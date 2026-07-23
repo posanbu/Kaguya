@@ -1,0 +1,76 @@
+description: Kaguya Prompt 结构回归测试
+
+prompts:
+  - "compile {{kind}} prompt"
+
+providers:
+  - id: file://promptfoo/provider.cjs
+
+tests:
+  - description: route 包含历史、人格、记忆与路由策略
+    vars:
+      kind: route
+      persona: ROUTE_PERSONA
+      history:
+        - role: user
+          content: ROUTE_HISTORY
+      memories:
+        - content: ROUTE_MEMORY
+      routePolicy: ROUTE_POLICY
+    assert:
+      - type: javascript
+        value: file://promptfoo/assertions.cjs:assertRoutePrompt
+
+  - description: reply 排除仅供路由使用的策略
+    vars:
+      kind: reply
+      persona: REPLY_PERSONA
+      history:
+        - role: user
+          content: REPLY_HISTORY
+      memories:
+        - content: REPLY_MEMORY
+      routePolicy: ROUTE_ONLY_POLICY
+      replyPolicy: REPLY_POLICY
+    assert:
+      - type: javascript
+        value: file://promptfoo/assertions.cjs:assertReplyPrompt
+
+  - description: state 包含短时状态更新策略
+    vars:
+      kind: state
+      history:
+        - role: user
+          content: STATE_HISTORY
+      currentState: STATE_CURRENT
+      statePolicy: SHORT_TERM_STATE_POLICY
+    assert:
+      - type: javascript
+        value: file://promptfoo/assertions.cjs:assertStatePrompt
+
+  - description: memory 只包含窗口内记录与记忆策略
+    vars:
+      kind: memory
+      window:
+        from: "2026-07-23T10:00:00.000Z"
+        to: "2026-07-23T11:00:00.000Z"
+      history:
+        - role: user
+          content: BEFORE_WINDOW
+          occurredAt: "2026-07-23T09:59:59.999Z"
+        - role: user
+          content: WINDOW_START
+          occurredAt: "2026-07-23T10:00:00.000Z"
+        - role: assistant
+          content: WINDOW_MIDDLE
+          occurredAt: "2026-07-23T10:30:00.000Z"
+        - role: user
+          content: WINDOW_END
+          occurredAt: "2026-07-23T11:00:00.000Z"
+        - role: assistant
+          content: AFTER_WINDOW
+          occurredAt: "2026-07-23T11:00:00.001Z"
+      memoryPolicy: MEMORY_POLICY
+    assert:
+      - type: javascript
+        value: file://promptfoo/assertions.cjs:assertMemoryPrompt

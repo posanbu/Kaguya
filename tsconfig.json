@@ -1,0 +1,13 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/schema" },
+    { "path": "./packages/sdk" },
+    { "path": "./packages/engine" },
+    { "path": "./packages/prompt" },
+    { "path": "./packages/llm" },
+    { "path": "./packages/database" },
+    { "path": "./packages/scheduler" },
+    { "path": "./apps/demo" }
+  ]
+}

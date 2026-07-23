@@ -1,0 +1,19 @@
+{
+  "name": "@kaguya/demo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "start": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@kaguya/database": "workspace:*",
+    "@kaguya/engine": "workspace:*",
+    "@kaguya/llm": "workspace:*",
+    "@kaguya/prompt": "workspace:*",
+    "@kaguya/scheduler": "workspace:*",
+    "@kaguya/schema": "workspace:*",
+    "@kaguya/sdk": "workspace:*"
+  }
+}
