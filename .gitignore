@@ -7,3 +7,4 @@ coverage/
 *.sqlite-shm
 *.sqlite-wal
 .DS_Store
+.worktrees/
