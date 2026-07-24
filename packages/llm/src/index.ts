@@ -9,6 +9,8 @@ import {
 } from "ai";
 import { MockLanguageModelV3 } from "ai/test";
 
+export * from "./openai-compatible.js";
+
 const generatedTextSchema = z.string().trim().min(1);
 
 export const routeOutputSchema = z
