@@ -70,6 +70,7 @@ docs/               调研、架构、会议记录和设计文档
 ## 文档
 
 - [架构说明](docs/architecture.md)：包边界、事件字段、节点/边、工作流、Prompt 与数据库追踪。
+- [人工待实现路线图](docs/remaining-work.md)：生产闭环、可靠性与后续扩展所需的人工决策、工程任务和验收标准。
 - [MaiBot 调研](docs/maibot-analysis.md)：直接 LLM 调用入口、触发关系、Prompt 来源和持久化影响。
 - [贡献指南](CONTRIBUTING.md)：环境、开发流程、新增子包、迁移规则和提交前检查。
 - [会议记录](docs/meeting-0722.md)：原始需求与分工。
