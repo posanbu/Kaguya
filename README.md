@@ -1,6 +1,6 @@
 # Kaguya
 
-Kaguya 是一个以事件和有向工作流为核心的 TypeScript AI Bot 基础设施原型。它把消息处理、短间隔心跳、定时记忆整理、Prompt 组装、LLM 调用和 SQLite 追踪拆成可替换的边界；当前仓库聚焦会议记录中的 3.1 范围，不包含社交平台适配器或 Web UI。
+Kaguya 是一个以事件和有向工作流为核心的 TypeScript AI Bot 基础设施原型。它把消息处理、短间隔心跳、定时记忆整理、Prompt 组装、LLM 调用和 SQLite 追踪拆成可替换的边界；当前仓库不包含社交平台适配器或 Web UI。
 
 当前实现包含：
 
