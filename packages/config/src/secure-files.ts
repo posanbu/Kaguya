@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, lstatSync, realpathSync } from "node:fs";
 import { chmod, lstat, mkdir, open, rename, unlink } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { ConfigError } from "./errors.js";
 
@@ -12,15 +12,66 @@ export function assertPathInside(root: string, candidate: string): void {
   const resolvedRoot = resolve(root);
   const resolvedCandidate = resolve(candidate);
   const offset = relative(resolvedRoot, resolvedCandidate);
-  if (
+  if (!isContainedOffset(offset)) {
+    throw new ConfigError(
+      "CONFIG_UNSAFE_PATH",
+      `Managed path escapes configuration root: ${resolvedCandidate}`,
+    );
+  }
+  validateManagedAncestors(resolvedRoot, offset);
+}
+
+function validateManagedAncestors(root: string, offset: string): void {
+  let currentPath = root;
+  let canonicalRoot: string | undefined;
+  const components = offset === "" ? [] : offset.split(sep);
+
+  for (let index = -1; index < components.length; index += 1) {
+    if (index >= 0) {
+      currentPath = join(currentPath, components[index]!);
+    }
+
+    let stats;
+    try {
+      stats = lstatSync(currentPath);
+    } catch (error) {
+      if (isMissingFileError(error)) {
+        return;
+      }
+      throw normalizeFileError("validate managed path", currentPath, error);
+    }
+
+    if (stats.isSymbolicLink()) {
+      throw new ConfigError(
+        "CONFIG_UNSAFE_PATH",
+        `Managed path must not contain a symbolic link: ${currentPath}`,
+      );
+    }
+
+    let canonicalPath: string;
+    try {
+      canonicalPath = realpathSync(currentPath);
+    } catch (error) {
+      throw normalizeFileError("canonicalize managed path", currentPath, error);
+    }
+
+    if (canonicalRoot === undefined) {
+      canonicalRoot = canonicalPath;
+    } else if (
+      !isContainedOffset(relative(canonicalRoot, canonicalPath))
+    ) {
+      throw new ConfigError(
+        "CONFIG_UNSAFE_PATH",
+        `Managed path escapes configuration root: ${canonicalPath}`,
+      );
+    }
+  }
+}
+
+function isContainedOffset(offset: string): boolean {
+  return (
     offset === "" ||
     (offset !== ".." && !offset.startsWith(`..${sep}`) && !isAbsolute(offset))
-  ) {
-    return;
-  }
-  throw new ConfigError(
-    "CONFIG_UNSAFE_PATH",
-    `Managed path escapes configuration root: ${resolvedCandidate}`,
   );
 }
 
@@ -101,6 +152,16 @@ export async function writeSensitiveJson(
   path: string,
   value: unknown,
 ): Promise<void> {
+  let serializedValue: string;
+  try {
+    serializedValue = `${JSON.stringify(value, null, 2)}\n`;
+  } catch {
+    throw new ConfigError(
+      "CONFIG_IO_ERROR",
+      "Failed to serialize sensitive JSON",
+    );
+  }
+
   const directory = dirname(path);
   const temporaryPath = `${path}.${randomUUID()}.tmp`;
   let handle: Awaited<ReturnType<typeof open>> | undefined;
@@ -116,7 +177,7 @@ export async function writeSensitiveJson(
     }
 
     handle = await open(temporaryPath, "wx", FILE_MODE);
-    await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, "utf8");
+    await handle.writeFile(serializedValue, "utf8");
     await handle.sync();
     await handle.close();
     handle = undefined;
