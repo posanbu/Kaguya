@@ -10,7 +10,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ConfigError } from "./errors.js";
 import {
@@ -21,6 +21,47 @@ import {
   writeSensitiveJson,
 } from "./secure-files.js";
 
+const fileSystemFaults = vi.hoisted(() => ({
+  failNextTemporaryWrite: false,
+}));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    open: async (
+      path: Parameters<typeof actual.open>[0],
+      flags: Parameters<typeof actual.open>[1],
+      mode?: Parameters<typeof actual.open>[2],
+    ) => {
+      const handle = await actual.open(path, flags, mode);
+      if (
+        !fileSystemFaults.failNextTemporaryWrite ||
+        typeof path !== "string" ||
+        !path.endsWith(".tmp")
+      ) {
+        return handle;
+      }
+
+      fileSystemFaults.failNextTemporaryWrite = false;
+      return new Proxy(handle, {
+        get(target, property) {
+          if (property === "writeFile") {
+            return async () => {
+              throw Object.assign(
+                new Error("injected temporary write failure"),
+                { code: "EIO" },
+              );
+            };
+          }
+          const value: unknown = Reflect.get(target, property, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+    },
+  };
+});
+
 const temporaryRoots: string[] = [];
 
 async function temporaryRoot(): Promise<string> {
@@ -30,6 +71,7 @@ async function temporaryRoot(): Promise<string> {
 }
 
 afterEach(async () => {
+  fileSystemFaults.failNextTemporaryWrite = false;
   await Promise.all(
     temporaryRoots
       .splice(0)
@@ -65,6 +107,22 @@ describe("sensitive file primitives", () => {
     await expect(writeSensitiveJson(file, { value: 1n })).rejects.toMatchObject(
       { code: "CONFIG_IO_ERROR" },
     );
+
+    expect(JSON.parse(await readFile(file, "utf8"))).toEqual({
+      value: "original",
+    });
+    expect(await readdir(root)).toEqual(["index.json"]);
+  });
+
+  it("removes the temporary file when writing it fails", async () => {
+    const root = await temporaryRoot();
+    const file = join(root, "index.json");
+    await writeSensitiveJson(file, { value: "original" });
+    fileSystemFaults.failNextTemporaryWrite = true;
+
+    await expect(
+      writeSensitiveJson(file, { value: "replacement" }),
+    ).rejects.toMatchObject({ code: "CONFIG_IO_ERROR" });
 
     expect(JSON.parse(await readFile(file, "utf8"))).toEqual({
       value: "original",
