@@ -1,5 +1,6 @@
 export { ConfigError, configErrorCodes } from "./errors.js";
 export type { ConfigErrorCode } from "./errors.js";
+export { REDACTED_CONFIG_VALUE, redactConfigValue } from "./redact.js";
 export {
   aiConfigSchema,
   aiProviderConfigSchema,
