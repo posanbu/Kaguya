@@ -137,6 +137,16 @@ interface FileUserConfigManagerOptions {
   rootDir: string;
 }
 
+interface UserConfigProfileSettings {
+  ai: UserConfigProfile["ai"];
+  platforms: UserConfigProfile["platforms"];
+  plugins: UserConfigProfile["plugins"];
+}
+
+interface UpdateUserConfigProfileInput extends UserConfigProfileSettings {
+  name?: string;
+}
+
 class FileUserConfigManager {
   static open(
     options: FileUserConfigManagerOptions,
@@ -146,11 +156,11 @@ class FileUserConfigManager {
   getProfile(profileId: string): Promise<UserConfigProfile>;
   createProfile(
     name: string,
-    initial?: UserConfigProfileInput,
+    initial?: UserConfigProfileSettings,
   ): Promise<UserConfigProfile>;
   updateProfile(
     profileId: string,
-    update: UserConfigProfileInput,
+    update: UpdateUserConfigProfileInput,
   ): Promise<UserConfigProfile>;
   deleteProfile(profileId: string): Promise<void>;
 
@@ -166,6 +176,10 @@ class FileUserConfigManager {
 `open()` creates an empty store when necessary. A newly created store contains
 one profile named `default`. The default profile can be edited but cannot be
 renamed or deleted.
+
+`createProfile()` uses empty AI, platform, and plugin collections when
+`initial` is omitted. `updateProfile()` replaces the complete settings set and
+optionally changes the display name; it is not a partial merge.
 
 `listProfiles()` returns metadata only. It never returns AI keys, platform
 credentials, plugin settings, or other profile payloads.
