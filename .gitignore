@@ -3,6 +3,7 @@ node_modules/
 dist/
 coverage/
 .data/
+/.kaguya-config/
 *.tsbuildinfo
 *.sqlite
 *.sqlite-shm

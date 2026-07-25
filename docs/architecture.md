@@ -1,6 +1,6 @@
 # Kaguya 架构
 
-本文描述当前代码已经实现的 3.1 基础设施，不把设计文档中的后续设想当作现状。平台适配器、真实模型配置、Web UI、生产队列和跨进程调度不在当前范围内。
+本文描述当前代码已经实现的 3.1 基础设施，不把设计文档中的后续设想当作现状。`@kaguya/config` 已提供本地敏感配置存储；平台适配器、真实 provider 的执行装配、配置 UI、平台/插件运行时接线、生产队列和跨进程调度仍不在当前范围内。
 
 ## 从会议 3.1 到代码
 
@@ -13,6 +13,7 @@
 | 多来源 Prompt 的来龙去脉       | `@kaguya/prompt`       | 按优先级稳定编译片段，转义边界字符，并生成每片段 SHA-256 provenance      |
 | 找到并统一所有 LLM request     | `@kaguya/llm`          | 单一生成边界、四类输出校验、错误归一化、成功/失败 trace                  |
 | 消息、memory 和运行记录        | `@kaguya/database`     | SQLite 迁移与 messages、memories、event_runs、llm_traces repositories    |
+| 用户配置 profile 与会话选择    | `@kaguya/config`       | 明文 JSON profile 持久化、仅元数据列表、会话选择与默认 profile 回退      |
 | 消息流转图和三类 bot 逻辑      | `@kaguya/demo`         | 组装消息、心跳、定时记忆工作流；注入数据库、事件总线、Prompt 与 LLM 服务 |
 | 测试关键 Prompt                | `promptfooconfig.yaml` | 离线调用真实 PromptCompiler，验证 route/reply/state/memory 的精确结构    |
 
@@ -30,6 +31,7 @@ flowchart TD
   Prompt["@kaguya/prompt<br/>Prompt 编译"]
   LLM["@kaguya/llm<br/>模型边界与 trace"]
   DB["@kaguya/database<br/>SQLite"]
+  Config["@kaguya/config<br/>敏感 profile 存储"]
 
   Demo --> SDK
   Demo --> Engine
@@ -46,7 +48,24 @@ flowchart TD
   DB --> Schema
 ```
 
-这些方向由 workspace 依赖和 TypeScript project references 共同表达。`schema` 不知道任何实现；`engine` 不直接创建数据库；`llm` 只通过 `LlmTraceWriter` 写 trace；业务 policy 和 workflow 只存在于应用层。
+这些方向由 workspace 依赖和 TypeScript project references 共同表达。`schema` 不知道任何实现；`engine` 不直接创建数据库；`llm` 只通过 `LlmTraceWriter` 写 trace；业务 policy 和 workflow 只存在于应用层。`@kaguya/config` 是独立包，不依赖 `@kaguya/database`，当前也没有应用代码连接它。
+
+## 用户配置边界
+
+`@kaguya/config` 将一个调用方显式指定的配置根目录保存为以下布局；根目录整体均为敏感数据，`index.json` 中的元数据和会话绑定也不能公开。
+
+```text
+<config-root>/
+├── index.json
+└── profiles/
+    └── profile_<uuid>.json
+```
+
+`FileUserConfigManager.open({ rootDir })` 创建或打开存储。它提供 `listProfiles()`（只返回元数据）、`getProfile()`、`createProfile()`、`updateProfile()`、`deleteProfile()`、默认 profile 读写、会话绑定/解绑和 `resolveProfile()`；未绑定会话解析到默认 profile。profile JSON 中的 API key、平台凭据和插件设置以明文保存，因此完整 profile 只应在运行时代码确有需要时读取。
+
+在 POSIX 上，根目录和 `profiles/` 目录会校正为 `0700`，index、profile 和临时文件会校正为 `0600`。受管目录或文件中的符号链接、越出根目录的路径和不属于当前用户的 POSIX 路径会被拒绝。写入先同步唯一临时文件，再以原子替换落盘，并在支持时同步父目录；同一 manager 实例内会串行化修改。该实现不提供跨进程锁，同一配置根目录只能有一个写进程。Windows 不具备等价的 POSIX mode 保证，部署者必须配置只允许运行身份访问的 NTFS ACL。
+
+该包当前只实现存储和选择语义，`apps/demo` 尚未消费 profile。配置 UI、真实 provider adapter/execution，以及平台和插件的运行时 wiring 仍须按 [人工待实现路线图](remaining-work.md) 完成；配置 package 不连接 SQLite database。
 
 ## 事件模型
 
