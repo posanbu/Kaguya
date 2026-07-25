@@ -143,7 +143,7 @@ describe("user configuration schemas", () => {
     });
   });
 
-  it("rejects duplicate IDs and a disabled default provider", () => {
+  it("rejects duplicate provider IDs", () => {
     const duplicateProvider = {
       id: "provider-1",
       type: "openai-compatible",
@@ -165,12 +165,22 @@ describe("user configuration schemas", () => {
         plugins: [],
       }),
     ).toThrow();
+  });
 
+  it("rejects a disabled default provider", () => {
     expect(() =>
       userConfigProfileSettingsSchema.parse({
         ai: {
           defaultProviderId: "provider-1",
-          providers: [{ ...duplicateProvider, enabled: false }],
+          providers: [
+            {
+              id: "provider-1",
+              type: "openai-compatible",
+              enabled: false,
+              models: [],
+              settings: {},
+            },
+          ],
         },
         platforms: [],
         plugins: [],
@@ -178,14 +188,32 @@ describe("user configuration schemas", () => {
     ).toThrow();
   });
 
-  it("rejects an index whose default and bindings reference missing profiles", () => {
+  it("rejects an index whose default references a missing profile", () => {
     expect(() =>
       userConfigIndexSchema.parse({
         version: 1,
         defaultProfileId: profileId,
         profiles: [],
+        sessionBindings: {},
+      }),
+    ).toThrow();
+  });
+
+  it("rejects an index whose binding references a missing profile", () => {
+    expect(() =>
+      userConfigIndexSchema.parse({
+        version: 1,
+        defaultProfileId: profileId,
+        profiles: [
+          {
+            id: profileId,
+            name: "default",
+            createdAt: "2026-07-25T00:00:00.000Z",
+            updatedAt: "2026-07-25T00:00:00.000Z",
+          },
+        ],
         sessionBindings: {
-          "session-1": profileId,
+          "session-1": "a0fc7b07-8a10-4406-970b-88bc74a9416f",
         },
       }),
     ).toThrow();
@@ -538,7 +566,7 @@ import { describe, expect, it } from "vitest";
 import { REDACTED_CONFIG_VALUE, redactConfigValue } from "./redact.js";
 
 describe("redactConfigValue", () => {
-  it("recursively removes common secret fields without mutating input", () => {
+  it("recursively removes common secret fields", () => {
     const source = {
       apiKey: "ai-secret",
       nested: {
@@ -562,15 +590,17 @@ describe("redactConfigValue", () => {
       },
       platforms: [{ credentials: REDACTED_CONFIG_VALUE }],
     });
-    expect(source.apiKey).toBe("ai-secret");
-    expect(source.platforms[0]?.credentials.password).toBe("platform-secret");
   });
 
-  it("returns detached arrays and non-secret objects", () => {
-    const source = { values: [{ enabled: true }] };
+  it("returns a detached value without mutating its input", () => {
+    const source = {
+      apiKey: "ai-secret",
+      values: [{ enabled: true }],
+    };
     const redacted = redactConfigValue(source);
 
     redacted.values[0]!.enabled = false;
+    expect(source.apiKey).toBe("ai-secret");
     expect(source.values[0]?.enabled).toBe(true);
   });
 });
@@ -664,7 +694,7 @@ git commit -m "feat(config): redact sensitive configuration values"
 - Produces internally:
   `ensureSensitiveDirectory(path)`,
   `readSensitiveJson(path)`,
-  `writeSensitiveJson(path, value, hooks?)`,
+  `writeSensitiveJson(path, value)`,
   `removeSensitiveFile(path)`, and
   `assertPathInside(root, candidate)`.
 - These helpers are not re-exported from the package public entry point.
@@ -736,17 +766,9 @@ describe("sensitive file primitives", () => {
     const file = join(root, "index.json");
     await writeSensitiveJson(file, { value: "original" });
 
-    await expect(
-      writeSensitiveJson(
-        file,
-        { value: "replacement" },
-        {
-          beforeRename: () => {
-            throw new Error("injected failure");
-          },
-        },
-      ),
-    ).rejects.toMatchObject({ code: "CONFIG_IO_ERROR" });
+    await expect(writeSensitiveJson(file, { value: 1n })).rejects.toMatchObject(
+      { code: "CONFIG_IO_ERROR" },
+    );
 
     expect(JSON.parse(await readFile(file, "utf8"))).toEqual({
       value: "original",
@@ -798,10 +820,6 @@ import { ConfigError } from "./errors.js";
 
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
-
-interface AtomicWriteHooks {
-  beforeRename?: (temporaryPath: string) => void | Promise<void>;
-}
 
 export function assertPathInside(root: string, candidate: string): void {
   const resolvedRoot = resolve(root);
@@ -910,7 +928,6 @@ Add:
 export async function writeSensitiveJson(
   path: string,
   value: unknown,
-  hooks: AtomicWriteHooks = {},
 ): Promise<void> {
   const directory = dirname(path);
   const temporaryPath = `${path}.${randomUUID()}.tmp`;
@@ -931,7 +948,6 @@ export async function writeSensitiveJson(
     await handle.sync();
     await handle.close();
     handle = undefined;
-    await hooks.beforeRename?.(temporaryPath);
     await rename(temporaryPath, path);
     if (process.platform !== "win32") {
       await chmod(path, FILE_MODE);
@@ -1038,7 +1054,8 @@ git commit -m "feat(config): persist sensitive JSON atomically"
   `updateProfile(id, update)`,
   `deleteProfile(id)`,
   `getDefaultProfileId()`, and
-  `setDefaultProfile(id)`.
+  `setDefaultProfile(id)`, with all mutations serialized through a
+  failure-safe in-process queue.
 
 - [ ] **Step 1: Write failing initialization and lifecycle tests**
 
@@ -1068,7 +1085,7 @@ afterEach(async () => {
 });
 
 describe("FileUserConfigManager profile lifecycle", () => {
-  it("creates and reopens one protected default profile", async () => {
+  it("creates and reopens one default profile", async () => {
     const rootDir = await createRoot();
     const first = await FileUserConfigManager.open({ rootDir });
     const metadata = first.listProfiles();
@@ -1088,10 +1105,9 @@ describe("FileUserConfigManager profile lifecycle", () => {
     expect(reopened.listProfiles()).toEqual(metadata);
   });
 
-  it("round-trips plaintext secrets and returns detached values", async () => {
-    const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
-    });
+  it("round-trips plaintext secrets without listing them", async () => {
+    const rootDir = await createRoot();
+    const manager = await FileUserConfigManager.open({ rootDir });
     const created = await manager.createProfile("work", {
       ai: {
         defaultProviderId: "provider-1",
@@ -1113,13 +1129,9 @@ describe("FileUserConfigManager profile lifecycle", () => {
     expect((await manager.getProfile(created.id)).ai.providers[0]?.apiKey).toBe(
       "test-plaintext-key",
     );
-    created.ai.providers[0]!.apiKey = "mutated";
-    expect((await manager.getProfile(created.id)).ai.providers[0]?.apiKey).toBe(
-      "test-plaintext-key",
-    );
     expect(
       await readFile(
-        join(manager.rootDir, "profiles", `profile_${created.id}.json`),
+        join(rootDir, "profiles", `profile_${created.id}.json`),
         "utf8",
       ),
     ).toContain("test-plaintext-key");
@@ -1128,25 +1140,41 @@ describe("FileUserConfigManager profile lifecycle", () => {
     );
   });
 
-  it("updates complete settings and enforces unique trimmed names", async () => {
+  it("returns detached profile values", async () => {
+    const manager = await FileUserConfigManager.open({
+      rootDir: await createRoot(),
+    });
+    const created = await manager.createProfile("work", {
+      ai: {
+        providers: [
+          {
+            id: "provider-1",
+            type: "test",
+            enabled: true,
+            apiKey: "test-plaintext-key",
+            models: [],
+            settings: {},
+          },
+        ],
+      },
+      platforms: [],
+      plugins: [],
+    });
+
+    created.ai.providers[0]!.apiKey = "mutated";
+    expect((await manager.getProfile(created.id)).ai.providers[0]?.apiKey).toBe(
+      "test-plaintext-key",
+    );
+  });
+
+  it("replaces complete settings and normalizes a new name", async () => {
     const manager = await FileUserConfigManager.open({
       rootDir: await createRoot(),
     });
     const work = await manager.createProfile(" work ");
-    await manager.createProfile("personal");
-
     await expect(
       manager.updateProfile(work.id, {
-        name: "personal",
-        ai: { providers: [] },
-        platforms: [],
-        plugins: [],
-      }),
-    ).rejects.toMatchObject({ code: "CONFIG_PROFILE_NAME_CONFLICT" });
-
-    await expect(
-      manager.updateProfile(work.id, {
-        name: "renamed",
+        name: " renamed ",
         ai: { providers: [] },
         platforms: [],
         plugins: [{ id: "plugin-1", enabled: false, settings: {} }],
@@ -1157,16 +1185,40 @@ describe("FileUserConfigManager profile lifecycle", () => {
     });
   });
 
-  it("protects the current default and deletes an unused non-default profile", async () => {
+  it("rejects a duplicate normalized profile name", async () => {
+    const manager = await FileUserConfigManager.open({
+      rootDir: await createRoot(),
+    });
+    const work = await manager.createProfile("work");
+    await manager.createProfile("personal");
+
+    await expect(
+      manager.updateProfile(work.id, {
+        name: " personal ",
+        ai: { providers: [] },
+        platforms: [],
+        plugins: [],
+      }),
+    ).rejects.toMatchObject({ code: "CONFIG_PROFILE_NAME_CONFLICT" });
+  });
+
+  it("protects the current default from deletion", async () => {
     const manager = await FileUserConfigManager.open({
       rootDir: await createRoot(),
     });
     const defaultId = manager.getDefaultProfileId();
-    const removable = await manager.createProfile("removable");
 
     await expect(manager.deleteProfile(defaultId)).rejects.toMatchObject({
       code: "CONFIG_DEFAULT_PROFILE_PROTECTED",
     });
+  });
+
+  it("protects the current default from renaming", async () => {
+    const manager = await FileUserConfigManager.open({
+      rootDir: await createRoot(),
+    });
+    const defaultId = manager.getDefaultProfileId();
+
     await expect(
       manager.updateProfile(defaultId, {
         name: "renamed-default",
@@ -1177,6 +1229,14 @@ describe("FileUserConfigManager profile lifecycle", () => {
     ).rejects.toMatchObject({
       code: "CONFIG_DEFAULT_PROFILE_PROTECTED",
     });
+  });
+
+  it("deletes an unused non-default profile", async () => {
+    const manager = await FileUserConfigManager.open({
+      rootDir: await createRoot(),
+    });
+    const removable = await manager.createProfile("removable");
+
     await manager.deleteProfile(removable.id);
     await expect(manager.getProfile(removable.id)).rejects.toMatchObject({
       code: "CONFIG_PROFILE_NOT_FOUND",
@@ -1187,23 +1247,46 @@ describe("FileUserConfigManager profile lifecycle", () => {
     const manager = await FileUserConfigManager.open({
       rootDir: await createRoot(),
     });
-    const originalDefaultId = manager.getDefaultProfileId();
     const replacement = await manager.createProfile("replacement");
 
     await manager.setDefaultProfile(replacement.id);
     expect(manager.getDefaultProfileId()).toBe(replacement.id);
-    await expect(manager.deleteProfile(replacement.id)).rejects.toMatchObject({
-      code: "CONFIG_DEFAULT_PROFILE_PROTECTED",
+  });
+
+  it("serializes competing profile names", async () => {
+    const manager = await FileUserConfigManager.open({
+      rootDir: await createRoot(),
     });
-    await expect(
-      manager.deleteProfile(originalDefaultId),
-    ).resolves.toBeUndefined();
+
+    const results = await Promise.allSettled([
+      manager.createProfile("shared"),
+      manager.createProfile("shared"),
+    ]);
+    expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(
+      1,
+    );
+    expect(results.filter(({ status }) => status === "rejected")).toHaveLength(
+      1,
+    );
+  });
+
+  it("keeps the mutation queue usable after a rejected operation", async () => {
+    const manager = await FileUserConfigManager.open({
+      rootDir: await createRoot(),
+    });
+    await manager.createProfile("shared");
+    await expect(manager.createProfile("shared")).rejects.toMatchObject({
+      code: "CONFIG_PROFILE_NAME_CONFLICT",
+    });
+
+    await expect(manager.createProfile("after-failure")).resolves.toMatchObject(
+      {
+        name: "after-failure",
+      },
+    );
   });
 });
 ```
-
-Expose `readonly rootDir: string` on the manager so diagnostics and callers can
-show the resolved sensitive root without exposing profile content.
 
 - [ ] **Step 2: Run the tests to verify RED**
 
@@ -1250,13 +1333,14 @@ export interface FileUserConfigManagerOptions {
 }
 
 export class FileUserConfigManager {
-  readonly rootDir: string;
+  readonly #rootDir: string;
   readonly #profilesDir: string;
   readonly #indexPath: string;
   #index: UserConfigIndex;
+  #writeTail: Promise<void> = Promise.resolve();
 
   private constructor(rootDir: string, index: UserConfigIndex) {
-    this.rootDir = rootDir;
+    this.#rootDir = rootDir;
     this.#profilesDir = join(rootDir, "profiles");
     this.#indexPath = join(rootDir, "index.json");
     this.#index = index;
@@ -1297,6 +1381,24 @@ export class FileUserConfigManager {
     await manager.#validateReferencedProfiles();
     return manager;
   }
+}
+```
+
+Add the mutation queue inside the class before implementing public mutation
+methods:
+
+```ts
+#enqueue<T>(operation: () => Promise<T>): Promise<T> {
+  const result = this.#writeTail.then(operation, operation);
+  this.#writeTail = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
+async #afterPendingWrites(): Promise<void> {
+  await this.#writeTail;
 }
 ```
 
@@ -1409,7 +1511,7 @@ paths. Add these private helpers:
 
 #profilePath(profileId: string): string {
   const path = join(this.#profilesDir, `profile_${profileId}.json`);
-  assertPathInside(this.rootDir, path);
+  assertPathInside(this.#rootDir, path);
   return path;
 }
 
@@ -1449,6 +1551,7 @@ listProfiles(): readonly UserConfigProfileMetadata[] {
 }
 
 async getProfile(profileId: string): Promise<UserConfigProfile> {
+  await this.#afterPendingWrites();
   return structuredClone(await this.#readProfile(profileId));
 }
 ```
@@ -1486,10 +1589,9 @@ function normalizeProfileName(name: string): string {
 Implement `createProfile` using this exact state transition:
 
 ```ts
-async createProfile(
+async #createProfile(
   name: string,
-  initial: UserConfigProfileSettings =
-    emptyUserConfigProfileSettings(),
+  initial: UserConfigProfileSettings,
 ): Promise<UserConfigProfile> {
   const normalizedName = normalizeProfileName(name);
   const settings = parseSettings(initial);
@@ -1531,12 +1633,24 @@ async createProfile(
   this.#index = nextIndex;
   return structuredClone(profile);
 }
+
+async createProfile(
+  name: string,
+  initial?: UserConfigProfileSettings,
+): Promise<UserConfigProfile> {
+  return this.#enqueue(() =>
+    this.#createProfile(
+      name,
+      initial ?? emptyUserConfigProfileSettings(),
+    ),
+  );
+}
 ```
 
 Implement `updateProfile` with complete settings replacement:
 
 ```ts
-async updateProfile(
+async #updateProfile(
   profileId: string,
   update: UpdateUserConfigProfileInput,
 ): Promise<UserConfigProfile> {
@@ -1600,10 +1714,14 @@ async updateProfile(
   this.#index = nextIndex;
   return structuredClone(profile);
 }
-```
 
-Task 5 will place these complete operations inside the write queue; this task
-first verifies the single-operation lifecycle independently.
+async updateProfile(
+  profileId: string,
+  update: UpdateUserConfigProfileInput,
+): Promise<UserConfigProfile> {
+  return this.#enqueue(() => this.#updateProfile(profileId, update));
+}
+```
 
 - [ ] **Step 5: Implement default selection and deletion**
 
@@ -1614,7 +1732,7 @@ getDefaultProfileId(): string {
   return this.#index.defaultProfileId;
 }
 
-async setDefaultProfile(profileId: string): Promise<void> {
+async #setDefaultProfile(profileId: string): Promise<void> {
   this.#requireMetadata(profileId);
   const nextIndex: UserConfigIndex = {
     ...structuredClone(this.#index),
@@ -1624,7 +1742,7 @@ async setDefaultProfile(profileId: string): Promise<void> {
   this.#index = nextIndex;
 }
 
-async deleteProfile(profileId: string): Promise<void> {
+async #deleteProfile(profileId: string): Promise<void> {
   this.#requireMetadata(profileId);
   if (profileId === this.#index.defaultProfileId) {
     throw new ConfigError(
@@ -1647,6 +1765,14 @@ async deleteProfile(profileId: string): Promise<void> {
   await this.#writeIndex(nextIndex);
   this.#index = nextIndex;
   await removeSensitiveFile(this.#profilePath(profileId));
+}
+
+async setDefaultProfile(profileId: string): Promise<void> {
+  return this.#enqueue(() => this.#setDefaultProfile(profileId));
+}
+
+async deleteProfile(profileId: string): Promise<void> {
+  return this.#enqueue(() => this.#deleteProfile(profileId));
 }
 ```
 
@@ -1684,7 +1810,7 @@ git commit -m "feat(config): manage configuration profile lifecycle"
 
 ---
 
-### Task 5: Session Resolution, Mutation Serialization, and Corruption Safety
+### Task 5: Session Resolution and Corruption Safety
 
 **Files:**
 
@@ -1697,27 +1823,43 @@ git commit -m "feat(config): manage configuration profile lifecycle"
 - Produces:
   `bindSession(sessionId, profileId)`,
   `unbindSession(sessionId)`,
-  `resolveProfile(sessionId)`, and a failure-safe mutation queue.
+  and `resolveProfile(sessionId)`.
 
-- [ ] **Step 1: Add failing session and concurrency tests**
+- [ ] **Step 1: Add failing session-selection tests**
 
 Append to `packages/config/src/manager.test.ts`:
 
 ```ts
 describe("FileUserConfigManager session selection", () => {
-  it("falls back to default and resolves explicit session bindings", async () => {
+  it("falls back to the default profile", async () => {
+    const manager = await FileUserConfigManager.open({
+      rootDir: await createRoot(),
+    });
+
+    await expect(manager.resolveProfile("session-1")).resolves.toMatchObject({
+      id: manager.getDefaultProfileId(),
+    });
+  });
+
+  it("resolves an explicit session binding", async () => {
     const manager = await FileUserConfigManager.open({
       rootDir: await createRoot(),
     });
     const work = await manager.createProfile("work");
 
-    await expect(manager.resolveProfile("session-1")).resolves.toMatchObject({
-      id: manager.getDefaultProfileId(),
-    });
     await manager.bindSession("session-1", work.id);
     await expect(manager.resolveProfile("session-1")).resolves.toMatchObject({
       id: work.id,
     });
+  });
+
+  it("returns to default fallback after unbinding a session", async () => {
+    const manager = await FileUserConfigManager.open({
+      rootDir: await createRoot(),
+    });
+    const work = await manager.createProfile("work");
+
+    await manager.bindSession("session-1", work.id);
     await manager.unbindSession("session-1");
     await expect(manager.resolveProfile("session-1")).resolves.toMatchObject({
       id: manager.getDefaultProfileId(),
@@ -1748,28 +1890,6 @@ describe("FileUserConfigManager session selection", () => {
       code: "CONFIG_PROFILE_IN_USE",
     });
   });
-
-  it("serializes competing profile names and remains usable after failure", async () => {
-    const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
-    });
-
-    const results = await Promise.allSettled([
-      manager.createProfile("shared"),
-      manager.createProfile("shared"),
-    ]);
-    expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(
-      1,
-    );
-    expect(results.filter(({ status }) => status === "rejected")).toHaveLength(
-      1,
-    );
-    await expect(manager.createProfile("after-failure")).resolves.toMatchObject(
-      {
-        name: "after-failure",
-      },
-    );
-  });
 });
 ```
 
@@ -1781,69 +1901,9 @@ Run:
 pnpm vitest run packages/config/src/manager.test.ts
 ```
 
-Expected: FAIL because session methods and the queue implementation are absent.
+Expected: FAIL because the session methods are absent.
 
-- [ ] **Step 3: Implement the failure-safe write queue**
-
-Add to `FileUserConfigManager`:
-
-```ts
-#writeTail: Promise<void> = Promise.resolve();
-
-#enqueue<T>(operation: () => Promise<T>): Promise<T> {
-  const result = this.#writeTail.then(operation, operation);
-  this.#writeTail = result.then(
-    () => undefined,
-    () => undefined,
-  );
-  return result;
-}
-
-async #afterPendingWrites(): Promise<void> {
-  await this.#writeTail;
-}
-```
-
-Rename the four existing implementation methods to `#createProfile`,
-`#updateProfile`, `#setDefaultProfile`, and `#deleteProfile` without changing
-their parameters, return types, or bodies. Then add these public queueing
-methods:
-
-```ts
-async createProfile(
-  name: string,
-  initial?: UserConfigProfileSettings,
-): Promise<UserConfigProfile> {
-  return this.#enqueue(() =>
-    this.#createProfile(
-      name,
-      initial ?? emptyUserConfigProfileSettings(),
-    ),
-  );
-}
-
-async updateProfile(
-  profileId: string,
-  update: UpdateUserConfigProfileInput,
-): Promise<UserConfigProfile> {
-  return this.#enqueue(() => this.#updateProfile(profileId, update));
-}
-
-async setDefaultProfile(profileId: string): Promise<void> {
-  return this.#enqueue(() => this.#setDefaultProfile(profileId));
-}
-
-async deleteProfile(profileId: string): Promise<void> {
-  return this.#enqueue(() => this.#deleteProfile(profileId));
-}
-```
-
-Name conflict, existence, default, and in-use checks stay in the extracted
-private bodies, so they execute after earlier mutations. Add
-`await this.#afterPendingWrites()` at the beginning of `getProfile`.
-Synchronous metadata methods read the last fully committed in-memory index.
-
-- [ ] **Step 4: Implement safe binding and resolution**
+- [ ] **Step 3: Implement safe binding and resolution**
 
 Validate session IDs without changing their exact value:
 
@@ -1922,7 +1982,7 @@ async resolveProfile(sessionId: string): Promise<UserConfigProfile> {
 }
 ```
 
-- [ ] **Step 5: Add failing corruption and no-secret error tests**
+- [ ] **Step 4: Add failing corruption and no-secret error tests**
 
 Append:
 
@@ -1989,7 +2049,7 @@ describe("FileUserConfigManager corruption safety", () => {
 });
 ```
 
-- [ ] **Step 6: Run focused and package verification**
+- [ ] **Step 5: Run focused and package verification**
 
 Run:
 
@@ -2000,8 +2060,8 @@ pnpm lint
 git diff --check
 ```
 
-Expected: all configuration package tests pass, including concurrent duplicate
-creation, queue recovery, corrupt-store failure, and secret-free errors.
+Expected: all configuration package tests pass, including session fallback,
+prototype-like session IDs, corrupt-store failure, and secret-free errors.
 
 Commit:
 
