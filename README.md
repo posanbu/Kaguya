@@ -10,6 +10,7 @@ Kaguya 是一个以事件和有向工作流为核心的 TypeScript AI Bot 基础
 - 带稳定排序和 SHA-256 来源摘要的 Prompt 编译器；
 - 基于 Vercel AI SDK 的结构化 LLM 边界与完整调用 trace；
 - SQLite 消息、记忆、节点运行和 LLM trace 仓储；
+- 多份敏感用户配置、会话选择与默认回退；
 - 消息、心跳、定时记忆三条可执行示例工作流；
 - 不依赖远端模型或 API key 的确定性测试、demo 和 Promptfoo 回归测试；`prompt:test` 会阻断 CLI 外部出口。
 
@@ -63,6 +64,7 @@ packages/scheduler/ 手动、interval 与 cron 触发器
 packages/prompt/    Prompt 编译与来源追踪
 packages/llm/       LLM 调用、结构校验与 trace
 packages/database/  SQLite 迁移和 repositories
+packages/config/    敏感用户配置 profile 的 JSON 存储与会话选择
 promptfoo/          离线 Promptfoo provider 与结构断言
 docs/               调研、架构、会议记录和设计文档
 ```
@@ -70,6 +72,8 @@ docs/               调研、架构、会议记录和设计文档
 ## 文档
 
 - [架构说明](docs/architecture.md)：包边界、事件字段、节点/边、工作流、Prompt 与数据库追踪。
+- [配置包说明](packages/config/README.md)：敏感配置的 API、存储边界和泄漏处置。
+- [用户配置设计](docs/superpowers/specs/2026-07-25-user-configuration-management-design.md)：profile、会话选择与敏感文件处理的已批准设计。
 - [人工待实现路线图](docs/remaining-work.md)：生产闭环、可靠性与后续扩展所需的人工决策、工程任务和验收标准。
 - [MaiBot 调研](docs/maibot-analysis.md)：直接 LLM 调用入口、触发关系、Prompt 来源和持久化影响。
 - [贡献指南](CONTRIBUTING.md)：环境、开发流程、新增子包、迁移规则和提交前检查。
@@ -78,4 +82,4 @@ docs/               调研、架构、会议记录和设计文档
 
 ## 当前边界
 
-这是基础设施原型，而不是可直接连接聊天平台的完整 Bot。平台网关、真实模型 provider 配置、并发队列、工作流循环/重试策略、Web UI 和生产部署仍属于后续工作。当前 demo 的 policy 和 persona 是固定样例文本；业务应用应在应用层装配自己的数据源和策略。
+这是基础设施原型，而不是可直接连接聊天平台的完整 Bot。`@kaguya/config` 已实现敏感 profile 的本地存储、会话选择和默认回退，但当前 demo 尚未读取这些 profile。配置 UI、真实 provider 的执行装配，以及平台和插件的运行时接线仍属于后续工作；并发队列、工作流循环/重试策略和生产部署也尚未实现。当前 demo 的 policy 和 persona 是固定样例文本；业务应用应在应用层装配自己的数据源和策略。

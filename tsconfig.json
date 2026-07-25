@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "./packages/schema" },
+    { "path": "./packages/config" },
     { "path": "./packages/sdk" },
     { "path": "./packages/engine" },
     { "path": "./packages/prompt" },
