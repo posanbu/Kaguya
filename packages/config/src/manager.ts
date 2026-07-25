@@ -117,6 +117,50 @@ export class FileUserConfigManager {
     return this.#enqueue(() => this.#deleteProfile(profileId));
   }
 
+  async bindSession(sessionId: string, profileId: string): Promise<void> {
+    const requiredSessionId = requireSessionId(sessionId);
+    return this.#enqueue(async () => {
+      this.#requireMetadata(profileId);
+      const sessionBindings = copyBindings(this.#index.sessionBindings);
+      sessionBindings[requiredSessionId] = profileId;
+      const nextIndex: UserConfigIndex = {
+        ...structuredClone(this.#index),
+        sessionBindings,
+      };
+      await this.#writeIndex(nextIndex);
+      this.#index = nextIndex;
+    });
+  }
+
+  async unbindSession(sessionId: string): Promise<void> {
+    const requiredSessionId = requireSessionId(sessionId);
+    return this.#enqueue(async () => {
+      const sessionBindings = copyBindings(this.#index.sessionBindings);
+      if (!Object.hasOwn(sessionBindings, requiredSessionId)) {
+        return;
+      }
+      delete sessionBindings[requiredSessionId];
+      const nextIndex: UserConfigIndex = {
+        ...structuredClone(this.#index),
+        sessionBindings,
+      };
+      await this.#writeIndex(nextIndex);
+      this.#index = nextIndex;
+    });
+  }
+
+  async resolveProfile(sessionId: string): Promise<UserConfigProfile> {
+    const requiredSessionId = requireSessionId(sessionId);
+    await this.#afterPendingWrites();
+    const profileId = Object.hasOwn(
+      this.#index.sessionBindings,
+      requiredSessionId,
+    )
+      ? this.#index.sessionBindings[requiredSessionId]!
+      : this.#index.defaultProfileId;
+    return structuredClone(await this.#readProfile(profileId));
+  }
+
   #enqueue<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.#writeTail.then(operation, operation);
     this.#writeTail = result.then(
@@ -168,14 +212,21 @@ export class FileUserConfigManager {
 
   async #writeIndex(index: UserConfigIndex): Promise<void> {
     const parsed = userConfigIndexSchema.safeParse(index);
-    if (!parsed.success) {
+    const sessionBindings = copyBindings(index.sessionBindings);
+    if (
+      !parsed.success ||
+      !bindingsReferenceKnownProfiles(sessionBindings, parsed.data.profiles)
+    ) {
       throw new ConfigError(
         "CONFIG_IO_ERROR",
         "Refused to persist an invalid configuration index",
       );
     }
     assertPathInside(this.#rootDir, this.#indexPath);
-    await writeSensitiveJson(this.#indexPath, parsed.data);
+    await writeSensitiveJson(this.#indexPath, {
+      ...parsed.data,
+      sessionBindings,
+    });
   }
 
   async #validateReferencedProfiles(): Promise<void> {
@@ -360,7 +411,23 @@ function parsePersistedIndex(value: unknown, path: string): UserConfigIndex {
       `Configuration index failed validation: ${path}`,
     );
   }
-  return parsed.data;
+  const sessionBindings = copyBindings(
+    (
+      value as {
+        sessionBindings: Readonly<Record<string, string>>;
+      }
+    ).sessionBindings,
+  );
+  if (!bindingsReferenceKnownProfiles(sessionBindings, parsed.data.profiles)) {
+    throw new ConfigError(
+      "CONFIG_CORRUPT_STORE",
+      `Configuration index failed validation: ${path}`,
+    );
+  }
+  return {
+    ...parsed.data,
+    sessionBindings,
+  };
 }
 
 function parsePersistedProfile(
@@ -399,6 +466,37 @@ function normalizeProfileName(name: string): string {
   return normalized;
 }
 
+function requireSessionId(sessionId: string): string {
+  if (sessionId.trim().length === 0) {
+    throw new ConfigError(
+      "CONFIG_INVALID_INPUT",
+      "Session ID must not be empty",
+    );
+  }
+  return sessionId;
+}
+
+function copyBindings(
+  source: Readonly<Record<string, string>>,
+): Record<string, string> {
+  const target = Object.create(null) as Record<string, string>;
+  for (const [sessionId, profileId] of Object.entries(source)) {
+    target[sessionId] = profileId;
+  }
+  return target;
+}
+
+function bindingsReferenceKnownProfiles(
+  bindings: Readonly<Record<string, string>>,
+  profiles: readonly UserConfigProfileMetadata[],
+): boolean {
+  const profileIds = new Set(profiles.map(({ id }) => id));
+  return Object.entries(bindings).every(
+    ([sessionId, profileId]) =>
+      sessionId.trim().length > 0 && profileIds.has(profileId),
+  );
+}
+
 async function createInitialStore(
   profilesDir: string,
   indexPath: string,
@@ -417,7 +515,7 @@ async function createInitialStore(
     profiles: [
       { id, name: "default", createdAt: timestamp, updatedAt: timestamp },
     ],
-    sessionBindings: {},
+    sessionBindings: copyBindings({}),
   };
   const path = join(profilesDir, `profile_${id}.json`);
   assertPathInside(dirname(profilesDir), path);
