@@ -1,5 +1,7 @@
 export { ConfigError, configErrorCodes } from "./errors.js";
 export type { ConfigErrorCode } from "./errors.js";
+export { FileUserConfigManager } from "./manager.js";
+export type { FileUserConfigManagerOptions } from "./manager.js";
 export { REDACTED_CONFIG_VALUE, redactConfigValue } from "./redact.js";
 export {
   aiConfigSchema,
