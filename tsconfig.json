@@ -8,6 +8,7 @@
     { "path": "./packages/llm" },
     { "path": "./packages/database" },
     { "path": "./packages/scheduler" },
+    { "path": "./apps/api" },
     { "path": "./apps/demo" }
   ]
 }

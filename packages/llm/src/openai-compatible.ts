@@ -2,6 +2,7 @@ const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_RETRY_DELAY_MS = 500;
+const MAX_RETRY_DELAY_MS = 60_000;
 
 export interface OpenAiCompatibleRequest {
   apiKey: string;
@@ -163,7 +164,6 @@ export class OpenAiCompatibleLlmService {
           attempt,
           durationMs: Math.max(0, this.#now() - startedAt),
           errorKind: normalized.kind,
-          errorMessage: normalized.message,
           ...(normalized.status === undefined
             ? {}
             : { status: normalized.status }),
@@ -176,9 +176,16 @@ export class OpenAiCompatibleLlmService {
           throw normalized;
         }
 
-        await this.#sleep(
-          retryDelay(configuration.retryDelayMs, attempt, normalized.cause),
-        );
+        try {
+          await waitForRetry(
+            retryDelay(configuration.retryDelayMs, attempt, normalized.cause),
+            request.signal,
+            this.#sleep,
+            attempt,
+          );
+        } catch (sleepError) {
+          throw normalizeCallError(sleepError, attempt, request.signal);
+        }
       }
     }
 
@@ -209,6 +216,7 @@ export class OpenAiCompatibleLlmService {
     try {
       return await this.#fetch(configuration.endpoint, {
         method: "POST",
+        redirect: "error",
         headers: configuration.headers,
         body: JSON.stringify({
           model: configuration.model,
@@ -447,7 +455,49 @@ function retryDelay(
   cause: unknown,
 ): number {
   const retryAfterMs = retryAfter(cause);
-  return retryAfterMs ?? baseDelayMs * 2 ** (attempt - 1);
+  return Math.min(
+    MAX_RETRY_DELAY_MS,
+    retryAfterMs ?? baseDelayMs * 2 ** (attempt - 1),
+  );
+}
+
+async function waitForRetry(
+  milliseconds: number,
+  signal: AbortSignal | undefined,
+  sleep: (milliseconds: number) => Promise<void>,
+  attempt: number,
+): Promise<void> {
+  if (signal === undefined) {
+    await sleep(milliseconds);
+    return;
+  }
+  if (signal.aborted) {
+    throw cancelledError(signal, attempt);
+  }
+
+  let abortListener: (() => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    abortListener = () => reject(cancelledError(signal, attempt));
+    signal.addEventListener("abort", abortListener, { once: true });
+  });
+  try {
+    await Promise.race([sleep(milliseconds), aborted]);
+  } finally {
+    if (abortListener !== undefined) {
+      signal.removeEventListener("abort", abortListener);
+    }
+  }
+}
+
+function cancelledError(
+  signal: AbortSignal,
+  attempt: number,
+): OpenAiCompatibleError {
+  return new OpenAiCompatibleError("LLM call cancelled", {
+    kind: "cancelled",
+    attempts: attempt,
+    cause: signal.reason,
+  });
 }
 
 function retryAfter(cause: unknown): number | undefined {

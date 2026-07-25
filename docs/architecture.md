@@ -1,6 +1,6 @@
 # Kaguya 架构
 
-本文描述当前代码已经实现的 3.1 基础设施，不把设计文档中的后续设想当作现状。平台适配器、真实模型配置、Web UI、生产队列和跨进程调度不在当前范围内。
+本文描述当前代码已经实现的 3.1 基础设施，不把设计文档中的后续设想当作现状。平台适配器、生产级真实模型策略、Web UI、生产队列和跨进程调度不在当前范围内。
 
 ## 从会议 3.1 到代码
 
@@ -12,16 +12,18 @@
 | 心跳和长间隔任务               | `@kaguya/scheduler`    | 手动、固定间隔和六字段 cron 触发器；payload 与业务执行器由应用注入       |
 | 多来源 Prompt 的来龙去脉       | `@kaguya/prompt`       | 按优先级稳定编译片段，转义边界字符，并生成每片段 SHA-256 provenance      |
 | 找到并统一所有 LLM request     | `@kaguya/llm`          | 单一生成边界、四类输出校验、错误归一化、成功/失败 trace                  |
+| 为 UI 暴露受控的应用接口       | `@kaguya/api`          | Fastify 网关、Bearer 认证、限流、CORS、OpenAPI 和模型 host 白名单        |
 | 消息、memory 和运行记录        | `@kaguya/database`     | SQLite 迁移与 messages、memories、event_runs、llm_traces repositories    |
 | 消息流转图和三类 bot 逻辑      | `@kaguya/demo`         | 组装消息、心跳、定时记忆工作流；注入数据库、事件总线、Prompt 与 LLM 服务 |
 | 测试关键 Prompt                | `promptfooconfig.yaml` | 离线调用真实 PromptCompiler，验证 route/reply/state/memory 的精确结构    |
 
-`apps/demo` 是 composition root。基础包只提供契约或能力，不知道具体业务 workflow；应用把实现放进 `WorkflowContext.services`，节点通过带类型检查的 getter 取回服务。
+`apps/demo` 是工作流的 composition root；`apps/api` 是独立 HTTP composition root。基础包只提供契约或能力，不知道具体业务 workflow；应用把实现放进 `WorkflowContext.services`，节点通过带类型检查的 getter 取回服务。
 
 ## 包与依赖方向
 
 ```mermaid
 flowchart TD
+  API["@kaguya/api<br/>应用 API 网关"]
   Demo["@kaguya/demo<br/>composition root"]
   Schema["@kaguya/schema<br/>共享契约"]
   SDK["@kaguya/sdk<br/>声明 API"]
@@ -31,6 +33,8 @@ flowchart TD
   LLM["@kaguya/llm<br/>模型边界与 trace"]
   DB["@kaguya/database<br/>SQLite"]
 
+  API --> LLM
+  API --> Schema
   Demo --> SDK
   Demo --> Engine
   Demo --> Scheduler
@@ -47,6 +51,12 @@ flowchart TD
 ```
 
 这些方向由 workspace 依赖和 TypeScript project references 共同表达。`schema` 不知道任何实现；`engine` 不直接创建数据库；`llm` 只通过 `LlmTraceWriter` 写 trace；业务 policy 和 workflow 只存在于应用层。
+
+## 应用 API 网关
+
+`apps/api` 使用 Fastify 及官方 CORS、rate-limit、Swagger 插件，公开健康检查、OpenAPI 文档和受 Bearer token 保护的 OpenAI-compatible 模型连通性接口。自定义模型地址必须命中服务端 hostname 白名单；请求体、鉴权头类型和模型参数都在进入 `@kaguya/llm` 前校验。
+
+该模型接口是配置测试边界，不是正式聊天入口：它不创建 session，不调用 `dispatchEvent`，也不写 `event_runs` 或 `llm_traces`。正式聊天 API 需要把请求映射为事件，并补充持久 run、可重连 SSE、取消和有界队列。完整配置与接口约定见 [应用 API 网关](api-gateway.md)。
 
 ## 事件模型
 
@@ -252,6 +262,8 @@ digest 用于识别内容，不用于恢复或隐藏内容；完整片段和最�
 demo 注入 `MockLanguageModelV3` 并按调用顺序返回确定性 JSON；不配置真实 provider，不访问网络。
 
 `apps/demo` 的 `LlmLifecycleClient` 包装上述生成边界，在应用层发布 `llm.requested/completed/failed`，因此 `@kaguya/llm` 和 `@kaguya/engine` 仍然彼此独立。
+
+`@kaguya/llm` 还导出独立的 `OpenAiCompatibleLlmService`，允许应用层按次传入 API key、base URL、模型和 system/user Prompt，并提供超时、受控重试、usage 统计及结构化日志。该接口面向 UI 后端和模型连通性场景，目前不经过 `KaguyaLlmClient`，因此不会自动执行四类业务 schema 校验或写入 `llm_traces`。正式工作流接入仍需增加 adapter，把动态 provider 模型注入现有生成边界。详细约定见 [OpenAI-compatible LLM 通用接口](openai-compatible-llm.md)。
 
 ## SQLite schema
 

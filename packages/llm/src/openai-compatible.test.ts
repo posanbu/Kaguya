@@ -60,6 +60,7 @@ describe("OpenAiCompatibleLlmService", () => {
       "https://gateway.example/v1/chat/completions",
       expect.objectContaining({
         method: "POST",
+        redirect: "error",
         headers: expect.objectContaining({
           Authorization: "Bearer secret-key",
           "content-type": "application/json",
@@ -121,6 +122,56 @@ describe("OpenAiCompatibleLlmService", () => {
     expect(sleep).toHaveBeenCalledWith(25);
   });
 
+  it("caps exponential retry delays at sixty seconds", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ error: { message: "busy" } }, { status: 503 }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ error: { message: "still busy" } }, { status: 503 }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ choices: [{ message: { content: "recovered" } }] }),
+      );
+    const sleep = vi.fn(() => Promise.resolve());
+    const service = new OpenAiCompatibleLlmService({ fetch, sleep });
+
+    await service.call({
+      ...baseRequest,
+      maxRetries: 2,
+      retryDelayMs: 60_000,
+    });
+
+    expect(sleep).toHaveBeenNthCalledWith(1, 60_000);
+    expect(sleep).toHaveBeenNthCalledWith(2, 60_000);
+  });
+
+  it("cancels while waiting to retry", async () => {
+    const controller = new AbortController();
+    const fetch = vi.fn<typeof globalThis.fetch>(() =>
+      Promise.resolve(
+        jsonResponse({ error: { message: "busy" } }, { status: 503 }),
+      ),
+    );
+    const sleep = vi.fn(() => new Promise<void>(() => undefined));
+    const service = new OpenAiCompatibleLlmService({ fetch, sleep });
+    const pendingCall = service.call({
+      ...baseRequest,
+      maxRetries: 2,
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(sleep).toHaveBeenCalledOnce());
+
+    controller.abort();
+
+    await expect(pendingCall).rejects.toMatchObject({
+      kind: "cancelled",
+      attempts: 1,
+    });
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
   it("does not retry authentication failures", async () => {
     const fetch = vi.fn<typeof globalThis.fetch>(() =>
       Promise.resolve(
@@ -174,6 +225,41 @@ describe("OpenAiCompatibleLlmService", () => {
     expect(serialized).not.toContain(baseRequest.systemPrompt);
     expect(serialized).not.toContain(baseRequest.userPrompt);
     expect(serialized).not.toContain("private answer");
+  });
+
+  it("does not log provider error messages that reflect sensitive input", async () => {
+    const events: OpenAiCompatibleLogEvent[] = [];
+    const logger = {
+      info: vi.fn((event: OpenAiCompatibleLogEvent) => events.push(event)),
+      error: vi.fn((event: OpenAiCompatibleLogEvent) => events.push(event)),
+    };
+    const reflectedMessage = `${baseRequest.apiKey} ${baseRequest.systemPrompt}`;
+    const service = new OpenAiCompatibleLlmService({
+      fetch: () =>
+        Promise.resolve(
+          jsonResponse(
+            { error: { message: reflectedMessage } },
+            { status: 401 },
+          ),
+        ),
+      logger,
+    });
+
+    await expect(service.call(baseRequest)).rejects.toMatchObject({
+      message: reflectedMessage,
+      kind: "non-retryable",
+    });
+
+    const serialized = JSON.stringify(events);
+    expect(serialized).not.toContain(baseRequest.apiKey);
+    expect(serialized).not.toContain(baseRequest.systemPrompt);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "llm.call.failed",
+        errorKind: "non-retryable",
+        status: 401,
+      }),
+    );
   });
 
   it("rejects invalid UI configuration before sending a request", async () => {

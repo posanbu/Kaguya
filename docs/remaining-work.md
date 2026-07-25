@@ -147,7 +147,7 @@ demo 已经展示消息、心跳和定时记忆的流转方式，但 persona、p
 
 **当前基础**
 
-`@kaguya/llm` 已提供统一生成边界、四类响应 schema、错误分类和完整 trace；demo 只注入确定性 mock model。
+`@kaguya/llm` 已提供统一生成边界、四类响应 schema、错误分类和完整 trace；同时提供独立的 OpenAI-compatible 动态调用器，支持按次配置 URL、模型、鉴权、超时和重试。该调用器尚未接入 `KaguyaLlmClient` 的业务 schema 与 trace，demo 仍只注入确定性 mock model。
 
 **为什么必须人工参与**
 
@@ -164,7 +164,7 @@ demo 已经展示消息、心跳和定时记忆的流转方式，但 persona、p
 
 **工程交付物**
 
-- 基于 AI SDK 的真实 provider adapter；
+- 将 OpenAI-compatible 动态调用器或其他 provider adapter 接入 `KaguyaLlmClient`；
 - 按 LLM kind 选择模型和参数的配置；
 - secret manager 注入，不把密钥写入仓库或普通日志；
 - 超时、取消、限流和受控重试；
@@ -498,7 +498,7 @@ AI/检索工程师和后端/数据工程师共同主责，产品与安全负责�
 
 **当前基础**
 
-仓库没有 Web API 或 UI；运行状态只能通过数据库、测试和命令行检查。
+仓库已有一个经过 Bearer 认证、限流和 provider 白名单保护的基础应用 API 网关，并提供模型配置连通性接口与 OpenAPI 文档。它尚不是管理 API：运行状态仍只能通过数据库、测试和命令行检查，也没有 UI、角色授权或操作审计。
 
 **为什么必须人工参与**
 

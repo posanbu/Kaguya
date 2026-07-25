@@ -9,6 +9,7 @@ Kaguya 是一个以事件和有向工作流为核心的 TypeScript AI Bot 基础
 - 手动、固定间隔与六字段 cron 触发器；
 - 带稳定排序和 SHA-256 来源摘要的 Prompt 编译器；
 - 基于 Vercel AI SDK 的结构化 LLM 边界与完整调用 trace；
+- 基于 Fastify 的应用 API 网关、Bearer 认证、限流、CORS 与 OpenAPI；
 - SQLite 消息、记忆、节点运行和 LLM trace 仓储；
 - 消息、心跳、定时记忆三条可执行示例工作流；
 - 不依赖远端模型或 API key 的确定性测试、demo 和 Promptfoo 回归测试；`prompt:test` 会阻断 CLI 外部出口。
@@ -48,6 +49,8 @@ fnm use
 | `pnpm format:check` | 检查格式但不改文件                                    |
 | `pnpm test`         | 运行单元与集成测试                                    |
 | `pnpm prompt:test`  | 阻断外部出口后在本地验证四类 Prompt 的结构            |
+| `pnpm api:dev`      | 构建 API 及 workspace 依赖后启动开发网关              |
+| `pnpm api`          | 启动已构建的应用 API 网关                             |
 | `pnpm demo`         | 运行消息、心跳和定时记忆的确定性端到端示例            |
 
 `prompt:test` 的自定义 provider 只通过 source bridge 加载仓库源码，不创建模型、不读取 API key，也不自行访问网络。固定的 Promptfoo 0.121.19 即使收到 telemetry disable 标志仍可能尝试上报一次“telemetry disabled”；脚本保留 telemetry/update disable 标志，同时把大小写 HTTP(S)/ALL proxy 都指向不可达的 `127.0.0.1:9`，并清空 `NO_PROXY` 绕过列表，因此该尝试不能离开 localhost。
@@ -55,6 +58,7 @@ fnm use
 ## 仓库结构
 
 ```text
+apps/api/           Fastify 应用 API 网关与模型连通性接口
 apps/demo/          三条工作流的组装、确定性模型与可执行示例
 packages/schema/    跨包数据契约
 packages/sdk/       事件、监听器、节点与工作流定义 API
@@ -70,6 +74,9 @@ docs/               调研、架构、会议记录和设计文档
 ## 文档
 
 - [架构说明](docs/architecture.md)：包边界、事件字段、节点/边、工作流、Prompt 与数据库追踪。
+- [应用 API 网关](docs/api-gateway.md)：Fastify 选型、AstrBot 参考、启动配置、接口与安全边界。
+- [2026-07-25 网关更新说明](docs/updates/2026-07-25-application-api-gateway.md)：新增能力、测试修复、兼容性变化与验证结果。
+- [OpenAI-compatible LLM 接口](docs/openai-compatible-llm.md)：动态模型/API 地址、鉴权、重试、日志和 UI 后端接入方式。
 - [人工待实现路线图](docs/remaining-work.md)：生产闭环、可靠性与后续扩展所需的人工决策、工程任务和验收标准。
 - [MaiBot 调研](docs/maibot-analysis.md)：直接 LLM 调用入口、触发关系、Prompt 来源和持久化影响。
 - [贡献指南](CONTRIBUTING.md)：环境、开发流程、新增子包、迁移规则和提交前检查。
@@ -78,4 +85,4 @@ docs/               调研、架构、会议记录和设计文档
 
 ## 当前边界
 
-这是基础设施原型，而不是可直接连接聊天平台的完整 Bot。平台网关、真实模型 provider 配置、并发队列、工作流循环/重试策略、Web UI 和生产部署仍属于后续工作。当前 demo 的 policy 和 persona 是固定样例文本；业务应用应在应用层装配自己的数据源和策略。
+这是基础设施原型，而不是可直接连接聊天平台的完整 Bot。仓库已提供应用 API 网关和独立的 OpenAI-compatible 模型连通性接口，但正式聊天会话 API、工作流的真实模型策略与 trace 接入、平台适配器、持久运行/SSE、并发队列、Web UI 和生产部署仍属于后续工作。当前 demo 的 policy 和 persona 是固定样例文本；业务应用应在应用层装配自己的数据源和策略。
