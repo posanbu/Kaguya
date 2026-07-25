@@ -1,4 +1,8 @@
+import type { JsonObject, JsonValue } from "./model.js";
+
 export const REDACTED_CONFIG_VALUE = "[REDACTED]";
+
+export type RedactedConfigValue = JsonValue;
 
 const secretTerms = [
   "apikey",
@@ -10,11 +14,11 @@ const secretTerms = [
   "accesskey",
 ];
 
-export function redactConfigValue<T>(value: T): T {
-  return redact(value) as T;
+export function redactConfigValue(value: JsonValue): RedactedConfigValue {
+  return redact(value);
 }
 
-function redact(value: unknown): unknown {
+function redact(value: JsonValue): JsonValue {
   if (Array.isArray(value)) {
     return value.map((entry) => redact(entry));
   }
@@ -24,7 +28,7 @@ function redact(value: unknown): unknown {
         key,
         isSecretKey(key) ? REDACTED_CONFIG_VALUE : redact(entry),
       ]),
-    );
+    ) as JsonObject;
   }
   return value;
 }

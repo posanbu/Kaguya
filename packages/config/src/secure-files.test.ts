@@ -23,18 +23,87 @@ import {
 
 const fileSystemFaults = vi.hoisted(() => ({
   failNextTemporaryWrite: false,
+  failNextTemporaryChmod: false,
+  postRenameDirectoryFailure: undefined as
+    "open" | "sync" | "close" | undefined,
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {
     ...actual,
+    chmod: async (
+      path: Parameters<typeof actual.chmod>[0],
+      mode: Parameters<typeof actual.chmod>[1],
+    ) => {
+      if (
+        fileSystemFaults.failNextTemporaryChmod &&
+        typeof path === "string" &&
+        path.endsWith(".tmp")
+      ) {
+        fileSystemFaults.failNextTemporaryChmod = false;
+        throw Object.assign(new Error("injected temporary chmod failure"), {
+          code: "EACCES",
+        });
+      }
+      await actual.chmod(path, mode);
+    },
     open: async (
       path: Parameters<typeof actual.open>[0],
       flags: Parameters<typeof actual.open>[1],
       mode?: Parameters<typeof actual.open>[2],
     ) => {
+      if (
+        fileSystemFaults.postRenameDirectoryFailure === "open" &&
+        flags === "r"
+      ) {
+        fileSystemFaults.postRenameDirectoryFailure = undefined;
+        throw Object.assign(new Error("injected directory open failure"), {
+          code: "EIO",
+        });
+      }
       const handle = await actual.open(path, flags, mode);
+      if (
+        fileSystemFaults.postRenameDirectoryFailure === "sync" &&
+        flags === "r"
+      ) {
+        return new Proxy(handle, {
+          get(target, property) {
+            if (property === "sync") {
+              return async () => {
+                fileSystemFaults.postRenameDirectoryFailure = undefined;
+                throw Object.assign(
+                  new Error("injected directory sync failure"),
+                  { code: "EIO" },
+                );
+              };
+            }
+            const value: unknown = Reflect.get(target, property, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      }
+      if (
+        fileSystemFaults.postRenameDirectoryFailure === "close" &&
+        flags === "r"
+      ) {
+        return new Proxy(handle, {
+          get(target, property) {
+            if (property === "close") {
+              return async () => {
+                fileSystemFaults.postRenameDirectoryFailure = undefined;
+                await target.close();
+                throw Object.assign(
+                  new Error("injected directory close failure"),
+                  { code: "EIO" },
+                );
+              };
+            }
+            const value: unknown = Reflect.get(target, property, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      }
       if (
         !fileSystemFaults.failNextTemporaryWrite ||
         typeof path !== "string" ||
@@ -72,6 +141,8 @@ async function temporaryRoot(): Promise<string> {
 
 afterEach(async () => {
   fileSystemFaults.failNextTemporaryWrite = false;
+  fileSystemFaults.failNextTemporaryChmod = false;
+  fileSystemFaults.postRenameDirectoryFailure = undefined;
   await Promise.all(
     temporaryRoots
       .splice(0)
@@ -129,6 +200,47 @@ describe("sensitive file primitives", () => {
     });
     expect(await readdir(root)).toEqual(["index.json"]);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "keeps the destination unchanged when temporary chmod fails before rename",
+    async () => {
+      const root = await temporaryRoot();
+      const file = join(root, "index.json");
+      await writeSensitiveJson(file, { value: "original" });
+      fileSystemFaults.failNextTemporaryChmod = true;
+
+      await expect(
+        writeSensitiveJson(file, { value: "replacement" }),
+      ).rejects.toMatchObject({
+        code: "CONFIG_PERMISSION_ERROR",
+        message: `Failed to write sensitive JSON: ${file}`,
+      });
+
+      expect(JSON.parse(await readFile(file, "utf8"))).toEqual({
+        value: "original",
+      });
+      expect(await readdir(root)).toEqual(["index.json"]);
+    },
+  );
+
+  it.each(["open", "sync", "close"] as const)(
+    "treats post-rename directory %s failure as a committed write",
+    async (failure) => {
+      const root = await temporaryRoot();
+      const file = join(root, "index.json");
+      await writeSensitiveJson(file, { value: "original" });
+      fileSystemFaults.postRenameDirectoryFailure = failure;
+
+      await expect(
+        writeSensitiveJson(file, { value: "replacement" }),
+      ).resolves.toBeUndefined();
+
+      expect(JSON.parse(await readFile(file, "utf8"))).toEqual({
+        value: "replacement",
+      });
+      expect(await readdir(root)).toEqual(["index.json"]);
+    },
+  );
 
   it("does not expose values that cause JSON serialization to fail", async () => {
     const root = await temporaryRoot();

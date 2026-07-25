@@ -43,14 +43,20 @@ const selected = await configs.resolveProfile("session-1");
 `resolveProfile()` only where runtime code needs the complete secret-bearing
 configuration.
 
+`updateProfile()` replaces the complete `ai`, `platforms`, and `plugins`
+settings set; it is not a partial merge. The current default profile may be
+edited, but it cannot be renamed or deleted. A profile selected by any session
+cannot be deleted until every such session is explicitly unbound or rebound.
+
 ## Storage boundary
 
 - POSIX directories are corrected to `0700`; managed files are corrected to
   `0600`.
 - Managed symlinks and paths outside the root are rejected.
 - Writes use a synchronized temporary file and atomic replacement.
-- One process may write a configuration root. Cross-process locking is not
-  provided.
+- Each configuration root must have exactly one live
+  `FileUserConfigManager`/writer instance, including within the same process.
+  Coordination across manager instances or processes is not supported.
 - Windows deployments must apply restrictive NTFS ACLs; POSIX modes do not
   provide an equivalent Windows guarantee.
 - Plaintext storage does not protect against the same OS user, administrators,

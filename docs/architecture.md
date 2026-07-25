@@ -63,7 +63,7 @@ flowchart TD
 
 `FileUserConfigManager.open({ rootDir })` 创建或打开存储。它提供 `listProfiles()`（只返回元数据）、`getProfile()`、`createProfile()`、`updateProfile()`、`deleteProfile()`、默认 profile 读写、会话绑定/解绑和 `resolveProfile()`；未绑定会话解析到默认 profile。profile JSON 中的 API key、平台凭据和插件设置以明文保存，因此完整 profile 只应在运行时代码确有需要时读取。
 
-在 POSIX 上，根目录和 `profiles/` 目录会校正为 `0700`，index、profile 和临时文件会校正为 `0600`。受管目录或文件中的符号链接、越出根目录的路径和不属于当前用户的 POSIX 路径会被拒绝。写入先同步唯一临时文件，再以原子替换落盘，并在支持时同步父目录；同一 manager 实例内会串行化修改。该实现不提供跨进程锁，同一配置根目录只能有一个写进程。Windows 不具备等价的 POSIX mode 保证，部署者必须配置只允许运行身份访问的 NTFS ACL。
+在 POSIX 上，根目录和 `profiles/` 目录会校正为 `0700`，index、profile 和临时文件会校正为 `0600`。受管目录或文件中的符号链接、越出根目录的路径和不属于当前用户的 POSIX 路径会被拒绝。写入先同步唯一临时文件，再以原子替换落盘，并在支持时同步父目录；同一 manager 实例内会串行化修改。每个配置根目录在任意时刻必须恰好只有一个活跃的 `FileUserConfigManager`/writer 实例，包括同一进程内；该实现不支持多个 manager 实例之间或跨进程的协调。Windows 不具备等价的 POSIX mode 保证，部署者必须配置只允许运行身份访问的 NTFS ACL。
 
 该包当前只实现存储和选择语义，`apps/demo` 尚未消费 profile。配置 UI、真实 provider adapter/execution，以及平台和插件的运行时 wiring 仍须按 [人工待实现路线图](remaining-work.md) 完成；配置 package 不连接 SQLite database。
 

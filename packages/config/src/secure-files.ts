@@ -57,9 +57,7 @@ function validateManagedAncestors(root: string, offset: string): void {
 
     if (canonicalRoot === undefined) {
       canonicalRoot = canonicalPath;
-    } else if (
-      !isContainedOffset(relative(canonicalRoot, canonicalPath))
-    ) {
+    } else if (!isContainedOffset(relative(canonicalRoot, canonicalPath))) {
       throw new ConfigError(
         "CONFIG_UNSAFE_PATH",
         `Managed path escapes configuration root: ${canonicalPath}`,
@@ -177,20 +175,14 @@ export async function writeSensitiveJson(
     }
 
     handle = await open(temporaryPath, "wx", FILE_MODE);
+    if (process.platform !== "win32") {
+      await chmod(temporaryPath, FILE_MODE);
+    }
     await handle.writeFile(serializedValue, "utf8");
     await handle.sync();
     await handle.close();
     handle = undefined;
     await rename(temporaryPath, path);
-    if (process.platform !== "win32") {
-      await chmod(path, FILE_MODE);
-      const directoryHandle = await open(directory, "r");
-      try {
-        await directoryHandle.sync();
-      } finally {
-        await directoryHandle.close();
-      }
-    }
   } catch (error) {
     await handle?.close().catch(() => undefined);
     await unlink(temporaryPath).catch(() => undefined);
@@ -198,6 +190,10 @@ export async function writeSensitiveJson(
       throw error;
     }
     throw normalizeFileError("write sensitive JSON", path, error);
+  }
+
+  if (process.platform !== "win32") {
+    await synchronizeDirectoryBestEffort(directory);
   }
 }
 
@@ -217,6 +213,19 @@ function isMissingFileError(error: unknown): boolean {
     "code" in error &&
     error.code === "ENOENT"
   );
+}
+
+async function synchronizeDirectoryBestEffort(path: string): Promise<void> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(path, "r");
+    await handle.sync();
+  } catch {
+    // Rename is the logical commit boundary. Durability confirmation has no
+    // recovery path and must not be reported as an uncommitted write.
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
 }
 
 function normalizeFileError(

@@ -44,13 +44,7 @@ export class FileUserConfigManager {
   static async open(
     options: FileUserConfigManagerOptions,
   ): Promise<FileUserConfigManager> {
-    const rootDir = resolve(options.rootDir);
-    if (options.rootDir.trim().length === 0) {
-      throw new ConfigError(
-        "CONFIG_INVALID_INPUT",
-        "Configuration root must not be empty",
-      );
-    }
+    const rootDir = resolve(requireConfigurationRoot(options));
     const profilesDir = join(rootDir, "profiles");
     const indexPath = join(rootDir, "index.json");
 
@@ -94,7 +88,10 @@ export class FileUserConfigManager {
     initial?: UserConfigProfileSettings,
   ): Promise<UserConfigProfile> {
     return this.#enqueue(() =>
-      this.#createProfile(name, initial ?? emptyUserConfigProfileSettings()),
+      this.#createProfile(
+        name,
+        initial === undefined ? emptyUserConfigProfileSettings() : initial,
+      ),
     );
   }
 
@@ -175,7 +172,15 @@ export class FileUserConfigManager {
   }
 
   #requireMetadata(profileId: string): UserConfigProfileMetadata {
-    if (!profileIdSchema.safeParse(profileId).success) {
+    let isValidProfileId = false;
+    try {
+      isValidProfileId =
+        typeof profileId === "string" &&
+        profileIdSchema.safeParse(profileId).success;
+    } catch {
+      // Normalize runtime type mismatches and proxy traps without retaining them.
+    }
+    if (!isValidProfileId) {
       throw new ConfigError(
         "CONFIG_INVALID_INPUT",
         "Configuration profile ID is invalid",
@@ -212,26 +217,30 @@ export class FileUserConfigManager {
 
   async #writeIndex(index: UserConfigIndex): Promise<void> {
     const parsed = userConfigIndexSchema.safeParse(index);
-    const sessionBindings = copyBindings(index.sessionBindings);
-    if (
-      !parsed.success ||
-      !bindingsReferenceKnownProfiles(sessionBindings, parsed.data.profiles)
-    ) {
+    if (!parsed.success) {
       throw new ConfigError(
         "CONFIG_IO_ERROR",
         "Refused to persist an invalid configuration index",
       );
     }
     assertPathInside(this.#rootDir, this.#indexPath);
-    await writeSensitiveJson(this.#indexPath, {
-      ...parsed.data,
-      sessionBindings,
-    });
+    await writeSensitiveJson(this.#indexPath, parsed.data);
   }
 
   async #validateReferencedProfiles(): Promise<void> {
     for (const metadata of this.#index.profiles) {
-      const profile = await this.#readProfile(metadata.id);
+      let profile: UserConfigProfile;
+      try {
+        profile = await this.#readProfile(metadata.id);
+      } catch (error) {
+        if (isMissingPath(error)) {
+          throw new ConfigError(
+            "CONFIG_CORRUPT_STORE",
+            "Configuration index references a missing profile",
+          );
+        }
+        throw error;
+      }
       if (profile.name !== metadata.name) {
         const path = this.#profilePath(metadata.id);
         throw new ConfigError(
@@ -296,12 +305,13 @@ export class FileUserConfigManager {
     profileId: string,
     update: UpdateUserConfigProfileInput,
   ): Promise<UserConfigProfile> {
+    const parsedUpdate = parseUpdateInput(update);
     const metadata = this.#requireMetadata(profileId);
     const oldProfile = await this.#readProfile(profileId);
     const name =
-      update.name === undefined
+      parsedUpdate.name === undefined
         ? metadata.name
-        : normalizeProfileName(update.name);
+        : normalizeProfileName(parsedUpdate.name);
     if (profileId === this.#index.defaultProfileId && name !== metadata.name) {
       throw new ConfigError(
         "CONFIG_DEFAULT_PROFILE_PROTECTED",
@@ -318,16 +328,11 @@ export class FileUserConfigManager {
         `Configuration profile name already exists: ${name}`,
       );
     }
-    const settings = parseSettings({
-      ai: update.ai,
-      platforms: update.platforms,
-      plugins: update.plugins,
-    });
     const profile: UserConfigProfile = {
       version: 1,
       id: profileId,
       name,
-      ...settings,
+      ...parsedUpdate.settings,
     };
     const nextIndex: UserConfigIndex = {
       ...structuredClone(this.#index),
@@ -395,11 +400,21 @@ export class FileUserConfigManager {
 }
 
 function isMissingPath(error: unknown): boolean {
+  if (
+    typeof error !== "object" ||
+    error === null ||
+    !("code" in error || "cause" in error)
+  ) {
+    return false;
+  }
+  if ("code" in error && error.code === "ENOENT") {
+    return true;
+  }
   return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    error.code === "ENOENT"
+    "cause" in error &&
+    error.cause !== undefined &&
+    error.cause !== error &&
+    isMissingPath(error.cause)
   );
 }
 
@@ -411,23 +426,7 @@ function parsePersistedIndex(value: unknown, path: string): UserConfigIndex {
       `Configuration index failed validation: ${path}`,
     );
   }
-  const sessionBindings = copyBindings(
-    (
-      value as {
-        sessionBindings: Readonly<Record<string, string>>;
-      }
-    ).sessionBindings,
-  );
-  if (!bindingsReferenceKnownProfiles(sessionBindings, parsed.data.profiles)) {
-    throw new ConfigError(
-      "CONFIG_CORRUPT_STORE",
-      `Configuration index failed validation: ${path}`,
-    );
-  }
-  return {
-    ...parsed.data,
-    sessionBindings,
-  };
+  return parsed.data;
 }
 
 function parsePersistedProfile(
@@ -445,17 +444,60 @@ function parsePersistedProfile(
 }
 
 function parseSettings(value: unknown): UserConfigProfileSettings {
-  const parsed = userConfigProfileSettingsSchema.safeParse(value);
-  if (!parsed.success) {
+  try {
+    const parsed = userConfigProfileSettingsSchema.safeParse(value);
+    if (parsed.success) {
+      return parsed.data;
+    }
+  } catch {
+    // Normalize hostile getters and proxy traps without retaining their errors.
+  }
+  throw new ConfigError(
+    "CONFIG_INVALID_INPUT",
+    "Configuration profile input failed validation",
+  );
+}
+
+function parseUpdateInput(value: unknown): {
+  name: unknown;
+  settings: UserConfigProfileSettings;
+} {
+  try {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new ConfigError(
+        "CONFIG_INVALID_INPUT",
+        "Configuration profile input failed validation",
+      );
+    }
+    const update = value as {
+      readonly ai?: unknown;
+      readonly name?: unknown;
+      readonly platforms?: unknown;
+      readonly plugins?: unknown;
+    };
+    return {
+      name: update.name,
+      settings: parseSettings({
+        ai: update.ai,
+        platforms: update.platforms,
+        plugins: update.plugins,
+      }),
+    };
+  } catch {
     throw new ConfigError(
       "CONFIG_INVALID_INPUT",
       "Configuration profile input failed validation",
     );
   }
-  return parsed.data;
 }
 
-function normalizeProfileName(name: string): string {
+function normalizeProfileName(name: unknown): string {
+  if (typeof name !== "string") {
+    throw new ConfigError(
+      "CONFIG_INVALID_INPUT",
+      "Configuration profile name must not be empty",
+    );
+  }
   const normalized = name.trim();
   if (normalized.length === 0) {
     throw new ConfigError(
@@ -466,7 +508,13 @@ function normalizeProfileName(name: string): string {
   return normalized;
 }
 
-function requireSessionId(sessionId: string): string {
+function requireSessionId(sessionId: unknown): string {
+  if (typeof sessionId !== "string") {
+    throw new ConfigError(
+      "CONFIG_INVALID_INPUT",
+      "Session ID must not be empty",
+    );
+  }
   if (sessionId.trim().length === 0) {
     throw new ConfigError(
       "CONFIG_INVALID_INPUT",
@@ -474,6 +522,32 @@ function requireSessionId(sessionId: string): string {
     );
   }
   return sessionId;
+}
+
+function requireConfigurationRoot(options: unknown): string {
+  let rootDir: unknown;
+  try {
+    if (options === null || typeof options !== "object") {
+      throw new Error();
+    }
+    rootDir = (options as { readonly rootDir?: unknown }).rootDir;
+  } catch {
+    throw new ConfigError(
+      "CONFIG_INVALID_INPUT",
+      "Configuration root is invalid",
+    );
+  }
+  if (
+    typeof rootDir !== "string" ||
+    rootDir.trim().length === 0 ||
+    rootDir.includes("\0")
+  ) {
+    throw new ConfigError(
+      "CONFIG_INVALID_INPUT",
+      "Configuration root is invalid",
+    );
+  }
+  return rootDir;
 }
 
 function copyBindings(
@@ -484,17 +558,6 @@ function copyBindings(
     target[sessionId] = profileId;
   }
   return target;
-}
-
-function bindingsReferenceKnownProfiles(
-  bindings: Readonly<Record<string, string>>,
-  profiles: readonly UserConfigProfileMetadata[],
-): boolean {
-  const profileIds = new Set(profiles.map(({ id }) => id));
-  return Object.entries(bindings).every(
-    ([sessionId, profileId]) =>
-      sessionId.trim().length > 0 && profileIds.has(profileId),
-  );
 }
 
 async function createInitialStore(
