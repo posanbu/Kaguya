@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   OpenAiCompatibleError,
   OpenAiCompatibleLlmService,
+  type OpenAiCompatibleRequest,
   type OpenAiCompatibleLogEvent,
 } from "./openai-compatible.js";
 
@@ -468,6 +469,9 @@ describe("OpenAiCompatibleLlmService", () => {
 
     await expect(
       service.call({ ...baseRequest, apiKey: "  " }),
+    ).rejects.toMatchObject({ kind: "configuration", attempts: 0 });
+    await expect(
+      service.call(null as unknown as OpenAiCompatibleRequest),
     ).rejects.toMatchObject({ kind: "configuration", attempts: 0 });
     await expect(
       service.call({ ...baseRequest, baseUrl: "file:///tmp/model" }),

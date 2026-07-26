@@ -246,20 +246,24 @@ interface NormalizedRequest {
 }
 
 function normalizeRequest(request: OpenAiCompatibleRequest): NormalizedRequest {
-  const apiKey = requireTrimmedText(request.apiKey, "apiKey");
-  const model = requireTrimmedText(request.model, "model");
-  const systemPrompt = requirePromptText(request.systemPrompt, "systemPrompt");
-  const userPrompt = requirePromptText(request.userPrompt, "userPrompt");
-  const endpoint = resolveProviderEndpoint(request.baseUrl);
-  const temperature = request.temperature ?? 0;
+  if (!isRecord(request) || Array.isArray(request)) {
+    throw configurationError("request must be an object");
+  }
+  const input = request as OpenAiCompatibleRequest;
+  const apiKey = requireTrimmedText(input.apiKey, "apiKey");
+  const model = requireTrimmedText(input.model, "model");
+  const systemPrompt = requirePromptText(input.systemPrompt, "systemPrompt");
+  const userPrompt = requirePromptText(input.userPrompt, "userPrompt");
+  const endpoint = resolveProviderEndpoint(input.baseUrl);
+  const temperature = input.temperature ?? 0;
   const maxRetries = integerInRange(
-    request.maxRetries ?? DEFAULT_MAX_RETRIES,
+    input.maxRetries ?? DEFAULT_MAX_RETRIES,
     "maxRetries",
     0,
     10,
   );
   const timeoutMs = integerInRange(
-    request.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     "timeoutMs",
     1,
     300_000,
@@ -273,8 +277,7 @@ function normalizeRequest(request: OpenAiCompatibleRequest): NormalizedRequest {
   }
 
   const apiKeyHeader =
-    optionalTrimmedText(request.apiKeyHeader, "apiKeyHeader") ??
-    "Authorization";
+    optionalTrimmedText(input.apiKeyHeader, "apiKeyHeader") ?? "Authorization";
   if (!isHeaderName(apiKeyHeader)) {
     throw configurationError("apiKeyHeader must be a valid HTTP header name");
   }
@@ -288,7 +291,7 @@ function normalizeRequest(request: OpenAiCompatibleRequest): NormalizedRequest {
   const authentication = authenticationOptions(
     apiKey,
     apiKeyHeader,
-    request.additionalHeaders,
+    input.additionalHeaders,
   );
 
   return {
