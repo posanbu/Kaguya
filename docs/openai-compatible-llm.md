@@ -53,19 +53,19 @@ console.log(result.usage);
 
 ## 请求字段
 
-| 字段                | 必填 | 默认值                      | 说明                                                                     |
-| ------------------- | ---- | --------------------------- | ------------------------------------------------------------------------ |
-| `apiKey`            | 是   | 无                          | API 密钥，只用于本次请求                                                 |
-| `baseUrl`           | 否   | `https://api.openai.com/v1` | API base URL，或完整的 `chat/completions` URL                            |
-| `model`             | 是   | 无                          | 本次调用使用的模型 ID                                                    |
-| `systemPrompt`      | 是   | 无                          | system 消息                                                              |
-| `userPrompt`        | 是   | 无                          | user 消息                                                                |
-| `temperature`       | 否   | `0`                         | 取值范围 `0..2`                                                          |
-| `maxRetries`        | 否   | `2`                         | 直接交给 `generateText` 的最大重试次数，取值范围 `0..10`                 |
-| `timeoutMs`         | 否   | `30000`                     | 整次 SDK 调用的总超时，取值范围 `1..300000`                              |
-| `apiKeyHeader`      | 否   | `Authorization`             | 非 Bearer 服务可设置为 `api-key` 等 header 名称；不能使用 `Content-Type` |
-| `additionalHeaders` | 否   | 无                          | provider 要求的额外 HTTP headers；不能覆盖 `Content-Type`                |
-| `signal`            | 否   | 无                          | 调用方提供的 `AbortSignal`，用于取消整个调用                             |
+| 字段                | 必填 | 默认值                      | 说明                                                                                      |
+| ------------------- | ---- | --------------------------- | ----------------------------------------------------------------------------------------- |
+| `apiKey`            | 是   | 无                          | API 密钥，只用于本次请求                                                                  |
+| `baseUrl`           | 否   | `https://api.openai.com/v1` | API base URL，或完整的 `chat/completions` URL                                             |
+| `model`             | 是   | 无                          | 本次调用使用的模型 ID                                                                     |
+| `systemPrompt`      | 是   | 无                          | system 消息；只用 trim 结果校验非空，发送时保留原始空白                                   |
+| `userPrompt`        | 是   | 无                          | user 消息；只用 trim 结果校验非空，发送时保留原始空白                                     |
+| `temperature`       | 否   | `0`                         | 取值范围 `0..2`                                                                           |
+| `maxRetries`        | 否   | `2`                         | 直接交给 `generateText` 的最大重试次数，取值范围 `0..10`                                  |
+| `timeoutMs`         | 否   | `30000`                     | 整次 SDK 调用的总超时，取值范围 `1..300000`                                               |
+| `apiKeyHeader`      | 否   | `Authorization`             | 非 Bearer 服务可设置为 `api-key` 等 header 名称；不能使用 `Content-Type` 或保留 header    |
+| `additionalHeaders` | 否   | 无                          | provider 要求的额外 HTTP headers；不能覆盖 `Content-Type` 或连接/请求 framing 保留 header |
+| `signal`            | 否   | 无                          | 调用方提供的 `AbortSignal`，用于取消整个调用                                              |
 
 当 `apiKeyHeader` 为 `Authorization` 时，密钥通过 provider SDK 的 `apiKey` 选项传入，由 SDK 生成 `Bearer <apiKey>`；使用其他 header 名称时通过 SDK 的自定义 headers 发送密钥值。
 
@@ -109,7 +109,7 @@ interface OpenAiCompatibleResult {
 }
 ```
 
-`model` 优先使用 provider 响应中的模型 ID；provider 未返回时使用请求值。`usage` 和 `requestId` 取决于 provider 是否返回相应数据。
+`model` 优先使用 provider 响应中的模型 ID；provider 未返回时使用请求值。`usage` 和 `requestId` 取决于 provider 是否返回相应数据；如果 provider 只返回原始 `usage.total_tokens`，service 也会保留该总数。
 
 ## 重试与错误
 
@@ -128,11 +128,11 @@ interface OpenAiCompatibleResult {
 | `non-retryable` | 鉴权、请求、协议或响应内容错误              |
 | `cancelled`     | 调用方 `AbortSignal` 中止或 SDK 总超时      |
 
-错误还包含 `attempts`，provider 错误可能包含 `status`。接口在 SDK 用尽 `maxRetries` 后抛出归一化后的错误。
+错误还包含 `attempts`，provider 错误可能包含 `status`。归一化错误使用稳定的脱敏 `message`，也不会保留 SDK 原始异常的 `cause`，因为原始异常中可能包含完整 Prompt、请求头、provider 错误消息或响应体；接口在 SDK 用尽 `maxRetries` 后抛出归一化后的错误。
 
 ## 日志与安全边界
 
-结构化日志只记录事件名、模型、endpoint、尝试次数、耗时、状态、usage 和错误分类，不记录 provider 原始错误消息、API key、Prompt 或模型回答。endpoint 的 query 和 hash 在日志中会移除。adapter 的 fetch wrapper 强制使用 `redirect: "error"`，调用方必须提供最终 provider 地址。
+结构化日志只记录事件名、模型、endpoint、尝试次数、耗时、状态、usage 和错误分类，不记录 provider 原始错误消息、API key、Prompt 或模型回答。日志中的 `endpoint` 仅保留 provider 的 URL origin，不保留可能包含租户标识、部署路径、签名参数或其他敏感信息的 path、query 和 hash。`apiKeyHeader` 与 `additionalHeaders` 会拒绝 `Host`、`Content-Length`、`Transfer-Encoding`、`Connection`、`Proxy-Authorization` 等连接或请求 framing 保留 header。adapter 的 fetch wrapper 强制使用 `redirect: "error"`，调用方必须提供最终 provider 地址。
 
 生产接入还必须在 core/application 层完成以下控制：
 

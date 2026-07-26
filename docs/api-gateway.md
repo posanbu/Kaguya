@@ -77,12 +77,12 @@ pnpm api
 
 消息请求体只允许两个字段：
 
-| 字段        | 约束                                                               |
-| ----------- | ------------------------------------------------------------------ |
-| `sessionId` | 字符串；trim 后非空；最长 256 个字符；入队时使用 trim 后的值       |
-| `text`      | 字符串；非空且 trim 后非空；最长 131072 个字符；入队时保留原始空白 |
+| 字段        | 约束                                                                              |
+| ----------- | --------------------------------------------------------------------------------- |
+| `sessionId` | 字符串；trim 后非空；最长 256 个 Unicode code point；入队时使用 trim 后的值       |
+| `text`      | 字符串；非空且 trim 后非空；最长 131072 个 Unicode code point；入队时保留原始空白 |
 
-任何额外字段都会返回 `400 invalid_request`，包括 `apiKey`、`baseUrl` 和 `model`。
+任何额外字段都会返回 `400 invalid_request`，包括 `apiKey`、`baseUrl` 和 `model`。完整 JSON 请求体仍受 256 KiB 字节上限约束，因此多字节文本可能先触发 `413 request_rejected`。
 
 调用示例：
 
@@ -131,14 +131,15 @@ messageIngress.enqueue({
 
 失败响应统一使用 `{ "error": { "code", "message", "requestId" } }`。当前公开错误码包括：
 
-| 错误码             | 典型状态码 | 含义                                |
-| ------------------ | ---------- | ----------------------------------- |
-| `unauthorized`     | `401`      | Bearer token 缺失或不正确           |
-| `invalid_request`  | `400`      | JSON body 不符合严格 schema         |
-| `core_unavailable` | `503`      | composition root 未配置消息 ingress |
-| `rate_limited`     | `429`      | 来源超过限流配额                    |
-| `request_rejected` | 其他 `4xx` | Fastify 拒绝了请求                  |
-| `internal_error`   | `500`      | ingress 失败或网关发生未处理异常    |
+| 错误码             | 典型状态码 | 含义                                  |
+| ------------------ | ---------- | ------------------------------------- |
+| `unauthorized`     | `401`      | Bearer token 缺失或不正确             |
+| `invalid_request`  | `400`      | JSON body 不符合严格 schema           |
+| `not_found`        | `404`      | 请求的路由不存在                      |
+| `core_unavailable` | `503`      | composition root 未配置消息 ingress   |
+| `rate_limited`     | `429`      | 来源超过限流配额                      |
+| `request_rejected` | 其他 `4xx` | Fastify 拒绝请求，例如 `413` 或 `415` |
+| `internal_error`   | `500`      | ingress 失败或网关发生未处理异常      |
 
 ## 安全边界
 
@@ -146,7 +147,7 @@ messageIngress.enqueue({
 - 已认证与未认证流量使用独立限流桶，失败认证不会耗尽合法调用额度。
 - 请求 schema 严格拒绝未知字段，网关不会接收或记录 provider API key、URL 和模型名。
 - ingress 内部异常不会回显给客户端，只返回规范化的 `internal_error`。
-- `x-request-id` 会进入响应与 `MessageIngressCommand`，用于跨边界追踪。
+- 合法的 `x-request-id` 会进入响应与 `MessageIngressCommand`，用于跨边界追踪。客户端 ID 必须为 1 到 128 个 ASCII 字符，首字符为字母或数字，其余字符只允许字母、数字、点、下划线、冒号和连字符；非法值会被新的 UUID 替换。
 - 只有 `KAGUYA_TRUST_PROXY` 明确列出的代理才能影响客户端 IP 和限流 key。
 - 请求体上限为 256 KiB。生产部署仍应在反向代理层配置 TLS、连接数和请求超时。
 - CORS 只限制浏览器来源，不能替代 Bearer 认证或服务端授权。

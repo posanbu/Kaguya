@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
@@ -12,13 +12,23 @@ import Fastify, {
 
 import type { ApiGatewayConfig } from "./config.js";
 
+const MAX_SESSION_ID_LENGTH = 256;
+const MAX_MESSAGE_TEXT_LENGTH = 131_072;
+const MAX_REQUEST_ID_LENGTH = 128;
+const REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
+
 const messageRequestSchema = z
   .object({
-    sessionId: z.string().trim().min(1).max(256),
+    sessionId: z
+      .string()
+      .min(1)
+      .refine((value) => hasAtMostCodePoints(value, MAX_SESSION_ID_LENGTH))
+      .transform((value) => value.trim())
+      .refine((value) => value.length > 0),
     text: z
       .string()
       .min(1)
-      .max(131_072)
+      .refine((value) => hasAtMostCodePoints(value, MAX_MESSAGE_TEXT_LENGTH))
       .refine((value) => value.trim().length > 0),
   })
   .strict();
@@ -28,8 +38,16 @@ const messageBodyJsonSchema = {
   additionalProperties: false,
   required: ["sessionId", "text"],
   properties: {
-    sessionId: { type: "string", minLength: 1, maxLength: 256 },
-    text: { type: "string", minLength: 1, maxLength: 131_072 },
+    sessionId: {
+      type: "string",
+      minLength: 1,
+      maxLength: MAX_SESSION_ID_LENGTH,
+    },
+    text: {
+      type: "string",
+      minLength: 1,
+      maxLength: MAX_MESSAGE_TEXT_LENGTH,
+    },
   },
 } as const;
 
@@ -90,7 +108,9 @@ export async function createApiGateway(
   const app = Fastify({
     logger: options.logger ?? false,
     bodyLimit: 256 * 1024,
-    requestIdHeader: "x-request-id",
+    requestIdHeader: false,
+    genReqId: (request) =>
+      validRequestId(request.headers["x-request-id"]) ?? randomUUID(),
     trustProxy: options.config.trustProxy,
     ajv: {
       customOptions: {
@@ -179,6 +199,8 @@ export async function createApiGateway(
           202: acceptedMessageResponseJsonSchema,
           400: errorResponseJsonSchema,
           401: errorResponseJsonSchema,
+          413: errorResponseJsonSchema,
+          415: errorResponseJsonSchema,
           429: errorResponseJsonSchema,
           500: errorResponseJsonSchema,
           503: errorResponseJsonSchema,
@@ -209,8 +231,16 @@ export async function createApiGateway(
     },
   );
 
+  app.setNotFoundHandler(async (request, reply) =>
+    reply.code(404).send(errorBody("not_found", "Route not found", request.id)),
+  );
+
   app.setErrorHandler(async (error, request, reply) => {
-    if (isValidationError(error) || error instanceof z.ZodError) {
+    if (
+      isValidationError(error) ||
+      error instanceof z.ZodError ||
+      isMalformedJsonError(error)
+    ) {
       return reply
         .code(400)
         .send(
@@ -276,6 +306,25 @@ function hasValidGatewayToken(
   );
 }
 
+function validRequestId(value: string | string[] | undefined) {
+  return typeof value === "string" &&
+    value.length <= MAX_REQUEST_ID_LENGTH &&
+    REQUEST_ID_PATTERN.test(value)
+    ? value
+    : undefined;
+}
+
+function hasAtMostCodePoints(value: string, maximum: number): boolean {
+  let length = 0;
+  for (const _codePoint of value) {
+    length += 1;
+    if (length > maximum) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function errorBody(code: string, message: string, requestId: string) {
   return { error: { code, message, requestId } };
 }
@@ -286,6 +335,15 @@ function isValidationError(error: unknown): boolean {
     error !== null &&
     "validation" in error &&
     error.validation !== undefined
+  );
+}
+
+function isMalformedJsonError(error: unknown): boolean {
+  return (
+    isHttpError(error) &&
+    error.statusCode === 400 &&
+    "code" in error &&
+    error.code === "FST_ERR_CTP_INVALID_JSON_BODY"
   );
 }
 

@@ -8,6 +8,29 @@ const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_RETRIES = 2;
 
+// These headers can change the HTTP connection or request framing. They are
+// controlled by the SDK/fetch implementation and must not be supplied by a
+// provider configuration object.
+const DISALLOWED_CUSTOM_HEADER_NAMES = new Set([
+  "connection",
+  "content-length",
+  "expect",
+  "host",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "proxy-connection",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+  // These names are valid HTTP tokens, but are unsafe when the provider
+  // headers are assembled through ordinary JavaScript objects.
+  "__proto__",
+  "constructor",
+  "prototype",
+]);
+
 export interface OpenAiCompatibleRequest {
   apiKey: string;
   baseUrl?: string;
@@ -44,22 +67,22 @@ export class OpenAiCompatibleError extends Error {
   readonly kind: OpenAiCompatibleErrorKind;
   readonly status?: number;
   readonly attempts: number;
-  override readonly cause: unknown;
 
   constructor(
     message: string,
     options: {
       kind: OpenAiCompatibleErrorKind;
       attempts: number;
-      cause?: unknown;
       status?: number;
     },
   ) {
-    super(message, { cause: options.cause });
+    // Do not attach the SDK error as `cause`: provider errors can contain the
+    // serialized prompt, request headers, and response body. Callers receive
+    // the stable classification fields below and can log them safely.
+    super(message);
     this.name = "OpenAiCompatibleError";
     this.kind = options.kind;
     this.attempts = options.attempts;
-    this.cause = options.cause;
     if (options.status !== undefined) {
       this.status = options.status;
     }
@@ -167,7 +190,10 @@ export class OpenAiCompatibleLlmService {
         });
       }
 
-      const usage = normalizeUsage(generated.usage);
+      const usage = normalizeUsage(
+        generated.usage,
+        generated.steps.map((step) => step.usage.raw),
+      );
       const requestId = headerValue(generated.response.headers, "x-request-id");
       const result: OpenAiCompatibleResult = {
         content: generated.text,
@@ -220,10 +246,10 @@ interface NormalizedRequest {
 }
 
 function normalizeRequest(request: OpenAiCompatibleRequest): NormalizedRequest {
-  const apiKey = requireText(request.apiKey, "apiKey");
-  const model = requireText(request.model, "model");
-  const systemPrompt = requireText(request.systemPrompt, "systemPrompt");
-  const userPrompt = requireText(request.userPrompt, "userPrompt");
+  const apiKey = requireTrimmedText(request.apiKey, "apiKey");
+  const model = requireTrimmedText(request.model, "model");
+  const systemPrompt = requirePromptText(request.systemPrompt, "systemPrompt");
+  const userPrompt = requirePromptText(request.userPrompt, "userPrompt");
   const endpoint = resolveProviderEndpoint(request.baseUrl);
   const temperature = request.temperature ?? 0;
   const maxRetries = integerInRange(
@@ -246,12 +272,18 @@ function normalizeRequest(request: OpenAiCompatibleRequest): NormalizedRequest {
     throw configurationError("apiKey contains invalid header characters");
   }
 
-  const apiKeyHeader = request.apiKeyHeader?.trim() || "Authorization";
+  const apiKeyHeader =
+    optionalTrimmedText(request.apiKeyHeader, "apiKeyHeader") ??
+    "Authorization";
   if (!isHeaderName(apiKeyHeader)) {
     throw configurationError("apiKeyHeader must be a valid HTTP header name");
   }
-  if (apiKeyHeader.toLowerCase() === "content-type") {
+  const normalizedApiKeyHeader = apiKeyHeader.toLowerCase();
+  if (normalizedApiKeyHeader === "content-type") {
     throw configurationError("apiKeyHeader cannot be content-type");
+  }
+  if (isDisallowedCustomHeaderName(normalizedApiKeyHeader)) {
+    throw configurationError("apiKeyHeader cannot be a reserved HTTP header");
   }
   const authentication = authenticationOptions(
     apiKey,
@@ -284,8 +316,8 @@ function resolveProviderEndpoint(baseUrl: string | undefined): {
   let url: URL;
   try {
     url = new URL(baseUrl?.trim() || DEFAULT_BASE_URL);
-  } catch (error) {
-    throw configurationError("baseUrl must be a valid URL", error);
+  } catch {
+    throw configurationError("baseUrl must be a valid URL");
   }
 
   if (url.protocol !== "http:" && url.protocol !== "https:") {
@@ -307,7 +339,10 @@ function resolveProviderEndpoint(baseUrl: string | undefined): {
   const base = url.toString().replace(/\/$/u, "");
   return {
     baseUrl: base,
-    logEndpoint: `${base}/chat/completions`,
+    // Provider paths can contain tenant IDs, deployment names, or signed
+    // material. Keep logs useful for host-level diagnostics without retaining
+    // path, query, or fragment data.
+    logEndpoint: url.origin,
     ...(rawQuery.length === 0 ? {} : { rawQuery }),
   };
 }
@@ -345,14 +380,29 @@ function appendRawQuery(
 function authenticationOptions(
   apiKey: string,
   apiKeyHeader: string,
-  additionalHeaders: Record<string, string> | undefined,
+  additionalHeaders: unknown,
 ): { providerApiKey?: string; headers: Record<string, string> } {
-  const headers: Record<string, string> = {};
+  if (
+    additionalHeaders !== undefined &&
+    (!isRecord(additionalHeaders) || Array.isArray(additionalHeaders))
+  ) {
+    throw configurationError("additionalHeaders must be an object");
+  }
+  const headers = Object.create(null) as Record<string, string>;
   for (const [name, value] of Object.entries(additionalHeaders ?? {})) {
-    if (!isHeaderName(name) || hasHeaderControlCharacters(value)) {
+    if (
+      !isHeaderName(name) ||
+      typeof value !== "string" ||
+      hasHeaderControlCharacters(value)
+    ) {
       throw configurationError("additionalHeaders contains an invalid header");
     }
     const normalizedName = name.toLowerCase();
+    if (isDisallowedCustomHeaderName(normalizedName)) {
+      throw configurationError(
+        "additionalHeaders cannot set a reserved HTTP header",
+      );
+    }
     if (normalizedName === "content-type") {
       throw configurationError(
         "additionalHeaders cannot override the content-type header",
@@ -369,15 +419,22 @@ function authenticationOptions(
   return { headers };
 }
 
-function normalizeUsage(usage: {
-  inputTokens: number | undefined;
-  outputTokens: number | undefined;
-  totalTokens: number | undefined;
-}): OpenAiCompatibleUsage | undefined {
+function normalizeUsage(
+  usage: {
+    inputTokens: number | undefined;
+    outputTokens: number | undefined;
+    totalTokens: number | undefined;
+    raw?: unknown;
+  },
+  stepRawUsages: readonly unknown[] = [],
+): OpenAiCompatibleUsage | undefined {
+  const rawTotalTokens =
+    readRawTotalTokens(usage.raw) ?? sumRawTotalTokens(stepRawUsages);
   if (
     usage.inputTokens === undefined &&
     usage.outputTokens === undefined &&
-    usage.totalTokens === undefined
+    usage.totalTokens === undefined &&
+    rawTotalTokens === undefined
   ) {
     return undefined;
   }
@@ -386,8 +443,29 @@ function normalizeUsage(usage: {
   return {
     promptTokens,
     completionTokens,
-    totalTokens: usage.totalTokens ?? promptTokens + completionTokens,
+    totalTokens:
+      rawTotalTokens ?? usage.totalTokens ?? promptTokens + completionTokens,
   };
+}
+
+function readRawTotalTokens(raw: unknown): number | undefined {
+  if (!isRecord(raw) || typeof raw.total_tokens !== "number") {
+    return undefined;
+  }
+  return Number.isFinite(raw.total_tokens) ? raw.total_tokens : undefined;
+}
+
+function sumRawTotalTokens(rawUsages: readonly unknown[]): number | undefined {
+  let total = 0;
+  let found = false;
+  for (const raw of rawUsages) {
+    const value = readRawTotalTokens(raw);
+    if (value !== undefined) {
+      total += value;
+      found = true;
+    }
+  }
+  return found ? total : undefined;
 }
 
 function normalizeSdkError(
@@ -412,7 +490,6 @@ function normalizeSdkError(
     return new OpenAiCompatibleError("LLM call cancelled", {
       kind: "cancelled",
       attempts,
-      cause: error,
       ...(apiError?.statusCode === undefined
         ? {}
         : { status: apiError.statusCode }),
@@ -428,10 +505,9 @@ function normalizeSdkError(
         ? "retryable"
         : "non-retryable";
 
-  return new OpenAiCompatibleError(errorMessage(underlying), {
+  return new OpenAiCompatibleError(normalizedSdkErrorMessage(kind), {
     kind,
     attempts,
-    cause: error,
     ...(apiError?.statusCode === undefined
       ? {}
       : { status: apiError.statusCode }),
@@ -468,12 +544,35 @@ function headerValue(
   return match?.[1];
 }
 
-function requireText(value: string, name: string): string {
+function requireTrimmedText(value: unknown, name: string): string {
+  if (typeof value !== "string") {
+    throw configurationError(`${name} must be a string`);
+  }
   const normalized = value.trim();
   if (normalized.length === 0) {
     throw configurationError(`${name} is required`);
   }
   return normalized;
+}
+
+function requirePromptText(value: unknown, name: string): string {
+  if (typeof value !== "string") {
+    throw configurationError(`${name} must be a string`);
+  }
+  if (value.trim().length === 0) {
+    throw configurationError(`${name} is required`);
+  }
+  return value;
+}
+
+function optionalTrimmedText(value: unknown, name: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string") {
+    throw configurationError(`${name} must be a string`);
+  }
+  return value.trim() || undefined;
 }
 
 function integerInRange(
@@ -490,16 +589,19 @@ function integerInRange(
   return value;
 }
 
-function configurationError(message: string, cause?: unknown) {
+function configurationError(message: string) {
   return new OpenAiCompatibleError(message, {
     kind: "configuration",
     attempts: 0,
-    cause,
   });
 }
 
 function isHeaderName(value: string): boolean {
   return /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u.test(value);
+}
+
+function isDisallowedCustomHeaderName(value: string): boolean {
+  return DISALLOWED_CUSTOM_HEADER_NAMES.has(value.toLowerCase());
 }
 
 function hasHeaderControlCharacters(value: string): boolean {
@@ -510,8 +612,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error && error.message.length > 0
-    ? error.message
-    : "Language model request failed";
+function normalizedSdkErrorMessage(kind: OpenAiCompatibleErrorKind): string {
+  return kind === "retryable"
+    ? "LLM provider request failed temporarily"
+    : "LLM provider request failed";
 }

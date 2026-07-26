@@ -9,7 +9,7 @@
 - 保留 `GET /healthz` 存活检查和 `GET /api/v1/openapi.json` OpenAPI 文档；
 - 新增 `POST /api/v1/messages`，请求体只接受 `sessionId` 与 `text`；
 - 新增 `MessageIngress.enqueue({ sessionId, text, requestId })` 依赖注入边界；
-- 成功入队返回 HTTP `202` 和 `{ status: "accepted", requestId }`；
+- ingress 接受交接后返回 HTTP `202` 和 `{ status: "accepted", requestId }`；
 - 未注入 ingress 时返回 HTTP `503 core_unavailable`；
 - ingress 内部失败统一脱敏为 HTTP `500 internal_error`；
 - 删除 `POST /api/v1/llm/chat`，旧路径现在返回 `404`；
@@ -41,10 +41,12 @@ Content-Type: application/json
 }
 ```
 
-- `sessionId` trim 后必须非空，最长 256 个字符；
-- `text` 必须非空且 trim 后非空，最长 131072 个字符；
+- `sessionId` trim 后必须非空，最长 256 个 Unicode code point；
+- `text` 必须非空且 trim 后非空，最长 131072 个 Unicode code point；
 - schema 为 strict，任何额外字段都会返回 `400 invalid_request`；
-- 认证先于 body 解析和校验执行。
+- 认证先于 body 解析和校验执行；
+- 完整 JSON body 上限为 256 KiB，超限返回统一格式的 `413 request_rejected`；
+- 可选的 `x-request-id` 只接受最多 128 字符的受限 ASCII 格式，非法值由网关替换为 UUID。
 
 ### 已接受
 
@@ -83,17 +85,20 @@ HTTP/1.1 503 Service Unavailable
 
 ## 测试发现与修复
 
-| 问题                                 | 修复或覆盖                                                     |
-| ------------------------------------ | -------------------------------------------------------------- |
-| body 校验早于认证                    | 认证移到 `onRequest`，未认证畸形请求统一返回 `401`             |
-| 失败认证占用合法调用配额             | 按认证状态和客户端 IP 分离限流 key                             |
-| Fastify 静默删除未知字段             | 关闭 AJV `removeAdditional`，未知字段返回 `invalid_request`    |
-| UI 可提交 provider 凭证和模型策略    | strict schema 只允许 `sessionId` 与 `text`                     |
-| 空白消息可进入 core                  | Zod 层要求两个字段 trim 后非空                                 |
-| 已删除的模型路由仍可能出现在 OpenAPI | 回归测试同时断言旧路径返回 `404` 且 OpenAPI 不含 provider 字段 |
-| core 尚未接线时可能伪装成成功        | 缺少 ingress 时显式返回 `503 core_unavailable`                 |
-| ingress 异常细节可能泄漏给客户端     | 统一返回 `500 internal_error`，不暴露内部异常消息              |
-| 未受信代理可伪造客户端 IP            | 只接受 `KAGUYA_TRUST_PROXY` 明确列出的代理地址或 CIDR          |
+| 问题                                          | 修复或覆盖                                                     |
+| --------------------------------------------- | -------------------------------------------------------------- |
+| body 校验早于认证                             | 认证移到 `onRequest`，未认证畸形请求统一返回 `401`             |
+| 失败认证占用合法调用配额                      | 按认证状态和客户端 IP 分离限流 key                             |
+| Fastify 静默删除未知字段                      | 关闭 AJV `removeAdditional`，未知字段返回 `invalid_request`    |
+| UI 可提交 provider 凭证和模型策略             | strict schema 只允许 `sessionId` 与 `text`                     |
+| 空白消息可进入 core                           | Zod 层要求两个字段 trim 后非空                                 |
+| 已删除的模型路由仍可能出现在 OpenAPI          | 回归测试同时断言旧路径返回 `404` 且 OpenAPI 不含 provider 字段 |
+| core 尚未接线时可能伪装成成功                 | 缺少 ingress 时显式返回 `503 core_unavailable`                 |
+| ingress 异常细节可能泄漏给客户端              | 统一返回 `500 internal_error`，不暴露内部异常消息              |
+| 未受信代理可伪造客户端 IP                     | 只接受 `KAGUYA_TRUST_PROXY` 明确列出的代理地址或 CIDR          |
+| 畸形 JSON、超大 body 和错误媒体类型响应不一致 | 分别归一化为 `400 invalid_request`、`413/415 request_rejected` |
+| 默认 404 未使用网关错误结构                   | 未匹配路由统一返回 `404 not_found`                             |
+| 客户端 request ID 可无限长并原样回显          | 只接受受限格式和 128 字符上限，否则生成新的 UUID               |
 
 ## 网关配置
 
@@ -124,6 +129,8 @@ HTTP/1.1 503 Service Unavailable
 - 旧模型路由返回 `404`；
 - Bearer 认证先于 body 解析，且 scheme 大小写不敏感；
 - strict schema 拒绝模型字段、provider 字段、空白消息和其他额外字段；
+- 畸形 JSON、超大 body、错误媒体类型和未知路由均返回统一错误结构；
+- Unicode 字段长度与 OpenAPI schema 一致，客户端 request ID 经过长度和字符集约束；
 - 注入 ingress 时返回 `202` 并传递 trim 后的 `sessionId`、原始 `text` 与 `requestId`；
 - 未注入 ingress 时返回 `503`，ingress 抛错时返回脱敏的 `500`；
 - 已认证与未认证限流桶分离，转发 IP 只在显式可信代理下生效。

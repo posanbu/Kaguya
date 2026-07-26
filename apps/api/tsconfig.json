@@ -5,8 +5,5 @@
     "outDir": "./dist"
   },
   "include": ["src/**/*.ts"],
-  "references": [
-    { "path": "../../packages/schema" },
-    { "path": "../../packages/llm" }
-  ]
+  "references": [{ "path": "../../packages/schema" }]
 }

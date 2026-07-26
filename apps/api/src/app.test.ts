@@ -72,6 +72,32 @@ describe("application API gateway", () => {
                   },
                 },
               },
+              "413": {
+                content: {
+                  "application/json": {
+                    schema: {
+                      properties: {
+                        error: {
+                          required: ["code", "message", "requestId"],
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+              "415": {
+                content: {
+                  "application/json": {
+                    schema: {
+                      properties: {
+                        error: {
+                          required: ["code", "message", "requestId"],
+                        },
+                      },
+                    },
+                  },
+                },
+              },
               "503": {
                 content: {
                   "application/json": {
@@ -123,7 +149,69 @@ describe("application API gateway", () => {
     });
 
     expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({
+      error: { code: "not_found", message: "Route not found" },
+    });
     expect(enqueue).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("uses bounded client request IDs and replaces unsafe values", async () => {
+    const enqueue = vi.fn(() => Promise.resolve());
+    const app = await createApiGateway({
+      config,
+      messageIngress: { enqueue },
+    });
+    const unsafeRequestId = "x".repeat(10_000);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/messages",
+      headers: {
+        ...authorization(),
+        "x-request-id": unsafeRequestId,
+      },
+      payload: requestBody,
+    });
+
+    expect(response.statusCode).toBe(202);
+    const responseRequestId = response.json().data.requestId as string;
+    expect(responseRequestId).not.toBe(unsafeRequestId);
+    expect(responseRequestId.length).toBeLessThanOrEqual(128);
+    expect(enqueue).toHaveBeenCalledWith({
+      ...requestBody,
+      requestId: responseRequestId,
+    });
+    await app.close();
+  });
+
+  it("uses the same Unicode length semantics as the OpenAPI schema", async () => {
+    const enqueue = vi.fn(() => Promise.resolve());
+    const app = await createApiGateway({
+      config,
+      messageIngress: { enqueue },
+    });
+    const maximumLengthSessionId = "\u{1f600}".repeat(256);
+
+    const accepted = await app.inject({
+      method: "POST",
+      url: "/api/v1/messages",
+      headers: authorization(),
+      payload: { ...requestBody, sessionId: maximumLengthSessionId },
+    });
+    const rejected = await app.inject({
+      method: "POST",
+      url: "/api/v1/messages",
+      headers: authorization(),
+      payload: {
+        ...requestBody,
+        sessionId: `${maximumLengthSessionId}\u{1f600}`,
+      },
+    });
+
+    expect(accepted.statusCode).toBe(202);
+    expect(rejected.statusCode).toBe(400);
+    expect(enqueue).toHaveBeenCalledTimes(1);
     await app.close();
   });
 
@@ -227,6 +315,69 @@ describe("application API gateway", () => {
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({
       error: { code: "invalid_request" },
+    });
+    expect(enqueue).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("reports malformed JSON as an invalid request", async () => {
+    const enqueue = vi.fn(() => Promise.resolve());
+    const app = await createApiGateway({
+      config,
+      messageIngress: { enqueue },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/messages",
+      headers: {
+        ...authorization(),
+        "content-type": "application/json",
+      },
+      payload: '{"sessionId":"session-1",',
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      error: { code: "invalid_request" },
+    });
+    expect(enqueue).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("normalizes unsupported media types and oversized bodies", async () => {
+    const enqueue = vi.fn(() => Promise.resolve());
+    const app = await createApiGateway({
+      config,
+      messageIngress: { enqueue },
+    });
+
+    const unsupported = await app.inject({
+      method: "POST",
+      url: "/api/v1/messages",
+      headers: {
+        ...authorization(),
+        "content-type": "application/xml",
+      },
+      payload: "<message />",
+    });
+    const oversized = await app.inject({
+      method: "POST",
+      url: "/api/v1/messages",
+      headers: authorization(),
+      payload: {
+        sessionId: "session-1",
+        text: "x".repeat(300_000),
+      },
+    });
+
+    expect(unsupported.statusCode).toBe(415);
+    expect(unsupported.json()).toMatchObject({
+      error: { code: "request_rejected" },
+    });
+    expect(oversized.statusCode).toBe(413);
+    expect(oversized.json()).toMatchObject({
+      error: { code: "request_rejected" },
     });
     expect(enqueue).not.toHaveBeenCalled();
     await app.close();

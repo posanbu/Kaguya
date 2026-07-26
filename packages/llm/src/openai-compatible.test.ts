@@ -83,6 +83,45 @@ describe("OpenAiCompatibleLlmService", () => {
     });
   });
 
+  it("validates prompt text without changing its whitespace", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(() =>
+      Promise.resolve(
+        jsonResponse({ choices: [{ message: { content: "ok" } }] }),
+      ),
+    );
+    const service = new OpenAiCompatibleLlmService({ fetch });
+
+    await service.call({
+      ...baseRequest,
+      systemPrompt: "  system prompt\n",
+      userPrompt: "\nuser prompt  ",
+    });
+
+    const body = JSON.parse(
+      (fetch.mock.calls[0]?.[1]?.body as string | undefined) ?? "null",
+    );
+    expect(body.messages).toEqual([
+      { role: "system", content: "  system prompt\n" },
+      { role: "user", content: "\nuser prompt  " },
+    ]);
+  });
+
+  it("preserves a provider total_tokens value when token components are absent", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(() =>
+      Promise.resolve(
+        jsonResponse({
+          choices: [{ message: { content: "ok" } }],
+          usage: { total_tokens: 42 },
+        }),
+      ),
+    );
+    const service = new OpenAiCompatibleLlmService({ fetch });
+
+    await expect(service.call(baseRequest)).resolves.toMatchObject({
+      usage: { promptTokens: 0, completionTokens: 0, totalTokens: 42 },
+    });
+  });
+
   it("normalizes a full chat completions URL and preserves raw query parameters", async () => {
     const fetch = vi.fn<typeof globalThis.fetch>(() =>
       Promise.resolve(
@@ -142,7 +181,7 @@ describe("OpenAiCompatibleLlmService", () => {
     await expect(
       service.call({ ...baseRequest, maxRetries: 2 }),
     ).rejects.toMatchObject({
-      message: "still busy",
+      message: "LLM provider request failed temporarily",
       kind: "retryable",
       status: 503,
       attempts: 3,
@@ -167,7 +206,7 @@ describe("OpenAiCompatibleLlmService", () => {
     await expect(
       service.call({ ...baseRequest, maxRetries: 1 }),
     ).rejects.toMatchObject({
-      message: "invalid key",
+      message: "LLM provider request failed",
       kind: "non-retryable",
       status: 401,
       attempts: 2,
@@ -265,7 +304,7 @@ describe("OpenAiCompatibleLlmService", () => {
       .catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(OpenAiCompatibleError);
     expect(error).toMatchObject({
-      message: "invalid key",
+      message: "LLM provider request failed",
       kind: "non-retryable",
       status: 401,
       attempts: 1,
@@ -285,6 +324,32 @@ describe("OpenAiCompatibleLlmService", () => {
       attempts: 1,
     });
     expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("does not expose the raw SDK error as a public cause", async () => {
+    const privatePrompt = "prompt-secret-that-must-not-leak";
+    const fetch = vi.fn<typeof globalThis.fetch>(() =>
+      Promise.resolve(
+        jsonResponse(
+          {
+            error: {
+              message: "invalid key",
+              request: privatePrompt,
+            },
+          },
+          { status: 401 },
+        ),
+      ),
+    );
+    const service = new OpenAiCompatibleLlmService({ fetch });
+
+    const error = await service
+      .call({ ...baseRequest, userPrompt: privatePrompt })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(OpenAiCompatibleError);
+    expect(Object.prototype.hasOwnProperty.call(error, "cause")).toBe(false);
+    expect(JSON.stringify(error)).not.toContain(privatePrompt);
   });
 
   it("classifies malformed SDK responses as non-retryable", async () => {
@@ -334,7 +399,34 @@ describe("OpenAiCompatibleLlmService", () => {
     expect(serialized).not.toContain("private answer");
   });
 
-  it("does not log provider errors that reflect sensitive input", async () => {
+  it("logs only the provider origin, not a tenant path or query", async () => {
+    const events: OpenAiCompatibleLogEvent[] = [];
+    const logger = {
+      info: vi.fn((event: OpenAiCompatibleLogEvent) => events.push(event)),
+      error: vi.fn((event: OpenAiCompatibleLogEvent) => events.push(event)),
+    };
+    const service = new OpenAiCompatibleLlmService({
+      fetch: () =>
+        Promise.resolve(
+          jsonResponse({ choices: [{ message: { content: "ok" } }] }),
+        ),
+      logger,
+    });
+
+    await service.call({
+      ...baseRequest,
+      baseUrl:
+        "https://gateway.example/openai/deployments/tenant-secret/chat/completions?sig=query-secret#fragment-secret",
+    });
+
+    expect(events).toHaveLength(2);
+    expect(events[0]?.endpoint).toBe("https://gateway.example");
+    expect(JSON.stringify(events)).not.toContain("tenant-secret");
+    expect(JSON.stringify(events)).not.toContain("query-secret");
+    expect(JSON.stringify(events)).not.toContain("fragment-secret");
+  });
+
+  it("does not expose or log provider errors that reflect sensitive input", async () => {
     const events: OpenAiCompatibleLogEvent[] = [];
     const logger = {
       info: vi.fn((event: OpenAiCompatibleLogEvent) => events.push(event)),
@@ -353,13 +445,14 @@ describe("OpenAiCompatibleLlmService", () => {
     });
 
     await expect(service.call(baseRequest)).rejects.toMatchObject({
-      message: reflectedMessage,
+      message: "LLM provider request failed",
       kind: "non-retryable",
     });
 
     const serialized = JSON.stringify(events);
     expect(serialized).not.toContain(baseRequest.apiKey);
     expect(serialized).not.toContain(baseRequest.systemPrompt);
+    expect(serialized).not.toContain(reflectedMessage);
     expect(logger.error).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "llm.call.failed",
@@ -394,6 +487,45 @@ describe("OpenAiCompatibleLlmService", () => {
     await expect(
       service.call({ ...baseRequest, apiKeyHeader: "Content-Type" }),
     ).rejects.toMatchObject({ kind: "configuration", attempts: 0 });
+
+    await expect(
+      service.call({
+        ...baseRequest,
+        apiKeyHeader: 42 as unknown as string,
+      }),
+    ).rejects.toMatchObject({ kind: "configuration", attempts: 0 });
+    await expect(
+      service.call({
+        ...baseRequest,
+        additionalHeaders: [] as unknown as Record<string, string>,
+      }),
+    ).rejects.toMatchObject({ kind: "configuration", attempts: 0 });
+
+    const reservedHeaders = [
+      "Host",
+      "content-length",
+      "Transfer-Encoding",
+      "Connection",
+      "Proxy-Authorization",
+      "Keep-Alive",
+      "TE",
+      "Trailer",
+      "Upgrade",
+      "__proto__",
+      "constructor",
+      "prototype",
+    ];
+    for (const header of reservedHeaders) {
+      await expect(
+        service.call({ ...baseRequest, apiKeyHeader: header }),
+      ).rejects.toMatchObject({ kind: "configuration", attempts: 0 });
+      await expect(
+        service.call({
+          ...baseRequest,
+          additionalHeaders: { [header.toLowerCase()]: "value" },
+        }),
+      ).rejects.toMatchObject({ kind: "configuration", attempts: 0 });
+    }
     expect(fetch).not.toHaveBeenCalled();
   });
 });
