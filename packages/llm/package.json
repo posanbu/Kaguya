@@ -13,6 +13,7 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
+    "@ai-sdk/openai-compatible": "3.0.14",
     "@kaguya/schema": "workspace:*",
     "ai": "7.0.35"
   }

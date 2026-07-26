@@ -3,9 +3,6 @@ export interface ApiGatewayConfig {
   port: number;
   gatewayToken: string;
   corsOrigins: readonly string[];
-  llmAllowedHosts: ReadonlySet<string>;
-  allowInsecureLlmHttp: boolean;
-  llmRequestTimeoutMs: number;
   trustProxy: false | string[];
   rateLimitMax: number;
   rateLimitWindowMs: number;
@@ -35,23 +32,6 @@ export function readApiGatewayConfig(
     corsOrigins: commaSeparatedValues(
       environment.KAGUYA_CORS_ORIGINS ??
         "http://localhost:5173,http://127.0.0.1:5173",
-    ),
-    llmAllowedHosts: new Set(
-      commaSeparatedValues(
-        environment.KAGUYA_LLM_ALLOWED_HOSTS ?? "api.openai.com",
-      ).map((host) => host.toLowerCase()),
-    ),
-    allowInsecureLlmHttp: booleanEnvironmentValue(
-      environment,
-      "KAGUYA_LLM_ALLOW_INSECURE_HTTP",
-      false,
-    ),
-    llmRequestTimeoutMs: integerEnvironmentValue(
-      environment,
-      "KAGUYA_LLM_REQUEST_TIMEOUT_MS",
-      300_000,
-      1_000,
-      900_000,
     ),
     trustProxy: optionalListEnvironmentValue(environment, "KAGUYA_TRUST_PROXY"),
     rateLimitMax: integerEnvironmentValue(
@@ -119,22 +99,4 @@ function integerEnvironmentValue(
     );
   }
   return value;
-}
-
-function booleanEnvironmentValue(
-  environment: NodeJS.ProcessEnv,
-  name: string,
-  defaultValue: boolean,
-): boolean {
-  const raw = environment[name]?.trim().toLowerCase();
-  if (!raw) {
-    return defaultValue;
-  }
-  if (raw === "true") {
-    return true;
-  }
-  if (raw === "false") {
-    return false;
-  }
-  throw new Error(`${name} must be true or false`);
 }

@@ -1,70 +1,133 @@
 # 2026-07-25 应用 API 网关更新说明
 
-本次更新为 Kaguya 增加第一阶段应用 API 网关，并强化 OpenAI-compatible LLM 调用边界。目标是让后续 Web UI 可以通过受控的服务端接口测试不同模型、API 地址和鉴权方式，同时避免浏览器直接访问模型供应商。
+本次更新把 `@kaguya/api` 收敛为应用消息入口：Web UI 只提交会话标识和消息文本，网关完成认证、限流、严格校验并调用注入的 `MessageIngress`。模型、provider、API 地址和凭证不再由客户端请求决定。
 
-## 新增能力
+同时，按照 [Issue #1](https://github.com/posanbu/Kaguya/issues/1)，OpenAI-compatible 模型调用继续由 `@kaguya/llm` 内部的 Vercel AI SDK adapter 承担，网关不再提供或维护第二套模型调用接口。
 
-- 新增 `@kaguya/api` Fastify 应用，提供统一的 HTTP composition root；
-- 新增 `GET /healthz` 存活检查；
-- 新增 `GET /api/v1/openapi.json` OpenAPI 文档；
-- 新增 `POST /api/v1/llm/chat` 模型配置与连通性测试接口；
-- 复用 `OpenAiCompatibleLlmService`，支持动态 API key、base URL、模型、Prompt、温度、超时与重试参数；
-- 增加 Bearer 网关认证、CORS、按客户端 IP 限流、256 KiB 请求体上限和统一错误结构；
-- 增加 provider hostname 白名单、HTTPS 默认策略、鉴权 header 白名单和 URL 凭证检查；
-- `pnpm api:dev` 会先按 workspace 依赖顺序构建 `schema`、`llm` 和 `api`，避免使用缺失或陈旧的 `dist`。
+## 新增与调整
+
+- 保留 `GET /healthz` 存活检查和 `GET /api/v1/openapi.json` OpenAPI 文档；
+- 新增 `POST /api/v1/messages`，请求体只接受 `sessionId` 与 `text`；
+- 新增 `MessageIngress.enqueue({ sessionId, text, requestId })` 依赖注入边界；
+- 成功入队返回 HTTP `202` 和 `{ status: "accepted", requestId }`；
+- 未注入 ingress 时返回 HTTP `503 core_unavailable`；
+- ingress 内部失败统一脱敏为 HTTP `500 internal_error`；
+- 删除 `POST /api/v1/llm/chat`，旧路径现在返回 `404`；
+- 从网关删除 provider URL、API key、模型选择、LLM 超时和 provider allowlist 配置；
+- 保留 Bearer 认证、CORS、按客户端 IP 限流、可信代理、256 KiB 请求体上限和统一错误结构。
+
+## Issue #1 SDK 边界
+
+`@kaguya/llm` 的 OpenAI-compatible adapter 使用 `@ai-sdk/openai-compatible` 创建动态 provider，并通过 `ai` 的 `generateText` 执行调用。请求序列化、模型响应解析、usage 解析和 SDK 重试由现有 SDK 负责，Kaguya 只维护自身的输入、错误与 trace 契约。
+
+`@kaguya/api` 不依赖 `@kaguya/llm`。网关只负责 HTTP ingress，不接收 `apiKey`、`baseUrl` 或 `model`，也不负责选择 provider 与工作流。这样既满足 Issue #1 的“模型 API 使用现有 SDK”要求，也避免把敏感 provider 配置暴露成面向 UI 的透传代理。本次没有引入另一套 xsAI 调用实现。
+
+底层 adapter 的详细契约见 [OpenAI-compatible LLM 通用接口](../openai-compatible-llm.md)。该 adapter 可用于内部装配与独立连通性测试，但不是 Web UI 后端路由。
+
+## API 契约
+
+### 请求
+
+```http
+POST /api/v1/messages
+Authorization: Bearer <KAGUYA_GATEWAY_TOKEN>
+Content-Type: application/json
+```
+
+```json
+{
+  "sessionId": "session-1",
+  "text": "Hello"
+}
+```
+
+- `sessionId` trim 后必须非空，最长 256 个字符；
+- `text` 必须非空且 trim 后非空，最长 131072 个字符；
+- schema 为 strict，任何额外字段都会返回 `400 invalid_request`；
+- 认证先于 body 解析和校验执行。
+
+### 已接受
+
+```http
+HTTP/1.1 202 Accepted
+```
+
+```json
+{
+  "data": {
+    "status": "accepted",
+    "requestId": "request-id"
+  }
+}
+```
+
+`202` 仅确认注入的 ingress 已接受 `enqueue`，不代表 core 已消费消息、工作流已完成或模型已返回结果。
+
+### Core 未接线
+
+```http
+HTTP/1.1 503 Service Unavailable
+```
+
+```json
+{
+  "error": {
+    "code": "core_unavailable",
+    "message": "Core message ingress is not configured",
+    "requestId": "request-id"
+  }
+}
+```
+
+当前 `server.ts` 没有注入 `MessageIngress`，所以这是通过 `pnpm api` 或 `pnpm api:dev` 启动后合法消息请求的当前结果。
 
 ## 测试发现与修复
 
-新增的故障与安全测试发现并修复了以下问题：
+| 问题                                 | 修复或覆盖                                                     |
+| ------------------------------------ | -------------------------------------------------------------- |
+| body 校验早于认证                    | 认证移到 `onRequest`，未认证畸形请求统一返回 `401`             |
+| 失败认证占用合法调用配额             | 按认证状态和客户端 IP 分离限流 key                             |
+| Fastify 静默删除未知字段             | 关闭 AJV `removeAdditional`，未知字段返回 `invalid_request`    |
+| UI 可提交 provider 凭证和模型策略    | strict schema 只允许 `sessionId` 与 `text`                     |
+| 空白消息可进入 core                  | Zod 层要求两个字段 trim 后非空                                 |
+| 已删除的模型路由仍可能出现在 OpenAPI | 回归测试同时断言旧路径返回 `404` 且 OpenAPI 不含 provider 字段 |
+| core 尚未接线时可能伪装成成功        | 缺少 ingress 时显式返回 `503 core_unavailable`                 |
+| ingress 异常细节可能泄漏给客户端     | 统一返回 `500 internal_error`，不暴露内部异常消息              |
+| 未受信代理可伪造客户端 IP            | 只接受 `KAGUYA_TRUST_PROXY` 明确列出的代理地址或 CIDR          |
 
-| 问题                                 | 修复                                                              |
-| ------------------------------------ | ----------------------------------------------------------------- |
-| Bearer scheme 被按大小写匹配         | 按 HTTP 认证规范进行大小写无关匹配，并继续使用常量时间 token 比较 |
-| body 校验早于认证                    | 将认证移动到 `onRequest`，未认证畸形请求统一返回 `401`            |
-| 失败认证占用合法调用配额             | 按认证状态和客户端 IP 分离限流 key                                |
-| Fastify 静默删除未知字段             | 关闭 AJV `removeAdditional`，未知字段返回 `invalid_request`       |
-| 非 HTTP(S) URL 可通过网关层          | 在调用 LLM service 前拒绝不支持的协议                             |
-| API key 与 Prompt 可经 HTTP 明文传输 | 默认只允许 HTTPS；本地 HTTP 必须由服务端显式开启                  |
-| fetch 自动跟随 provider 重定向       | 设置 `redirect: "error"`，避免鉴权 header 离开批准的 endpoint     |
-| API key 控制字符进入 HTTP header     | JSON Schema 与 Zod 两层拒绝控制字符                               |
-| provider 错误可能回显到日志或 API    | 日志和网关响应只保留规范化的公开错误信息                          |
-| 指数退避可能持续数小时               | 单次退避封顶 60 秒，并允许 `AbortSignal` 中断等待                 |
-| 客户端断连后模型调用继续             | 将 socket 断连和模型调用总 deadline 连接到 LLM `AbortSignal`      |
-| 反向代理后所有用户共享限流 IP        | 增加默认关闭的可信代理地址/CIDR 配置，拒绝未受信来源伪造转发 IP   |
+## 网关配置
 
-## 新增配置
+| 环境变量                      | 默认值                                        | 用途                              |
+| ----------------------------- | --------------------------------------------- | --------------------------------- |
+| `KAGUYA_GATEWAY_TOKEN`        | 无                                            | 网关 Bearer token，至少 16 个字符 |
+| `KAGUYA_API_HOST`             | `127.0.0.1`                                   | HTTP 监听地址                     |
+| `KAGUYA_API_PORT`             | `3000`                                        | HTTP 监听端口                     |
+| `KAGUYA_CORS_ORIGINS`         | `http://localhost:5173,http://127.0.0.1:5173` | 允许的浏览器 origin 列表          |
+| `KAGUYA_TRUST_PROXY`          | 空                                            | 可信反向代理地址或 CIDR 列表      |
+| `KAGUYA_RATE_LIMIT_MAX`       | `30`                                          | 每个限流窗口的最大请求数          |
+| `KAGUYA_RATE_LIMIT_WINDOW_MS` | `60000`                                       | 限流窗口毫秒数                    |
 
-| 环境变量                         | 默认值           | 用途                              |
-| -------------------------------- | ---------------- | --------------------------------- |
-| `KAGUYA_GATEWAY_TOKEN`           | 无               | 网关 Bearer token，至少 16 个字符 |
-| `KAGUYA_API_HOST`                | `127.0.0.1`      | HTTP 监听地址                     |
-| `KAGUYA_API_PORT`                | `3000`           | HTTP 监听端口                     |
-| `KAGUYA_CORS_ORIGINS`            | 本地 Vite 地址   | 允许的浏览器 origin 列表          |
-| `KAGUYA_LLM_ALLOWED_HOSTS`       | `api.openai.com` | provider hostname 精确白名单      |
-| `KAGUYA_LLM_ALLOW_INSECURE_HTTP` | `false`          | 显式允许 HTTP provider            |
-| `KAGUYA_LLM_REQUEST_TIMEOUT_MS`  | `300000`         | 单次模型调用总 deadline           |
-| `KAGUYA_TRUST_PROXY`             | 空               | 可信反向代理地址或 CIDR 列表      |
-| `KAGUYA_RATE_LIMIT_MAX`          | `30`             | 每个限流窗口的最大请求数          |
-| `KAGUYA_RATE_LIMIT_WINDOW_MS`    | `60000`          | 限流窗口毫秒数                    |
-
-完整启动方式、请求示例和安全说明见 [应用 API 网关](../api-gateway.md)，底层模型调用约定见 [OpenAI-compatible LLM 通用接口](../openai-compatible-llm.md)。
+旧的模型 provider 网关环境变量均已删除。完整启动方式、响应结构和安全说明见 [应用 API 网关](../api-gateway.md)。
 
 ## 兼容性变化
 
-- 自定义 provider 使用 HTTP 时必须设置 `KAGUYA_LLM_ALLOW_INSECURE_HTTP=true`；生产环境应保持关闭。
-- provider 的 HTTP 重定向不再自动跟随，调用方必须提供最终 API 地址。
-- 请求中的未知字段不再被忽略，而是返回 `400 invalid_request`。
-- API 不再返回 provider 原始错误消息；客户端应使用 `kind`、`providerStatus` 和 `requestId` 定位问题。
-- `Retry-After` 和指数退避单次最多等待 60 秒，网关总 deadline 到期后会取消调用。
+- 旧模型直连路由不提供兼容别名；
+- Web UI 请求必须改为 `POST /api/v1/messages` 并只发送 `sessionId` 与 `text`；
+- `apiKey`、`baseUrl`、`model` 以及其他额外字段会被拒绝，不能再通过 HTTP ingress 动态路由模型；
+- 调用方必须把 `202 accepted` 与最终处理完成区分开；
+- 部署方必须在 composition root 注入 `MessageIngress`，否则合法消息会收到 `503`；
+- provider 和模型策略应从服务端配置与 core 读取，并通过 `@kaguya/llm` SDK adapter 执行。
 
-## 验证结果
+## 验证范围
 
-- `pnpm build` 通过；
-- `pnpm typecheck` 通过；
-- `pnpm lint` 通过；
-- `pnpm test` 通过，共 17 个测试文件、137 项测试；
-- 实际 HTTP 冒烟验证覆盖健康检查、OpenAPI、认证顺序、协议拒绝和 header 控制字符校验。
+- OpenAPI 只公开消息 ingress，不包含旧模型路由和 provider 配置字段；
+- 旧模型路由返回 `404`；
+- Bearer 认证先于 body 解析，且 scheme 大小写不敏感；
+- strict schema 拒绝模型字段、provider 字段、空白消息和其他额外字段；
+- 注入 ingress 时返回 `202` 并传递 trim 后的 `sessionId`、原始 `text` 与 `requestId`；
+- 未注入 ingress 时返回 `503`，ingress 抛错时返回脱敏的 `500`；
+- 已认证与未认证限流桶分离，转发 IP 只在显式可信代理下生效。
 
 ## 当前边界
 
-`POST /api/v1/llm/chat` 仍是模型配置测试接口，不是正式聊天工作流入口。它不会创建会话、调用 `dispatchEvent` 或写入 `event_runs`/`llm_traces`。持久 run、可重连 SSE、取消 API、有界队列、用户级授权和正式 Web UI 仍属于下一阶段。
+本次只实现 validation + enqueue boundary。core dispatcher、持久队列、consumer、工作流 handoff、持久 run、结果查询、可重连 SSE、取消 API 和正式 Web UI 均未实现。模型 SDK adapter 已存在，但需要在服务端 core 策略确定模型与 provider 后才能接入正式消息处理链路。

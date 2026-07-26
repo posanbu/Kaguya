@@ -1,17 +1,9 @@
-import {
-  createConsoleLlmLogger,
-  OpenAiCompatibleLlmService,
-} from "@kaguya/llm";
-
 import { createApiGateway } from "./app.js";
 import { readApiGatewayConfig } from "./config.js";
 
 const config = readApiGatewayConfig();
 const app = await createApiGateway({
   config,
-  llmService: new OpenAiCompatibleLlmService({
-    logger: createConsoleLlmLogger(),
-  }),
   logger: true,
 });
 

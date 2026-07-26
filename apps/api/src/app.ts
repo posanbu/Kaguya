@@ -3,15 +3,8 @@ import { timingSafeEqual } from "node:crypto";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import swagger from "@fastify/swagger";
-import {
-  OpenAiCompatibleError,
-  OpenAiCompatibleLlmService,
-  type OpenAiCompatibleRequest,
-  type OpenAiCompatibleResult,
-} from "@kaguya/llm";
 import { z } from "@kaguya/schema";
 import Fastify, {
-  type FastifyReply,
   type FastifyInstance,
   type FastifyRequest,
   type FastifyServerOptions,
@@ -19,61 +12,75 @@ import Fastify, {
 
 import type { ApiGatewayConfig } from "./config.js";
 
-const apiKeyHeaderSchema = z.enum(["Authorization", "api-key", "x-api-key"]);
-const apiKeySchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(8_192)
-  .refine((value) => !/[\u0000-\u001f\u007f]/u.test(value));
-const chatRequestSchema = z
+const messageRequestSchema = z
   .object({
-    apiKey: apiKeySchema,
-    baseUrl: z.url().max(2_048).optional(),
-    model: z.string().trim().min(1).max(256),
-    systemPrompt: z.string().trim().min(1).max(32_768),
-    userPrompt: z.string().trim().min(1).max(131_072),
-    temperature: z.number().min(0).max(2).optional(),
-    maxRetries: z.number().int().min(0).max(10).optional(),
-    retryDelayMs: z.number().int().min(0).max(60_000).optional(),
-    timeoutMs: z.number().int().min(1).max(300_000).optional(),
-    apiKeyHeader: apiKeyHeaderSchema.optional(),
+    sessionId: z.string().trim().min(1).max(256),
+    text: z
+      .string()
+      .min(1)
+      .max(131_072)
+      .refine((value) => value.trim().length > 0),
   })
   .strict();
 
-const chatBodyJsonSchema = {
+const messageBodyJsonSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["apiKey", "model", "systemPrompt", "userPrompt"],
+  required: ["sessionId", "text"],
   properties: {
-    apiKey: {
-      type: "string",
-      minLength: 1,
-      maxLength: 8_192,
-      pattern: "^[^\\u0000-\\u001F\\u007F]+$",
-    },
-    baseUrl: { type: "string", format: "uri", maxLength: 2_048 },
-    model: { type: "string", minLength: 1, maxLength: 256 },
-    systemPrompt: { type: "string", minLength: 1, maxLength: 32_768 },
-    userPrompt: { type: "string", minLength: 1, maxLength: 131_072 },
-    temperature: { type: "number", minimum: 0, maximum: 2 },
-    maxRetries: { type: "integer", minimum: 0, maximum: 10 },
-    retryDelayMs: { type: "integer", minimum: 0, maximum: 60_000 },
-    timeoutMs: { type: "integer", minimum: 1, maximum: 300_000 },
-    apiKeyHeader: {
-      type: "string",
-      enum: ["Authorization", "api-key", "x-api-key"],
+    sessionId: { type: "string", minLength: 1, maxLength: 256 },
+    text: { type: "string", minLength: 1, maxLength: 131_072 },
+  },
+} as const;
+
+const acceptedMessageResponseJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["data"],
+  properties: {
+    data: {
+      type: "object",
+      additionalProperties: false,
+      required: ["status", "requestId"],
+      properties: {
+        status: { type: "string", enum: ["accepted"] },
+        requestId: { type: "string" },
+      },
     },
   },
 } as const;
 
-export interface ApiGatewayLlmService {
-  call(request: OpenAiCompatibleRequest): Promise<OpenAiCompatibleResult>;
+const errorResponseJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["error"],
+  properties: {
+    error: {
+      type: "object",
+      additionalProperties: false,
+      required: ["code", "message", "requestId"],
+      properties: {
+        code: { type: "string" },
+        message: { type: "string" },
+        requestId: { type: "string" },
+      },
+    },
+  },
+} as const;
+
+export interface MessageIngressCommand {
+  readonly sessionId: string;
+  readonly text: string;
+  readonly requestId: string;
+}
+
+export interface MessageIngress {
+  enqueue(command: MessageIngressCommand): Promise<void>;
 }
 
 export interface CreateApiGatewayOptions {
   config: ApiGatewayConfig;
-  llmService?: ApiGatewayLlmService;
+  messageIngress?: MessageIngress;
   logger?: FastifyServerOptions["logger"];
 }
 
@@ -91,7 +98,6 @@ export async function createApiGateway(
       },
     },
   });
-  const llmService = options.llmService ?? new OpenAiCompatibleLlmService();
 
   await app.register(cors, {
     origin:
@@ -149,7 +155,7 @@ export async function createApiGateway(
   );
 
   app.post(
-    "/api/v1/llm/chat",
+    "/api/v1/messages",
     {
       onRequest: async (request, reply) => {
         if (!hasValidGatewayToken(request, options.config.gatewayToken)) {
@@ -165,53 +171,41 @@ export async function createApiGateway(
         }
       },
       schema: {
-        tags: ["LLM"],
-        summary: "Call an OpenAI-compatible chat model",
+        tags: ["Messages"],
+        summary: "Validate and hand off a message to the core",
         security: [{ bearerAuth: [] }],
-        body: chatBodyJsonSchema,
+        body: messageBodyJsonSchema,
+        response: {
+          202: acceptedMessageResponseJsonSchema,
+          400: errorResponseJsonSchema,
+          401: errorResponseJsonSchema,
+          429: errorResponseJsonSchema,
+          500: errorResponseJsonSchema,
+          503: errorResponseJsonSchema,
+        },
       },
     },
     async (request, reply) => {
-      const parsed = chatRequestSchema.parse(request.body);
-      assertAllowedProvider(
-        parsed.baseUrl,
-        options.config.llmAllowedHosts,
-        options.config.allowInsecureLlmHttp,
-      );
-
-      const cancellation = requestCancellation(
-        request,
-        reply,
-        options.config.llmRequestTimeoutMs,
-      );
-      try {
-        const result = await llmService.call({
-          apiKey: parsed.apiKey,
-          model: parsed.model,
-          systemPrompt: parsed.systemPrompt,
-          userPrompt: parsed.userPrompt,
-          signal: cancellation.signal,
-          ...(parsed.baseUrl === undefined ? {} : { baseUrl: parsed.baseUrl }),
-          ...(parsed.temperature === undefined
-            ? {}
-            : { temperature: parsed.temperature }),
-          ...(parsed.maxRetries === undefined
-            ? {}
-            : { maxRetries: parsed.maxRetries }),
-          ...(parsed.retryDelayMs === undefined
-            ? {}
-            : { retryDelayMs: parsed.retryDelayMs }),
-          ...(parsed.timeoutMs === undefined
-            ? {}
-            : { timeoutMs: parsed.timeoutMs }),
-          ...(parsed.apiKeyHeader === undefined
-            ? {}
-            : { apiKeyHeader: parsed.apiKeyHeader }),
-        });
-        return reply.code(200).send({ data: result });
-      } finally {
-        cancellation.dispose();
+      const parsed = messageRequestSchema.parse(request.body);
+      if (options.messageIngress === undefined) {
+        throw new ApiGatewayError(
+          "core_unavailable",
+          "Core message ingress is not configured",
+          503,
+        );
       }
+
+      await options.messageIngress.enqueue({
+        sessionId: parsed.sessionId,
+        text: parsed.text,
+        requestId: request.id,
+      });
+      return reply.code(202).send({
+        data: {
+          status: "accepted",
+          requestId: request.id,
+        },
+      });
     },
   );
 
@@ -227,28 +221,6 @@ export async function createApiGateway(
       return reply
         .code(error.statusCode)
         .send(errorBody(error.code, error.message, request.id));
-    }
-    if (error instanceof OpenAiCompatibleError) {
-      request.log.warn(
-        {
-          errorKind: error.kind,
-          providerStatus: error.status,
-          attempts: error.attempts,
-        },
-        "LLM provider call failed",
-      );
-      return reply.code(providerErrorStatus(error)).send({
-        error: {
-          code: "llm_provider_error",
-          message: publicProviderErrorMessage(error),
-          requestId: request.id,
-          kind: error.kind,
-          attempts: error.attempts,
-          ...(error.status === undefined
-            ? {}
-            : { providerStatus: error.status }),
-        },
-      });
     }
     if (
       isHttpError(error) &&
@@ -302,95 +274,6 @@ function hasValidGatewayToken(
   return (
     expected.length === supplied.length && timingSafeEqual(expected, supplied)
   );
-}
-
-function assertAllowedProvider(
-  baseUrl: string | undefined,
-  allowedHosts: ReadonlySet<string>,
-  allowInsecureHttp: boolean,
-): void {
-  const url = new URL(baseUrl ?? "https://api.openai.com/v1");
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new ApiGatewayError(
-      "provider_url_rejected",
-      "Provider URLs must use HTTP or HTTPS",
-      400,
-    );
-  }
-  if (url.protocol === "http:" && !allowInsecureHttp) {
-    throw new ApiGatewayError(
-      "provider_url_rejected",
-      "Provider URLs must use HTTPS unless insecure HTTP is explicitly enabled",
-      400,
-    );
-  }
-  if (url.username || url.password) {
-    throw new ApiGatewayError(
-      "provider_url_rejected",
-      "Provider URLs cannot contain embedded credentials",
-      400,
-    );
-  }
-  if (!allowedHosts.has(url.hostname.toLowerCase())) {
-    throw new ApiGatewayError(
-      "provider_not_allowed",
-      "The requested provider host is not allowed",
-      403,
-    );
-  }
-}
-
-function providerErrorStatus(error: OpenAiCompatibleError): number {
-  if (error.kind === "configuration") {
-    return 400;
-  }
-  if (error.kind === "cancelled") {
-    return 408;
-  }
-  if (error.kind === "retryable") {
-    return 503;
-  }
-  return 502;
-}
-
-function publicProviderErrorMessage(error: OpenAiCompatibleError): string {
-  if (error.kind === "configuration") {
-    return "LLM provider configuration is invalid";
-  }
-  if (error.kind === "cancelled") {
-    return "LLM provider call was cancelled";
-  }
-  if (error.kind === "retryable") {
-    return "LLM provider is temporarily unavailable";
-  }
-  return "LLM provider rejected the request";
-}
-
-function requestCancellation(
-  request: FastifyRequest,
-  reply: FastifyReply,
-  timeoutMs: number,
-): { signal: AbortSignal; dispose(): void } {
-  const controller = new AbortController();
-  const abort = () => controller.abort(new Error("API request cancelled"));
-  const abortOnResponseClose = () => {
-    if (!reply.raw.writableEnded) {
-      abort();
-    }
-  };
-  const timeout = setTimeout(abort, timeoutMs);
-  timeout.unref();
-  request.raw.once("aborted", abort);
-  reply.raw.once("close", abortOnResponseClose);
-
-  return {
-    signal: controller.signal,
-    dispose() {
-      clearTimeout(timeout);
-      request.raw.off("aborted", abort);
-      reply.raw.off("close", abortOnResponseClose);
-    },
-  };
 }
 
 function errorBody(code: string, message: string, requestId: string) {

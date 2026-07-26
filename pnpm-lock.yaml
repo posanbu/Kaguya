@@ -47,9 +47,6 @@ importers:
       '@fastify/swagger':
         specifier: ^9.8.1
         version: 9.8.1
-      '@kaguya/llm':
-        specifier: workspace:*
-        version: link:../../packages/llm
       '@kaguya/schema':
         specifier: workspace:*
         version: link:../../packages/schema
@@ -98,6 +95,9 @@ importers:
 
   packages/llm:
     dependencies:
+      '@ai-sdk/openai-compatible':
+        specifier: 3.0.14
+        version: 3.0.14(zod@4.4.3)
       '@kaguya/schema':
         specifier: workspace:*
         version: link:../schema
@@ -145,6 +145,12 @@ packages:
 
   '@ai-sdk/gateway@4.0.27':
     resolution: {integrity: sha512-gqTMvV0N8/JirIZ3OzwjSZRYxzwZu/PeOFCKb8NB9fstWH39tI+L6CkeMNVou5/HCKEYAw6RCOHW59Vhquv8vA==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
+
+  '@ai-sdk/openai-compatible@3.0.14':
+    resolution: {integrity: sha512-nUl7dBHUDTqcnuWGnEbKMwDDqL94BxRfibLwYv8uWp+kZn8Zqdxy7tUBt4sv2hpHQi+S2P6bUyqW18xmbykErw==}
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
@@ -4651,6 +4657,12 @@ snapshots:
       '@ai-sdk/provider': 4.0.3
       '@ai-sdk/provider-utils': 5.0.12(zod@4.4.3)
       '@vercel/oidc': 3.2.0
+      zod: 4.4.3
+
+  '@ai-sdk/openai-compatible@3.0.14(zod@4.4.3)':
+    dependencies:
+      '@ai-sdk/provider': 4.0.3
+      '@ai-sdk/provider-utils': 5.0.12(zod@4.4.3)
       zod: 4.4.3
 
   '@ai-sdk/provider-utils@4.0.40(zod@4.4.3)':
