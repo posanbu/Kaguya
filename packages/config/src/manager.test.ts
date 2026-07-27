@@ -1537,6 +1537,51 @@ describe("FileUserConfigManager runtime input validation", () => {
     expect(manager.listProfiles().map(({ name }) => name)).toEqual(["default"]);
   });
 
+  it.each(["name", "settings", "acknowledgedWarnings"] as const)(
+    "replaces a getter-thrown ConfigError while reading initialize %s",
+    async (field) => {
+      const rootDir = await mkdtemp(join(tmpdir(), "kaguya-config-manager-"));
+      roots.push(rootDir);
+      const attackerError = new ConfigError(
+        "CONFIG_IO_ERROR",
+        `${secret}-message`,
+        { cause: { attackerCause: secret } },
+      );
+      const options = new Proxy(
+        {
+          rootDir,
+          name: "hostile-initialize",
+          settings: readySettings(["model-a", "model-b"]),
+          acknowledgedWarnings: [],
+        },
+        {
+          get(target, property, receiver): unknown {
+            if (property === field) {
+              throw attackerError;
+            }
+            return Reflect.get(target, property, receiver);
+          },
+        },
+      );
+
+      const error = await FileUserConfigManager.initialize(
+        options as never,
+      ).catch((caught: unknown) => caught);
+
+      expect(error).not.toBe(attackerError);
+      expect(error).toMatchObject({
+        code: "CONFIG_INVALID_INPUT",
+        message: "Configuration profile input failed validation",
+      });
+      expect((error as { cause?: unknown }).cause).toBeUndefined();
+      for (const representation of [String(error), JSON.stringify(error)]) {
+        expect(representation).not.toContain(secret);
+        expect(representation).not.toContain("CONFIG_IO_ERROR");
+        expect(representation).not.toContain("attackerCause");
+      }
+    },
+  );
+
   it("does not inspect getter-thrown revoked proxies at create and update boundaries", async () => {
     const manager = await FileUserConfigManager.open({
       rootDir: await createRoot(),

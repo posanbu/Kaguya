@@ -591,10 +591,7 @@ function parseInitializeInput(value: unknown): {
         options.acknowledgedWarnings,
       ),
     };
-  } catch (error) {
-    if (error instanceof ConfigError) {
-      throw error;
-    }
+  } catch {
     throw new ConfigError(
       "CONFIG_INVALID_INPUT",
       "Configuration profile input failed validation",
