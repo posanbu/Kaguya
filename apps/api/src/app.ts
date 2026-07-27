@@ -3,11 +3,12 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import swagger from "@fastify/swagger";
+import { runWithLogContext } from "@kaguya/logger";
 import { z } from "@kaguya/schema";
 import Fastify, {
+  type FastifyBaseLogger,
   type FastifyInstance,
   type FastifyRequest,
-  type FastifyServerOptions,
 } from "fastify";
 
 import type { ApiGatewayConfig } from "./config.js";
@@ -99,14 +100,16 @@ export interface MessageIngress {
 export interface CreateApiGatewayOptions {
   config: ApiGatewayConfig;
   messageIngress?: MessageIngress;
-  logger?: FastifyServerOptions["logger"];
+  logger?: FastifyBaseLogger;
 }
 
 export async function createApiGateway(
   options: CreateApiGatewayOptions,
 ): Promise<FastifyInstance> {
   const app = Fastify({
-    logger: options.logger ?? false,
+    ...(options.logger === undefined
+      ? { logger: false }
+      : { loggerInstance: options.logger }),
     bodyLimit: 256 * 1024,
     requestIdHeader: false,
     genReqId: (request) =>
@@ -117,6 +120,10 @@ export async function createApiGateway(
         removeAdditional: false,
       },
     },
+  });
+
+  app.addHook("onRequest", (request, _reply, done) => {
+    runWithLogContext({ requestId: request.id }, done);
   });
 
   await app.register(cors, {
@@ -209,7 +216,8 @@ export async function createApiGateway(
     },
     async (request, reply) => {
       const parsed = messageRequestSchema.parse(request.body);
-      if (options.messageIngress === undefined) {
+      const messageIngress = options.messageIngress;
+      if (messageIngress === undefined) {
         throw new ApiGatewayError(
           "core_unavailable",
           "Core message ingress is not configured",
@@ -217,16 +225,22 @@ export async function createApiGateway(
         );
       }
 
-      await options.messageIngress.enqueue({
-        sessionId: parsed.sessionId,
-        text: parsed.text,
-        requestId: request.id,
-      });
-      return reply.code(202).send({
-        data: {
-          status: "accepted",
+      return runWithLogContext({ sessionId: parsed.sessionId }, async () => {
+        await messageIngress.enqueue({
+          sessionId: parsed.sessionId,
+          text: parsed.text,
           requestId: request.id,
-        },
+        });
+        request.log.info(
+          { event: "gateway.message.accepted" },
+          "Message accepted by core ingress",
+        );
+        return reply.code(202).send({
+          data: {
+            status: "accepted",
+            requestId: request.id,
+          },
+        });
       });
     },
   );

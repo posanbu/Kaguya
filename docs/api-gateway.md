@@ -8,13 +8,14 @@
 
 网关使用 Fastify 5 及其官方插件：
 
-| 库或边界              | 用途                      | 选择原因                                                      |
-| --------------------- | ------------------------- | ------------------------------------------------------------- |
-| `fastify`             | HTTP 服务、路由和生命周期 | TypeScript 支持成熟，插件边界清晰，适合组合认证和后续流式接口 |
-| `@fastify/cors`       | 浏览器跨域策略            | 由服务端显式控制允许的 UI origin                              |
-| `@fastify/rate-limit` | 按来源 IP 限流            | 在请求进入 core 前保护网关资源                                |
-| `@fastify/swagger`    | OpenAPI 文档              | 让后续 Web UI 可以生成或校验 API client                       |
-| `MessageIngress`      | core 消息入站抽象         | 让 HTTP 层只依赖 `enqueue` 契约，不耦合 dispatcher 或队列实现 |
+| 库或边界              | 用途                      | 选择原因                                                       |
+| --------------------- | ------------------------- | -------------------------------------------------------------- |
+| `fastify`             | HTTP 服务、路由和生命周期 | TypeScript 支持成熟，插件边界清晰，适合组合认证和后续流式接口  |
+| `@fastify/cors`       | 浏览器跨域策略            | 由服务端显式控制允许的 UI origin                               |
+| `@fastify/rate-limit` | 按来源 IP 限流            | 在请求进入 core 前保护网关资源                                 |
+| `@fastify/swagger`    | OpenAPI 文档              | 让后续 Web UI 可以生成或校验 API client                        |
+| `@kaguya/logger`      | 结构化日志和请求上下文    | 通过 Pino 记录请求元数据，并把 request/session ID 传到 ingress |
+| `MessageIngress`      | core 消息入站抽象         | 让 HTTP 层只依赖 `enqueue` 契约，不耦合 dispatcher 或队列实现  |
 
 按照 [Issue #1](https://github.com/posanbu/Kaguya/issues/1)，`@kaguya/llm` 内部的 OpenAI-compatible adapter 使用 Vercel AI SDK，由 `@ai-sdk/openai-compatible` 创建 provider，并由 `ai` 的 `generateText` 处理模型调用。`@kaguya/api` 不导入 `@kaguya/llm`，也没有手写另一套 provider HTTP 客户端；SDK adapter 是内部模型边界，不是暴露给 Web UI 的动态模型代理。
 
@@ -64,8 +65,14 @@ pnpm api
 | `KAGUYA_TRUST_PROXY`          | 空                                            | 逗号分隔的可信反向代理地址或 CIDR；为空时忽略转发 IP     |
 | `KAGUYA_RATE_LIMIT_MAX`       | `30`                                          | 每个来源在时间窗口内的最大请求数，允许 `1..10000`        |
 | `KAGUYA_RATE_LIMIT_WINDOW_MS` | `60000`                                       | 限流窗口毫秒数，允许 `1000..3600000`                     |
+| `KAGUYA_LOG_LEVEL`            | `info`                                        | Pino 默认日志级别                                        |
+| `KAGUYA_LOG_LEVELS`           | 空                                            | 逗号分隔的 `namespace=level` 模块级别覆盖                |
+| `KAGUYA_LOG_ASYNC`            | `false`                                       | 是否使用 Pino worker transport                           |
+| `KAGUYA_LOG_DESTINATION`      | `stdout`                                      | `stdout`、`stderr` 或日志文件路径                        |
 
 网关没有模型 provider 相关环境变量。模型凭证、provider 地址和模型选择不属于 HTTP ingress 配置。
+
+API 使用 `module=api` 的 Pino child Logger。每个请求的 `requestId` 会进入日志上下文，合法消息在调用 `MessageIngress.enqueue` 时再附加 trim 后的 `sessionId`；请求 serializer 不输出 Authorization、body 或 URL query，消息正文也不会写入普通日志。日志配置和关闭刷新约定见 [结构化日志](logging.md)。
 
 ## 接口
 

@@ -41,6 +41,12 @@ pnpm install
 
 备份、压缩包和故障现场副本仍然是敏感数据，必须限制访问并加密保存。
 
+## 日志规范
+
+运行时代码使用 `@kaguya/logger`，不要新增 `console.log/error` 或自行构造另一套 JSON logger。应用入口创建根 Logger，模块通过 `createModuleLogger()` 创建 child Logger；跨模块调用使用 `runWithLogContext()` 传播仓库约定的关联 ID。
+
+日志对象必须提供稳定 `event` 字段，不把用户消息、Prompt、模型回答、HTTP body/headers、完整 provider URL、凭证或原始 provider Error 写入普通日志。默认 redaction 和安全 serializer 只是兜底；新增字段时仍须检查数据敏感性，并补充不会泄漏测试。高吞吐进程启用 worker transport 时，正常关闭必须调用 `closeLogger()`。
+
 ## 开发命令
 
 ```bash

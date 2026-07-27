@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { KaguyaLogger } from "@kaguya/logger";
+
 import {
+  createPinoLlmLogger,
   OpenAiCompatibleError,
   OpenAiCompatibleLlmService,
   type OpenAiCompatibleRequest,
@@ -398,6 +401,33 @@ describe("OpenAiCompatibleLlmService", () => {
     expect(serialized).not.toContain(baseRequest.systemPrompt);
     expect(serialized).not.toContain(baseRequest.userPrompt);
     expect(serialized).not.toContain("private answer");
+  });
+
+  it("adapts structured LLM events to a Pino logger", () => {
+    const logger = {
+      info: vi.fn(),
+      error: vi.fn(),
+    } as unknown as KaguyaLogger;
+    const adapter = createPinoLlmLogger(logger);
+    const started: OpenAiCompatibleLogEvent = {
+      event: "llm.call.started",
+      model: "model-a",
+      endpoint: "https://gateway.example",
+      attempt: 1,
+    };
+    const failed: OpenAiCompatibleLogEvent = {
+      event: "llm.call.failed",
+      model: "model-a",
+      endpoint: "https://gateway.example",
+      attempt: 1,
+      errorKind: "non-retryable",
+    };
+
+    adapter.info(started);
+    adapter.error(failed);
+
+    expect(logger.info).toHaveBeenCalledWith(started, "llm.call.started");
+    expect(logger.error).toHaveBeenCalledWith(failed, "llm.call.failed");
   });
 
   it("logs only the provider origin, not a tenant path or query", async () => {

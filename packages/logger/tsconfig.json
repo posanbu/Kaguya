@@ -4,6 +4,5 @@
     "rootDir": "./src",
     "outDir": "./dist"
   },
-  "include": ["src/**/*.ts"],
-  "references": [{ "path": "../logger" }, { "path": "../schema" }]
+  "include": ["src/**/*.ts"]
 }
