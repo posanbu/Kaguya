@@ -11,7 +11,7 @@ Kaguya 是一个以事件和有向工作流为核心的 TypeScript AI Bot 基础
 - 基于 Vercel AI SDK 的结构化 LLM 边界、OpenAI-compatible 动态 provider 与完整调用 trace；
 - 基于 Fastify 的消息参数校验与 ingress enqueue 网关、Bearer 认证、限流、CORS 与 OpenAPI；
 - SQLite 消息、记忆、节点运行和 LLM trace 仓储；
-- 多份敏感用户配置、会话选择与默认回退；
+- 多份敏感用户配置、显式初始化、会话/默认 profile 选择与 readiness 阻断；
 - 消息、心跳、定时记忆三条可执行示例工作流；
 - 不依赖远端模型或 API key 的确定性测试、demo 和 Promptfoo 回归测试；`prompt:test` 会阻断 CLI 外部出口。
 
@@ -91,4 +91,12 @@ docs/               调研、架构、会议记录和设计文档
 
 这是基础设施原型，而不是可直接连接聊天平台的完整 Bot。应用 API 网关当前只提供 `POST /api/v1/messages` 的参数校验与 `MessageIngress.enqueue` 注入边界；生产启动入口尚未注入 ingress，因此 core dispatcher、持久队列、consumer 和后续工作流 handoff 仍未实现。`@kaguya/llm` 的 OpenAI-compatible 能力是内部适配器，不是由网关暴露给 UI 的动态模型代理。
 
-`@kaguya/config` 已实现敏感 profile 的本地存储、会话选择和默认回退，但当前 demo 尚未读取这些 profile。真实模型策略与 trace 接入、平台适配器、持久运行/SSE、并发队列、Web UI 和生产部署仍属于后续工作。当前 demo 的 policy 和 persona 是固定样例文本；业务应用应在应用层装配自己的数据源和策略。
+`@kaguya/config` 已实现敏感 profile 的本地存储、无副作用的首次
+`inspect()`、显式 `initialize()`、会话选择和 readiness 阻断；它不会自动
+创建空 default profile。会话绑定或 default profile 只选择一个候选 profile，
+该候选必须 ready，不能回退到其他 profile、provider 或模型。配置至少需要两
+个不同的 `providerId:modelId` 目标；执行层未来遇到 provider 错误时也必须直接
+返回，不得 fallback。当前 demo 尚未读取这些 profile。真实模型策略与 trace
+接入、平台适配器、持久运行/SSE、并发队列、Web UI 和生产部署仍属于后续工作。
+当前 demo 的 policy 和 persona 是固定样例文本；业务应用应在应用层装配自己的
+数据源和策略。
