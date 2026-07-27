@@ -10,6 +10,7 @@ Kaguya 是一个以事件和有向工作流为核心的 TypeScript AI Bot 基础
 - 带稳定排序和 SHA-256 来源摘要的 Prompt 编译器；
 - 基于 Vercel AI SDK 的结构化 LLM 边界、OpenAI-compatible 动态 provider 与完整调用 trace；
 - 基于 Fastify 的消息参数校验与 ingress enqueue 网关、Bearer 认证、限流、CORS 与 OpenAPI；
+- 基于 Pino 的结构化日志、模块命名空间、异步链路上下文、默认脱敏与可选 worker 输出；
 - SQLite 消息、记忆、节点运行和 LLM trace 仓储；
 - 多份敏感用户配置、会话选择与默认回退；
 - 消息、心跳、定时记忆三条可执行示例工作流；
@@ -69,6 +70,7 @@ packages/prompt/    Prompt 编译与来源追踪
 packages/llm/       LLM 调用、结构校验与 trace
 packages/database/  SQLite 迁移和 repositories
 packages/config/    敏感用户配置 profile 的 JSON 存储与会话选择
+packages/logger/    Pino 结构化日志、命名空间与链路上下文
 promptfoo/          离线 Promptfoo provider 与结构断言
 docs/               调研、架构、会议记录和设计文档
 ```
@@ -77,6 +79,7 @@ docs/               调研、架构、会议记录和设计文档
 
 - [架构说明](docs/architecture.md)：包边界、事件字段、节点/边、工作流、Prompt 与数据库追踪。
 - [应用 API 网关](docs/api-gateway.md)：Fastify 选型、AstrBot 参考、启动配置、接口与安全边界。
+- [结构化日志](docs/logging.md)：Pino API、链路上下文、命名空间级别、异步输出和脱敏边界。
 - [2026-07-25 网关更新说明](docs/updates/2026-07-25-application-api-gateway.md)：新增能力、测试修复、兼容性变化与验证结果。
 - [OpenAI-compatible LLM 接口](docs/openai-compatible-llm.md)：基于 Vercel AI SDK 的内部适配器与独立连通性测试工具；它不是 Web UI 的后端 API。
 - [配置包说明](packages/config/README.md)：敏感配置的 API、存储边界和泄漏处置。

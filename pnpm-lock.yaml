@@ -47,6 +47,9 @@ importers:
       '@fastify/swagger':
         specifier: ^9.8.1
         version: 9.8.1
+      '@kaguya/logger':
+        specifier: workspace:*
+        version: link:../../packages/logger
       '@kaguya/schema':
         specifier: workspace:*
         version: link:../../packages/schema
@@ -78,6 +81,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/sdk
 
+  packages/config:
+    dependencies:
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+
   packages/database:
     dependencies:
       '@kaguya/schema':
@@ -98,12 +107,21 @@ importers:
       '@ai-sdk/openai-compatible':
         specifier: 3.0.14
         version: 3.0.14(zod@4.4.3)
+      '@kaguya/logger':
+        specifier: workspace:*
+        version: link:../logger
       '@kaguya/schema':
         specifier: workspace:*
         version: link:../schema
       ai:
         specifier: 7.0.35
         version: 7.0.35(zod@4.4.3)
+
+  packages/logger:
+    dependencies:
+      pino:
+        specifier: 10.3.1
+        version: 10.3.1
 
   packages/prompt:
     dependencies:
@@ -118,12 +136,6 @@ importers:
         version: link:../schema
 
   packages/schema:
-    dependencies:
-      zod:
-        specifier: 4.4.3
-        version: 4.4.3
-
-  packages/config:
     dependencies:
       zod:
         specifier: 4.4.3

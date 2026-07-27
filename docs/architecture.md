@@ -13,6 +13,7 @@
 | 多来源 Prompt 的来龙去脉       | `@kaguya/prompt`       | 按优先级稳定编译片段，转义边界字符，并生成每片段 SHA-256 provenance      |
 | 找到并统一所有 LLM request     | `@kaguya/llm`          | 单一生成边界、四类输出校验、错误归一化、成功/失败 trace                  |
 | 为 UI 暴露受控的应用接口       | `@kaguya/api`          | Fastify 网关、Bearer 认证、消息校验、限流、CORS、OpenAPI 和核心入站 port |
+| 统一模块日志和链路上下文       | `@kaguya/logger`       | Pino JSON、模块级别、AsyncLocalStorage 关联 ID、脱敏和 worker transport  |
 | 消息、memory 和运行记录        | `@kaguya/database`     | SQLite 迁移与 messages、memories、event_runs、llm_traces repositories    |
 | 用户配置 profile 与会话选择    | `@kaguya/config`       | 明文 JSON profile 持久化、仅元数据列表、会话选择与默认 profile 回退      |
 | 消息流转图和三类 bot 逻辑      | `@kaguya/demo`         | 组装消息、心跳、定时记忆工作流；注入数据库、事件总线、Prompt 与 LLM 服务 |
@@ -34,8 +35,10 @@ flowchart TD
   LLM["@kaguya/llm<br/>模型边界与 trace"]
   DB["@kaguya/database<br/>SQLite"]
   Config["@kaguya/config<br/>敏感 profile 存储"]
+  Logger["@kaguya/logger<br/>Pino 与链路上下文"]
 
   API --> Schema
+  API --> Logger
   Demo --> SDK
   Demo --> Engine
   Demo --> Scheduler
@@ -48,10 +51,11 @@ flowchart TD
   Scheduler --> Schema
   Prompt --> Schema
   LLM --> Schema
+  LLM --> Logger
   DB --> Schema
 ```
 
-这些方向由 workspace 依赖和 TypeScript project references 共同表达。`schema` 不知道任何实现；`engine` 不直接创建数据库；`llm` 只通过 `LlmTraceWriter` 写 trace；业务 policy 和 workflow 只存在于应用层。`@kaguya/config` 是独立包，不依赖 `@kaguya/database`，当前也没有应用代码连接它。
+这些方向由 workspace 依赖和 TypeScript project references 共同表达。`schema` 不知道任何实现；`engine` 不直接创建数据库；`llm` 只通过 `LlmTraceWriter` 写 trace，并为 OpenAI-compatible 事件提供 Pino adapter；业务 policy 和 workflow 只存在于应用层。`@kaguya/logger` 只依赖 Pino，不依赖业务 package。`@kaguya/config` 是独立包，不依赖 `@kaguya/database`，当前也没有应用代码连接它。
 
 ## 用户配置边界
 
@@ -75,6 +79,12 @@ flowchart TD
 `apps/api` 使用 Fastify 及官方 CORS、rate-limit、Swagger 插件，公开健康检查、OpenAPI 文档和受 Bearer token 保护的 `POST /api/v1/messages`。消息接口只接受 `sessionId` 与 `text`；通过认证和严格校验后，网关把 `{ sessionId, text, requestId }` 交给注入的 `MessageIngress.enqueue`。它不接受 API key、base URL 或模型参数，也不选择 provider、模型或 workflow。
 
 `MessageIngress` 只是 HTTP 层与未来核心层之间的 port。当前仓库尚未实现生产 core dispatcher、持久队列或 consumer，`server.ts` 也没有注入真实 adapter，因此合法消息会返回 `503 core_unavailable`，不会伪造已经入队。网关不直接注入 `EventBus`：现有 EventBus 只做进程内发布，不会选择 workflow，也没有可靠投递语义。后续核心 adapter 应负责事件构造、持久化入队、consumer 分发、工作流选择和模型策略。完整约定见 [应用 API 网关](api-gateway.md)。
+
+## 结构化日志
+
+`@kaguya/logger` 以 Pino 输出单行 JSON。composition root 创建根 Logger，业务模块使用带 `module` 字段的 child Logger；`KAGUYA_LOG_LEVELS` 可以按最长命名空间前缀覆盖级别。AsyncLocalStorage 在并发任务间隔离 `traceId/sessionId/eventId/runId/requestId/workflowId/nodeId`，嵌套调用会继承并覆盖当前上下文。
+
+默认同步 destination 保持开发与测试的确定顺序；生产可通过 `KAGUYA_LOG_ASYNC=true` 使用 worker transport。默认 redaction、安全 Error serializer 和无 query/header/body 的 HTTP serializer 降低误泄漏风险，但调用方仍禁止记录 Prompt、模型回答、消息正文、凭证和 provider 原始错误。完整约定见 [结构化日志](logging.md)。
 
 ## 事件模型
 

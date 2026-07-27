@@ -377,7 +377,7 @@ EventBus 和 WorkflowEngine 当前在单进程内执行；节点记录生命周�
 
 **当前基础**
 
-数据库已有 event run 和 LLM trace，但没有统一生产日志、指标、跨服务 trace、告警或值班手册。
+仓库已有基于 Pino 的统一 JSON 日志包、模块命名空间、AsyncLocalStorage 关联 ID、默认脱敏和可选 worker transport；API 网关已传播 `requestId/sessionId`，OpenAI-compatible adapter 已能写入 Pino。事件总线、工作流、scheduler、database 和平台 adapter 尚未全部接入，指标、跨服务 trace、日志采集、告警或值班手册也未实现。
 
 **为什么必须人工参与**
 
