@@ -1,7 +1,35 @@
+import {
+  createOpenAICompatible,
+  type OpenAICompatibleProviderSettings,
+} from "@ai-sdk/openai-compatible";
+import { APICallError, RetryError, generateText } from "ai";
+
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_RETRIES = 2;
-const DEFAULT_RETRY_DELAY_MS = 500;
+
+// These headers can change the HTTP connection or request framing. They are
+// controlled by the SDK/fetch implementation and must not be supplied by a
+// provider configuration object.
+const DISALLOWED_CUSTOM_HEADER_NAMES = new Set([
+  "connection",
+  "content-length",
+  "expect",
+  "host",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "proxy-connection",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+  // These names are valid HTTP tokens, but are unsafe when the provider
+  // headers are assembled through ordinary JavaScript objects.
+  "__proto__",
+  "constructor",
+  "prototype",
+]);
 
 export interface OpenAiCompatibleRequest {
   apiKey: string;
@@ -11,7 +39,6 @@ export interface OpenAiCompatibleRequest {
   userPrompt: string;
   temperature?: number;
   maxRetries?: number;
-  retryDelayMs?: number;
   timeoutMs?: number;
   apiKeyHeader?: string;
   additionalHeaders?: Record<string, string>;
@@ -40,22 +67,22 @@ export class OpenAiCompatibleError extends Error {
   readonly kind: OpenAiCompatibleErrorKind;
   readonly status?: number;
   readonly attempts: number;
-  override readonly cause: unknown;
 
   constructor(
     message: string,
     options: {
       kind: OpenAiCompatibleErrorKind;
       attempts: number;
-      cause?: unknown;
       status?: number;
     },
   ) {
-    super(message, { cause: options.cause });
+    // Do not attach the SDK error as `cause`: provider errors can contain the
+    // serialized prompt, request headers, and response body. Callers receive
+    // the stable classification fields below and can log them safely.
+    super(message);
     this.name = "OpenAiCompatibleError";
     this.kind = options.kind;
     this.attempts = options.attempts;
-    this.cause = options.cause;
     if (options.status !== undefined) {
       this.status = options.status;
     }
@@ -83,7 +110,6 @@ export interface OpenAiCompatibleServiceOptions {
   fetch?: typeof fetch;
   logger?: OpenAiCompatibleLogger;
   now?: () => number;
-  sleep?: (milliseconds: number) => Promise<void>;
 }
 
 const silentLogger: OpenAiCompatibleLogger = {
@@ -106,13 +132,11 @@ export class OpenAiCompatibleLlmService {
   readonly #fetch: typeof fetch;
   readonly #logger: OpenAiCompatibleLogger;
   readonly #now: () => number;
-  readonly #sleep: (milliseconds: number) => Promise<void>;
 
   constructor(options: OpenAiCompatibleServiceOptions = {}) {
     this.#fetch = options.fetch ?? globalThis.fetch;
     this.#logger = options.logger ?? silentLogger;
     this.#now = options.now ?? Date.now;
-    this.#sleep = options.sleep ?? defaultSleep;
   }
 
   async call(
@@ -120,147 +144,126 @@ export class OpenAiCompatibleLlmService {
   ): Promise<OpenAiCompatibleResult> {
     const configuration = normalizeRequest(request);
     const startedAt = this.#now();
-    let lastError: OpenAiCompatibleError | undefined;
+    let attempts = 0;
 
-    for (let attempt = 1; attempt <= configuration.maxRetries + 1; attempt++) {
+    const trackedFetch: typeof fetch = async (input, init) => {
+      attempts += 1;
       this.#logger.info({
         event: "llm.call.started",
         model: configuration.model,
         endpoint: configuration.logEndpoint,
-        attempt,
+        attempt: attempts,
       });
-
-      try {
-        const response = await this.#request(configuration, request.signal);
-        const parsed = await parseResponse(response, attempt);
-        const result: OpenAiCompatibleResult = {
-          content: parsed.content,
-          model: parsed.model ?? configuration.model,
-          attempts: attempt,
-          durationMs: Math.max(0, this.#now() - startedAt),
-          ...(parsed.requestId === undefined
-            ? {}
-            : { requestId: parsed.requestId }),
-          ...(parsed.usage === undefined ? {} : { usage: parsed.usage }),
-        };
-
-        this.#logger.info({
-          event: "llm.call.succeeded",
-          model: configuration.model,
-          endpoint: configuration.logEndpoint,
-          attempt,
-          durationMs: result.durationMs,
-          ...(result.usage === undefined ? {} : { usage: result.usage }),
-        });
-        return result;
-      } catch (error) {
-        const normalized = normalizeCallError(error, attempt, request.signal);
-        lastError = normalized;
-        this.#logger.error({
-          event: "llm.call.failed",
-          model: configuration.model,
-          endpoint: configuration.logEndpoint,
-          attempt,
-          durationMs: Math.max(0, this.#now() - startedAt),
-          errorKind: normalized.kind,
-          errorMessage: normalized.message,
-          ...(normalized.status === undefined
-            ? {}
-            : { status: normalized.status }),
-        });
-
-        if (
-          normalized.kind !== "retryable" ||
-          attempt > configuration.maxRetries
-        ) {
-          throw normalized;
-        }
-
-        await this.#sleep(
-          retryDelay(configuration.retryDelayMs, attempt, normalized.cause),
-        );
-      }
-    }
-
-    throw (
-      lastError ??
-      new OpenAiCompatibleError("Language model generation failed", {
-        kind: "non-retryable",
-        attempts: 0,
-      })
-    );
-  }
-
-  async #request(
-    configuration: NormalizedRequest,
-    callerSignal: AbortSignal | undefined,
-  ): Promise<Response> {
-    const controller = new AbortController();
-    const abortFromCaller = () => controller.abort(callerSignal?.reason);
-    callerSignal?.addEventListener("abort", abortFromCaller, { once: true });
-    if (callerSignal?.aborted === true) {
-      abortFromCaller();
-    }
-    const timeout = setTimeout(
-      () => controller.abort(),
-      configuration.timeoutMs,
-    );
+      return this.#fetch(appendRawQuery(input, configuration.rawQuery), {
+        ...init,
+        redirect: "error",
+      });
+    };
 
     try {
-      return await this.#fetch(configuration.endpoint, {
-        method: "POST",
+      const providerOptions: OpenAICompatibleProviderSettings = {
+        name: "kaguya-openai-compatible",
+        baseURL: configuration.baseUrl,
         headers: configuration.headers,
-        body: JSON.stringify({
-          model: configuration.model,
-          messages: [
-            { role: "system", content: configuration.systemPrompt },
-            { role: "user", content: configuration.userPrompt },
-          ],
-          temperature: configuration.temperature,
-        }),
-        signal: controller.signal,
+        fetch: trackedFetch,
+        ...(configuration.providerApiKey === undefined
+          ? {}
+          : { apiKey: configuration.providerApiKey }),
+      };
+      const provider = createOpenAICompatible(providerOptions);
+      const generated = await generateText({
+        model: provider.chatModel(configuration.model),
+        system: configuration.systemPrompt,
+        prompt: configuration.userPrompt,
+        temperature: configuration.temperature,
+        maxRetries: configuration.maxRetries,
+        timeout: configuration.timeoutMs,
+        ...(request.signal === undefined
+          ? {}
+          : { abortSignal: request.signal }),
       });
-    } finally {
-      clearTimeout(timeout);
-      callerSignal?.removeEventListener("abort", abortFromCaller);
+
+      if (generated.text.trim().length === 0) {
+        throw new OpenAiCompatibleError("LLM API returned empty content", {
+          kind: "non-retryable",
+          attempts: Math.max(1, attempts),
+        });
+      }
+
+      const usage = normalizeUsage(
+        generated.usage,
+        generated.steps.map((step) => step.usage.raw),
+      );
+      const requestId = headerValue(generated.response.headers, "x-request-id");
+      const result: OpenAiCompatibleResult = {
+        content: generated.text,
+        model: generated.response.modelId || configuration.model,
+        attempts: Math.max(1, attempts),
+        durationMs: Math.max(0, this.#now() - startedAt),
+        ...(requestId === undefined ? {} : { requestId }),
+        ...(usage === undefined ? {} : { usage }),
+      };
+
+      this.#logger.info({
+        event: "llm.call.succeeded",
+        model: configuration.model,
+        endpoint: configuration.logEndpoint,
+        attempt: result.attempts,
+        durationMs: result.durationMs,
+        ...(result.usage === undefined ? {} : { usage: result.usage }),
+      });
+      return result;
+    } catch (error) {
+      const normalized = normalizeSdkError(error, attempts, request.signal);
+      this.#logger.error({
+        event: "llm.call.failed",
+        model: configuration.model,
+        endpoint: configuration.logEndpoint,
+        attempt: normalized.attempts,
+        durationMs: Math.max(0, this.#now() - startedAt),
+        errorKind: normalized.kind,
+        ...(normalized.status === undefined
+          ? {}
+          : { status: normalized.status }),
+      });
+      throw normalized;
     }
   }
 }
 
 interface NormalizedRequest {
-  endpoint: string;
+  baseUrl: string;
   logEndpoint: string;
+  rawQuery?: string;
+  providerApiKey?: string;
   headers: Record<string, string>;
   model: string;
   systemPrompt: string;
   userPrompt: string;
   temperature: number;
   maxRetries: number;
-  retryDelayMs: number;
   timeoutMs: number;
 }
 
 function normalizeRequest(request: OpenAiCompatibleRequest): NormalizedRequest {
-  const apiKey = requireText(request.apiKey, "apiKey");
-  const model = requireText(request.model, "model");
-  const systemPrompt = requireText(request.systemPrompt, "systemPrompt");
-  const userPrompt = requireText(request.userPrompt, "userPrompt");
-  const endpoint = resolveEndpoint(request.baseUrl);
-  const temperature = request.temperature ?? 0;
+  if (!isRecord(request) || Array.isArray(request)) {
+    throw configurationError("request must be an object");
+  }
+  const input = request as OpenAiCompatibleRequest;
+  const apiKey = requireTrimmedText(input.apiKey, "apiKey");
+  const model = requireTrimmedText(input.model, "model");
+  const systemPrompt = requirePromptText(input.systemPrompt, "systemPrompt");
+  const userPrompt = requirePromptText(input.userPrompt, "userPrompt");
+  const endpoint = resolveProviderEndpoint(input.baseUrl);
+  const temperature = input.temperature ?? 0;
   const maxRetries = integerInRange(
-    request.maxRetries ?? DEFAULT_MAX_RETRIES,
+    input.maxRetries ?? DEFAULT_MAX_RETRIES,
     "maxRetries",
     0,
     10,
   );
-  const retryDelayMs = integerInRange(
-    request.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS,
-    "retryDelayMs",
-    0,
-    60_000,
-  );
   const timeoutMs = integerInRange(
-    request.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     "timeoutMs",
     1,
     300_000,
@@ -269,213 +272,310 @@ function normalizeRequest(request: OpenAiCompatibleRequest): NormalizedRequest {
   if (!Number.isFinite(temperature) || temperature < 0 || temperature > 2) {
     throw configurationError("temperature must be between 0 and 2");
   }
+  if (hasHeaderControlCharacters(apiKey)) {
+    throw configurationError("apiKey contains invalid header characters");
+  }
 
-  const apiKeyHeader = request.apiKeyHeader?.trim() || "Authorization";
-  const authentication =
-    apiKeyHeader.toLowerCase() === "authorization"
-      ? `Bearer ${apiKey}`
-      : apiKey;
+  const apiKeyHeader =
+    optionalTrimmedText(input.apiKeyHeader, "apiKeyHeader") ?? "Authorization";
+  if (!isHeaderName(apiKeyHeader)) {
+    throw configurationError("apiKeyHeader must be a valid HTTP header name");
+  }
+  const normalizedApiKeyHeader = apiKeyHeader.toLowerCase();
+  if (normalizedApiKeyHeader === "content-type") {
+    throw configurationError("apiKeyHeader cannot be content-type");
+  }
+  if (isDisallowedCustomHeaderName(normalizedApiKeyHeader)) {
+    throw configurationError("apiKeyHeader cannot be a reserved HTTP header");
+  }
+  const authentication = authenticationOptions(
+    apiKey,
+    apiKeyHeader,
+    input.additionalHeaders,
+  );
 
   return {
-    endpoint,
-    logEndpoint: redactEndpoint(endpoint),
+    baseUrl: endpoint.baseUrl,
+    logEndpoint: endpoint.logEndpoint,
+    ...(endpoint.rawQuery === undefined ? {} : { rawQuery: endpoint.rawQuery }),
     model,
     systemPrompt,
     userPrompt,
     temperature,
     maxRetries,
-    retryDelayMs,
     timeoutMs,
-    headers: {
-      ...request.additionalHeaders,
-      "content-type": "application/json",
-      [apiKeyHeader]: authentication,
-    },
+    ...(authentication.providerApiKey === undefined
+      ? {}
+      : { providerApiKey: authentication.providerApiKey }),
+    headers: authentication.headers,
   };
 }
 
-function resolveEndpoint(baseUrl: string | undefined): string {
+function resolveProviderEndpoint(baseUrl: string | undefined): {
+  baseUrl: string;
+  logEndpoint: string;
+  rawQuery?: string;
+} {
   let url: URL;
   try {
     url = new URL(baseUrl?.trim() || DEFAULT_BASE_URL);
-  } catch (error) {
-    throw configurationError("baseUrl must be a valid URL", error);
+  } catch {
+    throw configurationError("baseUrl must be a valid URL");
   }
 
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw configurationError("baseUrl must use http or https");
   }
-
-  const pathname = url.pathname.replace(/\/+$/, "");
-  if (!pathname.endsWith("/chat/completions")) {
-    url.pathname = `${pathname}/chat/completions`;
+  if (url.username || url.password) {
+    throw configurationError("baseUrl cannot contain embedded credentials");
   }
-  return url.toString();
-}
 
-function redactEndpoint(endpoint: string): string {
-  const url = new URL(endpoint);
+  const rawQuery = url.search;
   url.search = "";
   url.hash = "";
-  return url.toString();
-}
-
-async function parseResponse(
-  response: Response,
-  attempt: number,
-): Promise<{
-  content: string;
-  model?: string;
-  requestId?: string;
-  usage?: OpenAiCompatibleUsage;
-}> {
-  const body = await readJson(response, attempt);
-
-  if (!response.ok) {
-    const message =
-      providerErrorMessage(body) ?? `LLM API returned ${response.status}`;
-    const cause = { response, body };
-    throw new OpenAiCompatibleError(message, {
-      kind: isRetryableStatus(response.status) ? "retryable" : "non-retryable",
-      attempts: attempt,
-      status: response.status,
-      cause,
-    });
+  let pathname = url.pathname.replace(/\/+$/, "");
+  if (pathname.endsWith("/chat/completions")) {
+    pathname = pathname.slice(0, -"/chat/completions".length);
   }
+  url.pathname = pathname || "/";
 
-  const content = responseContent(body);
-  if (content === undefined || content.trim().length === 0) {
-    throw new OpenAiCompatibleError("LLM API returned empty content", {
-      kind: "non-retryable",
-      attempts: attempt,
-      status: response.status,
-      cause: body,
-    });
-  }
-
-  const model = isRecord(body) ? textProperty(body, "model") : undefined;
-  const requestId = response.headers.get("x-request-id") ?? undefined;
-  const usage = responseUsage(body);
+  const base = url.toString().replace(/\/$/u, "");
   return {
-    content,
-    ...(model === undefined ? {} : { model }),
-    ...(requestId === undefined ? {} : { requestId }),
-    ...(usage === undefined ? {} : { usage }),
+    baseUrl: base,
+    // Provider paths can contain tenant IDs, deployment names, or signed
+    // material. Keep logs useful for host-level diagnostics without retaining
+    // path, query, or fragment data.
+    logEndpoint: url.origin,
+    ...(rawQuery.length === 0 ? {} : { rawQuery }),
   };
 }
 
-async function readJson(response: Response, attempt: number): Promise<unknown> {
-  try {
-    return await response.json();
-  } catch (error) {
-    throw new OpenAiCompatibleError("LLM API returned invalid JSON", {
-      kind: response.ok ? "non-retryable" : "retryable",
-      attempts: attempt,
-      status: response.status,
-      cause: error,
-    });
+function appendRawQuery(
+  input: RequestInfo | URL,
+  rawQuery: string | undefined,
+): RequestInfo | URL {
+  if (rawQuery === undefined) {
+    return input;
   }
+
+  const append = (value: string) => {
+    const fragmentIndex = value.indexOf("#");
+    const endpoint =
+      fragmentIndex === -1 ? value : value.slice(0, fragmentIndex);
+    const fragment = fragmentIndex === -1 ? "" : value.slice(fragmentIndex);
+    const separator = endpoint.includes("?")
+      ? endpoint.endsWith("?") || endpoint.endsWith("&")
+        ? ""
+        : "&"
+      : "?";
+    return `${endpoint}${separator}${rawQuery.slice(1)}${fragment}`;
+  };
+
+  if (typeof input === "string") {
+    return append(input);
+  }
+  if (input instanceof URL) {
+    return append(input.toString());
+  }
+  return new Request(append(input.url), input);
 }
 
-function responseContent(body: unknown): string | undefined {
-  if (!isRecord(body) || !Array.isArray(body.choices)) {
-    return undefined;
-  }
-  const choice = body.choices[0];
-  if (!isRecord(choice) || !isRecord(choice.message)) {
-    return undefined;
-  }
-  return textProperty(choice.message, "content");
-}
-
-function responseUsage(body: unknown): OpenAiCompatibleUsage | undefined {
-  if (!isRecord(body) || !isRecord(body.usage)) {
-    return undefined;
-  }
-  const promptTokens = numberProperty(body.usage, "prompt_tokens");
-  const completionTokens = numberProperty(body.usage, "completion_tokens");
-  const totalTokens = numberProperty(body.usage, "total_tokens");
+function authenticationOptions(
+  apiKey: string,
+  apiKeyHeader: string,
+  additionalHeaders: unknown,
+): { providerApiKey?: string; headers: Record<string, string> } {
   if (
-    promptTokens === undefined &&
-    completionTokens === undefined &&
-    totalTokens === undefined
+    additionalHeaders !== undefined &&
+    (!isRecord(additionalHeaders) || Array.isArray(additionalHeaders))
+  ) {
+    throw configurationError("additionalHeaders must be an object");
+  }
+  const headers = Object.create(null) as Record<string, string>;
+  for (const [name, value] of Object.entries(additionalHeaders ?? {})) {
+    if (
+      !isHeaderName(name) ||
+      typeof value !== "string" ||
+      hasHeaderControlCharacters(value)
+    ) {
+      throw configurationError("additionalHeaders contains an invalid header");
+    }
+    const normalizedName = name.toLowerCase();
+    if (isDisallowedCustomHeaderName(normalizedName)) {
+      throw configurationError(
+        "additionalHeaders cannot set a reserved HTTP header",
+      );
+    }
+    if (normalizedName === "content-type") {
+      throw configurationError(
+        "additionalHeaders cannot override the content-type header",
+      );
+    }
+    if (normalizedName !== apiKeyHeader.toLowerCase()) {
+      headers[name] = value;
+    }
+  }
+  if (apiKeyHeader.toLowerCase() === "authorization") {
+    return { providerApiKey: apiKey, headers };
+  }
+  headers[apiKeyHeader] = apiKey;
+  return { headers };
+}
+
+function normalizeUsage(
+  usage: {
+    inputTokens: number | undefined;
+    outputTokens: number | undefined;
+    totalTokens: number | undefined;
+    raw?: unknown;
+  },
+  stepRawUsages: readonly unknown[] = [],
+): OpenAiCompatibleUsage | undefined {
+  const rawTotalTokens =
+    readRawTotalTokens(usage.raw) ?? sumRawTotalTokens(stepRawUsages);
+  if (
+    usage.inputTokens === undefined &&
+    usage.outputTokens === undefined &&
+    usage.totalTokens === undefined &&
+    rawTotalTokens === undefined
   ) {
     return undefined;
   }
+  const promptTokens = usage.inputTokens ?? 0;
+  const completionTokens = usage.outputTokens ?? 0;
   return {
-    promptTokens: promptTokens ?? 0,
-    completionTokens: completionTokens ?? 0,
-    totalTokens: totalTokens ?? (promptTokens ?? 0) + (completionTokens ?? 0),
+    promptTokens,
+    completionTokens,
+    totalTokens:
+      rawTotalTokens ?? usage.totalTokens ?? promptTokens + completionTokens,
   };
 }
 
-function providerErrorMessage(body: unknown): string | undefined {
-  if (!isRecord(body)) {
+function readRawTotalTokens(raw: unknown): number | undefined {
+  if (!isRecord(raw) || typeof raw.total_tokens !== "number") {
     return undefined;
   }
-  if (isRecord(body.error)) {
-    return textProperty(body.error, "message");
-  }
-  return textProperty(body, "message");
+  return Number.isFinite(raw.total_tokens) ? raw.total_tokens : undefined;
 }
 
-function normalizeCallError(
+function sumRawTotalTokens(rawUsages: readonly unknown[]): number | undefined {
+  let total = 0;
+  let found = false;
+  for (const raw of rawUsages) {
+    const value = readRawTotalTokens(raw);
+    if (value !== undefined) {
+      total += value;
+      found = true;
+    }
+  }
+  return found ? total : undefined;
+}
+
+function normalizeSdkError(
   error: unknown,
-  attempt: number,
+  fetchAttempts: number,
   callerSignal: AbortSignal | undefined,
 ): OpenAiCompatibleError {
   if (error instanceof OpenAiCompatibleError) {
     return error;
   }
-  if (callerSignal?.aborted === true) {
+
+  const retryError = RetryError.isInstance(error) ? error : undefined;
+  const underlying = retryError?.lastError ?? error;
+  const apiError = findApiCallError(underlying);
+  const attempts = Math.max(1, fetchAttempts, retryError?.errors.length ?? 0);
+
+  if (
+    callerSignal?.aborted === true ||
+    retryError?.reason === "abort" ||
+    isAbortError(underlying)
+  ) {
     return new OpenAiCompatibleError("LLM call cancelled", {
       kind: "cancelled",
-      attempts: attempt,
-      cause: error,
+      attempts,
+      ...(apiError?.statusCode === undefined
+        ? {}
+        : { status: apiError.statusCode }),
     });
   }
-  return new OpenAiCompatibleError(errorMessage(error), {
-    kind: "retryable",
-    attempts: attempt,
-    cause: error,
+
+  const kind: OpenAiCompatibleErrorKind =
+    apiError === undefined
+      ? retryError?.reason === "maxRetriesExceeded"
+        ? "retryable"
+        : "non-retryable"
+      : apiError.isRetryable
+        ? "retryable"
+        : "non-retryable";
+
+  return new OpenAiCompatibleError(normalizedSdkErrorMessage(kind), {
+    kind,
+    attempts,
+    ...(apiError?.statusCode === undefined
+      ? {}
+      : { status: apiError.statusCode }),
   });
 }
 
-function retryDelay(
-  baseDelayMs: number,
-  attempt: number,
-  cause: unknown,
-): number {
-  const retryAfterMs = retryAfter(cause);
-  return retryAfterMs ?? baseDelayMs * 2 ** (attempt - 1);
+function findApiCallError(error: unknown): APICallError | undefined {
+  if (APICallError.isInstance(error)) {
+    return error;
+  }
+  if (isRecord(error) && APICallError.isInstance(error.cause)) {
+    return error.cause;
+  }
+  return undefined;
 }
 
-function retryAfter(cause: unknown): number | undefined {
-  if (!isRecord(cause) || !(cause.response instanceof Response)) {
-    return undefined;
+function isAbortError(error: unknown): boolean {
+  if (error instanceof Error) {
+    if (error.name === "AbortError" || error.name === "TimeoutError") {
+      return true;
+    }
+    return error.cause === undefined ? false : isAbortError(error.cause);
   }
-  const value = cause.response.headers.get("retry-after");
-  if (value === null) {
-    return undefined;
-  }
-  const seconds = Number(value);
-  if (Number.isFinite(seconds) && seconds >= 0) {
-    return seconds * 1_000;
-  }
-  const date = Date.parse(value);
-  return Number.isNaN(date) ? undefined : Math.max(0, date - Date.now());
+  return false;
 }
 
-function isRetryableStatus(status: number): boolean {
-  return status === 408 || status === 409 || status === 429 || status >= 500;
+function headerValue(
+  headers: Record<string, string> | undefined,
+  name: string,
+): string | undefined {
+  const match = Object.entries(headers ?? {}).find(
+    ([key]) => key.toLowerCase() === name.toLowerCase(),
+  );
+  return match?.[1];
 }
 
-function requireText(value: string, name: string): string {
+function requireTrimmedText(value: unknown, name: string): string {
+  if (typeof value !== "string") {
+    throw configurationError(`${name} must be a string`);
+  }
   const normalized = value.trim();
   if (normalized.length === 0) {
     throw configurationError(`${name} is required`);
   }
   return normalized;
+}
+
+function requirePromptText(value: unknown, name: string): string {
+  if (typeof value !== "string") {
+    throw configurationError(`${name} must be a string`);
+  }
+  if (value.trim().length === 0) {
+    throw configurationError(`${name} is required`);
+  }
+  return value;
+}
+
+function optionalTrimmedText(value: unknown, name: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string") {
+    throw configurationError(`${name} must be a string`);
+  }
+  return value.trim() || undefined;
 }
 
 function integerInRange(
@@ -492,34 +592,31 @@ function integerInRange(
   return value;
 }
 
-function configurationError(message: string, cause?: unknown) {
+function configurationError(message: string) {
   return new OpenAiCompatibleError(message, {
     kind: "configuration",
     attempts: 0,
-    cause,
   });
 }
 
-function textProperty(value: Record<string, unknown>, key: string) {
-  return typeof value[key] === "string" ? value[key] : undefined;
+function isHeaderName(value: string): boolean {
+  return /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u.test(value);
 }
 
-function numberProperty(value: Record<string, unknown>, key: string) {
-  return typeof value[key] === "number" && Number.isFinite(value[key])
-    ? value[key]
-    : undefined;
+function isDisallowedCustomHeaderName(value: string): boolean {
+  return DISALLOWED_CUSTOM_HEADER_NAMES.has(value.toLowerCase());
+}
+
+function hasHeaderControlCharacters(value: string): boolean {
+  return /[\u0000-\u001f\u007f]/u.test(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error && error.message.length > 0
-    ? error.message
-    : "Language model request failed";
-}
-
-function defaultSleep(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+function normalizedSdkErrorMessage(kind: OpenAiCompatibleErrorKind): string {
+  return kind === "retryable"
+    ? "LLM provider request failed temporarily"
+    : "LLM provider request failed";
 }

@@ -28,6 +28,7 @@
 - `@kaguya/prompt`：稳定的多片段 Prompt 编译、转义和 provenance；
 - `@kaguya/llm`：统一模型边界、结构化输出校验、错误归一化和 trace；
 - `@kaguya/database`：SQLite 迁移和 messages、memories、event runs、LLM traces repositories；
+- `apps/api`：Bearer 认证、严格消息校验、限流、OpenAPI 和可注入的 `MessageIngress` 核心入站 port；
 - `apps/demo`：消息、心跳和定时记忆三条确定性工作流；
 - `promptfoo`：route、reply、state、memory 的离线 Prompt 结构回归。
 
@@ -104,7 +105,7 @@ demo 已经展示消息、心跳和定时记忆的流转方式，但 persona、p
 
 **当前基础**
 
-`apps/demo` 能构造 `message.received` 并通过 `dispatchEvent` 进入工作流，但没有连接任何真实聊天平台，也没有真实发送出口。
+`apps/api` 能认证并校验 `sessionId/text`，再把 `{ sessionId, text, requestId }` 交给 `MessageIngress`；当前没有实现该 port 的 core dispatcher、持久队列或 consumer。`apps/demo` 能构造 `message.received` 并通过 `dispatchEvent` 进入工作流，但没有连接任何真实聊天平台，也没有真实发送出口。
 
 **为什么必须人工参与**
 
@@ -147,7 +148,7 @@ demo 已经展示消息、心跳和定时记忆的流转方式，但 persona、p
 
 **当前基础**
 
-`@kaguya/llm` 已提供统一生成边界、四类响应 schema、错误分类和完整 trace；demo 只注入确定性 mock model。
+`@kaguya/llm` 已提供统一生成边界、四类响应 schema、错误分类和完整 trace；同时提供基于 Vercel AI SDK 的 OpenAI-compatible 动态 adapter，支持按次配置 URL、模型、鉴权、超时和重试。该 adapter 属于 core/application 层，不由应用 API 网关暴露；它尚未接入 `KaguyaLlmClient` 的业务 schema 与 trace，demo 仍只注入确定性 mock model。
 
 **为什么必须人工参与**
 
@@ -164,7 +165,7 @@ demo 已经展示消息、心跳和定时记忆的流转方式，但 persona、p
 
 **工程交付物**
 
-- 基于 AI SDK 的真实 provider adapter；
+- 将 OpenAI-compatible 动态调用器或其他 provider adapter 接入 `KaguyaLlmClient`；
 - 按 LLM kind 选择模型和参数的配置；
 - secret manager 注入，不把密钥写入仓库或普通日志；
 - 超时、取消、限流和受控重试；
@@ -334,7 +335,7 @@ P0 只有在以下闭环同时成立时才算完成：
 
 **当前基础**
 
-EventBus 和 WorkflowEngine 当前在单进程内执行；节点记录生命周期，但没有持久化队列、自动重试或崩溃后续跑。
+EventBus 和 WorkflowEngine 当前在单进程内执行；节点记录生命周期，但没有持久化队列、自动重试或崩溃后续跑。应用 API 网关虽然定义了 `MessageIngress` 交接 port，但生产 core dispatcher、持久队列和 consumer 均尚未实现。
 
 **为什么必须人工参与**
 
@@ -498,7 +499,7 @@ AI/检索工程师和后端/数据工程师共同主责，产品与安全负责�
 
 **当前基础**
 
-仓库没有 Web API 或 UI；运行状态只能通过数据库、测试和命令行检查。
+仓库已有一个经过 Bearer 认证、严格消息校验和限流保护的基础应用 API 网关，并提供 OpenAPI 文档与 `MessageIngress` 核心入站 port。网关不接收或路由模型配置；core dispatcher、持久队列和 consumer 尚未实现。它也不是管理 API：运行状态仍只能通过数据库、测试和命令行检查，没有 UI、角色授权或操作审计。
 
 **为什么必须人工参与**
 

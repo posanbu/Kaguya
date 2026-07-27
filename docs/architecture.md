@@ -12,17 +12,19 @@
 | 心跳和长间隔任务               | `@kaguya/scheduler`    | 手动、固定间隔和六字段 cron 触发器；payload 与业务执行器由应用注入       |
 | 多来源 Prompt 的来龙去脉       | `@kaguya/prompt`       | 按优先级稳定编译片段，转义边界字符，并生成每片段 SHA-256 provenance      |
 | 找到并统一所有 LLM request     | `@kaguya/llm`          | 单一生成边界、四类输出校验、错误归一化、成功/失败 trace                  |
+| 为 UI 暴露受控的应用接口       | `@kaguya/api`          | Fastify 网关、Bearer 认证、消息校验、限流、CORS、OpenAPI 和核心入站 port |
 | 消息、memory 和运行记录        | `@kaguya/database`     | SQLite 迁移与 messages、memories、event_runs、llm_traces repositories    |
 | 用户配置 profile 与会话选择    | `@kaguya/config`       | 明文 JSON profile 持久化、仅元数据列表、会话选择与默认 profile 回退      |
 | 消息流转图和三类 bot 逻辑      | `@kaguya/demo`         | 组装消息、心跳、定时记忆工作流；注入数据库、事件总线、Prompt 与 LLM 服务 |
 | 测试关键 Prompt                | `promptfooconfig.yaml` | 离线调用真实 PromptCompiler，验证 route/reply/state/memory 的精确结构    |
 
-`apps/demo` 是 composition root。基础包只提供契约或能力，不知道具体业务 workflow；应用把实现放进 `WorkflowContext.services`，节点通过带类型检查的 getter 取回服务。
+`apps/demo` 是工作流的 composition root；`apps/api` 是独立 HTTP composition root。基础包只提供契约或能力，不知道具体业务 workflow；应用把实现放进 `WorkflowContext.services`，节点通过带类型检查的 getter 取回服务。
 
 ## 包与依赖方向
 
 ```mermaid
 flowchart TD
+  API["@kaguya/api<br/>应用 API 网关"]
   Demo["@kaguya/demo<br/>composition root"]
   Schema["@kaguya/schema<br/>共享契约"]
   SDK["@kaguya/sdk<br/>声明 API"]
@@ -33,6 +35,7 @@ flowchart TD
   DB["@kaguya/database<br/>SQLite"]
   Config["@kaguya/config<br/>敏感 profile 存储"]
 
+  API --> Schema
   Demo --> SDK
   Demo --> Engine
   Demo --> Scheduler
@@ -66,6 +69,12 @@ flowchart TD
 在 POSIX 上，根目录和 `profiles/` 目录会校正为 `0700`，index、profile 和临时文件会校正为 `0600`。受管目录或文件中的符号链接、越出根目录的路径和不属于当前用户的 POSIX 路径会被拒绝。写入先同步唯一临时文件，再以原子替换落盘，并在支持时同步父目录；同一 manager 实例内会串行化修改。每个配置根目录在任意时刻必须恰好只有一个活跃的 `FileUserConfigManager`/writer 实例，包括同一进程内；该实现不支持多个 manager 实例之间或跨进程的协调。Windows 不具备等价的 POSIX mode 保证，部署者必须配置只允许运行身份访问的 NTFS ACL。
 
 该包当前只实现存储和选择语义，`apps/demo` 尚未消费 profile。配置 UI、真实 provider adapter/execution，以及平台和插件的运行时 wiring 仍须按 [人工待实现路线图](remaining-work.md) 完成；配置 package 不连接 SQLite database。
+
+## 应用 API 网关
+
+`apps/api` 使用 Fastify 及官方 CORS、rate-limit、Swagger 插件，公开健康检查、OpenAPI 文档和受 Bearer token 保护的 `POST /api/v1/messages`。消息接口只接受 `sessionId` 与 `text`；通过认证和严格校验后，网关把 `{ sessionId, text, requestId }` 交给注入的 `MessageIngress.enqueue`。它不接受 API key、base URL 或模型参数，也不选择 provider、模型或 workflow。
+
+`MessageIngress` 只是 HTTP 层与未来核心层之间的 port。当前仓库尚未实现生产 core dispatcher、持久队列或 consumer，`server.ts` 也没有注入真实 adapter，因此合法消息会返回 `503 core_unavailable`，不会伪造已经入队。网关不直接注入 `EventBus`：现有 EventBus 只做进程内发布，不会选择 workflow，也没有可靠投递语义。后续核心 adapter 应负责事件构造、持久化入队、consumer 分发、工作流选择和模型策略。完整约定见 [应用 API 网关](api-gateway.md)。
 
 ## 事件模型
 
@@ -272,6 +281,10 @@ demo 注入 `MockLanguageModelV3` 并按调用顺序返回确定性 JSON；不�
 
 `apps/demo` 的 `LlmLifecycleClient` 包装上述生成边界，在应用层发布 `llm.requested/completed/failed`，因此 `@kaguya/llm` 和 `@kaguya/engine` 仍然彼此独立。
 
+`@kaguya/llm` 还导出独立的 `OpenAiCompatibleLlmService`，允许应用层按次传入 API key、base URL、模型和 system/user Prompt。该服务使用 `ai@7.0.35` 的 `generateText` 与 `@ai-sdk/openai-compatible@3.0.14` 的动态 provider，由 SDK 负责供应商请求、响应/usage 解析和重试；服务保留输入校验、统一结果、错误分类和结构化日志。`timeoutMs` 约束整次 SDK 调用，调用方的 `AbortSignal` 直接用于取消，两类终止都归一化为 `cancelled`。adapter 注入的 fetch wrapper 强制使用 `redirect: "error"`，该重定向保护不是 SDK 的默认行为。
+
+该 SDK service 属于 core/application 层的模型 adapter 或独立连通性测试工具，不由 `apps/api` 导入或暴露。它目前不经过 `KaguyaLlmClient`，因此不会自动执行四类业务 schema 校验或写入 `llm_traces`；正式工作流仍需由核心 adapter 把动态 provider 模型接入现有生成边界。详细约定见 [OpenAI-compatible LLM 通用接口](openai-compatible-llm.md)。
+
 ## SQLite schema
 
 迁移在 `BEGIN IMMEDIATE` 事务中创建 `schema_migrations`，按整数 version 只执行一次，成功后与版本记录一起提交。
@@ -309,6 +322,7 @@ scheduler 不知道事件总线或 workflow；应用负责把 trigger payload �
 ## 已知限制与演进原则
 
 - EventBus、scheduler 和 workflow queue 都是进程内能力，没有持久投递或分布式锁。
+- API 只定义并调用 `MessageIngress` port；生产 core dispatcher、持久队列和 consumer 尚未实现。
 - workflow 是 DAG；没有循环、补偿、自动重试或真正的多前驱 join。
 - demo 的 service registry 是运行时 record，getter 负责类型守卫；以后可替换为更强的依赖注入。
 - state 和不同期限 memory 共用一张表，以 metadata 区分；更复杂检索可在不改变事件信封的前提下替换 repository。
