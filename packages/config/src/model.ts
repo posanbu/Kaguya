@@ -70,18 +70,6 @@ const aiConfigInnerSchema = z
   .superRefine((ai, context) => {
     rejectOwnUndefined(ai, "defaultProviderId", context);
     addDuplicateIdIssues(ai.providers, "provider", ["providers"], context);
-    if (
-      ai.defaultProviderId !== undefined &&
-      !ai.providers.some(
-        (provider) => provider.id === ai.defaultProviderId && provider.enabled,
-      )
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["defaultProviderId"],
-        message: "defaultProviderId must reference an enabled provider",
-      });
-    }
   });
 
 export const aiConfigSchema = guardSchemaInput(aiConfigInnerSchema);
@@ -138,12 +126,21 @@ export const userConfigProfileSettingsSchema = guardSchemaInput(
   userConfigProfileSettingsInnerSchema,
 );
 
+const userConfigProfileReviewSchema = z.strictObject({
+  acknowledgedWarnings: z.array(nonEmptyIdSchema),
+});
+
 const userConfigProfileInnerSchema =
-  userConfigProfileSettingsInnerSchema.safeExtend({
-    version: z.literal(1),
-    id: profileIdSchema,
-    name: z.string().trim().min(1),
-  });
+  userConfigProfileSettingsInnerSchema
+    .safeExtend({
+      version: z.literal(1),
+      id: profileIdSchema,
+      name: z.string().trim().min(1),
+      review: userConfigProfileReviewSchema.optional(),
+    })
+    .superRefine((profile, context) => {
+      rejectOwnUndefined(profile, "review", context);
+    });
 
 export const userConfigProfileSchema = guardSchemaInput(
   userConfigProfileInnerSchema,

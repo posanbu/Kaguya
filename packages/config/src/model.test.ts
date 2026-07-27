@@ -154,8 +154,8 @@ describe("user configuration schemas", () => {
     }
   });
 
-  it("rejects a disabled default provider", () => {
-    expect(() =>
+  it("allows a disabled default provider so the draft can be repaired", () => {
+    expect(
       userConfigProfileSettingsSchema.parse({
         ai: {
           defaultProviderId: "provider-1",
@@ -171,8 +171,24 @@ describe("user configuration schemas", () => {
         },
         platforms: [],
         plugins: [],
-      }),
-    ).toThrow();
+      }).ai.defaultProviderId,
+    ).toBe("provider-1");
+  });
+
+  it("accepts persisted warning acknowledgements on a profile", () => {
+    const profile = userConfigProfileSchema.parse({
+      version: 1,
+      id: profileId,
+      name: "personal",
+      ai: { providers: [] },
+      platforms: [],
+      plugins: [],
+      review: { acknowledgedWarnings: ["platforms-empty"] },
+    });
+
+    expect(profile.review).toEqual({
+      acknowledgedWarnings: ["platforms-empty"],
+    });
   });
 
   it("rejects an index whose default references a missing profile", () => {
@@ -430,6 +446,19 @@ describe("user configuration schemas", () => {
         aiConfigSchema.safeParse({
           defaultProviderId: undefined,
           providers: [],
+        }).success,
+    ],
+    [
+      "review",
+      () =>
+        userConfigProfileSchema.safeParse({
+          version: 1,
+          id: profileId,
+          name: "default",
+          ai: { providers: [] },
+          platforms: [],
+          plugins: [],
+          review: undefined,
         }).success,
     ],
   ])("rejects an own optional %s key with undefined", (_field, parse) => {

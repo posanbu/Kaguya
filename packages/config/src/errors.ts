@@ -8,6 +8,9 @@ export const configErrorCodes = [
   "CONFIG_UNSAFE_PATH",
   "CONFIG_PERMISSION_ERROR",
   "CONFIG_IO_ERROR",
+  "CONFIG_SETUP_REQUIRED",
+  "CONFIG_INCOMPLETE",
+  "CONFIG_REVIEW_REQUIRED",
 ] as const;
 
 export type ConfigErrorCode = (typeof configErrorCodes)[number];
