@@ -4,19 +4,19 @@
 
 ## 从会议 3.1 到代码
 
-| 会议关注点                     | 实现位置               | 当前职责                                                                 |
-| ------------------------------ | ---------------------- | ------------------------------------------------------------------------ |
-| 事件包含什么、如何触发         | `@kaguya/schema`       | 定义统一事件信封及消息、记忆、Prompt、节点运行和 LLM trace 契约          |
-| 快速定义事件、监听器、节点和边 | `@kaguya/sdk`          | `defineEvent`、`defineListener`、`defineNode`、`defineWorkflow`          |
-| 特殊事件触发什么               | `@kaguya/engine`       | 拦截/观察监听器；校验并执行无环工作流；记录每个节点生命周期              |
-| 心跳和长间隔任务               | `@kaguya/scheduler`    | 手动、固定间隔和六字段 cron 触发器；payload 与业务执行器由应用注入       |
-| 多来源 Prompt 的来龙去脉       | `@kaguya/prompt`       | 按优先级稳定编译片段，转义边界字符，并生成每片段 SHA-256 provenance      |
-| 找到并统一所有 LLM request     | `@kaguya/llm`          | 单一生成边界、四类输出校验、错误归一化、成功/失败 trace                  |
-| 为 UI 暴露受控的应用接口       | `@kaguya/api`          | Fastify 网关、Bearer 认证、消息校验、限流、CORS、OpenAPI 和核心入站 port |
-| 消息、memory 和运行记录        | `@kaguya/database`     | SQLite 迁移与 messages、memories、event_runs、llm_traces repositories    |
-| 用户配置 profile 与会话选择    | `@kaguya/config`       | 明文 JSON profile 持久化、仅元数据列表、会话选择与默认 profile 回退      |
-| 消息流转图和三类 bot 逻辑      | `@kaguya/demo`         | 组装消息、心跳、定时记忆工作流；注入数据库、事件总线、Prompt 与 LLM 服务 |
-| 测试关键 Prompt                | `promptfooconfig.yaml` | 离线调用真实 PromptCompiler，验证 route/reply/state/memory 的精确结构    |
+| 会议关注点                     | 实现位置               | 当前职责                                                                          |
+| ------------------------------ | ---------------------- | --------------------------------------------------------------------------------- |
+| 事件包含什么、如何触发         | `@kaguya/schema`       | 定义统一事件信封及消息、记忆、Prompt、节点运行和 LLM trace 契约                   |
+| 快速定义事件、监听器、节点和边 | `@kaguya/sdk`          | `defineEvent`、`defineListener`、`defineNode`、`defineWorkflow`                   |
+| 特殊事件触发什么               | `@kaguya/engine`       | 拦截/观察监听器；校验并执行无环工作流；记录每个节点生命周期                       |
+| 心跳和长间隔任务               | `@kaguya/scheduler`    | 手动、固定间隔和六字段 cron 触发器；payload 与业务执行器由应用注入                |
+| 多来源 Prompt 的来龙去脉       | `@kaguya/prompt`       | 按优先级稳定编译片段，转义边界字符，并生成每片段 SHA-256 provenance               |
+| 找到并统一所有 LLM request     | `@kaguya/llm`          | 单一生成边界、四类输出校验、错误归一化、成功/失败 trace                           |
+| 为 UI 暴露受控的应用接口       | `@kaguya/api`          | Fastify 网关、Bearer 认证、消息校验、限流、CORS、OpenAPI 和核心入站 port          |
+| 消息、memory 和运行记录        | `@kaguya/database`     | SQLite 迁移与 messages、memories、event_runs、llm_traces repositories             |
+| 用户配置 profile 与会话选择    | `@kaguya/config`       | 明文 JSON profile 持久化、显式初始化、仅元数据列表、单一候选选择与 readiness 阻断 |
+| 消息流转图和三类 bot 逻辑      | `@kaguya/demo`         | 组装消息、心跳、定时记忆工作流；注入数据库、事件总线、Prompt 与 LLM 服务          |
+| 测试关键 Prompt                | `promptfooconfig.yaml` | 离线调用真实 PromptCompiler，验证 route/reply/state/memory 的精确结构             |
 
 `apps/demo` 是工作流的 composition root；`apps/api` 是独立 HTTP composition root。基础包只提供契约或能力，不知道具体业务 workflow；应用把实现放进 `WorkflowContext.services`，节点通过带类型检查的 getter 取回服务。
 
@@ -64,11 +64,40 @@ flowchart TD
     └── profile_<uuid>.json
 ```
 
-`FileUserConfigManager.open({ rootDir })` 创建或打开存储。它提供 `listProfiles()`（只返回元数据）、`getProfile()`、`createProfile()`、`updateProfile()`、`deleteProfile()`、默认 profile 读写、会话绑定/解绑和 `resolveProfile()`；未绑定会话解析到默认 profile。profile JSON 中的 API key、平台凭据和插件设置以明文保存，因此完整 profile 只应在运行时代码确有需要时读取。
+首次使用先调用 `FileUserConfigManager.inspect({ rootDir })`。缺少 store 时它
+返回机器可读的 `setup_required` 与固定 `guidance.steps`，且不创建根目录、
+`profiles/`、`index.json` 或 profile。调用方必须据此收集显式输入，然后调用
+`initialize()`；`open({ rootDir })` 只打开既有 store，缺少 store 时抛出
+`CONFIG_SETUP_REQUIRED`，绝不生成空 default profile。
+
+`initialize()` 只在候选配置已经 ready 后才进行首次文件系统写入：必须选择已启用
+的 default provider，所有已启用 provider 合计至少有两个不同的
+`providerId:modelId` 目标。缺少模型配置时 Promise 会以
+`ConfigIncompleteError`（`CONFIG_INCOMPLETE`）拒绝。缺少 base
+URL/API key 的已启用 provider、空 platforms 或空 plugins 是可选 warning；调用方
+必须处理 `ConfigReviewRequiredError`（`CONFIG_REVIEW_REQUIRED`）中的无敏感 warning、
+取得明确确认后以当前 warning ID 重试初始化，或对既有 profile 调用
+`acknowledgeConfigurationWarnings(profileId, warningIds)`。确认记录按 profile 保存，
+每次完整 `updateProfile()` 都清空它们并要求重新检查。
+
+打开 store 后，manager 提供 `listProfiles()`（只返回元数据）、`getProfile()`、
+`createProfile()`、`updateProfile()`、`deleteProfile()`、默认 profile 读写、会话绑定/
+解绑、`inspectProfile()`、warning 确认和 `resolveProfile()`。未绑定会话的 default
+profile、或显式会话绑定，只负责选择一个候选；这不代表候选已经 ready。
+`resolveProfile()` 只检查被选中的 profile，并在其 invalid 或 review_required 时分别
+以 `ConfigIncompleteError`（`CONFIG_INCOMPLETE`）或
+`ConfigReviewRequiredError`（`CONFIG_REVIEW_REQUIRED`）拒绝，不会搜索或回退到其他
+profile、provider 或模型。既有不完整 profile 仍可打开、列出和更新以便修复。profile
+JSON 中的 API key、平台凭据和插件设置以明文保存，因此完整 profile 只应在运行时代码
+确有需要时读取。
 
 在 POSIX 上，根目录和 `profiles/` 目录会校正为 `0700`，index、profile 和临时文件会校正为 `0600`。受管目录或文件中的符号链接、越出根目录的路径和不属于当前用户的 POSIX 路径会被拒绝。写入先同步唯一临时文件，再以原子替换落盘，并在支持时同步父目录；同一 manager 实例内会串行化修改。每个配置根目录在任意时刻必须恰好只有一个活跃的 `FileUserConfigManager`/writer 实例，包括同一进程内；该实现不支持多个 manager 实例之间或跨进程的协调。Windows 不具备等价的 POSIX mode 保证，部署者必须配置只允许运行身份访问的 NTFS ACL。
 
-该包当前只实现存储和选择语义，`apps/demo` 尚未消费 profile。配置 UI、真实 provider adapter/execution，以及平台和插件的运行时 wiring 仍须按 [人工待实现路线图](remaining-work.md) 完成；配置 package 不连接 SQLite database。
+该包当前只实现存储、readiness 和选择语义，`apps/demo` 尚未消费 profile。配置 UI、
+真实 provider adapter/execution，以及平台和插件的运行时 wiring 仍须按
+[人工待实现路线图](remaining-work.md) 完成；配置 package 不连接 SQLite database。
+未来执行层应将选定 provider 的网络、鉴权和执行错误直接返回，不实施 provider 或模型
+fallback。
 
 ## 应用 API 网关
 
