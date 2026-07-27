@@ -30,6 +30,7 @@ import {
   deriveConfigurationWarnings,
   inspectUserConfigProfile,
   type ConfigurationReadiness,
+  type ProfileReadiness,
 } from "./readiness.js";
 
 export interface FileUserConfigManagerOptions {
@@ -192,6 +193,13 @@ export class FileUserConfigManager {
     return structuredClone(await this.#readProfile(profileId));
   }
 
+  async inspectProfile(profileId: string): Promise<ProfileReadiness> {
+    await this.#afterPendingWrites();
+    return structuredClone(
+      inspectUserConfigProfile(await this.#readProfile(profileId)),
+    );
+  }
+
   async createProfile(
     name: string,
     initial?: UserConfigProfileSettings,
@@ -209,6 +217,15 @@ export class FileUserConfigManager {
     update: UpdateUserConfigProfileInput,
   ): Promise<UserConfigProfile> {
     return this.#enqueue(() => this.#updateProfile(profileId, update));
+  }
+
+  async acknowledgeConfigurationWarnings(
+    profileId: string,
+    warningIds: readonly string[],
+  ): Promise<void> {
+    return this.#enqueue(() =>
+      this.#acknowledgeConfigurationWarnings(profileId, warningIds),
+    );
   }
 
   getDefaultProfileId(): string {
@@ -264,7 +281,15 @@ export class FileUserConfigManager {
     )
       ? this.#index.sessionBindings[requiredSessionId]!
       : this.#index.defaultProfileId;
-    return structuredClone(await this.#readProfile(profileId));
+    const profile = await this.#readProfile(profileId);
+    const readiness = inspectUserConfigProfile(profile);
+    if (readiness.status === "invalid") {
+      throw new ConfigIncompleteError(readiness.issues);
+    }
+    if (readiness.status === "review_required") {
+      throw new ConfigReviewRequiredError(readiness.warnings);
+    }
+    return structuredClone(profile);
   }
 
   #enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -451,6 +476,50 @@ export class FileUserConfigManager {
           : structuredClone(current),
       ),
     };
+    await this.#replaceProfile(profileId, oldProfile, profile, nextIndex);
+    return structuredClone(profile);
+  }
+
+  async #acknowledgeConfigurationWarnings(
+    profileId: string,
+    warningIds: readonly string[],
+  ): Promise<void> {
+    const acknowledgements = parseCurrentWarningAcknowledgements(warningIds);
+    const oldProfile = await this.#readProfile(profileId);
+    const currentWarningIds = new Set(
+      deriveConfigurationWarnings(oldProfile).map((warning) => warning.id),
+    );
+    if (
+      acknowledgements.some(
+        (acknowledgement) => !currentWarningIds.has(acknowledgement),
+      )
+    ) {
+      throw new ConfigError(
+        "CONFIG_INVALID_INPUT",
+        "Configuration acknowledgement is invalid",
+      );
+    }
+    const profile: UserConfigProfile = {
+      ...oldProfile,
+      review: { acknowledgedWarnings: [...acknowledgements].sort() },
+    };
+    const nextIndex: UserConfigIndex = {
+      ...structuredClone(this.#index),
+      profiles: this.#index.profiles.map((current) =>
+        current.id === profileId
+          ? { ...current, updatedAt: new Date().toISOString() }
+          : structuredClone(current),
+      ),
+    };
+    await this.#replaceProfile(profileId, oldProfile, profile, nextIndex);
+  }
+
+  async #replaceProfile(
+    profileId: string,
+    oldProfile: UserConfigProfile,
+    profile: UserConfigProfile,
+    nextIndex: UserConfigIndex,
+  ): Promise<void> {
     const path = this.#profilePath(profileId);
     await writeSensitiveJson(path, profile);
     try {
@@ -469,7 +538,6 @@ export class FileUserConfigManager {
       throw indexError;
     }
     this.#index = nextIndex;
-    return structuredClone(profile);
   }
 
   async #setDefaultProfile(profileId: string): Promise<void> {
@@ -619,6 +687,35 @@ function parseAcknowledgedWarnings(value: unknown): string[] {
       }
       seen.add(normalized);
       acknowledgements.push(normalized);
+    }
+    return acknowledgements;
+  } catch {
+    throw new ConfigError(
+      "CONFIG_INVALID_INPUT",
+      "Configuration acknowledgement is invalid",
+    );
+  }
+}
+
+function parseCurrentWarningAcknowledgements(
+  value: unknown,
+): readonly string[] {
+  try {
+    if (!Array.isArray(value)) {
+      throw new Error();
+    }
+    const acknowledgements: string[] = [];
+    const seen = new Set<string>();
+    for (const acknowledgement of value) {
+      if (
+        typeof acknowledgement !== "string" ||
+        acknowledgement.length === 0 ||
+        seen.has(acknowledgement)
+      ) {
+        throw new Error();
+      }
+      seen.add(acknowledgement);
+      acknowledgements.push(acknowledgement);
     }
     return acknowledgements;
   } catch {
