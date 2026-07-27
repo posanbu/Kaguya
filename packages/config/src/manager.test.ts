@@ -1,4 +1,5 @@
 import {
+  access,
   mkdtemp,
   readFile,
   readdir,
@@ -12,7 +13,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ConfigError } from "./errors.js";
 import { FileUserConfigManager } from "./manager.js";
-import type { JsonObject } from "./model.js";
+import type { JsonObject, UserConfigProfileSettings } from "./model.js";
+import { configurationSetupGuidance } from "./readiness.js";
 
 const atomicWriteFaults = vi.hoisted(() => ({
   postRenameDirectoryFailure: undefined as
@@ -123,7 +125,52 @@ const roots: string[] = [];
 async function createRoot(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "kaguya-config-manager-"));
   roots.push(root);
+  await initializeReadyManager(root);
   return root;
+}
+
+function readySettings(
+  models: readonly string[],
+  options: { readonly baseUrl?: boolean } = {},
+): UserConfigProfileSettings {
+  return {
+    ai: {
+      defaultProviderId: "provider-1",
+      providers: [
+        {
+          id: "provider-1",
+          type: "openai-compatible",
+          enabled: true,
+          ...(options.baseUrl === false
+            ? {}
+            : { baseUrl: "https://api.example.test/v1" }),
+          apiKey: "test-api-key",
+          models: [...models],
+          settings: {},
+        },
+      ],
+    },
+    platforms: [
+      {
+        id: "platform-1",
+        type: "test",
+        enabled: true,
+        credentials: {},
+        settings: {},
+      },
+    ],
+    plugins: [{ id: "plugin-1", enabled: true, settings: {} }],
+  };
+}
+
+async function initializeReadyManager(
+  rootDir: string,
+): Promise<FileUserConfigManager> {
+  return FileUserConfigManager.initialize({
+    rootDir,
+    name: "default",
+    settings: readySettings(["model-a", "model-b"]),
+  });
 }
 
 afterEach(async () => {
@@ -136,24 +183,72 @@ afterEach(async () => {
 });
 
 describe("FileUserConfigManager profile lifecycle", () => {
-  it("creates and reopens one default profile", async () => {
+  it("inspects a missing store without creating files", async () => {
     const rootDir = await createRoot();
-    const first = await FileUserConfigManager.open({ rootDir });
-    const metadata = first.listProfiles();
+    const missingRootDir = join(rootDir, "not-created");
 
-    expect(metadata).toHaveLength(1);
-    expect(metadata[0]?.name).toBe("default");
-    expect(first.getDefaultProfileId()).toBe(metadata[0]?.id);
-    await expect(first.getProfile(metadata[0]!.id)).resolves.toMatchObject({
-      version: 1,
-      name: "default",
-      ai: { providers: [] },
-      platforms: [],
-      plugins: [],
+    await expect(
+      FileUserConfigManager.inspect({ rootDir: missingRootDir }),
+    ).resolves.toEqual({
+      status: "setup_required",
+      guidance: configurationSetupGuidance,
+    });
+    await expect(access(missingRootDir)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(
+      FileUserConfigManager.open({ rootDir: missingRootDir }),
+    ).rejects.toMatchObject({
+      code: "CONFIG_SETUP_REQUIRED",
+    });
+    await expect(access(missingRootDir)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("initializes only a complete acknowledged candidate", async () => {
+    const parent = await createRoot();
+    const incompleteRootDir = join(parent, "incomplete");
+    const reviewRootDir = join(parent, "review");
+    const readyRootDir = join(parent, "ready");
+
+    await expect(
+      FileUserConfigManager.initialize({
+        rootDir: incompleteRootDir,
+        name: "incomplete",
+        settings: readySettings(["model-a"]),
+      }),
+    ).rejects.toMatchObject({ code: "CONFIG_INCOMPLETE" });
+    await expect(access(incompleteRootDir)).rejects.toMatchObject({
+      code: "ENOENT",
     });
 
-    const reopened = await FileUserConfigManager.open({ rootDir });
-    expect(reopened.listProfiles()).toEqual(metadata);
+    await expect(
+      FileUserConfigManager.initialize({
+        rootDir: reviewRootDir,
+        name: "review",
+        settings: readySettings(["model-a", "model-b"], { baseUrl: false }),
+      }),
+    ).rejects.toMatchObject({ code: "CONFIG_REVIEW_REQUIRED" });
+    await expect(access(reviewRootDir)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+
+    const initialized = await FileUserConfigManager.initialize({
+      rootDir: readyRootDir,
+      name: "ready",
+      settings: readySettings(["model-a", "model-b"]),
+    });
+    const initializedId = initialized.getDefaultProfileId();
+    const reopened = await FileUserConfigManager.open({
+      rootDir: readyRootDir,
+    });
+
+    expect(reopened.getDefaultProfileId()).toBe(initializedId);
+    await expect(reopened.getProfile(initializedId)).resolves.toMatchObject({
+      name: "ready",
+      ai: { defaultProviderId: "provider-1" },
+    });
   });
 
   it("round-trips plaintext secrets without listing them", async () => {

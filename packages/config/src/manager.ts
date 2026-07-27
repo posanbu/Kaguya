@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { access } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 import { ConfigError } from "./errors.js";
 import {
@@ -22,9 +22,24 @@ import {
   removeSensitiveFile,
   writeSensitiveJson,
 } from "./secure-files.js";
+import {
+  configurationSetupGuidance,
+  ConfigIncompleteError,
+  ConfigReviewRequiredError,
+  ConfigSetupRequiredError,
+  deriveConfigurationWarnings,
+  inspectUserConfigProfile,
+  type ConfigurationReadiness,
+} from "./readiness.js";
 
 export interface FileUserConfigManagerOptions {
   rootDir: string;
+}
+
+export interface FileUserConfigInitializeOptions extends FileUserConfigManagerOptions {
+  readonly name: string;
+  readonly settings: UserConfigProfileSettings;
+  readonly acknowledgedWarnings?: readonly string[];
 }
 
 export class FileUserConfigManager {
@@ -49,29 +64,123 @@ export class FileUserConfigManager {
     const indexPath = join(rootDir, "index.json");
 
     assertPathInside(rootDir, rootDir);
-    await ensureSensitiveDirectory(rootDir);
-    assertPathInside(rootDir, profilesDir);
-    await ensureSensitiveDirectory(profilesDir);
-
     let index: UserConfigIndex;
     try {
       assertPathInside(rootDir, indexPath);
       await access(indexPath);
-      assertPathInside(rootDir, indexPath);
-      index = parsePersistedIndex(
-        await readSensitiveJson(indexPath),
-        indexPath,
-      );
     } catch (error) {
-      if (!isMissingPath(error)) {
-        throw error;
+      if (isMissingPath(error)) {
+        throw new ConfigSetupRequiredError(configurationSetupGuidance);
       }
-      index = await createInitialStore(profilesDir, indexPath);
+      throw error;
     }
+    await ensureSensitiveDirectory(rootDir);
+    assertPathInside(rootDir, profilesDir);
+    await ensureSensitiveDirectory(profilesDir);
+    assertPathInside(rootDir, indexPath);
+    index = parsePersistedIndex(await readSensitiveJson(indexPath), indexPath);
 
     const manager = new FileUserConfigManager(rootDir, index);
     await manager.#validateReferencedProfiles();
     return manager;
+  }
+
+  static async inspect(
+    options: FileUserConfigManagerOptions,
+  ): Promise<ConfigurationReadiness> {
+    const rootDir = resolve(requireConfigurationRoot(options));
+    const indexPath = join(rootDir, "index.json");
+
+    assertPathInside(rootDir, rootDir);
+    assertPathInside(rootDir, indexPath);
+    try {
+      await access(indexPath);
+    } catch (error) {
+      if (isMissingPath(error)) {
+        return {
+          status: "setup_required",
+          guidance: configurationSetupGuidance,
+        };
+      }
+      throw error;
+    }
+
+    const manager = await FileUserConfigManager.open({ rootDir });
+    return inspectUserConfigProfile(
+      await manager.getProfile(manager.getDefaultProfileId()),
+    );
+  }
+
+  static async initialize(
+    options: FileUserConfigInitializeOptions,
+  ): Promise<FileUserConfigManager> {
+    const input = parseInitializeInput(options);
+    const rootDir = resolve(input.rootDir);
+    const profilesDir = join(rootDir, "profiles");
+    const indexPath = join(rootDir, "index.json");
+    const id = randomUUID();
+    const profile: UserConfigProfile = {
+      version: 1,
+      id,
+      name: input.name,
+      ...input.settings,
+      ...(input.acknowledgedWarnings.length === 0
+        ? {}
+        : { review: { acknowledgedWarnings: input.acknowledgedWarnings } }),
+    };
+    const warningIds = new Set(
+      deriveConfigurationWarnings(profile).map((warning) => warning.id),
+    );
+    if (
+      input.acknowledgedWarnings.some(
+        (acknowledgement) => !warningIds.has(acknowledgement),
+      )
+    ) {
+      throw new ConfigError(
+        "CONFIG_INVALID_INPUT",
+        "Configuration acknowledgement is invalid",
+      );
+    }
+
+    const readiness = inspectUserConfigProfile(profile);
+    if (readiness.status === "invalid") {
+      throw new ConfigIncompleteError(readiness.issues);
+    }
+    if (readiness.status === "review_required") {
+      throw new ConfigReviewRequiredError(readiness.warnings);
+    }
+
+    assertPathInside(rootDir, rootDir);
+    assertPathInside(rootDir, indexPath);
+    await assertStoreIsUninitialized(indexPath);
+    await ensureSensitiveDirectory(rootDir);
+    assertPathInside(rootDir, profilesDir);
+    await ensureSensitiveDirectory(profilesDir);
+    assertPathInside(rootDir, indexPath);
+    await assertStoreIsUninitialized(indexPath);
+
+    const timestamp = new Date().toISOString();
+    const index: UserConfigIndex = {
+      version: 1,
+      defaultProfileId: id,
+      profiles: [
+        { id, name: input.name, createdAt: timestamp, updatedAt: timestamp },
+      ],
+      sessionBindings: copyBindings({}),
+    };
+    const profilePath = join(profilesDir, `profile_${id}.json`);
+    assertPathInside(rootDir, profilePath);
+    await writeSensitiveJson(profilePath, profile);
+    try {
+      assertPathInside(rootDir, indexPath);
+      await assertStoreIsUninitialized(indexPath);
+      await writeSensitiveJson(indexPath, index);
+    } catch (error) {
+      assertPathInside(rootDir, profilePath);
+      await removeSensitiveFile(profilePath);
+      throw error;
+    }
+    return new FileUserConfigManager(rootDir, index);
   }
 
   listProfiles(): readonly UserConfigProfileMetadata[] {
@@ -458,6 +567,71 @@ function parseSettings(value: unknown): UserConfigProfileSettings {
   );
 }
 
+function parseInitializeInput(value: unknown): {
+  rootDir: string;
+  name: string;
+  settings: UserConfigProfileSettings;
+  acknowledgedWarnings: string[];
+} {
+  try {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error();
+    }
+    const options = value as {
+      readonly acknowledgedWarnings?: unknown;
+      readonly name?: unknown;
+      readonly rootDir?: unknown;
+      readonly settings?: unknown;
+    };
+    return {
+      rootDir: requireConfigurationRoot(options),
+      name: normalizeProfileName(options.name),
+      settings: parseSettings(options.settings),
+      acknowledgedWarnings: parseAcknowledgedWarnings(
+        options.acknowledgedWarnings,
+      ),
+    };
+  } catch (error) {
+    if (error instanceof ConfigError) {
+      throw error;
+    }
+    throw new ConfigError(
+      "CONFIG_INVALID_INPUT",
+      "Configuration profile input failed validation",
+    );
+  }
+}
+
+function parseAcknowledgedWarnings(value: unknown): string[] {
+  if (value === undefined) {
+    return [];
+  }
+  try {
+    if (!Array.isArray(value)) {
+      throw new Error();
+    }
+    const acknowledgements: string[] = [];
+    const seen = new Set<string>();
+    for (const acknowledgement of value) {
+      if (typeof acknowledgement !== "string") {
+        throw new Error();
+      }
+      const normalized = acknowledgement.trim();
+      if (normalized.length === 0 || seen.has(normalized)) {
+        throw new Error();
+      }
+      seen.add(normalized);
+      acknowledgements.push(normalized);
+    }
+    return acknowledgements;
+  } catch {
+    throw new ConfigError(
+      "CONFIG_INVALID_INPUT",
+      "Configuration acknowledgement is invalid",
+    );
+  }
+}
+
 function parseUpdateInput(value: unknown): {
   name: unknown;
   settings: UserConfigProfileSettings;
@@ -560,30 +734,17 @@ function copyBindings(
   return target;
 }
 
-async function createInitialStore(
-  profilesDir: string,
-  indexPath: string,
-): Promise<UserConfigIndex> {
-  const id = randomUUID();
-  const timestamp = new Date().toISOString();
-  const profile: UserConfigProfile = {
-    version: 1,
-    id,
-    name: "default",
-    ...emptyUserConfigProfileSettings(),
-  };
-  const index: UserConfigIndex = {
-    version: 1,
-    defaultProfileId: id,
-    profiles: [
-      { id, name: "default", createdAt: timestamp, updatedAt: timestamp },
-    ],
-    sessionBindings: copyBindings({}),
-  };
-  const path = join(profilesDir, `profile_${id}.json`);
-  assertPathInside(dirname(profilesDir), path);
-  await writeSensitiveJson(path, profile);
-  assertPathInside(dirname(indexPath), indexPath);
-  await writeSensitiveJson(indexPath, index);
-  return index;
+async function assertStoreIsUninitialized(indexPath: string): Promise<void> {
+  try {
+    await access(indexPath);
+  } catch (error) {
+    if (isMissingPath(error)) {
+      return;
+    }
+    throw error;
+  }
+  throw new ConfigError(
+    "CONFIG_INVALID_INPUT",
+    "Configuration store is already initialized",
+  );
 }
