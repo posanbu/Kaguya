@@ -1,4 +1,5 @@
 import {
+  access,
   mkdtemp,
   readFile,
   readdir,
@@ -12,7 +13,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ConfigError } from "./errors.js";
 import { FileUserConfigManager } from "./manager.js";
-import type { JsonObject } from "./model.js";
+import type { JsonObject, UserConfigProfileSettings } from "./model.js";
+import { configurationSetupGuidance } from "./readiness.js";
 
 const atomicWriteFaults = vi.hoisted(() => ({
   postRenameDirectoryFailure: undefined as
@@ -123,7 +125,71 @@ const roots: string[] = [];
 async function createRoot(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "kaguya-config-manager-"));
   roots.push(root);
+  await initializeReadyManager(root);
   return root;
+}
+
+function readySettings(
+  models: readonly string[],
+  options: { readonly baseUrl?: boolean } = {},
+): UserConfigProfileSettings {
+  return {
+    ai: {
+      defaultProviderId: "provider-1",
+      providers: [
+        {
+          id: "provider-1",
+          type: "openai-compatible",
+          enabled: true,
+          ...(options.baseUrl === false
+            ? {}
+            : { baseUrl: "https://api.example.test/v1" }),
+          apiKey: "test-api-key",
+          models: [...models],
+          settings: {},
+        },
+      ],
+    },
+    platforms: [
+      {
+        id: "platform-1",
+        type: "test",
+        enabled: true,
+        credentials: {},
+        settings: {},
+      },
+    ],
+    plugins: [{ id: "plugin-1", enabled: true, settings: {} }],
+  };
+}
+
+function reviewSettings(): UserConfigProfileSettings {
+  return {
+    ai: {
+      defaultProviderId: "provider-1",
+      providers: [
+        {
+          id: "provider-1",
+          type: "openai-compatible",
+          enabled: true,
+          models: ["model-a", "model-b"],
+          settings: {},
+        },
+      ],
+    },
+    platforms: [],
+    plugins: [],
+  };
+}
+
+async function initializeReadyManager(
+  rootDir: string,
+): Promise<FileUserConfigManager> {
+  return FileUserConfigManager.initialize({
+    rootDir,
+    name: "default",
+    settings: readySettings(["model-a", "model-b"]),
+  });
 }
 
 afterEach(async () => {
@@ -136,24 +202,72 @@ afterEach(async () => {
 });
 
 describe("FileUserConfigManager profile lifecycle", () => {
-  it("creates and reopens one default profile", async () => {
+  it("inspects a missing store without creating files", async () => {
     const rootDir = await createRoot();
-    const first = await FileUserConfigManager.open({ rootDir });
-    const metadata = first.listProfiles();
+    const missingRootDir = join(rootDir, "not-created");
 
-    expect(metadata).toHaveLength(1);
-    expect(metadata[0]?.name).toBe("default");
-    expect(first.getDefaultProfileId()).toBe(metadata[0]?.id);
-    await expect(first.getProfile(metadata[0]!.id)).resolves.toMatchObject({
-      version: 1,
-      name: "default",
-      ai: { providers: [] },
-      platforms: [],
-      plugins: [],
+    await expect(
+      FileUserConfigManager.inspect({ rootDir: missingRootDir }),
+    ).resolves.toEqual({
+      status: "setup_required",
+      guidance: configurationSetupGuidance,
+    });
+    await expect(access(missingRootDir)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(
+      FileUserConfigManager.open({ rootDir: missingRootDir }),
+    ).rejects.toMatchObject({
+      code: "CONFIG_SETUP_REQUIRED",
+    });
+    await expect(access(missingRootDir)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("initializes only a complete acknowledged candidate", async () => {
+    const parent = await createRoot();
+    const incompleteRootDir = join(parent, "incomplete");
+    const reviewRootDir = join(parent, "review");
+    const readyRootDir = join(parent, "ready");
+
+    await expect(
+      FileUserConfigManager.initialize({
+        rootDir: incompleteRootDir,
+        name: "incomplete",
+        settings: readySettings(["model-a"]),
+      }),
+    ).rejects.toMatchObject({ code: "CONFIG_INCOMPLETE" });
+    await expect(access(incompleteRootDir)).rejects.toMatchObject({
+      code: "ENOENT",
     });
 
-    const reopened = await FileUserConfigManager.open({ rootDir });
-    expect(reopened.listProfiles()).toEqual(metadata);
+    await expect(
+      FileUserConfigManager.initialize({
+        rootDir: reviewRootDir,
+        name: "review",
+        settings: readySettings(["model-a", "model-b"], { baseUrl: false }),
+      }),
+    ).rejects.toMatchObject({ code: "CONFIG_REVIEW_REQUIRED" });
+    await expect(access(reviewRootDir)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+
+    const initialized = await FileUserConfigManager.initialize({
+      rootDir: readyRootDir,
+      name: "ready",
+      settings: readySettings(["model-a", "model-b"]),
+    });
+    const initializedId = initialized.getDefaultProfileId();
+    const reopened = await FileUserConfigManager.open({
+      rootDir: readyRootDir,
+    });
+
+    expect(reopened.getDefaultProfileId()).toBe(initializedId);
+    await expect(reopened.getProfile(initializedId)).resolves.toMatchObject({
+      name: "ready",
+      ai: { defaultProviderId: "provider-1" },
+    });
   });
 
   it("round-trips plaintext secrets without listing them", async () => {
@@ -763,6 +877,131 @@ describe("FileUserConfigManager profile lifecycle", () => {
 });
 
 describe("FileUserConfigManager session selection", () => {
+  it("acknowledges current configuration warnings and clears review on update", async () => {
+    const rootDir = await createRoot();
+    const manager = await FileUserConfigManager.open({ rootDir });
+    const profile = await manager.createProfile("review", reviewSettings());
+    const profilePath = join(rootDir, "profiles", `profile_${profile.id}.json`);
+    const warningIds = [
+      "provider-base-url-missing:provider-1",
+      "provider-api-key-missing:provider-1",
+      "platforms-empty",
+      "plugins-empty",
+    ];
+
+    const readiness = await manager.inspectProfile(profile.id);
+    expect(readiness.status).toBe("review_required");
+    if (readiness.status === "review_required") {
+      expect(readiness.warnings.map(({ id }) => id)).toEqual(warningIds);
+    }
+    await manager.bindSession("review-session", profile.id);
+    await expect(
+      manager.resolveProfile("review-session"),
+    ).rejects.toMatchObject({ code: "CONFIG_REVIEW_REQUIRED" });
+
+    const beforeInvalidAcknowledgement = await readFile(profilePath, "utf8");
+    await expect(
+      manager.acknowledgeConfigurationWarnings(profile.id, ["stale-warning"]),
+    ).rejects.toMatchObject({ code: "CONFIG_INVALID_INPUT" });
+    await expect(readFile(profilePath, "utf8")).resolves.toBe(
+      beforeInvalidAcknowledgement,
+    );
+
+    await manager.acknowledgeConfigurationWarnings(profile.id, warningIds);
+    await expect(
+      manager.resolveProfile("review-session"),
+    ).resolves.toMatchObject({ id: profile.id });
+    await expect(manager.getProfile(profile.id)).resolves.toMatchObject({
+      review: { acknowledgedWarnings: [...warningIds].sort() },
+    });
+
+    await manager.updateProfile(profile.id, reviewSettings());
+    const persistedAfterUpdate = JSON.parse(
+      await readFile(profilePath, "utf8"),
+    ) as Record<string, unknown>;
+    expect(Object.hasOwn(persistedAfterUpdate, "review")).toBe(false);
+    await expect(
+      manager.resolveProfile("review-session"),
+    ).rejects.toMatchObject({ code: "CONFIG_REVIEW_REQUIRED" });
+  });
+
+  it("does not fall back when the bound or default profile is incomplete", async () => {
+    const manager = await FileUserConfigManager.open({
+      rootDir: await createRoot(),
+    });
+    const secret = "readiness-error-secret";
+    const incomplete = await manager.createProfile("incomplete", {
+      ai: {
+        defaultProviderId: "provider-1",
+        providers: [
+          {
+            id: "provider-1",
+            type: "openai-compatible",
+            enabled: true,
+            baseUrl: "https://api.example.test/v1",
+            apiKey: secret,
+            models: ["only-model"],
+            settings: {},
+          },
+        ],
+      },
+      platforms: [],
+      plugins: [],
+    });
+
+    await manager.bindSession("bound-session", incomplete.id);
+    const boundError = await manager
+      .resolveProfile("bound-session")
+      .catch((caught: unknown) => caught);
+    expect(boundError).toMatchObject({ code: "CONFIG_INCOMPLETE" });
+    expect(boundError).not.toMatchObject({ id: manager.getDefaultProfileId() });
+    for (const representation of [
+      String(boundError),
+      JSON.stringify(boundError),
+    ]) {
+      expect(representation).not.toContain(secret);
+    }
+
+    await manager.setDefaultProfile(incomplete.id);
+    await expect(
+      manager.resolveProfile("unbound-session"),
+    ).rejects.toMatchObject({ code: "CONFIG_INCOMPLETE" });
+  });
+
+  it("keeps secrets out of readiness errors", async () => {
+    const manager = await FileUserConfigManager.open({
+      rootDir: await createRoot(),
+    });
+    const secret = "readiness-error-secret";
+    const incomplete = await manager.createProfile("incomplete", {
+      ai: {
+        defaultProviderId: "provider-1",
+        providers: [
+          {
+            id: "provider-1",
+            type: "openai-compatible",
+            enabled: true,
+            baseUrl: "https://api.example.test/v1",
+            apiKey: secret,
+            models: ["only-model"],
+            settings: {},
+          },
+        ],
+      },
+      platforms: [],
+      plugins: [],
+    });
+    await manager.bindSession("secret-session", incomplete.id);
+
+    const error = await manager
+      .resolveProfile("secret-session")
+      .catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ code: "CONFIG_INCOMPLETE" });
+    expect(String(error)).not.toContain(secret);
+    expect(JSON.stringify(error)).not.toContain(secret);
+  });
+
   it("falls back to the default profile", async () => {
     const manager = await FileUserConfigManager.open({
       rootDir: await createRoot(),
@@ -777,7 +1016,10 @@ describe("FileUserConfigManager session selection", () => {
     const manager = await FileUserConfigManager.open({
       rootDir: await createRoot(),
     });
-    const work = await manager.createProfile("work");
+    const work = await manager.createProfile(
+      "work",
+      readySettings(["model-a", "model-b"]),
+    );
 
     await manager.bindSession("session-1", work.id);
 
@@ -803,7 +1045,10 @@ describe("FileUserConfigManager session selection", () => {
   it("persists an explicit session binding across reopen", async () => {
     const rootDir = await createRoot();
     const manager = await FileUserConfigManager.open({ rootDir });
-    const work = await manager.createProfile("work");
+    const work = await manager.createProfile(
+      "work",
+      readySettings(["model-a", "model-b"]),
+    );
 
     await manager.bindSession("session-1", work.id);
 
@@ -831,7 +1076,10 @@ describe("FileUserConfigManager session selection", () => {
     const manager = await FileUserConfigManager.open({
       rootDir: await createRoot(),
     });
-    const work = await manager.createProfile("work");
+    const work = await manager.createProfile(
+      "work",
+      readySettings(["model-a", "model-b"]),
+    );
 
     const binding = manager.bindSession("session-1", work.id);
     const resolution = manager.resolveProfile("session-1");
@@ -853,7 +1101,10 @@ describe("FileUserConfigManager session selection", () => {
   it("safely persists a __proto__ session binding across reopen", async () => {
     const rootDir = await createRoot();
     const manager = await FileUserConfigManager.open({ rootDir });
-    const profile = await manager.createProfile("safe");
+    const profile = await manager.createProfile(
+      "safe",
+      readySettings(["model-a", "model-b"]),
+    );
 
     await manager.bindSession("__proto__", profile.id);
 
@@ -925,7 +1176,10 @@ describe("FileUserConfigManager session selection", () => {
   it("preserves a non-empty session ID exactly", async () => {
     const rootDir = await createRoot();
     const manager = await FileUserConfigManager.open({ rootDir });
-    const profile = await manager.createProfile("spaced");
+    const profile = await manager.createProfile(
+      "spaced",
+      readySettings(["model-a", "model-b"]),
+    );
 
     await manager.bindSession(" session-1 ", profile.id);
 
@@ -941,7 +1195,10 @@ describe("FileUserConfigManager session selection", () => {
   it("safely persists a constructor session binding across reopen", async () => {
     const rootDir = await createRoot();
     const manager = await FileUserConfigManager.open({ rootDir });
-    const profile = await manager.createProfile("constructor-safe");
+    const profile = await manager.createProfile(
+      "constructor-safe",
+      readySettings(["model-a", "model-b"]),
+    );
 
     await manager.bindSession("constructor", profile.id);
 
@@ -990,7 +1247,10 @@ describe("FileUserConfigManager session selection", () => {
     const manager = await FileUserConfigManager.open({
       rootDir: await createRoot(),
     });
-    const profile = await manager.createProfile("work");
+    const profile = await manager.createProfile(
+      "work",
+      readySettings(["model-a", "model-b"]),
+    );
     sensitiveFileFaults.write.push({
       target: "index",
       message: "injected binding index failure",
@@ -1012,7 +1272,10 @@ describe("FileUserConfigManager session selection", () => {
     const manager = await FileUserConfigManager.open({
       rootDir: await createRoot(),
     });
-    const profile = await manager.createProfile("work");
+    const profile = await manager.createProfile(
+      "work",
+      readySettings(["model-a", "model-b"]),
+    );
     sensitiveFileFaults.write.push({
       target: "index",
       message: "injected binding queue failure",
@@ -1035,7 +1298,10 @@ describe("FileUserConfigManager session selection", () => {
     const manager = await FileUserConfigManager.open({
       rootDir: await createRoot(),
     });
-    const profile = await manager.createProfile("work");
+    const profile = await manager.createProfile(
+      "work",
+      readySettings(["model-a", "model-b"]),
+    );
     await manager.bindSession("session-1", profile.id);
     sensitiveFileFaults.write.push({
       target: "index",
@@ -1441,6 +1707,51 @@ describe("FileUserConfigManager runtime input validation", () => {
     }
     expect(manager.listProfiles().map(({ name }) => name)).toEqual(["default"]);
   });
+
+  it.each(["name", "settings", "acknowledgedWarnings"] as const)(
+    "replaces a getter-thrown ConfigError while reading initialize %s",
+    async (field) => {
+      const rootDir = await mkdtemp(join(tmpdir(), "kaguya-config-manager-"));
+      roots.push(rootDir);
+      const attackerError = new ConfigError(
+        "CONFIG_IO_ERROR",
+        `${secret}-message`,
+        { cause: { attackerCause: secret } },
+      );
+      const options = new Proxy(
+        {
+          rootDir,
+          name: "hostile-initialize",
+          settings: readySettings(["model-a", "model-b"]),
+          acknowledgedWarnings: [],
+        },
+        {
+          get(target, property, receiver): unknown {
+            if (property === field) {
+              throw attackerError;
+            }
+            return Reflect.get(target, property, receiver);
+          },
+        },
+      );
+
+      const error = await FileUserConfigManager.initialize(
+        options as never,
+      ).catch((caught: unknown) => caught);
+
+      expect(error).not.toBe(attackerError);
+      expect(error).toMatchObject({
+        code: "CONFIG_INVALID_INPUT",
+        message: "Configuration profile input failed validation",
+      });
+      expect((error as { cause?: unknown }).cause).toBeUndefined();
+      for (const representation of [String(error), JSON.stringify(error)]) {
+        expect(representation).not.toContain(secret);
+        expect(representation).not.toContain("CONFIG_IO_ERROR");
+        expect(representation).not.toContain("attackerCause");
+      }
+    },
+  );
 
   it("does not inspect getter-thrown revoked proxies at create and update boundaries", async () => {
     const manager = await FileUserConfigManager.open({

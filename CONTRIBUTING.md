@@ -84,6 +84,15 @@ pnpm format:check
 
 修复 bug 时必须先加入能复现该 bug 的回归测试。测试应断言公开结果、持久化记录或 trace，不要只断言内部调用次数。涉及时间、ID、数据库或模型时使用可注入时钟、ID 生成器、临时 SQLite 和确定性模型；测试中禁止真实等待、网络请求和 API key。
 
+配置包改动先运行聚焦检查：
+
+```bash
+pnpm vitest run packages/config/src
+pnpm --filter @kaguya/config typecheck
+```
+
+配置测试只能使用 `test-only-placeholder` 一类占位值，绝不能读取真实本地配置根目录。新增或修改 readiness/error 断言时，必须验证输出不含任何明文 credential（包括 API key）。
+
 Prompt 变更同样先修改 `promptfooconfig.yaml` 的输入和 `promptfoo/assertions.cjs` 的结构断言，确认失败后再改编译或组装逻辑。断言应验证片段来源、ID、顺序和内容，不能只做宽泛的关键词存在检查。
 
 ## 新增 workspace 包
