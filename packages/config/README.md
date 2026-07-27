@@ -85,8 +85,10 @@ cannot be deleted until every such session is explicitly unbound or rebound.
 
 Session binding, or `defaultProfileId` when unbound, selects exactly one
 candidate profile. Selection is not readiness: `resolveProfile()` checks that
-candidate and returns `CONFIG_INCOMPLETE` or `CONFIG_REVIEW_REQUIRED` when it
-is not ready. It never falls back to another profile, provider, or model.
+candidate and rejects with the typed `ConfigIncompleteError`
+(`CONFIG_INCOMPLETE`) or `ConfigReviewRequiredError` (`CONFIG_REVIEW_REQUIRED`)
+when it is not ready. It never falls back to another profile, provider, or
+model.
 Existing incomplete profiles can still be opened and edited for repair. The
 future provider execution layer must return provider/network/authentication
 failures directly; it must not attempt a fallback provider or model.

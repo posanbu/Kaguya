@@ -80,7 +80,7 @@ docs/               调研、架构、会议记录和设计文档
 - [2026-07-25 网关更新说明](docs/updates/2026-07-25-application-api-gateway.md)：新增能力、测试修复、兼容性变化与验证结果。
 - [OpenAI-compatible LLM 接口](docs/openai-compatible-llm.md)：基于 Vercel AI SDK 的内部适配器与独立连通性测试工具；它不是 Web UI 的后端 API。
 - [配置包说明](packages/config/README.md)：敏感配置的 API、存储边界和泄漏处置。
-- [用户配置设计](docs/superpowers/specs/2026-07-25-user-configuration-management-design.md)：profile、会话选择与敏感文件处理的已批准设计。
+- [用户配置 readiness 设计](docs/superpowers/specs/2026-07-27-config-onboarding-readiness-design.md)：显式 setup、确认流程、profile 选择与无 fallback 的当前行为；2026-07-25 设计已被替代。
 - [人工待实现路线图](docs/remaining-work.md)：生产闭环、可靠性与后续扩展所需的人工决策、工程任务和验收标准。
 - [MaiBot 调研](docs/maibot-analysis.md)：直接 LLM 调用入口、触发关系、Prompt 来源和持久化影响。
 - [贡献指南](CONTRIBUTING.md)：环境、开发流程、新增子包、迁移规则和提交前检查。

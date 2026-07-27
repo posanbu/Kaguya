@@ -72,10 +72,11 @@ flowchart TD
 
 `initialize()` 只在候选配置已经 ready 后才进行首次文件系统写入：必须选择已启用
 的 default provider，所有已启用 provider 合计至少有两个不同的
-`providerId:modelId` 目标。缺少模型配置会得到 `CONFIG_INCOMPLETE`。缺少 base
+`providerId:modelId` 目标。缺少模型配置时 Promise 会以
+`ConfigIncompleteError`（`CONFIG_INCOMPLETE`）拒绝。缺少 base
 URL/API key 的已启用 provider、空 platforms 或空 plugins 是可选 warning；调用方
-必须显示 `CONFIG_REVIEW_REQUIRED` 的无敏感 warning、取得明确确认后以当前 warning
-ID 重试初始化，或对既有 profile 调用
+必须处理 `ConfigReviewRequiredError`（`CONFIG_REVIEW_REQUIRED`）中的无敏感 warning、
+取得明确确认后以当前 warning ID 重试初始化，或对既有 profile 调用
 `acknowledgeConfigurationWarnings(profileId, warningIds)`。确认记录按 profile 保存，
 每次完整 `updateProfile()` 都清空它们并要求重新检查。
 
@@ -84,10 +85,11 @@ ID 重试初始化，或对既有 profile 调用
 解绑、`inspectProfile()`、warning 确认和 `resolveProfile()`。未绑定会话的 default
 profile、或显式会话绑定，只负责选择一个候选；这不代表候选已经 ready。
 `resolveProfile()` 只检查被选中的 profile，并在其 invalid 或 review_required 时分别
-抛出 `CONFIG_INCOMPLETE` 或 `CONFIG_REVIEW_REQUIRED`，不会搜索或回退到其他 profile、
-provider 或模型。既有不完整 profile 仍可打开、列出和更新以便修复。profile JSON
-中的 API key、平台凭据和插件设置以明文保存，因此完整 profile 只应在运行时代码确有
-需要时读取。
+以 `ConfigIncompleteError`（`CONFIG_INCOMPLETE`）或
+`ConfigReviewRequiredError`（`CONFIG_REVIEW_REQUIRED`）拒绝，不会搜索或回退到其他
+profile、provider 或模型。既有不完整 profile 仍可打开、列出和更新以便修复。profile
+JSON 中的 API key、平台凭据和插件设置以明文保存，因此完整 profile 只应在运行时代码
+确有需要时读取。
 
 在 POSIX 上，根目录和 `profiles/` 目录会校正为 `0700`，index、profile 和临时文件会校正为 `0600`。受管目录或文件中的符号链接、越出根目录的路径和不属于当前用户的 POSIX 路径会被拒绝。写入先同步唯一临时文件，再以原子替换落盘，并在支持时同步父目录；同一 manager 实例内会串行化修改。每个配置根目录在任意时刻必须恰好只有一个活跃的 `FileUserConfigManager`/writer 实例，包括同一进程内；该实现不支持多个 manager 实例之间或跨进程的协调。Windows 不具备等价的 POSIX mode 保证，部署者必须配置只允许运行身份访问的 NTFS ACL。
 

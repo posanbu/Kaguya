@@ -130,17 +130,16 @@ const userConfigProfileReviewSchema = z.strictObject({
   acknowledgedWarnings: z.array(nonEmptyIdSchema),
 });
 
-const userConfigProfileInnerSchema =
-  userConfigProfileSettingsInnerSchema
-    .safeExtend({
-      version: z.literal(1),
-      id: profileIdSchema,
-      name: z.string().trim().min(1),
-      review: userConfigProfileReviewSchema.optional(),
-    })
-    .superRefine((profile, context) => {
-      rejectOwnUndefined(profile, "review", context);
-    });
+const userConfigProfileInnerSchema = userConfigProfileSettingsInnerSchema
+  .safeExtend({
+    version: z.literal(1),
+    id: profileIdSchema,
+    name: z.string().trim().min(1),
+    review: userConfigProfileReviewSchema.optional(),
+  })
+  .superRefine((profile, context) => {
+    rejectOwnUndefined(profile, "review", context);
+  });
 
 export const userConfigProfileSchema = guardSchemaInput(
   userConfigProfileInnerSchema,

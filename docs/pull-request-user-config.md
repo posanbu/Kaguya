@@ -7,22 +7,20 @@
 ## Changes
 
 - 新增 `@kaguya/config` TypeScript 包及配置 schema。
-- 新增无副作用的 `inspect()` 引导和显式 `initialize()`；缺少 store 不再生成空 default profile，`open()` 改为返回 `CONFIG_SETUP_REQUIRED`。
-- 初始化和会话解析要求至少两个不同的 `providerId:modelId` 目标；模型不完整时返回 `CONFIG_INCOMPLETE`。
+- 新增无副作用的 `inspect()` 引导和显式 `initialize()`；缺少 store 不再生成空 default profile，`open()` 的 Promise 会以 `ConfigSetupRequiredError`（`CONFIG_SETUP_REQUIRED`）拒绝。
+- 初始化和会话解析要求至少两个不同的 `providerId:modelId` 目标；模型不完整时 Promise 会以 `ConfigIncompleteError`（`CONFIG_INCOMPLETE`）拒绝。
 - 支持配置的创建、读取、完整更新、删除和默认配置管理；完整更新会清除该 profile 的 warning 确认。
 - 支持会话绑定、解绑和未绑定会话的 default profile 选择；解析只检查被选中的一个 profile，不能回退其他 profile、provider 或模型。
-- 可选配置缺失会返回 `CONFIG_REVIEW_REQUIRED`；只有显示 warning 并得到明确用户确认后，初始化重试或 per-profile `acknowledgeConfigurationWarnings()` 才可记录确认。
+- 可选配置缺失时 Promise 会以 `ConfigReviewRequiredError`（`CONFIG_REVIEW_REQUIRED`）拒绝；只有显示 warning 并得到明确用户确认后，初始化重试或 per-profile `acknowledgeConfigurationWarnings()` 才可记录确认。
 - 使用敏感 JSON 文件持久化明文密钥，并提供原子写入、路径与符号链接防护、POSIX 权限加固、损坏检测和递归脱敏。
 - 补充配置使用、安全边界和后续集成文档。
 
 ## Validation
 
-- Vitest：247/247
-- Promptfoo：4/4
-- `pnpm lint`
-- `pnpm build`
-- `pnpm typecheck`
-- 所有已跟踪文件通过 Prettier 检查
+- `pnpm test`：22 个 test files、290 个 tests 通过；`pnpm vitest run packages/config/src`：5 个 test files、148 个 tests 通过。
+- `pnpm lint`、`pnpm build`、`pnpm typecheck` 与 `pnpm --filter @kaguya/config typecheck` 均通过。
+- Task 4 的文档和 `packages/config/src/model.ts` 均通过针对性的 Prettier 检查。
+- 仓库范围 `pnpm format:check` 仍会因本任务之外的文件失败；该命令的完整剩余输出见 Task 4 report，不能据此声称所有已跟踪文件都已格式化。
 
 ## Known limitations
 
