@@ -1,6 +1,6 @@
 # Kaguya
 
-Kaguya 是一个以事件和有向工作流为核心的 TypeScript AI Bot 基础设施原型。它把消息处理、短间隔心跳、定时记忆整理、Prompt 组装、LLM 调用和 SQLite 追踪拆成可替换的边界；当前仓库不包含社交平台适配器或 Web UI。
+Kaguya 是一个以事件和有向工作流为核心的 TypeScript AI Bot 基础设施原型。它把消息处理、短间隔心跳、定时记忆整理、Prompt 组装、LLM 调用和 SQLite 追踪拆成可替换的边界；当前仓库不包含社交平台适配器，Web UI 仅提供基础消息入口。
 
 当前实现包含：
 
@@ -10,6 +10,7 @@ Kaguya 是一个以事件和有向工作流为核心的 TypeScript AI Bot 基础
 - 带稳定排序和 SHA-256 来源摘要的 Prompt 编译器；
 - 基于 Vercel AI SDK 的结构化 LLM 边界、OpenAI-compatible 动态 provider 与完整调用 trace；
 - 基于 Fastify 的消息参数校验与 ingress enqueue 网关、Bearer 认证、限流、CORS 与 OpenAPI；
+- 基于 React 和 Vite 的初版 Web UI，支持网关配置、健康检查和消息提交状态；
 - SQLite 消息、记忆、节点运行和 LLM trace 仓储；
 - 多份敏感用户配置、显式初始化、会话/默认 profile 选择与 readiness 阻断；
 - 消息、心跳、定时记忆三条可执行示例工作流；
@@ -52,6 +53,8 @@ fnm use
 | `pnpm prompt:test`  | 阻断外部出口后在本地验证四类 Prompt 的结构            |
 | `pnpm api:dev`      | 构建 API 及 workspace 依赖后启动开发网关              |
 | `pnpm api`          | 启动已构建的应用 API 网关                             |
+| `pnpm web`          | 启动 Web UI 开发服务器                                |
+| `pnpm web:build`    | 构建 Web UI                                           |
 | `pnpm demo`         | 运行消息、心跳和定时记忆的确定性端到端示例            |
 
 `prompt:test` 的自定义 provider 只通过 source bridge 加载仓库源码，不创建模型、不读取 API key，也不自行访问网络。固定的 Promptfoo 0.121.19 即使收到 telemetry disable 标志仍可能尝试上报一次“telemetry disabled”；脚本保留 telemetry/update disable 标志，同时把大小写 HTTP(S)/ALL proxy 都指向不可达的 `127.0.0.1:9`，并清空 `NO_PROXY` 绕过列表，因此该尝试不能离开 localhost。
@@ -60,6 +63,7 @@ fnm use
 
 ```text
 apps/api/           Fastify 消息参数校验与 ingress enqueue 网关
+apps/web/           React/Vite 应用消息网关客户端
 apps/demo/          三条工作流的组装、确定性模型与可执行示例
 packages/schema/    跨包数据契约
 packages/sdk/       事件、监听器、节点与工作流定义 API
@@ -77,6 +81,7 @@ docs/               调研、架构、会议记录和设计文档
 
 - [架构说明](docs/architecture.md)：包边界、事件字段、节点/边、工作流、Prompt 与数据库追踪。
 - [应用 API 网关](docs/api-gateway.md)：Fastify 选型、AstrBot 参考、启动配置、接口与安全边界。
+- [Web UI](docs/web-ui.md)：初版界面能力、启动方式、存储策略和当前响应边界。
 - [2026-07-25 网关更新说明](docs/updates/2026-07-25-application-api-gateway.md)：新增能力、测试修复、兼容性变化与验证结果。
 - [OpenAI-compatible LLM 接口](docs/openai-compatible-llm.md)：基于 Vercel AI SDK 的内部适配器与独立连通性测试工具；它不是 Web UI 的后端 API。
 - [配置包说明](packages/config/README.md)：敏感配置的 API、存储边界和泄漏处置。

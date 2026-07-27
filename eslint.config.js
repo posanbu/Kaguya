@@ -5,7 +5,7 @@ export default tseslint.config(
     ignores: ["**/dist/**", "**/node_modules/**", "**/coverage/**"],
   },
   {
-    files: ["**/*.ts"],
+    files: ["**/*.{ts,tsx}"],
     languageOptions: {
       parser: tseslint.parser,
     },
