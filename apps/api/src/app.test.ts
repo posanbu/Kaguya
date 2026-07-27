@@ -1,4 +1,14 @@
+import { Writable } from "node:stream";
+
 import { describe, expect, it, vi } from "vitest";
+
+import {
+  closeLogger,
+  createLogger,
+  createModuleLogger,
+  getLogContext,
+  type LogContext,
+} from "@kaguya/logger";
 
 import { createApiGateway, type MessageIngress } from "./app.js";
 import type { ApiGatewayConfig } from "./config.js";
@@ -266,6 +276,73 @@ describe("application API gateway", () => {
     await app.close();
   });
 
+  it("propagates request and session context into the core ingress", async () => {
+    let capturedContext: Readonly<LogContext> | undefined;
+    const app = await createApiGateway({
+      config,
+      messageIngress: {
+        enqueue: () => {
+          capturedContext = getLogContext();
+          return Promise.resolve();
+        },
+      },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/messages",
+      headers: {
+        ...authorization(),
+        "x-request-id": "request-context-1",
+      },
+      payload: requestBody,
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(capturedContext).toEqual({
+      requestId: "request-context-1",
+      sessionId: "session-1",
+    });
+    await app.close();
+  });
+
+  it("writes contextual Pino logs without credentials or message content", async () => {
+    const stream = new LogStream();
+    const rootLogger = createLogger({ service: "kaguya-api-test", stream });
+    const logger = createModuleLogger(rootLogger, "api");
+    const app = await createApiGateway({
+      config,
+      logger,
+      messageIngress: fakeIngress(),
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/messages",
+      headers: {
+        ...authorization(),
+        "x-request-id": "request-log-1",
+      },
+      payload: requestBody,
+    });
+
+    expect(response.statusCode).toBe(202);
+    await app.close();
+    await closeLogger(rootLogger);
+    const logs = stream.logs();
+    expect(
+      logs.find((entry) => entry.event === "gateway.message.accepted"),
+    ).toMatchObject({
+      service: "kaguya-api-test",
+      module: "api",
+      requestId: "request-log-1",
+      sessionId: "session-1",
+    });
+    const serialized = JSON.stringify(logs);
+    expect(serialized).not.toContain(gatewayToken);
+    expect(serialized).not.toContain(requestBody.text);
+  });
+
   it("rejects model, provider, prompt, and workflow routing fields", async () => {
     const enqueue = vi.fn(() => Promise.resolve());
     const app = await createApiGateway({
@@ -502,4 +579,26 @@ function injectFrom(
     },
     payload: requestBody,
   });
+}
+
+class LogStream extends Writable {
+  readonly #chunks: string[] = [];
+
+  override _write(
+    chunk: Buffer | string,
+    _encoding: BufferEncoding,
+    callback: (error?: Error | null) => void,
+  ) {
+    this.#chunks.push(chunk.toString());
+    callback();
+  }
+
+  logs(): Record<string, unknown>[] {
+    return this.#chunks
+      .join("")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+  }
 }

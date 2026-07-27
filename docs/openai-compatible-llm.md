@@ -21,13 +21,19 @@ SDK 只负责模型协议与调用生命周期，不负责 HTTP 网关、消息�
 只应在受信任的 core/application composition root 中调用该接口。provider 配置应来自服务端配置或密钥存储，不能从 `POST /api/v1/messages` 透传，也不能把平台密钥打包到浏览器代码中。
 
 ```ts
+import { OpenAiCompatibleLlmService, createPinoLlmLogger } from "@kaguya/llm";
 import {
-  OpenAiCompatibleLlmService,
-  createConsoleLlmLogger,
-} from "@kaguya/llm";
+  closeLogger,
+  createLogger,
+  createModuleLogger,
+  readLoggerOptions,
+} from "@kaguya/logger";
+
+const rootLogger = createLogger(readLoggerOptions("kaguya-core"));
+const logger = createModuleLogger(rootLogger, "llm:openai-compatible");
 
 const service = new OpenAiCompatibleLlmService({
-  logger: createConsoleLlmLogger(),
+  logger: createPinoLlmLogger(logger),
 });
 
 const providerConfig = {
@@ -47,9 +53,10 @@ const result = await service.call({
 
 console.log(result.content);
 console.log(result.usage);
+await closeLogger(rootLogger);
 ```
 
-`OpenAiCompatibleLlmService` 默认不输出日志。传入 `createConsoleLlmLogger()` 后，每条日志以单行 JSON 输出；生产应用也可以注入自己的 `OpenAiCompatibleLogger`，对接现有日志系统。
+`OpenAiCompatibleLlmService` 默认不输出日志。生产 composition root 应通过 `createPinoLlmLogger()` 接入 `@kaguya/logger`，从当前 AsyncLocalStorage 上下文继承 `traceId/sessionId/workflowId/nodeId` 等关联字段。`createConsoleLlmLogger()` 仅为兼容已有本地工具保留，不提供命名空间、上下文传播或统一脱敏策略。
 
 ## 请求字段
 
@@ -133,6 +140,8 @@ interface OpenAiCompatibleResult {
 ## 日志与安全边界
 
 结构化日志只记录事件名、模型、endpoint、尝试次数、耗时、状态、usage 和错误分类，不记录 provider 原始错误消息、API key、Prompt 或模型回答。日志中的 `endpoint` 仅保留 provider 的 URL origin，不保留可能包含租户标识、部署路径、签名参数或其他敏感信息的 path、query 和 hash。`apiKeyHeader` 与 `additionalHeaders` 会拒绝 `Host`、`Content-Length`、`Transfer-Encoding`、`Connection`、`Proxy-Authorization` 等连接或请求 framing 保留 header。adapter 的 fetch wrapper 强制使用 `redirect: "error"`，调用方必须提供最终 provider 地址。
+
+`@kaguya/logger` 还会默认遮盖常见凭证和内容字段，并把 Error 收敛为分类元数据；这只是额外兜底，不能替代 service 自身“不构造敏感日志事件”的边界。统一日志配置、命名空间级别和同步/异步输出约定见 [结构化日志](logging.md)。
 
 生产接入还必须在 core/application 层完成以下控制：
 

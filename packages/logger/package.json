@@ -1,5 +1,5 @@
 {
-  "name": "@kaguya/llm",
+  "name": "@kaguya/logger",
   "private": true,
   "type": "module",
   "exports": {
@@ -13,9 +13,6 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
-    "@ai-sdk/openai-compatible": "3.0.14",
-    "@kaguya/logger": "workspace:*",
-    "@kaguya/schema": "workspace:*",
-    "ai": "7.0.35"
+    "pino": "10.3.1"
   }
 }

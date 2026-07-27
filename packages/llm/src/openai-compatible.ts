@@ -2,6 +2,7 @@ import {
   createOpenAICompatible,
   type OpenAICompatibleProviderSettings,
 } from "@ai-sdk/openai-compatible";
+import type { KaguyaLogger } from "@kaguya/logger";
 import { APICallError, RetryError, generateText } from "ai";
 
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
@@ -124,6 +125,19 @@ export function createConsoleLlmLogger(): OpenAiCompatibleLogger {
     },
     error(event) {
       console.error(JSON.stringify(event));
+    },
+  };
+}
+
+export function createPinoLlmLogger(
+  logger: KaguyaLogger,
+): OpenAiCompatibleLogger {
+  return {
+    info(event) {
+      logger.info(event, event.event);
+    },
+    error(event) {
+      logger.error(event, event.event);
     },
   };
 }
