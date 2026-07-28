@@ -6,6 +6,8 @@
   },
   "include": ["src/**/*.ts"],
   "references": [
+    { "path": "../demo" },
+    { "path": "../../packages/database" },
     { "path": "../../packages/logger" },
     { "path": "../../packages/schema" }
   ]

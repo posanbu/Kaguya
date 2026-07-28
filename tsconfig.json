@@ -11,6 +11,7 @@
     { "path": "./packages/database" },
     { "path": "./packages/scheduler" },
     { "path": "./apps/api" },
-    { "path": "./apps/demo" }
+    { "path": "./apps/demo" },
+    { "path": "./apps/web" }
   ]
 }
