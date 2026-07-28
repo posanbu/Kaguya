@@ -37,10 +37,7 @@ export function createLocalMessageIngress(
   database.migrate();
 
   let closed = false;
-  let sequence = 0;
   const eventBus = new EventBus();
-  const nextId = (prefix: string) =>
-    `${prefix}-${String(++sequence).padStart(6, "0")}`;
   const now = options.now ?? (() => new Date());
   const promptCompiler = new PromptCompiler();
   const engine = new WorkflowEngine({ recorder: database.eventRuns });
@@ -53,6 +50,7 @@ export function createLocalMessageIngress(
       }
 
       const traceId = `webui-${command.requestId}`;
+      const nextId = createTraceScopedIdFactory(traceId);
       const event = messageReceivedEvent.create(
         {
           id: `${traceId}-message-received`,
@@ -91,6 +89,12 @@ export function createLocalMessageIngress(
       }
     },
   };
+}
+
+function createTraceScopedIdFactory(traceId: string): (prefix: string) => string {
+  let sequence = 0;
+  return (prefix: string) =>
+    `${traceId}-${prefix}-${String(++sequence).padStart(6, "0")}`;
 }
 
 function createWorkflowServices(

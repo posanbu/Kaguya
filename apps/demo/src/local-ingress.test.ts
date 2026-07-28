@@ -112,4 +112,44 @@ describe("local message ingress", () => {
       database.close();
     }
   });
+
+  it("keeps workflow record IDs unique after reopening the same local database", async () => {
+    const databasePath = tempDatabasePath();
+    const firstIngress = createLocalMessageIngress({
+      databasePath,
+      now: () => new Date("2026-07-28T01:02:03.000Z"),
+    });
+    await firstIngress.enqueue({
+      sessionId: "web-session-restart",
+      text: "Before restart",
+      requestId: "request-before-restart",
+    });
+    firstIngress.close();
+
+    const secondIngress = createLocalMessageIngress({
+      databasePath,
+      now: () => new Date("2026-07-28T01:03:03.000Z"),
+    });
+    await secondIngress.enqueue({
+      sessionId: "web-session-restart",
+      text: "After restart",
+      requestId: "request-after-restart",
+    });
+    secondIngress.close();
+
+    const database = KaguyaDatabase.open(databasePath);
+    try {
+      expect(database.messages.listRecent("web-session-restart", 10)).toHaveLength(
+        4,
+      );
+      expect(
+        database.eventRuns.listByTrace("webui-request-before-restart").length,
+      ).toBeGreaterThan(0);
+      expect(
+        database.eventRuns.listByTrace("webui-request-after-restart").length,
+      ).toBeGreaterThan(0);
+    } finally {
+      database.close();
+    }
+  });
 });
