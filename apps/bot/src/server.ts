@@ -21,7 +21,11 @@ export class WebSocketJsonTransport implements JsonMessageTransport {
       if (!data) {
         return;
       }
-      this.messageHandler?.(JSON.parse(data));
+      try {
+        this.messageHandler?.(JSON.parse(data));
+      } catch {
+        return;
+      }
     });
     this.socket.addEventListener("close", () => {
       this.closeHandler?.();

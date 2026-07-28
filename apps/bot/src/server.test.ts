@@ -42,6 +42,18 @@ afterEach(() => {
 });
 
 describe("WebSocketJsonTransport", () => {
+  it("ignores malformed JSON WebSocket messages", () => {
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+    const transport = new WebSocketJsonTransport("ws://127.0.0.1:3001");
+    const received: unknown[] = [];
+    transport.onJsonMessage((message) => received.push(message));
+
+    expect(() => {
+      FakeWebSocket.latest?.emit("message", { data: "{not-json" });
+    }).not.toThrow();
+    expect(received).toEqual([]);
+  });
+
   it("bridges JSON messages through a token-authenticated WebSocket", () => {
     globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
     const transport = new WebSocketJsonTransport(
