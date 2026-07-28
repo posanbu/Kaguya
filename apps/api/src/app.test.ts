@@ -22,6 +22,7 @@ const config: ApiGatewayConfig = {
   trustProxy: false,
   rateLimitMax: 30,
   rateLimitWindowMs: 60_000,
+  databasePath: "/tmp/kaguya-api-test.sqlite",
 };
 const requestBody = { sessionId: "session-1", text: "Hello" };
 
