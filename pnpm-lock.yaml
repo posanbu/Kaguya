@@ -63,6 +63,33 @@ importers:
         specifier: ^5.10.0
         version: 5.10.0
 
+  apps/bot:
+    dependencies:
+      '@kaguya/database':
+        specifier: workspace:*
+        version: link:../../packages/database
+      '@kaguya/demo':
+        specifier: workspace:*
+        version: link:../demo
+      '@kaguya/engine':
+        specifier: workspace:*
+        version: link:../../packages/engine
+      '@kaguya/llm':
+        specifier: workspace:*
+        version: link:../../packages/llm
+      '@kaguya/logger':
+        specifier: workspace:*
+        version: link:../../packages/logger
+      '@kaguya/platform-adapters':
+        specifier: workspace:*
+        version: link:../../packages/platform-adapters
+      '@kaguya/prompt':
+        specifier: workspace:*
+        version: link:../../packages/prompt
+      '@kaguya/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
+
   apps/demo:
     dependencies:
       '@kaguya/database':

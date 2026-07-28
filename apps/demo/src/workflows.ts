@@ -28,6 +28,8 @@ export {
   routeRequestedEvent,
 } from "./events.js";
 export { dispatchEvent, emitDefinedEvent } from "./dispatch.js";
+export { LlmLifecycleClient } from "./llm-lifecycle.js";
+export type { WorkflowServices } from "./services.js";
 export {
   createLocalMessageIngress,
   type CreateLocalMessageIngressOptions,

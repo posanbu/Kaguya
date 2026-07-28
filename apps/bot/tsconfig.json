@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../demo" },
+    { "path": "../../packages/database" },
+    { "path": "../../packages/engine" },
+    { "path": "../../packages/llm" },
+    { "path": "../../packages/logger" },
+    { "path": "../../packages/platform-adapters" },
+    { "path": "../../packages/prompt" },
+    { "path": "../../packages/sdk" }
+  ]
+}
