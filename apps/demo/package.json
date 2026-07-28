@@ -2,6 +2,12 @@
   "name": "@kaguya/demo",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/workflows.d.ts",
+      "default": "./dist/workflows.js"
+    }
+  },
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
