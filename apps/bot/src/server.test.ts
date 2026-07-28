@@ -1,6 +1,14 @@
-import { afterEach, describe, expect, it } from "vitest";
+import type {
+  JsonMessageTransport,
+  PlatformDeliveryReceipt,
+  PlatformReplySender,
+} from "@kaguya/platform-adapters";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { WebSocketJsonTransport } from "./server.js";
+import {
+  NapCatConnectionSupervisor,
+  WebSocketJsonTransport,
+} from "./server.js";
 
 class FakeWebSocket {
   static latest: FakeWebSocket | undefined;
@@ -54,6 +62,19 @@ describe("WebSocketJsonTransport", () => {
     expect(received).toEqual([]);
   });
 
+  it("does not swallow errors thrown by a JSON message handler", () => {
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+    const transport = new WebSocketJsonTransport("ws://127.0.0.1:3001");
+    const handlerError = new Error("dispatch failed");
+    transport.onJsonMessage(() => {
+      throw handlerError;
+    });
+
+    expect(() => {
+      FakeWebSocket.latest?.emit("message", { data: '{"message_id":"12345"}' });
+    }).toThrow(handlerError);
+  });
+
   it("bridges JSON messages through a token-authenticated WebSocket", () => {
     globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
     const transport = new WebSocketJsonTransport(
@@ -79,5 +100,97 @@ describe("WebSocketJsonTransport", () => {
     expect(received).toEqual([{ message_id: "12345" }]);
     expect(closeError?.message).toBe("NapCat WebSocket error");
     expect(FakeWebSocket.latest?.closed).toBe(true);
+  });
+});
+
+class SupervisorTransport implements JsonMessageTransport {
+  private readonly closeHandlers = new Set<(error?: Error) => void>();
+
+  sendJson(): void {}
+
+  onJsonMessage(): void {}
+
+  onClose(handler: (error?: Error) => void): void {
+    this.closeHandlers.add(handler);
+  }
+
+  close(): void {}
+
+  disconnect(error?: Error): void {
+    for (const handler of this.closeHandlers) {
+      handler(error);
+    }
+  }
+}
+
+describe("NapCatConnectionSupervisor", () => {
+  it("recreates the full connection after the configured delay and cancels reconnect on stop", async () => {
+    vi.useFakeTimers();
+    const connections: Array<{
+      transport: SupervisorTransport;
+      sender: PlatformReplySender;
+      adapter: {
+        starts: number;
+        stops: number;
+        start(): Promise<void>;
+        stop(): Promise<void>;
+      };
+    }> = [];
+    const supervisor = new NapCatConnectionSupervisor({
+      adapterId: "napcat.qq.main",
+      reconnectMs: 250,
+      createConnection: () => {
+        const connectionNumber = connections.length + 1;
+        const transport = new SupervisorTransport();
+        const sender: PlatformReplySender = {
+          async sendTextReply(target): Promise<PlatformDeliveryReceipt> {
+            return {
+              ok: true,
+              adapterId: "napcat.qq.main",
+              platform: "qq",
+              target,
+              platformMessageId: `connection-${connectionNumber}`,
+            };
+          },
+        };
+        const adapter = {
+          starts: 0,
+          stops: 0,
+          async start() {
+            this.starts += 1;
+          },
+          async stop() {
+            this.stops += 1;
+          },
+        };
+        const connection = { transport, sender, adapter };
+        connections.push(connection);
+        return connection;
+      },
+    });
+
+    try {
+      await supervisor.start();
+      expect(connections).toHaveLength(1);
+      expect(connections[0]?.adapter.starts).toBe(1);
+
+      connections[0]?.transport.disconnect(new Error("socket closed"));
+      await vi.advanceTimersByTimeAsync(249);
+      expect(connections).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(connections).toHaveLength(2);
+      expect(connections[0]?.adapter.stops).toBe(1);
+      expect(connections[1]?.adapter.starts).toBe(1);
+      await expect(
+        supervisor.sendTextReply({ kind: "private", userId: "112233" }, "hi"),
+      ).resolves.toMatchObject({ platformMessageId: "connection-2" });
+
+      await supervisor.stop();
+      connections[1]?.transport.disconnect();
+      await vi.advanceTimersByTimeAsync(250);
+      expect(connections).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

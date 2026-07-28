@@ -89,7 +89,11 @@ export class NapCatActionClient implements PlatformReplySender {
   }
 
   private handleJsonMessage(message: unknown): void {
-    if (typeof message !== "object" || message === null || !("echo" in message)) {
+    if (
+      typeof message !== "object" ||
+      message === null ||
+      !("echo" in message)
+    ) {
       return;
     }
     const echo = String((message as { echo: unknown }).echo);
@@ -158,27 +162,45 @@ function extractMessageId(data: unknown): string | undefined {
 
 export interface NapCatOneBotAdapterOptions {
   readonly adapterId: string;
+  readonly expectedSelfId?: string;
   readonly transport: JsonMessageTransport;
   readonly now: () => Date;
   readonly onInboundMessage: (message: PlatformInboundMessage) => Promise<void>;
+  readonly onInboundError?: (
+    error: unknown,
+    context: NapCatInboundErrorContext,
+  ) => void;
+}
+
+export interface NapCatInboundErrorContext {
+  readonly adapterId: string;
+  readonly traceId: string;
 }
 
 export class NapCatOneBotAdapter {
+  private readonly inFlight = new Set<Promise<void>>();
+  private acceptingMessages = false;
+
   constructor(private readonly options: NapCatOneBotAdapterOptions) {
     subscribeToJsonMessages(options.transport, (message) => {
-      void this.handleJsonMessage(message);
+      this.handleJsonMessage(message);
     });
   }
 
   async start(): Promise<void> {
-    return undefined;
+    this.acceptingMessages = true;
   }
 
   async stop(): Promise<void> {
+    this.acceptingMessages = false;
     this.options.transport.close();
+    await Promise.allSettled([...this.inFlight]);
   }
 
-  private async handleJsonMessage(message: unknown): Promise<void> {
+  private handleJsonMessage(message: unknown): void {
+    if (!this.acceptingMessages) {
+      return;
+    }
     if (typeof message === "object" && message !== null && "echo" in message) {
       return;
     }
@@ -189,7 +211,32 @@ export class NapCatOneBotAdapter {
     if (inbound === undefined) {
       return;
     }
-    await this.options.onInboundMessage(inbound);
+    if (
+      this.options.expectedSelfId !== undefined &&
+      inbound.selfId !== this.options.expectedSelfId
+    ) {
+      return;
+    }
+
+    const dispatch = Promise.resolve().then(() =>
+      this.options.onInboundMessage(inbound),
+    );
+    let tracked: Promise<void>;
+    tracked = dispatch
+      .catch((error: unknown) => {
+        try {
+          this.options.onInboundError?.(error, {
+            adapterId: this.options.adapterId,
+            traceId: inbound.traceId,
+          });
+        } catch {
+          // Error reporting must not create a second unhandled rejection.
+        }
+      })
+      .finally(() => {
+        this.inFlight.delete(tracked);
+      });
+    this.inFlight.add(tracked);
   }
 }
 

@@ -18,5 +18,6 @@ export {
   NapCatOneBotAdapter,
   type JsonMessageTransport,
   type NapCatActionClientOptions,
+  type NapCatInboundErrorContext,
   type NapCatOneBotAdapterOptions,
 } from "./napcat.js";

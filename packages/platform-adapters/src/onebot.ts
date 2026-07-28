@@ -70,8 +70,8 @@ export function normalizeOneBotMessageEvent(
   const platformMessageId = normalizeRequiredId(event.message_id);
   const userId = normalizeRequiredId(event.user_id);
   const selfId = normalizeOptionalId(event.self_id);
-  const text = normalizeMessageText(event.message).trim();
-  if (!platformMessageId || !userId || !text) return undefined;
+  const text = normalizeMessageText(event.message);
+  if (!platformMessageId || !userId || !text.trim()) return undefined;
 
   const target = targetFor(messageType, event.group_id, userId);
   if (target === undefined) return undefined;
@@ -133,15 +133,17 @@ function normalizeMessageText(
   message: string | readonly ParsedOneBotMessageSegment[],
 ): string {
   if (typeof message === "string") return message;
-  return message
-    .map(segmentToText)
-    .join("")
-    .replace(/[ \t]+\n/g, "\n");
+  return message.map(segmentToText).join("");
 }
 
 function segmentToText(segment: ParsedOneBotMessageSegment): string {
-  if (segment.type === "text")
-    return normalizeOptionalText(segment.data?.text) ?? "";
+  if (segment.type === "text") {
+    const text = segment.data?.text;
+    if (typeof text !== "string" && typeof text !== "number") {
+      return "";
+    }
+    return String(text);
+  }
   if (segment.type === "at")
     return `@${normalizeOptionalText(segment.data?.qq) ?? "unknown"}`;
   if (segment.type === "reply")

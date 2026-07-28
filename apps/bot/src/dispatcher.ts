@@ -8,7 +8,9 @@ import {
   messageReceivedEvent,
 } from "@kaguya/demo";
 import { EventBus, WorkflowEngine } from "@kaguya/engine";
+import type { KaguyaLogger } from "@kaguya/logger";
 import type {
+  PlatformDeliveryReceipt,
   PlatformInboundMessage,
   PlatformReplySender,
 } from "@kaguya/platform-adapters";
@@ -20,6 +22,7 @@ import { createBotWorkflowServices } from "./services.js";
 
 export interface CreatePlatformDispatcherOptions {
   readonly databasePath: string;
+  readonly logger?: KaguyaLogger;
   readonly now?: () => Date;
   readonly platformReplySender?: PlatformReplySender;
 }
@@ -36,6 +39,7 @@ export class PlatformDispatcher {
       eventBus: new EventBus(),
       engine: new WorkflowEngine({ recorder: database.eventRuns }),
       promptCompiler: new PromptCompiler(),
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
       now: options.now ?? (() => new Date()),
       ...(options.platformReplySender === undefined
         ? {}
@@ -50,6 +54,7 @@ export class PlatformDispatcher {
       readonly database: KaguyaDatabase;
       readonly eventBus: EventBus;
       readonly engine: WorkflowEngine;
+      readonly logger?: KaguyaLogger;
       readonly promptCompiler: PromptCompiler;
       readonly now: () => Date;
       readonly platformReplySender?: PlatformReplySender;
@@ -96,7 +101,7 @@ export class PlatformDispatcher {
       services,
     };
 
-    await dispatchEvent({
+    const result = await dispatchEvent({
       definition: messageReceivedEvent,
       event,
       eventBus: this.options.eventBus,
@@ -104,9 +109,33 @@ export class PlatformDispatcher {
       workflow: this.workflow,
       context,
     });
+    const receipt = result?.outputs["send-reply"];
+    if (isFailedDeliveryReceipt(receipt)) {
+      this.options.logger?.warn(
+        {
+          event: "platform.delivery.failed",
+          traceId: message.traceId,
+          adapterId: message.adapterId,
+          platform: message.platform,
+          targetKind: message.target.kind,
+        },
+        "Platform reply delivery failed",
+      );
+    }
   }
 
   close(): void {
     this.options.database.close();
   }
+}
+
+function isFailedDeliveryReceipt(
+  value: unknown,
+): value is PlatformDeliveryReceipt & { readonly ok: false } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "ok" in value &&
+    value.ok === false
+  );
 }

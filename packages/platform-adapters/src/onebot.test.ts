@@ -132,3 +132,26 @@ it("ignores non-message events and blank normalized messages", () => {
     ),
   ).toBeUndefined();
 });
+
+it("preserves whitespace contributed by adjacent text segments", () => {
+  const message = normalizeOneBotMessageEvent(
+    {
+      post_type: "message",
+      message_type: "private",
+      self_id: 998877,
+      message_id: 12345,
+      user_id: 112233,
+      message: [
+        { type: "text", data: { text: " hello " } },
+        { type: "at", data: { qq: "998877" } },
+        { type: "text", data: { text: " world " } },
+      ],
+    },
+    {
+      adapterId: "napcat.qq.main",
+      now: () => new Date("2026-07-28T01:02:03.000Z"),
+    },
+  );
+
+  expect(message?.text).toBe(" hello @998877 world ");
+});
