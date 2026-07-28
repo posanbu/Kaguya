@@ -107,6 +107,7 @@ async function main(): Promise<void> {
       },
     );
 
+    services.messageReceivedEvent = messageEvent;
     await dispatchEvent({
       definition: messageReceivedEvent,
       event: messageEvent,
