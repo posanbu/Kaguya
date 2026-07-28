@@ -133,3 +133,91 @@ it("dispatches normalized inbound messages and ignores action responses", async 
     text: "hello",
   });
 });
+
+it("supports an action client and adapter sharing one transport", async () => {
+  const transport = new FakeTransport();
+  const inboundMessages: unknown[] = [];
+  const client = new NapCatActionClient({
+    adapterId: "napcat.qq.main",
+    transport,
+    nextEcho: () => "echo-shared",
+    timeoutMs: 1000,
+  });
+  const adapter = new NapCatOneBotAdapter({
+    adapterId: "napcat.qq.main",
+    transport,
+    now: () => new Date("2026-07-28T01:02:03.000Z"),
+    onInboundMessage: async (message) => {
+      inboundMessages.push(message);
+    },
+  });
+
+  const receiptPromise = client.sendTextReply(
+    { kind: "private", userId: "112233" },
+    "hi",
+  );
+  transport.receive({
+    post_type: "message",
+    message_type: "private",
+    message_id: 123,
+    user_id: 456,
+    message: "hello",
+  });
+  transport.receive({
+    status: "ok",
+    data: { message_id: 24680 },
+    echo: "echo-shared",
+  });
+
+  await expect(receiptPromise).resolves.toMatchObject({
+    ok: true,
+    platformMessageId: "24680",
+  });
+  await Promise.resolve();
+  expect(inboundMessages).toHaveLength(1);
+  expect(inboundMessages[0]).toMatchObject({
+    sessionId: "qq:private:456",
+    text: "hello",
+  });
+});
+
+it("returns a failed receipt when a NapCat action times out", async () => {
+  const transport = new FakeTransport();
+  const client = new NapCatActionClient({
+    adapterId: "napcat.qq.main",
+    transport,
+    nextEcho: () => "echo-timeout",
+    timeoutMs: 10,
+  });
+
+  await expect(
+    client.sendTextReply({ kind: "group", groupId: "778899" }, "later"),
+  ).resolves.toMatchObject({
+    ok: false,
+    adapterId: "napcat.qq.main",
+    target: { kind: "group", groupId: "778899" },
+    error: "NapCat action timed out",
+  });
+});
+
+it("returns failed receipts when the NapCat transport closes", async () => {
+  const transport = new FakeTransport();
+  const client = new NapCatActionClient({
+    adapterId: "napcat.qq.main",
+    transport,
+    nextEcho: () => "echo-close",
+    timeoutMs: 1000,
+  });
+
+  const receiptPromise = client.sendTextReply(
+    { kind: "private", userId: "112233" },
+    "during-close",
+  );
+  transport.close();
+
+  await expect(receiptPromise).resolves.toMatchObject({
+    ok: false,
+    target: { kind: "private", userId: "112233" },
+    error: "NapCat connection closed",
+  });
+});

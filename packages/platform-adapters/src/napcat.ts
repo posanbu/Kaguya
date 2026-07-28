@@ -16,6 +16,30 @@ export interface JsonMessageTransport {
   close(): void;
 }
 
+type JsonMessageHandler = (message: unknown) => void;
+const jsonMessageSubscribers = new WeakMap<
+  JsonMessageTransport,
+  Set<JsonMessageHandler>
+>();
+
+function subscribeToJsonMessages(
+  transport: JsonMessageTransport,
+  handler: JsonMessageHandler,
+): void {
+  let subscribers = jsonMessageSubscribers.get(transport);
+  if (subscribers === undefined) {
+    subscribers = new Set<JsonMessageHandler>();
+    jsonMessageSubscribers.set(transport, subscribers);
+    const subscriberSet = subscribers;
+    transport.onJsonMessage((message) => {
+      for (const subscriber of subscriberSet) {
+        subscriber(message);
+      }
+    });
+  }
+  subscribers.add(handler);
+}
+
 export interface NapCatActionClientOptions {
   readonly adapterId: string;
   readonly transport: JsonMessageTransport;
@@ -33,7 +57,7 @@ export class NapCatActionClient implements PlatformReplySender {
   private readonly pending = new Map<string, PendingAction>();
 
   constructor(private readonly options: NapCatActionClientOptions) {
-    options.transport.onJsonMessage((message) => {
+    subscribeToJsonMessages(options.transport, (message) => {
       this.handleJsonMessage(message);
     });
     options.transport.onClose((error) => {
@@ -141,7 +165,7 @@ export interface NapCatOneBotAdapterOptions {
 
 export class NapCatOneBotAdapter {
   constructor(private readonly options: NapCatOneBotAdapterOptions) {
-    options.transport.onJsonMessage((message) => {
+    subscribeToJsonMessages(options.transport, (message) => {
       void this.handleJsonMessage(message);
     });
   }
