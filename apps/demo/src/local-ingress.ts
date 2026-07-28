@@ -42,26 +42,7 @@ export function createLocalMessageIngress(
   const nextId = (prefix: string) =>
     `${prefix}-${String(++sequence).padStart(6, "0")}`;
   const now = options.now ?? (() => new Date());
-  const services: WorkflowServices = {
-    database,
-    promptCompiler: new PromptCompiler(),
-    llmClient: new LlmLifecycleClient(
-      new KaguyaLlmClient({
-        model: createDeterministicModel([
-          {
-            shouldReply: true,
-            reason: "the local Web UI message should enter the workflow",
-          },
-          { text: "It is a lovely night for watching the moon." },
-        ]),
-        traceWriter: database.llmTraces,
-        now,
-        nextId,
-      }),
-      eventBus,
-    ),
-    eventBus,
-  };
+  const promptCompiler = new PromptCompiler();
   const engine = new WorkflowEngine({ recorder: database.eventRuns });
   const workflow = createMessageWorkflow();
 
@@ -88,7 +69,10 @@ export function createLocalMessageIngress(
         sessionId: command.sessionId,
         now,
         nextId,
-        services,
+        services: createWorkflowServices(database, eventBus, promptCompiler, {
+          now,
+          nextId,
+        }),
       };
 
       await dispatchEvent({
@@ -106,5 +90,36 @@ export function createLocalMessageIngress(
         database.close();
       }
     },
+  };
+}
+
+function createWorkflowServices(
+  database: KaguyaDatabase,
+  eventBus: EventBus,
+  promptCompiler: PromptCompiler,
+  helpers: {
+    readonly now: () => Date;
+    readonly nextId: (prefix: string) => string;
+  },
+): WorkflowServices {
+  return {
+    database,
+    promptCompiler,
+    llmClient: new LlmLifecycleClient(
+      new KaguyaLlmClient({
+        model: createDeterministicModel([
+          {
+            shouldReply: true,
+            reason: "the local Web UI message should enter the workflow",
+          },
+          { text: "It is a lovely night for watching the moon." },
+        ]),
+        traceWriter: database.llmTraces,
+        now: helpers.now,
+        nextId: helpers.nextId,
+      }),
+      eventBus,
+    ),
+    eventBus,
   };
 }

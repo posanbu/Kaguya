@@ -72,4 +72,44 @@ describe("local message ingress", () => {
       database.close();
     }
   });
+
+  it("dispatches multiple Web UI messages without exhausting deterministic LLM responses", async () => {
+    const databasePath = tempDatabasePath();
+    const ingress = createLocalMessageIngress({
+      databasePath,
+      now: () => new Date("2026-07-28T01:02:03.000Z"),
+    });
+
+    await ingress.enqueue({
+      sessionId: "web-session-repeat",
+      text: "First message",
+      requestId: "request-one",
+    });
+    await ingress.enqueue({
+      sessionId: "web-session-repeat",
+      text: "Second message",
+      requestId: "request-two",
+    });
+    ingress.close();
+
+    const database = KaguyaDatabase.open(databasePath);
+    try {
+      const messages = database.messages.listRecent("web-session-repeat", 10);
+
+      expect(messages.filter((message) => message.role === "user")).toHaveLength(
+        2,
+      );
+      expect(
+        messages.filter((message) => message.role === "assistant"),
+      ).toHaveLength(2);
+      expect(database.llmTraces.listByTrace("webui-request-one")).toHaveLength(
+        2,
+      );
+      expect(database.llmTraces.listByTrace("webui-request-two")).toHaveLength(
+        2,
+      );
+    } finally {
+      database.close();
+    }
+  });
 });
