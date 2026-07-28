@@ -13,3 +13,10 @@ export {
   type OneBotActionRequest,
   type OneBotMessageSegment,
 } from "./onebot.js";
+export {
+  NapCatActionClient,
+  NapCatOneBotAdapter,
+  type JsonMessageTransport,
+  type NapCatActionClientOptions,
+  type NapCatOneBotAdapterOptions,
+} from "./napcat.js";

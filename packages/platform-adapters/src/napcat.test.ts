@@ -1,0 +1,135 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  NapCatActionClient,
+  NapCatOneBotAdapter,
+  type JsonMessageTransport,
+} from "./napcat.js";
+
+class FakeTransport implements JsonMessageTransport {
+  readonly sent: unknown[] = [];
+  private messageHandler: ((message: unknown) => void) | undefined;
+  private closeHandler: ((error?: Error) => void) | undefined;
+
+  sendJson(message: unknown): void {
+    this.sent.push(message);
+  }
+
+  onJsonMessage(handler: (message: unknown) => void): void {
+    this.messageHandler = handler;
+  }
+
+  onClose(handler: (error?: Error) => void): void {
+    this.closeHandler = handler;
+  }
+
+  close(): void {
+    this.closeHandler?.();
+  }
+
+  receive(message: unknown): void {
+    this.messageHandler?.(message);
+  }
+}
+
+describe("NapCatActionClient", () => {
+  it("sends a private action and resolves the matching echo response", async () => {
+    const transport = new FakeTransport();
+    const client = new NapCatActionClient({
+      adapterId: "napcat.qq.main",
+      transport,
+      nextEcho: () => "echo-1",
+      timeoutMs: 1000,
+    });
+
+    const promise = client.sendTextReply(
+      { kind: "private", userId: "112233" },
+      "hi",
+    );
+
+    expect(transport.sent).toEqual([
+      {
+        action: "send_private_msg",
+        params: {
+          user_id: 112233,
+          message: [{ type: "text", data: { text: "hi" } }],
+        },
+        echo: "echo-1",
+      },
+    ]);
+
+    transport.receive({
+      status: "ok",
+      retcode: 0,
+      data: { message_id: 24680 },
+      echo: "echo-1",
+    });
+
+    await expect(promise).resolves.toMatchObject({
+      ok: true,
+      adapterId: "napcat.qq.main",
+      platform: "qq",
+      target: { kind: "private", userId: "112233" },
+      platformMessageId: "24680",
+    });
+  });
+
+  it("returns failed receipts for matching failed action responses", async () => {
+    const transport = new FakeTransport();
+    const client = new NapCatActionClient({
+      adapterId: "napcat.qq.main",
+      transport,
+      nextEcho: () => "echo-2",
+      timeoutMs: 1000,
+    });
+
+    const promise = client.sendTextReply(
+      { kind: "group", groupId: "778899" },
+      "nope",
+    );
+    transport.receive({
+      status: "failed",
+      retcode: 1404,
+      wording: "group not found",
+      echo: "echo-2",
+    });
+
+    await expect(promise).resolves.toMatchObject({
+      ok: false,
+      error: "group not found",
+      target: { kind: "group", groupId: "778899" },
+    });
+  });
+});
+
+it("dispatches normalized inbound messages and ignores action responses", async () => {
+  const transport = new FakeTransport();
+  const inboundMessages: unknown[] = [];
+  const onInboundMessage = async (message: unknown) => {
+    inboundMessages.push(message);
+  };
+  const adapter = new NapCatOneBotAdapter({
+    adapterId: "napcat.qq.main",
+    transport,
+    now: () => new Date("2026-07-28T01:02:03.000Z"),
+    onInboundMessage,
+  });
+
+  await adapter.start();
+  transport.receive({ status: "ok", echo: "echo-ignored" });
+  transport.receive({
+    post_type: "message",
+    message_type: "private",
+    message_id: 123,
+    user_id: 456,
+    message: "hello",
+  });
+
+  await Promise.resolve();
+
+  expect(inboundMessages).toHaveLength(1);
+  expect(inboundMessages[0]).toMatchObject({
+    sessionId: "qq:private:456",
+    text: "hello",
+  });
+});
