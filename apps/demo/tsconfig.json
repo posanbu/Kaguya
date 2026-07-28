@@ -12,6 +12,7 @@
     { "path": "../../packages/engine" },
     { "path": "../../packages/prompt" },
     { "path": "../../packages/llm" },
+    { "path": "../../packages/platform-adapters" },
     { "path": "../../packages/database" },
     { "path": "../../packages/scheduler" }
   ]

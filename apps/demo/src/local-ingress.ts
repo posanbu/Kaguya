@@ -62,15 +62,17 @@ export function createLocalMessageIngress(
         },
         { text: command.text },
       );
+      const services = createWorkflowServices(database, eventBus, promptCompiler, {
+        now,
+        nextId,
+      });
+      services.messageReceivedEvent = event;
       const context: WorkflowContext = {
         traceId,
         sessionId: command.sessionId,
         now,
         nextId,
-        services: createWorkflowServices(database, eventBus, promptCompiler, {
-          now,
-          nextId,
-        }),
+        services,
       };
 
       await dispatchEvent({

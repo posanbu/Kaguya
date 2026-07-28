@@ -74,6 +74,9 @@ importers:
       '@kaguya/llm':
         specifier: workspace:*
         version: link:../../packages/llm
+      '@kaguya/platform-adapters':
+        specifier: workspace:*
+        version: link:../../packages/platform-adapters
       '@kaguya/prompt':
         specifier: workspace:*
         version: link:../../packages/prompt
