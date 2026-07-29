@@ -105,7 +105,7 @@ demo 已经展示消息、心跳和定时记忆的流转方式，但 persona、p
 
 **当前基础**
 
-`apps/api` 能认证并校验 `sessionId/text`，再把 `{ sessionId, text, requestId }` 交给 `MessageIngress`；当前没有实现该 port 的 core dispatcher、持久队列或 consumer。`apps/demo` 能构造 `message.received` 并通过 `dispatchEvent` 进入工作流，但没有连接任何真实聊天平台，也没有真实发送出口。
+`apps/api` 能认证并校验 `sessionId/text`，再把 `{ sessionId, text, requestId }` 交给 `MessageIngress`；开发启动入口已经注入本地确定性 ingress，可将 Web UI 消息送入 message workflow 并写入 SQLite。生产 core dispatcher、持久队列和 consumer 仍未实现。`apps/demo` 能构造 `message.received` 并通过 `dispatchEvent` 进入工作流，但没有连接任何真实聊天平台，也没有真实发送出口。
 
 **为什么必须人工参与**
 
@@ -499,7 +499,7 @@ AI/检索工程师和后端/数据工程师共同主责，产品与安全负责�
 
 **当前基础**
 
-仓库已有一个经过 Bearer 认证、严格消息校验和限流保护的基础应用 API 网关，并提供 OpenAPI 文档与 `MessageIngress` 核心入站 port。网关不接收或路由模型配置；core dispatcher、持久队列和 consumer 尚未实现。初版 Web UI 仅支持健康检查和消息提交，不是管理控制台；运行状态仍只能通过数据库、测试和命令行检查，也没有角色授权或操作审计。
+仓库已有一个经过 Bearer 认证、严格消息校验和限流保护的基础应用 API 网关，并提供 OpenAPI 文档与 `MessageIngress` 核心入站 port。网关不接收或路由模型配置；开发启动入口会把 Web UI 消息交给本地确定性 ingress 并写入 SQLite，但生产 core dispatcher、持久队列和 consumer 尚未实现。初版 Web UI 仅支持健康检查和消息提交，不是管理控制台；运行状态仍只能通过数据库、测试和命令行检查，也没有角色授权或操作审计。
 
 **为什么必须人工参与**
 

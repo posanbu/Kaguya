@@ -1,21 +1,21 @@
 {
-  "name": "@kaguya/api",
+  "name": "@kaguya/bot",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
     "start": "node dist/server.js",
-    "dev": "pnpm --filter @kaguya/api... build && tsx src/server.ts"
+    "dev": "pnpm --filter @kaguya/bot... build && tsx src/server.ts"
   },
   "dependencies": {
-    "@fastify/cors": "^11.3.0",
-    "@fastify/rate-limit": "^11.1.0",
-    "@fastify/swagger": "^9.8.1",
     "@kaguya/database": "workspace:*",
     "@kaguya/demo": "workspace:*",
+    "@kaguya/engine": "workspace:*",
+    "@kaguya/llm": "workspace:*",
     "@kaguya/logger": "workspace:*",
-    "@kaguya/schema": "workspace:*",
-    "fastify": "^5.10.0"
+    "@kaguya/platform-adapters": "workspace:*",
+    "@kaguya/prompt": "workspace:*",
+    "@kaguya/sdk": "workspace:*"
   }
 }
