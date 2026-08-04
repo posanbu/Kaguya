@@ -1,4 +1,4 @@
-import type { RouteOutput } from "@kaguya/llm";
+import type { RouteOutput } from "@kaguya/llm/schemas";
 import { type CompiledPrompt, type MessageRecord } from "@kaguya/schema";
 import {
   defineNode,

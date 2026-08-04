@@ -1,6 +1,6 @@
 # OpenAI-compatible LLM 通用接口
 
-`@kaguya/llm` 导出 `OpenAiCompatibleLlmService`，供 core/application 层按次配置 API 地址、鉴权方式和模型，并通过 OpenAI-compatible `chat/completions` 协议生成文本。它是内部 TypeScript adapter，不是应用 API 网关的 HTTP 接口。
+`@kaguya/llm/openai-compatible` 导出 `OpenAiCompatibleLlmService`，供 core/application 层按次配置 API 地址、鉴权方式和模型，并通过 OpenAI-compatible `chat/completions` 协议生成文本。它是内部 TypeScript adapter，不是应用 API 网关的 HTTP 接口。包根路径继续兼容导出该 API，但新代码应使用独立子路径。
 
 该接口适合核心层 provider 集成、独立连通性测试和受信任的服务端工具。它与工作流使用的 `KaguyaLlmClient` 是两个不同边界：当前不会写入 `llm_traces`，也不会自动执行 route/reply/state/memory 的 JSON schema 校验。
 
@@ -21,7 +21,10 @@ SDK 只负责模型协议与调用生命周期，不负责 HTTP 网关、消息�
 只应在受信任的 core/application composition root 中调用该接口。provider 配置应来自服务端配置或密钥存储，不能从 `POST /api/v1/messages` 透传，也不能把平台密钥打包到浏览器代码中。
 
 ```ts
-import { OpenAiCompatibleLlmService, createPinoLlmLogger } from "@kaguya/llm";
+import {
+  OpenAiCompatibleLlmService,
+  createPinoLlmLogger,
+} from "@kaguya/llm/openai-compatible";
 import {
   closeLogger,
   createLogger,

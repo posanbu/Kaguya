@@ -4,7 +4,8 @@ import { fileURLToPath } from "node:url";
 
 import { KaguyaDatabase } from "@kaguya/database";
 import { EventBus, WorkflowEngine } from "@kaguya/engine";
-import { KaguyaLlmClient, createDeterministicModel } from "@kaguya/llm";
+import { KaguyaLlmClient } from "@kaguya/llm/client";
+import { createDeterministicModel } from "@kaguya/llm/testing";
 import { PromptCompiler } from "@kaguya/prompt";
 
 import { dispatchEvent } from "./dispatch.js";

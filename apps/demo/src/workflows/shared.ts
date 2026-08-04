@@ -5,7 +5,7 @@ import {
   type ReplyOutput,
   type RouteOutput,
   type StateOutput,
-} from "@kaguya/llm";
+} from "@kaguya/llm/schemas";
 import {
   type CompiledPrompt,
   type EventEnvelope,

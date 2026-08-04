@@ -1,4 +1,4 @@
-import type { RouteOutput, StateOutput } from "@kaguya/llm";
+import type { RouteOutput, StateOutput } from "@kaguya/llm/schemas";
 import {
   type CompiledPrompt,
   type MemoryRecord,

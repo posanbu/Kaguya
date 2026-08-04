@@ -1,4 +1,4 @@
-import { replyOutputSchema, routeOutputSchema } from "@kaguya/llm";
+import { replyOutputSchema, routeOutputSchema } from "@kaguya/llm/schemas";
 import {
   llmErrorKindSchema,
   promptFragmentSourceSchema,
