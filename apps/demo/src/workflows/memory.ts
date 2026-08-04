@@ -1,5 +1,5 @@
 import { WorkflowEngine } from "@kaguya/engine";
-import { memoryOutputSchema, type MemoryOutput } from "@kaguya/llm";
+import { memoryOutputSchema, type MemoryOutput } from "@kaguya/llm/schemas";
 import {
   type CompiledPrompt,
   type MemoryRecord,

@@ -1,9 +1,6 @@
 import { type EventBus } from "@kaguya/engine";
-import {
-  KaguyaLlmClient,
-  type KaguyaLlmOutputByKind,
-  type KaguyaLlmRequest,
-} from "@kaguya/llm";
+import { KaguyaLlmClient, type KaguyaLlmRequest } from "@kaguya/llm/client";
+import type { KaguyaLlmOutputByKind } from "@kaguya/llm/schemas";
 import type { LlmErrorKind } from "@kaguya/schema";
 import type { WorkflowContext } from "@kaguya/sdk";
 

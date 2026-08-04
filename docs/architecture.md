@@ -296,7 +296,7 @@ digest 用于识别内容，不用于恢复或隐藏内容；完整片段和最�
 
 ## LLM 边界与 trace
 
-`KaguyaLlmClient.generate` 是工作流唯一的文本生成边界。请求必须携带 `kind`、`modelId`、完整 compiled Prompt、`traceId`、`workflowId` 和 `nodeId`。
+`KaguyaLlmClient.generate` 是工作流唯一的文本生成边界。client 位于独立的 `@kaguya/llm/client` 子路径，接受 Vercel AI SDK `LanguageModel` 并通过 `generateText` 调用模型；四类输出 schema 位于 `@kaguya/llm/schemas`，基于 `ai/test` 的确定性模型位于 `@kaguya/llm/testing`。请求必须携带 `kind`、`modelId`、完整 compiled Prompt、`traceId`、`workflowId` 和 `nodeId`。
 
 四类响应在返回业务节点前严格解析：
 
@@ -307,7 +307,7 @@ digest 用于识别内容，不用于恢复或隐藏内容；完整片段和最�
 | `state`  | `{ mood: string, relationship: string, shortTermMemories: string[] }` |
 | `memory` | `{ memories: string[] }`                                              |
 
-四个 schema 由 `@kaguya/llm` 统一导出并由 demo 直接复用。reply、state、可选 route reason 以及每条短期/长期 memory 都先 trim 再要求非空；memory 数组本身可以为空。空白结构会成为不可重试响应错误，不会到达消息或 memory repository。
+四个 schema 由 `@kaguya/llm/schemas` 统一导出并由 demo 直接复用；包根路径仍保留兼容导出。reply、state、可选 route reason 以及每条短期/长期 memory 都先 trim 再要求非空；memory 数组本身可以为空。空白结构会成为不可重试响应错误，不会到达消息或 memory repository。
 
 每次调用无论成功或失败都先尝试写 trace：
 
@@ -320,7 +320,7 @@ demo 注入 `MockLanguageModelV3` 并按调用顺序返回确定性 JSON；不�
 
 `apps/demo` 的 `LlmLifecycleClient` 包装上述生成边界，在应用层发布 `llm.requested/completed/failed`，因此 `@kaguya/llm` 和 `@kaguya/engine` 仍然彼此独立。
 
-`@kaguya/llm` 还导出独立的 `OpenAiCompatibleLlmService`，允许应用层按次传入 API key、base URL、模型和 system/user Prompt。该服务使用 `ai@7.0.35` 的 `generateText` 与 `@ai-sdk/openai-compatible@3.0.14` 的动态 provider，由 SDK 负责供应商请求、响应/usage 解析和重试；服务保留输入校验、统一结果、错误分类和结构化日志。`timeoutMs` 约束整次 SDK 调用，调用方的 `AbortSignal` 直接用于取消，两类终止都归一化为 `cancelled`。adapter 注入的 fetch wrapper 强制使用 `redirect: "error"`，该重定向保护不是 SDK 的默认行为。
+`@kaguya/llm/openai-compatible` 还导出独立的 `OpenAiCompatibleLlmService`，允许应用层按次传入 API key、base URL、模型和 system/user Prompt。该服务使用 `ai@7.0.35` 的 `generateText` 与 `@ai-sdk/openai-compatible@3.0.14` 的动态 provider，由 SDK 负责供应商请求、响应/usage 解析和重试；服务保留输入校验、统一结果、错误分类和结构化日志。`timeoutMs` 约束整次 SDK 调用，调用方的 `AbortSignal` 直接用于取消，两类终止都归一化为 `cancelled`。adapter 注入的 fetch wrapper 强制使用 `redirect: "error"`，该重定向保护不是 SDK 的默认行为。
 
 该 SDK service 属于 core/application 层的模型 adapter 或独立连通性测试工具，不由 `apps/api` 导入或暴露。它目前不经过 `KaguyaLlmClient`，因此不会自动执行四类业务 schema 校验或写入 `llm_traces`；正式工作流仍需由核心 adapter 把动态 provider 模型接入现有生成边界。详细约定见 [OpenAI-compatible LLM 通用接口](openai-compatible-llm.md)。
 

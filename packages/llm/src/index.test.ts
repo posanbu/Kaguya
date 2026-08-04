@@ -3,12 +3,9 @@ import { APICallError } from "ai";
 import { MockLanguageModelV3 } from "ai/test";
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  KaguyaLlmClient,
-  KaguyaLlmError,
-  createDeterministicModel,
-} from "./index.js";
+import { KaguyaLlmClient, KaguyaLlmError } from "./client.js";
 import * as llm from "./index.js";
+import { createDeterministicModel } from "./testing.js";
 
 const prompt: CompiledPrompt = {
   kind: "route",

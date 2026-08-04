@@ -94,7 +94,7 @@ $env:KAGUYA_LOG_DESTINATION = ".data/logs/kaguya.jsonl"
 ## 当前接入
 
 - `apps/api` 使用 Pino 实例作为 Fastify logger，并把 `requestId` 注入整个请求链；合法消息进入 core ingress 时再加入 `sessionId`。网关只记录 `gateway.message.accepted` 等元数据，不记录消息正文或 Authorization header。
-- `@kaguya/llm` 提供 `createPinoLlmLogger()`，把现有 `llm.call.started/succeeded/failed` 事件写入模块 Logger；事件仍只包含模型、provider origin、尝试次数、耗时、usage 和错误分类。
+- `@kaguya/llm/openai-compatible` 提供 `createPinoLlmLogger()`，把现有 `llm.call.started/succeeded/failed` 事件写入模块 Logger；事件仍只包含模型、provider origin、尝试次数、耗时、usage 和错误分类。
 
 事件总线、工作流、scheduler、database 和平台 adapter 尚未全部接入统一 Logger。跨进程 trace、指标、告警、日志采集、保留周期和访问控制仍属于生产可观测性后续工作。
 
