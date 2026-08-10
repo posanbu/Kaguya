@@ -155,3 +155,23 @@ it("preserves whitespace contributed by adjacent text segments", () => {
 
   expect(message?.text).toBe(" hello @998877 world ");
 });
+
+it("ignores messages authored by the connected bot account", () => {
+  const message = normalizeOneBotMessageEvent(
+    {
+      post_type: "message",
+      message_type: "group",
+      self_id: 998877,
+      message_id: 12345,
+      user_id: 998877,
+      group_id: 778899,
+      message: "It is a lovely night for watching the moon.",
+    },
+    {
+      adapterId: "napcat.qq.main",
+      now: () => new Date("2026-07-28T01:02:03.000Z"),
+    },
+  );
+
+  expect(message).toBeUndefined();
+});

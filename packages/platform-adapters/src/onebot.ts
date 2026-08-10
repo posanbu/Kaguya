@@ -70,6 +70,8 @@ export function normalizeOneBotMessageEvent(
   const platformMessageId = normalizeRequiredId(event.message_id);
   const userId = normalizeRequiredId(event.user_id);
   const selfId = normalizeOptionalId(event.self_id);
+  if (selfId !== undefined && userId === selfId) return undefined;
+
   const text = normalizeMessageText(event.message);
   if (!platformMessageId || !userId || !text.trim()) return undefined;
 
