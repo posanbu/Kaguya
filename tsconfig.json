@@ -10,7 +10,10 @@
     { "path": "./packages/llm" },
     { "path": "./packages/database" },
     { "path": "./packages/scheduler" },
+    { "path": "./packages/platform-adapters" },
     { "path": "./apps/api" },
-    { "path": "./apps/demo" }
+    { "path": "./apps/bot" },
+    { "path": "./apps/demo" },
+    { "path": "./apps/web" }
   ]
 }

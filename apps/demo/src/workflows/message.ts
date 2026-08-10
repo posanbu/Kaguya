@@ -1,5 +1,9 @@
 import type { RouteOutput } from "@kaguya/llm";
-import { type CompiledPrompt, type MessageRecord } from "@kaguya/schema";
+import {
+  type CompiledPrompt,
+  type MessageRecord,
+  eventEnvelopeSchema,
+} from "@kaguya/schema";
 import {
   defineNode,
   defineWorkflow,
@@ -25,6 +29,8 @@ import {
   requiredSessionId,
   routeDecisionSchema,
   routeFragments,
+  sendReplyNode,
+  type SendReplyInput,
   type ConversationContext,
 } from "./shared.js";
 
@@ -98,6 +104,15 @@ const decideRouteNode = defineNode<CompiledPrompt, RouteOutput>({
   },
 });
 
+const prepareSendReplyNode = defineNode<MessageRecord, SendReplyInput>({
+  id: "prepare-send-reply",
+  async run(reply, context) {
+    const originalEvent = context.services.messageReceivedEvent;
+    const event = eventEnvelopeSchema.parse(originalEvent);
+    return { event: { ...event, sessionId: requiredSessionId(context) }, reply };
+  },
+});
+
 export function createMessageWorkflow(): WorkflowDefinition {
   return defineWorkflow({
     id: "message-workflow",
@@ -109,6 +124,8 @@ export function createMessageWorkflow(): WorkflowDefinition {
       compileReplyNode,
       createGenerateReplyNode("message-workflow"),
       persistReplyNode,
+      prepareSendReplyNode,
+      sendReplyNode,
     ],
     edges: [
       { from: "persist-message", to: "load-context" },
@@ -121,6 +138,8 @@ export function createMessageWorkflow(): WorkflowDefinition {
       },
       { from: "compile-reply", to: "generate-reply" },
       { from: "generate-reply", to: "persist-reply" },
+      { from: "persist-reply", to: "prepare-send-reply" },
+      { from: "prepare-send-reply", to: "send-reply" },
     ],
   });
 }

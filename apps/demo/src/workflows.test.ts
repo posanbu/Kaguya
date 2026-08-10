@@ -1,6 +1,11 @@
 import { KaguyaDatabase } from "@kaguya/database";
 import { EventBus, WorkflowEngine } from "@kaguya/engine";
 import { KaguyaLlmClient, createDeterministicModel } from "@kaguya/llm";
+import type {
+  PlatformDeliveryReceipt,
+  PlatformMessageTarget,
+  PlatformReplySender,
+} from "@kaguya/platform-adapters";
 import { PromptCompiler } from "@kaguya/prompt";
 import type { EventEnvelope, MessageRecord } from "@kaguya/schema";
 import type { WorkflowContext } from "@kaguya/sdk";
@@ -47,9 +52,9 @@ function createHarness(outputs: readonly unknown[]) {
     database,
     engine,
     eventBus,
-    context(
-      event: Pick<EventEnvelope, "traceId" | "sessionId">,
-    ): WorkflowContext {
+    contextServices: services,
+    context(event: EventEnvelope): WorkflowContext {
+      services.messageReceivedEvent = event;
       return {
         traceId: event.traceId,
         ...(event.sessionId === undefined
@@ -61,6 +66,41 @@ function createHarness(outputs: readonly unknown[]) {
       };
     },
   };
+}
+
+async function runMessageWorkflowForTest(options: {
+  eventMetadata?: Record<string, unknown>;
+  services?: Partial<WorkflowServices>;
+}) {
+  const harness = createHarness([
+    { shouldReply: true, reason: "direct question" },
+    { text: "It is a lovely night for watching the moon." },
+  ]);
+  Object.assign(harness.contextServices, options.services ?? {});
+  const event = messageReceivedEvent.create(
+    {
+      id: "message-platform-send",
+      source: "integration-test",
+      occurredAt: NOW,
+      traceId: "trace-message-platform-send",
+      sessionId: "session-message-platform-send",
+      metadata: options.eventMetadata ?? {},
+    },
+    { text: "How is the moon?" },
+  );
+  harness.contextServices.messageReceivedEvent = event;
+  try {
+    return await dispatchEvent({
+      definition: messageReceivedEvent,
+      event,
+      eventBus: harness.eventBus,
+      engine: harness.engine,
+      workflow: createMessageWorkflow(),
+      context: harness.context(event),
+    });
+  } finally {
+    harness.database.close();
+  }
 }
 
 function message(
@@ -94,6 +134,40 @@ function observeApprovedLifecycle(eventBus: EventBus): string[] {
 }
 
 describe("message workflow", () => {
+  it("sends persisted assistant replies through the configured platform sender", async () => {
+    const sent: Array<{ target: PlatformMessageTarget; text: string }> = [];
+    const platformReplySender: PlatformReplySender = {
+      async sendTextReply(target, text): Promise<PlatformDeliveryReceipt> {
+        sent.push({ target, text });
+        return {
+          ok: true,
+          adapterId: "napcat.qq.main",
+          platform: "qq",
+          target,
+          platformMessageId: "sent-1",
+        };
+      },
+    };
+
+    const result = await runMessageWorkflowForTest({
+      eventMetadata: {
+        target: { kind: "private", userId: "112233" },
+      },
+      services: { platformReplySender },
+    });
+
+    expect(sent).toEqual([
+      {
+        target: { kind: "private", userId: "112233" },
+        text: "It is a lovely night for watching the moon.",
+      },
+    ]);
+    expect(result?.outputs["send-reply"]).toMatchObject({
+      ok: true,
+      platformMessageId: "sent-1",
+    });
+  });
+
   it("rejects malformed envelopes before writing a message or LLM trace", async () => {
     const harness = createHarness([{ shouldReply: false }]);
     const sessionId = "session-malformed-message";
@@ -156,6 +230,8 @@ describe("message workflow", () => {
         "compile-reply",
         "generate-reply",
         "persist-reply",
+        "prepare-send-reply",
+        "send-reply",
       ]);
       const messages = harness.database.messages
         .listRecent(sessionId, 10)

@@ -1,3 +1,9 @@
+import { fileURLToPath } from "node:url";
+
+const defaultDatabasePath = fileURLToPath(
+  new URL("../../../.data/kaguya-api.sqlite", import.meta.url),
+);
+
 export interface ApiGatewayConfig {
   host: string;
   port: number;
@@ -6,6 +12,7 @@ export interface ApiGatewayConfig {
   trustProxy: false | string[];
   rateLimitMax: number;
   rateLimitWindowMs: number;
+  databasePath: string;
 }
 
 export function readApiGatewayConfig(
@@ -48,6 +55,8 @@ export function readApiGatewayConfig(
       1_000,
       3_600_000,
     ),
+    databasePath:
+      environment.KAGUYA_API_DATABASE_PATH?.trim() || defaultDatabasePath,
   };
 }
 
