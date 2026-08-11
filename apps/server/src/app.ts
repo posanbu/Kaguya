@@ -4,14 +4,17 @@ import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import swagger from "@fastify/swagger";
 import { runWithLogContext } from "@kaguya/logger";
+import type { RuntimeWebMessage } from "@kaguya/runtime";
 import { z } from "@kaguya/schema";
 import Fastify, {
+  LogController,
   type FastifyBaseLogger,
   type FastifyInstance,
+  type FastifyReply,
   type FastifyRequest,
 } from "fastify";
 
-import type { ApiGatewayConfig } from "./config.js";
+import type { ServerConfig } from "./config.js";
 
 const MAX_SESSION_ID_LENGTH = 256;
 const MAX_MESSAGE_TEXT_LENGTH = 131_072;
@@ -87,24 +90,18 @@ const errorResponseJsonSchema = {
   },
 } as const;
 
-export interface MessageIngressCommand {
-  readonly sessionId: string;
-  readonly text: string;
-  readonly requestId: string;
-}
-
-export interface MessageIngress {
-  enqueue(command: MessageIngressCommand): Promise<void>;
-}
-
-export interface CreateApiGatewayOptions {
-  config: ApiGatewayConfig;
-  messageIngress?: MessageIngress;
+export interface CreateHttpApplicationOptions {
+  config: ServerConfig;
+  runtime?: RuntimeDispatcher;
   logger?: FastifyBaseLogger;
 }
 
-export async function createApiGateway(
-  options: CreateApiGatewayOptions,
+export interface RuntimeDispatcher {
+  dispatch(message: RuntimeWebMessage): Promise<unknown>;
+}
+
+export async function createHttpApplication(
+  options: CreateHttpApplicationOptions,
 ): Promise<FastifyInstance> {
   const app = Fastify({
     ...(options.logger === undefined
@@ -112,6 +109,7 @@ export async function createApiGateway(
       : { loggerInstance: options.logger }),
     bodyLimit: 256 * 1024,
     requestIdHeader: false,
+    logController: new LogController({ disableRequestLogging: true }),
     genReqId: (request) =>
       validRequestId(request.headers["x-request-id"]) ?? randomUUID(),
     trustProxy: options.config.trustProxy,
@@ -199,7 +197,7 @@ export async function createApiGateway(
       },
       schema: {
         tags: ["Messages"],
-        summary: "Validate and hand off a message to the core",
+        summary: "Validate and dispatch a message to Kaguya Runtime",
         security: [{ bearerAuth: [] }],
         body: messageBodyJsonSchema,
         response: {
@@ -216,8 +214,8 @@ export async function createApiGateway(
     },
     async (request, reply) => {
       const parsed = messageRequestSchema.parse(request.body);
-      const messageIngress = options.messageIngress;
-      if (messageIngress === undefined) {
+      const runtime = options.runtime;
+      if (runtime === undefined) {
         throw new ApiGatewayError(
           "core_unavailable",
           "Core message ingress is not configured",
@@ -226,14 +224,15 @@ export async function createApiGateway(
       }
 
       return runWithLogContext({ sessionId: parsed.sessionId }, async () => {
-        await messageIngress.enqueue({
+        await runtime.dispatch({
+          kind: "web",
           sessionId: parsed.sessionId,
           text: parsed.text,
           requestId: request.id,
         });
         request.log.info(
-          { event: "gateway.message.accepted" },
-          "Message accepted by core ingress",
+          { event: "http.message.accepted" },
+          "Message accepted by Kaguya Runtime",
         );
         return reply.code(202).send({
           data: {
@@ -245,9 +244,14 @@ export async function createApiGateway(
     },
   );
 
-  app.setNotFoundHandler(async (request, reply) =>
-    reply.code(404).send(errorBody("not_found", "Route not found", request.id)),
-  );
+  app.setNotFoundHandler(async (request, reply) => {
+    if (canServeSpaFallback(request, reply)) {
+      return reply.sendFile("index.html");
+    }
+    return reply
+      .code(404)
+      .send(errorBody("not_found", "Route not found", request.id));
+  });
 
   app.setErrorHandler(async (error, request, reply) => {
     if (
@@ -283,13 +287,31 @@ export async function createApiGateway(
         );
     }
 
-    request.log.error({ err: error }, "Unhandled API gateway error");
+    request.log.error(
+      { event: "http.request.failed", err: error },
+      "Unhandled Kaguya HTTP error",
+    );
     return reply
       .code(500)
       .send(errorBody("internal_error", "Internal server error", request.id));
   });
 
   return app;
+}
+
+function canServeSpaFallback(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): reply is FastifyReply & { sendFile(path: string): FastifyReply } {
+  const path = request.url.split(/[?#]/u, 1)[0] ?? "";
+  return (
+    request.method === "GET" &&
+    request.headers.accept?.includes("text/html") === true &&
+    path !== "/healthz" &&
+    !path.startsWith("/api/") &&
+    "sendFile" in reply &&
+    typeof reply.sendFile === "function"
+  );
 }
 
 class ApiGatewayError extends Error {

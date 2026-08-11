@@ -1,21 +1,25 @@
 {
-  "name": "@kaguya/bot",
+  "name": "@kaguya/runtime",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
   "scripts": {
     "build": "tsc -b",
-    "typecheck": "tsc -b --pretty false",
-    "start": "node dist/server.js",
-    "dev": "pnpm --filter @kaguya/bot... build && tsx src/server.ts"
+    "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
     "@kaguya/database": "workspace:*",
-    "@kaguya/demo": "workspace:*",
     "@kaguya/engine": "workspace:*",
     "@kaguya/llm": "workspace:*",
     "@kaguya/logger": "workspace:*",
     "@kaguya/platform-adapters": "workspace:*",
     "@kaguya/prompt": "workspace:*",
+    "@kaguya/schema": "workspace:*",
     "@kaguya/sdk": "workspace:*"
   }
 }

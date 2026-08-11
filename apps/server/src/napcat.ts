@@ -1,5 +1,3 @@
-import { pathToFileURL } from "node:url";
-
 import {
   NapCatActionClient,
   NapCatOneBotAdapter,
@@ -8,16 +6,10 @@ import {
   type PlatformMessageTarget,
   type PlatformReplySender,
 } from "@kaguya/platform-adapters";
-import {
-  closeLogger,
-  createLogger,
-  createModuleLogger,
-  readLoggerOptions,
-  type KaguyaLogger,
-} from "@kaguya/logger";
+import type { KaguyaLogger } from "@kaguya/logger";
+import type { KaguyaRuntime } from "@kaguya/runtime";
 
-import { readBotConfig } from "./config.js";
-import { PlatformDispatcher } from "./dispatcher.js";
+import type { NapCatConfig } from "./config.js";
 
 export class WebSocketJsonTransport implements JsonMessageTransport {
   private messageHandler: ((message: unknown) => void) | undefined;
@@ -39,9 +31,7 @@ export class WebSocketJsonTransport implements JsonMessageTransport {
       }
       this.messageHandler?.(message);
     });
-    this.socket.addEventListener("close", () => {
-      this.notifyClose();
-    });
+    this.socket.addEventListener("close", () => this.notifyClose());
     this.socket.addEventListener("error", () => {
       this.notifyClose(new Error("NapCat WebSocket error"));
     });
@@ -85,6 +75,9 @@ export interface NapCatConnectionSupervisorOptions {
   readonly adapterId: string;
   readonly reconnectMs: number;
   readonly createConnection: () => NapCatConnection;
+  readonly onConnected?: () => void;
+  readonly onDisconnected?: (error?: Error) => void;
+  readonly onReconnectScheduled?: (delayMs: number) => void;
   readonly onConnectionError?: (error: unknown) => void;
 }
 
@@ -110,7 +103,6 @@ export class NapCatConnectionSupervisor implements PlatformReplySender {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
     }
-
     const connection = this.connection;
     this.connection = undefined;
     if (connection !== undefined) {
@@ -141,7 +133,6 @@ export class NapCatConnectionSupervisor implements PlatformReplySender {
     if (this.stopping) {
       return;
     }
-
     let connection: NapCatConnection | undefined;
     try {
       const createdConnection = this.options.createConnection();
@@ -151,6 +142,7 @@ export class NapCatConnectionSupervisor implements PlatformReplySender {
         this.handleDisconnect(createdConnection, error);
       });
       await createdConnection.adapter.start();
+      this.options.onConnected?.();
       if (this.stopping || this.connection !== createdConnection) {
         if (this.connection === createdConnection) {
           this.connection = undefined;
@@ -173,6 +165,7 @@ export class NapCatConnectionSupervisor implements PlatformReplySender {
     }
     this.connection = undefined;
     void this.retire(connection);
+    this.options.onDisconnected?.(error);
     if (error !== undefined) {
       this.reportConnectionError(error);
     }
@@ -186,12 +179,8 @@ export class NapCatConnectionSupervisor implements PlatformReplySender {
     }
     const retirement = connection.adapter
       .stop()
-      .catch((error: unknown) => {
-        this.reportConnectionError(error);
-      })
-      .finally(() => {
-        this.retirements.delete(connection);
-      });
+      .catch((error: unknown) => this.reportConnectionError(error))
+      .finally(() => this.retirements.delete(connection));
     this.retirements.set(connection, retirement);
     return retirement;
   }
@@ -200,6 +189,7 @@ export class NapCatConnectionSupervisor implements PlatformReplySender {
     if (this.stopping || this.reconnectTimer !== undefined) {
       return;
     }
+    this.options.onReconnectScheduled?.(this.options.reconnectMs);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
       void this.connect();
@@ -210,95 +200,101 @@ export class NapCatConnectionSupervisor implements PlatformReplySender {
     try {
       this.options.onConnectionError?.(error);
     } catch {
-      // Runtime diagnostics must not interrupt reconnect or shutdown.
+      // Diagnostics must not interrupt reconnect or shutdown.
     }
   }
 }
 
-export async function startBot(): Promise<void> {
-  const config = readBotConfig();
-  const rootLogger = createLogger(readLoggerOptions("kaguya-bot"));
-  const logger = createModuleLogger(rootLogger, "bot");
-
-  if (!config.napcat.enabled) {
-    const dispatcher = PlatformDispatcher.createForDeterministicModel({
-      databasePath: config.databasePath,
-      logger,
-    });
-    let closePromise: Promise<void> | undefined;
-    const close = () => {
-      closePromise ??= (async () => {
-        dispatcher.close();
-        await closeLogger(rootLogger);
-      })();
-      return closePromise;
-    };
-    registerShutdownHandlers(close, logger);
-    return;
-  }
-
-  let dispatcher: PlatformDispatcher;
-  const supervisor = new NapCatConnectionSupervisor({
-    adapterId: config.napcat.adapterId,
-    reconnectMs: config.napcat.reconnectMs,
+export function createNapCatSupervisor(options: {
+  readonly config: NapCatConfig;
+  readonly runtime: KaguyaRuntime;
+  readonly logger: KaguyaLogger;
+}): NapCatConnectionSupervisor {
+  let supervisor: NapCatConnectionSupervisor;
+  supervisor = new NapCatConnectionSupervisor({
+    adapterId: options.config.adapterId,
+    reconnectMs: options.config.reconnectMs,
     createConnection: () => {
       const transport = new WebSocketJsonTransport(
-        config.napcat.wsUrl ?? "",
-        config.napcat.accessToken,
+        options.config.wsUrl ?? "",
+        options.config.accessToken,
       );
       const actionClient = new NapCatActionClient({
-        adapterId: config.napcat.adapterId,
+        adapterId: options.config.adapterId,
         transport,
         nextEcho: createEchoFactory(),
         timeoutMs: 30_000,
       });
       const adapter = new NapCatOneBotAdapter({
-        adapterId: config.napcat.adapterId,
-        ...(config.napcat.selfId === undefined
+        adapterId: options.config.adapterId,
+        ...(options.config.selfId === undefined
           ? {}
-          : { expectedSelfId: config.napcat.selfId }),
+          : { expectedSelfId: options.config.selfId }),
         transport,
         now: () => new Date(),
         onInboundMessage: (message) =>
-          dispatcher.dispatchInboundMessage(message),
+          options.runtime
+            .dispatch({
+              kind: "platform",
+              message,
+              replySender: supervisor,
+            })
+            .then(() => undefined),
         onInboundError: (error, context) => {
-          logger.error(
+          options.logger.error(
             {
-              event: "platform.inbound.dispatch.failed",
+              event: "napcat.inbound.failed",
               traceId: context.traceId,
               adapterId: context.adapterId,
               err: error,
             },
-            "Inbound platform dispatch failed",
+            "NapCat inbound dispatch failed",
           );
         },
       });
       return { transport, sender: actionClient, adapter };
     },
+    onConnected: () => {
+      options.logger.info(
+        {
+          event: "napcat.connection.connected",
+          adapterId: options.config.adapterId,
+        },
+        "NapCat connection established",
+      );
+    },
+    onDisconnected: (error) => {
+      options.logger.warn(
+        {
+          event: "napcat.connection.disconnected",
+          adapterId: options.config.adapterId,
+          ...(error === undefined ? {} : { err: error }),
+        },
+        "NapCat connection closed",
+      );
+    },
+    onReconnectScheduled: (delayMs) => {
+      options.logger.info(
+        {
+          event: "napcat.reconnect.scheduled",
+          adapterId: options.config.adapterId,
+          delayMs,
+        },
+        "NapCat reconnect scheduled",
+      );
+    },
     onConnectionError: (error) => {
-      logger.warn(
-        { event: "platform.connection.failed", err: error },
+      options.logger.warn(
+        {
+          event: "napcat.connection.failed",
+          adapterId: options.config.adapterId,
+          err: error,
+        },
         "NapCat connection failed",
       );
     },
   });
-  dispatcher = PlatformDispatcher.createForDeterministicModel({
-    databasePath: config.databasePath,
-    logger,
-    platformReplySender: supervisor,
-  });
-  await supervisor.start();
-
-  let closePromise: Promise<void> | undefined;
-  const close = async () => {
-    closePromise ??= (async () => {
-      await supervisor.stop();
-      dispatcher.close();
-      await closeLogger(rootLogger);
-    })();
-    await closePromise;
-  };
-  registerShutdownHandlers(close, logger);
+  return supervisor;
 }
 
 function withAccessToken(url: string, accessToken?: string): string {
@@ -313,28 +309,4 @@ function withAccessToken(url: string, accessToken?: string): string {
 function createEchoFactory(): () => string {
   let sequence = 0;
   return () => `napcat-${Date.now()}-${++sequence}`;
-}
-
-function registerShutdownHandlers(
-  close: () => Promise<void>,
-  logger: KaguyaLogger,
-): void {
-  const shutdown = () => {
-    void close().catch((error: unknown) => {
-      process.exitCode = 1;
-      logger.fatal(
-        { event: "bot.shutdown.failed", err: error },
-        "Bot shutdown failed",
-      );
-    });
-  };
-  process.once("SIGINT", shutdown);
-  process.once("SIGTERM", shutdown);
-}
-
-if (process.argv[1] !== undefined) {
-  const entrypointUrl = pathToFileURL(process.argv[1]).href;
-  if (import.meta.url === entrypointUrl) {
-    await startBot();
-  }
 }

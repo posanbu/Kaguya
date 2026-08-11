@@ -10,11 +10,11 @@ import {
   type LogContext,
 } from "@kaguya/logger";
 
-import { createApiGateway, type MessageIngress } from "./app.js";
-import type { ApiGatewayConfig } from "./config.js";
+import { createHttpApplication } from "./app.js";
+import type { ServerConfig } from "./config.js";
 
 const gatewayToken = "test-gateway-token-12345";
-const config: ApiGatewayConfig = {
+const config: ServerConfig = {
   host: "127.0.0.1",
   port: 3000,
   gatewayToken,
@@ -23,6 +23,13 @@ const config: ApiGatewayConfig = {
   rateLimitMax: 30,
   rateLimitWindowMs: 60_000,
   databasePath: "/tmp/kaguya-api-test.sqlite",
+  development: false,
+  webDistPath: "/tmp/kaguya-web-test",
+  napcat: {
+    enabled: false,
+    adapterId: "napcat.qq.main",
+    reconnectMs: 3000,
+  },
 };
 const requestBody = { sessionId: "session-1", text: "Hello" };
 
@@ -332,7 +339,7 @@ describe("application API gateway", () => {
     await closeLogger(rootLogger);
     const logs = stream.logs();
     expect(
-      logs.find((entry) => entry.event === "gateway.message.accepted"),
+      logs.find((entry) => entry.event === "http.message.accepted"),
     ).toMatchObject({
       service: "kaguya-api-test",
       module: "api",
@@ -565,6 +572,42 @@ describe("application API gateway", () => {
 
 function fakeIngress(): MessageIngress {
   return { enqueue: () => Promise.resolve() };
+}
+
+interface MessageIngress {
+  enqueue(command: {
+    sessionId: string;
+    text: string;
+    requestId: string;
+  }): Promise<void>;
+}
+
+function createApiGateway(options: {
+  config: ServerConfig;
+  messageIngress?: MessageIngress;
+  logger?: Parameters<typeof createHttpApplication>[0]["logger"];
+}) {
+  const runtime =
+    options.messageIngress === undefined
+      ? undefined
+      : {
+          dispatch(message: {
+            kind: "web";
+            sessionId: string;
+            text: string;
+            requestId: string;
+          }) {
+            const { kind: _kind, ...command } = message;
+            return (
+              options.messageIngress?.enqueue(command) ?? Promise.resolve()
+            );
+          },
+        };
+  return createHttpApplication({
+    config: options.config,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
+    ...(runtime === undefined ? {} : { runtime }),
+  });
 }
 
 function injectFrom(

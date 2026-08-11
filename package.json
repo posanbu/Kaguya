@@ -9,19 +9,15 @@
   },
   "scripts": {
     "build": "tsc -b && pnpm --filter @kaguya/web build",
+    "dev": "pnpm --filter @kaguya/server dev",
+    "start": "pnpm --filter @kaguya/server start",
     "typecheck": "tsc -b --pretty false && pnpm --filter @kaguya/web typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
     "prompt:test": "cross-env PROMPTFOO_DISABLE_TELEMETRY=1 PROMPTFOO_DISABLE_UPDATE=1 HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9 ALL_PROXY=http://127.0.0.1:9 NO_PROXY= https_proxy=http://127.0.0.1:9 http_proxy=http://127.0.0.1:9 all_proxy=http://127.0.0.1:9 no_proxy= promptfoo eval --no-cache",
-    "api": "pnpm --filter @kaguya/api start",
-    "api:dev": "pnpm --filter @kaguya/api dev",
-    "web": "pnpm --filter @kaguya/web dev",
-    "web:build": "pnpm --filter @kaguya/web build",
-    "demo": "pnpm --filter @kaguya/demo start",
-    "bot": "pnpm --filter @kaguya/bot start",
-    "bot:dev": "pnpm --filter @kaguya/bot dev"
+    "demo": "pnpm --filter @kaguya/demo start"
   },
   "devDependencies": {
     "@types/node": "24.13.3",

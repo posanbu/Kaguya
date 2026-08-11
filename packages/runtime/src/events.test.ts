@@ -7,6 +7,7 @@ const approvedEventTypes = [
   "message.persisted",
   "heartbeat.tick",
   "memory.schedule.tick",
+  "memory.session.tick",
   "route.requested",
   "route.decided",
   "prompt.compiled",
@@ -18,7 +19,7 @@ const approvedEventTypes = [
   "reply.generated",
 ] as const;
 
-describe("demo event catalog", () => {
+describe("runtime event catalog", () => {
   it("exports every approved concrete event as an EventDefinition", () => {
     const catalog = (
       events as unknown as {

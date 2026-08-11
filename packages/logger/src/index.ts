@@ -7,6 +7,7 @@ import pino, {
   type Logger,
   type LoggerOptions,
 } from "pino";
+import pinoPretty from "pino-pretty";
 
 const MAX_CONTEXT_VALUE_LENGTH = 512;
 const MAX_NAMESPACE_LENGTH = 128;
@@ -41,6 +42,8 @@ export const DEFAULT_REDACT_PATHS = Object.freeze([
   "*.token",
   "accessToken",
   "*.accessToken",
+  "access_token",
+  "*.access_token",
   "refreshToken",
   "*.refreshToken",
   "password",
@@ -61,6 +64,14 @@ export const DEFAULT_REDACT_PATHS = Object.freeze([
   "*.text",
   "body",
   "*.body",
+  "credentials",
+  "*.credentials",
+  "raw",
+  "*.raw",
+  "target",
+  "*.target",
+  "wsUrl",
+  "*.wsUrl",
   "headers.authorization",
   "req.headers.authorization",
   "request.headers.authorization",
@@ -68,6 +79,7 @@ export const DEFAULT_REDACT_PATHS = Object.freeze([
 
 export type KaguyaLogger = Logger;
 export type LogLevel = LevelWithSilent;
+export type LogFormat = "json" | "pretty";
 
 export interface LogContext {
   readonly traceId?: string;
@@ -85,6 +97,7 @@ export interface CreateLoggerOptions {
   readonly level?: LogLevel;
   readonly namespaceLevels?: Readonly<Record<string, LogLevel>>;
   readonly async?: boolean;
+  readonly format?: LogFormat;
   readonly destination?: string | number;
   readonly stream?: DestinationStream;
   readonly base?: Bindings;
@@ -120,12 +133,7 @@ export function createLogger(options: CreateLoggerOptions): KaguyaLogger {
       : validNamespace(options.module, "module");
   const defaultLevel = validLevel(options.level ?? "info", "level");
   const namespaceLevels = normalizeNamespaceLevels(options.namespaceLevels);
-  if (options.stream !== undefined && options.async === true) {
-    throw new TypeError("stream and async logging cannot be enabled together");
-  }
-  if (options.stream !== undefined && options.destination !== undefined) {
-    throw new TypeError("stream and destination cannot be configured together");
-  }
+  validateOutputOptions(options);
 
   const output = createOutput(options);
   const loggerOptions: LoggerOptions = {
@@ -234,13 +242,19 @@ export function readLoggerOptions(
   service: string,
   environment: NodeJS.ProcessEnv = process.env,
 ): CreateLoggerOptions {
-  return {
+  const options: CreateLoggerOptions = {
     service: validNamespace(service, "service"),
     level: environmentLevel(environment.KAGUYA_LOG_LEVEL, "info"),
     namespaceLevels: parseNamespaceLevels(environment.KAGUYA_LOG_LEVELS),
     async: environmentBoolean(environment.KAGUYA_LOG_ASYNC, false),
+    format: environmentLogFormat(
+      environment.KAGUYA_LOG_FORMAT,
+      environment.NODE_ENV === "development" ? "pretty" : "json",
+    ),
     destination: environmentDestination(environment.KAGUYA_LOG_DESTINATION),
   };
+  validateOutputOptions(options);
+  return options;
 }
 
 export async function flushLogger(logger: KaguyaLogger): Promise<void> {
@@ -318,6 +332,26 @@ function createOutput(options: CreateLoggerOptions): {
   stream: DestinationStream;
   closeStream: boolean;
 } {
+  if (options.format === "pretty") {
+    const destination = options.destination ?? 1;
+    return {
+      stream: pinoPretty({
+        destination,
+        sync: true,
+        colorize:
+          destination === 1
+            ? process.stdout.isTTY
+            : destination === 2
+              ? process.stderr.isTTY
+              : false,
+        translateTime: "SYS:standard",
+        singleLine: true,
+        messageFormat: "{module} {event} {msg}",
+        ignore: "service,module,event,pid,hostname",
+      }),
+      closeStream: false,
+    };
+  }
   if (options.stream !== undefined) {
     return { stream: options.stream, closeStream: false };
   }
@@ -342,6 +376,42 @@ function createOutput(options: CreateLoggerOptions): {
     }),
     closeStream: destination !== 1 && destination !== 2,
   };
+}
+
+function validateOutputOptions(options: CreateLoggerOptions): void {
+  if (options.stream !== undefined && options.async === true) {
+    throw new TypeError("stream and async logging cannot be enabled together");
+  }
+  if (options.stream !== undefined && options.destination !== undefined) {
+    throw new TypeError("stream and destination cannot be configured together");
+  }
+  if (options.format !== "pretty") {
+    return;
+  }
+  if (options.async === true) {
+    throw new TypeError("pretty logging cannot be asynchronous");
+  }
+  if (options.stream !== undefined) {
+    throw new TypeError("pretty logging only supports stdout or stderr");
+  }
+  const destination = options.destination ?? 1;
+  if (destination !== 1 && destination !== 2) {
+    throw new TypeError("pretty logging only supports stdout or stderr");
+  }
+}
+
+function environmentLogFormat(
+  value: string | undefined,
+  fallback: LogFormat,
+): LogFormat {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) {
+    return fallback;
+  }
+  if (normalized === "json" || normalized === "pretty") {
+    return normalized;
+  }
+  throw new TypeError("KAGUYA_LOG_FORMAT must be json or pretty");
 }
 
 function normalizeContext(context: LogContext): LogContext {

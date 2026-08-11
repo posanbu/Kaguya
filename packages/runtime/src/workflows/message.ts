@@ -107,8 +107,9 @@ const decideRouteNode = defineNode<CompiledPrompt, RouteOutput>({
 const prepareSendReplyNode = defineNode<MessageRecord, SendReplyInput>({
   id: "prepare-send-reply",
   async run(reply, context) {
-    const originalEvent = context.services.messageReceivedEvent;
-    const event = eventEnvelopeSchema.parse(originalEvent);
+    const event = eventEnvelopeSchema.parse(
+      context.services.messageReceivedEvent,
+    );
     return {
       event: { ...event, sessionId: requiredSessionId(context) },
       reply,

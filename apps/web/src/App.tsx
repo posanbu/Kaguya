@@ -16,9 +16,6 @@ import {
   sendMessage,
 } from "./api.js";
 
-const DEFAULT_GATEWAY_URL =
-  import.meta.env.VITE_KAGUYA_API_URL ?? "http://127.0.0.1:3000";
-const GATEWAY_URL_KEY = "kaguya.gatewayUrl";
 const SESSION_ID_KEY = "kaguya.sessionId";
 const TOKEN_KEY = "kaguya.gatewayToken";
 
@@ -35,9 +32,6 @@ interface ChatMessage {
 }
 
 export function App() {
-  const [gatewayUrl, setGatewayUrl] = useState(() =>
-    readStorage(localStorage, GATEWAY_URL_KEY, DEFAULT_GATEWAY_URL),
-  );
   const [sessionId, setSessionId] = useState(() =>
     readStorage(localStorage, SESSION_ID_KEY, createSessionId()),
   );
@@ -57,7 +51,6 @@ export function App() {
     !isSending && draft.trim().length > 0 && draftLength <= MAX_MESSAGE_LENGTH;
 
   const persistConnection = () => {
-    localStorage.setItem(GATEWAY_URL_KEY, gatewayUrl.trim());
     localStorage.setItem(SESSION_ID_KEY, sessionId.trim());
     sessionStorage.setItem(TOKEN_KEY, token);
   };
@@ -67,7 +60,7 @@ export function App() {
     setFormError(undefined);
     persistConnection();
     try {
-      await checkGatewayHealth(gatewayUrl);
+      await checkGatewayHealth();
       setHealthState("online");
     } catch (error) {
       setHealthState("offline");
@@ -95,10 +88,7 @@ export function App() {
     setDraft("");
 
     try {
-      const response = await sendMessage(
-        { baseUrl: gatewayUrl, token },
-        { sessionId, text },
-      );
+      const response = await sendMessage({ token }, { sessionId, text });
       setMessages((current) =>
         current.map((message) =>
           message.id === id
@@ -142,7 +132,7 @@ export function App() {
         </div>
         <div>
           <h1>Kaguya</h1>
-          <p>应用消息网关</p>
+          <p>统一消息服务</p>
         </div>
       </header>
 
@@ -151,14 +141,14 @@ export function App() {
           <div className="panel-heading">
             <div>
               <p className="eyebrow">连接配置</p>
-              <h2 id="connection-title">API 网关</h2>
+              <h2 id="connection-title">Kaguya 服务</h2>
             </div>
             <button
               type="button"
               className={`health-button ${healthState}`}
               onClick={() => void checkConnection()}
               disabled={healthState === "checking"}
-              title="检测 API 网关连接"
+              title="检测 Kaguya 服务连接"
             >
               <RefreshCw
                 className={healthState === "checking" ? "spin" : undefined}
@@ -169,18 +159,6 @@ export function App() {
           </div>
 
           <label className="field">
-            <span>网关地址</span>
-            <input
-              type="url"
-              value={gatewayUrl}
-              onChange={(event) => setGatewayUrl(event.target.value)}
-              onBlur={persistConnection}
-              placeholder="http://127.0.0.1:3000"
-              autoComplete="url"
-            />
-          </label>
-
-          <label className="field">
             <span>Bearer Token</span>
             <div className="password-field">
               <input
@@ -188,7 +166,7 @@ export function App() {
                 value={token}
                 onChange={(event) => setToken(event.target.value)}
                 onBlur={persistConnection}
-                placeholder="输入网关令牌"
+                placeholder="输入服务令牌"
                 autoComplete="current-password"
               />
               <button
@@ -217,7 +195,7 @@ export function App() {
           </label>
 
           <div className="boundary-note">
-            <p>当前网关仅接收消息。</p>
+            <p>当前服务仅接受消息。</p>
             <span>模型配置和回复由核心层管理。</span>
           </div>
         </aside>
@@ -311,7 +289,7 @@ function DeliveryStatus({ message }: { message: ChatMessage }) {
     return (
       <p className="delivery-status accepted" title={message.requestId}>
         <CheckCircle2 size={15} />
-        网关已接收
+        服务已接收
         <code>{shortRequestId(message.requestId)}</code>
       </p>
     );
@@ -330,7 +308,7 @@ function errorMessage(error: unknown): string {
       return "核心消息入口尚未接入";
     }
     if (error.code === "unauthorized") {
-      return "网关令牌无效";
+      return "服务令牌无效";
     }
     if (error.code === "rate_limited") {
       return "请求过于频繁，请稍后再试";
@@ -345,7 +323,7 @@ function healthLabel(state: HealthState): string {
     return "检测中";
   }
   if (state === "online") {
-    return "网关可用";
+    return "服务可用";
   }
   if (state === "offline") {
     return "连接失败";

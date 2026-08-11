@@ -24,6 +24,10 @@ export interface KaguyaLlmRequest {
   nodeId: string;
 }
 
+export interface KaguyaLlmGenerateRequest extends KaguyaLlmRequest {
+  traceRecordId: string;
+}
+
 export interface LlmTraceWriter {
   write(trace: LlmTrace): Promise<void>;
 }
@@ -56,34 +60,47 @@ export class TracePersistenceError extends Error {
   }
 }
 
-export interface KaguyaLlmClientOptions {
-  model: LanguageModel;
+interface KaguyaLlmClientBaseOptions {
   traceWriter: LlmTraceWriter;
   now: () => Date;
-  nextId: (prefix: string) => string;
 }
+
+export type KaguyaLlmModelResolver = (
+  request: KaguyaLlmRequest,
+) => LanguageModel;
+
+export type KaguyaLlmClientOptions = KaguyaLlmClientBaseOptions &
+  (
+    | {
+        model: LanguageModel;
+        resolveModel?: never;
+      }
+    | {
+        model?: never;
+        resolveModel: KaguyaLlmModelResolver;
+      }
+  );
 
 /**
  * The workflow-facing LLM boundary. Provider SDKs create a Vercel AI SDK
  * LanguageModel; this client owns generation, output validation, and tracing.
  */
 export class KaguyaLlmClient {
-  readonly #model: LanguageModel;
+  readonly #resolveModel: (request: KaguyaLlmRequest) => LanguageModel;
   readonly #traceWriter: LlmTraceWriter;
   readonly #now: () => Date;
-  readonly #nextId: (prefix: string) => string;
 
   constructor(options: KaguyaLlmClientOptions) {
-    this.#model = options.model;
+    this.#resolveModel =
+      options.resolveModel ?? (() => options.model as LanguageModel);
     this.#traceWriter = options.traceWriter;
     this.#now = options.now;
-    this.#nextId = options.nextId;
   }
 
   async generate<K extends KaguyaLlmRequest["kind"]>(
-    request: KaguyaLlmRequest & { kind: K },
+    request: KaguyaLlmGenerateRequest & { kind: K },
   ): Promise<KaguyaLlmOutputByKind[K]> {
-    const id = this.#nextId("llm-trace");
+    const id = request.traceRecordId;
     const startedAt = this.#now();
     let response: KaguyaLlmOutputByKind[K] | undefined;
     let usage: Record<string, unknown> | undefined;
@@ -91,7 +108,7 @@ export class KaguyaLlmClient {
 
     try {
       const result = await generateText({
-        model: this.#model,
+        model: this.#resolveModel(request),
         prompt: request.prompt.text,
       });
 

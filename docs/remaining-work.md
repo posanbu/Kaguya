@@ -28,8 +28,9 @@
 - `@kaguya/prompt`：稳定的多片段 Prompt 编译、转义和 provenance；
 - `@kaguya/llm`：统一模型边界、结构化输出校验、错误归一化和 trace；
 - `@kaguya/database`：SQLite 迁移和 messages、memories、event runs、LLM traces repositories；
-- `apps/api`：Bearer 认证、严格消息校验、限流、OpenAPI 和可注入的 `MessageIngress` 核心入站 port；
-- `apps/demo`：消息、心跳和定时记忆三条确定性工作流；
+- `@kaguya/runtime`：共享数据库、EventBus、WorkflowEngine、PromptCompiler、LLM client，以及并发安全的 Web/NapCat message dispatch；
+- `apps/server`：单进程提供 Web UI、Bearer 认证、严格消息校验、限流、OpenAPI 和可选 NapCat supervisor；
+- `apps/demo`：显式运行消息、心跳和定时记忆三条确定性工作流；
 - `promptfoo`：route、reply、state、memory 的离线 Prompt 结构回归。
 
 这些能力是后续实现应继续使用的基础，但不代表生产集成已经存在。尤其不要绕开现有的事件校验、`traceId/sessionId` 绑定、Prompt provenance、LLM 输出校验和运行记录，另写一套不兼容的入口。
@@ -105,7 +106,7 @@ demo 已经展示消息、心跳和定时记忆的流转方式，但 persona、p
 
 **当前基础**
 
-`apps/api` 能认证并校验 `sessionId/text`，再把 `{ sessionId, text, requestId }` 交给 `MessageIngress`；开发启动入口已经注入本地确定性 ingress，可将 Web UI 消息送入 message workflow 并写入 SQLite。生产 core dispatcher、持久队列和 consumer 仍未实现。`apps/demo` 能构造 `message.received` 并通过 `dispatchEvent` 进入工作流，但没有连接任何真实聊天平台，也没有真实发送出口。
+`apps/server` 已将 Web UI、HTTP API 和可选 NapCat WebSocket 收束到一个进程，并把 Web/标准化 NapCat 消息 dispatch 到同一个 `KaguyaRuntime`。平台消息携带 reply sender，可把确定性回复发回原 target；断线 supervisor 会重连且不影响 HTTP。尚未完成的是真实账号联调、平台权限与审核、幂等/持久队列、生产重试策略和真实模型装配。`apps/demo` 只显式验证 message、heartbeat、memory，不提供长期服务。
 
 **为什么必须人工参与**
 

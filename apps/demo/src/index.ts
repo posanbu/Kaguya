@@ -7,20 +7,17 @@ import { EventBus, WorkflowEngine } from "@kaguya/engine";
 import { KaguyaLlmClient } from "@kaguya/llm/client";
 import { createDeterministicModel } from "@kaguya/llm/testing";
 import { PromptCompiler } from "@kaguya/prompt";
-
-import { dispatchEvent } from "./dispatch.js";
 import {
-  heartbeatTickEvent,
-  memoryScheduleTickEvent,
-  messageReceivedEvent,
-} from "./events.js";
-import { LlmLifecycleClient } from "./llm-lifecycle.js";
-import type { WorkflowServices } from "./services.js";
-import {
+  LlmLifecycleClient,
   createHeartbeatWorkflow,
   createMemoryWorkflow,
   createMessageWorkflow,
-} from "./workflows.js";
+  dispatchEvent,
+  heartbeatTickEvent,
+  memoryScheduleTickEvent,
+  messageReceivedEvent,
+  type WorkflowServices,
+} from "@kaguya/runtime";
 
 const DEMO_TIME = "2026-07-23T12:00:00.000Z";
 const DEMO_SESSION_ID = "demo-session";
@@ -46,6 +43,17 @@ async function main(): Promise<void> {
       `${prefix}-${String(++sequence).padStart(4, "0")}`;
     const now = () => new Date(Date.parse(DEMO_TIME) + elapsedMs++);
     const eventBus = new EventBus();
+    const messageEvent = messageReceivedEvent.create(
+      {
+        id: "demo-message-event",
+        source: "demo",
+        occurredAt: DEMO_TIME,
+        traceId: DEMO_TRACE_IDS.message,
+        sessionId: DEMO_SESSION_ID,
+        metadata: { demo: true },
+      },
+      { text: "Is tonight good for watching the moon?" },
+    );
     const services: WorkflowServices = {
       database,
       promptCompiler: new PromptCompiler(),
@@ -64,25 +72,14 @@ async function main(): Promise<void> {
           ]),
           traceWriter: database.llmTraces,
           now,
-          nextId,
         }),
         eventBus,
       ),
       eventBus,
+      messageReceivedEvent: messageEvent,
     };
     const engine = new WorkflowEngine({ recorder: database.eventRuns });
 
-    const messageEvent = messageReceivedEvent.create(
-      {
-        id: "demo-message-event",
-        source: "demo",
-        occurredAt: DEMO_TIME,
-        traceId: DEMO_TRACE_IDS.message,
-        sessionId: DEMO_SESSION_ID,
-        metadata: { demo: true },
-      },
-      { text: "Is tonight good for watching the moon?" },
-    );
     const heartbeatEvent = heartbeatTickEvent.create(
       {
         id: "demo-heartbeat-event",
@@ -108,7 +105,6 @@ async function main(): Promise<void> {
       },
     );
 
-    services.messageReceivedEvent = messageEvent;
     await dispatchEvent({
       definition: messageReceivedEvent,
       event: messageEvent,

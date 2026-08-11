@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import { checkGatewayHealth, GatewayRequestError, sendMessage } from "./api.js";
 
 const config = {
-  baseUrl: "http://127.0.0.1:3000/",
   token: "test-gateway-token",
 };
 
@@ -25,17 +24,14 @@ describe("sendMessage", () => {
         request,
       ),
     ).resolves.toEqual({ status: "accepted", requestId: "request-1" });
-    expect(request).toHaveBeenCalledWith(
-      "http://127.0.0.1:3000/api/v1/messages",
-      {
-        method: "POST",
-        headers: {
-          authorization: "Bearer test-gateway-token",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ sessionId: "session-1", text: " Hello " }),
+    expect(request).toHaveBeenCalledWith("/api/v1/messages", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer test-gateway-token",
+        "content-type": "application/json",
       },
-    );
+      body: JSON.stringify({ sessionId: "session-1", text: " Hello " }),
+    });
   });
 
   it("surfaces the structured gateway error", async () => {
@@ -66,7 +62,7 @@ describe("sendMessage", () => {
 
     await expect(
       sendMessage(
-        { baseUrl: "http://127.0.0.1:3000", token: "" },
+        { token: "" },
         { sessionId: "session-1", text: "Hello" },
         request,
       ),
@@ -95,10 +91,8 @@ describe("checkGatewayHealth", () => {
       .fn<typeof fetch>()
       .mockResolvedValue(Response.json({ status: "ok" }));
 
-    await expect(
-      checkGatewayHealth("http://127.0.0.1:3000/", request),
-    ).resolves.toBeUndefined();
-    expect(request).toHaveBeenCalledWith("http://127.0.0.1:3000/healthz", {
+    await expect(checkGatewayHealth(request)).resolves.toBeUndefined();
+    expect(request).toHaveBeenCalledWith("/healthz", {
       method: "GET",
     });
   });
@@ -110,8 +104,9 @@ describe("checkGatewayHealth", () => {
         Response.json({ status: "starting" }, { status: 503 }),
       );
 
-    await expect(
-      checkGatewayHealth("http://127.0.0.1:3000", request),
-    ).rejects.toMatchObject({ code: "health_check_failed", status: 503 });
+    await expect(checkGatewayHealth(request)).rejects.toMatchObject({
+      code: "health_check_failed",
+      status: 503,
+    });
   });
 });

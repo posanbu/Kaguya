@@ -1,7 +1,6 @@
 export const MAX_MESSAGE_LENGTH = 131_072;
 
 export interface GatewayConfig {
-  readonly baseUrl: string;
   readonly token: string;
 }
 
@@ -16,23 +15,21 @@ export interface AcceptedMessage {
 }
 
 export async function checkGatewayHealth(
-  baseUrl: string,
   fetchImplementation: typeof fetch = fetch,
 ): Promise<void> {
-  const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
   let response: Response;
   try {
-    response = await fetchImplementation(`${normalizedBaseUrl}/healthz`, {
+    response = await fetchImplementation("/healthz", {
       method: "GET",
     });
   } catch {
-    throw new GatewayRequestError("无法连接到 API 网关", "network_error", 0);
+    throw new GatewayRequestError("无法连接到 Kaguya 服务", "network_error", 0);
   }
 
   const payload = await readJson(response);
   if (!response.ok || !isRecord(payload) || payload.status !== "ok") {
     throw new GatewayRequestError(
-      `网关健康检查失败（HTTP ${response.status}）`,
+      `服务健康检查失败（HTTP ${response.status}）`,
       "health_check_failed",
       response.status,
     );
@@ -68,12 +65,11 @@ export async function sendMessage(
   input: SendMessageInput,
   fetchImplementation: typeof fetch = fetch,
 ): Promise<AcceptedMessage> {
-  const baseUrl = normalizeBaseUrl(config.baseUrl);
   const token = config.token.trim();
   const sessionId = input.sessionId.trim();
 
   if (!token) {
-    throw new GatewayRequestError("请输入网关访问令牌", "missing_token", 0);
+    throw new GatewayRequestError("请输入服务访问令牌", "missing_token", 0);
   }
   if (!sessionId) {
     throw new GatewayRequestError("请输入会话 ID", "missing_session_id", 0);
@@ -83,7 +79,7 @@ export async function sendMessage(
   }
   if ([...input.text].length > MAX_MESSAGE_LENGTH) {
     throw new GatewayRequestError(
-      "消息超过网关允许的长度",
+      "消息超过服务允许的长度",
       "message_too_long",
       0,
     );
@@ -91,7 +87,7 @@ export async function sendMessage(
 
   let response: Response;
   try {
-    response = await fetchImplementation(`${baseUrl}/api/v1/messages`, {
+    response = await fetchImplementation("/api/v1/messages", {
       method: "POST",
       headers: {
         authorization: `Bearer ${token}`,
@@ -102,8 +98,8 @@ export async function sendMessage(
   } catch (error) {
     throw new GatewayRequestError(
       error instanceof Error && error.name === "AbortError"
-        ? "网关请求已取消"
-        : "无法连接到 API 网关",
+        ? "服务请求已取消"
+        : "无法连接到 Kaguya 服务",
       "network_error",
       0,
     );
@@ -113,7 +109,7 @@ export async function sendMessage(
   if (!response.ok) {
     const gatewayError = isErrorResponse(payload) ? payload.error : undefined;
     throw new GatewayRequestError(
-      gatewayError?.message ?? `网关请求失败（HTTP ${response.status}）`,
+      gatewayError?.message ?? `服务请求失败（HTTP ${response.status}）`,
       gatewayError?.code ?? "gateway_error",
       response.status,
       gatewayError?.requestId,
@@ -121,33 +117,12 @@ export async function sendMessage(
   }
   if (!isAcceptedMessageResponse(payload)) {
     throw new GatewayRequestError(
-      "网关返回了无法识别的响应",
+      "服务返回了无法识别的响应",
       "invalid_response",
       response.status,
     );
   }
   return payload.data;
-}
-
-function normalizeBaseUrl(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    throw new GatewayRequestError("请输入 API 网关地址", "missing_base_url", 0);
-  }
-
-  try {
-    const url = new URL(trimmed);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      throw new Error("unsupported protocol");
-    }
-    return url.toString().replace(/\/$/u, "");
-  } catch {
-    throw new GatewayRequestError(
-      "API 网关地址格式不正确",
-      "invalid_base_url",
-      0,
-    );
-  }
 }
 
 async function readJson(response: Response): Promise<unknown> {

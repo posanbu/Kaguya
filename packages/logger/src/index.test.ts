@@ -111,6 +111,11 @@ describe("Kaguya logger", () => {
     logger.error({
       event: "provider.failed",
       apiKey: "api-key-value",
+      access_token: "platform-token-value",
+      credentials: { password: "credential-value" },
+      raw: { targetId: "platform-target-value" },
+      delivery: { target: { kind: "private", userId: "direct-target-value" } },
+      wsUrl: "ws://localhost:3001?access_token=socket-secret",
       config: { token: "token-value", userPrompt: "private prompt" },
       err: providerError,
       req: {
@@ -127,6 +132,11 @@ describe("Kaguya logger", () => {
     expect(serialized).toContain("[REDACTED]");
     expect(serialized).not.toContain("api-key-value");
     expect(serialized).not.toContain("token-value");
+    expect(serialized).not.toContain("platform-token-value");
+    expect(serialized).not.toContain("credential-value");
+    expect(serialized).not.toContain("platform-target-value");
+    expect(serialized).not.toContain("direct-target-value");
+    expect(serialized).not.toContain("socket-secret");
     expect(serialized).not.toContain("private prompt");
     expect(serialized).not.toContain("provider-secret-response");
     expect(serialized).not.toContain("query-secret");
@@ -162,6 +172,7 @@ describe("Kaguya logger", () => {
         "engine:workflow": "debug",
       },
       async: true,
+      format: "json",
       destination: "./logs/api.jsonl",
     });
     expect(readLoggerOptions("kaguya-api", {})).toEqual({
@@ -169,8 +180,18 @@ describe("Kaguya logger", () => {
       level: "info",
       namespaceLevels: {},
       async: false,
+      format: "json",
       destination: 1,
     });
+    expect(
+      readLoggerOptions("kaguya", { NODE_ENV: "development" }),
+    ).toMatchObject({ format: "pretty", destination: 1, async: false });
+    expect(
+      readLoggerOptions("kaguya", {
+        NODE_ENV: "development",
+        KAGUYA_LOG_FORMAT: "json",
+      }),
+    ).toMatchObject({ format: "json" });
   });
 
   it("rejects malformed logger configuration and context", () => {
@@ -182,6 +203,21 @@ describe("Kaguya logger", () => {
         KAGUYA_LOG_LEVELS: "engine:workflow",
       }),
     ).toThrow("namespace=level");
+    expect(() =>
+      readLoggerOptions("kaguya", {
+        NODE_ENV: "development",
+        KAGUYA_LOG_ASYNC: "true",
+      }),
+    ).toThrow("pretty logging cannot be asynchronous");
+    expect(() =>
+      readLoggerOptions("kaguya", {
+        KAGUYA_LOG_FORMAT: "pretty",
+        KAGUYA_LOG_DESTINATION: "./logs/pretty.log",
+      }),
+    ).toThrow("pretty logging only supports stdout or stderr");
+    expect(() =>
+      readLoggerOptions("kaguya", { KAGUYA_LOG_FORMAT: "text" }),
+    ).toThrow("json or pretty");
     expect(() => runWithLogContext({ traceId: "" }, () => undefined)).toThrow(
       "traceId must be a non-empty string",
     );

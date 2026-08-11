@@ -301,7 +301,7 @@ export async function emitNodeEvent<TType extends string, TPayload>(
   const event = definition.create(
     {
       id: context.nextId("event"),
-      source: `demo-workflow/${nodeId}`,
+      source: `runtime-workflow/${nodeId}`,
       occurredAt: context.now().toISOString(),
       traceId: context.traceId,
       sessionId: requiredSessionId(context),

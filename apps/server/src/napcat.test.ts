@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   NapCatConnectionSupervisor,
   WebSocketJsonTransport,
-} from "./server.js";
+} from "./napcat.js";
 
 class FakeWebSocket {
   static latest: FakeWebSocket | undefined;

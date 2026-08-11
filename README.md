@@ -1,111 +1,103 @@
 # Kaguya
 
-Kaguya 是一个以事件和有向工作流为核心的 TypeScript AI Bot 基础设施原型。它把消息处理、短间隔心跳、定时记忆整理、Prompt 组装、LLM 调用和 SQLite 追踪拆成可替换的边界；当前仓库不包含社交平台适配器，Web UI 仅提供基础消息入口。
+Kaguya 是一个以事件和有向工作流为核心的 TypeScript AI Bot Runtime。仓库现在只有一个长期运行的应用入口：`apps/server` 在同一进程、同一端口上提供 Web UI、HTTP API 和可选 NapCat 连接，并通过唯一的 `@kaguya/runtime` 处理消息。
 
-当前实现包含：
+核心能力包括：
 
-- 统一的事件信封、Zod schema 与 SDK 定义；
-- 可拦截、可观察的事件总线和无环工作流引擎；
-- 手动、固定间隔与六字段 cron 触发器；
-- 带稳定排序和 SHA-256 来源摘要的 Prompt 编译器；
-- 基于 Vercel AI SDK 的独立 LLM client、结构化输出 schema、OpenAI-compatible provider adapter 与完整调用 trace；
-- 基于 Fastify 的消息参数校验与 ingress enqueue 网关、Bearer 认证、限流、CORS 与 OpenAPI；
-- 基于 Pino 的结构化日志、模块命名空间、异步链路上下文、默认脱敏与可选 worker 输出；
-- 基于 React 和 Vite 的初版 Web UI，支持网关配置、健康检查和消息提交状态；
-- SQLite 消息、记忆、节点运行和 LLM trace 仓储；
-- 多份敏感用户配置、显式初始化、会话/默认 profile 选择与 readiness 阻断；
-- 消息、心跳、定时记忆三条可执行示例工作流；
-- 不依赖远端模型或 API key 的确定性测试、demo 和 Promptfoo 回归测试；`prompt:test` 会阻断 CLI 外部出口。
+- `KaguyaRuntime` 统一持有 SQLite、EventBus、WorkflowEngine、PromptCompiler、LLM client 和工作流装配；
+- Web 与 NapCat 消息进入同一条 message workflow、同一数据库和同一会话历史；
+- Fastify 同端口提供 UI、`/healthz`、OpenAPI 和受 Bearer Token 保护的消息 API；
+- 开发环境由 Fastify 内挂 Vite middleware，HMR 不需要第二个 Web 服务；
+- NapCat 可选且独立重连，断线不会影响 HTTP 和 Web UI；
+- 开发默认 pretty 日志、生产默认 JSON，并统一关联 request、trace、event 和 workflow node；
+- heartbeat 与 memory 工作流仍保留，但只由 `pnpm demo` 显式运行，Server 不注册 scheduler。
 
 ## 快速开始
 
-需要 Node.js 24.18.0 和 pnpm 11.9.0。仓库同时提供 `.nvmrc` 与 `.node-version`。
+需要 Node.js 24.18.0 和 pnpm 11.9.0。
 
 ```bash
-nvm install
-nvm use
 corepack enable
-corepack install --global pnpm@11.9.0
 pnpm install
-pnpm test
-pnpm prompt:test
-pnpm demo
+export KAGUYA_GATEWAY_TOKEN="replace-with-at-least-16-characters"
+pnpm dev
 ```
 
-也可以使用 fnm：
+打开 `http://127.0.0.1:3000`。页面和 API 使用同源路径；浏览器只需要填写 Bearer Token 和会话 ID。
+
+生产运行：
 
 ```bash
-fnm install
-fnm use
+pnpm build
+export KAGUYA_GATEWAY_TOKEN="replace-with-at-least-16-characters"
+pnpm start
 ```
 
-`pnpm demo` 使用 `ai/test` 的确定性模型，运行三条工作流并在 `.data/kaguya-demo.sqlite` 写入本地演示数据。重复运行前只清理固定 demo session 及其 trace，不会删除其他会话数据。
+新 Runtime 默认使用 `.data/kaguya.sqlite`。历史的 `.data/kaguya-api.sqlite` 和 `.data/kaguya-bot.sqlite` 不会被读取、合并或删除。
 
 ## 常用命令
 
-| 命令                | 用途                                                  |
-| ------------------- | ----------------------------------------------------- |
-| `pnpm build`        | 构建全部 TypeScript project references                |
-| `pnpm typecheck`    | 以 TypeScript build mode 检查类型，并可能更新 `dist/` |
-| `pnpm lint`         | 运行 ESLint                                           |
-| `pnpm format`       | 使用 Prettier 格式化仓库                              |
-| `pnpm format:check` | 检查格式但不改文件                                    |
-| `pnpm test`         | 运行单元与集成测试                                    |
-| `pnpm prompt:test`  | 阻断外部出口后在本地验证四类 Prompt 的结构            |
-| `pnpm api:dev`      | 构建 API 及 workspace 依赖后启动开发网关              |
-| `pnpm api`          | 启动已构建的应用 API 网关                             |
-| `pnpm web`          | 启动 Web UI 开发服务器                                |
-| `pnpm web:build`    | 构建 Web UI                                           |
-| `pnpm demo`         | 运行消息、心跳和定时记忆的确定性端到端示例            |
+| 命令               | 用途                                                 |
+| ------------------ | ---------------------------------------------------- |
+| `pnpm dev`         | 以开发模式启动唯一 Kaguya Server 和内嵌 Vite         |
+| `pnpm build`       | 构建 packages、Server 和 Web 产物                    |
+| `pnpm start`       | 以生产模式启动构建后的唯一 Server                    |
+| `pnpm demo`        | 显式运行 message、heartbeat、memory 三条确定性工作流 |
+| `pnpm test`        | 运行单元和集成测试                                   |
+| `pnpm typecheck`   | 检查全部 TypeScript project references 和 Web        |
+| `pnpm lint`        | 运行 ESLint                                          |
+| `pnpm prompt:test` | 在阻断外部出口后验证四类 Prompt 结构                 |
 
-`prompt:test` 的自定义 provider 只通过 source bridge 加载仓库源码，不创建模型、不读取 API key，也不自行访问网络。固定的 Promptfoo 0.121.19 即使收到 telemetry disable 标志仍可能尝试上报一次“telemetry disabled”；脚本保留 telemetry/update disable 标志，同时把大小写 HTTP(S)/ALL proxy 都指向不可达的 `127.0.0.1:9`，并清空 `NO_PROXY` 绕过列表，因此该尝试不能离开 localhost。
+`pnpm demo` 写入 `.data/kaguya-demo.sqlite`，与 Server 数据库隔离。Server 本身不会定时或自动触发 heartbeat/memory。
+
+## 统一配置
+
+| 环境变量                      | 默认值                | 说明                                   |
+| ----------------------------- | --------------------- | -------------------------------------- |
+| `KAGUYA_GATEWAY_TOKEN`        | 无                    | 必填，至少 16 个字符                   |
+| `KAGUYA_HOST`                 | `127.0.0.1`           | 唯一服务监听地址                       |
+| `KAGUYA_PORT`                 | `3000`                | 唯一服务监听端口                       |
+| `KAGUYA_DATABASE_PATH`        | `.data/kaguya.sqlite` | Runtime SQLite 文件                    |
+| `KAGUYA_CORS_ORIGINS`         | 空                    | 逗号分隔的允许来源；同源 UI 不需要配置 |
+| `KAGUYA_TRUST_PROXY`          | 空                    | 逗号分隔的可信代理地址/CIDR            |
+| `KAGUYA_RATE_LIMIT_MAX`       | `30`                  | 每个限流窗口的请求数                   |
+| `KAGUYA_RATE_LIMIT_WINDOW_MS` | `60000`               | 限流窗口毫秒数                         |
+| `KAGUYA_NAPCAT_ENABLED`       | `false`               | 是否启用 NapCat                        |
+| `KAGUYA_NAPCAT_WS_URL`        | 无                    | 启用 NapCat 时必填                     |
+| `KAGUYA_NAPCAT_ACCESS_TOKEN`  | 无                    | NapCat access token                    |
+| `KAGUYA_NAPCAT_SELF_ID`       | 无                    | 可选的预期机器人 ID                    |
+| `KAGUYA_NAPCAT_RECONNECT_MS`  | `3000`                | 重连间隔                               |
+
+旧变量 `KAGUYA_API_HOST`、`KAGUYA_API_PORT`、`KAGUYA_API_DATABASE_PATH`、`KAGUYA_BOT_DATABASE_PATH` 会让启动直接失败，并提示改用统一变量。
+
+日志变量和事件表见 [结构化日志](docs/logging.md)。
 
 ## 仓库结构
 
 ```text
-apps/api/           Fastify 消息参数校验与 ingress enqueue 网关
-apps/web/           React/Vite 应用消息网关客户端
-apps/demo/          三条工作流的组装、确定性模型与可执行示例
-packages/schema/    跨包数据契约
-packages/sdk/       事件、监听器、节点与工作流定义 API
-packages/engine/    事件总线与工作流执行器
-packages/scheduler/ 手动、interval 与 cron 触发器
-packages/prompt/    Prompt 编译与来源追踪
-packages/llm/       LLM 调用、结构校验与 trace
+apps/server/        唯一 composition root：HTTP、Web、NapCat、Runtime、关闭流程
+apps/web/           React/Vite 同源浏览器客户端
+apps/demo/          heartbeat/memory/message 的显式演示 runner
+packages/runtime/   消息 dispatch、三条工作流、共用节点和共享运行组件
+packages/engine/    EventBus 与 WorkflowEngine
 packages/database/  SQLite 迁移和 repositories
-packages/config/    敏感用户配置 profile 的 JSON 存储与会话选择
-packages/logger/    Pino 结构化日志、命名空间与链路上下文
-promptfoo/          离线 Promptfoo provider 与结构断言
-docs/               调研、架构、会议记录和设计文档
+packages/llm/       LLM 调用、输出校验和 trace
+packages/prompt/    Prompt 编译与 provenance
+packages/logger/    统一日志、上下文与脱敏
+packages/schema/    跨包数据契约
+packages/sdk/       事件、节点与工作流定义 API
 ```
 
 ## 文档
 
-- [架构说明](docs/architecture.md)：包边界、事件字段、节点/边、工作流、Prompt 与数据库追踪。
-- [应用 API 网关](docs/api-gateway.md)：Fastify 选型、AstrBot 参考、启动配置、接口与安全边界。
-- [结构化日志](docs/logging.md)：Pino API、链路上下文、命名空间级别、异步输出和脱敏边界。
-- [LLM Client](docs/llm-client.md)：Vercel AI SDK client、独立模块子路径、输出校验、错误与 trace 约定。
-- [Web UI](docs/web-ui.md)：初版界面能力、启动方式、存储策略和当前响应边界。
-- [2026-07-25 网关更新说明](docs/updates/2026-07-25-application-api-gateway.md)：新增能力、测试修复、兼容性变化与验证结果。
-- [OpenAI-compatible LLM 接口](docs/openai-compatible-llm.md)：基于 Vercel AI SDK 的内部适配器与独立连通性测试工具；它不是 Web UI 的后端 API。
-- [配置包说明](packages/config/README.md)：敏感配置的 API、存储边界和泄漏处置。
-- [用户配置 readiness 设计](docs/superpowers/specs/2026-07-27-config-onboarding-readiness-design.md)：显式 setup、确认流程、profile 选择与无 fallback 的当前行为；2026-07-25 设计已被替代。
-- [人工待实现路线图](docs/remaining-work.md)：生产闭环、可靠性与后续扩展所需的人工决策、工程任务和验收标准。
-- [MaiBot 调研](docs/maibot-analysis.md)：直接 LLM 调用入口、触发关系、Prompt 来源和持久化影响。
-- [贡献指南](CONTRIBUTING.md)：环境、开发流程、新增子包、迁移规则和提交前检查。
-- [会议记录](docs/meeting-0722.md)：原始需求与分工。
-- [初始化设计](docs/superpowers/specs/2026-07-23-kaguya-init-design.md)：范围和设计决策。
+- [架构说明](docs/architecture.md)
+- [HTTP API 与统一 Server](docs/api-gateway.md)
+- [Web UI](docs/web-ui.md)
+- [结构化日志](docs/logging.md)
+- [LLM Client](docs/llm-client.md)
+- [配置包说明](packages/config/README.md)
+- [贡献指南](CONTRIBUTING.md)
 
 ## 当前边界
 
-这是基础设施原型，而不是可直接连接聊天平台的完整 Bot。应用 API 网关在开发启动入口中注入本地确定性 `MessageIngress`，用于验证 Web UI → API → message workflow → SQLite。生产 core dispatcher、持久队列、consumer、真实模型策略、平台 adapter、持久运行/SSE 和部署仍属于后续工作。`@kaguya/llm` 的 OpenAI-compatible 能力是内部适配器，不是由网关暴露给 UI 的动态模型代理。
-
-`@kaguya/config` 已实现敏感 profile 的本地存储、无副作用的首次
-`inspect()`、显式 `initialize()`、会话选择和 readiness 阻断；它不会自动
-创建空 default profile。会话绑定或 default profile 只选择一个候选 profile，
-该候选必须 ready，不能回退到其他 profile、provider 或模型。配置至少需要两
-个不同的 `providerId:modelId` 目标；执行层未来遇到 provider 错误时也必须直接
-返回，不得 fallback。当前 demo 尚未读取这些 profile。真实模型策略与 trace
-接入、平台适配器、持久运行/SSE、并发队列、管理 Web UI 和生产部署仍属于后续工作。
-当前 demo 的 policy 和 persona 是固定样例文本；业务应用应在应用层装配自己的
-数据源和策略。
+主程序继续使用并发安全、可重复的确定性模型。真实 provider/config profile 接线、scheduler、SSE、消息查询、持久队列和新的平台 adapter 不在本次 Runtime 收束范围内。HTTP `202 accepted` 表示同步 dispatch 已完成并被入口接受，但接口仍不返回模型回答；平台消息在工作流内通过对应 sender 投递回复。

@@ -1,0 +1,27 @@
+{
+  "name": "@kaguya/server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "start": "cross-env NODE_ENV=production node dist/server.js",
+    "dev": "pnpm --filter @kaguya/server... build && cross-env NODE_ENV=development tsx src/server.ts"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.3.0",
+    "@fastify/middie": "^9.0.3",
+    "@fastify/rate-limit": "^11.1.0",
+    "@fastify/static": "^8.3.0",
+    "@fastify/swagger": "^9.8.1",
+    "@kaguya/logger": "workspace:*",
+    "@kaguya/platform-adapters": "workspace:*",
+    "@kaguya/runtime": "workspace:*",
+    "@kaguya/schema": "workspace:*",
+    "fastify": "^5.10.0",
+    "vite": "7.3.6"
+  },
+  "devDependencies": {
+    "@kaguya/database": "workspace:*"
+  }
+}

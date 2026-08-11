@@ -7,13 +7,10 @@
   },
   "include": ["src/**/*.ts"],
   "references": [
-    { "path": "../demo" },
     { "path": "../../packages/database" },
-    { "path": "../../packages/engine" },
-    { "path": "../../packages/llm" },
     { "path": "../../packages/logger" },
     { "path": "../../packages/platform-adapters" },
-    { "path": "../../packages/prompt" },
-    { "path": "../../packages/sdk" }
+    { "path": "../../packages/runtime" },
+    { "path": "../../packages/schema" }
   ]
 }

@@ -1,109 +1,120 @@
 # 结构化日志
 
-`@kaguya/logger` 是 Kaguya 的统一日志基础包。它基于 Pino 10，提供单行 JSON、模块命名空间、AsyncLocalStorage 链路上下文、敏感字段脱敏和可选 worker transport。实现对应 [Issue #5](https://github.com/posanbu/Kaguya/issues/5)。
+Kaguya 只有一个根 Logger，`service` 固定为 `kaguya`。`apps/server` 创建并最终关闭它；Server、Runtime、EventBus observer、workflow recorder 和 NapCat 都使用 child Logger，不创建第二套日志出口。
 
-## 基本用法
+## 输出格式
 
-应用 composition root 创建一次根 Logger，各模块只创建 child Logger，不创建全局单例：
+| 环境                   | 默认格式 | 默认目标    |
+| ---------------------- | -------- | ----------- |
+| `NODE_ENV=development` | `pretty` | 同步 stdout |
+| 其他/production        | `json`   | 同步 stdout |
 
-```ts
-import {
-  closeLogger,
-  createLogger,
-  createModuleLogger,
-  readLoggerOptions,
-  runWithLogContext,
-} from "@kaguya/logger";
+`KAGUYA_LOG_FORMAT=pretty|json` 可显式覆盖。pretty 只允许同步 stdout/stderr；pretty 与 `KAGUYA_LOG_ASYNC=true` 或文件 destination 组合会在启动时直接报配置错误。JSON 继续支持同步/异步和文件输出。
 
-const rootLogger = createLogger(readLoggerOptions("kaguya-core"));
-const workflowLogger = createModuleLogger(rootLogger, "engine:workflow");
+| 环境变量                 | 默认值        | 说明                                       |
+| ------------------------ | ------------- | ------------------------------------------ |
+| `KAGUYA_LOG_FORMAT`      | 按 `NODE_ENV` | `pretty` 或 `json`                         |
+| `KAGUYA_LOG_LEVEL`       | `info`        | `trace/debug/info/warn/error/fatal/silent` |
+| `KAGUYA_LOG_LEVELS`      | 空            | 逗号分隔 `namespace=level`，最长前缀优先   |
+| `KAGUYA_LOG_ASYNC`       | `false`       | 仅 JSON；`true/1` 启用 worker transport    |
+| `KAGUYA_LOG_DESTINATION` | `stdout`      | `stdout`、`stderr`；JSON 还可使用文件路径  |
 
-await runWithLogContext(
-  {
-    traceId: "trace-1",
-    sessionId: "session-1",
-    workflowId: "message-workflow",
-  },
-  async () => {
-    workflowLogger.info({ event: "workflow.started" }, "Workflow started");
-  },
-);
+开发调试事件和节点：
 
-await closeLogger(rootLogger);
+```bash
+KAGUYA_LOG_LEVEL=info \
+KAGUYA_LOG_LEVELS="runtime:event=debug,runtime:workflow=debug" \
+KAGUYA_GATEWAY_TOKEN="replace-with-at-least-16-characters" \
+pnpm dev
 ```
 
-`runWithLogContext` 会合并当前上下文并在同步调用、Promise、timer 和同一异步资源链中传播。并发链路使用相互隔离的 store。允许的关联字段只有：
+生产 JSON 文件示例：
 
-| 字段         | 用途                                              |
-| ------------ | ------------------------------------------------- |
-| `traceId`    | 顶层消息、心跳或调度及其所有派生工作的共同链路 ID |
-| `sessionId`  | 会话关联                                          |
-| `eventId`    | 具体事件                                          |
-| `runId`      | 持久化运行或任务                                  |
-| `requestId`  | HTTP 请求                                         |
-| `workflowId` | 工作流                                            |
-| `nodeId`     | 工作流节点                                        |
-
-上下文值必须是 1 到 512 个字符，未知字段会被拒绝。业务字段应放在单次日志对象中，不应塞入长期上下文。
-
-## 日志约定
-
-- `service` 标识进程或部署单元，例如 `kaguya-api`；
-- `module` 使用冒号分隔的命名空间，例如 `engine:workflow:message`；
-- `event` 使用稳定的小写点分事件名，例如 `gateway.message.accepted`；
-- `msg` 只写便于人工阅读的稳定描述，不拼接用户输入或凭证；
-- 耗时统一使用 `durationMs`，计数保持数字类型；
-- 关联 ID 由上下文注入，不在每条日志中重复手工拼装。
-
-输出使用 ISO 8601 `time` 和字符串 `level`。Pino 保证同一 destination 内的写入顺序，但多个进程或多个 destination 不存在全局总序；聚合系统应结合 `time` 和关联 ID 排序。
-
-## 环境变量
-
-`readLoggerOptions(service)` 读取以下配置：
-
-| 环境变量                 | 默认值   | 说明                                                                |
-| ------------------------ | -------- | ------------------------------------------------------------------- |
-| `KAGUYA_LOG_LEVEL`       | `info`   | `trace/debug/info/warn/error/fatal/silent`                          |
-| `KAGUYA_LOG_LEVELS`      | 空       | 逗号分隔的 `namespace=level`；最长命名空间前缀优先                  |
-| `KAGUYA_LOG_ASYNC`       | `false`  | `true/1` 使用 Pino worker transport；`false/0` 使用同步 destination |
-| `KAGUYA_LOG_DESTINATION` | `stdout` | `stdout`、`stderr` 或文件路径；文件目录不存在时由 Pino 创建         |
-
-示例：
-
-```powershell
-$env:KAGUYA_LOG_LEVEL = "info"
-$env:KAGUYA_LOG_LEVELS = "engine:workflow=debug,adapter:napcat=warn"
-$env:KAGUYA_LOG_ASYNC = "true"
-$env:KAGUYA_LOG_DESTINATION = ".data/logs/kaguya.jsonl"
+```bash
+NODE_ENV=production \
+KAGUYA_LOG_FORMAT=json \
+KAGUYA_LOG_ASYNC=true \
+KAGUYA_LOG_DESTINATION=.data/logs/kaguya.jsonl \
+KAGUYA_GATEWAY_TOKEN="replace-with-at-least-16-characters" \
+pnpm start
 ```
 
-默认同步输出用于保持开发、测试和关键启动日志的确定顺序。高吞吐生产进程可显式启用 worker transport，把写入移出主线程。正常关闭时必须调用 `closeLogger(rootLogger)`；强制终止或进程崩溃仍可能丢失尚未刷新的异步日志。
+正常关闭最终调用 `closeLogger()`，先 flush 再关闭 destination。强制终止仍可能丢失尚未刷新的异步日志。
 
-## 安全边界
+## 模块
 
-默认 redaction 会遮盖常见 API key、token、authorization、password、secret、Prompt、消息正文和 body 字段。`err`/`error` 只保留 `type`、`code`、`statusCode` 和 `retryable`，不会自动记录原始 `message`、`stack` 或 `cause`。HTTP request serializer 不记录 headers、body 或 query，只保留 request ID、method、无 query 的 path 和远端地址。
+| module             | 范围                             |
+| ------------------ | -------------------------------- |
+| `server`           | 进程启动、监听和关闭             |
+| `server:http`      | HTTP 接受与请求失败              |
+| `runtime`          | Runtime 生命周期和 dispatch 结果 |
+| `runtime:event`    | EventBus observer                |
+| `runtime:workflow` | 持久化 workflow node 生命周期    |
+| `adapter:napcat`   | NapCat 连接、重连、入站和投递    |
+| `llm`              | LLM/provider 边界日志            |
 
-这些机制只是误用兜底，不代表可以主动记录敏感内容：
+命名空间覆盖使用最长前缀，因此 `runtime:workflow=debug` 不会开启其他 Runtime debug 日志。
 
-- 不记录 API key、Bearer Token、平台凭证或完整配置；
-- 不记录 Prompt、模型回答、用户消息正文或 provider 原始响应；
-- 不把任意原始 Error、HTTP headers/body 或完整 URL 展开到其他字段；
-- 新增敏感字段时同时更新日志调用、redaction 测试和数据访问策略；
-- 需要保存 Prompt 或模型输出时使用受控的 trace repository，不使用普通运行日志。
+## 关联上下文
 
-## 当前接入
+AsyncLocalStorage 传播下列字段，并隔离并发请求：
 
-- `apps/api` 使用 Pino 实例作为 Fastify logger，并把 `requestId` 注入整个请求链；合法消息进入 core ingress 时再加入 `sessionId`。网关只记录 `gateway.message.accepted` 等元数据，不记录消息正文或 Authorization header。
-- `@kaguya/llm/openai-compatible` 提供 `createPinoLlmLogger()`，把现有 `llm.call.started/succeeded/failed` 事件写入模块 Logger；事件仍只包含模型、provider origin、尝试次数、耗时、usage 和错误分类。
+| 字段                            | 来源                      |
+| ------------------------------- | ------------------------- |
+| `requestId`                     | Fastify 请求 hook         |
+| `traceId`、`sessionId`          | 每次 Runtime dispatch     |
+| `eventId`                       | EventBus observer         |
+| `runId`、`workflowId`、`nodeId` | workflow recorder wrapper |
 
-事件总线、工作流、scheduler、database 和平台 adapter 尚未全部接入统一 Logger。跨进程 trace、指标、告警、日志采集、保留周期和访问控制仍属于生产可观测性后续工作。
+上下文值必须为 1–512 个字符；未知字段会被拒绝。Web trace 使用 `webui-${requestId}`，平台 trace 由 adapter 提供。
 
-## 验证
+## 日志事件表
 
-```powershell
-pnpm exec vitest run packages/logger/src/index.test.ts
-pnpm typecheck
-pnpm build
-```
+`info` 只用于服务/Runtime 生命周期、HTTP 消息接受、dispatch 完成以及 NapCat 连接/投递状态。详细执行步骤使用 `debug`，失败使用 `warn`、`error` 或 `fatal`。
 
-单元测试覆盖结构化字段、并发上下文隔离、嵌套上下文、命名空间级别、敏感信息脱敏、安全错误/HTTP 序列化、环境变量校验，以及 worker transport 的写入顺序和关闭刷新。
+| event                                              | 级别  | module             | 含义                                     |
+| -------------------------------------------------- | ----- | ------------------ | ---------------------------------------- |
+| `server.starting` / `server.started`               | info  | `server`           | 唯一 Server 启动                         |
+| `server.stopping` / `server.stopped`               | info  | `server`           | 有序关闭                                 |
+| `server.start.failed` / `server.shutdown.failed`   | fatal | `server`           | 启动或关闭失败                           |
+| `runtime.started` / `runtime.stopped`              | info  | `runtime`          | SQLite 与共享组件生命周期                |
+| `message.dispatch.started`                         | debug | `runtime`          | 一条消息开始进入 workflow                |
+| `message.dispatch.completed`                       | info  | `runtime`          | 结构化 dispatch 结果与平台 delivery 状态 |
+| `message.dispatch.failed`                          | error | `runtime`          | dispatch 失败                            |
+| `http.message.accepted`                            | info  | `server:http`      | HTTP 消息已由 Runtime 完成处理并返回 202 |
+| `http.request.failed`                              | error | `server:http`      | 未处理 HTTP 错误                         |
+| `event.emitted`                                    | debug | `runtime:event`    | EventBus observer 看见已发布事件         |
+| `event.observer.failed`                            | error | `runtime:event`    | observer 自身失败，不改变业务结果        |
+| `workflow.node.started/completed/failed/cancelled` | debug | `runtime:workflow` | recorder 已持久化节点状态                |
+| `napcat.connection.starting/connected`             | info  | `adapter:napcat`   | 平台连接状态                             |
+| `napcat.connection.disconnected/failed`            | warn  | `adapter:napcat`   | 断线或连接失败                           |
+| `napcat.reconnect.scheduled`                       | info  | `adapter:napcat`   | 已安排重连                               |
+| `napcat.inbound.failed`                            | error | `adapter:napcat`   | 标准化消息 dispatch 失败                 |
+| `platform.delivery.completed`                      | info  | `runtime`          | 平台 reply receipt 表示成功              |
+| `platform.delivery.failed`                         | warn  | `runtime`          | 平台 reply receipt 表示失败              |
+
+Fastify 的通用每请求 info 日志已关闭，避免健康检查和静态资源淹没业务日志。
+
+## 脱敏边界
+
+普通日志禁止包含：
+
+- 用户消息正文、Prompt、模型输出；
+- 平台 raw payload、target ID；
+- Bearer/API/access token、credentials、password、secret；
+- NapCat WebSocket URL；
+- 完整配置、HTTP headers/body/query 或 provider 原始响应。
+
+默认 redaction 覆盖常见 `apiKey`、`api_key`、`token`、`accessToken`、`access_token`、`authorization`、`credentials`、`raw`、`wsUrl`、Prompt/content/text/body 等路径。Error serializer 只保留 `type`、`code`、`statusCode`、`retryable`；request serializer 只保留 request ID、method、无 query path 和远端地址。
+
+redaction 是误用兜底，不是记录敏感数据的授权。Prompt 和模型输出需要审计时只使用受控 SQLite trace repository。
+
+## 排障
+
+- 启动时报 “pretty logging cannot be asynchronous”：改用 `KAGUYA_LOG_FORMAT=json`，或关闭 `KAGUYA_LOG_ASYNC`；
+- 启动时报 “pretty logging only supports stdout or stderr”：移除文件 destination，或改用 JSON；
+- 看不到 event/node：将 `runtime:event`、`runtime:workflow` 提升到 `debug`；
+- Web 可用但平台断线：筛选 `module=adapter:napcat`，观察 connected/disconnected/failed/reconnect；
+- HTTP 500：用 response 的 request ID 筛选 `requestId`，再沿 `traceId` 查看 Runtime；
+- 节点失败：以 `traceId + runId + workflowId + nodeId` 关联 `workflow.node.failed` 和数据库 `event_runs`；
+- 关闭日志缺失：确认进程收到 SIGINT/SIGTERM 并完成优雅关闭，而非被强制终止。
