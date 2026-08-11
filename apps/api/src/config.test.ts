@@ -11,6 +11,7 @@ describe("readApiGatewayConfig", () => {
       KAGUYA_TRUST_PROXY: "127.0.0.1, 10.0.0.0/8",
       KAGUYA_RATE_LIMIT_MAX: "20",
       KAGUYA_RATE_LIMIT_WINDOW_MS: "10000",
+      KAGUYA_API_DATABASE_PATH: "/tmp/kaguya-test.sqlite",
     });
 
     expect(config).toMatchObject({
@@ -21,7 +22,16 @@ describe("readApiGatewayConfig", () => {
       trustProxy: ["127.0.0.1", "10.0.0.0/8"],
       rateLimitMax: 20,
       rateLimitWindowMs: 10_000,
+      databasePath: "/tmp/kaguya-test.sqlite",
     });
+  });
+
+  it("defaults the local ingress database path under the repository data directory", () => {
+    const config = readApiGatewayConfig({
+      KAGUYA_GATEWAY_TOKEN: "a-secure-gateway-token",
+    });
+
+    expect(config.databasePath).toMatch(/[/\\]\.data[/\\]kaguya-api\.sqlite$/u);
   });
 
   it("requires a non-trivial gateway token", () => {

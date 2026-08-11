@@ -47,6 +47,12 @@ importers:
       '@fastify/swagger':
         specifier: ^9.8.1
         version: 9.8.1
+      '@kaguya/database':
+        specifier: workspace:*
+        version: link:../../packages/database
+      '@kaguya/demo':
+        specifier: workspace:*
+        version: link:../demo
       '@kaguya/logger':
         specifier: workspace:*
         version: link:../../packages/logger
@@ -56,6 +62,33 @@ importers:
       fastify:
         specifier: ^5.10.0
         version: 5.10.0
+
+  apps/bot:
+    dependencies:
+      '@kaguya/database':
+        specifier: workspace:*
+        version: link:../../packages/database
+      '@kaguya/demo':
+        specifier: workspace:*
+        version: link:../demo
+      '@kaguya/engine':
+        specifier: workspace:*
+        version: link:../../packages/engine
+      '@kaguya/llm':
+        specifier: workspace:*
+        version: link:../../packages/llm
+      '@kaguya/logger':
+        specifier: workspace:*
+        version: link:../../packages/logger
+      '@kaguya/platform-adapters':
+        specifier: workspace:*
+        version: link:../../packages/platform-adapters
+      '@kaguya/prompt':
+        specifier: workspace:*
+        version: link:../../packages/prompt
+      '@kaguya/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
 
   apps/demo:
     dependencies:
@@ -68,6 +101,9 @@ importers:
       '@kaguya/llm':
         specifier: workspace:*
         version: link:../../packages/llm
+      '@kaguya/platform-adapters':
+        specifier: workspace:*
+        version: link:../../packages/platform-adapters
       '@kaguya/prompt':
         specifier: workspace:*
         version: link:../../packages/prompt
@@ -147,6 +183,12 @@ importers:
       pino:
         specifier: 10.3.1
         version: 10.3.1
+
+  packages/platform-adapters:
+    dependencies:
+      '@kaguya/schema':
+        specifier: workspace:*
+        version: link:../schema
 
   packages/prompt:
     dependencies:
@@ -6300,7 +6342,7 @@ snapshots:
   '@isaacs/cliui@8.0.2':
     dependencies:
       string-width: 5.1.2
-      string-width-cjs: string-width@4.2.3
+      string-width-cjs: string-width@4.2.0
       strip-ansi: 7.2.0
       strip-ansi-cjs: strip-ansi@6.0.1
       wrap-ansi: 8.1.0
@@ -10362,8 +10404,8 @@ snapshots:
   wrap-ansi@7.0.0:
     dependencies:
       ansi-styles: 4.3.0
-      string-width: 4.2.3
-      strip-ansi: 6.0.1
+      string-width: 4.2.0
+      strip-ansi: 6.0.0
 
   wrap-ansi@8.1.0:
     dependencies:

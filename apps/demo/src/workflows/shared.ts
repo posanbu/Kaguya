@@ -6,6 +6,10 @@ import {
   type RouteOutput,
   type StateOutput,
 } from "@kaguya/llm/schemas";
+import type {
+  PlatformDeliveryReceipt,
+  PlatformMessageTarget,
+} from "@kaguya/platform-adapters";
 import {
   type CompiledPrompt,
   type EventEnvelope,
@@ -31,6 +35,7 @@ import {
   getDatabase,
   getEventBus,
   getLlmClient,
+  getPlatformReplySender,
   getPromptCompiler,
 } from "../services.js";
 
@@ -93,6 +98,61 @@ export const persistReplyNode: WorkflowNode<ReplyOutput, MessageRecord> =
       return record;
     },
   });
+
+export interface SendReplyInput {
+  readonly event: EventEnvelope;
+  readonly reply: MessageRecord;
+}
+
+export const sendReplyNode: WorkflowNode<
+  SendReplyInput,
+  PlatformDeliveryReceipt | undefined
+> = defineNode({
+  id: "send-reply",
+  async run(input, context) {
+    const sender = getPlatformReplySender(context);
+    if (sender === undefined) {
+      return undefined;
+    }
+    if (input.reply.role !== "assistant") {
+      throw new Error("send-reply only supports assistant messages");
+    }
+    const target = parsePlatformTarget(input.event.metadata.target);
+    if (target === undefined) {
+      return undefined;
+    }
+    return sender.sendTextReply(target, input.reply.content, {
+      traceId: context.traceId,
+      sessionId: requiredSessionId(context),
+      messageId: input.reply.id,
+    });
+  },
+});
+
+export function parsePlatformTarget(
+  value: unknown,
+): PlatformMessageTarget | undefined {
+  if (typeof value !== "object" || value === null || !("kind" in value)) {
+    return undefined;
+  }
+  if ((value as { kind: unknown }).kind === "private") {
+    const userId = normalizeTargetId((value as { userId?: unknown }).userId);
+    return userId === undefined ? undefined : { kind: "private", userId };
+  }
+  if ((value as { kind: unknown }).kind === "group") {
+    const groupId = normalizeTargetId((value as { groupId?: unknown }).groupId);
+    return groupId === undefined ? undefined : { kind: "group", groupId };
+  }
+  return undefined;
+}
+
+function normalizeTargetId(value: unknown): string | undefined {
+  if (value === undefined || value === null || typeof value === "boolean") {
+    return undefined;
+  }
+  const normalized = String(value).trim();
+  return normalized || undefined;
+}
 
 export function createGenerateReplyNode(
   workflowId: "message-workflow" | "heartbeat-workflow",
