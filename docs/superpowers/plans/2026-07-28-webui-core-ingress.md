@@ -39,12 +39,14 @@
 ### Task 1: Local Demo Message Ingress
 
 **Files:**
+
 - Create: `apps/demo/src/local-ingress.ts`
 - Create: `apps/demo/src/local-ingress.test.ts`
 - Modify: `apps/demo/src/workflows.ts`
 - Modify: `apps/demo/package.json`
 
 **Interfaces:**
+
 - Consumes:
   - `dispatchEvent({ definition, event, eventBus, engine, workflow, context })`
   - `messageReceivedEvent.create(base, { text })`
@@ -109,15 +111,19 @@ describe("local message ingress", () => {
         "assistant",
         "user",
       ]);
-      expect(messages.find((message) => message.role === "user")).toMatchObject({
-        content: "Is the moon bright tonight?",
-        metadata: {
-          requestId: "request-abc",
-          eventId: "webui-request-abc-message-received",
-          traceId: "webui-request-abc",
+      expect(messages.find((message) => message.role === "user")).toMatchObject(
+        {
+          content: "Is the moon bright tonight?",
+          metadata: {
+            requestId: "request-abc",
+            eventId: "webui-request-abc-message-received",
+            traceId: "webui-request-abc",
+          },
         },
-      });
-      expect(messages.find((message) => message.role === "assistant")).toMatchObject({
+      );
+      expect(
+        messages.find((message) => message.role === "assistant"),
+      ).toMatchObject({
         content: "It is a lovely night for watching the moon.",
         metadata: {
           generatedBy: "generate-reply",
@@ -199,7 +205,10 @@ export function createLocalMessageIngress(
     llmClient: new LlmLifecycleClient(
       new KaguyaLlmClient({
         model: createDeterministicModel([
-          { shouldReply: true, reason: "the local Web UI message should enter the workflow" },
+          {
+            shouldReply: true,
+            reason: "the local Web UI message should enter the workflow",
+          },
           { text: "It is a lovely night for watching the moon." },
         ]),
         traceWriter: database.llmTraces,
@@ -312,10 +321,12 @@ git commit -m "feat(demo): add local message ingress"
 ### Task 2: API Database Path Configuration
 
 **Files:**
+
 - Modify: `apps/api/src/config.ts`
 - Modify: `apps/api/src/config.test.ts`
 
 **Interfaces:**
+
 - Consumes: existing `readApiGatewayConfig(environment?: NodeJS.ProcessEnv): ApiGatewayConfig`
 - Produces:
   - `ApiGatewayConfig.databasePath: string`
@@ -422,6 +433,7 @@ git commit -m "feat(api): configure local ingress database path"
 ### Task 3: API Server Composition With Local Ingress
 
 **Files:**
+
 - Modify: `apps/api/package.json`
 - Modify: `apps/api/tsconfig.json`
 - Modify: `apps/api/src/server.ts`
@@ -429,6 +441,7 @@ git commit -m "feat(api): configure local ingress database path"
 - Modify: `tsconfig.json`
 
 **Interfaces:**
+
 - Consumes:
   - `createLocalMessageIngress({ databasePath }): LocalMessageIngress`
   - `createApiGateway({ config, logger, messageIngress })`
@@ -513,7 +526,9 @@ describe("API server composition", () => {
         "assistant",
         "user",
       ]);
-      expect(database.llmTraces.listByTrace("webui-request-api-1")).toHaveLength(2);
+      expect(
+        database.llmTraces.listByTrace("webui-request-api-1"),
+      ).toHaveLength(2);
     } finally {
       database.close();
     }
@@ -622,11 +637,13 @@ git commit -m "feat(api): inject local core ingress"
 ### Task 4: Documentation And End-To-End Verification
 
 **Files:**
+
 - Modify: `README.md`
 - Modify: `docs/web-ui.md`
 - Modify: `docs/remaining-work.md` only if the current boundary text has become inaccurate.
 
 **Interfaces:**
+
 - Consumes: local API server now injects deterministic ingress.
 - Produces: docs that explain local messages can be accepted and persisted, while production gaps remain explicit.
 

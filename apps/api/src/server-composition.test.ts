@@ -70,9 +70,9 @@ describe("API server composition", () => {
         "assistant",
         "user",
       ]);
-      expect(database.llmTraces.listByTrace("webui-request-api-1")).toHaveLength(
-        2,
-      );
+      expect(
+        database.llmTraces.listByTrace("webui-request-api-1"),
+      ).toHaveLength(2);
     } finally {
       database.close();
     }

@@ -35,7 +35,7 @@ HTTP webhook, media download, durable queue, or arbitration behavior.
    tests.
 3. The adapter inbound test was added before restoring the adapter
    implementation. The next run failed with `NapCatOneBotAdapter is not a
-   constructor` while the two action tests remained green.
+constructor` while the two action tests remained green.
 4. The adapter implementation was restored. The focused NapCat run passed with
    3 tests.
 
@@ -76,7 +76,7 @@ declares `24.18.0`; it did not affect the passing checks.
   transport integration test because the receipt resolved as failed after the
   adapter overwrote the action listener.
 - The same run also exposed that the test transport contract is `close():
-  void`; the close test was corrected to assert the specified default close
+void`; the close test was corrected to assert the specified default close
   error rather than passing an unsupported error argument.
 - After the router and test-fake correction, the focused NapCat run passed with
   6 tests.

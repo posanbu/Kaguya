@@ -46,4 +46,3 @@ The commands were run with the bundled Node runtime prepended to `PATH`. pnpm em
 - `packages/platform-adapters/src/onebot.test.ts`
 - `tsconfig.json`
 - `pnpm-lock.yaml`
-

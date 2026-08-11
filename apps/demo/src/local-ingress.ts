@@ -3,7 +3,8 @@ import { dirname } from "node:path";
 
 import { KaguyaDatabase } from "@kaguya/database";
 import { EventBus, WorkflowEngine } from "@kaguya/engine";
-import { KaguyaLlmClient, createDeterministicModel } from "@kaguya/llm";
+import { KaguyaLlmClient } from "@kaguya/llm/client";
+import { createDeterministicModel } from "@kaguya/llm/testing";
 import { PromptCompiler } from "@kaguya/prompt";
 import type { WorkflowContext } from "@kaguya/sdk";
 
@@ -62,10 +63,15 @@ export function createLocalMessageIngress(
         },
         { text: command.text },
       );
-      const services = createWorkflowServices(database, eventBus, promptCompiler, {
-        now,
-        nextId,
-      });
+      const services = createWorkflowServices(
+        database,
+        eventBus,
+        promptCompiler,
+        {
+          now,
+          nextId,
+        },
+      );
       services.messageReceivedEvent = event;
       const context: WorkflowContext = {
         traceId,
@@ -93,7 +99,9 @@ export function createLocalMessageIngress(
   };
 }
 
-function createTraceScopedIdFactory(traceId: string): (prefix: string) => string {
+function createTraceScopedIdFactory(
+  traceId: string,
+): (prefix: string) => string {
   let sequence = 0;
   return (prefix: string) =>
     `${traceId}-${prefix}-${String(++sequence).padStart(6, "0")}`;

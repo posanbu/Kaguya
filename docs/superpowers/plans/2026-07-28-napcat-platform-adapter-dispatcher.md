@@ -65,6 +65,7 @@ Modify workspace files:
 ### Task 1: Platform Adapter Contracts And OneBot Mapping
 
 **Files:**
+
 - Create: `packages/platform-adapters/package.json`
 - Create: `packages/platform-adapters/tsconfig.json`
 - Create: `packages/platform-adapters/src/types.ts`
@@ -74,6 +75,7 @@ Modify workspace files:
 - Modify: `tsconfig.json`
 
 **Interfaces:**
+
 - Produces:
   - `PlatformInboundMessage`
   - `PlatformMessageTarget`
@@ -151,7 +153,10 @@ describe("normalizeOneBotMessageEvent", () => {
         sender: { user_id: 112233, nickname: "Ada" },
         message: [{ type: "text", data: { text: "hello kaguya" } }],
       },
-      { adapterId: "napcat.qq.main", now: () => new Date("2026-07-28T01:02:03.000Z") },
+      {
+        adapterId: "napcat.qq.main",
+        now: () => new Date("2026-07-28T01:02:03.000Z"),
+      },
     );
 
     expect(message).toMatchObject({
@@ -403,11 +408,16 @@ function senderFor(
   };
 }
 
-function normalizeMessageText(message: string | readonly OneBotMessageSegment[]): string {
+function normalizeMessageText(
+  message: string | readonly OneBotMessageSegment[],
+): string {
   if (typeof message === "string") {
     return message;
   }
-  return message.map(segmentToText).join("").replace(/[ \t]+\n/g, "\n");
+  return message
+    .map(segmentToText)
+    .join("")
+    .replace(/[ \t]+\n/g, "\n");
 }
 
 function segmentToText(segment: OneBotMessageSegment): string {
@@ -505,7 +515,10 @@ it("maps group messages to group sessions and degraded segment text", () => {
         { type: "image", data: { file: "x.jpg" } },
       ],
     },
-    { adapterId: "napcat.qq.main", now: () => new Date("2026-07-28T01:02:03.000Z") },
+    {
+      adapterId: "napcat.qq.main",
+      now: () => new Date("2026-07-28T01:02:03.000Z"),
+    },
   );
 
   expect(message).toMatchObject({
@@ -524,7 +537,10 @@ it("ignores non-message events and blank normalized messages", () => {
   };
 
   expect(
-    normalizeOneBotMessageEvent({ post_type: "meta_event", message_id: 1, user_id: 2, message: "x" }, options),
+    normalizeOneBotMessageEvent(
+      { post_type: "meta_event", message_id: 1, user_id: 2, message: "x" },
+      options,
+    ),
   ).toBeUndefined();
   expect(
     normalizeOneBotMessageEvent(
@@ -594,11 +610,13 @@ git commit -m "feat: add onebot platform message mapping"
 ### Task 2: NapCat Action Client And Adapter Transport
 
 **Files:**
+
 - Create: `packages/platform-adapters/src/napcat.ts`
 - Test: `packages/platform-adapters/src/napcat.test.ts`
 - Modify: `packages/platform-adapters/src/index.ts`
 
 **Interfaces:**
+
 - Consumes:
   - `PlatformMessageTarget`
   - `PlatformInboundMessage`
@@ -798,7 +816,11 @@ export class NapCatActionClient implements PlatformReplySender {
   }
 
   private handleJsonMessage(message: unknown): void {
-    if (typeof message !== "object" || message === null || !("echo" in message)) {
+    if (
+      typeof message !== "object" ||
+      message === null ||
+      !("echo" in message)
+    ) {
       return;
     }
     const echo = String((message as { echo: unknown }).echo);
@@ -944,9 +966,10 @@ import { NapCatOneBotAdapter } from "./napcat.js";
 
 it("dispatches normalized inbound messages and ignores action responses", async () => {
   const transport = new FakeTransport();
-  const onInboundMessage = vi.fn<[(typeof import("./types.js"))["PlatformInboundMessage"]], Promise<void>>(
-    async () => undefined,
-  );
+  const onInboundMessage = vi.fn<
+    [(typeof import("./types.js"))["PlatformInboundMessage"]],
+    Promise<void>
+  >(async () => undefined);
   const adapter = new NapCatOneBotAdapter({
     adapterId: "napcat.qq.main",
     transport,
@@ -1016,6 +1039,7 @@ git commit -m "feat: add napcat action client"
 ### Task 3: Optional Platform Sender In Message Workflow
 
 **Files:**
+
 - Modify: `apps/demo/src/services.ts`
 - Modify: `apps/demo/src/workflows/shared.ts`
 - Modify: `apps/demo/src/workflows/message.ts`
@@ -1025,6 +1049,7 @@ git commit -m "feat: add napcat action client"
 - Modify: `apps/demo/tsconfig.json`
 
 **Interfaces:**
+
 - Consumes:
   - `PlatformReplySender`
   - `PlatformMessageTarget`
@@ -1150,9 +1175,7 @@ return {
   ): WorkflowContext {
     return {
       traceId: event.traceId,
-      ...(event.sessionId === undefined
-        ? {}
-        : { sessionId: event.sessionId }),
+      ...(event.sessionId === undefined ? {} : { sessionId: event.sessionId }),
       now,
       nextId,
       services,
@@ -1220,30 +1243,34 @@ export interface SendReplyInput {
   readonly reply: MessageRecord;
 }
 
-export const sendReplyNode: WorkflowNode<SendReplyInput, PlatformDeliveryReceipt | undefined> =
-  defineNode({
-    id: "send-reply",
-    async run(input, context) {
-      const sender = getPlatformReplySender(context);
-      if (sender === undefined) {
-        return undefined;
-      }
-      if (input.reply.role !== "assistant") {
-        throw new Error("send-reply only supports assistant messages");
-      }
-      const target = parsePlatformTarget(input.event.metadata.target);
-      if (target === undefined) {
-        return undefined;
-      }
-      return sender.sendTextReply(target, input.reply.content, {
-        traceId: context.traceId,
-        sessionId: requiredSessionId(context),
-        messageId: input.reply.id,
-      });
-    },
-  });
+export const sendReplyNode: WorkflowNode<
+  SendReplyInput,
+  PlatformDeliveryReceipt | undefined
+> = defineNode({
+  id: "send-reply",
+  async run(input, context) {
+    const sender = getPlatformReplySender(context);
+    if (sender === undefined) {
+      return undefined;
+    }
+    if (input.reply.role !== "assistant") {
+      throw new Error("send-reply only supports assistant messages");
+    }
+    const target = parsePlatformTarget(input.event.metadata.target);
+    if (target === undefined) {
+      return undefined;
+    }
+    return sender.sendTextReply(target, input.reply.content, {
+      traceId: context.traceId,
+      sessionId: requiredSessionId(context),
+      messageId: input.reply.id,
+    });
+  },
+});
 
-export function parsePlatformTarget(value: unknown): PlatformMessageTarget | undefined {
+export function parsePlatformTarget(
+  value: unknown,
+): PlatformMessageTarget | undefined {
   if (typeof value !== "object" || value === null || !("kind" in value)) {
     return undefined;
   }
@@ -1368,6 +1395,7 @@ git commit -m "feat: add optional platform reply sender"
 ### Task 4: Production Platform Dispatcher
 
 **Files:**
+
 - Create: `apps/bot/package.json`
 - Create: `apps/bot/tsconfig.json`
 - Create: `apps/bot/src/id.ts`
@@ -1378,6 +1406,7 @@ git commit -m "feat: add optional platform reply sender"
 - Modify: `tsconfig.json`
 
 **Interfaces:**
+
 - Consumes:
   - `PlatformInboundMessage`
   - `PlatformReplySender`
@@ -1520,23 +1549,27 @@ describe("PlatformDispatcher", () => {
         "assistant",
         "user",
       ]);
-      expect(messages.find((message) => message.role === "user")).toMatchObject({
-        content: "hello from qq",
-        metadata: {
-          adapterId: "napcat.qq.main",
-          platform: "qq",
-          platformMessageId: "12345",
-          target: { kind: "private", userId: "112233" },
-          sender: { userId: "112233", nickname: "Ada" },
+      expect(messages.find((message) => message.role === "user")).toMatchObject(
+        {
+          content: "hello from qq",
+          metadata: {
+            adapterId: "napcat.qq.main",
+            platform: "qq",
+            platformMessageId: "12345",
+            target: { kind: "private", userId: "112233" },
+            sender: { userId: "112233", nickname: "Ada" },
+          },
         },
-      });
+      );
       expect(sent).toEqual([
         {
           target: { kind: "private", userId: "112233" },
           text: "It is a lovely night for watching the moon.",
         },
       ]);
-      expect(database.llmTraces.listByTrace("napcat:998877:12345")).toHaveLength(2);
+      expect(
+        database.llmTraces.listByTrace("napcat:998877:12345"),
+      ).toHaveLength(2);
     } finally {
       database.close();
     }
@@ -1773,6 +1806,7 @@ git commit -m "feat: add production platform dispatcher"
 ### Task 5: Bot Runtime Configuration And NapCat Wiring
 
 **Files:**
+
 - Create: `apps/bot/src/config.ts`
 - Create: `apps/bot/src/server.ts`
 - Test: `apps/bot/src/config.test.ts`
@@ -1780,6 +1814,7 @@ git commit -m "feat: add production platform dispatcher"
 - Modify: `package.json`
 
 **Interfaces:**
+
 - Consumes:
   - `PlatformDispatcher`
   - `NapCatActionClient`
@@ -1824,9 +1859,9 @@ describe("readBotConfig", () => {
   });
 
   it("requires ws url when NapCat is enabled", () => {
-    expect(() =>
-      readBotConfig({ KAGUYA_NAPCAT_ENABLED: "true" }),
-    ).toThrow("KAGUYA_NAPCAT_WS_URL is required when KAGUYA_NAPCAT_ENABLED=true");
+    expect(() => readBotConfig({ KAGUYA_NAPCAT_ENABLED: "true" })).toThrow(
+      "KAGUYA_NAPCAT_WS_URL is required when KAGUYA_NAPCAT_ENABLED=true",
+    );
   });
 });
 ```
@@ -1886,7 +1921,9 @@ export function readBotConfig(
       ...(wsUrl === undefined ? {} : { wsUrl }),
       ...(optionalText(environment.KAGUYA_NAPCAT_ACCESS_TOKEN) === undefined
         ? {}
-        : { accessToken: optionalText(environment.KAGUYA_NAPCAT_ACCESS_TOKEN) }),
+        : {
+            accessToken: optionalText(environment.KAGUYA_NAPCAT_ACCESS_TOKEN),
+          }),
       ...(optionalText(environment.KAGUYA_NAPCAT_SELF_ID) === undefined
         ? {}
         : { selfId: optionalText(environment.KAGUYA_NAPCAT_SELF_ID) }),
@@ -1919,7 +1956,9 @@ function integerEnvironmentValue(
   }
   const value = Number(normalized);
   if (!Number.isInteger(value) || value < minimum || value > maximum) {
-    throw new Error(`${name} must be an integer between ${minimum} and ${maximum}`);
+    throw new Error(
+      `${name} must be an integer between ${minimum} and ${maximum}`,
+    );
   }
   return value;
 }

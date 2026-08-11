@@ -27,8 +27,8 @@ describe("readBotConfig", () => {
   });
 
   it("requires ws url when NapCat is enabled", () => {
-    expect(() =>
-      readBotConfig({ KAGUYA_NAPCAT_ENABLED: "true" }),
-    ).toThrow("KAGUYA_NAPCAT_WS_URL is required when KAGUYA_NAPCAT_ENABLED=true");
+    expect(() => readBotConfig({ KAGUYA_NAPCAT_ENABLED: "true" })).toThrow(
+      "KAGUYA_NAPCAT_WS_URL is required when KAGUYA_NAPCAT_ENABLED=true",
+    );
   });
 });

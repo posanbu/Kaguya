@@ -31,9 +31,7 @@ describe("readApiGatewayConfig", () => {
       KAGUYA_GATEWAY_TOKEN: "a-secure-gateway-token",
     });
 
-    expect(config.databasePath).toMatch(
-      /[/\\]\.data[/\\]kaguya-api\.sqlite$/u,
-    );
+    expect(config.databasePath).toMatch(/[/\\]\.data[/\\]kaguya-api\.sqlite$/u);
   });
 
   it("requires a non-trivial gateway token", () => {

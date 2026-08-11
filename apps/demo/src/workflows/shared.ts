@@ -5,7 +5,7 @@ import {
   type ReplyOutput,
   type RouteOutput,
   type StateOutput,
-} from "@kaguya/llm";
+} from "@kaguya/llm/schemas";
 import type {
   PlatformDeliveryReceipt,
   PlatformMessageTarget,
@@ -140,9 +140,7 @@ export function parsePlatformTarget(
     return userId === undefined ? undefined : { kind: "private", userId };
   }
   if ((value as { kind: unknown }).kind === "group") {
-    const groupId = normalizeTargetId(
-      (value as { groupId?: unknown }).groupId,
-    );
+    const groupId = normalizeTargetId((value as { groupId?: unknown }).groupId);
     return groupId === undefined ? undefined : { kind: "group", groupId };
   }
   return undefined;

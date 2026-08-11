@@ -1,5 +1,5 @@
 import { WorkflowEngine } from "@kaguya/engine";
-import { KaguyaLlmError } from "@kaguya/llm";
+import { KaguyaLlmError } from "@kaguya/llm/client";
 import type { EventRun } from "@kaguya/schema";
 import { defineNode, defineWorkflow, type WorkflowContext } from "@kaguya/sdk";
 import { describe, expect, it } from "vitest";

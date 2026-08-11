@@ -1,7 +1,8 @@
 import { KaguyaDatabase } from "@kaguya/database";
 import { LlmLifecycleClient, type WorkflowServices } from "@kaguya/demo";
 import { EventBus } from "@kaguya/engine";
-import { KaguyaLlmClient, createDeterministicModel } from "@kaguya/llm";
+import { KaguyaLlmClient } from "@kaguya/llm/client";
+import { createDeterministicModel } from "@kaguya/llm/testing";
 import type { PlatformReplySender } from "@kaguya/platform-adapters";
 import { PromptCompiler } from "@kaguya/prompt";
 

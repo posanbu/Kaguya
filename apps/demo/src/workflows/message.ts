@@ -1,4 +1,4 @@
-import type { RouteOutput } from "@kaguya/llm";
+import type { RouteOutput } from "@kaguya/llm/schemas";
 import {
   type CompiledPrompt,
   type MessageRecord,
@@ -109,7 +109,10 @@ const prepareSendReplyNode = defineNode<MessageRecord, SendReplyInput>({
   async run(reply, context) {
     const originalEvent = context.services.messageReceivedEvent;
     const event = eventEnvelopeSchema.parse(originalEvent);
-    return { event: { ...event, sessionId: requiredSessionId(context) }, reply };
+    return {
+      event: { ...event, sessionId: requiredSessionId(context) },
+      reply,
+    };
   },
 });
 

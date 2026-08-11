@@ -12,10 +12,7 @@ import {
 } from "@kaguya/logger";
 
 import { createApiGateway } from "./app.js";
-import {
-  readApiGatewayConfig,
-  type ApiGatewayConfig,
-} from "./config.js";
+import { readApiGatewayConfig, type ApiGatewayConfig } from "./config.js";
 
 export function createConfiguredMessageIngress(
   config: Pick<ApiGatewayConfig, "databasePath">,
