@@ -6,6 +6,7 @@ const defaultDatabasePath = fileURLToPath(
 const defaultWebDistPath = fileURLToPath(
   new URL("../../web/dist", import.meta.url),
 );
+const defaultLlmBaseUrl = "https://api.openai.com/v1";
 const legacyEnvironmentVariables = [
   "KAGUYA_API_HOST",
   "KAGUYA_API_PORT",
@@ -24,8 +25,20 @@ export interface ServerConfig {
   readonly databasePath: string;
   readonly development: boolean;
   readonly webDistPath: string;
+  readonly llm: LlmConfig;
   readonly napcat: NapCatConfig;
 }
+
+export type LlmConfig =
+  | {
+      readonly provider: "deterministic";
+    }
+  | {
+      readonly provider: "openai-compatible";
+      readonly apiKey: string;
+      readonly model: string;
+      readonly baseUrl: string;
+    };
 
 export interface NapCatConfig {
   readonly enabled: boolean;
@@ -46,6 +59,21 @@ export function readServerConfig(
   );
   if (gatewayToken.length < 16) {
     throw new Error("KAGUYA_GATEWAY_TOKEN must contain at least 16 characters");
+  }
+
+  const llmApiKey = optionalText(environment.KAGUYA_LLM_API_KEY);
+  const llmModel = optionalText(environment.KAGUYA_LLM_MODEL);
+  const llmBaseUrl =
+    optionalText(environment.KAGUYA_LLM_BASE_URL) ?? defaultLlmBaseUrl;
+  if (llmApiKey !== undefined && llmModel === undefined) {
+    throw new Error(
+      "KAGUYA_LLM_MODEL is required when KAGUYA_LLM_API_KEY is set",
+    );
+  }
+  if (llmModel !== undefined && llmApiKey === undefined) {
+    throw new Error(
+      "KAGUYA_LLM_API_KEY is required when KAGUYA_LLM_MODEL is set",
+    );
   }
 
   const napcatEnabled = environment.KAGUYA_NAPCAT_ENABLED?.trim() === "true";
@@ -91,6 +119,15 @@ export function readServerConfig(
     development: environment.NODE_ENV === "development",
     webDistPath:
       optionalText(environment.KAGUYA_WEB_DIST_PATH) ?? defaultWebDistPath,
+    llm:
+      llmApiKey === undefined || llmModel === undefined
+        ? { provider: "deterministic" }
+        : {
+            provider: "openai-compatible",
+            apiKey: llmApiKey,
+            model: llmModel,
+            baseUrl: llmBaseUrl,
+          },
     napcat: {
       enabled: napcatEnabled,
       adapterId: "napcat.qq.main",

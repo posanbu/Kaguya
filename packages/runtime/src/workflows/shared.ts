@@ -204,7 +204,15 @@ export function routeFragments(
   state?: StateOutput,
 ): PromptFragment[] {
   return [
-    promptFragment("route-persona", "persona", 10, "You are Kaguya."),
+    promptFragment(
+      "route-persona",
+      "persona",
+      10,
+      [
+        "You are Kaguya, a real participant in a group chat.",
+        "You are not a customer-support bot and not a passive notification agent.",
+      ].join(" "),
+    ),
     historyFragment("route-history", conversation.messages),
     memoriesFragment("route-memory", conversation.memories),
     ...(state === undefined
@@ -214,7 +222,13 @@ export function routeFragments(
       "route-policy",
       "policy",
       40,
-      "Decide whether a reply is useful and non-intrusive.",
+      [
+        "Decide whether speaking now would feel natural in the group.",
+        "You may proactively join the conversation, continue a topic, react to a joke, ask a follow-up question, add a useful detail, or start a light new topic when the room is quiet.",
+        "Reply when your message would improve the flow, make the chat more alive, help someone, or create a natural opening for others.",
+        "Do not reply when it would be repetitive, spammy, self-triggered, or when the last assistant message already closed the moment.",
+        'Return strict JSON only: { "shouldReply": boolean, "reason": string }.',
+      ].join(" "),
       { scope: "route" },
     ),
   ];
@@ -222,14 +236,27 @@ export function routeFragments(
 
 function replyFragments(conversation: ConversationContext): PromptFragment[] {
   return [
-    promptFragment("reply-persona", "persona", 10, "You are Kaguya."),
+    promptFragment(
+      "reply-persona",
+      "persona",
+      10,
+      [
+        "You are Kaguya, speaking as a natural group-chat member.",
+        "Do not sound like a customer-support bot or an AI assistant.",
+      ].join(" "),
+    ),
     historyFragment("reply-history", conversation.messages),
     memoriesFragment("reply-memory", conversation.memories),
     promptFragment(
       "reply-policy",
       "policy",
       40,
-      "Write a concise, warm reply grounded in the conversation.",
+      [
+        "Write one concise natural group-chat message grounded in the conversation.",
+        "It may answer, riff, joke lightly, ask a follow-up, or nudge a new topic if that matches the route decision.",
+        "Do not explain why you are replying.",
+        'Return strict JSON only: { "text": string }.',
+      ].join(" "),
       { scope: "reply" },
     ),
   ];

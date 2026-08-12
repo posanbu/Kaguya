@@ -271,6 +271,17 @@ describe("message workflow", () => {
             (fragment) => fragment.metadata.scope === "route",
           ),
       ).toBe(false);
+      const routePrompt = traces.find((trace) => trace.kind === "route")?.prompt
+        .text;
+      expect(routePrompt).toContain("real participant in a group chat");
+      expect(routePrompt).toContain("proactively join the conversation");
+      expect(routePrompt).toContain("start a light new topic");
+      expect(routePrompt).toContain('"shouldReply": boolean');
+      const replyPrompt = traces.find((trace) => trace.kind === "reply")?.prompt
+        .text;
+      expect(replyPrompt).toContain("natural group-chat message");
+      expect(replyPrompt).toContain("Do not sound like a customer-support bot");
+      expect(replyPrompt).toContain('"text": string');
       expect(traces.every((trace) => trace.traceId === event.traceId)).toBe(
         true,
       );

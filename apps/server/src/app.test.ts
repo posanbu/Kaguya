@@ -25,6 +25,7 @@ const config: ServerConfig = {
   databasePath: "/tmp/kaguya-api-test.sqlite",
   development: false,
   webDistPath: "/tmp/kaguya-web-test",
+  llm: { provider: "deterministic" },
   napcat: {
     enabled: false,
     adapterId: "napcat.qq.main",
