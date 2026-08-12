@@ -13,7 +13,7 @@ export interface WorkflowServices extends Record<string, unknown> {
   llmClient: LlmLifecycleClient;
   eventBus: EventBus;
   platformReplySender?: PlatformReplySender;
-  messageReceivedEvent?: EventEnvelope;
+  messageReceivedEvent: EventEnvelope;
 }
 
 export function getDatabase(context: WorkflowContext): KaguyaDatabase {

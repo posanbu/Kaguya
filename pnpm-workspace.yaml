@@ -1,6 +1,7 @@
 packages:
   - "apps/*"
   - "packages/*"
+enableGlobalVirtualStore: false
 allowBuilds:
   "@playwright/browser-chromium": false
   "@swc/core": false

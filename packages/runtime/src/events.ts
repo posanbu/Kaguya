@@ -163,6 +163,7 @@ export const approvedEventDefinitions = [
   messagePersistedEvent,
   heartbeatTickEvent,
   memoryScheduleTickEvent,
+  memorySessionTickEvent,
   routeRequestedEvent,
   routeDecidedEvent,
   promptCompiledEvent,

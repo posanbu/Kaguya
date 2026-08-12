@@ -37,7 +37,6 @@ function createHarness(outputs: readonly unknown[]) {
       model: createDeterministicModel(outputs),
       traceWriter: database.llmTraces,
       now,
-      nextId,
     }),
     eventBus,
   );
@@ -46,6 +45,17 @@ function createHarness(outputs: readonly unknown[]) {
     promptCompiler: new PromptCompiler(),
     llmClient,
     eventBus,
+    messageReceivedEvent: messageReceivedEvent.create(
+      {
+        id: "placeholder-message",
+        source: "test",
+        occurredAt: NOW,
+        traceId: "placeholder-trace",
+        sessionId: "placeholder-session",
+        metadata: {},
+      },
+      { text: "placeholder" },
+    ),
   };
   const engine = new WorkflowEngine({ recorder: database.eventRuns });
 

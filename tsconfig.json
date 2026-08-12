@@ -11,8 +11,8 @@
     { "path": "./packages/database" },
     { "path": "./packages/scheduler" },
     { "path": "./packages/platform-adapters" },
-    { "path": "./apps/api" },
-    { "path": "./apps/bot" },
+    { "path": "./packages/runtime" },
+    { "path": "./apps/server" },
     { "path": "./apps/demo" },
     { "path": "./apps/web" }
   ]

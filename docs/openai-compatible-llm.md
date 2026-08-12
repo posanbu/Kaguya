@@ -14,7 +14,7 @@
 
 没有引入 xsAI。仓库的正式工作流已经使用 Vercel AI SDK，继续使用同一套模型抽象可以共享类型、错误语义和测试工具，避免同时维护两套 provider 调用层。
 
-SDK 只负责模型协议与调用生命周期，不负责 HTTP 网关、消息分发或 workflow 选择。provider allowlist、HTTPS 要求、密钥来源、成本限制和日志脱敏应由未来的 core/application adapter 负责。`apps/api` 不导入或暴露这个 service，也不接收 API key、base URL 或模型参数。
+SDK 只负责模型协议与调用生命周期，不负责 HTTP、消息分发或 workflow 选择。provider allowlist、HTTPS 要求、密钥来源、成本限制和日志脱敏应由 application adapter 负责。`apps/server` 的公开消息 API 不暴露这个 service，也不接收 API key、base URL 或模型参数。
 
 ## 基本用法
 
@@ -160,5 +160,5 @@ interface OpenAiCompatibleResult {
 - 仅实现 OpenAI-compatible chat completions 文本响应；
 - 暂不支持流式输出、tools/function calling、多模态输入和 embedding；
 - 不负责保存模型配置、密钥或调用历史；
-- 仓库当前没有 Web UI；本接口是内部 TypeScript adapter，不由 `apps/api` 暴露；
+- Web UI 已由统一 Server 同源提供；本接口仍是内部 TypeScript adapter，不由公开 HTTP API 暴露；
 - demo 仍使用确定性 mock model，不会访问远端 API。

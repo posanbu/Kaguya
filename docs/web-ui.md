@@ -1,47 +1,46 @@
 # Web UI
 
-`apps/web` 是 Kaguya 应用 API 网关的初版浏览器客户端。它提供网关地址、Bearer Token、会话 ID 和消息输入，并调用 `POST /api/v1/messages`。
-
-## 当前能力
-
-- 网关地址和会话 ID 保存在浏览器 `localStorage`；
-- Bearer Token 仅保存在当前标签页所属的 `sessionStorage`；
-- 可通过公开的 `GET /healthz` 检测网关连接状态；
-- 发送前校验连接配置、会话 ID、空消息和消息长度；
-- 展示消息提交中、网关已接收和提交失败状态；
-- 展示网关返回的结构化错误，并对未授权、限流和核心层未接入提供明确状态；
-- 支持桌面和移动端布局。
-
-UI 不接收模型、Provider、API key 或模型 Base URL。消息通过网关校验后交给 `MessageIngress`，后续模型选择和工作流属于核心层职责。
+`apps/web` 是统一 Kaguya Server 内提供的 React/Vite 客户端。它不再运行独立的开发服务，也不接受网关地址配置；健康检查和消息提交始终使用同源相对路径 `/healthz` 与 `/api/v1/messages`。
 
 ## 启动
 
-先启动 API 网关：
-
-```powershell
-. .\scripts\use-kaguya-env.ps1
-$env:KAGUYA_GATEWAY_TOKEN = "replace-with-at-least-16-characters"
-pnpm api:dev
+```bash
+export KAGUYA_GATEWAY_TOKEN="replace-with-at-least-16-characters"
+pnpm dev
 ```
 
-再打开另一个终端启动 Web UI：
+打开 `http://127.0.0.1:3000`。开发模式由 Fastify 内挂 Vite middleware 并在同一端口提供 HMR。生产模式先执行 `pnpm build`，再由 Fastify 提供 `apps/web/dist`。
 
-```powershell
-. .\scripts\use-kaguya-env.ps1
-pnpm web
-```
+不再使用 `pnpm web`、第二个 5173 端口或 `VITE_KAGUYA_API_URL`。
 
-默认访问地址为 `http://127.0.0.1:5173`。页面默认连接 `http://127.0.0.1:3000`，也可以通过 `VITE_KAGUYA_API_URL` 修改默认网关地址：
+## 浏览器存储
 
-```powershell
-$env:VITE_KAGUYA_API_URL = "http://127.0.0.1:3000"
-pnpm web
-```
+| 数据         | 存储                                      | 生命周期               |
+| ------------ | ----------------------------------------- | ---------------------- |
+| 会话 ID      | `localStorage` 的 `kaguya.sessionId`      | 浏览器后续会话继续使用 |
+| Bearer Token | `sessionStorage` 的 `kaguya.gatewayToken` | 仅当前标签页会话       |
+| Server 地址  | 不存储                                    | 始终使用页面同源地址   |
 
-不要通过 Vite 环境变量写入网关 Token，因为 `VITE_*` 的值会打包到浏览器代码中。
+Token 不应写入 `VITE_*` 环境变量，因为这类值会被打包进浏览器产物。
 
-## 当前边界
+## 当前能力
 
-本地开发入口现在会注入确定性的 `MessageIngress`，所以合法消息会返回 `202 accepted` 并写入本地 SQLite。该入口只用于开发闭环验证；它没有持久队列、真实平台发送、真实模型策略、结果查询或 SSE，因此 UI 仍不会伪造机器人回复。
+- 检测统一服务健康状态；
+- 在发送前校验 Token、会话 ID、空消息和消息长度；
+- 展示提交中、Server 已接受和提交失败状态；
+- 展示 API 返回的结构化错误；
+- 适配桌面和移动布局。
 
-当前接口只有提交结果，没有消息查询或 SSE 响应通道，因此 UI 不会伪造机器人回复。后续应在核心层提供持久 run、结果查询和可重连事件流后再扩展对话响应。
+UI 不接收 provider、模型、API key 或 base URL。模型和工作流由 Server 内 Runtime 管理。
+
+## 响应边界
+
+消息 API 保留 `202 accepted`，没有回复查询或 SSE，因此页面只展示提交状态，不伪造机器人回答。Runtime 会把确定性回复写入同一 SQLite；只有平台入站携带 reply sender 时，工作流才把回复投递到平台。
+
+## 排障
+
+- 页面打不开：确认 `pnpm dev` 仍在运行，并检查 `server.start.failed` 或 Vite 启动错误；
+- 健康检查失败：确认浏览器访问的就是 `KAGUYA_HOST:KAGUYA_PORT`，页面不支持另填网关地址；
+- 返回 401：页面中填写的 Token 必须与 Server 的 `KAGUYA_GATEWAY_TOKEN` 完全一致；
+- 页面可用但 NapCat 无响应：检查 `adapter:napcat` 日志；平台连接状态不影响 Web UI；
+- 深层页面生产环境 404：确认 `apps/web/dist/index.html` 存在并由 `pnpm build` 生成。

@@ -30,9 +30,3 @@ export {
 export { dispatchEvent, emitDefinedEvent } from "./dispatch.js";
 export { LlmLifecycleClient } from "./llm-lifecycle.js";
 export type { WorkflowServices } from "./services.js";
-export {
-  createLocalMessageIngress,
-  type CreateLocalMessageIngressOptions,
-  type LocalMessageIngress,
-  type LocalMessageIngressCommand,
-} from "./local-ingress.js";

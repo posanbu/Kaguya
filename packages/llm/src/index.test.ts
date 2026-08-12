@@ -31,7 +31,10 @@ function modelResult(text: string) {
   };
 }
 
-function request(kind: CompiledPrompt["kind"] = "route") {
+function request(
+  kind: CompiledPrompt["kind"] = "route",
+  traceRecordId = "llm-trace-1",
+) {
   return {
     kind,
     modelId: "deterministic-model",
@@ -39,6 +42,7 @@ function request(kind: CompiledPrompt["kind"] = "route") {
     traceId: "trace-1",
     workflowId: "message-workflow",
     nodeId: "decide-route",
+    traceRecordId,
   };
 }
 
@@ -74,7 +78,6 @@ describe("KaguyaLlmClient", () => {
         "2026-07-23T00:00:00.000Z",
         "2026-07-23T00:00:00.025Z",
       ),
-      nextId: () => "llm-trace-1",
     });
 
     await expect(client.generate(request())).resolves.toEqual({
@@ -127,13 +130,14 @@ describe("KaguyaLlmClient", () => {
         "2026-07-23T00:00:00.000Z",
         "2026-07-23T00:00:00.010Z",
       ),
-      nextId: () => "llm-trace-2",
     });
 
-    const caught = await client.generate(request()).catch((error: unknown) => {
-      order.push("caught");
-      return error;
-    });
+    const caught = await client
+      .generate(request("route", "llm-trace-2"))
+      .catch((error: unknown) => {
+        order.push("caught");
+        return error;
+      });
 
     expect(caught).toBeInstanceOf(KaguyaLlmError);
     expect(caught).toMatchObject({
@@ -181,7 +185,6 @@ describe("KaguyaLlmClient", () => {
         "2026-07-23T00:00:00.000Z",
         "2026-07-23T00:00:00.010Z",
       ),
-      nextId: () => "llm-trace-write-failed",
     });
 
     const caught = await client
@@ -207,7 +210,6 @@ describe("KaguyaLlmClient", () => {
         "2026-07-23T00:00:00.000Z",
         "2026-07-23T00:00:00.010Z",
       ),
-      nextId: () => "llm-trace-write-failed",
     });
 
     const caught = await client
@@ -239,7 +241,6 @@ describe("KaguyaLlmClient", () => {
         "2026-07-23T00:00:00.000Z",
         "2026-07-23T00:00:00.001Z",
       ),
-      nextId: () => "llm-trace-retryable",
     });
 
     await expect(client.generate(request())).rejects.toMatchObject({
@@ -260,7 +261,6 @@ describe("KaguyaLlmClient", () => {
         "2026-07-23T00:00:00.000Z",
         "2026-07-23T00:00:00.001Z",
       ),
-      nextId: () => "llm-trace-cancelled",
     });
 
     await expect(client.generate(request())).rejects.toMatchObject({
@@ -282,10 +282,11 @@ describe("KaguyaLlmClient", () => {
         "2026-07-23T00:00:00.000Z",
         "2026-07-23T00:00:00.001Z",
       ),
-      nextId: () => "llm-trace-3",
     });
 
-    await expect(client.generate(request())).rejects.toMatchObject({
+    await expect(
+      client.generate(request("route", "llm-trace-3")),
+    ).rejects.toMatchObject({
       kind: "non-retryable",
     });
     expect(traces[0]).toMatchObject({
@@ -313,7 +314,6 @@ describe("KaguyaLlmClient", () => {
         "2026-07-23T00:00:00.000Z",
         "2026-07-23T00:00:00.001Z",
       ),
-      nextId: () => `llm-trace-${kind}`,
     });
 
     await expect(client.generate(request(kind))).resolves.toEqual(output);
@@ -365,7 +365,6 @@ describe("KaguyaLlmClient", () => {
           "2026-07-23T00:00:00.000Z",
           "2026-07-23T00:00:00.001Z",
         ),
-        nextId: () => `llm-trace-blank-${kind}`,
       });
 
       await expect(client.generate(request(kind))).rejects.toMatchObject({
@@ -400,7 +399,6 @@ describe("KaguyaLlmClient", () => {
           "2026-07-23T00:00:00.000Z",
           "2026-07-23T00:00:00.001Z",
         ),
-        nextId: () => `llm-trace-trim-${kind}`,
       });
 
       const result = await client.generate(request(kind));

@@ -38,7 +38,10 @@ export class LlmLifecycleClient {
 
     let output: KaguyaLlmOutputByKind[K];
     try {
-      output = await this.client.generate(request);
+      output = await this.client.generate({
+        ...request,
+        traceRecordId: context.nextId("llm-trace"),
+      });
     } catch (error) {
       await emitDefinedEvent({
         definition: llmFailedEvent,
@@ -69,7 +72,7 @@ function eventBase(nodeId: string, context: WorkflowContext) {
   }
   return {
     id: context.nextId("event"),
-    source: `demo-llm/${nodeId}`,
+    source: `runtime-llm/${nodeId}`,
     occurredAt: context.now().toISOString(),
     traceId: context.traceId,
     sessionId: context.sessionId,
