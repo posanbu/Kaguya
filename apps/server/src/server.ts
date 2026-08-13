@@ -1,5 +1,6 @@
 import { pathToFileURL } from "node:url";
 
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
   closeLogger,
   createLogger,
@@ -7,7 +8,7 @@ import {
   readLoggerOptions,
   type KaguyaLogger,
 } from "@kaguya/logger";
-import { KaguyaRuntime } from "@kaguya/runtime";
+import { KaguyaRuntime, type KaguyaRuntimeOptions } from "@kaguya/runtime";
 import type { FastifyInstance } from "fastify";
 
 import { createHttpApplication } from "./app.js";
@@ -31,9 +32,11 @@ export async function startKaguyaServer(
   const serverLogger = createModuleLogger(rootLogger, "server");
   const httpLogger = createModuleLogger(rootLogger, "server:http");
   const napcatLogger = createModuleLogger(rootLogger, "adapter:napcat");
+  const resolveModel = createRuntimeModelResolver(config);
   const runtime = new KaguyaRuntime({
     databasePath: config.databasePath,
     logger: rootLogger,
+    ...(resolveModel === undefined ? {} : { resolveModel }),
   });
 
   let app: FastifyInstance | undefined;
@@ -114,6 +117,22 @@ export async function startKaguyaServer(
   };
   registerShutdownHandlers(started, serverLogger);
   return started;
+}
+
+export function createRuntimeModelResolver(
+  config: ServerConfig,
+): KaguyaRuntimeOptions["resolveModel"] | undefined {
+  if (config.llm.provider === "deterministic") {
+    return undefined;
+  }
+
+  const llm = config.llm;
+  const provider = createOpenAICompatible({
+    name: "kaguya-openai-compatible",
+    apiKey: llm.apiKey,
+    baseURL: llm.baseUrl,
+  });
+  return () => provider.chatModel(llm.model);
 }
 
 async function closeResources(options: {

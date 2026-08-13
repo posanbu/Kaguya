@@ -109,7 +109,24 @@ export interface SafeErrorLog {
   readonly code?: string | number;
   readonly statusCode?: number;
   readonly retryable?: boolean;
+  readonly errorKind?: SafeLlmErrorKind;
+  readonly llmFailure?: SafeLlmFailure;
 }
+
+type SafeLlmErrorKind =
+  "retryable" | "non-retryable" | "cancelled" | "configuration";
+type SafeLlmFailure =
+  | "connection_failed"
+  | "invalid_json_response"
+  | "invalid_response_structure"
+  | "provider_request_failed";
+
+const SAFE_LLM_ERROR_KINDS = new Set<SafeLlmErrorKind>([
+  "retryable",
+  "non-retryable",
+  "cancelled",
+  "configuration",
+]);
 
 interface NamespaceLevelRule {
   readonly namespace: string;
@@ -320,12 +337,63 @@ export function toSafeError(error: unknown): SafeErrorLog {
       : typeof error.isRetryable === "boolean"
         ? error.isRetryable
         : undefined;
+  const errorKind = safeLlmErrorKind(type, error.kind);
+  const llmFailure = classifyLlmFailure(type, error);
   return {
     type,
     ...(code === undefined ? {} : { code }),
     ...(statusCode === undefined ? {} : { statusCode }),
     ...(retryable === undefined ? {} : { retryable }),
+    ...(errorKind === undefined ? {} : { errorKind }),
+    ...(llmFailure === undefined ? {} : { llmFailure }),
   };
+}
+
+function safeLlmErrorKind(
+  type: string,
+  value: unknown,
+): SafeLlmErrorKind | undefined {
+  return type === "KaguyaLlmError" &&
+    typeof value === "string" &&
+    SAFE_LLM_ERROR_KINDS.has(value as SafeLlmErrorKind)
+    ? (value as SafeLlmErrorKind)
+    : undefined;
+}
+
+function classifyLlmFailure(
+  type: string,
+  error: Record<string, unknown>,
+): SafeLlmFailure | undefined {
+  if (type !== "KaguyaLlmError") {
+    return undefined;
+  }
+
+  const message =
+    typeof error.message === "string" ? error.message.toLowerCase() : "";
+  if (message.includes("invalid json response")) {
+    return "invalid_json_response";
+  }
+  if (message.includes("invalid response structure")) {
+    return "invalid_response_structure";
+  }
+  if (isConnectionFailureMessage(message)) {
+    return "connection_failed";
+  }
+  return "provider_request_failed";
+}
+
+function isConnectionFailureMessage(message: string): boolean {
+  return [
+    "cannot connect to api",
+    "network socket disconnected",
+    "fetch failed",
+    "connection refused",
+    "econnrefused",
+    "econnreset",
+    "enotfound",
+    "etimedout",
+    "tls connection",
+  ].some((fragment) => message.includes(fragment));
 }
 
 function createOutput(options: CreateLoggerOptions): {

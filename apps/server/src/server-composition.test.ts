@@ -4,11 +4,18 @@ import { join } from "node:path";
 
 import { KaguyaDatabase } from "@kaguya/database";
 import { KaguyaRuntime } from "@kaguya/runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createHttpApplication } from "./app.js";
 import type { ServerConfig } from "./config.js";
+import { createRuntimeModelResolver } from "./server.js";
 import { registerWebUi } from "./web.js";
+
+const chatModel = vi.fn((modelId: string) => ({ modelId }));
+
+vi.mock("@ai-sdk/openai-compatible", () => ({
+  createOpenAICompatible: vi.fn(() => ({ chatModel })),
+}));
 
 const gatewayToken = "test-gateway-token-12345";
 const roots: string[] = [];
@@ -37,6 +44,7 @@ function config(databasePath: string): ServerConfig {
     databasePath,
     development: false,
     webDistPath: join(dirnameOf(databasePath), "web"),
+    llm: { provider: "deterministic" },
     napcat: {
       enabled: false,
       adapterId: "napcat.qq.main",
@@ -151,6 +159,37 @@ describe("unified server composition", () => {
 
     await app.close();
     await webUi.close();
+  });
+
+  it("creates a runtime model resolver from OpenAI-compatible LLM config", () => {
+    const serverConfig: ServerConfig = {
+      ...config("/tmp/kaguya.sqlite"),
+      llm: {
+        provider: "openai-compatible",
+        apiKey: "provider-key",
+        baseUrl: "https://llm.example/v1",
+        model: "chat-model",
+      },
+    };
+
+    const resolver = createRuntimeModelResolver(serverConfig);
+
+    expect(
+      resolver?.({
+        kind: "route",
+        modelId: "ignored-workflow-model",
+        prompt: {
+          kind: "route",
+          text: "prompt",
+          fragments: [],
+          provenance: [],
+        },
+        traceId: "trace",
+        workflowId: "message-workflow",
+        nodeId: "decide-route",
+      }),
+    ).toEqual({ modelId: "chat-model" });
+    expect(chatModel).toHaveBeenCalledWith("chat-model");
   });
 });
 

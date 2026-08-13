@@ -62,11 +62,16 @@ pnpm start
 | `KAGUYA_TRUST_PROXY`          | 空                    | 逗号分隔的可信代理地址/CIDR            |
 | `KAGUYA_RATE_LIMIT_MAX`       | `30`                  | 每个限流窗口的请求数                   |
 | `KAGUYA_RATE_LIMIT_WINDOW_MS` | `60000`               | 限流窗口毫秒数                         |
+| `KAGUYA_LLM_API_KEY`          | 无                    | OpenAI-compatible LLM API key          |
+| `KAGUYA_LLM_BASE_URL`         | OpenAI 默认地址       | 可选的 OpenAI-compatible base URL      |
+| `KAGUYA_LLM_MODEL`            | 无                    | OpenAI-compatible 模型名               |
 | `KAGUYA_NAPCAT_ENABLED`       | `false`               | 是否启用 NapCat                        |
 | `KAGUYA_NAPCAT_WS_URL`        | 无                    | 启用 NapCat 时必填                     |
 | `KAGUYA_NAPCAT_ACCESS_TOKEN`  | 无                    | NapCat access token                    |
 | `KAGUYA_NAPCAT_SELF_ID`       | 无                    | 可选的预期机器人 ID                    |
 | `KAGUYA_NAPCAT_RECONNECT_MS`  | `3000`                | 重连间隔                               |
+
+如果没有配置 `KAGUYA_LLM_API_KEY` 和 `KAGUYA_LLM_MODEL`，Runtime 会继续使用确定性本地模型，主要用于测试和演示。生产接 QQ 时应同时配置这两个变量，让 route/reply 节点由真实 LLM 判断是否自然发言以及回复内容。
 
 旧变量 `KAGUYA_API_HOST`、`KAGUYA_API_PORT`、`KAGUYA_API_DATABASE_PATH`、`KAGUYA_BOT_DATABASE_PATH` 会让启动直接失败，并提示改用统一变量。
 
