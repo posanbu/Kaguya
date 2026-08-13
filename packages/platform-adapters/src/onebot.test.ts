@@ -6,7 +6,7 @@ import {
 } from "./onebot.js";
 
 describe("normalizeOneBotMessageEvent", () => {
-  it("maps private text messages to stable Kaguya session and trace IDs", () => {
+  it("maps private text messages without creating a Core session", () => {
     const message = normalizeOneBotMessageEvent(
       {
         post_type: "message",
@@ -28,7 +28,6 @@ describe("normalizeOneBotMessageEvent", () => {
       platform: "qq",
       adapterId: "napcat.qq.main",
       selfId: "998877",
-      sessionId: "qq:private:112233",
       traceId: "napcat:998877:12345",
       platformMessageId: "12345",
       occurredAt: "2026-07-28T01:02:03.000Z",
@@ -74,9 +73,33 @@ describe("buildOneBotSendAction", () => {
       echo: "echo-2",
     });
   });
+
+  it("builds reply actions with an explicit platform reply segment", () => {
+    expect(
+      buildOneBotSendAction(
+        { kind: "group", groupId: "778899" },
+        {
+          kind: "reply",
+          replyToPlatformMessageId: "source-message-1",
+          text: "group reply",
+        },
+        "echo-reply",
+      ),
+    ).toEqual({
+      action: "send_group_msg",
+      params: {
+        group_id: 778899,
+        message: [
+          { type: "reply", data: { id: "source-message-1" } },
+          { type: "text", data: { text: "group reply" } },
+        ],
+      },
+      echo: "echo-reply",
+    });
+  });
 });
 
-it("maps group messages to group sessions and degraded segment text", () => {
+it("maps group messages to structured targets and degraded segment text", () => {
   const message = normalizeOneBotMessageEvent(
     {
       post_type: "message",
@@ -100,7 +123,6 @@ it("maps group messages to group sessions and degraded segment text", () => {
   );
 
   expect(message).toMatchObject({
-    sessionId: "qq:group:778899",
     traceId: "napcat:998877:abc-1",
     text: "[reply:old-msg]@998877hi[image]",
     mentions: [{ kind: "user", id: "998877" }],

@@ -1,6 +1,5 @@
 import { KaguyaDatabase } from "@kaguya/database";
 import { EventBus } from "@kaguya/engine";
-import type { PlatformReplySender } from "@kaguya/platform-adapters";
 import { PromptCompiler } from "@kaguya/prompt";
 import type { EventEnvelope } from "@kaguya/schema";
 import type { WorkflowContext } from "@kaguya/sdk";
@@ -12,8 +11,7 @@ export interface WorkflowServices extends Record<string, unknown> {
   promptCompiler: PromptCompiler;
   llmClient?: LlmLifecycleClient;
   eventBus: EventBus;
-  platformReplySender?: PlatformReplySender;
-  messageReceivedEvent: EventEnvelope;
+  messageReceivedEvent?: EventEnvelope;
 }
 
 export function getDatabase(context: WorkflowContext): KaguyaDatabase {
@@ -46,14 +44,4 @@ export function getEventBus(context: WorkflowContext): EventBus {
     throw new Error("workflow service eventBus is not configured");
   }
   return service;
-}
-
-export function getPlatformReplySender(
-  context: WorkflowContext,
-): PlatformReplySender | undefined {
-  const service = context.services.platformReplySender;
-  if (service === undefined) {
-    return undefined;
-  }
-  return service as PlatformReplySender;
 }

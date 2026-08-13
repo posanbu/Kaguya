@@ -1,8 +1,11 @@
 export type PlatformName = "qq";
 
-export type PlatformMessageTarget =
-  | { readonly kind: "private"; readonly userId: string }
-  | { readonly kind: "group"; readonly groupId: string };
+import type {
+  OutboundMessageContent,
+  PlatformDestination,
+} from "@kaguya/schema";
+
+export type PlatformMessageTarget = PlatformDestination;
 
 export interface PlatformMessageSender {
   readonly userId: string;
@@ -17,7 +20,6 @@ export interface PlatformInboundMessage {
   readonly platform: PlatformName;
   readonly adapterId: string;
   readonly selfId?: string;
-  readonly sessionId: string;
   readonly traceId: string;
   readonly platformMessageId: string;
   readonly occurredAt: string;
@@ -42,6 +44,14 @@ export interface PlatformReplySender {
   sendTextReply(
     target: PlatformMessageTarget,
     text: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<PlatformDeliveryReceipt>;
+}
+
+export interface PlatformOutboundTransport {
+  sendMessage(
+    target: PlatformMessageTarget,
+    message: OutboundMessageContent,
     metadata?: Record<string, unknown>,
   ): Promise<PlatformDeliveryReceipt>;
 }

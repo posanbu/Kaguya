@@ -191,6 +191,40 @@ describe("Kaguya logger", () => {
     });
   });
 
+  it("summarizes nested aggregate LLM failures without serializing children", () => {
+    const stream = new MemoryStream();
+    const logger = createLogger({ service: "kaguya-test", stream });
+    const failure = (secret: string) =>
+      Object.assign(new Error(`Cannot connect to API: ${secret}`), {
+        name: "KaguyaLlmError",
+        kind: "retryable",
+        apiKey: secret,
+      });
+    const error = new AggregateError(
+      [
+        new AggregateError([failure("key-one")], "module failure key-two"),
+        failure("key-three"),
+      ],
+      "event delivery failed key-four",
+    );
+
+    logger.error({ event: "module.failed", err: error });
+
+    const serialized = JSON.stringify(stream.logs());
+    expect(serialized).not.toContain("key-one");
+    expect(serialized).not.toContain("key-two");
+    expect(serialized).not.toContain("key-three");
+    expect(serialized).not.toContain("key-four");
+    expect(stream.logs()[0]).toMatchObject({
+      err: {
+        type: "AggregateError",
+        errorKind: "retryable",
+        llmFailure: "connection_failed",
+        failureCount: 2,
+      },
+    });
+  });
+
   it("parses environment defaults and namespace overrides", () => {
     expect(
       readLoggerOptions("kaguya-api", {

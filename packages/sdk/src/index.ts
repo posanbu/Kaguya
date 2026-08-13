@@ -3,7 +3,6 @@ import { eventEnvelopeSchema, type EventEnvelope, z } from "@kaguya/schema";
 export interface EventDefinition<TType extends string, TPayload> {
   type: TType;
   payloadSchema: z.ZodType<TPayload>;
-  sessionScoped: boolean;
   create(
     base: Omit<EventEnvelope, "type" | "payload">,
     payload: TPayload,
@@ -13,24 +12,16 @@ export interface EventDefinition<TType extends string, TPayload> {
 export function defineEvent<TType extends string, TPayload>(
   type: TType,
   payloadSchema: z.ZodType<TPayload>,
-  options: { sessionScoped?: boolean } = {},
 ): EventDefinition<TType, TPayload> {
-  const sessionScoped = options.sessionScoped ?? false;
-
   return {
     type,
     payloadSchema,
-    sessionScoped,
     create(base, payload) {
       const event: EventEnvelope<TType, TPayload> = {
         ...base,
         type,
         payload: payloadSchema.parse(payload),
       };
-
-      if (sessionScoped && event.sessionId === undefined) {
-        throw new Error(`${type} requires sessionId`);
-      }
 
       eventEnvelopeSchema.parse(event);
       return event;
@@ -64,7 +55,6 @@ export function defineListener<TType extends string, TPayload>(
 
 export interface ExecutionContext {
   traceId: string;
-  sessionId?: string;
   now(): Date;
   nextId(prefix: string): string;
 }

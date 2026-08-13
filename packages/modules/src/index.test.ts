@@ -1,9 +1,5 @@
 import { PromptCompiler } from "@kaguya/prompt";
-import type {
-  EventEnvelope,
-  MemoryRecord,
-  MessageRecord,
-} from "@kaguya/schema";
+import type { EventEnvelope, MessageRecord } from "@kaguya/schema";
 import type {
   EventDefinition,
   ModuleHandlerContext,
@@ -14,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { alwaysReplyFilterModule } from "./always-reply-filter.js";
 import {
   messageIngestedEvent,
-  replyGeneratedEvent,
+  outboundMessageRequestedEvent,
   replyRequestedEvent,
   type ModuleMessage,
 } from "./events.js";
@@ -23,14 +19,16 @@ import { createLlmReplyModule, llmReplySettingsSchema } from "./llm-reply.js";
 const moduleMessage: ModuleMessage = {
   messageId: "message-1",
   text: "@998877 hello",
-  conversation: { kind: "group", id: "778899" },
-  sender: { id: "112233", displayName: "Ada" },
-  mentions: [{ kind: "user", id: "998877" }],
-  origin: {
+  occurredAt: "2026-08-13T00:00:00.000Z",
+  source: {
+    kind: "platform",
     platform: "qq",
     adapterId: "napcat.qq.main",
-    messageId: "platform-1",
+    platformMessageId: "platform-1",
     selfId: "998877",
+    destination: { kind: "group", groupId: "778899" },
+    sender: { id: "112233", displayName: "Ada" },
+    mentions: [{ kind: "user", id: "998877" }],
   },
 };
 
@@ -40,7 +38,6 @@ function eventBase() {
     source: "test",
     occurredAt: "2026-08-13T00:00:00.000Z",
     traceId: "trace-1",
-    sessionId: "qq:group:778899",
     metadata: {},
   };
 }
@@ -68,9 +65,6 @@ function handlerContext(
     definitionId: `definition:${instanceId}`,
     instanceId,
     traceId: sourceEvent.traceId,
-    ...(sourceEvent.sessionId === undefined
-      ? {}
-      : { sessionId: sourceEvent.sessionId }),
     sourceEvent,
     now: () => new Date("2026-08-13T00:00:01.000Z"),
     nextId: (prefix) => `${sourceEvent.traceId}-${prefix}-${++sequence}`,
@@ -114,11 +108,6 @@ describe("alwaysReplyFilterModule", () => {
       handlerContext("filter.default", source, emitted),
     );
 
-    expect(instance.subscriptions).toHaveLength(1);
-    expect(instance.subscriptions[0]).toMatchObject({
-      event: messageIngestedEvent,
-      targeted: false,
-    });
     expect(emitted).toContainEqual(
       expect.objectContaining({
         type: replyRequestedEvent.type,
@@ -134,26 +123,16 @@ describe("alwaysReplyFilterModule", () => {
 describe("createLlmReplyModule", () => {
   const userMessage: MessageRecord = {
     id: "message-1",
-    sessionId: "qq:group:778899",
     role: "user",
-    content: "@998877 hello",
-    occurredAt: "2026-08-13T00:00:00.000Z",
-    metadata: { messageContext: moduleMessage },
-  };
-  const memory: MemoryRecord = {
-    id: "memory-1",
-    sessionId: userMessage.sessionId,
-    content: "Ada likes moonlight.",
-    occurredAt: "2026-08-12T00:00:00.000Z",
-    metadata: {},
+    content: moduleMessage.text,
+    occurredAt: moduleMessage.occurredAt,
+    metadata: { moduleMessage },
   };
 
-  it("only subscribes to targeted reply requests and emits generated text", async () => {
+  it("uses only the current message and emits a platform reply request", async () => {
     const requests: unknown[] = [];
     const definition = createLlmReplyModule({
-      conversationReader: {
-        load: () => ({ messages: [userMessage], memories: [memory] }),
-      },
+      messageReader: { getById: () => userMessage },
       promptCompiler: new PromptCompiler(),
       llm: {
         async generate(request) {
@@ -162,7 +141,10 @@ describe("createLlmReplyModule", () => {
         },
       },
     });
-    const settings = llmReplySettingsSchema.parse({ modelId: "model-1" });
+    const settings = llmReplySettingsSchema.parse({
+      modelTier: "heavy",
+      outbound: { mode: "source", messageKind: "reply" },
+    });
     const instance = await createInstance(
       definition,
       "reply.default",
@@ -179,17 +161,10 @@ describe("createLlmReplyModule", () => {
       handlerContext("reply.default", source, emitted),
     );
 
-    expect(instance.subscriptions).toHaveLength(1);
-    expect(instance.subscriptions[0]).toMatchObject({
-      event: replyRequestedEvent,
-      targeted: true,
-    });
     expect(requests).toContainEqual(
       expect.objectContaining({
         kind: "reply",
-        modelId: "model-1",
-        workflowId: "message-module-pipeline",
-        nodeId: "reply.default",
+        selection: { modelTier: "heavy" },
         prompt: expect.objectContaining({
           text: expect.stringContaining("reply-current-message-context"),
         }),
@@ -198,61 +173,130 @@ describe("createLlmReplyModule", () => {
     expect(JSON.stringify(requests)).toContain("mentions");
     expect(emitted).toContainEqual(
       expect.objectContaining({
-        type: replyGeneratedEvent.type,
-        payload: { messageId: "message-1", text: "Hello Ada." },
+        type: outboundMessageRequestedEvent.type,
+        payload: {
+          adapterId: "napcat.qq.main",
+          platform: "qq",
+          destination: { kind: "group", groupId: "778899" },
+          message: {
+            kind: "reply",
+            replyToPlatformMessageId: "platform-1",
+            text: "Hello Ada.",
+          },
+        },
       }),
     );
   });
 
-  it("does not publish reply.generated when generation fails", async () => {
-    const generationError = new Error("model unavailable");
+  it("can choose a fixed destination independently of the source", async () => {
     const definition = createLlmReplyModule({
-      conversationReader: {
-        load: () => ({ messages: [userMessage], memories: [] }),
-      },
+      messageReader: { getById: () => userMessage },
       promptCompiler: new PromptCompiler(),
-      llm: {
-        async generate() {
-          throw generationError;
-        },
-      },
+      llm: { generate: async () => ({ text: "Elsewhere" }) },
     });
     const instance = await createInstance(
       definition,
-      "reply.default",
-      llmReplySettingsSchema.parse({ modelId: "model-1" }),
+      "reply.fixed",
+      llmReplySettingsSchema.parse({
+        profileId: "profile-2",
+        modelTier: "light",
+        outbound: {
+          mode: "fixed",
+          adapterId: "napcat.qq.other",
+          platform: "qq",
+          destination: { kind: "private", userId: "42" },
+          messageKind: "text",
+        },
+      }),
     );
     const source = replyRequestedEvent.create(eventBase(), {
-      targetInstanceId: "reply.default",
+      targetInstanceId: "reply.fixed",
       messageId: "message-1",
     });
     const emitted: EventEnvelope[] = [];
 
-    await expect(
-      instance.subscriptions[0]?.handle(
-        source,
-        handlerContext("reply.default", source, emitted),
-      ),
-    ).rejects.toBe(generationError);
-    expect(emitted).toEqual([]);
+    await instance.subscriptions[0]?.handle(
+      source,
+      handlerContext("reply.fixed", source, emitted),
+    );
+    expect(emitted[0]?.payload).toMatchObject({
+      adapterId: "napcat.qq.other",
+      destination: { kind: "private", userId: "42" },
+      message: { kind: "text", text: "Elsewhere" },
+    });
   });
 
-  it("does not publish reply.generated for an invalid LLM output", async () => {
+  it("keeps profile and tier selection independent across reply instances", async () => {
+    const selections: unknown[] = [];
     const definition = createLlmReplyModule({
-      conversationReader: {
-        load: () => ({ messages: [userMessage], memories: [] }),
-      },
+      messageReader: { getById: () => userMessage },
       promptCompiler: new PromptCompiler(),
       llm: {
-        async generate() {
-          return { text: "   " };
+        async generate(request) {
+          selections.push(request.selection);
+          return { text: "selected" };
         },
       },
+    });
+    const light = await createInstance(
+      definition,
+      "reply.light",
+      llmReplySettingsSchema.parse({
+        profileId: "profile-light",
+        modelTier: "light",
+        outbound: { mode: "source", messageKind: "text" },
+      }),
+    );
+    const heavy = await createInstance(
+      definition,
+      "reply.heavy",
+      llmReplySettingsSchema.parse({
+        profileId: "profile-heavy",
+        modelTier: "heavy",
+        outbound: { mode: "source", messageKind: "reply" },
+      }),
+    );
+    const lightSource = replyRequestedEvent.create(eventBase(), {
+      targetInstanceId: "reply.light",
+      messageId: "message-1",
+    });
+    const heavySource = replyRequestedEvent.create(
+      { ...eventBase(), id: "event-2" },
+      {
+        targetInstanceId: "reply.heavy",
+        messageId: "message-1",
+      },
+    );
+
+    await light.subscriptions[0]?.handle(
+      lightSource,
+      handlerContext("reply.light", lightSource, []),
+    );
+    await heavy.subscriptions[0]?.handle(
+      heavySource,
+      handlerContext("reply.heavy", heavySource, []),
+    );
+
+    expect(selections).toEqual([
+      { profileId: "profile-light", modelTier: "light" },
+      { profileId: "profile-heavy", modelTier: "heavy" },
+    ]);
+  });
+
+  it("does not emit outbound when generation fails", async () => {
+    const failure = new Error("model unavailable");
+    const definition = createLlmReplyModule({
+      messageReader: { getById: () => userMessage },
+      promptCompiler: new PromptCompiler(),
+      llm: { generate: async () => Promise.reject(failure) },
     });
     const instance = await createInstance(
       definition,
       "reply.default",
-      llmReplySettingsSchema.parse({ modelId: "model-1" }),
+      llmReplySettingsSchema.parse({
+        modelTier: "heavy",
+        outbound: { mode: "source", messageKind: "reply" },
+      }),
     );
     const source = replyRequestedEvent.create(eventBase(), {
       targetInstanceId: "reply.default",
@@ -265,7 +309,7 @@ describe("createLlmReplyModule", () => {
         source,
         handlerContext("reply.default", source, emitted),
       ),
-    ).rejects.toThrow();
+    ).rejects.toBe(failure);
     expect(emitted).toEqual([]);
   });
 });

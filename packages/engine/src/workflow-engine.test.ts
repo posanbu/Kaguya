@@ -10,7 +10,6 @@ import {
 
 const context: WorkflowContext = {
   traceId: "trace-1",
-  sessionId: "session-1",
   now: () => new Date("2026-07-23T00:00:00.000Z"),
   nextId: (prefix) => `${prefix}-1`,
   services: {},

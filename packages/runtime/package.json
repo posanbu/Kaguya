@@ -17,6 +17,7 @@
     "@kaguya/engine": "workspace:*",
     "@kaguya/llm": "workspace:*",
     "@kaguya/logger": "workspace:*",
+    "@kaguya/modules": "workspace:*",
     "@kaguya/platform-adapters": "workspace:*",
     "@kaguya/prompt": "workspace:*",
     "@kaguya/schema": "workspace:*",

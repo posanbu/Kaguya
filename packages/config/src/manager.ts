@@ -292,6 +292,21 @@ export class FileUserConfigManager {
     return structuredClone(profile);
   }
 
+  async resolveProfileById(profileId?: string): Promise<UserConfigProfile> {
+    await this.#afterPendingWrites();
+    const profile = await this.#readProfile(
+      profileId ?? this.#index.defaultProfileId,
+    );
+    const readiness = inspectUserConfigProfile(profile);
+    if (readiness.status === "invalid") {
+      throw new ConfigIncompleteError(readiness.issues);
+    }
+    if (readiness.status === "review_required") {
+      throw new ConfigReviewRequiredError(readiness.warnings);
+    }
+    return structuredClone(profile);
+  }
+
   #enqueue<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.#writeTail.then(operation, operation);
     this.#writeTail = result.then(

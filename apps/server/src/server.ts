@@ -2,13 +2,23 @@ import { pathToFileURL } from "node:url";
 
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
+  ConfigIncompleteError,
+  ConfigReviewRequiredError,
+  FileUserConfigManager,
+  inspectUserConfigProfile,
+  type UserConfigProfile,
+} from "@kaguya/config";
+import {
   closeLogger,
   createLogger,
   createModuleLogger,
   readLoggerOptions,
   type KaguyaLogger,
 } from "@kaguya/logger";
-import { KaguyaRuntime, type KaguyaRuntimeOptions } from "@kaguya/runtime";
+import {
+  KaguyaRuntime,
+  type RuntimeModelSelectionResolver,
+} from "@kaguya/runtime";
 import type { FastifyInstance } from "fastify";
 
 import { createHttpApplication } from "./app.js";
@@ -28,15 +38,17 @@ export interface StartedKaguyaServer {
 export async function startKaguyaServer(
   config: ServerConfig = readServerConfig(),
 ): Promise<StartedKaguyaServer> {
+  const resolveModelSelection = await createRuntimeModelSelectionResolver(
+    config.configRoot,
+  );
   const rootLogger = createLogger(readLoggerOptions("kaguya"));
   const serverLogger = createModuleLogger(rootLogger, "server");
   const httpLogger = createModuleLogger(rootLogger, "server:http");
   const napcatLogger = createModuleLogger(rootLogger, "adapter:napcat");
-  const resolveModel = createRuntimeModelResolver(config);
   const runtime = new KaguyaRuntime({
     databasePath: config.databasePath,
     logger: rootLogger,
-    ...(resolveModel === undefined ? {} : { resolveModel }),
+    resolveModelSelection,
   });
 
   let app: FastifyInstance | undefined;
@@ -67,6 +79,18 @@ export async function startKaguyaServer(
       },
       "Kaguya server starting",
     );
+    if (config.napcat.enabled) {
+      napcat = createNapCatSupervisor({
+        config: config.napcat,
+        runtime,
+        logger: napcatLogger,
+      });
+      runtime.registerTransport({
+        adapterId: config.napcat.adapterId,
+        platform: "qq",
+        transport: napcat,
+      });
+    }
     await runtime.start();
     app = await createHttpApplication({
       config,
@@ -77,11 +101,6 @@ export async function startKaguyaServer(
     await app.listen({ host: config.host, port: config.port });
 
     if (config.napcat.enabled) {
-      napcat = createNapCatSupervisor({
-        config: config.napcat,
-        runtime,
-        logger: napcatLogger,
-      });
       napcatLogger.info(
         {
           event: "napcat.connection.starting",
@@ -89,7 +108,7 @@ export async function startKaguyaServer(
         },
         "NapCat connection starting",
       );
-      await napcat.start();
+      await napcat?.start();
     }
 
     serverLogger.info(
@@ -119,20 +138,79 @@ export async function startKaguyaServer(
   return started;
 }
 
-export function createRuntimeModelResolver(
-  config: ServerConfig,
-): KaguyaRuntimeOptions["resolveModel"] | undefined {
-  if (config.llm.provider === "deterministic") {
-    return undefined;
+export async function createRuntimeModelSelectionResolver(
+  configRoot: string,
+): Promise<RuntimeModelSelectionResolver> {
+  const manager = await FileUserConfigManager.open({ rootDir: configRoot });
+  const defaultProfileId = manager.getDefaultProfileId();
+  await manager.resolveProfileById(defaultProfileId);
+  const profiles = new Map<string, UserConfigProfile>();
+  for (const metadata of manager.listProfiles()) {
+    profiles.set(metadata.id, await manager.getProfile(metadata.id));
   }
+  const providerCache = new Map<
+    string,
+    ReturnType<typeof createOpenAICompatible>
+  >();
 
-  const llm = config.llm;
-  const provider = createOpenAICompatible({
-    name: "kaguya-openai-compatible",
-    apiKey: llm.apiKey,
-    baseURL: llm.baseUrl,
-  });
-  return () => provider.chatModel(llm.model);
+  const resolver: RuntimeModelSelectionResolver = (selection) => {
+    const profileId = selection.profileId ?? defaultProfileId;
+    const profile = profiles.get(profileId);
+    if (profile === undefined) {
+      throw new Error(`Configuration profile was not found: ${profileId}`);
+    }
+    assertProfileReady(profile);
+    const target = profile.ai.modelTiers?.[selection.modelTier];
+    if (target === undefined) {
+      throw new Error(
+        `Model tier is unavailable in profile ${profileId}: ${selection.modelTier}`,
+      );
+    }
+    const provider = profile.ai.providers.find(
+      ({ id }) => id === target.providerId,
+    );
+    if (provider === undefined || !provider.enabled) {
+      throw new Error(
+        `Model tier provider is unavailable in profile ${profileId}`,
+      );
+    }
+    if (provider.type !== "openai-compatible") {
+      throw new Error(
+        `Unsupported AI provider type in profile ${profileId}: ${provider.type}`,
+      );
+    }
+    if (provider.apiKey === undefined || provider.baseUrl === undefined) {
+      throw new Error(
+        `AI provider credentials are incomplete in profile ${profileId}`,
+      );
+    }
+    const cacheKey = `${profileId}:${provider.id}`;
+    let client = providerCache.get(cacheKey);
+    if (client === undefined) {
+      client = createOpenAICompatible({
+        name: `kaguya-${profileId}-${provider.id}`,
+        apiKey: provider.apiKey,
+        baseURL: provider.baseUrl,
+      });
+      providerCache.set(cacheKey, client);
+    }
+    return { modelId: target.modelId, model: client.chatModel(target.modelId) };
+  };
+
+  // Fail before HTTP/adapters start if either default tier is not executable.
+  resolver({ modelTier: "light" });
+  resolver({ modelTier: "heavy" });
+  return resolver;
+}
+
+function assertProfileReady(profile: UserConfigProfile): void {
+  const readiness = inspectUserConfigProfile(profile);
+  if (readiness.status === "invalid") {
+    throw new ConfigIncompleteError(readiness.issues);
+  }
+  if (readiness.status === "review_required") {
+    throw new ConfigReviewRequiredError(readiness.warnings);
+  }
 }
 
 async function closeResources(options: {

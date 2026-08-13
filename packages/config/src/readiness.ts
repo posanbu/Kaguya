@@ -5,7 +5,7 @@ export interface ConfigurationGuidanceStep {
   readonly id:
     | "create-profile"
     | "add-enabled-provider"
-    | "configure-two-models"
+    | "configure-model-tiers"
     | "select-default-provider"
     | "review-optional-configuration";
   readonly message: string;
@@ -56,8 +56,8 @@ export const configurationSetupGuidance: ConfigurationGuidance = Object.freeze({
       message: "Add and enable an AI provider.",
     }),
     Object.freeze({
-      id: "configure-two-models" as const,
-      message: "Configure at least two models.",
+      id: "configure-model-tiers" as const,
+      message: "Assign distinct light and heavy model targets.",
     }),
     Object.freeze({
       id: "select-default-provider" as const,
@@ -157,7 +157,6 @@ function deriveConfigurationIssues(
     });
   }
 
-  const targets = new Set<string>();
   for (const [providerIndex, provider] of profile.ai.providers.entries()) {
     if (!provider.enabled) {
       continue;
@@ -180,15 +179,47 @@ function deriveConfigurationIssues(
         });
       }
       seenModels.add(modelId);
-      targets.add(`${provider.id}:${modelId}`);
     }
   }
 
-  if (targets.size < 2) {
+  const tiers = profile.ai.modelTiers;
+  if (tiers === undefined) {
     issues.push({
-      id: "insufficient-model-targets",
-      path: "ai.providers",
-      message: "At least two distinct model targets must be configured.",
+      id: "model-tiers-missing",
+      path: "ai.modelTiers",
+      message: "Light and heavy model tiers must be configured.",
+    });
+    return issues;
+  }
+
+  const targetIds = new Set<string>();
+  for (const tier of ["light", "heavy"] as const) {
+    const target = tiers[tier];
+    const provider = profile.ai.providers.find(
+      ({ id }) => id === target.providerId,
+    );
+    if (provider === undefined || !provider.enabled) {
+      issues.push({
+        id: `model-tier-provider-invalid:${tier}`,
+        path: `ai.modelTiers.${tier}.providerId`,
+        message: `${tier} must reference an enabled provider.`,
+      });
+      continue;
+    }
+    if (!provider.models.includes(target.modelId)) {
+      issues.push({
+        id: `model-tier-model-invalid:${tier}`,
+        path: `ai.modelTiers.${tier}.modelId`,
+        message: `${tier} must reference a model declared by its provider.`,
+      });
+    }
+    targetIds.add(`${target.providerId}:${target.modelId}`);
+  }
+  if (targetIds.size < 2) {
+    issues.push({
+      id: "model-tier-targets-not-distinct",
+      path: "ai.modelTiers",
+      message: "Light and heavy tiers must use distinct model targets.",
     });
   }
 

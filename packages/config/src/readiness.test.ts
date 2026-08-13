@@ -10,12 +10,18 @@ function profileWith(
   providers: UserConfigProfile["ai"]["providers"],
   overrides: Partial<UserConfigProfile> = {},
 ): UserConfigProfile {
+  const targets = providers.flatMap((provider) =>
+    provider.models.map((modelId) => ({ providerId: provider.id, modelId })),
+  );
+  const light = targets[0] ?? { providerId: "missing", modelId: "missing" };
+  const heavy = targets[1] ?? light;
   return userConfigProfileSchema.parse({
     version: 1,
     id: "4f649709-50d9-4fc4-8df4-95f96163f7c9",
     name: "test",
     ai: {
       defaultProviderId: providers[0]?.id,
+      modelTiers: { light, heavy },
       providers,
     },
     platforms: [
@@ -33,7 +39,7 @@ function profileWith(
 }
 
 describe("inspectUserConfigProfile", () => {
-  it("rejects a single enabled model target", () => {
+  it("rejects tiers that point to the same model target", () => {
     const readiness = inspectUserConfigProfile(
       profileWith([
         {
@@ -52,8 +58,8 @@ describe("inspectUserConfigProfile", () => {
       status: "invalid",
       issues: [
         {
-          id: "insufficient-model-targets",
-          path: "ai.providers",
+          id: "model-tier-targets-not-distinct",
+          path: "ai.modelTiers",
         },
       ],
     });

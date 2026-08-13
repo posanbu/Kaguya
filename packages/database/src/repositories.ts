@@ -5,10 +5,12 @@ import {
   llmTraceSchema,
   memoryRecordSchema,
   messageRecordSchema,
+  outboundMessageRecordSchema,
   type EventRun,
   type LlmTrace,
   type MemoryRecord,
   type MessageRecord,
+  type OutboundMessageRecord,
 } from "@kaguya/schema";
 
 type SqlRow = Record<string, SQLOutputValue>;
@@ -46,12 +48,11 @@ export class MessageRepository {
   insert(record: MessageRecord): void {
     this.database
       .prepare(
-        `INSERT INTO messages (id, session_id, role, content, occurred_at, metadata_json)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO messages (id, role, content, occurred_at, metadata_json)
+         VALUES (?, ?, ?, ?, ?)`,
       )
       .run(
         record.id,
-        record.sessionId,
         record.role,
         record.content,
         record.occurredAt,
@@ -62,54 +63,98 @@ export class MessageRepository {
   getById(id: string): MessageRecord | undefined {
     const row = this.database
       .prepare(
-        `SELECT id, session_id, role, content, occurred_at, metadata_json
+        `SELECT id, role, content, occurred_at, metadata_json
          FROM messages WHERE id = ?`,
       )
       .get(id);
     return row === undefined ? undefined : readMessage(row);
   }
 
-  deleteBySession(sessionId: string): void {
-    this.database
-      .prepare("DELETE FROM messages WHERE session_id = ?")
-      .run(sessionId);
-  }
-
-  listRecent(sessionId: string, limit: number): MessageRecord[] {
+  listRecent(limit: number): MessageRecord[] {
     assertRecentLimit(limit);
     return this.database
       .prepare(
-        `SELECT id, session_id, role, content, occurred_at, metadata_json
-         FROM messages WHERE session_id = ?
-         ORDER BY occurred_at DESC, id DESC LIMIT ?`,
+        `SELECT id, role, content, occurred_at, metadata_json
+         FROM messages ORDER BY occurred_at DESC, id DESC LIMIT ?`,
       )
-      .all(sessionId, limit)
+      .all(limit)
       .map((row) => readMessage(row));
   }
+}
 
-  listWindow(
-    sessionId: string,
-    fromIso: string,
-    toIso: string,
-  ): MessageRecord[] {
-    return this.database
+export class OutboundMessageRepository {
+  constructor(private readonly database: DatabaseSync) {}
+
+  insert(
+    record: Extract<OutboundMessageRecord, { status: "requested" }>,
+  ): void {
+    this.database
       .prepare(
-        `SELECT id, session_id, role, content, occurred_at, metadata_json
-         FROM messages WHERE session_id = ? AND occurred_at >= ? AND occurred_at <= ?
-         ORDER BY occurred_at ASC, id ASC`,
+        `INSERT INTO outbound_messages (
+          id, trace_id, adapter_id, platform, destination_json, message_json,
+          occurred_at, completed_at, status, receipt_json, error, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'requested', NULL, NULL, ?)`,
       )
-      .all(sessionId, fromIso, toIso)
-      .map((row) => readMessage(row));
+      .run(
+        record.id,
+        record.traceId,
+        record.adapterId,
+        record.platform,
+        stringifyJson(record.destination),
+        stringifyJson(record.message),
+        record.occurredAt,
+        stringifyJson(record.metadata),
+      );
   }
 
-  listSessionIds(fromIso: string, toIso: string): string[] {
+  complete(
+    record:
+      | Extract<OutboundMessageRecord, { status: "delivered" }>
+      | Extract<OutboundMessageRecord, { status: "failed" }>,
+  ): void {
+    const result = this.database
+      .prepare(
+        `UPDATE outbound_messages SET
+          completed_at = ?, status = ?, receipt_json = ?, error = ?
+         WHERE id = ? AND status = 'requested'`,
+      )
+      .run(
+        record.completedAt,
+        record.status,
+        record.status === "delivered" ? stringifyJson(record.receipt) : null,
+        record.status === "failed" ? record.error : null,
+        record.id,
+      );
+    if (result.changes !== 1) {
+      throw new DatabaseRecordError(
+        "outbound_messages",
+        record.id,
+        "invalid lifecycle transition",
+      );
+    }
+  }
+
+  getById(id: string): OutboundMessageRecord | undefined {
+    const row = this.database
+      .prepare(
+        `SELECT id, trace_id, adapter_id, platform, destination_json,
+          message_json, occurred_at, completed_at, status, receipt_json,
+          error, metadata_json FROM outbound_messages WHERE id = ?`,
+      )
+      .get(id);
+    return row === undefined ? undefined : readOutboundMessage(row);
+  }
+
+  listByTrace(traceId: string): OutboundMessageRecord[] {
     return this.database
       .prepare(
-        `SELECT DISTINCT session_id FROM messages
-         WHERE occurred_at >= ? AND occurred_at <= ? ORDER BY session_id ASC`,
+        `SELECT id, trace_id, adapter_id, platform, destination_json,
+          message_json, occurred_at, completed_at, status, receipt_json,
+          error, metadata_json FROM outbound_messages
+         WHERE trace_id = ? ORDER BY occurred_at ASC, id ASC`,
       )
-      .all(fromIso, toIso)
-      .map((row) => requiredString(row, "session_id", "messages", "<session>"));
+      .all(traceId)
+      .map((row) => readOutboundMessage(row));
   }
 }
 
@@ -229,9 +274,10 @@ export class LlmTraceRepository {
     this.database
       .prepare(
         `INSERT INTO llm_traces (
-          id, trace_id, workflow_id, node_id, kind, model_id, prompt_json, started_at,
-          completed_at, duration_ms, status, response_json, usage_json, error_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          id, trace_id, workflow_id, node_id, kind, model_id, causation_event_id,
+          root_event_id, prompt_json, started_at, completed_at, duration_ms,
+          status, response_json, usage_json, error_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         trace.id,
@@ -240,6 +286,8 @@ export class LlmTraceRepository {
         trace.nodeId,
         trace.kind,
         trace.modelId,
+        trace.causationEventId ?? null,
+        trace.rootEventId ?? null,
         stringifyJson(trace.prompt),
         trace.startedAt,
         trace.completedAt,
@@ -258,7 +306,8 @@ export class LlmTraceRepository {
   listByTrace(traceId: string): LlmTrace[] {
     return this.database
       .prepare(
-        `SELECT id, trace_id, workflow_id, node_id, kind, model_id, prompt_json, started_at,
+        `SELECT id, trace_id, workflow_id, node_id, kind, model_id,
+          causation_event_id, root_event_id, prompt_json, started_at,
           completed_at, duration_ms, status, response_json, usage_json, error_json
          FROM llm_traces WHERE trace_id = ? ORDER BY started_at ASC, id ASC`,
       )
@@ -272,13 +321,52 @@ function readMessage(row: SqlRow): MessageRecord {
   return reconstructRecord("messages", id, () =>
     messageRecordSchema.parse({
       id,
-      sessionId: requiredString(row, "session_id", "messages", id),
       role: requiredString(row, "role", "messages", id),
       content: requiredString(row, "content", "messages", id),
       occurredAt: requiredString(row, "occurred_at", "messages", id),
       metadata: parseJson(row, "metadata_json", "messages", id),
     }),
   );
+}
+
+function readOutboundMessage(row: SqlRow): OutboundMessageRecord {
+  const id = requiredString(row, "id", "outbound_messages", "<unknown>");
+  return reconstructRecord("outbound_messages", id, () => {
+    const status = requiredString(row, "status", "outbound_messages", id);
+    const base = {
+      id,
+      traceId: requiredString(row, "trace_id", "outbound_messages", id),
+      adapterId: requiredString(row, "adapter_id", "outbound_messages", id),
+      platform: requiredString(row, "platform", "outbound_messages", id),
+      destination: parseJson(row, "destination_json", "outbound_messages", id),
+      message: parseJson(row, "message_json", "outbound_messages", id),
+      occurredAt: requiredString(row, "occurred_at", "outbound_messages", id),
+      metadata: parseJson(row, "metadata_json", "outbound_messages", id),
+      status,
+    };
+    if (status === "requested") {
+      return outboundMessageRecordSchema.parse(base);
+    }
+    const completedAt = requiredString(
+      row,
+      "completed_at",
+      "outbound_messages",
+      id,
+    );
+    return outboundMessageRecordSchema.parse(
+      status === "delivered"
+        ? {
+            ...base,
+            completedAt,
+            receipt: parseJson(row, "receipt_json", "outbound_messages", id),
+          }
+        : {
+            ...base,
+            completedAt,
+            error: requiredString(row, "error", "outbound_messages", id),
+          },
+    );
+  });
 }
 
 function readMemory(row: SqlRow): MemoryRecord {
@@ -336,6 +424,13 @@ function readLlmTrace(row: SqlRow): LlmTrace {
   const id = requiredString(row, "id", "llm_traces", "<unknown>");
   return reconstructRecord("llm_traces", id, () => {
     const status = requiredString(row, "status", "llm_traces", id);
+    const causationEventId = optionalString(
+      row,
+      "causation_event_id",
+      "llm_traces",
+      id,
+    );
+    const rootEventId = optionalString(row, "root_event_id", "llm_traces", id);
     const base = {
       id,
       traceId: requiredString(row, "trace_id", "llm_traces", id),
@@ -343,6 +438,8 @@ function readLlmTrace(row: SqlRow): LlmTrace {
       nodeId: requiredString(row, "node_id", "llm_traces", id),
       kind: requiredString(row, "kind", "llm_traces", id),
       modelId: requiredString(row, "model_id", "llm_traces", id),
+      ...(causationEventId === undefined ? {} : { causationEventId }),
+      ...(rootEventId === undefined ? {} : { rootEventId }),
       prompt: parseJson(row, "prompt_json", "llm_traces", id),
       startedAt: requiredString(row, "started_at", "llm_traces", id),
       completedAt: requiredString(row, "completed_at", "llm_traces", id),
@@ -459,6 +556,17 @@ function requiredString(
     );
   }
   return value;
+}
+
+function optionalString(
+  row: SqlRow,
+  column: string,
+  table: string,
+  recordId: string,
+): string | undefined {
+  return row[column] === null
+    ? undefined
+    : requiredString(row, column, table, recordId);
 }
 
 function requiredNumber(

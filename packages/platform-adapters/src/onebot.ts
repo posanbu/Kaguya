@@ -1,4 +1,4 @@
-import { z } from "@kaguya/schema";
+import { z, type OutboundMessageContent } from "@kaguya/schema";
 
 import type {
   PlatformInboundMessage,
@@ -80,16 +80,10 @@ export function normalizeOneBotMessageEvent(
   const target = targetFor(messageType, event.group_id, userId);
   if (target === undefined) return undefined;
 
-  const sessionId =
-    target.kind === "private"
-      ? `qq:private:${target.userId}`
-      : `qq:group:${target.groupId}`;
-
   return {
     platform: "qq",
     adapterId: options.adapterId,
     ...(selfId === undefined ? {} : { selfId }),
-    sessionId,
     traceId: `napcat:${selfId ?? "unknown"}:${platformMessageId}`,
     platformMessageId,
     occurredAt:
@@ -106,10 +100,24 @@ export function normalizeOneBotMessageEvent(
 
 export function buildOneBotSendAction(
   target: PlatformMessageTarget,
-  text: string,
+  content: string | OutboundMessageContent,
   echo: string,
 ): OneBotActionRequest {
-  const message = [{ type: "text", data: { text } }] as const;
+  const normalized =
+    typeof content === "string"
+      ? ({ kind: "text", text: content } as const)
+      : content;
+  const message: readonly OneBotMessageSegment[] = [
+    ...(normalized.kind === "reply"
+      ? [
+          {
+            type: "reply",
+            data: { id: normalized.replyToPlatformMessageId },
+          },
+        ]
+      : []),
+    { type: "text", data: { text: normalized.text } },
+  ];
   if (target.kind === "private") {
     return {
       action: "send_private_msg",

@@ -8,7 +8,7 @@ afterEach(() => {
 });
 
 describe("ManualTrigger", () => {
-  it("fires immediately without replacing trace or session identity", async () => {
+  it("fires immediately without replacing trace identity", async () => {
     const trigger = new ManualTrigger<
       EventEnvelope<"heartbeat.tick", Record<string, never>>
     >();
@@ -18,7 +18,6 @@ describe("ManualTrigger", () => {
       source: "test",
       occurredAt: "2026-07-23T00:00:00.000Z",
       traceId: "trace-heartbeat",
-      sessionId: "session-1",
       payload: {},
       metadata: {},
     };

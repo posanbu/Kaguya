@@ -14,9 +14,7 @@ describe("readServerConfig", () => {
       KAGUYA_RATE_LIMIT_MAX: "20",
       KAGUYA_RATE_LIMIT_WINDOW_MS: "10000",
       KAGUYA_DATABASE_PATH: "/tmp/kaguya-test.sqlite",
-      KAGUYA_LLM_API_KEY: "provider-key",
-      KAGUYA_LLM_BASE_URL: "https://llm.example/v1",
-      KAGUYA_LLM_MODEL: "chat-model",
+      KAGUYA_CONFIG_ROOT: "/tmp/kaguya-config-test",
       KAGUYA_NAPCAT_ENABLED: "true",
       KAGUYA_NAPCAT_WS_URL: "ws://127.0.0.1:3001",
       KAGUYA_NAPCAT_RECONNECT_MS: "500",
@@ -31,13 +29,8 @@ describe("readServerConfig", () => {
       rateLimitMax: 20,
       rateLimitWindowMs: 10_000,
       databasePath: "/tmp/kaguya-test.sqlite",
+      configRoot: "/tmp/kaguya-config-test",
       development: true,
-      llm: {
-        provider: "openai-compatible",
-        apiKey: "provider-key",
-        baseUrl: "https://llm.example/v1",
-        model: "chat-model",
-      },
       napcat: {
         enabled: true,
         adapterId: "napcat.qq.main",
@@ -57,9 +50,9 @@ describe("readServerConfig", () => {
       host: "127.0.0.1",
       port: 3000,
       development: false,
-      llm: { provider: "deterministic" },
       napcat: { enabled: false, reconnectMs: 3000 },
     });
+    expect(config.configRoot).toMatch(/[/\\]\.data[/\\]kaguya-config$/u);
   });
 
   it("rejects legacy split-service variables", () => {
@@ -93,19 +86,26 @@ describe("readServerConfig", () => {
     ).toThrow("KAGUYA_NAPCAT_WS_URL is required");
   });
 
-  it("requires API key and model together for OpenAI-compatible LLM", () => {
-    expect(() =>
-      readServerConfig({
-        KAGUYA_GATEWAY_TOKEN: "a-secure-gateway-token",
-        KAGUYA_LLM_API_KEY: "provider-key",
-      }),
-    ).toThrow("KAGUYA_LLM_MODEL is required when KAGUYA_LLM_API_KEY is set");
-
-    expect(() =>
-      readServerConfig({
-        KAGUYA_GATEWAY_TOKEN: "a-secure-gateway-token",
-        KAGUYA_LLM_MODEL: "chat-model",
-      }),
-    ).toThrow("KAGUYA_LLM_API_KEY is required when KAGUYA_LLM_MODEL is set");
+  it("rejects legacy LLM environment configuration without exposing values", () => {
+    for (const name of [
+      "KAGUYA_LLM_API_KEY",
+      "KAGUYA_LLM_BASE_URL",
+      "KAGUYA_LLM_MODEL",
+    ]) {
+      expect(() =>
+        readServerConfig({
+          KAGUYA_GATEWAY_TOKEN: "a-secure-gateway-token",
+          [name]: "must-not-appear",
+        }),
+      ).toThrow("KAGUYA_CONFIG_ROOT");
+      try {
+        readServerConfig({
+          KAGUYA_GATEWAY_TOKEN: "a-secure-gateway-token",
+          [name]: "must-not-appear",
+        });
+      } catch (error) {
+        expect(String(error)).not.toContain("must-not-appear");
+      }
+    }
   });
 });

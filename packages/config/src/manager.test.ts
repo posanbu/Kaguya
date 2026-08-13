@@ -136,6 +136,10 @@ function readySettings(
   return {
     ai: {
       defaultProviderId: "provider-1",
+      modelTiers: {
+        light: { providerId: "provider-1", modelId: models[0] ?? "missing" },
+        heavy: { providerId: "provider-1", modelId: models[1] ?? "missing" },
+      },
       providers: [
         {
           id: "provider-1",
@@ -167,6 +171,10 @@ function reviewSettings(): UserConfigProfileSettings {
   return {
     ai: {
       defaultProviderId: "provider-1",
+      modelTiers: {
+        light: { providerId: "provider-1", modelId: "model-a" },
+        heavy: { providerId: "provider-1", modelId: "model-b" },
+      },
       providers: [
         {
           id: "provider-1",

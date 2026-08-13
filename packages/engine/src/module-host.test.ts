@@ -18,12 +18,10 @@ import {
 const broadcastEvent = defineEvent(
   "module.test.broadcast",
   z.object({ value: z.string() }).strict(),
-  { sessionScoped: true },
 );
 const targetedEvent = defineEvent(
   "module.test.targeted",
   z.object({ targetInstanceId: z.string().min(1), value: z.string() }).strict(),
-  { sessionScoped: true },
 );
 
 function baseEvent<TType extends string, TPayload>(
@@ -41,7 +39,6 @@ function createHostEvent<TType extends string, TPayload>(
         source: string;
         occurredAt: string;
         traceId: string;
-        sessionId: string;
         metadata: Record<string, unknown>;
       },
       payload: TPayload,
@@ -55,7 +52,6 @@ function createHostEvent<TType extends string, TPayload>(
       source: "test",
       occurredAt: "2026-08-13T00:00:00.000Z",
       traceId: "trace-1",
-      sessionId: "session-1",
       metadata: {},
     },
     payload,
@@ -267,7 +263,7 @@ describe("ModuleHost", () => {
     );
   });
 
-  it("emits derived events with inherited identity and module causation", async () => {
+  it("emits derived events with trace, root identity, and module causation", async () => {
     const runtime = host();
     const derived: unknown[] = [];
     runtime.eventBus.subscribe(
@@ -318,15 +314,110 @@ describe("ModuleHost", () => {
       expect.objectContaining({
         source: "module:emitter",
         traceId: "trace-1",
-        sessionId: "session-1",
         payload: { targetInstanceId: "receiver", value: "derived" },
         metadata: expect.objectContaining({
           causationEventId: "event-1",
+          rootEventId: "event-1",
           moduleDefinitionId: "test.emitter",
           moduleInstanceId: "emitter",
         }),
       }),
     );
+  });
+
+  it("rejects module attempts to overwrite provenance metadata", async () => {
+    const runtime = host();
+    runtime.host.register(
+      defineModule({
+        manifest: {
+          apiVersion: 1,
+          definitionId: "test.reserved",
+          displayName: "Reserved",
+          settingsSchema: z.object({}).strict(),
+        },
+        create: () => ({
+          subscriptions: [
+            onEvent(broadcastEvent, async (_event, context) => {
+              await context.emit(
+                targetedEvent,
+                { targetInstanceId: "receiver", value: "x" },
+                { rootEventId: "forged" },
+              );
+            }),
+          ],
+        }),
+      }),
+    );
+    runtime.host.register(
+      definition("test.receiver.reserved", { targeted: () => {} }),
+    );
+    await runtime.host.start([
+      { instanceId: "reserved", definitionId: "test.reserved", settings: {} },
+      {
+        instanceId: "receiver",
+        definitionId: "test.receiver.reserved",
+        settings: { label: "receiver" },
+      },
+    ]);
+
+    await expect(
+      runtime.eventBus.emit(baseEvent(broadcastEvent, { value: "x" })),
+    ).rejects.toBeInstanceOf(AggregateError);
+  });
+
+  it("rejects interceptor attempts to rewrite derived-event provenance", async () => {
+    const runtime = host();
+    runtime.eventBus.subscribe(
+      targetedEvent.type,
+      (event) => ({
+        continue: true,
+        event: {
+          ...event,
+          source: "forged-source",
+          metadata: { ...event.metadata, rootEventId: "forged-root" },
+        },
+      }),
+      { priority: 100, mode: "intercept" },
+    );
+    runtime.host.register(
+      defineModule({
+        manifest: {
+          apiVersion: 1,
+          definitionId: "test.protected-emitter",
+          displayName: "Protected emitter",
+          settingsSchema: z.object({}).strict(),
+        },
+        create: () => ({
+          subscriptions: [
+            onEvent(broadcastEvent, async (_event, context) => {
+              await context.emit(targetedEvent, {
+                targetInstanceId: "receiver",
+                value: "x",
+              });
+            }),
+          ],
+        }),
+      }),
+    );
+    runtime.host.register(
+      definition("test.protected-receiver", { targeted: () => {} }),
+    );
+    await runtime.host.start([
+      {
+        instanceId: "protected-emitter",
+        definitionId: "test.protected-emitter",
+        settings: {},
+      },
+      {
+        instanceId: "receiver",
+        definitionId: "test.protected-receiver",
+        settings: { label: "receiver" },
+      },
+    ]);
+
+    await expect(
+      runtime.eventBus.emit(baseEvent(broadcastEvent, { value: "x" })),
+    ).rejects.toBeInstanceOf(AggregateError);
   });
 
   it("does not deduplicate requests emitted by multiple module instances", async () => {

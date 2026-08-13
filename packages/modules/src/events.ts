@@ -1,4 +1,8 @@
-import { z } from "@kaguya/schema";
+import {
+  outboundMessageContentSchema,
+  platformDestinationSchema,
+  z,
+} from "@kaguya/schema";
 import { defineEvent } from "@kaguya/sdk";
 
 const nonBlankStringSchema = z.string().trim().min(1);
@@ -8,13 +12,6 @@ export const messageMentionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("all") }).strict(),
 ]);
 
-export const messageConversationSchema = z
-  .object({
-    kind: z.enum(["direct", "group", "session"]),
-    id: nonBlankStringSchema,
-  })
-  .strict();
-
 export const messageSenderSchema = z
   .object({
     id: nonBlankStringSchema,
@@ -22,37 +19,44 @@ export const messageSenderSchema = z
   })
   .strict();
 
-export const messageOriginSchema = z
+export const moduleMessageSourceSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("web"),
+      requestId: nonBlankStringSchema,
+      sourceId: nonBlankStringSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("platform"),
+      platform: nonBlankStringSchema,
+      adapterId: nonBlankStringSchema,
+      platformMessageId: nonBlankStringSchema,
+      selfId: nonBlankStringSchema.optional(),
+      destination: platformDestinationSchema,
+      sender: messageSenderSchema,
+      mentions: z.array(messageMentionSchema),
+    })
+    .strict(),
+]);
+
+export const moduleMessageSchema = z
   .object({
-    platform: nonBlankStringSchema,
-    adapterId: nonBlankStringSchema.optional(),
     messageId: nonBlankStringSchema,
-    selfId: nonBlankStringSchema.optional(),
+    text: z.string(),
+    occurredAt: z.iso.datetime(),
+    source: moduleMessageSourceSchema,
   })
   .strict();
-
-export const messageContextSchema = z
-  .object({
-    conversation: messageConversationSchema,
-    sender: messageSenderSchema.optional(),
-    mentions: z.array(messageMentionSchema),
-    origin: messageOriginSchema.optional(),
-  })
-  .strict();
-
-export const moduleMessageSchema = messageContextSchema.extend({
-  messageId: nonBlankStringSchema,
-  text: z.string(),
-});
 
 export type MessageMention = z.infer<typeof messageMentionSchema>;
-export type MessageContext = z.infer<typeof messageContextSchema>;
+export type ModuleMessageSource = z.infer<typeof moduleMessageSourceSchema>;
 export type ModuleMessage = z.infer<typeof moduleMessageSchema>;
 
 export const messageIngestedEvent = defineEvent(
   "message.ingested",
   z.object({ message: moduleMessageSchema }).strict(),
-  { sessionScoped: true },
 );
 
 export const replyRequestedEvent = defineEvent(
@@ -63,16 +67,32 @@ export const replyRequestedEvent = defineEvent(
       messageId: nonBlankStringSchema,
     })
     .strict(),
-  { sessionScoped: true },
 );
 
-export const replyGeneratedEvent = defineEvent(
-  "reply.generated",
+export const outboundMessageRequestedEvent = defineEvent(
+  "message.outbound.requested",
   z
     .object({
-      messageId: nonBlankStringSchema,
-      text: nonBlankStringSchema,
+      adapterId: nonBlankStringSchema,
+      platform: nonBlankStringSchema,
+      destination: platformDestinationSchema,
+      message: outboundMessageContentSchema,
     })
     .strict(),
-  { sessionScoped: true },
+);
+
+const outboundResultBaseSchema = z.object({
+  outboundMessageId: nonBlankStringSchema,
+  adapterId: nonBlankStringSchema,
+  platform: nonBlankStringSchema,
+});
+
+export const outboundMessageDeliveredEvent = defineEvent(
+  "message.outbound.delivered",
+  outboundResultBaseSchema.strict(),
+);
+
+export const outboundMessageFailedEvent = defineEvent(
+  "message.outbound.failed",
+  outboundResultBaseSchema.extend({ error: nonBlankStringSchema }).strict(),
 );

@@ -6,7 +6,6 @@ import { describe, expect, it } from "vitest";
 
 const context: WorkflowContext = {
   traceId: "trace-real-llm-error",
-  sessionId: "session-real-llm-error",
   now: () => new Date("2026-07-23T00:00:00.000Z"),
   nextId: (prefix) => `${prefix}-1`,
   services: {},

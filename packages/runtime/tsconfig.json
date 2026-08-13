@@ -13,6 +13,7 @@
     { "path": "../prompt" },
     { "path": "../llm" },
     { "path": "../logger" },
+    { "path": "../modules" },
     { "path": "../platform-adapters" },
     { "path": "../database" }
   ]

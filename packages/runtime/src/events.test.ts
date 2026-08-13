@@ -8,7 +8,7 @@ const approvedEventTypes = [
   "message.ingested",
   "heartbeat.tick",
   "memory.schedule.tick",
-  "memory.session.tick",
+  "memory.context.tick",
   "route.requested",
   "route.decided",
   "prompt.compiled",
@@ -17,8 +17,10 @@ const approvedEventTypes = [
   "llm.failed",
   "memory.write.requested",
   "memory.written",
-  "reply.generated",
   "reply.requested",
+  "message.outbound.requested",
+  "message.outbound.delivered",
+  "message.outbound.failed",
 ] as const;
 
 describe("runtime event catalog", () => {

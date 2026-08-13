@@ -135,7 +135,6 @@ it("dispatches normalized inbound messages and ignores action responses", async 
 
   expect(inboundMessages).toHaveLength(1);
   expect(inboundMessages[0]).toMatchObject({
-    sessionId: "qq:private:456",
     text: "hello",
   });
 });
@@ -183,7 +182,6 @@ it("supports an action client and adapter sharing one transport", async () => {
   await Promise.resolve();
   expect(inboundMessages).toHaveLength(1);
   expect(inboundMessages[0]).toMatchObject({
-    sessionId: "qq:private:456",
     text: "hello",
   });
   await adapter.stop();

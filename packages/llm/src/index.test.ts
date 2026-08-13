@@ -160,7 +160,7 @@ describe("KaguyaLlmClient", () => {
       status: "failed",
       error: {
         name: "KaguyaLlmError",
-        message: "provider unavailable",
+        message: "Language model generation failed",
         kind: "non-retryable",
       },
     });
@@ -196,6 +196,43 @@ describe("KaguyaLlmClient", () => {
       kind: "non-retryable",
       cause: providerError,
       traceWriteError,
+    });
+  });
+
+  it("does not persist provider details in a failed trace", async () => {
+    const secret = "provider-api-key-must-not-enter-trace";
+    const traces: LlmTrace[] = [];
+    const client = new KaguyaLlmClient({
+      model: new MockLanguageModelV3({
+        doGenerate: () =>
+          Promise.reject(
+            new APICallError({
+              message: `provider reflected ${secret}`,
+              url: "https://provider.invalid/generate",
+              requestBodyValues: {},
+              isRetryable: false,
+            }),
+          ),
+      }),
+      traceWriter: {
+        write(trace) {
+          traces.push(trace);
+          return Promise.resolve();
+        },
+      },
+      now: deterministicClock(
+        "2026-07-23T00:00:00.000Z",
+        "2026-07-23T00:00:00.010Z",
+      ),
+    });
+
+    await expect(client.generate(request())).rejects.toBeInstanceOf(
+      KaguyaLlmError,
+    );
+    expect(JSON.stringify(traces)).not.toContain(secret);
+    expect(traces[0]).toMatchObject({
+      status: "failed",
+      error: { message: "Language model generation failed" },
     });
   });
 

@@ -8,7 +8,6 @@ export interface EventEnvelope<TType = string, TPayload = unknown> {
   source: string;
   occurredAt: string;
   traceId: string;
-  sessionId?: string;
   payload: TPayload;
   metadata: Record<string, unknown>;
 }
@@ -20,23 +19,13 @@ export const eventEnvelopeSchema = z
     source: z.string().min(1),
     occurredAt: z.iso.datetime(),
     traceId: z.string().min(1),
-    sessionId: z.string().min(1).optional(),
     payload: z.unknown(),
     metadata: z.record(z.string(), z.unknown()),
   })
-  .superRefine((event, context) => {
-    const globalTypes = new Set(["memory.schedule.tick"]);
-    if (!globalTypes.has(event.type) && event.sessionId === undefined) {
-      context.addIssue({
-        code: "custom",
-        message: `${event.type} requires sessionId`,
-      });
-    }
-  });
+  .strict();
 
 export const messageRecordSchema = z.object({
   id: z.string().min(1),
-  sessionId: z.string().min(1),
   role: z.enum(["user", "assistant", "system"]),
   content: z.string(),
   occurredAt: z.iso.datetime(),
@@ -44,6 +33,55 @@ export const messageRecordSchema = z.object({
 });
 
 export type MessageRecord = z.infer<typeof messageRecordSchema>;
+
+export const platformDestinationSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("private"), userId: z.string().min(1) }).strict(),
+  z.object({ kind: z.literal("group"), groupId: z.string().min(1) }).strict(),
+]);
+
+export type PlatformDestination = z.infer<typeof platformDestinationSchema>;
+
+export const outboundMessageContentSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("text"), text: z.string().min(1) }).strict(),
+  z
+    .object({
+      kind: z.literal("reply"),
+      replyToPlatformMessageId: z.string().min(1),
+      text: z.string().min(1),
+    })
+    .strict(),
+]);
+
+export type OutboundMessageContent = z.infer<
+  typeof outboundMessageContentSchema
+>;
+
+const outboundMessageRecordBaseSchema = z.object({
+  id: z.string().min(1),
+  traceId: z.string().min(1),
+  adapterId: z.string().min(1),
+  platform: z.string().min(1),
+  destination: platformDestinationSchema,
+  message: outboundMessageContentSchema,
+  occurredAt: z.iso.datetime(),
+  metadata: z.record(z.string(), z.unknown()),
+});
+
+export const outboundMessageRecordSchema = z.discriminatedUnion("status", [
+  outboundMessageRecordBaseSchema.extend({ status: z.literal("requested") }),
+  outboundMessageRecordBaseSchema.extend({
+    status: z.literal("delivered"),
+    completedAt: z.iso.datetime(),
+    receipt: z.record(z.string(), z.unknown()),
+  }),
+  outboundMessageRecordBaseSchema.extend({
+    status: z.literal("failed"),
+    completedAt: z.iso.datetime(),
+    error: z.string().min(1),
+  }),
+]);
+
+export type OutboundMessageRecord = z.infer<typeof outboundMessageRecordSchema>;
 
 export const memoryRecordSchema = z.object({
   id: z.string().min(1),
@@ -110,6 +148,8 @@ const traceBaseSchema = z.object({
   nodeId: z.string().min(1),
   kind: promptKindSchema,
   modelId: z.string().min(1),
+  causationEventId: z.string().min(1).optional(),
+  rootEventId: z.string().min(1).optional(),
   prompt: compiledPromptSchema,
   startedAt: z.iso.datetime(),
   durationMs: z.number().nonnegative(),

@@ -69,6 +69,66 @@ const migrations: readonly Migration[] = [
         ON llm_traces (trace_id, started_at);
     `,
   },
+  {
+    version: 2,
+    sql: `
+      CREATE TABLE messages_without_session (
+        id TEXT PRIMARY KEY,
+        role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+        content TEXT NOT NULL,
+        occurred_at TEXT NOT NULL,
+        metadata_json TEXT NOT NULL
+      ) STRICT;
+
+      INSERT INTO messages_without_session (
+        id, role, content, occurred_at, metadata_json
+      )
+      SELECT
+        id,
+        role,
+        content,
+        occurred_at,
+        CASE
+          WHEN json_valid(metadata_json) AND json_type(metadata_json) = 'object'
+            THEN json_set(metadata_json, '$.legacySessionId', session_id)
+          ELSE json_object(
+            'legacySessionId', session_id,
+            'legacyMetadata', metadata_json
+          )
+        END
+      FROM messages;
+
+      DROP INDEX messages_session_occurred_at_idx;
+      DROP TABLE messages;
+      ALTER TABLE messages_without_session RENAME TO messages;
+      CREATE INDEX messages_occurred_at_idx ON messages (occurred_at);
+
+      CREATE TABLE outbound_messages (
+        id TEXT PRIMARY KEY,
+        trace_id TEXT NOT NULL,
+        adapter_id TEXT NOT NULL,
+        platform TEXT NOT NULL,
+        destination_json TEXT NOT NULL,
+        message_json TEXT NOT NULL,
+        occurred_at TEXT NOT NULL,
+        completed_at TEXT,
+        status TEXT NOT NULL CHECK (status IN ('requested', 'delivered', 'failed')),
+        receipt_json TEXT,
+        error TEXT,
+        metadata_json TEXT NOT NULL
+      ) STRICT;
+
+      CREATE INDEX outbound_messages_trace_occurred_at_idx
+        ON outbound_messages (trace_id, occurred_at);
+    `,
+  },
+  {
+    version: 3,
+    sql: `
+      ALTER TABLE llm_traces ADD COLUMN causation_event_id TEXT;
+      ALTER TABLE llm_traces ADD COLUMN root_event_id TEXT;
+    `,
+  },
 ];
 
 export function migrateDatabase(database: DatabaseSync): void {

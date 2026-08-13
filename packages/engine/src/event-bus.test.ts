@@ -9,7 +9,6 @@ const messageEvent: EventEnvelope<"message.received", { text: string }> = {
   source: "test",
   occurredAt: "2026-07-23T00:00:00.000Z",
   traceId: "trace-1",
-  sessionId: "session-1",
   payload: { text: "original" },
   metadata: { source: "caller" },
 };

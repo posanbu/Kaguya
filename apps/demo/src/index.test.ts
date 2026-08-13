@@ -21,6 +21,6 @@ describe("demo entry point", () => {
     expect(result.error).toBeUndefined();
     expect(result.signal).toBeNull();
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("message workflow: completed");
+    expect(result.stdout).toContain("message module pipeline: completed");
   });
 });

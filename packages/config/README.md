@@ -1,7 +1,7 @@
 # @kaguya/config
 
-`@kaguya/config` stores multiple user configuration profiles as JSON and
-resolves a profile for each session.
+`@kaguya/config` stores multiple user configuration profiles as JSON. Runtime
+modules select a profile explicitly by ID, or omit the ID to use the default.
 
 > Profile JSON contains plaintext API keys and credentials. Treat the complete
 > configuration root as sensitive data. Do not commit, log, attach, or publish
@@ -43,6 +43,10 @@ const configs = await FileUserConfigManager.initialize({
   settings: {
     ai: {
       defaultProviderId: "local-provider",
+      modelTiers: {
+        light: { providerId: "local-provider", modelId: "model-a" },
+        heavy: { providerId: "local-provider", modelId: "model-b" },
+      },
       providers: [
         {
           id: "local-provider",
@@ -75,23 +79,29 @@ full `updateProfile()` clears them so the edited configuration must be reviewed
 again.
 
 `listProfiles()` returns metadata only. Use `getProfile()` or
-`resolveProfile()` only where runtime code needs the complete secret-bearing
-configuration.
+`resolveProfileById()` only where runtime code needs the complete
+secret-bearing configuration. `resolveProfileById()` validates exactly the
+selected profile and never falls back. Existing profiles without
+`ai.modelTiers` remain editable, but their readiness is `invalid`; target
+selection is never inferred from provider model-array order.
 
 `updateProfile()` replaces the complete `ai`, `platforms`, and `plugins`
 settings set; it is not a partial merge. The current default profile may be
-edited, but it cannot be renamed or deleted. A profile selected by any session
-cannot be deleted until every such session is explicitly unbound or rebound.
+edited, but it cannot be renamed or deleted. Legacy session-binding APIs remain
+for configuration-store compatibility, but the Runtime and module SDK never
+consult them.
 
-Session binding, or `defaultProfileId` when unbound, selects exactly one
-candidate profile. Selection is not readiness: `resolveProfile()` checks that
-candidate and rejects with the typed `ConfigIncompleteError`
-(`CONFIG_INCOMPLETE`) or `ConfigReviewRequiredError` (`CONFIG_REVIEW_REQUIRED`)
-when it is not ready. It never falls back to another profile, provider, or
-model.
+At server startup, `KAGUYA_CONFIG_ROOT` is loaded into a frozen profile
+registry. The default profile and both tiers must be executable before HTTP or
+adapter ingress starts. A module may set `profileId` and `modelTier` to select a
+different target. Failure of that selected profile affects only that request;
+there is no fallback to the default profile, another provider, or another
+model. The legacy `KAGUYA_LLM_API_KEY`, `KAGUYA_LLM_BASE_URL`, and
+`KAGUYA_LLM_MODEL` variables are rejected with a value-free migration error.
+
 Existing incomplete profiles can still be opened and edited for repair. The
-future provider execution layer must return provider/network/authentication
-failures directly; it must not attempt a fallback provider or model.
+provider execution layer returns provider/network/authentication failures
+directly; it does not attempt a fallback provider or model.
 
 ## Storage boundary
 

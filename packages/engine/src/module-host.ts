@@ -27,6 +27,13 @@ interface ActiveSubscription {
   readonly subscription: ModuleSubscription;
 }
 
+const reservedModuleMetadataKeys = new Set([
+  "causationEventId",
+  "rootEventId",
+  "moduleDefinitionId",
+  "moduleInstanceId",
+]);
+
 export class ModuleDefinitionNotFoundError extends Error {
   constructor(readonly definitionId: string) {
     super(`Module definition is not registered: ${definitionId}`);
@@ -197,13 +204,11 @@ export class ModuleHost {
       definitionId: module.definition.manifest.definitionId,
       instanceId: module.instanceId,
       traceId: sourceEvent.traceId,
-      ...(sourceEvent.sessionId === undefined
-        ? {}
-        : { sessionId: sourceEvent.sessionId }),
       sourceEvent,
       now: this.options.now,
       nextId: (prefix) => this.options.nextId(sourceEvent.traceId, prefix),
       emit: async (definition, payload, metadata = {}) => {
+        assertModuleMetadata(metadata);
         this.assertTarget(definition.type, payload);
         const derived = definition.create(
           {
@@ -211,12 +216,10 @@ export class ModuleHost {
             source: `module:${module.instanceId}`,
             occurredAt: this.options.now().toISOString(),
             traceId: sourceEvent.traceId,
-            ...(sourceEvent.sessionId === undefined
-              ? {}
-              : { sessionId: sourceEvent.sessionId }),
             metadata: {
               ...metadata,
               causationEventId: sourceEvent.id,
+              rootEventId: rootEventId(sourceEvent),
               moduleDefinitionId: module.definition.manifest.definitionId,
               moduleInstanceId: module.instanceId,
             },
@@ -322,13 +325,30 @@ function validateDerivedEvent<TType extends string, TPayload>(
   if (candidate.type !== definition.type) {
     throw new TypeError("Module event type cannot be rewritten");
   }
-  if (
-    candidate.traceId !== original.traceId ||
-    candidate.sessionId !== original.sessionId
-  ) {
-    throw new TypeError("Module event identity cannot be rewritten");
+  for (const key of ["id", "source", "occurredAt", "traceId"] as const) {
+    if (candidate[key] !== original[key]) {
+      throw new TypeError(`Module event ${key} cannot be rewritten`);
+    }
+  }
+  for (const key of reservedModuleMetadataKeys) {
+    if (candidate.metadata[key] !== original.metadata[key]) {
+      throw new TypeError(`Module event metadata.${key} cannot be rewritten`);
+    }
   }
   definition.payloadSchema.parse(candidate.payload);
+}
+
+function rootEventId(event: EventEnvelope): string {
+  const root = event.metadata.rootEventId;
+  return typeof root === "string" && root.length > 0 ? root : event.id;
+}
+
+function assertModuleMetadata(metadata: Record<string, unknown>): void {
+  for (const key of Object.keys(metadata)) {
+    if (reservedModuleMetadataKeys.has(key)) {
+      throw new TypeError(`Module metadata key is reserved: ${key}`);
+    }
+  }
 }
 
 async function disposeModules(

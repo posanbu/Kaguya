@@ -80,6 +80,9 @@ importers:
       '@fastify/swagger':
         specifier: ^9.8.1
         version: 9.8.1
+      '@kaguya/config':
+        specifier: workspace:*
+        version: link:../../packages/config
       '@kaguya/logger':
         specifier: workspace:*
         version: link:../../packages/logger
@@ -214,6 +217,9 @@ importers:
       '@kaguya/logger':
         specifier: workspace:*
         version: link:../logger
+      '@kaguya/modules':
+        specifier: workspace:*
+        version: link:../modules
       '@kaguya/platform-adapters':
         specifier: workspace:*
         version: link:../platform-adapters
