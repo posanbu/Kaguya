@@ -10,6 +10,9 @@ export interface PlatformMessageSender {
   readonly card?: string;
 }
 
+export type PlatformMessageMention =
+  { readonly kind: "user"; readonly id: string } | { readonly kind: "all" };
+
 export interface PlatformInboundMessage {
   readonly platform: PlatformName;
   readonly adapterId: string;
@@ -19,6 +22,7 @@ export interface PlatformInboundMessage {
   readonly platformMessageId: string;
   readonly occurredAt: string;
   readonly text: string;
+  readonly mentions: readonly PlatformMessageMention[];
   readonly target: PlatformMessageTarget;
   readonly sender: PlatformMessageSender;
   readonly raw: Record<string, unknown>;

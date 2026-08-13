@@ -1,6 +1,7 @@
 export type {
   PlatformDeliveryReceipt,
   PlatformInboundMessage,
+  PlatformMessageMention,
   PlatformMessageSender,
   PlatformMessageTarget,
   PlatformName,

@@ -5,6 +5,7 @@ import * as events from "./events.js";
 const approvedEventTypes = [
   "message.received",
   "message.persisted",
+  "message.ingested",
   "heartbeat.tick",
   "memory.schedule.tick",
   "memory.session.tick",
@@ -17,6 +18,7 @@ const approvedEventTypes = [
   "memory.write.requested",
   "memory.written",
   "reply.generated",
+  "reply.requested",
 ] as const;
 
 describe("runtime event catalog", () => {

@@ -2,7 +2,7 @@ import { type EventBus } from "@kaguya/engine";
 import { KaguyaLlmClient, type KaguyaLlmRequest } from "@kaguya/llm/client";
 import type { KaguyaLlmOutputByKind } from "@kaguya/llm/schemas";
 import type { LlmErrorKind } from "@kaguya/schema";
-import type { WorkflowContext } from "@kaguya/sdk";
+import type { ExecutionContext } from "@kaguya/sdk";
 
 import { emitDefinedEvent } from "./dispatch.js";
 import {
@@ -19,7 +19,7 @@ export class LlmLifecycleClient {
 
   async generate<K extends KaguyaLlmRequest["kind"]>(
     request: KaguyaLlmRequest & { kind: K },
-    context: WorkflowContext,
+    context: ExecutionContext,
   ): Promise<KaguyaLlmOutputByKind[K]> {
     const lifecyclePayload = {
       kind: request.kind,
@@ -66,7 +66,7 @@ export class LlmLifecycleClient {
   }
 }
 
-function eventBase(nodeId: string, context: WorkflowContext) {
+function eventBase(nodeId: string, context: ExecutionContext) {
   if (context.sessionId === undefined) {
     throw new Error("LLM lifecycle events require a sessionId");
   }

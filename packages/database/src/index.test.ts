@@ -70,6 +70,8 @@ describe("KaguyaDatabase messages", () => {
       database.messages.insert(latest);
 
       expect(database.messages.listRecent("session-1", 1)).toEqual([latest]);
+      expect(database.messages.getById(first.id)).toEqual(first);
+      expect(database.messages.getById("message-missing")).toBeUndefined();
     }));
 });
 

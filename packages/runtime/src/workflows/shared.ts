@@ -26,11 +26,7 @@ import {
 } from "@kaguya/sdk";
 
 import { emitDefinedEvent } from "../dispatch.js";
-import {
-  messagePersistedEvent,
-  promptCompiledEvent,
-  replyGeneratedEvent,
-} from "../events.js";
+import { messagePersistedEvent, promptCompiledEvent } from "../events.js";
 import {
   getDatabase,
   getEventBus,
@@ -172,12 +168,6 @@ export function createGenerateReplyNode(
           },
           context,
         ),
-      );
-      await emitNodeEvent(
-        context,
-        replyGeneratedEvent,
-        "generate-reply",
-        reply,
       );
       return reply;
     },

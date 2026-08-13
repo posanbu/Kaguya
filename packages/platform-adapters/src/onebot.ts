@@ -2,6 +2,7 @@ import { z } from "@kaguya/schema";
 
 import type {
   PlatformInboundMessage,
+  PlatformMessageMention,
   PlatformMessageSender,
   PlatformMessageTarget,
 } from "./types.js";
@@ -72,7 +73,8 @@ export function normalizeOneBotMessageEvent(
   const selfId = normalizeOptionalId(event.self_id);
   if (selfId !== undefined && userId === selfId) return undefined;
 
-  const text = normalizeMessageText(event.message);
+  const normalizedMessage = normalizeMessage(event.message);
+  const text = normalizedMessage.text;
   if (!platformMessageId || !userId || !text.trim()) return undefined;
 
   const target = targetFor(messageType, event.group_id, userId);
@@ -95,6 +97,7 @@ export function normalizeOneBotMessageEvent(
         ? options.now().toISOString()
         : new Date(event.time * 1000).toISOString(),
     text,
+    mentions: normalizedMessage.mentions,
     target,
     sender: senderFor(event.sender, userId),
     raw: input as Record<string, unknown>,
@@ -131,14 +134,24 @@ function targetFor(
   return groupId === undefined ? undefined : { kind: "group", groupId };
 }
 
-function normalizeMessageText(
+function normalizeMessage(
   message: string | readonly ParsedOneBotMessageSegment[],
-): string {
-  if (typeof message === "string") return message;
-  return message.map(segmentToText).join("");
+): {
+  readonly text: string;
+  readonly mentions: readonly PlatformMessageMention[];
+} {
+  const mentions: PlatformMessageMention[] = [];
+  const text =
+    typeof message === "string"
+      ? normalizeStringMessage(message, mentions)
+      : message.map((segment) => segmentToText(segment, mentions)).join("");
+  return { text, mentions };
 }
 
-function segmentToText(segment: ParsedOneBotMessageSegment): string {
+function segmentToText(
+  segment: ParsedOneBotMessageSegment,
+  mentions: PlatformMessageMention[],
+): string {
   if (segment.type === "text") {
     const text = segment.data?.text;
     if (typeof text !== "string" && typeof text !== "number") {
@@ -146,14 +159,41 @@ function segmentToText(segment: ParsedOneBotMessageSegment): string {
     }
     return String(text);
   }
-  if (segment.type === "at")
-    return `@${normalizeOptionalText(segment.data?.qq) ?? "unknown"}`;
+  if (segment.type === "at") {
+    const target = normalizeMention(segment.data?.qq);
+    if (target === undefined) return "@unknown";
+    mentions.push(target);
+    return target.kind === "all" ? "@all" : `@${target.id}`;
+  }
   if (segment.type === "reply")
     return `[reply:${normalizeOptionalText(segment.data?.id) ?? "unknown"}]`;
   if (segment.type === "image") return "[image]";
   if (segment.type === "face")
     return `[face:${normalizeOptionalText(segment.data?.id) ?? "unknown"}]`;
   return `[${segment.type}]`;
+}
+
+function normalizeStringMessage(
+  message: string,
+  mentions: PlatformMessageMention[],
+): string {
+  return message.replace(
+    /\[CQ:at,qq=([^,\]]+)(?:,[^\]]*)?\]/g,
+    (_segment, rawTarget: string) => {
+      const target = normalizeMention(rawTarget);
+      if (target === undefined) return "@unknown";
+      mentions.push(target);
+      return target.kind === "all" ? "@all" : `@${target.id}`;
+    },
+  );
+}
+
+function normalizeMention(value: unknown): PlatformMessageMention | undefined {
+  const normalized = normalizeOptionalId(value);
+  if (normalized === undefined) return undefined;
+  return normalized === "all"
+    ? { kind: "all" }
+    : { kind: "user", id: normalized };
 }
 
 function senderFor(

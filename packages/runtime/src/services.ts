@@ -10,7 +10,7 @@ import { LlmLifecycleClient } from "./llm-lifecycle.js";
 export interface WorkflowServices extends Record<string, unknown> {
   database: KaguyaDatabase;
   promptCompiler: PromptCompiler;
-  llmClient: LlmLifecycleClient;
+  llmClient?: LlmLifecycleClient;
   eventBus: EventBus;
   platformReplySender?: PlatformReplySender;
   messageReceivedEvent: EventEnvelope;

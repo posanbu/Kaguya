@@ -59,6 +59,16 @@ export class MessageRepository {
       );
   }
 
+  getById(id: string): MessageRecord | undefined {
+    const row = this.database
+      .prepare(
+        `SELECT id, session_id, role, content, occurred_at, metadata_json
+         FROM messages WHERE id = ?`,
+      )
+      .get(id);
+    return row === undefined ? undefined : readMessage(row);
+  }
+
   deleteBySession(sessionId: string): void {
     this.database
       .prepare("DELETE FROM messages WHERE session_id = ?")

@@ -62,11 +62,14 @@ export function defineListener<TType extends string, TPayload>(
   return { type, handler, options };
 }
 
-export interface WorkflowContext {
+export interface ExecutionContext {
   traceId: string;
   sessionId?: string;
   now(): Date;
   nextId(prefix: string): string;
+}
+
+export interface WorkflowContext extends ExecutionContext {
   services: Record<string, unknown>;
 }
 
@@ -92,14 +95,27 @@ export function classifyWorkflowFailure(
 function structuralFailureKind(
   error: unknown,
 ): WorkflowFailureKind | undefined {
-  if (typeof error !== "object" || error === null || !("kind" in error)) {
+  if (typeof error !== "object" || error === null) {
     return undefined;
   }
-  return error.kind === "cancelled" ||
-    error.kind === "non-retryable" ||
-    error.kind === "retryable"
-    ? error.kind
-    : undefined;
+  if ("kind" in error) {
+    const kind = error.kind;
+    if (
+      kind === "cancelled" ||
+      kind === "non-retryable" ||
+      kind === "retryable"
+    ) {
+      return kind;
+    }
+  }
+  if (error instanceof AggregateError) {
+    const kinds = error.errors.map(structuralFailureKind);
+    const first = kinds[0];
+    if (first !== undefined && kinds.every((kind) => kind === first)) {
+      return first;
+    }
+  }
+  return undefined;
 }
 
 function isNamedAbortError(error: unknown): boolean {
@@ -204,3 +220,17 @@ export function defineWorkflow(
 
   return definition;
 }
+
+export {
+  defineModule,
+  onEvent,
+  onTargetedEvent,
+  type CreateModuleInstanceOptions,
+  type ModuleActivation,
+  type ModuleDefinition,
+  type ModuleHandlerContext,
+  type ModuleInstance,
+  type ModuleManifest,
+  type ModuleSubscription,
+  type TargetedModulePayload,
+} from "./modules.js";

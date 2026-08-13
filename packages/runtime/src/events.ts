@@ -1,4 +1,10 @@
-import { replyOutputSchema, routeOutputSchema } from "@kaguya/llm/schemas";
+import { routeOutputSchema } from "@kaguya/llm/schemas";
+import {
+  messageContextSchema,
+  messageIngestedEvent,
+  replyGeneratedEvent,
+  replyRequestedEvent,
+} from "@kaguya/modules";
 import {
   llmErrorKindSchema,
   promptFragmentSourceSchema,
@@ -32,7 +38,12 @@ export const memoryWindowSchema = z
 
 export const messageReceivedEvent = defineEvent(
   "message.received",
-  z.object({ text: z.string() }).strict(),
+  z
+    .object({
+      text: z.string(),
+      context: messageContextSchema.optional(),
+    })
+    .strict(),
   { sessionScoped: true },
 );
 
@@ -146,12 +157,6 @@ export const memoryWrittenEvent = defineEvent(
   { sessionScoped: true },
 );
 
-export const replyGeneratedEvent = defineEvent(
-  "reply.generated",
-  replyOutputSchema,
-  { sessionScoped: true },
-);
-
 export const memorySessionTickEvent = defineEvent(
   "memory.session.tick",
   memoryWindowSchema,
@@ -161,6 +166,7 @@ export const memorySessionTickEvent = defineEvent(
 export const approvedEventDefinitions = [
   messageReceivedEvent,
   messagePersistedEvent,
+  messageIngestedEvent,
   heartbeatTickEvent,
   memoryScheduleTickEvent,
   memorySessionTickEvent,
@@ -173,4 +179,7 @@ export const approvedEventDefinitions = [
   memoryWriteRequestedEvent,
   memoryWrittenEvent,
   replyGeneratedEvent,
+  replyRequestedEvent,
 ] as const;
+
+export { messageIngestedEvent, replyGeneratedEvent, replyRequestedEvent };

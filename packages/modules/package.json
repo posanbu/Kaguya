@@ -1,0 +1,21 @@
+{
+  "name": "@kaguya/modules",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "@kaguya/llm": "workspace:*",
+    "@kaguya/prompt": "workspace:*",
+    "@kaguya/schema": "workspace:*",
+    "@kaguya/sdk": "workspace:*"
+  }
+}
