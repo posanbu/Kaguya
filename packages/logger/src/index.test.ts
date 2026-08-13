@@ -156,6 +156,41 @@ describe("Kaguya logger", () => {
     });
   });
 
+  it("classifies LLM failures without leaking provider error details", () => {
+    const stream = new MemoryStream();
+    const logger = createLogger({ service: "kaguya-test", stream });
+    const llmError = Object.assign(
+      new Error(
+        "Failed after 3 attempts. Last error: AI_APICallError: Cannot connect to API: Client network socket disconnected before secure TLS connection was established",
+      ),
+      {
+        name: "KaguyaLlmError",
+        kind: "retryable",
+      },
+    );
+
+    logger.error({
+      event: "llm.failed",
+      apiKey: "api-key-value",
+      prompt: "private prompt",
+      err: llmError,
+    });
+
+    const logs = stream.logs();
+    const serialized = JSON.stringify(logs);
+    expect(serialized).not.toContain("Cannot connect to API");
+    expect(serialized).not.toContain("network socket disconnected");
+    expect(serialized).not.toContain("private prompt");
+    expect(serialized).not.toContain("api-key-value");
+    expect(logs[0]).toMatchObject({
+      err: {
+        type: "KaguyaLlmError",
+        errorKind: "retryable",
+        llmFailure: "connection_failed",
+      },
+    });
+  });
+
   it("parses environment defaults and namespace overrides", () => {
     expect(
       readLoggerOptions("kaguya-api", {
