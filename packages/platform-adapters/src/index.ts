@@ -1,9 +1,11 @@
 export type {
   PlatformDeliveryReceipt,
   PlatformInboundMessage,
+  PlatformMessageMention,
   PlatformMessageSender,
   PlatformMessageTarget,
   PlatformName,
+  PlatformOutboundTransport,
   PlatformReplySender,
 } from "./types.js";
 export {

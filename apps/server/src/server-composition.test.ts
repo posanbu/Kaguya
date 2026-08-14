@@ -3,12 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { KaguyaDatabase } from "@kaguya/database";
+import { FileUserConfigManager } from "@kaguya/config";
 import { KaguyaRuntime } from "@kaguya/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createHttpApplication } from "./app.js";
 import type { ServerConfig } from "./config.js";
-import { createRuntimeModelResolver } from "./server.js";
+import { createRuntimeModelSelectionResolver } from "./server.js";
 import { registerWebUi } from "./web.js";
 
 const chatModel = vi.fn((modelId: string) => ({ modelId }));
@@ -42,9 +43,9 @@ function config(databasePath: string): ServerConfig {
     rateLimitMax: 30,
     rateLimitWindowMs: 60_000,
     databasePath,
+    configRoot: join(dirnameOf(databasePath), "config"),
     development: false,
     webDistPath: join(dirnameOf(databasePath), "web"),
-    llm: { provider: "deterministic" },
     napcat: {
       enabled: false,
       adapterId: "napcat.qq.main",
@@ -83,14 +84,11 @@ describe("unified server composition", () => {
     const database = KaguyaDatabase.open(databasePath);
     try {
       expect(
-        database.messages
-          .listRecent("web-session-server", 10)
-          .map((message) => message.role)
-          .sort(),
-      ).toEqual(["assistant", "user"]);
+        database.messages.listRecent(10).map((message) => message.role),
+      ).toEqual(["user"]);
       expect(
         database.llmTraces.listByTrace("webui-request-server-1"),
-      ).toHaveLength(2);
+      ).toHaveLength(1);
     } finally {
       database.close();
     }
@@ -161,35 +159,57 @@ describe("unified server composition", () => {
     await webUi.close();
   });
 
-  it("creates a runtime model resolver from OpenAI-compatible LLM config", () => {
-    const serverConfig: ServerConfig = {
-      ...config("/tmp/kaguya.sqlite"),
-      llm: {
-        provider: "openai-compatible",
-        apiKey: "provider-key",
-        baseUrl: "https://llm.example/v1",
-        model: "chat-model",
-      },
-    };
-
-    const resolver = createRuntimeModelResolver(serverConfig);
-
-    expect(
-      resolver?.({
-        kind: "route",
-        modelId: "ignored-workflow-model",
-        prompt: {
-          kind: "route",
-          text: "prompt",
-          fragments: [],
-          provenance: [],
+  it("creates a heavy/light resolver from frozen profile configuration", async () => {
+    const root = mkdtempSync(join(tmpdir(), "kaguya-profile-resolver-"));
+    roots.push(root);
+    const manager = await FileUserConfigManager.initialize({
+      rootDir: root,
+      name: "test",
+      settings: {
+        ai: {
+          defaultProviderId: "provider-1",
+          modelTiers: {
+            light: { providerId: "provider-1", modelId: "light-model" },
+            heavy: { providerId: "provider-1", modelId: "heavy-model" },
+          },
+          providers: [
+            {
+              id: "provider-1",
+              type: "openai-compatible",
+              enabled: true,
+              apiKey: "provider-key",
+              baseUrl: "https://llm.example/v1",
+              models: ["light-model", "heavy-model"],
+              settings: {},
+            },
+          ],
         },
-        traceId: "trace",
-        workflowId: "message-workflow",
-        nodeId: "decide-route",
-      }),
-    ).toEqual({ modelId: "chat-model" });
-    expect(chatModel).toHaveBeenCalledWith("chat-model");
+        platforms: [],
+        plugins: [],
+      },
+      acknowledgedWarnings: ["platforms-empty", "plugins-empty"],
+    });
+    const incomplete = await manager.createProfile("incomplete");
+
+    const resolver = await createRuntimeModelSelectionResolver(root);
+
+    expect(resolver({ modelTier: "heavy" })).toEqual({
+      modelId: "heavy-model",
+      model: { modelId: "heavy-model" },
+    });
+    expect(chatModel).toHaveBeenCalledWith("heavy-model");
+    expect(() =>
+      resolver({ profileId: incomplete.id, modelTier: "heavy" }),
+    ).toThrow("Configuration is incomplete");
+  });
+
+  it("rejects a missing profile store before creating provider clients", async () => {
+    const parent = mkdtempSync(join(tmpdir(), "kaguya-missing-profile-"));
+    roots.push(parent);
+
+    await expect(
+      createRuntimeModelSelectionResolver(join(parent, "missing")),
+    ).rejects.toMatchObject({ code: "CONFIG_SETUP_REQUIRED" });
   });
 });
 

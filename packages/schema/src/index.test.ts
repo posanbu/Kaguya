@@ -7,10 +7,10 @@ import {
 } from "./index.js";
 
 describe("eventEnvelopeSchema", () => {
-  it("rejects a session event without sessionId", () => {
+  it("accepts events without a Core session", () => {
     expect(eventEnvelopeSchema).toBeDefined();
 
-    expect(() =>
+    expect(
       eventEnvelopeSchema.parse({
         id: "event-1",
         type: "message.received",
@@ -20,21 +20,22 @@ describe("eventEnvelopeSchema", () => {
         payload: {},
         metadata: {},
       }),
-    ).toThrow();
+    ).toMatchObject({ traceId: "trace-1" });
   });
 
-  it("accepts a global scheduled-memory event without a session", () => {
-    expect(
+  it("rejects the removed top-level sessionId field", () => {
+    expect(() =>
       eventEnvelopeSchema.parse({
         id: "event-1",
-        type: "memory.schedule.tick",
-        source: "scheduler",
+        type: "message.received",
+        source: "test",
         occurredAt: "2026-07-23T00:00:00.000Z",
         traceId: "trace-1",
+        sessionId: "legacy-session",
         payload: {},
         metadata: {},
       }),
-    ).toMatchObject({ type: "memory.schedule.tick" });
+    ).toThrow();
   });
 });
 

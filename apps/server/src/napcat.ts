@@ -4,8 +4,10 @@ import {
   type JsonMessageTransport,
   type PlatformDeliveryReceipt,
   type PlatformMessageTarget,
+  type PlatformOutboundTransport,
   type PlatformReplySender,
 } from "@kaguya/platform-adapters";
+import type { OutboundMessageContent } from "@kaguya/schema";
 import type { KaguyaLogger } from "@kaguya/logger";
 import type { KaguyaRuntime } from "@kaguya/runtime";
 
@@ -67,7 +69,7 @@ export interface NapCatManagedAdapter {
 
 export interface NapCatConnection {
   readonly transport: JsonMessageTransport;
-  readonly sender: PlatformReplySender;
+  readonly sender: PlatformReplySender | PlatformOutboundTransport;
   readonly adapter: NapCatManagedAdapter;
 }
 
@@ -81,7 +83,9 @@ export interface NapCatConnectionSupervisorOptions {
   readonly onConnectionError?: (error: unknown) => void;
 }
 
-export class NapCatConnectionSupervisor implements PlatformReplySender {
+export class NapCatConnectionSupervisor
+  implements PlatformReplySender, PlatformOutboundTransport
+{
   private connection: NapCatConnection | undefined;
   private reconnectTimer: NodeJS.Timeout | undefined;
   private readonly retirements = new Map<NapCatConnection, Promise<void>>();
@@ -116,6 +120,14 @@ export class NapCatConnectionSupervisor implements PlatformReplySender {
     text: string,
     metadata?: Record<string, unknown>,
   ): Promise<PlatformDeliveryReceipt> {
+    return this.sendMessage(target, { kind: "text", text }, metadata);
+  }
+
+  async sendMessage(
+    target: PlatformMessageTarget,
+    message: OutboundMessageContent,
+    metadata?: Record<string, unknown>,
+  ): Promise<PlatformDeliveryReceipt> {
     const sender = this.connection?.sender;
     if (sender === undefined) {
       return {
@@ -126,7 +138,10 @@ export class NapCatConnectionSupervisor implements PlatformReplySender {
         error: "NapCat connection unavailable",
       };
     }
-    return sender.sendTextReply(target, text, metadata);
+    if ("sendMessage" in sender) {
+      return sender.sendMessage(target, message, metadata);
+    }
+    return sender.sendTextReply(target, message.text, metadata);
   }
 
   private async connect(): Promise<void> {
@@ -237,7 +252,6 @@ export function createNapCatSupervisor(options: {
             .dispatch({
               kind: "platform",
               message,
-              replySender: supervisor,
             })
             .then(() => undefined),
         onInboundError: (error, context) => {

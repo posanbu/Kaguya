@@ -84,9 +84,6 @@ function validateDefinedEvent<TType extends string, TPayload>(
       source: parsed.source,
       occurredAt: parsed.occurredAt,
       traceId: parsed.traceId,
-      ...(parsed.sessionId === undefined
-        ? {}
-        : { sessionId: parsed.sessionId }),
       payload: parsed.payload,
       metadata: parsed.metadata,
     };
@@ -111,14 +108,6 @@ function validateDefinedEvent<TType extends string, TPayload>(
     throw new EventValidationError(definition.type, cause, "payload");
   }
 
-  if (definition.sessionScoped && envelope.sessionId === undefined) {
-    throw new EventValidationError(
-      definition.type,
-      new TypeError(`${definition.type} requires sessionId`),
-      "definition",
-    );
-  }
-
   return {
     ...envelope,
     type: definition.type,
@@ -128,19 +117,12 @@ function validateDefinedEvent<TType extends string, TPayload>(
 
 function validateContextIdentity(
   event: EventEnvelope,
-  context: Pick<WorkflowContext, "sessionId" | "traceId">,
+  context: Pick<WorkflowContext, "traceId">,
 ): void {
   if (event.traceId !== context.traceId) {
     throw new EventValidationError(
       event.type,
       new TypeError("event traceId does not match workflow context"),
-      "definition",
-    );
-  }
-  if (event.sessionId !== context.sessionId) {
-    throw new EventValidationError(
-      event.type,
-      new TypeError("event sessionId does not match workflow context"),
       "definition",
     );
   }

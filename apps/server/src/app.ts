@@ -223,7 +223,7 @@ export async function createHttpApplication(
         );
       }
 
-      return runWithLogContext({ sessionId: parsed.sessionId }, async () => {
+      return runWithLogContext({}, async () => {
         await runtime.dispatch({
           kind: "web",
           sessionId: parsed.sessionId,

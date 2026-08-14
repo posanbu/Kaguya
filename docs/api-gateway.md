@@ -6,6 +6,7 @@
 
 ```bash
 export KAGUYA_GATEWAY_TOKEN="replace-with-at-least-16-characters"
+export KAGUYA_CONFIG_ROOT="/absolute/path/to/kaguya-config"
 pnpm dev
 ```
 
@@ -14,6 +15,7 @@ pnpm dev
 ```bash
 pnpm build
 export KAGUYA_GATEWAY_TOKEN="replace-with-at-least-16-characters"
+export KAGUYA_CONFIG_ROOT="/absolute/path/to/kaguya-config"
 pnpm start
 ```
 
@@ -25,6 +27,7 @@ pnpm start
 | `KAGUYA_HOST`                 | `127.0.0.1`           | 唯一监听地址                                 |
 | `KAGUYA_PORT`                 | `3000`                | `1..65535`                                   |
 | `KAGUYA_DATABASE_PATH`        | `.data/kaguya.sqlite` | 唯一 Runtime 数据库                          |
+| `KAGUYA_CONFIG_ROOT`          | `.data/kaguya-config` | 权限保护的 profile registry                  |
 | `KAGUYA_CORS_ORIGINS`         | 空                    | 逗号分隔；空值关闭跨源许可，同源 UI 不受影响 |
 | `KAGUYA_TRUST_PROXY`          | 空                    | 逗号分隔的可信代理地址/CIDR                  |
 | `KAGUYA_RATE_LIMIT_MAX`       | `30`                  | `1..10000`                                   |
@@ -41,18 +44,18 @@ NapCat 配置：
 | `KAGUYA_NAPCAT_SELF_ID`      | 无      | 可选，校验收到事件的机器人 ID      |
 | `KAGUYA_NAPCAT_RECONNECT_MS` | `3000`  | `100..3600000` 毫秒                |
 
-检测到 `KAGUYA_API_HOST`、`KAGUYA_API_PORT`、`KAGUYA_API_DATABASE_PATH` 或 `KAGUYA_BOT_DATABASE_PATH` 时启动失败。不存在旧配置兼容层。
+检测到 `KAGUYA_API_HOST`、`KAGUYA_API_PORT`、`KAGUYA_API_DATABASE_PATH`、`KAGUYA_BOT_DATABASE_PATH` 或旧 `KAGUYA_LLM_*` 变量时启动失败。Provider、key 和 light/heavy target 只从 profile store 加载。
 
 日志配置见 [结构化日志](logging.md)。
 
 ## 路由
 
-| 方法和路径                 | 认证         | 用途                          |
-| -------------------------- | ------------ | ----------------------------- |
-| `GET /` 和静态资源         | 无           | Web UI                        |
-| `GET /healthz`             | 无           | 服务存活检查                  |
-| `GET /api/v1/openapi.json` | 无           | OpenAPI 文档                  |
-| `POST /api/v1/messages`    | Bearer Token | Web 消息进入 message workflow |
+| 方法和路径                 | 认证         | 用途                       |
+| -------------------------- | ------------ | -------------------------- |
+| `GET /` 和静态资源         | 无           | Web UI                     |
+| `GET /healthz`             | 无           | 服务存活检查               |
+| `GET /api/v1/openapi.json` | 无           | OpenAPI 文档               |
+| `POST /api/v1/messages`    | Bearer Token | Web 消息落库并发布模块事件 |
 
 生产 SPA fallback 只接受带 `text/html` 的 GET 页面请求，且显式排除 `/api/*` 和 `/healthz`。未知 API 仍返回结构化 `404 not_found`。
 
@@ -67,7 +70,7 @@ NapCat 配置：
 }
 ```
 
-- `sessionId` trim 后非空，最多 256 个 Unicode code point；
+- `sessionId` trim 后非空，最多 256 个 Unicode code point；它只是兼容协议中的 opaque Web source ID，不创建 Core session、历史或 profile binding；
 - `text` trim 后必须非空，最多 131072 个 Unicode code point，工作流保留原始空白；
 - 请求体最多 256 KiB；
 - 任何额外字段都会被严格 schema 拒绝。
@@ -91,7 +94,7 @@ Runtime dispatch 成功后保持现有 `202` 协议：
 }
 ```
 
-接口不返回模型回答，不提供查询或 SSE。Web 输入会写入用户/助手消息与 trace，但因为没有平台 sender，不触发任何平台投递。
+接口不返回模型回答，不提供查询或 SSE。Web 输入会写入用户消息并进入默认 filter/LLM 模块；默认模块没有 Web destination，因此不会发出 outbound request。自定义模块如需发送，必须自行配置已注册 adapter 和 destination。
 
 失败统一返回：
 
@@ -120,11 +123,11 @@ Runtime dispatch 成功后保持现有 `202` 协议：
 合法 `X-Request-Id` 必须是 1–128 个 ASCII 字符：首字符为字母或数字，其余仅允许字母、数字、点、下划线、冒号和连字符；非法值被 UUID 替换。Web trace ID 固定为 `webui-${requestId}`。
 
 - Bearer 认证先于业务校验；认证和未认证流量使用不同限流 key；
-- 请求不能指定 provider、API key、base URL、模型或 workflow；
+- 请求不能指定 provider、API key、base URL、模型、模块或 transport destination；
 - HTTP 日志不记录 Authorization、body、query 或消息正文；
 - `KAGUYA_TRUST_PROXY` 为空时不信任转发地址；
 - 生产部署仍需在边界层配置 TLS、连接数和超时。
 
 ## NapCat 可用性
 
-NapCat supervisor 将 OneBot 消息标准化后以 `kind: "platform"` dispatch 到同一个 Runtime，并将 supervisor 作为该消息的 `PlatformReplySender`。断线期间发送会返回失败 receipt；supervisor 按配置重连。连接失败不会停止 Fastify，也不会改变 `/healthz`。
+NapCat supervisor 将 OneBot 消息标准化后以 `kind: "platform"` dispatch 到同一个 Runtime，并在 ingress 启动前以稳定 `adapterId` 注册为 outbound transport。模块提供的 destination 与 `text`/`reply` 消息会原样交给该 transport；Core 不从入站消息推导目标。断线期间发送产生可审计的失败，supervisor 按配置重连。连接失败不会停止 Fastify，也不会改变 `/healthz`。

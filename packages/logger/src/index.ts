@@ -111,6 +111,7 @@ export interface SafeErrorLog {
   readonly retryable?: boolean;
   readonly errorKind?: SafeLlmErrorKind;
   readonly llmFailure?: SafeLlmFailure;
+  readonly failureCount?: number;
 }
 
 type SafeLlmErrorKind =
@@ -337,8 +338,9 @@ export function toSafeError(error: unknown): SafeErrorLog {
       : typeof error.isRetryable === "boolean"
         ? error.isRetryable
         : undefined;
-  const errorKind = safeLlmErrorKind(type, error.kind);
-  const llmFailure = classifyLlmFailure(type, error);
+  const aggregate = aggregateSummary(error);
+  const errorKind = safeLlmErrorKind(type, error.kind) ?? aggregate?.errorKind;
+  const llmFailure = classifyLlmFailure(type, error) ?? aggregate?.llmFailure;
   return {
     type,
     ...(code === undefined ? {} : { code }),
@@ -346,7 +348,65 @@ export function toSafeError(error: unknown): SafeErrorLog {
     ...(retryable === undefined ? {} : { retryable }),
     ...(errorKind === undefined ? {} : { errorKind }),
     ...(llmFailure === undefined ? {} : { llmFailure }),
+    ...(aggregate === undefined
+      ? {}
+      : { failureCount: aggregate.failureCount }),
   };
+}
+
+function aggregateSummary(error: Record<string, unknown>):
+  | {
+      readonly errorKind?: SafeLlmErrorKind;
+      readonly llmFailure?: SafeLlmFailure;
+      readonly failureCount: number;
+    }
+  | undefined {
+  if (!(error instanceof AggregateError)) {
+    return undefined;
+  }
+  const leaves = aggregateLeaves(error);
+  const errorKind = oneDistinct(leaves.map((leaf) => safeLeafErrorKind(leaf)));
+  const llmFailure = oneDistinct(
+    leaves.map((leaf) => {
+      if (!isRecord(leaf)) return undefined;
+      const leafType =
+        typeof leaf.name === "string" && leaf.name.length > 0
+          ? leaf.name
+          : "Error";
+      return classifyLlmFailure(leafType, leaf);
+    }),
+  );
+  return {
+    ...(errorKind === undefined ? {} : { errorKind }),
+    ...(llmFailure === undefined ? {} : { llmFailure }),
+    failureCount: leaves.length,
+  };
+}
+
+function aggregateLeaves(error: AggregateError): unknown[] {
+  return error.errors.flatMap((child) =>
+    child instanceof AggregateError ? aggregateLeaves(child) : [child],
+  );
+}
+
+function safeLeafErrorKind(error: unknown): SafeLlmErrorKind | undefined {
+  if (!isRecord(error)) return undefined;
+  const type =
+    typeof error.name === "string" && error.name.length > 0
+      ? error.name
+      : "Error";
+  const explicit = safeLlmErrorKind(type, error.kind);
+  if (explicit !== undefined) return explicit;
+  return type === "AbortError" ? "cancelled" : undefined;
+}
+
+function oneDistinct<Value>(
+  values: readonly (Value | undefined)[],
+): Value | undefined {
+  const first = values[0];
+  return first !== undefined && values.every((value) => value === first)
+    ? first
+    : undefined;
 }
 
 function safeLlmErrorKind(

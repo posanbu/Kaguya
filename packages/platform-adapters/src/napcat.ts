@@ -1,7 +1,10 @@
+import type { OutboundMessageContent } from "@kaguya/schema";
+
 import type {
   PlatformDeliveryReceipt,
   PlatformInboundMessage,
   PlatformMessageTarget,
+  PlatformOutboundTransport,
   PlatformReplySender,
 } from "./types.js";
 import {
@@ -53,7 +56,9 @@ interface PendingAction {
   readonly timer: NodeJS.Timeout;
 }
 
-export class NapCatActionClient implements PlatformReplySender {
+export class NapCatActionClient
+  implements PlatformReplySender, PlatformOutboundTransport
+{
   private readonly pending = new Map<string, PendingAction>();
 
   constructor(private readonly options: NapCatActionClientOptions) {
@@ -69,8 +74,15 @@ export class NapCatActionClient implements PlatformReplySender {
     target: PlatformMessageTarget,
     text: string,
   ): Promise<PlatformDeliveryReceipt> {
+    return this.sendMessage(target, { kind: "text", text });
+  }
+
+  async sendMessage(
+    target: PlatformMessageTarget,
+    message: OutboundMessageContent,
+  ): Promise<PlatformDeliveryReceipt> {
     const echo = this.options.nextEcho();
-    const request = buildOneBotSendAction(target, text, echo);
+    const request = buildOneBotSendAction(target, message, echo);
     const receipt = new Promise<PlatformDeliveryReceipt>((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(echo);

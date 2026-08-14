@@ -22,6 +22,8 @@ export interface KaguyaLlmRequest {
   traceId: string;
   workflowId: string;
   nodeId: string;
+  causationEventId?: string;
+  rootEventId?: string;
 }
 
 export interface KaguyaLlmGenerateRequest extends KaguyaLlmRequest {
@@ -125,6 +127,12 @@ export class KaguyaLlmClient {
         nodeId: request.nodeId,
         kind: request.kind,
         modelId: request.modelId,
+        ...(request.causationEventId === undefined
+          ? {}
+          : { causationEventId: request.causationEventId }),
+        ...(request.rootEventId === undefined
+          ? {}
+          : { rootEventId: request.rootEventId }),
         prompt: request.prompt,
         startedAt: startedAt.toISOString(),
         completedAt: completedAt.toISOString(),
@@ -144,7 +152,7 @@ export class KaguyaLlmClient {
               status: "failed",
               error: {
                 name: failure.name,
-                message: failure.message,
+                message: safeTraceFailureMessage(failure.kind),
                 kind: failure.kind,
               },
             };
@@ -166,6 +174,12 @@ export class KaguyaLlmClient {
 
     return response as KaguyaLlmOutputByKind[K];
   }
+}
+
+function safeTraceFailureMessage(kind: KaguyaLlmErrorKind): string {
+  return kind === "cancelled"
+    ? "Language model generation was cancelled"
+    : "Language model generation failed";
 }
 
 function parseOutput<K extends keyof KaguyaLlmOutputByKind>(

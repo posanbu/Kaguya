@@ -1,116 +1,92 @@
 # Kaguya 架构
 
-Kaguya 采用一个长期运行进程、一个应用入口和一个共享 Runtime。`apps/server` 是唯一 composition root；`@kaguya/runtime` 是唯一业务运行时。Web、HTTP API 和可选 NapCat 不再各自创建数据库、EventBus 或工作流组件。
+Kaguya 采用一个长期运行进程、一个 composition root 和一个共享 Runtime。`apps/server` 负责配置与资源装配；`@kaguya/runtime` 负责通用 ingress、模块事件分发、LLM execution port 和 outbound transport。Core 不拥有 session，也没有固定的“回复工作流”。
 
 ## 运行形态
 
 ```mermaid
 flowchart LR
-  Browser["浏览器 / Web UI"] -->|"同源 HTTP"| Server["apps/server\nFastify + Vite/静态资源"]
-  NapCat["NapCat WebSocket"] -->|"标准化平台消息"| Server
-  Server -->|"RuntimeInboundMessage"| Runtime["@kaguya/runtime\nKaguyaRuntime"]
-  Runtime --> EventBus["EventBus"]
-  Runtime --> Engine["WorkflowEngine"]
-  Runtime --> Prompt["PromptCompiler"]
-  Runtime --> LLM["KaguyaLlmClient"]
-  Runtime --> DB[".data/kaguya.sqlite"]
-  Engine --> Message["message workflow"]
-  Demo["pnpm demo"] -. "显式调用" .-> Heartbeat["heartbeat workflow"]
-  Demo -. "显式调用" .-> Memory["memory workflow"]
+  Browser["浏览器 / Web UI"] --> Server["apps/server\nFastify"]
+  NapCat["NapCat WebSocket"] --> Server
+  Server --> Runtime["KaguyaRuntime"]
+  Runtime --> DB["SQLite"]
+  Runtime --> Bus["EventBus"]
+  Bus --> Host["ModuleHost"]
+  Host --> LLM["LLM execution port"]
+  Host --> Outbound["message.outbound.requested"]
+  Outbound --> Registry["Transport registry"]
+  Registry --> NapCat
 ```
 
-开发模式下，Vite middleware 和 HMR 挂在 Fastify 的 `127.0.0.1:3000` 上。生产模式下，同一个 Fastify 实例提供 `apps/web/dist`；SPA fallback 只处理浏览器页面路由，不覆盖 `/api/*` 或 `/healthz`。
+开发模式下 Vite middleware 和 HMR 挂在同一个 Fastify 实例；生产模式由该实例提供 `apps/web/dist`。NapCat 是可选 ingress 与 transport，连接失败不会停止 HTTP 服务。
 
-NapCat 是可选入站。未启用、断线或重连时，HTTP 和 Web UI 保持可用。
+启动顺序固定为：加载并冻结配置 profile registry，打开并迁移数据库，注册 transport，创建并启动 ModuleHost，最后启动 HTTP 与 adapter ingress。默认 profile 无效时，不会产生部分启动。
 
-## Composition root 与依赖方向
+## 包职责
 
-| 层             | 位置                                                   | 职责                                                           |
-| -------------- | ------------------------------------------------------ | -------------------------------------------------------------- |
-| 应用装配       | `apps/server`                                          | 配置、根 Logger、Runtime、Fastify、Web、NapCat、信号和关闭顺序 |
-| 运行时         | `packages/runtime`                                     | dispatch、事件定义、LLM lifecycle、工作流及共用节点            |
-| 演示           | `apps/demo`                                            | 显式执行 message、heartbeat、memory；不提供长期服务            |
-| 执行基础       | `packages/engine`、`packages/sdk`                      | EventBus、工作流执行器和声明 API                               |
-| 数据与模型边界 | `packages/database`、`packages/prompt`、`packages/llm` | SQLite、Prompt 编译、模型调用和 trace                          |
-| 契约           | `packages/schema`、`packages/platform-adapters`        | 事件/数据 schema 与标准化平台消息/回复接口                     |
+| 层级       | 包                                                                        | 职责                                                                       |
+| ---------- | ------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| 应用装配   | `apps/server`                                                             | 配置、Logger、Runtime、Fastify、NapCat 和关闭顺序                          |
+| 运行时     | `packages/runtime`                                                        | 入站持久化、事件发布、ModuleHost 装配、LLM port、transport registry 与审计 |
+| 模块协议   | `packages/modules`                                                        | `message.*` 标准事件以及最小 filter/LLM demo 模块                          |
+| 执行基础   | `packages/engine`、`packages/sdk`                                         | EventBus、ModuleHost、强类型模块/事件 API；保留显式 workflow API           |
+| 数据与模型 | `packages/database`、`packages/prompt`、`packages/llm`、`packages/config` | SQLite、Prompt、模型调用/trace、profile/tier 配置                          |
+| 平台契约   | `packages/schema`、`packages/platform-adapters`                           | 公共 schema、OneBot 规范化和稳定 outbound transport                        |
 
-依赖方向为 `apps/server -> runtime -> 基础 packages`。Runtime 不读取 Server 环境变量，也不拥有 HTTP 或 WebSocket；Server 不重建 Runtime 内部组件。
+依赖方向是 `apps/server → runtime → 基础 packages`。Runtime 不读取 Server 环境变量；Server 不重建 Runtime 内部组件。
 
-## `KaguyaRuntime`
-
-公开生命周期：
-
-```ts
-const runtime = new KaguyaRuntime({ databasePath, logger });
-await runtime.start();
-const result = await runtime.dispatch(message);
-await runtime.close();
-```
-
-- `start()` 创建父目录、打开并迁移一个 SQLite 文件，然后初始化共享 EventBus、WorkflowEngine、PromptCompiler、LLM client、message workflow 和日志 observer。重复 `start()` 在已经启动时无副作用，关闭后不能重启。
-- `dispatch()` 接受 Web/platform 判别联合类型。每次调用创建独立 `WorkflowContext`、`services`、事件和 trace scoped ID factory；当前事件、sender 或 session 不保存在共享可变字段中。
-- `close()` 先停止接受新 dispatch，再等待所有在途 dispatch，最后关闭数据库；重复调用共享同一个结果并保持幂等。
-
-Web trace 固定为 `webui-${requestId}`。平台消息保留 adapter 提供的 `traceId`、`sessionId`、`platform` 和标准化 metadata。返回结果包含 `traceId`、`workflowId`、完成节点、是否中断，以及平台消息可能产生的 delivery receipt。
-
-## 消息链路
+## 消息模块链
 
 ```mermaid
 sequenceDiagram
-  participant Ingress as Web / NapCat
-  participant Server as apps/server
-  participant Runtime as KaguyaRuntime
-  participant Flow as message workflow
+  participant Ingress as HTTP / Adapter ingress
+  participant Core as KaguyaRuntime
   participant DB as SQLite
-  participant Sender as PlatformReplySender
+  participant Bus as EventBus / ModuleHost
+  participant Filter as demo.filter.always
+  participant Reply as demo.reply.llm
+  participant LLM as LLM execution port
+  participant Transport as Registered transport
 
-  Ingress->>Server: Web request 或标准化平台消息
-  Server->>Runtime: dispatch(discriminated input)
-  Runtime->>Flow: 独立 event + WorkflowContext
-  Flow->>DB: user message / node runs / LLM traces
-  Flow->>DB: assistant message
-  opt 平台输入且 target 合法
-    Flow->>Sender: sendTextReply(target, text)
-    Sender-->>Flow: delivery receipt
-  end
-  Flow-->>Runtime: completedNodeIds + outputs
-  Runtime-->>Server: structured dispatch result
+  Ingress->>Core: normalized inbound message
+  Core->>DB: persist user message
+  Core->>Bus: message.ingested
+  Bus->>Filter: broadcast
+  Filter->>Bus: reply.requested(targetInstanceId)
+  Bus->>Reply: targeted delivery
+  Reply->>DB: get current message by ID
+  Reply->>LLM: profileId? + light/heavy + one-shot prompt
+  LLM-->>Reply: validated output
+  Reply->>Bus: message.outbound.requested
+  Bus->>Core: generic outbound request
+  Core->>DB: persist requested
+  Core->>Transport: exact adapter + destination + text/reply
+  Core->>DB: update delivered/failed
+  Core->>Bus: message.outbound.delivered/failed
 ```
 
-Web 输入没有 `PlatformReplySender`，因此绝不会触发平台发送。平台输入只携带该条消息对应的 sender；消息 workflow 在 sender 和合法 target 同时存在时才投递。
+`reply.*` 只是 demo 模块间协议。模块可以不回复、使用自己的状态/历史，或把输出发送到与触发消息无关的私聊或群聊。Core 不从 message ID、sender、mention 或来源推导 destination，也不检查 outbound 是否在回复当前消息。
 
-主程序的确定性模型按 LLM kind 解析，并可被并发 dispatch 安全复用。LLM trace record ID 由每次请求显式传入，不再固化在 client 构造阶段。真实 provider 和 config profile 尚未装配。
+`message.ingested` 对所有已持久化入站消息广播。平台事件包含公开且 schema 校验后的 adapter、平台消息 ID、self ID、destination、sender 和 mentions；adapter `raw` 不进入事件或持久化 metadata。OneBot 数组段与 CQ 字符串生成一致的 text/mentions，`@` 只是模块输入，不是 Core 触发条件。
 
-## 三条工作流
+HTTP `sessionId` 字段仅为线协议兼容，Runtime 将其保存为 opaque Web source ID。默认 reply 模块会完成一次 LLM 请求，但不会为 Web 输入推导 transport destination。
 
-| 工作流    | 入口事件               | 长期 Server 是否触发         | 用途                                                       |
-| --------- | ---------------------- | ---------------------------- | ---------------------------------------------------------- |
-| message   | `message.received`     | 是，仅由 Web/NapCat 入站触发 | 持久化消息、加载上下文、route、reply、持久化和可选平台发送 |
-| heartbeat | `heartbeat.tick`       | 否                           | 确定性 demo 中验证状态更新与主动路由                       |
-| memory    | `memory.schedule.tick` | 否                           | 确定性 demo 中按时间窗口展开会话并写长期记忆               |
+## 无 Core Session
 
-heartbeat/memory 的定义和共用节点位于 Runtime 包中，但 `apps/server` 不创建 scheduler、不注册 timer，也不自动 dispatch 它们。`pnpm demo` 是唯一现成执行入口。
+`ExecutionContext`、`WorkflowContext`、`ModuleHandlerContext` 与 `EventEnvelope` 只有 trace，没有 session。消息表没有 `session_id`，repository 也不提供按 session 查询历史的 API。迁移旧表时，原值仅写入 message metadata 的 `legacySessionId` 供审计。
 
-## 数据边界
+私聊、群聊和用户既不会天然共享，也不会天然隔离上下文。需要历史、记忆或 profile 选择的模块必须自行定义 key、状态与消息选择。保留的 heartbeat/memory workflow 只接受调用方显式给出的 context/message IDs，不扫描消息来源推导上下文，也不接入默认消息链。
 
-Runtime 默认只打开 `.data/kaguya.sqlite`。Web 和 NapCat 消息因而共享 messages、memories、event_runs 和 llm_traces repositories。旧 `.data/kaguya-api.sqlite` 与 `.data/kaguya-bot.sqlite` 留在磁盘，不读取、不迁移、不合并、不删除。
+## 事件身份与错误边界
 
-Runtime 将平台 raw payload 排除在业务持久化数据之外。普通日志同样不记录消息正文、Prompt、模型输出、raw payload、target ID、Token、WebSocket URL 或完整配置；Prompt/模型输出只进入受控数据库 trace。
+模块派生事件自动继承 `traceId`，并写入逐级 `causationEventId`、`rootEventId`、`moduleDefinitionId` 与 `moduleInstanceId`。这些字段不能被模块 metadata 或 EventBus interceptor 改写。它们只用于观测和审计，不构成授权或隔离。
 
-## 关闭顺序
+广播等待全部匹配模块完成后聚合错误；定向事件只交给目标实例。关闭先停止 ingress，再等待 Runtime 在途 dispatch，停止 ModuleHost，关闭数据库、Web 资源和 Logger。嵌套模块/LLM 错误在日志中只保留安全分类与失败数量，不序列化 provider cause、token 或消息内容。
 
-正常关闭和启动失败清理遵守同一资源所有权：
+## 配置、LLM 与数据
 
-1. Fastify 停止 HTTP 新入站，NapCat supervisor 停止连接与重连；
-2. 等待 HTTP/NapCat 在途调用结束；
-3. Runtime 停止新 dispatch、等待其在途任务并关闭 SQLite；
-4. 关闭 Vite dev server（生产静态资源没有额外进程）；
-5. flush 并关闭根 Logger。
+Server 从 `KAGUYA_CONFIG_ROOT` 加载 profile registry。每个模块 LLM request 显式选择 `{profileId?, modelTier}`；省略 profile 时使用默认 profile。`light` 与 `heavy` 必须指向两个不同、有效、enabled 的 provider/model target，可跨 provider。选择失败不 fallback。
 
-任何已经创建的资源在后续启动阶段失败时按逆序清理。NapCat 初次连接失败属于可恢复状态，不会让 Server 启动失败。
+Provider key 只存在于权限保护的 profile JSON、配置管理器与 provider factory。模块 settings、事件、Prompt、trace 和日志都不接收 key。完整存储约束见 [`@kaguya/config`](../packages/config/README.md)。
 
-## 事件与日志上下文
-
-所有业务事件使用 `EventEnvelope`，并由具体 `EventDefinition` 校验。`requestId` 在 HTTP hook 中进入日志上下文；Runtime 追加 `traceId/sessionId`；EventBus observer 和 recorder wrapper 再追加 `eventId` 或 `runId/workflowId/nodeId`。AsyncLocalStorage 让并发消息保持隔离。
-
-日志模块固定为 `server`、`server:http`、`runtime`、`runtime:event`、`runtime:workflow`、`adapter:napcat`、`llm`。完整事件和排障表见 [结构化日志](logging.md)。
+SQLite 保存规范化入站消息、LLM trace 和 outbound audit。每个 outbound request 先以 `requested` 落库，transport 完成后原子更新为 `delivered` 或 `failed`；receipt 只保留非敏感字段。系统不提供持久事件队列、自动重试或去重。

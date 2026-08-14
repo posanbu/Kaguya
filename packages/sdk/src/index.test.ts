@@ -1,7 +1,14 @@
 import { z } from "@kaguya/schema";
 import { describe, expect, it } from "vitest";
 
-import { defineEvent, defineNode, defineWorkflow } from "./index.js";
+import {
+  defineEvent,
+  defineModule,
+  defineNode,
+  defineWorkflow,
+  onEvent,
+  onTargetedEvent,
+} from "./index.js";
 import * as sdk from "./index.js";
 
 const baseEvent = {
@@ -9,7 +16,6 @@ const baseEvent = {
   source: "test",
   occurredAt: "2026-07-23T00:00:00.000Z",
   traceId: "trace-1",
-  sessionId: "session-1",
   metadata: {},
 };
 
@@ -18,7 +24,6 @@ describe("defineEvent", () => {
     const messageReceived = defineEvent(
       "message.received",
       z.object({ messageId: z.string() }),
-      { sessionScoped: true },
     );
 
     expect(
@@ -106,5 +111,75 @@ describe("workflow failure classification", () => {
       status: "failed",
       retryable: false,
     });
+    expect(
+      classifyWorkflowFailure(
+        new AggregateError([
+          new AggregateError([{ kind: "retryable" }]),
+          { kind: "retryable" },
+        ]),
+      ),
+    ).toEqual({ status: "failed", retryable: true });
+    expect(
+      classifyWorkflowFailure(
+        new AggregateError([{ kind: "retryable" }, { kind: "non-retryable" }]),
+      ),
+    ).toEqual({ status: "failed", retryable: false });
+  });
+});
+
+describe("module SDK", () => {
+  it("defines modules with discoverable settings and typed subscriptions", () => {
+    const broadcast = defineEvent(
+      "test.broadcast",
+      z.object({ value: z.string() }),
+    );
+    const targeted = defineEvent(
+      "test.targeted",
+      z.object({ targetInstanceId: z.string(), value: z.string() }),
+    );
+    const definition = defineModule({
+      manifest: {
+        apiVersion: 1,
+        definitionId: "test.module",
+        displayName: "Test module",
+        settingsSchema: z.object({ prefix: z.string() }),
+      },
+      create: ({ settings }) => ({
+        subscriptions: [
+          onEvent(broadcast, () => {
+            void settings.prefix;
+          }),
+          onTargetedEvent(targeted, () => {
+            void settings.prefix;
+          }),
+        ],
+      }),
+    });
+
+    expect(definition.manifest.settingsSchema.parse({ prefix: "ok" })).toEqual({
+      prefix: "ok",
+    });
+    expect(
+      definition.create({ instanceId: "test.1", settings: { prefix: "ok" } }),
+    ).toMatchObject({
+      subscriptions: [
+        { targeted: false, event: broadcast },
+        { targeted: true, event: targeted },
+      ],
+    });
+  });
+
+  it("rejects invalid module manifests", () => {
+    expect(() =>
+      defineModule({
+        manifest: {
+          apiVersion: 1,
+          definitionId: " ",
+          displayName: "Invalid",
+          settingsSchema: z.object({}),
+        },
+        create: () => ({ subscriptions: [] }),
+      }),
+    ).toThrow("module definition id must not be empty");
   });
 });

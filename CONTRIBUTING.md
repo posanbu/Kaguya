@@ -75,7 +75,7 @@ pnpm format:check
 
 ## 测试清单
 
-当前仓库共有 32 个 Vitest 测试文件。根命令会自动发现 `apps/`、`packages/` 和 `promptfoo/` 下的测试。workspace 包通过 `dist/` 暴露入口，因此首次安装、创建新工作树或切换到包含包导出变更的分支后，应先构建再测试；CI 使用相同顺序：
+当前仓库共有 33 个 Vitest 测试文件。根命令会自动发现 `apps/`、`packages/` 和 `promptfoo/` 下的测试。workspace 包通过 `dist/` 暴露入口，因此首次安装、创建新工作树或切换到包含包导出变更的分支后，应先构建再测试；CI 使用相同顺序：
 
 ```bash
 pnpm build
@@ -84,28 +84,25 @@ pnpm test
 
 测试按职责分布如下：
 
-| 范围                                    | 测试文件                                                                                                                                                                                                                       | 覆盖内容                                                                                                       |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
-| `packages/schema`、`packages/sdk`       | `packages/schema/src/index.test.ts`<br>`packages/sdk/src/index.test.ts`                                                                                                                                                        | 事件信封、Prompt 片段、LLM trace schema；事件、工作流定义和失败分类                                            |
-| `packages/engine`、`packages/scheduler` | `packages/engine/src/event-bus.test.ts`<br>`packages/engine/src/workflow-engine.test.ts`<br>`packages/scheduler/src/index.test.ts`                                                                                             | 事件总线拦截与发布、工作流拓扑/运行、手动/interval/cron 触发器                                                 |
-| `packages/prompt`、`packages/database`  | `packages/prompt/src/index.test.ts`<br>`packages/database/src/index.test.ts`                                                                                                                                                   | Prompt 排序、来源摘要和 provenance；SQLite migration、消息、memory、运行记录、trace 和 demo 清理               |
-| `packages/config`                       | `packages/config/src/manager.test.ts`<br>`packages/config/src/model.test.ts`<br>`packages/config/src/readiness.test.ts`<br>`packages/config/src/redact.test.ts`<br>`packages/config/src/secure-files.test.ts`                  | profile 生命周期、session/default 选择、损坏恢复、输入校验、readiness、敏感字段脱敏和安全文件边界              |
-| `packages/logger`、`packages/llm`       | `packages/logger/src/index.test.ts`<br>`packages/llm/src/index.test.ts`<br>`packages/llm/src/openai-compatible.test.ts`                                                                                                        | Pino 结构化字段、上下文隔离、脱敏和 transport；LLM 输出校验、错误/trace 生命周期以及 OpenAI-compatible adapter |
-| `packages/platform-adapters`            | `packages/platform-adapters/src/napcat.test.ts`<br>`packages/platform-adapters/src/onebot.test.ts`                                                                                                                             | NapCat action client、OneBot 消息事件规范化和发送 action 构造                                                  |
-| `apps/api`                              | `apps/api/src/app.test.ts`<br>`apps/api/src/config.test.ts`<br>`apps/api/src/server-composition.test.ts`                                                                                                                       | Fastify 网关认证、CORS、限流、请求校验、错误结构、环境配置和生产 composition                                   |
-| `apps/bot`                              | `apps/bot/src/config.test.ts`<br>`apps/bot/src/dispatcher.test.ts`<br>`apps/bot/src/server.test.ts`                                                                                                                            | Bot 环境配置、平台事件分发、WebSocket JSON transport 和 NapCat 连接监督                                        |
-| `apps/demo`                             | `apps/demo/src/dispatch.test.ts`<br>`apps/demo/src/events.test.ts`<br>`apps/demo/src/failure-semantics.test.ts`<br>`apps/demo/src/index.test.ts`<br>`apps/demo/src/local-ingress.test.ts`<br>`apps/demo/src/workflows.test.ts` | 应用事件边界、事件目录、入口装配、本地消息 ingress、LLM 失败分类和消息/heartbeat/memory 工作流                 |
-| `apps/web`                              | `apps/web/src/api.test.ts`                                                                                                                                                                                                     | 网关健康检查、Bearer 请求、消息提交、响应校验和错误映射                                                        |
-| `promptfoo`                             | `promptfoo/command.test.ts`<br>`promptfoo/provider.test.ts`                                                                                                                                                                    | `prompt:test` 命令的本地出口隔离，以及 Promptfoo provider 的离线结构调用                                       |
+| 范围                                                 | 主要测试文件                                                                                     | 覆盖内容                                                                                                      |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| `packages/schema`、`packages/sdk`                    | `index.test.ts`                                                                                  | 无 session 事件信封、模块/事件 API、工作流定义和失败分类                                                      |
+| `packages/engine`、`packages/scheduler`              | `event-bus.test.ts`、`module-host.test.ts`、`workflow-engine.test.ts`、`scheduler/index.test.ts` | 广播/定向模块分发、provenance 保护、错误聚合、stop 和显式 workflow/scheduler                                  |
+| `packages/modules`、`packages/runtime`               | `modules/index.test.ts`、`runtime/*.test.ts`                                                     | filter/LLM demo、单消息 prompt、profile/tier 选择、因果链、transport 审计、关闭 drain 与显式 heartbeat/memory |
+| `packages/database`、`packages/config`               | `database/index.test.ts`、`config/*.test.ts`                                                     | 无 session 消息迁移、outbound 状态；profile、model tiers、readiness、脱敏和文件权限                           |
+| `packages/logger`、`packages/llm`、`packages/prompt` | 各包 `index.test.ts` 及 adapter 测试                                                             | 嵌套错误安全摘要、LLM 输出/trace、OpenAI-compatible adapter 和 Prompt provenance                              |
+| `packages/platform-adapters`                         | `napcat.test.ts`、`onebot.test.ts`                                                               | CQ/数组消息规范化、mentions、text/reply action 和 transport receipt                                           |
+| `apps/server`、`apps/web`、`apps/demo`               | 各应用 `*.test.ts`                                                                               | 统一 Server、HTTP 兼容协议、配置启动门、NapCat supervisor、Web client 与 demo composition                     |
+| `promptfoo`                                          | `command.test.ts`、`provider.test.ts`                                                            | `prompt:test` 的出口隔离与离线结构调用                                                                        |
 
 完成必要构建后，可以按目录运行聚焦测试，例如：
 
 ```bash
 pnpm exec vitest run packages/config/src
 pnpm exec vitest run packages/llm/src
+pnpm exec vitest run packages/runtime/src
 pnpm exec vitest run packages/platform-adapters/src
-pnpm exec vitest run apps/api/src
-pnpm exec vitest run apps/bot/src
+pnpm exec vitest run apps/server/src
 pnpm exec vitest run apps/web/src/api.test.ts
 pnpm exec vitest run promptfoo
 ```

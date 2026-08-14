@@ -62,13 +62,25 @@ export const aiProviderConfigSchema = guardSchemaInput(
   aiProviderConfigInnerSchema,
 );
 
+const modelTierTargetSchema = z.strictObject({
+  providerId: nonEmptyIdSchema,
+  modelId: nonEmptyIdSchema,
+});
+
+export const modelTiersSchema = z.strictObject({
+  light: modelTierTargetSchema,
+  heavy: modelTierTargetSchema,
+});
+
 const aiConfigInnerSchema = z
   .strictObject({
     defaultProviderId: nonEmptyIdSchema.optional(),
+    modelTiers: modelTiersSchema.optional(),
     providers: z.array(aiProviderConfigSchema),
   })
   .superRefine((ai, context) => {
     rejectOwnUndefined(ai, "defaultProviderId", context);
+    rejectOwnUndefined(ai, "modelTiers", context);
     addDuplicateIdIssues(ai.providers, "provider", ["providers"], context);
   });
 
@@ -406,6 +418,7 @@ function addDuplicateIdIssues(
 }
 
 export type UserConfigProfile = z.infer<typeof userConfigProfileSchema>;
+export type ModelTierTarget = z.infer<typeof modelTierTargetSchema>;
 export type UserConfigProfileSettings = z.infer<
   typeof userConfigProfileSettingsSchema
 >;

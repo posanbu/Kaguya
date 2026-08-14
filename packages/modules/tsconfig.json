@@ -2,19 +2,13 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "rootDir": "./src",
-    "outDir": "./dist",
-    "types": ["node"]
+    "outDir": "./dist"
   },
   "include": ["src/**/*.ts"],
   "references": [
     { "path": "../schema" },
     { "path": "../sdk" },
-    { "path": "../engine" },
     { "path": "../prompt" },
-    { "path": "../llm" },
-    { "path": "../logger" },
-    { "path": "../modules" },
-    { "path": "../platform-adapters" },
-    { "path": "../database" }
+    { "path": "../llm" }
   ]
 }

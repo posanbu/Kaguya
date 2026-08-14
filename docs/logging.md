@@ -43,15 +43,15 @@ pnpm start
 
 ## 模块
 
-| module             | 范围                             |
-| ------------------ | -------------------------------- |
-| `server`           | 进程启动、监听和关闭             |
-| `server:http`      | HTTP 接受与请求失败              |
-| `runtime`          | Runtime 生命周期和 dispatch 结果 |
-| `runtime:event`    | EventBus observer                |
-| `runtime:workflow` | 持久化 workflow node 生命周期    |
-| `adapter:napcat`   | NapCat 连接、重连、入站和投递    |
-| `llm`              | LLM/provider 边界日志            |
+| module             | 范围                                     |
+| ------------------ | ---------------------------------------- |
+| `server`           | 进程启动、监听和关闭                     |
+| `server:http`      | HTTP 接受与请求失败                      |
+| `runtime`          | Runtime、模块 dispatch 和 transport 结果 |
+| `runtime:event`    | EventBus observer                        |
+| `runtime:workflow` | 显式 heartbeat/memory workflow 生命周期  |
+| `adapter:napcat`   | NapCat 连接、重连、入站和投递            |
+| `llm`              | LLM/provider 边界日志                    |
 
 命名空间覆盖使用最长前缀，因此 `runtime:workflow=debug` 不会开启其他 Runtime debug 日志。
 
@@ -62,7 +62,7 @@ AsyncLocalStorage 传播下列字段，并隔离并发请求：
 | 字段                            | 来源                      |
 | ------------------------------- | ------------------------- |
 | `requestId`                     | Fastify 请求 hook         |
-| `traceId`、`sessionId`          | 每次 Runtime dispatch     |
+| `traceId`                       | 每次 Runtime dispatch     |
 | `eventId`                       | EventBus observer         |
 | `runId`、`workflowId`、`nodeId` | workflow recorder wrapper |
 
@@ -78,8 +78,8 @@ AsyncLocalStorage 传播下列字段，并隔离并发请求：
 | `server.stopping` / `server.stopped`               | info  | `server`           | 有序关闭                                 |
 | `server.start.failed` / `server.shutdown.failed`   | fatal | `server`           | 启动或关闭失败                           |
 | `runtime.started` / `runtime.stopped`              | info  | `runtime`          | SQLite 与共享组件生命周期                |
-| `message.dispatch.started`                         | debug | `runtime`          | 一条消息开始进入 workflow                |
-| `message.dispatch.completed`                       | info  | `runtime`          | 结构化 dispatch 结果与平台 delivery 状态 |
+| `message.dispatch.started`                         | debug | `runtime`          | 一条消息开始进入模块链                   |
+| `message.dispatch.completed`                       | info  | `runtime`          | 模块 dispatch 结果与 outbound 状态       |
 | `message.dispatch.failed`                          | error | `runtime`          | dispatch 失败                            |
 | `http.message.accepted`                            | info  | `server:http`      | HTTP 消息已由 Runtime 完成处理并返回 202 |
 | `http.request.failed`                              | error | `server:http`      | 未处理 HTTP 错误                         |
@@ -90,8 +90,8 @@ AsyncLocalStorage 传播下列字段，并隔离并发请求：
 | `napcat.connection.disconnected/failed`            | warn  | `adapter:napcat`   | 断线或连接失败                           |
 | `napcat.reconnect.scheduled`                       | info  | `adapter:napcat`   | 已安排重连                               |
 | `napcat.inbound.failed`                            | error | `adapter:napcat`   | 标准化消息 dispatch 失败                 |
-| `platform.delivery.completed`                      | info  | `runtime`          | 平台 reply receipt 表示成功              |
-| `platform.delivery.failed`                         | warn  | `runtime`          | 平台 reply receipt 表示失败              |
+| `platform.delivery.completed`                      | info  | `runtime`          | 通用 outbound transport 成功             |
+| `platform.delivery.failed`                         | warn  | `runtime`          | 通用 outbound transport 失败             |
 
 Fastify 的通用每请求 info 日志已关闭，避免健康检查和静态资源淹没业务日志。
 
@@ -105,7 +105,7 @@ Fastify 的通用每请求 info 日志已关闭，避免健康检查和静态资
 - NapCat WebSocket URL；
 - 完整配置、HTTP headers/body/query 或 provider 原始响应。
 
-默认 redaction 覆盖常见 `apiKey`、`api_key`、`token`、`accessToken`、`access_token`、`authorization`、`credentials`、`raw`、`wsUrl`、Prompt/content/text/body 等路径。Error serializer 只保留 `type`、`code`、`statusCode`、`retryable`；request serializer 只保留 request ID、method、无 query path 和远端地址。
+默认 redaction 覆盖常见 `apiKey`、`api_key`、`token`、`accessToken`、`access_token`、`authorization`、`credentials`、`raw`、`wsUrl`、Prompt/content/text/body 等路径。Error serializer 只保留 `type`、`code`、`statusCode`、`retryable` 以及安全的 LLM 分类；嵌套 `AggregateError` 只增加叶子失败数量和一致分类，不展开 children/cause。request serializer 只保留 request ID、method、无 query path 和远端地址。
 
 redaction 是误用兜底，不是记录敏感数据的授权。Prompt 和模型输出需要审计时只使用受控 SQLite trace repository。
 

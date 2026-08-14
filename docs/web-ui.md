@@ -15,11 +15,11 @@ pnpm dev
 
 ## 浏览器存储
 
-| 数据         | 存储                                      | 生命周期               |
-| ------------ | ----------------------------------------- | ---------------------- |
-| 会话 ID      | `localStorage` 的 `kaguya.sessionId`      | 浏览器后续会话继续使用 |
-| Bearer Token | `sessionStorage` 的 `kaguya.gatewayToken` | 仅当前标签页会话       |
-| Server 地址  | 不存储                                    | 始终使用页面同源地址   |
+| 数据         | 存储                                      | 生命周期                                    |
+| ------------ | ----------------------------------------- | ------------------------------------------- |
+| Source ID    | `localStorage` 的 `kaguya.sessionId`      | 兼容 API 字段；Core 不赋予 session/历史语义 |
+| Bearer Token | `sessionStorage` 的 `kaguya.gatewayToken` | 仅当前标签页会话                            |
+| Server 地址  | 不存储                                    | 始终使用页面同源地址                        |
 
 Token 不应写入 `VITE_*` 环境变量，因为这类值会被打包进浏览器产物。
 

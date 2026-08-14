@@ -17,3 +17,9 @@ export {
   type WorkflowExecutionResult,
   type WorkflowRunRecorder,
 } from "./workflow-engine.js";
+export {
+  ModuleDefinitionNotFoundError,
+  ModuleHost,
+  ModuleTargetNotFoundError,
+  type ModuleHostOptions,
+} from "./module-host.js";

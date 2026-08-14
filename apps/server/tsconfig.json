@@ -7,6 +7,7 @@
   },
   "include": ["src/**/*.ts"],
   "references": [
+    { "path": "../../packages/config" },
     { "path": "../../packages/database" },
     { "path": "../../packages/logger" },
     { "path": "../../packages/platform-adapters" },

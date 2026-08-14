@@ -6,7 +6,7 @@ import {
 } from "./onebot.js";
 
 describe("normalizeOneBotMessageEvent", () => {
-  it("maps private text messages to stable Kaguya session and trace IDs", () => {
+  it("maps private text messages without creating a Core session", () => {
     const message = normalizeOneBotMessageEvent(
       {
         post_type: "message",
@@ -28,11 +28,11 @@ describe("normalizeOneBotMessageEvent", () => {
       platform: "qq",
       adapterId: "napcat.qq.main",
       selfId: "998877",
-      sessionId: "qq:private:112233",
       traceId: "napcat:998877:12345",
       platformMessageId: "12345",
       occurredAt: "2026-07-28T01:02:03.000Z",
       text: "hello kaguya",
+      mentions: [],
       target: { kind: "private", userId: "112233" },
       sender: { userId: "112233", nickname: "Ada" },
     });
@@ -73,9 +73,33 @@ describe("buildOneBotSendAction", () => {
       echo: "echo-2",
     });
   });
+
+  it("builds reply actions with an explicit platform reply segment", () => {
+    expect(
+      buildOneBotSendAction(
+        { kind: "group", groupId: "778899" },
+        {
+          kind: "reply",
+          replyToPlatformMessageId: "source-message-1",
+          text: "group reply",
+        },
+        "echo-reply",
+      ),
+    ).toEqual({
+      action: "send_group_msg",
+      params: {
+        group_id: 778899,
+        message: [
+          { type: "reply", data: { id: "source-message-1" } },
+          { type: "text", data: { text: "group reply" } },
+        ],
+      },
+      echo: "echo-reply",
+    });
+  });
 });
 
-it("maps group messages to group sessions and degraded segment text", () => {
+it("maps group messages to structured targets and degraded segment text", () => {
   const message = normalizeOneBotMessageEvent(
     {
       post_type: "message",
@@ -99,9 +123,9 @@ it("maps group messages to group sessions and degraded segment text", () => {
   );
 
   expect(message).toMatchObject({
-    sessionId: "qq:group:778899",
     traceId: "napcat:998877:abc-1",
     text: "[reply:old-msg]@998877hi[image]",
+    mentions: [{ kind: "user", id: "998877" }],
     target: { kind: "group", groupId: "778899" },
     sender: { userId: "445566", nickname: "Lin", card: "林" },
   });
@@ -154,6 +178,51 @@ it("preserves whitespace contributed by adjacent text segments", () => {
   );
 
   expect(message?.text).toBe(" hello @998877 world ");
+  expect(message?.mentions).toEqual([{ kind: "user", id: "998877" }]);
+});
+
+it("normalizes CQ string mentions and @all like segment messages", () => {
+  const options = {
+    adapterId: "napcat.qq.main",
+    now: () => new Date("2026-07-28T01:02:03.000Z"),
+  };
+  const cqMessage = normalizeOneBotMessageEvent(
+    {
+      post_type: "message",
+      message_type: "group",
+      self_id: 998877,
+      message_id: 1,
+      user_id: 112233,
+      group_id: 778899,
+      message: "[CQ:at,qq=998877] hi [CQ:at,qq=all]",
+    },
+    options,
+  );
+  const segmentMessage = normalizeOneBotMessageEvent(
+    {
+      post_type: "message",
+      message_type: "group",
+      self_id: 998877,
+      message_id: 2,
+      user_id: 112233,
+      group_id: 778899,
+      message: [
+        { type: "at", data: { qq: 998877 } },
+        { type: "text", data: { text: " hi " } },
+        { type: "at", data: { qq: "all" } },
+      ],
+    },
+    options,
+  );
+
+  expect(cqMessage).toMatchObject({
+    text: "@998877 hi @all",
+    mentions: [{ kind: "user", id: "998877" }, { kind: "all" }],
+  });
+  expect(segmentMessage).toMatchObject({
+    text: cqMessage?.text,
+    mentions: cqMessage?.mentions,
+  });
 });
 
 it("ignores messages authored by the connected bot account", () => {

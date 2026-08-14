@@ -23,9 +23,9 @@ const config: ServerConfig = {
   rateLimitMax: 30,
   rateLimitWindowMs: 60_000,
   databasePath: "/tmp/kaguya-api-test.sqlite",
+  configRoot: "/tmp/kaguya-config-test",
   development: false,
   webDistPath: "/tmp/kaguya-web-test",
-  llm: { provider: "deterministic" },
   napcat: {
     enabled: false,
     adapterId: "napcat.qq.main",
@@ -285,7 +285,7 @@ describe("application API gateway", () => {
     await app.close();
   });
 
-  it("propagates request and session context into the core ingress", async () => {
+  it("propagates request context without treating sourceId as a session", async () => {
     let capturedContext: Readonly<LogContext> | undefined;
     const app = await createApiGateway({
       config,
@@ -310,7 +310,6 @@ describe("application API gateway", () => {
     expect(response.statusCode).toBe(202);
     expect(capturedContext).toEqual({
       requestId: "request-context-1",
-      sessionId: "session-1",
     });
     await app.close();
   });
@@ -345,7 +344,6 @@ describe("application API gateway", () => {
       service: "kaguya-api-test",
       module: "api",
       requestId: "request-log-1",
-      sessionId: "session-1",
     });
     const serialized = JSON.stringify(logs);
     expect(serialized).not.toContain(gatewayToken);

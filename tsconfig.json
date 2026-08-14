@@ -6,6 +6,7 @@
     { "path": "./packages/logger" },
     { "path": "./packages/sdk" },
     { "path": "./packages/engine" },
+    { "path": "./packages/modules" },
     { "path": "./packages/prompt" },
     { "path": "./packages/llm" },
     { "path": "./packages/database" },

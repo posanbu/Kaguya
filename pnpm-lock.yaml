@@ -47,6 +47,9 @@ importers:
       '@kaguya/llm':
         specifier: workspace:*
         version: link:../../packages/llm
+      '@kaguya/modules':
+        specifier: workspace:*
+        version: link:../../packages/modules
       '@kaguya/platform-adapters':
         specifier: workspace:*
         version: link:../../packages/platform-adapters
@@ -77,6 +80,9 @@ importers:
       '@fastify/swagger':
         specifier: ^9.8.1
         version: 9.8.1
+      '@kaguya/config':
+        specifier: workspace:*
+        version: link:../../packages/config
       '@kaguya/logger':
         specifier: workspace:*
         version: link:../../packages/logger
@@ -170,6 +176,21 @@ importers:
         specifier: 13.1.3
         version: 13.1.3
 
+  packages/modules:
+    dependencies:
+      '@kaguya/llm':
+        specifier: workspace:*
+        version: link:../llm
+      '@kaguya/prompt':
+        specifier: workspace:*
+        version: link:../prompt
+      '@kaguya/schema':
+        specifier: workspace:*
+        version: link:../schema
+      '@kaguya/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+
   packages/platform-adapters:
     dependencies:
       '@kaguya/schema':
@@ -196,6 +217,9 @@ importers:
       '@kaguya/logger':
         specifier: workspace:*
         version: link:../logger
+      '@kaguya/modules':
+        specifier: workspace:*
+        version: link:../modules
       '@kaguya/platform-adapters':
         specifier: workspace:*
         version: link:../platform-adapters

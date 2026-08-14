@@ -1,5 +1,5 @@
 {
-  "name": "@kaguya/runtime",
+  "name": "@kaguya/modules",
   "private": true,
   "type": "module",
   "exports": {
@@ -13,12 +13,7 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
-    "@kaguya/database": "workspace:*",
-    "@kaguya/engine": "workspace:*",
     "@kaguya/llm": "workspace:*",
-    "@kaguya/logger": "workspace:*",
-    "@kaguya/modules": "workspace:*",
-    "@kaguya/platform-adapters": "workspace:*",
     "@kaguya/prompt": "workspace:*",
     "@kaguya/schema": "workspace:*",
     "@kaguya/sdk": "workspace:*"
