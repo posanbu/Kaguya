@@ -2,6 +2,10 @@ import type { CompiledPrompt, LlmErrorKind, LlmTrace } from "@kaguya/schema";
 import {
   APICallError,
   generateText,
+  JSONParseError,
+  NoObjectGeneratedError,
+  Output,
+  type FlexibleSchema,
   type LanguageModel,
   type LanguageModelUsage,
   RetryError,
@@ -112,10 +116,14 @@ export class KaguyaLlmClient {
       const result = await generateText({
         model: this.#resolveModel(request),
         prompt: request.prompt.text,
+        output: Output.object({
+          schema: outputSchemaFor(request.kind),
+          name: `${request.kind}Output`,
+        }),
       });
 
       usage = normalizeUsage(result.usage);
-      response = parseOutput(request.kind, result.text);
+      response = result.output;
     } catch (error) {
       failure = normalizeError(error);
     } finally {
@@ -182,38 +190,17 @@ function safeTraceFailureMessage(kind: KaguyaLlmErrorKind): string {
     : "Language model generation failed";
 }
 
-function parseOutput<K extends keyof KaguyaLlmOutputByKind>(
+const outputSchemas = {
+  route: routeOutputSchema,
+  reply: replyOutputSchema,
+  state: stateOutputSchema,
+  memory: memoryOutputSchema,
+} as const;
+
+function outputSchemaFor<K extends keyof KaguyaLlmOutputByKind>(
   kind: K,
-  text: string,
-): KaguyaLlmOutputByKind[K] {
-  let value: unknown;
-
-  try {
-    value = JSON.parse(text);
-  } catch (error) {
-    throw new KaguyaLlmError(`Invalid JSON response for ${kind}`, {
-      kind: "non-retryable",
-      cause: error,
-    });
-  }
-
-  try {
-    switch (kind) {
-      case "route":
-        return routeOutputSchema.parse(value) as KaguyaLlmOutputByKind[K];
-      case "reply":
-        return replyOutputSchema.parse(value) as KaguyaLlmOutputByKind[K];
-      case "state":
-        return stateOutputSchema.parse(value) as KaguyaLlmOutputByKind[K];
-      case "memory":
-        return memoryOutputSchema.parse(value) as KaguyaLlmOutputByKind[K];
-    }
-  } catch (error) {
-    throw new KaguyaLlmError(`Invalid response structure for ${kind}`, {
-      kind: "non-retryable",
-      cause: error,
-    });
-  }
+): FlexibleSchema<KaguyaLlmOutputByKind[K]> {
+  return outputSchemas[kind] as FlexibleSchema<KaguyaLlmOutputByKind[K]>;
 }
 
 function normalizeUsage(
@@ -235,6 +222,16 @@ function normalizeUsage(
 function normalizeError(error: unknown): KaguyaLlmError {
   if (error instanceof KaguyaLlmError) {
     return error;
+  }
+
+  if (NoObjectGeneratedError.isInstance(error)) {
+    const message = JSONParseError.isInstance(error.cause)
+      ? "Invalid JSON response for structured output"
+      : "Invalid response structure for structured output";
+    return new KaguyaLlmError(message, {
+      kind: "non-retryable",
+      cause: error,
+    });
   }
 
   const kind: KaguyaLlmErrorKind = isAbortError(error)
