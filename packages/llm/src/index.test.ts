@@ -325,10 +325,30 @@ describe("KaguyaLlmClient", () => {
       client.generate(request("route", "llm-trace-3")),
     ).rejects.toMatchObject({
       kind: "non-retryable",
+      message: "Invalid response structure for structured output",
     });
     expect(traces[0]).toMatchObject({
       status: "failed",
       error: { name: "KaguyaLlmError" },
+    });
+  });
+
+  it("normalizes malformed structured output without parsing it manually", async () => {
+    const client = new KaguyaLlmClient({
+      model: new MockLanguageModelV3({
+        doGenerate: modelResult("plain text"),
+      }),
+      traceWriter: { write: () => Promise.resolve() },
+      now: deterministicClock(
+        "2026-07-23T00:00:00.000Z",
+        "2026-07-23T00:00:00.001Z",
+      ),
+    });
+
+    await expect(client.generate(request())).rejects.toMatchObject({
+      name: "KaguyaLlmError",
+      kind: "non-retryable",
+      message: "Invalid JSON response for structured output",
     });
   });
 
@@ -354,6 +374,33 @@ describe("KaguyaLlmClient", () => {
     });
 
     await expect(client.generate(request(kind))).resolves.toEqual(output);
+  });
+
+  it("requests structured output from the SDK for reply generation", async () => {
+    const model = new MockLanguageModelV3({
+      modelId: "deterministic-model",
+      doGenerate: modelResult('{"text":"hello"}'),
+    });
+    const client = new KaguyaLlmClient({
+      model,
+      traceWriter: { write: () => Promise.resolve() },
+      now: deterministicClock(
+        "2026-07-23T00:00:00.000Z",
+        "2026-07-23T00:00:00.001Z",
+      ),
+    });
+
+    await expect(client.generate(request("reply"))).resolves.toEqual({
+      text: "hello",
+    });
+    expect(model.doGenerateCalls[0]?.responseFormat).toMatchObject({
+      type: "json",
+      name: "replyOutput",
+      schema: {
+        type: "object",
+        required: ["text"],
+      },
+    });
   });
 
   it("exports the single per-kind output schemas consumed by applications", () => {

@@ -41,12 +41,12 @@ const result = await client.generate({
 });
 ```
 
-`kind` 决定返回类型。四类结果都会在返回工作流之前进行严格 schema 校验；非法 JSON、字段缺失、额外字段或空白业务文本会归类为 `non-retryable`。
+`kind` 决定返回类型。client 会通过 Vercel AI SDK 的 `Output.object` 把对应业务 schema 传给 provider，并直接读取 SDK 校验后的结构化输出，不再手动解析普通文本。非法 JSON、字段缺失、额外字段或空白业务文本会归类为 `non-retryable`。
 
 ## Vercel AI SDK 边界
 
 - client 接受 Vercel AI SDK 的统一 `LanguageModel`，业务工作流不导入供应商 SDK；
-- client 使用 `generateText` 发起生成并读取统一 usage；
+- client 使用 `generateText` 与 `Output.object` 发起结构化生成，并读取统一 output 与 usage；
 - provider 选择和凭证解析由 composition root 或独立 adapter 完成；
 - SDK 的 `APICallError` 与 `RetryError` 会归一化为 `retryable`、`non-retryable` 或 `cancelled`；
 - client 不维护另一套 HTTP、重试或供应商响应解析实现；
