@@ -191,6 +191,7 @@ export async function createRuntimeModelSelectionResolver(
         name: `kaguya-${profileId}-${provider.id}`,
         apiKey: provider.apiKey,
         baseURL: provider.baseUrl,
+        ...openAICompatibleProviderSettings(provider.settings),
       });
       providerCache.set(cacheKey, client);
     }
@@ -201,6 +202,14 @@ export async function createRuntimeModelSelectionResolver(
   resolver({ modelTier: "light" });
   resolver({ modelTier: "heavy" });
   return resolver;
+}
+
+function openAICompatibleProviderSettings(
+  settings: UserConfigProfile["ai"]["providers"][number]["settings"],
+): { supportsStructuredOutputs?: boolean } {
+  return typeof settings.supportsStructuredOutputs === "boolean"
+    ? { supportsStructuredOutputs: settings.supportsStructuredOutputs }
+    : {};
 }
 
 function assertProfileReady(profile: UserConfigProfile): void {
