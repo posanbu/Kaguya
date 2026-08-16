@@ -5,13 +5,24 @@ import {
   EyeOff,
   LoaderCircle,
   RefreshCw,
+  Save,
   SendHorizontal,
+  Settings2,
 } from "lucide-react";
-import { FormEvent, KeyboardEvent, useMemo, useRef, useState } from "react";
+import {
+  FormEvent,
+  KeyboardEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import {
   checkGatewayHealth,
   GatewayRequestError,
+  getConfigurationStatus,
+  initializeConfiguration,
   MAX_MESSAGE_LENGTH,
   sendMessage,
 } from "./api.js";
@@ -21,6 +32,7 @@ const TOKEN_KEY = "kaguya.gatewayToken";
 
 type DeliveryState = "sending" | "accepted" | "failed";
 type HealthState = "idle" | "checking" | "online" | "offline";
+type ConfigurationView = "checking" | "setup" | "restart" | "chat" | "error";
 
 interface ChatMessage {
   readonly id: string;
@@ -38,6 +50,9 @@ export function App() {
   const [token, setToken] = useState(() =>
     readStorage(sessionStorage, TOKEN_KEY, ""),
   );
+  const [configurationView, setConfigurationView] =
+    useState<ConfigurationView>("checking");
+  const [configurationError, setConfigurationError] = useState<string>();
   const [showToken, setShowToken] = useState(false);
   const [healthState, setHealthState] = useState<HealthState>("idle");
   const [draft, setDraft] = useState("");
@@ -49,6 +64,32 @@ export function App() {
   const draftLength = useMemo(() => [...draft].length, [draft]);
   const canSend =
     !isSending && draft.trim().length > 0 && draftLength <= MAX_MESSAGE_LENGTH;
+
+  useEffect(() => {
+    let active = true;
+    void getConfigurationStatus().then(
+      (status) => {
+        if (!active) return;
+        setConfigurationView(
+          status.status === "setup_required" ||
+            status.status === "invalid" ||
+            status.status === "review_required"
+            ? "setup"
+            : status.status === "restart_required"
+              ? "restart"
+              : "chat",
+        );
+      },
+      (error) => {
+        if (!active) return;
+        setConfigurationError(errorMessage(error));
+        setConfigurationView("error");
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const persistConnection = () => {
     localStorage.setItem(SESSION_ID_KEY, sessionId.trim());
@@ -123,6 +164,30 @@ export function App() {
       void submitMessage();
     }
   };
+
+  if (configurationView === "checking") {
+    return <ConfigurationLoading />;
+  }
+
+  if (configurationView === "error") {
+    return <ConfigurationStatusError message={configurationError} />;
+  }
+
+  if (configurationView === "setup") {
+    return (
+      <SetupScreen
+        token={token}
+        onTokenChange={(value) => {
+          setToken(value);
+          sessionStorage.setItem(TOKEN_KEY, value);
+        }}
+      />
+    );
+  }
+
+  if (configurationView === "restart") {
+    return <RestartRequired />;
+  }
 
   return (
     <div className="app-shell">
@@ -276,6 +341,260 @@ export function App() {
   );
 }
 
+function ConfigurationLoading() {
+  return (
+    <div className="setup-shell">
+      <div className="setup-status" role="status">
+        <LoaderCircle className="spin" size={20} />
+        <span>正在读取配置状态</span>
+      </div>
+    </div>
+  );
+}
+
+function ConfigurationStatusError({
+  message,
+}: {
+  message: string | undefined;
+}) {
+  return (
+    <div className="setup-shell">
+      <section className="setup-card setup-status-card" role="alert">
+        <Settings2 size={22} />
+        <h1>无法读取配置状态</h1>
+        <p>{message ?? "请确认 Kaguya 服务正在运行"}</p>
+        <button
+          type="button"
+          className="setup-button"
+          onClick={() => window.location.reload()}
+        >
+          重新检查
+        </button>
+      </section>
+    </div>
+  );
+}
+
+function RestartRequired() {
+  return (
+    <div className="setup-shell">
+      <section className="setup-card setup-status-card" role="status">
+        <CheckCircle2 size={22} />
+        <h1>配置已保存</h1>
+        <p>请重启 Kaguya 服务，使 Runtime 加载新的模型配置，然后刷新页面。</p>
+        <button
+          type="button"
+          className="setup-button"
+          onClick={() => window.location.reload()}
+        >
+          已重启，重新检查
+        </button>
+      </section>
+    </div>
+  );
+}
+
+function SetupScreen({
+  token,
+  onTokenChange,
+}: {
+  readonly token: string;
+  readonly onTokenChange: (value: string) => void;
+}) {
+  const [profileName, setProfileName] = useState("default");
+  const [baseUrl, setBaseUrl] = useState("https://api.openai.com/v1");
+  const [apiKey, setApiKey] = useState("");
+  const [lightModel, setLightModel] = useState("");
+  const [heavyModel, setHeavyModel] = useState("");
+  const [acknowledgeOptional, setAcknowledgeOptional] = useState(false);
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [formError, setFormError] = useState<string>();
+
+  const modelsAreDistinct = lightModel.trim() !== heavyModel.trim();
+  const canSubmit =
+    !submitting &&
+    token.trim().length > 0 &&
+    profileName.trim().length > 0 &&
+    baseUrl.trim().length > 0 &&
+    apiKey.length > 0 &&
+    lightModel.trim().length > 0 &&
+    heavyModel.trim().length > 0 &&
+    modelsAreDistinct &&
+    acknowledgeOptional;
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!canSubmit) return;
+    setSubmitting(true);
+    setFormError(undefined);
+    try {
+      await initializeConfiguration(
+        { token },
+        {
+          profileName,
+          baseUrl,
+          apiKey,
+          lightModel,
+          heavyModel,
+          acknowledgeOptional,
+        },
+      );
+      setSaved(true);
+    } catch (error) {
+      setFormError(errorMessage(error));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="setup-shell">
+      <header className="topbar">
+        <div className="brand-mark" aria-hidden="true">
+          K
+        </div>
+        <div>
+          <h1>Kaguya</h1>
+          <p>配置向导</p>
+        </div>
+      </header>
+
+      <main className="setup-main">
+        <section className="setup-card" aria-labelledby="setup-title">
+          <div className="setup-heading">
+            <div className="setup-icon" aria-hidden="true">
+              <Settings2 size={20} />
+            </div>
+            <div>
+              <p className="eyebrow">运行前检查</p>
+              <h1 id="setup-title">完成运行配置</h1>
+            </div>
+          </div>
+          <p className="setup-intro">
+            配置缺失或尚未确认时会停留在此页面。填写一个 OpenAI-compatible
+            模型服务，保存后重启 Kaguya 即可开始聊天。
+          </p>
+
+          <form className="setup-form" onSubmit={(event) => void submit(event)}>
+            <label className="field">
+              <span>配置名称</span>
+              <input
+                value={profileName}
+                onChange={(event) => setProfileName(event.target.value)}
+                maxLength={100}
+                autoComplete="off"
+                placeholder="default"
+              />
+            </label>
+            <label className="field">
+              <span>模型服务 URL</span>
+              <input
+                type="url"
+                value={baseUrl}
+                onChange={(event) => setBaseUrl(event.target.value)}
+                autoComplete="url"
+                placeholder="https://api.openai.com/v1"
+              />
+            </label>
+            <label className="field">
+              <span>模型服务 API Key</span>
+              <div className="password-field">
+                <input
+                  type={showApiKey ? "text" : "password"}
+                  value={apiKey}
+                  onChange={(event) => setApiKey(event.target.value)}
+                  autoComplete="new-password"
+                  placeholder="输入模型服务密钥"
+                />
+                <button
+                  type="button"
+                  className="icon-button"
+                  onClick={() => setShowApiKey((current) => !current)}
+                  aria-label={showApiKey ? "隐藏 API Key" : "显示 API Key"}
+                  title={showApiKey ? "隐藏 API Key" : "显示 API Key"}
+                >
+                  {showApiKey ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+            </label>
+            <div className="setup-model-grid">
+              <label className="field">
+                <span>Light 模型</span>
+                <input
+                  value={lightModel}
+                  onChange={(event) => setLightModel(event.target.value)}
+                  autoComplete="off"
+                  placeholder="gpt-4o-mini"
+                />
+              </label>
+              <label className="field">
+                <span>Heavy 模型</span>
+                <input
+                  value={heavyModel}
+                  onChange={(event) => setHeavyModel(event.target.value)}
+                  autoComplete="off"
+                  placeholder="gpt-4o"
+                />
+              </label>
+            </div>
+            {!modelsAreDistinct && lightModel.trim() && heavyModel.trim() ? (
+              <p className="setup-field-error">Light 和 Heavy 模型必须不同</p>
+            ) : null}
+            <label className="setup-check">
+              <input
+                type="checkbox"
+                checked={acknowledgeOptional}
+                onChange={(event) =>
+                  setAcknowledgeOptional(event.target.checked)
+                }
+              />
+              <span>我确认暂不配置平台和插件，稍后再补充</span>
+            </label>
+
+            <label className="field">
+              <span>网关访问令牌</span>
+              <input
+                type="password"
+                value={token}
+                onChange={(event) => onTokenChange(event.target.value)}
+                autoComplete="current-password"
+                placeholder="KAGUYA_GATEWAY_TOKEN"
+              />
+            </label>
+
+            {formError ? (
+              <div className="error-banner" role="alert">
+                <AlertCircle size={17} />
+                <span>{formError}</span>
+              </div>
+            ) : null}
+            {saved ? (
+              <div className="setup-success" role="status">
+                <CheckCircle2 size={17} />
+                <span>配置已保存，请重启服务后刷新此页面。</span>
+              </div>
+            ) : null}
+            <button
+              className="setup-button"
+              type="submit"
+              disabled={!canSubmit || saved}
+            >
+              {submitting ? (
+                <LoaderCircle className="spin" size={18} />
+              ) : (
+                <Save size={18} />
+              )}
+              <span>{submitting ? "保存中" : "保存配置"}</span>
+            </button>
+          </form>
+        </section>
+      </main>
+    </div>
+  );
+}
+
 function DeliveryStatus({ message }: { message: ChatMessage }) {
   if (message.state === "sending") {
     return (
@@ -312,6 +631,12 @@ function errorMessage(error: unknown): string {
     }
     if (error.code === "rate_limited") {
       return "请求过于频繁，请稍后再试";
+    }
+    if (error.code === "configuration_setup_required") {
+      return "请先完成运行配置";
+    }
+    if (error.code === "configuration_invalid") {
+      return "配置内容不完整或无效";
     }
     return error.message;
   }

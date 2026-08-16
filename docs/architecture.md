@@ -20,7 +20,7 @@ flowchart LR
 
 开发模式下 Vite middleware 和 HMR 挂在同一个 Fastify 实例；生产模式由该实例提供 `apps/web/dist`。NapCat 是可选 ingress 与 transport，连接失败不会停止 HTTP 服务。
 
-启动顺序固定为：加载并冻结配置 profile registry，打开并迁移数据库，注册 transport，创建并启动 ModuleHost，最后启动 HTTP 与 adapter ingress。默认 profile 无效时，不会产生部分启动。
+正常启动顺序为：加载并冻结配置 profile registry，打开并迁移数据库，注册 transport，创建并启动 ModuleHost，最后启动 HTTP 与 adapter ingress。若 profile store 尚未初始化、默认 profile 不完整或可选项尚未确认，则进入 setup mode，只启动 HTTP 与 Web UI；配置保存后必须重启，才会继续加载 Runtime 和 adapter ingress。配置文件损坏、路径或权限异常仍会拒绝启动，不会由引导流程覆盖。
 
 ## 包职责
 
@@ -49,7 +49,8 @@ sequenceDiagram
   participant Transport as Registered transport
 
   Ingress->>Core: normalized inbound message
-  Core->>DB: persist user message
+  Core->>Core: gateway allowlist check
+  Core->>DB: persist user message (allowed only)
   Core->>Bus: message.ingested
   Bus->>Filter: broadcast
   Filter->>Bus: reply.requested(targetInstanceId)
@@ -68,6 +69,8 @@ sequenceDiagram
 `reply.*` 只是 demo 模块间协议。模块可以不回复、使用自己的状态/历史，或把输出发送到与触发消息无关的私聊或群聊。Core 不从 message ID、sender、mention 或来源推导 destination，也不检查 outbound 是否在回复当前消息。
 
 `message.ingested` 对所有已持久化入站消息广播。平台事件包含公开且 schema 校验后的 adapter、平台消息 ID、self ID、destination、sender 和 mentions；adapter `raw` 不进入事件或持久化 metadata。OneBot 数组段与 CQ 字符串生成一致的 text/mentions，`@` 只是模块输入，不是 Core 触发条件。
+
+平台白名单在 Runtime 入站边界执行。平台、用户或群组任一已配置维度未命中时，消息会被记录为 `message.dispatch.filtered` 并在落库、事件发布和 LLM 调用之前结束；未配置的维度不参与筛选。
 
 HTTP `sessionId` 字段仅为线协议兼容，Runtime 将其保存为 opaque Web source ID。默认 reply 模块会完成一次 LLM 请求，但不会为 Web 输入推导 transport destination。
 

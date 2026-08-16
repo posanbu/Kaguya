@@ -31,7 +31,14 @@ export interface ServerConfig {
   readonly configRoot: string;
   readonly development: boolean;
   readonly webDistPath: string;
+  readonly gatewayAllowlist: GatewayAllowlistConfig;
   readonly napcat: NapCatConfig;
+}
+
+export interface GatewayAllowlistConfig {
+  readonly platforms: readonly string[];
+  readonly userIds: readonly string[];
+  readonly groupIds: readonly string[];
 }
 
 export interface NapCatConfig {
@@ -100,6 +107,17 @@ export function readServerConfig(
     development: environment.NODE_ENV === "development",
     webDistPath:
       optionalText(environment.KAGUYA_WEB_DIST_PATH) ?? defaultWebDistPath,
+    gatewayAllowlist: {
+      platforms: commaSeparatedValues(
+        environment.KAGUYA_GATEWAY_ALLOWLIST_PLATFORMS ?? "",
+      ),
+      userIds: commaSeparatedValues(
+        environment.KAGUYA_GATEWAY_ALLOWLIST_USER_IDS ?? "",
+      ),
+      groupIds: commaSeparatedValues(
+        environment.KAGUYA_GATEWAY_ALLOWLIST_GROUP_IDS ?? "",
+      ),
+    },
     napcat: {
       enabled: napcatEnabled,
       adapterId: "napcat.qq.main",

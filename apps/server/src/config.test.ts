@@ -18,6 +18,9 @@ describe("readServerConfig", () => {
       KAGUYA_NAPCAT_ENABLED: "true",
       KAGUYA_NAPCAT_WS_URL: "ws://127.0.0.1:3001",
       KAGUYA_NAPCAT_RECONNECT_MS: "500",
+      KAGUYA_GATEWAY_ALLOWLIST_PLATFORMS: "qq, qq",
+      KAGUYA_GATEWAY_ALLOWLIST_USER_IDS: "user-1, user-2",
+      KAGUYA_GATEWAY_ALLOWLIST_GROUP_IDS: "group-1",
     });
 
     expect(config).toMatchObject({
@@ -31,6 +34,11 @@ describe("readServerConfig", () => {
       databasePath: "/tmp/kaguya-test.sqlite",
       configRoot: "/tmp/kaguya-config-test",
       development: true,
+      gatewayAllowlist: {
+        platforms: ["qq"],
+        userIds: ["user-1", "user-2"],
+        groupIds: ["group-1"],
+      },
       napcat: {
         enabled: true,
         adapterId: "napcat.qq.main",

@@ -21,18 +21,21 @@ pnpm start
 
 ## Server 配置
 
-| 环境变量                      | 默认值                | 约束/用途                                    |
-| ----------------------------- | --------------------- | -------------------------------------------- |
-| `KAGUYA_GATEWAY_TOKEN`        | 无                    | 必填，至少 16 字符；消息 API Bearer Token    |
-| `KAGUYA_HOST`                 | `127.0.0.1`           | 唯一监听地址                                 |
-| `KAGUYA_PORT`                 | `3000`                | `1..65535`                                   |
-| `KAGUYA_DATABASE_PATH`        | `.data/kaguya.sqlite` | 唯一 Runtime 数据库                          |
-| `KAGUYA_CONFIG_ROOT`          | `.data/kaguya-config` | 权限保护的 profile registry                  |
-| `KAGUYA_CORS_ORIGINS`         | 空                    | 逗号分隔；空值关闭跨源许可，同源 UI 不受影响 |
-| `KAGUYA_TRUST_PROXY`          | 空                    | 逗号分隔的可信代理地址/CIDR                  |
-| `KAGUYA_RATE_LIMIT_MAX`       | `30`                  | `1..10000`                                   |
-| `KAGUYA_RATE_LIMIT_WINDOW_MS` | `60000`               | `1000..3600000` 毫秒                         |
-| `KAGUYA_WEB_DIST_PATH`        | `apps/web/dist`       | 生产静态产物目录，主要用于测试/部署覆盖      |
+| 环境变量                             | 默认值                | 约束/用途                                    |
+| ------------------------------------ | --------------------- | -------------------------------------------- |
+| `KAGUYA_GATEWAY_TOKEN`               | 无                    | 必填，至少 16 字符；消息 API Bearer Token    |
+| `KAGUYA_HOST`                        | `127.0.0.1`           | 唯一监听地址                                 |
+| `KAGUYA_PORT`                        | `3000`                | `1..65535`                                   |
+| `KAGUYA_DATABASE_PATH`               | `.data/kaguya.sqlite` | 唯一 Runtime 数据库                          |
+| `KAGUYA_CONFIG_ROOT`                 | `.data/kaguya-config` | 权限保护的 profile registry                  |
+| `KAGUYA_CORS_ORIGINS`                | 空                    | 逗号分隔；空值关闭跨源许可，同源 UI 不受影响 |
+| `KAGUYA_TRUST_PROXY`                 | 空                    | 逗号分隔的可信代理地址/CIDR                  |
+| `KAGUYA_RATE_LIMIT_MAX`              | `30`                  | `1..10000`                                   |
+| `KAGUYA_RATE_LIMIT_WINDOW_MS`        | `60000`               | `1000..3600000` 毫秒                         |
+| `KAGUYA_WEB_DIST_PATH`               | `apps/web/dist`       | 生产静态产物目录，主要用于测试/部署覆盖      |
+| `KAGUYA_GATEWAY_ALLOWLIST_PLATFORMS` | 空                    | 逗号分隔的平台 ID；空值表示不限制            |
+| `KAGUYA_GATEWAY_ALLOWLIST_USER_IDS`  | 空                    | 逗号分隔的用户 ID；空值表示不限制            |
+| `KAGUYA_GATEWAY_ALLOWLIST_GROUP_IDS` | 空                    | 逗号分隔的群组 ID；空值表示不限制            |
 
 NapCat 配置：
 
@@ -47,6 +50,27 @@ NapCat 配置：
 检测到 `KAGUYA_API_HOST`、`KAGUYA_API_PORT`、`KAGUYA_API_DATABASE_PATH`、`KAGUYA_BOT_DATABASE_PATH` 或旧 `KAGUYA_LLM_*` 变量时启动失败。Provider、key 和 light/heavy target 只从 profile store 加载。
 
 日志配置见 [结构化日志](logging.md)。
+
+## 统一配置引导
+
+`KAGUYA_CONFIG_ROOT` 尚未初始化、默认 profile 不完整，或者可选配置尚未确认时，Server 都会进入统一的配置模式。此时 HTTP 和 Web UI 继续启动，但 Runtime 消息处理和 NapCat 入站不会启动。浏览器访问服务根路径会显示同一个配置页面，要求填写 OpenAI-compatible Provider 的 Base URL、API Key 以及 light/heavy 两个不同的模型 ID。
+
+配置页面通过以下接口完成引导：
+
+- `GET /api/v1/setup`：读取 `setup_required`、`restart_required`、`ready`、`invalid` 或 `review_required` 状态；该接口不返回密钥或完整 profile。
+- `POST /api/v1/setup`：使用网关 Bearer Token 提交或修复配置。请求成功返回 `201` 和 `restartRequired: true`。
+
+提交时必须明确确认暂不配置平台和插件。配置仓库不存在时会创建首个 profile；默认 profile 已存在但不完整时，会通过配置管理器替换其 AI 配置并保留 profile ID 与名称。保存成功后重启 Server，再刷新 Web UI；重启过程会重新加载 profile、模型客户端和平台连接。
+
+配置文件损坏、路径越界、符号链接或权限错误不属于可自动修复的“缺失配置”，Server 会拒绝启动并保留原文件，避免引导流程覆盖需要人工恢复的数据。`KAGUYA_GATEWAY_TOKEN` 仍是启动 HTTP 前必须提供的安全凭据，不能通过未认证的首次配置页面创建。
+
+## 平台入站白名单
+
+白名单位于 Runtime 的入站边界，而不是普通回复模块内部。这样，被拒绝的消息不会写入消息表，也不会发布 `message.ingested` 事件，因此不会触发 Prompt、LLM 或出站 transport。Web UI 消息不携带平台身份，始终沿用原有网关行为。
+
+三个变量分别限制平台、发送用户和目标群组。只要某个变量配置了值，对应字段就必须命中；多个变量同时配置时采用“同时满足”的关系。未配置的维度是通配条件。例如，只设置 `KAGUYA_GATEWAY_ALLOWLIST_GROUP_IDS=123,456` 时，只有这两个群组中的群消息会进入机器人流程，私聊会被过滤；只设置用户 ID 时，匹配用户的私聊和群消息都可以进入。
+
+ID 会在读取配置时按逗号拆分、去除首尾空白并去重。过滤结果会以 `message.dispatch.filtered` 写入结构化日志，日志只记录平台、adapter 和目标类型，不记录消息正文或凭据。
 
 ## 路由
 

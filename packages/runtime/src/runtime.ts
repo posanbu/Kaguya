@@ -39,6 +39,7 @@ import type { ModuleActivation, ModuleDefinition } from "@kaguya/sdk";
 
 import { approvedEventDefinitions } from "./events.js";
 import { LlmLifecycleClient } from "./llm-lifecycle.js";
+import { GatewayAllowlist } from "./gateway-allowlist.js";
 
 export interface RuntimeWebMessage {
   readonly kind: "web";
@@ -63,6 +64,7 @@ export interface RuntimeDispatchResult {
   readonly deliveries: readonly PlatformDeliveryReceipt[];
   readonly delivery?: PlatformDeliveryReceipt;
   readonly interrupted: boolean;
+  readonly filtered: boolean;
 }
 
 export interface ResolvedRuntimeModel {
@@ -87,6 +89,7 @@ export interface KaguyaRuntimeOptions {
   readonly resolveModelSelection?: RuntimeModelSelectionResolver;
   readonly moduleDefinitions?: readonly ModuleDefinition[];
   readonly moduleActivations?: readonly ModuleActivation[];
+  readonly gatewayAllowlist?: GatewayAllowlist;
 }
 
 export class RuntimeUnavailableError extends Error {
@@ -288,11 +291,35 @@ export class KaguyaRuntime {
   async #dispatch(
     input: RuntimeInboundMessage,
   ): Promise<RuntimeDispatchResult> {
-    const normalized = normalizeInboundMessage(input, this.#now, (prefix) =>
-      this.#nextId(traceIdOf(input), prefix),
-    );
+    const traceId = traceIdOf(input);
     const startedAt = this.#now().getTime();
-    return runWithLogContext({ traceId: normalized.traceId }, async () => {
+    return runWithLogContext({ traceId }, async () => {
+      if (
+        input.kind === "platform" &&
+        this.options.gatewayAllowlist?.allows(input.message) === false
+      ) {
+        this.#runtimeLogger?.info(
+          {
+            event: "message.dispatch.filtered",
+            sourceKind: input.kind,
+            durationMs: Math.max(0, this.#now().getTime() - startedAt),
+            ...platformLogFields(input),
+          },
+          "Message filtered by gateway allowlist",
+        );
+        return {
+          traceId,
+          workflowId: "message-module-pipeline" as const,
+          completedNodeIds: [],
+          deliveries: [],
+          interrupted: true,
+          filtered: true,
+        };
+      }
+
+      const normalized = normalizeInboundMessage(input, this.#now, (prefix) =>
+        this.#nextId(traceId, prefix),
+      );
       this.#runtimeLogger?.debug(
         {
           event: "message.dispatch.started",
@@ -331,6 +358,7 @@ export class KaguyaRuntime {
           deliveries,
           ...(lastDelivery === undefined ? {} : { delivery: lastDelivery }),
           interrupted: !result.continue,
+          filtered: false,
         };
       } catch (error) {
         this.#runtimeLogger?.error(
