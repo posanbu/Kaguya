@@ -7,6 +7,8 @@ import { FileUserConfigManager } from "@kaguya/config";
 import { KaguyaRuntime } from "@kaguya/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+
 import { createHttpApplication } from "./app.js";
 import type { ServerConfig } from "./config.js";
 import { createRuntimeModelSelectionResolver } from "./server.js";
@@ -201,6 +203,44 @@ describe("unified server composition", () => {
     expect(() =>
       resolver({ profileId: incomplete.id, modelTier: "heavy" }),
     ).toThrow("Configuration is incomplete");
+  });
+
+  it("passes structured-output support from profile provider settings", async () => {
+    const root = mkdtempSync(join(tmpdir(), "kaguya-profile-resolver-"));
+    roots.push(root);
+    await FileUserConfigManager.initialize({
+      rootDir: root,
+      name: "test",
+      settings: {
+        ai: {
+          defaultProviderId: "provider-1",
+          modelTiers: {
+            light: { providerId: "provider-1", modelId: "light-model" },
+            heavy: { providerId: "provider-1", modelId: "heavy-model" },
+          },
+          providers: [
+            {
+              id: "provider-1",
+              type: "openai-compatible",
+              enabled: true,
+              apiKey: "provider-key",
+              baseUrl: "https://llm.example/v1",
+              models: ["light-model", "heavy-model"],
+              settings: { supportsStructuredOutputs: true },
+            },
+          ],
+        },
+        platforms: [],
+        plugins: [],
+      },
+      acknowledgedWarnings: ["platforms-empty", "plugins-empty"],
+    });
+
+    await createRuntimeModelSelectionResolver(root);
+
+    expect(createOpenAICompatible).toHaveBeenCalledWith(
+      expect.objectContaining({ supportsStructuredOutputs: true }),
+    );
   });
 
   it("rejects a missing profile store before creating provider clients", async () => {
