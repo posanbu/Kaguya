@@ -2,6 +2,7 @@ import { pathToFileURL } from "node:url";
 
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
+  ConfigSetupRequiredError,
   ConfigIncompleteError,
   ConfigReviewRequiredError,
   FileUserConfigManager,
@@ -16,6 +17,7 @@ import {
   type KaguyaLogger,
 } from "@kaguya/logger";
 import {
+  GatewayAllowlist,
   KaguyaRuntime,
   type RuntimeModelSelectionResolver,
 } from "@kaguya/runtime";
@@ -27,6 +29,7 @@ import {
   createNapCatSupervisor,
   type NapCatConnectionSupervisor,
 } from "./napcat.js";
+import { createConfigurationSetup } from "./setup.js";
 import { registerWebUi, type WebUiHandle } from "./web.js";
 
 export interface StartedKaguyaServer {
@@ -38,18 +41,37 @@ export interface StartedKaguyaServer {
 export async function startKaguyaServer(
   config: ServerConfig = readServerConfig(),
 ): Promise<StartedKaguyaServer> {
-  const resolveModelSelection = await createRuntimeModelSelectionResolver(
-    config.configRoot,
-  );
   const rootLogger = createLogger(readLoggerOptions("kaguya"));
   const serverLogger = createModuleLogger(rootLogger, "server");
   const httpLogger = createModuleLogger(rootLogger, "server:http");
   const napcatLogger = createModuleLogger(rootLogger, "adapter:napcat");
+  const setup = createConfigurationSetup(config.configRoot);
+  let resolveModelSelection: RuntimeModelSelectionResolver | undefined;
+  try {
+    resolveModelSelection = await createRuntimeModelSelectionResolver(
+      config.configRoot,
+    );
+  } catch (error) {
+    if (!isRecoverableConfigurationError(error)) {
+      await closeLogger(rootLogger);
+      throw error;
+    }
+    serverLogger.warn(
+      {
+        event: "server.configuration.required",
+        reason: error.code,
+        setupUrl: `http://${config.host}:${config.port}/`,
+      },
+      "Configuration is not ready; open the Web UI to complete setup",
+    );
+  }
   const runtime = new KaguyaRuntime({
     databasePath: config.databasePath,
     logger: rootLogger,
-    resolveModelSelection,
+    ...(resolveModelSelection === undefined ? {} : { resolveModelSelection }),
+    gatewayAllowlist: new GatewayAllowlist(config.gatewayAllowlist),
   });
+  const runtimeReady = resolveModelSelection !== undefined;
 
   let app: FastifyInstance | undefined;
   let webUi: WebUiHandle | undefined;
@@ -75,11 +97,11 @@ export async function startKaguyaServer(
         host: config.host,
         port: config.port,
         development: config.development,
-        napcatEnabled: config.napcat.enabled,
+        napcatEnabled: runtimeReady && config.napcat.enabled,
       },
       "Kaguya server starting",
     );
-    if (config.napcat.enabled) {
+    if (runtimeReady && config.napcat.enabled) {
       napcat = createNapCatSupervisor({
         config: config.napcat,
         runtime,
@@ -91,16 +113,19 @@ export async function startKaguyaServer(
         transport: napcat,
       });
     }
-    await runtime.start();
+    if (runtimeReady) {
+      await runtime.start();
+    }
     app = await createHttpApplication({
       config,
-      runtime,
+      ...(runtimeReady ? { runtime } : {}),
+      setup,
       logger: httpLogger,
     });
     webUi = await registerWebUi(app, config);
     await app.listen({ host: config.host, port: config.port });
 
-    if (config.napcat.enabled) {
+    if (runtimeReady && config.napcat.enabled) {
       napcatLogger.info(
         {
           event: "napcat.connection.starting",
@@ -116,7 +141,7 @@ export async function startKaguyaServer(
         event: "server.started",
         host: config.host,
         port: config.port,
-        napcatEnabled: config.napcat.enabled,
+        napcatEnabled: runtimeReady && config.napcat.enabled,
       },
       "Kaguya server started",
     );
@@ -136,6 +161,17 @@ export async function startKaguyaServer(
   };
   registerShutdownHandlers(started, serverLogger);
   return started;
+}
+
+function isRecoverableConfigurationError(
+  error: unknown,
+): error is
+  ConfigSetupRequiredError | ConfigIncompleteError | ConfigReviewRequiredError {
+  return (
+    error instanceof ConfigSetupRequiredError ||
+    error instanceof ConfigIncompleteError ||
+    error instanceof ConfigReviewRequiredError
+  );
 }
 
 export async function createRuntimeModelSelectionResolver(

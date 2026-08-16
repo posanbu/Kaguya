@@ -13,6 +13,12 @@ pnpm dev
 
 不再使用 `pnpm web`、第二个 5173 端口或 `VITE_KAGUYA_API_URL`。
 
+## 统一配置入口
+
+当 `KAGUYA_CONFIG_ROOT` 尚未初始化、默认 profile 不完整或可选配置尚未确认时，页面会显示统一配置入口，而不是聊天界面。引导页收集 OpenAI-compatible Provider 的 Base URL、API Key、light/heavy 模型 ID，以及网关访问令牌；API Key 仅通过受保护的配置接口提交，不会写入浏览器存储。已有但不完整的默认 profile 会通过同一入口修复，不会静默回退到其他配置。
+
+保存成功后页面会提示重启 Server。重启是必要的，因为 Runtime 会在启动时冻结 profile 并创建模型客户端；重启完成后刷新页面即可进入聊天界面。
+
 ## 浏览器存储
 
 | 数据         | 存储                                      | 生命周期                                    |

@@ -3,6 +3,7 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import swagger from "@fastify/swagger";
+import { ConfigError } from "@kaguya/config";
 import { runWithLogContext } from "@kaguya/logger";
 import type { RuntimeWebMessage } from "@kaguya/runtime";
 import { z } from "@kaguya/schema";
@@ -15,6 +16,11 @@ import Fastify, {
 } from "fastify";
 
 import type { ServerConfig } from "./config.js";
+import {
+  isConfigurationInputError,
+  type ConfigurationSetup,
+  type InitialConfigurationInput,
+} from "./setup.js";
 
 const MAX_SESSION_ID_LENGTH = 256;
 const MAX_MESSAGE_TEXT_LENGTH = 131_072;
@@ -51,6 +57,59 @@ const messageBodyJsonSchema = {
       type: "string",
       minLength: 1,
       maxLength: MAX_MESSAGE_TEXT_LENGTH,
+    },
+  },
+} as const;
+
+const setupRequestSchema = z
+  .object({
+    profileName: z.string().trim().min(1).max(100),
+    baseUrl: z.string().trim().url(),
+    apiKey: z.string().min(1).max(4096),
+    lightModel: z.string().trim().min(1).max(256),
+    heavyModel: z.string().trim().min(1).max(256),
+    acknowledgeOptional: z.boolean(),
+  })
+  .refine(({ lightModel, heavyModel }) => lightModel !== heavyModel, {
+    message: "Light and heavy models must be different",
+    path: ["heavyModel"],
+  })
+  .strict();
+
+const setupRequestJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "profileName",
+    "baseUrl",
+    "apiKey",
+    "lightModel",
+    "heavyModel",
+    "acknowledgeOptional",
+  ],
+  properties: {
+    profileName: { type: "string", minLength: 1, maxLength: 100 },
+    baseUrl: { type: "string", format: "uri" },
+    apiKey: { type: "string", minLength: 1, maxLength: 4096 },
+    lightModel: { type: "string", minLength: 1, maxLength: 256 },
+    heavyModel: { type: "string", minLength: 1, maxLength: 256 },
+    acknowledgeOptional: { type: "boolean" },
+  },
+} as const;
+
+const setupResponseJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["data"],
+  properties: {
+    data: {
+      type: "object",
+      additionalProperties: false,
+      required: ["status", "restartRequired"],
+      properties: {
+        status: { type: "string", enum: ["configured"] },
+        restartRequired: { type: "boolean" },
+      },
     },
   },
 } as const;
@@ -93,6 +152,7 @@ const errorResponseJsonSchema = {
 export interface CreateHttpApplicationOptions {
   config: ServerConfig;
   runtime?: RuntimeDispatcher;
+  setup?: ConfigurationSetup;
   logger?: FastifyBaseLogger;
 }
 
@@ -179,6 +239,106 @@ export async function createHttpApplication(
     async () => app.swagger(),
   );
 
+  app.get(
+    "/api/v1/setup",
+    {
+      config: { rateLimit: false },
+      schema: {
+        hide: true,
+        tags: ["System"],
+        summary: "Inspect first-run configuration readiness",
+      },
+    },
+    async () => ({
+      data: (await options.setup?.inspect()) ?? { status: "ready" as const },
+    }),
+  );
+
+  app.post(
+    "/api/v1/setup",
+    {
+      onRequest: async (request, reply) => {
+        if (!hasValidGatewayToken(request, options.config.gatewayToken)) {
+          return reply
+            .code(401)
+            .send(
+              errorBody(
+                "unauthorized",
+                "A valid gateway Bearer token is required",
+                request.id,
+              ),
+            );
+        }
+      },
+      schema: {
+        hide: true,
+        tags: ["System"],
+        summary: "Initialize the first configuration profile",
+        security: [{ bearerAuth: [] }],
+        body: setupRequestJsonSchema,
+        response: {
+          201: setupResponseJsonSchema,
+          400: errorResponseJsonSchema,
+          401: errorResponseJsonSchema,
+          409: errorResponseJsonSchema,
+          429: errorResponseJsonSchema,
+          500: errorResponseJsonSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const setup = options.setup;
+      if (setup === undefined) {
+        throw new ApiGatewayError(
+          "configuration_not_required",
+          "Configuration setup is not required",
+          409,
+        );
+      }
+      const setupStatus = await setup.inspect();
+      if (
+        setupStatus.status === "ready" ||
+        setupStatus.status === "restart_required"
+      ) {
+        throw new ApiGatewayError(
+          "configuration_not_required",
+          "Configuration setup is not required",
+          409,
+        );
+      }
+      const parsed = setupRequestSchema.parse(request.body);
+      try {
+        await setup.initialize(parsed satisfies InitialConfigurationInput);
+      } catch (error) {
+        if (isConfigurationInputError(error)) {
+          throw new ApiGatewayError(
+            "configuration_invalid",
+            "Configuration input is invalid or incomplete",
+            400,
+          );
+        }
+        if (
+          error instanceof ConfigError &&
+          error.code === "CONFIG_CORRUPT_STORE"
+        ) {
+          throw new ApiGatewayError(
+            "configuration_unavailable",
+            "Configuration store is unavailable",
+            409,
+          );
+        }
+        throw error;
+      }
+      request.log.info(
+        { event: "configuration.setup.completed" },
+        "Configuration saved; restart required",
+      );
+      return reply.code(201).send({
+        data: { status: "configured", restartRequired: true },
+      });
+    },
+  );
+
   app.post(
     "/api/v1/messages",
     {
@@ -217,8 +377,12 @@ export async function createHttpApplication(
       const runtime = options.runtime;
       if (runtime === undefined) {
         throw new ApiGatewayError(
-          "core_unavailable",
-          "Core message ingress is not configured",
+          options.setup === undefined
+            ? "core_unavailable"
+            : "configuration_setup_required",
+          options.setup === undefined
+            ? "Core message ingress is not configured"
+            : "Configuration must be completed before messages can be processed",
           503,
         );
       }

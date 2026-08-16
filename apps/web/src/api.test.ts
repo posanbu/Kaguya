@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { checkGatewayHealth, GatewayRequestError, sendMessage } from "./api.js";
+import {
+  checkGatewayHealth,
+  GatewayRequestError,
+  getConfigurationStatus,
+  initializeConfiguration,
+  sendMessage,
+} from "./api.js";
 
 const config = {
   token: "test-gateway-token",
@@ -108,5 +114,78 @@ describe("checkGatewayHealth", () => {
       code: "health_check_failed",
       status: 503,
     });
+  });
+});
+
+describe("configuration setup", () => {
+  it("reads setup status without authentication", async () => {
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json({ data: { status: "setup_required" } }));
+
+    await expect(getConfigurationStatus(request)).resolves.toEqual({
+      status: "setup_required",
+    });
+    expect(request).toHaveBeenCalledWith("/api/v1/setup", { method: "GET" });
+  });
+
+  it("submits the initial provider configuration with the gateway token", async () => {
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        Response.json(
+          { data: { status: "configured", restartRequired: true } },
+          { status: 201 },
+        ),
+      );
+
+    await expect(
+      initializeConfiguration(
+        config,
+        {
+          profileName: "default",
+          baseUrl: "https://api.example/v1",
+          apiKey: "provider-secret",
+          lightModel: "small-model",
+          heavyModel: "large-model",
+          acknowledgeOptional: true,
+        },
+        request,
+      ),
+    ).resolves.toEqual({ status: "configured", restartRequired: true });
+    expect(request).toHaveBeenCalledWith("/api/v1/setup", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer test-gateway-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        profileName: "default",
+        baseUrl: "https://api.example/v1",
+        apiKey: "provider-secret",
+        lightModel: "small-model",
+        heavyModel: "large-model",
+        acknowledgeOptional: true,
+      }),
+    });
+  });
+
+  it("rejects setup submission without a gateway token", async () => {
+    const request = vi.fn<typeof fetch>();
+    await expect(
+      initializeConfiguration(
+        { token: "" },
+        {
+          profileName: "default",
+          baseUrl: "https://api.example/v1",
+          apiKey: "provider-secret",
+          lightModel: "small-model",
+          heavyModel: "large-model",
+          acknowledgeOptional: true,
+        },
+        request,
+      ),
+    ).rejects.toMatchObject({ code: "missing_token" });
+    expect(request).not.toHaveBeenCalled();
   });
 });

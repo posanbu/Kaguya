@@ -25,7 +25,7 @@ export KAGUYA_CONFIG_ROOT="/absolute/path/to/kaguya-config"
 pnpm dev
 ```
 
-`KAGUYA_CONFIG_ROOT` 必须是已经初始化、权限受保护的 profile store；默认 profile 的 `light` 和 `heavy` tier 都必须有效。初始化格式与密钥边界见 [`@kaguya/config`](packages/config/README.md)。打开 `http://127.0.0.1:3000` 后，页面和 API 使用同源路径。
+`KAGUYA_CONFIG_ROOT` 指向权限受保护的 profile store。目录尚未初始化、默认 profile 不完整或可选配置尚未确认时，Server 会进入统一配置模式并显示引导页；保存 Provider 后需要重启服务。配置文件损坏或权限异常仍会拒绝启动，不会自动覆盖。初始化格式与密钥边界见 [`@kaguya/config`](packages/config/README.md)。打开 `http://127.0.0.1:3000` 后，页面和 API 使用同源路径。
 
 生产运行：
 
@@ -55,22 +55,25 @@ pnpm start
 
 ## 统一配置
 
-| 环境变量                      | 默认值                | 说明                                   |
-| ----------------------------- | --------------------- | -------------------------------------- |
-| `KAGUYA_GATEWAY_TOKEN`        | 无                    | 必填，至少 16 个字符                   |
-| `KAGUYA_HOST`                 | `127.0.0.1`           | 唯一服务监听地址                       |
-| `KAGUYA_PORT`                 | `3000`                | 唯一服务监听端口                       |
-| `KAGUYA_DATABASE_PATH`        | `.data/kaguya.sqlite` | Runtime SQLite 文件                    |
-| `KAGUYA_CORS_ORIGINS`         | 空                    | 逗号分隔的允许来源；同源 UI 不需要配置 |
-| `KAGUYA_TRUST_PROXY`          | 空                    | 逗号分隔的可信代理地址/CIDR            |
-| `KAGUYA_RATE_LIMIT_MAX`       | `30`                  | 每个限流窗口的请求数                   |
-| `KAGUYA_RATE_LIMIT_WINDOW_MS` | `60000`               | 限流窗口毫秒数                         |
-| `KAGUYA_CONFIG_ROOT`          | `.data/kaguya-config` | profile registry；含 provider 与 tier  |
-| `KAGUYA_NAPCAT_ENABLED`       | `false`               | 是否启用 NapCat                        |
-| `KAGUYA_NAPCAT_WS_URL`        | 无                    | 启用 NapCat 时必填                     |
-| `KAGUYA_NAPCAT_ACCESS_TOKEN`  | 无                    | NapCat access token                    |
-| `KAGUYA_NAPCAT_SELF_ID`       | 无                    | 可选的预期机器人 ID                    |
-| `KAGUYA_NAPCAT_RECONNECT_MS`  | `3000`                | 重连间隔                               |
+| 环境变量                             | 默认值                | 说明                                   |
+| ------------------------------------ | --------------------- | -------------------------------------- |
+| `KAGUYA_GATEWAY_TOKEN`               | 无                    | 必填，至少 16 个字符                   |
+| `KAGUYA_HOST`                        | `127.0.0.1`           | 唯一服务监听地址                       |
+| `KAGUYA_PORT`                        | `3000`                | 唯一服务监听端口                       |
+| `KAGUYA_DATABASE_PATH`               | `.data/kaguya.sqlite` | Runtime SQLite 文件                    |
+| `KAGUYA_CORS_ORIGINS`                | 空                    | 逗号分隔的允许来源；同源 UI 不需要配置 |
+| `KAGUYA_TRUST_PROXY`                 | 空                    | 逗号分隔的可信代理地址/CIDR            |
+| `KAGUYA_RATE_LIMIT_MAX`              | `30`                  | 每个限流窗口的请求数                   |
+| `KAGUYA_RATE_LIMIT_WINDOW_MS`        | `60000`               | 限流窗口毫秒数                         |
+| `KAGUYA_CONFIG_ROOT`                 | `.data/kaguya-config` | profile registry；含 provider 与 tier  |
+| `KAGUYA_GATEWAY_ALLOWLIST_PLATFORMS` | 空                    | 逗号分隔的平台 ID；空值表示不限制      |
+| `KAGUYA_GATEWAY_ALLOWLIST_USER_IDS`  | 空                    | 逗号分隔的用户 ID；空值表示不限制      |
+| `KAGUYA_GATEWAY_ALLOWLIST_GROUP_IDS` | 空                    | 逗号分隔的群组 ID；空值表示不限制      |
+| `KAGUYA_NAPCAT_ENABLED`              | `false`               | 是否启用 NapCat                        |
+| `KAGUYA_NAPCAT_WS_URL`               | 无                    | 启用 NapCat 时必填                     |
+| `KAGUYA_NAPCAT_ACCESS_TOKEN`         | 无                    | NapCat access token                    |
+| `KAGUYA_NAPCAT_SELF_ID`              | 无                    | 可选的预期机器人 ID                    |
+| `KAGUYA_NAPCAT_RECONNECT_MS`         | `3000`                | 重连间隔                               |
 
 Server 不从环境变量读取 provider key、base URL 或 model。检测到旧的 `KAGUYA_LLM_API_KEY`、`KAGUYA_LLM_BASE_URL` 或 `KAGUYA_LLM_MODEL` 会在启动前失败并提示迁移到 profile；错误不会包含变量值。直接嵌入 `KaguyaRuntime` 的测试和 demo 仍可注入确定性模型。
 

@@ -14,6 +14,96 @@ export interface AcceptedMessage {
   readonly requestId: string;
 }
 
+export type ConfigurationStatus =
+  | { readonly status: "setup_required" }
+  | { readonly status: "restart_required" }
+  | { readonly status: "ready" }
+  | { readonly status: "invalid" }
+  | { readonly status: "review_required" };
+
+export interface InitialConfigurationInput {
+  readonly profileName: string;
+  readonly baseUrl: string;
+  readonly apiKey: string;
+  readonly lightModel: string;
+  readonly heavyModel: string;
+  readonly acknowledgeOptional: boolean;
+}
+
+export interface ConfigurationSaved {
+  readonly status: "configured";
+  readonly restartRequired: true;
+}
+
+export async function getConfigurationStatus(
+  fetchImplementation: typeof fetch = fetch,
+): Promise<ConfigurationStatus> {
+  let response: Response;
+  try {
+    response = await fetchImplementation("/api/v1/setup", { method: "GET" });
+  } catch {
+    throw new GatewayRequestError(
+      "无法读取 Kaguya 配置状态",
+      "network_error",
+      0,
+    );
+  }
+
+  const payload = await readJson(response);
+  if (!response.ok || !isConfigurationStatusResponse(payload)) {
+    throw new GatewayRequestError(
+      `无法读取配置状态（HTTP ${response.status}）`,
+      "configuration_status_failed",
+      response.status,
+    );
+  }
+  return payload.data;
+}
+
+export async function initializeConfiguration(
+  config: GatewayConfig,
+  input: InitialConfigurationInput,
+  fetchImplementation: typeof fetch = fetch,
+): Promise<ConfigurationSaved> {
+  const token = config.token.trim();
+  if (!token) {
+    throw new GatewayRequestError("请输入服务访问令牌", "missing_token", 0);
+  }
+
+  let response: Response;
+  try {
+    response = await fetchImplementation("/api/v1/setup", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(input),
+    });
+  } catch {
+    throw new GatewayRequestError("无法连接到 Kaguya 服务", "network_error", 0);
+  }
+
+  const payload = await readJson(response);
+  if (!response.ok) {
+    const gatewayError = isErrorResponse(payload) ? payload.error : undefined;
+    throw new GatewayRequestError(
+      gatewayError?.message ?? `保存配置失败（HTTP ${response.status}）`,
+      gatewayError?.code ?? "configuration_failed",
+      response.status,
+      gatewayError?.requestId,
+    );
+  }
+  if (!isConfigurationSavedResponse(payload)) {
+    throw new GatewayRequestError(
+      "服务返回了无法识别的配置响应",
+      "invalid_response",
+      response.status,
+    );
+  }
+  return payload.data;
+}
+
 export async function checkGatewayHealth(
   fetchImplementation: typeof fetch = fetch,
 ): Promise<void> {
@@ -141,6 +231,32 @@ function isAcceptedMessageResponse(
   }
   return (
     value.data.status === "accepted" && typeof value.data.requestId === "string"
+  );
+}
+
+function isConfigurationStatusResponse(
+  value: unknown,
+): value is { data: ConfigurationStatus } {
+  if (!isRecord(value) || !isRecord(value.data)) {
+    return false;
+  }
+  return [
+    "setup_required",
+    "restart_required",
+    "ready",
+    "invalid",
+    "review_required",
+  ].includes(String(value.data.status));
+}
+
+function isConfigurationSavedResponse(
+  value: unknown,
+): value is { data: ConfigurationSaved } {
+  return (
+    isRecord(value) &&
+    isRecord(value.data) &&
+    value.data.status === "configured" &&
+    value.data.restartRequired === true
   );
 }
 

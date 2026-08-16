@@ -13,6 +13,7 @@ import {
   OutboundTransportNotFoundError,
   RuntimeUnavailableError,
 } from "./runtime.js";
+import { GatewayAllowlist } from "./gateway-allowlist.js";
 
 const directories: string[] = [];
 
@@ -48,6 +49,48 @@ function platformMessage(adapterId = "napcat.qq.main") {
 }
 
 describe("KaguyaRuntime", () => {
+  it("filters a platform message before persistence and reply generation", async () => {
+    const databasePath = path();
+    const resolveModelSelection = vi.fn(() => {
+      throw new Error("Filtered messages must not resolve an LLM");
+    });
+    const sendMessage = vi.fn<PlatformOutboundTransport["sendMessage"]>(
+      async (target) => ({
+        ok: true,
+        adapterId: "napcat.qq.main",
+        platform: "qq",
+        target,
+      }),
+    );
+    const runtime = new KaguyaRuntime({
+      databasePath,
+      resolveModelSelection,
+      gatewayAllowlist: new GatewayAllowlist({ groupIds: ["allowed-group"] }),
+    });
+    runtime.registerTransport({
+      adapterId: "napcat.qq.main",
+      platform: "qq",
+      transport: { sendMessage },
+    });
+    await runtime.start();
+
+    const result = await runtime.dispatch(platformMessage());
+    await runtime.close();
+
+    expect(result).toMatchObject({
+      filtered: true,
+      interrupted: true,
+      completedNodeIds: [],
+      deliveries: [],
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(resolveModelSelection).not.toHaveBeenCalled();
+
+    const database = KaguyaDatabase.open(databasePath);
+    expect(database.messages.listRecent(10)).toEqual([]);
+    database.close();
+  });
+
   it("persists, runs modules, and transports a platform reply", async () => {
     const databasePath = path();
     const sendMessage = vi.fn<PlatformOutboundTransport["sendMessage"]>(
@@ -60,7 +103,14 @@ describe("KaguyaRuntime", () => {
         raw: { mustNotBePersisted: true },
       }),
     );
-    const runtime = new KaguyaRuntime({ databasePath });
+    const runtime = new KaguyaRuntime({
+      databasePath,
+      gatewayAllowlist: new GatewayAllowlist({
+        platforms: ["qq"],
+        userIds: ["112233"],
+        groupIds: ["778899"],
+      }),
+    });
     runtime.registerTransport({
       adapterId: "napcat.qq.main",
       platform: "qq",
@@ -82,6 +132,7 @@ describe("KaguyaRuntime", () => {
     expect(result.deliveries).toEqual([
       expect.objectContaining({ ok: true, platformMessageId: "sent-1" }),
     ]);
+    expect(result.filtered).toBe(false);
 
     const database = KaguyaDatabase.open(databasePath);
     const messages = database.messages.listRecent(10);
