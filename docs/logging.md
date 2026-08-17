@@ -92,18 +92,31 @@ AsyncLocalStorage 传播下列字段，并隔离并发请求：
 | `napcat.inbound.failed`                            | error | `adapter:napcat`   | 标准化消息 dispatch 失败                 |
 | `platform.delivery.completed`                      | info  | `runtime`          | 通用 outbound transport 成功             |
 | `platform.delivery.failed`                         | warn  | `runtime`          | 通用 outbound transport 失败             |
+| `llm.call.started`                                 | info  | `llm`              | LLM 请求开始，包含受控 `input` 摘要      |
+| `llm.call.succeeded`                               | info  | `llm`              | LLM 请求成功，包含耗时、尝试次数和 usage |
+| `llm.call.failed`                                  | error | `llm`              | LLM 请求失败，包含安全错误分类           |
 
 Fastify 的通用每请求 info 日志已关闭，避免健康检查和静态资源淹没业务日志。
+
+`llm.call.started.input` 使用 `openai-compatible.chat` 格式，记录：
+
+- `modality`：`text` 或 `multimodal`，用于快速判断是否走了多模态输入；
+- `messages[]`：每条输入的 `role`、`contentTypes`、`charCount` 和短 `preview`；
+- `temperature`、`maxRetries`、`timeoutMs`。
+
+`preview` 只保留前若干字符，用于排查路由、Prompt 组装和输入形态；完整 Prompt 仍以受控 SQLite LLM trace 为准。
 
 ## 脱敏边界
 
 普通日志禁止包含：
 
-- 用户消息正文、Prompt、模型输出；
+- 用户消息全文、Prompt 全文、模型输出；
 - 平台 raw payload、target ID；
 - Bearer/API/access token、credentials、password、secret；
 - NapCat WebSocket URL；
 - 完整配置、HTTP headers/body/query 或 provider 原始响应。
+
+唯一例外是 `llm.call.started.input.messages[].preview`，它只保留输入前若干字符，并搭配 `contentTypes`、`charCount` 和 `modality` 判断本次请求形态。不要把 provider 错误、HTTP body、模型输出或完整 Prompt 当作普通日志字段写出。
 
 默认 redaction 覆盖常见 `apiKey`、`api_key`、`token`、`accessToken`、`access_token`、`authorization`、`credentials`、`raw`、`wsUrl`、Prompt/content/text/body 等路径。Error serializer 只保留 `type`、`code`、`statusCode`、`retryable` 以及安全的 LLM 分类；嵌套 `AggregateError` 只增加叶子失败数量和一致分类，不展开 children/cause。request serializer 只保留 request ID、method、无 query path 和远端地址。
 
