@@ -1,385 +1,288 @@
----
-title: 数据库
----
+# MaiBot 事件循环与 LLM 调用调研
 
-# 数据库
+## 范围与方法
 
-MaiBot 使用 **SQLite** 作为本地数据库，通过 **SQLModel**（SQLAlchemy 之上）定义和管理 22 张表。数据文件位于启动目录下的 `data/trymai.db`。本文面向需要运维、排查问题、做数据归档或分析统计的进阶用户。
+本报告用于回答会议 3.1 的三个问题：消息如何唤醒 Bot、每次 LLM 请求的 Prompt 从哪里来、输出流向哪里。结论来自对相邻只读仓库 `MaiBot` 的静态源码检查：
 
-::: tip 数据导入导出
-如果你需要将统计、消息等数据导出到外部分析系统，请参见 [数据导入导出](/develop/statistics-io)。
-:::
+- 检查日期：2026-07-23；
+- 本地提交：`5dfffee80`；
+- 重点目录：`src/maisaka`、`src/chat/replyer`、`src/chat/image_system`、`src/emoji_system`、`src/learners`、`src/services`、`src/A_memorix`、`src/mcp_module` 和相关 WebUI router；
+- 检索方式：枚举 `LLMServiceClient`、`EmbeddingServiceClient`、`generate_response*`、`generate_with_resolved_model`、底层 `LLMOrchestrator` 直调，再反向追踪调用者、开关、Prompt builder 和写入端。
 
-## 连接与会话
+这是源码可达性分析，不代表每个功能在某次部署都已启用。MaiBot 的配置、插件 hook 和模型任务可以改变实际调用。状态标记：
 
-MaiBot 在创建每个数据库连接时都会设置一组 SQLite PRAGMA，源码位于 `src/common/database/database.py:36-47`。
+| 标记     | 含义                                                       |
+| -------- | ---------------------------------------------------------- |
+| 主链     | 正常消息处理可以直接到达                                   |
+| 条件启用 | 代码可达，但需要配置、数据量、模型或 feature flag          |
+| 后台任务 | 由队列、裁切阈值或周期 loop 到达，不阻塞主消息链           |
+| 手动诊断 | 只有 WebUI/API 操作触发，不是 Bot 自动决策                 |
+| 兼容路径 | 仍可运行的 fallback/旧格式入口，不等于死代码               |
+| 保留未达 | 当前仓库没有找到生产调用者，或上游条件在当前实现中恒不成立 |
+| 注释     | 只出现在注释中的日志/旧逻辑，不参与运行                    |
 
-**`journal_mode=WAL`** — 写前日志模式。SQLite 默认使用 rollback journal，MaiBot 改为 WAL（Write-Ahead Logging）。WAL 下读和写不再互斥，意味着消息写入与 WebUI 查询可以并发进行，不会出现 "database locked" 阻塞。代价是会多一个 `-wal` 文件和 `-shm` 索引文件。
+## 核心结论
 
-**`cache_size=-64000`** — 页面缓存设 64 MB。负值表示单位为 KB，适合 MaiBot 这种持续运行、频繁小读的场景。
+1. 当前主循环不是固定 30 秒或 1 分钟轮询。它是每 session 一个 `MaisakaHeartFlowChatting`，由消息、延迟判定、`wait` 到期、插件主动任务和 focus 冷却唤醒共同写入内部 `asyncio.Queue`。
+2. “Planner 决定动作”和“Replyer 生成可见文本”是两次独立 LLM 调用。Planner 通常调用 `reply` 工具；该工具再组装更窄的真实聊天上下文、表达习惯和回复指引，调用 replyer 模型并发送结果。
+3. LLM 调用已大体收口到 `src/services/llm_service.py`，但 WebUI 模型测试/人设生成仍直接构造 `LLMOrchestrator`。`LLMServiceClient` 记录模型统计与 Prompt cache 指标，不提供类似 Kaguya `traceId` 的跨事件统一 trace。
+4. 长时学习不是“每天一次”的单一路径。表达、行为、黑话学习由上下文裁切和最小消息/间隔阈值触发；聊天摘要由发送消息数量阈值触发；A_Memorix 另有 autosave、episode、画像刷新、反馈纠错和 memory maintenance 等后台 loop。
+5. Prompt 来源是多层组合：文件模板、运行配置、会话历史、数据库召回、工具定义、当前时间、一次性 ReferenceMessage 和插件 hook。调试预览会保存组装后的消息，但没有统一的片段 ID/digest provenance。
 
-**`busy_timeout=1000`** — 连接遇锁时最多等待 1 秒再超时。WAL 模式下这个值通常足够，但遇到高并发写入时可以调高此值。
-
-**`synchronous=NORMAL`** — 平衡模式。FULL 会在每次事务提交后 fsync 两次（性能代价高），NORMAL 仅在关键时机 fsync，意外断电场景下仍有较好数据一致性。
-
-**`foreign_keys=ON`** — 显式开启外键约束。SQLite 默认不执行外键检查，必须在每次连接时手动打开。
-
-如果你要用外部工具（如 DB Browser for SQLite）直连数据库文件进行运维操作，建议执行同样的 PRAGMA：
-
-::: code-group
-
-```sql [SQL ~vscode-icons:file-type-sql~]
-PRAGMA journal_mode=WAL;
-PRAGMA foreign_keys=ON;
-PRAGMA busy_timeout=5000;
-```
-
-:::
-
-## 22 张表总览
-
-MaiBot 目前维护 22 张表，围绕一条主线展开：**以 `chat_sessions.session_id` 为会话轴，连接消息、模型调用、工具调用、学习数据等运行时实体**。以下是 ER 关系图（只显示关键外键关系，不枚举列）：
+## 入站消息主链
 
 ```mermaid
-erDiagram
-    chat_sessions ||--o{ mai_messages : "session_id"
-    chat_sessions ||--o{ llm_usage : "session_id"
-    chat_sessions ||--o{ tool_records : "session_id"
-    chat_sessions ||--o{ maisaka_monitor_events : "session_id"
-    chat_sessions ||--o{ expressions : "session_id"
-    chat_sessions ||--o{ behavior_experience_paths : "session_id"
-    chat_sessions ||--o{ behavior_scene_clusters : "session_id"
-    chat_sessions ||--o{ behavior_actions : "session_id"
-    chat_sessions ||--o{ behavior_outcomes : "session_id"
-
-    behavior_experience_paths }o--|| behavior_scene_clusters : "scene_cluster_id"
-    behavior_experience_paths }o--|| behavior_actions : "action_id"
-    behavior_experience_paths }o--|| behavior_outcomes : "outcome_id"
-    behavior_scene_tag_clusters }o--|| behavior_scene_clusters : "cluster_key"
-
-    person_info ||--o{ mai_messages : "user_id"
-    person_info ||--o{ chat_sessions : "user_id"
-
-    jargons {}
-    images {}
-    high_frequency_terms {}
-    online_time {}
-    binary_data {}
-    one_time_maintenance_tasks {}
-    statistics_aggregation_cursors {}
-    statistics_message_hourly {}
-    statistics_tool_hourly {}
-    statistics_model_hourly {}
+flowchart TD
+  Adapter["平台 Adapter<br/>SessionMessage"] --> Receiver["HeartFCMessageReceiver.process_message"]
+  Receiver --> MessageDB["消息先写主数据库"]
+  Receiver --> Runtime["获取/创建 session runtime<br/>register_message"]
+  Runtime --> Cache["message_cache + WebUI monitor"]
+  Runtime --> Effect["条件：回复效果观察器<br/>接收后续用户消息"]
+  Cache --> Focus{"focus 准入?"}
+  Focus -->|否| CachedOnly["只缓存，等待 focus 唤醒"]
+  Focus -->|是| Gate["强制触发 / 回复必要性 / 频率阈值 / idle backoff"]
+  Gate -->|延迟| Recheck["延迟后重新判定"]
+  Gate -->|进入| Queue["internal_turn_queue: message"]
+  Queue --> Loop["ReasoningEngine.run_loop"]
+  Loop --> Context["刷新聊天回想、黑话、人物画像、启发式记忆、行为参考"]
+  Context --> Planner["Planner LLM<br/>messages + tools + hooks"]
+  Planner --> Tool{"tool calls?"}
+  Tool -->|reply| Replyer["表达候选/子代理<br/>Replyer LLM"]
+  Replyer --> Send["send_service 发送并持久化"]
+  Send --> Automation["人物事实/聊天摘要写回队列"]
+  Send --> EffectRecord["条件：回复效果 JSON 观察记录"]
+  Tool -->|其他工具| Loop
+  Tool -->|无工具| End["结束本轮"]
+  Loop --> Trim["裁切上下文"]
+  Trim --> Mid["可选：同步生成聊天回想"]
+  Trim --> Learn["异步：表达/行为/黑话/高频词学习"]
 ```
 
-上图中，`chat_sessions` 处于中心位置，9 张表通过 `session_id` 与之关联。`person_info` 通过 `user_id` 跨接在消息与会话之上，提供统一的身份视角。其余 11 张相对独立的表（`jargons`、`images`、`high_frequency_terms`、`online_time`、`binary_data`、`statistics_*`、`one_time_maintenance_tasks` 等）各自承担专项职责，详见下文各节。
+`src/chat/heart_flow` 的名字是历史沿用，但其中 manager 和 message processor 正被 `src/chat/message_receive/bot.py` 等当前入口导入，不能因为目录名就标为 legacy。
 
-## Chat ↔ Session：会话管理
+## 短间隔/运行时唤醒
 
-MaiBot 的"会话"概念承载在 `chat_sessions` 表里，对应 Python 模型 `ChatSession`（`src/common/database/database_model.py:503-527`）。
-
-**`session_id`** — 唯一会话标识，是整库的关联主键。MaiBot 每次建立新的聊天上下文（新群聊、新私聊窗口）都会生成一个 session_id，后续所有消息、模型推理、工具调用都绑定在此 ID 上。
-
-**`user_id` / `group_id` / `platform`** — 会话元数据，标识该会话属于哪个用户或群组、来自哪个平台。
-
-**`account_id` / `scope`** — 多账号路由字段。同一平台如果登了多个账号，用 `account_id` 区分；`scope` 进一步细分同一账号下的不同路由域。
-
-当会话长期不活跃时，`last_active_timestamp` 会自然偏离当前时间。你可以利用这个字段做会话清理或统计活跃度，见 [运维常见查询](#运维常见查询)。
-
-## 5 类学习模型
-
-MaiBot 的"学习"能力横跨 5 类数据模型，存放在 9 张表中。
-
-### 表达方式学习
-
-`expressions` 表记录特定情景下机器人应使用的表达风格。
-
-**`situation` / `style`** — 情景与风格标签。例如 "群友求助 / 安慰"、"冷场 / 活跃气氛"。
-**`content_list`** — JSON 格式的表达候选列表（多句备选）。
-**`session_id`** — 为 `NULL` 时表示全局表达，有值时仅在该会话内生效。
-
-### 黑话挖掘
-
-`jargons` 表（`src/common/database/database_model.py:431-458`）记录群内新词和内部暗语。
-
-**`content`** — 黑话文本本身。
-**`meaning`** — AI 推断的含义（如 "开黑 = 组队打游戏"）。
-**`is_jargon`** — 是否为已确认的黑话。为 `False` 时表示仍存疑。
-**`is_complete`** — 推断是否已完成（`count > 100` 后不再推断）。
-**`session_id_dict`** — 该黑话在哪些会话中出现及其频次，JSON 字典格式。见 [JSON 列约定](#json-列约定)。
-
-### 行为经验学习
-
-这是最复杂的一组学习模型，包含 5 张表，源码覆盖 `database_model.py:321-428`。
-
-**`behavior_experience_paths`** — 核心路径表。记录一条可反馈的行为经验：在某个场景下做出某个动作，得到了什么结果。
-**`behavior_scene_clusters`** — 场景簇。用 tag 概率分布描述一类场景（如 "群友求助且语气急促"）。
-**`behavior_scene_tag_clusters`** — Tag 簇成员索引，将同义 tag 快速归到同一个簇。
-**`behavior_actions`** — 行为动作实体，复用动作文本描述。
-**`behavior_outcomes`** — 行为结果实体，复用结果描述。
-
-关联路径：一个 `behavior_experience_paths` 行通过 `scene_cluster_id`、`action_id`、`outcome_id` 分别指向对应的簇、动作和结果实体，形成完整的 "场景 → 动作 → 结果" 经验链。`evidence_list` 字段以 JSON 数组存储支撑这条经验的证据消息引用。
-
-### 人物画像
-
-`person_info` 表（`database_model.py:472-501`）构建对话参与者的长期画像。
-
-**`person_id`** — 跨平台/跨 user_id 的统一身份 ID，是人物画像的锚点。
-**`person_name`** — 推断出的真实姓名或称呼。
-**`memory_points`** — 记忆要点，JSON 格式，存储 AI 对该人物的印象摘要。
-
-### 高频词库
-
-`high_frequency_terms` 表（`database_model.py:256-276`）按群聊维度统计高频词和词组。
-
-**`chat_id`** — 群聊或私聊标识。
-**`rank`** — 在该群内的排名。
-**`frequency`** — 词频（出现次数 / 总词数）。
-
-## 统计与遥测
-
-MaiBot 自建了一套按小时聚合的统计体系，包含 3 张聚合表加 1 张游标表：
-
-**`statistics_message_hourly`** — 按小时聚合的消息量，按 `(bucket_time, chat_id)` 去重。
-**`statistics_tool_hourly`** — 按小时聚合的工具调用次数，按 `(bucket_time, tool_name)` 去重。
-**`statistics_model_hourly`** — 按小时聚合的模型用量，包含 token 数、费用（元）、耗时方差。
-**`statistics_aggregation_cursors`** — 增量游标，记录每类统计源上次处理到的最大 `id`，确保从头聚合不丢数。
-
-`llm_usage` 表是原始记录的来源，每条记录包含一次完整的模型请求元数据：prompt tokens、completion tokens、费用（元）、是否命中 prompt cache 等。如果你启用了模型缓存计费，`prompt_cache_hit_tokens` 和 `prompt_cache_miss_tokens` 列可帮你核算缓存节省的费用。
-
-## Person 与身份
-
-`person_info` 并不是简单的 user_id 映射。MaiBot 会在运行时尝试将同一个用户在多个平台、多个群里的 `user_id` 统一到同一个 `person_id` 下，实现跨屏画像。
-
-**`group_cardname`** 字段是一个 JSON 列，格式为 `[{group_id: str, group_cardname: str}]`，存储该人在各个群里的群名片。这也是典型的 JSON 列，见下文须知。
-
-**`first_known_time` / `last_known_time`** 分别记录首次和最后一次互动的时间，结合 `know_counts` 可评估交互频率。
-
-## Maisaka Monitor
-
-`maisaka_monitor_events` 表（`database_model.py:148-165`）是 Maisaka 推理引擎的观察事件账本。每一次规划、回复生成、工具调用决策都会写入一条事件，以 `event_type` 分类，`payload_json` 存放完整的结构化负载。
-
-该表有 4 个复合索引：`(session_id, event_id)` 按会话拉取事件，`(event_type, event_id)` 按类型筛选，`(timestamp)` 和 `(created_at)` 分别支持时间范围查询。
-
-::: tip
-WebUI"麦麦观察"面板直接消费此表数据。如果你发现面板加载很慢，检查 `maisaka_monitor_events` 的行数是否过大，必要时按时间范围清理历史事件。
-:::
-
-## JSON 列约定
-
-MaiBot 多张表使用 `Text` 列存储 JSON 字符串。这些列由应用层序列化/反序列化，SQLite 层仅存为纯文本。务必注意以下约束：
-
-- **禁止直接 `UPDATE ... SET` JSON 列** — 应用层在读写时依赖特定 JSON 结构。直接改数据库值极易造成结构不匹配，导致运行时解析异常。以下三列是高风险示例：
-
-  **`person_info.group_cardname`** (`database_model.py:488-490`) — 存储格式为 `[{"group_id": "...", "group_cardname": "..."}]`。手工修改时如果 JSON 键名拼错（如 `"group_cardname"` 少一个字母），会导致群名片丢失。
-
-  **`jargons.session_id_dict`** (`database_model.py:444-446`) — 格式为 `{"session_id_1": count, "session_id_2": count}`。手工把 count 值从整数改成字符串，黑话关联逻辑会出错。
-
-  **`behavior_experience_paths.evidence_list`** (`database_model.py:350`) — 证据消息引用数组。内部引用 `message_id` 等字段，手工修改时引用格式错误会导致 WebUI 经验追溯功能断裂。
-
-- **读取 JSON 列时，务必在应用层解析** — 不要在 SQL 中用字符串函数手动拼接 JSON，字段顺序或内部结构随时可能被应用层升级。
-
-- **要改 JSON 内容，通过 MaiBot 的功能路径操作** — 比如改黑话含义应该通过 WebUI 黑话面板，而不是直接铲数据库。
-
-## 迁移系统
-
-MaiBot 的 schema 版本管理使用 SQLite 的 `PRAGMA user_version` 作为版本号存储，配合自建的迁移管理器实现有序升级。
-
-### 启动流程
-
-每次启动时，`initialize_database()`（`src/common/database/database.py:122-154`）按以下顺序执行：
-
-1. **检测 `user_version`** — 通过 `SchemaVersionResolver` 读取当前数据库版本号（空库返回 0）。
-2. **版本校验** — 如果数据库版本高于代码内置的 `LATEST_SCHEMA_VERSION`，立即拒绝启动。这是向前不兼容场景的安全闸。
-3. **空库直建** — 如果 `user_version == 0`（空数据库），跳过迁移，直接用 `SQLModel.metadata.create_all()` 创建最新结构，同时写入目标版本号。
-4. **增量迁移** — 如果版本落后，按注册的迁移步骤逐个执行。迁移完成后执行 `create_all()` 兜底，确保新增模型都已建表。
-5. **写入目标版本** — 将 `LATEST_SCHEMA_VERSION` 写入 `PRAGMA user_version`。
-6. **运行期性能索引** — 调用 `ensure_runtime_performance_indexes()` 补齐不影响 schema 版本的运行时索引（如 `jargons` 表上的复合索引）。
-
-### 版本升级路径
-
-从 v1（最早旧版 schema）到当前版本，MaiBot 内置了 35 步迁移，源码入口在 `src/common/database/migrations/builtin.py:46-82`。每步迁移为独立的 Python 模块（如 `v22_to_v23.py`），负责一个版本间的表结构变更、数据迁移或旧表清理。
-
-关键节点：
-- **v1 → v2** — 从旧版单表模式迁移到 `chat_sessions` + `mai_messages` 双表模式，清理旧表 `chat_streams`、`emoji`、`thinking_back` 等。
-- **v21 → v22** — 完成旧版遗留表的最终清理，此后不再向后兼容遗留结构。
-
-::: danger
-MaiBot 没有"降级"路径。一旦数据库升级到高版本，**无法**在旧版代码上运行。如果你需要回滚 MaiBot 版本，必须从备份恢复数据库（如果备份的版本号匹配旧版代码）。
-:::
-
-### 性能索引
-
-除了 schema 定义的索引，MaiBot 在启动后会补充 3 个运行期性能索引（`database.py:76-92`）：`ix_jargons_status_count_id`、`ix_jargons_global_count_id`、`ix_jargons_complete_count_id`，分别加速 `jargons` 表的状态、全局和完结判定查询。这些索引用 `IF NOT EXISTS` 创建；如果在启动时数据库被其他进程占用，创建失败不会阻止启动，下次启动时自动补建。
-
-## 备份与 VACUUM
-
-### 备份
-
-SQLite 数据库是一个单一文件，最简单的备份方式就是复制 `data/trymai.db`。但直接 `cp` 有风险（可能读到未提交事务的中间状态）。安全做法：
-
-**方案一：SQLite `.backup` 命令**
-
-::: code-group
-
-```sql [SQL ~vscode-icons:file-type-sql~]
-sqlite3 data/trymai.db ".backup 'backup.db'"
+```mermaid
+flowchart LR
+  Message["新消息"] --> Scheduler["MessageTurnScheduler"]
+  Scheduler -->|达到条件| Q["internal_turn_queue"]
+  Scheduler -->|频率窗口| Delay["deferred check"] --> Scheduler
+  Wait["Planner 调用 wait(seconds)"] --> Timeout["asyncio.sleep 到期"] -->|timeout| Q
+  Plugin["插件 proactive task"] -->|proactive| Q
+  Focus["focus cooldown / @ 强制唤醒"] -->|proactive| Q
+  Q --> Drain["合并就绪触发与 pending messages"]
+  Drain --> Planner["Planner rounds"]
+  New["运行中又有消息"] --> Interrupt["请求中断当前 Planner"]
+  Interrupt --> Planner
 ```
 
-:::
+`wait`、延迟判定和 focus cooldown 都是按需创建的 timer；源码中没有一个无条件对所有 session 每 30/60 秒执行 Planner 的全局 heartbeat。因此，会议里的“短间隔心跳”在 MaiBot 当前实现中更接近“可延期、可主动唤醒的 session runtime”，而不是固定 interval job。
 
-**方案二：`VACUUM INTO`（SQLite 3.27+）**
+## 长间隔学习与 memory
 
-::: code-group
+```mermaid
+flowchart TD
+  Cycle["Planner/工具轮结束"] --> Trim{"历史发生裁切?"}
+  Trim -->|是，开关开启| Mid["同步 mid-term summary LLM<br/>+ recall cue embeddings"]
+  Trim -->|removed messages 达阈值| Batch["后台并行批次"]
+  Batch --> Expr["表达抽取/审核/向量索引"]
+  Batch --> Behavior["场景切分/行为学习/反馈"]
+  Batch --> Jargon["黑话抽取/三阶段推断"]
+  Batch --> HF["规则型高频词"]
 
-```sql [SQL ~vscode-icons:file-type-sql~]
-VACUUM INTO 'backup.db';
+  Sent["消息发送完成"] --> WritebackQ["MemoryAutomation queues"]
+  WritebackQ --> Fact["人物事实提取 LLM<br/>写长期人物事实"]
+  WritebackQ --> SummaryThreshold{"新增消息达到阈值?"}
+  SummaryThreshold -->|是| ChatSummary["A_Memorix 聊天摘要/实体/关系"]
+
+  Kernel["A_Memorix kernel 启动"] --> Loops["后台 loops"]
+  Loops --> Save["auto save"]
+  Loops --> Episode["pending episode segmentation LLM"]
+  Loops --> Profile["人物画像刷新/证据分类 LLM"]
+  Loops --> Feedback["记忆反馈纠错 LLM"]
+  Loops --> Maintenance["衰减、freeze/prune、orphan GC"]
+  Loops --> Vector["embedding probe / vector backfill"]
 ```
 
-:::
+表达/行为/黑话批次以“上下文被裁切 + 最小条数 + 最小间隔”为门槛，不是 cron。A_Memorix 的 loop 才具有明确的分钟/小时级周期；例如人物画像刷新默认按配置分钟数检查，memory maintenance 按 `base_decay_interval_hours` 衰减和清理。
 
-两种方法都会在备份时维护事务一致性。MaiBot 默认启用 WAL，数据库实际由 `trymai.db`、`trymai.db-wal`、`trymai.db-shm` 三个文件构成。如果你要手动 `cp` 备份，必须同时复制三个文件，不推荐。
+## 统一服务边界
 
-### VACUUM
+| 状态     | 入口                                               | 输入与调用                                                                                                                                                                                                      | 输出消费者与持久化                                                                                                                                                                                                                                   |
+| -------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 主链边界 | `src/services/llm_service.py`                      | `generate_response`、message factory 和 image；转给 `LLMOrchestrator`                                                                                                                                           | 返回统一 response/reasoning/tool calls/token；记录模型使用和 Prompt cache 统计，不保存统一业务 trace                                                                                                                                                 |
+| 条件启用 | `LLMServiceClient.transcribe_audio`，同文件 `:325` | 入站 `VoiceComponent` 且 `voice.enable_asr` 开启时，`get_voice_text` 把原始 bytes 编成 base64，以 `voice` task/`audio` request 调 `generate_response_for_voice`；插件也可调用 `llm.transcribe_audio` capability | 主链把 `.text` 写成组件内容 `[语音: ...]`，汇入 `SessionMessage.processed_plain_text`，随后供过滤、Planner/history 消费并随入站消息写主数据库；插件调用只返回 text/content，由插件决定是否落库。本入口丢弃 `session_id`，不另建转写记录或 cache 统计 |
+| 主链边界 | `src/services/embedding_service.py`                | 单条/批量文本转给 orchestrator embedding                                                                                                                                                                        | 返回向量与模型名；具体索引/数据库由调用者写入                                                                                                                                                                                                        |
+| 兼容路径 | `LLMServiceClient.embed_text`                      | 创建 `EmbeddingServiceClient` 再委托                                                                                                                                                                            | 没有额外模型调用；注释明确推荐直接使用 embedding client                                                                                                                                                                                              |
+| API 边界 | `llm_service.generate(LLMServiceRequest)`          | 把字符串或 message dict 统一成 message factory                                                                                                                                                                  | 能力 API、A_Memorix、WebUI replay 使用；错误被包装为 `success=false`                                                                                                                                                                                 |
+| 后台任务 | `src/services/memory_flow_service.py` 人物事实写回 | 用户原始证据、邻近上下文、bot 回复和内联 JSON 指令；`utils` 文本模型                                                                                                                                            | 严格只接受用户证据支持的稳定事实，经 `store_person_memory_from_answer` 写 A_Memorix                                                                                                                                                                  |
+| 后台任务 | 同文件聊天摘要写回                                 | 发送消息累计达到阈值后调用 `memory_service.ingest_summary`                                                                                                                                                      | 间接进入 A_Memorix SummaryImporter；以 metadata 游标避免重启后立即重复摘要                                                                                                                                                                           |
 
-SQLite 不会自动回收删除行释放的空间，数据库文件只会增长不会缩小。定期 VACUUM 可重建整个数据库文件，回收磁盘空间。消息量大的实例建议每 1-2 个月执行一次。
+service 层是调用协议的统一边界，不是 Prompt 组装器。业务模块仍各自管理模板、history selection、JSON 修复和落库。
 
-**执行前务必关闭 MaiBot**，因为 VACUUM 会锁定整库：
+## 实时对话、路由与回复
 
-::: code-group
+| 状态     | 类别与证据                                                           | 触发                                                           | Prompt 来源                                                                                                                                                                    | 模型调用与输出消费                                                                                                                                                             | 持久化影响                                                                                           |
+| -------- | -------------------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| 主链     | Planner：`src/maisaka/chat_loop_service.py:981`                      | `message`、`timeout` 或 `proactive` 进入 run loop              | `maisaka_chat`/`maisaka_chat_focus`；人格、群/私聊配置、memory 使用规则、选中历史、工具结果、黑话/行为/聊天回想 Reference、人物画像、启发式记忆、当前时间、聊天专属提示、tools | `planner` task 的 message call；输出 reasoning 与 tool calls，写回内存 chat history，驱动 reply/wait/switch_chat/query_memory/插件工具；before/after hook 可改消息、工具和输出 | Prompt 预览 JSON/HTML 与 cache/usage 统计；具体业务写入取决于工具。新消息可中断在途 Planner          |
+| 条件启用 | 表达选择子代理：`src/maisaka/builtin_tool/reply.py:33`               | replyer 构建上下文且表达功能有候选                             | 表达候选 ID/情境/风格组成 selector system Prompt；最多 10 条真实 `SessionBackedMessage`，当前时间                                                                              | `run_sub_agent(... request_kind="expression_selector")` 最终仍到 `chat_loop_step`；解析选中 ID，失败回退直接注入                                                               | 更新 Expression 的 `last_active_time`；选中表达组成一次性 expression habits 注入 replyer             |
+| 条件启用 | 行为场景分析子代理：`src/maisaka/reasoning_engine.py:197`            | Planner 前行为 reference 召回且行为功能开启                    | analyzer 生成的场景 system Prompt、裁切后的真实上下文、固定结构约束                                                                                                            | `request_kind="behavior_scenario_analyzer"`；输出场景 tag/profile，规则/权重算法据此选行为。最终行为选择本身不再用 LLM                                                         | 标记 behavior pattern activation/selection，并把参考作为内存 `ReferenceMessage` 注入；不直接生成回复 |
+| 条件启用 | Replyer：`src/chat/replyer/maisaka_generator_base.py:1092`           | Planner 成功调用 `reply` 工具                                  | `maisaka_replyer`；人格、群/私聊/会话提示、真实聊天历史、目标消息、reply guide/reference、Planner thought fallback、表达习惯、关键词反应、附件、当前时间、retry/hook 约束      | `replyer` 模型；纯文本经 hook 审查，可带约束重试，然后解析附件、发送并回填 tool result                                                                                         | 已发送消息由发送链写主消息库；保存 reply Prompt 预览与 metrics；可创建回复效果观察 JSON              |
+| 条件启用 | 回复效果评分：`src/maisaka/runtime.py:1415`、`reply_effect/judge.py` | 成功发送后观察到足够后续消息、负反馈、超时或 runtime 停止      | bot 回复、最多 5 条后续消息和五维 rubric；额外固定 system 要求严格 JSON                                                                                                        | `request_kind="reply_effect_judge"` 子代理；输出 social presence、warmth、competence、appropriateness、uncanny risk，解析失败使用中性分                                        | `logs/maisaka_reply_effect/<chat>/*.json` 从 pending 更新为 finalized；不改回复正文                  |
+| 条件启用 | 启发式长期记忆：`src/maisaka/memory/heuristic_injector.py:181`       | Planner 前；开关开启、历史达到窗口、缓存/间隔/新增消息门槛通过 | `heuristic_memory_impression` 模板：chat identity + 最近消息窗口                                                                                                               | `utils` 模型生成当前聊天“印象”，再调用 `memory_service.search`；结果经过 session/person/cross-chat scope 过滤                                                                  | 只更新 runtime recall cache，把命中作为内部参考注入；不会因为召回而写新 memory                       |
+| 条件启用 | 中期聊天回想：`src/maisaka/memory/mid_term.py:155,357,687`           | 上下文裁切；或每次 Planner continuation 前尝试召回             | 摘要模板含时间范围、参与者和被裁切的真实 user messages，可按模型能力带图；输出 summary + recall cues                                                                           | `mid_memory` 文本模型生成摘要；embedding 模型编码 cues 和当前 query，相似度达到阈值时生成 memory Reference                                                                     | 摘要作为 `ComplexSessionMessage` 留在该 runtime history，cue 向量存消息 payload；没有独立数据库写入  |
+| 条件启用 | 表达向量：`src/chat/replyer/expression_vector_index.py:263,964,1312` | 向量表达模式初始化/学习写入/每次查询                           | 固定 profile probes；`situation + style`；Planner 传来的结构化 expression intent/query                                                                                         | embedding profile 标定、批量索引、query 相似检索与聚类候选                                                                                                                     | `.npz`/metadata 向量索引；校验模型名和维度，学习批次后重建聚类                                       |
 
-```sql [SQL ~vscode-icons:file-type-sql~]
-VACUUM;
-```
+### Planner Prompt 的实际顺序
 
-:::
+`MaisakaChatLoopService._build_request_messages` 的消息层次是：
 
-执行后可用 `PRAGMA page_count` 对比前后页数验证效果。注意 VACUUM 需要至少等同于原库大小的额外磁盘空间用于临时文件；空间不足会导致失败，但原库不受影响。
+1. system：聊天模板与人格、注意事项、memory 规则；
+2. 选中的 history：真实消息、assistant thought、tool result、一次性 reference；planner 会排除原始 mid-term summary message；
+3. 跨日期时插入时间边界；
+4. 一次性 user 注入：deferred tool 提醒、启发式 memory、人物画像；
+5. 当前时间；
+6. focus tail 与当前聊天专属提示；
+7. 最后一条 assistant reminder；
+8. 独立 tool definitions。
 
-## 运维常见查询
+插件的 `maisaka.planner.before_request` 可以重写 messages 与 tools，`after_response` 可以重写 response、tool calls 和 token 数。因此只读模板文件不能完整解释最终请求；调试或 Kaguya provenance 必须记录 hook 后的实际输入。
 
-以下 5 个核心示例覆盖日常运维中最常遇到的数据查询场景。所有 SQL 建议在 MaiBot 关闭后使用 `sqlite3` 命令行执行。
+### Replyer 与 Planner 的隔离
 
-### 最近 24 小时的活跃会话
+replyer 会过滤 `ReferenceMessage`、`ToolResultMessage`、工具媒体和 mid-term summary，只保留真实聊天及可见 assistant 回复。Planner 检索到的 memory/behavior 不会自动泄漏给 replyer；需要回复时，Planner 应通过 `reply_guide` 和 `reference_info` 明确传递必要信息。这是 Kaguya 将 route/reply policy 分开的直接借鉴点。
 
-::: code-group
+## 图片与表情包
 
-```sql [SQL ~vscode-icons:file-type-sql~]
-SELECT session_id, user_nickname, group_name, platform, last_active_timestamp
-FROM chat_sessions
-WHERE last_active_timestamp > datetime('now', '-1 day')
-ORDER BY last_active_timestamp DESC LIMIT 20;
-```
+| 状态     | 类别与证据                                                       | 触发与 Prompt                                                                                                                                                                                                                                                                                            | 输出消费者                                                                                                                                                                   | 持久化影响                                                                                                                                                                                                      |
+| -------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 条件启用 | 发送表情选择子代理：`src/maisaka/builtin_tool/send_emoji.py:341` | `experimental.enable_rich_reply=false` 时 Planner 可调用 `send_emoji`；从库存随机取 `emoji_send_num`（上限 64），制成带序号的近方形 PNG 拼图。`emoji_selection` system Prompt 注入数量/行列，子代理另带最多 12 条 runtime context、一次性 JSON 任务提示和候选拼图；按 emoji/planner/vlm 任务选择视觉模型 | `run_sub_agent(... request_kind="emotion")` 解析 `{emoji_index, reason}`；解析失败或越界回退第一张，before/after-select hook 仍可中止或改选，最终交 `send_emoji_for_maisaka` | 非 CLI 成功后经 Platform IO 发送，`storage_message=true` 写主消息库并以 `guided_reply` 同步 Maisaka history，同时更新 emoji `query_count`/`last_used_time`；CLI 只渲染预览、更新 usage 并由工具补入内存 history |
+| 条件启用 | 图片描述：`src/chat/image_system/image_manager.py:462`           | 新图或已发送图片缺描述；`image_description` 模板 + base64 image                                                                                                                                                                                                                                          | VLM 文本描述供聊天可见文本和后续 Prompt                                                                                                                                      | Images 记录、文件状态和 description；后台识别可不阻塞发送                                                                                                                                                       |
+| 条件启用 | 表情替换：`src/emoji_system/emoji_manager.py:902`                | 表情库到上限，需要决定是否替换；`emoji_replace` + 抽样库存/次数/时间/新描述                                                                                                                                                                                                                              | 解析“取消注册编号 N”或不替换                                                                                                                                                 | 取消旧表情注册并注册新表情；文件与 emoji DB 改变                                                                                                                                                                |
+| 条件启用 | 表情内容审核：`src/emoji_system/emoji_manager.py:965`            | 注册前 `content_filtration` 开启                                                                                                                                                                                                                                                                         | VLM 返回含“否”则拒绝                                                                                                                                                         | 通过后才允许注册；模型错误默认拒绝                                                                                                                                                                              |
+| 条件启用 | 表情标签：`src/emoji_system/emoji_manager.py:1019,1031`          | 新表情缺描述；GIF 转静帧；内联“最多 5 个标签”Prompt                                                                                                                                                                                                                                                      | 纯文本情绪/场景标签                                                                                                                                                          | 标签写入 emoji 记录；无 VLM 时跳过识别                                                                                                                                                                          |
 
-:::
+这些路径调用的是同一 service 统计边界，但 image base64 在 cache 统计中只保存尺寸和 SHA-256，不直接把原始 base64 当作统计 Prompt 文本。
 
-### 模型费用统计（按模型汇总）
+## 裁切后的学习链
 
-::: code-group
+`ReasoningEngine._post_process_chat_history_after_cycle` 只有在历史实际变化时才处理。被移除的上下文与刚清掉的 behavior reference 进入后台批次；同一 session 已有批次运行时会跳过新批次。
 
-```sql [SQL ~vscode-icons:file-type-sql~]
-SELECT
-    model_name, provider_name,
-    COUNT(*) AS requests,
-    SUM(total_tokens) AS tokens,
-    ROUND(SUM(cost), 4) AS cost_yuan,
-    ROUND(AVG(time_cost), 2) AS avg_sec
-FROM llm_usage
-WHERE timestamp > datetime('now', '-7 days')
-GROUP BY model_name, provider_name
-ORDER BY cost_yuan DESC;
-```
+| 状态     | 类别与证据                                                 | Prompt 来源                                                                              | 模型输出与消费者                                                        | 持久化影响                                                                                         |
+| -------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| 后台任务 | 表达抽取：`src/learners/expression_learner.py:398`         | `learn_style`；bot 名；每条消息独立 user message，带 source_id/speaker/name/time/content | 解析 `(situation, style, source_id)`，验证 source、过滤专名/图片/表情等 | upsert Expression；记录 Prompt 预览；向量模式同步 expression index                                 |
+| 条件启用 | 表达 AI 审核：`src/learners/expression_utils.py:167`       | `expression_evaluation` + situation/style + 通用性标准                                   | JSON `suitable/reason`；只有通过才写                                    | AI review log；Expression 可标为 AI 修改/待人工审核                                                |
+| 保留未达 | 表达情境概括：`src/learners/expression_learner.py:901`     | 多个相似 situation 的内联概括 Prompt                                                     | `expression.summary` 返回不超过 20 字摘要                               | 当前 `_find_similar_expression` 只返回完全相同且 similarity=1，调用条件 `similarity < 1` 恒不成立  |
+| 后台任务 | 行为场景切分：`src/learners/behavior_learner.py:1157`      | behavior scenario analyzer system Prompt + 带 source_id 的学习消息                       | 把窗口拆成 1–3 个 segment/tag profiles                                  | 场景画像供本批次使用并保存 Prompt 预览                                                             |
+| 保留未达 | 单场景 helper：`src/learners/behavior_learner.py:1121`     | 与场景切分相同的单 profile 版本                                                          | 返回一个 `BehaviorScenarioProfile`                                      | 当前只找到定义，生产批次调用的是 segmented helper；fallback 在 segmented 方法内部直接调用 analyzer |
+| 后台任务 | 行为抽取：`src/learners/behavior_learner.py:891`           | `learn_behavior`；bot 名；场景 segments；逐条真实消息                                    | 解析 action/outcome/actor/learning_type/source_ids，过滤后最多写 12 条  | 批量 upsert behavior experience paths，随后衰减/禁用/合并维护                                      |
+| 后台任务 | 行为反馈：`src/learners/behavior_learner.py:712`           | `evaluate_behavior_feedback`；已有 behavior references + 后续 timeline items             | JSON score/status/reason/outcome/source_ids，严格校验证据               | `apply_behavior_feedback` 更新 score、成功/失败及 action log                                       |
+| 后台任务 | 黑话抽取：`src/learners/jargon_learner.py:447`             | `learn_jargon`；bot 名；带 source_id/speaker/time/content 的消息                         | 解析 jargon 与来源；结合缓存候选                                        | 写入/累加 jargon 证据和处理日志                                                                    |
+| 后台任务 | 黑话三阶段推断：`src/learners/jargon_miner.py:449,488,515` | ① 上下文证据+上次含义；② 只看词面；③ 比较两次结果                                        | 判断 meaning、信息是否足够、上下文义是否不同；达到计数阈值后可完成      | 更新 jargon meaning、`is_jargon`、`last_inference_count`、完成状态并保存每阶段 Prompt 预览         |
+| 后台任务 | 高频词                                                     | 同批次真实消息；规则统计，不调用 LLM                                                     | 更新词频                                                                | 高频词存储；不要把它误列为 LLM 请求                                                                |
 
-:::
+学习输入明确区分 `speaker=SELF` 与用户；SELF 只作上下文。source_id 校验和证据写回值得借鉴，因为它防止模型生成无法对应原消息的“学到内容”。
 
-### 排查最新消息内容
+## A_Memorix 调用与后台任务
 
-::: code-group
+A_Memorix 不只是一个向量搜索函数。它维护 metadata、graph、paragraph/graph vectors、sparse index、episode、person profile、反馈任务和检索调参；文本生成通过 `core/utils/model_routing.py` 选择 task/具体模型，再回到宿主 `llm_service`。
 
-```sql [SQL ~vscode-icons:file-type-sql~]
-SELECT timestamp, platform, user_nickname, processed_plain_text, session_id
-FROM mai_messages
-ORDER BY id DESC LIMIT 30;
-```
+| 状态     | 类别与证据                                                             | 触发与 Prompt                                                                          | 输出消费者                               | 持久化影响                                                           |
+| -------- | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ---------------------------------------- | -------------------------------------------------------------------- |
+| 后台/API | 聊天摘要：`core/utils/summary_importer.py:558`                         | 消息阈值自动写回或显式 ingest；聊天记录、之前摘要、bot 人格、`SUMMARY_PROMPT_TEMPLATE` | JSON summary/entities/relations          | paragraph、entity/relation graph、vector、source metadata 和触发游标 |
+| 后台任务 | episode segmentation：`core/utils/episode_segmentation_service.py:286` | pending paragraphs 的 source/time window/content                                       | JSON episodes，校验 paragraph hashes     | episode rows、参与者、关键词、时间与 LLM confidence                  |
+| 后台/API | 人物画像证据分类：`core/utils/person_profile_service.py:742`           | relation/vector evidence、memory traits、person ID/name/aliases                        | LLM 分桶与规则 fallback 合并             | person profile snapshots/refresh task 状态；失败不会阻断规则画像     |
+| API/后台 | Web/知识导入：`core/utils/web_import_manager.py:3731`                  | 网页抽取 chunk 与 extraction 指令；带 timeout/retry                                    | 解析实体、关系和正文结构                 | import task、paragraph、graph 与 vectors                             |
+| API      | 摘要导入等模型路由：`core/utils/model_routing.py:137`                  | 任务名或具体模型 selector + 调用方 Prompt                                              | 统一 `LLMServiceResult`                  | 由调用方落库；单模型路径临时钉住 orchestrator task config            |
+| 条件启用 | 检索调参：`core/utils/retrieval_tuning_manager.py:1660,1715`           | SPO anchor 生成自然语言评测问题；失败摘要生成候选 profile                              | NL cases 或限定字段的 retrieval profiles | tuning task/cases/results/profile；LLM 失败时回退规则/随机候选       |
+| 条件启用 | 记忆反馈分类：`core/runtime/sdk_memory_kernel.py:5445`                 | 原 query、候选 hit briefs、后续反馈；仅有否定/纠正信号时调用                           | confirm/reject/correct/supplement/none   | feedback task、action log、relation 修正/失活/补充                   |
+| 手动/API | 模糊修改计划：`core/runtime/sdk_memory_kernel.py:8529`                 | 用户修改请求、scope/person/chat 与可删除候选；`memory_fuzzy_modify_plan`               | 有限 operations + confidence             | 通过后修改 paragraph/relation，记录操作并可刷新画像                  |
+| 后台任务 | 周期维护                                                               | 不调用文本 LLM：autosave、embedding probe/backfill、衰减、freeze/prune、orphan GC      | 存储维护                                 | graph/vector/metadata；与 LLM 提取任务应分开计数                     |
 
-:::
+此外，`scripts/process_knowledge.py` 也通过相同 model routing 执行离线知识处理，但它是脚本，不属于在线 Bot event loop。
 
-::: details raw_content 字段说明
-`raw_content` 列存储的是 msgpack 编码的原始消息二进制，无法直接通过 SQL 阅读。`processed_plain_text` 是平面化处理后的纯文本，适合人工排查。
-:::
+### A_Memorix 的周期 loop
 
-### 查看已学到的黑话
+kernel 启动后按配置维护：
 
-::: code-group
+- auto-save；
+- pending episode 处理；
+- embedding fallback probe 与 paragraph vector backfill；
+- active person profile 定期刷新和持久 refresh queue；
+- feedback correction 与 reconcile；
+- memory 权重衰减、freeze/prune 和 orphan GC；
+- 必要时进行 dual-vector 自动迁移。
 
-```sql [SQL ~vscode-icons:file-type-sql~]
-SELECT content, meaning, count, is_global, created_by, created_timestamp
-FROM jargons
-WHERE is_jargon = 1
-ORDER BY count DESC LIMIT 20;
-```
+这些 loop 彼此独立。异常通常记录并降级，不应在 Kaguya 中被压成一个含糊的“每天整理 memory”节点；更合适的抽象是多个可观察、可重试的 workflow。
 
-:::
+## MCP Sampling
 
-### 查看已认识的人物
+| 状态     | 证据                                   | 触发与 Prompt                                                                                         | 输出与持久化                                                                                                                   |
+| -------- | -------------------------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| 条件启用 | `src/mcp_module/host_llm_bridge.py:89` | MCP server 发起 `sampling/createMessage`；server messages、systemPrompt、tools、temperature/maxTokens | 宿主 `planner` task 返回 MCP `CreateMessageResult`/tool calls；required tool 未调用则返回协议错误。除模型统计外不写 Bot 业务库 |
 
-::: code-group
+该桥允许外部 MCP server 消耗宿主模型预算。它不经过 Maisaka Planner 的 persona/history 组装，Prompt 的信任边界来自 MCP 请求本身。
 
-```sql [SQL ~vscode-icons:file-type-sql~]
-SELECT person_id, person_name, user_nickname, platform,
-       know_counts, first_known_time, last_known_time
-FROM person_info
-WHERE is_known = 1
-ORDER BY know_counts DESC LIMIT 20;
-```
+## WebUI 手动诊断入口
 
-:::
+下列入口代码可达，但都需要人主动调用，不应画进自动消息主链：
 
-### 其他实用查询
+| 状态     | 入口与证据                                                         | Prompt/调用                                                                  | 返回与持久化                                                                      |
+| -------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| 手动诊断 | `POST /api/webui/models/test-model`，`webui/routers/model.py:155`  | 固定能力测试 messages，可带视觉与 tool definition；直接用单模型 orchestrator | 返回文本、reasoning、tool call、token、延迟；不写业务数据                         |
+| 手动诊断 | 同 endpoint 的 embedding 分支，`model.py:413`                      | 固定文本“MaiBot 模型可用性测试”                                              | 返回向量维度和延迟；不写索引                                                      |
+| 手动工具 | `/api/webui/config/prompt-generator/generate`，`config.py:1748`    | 用户文段 + 输出 personality/reply_style JSON 的 instruction；钉住选中模型    | 返回 config blocks/TOML；生成 endpoint 不自动应用，另一个 apply endpoint 才写配置 |
+| 手动诊断 | `/api/webui/behavior/retrieval-debug`，`behavior.py:236`           | 一句话 scene + 与生产相同的 behavior scenario analyzer                       | 返回场景 tag/profile 供 UI 调试；不写 behavior pattern                            |
+| 手动诊断 | `/api/webui/reasoning-process/replay`，`reasoning_process.py:1870` | 可编辑的已保存 messages，可恢复本地 image，选择模型/tools/temperature        | 通过 `LLMServiceRequest` 返回重放结果与 token；不覆盖原 Prompt 预览或业务记录     |
 
-**查看当前数据库版本号：**
+WebUI 的 model test 和 persona generator 绕过 `LLMServiceClient`，直接子类化 `LLMOrchestrator`；这说明“所有 LLM 必须过同一可审计门面”在 MaiBot 当前代码中尚未完全成立。
 
-::: code-group
+## 活跃、兼容、保留和注释的边界
 
-```sql [SQL ~vscode-icons:file-type-sql~]
-PRAGMA user_version;
-```
+### 确认活跃但名称容易误判
 
-:::
+- `src/chat/heart_flow/heartflow_manager.py` 与 `heartflow_message_processor.py` 是当前消息入口，目录名不是废弃证据。
+- `MaisakaExpressionSelector._sample_legacy_expression_candidates` 是向量不可用或配置为旧候选模式时的真实 fallback。
+- A_Memorix 的 legacy vector/schema 代码大多用于离线迁移与兼容检查；不能据此认为整个 A_Memorix 是 legacy。
+- `LLMServiceClient.embed_text` 是仍可调用的兼容入口，但会立即委托新 embedding service。
 
-**数据库文件大小估算：**
+### 确认保留但当前主链未到达
 
-::: code-group
+- `expression.summary` 客户端仍创建；当前表达匹配只返回完全相同项，`similarity < 1` 的概括分支不会触发。
+- BehaviorLearner 的 `_analyze_learning_scene` 单 profile helper 没有找到生产调用者；活跃批次使用 `_analyze_learning_scene_segments`。
+- WebUI legacy import、旧 schema migration 和旧 vector migration 是运维/导入能力，不是在线 LLM 主链。
 
-```sql [SQL ~vscode-icons:file-type-sql~]
-SELECT page_count * page_size AS file_bytes FROM pragma_page_count, pragma_page_size;
-```
+### 只有注释，不是运行调用
 
-:::
+- mid-term memory 中“打印完整 Prompt messages”的 `logger.info` 被注释；实际 LLM call 和 Prompt preview 保存仍然活跃。
+- reasoning engine 和 replyer 中多处详细开始/结束 logger 被注释；不影响相邻 Planner/Replyer 调用。
+- HeartFC message processor 中 adapter 已接管的 mention 计算和旧引用替换是注释逻辑，当前只保存 adapter 产出的消息字段。
 
-**列出所有表名：**
+静态分析不应把注释中的旧行为、只读调试展示或 migration 脚本计入在线调用次数。
 
-::: code-group
+## 对 Kaguya 的直接启发
 
-```sql [SQL ~vscode-icons:file-type-sql~]
-SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;
-```
+### 值得保留
 
-:::
+- 消息先持久化再路由，避免 route 看不到触发消息；
+- Planner 与 Replyer 拆分，各自只拿需要的 policy 和上下文；
+- session runtime 同时接受消息、timeout 和 proactive 触发，而不是只依赖固定轮询；
+- history 裁切、学习批次和 memory maintenance 分离；
+- 模型提取结果必须校验 source/evidence，再允许写入；
+- WebUI replay 和 Prompt preview 对调试很有价值。
 
-对于行数统计，建议在 `sqlite3` 命令行下用 `.tables` 配合逐个 `SELECT COUNT(*)` 进行，避免单条 SQL 做全表扫描聚合。
+### Kaguya 应更明确的地方
 
-**清理过旧的 Maisaka Monitor 事件（慎用）：**
+- 用统一 `EventEnvelope.traceId` 串起触发、节点、派生事件、Prompt 和 LLM trace；
+- Prompt 不是一个不可解释的大字符串，而是带来源、scope、顺序和 digest 的 fragments；
+- 区分 intercept 与 observe，观察失败不能破坏主链；
+- route/reply/state/memory 输出在统一边界严格校验；
+- 定时任务、消息阈值任务和 history-trim 任务分别建 workflow，不用“心跳”概括所有后台工作；
+- 所有诊断和业务 LLM 都应经过同一审计边界，避免 WebUI 直连形成盲区。
 
-::: code-group
+### 不应照搬
 
-```sql [SQL ~vscode-icons:file-type-sql~]
-DELETE FROM maisaka_monitor_events
-WHERE created_at < datetime('now', '-7 days');
-```
-
-:::
-
-::: warning
-直接 `DELETE` 大表可能触发长事务，建议按日分批执行，以控制事务大小。
-:::
+- 当前 session queue、Prompt preview 与多个学习日志各有自己的关联方式，缺少一个跨模块 trace；
+- 大量 feature flag、fallback 和 JSON repair 会提高韧性，也可能掩盖契约漂移；Kaguya 初始版本选择严格失败；
+- 内存 history 中的 mid-term summary 与持久长期 memory 语义相近但生命周期不同，Kaguya 应在 metadata/schema 中明确期限；
+- A_Memorix 是完整子系统，不应让其内部存储模型渗透到通用 event/workflow SDK。

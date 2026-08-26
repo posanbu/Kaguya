@@ -1,105 +1,49 @@
-# Changelog
+# 网关白名单与统一配置引导更新说明
 
-For dev and detailed changelogs, see [GitHub Releases](https://github.com/MaiM-with-u/MaiBot/releases).
+机器人接入外部平台后，并非所有消息都应进入业务处理链。若过滤发生在普通回复模块中，未授权消息仍可能提前写入数据库、发布事件或触发其他模块，因而不能形成可靠的访问边界。本次更新将平台、用户和群组白名单放到 Runtime 的统一入站位置，使不满足条件的消息在产生业务副作用前停止。
 
-::: timeline 2026-08-23
-- [1.2.2] Expression selection performance and accuracy improved; WebUI resource management and model config experience comprehensively upgraded
-- Expressions: MMR diversity reranking rewritten with vectorized implementation, significantly faster on large candidate pools; adjusted vector similarity weight mix, removed lexical overlap scoring to avoid false interference on short texts and CJK content; removed `vector` selection mode, existing configs auto-upgrade to `vector_intent`
-- WebUI [1.7.2]: model provider form adds custom request headers and a collapsible advanced config panel; task config adds hard timeouts for text and vision tasks, auto-falling back to the next model on timeout; adding a model now defaults to the currently filtered provider; model test image replaced with a standard PNG for broader vision model compatibility
-- WebUI resource management: curated expression management refactored — "review/approve" unified as "curate", top tabs replaced by dropdown menu, detail and edit dialogs merged, pagination now supports per-page count selection; jargon list pagination and layout restructured, status filter changed from tabs to dropdown, added prompt template entry; emoji filter and sort unified into the filter card, status switch changed from tabs to dropdown, sort split into field selector + asc/desc toggle, default sorted by registration time (newest first)
-- WebUI misc: login page now supports `redirect` query parameter — embedded pages return to their original location after login; prompt version management adds delete endpoint, auto-restoring the default prompt when the active version is deleted; expression and jargon lists use unified transparent background styling in the retro theme
-- Models: temporarily compatible with V4V-class vision model image formats — animated GIF/WebP frames are converted to PNG (first frame only) before submission
-- Plugins: "allow/deny" wording in plugin config unified as "read/do not read", more semantically accurate to the actual functionality
-- Maisaka: adjusted person reference wording in planning prompts
-- Engineering: PyPI index config now supports multi-source fallback (Tsinghua → Aliyun → official), improving install reliability in mainland China
-:::
+与此同时，配置缺失不再只表现为启动失败。配置仓库不存在、默认 profile 不完整或可选配置尚未确认时，Server 会进入统一配置模式，只启动 HTTP 与 Web UI，并暂停 Runtime 和 NapCat 入站。用户可以从同一个页面创建首个 profile，或者修复已有但尚不可运行的默认 profile。
 
-::: timeline 2026-08-19
-- [1.2.1] Fixed MCP long-running calls being wrongly timed out, Maisaka final-message compatibility and own-message identification; WebUI now applies saved model config immediately and displays offline adapters correctly
-- MCP: fixed Streamable HTTP long-running tool calls wrongly using the HTTP request timeout; reading responses now follows the session read timeout
-- Maisaka: fixed compatibility of the final assistant message, now ending with a user message; own messages are now always marked to reduce the model mistaking message sources (removed the `self_message_special_mark` config option)
-- WebUI [1.7.1]: model config is now synced to the runtime immediately after saving, avoiding configs not applying in Docker; fixed chat page monitoring state (errors and thinking order); offline adapters are now displayed correctly
-- Adapters: deleting a group chat now also cleans up the explicit allow/deny rules in the adapter policy
-- Config: fixed WebUI saving configuration potentially producing invalid TOML
-:::
+## 白名单在消息落库前完成判断
 
-::: timeline 2026-08-18
-- [1.2.0] Maisaka: Replyer now uses different reply modes per scenario for more diverse replies; improved Replyer organization
-- Reply effect evaluation upgraded (currently v6): responsiveness no longer considers reply speed, removed the raw total score without clear semantics, records without related info are marked "completed / no info", records that didn't finish the observation window are marked "incomplete" and excluded from scoring; score distribution is now a per-sample scatter plot; supports deleting / clearing score records
-- Models: official support for the Response endpoint; model context and output upgraded to a flat Item-first structure, keeping body, reasoning, function calls, tool results and provider-native activities separate
-- Expression: fixed repeated abnormal restarts after expression vector index corruption; optimized online index maintenance (incremental assignment, k-means++, lock-free atomic writes)
-- Adapters: bot platform accounts now persist the identity reported by the adapter, so multiple accounts on one instance are reliably recognized; adapters can auto-discover their ID; access policy adds independent group and private default actions (allow by default, switchable to deny)
-- WebUI [1.7.0]: new dedicated adapter management and unified command management pages; improved model configuration layout; fixed local model testing bug; settings page shows discovered adapter accounts with online status and soft disable / restore; group frequency can be set per mode (with wildcard and default config); reasoning logs now show input, output and total tokens
-- Messages: nested forwarded messages can now be viewed
-- Plugin SDK: `send.text`, `send.emoji`, `send.image`, `send.forward`, `send.hybrid`, `send.command` and `send.custom` support `return_details=True` to get the platform-confirmed final message ID
-- Improved startup onboarding
-:::
+白名单由以下环境变量提供：
 
-::: timeline 2026-08-04
-- [1.1.4] Models: added support for the OpenAI Responses API (text, images, structured output, function tools, native tools, streaming events and usage stats); added native web search for DeepSeek v4 flash with related parameters
-- Maisaka: Responses native web search summaries (query, action, status and source count for the round) shown in the monitor and regular logs
-- WebUI [1.6.3]: new native detailed statistics page (keeps the old HTML report, interactive filtering by model/module/request type/chat flow, trends and performance metrics)
-- Plugin management: shows conflicting directories of duplicate plugins with explicit load failure reasons; refreshes runtime state immediately after enabling a plugin; cleans up empty plugin root directories on startup
-- Fixed being unable to add a new model provider when both model and provider lists are empty; improved plugin market card layout
-:::
+- `KAGUYA_GATEWAY_ALLOWLIST_PLATFORMS`：允许进入 Runtime 的平台 ID；
+- `KAGUYA_GATEWAY_ALLOWLIST_USER_IDS`：允许发送消息的用户 ID；
+- `KAGUYA_GATEWAY_ALLOWLIST_GROUP_IDS`：允许接收消息的群组 ID。
 
-::: timeline 2026-07-28
-- [1.1.3] WebUI: optimized sidebar hover behavior, page colors and layout, new storage management page
-- Maisaka: fixed Planner native reasoning incorrectly passed as body to Replyer; added typo correction message references
-- [1.1.2] WebUI: optimized homepage cards
-- [1.1.1] Main program: statistics charts split into customizable cards, fixed memory growth from full model call detail loading
-- WebUI: LLM request error classification in reasoning view, global AI search upgraded to draggable multi-turn Agent overlay
-- Chat: fixed session teardown on page switch, default nickname "Human", user avatar and emoji support
-- Plugin list now layered by load status; homepage version and card layout streamlined
-- Maisaka: added `reply.before_post_process` Hook for per-reply text post-processing control
-- MCP: process-level shared server connections with hot reload, improved WebUI MCP configuration
-:::
+每个变量都使用逗号分隔，读取时会去除首尾空白并消除重复值。未配置的维度相当于通配条件；一旦某个维度存在配置，该维度就必须命中。多个已配置维度之间采用“同时满足”的关系，而不是任选其一。
 
-::: timeline 2026-07-22
-- [1.1.0] Main program: optional interactive terminal input with `/clear`, `/pm`, `/offline`, `/online` commands for chat and adapter management
-- A_Memorix: long-term memory lifecycle (decay/freeze/restore/protect/recycle bin), improved retrieval quality and character profiles
-- Legacy memory migration fixes: orphaned associations, timeline selection, entity renaming issues
-- Maisaka: separated behavior style from persona, fixed cross-day time reminder interrupting tool chains
-- WebUI: fixed frequency display precision, QQ number config, model rename, and homepage animation issues
-- Plugins: automatic compatibility check after host update, tightened Host version range
-:::
+例如，同时配置用户白名单和群组白名单时，只有白名单用户在白名单群组中发送的消息才能进入后续流程。只配置群组白名单时，私聊消息因为没有群组 ID，也不会满足这一约束。
 
-::: timeline 2026-07-09
-- [1.0.12] Improved Planner-to-Replyer information transfer and reduced duplicate replies
-- WebUI: more reliable offline observation records, custom API model lists, multiple model configurations, data import/export, and upgrade announcements
-- Initial setup now guides users to replace the temporary startup Token with a persistent Token
-- Messaging: the host can control adapter admission; fixed handling of oversized emoji images
-:::
+过滤发生在消息持久化和 `message.ingested` 事件发布之前。被拒绝的消息不会进入数据库、Prompt、LLM 或出站回复流程；结构化日志只记录平台、adapter 和目标类型，不记录消息正文与凭据。
 
-::: timeline 2026-06-12
-- [1.0.0] **Systematic upgrade!** Maisaka inference engine refactored with Planner-Replyer deep integration
-- Thinking effort mechanism: dynamically controls reply time and length
-- A-Memorix Memory Engine v1.0: knowledge graphs, character profiles, chat summaries
-- Feedback correction system: automatically corrects outdated memories
-- MCP built-in plugin; global memory configuration added
-- WebUI: Model preset marketplace, comprehensive security hardening, frontend auth refactoring
-- For a more complete illustrated explanation, see the [MaiBot 1.0.0 Update Feature](./v1-0-0.md)
-:::
+Web UI 消息不携带平台、用户和群组身份，因此不参与平台白名单判断，仍由现有 Bearer Token 保护。
 
-::: timeline 2026-01-11
-- [0.12.2] Optimized private chat wait logic, force quote reply on timeout
-- Fixed disconnection issues with some adapters, optimized memory retrieval logic
-:::
+## 不同配置缺失状态进入同一页面
 
-::: timeline 2025-12-31
-- [0.12.1] Year-end summary feature (WebUI), optional LLM judgment for quote replies
-- Expression optimization: automatic and manual evaluation support
-- Reply and planning records viewable in WebUI
-- Global memory blacklist: exclude specific group chats from global memory
-:::
+Server 启动时会先检查默认 profile 的 readiness。以下三种状态都属于可以由用户补全的配置问题：
 
-::: timeline 2025-12-21
-- [0.12.0] Thinking effort mechanism: dynamic reply time and length control
-- Planner and Replyer integration, new private chat system
-- MaiMai dreaming feature, MCP plugin as built-in
-- Global memory configuration added
-:::
+- `setup_required`：配置仓库尚未创建；
+- `invalid`：默认 profile 缺少可执行的 Provider、模型或 tier；
+- `review_required`：配置主体有效，但可选项尚未得到明确确认。
 
-## Earlier Versions
+遇到这些状态时，Server 会记录 `server.configuration.required`，并在日志中给出 Web UI 地址。此时 `/healthz` 和配置页面可用，消息接口返回 `503 configuration_setup_required`，Runtime 与 NapCat 不会启动。
 
-For changelog of earlier versions, see [GitHub Releases](https://github.com/Mai-with-u/MaiBot/releases).
+配置页面收集一个 OpenAI-compatible Provider 的 Base URL、API Key，以及互不相同的 light/heavy 模型 ID。提交接口仍要求 `KAGUYA_GATEWAY_TOKEN`，API Key 只存在于当前表单状态和受保护的 profile 文件中，不写入浏览器存储。
+
+当配置仓库不存在时，配置管理器创建首个 profile；当默认 profile 已存在但不完整时，配置管理器保留其 ID 和名称，只替换完整的 AI、平台与插件 settings，并记录用户对空平台、空插件配置的确认。已经处于 `ready` 状态的 profile 不允许通过 setup 接口覆盖。
+
+保存完成后，当前进程返回 `restart_required`。这是有意保留的生命周期边界：Runtime 在启动时冻结 profile 并创建模型客户端，因此配置不会在一个已经部分启动的进程中热替换。重启 Server 后，新的配置才会进入正常消息处理链。
+
+## 可修复缺失与存储故障必须区分
+
+统一配置入口只处理能够安全补全的业务配置。配置文件损坏、索引引用不存在的 profile、路径越界、符号链接以及文件权限异常，仍会阻止 Server 启动。此类错误可能意味着存储遭到破坏或部署权限不正确，自动覆盖会使恢复工作更加困难。
+
+`KAGUYA_GATEWAY_TOKEN` 也仍然是启动 HTTP 服务前的必要条件。它承担配置写入接口的认证职责，不能由一个尚未认证的页面自行创建。缺少令牌、令牌长度不足，或者启用 NapCat 后缺少 WebSocket URL 时，Server 会在启动前明确报错。
+
+## 验证范围
+
+本次测试覆盖白名单的通配、单维度和多维度组合，确认被过滤消息不会落库、发布事件或调用 LLM；同时覆盖首次初始化、无效 profile 修复、待确认 profile 修复、重复模型拒绝、未确认可选项拒绝，以及已就绪配置不可覆盖等边界。
+
+TypeScript 类型检查、ESLint、格式检查和 Server/Web 生产构建均已通过。全仓测试中 343 项通过；另外两项配置安全测试在当前 Windows 环境因系统不允许创建符号链接而返回 `EPERM`，失败发生在测试准备阶段，与本次白名单和配置引导逻辑无关。

@@ -1,238 +1,164 @@
----
-title: 模型配置
-titleTemplate: :title · 模型配置
----
+# OpenAI-compatible LLM 通用接口
 
-# 模型配置
+`@kaguya/llm/openai-compatible` 导出 `OpenAiCompatibleLlmService`，供 core/application 层按次配置 API 地址、鉴权方式和模型，并通过 OpenAI-compatible `chat/completions` 协议生成文本。它是内部 TypeScript adapter，不是应用 API 网关的 HTTP 接口。包根路径继续兼容导出该 API，但新代码应使用独立子路径。
 
-`model_config.toml` 给麦麦配置"AI 大脑"——决定不同组件使用什么 LLM 模型，以及如何连接 API 服务商。
+该接口适合核心层 provider 集成、独立连通性测试和受信任的服务端工具。它与工作流使用的 `KaguyaLlmClient` 是两个不同边界：当前不会写入 `llm_traces`，也不会自动执行 route/reply/state/memory 的 JSON schema 校验。
 
-最少启动只需一个 LLM 模型和一个 API 提供商（`models` 和 `api_providers` 均非空）。完整功能还需 VLM 模型（看图）和嵌入模型（记忆搜索）。
+## SDK 选型与职责
 
-## API 提供商
+按照 [Issue #1](https://github.com/posanbu/Kaguya/issues/1)，通用接口已从手写 `fetch` 迁移到 Vercel AI SDK，固定使用 `ai@7.0.35` 和 `@ai-sdk/openai-compatible@3.0.14`：
 
-每个 `[[api_providers]]` 块定义一个 API 服务商。一个配置文件可以有多个提供商。
+- `createOpenAICompatible` 根据每次调用的 base URL、API key、鉴权 header 和额外 headers 创建 provider；
+- `generateText` 负责组装 provider 请求、解析文本与 usage、执行 `maxRetries` 指定的重试，并处理整次生成的超时和取消信号；
+- `OpenAiCompatibleLlmService` 保留输入校验、动态 provider 配置、统一结果、错误分类和结构化日志的稳定应用边界。
 
-::: code-group
+没有引入 xsAI。仓库的正式工作流已经使用 Vercel AI SDK，继续使用同一套模型抽象可以共享类型、错误语义和测试工具，避免同时维护两套 provider 调用层。
 
-```toml [TOML ~vscode-icons:file-type-toml~]
-[[api_providers]]
-name = "deepseek"                          # [必填] API 服务商名称，在 models 的 api_provider 中需使用这个命名
-base_url = "https://api.deepseek.com/v1"   # [必填] API 服务商的 BaseURL
-api_key = "your-api-key"                   # [必填] API 密钥。若 auth_type 为 none 则不需要
-client_type = "openai"                     # [可选] 客户端类型：openai(默认) / openai_responses / google
-auth_type = "bearer"                       # [可选] 鉴权方式：bearer(默认) / header / query / none
-auth_header_name = "Authorization"         # [可选] 当 auth_type 为 header 时使用的请求头名称
-auth_header_prefix = "Bearer"              # [可选] 当 auth_type 为 header 时的请求头前缀，留空表示直接发送原始密钥
-auth_query_name = "api_key"                # [可选] 当 auth_type 为 query 时使用的查询参数名称
-default_headers = {}                       # [可选] 所有请求默认附带的 HTTP Header
-default_query = {}                         # [可选] 所有请求默认附带的查询参数
-# organization = "org-xxxx"                # [可选] OpenAI 官方接口可选的 organization
-# project = "proj-xxxx"                    # [可选] OpenAI 官方接口可选的 project
-model_list_endpoint = "/models"            # [可选] 模型列表端点路径
-reasoning_parse_mode = "auto"              # [可选] 推理内容解析模式：auto(默认) / native / think_tag / none
-tool_argument_parse_mode = "auto"          # [可选] 工具参数解析模式：auto(默认) / strict / repair / double_decode
-max_retry = 3                              # [可选] 最大重试次数
-timeout = 60                               # [可选] API 调用超时，单位秒
-retry_interval = 5                         # [可选] 重试间隔，单位秒
+SDK 只负责模型协议与调用生命周期，不负责 HTTP、消息分发或 workflow 选择。provider allowlist、HTTPS 要求、密钥来源、成本限制和日志脱敏应由 application adapter 负责。`apps/server` 的公开消息 API 不暴露这个 service，也不接收 API key、base URL 或模型参数。
+
+## 基本用法
+
+只应在受信任的 core/application composition root 中调用该接口。provider 配置应来自服务端配置或密钥存储，不能从 `POST /api/v1/messages` 透传，也不能把平台密钥打包到浏览器代码中。
+
+```ts
+import {
+  OpenAiCompatibleLlmService,
+  createPinoLlmLogger,
+} from "@kaguya/llm/openai-compatible";
+import {
+  closeLogger,
+  createLogger,
+  createModuleLogger,
+  readLoggerOptions,
+} from "@kaguya/logger";
+
+const rootLogger = createLogger(readLoggerOptions("kaguya-core"));
+const logger = createModuleLogger(rootLogger, "llm:openai-compatible");
+
+const service = new OpenAiCompatibleLlmService({
+  logger: createPinoLlmLogger(logger),
+});
+
+const providerConfig = {
+  apiKey: process.env.PROVIDER_API_KEY ?? "",
+  baseUrl: process.env.PROVIDER_BASE_URL,
+  model: process.env.PROVIDER_MODEL ?? "gpt-5",
+};
+
+const result = await service.call({
+  ...providerConfig,
+  systemPrompt: "Answer concisely.",
+  userPrompt: "Hello",
+  temperature: 0,
+  maxRetries: 2,
+  timeoutMs: 30_000,
+});
+
+console.log(result.content);
+console.log(result.usage);
+await closeLogger(rootLogger);
 ```
 
-:::
+`OpenAiCompatibleLlmService` 默认不输出日志。生产 composition root 应通过 `createPinoLlmLogger()` 接入 `@kaguya/logger`，从当前 AsyncLocalStorage 上下文继承 `traceId/sessionId/workflowId/nodeId` 等关联字段。`createConsoleLlmLogger()` 仅为兼容已有本地工具保留，不提供命名空间、上下文传播或统一脱敏策略。
 
-**要点：**
+## 请求字段
 
-- **必填**：`name`（服务商名称）、`base_url`（端点地址）、`api_key`（密钥，`auth_type = "none"` 时除外）
-- **鉴权**：默认 `bearer` 适用于绝大部分服务商。其他可选 `header` / `query` / `none`
-- **客户端**：默认 `openai`。Google Gemini 用 `"google"`，见 [模型额外参数](./model-extra-params.md#gemini-原生-api)
-- **Responses API**：支持 OpenAI Responses 协议的服务商（如 DeepSeek v4 flash 的联网搜索）用 `"openai_responses"`（1.2.0 起正式支持），见 [模型额外参数](./model-extra-params.md#responses-api)
-- **超时与重试**：`timeout` 默认 60s，`max_retry` 默认 3 次，`retry_interval` 默认 5s
-- 其余字段参见上方注释，均有合理默认值
+| 字段                | 必填 | 默认值                      | 说明                                                                                      |
+| ------------------- | ---- | --------------------------- | ----------------------------------------------------------------------------------------- |
+| `apiKey`            | 是   | 无                          | API 密钥，只用于本次请求                                                                  |
+| `baseUrl`           | 否   | `https://api.openai.com/v1` | API base URL，或完整的 `chat/completions` URL                                             |
+| `model`             | 是   | 无                          | 本次调用使用的模型 ID                                                                     |
+| `systemPrompt`      | 是   | 无                          | system 消息；只用 trim 结果校验非空，发送时保留原始空白                                   |
+| `userPrompt`        | 是   | 无                          | user 消息；只用 trim 结果校验非空，发送时保留原始空白                                     |
+| `temperature`       | 否   | `0`                         | 取值范围 `0..2`                                                                           |
+| `maxRetries`        | 否   | `2`                         | 直接交给 `generateText` 的最大重试次数，取值范围 `0..10`                                  |
+| `timeoutMs`         | 否   | `30000`                     | 整次 SDK 调用的总超时，取值范围 `1..300000`                                               |
+| `apiKeyHeader`      | 否   | `Authorization`             | 非 Bearer 服务可设置为 `api-key` 等 header 名称；不能使用 `Content-Type` 或保留 header    |
+| `additionalHeaders` | 否   | 无                          | provider 要求的额外 HTTP headers；不能覆盖 `Content-Type` 或连接/请求 framing 保留 header |
+| `signal`            | 否   | 无                          | 调用方提供的 `AbortSignal`，用于取消整个调用                                              |
 
+当 `apiKeyHeader` 为 `Authorization` 时，密钥通过 provider SDK 的 `apiKey` 选项传入，由 SDK 生成 `Bearer <apiKey>`；使用其他 header 名称时通过 SDK 的自定义 headers 发送密钥值。
 
-## 模型
+## URL 规则
 
-每个 `[[models]]` 块定义一个具体的 LLM 模型，关联到某个 API 提供商。
+- `https://gateway.example/v1` 会转换为 `https://gateway.example/v1/chat/completions`。
+- 已以 `/chat/completions` 结尾的完整地址保持不变。
+- URL query 会按原始形式保留，包括重复参数、顺序和百分号编码，可用于 Azure `api-version` 或签名地址。
+- 仅允许 `http` 和 `https` 协议。
+- adapter 注入 provider 的 fetch wrapper 会强制使用 `redirect: "error"`，不会自动跟随 provider 重定向；这是 Kaguya 的传输策略，不是 SDK 默认行为。
+- 通用 service 本身允许调用任意 HTTP(S) host；HTTPS 默认策略和 hostname allowlist 由调用它的 core/application adapter 提供。
 
-::: code-group
+Azure 风格示例：
 
-```toml [TOML ~vscode-icons:file-type-toml~]
-[[models]]
-model_identifier = "deepseek-v4-flash"       # [必填] API 服务商提供的模型标识符
-name = "deepseek-v4-flash"                   # [必填] 模型名称，在 model_task_config 中需使用这个命名
-api_provider = "deepseek"                    # [必填] 对应 api_providers 中配置的服务商名称
-price_in = 1.0                               # [可选] 输入价格，单位：元/M token
-cache = false                                # [可选] 是否启用缓存计费
-cache_price_in = 0.0                         # [可选] 缓存命中输入价格，仅 cache=true 时使用
-price_out = 2.0                              # [可选] 输出价格，单位：元/M token
-# temperature = 0.7                          # [可选] 模型级别温度，会覆盖任务配置中的 temperature
-# max_tokens = 4096                          # [可选] 模型级别最大 token 数，会覆盖任务配置中的 max_tokens
-force_stream_mode = false                    # [可选] 强制流式输出模式，模型不支持非流式输出时设为 true
-visual = false                               # [可选] 是否为多模态模型（支持视觉输入）
-extra_params = {}                            # [可选] 额外参数，详见 模型额外参数
+```ts
+await service.call({
+  apiKey,
+  apiKeyHeader: "api-key",
+  baseUrl:
+    "https://example.openai.azure.com/openai/deployments/my-model/chat/completions?api-version=2026-01-01",
+  model: "my-model",
+  systemPrompt: "Answer concisely.",
+  userPrompt: "Hello",
+});
 ```
 
-:::
+## 返回结果
 
-**要点：**
-
-- **必填**：`model_identifier`（API 标识符）、`name`（自定义名称）、`api_provider`（归属服务商）
-- **价格**：`price_in` / `price_out` 用于统计，单位 元/百万 token。开启 `cache` 后可单独设置 `cache_price_in`
-- **模型级覆盖**：`temperature` / `max_tokens` 可覆盖任务配置，不设则使用任务默认值
-- **视觉**：`visual = true` 表示支持图像输入，用于 `vlm` 任务
-- **`extra_params`**：服务商特有参数（思考模式、推理强度等），详见 [模型额外参数](./model-extra-params.md)
-
-
-## 任务配置
-
-根据任务特点给每个任务分配不同模型，实现最优表现和效率。
-
-麦麦将模型调用分为三类角色：**Planner** 是战略核心，决定何时说话、调用哪些工具（需较强推理能力来调度 MCP 和工具链）；**Replyer** 负责将 Planner 收集的信息转化为最终回复文本，追求语言质量；其余辅助任务用低价 flash 模型追求速度。一次典型的「收到消息 → 发出回复」触发 3~6 次 LLM 调用。
-
-::: code-group
-
-```toml [replyer（智能模型） ~vscode-icons:file-type-toml~]
-# [必填] 回复器：将 Planner 收集的信息转为最终回复文本。追求语言质量和表达风格，推荐 pro 模型 + 思考模式。
-[model_task_config.replyer]
-model_list = ["deepseek-v4-pro-think"]        # [必填] 模型名称列表
-max_tokens = 4096                             # [可选] 最大输出 token 数
-temperature = 1.0                             # [可选] 模型温度，0.3 保守 / 0.7 有创意 / 1.0 随机
-slow_threshold = 120.0                        # [可选] 慢请求阈值（秒）
-selection_strategy = "random"                 # [可选] 模型选择策略：balance / random / sequential
-hard_timeout = 240.0                          # [可选] 硬超时（秒）
+```ts
+interface OpenAiCompatibleResult {
+  content: string;
+  model: string;
+  requestId?: string;
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
+  attempts: number;
+  durationMs: number;
+}
 ```
 
-```toml [planner（快模型） ~vscode-icons:file-type-toml~]
-# [必填] 规划器：战略核心——决定何时说话、回复谁、调用哪些工具（MCP/插件）。需较强推理和 tool 调用能力。
-[model_task_config.planner]
-model_list = ["deepseek-v4-flash"]            # [必填] 模型名称列表
-max_tokens = 8000                             # [可选] 最大输出 token 数
-temperature = 0.7                             # [可选] 模型温度
-slow_threshold = 12.0                         # [可选] 慢请求阈值（秒）
-selection_strategy = "random"                 # [可选] 模型选择策略
-hard_timeout = 180.0                          # [可选] 硬超时（秒）
-```
+`model` 优先使用 provider 响应中的模型 ID；provider 未返回时使用请求值。`usage` 和 `requestId` 取决于 provider 是否返回相应数据；如果 provider 只返回原始 `usage.total_tokens`，service 也会保留该总数。
 
-```toml [utils（快模型） ~vscode-icons:file-type-toml~]
-# [必填] 组件模型：表情包分析、学习分析、取名、关系模块、情绪变化等。麦麦必须的模型。
-[model_task_config.utils]
-model_list = ["deepseek-v4-flash"]            # [必填] 模型名称列表
-max_tokens = 4096                             # [可选] 最大输出 token 数
-temperature = 0.5                             # [可选] 模型温度
-slow_threshold = 15.0                         # [可选] 慢请求阈值（秒）
-selection_strategy = "random"                 # [可选] 模型选择策略
-hard_timeout = 120.0                          # [可选] 硬超时（秒）
-```
+## 重试与错误
 
-```toml [memory（长期记忆） ~vscode-icons:file-type-toml~]
-# [可选] 长期记忆：记忆总结、抽取、写回等高质量任务（A_Memorix 子系统）。
-# 默认 model_list 为空（不自动回退），未配置时调用方按需处理。
-[model_task_config.memory]
-model_list = []                               # [可选] 模型名称列表
-max_tokens = 8192                             # [可选] 最大输出 token 数
-temperature = 0.5                             # [可选] 模型温度
-slow_threshold = 30.0                         # [可选] 慢请求阈值（秒）
-selection_strategy = "random"                 # [可选] 模型选择策略
-hard_timeout = 240.0                          # [可选] 硬超时（秒）
-```
+`maxRetries` 直接传给 `generateText`。哪些 provider、限流或网络错误可以重试，以及退避和 `Retry-After` 的处理，由 Vercel AI SDK 统一实现；Kaguya 不再维护第二套 HTTP 重试循环。
 
-```toml [mid_memory（中期摘要） ~vscode-icons:file-type-toml~]
-# [可选] 中期摘要：上下文裁切时将历史聊天压缩为摘要。留空时自动回退到 planner。
-[model_task_config.mid_memory]
-model_list = []                               # [可选] 模型名称列表（→回退 planner）
-max_tokens = 8000                             # [可选] 最大输出 token 数
-temperature = 0.7                             # [可选] 模型温度
-slow_threshold = 12.0                         # [可选] 慢请求阈值（秒）
-selection_strategy = "random"                 # [可选] 模型选择策略
-hard_timeout = 180.0                          # [可选] 硬超时（秒）
-```
+本次迁移删除了 `retryDelayMs` 请求字段，因为 AI SDK v7 不公开可配置的初始退避时间。继续接受该字段会让调用方误以为它能够影响 SDK，属于虚假配置，因此这是一次明确的 API 契约调整。
 
-```toml [learner（学习） ~vscode-icons:file-type-toml~]
-# [可选] 学习模型：表达方式学习和黑话学习。留空时自动回退到 utils。
-[model_task_config.learner]
-model_list = []                               # [可选] 模型名称列表（→回退 utils）
-max_tokens = 4096                             # [可选] 最大输出 token 数
-hard_timeout = 120.0                          # [可选] 硬超时（秒）
-```
+`timeoutMs` 的语义也从“每次 HTTP 尝试的超时”调整为“整次 `generateText` 调用的总超时”。调用方传入的 `signal` 会直接作为 SDK 的 `abortSignal`，可以取消当前请求和后续重试。未来的核心 adapter 可以把自身的任务取消信号传入这里。无论由调用方中止还是由 SDK 总超时触发，公开错误都会归类为 `cancelled`。
 
-```toml [expression_use（表达选择） ~vscode-icons:file-type-toml~]
-# [可选] 表达方式选择模型。留空时自动回退到 utils。
-[model_task_config.expression_use]
-model_list = []                               # [可选] 模型名称列表（→回退 utils）
-max_tokens = 1024                             # [可选] 最大输出 token 数
-temperature = 0.3                             # [可选] 模型温度
-slow_threshold = 15.0                         # [可选] 慢请求阈值（秒）
-selection_strategy = "balance"                # [可选] 模型选择策略
-hard_timeout = 120.0                          # [可选] 硬超时（秒）
-```
+配置错误不会进入 SDK；SDK 调用失败后由 service 统一归一化为 `OpenAiCompatibleError`：
 
-```toml [emoji（表情包选择） ~vscode-icons:file-type-toml~]
-# [可选] 表情包选择：从候选表情包中选出合适的一张发送。
-# 选择优先级：emoji 有模型→用 emoji，planner 全视觉→用 planner，否则→用 vlm
-[model_task_config.emoji]
-model_list = []                               # [可选] 模型名称列表
-max_tokens = 4096                             # [可选] 最大输出 token 数
-hard_timeout = 120.0                          # [可选] 硬超时（秒）
-```
+| `kind`          | 含义                                        |
+| --------------- | ------------------------------------------- |
+| `configuration` | 请求字段或 URL 配置非法，请在发送前修正     |
+| `retryable`     | SDK 标记为可重试的 provider、限流或网络错误 |
+| `non-retryable` | 鉴权、请求、协议或响应内容错误              |
+| `cancelled`     | 调用方 `AbortSignal` 中止或 SDK 总超时      |
 
-```toml [vlm（看图） ~vscode-icons:file-type-toml~]
-# [强烈建议] 看图说话：理解图片内容。需 visual=true 的多模态模型。
-[model_task_config.vlm]
-model_list = ["qwen-vl"]                      # [必填] 模型名称列表，需 visual=true 的多模态模型
-max_tokens = 4096                             # [可选] 最大输出 token 数
-hard_timeout = 240.0                          # [可选] 硬超时（秒）
-```
+错误还包含 `attempts`，provider 错误可能包含 `status`。归一化错误使用稳定的脱敏 `message`，也不会保留 SDK 原始异常的 `cause`，因为原始异常中可能包含完整 Prompt、请求头、provider 错误消息或响应体；接口在 SDK 用尽 `maxRetries` 后抛出归一化后的错误。
 
-```toml [voice（语音识别） ~vscode-icons:file-type-toml~]
-# [可选] 语音识别：语音转文字。
-[model_task_config.voice]
-model_list = []                               # [可选] 模型名称列表
-max_tokens = 4096                             # [可选] 最大输出 token 数
-hard_timeout = 120.0                          # [可选] 硬超时（秒）
-```
+## 日志与安全边界
 
-```toml [embedding（嵌入模型） ~vscode-icons:file-type-toml~]
-# [强烈建议] 嵌入模型：生成文本向量，用于长期记忆的语义搜索。
-# 推荐专门的嵌入模型（如 text-embedding-3-small）。未配置时记忆搜索不可用。
-[model_task_config.embedding]
-model_list = ["text-embedding-3-small"]       # [必填] 模型名称列表，推荐专门的嵌入模型
-max_tokens = 4096                             # [可选] 最大输出 token 数
-hard_timeout = 60.0                           # [可选] 硬超时（秒）
-```
+结构化日志只记录事件名、模型、endpoint、尝试次数、耗时、状态、usage 和错误分类，不记录 provider 原始错误消息、API key、Prompt 或模型回答。日志中的 `endpoint` 仅保留 provider 的 URL origin，不保留可能包含租户标识、部署路径、签名参数或其他敏感信息的 path、query 和 hash。`apiKeyHeader` 与 `additionalHeaders` 会拒绝 `Host`、`Content-Length`、`Transfer-Encoding`、`Connection`、`Proxy-Authorization` 等连接或请求 framing 保留 header。adapter 的 fetch wrapper 强制使用 `redirect: "error"`，调用方必须提供最终 provider 地址。
 
-:::
+`@kaguya/logger` 还会默认遮盖常见凭证和内容字段，并把 Error 收敛为分类元数据；这只是额外兜底，不能替代 service 自身“不构造敏感日志事件”的边界。统一日志配置、命名空间级别和同步/异步输出约定见 [结构化日志](logging.md)。
 
-**要点：**
+生产接入还必须在 core/application 层完成以下控制：
 
-- **三个必配**：`replyer`、`planner`、`utils` 配好即可运行，其余留空自动回退
-- **Planner 是战略核心**：决定何时说话、调用哪些工具（MCP/插件），需要一定的推理能力，建议用能力均衡的模型
-- **Replyer 追求语言质量**：将 Planner 收集的信息转为最终回复，推荐 pro 模型 + 思考模式
-- **视觉**：`vlm` 需 `visual = true` 的多模态模型，推荐 `qwen-vl`
-- **嵌入**：`embedding` 推荐专门嵌入模型（如 `text-embedding-3-small`），未配置则记忆搜索不可用
-- 模型配置中的 `temperature` / `max_tokens` 会覆盖此处设置
+- 不把 API key 写入数据库、普通日志、错误响应或浏览器持久存储；
+- 只从受信任配置读取 provider，并对允许的 host 建立 allowlist，避免任意 URL 造成 SSRF；
+- 对 `additionalHeaders` 和完整 URL 做权限控制；
+- 限制请求大小、用户调用频率、模型范围和成本预算；
+- 根据数据合规要求决定 Prompt 是否允许发送给第三方 provider；
+- 如果调用属于正式工作流，应通过 adapter 接入 `KaguyaLlmClient`，保留 schema 校验与 `llm_traces`。
 
-### 回退规则
+## 当前限制
 
-部分任务的 `model_list` 为空时，自动复用其他任务：
-
-```
-         ┌──────────┐
-         │  planner │◄──── mid_memory（留空时回退）
-         └──────────┘
-              ▲
-              │
-         ┌──────────┐
-         │  utils   │◄──── learner（留空时回退）
-         │          │◄──── expression_use（留空时回退）
-         └──────────┘
-
-memory · emoji · vlm · voice · embedding → 留空不自动回退，调用方会跳过或报错
-
-emoji 特殊逻辑：emoji 有模型→用 emoji，planner 全视觉→用 planner，否则→用 vlm
-```
-
-## 下一步
-
-- 模型高级参数（思考模式、推理强度）：[模型额外参数](./model-extra-params.md)
-- 配置机器人：看 [Bot 配置](./bot-config.md)
-- 连接 QQ：[NapCat 适配器](../adapters/napcat.md)
-- 管理 WebUI：[WebUI 配置管理](../webui/config-management.md)
+- 仅实现 OpenAI-compatible chat completions 文本响应；
+- 暂不支持流式输出、tools/function calling、多模态输入和 embedding；
+- 不负责保存模型配置、密钥或调用历史；
+- Web UI 已由统一 Server 同源提供；本接口仍是内部 TypeScript adapter，不由公开 HTTP API 暴露；
+- demo 仍使用确定性 mock model，不会访问远端 API。

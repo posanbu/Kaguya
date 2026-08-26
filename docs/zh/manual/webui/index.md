@@ -1,79 +1,52 @@
----
-title: 🖥️ WebUI 管理面板
----
+# Web UI
 
-# 🖥️ WebUI 管理面板
+`apps/web` 是统一 Kaguya Server 内提供的 React/Vite 客户端。它不再运行独立的开发服务，也不接受网关地址配置；健康检查和消息提交始终使用同源相对路径 `/healthz` 与 `/api/v1/messages`。
 
-通过浏览器就能管理你的机器人！
+## 启动
 
-## 第一次使用
-
-### 获取登录密码
-
-第一次启动 MaiBot 时，控制台会显示一个密码（Token）：
-
-```
-WebUI Access Token: a1b2c3d4...
-请使用此 Token 登录 WebUI
+```bash
+export KAGUYA_GATEWAY_TOKEN="replace-with-at-least-16-characters"
+pnpm dev
 ```
 
-首次显示的是本次启动使用的临时 Token。登录后，首次配置向导会要求你设置一个符合安全要求的固定 Token；临时 Token 会在下次启动时重新生成。
+打开 `http://127.0.0.1:3000`。开发模式由 Fastify 内挂 Vite middleware 并在同一端口提供 HMR。生产模式先执行 `pnpm build`，再由 Fastify 提供 `apps/web/dist`。
 
-### 登录步骤
+不再使用 `pnpm web`、第二个 5173 端口或 `VITE_KAGUYA_API_URL`。
 
-1. 打开浏览器，访问 `http://localhost:8001`（默认地址）
-2. 输入控制台显示的密码
-3. 首次登录时按向导设置固定 Token，并使用新 Token 重新登录
-4. 完成首次配置后进入管理面板
+## 统一配置入口
 
-## 能做什么？
+当 `KAGUYA_CONFIG_ROOT` 尚未初始化、默认 profile 不完整或可选配置尚未确认时，页面会显示统一配置入口，而不是聊天界面。引导页收集 OpenAI-compatible Provider 的 Base URL、API Key、light/heavy 模型 ID，以及网关访问令牌；API Key 仅通过受保护的配置接口提交，不会写入浏览器存储。已有但不完整的默认 profile 会通过同一入口修复，不会静默回退到其他配置。
 
-WebUI 让你轻松管理 MaiBot：
+保存成功后页面会提示重启 Server。重启是必要的，因为 Runtime 会在启动时冻结 profile 并创建模型客户端；重启完成后刷新页面即可进入聊天界面。
 
-- ⚙️ **改配置** - 不用编辑文件，点点鼠标就能改设置
-- 🧠 **管记忆** - 查看、编辑、删除机器人的记忆
-- 🔌 **装插件** - 安装和管理各种功能插件
-- 📊 **看统计** - 查看聊天记录和使用数据
+## 浏览器存储
 
-## 基本设置
+| 数据         | 存储                                      | 生命周期                                    |
+| ------------ | ----------------------------------------- | ------------------------------------------- |
+| Source ID    | `localStorage` 的 `kaguya.sessionId`      | 兼容 API 字段；Core 不赋予 session/历史语义 |
+| Bearer Token | `sessionStorage` 的 `kaguya.gatewayToken` | 仅当前标签页会话                            |
+| Server 地址  | 不存储                                    | 始终使用页面同源地址                        |
 
-在 `bot_config.toml` 里可以改 WebUI 的设置：
+Token 不应写入 `VITE_*` 环境变量，因为这类值会被打包进浏览器产物。
 
-::: code-group
+## 当前能力
 
-```toml [TOML ~vscode-icons:file-type-toml~]
-[webui]
-enabled = true                # 是否启用 WebUI
-host = ["127.0.0.1", "::1"]  # 绑定地址列表
-port = 8001                   # 端口号
-mode = "production"           # 运行模式：development(开发) 或 production(生产)
-webui_style = 1               # 界面风格
-anti_crawler_mode = "basic"   # 防爬虫模式：false / strict / loose / basic
-allowed_ips = "127.0.0.1"     # IP 白名单（逗号分隔）
-```
+- 检测统一服务健康状态；
+- 在发送前校验 Token、会话 ID、空消息和消息长度；
+- 展示提交中、Server 已接受和提交失败状态；
+- 展示 API 返回的结构化错误；
+- 适配桌面和移动布局。
 
-:::
+UI 不接收 provider、模型、API key 或 base URL。模型和工作流由 Server 内 Runtime 管理。
 
-- `host` 改成 `["0.0.0.0", "::"]` 可以监听所有 IPv4/IPv6 网卡；同时应配置防火墙、访问白名单和 HTTPS
-- `port` 可以改成其他数字避免冲突
+## 响应边界
 
-## 忘记密码怎么办？
+消息 API 保留 `202 accepted`，没有回复查询或 SSE，因此页面只展示提交状态，不伪造机器人回答。Runtime 会把确定性回复写入同一 SQLite；只有平台入站携带 reply sender 时，工作流才把回复投递到平台。
 
-如果仍能登录，可在 WebUI 的系统设置中重新生成或修改 Token。如果已经无法登录：
+## 排障
 
-1. 关闭 MaiBot
-2. 删除 `data/webui.json` 文件
-3. 重新启动 MaiBot，使用控制台显示的新临时 Token 登录，并重新设置固定 Token
-
-## 安全提醒
-
-- 不要把密码告诉别人
-- 公网部署必须优先使用 HTTPS 或可信私有网络；仅修改默认端口不能替代访问控制
-- 怀疑 Token 泄露时应立即在系统设置中重新生成
-
-## 更多功能
-
-- [配置管理](./config-management.md) - 在浏览器里改配置
-- [记忆管理](./memory-management.md) - 查看和管理记忆
-- [插件管理](./plugin-management.md) - 安装和管理插件
-- [聊天记录](./chat-stats.md) - 查看聊天统计
+- 页面打不开：确认 `pnpm dev` 仍在运行，并检查 `server.start.failed` 或 Vite 启动错误；
+- 健康检查失败：确认浏览器访问的就是 `KAGUYA_HOST:KAGUYA_PORT`，页面不支持另填网关地址；
+- 返回 401：页面中填写的 Token 必须与 Server 的 `KAGUYA_GATEWAY_TOKEN` 完全一致；
+- 页面可用但 NapCat 无响应：检查 `adapter:napcat` 日志；平台连接状态不影响 Web UI；
+- 深层页面生产环境 404：确认 `apps/web/dist/index.html` 存在并由 `pnpm build` 生成。

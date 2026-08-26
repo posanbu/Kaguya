@@ -1,96 +1,132 @@
----
-title: '# Feature Introduction'
----
-# Feature Overview
+## 1 基础
 
-MaiBot (MaiMai) is not just a chatbot — she is a digital life dedicated to interacting in a genuine human style. Below are her core capabilities.
+llm sdk
 
-<div class="feature-cards">
+我们要手动维护历史消息
 
-<div class="feature-card">
+### 事件循环
 
-### 💬 Intelligent Conversation Pipeline
+- 事件：会触发别的事件/动作
+- 监听器：触发机制
 
-The complete processing pipeline from message reception to final response, supporting Hook interception, command dispatch, filtering checks, and flexible routing.
+事件队列
 
-[Learn about the Message Pipeline →](../manual/features/message-pipeline.md)
+## 2 bot基本逻辑
 
-</div>
+### 监听器
 
-<div class="feature-card">
+- 事件：有消息更新
+  （监听器（路由）：假如有消息更新）
+  - 将新消息推入历史记录
+  - 从历史记录中获取最新的n条对话
+  - 获取（我们自定义的） memory/prompt
+  - 将上面的信息组装成一次llm request的 prompt，（决定要不要回复），回复
 
-### 🧠 Maisaka Reasoning Engine
+- schedule/corn
 
-A multi-turn internal reasoning system based on tool calling. Planner decisions, tool execution, automatic interruption, and retries keep conversation flow natural.
+### 长间隔（3h/每天）定时任务
 
-[Learn about Maisaka →](../manual/features/maisaka-reasoning.md)
+目的：
 
-</div>
+- 在空闲时整理 memory
+  - memory 可以是一组独立的事件组：memory的写的时机是可以自己设计的
+  - 每天凌晨三点钟检查这一天的聊天记录，根据某个prompt（memory policy）获取特定信息存入数据库
+  - memory policy 也可以是从某个数据库获取的
+  - （xx事件（点）触发xx数据库更新（边））
 
-<div class="feature-card">
+我们要做的基础设施要提供点和边的定义方式，比较快速方便地构建复杂形态的 memory（workflow）
 
-### ❤️ Long-Term Memory System
+### 短间隔（1min/30s）心跳
 
-The A-Memorix memory engine provides knowledge graphs, conversation summaries, and persona profiles. An automatic write-back mechanism enables MaiMai to continuously accumulate understanding of you.
+- 假如设定的n很小，要有专门的短时状态更新
+  - 评估bot的心情怎么样，得到的心情->被嵌入prompt
+  - 用户关系
+  - 短时记忆
+- 路由
+  - 路由1：**每次有消息更新**，跑一遍路由决定回不回复
+  - 路由2：**隔一段时间**（获取目前的历史消息）跑一遍路由
 
-[Learn about the Memory System →](../manual/features/memory-system.md)
+## 3 分工
 
-</div>
+具体要做的
 
-<div class="feature-card">
+研究maibot的事件循环
 
-### 📖 Expression and Slang Learning
+#### 3.1
 
-Automatically extracts expression styles and group slang from conversations, infers meanings through LLMs, and gradually refines them, making MaiMai increasingly resemble the people around you.
+- prompt组装方式的来龙去脉
+  - 找到所有的llm request怎么发出
+  - 每个prompt可能由多个来源的数据库/prompt（文本）组装而成
+  - 最终会得到一个消息流转的图
+- 心跳机制/监听器
+  - 每个特殊的事件会触发什么（有消息进入，心跳/定时任务）
+- 事件的设计
+  - 每个事件包含什么字段（信息）
+  - 事件怎么触发
+- 抄什么：研究 maibot 的上述逻辑
+  - 尝试做一个maibot各组件的抽象层
+  - 可用的memory库可能有很多，可以调查一下，选什么库不一定重要
+  - 测试 prompt 工具 [promptfoo](https://github.com/promptfoo/promptfoo)
 
-[Learn about the Learning System →](../manual/features/learning.md)
+#### 3.2
 
-</div>
+- 社交平台适配器（网关）：bot - 适配层 - 协议 -（社交平台适配器）- 社交平台
+  - QQ：适配器用napcat，Onebot v11协议
+  - tg：没有适配器层，官方给api
+  - 写适配层，把各社交平台的消息（包括终端/webui）统一成一种 schema（raw/source/时间）统一的消息更新事件
+  - 抄 openclaw/或者别的
+  - koishi.js 有一个协议 satori 兼容多平台的统一的事件字段协议，适配层可以抄他
 
-<div class="feature-card">
+#### 3.3
 
-### 😊 Sticker System
+- webui/文档站ui
+  - 调研现有框架 web框架/静态站点框架
+  - 实在找不到去抄 moeru-ai/airi 文档站
+  - 千万不要手写 html
 
-VLM-based automatic sticker recognition, emotion tag generation, and intelligent selection make conversations more vivid.
+- 评估/可视化
+  - 先感受一下（手动评估）
+  - memory 结构/更新可视化
+  - prompt组装/场景/剧本/角色状态可视化
+  - 要么找bench
 
-[Learn about the Sticker System →](../manual/features/emoji-system.md)
+#### 3.4
 
-</div>
+- computer use（cua）
 
-<div class="feature-card">
+qq插件生态兼容
 
-### 🔌 MCP Integration
+AI bot
 
-Supports Model Context Protocol, connecting to external tool servers to infinitely expand MaiMai's capability boundaries.
+- 50% astrbot
+- 30% 官方弱智bot
+- 15% maibot
 
-[Learn about MCP →](../manual/features/mcp.md)
+## 4 开发
 
-</div>
+使用 typescript
 
-</div>
+读不懂让ai解释
 
-<style>
-.feature-cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 16px;
-  margin-top: 24px;
-}
-.feature-card {
-  border: 1px solid var(--vp-c-divider);
-  border-radius: 8px;
-  padding: 20px;
-  transition: border-color 0.25s, box-shadow 0.25s;
-}
-.feature-card:hover {
-  border-color: var(--vp-c-brand);
-  box-shadow: 0 2px 12px var(--vp-c-brand-soft);
-}
-.feature-card h3 {
-  margin-top: 0;
-  font-size: 1.1em;
-}
-.feature-card a {
-  font-size: 0.9em;
-}
-</style>
+test-driven
+
+- 看测试用例
+- 回归测试：修bug的过程中，当你发现bug之后可以立即写一个测试（会不通过）
+- 最好让 coding agent解释一下写了什么测试
+
+docs
+
+- 边写代码边写文档
+- 写完之后自己看一遍，因为ai写的可能跟你关注点不一样
+- manual（可以最后写） / contributing guide（开发时写） 分开
+
+技术选型
+
+## 5 计划
+
+- [ ] 做一个init commit (3.1) - cnc/ldh/hjb
+  - [ ] sdk / 数据库 / 子包的划分（研究maibot，自己归类） 定下来
+  - [ ] 确保研究明白之后，直接 codex 每个子包写出来，跑通就交
+  - [ ] markdown 文档
+- [ ] ui - lfx/lzf/cly
+- [ ] 适配器（相对独立且抄就行了）

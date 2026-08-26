@@ -1,37 +1,95 @@
----
-title: 开发指南
----
+# Kaguya 架构
 
-# 开发指南
+Kaguya 采用一个长期运行进程、一个 composition root 和一个共享 Runtime。`apps/server` 负责配置与资源装配；`@kaguya/runtime` 负责通用 ingress、模块事件分发、LLM execution port 和 outbound transport。Core 不拥有 session，也没有固定的“回复工作流”。
 
-本节面向部署运维与高级使用者——把 MaiBot 跑稳、排查问题、扩展对接、作数据归档与自动化。
+## 运行形态
 
-::: tip 技术栈
-MaiBot 采用 Python 3.12+ / FastAPI / SQLModel / structlog / Pydantic + TOML 热重载，通过 `uv` 管理依赖。完整项目结构与技术选型见 [配置系统](./configuration.md)。
-:::
+```mermaid
+flowchart LR
+  Browser["浏览器 / Web UI"] --> Server["apps/server\nFastify"]
+  NapCat["NapCat WebSocket"] --> Server
+  Server --> Runtime["KaguyaRuntime"]
+  Runtime --> DB["SQLite"]
+  Runtime --> Bus["EventBus"]
+  Bus --> Host["ModuleHost"]
+  Host --> LLM["LLM execution port"]
+  Host --> Outbound["message.outbound.requested"]
+  Outbound --> Registry["Transport registry"]
+  Registry --> NapCat
+```
 
-## 文档索引
+开发模式下 Vite middleware 和 HMR 挂在同一个 Fastify 实例；生产模式由该实例提供 `apps/web/dist`。NapCat 是可选 ingress 与 transport，连接失败不会停止 HTTP 服务。
 
-- **数据库** — SQLite + SQLModel 22 张表：连接与会话、PRAGMA 调优、数据归档与排查。（运维）
-- **配置系统** — 两份 TOML（bot_config + model_config）的版本链、热重载机制、升级钩子与旧版迁移。（运维 / 高级使用者）
-- **消息服务器与适配器对接** — WebSocket 消息服务器如何让外部适配器（NapCat、GoCQ、Discord、Telegram 等）接入 MaiBot：认证、消息流向与部署要点。（运维）
-- **LLM 模型集成** — APIProvider / ModelInfo / ModelTaskConfig 三概念驱动的 LLM 接入链路，配置即连。（高级使用者）
-- **MCP 集成与外部工具接入** — MCP 客户端集成：三种 transport 选型、工具注册、命名冲突处理与调试。（高级使用者）
-- **WebUI HTTP API 入口** — 子目录 6 篇：FastAPI 后端 HTTP / WebSocket API 总览，含认证、路由组与场景跳转。（运维 / 高级使用者）
-- **日志与可观测性** — structlog 三条并行输出通道（文件 / 控制台 / WebUI）：日志调优、第三方降噪、LLM 请求快照抓取与线上排查。（运维）
-- **统计与数据导入导出** — 小时粒度聚合表、实时仪表盘查询、异步导出 zip 包三条数据消费路径。（运维 / 高级使用者）
-- **事件管线与钩子** — EventBus 与命名 Hook 双事件系统的协同机制：拦截型 / 非拦截型处理器、插件桥接与排查视角。（高级使用者 / 插件底层）
-- **插件运行时内部架构** — Host / Runner 双进程 IPC 架构的内部机制：msgpack 编解码、热重载与故障隔离。面向运维排查，非插件开发。（插件底层）
+正常启动顺序为：加载并冻结配置 profile registry，打开并迁移数据库，注册 transport，创建并启动 ModuleHost，最后启动 HTTP 与 adapter ingress。若 profile store 尚未初始化、默认 profile 不完整或可选项尚未确认，则进入 setup mode，只启动 HTTP 与 Web UI；配置保存后必须重启，才会继续加载 Runtime 和 adapter ingress。配置文件损坏、路径或权限异常仍会拒绝启动，不会由引导流程覆盖。
 
-## 路线图
+## 包职责
 
-- 把 bot 跑在 VPS → [配置系统](./configuration.md) → [消息服务器与适配器对接](./message-server-and-adapters.md) → [日志与可观测性](./observability.md)
-- 写 WebUI 自动化面板 → [WebUI HTTP API 入口](./webui-api/) → [统计与数据导入导出](./statistics-io.md)
-- 对接外部聊天平台 → [消息服务器与适配器对接](./message-server-and-adapters.md) → [事件管线与钩子](./event-pipeline-hooks.md)
-- 接 MCP Server → [配置系统](./configuration.md) → [MCP 集成与外部工具接入](./mcp-integration.md)
-- 导出 / 迁移数据 → [数据库](./database.md) → [统计与数据导入导出](./statistics-io.md)
+| 层级       | 包                                                                        | 职责                                                                       |
+| ---------- | ------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| 应用装配   | `apps/server`                                                             | 配置、Logger、Runtime、Fastify、NapCat 和关闭顺序                          |
+| 运行时     | `packages/runtime`                                                        | 入站持久化、事件发布、ModuleHost 装配、LLM port、transport registry 与审计 |
+| 模块协议   | `packages/modules`                                                        | `message.*` 标准事件以及最小 filter/LLM demo 模块                          |
+| 执行基础   | `packages/engine`、`packages/sdk`                                         | EventBus、ModuleHost、强类型模块/事件 API；保留显式 workflow API           |
+| 数据与模型 | `packages/database`、`packages/prompt`、`packages/llm`、`packages/config` | SQLite、Prompt、模型调用/trace、profile/tier 配置                          |
+| 平台契约   | `packages/schema`、`packages/platform-adapters`                           | 公共 schema、OneBot 规范化和稳定 outbound transport                        |
 
-## 扩展与贡献
+依赖方向是 `apps/server → runtime → 基础 packages`。Runtime 不读取 Server 环境变量；Server 不重建 Runtime 内部组件。
 
-- 如需写插件，请前往 [插件开发文档](/plugin/)，那里覆盖 Manifest、生命周期、组件注册等面向开发者的内容。
-- 如需向 MaiBot 源码贡献代码，请查阅 [GitHub 仓库的贡献指南](https://github.com/Mai-with-u/MaiBot/blob/main/docs/CONTRIBUTE.md)。本仓库原有 `contributing.md` 已不再维护，以 GitHub 仓库为准。
+## 消息模块链
+
+```mermaid
+sequenceDiagram
+  participant Ingress as HTTP / Adapter ingress
+  participant Core as KaguyaRuntime
+  participant DB as SQLite
+  participant Bus as EventBus / ModuleHost
+  participant Filter as demo.filter.always
+  participant Reply as demo.reply.llm
+  participant LLM as LLM execution port
+  participant Transport as Registered transport
+
+  Ingress->>Core: normalized inbound message
+  Core->>Core: gateway allowlist check
+  Core->>DB: persist user message (allowed only)
+  Core->>Bus: message.ingested
+  Bus->>Filter: broadcast
+  Filter->>Bus: reply.requested(targetInstanceId)
+  Bus->>Reply: targeted delivery
+  Reply->>DB: get current message by ID
+  Reply->>LLM: profileId? + light/heavy + one-shot prompt
+  LLM-->>Reply: validated output
+  Reply->>Bus: message.outbound.requested
+  Bus->>Core: generic outbound request
+  Core->>DB: persist requested
+  Core->>Transport: exact adapter + destination + text/reply
+  Core->>DB: update delivered/failed
+  Core->>Bus: message.outbound.delivered/failed
+```
+
+`reply.*` 只是 demo 模块间协议。模块可以不回复、使用自己的状态/历史，或把输出发送到与触发消息无关的私聊或群聊。Core 不从 message ID、sender、mention 或来源推导 destination，也不检查 outbound 是否在回复当前消息。
+
+`message.ingested` 对所有已持久化入站消息广播。平台事件包含公开且 schema 校验后的 adapter、平台消息 ID、self ID、destination、sender 和 mentions；adapter `raw` 不进入事件或持久化 metadata。OneBot 数组段与 CQ 字符串生成一致的 text/mentions，`@` 只是模块输入，不是 Core 触发条件。
+
+平台白名单在 Runtime 入站边界执行。平台、用户或群组任一已配置维度未命中时，消息会被记录为 `message.dispatch.filtered` 并在落库、事件发布和 LLM 调用之前结束；未配置的维度不参与筛选。
+
+HTTP `sessionId` 字段仅为线协议兼容，Runtime 将其保存为 opaque Web source ID。默认 reply 模块会完成一次 LLM 请求，但不会为 Web 输入推导 transport destination。
+
+## 无 Core Session
+
+`ExecutionContext`、`WorkflowContext`、`ModuleHandlerContext` 与 `EventEnvelope` 只有 trace，没有 session。消息表没有 `session_id`，repository 也不提供按 session 查询历史的 API。迁移旧表时，原值仅写入 message metadata 的 `legacySessionId` 供审计。
+
+私聊、群聊和用户既不会天然共享，也不会天然隔离上下文。需要历史、记忆或 profile 选择的模块必须自行定义 key、状态与消息选择。保留的 heartbeat/memory workflow 只接受调用方显式给出的 context/message IDs，不扫描消息来源推导上下文，也不接入默认消息链。
+
+## 事件身份与错误边界
+
+模块派生事件自动继承 `traceId`，并写入逐级 `causationEventId`、`rootEventId`、`moduleDefinitionId` 与 `moduleInstanceId`。这些字段不能被模块 metadata 或 EventBus interceptor 改写。它们只用于观测和审计，不构成授权或隔离。
+
+广播等待全部匹配模块完成后聚合错误；定向事件只交给目标实例。关闭先停止 ingress，再等待 Runtime 在途 dispatch，停止 ModuleHost，关闭数据库、Web 资源和 Logger。嵌套模块/LLM 错误在日志中只保留安全分类与失败数量，不序列化 provider cause、token 或消息内容。
+
+## 配置、LLM 与数据
+
+Server 从 `KAGUYA_CONFIG_ROOT` 加载 profile registry。每个模块 LLM request 显式选择 `{profileId?, modelTier}`；省略 profile 时使用默认 profile。`light` 与 `heavy` 必须指向两个不同、有效、enabled 的 provider/model target，可跨 provider。选择失败不 fallback。
+
+Provider key 只存在于权限保护的 profile JSON、配置管理器与 provider factory。模块 settings、事件、Prompt、trace 和日志都不接收 key。完整存储约束见 [`@kaguya/config`](../packages/config/README.md)。
+
+SQLite 保存规范化入站消息、LLM trace 和 outbound audit。每个 outbound request 先以 `requested` 落库，transport 完成后原子更新为 `delivered` 或 `failed`；receipt 只保留非敏感字段。系统不提供持久事件队列、自动重试或去重。

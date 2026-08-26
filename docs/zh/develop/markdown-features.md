@@ -1,252 +1,73 @@
----
-title: 文档编写特性
----
+## 选用 Vercel AI SDK Core 的理由
 
-# 文档编写特性
+### 1. 统一的 provider 抽象层
 
-编写者注：本页收录本站用到的**非 VitePress 原生**的插件特性，这些特性需要编写者在 Markdown 中写特定语法才能触发。VitePress 原生的 custom container（`::: tip` / `::: warning` 等）、代码块行号高亮、代码片段导入等特性请参见 [VitePress 官方文档](https://vitepress.dev/guide/markdown)。
+packages/llm 需要对上层暴露一个统一客户端接口，在内部适配具体 provider，业务工作流不能直接导入供应商 SDK（architecture.md:209、design spec 第 209 行）。Vercel AI SDK Core 的核心价值正是把 OpenAI / Anthropic / Google 等不同 provider 归一化到同一套 LanguageModel 接口，天然满足「换 provider 不改业务代码」这个边界要求。
 
-本页遵守[文档写作约定](https://github.com/MaiM-with-u/MaiBot/blob/main/docs/CONTRIBUTE.md)：**内容页禁止使用 Markdown 表格**，请用列表或定义式描述；索引页可以按需使用表格。
+### 2. 内置可测试的 mock model（关键决定因素）
 
-## Mermaid 图表
+项目有一条硬性约束：测试、demo、Promptfoo 回归都必须不依赖远端模型、不读 API key、不访问网络（README.md:14、README.md:53）。
 
-用 ` ```mermaid ` 围栏代码块插入流程图、时序图、类图等。本站通过 `vitepress-plugin-mermaid` 插件支持。也支持 ` ```mmd `（不渲染，仅展示源码，用于教学示例）。
+Vercel AI SDK 提供 ai/test 的 mock model 和 MockLanguageModelV3，demo 直接注入它并按调用顺序返回确定性 JSON（architecture.md:252、design spec 第 29 行）。
+这让整套确定性测试无需自己造一层 provider 抽象，SDK 原生支持。
 
-支持的图表类型：flowchart、sequenceDiagram、classDiagram、stateDiagram、erDiagram、gantt、pie、gitGraph 等。
+### 3. 结构化输出 + trace 友好
 
-**用法示例：**
+LLM 边界需要做结构校验并记录完整调用 trace（请求类别、模型标识、归一化消息、usage、耗时、错误分类等，architecture.md:211-250）。AI SDK Core 的 generateObject/结构化生成能力和标准化的 usage/响应结构，正好对接这套 trace 归一化需求（retryable/non-retryable/cancelled）。
 
-````markdown
-```mermaid
-flowchart TD
-    A[消息到达] --> B[消息管线处理]
-    B --> C{命中命令?}
-    C -->|是| D[执行命令]
-    C -->|否| E[进入对话]
-    D --> F[返回响应]
-    E --> F
-```
-````
+### 4. 只用 Core，不用框架层
 
-**效果预览：**
+文档特意写的是「Vercel AI SDK Core」，而非整套 AI SDK。这符合项目「基础设施原型、不引入重依赖」的一贯取向（如数据库层也刻意不引 ORM，只用 node:sqlite）。Core 只提供 LLM 调用原语，UI/React 相关部分不引入。
 
-```mermaid
-flowchart TD
-    A[消息到达] --> B[消息管线处理]
-    B --> C{命中命令?}
-    C -->|是| D[执行命令]
-    C -->|否| E[进入对话]
-    D --> F[返回响应]
-    E --> F
-```
+## 不同 SDK 的影响维度
 
-> 该插件在消息流程、数据库和运行时等开发文档中实际使用。
+在 Kaguya 里：
 
-## 更新时间线
+单事件流：一条顶层事件带一个 traceId，fan-out 出会话/节点，但共享 trace 血缘（architecture.md:200）。一次完整处理会依次经过 route → reply → state → memory 四类调用。
+多模型：四类 kind 每个都带自己的 modelId（architecture.md，generate 请求必须携带 kind + modelId）。现实中 route 用便宜小模型、reply 用大模型、state/memory 用中等模型是很自然的装配——甚至可能跨 provider（route 用 Gemini Flash、reply 用 Claude）。
+所以真正的问题是：当同一条 trace 里要顺序/并发调用多个异构模型时，SDK 的抽象层会在哪些地方帮你、或坑你。 下面按影响维度拆。
 
-用 `::: timeline <日期>` ... `:::` 容器创建时间线排版。本站通过 `vitepress-markdown-timeline` 插件支持。日期格式 `YYYY-MM-DD`，内部用 Markdown 项目符号列表。
+### 1. 接口归一化 —— 这是"多模型"最核心的分野
 
-**用法示例：**
+Kaguya 要求"业务工作流不能直接导入供应商 SDK"（architecture.md:209）。用官方 SDK 意味着你必须自己在 @kaguya/llm 里写一层归一化——本质是重造 AI SDK Core 的一小块。多模型越多，这层自造代码的分叉成本越高。AI SDK Core 直接把这层送给你。
 
-```
-::: timeline 2026-07-09
-- [1.0.12] 优化 Planner 到 Replyer 的信息传递
-- WebUI：增强麦麦观察离线记录，支持自定义 API 模型列表
-- 首次配置会引导用户把启动时临时 Token 更换为固定 Token
-:::
-```
+### 2. usage / trace 字段的归一化 —— 单事件流下最容易被低估
 
-**效果预览：** [查看时间线渲染效果 →](/changelog/)
+系统每次调用都写 trace，且要求 "归一化 usage、起止时间、耗时"（architecture.md:247）。
 
-> 该插件在 `zh/changelog/index.md` 中实际使用。
+不同 provider 官方 SDK 的 usage 字段命名和结构都不同（prompt_tokens vs inputTokens，是否含 cache/reasoning token…）。单事件流里同一条 traceId 下混着多个 provider 的原始 usage，你必须自己对齐口径，否则 trace 里的 token/耗时无法横向汇总。
+AI SDK Core 已经把 usage 归一到统一结构，四类模型即使跨 provider，写进 llm_traces 的字段口径也是一致的——这直接服务于"单事件流"要能聚合统计的目标。
+这是"单事件流 + 多模型"组合专属的痛点:单模型时字段不一致无所谓,多模型 + 要聚合 trace 时,归一化就是刚需。
 
-## 代码组图标
+### 3. 错误归一化 → 决定重试语义
 
-本站通过 `vitepress-plugin-group-icons` 插件在 `::: code-group` 的标签页上自动显示图标。编写者有**三种**方式触发图标。
+系统把错误归一为 retryable / non-retryable / cancelled（architecture.md:248）。
 
-### 1. 内置关键词自动匹配
+多个 provider 的错误类型、超时/取消信号、限流码各不相同。用官方 SDK,你要为每个 provider 分别映射到这三态。
+AI SDK Core 提供统一的 error 类型和 abort 语义,一套映射覆盖所有模型。单事件流里 route 失败要不要连累整条 trace、能否 cancel 下游,这套判断在统一 error 模型下才写得干净。
 
-标签文本中包含特定关键词时自动出现对应图标。常用关键词包括：
+### 4. 结构化输出 —— 四类 schema 的落点
 
-- **包管理器** — pnpm、npm、yarn、bun、deno
-- **框架** — vue、react、svelte、angular、next、nuxt、astro、solid
-- **工具** — vite、rollup、webpack、esbuild、eslint、tailwind
-- **其他** — tsconfig、gitignore、.env、prisma、gradle
-- **文件扩展名** — 标签文本中包含文件名（如 `vite.config.ts`、`package.json`、`main.py`）时自动匹配：.ts、.js、.py、.json、.yml、.toml、.rs、.go、.html、.css、.scss、.lua、.swift 等数十种
+四类 kind 都要求严格 JSON 结构（architecture.md 的 kind 表）。
 
-> 完整内置标签列表见 [vitepress-plugin-group-icons 官方文档](https://vp.yuy1n.io/features.html)。
+AI SDK Core 的 generateObject + schema 在所有 provider 上行为一致(内部处理 JSON mode / tool-call / grammar 的差异)。多模型下你写一次 schema 校验,不用关心底下是 OpenAI 的 json_schema 还是 Anthropic 的 tool。
+官方 SDK:各家结构化输出机制不同,多模型 = 多套结构化调用代码路径。5. 测试可确定性 —— 多模型时的组合爆炸
+demo 按调用顺序注入 MockLanguageModelV3 返回确定性 JSON（architecture.md:252）。
 
-### 2. 本仓库自定义关键词
+单事件流串起四个模型调用,测试需要一个 mock 层能按序模拟这 4 个异构模型。AI SDK 的 mock model 是统一接口,一个 mock 覆盖全部四类,与真实 provider 无关。
+若用官方 SDK,你要么 mock 四个不同 SDK 的 client,要么先自建抽象再 mock——测试复杂度随模型种类线性上升。
 
-下列关键词也已配置自动匹配（在 `.vitepress/config.mts` 的 `customIcon` 中定义），只要标签文本中含有这些关键词就会自动出现对应图标：
+### 6. 反向代价（选 AI SDK Core 要接受的）
 
-- **`git`** — vscode-icons:file-type-git 图标
-- **`uv`** — vscode-icons:file-type-python 图标
-- **`pip`** — vscode-icons:file-type-python 图标
+公平地说,统一抽象也有成本:
 
-### 3. 标签内联命名图标
+能力最小公分母 / provider 专属特性:某个 provider 的独有参数(如 Anthropic 的 prompt caching、cache breakpoint、某些 reasoning 控制)在统一接口里可能暴露得晚或需要走 providerOptions 逃生口。多模型系统若想精调某一个模型的独家能力,统一抽象会挡一层。
+版本追随:新 provider 特性要等 SDK 适配。官方 SDK 永远最快拿到自家新功能。
+抽象泄漏:极端情况下你仍需针对某模型写 provider-specific 分支,这时统一层反而多绕一圈。
+结论(针对 Kaguya 这个系统)
+在"单事件流 + 多模型"下,SDK 的影响集中在四个归一化点:接口、usage/trace、错误语义、结构化输出——而这四点恰好都是 Kaguya 的硬性设计约束。
 
-在 code-group 的标签中嵌入 `~iconify-id~` 语法，显式指定图标。格式为 `[标签文字 ~iconify图标名~]`，图标名从 [Iconify](https://icon-sets.iconify.design/) 获取（如 `vscode-icons:file-type-git`、`logos:docker-icon`）。
-
-**综合用法示例：**
-
-````markdown
-::: code-group
-
-```bash [稳定版（推荐）~vscode-icons:file-type-git~]
-git clone https://github.com/MaiM-with-u/MaiBot.git
-cd MaiBot
-```
-
-```bash [开发版（尝鲜）~vscode-icons:file-type-git~]
-git clone -b dev https://github.com/MaiM-with-u/MaiBot.git
-cd MaiBot
-```
-
-```bash [pip 安装依赖]
-# 标签含 "pip" 自动出现 Python 图标（本仓库自定义关键词）
-pip install -r requirements.txt
-```
-
-```bash [uv 安装依赖]
-# 标签含 "uv" 自动出现 Python 图标（本仓库自定义关键词）
-uv sync
-```
-
-:::
-````
-
-**效果预览：**
-
-::: code-group
-
-```bash [稳定版 ~vscode-icons:file-type-git~]
-git clone https://github.com/MaiM-with-u/MaiBot.git
-```
-
-```bash [uv 安装]
-uv sync
-```
-
-```bash [pip 安装]
-pip install -r requirements.txt
-```
-
-:::
-
-> 本仓库中，`zh/manual/deployment/installation.md` 使用了 `~vscode-icons:file-type-git~` 内联图标；其他文件中通过 `pnpm`/`npm`/`yarn`/`pip`/`uv` 等关键词自动匹配图标。
-
-## 代码组强制写法与禁止包裹
-
-本站约定：**凡是有语言标注的独立代码块，一律放进单标签 `::: code-group` 内**，标签显式指定 `~vscode-icons:<id>~` 内联图标，不依赖关键词匹配。下面用 S1–S5 说明强制写法与禁止包裹规则。
-
-### S1 独立代码块必须外包 code-group
-
-即使一个 code-group 里只有一个代码块，也必须用 `::: code-group` 包裹，并给标签配内联图标：
-
-```markdown
-::: code-group
-
-```toml [TOML ~vscode-icons:file-type-toml~]
-[bot]
-platform = "qq"
-```
-
-:::
-```
-
-禁止不带 code-group 的裸语言 fence（` ```toml `、` ```python `、` ```bash ` 等）。
-
-### S2 标签必须显式内联图标
-
-code-group 标签要写成 `[标签文字 ~iconify图标名~]`，显式给出图标，**不要依赖关键词自动匹配**：
-
-- ❌ ` ```toml [配置] ` ` — 无图标
-- ✅ ` ```toml [配置 ~vscode-icons:file-type-toml~] ` — 显式图标
-
-图标名从 [Iconify](https://icon-sets.iconify.design/) 获取，常用：`vscode-icons:file-type-toml`、`vscode-icons:file-type-python`、`vscode-icons:file-type-json`、`vscode-icons:file-type-shell`、`vscode-icons:file-type-git`、`logos:docker-icon`。
-
-### S3 无语言标注的展示块不包裹
-
-没有语言标注的裸 fence（` ``` ` 无语言），用于展示目录树、日志输出、流程步骤、ASCII 图等**纯文本内容**，不属于代码，不需要外包 code-group，保持原样即可：
-
-````markdown
-```
-my-plugin/
-├── _manifest.json
-└── plugin.py
-```
-````
-
-### S4 mermaid / mmd 不包裹
-
-Mermaid 流程图（` ```mermaid `）用于渲染图表，` ```mmd ` 用于展示 Mermaid 源码，两者都必须保持独立 fence，**禁止**外包 code-group，否则无法渲染或失去展示语义。
-
-### S5 代码组内至少一个代码块、不嵌套
-
-`::: code-group` 内必须包含一个或多个 ` ``` ` fence，且**不能在 code-group 内再嵌套 code-group**。多个代码块用同一逻辑主题整理到一组，标签文字简短。
-
-### en 镜像约定
-
-翻译成英文时，code-group 结构、图标 ID、代码内容必须与中文版**完全一致**（术语可翻译，代码/字段/图标不翻译）。标签文字可译，但图标 `~vscode-icons:<id>~` 原样保留。
-
-## 可选 Vue 组件
-
-以下两个 Vue 组件已在主题中注册，可以在 Markdown 中直接以 HTML 标签形式使用。组件源码位于 `.vitepress/theme/components/` 目录，在 `.vitepress/theme/index.ts` 中通过 `app.component()` 注册。
-
-> 当前暂无 MD 文件使用这些组件，按需启用。
-
-### xgplayer 视频播放器
-
-- **`url`** (必填) — 视频地址
-- **`poster`** (可选, 默认 `''`) — 封面图地址
-- **`width`** (可选, 默认 `'100%'`) — 播放器宽度
-- **`height`** (可选, 默认 `'auto'`) — 播放器高度
-
-```html
-<xgplayer url="https://litev4.github.io/rickroll/rickroll.mp4" width="100%" height="auto" />
-```
-
-**效果预览：**
-
-<xgplayer url="https://litev4.github.io/rickroll/rickroll.mp4" width="100%" height="auto" />
-
-### Bilibili iframe 嵌入
-
-除了 xgplayer 组件，也可以直接用 `<iframe>` 嵌入哔哩哔哩等第三方平台的视频：
-
-```html
-<iframe 
-style="width:100%; aspect-ratio:16/9; margin-top: 2em;" 
-src="//player.bilibili.com/player.html?bvid=BV1amAneGE3P" 
-frameborder="0" 
-allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" 
-allowfullscreen>
-</iframe>
-```
-
-**效果预览：**
-
-<iframe 
-style="width:100%; aspect-ratio:16/9; margin-top: 2em;" 
-src="//player.bilibili.com/player.html?bvid=BV1amAneGE3P" 
-frameborder="0" 
-allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" 
-allowfullscreen>
-</iframe>
-
-### Linkcard 链接卡片
-
-- **`url`** (必填) — 链接地址
-- **`title`** (必填) — 卡片标题
-- **`description`** (必填) — 卡片描述
-- **`logo`** (可选, 默认 `''`) — 左侧 logo 图片地址
-
-```html
-<Linkcard url="https://github.com/MaiM-with-u/MaiBot" title="MaiBot" description="一个智能 QQ 群聊天机器人" logo="/title_img/mai.png" />
-```
-
-**效果预览：**
-
-<Linkcard url="https://github.com/MaiM-with-u/MaiBot" title="MaiBot" description="一个智能 QQ 群聊天机器人" logo="/title_img/mai.png" />
-
+用 AI SDK Core:多模型的差异被吸收在 @kaguya/llm 边界之内,单事件流的 trace 聚合、错误分类、确定性测试都"一次编写、全模型适用"。代价是牺牲少量 provider 独家能力的即时可达性。
+用 官方 SDK:你会在 @kaguya/llm 里手工重建上述归一化层,模型/provider 越多,这层越重、越易分叉;换来的是对每个模型独家能力的完全掌控。
+用 LangChain:也能统一,但它带来 chain/runnable/memory 等一整套自有概念,与 Kaguya 已经自建的事件总线、Prompt 编译、trace 体系职责重叠,反而增加认知与耦合成本——对一个刻意"不引 ORM、只用 Core"的极简原型不划算。
+对 Kaguya 这种多模型异构但要求单一 trace 血缘可聚合的系统,AI SDK Core 的取舍是合理的:它把"多模型"的复杂度压在一个统一边界里,让"单事件流"的可观测性得以成立。
