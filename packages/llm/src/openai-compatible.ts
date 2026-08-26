@@ -8,6 +8,7 @@ import { APICallError, RetryError, generateText } from "ai";
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_RETRIES = 2;
+const INPUT_PREVIEW_CHAR_LIMIT = 160;
 
 // These headers can change the HTTP connection or request framing. They are
 // controlled by the SDK/fetch implementation and must not be supplied by a
@@ -95,11 +96,28 @@ export interface OpenAiCompatibleLogEvent {
   model: string;
   endpoint: string;
   attempt: number;
+  input?: OpenAiCompatibleInputLog;
   durationMs?: number;
   status?: number;
   usage?: OpenAiCompatibleUsage;
   errorKind?: OpenAiCompatibleErrorKind;
   errorMessage?: string;
+}
+
+export interface OpenAiCompatibleInputLog {
+  format: "openai-compatible.chat";
+  modality: "text" | "multimodal";
+  messages: readonly OpenAiCompatibleInputMessageLog[];
+  temperature: number;
+  maxRetries: number;
+  timeoutMs: number;
+}
+
+export interface OpenAiCompatibleInputMessageLog {
+  role: "system" | "user";
+  contentTypes: readonly string[];
+  charCount: number;
+  preview: string;
 }
 
 export interface OpenAiCompatibleLogger {
@@ -167,6 +185,7 @@ export class OpenAiCompatibleLlmService {
         model: configuration.model,
         endpoint: configuration.logEndpoint,
         attempt: attempts,
+        input: inputLog(configuration),
       });
       return this.#fetch(appendRawQuery(input, configuration.rawQuery), {
         ...init,
@@ -323,6 +342,41 @@ function normalizeRequest(request: OpenAiCompatibleRequest): NormalizedRequest {
       : { providerApiKey: authentication.providerApiKey }),
     headers: authentication.headers,
   };
+}
+
+function inputLog(configuration: NormalizedRequest): OpenAiCompatibleInputLog {
+  const messages: OpenAiCompatibleInputMessageLog[] = [
+    inputMessageLog("system", configuration.systemPrompt),
+    inputMessageLog("user", configuration.userPrompt),
+  ];
+  return {
+    format: "openai-compatible.chat",
+    modality: messages.some((message) => !message.contentTypes.includes("text"))
+      ? "multimodal"
+      : "text",
+    messages,
+    temperature: configuration.temperature,
+    maxRetries: configuration.maxRetries,
+    timeoutMs: configuration.timeoutMs,
+  };
+}
+
+function inputMessageLog(
+  role: OpenAiCompatibleInputMessageLog["role"],
+  value: string,
+): OpenAiCompatibleInputMessageLog {
+  return {
+    role,
+    contentTypes: ["text"],
+    charCount: value.length,
+    preview: previewText(value),
+  };
+}
+
+function previewText(value: string): string {
+  return value.length <= INPUT_PREVIEW_CHAR_LIMIT
+    ? value
+    : `${value.slice(0, INPUT_PREVIEW_CHAR_LIMIT)}...`;
 }
 
 function resolveProviderEndpoint(baseUrl: string | undefined): {
