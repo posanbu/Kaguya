@@ -1,0 +1,30 @@
+{
+  "name": "maibot-docs",
+  "version": "2.0.0",
+  "description": "MaiBot Documentation",
+  "scripts": {
+    "docs:dev": "vitepress dev",
+    "docs:build": "vitepress build",
+    "docs:preview": "vitepress preview"
+  },
+  "devDependencies": {
+    "@nolebase/vitepress-plugin-enhanced-readabilities": "^2.18.2",
+    "@nolebase/vitepress-plugin-inline-link-preview": "^2.18.2",
+    "@types/dom-view-transitions": "^1.0.6",
+    "medium-zoom": "^1.1.0",
+    "mermaid": "^11.12.3",
+    "nprogress-v2": "^1.1.10",
+    "vitepress": "^1.6.4",
+    "vitepress-plugin-group-icons": "^1.7.1",
+    "vitepress-plugin-llms": "^1.13.0",
+    "vitepress-markdown-timeline": "^1.2.2",
+    "vitepress-plugin-mermaid": "^2.0.17",
+    "xgplayer": "^3.0.24"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
+  "packageManager": "pnpm@10.30.3"
+}

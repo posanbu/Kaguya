@@ -371,7 +371,7 @@ describe("OpenAiCompatibleLlmService", () => {
     expect(fetch).toHaveBeenCalledOnce();
   });
 
-  it("emits structured logs without credentials or prompt content", async () => {
+  it("emits structured logs with input shape and bounded previews", async () => {
     const events: OpenAiCompatibleLogEvent[] = [];
     const logger = {
       info: vi.fn((event: OpenAiCompatibleLogEvent) => events.push(event)),
@@ -396,10 +396,32 @@ describe("OpenAiCompatibleLlmService", () => {
       "llm.call.started",
       "llm.call.succeeded",
     ]);
+    expect(events[0]).toMatchObject({
+      event: "llm.call.started",
+      input: {
+        format: "openai-compatible.chat",
+        modality: "text",
+        temperature: 0,
+        maxRetries: 2,
+        timeoutMs: 30_000,
+        messages: [
+          {
+            role: "system",
+            contentTypes: ["text"],
+            charCount: 16,
+            preview: "You are helpful.",
+          },
+          {
+            role: "user",
+            contentTypes: ["text"],
+            charCount: 5,
+            preview: "Hello",
+          },
+        ],
+      },
+    });
     const serialized = JSON.stringify(events);
     expect(serialized).not.toContain(baseRequest.apiKey);
-    expect(serialized).not.toContain(baseRequest.systemPrompt);
-    expect(serialized).not.toContain(baseRequest.userPrompt);
     expect(serialized).not.toContain("private answer");
   });
 
@@ -482,7 +504,6 @@ describe("OpenAiCompatibleLlmService", () => {
 
     const serialized = JSON.stringify(events);
     expect(serialized).not.toContain(baseRequest.apiKey);
-    expect(serialized).not.toContain(baseRequest.systemPrompt);
     expect(serialized).not.toContain(reflectedMessage);
     expect(logger.error).toHaveBeenCalledWith(
       expect.objectContaining({

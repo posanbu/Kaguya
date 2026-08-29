@@ -93,12 +93,16 @@ are rejected with `CONFIG_UNSUPPORTED_VERSION`; callers must back up the store
 and initialize a new index. No automatic migration or deletion is performed.
 
 At server startup, `KAGUYA_CONFIG_ROOT` is loaded into a frozen profile
-registry. The default profile and both tiers must be executable before HTTP or
-adapter ingress starts. A module may set `profileId` and `modelTier` to select a
-different target. Failure of that selected profile affects only that request;
-there is no fallback to the default profile, another provider, or another
-model. The legacy `KAGUYA_LLM_API_KEY`, `KAGUYA_LLM_BASE_URL`, and
-`KAGUYA_LLM_MODEL` variables are rejected with a value-free migration error.
+registry. When the store is missing, the default profile is incomplete, or its
+optional warnings are unreviewed, HTTP starts in setup mode so the Web UI can
+initialize or repair the default profile. Runtime and adapter ingress remain
+stopped until the server is restarted. Corrupt stores and unsafe or
+inaccessible paths still fail startup and are never overwritten by setup. A
+module may set `profileId` and `modelTier` to select a different target.
+Failure of that selected profile affects only that request; there is no
+fallback to the default profile, another provider, or another model. The
+legacy `KAGUYA_LLM_API_KEY`, `KAGUYA_LLM_BASE_URL`, and `KAGUYA_LLM_MODEL`
+variables are rejected with a value-free migration error.
 
 Existing incomplete profiles can still be opened and edited for repair. The
 provider execution layer returns provider/network/authentication failures

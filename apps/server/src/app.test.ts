@@ -9,9 +9,11 @@ import {
   getLogContext,
   type LogContext,
 } from "@kaguya/logger";
+import { configurationSetupGuidance } from "@kaguya/config";
 
 import { createHttpApplication } from "./app.js";
 import type { ServerConfig } from "./config.js";
+import type { ConfigurationSetup } from "./setup.js";
 
 const gatewayToken = "test-gateway-token-12345";
 const config: ServerConfig = {
@@ -26,6 +28,7 @@ const config: ServerConfig = {
   configRoot: "/tmp/kaguya-config-test",
   development: false,
   webDistPath: "/tmp/kaguya-web-test",
+  gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
   napcat: {
     enabled: false,
     adapterId: "napcat.qq.main",
@@ -39,6 +42,122 @@ function authorization(scheme = "Bearer") {
 }
 
 describe("application API gateway", () => {
+  it("serves first-run setup status and accepts initial configuration", async () => {
+    const setup: ConfigurationSetup = {
+      inspect: vi.fn(async () => ({
+        status: "setup_required" as const,
+        guidance: configurationSetupGuidance,
+      })),
+      initialize: vi.fn(async () => undefined),
+    };
+    const app = await createHttpApplication({ config, setup });
+
+    const status = await app.inject({ method: "GET", url: "/api/v1/setup" });
+    expect(status.statusCode).toBe(200);
+    expect(status.json()).toMatchObject({
+      data: { status: "setup_required", guidance: configurationSetupGuidance },
+    });
+
+    const configured = await app.inject({
+      method: "POST",
+      url: "/api/v1/setup",
+      headers: authorization(),
+      payload: {
+        profileName: "default",
+        baseUrl: "https://api.example/v1",
+        apiKey: "provider-secret",
+        lightModel: "small-model",
+        heavyModel: "large-model",
+        acknowledgeOptional: true,
+      },
+    });
+    expect(configured.statusCode).toBe(201);
+    expect(configured.json()).toEqual({
+      data: { status: "configured", restartRequired: true },
+    });
+    expect(setup.initialize).toHaveBeenCalledWith({
+      profileName: "default",
+      baseUrl: "https://api.example/v1",
+      apiKey: "provider-secret",
+      lightModel: "small-model",
+      heavyModel: "large-model",
+      acknowledgeOptional: true,
+    });
+
+    const message = await app.inject({
+      method: "POST",
+      url: "/api/v1/messages",
+      headers: authorization(),
+      payload: requestBody,
+    });
+    expect(message.statusCode).toBe(503);
+    expect(message.json()).toMatchObject({
+      error: { code: "configuration_setup_required" },
+    });
+    await app.close();
+  });
+
+  it("rejects identical light and heavy models", async () => {
+    const setup: ConfigurationSetup = {
+      inspect: vi.fn(async () => ({
+        status: "setup_required" as const,
+        guidance: configurationSetupGuidance,
+      })),
+      initialize: vi.fn(async () => undefined),
+    };
+    const app = await createHttpApplication({ config, setup });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/setup",
+      headers: authorization(),
+      payload: {
+        profileName: "default",
+        baseUrl: "https://api.example/v1",
+        apiKey: "provider-secret",
+        lightModel: "same-model",
+        heavyModel: "same-model",
+        acknowledgeOptional: true,
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      error: { code: "invalid_request" },
+    });
+    expect(setup.initialize).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("does not allow setup to overwrite a ready configuration", async () => {
+    const setup: ConfigurationSetup = {
+      inspect: vi.fn(async () => ({ status: "ready" as const })),
+      initialize: vi.fn(async () => undefined),
+    };
+    const app = await createHttpApplication({ config, setup });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/setup",
+      headers: authorization(),
+      payload: {
+        profileName: "replacement",
+        baseUrl: "https://api.example/v1",
+        apiKey: "replacement-secret",
+        lightModel: "replacement-light",
+        heavyModel: "replacement-heavy",
+        acknowledgeOptional: true,
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      error: { code: "configuration_not_required" },
+    });
+    expect(setup.initialize).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it("exposes health, OpenAPI, and only the core message ingress contract", async () => {
     const app = await createApiGateway({
       config,

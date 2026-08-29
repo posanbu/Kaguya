@@ -48,6 +48,7 @@ function config(databasePath: string): ServerConfig {
     configRoot: join(dirnameOf(databasePath), "config"),
     development: false,
     webDistPath: join(dirnameOf(databasePath), "web"),
+    gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
     napcat: {
       enabled: false,
       adapterId: "napcat.qq.main",
