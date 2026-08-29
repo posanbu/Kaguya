@@ -43,7 +43,7 @@ describe("Kaguya logger", () => {
 
     await Promise.all([
       runWithLogContext(
-        { traceId: "trace-a", sessionId: "session-a" },
+        { traceId: "trace-a", requestId: "request-a" },
         async () => {
           await Promise.resolve();
           runWithLogContext({ nodeId: "node-a" }, () => {
@@ -52,7 +52,7 @@ describe("Kaguya logger", () => {
         },
       ),
       runWithLogContext(
-        { traceId: "trace-b", sessionId: "session-b" },
+        { traceId: "trace-b", requestId: "request-b" },
         async () => {
           await new Promise((resolve) => setTimeout(resolve, 0));
           logger.info({ event: "message.received" });
@@ -65,12 +65,12 @@ describe("Kaguya logger", () => {
     );
     expect(byTrace["trace-a"]).toMatchObject({
       traceId: "trace-a",
-      sessionId: "session-a",
+      requestId: "request-a",
       nodeId: "node-a",
     });
     expect(byTrace["trace-b"]).toMatchObject({
       traceId: "trace-b",
-      sessionId: "session-b",
+      requestId: "request-b",
     });
     expect(getLogContext()).toBeUndefined();
   });

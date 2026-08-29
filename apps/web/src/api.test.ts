@@ -18,11 +18,7 @@ describe("sendMessage", () => {
       );
 
     await expect(
-      sendMessage(
-        config,
-        { sessionId: " session-1 ", text: " Hello " },
-        request,
-      ),
+      sendMessage(config, { text: " Hello " }, request),
     ).resolves.toEqual({ status: "accepted", requestId: "request-1" });
     expect(request).toHaveBeenCalledWith("/api/v1/messages", {
       method: "POST",
@@ -30,7 +26,7 @@ describe("sendMessage", () => {
         authorization: "Bearer test-gateway-token",
         "content-type": "application/json",
       },
-      body: JSON.stringify({ sessionId: "session-1", text: " Hello " }),
+      body: JSON.stringify({ text: " Hello " }),
     });
   });
 
@@ -49,7 +45,7 @@ describe("sendMessage", () => {
     );
 
     await expect(
-      sendMessage(config, { sessionId: "session-1", text: "Hello" }, request),
+      sendMessage(config, { text: "Hello" }, request),
     ).rejects.toMatchObject({
       code: "core_unavailable",
       status: 503,
@@ -61,11 +57,7 @@ describe("sendMessage", () => {
     const request = vi.fn<typeof fetch>();
 
     await expect(
-      sendMessage(
-        { token: "" },
-        { sessionId: "session-1", text: "Hello" },
-        request,
-      ),
+      sendMessage({ token: "" }, { text: "Hello" }, request),
     ).rejects.toEqual(
       expect.objectContaining<Partial<GatewayRequestError>>({
         code: "missing_token",
@@ -80,7 +72,7 @@ describe("sendMessage", () => {
       .mockResolvedValue(Response.json({ status: "ok" }, { status: 202 }));
 
     await expect(
-      sendMessage(config, { sessionId: "session-1", text: "Hello" }, request),
+      sendMessage(config, { text: "Hello" }, request),
     ).rejects.toMatchObject({ code: "invalid_response", status: 202 });
   });
 });

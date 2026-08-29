@@ -10,7 +10,6 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import { dispatchEvent } from "./dispatch.js";
-import { memoryScheduleTickEvent } from "./events.js";
 
 const NOW = "2026-08-14T00:00:00.000Z";
 const inputEvent = defineEvent(
@@ -114,24 +113,5 @@ describe("dispatchEvent", () => {
       name: "EventValidationError",
       phase: "payload",
     });
-  });
-
-  it("rejects an inverted explicit memory window", () => {
-    expect(() =>
-      memoryScheduleTickEvent.create(
-        {
-          id: "memory-1",
-          source: "test",
-          occurredAt: NOW,
-          traceId: "trace-memory",
-          metadata: {},
-        },
-        {
-          from: "2026-08-14T01:00:00.000Z",
-          to: NOW,
-          contexts: [],
-        },
-      ),
-    ).toThrow();
   });
 });

@@ -265,20 +265,6 @@ button:disabled {
   border-bottom: 1px solid #e3e7eb;
 }
 
-.session-label {
-  max-width: min(50%, 320px);
-  overflow: hidden;
-  padding: 5px 8px;
-  border: 1px solid #dfe3e8;
-  border-radius: 5px;
-  background: #f7f8fa;
-  color: #59626e;
-  font-family: "Cascadia Code", Consolas, monospace;
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .message-list {
   overflow-y: auto;
   padding: 22px;
@@ -478,10 +464,6 @@ button:disabled {
 
   .chat-heading {
     align-items: center;
-  }
-
-  .session-label {
-    max-width: 48%;
   }
 
   .message-row {

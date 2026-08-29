@@ -6,12 +6,12 @@ Kaguya 是一个事件驱动、模块可插拔的 TypeScript AI Bot Runtime。�
 
 - `KaguyaRuntime` 统一持有 SQLite、EventBus、ModuleHost、LLM execution port 和 outbound transport registry；
 - 入站消息先落库并广播 `message.ingested`；模块自行过滤、组织上下文、请求 LLM 和选择出站目标；
-- Core 与 SDK 没有 session 概念，不根据私聊、群聊、用户或 HTTP 字段建立或隔离历史；
+- 入站消息不包含分组标识，Core 不根据私聊、群聊、用户或 HTTP 字段建立或隔离历史；
 - Fastify 同端口提供 UI、`/healthz`、OpenAPI 和受 Bearer Token 保护的消息 API；
 - 开发环境由 Fastify 内挂 Vite middleware，HMR 不需要第二个 Web 服务；
 - NapCat 可选且独立重连，断线不会影响 HTTP 和 Web UI；
 - 开发默认 pretty 日志、生产默认 JSON，并统一关联 request、trace、event 和 workflow node；
-- 默认 demo 模块链为 `always filter → LLM reply → outbound request`；heartbeat 与 memory 不接入消息链。
+- 默认 demo 模块链为 `always filter → LLM reply → outbound request`。
 
 ## 快速开始
 
@@ -51,7 +51,7 @@ pnpm start
 | `pnpm lint`        | 运行 ESLint                                   |
 | `pnpm prompt:test` | 在阻断外部出口后验证四类 Prompt 结构          |
 
-`pnpm demo` 写入 `.data/kaguya-demo.sqlite`，与 Server 数据库隔离。Server 本身不会定时或自动触发 heartbeat/memory。
+`pnpm demo` 写入 `.data/kaguya-demo.sqlite`，与 Server 数据库隔离。
 
 ## 统一配置
 
@@ -83,7 +83,7 @@ Server 不从环境变量读取 provider key、base URL 或 model。检测到旧
 ```text
 apps/server/        唯一 composition root：HTTP、Web、NapCat、Runtime、关闭流程
 apps/web/           React/Vite 同源浏览器客户端
-apps/demo/          heartbeat/memory/message 的显式演示 runner
+apps/demo/          确定性消息模块链的显式演示 runner
 packages/runtime/   消息 ingress、模块装配、LLM execution 与 outbound transport
 packages/engine/    EventBus 与 WorkflowEngine
 packages/modules/   标准消息事件与最小 filter/LLM demo 模块
@@ -107,4 +107,4 @@ packages/sdk/       事件、模块、节点与工作流定义 API
 
 ## 当前边界
 
-模块是受信任的同进程代码，可向任意已注册 transport destination 发消息。系统没有持久事件队列、重试、去重、热更新或模块沙箱。HTTP `sessionId` 只作为兼容线协议中的 opaque source ID；HTTP `202 accepted` 不返回模型回答，也不会自动推导 Web 出站地址。
+模块是受信任的同进程代码，可向任意已注册 transport destination 发消息。系统没有持久事件队列、重试、去重、热更新或模块沙箱。HTTP 消息只携带文本；`202 accepted` 不返回模型回答，也不会自动推导 Web 出站地址。旧配置索引和旧 SQLite 格式会被明确拒绝，不会自动迁移或删除。

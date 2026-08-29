@@ -16,7 +16,6 @@ import {
   sendMessage,
 } from "./api.js";
 
-const SESSION_ID_KEY = "kaguya.sessionId";
 const TOKEN_KEY = "kaguya.gatewayToken";
 
 type DeliveryState = "sending" | "accepted" | "failed";
@@ -32,9 +31,6 @@ interface ChatMessage {
 }
 
 export function App() {
-  const [sessionId, setSessionId] = useState(() =>
-    readStorage(localStorage, SESSION_ID_KEY, createSessionId()),
-  );
   const [token, setToken] = useState(() =>
     readStorage(sessionStorage, TOKEN_KEY, ""),
   );
@@ -51,7 +47,6 @@ export function App() {
     !isSending && draft.trim().length > 0 && draftLength <= MAX_MESSAGE_LENGTH;
 
   const persistConnection = () => {
-    localStorage.setItem(SESSION_ID_KEY, sessionId.trim());
     sessionStorage.setItem(TOKEN_KEY, token);
   };
 
@@ -88,7 +83,7 @@ export function App() {
     setDraft("");
 
     try {
-      const response = await sendMessage({ token }, { sessionId, text });
+      const response = await sendMessage({ token }, { text });
       setMessages((current) =>
         current.map((message) =>
           message.id === id
@@ -181,19 +176,6 @@ export function App() {
             </div>
           </label>
 
-          <label className="field">
-            <span>会话 ID</span>
-            <input
-              type="text"
-              value={sessionId}
-              onChange={(event) => setSessionId(event.target.value)}
-              onBlur={persistConnection}
-              maxLength={256}
-              placeholder="web-xxxxxxxx"
-              autoComplete="off"
-            />
-          </label>
-
           <div className="boundary-note">
             <p>当前服务仅接受消息。</p>
             <span>模型配置和回复由核心层管理。</span>
@@ -203,12 +185,9 @@ export function App() {
         <section className="chat-panel" aria-labelledby="chat-title">
           <header className="chat-heading">
             <div>
-              <p className="eyebrow">当前会话</p>
+              <p className="eyebrow">消息入口</p>
               <h2 id="chat-title">消息</h2>
             </div>
-            <span className="session-label" title={sessionId || "未设置会话"}>
-              {sessionId || "未设置会话"}
-            </span>
           </header>
 
           <div className="message-list" aria-live="polite">
@@ -337,10 +316,6 @@ function readStorage(storage: Storage, key: string, fallback: string): string {
   } catch {
     return fallback;
   }
-}
-
-function createSessionId(): string {
-  return `web-${crypto.randomUUID().slice(0, 8)}`;
 }
 
 function formatTime(value: Date): string {

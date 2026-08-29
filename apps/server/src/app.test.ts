@@ -32,7 +32,7 @@ const config: ServerConfig = {
     reconnectMs: 3000,
   },
 };
-const requestBody = { sessionId: "session-1", text: "Hello" };
+const requestBody = { text: "Hello" };
 
 function authorization(scheme = "Bearer") {
   return { authorization: `${scheme} ${gatewayToken}` };
@@ -65,9 +65,8 @@ describe("application API gateway", () => {
               content: {
                 "application/json": {
                   schema: {
-                    required: ["sessionId", "text"],
+                    required: ["text"],
                     properties: {
-                      sessionId: { type: "string" },
                       text: { type: "string" },
                     },
                   },
@@ -204,33 +203,21 @@ describe("application API gateway", () => {
     await app.close();
   });
 
-  it("uses the same Unicode length semantics as the OpenAPI schema", async () => {
+  it("rejects the removed sessionId request field", async () => {
     const enqueue = vi.fn(() => Promise.resolve());
     const app = await createApiGateway({
       config,
       messageIngress: { enqueue },
     });
-    const maximumLengthSessionId = "\u{1f600}".repeat(256);
-
-    const accepted = await app.inject({
-      method: "POST",
-      url: "/api/v1/messages",
-      headers: authorization(),
-      payload: { ...requestBody, sessionId: maximumLengthSessionId },
-    });
     const rejected = await app.inject({
       method: "POST",
       url: "/api/v1/messages",
       headers: authorization(),
-      payload: {
-        ...requestBody,
-        sessionId: `${maximumLengthSessionId}\u{1f600}`,
-      },
+      payload: { ...requestBody, sessionId: "legacy-session" },
     });
 
-    expect(accepted.statusCode).toBe(202);
     expect(rejected.statusCode).toBe(400);
-    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(enqueue).not.toHaveBeenCalled();
     await app.close();
   });
 
@@ -269,7 +256,7 @@ describe("application API gateway", () => {
         ...authorization("bearer"),
         "x-request-id": "request-123",
       },
-      payload: { sessionId: " session-1 ", text: " Hello " },
+      payload: { text: " Hello " },
     });
 
     expect(response.statusCode).toBe(202);
@@ -278,14 +265,13 @@ describe("application API gateway", () => {
     });
     expect(enqueue).toHaveBeenCalledTimes(1);
     expect(enqueue).toHaveBeenCalledWith({
-      sessionId: "session-1",
       text: " Hello ",
       requestId: "request-123",
     });
     await app.close();
   });
 
-  it("propagates request context without treating sourceId as a session", async () => {
+  it("propagates request context", async () => {
     let capturedContext: Readonly<LogContext> | undefined;
     const app = await createApiGateway({
       config,
@@ -393,7 +379,7 @@ describe("application API gateway", () => {
       method: "POST",
       url: "/api/v1/messages",
       headers: authorization(),
-      payload: { sessionId: "session-1", text: "   " },
+      payload: { text: "   " },
     });
 
     expect(response.statusCode).toBe(400);
@@ -418,7 +404,7 @@ describe("application API gateway", () => {
         ...authorization(),
         "content-type": "application/json",
       },
-      payload: '{"sessionId":"session-1",',
+      payload: '{"text":"unfinished",',
     });
 
     expect(response.statusCode).toBe(400);
@@ -450,7 +436,6 @@ describe("application API gateway", () => {
       url: "/api/v1/messages",
       headers: authorization(),
       payload: {
-        sessionId: "session-1",
         text: "x".repeat(300_000),
       },
     });
@@ -574,11 +559,7 @@ function fakeIngress(): MessageIngress {
 }
 
 interface MessageIngress {
-  enqueue(command: {
-    sessionId: string;
-    text: string;
-    requestId: string;
-  }): Promise<void>;
+  enqueue(command: { text: string; requestId: string }): Promise<void>;
 }
 
 function createApiGateway(options: {
@@ -590,12 +571,7 @@ function createApiGateway(options: {
     options.messageIngress === undefined
       ? undefined
       : {
-          dispatch(message: {
-            kind: "web";
-            sessionId: string;
-            text: string;
-            requestId: string;
-          }) {
+          dispatch(message: { kind: "web"; text: string; requestId: string }) {
             const { kind: _kind, ...command } = message;
             return (
               options.messageIngress?.enqueue(command) ?? Promise.resolve()

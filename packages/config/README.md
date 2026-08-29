@@ -87,9 +87,10 @@ selection is never inferred from provider model-array order.
 
 `updateProfile()` replaces the complete `ai`, `platforms`, and `plugins`
 settings set; it is not a partial merge. The current default profile may be
-edited, but it cannot be renamed or deleted. Legacy session-binding APIs remain
-for configuration-store compatibility, but the Runtime and module SDK never
-consult them.
+edited, but it cannot be renamed or deleted. The index format is version 2 and
+contains only profile metadata plus the default profile ID. Version 1 indexes
+are rejected with `CONFIG_UNSUPPORTED_VERSION`; callers must back up the store
+and initialize a new index. No automatic migration or deletion is performed.
 
 At server startup, `KAGUYA_CONFIG_ROOT` is loaded into a frozen profile
 registry. The default profile and both tiers must be executable before HTTP or

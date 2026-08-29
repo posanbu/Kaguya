@@ -6,7 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import type { OutboundMessageRecord } from "@kaguya/schema";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { KaguyaDatabase } from "./index.js";
+import { DatabaseFormatError, KaguyaDatabase } from "./index.js";
 
 const directories: string[] = [];
 
@@ -24,7 +24,8 @@ function databasePath(): string {
 
 describe("KaguyaDatabase", () => {
   it("stores messages without a Core session", () => {
-    const database = KaguyaDatabase.open(databasePath());
+    const path = databasePath();
+    const database = KaguyaDatabase.open(path);
     database.migrate();
     database.messages.insert({
       id: "message-1",
@@ -43,9 +44,22 @@ describe("KaguyaDatabase", () => {
     });
     expect(database.messages.listRecent(10)).toHaveLength(1);
     database.close();
+
+    const inspected = new DatabaseSync(path);
+    expect(
+      inspected
+        .prepare("SELECT value FROM kaguya_metadata WHERE key = ?")
+        .get("format_version"),
+    ).toEqual({ value: "2" });
+    const tables = inspected
+      .prepare("SELECT name FROM sqlite_schema WHERE type = 'table'")
+      .all()
+      .map((row) => row.name);
+    expect(tables).not.toContain("memories");
+    inspected.close();
   });
 
-  it("migrates legacy session_id into metadata and removes the column", () => {
+  it("rejects a legacy database without modifying schema or data", () => {
     const path = databasePath();
     const legacy = new DatabaseSync(path);
     legacy.exec(`
@@ -64,60 +78,64 @@ describe("KaguyaDatabase", () => {
       ) STRICT;
       CREATE INDEX messages_session_occurred_at_idx
         ON messages (session_id, occurred_at);
-      CREATE TABLE llm_traces (
-        id TEXT PRIMARY KEY,
-        trace_id TEXT NOT NULL,
-        workflow_id TEXT NOT NULL,
-        node_id TEXT NOT NULL,
-        kind TEXT NOT NULL,
-        model_id TEXT NOT NULL,
-        prompt_json TEXT NOT NULL,
-        started_at TEXT NOT NULL,
-        completed_at TEXT NOT NULL,
-        duration_ms REAL NOT NULL,
-        status TEXT NOT NULL,
-        response_json TEXT,
-        usage_json TEXT,
-        error_json TEXT
-      ) STRICT;
       INSERT INTO messages VALUES (
         'legacy-message', 'qq:group:778899', 'user', 'old',
         '2026-08-13T00:00:00.000Z', '{"existing":true}'
       );
-      INSERT INTO messages VALUES (
-        'legacy-malformed', 'qq:private:112233', 'user', 'also old',
-        '2026-08-13T00:00:01.000Z', 'not-json'
-      );
     `);
+    const beforeSchema = legacy
+      .prepare(
+        "SELECT type, name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name",
+      )
+      .all();
+    const beforeMessages = legacy.prepare("SELECT * FROM messages").all();
     legacy.close();
 
     const database = KaguyaDatabase.open(path);
-    database.migrate();
-    expect(database.messages.getById("legacy-message")).toMatchObject({
-      metadata: { existing: true, legacySessionId: "qq:group:778899" },
-    });
-    expect(database.messages.getById("legacy-malformed")).toMatchObject({
-      metadata: {
-        legacySessionId: "qq:private:112233",
-        legacyMetadata: "not-json",
-      },
-    });
-    expect(database.messages.listRecent(10)).toHaveLength(2);
+    expect(() => database.migrate()).toThrowError(DatabaseFormatError);
+    expect(() => database.migrate()).toThrowError(
+      expect.objectContaining({ code: "DATABASE_UNSUPPORTED_FORMAT" }),
+    );
     database.close();
 
     const inspected = new DatabaseSync(path);
-    const columns = inspected
-      .prepare("PRAGMA table_info(messages)")
-      .all()
-      .map((row) => row.name);
-    expect(columns).not.toContain("session_id");
-    const traceColumns = inspected
-      .prepare("PRAGMA table_info(llm_traces)")
-      .all()
-      .map((row) => row.name);
-    expect(traceColumns).toEqual(
-      expect.arrayContaining(["causation_event_id", "root_event_id"]),
+    expect(
+      inspected
+        .prepare(
+          "SELECT type, name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name",
+        )
+        .all(),
+    ).toEqual(beforeSchema);
+    expect(inspected.prepare("SELECT * FROM messages").all()).toEqual(
+      beforeMessages,
     );
+    inspected.close();
+  });
+
+  it("rejects an unsupported format marker without repairing it", () => {
+    const path = databasePath();
+    const initialized = KaguyaDatabase.open(path);
+    initialized.migrate();
+    initialized.close();
+
+    const incompatible = new DatabaseSync(path);
+    incompatible
+      .prepare("UPDATE kaguya_metadata SET value = ? WHERE key = ?")
+      .run("unsupported", "format_version");
+    incompatible.close();
+
+    const database = KaguyaDatabase.open(path);
+    expect(() => database.migrate()).toThrowError(
+      expect.objectContaining({ code: "DATABASE_UNSUPPORTED_FORMAT" }),
+    );
+    database.close();
+
+    const inspected = new DatabaseSync(path);
+    expect(
+      inspected
+        .prepare("SELECT value FROM kaguya_metadata WHERE key = ?")
+        .get("format_version"),
+    ).toEqual({ value: "unsupported" });
     inspected.close();
   });
 

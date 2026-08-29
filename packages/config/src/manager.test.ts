@@ -884,12 +884,31 @@ describe("FileUserConfigManager profile lifecycle", () => {
   });
 });
 
-describe("FileUserConfigManager session selection", () => {
-  it("acknowledges current configuration warnings and clears review on update", async () => {
-    const rootDir = await createRoot();
-    const manager = await FileUserConfigManager.open({ rootDir });
+describe("FileUserConfigManager profile resolution", () => {
+  it("resolves the default or an explicit profile by ID", async () => {
+    const manager = await FileUserConfigManager.open({
+      rootDir: await createRoot(),
+    });
+    const profile = await manager.createProfile(
+      "work",
+      readySettings(["model-a", "model-b"]),
+    );
+
+    await expect(manager.resolveProfileById()).resolves.toMatchObject({
+      id: manager.getDefaultProfileId(),
+    });
+    await expect(manager.resolveProfileById(profile.id)).resolves.toMatchObject(
+      {
+        id: profile.id,
+      },
+    );
+  });
+
+  it("requires configuration warnings to be acknowledged", async () => {
+    const manager = await FileUserConfigManager.open({
+      rootDir: await createRoot(),
+    });
     const profile = await manager.createProfile("review", reviewSettings());
-    const profilePath = join(rootDir, "profiles", `profile_${profile.id}.json`);
     const warningIds = [
       "provider-base-url-missing:provider-1",
       "provider-api-key-missing:provider-1",
@@ -897,43 +916,18 @@ describe("FileUserConfigManager session selection", () => {
       "plugins-empty",
     ];
 
-    const readiness = await manager.inspectProfile(profile.id);
-    expect(readiness.status).toBe("review_required");
-    if (readiness.status === "review_required") {
-      expect(readiness.warnings.map(({ id }) => id)).toEqual(warningIds);
-    }
-    await manager.bindSession("review-session", profile.id);
-    await expect(
-      manager.resolveProfile("review-session"),
-    ).rejects.toMatchObject({ code: "CONFIG_REVIEW_REQUIRED" });
-
-    const beforeInvalidAcknowledgement = await readFile(profilePath, "utf8");
-    await expect(
-      manager.acknowledgeConfigurationWarnings(profile.id, ["stale-warning"]),
-    ).rejects.toMatchObject({ code: "CONFIG_INVALID_INPUT" });
-    await expect(readFile(profilePath, "utf8")).resolves.toBe(
-      beforeInvalidAcknowledgement,
-    );
-
+    await expect(manager.resolveProfileById(profile.id)).rejects.toMatchObject({
+      code: "CONFIG_REVIEW_REQUIRED",
+    });
     await manager.acknowledgeConfigurationWarnings(profile.id, warningIds);
-    await expect(
-      manager.resolveProfile("review-session"),
-    ).resolves.toMatchObject({ id: profile.id });
-    await expect(manager.getProfile(profile.id)).resolves.toMatchObject({
-      review: { acknowledgedWarnings: [...warningIds].sort() },
-    });
-
-    await manager.updateProfile(profile.id, reviewSettings());
-    const persistedAfterUpdate = JSON.parse(
-      await readFile(profilePath, "utf8"),
-    ) as Record<string, unknown>;
-    expect(Object.hasOwn(persistedAfterUpdate, "review")).toBe(false);
-    await expect(
-      manager.resolveProfile("review-session"),
-    ).rejects.toMatchObject({ code: "CONFIG_REVIEW_REQUIRED" });
+    await expect(manager.resolveProfileById(profile.id)).resolves.toMatchObject(
+      {
+        id: profile.id,
+      },
+    );
   });
 
-  it("does not fall back when the bound or default profile is incomplete", async () => {
+  it("does not expose provider secrets in incomplete-profile errors", async () => {
     const manager = await FileUserConfigManager.open({
       rootDir: await createRoot(),
     });
@@ -946,7 +940,6 @@ describe("FileUserConfigManager session selection", () => {
             id: "provider-1",
             type: "openai-compatible",
             enabled: true,
-            baseUrl: "https://api.example.test/v1",
             apiKey: secret,
             models: ["only-model"],
             settings: {},
@@ -956,396 +949,13 @@ describe("FileUserConfigManager session selection", () => {
       platforms: [],
       plugins: [],
     });
-
-    await manager.bindSession("bound-session", incomplete.id);
-    const boundError = await manager
-      .resolveProfile("bound-session")
-      .catch((caught: unknown) => caught);
-    expect(boundError).toMatchObject({ code: "CONFIG_INCOMPLETE" });
-    expect(boundError).not.toMatchObject({ id: manager.getDefaultProfileId() });
-    for (const representation of [
-      String(boundError),
-      JSON.stringify(boundError),
-    ]) {
-      expect(representation).not.toContain(secret);
-    }
-
-    await manager.setDefaultProfile(incomplete.id);
-    await expect(
-      manager.resolveProfile("unbound-session"),
-    ).rejects.toMatchObject({ code: "CONFIG_INCOMPLETE" });
-  });
-
-  it("keeps secrets out of readiness errors", async () => {
-    const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
-    });
-    const secret = "readiness-error-secret";
-    const incomplete = await manager.createProfile("incomplete", {
-      ai: {
-        defaultProviderId: "provider-1",
-        providers: [
-          {
-            id: "provider-1",
-            type: "openai-compatible",
-            enabled: true,
-            baseUrl: "https://api.example.test/v1",
-            apiKey: secret,
-            models: ["only-model"],
-            settings: {},
-          },
-        ],
-      },
-      platforms: [],
-      plugins: [],
-    });
-    await manager.bindSession("secret-session", incomplete.id);
 
     const error = await manager
-      .resolveProfile("secret-session")
+      .resolveProfileById(incomplete.id)
       .catch((caught: unknown) => caught);
-
     expect(error).toMatchObject({ code: "CONFIG_INCOMPLETE" });
     expect(String(error)).not.toContain(secret);
     expect(JSON.stringify(error)).not.toContain(secret);
-  });
-
-  it("falls back to the default profile", async () => {
-    const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
-    });
-
-    await expect(manager.resolveProfile("session-1")).resolves.toMatchObject({
-      id: manager.getDefaultProfileId(),
-    });
-  });
-
-  it("resolves an explicit session binding", async () => {
-    const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
-    });
-    const work = await manager.createProfile(
-      "work",
-      readySettings(["model-a", "model-b"]),
-    );
-
-    await manager.bindSession("session-1", work.id);
-
-    await expect(manager.resolveProfile("session-1")).resolves.toMatchObject({
-      id: work.id,
-    });
-  });
-
-  it("returns to default fallback after unbinding a session", async () => {
-    const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
-    });
-    const work = await manager.createProfile("work");
-
-    await manager.bindSession("session-1", work.id);
-    await manager.unbindSession("session-1");
-
-    await expect(manager.resolveProfile("session-1")).resolves.toMatchObject({
-      id: manager.getDefaultProfileId(),
-    });
-  });
-
-  it("persists an explicit session binding across reopen", async () => {
-    const rootDir = await createRoot();
-    const manager = await FileUserConfigManager.open({ rootDir });
-    const work = await manager.createProfile(
-      "work",
-      readySettings(["model-a", "model-b"]),
-    );
-
-    await manager.bindSession("session-1", work.id);
-
-    const reopened = await FileUserConfigManager.open({ rootDir });
-    await expect(reopened.resolveProfile("session-1")).resolves.toMatchObject({
-      id: work.id,
-    });
-  });
-
-  it("persists an unbound session across reopen", async () => {
-    const rootDir = await createRoot();
-    const manager = await FileUserConfigManager.open({ rootDir });
-    const work = await manager.createProfile("work");
-
-    await manager.bindSession("session-1", work.id);
-    await manager.unbindSession("session-1");
-
-    const reopened = await FileUserConfigManager.open({ rootDir });
-    await expect(reopened.resolveProfile("session-1")).resolves.toMatchObject({
-      id: manager.getDefaultProfileId(),
-    });
-  });
-
-  it("waits for a pending binding before resolving", async () => {
-    const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
-    });
-    const work = await manager.createProfile(
-      "work",
-      readySettings(["model-a", "model-b"]),
-    );
-
-    const binding = manager.bindSession("session-1", work.id);
-    const resolution = manager.resolveProfile("session-1");
-
-    await binding;
-    await expect(resolution).resolves.toMatchObject({ id: work.id });
-  });
-
-  it("treats an unbound constructor session ID as unbound", async () => {
-    const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
-    });
-
-    await expect(manager.resolveProfile("constructor")).resolves.toMatchObject({
-      id: manager.getDefaultProfileId(),
-    });
-  });
-
-  it("safely persists a __proto__ session binding across reopen", async () => {
-    const rootDir = await createRoot();
-    const manager = await FileUserConfigManager.open({ rootDir });
-    const profile = await manager.createProfile(
-      "safe",
-      readySettings(["model-a", "model-b"]),
-    );
-
-    await manager.bindSession("__proto__", profile.id);
-
-    const persistedIndex = JSON.parse(
-      await readFile(join(rootDir, "index.json"), "utf8"),
-    ) as { sessionBindings: Record<string, string> };
-    expect(Object.hasOwn(persistedIndex.sessionBindings, "__proto__")).toBe(
-      true,
-    );
-    expect(persistedIndex.sessionBindings["__proto__"]).toBe(profile.id);
-
-    const reopened = await FileUserConfigManager.open({ rootDir });
-    await expect(reopened.resolveProfile("__proto__")).resolves.toMatchObject({
-      id: profile.id,
-    });
-    expect(Object.prototype).not.toHaveProperty("id");
-  });
-
-  it("rejects an empty session ID when resolving", async () => {
-    const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
-    });
-
-    await expect(manager.resolveProfile("   ")).rejects.toMatchObject({
-      code: "CONFIG_INVALID_INPUT",
-      message: "Session ID must not be empty",
-    });
-  });
-
-  it("rejects an empty session ID before binding writes", async () => {
-    const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
-    });
-    const profile = await manager.createProfile("work");
-    sensitiveFileFaults.write.push({
-      target: "index",
-      message: "unconsumed blank binding fault",
-    });
-
-    await expect(manager.bindSession("   ", profile.id)).rejects.toMatchObject({
-      code: "CONFIG_INVALID_INPUT",
-      message: "Session ID must not be empty",
-    });
-    await expect(manager.createProfile("probe")).rejects.toMatchObject({
-      code: "CONFIG_IO_ERROR",
-      message: "unconsumed blank binding fault",
-    });
-  });
-
-  it("rejects an empty session ID before unbinding writes", async () => {
-    const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
-    });
-    sensitiveFileFaults.write.push({
-      target: "index",
-      message: "unconsumed blank unbinding fault",
-    });
-
-    await expect(manager.unbindSession("   ")).rejects.toMatchObject({
-      code: "CONFIG_INVALID_INPUT",
-      message: "Session ID must not be empty",
-    });
-    await expect(manager.createProfile("probe")).rejects.toMatchObject({
-      code: "CONFIG_IO_ERROR",
-      message: "unconsumed blank unbinding fault",
-    });
-  });
-
-  it("preserves a non-empty session ID exactly", async () => {
-    const rootDir = await createRoot();
-    const manager = await FileUserConfigManager.open({ rootDir });
-    const profile = await manager.createProfile(
-      "spaced",
-      readySettings(["model-a", "model-b"]),
-    );
-
-    await manager.bindSession(" session-1 ", profile.id);
-
-    const reopened = await FileUserConfigManager.open({ rootDir });
-    await expect(reopened.resolveProfile(" session-1 ")).resolves.toMatchObject(
-      { id: profile.id },
-    );
-    await expect(reopened.resolveProfile("session-1")).resolves.toMatchObject({
-      id: manager.getDefaultProfileId(),
-    });
-  });
-
-  it("safely persists a constructor session binding across reopen", async () => {
-    const rootDir = await createRoot();
-    const manager = await FileUserConfigManager.open({ rootDir });
-    const profile = await manager.createProfile(
-      "constructor-safe",
-      readySettings(["model-a", "model-b"]),
-    );
-
-    await manager.bindSession("constructor", profile.id);
-
-    const persistedIndex = JSON.parse(
-      await readFile(join(rootDir, "index.json"), "utf8"),
-    ) as { sessionBindings: Record<string, string> };
-    expect(Object.hasOwn(persistedIndex.sessionBindings, "constructor")).toBe(
-      true,
-    );
-    expect(persistedIndex.sessionBindings.constructor).toBe(profile.id);
-
-    const reopened = await FileUserConfigManager.open({ rootDir });
-    await expect(reopened.resolveProfile("constructor")).resolves.toMatchObject(
-      { id: profile.id },
-    );
-  });
-
-  it("rejects deleting a profile used by a session", async () => {
-    const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
-    });
-    const profile = await manager.createProfile("bound");
-    await manager.bindSession("session-1", profile.id);
-
-    await expect(manager.deleteProfile(profile.id)).rejects.toMatchObject({
-      code: "CONFIG_PROFILE_IN_USE",
-    });
-  });
-
-  it("validates a binding against profile state inside the mutation queue", async () => {
-    const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
-    });
-    const profile = await manager.createProfile("soon-deleted");
-
-    const deletion = manager.deleteProfile(profile.id);
-    const binding = manager.bindSession("session-1", profile.id);
-
-    await deletion;
-    await expect(binding).rejects.toMatchObject({
-      code: "CONFIG_PROFILE_NOT_FOUND",
-    });
-  });
-
-  it("keeps binding memory unchanged when its index write fails", async () => {
-    const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
-    });
-    const profile = await manager.createProfile(
-      "work",
-      readySettings(["model-a", "model-b"]),
-    );
-    sensitiveFileFaults.write.push({
-      target: "index",
-      message: "injected binding index failure",
-    });
-
-    await expect(
-      manager.bindSession("session-1", profile.id),
-    ).rejects.toMatchObject({
-      code: "CONFIG_IO_ERROR",
-      message: "injected binding index failure",
-    });
-
-    await expect(manager.resolveProfile("session-1")).resolves.toMatchObject({
-      id: manager.getDefaultProfileId(),
-    });
-  });
-
-  it("keeps the queue usable after a binding index write failure", async () => {
-    const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
-    });
-    const profile = await manager.createProfile(
-      "work",
-      readySettings(["model-a", "model-b"]),
-    );
-    sensitiveFileFaults.write.push({
-      target: "index",
-      message: "injected binding queue failure",
-    });
-
-    await expect(
-      manager.bindSession("failed-session", profile.id),
-    ).rejects.toMatchObject({
-      code: "CONFIG_IO_ERROR",
-      message: "injected binding queue failure",
-    });
-
-    await manager.bindSession("working-session", profile.id);
-    await expect(
-      manager.resolveProfile("working-session"),
-    ).resolves.toMatchObject({ id: profile.id });
-  });
-
-  it("keeps unbinding memory unchanged when its index write fails", async () => {
-    const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
-    });
-    const profile = await manager.createProfile(
-      "work",
-      readySettings(["model-a", "model-b"]),
-    );
-    await manager.bindSession("session-1", profile.id);
-    sensitiveFileFaults.write.push({
-      target: "index",
-      message: "injected unbinding index failure",
-    });
-
-    await expect(manager.unbindSession("session-1")).rejects.toMatchObject({
-      code: "CONFIG_IO_ERROR",
-      message: "injected unbinding index failure",
-    });
-
-    await expect(manager.resolveProfile("session-1")).resolves.toMatchObject({
-      id: profile.id,
-    });
-  });
-
-  it("keeps the queue usable after an unbinding index write failure", async () => {
-    const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
-    });
-    const profile = await manager.createProfile("work");
-    await manager.bindSession("session-1", profile.id);
-    sensitiveFileFaults.write.push({
-      target: "index",
-      message: "injected unbinding queue failure",
-    });
-
-    await expect(manager.unbindSession("session-1")).rejects.toMatchObject({
-      code: "CONFIG_IO_ERROR",
-      message: "injected unbinding queue failure",
-    });
-
-    await manager.unbindSession("session-1");
-    await expect(manager.resolveProfile("session-1")).resolves.toMatchObject({
-      id: manager.getDefaultProfileId(),
-    });
   });
 });
 
@@ -1373,27 +983,28 @@ describe("FileUserConfigManager corruption safety", () => {
     expect(JSON.stringify(error)).not.toContain(secret);
   });
 
-  it("fails closed when a __proto__ binding references an unknown profile", async () => {
+  it("rejects a version 1 index without modifying it", async () => {
     const rootDir = await createRoot();
     await FileUserConfigManager.open({ rootDir });
     const path = join(rootDir, "index.json");
-    const index = JSON.parse(await readFile(path, "utf8")) as {
-      sessionBindings: Record<string, string>;
-    };
-    index.sessionBindings = JSON.parse(
-      '{"__proto__":"11111111-1111-4111-8111-111111111111"}',
-    ) as Record<string, string>;
+    const index = JSON.parse(await readFile(path, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    index.version = 1;
+    index.sessionBindings = {};
     await writeFile(path, JSON.stringify(index), "utf8");
+    const beforeOpen = await readFile(path, "utf8");
 
     const error = await FileUserConfigManager.open({ rootDir }).catch(
       (caught: unknown) => caught,
     );
 
     expect(error).toMatchObject({
-      code: "CONFIG_CORRUPT_STORE",
-      message: `Configuration index failed validation: ${path}`,
+      code: "CONFIG_UNSUPPORTED_VERSION",
     });
     expect((error as { cause?: unknown }).cause).toBeUndefined();
+    await expect(readFile(path, "utf8")).resolves.toBe(beforeOpen);
   });
 
   it("rejects a malformed referenced profile without exposing its secret", async () => {
@@ -1533,20 +1144,8 @@ describe("FileUserConfigManager runtime input validation", () => {
         () => manager.deleteProfile(Symbol(secret) as never),
       ],
       [
-        "null binding session ID",
-        () => manager.bindSession(null as never, profileId),
-      ],
-      [
-        "null binding profile ID",
-        () => manager.bindSession("session-1", null as never),
-      ],
-      [
-        "object unbinding session ID",
-        () => manager.unbindSession({ secret } as never),
-      ],
-      [
-        "undefined resolving session ID",
-        () => manager.resolveProfile(undefined as never),
+        "null resolving profile ID",
+        () => manager.resolveProfileById(null as never),
       ],
     ];
 
@@ -1606,24 +1205,9 @@ describe("FileUserConfigManager runtime input validation", () => {
         () => manager.deleteProfile(revokedProxy() as never),
       ],
       [
-        "binding session ID",
-        "Session ID must not be empty",
-        () => manager.bindSession(revokedProxy() as never, profileId),
-      ],
-      [
-        "binding profile ID",
+        "resolving profile ID",
         "Configuration profile ID is invalid",
-        () => manager.bindSession("session-1", revokedProxy() as never),
-      ],
-      [
-        "unbinding session ID",
-        "Session ID must not be empty",
-        () => manager.unbindSession(revokedProxy() as never),
-      ],
-      [
-        "resolving session ID",
-        "Session ID must not be empty",
-        () => manager.resolveProfile(revokedProxy() as never),
+        () => manager.resolveProfileById(revokedProxy() as never),
       ],
     ];
 

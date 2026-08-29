@@ -74,7 +74,6 @@ describe("unified server composition", () => {
         "x-request-id": "request-server-1",
       },
       payload: {
-        sessionId: "web-session-server",
         text: "Hello from the browser",
       },
     });

@@ -108,14 +108,13 @@ describe("KaguyaRuntime", () => {
     database.close();
   });
 
-  it("keeps the HTTP sessionId only as an opaque Web source", async () => {
+  it("keeps only the request receipt on a Web source", async () => {
     const databasePath = path();
     const runtime = new KaguyaRuntime({ databasePath });
     await runtime.start();
     const result = await runtime.dispatch({
       kind: "web",
       requestId: "request-1",
-      sessionId: "caller-controlled-source",
       text: "hello from web",
     });
     await runtime.close();
@@ -127,7 +126,6 @@ describe("KaguyaRuntime", () => {
         source: {
           kind: "web",
           requestId: "request-1",
-          sourceId: "caller-controlled-source",
         },
       },
     });

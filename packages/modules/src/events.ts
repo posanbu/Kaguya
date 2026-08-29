@@ -24,7 +24,6 @@ export const moduleMessageSourceSchema = z.discriminatedUnion("kind", [
     .object({
       kind: z.literal("web"),
       requestId: nonBlankStringSchema,
-      sourceId: nonBlankStringSchema,
     })
     .strict(),
   z

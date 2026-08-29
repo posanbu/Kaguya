@@ -61,16 +61,14 @@ NapCat 配置：
 
 ## 提交消息
 
-请求体只允许两个字段：
+请求体只允许一个字段：
 
 ```json
 {
-  "sessionId": "session-1",
   "text": "Hello"
 }
 ```
 
-- `sessionId` trim 后非空，最多 256 个 Unicode code point；它只是兼容协议中的 opaque Web source ID，不创建 Core session、历史或 profile binding；
 - `text` trim 后必须非空，最多 131072 个 Unicode code point，工作流保留原始空白；
 - 请求体最多 256 KiB；
 - 任何额外字段都会被严格 schema 拒绝。
@@ -80,7 +78,7 @@ curl http://127.0.0.1:3000/api/v1/messages \
   -H "Authorization: Bearer replace-with-at-least-16-characters" \
   -H "Content-Type: application/json" \
   -H "X-Request-Id: example-1" \
-  -d '{"sessionId":"session-1","text":"Hello"}'
+  -d '{"text":"Hello"}'
 ```
 
 Runtime dispatch 成功后保持现有 `202` 协议：

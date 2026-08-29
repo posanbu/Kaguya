@@ -83,16 +83,6 @@ export const outboundMessageRecordSchema = z.discriminatedUnion("status", [
 
 export type OutboundMessageRecord = z.infer<typeof outboundMessageRecordSchema>;
 
-export const memoryRecordSchema = z.object({
-  id: z.string().min(1),
-  sessionId: z.string().min(1),
-  content: z.string(),
-  occurredAt: z.iso.datetime(),
-  metadata: z.record(z.string(), z.unknown()),
-});
-
-export type MemoryRecord = z.infer<typeof memoryRecordSchema>;
-
 export type PromptFragmentSource =
   "template" | "history" | "memory" | "persona" | "policy" | "state";
 
