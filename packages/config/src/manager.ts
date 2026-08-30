@@ -1,16 +1,34 @@
+/**
+ * 功能概述：本模块实现 `packages/config` 的文件型 Profile Registry 管理器，
+ * 负责以 `index.json` + `profiles/profile_<id>.json` 的双层结构持久化配置，
+ * 并提供显式 bootstrap、Profile 生命周期、就绪态解析与失败回滚能力。
+ * 主要职责：`open`/`inspect` 负责在不回退到旧版默认语义的前提下读取现有仓库；
+ * `bootstrap` 仅在根目录缺失或为空时创建保留 `default` Profile 与 v3 index，
+ * 且按“先写 Profile、后发布 index”的顺序落盘；`createProfile` 只创建空 Profile；
+ * `replaceProfile` 以完整替换方式写入 Profile 并在 index 写失败时回滚旧内容；
+ * `selectProfile` 只更新选中元数据；`deleteProfile` 保护保留 `default` 与当前选中项；
+ * `resolveProfileById` 强制调用方显式提供 ID 并在返回前执行 readiness 校验。
+ * 代码库关系：本文件消费 `model.ts` 中的 v3 schema、`readiness.ts` 的 readiness
+ * 判定与 registry 组合帮助器，以及 `secure-files.ts` 的敏感目录/原子写工具；
+ * 它被 `packages/config/src/index.ts` 稳定导出，并由服务启动、WebUI 与测试用例直接依赖。
+ * 输入输出与副作用：所有公开写操作都会串行进入 mutation queue，实际修改磁盘中的
+ * `index.json` 和对应 Profile 文件；路径必须始终位于受管根目录内，legacy v1/v2 index
+ * 会在任何目录准备或写入前被拒绝，bootstrap/index 更新失败时只回滚本次尝试创建或替换的
+ * Profile 文件，不删除调用方已拥有的根目录。
+ */
 import { randomUUID } from "node:crypto";
-import { access } from "node:fs/promises";
+import { access, lstat, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import { ConfigError } from "./errors.js";
 import {
   emptyUserConfigProfileSettings,
   profileIdSchema,
-  type UpdateUserConfigProfileInput,
+  type ProfileId,
+  type ReplaceUserConfigProfileInput,
   type UserConfigIndex,
   type UserConfigProfile,
   type UserConfigProfileMetadata,
-  type UserConfigProfileSettings,
   userConfigIndexSchema,
   userConfigProfileSchema,
   userConfigProfileSettingsSchema,
@@ -31,16 +49,11 @@ import {
   inspectUserConfigProfile,
   type ConfigurationReadiness,
   type ProfileReadiness,
+  withRegistryReadiness,
 } from "./readiness.js";
 
 export interface FileUserConfigManagerOptions {
   rootDir: string;
-}
-
-export interface FileUserConfigInitializeOptions extends FileUserConfigManagerOptions {
-  readonly name: string;
-  readonly settings: UserConfigProfileSettings;
-  readonly acknowledgedWarnings?: readonly string[];
 }
 
 export class FileUserConfigManager {
@@ -65,9 +78,8 @@ export class FileUserConfigManager {
     const indexPath = join(rootDir, "index.json");
 
     assertPathInside(rootDir, rootDir);
-    let index: UserConfigIndex;
+    assertPathInside(rootDir, indexPath);
     try {
-      assertPathInside(rootDir, indexPath);
       await access(indexPath);
     } catch (error) {
       if (isMissingPath(error)) {
@@ -75,11 +87,12 @@ export class FileUserConfigManager {
       }
       throw error;
     }
-    await ensureSensitiveDirectory(rootDir);
-    assertPathInside(rootDir, profilesDir);
-    await ensureSensitiveDirectory(profilesDir);
-    assertPathInside(rootDir, indexPath);
-    index = parsePersistedIndex(await readSensitiveJson(indexPath), indexPath);
+
+    const index = parsePersistedIndex(
+      await readSensitiveJson(indexPath),
+      indexPath,
+    );
+    await ensureOpenDirectories(rootDir, profilesDir);
 
     const manager = new FileUserConfigManager(rootDir, index);
     await manager.#validateReferencedProfiles();
@@ -107,79 +120,57 @@ export class FileUserConfigManager {
     }
 
     const manager = await FileUserConfigManager.open({ rootDir });
-    return inspectUserConfigProfile(
-      await manager.getProfile(manager.getDefaultProfileId()),
+    return withRegistryReadiness(
+      manager.listProfiles(),
+      manager.getSelectedProfileId(),
+      await manager.inspectProfile(manager.getSelectedProfileId()),
     );
   }
 
-  static async initialize(
-    options: FileUserConfigInitializeOptions,
+  static async bootstrap(
+    options: FileUserConfigManagerOptions,
   ): Promise<FileUserConfigManager> {
-    const input = parseInitializeInput(options);
-    const rootDir = resolve(input.rootDir);
+    const rootDir = resolve(requireConfigurationRoot(options));
     const profilesDir = join(rootDir, "profiles");
     const indexPath = join(rootDir, "index.json");
-    const id = randomUUID();
-    const profile: UserConfigProfile = {
-      version: 1,
-      id,
-      name: input.name,
-      ...input.settings,
-      ...(input.acknowledgedWarnings.length === 0
-        ? {}
-        : { review: { acknowledgedWarnings: input.acknowledgedWarnings } }),
-    };
-    const warningIds = new Set(
-      deriveConfigurationWarnings(profile).map((warning) => warning.id),
-    );
-    if (
-      input.acknowledgedWarnings.some(
-        (acknowledgement) => !warningIds.has(acknowledgement),
-      )
-    ) {
-      throw new ConfigError(
-        "CONFIG_INVALID_INPUT",
-        "Configuration acknowledgement is invalid",
-      );
-    }
-
-    const readiness = inspectUserConfigProfile(profile);
-    if (readiness.status === "invalid") {
-      throw new ConfigIncompleteError(readiness.issues);
-    }
-    if (readiness.status === "review_required") {
-      throw new ConfigReviewRequiredError(readiness.warnings);
-    }
 
     assertPathInside(rootDir, rootDir);
-    assertPathInside(rootDir, indexPath);
-    await assertStoreIsUninitialized(indexPath);
-    await ensureSensitiveDirectory(rootDir);
     assertPathInside(rootDir, profilesDir);
-    await ensureSensitiveDirectory(profilesDir);
     assertPathInside(rootDir, indexPath);
-    await assertStoreIsUninitialized(indexPath);
+    await assertBootstrapableRoot(rootDir, indexPath);
 
-    const timestamp = new Date().toISOString();
+    await ensureSensitiveDirectory(rootDir);
+    await ensureSensitiveDirectory(profilesDir);
+
+    const createdAt = new Date().toISOString();
+    const profile: UserConfigProfile = {
+      version: 1,
+      id: "default",
+      name: "default",
+      ...emptyUserConfigProfileSettings(),
+    };
     const index: UserConfigIndex = {
-      version: 2,
-      defaultProfileId: id,
+      version: 3,
+      selectedProfileId: "default",
       profiles: [
-        { id, name: input.name, createdAt: timestamp, updatedAt: timestamp },
+        {
+          id: "default",
+          name: "default",
+          createdAt,
+          updatedAt: createdAt,
+        },
       ],
     };
-    const profilePath = join(profilesDir, `profile_${id}.json`);
+    const profilePath = join(profilesDir, "profile_default.json");
     assertPathInside(rootDir, profilePath);
     await writeSensitiveJson(profilePath, profile);
     try {
-      assertPathInside(rootDir, indexPath);
-      await assertStoreIsUninitialized(indexPath);
       await writeSensitiveJson(indexPath, index);
     } catch (error) {
-      assertPathInside(rootDir, profilePath);
-      await removeSensitiveFile(profilePath);
+      await removeSensitiveFile(profilePath).catch(() => undefined);
       throw error;
     }
+
     return new FileUserConfigManager(rootDir, index);
   }
 
@@ -187,39 +178,35 @@ export class FileUserConfigManager {
     return structuredClone(this.#index.profiles);
   }
 
-  async getProfile(profileId: string): Promise<UserConfigProfile> {
+  getSelectedProfileId(): ProfileId {
+    return this.#index.selectedProfileId;
+  }
+
+  async getProfile(profileId: ProfileId): Promise<UserConfigProfile> {
     await this.#afterPendingWrites();
     return structuredClone(await this.#readProfile(profileId));
   }
 
-  async inspectProfile(profileId: string): Promise<ProfileReadiness> {
+  async inspectProfile(profileId: ProfileId): Promise<ProfileReadiness> {
     await this.#afterPendingWrites();
     return structuredClone(
       inspectUserConfigProfile(await this.#readProfile(profileId)),
     );
   }
 
-  async createProfile(
-    name: string,
-    initial?: UserConfigProfileSettings,
-  ): Promise<UserConfigProfile> {
-    return this.#enqueue(() =>
-      this.#createProfile(
-        name,
-        initial === undefined ? emptyUserConfigProfileSettings() : initial,
-      ),
-    );
+  async createProfile(name: string): Promise<UserConfigProfile> {
+    return this.#enqueue(() => this.#createProfile(name));
   }
 
-  async updateProfile(
-    profileId: string,
-    update: UpdateUserConfigProfileInput,
+  async replaceProfile(
+    profileId: ProfileId,
+    replacement: ReplaceUserConfigProfileInput,
   ): Promise<UserConfigProfile> {
-    return this.#enqueue(() => this.#updateProfile(profileId, update));
+    return this.#enqueue(() => this.#replaceProfileById(profileId, replacement));
   }
 
   async acknowledgeConfigurationWarnings(
-    profileId: string,
+    profileId: ProfileId,
     warningIds: readonly string[],
   ): Promise<void> {
     return this.#enqueue(() =>
@@ -227,23 +214,17 @@ export class FileUserConfigManager {
     );
   }
 
-  getDefaultProfileId(): string {
-    return this.#index.defaultProfileId;
+  async selectProfile(profileId: ProfileId): Promise<void> {
+    return this.#enqueue(() => this.#selectProfile(profileId));
   }
 
-  async setDefaultProfile(profileId: string): Promise<void> {
-    return this.#enqueue(() => this.#setDefaultProfile(profileId));
-  }
-
-  async deleteProfile(profileId: string): Promise<void> {
+  async deleteProfile(profileId: ProfileId): Promise<void> {
     return this.#enqueue(() => this.#deleteProfile(profileId));
   }
 
-  async resolveProfileById(profileId?: string): Promise<UserConfigProfile> {
+  async resolveProfileById(profileId: ProfileId): Promise<UserConfigProfile> {
     await this.#afterPendingWrites();
-    const profile = await this.#readProfile(
-      profileId === undefined ? this.#index.defaultProfileId : profileId,
-    );
+    const profile = await this.#readProfile(profileId);
     const readiness = inspectUserConfigProfile(profile);
     if (readiness.status === "invalid") {
       throw new ConfigIncompleteError(readiness.issues);
@@ -267,7 +248,7 @@ export class FileUserConfigManager {
     await this.#writeTail;
   }
 
-  #requireMetadata(profileId: string): UserConfigProfileMetadata {
+  #requireMetadata(profileId: ProfileId): UserConfigProfileMetadata {
     let isValidProfileId = false;
     try {
       isValidProfileId =
@@ -282,6 +263,7 @@ export class FileUserConfigManager {
         "Configuration profile ID is invalid",
       );
     }
+
     const metadata = this.#index.profiles.find(({ id }) => id === profileId);
     if (metadata === undefined) {
       throw new ConfigError(
@@ -292,13 +274,13 @@ export class FileUserConfigManager {
     return metadata;
   }
 
-  #profilePath(profileId: string): string {
+  #profilePath(profileId: ProfileId): string {
     const path = join(this.#profilesDir, `profile_${profileId}.json`);
     assertPathInside(this.#rootDir, path);
     return path;
   }
 
-  async #readProfile(profileId: string): Promise<UserConfigProfile> {
+  async #readProfile(profileId: ProfileId): Promise<UserConfigProfile> {
     this.#requireMetadata(profileId);
     const path = this.#profilePath(profileId);
     const profile = parsePersistedProfile(await readSensitiveJson(path), path);
@@ -347,12 +329,14 @@ export class FileUserConfigManager {
     }
   }
 
-  async #createProfile(
-    name: string,
-    initial: UserConfigProfileSettings,
-  ): Promise<UserConfigProfile> {
+  async #createProfile(name: string): Promise<UserConfigProfile> {
     const normalizedName = normalizeProfileName(name);
-    const settings = parseSettings(initial);
+    if (normalizedName === "default") {
+      throw new ConfigError(
+        "CONFIG_PROFILE_NAME_CONFLICT",
+        "Configuration profile name already exists: default",
+      );
+    }
     if (
       this.#index.profiles.some(
         ({ name: current }) => current === normalizedName,
@@ -370,7 +354,7 @@ export class FileUserConfigManager {
       version: 1,
       id,
       name: normalizedName,
-      ...settings,
+      ...emptyUserConfigProfileSettings(),
     };
     const nextIndex: UserConfigIndex = {
       ...structuredClone(this.#index),
@@ -389,7 +373,6 @@ export class FileUserConfigManager {
     try {
       await this.#writeIndex(nextIndex);
     } catch (error) {
-      assertPathInside(this.#rootDir, path);
       await removeSensitiveFile(path);
       throw error;
     }
@@ -397,23 +380,17 @@ export class FileUserConfigManager {
     return structuredClone(profile);
   }
 
-  async #updateProfile(
-    profileId: string,
-    update: UpdateUserConfigProfileInput,
+  async #replaceProfileById(
+    profileId: ProfileId,
+    replacement: ReplaceUserConfigProfileInput,
   ): Promise<UserConfigProfile> {
-    const parsedUpdate = parseUpdateInput(update);
+    const parsedReplacement = parseReplacementInput(replacement);
     const metadata = this.#requireMetadata(profileId);
     const oldProfile = await this.#readProfile(profileId);
     const name =
-      parsedUpdate.name === undefined
-        ? metadata.name
-        : normalizeProfileName(parsedUpdate.name);
-    if (profileId === this.#index.defaultProfileId && name !== metadata.name) {
-      throw new ConfigError(
-        "CONFIG_DEFAULT_PROFILE_PROTECTED",
-        `The default configuration profile cannot be renamed: ${profileId}`,
-      );
-    }
+      profileId === "default"
+        ? "default"
+        : normalizeProfileName(parsedReplacement.name);
     if (
       this.#index.profiles.some(
         ({ id, name: current }) => id !== profileId && current === name,
@@ -424,26 +401,39 @@ export class FileUserConfigManager {
         `Configuration profile name already exists: ${name}`,
       );
     }
-    const profile: UserConfigProfile = {
+
+    const profileWithoutReview: UserConfigProfile = {
       version: 1,
       id: profileId,
       name,
-      ...parsedUpdate.settings,
+      ...parsedReplacement.settings,
+    };
+    const profile: UserConfigProfile = {
+      ...profileWithoutReview,
+      ...buildReplacementReview(
+        profileWithoutReview,
+        parsedReplacement.acknowledgedWarnings,
+      ),
     };
     const nextIndex: UserConfigIndex = {
       ...structuredClone(this.#index),
       profiles: this.#index.profiles.map((current) =>
         current.id === profileId
-          ? { ...current, name, updatedAt: new Date().toISOString() }
+          ? {
+              ...current,
+              name,
+              createdAt: metadata.createdAt,
+              updatedAt: new Date().toISOString(),
+            }
           : structuredClone(current),
       ),
     };
-    await this.#replaceProfile(profileId, oldProfile, profile, nextIndex);
+    await this.#replacePersistedProfile(profileId, oldProfile, profile, nextIndex);
     return structuredClone(profile);
   }
 
   async #acknowledgeConfigurationWarnings(
-    profileId: string,
+    profileId: ProfileId,
     warningIds: readonly string[],
   ): Promise<void> {
     const acknowledgements = parseCurrentWarningAcknowledgements(warningIds);
@@ -473,11 +463,11 @@ export class FileUserConfigManager {
           : structuredClone(current),
       ),
     };
-    await this.#replaceProfile(profileId, oldProfile, profile, nextIndex);
+    await this.#replacePersistedProfile(profileId, oldProfile, profile, nextIndex);
   }
 
-  async #replaceProfile(
-    profileId: string,
+  async #replacePersistedProfile(
+    profileId: ProfileId,
     oldProfile: UserConfigProfile,
     profile: UserConfigProfile,
     nextIndex: UserConfigIndex,
@@ -488,7 +478,6 @@ export class FileUserConfigManager {
       await this.#writeIndex(nextIndex);
     } catch (indexError) {
       try {
-        assertPathInside(this.#rootDir, path);
         await writeSensitiveJson(path, oldProfile);
       } catch (rollbackError) {
         throw new ConfigError(
@@ -502,24 +491,31 @@ export class FileUserConfigManager {
     this.#index = nextIndex;
   }
 
-  async #setDefaultProfile(profileId: string): Promise<void> {
+  async #selectProfile(profileId: ProfileId): Promise<void> {
     this.#requireMetadata(profileId);
     const nextIndex: UserConfigIndex = {
       ...structuredClone(this.#index),
-      defaultProfileId: profileId,
+      selectedProfileId: profileId,
     };
     await this.#writeIndex(nextIndex);
     this.#index = nextIndex;
   }
 
-  async #deleteProfile(profileId: string): Promise<void> {
+  async #deleteProfile(profileId: ProfileId): Promise<void> {
     this.#requireMetadata(profileId);
-    if (profileId === this.#index.defaultProfileId) {
+    if (profileId === "default") {
       throw new ConfigError(
         "CONFIG_DEFAULT_PROFILE_PROTECTED",
         `The default configuration profile cannot be deleted: ${profileId}`,
       );
     }
+    if (profileId === this.#index.selectedProfileId) {
+      throw new ConfigError(
+        "CONFIG_PROFILE_IN_USE",
+        `The selected configuration profile cannot be deleted: ${profileId}`,
+      );
+    }
+
     const nextIndex: UserConfigIndex = {
       ...structuredClone(this.#index),
       profiles: this.#index.profiles
@@ -552,10 +548,11 @@ function isMissingPath(error: unknown): boolean {
 }
 
 function parsePersistedIndex(value: unknown, path: string): UserConfigIndex {
-  if (persistedVersion(value) === 1) {
+  const version = persistedVersion(value);
+  if (version === 1 || version === 2) {
     throw new ConfigError(
       "CONFIG_UNSUPPORTED_VERSION",
-      "Configuration index version 1 is no longer supported; back up the store and initialize a new configuration index",
+      "Configuration index version 1 or 2 is unsupported; back up the configuration and reinitialize it.",
     );
   }
   const parsed = userConfigIndexSchema.safeParse(value);
@@ -593,7 +590,7 @@ function parsePersistedProfile(
   return parsed.data;
 }
 
-function parseSettings(value: unknown): UserConfigProfileSettings {
+function parseSettings(value: unknown) {
   try {
     const parsed = userConfigProfileSettingsSchema.safeParse(value);
     if (parsed.success) {
@@ -608,66 +605,27 @@ function parseSettings(value: unknown): UserConfigProfileSettings {
   );
 }
 
-function parseInitializeInput(value: unknown): {
-  rootDir: string;
-  name: string;
-  settings: UserConfigProfileSettings;
-  acknowledgedWarnings: string[];
-} {
-  try {
-    if (value === null || typeof value !== "object" || Array.isArray(value)) {
-      throw new Error();
-    }
-    const options = value as {
-      readonly acknowledgedWarnings?: unknown;
-      readonly name?: unknown;
-      readonly rootDir?: unknown;
-      readonly settings?: unknown;
-    };
-    return {
-      rootDir: requireConfigurationRoot(options),
-      name: normalizeProfileName(options.name),
-      settings: parseSettings(options.settings),
-      acknowledgedWarnings: parseAcknowledgedWarnings(
-        options.acknowledgedWarnings,
-      ),
-    };
-  } catch {
-    throw new ConfigError(
-      "CONFIG_INVALID_INPUT",
-      "Configuration profile input failed validation",
-    );
+function buildReplacementReview(
+  profile: UserConfigProfile,
+  acknowledgedWarnings: readonly string[],
+): { review?: { acknowledgedWarnings: string[] } } {
+  if (acknowledgedWarnings.length === 0) {
+    return {};
   }
-}
-
-function parseAcknowledgedWarnings(value: unknown): string[] {
-  if (value === undefined) {
-    return [];
-  }
-  try {
-    if (!Array.isArray(value)) {
-      throw new Error();
-    }
-    const acknowledgements: string[] = [];
-    const seen = new Set<string>();
-    for (const acknowledgement of value) {
-      if (typeof acknowledgement !== "string") {
-        throw new Error();
-      }
-      const normalized = acknowledgement.trim();
-      if (normalized.length === 0 || seen.has(normalized)) {
-        throw new Error();
-      }
-      seen.add(normalized);
-      acknowledgements.push(normalized);
-    }
-    return acknowledgements;
-  } catch {
+  const validWarningIds = new Set(
+    deriveConfigurationWarnings(profile).map((warning) => warning.id),
+  );
+  if (acknowledgedWarnings.some((warningId) => !validWarningIds.has(warningId))) {
     throw new ConfigError(
       "CONFIG_INVALID_INPUT",
       "Configuration acknowledgement is invalid",
     );
   }
+  return {
+    review: {
+      acknowledgedWarnings: [...acknowledgedWarnings].sort(),
+    },
+  };
 }
 
 function parseCurrentWarningAcknowledgements(
@@ -699,9 +657,10 @@ function parseCurrentWarningAcknowledgements(
   }
 }
 
-function parseUpdateInput(value: unknown): {
-  name: unknown;
-  settings: UserConfigProfileSettings;
+function parseReplacementInput(value: unknown): {
+  name: string;
+  acknowledgedWarnings: readonly string[];
+  settings: ReturnType<typeof parseSettings>;
 } {
   try {
     if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -710,18 +669,22 @@ function parseUpdateInput(value: unknown): {
         "Configuration profile input failed validation",
       );
     }
-    const update = value as {
+    const replacement = value as {
+      readonly acknowledgedWarnings?: unknown;
       readonly ai?: unknown;
       readonly name?: unknown;
       readonly platforms?: unknown;
       readonly plugins?: unknown;
     };
     return {
-      name: update.name,
+      acknowledgedWarnings: parseCurrentWarningAcknowledgements(
+        replacement.acknowledgedWarnings,
+      ),
+      name: normalizeProfileName(replacement.name),
       settings: parseSettings({
-        ai: update.ai,
-        platforms: update.platforms,
-        plugins: update.plugins,
+        ai: replacement.ai,
+        platforms: replacement.platforms,
+        plugins: replacement.plugins,
       }),
     };
   } catch {
@@ -775,14 +738,56 @@ function requireConfigurationRoot(options: unknown): string {
   return rootDir;
 }
 
-async function assertStoreIsUninitialized(indexPath: string): Promise<void> {
+async function ensureOpenDirectories(
+  rootDir: string,
+  profilesDir: string,
+): Promise<void> {
+  assertPathInside(rootDir, rootDir);
+  assertPathInside(rootDir, profilesDir);
+  await ensureSensitiveDirectory(rootDir);
+  await ensureSensitiveDirectory(profilesDir);
+}
+
+async function assertBootstrapableRoot(
+  rootDir: string,
+  indexPath: string,
+): Promise<void> {
   try {
-    await access(indexPath);
+    const rootStats = await lstat(rootDir);
+    if (!rootStats.isDirectory()) {
+      throw new ConfigError(
+        "CONFIG_INVALID_INPUT",
+        "Configuration root must be absent or an empty directory before bootstrap",
+      );
+    }
+
+    const entries = await readdir(rootDir);
+    if (entries.length === 0) {
+      return;
+    }
+    if (entries.includes("index.json")) {
+      await throwAlreadyBootstrapped(indexPath);
+    }
+    throw new ConfigError(
+      "CONFIG_INVALID_INPUT",
+      "Configuration root must be absent or an empty directory before bootstrap",
+    );
   } catch (error) {
     if (isMissingPath(error)) {
       return;
     }
     throw error;
+  }
+}
+
+async function throwAlreadyBootstrapped(indexPath: string): Promise<never> {
+  const index = await readSensitiveJson(indexPath);
+  const version = persistedVersion(index);
+  if (version === 1 || version === 2) {
+    throw new ConfigError(
+      "CONFIG_UNSUPPORTED_VERSION",
+      "Configuration index version 1 or 2 is unsupported; back up the configuration and reinitialize it.",
+    );
   }
   throw new ConfigError(
     "CONFIG_INVALID_INPUT",
