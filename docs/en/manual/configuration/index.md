@@ -54,9 +54,13 @@ The Web UI checks setup status before exposing chat. When configuration is
 required, it opens the Profile management screen, loads the current selected
 Profile by ID, and edits the complete Profile body rather than overwriting
 hidden fields with a blank form. API keys are not stored in browser storage.
-After replacing or selecting the active Profile, the UI enters
-`restart_required` and asks the user to restart the Server so Runtime can
-freeze the selected Profile again at startup.
+If a save or selection leaves the selected Profile in `invalid` or
+`review_required`, the UI continues to show readiness issues and warnings
+instead of prompting for a restart. The UI enters `restart_required` only after
+the selected Profile is ready and the persisted selected-profile
+configuration differs from the Runtime snapshot frozen at startup. At that
+point the user restarts the Server so Runtime can freeze the selected Profile
+again at startup.
 
 ## Safety boundaries remain intact
 
@@ -76,5 +80,6 @@ different targets.
 
 The live configuration and server docs now describe the v3 registry contract:
 one explicit `selectedProfileId`, setup status through `GET /api/v1/setup`,
-Profile mutations through `/api/v1/profiles*`, and restart-required activation
-for any selected-Profile change.
+Profile mutations through `/api/v1/profiles*`, and conditional
+`restart_required` activation only when a ready selected Profile differs from
+the running snapshot.
