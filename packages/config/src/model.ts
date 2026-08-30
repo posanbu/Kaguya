@@ -1,7 +1,14 @@
+/**
+ * 架构说明：本模块拥有配置 Profile 与 Registry 的持久化 schema，
+ * 负责 JSON 克隆、引用完整性与 v3 注册表不变量。它被配置管理器、
+ * 运行时启动链和 WebUI/API 层共同消费，必须保持可安全反序列化且
+ * 不能泄漏未克隆的外部对象引用。
+ */
 import { z } from "zod";
 
 const nonEmptyIdSchema = z.string().trim().min(1);
-const profileIdInnerSchema = z.uuid();
+const userProfileIdSchema = z.uuid();
+const profileIdInnerSchema = z.union([z.literal("default"), userProfileIdSchema]);
 export const profileIdSchema = guardSchemaInput(profileIdInnerSchema);
 
 export type JsonPrimitive = null | string | boolean | number;
@@ -150,6 +157,13 @@ const userConfigProfileInnerSchema = userConfigProfileSettingsInnerSchema
     review: userConfigProfileReviewSchema.optional(),
   })
   .superRefine((profile, context) => {
+    if (profile.id === "default" && profile.name !== "default") {
+      context.addIssue({
+        code: "custom",
+        path: ["name"],
+        message: "default profile name must be default",
+      });
+    }
     rejectOwnUndefined(profile, "review", context);
   });
 
@@ -170,30 +184,40 @@ export const userConfigProfileMetadataSchema = guardSchemaInput(
 
 const userConfigIndexInnerSchema = z
   .strictObject({
-    version: z.literal(2),
-    defaultProfileId: profileIdSchema,
+    version: z.literal(3),
+    selectedProfileId: profileIdSchema,
     profiles: z.array(userConfigProfileMetadataSchema),
   })
   .superRefine((index, context) => {
-    const profileIds = new Set(index.profiles.map(({ id }) => id));
+    let defaultCount = 0;
+    const profileIds = new Set<string>();
     const profileNames = new Set<string>();
-    if (!profileIds.has(index.defaultProfileId)) {
+    if (!index.profiles.some(({ id }) => id === "default")) {
       context.addIssue({
         code: "custom",
-        path: ["defaultProfileId"],
-        message: "defaultProfileId must reference a profile",
+        path: ["profiles"],
+        message: "profiles must include the default profile",
       });
     }
     for (const [position, profile] of index.profiles.entries()) {
-      if (
-        index.profiles.findIndex(({ id }) => id === profile.id) !== position
-      ) {
+      if (profile.id === "default") {
+        defaultCount += 1;
+        if (profile.name !== "default") {
+          context.addIssue({
+            code: "custom",
+            path: ["profiles", position, "name"],
+            message: "default profile name must be default",
+          });
+        }
+      }
+      if (profileIds.has(profile.id)) {
         context.addIssue({
           code: "custom",
           path: ["profiles", position, "id"],
           message: "profile IDs must be unique",
         });
       }
+      profileIds.add(profile.id);
       if (profileNames.has(profile.name)) {
         context.addIssue({
           code: "custom",
@@ -202,6 +226,20 @@ const userConfigIndexInnerSchema = z
         });
       }
       profileNames.add(profile.name);
+    }
+    if (defaultCount !== 1) {
+      context.addIssue({
+        code: "custom",
+        path: ["profiles"],
+        message: "profiles must include exactly one default profile",
+      });
+    }
+    if (!profileIds.has(index.selectedProfileId)) {
+      context.addIssue({
+        code: "custom",
+        path: ["selectedProfileId"],
+        message: "selectedProfileId must reference a profile",
+      });
     }
   });
 
@@ -347,6 +385,7 @@ function addDuplicateIdIssues(
 }
 
 export type UserConfigProfile = z.infer<typeof userConfigProfileSchema>;
+export type ProfileId = z.infer<typeof profileIdSchema>;
 export type ModelTierTarget = z.infer<typeof modelTierTargetSchema>;
 export type UserConfigProfileSettings = z.infer<
   typeof userConfigProfileSettingsSchema
@@ -355,6 +394,11 @@ export type UserConfigProfileMetadata = z.infer<
   typeof userConfigProfileMetadataSchema
 >;
 export type UserConfigIndex = z.infer<typeof userConfigIndexSchema>;
+
+export type ReplaceUserConfigProfileInput = UserConfigProfileSettings & {
+  readonly name: string;
+  readonly acknowledgedWarnings: readonly string[];
+};
 
 export type UpdateUserConfigProfileInput = UserConfigProfileSettings & {
   name?: string;

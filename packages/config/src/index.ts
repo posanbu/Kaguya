@@ -1,3 +1,8 @@
+/**
+ * 架构说明：本入口只做配置模型、就绪态与管理器能力的稳定导出，
+ * 让上层调用方无需关心各 schema/错误类型的文件切分，同时避免
+ * 直接依赖内部实现细节。
+ */
 export { ConfigError, configErrorCodes } from "./errors.js";
 export type { ConfigErrorCode } from "./errors.js";
 export {
@@ -6,6 +11,7 @@ export {
   ConfigReviewRequiredError,
   ConfigSetupRequiredError,
   inspectUserConfigProfile,
+  withRegistryReadiness,
 } from "./readiness.js";
 export type {
   ConfigurationGuidance,
@@ -13,6 +19,7 @@ export type {
   ConfigurationIssue,
   ConfigurationReadiness,
   ConfigurationWarning,
+  ExistingConfigurationReadiness,
   ProfileReadiness,
 } from "./readiness.js";
 export { FileUserConfigManager } from "./manager.js";
@@ -31,6 +38,7 @@ export {
   modelTiersSchema,
   platformConfigSchema,
   pluginConfigSchema,
+  profileIdSchema,
   userConfigIndexSchema,
   userConfigProfileMetadataSchema,
   userConfigProfileSchema,
@@ -41,6 +49,8 @@ export type {
   JsonPrimitive,
   JsonValue,
   ModelTierTarget,
+  ProfileId,
+  ReplaceUserConfigProfileInput,
   UpdateUserConfigProfileInput,
   UserConfigIndex,
   UserConfigProfile,

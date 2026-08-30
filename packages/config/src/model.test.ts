@@ -1,3 +1,8 @@
+/**
+ * 架构说明：本测试守护配置模型的注册表契约，覆盖 Profile ID、v3 索引
+ * 以及唯一性和引用完整性约束，确保管理器与 API 只能依赖这里定义的持久化
+ * 结构，而不会回退到旧版 defaultProfileId 语义。
+ */
 import { describe, expect, it } from "vitest";
 
 import {
@@ -13,6 +18,13 @@ import {
 } from "./model.js";
 
 const profileId = "4f649709-50d9-4fc4-8df4-95f96163f7c9";
+const defaultMetadata = {
+  id: "default",
+  name: "default",
+  createdAt: "2026-08-30T00:00:00.000Z",
+  updatedAt: "2026-08-30T00:00:00.000Z",
+};
+const userProfileId = profileId;
 type TestSafeParseResult = { success: boolean; error?: unknown };
 
 const publicSchemaParsers = [
@@ -79,6 +91,116 @@ function createThrowingGetterProxy(secret: string): object {
 }
 
 describe("user configuration schemas", () => {
+  it("accepts the reserved default profile ID and rejects non-UUID names", () => {
+    expect(profileIdSchema.parse("default")).toBe("default");
+    expect(profileIdSchema.safeParse("named-profile").success).toBe(false);
+  });
+
+  it("accepts a v3 registry index with a selected default profile", () => {
+    expect(
+      userConfigIndexSchema.parse({
+        version: 3,
+        selectedProfileId: "default",
+        profiles: [defaultMetadata],
+      }),
+    ).toMatchObject({ version: 3, selectedProfileId: "default" });
+  });
+
+  it("rejects a v3 registry index whose selected profile is missing", () => {
+    expect(
+      userConfigIndexSchema.safeParse({
+        version: 3,
+        selectedProfileId: userProfileId,
+        profiles: [defaultMetadata],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a registry index without the default profile", () => {
+    expect(
+      userConfigIndexSchema.safeParse({
+        version: 3,
+        selectedProfileId: "default",
+        profiles: [
+          {
+            ...defaultMetadata,
+            id: profileId,
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a registry index when the default profile name is not default", () => {
+    expect(
+      userConfigIndexSchema.safeParse({
+        version: 3,
+        selectedProfileId: "default",
+        profiles: [
+          {
+            ...defaultMetadata,
+            name: "personal",
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects duplicate profile IDs", () => {
+    expect(
+      userConfigIndexSchema.safeParse({
+        version: 3,
+        selectedProfileId: "default",
+        profiles: [
+          defaultMetadata,
+          {
+            ...defaultMetadata,
+            createdAt: "2026-08-30T01:00:00.000Z",
+            updatedAt: "2026-08-30T01:00:00.000Z",
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects duplicate profile names", () => {
+    expect(
+      userConfigIndexSchema.safeParse({
+        version: 3,
+        selectedProfileId: "default",
+        profiles: [
+          defaultMetadata,
+          {
+            id: profileId,
+            name: "default",
+            createdAt: "2026-08-30T01:00:00.000Z",
+            updatedAt: "2026-08-30T01:00:00.000Z",
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a legacy index that still uses defaultProfileId", () => {
+    expect(
+      userConfigIndexSchema.safeParse({
+        version: 3,
+        defaultProfileId: "default",
+        profiles: [defaultMetadata],
+      }).success,
+    ).toBe(false);
+  });
+
+  it.each([1, 2])("rejects registry index version %s", (version) => {
+    expect(
+      userConfigIndexSchema.safeParse({
+        version,
+        defaultProfileId: "default",
+        profiles: [defaultMetadata],
+      }).success,
+    ).toBe(false);
+  });
+
   it("preserves plaintext AI and platform credentials", () => {
     const profile = userConfigProfileSchema.parse({
       version: 1,
@@ -395,11 +517,11 @@ describe("user configuration schemas", () => {
       "configuration index",
       () =>
         userConfigIndexSchema.safeParse({
-          version: 2,
-          defaultProfileId: profileId,
+          version: 3,
+          selectedProfileId: "default",
           profiles: [
             {
-              id: profileId,
+              id: "default",
               name: "default",
               createdAt: "2026-07-25T00:00:00.000Z",
               updatedAt: "2026-07-25T00:00:00.000Z",
