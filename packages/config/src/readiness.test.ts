@@ -74,8 +74,9 @@ describe("inspectUserConfigProfile", () => {
 
   it("does not serialize selected profile metadata secrets", () => {
     const secret = "placeholder-readiness-secret";
+    const profiles = [structuredClone(defaultMetadata)];
     const readiness = withRegistryReadiness(
-      [defaultMetadata],
+      profiles,
       "default",
       inspectUserConfigProfile(
         profileWith([
@@ -93,6 +94,19 @@ describe("inspectUserConfigProfile", () => {
     );
 
     expect(JSON.stringify(readiness)).not.toContain(secret);
+  });
+
+  it("detaches the registry metadata snapshot from caller mutation", () => {
+    const profiles = [structuredClone(defaultMetadata)];
+    const readiness = withRegistryReadiness(
+      profiles,
+      "default",
+      inspectUserConfigProfile(profileWith([])),
+    );
+
+    profiles[0]!.name = "mutated";
+
+    expect(readiness.profiles[0]).toEqual(defaultMetadata);
   });
 
   it("rejects tiers that point to the same model target", () => {

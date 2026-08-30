@@ -48,17 +48,18 @@ export type ProfileReadiness =
     }
   | { readonly status: "ready" };
 
+export type ExistingConfigurationReadiness = ProfileReadiness & {
+  readonly profiles: readonly UserConfigProfileMetadata[];
+  readonly selectedProfileId: ProfileId;
+};
+
 export type ConfigurationReadiness =
   | {
       readonly status: "setup_required";
       readonly guidance: ConfigurationGuidance;
     }
-  | ProfileReadiness;
-
-export type ExistingConfigurationReadiness = ProfileReadiness & {
-  readonly profiles: readonly UserConfigProfileMetadata[];
-  readonly selectedProfileId: ProfileId;
-};
+  | ProfileReadiness
+  | ExistingConfigurationReadiness;
 
 export const configurationSetupGuidance: ConfigurationGuidance = Object.freeze({
   steps: Object.freeze([
@@ -111,9 +112,10 @@ export function withRegistryReadiness(
   selectedProfileId: ProfileId,
   readiness: ProfileReadiness,
 ): ExistingConfigurationReadiness {
+  const profilesSnapshot = profiles.map((profile) => structuredClone(profile));
   return {
     ...readiness,
-    profiles,
+    profiles: profilesSnapshot,
     selectedProfileId,
   };
 }
