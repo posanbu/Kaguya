@@ -322,8 +322,13 @@ describe("application API gateway", () => {
           profile: { id: created.profile.id, name: "work" },
         },
       });
-      await expect(management.inspect()).resolves.toEqual({
+      await expect(management.inspect()).resolves.toMatchObject({
         status: "restart_required",
+        selectedProfileId: created.profile.id,
+        profiles: expect.arrayContaining([
+          expect.objectContaining({ id: "default", name: "default" }),
+          expect.objectContaining({ id: created.profile.id, name: "work" }),
+        ]),
       });
     });
   });

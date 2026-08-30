@@ -412,8 +412,8 @@ function ProfileManagementScreen({
   readonly onClose: () => void;
   readonly onRestartRequired: () => void;
 }) {
-  const [registry, setRegistry] = useState<ProfileRegistryMetadata>(() =>
-    deriveRegistryMetadata(initialStatus),
+  const [registry, setRegistry] = useState<ProfileRegistryMetadata | undefined>(
+    () => readRegistryMetadata(initialStatus),
   );
   const [statusSnapshot, setStatusSnapshot] = useState(initialStatus);
   const [openedProfileId, setOpenedProfileId] = useState<string | undefined>(
@@ -433,7 +433,7 @@ function ProfileManagementScreen({
   const config: GatewayConfig = { token };
 
   useEffect(() => {
-    const nextRegistry = deriveRegistryMetadata(initialStatus);
+    const nextRegistry = readRegistryMetadata(initialStatus);
     setRegistry(nextRegistry);
     setStatusSnapshot(initialStatus);
     setOpenedProfileId(
@@ -480,6 +480,10 @@ function ProfileManagementScreen({
     }
     void refreshRegistry();
   }, [token]);
+
+  if (registry === undefined) {
+    return <ConfigurationLoading />;
+  }
 
   const canClose = statusSnapshot?.status === "ready";
   const readinessIssues = statusSnapshot?.issues ?? [];
@@ -1140,19 +1144,23 @@ export function clearLoadedProfileStateSnapshot(input: {
   };
 }
 
-export function deriveRegistryMetadata(
+export function readRegistryMetadata(
   status: ConfigurationStatus | undefined,
-): ProfileRegistryMetadata {
+): ProfileRegistryMetadata | undefined {
+  if (status === undefined) {
+    return undefined;
+  }
+  if (
+    typeof status.selectedProfileId !== "string" ||
+    !Array.isArray(status.profiles)
+  ) {
+    throw new Error(
+      "Configuration status is missing profile registry metadata",
+    );
+  }
   return {
-    selectedProfileId: status?.selectedProfileId ?? "default",
-    profiles: status?.profiles ?? [
-      {
-        id: "default",
-        name: "default",
-        createdAt: "",
-        updatedAt: "",
-      } satisfies ProfileMetadata,
-    ],
+    selectedProfileId: status.selectedProfileId,
+    profiles: status.profiles,
   };
 }
 

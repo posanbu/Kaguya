@@ -240,6 +240,21 @@ describe("configuration setup", () => {
     expect(request).toHaveBeenCalledWith("/api/v1/setup", { method: "GET" });
   });
 
+  it("requires selected profile metadata on anonymous restart_required status", async () => {
+    const request = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({
+        data: {
+          status: "restart_required",
+        },
+      }),
+    );
+
+    await expect(getConfigurationStatus(request)).rejects.toMatchObject({
+      code: "configuration_status_failed",
+      status: 200,
+    });
+  });
+
   it("rejects malformed anonymous setup metadata", async () => {
     const request = vi.fn<typeof fetch>().mockResolvedValue(
       Response.json({

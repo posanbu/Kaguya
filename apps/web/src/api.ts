@@ -111,8 +111,8 @@ export interface ConfigurationStatus {
     | "ready"
     | "invalid"
     | "review_required";
-  readonly selectedProfileId?: string;
-  readonly profiles?: readonly ProfileMetadata[];
+  readonly selectedProfileId: string;
+  readonly profiles: readonly ProfileMetadata[];
   readonly issues?: readonly ConfigurationIssue[];
   readonly warnings?: readonly ConfigurationWarning[];
 }
@@ -581,8 +581,8 @@ function isConfigurationStatusResponse(
     return false;
   }
   return (
-    isOptionalString(value.data.selectedProfileId) &&
-    isOptionalProfileMetadataArray(value.data.profiles) &&
+    typeof value.data.selectedProfileId === "string" &&
+    isProfileMetadataArray(value.data.profiles) &&
     isOptionalConfigurationIssueArray(value.data.issues) &&
     isOptionalConfigurationWarningArray(value.data.warnings)
   );
@@ -625,12 +625,6 @@ function isProfileMetadataArray(
   value: unknown,
 ): value is readonly ProfileMetadata[] {
   return Array.isArray(value) && value.every(isProfileMetadata);
-}
-
-function isOptionalProfileMetadataArray(
-  value: unknown,
-): value is readonly ProfileMetadata[] | undefined {
-  return value === undefined || isProfileMetadataArray(value);
 }
 
 function isProfileMetadata(value: unknown): value is ProfileMetadata {

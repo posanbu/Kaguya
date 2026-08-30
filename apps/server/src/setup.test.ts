@@ -97,9 +97,14 @@ describe("configuration management", () => {
 
       expect(selected.profile.id).toBe(created.profile.id);
       expect(selected.restartRequired).toBe(true);
-      await expect(management.inspect()).resolves.toEqual({
+      await expect(management.inspect()).resolves.toMatchObject({
         status: "restart_required",
-      });
+        selectedProfileId: created.profile.id,
+        profiles: expect.arrayContaining([
+          expect.objectContaining({ id: "default", name: "default" }),
+          expect.objectContaining({ id: created.profile.id, name: "work" }),
+        ]),
+      } satisfies Partial<ConfigurationSetupStatus>);
       await expect(
         (await createConfigurationManagement(root)).inspect(),
       ).resolves.toEqual({

@@ -15,7 +15,7 @@ import { describe, expect, it } from "vitest";
 import {
   clearLoadedProfileStateSnapshot,
   deriveConfigurationView,
-  deriveRegistryMetadata,
+  readRegistryMetadata,
 } from "./App.js";
 
 describe("deriveConfigurationView", () => {
@@ -52,10 +52,10 @@ describe("clearLoadedProfileStateSnapshot", () => {
   });
 });
 
-describe("deriveRegistryMetadata", () => {
-  it("prefers the explicit selected profile from readiness metadata", () => {
+describe("readRegistryMetadata", () => {
+  it("returns the explicit selected profile metadata from setup status", () => {
     expect(
-      deriveRegistryMetadata({
+      readRegistryMetadata({
         status: "ready",
         selectedProfileId: "default",
         profiles: [
@@ -80,5 +80,13 @@ describe("deriveRegistryMetadata", () => {
         },
       ],
     });
+  });
+
+  it("rejects setup status that omits registry metadata", () => {
+    expect(() =>
+      readRegistryMetadata({
+        status: "restart_required",
+      } as unknown as Parameters<typeof readRegistryMetadata>[0]),
+    ).toThrow("Configuration status is missing profile registry metadata");
   });
 });

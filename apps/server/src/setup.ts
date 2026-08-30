@@ -31,7 +31,10 @@ import {
 } from "@kaguya/config";
 
 export type ConfigurationSetupStatus =
-  ExistingConfigurationReadiness | { readonly status: "restart_required" };
+  | ExistingConfigurationReadiness
+  | (Omit<ExistingConfigurationReadiness, "status"> & {
+      readonly status: "restart_required";
+    });
 
 export interface ProfileRegistryMetadata {
   readonly selectedProfileId: string;
@@ -78,17 +81,21 @@ export async function createConfigurationManagement(
   return {
     async inspect() {
       const selectedProfileId = manager.getSelectedProfileId();
-      const readiness = inspectUserConfigProfile(
+      const selectedReadiness = inspectUserConfigProfile(
         await manager.getProfile(selectedProfileId),
       );
-      if (readiness.status === "ready" && restartRequired) {
-        return { status: "restart_required" as const };
-      }
-      return withRegistryReadiness(
+      const readiness = withRegistryReadiness(
         manager.listProfiles(),
         selectedProfileId,
-        readiness,
+        selectedReadiness,
       );
+      if (selectedReadiness.status === "ready" && restartRequired) {
+        return {
+          ...readiness,
+          status: "restart_required" as const,
+        };
+      }
+      return readiness;
     },
     async listProfiles() {
       return {

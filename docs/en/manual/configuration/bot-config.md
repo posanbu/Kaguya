@@ -2,18 +2,30 @@
 
 ## Summary
 
-`@kaguya/config` stores multiple AI, platform, and plugin configurations. It
-provides a default Profile and lookup by an explicit `profileId`; selection is
-never inferred from a message source or user identity.
+`@kaguya/config` stores multiple AI, platform, and plugin configurations and
+tracks one explicit `selectedProfileId` in a v3 registry. Configuration
+selection is never inferred from a message source, user identity, or module
+parameter.
 
 ## Current contract
 
-- `inspect()` reports readiness without side effects; `initialize()` explicitly creates the first Profile.
-- Index format v2 contains only `defaultProfileId` and Profile metadata. Profile files remain format v1.
-- `resolveProfileById(profileId?)` resolves an explicit or default Profile without falling back to another Profile, provider, or model.
-- A complete update clears warning acknowledgements, so the edited Profile must be reviewed again.
-- Plaintext secrets are written only to permission-protected sensitive JSON files using atomic replacement and path/symlink protection.
-- A v1 index is rejected with `CONFIG_UNSUPPORTED_VERSION`. It is never migrated or deleted automatically; back it up and initialize a new index.
+- `inspect()` reports readiness without side effects, and `bootstrap()`
+  explicitly creates an empty registry with the reserved `default` Profile.
+- Index format v3 stores `selectedProfileId` and Profile metadata. Profile
+  files remain format v1.
+- `resolveProfileById(profileId)` always requires an explicit ID and never
+  falls back to another Profile, provider, or model.
+- The reserved `default` Profile always exists, cannot be renamed, and cannot
+  be deleted.
+- Creating a Profile, replacing a full Profile body, selecting the global
+  Profile, and deleting a Profile are separate explicit operations.
+- A complete replacement clears warning acknowledgements, so the edited Profile
+  must be reviewed again.
+- Plaintext secrets are written only to permission-protected sensitive JSON
+  files using atomic replacement and path/symlink protection.
+- v1 and v2 indexes are rejected with `CONFIG_UNSUPPORTED_VERSION`. They are
+  never migrated or deleted automatically; back them up and bootstrap a new
+  registry.
 
 ## Known limitations
 
