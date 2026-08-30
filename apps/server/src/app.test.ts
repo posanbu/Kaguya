@@ -413,7 +413,7 @@ describe("application API gateway", () => {
 
       expect(invalidId.statusCode).toBe(400);
       expect(invalidId.json()).toMatchObject({
-        error: { code: "profile_invalid" },
+        error: { code: "invalid_request" },
       });
       expect(unknown.statusCode).toBe(404);
       expect(unknown.json()).toMatchObject({
@@ -510,6 +510,14 @@ describe("application API gateway", () => {
                 "application/json": {
                   schema: {
                     required: ["selectedProfileId"],
+                    properties: {
+                      selectedProfileId: {
+                        anyOf: [
+                          { enum: ["default"] },
+                          { type: "string", format: "uuid" },
+                        ],
+                      },
+                    },
                   },
                 },
               },
@@ -526,6 +534,18 @@ describe("application API gateway", () => {
                       properties: {
                         data: {
                           required: ["status", "selectedProfileId", "profiles"],
+                          properties: {
+                            profiles: {
+                              items: {
+                                required: [
+                                  "id",
+                                  "name",
+                                  "createdAt",
+                                  "updatedAt",
+                                ],
+                              },
+                            },
+                          },
                         },
                       },
                     },
@@ -613,10 +633,9 @@ describe("application API gateway", () => {
     });
     const serialized = JSON.stringify(document);
     expect(serialized).toContain("/api/v1/setup");
-    expect(serialized).not.toContain('"apiKey"');
-    expect(serialized).not.toContain('"baseUrl"');
-    expect(serialized).not.toContain('"model"');
-    expect(serialized).not.toContain('"provider"');
+    expect(serialized).toContain('"selectedProfileId"');
+    expect(serialized).toContain('"apiKey"');
+    expect(serialized).toContain('"baseUrl"');
     expect(serialized).not.toContain('"workflowId"');
     expect(serialized).not.toContain('"systemPrompt"');
     expect(serialized).not.toContain('"userPrompt"');

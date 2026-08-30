@@ -104,6 +104,13 @@ export interface ConfigurationWarning {
   readonly message: string;
 }
 
+/**
+ * 说明：Web 客户端保留 `setup_required` 这个状态，是为了对齐底层配置库在
+ * bootstrap 之前的只读 inspect 契约。正常的 Kaguya Server 启动流程会先创建
+ * 空 registry，因此 `/api/v1/setup` 通常返回 `invalid`、`review_required`、
+ * `restart_required` 或 `ready`，但客户端仍接受 `setup_required`，以兼容
+ * 未来显式 bootstrap/setup mode 或更底层的管理调用。
+ */
 export interface ConfigurationStatus {
   readonly status:
     | "setup_required"

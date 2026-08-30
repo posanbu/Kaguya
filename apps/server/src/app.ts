@@ -76,7 +76,7 @@ const createProfileRequestSchema = z
 
 const selectionRequestSchema = z
   .object({
-    selectedProfileId: z.string(),
+    selectedProfileId: profileIdSchema,
   })
   .strict();
 
@@ -99,14 +99,146 @@ const createProfileRequestJsonSchema = {
   },
 } as const;
 
+const profileIdJsonSchema = {
+  anyOf: [{ const: "default" }, { type: "string", format: "uuid" }],
+} as const;
+
+const profileMetadataJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["id", "name", "createdAt", "updatedAt"],
+  properties: {
+    id: profileIdJsonSchema,
+    name: { type: "string", minLength: 1 },
+    createdAt: { type: "string", format: "date-time" },
+    updatedAt: { type: "string", format: "date-time" },
+  },
+} as const;
+
+const configurationIssueJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["id", "path", "message"],
+  properties: {
+    id: { type: "string", minLength: 1 },
+    path: { type: "string" },
+    message: { type: "string", minLength: 1 },
+  },
+} as const;
+
+const modelTierTargetJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["providerId", "modelId"],
+  properties: {
+    providerId: { type: "string", minLength: 1 },
+    modelId: { type: "string", minLength: 1 },
+  },
+} as const;
+
+const aiProviderConfigJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["id", "type", "enabled", "models", "settings"],
+  properties: {
+    id: { type: "string", minLength: 1 },
+    type: { type: "string", minLength: 1 },
+    enabled: { type: "boolean" },
+    baseUrl: { type: "string", format: "uri" },
+    apiKey: { type: "string" },
+    models: {
+      type: "array",
+      items: { type: "string", minLength: 1 },
+    },
+    settings: { type: "object", additionalProperties: true },
+  },
+} as const;
+
+const aiConfigJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["providers"],
+  properties: {
+    defaultProviderId: { type: "string", minLength: 1 },
+    modelTiers: {
+      type: "object",
+      additionalProperties: false,
+      required: ["light", "heavy"],
+      properties: {
+        light: modelTierTargetJsonSchema,
+        heavy: modelTierTargetJsonSchema,
+      },
+    },
+    providers: {
+      type: "array",
+      items: aiProviderConfigJsonSchema,
+    },
+  },
+} as const;
+
+const platformConfigJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["id", "type", "enabled", "credentials", "settings"],
+  properties: {
+    id: { type: "string", minLength: 1 },
+    type: { type: "string", minLength: 1 },
+    enabled: { type: "boolean" },
+    credentials: { type: "object", additionalProperties: true },
+    settings: { type: "object", additionalProperties: true },
+  },
+} as const;
+
+const pluginConfigJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["id", "enabled", "settings"],
+  properties: {
+    id: { type: "string", minLength: 1 },
+    enabled: { type: "boolean" },
+    settings: { type: "object", additionalProperties: true },
+  },
+} as const;
+
+const profileReviewJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["acknowledgedWarnings"],
+  properties: {
+    acknowledgedWarnings: {
+      type: "array",
+      items: { type: "string", minLength: 1 },
+    },
+  },
+} as const;
+
+const userConfigProfileJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["version", "id", "name", "ai", "platforms", "plugins"],
+  properties: {
+    version: { type: "integer", enum: [1] },
+    id: profileIdJsonSchema,
+    name: { type: "string", minLength: 1 },
+    ai: aiConfigJsonSchema,
+    platforms: {
+      type: "array",
+      items: platformConfigJsonSchema,
+    },
+    plugins: {
+      type: "array",
+      items: pluginConfigJsonSchema,
+    },
+    review: profileReviewJsonSchema,
+  },
+} as const;
+
 const selectionRequestJsonSchema = {
   type: "object",
   additionalProperties: false,
   required: ["selectedProfileId"],
   properties: {
-    selectedProfileId: {
-      type: "string",
-    },
+    selectedProfileId: profileIdJsonSchema,
   },
 } as const;
 
@@ -115,9 +247,7 @@ const profilePathParamsJsonSchema = {
   additionalProperties: false,
   required: ["profileId"],
   properties: {
-    profileId: {
-      type: "string",
-    },
+    profileId: profileIdJsonSchema,
   },
 } as const;
 
@@ -127,9 +257,9 @@ const replaceProfileRequestJsonSchema = {
   required: ["name", "ai", "platforms", "plugins", "acknowledgedWarnings"],
   properties: {
     name: { type: "string", minLength: 1, maxLength: 100 },
-    ai: { type: "object" },
-    platforms: { type: "array" },
-    plugins: { type: "array" },
+    ai: aiConfigJsonSchema,
+    platforms: { type: "array", items: platformConfigJsonSchema },
+    plugins: { type: "array", items: pluginConfigJsonSchema },
     acknowledgedWarnings: {
       type: "array",
       items: { type: "string", minLength: 1 },
@@ -147,19 +277,28 @@ const setupStatusResponseJsonSchema = {
       additionalProperties: false,
       required: ["status", "selectedProfileId", "profiles"],
       properties: {
-        status: { type: "string" },
-        selectedProfileId: { type: "string" },
+        status: {
+          type: "string",
+          enum: [
+            "setup_required",
+            "invalid",
+            "review_required",
+            "restart_required",
+            "ready",
+          ],
+        },
+        selectedProfileId: profileIdJsonSchema,
         profiles: {
           type: "array",
-          items: { type: "object", additionalProperties: true },
+          items: profileMetadataJsonSchema,
         },
         issues: {
           type: "array",
-          items: { type: "object", additionalProperties: true },
+          items: configurationIssueJsonSchema,
         },
         warnings: {
           type: "array",
-          items: { type: "object", additionalProperties: true },
+          items: configurationIssueJsonSchema,
         },
       },
     },
@@ -176,10 +315,10 @@ const profileRegistryResponseJsonSchema = {
       additionalProperties: false,
       required: ["selectedProfileId", "profiles"],
       properties: {
-        selectedProfileId: { type: "string" },
+        selectedProfileId: profileIdJsonSchema,
         profiles: {
           type: "array",
-          items: { type: "object", additionalProperties: true },
+          items: profileMetadataJsonSchema,
         },
       },
     },
@@ -196,7 +335,7 @@ const profileResponseJsonSchema = {
       additionalProperties: false,
       required: ["profile"],
       properties: {
-        profile: { type: "object", additionalProperties: true },
+        profile: userConfigProfileJsonSchema,
       },
     },
   },
@@ -212,7 +351,7 @@ const profileMutationResponseJsonSchema = {
       additionalProperties: false,
       required: ["profile", "restartRequired"],
       properties: {
-        profile: { type: "object", additionalProperties: true },
+        profile: userConfigProfileJsonSchema,
         restartRequired: { type: "boolean" },
       },
     },
