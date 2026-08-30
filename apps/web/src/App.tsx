@@ -1,37 +1,67 @@
+/**
+ * 功能概述：本文件承载 WebUI 的顶层状态机，在匿名 setup 状态、Profile 管理、
+ * 待重启提示与消息聊天之间做显式切换，落实“全局 selected Profile 唯一生效、
+ * 切换后必须重启 Runtime”的产品契约。
+ * 主要职责：`App` 负责首次读取 `/api/v1/setup`、保存网关 token、根据 selected
+ * Profile 的 readiness 决定当前视图，并在 ready 状态下提供聊天入口与 Settings
+ * 按钮；`ProfileManagementScreen` 负责展示 Profile 元数据列表、按 ID 加载完整
+ * Profile、独立执行 create/replace/select/delete 动作，并在切换 Profile 或离开
+ * 管理页时清空包含 secret 的已加载正文与编辑字段；其余小组件负责重启提示、
+ * readiness 呈现与消息投递反馈。
+ * 代码库关系：本文件消费 `api.ts` 的匿名状态、消息接口与 Profile Registry 管理
+ * API，以及 `profile-editor.ts` 的纯函数合并逻辑；样式由同目录 `styles.css`
+ * 提供，服务端实现位于 `apps/server/src/app.ts` 与 `setup.ts`。
+ * 输入输出与副作用：页面会读写 `sessionStorage` 里的网关 token；所有 Profile
+ * 修改都通过 HTTP 请求落到服务端，不在浏览器端推断默认 Profile；当 selected
+ * Profile 已 ready 且本次 replace/select 改变冻结运行配置时，本文件只切到
+ * restart 视图提示用户重启，不做热切换。
+ */
 import {
   AlertCircle,
   CheckCircle2,
   Eye,
   EyeOff,
   LoaderCircle,
+  Plus,
   RefreshCw,
   Save,
   SendHorizontal,
   Settings2,
+  Trash2,
 } from "lucide-react";
-import {
-  FormEvent,
-  KeyboardEvent,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 
 import {
   checkGatewayHealth,
+  createProfile,
+  deleteProfile,
+  GatewayConfig,
   GatewayRequestError,
   getConfigurationStatus,
-  initializeConfiguration,
+  getProfile,
+  listProfiles,
   MAX_MESSAGE_LENGTH,
+  ProfileMetadata,
+  replaceProfile,
+  selectProfile,
   sendMessage,
+  type ConfigurationIssue,
+  type ConfigurationStatus,
+  type ConfigurationWarning,
+  type ProfileRegistryMetadata,
+  type UserConfigProfile,
 } from "./api.js";
+import {
+  mergeProfileEditorFields,
+  profileToEditorFields,
+  type ProfileEditorFields,
+} from "./profile-editor.js";
 
 const TOKEN_KEY = "kaguya.gatewayToken";
 
 type DeliveryState = "sending" | "accepted" | "failed";
 type HealthState = "idle" | "checking" | "online" | "offline";
-type ConfigurationView = "checking" | "setup" | "restart" | "chat" | "error";
+type ConfigurationView = "checking" | "profiles" | "restart" | "chat" | "error";
 
 interface ChatMessage {
   readonly id: string;
@@ -48,6 +78,8 @@ export function App() {
   );
   const [configurationView, setConfigurationView] =
     useState<ConfigurationView>("checking");
+  const [configurationStatus, setConfigurationStatus] =
+    useState<ConfigurationStatus>();
   const [configurationError, setConfigurationError] = useState<string>();
   const [showToken, setShowToken] = useState(false);
   const [healthState, setHealthState] = useState<HealthState>("idle");
@@ -57,27 +89,35 @@ export function App() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const isSending = messages.some((message) => message.state === "sending");
-  const draftLength = useMemo(() => [...draft].length, [draft]);
+  const draftLength = [...draft].length;
   const canSend =
     !isSending && draft.trim().length > 0 && draftLength <= MAX_MESSAGE_LENGTH;
+
+  const loadConfigurationStatus = async (options?: {
+    readonly keepProfilesOpen?: boolean;
+  }) => {
+    const status = await getConfigurationStatus();
+    setConfigurationStatus(status);
+    setConfigurationView((current) =>
+      deriveConfigurationView(status, current, options?.keepProfilesOpen ?? false),
+    );
+    return status;
+  };
 
   useEffect(() => {
     let active = true;
     void getConfigurationStatus().then(
       (status) => {
-        if (!active) return;
-        setConfigurationView(
-          status.status === "setup_required" ||
-            status.status === "invalid" ||
-            status.status === "review_required"
-            ? "setup"
-            : status.status === "restart_required"
-              ? "restart"
-              : "chat",
-        );
+        if (!active) {
+          return;
+        }
+        setConfigurationStatus(status);
+        setConfigurationView(deriveConfigurationView(status, "checking", false));
       },
       (error) => {
-        if (!active) return;
+        if (!active) {
+          return;
+        }
         setConfigurationError(errorMessage(error));
         setConfigurationView("error");
       },
@@ -168,13 +208,24 @@ export function App() {
     return <ConfigurationStatusError message={configurationError} />;
   }
 
-  if (configurationView === "setup") {
+  if (configurationView === "profiles") {
     return (
-      <SetupScreen
+      <ProfileManagementScreen
         token={token}
+        initialStatus={configurationStatus}
         onTokenChange={(value) => {
           setToken(value);
           sessionStorage.setItem(TOKEN_KEY, value);
+        }}
+        onStatusChange={(status) => {
+          setConfigurationStatus(status);
+        }}
+        onReloadStatus={(options) => loadConfigurationStatus(options)}
+        onClose={() => {
+          setConfigurationView("chat");
+        }}
+        onRestartRequired={() => {
+          setConfigurationView("restart");
         }}
       />
     );
@@ -253,6 +304,14 @@ export function App() {
               <p className="eyebrow">消息入口</p>
               <h2 id="chat-title">消息</h2>
             </div>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => setConfigurationView("profiles")}
+            >
+              <Settings2 size={16} />
+              <span>Settings</span>
+            </button>
           </header>
 
           <div className="message-list" aria-live="polite">
@@ -320,6 +379,610 @@ export function App() {
   );
 }
 
+function ProfileManagementScreen({
+  token,
+  initialStatus,
+  onTokenChange,
+  onStatusChange,
+  onReloadStatus,
+  onClose,
+  onRestartRequired,
+}: {
+  readonly token: string;
+  readonly initialStatus: ConfigurationStatus | undefined;
+  readonly onTokenChange: (value: string) => void;
+  readonly onStatusChange: (status: ConfigurationStatus) => void;
+  readonly onReloadStatus: (options?: {
+    readonly keepProfilesOpen?: boolean;
+  }) => Promise<ConfigurationStatus>;
+  readonly onClose: () => void;
+  readonly onRestartRequired: () => void;
+}) {
+  const [registry, setRegistry] = useState<ProfileRegistryMetadata>(() =>
+    deriveRegistryMetadata(initialStatus),
+  );
+  const [statusSnapshot, setStatusSnapshot] = useState(initialStatus);
+  const [openedProfileId, setOpenedProfileId] = useState<string | undefined>(
+    initialStatus?.selectedProfileId,
+  );
+  const [loadedProfile, setLoadedProfile] = useState<UserConfigProfile>();
+  const [editorFields, setEditorFields] = useState<ProfileEditorFields>();
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [loadingProfile, setLoadingProfile] = useState(false);
+  const [mutating, setMutating] = useState(false);
+  const [createExpanded, setCreateExpanded] = useState(false);
+  const [createName, setCreateName] = useState("");
+  const [panelError, setPanelError] = useState<string>();
+  const [notice, setNotice] = useState<string>();
+  const requestSequence = useRef(0);
+
+  const config: GatewayConfig = { token };
+
+  useEffect(() => {
+    const nextRegistry = deriveRegistryMetadata(initialStatus);
+    setRegistry(nextRegistry);
+    setStatusSnapshot(initialStatus);
+    setOpenedProfileId((current) => current ?? initialStatus?.selectedProfileId);
+  }, [initialStatus]);
+
+  useEffect(() => {
+    clearLoadedProfileState();
+  }, [token]);
+
+  useEffect(() => {
+    if (!openedProfileId || token.trim().length === 0) {
+      return;
+    }
+    const currentSequence = requestSequence.current + 1;
+    requestSequence.current = currentSequence;
+    setLoadingProfile(true);
+    setPanelError(undefined);
+    setNotice(undefined);
+    void getProfile(config, openedProfileId).then(
+      ({ profile }) => {
+        if (requestSequence.current !== currentSequence) {
+          return;
+        }
+        setLoadedProfile(profile);
+        setEditorFields(profileToEditorFields(profile));
+        setLoadingProfile(false);
+      },
+      (error) => {
+        if (requestSequence.current !== currentSequence) {
+          return;
+        }
+        clearLoadedProfileState();
+        setPanelError(errorMessage(error));
+        setLoadingProfile(false);
+      },
+    );
+  }, [config, openedProfileId, token]);
+
+  useEffect(() => {
+    if (token.trim().length === 0) {
+      return;
+    }
+    void refreshRegistry();
+  }, [token]);
+
+  const canClose = statusSnapshot?.status === "ready";
+  const readinessIssues = statusSnapshot?.issues ?? [];
+  const readinessWarnings = statusSnapshot?.warnings ?? [];
+  const selectedProfileId =
+    registry.selectedProfileId || statusSnapshot?.selectedProfileId || "default";
+  const deleteDisabled =
+    openedProfileId === undefined ||
+    openedProfileId === "default" ||
+    openedProfileId === selectedProfileId;
+  const saveDisabled =
+    mutating ||
+    loadingProfile ||
+    loadedProfile === undefined ||
+    editorFields === undefined;
+
+  function clearLoadedProfileState() {
+    requestSequence.current += 1;
+    setLoadedProfile(undefined);
+    setEditorFields(undefined);
+    setShowApiKey(false);
+  }
+
+  async function refreshRegistry() {
+    const nextRegistry = await listProfiles(config);
+    setRegistry(nextRegistry);
+    return nextRegistry;
+  }
+
+  async function refreshStatusAfterMutation() {
+    const status = await onReloadStatus({ keepProfilesOpen: true });
+    setStatusSnapshot(status);
+    onStatusChange(status);
+    return status;
+  }
+
+  const handleOpenProfile = (profileId: string) => {
+    setOpenedProfileId(profileId);
+    clearLoadedProfileState();
+    setPanelError(undefined);
+    setNotice(
+      token.trim().length === 0
+        ? "Enter the gateway token to load this profile."
+        : undefined,
+    );
+  };
+
+  const handleCreateProfile = async () => {
+    if (createName.trim().length === 0) {
+      setPanelError("Profile name is required.");
+      return;
+    }
+    setMutating(true);
+    setPanelError(undefined);
+    setNotice(undefined);
+    try {
+      const result = await createProfile(config, { name: createName });
+      const nextRegistry = await refreshRegistry();
+      setOpenedProfileId(result.profile.id);
+      setLoadedProfile(result.profile);
+      setEditorFields(profileToEditorFields(result.profile));
+      setCreateExpanded(false);
+      setCreateName("");
+      setRegistry(nextRegistry);
+      setNotice("Profile created. Select it separately to make it active.");
+    } catch (error) {
+      setPanelError(errorMessage(error));
+    } finally {
+      setMutating(false);
+    }
+  };
+
+  const handleSaveProfile = async () => {
+    if (loadedProfile === undefined || editorFields === undefined) {
+      return;
+    }
+    setMutating(true);
+    setPanelError(undefined);
+    setNotice(undefined);
+    try {
+      const replacement = mergeProfileEditorFields(loadedProfile, editorFields);
+      const result = await replaceProfile(config, loadedProfile.id, replacement);
+      setLoadedProfile(result.profile);
+      setEditorFields(profileToEditorFields(result.profile));
+      await refreshRegistry();
+      const status = await refreshStatusAfterMutation();
+      if (result.restartRequired && status.status === "ready") {
+        onRestartRequired();
+        return;
+      }
+      setNotice("Profile saved.");
+    } catch (error) {
+      setPanelError(errorMessage(error));
+    } finally {
+      setMutating(false);
+    }
+  };
+
+  const handleSelectProfile = async () => {
+    if (openedProfileId === undefined) {
+      return;
+    }
+    setMutating(true);
+    setPanelError(undefined);
+    setNotice(undefined);
+    try {
+      const result = await selectProfile(config, openedProfileId);
+      setLoadedProfile(result.profile);
+      setEditorFields(profileToEditorFields(result.profile));
+      const nextRegistry = await refreshRegistry();
+      const status = await refreshStatusAfterMutation();
+      setRegistry(nextRegistry);
+      if (result.restartRequired && status.status === "ready") {
+        onRestartRequired();
+        return;
+      }
+      setNotice(
+        status.status === "ready"
+          ? "Selected profile updated."
+          : "Selected profile changed. Fix its readiness issues before restart.",
+      );
+    } catch (error) {
+      setPanelError(errorMessage(error));
+    } finally {
+      setMutating(false);
+    }
+  };
+
+  const handleDeleteProfile = async () => {
+    if (openedProfileId === undefined || deleteDisabled) {
+      return;
+    }
+    setMutating(true);
+    setPanelError(undefined);
+    setNotice(undefined);
+    try {
+      await deleteProfile(config, openedProfileId);
+      clearLoadedProfileState();
+      const nextRegistry = await refreshRegistry();
+      const status = await refreshStatusAfterMutation();
+      setRegistry(nextRegistry);
+      setStatusSnapshot(status);
+      setOpenedProfileId(nextRegistry.selectedProfileId);
+      setNotice("Profile deleted.");
+    } catch (error) {
+      setPanelError(errorMessage(error));
+    } finally {
+      setMutating(false);
+    }
+  };
+
+  return (
+    <div className="setup-shell">
+      <header className="topbar">
+        <div className="brand-mark" aria-hidden="true">
+          K
+        </div>
+        <div>
+          <h1>Kaguya</h1>
+          <p>Profile 管理</p>
+        </div>
+      </header>
+
+      <main className="setup-main profile-main">
+        <div className="profile-workspace">
+          <aside className="setup-card profile-sidebar" aria-labelledby="profiles-title">
+            <div className="panel-heading profile-sidebar-heading">
+              <div>
+                <p className="eyebrow">Registry</p>
+                <h2 id="profiles-title">Profiles</h2>
+              </div>
+              {canClose ? (
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => {
+                    clearLoadedProfileState();
+                    onClose();
+                  }}
+                >
+                  返回消息
+                </button>
+              ) : null}
+            </div>
+
+            <div className="profile-create">
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={mutating}
+                onClick={() => {
+                  setCreateExpanded((current) => !current);
+                  setPanelError(undefined);
+                }}
+              >
+                <Plus size={16} />
+                <span>Create Profile</span>
+              </button>
+              {createExpanded ? (
+                <div className="profile-create-form">
+                  <label className="field compact-field">
+                    <span>Profile name</span>
+                    <input
+                      value={createName}
+                      onChange={(event) => setCreateName(event.target.value)}
+                      placeholder="Production"
+                      autoComplete="off"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="setup-button inline-button"
+                    disabled={mutating}
+                    onClick={() => void handleCreateProfile()}
+                  >
+                    {mutating ? (
+                      <LoaderCircle className="spin" size={16} />
+                    ) : (
+                      <Plus size={16} />
+                    )}
+                    <span>{mutating ? "Creating" : "Create"}</span>
+                  </button>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="profile-list" role="list">
+              {registry.profiles.map((profile) => {
+                const active = profile.id === openedProfileId;
+                const selected = profile.id === selectedProfileId;
+                return (
+                  <button
+                    key={profile.id}
+                    type="button"
+                    className={`profile-list-item${active ? " active" : ""}`}
+                    onClick={() => handleOpenProfile(profile.id)}
+                  >
+                    <span className="profile-list-name">{profile.name}</span>
+                    <span className="profile-list-meta">
+                      {selected ? "Selected" : "Available"}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <ReadinessPanel
+              selectedProfileId={selectedProfileId}
+              status={statusSnapshot?.status ?? "setup_required"}
+              issues={readinessIssues}
+              warnings={readinessWarnings}
+            />
+          </aside>
+
+          <section className="setup-card profile-editor-card" aria-labelledby="profile-editor-title">
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">Editor</p>
+                <h2 id="profile-editor-title">
+                  {openedProfileId === undefined ? "Select a profile" : "Profile details"}
+                </h2>
+              </div>
+              <div className="editor-actions">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={openedProfileId === undefined || mutating}
+                  onClick={() => void handleSelectProfile()}
+                >
+                  Select
+                </button>
+                <button
+                  type="button"
+                  className="danger-button"
+                  disabled={deleteDisabled || mutating}
+                  onClick={() => void handleDeleteProfile()}
+                >
+                  <Trash2 size={16} />
+                  <span>Delete</span>
+                </button>
+              </div>
+            </div>
+
+            <p className="setup-intro profile-intro">
+              Load a full profile with the management token, then save or select it explicitly.
+              Creation, replacement, selection, and deletion remain separate actions.
+            </p>
+
+            <label className="field">
+              <span>Gateway token</span>
+              <input
+                type="password"
+                value={token}
+                onChange={(event) => onTokenChange(event.target.value)}
+                autoComplete="current-password"
+                placeholder="KAGUYA_GATEWAY_TOKEN"
+              />
+            </label>
+
+            {panelError ? (
+              <div className="error-banner" role="alert">
+                <AlertCircle size={17} />
+                <span>{panelError}</span>
+              </div>
+            ) : null}
+            {notice ? (
+              <div className="setup-success" role="status">
+                <CheckCircle2 size={17} />
+                <span>{notice}</span>
+              </div>
+            ) : null}
+
+            {loadingProfile ? (
+              <div className="profile-loading" role="status">
+                <LoaderCircle className="spin" size={18} />
+                <span>Loading profile</span>
+              </div>
+            ) : null}
+
+            {openedProfileId !== undefined && loadedProfile === undefined && !loadingProfile ? (
+              <div className="profile-placeholder">
+                <p>
+                  {token.trim().length === 0
+                    ? "Enter the gateway token to load this profile body."
+                    : "Select a profile again if loading failed."}
+                </p>
+              </div>
+            ) : null}
+
+            {loadedProfile !== undefined && editorFields !== undefined ? (
+              <form
+                className="setup-form profile-editor-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void handleSaveProfile();
+                }}
+              >
+                <label className="field">
+                  <span>Profile name</span>
+                  <input
+                    value={editorFields.name}
+                    disabled={loadedProfile.id === "default"}
+                    onChange={(event) =>
+                      setEditorFields((current) =>
+                        current === undefined
+                          ? current
+                          : { ...current, name: event.target.value },
+                      )
+                    }
+                    maxLength={100}
+                    autoComplete="off"
+                    placeholder="default"
+                  />
+                </label>
+                <label className="field">
+                  <span>Model service URL</span>
+                  <input
+                    type="url"
+                    value={editorFields.baseUrl}
+                    onChange={(event) =>
+                      setEditorFields((current) =>
+                        current === undefined
+                          ? current
+                          : { ...current, baseUrl: event.target.value },
+                      )
+                    }
+                    autoComplete="url"
+                    placeholder="https://api.openai.com/v1"
+                  />
+                </label>
+                <label className="field">
+                  <span>Model service API key</span>
+                  <div className="password-field">
+                    <input
+                      type={showApiKey ? "text" : "password"}
+                      value={editorFields.apiKey}
+                      onChange={(event) =>
+                        setEditorFields((current) =>
+                          current === undefined
+                            ? current
+                            : { ...current, apiKey: event.target.value },
+                        )
+                      }
+                      autoComplete="new-password"
+                      placeholder="Enter provider API key"
+                    />
+                    <button
+                      type="button"
+                      className="icon-button"
+                      onClick={() => setShowApiKey((current) => !current)}
+                      aria-label={showApiKey ? "Hide API key" : "Show API key"}
+                      title={showApiKey ? "Hide API key" : "Show API key"}
+                    >
+                      {showApiKey ? <EyeOff size={18} /> : <Eye size={18} />}
+                    </button>
+                  </div>
+                </label>
+                <div className="setup-model-grid">
+                  <label className="field">
+                    <span>Light model</span>
+                    <input
+                      value={editorFields.lightModel}
+                      onChange={(event) =>
+                        setEditorFields((current) =>
+                          current === undefined
+                            ? current
+                            : { ...current, lightModel: event.target.value },
+                        )
+                      }
+                      autoComplete="off"
+                      placeholder="gpt-4o-mini"
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Heavy model</span>
+                    <input
+                      value={editorFields.heavyModel}
+                      onChange={(event) =>
+                        setEditorFields((current) =>
+                          current === undefined
+                            ? current
+                            : { ...current, heavyModel: event.target.value },
+                        )
+                      }
+                      autoComplete="off"
+                      placeholder="gpt-4o"
+                    />
+                  </label>
+                </div>
+                <label className="setup-check">
+                  <input
+                    type="checkbox"
+                    checked={editorFields.acknowledgeOptional}
+                    onChange={(event) =>
+                      setEditorFields((current) =>
+                        current === undefined
+                          ? current
+                          : {
+                              ...current,
+                              acknowledgeOptional: event.target.checked,
+                            },
+                      )
+                    }
+                  />
+                  <span>I understand that platforms and plugins are still unconfigured.</span>
+                </label>
+
+                <button
+                  className="setup-button"
+                  type="submit"
+                  disabled={saveDisabled}
+                >
+                  {mutating ? (
+                    <LoaderCircle className="spin" size={18} />
+                  ) : (
+                    <Save size={18} />
+                  )}
+                  <span>{mutating ? "Saving" : "Save Profile"}</span>
+                </button>
+              </form>
+            ) : null}
+          </section>
+        </div>
+      </main>
+    </div>
+  );
+}
+
+function ReadinessPanel({
+  selectedProfileId,
+  status,
+  issues,
+  warnings,
+}: {
+  readonly selectedProfileId: string;
+  readonly status: ConfigurationStatus["status"];
+  readonly issues: readonly ConfigurationIssue[];
+  readonly warnings: readonly ConfigurationWarning[];
+}) {
+  return (
+    <section className="readiness-card" aria-labelledby="readiness-title">
+      <div className="readiness-heading">
+        <p className="eyebrow">Selected Profile</p>
+        <h3 id="readiness-title">{selectedProfileId}</h3>
+      </div>
+      <p className="readiness-status">Status: {statusLabel(status)}</p>
+      {issues.length > 0 ? (
+        <div className="readiness-group">
+          <strong>Issues</strong>
+          <ul className="readiness-list">
+            {issues.map((issue) => (
+              <li key={`${issue.id}:${issue.path}`}>
+                <code>{issue.path}</code>
+                <span>{issue.message}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {warnings.length > 0 ? (
+        <div className="readiness-group">
+          <strong>Warnings</strong>
+          <ul className="readiness-list">
+            {warnings.map((warning) => (
+              <li key={`${warning.id}:${warning.path}`}>
+                <code>{warning.path}</code>
+                <span>{warning.message}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {issues.length === 0 && warnings.length === 0 ? (
+        <p className="readiness-empty">No readiness issues for the selected profile.</p>
+      ) : null}
+    </section>
+  );
+}
+
 function ConfigurationLoading() {
   return (
     <div className="setup-shell">
@@ -334,7 +997,7 @@ function ConfigurationLoading() {
 function ConfigurationStatusError({
   message,
 }: {
-  message: string | undefined;
+  readonly message: string | undefined;
 }) {
   return (
     <div className="setup-shell">
@@ -360,7 +1023,7 @@ function RestartRequired() {
       <section className="setup-card setup-status-card" role="status">
         <CheckCircle2 size={22} />
         <h1>配置已保存</h1>
-        <p>请重启 Kaguya 服务，使 Runtime 加载新的模型配置，然后刷新页面。</p>
+        <p>请重启 Kaguya 服务，使 Runtime 加载新的选中 Profile，然后刷新页面。</p>
         <button
           type="button"
           className="setup-button"
@@ -373,208 +1036,7 @@ function RestartRequired() {
   );
 }
 
-function SetupScreen({
-  token,
-  onTokenChange,
-}: {
-  readonly token: string;
-  readonly onTokenChange: (value: string) => void;
-}) {
-  const [profileName, setProfileName] = useState("default");
-  const [baseUrl, setBaseUrl] = useState("https://api.openai.com/v1");
-  const [apiKey, setApiKey] = useState("");
-  const [lightModel, setLightModel] = useState("");
-  const [heavyModel, setHeavyModel] = useState("");
-  const [acknowledgeOptional, setAcknowledgeOptional] = useState(false);
-  const [showApiKey, setShowApiKey] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [formError, setFormError] = useState<string>();
-
-  const modelsAreDistinct = lightModel.trim() !== heavyModel.trim();
-  const canSubmit =
-    !submitting &&
-    token.trim().length > 0 &&
-    profileName.trim().length > 0 &&
-    baseUrl.trim().length > 0 &&
-    apiKey.length > 0 &&
-    lightModel.trim().length > 0 &&
-    heavyModel.trim().length > 0 &&
-    modelsAreDistinct &&
-    acknowledgeOptional;
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!canSubmit) return;
-    setSubmitting(true);
-    setFormError(undefined);
-    try {
-      await initializeConfiguration(
-        { token },
-        {
-          profileName,
-          baseUrl,
-          apiKey,
-          lightModel,
-          heavyModel,
-          acknowledgeOptional,
-        },
-      );
-      setSaved(true);
-    } catch (error) {
-      setFormError(errorMessage(error));
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <div className="setup-shell">
-      <header className="topbar">
-        <div className="brand-mark" aria-hidden="true">
-          K
-        </div>
-        <div>
-          <h1>Kaguya</h1>
-          <p>配置向导</p>
-        </div>
-      </header>
-
-      <main className="setup-main">
-        <section className="setup-card" aria-labelledby="setup-title">
-          <div className="setup-heading">
-            <div className="setup-icon" aria-hidden="true">
-              <Settings2 size={20} />
-            </div>
-            <div>
-              <p className="eyebrow">运行前检查</p>
-              <h1 id="setup-title">完成运行配置</h1>
-            </div>
-          </div>
-          <p className="setup-intro">
-            配置缺失或尚未确认时会停留在此页面。填写一个 OpenAI-compatible
-            模型服务，保存后重启 Kaguya 即可开始聊天。
-          </p>
-
-          <form className="setup-form" onSubmit={(event) => void submit(event)}>
-            <label className="field">
-              <span>配置名称</span>
-              <input
-                value={profileName}
-                onChange={(event) => setProfileName(event.target.value)}
-                maxLength={100}
-                autoComplete="off"
-                placeholder="default"
-              />
-            </label>
-            <label className="field">
-              <span>模型服务 URL</span>
-              <input
-                type="url"
-                value={baseUrl}
-                onChange={(event) => setBaseUrl(event.target.value)}
-                autoComplete="url"
-                placeholder="https://api.openai.com/v1"
-              />
-            </label>
-            <label className="field">
-              <span>模型服务 API Key</span>
-              <div className="password-field">
-                <input
-                  type={showApiKey ? "text" : "password"}
-                  value={apiKey}
-                  onChange={(event) => setApiKey(event.target.value)}
-                  autoComplete="new-password"
-                  placeholder="输入模型服务密钥"
-                />
-                <button
-                  type="button"
-                  className="icon-button"
-                  onClick={() => setShowApiKey((current) => !current)}
-                  aria-label={showApiKey ? "隐藏 API Key" : "显示 API Key"}
-                  title={showApiKey ? "隐藏 API Key" : "显示 API Key"}
-                >
-                  {showApiKey ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
-              </div>
-            </label>
-            <div className="setup-model-grid">
-              <label className="field">
-                <span>Light 模型</span>
-                <input
-                  value={lightModel}
-                  onChange={(event) => setLightModel(event.target.value)}
-                  autoComplete="off"
-                  placeholder="gpt-4o-mini"
-                />
-              </label>
-              <label className="field">
-                <span>Heavy 模型</span>
-                <input
-                  value={heavyModel}
-                  onChange={(event) => setHeavyModel(event.target.value)}
-                  autoComplete="off"
-                  placeholder="gpt-4o"
-                />
-              </label>
-            </div>
-            {!modelsAreDistinct && lightModel.trim() && heavyModel.trim() ? (
-              <p className="setup-field-error">Light 和 Heavy 模型必须不同</p>
-            ) : null}
-            <label className="setup-check">
-              <input
-                type="checkbox"
-                checked={acknowledgeOptional}
-                onChange={(event) =>
-                  setAcknowledgeOptional(event.target.checked)
-                }
-              />
-              <span>我确认暂不配置平台和插件，稍后再补充</span>
-            </label>
-
-            <label className="field">
-              <span>网关访问令牌</span>
-              <input
-                type="password"
-                value={token}
-                onChange={(event) => onTokenChange(event.target.value)}
-                autoComplete="current-password"
-                placeholder="KAGUYA_GATEWAY_TOKEN"
-              />
-            </label>
-
-            {formError ? (
-              <div className="error-banner" role="alert">
-                <AlertCircle size={17} />
-                <span>{formError}</span>
-              </div>
-            ) : null}
-            {saved ? (
-              <div className="setup-success" role="status">
-                <CheckCircle2 size={17} />
-                <span>配置已保存，请重启服务后刷新此页面。</span>
-              </div>
-            ) : null}
-            <button
-              className="setup-button"
-              type="submit"
-              disabled={!canSubmit || saved}
-            >
-              {submitting ? (
-                <LoaderCircle className="spin" size={18} />
-              ) : (
-                <Save size={18} />
-              )}
-              <span>{submitting ? "保存中" : "保存配置"}</span>
-            </button>
-          </form>
-        </section>
-      </main>
-    </div>
-  );
-}
-
-function DeliveryStatus({ message }: { message: ChatMessage }) {
+function DeliveryStatus({ message }: { readonly message: ChatMessage }) {
   if (message.state === "sending") {
     return (
       <p className="delivery-status sending">
@@ -600,6 +1062,56 @@ function DeliveryStatus({ message }: { message: ChatMessage }) {
   );
 }
 
+function deriveConfigurationView(
+  status: ConfigurationStatus,
+  current: ConfigurationView,
+  keepProfilesOpen: boolean,
+): ConfigurationView {
+  if (status.status === "invalid" || status.status === "review_required") {
+    return "profiles";
+  }
+  if (status.status === "restart_required") {
+    return "restart";
+  }
+  if (keepProfilesOpen && current === "profiles") {
+    return "profiles";
+  }
+  return "chat";
+}
+
+function deriveRegistryMetadata(
+  status: ConfigurationStatus | undefined,
+): ProfileRegistryMetadata {
+  return {
+    selectedProfileId: status?.selectedProfileId ?? "default",
+    profiles:
+      status?.profiles ??
+      [
+        {
+          id: "default",
+          name: "default",
+          createdAt: "",
+          updatedAt: "",
+        } satisfies ProfileMetadata,
+      ],
+  };
+}
+
+function statusLabel(status: ConfigurationStatus["status"]): string {
+  switch (status) {
+    case "setup_required":
+      return "Setup required";
+    case "invalid":
+      return "Invalid";
+    case "review_required":
+      return "Review required";
+    case "restart_required":
+      return "Restart required";
+    case "ready":
+      return "Ready";
+  }
+}
+
 function errorMessage(error: unknown): string {
   if (error instanceof GatewayRequestError) {
     if (error.code === "core_unavailable") {
@@ -614,8 +1126,23 @@ function errorMessage(error: unknown): string {
     if (error.code === "configuration_setup_required") {
       return "请先完成运行配置";
     }
-    if (error.code === "configuration_invalid") {
-      return "配置内容不完整或无效";
+    if (error.code === "configuration_unavailable") {
+      return "配置仓库当前不可用";
+    }
+    if (error.code === "profile_name_conflict") {
+      return "Profile 名称已存在";
+    }
+    if (error.code === "profile_not_found") {
+      return "Profile 不存在";
+    }
+    if (error.code === "profile_protected") {
+      return "default Profile 不可修改或删除";
+    }
+    if (error.code === "profile_in_use") {
+      return "当前选中的 Profile 不能删除";
+    }
+    if (error.code === "profile_invalid") {
+      return "Profile 内容不完整或无效";
     }
     return error.message;
   }

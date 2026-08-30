@@ -1,3 +1,16 @@
+/*
+ * 功能概述：本样式文件定义 Kaguya WebUI 的全局视觉基础，以及 Profile
+ * 管理页的列表/编辑器双栏布局、聊天页连接面板与重启提示等页面骨架。
+ * 主要职责：提供顶栏、卡片、表单、按钮、消息列表与 readiness 区块的统一样式；
+ * 为 Task 7 新增 `.profile-workspace`、`.profile-sidebar`、`.profile-editor-card`
+ * 等类，保证 Profile 元数据列表与完整编辑表单在桌面端并排、在窄屏下折叠；
+ * 保留已有颜色、间距、焦点态与 reduced-motion 约束，不引入新的视觉体系。
+ * 代码库关系：由 `apps/web/src/main.tsx` 全局引入，供 `App.tsx` 的聊天页、
+ * Profile 管理页和重启页共享；不直接参与任何业务逻辑，但其类名契约需与
+ * React 组件保持一致。
+ * 输入输出与副作用：纯声明式 CSS；当视口宽度低于 800px 时自动切到单栏，
+ * 当用户偏好减少动画时停止旋转与过渡。
+ */
 :root {
   color: #20242a;
   background: #f4f6f8;
@@ -28,11 +41,6 @@ button,
 input,
 textarea {
   font: inherit;
-}
-
-button,
-input,
-textarea {
   letter-spacing: 0;
 }
 
@@ -62,6 +70,10 @@ button:disabled {
   padding: 48px 18px;
 }
 
+.profile-main {
+  width: min(1240px, 100%);
+}
+
 .setup-card {
   border: 1px solid #dfe3e8;
   border-radius: 8px;
@@ -89,7 +101,21 @@ button:disabled {
 .setup-heading p,
 .setup-intro,
 .setup-status-card h1,
-.setup-status-card p {
+.setup-status-card p,
+.topbar h1,
+.topbar p,
+.panel-heading h2,
+.panel-heading p,
+.chat-heading h2,
+.chat-heading p,
+.boundary-note p,
+.boundary-note span,
+.empty-state p,
+.message-row p,
+.readiness-heading h3,
+.readiness-heading p,
+.profile-placeholder p,
+.readiness-empty {
   margin: 0;
 }
 
@@ -108,6 +134,10 @@ button:disabled {
 
 .setup-form {
   margin-top: 24px;
+}
+
+.profile-editor-form {
+  margin-top: 18px;
 }
 
 .setup-model-grid {
@@ -134,36 +164,65 @@ button:disabled {
   accent-color: #24724b;
 }
 
-.setup-field-error {
-  margin: 8px 0 0;
-  color: #ad2e2e;
-  font-size: 12px;
-}
-
-.setup-button {
+.setup-button,
+.send-button,
+.secondary-button,
+.danger-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 7px;
-  min-height: 42px;
-  margin-top: 20px;
-  padding: 9px 16px;
-  border: 1px solid #1f6844;
+  min-height: 40px;
+  padding: 8px 16px;
   border-radius: 6px;
-  background: #24724b;
-  color: #ffffff;
   font-size: 13px;
   font-weight: 700;
 }
 
-.setup-button:hover:not(:disabled) {
+.setup-button,
+.send-button {
+  border: 1px solid #1f6844;
+  background: #24724b;
+  color: #ffffff;
+}
+
+.setup-button:hover:not(:disabled),
+.send-button:hover:not(:disabled) {
   background: #1f6844;
 }
 
-.setup-button:disabled {
-  cursor: not-allowed;
+.setup-button:disabled,
+.send-button:disabled,
+.secondary-button:disabled,
+.danger-button:disabled {
   border-color: #c8cdd3;
   background: #c8cdd3;
+  color: #ffffff;
+}
+
+.secondary-button {
+  border: 1px solid #d6dbe1;
+  background: #ffffff;
+  color: #404750;
+}
+
+.secondary-button:hover:not(:disabled) {
+  border-color: #aeb6c0;
+  background: #f7f8fa;
+}
+
+.danger-button {
+  border: 1px solid #d67a7a;
+  background: #fff5f5;
+  color: #922b2b;
+}
+
+.danger-button:hover:not(:disabled) {
+  background: #ffeaea;
+}
+
+.inline-button {
+  margin-top: 0;
 }
 
 .setup-success {
@@ -231,19 +290,6 @@ button:disabled {
   font-weight: 700;
 }
 
-.topbar h1,
-.topbar p,
-.panel-heading h2,
-.panel-heading p,
-.chat-heading h2,
-.chat-heading p,
-.boundary-note p,
-.boundary-note span,
-.empty-state p,
-.message-row p {
-  margin: 0;
-}
-
 .topbar h1 {
   font-size: 17px;
   line-height: 1.25;
@@ -265,6 +311,12 @@ button:disabled {
   padding: 24px clamp(18px, 4vw, 48px);
 }
 
+.profile-workspace {
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+  gap: 24px;
+}
+
 .connection-panel,
 .chat-panel {
   border: 1px solid #dfe3e8;
@@ -278,7 +330,9 @@ button:disabled {
 }
 
 .panel-heading,
-.chat-heading {
+.chat-heading,
+.profile-sidebar-heading,
+.editor-actions {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -342,6 +396,10 @@ button:disabled {
   color: #404750;
   font-size: 13px;
   font-weight: 600;
+}
+
+.compact-field {
+  margin-top: 0;
 }
 
 .field input,
@@ -536,37 +594,11 @@ button:disabled {
   font-weight: 700;
 }
 
-.send-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  min-width: 98px;
-  min-height: 40px;
-  padding: 8px 16px;
-  border: 1px solid #1f6844;
-  border-radius: 6px;
-  background: #24724b;
-  color: #ffffff;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.send-button:hover:not(:disabled) {
-  background: #1f6844;
-}
-
-.send-button:disabled {
-  border-color: #c8cdd3;
-  background: #c8cdd3;
-  color: #ffffff;
-}
-
 .error-banner {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  margin-bottom: 10px;
+  margin-top: 16px;
   padding: 9px 11px;
   border: 1px solid #efcaca;
   border-radius: 6px;
@@ -581,6 +613,136 @@ button:disabled {
   margin-top: 1px;
 }
 
+.profile-sidebar,
+.profile-editor-card {
+  align-self: start;
+}
+
+.profile-sidebar {
+  padding: 24px;
+}
+
+.profile-create {
+  display: grid;
+  gap: 12px;
+}
+
+.profile-create-form {
+  display: grid;
+  gap: 12px;
+}
+
+.profile-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.profile-list-item {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid #d6dbe1;
+  border-radius: 7px;
+  background: #ffffff;
+  text-align: left;
+}
+
+.profile-list-item:hover {
+  border-color: #aeb6c0;
+  background: #f7f8fa;
+}
+
+.profile-list-item.active {
+  border-color: #24724b;
+  background: #f1f8f4;
+}
+
+.profile-list-name {
+  color: #20242a;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.profile-list-meta {
+  color: #68717d;
+  font-size: 12px;
+}
+
+.profile-intro {
+  margin-top: -8px;
+}
+
+.editor-actions {
+  flex-wrap: wrap;
+}
+
+.readiness-card {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid #eceff2;
+}
+
+.readiness-heading h3 {
+  margin-top: 4px;
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+.readiness-status {
+  margin: 12px 0 0;
+  color: #404750;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.readiness-group {
+  margin-top: 14px;
+}
+
+.readiness-group strong {
+  display: block;
+  margin-bottom: 8px;
+  color: #20242a;
+  font-size: 13px;
+}
+
+.readiness-list {
+  display: grid;
+  gap: 8px;
+  padding-left: 18px;
+  margin: 0;
+  color: #59626e;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.readiness-list li {
+  display: grid;
+  gap: 2px;
+}
+
+.readiness-list code {
+  color: #404750;
+}
+
+.readiness-empty,
+.profile-loading,
+.profile-placeholder {
+  margin-top: 18px;
+  color: #59626e;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.profile-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .spin {
   animation: spin 900ms linear infinite;
 }
@@ -592,21 +754,25 @@ button:disabled {
 }
 
 @media (max-width: 800px) {
-  .workspace {
+  .workspace,
+  .profile-workspace {
     grid-template-columns: 1fr;
+  }
+
+  .workspace {
     padding: 16px;
   }
 
-  .connection-panel {
-    width: 100%;
+  .setup-main {
+    padding: 24px 16px;
   }
 
   .chat-panel {
     min-height: 650px;
   }
 
-  .setup-main {
-    padding: 24px 16px;
+  .setup-model-grid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -616,45 +782,37 @@ button:disabled {
     padding: 10px 16px;
   }
 
-  .workspace {
+  .workspace,
+  .setup-main {
     min-height: calc(100vh - 64px);
-    gap: 16px;
   }
 
+  .setup-card,
   .connection-panel,
   .chat-heading,
-  .message-list {
-    padding: 16px;
+  .composer {
+    padding-left: 16px;
+    padding-right: 16px;
   }
 
-  .chat-heading {
-    align-items: center;
+  .composer-footer,
+  .panel-heading,
+  .chat-heading,
+  .profile-sidebar-heading {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .message-row {
-    width: 92%;
-  }
-
-  .composer {
-    padding: 14px;
-  }
-
-  .setup-card {
-    padding: 20px;
-  }
-
-  .setup-model-grid {
-    grid-template-columns: 1fr;
+    width: 100%;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    scroll-behavior: auto !important;
-    transition-duration: 0.01ms !important;
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
+  .field input,
+  .composer textarea,
+  .spin {
+    transition: none;
+    animation: none;
   }
 }
