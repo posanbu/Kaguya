@@ -134,10 +134,11 @@ If the Telegram configuration in `platforms` is missing, MaiBot may be unable to
 - **`ban_user_id`** — Global blocked user ID list; messages from blocked users will be discarded directly. Default: empty.
 
 ::: tip 聊天过滤说明
+
 - **Whitelist Mode**: Only process group/private chat messages in the list; others are discarded.
 - **Blacklist Mode**: Process all messages, but discard group/private chat messages in the list.
 - Group chats are whitelist mode by default. If the Bot is connected but unresponsive in a group, first check if the corresponding chat_id is filled in `group_list`.
-:::
+  :::
 
 ## Message Type Support
 
@@ -237,6 +238,7 @@ The adapter supports multiple ways to identify when a user @mentions the Bot, en
 3. **Text Fallback Matching**: When the above methods fail, it uses regex to match `@bot_username` within the message text.
 
 When an @Bot mention is identified, the adapter will:
+
 - Insert a component of type `at` into the message segment, marking `target_user_id` as the Bot ID.
 - Set `is_mentioned` and `is_at` to `true`.
 - Remove duplicate `@bot_username` text from the beginning of the text to avoid having two @mentions in the Prompt.

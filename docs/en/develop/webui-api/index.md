@@ -55,6 +55,7 @@ curl -X POST http://127.0.0.1:8001/api/webui/auth/verify \
   -H "Content-Type: application/json" \
   -d '{"token": "你的临时或固定Token"}'
 ```
+
 :::
 
 **Related endpoints:**
@@ -73,6 +74,7 @@ curl -X POST http://127.0.0.1:8001/api/webui/auth/verify \
 curl -X GET http://127.0.0.1:8001/api/webui/auth/check \
   -H "Cookie: maibot_session=你的Token"
 ```
+
 :::
 
 ### 2. api_server_allowed_api_keys (Script / External Calls)
@@ -95,6 +97,7 @@ Browser-side WebSocket connections cannot carry custom HTTP Headers and cannot r
 curl -X GET http://127.0.0.1:8001/api/webui/ws-token \
   -H "Cookie: maibot_session=你的Token"
 ```
+
 :::
 
 ## Route Structure and Base Path
@@ -142,6 +145,7 @@ The simplest health check requires no authentication — a single curl confirms 
 ```bash [curl Health Check ~vscode-icons:file-type-http~]
 curl http://127.0.0.1:8001/api/webui/health
 ```
+
 :::
 
 Expected response:
@@ -149,7 +153,7 @@ Expected response:
 ::: code-group
 
 ```json [JSON ~vscode-icons:file-type-json~]
-{"status": "healthy", "service": "MaiBot WebUI"}
+{ "status": "healthy", "service": "MaiBot WebUI" }
 ```
 
 :::

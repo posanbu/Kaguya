@@ -15,13 +15,18 @@ import { describe, expect, it } from "vitest";
 import {
   clearLoadedProfileStateSnapshot,
   deriveConfigurationView,
+  deriveRegistryMetadata,
 } from "./App.js";
 
 describe("deriveConfigurationView", () => {
   it("routes setup_required into profile management instead of chat", () => {
     expect(
       deriveConfigurationView(
-        { status: "setup_required", selectedProfileId: "default", profiles: [] },
+        {
+          status: "setup_required",
+          selectedProfileId: "default",
+          profiles: [],
+        },
         "checking",
         false,
       ),
@@ -43,6 +48,37 @@ describe("clearLoadedProfileStateSnapshot", () => {
       loadedProfile: undefined,
       editorFields: undefined,
       showApiKey: false,
+    });
+  });
+});
+
+describe("deriveRegistryMetadata", () => {
+  it("prefers the explicit selected profile from readiness metadata", () => {
+    expect(
+      deriveRegistryMetadata({
+        status: "ready",
+        selectedProfileId: "default",
+        profiles: [
+          {
+            id: "default",
+            name: "default",
+            createdAt: "2026-08-30T00:00:00.000Z",
+            updatedAt: "2026-08-30T00:00:00.000Z",
+          },
+        ],
+        issues: [],
+        warnings: [],
+      }),
+    ).toEqual({
+      selectedProfileId: "default",
+      profiles: [
+        {
+          id: "default",
+          name: "default",
+          createdAt: "2026-08-30T00:00:00.000Z",
+          updatedAt: "2026-08-30T00:00:00.000Z",
+        },
+      ],
     });
   });
 });

@@ -27,4 +27,3 @@ Check whether the plugin is enabled, SnowLuma is running, `server` and `port` ta
 ## How do I tell whether the adapter or MaiBot is failing?
 
 Follow the message path in order: platform receive, adapter receive and conversion, MaiBot receive, model reply, and adapter send. The first missing step usually identifies the failing component or connection immediately before it.
-

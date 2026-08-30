@@ -31,4 +31,3 @@ Start with the smallest working configuration and verify the message path before
 ## What should I include when asking for help?
 
 Include the operating system, MaiBot version, deployment method, adapter version, complete error log, relevant configuration, and reproduction steps. Remove API keys, access tokens, cookies, and other secrets before sharing anything.
-

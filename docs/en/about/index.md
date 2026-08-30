@@ -15,12 +15,13 @@ MaiBot (MaiSaka) is an interactive agent based on large language models. She is 
 ## Design Philosophy
 
 > **SengokuCola says:**
+>
 > - This project originally started as a few extra features for the NiuNiu bot, but it kept growing until a full rewrite became inevitable. The goal was to create a "life form" active in QQ group chats, not a feature-complete bot, but something as human-like and real-feeling as possible.
 > - The core design principle is: "more lifelike, not merely better."
 > - If people truly want AI companionship, not everyone needs a perfect "helpful assistant" that solves every problem. Some people may want a life form that can make mistakes and has its own perceptions and thoughts.
 
 > **xxxxx says:**
-> *Code is open, but the soul is yours.*
+> _Code is open, but the soul is yours._
 
 ## Related Projects
 

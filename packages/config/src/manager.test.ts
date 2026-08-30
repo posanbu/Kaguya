@@ -246,10 +246,12 @@ describe("FileUserConfigManager profile lifecycle", () => {
         await mkdir(rootDir);
       }
 
-      await expect(FileUserConfigManager.inspect({ rootDir })).resolves.toEqual({
-        status: "setup_required",
-        guidance: configurationSetupGuidance,
-      });
+      await expect(FileUserConfigManager.inspect({ rootDir })).resolves.toEqual(
+        {
+          status: "setup_required",
+          guidance: configurationSetupGuidance,
+        },
+      );
       await expect(access(join(rootDir, "index.json"))).rejects.toMatchObject({
         code: "ENOENT",
       });
@@ -259,9 +261,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
       expect(await readJson(join(rootDir, "index.json"))).toEqual({
         version: 3,
         selectedProfileId: "default",
-        profiles: [
-          expect.objectContaining({ id: "default", name: "default" }),
-        ],
+        profiles: [expect.objectContaining({ id: "default", name: "default" })],
       });
       expect(
         await readJson(join(rootDir, "profiles/profile_default.json")),
@@ -277,7 +277,9 @@ describe("FileUserConfigManager profile lifecycle", () => {
         expect.objectContaining({
           status: "invalid",
           selectedProfileId: "default",
-          profiles: [expect.objectContaining({ id: "default", name: "default" })],
+          profiles: [
+            expect.objectContaining({ id: "default", name: "default" }),
+          ],
         }),
       );
       expect(manager.getSelectedProfileId()).toBe("default");
@@ -298,42 +300,43 @@ describe("FileUserConfigManager profile lifecycle", () => {
     expect(sensitiveFileFaults.ensureDirectoryCalls).toBe(0);
   });
 
-  it.each([
-    "stray file",
-    "orphaned profiles directory",
-    "existing index",
-  ])("bootstrap refuses a %s root without writing", async (fixture) => {
-    const parent = await createEmptyRoot();
-    const rootDir = join(parent, fixture.replaceAll(" ", "-"));
-    const indexPath = join(rootDir, "index.json");
-    const profilesDir = join(rootDir, "profiles");
+  it.each(["stray file", "orphaned profiles directory", "existing index"])(
+    "bootstrap refuses a %s root without writing",
+    async (fixture) => {
+      const parent = await createEmptyRoot();
+      const rootDir = join(parent, fixture.replaceAll(" ", "-"));
+      const indexPath = join(rootDir, "index.json");
+      const profilesDir = join(rootDir, "profiles");
 
-    if (fixture === "stray file") {
-      await writeFile(rootDir, "occupied", "utf8");
-    } else if (fixture === "orphaned profiles directory") {
-      await mkdir(rootDir);
-      await mkdir(profilesDir);
-    } else {
-      await FileUserConfigManager.bootstrap({ rootDir });
-    }
+      if (fixture === "stray file") {
+        await writeFile(rootDir, "occupied", "utf8");
+      } else if (fixture === "orphaned profiles directory") {
+        await mkdir(rootDir);
+        await mkdir(profilesDir);
+      } else {
+        await FileUserConfigManager.bootstrap({ rootDir });
+      }
 
-    const beforeIndex = await readFile(indexPath, "utf8").catch(() => undefined);
-    const beforeProfiles = await readdir(profilesDir).catch(() => undefined);
+      const beforeIndex = await readFile(indexPath, "utf8").catch(
+        () => undefined,
+      );
+      const beforeProfiles = await readdir(profilesDir).catch(() => undefined);
 
-    await expect(
-      FileUserConfigManager.bootstrap({ rootDir }),
-    ).rejects.toMatchObject({
-      code:
-        fixture === "stray file" ? "CONFIG_IO_ERROR" : "CONFIG_INVALID_INPUT",
-    });
+      await expect(
+        FileUserConfigManager.bootstrap({ rootDir }),
+      ).rejects.toMatchObject({
+        code:
+          fixture === "stray file" ? "CONFIG_IO_ERROR" : "CONFIG_INVALID_INPUT",
+      });
 
-    await expect(readFile(indexPath, "utf8").catch(() => undefined)).resolves.toBe(
-      beforeIndex,
-    );
-    await expect(readdir(profilesDir).catch(() => undefined)).resolves.toEqual(
-      beforeProfiles,
-    );
-  });
+      await expect(
+        readFile(indexPath, "utf8").catch(() => undefined),
+      ).resolves.toBe(beforeIndex);
+      await expect(
+        readdir(profilesDir).catch(() => undefined),
+      ).resolves.toEqual(beforeProfiles);
+    },
+  );
 
   it("round-trips plaintext secrets without listing them", async () => {
     const rootDir = await createBootstrappedRoot();
@@ -1100,11 +1103,11 @@ describe("FileUserConfigManager corruption safety", () => {
     async (version) => {
       const rootDir = await createBootstrappedRoot();
       await FileUserConfigManager.open({ rootDir });
-    const path = join(rootDir, "index.json");
-    const index = JSON.parse(await readFile(path, "utf8")) as Record<
-      string,
-      unknown
-    >;
+      const path = join(rootDir, "index.json");
+      const index = JSON.parse(await readFile(path, "utf8")) as Record<
+        string,
+        unknown
+      >;
       index.version = version;
       if (version === 1) {
         index.sessionBindings = {};
@@ -1113,8 +1116,8 @@ describe("FileUserConfigManager corruption safety", () => {
         index.defaultProfileId = "default";
         delete index.selectedProfileId;
       }
-    await writeFile(path, JSON.stringify(index), "utf8");
-    const beforeOpen = await readFile(path, "utf8");
+      await writeFile(path, JSON.stringify(index), "utf8");
+      const beforeOpen = await readFile(path, "utf8");
 
       for (const operation of [
         () => FileUserConfigManager.inspect({ rootDir }),
@@ -1259,10 +1262,7 @@ describe("FileUserConfigManager runtime input validation", () => {
         () => manager.replaceProfile(profileId, null as never),
       ],
       ["null get profile ID", () => manager.getProfile(null as never)],
-      [
-        "numeric selected profile ID",
-        () => manager.selectProfile(42 as never),
-      ],
+      ["numeric selected profile ID", () => manager.selectProfile(42 as never)],
       [
         "symbol delete profile ID",
         () => manager.deleteProfile(Symbol(secret) as never),

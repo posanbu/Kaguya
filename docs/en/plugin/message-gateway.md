@@ -292,10 +292,11 @@ stateDiagram-v2
 ```
 
 ::: important
+
 - Plugins should call `ctx.gateway.update_state(ready=True)` in `on_load()` to report ready status
 - Plugins should call `ctx.gateway.update_state(ready=False)` in `on_unload()` to report offline status
 - Only gateways with `ready=True` will participate in message routing
-:::
+  :::
 
 ## Platform Field Descriptions
 

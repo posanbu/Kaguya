@@ -1,6 +1,7 @@
 ---
 title: Installing and Managing Plugins
 ---
+
 # Install and Manage Plugins
 
 Plugins are like installing "Apps" for MaiBot, giving it more capabilities!
@@ -25,6 +26,7 @@ Plugins are extensions for MaiBot, such as:
 4. Click "Install" and wait for completion
 
 **Example Address**:
+
 ```
 https://github.com/author/plugin-name
 ```
@@ -43,6 +45,7 @@ https://github.com/author/plugin-name
 ### View Plugins
 
 The plugin page will display:
+
 - 📋 **Plugin Name** and description
 - 🔧 **Version Number** and author
 - ✅ **Enable Status** (Green = Enabled, Gray = Disabled)
@@ -57,11 +60,13 @@ The plugin page will display:
 ### Configure Plugins
 
 Some plugins allow custom settings:
+
 1. Click the "Settings" button of the plugin
 2. Modify configuration options
 3. After saving, the runtime invokes the plugin configuration-update lifecycle
 
 **Common Configurations**:
+
 - API Keys (for plugins requiring external services)
 - Trigger Keywords
 - Feature Toggles
@@ -69,6 +74,7 @@ Some plugins allow custom settings:
 ### Update Plugins
 
 When a new version of a plugin is available, an update prompt will appear:
+
 1. Click the "Update" button
 2. Wait for download and installation
 3. Source changes restart the plugin Supervisor and reload the plugin
@@ -76,6 +82,7 @@ When a new version of a plugin is available, an update prompt will appear:
 ### Uninstall Plugins
 
 Unnecessary plugins can be uninstalled:
+
 1. Click the "Uninstall" button
 2. Confirm uninstallation
 3. Plugin files will be deleted
@@ -101,16 +108,19 @@ Restart all of MaiBot only if the log reports that watching, loading, unloading,
 ## Recommended Plugins
 
 ### Essentials for Beginners
+
 - **Welcome Plugin** - Automatically welcomes new users to the group
 - **Help Plugin** - Provides command help
 - **Check-in Plugin** - Daily check-in functionality
 
 ### Entertainment
+
 - **Gacha Plugin** - Simulates various gacha pulls
 - **Dice Plugin** - Dice rolling game
 - **Riddle Plugin** - Riddles and brain teasers
 
 ### Utility
+
 - **Translation Plugin** - Multi-language translation
 - **Calculation Plugin** - Mathematical calculations
 - **Time Plugin** - Time and date queries
@@ -118,17 +128,22 @@ Restart all of MaiBot only if the log reports that watching, loading, unloading,
 ## Usage Tips
 
 ### Plugin Conflicts
+
 If plugin functions overlap or conflict:
+
 - Only enable necessary plugins
 - Contact the plugin author for updates
 
 ### Performance Optimization
+
 Too many plugins may affect performance:
+
 - Uninstall unused plugins promptly
 - Regularly clean up unnecessary plugins
 - Monitor plugin resource usage
 
 ### Security Reminders
+
 - Only install plugins from trusted sources
 - Review plugin permission requirements
 - Regularly update plugin versions

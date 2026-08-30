@@ -206,7 +206,7 @@ def create_plugin():
 
 Below is a complete minimum viable plugin, including the manifest declaration and Python code.
 
-**_manifest.json**:
+**\_manifest.json**:
 
 ::: code-group
 

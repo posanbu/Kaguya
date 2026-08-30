@@ -1,6 +1,7 @@
 ---
 title: Lifecycle
 ---
+
 # Lifecycle
 
 MaiBot plugins have three lifecycle methods: `on_load()`, `on_unload()`, and `on_config_update()`. The SDK enforces that all plugins implement these three methods; otherwise, the Runner will refuse to load the plugin.
@@ -171,9 +172,10 @@ async def on_config_update(
 - **`"model"`** → `ON_MODEL_CONFIG_RELOAD` — LLM model configuration. Requires subscription via `config_reload_subscriptions`.
 
 ::: important
+
 - The callback for `scope == "self"` is **always triggered** and does not require additional subscription.
 - `scope == "bot"` and `scope == "model"` are triggered only if declared in `config_reload_subscriptions`.
-:::
+  :::
 
 ### Example
 

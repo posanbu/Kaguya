@@ -26,9 +26,11 @@ If not installed yet, refer to the official docs:
 
 ::: tip Domestic Users (China)
 For servers in China, you can use this one-liner:
+
 ```bash
 bash <(curl -sSL https://linuxmirrors.cn/docker.sh)
 ```
+
 :::
 
 ## Docker Compose

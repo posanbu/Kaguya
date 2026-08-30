@@ -33,4 +33,3 @@ There is no guaranteed fixed count. Sample consistency, context, and the learnin
 ## How can several chats share expressions or jargon?
 
 Place the desired chat streams in the same expression or jargon sharing group. See [Bot Configuration](../manual/configuration/bot-config.md) for wildcard rules. Use global wildcards only when every chat should share learning results.
-

@@ -107,7 +107,11 @@ export function App() {
     const status = await getConfigurationStatus();
     setConfigurationStatus(status);
     setConfigurationView((current) =>
-      deriveConfigurationView(status, current, options?.keepProfilesOpen ?? false),
+      deriveConfigurationView(
+        status,
+        current,
+        options?.keepProfilesOpen ?? false,
+      ),
     );
     return status;
   };
@@ -120,7 +124,9 @@ export function App() {
           return;
         }
         setConfigurationStatus(status);
-        setConfigurationView(deriveConfigurationView(status, "checking", false));
+        setConfigurationView(
+          deriveConfigurationView(status, "checking", false),
+        );
       },
       (error) => {
         if (!active) {
@@ -430,7 +436,9 @@ function ProfileManagementScreen({
     const nextRegistry = deriveRegistryMetadata(initialStatus);
     setRegistry(nextRegistry);
     setStatusSnapshot(initialStatus);
-    setOpenedProfileId((current) => current ?? initialStatus?.selectedProfileId);
+    setOpenedProfileId(
+      (current) => current ?? initialStatus?.selectedProfileId,
+    );
   }, [initialStatus]);
 
   useEffect(() => {
@@ -476,8 +484,7 @@ function ProfileManagementScreen({
   const canClose = statusSnapshot?.status === "ready";
   const readinessIssues = statusSnapshot?.issues ?? [];
   const readinessWarnings = statusSnapshot?.warnings ?? [];
-  const selectedProfileId =
-    registry.selectedProfileId || statusSnapshot?.selectedProfileId || "default";
+  const selectedProfileId = registry.selectedProfileId;
   const deleteDisabled =
     openedProfileId === undefined ||
     openedProfileId === "default" ||
@@ -559,7 +566,11 @@ function ProfileManagementScreen({
     setNotice(undefined);
     try {
       const replacement = mergeProfileEditorFields(loadedProfile, editorFields);
-      const result = await replaceProfile(config, loadedProfile.id, replacement);
+      const result = await replaceProfile(
+        config,
+        loadedProfile.id,
+        replacement,
+      );
       setLoadedProfile(result.profile);
       setEditorFields(profileToEditorFields(result.profile));
       await refreshRegistry();
@@ -643,7 +654,10 @@ function ProfileManagementScreen({
 
       <main className="setup-main profile-main">
         <div className="profile-workspace">
-          <aside className="setup-card profile-sidebar" aria-labelledby="profiles-title">
+          <aside
+            className="setup-card profile-sidebar"
+            aria-labelledby="profiles-title"
+          >
             <div className="panel-heading profile-sidebar-heading">
               <div>
                 <p className="eyebrow">Registry</p>
@@ -732,12 +746,17 @@ function ProfileManagementScreen({
             />
           </aside>
 
-          <section className="setup-card profile-editor-card" aria-labelledby="profile-editor-title">
+          <section
+            className="setup-card profile-editor-card"
+            aria-labelledby="profile-editor-title"
+          >
             <div className="panel-heading">
               <div>
                 <p className="eyebrow">Editor</p>
                 <h2 id="profile-editor-title">
-                  {openedProfileId === undefined ? "Select a profile" : "Profile details"}
+                  {openedProfileId === undefined
+                    ? "Select a profile"
+                    : "Profile details"}
                 </h2>
               </div>
               <div className="editor-actions">
@@ -762,8 +781,9 @@ function ProfileManagementScreen({
             </div>
 
             <p className="setup-intro profile-intro">
-              Load a full profile with the management token, then save or select it explicitly.
-              Creation, replacement, selection, and deletion remain separate actions.
+              Load a full profile with the management token, then save or select
+              it explicitly. Creation, replacement, selection, and deletion
+              remain separate actions.
             </p>
 
             <label className="field">
@@ -797,7 +817,9 @@ function ProfileManagementScreen({
               </div>
             ) : null}
 
-            {openedProfileId !== undefined && loadedProfile === undefined && !loadingProfile ? (
+            {openedProfileId !== undefined &&
+            loadedProfile === undefined &&
+            !loadingProfile ? (
               <div className="profile-placeholder">
                 <p>
                   {token.trim().length === 0
@@ -922,7 +944,10 @@ function ProfileManagementScreen({
                       )
                     }
                   />
-                  <span>I understand that platforms and plugins are still unconfigured.</span>
+                  <span>
+                    I understand that platforms and plugins are still
+                    unconfigured.
+                  </span>
                 </label>
 
                 <button
@@ -991,7 +1016,9 @@ function ReadinessPanel({
         </div>
       ) : null}
       {issues.length === 0 && warnings.length === 0 ? (
-        <p className="readiness-empty">No readiness issues for the selected profile.</p>
+        <p className="readiness-empty">
+          No readiness issues for the selected profile.
+        </p>
       ) : null}
     </section>
   );
@@ -1037,7 +1064,9 @@ function RestartRequired() {
       <section className="setup-card setup-status-card" role="status">
         <CheckCircle2 size={22} />
         <h1>配置已保存</h1>
-        <p>请重启 Kaguya 服务，使 Runtime 加载新的选中 Profile，然后刷新页面。</p>
+        <p>
+          请重启 Kaguya 服务，使 Runtime 加载新的选中 Profile，然后刷新页面。
+        </p>
         <button
           type="button"
           className="setup-button"
@@ -1111,21 +1140,19 @@ export function clearLoadedProfileStateSnapshot(input: {
   };
 }
 
-function deriveRegistryMetadata(
+export function deriveRegistryMetadata(
   status: ConfigurationStatus | undefined,
 ): ProfileRegistryMetadata {
   return {
     selectedProfileId: status?.selectedProfileId ?? "default",
-    profiles:
-      status?.profiles ??
-      [
-        {
-          id: "default",
-          name: "default",
-          createdAt: "",
-          updatedAt: "",
-        } satisfies ProfileMetadata,
-      ],
+    profiles: status?.profiles ?? [
+      {
+        id: "default",
+        name: "default",
+        createdAt: "",
+        updatedAt: "",
+      } satisfies ProfileMetadata,
+    ],
   };
 }
 

@@ -180,38 +180,36 @@ describe("checkGatewayHealth", () => {
 
 describe("configuration setup", () => {
   it("reads anonymous setup status with selected profile metadata", async () => {
-    const request = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(
-        Response.json({
-          data: {
-            status: "invalid",
-            selectedProfileId: "default",
-            profiles: [
-              {
-                id: "default",
-                name: "default",
-                createdAt: "2026-08-30T00:00:00.000Z",
-                updatedAt: "2026-08-30T00:00:00.000Z",
-              },
-            ],
-            issues: [
-              {
-                id: "default-provider-missing",
-                path: "ai.providers",
-                message: "missing provider",
-              },
-            ],
-            warnings: [
-              {
-                id: "platforms-empty",
-                path: "platforms",
-                message: "platforms empty",
-              },
-            ],
-          },
-        }),
-      );
+    const request = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({
+        data: {
+          status: "invalid",
+          selectedProfileId: "default",
+          profiles: [
+            {
+              id: "default",
+              name: "default",
+              createdAt: "2026-08-30T00:00:00.000Z",
+              updatedAt: "2026-08-30T00:00:00.000Z",
+            },
+          ],
+          issues: [
+            {
+              id: "default-provider-missing",
+              path: "ai.providers",
+              message: "missing provider",
+            },
+          ],
+          warnings: [
+            {
+              id: "platforms-empty",
+              path: "platforms",
+              message: "platforms empty",
+            },
+          ],
+        },
+      }),
+    );
 
     await expect(getConfigurationStatus(request)).resolves.toEqual({
       status: "invalid",
@@ -243,19 +241,17 @@ describe("configuration setup", () => {
   });
 
   it("rejects malformed anonymous setup metadata", async () => {
-    const request = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(
-        Response.json({
-          data: {
-            status: "invalid",
-            selectedProfileId: { bad: true },
-            profiles: [{ id: "default" }],
-            issues: [{ id: "missing" }],
-            warnings: [{ id: "warn" }],
-          },
-        }),
-      );
+    const request = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({
+        data: {
+          status: "invalid",
+          selectedProfileId: { bad: true },
+          profiles: [{ id: "default" }],
+          issues: [{ id: "missing" }],
+          warnings: [{ id: "warn" }],
+        },
+      }),
+    );
 
     await expect(getConfigurationStatus(request)).rejects.toMatchObject({
       code: "configuration_status_failed",
@@ -264,26 +260,24 @@ describe("configuration setup", () => {
   });
 
   it("replaces the reserved default profile when the setup name is default", async () => {
-    const request = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(
-        Response.json(
-          {
-            data: {
-              profile: {
-                version: 1,
-                id: "default",
-                name: "default",
-                ai: { providers: [] },
-                platforms: [],
-                plugins: [],
-              },
-              restartRequired: true,
+    const request = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json(
+        {
+          data: {
+            profile: {
+              version: 1,
+              id: "default",
+              name: "default",
+              ai: { providers: [] },
+              platforms: [],
+              plugins: [],
             },
+            restartRequired: true,
           },
-          { status: 200 },
-        ),
-      );
+        },
+        { status: 200 },
+      ),
+    );
 
     await expect(
       initializeConfiguration(
@@ -403,96 +397,131 @@ describe("configuration setup", () => {
       },
       body: JSON.stringify({ name: "work" }),
     });
-    expect(request).toHaveBeenNthCalledWith(2, "/api/v1/profiles/profile-uuid", {
-      method: "PUT",
-      headers: {
-        authorization: "Bearer test-gateway-token",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        name: "work",
-        acknowledgedWarnings: ["platforms-empty", "plugins-empty"],
-        ai: {
-          defaultProviderId: "default-provider",
-          modelTiers: {
-            light: {
-              providerId: "default-provider",
-              modelId: "light-model",
-            },
-            heavy: {
-              providerId: "default-provider",
-              modelId: "heavy-model",
-            },
-          },
-          providers: [
-            {
-              id: "default-provider",
-              type: "openai-compatible",
-              enabled: true,
-              baseUrl: "https://api.example/v1",
-              apiKey: "provider-secret",
-              models: ["light-model", "heavy-model"],
-              settings: {},
-            },
-          ],
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/profiles/profile-uuid",
+      {
+        method: "PUT",
+        headers: {
+          authorization: "Bearer test-gateway-token",
+          "content-type": "application/json",
         },
-        platforms: [],
-        plugins: [],
-      }),
-    });
+        body: JSON.stringify({
+          name: "work",
+          acknowledgedWarnings: ["platforms-empty", "plugins-empty"],
+          ai: {
+            defaultProviderId: "default-provider",
+            modelTiers: {
+              light: {
+                providerId: "default-provider",
+                modelId: "light-model",
+              },
+              heavy: {
+                providerId: "default-provider",
+                modelId: "heavy-model",
+              },
+            },
+            providers: [
+              {
+                id: "default-provider",
+                type: "openai-compatible",
+                enabled: true,
+                baseUrl: "https://api.example/v1",
+                apiKey: "provider-secret",
+                models: ["light-model", "heavy-model"],
+                settings: {},
+              },
+            ],
+          },
+          platforms: [],
+          plugins: [],
+        }),
+      },
+    );
   });
 });
 
 describe("profile response validation", () => {
   it.each([
-    ["listProfiles", () =>
-      listProfiles(
-        config,
-        vi.fn<typeof fetch>().mockResolvedValue(
-          Response.json({ data: { selectedProfileId: "default", profiles: [{}] } }),
+    [
+      "listProfiles",
+      () =>
+        listProfiles(
+          config,
+          vi.fn<typeof fetch>().mockResolvedValue(
+            Response.json({
+              data: { selectedProfileId: "default", profiles: [{}] },
+            }),
+          ),
         ),
-      )],
-    ["createProfile", () =>
-      createProfile(
-        config,
-        { name: "work" },
-        vi.fn<typeof fetch>().mockResolvedValue(
-          Response.json({ data: { profile: {}, restartRequired: false } }, { status: 201 }),
+    ],
+    [
+      "createProfile",
+      () =>
+        createProfile(
+          config,
+          { name: "work" },
+          vi
+            .fn<typeof fetch>()
+            .mockResolvedValue(
+              Response.json(
+                { data: { profile: {}, restartRequired: false } },
+                { status: 201 },
+              ),
+            ),
         ),
-      )],
-    ["getProfile", () =>
-      getProfile(
-        config,
-        "profile-1",
-        vi.fn<typeof fetch>().mockResolvedValue(
-          Response.json({ data: { profile: {} } }),
+    ],
+    [
+      "getProfile",
+      () =>
+        getProfile(
+          config,
+          "profile-1",
+          vi
+            .fn<typeof fetch>()
+            .mockResolvedValue(Response.json({ data: { profile: {} } })),
         ),
-      )],
-    ["replaceProfile", () =>
-      replaceProfile(
-        config,
-        "profile-1",
-        replacement,
-        vi.fn<typeof fetch>().mockResolvedValue(
-          Response.json({ data: { profile: {}, restartRequired: true } }),
+    ],
+    [
+      "replaceProfile",
+      () =>
+        replaceProfile(
+          config,
+          "profile-1",
+          replacement,
+          vi
+            .fn<typeof fetch>()
+            .mockResolvedValue(
+              Response.json({ data: { profile: {}, restartRequired: true } }),
+            ),
         ),
-      )],
-    ["selectProfile", () =>
-      selectProfile(
-        config,
-        "profile-1",
-        vi.fn<typeof fetch>().mockResolvedValue(
-          Response.json({ data: { profile: {}, restartRequired: true } }),
+    ],
+    [
+      "selectProfile",
+      () =>
+        selectProfile(
+          config,
+          "profile-1",
+          vi
+            .fn<typeof fetch>()
+            .mockResolvedValue(
+              Response.json({ data: { profile: {}, restartRequired: true } }),
+            ),
         ),
-      )],
-    ["deleteProfile", () =>
-      deleteProfile(
-        config,
-        "profile-1",
-        vi.fn<typeof fetch>().mockResolvedValue(
-          Response.json({ data: { status: "deleted" } }, { status: 200 }),
+    ],
+    [
+      "deleteProfile",
+      () =>
+        deleteProfile(
+          config,
+          "profile-1",
+          vi
+            .fn<typeof fetch>()
+            .mockResolvedValue(
+              Response.json({ data: { status: "deleted" } }, { status: 200 }),
+            ),
         ),
-      )],
+    ],
   ])("rejects malformed responses for %s", async (_, action) => {
     await expect(action()).rejects.toMatchObject({
       code: expect.any(String),
@@ -500,37 +529,37 @@ describe("profile response validation", () => {
   });
 
   it("rejects nested malformed profile content", async () => {
-    const request = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(
-        Response.json({
-          data: {
-            profile: {
-              version: 1,
-              id: "profile-1",
-              name: "work",
-              ai: {
-                defaultProviderId: "default-provider",
-                modelTiers: {
-                  light: {
-                    providerId: "default-provider",
-                    modelId: "light-model",
-                  },
-                  heavy: {
-                    providerId: "default-provider",
-                    modelId: "heavy-model",
-                  },
+    const request = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({
+        data: {
+          profile: {
+            version: 1,
+            id: "profile-1",
+            name: "work",
+            ai: {
+              defaultProviderId: "default-provider",
+              modelTiers: {
+                light: {
+                  providerId: "default-provider",
+                  modelId: "light-model",
                 },
-                providers: [null],
+                heavy: {
+                  providerId: "default-provider",
+                  modelId: "heavy-model",
+                },
               },
-              platforms: [],
-              plugins: [],
+              providers: [null],
             },
+            platforms: [],
+            plugins: [],
           },
-        }),
-      );
+        },
+      }),
+    );
 
-    await expect(getProfile(config, "profile-1", request)).rejects.toMatchObject({
+    await expect(
+      getProfile(config, "profile-1", request),
+    ).rejects.toMatchObject({
       code: "profile_read_failed",
       status: 200,
     });
@@ -539,23 +568,21 @@ describe("profile response validation", () => {
 
 describe("profile registry requests", () => {
   it("lists profiles with authentication", async () => {
-    const request = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(
-        Response.json({
-          data: {
-            selectedProfileId: "default",
-            profiles: [
-              {
-                id: "default",
-                name: "default",
-                createdAt: "2026-08-30T00:00:00.000Z",
-                updatedAt: "2026-08-30T00:00:00.000Z",
-              },
-            ],
-          },
-        }),
-      );
+    const request = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({
+        data: {
+          selectedProfileId: "default",
+          profiles: [
+            {
+              id: "default",
+              name: "default",
+              createdAt: "2026-08-30T00:00:00.000Z",
+              updatedAt: "2026-08-30T00:00:00.000Z",
+            },
+          ],
+        },
+      }),
+    );
 
     await expect(listProfiles(config, request)).resolves.toEqual({
       selectedProfileId: "default",
@@ -577,40 +604,38 @@ describe("profile registry requests", () => {
   });
 
   it("creates profiles with the expected JSON body", async () => {
-    const request = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(
-        Response.json(
-          {
-            data: {
-              profile: {
-                version: 1,
-                id: "b4fbe71d-68a8-45fd-b180-5f0ef4c4b9ee",
-                name: "work",
-                ai: { providers: [] },
-                platforms: [],
-                plugins: [],
-              },
-              restartRequired: false,
+    const request = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json(
+        {
+          data: {
+            profile: {
+              version: 1,
+              id: "b4fbe71d-68a8-45fd-b180-5f0ef4c4b9ee",
+              name: "work",
+              ai: { providers: [] },
+              platforms: [],
+              plugins: [],
             },
+            restartRequired: false,
           },
-          { status: 201 },
-        ),
-      );
-
-    await expect(createProfile(config, { name: "work" }, request)).resolves.toEqual(
-      {
-        profile: {
-          version: 1,
-          id: "b4fbe71d-68a8-45fd-b180-5f0ef4c4b9ee",
-          name: "work",
-          ai: { providers: [] },
-          platforms: [],
-          plugins: [],
         },
-        restartRequired: false,
-      },
+        { status: 201 },
+      ),
     );
+
+    await expect(
+      createProfile(config, { name: "work" }, request),
+    ).resolves.toEqual({
+      profile: {
+        version: 1,
+        id: "b4fbe71d-68a8-45fd-b180-5f0ef4c4b9ee",
+        name: "work",
+        ai: { providers: [] },
+        platforms: [],
+        plugins: [],
+      },
+      restartRequired: false,
+    });
     expect(request).toHaveBeenCalledWith("/api/v1/profiles", {
       method: "POST",
       headers: {
@@ -622,22 +647,20 @@ describe("profile registry requests", () => {
   });
 
   it("reads a profile by encoded id", async () => {
-    const request = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(
-        Response.json({
-          data: {
-              profile: {
-                version: 1,
-                id: "profile/one",
-                name: "work",
-                ai: { providers: [] },
-                platforms: [],
-                plugins: [],
-            },
+    const request = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({
+        data: {
+          profile: {
+            version: 1,
+            id: "profile/one",
+            name: "work",
+            ai: { providers: [] },
+            platforms: [],
+            plugins: [],
           },
-        }),
-      );
+        },
+      }),
+    );
 
     await expect(getProfile(config, "profile/one", request)).resolves.toEqual({
       profile: {
@@ -658,20 +681,18 @@ describe("profile registry requests", () => {
   });
 
   it("replaces a profile with the full payload", async () => {
-    const request = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(
-        Response.json({
-          data: {
-              profile: {
-                version: 1,
-                id: "profile/one",
-                ...replacement,
-              },
-              restartRequired: true,
+    const request = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({
+        data: {
+          profile: {
+            version: 1,
+            id: "profile/one",
+            ...replacement,
           },
-        }),
-      );
+          restartRequired: true,
+        },
+      }),
+    );
 
     await expect(
       replaceProfile(config, "profile/one", replacement, request),
@@ -694,25 +715,25 @@ describe("profile registry requests", () => {
   });
 
   it("selects the global profile explicitly", async () => {
-    const request = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(
-        Response.json({
-          data: {
-              profile: {
-                version: 1,
-                id: "profile/one",
-                name: "work",
-                ai: { providers: [] },
-                platforms: [],
-                plugins: [],
-            },
-            restartRequired: true,
+    const request = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({
+        data: {
+          profile: {
+            version: 1,
+            id: "profile/one",
+            name: "work",
+            ai: { providers: [] },
+            platforms: [],
+            plugins: [],
           },
-        }),
-      );
+          restartRequired: true,
+        },
+      }),
+    );
 
-    await expect(selectProfile(config, "profile/one", request)).resolves.toEqual({
+    await expect(
+      selectProfile(config, "profile/one", request),
+    ).resolves.toEqual({
       profile: {
         version: 1,
         id: "profile/one",
@@ -734,11 +755,13 @@ describe("profile registry requests", () => {
   });
 
   it("deletes a profile by encoded id", async () => {
-    const request = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(null, { status: 204 }),
-    );
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(null, { status: 204 }));
 
-    await expect(deleteProfile(config, "profile/one", request)).resolves.toBeUndefined();
+    await expect(
+      deleteProfile(config, "profile/one", request),
+    ).resolves.toBeUndefined();
     expect(request).toHaveBeenCalledWith("/api/v1/profiles/profile%2Fone", {
       method: "DELETE",
       headers: {
@@ -749,8 +772,15 @@ describe("profile registry requests", () => {
 
   it.each([
     ["listProfiles", () => listProfiles({ token: "" }, vi.fn<typeof fetch>())],
-    ["createProfile", () => createProfile({ token: "" }, { name: "work" }, vi.fn<typeof fetch>())],
-    ["getProfile", () => getProfile({ token: "" }, "profile/one", vi.fn<typeof fetch>())],
+    [
+      "createProfile",
+      () =>
+        createProfile({ token: "" }, { name: "work" }, vi.fn<typeof fetch>()),
+    ],
+    [
+      "getProfile",
+      () => getProfile({ token: "" }, "profile/one", vi.fn<typeof fetch>()),
+    ],
     [
       "replaceProfile",
       () =>
@@ -761,8 +791,14 @@ describe("profile registry requests", () => {
           vi.fn<typeof fetch>(),
         ),
     ],
-    ["selectProfile", () => selectProfile({ token: "" }, "profile/one", vi.fn<typeof fetch>())],
-    ["deleteProfile", () => deleteProfile({ token: "" }, "profile/one", vi.fn<typeof fetch>())],
+    [
+      "selectProfile",
+      () => selectProfile({ token: "" }, "profile/one", vi.fn<typeof fetch>()),
+    ],
+    [
+      "deleteProfile",
+      () => deleteProfile({ token: "" }, "profile/one", vi.fn<typeof fetch>()),
+    ],
   ])("rejects locally when the token is blank for %s", async (_, action) => {
     await expect(action()).rejects.toMatchObject({ code: "missing_token" });
   });

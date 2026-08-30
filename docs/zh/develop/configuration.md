@@ -76,10 +76,10 @@ MaiBot 运行时依赖 `config/` 目录下两份独立的 TOML 文件，它们�
 
 — OpenAI 兼容接口的鉴权方式。
 
-  - `bearer` — 标准 Bearer Token（请求头 `Authorization: Bearer <api_key>`），默认值。
-  - `header` — 自定义请求头鉴权。需配合 `auth_header_name`（请求头名）和 `auth_header_prefix`（前缀）使用。
-  - `query` — 查询参数鉴权。需配合 `auth_query_name`（参数名，默认 `api_key`）使用。
-  - `none` — 不鉴权，适用于不需要密钥的本地模型或代理。
+- `bearer` — 标准 Bearer Token（请求头 `Authorization: Bearer <api_key>`），默认值。
+- `header` — 自定义请求头鉴权。需配合 `auth_header_name`（请求头名）和 `auth_header_prefix`（前缀）使用。
+- `query` — 查询参数鉴权。需配合 `auth_query_name`（参数名，默认 `api_key`）使用。
+- `none` — 不鉴权，适用于不需要密钥的本地模型或代理。
 
 **auth_header_name** — `header` 模式下的 HTTP 请求头名称（默认 `Authorization`）。
 **auth_header_prefix** — `header` 模式下密钥前缀（默认 `Bearer`，留空表示直接发送原始密钥）。
@@ -89,19 +89,19 @@ MaiBot 运行时依赖 `config/` 目录下两份独立的 TOML 文件，它们�
 
 — 控制模型推理内容（thinking / CoT）的解析方式。
 
-  - `auto` — 自动检测。优先使用 native，不可用时回退到 think_tag。
-  - `native` — 原生 API 推理字段（如 `reasoning_content`）。
-  - `think_tag` — 正则提取 `{think}` 标签内容（适用于部分国产模型）。
-  - `none` — 不解析推理内容。
+- `auto` — 自动检测。优先使用 native，不可用时回退到 think_tag。
+- `native` — 原生 API 推理字段（如 `reasoning_content`）。
+- `think_tag` — 正则提取 `{think}` 标签内容（适用于部分国产模型）。
+- `none` — 不解析推理内容。
 
 **tool_argument_parse_mode**
 
 — 控制模型工具调用参数的解析策略。
 
-  - `auto` — 自动选择合适的策略，默认值。
-  - `strict` — 直接解析 JSON 参数，不额外修复。
-  - `repair` — 尝试修复格式错误的 JSON 参数后再解析。
-  - `double_decode` — 对参数字符串先 URL-decode 再 JSON 解析（适用于部分模型将参数双重编码的情况）。
+- `auto` — 自动选择合适的策略，默认值。
+- `strict` — 直接解析 JSON 参数，不额外修复。
+- `repair` — 尝试修复格式错误的 JSON 参数后再解析。
+- `double_decode` — 对参数字符串先 URL-decode 再 JSON 解析（适用于部分模型将参数双重编码的情况）。
 
 **default_headers** — 所有请求默认附加的 HTTP Header 字典。
 **default_query** — 所有请求默认附加的查询参数字典。
@@ -218,6 +218,7 @@ flowchart TD
 ```
 
 热重载的关键保护：
+
 - **频率保护**：两次热重载之间至少间隔 1 秒。
 - **超时保护**：单次 `reload_config` 最多执行 20 秒。
 - **锁保护**：`asyncio.Lock` 保证同一时刻只有一个重载在进行。

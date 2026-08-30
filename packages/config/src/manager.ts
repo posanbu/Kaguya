@@ -226,7 +226,9 @@ export class FileUserConfigManager {
     profileId: ProfileId,
     replacement: ReplaceUserConfigProfileInput,
   ): Promise<UserConfigProfile> {
-    return this.#enqueue(() => this.#replaceProfileById(profileId, replacement));
+    return this.#enqueue(() =>
+      this.#replaceProfileById(profileId, replacement),
+    );
   }
 
   async acknowledgeConfigurationWarnings(
@@ -452,7 +454,12 @@ export class FileUserConfigManager {
           : structuredClone(current),
       ),
     };
-    await this.#replacePersistedProfile(profileId, oldProfile, profile, nextIndex);
+    await this.#replacePersistedProfile(
+      profileId,
+      oldProfile,
+      profile,
+      nextIndex,
+    );
     return structuredClone(profile);
   }
 
@@ -487,7 +494,12 @@ export class FileUserConfigManager {
           : structuredClone(current),
       ),
     };
-    await this.#replacePersistedProfile(profileId, oldProfile, profile, nextIndex);
+    await this.#replacePersistedProfile(
+      profileId,
+      oldProfile,
+      profile,
+      nextIndex,
+    );
   }
 
   async #replacePersistedProfile(
@@ -639,7 +651,9 @@ function buildReplacementReview(
   const validWarningIds = new Set(
     deriveConfigurationWarnings(profile).map((warning) => warning.id),
   );
-  if (acknowledgedWarnings.some((warningId) => !validWarningIds.has(warningId))) {
+  if (
+    acknowledgedWarnings.some((warningId) => !validWarningIds.has(warningId))
+  ) {
     throw new ConfigError(
       "CONFIG_INVALID_INPUT",
       "Configuration acknowledgement is invalid",
@@ -819,7 +833,8 @@ async function readManagedJsonReadOnly(path: string): Promise<unknown> {
   try {
     handle = await open(
       path,
-      constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW),
+      constants.O_RDONLY |
+        (process.platform === "win32" ? 0 : constants.O_NOFOLLOW),
     );
     return JSON.parse(await handle.readFile("utf8"));
   } catch (error) {

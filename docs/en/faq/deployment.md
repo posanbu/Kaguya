@@ -36,4 +36,3 @@ Docker deployments also require correct port mapping and bind addresses. See [Do
 ## Why is a setting missing from the WebUI?
 
 Check whether the page has an advanced-settings toggle, then verify the current MaiBot version. Settings may be moved, renamed, or replaced; do not add unknown configuration only because it appears in an old screenshot.
-

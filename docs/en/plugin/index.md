@@ -1,6 +1,7 @@
 ---
 title: Plugin Development Guide
 ---
+
 # Plugin Development Guide
 
 MaiBot's plugin system adopts a Host/Runner IPC architecture. Plugin code runs in isolated child processes and communicates with the main process via an RPC protocol encoded with msgpack. This section introduces the architectural principles, development workflow, and core concepts of the plugin system.
@@ -45,7 +46,6 @@ graph TD
   - Host → Runner: Invokes plugin components (Tools, Commands, etc.) via `invoke_plugin()`
   - Runner → Host: Plugins initiate RPC callbacks via the capability proxy in `self.ctx` (e.g., `ctx.send.text()`, `ctx.db.query()`)
 
-
 ## Quick Start
 
 ### 1. Install SDK
@@ -56,6 +56,7 @@ pip install maibot-plugin-sdk
 
 ::: tip Note
 The package name is `maibot-plugin-sdk`, but in code, import using `maibot_sdk`:
+
 ```python
 from maibot_sdk import MaiBotPlugin, Command, Tool
 ```

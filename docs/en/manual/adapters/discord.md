@@ -175,10 +175,11 @@ If the Bot is connected but not responding to messages, check the chat filtering
 - **`typing_indicator_timeout_sec`** — Maximum duration to show the typing indicator (seconds). Set to 0 to never time out until a reply is sent. Default: 0
 
 ::: tip Chat Filtering Explanation
+
 - **Whitelist mode**: only processes messages from servers/channels/users in the list; others are discarded
 - **Blacklist mode**: processes all messages except those from servers/channels/users in the list
 - All list modes default to blacklist (allow all). If the Bot is connected but not responding, check the list configuration first
-:::
+  :::
 
 ### `[platform]` — Platform Settings
 
@@ -209,7 +210,7 @@ Enabling voice features requires all of the following conditions:
 - `voice.enabled = true`
 - `connection.intent_voice_states = true`
 - Bot has `View Channel`, `Connect`, and `Speak` permissions for the target voice channel
-:::
+  :::
 
 ### `[siliconflow_tts]` — SiliconFlow TTS
 

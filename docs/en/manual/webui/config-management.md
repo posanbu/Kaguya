@@ -27,16 +27,19 @@ Edit the configuration file directly, suitable for tech-savvy users:
 ## What Settings Can Be Modified?
 
 ### 🤖 Bot Settings
+
 - **Basic Profile** - Name, avatar, signature
 - **Chat Behavior** - Reply speed, message length
 - **Personality Traits** - Character, speaking style
 
 ### 💬 Message Settings
+
 - **Reply Rules** - When to reply, who to reply to
 - **Emoji Usage** - Whether to use emojis/stickers frequently
 - **Typos** - Whether to intentionally make typos
 
 ### 🧠 Intelligence Settings
+
 - **Memory System** - How much to remember, how long to remember
 - **Model Selection** - Which AI model to use
 - **API Configuration** - Model provider settings
@@ -68,11 +71,13 @@ A plugin's own configuration is managed by the plugin lifecycle and normally hot
 ## Modification Suggestions
 
 ### Beginner Recommendations
+
 - First change the **bot name** and **signature** to give the bot some personality
 - Adjust the **reply speed**, neither too fast nor too slow is good
 - Try the **personality settings** to make the bot more interesting
 
 ### Advanced Tips
+
 - Configure **multiple AI models** for different tasks
 - Set up **keyword replies** to make the bot smarter
 - Adjust **memory parameters** to remember more chat content
@@ -80,11 +85,13 @@ A plugin's own configuration is managed by the plugin lifecycle and normally hot
 ## Precautions
 
 ⚠️ **Important Reminder**:
+
 - Incorrect settings may cause the bot to malfunction
 - Check the documentation first for options you are unsure about
 - It is recommended to back up important configurations first
 
 📝 **Tips**:
+
 - Hover the mouse over a setting item for an explanation
 - Remember to click save after making changes
 - You can reset to default settings if there are problems

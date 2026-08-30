@@ -39,6 +39,7 @@ from maibot_sdk.types import ToolParameterInfo, ToolParamType
 - **`parameters`** `list | dict | None` — Tool parameter definitions, supporting two formats (see below).
 
 Description field conventions:
+
 - `description`: Description of the tool, including usage methods, scenarios, and notes. When `brief_description` is empty, `description` serves as the fallback description.
 - `brief_description`: A brief description used by the main program or small models to quickly determine "what this tool does".
 - `detailed_description`: A detailed description of parameters, required items, optional items, and invocation constraints.
@@ -149,6 +150,7 @@ async def handle_greet(self, stream_id: str, **kwargs):
 :::
 
 ### Return Value
+
 The return value of a Tool handler is returned to the LLM as the tool execution result. The return value can be:
 
 - `dict`: Recommended, as the LLM can understand structured data
@@ -158,6 +160,7 @@ The return value of a Tool handler is returned to the LLM as the tool execution 
 The LLM decides the next step based on the return value (e.g., replying to the user, calling other tools, etc.).
 
 ### Returning Images and Other Media
+
 If a Tool needs to pass an image to Maisaka for further observation or reasoning, do not embed base64 images directly into `content`. It is recommended to return `dict`, placing the text for the LLM to read in `content` and the image itself in `content_items`:
 
 ::: code-group

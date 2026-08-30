@@ -11,7 +11,7 @@
 **禁止速查**
 
 - ❌ 内容页用 `| A | B |` 表格 → ✅ `**A** — B` 定义列表
-- ❌ 裸 ``` ```toml ``` fence → ✅ 包在 `::: code-group` 内，标签带 `~vscode-icons:file-type-toml~` 内联图标
+- ❌ 裸 ` `toml ``` fence → ✅ 包在 `::: code-group` 内，标签带 `~vscode-icons:file-type-toml~` 内联图标
 - ❌ 标签依赖关键词自动匹配图标 → ✅ 显式 `~vscode-icons:<id>~`
 
 ---

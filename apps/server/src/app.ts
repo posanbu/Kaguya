@@ -147,9 +147,18 @@ const setupStatusResponseJsonSchema = {
       properties: {
         status: { type: "string" },
         selectedProfileId: { type: "string" },
-        profiles: { type: "array", items: { type: "object", additionalProperties: true } },
-        issues: { type: "array", items: { type: "object", additionalProperties: true } },
-        warnings: { type: "array", items: { type: "object", additionalProperties: true } },
+        profiles: {
+          type: "array",
+          items: { type: "object", additionalProperties: true },
+        },
+        issues: {
+          type: "array",
+          items: { type: "object", additionalProperties: true },
+        },
+        warnings: {
+          type: "array",
+          items: { type: "object", additionalProperties: true },
+        },
       },
     },
   },
@@ -166,7 +175,10 @@ const profileRegistryResponseJsonSchema = {
       required: ["selectedProfileId", "profiles"],
       properties: {
         selectedProfileId: { type: "string" },
-        profiles: { type: "array", items: { type: "object", additionalProperties: true } },
+        profiles: {
+          type: "array",
+          items: { type: "object", additionalProperties: true },
+        },
       },
     },
   },
@@ -390,7 +402,9 @@ export async function createHttpApplication(
     },
     async (request, reply) => {
       const body = createProfileRequestSchema.parse(request.body);
-      const result = await requireManagement(options.setup).createProfile(body.name);
+      const result = await requireManagement(options.setup).createProfile(
+        body.name,
+      );
       return reply.code(201).send({ data: result });
     },
   );

@@ -54,6 +54,7 @@ An MCP server can expose four types of capabilities:
 Executable functions with input/output schemas. This is the most commonly used capability type — MCP tools are registered into MaiBot's tool registry, and the Maisaka planner can invoke them just like built-in tools.
 
 Each tool contains:
+
 - **name** — A globally unique tool identifier
 - **description** — A natural-language description of what the tool does
 - **inputSchema** — Parameter definition in JSON Schema format
@@ -65,6 +66,7 @@ Each tool contains:
 Predefined prompt templates with optional parameters. They can be fetched and used to build conversation context.
 
 Each prompt contains:
+
 - **name** — Unique identifier
 - **arguments** — Optional template parameters, each can be marked as required
 - **description** — Description of what the template does
@@ -74,6 +76,7 @@ Each prompt contains:
 Static data or files accessible by URI. Resources exposed by a server have fixed URIs that the client can read directly.
 
 Each resource contains:
+
 - **URI** — The resource's unique address
 - **name/description** — Human-readable identifiers
 - **MIME type** — The content format of the resource

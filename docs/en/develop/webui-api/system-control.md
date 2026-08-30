@@ -31,7 +31,7 @@ curl -X POST http://127.0.0.1:8001/api/webui/system/restart \
 ::: code-group
 
 ```json [JSON ~vscode-icons:file-type-json~]
-{"success": true, "message": "麦麦正在重启中..."}
+{ "success": true, "message": "麦麦正在重启中..." }
 ```
 
 :::
@@ -149,7 +149,7 @@ curl -X POST http://127.0.0.1:8001/api/webui/system/update-notice/ack \
 ::: code-group
 
 ```json [JSON ~vscode-icons:file-type-json~]
-{"success": true, "message": "更新公告已确认", "version": "1.2.0"}
+{ "success": true, "message": "更新公告已确认", "version": "1.2.0" }
 ```
 
 :::

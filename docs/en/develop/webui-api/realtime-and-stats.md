@@ -281,6 +281,7 @@ This script depends on `aiohttp`. Before running, complete login to get a Cookie
 At this point, the entire WebUI HTTP API subdirectory has been covered. From the skeleton in the entry page through the six scenario documents, you should now have a complete understanding of authentication, configuration, system control, plugin management, data operations, and real-time channels.
 
 If you have specific needs:
+
 - Getting started debugging the API → go back to **[WebUI HTTP API Entry](./index)** for a quick connectivity test
 - Writing script integrations → start with **[Auth and First Setup](./auth-and-setup)** to handle login, then jump by scenario
 - Looking up individual endpoints → use your browser's search function directly within this subdirectory to search for endpoint paths

@@ -13,6 +13,7 @@ Actually, MaiBot's thinking process is very similar to real human conversation �
 ### 🎧 Step 1: Listen Carefully to What You Say
 
 Just like in a real human conversation, MaiBot will first:
+
 - **Listen to your words** — won't interrupt you
 - **Understand the context** — knows what topic you're discussing
 - **Remember important information** — notes down key content
@@ -20,11 +21,13 @@ Just like in a real human conversation, MaiBot will first:
 ### 🤔 Step 2: Think About Whether to Speak
 
 This step is crucial! MaiBot will consider:
+
 - **Is it appropriate to chime in right now?** — polite like a real person
 - **What should I say?** — thinks about what valuable content to contribute
 - **What tone should I use?** — adjusts according to the chat atmosphere
 
 Sometimes it thinks:
+
 - "It doesn't seem appropriate to interject now, I'll wait a bit"
 - "I can participate in this topic"
 - "Would it be too abrupt if I say this?"
@@ -32,6 +35,7 @@ Sometimes it thinks:
 ### 💭 Step 3: Organize the Language
 
 After deciding to speak, it will:
+
 - **Recall previous conversations** — see if there's any relevant information
 - **Check the memory bank** — look for useful knowledge
 - **Consider speaking style** — mimic the way your group talks
@@ -68,16 +72,19 @@ MaiBot: I think BBQ is a good choice! It won't be too hot,
 MaiBot's slow replies are usually because:
 
 ### 🧐 Thinking Carefully
+
 - The topic is rather complex and needs more thought
 - Recalling relevant memories
 - Organizing a longer reply
 
 ### 📚 Looking Up Information
+
 - Searching for relevant information in its memory
 - Thinking about what emoji/sticker is appropriate to use
 - Recalling your previous conversations
 
 ### ⏰ Waiting for the Right Moment
+
 - Feels it's not the right time to speak, waiting a bit
 - Observing other people's reactions
 - Doesn't want to interject too frequently
@@ -85,19 +92,25 @@ MaiBot's slow replies are usually because:
 ## Characteristics of Its Thinking
 
 ### 🎯 Has a Sense of Rhythm
+
 Unlike some bots that spam instant replies, MaiBot will:
+
 - Be fast when it should be fast, and slow when it should be slow
 - Leave natural intervals in the conversation
 - Won't "leave you on read", but won't reply instantly either
 
 ### 🧠 Thinks Iteratively
+
 Sometimes it will:
+
 - Think once, feel it's not good enough, and rethink
 - Re-evaluate after receiving new messages
 - Constantly adjust its train of thought during the conversation
 
 ### 💡 Learns and Improves
+
 After each conversation, it will:
+
 - Summarize the experience from this conversation
 - Remember what responses worked well
 - Do better next time it encounters a similar situation
@@ -118,16 +131,19 @@ The scenario is judged from the chat context, topic type, and the group's speaki
 Sometimes MaiBot falls into an "overthinking" mode:
 
 ### 🤯 Topic Is Too Complex
+
 - Involves too much background knowledge
 - Too many possible ways to respond
 - Worried about saying the wrong thing
 
 ### 😅 Choice Paralysis
+
 - Has several good reply ideas
 - Doesn't know which one is better
 - Weighing the effects of various responses
 
 ### 🎯 Striving for Perfection
+
 - Wants to give the best advice
 - Wants the most natural response
 - Wants the most appropriate tone
@@ -146,6 +162,7 @@ This is why sometimes you see "typing..." (if that feature is available), but th
 ## Want to Dive Deeper?
 
 If you're particularly interested in MaiBot's thinking process:
+
 - [See how its memory system works →](./memory-system.md)
 - [Learn how it learns speaking styles →](./learning.md)
 - [See how it processes messages →](./message-pipeline.md)

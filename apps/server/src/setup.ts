@@ -31,8 +31,7 @@ import {
 } from "@kaguya/config";
 
 export type ConfigurationSetupStatus =
-  | ExistingConfigurationReadiness
-  | { readonly status: "restart_required" };
+  ExistingConfigurationReadiness | { readonly status: "restart_required" };
 
 export interface ProfileRegistryMetadata {
   readonly selectedProfileId: string;
@@ -163,10 +162,7 @@ export async function initializeConfigurationProfile(
 
 export class ConfigurationSetupNotRequiredError extends ConfigError {
   constructor() {
-    super(
-      "CONFIG_INVALID_INPUT",
-      "Configuration setup is not required",
-    );
+    super("CONFIG_INVALID_INPUT", "Configuration setup is not required");
   }
 }
 

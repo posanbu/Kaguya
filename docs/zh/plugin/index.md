@@ -81,6 +81,7 @@ uv build
 
 ::: tip 注意
 安装包名为 `maibot-plugin-sdk`，但代码中导入时使用 `maibot_sdk`：
+
 ```python
 from maibot_sdk import MaiBotPlugin, Command, Tool
 ```

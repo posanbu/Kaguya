@@ -172,9 +172,10 @@ async def on_config_update(
 - **`"model"`** → `ON_MODEL_CONFIG_RELOAD` — LLM 模型配置。需要通过 `config_reload_subscriptions` 订阅
 
 ::: important
+
 - `scope == "self"` 的回调**始终触发**，不需要额外订阅
 - `scope == "bot"` 和 `scope == "model"` 只有在 `config_reload_subscriptions` 中声明后才会触发
-:::
+  :::
 
 ### 示例
 

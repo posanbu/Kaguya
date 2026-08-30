@@ -69,7 +69,9 @@ describe("application API gateway", () => {
       inspect: vi.fn(async () => ({
         status: "invalid" as const,
         selectedProfileId: "default",
-        profiles: [{ id: "default", name: "default", createdAt: NOW, updatedAt: NOW }],
+        profiles: [
+          { id: "default", name: "default", createdAt: NOW, updatedAt: NOW },
+        ],
         issues: [
           {
             id: "default-provider-missing",
@@ -185,9 +187,11 @@ describe("application API gateway", () => {
       const response = await app.inject(request);
 
       expect(response.statusCode, `${request.method} ${request.url}`).toBe(401);
-      expect(response.json(), `${request.method} ${request.url}`).toMatchObject({
-        error: { code: "unauthorized" },
-      });
+      expect(response.json(), `${request.method} ${request.url}`).toMatchObject(
+        {
+          error: { code: "unauthorized" },
+        },
+      );
     }
     await app.close();
   });
@@ -267,7 +271,11 @@ describe("application API gateway", () => {
   it("replaces profile with the submitted full body", async () => {
     await withManagementApp(async (app, management) => {
       const created = await management.createProfile("work");
-      const payload = readyProfileReplacement("work", "light-model", "heavy-model");
+      const payload = readyProfileReplacement(
+        "work",
+        "light-model",
+        "heavy-model",
+      );
 
       const response = await app.inject({
         method: "PUT",
@@ -1067,12 +1075,16 @@ function stubManagement(): ConfigurationManagement {
     inspect: vi.fn(async () => ({
       status: "invalid" as const,
       selectedProfileId: "default",
-      profiles: [{ id: "default", name: "default", createdAt: NOW, updatedAt: NOW }],
+      profiles: [
+        { id: "default", name: "default", createdAt: NOW, updatedAt: NOW },
+      ],
       issues: [],
     })),
     listProfiles: vi.fn(async () => ({
       selectedProfileId: "default",
-      profiles: [{ id: "default", name: "default", createdAt: NOW, updatedAt: NOW }],
+      profiles: [
+        { id: "default", name: "default", createdAt: NOW, updatedAt: NOW },
+      ],
     })),
     getProfile: vi.fn(async () => ({
       version: 1 as const,

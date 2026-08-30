@@ -26,9 +26,11 @@ docker compose version
 
 ::: tip 国内用户
 国内服务器可以使用一键安装脚本：
+
 ```bash
 bash <(curl -sSL https://linuxmirrors.cn/docker.sh)
 ```
+
 :::
 
 ## Docker Compose

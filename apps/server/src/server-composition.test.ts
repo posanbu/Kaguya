@@ -20,19 +20,21 @@ import { Writable } from "node:stream";
 
 import { KaguyaDatabase } from "@kaguya/database";
 import { FileUserConfigManager } from "@kaguya/config";
+import { closeLogger, createLogger, createModuleLogger } from "@kaguya/logger";
 import {
-  closeLogger,
-  createLogger,
-  createModuleLogger,
-} from "@kaguya/logger";
-import { KaguyaRuntime, type RuntimeModelSelectionResolver } from "@kaguya/runtime";
+  KaguyaRuntime,
+  type RuntimeModelSelectionResolver,
+} from "@kaguya/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 
 import { createHttpApplication } from "./app.js";
 import type { ServerConfig } from "./config.js";
-import { createRuntimeModelSelectionResolver, startKaguyaServer } from "./server.js";
+import {
+  createRuntimeModelSelectionResolver,
+  startKaguyaServer,
+} from "./server.js";
 import { registerWebUi } from "./web.js";
 import { llmReplySettingsSchema } from "../../../packages/modules/src/llm-reply.js";
 
@@ -187,14 +189,20 @@ describe("unified server composition", () => {
     const databasePath = tempDatabasePath();
     const configRoot = join(dirnameOf(databasePath), "config");
     mkdirSync(configRoot, { recursive: true });
-    writeFileSync(join(configRoot, "index.json"), JSON.stringify({ version: 2 }));
+    writeFileSync(
+      join(configRoot, "index.json"),
+      JSON.stringify({ version: 2 }),
+    );
 
     const stream = new LogStream();
     const rootLogger = createLogger({ service: "kaguya-server-test", stream });
     const createLoggerSpy = vi
       .spyOn(await import("@kaguya/logger"), "createLogger")
       .mockReturnValue(rootLogger);
-    const closeLoggerSpy = vi.spyOn(await import("@kaguya/logger"), "closeLogger");
+    const closeLoggerSpy = vi.spyOn(
+      await import("@kaguya/logger"),
+      "closeLogger",
+    );
 
     const error = await startKaguyaServer({
       ...config(databasePath),
@@ -207,7 +215,10 @@ describe("unified server composition", () => {
     expect(closeLoggerSpy).toHaveBeenCalledWith(rootLogger);
     expect(stream.logs()).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ event: "server.start.failed", level: "fatal" }),
+        expect.objectContaining({
+          event: "server.start.failed",
+          level: "fatal",
+        }),
         expect.objectContaining({ event: "server.stopping", level: "info" }),
         expect.objectContaining({ event: "server.stopped", level: "info" }),
       ]),
@@ -229,10 +240,10 @@ describe("unified server composition", () => {
         readyProfileSettings("default-light", "default-heavy"),
       ),
     );
-    await manager.acknowledgeConfigurationWarnings(manager.getSelectedProfileId(), [
-      "platforms-empty",
-      "plugins-empty",
-    ]);
+    await manager.acknowledgeConfigurationWarnings(
+      manager.getSelectedProfileId(),
+      ["platforms-empty", "plugins-empty"],
+    );
     await manager.createProfile("incomplete");
 
     const resolver = await createRuntimeModelSelectionResolver(root);
@@ -260,10 +271,10 @@ describe("unified server composition", () => {
         readyProfileSettings("default-light", "default-heavy"),
       ),
     );
-    await manager.acknowledgeConfigurationWarnings(manager.getSelectedProfileId(), [
-      "platforms-empty",
-      "plugins-empty",
-    ]);
+    await manager.acknowledgeConfigurationWarnings(
+      manager.getSelectedProfileId(),
+      ["platforms-empty", "plugins-empty"],
+    );
     const selected = await manager.createProfile("selected");
     await manager.replaceProfile(
       selected.id,
@@ -321,10 +332,10 @@ describe("unified server composition", () => {
       platforms: [],
       plugins: [],
     });
-    await manager.acknowledgeConfigurationWarnings(manager.getSelectedProfileId(), [
-      "platforms-empty",
-      "plugins-empty",
-    ]);
+    await manager.acknowledgeConfigurationWarnings(
+      manager.getSelectedProfileId(),
+      ["platforms-empty", "plugins-empty"],
+    );
 
     await createRuntimeModelSelectionResolver(root);
 
@@ -353,10 +364,10 @@ describe("unified server composition", () => {
         readyProfileSettings("default-light", "default-heavy"),
       ),
     );
-    await manager.acknowledgeConfigurationWarnings(manager.getSelectedProfileId(), [
-      "platforms-empty",
-      "plugins-empty",
-    ]);
+    await manager.acknowledgeConfigurationWarnings(
+      manager.getSelectedProfileId(),
+      ["platforms-empty", "plugins-empty"],
+    );
     const resolver: RuntimeModelSelectionResolver =
       await createRuntimeModelSelectionResolver(root);
 
@@ -367,8 +378,11 @@ describe("unified server composition", () => {
         outbound: { mode: "source", messageKind: "text" },
       }).success,
     ).toBe(false);
-    // @ts-expect-error Runtime selections are tier-only and cannot carry a profile override.
-    const invalidSelection: Parameters<RuntimeModelSelectionResolver>[0] = { profileId: "profile-override", modelTier: "light" };
+    const invalidSelection: Parameters<RuntimeModelSelectionResolver>[0] = {
+      // @ts-expect-error Runtime selections are tier-only and cannot carry a profile override.
+      profileId: "profile-override",
+      modelTier: "light",
+    };
     expect(invalidSelection.modelTier).toBe("light");
     expect(resolver({ modelTier: "light" })).toEqual({
       modelId: "default-light",

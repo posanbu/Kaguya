@@ -13,10 +13,11 @@ In `plugin.py`, a plugin uses `config_model` to declare its configuration struct
 The plugin source repository uses `config_model` as its configuration definition, and `.gitignore` should include `/config.toml`. Values changed through WebUI or runtime configuration APIs are stored in `config.toml` under the installed plugin directory.
 
 ::: tip Responsibilities of configuration-related files
+
 - `config_model` in `plugin.py`: Defines the configuration structure, types, defaults, and WebUI presentation metadata
 - `config.toml`: Stores the current installation's runtime configuration and is generated and maintained by the Runner
 - `_manifest.json`: Declares the plugin ID, version, dependencies, and capabilities and is validated and managed by the Host
-:::
+  :::
 
 ## PluginConfigBase Configuration Model
 
@@ -114,7 +115,7 @@ Field(
 - **`description`** `str` — Field description, displayed as a form label in the WebUI
 - **`json_schema_extra`** `dict` — Additional metadata passed to the WebUI Schema generator. Common keys: `placeholder` (input box placeholder text), `group` (UI grouping hint)
 
-### __ui_label__
+### **ui_label**
 
 `PluginConfigBase` subclasses can set the group title displayed in the WebUI via the `__ui_label__` class attribute:
 
@@ -128,7 +129,7 @@ class PluginSection(PluginConfigBase):
 
 :::
 
-### __ui_icon__
+### **ui_icon**
 
 `PluginConfigBase` subclasses can set the group icon displayed in the WebUI via the `__ui_icon__` class attribute, accepting [Material Icons](https://fonts.google.com/icons) icon names:
 
@@ -143,7 +144,7 @@ class PluginSection(PluginConfigBase):
 
 :::
 
-### __ui_order__
+### **ui_order**
 
 `PluginConfigBase` subclasses can set the display order of groups in the WebUI via the `__ui_order__` class attribute. Lower values appear first:
 
@@ -200,9 +201,10 @@ class MyPlugin(MaiBotPlugin):
 ```
 
 ::: warning 注意
+
 - Calling `self.config` without declaring `config_model` will raise `RuntimeError`
 - Calling `self.config` before the configuration is injected will also raise `RuntimeError`
-:::
+  :::
 
 ### Raw Dictionary Access
 

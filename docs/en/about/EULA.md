@@ -1,6 +1,7 @@
 ---
 title: EULA
 ---
+
 # **MaiBot End User License Agreement**
 
 **Version: V1.3**

@@ -1,6 +1,7 @@
 ---
 title: Action Component (Legacy)
 ---
+
 # Action Component (Legacy)
 
 ::: danger Deprecated

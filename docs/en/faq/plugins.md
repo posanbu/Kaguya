@@ -25,4 +25,3 @@ Check the repository URL, network, Git installation, proxy, and mirror settings.
 ## What if a plugin stops working after an update?
 
 Read its release notes and migration instructions and verify the supported MaiBot versions. Back up the plugin directory and configuration before rolling back, then follow the repository's version guidance.
-

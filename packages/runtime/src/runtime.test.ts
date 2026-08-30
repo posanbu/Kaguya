@@ -302,7 +302,9 @@ describe("KaguyaRuntime", () => {
         selections.push(selection);
         return {
           modelId: `resolved-${selection.modelTier}`,
-          model: createRepeatingDeterministicModel({ text: selection.modelTier }),
+          model: createRepeatingDeterministicModel({
+            text: selection.modelTier,
+          }),
         };
       }),
       moduleActivations: [

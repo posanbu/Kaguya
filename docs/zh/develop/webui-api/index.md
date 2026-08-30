@@ -55,6 +55,7 @@ curl -X POST http://127.0.0.1:8001/api/webui/auth/verify \
   -H "Content-Type: application/json" \
   -d '{"token": "你的临时或固定Token"}'
 ```
+
 :::
 
 **相关端点：**
@@ -73,6 +74,7 @@ curl -X POST http://127.0.0.1:8001/api/webui/auth/verify \
 curl -X GET http://127.0.0.1:8001/api/webui/auth/check \
   -H "Cookie: maibot_session=你的Token"
 ```
+
 :::
 
 ### 2. api_server_allowed_api_keys（脚本/外部调用）
@@ -95,6 +97,7 @@ curl -X GET http://127.0.0.1:8001/api/webui/auth/check \
 curl -X GET http://127.0.0.1:8001/api/webui/ws-token \
   -H "Cookie: maibot_session=你的Token"
 ```
+
 :::
 
 ## 路由结构与 base path
@@ -142,6 +145,7 @@ curl -X GET http://127.0.0.1:8001/api/webui/ws-token \
 ```bash [curl 健康检查 ~vscode-icons:file-type-http~]
 curl http://127.0.0.1:8001/api/webui/health
 ```
+
 :::
 
 预期返回：
@@ -149,7 +153,7 @@ curl http://127.0.0.1:8001/api/webui/health
 ::: code-group
 
 ```json [JSON ~vscode-icons:file-type-json~]
-{"status": "healthy", "service": "MaiBot WebUI"}
+{ "status": "healthy", "service": "MaiBot WebUI" }
 ```
 
 :::

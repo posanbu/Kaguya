@@ -21,11 +21,13 @@ Covers scenarios 1–6, the most common problems encountered by new users when d
 ### Scenario 1: Configuration File Not Found or Incorrect Format
 
 #### Error Symptoms
+
 - MaiBot crashes immediately on startup
 - Terminal prints TOML parsing error, e.g. `Invalid TOML syntax`
 - Or reports a missing `[inner].version`, an invalid field type, or another configuration parsing error
 
 #### Quick Self-Check Trio
+
 1️⃣ Do both `bot_config.toml` and `model_config.toml` exist in `config/`?
 2️⃣ Is the TOML syntax correct? Strings need quotes, numbers don't, booleans are lowercase
 3️⃣ Which file and field does the log identify? Do not reset both files at once
@@ -105,6 +107,7 @@ enabled = True             # Error! Should be lowercase true
 If you've manually edited the file and aren't sure about the format, use an [online TOML validator](https://toml.io/en/) to check.
 
 #### Prevention Tips
+
 - 📝 **Use WebUI to modify configuration** — WebUI validates the format when saving
 - 💾 **Back up before modifying** — Back up `config/bot_config.toml` and `config/model_config.toml`
 - 🔍 **Make small changes** — Only modify a few lines at a time, test if startup works after saving
@@ -114,11 +117,13 @@ If you've manually edited the file and aren't sure about the format, use an [onl
 ### Scenario 2: API Key Error / Insufficient Balance
 
 #### Error Symptoms
+
 - Bot completely unresponsive
 - Backend log shows `401 Unauthorized` / `402 Payment Required` / `403 Forbidden`
 - Log prompts `API key is invalid` or `Insufficient balance`
 
 #### Quick Self-Check Trio
+
 1️⃣ Is the API Key filled in correctly? Check `api_key` field in `model_config.toml`
 2️⃣ Is the account balance sufficient? Log into the API provider's dashboard to check balance
 3️⃣ Is the model name correct? Check if `model_identifier` is in the provider's supported model list
@@ -151,6 +156,7 @@ curl https://api.deepseek.com/v1/models \
 :::
 
 **Step 3: Check Balance**
+
 - Log into DeepSeek/OpenAI or other provider's dashboard
 - Check if account balance is greater than 0
 - Check if API Key has expired or been disabled
@@ -174,6 +180,7 @@ api_provider = "DeepSeek"
 :::
 
 #### Prevention Tips
+
 - 🔑 **Don't commit Keys to Git** — Use environment variables or local configuration files
 - 💰 **Set up balance alerts** — Enable low-balance email notifications in the API dashboard
 - 📊 **Monitor usage** — Regularly check token consumption
@@ -183,11 +190,13 @@ api_provider = "DeepSeek"
 ### Scenario 3: Port Occupied
 
 #### Error Symptoms
+
 - Startup reports `OSError: [Errno 98] Address already in use`
 - Or `[Errno 10048]` (Windows)
 - Error log: `端口 8001 已被占用 (host=127.0.0.1)`
 
 #### Quick Self-Check Trio
+
 1️⃣ Which process is occupying the port? Check in Task Manager / Activity Monitor
 2️⃣ Can you close the occupying process? End the occupying process in Task Manager
 3️⃣ Can you change MaiBot's port? Edit the configuration file to use another port
@@ -230,6 +239,7 @@ Ports `8001` and `8002` do not conflict. Port `8001` must not be suggested for a
 Restart MaiBot after changing a listening port so the service binds to the new value.
 
 #### Prevention Tips
+
 - 📝 **Document port assignments** — Avoid multiple services using the same port
 - 🔄 **Check after restart** — Sometimes old processes aren't cleaned up, may need to manually end them after restart
 - 🔧 **Verify before changing** — Use system tools to confirm the target port is free instead of guessing from its number
@@ -239,11 +249,13 @@ Restart MaiBot after changing a listening port so the service binds to the new v
 ### Scenario 4: WebUI Page Won't Open
 
 #### Error Symptoms
+
 - Browser shows "This site can't be reached" or "Connection refused" when visiting `http://localhost:8001`
 - Page is blank or times out loading
 - MaiBot is running but WebUI won't open
 
 #### Quick Self-Check Trio
+
 1️⃣ Did MaiBot really start successfully? Check the terminal for errors
 2️⃣ Is the browser address correct? Default is `http://localhost:8001`
 3️⃣ Is the firewall blocking it? Windows Firewall / antivirus software may be blocking
@@ -252,17 +264,21 @@ Restart MaiBot after changing a listening port so the service binds to the new v
 
 **Step 1: Confirm MaiBot is Running**
 Check the terminal window where MaiBot is running, look for a log message like this:
+
 ```
 WebUI 服务器 启动成功: http://127.0.0.1:8001
 ```
+
 If you don't see this, MaiBot hasn't fully started yet. Resolve the startup error first.
 
 **Step 2: Check Address and Port**
+
 - Default address: `http://127.0.0.1:8001` (recommend using 127.0.0.1 instead of localhost)
 - If you changed the port, use your modified port
 - If deploying on a remote server, replace `127.0.0.1` with the server's IP
 
 **Step 3: Check Firewall**
+
 - **Windows**: Open "Windows Security" → "Firewall & network protection" → "Allow an app through firewall", ensure Python is allowed
 - **macOS**: System Settings → Network → Firewall, check if Python is blocked
 - **Linux**: Check iptables or ufw rules
@@ -271,6 +287,7 @@ If you don't see this, MaiBot hasn't fully started yet. Resolve the startup erro
 If the port is taken by another program, WebUI won't start. Refer to Scenario 3 for checking port occupancy.
 
 #### Prevention Tips
+
 - 🖥️ **Check logs after startup** — Open the browser only after seeing "WebUI server started successfully"
 - 🔧 **Always use 127.0.0.1** — More stable than localhost, avoids DNS resolution issues
 - 🛡️ **Temporarily disable firewall** — If you're sure it's safe, temporarily disable the firewall for testing
@@ -280,11 +297,13 @@ If the port is taken by another program, WebUI won't start. Refer to Scenario 3 
 ### Scenario 5: MCP Configuration Error
 
 #### Error Symptoms
+
 - Startup reports `MCP 服务器 {name} 使用 stdio 时必须填写 command`
 - Or `MCP 服务器 {name} 使用 streamable_http 时必须填写 url`
 - Or log shows `MCP server xxx failed to connect`
 
 #### Quick Self-Check Trio
+
 1️⃣ Is the server address correct? Check `mcp.servers[].url` or `command` field
 2️⃣ Does the Token/Secret match? Confirm `bearer_token` matches the MCP server
 3️⃣ Is the MCP service running? Confirm the server has started and is accessible
@@ -360,6 +379,7 @@ bearer_token = ""         # Error! Must specify Token
 :::
 
 #### Prevention Tips
+
 - 📋 **Check each config item** — Refer to the MCP server documentation to confirm parameters
 - 🔍 **Test before deploying** — Use `curl` to test connectivity before configuring in MaiBot
 - 📝 **Document Token changes** — Update MaiBot configuration synchronously when Token changes
@@ -369,11 +389,13 @@ bearer_token = ""         # Error! Must specify Token
 ### Scenario 6: Bot Not Replying to Messages
 
 #### Error Symptoms
+
 - Message has been sent to the platform (QQ group / private chat)
 - Bot has no response at all
 - No errors in logs, but still no reply
 
 #### Quick Self-Check Trio
+
 1️⃣ Check the backend terminal output — did it show a message received prompt?
 2️⃣ Was a rule matched? Check if keyword/intent rules cover this message
 3️⃣ Is the LLM configuration correct? Confirm API Key and model configuration are correct (refer to Scenario 2)
@@ -382,10 +404,11 @@ bearer_token = ""         # Error! Must specify Token
 
 **Step 1: Check Terminal Output**
 Restart MaiBot and observe the terminal logs, see if there are:
+
 - `收到消息：...` (shows the message reached MaiBot)
 - `正在调用 LLM...` (shows it's requesting AI)
 - `发送回复：...` (shows the reply was sent)
-If all of these appear, MaiBot itself is fine — it might be a platform permission or network issue.
+  If all of these appear, MaiBot itself is fine — it might be a platform permission or network issue.
 
 **Step 2: Check Reply Rules**
 ::: code-group
@@ -413,6 +436,7 @@ reply_frequency_limit = 10      # Max 1 reply per 10 seconds
 :::
 
 **Step 4: Check Platform Permissions**
+
 - QQ groups: Is the bot muted? Does it have permission to speak?
 - Private chat: Has the bot been blocked?
 - Adapter: Is NapCat connected normally?
@@ -432,6 +456,7 @@ curl https://api.deepseek.com/v1/chat/completions \
 :::
 
 #### Prevention Tips
+
 - 📊 **Monitor logs** — Regularly check logs, handle anomalies promptly
 - 🧪 **Test new rules** — Test whether a rule works after adding it
 - 📝 **Document configuration changes** — Record changes after modifying reply rules
@@ -447,11 +472,13 @@ Covers scenarios 7–11, problems encountered relatively often during normal use
 ### Scenario 7: Plugin Loading Failed
 
 #### Error Symptoms
+
 - Startup reports `PluginLoadError`, corresponding plugin is grayed out and unavailable in the plugin list
 - Log shows `ImportError`, `ModuleNotFoundError`, or `ManifestValidationError`
 - Plugin directory exists but no plugins are loaded
 
 #### Quick Self-Check Trio
+
 1️⃣ First try reinstalling the plugin with the latest version
 2️⃣ Check the log for what dependencies are missing
 3️⃣ Confirm Python version is ≥ 3.12 and the plugin is compatible with the MaiBot version
@@ -474,12 +501,15 @@ uv sync
 
 **Step 3: Read the Full Error Log**
 When starting MaiBot, pay attention to the complete error information in the terminal, look for prompts like:
+
 ```
 No module named 'requests'
 ```
+
 Install whatever is indicated as missing.
 
 #### Prevention Tips
+
 - Check the documentation before installing a plugin to confirm compatible MaiBot version
 - Prioritize official plugins or popular community plugins
 - Regularly update plugins and MaiBot to the latest versions
@@ -489,11 +519,13 @@ Install whatever is indicated as missing.
 ### Scenario 8: Database Error
 
 #### Error Symptoms
+
 - Runtime reports `DatabaseError` or `OperationalError`
 - Startup prompts database migration failed
 - Log shows `database is locked` or `disk I/O error`
 
 #### Quick Self-Check Trio
+
 1️⃣ Check if multiple MaiBot instances are running simultaneously connecting to the same database
 2️⃣ Check if disk space is full (open file manager to check)
 3️⃣ Confirm `data/MaiBot.db` file permissions are correct (readable and writable)
@@ -531,6 +563,7 @@ journal_mode = "wal"
 Open the `logs/` folder and delete unneeded old log files. If disk space is critically low, also check other directories for large files.
 
 #### Prevention Tips
+
 - Avoid running multiple MaiBot instances simultaneously connecting to the same database file
 - Regularly back up `data/MaiBot.db` (recommended weekly)
 - Configure log rotation to prevent log files from filling up the disk
@@ -541,11 +574,13 @@ Open the `logs/` folder and delete unneeded old log files. If disk space is crit
 ### Scenario 9: Network Timeout / Connection Failure
 
 #### Error Symptoms
+
 - LLM request returns `APIConnectionError` or `TimeoutError` after being unresponsive for a long time
 - Log shows `Connection refused`, `Connection reset`, or `Read timed out`
 - Bot completely unresponsive, but local features work normally
 
 #### Quick Self-Check Trio
+
 1️⃣ Test network connectivity (`curl -v https://api.deepseek.com`)
 2️⃣ Try a different network (e.g., switch to mobile hotspot)
 3️⃣ Confirm the `timeout` parameter isn't too small (recommended 60–120 seconds)
@@ -604,6 +639,7 @@ api_key = "sk-your-backup-key"
 :::
 
 #### Prevention Tips
+
 - Set reasonable `timeout` (60–120 seconds) and `max_retry` (2–3 times)
 - Try a different network when your network is unstable (e.g., switch to mobile hotspot)
 - Configure multiple API providers as backups to avoid single points of failure
@@ -614,11 +650,13 @@ api_key = "sk-your-backup-key"
 ### Scenario 10: Emoji System Error
 
 #### Error Symptoms
+
 - Sending emoji commands has no effect
 - Emoji generation fails, logs show `VLMError` or `FilterError`
 - Emoji registration fails, prompting quantity limit exceeded
 
 #### Quick Self-Check Trio
+
 1️⃣ Confirm `emoji.vlm_api_key` is configured (if using VLM verification)
 2️⃣ Check if `emoji.filter` rules are too strict
 3️⃣ Ensure `data/emojis/` directory is writable (correct permissions)
@@ -672,6 +710,7 @@ do_replace = true            # Replace old emojis when limit is reached
 :::
 
 #### Prevention Tips
+
 - Temporarily disable VLM verification during first use to check if it's a model issue
 - Enable `content_filtration` cautiously to avoid false filtering of normal emojis
 - Regularly clean the `data/emojis/` directory, remove unused emojis
@@ -682,11 +721,13 @@ do_replace = true            # Replace old emojis when limit is reached
 ### Scenario 11: Knowledge Graph / Memory System Error
 
 #### Error Symptoms
+
 - Bot replies "I don't remember" or "No relevant information found"
 - Log prompts knowledge file loading failed
 - Memory added but cannot be retrieved
 
 #### Quick Self-Check Trio
+
 1️⃣ Run `maibot knowledge rebuild` to rebuild the knowledge index
 2️⃣ Check if files in `data/knowledge/` directory are intact
 3️⃣ Confirm `knowledge.enabled` is `true`
@@ -761,6 +802,7 @@ maibot knowledge rebuild
 :::
 
 #### Prevention Tips
+
 - Control the length of individual entries when adding knowledge to avoid exceeding the embedding model's token limit
 - Rebuild the knowledge index periodically to keep the index synchronized with knowledge files
 - Back up `data/knowledge/` and `data/vector_index/` directories
@@ -775,12 +817,14 @@ Covers scenarios 12–17, problems encountered only in specific operations or co
 ### Scenario 12: WebUI Login Failed / Token Expired
 
 #### Error Symptoms
+
 - Opening WebUI page automatically redirects back to login page
 - After entering password, prompts "Login failed" or "Incorrect password"
 - API requests return `401 Unauthorized` error
 - Browser console shows `Token expired` or `Invalid session`
 
 #### Quick Self-Check Trio
+
 1️⃣ **Clear browser cache** — Cookie/LocalStorage may have expired or become corrupted
 2️⃣ **Check if password is correct** — Confirm uppercase/lowercase and special characters are entered correctly
 3️⃣ **Check WebUI service status** — Confirm the service is running and hasn't been restarted
@@ -830,6 +874,7 @@ session_expire = 7                   # Session validity (days), default 7 days
 > ⚠️ **Note**: Modifying `secret_key` will invalidate all logged-in sessions, requiring re-login.
 
 #### Prevention Tips
+
 - **Extend session validity** — Change `session_expire` to 30 days
 - **Keep secret_key fixed** — Don't change it frequently, otherwise you'll have to re-login each time
 - **Use browser bookmarks** — Save the page after logging in to avoid re-entering the password
@@ -839,12 +884,14 @@ session_expire = 7                   # Session validity (days), default 7 days
 ### Scenario 13: Platform Bot Account Not Configured
 
 #### Error Symptoms
+
 - Messages cannot be sent on a platform (e.g., QQ)
 - Log prompts `No bot account configured for platform qq`
 - Adapter is connected but bot is unresponsive
 - Message sending fails, returns `400 Bad Request`
 
 #### Quick Self-Check Trio
+
 1️⃣ **Check platform configuration** — Confirm `platforms.qq.bot_accounts` is filled in
 2️⃣ **Verify account credentials** — Confirm Token/password is correct and hasn't expired
 3️⃣ **Check adapter logs** — Confirm the adapter is connected normally
@@ -888,11 +935,13 @@ docker logs maibot | grep -i adapter
 :::
 
 **Step 3: Verify Account Credentials**
+
 - **QQ platform** — Confirm the QQ number can log into NapCat/GoCQQ normally
 - **WeChat platform** — Confirm the Token hasn't expired and permissions are correct
 - **Other platforms** — Refer to the corresponding adapter's documentation
 
 #### Prevention Tips
+
 - **Use a secondary account** — Avoid the risk of your main account being banned
 - **Update credentials regularly** — Replace Token before it expires
 - **Configure backup accounts** — Can quickly switch if the primary account has issues
@@ -902,12 +951,14 @@ docker logs maibot | grep -i adapter
 ### Scenario 14: Invalid Regular Expression
 
 #### Error Symptoms
+
 - Startup or saving configuration reports `re.error: bad escape` etc.
 - Log prompts `Invalid regex pattern` or `正则表达式编译失败`
 - Keyword rules / message filtering don't work
 - Configuration page shows "Save failed: regex syntax error"
 
 #### Quick Self-Check Trio
+
 1️⃣ **Check special character escaping** — Whether `\.` `\*` `\+` etc. special characters have backslashes
 2️⃣ **Check bracket matching** — Whether `()` `[]` `{}` are properly paired
 3️⃣ **Use online tool to test** — Verify the regex with regex101.com
@@ -915,6 +966,7 @@ docker logs maibot | grep -i adapter
 #### Solutions
 
 **Method 1: Use Online Regex Testing Tool**
+
 ```text
 # Visit https://regex101.com/
 # 1. Enter your regex pattern on the left
@@ -957,6 +1009,7 @@ ban_words = ["天气", "气温", "温度"]
 > 💡 **Tip**: Regex in TOML files requires double backslashes `\\` for escaping because `\` itself is a TOML escape character.
 
 #### Prevention Tips
+
 - **Prefer keyword matching** — Simple scenarios don't need regex
 - **Test complex regex separately** — Validate on regex101.com first before putting it into config
 - **Add explanatory comments** — Add comments next to regex to describe what it matches, making maintenance easier
@@ -966,12 +1019,14 @@ ban_words = ["天气", "气温", "温度"]
 ### Scenario 15: Keyword Rule Configuration Error
 
 #### Error Symptoms
+
 - Message matches the wrong reply rule
 - Rule doesn't take effect at all, bot doesn't reply
 - Priority conflicts, high-priority rules override low-priority ones
 - Mixed Chinese/English punctuation causing matching failure
 
 #### Quick Self-Check Trio
+
 1️⃣ **Check rule priority** — Higher `priority` rules override lower ones
 2️⃣ **Confirm rule is enabled** — Is `enabled = true` set?
 3️⃣ **Test punctuation** — Full-width / half-width symbol differences can affect matching
@@ -1053,6 +1108,7 @@ keywords = ["你好，", "你好，", "hello", "hello!"]
 :::
 
 #### Prevention Tips
+
 - **Add comments to rules** — Comment the purpose next to each rule
 - **Hierarchical priority management** — Exact match > Regex match > Normal keywords > Fallback rule
 - **Test rules regularly** — Send test messages in the group to verify matching
@@ -1063,12 +1119,14 @@ keywords = ["你好，", "你好，", "hello", "hello!"]
 ### Scenario 16: Git Operation Failed (WebUI)
 
 #### Error Symptoms
+
 - Knowledge base sync / Git mirror operation fails in WebUI
 - Log shows `Git clone failed` or `Permission denied`
 - SSH Key verification fails with `Host key verification failed`
 - Git LFS files are too large causing timeout
 
 #### Quick Self-Check Trio
+
 1️⃣ **First check network** — Can you access GitHub/Gitee?
 2️⃣ **Try a public repository** — Does a repo that doesn't require login work?
 3️⃣ **Is the repository too large?** — Large files can cause timeout
@@ -1094,6 +1152,7 @@ max_file_size = 100              # Maximum single file size (MB), files larger t
 :::
 
 #### Prevention Tips
+
 - **Test with a public repository first** — Switch to a private repo only after confirming sync works
 - **Avoid large files** — Don't put large binary files in the repository
 
@@ -1102,12 +1161,14 @@ max_file_size = 100              # Maximum single file size (MB), files larger t
 ### Scenario 17: Log Files Too Large / Disk Space Full
 
 #### Error Symptoms
+
 - System running slowly or crashing
 - Log rotation fails with `No space left on device`
 - Disk usage 100%, cannot write new files
 - MaiBot startup fails, prompting database locked or write failure
 
 #### Quick Self-Check Trio
+
 1️⃣ **Check disk space** — Open file manager to see how much space is left
 2️⃣ **Check log file size** — See how large the `logs/` folder is
 3️⃣ **Check log level** — `DEBUG` level generates a large amount of logs
@@ -1132,6 +1193,7 @@ enable_rotation = true         # Enable log rotation
 :::
 
 **Step 3: Clean Up Other Junk Files**
+
 - Docker users: Clean up unused images and containers to free space
 - Check `~/.cache/` directory, delete any unneeded cache files
 
@@ -1139,6 +1201,7 @@ enable_rotation = true         # Enable log rotation
 If the current disk is indeed too small, consider moving MaiBot's logs and data directories to a larger disk.
 
 #### Prevention Tips
+
 - **Use INFO level in production** — Avoid excessive DEBUG logs
 - **Configure log rotation** — Limit log file size and count
 - **Regular cleanup** — Set up crontab to automatically clean old logs weekly
@@ -1154,16 +1217,19 @@ Covers scenarios 18–19, problems rarely encountered but may appear in special 
 ### Scenario 18: Person/User System Data Anomaly
 
 #### Error Symptoms
+
 - User profile loading fails in WebUI, shows blank or error
 - Character card information lost, previously set personality/background is gone
 - When binding accounts, prompts "User already exists" or "Foreign key constraint failed"
 
 #### Quick Self-Check Trio
+
 1️⃣ Did you directly modify the SQLite database file?
 2️⃣ Is the JSON format of character cards in `data/persons/` folder correct?
 3️⃣ Are there multiple MaiBot instances accessing the same database simultaneously?
 
 #### Solutions
+
 **Rebuild User Index**
 ::: code-group
 
@@ -1199,6 +1265,7 @@ cp data/MaiBot.db data/MaiBot.db.bak
 :::
 
 #### Prevention Tips
+
 - 🖥️ **Use WebUI for management** — Don't modify the database file directly
 - 💾 **Back up regularly** — `data/persons/` and `data/MaiBot.db` are important
 - 🔒 **Avoid concurrent access** — Don't start multiple MaiBot instances connecting to the same database
@@ -1208,21 +1275,26 @@ cp data/MaiBot.db data/MaiBot.db.bak
 ### Scenario 19: Adapter WebSocket Disconnect Reconnect Loop
 
 #### Error Symptoms
+
 Adapter logs continuously:
+
 ```
 [WebSocket] Connection closed, reconnecting...
 [WebSocket] Reconnecting in 3s...
 [WebSocket] Connection established
 [WebSocket] Connection closed, reconnecting...
 ```
+
 Message sending and receiving is unstable, sometimes works and sometimes doesn't.
 
 #### Quick Self-Check Trio
+
 1️⃣ Is the `adapter.ws_url` address and port correct?
 2️⃣ Is the network stable? (Between server and adapter)
 3️⃣ Is the server-side WebSocket service running normally?
 
 #### Solutions
+
 **Check WebSocket Address**
 ::: code-group
 
@@ -1260,6 +1332,7 @@ heartbeat_interval = 30  # Send a heartbeat every 30 seconds
 :::
 
 #### Prevention Tips
+
 - 🌐 **Ensure network stability** — The network between server and adapter should be reliable
 - 🔔 **Enable heartbeat detection** — Recommended for long connections to keep alive
 - 📊 **Monitor logs** — Investigate promptly if frequent reconnection is detected
@@ -1493,5 +1566,3 @@ graph TD
 ```
 
 <!-- TASK_FLOWCHART_END -->
-
-

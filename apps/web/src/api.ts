@@ -474,7 +474,8 @@ async function readProfileMutationResult(
   if (!response.ok || !isProfileMutationResultResponse(payload)) {
     const gatewayError = isErrorResponse(payload) ? payload.error : undefined;
     throw new GatewayRequestError(
-      gatewayError?.message ?? `Profile mutation failed（HTTP ${response.status}）`,
+      gatewayError?.message ??
+        `Profile mutation failed（HTTP ${response.status}）`,
       gatewayError?.code ?? failureCode,
       response.status,
       gatewayError?.requestId,
@@ -620,7 +621,9 @@ function isProfileMutationResultResponse(
   );
 }
 
-function isProfileMetadataArray(value: unknown): value is readonly ProfileMetadata[] {
+function isProfileMetadataArray(
+  value: unknown,
+): value is readonly ProfileMetadata[] {
   return Array.isArray(value) && value.every(isProfileMetadata);
 }
 
@@ -794,12 +797,12 @@ function isJsonObject(value: unknown): value is JsonObject {
 }
 
 function isStringArray(value: unknown): value is readonly string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === "string");
+  return (
+    Array.isArray(value) && value.every((item) => typeof item === "string")
+  );
 }
 
-function isErrorResponse(
-  value: unknown,
-): value is {
+function isErrorResponse(value: unknown): value is {
   error: {
     code: string;
     message: string;

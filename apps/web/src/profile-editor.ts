@@ -14,10 +14,7 @@
  * 输入输出与副作用：函数只处理内存对象；实现必须克隆数组和对象，
  * 不能修改传入的 profile 引用，也不能偷偷删减未展示字段。
  */
-import type {
-  ReplaceProfileInput,
-  UserConfigProfile,
-} from "./api.js";
+import type { ReplaceProfileInput, UserConfigProfile } from "./api.js";
 
 const DEFAULT_PROVIDER_ID = "default-provider";
 const OPENAI_COMPATIBLE_PROVIDER_TYPE = "openai-compatible";
@@ -87,7 +84,8 @@ export function profileToEditorFields(
     name: profile.name,
     baseUrl: provider?.baseUrl ?? "",
     apiKey: provider?.apiKey ?? "",
-    lightModel: profile.ai.modelTiers?.light.modelId ?? provider?.models[0] ?? "",
+    lightModel:
+      profile.ai.modelTiers?.light.modelId ?? provider?.models[0] ?? "",
     heavyModel:
       profile.ai.modelTiers?.heavy.modelId ??
       provider?.models[1] ??
@@ -229,7 +227,8 @@ function deriveWarningIds(profile: MutableProfile): Set<string> {
 
 function isOptionalWarningId(warningId: string): boolean {
   return (
-    warningId === OPTIONAL_WARNING_IDS[0] || warningId === OPTIONAL_WARNING_IDS[1]
+    warningId === OPTIONAL_WARNING_IDS[0] ||
+    warningId === OPTIONAL_WARNING_IDS[1]
   );
 }
 

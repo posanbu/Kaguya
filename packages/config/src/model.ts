@@ -8,7 +8,10 @@ import { z } from "zod";
 
 const nonEmptyIdSchema = z.string().trim().min(1);
 const userProfileIdSchema = z.uuid();
-const profileIdInnerSchema = z.union([z.literal("default"), userProfileIdSchema]);
+const profileIdInnerSchema = z.union([
+  z.literal("default"),
+  userProfileIdSchema,
+]);
 export const profileIdSchema = guardSchemaInput(profileIdInnerSchema);
 
 export type JsonPrimitive = null | string | boolean | number;

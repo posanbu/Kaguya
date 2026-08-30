@@ -55,7 +55,9 @@ describe("configuration management", () => {
           ]),
         }),
       );
-      await expect(management.getProfile(created.profile.id)).resolves.toMatchObject({
+      await expect(
+        management.getProfile(created.profile.id),
+      ).resolves.toMatchObject({
         id: created.profile.id,
         name: "work",
         ai: { providers: [] },
@@ -77,7 +79,11 @@ describe("configuration management", () => {
 
       const replaced = await management.replaceProfile(
         created.profile.id,
-        readyProfileReplacement(created.profile.name, "work-light", "work-heavy"),
+        readyProfileReplacement(
+          created.profile.name,
+          "work-light",
+          "work-heavy",
+        ),
       );
 
       expect(replaced.profile.id).toBe(created.profile.id);
@@ -116,7 +122,11 @@ describe("configuration management", () => {
       const created = await management.createProfile("work");
       await management.replaceProfile(
         created.profile.id,
-        readyProfileReplacement(created.profile.name, "work-light", "work-heavy"),
+        readyProfileReplacement(
+          created.profile.name,
+          "work-light",
+          "work-heavy",
+        ),
       );
       await management.selectProfile(created.profile.id);
 

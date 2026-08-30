@@ -76,10 +76,10 @@ The following three fields determine how requests are authenticated and parsed:
 
 — Authentication method for OpenAI-compatible interfaces.
 
-  - `bearer` — standard Bearer Token (`Authorization: Bearer <api_key>` header), default value.
-  - `header` — custom header authentication. Requires `auth_header_name` (header name) and `auth_header_prefix` (prefix).
-  - `query` — query parameter authentication. Requires `auth_query_name` (parameter name, default `api_key`).
-  - `none` — no authentication, suitable for local models or proxies that don't require a key.
+- `bearer` — standard Bearer Token (`Authorization: Bearer <api_key>` header), default value.
+- `header` — custom header authentication. Requires `auth_header_name` (header name) and `auth_header_prefix` (prefix).
+- `query` — query parameter authentication. Requires `auth_query_name` (parameter name, default `api_key`).
+- `none` — no authentication, suitable for local models or proxies that don't require a key.
 
 **auth_header_name** — HTTP header name in `header` mode (default `Authorization`).
 **auth_header_prefix** — key prefix in `header` mode (default `Bearer`; leave empty to send the raw key directly).
@@ -89,19 +89,19 @@ The following three fields determine how requests are authenticated and parsed:
 
 — Controls how model reasoning content (thinking / CoT) is parsed.
 
-  - `auto` — auto-detect. Prefers native, falls back to `think_tag` when unavailable.
-  - `native` — native API reasoning fields (e.g. `reasoning_content`).
-  - `think_tag` — regex extraction of `{think}` tag content (suitable for some domestic models).
-  - `none` — do not parse reasoning content.
+- `auto` — auto-detect. Prefers native, falls back to `think_tag` when unavailable.
+- `native` — native API reasoning fields (e.g. `reasoning_content`).
+- `think_tag` — regex extraction of `{think}` tag content (suitable for some domestic models).
+- `none` — do not parse reasoning content.
 
 **tool_argument_parse_mode**
 
 — Controls the parsing strategy for model tool call arguments.
 
-  - `auto` — automatically select the appropriate strategy, default value.
-  - `strict` — parse JSON arguments directly without additional repair.
-  - `repair` — attempt to fix malformed JSON arguments before parsing.
-  - `double_decode` — URL-decode the argument string first, then parse as JSON (for models that double-encode parameters).
+- `auto` — automatically select the appropriate strategy, default value.
+- `strict` — parse JSON arguments directly without additional repair.
+- `repair` — attempt to fix malformed JSON arguments before parsing.
+- `double_decode` — URL-decode the argument string first, then parse as JSON (for models that double-encode parameters).
 
 **default_headers** — dictionary of HTTP headers attached to all requests by default.
 **default_query** — dictionary of query parameters attached to all requests by default.
@@ -218,6 +218,7 @@ flowchart TD
 ```
 
 Key protections for hot reload:
+
 - **Frequency protection**: at least 1 second between two hot reloads.
 - **Timeout protection**: a single `reload_config` runs for at most 20 seconds.
 - **Lock protection**: `asyncio.Lock` ensures only one reload is in progress at a time.

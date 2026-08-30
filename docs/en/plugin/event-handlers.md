@@ -243,6 +243,7 @@ class SendAuditPlugin(MaiBotPlugin):
 - **Applicable Scenarios**: `@EventHandler` fixed stages of the message flow $\rightarrow$ `@HookHandler` any extension point defined by the main program
 
 General Principles:
+
 - If you need to execute logic at a **fixed stage** of the message flow (e.g., upon receiving a message, after LLM return), use `@EventHandler`.
 - If you need to subscribe to a **specifically named Hook point** defined by the main program (e.g., `heart_fc.heart_flow_cycle_start`), use `@HookHandler`.
 

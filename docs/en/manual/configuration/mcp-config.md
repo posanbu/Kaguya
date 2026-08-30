@@ -1,6 +1,7 @@
 ---
 title: MCP Configuration
 ---
+
 # MCP Configuration 🛠️
 
 MCP (Model Context Protocol) enables MaiBot to connect with external tools, transforming it from "just chatting" to "both speaking and acting" — checking weather, searching news, reading files, calling APIs, and more, all within reach.
