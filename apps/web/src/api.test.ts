@@ -498,6 +498,43 @@ describe("profile response validation", () => {
       code: expect.any(String),
     });
   });
+
+  it("rejects nested malformed profile content", async () => {
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        Response.json({
+          data: {
+            profile: {
+              version: 1,
+              id: "profile-1",
+              name: "work",
+              ai: {
+                defaultProviderId: "default-provider",
+                modelTiers: {
+                  light: {
+                    providerId: "default-provider",
+                    modelId: "light-model",
+                  },
+                  heavy: {
+                    providerId: "default-provider",
+                    modelId: "heavy-model",
+                  },
+                },
+                providers: [null],
+              },
+              platforms: [],
+              plugins: [],
+            },
+          },
+        }),
+      );
+
+    await expect(getProfile(config, "profile-1", request)).rejects.toMatchObject({
+      code: "profile_read_failed",
+      status: 200,
+    });
+  });
 });
 
 describe("profile registry requests", () => {

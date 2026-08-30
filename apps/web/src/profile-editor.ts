@@ -123,7 +123,10 @@ export function mergeProfileEditorFields(
 
   return {
     name: next.name,
-    acknowledgedWarnings: computeAcknowledgedWarnings(next, fields.acknowledgeOptional),
+    acknowledgedWarnings: computeAcknowledgedWarnings(
+      next,
+      fields.acknowledgeOptional,
+    ),
     ai: next.ai as ReplaceProfileInput["ai"],
     platforms: next.platforms,
     plugins: next.plugins,
@@ -182,13 +185,17 @@ function computeAcknowledgedWarnings(
   profile: MutableProfile,
   includeOptionalWarnings: boolean,
 ): string[] {
-  const warnings = new Set<string>(
-    (profile.review?.acknowledgedWarnings ?? []).filter(
-      (warningId) =>
-        warningId !== OPTIONAL_WARNING_IDS[0] &&
-        warningId !== OPTIONAL_WARNING_IDS[1],
-    ),
-  );
+  const currentWarnings = deriveWarningIds(profile);
+  const warnings = new Set<string>();
+  for (const warningId of profile.review?.acknowledgedWarnings ?? []) {
+    if (!currentWarnings.has(warningId)) {
+      continue;
+    }
+    if (!includeOptionalWarnings && isOptionalWarningId(warningId)) {
+      continue;
+    }
+    warnings.add(warningId);
+  }
   if (includeOptionalWarnings && profile.platforms.length === 0) {
     warnings.add(OPTIONAL_WARNING_IDS[0]);
   }
@@ -196,4 +203,36 @@ function computeAcknowledgedWarnings(
     warnings.add(OPTIONAL_WARNING_IDS[1]);
   }
   return [...warnings];
+}
+
+function deriveWarningIds(profile: MutableProfile): Set<string> {
+  const warnings = new Set<string>();
+  for (const provider of profile.ai.providers) {
+    if (!provider.enabled) {
+      continue;
+    }
+    if (isMissingString(provider.baseUrl)) {
+      warnings.add(`provider-base-url-missing:${provider.id}`);
+    }
+    if (isMissingString(provider.apiKey)) {
+      warnings.add(`provider-api-key-missing:${provider.id}`);
+    }
+  }
+  if (profile.platforms.length === 0) {
+    warnings.add(OPTIONAL_WARNING_IDS[0]);
+  }
+  if (profile.plugins.length === 0) {
+    warnings.add(OPTIONAL_WARNING_IDS[1]);
+  }
+  return warnings;
+}
+
+function isOptionalWarningId(warningId: string): boolean {
+  return (
+    warningId === OPTIONAL_WARNING_IDS[0] || warningId === OPTIONAL_WARNING_IDS[1]
+  );
+}
+
+function isMissingString(value: string | undefined): boolean {
+  return value === undefined || value.trim().length === 0;
 }

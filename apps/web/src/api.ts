@@ -692,11 +692,92 @@ function isUserConfigProfile(value: unknown): value is UserConfigProfile {
     value.version === 1 &&
     typeof value.id === "string" &&
     typeof value.name === "string" &&
-    isRecord(value.ai) &&
-    Array.isArray(value.ai.providers) &&
-    Array.isArray(value.platforms) &&
-    Array.isArray(value.plugins) &&
+    isProfileAi(value.ai) &&
+    isProfilePlatformArray(value.platforms) &&
+    isProfilePluginArray(value.plugins) &&
     (value.review === undefined || isProfileReview(value.review))
+  );
+}
+
+function isProfileAi(value: unknown): value is UserConfigProfile["ai"] {
+  return (
+    isRecord(value) &&
+    isOptionalString(value.defaultProviderId) &&
+    isOptionalModelTiers(value.modelTiers) &&
+    isProfileProviderArray(value.providers)
+  );
+}
+
+function isOptionalModelTiers(
+  value: unknown,
+): value is UserConfigProfile["ai"]["modelTiers"] | undefined {
+  return value === undefined || isModelTiers(value);
+}
+
+function isModelTiers(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isModelTierTarget(value.light) &&
+    isModelTierTarget(value.heavy)
+  );
+}
+
+function isModelTierTarget(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.providerId === "string" &&
+    typeof value.modelId === "string"
+  );
+}
+
+function isProfileProviderArray(
+  value: unknown,
+): value is readonly UserConfigProfileProvider[] {
+  return Array.isArray(value) && value.every(isProfileProvider);
+}
+
+function isProfileProvider(value: unknown): value is UserConfigProfileProvider {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.type === "string" &&
+    typeof value.enabled === "boolean" &&
+    isOptionalString(value.baseUrl) &&
+    isOptionalString(value.apiKey) &&
+    isStringArray(value.models) &&
+    isJsonObject(value.settings)
+  );
+}
+
+function isProfilePlatformArray(
+  value: unknown,
+): value is readonly UserConfigProfilePlatform[] {
+  return Array.isArray(value) && value.every(isProfilePlatform);
+}
+
+function isProfilePlatform(value: unknown): value is UserConfigProfilePlatform {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.type === "string" &&
+    typeof value.enabled === "boolean" &&
+    isJsonObject(value.credentials) &&
+    isJsonObject(value.settings)
+  );
+}
+
+function isProfilePluginArray(
+  value: unknown,
+): value is readonly UserConfigProfilePlugin[] {
+  return Array.isArray(value) && value.every(isProfilePlugin);
+}
+
+function isProfilePlugin(value: unknown): value is UserConfigProfilePlugin {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.enabled === "boolean" &&
+    isJsonObject(value.settings)
   );
 }
 
@@ -710,6 +791,10 @@ function isProfileReview(value: unknown): boolean {
 
 function isJsonObject(value: unknown): value is JsonObject {
   return isRecord(value) && !Array.isArray(value);
+}
+
+function isStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
 function isErrorResponse(

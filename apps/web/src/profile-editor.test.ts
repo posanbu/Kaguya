@@ -91,7 +91,7 @@ const completeProfile: UserConfigProfile = {
     acknowledgedWarnings: [
       "platforms-empty",
       "plugins-empty",
-      "custom-warning",
+      "provider-base-url-missing:default-provider",
     ],
   },
 };
@@ -105,6 +105,38 @@ const emptyDefaultProfile: UserConfigProfile = {
   },
   platforms: [],
   plugins: [],
+};
+
+const warningProfile: UserConfigProfile = {
+  version: 1,
+  id: "warning-profile",
+  name: "Warning",
+  ai: {
+    defaultProviderId: "default-provider",
+    modelTiers: {
+      light: { providerId: "default-provider", modelId: "light-model" },
+      heavy: { providerId: "default-provider", modelId: "heavy-model" },
+    },
+    providers: [
+      {
+        id: "default-provider",
+        type: "openai-compatible",
+        enabled: true,
+        apiKey: "provider-secret",
+        models: ["light-model", "heavy-model"],
+        settings: {},
+      },
+    ],
+  },
+  platforms: [],
+  plugins: [],
+  review: {
+    acknowledgedWarnings: [
+      "provider-base-url-missing:default-provider",
+      "platforms-empty",
+      "plugins-empty",
+    ],
+  },
 };
 
 describe("profileToEditorFields", () => {
@@ -146,7 +178,7 @@ describe("mergeProfileEditorFields", () => {
 
     expect(merged).toEqual({
       name: "Production v2",
-      acknowledgedWarnings: ["custom-warning"],
+      acknowledgedWarnings: [],
       ai: {
         defaultProviderId: "default-provider",
         modelTiers: {
@@ -253,12 +285,27 @@ describe("mergeProfileEditorFields", () => {
     });
   });
 
+  it("keeps still-valid hidden warnings when the base URL changes", () => {
+    const merged = mergeProfileEditorFields(warningProfile, {
+      ...profileToEditorFields(warningProfile),
+      baseUrl: "https://api.example/v2",
+      acknowledgeOptional: true,
+    });
+
+    expect(merged.acknowledgedWarnings).toEqual([
+      "platforms-empty",
+      "plugins-empty",
+    ]);
+  });
+
   it("removes only the optional warning ids when the checkbox is cleared", () => {
-    const merged = mergeProfileEditorFields(completeProfile, {
-      ...profileToEditorFields(completeProfile),
+    const merged = mergeProfileEditorFields(warningProfile, {
+      ...profileToEditorFields(warningProfile),
       acknowledgeOptional: false,
     });
 
-    expect(merged.acknowledgedWarnings).toEqual(["custom-warning"]);
+    expect(merged.acknowledgedWarnings).toEqual([
+      "provider-base-url-missing:default-provider",
+    ]);
   });
 });
