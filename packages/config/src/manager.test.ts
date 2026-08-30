@@ -50,6 +50,7 @@ const sensitiveFileFaults = vi.hoisted(() => ({
     message: string;
   }[],
   remove: [] as string[],
+  ensureDirectoryCalls: 0,
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -120,6 +121,10 @@ vi.mock("./secure-files.js", async (importOriginal) => {
 
   return {
     ...actual,
+    async ensureSensitiveDirectory(path: string): Promise<void> {
+      sensitiveFileFaults.ensureDirectoryCalls += 1;
+      await actual.ensureSensitiveDirectory(path);
+    },
     async writeSensitiveJson(path: string, value: unknown): Promise<void> {
       const target = path.endsWith("index.json") ? "index" : "profile";
       const fault = sensitiveFileFaults.write[0];
@@ -222,6 +227,7 @@ afterEach(async () => {
   atomicWriteFaults.postRenameDirectoryFailure = undefined;
   sensitiveFileFaults.write.splice(0);
   sensitiveFileFaults.remove.splice(0);
+  sensitiveFileFaults.ensureDirectoryCalls = 0;
   await Promise.all(
     roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
   );
@@ -277,6 +283,20 @@ describe("FileUserConfigManager profile lifecycle", () => {
       expect(manager.getSelectedProfileId()).toBe("default");
     },
   );
+
+  it("inspects a bootstrapped store without preparing directories", async () => {
+    const rootDir = await createBootstrappedRoot();
+    sensitiveFileFaults.ensureDirectoryCalls = 0;
+
+    await expect(FileUserConfigManager.inspect({ rootDir })).resolves.toEqual(
+      expect.objectContaining({
+        status: "invalid",
+        selectedProfileId: "default",
+      }),
+    );
+
+    expect(sensitiveFileFaults.ensureDirectoryCalls).toBe(0);
+  });
 
   it.each([
     "stray file",
@@ -818,6 +838,27 @@ describe("FileUserConfigManager profile lifecycle", () => {
 
     expect(manager.listProfiles().map(({ name }) => name)).toEqual(["default"]);
     expect(await readdir(join(rootDir, "profiles"))).toHaveLength(1);
+  });
+
+  it("reports bootstrap cleanup failure after an index write failure", async () => {
+    const rootDir = await createEmptyRoot();
+    const profilePath = join(rootDir, "profiles", "profile_default.json");
+    sensitiveFileFaults.write.push({
+      target: "index",
+      message: "injected bootstrap index failure",
+    });
+    sensitiveFileFaults.remove.push("injected bootstrap cleanup failure");
+
+    await expect(
+      FileUserConfigManager.bootstrap({ rootDir }),
+    ).rejects.toMatchObject({
+      code: "CONFIG_IO_ERROR",
+      message: `Failed to remove bootstrapped profile after index write failure: ${profilePath}`,
+      cause: {
+        code: "CONFIG_IO_ERROR",
+        message: "injected bootstrap cleanup failure",
+      },
+    });
   });
 
   it("restores the old profile when its replacement index write fails", async () => {

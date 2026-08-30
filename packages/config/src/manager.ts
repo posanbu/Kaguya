@@ -3,6 +3,8 @@
  * 负责以 `index.json` + `profiles/profile_<id>.json` 的双层结构持久化配置，
  * 并提供显式 bootstrap、Profile 生命周期、就绪态解析与失败回滚能力。
  * 主要职责：`open`/`inspect` 负责在不回退到旧版默认语义的前提下读取现有仓库；
+ * 其中 `inspect` 必须保持严格只读，只能通过 `lstat` 与 `O_NOFOLLOW` 打开的
+ * 文件句柄检查现存 root/index/profile，而不能执行 mkdir/chmod 等目录准备写操作；
  * `bootstrap` 仅在根目录缺失或为空时创建保留 `default` Profile 与 v3 index，
  * 且按“先写 Profile、后发布 index”的顺序落盘；`createProfile` 只创建空 Profile；
  * `replaceProfile` 以完整替换方式写入 Profile 并在 index 写失败时回滚旧内容；
@@ -14,10 +16,12 @@
  * 输入输出与副作用：所有公开写操作都会串行进入 mutation queue，实际修改磁盘中的
  * `index.json` 和对应 Profile 文件；路径必须始终位于受管根目录内，legacy v1/v2 index
  * 会在任何目录准备或写入前被拒绝，bootstrap/index 更新失败时只回滚本次尝试创建或替换的
- * Profile 文件，不删除调用方已拥有的根目录。
+ * Profile 文件，不删除调用方已拥有的根目录；若 bootstrap 的清理删除本身失败，会显式抛出
+ * `CONFIG_IO_ERROR` 并保留清理失败 cause，而不是静默吞掉该错误。
  */
 import { randomUUID } from "node:crypto";
-import { access, lstat, readdir } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, lstat, open, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import { ConfigError } from "./errors.js";
@@ -103,6 +107,7 @@ export class FileUserConfigManager {
     options: FileUserConfigManagerOptions,
   ): Promise<ConfigurationReadiness> {
     const rootDir = resolve(requireConfigurationRoot(options));
+    const profilesDir = join(rootDir, "profiles");
     const indexPath = join(rootDir, "index.json");
 
     assertPathInside(rootDir, rootDir);
@@ -119,11 +124,22 @@ export class FileUserConfigManager {
       throw error;
     }
 
-    const manager = await FileUserConfigManager.open({ rootDir });
+    const index = parsePersistedIndex(
+      await readManagedJsonReadOnly(indexPath),
+      indexPath,
+    );
+    await validateManagedDirectoryReadOnly(rootDir);
+    await validateManagedDirectoryReadOnly(profilesDir);
+    const selectedProfile = await readProfileReadOnly(
+      rootDir,
+      profilesDir,
+      index.selectedProfileId,
+    );
+    await validateReferencedProfilesReadOnly(rootDir, profilesDir, index);
     return withRegistryReadiness(
-      manager.listProfiles(),
-      manager.getSelectedProfileId(),
-      await manager.inspectProfile(manager.getSelectedProfileId()),
+      index.profiles,
+      index.selectedProfileId,
+      inspectUserConfigProfile(selectedProfile),
     );
   }
 
@@ -167,7 +183,15 @@ export class FileUserConfigManager {
     try {
       await writeSensitiveJson(indexPath, index);
     } catch (error) {
-      await removeSensitiveFile(profilePath).catch(() => undefined);
+      try {
+        await removeSensitiveFile(profilePath);
+      } catch (cleanupError) {
+        throw new ConfigError(
+          "CONFIG_IO_ERROR",
+          `Failed to remove bootstrapped profile after index write failure: ${profilePath}`,
+          { cause: cleanupError },
+        );
+      }
       throw error;
     }
 
@@ -748,6 +772,121 @@ async function ensureOpenDirectories(
   await ensureSensitiveDirectory(profilesDir);
 }
 
+async function validateManagedDirectoryReadOnly(path: string): Promise<void> {
+  const stats = await readOnlyLstat(path);
+  if (!stats.isDirectory()) {
+    throw new ConfigError(
+      "CONFIG_UNSAFE_PATH",
+      `Managed path has an unexpected type: ${path}`,
+    );
+  }
+}
+
+async function validateManagedFileReadOnly(path: string): Promise<void> {
+  const stats = await readOnlyLstat(path);
+  if (!stats.isFile()) {
+    throw new ConfigError(
+      "CONFIG_UNSAFE_PATH",
+      `Managed path has an unexpected type: ${path}`,
+    );
+  }
+}
+
+async function readOnlyLstat(path: string) {
+  const stats = await lstat(path);
+  if (stats.isSymbolicLink()) {
+    throw new ConfigError(
+      "CONFIG_UNSAFE_PATH",
+      `Managed path must not be a symbolic link: ${path}`,
+    );
+  }
+  if (
+    process.platform !== "win32" &&
+    typeof process.getuid === "function" &&
+    stats.uid !== process.getuid()
+  ) {
+    throw new ConfigError(
+      "CONFIG_PERMISSION_ERROR",
+      `Managed path is not owned by the current user: ${path}`,
+    );
+  }
+  return stats;
+}
+
+async function readManagedJsonReadOnly(path: string): Promise<unknown> {
+  await validateManagedFileReadOnly(path);
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(
+      path,
+      constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW),
+    );
+    return JSON.parse(await handle.readFile("utf8"));
+  } catch (error) {
+    if (error instanceof ConfigError) {
+      throw error;
+    }
+    if (error instanceof SyntaxError) {
+      throw new ConfigError(
+        "CONFIG_CORRUPT_STORE",
+        `Configuration JSON is invalid: ${path}`,
+      );
+    }
+    throw normalizeReadOnlyError("read managed JSON", path, error);
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+async function readProfileReadOnly(
+  rootDir: string,
+  profilesDir: string,
+  profileId: ProfileId,
+): Promise<UserConfigProfile> {
+  const profilePath = join(profilesDir, `profile_${profileId}.json`);
+  assertPathInside(rootDir, profilePath);
+  const profile = parsePersistedProfile(
+    await readManagedJsonReadOnly(profilePath),
+    profilePath,
+  );
+  if (profile.id !== profileId) {
+    throw new ConfigError(
+      "CONFIG_CORRUPT_STORE",
+      `Configuration profile ID does not match its filename: ${profilePath}`,
+    );
+  }
+  return profile;
+}
+
+async function validateReferencedProfilesReadOnly(
+  rootDir: string,
+  profilesDir: string,
+  index: UserConfigIndex,
+): Promise<void> {
+  for (const metadata of index.profiles) {
+    let profile: UserConfigProfile;
+    try {
+      profile = await readProfileReadOnly(rootDir, profilesDir, metadata.id);
+    } catch (error) {
+      if (isMissingPath(error)) {
+        throw new ConfigError(
+          "CONFIG_CORRUPT_STORE",
+          "Configuration index references a missing profile",
+        );
+      }
+      throw error;
+    }
+    if (profile.name !== metadata.name) {
+      const profilePath = join(profilesDir, `profile_${metadata.id}.json`);
+      assertPathInside(rootDir, profilePath);
+      throw new ConfigError(
+        "CONFIG_CORRUPT_STORE",
+        `Configuration profile name does not match the index: ${profilePath}`,
+      );
+    }
+  }
+}
+
 async function assertBootstrapableRoot(
   rootDir: string,
   indexPath: string,
@@ -792,5 +931,22 @@ async function throwAlreadyBootstrapped(indexPath: string): Promise<never> {
   throw new ConfigError(
     "CONFIG_INVALID_INPUT",
     "Configuration store is already initialized",
+  );
+}
+
+function normalizeReadOnlyError(
+  action: string,
+  path: string,
+  error: unknown,
+): ConfigError {
+  const permissionDenied =
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error.code === "EACCES" || error.code === "EPERM");
+  return new ConfigError(
+    permissionDenied ? "CONFIG_PERMISSION_ERROR" : "CONFIG_IO_ERROR",
+    `Failed to ${action}: ${path}`,
+    { cause: error },
   );
 }

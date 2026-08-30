@@ -62,3 +62,24 @@ Task 1 review 中明确延后的 v2/default manager 引用，已在本次收口�
 ## 额外说明
 
 brief 列出的变更文件是 `manager.ts`、`manager.test.ts`、`index.ts`。为了让新增的 `CONFIG_PROFILE_IN_USE` 通过类型系统并成为稳定公开错误码，我额外修改了 `packages/config/src/errors.ts`。这是一个受 Task 2 新契约直接驱动的最小必要改动，不属于额外扩张。
+
+## 2026-08-30 review fix round
+
+本轮修复只处理 review 明确指出的两个问题，没有扩张到 Task 3 之后的范围。
+
+第一，`FileUserConfigManager.inspect()` 现在不再通过 `open()` 间接调用 `ensureSensitiveDirectory()`。我在 `manager.ts` 中加入了只读读取路径：它会对现存 root、`index.json`、`profiles/` 目录和各 `profile_<id>.json` 文件执行 `lstat` 检查，并用 `O_NOFOLLOW` 的只读文件句柄读取 JSON。这样 `inspect()` 在缺失根目录时仍返回 `setup_required`，在有效 v3 store 上仍返回安全的 readiness 结果，但不会执行 mkdir、chmod 或任何权限归一化写操作。
+
+第二，bootstrap 的 index 发布失败后，如果删除本次新建的 `profile_default.json` 也失败，错误现在不会再被静默吞掉。实现已改为抛出显式的 `CONFIG_IO_ERROR`，消息包含清理失败发生的 Profile 路径，并把清理错误保存在 `cause` 中，确保调用方能区分“index 写失败但清理成功”和“index 写失败且清理也失败”这两类故障。
+
+为此我补充了两条聚焦测试：
+
+- `inspect` 在已 bootstrap store 上不会准备目录
+- bootstrap 在 index 写失败且清理失败时返回显式 cleanup error
+
+本轮完成后重新执行了：
+
+- `pnpm vitest run packages/config/src/manager.test.ts -t "preparing directories|bootstrap cleanup failure"`
+- `pnpm vitest run packages/config/src`
+- `pnpm --dir packages/config typecheck`
+
+截至 2026-08-30，上述验证均已通过。
