@@ -72,6 +72,14 @@ interface ChatMessage {
   readonly error?: string;
 }
 
+interface ClearedLoadedProfileStateSnapshot {
+  readonly requestSequence: number;
+  readonly loadingProfile: boolean;
+  readonly loadedProfile: UserConfigProfile | undefined;
+  readonly editorFields: ProfileEditorFields | undefined;
+  readonly showApiKey: boolean;
+}
+
 export function App() {
   const [token, setToken] = useState(() =>
     readStorage(sessionStorage, TOKEN_KEY, ""),
@@ -481,10 +489,16 @@ function ProfileManagementScreen({
     editorFields === undefined;
 
   function clearLoadedProfileState() {
-    requestSequence.current += 1;
-    setLoadedProfile(undefined);
-    setEditorFields(undefined);
-    setShowApiKey(false);
+    const snapshot = clearLoadedProfileStateSnapshot({
+      requestSequence: requestSequence.current,
+      loadingProfile,
+      showApiKey,
+    });
+    requestSequence.current = snapshot.requestSequence;
+    setLoadingProfile(snapshot.loadingProfile);
+    setLoadedProfile(snapshot.loadedProfile);
+    setEditorFields(snapshot.editorFields);
+    setShowApiKey(snapshot.showApiKey);
   }
 
   async function refreshRegistry() {
@@ -1062,12 +1076,16 @@ function DeliveryStatus({ message }: { readonly message: ChatMessage }) {
   );
 }
 
-function deriveConfigurationView(
+export function deriveConfigurationView(
   status: ConfigurationStatus,
   current: ConfigurationView,
   keepProfilesOpen: boolean,
 ): ConfigurationView {
-  if (status.status === "invalid" || status.status === "review_required") {
+  if (
+    status.status === "setup_required" ||
+    status.status === "invalid" ||
+    status.status === "review_required"
+  ) {
     return "profiles";
   }
   if (status.status === "restart_required") {
@@ -1077,6 +1095,20 @@ function deriveConfigurationView(
     return "profiles";
   }
   return "chat";
+}
+
+export function clearLoadedProfileStateSnapshot(input: {
+  readonly requestSequence: number;
+  readonly loadingProfile: boolean;
+  readonly showApiKey: boolean;
+}): ClearedLoadedProfileStateSnapshot {
+  return {
+    requestSequence: input.requestSequence + 1,
+    loadingProfile: false,
+    loadedProfile: undefined,
+    editorFields: undefined,
+    showApiKey: false,
+  };
 }
 
 function deriveRegistryMetadata(
