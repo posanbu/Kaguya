@@ -20,7 +20,7 @@ flowchart LR
 
 开发模式下 Vite middleware 和 HMR 挂在同一个 Fastify 实例；生产模式由该实例提供 `apps/web/dist`。NapCat 是可选 ingress 与 transport，连接失败不会停止 HTTP 服务。
 
-正常启动顺序为：加载并冻结配置 profile registry，打开并迁移数据库，注册 transport，创建并启动 ModuleHost，最后启动 HTTP 与 adapter ingress。若 profile store 尚未初始化、当前全局选中的 profile 不完整或可选项尚未确认，则进入 setup mode，只启动 HTTP 与 Web UI；配置保存或切换 Profile 后必须重启，才会继续加载 Runtime 和 adapter ingress。配置文件损坏、路径或权限异常仍会拒绝启动，不会由引导流程覆盖。
+正常启动顺序为：加载并冻结配置 profile registry，打开并迁移数据库，注册 transport，创建并启动 ModuleHost，最后启动 HTTP 与 adapter ingress。若 profile store 尚未初始化、当前全局选中的 profile 不完整或可选项尚未确认，则进入 setup mode，只启动 HTTP 与 Web UI；当 selected Profile 仍处于 `invalid` 或 `review_required` 时，页面继续显示 readiness 状态。只有当用户选择某个 Profile，或完整替换当前 selected Profile，且该 selected Profile 已 ready 时，页面才会进入 `restart_required`，用户重启后 Runtime 和 adapter ingress 才会继续加载。配置文件损坏、路径或权限异常仍会拒绝启动，不会由引导流程覆盖。
 
 ## 包职责
 

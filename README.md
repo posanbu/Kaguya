@@ -25,7 +25,7 @@ export KAGUYA_CONFIG_ROOT="/absolute/path/to/kaguya-config"
 pnpm dev
 ```
 
-`KAGUYA_CONFIG_ROOT` 指向权限受保护的 profile store。目录尚未初始化、当前全局选中的 profile 不完整或可选配置尚未确认时，Server 会进入统一配置模式并显示引导页；保存或切换 Profile 后需要重启服务。配置文件损坏或权限异常仍会拒绝启动，不会自动覆盖。初始化格式与密钥边界见 [`@kaguya/config`](packages/config/README.md)。打开 `http://127.0.0.1:3000` 后，页面和 API 使用同源路径。
+`KAGUYA_CONFIG_ROOT` 指向权限受保护的 profile store。目录尚未初始化、当前全局选中的 profile 不完整或可选配置尚未确认时，Server 会进入统一配置模式并显示引导页；如果当前 selected Profile 仍然 `invalid` 或 `review_required`，页面会继续展示 readiness 问题。只有当用户选择了某个 Profile，或完整替换了当前 selected Profile，且该 selected Profile 已 ready 时，页面才会进入 `restart_required` 并要求重启服务。配置文件损坏或权限异常仍会拒绝启动，不会自动覆盖。初始化格式与密钥边界见 [`@kaguya/config`](packages/config/README.md)。打开 `http://127.0.0.1:3000` 后，页面和 API 使用同源路径。
 
 生产运行：
 

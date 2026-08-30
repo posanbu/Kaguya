@@ -79,7 +79,7 @@ await configs.replaceProfile("default", {
 Create additional named profiles explicitly, then select one explicitly:
 
 ```ts
-const created = await configs.createProfile({ name: "staging" });
+const created = await configs.createProfile("staging");
 
 await configs.replaceProfile(created.id, {
   name: "staging",
