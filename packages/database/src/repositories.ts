@@ -3,12 +3,10 @@ import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 import {
   eventRunSchema,
   llmTraceSchema,
-  memoryRecordSchema,
   messageRecordSchema,
   outboundMessageRecordSchema,
   type EventRun,
   type LlmTrace,
-  type MemoryRecord,
   type MessageRecord,
   type OutboundMessageRecord,
 } from "@kaguya/schema";
@@ -155,58 +153,6 @@ export class OutboundMessageRepository {
       )
       .all(traceId)
       .map((row) => readOutboundMessage(row));
-  }
-}
-
-export class MemoryRepository {
-  constructor(private readonly database: DatabaseSync) {}
-
-  insert(record: MemoryRecord): void {
-    this.database
-      .prepare(
-        `INSERT INTO memories (id, session_id, content, occurred_at, metadata_json)
-         VALUES (?, ?, ?, ?, ?)`,
-      )
-      .run(
-        record.id,
-        record.sessionId,
-        record.content,
-        record.occurredAt,
-        stringifyJson(record.metadata),
-      );
-  }
-
-  deleteBySession(sessionId: string): void {
-    this.database
-      .prepare("DELETE FROM memories WHERE session_id = ?")
-      .run(sessionId);
-  }
-
-  listRecent(sessionId: string, limit: number): MemoryRecord[] {
-    assertRecentLimit(limit);
-    return this.database
-      .prepare(
-        `SELECT id, session_id, content, occurred_at, metadata_json
-         FROM memories WHERE session_id = ?
-         ORDER BY occurred_at DESC, id DESC LIMIT ?`,
-      )
-      .all(sessionId, limit)
-      .map((row) => readMemory(row));
-  }
-
-  listWindow(
-    sessionId: string,
-    fromIso: string,
-    toIso: string,
-  ): MemoryRecord[] {
-    return this.database
-      .prepare(
-        `SELECT id, session_id, content, occurred_at, metadata_json
-         FROM memories WHERE session_id = ? AND occurred_at >= ? AND occurred_at <= ?
-         ORDER BY occurred_at ASC, id ASC`,
-      )
-      .all(sessionId, fromIso, toIso)
-      .map((row) => readMemory(row));
   }
 }
 
@@ -367,19 +313,6 @@ function readOutboundMessage(row: SqlRow): OutboundMessageRecord {
           },
     );
   });
-}
-
-function readMemory(row: SqlRow): MemoryRecord {
-  const id = requiredString(row, "id", "memories", "<unknown>");
-  return reconstructRecord("memories", id, () =>
-    memoryRecordSchema.parse({
-      id,
-      sessionId: requiredString(row, "session_id", "memories", id),
-      content: requiredString(row, "content", "memories", id),
-      occurredAt: requiredString(row, "occurred_at", "memories", id),
-      metadata: parseJson(row, "metadata_json", "memories", id),
-    }),
-  );
 }
 
 function readEventRun(row: SqlRow): EventRun {

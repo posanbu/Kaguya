@@ -5,32 +5,21 @@ interface Migration {
   sql: string;
 }
 
+const DATABASE_FORMAT_VERSION = "2";
+
 const migrations: readonly Migration[] = [
   {
     version: 1,
     sql: `
       CREATE TABLE messages (
         id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL,
         role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
         content TEXT NOT NULL,
         occurred_at TEXT NOT NULL,
         metadata_json TEXT NOT NULL
       ) STRICT;
 
-      CREATE INDEX messages_session_occurred_at_idx
-        ON messages (session_id, occurred_at);
-
-      CREATE TABLE memories (
-        id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        content TEXT NOT NULL,
-        occurred_at TEXT NOT NULL,
-        metadata_json TEXT NOT NULL
-      ) STRICT;
-
-      CREATE INDEX memories_session_occurred_at_idx
-        ON memories (session_id, occurred_at);
+      CREATE INDEX messages_occurred_at_idx ON messages (occurred_at);
 
       CREATE TABLE event_runs (
         id TEXT PRIMARY KEY,
@@ -55,6 +44,8 @@ const migrations: readonly Migration[] = [
         node_id TEXT NOT NULL,
         kind TEXT NOT NULL CHECK (kind IN ('route', 'reply', 'state', 'memory')),
         model_id TEXT NOT NULL,
+        causation_event_id TEXT,
+        root_event_id TEXT,
         prompt_json TEXT NOT NULL,
         started_at TEXT NOT NULL,
         completed_at TEXT NOT NULL,
@@ -67,41 +58,6 @@ const migrations: readonly Migration[] = [
 
       CREATE INDEX llm_traces_trace_started_at_idx
         ON llm_traces (trace_id, started_at);
-    `,
-  },
-  {
-    version: 2,
-    sql: `
-      CREATE TABLE messages_without_session (
-        id TEXT PRIMARY KEY,
-        role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
-        content TEXT NOT NULL,
-        occurred_at TEXT NOT NULL,
-        metadata_json TEXT NOT NULL
-      ) STRICT;
-
-      INSERT INTO messages_without_session (
-        id, role, content, occurred_at, metadata_json
-      )
-      SELECT
-        id,
-        role,
-        content,
-        occurred_at,
-        CASE
-          WHEN json_valid(metadata_json) AND json_type(metadata_json) = 'object'
-            THEN json_set(metadata_json, '$.legacySessionId', session_id)
-          ELSE json_object(
-            'legacySessionId', session_id,
-            'legacyMetadata', metadata_json
-          )
-        END
-      FROM messages;
-
-      DROP INDEX messages_session_occurred_at_idx;
-      DROP TABLE messages;
-      ALTER TABLE messages_without_session RENAME TO messages;
-      CREATE INDEX messages_occurred_at_idx ON messages (occurred_at);
 
       CREATE TABLE outbound_messages (
         id TEXT PRIMARY KEY,
@@ -122,24 +78,40 @@ const migrations: readonly Migration[] = [
         ON outbound_messages (trace_id, occurred_at);
     `,
   },
-  {
-    version: 3,
-    sql: `
-      ALTER TABLE llm_traces ADD COLUMN causation_event_id TEXT;
-      ALTER TABLE llm_traces ADD COLUMN root_event_id TEXT;
-    `,
-  },
 ];
 
+export class DatabaseFormatError extends Error {
+  readonly code = "DATABASE_UNSUPPORTED_FORMAT";
+
+  constructor() {
+    super(
+      "The database format is no longer supported; back up the database and initialize a new one",
+    );
+    this.name = "DatabaseFormatError";
+  }
+}
+
 export function migrateDatabase(database: DatabaseSync): void {
+  assertSupportedOrEmptyDatabase(database);
+
   database.exec("BEGIN IMMEDIATE");
   try {
     database.exec(`
+      CREATE TABLE IF NOT EXISTS kaguya_metadata (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      ) STRICT;
+
       CREATE TABLE IF NOT EXISTS schema_migrations (
         version INTEGER PRIMARY KEY,
         migrated_at TEXT NOT NULL
       ) STRICT;
     `);
+    database
+      .prepare(
+        "INSERT OR IGNORE INTO kaguya_metadata (key, value) VALUES (?, ?)",
+      )
+      .run("format_version", DATABASE_FORMAT_VERSION);
 
     const appliedVersions = new Set(
       database
@@ -156,7 +128,6 @@ export function migrateDatabase(database: DatabaseSync): void {
       if (appliedVersions.has(migration.version)) {
         continue;
       }
-
       database.exec(migration.sql);
       recordMigration.run(migration.version, new Date().toISOString());
     }
@@ -165,5 +136,30 @@ export function migrateDatabase(database: DatabaseSync): void {
   } catch (error) {
     database.exec("ROLLBACK");
     throw error;
+  }
+}
+
+function assertSupportedOrEmptyDatabase(database: DatabaseSync): void {
+  const tables = database
+    .prepare(
+      "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+    )
+    .all()
+    .map((row) => row.name)
+    .filter((name): name is string => typeof name === "string");
+  if (tables.length === 0) {
+    return;
+  }
+  if (
+    !tables.includes("kaguya_metadata") ||
+    !tables.includes("schema_migrations")
+  ) {
+    throw new DatabaseFormatError();
+  }
+  const format = database
+    .prepare("SELECT value FROM kaguya_metadata WHERE key = ?")
+    .get("format_version");
+  if (format?.value !== DATABASE_FORMAT_VERSION) {
+    throw new DatabaseFormatError();
   }
 }

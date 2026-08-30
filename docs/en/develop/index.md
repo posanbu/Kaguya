@@ -1,6 +1,6 @@
 # Kaguya 架构
 
-Kaguya 采用一个长期运行进程、一个 composition root 和一个共享 Runtime。`apps/server` 负责配置与资源装配；`@kaguya/runtime` 负责通用 ingress、模块事件分发、LLM execution port 和 outbound transport。Core 不拥有 session，也没有固定的“回复工作流”。
+Kaguya uses one long-running process, one composition root, and one shared Runtime. `apps/server` assembles configuration and resources; `@kaguya/runtime` owns generic ingress, module event dispatch, the LLM execution port, and outbound transports. Core does not maintain message grouping and has no fixed reply workflow.
 
 ## 运行形态
 
@@ -72,13 +72,15 @@ sequenceDiagram
 
 平台白名单在 Runtime 入站边界执行。平台、用户或群组任一已配置维度未命中时，消息会被记录为 `message.dispatch.filtered` 并在落库、事件发布和 LLM 调用之前结束；未配置的维度不参与筛选。
 
-HTTP `sessionId` 字段仅为线协议兼容，Runtime 将其保存为 opaque Web source ID。默认 reply 模块会完成一次 LLM 请求，但不会为 Web 输入推导 transport destination。
+The platform allowlist runs at the Runtime ingress boundary. If any configured platform, user, or group dimension does not match, the Runtime records `message.dispatch.filtered` and stops before persistence, event publication, or LLM execution. Unconfigured dimensions do not participate in filtering.
 
-## 无 Core Session
+HTTP input contains only text plus the gateway-generated `requestId`. The default reply module performs one LLM request but does not infer an outbound transport destination for Web input.
 
-`ExecutionContext`、`WorkflowContext`、`ModuleHandlerContext` 与 `EventEnvelope` 只有 trace，没有 session。消息表没有 `session_id`，repository 也不提供按 session 查询历史的 API。迁移旧表时，原值仅写入 message metadata 的 `legacySessionId` 供审计。
+## Messages have no grouping identifier
 
-私聊、群聊和用户既不会天然共享，也不会天然隔离上下文。需要历史、记忆或 profile 选择的模块必须自行定义 key、状态与消息选择。保留的 heartbeat/memory workflow 只接受调用方显式给出的 context/message IDs，不扫描消息来源推导上下文，也不接入默认消息链。
+`ExecutionContext`, `WorkflowContext`, `ModuleHandlerContext`, and `EventEnvelope` retain only runtime and causal identifiers. The message table has no grouping column, and repositories do not query history by conversation grouping. Legacy SQLite formats are rejected before any write; the application never migrates or deletes them automatically.
+
+Private chats, groups, and users neither inherently share nor isolate context. Future information atoms and the message DAG will organize data through explicit typed references and module subscriptions. The current Runtime provides no heartbeat or legacy Memory placeholder workflows.
 
 ## 事件身份与错误边界
 

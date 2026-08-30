@@ -14,7 +14,6 @@ const MAX_NAMESPACE_LENGTH = 128;
 const NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
 const LOG_CONTEXT_KEYS = new Set<keyof LogContext>([
   "traceId",
-  "sessionId",
   "eventId",
   "runId",
   "requestId",
@@ -83,7 +82,6 @@ export type LogFormat = "json" | "pretty";
 
 export interface LogContext {
   readonly traceId?: string;
-  readonly sessionId?: string;
   readonly eventId?: string;
   readonly runId?: string;
   readonly requestId?: string;

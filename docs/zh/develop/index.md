@@ -1,6 +1,6 @@
 # Kaguya 架构
 
-Kaguya 采用一个长期运行进程、一个 composition root 和一个共享 Runtime。`apps/server` 负责配置与资源装配；`@kaguya/runtime` 负责通用 ingress、模块事件分发、LLM execution port 和 outbound transport。Core 不拥有 session，也没有固定的“回复工作流”。
+Kaguya 采用一个长期运行进程、一个 composition root 和一个共享 Runtime。`apps/server` 负责配置与资源装配；`@kaguya/runtime` 负责通用 ingress、模块事件分发、LLM execution port 和 outbound transport。Core 不维护消息分组，也没有固定的“回复工作流”。
 
 ## 运行形态
 
@@ -72,13 +72,15 @@ sequenceDiagram
 
 平台白名单在 Runtime 入站边界执行。平台、用户或群组任一已配置维度未命中时，消息会被记录为 `message.dispatch.filtered` 并在落库、事件发布和 LLM 调用之前结束；未配置的维度不参与筛选。
 
-HTTP `sessionId` 字段仅为线协议兼容，Runtime 将其保存为 opaque Web source ID。默认 reply 模块会完成一次 LLM 请求，但不会为 Web 输入推导 transport destination。
+平台白名单在 Runtime 入站边界执行。平台、用户或群组任一已配置维度未命中时，消息会被记录为 `message.dispatch.filtered` 并在落库、事件发布和 LLM 调用之前结束；未配置的维度不参与筛选。
 
-## 无 Core Session
+HTTP 输入只包含文本和由网关生成的 `requestId`。默认 reply 模块会完成一次 LLM 请求，但不会为 Web 输入推导 transport destination。
 
-`ExecutionContext`、`WorkflowContext`、`ModuleHandlerContext` 与 `EventEnvelope` 只有 trace，没有 session。消息表没有 `session_id`，repository 也不提供按 session 查询历史的 API。迁移旧表时，原值仅写入 message metadata 的 `legacySessionId` 供审计。
+## 消息无分组标识
 
-私聊、群聊和用户既不会天然共享，也不会天然隔离上下文。需要历史、记忆或 profile 选择的模块必须自行定义 key、状态与消息选择。保留的 heartbeat/memory workflow 只接受调用方显式给出的 context/message IDs，不扫描消息来源推导上下文，也不接入默认消息链。
+`ExecutionContext`、`WorkflowContext`、`ModuleHandlerContext` 与 `EventEnvelope` 只保留运行和因果关联 ID。消息表不包含分组列，repository 也不提供按对话分组查询历史的 API。旧 SQLite 格式在任何写入前被拒绝，程序不会自动迁移或删除。
+
+私聊、群聊和用户既不会天然共享，也不会天然隔离上下文。后续信息原子与消息 DAG 将通过显式类型引用和模块订阅组织数据流；当前 Runtime 不提供 heartbeat 或 Memory 占位工作流。
 
 ## 事件身份与错误边界
 

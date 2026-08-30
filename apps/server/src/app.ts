@@ -22,19 +22,12 @@ import {
   type InitialConfigurationInput,
 } from "./setup.js";
 
-const MAX_SESSION_ID_LENGTH = 256;
 const MAX_MESSAGE_TEXT_LENGTH = 131_072;
 const MAX_REQUEST_ID_LENGTH = 128;
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
 
 const messageRequestSchema = z
   .object({
-    sessionId: z
-      .string()
-      .min(1)
-      .refine((value) => hasAtMostCodePoints(value, MAX_SESSION_ID_LENGTH))
-      .transform((value) => value.trim())
-      .refine((value) => value.length > 0),
     text: z
       .string()
       .min(1)
@@ -46,13 +39,8 @@ const messageRequestSchema = z
 const messageBodyJsonSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["sessionId", "text"],
+  required: ["text"],
   properties: {
-    sessionId: {
-      type: "string",
-      minLength: 1,
-      maxLength: MAX_SESSION_ID_LENGTH,
-    },
     text: {
       type: "string",
       minLength: 1,
@@ -390,7 +378,6 @@ export async function createHttpApplication(
       return runWithLogContext({}, async () => {
         await runtime.dispatch({
           kind: "web",
-          sessionId: parsed.sessionId,
           text: parsed.text,
           requestId: request.id,
         });

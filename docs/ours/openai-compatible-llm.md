@@ -59,7 +59,7 @@ console.log(result.usage);
 await closeLogger(rootLogger);
 ```
 
-`OpenAiCompatibleLlmService` 默认不输出日志。生产 composition root 应通过 `createPinoLlmLogger()` 接入 `@kaguya/logger`，从当前 AsyncLocalStorage 上下文继承 `traceId/sessionId/workflowId/nodeId` 等关联字段。`createConsoleLlmLogger()` 仅为兼容已有本地工具保留，不提供命名空间、上下文传播或统一脱敏策略。
+`OpenAiCompatibleLlmService` 默认不输出日志。生产 composition root 应通过 `createPinoLlmLogger()` 接入 `@kaguya/logger`，从当前 AsyncLocalStorage 上下文继承 `traceId/requestId/workflowId/nodeId` 等关联字段。`createConsoleLlmLogger()` 仅为兼容已有本地工具保留，不提供命名空间、上下文传播或统一脱敏策略。
 
 ## 请求字段
 

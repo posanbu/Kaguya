@@ -44,8 +44,6 @@ import { GatewayAllowlist } from "./gateway-allowlist.js";
 export interface RuntimeWebMessage {
   readonly kind: "web";
   readonly requestId: string;
-  /** Opaque ingress-provided source identifier; it has no session semantics. */
-  readonly sessionId: string;
   readonly text: string;
   readonly occurredAt?: string;
 }
@@ -566,7 +564,6 @@ function normalizeInboundMessage(
         ? {
             kind: "web",
             requestId: input.requestId,
-            sourceId: input.sessionId,
           }
         : {
             kind: "platform",

@@ -84,16 +84,16 @@ pnpm test
 
 测试按职责分布如下：
 
-| 范围                                                 | 主要测试文件                                                                                     | 覆盖内容                                                                                                      |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
-| `packages/schema`、`packages/sdk`                    | `index.test.ts`                                                                                  | 无 session 事件信封、模块/事件 API、工作流定义和失败分类                                                      |
-| `packages/engine`、`packages/scheduler`              | `event-bus.test.ts`、`module-host.test.ts`、`workflow-engine.test.ts`、`scheduler/index.test.ts` | 广播/定向模块分发、provenance 保护、错误聚合、stop 和显式 workflow/scheduler                                  |
-| `packages/modules`、`packages/runtime`               | `modules/index.test.ts`、`runtime/*.test.ts`                                                     | filter/LLM demo、单消息 prompt、profile/tier 选择、因果链、transport 审计、关闭 drain 与显式 heartbeat/memory |
-| `packages/database`、`packages/config`               | `database/index.test.ts`、`config/*.test.ts`                                                     | 无 session 消息迁移、outbound 状态；profile、model tiers、readiness、脱敏和文件权限                           |
-| `packages/logger`、`packages/llm`、`packages/prompt` | 各包 `index.test.ts` 及 adapter 测试                                                             | 嵌套错误安全摘要、LLM 输出/trace、OpenAI-compatible adapter 和 Prompt provenance                              |
-| `packages/platform-adapters`                         | `napcat.test.ts`、`onebot.test.ts`                                                               | CQ/数组消息规范化、mentions、text/reply action 和 transport receipt                                           |
-| `apps/server`、`apps/web`、`apps/demo`               | 各应用 `*.test.ts`                                                                               | 统一 Server、HTTP 兼容协议、配置启动门、NapCat supervisor、Web client 与 demo composition                     |
-| `promptfoo`                                          | `command.test.ts`、`provider.test.ts`                                                            | `prompt:test` 的出口隔离与离线结构调用                                                                        |
+| 范围                                                 | 主要测试文件                                                                                     | 覆盖内容                                                                                  |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| `packages/schema`、`packages/sdk`                    | `index.test.ts`                                                                                  | 原子事件信封、模块/事件 API、工作流定义和失败分类                                         |
+| `packages/engine`、`packages/scheduler`              | `event-bus.test.ts`、`module-host.test.ts`、`workflow-engine.test.ts`、`scheduler/index.test.ts` | 广播/定向模块分发、provenance 保护、错误聚合、stop 和显式 workflow/scheduler              |
+| `packages/modules`、`packages/runtime`               | `modules/index.test.ts`、`runtime/*.test.ts`                                                     | filter/LLM demo、单消息 prompt、profile/tier 选择、因果链、transport 审计与关闭 drain     |
+| `packages/database`、`packages/config`               | `database/index.test.ts`、`config/*.test.ts`                                                     | 新格式拒绝旧存储、outbound 状态；profile、model tiers、readiness、脱敏和文件权限          |
+| `packages/logger`、`packages/llm`、`packages/prompt` | 各包 `index.test.ts` 及 adapter 测试                                                             | 嵌套错误安全摘要、LLM 输出/trace、OpenAI-compatible adapter 和 Prompt provenance          |
+| `packages/platform-adapters`                         | `napcat.test.ts`、`onebot.test.ts`                                                               | CQ/数组消息规范化、mentions、text/reply action 和 transport receipt                       |
+| `apps/server`、`apps/web`、`apps/demo`               | 各应用 `*.test.ts`                                                                               | 统一 Server、HTTP 消息协议、配置启动门、NapCat supervisor、Web client 与 demo composition |
+| `promptfoo`                                          | `command.test.ts`、`provider.test.ts`                                                            | `prompt:test` 的出口隔离与离线结构调用                                                    |
 
 完成必要构建后，可以按目录运行聚焦测试，例如：
 

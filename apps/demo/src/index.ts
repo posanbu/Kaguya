@@ -3,9 +3,11 @@ import { fileURLToPath } from "node:url";
 import { KaguyaDatabase } from "@kaguya/database";
 import { KaguyaRuntime } from "@kaguya/runtime";
 
-const databasePath = fileURLToPath(
+const defaultDatabasePath = fileURLToPath(
   new URL("../../../.data/kaguya-demo.sqlite", import.meta.url),
 );
+const databasePath =
+  process.env.KAGUYA_DEMO_DATABASE_PATH?.trim() || defaultDatabasePath;
 
 async function main(): Promise<void> {
   const runtime = new KaguyaRuntime({ databasePath });
@@ -13,8 +15,6 @@ async function main(): Promise<void> {
   const result = await runtime.dispatch({
     kind: "web",
     requestId: `demo-${Date.now()}`,
-    // Kept only as an opaque Web source value for API compatibility.
-    sessionId: "demo-source",
     text: "Is tonight good for watching the moon?",
   });
   await runtime.close();

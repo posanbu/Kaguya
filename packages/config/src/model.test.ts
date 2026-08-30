@@ -194,15 +194,14 @@ describe("user configuration schemas", () => {
   it("rejects an index whose default references a missing profile", () => {
     expect(() =>
       userConfigIndexSchema.parse({
-        version: 1,
+        version: 2,
         defaultProfileId: profileId,
         profiles: [],
-        sessionBindings: {},
       }),
     ).toThrow();
   });
 
-  it("rejects an index whose binding references a missing profile", () => {
+  it("rejects a legacy index containing session bindings", () => {
     expect(() =>
       userConfigIndexSchema.parse({
         version: 1,
@@ -215,9 +214,7 @@ describe("user configuration schemas", () => {
             updatedAt: "2026-07-25T00:00:00.000Z",
           },
         ],
-        sessionBindings: {
-          "session-1": "a0fc7b07-8a10-4406-970b-88bc74a9416f",
-        },
+        sessionBindings: {},
       }),
     ).toThrow();
   });
@@ -398,7 +395,7 @@ describe("user configuration schemas", () => {
       "configuration index",
       () =>
         userConfigIndexSchema.safeParse({
-          version: 1,
+          version: 2,
           defaultProfileId: profileId,
           profiles: [
             {
@@ -408,7 +405,6 @@ describe("user configuration schemas", () => {
               updatedAt: "2026-07-25T00:00:00.000Z",
             },
           ],
-          sessionBindings: {},
         }).success,
     ],
   ])("continues to accept valid %s input", (_name, parse) => {
@@ -480,14 +476,10 @@ describe("user configuration schemas", () => {
     expect(Object.hasOwn(ai, "defaultProviderId")).toBe(false);
   });
 
-  it("rejects an unknown __proto__ session binding in the public index schema", () => {
-    const sessionBindings = JSON.parse(
-      '{"__proto__":"11111111-1111-4111-8111-111111111111"}',
-    ) as unknown;
-
+  it("rejects removed binding fields in the public index schema", () => {
     expect(
       userConfigIndexSchema.safeParse({
-        version: 1,
+        version: 2,
         defaultProfileId: profileId,
         profiles: [
           {
@@ -497,38 +489,8 @@ describe("user configuration schemas", () => {
             updatedAt: "2026-07-25T00:00:00.000Z",
           },
         ],
-        sessionBindings,
+        sessionBindings: {},
       }).success,
     ).toBe(false);
-  });
-
-  it("preserves valid prototype-like session bindings in a null-prototype map", () => {
-    const sessionBindings = JSON.parse(
-      `{"__proto__":"${profileId}","constructor":"${profileId}","prototype":"${profileId}"}`,
-    ) as unknown;
-
-    const parsed = userConfigIndexSchema.parse({
-      version: 1,
-      defaultProfileId: profileId,
-      profiles: [
-        {
-          id: profileId,
-          name: "default",
-          createdAt: "2026-07-25T00:00:00.000Z",
-          updatedAt: "2026-07-25T00:00:00.000Z",
-        },
-      ],
-      sessionBindings,
-    });
-
-    expect(Object.getPrototypeOf(parsed.sessionBindings)).toBeNull();
-    expect(Object.keys(parsed.sessionBindings)).toEqual([
-      "__proto__",
-      "constructor",
-      "prototype",
-    ]);
-    expect(parsed.sessionBindings["__proto__"]).toBe(profileId);
-    expect(parsed.sessionBindings.constructor).toBe(profileId);
-    expect(parsed.sessionBindings.prototype).toBe(profileId);
   });
 });

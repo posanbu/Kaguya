@@ -168,38 +168,11 @@ export const userConfigProfileMetadataSchema = guardSchemaInput(
   userConfigProfileMetadataInnerSchema,
 );
 
-const sessionBindingsSchema = z
-  .unknown()
-  .transform<Record<string, string>>((value, context) => {
-    const bindings = safelyCopySessionBindings(value);
-    if (bindings === undefined) {
-      context.addIssue({
-        code: "custom",
-        message: "Session bindings must be a plain object",
-      });
-      return z.NEVER;
-    }
-    for (const [sessionId, profileId] of Object.entries(bindings)) {
-      const parsedProfileId = profileIdSchema.safeParse(profileId);
-      if (!parsedProfileId.success) {
-        context.addIssue({
-          code: "custom",
-          path: [sessionId],
-          message: "Session binding profile ID is invalid",
-        });
-        continue;
-      }
-      bindings[sessionId] = parsedProfileId.data;
-    }
-    return bindings;
-  });
-
 const userConfigIndexInnerSchema = z
   .strictObject({
-    version: z.literal(1),
+    version: z.literal(2),
     defaultProfileId: profileIdSchema,
     profiles: z.array(userConfigProfileMetadataSchema),
-    sessionBindings: sessionBindingsSchema,
   })
   .superRefine((index, context) => {
     const profileIds = new Set(index.profiles.map(({ id }) => id));
@@ -229,17 +202,6 @@ const userConfigIndexInnerSchema = z
         });
       }
       profileNames.add(profile.name);
-    }
-    for (const [sessionId, profileId] of Object.entries(
-      index.sessionBindings,
-    )) {
-      if (sessionId.trim().length === 0 || !profileIds.has(profileId)) {
-        context.addIssue({
-          code: "custom",
-          path: ["sessionBindings", sessionId],
-          message: "session binding must reference a profile",
-        });
-      }
     }
   });
 
@@ -362,39 +324,6 @@ function cloneJsonValue(
     return clone;
   } finally {
     ancestors.delete(value);
-  }
-}
-
-function safelyCopySessionBindings(
-  value: unknown,
-): Record<string, string> | undefined {
-  try {
-    if (value === null || typeof value !== "object" || Array.isArray(value)) {
-      return undefined;
-    }
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) {
-      return undefined;
-    }
-    const bindings = Object.create(null) as Record<string, string>;
-    for (const key of Reflect.ownKeys(value)) {
-      if (typeof key !== "string") {
-        return undefined;
-      }
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (
-        descriptor === undefined ||
-        !descriptor.enumerable ||
-        !("value" in descriptor) ||
-        typeof descriptor.value !== "string"
-      ) {
-        return undefined;
-      }
-      bindings[key] = descriptor.value;
-    }
-    return bindings;
-  } catch {
-    return undefined;
   }
 }
 

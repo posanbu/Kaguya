@@ -14,14 +14,6 @@ import {
 import { defineEvent } from "@kaguya/sdk";
 
 const nonBlankStringSchema = z.string().trim().min(1);
-const emptyPayloadSchema = z.object({}).strict();
-const memoryKindSchema = z.enum(["long-term", "short-term", "state"]);
-const explicitContextSchema = z
-  .object({
-    contextKey: nonBlankStringSchema,
-    messageIds: z.array(nonBlankStringSchema),
-  })
-  .strict();
 const llmLifecyclePayloadSchema = z
   .object({
     kind: promptKindSchema,
@@ -30,14 +22,6 @@ const llmLifecyclePayloadSchema = z
     nodeId: nonBlankStringSchema,
   })
   .strict();
-
-export const memoryWindowSchema = z
-  .object({ from: z.iso.datetime(), to: z.iso.datetime() })
-  .strict()
-  .refine(
-    ({ from, to }) => Date.parse(from) <= Date.parse(to),
-    "from must be before or equal to to",
-  );
 
 export const messageReceivedEvent = defineEvent(
   "message.received",
@@ -50,26 +34,6 @@ export const messagePersistedEvent = defineEvent(
     .object({
       messageId: nonBlankStringSchema,
       role: z.enum(["assistant", "system", "user"]),
-    })
-    .strict(),
-);
-
-export const heartbeatTickEvent = defineEvent(
-  "heartbeat.tick",
-  explicitContextSchema,
-);
-export const memoryScheduleTickEvent = defineEvent(
-  "memory.schedule.tick",
-  memoryWindowSchema
-    .extend({ contexts: z.array(explicitContextSchema) })
-    .strict(),
-);
-export const memorySessionTickEvent = defineEvent(
-  "memory.context.tick",
-  memoryWindowSchema
-    .extend({
-      contextKey: nonBlankStringSchema,
-      messageIds: z.array(nonBlankStringSchema),
     })
     .strict(),
 );
@@ -130,36 +94,16 @@ export const llmFailedEvent = defineEvent(
     .strict(),
 );
 
-export const memoryWriteRequestedEvent = defineEvent(
-  "memory.write.requested",
-  z
-    .object({
-      memoryId: nonBlankStringSchema,
-      kind: memoryKindSchema,
-      content: nonBlankStringSchema,
-    })
-    .strict(),
-);
-export const memoryWrittenEvent = defineEvent(
-  "memory.written",
-  z.object({ memoryId: nonBlankStringSchema, kind: memoryKindSchema }).strict(),
-);
-
 export const approvedEventDefinitions = [
   messageReceivedEvent,
   messagePersistedEvent,
   messageIngestedEvent,
-  heartbeatTickEvent,
-  memoryScheduleTickEvent,
-  memorySessionTickEvent,
   routeRequestedEvent,
   routeDecidedEvent,
   promptCompiledEvent,
   llmRequestedEvent,
   llmCompletedEvent,
   llmFailedEvent,
-  memoryWriteRequestedEvent,
-  memoryWrittenEvent,
   replyRequestedEvent,
   outboundMessageRequestedEvent,
   outboundMessageDeliveredEvent,

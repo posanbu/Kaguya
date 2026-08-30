@@ -162,12 +162,11 @@ export class FileUserConfigManager {
 
     const timestamp = new Date().toISOString();
     const index: UserConfigIndex = {
-      version: 1,
+      version: 2,
       defaultProfileId: id,
       profiles: [
         { id, name: input.name, createdAt: timestamp, updatedAt: timestamp },
       ],
-      sessionBindings: copyBindings({}),
     };
     const profilePath = join(profilesDir, `profile_${id}.json`);
     assertPathInside(rootDir, profilePath);
@@ -240,62 +239,10 @@ export class FileUserConfigManager {
     return this.#enqueue(() => this.#deleteProfile(profileId));
   }
 
-  async bindSession(sessionId: string, profileId: string): Promise<void> {
-    const requiredSessionId = requireSessionId(sessionId);
-    return this.#enqueue(async () => {
-      this.#requireMetadata(profileId);
-      const sessionBindings = copyBindings(this.#index.sessionBindings);
-      sessionBindings[requiredSessionId] = profileId;
-      const nextIndex: UserConfigIndex = {
-        ...structuredClone(this.#index),
-        sessionBindings,
-      };
-      await this.#writeIndex(nextIndex);
-      this.#index = nextIndex;
-    });
-  }
-
-  async unbindSession(sessionId: string): Promise<void> {
-    const requiredSessionId = requireSessionId(sessionId);
-    return this.#enqueue(async () => {
-      const sessionBindings = copyBindings(this.#index.sessionBindings);
-      if (!Object.hasOwn(sessionBindings, requiredSessionId)) {
-        return;
-      }
-      delete sessionBindings[requiredSessionId];
-      const nextIndex: UserConfigIndex = {
-        ...structuredClone(this.#index),
-        sessionBindings,
-      };
-      await this.#writeIndex(nextIndex);
-      this.#index = nextIndex;
-    });
-  }
-
-  async resolveProfile(sessionId: string): Promise<UserConfigProfile> {
-    const requiredSessionId = requireSessionId(sessionId);
-    await this.#afterPendingWrites();
-    const profileId = Object.hasOwn(
-      this.#index.sessionBindings,
-      requiredSessionId,
-    )
-      ? this.#index.sessionBindings[requiredSessionId]!
-      : this.#index.defaultProfileId;
-    const profile = await this.#readProfile(profileId);
-    const readiness = inspectUserConfigProfile(profile);
-    if (readiness.status === "invalid") {
-      throw new ConfigIncompleteError(readiness.issues);
-    }
-    if (readiness.status === "review_required") {
-      throw new ConfigReviewRequiredError(readiness.warnings);
-    }
-    return structuredClone(profile);
-  }
-
   async resolveProfileById(profileId?: string): Promise<UserConfigProfile> {
     await this.#afterPendingWrites();
     const profile = await this.#readProfile(
-      profileId ?? this.#index.defaultProfileId,
+      profileId === undefined ? this.#index.defaultProfileId : profileId,
     );
     const readiness = inspectUserConfigProfile(profile);
     if (readiness.status === "invalid") {
@@ -573,12 +520,6 @@ export class FileUserConfigManager {
         `The default configuration profile cannot be deleted: ${profileId}`,
       );
     }
-    if (Object.values(this.#index.sessionBindings).includes(profileId)) {
-      throw new ConfigError(
-        "CONFIG_PROFILE_IN_USE",
-        `Configuration profile is selected by a session: ${profileId}`,
-      );
-    }
     const nextIndex: UserConfigIndex = {
       ...structuredClone(this.#index),
       profiles: this.#index.profiles
@@ -611,6 +552,12 @@ function isMissingPath(error: unknown): boolean {
 }
 
 function parsePersistedIndex(value: unknown, path: string): UserConfigIndex {
+  if (persistedVersion(value) === 1) {
+    throw new ConfigError(
+      "CONFIG_UNSUPPORTED_VERSION",
+      "Configuration index version 1 is no longer supported; back up the store and initialize a new configuration index",
+    );
+  }
   const parsed = userConfigIndexSchema.safeParse(value);
   if (!parsed.success) {
     throw new ConfigError(
@@ -619,6 +566,17 @@ function parsePersistedIndex(value: unknown, path: string): UserConfigIndex {
     );
   }
   return parsed.data;
+}
+
+function persistedVersion(value: unknown): unknown {
+  try {
+    if (value === null || typeof value !== "object") {
+      return undefined;
+    }
+    return Reflect.get(value, "version");
+  } catch {
+    return undefined;
+  }
 }
 
 function parsePersistedProfile(
@@ -791,22 +749,6 @@ function normalizeProfileName(name: unknown): string {
   return normalized;
 }
 
-function requireSessionId(sessionId: unknown): string {
-  if (typeof sessionId !== "string") {
-    throw new ConfigError(
-      "CONFIG_INVALID_INPUT",
-      "Session ID must not be empty",
-    );
-  }
-  if (sessionId.trim().length === 0) {
-    throw new ConfigError(
-      "CONFIG_INVALID_INPUT",
-      "Session ID must not be empty",
-    );
-  }
-  return sessionId;
-}
-
 function requireConfigurationRoot(options: unknown): string {
   let rootDir: unknown;
   try {
@@ -831,16 +773,6 @@ function requireConfigurationRoot(options: unknown): string {
     );
   }
   return rootDir;
-}
-
-function copyBindings(
-  source: Readonly<Record<string, string>>,
-): Record<string, string> {
-  const target = Object.create(null) as Record<string, string>;
-  for (const [sessionId, profileId] of Object.entries(source)) {
-    target[sessionId] = profileId;
-  }
-  return target;
 }
 
 async function assertStoreIsUninitialized(indexPath: string): Promise<void> {

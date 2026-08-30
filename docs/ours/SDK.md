@@ -23,7 +23,7 @@ LLM 边界需要做结构校验并记录完整调用 trace（请求类别、模�
 
 在 Kaguya 里：
 
-单事件流：一条顶层事件带一个 traceId，fan-out 出会话/节点，但共享 trace 血缘（architecture.md:200）。一次完整处理会依次经过 route → reply → state → memory 四类调用。
+单事件流：一条顶层事件带一个 traceId，经模块节点 fan-out，但共享 trace 血缘（architecture.md:200）。一次完整处理可以包含 route、reply、state 和 memory 四类模型调用。
 多模型：四类 kind 每个都带自己的 modelId（architecture.md，generate 请求必须携带 kind + modelId）。现实中 route 用便宜小模型、reply 用大模型、state/memory 用中等模型是很自然的装配——甚至可能跨 provider（route 用 Gemini Flash、reply 用 Claude）。
 所以真正的问题是：当同一条 trace 里要顺序/并发调用多个异构模型时，SDK 的抽象层会在哪些地方帮你、或坑你。 下面按影响维度拆。
 

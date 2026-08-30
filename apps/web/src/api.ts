@@ -5,7 +5,6 @@ export interface GatewayConfig {
 }
 
 export interface SendMessageInput {
-  readonly sessionId: string;
   readonly text: string;
 }
 
@@ -156,13 +155,9 @@ export async function sendMessage(
   fetchImplementation: typeof fetch = fetch,
 ): Promise<AcceptedMessage> {
   const token = config.token.trim();
-  const sessionId = input.sessionId.trim();
 
   if (!token) {
     throw new GatewayRequestError("请输入服务访问令牌", "missing_token", 0);
-  }
-  if (!sessionId) {
-    throw new GatewayRequestError("请输入会话 ID", "missing_session_id", 0);
   }
   if (!input.text.trim()) {
     throw new GatewayRequestError("消息不能为空", "empty_message", 0);
@@ -183,7 +178,7 @@ export async function sendMessage(
         authorization: `Bearer ${token}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify({ sessionId, text: input.text }),
+      body: JSON.stringify({ text: input.text }),
     });
   } catch (error) {
     throw new GatewayRequestError(
