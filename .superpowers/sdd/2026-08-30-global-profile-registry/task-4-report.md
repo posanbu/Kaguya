@@ -90,3 +90,70 @@ the Server package to consume the new setup-management surface.
 - `pnpm` continues to emit the pre-existing Homebrew `/bin/ps` sandbox warning
   before command output, but the required verification commands still completed
   successfully.
+
+## Fix round
+
+### RED evidence
+
+Command:
+
+```bash
+pnpm vitest run apps/server/src/app.test.ts apps/server/src/server-composition.test.ts
+```
+
+Exit status: `1`
+
+Key failures:
+
+```text
+apps/server/src/app.test.ts > maps a setup readiness race to configuration_not_required
+expected 400 to be 409
+
+apps/server/src/server-composition.test.ts > keeps unrecoverable management creation on the startup fatal-and-close path
+expected "closeLogger" to be called with arguments ... Number of calls: 0
+```
+
+The first regression showed that the temporary `/api/v1/setup` bridge still
+collapsed a second-readiness-check race into `configuration_invalid`/400. The
+second showed that unrecoverable management creation happened before the guarded
+startup path, so the structured `server.start.failed` + logger close sequence
+was skipped.
+
+### GREEN evidence
+
+Commands:
+
+```bash
+pnpm vitest run apps/server/src/setup.test.ts apps/server/src/app.test.ts apps/server/src/server-composition.test.ts
+pnpm --filter @kaguya/server typecheck
+```
+
+All exited `0`.
+
+Exact passing summary:
+
+```text
+pnpm vitest run apps/server/src/setup.test.ts apps/server/src/app.test.ts apps/server/src/server-composition.test.ts
+Test Files  3 passed (3)
+Tests  33 passed (33)
+```
+
+`pnpm --filter @kaguya/server typecheck` completed successfully after the fix
+round changes.
+
+### Fixes applied
+
+- Moved `createConfigurationManagement()` under the startup `try` in
+  `apps/server/src/server.ts`, made shutdown tolerate a not-yet-created
+  `runtime`, and preserved the existing fatal log plus logger-close path for
+  unrecoverable config-store failures during bootstrap/open.
+- Added a focused startup regression in
+  `apps/server/src/server-composition.test.ts` that asserts
+  `CONFIG_UNSUPPORTED_VERSION` still triggers `server.start.failed`,
+  `server.stopping`, `server.stopped`, and `closeLogger(...)`.
+- Added `ConfigurationSetupNotRequiredError` in `apps/server/src/setup.ts` so
+  the temporary setup bridge can distinguish the second-readiness-check race
+  from normal invalid input.
+- Updated `apps/server/src/app.ts` to map that race-specific error to HTTP 409
+  `configuration_not_required`, and added the changing-`inspect()` regression in
+  `apps/server/src/app.test.ts`.

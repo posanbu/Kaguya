@@ -13,7 +13,8 @@
  * 代码库关系：本文件直接依赖 `@kaguya/config` 的 `FileUserConfigManager`、
  * readiness 类型和 Profile schema 类型，被 `server.ts` 在启动前创建并传给
  * HTTP 应用；Task 5 的 Profile 路由将继续消费这里的细粒度方法，而不是重新发明
- * 另一层配置编排逻辑。
+ * 另一层配置编排逻辑。临时 `/api/v1/setup` bridge 通过本文件区分真正的输入错误与
+ * “第二次 readiness 检查时 setup 已不再需要”的竞态冲突。
  * 输入输出与副作用：创建门面时可能在缺失仓库的根目录写入 v3 `default` Profile；
  * 后续公开 mutation 都会落盘到配置目录，但不会启动、重载或停止 Runtime/NapCat。
  * 重启标记只存在于当前进程实例内，重新创建门面后会重新按磁盘状态计算 readiness。
@@ -145,10 +146,7 @@ export async function initializeConfigurationProfile(
 
   const status = await management.inspect();
   if (status.status === "ready" || status.status === "restart_required") {
-    throw new ConfigError(
-      "CONFIG_INVALID_INPUT",
-      "Configuration setup is not required",
-    );
+    throw new ConfigurationSetupNotRequiredError();
   }
 
   return management.replaceProfile(
@@ -161,6 +159,15 @@ export async function initializeConfigurationProfile(
       input.apiKey,
     ),
   );
+}
+
+export class ConfigurationSetupNotRequiredError extends ConfigError {
+  constructor() {
+    super(
+      "CONFIG_INVALID_INPUT",
+      "Configuration setup is not required",
+    );
+  }
 }
 
 function initialProfileReplacement(
@@ -209,4 +216,10 @@ export function isConfigurationInputError(error: unknown): boolean {
       error.code === "CONFIG_INCOMPLETE" ||
       error.code === "CONFIG_REVIEW_REQUIRED")
   );
+}
+
+export function isConfigurationSetupNotRequiredError(
+  error: unknown,
+): error is ConfigurationSetupNotRequiredError {
+  return error instanceof ConfigurationSetupNotRequiredError;
 }

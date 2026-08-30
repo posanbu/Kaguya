@@ -5,8 +5,9 @@
  * `runtime` 与 `setup` 是否存在决定服务是处于可处理消息的 ready 模式，还是只暴露
  * 配置引导能力的 setup 模式；`/api/v1/setup` 当前仍通过
  * `initializeConfigurationProfile` 调用 `ConfigurationManagement` 的细粒度替换能力，
- * 作为 Task 4 到 Task 5 之间的兼容桥接；其余 helper 负责请求 ID、鉴权、SPA
- * fallback 与结构化错误响应。
+ * 作为 Task 4 到 Task 5 之间的兼容桥接，并对 setup-ready 竞态单独映射 409
+ * `configuration_not_required`；其余 helper 负责请求 ID、鉴权、SPA fallback 与
+ * 结构化错误响应。
  * 代码库关系：本模块消费 `setup.ts` 的配置管理门面与输入校验辅助函数，依赖
  * `@kaguya/schema` 的 Zod 边界和 `@kaguya/logger` 的请求上下文；`server.ts`
  * 会把统一创建的 `ConfigurationManagement` 实例传入这里，后续 Task 5 会在本文件上
@@ -36,6 +37,7 @@ import type { ServerConfig } from "./config.js";
 import {
   initializeConfigurationProfile,
   isConfigurationInputError,
+  isConfigurationSetupNotRequiredError,
   type ConfigurationManagement,
 } from "./setup.js";
 
@@ -315,6 +317,13 @@ export async function createHttpApplication(
       try {
         await initializeConfigurationProfile(setup, parsed);
       } catch (error) {
+        if (isConfigurationSetupNotRequiredError(error)) {
+          throw new ApiGatewayError(
+            "configuration_not_required",
+            "Configuration setup is not required",
+            409,
+          );
+        }
         if (isConfigurationInputError(error)) {
           throw new ApiGatewayError(
             "configuration_invalid",

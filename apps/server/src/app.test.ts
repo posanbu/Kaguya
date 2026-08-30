@@ -1,9 +1,10 @@
 /**
  * 功能概述：本文件验证 HTTP 应用在消息模式与 setup 模式下的路由边界、鉴权和错误映射，
  * 并为服务层配置门面从旧 `initialize()` 迁移到 `ConfigurationManagement` 提供编译期回归保护。
- * 主要职责：前几组用例覆盖 `/api/v1/setup` 与 `/api/v1/messages` 的鉴权、状态码与
- * 请求校验；辅助构造会为管理门面提供最小可用 stub，使测试聚焦在 HTTP 行为而不是
- * config manager 细节；其余用例验证 OpenAPI、限流、请求 ID 与日志上下文契约。
+ * 主要职责：前几组用例覆盖 `/api/v1/setup` 与 `/api/v1/messages` 的鉴权、状态码、
+ * 请求校验以及 setup readiness 竞态映射；辅助构造会为管理门面提供最小可用 stub，
+ * 使测试聚焦在 HTTP 行为而不是 config manager 细节；其余用例验证 OpenAPI、限流、
+ * 请求 ID 与日志上下文契约。
  * 代码库关系：该文件直接驱动 `app.ts`，并通过 mock 的 `ConfigurationManagement`
  * 与 fake message ingress 隔离 Fastify 路由层；它与 `setup.ts`、`server.ts` 一起构成
  * 服务包在 Task 4 期间的过渡安全网，确保 setup API 重构不会破坏网关类型边界。
@@ -206,6 +207,54 @@ describe("application API gateway", () => {
     expect(response.json()).toMatchObject({
       error: { code: "configuration_not_required" },
     });
+    expect(setup.replaceProfile).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("maps a setup readiness race to configuration_not_required", async () => {
+    const setup: ConfigurationManagement = {
+      inspect: vi
+        .fn<ConfigurationManagement["inspect"]>()
+        .mockResolvedValueOnce({
+          status: "invalid",
+          selectedProfileId: "default",
+          profiles: [],
+          issues: [],
+        })
+        .mockResolvedValueOnce({
+          status: "restart_required",
+        }),
+      listProfiles: vi.fn(async () => ({
+        selectedProfileId: "default",
+        profiles: [],
+      })),
+      getProfile: vi.fn(),
+      createProfile: vi.fn(),
+      replaceProfile: vi.fn(),
+      selectProfile: vi.fn(),
+      deleteProfile: vi.fn(),
+    };
+    const app = await createHttpApplication({ config, setup });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/setup",
+      headers: authorization(),
+      payload: {
+        profileName: "replacement",
+        baseUrl: "https://api.example/v1",
+        apiKey: "replacement-secret",
+        lightModel: "replacement-light",
+        heavyModel: "replacement-heavy",
+        acknowledgeOptional: true,
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      error: { code: "configuration_not_required" },
+    });
+    expect(setup.inspect).toHaveBeenCalledTimes(2);
     expect(setup.replaceProfile).not.toHaveBeenCalled();
     await app.close();
   });
