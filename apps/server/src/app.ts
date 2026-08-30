@@ -144,6 +144,8 @@ const setupStatusResponseJsonSchema = {
   properties: {
     data: {
       type: "object",
+      additionalProperties: false,
+      required: ["status", "selectedProfileId", "profiles"],
       properties: {
         status: { type: "string" },
         selectedProfileId: { type: "string" },
@@ -347,7 +349,6 @@ export async function createHttpApplication(
     {
       config: { rateLimit: false },
       schema: {
-        hide: true,
         tags: ["System"],
         summary: "Inspect first-run configuration readiness",
         response: {
@@ -356,7 +357,7 @@ export async function createHttpApplication(
       },
     },
     async () => ({
-      data: (await options.setup?.inspect()) ?? { status: "ready" as const },
+      data: (await options.setup?.inspect()) ?? readySetupStatus(),
     }),
   );
 
@@ -718,6 +719,21 @@ function parseProfileId(profileId: string) {
     throw new ConfigError("CONFIG_INVALID_INPUT", "Profile ID is invalid");
   }
   return parsed.data;
+}
+
+function readySetupStatus() {
+  return {
+    status: "ready" as const,
+    selectedProfileId: "default",
+    profiles: [
+      {
+        id: "default",
+        name: "default",
+        createdAt: "",
+        updatedAt: "",
+      },
+    ],
+  };
 }
 
 function mapConfigError(error: ConfigError) {

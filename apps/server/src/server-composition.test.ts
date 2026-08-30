@@ -152,6 +152,45 @@ describe("unified server composition", () => {
     expect(spa.body).toContain("Kaguya UI");
     expect(health.json()).toEqual({ status: "ok" });
     expect(openapi.statusCode).toBe(200);
+    expect(openapi.json()).toMatchObject({
+      paths: {
+        "/api/v1/setup": {
+          get: {
+            responses: {
+              "200": {
+                content: {
+                  "application/json": {
+                    schema: {
+                      properties: {
+                        data: {
+                          required: ["status", "selectedProfileId", "profiles"],
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(
+      (await app.inject({ method: "GET", url: "/api/v1/setup" })).json(),
+    ).toEqual({
+      data: {
+        status: "ready",
+        selectedProfileId: "default",
+        profiles: [
+          {
+            id: "default",
+            name: "default",
+            createdAt: "",
+            updatedAt: "",
+          },
+        ],
+      },
+    });
     expect(missingApi.statusCode).toBe(404);
     expect(missingApi.json()).toMatchObject({ error: { code: "not_found" } });
 

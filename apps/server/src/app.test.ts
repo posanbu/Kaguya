@@ -333,6 +333,32 @@ describe("application API gateway", () => {
     });
   });
 
+  it("serves metadata-complete ready setup status when management is absent", async () => {
+    const app = await createApiGateway({ config });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/setup",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      data: {
+        status: "ready",
+        selectedProfileId: "default",
+        profiles: [
+          {
+            id: "default",
+            name: "default",
+            createdAt: "",
+            updatedAt: "",
+          },
+        ],
+      },
+    });
+    await app.close();
+  });
+
   it("deletes an unselected profile", async () => {
     await withManagementApp(async (app, management) => {
       const created = await management.createProfile("throwaway");
@@ -490,6 +516,25 @@ describe("application API gateway", () => {
             },
           },
         },
+        "/api/v1/setup": {
+          get: {
+            responses: {
+              200: {
+                content: {
+                  "application/json": {
+                    schema: {
+                      properties: {
+                        data: {
+                          required: ["status", "selectedProfileId", "profiles"],
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
         "/api/v1/messages": {
           post: {
             security: [{ bearerAuth: [] }],
@@ -567,7 +612,7 @@ describe("application API gateway", () => {
       },
     });
     const serialized = JSON.stringify(document);
-    expect(serialized).not.toContain("/api/v1/setup");
+    expect(serialized).toContain("/api/v1/setup");
     expect(serialized).not.toContain('"apiKey"');
     expect(serialized).not.toContain('"baseUrl"');
     expect(serialized).not.toContain('"model"');
