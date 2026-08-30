@@ -18,7 +18,7 @@ import { join } from "node:path";
 
 import { KaguyaDatabase } from "@kaguya/database";
 import { FileUserConfigManager } from "@kaguya/config";
-import { KaguyaRuntime } from "@kaguya/runtime";
+import { KaguyaRuntime, type RuntimeModelSelectionResolver } from "@kaguya/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
@@ -315,7 +315,8 @@ describe("unified server composition", () => {
       "platforms-empty",
       "plugins-empty",
     ]);
-    const resolver = await createRuntimeModelSelectionResolver(root);
+    const resolver: RuntimeModelSelectionResolver =
+      await createRuntimeModelSelectionResolver(root);
 
     expect(
       llmReplySettingsSchema.safeParse({
@@ -324,8 +325,14 @@ describe("unified server composition", () => {
         outbound: { mode: "source", messageKind: "text" },
       }).success,
     ).toBe(false);
-    // @ts-expect-error Runtime selection no longer accepts profile-level overrides.
-    expect(() => resolver({ profileId: "profile-override", modelTier: "light" })).not.toThrow();
+    // @ts-expect-error Runtime selections are tier-only and cannot carry a profile override.
+    const invalidSelection: Parameters<RuntimeModelSelectionResolver>[0] = { profileId: "profile-override", modelTier: "light" };
+    expect(invalidSelection.modelTier).toBe("light");
+    expect(resolver({ modelTier: "light" })).toEqual({
+      modelId: "default-light",
+      model: { modelId: "default-light" },
+    });
+    expect(chatModel).toHaveBeenCalledWith("default-light");
   });
 });
 
