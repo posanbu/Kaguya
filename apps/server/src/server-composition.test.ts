@@ -1,3 +1,17 @@
+/**
+ * 功能概述：本文件验证服务层组合逻辑，确保 HTTP、Web UI、Runtime 与配置 Profile
+ * Registry 在统一启动流程下按预期协作，尤其覆盖启动期构造的模型解析器如何从配置中
+ * 冻结一个已选中的 Profile 并向 Runtime 暴露仅含 tier 的解析接口。
+ * 主要职责：前半部分用例覆盖 Web/API/Vite 路由组合；Profile 解析器相关用例验证
+ * `createRuntimeModelSelectionResolver` 会在服务启动时读取当前 selected Profile、校验
+ * light/heavy tier、保留 provider 能力设置，并拒绝模块或调用方继续传入 `profileId`。
+ * 代码库关系：测试直接驱动 `server.ts`、`app.ts` 与 `web.ts`，并借助
+ * `@kaguya/config` 的真实文件型 Registry、`@kaguya/runtime` 的共享 Runtime、
+ * `@ai-sdk/openai-compatible` 的 mock 客户端观察 provider client 创建行为。
+ * 输入输出与副作用：每个用例都在临时目录中创建数据库与配置根目录，结束后删除；
+ * 若服务层重新引入按请求切换 Profile、重新扫描全部 Profile、或在错误路径中泄露配置细节，
+ * 本文件会作为回归测试立即失败。
+ */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +27,7 @@ import { createHttpApplication } from "./app.js";
 import type { ServerConfig } from "./config.js";
 import { createRuntimeModelSelectionResolver } from "./server.js";
 import { registerWebUi } from "./web.js";
+import { llmReplySettingsSchema } from "../../../packages/modules/src/llm-reply.js";
 
 const chatModel = vi.fn((modelId: string) => ({ modelId }));
 
@@ -164,77 +179,110 @@ describe("unified server composition", () => {
   it("creates a heavy/light resolver from frozen profile configuration", async () => {
     const root = mkdtempSync(join(tmpdir(), "kaguya-profile-resolver-"));
     roots.push(root);
-    const manager = await FileUserConfigManager.initialize({
-      rootDir: root,
-      name: "test",
-      settings: {
-        ai: {
-          defaultProviderId: "provider-1",
-          modelTiers: {
-            light: { providerId: "provider-1", modelId: "light-model" },
-            heavy: { providerId: "provider-1", modelId: "heavy-model" },
-          },
-          providers: [
-            {
-              id: "provider-1",
-              type: "openai-compatible",
-              enabled: true,
-              apiKey: "provider-key",
-              baseUrl: "https://llm.example/v1",
-              models: ["light-model", "heavy-model"],
-              settings: {},
-            },
-          ],
-        },
-        platforms: [],
-        plugins: [],
-      },
-      acknowledgedWarnings: ["platforms-empty", "plugins-empty"],
-    });
-    const incomplete = await manager.createProfile("incomplete");
+    const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+    await manager.replaceProfile(
+      manager.getSelectedProfileId(),
+      readyProfileReplacement(
+        "default",
+        readyProfileSettings("default-light", "default-heavy"),
+      ),
+    );
+    await manager.acknowledgeConfigurationWarnings(manager.getSelectedProfileId(), [
+      "platforms-empty",
+      "plugins-empty",
+    ]);
+    await manager.createProfile("incomplete");
 
     const resolver = await createRuntimeModelSelectionResolver(root);
 
-    expect(resolver({ modelTier: "heavy" })).toEqual({
-      modelId: "heavy-model",
-      model: { modelId: "heavy-model" },
+    expect(resolver({ modelTier: "light" })).toEqual({
+      modelId: "default-light",
+      model: { modelId: "default-light" },
     });
-    expect(chatModel).toHaveBeenCalledWith("heavy-model");
-    expect(() =>
-      resolver({ profileId: incomplete.id, modelTier: "heavy" }),
-    ).toThrow("Configuration is incomplete");
+    expect(resolver({ modelTier: "heavy" })).toEqual({
+      modelId: "default-heavy",
+      model: { modelId: "default-heavy" },
+    });
+    expect(chatModel).toHaveBeenCalledWith("default-light");
+    expect(chatModel).toHaveBeenCalledWith("default-heavy");
+  });
+
+  it("freezes the selected profile even if the registry selection changes later", async () => {
+    const root = mkdtempSync(join(tmpdir(), "kaguya-profile-resolver-"));
+    roots.push(root);
+    const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+    await manager.replaceProfile(
+      manager.getSelectedProfileId(),
+      readyProfileReplacement(
+        "default",
+        readyProfileSettings("default-light", "default-heavy"),
+      ),
+    );
+    await manager.acknowledgeConfigurationWarnings(manager.getSelectedProfileId(), [
+      "platforms-empty",
+      "plugins-empty",
+    ]);
+    const selected = await manager.createProfile("selected");
+    await manager.replaceProfile(
+      selected.id,
+      readyProfileReplacement(
+        selected.name,
+        readyProfileSettings("selected-light", "selected-heavy"),
+      ),
+    );
+    await manager.acknowledgeConfigurationWarnings(selected.id, [
+      "platforms-empty",
+      "plugins-empty",
+    ]);
+    await manager.selectProfile(selected.id);
+
+    const resolver = await createRuntimeModelSelectionResolver(root);
+    await manager.selectProfile("default");
+
+    expect(resolver({ modelTier: "light" })).toEqual({
+      modelId: "selected-light",
+      model: { modelId: "selected-light" },
+    });
+    expect(resolver({ modelTier: "heavy" })).toEqual({
+      modelId: "selected-heavy",
+      model: { modelId: "selected-heavy" },
+    });
+    expect(chatModel).toHaveBeenCalledWith("selected-light");
+    expect(chatModel).toHaveBeenCalledWith("selected-heavy");
   });
 
   it("passes structured-output support from profile provider settings", async () => {
     const root = mkdtempSync(join(tmpdir(), "kaguya-profile-resolver-"));
     roots.push(root);
-    await FileUserConfigManager.initialize({
-      rootDir: root,
-      name: "test",
-      settings: {
-        ai: {
-          defaultProviderId: "provider-1",
-          modelTiers: {
-            light: { providerId: "provider-1", modelId: "light-model" },
-            heavy: { providerId: "provider-1", modelId: "heavy-model" },
-          },
-          providers: [
-            {
-              id: "provider-1",
-              type: "openai-compatible",
-              enabled: true,
-              apiKey: "provider-key",
-              baseUrl: "https://llm.example/v1",
-              models: ["light-model", "heavy-model"],
-              settings: { supportsStructuredOutputs: true },
-            },
-          ],
-        },
-        platforms: [],
-        plugins: [],
-      },
+    const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+    await manager.replaceProfile(manager.getSelectedProfileId(), {
+      name: "default",
       acknowledgedWarnings: ["platforms-empty", "plugins-empty"],
+      ai: {
+        defaultProviderId: "provider-1",
+        modelTiers: {
+          light: { providerId: "provider-1", modelId: "light-model" },
+          heavy: { providerId: "provider-1", modelId: "heavy-model" },
+        },
+        providers: [
+          {
+            id: "provider-1",
+            type: "openai-compatible",
+            enabled: true,
+            apiKey: "provider-key",
+            baseUrl: "https://llm.example/v1",
+            models: ["light-model", "heavy-model"],
+            settings: { supportsStructuredOutputs: true },
+          },
+        ],
+      },
+      platforms: [],
+      plugins: [],
     });
+    await manager.acknowledgeConfigurationWarnings(manager.getSelectedProfileId(), [
+      "platforms-empty",
+      "plugins-empty",
+    ]);
 
     await createRuntimeModelSelectionResolver(root);
 
@@ -251,8 +299,72 @@ describe("unified server composition", () => {
       createRuntimeModelSelectionResolver(join(parent, "missing")),
     ).rejects.toMatchObject({ code: "CONFIG_SETUP_REQUIRED" });
   });
+
+  it("rejects profile overrides at the module boundary and resolver call site", async () => {
+    const root = mkdtempSync(join(tmpdir(), "kaguya-profile-resolver-"));
+    roots.push(root);
+    const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+    await manager.replaceProfile(
+      manager.getSelectedProfileId(),
+      readyProfileReplacement(
+        "default",
+        readyProfileSettings("default-light", "default-heavy"),
+      ),
+    );
+    await manager.acknowledgeConfigurationWarnings(manager.getSelectedProfileId(), [
+      "platforms-empty",
+      "plugins-empty",
+    ]);
+    const resolver = await createRuntimeModelSelectionResolver(root);
+
+    expect(
+      llmReplySettingsSchema.safeParse({
+        profileId: "profile-override",
+        modelTier: "light",
+        outbound: { mode: "source", messageKind: "text" },
+      }).success,
+    ).toBe(false);
+    // @ts-expect-error Runtime selection no longer accepts profile-level overrides.
+    expect(() => resolver({ profileId: "profile-override", modelTier: "light" })).not.toThrow();
+  });
 });
 
 function dirnameOf(path: string): string {
   return path.slice(0, path.lastIndexOf("/"));
+}
+
+function readyProfileSettings(lightModelId: string, heavyModelId: string) {
+  return {
+    ai: {
+      defaultProviderId: "provider-1",
+      modelTiers: {
+        light: { providerId: "provider-1", modelId: lightModelId },
+        heavy: { providerId: "provider-1", modelId: heavyModelId },
+      },
+      providers: [
+        {
+          id: "provider-1",
+          type: "openai-compatible" as const,
+          enabled: true,
+          apiKey: "provider-key",
+          baseUrl: "https://llm.example/v1",
+          models: [lightModelId, heavyModelId],
+          settings: {},
+        },
+      ],
+    },
+    platforms: [],
+    plugins: [],
+  };
+}
+
+function readyProfileReplacement(
+  name: string,
+  settings: ReturnType<typeof readyProfileSettings>,
+) {
+  return {
+    name,
+    acknowledgedWarnings: ["platforms-empty", "plugins-empty"],
+    ...settings,
+  };
 }

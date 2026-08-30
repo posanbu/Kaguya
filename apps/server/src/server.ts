@@ -1,3 +1,20 @@
+/**
+ * 功能概述：本文件是 Kaguya 服务端主入口，负责读取 ServerConfig、组装 HTTP 应用、
+ * Web UI、NapCat 连接与 Runtime，并把配置 Registry 中当前选中的 Profile 冻结成
+ * 一个供 Runtime 使用的 tier-only 模型解析器。
+ * 主要职责：`startKaguyaServer` 协调整体启动/关闭流程与 setup-mode 回退；
+ * `createRuntimeModelSelectionResolver` 在启动时打开配置根目录，读取
+ * `getSelectedProfileId()`，强制通过 `resolveProfileById(profileId)` 解析且校验该 Profile，
+ * 然后闭包出一个只接受 `modelTier` 的 resolver；`openAICompatibleProviderSettings` 提取
+ * provider 能力开关；`assertProfileReady` 保持 readiness 错误固定且无 secret；
+ * 其余 helper 管理资源关闭与进程信号处理。
+ * 代码库关系：本文件消费 `@kaguya/config` 的 Profile Registry、`@kaguya/runtime`
+ * 的运行时注入点、Fastify HTTP 组装和 NapCat 适配器；模块层 `packages/modules`
+ * 已不再携带 `profileId`，因此 Profile 选择只能在这里于服务启动时完成一次。
+ * 输入输出与副作用：启动时会创建 logger、检查配置 readiness、按需启动 Runtime/HTTP/NapCat；
+ * resolver 会缓存已选 Profile 下 provider client，并在 light/heavy tier 缺失时于启动期失败，
+ * 防止服务接受请求后再暴露可变 Profile 覆盖路径。
+ */
 import { pathToFileURL } from "node:url";
 
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
@@ -178,28 +195,18 @@ export async function createRuntimeModelSelectionResolver(
   configRoot: string,
 ): Promise<RuntimeModelSelectionResolver> {
   const manager = await FileUserConfigManager.open({ rootDir: configRoot });
-  const defaultProfileId = manager.getDefaultProfileId();
-  await manager.resolveProfileById(defaultProfileId);
-  const profiles = new Map<string, UserConfigProfile>();
-  for (const metadata of manager.listProfiles()) {
-    profiles.set(metadata.id, await manager.getProfile(metadata.id));
-  }
+  const selectedProfileId = manager.getSelectedProfileId();
+  const profile = await manager.resolveProfileById(selectedProfileId);
   const providerCache = new Map<
     string,
     ReturnType<typeof createOpenAICompatible>
   >();
 
   const resolver: RuntimeModelSelectionResolver = (selection) => {
-    const profileId = selection.profileId ?? defaultProfileId;
-    const profile = profiles.get(profileId);
-    if (profile === undefined) {
-      throw new Error(`Configuration profile was not found: ${profileId}`);
-    }
-    assertProfileReady(profile);
     const target = profile.ai.modelTiers?.[selection.modelTier];
     if (target === undefined) {
       throw new Error(
-        `Model tier is unavailable in profile ${profileId}: ${selection.modelTier}`,
+        `Model tier is unavailable in selected profile ${selectedProfileId}: ${selection.modelTier}`,
       );
     }
     const provider = profile.ai.providers.find(
@@ -207,24 +214,24 @@ export async function createRuntimeModelSelectionResolver(
     );
     if (provider === undefined || !provider.enabled) {
       throw new Error(
-        `Model tier provider is unavailable in profile ${profileId}`,
+        `Model tier provider is unavailable in selected profile ${selectedProfileId}`,
       );
     }
     if (provider.type !== "openai-compatible") {
       throw new Error(
-        `Unsupported AI provider type in profile ${profileId}: ${provider.type}`,
+        `Unsupported AI provider type in selected profile ${selectedProfileId}: ${provider.type}`,
       );
     }
     if (provider.apiKey === undefined || provider.baseUrl === undefined) {
       throw new Error(
-        `AI provider credentials are incomplete in profile ${profileId}`,
+        `AI provider credentials are incomplete in selected profile ${selectedProfileId}`,
       );
     }
-    const cacheKey = `${profileId}:${provider.id}`;
+    const cacheKey = provider.id;
     let client = providerCache.get(cacheKey);
     if (client === undefined) {
       client = createOpenAICompatible({
-        name: `kaguya-${profileId}-${provider.id}`,
+        name: `kaguya-${selectedProfileId}-${provider.id}`,
         apiKey: provider.apiKey,
         baseURL: provider.baseUrl,
         ...openAICompatibleProviderSettings(provider.settings),
