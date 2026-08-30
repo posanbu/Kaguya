@@ -1,4 +1,23 @@
+/**
+ * 架构说明：本模块是 Web 端唯一的 Kaguya HTTP 客户端门面，
+ * 负责把界面动作翻译成显式的 `/api/v1/setup` 与 Profile Registry 请求。
+ * 它必须只暴露最小必需的 wire contract：读取匿名 setup 状态、发送消息、
+ * 检查健康，以及对 Profile 集合执行列出、创建、读取、完整替换、
+ * 显式选择和删除；所有请求都要在本地先校验 token，再拼出精确的
+ * method / URL / Bearer 头 / JSON body，避免把鉴权或隐藏字段交给浏览器猜测。
+ * 主要职责：为 App 及后续 Profile 管理页面提供稳定的 typed API，
+ * 同时保留旧的消息与健康检查路径；Profile 请求必须编码 path 参数，
+ * 匿名 setup 状态要能返回安全的 Registry 元数据，但不能包含任何 secret。
+ * 代码库关系：该文件依赖 `@kaguya/config` 的 Profile JSON 结构作为返回值
+ * 类型参考，但不会持有任何持久化密钥；Task 6 的 editor helper 会把
+ * 表单字段转成完整的替换体，Task 7 再消费这里的客户端函数。
+ * 输入输出与副作用：所有函数都通过可注入 `fetch` 实现发起请求，
+ * 默认使用全局 `fetch`；若 token 为空、网络断开、响应格式不匹配或
+ * 服务端返回错误 JSON，这里会抛出 `GatewayRequestError`。
+ */
 export const MAX_MESSAGE_LENGTH = 131_072;
+const OPENAI_COMPATIBLE_PROVIDER_TYPE = "openai-compatible";
+const DEFAULT_PROVIDER_ID = "default-provider";
 
 export interface GatewayConfig {
   readonly token: string;
@@ -13,128 +32,135 @@ export interface AcceptedMessage {
   readonly requestId: string;
 }
 
-export type ConfigurationStatus =
-  | { readonly status: "setup_required" }
-  | { readonly status: "restart_required" }
-  | { readonly status: "ready" }
-  | { readonly status: "invalid" }
-  | { readonly status: "review_required" };
-
-export interface InitialConfigurationInput {
-  readonly profileName: string;
-  readonly baseUrl: string;
-  readonly apiKey: string;
-  readonly lightModel: string;
-  readonly heavyModel: string;
-  readonly acknowledgeOptional: boolean;
+export interface ProfileMetadata {
+  readonly id: string;
+  readonly name: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
 }
+
+export interface JsonObject {
+  readonly [key: string]: unknown;
+}
+
+export interface UserConfigProfileProvider {
+  readonly id: string;
+  readonly type: string;
+  readonly enabled: boolean;
+  readonly baseUrl?: string;
+  readonly apiKey?: string;
+  readonly models: readonly string[];
+  readonly settings: JsonObject;
+}
+
+export interface UserConfigProfilePlatform {
+  readonly id: string;
+  readonly type: string;
+  readonly enabled: boolean;
+  readonly credentials: JsonObject;
+  readonly settings: JsonObject;
+}
+
+export interface UserConfigProfilePlugin {
+  readonly id: string;
+  readonly enabled: boolean;
+  readonly settings: JsonObject;
+}
+
+export interface UserConfigProfile {
+  readonly version: 1;
+  readonly id: string;
+  readonly name: string;
+  readonly ai: {
+    readonly defaultProviderId?: string;
+    readonly modelTiers?: {
+      readonly light: {
+        readonly providerId: string;
+        readonly modelId: string;
+      };
+      readonly heavy: {
+        readonly providerId: string;
+        readonly modelId: string;
+      };
+    };
+    readonly providers: readonly UserConfigProfileProvider[];
+  };
+  readonly platforms: readonly UserConfigProfilePlatform[];
+  readonly plugins: readonly UserConfigProfilePlugin[];
+  readonly review?: {
+    readonly acknowledgedWarnings: readonly string[];
+  };
+}
+
+export interface ConfigurationIssue {
+  readonly id: string;
+  readonly path: string;
+  readonly message: string;
+}
+
+export interface ConfigurationWarning {
+  readonly id: string;
+  readonly path: string;
+  readonly message: string;
+}
+
+export interface ConfigurationStatus {
+  readonly status:
+    | "setup_required"
+    | "restart_required"
+    | "ready"
+    | "invalid"
+    | "review_required";
+  readonly selectedProfileId?: string;
+  readonly profiles?: readonly ProfileMetadata[];
+  readonly issues?: readonly ConfigurationIssue[];
+  readonly warnings?: readonly ConfigurationWarning[];
+}
+
+export interface ProfileRegistryMetadata {
+  readonly selectedProfileId: string;
+  readonly profiles: readonly ProfileMetadata[];
+}
+
+export interface ProfileReadResult {
+  readonly profile: UserConfigProfile;
+}
+
+export interface ProfileMutationResult {
+  readonly profile: UserConfigProfile;
+  readonly restartRequired: boolean;
+}
+
+export interface CreateProfileInput {
+  readonly name: string;
+}
+
+export interface ReplaceProfileInput {
+  readonly name: string;
+  readonly acknowledgedWarnings: readonly string[];
+  readonly ai: {
+    readonly defaultProviderId: string;
+    readonly modelTiers: {
+      readonly light: {
+        readonly providerId: string;
+        readonly modelId: string;
+      };
+      readonly heavy: {
+        readonly providerId: string;
+        readonly modelId: string;
+      };
+    };
+    readonly providers: readonly UserConfigProfileProvider[];
+  };
+  readonly platforms: readonly UserConfigProfilePlatform[];
+  readonly plugins: readonly UserConfigProfilePlugin[];
+}
+
+export type ProfileReplacementInput = ReplaceProfileInput;
 
 export interface ConfigurationSaved {
   readonly status: "configured";
   readonly restartRequired: true;
-}
-
-export async function getConfigurationStatus(
-  fetchImplementation: typeof fetch = fetch,
-): Promise<ConfigurationStatus> {
-  let response: Response;
-  try {
-    response = await fetchImplementation("/api/v1/setup", { method: "GET" });
-  } catch {
-    throw new GatewayRequestError(
-      "无法读取 Kaguya 配置状态",
-      "network_error",
-      0,
-    );
-  }
-
-  const payload = await readJson(response);
-  if (!response.ok || !isConfigurationStatusResponse(payload)) {
-    throw new GatewayRequestError(
-      `无法读取配置状态（HTTP ${response.status}）`,
-      "configuration_status_failed",
-      response.status,
-    );
-  }
-  return payload.data;
-}
-
-export async function initializeConfiguration(
-  config: GatewayConfig,
-  input: InitialConfigurationInput,
-  fetchImplementation: typeof fetch = fetch,
-): Promise<ConfigurationSaved> {
-  const token = config.token.trim();
-  if (!token) {
-    throw new GatewayRequestError("请输入服务访问令牌", "missing_token", 0);
-  }
-
-  let response: Response;
-  try {
-    response = await fetchImplementation("/api/v1/setup", {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(input),
-    });
-  } catch {
-    throw new GatewayRequestError("无法连接到 Kaguya 服务", "network_error", 0);
-  }
-
-  const payload = await readJson(response);
-  if (!response.ok) {
-    const gatewayError = isErrorResponse(payload) ? payload.error : undefined;
-    throw new GatewayRequestError(
-      gatewayError?.message ?? `保存配置失败（HTTP ${response.status}）`,
-      gatewayError?.code ?? "configuration_failed",
-      response.status,
-      gatewayError?.requestId,
-    );
-  }
-  if (!isConfigurationSavedResponse(payload)) {
-    throw new GatewayRequestError(
-      "服务返回了无法识别的配置响应",
-      "invalid_response",
-      response.status,
-    );
-  }
-  return payload.data;
-}
-
-export async function checkGatewayHealth(
-  fetchImplementation: typeof fetch = fetch,
-): Promise<void> {
-  let response: Response;
-  try {
-    response = await fetchImplementation("/healthz", {
-      method: "GET",
-    });
-  } catch {
-    throw new GatewayRequestError("无法连接到 Kaguya 服务", "network_error", 0);
-  }
-
-  const payload = await readJson(response);
-  if (!response.ok || !isRecord(payload) || payload.status !== "ok") {
-    throw new GatewayRequestError(
-      `服务健康检查失败（HTTP ${response.status}）`,
-      "health_check_failed",
-      response.status,
-    );
-  }
-}
-
-interface AcceptedMessageResponse {
-  data: AcceptedMessage;
-}
-
-interface ErrorResponse {
-  error: {
-    code: string;
-    message: string;
-    requestId: string;
-  };
 }
 
 export class GatewayRequestError extends Error {
@@ -149,16 +175,185 @@ export class GatewayRequestError extends Error {
   }
 }
 
+export async function getConfigurationStatus(
+  fetchImplementation: typeof fetch = fetch,
+): Promise<ConfigurationStatus> {
+  const response = await requestJson(
+    "/api/v1/setup",
+    { method: "GET" },
+    fetchImplementation,
+  );
+  const payload = await readJson(response);
+  if (!response.ok || !isConfigurationStatusResponse(payload)) {
+    throw new GatewayRequestError(
+      `无法读取配置状态（HTTP ${response.status}）`,
+      "configuration_status_failed",
+      response.status,
+    );
+  }
+  return payload.data;
+}
+
+export async function listProfiles(
+  config: GatewayConfig,
+  fetchImplementation: typeof fetch = fetch,
+): Promise<ProfileRegistryMetadata> {
+  const response = await requestAuthenticatedJson(
+    config,
+    "/api/v1/profiles",
+    { method: "GET" },
+    fetchImplementation,
+  );
+  const payload = await readJson(response);
+  if (!response.ok || !isProfileRegistryMetadataResponse(payload)) {
+    throw new GatewayRequestError(
+      `无法读取 Profile 集合（HTTP ${response.status}）`,
+      "profiles_failed",
+      response.status,
+    );
+  }
+  return payload.data;
+}
+
+export async function createProfile(
+  config: GatewayConfig,
+  input: CreateProfileInput,
+  fetchImplementation: typeof fetch = fetch,
+): Promise<ProfileMutationResult> {
+  const token = requireToken(config);
+  const response = await requestJson(
+    "/api/v1/profiles",
+    {
+      method: "POST",
+      headers: jsonHeaders(token),
+      body: JSON.stringify(input),
+    },
+    fetchImplementation,
+  );
+  return readProfileMutationResult(response, "profile_create_failed");
+}
+
+export async function getProfile(
+  config: GatewayConfig,
+  profileId: string,
+  fetchImplementation: typeof fetch = fetch,
+): Promise<ProfileReadResult> {
+  const token = requireToken(config);
+  const response = await requestJson(
+    `/api/v1/profiles/${encodeURIComponent(profileId)}`,
+    {
+      method: "GET",
+      headers: bearerHeaders(token),
+    },
+    fetchImplementation,
+  );
+  const payload = await readJson(response);
+  if (!response.ok || !isProfileReadResultResponse(payload)) {
+    throw new GatewayRequestError(
+      `无法读取 Profile（HTTP ${response.status}）`,
+      "profile_read_failed",
+      response.status,
+    );
+  }
+  return payload.data;
+}
+
+export async function replaceProfile(
+  config: GatewayConfig,
+  profileId: string,
+  replacement: ProfileReplacementInput,
+  fetchImplementation: typeof fetch = fetch,
+): Promise<ProfileMutationResult> {
+  const token = requireToken(config);
+  const response = await requestJson(
+    `/api/v1/profiles/${encodeURIComponent(profileId)}`,
+    {
+      method: "PUT",
+      headers: jsonHeaders(token),
+      body: JSON.stringify(replacement),
+    },
+    fetchImplementation,
+  );
+  return readProfileMutationResult(response, "profile_replace_failed");
+}
+
+export async function selectProfile(
+  config: GatewayConfig,
+  profileId: string,
+  fetchImplementation: typeof fetch = fetch,
+): Promise<ProfileMutationResult> {
+  const token = requireToken(config);
+  const response = await requestJson(
+    "/api/v1/profiles/selection",
+    {
+      method: "PUT",
+      headers: jsonHeaders(token),
+      body: JSON.stringify({ selectedProfileId: profileId }),
+    },
+    fetchImplementation,
+  );
+  return readProfileMutationResult(response, "profile_select_failed");
+}
+
+export async function deleteProfile(
+  config: GatewayConfig,
+  profileId: string,
+  fetchImplementation: typeof fetch = fetch,
+): Promise<void> {
+  const token = requireToken(config);
+  const response = await requestJson(
+    `/api/v1/profiles/${encodeURIComponent(profileId)}`,
+    {
+      method: "DELETE",
+      headers: bearerHeaders(token),
+    },
+    fetchImplementation,
+  );
+  if (response.status === 204) {
+    return;
+  }
+  const payload = await readJson(response);
+  if (!response.ok) {
+    const gatewayError = isErrorResponse(payload) ? payload.error : undefined;
+    throw new GatewayRequestError(
+      gatewayError?.message ?? `删除 Profile 失败（HTTP ${response.status}）`,
+      gatewayError?.code ?? "profile_delete_failed",
+      response.status,
+      gatewayError?.requestId,
+    );
+  }
+  throw new GatewayRequestError(
+    "服务返回了无法识别的删除响应",
+    "invalid_response",
+    response.status,
+  );
+}
+
+export async function checkGatewayHealth(
+  fetchImplementation: typeof fetch = fetch,
+): Promise<void> {
+  const response = await requestJson(
+    "/healthz",
+    { method: "GET" },
+    fetchImplementation,
+  );
+  const payload = await readJson(response);
+  if (!response.ok || !isRecord(payload) || payload.status !== "ok") {
+    throw new GatewayRequestError(
+      `服务健康检查失败（HTTP ${response.status}）`,
+      "health_check_failed",
+      response.status,
+    );
+  }
+}
+
 export async function sendMessage(
   config: GatewayConfig,
   input: SendMessageInput,
   fetchImplementation: typeof fetch = fetch,
 ): Promise<AcceptedMessage> {
-  const token = config.token.trim();
+  const token = requireToken(config);
 
-  if (!token) {
-    throw new GatewayRequestError("请输入服务访问令牌", "missing_token", 0);
-  }
   if (!input.text.trim()) {
     throw new GatewayRequestError("消息不能为空", "empty_message", 0);
   }
@@ -170,25 +365,15 @@ export async function sendMessage(
     );
   }
 
-  let response: Response;
-  try {
-    response = await fetchImplementation("/api/v1/messages", {
+  const response = await requestJson(
+    "/api/v1/messages",
+    {
       method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-      },
+      headers: jsonHeaders(token),
       body: JSON.stringify({ text: input.text }),
-    });
-  } catch (error) {
-    throw new GatewayRequestError(
-      error instanceof Error && error.name === "AbortError"
-        ? "服务请求已取消"
-        : "无法连接到 Kaguya 服务",
-      "network_error",
-      0,
-    );
-  }
+    },
+    fetchImplementation,
+  );
 
   const payload = await readJson(response);
   if (!response.ok) {
@@ -210,6 +395,127 @@ export async function sendMessage(
   return payload.data;
 }
 
+/**
+ * 兼容旧的 setup 聚合写入口，供当前尚未切换到 Profile 管理页的界面使用。
+ * 后续 UI 迁移完成后应移除。
+ */
+export interface InitialConfigurationInput {
+  readonly profileName: string;
+  readonly baseUrl: string;
+  readonly apiKey: string;
+  readonly lightModel: string;
+  readonly heavyModel: string;
+  readonly acknowledgeOptional: boolean;
+}
+
+export async function initializeConfiguration(
+  config: GatewayConfig,
+  input: InitialConfigurationInput,
+  fetchImplementation: typeof fetch = fetch,
+): Promise<ConfigurationSaved> {
+  const created = await createProfile(
+    config,
+    { name: input.profileName },
+    fetchImplementation,
+  );
+  await replaceProfile(
+    config,
+    created.profile.id,
+    {
+      name: input.profileName,
+      acknowledgedWarnings: input.acknowledgeOptional
+        ? ["platforms-empty", "plugins-empty"]
+        : [],
+      ai: {
+        defaultProviderId: DEFAULT_PROVIDER_ID,
+        modelTiers: {
+          light: {
+            providerId: DEFAULT_PROVIDER_ID,
+            modelId: input.lightModel,
+          },
+          heavy: {
+            providerId: DEFAULT_PROVIDER_ID,
+            modelId: input.heavyModel,
+          },
+        },
+        providers: [
+          {
+            id: DEFAULT_PROVIDER_ID,
+            type: OPENAI_COMPATIBLE_PROVIDER_TYPE,
+            enabled: true,
+            baseUrl: input.baseUrl,
+            apiKey: input.apiKey,
+            models: [input.lightModel, input.heavyModel],
+            settings: {},
+          },
+        ],
+      },
+      platforms: [],
+      plugins: [],
+    },
+    fetchImplementation,
+  );
+  return {
+    status: "configured",
+    restartRequired: true,
+  };
+}
+
+async function readProfileMutationResult(
+  response: Response,
+  failureCode: string,
+): Promise<ProfileMutationResult> {
+  const payload = await readJson(response);
+  if (!response.ok || !isProfileMutationResultResponse(payload)) {
+    const gatewayError = isErrorResponse(payload) ? payload.error : undefined;
+    throw new GatewayRequestError(
+      gatewayError?.message ?? `Profile mutation failed（HTTP ${response.status}）`,
+      gatewayError?.code ?? failureCode,
+      response.status,
+      gatewayError?.requestId,
+    );
+  }
+  return payload.data;
+}
+
+async function requestAuthenticatedJson(
+  config: GatewayConfig,
+  path: string,
+  init: RequestInit,
+  fetchImplementation: typeof fetch,
+): Promise<Response> {
+  const token = requireToken(config);
+  return requestJson(
+    path,
+    {
+      ...init,
+      headers: {
+        ...(init.headers ?? {}),
+        ...bearerHeaders(token),
+      },
+    },
+    fetchImplementation,
+  );
+}
+
+async function requestJson(
+  path: string,
+  init: RequestInit,
+  fetchImplementation: typeof fetch,
+): Promise<Response> {
+  try {
+    return await fetchImplementation(path, init);
+  } catch (error) {
+    throw new GatewayRequestError(
+      error instanceof Error && error.name === "AbortError"
+        ? "服务请求已取消"
+        : "无法连接到 Kaguya 服务",
+      "network_error",
+      0,
+    );
+  }
+}
+
 async function readJson(response: Response): Promise<unknown> {
   try {
     return await response.json();
@@ -218,9 +524,30 @@ async function readJson(response: Response): Promise<unknown> {
   }
 }
 
+function requireToken(config: GatewayConfig): string {
+  const token = config.token.trim();
+  if (!token) {
+    throw new GatewayRequestError("请输入服务访问令牌", "missing_token", 0);
+  }
+  return token;
+}
+
+function bearerHeaders(token: string): Record<string, string> {
+  return {
+    authorization: `Bearer ${token}`,
+  };
+}
+
+function jsonHeaders(token: string): Record<string, string> {
+  return {
+    ...bearerHeaders(token),
+    "content-type": "application/json",
+  };
+}
+
 function isAcceptedMessageResponse(
   value: unknown,
-): value is AcceptedMessageResponse {
+): value is { data: AcceptedMessage } {
   if (!isRecord(value) || !isRecord(value.data)) {
     return false;
   }
@@ -235,27 +562,70 @@ function isConfigurationStatusResponse(
   if (!isRecord(value) || !isRecord(value.data)) {
     return false;
   }
-  return [
-    "setup_required",
-    "restart_required",
-    "ready",
-    "invalid",
-    "review_required",
-  ].includes(String(value.data.status));
+  const status = value.data.status;
+  if (
+    ![
+      "setup_required",
+      "restart_required",
+      "ready",
+      "invalid",
+      "review_required",
+    ].includes(String(status))
+  ) {
+    return false;
+  }
+  return isOptionalProfileRegistrySnapshot(value.data);
 }
 
-function isConfigurationSavedResponse(
-  value: unknown,
-): value is { data: ConfigurationSaved } {
+function isOptionalProfileRegistrySnapshot(value: Record<string, unknown>): boolean {
   return (
-    isRecord(value) &&
-    isRecord(value.data) &&
-    value.data.status === "configured" &&
-    value.data.restartRequired === true
+    (value.selectedProfileId === undefined ||
+      typeof value.selectedProfileId === "string") &&
+    (value.profiles === undefined ||
+      Array.isArray(value.profiles)) &&
+    (value.issues === undefined || Array.isArray(value.issues)) &&
+    (value.warnings === undefined || Array.isArray(value.warnings))
   );
 }
 
-function isErrorResponse(value: unknown): value is ErrorResponse {
+function isProfileRegistryMetadataResponse(
+  value: unknown,
+): value is { data: ProfileRegistryMetadata } {
+  if (!isRecord(value) || !isRecord(value.data)) {
+    return false;
+  }
+  return (
+    typeof value.data.selectedProfileId === "string" &&
+    Array.isArray(value.data.profiles)
+  );
+}
+
+function isProfileReadResultResponse(
+  value: unknown,
+): value is { data: ProfileReadResult } {
+  return isRecord(value) && isRecord(value.data) && isRecord(value.data.profile);
+}
+
+function isProfileMutationResultResponse(
+  value: unknown,
+): value is { data: ProfileMutationResult } {
+  return (
+    isRecord(value) &&
+    isRecord(value.data) &&
+    isRecord(value.data.profile) &&
+    typeof value.data.restartRequired === "boolean"
+  );
+}
+
+function isErrorResponse(
+  value: unknown,
+): value is {
+  error: {
+    code: string;
+    message: string;
+    requestId: string;
+  };
+} {
   if (!isRecord(value) || !isRecord(value.error)) {
     return false;
   }
