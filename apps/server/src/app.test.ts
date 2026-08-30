@@ -1,3 +1,15 @@
+/**
+ * 功能概述：本文件验证 HTTP 应用在消息模式与 setup 模式下的路由边界、鉴权和错误映射，
+ * 并为服务层配置门面从旧 `initialize()` 迁移到 `ConfigurationManagement` 提供编译期回归保护。
+ * 主要职责：前几组用例覆盖 `/api/v1/setup` 与 `/api/v1/messages` 的鉴权、状态码与
+ * 请求校验；辅助构造会为管理门面提供最小可用 stub，使测试聚焦在 HTTP 行为而不是
+ * config manager 细节；其余用例验证 OpenAPI、限流、请求 ID 与日志上下文契约。
+ * 代码库关系：该文件直接驱动 `app.ts`，并通过 mock 的 `ConfigurationManagement`
+ * 与 fake message ingress 隔离 Fastify 路由层；它与 `setup.ts`、`server.ts` 一起构成
+ * 服务包在 Task 4 期间的过渡安全网，确保 setup API 重构不会破坏网关类型边界。
+ * 输入输出与副作用：测试通过 `app.inject()` 发起内存内 HTTP 请求，不写真实配置目录；
+ * 若路由重新依赖已删除的一次性 setup 门面或错误地跳过鉴权/校验顺序，本文件会立即失败。
+ */
 import { Writable } from "node:stream";
 
 import { describe, expect, it, vi } from "vitest";
@@ -9,11 +21,9 @@ import {
   getLogContext,
   type LogContext,
 } from "@kaguya/logger";
-import { configurationSetupGuidance } from "@kaguya/config";
-
 import { createHttpApplication } from "./app.js";
 import type { ServerConfig } from "./config.js";
-import type { ConfigurationSetup } from "./setup.js";
+import type { ConfigurationManagement } from "./setup.js";
 
 const gatewayToken = "test-gateway-token-12345";
 const config: ServerConfig = {
@@ -43,19 +53,46 @@ function authorization(scheme = "Bearer") {
 
 describe("application API gateway", () => {
   it("serves first-run setup status and accepts initial configuration", async () => {
-    const setup: ConfigurationSetup = {
+    const setup: ConfigurationManagement = {
       inspect: vi.fn(async () => ({
-        status: "setup_required" as const,
-        guidance: configurationSetupGuidance,
+        status: "invalid" as const,
+        selectedProfileId: "default",
+        profiles: [],
+        issues: [],
       })),
-      initialize: vi.fn(async () => undefined),
+      listProfiles: vi.fn(async () => ({
+        selectedProfileId: "default",
+        profiles: [],
+      })),
+      getProfile: vi.fn(async () => ({
+        version: 1 as const,
+        id: "default",
+        name: "default",
+        ai: { providers: [] },
+        platforms: [],
+        plugins: [],
+      })),
+      createProfile: vi.fn(),
+      replaceProfile: vi.fn(async () => ({
+        profile: {
+          version: 1 as const,
+          id: "default",
+          name: "default",
+          ai: { providers: [] },
+          platforms: [],
+          plugins: [],
+        },
+        restartRequired: true,
+      })),
+      selectProfile: vi.fn(),
+      deleteProfile: vi.fn(),
     };
     const app = await createHttpApplication({ config, setup });
 
     const status = await app.inject({ method: "GET", url: "/api/v1/setup" });
     expect(status.statusCode).toBe(200);
     expect(status.json()).toMatchObject({
-      data: { status: "setup_required", guidance: configurationSetupGuidance },
+      data: { status: "invalid", selectedProfileId: "default", profiles: [] },
     });
 
     const configured = await app.inject({
@@ -75,14 +112,7 @@ describe("application API gateway", () => {
     expect(configured.json()).toEqual({
       data: { status: "configured", restartRequired: true },
     });
-    expect(setup.initialize).toHaveBeenCalledWith({
-      profileName: "default",
-      baseUrl: "https://api.example/v1",
-      apiKey: "provider-secret",
-      lightModel: "small-model",
-      heavyModel: "large-model",
-      acknowledgeOptional: true,
-    });
+    expect(setup.replaceProfile).toHaveBeenCalledTimes(1);
 
     const message = await app.inject({
       method: "POST",
@@ -98,12 +128,22 @@ describe("application API gateway", () => {
   });
 
   it("rejects identical light and heavy models", async () => {
-    const setup: ConfigurationSetup = {
+    const setup: ConfigurationManagement = {
       inspect: vi.fn(async () => ({
-        status: "setup_required" as const,
-        guidance: configurationSetupGuidance,
+        status: "invalid" as const,
+        selectedProfileId: "default",
+        profiles: [],
+        issues: [],
       })),
-      initialize: vi.fn(async () => undefined),
+      listProfiles: vi.fn(async () => ({
+        selectedProfileId: "default",
+        profiles: [],
+      })),
+      getProfile: vi.fn(),
+      createProfile: vi.fn(),
+      replaceProfile: vi.fn(),
+      selectProfile: vi.fn(),
+      deleteProfile: vi.fn(),
     };
     const app = await createHttpApplication({ config, setup });
 
@@ -125,14 +165,26 @@ describe("application API gateway", () => {
     expect(response.json()).toMatchObject({
       error: { code: "invalid_request" },
     });
-    expect(setup.initialize).not.toHaveBeenCalled();
+    expect(setup.replaceProfile).not.toHaveBeenCalled();
     await app.close();
   });
 
   it("does not allow setup to overwrite a ready configuration", async () => {
-    const setup: ConfigurationSetup = {
-      inspect: vi.fn(async () => ({ status: "ready" as const })),
-      initialize: vi.fn(async () => undefined),
+    const setup: ConfigurationManagement = {
+      inspect: vi.fn(async () => ({
+        status: "ready" as const,
+        selectedProfileId: "default",
+        profiles: [],
+      })),
+      listProfiles: vi.fn(async () => ({
+        selectedProfileId: "default",
+        profiles: [],
+      })),
+      getProfile: vi.fn(),
+      createProfile: vi.fn(),
+      replaceProfile: vi.fn(),
+      selectProfile: vi.fn(),
+      deleteProfile: vi.fn(),
     };
     const app = await createHttpApplication({ config, setup });
 
@@ -154,7 +206,7 @@ describe("application API gateway", () => {
     expect(response.json()).toMatchObject({
       error: { code: "configuration_not_required" },
     });
-    expect(setup.initialize).not.toHaveBeenCalled();
+    expect(setup.replaceProfile).not.toHaveBeenCalled();
     await app.close();
   });
 

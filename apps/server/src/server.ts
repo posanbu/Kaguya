@@ -2,12 +2,12 @@
  * 功能概述：本文件是 Kaguya 服务端主入口，负责读取 ServerConfig、组装 HTTP 应用、
  * Web UI、NapCat 连接与 Runtime，并把配置 Registry 中当前选中的 Profile 冻结成
  * 一个供 Runtime 使用的 tier-only 模型解析器。
- * 主要职责：`startKaguyaServer` 协调整体启动/关闭流程与 setup-mode 回退；
- * `createRuntimeModelSelectionResolver` 在启动时打开配置根目录，读取
- * `getSelectedProfileId()`，强制通过 `resolveProfileById(profileId)` 解析且校验该 Profile，
- * 然后闭包出一个只接受 `modelTier` 的 resolver；`openAICompatibleProviderSettings` 提取
- * provider 能力开关；`assertProfileReady` 保持 readiness 错误固定且无 secret；
- * 其余 helper 管理资源关闭与进程信号处理。
+ * 主要职责：`startKaguyaServer` 现在会先创建异步 `ConfigurationManagement`，
+ * 让缺失仓库先完成 bootstrap/open，再根据 selected Profile readiness 决定当前进程是
+ * 正常启动 Runtime，还是进入 setup-mode 暂停 Runtime/NapCat 仅提供配置入口；
+ * `createRuntimeModelSelectionResolver` 继续在启动时读取当前 selected Profile 并校验；
+ * `openAICompatibleProviderSettings` 提取 provider 能力开关；`assertProfileReady`
+ * 保持 readiness 错误固定且无 secret；其余 helper 管理资源关闭与进程信号处理。
  * 代码库关系：本文件消费 `@kaguya/config` 的 Profile Registry、`@kaguya/runtime`
  * 的运行时注入点、Fastify HTTP 组装和 NapCat 适配器；模块层 `packages/modules`
  * 已不再携带 `profileId`，因此 Profile 选择只能在这里于服务启动时完成一次。
@@ -46,7 +46,7 @@ import {
   createNapCatSupervisor,
   type NapCatConnectionSupervisor,
 } from "./napcat.js";
-import { createConfigurationSetup } from "./setup.js";
+import { createConfigurationManagement } from "./setup.js";
 import { registerWebUi, type WebUiHandle } from "./web.js";
 
 export interface StartedKaguyaServer {
@@ -62,21 +62,33 @@ export async function startKaguyaServer(
   const serverLogger = createModuleLogger(rootLogger, "server");
   const httpLogger = createModuleLogger(rootLogger, "server:http");
   const napcatLogger = createModuleLogger(rootLogger, "adapter:napcat");
-  const setup = createConfigurationSetup(config.configRoot);
+  const setup = await createConfigurationManagement(config.configRoot);
+  const setupStatus = await setup.inspect();
   let resolveModelSelection: RuntimeModelSelectionResolver | undefined;
-  try {
-    resolveModelSelection = await createRuntimeModelSelectionResolver(
-      config.configRoot,
-    );
-  } catch (error) {
-    if (!isRecoverableConfigurationError(error)) {
-      await closeLogger(rootLogger);
-      throw error;
+  if (setupStatus.status === "ready") {
+    try {
+      resolveModelSelection = await createRuntimeModelSelectionResolver(
+        config.configRoot,
+      );
+    } catch (error) {
+      if (!isRecoverableConfigurationError(error)) {
+        await closeLogger(rootLogger);
+        throw error;
+      }
+      serverLogger.warn(
+        {
+          event: "server.configuration.required",
+          reason: error.code,
+          setupUrl: `http://${config.host}:${config.port}/`,
+        },
+        "Configuration is not ready; open the Web UI to complete setup",
+      );
     }
+  } else {
     serverLogger.warn(
       {
         event: "server.configuration.required",
-        reason: error.code,
+        reason: setupStatus.status,
         setupUrl: `http://${config.host}:${config.port}/`,
       },
       "Configuration is not ready; open the Web UI to complete setup",

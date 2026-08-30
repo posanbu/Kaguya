@@ -1,3 +1,20 @@
+/**
+ * 功能概述：本文件组装 Kaguya 服务端的 Fastify HTTP 应用，承载匿名健康检查、
+ * OpenAPI 文档、首屏配置状态查询，以及带鉴权的消息入口和临时 setup 写入口。
+ * 主要职责：`createHttpApplication` 注册路由、统一限流/CORS/错误映射，并根据
+ * `runtime` 与 `setup` 是否存在决定服务是处于可处理消息的 ready 模式，还是只暴露
+ * 配置引导能力的 setup 模式；`/api/v1/setup` 当前仍通过
+ * `initializeConfigurationProfile` 调用 `ConfigurationManagement` 的细粒度替换能力，
+ * 作为 Task 4 到 Task 5 之间的兼容桥接；其余 helper 负责请求 ID、鉴权、SPA
+ * fallback 与结构化错误响应。
+ * 代码库关系：本模块消费 `setup.ts` 的配置管理门面与输入校验辅助函数，依赖
+ * `@kaguya/schema` 的 Zod 边界和 `@kaguya/logger` 的请求上下文；`server.ts`
+ * 会把统一创建的 `ConfigurationManagement` 实例传入这里，后续 Task 5 会在本文件上
+ * 扩展正式的 Profile 管理路由，而不是修改底层 config manager。
+ * 输入输出与副作用：运行时会创建 Fastify 实例并注册中间件；setup 路由可能写入
+ * selected Profile 配置但不会启动 Runtime；消息路由仅在 `runtime` 就绪时转发消息，
+ * 否则返回明确的 503 setup-required/core-unavailable 错误。
+ */
 import { randomUUID, timingSafeEqual } from "node:crypto";
 
 import cors from "@fastify/cors";
@@ -17,9 +34,9 @@ import Fastify, {
 
 import type { ServerConfig } from "./config.js";
 import {
+  initializeConfigurationProfile,
   isConfigurationInputError,
-  type ConfigurationSetup,
-  type InitialConfigurationInput,
+  type ConfigurationManagement,
 } from "./setup.js";
 
 const MAX_MESSAGE_TEXT_LENGTH = 131_072;
@@ -140,7 +157,7 @@ const errorResponseJsonSchema = {
 export interface CreateHttpApplicationOptions {
   config: ServerConfig;
   runtime?: RuntimeDispatcher;
-  setup?: ConfigurationSetup;
+  setup?: ConfigurationManagement;
   logger?: FastifyBaseLogger;
 }
 
@@ -296,7 +313,7 @@ export async function createHttpApplication(
       }
       const parsed = setupRequestSchema.parse(request.body);
       try {
-        await setup.initialize(parsed satisfies InitialConfigurationInput);
+        await initializeConfigurationProfile(setup, parsed);
       } catch (error) {
         if (isConfigurationInputError(error)) {
           throw new ApiGatewayError(
