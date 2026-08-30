@@ -88,7 +88,11 @@ const completeProfile: UserConfigProfile = {
     },
   ],
   review: {
-    acknowledgedWarnings: ["platforms-empty", "plugins-empty"],
+    acknowledgedWarnings: [
+      "platforms-empty",
+      "plugins-empty",
+      "custom-warning",
+    ],
   },
 };
 
@@ -142,7 +146,7 @@ describe("mergeProfileEditorFields", () => {
 
     expect(merged).toEqual({
       name: "Production v2",
-      acknowledgedWarnings: [],
+      acknowledgedWarnings: ["custom-warning"],
       ai: {
         defaultProviderId: "default-provider",
         modelTiers: {
@@ -247,5 +251,14 @@ describe("mergeProfileEditorFields", () => {
       platforms: [],
       plugins: [],
     });
+  });
+
+  it("removes only the optional warning ids when the checkbox is cleared", () => {
+    const merged = mergeProfileEditorFields(completeProfile, {
+      ...profileToEditorFields(completeProfile),
+      acknowledgeOptional: false,
+    });
+
+    expect(merged.acknowledgedWarnings).toEqual(["custom-warning"]);
   });
 });

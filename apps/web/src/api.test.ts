@@ -25,6 +25,7 @@ import {
   getConfigurationStatus,
   getProfile,
   listProfiles,
+  initializeConfiguration,
   replaceProfile,
   selectProfile,
   sendMessage,
@@ -240,6 +241,263 @@ describe("configuration setup", () => {
     });
     expect(request).toHaveBeenCalledWith("/api/v1/setup", { method: "GET" });
   });
+
+  it("rejects malformed anonymous setup metadata", async () => {
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        Response.json({
+          data: {
+            status: "invalid",
+            selectedProfileId: { bad: true },
+            profiles: [{ id: "default" }],
+            issues: [{ id: "missing" }],
+            warnings: [{ id: "warn" }],
+          },
+        }),
+      );
+
+    await expect(getConfigurationStatus(request)).rejects.toMatchObject({
+      code: "configuration_status_failed",
+      status: 200,
+    });
+  });
+
+  it("replaces the reserved default profile when the setup name is default", async () => {
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        Response.json(
+          {
+            data: {
+              profile: {
+                version: 1,
+                id: "default",
+                name: "default",
+                ai: { providers: [] },
+                platforms: [],
+                plugins: [],
+              },
+              restartRequired: true,
+            },
+          },
+          { status: 200 },
+        ),
+      );
+
+    await expect(
+      initializeConfiguration(
+        config,
+        {
+          profileName: "default",
+          baseUrl: "https://api.example/v1",
+          apiKey: "provider-secret",
+          lightModel: "light-model",
+          heavyModel: "heavy-model",
+          acknowledgeOptional: true,
+        },
+        request,
+      ),
+    ).resolves.toEqual({ status: "configured", restartRequired: true });
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith("/api/v1/profiles/default", {
+      method: "PUT",
+      headers: {
+        authorization: "Bearer test-gateway-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        name: "default",
+        acknowledgedWarnings: ["platforms-empty", "plugins-empty"],
+        ai: {
+          defaultProviderId: "default-provider",
+          modelTiers: {
+            light: {
+              providerId: "default-provider",
+              modelId: "light-model",
+            },
+            heavy: {
+              providerId: "default-provider",
+              modelId: "heavy-model",
+            },
+          },
+          providers: [
+            {
+              id: "default-provider",
+              type: "openai-compatible",
+              enabled: true,
+              baseUrl: "https://api.example/v1",
+              apiKey: "provider-secret",
+              models: ["light-model", "heavy-model"],
+              settings: {},
+            },
+          ],
+        },
+        platforms: [],
+        plugins: [],
+      }),
+    });
+  });
+
+  it("creates a named profile before replacing it in the compatibility wrapper", async () => {
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            data: {
+              profile: {
+                version: 1,
+                id: "profile-uuid",
+                name: "work",
+                ai: { providers: [] },
+                platforms: [],
+                plugins: [],
+              },
+              restartRequired: false,
+            },
+          },
+          { status: 201 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            data: {
+              profile: {
+                version: 1,
+                id: "profile-uuid",
+                name: "work",
+                ai: { providers: [] },
+                platforms: [],
+                plugins: [],
+              },
+              restartRequired: true,
+            },
+          },
+          { status: 200 },
+        ),
+      );
+
+    await expect(
+      initializeConfiguration(
+        config,
+        {
+          profileName: "work",
+          baseUrl: "https://api.example/v1",
+          apiKey: "provider-secret",
+          lightModel: "light-model",
+          heavyModel: "heavy-model",
+          acknowledgeOptional: true,
+        },
+        request,
+      ),
+    ).resolves.toEqual({ status: "configured", restartRequired: true });
+
+    expect(request).toHaveBeenNthCalledWith(1, "/api/v1/profiles", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer test-gateway-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ name: "work" }),
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "/api/v1/profiles/profile-uuid", {
+      method: "PUT",
+      headers: {
+        authorization: "Bearer test-gateway-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        name: "work",
+        acknowledgedWarnings: ["platforms-empty", "plugins-empty"],
+        ai: {
+          defaultProviderId: "default-provider",
+          modelTiers: {
+            light: {
+              providerId: "default-provider",
+              modelId: "light-model",
+            },
+            heavy: {
+              providerId: "default-provider",
+              modelId: "heavy-model",
+            },
+          },
+          providers: [
+            {
+              id: "default-provider",
+              type: "openai-compatible",
+              enabled: true,
+              baseUrl: "https://api.example/v1",
+              apiKey: "provider-secret",
+              models: ["light-model", "heavy-model"],
+              settings: {},
+            },
+          ],
+        },
+        platforms: [],
+        plugins: [],
+      }),
+    });
+  });
+});
+
+describe("profile response validation", () => {
+  it.each([
+    ["listProfiles", () =>
+      listProfiles(
+        config,
+        vi.fn<typeof fetch>().mockResolvedValue(
+          Response.json({ data: { selectedProfileId: "default", profiles: [{}] } }),
+        ),
+      )],
+    ["createProfile", () =>
+      createProfile(
+        config,
+        { name: "work" },
+        vi.fn<typeof fetch>().mockResolvedValue(
+          Response.json({ data: { profile: {}, restartRequired: false } }, { status: 201 }),
+        ),
+      )],
+    ["getProfile", () =>
+      getProfile(
+        config,
+        "profile-1",
+        vi.fn<typeof fetch>().mockResolvedValue(
+          Response.json({ data: { profile: {} } }),
+        ),
+      )],
+    ["replaceProfile", () =>
+      replaceProfile(
+        config,
+        "profile-1",
+        replacement,
+        vi.fn<typeof fetch>().mockResolvedValue(
+          Response.json({ data: { profile: {}, restartRequired: true } }),
+        ),
+      )],
+    ["selectProfile", () =>
+      selectProfile(
+        config,
+        "profile-1",
+        vi.fn<typeof fetch>().mockResolvedValue(
+          Response.json({ data: { profile: {}, restartRequired: true } }),
+        ),
+      )],
+    ["deleteProfile", () =>
+      deleteProfile(
+        config,
+        "profile-1",
+        vi.fn<typeof fetch>().mockResolvedValue(
+          Response.json({ data: { status: "deleted" } }, { status: 200 }),
+        ),
+      )],
+  ])("rejects malformed responses for %s", async (_, action) => {
+    await expect(action()).rejects.toMatchObject({
+      code: expect.any(String),
+    });
+  });
 });
 
 describe("profile registry requests", () => {
@@ -289,6 +547,7 @@ describe("profile registry requests", () => {
           {
             data: {
               profile: {
+                version: 1,
                 id: "b4fbe71d-68a8-45fd-b180-5f0ef4c4b9ee",
                 name: "work",
                 ai: { providers: [] },
@@ -305,6 +564,7 @@ describe("profile registry requests", () => {
     await expect(createProfile(config, { name: "work" }, request)).resolves.toEqual(
       {
         profile: {
+          version: 1,
           id: "b4fbe71d-68a8-45fd-b180-5f0ef4c4b9ee",
           name: "work",
           ai: { providers: [] },
@@ -330,12 +590,13 @@ describe("profile registry requests", () => {
       .mockResolvedValue(
         Response.json({
           data: {
-            profile: {
-              id: "profile/one",
-              name: "work",
-              ai: { providers: [] },
-              platforms: [],
-              plugins: [],
+              profile: {
+                version: 1,
+                id: "profile/one",
+                name: "work",
+                ai: { providers: [] },
+                platforms: [],
+                plugins: [],
             },
           },
         }),
@@ -343,6 +604,7 @@ describe("profile registry requests", () => {
 
     await expect(getProfile(config, "profile/one", request)).resolves.toEqual({
       profile: {
+        version: 1,
         id: "profile/one",
         name: "work",
         ai: { providers: [] },
@@ -364,11 +626,12 @@ describe("profile registry requests", () => {
       .mockResolvedValue(
         Response.json({
           data: {
-            profile: {
-              id: "profile/one",
-              ...replacement,
-            },
-            restartRequired: true,
+              profile: {
+                version: 1,
+                id: "profile/one",
+                ...replacement,
+              },
+              restartRequired: true,
           },
         }),
       );
@@ -377,6 +640,7 @@ describe("profile registry requests", () => {
       replaceProfile(config, "profile/one", replacement, request),
     ).resolves.toEqual({
       profile: {
+        version: 1,
         id: "profile/one",
         ...replacement,
       },
@@ -398,12 +662,13 @@ describe("profile registry requests", () => {
       .mockResolvedValue(
         Response.json({
           data: {
-            profile: {
-              id: "profile/one",
-              name: "work",
-              ai: { providers: [] },
-              platforms: [],
-              plugins: [],
+              profile: {
+                version: 1,
+                id: "profile/one",
+                name: "work",
+                ai: { providers: [] },
+                platforms: [],
+                plugins: [],
             },
             restartRequired: true,
           },
@@ -412,6 +677,7 @@ describe("profile registry requests", () => {
 
     await expect(selectProfile(config, "profile/one", request)).resolves.toEqual({
       profile: {
+        version: 1,
         id: "profile/one",
         name: "work",
         ai: { providers: [] },

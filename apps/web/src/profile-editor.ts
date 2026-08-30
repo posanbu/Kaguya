@@ -123,9 +123,7 @@ export function mergeProfileEditorFields(
 
   return {
     name: next.name,
-    acknowledgedWarnings: fields.acknowledgeOptional
-      ? computeAcknowledgedWarnings(next)
-      : [],
+    acknowledgedWarnings: computeAcknowledgedWarnings(next, fields.acknowledgeOptional),
     ai: next.ai as ReplaceProfileInput["ai"],
     platforms: next.platforms,
     plugins: next.plugins,
@@ -180,12 +178,21 @@ function ensureEditableProvider(
   return profile.ai.providers[profile.ai.providers.length - 1]!;
 }
 
-function computeAcknowledgedWarnings(profile: MutableProfile): string[] {
-  const warnings = new Set<string>(profile.review?.acknowledgedWarnings ?? []);
-  if (profile.platforms.length === 0) {
+function computeAcknowledgedWarnings(
+  profile: MutableProfile,
+  includeOptionalWarnings: boolean,
+): string[] {
+  const warnings = new Set<string>(
+    (profile.review?.acknowledgedWarnings ?? []).filter(
+      (warningId) =>
+        warningId !== OPTIONAL_WARNING_IDS[0] &&
+        warningId !== OPTIONAL_WARNING_IDS[1],
+    ),
+  );
+  if (includeOptionalWarnings && profile.platforms.length === 0) {
     warnings.add(OPTIONAL_WARNING_IDS[0]);
   }
-  if (profile.plugins.length === 0) {
+  if (includeOptionalWarnings && profile.plugins.length === 0) {
     warnings.add(OPTIONAL_WARNING_IDS[1]);
   }
   return [...warnings];

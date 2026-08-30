@@ -413,14 +413,19 @@ export async function initializeConfiguration(
   input: InitialConfigurationInput,
   fetchImplementation: typeof fetch = fetch,
 ): Promise<ConfigurationSaved> {
-  const created = await createProfile(
-    config,
-    { name: input.profileName },
-    fetchImplementation,
-  );
+  const profileId =
+    input.profileName.trim() === "default"
+      ? "default"
+      : (
+          await createProfile(
+            config,
+            { name: input.profileName },
+            fetchImplementation,
+          )
+        ).profile.id;
   await replaceProfile(
     config,
-    created.profile.id,
+    profileId,
     {
       name: input.profileName,
       acknowledgedWarnings: input.acknowledgeOptional
@@ -574,17 +579,11 @@ function isConfigurationStatusResponse(
   ) {
     return false;
   }
-  return isOptionalProfileRegistrySnapshot(value.data);
-}
-
-function isOptionalProfileRegistrySnapshot(value: Record<string, unknown>): boolean {
   return (
-    (value.selectedProfileId === undefined ||
-      typeof value.selectedProfileId === "string") &&
-    (value.profiles === undefined ||
-      Array.isArray(value.profiles)) &&
-    (value.issues === undefined || Array.isArray(value.issues)) &&
-    (value.warnings === undefined || Array.isArray(value.warnings))
+    isOptionalString(value.data.selectedProfileId) &&
+    isOptionalProfileMetadataArray(value.data.profiles) &&
+    isOptionalConfigurationIssueArray(value.data.issues) &&
+    isOptionalConfigurationWarningArray(value.data.warnings)
   );
 }
 
@@ -596,14 +595,18 @@ function isProfileRegistryMetadataResponse(
   }
   return (
     typeof value.data.selectedProfileId === "string" &&
-    Array.isArray(value.data.profiles)
+    isProfileMetadataArray(value.data.profiles)
   );
 }
 
 function isProfileReadResultResponse(
   value: unknown,
 ): value is { data: ProfileReadResult } {
-  return isRecord(value) && isRecord(value.data) && isRecord(value.data.profile);
+  return (
+    isRecord(value) &&
+    isRecord(value.data) &&
+    isUserConfigProfile(value.data.profile)
+  );
 }
 
 function isProfileMutationResultResponse(
@@ -612,9 +615,101 @@ function isProfileMutationResultResponse(
   return (
     isRecord(value) &&
     isRecord(value.data) &&
-    isRecord(value.data.profile) &&
+    isUserConfigProfile(value.data.profile) &&
     typeof value.data.restartRequired === "boolean"
   );
+}
+
+function isProfileMetadataArray(value: unknown): value is readonly ProfileMetadata[] {
+  return Array.isArray(value) && value.every(isProfileMetadata);
+}
+
+function isOptionalProfileMetadataArray(
+  value: unknown,
+): value is readonly ProfileMetadata[] | undefined {
+  return value === undefined || isProfileMetadataArray(value);
+}
+
+function isProfileMetadata(value: unknown): value is ProfileMetadata {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.name === "string" &&
+    typeof value.createdAt === "string" &&
+    typeof value.updatedAt === "string"
+  );
+}
+
+function isOptionalConfigurationIssueArray(
+  value: unknown,
+): value is readonly ConfigurationIssue[] | undefined {
+  return value === undefined || isConfigurationIssueArray(value);
+}
+
+function isConfigurationIssueArray(
+  value: unknown,
+): value is readonly ConfigurationIssue[] {
+  return Array.isArray(value) && value.every(isConfigurationIssue);
+}
+
+function isConfigurationIssue(value: unknown): value is ConfigurationIssue {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.path === "string" &&
+    typeof value.message === "string"
+  );
+}
+
+function isOptionalConfigurationWarningArray(
+  value: unknown,
+): value is readonly ConfigurationWarning[] | undefined {
+  return value === undefined || isConfigurationWarningArray(value);
+}
+
+function isConfigurationWarningArray(
+  value: unknown,
+): value is readonly ConfigurationWarning[] {
+  return Array.isArray(value) && value.every(isConfigurationWarning);
+}
+
+function isConfigurationWarning(value: unknown): value is ConfigurationWarning {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.path === "string" &&
+    typeof value.message === "string"
+  );
+}
+
+function isOptionalString(value: unknown): value is string | undefined {
+  return value === undefined || typeof value === "string";
+}
+
+function isUserConfigProfile(value: unknown): value is UserConfigProfile {
+  return (
+    isRecord(value) &&
+    value.version === 1 &&
+    typeof value.id === "string" &&
+    typeof value.name === "string" &&
+    isRecord(value.ai) &&
+    Array.isArray(value.ai.providers) &&
+    Array.isArray(value.platforms) &&
+    Array.isArray(value.plugins) &&
+    (value.review === undefined || isProfileReview(value.review))
+  );
+}
+
+function isProfileReview(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.acknowledgedWarnings) &&
+    value.acknowledgedWarnings.every((warning) => typeof warning === "string")
+  );
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return isRecord(value) && !Array.isArray(value);
 }
 
 function isErrorResponse(
