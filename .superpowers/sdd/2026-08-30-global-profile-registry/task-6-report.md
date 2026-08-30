@@ -55,9 +55,31 @@ pnpm --filter @kaguya/web typecheck
 
 Result: both passed.
 
+## FIX ROUND 2
+
+Changed:
+
+- `mergeProfileEditorFields` now keeps only acknowledgements that remain valid after the edited profile is rebuilt, so stale provider warnings fall away while still-valid hidden warnings remain.
+- `apps/web/src/api.ts` now validates nested provider, platform, plugin, model tier, settings, and credentials shapes so malformed nested response shells such as `providers: [null]` are rejected.
+
+Regression tests added:
+
+- Base URL edits remove `provider-base-url-missing:*` while preserving still-valid optional warnings.
+- Clearing the optional checkbox removes only the optional warnings and retains still-valid hidden provider warnings.
+- Nested malformed profile responses are rejected.
+
+Fix verification:
+
+```bash
+pnpm vitest run apps/web/src/api.test.ts apps/web/src/profile-editor.test.ts
+pnpm --filter @kaguya/web typecheck
+```
+
+Result: both passed.
+
 ## SHA
 
-`fb4fd2d`
+`d531ada`
 
 ## Concerns
 
