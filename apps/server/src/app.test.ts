@@ -1,16 +1,22 @@
 /**
- * 功能概述：本文件验证 HTTP 应用在消息模式与 setup 模式下的路由边界、鉴权和错误映射，
- * 并为服务层配置门面从旧 `initialize()` 迁移到 `ConfigurationManagement` 提供编译期回归保护。
- * 主要职责：前几组用例覆盖 `/api/v1/setup` 与 `/api/v1/messages` 的鉴权、状态码、
- * 请求校验以及 setup readiness 竞态映射；辅助构造会为管理门面提供最小可用 stub，
- * 使测试聚焦在 HTTP 行为而不是 config manager 细节；其余用例验证 OpenAPI、限流、
- * 请求 ID 与日志上下文契约。
- * 代码库关系：该文件直接驱动 `app.ts`，并通过 mock 的 `ConfigurationManagement`
- * 与 fake message ingress 隔离 Fastify 路由层；它与 `setup.ts`、`server.ts` 一起构成
- * 服务包在 Task 4 期间的过渡安全网，确保 setup API 重构不会破坏网关类型边界。
- * 输入输出与副作用：测试通过 `app.inject()` 发起内存内 HTTP 请求，不写真实配置目录；
- * 若路由重新依赖已删除的一次性 setup 门面或错误地跳过鉴权/校验顺序，本文件会立即失败。
+ * 功能概述：本文件验证 HTTP 应用在匿名 setup 可见性、带鉴权的 Profile 管理接口、
+ * 消息入口与统一错误映射上的外部契约，确保服务端只暴露显式的全局 Profile Registry
+ * 行为，不再保留临时 setup 写桥接或隐式 default 回退。
+ * 主要职责：前几组用例覆盖 `/api/v1/setup` 仅返回无密钥元数据、`/api/v1/profiles`
+ * 六个能力的鉴权优先级、CRUD/选择/删除语义，以及 `ConfigError` 到 HTTP 状态码和
+ * 业务错误码的映射；其余用例继续保护 `/api/v1/messages`、OpenAPI、限流、请求 ID
+ * 与日志上下文契约不回退。
+ * 代码库关系：该文件直接驱动 `app.ts`，既会用 stub `ConfigurationManagement`
+ * 验证路由层顺序，也会用真实 `createConfigurationManagement` 在临时目录上验证
+ * Profile API 与 `packages/config`/`setup.ts` 的集成行为；它与 `setup.test.ts`、
+ * `server-composition.test.ts` 一起覆盖 Task 5 的服务层收口。
+ * 输入输出与副作用：测试通过 `app.inject()` 发起内存内 HTTP 请求；Profile CRUD
+ * 集成用例会在临时配置目录中落盘 Registry 文件并在结束后删除。若路由泄漏 secret、
+ * 未先鉴权就执行校验，或错误映射偏离契约，本文件会立即失败。
  */
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Writable } from "node:stream";
 
 import { describe, expect, it, vi } from "vitest";
@@ -24,9 +30,14 @@ import {
 } from "@kaguya/logger";
 import { createHttpApplication } from "./app.js";
 import type { ServerConfig } from "./config.js";
-import type { ConfigurationManagement } from "./setup.js";
+import {
+  createConfigurationManagement,
+  type ConfigurationManagement,
+} from "./setup.js";
 
 const gatewayToken = "test-gateway-token-12345";
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const config: ServerConfig = {
   host: "127.0.0.1",
   port: 3000,
@@ -53,13 +64,26 @@ function authorization(scheme = "Bearer") {
 }
 
 describe("application API gateway", () => {
-  it("serves first-run setup status and accepts initial configuration", async () => {
+  it("serves anonymous setup status without secrets", async () => {
     const setup: ConfigurationManagement = {
       inspect: vi.fn(async () => ({
         status: "invalid" as const,
         selectedProfileId: "default",
-        profiles: [],
-        issues: [],
+        profiles: [{ id: "default", name: "default", createdAt: NOW, updatedAt: NOW }],
+        issues: [
+          {
+            id: "default-provider-missing",
+            path: "ai.providers",
+            message: "missing provider",
+          },
+        ],
+        warnings: [
+          {
+            id: "platforms-empty",
+            path: "platforms",
+            message: "platforms empty",
+          },
+        ],
       })),
       listProfiles: vi.fn(async () => ({
         selectedProfileId: "default",
@@ -93,27 +117,17 @@ describe("application API gateway", () => {
     const status = await app.inject({ method: "GET", url: "/api/v1/setup" });
     expect(status.statusCode).toBe(200);
     expect(status.json()).toMatchObject({
-      data: { status: "invalid", selectedProfileId: "default", profiles: [] },
-    });
-
-    const configured = await app.inject({
-      method: "POST",
-      url: "/api/v1/setup",
-      headers: authorization(),
-      payload: {
-        profileName: "default",
-        baseUrl: "https://api.example/v1",
-        apiKey: "provider-secret",
-        lightModel: "small-model",
-        heavyModel: "large-model",
-        acknowledgeOptional: true,
+      data: {
+        status: "invalid",
+        selectedProfileId: "default",
+        profiles: [expect.objectContaining({ id: "default", name: "default" })],
+        issues: [expect.objectContaining({ id: "default-provider-missing" })],
+        warnings: [expect.objectContaining({ id: "platforms-empty" })],
       },
     });
-    expect(configured.statusCode).toBe(201);
-    expect(configured.json()).toEqual({
-      data: { status: "configured", restartRequired: true },
-    });
-    expect(setup.replaceProfile).toHaveBeenCalledTimes(1);
+    expect(status.body).not.toContain("provider-secret");
+    expect(status.body).not.toContain('"apiKey"');
+    expect(status.body).not.toContain('"baseUrl"');
 
     const message = await app.inject({
       method: "POST",
@@ -128,7 +142,7 @@ describe("application API gateway", () => {
     await app.close();
   });
 
-  it("rejects identical light and heavy models", async () => {
+  it("authenticates profile management before path or body validation", async () => {
     const setup: ConfigurationManagement = {
       inspect: vi.fn(async () => ({
         status: "invalid" as const,
@@ -148,6 +162,245 @@ describe("application API gateway", () => {
     };
     const app = await createHttpApplication({ config, setup });
 
+    for (const request of [
+      { method: "GET" as const, url: "/api/v1/profiles" },
+      {
+        method: "POST" as const,
+        url: "/api/v1/profiles",
+        payload: { wrong: true },
+      },
+      { method: "GET" as const, url: "/api/v1/profiles/not-a-profile-id" },
+      {
+        method: "PUT" as const,
+        url: "/api/v1/profiles/not-a-profile-id",
+        payload: { bad: true },
+      },
+      {
+        method: "PUT" as const,
+        url: "/api/v1/profiles/selection",
+        payload: { selectedProfileId: "not-a-profile-id" },
+      },
+      { method: "DELETE" as const, url: "/api/v1/profiles/not-a-profile-id" },
+    ]) {
+      const response = await app.inject(request);
+
+      expect(response.statusCode, `${request.method} ${request.url}`).toBe(401);
+      expect(response.json(), `${request.method} ${request.url}`).toMatchObject({
+        error: { code: "unauthorized" },
+      });
+    }
+    await app.close();
+  });
+
+  it("creates profile without auto-selecting it", async () => {
+    await withManagementApp(async (app, management) => {
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/v1/profiles",
+        headers: authorization(),
+        payload: { name: "work" },
+      });
+
+      expect(created.statusCode).toBe(201);
+      expect(created.json()).toMatchObject({
+        data: {
+          restartRequired: false,
+          profile: {
+            id: expect.stringMatching(UUID_PATTERN),
+            name: "work",
+            ai: { providers: [] },
+            platforms: [],
+            plugins: [],
+          },
+        },
+      });
+      await expect(management.listProfiles()).resolves.toMatchObject({
+        selectedProfileId: "default",
+        profiles: expect.arrayContaining([
+          expect.objectContaining({ id: "default", name: "default" }),
+          expect.objectContaining({ name: "work" }),
+        ]),
+      });
+    });
+  });
+
+  it("reads profile metadata and body by explicit profile id", async () => {
+    await withManagementApp(async (app, management) => {
+      const created = await management.createProfile("work");
+
+      const listed = await app.inject({
+        method: "GET",
+        url: "/api/v1/profiles",
+        headers: authorization(),
+      });
+      const read = await app.inject({
+        method: "GET",
+        url: `/api/v1/profiles/${created.profile.id}`,
+        headers: authorization(),
+      });
+
+      expect(listed.statusCode).toBe(200);
+      expect(listed.json()).toMatchObject({
+        data: {
+          selectedProfileId: "default",
+          profiles: expect.arrayContaining([
+            expect.objectContaining({ id: "default", name: "default" }),
+            expect.objectContaining({ id: created.profile.id, name: "work" }),
+          ]),
+        },
+      });
+      expect(read.statusCode).toBe(200);
+      expect(read.json()).toMatchObject({
+        data: {
+          profile: {
+            id: created.profile.id,
+            name: "work",
+            ai: { providers: [] },
+            platforms: [],
+            plugins: [],
+          },
+        },
+      });
+    });
+  });
+
+  it("replaces profile with the submitted full body", async () => {
+    await withManagementApp(async (app, management) => {
+      const created = await management.createProfile("work");
+      const payload = readyProfileReplacement("work", "light-model", "heavy-model");
+
+      const response = await app.inject({
+        method: "PUT",
+        url: `/api/v1/profiles/${created.profile.id}`,
+        headers: authorization(),
+        payload,
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        data: {
+          restartRequired: false,
+          profile: {
+            id: created.profile.id,
+            name: "work",
+            ai: payload.ai,
+            platforms: [],
+            plugins: [],
+          },
+        },
+      });
+    });
+  });
+
+  it("selects profile explicitly and reports restart requirement", async () => {
+    await withManagementApp(async (app, management) => {
+      const created = await management.createProfile("work");
+      await management.replaceProfile(
+        created.profile.id,
+        readyProfileReplacement("work", "light-model", "heavy-model"),
+      );
+
+      const response = await app.inject({
+        method: "PUT",
+        url: "/api/v1/profiles/selection",
+        headers: authorization(),
+        payload: { selectedProfileId: created.profile.id },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        data: {
+          restartRequired: true,
+          profile: { id: created.profile.id, name: "work" },
+        },
+      });
+      await expect(management.inspect()).resolves.toEqual({
+        status: "restart_required",
+      });
+    });
+  });
+
+  it("deletes an unselected profile", async () => {
+    await withManagementApp(async (app, management) => {
+      const created = await management.createProfile("throwaway");
+
+      const response = await app.inject({
+        method: "DELETE",
+        url: `/api/v1/profiles/${created.profile.id}`,
+        headers: authorization(),
+      });
+
+      expect(response.statusCode).toBe(204);
+      expect(response.body).toBe("");
+      await expect(management.listProfiles()).resolves.toEqual({
+        selectedProfileId: "default",
+        profiles: [expect.objectContaining({ id: "default", name: "default" })],
+      });
+    });
+  });
+
+  it("maps profile validation and manager errors to the documented HTTP responses", async () => {
+    await withManagementApp(async (app, management) => {
+      const created = await management.createProfile("work");
+      const unknownProfileId = "22222222-2222-4222-8222-222222222222";
+
+      const invalidId = await app.inject({
+        method: "GET",
+        url: "/api/v1/profiles/not-a-profile-id",
+        headers: authorization(),
+      });
+      const unknown = await app.inject({
+        method: "GET",
+        url: `/api/v1/profiles/${unknownProfileId}`,
+        headers: authorization(),
+      });
+      const duplicateName = await app.inject({
+        method: "POST",
+        url: "/api/v1/profiles",
+        headers: authorization(),
+        payload: { name: "work" },
+      });
+      const protectedDelete = await app.inject({
+        method: "DELETE",
+        url: "/api/v1/profiles/default",
+        headers: authorization(),
+      });
+      await management.selectProfile(created.profile.id);
+      const inUseDelete = await app.inject({
+        method: "DELETE",
+        url: `/api/v1/profiles/${created.profile.id}`,
+        headers: authorization(),
+      });
+
+      expect(invalidId.statusCode).toBe(400);
+      expect(invalidId.json()).toMatchObject({
+        error: { code: "profile_invalid" },
+      });
+      expect(unknown.statusCode).toBe(404);
+      expect(unknown.json()).toMatchObject({
+        error: { code: "profile_not_found" },
+      });
+      expect(duplicateName.statusCode).toBe(409);
+      expect(duplicateName.json()).toMatchObject({
+        error: { code: "profile_name_conflict" },
+      });
+      expect(protectedDelete.statusCode).toBe(409);
+      expect(protectedDelete.json()).toMatchObject({
+        error: { code: "profile_protected" },
+      });
+      expect(inUseDelete.statusCode).toBe(409);
+      expect(inUseDelete.json()).toMatchObject({
+        error: { code: "profile_in_use" },
+      });
+    });
+  });
+
+  it("removes the temporary setup write endpoint", async () => {
+    const app = await createApiGateway({
+      config,
+      setup: stubManagement(),
+    });
+
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/setup",
@@ -156,113 +409,24 @@ describe("application API gateway", () => {
         profileName: "default",
         baseUrl: "https://api.example/v1",
         apiKey: "provider-secret",
-        lightModel: "same-model",
-        heavyModel: "same-model",
+        lightModel: "small-model",
+        heavyModel: "large-model",
         acknowledgeOptional: true,
       },
     });
 
-    expect(response.statusCode).toBe(400);
+    expect(response.statusCode).toBe(404);
     expect(response.json()).toMatchObject({
-      error: { code: "invalid_request" },
+      error: { code: "not_found", message: "Route not found" },
     });
-    expect(setup.replaceProfile).not.toHaveBeenCalled();
     await app.close();
   });
 
-  it("does not allow setup to overwrite a ready configuration", async () => {
-    const setup: ConfigurationManagement = {
-      inspect: vi.fn(async () => ({
-        status: "ready" as const,
-        selectedProfileId: "default",
-        profiles: [],
-      })),
-      listProfiles: vi.fn(async () => ({
-        selectedProfileId: "default",
-        profiles: [],
-      })),
-      getProfile: vi.fn(),
-      createProfile: vi.fn(),
-      replaceProfile: vi.fn(),
-      selectProfile: vi.fn(),
-      deleteProfile: vi.fn(),
-    };
-    const app = await createHttpApplication({ config, setup });
-
-    const response = await app.inject({
-      method: "POST",
-      url: "/api/v1/setup",
-      headers: authorization(),
-      payload: {
-        profileName: "replacement",
-        baseUrl: "https://api.example/v1",
-        apiKey: "replacement-secret",
-        lightModel: "replacement-light",
-        heavyModel: "replacement-heavy",
-        acknowledgeOptional: true,
-      },
-    });
-
-    expect(response.statusCode).toBe(409);
-    expect(response.json()).toMatchObject({
-      error: { code: "configuration_not_required" },
-    });
-    expect(setup.replaceProfile).not.toHaveBeenCalled();
-    await app.close();
-  });
-
-  it("maps a setup readiness race to configuration_not_required", async () => {
-    const setup: ConfigurationManagement = {
-      inspect: vi
-        .fn<ConfigurationManagement["inspect"]>()
-        .mockResolvedValueOnce({
-          status: "invalid",
-          selectedProfileId: "default",
-          profiles: [],
-          issues: [],
-        })
-        .mockResolvedValueOnce({
-          status: "restart_required",
-        }),
-      listProfiles: vi.fn(async () => ({
-        selectedProfileId: "default",
-        profiles: [],
-      })),
-      getProfile: vi.fn(),
-      createProfile: vi.fn(),
-      replaceProfile: vi.fn(),
-      selectProfile: vi.fn(),
-      deleteProfile: vi.fn(),
-    };
-    const app = await createHttpApplication({ config, setup });
-
-    const response = await app.inject({
-      method: "POST",
-      url: "/api/v1/setup",
-      headers: authorization(),
-      payload: {
-        profileName: "replacement",
-        baseUrl: "https://api.example/v1",
-        apiKey: "replacement-secret",
-        lightModel: "replacement-light",
-        heavyModel: "replacement-heavy",
-        acknowledgeOptional: true,
-      },
-    });
-
-    expect(response.statusCode).toBe(409);
-    expect(response.json()).toMatchObject({
-      error: { code: "configuration_not_required" },
-    });
-    expect(setup.inspect).toHaveBeenCalledTimes(2);
-    expect(setup.replaceProfile).not.toHaveBeenCalled();
-    await app.close();
-  });
-
-  it("exposes health, OpenAPI, and only the core message ingress contract", async () => {
+  it("exposes health, OpenAPI, and the profile plus message contracts", async () => {
     const app = await createApiGateway({
       config,
       messageIngress: fakeIngress(),
+      setup: stubManagement(),
     });
 
     const health = await app.inject({ method: "GET", url: "/healthz" });
@@ -278,6 +442,41 @@ describe("application API gateway", () => {
     expect(document).toMatchObject({
       info: { title: "Kaguya Application API", version: "1.0.0" },
       paths: {
+        "/api/v1/profiles": {
+          get: { security: [{ bearerAuth: [] }] },
+          post: {
+            security: [{ bearerAuth: [] }],
+            requestBody: {
+              content: {
+                "application/json": {
+                  schema: {
+                    required: ["name"],
+                    properties: { name: { type: "string" } },
+                  },
+                },
+              },
+            },
+          },
+        },
+        "/api/v1/profiles/{profileId}": {
+          get: { security: [{ bearerAuth: [] }] },
+          put: { security: [{ bearerAuth: [] }] },
+          delete: { security: [{ bearerAuth: [] }] },
+        },
+        "/api/v1/profiles/selection": {
+          put: {
+            security: [{ bearerAuth: [] }],
+            requestBody: {
+              content: {
+                "application/json": {
+                  schema: {
+                    required: ["selectedProfileId"],
+                  },
+                },
+              },
+            },
+          },
+        },
         "/api/v1/messages": {
           post: {
             security: [{ bearerAuth: [] }],
@@ -355,7 +554,7 @@ describe("application API gateway", () => {
       },
     });
     const serialized = JSON.stringify(document);
-    expect(serialized).not.toContain("/api/v1/llm/chat");
+    expect(serialized).not.toContain("/api/v1/setup");
     expect(serialized).not.toContain('"apiKey"');
     expect(serialized).not.toContain('"baseUrl"');
     expect(serialized).not.toContain('"model"');
@@ -785,6 +984,7 @@ interface MessageIngress {
 function createApiGateway(options: {
   config: ServerConfig;
   messageIngress?: MessageIngress;
+  setup?: ConfigurationManagement;
   logger?: Parameters<typeof createHttpApplication>[0]["logger"];
 }) {
   const runtime =
@@ -801,6 +1001,7 @@ function createApiGateway(options: {
   return createHttpApplication({
     config: options.config,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
+    ...(options.setup === undefined ? {} : { setup: options.setup }),
     ...(runtime === undefined ? {} : { runtime }),
   });
 }
@@ -840,4 +1041,81 @@ class LogStream extends Writable {
       .filter(Boolean)
       .map((line) => JSON.parse(line) as Record<string, unknown>);
   }
+}
+
+const NOW = "2026-08-30T00:00:00.000Z";
+
+async function withManagementApp(
+  assertion: (
+    app: Awaited<ReturnType<typeof createApiGateway>>,
+    management: ConfigurationManagement,
+  ) => Promise<void>,
+) {
+  const root = await mkdtemp(join(tmpdir(), "kaguya-app-test-"));
+  const management = await createConfigurationManagement(root);
+  const app = await createApiGateway({ config, setup: management });
+  try {
+    await assertion(app, management);
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+function stubManagement(): ConfigurationManagement {
+  return {
+    inspect: vi.fn(async () => ({
+      status: "invalid" as const,
+      selectedProfileId: "default",
+      profiles: [{ id: "default", name: "default", createdAt: NOW, updatedAt: NOW }],
+      issues: [],
+    })),
+    listProfiles: vi.fn(async () => ({
+      selectedProfileId: "default",
+      profiles: [{ id: "default", name: "default", createdAt: NOW, updatedAt: NOW }],
+    })),
+    getProfile: vi.fn(async () => ({
+      version: 1 as const,
+      id: "default",
+      name: "default",
+      ai: { providers: [] },
+      platforms: [],
+      plugins: [],
+    })),
+    createProfile: vi.fn(),
+    replaceProfile: vi.fn(),
+    selectProfile: vi.fn(),
+    deleteProfile: vi.fn(),
+  };
+}
+
+function readyProfileReplacement(
+  name: string,
+  lightModelId: string,
+  heavyModelId: string,
+) {
+  return {
+    name,
+    acknowledgedWarnings: ["platforms-empty", "plugins-empty"],
+    ai: {
+      defaultProviderId: "provider-1",
+      modelTiers: {
+        light: { providerId: "provider-1", modelId: lightModelId },
+        heavy: { providerId: "provider-1", modelId: heavyModelId },
+      },
+      providers: [
+        {
+          id: "provider-1",
+          type: "openai-compatible" as const,
+          enabled: true,
+          apiKey: "provider-key",
+          baseUrl: "https://llm.example/v1",
+          models: [lightModelId, heavyModelId],
+          settings: {},
+        },
+      ],
+    },
+    platforms: [],
+    plugins: [],
+  };
 }
