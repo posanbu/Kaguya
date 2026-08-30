@@ -66,7 +66,7 @@ NapCat 配置：
 - `PUT /api/v1/profiles/selection`
 - `DELETE /api/v1/profiles/:profileId`
 
-全新配置根会先通过 bootstrap 创建保留的空 `default` Profile，并把 `selectedProfileId` 设为 `"default"`。之后，用户可以配置 `default`，或者先创建并命名新的 Profile，再显式选择它。如果保存或切换后，当前 selected Profile 仍然是 `invalid` 或 `review_required`，页面会继续停留在 readiness 引导状态，而不会提示重启。只有当 selected Profile 已经 ready，且持久化后的 selection 或配置与当前运行时冻结快照不同，页面才会进入 `restart_required`；只有重启 Server，Runtime 才会在新的启动周期里重新冻结全局 Profile、模型客户端和平台连接。
+全新配置根会先通过 bootstrap 创建保留的空 `default` Profile，并把 `selectedProfileId` 设为 `"default"`。之后，用户可以配置 `default`，或者先创建并命名新的 Profile，再显式选择它。如果保存或切换后，当前 selected Profile 仍然是 `invalid` 或 `review_required`，页面会继续停留在 readiness 引导状态，而不会提示重启。选择某个 Profile，或完整替换当前 selected Profile，都会锁存一次重启要求；只有当该 selected Profile 已经 ready 时，页面才会进入 `restart_required`。只有重启 Server，Runtime 才会在新的启动周期里重新加载全局 Profile、模型客户端和平台连接。
 
 配置文件损坏、路径越界、符号链接或权限错误不属于可自动修复的“缺失配置”，Server 会拒绝启动并保留原文件，避免引导流程覆盖需要人工恢复的数据。`KAGUYA_GATEWAY_TOKEN` 仍是启动 HTTP 前必须提供的安全凭据；匿名 setup 模式不能读取完整 Profile，也不能写入配置。
 

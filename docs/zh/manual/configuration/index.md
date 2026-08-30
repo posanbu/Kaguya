@@ -29,7 +29,7 @@ Server 配置新增三个逗号分隔的环境变量：
 
 对于全新配置根，显式 bootstrap 会创建保留的空 `default` Profile，并将 `selectedProfileId` 设为 `"default"`。用户随后可以配置 `default`，或者创建新的命名 Profile，再单独选择它。
 
-Web UI 会在聊天界面之前检查 setup 状态。需要配置时会进入 Profile 管理界面，按 `profileId` 加载当前 Profile，并在完整正文基础上编辑，而不是用空表单覆盖未显示字段。API Key 不写入浏览器存储。如果保存或切换后，当前 selected Profile 仍然处于 `invalid` 或 `review_required`，页面会继续展示 readiness issues 与 warnings，而不会提示重启。只有当 selected Profile 已经 ready，且持久化后的全局选择或配置与 Runtime 启动时冻结的快照不同，页面才会进入 `restart_required`，要求用户重启 Server，使 Runtime 在新的启动周期里重新冻结 selected Profile 并创建模型客户端。
+Web UI 会在聊天界面之前检查 setup 状态。需要配置时会进入 Profile 管理界面，按 `profileId` 加载当前 Profile，并在完整正文基础上编辑，而不是用空表单覆盖未显示字段。API Key 不写入浏览器存储。如果保存或切换后，当前 selected Profile 仍然处于 `invalid` 或 `review_required`，页面会继续展示 readiness issues 与 warnings，而不会提示重启。选择某个 Profile，或完整替换当前 selected Profile，都会锁存一次重启要求；只有当该 selected Profile 已经 ready 时，页面才会进入 `restart_required`，要求用户重启 Server，使 Runtime 在下一个启动周期里加载该 selected Profile 并创建模型客户端。
 
 ## 安全边界没有被配置便利性削弱
 
@@ -39,4 +39,4 @@ Web UI 会在聊天界面之前检查 setup 状态。需要配置时会进入 Pr
 
 ## 文档与验证
 
-当前生效的配置文档与服务端文档都已经统一到 v3 registry 契约：运行时只有一个显式的 `selectedProfileId`，`GET /api/v1/setup` 只暴露 setup 状态，Profile 创建/读取/替换/选择/删除全部通过 `/api/v1/profiles*` 完成；只有当 ready 的 selected Profile 与当前运行快照不同，页面才会进入 `restart_required`，并在重启后真正进入 Runtime。
+当前生效的配置文档与服务端文档都已经统一到 v3 registry 契约：运行时只有一个显式的 `selectedProfileId`，`GET /api/v1/setup` 只暴露 setup 状态，Profile 创建/读取/替换/选择/删除全部通过 `/api/v1/profiles*` 完成；当用户选择某个 Profile，或替换当前 selected Profile 后，只要该 selected Profile 已 ready，页面就会进入 `restart_required`，并在重启后真正进入 Runtime。
