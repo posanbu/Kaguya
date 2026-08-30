@@ -1,14 +1,32 @@
 ---
 layout: home
-title: Kaguya 文档
----
+title: Kaguya Documentation
+sidebar: false
+outline: false
 
-<div style="text-align:center;padding:6rem 1rem">
-  <h1>Kaguya 文档</h1>
-  <p>事件驱动、模块可插拔的 TypeScript AI Bot Runtime。</p>
-  <p>
-    <a href="/Kaguya/zh/">进入中文文档</a>
-    ·
-    <a href="/Kaguya/en/">Read the English documentation</a>
-  </p>
-</div>
+hero:
+  name: Kaguya
+  text: Documentation
+  tagline: Choose a language to enter the documentation framework.
+  image:
+    src: /kaguya-mark.svg
+    alt: Kaguya
+  actions:
+    - theme: brand
+      text: 简体中文
+      link: /zh/
+    - theme: alt
+      text: English
+      link: /en/
+
+features:
+  - icon: 📖
+    title: Structured content
+    details: Guides, development notes, references, and project information have dedicated sections.
+  - icon: 🌐
+    title: Mirrored languages
+    details: Chinese and English content follow the same information architecture.
+  - icon: 🧭
+    title: Three-level navigation
+    details: Top navigation, section sidebar, and an independent page outline work together.
+---

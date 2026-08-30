@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">Kaguya</title>
+  <desc id="desc">A crescent moon and a small star in a violet circle</desc>
+  <defs>
+    <linearGradient id="bg" x1="18" y1="12" x2="108" y2="118" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7258e8"/>
+      <stop offset="0.58" stop-color="#a65ad1"/>
+      <stop offset="1" stop-color="#35b6a0"/>
+    </linearGradient>
+  </defs>
+  <circle cx="64" cy="64" r="58" fill="url(#bg)"/>
+  <path d="M79 30c-19 4-32 21-30 40 2 18 17 31 35 32-8 6-18 9-29 7-24-4-40-26-36-50 4-23 26-39 49-35 4 1 8 3 11 6Z" fill="#fff" opacity=".94"/>
+  <path d="m91 42 3.7 8.4L103 54l-8.3 3.6L91 66l-3.7-8.4L79 54l8.3-3.6L91 42Z" fill="#fff"/>
+</svg>
