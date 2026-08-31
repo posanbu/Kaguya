@@ -151,9 +151,9 @@ export class FileUserConfigManager {
     const indexPath = join(rootDir, "index.json");
 
     assertPathInside(rootDir, rootDir);
+    await assertBootstrapableRoot(rootDir, indexPath);
     assertPathInside(rootDir, profilesDir);
     assertPathInside(rootDir, indexPath);
-    await assertBootstrapableRoot(rootDir, indexPath);
 
     await ensureSensitiveDirectory(rootDir);
     await ensureSensitiveDirectory(profilesDir);

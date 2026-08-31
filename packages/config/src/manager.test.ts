@@ -325,8 +325,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
       await expect(
         FileUserConfigManager.bootstrap({ rootDir }),
       ).rejects.toMatchObject({
-        code:
-          fixture === "CONFIG_INVALID_INPUT",
+        code: "CONFIG_INVALID_INPUT",
       });
 
       await expect(
