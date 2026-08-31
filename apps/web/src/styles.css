@@ -492,7 +492,8 @@ button:disabled {
   font-size: 11px;
 }
 
-.delivery-status.accepted {
+.delivery-status.awaiting,
+.delivery-status.settled {
   color: #24724b;
 }
 

@@ -24,8 +24,12 @@ SQLite 格式都不再维护对话分组标识。旧配置索引和旧数据库�
 
 ## 当前约束
 
-- 暂时保留 `messageId`、`eventId`、`traceId` 和 Web `requestId`，后续 Issues
-  再按信息原子和 DAG 契约收敛。
+- 暂时保留 `messageId`、`eventId`、`traceId`、Web `requestId` 和 Web `sessionId`，
+  后续 Issues 再按信息原子和 DAG 契约收敛。
+- Web `sessionId` 是过渡性的 metadata-only 会话键：只存于 `messages.metadata_json`
+  （无新列、无迁移），供会话查询接口全表 `json_extract` 扫描。它是 Web 入口的限定
+  例外，不参与平台分组语义；#38+ 信息原子落地后预期与 `requestId` 一起收敛。
+  未来可考虑生成列索引替代全扫描（需数据库迁移，当前不做）。
 - 平台 sender、group、平台 message ID 只属于来源和投递信息，不作为 Core 分组键。
 - 当前没有持久事件队列、自动重试、去重、热更新、模块沙箱或旧 Memory 占位工作流。
 - 新能力必须继续遵守严格 schema、因果链保护、Prompt provenance、结构化日志脱敏

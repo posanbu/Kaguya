@@ -1,6 +1,6 @@
 # Web UI
 
-`apps/web` 是统一 Kaguya Server 内提供的 React/Vite 客户端。它不再运行独立的开发服务，也不接受网关地址配置；健康检查和消息提交始终使用同源相对路径 `/healthz` 与 `/api/v1/messages`。
+`apps/web` 是统一 Kaguya Server 内提供的 React/Vite 客户端。它不再运行独立的开发服务，也不接受网关地址配置；健康检查、消息提交和会话查询始终使用同源相对路径 `/healthz`、`/api/v1/messages` 与 `/api/v1/sessions/:sessionId`。
 
 ## 启动
 
@@ -24,6 +24,7 @@ pnpm dev
 | 数据         | 存储                                      | 生命周期             |
 | ------------ | ----------------------------------------- | -------------------- |
 | Bearer Token | `sessionStorage` 的 `kaguya.gatewayToken` | 仅当前标签页         |
+| 会话 ID      | `sessionStorage` 的 `kaguya.sessionId`    | 仅当前标签页         |
 | Server 地址  | 不存储                                    | 始终使用页面同源地址 |
 
 Token 不应写入 `VITE_*` 环境变量，因为这类值会被打包进浏览器产物。
@@ -32,7 +33,9 @@ Token 不应写入 `VITE_*` 环境变量，因为这类值会被打包进浏览�
 
 - 检测统一服务健康状态；
 - 在发送前校验 Token、空消息和消息长度；
-- 展示提交中、Server 已接受和提交失败状态；
+- 展示提交中、Server 已接受且等待回复、已回复和失败状态；
+- 进入聊天时恢复当前标签页的会话历史；
+- 通过轮询展示核心层持久化的 `assistant` 回复（左对齐气泡）；
 - 展示 API 返回的结构化错误；
 - 适配桌面和移动布局。
 
@@ -40,7 +43,11 @@ UI 不接收 provider、模型、API key 或 base URL。模型和工作流由 Se
 
 ## 响应边界
 
-消息 API 保留 `202 accepted`，没有回复查询或 SSE，因此页面只展示提交状态，不伪造机器人回答。Runtime 会把确定性回复写入同一 SQLite；只有平台入站携带 reply sender 时，工作流才把回复投递到平台。
+`202 accepted` 表示消息已持久化：用户消息写入 SQLite 后接口立即返回，LLM 回复在后台生成并由核心层持久化为 `assistant` 消息。页面不伪造机器人回答——回复出现之前只显示「等待回复」状态。
+
+收到 `202` 后，页面每 2.5 秒查询一次 `GET /api/v1/sessions/:sessionId`；当对应 `requestId` 的 `assistant` 消息出现时，以左对齐气泡展示，用户消息从「等待回复」转为「Server 已接收」。轮询在以下任一条件停止：全部未确认请求都收到回复；`202` 后 300 秒仍无回复（气泡标记「等待回复超时」）；或返回 401（停止轮询并显示表单错误）。标签页隐藏时暂停轮询，回到前台恢复。
+
+`sessionId` 存放在 `sessionStorage`，每个标签页独立：同一标签页刷新会恢复历史，第二个标签页开启新会话。Web 会话 ID 只存在于消息 `metadata_json`，不参与平台分组语义，也不是事件 payload 的一部分。
 
 ## 排障
 
@@ -48,4 +55,5 @@ UI 不接收 provider、模型、API key 或 base URL。模型和工作流由 Se
 - 健康检查失败：确认浏览器访问的就是 `KAGUYA_HOST:KAGUYA_PORT`，页面不支持另填网关地址；
 - 返回 401：页面中填写的 Token 必须与 Server 的 `KAGUYA_GATEWAY_TOKEN` 完全一致；
 - 页面可用但 NapCat 无响应：检查 `adapter:napcat` 日志；平台连接状态不影响 Web UI；
-- 深层页面生产环境 404：确认 `apps/web/dist/index.html` 存在并由 `pnpm build` 生成。
+- 深层页面生产环境 404：确认 `apps/web/dist/index.html` 存在并由 `pnpm build` 生成；
+- 回复长时间不出现：先确认 `202` 已返回且用户消息可见，再在 Server 日志中查找 `message.processing.failed`（含 traceId `webui-${requestId}`）与对应 LLM trace；回复生成失败时该会话只会保留用户消息。

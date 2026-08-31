@@ -110,4 +110,4 @@ packages/sdk/       事件、模块、节点与工作流定义 API
 
 ## 当前边界
 
-模块是受信任的同进程代码，可向任意已注册 transport destination 发消息。系统没有持久事件队列、重试、去重、热更新或模块沙箱。HTTP 消息只携带文本；`202 accepted` 不返回模型回答，也不会自动推导 Web 出站地址。旧配置索引和旧 SQLite 格式会被明确拒绝，不会自动迁移或删除。
+模块是受信任的同进程代码，可向任意已注册 transport destination 发消息。系统没有持久事件队列、重试、去重、热更新或模块沙箱。HTTP 消息携带文本与可选 `sessionId`；`202 accepted` 表示消息已持久化，模型回答在后台生成后由核心层持久化，通过会话查询接口 `GET /api/v1/sessions/:sessionId` 获取。旧配置索引和旧 SQLite 格式会被明确拒绝，不会自动迁移或删除。
