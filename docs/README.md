@@ -17,15 +17,15 @@
 使用仓库声明的 Node.js 24.18.0 和 pnpm 11.9.0，在本目录执行：
 
 ```bash
-pnpm install --ignore-workspace
-pnpm --ignore-workspace docs:dev
+pnpm install
+pnpm docs:dev
 ```
 
 生产构建和预览：
 
 ```bash
-pnpm --ignore-workspace docs:build
-pnpm --ignore-workspace docs:preview
+pnpm docs:build
+pnpm docs:preview
 ```
 
 GitHub Pages 使用 `/Kaguya/` 基础路径。

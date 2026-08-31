@@ -2,7 +2,7 @@
   "name": "@kaguya/docs",
   "version": "0.1.0",
   "private": true,
-  "description": "Kaguya multilingual documentation site",
+  "description": "Kaguya Chinese documentation site",
   "scripts": {
     "docs:dev": "vitepress dev",
     "docs:build": "vitepress build",
@@ -10,9 +10,14 @@
     "docs:check": "vitepress build"
   },
   "devDependencies": {
+    "@braintree/sanitize-url": "7.1.2",
     "@nolebase/vitepress-plugin-enhanced-readabilities": "^2.18.2",
     "@nolebase/vitepress-plugin-inline-link-preview": "^2.18.2",
     "@types/dom-view-transitions": "^1.0.6",
+    "cytoscape": "3.33.2",
+    "cytoscape-cose-bilkent": "4.1.0",
+    "dayjs": "1.11.20",
+    "debug": "4.4.3",
     "medium-zoom": "^1.1.0",
     "mermaid": "^11.12.3",
     "nprogress-v2": "^1.1.10",

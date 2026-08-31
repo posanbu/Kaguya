@@ -12,3 +12,4 @@ coverage/
 .DS_Store
 .worktrees/
 init.sh
+docs/.vitepress/cache/
