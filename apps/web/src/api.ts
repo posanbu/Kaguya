@@ -6,26 +6,11 @@ export interface GatewayConfig {
 
 export interface SendMessageInput {
   readonly text: string;
-  readonly sessionId?: string;
 }
 
 export interface AcceptedMessage {
   readonly status: "accepted";
   readonly requestId: string;
-  readonly sessionId: string;
-}
-
-export interface SessionMessageView {
-  readonly id: string;
-  readonly role: "user" | "assistant";
-  readonly content: string;
-  readonly occurredAt: string;
-  readonly requestId?: string;
-}
-
-export interface SessionMessages {
-  readonly sessionId: string;
-  readonly messages: readonly SessionMessageView[];
 }
 
 export type ConfigurationStatus =
@@ -194,11 +179,7 @@ export async function sendMessage(
         "content-type": "application/json",
         "x-request-id": crypto.randomUUID(),
       },
-      body: JSON.stringify(
-        input.sessionId === undefined
-          ? { text: input.text }
-          : { text: input.text, sessionId: input.sessionId },
-      ),
+      body: JSON.stringify({ text: input.text }),
     });
   } catch (error) {
     throw new GatewayRequestError(
@@ -230,59 +211,6 @@ export async function sendMessage(
   return payload.data;
 }
 
-export async function fetchSessionMessages(
-  config: GatewayConfig,
-  sessionId: string,
-  fetchImplementation: typeof fetch = fetch,
-): Promise<SessionMessages> {
-  const token = config.token.trim();
-
-  if (!token) {
-    throw new GatewayRequestError("请输入服务访问令牌", "missing_token", 0);
-  }
-  if (!sessionId.trim()) {
-    throw new GatewayRequestError("缺少会话标识", "missing_session", 0);
-  }
-
-  let response: Response;
-  try {
-    response = await fetchImplementation(
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
-      {
-        method: "GET",
-        headers: { authorization: `Bearer ${token}` },
-      },
-    );
-  } catch (error) {
-    throw new GatewayRequestError(
-      error instanceof Error && error.name === "AbortError"
-        ? "服务请求已取消"
-        : "无法连接到 Kaguya 服务",
-      "network_error",
-      0,
-    );
-  }
-
-  const payload = await readJson(response);
-  if (!response.ok) {
-    const gatewayError = isErrorResponse(payload) ? payload.error : undefined;
-    throw new GatewayRequestError(
-      gatewayError?.message ?? `查询会话失败（HTTP ${response.status}）`,
-      gatewayError?.code ?? "gateway_error",
-      response.status,
-      gatewayError?.requestId,
-    );
-  }
-  if (!isSessionMessagesResponse(payload, sessionId)) {
-    throw new GatewayRequestError(
-      "服务返回了无法识别的会话响应",
-      "invalid_response",
-      response.status,
-    );
-  }
-  return payload.data;
-}
-
 async function readJson(response: Response): Promise<unknown> {
   try {
     return await response.json();
@@ -298,41 +226,8 @@ function isAcceptedMessageResponse(
     return false;
   }
   return (
-    value.data.status === "accepted" &&
-    typeof value.data.requestId === "string" &&
-    typeof value.data.sessionId === "string"
+    value.data.status === "accepted" && typeof value.data.requestId === "string"
   );
-}
-
-interface SessionMessagesResponse {
-  data: SessionMessages;
-}
-
-function isSessionMessagesResponse(
-  value: unknown,
-  sessionId: string,
-): value is SessionMessagesResponse {
-  if (!isRecord(value) || !isRecord(value.data)) {
-    return false;
-  }
-  if (
-    value.data.sessionId !== sessionId ||
-    !Array.isArray(value.data.messages)
-  ) {
-    return false;
-  }
-  return value.data.messages.every((message) => {
-    if (!isRecord(message)) {
-      return false;
-    }
-    return (
-      typeof message.id === "string" &&
-      (message.role === "user" || message.role === "assistant") &&
-      typeof message.content === "string" &&
-      typeof message.occurredAt === "string" &&
-      (message.requestId === undefined || typeof message.requestId === "string")
-    );
-  });
 }
 
 function isConfigurationStatusResponse(

@@ -58,14 +58,13 @@ function config(databasePath: string): ServerConfig {
 }
 
 describe("unified server composition", () => {
-  it("dispatches Web messages through the shared Runtime", async () => {
+  it("enqueues Web messages through the shared Runtime", async () => {
     const databasePath = tempDatabasePath();
     const runtime = new KaguyaRuntime({ databasePath });
     await runtime.start();
     const app = await createHttpApplication({
       config: config(databasePath),
       messageIngress: runtime,
-      sessionMessages: runtime,
     });
 
     const response = await app.inject({
@@ -77,13 +76,12 @@ describe("unified server composition", () => {
       },
       payload: {
         text: "Hello from the browser",
-        sessionId: "composition-session",
       },
     });
 
     expect(response.statusCode).toBe(202);
     expect(response.json()).toMatchObject({
-      data: { status: "accepted", sessionId: "composition-session" },
+      data: { status: "accepted", requestId: "request-server-1" },
     });
     await app.close();
     await runtime.close();
@@ -92,12 +90,7 @@ describe("unified server composition", () => {
     try {
       expect(
         database.messages.listRecent(10).map((message) => message.role),
-      ).toEqual(["assistant", "user"]);
-      expect(
-        database.messages
-          .listBySession("composition-session", 10)
-          .map((message) => message.role),
-      ).toEqual(["user", "assistant"]);
+      ).toEqual(["user"]);
       expect(
         database.llmTraces.listByTrace("webui-request-server-1"),
       ).toHaveLength(1);

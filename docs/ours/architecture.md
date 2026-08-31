@@ -51,7 +51,6 @@ sequenceDiagram
   Ingress->>Core: normalized inbound message
   Core->>Core: gateway allowlist check
   Core->>DB: persist user message (allowed only)
-  Note over Ingress,Core: Web enqueue returns 202 here;<br/>module chain continues in background
   Core->>Bus: message.ingested
   Bus->>Filter: broadcast
   Filter->>Bus: reply.requested(targetInstanceId)
@@ -59,16 +58,12 @@ sequenceDiagram
   Reply->>DB: get current message by ID
   Reply->>LLM: profileId? + light/heavy + one-shot prompt
   LLM-->>Reply: validated output
-  alt web source
-    Reply->>DB: persist assistant (sessionId correlated)
-  else platform source
-    Reply->>Bus: message.outbound.requested
-    Bus->>Core: generic outbound request
-    Core->>DB: persist requested
-    Core->>Transport: exact adapter + destination + text/reply
-    Core->>DB: update delivered/failed
-    Core->>Bus: message.outbound.delivered/failed
-  end
+  Reply->>Bus: message.outbound.requested
+  Bus->>Core: generic outbound request
+  Core->>DB: persist requested
+  Core->>Transport: exact adapter + destination + text/reply
+  Core->>DB: update delivered/failed
+  Core->>Bus: message.outbound.delivered/failed
 ```
 
 `reply.*` 只是 demo 模块间协议。模块可以不回复、使用自己的状态/历史，或把输出发送到与触发消息无关的私聊或群聊。Core 不从 message ID、sender、mention 或来源推导 destination，也不检查 outbound 是否在回复当前消息。
@@ -77,13 +72,11 @@ sequenceDiagram
 
 平台白名单在 Runtime 入站边界执行。平台、用户或群组任一已配置维度未命中时，消息会被记录为 `message.dispatch.filtered` 并在落库、事件发布和 LLM 调用之前结束；未配置的维度不参与筛选。
 
-HTTP 输入包含文本、由网关生成的 `requestId` 和可选 `sessionId`（缺省时网关生成 UUID）。Web 入站走 `MessageIngress.enqueue()`：用户消息落库后立即返回 `202` 回执，`message.ingested` 及后续模块链在后台继续；平台入站保持同步 dispatch 契约。默认 reply 模块会完成一次 LLM 请求，对 Web 输入把回复作为 `assistant` 消息持久化到同一会话，不推导 transport destination；对平台来源行为不变。
+HTTP 输入只包含文本和由网关生成的 `requestId`。默认 reply 模块会完成一次 LLM 请求，但不会为 Web 输入推导 transport destination。
 
-## 消息无分组标识（Web 会话为限定例外）
+## 消息无分组标识
 
 `ExecutionContext`、`WorkflowContext`、`ModuleHandlerContext` 与 `EventEnvelope` 只保留运行和因果关联 ID。消息表不包含分组列，repository 也不提供按对话分组查询历史的 API。旧 SQLite 格式在任何写入前被拒绝，程序不会自动迁移或删除。
-
-唯一例外是 Web 入站：Web 消息可携带可选 `sessionId`，仅存入 `messages.metadata_json`（无新列、无数据库迁移），只用于会话查询接口向 Web UI 展示回复历史。它不进入模块上下文、事件 payload，也不参与平台分组语义；平台消息仍然没有分组键。
 
 私聊、群聊和用户既不会天然共享，也不会天然隔离上下文。后续信息原子与消息 DAG 将通过显式类型引用和模块订阅组织数据流；当前 Runtime 不提供 heartbeat 或 Memory 占位工作流。
 

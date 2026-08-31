@@ -118,9 +118,7 @@ export async function startKaguyaServer(
     }
     app = await createHttpApplication({
       config,
-      ...(runtimeReady
-        ? { messageIngress: runtime, sessionMessages: runtime }
-        : {}),
+      ...(runtimeReady ? { messageIngress: runtime } : {}),
       setup,
       logger: httpLogger,
     });

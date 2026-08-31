@@ -5,13 +5,11 @@ import type {
   ModuleHandlerContext,
   ModuleInstance,
 } from "@kaguya/sdk";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { alwaysReplyFilterModule } from "./always-reply-filter.js";
 import {
   messageIngestedEvent,
-  messagePersistedEvent,
-  moduleMessageSchema,
   outboundMessageRequestedEvent,
   replyRequestedEvent,
   type ModuleMessage,
@@ -131,24 +129,6 @@ describe("createLlmReplyModule", () => {
     metadata: { moduleMessage },
   };
 
-  const webUserMessage: ModuleMessage = {
-    messageId: "web-message-1",
-    text: "hello from web",
-    occurredAt: "2026-08-13T00:00:00.000Z",
-    source: {
-      kind: "web",
-      requestId: "request-1",
-      sessionId: "session-1",
-    },
-  };
-  const webUserRecord: MessageRecord = {
-    id: "web-message-1",
-    role: "user",
-    content: webUserMessage.text,
-    occurredAt: webUserMessage.occurredAt,
-    metadata: { moduleMessage: webUserMessage },
-  };
-
   it("uses only the current message and emits a platform reply request", async () => {
     const requests: unknown[] = [];
     const definition = createLlmReplyModule({
@@ -206,83 +186,6 @@ describe("createLlmReplyModule", () => {
         },
       }),
     );
-  });
-
-  it("persists a Web reply as an assistant message", async () => {
-    const insert = vi.fn(async (_record: MessageRecord) => undefined);
-    const definition = createLlmReplyModule({
-      messageReader: { getById: () => webUserRecord },
-      promptCompiler: new PromptCompiler(),
-      llm: { generate: async () => ({ text: "Good evening." }) },
-      messageWriter: { insert },
-    });
-    const instance = await createInstance(
-      definition,
-      "reply.default",
-      llmReplySettingsSchema.parse({
-        modelTier: "heavy",
-        outbound: { mode: "source", messageKind: "reply" },
-      }),
-    );
-    const source = replyRequestedEvent.create(eventBase(), {
-      targetInstanceId: "reply.default",
-      messageId: "web-message-1",
-    });
-    const emitted: EventEnvelope[] = [];
-
-    await instance.subscriptions[0]?.handle(
-      source,
-      handlerContext("reply.default", source, emitted),
-    );
-
-    expect(insert).toHaveBeenCalledTimes(1);
-    expect(insert).toHaveBeenCalledWith({
-      id: "trace-1-message-1",
-      role: "assistant",
-      content: "Good evening.",
-      occurredAt: "2026-08-13T00:00:01.000Z",
-      metadata: {
-        traceId: "trace-1",
-        requestId: "request-1",
-        sourceMessageId: "web-message-1",
-        sessionId: "session-1",
-      },
-    });
-    expect(emitted).toEqual([
-      expect.objectContaining({
-        type: messagePersistedEvent.type,
-        payload: { messageId: "trace-1-message-1", role: "assistant" },
-      }),
-    ]);
-  });
-
-  it("never calls the message writer for platform sources", async () => {
-    const insert = vi.fn(async (_record: MessageRecord) => undefined);
-    const definition = createLlmReplyModule({
-      messageReader: { getById: () => userMessage },
-      promptCompiler: new PromptCompiler(),
-      llm: { generate: async () => ({ text: "Hello Ada." }) },
-      messageWriter: { insert },
-    });
-    const instance = await createInstance(
-      definition,
-      "reply.default",
-      llmReplySettingsSchema.parse({
-        modelTier: "heavy",
-        outbound: { mode: "source", messageKind: "reply" },
-      }),
-    );
-    const source = replyRequestedEvent.create(eventBase(), {
-      targetInstanceId: "reply.default",
-      messageId: "message-1",
-    });
-
-    await instance.subscriptions[0]?.handle(
-      source,
-      handlerContext("reply.default", source, []),
-    );
-
-    expect(insert).not.toHaveBeenCalled();
   });
 
   it("can choose a fixed destination independently of the source", async () => {
@@ -408,53 +311,5 @@ describe("createLlmReplyModule", () => {
       ),
     ).rejects.toBe(failure);
     expect(emitted).toEqual([]);
-  });
-});
-
-describe("moduleMessageSchema", () => {
-  it("accepts an optional sessionId on Web sources", () => {
-    expect(
-      moduleMessageSchema.parse({
-        messageId: "web-1",
-        text: "hello",
-        occurredAt: "2026-08-13T00:00:00.000Z",
-        source: { kind: "web", requestId: "request-1" },
-      }).source,
-    ).toEqual({ kind: "web", requestId: "request-1" });
-    expect(
-      moduleMessageSchema.parse({
-        messageId: "web-2",
-        text: "hello",
-        occurredAt: "2026-08-13T00:00:00.000Z",
-        source: {
-          kind: "web",
-          requestId: "request-1",
-          sessionId: "session-1",
-        },
-      }).source,
-    ).toEqual({
-      kind: "web",
-      requestId: "request-1",
-      sessionId: "session-1",
-    });
-  });
-
-  it("rejects a sessionId on platform sources", () => {
-    const result = moduleMessageSchema.safeParse({
-      messageId: "platform-1",
-      text: "hello",
-      occurredAt: "2026-08-13T00:00:00.000Z",
-      source: {
-        kind: "platform",
-        platform: "qq",
-        adapterId: "napcat.qq.main",
-        platformMessageId: "platform-1",
-        destination: { kind: "group", groupId: "778899" },
-        sender: { id: "112233" },
-        mentions: [],
-        sessionId: "session-1",
-      },
-    });
-    expect(result.success).toBe(false);
   });
 });

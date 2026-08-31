@@ -41,12 +41,9 @@ import { approvedEventDefinitions } from "./events.js";
 import { LlmLifecycleClient } from "./llm-lifecycle.js";
 import { GatewayAllowlist } from "./gateway-allowlist.js";
 
-const SESSION_MESSAGE_PAGE_LIMIT = 200;
-
 export interface RuntimeWebMessage {
   readonly kind: "web";
   readonly requestId: string;
-  readonly sessionId: string;
   readonly text: string;
   readonly occurredAt?: string;
 }
@@ -71,15 +68,6 @@ export interface RuntimeDispatchResult {
 export interface RuntimeEnqueueReceipt {
   readonly traceId: string;
   readonly messageId: string;
-  readonly sessionId: string;
-}
-
-export interface SessionMessageView {
-  readonly id: string;
-  readonly role: "user" | "assistant";
-  readonly content: string;
-  readonly occurredAt: string;
-  readonly requestId?: string;
 }
 
 export interface ResolvedRuntimeModel {
@@ -206,7 +194,6 @@ export class KaguyaRuntime {
         messageReader: database.messages,
         llm,
         promptCompiler,
-        messageWriter: database.messages,
       });
       moduleHost = new ModuleHost({
         eventBus,
@@ -305,37 +292,7 @@ export class KaguyaRuntime {
     return Promise.resolve({
       traceId: ingested.traceId,
       messageId: ingested.record.id,
-      sessionId: message.sessionId,
     });
-  }
-
-  listSessionMessages(
-    sessionId: string,
-    options?: { limit?: number },
-  ): Promise<readonly SessionMessageView[]> {
-    if (this.#state !== "started") {
-      return Promise.reject(new RuntimeUnavailableError());
-    }
-    const limit = options?.limit ?? SESSION_MESSAGE_PAGE_LIMIT;
-    return Promise.resolve(
-      required(this.#database, "database")
-        .messages.listBySession(sessionId, limit)
-        .flatMap((record) => {
-          if (record.role !== "user" && record.role !== "assistant") {
-            return [];
-          }
-          const requestId = sessionRequestId(record);
-          return [
-            {
-              id: record.id,
-              role: record.role,
-              content: record.content,
-              occurredAt: record.occurredAt,
-              ...(requestId === undefined ? {} : { requestId }),
-            },
-          ];
-        }),
-    );
   }
 
   close(): Promise<void> {
@@ -666,7 +623,6 @@ function normalizeInboundMessage(
         ? {
             kind: "web",
             requestId: input.requestId,
-            sessionId: input.sessionId,
           }
         : {
             kind: "platform",
@@ -710,27 +666,10 @@ function normalizeInboundMessage(
       role: "user",
       content: moduleMessage.text,
       occurredAt,
-      metadata: {
-        moduleMessage,
-        traceId,
-        eventId,
-        ...(input.kind === "web" ? { sessionId: input.sessionId } : {}),
-      },
+      metadata: { moduleMessage, traceId, eventId },
     },
     event,
   };
-}
-
-function sessionRequestId(record: MessageRecord): string | undefined {
-  const metadata = record.metadata;
-  if (typeof metadata.requestId === "string" && metadata.requestId.length > 0) {
-    return metadata.requestId;
-  }
-  const parsed = moduleMessageSchema.safeParse(metadata.moduleMessage);
-  if (parsed.success && parsed.data.source.kind === "web") {
-    return parsed.data.source.requestId;
-  }
-  return undefined;
 }
 
 function createReplyLlmExecutor(options: {

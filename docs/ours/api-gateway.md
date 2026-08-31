@@ -1,6 +1,6 @@
 # HTTP API 与统一 Server
 
-`apps/server` 是 Kaguya 唯一服务入口。它在一个 Fastify 实例上提供 Web UI、健康检查、OpenAPI 和消息 API，网关只做接入与基础防护，消息通过 `MessageIngress.enqueue()` 交给同进程的 `KaguyaRuntime`。旧 `apps/api`、`apps/bot` 及其启动命令不再存在。
+`apps/server` 是 Kaguya 唯一服务入口。它在一个 Fastify 实例上提供 Web UI、健康检查、OpenAPI 和消息 API，并把消息直接交给同进程的 `KaguyaRuntime`。旧 `apps/api`、`apps/bot` 及其启动命令不再存在。
 
 ## 启动
 
@@ -74,29 +74,26 @@ ID 会在读取配置时按逗号拆分、去除首尾空白并去重。过滤�
 
 ## 路由
 
-| 方法和路径                        | 认证         | 用途                                   |
-| --------------------------------- | ------------ | -------------------------------------- |
-| `GET /` 和静态资源                | 无           | Web UI                                 |
-| `GET /healthz`                    | 无           | 服务存活检查                           |
-| `GET /api/v1/openapi.json`        | 无           | OpenAPI 文档                           |
-| `POST /api/v1/messages`           | Bearer Token | Web 消息落库，模块链后台继续，返回 202 |
-| `GET /api/v1/sessions/:sessionId` | Bearer Token | 查询指定 Web 会话的已持久化消息        |
+| 方法和路径                 | 认证         | 用途                       |
+| -------------------------- | ------------ | -------------------------- |
+| `GET /` 和静态资源         | 无           | Web UI                     |
+| `GET /healthz`             | 无           | 服务存活检查               |
+| `GET /api/v1/openapi.json` | 无           | OpenAPI 文档               |
+| `POST /api/v1/messages`    | Bearer Token | Web 消息落库并发布模块事件 |
 
 生产 SPA fallback 只接受带 `text/html` 的 GET 页面请求，且显式排除 `/api/*` 和 `/healthz`。未知 API 仍返回结构化 `404 not_found`。
 
 ## 提交消息
 
-请求体只允许以下字段：
+请求体只允许一个字段：
 
 ```json
 {
-  "text": "Hello",
-  "sessionId": "session-1"
+  "text": "Hello"
 }
 ```
 
 - `text` trim 后必须非空，最多 131072 个 Unicode code point，工作流保留原始空白；
-- `sessionId` 可选，1–128 字符：首字符为字母或数字，其余仅允许字母、数字、点、下划线、冒号和连字符；首尾空白被 trim；缺省时 Server 生成 UUID；
 - 请求体最多 256 KiB；
 - 任何额外字段都会被严格 schema 拒绝。
 
@@ -105,22 +102,21 @@ curl http://127.0.0.1:3000/api/v1/messages \
   -H "Authorization: Bearer replace-with-at-least-16-characters" \
   -H "Content-Type: application/json" \
   -H "X-Request-Id: example-1" \
-  -d '{"text":"Hello","sessionId":"session-1"}'
+  -d '{"text":"Hello"}'
 ```
 
-消息落库成功后返回 `202`，并回显实际生效的 `sessionId`：
+Runtime dispatch 成功后保持现有 `202` 协议：
 
 ```json
 {
   "data": {
     "status": "accepted",
-    "requestId": "example-1",
-    "sessionId": "session-1"
+    "requestId": "example-1"
   }
 }
 ```
 
-`202` 的语义是“已接受并持久化”：用户消息写入 SQLite 后接口即返回，默认 filter/LLM 模块链在后台继续执行。Web 输入的回复会由默认 reply 模块作为 `assistant` 消息持久化到同一会话，可通过会话历史查询接口获取。默认模块没有 Web destination，因此不会发出 outbound request；平台来源的出站行为不变，自定义模块如需发送仍须自行配置已注册 adapter 和 destination。后台处理失败只记录 `message.processing.failed` 日志，不影响已返回的 `202`。
+接口不返回模型回答，不提供查询或 SSE。Web 输入会写入用户消息并进入默认 filter/LLM 模块；默认模块没有 Web destination，因此不会发出 outbound request。自定义模块如需发送，必须自行配置已注册 adapter 和 destination。
 
 失败统一返回：
 
@@ -134,50 +130,15 @@ curl http://127.0.0.1:3000/api/v1/messages \
 }
 ```
 
-| 错误码             | 常见状态   | 含义                                        |
-| ------------------ | ---------- | ------------------------------------------- |
-| `unauthorized`     | 401        | Bearer Token 缺失或错误                     |
-| `invalid_request`  | 400        | JSON 或 schema 不合法                       |
-| `not_found`        | 404        | 路由不存在                                  |
-| `rate_limited`     | 429        | 超过来源限流                                |
-| `request_rejected` | 413/415 等 | Fastify 在进入 Runtime 前拒绝请求           |
-| `core_unavailable` | 503        | 测试/嵌入场景没有接入 Runtime，或配置未就绪 |
-| `internal_error`   | 500        | 核心处理或 Server 内部失败                  |
-
-## 会话历史查询
-
-`GET /api/v1/sessions/:sessionId` 使用同一 Bearer Token 查询指定 Web 会话中已持久化的 `user` 和 `assistant` 消息：
-
-```json
-{
-  "data": {
-    "sessionId": "session-1",
-    "messages": [
-      {
-        "id": "webui-example-1-message-000001",
-        "role": "user",
-        "content": "Hello",
-        "occurredAt": "2026-08-30T00:00:00.000Z",
-        "requestId": "example-1"
-      },
-      {
-        "id": "webui-example-1-message-000002",
-        "role": "assistant",
-        "content": "Good evening.",
-        "occurredAt": "2026-08-30T00:00:01.000Z",
-        "requestId": "example-1"
-      }
-    ]
-  }
-}
-```
-
-- 路径参数校验规则与请求体 `sessionId` 相同（1–128 字符，首字符为字母或数字，其余为字母、数字、点、下划线、冒号、连字符）；非法值返回 400 `invalid_request`；
-- 消息按时间正序返回，默认最多 200 条（最近）；
-- `requestId` 把 `assistant` 回复与发起它的 `user` 消息关联起来，客户端按它做精确配对；
-- 未知会话返回 `200` 和空列表，不返回 404；
-- 该路由使用独立限流桶（120 次/60 秒），与消息接口不共享全局桶，避免 UI 轮询把消息提交挤到 429；
-- 会话查询只读取 `messages` 表，`sessionId` 仅存在于 `metadata_json`，不是平台分组键。
+| 错误码             | 常见状态   | 含义                                     |
+| ------------------ | ---------- | ---------------------------------------- |
+| `unauthorized`     | 401        | Bearer Token 缺失或错误                  |
+| `invalid_request`  | 400        | JSON 或 schema 不合法                    |
+| `not_found`        | 404        | 路由不存在                               |
+| `rate_limited`     | 429        | 超过来源限流                             |
+| `request_rejected` | 413/415 等 | Fastify 在进入 Runtime 前拒绝请求        |
+| `core_unavailable` | 503        | 测试/嵌入场景没有配置 Runtime dispatcher |
+| `internal_error`   | 500        | Runtime dispatch 或 Server 内部失败      |
 
 ## 请求 ID 与安全边界
 
