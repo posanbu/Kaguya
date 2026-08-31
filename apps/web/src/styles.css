@@ -449,6 +449,14 @@ button:disabled {
   background: #f1f8f4;
 }
 
+.message-row.assistant {
+  margin-right: auto;
+  margin-left: 0;
+  border-color: #dfe3e8;
+  border-radius: 8px 8px 8px 2px;
+  background: #f0f2f5;
+}
+
 .message-row + .message-row {
   margin-top: 14px;
 }

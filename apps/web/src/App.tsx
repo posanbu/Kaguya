@@ -12,6 +12,7 @@ import {
 import {
   FormEvent,
   KeyboardEvent,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -20,21 +21,29 @@ import {
 
 import {
   checkGatewayHealth,
+  fetchSessionMessages,
   GatewayRequestError,
   getConfigurationStatus,
   initializeConfiguration,
   MAX_MESSAGE_LENGTH,
   sendMessage,
+  type SessionMessageView,
+  type SessionMessages,
 } from "./api.js";
 
 const TOKEN_KEY = "kaguya.gatewayToken";
+const SESSION_KEY = "kaguya.sessionId";
+const POLL_INTERVAL_MS = 2_500;
+const REPLY_TIMEOUT_MS = 300_000;
 
-type DeliveryState = "sending" | "accepted" | "failed";
+type DeliveryState = "sending" | "awaiting" | "settled" | "failed";
+type MessageRole = "user" | "assistant";
 type HealthState = "idle" | "checking" | "online" | "offline";
 type ConfigurationView = "checking" | "setup" | "restart" | "chat" | "error";
 
 interface ChatMessage {
   readonly id: string;
+  readonly role: MessageRole;
   readonly text: string;
   readonly createdAt: Date;
   readonly state: DeliveryState;
@@ -46,6 +55,9 @@ export function App() {
   const [token, setToken] = useState(() =>
     readStorage(sessionStorage, TOKEN_KEY, ""),
   );
+  const [sessionId, setSessionId] = useState(
+    () => readStorage(sessionStorage, SESSION_KEY, "") || crypto.randomUUID(),
+  );
   const [configurationView, setConfigurationView] =
     useState<ConfigurationView>("checking");
   const [configurationError, setConfigurationError] = useState<string>();
@@ -55,11 +67,131 @@ export function App() {
   const [messages, setMessages] = useState<readonly ChatMessage[]>([]);
   const [formError, setFormError] = useState<string>();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const messageListRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<readonly ChatMessage[]>([]);
+  const tokenRef = useRef(token);
+  const sessionIdRef = useRef(sessionId);
+  const outstandingRef = useRef<Set<string>>(new Set());
+  const replyStartedAtRef = useRef<Map<string, number>>(new Map());
+  const pollTimerRef = useRef<number | undefined>(undefined);
 
   const isSending = messages.some((message) => message.state === "sending");
   const draftLength = useMemo(() => [...draft].length, [draft]);
   const canSend =
     !isSending && draft.trim().length > 0 && draftLength <= MAX_MESSAGE_LENGTH;
+
+  useEffect(() => {
+    messagesRef.current = messages;
+    tokenRef.current = token;
+    sessionIdRef.current = sessionId;
+  });
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(SESSION_KEY, sessionId);
+    } catch {
+      // Storage is unavailable; the session still works for this tab.
+    }
+  }, [sessionId]);
+
+  const stopPolling = useCallback(() => {
+    if (pollTimerRef.current !== undefined) {
+      window.clearTimeout(pollTimerRef.current);
+      pollTimerRef.current = undefined;
+    }
+  }, []);
+
+  const schedulePollRef = useRef<() => void>(() => undefined);
+
+  const runPoll = useCallback(async () => {
+    const now = Date.now();
+    for (const requestId of [...outstandingRef.current]) {
+      const startedAt = replyStartedAtRef.current.get(requestId) ?? now;
+      if (now - startedAt >= REPLY_TIMEOUT_MS) {
+        outstandingRef.current.delete(requestId);
+        replyStartedAtRef.current.delete(requestId);
+        setMessages((current) =>
+          current.map((message) =>
+            message.role === "user" && message.requestId === requestId
+              ? { ...message, state: "failed", error: "等待回复超时" }
+              : message,
+          ),
+        );
+      }
+    }
+    if (outstandingRef.current.size === 0) {
+      return;
+    }
+
+    let session: SessionMessages;
+    try {
+      session = await fetchSessionMessages(
+        { token: tokenRef.current },
+        sessionIdRef.current,
+      );
+    } catch (error) {
+      if (
+        error instanceof GatewayRequestError &&
+        error.code === "unauthorized"
+      ) {
+        outstandingRef.current.clear();
+        setMessages((current) =>
+          current.map((message) =>
+            message.state === "awaiting"
+              ? {
+                  ...message,
+                  state: "failed",
+                  error: "服务令牌无效，已停止等待回复",
+                }
+              : message,
+          ),
+        );
+        setFormError(errorMessage(error));
+        return;
+      }
+      schedulePollRef.current();
+      return;
+    }
+
+    const { messages: merged, settledRequestIds } = mergeSessionMessages({
+      local: messagesRef.current,
+      server: session.messages,
+      awaiting: outstandingRef.current,
+    });
+    setMessages(merged);
+    for (const requestId of settledRequestIds) {
+      outstandingRef.current.delete(requestId);
+      replyStartedAtRef.current.delete(requestId);
+      setMessages((current) =>
+        current.map((message) =>
+          message.role === "user" && message.requestId === requestId
+            ? { ...message, state: "settled" }
+            : message,
+        ),
+      );
+    }
+    if (outstandingRef.current.size > 0) {
+      schedulePollRef.current();
+    }
+  }, []);
+
+  const schedulePoll = useCallback(() => {
+    if (pollTimerRef.current !== undefined) {
+      return;
+    }
+    pollTimerRef.current = window.setTimeout(() => {
+      pollTimerRef.current = undefined;
+      if (document.hidden || outstandingRef.current.size === 0) {
+        return;
+      }
+      void runPoll();
+    }, POLL_INTERVAL_MS);
+  }, [runPoll]);
+
+  useEffect(() => {
+    schedulePollRef.current = schedulePoll;
+    return stopPolling;
+  }, [schedulePoll, stopPolling]);
 
   useEffect(() => {
     let active = true;
@@ -86,6 +218,57 @@ export function App() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (configurationView !== "chat") {
+      return;
+    }
+    let active = true;
+    void (async () => {
+      try {
+        const history = await fetchSessionMessages(
+          { token: tokenRef.current },
+          sessionIdRef.current,
+        );
+        if (!active) {
+          return;
+        }
+        setMessages(
+          history.messages.map((view) => serverMessageToChat(view, "settled")),
+        );
+      } catch {
+        // Missing token or an offline gateway start an empty conversation;
+        // sending a message still works once the connection is fixed.
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [configurationView]);
+
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (!document.hidden && outstandingRef.current.size > 0) {
+        schedulePoll();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () =>
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, [schedulePoll]);
+
+  useEffect(() => {
+    const list = messageListRef.current;
+    const last = messages[messages.length - 1];
+    if (list === null || last === undefined) {
+      return;
+    }
+    const nearBottom =
+      list.scrollHeight - list.scrollTop - list.clientHeight < 80;
+    if (nearBottom || last.role === "assistant") {
+      list.scrollTop = list.scrollHeight;
+    }
+  }, [messages]);
 
   const persistConnection = () => {
     sessionStorage.setItem(TOKEN_KEY, token);
@@ -116,6 +299,7 @@ export function App() {
     const id = crypto.randomUUID();
     const pendingMessage: ChatMessage = {
       id,
+      role: "user",
       text,
       createdAt: new Date(),
       state: "sending",
@@ -124,18 +308,22 @@ export function App() {
     setDraft("");
 
     try {
-      const response = await sendMessage({ token }, { text });
+      const response = await sendMessage({ token }, { text, sessionId });
+      setSessionId(response.sessionId);
       setMessages((current) =>
         current.map((message) =>
           message.id === id
             ? {
                 ...message,
-                state: "accepted",
+                state: "awaiting",
                 requestId: response.requestId,
               }
             : message,
         ),
       );
+      outstandingRef.current.add(response.requestId);
+      replyStartedAtRef.current.set(response.requestId, Date.now());
+      schedulePoll();
     } catch (error) {
       const message = errorMessage(error);
       setMessages((current) =>
@@ -242,8 +430,8 @@ export function App() {
           </label>
 
           <div className="boundary-note">
-            <p>当前服务仅接受消息。</p>
-            <span>模型配置和回复由核心层管理。</span>
+            <p>消息交给核心层处理。</p>
+            <span>回复由核心层生成，经会话查询展示。</span>
           </div>
         </aside>
 
@@ -255,22 +443,29 @@ export function App() {
             </div>
           </header>
 
-          <div className="message-list" aria-live="polite">
+          <div className="message-list" aria-live="polite" ref={messageListRef}>
             {messages.length === 0 ? (
               <div className="empty-state">
                 <p>暂无消息</p>
               </div>
             ) : (
               messages.map((message) => (
-                <article className="message-row" key={message.id}>
+                <article
+                  className={`message-row ${message.role === "assistant" ? "assistant" : "user"}`}
+                  key={message.id}
+                >
                   <div className="message-meta">
-                    <strong>你</strong>
+                    <strong>
+                      {message.role === "assistant" ? "Kaguya" : "你"}
+                    </strong>
                     <time dateTime={message.createdAt.toISOString()}>
                       {formatTime(message.createdAt)}
                     </time>
                   </div>
                   <p className="message-body">{message.text}</p>
-                  <DeliveryStatus message={message} />
+                  {message.role === "user" ? (
+                    <DeliveryStatus message={message} />
+                  ) : null}
                 </article>
               ))
             )}
@@ -583,9 +778,20 @@ function DeliveryStatus({ message }: { message: ChatMessage }) {
       </p>
     );
   }
-  if (message.state === "accepted") {
+  if (message.state === "awaiting") {
     return (
-      <p className="delivery-status accepted" title={message.requestId}>
+      <p className="delivery-status awaiting" title={message.requestId}>
+        <CheckCircle2 size={15} />
+        服务已接收
+        <code>{shortRequestId(message.requestId)}</code>
+        <LoaderCircle className="spin" size={12} />
+        等待回复
+      </p>
+    );
+  }
+  if (message.state === "settled") {
+    return (
+      <p className="delivery-status settled" title={message.requestId}>
         <CheckCircle2 size={15} />
         服务已接收
         <code>{shortRequestId(message.requestId)}</code>
@@ -598,6 +804,93 @@ function DeliveryStatus({ message }: { message: ChatMessage }) {
       {message.error ?? "提交失败"}
     </p>
   );
+}
+
+/**
+ * Merge the locally displayed messages with a session snapshot from the
+ * gateway. Server rows are the source of truth for ids, order, and content;
+ * local-only rows are in-flight sends that have not been persisted yet. A
+ * user message is settled once its reply (matched by requestId) appears.
+ */
+export function mergeSessionMessages(options: {
+  readonly local: readonly ChatMessage[];
+  readonly server: readonly SessionMessageView[];
+  readonly awaiting: ReadonlySet<string>;
+}): {
+  readonly messages: ChatMessage[];
+  readonly settledRequestIds: readonly string[];
+} {
+  const { local, server, awaiting } = options;
+  const consumedLocal = new Set<ChatMessage>();
+  const messages: ChatMessage[] = [];
+
+  for (const view of server) {
+    const match = local.find(
+      (message) =>
+        !consumedLocal.has(message) &&
+        message.role === view.role &&
+        (message.id === view.id ||
+          (view.role === "user" &&
+            message.requestId !== undefined &&
+            message.requestId === view.requestId)),
+    );
+    if (match !== undefined) {
+      consumedLocal.add(match);
+      messages.push({
+        ...match,
+        id: view.id,
+        createdAt: parseOccurredAt(view.occurredAt, match.createdAt),
+        ...(view.requestId === undefined ? {} : { requestId: view.requestId }),
+      });
+      continue;
+    }
+    messages.push(serverMessageToChat(view, "settled"));
+  }
+
+  for (const message of local) {
+    if (!consumedLocal.has(message)) {
+      messages.push(message);
+    }
+  }
+
+  const settledRequestIds: string[] = [];
+  for (const requestId of awaiting) {
+    const index = messages.findIndex(
+      (message) => message.role === "user" && message.requestId === requestId,
+    );
+    if (
+      index >= 0 &&
+      messages.some(
+        (message, i) =>
+          i > index &&
+          message.role === "assistant" &&
+          message.requestId === requestId,
+      )
+    ) {
+      settledRequestIds.push(requestId);
+    }
+  }
+
+  return { messages, settledRequestIds };
+}
+
+function serverMessageToChat(
+  view: SessionMessageView,
+  state: DeliveryState,
+): ChatMessage {
+  return {
+    id: view.id,
+    role: view.role,
+    text: view.content,
+    createdAt: parseOccurredAt(view.occurredAt, new Date(0)),
+    state,
+    ...(view.requestId === undefined ? {} : { requestId: view.requestId }),
+  };
+}
+
+function parseOccurredAt(value: string, fallback: Date): Date {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? fallback : parsed;
 }
 
 function errorMessage(error: unknown): string {
