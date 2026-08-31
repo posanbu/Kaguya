@@ -1,0 +1,79 @@
+:root {
+  --vp-c-brand-1: #c95d20;
+  --vp-c-brand-2: #df6f28;
+  --vp-c-brand-3: #ef8a43;
+  --vp-c-brand-soft: rgba(223, 111, 40, 0.14);
+  --vp-c-tip-1: #c95d20;
+  --vp-c-tip-soft: rgba(239, 138, 67, 0.14);
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: linear-gradient(120deg, #b94e19 10%, #ed7b32 48%, #f6aa62 88%);
+  --vp-home-hero-image-background-image: radial-gradient(circle, rgba(255, 188, 111, 0.46), rgba(255, 224, 184, 0.2) 48%, transparent 72%);
+  --vp-home-hero-image-filter: blur(42px);
+  --vp-layout-max-width: 1500px;
+}
+
+.dark {
+  --vp-c-brand-1: #ffad68;
+  --vp-c-brand-2: #f4954e;
+  --vp-c-brand-3: #df732d;
+  --vp-c-brand-soft: rgba(244, 149, 78, 0.17);
+  --vp-c-tip-1: #ffad68;
+  --vp-c-tip-soft: rgba(244, 149, 78, 0.16);
+}
+
+body {
+  background-image:
+    radial-gradient(circle at 8% 10%, rgba(239, 138, 67, 0.09), transparent 24rem),
+    radial-gradient(circle at 92% 12%, rgba(255, 207, 146, 0.1), transparent 22rem);
+  background-attachment: fixed;
+}
+
+.VPNavBarTitle .logo {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+  filter: drop-shadow(0 3px 7px rgba(168, 73, 20, 0.2));
+}
+
+.VPHomeHero .image-src {
+  width: min(350px, 74vw);
+  height: min(350px, 74vw);
+  object-fit: contain;
+  filter: drop-shadow(0 22px 36px rgba(166, 73, 22, 0.2));
+}
+
+.VPFeature {
+  border: 1px solid var(--vp-c-divider);
+  background: color-mix(in srgb, var(--vp-c-bg-soft) 90%, rgba(255, 240, 220, 0.1));
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.VPFeature:hover {
+  transform: translateY(-3px);
+  border-color: var(--vp-c-brand-2);
+  box-shadow: 0 14px 34px rgba(164, 73, 22, 0.13);
+}
+
+.VPDocAsideOutline {
+  border-left: 1px solid var(--vp-c-divider);
+  padding-left: 18px;
+}
+
+.VPDoc h2 {
+  border-top: 0;
+  padding-top: 30px;
+}
+
+.vp-doc div[class*="language-"] {
+  border: 1px solid var(--vp-c-divider);
+}
+
+@media (max-width: 640px) {
+  .VPHomeHero .name {
+    font-size: 42px;
+  }
+
+  .VPHomeHero .text {
+    font-size: 28px;
+  }
+}

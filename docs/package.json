@@ -1,11 +1,13 @@
 {
-  "name": "maibot-docs",
-  "version": "2.0.0",
-  "description": "MaiBot Documentation",
+  "name": "@kaguya/docs",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Kaguya multilingual documentation site",
   "scripts": {
     "docs:dev": "vitepress dev",
     "docs:build": "vitepress build",
-    "docs:preview": "vitepress preview"
+    "docs:preview": "vitepress preview",
+    "docs:check": "vitepress build"
   },
   "devDependencies": {
     "@nolebase/vitepress-plugin-enhanced-readabilities": "^2.18.2",
@@ -21,10 +23,5 @@
     "vitepress-plugin-mermaid": "^2.0.17",
     "xgplayer": "^3.0.24"
   },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild"
-    ]
-  },
-  "packageManager": "pnpm@10.30.3"
+  "packageManager": "pnpm@11.9.0"
 }
