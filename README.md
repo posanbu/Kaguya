@@ -79,7 +79,7 @@ Server 不从环境变量读取 provider key、base URL 或 model。检测到旧
 
 旧变量 `KAGUYA_API_HOST`、`KAGUYA_API_PORT`、`KAGUYA_API_DATABASE_PATH`、`KAGUYA_BOT_DATABASE_PATH` 会让启动直接失败，并提示改用统一变量。
 
-日志变量和事件表见 [结构化日志](docs/logging.md)。
+日志变量见[环境变量参考](docs/reference/environment-variables.md)，执行链与脱敏边界见[运行时架构](docs/developers/architecture.md)。
 
 ## 仓库结构
 
@@ -100,11 +100,13 @@ packages/sdk/       事件、模块、节点与工作流定义 API
 
 ## 文档
 
-- [架构说明](docs/architecture.md)
-- [HTTP API 与统一 Server](docs/api-gateway.md)
-- [Web UI](docs/web-ui.md)
-- [结构化日志](docs/logging.md)
-- [LLM Client](docs/llm-client.md)
+- [文档站首页](docs/index.md)
+- [安装与启动](docs/guide/installation.md)
+- [配置 Kaguya](docs/guide/configuration.md)
+- [Web UI](docs/guide/webui.md)
+- [运行时架构](docs/developers/architecture.md)
+- [HTTP API](docs/reference/http-api.md)
+- [环境变量](docs/reference/environment-variables.md)
 - [配置包说明](packages/config/README.md)
 - [贡献指南](CONTRIBUTING.md)
 
