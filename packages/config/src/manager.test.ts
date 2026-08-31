@@ -326,7 +326,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
         FileUserConfigManager.bootstrap({ rootDir }),
       ).rejects.toMatchObject({
         code:
-          fixture === "stray file" ? "CONFIG_IO_ERROR" : "CONFIG_INVALID_INPUT",
+          fixture === "CONFIG_INVALID_INPUT",
       });
 
       await expect(
