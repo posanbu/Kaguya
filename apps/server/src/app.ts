@@ -5,7 +5,10 @@ import rateLimit from "@fastify/rate-limit";
 import swagger from "@fastify/swagger";
 import { ConfigError } from "@kaguya/config";
 import { runWithLogContext } from "@kaguya/logger";
-import type { RuntimeWebMessage } from "@kaguya/runtime";
+import {
+  RuntimeUnavailableError,
+  type SessionMessageView,
+} from "@kaguya/runtime";
 import { z } from "@kaguya/schema";
 import Fastify, {
   LogController,
@@ -25,6 +28,9 @@ import {
 const MAX_MESSAGE_TEXT_LENGTH = 131_072;
 const MAX_REQUEST_ID_LENGTH = 128;
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
+const MAX_SESSION_ID_LENGTH = 128;
+const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
+const SESSION_POLL_RATE_LIMIT_MAX = 120;
 
 const messageRequestSchema = z
   .object({
@@ -33,6 +39,12 @@ const messageRequestSchema = z
       .min(1)
       .refine((value) => hasAtMostCodePoints(value, MAX_MESSAGE_TEXT_LENGTH))
       .refine((value) => value.trim().length > 0),
+    sessionId: z
+      .string()
+      .trim()
+      .max(MAX_SESSION_ID_LENGTH)
+      .refine((value) => SESSION_ID_PATTERN.test(value))
+      .optional(),
   })
   .strict();
 
@@ -45,6 +57,25 @@ const messageBodyJsonSchema = {
       type: "string",
       minLength: 1,
       maxLength: MAX_MESSAGE_TEXT_LENGTH,
+    },
+    sessionId: {
+      type: "string",
+      minLength: 1,
+      maxLength: MAX_SESSION_ID_LENGTH,
+    },
+  },
+} as const;
+
+const sessionParamsJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["sessionId"],
+  properties: {
+    sessionId: {
+      type: "string",
+      minLength: 1,
+      maxLength: MAX_SESSION_ID_LENGTH,
+      pattern: SESSION_ID_PATTERN.source,
     },
   },
 } as const;
@@ -110,10 +141,42 @@ const acceptedMessageResponseJsonSchema = {
     data: {
       type: "object",
       additionalProperties: false,
-      required: ["status", "requestId"],
+      required: ["status", "requestId", "sessionId"],
       properties: {
         status: { type: "string", enum: ["accepted"] },
         requestId: { type: "string" },
+        sessionId: { type: "string" },
+      },
+    },
+  },
+} as const;
+
+const sessionMessagesResponseJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["data"],
+  properties: {
+    data: {
+      type: "object",
+      additionalProperties: false,
+      required: ["sessionId", "messages"],
+      properties: {
+        sessionId: { type: "string" },
+        messages: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["id", "role", "content", "occurredAt"],
+            properties: {
+              id: { type: "string" },
+              role: { type: "string", enum: ["user", "assistant"] },
+              content: { type: "string" },
+              occurredAt: { type: "string" },
+              requestId: { type: "string" },
+            },
+          },
+        },
       },
     },
   },
@@ -137,15 +200,34 @@ const errorResponseJsonSchema = {
   },
 } as const;
 
-export interface CreateHttpApplicationOptions {
-  config: ServerConfig;
-  runtime?: RuntimeDispatcher;
-  setup?: ConfigurationSetup;
-  logger?: FastifyBaseLogger;
+export interface MessageIngressCommand {
+  readonly text: string;
+  readonly requestId: string;
+  readonly sessionId: string;
 }
 
-export interface RuntimeDispatcher {
-  dispatch(message: RuntimeWebMessage): Promise<unknown>;
+export interface MessageIngressReceipt {
+  readonly traceId: string;
+  readonly messageId: string;
+  readonly sessionId: string;
+}
+
+export interface MessageIngress {
+  enqueue(command: MessageIngressCommand): Promise<MessageIngressReceipt>;
+}
+
+export interface SessionMessageReader {
+  listSessionMessages(
+    sessionId: string,
+  ): Promise<readonly SessionMessageView[]>;
+}
+
+export interface CreateHttpApplicationOptions {
+  config: ServerConfig;
+  messageIngress?: MessageIngress;
+  sessionMessages?: SessionMessageReader;
+  setup?: ConfigurationSetup;
+  logger?: FastifyBaseLogger;
 }
 
 export async function createHttpApplication(
@@ -164,6 +246,7 @@ export async function createHttpApplication(
     ajv: {
       customOptions: {
         removeAdditional: false,
+        coerceTypes: false,
       },
     },
   });
@@ -362,35 +445,98 @@ export async function createHttpApplication(
     },
     async (request, reply) => {
       const parsed = messageRequestSchema.parse(request.body);
-      const runtime = options.runtime;
-      if (runtime === undefined) {
-        throw new ApiGatewayError(
-          options.setup === undefined
-            ? "core_unavailable"
-            : "configuration_setup_required",
-          options.setup === undefined
-            ? "Core message ingress is not configured"
-            : "Configuration must be completed before messages can be processed",
-          503,
-        );
+      const messageIngress = options.messageIngress;
+      if (messageIngress === undefined) {
+        throw coreUnavailableError(options.setup);
       }
-
+      const sessionId = parsed.sessionId ?? randomUUID();
       return runWithLogContext({}, async () => {
-        await runtime.dispatch({
-          kind: "web",
-          text: parsed.text,
-          requestId: request.id,
-        });
+        let receipt: MessageIngressReceipt;
+        try {
+          receipt = await messageIngress.enqueue({
+            text: parsed.text,
+            requestId: request.id,
+            sessionId,
+          });
+        } catch (error) {
+          if (error instanceof RuntimeUnavailableError) {
+            throw coreUnavailableError(options.setup);
+          }
+          throw error;
+        }
         request.log.info(
-          { event: "http.message.accepted" },
+          {
+            event: "http.message.accepted",
+            messageId: receipt.messageId,
+            traceId: receipt.traceId,
+          },
           "Message accepted by Kaguya Runtime",
         );
         return reply.code(202).send({
           data: {
             status: "accepted",
             requestId: request.id,
+            sessionId: receipt.sessionId,
           },
         });
+      });
+    },
+  );
+
+  app.get(
+    "/api/v1/sessions/:sessionId",
+    {
+      config: {
+        rateLimit: {
+          max: SESSION_POLL_RATE_LIMIT_MAX,
+          timeWindow: 60_000,
+        },
+      },
+      onRequest: async (request, reply) => {
+        if (!hasValidGatewayToken(request, options.config.gatewayToken)) {
+          return reply
+            .code(401)
+            .send(
+              errorBody(
+                "unauthorized",
+                "A valid gateway Bearer token is required",
+                request.id,
+              ),
+            );
+        }
+      },
+      schema: {
+        tags: ["Messages"],
+        summary: "List the persisted messages of a Web session",
+        security: [{ bearerAuth: [] }],
+        params: sessionParamsJsonSchema,
+        response: {
+          200: sessionMessagesResponseJsonSchema,
+          400: errorResponseJsonSchema,
+          401: errorResponseJsonSchema,
+          429: errorResponseJsonSchema,
+          500: errorResponseJsonSchema,
+          503: errorResponseJsonSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const sessionMessages = options.sessionMessages;
+      if (sessionMessages === undefined) {
+        throw coreUnavailableError(options.setup);
+      }
+      const { sessionId } = request.params as { readonly sessionId: string };
+      return runWithLogContext({}, async () => {
+        let messages: readonly SessionMessageView[];
+        try {
+          messages = await sessionMessages.listSessionMessages(sessionId);
+        } catch (error) {
+          if (error instanceof RuntimeUnavailableError) {
+            throw coreUnavailableError(options.setup);
+          }
+          throw error;
+        }
+        return reply.code(200).send({ data: { sessionId, messages } });
       });
     },
   );
@@ -474,6 +620,18 @@ class ApiGatewayError extends Error {
     super(message);
     this.name = "ApiGatewayError";
   }
+}
+
+function coreUnavailableError(
+  setup: ConfigurationSetup | undefined,
+): ApiGatewayError {
+  return new ApiGatewayError(
+    setup === undefined ? "core_unavailable" : "configuration_setup_required",
+    setup === undefined
+      ? "Core message ingress is not configured"
+      : "Configuration must be completed before messages can be processed",
+    503,
+  );
 }
 
 function hasValidGatewayToken(

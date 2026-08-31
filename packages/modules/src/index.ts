@@ -5,6 +5,7 @@ export {
 export {
   messageIngestedEvent,
   messageMentionSchema,
+  messagePersistedEvent,
   messageSenderSchema,
   moduleMessageSourceSchema,
   moduleMessageSchema,
@@ -25,4 +26,5 @@ export {
   type ModuleModelSelection,
   type ReplyLlmExecutor,
   type ReplyMessageReader,
+  type ReplyMessageWriter,
 } from "./llm-reply.js";

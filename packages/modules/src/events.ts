@@ -24,6 +24,7 @@ export const moduleMessageSourceSchema = z.discriminatedUnion("kind", [
     .object({
       kind: z.literal("web"),
       requestId: nonBlankStringSchema,
+      sessionId: nonBlankStringSchema.optional(),
     })
     .strict(),
   z
@@ -56,6 +57,16 @@ export type ModuleMessage = z.infer<typeof moduleMessageSchema>;
 export const messageIngestedEvent = defineEvent(
   "message.ingested",
   z.object({ message: moduleMessageSchema }).strict(),
+);
+
+export const messagePersistedEvent = defineEvent(
+  "message.persisted",
+  z
+    .object({
+      messageId: nonBlankStringSchema,
+      role: z.enum(["assistant", "system", "user"]),
+    })
+    .strict(),
 );
 
 export const replyRequestedEvent = defineEvent(

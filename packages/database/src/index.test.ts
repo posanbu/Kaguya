@@ -59,6 +59,52 @@ describe("KaguyaDatabase", () => {
     inspected.close();
   });
 
+  it("lists session messages from metadata in chronological order", () => {
+    const database = KaguyaDatabase.open(databasePath());
+    database.migrate();
+    database.messages.insert({
+      id: "message-1",
+      role: "user",
+      content: "first",
+      occurredAt: "2026-08-14T00:00:00.000Z",
+      metadata: { sessionId: "session-a" },
+    });
+    database.messages.insert({
+      id: "message-3",
+      role: "assistant",
+      content: "late reply",
+      occurredAt: "2026-08-14T00:00:02.000Z",
+      metadata: { sessionId: "session-a", sourceMessageId: "message-2" },
+    });
+    database.messages.insert({
+      id: "message-2",
+      role: "user",
+      content: "second",
+      occurredAt: "2026-08-14T00:00:01.000Z",
+      metadata: { sessionId: "session-a" },
+    });
+    database.messages.insert({
+      id: "message-4",
+      role: "system",
+      content: "outside the session",
+      occurredAt: "2026-08-14T00:00:03.000Z",
+      metadata: { source: "platform" },
+    });
+
+    expect(
+      database.messages
+        .listBySession("session-a", 10)
+        .map((message) => message.id),
+    ).toEqual(["message-1", "message-2", "message-3"]);
+    expect(
+      database.messages
+        .listBySession("session-a", 2)
+        .map((message) => message.id),
+    ).toEqual(["message-2", "message-3"]);
+    expect(database.messages.listBySession("unknown-session", 10)).toEqual([]);
+    database.close();
+  });
+
   it("rejects a legacy database without modifying schema or data", () => {
     const path = databasePath();
     const legacy = new DatabaseSync(path);

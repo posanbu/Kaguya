@@ -12,9 +12,11 @@ const databasePath =
 async function main(): Promise<void> {
   const runtime = new KaguyaRuntime({ databasePath });
   await runtime.start();
+  const timestamp = Date.now();
   const result = await runtime.dispatch({
     kind: "web",
-    requestId: `demo-${Date.now()}`,
+    requestId: `demo-${timestamp}`,
+    sessionId: `demo-session-${timestamp}`,
     text: "Is tonight good for watching the moon?",
   });
   await runtime.close();

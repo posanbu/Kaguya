@@ -11,9 +11,11 @@ import {
   defineModule,
   onTargetedEvent,
   type ExecutionContext,
+  type ModuleHandlerContext,
 } from "@kaguya/sdk";
 
 import {
+  messagePersistedEvent,
   moduleMessageSchema,
   outboundMessageRequestedEvent,
   replyRequestedEvent,
@@ -38,6 +40,10 @@ export interface ReplyMessageReader {
   ): Promise<MessageRecord | undefined> | MessageRecord | undefined;
 }
 
+export interface ReplyMessageWriter {
+  insert(record: MessageRecord): void | Promise<void>;
+}
+
 export interface ReplyLlmExecutor {
   generate(
     request: {
@@ -56,6 +62,7 @@ export interface CreateLlmReplyModuleOptions {
   readonly messageReader: ReplyMessageReader;
   readonly llm: ReplyLlmExecutor;
   readonly promptCompiler: PromptCompiler;
+  readonly messageWriter?: ReplyMessageWriter;
 }
 
 const sourceDestinationSchema = z
@@ -149,6 +156,12 @@ export function createLlmReplyModule(
               context,
             ),
           );
+          await persistWebReply(
+            dependencies.messageWriter,
+            parsedMessage.data,
+            output.text,
+            context,
+          );
           const outbound = selectOutbound(
             parsedMessage.data,
             settings.outbound,
@@ -172,6 +185,36 @@ export function createLlmReplyModule(
         }),
       ],
     }),
+  });
+}
+
+async function persistWebReply(
+  writer: ReplyMessageWriter | undefined,
+  message: ModuleMessage,
+  text: string,
+  context: ModuleHandlerContext,
+): Promise<void> {
+  if (writer === undefined || message.source.kind !== "web") {
+    return;
+  }
+  const record: MessageRecord = {
+    id: context.nextId("message"),
+    role: "assistant",
+    content: text,
+    occurredAt: context.now().toISOString(),
+    metadata: {
+      traceId: context.traceId,
+      requestId: message.source.requestId,
+      sourceMessageId: message.messageId,
+      ...(message.source.sessionId === undefined
+        ? {}
+        : { sessionId: message.source.sessionId }),
+    },
+  };
+  await writer.insert(record);
+  await context.emit(messagePersistedEvent, {
+    messageId: record.id,
+    role: "assistant",
   });
 }
 

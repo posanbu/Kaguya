@@ -10,8 +10,13 @@ import {
   type LogContext,
 } from "@kaguya/logger";
 import { configurationSetupGuidance } from "@kaguya/config";
+import { RuntimeUnavailableError } from "@kaguya/runtime";
 
-import { createHttpApplication } from "./app.js";
+import {
+  createHttpApplication,
+  type MessageIngress,
+  type SessionMessageReader,
+} from "./app.js";
 import type { ServerConfig } from "./config.js";
 import type { ConfigurationSetup } from "./setup.js";
 
@@ -187,6 +192,7 @@ describe("application API gateway", () => {
                     required: ["text"],
                     properties: {
                       text: { type: "string" },
+                      sessionId: { type: "string" },
                     },
                   },
                 },
@@ -199,9 +205,11 @@ describe("application API gateway", () => {
                     schema: {
                       properties: {
                         data: {
+                          required: ["status", "requestId", "sessionId"],
                           properties: {
                             status: { enum: ["accepted"] },
                             requestId: { type: "string" },
+                            sessionId: { type: "string" },
                           },
                         },
                       },
@@ -251,6 +259,43 @@ describe("application API gateway", () => {
             },
           },
         },
+        "/api/v1/sessions/{sessionId}": {
+          get: {
+            security: [{ bearerAuth: [] }],
+            responses: {
+              "200": {
+                content: {
+                  "application/json": {
+                    schema: {
+                      properties: {
+                        data: {
+                          required: ["sessionId", "messages"],
+                          properties: {
+                            sessionId: { type: "string" },
+                            messages: { type: "array" },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+              "400": {
+                content: {
+                  "application/json": {
+                    schema: {
+                      properties: {
+                        error: {
+                          required: ["code", "message", "requestId"],
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
       },
     });
     const serialized = JSON.stringify(document);
@@ -266,7 +311,7 @@ describe("application API gateway", () => {
   });
 
   it("does not expose the removed model route", async () => {
-    const enqueue = vi.fn(() => Promise.resolve());
+    const enqueue = vi.fn(() => Promise.resolve(fakeReceipt()));
     const app = await createApiGateway({
       config,
       messageIngress: { enqueue },
@@ -294,7 +339,7 @@ describe("application API gateway", () => {
   });
 
   it("uses bounded client request IDs and replaces unsafe values", async () => {
-    const enqueue = vi.fn(() => Promise.resolve());
+    const enqueue = vi.fn(() => Promise.resolve(fakeReceipt()));
     const app = await createApiGateway({
       config,
       messageIngress: { enqueue },
@@ -315,33 +360,152 @@ describe("application API gateway", () => {
     const responseRequestId = response.json().data.requestId as string;
     expect(responseRequestId).not.toBe(unsafeRequestId);
     expect(responseRequestId.length).toBeLessThanOrEqual(128);
-    expect(enqueue).toHaveBeenCalledWith({
-      ...requestBody,
-      requestId: responseRequestId,
-    });
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ...requestBody,
+        requestId: responseRequestId,
+        sessionId: expect.any(String),
+      }),
+    );
     await app.close();
   });
 
-  it("rejects the removed sessionId request field", async () => {
-    const enqueue = vi.fn(() => Promise.resolve());
+  it("accepts a sessionId and echoes the effective session", async () => {
+    const enqueue = vi.fn(async ({ sessionId }: { sessionId: string }) =>
+      fakeReceipt(sessionId),
+    );
     const app = await createApiGateway({
       config,
       messageIngress: { enqueue },
     });
-    const rejected = await app.inject({
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/messages",
+      headers: {
+        ...authorization(),
+        "x-request-id": "request-session-1",
+      },
+      payload: { text: "Hello", sessionId: "session-1" },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toEqual({
+      data: {
+        status: "accepted",
+        requestId: "request-session-1",
+        sessionId: "session-1",
+      },
+    });
+    expect(enqueue).toHaveBeenCalledWith({
+      text: "Hello",
+      requestId: "request-session-1",
+      sessionId: "session-1",
+    });
+    await app.close();
+  });
+
+  it("generates and echoes a sessionId when the request omits one", async () => {
+    const enqueue = vi.fn(async ({ sessionId }: { sessionId: string }) =>
+      fakeReceipt(sessionId),
+    );
+    const app = await createApiGateway({
+      config,
+      messageIngress: { enqueue },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/messages",
+      headers: {
+        ...authorization(),
+        "x-request-id": "request-generated",
+      },
+      payload: requestBody,
+    });
+
+    expect(response.statusCode).toBe(202);
+    const echoedSessionId = response.json().data.sessionId as string;
+    expect(echoedSessionId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u,
+    );
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: echoedSessionId }),
+    );
+    await app.close();
+  });
+
+  it("normalizes sessionId values and rejects invalid ones", async () => {
+    const enqueue = vi.fn(async ({ sessionId }: { sessionId: string }) =>
+      fakeReceipt(sessionId),
+    );
+    const app = await createApiGateway({
+      config,
+      messageIngress: { enqueue },
+    });
+
+    const trimmed = await app.inject({
       method: "POST",
       url: "/api/v1/messages",
       headers: authorization(),
-      payload: { ...requestBody, sessionId: "legacy-session" },
+      payload: { text: "Hello", sessionId: " session-1 " },
+    });
+    expect(trimmed.statusCode).toBe(202);
+    expect(trimmed.json()).toMatchObject({
+      data: { sessionId: "session-1" },
+    });
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "session-1" }),
+    );
+
+    for (const sessionId of ["-bad", "", "s".repeat(129), 42]) {
+      const rejected = await app.inject({
+        method: "POST",
+        url: "/api/v1/messages",
+        headers: authorization(),
+        payload: { text: "Hello", sessionId },
+      });
+      expect(rejected.statusCode, JSON.stringify(sessionId)).toBe(400);
+      expect(rejected.json(), JSON.stringify(sessionId)).toMatchObject({
+        error: { code: "invalid_request" },
+      });
+    }
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
+  it("maps a rejected enqueue to the setup-required status", async () => {
+    const setup: ConfigurationSetup = {
+      inspect: vi.fn(async () => ({
+        status: "setup_required" as const,
+        guidance: configurationSetupGuidance,
+      })),
+      initialize: vi.fn(async () => undefined),
+    };
+    const app = await createApiGateway({
+      config,
+      setup,
+      messageIngress: {
+        enqueue: () => Promise.reject(new RuntimeUnavailableError()),
+      },
     });
 
-    expect(rejected.statusCode).toBe(400);
-    expect(enqueue).not.toHaveBeenCalled();
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/messages",
+      headers: authorization(),
+      payload: requestBody,
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({
+      error: { code: "configuration_setup_required" },
+    });
     await app.close();
   });
 
   it("authenticates before parsing or validating a message", async () => {
-    const enqueue = vi.fn(() => Promise.resolve());
+    const enqueue = vi.fn(() => Promise.resolve(fakeReceipt()));
     const app = await createApiGateway({
       config,
       messageIngress: { enqueue },
@@ -362,7 +526,9 @@ describe("application API gateway", () => {
   });
 
   it("validates and enqueues a message without model configuration", async () => {
-    const enqueue = vi.fn(() => Promise.resolve());
+    const enqueue = vi.fn(async ({ sessionId }: { sessionId: string }) =>
+      fakeReceipt(sessionId),
+    );
     const app = await createApiGateway({
       config,
       messageIngress: { enqueue },
@@ -379,13 +545,19 @@ describe("application API gateway", () => {
     });
 
     expect(response.statusCode).toBe(202);
+    const echoedSessionId = response.json().data.sessionId as string;
     expect(response.json()).toEqual({
-      data: { status: "accepted", requestId: "request-123" },
+      data: {
+        status: "accepted",
+        requestId: "request-123",
+        sessionId: echoedSessionId,
+      },
     });
     expect(enqueue).toHaveBeenCalledTimes(1);
     expect(enqueue).toHaveBeenCalledWith({
       text: " Hello ",
       requestId: "request-123",
+      sessionId: echoedSessionId,
     });
     await app.close();
   });
@@ -397,7 +569,7 @@ describe("application API gateway", () => {
       messageIngress: {
         enqueue: () => {
           capturedContext = getLogContext();
-          return Promise.resolve();
+          return Promise.resolve(fakeReceipt());
         },
       },
     });
@@ -456,7 +628,7 @@ describe("application API gateway", () => {
   });
 
   it("rejects model, provider, prompt, and workflow routing fields", async () => {
-    const enqueue = vi.fn(() => Promise.resolve());
+    const enqueue = vi.fn(() => Promise.resolve(fakeReceipt()));
     const app = await createApiGateway({
       config,
       messageIngress: { enqueue },
@@ -488,7 +660,7 @@ describe("application API gateway", () => {
   });
 
   it("rejects blank messages", async () => {
-    const enqueue = vi.fn(() => Promise.resolve());
+    const enqueue = vi.fn(() => Promise.resolve(fakeReceipt()));
     const app = await createApiGateway({
       config,
       messageIngress: { enqueue },
@@ -510,7 +682,7 @@ describe("application API gateway", () => {
   });
 
   it("reports malformed JSON as an invalid request", async () => {
-    const enqueue = vi.fn(() => Promise.resolve());
+    const enqueue = vi.fn(() => Promise.resolve(fakeReceipt()));
     const app = await createApiGateway({
       config,
       messageIngress: { enqueue },
@@ -535,7 +707,7 @@ describe("application API gateway", () => {
   });
 
   it("normalizes unsupported media types and oversized bodies", async () => {
-    const enqueue = vi.fn(() => Promise.resolve());
+    const enqueue = vi.fn(() => Promise.resolve(fakeReceipt()));
     const app = await createApiGateway({
       config,
       messageIngress: { enqueue },
@@ -671,36 +843,190 @@ describe("application API gateway", () => {
     expect(spoofedSecondClient.statusCode).toBe(429);
     await untrustedApp.close();
   });
+
+  describe("GET /api/v1/sessions/:sessionId", () => {
+    const firstView = {
+      id: "message-1",
+      role: "user" as const,
+      content: "Hello",
+      occurredAt: "2026-08-30T00:00:00.000Z",
+      requestId: "request-1",
+    };
+    const secondView = {
+      id: "message-2",
+      role: "assistant" as const,
+      content: "Good evening.",
+      occurredAt: "2026-08-30T00:00:01.000Z",
+    };
+
+    it("lists the persisted messages of a session", async () => {
+      const listSessionMessages = vi.fn(async () => [firstView, secondView]);
+      const app = await createApiGateway({
+        config,
+        sessionMessages: { listSessionMessages },
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/v1/sessions/session-1",
+        headers: authorization(),
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        data: { sessionId: "session-1", messages: [firstView, secondView] },
+      });
+      expect(listSessionMessages).toHaveBeenCalledWith("session-1");
+      await app.close();
+    });
+
+    it("returns an empty list for an unknown session", async () => {
+      const listSessionMessages = vi.fn(async () => []);
+      const app = await createApiGateway({
+        config,
+        sessionMessages: { listSessionMessages },
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/v1/sessions/unknown-session",
+        headers: authorization(),
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        data: { sessionId: "unknown-session", messages: [] },
+      });
+      await app.close();
+    });
+
+    it("authenticates before reading a session", async () => {
+      const listSessionMessages = vi.fn(async () => []);
+      const app = await createApiGateway({
+        config,
+        sessionMessages: { listSessionMessages },
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/v1/sessions/session-1",
+      });
+
+      expect(response.statusCode).toBe(401);
+      expect(response.json()).toMatchObject({
+        error: { code: "unauthorized" },
+      });
+      expect(listSessionMessages).not.toHaveBeenCalled();
+      await app.close();
+    });
+
+    it("rejects invalid session path parameters", async () => {
+      const listSessionMessages = vi.fn(async () => []);
+      const app = await createApiGateway({
+        config,
+        sessionMessages: { listSessionMessages },
+      });
+
+      const invalid = await app.inject({
+        method: "GET",
+        url: "/api/v1/sessions/-bad",
+        headers: authorization(),
+      });
+      expect(invalid.statusCode).toBe(400);
+      expect(invalid.json()).toMatchObject({
+        error: { code: "invalid_request" },
+      });
+
+      const oversized = await app.inject({
+        method: "GET",
+        url: `/api/v1/sessions/${"s".repeat(129)}`,
+        headers: authorization(),
+      });
+      expect(oversized.statusCode).toBe(414);
+      expect(listSessionMessages).not.toHaveBeenCalled();
+      await app.close();
+    });
+
+    it("reports an unavailable session reader", async () => {
+      const app = await createApiGateway({ config });
+
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/v1/sessions/session-1",
+        headers: authorization(),
+      });
+
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({
+        error: {
+          code: "core_unavailable",
+          message: "Core message ingress is not configured",
+        },
+      });
+      await app.close();
+    });
+
+    it("maps a rejected session read to the setup-required status", async () => {
+      const setup: ConfigurationSetup = {
+        inspect: vi.fn(async () => ({
+          status: "setup_required" as const,
+          guidance: configurationSetupGuidance,
+        })),
+        initialize: vi.fn(async () => undefined),
+      };
+      const app = await createApiGateway({
+        config,
+        setup,
+        sessionMessages: {
+          listSessionMessages: () =>
+            Promise.reject(new RuntimeUnavailableError()),
+        },
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/v1/sessions/session-1",
+        headers: authorization(),
+      });
+
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({
+        error: { code: "configuration_setup_required" },
+      });
+      await app.close();
+    });
+  });
 });
 
-function fakeIngress(): MessageIngress {
-  return { enqueue: () => Promise.resolve() };
+function fakeReceipt(sessionId = "session-fake") {
+  return {
+    traceId: "webui-session-fake",
+    messageId: "webui-session-fake-message-000001",
+    sessionId,
+  };
 }
 
-interface MessageIngress {
-  enqueue(command: { text: string; requestId: string }): Promise<void>;
+function fakeIngress(): MessageIngress {
+  return { enqueue: () => Promise.resolve(fakeReceipt()) };
 }
 
 function createApiGateway(options: {
   config: ServerConfig;
   messageIngress?: MessageIngress;
+  sessionMessages?: SessionMessageReader;
+  setup?: ConfigurationSetup;
   logger?: Parameters<typeof createHttpApplication>[0]["logger"];
 }) {
-  const runtime =
-    options.messageIngress === undefined
-      ? undefined
-      : {
-          dispatch(message: { kind: "web"; text: string; requestId: string }) {
-            const { kind: _kind, ...command } = message;
-            return (
-              options.messageIngress?.enqueue(command) ?? Promise.resolve()
-            );
-          },
-        };
   return createHttpApplication({
     config: options.config,
+    ...(options.messageIngress === undefined
+      ? {}
+      : { messageIngress: options.messageIngress }),
+    ...(options.sessionMessages === undefined
+      ? {}
+      : { sessionMessages: options.sessionMessages }),
+    ...(options.setup === undefined ? {} : { setup: options.setup }),
     ...(options.logger === undefined ? {} : { logger: options.logger }),
-    ...(runtime === undefined ? {} : { runtime }),
   });
 }
 

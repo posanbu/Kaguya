@@ -41,9 +41,12 @@ import { approvedEventDefinitions } from "./events.js";
 import { LlmLifecycleClient } from "./llm-lifecycle.js";
 import { GatewayAllowlist } from "./gateway-allowlist.js";
 
+const SESSION_MESSAGE_PAGE_LIMIT = 200;
+
 export interface RuntimeWebMessage {
   readonly kind: "web";
   readonly requestId: string;
+  readonly sessionId: string;
   readonly text: string;
   readonly occurredAt?: string;
 }
@@ -63,6 +66,20 @@ export interface RuntimeDispatchResult {
   readonly delivery?: PlatformDeliveryReceipt;
   readonly interrupted: boolean;
   readonly filtered: boolean;
+}
+
+export interface RuntimeEnqueueReceipt {
+  readonly traceId: string;
+  readonly messageId: string;
+  readonly sessionId: string;
+}
+
+export interface SessionMessageView {
+  readonly id: string;
+  readonly role: "user" | "assistant";
+  readonly content: string;
+  readonly occurredAt: string;
+  readonly requestId?: string;
 }
 
 export interface ResolvedRuntimeModel {
@@ -189,6 +206,7 @@ export class KaguyaRuntime {
         messageReader: database.messages,
         llm,
         promptCompiler,
+        messageWriter: database.messages,
       });
       moduleHost = new ModuleHost({
         eventBus,
@@ -249,6 +267,75 @@ export class KaguyaRuntime {
       () => this.#inFlight.delete(operation),
     );
     return operation;
+  }
+
+  enqueue(
+    message: Omit<RuntimeWebMessage, "kind">,
+  ): Promise<RuntimeEnqueueReceipt> {
+    if (this.#state !== "started") {
+      return Promise.reject(new RuntimeUnavailableError());
+    }
+    const startedAt = this.#now().getTime();
+    const webMessage: RuntimeWebMessage = { kind: "web", ...message };
+    const ingested = this.#ingest(webMessage);
+    const processing = runWithLogContext(
+      { traceId: ingested.traceId },
+      async () => {
+        try {
+          return await this.#process(ingested, webMessage, startedAt);
+        } catch (error) {
+          this.#runtimeLogger?.error(
+            {
+              event: "message.processing.failed",
+              sourceKind: "web",
+              durationMs: Math.max(0, this.#now().getTime() - startedAt),
+              err: error,
+            },
+            "Background message processing failed",
+          );
+          throw error;
+        }
+      },
+    );
+    this.#inFlight.add(processing);
+    void processing.then(
+      () => this.#inFlight.delete(processing),
+      () => this.#inFlight.delete(processing),
+    );
+    return Promise.resolve({
+      traceId: ingested.traceId,
+      messageId: ingested.record.id,
+      sessionId: message.sessionId,
+    });
+  }
+
+  listSessionMessages(
+    sessionId: string,
+    options?: { limit?: number },
+  ): Promise<readonly SessionMessageView[]> {
+    if (this.#state !== "started") {
+      return Promise.reject(new RuntimeUnavailableError());
+    }
+    const limit = options?.limit ?? SESSION_MESSAGE_PAGE_LIMIT;
+    return Promise.resolve(
+      required(this.#database, "database")
+        .messages.listBySession(sessionId, limit)
+        .flatMap((record) => {
+          if (record.role !== "user" && record.role !== "assistant") {
+            return [];
+          }
+          const requestId = sessionRequestId(record);
+          return [
+            {
+              id: record.id,
+              role: record.role,
+              content: record.content,
+              occurredAt: record.occurredAt,
+              ...(requestId === undefined ? {} : { requestId }),
+            },
+          ];
+        }),
+    );
   }
 
   close(): Promise<void> {
@@ -315,49 +402,9 @@ export class KaguyaRuntime {
         };
       }
 
-      const normalized = normalizeInboundMessage(input, this.#now, (prefix) =>
-        this.#nextId(traceId, prefix),
-      );
-      this.#runtimeLogger?.debug(
-        {
-          event: "message.dispatch.started",
-          sourceKind: input.kind,
-          ...platformLogFields(input),
-        },
-        "Message dispatch started",
-      );
       try {
-        required(this.#database, "database").messages.insert(normalized.record);
-        const result = await required(this.#eventBus, "event bus").emit(
-          normalized.event,
-        );
-        const deliveries = deliveryReceipts(
-          required(this.#database, "database").outboundMessages.listByTrace(
-            normalized.traceId,
-          ),
-        );
-        const durationMs = Math.max(0, this.#now().getTime() - startedAt);
-        const lastDelivery = deliveries.at(-1);
-        this.#runtimeLogger?.info(
-          {
-            event: "message.dispatch.completed",
-            sourceKind: input.kind,
-            durationMs,
-            deliveryCount: deliveries.length,
-            interrupted: !result.continue,
-            ...platformLogFields(input),
-          },
-          "Message dispatch completed",
-        );
-        return {
-          traceId: normalized.traceId,
-          workflowId: "message-module-pipeline",
-          completedNodeIds: ["persist-message", "publish-message-ingested"],
-          deliveries,
-          ...(lastDelivery === undefined ? {} : { delivery: lastDelivery }),
-          interrupted: !result.continue,
-          filtered: false,
-        };
+        const ingested = this.#ingest(input);
+        return await this.#process(ingested, input, startedAt);
       } catch (error) {
         this.#runtimeLogger?.error(
           {
@@ -372,6 +419,59 @@ export class KaguyaRuntime {
         throw error;
       }
     });
+  }
+
+  #ingest(input: RuntimeInboundMessage): IngestedMessage {
+    const normalized = normalizeInboundMessage(input, this.#now, (prefix) =>
+      this.#nextId(traceIdOf(input), prefix),
+    );
+    this.#runtimeLogger?.debug(
+      {
+        event: "message.dispatch.started",
+        sourceKind: input.kind,
+        ...platformLogFields(input),
+      },
+      "Message dispatch started",
+    );
+    required(this.#database, "database").messages.insert(normalized.record);
+    return normalized;
+  }
+
+  async #process(
+    ingested: IngestedMessage,
+    input: RuntimeInboundMessage,
+    startedAt: number,
+  ): Promise<RuntimeDispatchResult> {
+    const result = await required(this.#eventBus, "event bus").emit(
+      ingested.event,
+    );
+    const deliveries = deliveryReceipts(
+      required(this.#database, "database").outboundMessages.listByTrace(
+        ingested.traceId,
+      ),
+    );
+    const durationMs = Math.max(0, this.#now().getTime() - startedAt);
+    const lastDelivery = deliveries.at(-1);
+    this.#runtimeLogger?.info(
+      {
+        event: "message.dispatch.completed",
+        sourceKind: input.kind,
+        durationMs,
+        deliveryCount: deliveries.length,
+        interrupted: !result.continue,
+        ...platformLogFields(input),
+      },
+      "Message dispatch completed",
+    );
+    return {
+      traceId: ingested.traceId,
+      workflowId: "message-module-pipeline",
+      completedNodeIds: ["persist-message", "publish-message-ingested"],
+      deliveries,
+      ...(lastDelivery === undefined ? {} : { delivery: lastDelivery }),
+      interrupted: !result.continue,
+      filtered: false,
+    };
   }
 
   async #deliverOutbound(event: EventEnvelope): Promise<void> {
@@ -540,15 +640,17 @@ function outboundResultBase(
   };
 }
 
+interface IngestedMessage {
+  readonly traceId: string;
+  readonly record: MessageRecord;
+  readonly event: ReturnType<typeof messageIngestedEvent.create>;
+}
+
 function normalizeInboundMessage(
   input: RuntimeInboundMessage,
   now: () => Date,
   nextId: (prefix: string) => string,
-): {
-  traceId: string;
-  record: MessageRecord;
-  event: ReturnType<typeof messageIngestedEvent.create>;
-} {
+): IngestedMessage {
   const traceId = traceIdOf(input);
   const occurredAt =
     input.kind === "web"
@@ -564,6 +666,7 @@ function normalizeInboundMessage(
         ? {
             kind: "web",
             requestId: input.requestId,
+            sessionId: input.sessionId,
           }
         : {
             kind: "platform",
@@ -607,10 +710,27 @@ function normalizeInboundMessage(
       role: "user",
       content: moduleMessage.text,
       occurredAt,
-      metadata: { moduleMessage, traceId, eventId },
+      metadata: {
+        moduleMessage,
+        traceId,
+        eventId,
+        ...(input.kind === "web" ? { sessionId: input.sessionId } : {}),
+      },
     },
     event,
   };
+}
+
+function sessionRequestId(record: MessageRecord): string | undefined {
+  const metadata = record.metadata;
+  if (typeof metadata.requestId === "string" && metadata.requestId.length > 0) {
+    return metadata.requestId;
+  }
+  const parsed = moduleMessageSchema.safeParse(metadata.moduleMessage);
+  if (parsed.success && parsed.data.source.kind === "web") {
+    return parsed.data.source.requestId;
+  }
+  return undefined;
 }
 
 function createReplyLlmExecutor(options: {

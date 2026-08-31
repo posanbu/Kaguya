@@ -166,20 +166,210 @@ describe("KaguyaRuntime", () => {
     const result = await runtime.dispatch({
       kind: "web",
       requestId: "request-1",
+      sessionId: "session-1",
       text: "hello from web",
     });
     await runtime.close();
 
     expect(result.deliveries).toEqual([]);
     const database = KaguyaDatabase.open(databasePath);
-    expect(database.messages.listRecent(10)[0]?.metadata).toMatchObject({
+    const messages = database.messages.listRecent(10);
+    expect(messages).toHaveLength(2);
+    const user = messages.find((record) => record.role === "user");
+    const assistant = messages.find((record) => record.role === "assistant");
+    expect(user?.metadata).toMatchObject({
+      sessionId: "session-1",
       moduleMessage: {
         source: {
           kind: "web",
           requestId: "request-1",
+          sessionId: "session-1",
         },
       },
     });
+    expect(assistant?.content).toBe(
+      "It is a lovely night for watching the moon.",
+    );
+    expect(assistant?.metadata).toMatchObject({
+      traceId: "webui-request-1",
+      requestId: "request-1",
+      sessionId: "session-1",
+      sourceMessageId: user?.id,
+    });
+    database.close();
+  });
+
+  it("resolves enqueue after persistence and before reply generation", async () => {
+    const databasePath = path();
+    const deferred = createDeferredDeterministicModel({ text: "done" });
+    const runtime = new KaguyaRuntime({
+      databasePath,
+      resolveModelSelection: ({ modelTier }) => ({
+        modelId: `deferred-${modelTier}`,
+        model: deferred.model,
+      }),
+    });
+    await runtime.start();
+
+    const receipt = await runtime.enqueue({
+      requestId: "request-1",
+      sessionId: "session-1",
+      text: "hello from web",
+    });
+    expect(receipt.traceId).toBe("webui-request-1");
+    expect(receipt.sessionId).toBe("session-1");
+    expect(receipt.messageId).toMatch(/^webui-request-1-message-\d{6}$/u);
+
+    const pending = KaguyaDatabase.open(databasePath);
+    expect(pending.messages.listBySession("session-1", 10)).toHaveLength(1);
+    pending.close();
+
+    deferred.release();
+    await runtime.close();
+
+    const database = KaguyaDatabase.open(databasePath);
+    const messages = database.messages.listBySession("session-1", 10);
+    expect(messages.map((record) => record.role)).toEqual([
+      "user",
+      "assistant",
+    ]);
+    expect(database.llmTraces.listByTrace("webui-request-1")).toHaveLength(1);
+    database.close();
+  });
+
+  it("rejects enqueue and session queries while the runtime is unavailable", async () => {
+    const runtime = new KaguyaRuntime({ databasePath: path() });
+    await expect(
+      runtime.enqueue({
+        requestId: "request-1",
+        sessionId: "session-1",
+        text: "hello",
+      }),
+    ).rejects.toBeInstanceOf(RuntimeUnavailableError);
+    await expect(
+      runtime.listSessionMessages("session-1"),
+    ).rejects.toBeInstanceOf(RuntimeUnavailableError);
+
+    await runtime.start();
+    await runtime.enqueue({
+      requestId: "request-1",
+      sessionId: "session-1",
+      text: "hello",
+    });
+    await runtime.close();
+    await expect(
+      runtime.enqueue({
+        requestId: "request-2",
+        sessionId: "session-1",
+        text: "again",
+      }),
+    ).rejects.toBeInstanceOf(RuntimeUnavailableError);
+    await expect(
+      runtime.listSessionMessages("session-1"),
+    ).rejects.toBeInstanceOf(RuntimeUnavailableError);
+  });
+
+  it("waits for background enqueue processing before close", async () => {
+    const databasePath = path();
+    const deferred = createDeferredDeterministicModel({ text: "done" });
+    const runtime = new KaguyaRuntime({
+      databasePath,
+      resolveModelSelection: ({ modelTier }) => ({
+        modelId: `deferred-${modelTier}`,
+        model: deferred.model,
+      }),
+    });
+    await runtime.start();
+    const receipt = await runtime.enqueue({
+      requestId: "request-1",
+      sessionId: "session-1",
+      text: "hello from web",
+    });
+    await deferred.started;
+    const close = runtime.close();
+    deferred.release();
+    await close;
+
+    expect(receipt.traceId).toBe("webui-request-1");
+    const database = KaguyaDatabase.open(databasePath);
+    const messages = database.messages.listBySession("session-1", 10);
+    expect(messages).toHaveLength(2);
+    expect(messages[1]?.role).toBe("assistant");
+    database.close();
+  });
+
+  it("maps session views with request correlation and isolates sessions", async () => {
+    const databasePath = path();
+    const deferred = createDeferredDeterministicModel({ text: "reply" });
+    let milliseconds = Date.parse("2026-08-30T00:00:00.000Z");
+    const runtime = new KaguyaRuntime({
+      databasePath,
+      now: () => new Date((milliseconds += 1_000)),
+      resolveModelSelection: ({ modelTier }) => ({
+        modelId: `deterministic-${modelTier}`,
+        model: deferred.model,
+      }),
+    });
+    await runtime.start();
+
+    const receipt = await runtime.enqueue({
+      requestId: "request-1",
+      sessionId: "session-a",
+      text: "first",
+    });
+    const pending = await runtime.listSessionMessages("session-a");
+    expect(pending).toEqual([
+      {
+        id: receipt.messageId,
+        role: "user",
+        content: "first",
+        occurredAt: expect.any(String),
+        requestId: "request-1",
+      },
+    ]);
+    expect(await runtime.listSessionMessages("session-b")).toEqual([]);
+
+    deferred.release();
+    await runtime.close();
+
+    const database = KaguyaDatabase.open(databasePath);
+    const sessionA = database.messages.listBySession("session-a", 10);
+    expect(sessionA).toHaveLength(2);
+    expect(sessionA.map((record) => record.role)).toEqual([
+      "user",
+      "assistant",
+    ]);
+    expect(sessionA[1]?.metadata).toMatchObject({
+      traceId: "webui-request-1",
+      requestId: "request-1",
+      sessionId: "session-a",
+      sourceMessageId: receipt.messageId,
+    });
+    database.close();
+  });
+
+  it("absorbs a background enqueue failure instead of rejecting the receipt", async () => {
+    const databasePath = path();
+    const runtime = new KaguyaRuntime({
+      databasePath,
+      resolveModelSelection: () => {
+        throw new Error("model resolver exploded");
+      },
+    });
+    await runtime.start();
+
+    const receipt = await runtime.enqueue({
+      requestId: "request-1",
+      sessionId: "session-1",
+      text: "hello",
+    });
+    expect(receipt.sessionId).toBe("session-1");
+    await runtime.close();
+
+    const database = KaguyaDatabase.open(databasePath);
+    const messages = database.messages.listBySession("session-1", 10);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.role).toBe("user");
     database.close();
   });
 

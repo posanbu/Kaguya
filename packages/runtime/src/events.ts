@@ -1,5 +1,6 @@
 import {
   messageIngestedEvent,
+  messagePersistedEvent,
   outboundMessageDeliveredEvent,
   outboundMessageFailedEvent,
   outboundMessageRequestedEvent,
@@ -26,16 +27,6 @@ const llmLifecyclePayloadSchema = z
 export const messageReceivedEvent = defineEvent(
   "message.received",
   z.object({ text: z.string() }).strict(),
-);
-
-export const messagePersistedEvent = defineEvent(
-  "message.persisted",
-  z
-    .object({
-      messageId: nonBlankStringSchema,
-      role: z.enum(["assistant", "system", "user"]),
-    })
-    .strict(),
 );
 
 export const routeRequestedEvent = defineEvent(
@@ -112,6 +103,7 @@ export const approvedEventDefinitions = [
 
 export {
   messageIngestedEvent,
+  messagePersistedEvent,
   outboundMessageDeliveredEvent,
   outboundMessageFailedEvent,
   outboundMessageRequestedEvent,

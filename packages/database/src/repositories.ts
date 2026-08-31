@@ -78,6 +78,20 @@ export class MessageRepository {
       .all(limit)
       .map((row) => readMessage(row));
   }
+
+  listBySession(sessionId: string, limit: number): MessageRecord[] {
+    assertRecentLimit(limit);
+    return this.database
+      .prepare(
+        `SELECT id, role, content, occurred_at, metadata_json
+         FROM messages
+         WHERE json_extract(metadata_json, '$.sessionId') = ?
+         ORDER BY occurred_at DESC, id DESC LIMIT ?`,
+      )
+      .all(sessionId, limit)
+      .map((row) => readMessage(row))
+      .reverse();
+  }
 }
 
 export class OutboundMessageRepository {
