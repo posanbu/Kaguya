@@ -48,12 +48,12 @@ flowchart LR
 ::: code-group
 
 ```bash [本地开发 ~vscode-icons:file-type-shell~]
-pnpm --ignore-workspace docs:dev
+pnpm docs:dev
 ```
 
 ```bash [生产预览 ~vscode-icons:file-type-shell~]
-pnpm --ignore-workspace docs:build
-pnpm --ignore-workspace docs:preview
+pnpm docs:build
+pnpm docs:preview
 ```
 
 :::
@@ -77,7 +77,7 @@ pnpm --ignore-workspace docs:preview
 ::: code-group
 
 ```bash [文档检查 ~vscode-icons:file-type-shell~]
-pnpm --ignore-workspace docs:build
+pnpm docs:build
 git diff --check
 git status --short
 ```
