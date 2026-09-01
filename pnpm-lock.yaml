@@ -185,6 +185,12 @@ importers:
 
   packages/logger:
     dependencies:
+      '@kaguya/schema':
+        specifier: workspace:*
+        version: link:../schema
+      '@kaguya/sdk':
+        specifier: workspace:*
+        version: link:../sdk
       pino:
         specifier: 10.3.1
         version: 10.3.1
