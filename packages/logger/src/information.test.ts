@@ -313,6 +313,26 @@ describe("information atom log projection", () => {
     });
   });
 
+  it("reports projection exceptions and never throws", async () => {
+    const logger = createLogger({ service: "test", level: "trace", stream: new MemoryStream() });
+    const definition = defineInformationKind({ kind: "core.system.log.throwing", payloadSchema: z.object({ content: z.string() }).strict(), references: {}, log: { enabled: true, level: "info", project() { throw new Error("boom"); } } });
+    const atom = { informationId: "atom-throw", kind: definition.kind, occurredAt: "2026-09-01T00:00:00.000Z", source: "test", payload: { content: "x" }, references: [] } as InformationAtom;
+    const errors: unknown[] = [];
+    await expect(projectInformationAtomLog(logger, definition as any, atom, (e) => { errors.push(e); })).resolves.toBeUndefined();
+    expect(errors).toEqual([{ informationId: "atom-throw", kind: definition.kind, errorType: "projection_failed" }]);
+  });
+
+  it("rejects sensitive projection keys", async () => {
+    const stream = new MemoryStream();
+    const logger = createLogger({ service: "test", level: "trace", stream });
+    const definition = defineInformationKind({ kind: "core.system.log.sensitive", payloadSchema: z.object({ content: z.string() }).strict(), references: {}, log: { enabled: true, level: "info", project() { return { response: "secret" } as JsonObject; } } });
+    const atom = { informationId: "atom-sensitive", kind: definition.kind, occurredAt: "2026-09-01T00:00:00.000Z", source: "test", payload: { content: "x" }, references: [] } as InformationAtom;
+    const errors: unknown[] = [];
+    await projectInformationAtomLog(logger, definition as any, atom, (e) => { errors.push(e); });
+    expect(errors).toEqual([{ informationId: "atom-sensitive", kind: definition.kind, errorType: "invalid_projection_result" }]);
+    expect(stream.logs()).toEqual([]);
+  });
+
   it("reports unknown kinds from a sink", async () => {
     const stream = new MemoryStream();
     const logger = createLogger({

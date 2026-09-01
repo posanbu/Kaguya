@@ -70,7 +70,18 @@ export async function projectInformationAtomLog<P extends JsonObject>(
     return;
   }
 
-  const projection = normalizeProjection(definition.log.project(atom));
+  let rawProjection: unknown;
+  try {
+    rawProjection = definition.log.project(atom);
+  } catch {
+    await reportProjectionError(emergencyReporter, {
+      informationId: atom.informationId,
+      kind: atom.kind,
+      errorType: "projection_failed",
+    });
+    return;
+  }
+  const projection = normalizeProjection(rawProjection);
   if (projection === undefined) {
     await reportProjectionError(emergencyReporter, {
       informationId: atom.informationId,
@@ -160,8 +171,12 @@ function normalizeProjection(
 
 function cloneJsonObject(value: JsonObject): JsonObject | undefined {
   const clone: JsonObject = {};
+  const forbidden = new Set(["prompt", "response", "credentials", "raw", "headers"]);
   for (const key of Reflect.ownKeys(value)) {
     if (typeof key !== "string") {
+      return undefined;
+    }
+    if (forbidden.has(key)) {
       return undefined;
     }
 
