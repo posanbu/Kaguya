@@ -9,6 +9,17 @@ import pino, {
 } from "pino";
 import pinoPretty from "pino-pretty";
 
+export {
+  MAX_INFORMATION_CONTENT_CODE_POINTS,
+  createInformationAtomLogSink,
+  previewInformationContent,
+  projectInformationAtomLog,
+  type CreateInformationAtomLogSinkOptions,
+  type InformationAtomLogEmergencyReporter,
+  type InformationAtomLogError,
+  type InformationAtomLogSink,
+} from "./information.js";
+
 const MAX_CONTEXT_VALUE_LENGTH = 512;
 const MAX_NAMESPACE_LENGTH = 128;
 const NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;

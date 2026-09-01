@@ -6,5 +6,9 @@
     "types": ["node"]
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../schema" }]
+  "references": [
+    { "path": "../schema" },
+    { "path": "../engine" },
+    { "path": "../sdk" }
+  ]
 }

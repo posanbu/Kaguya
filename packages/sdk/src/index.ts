@@ -1,3 +1,9 @@
+/**
+ * 架构说明：本入口聚合 SDK 的稳定公开 API，包括事件、模块、
+ * 工作流与信息 kind 契约，供上层 composition root 统一消费。
+ * 代码库关系：`packages/schema` 提供基础 wire contract，`packages/sdk`
+ * 则在此基础上继续提供可注册的高层定义与构建器。
+ */
 import { eventEnvelopeSchema, type EventEnvelope, z } from "@kaguya/schema";
 
 export interface EventDefinition<TType extends string, TPayload> {
@@ -224,3 +230,15 @@ export {
   type ModuleSubscription,
   type TargetedModulePayload,
 } from "./modules.js";
+export {
+  defineInformationKind,
+  type DefineInformationKindInput,
+  type InformationAppendInput,
+  type InformationKindDefinition,
+  type InformationLogDisabledPolicy,
+  type InformationLogEnabledPolicy,
+  type InformationLogLevel,
+  type InformationLogPolicy,
+  type InformationLogProjection,
+  type InformationReferenceRule,
+} from "./information-kind.js";

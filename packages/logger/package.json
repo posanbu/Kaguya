@@ -13,6 +13,8 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
+    "@kaguya/schema": "workspace:*",
+    "@kaguya/sdk": "workspace:*",
     "pino": "10.3.1",
     "pino-pretty": "13.1.3"
   }
