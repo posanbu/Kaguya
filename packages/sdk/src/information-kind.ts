@@ -75,14 +75,11 @@ export function defineInformationKind<
   assertKindName(input.kind);
   assertPayloadSchema(input.payloadSchema);
 
-  const references = cloneAndValidateReferenceRules(input.references);
-  const log = cloneAndValidateLogPolicy(input.log);
-
   return Object.freeze({
     kind: input.kind,
     payloadSchema: input.payloadSchema,
-    references,
-    log,
+    references: cloneAndValidateReferenceRules(input.references),
+    log: cloneAndValidateLogPolicy(input.log),
   });
 }
 
@@ -96,70 +93,310 @@ function assertPayloadSchema(payloadSchema: unknown): asserts payloadSchema is z
   if (!(payloadSchema instanceof z.ZodType)) {
     throw new Error("payload schema must be a Zod schema");
   }
-  if (!(payloadSchema instanceof z.ZodObject)) {
-    throw new Error("payload schema must be a strict JSON object schema");
-  }
-
-  const candidate = buildRepresentativeObject(payloadSchema);
-  const probe = {
-    ...candidate,
-    __kaguya_payload_probe__: "__kaguya_probe__",
-  };
-
-  if (payloadSchema.safeParse(probe).success) {
-    throw new Error(
-      "payload schema must reject unknown keys and produce a JSON object",
-    );
-  }
+  assertJsonObjectSchema(payloadSchema as any, new Set<any>());
 }
 
-function buildRepresentativeObject(
-  schema: z.ZodObject<z.ZodRawShape>,
-): Record<string, unknown> {
-  const shape = schema.shape as Record<string, z.ZodTypeAny>;
-  const result: Record<string, unknown> = {};
-  for (const [key, fieldSchema] of Object.entries(shape)) {
-    const value = buildRepresentativeValue(fieldSchema);
-    if (value !== undefined) {
-      result[key] = value;
+function assertJsonObjectSchema(schema: any, seen: Set<any>): void {
+  const def = getSchemaDef(schema);
+  switch (def.type) {
+    case "object":
+      assertStrictObjectSchema(def, seen);
+      return;
+    case "union":
+    case "discriminatedUnion":
+    case "xor":
+      for (const option of getSchemaOptions(def)) {
+        assertJsonObjectSchema(option, seen);
+      }
+      return;
+    case "intersection":
+      assertJsonObjectSchema(def.left, seen);
+      assertJsonObjectSchema(def.right, seen);
+      return;
+    case "pipe":
+    case "transform": {
+      const inputSchema = def.in ?? def.innerType ?? def.input;
+      const sample = inputSchema === undefined ? undefined : buildRepresentativeValue(inputSchema, seen);
+      if (sample === undefined) {
+        throw new Error("payload schema must produce a JSON object");
+      }
+      const parsed = schema.safeParse(sample);
+      if (!parsed.success || !isPlainJsonObject(parsed.data)) {
+        throw new Error("payload schema must produce a JSON object");
+      }
+      assertJsonCompatibleValue(parsed.data);
+      return;
     }
+    case "record":
+      assertRecordKeySchema(def.keyType);
+      assertJsonValue(def.valueType, seen);
+      return;
+    default:
+      throw new Error("payload schema must produce a JSON object");
   }
-  return result;
 }
 
-function buildRepresentativeValue(schema: z.ZodTypeAny): unknown {
-  if (schema instanceof z.ZodString) {
-    return "probe";
+function assertStrictObjectSchema(def: any, seen: Set<any>): void {
+  if (!isNeverSchema(def.catchall)) {
+    throw new Error("payload schema must be strict");
   }
-  if (schema instanceof z.ZodNumber) {
-    return 0;
+
+  const shape = getObjectShape(def);
+  for (const fieldSchema of Object.values(shape)) {
+    assertJsonValue(fieldSchema, seen);
   }
-  if (schema instanceof z.ZodBoolean) {
-    return true;
+}
+
+function assertJsonValue(schema: any, seen: Set<any>): void {
+  const def = getSchemaDef(schema);
+  switch (def.type) {
+    case "string":
+    case "number":
+    case "boolean":
+    case "null":
+    case "literal":
+    case "enum":
+      return;
+    case "array":
+      assertJsonValue(def.element, seen);
+      return;
+    case "tuple":
+      for (const item of Array.isArray(def.items) ? def.items : []) {
+        assertJsonValue(item, seen);
+      }
+      if (def.rest !== undefined) {
+        assertJsonValue(def.rest, seen);
+      }
+      return;
+    case "object":
+      assertStrictObjectSchema(def, seen);
+      return;
+    case "record":
+      assertRecordKeySchema(def.keyType);
+      assertJsonValue(def.valueType, seen);
+      return;
+    case "union":
+    case "discriminatedUnion":
+    case "xor":
+      for (const option of getSchemaOptions(def)) {
+        assertJsonValue(option, seen);
+      }
+      return;
+    case "intersection":
+      assertJsonValue(def.left, seen);
+      assertJsonValue(def.right, seen);
+      return;
+    case "optional":
+    case "nullable":
+    case "default":
+    case "prefault":
+    case "nonoptional":
+    case "readonly":
+    case "catch":
+    case "success":
+      assertJsonValue(def.innerType, seen);
+      return;
+    case "pipe":
+    case "transform":
+      assertJsonValueOrObjectViaParse(schema, def, seen);
+      return;
+    case "bigint":
+    case "date":
+    case "symbol":
+    case "undefined":
+    case "void":
+    case "file":
+    case "nan":
+    case "map":
+    case "set":
+    case "function":
+    case "promise":
+    case "custom":
+      throw new Error(`payload schema contains unsupported ${def.type} fields`);
+    default:
+      throw new Error(`payload schema contains unsupported ${String(def.type)} fields`);
   }
-  if (schema instanceof z.ZodBigInt) {
+}
+
+function assertJsonValueOrObjectViaParse(
+  schema: any,
+  def: any,
+  seen: Set<any>,
+): void {
+  const inputSchema = def.in ?? def.innerType ?? def.input;
+  const sample = inputSchema === undefined ? undefined : buildRepresentativeValue(inputSchema, seen);
+  if (sample === undefined) {
+    throw new Error("payload schema must produce a JSON-compatible value");
+  }
+
+  const parsed = schema.safeParse(sample);
+  if (!parsed.success) {
+    throw new Error("payload schema must produce a JSON-compatible value");
+  }
+  assertJsonCompatibleValue(parsed.data);
+}
+
+function assertJsonCompatibleValue(value: unknown): void {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      assertJsonCompatibleValue(item);
+    }
+    return;
+  }
+  if (isPlainJsonObject(value)) {
+    for (const item of Object.values(value)) {
+      assertJsonCompatibleValue(item);
+    }
+    return;
+  }
+  throw new Error("payload schema must produce JSON-compatible output");
+}
+
+function buildRepresentativeValue(schema: any, seen: Set<any>): unknown {
+  if (seen.has(schema)) {
     return undefined;
   }
-  if (schema instanceof z.ZodLiteral) {
-    return (schema as any).value;
+  seen.add(schema);
+
+  const def = getSchemaDef(schema);
+  switch (def.type) {
+    case "string":
+      return "probe";
+    case "number":
+      return 0;
+    case "boolean":
+      return true;
+    case "null":
+      return null;
+    case "literal":
+      return getLiteralValue(def);
+    case "enum":
+      return getEnumValue(def);
+    case "bigint":
+      return 1n;
+    case "date":
+      return new Date("2026-09-01T00:00:00.000Z");
+    case "array": {
+      const item = buildRepresentativeValue(def.element, seen);
+      return item === undefined ? [] : [item];
+    }
+    case "tuple":
+      return (Array.isArray(def.items) ? def.items : []).map((item: any) =>
+        buildRepresentativeValue(item, seen),
+      );
+    case "object": {
+      const shape = getObjectShape(def);
+      const result: Record<string, unknown> = {};
+      for (const [key, fieldSchema] of Object.entries(shape)) {
+        const value = buildRepresentativeValue(fieldSchema, seen);
+        if (value !== undefined) {
+          result[key] = value;
+        }
+      }
+      return result;
+    }
+    case "record": {
+      const value = buildRepresentativeValue(def.valueType, seen);
+      return value === undefined ? {} : { probe: value };
+    }
+    case "union":
+    case "discriminatedUnion":
+    case "xor": {
+      const [firstOption] = getSchemaOptions(def);
+      return firstOption === undefined
+        ? undefined
+        : buildRepresentativeValue(firstOption, seen);
+    }
+    case "intersection": {
+      const left = buildRepresentativeValue(def.left, seen);
+      const right = buildRepresentativeValue(def.right, seen);
+      if (isPlainJsonObject(left) && isPlainJsonObject(right)) {
+        return { ...left, ...right };
+      }
+      return left ?? right;
+    }
+    case "optional":
+    case "nullable":
+    case "default":
+    case "prefault":
+    case "nonoptional":
+    case "readonly":
+    case "catch":
+    case "success":
+      return buildRepresentativeValue(def.innerType, seen);
+    case "pipe":
+    case "transform": {
+      const inputSchema = def.in ?? def.innerType ?? def.input;
+      return inputSchema === undefined
+        ? undefined
+        : buildRepresentativeValue(inputSchema, seen);
+    }
+    default:
+      return undefined;
   }
-  if (schema instanceof z.ZodEnum) {
-    return (schema as any).options[0];
+}
+
+function getSchemaDef(schema: any): any {
+  return schema?._zod?.def ?? schema?.def ?? {};
+}
+
+function getSchemaOptions(def: any): readonly any[] {
+  const options = def.options ?? def.innerTypes ?? def.items;
+  return Array.isArray(options) ? options : [];
+}
+
+function getObjectShape(def: any): Record<string, any> {
+  const shape = def.shape;
+  if (typeof shape === "function") {
+    return shape();
   }
-  if (schema instanceof z.ZodArray) {
-    const element = buildRepresentativeValue((schema as any).element);
-    return element === undefined ? undefined : [element];
+  if (shape && typeof shape === "object") {
+    return shape;
   }
-  if (schema instanceof z.ZodOptional || schema instanceof z.ZodNullable) {
-    return buildRepresentativeValue((schema as any).unwrap());
+  return {};
+}
+
+function assertRecordKeySchema(keySchema: any): void {
+  const def = getSchemaDef(keySchema);
+  if (def.type !== "string" && def.type !== "literal" && def.type !== "enum") {
+    throw new Error("record keys must be JSON string keys");
   }
-  if (schema instanceof z.ZodDefault) {
-    return buildRepresentativeValue((schema as any).removeDefault());
+}
+
+function isNeverSchema(schema: any): boolean {
+  return Boolean(schema) && getSchemaDef(schema).type === "never";
+}
+
+function isPlainJsonObject(value: unknown): value is JsonObject {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
   }
-  if (schema instanceof z.ZodObject) {
-    return buildRepresentativeObject(schema as any);
+  return Object.getPrototypeOf(value) === Object.prototype;
+}
+
+function getLiteralValue(def: any): unknown {
+  if (Array.isArray(def.values) && def.values.length > 0) {
+    return def.values[0];
   }
-  return undefined;
+  return def.value;
+}
+
+function getEnumValue(def: any): unknown {
+  if (def.entries && typeof def.entries === "object") {
+    const values = Object.values(def.entries);
+    if (values.length > 0) {
+      return values[0];
+    }
+  }
+  return Array.isArray(def.options) ? def.options[0] : undefined;
 }
 
 function cloneAndValidateReferenceRules(

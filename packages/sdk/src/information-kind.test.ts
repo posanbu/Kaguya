@@ -90,7 +90,7 @@ describe("defineInformationKind", () => {
         references: {},
         log: { enabled: false },
       }),
-    ).toThrow(/json object/iu);
+    ).toThrow(/strict/iu);
   });
 
   it("rejects duplicate target kinds and empty target kind lists", () => {
