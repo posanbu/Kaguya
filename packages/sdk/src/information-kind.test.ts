@@ -64,6 +64,35 @@ describe("defineInformationKind", () => {
     ).toThrow(/zod schema/iu);
   });
 
+  it("rejects schemas that do not enforce a strict JSON object contract", () => {
+    expect(() =>
+      defineInformationKind({
+        kind: "acme.message.created",
+        payloadSchema: z.string() as never,
+        references: {},
+        log: { enabled: false },
+      }),
+    ).toThrow(/json object/iu);
+
+    expect(() =>
+      defineInformationKind({
+        kind: "acme.message.created",
+        payloadSchema: z.array(z.string()) as never,
+        references: {},
+        log: { enabled: false },
+      }),
+    ).toThrow(/json object/iu);
+
+    expect(() =>
+      defineInformationKind({
+        kind: "acme.message.created",
+        payloadSchema: z.object({ text: z.string() }) as never,
+        references: {},
+        log: { enabled: false },
+      }),
+    ).toThrow(/json object/iu);
+  });
+
   it("rejects duplicate target kinds and empty target kind lists", () => {
     expect(() =>
       defineInformationKind({

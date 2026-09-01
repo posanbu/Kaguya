@@ -96,6 +96,70 @@ function assertPayloadSchema(payloadSchema: unknown): asserts payloadSchema is z
   if (!(payloadSchema instanceof z.ZodType)) {
     throw new Error("payload schema must be a Zod schema");
   }
+  if (!(payloadSchema instanceof z.ZodObject)) {
+    throw new Error("payload schema must be a strict JSON object schema");
+  }
+
+  const candidate = buildRepresentativeObject(payloadSchema);
+  const probe = {
+    ...candidate,
+    __kaguya_payload_probe__: "__kaguya_probe__",
+  };
+
+  if (payloadSchema.safeParse(probe).success) {
+    throw new Error(
+      "payload schema must reject unknown keys and produce a JSON object",
+    );
+  }
+}
+
+function buildRepresentativeObject(
+  schema: z.ZodObject<z.ZodRawShape>,
+): Record<string, unknown> {
+  const shape = schema.shape as Record<string, z.ZodTypeAny>;
+  const result: Record<string, unknown> = {};
+  for (const [key, fieldSchema] of Object.entries(shape)) {
+    const value = buildRepresentativeValue(fieldSchema);
+    if (value !== undefined) {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+function buildRepresentativeValue(schema: z.ZodTypeAny): unknown {
+  if (schema instanceof z.ZodString) {
+    return "probe";
+  }
+  if (schema instanceof z.ZodNumber) {
+    return 0;
+  }
+  if (schema instanceof z.ZodBoolean) {
+    return true;
+  }
+  if (schema instanceof z.ZodBigInt) {
+    return undefined;
+  }
+  if (schema instanceof z.ZodLiteral) {
+    return (schema as any).value;
+  }
+  if (schema instanceof z.ZodEnum) {
+    return (schema as any).options[0];
+  }
+  if (schema instanceof z.ZodArray) {
+    const element = buildRepresentativeValue((schema as any).element);
+    return element === undefined ? undefined : [element];
+  }
+  if (schema instanceof z.ZodOptional || schema instanceof z.ZodNullable) {
+    return buildRepresentativeValue((schema as any).unwrap());
+  }
+  if (schema instanceof z.ZodDefault) {
+    return buildRepresentativeValue((schema as any).removeDefault());
+  }
+  if (schema instanceof z.ZodObject) {
+    return buildRepresentativeObject(schema as any);
+  }
+  return undefined;
 }
 
 function cloneAndValidateReferenceRules(
