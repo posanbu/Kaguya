@@ -127,7 +127,7 @@ export async function startKaguyaServer(
     }
     app = await createHttpApplication({
       config,
-      ...(runtimeReady ? { webGateway } : {}),
+      ...(webGateway !== undefined ? { webGateway } : {}),
       setup,
       logger: httpLogger,
     });

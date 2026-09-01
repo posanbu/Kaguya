@@ -125,11 +125,14 @@ export function buildOneBotSendAction(
       echo,
     };
   }
-  return {
-    action: "send_group_msg",
-    params: { group_id: Number(target.groupId), message },
-    echo,
-  };
+  if (target.kind === "group") {
+    return {
+      action: "send_group_msg",
+      params: { group_id: Number(target.groupId), message },
+      echo,
+    };
+  }
+  throw new Error("OneBot cannot send messages to web destinations");
 }
 
 function targetFor(

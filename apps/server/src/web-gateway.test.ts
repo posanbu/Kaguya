@@ -9,6 +9,32 @@ import { afterEach, afterAll, describe, expect, it, vi } from "vitest";
 
 import { createWebMessageGateway } from "./web-gateway.js";
 
+class LogStream extends Writable {
+  readonly #chunks: string[] = [];
+
+  override _write(
+    chunk: Buffer | string,
+    _encoding: BufferEncoding,
+    callback: (error?: Error | null) => void,
+  ) {
+    this.#chunks.push(chunk.toString());
+    callback();
+  }
+
+  clear(): void {
+    this.#chunks.splice(0);
+  }
+
+  logs(): Record<string, unknown>[] {
+    return this.#chunks
+      .join("")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+  }
+}
+
 const stream = new LogStream();
 const rootLogger = createLogger({
   service: "kaguya-web-gateway-test",
@@ -89,30 +115,4 @@ function gatewayWith(
     runtime: { dispatch } as unknown as KaguyaRuntime,
     logger: rootLogger,
   });
-}
-
-class LogStream extends Writable {
-  readonly #chunks: string[] = [];
-
-  override _write(
-    chunk: Buffer | string,
-    _encoding: BufferEncoding,
-    callback: (error?: Error | null) => void,
-  ) {
-    this.#chunks.push(chunk.toString());
-    callback();
-  }
-
-  clear(): void {
-    this.#chunks.splice(0);
-  }
-
-  logs(): Record<string, unknown>[] {
-    return this.#chunks
-      .join("")
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as Record<string, unknown>);
-  }
 }

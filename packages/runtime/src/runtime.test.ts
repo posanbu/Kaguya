@@ -66,6 +66,13 @@ function webMessage(requestId = "request-1") {
   };
 }
 
+function errorMessages(error: unknown): string[] {
+  if (error instanceof AggregateError) {
+    return error.errors.flatMap((nested) => errorMessages(nested));
+  }
+  return error instanceof Error ? [error.message] : [];
+}
+
 describe("KaguyaRuntime", () => {
   it("filters a platform message before persistence and reply generation", async () => {
     const databasePath = path();
@@ -250,13 +257,7 @@ describe("KaguyaRuntime", () => {
     await runtime.close();
 
     expect(failure).toBeInstanceOf(AggregateError);
-    expect(
-      (failure as AggregateError).errors.some(
-        (error) =>
-          error instanceof Error &&
-          error.message === "model resolver exploded",
-      ),
-    ).toBe(true);
+    expect(errorMessages(failure)).toContain("model resolver exploded");
 
     const database = KaguyaDatabase.open(databasePath);
     expect(

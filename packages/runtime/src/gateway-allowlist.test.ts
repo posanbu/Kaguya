@@ -62,12 +62,13 @@ describe("GatewayAllowlist", () => {
 
   it("applies the same dimensions to web platform messages", () => {
     const webMessage = {
-      ...baseMessage,
       platform: "web" as const,
       adapterId: "web.ui.main",
-      selfId: undefined,
       traceId: "web:request-1",
       platformMessageId: "request-1",
+      occurredAt: "2026-08-16T00:00:00.000Z",
+      text: "hello",
+      mentions: [],
       target: { kind: "web" as const },
       sender: { userId: "web" },
       raw: {},
