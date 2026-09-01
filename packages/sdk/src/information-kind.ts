@@ -73,6 +73,7 @@ export function defineInformationKind<
     throw new Error("information kind definition must be an object");
   }
   assertKindName(input.kind);
+  assertPayloadSchema(input.payloadSchema);
 
   const references = cloneAndValidateReferenceRules(input.references);
   const log = cloneAndValidateLogPolicy(input.log);
@@ -88,6 +89,12 @@ export function defineInformationKind<
 function assertKindName(kind: string): void {
   if (!kindNamePattern.test(kind)) {
     throw new Error("kind must use dotted namespace naming");
+  }
+}
+
+function assertPayloadSchema(payloadSchema: unknown): asserts payloadSchema is z.ZodType<JsonObject> {
+  if (!(payloadSchema instanceof z.ZodType)) {
+    throw new Error("payload schema must be a Zod schema");
   }
 }
 

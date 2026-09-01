@@ -42,6 +42,28 @@ describe("defineInformationKind", () => {
     ).toThrow(/namespace/iu);
   });
 
+  it("rejects non-Zod payload schemas", () => {
+    expect(() =>
+      defineInformationKind({
+        kind: "acme.message.created",
+        payloadSchema: undefined as never,
+        references: {},
+        log: { enabled: false },
+      }),
+    ).toThrow(/zod schema/iu);
+
+    expect(() =>
+      defineInformationKind({
+        kind: "acme.message.created",
+        payloadSchema: {
+          parse: () => ({}) as never,
+        } as never,
+        references: {},
+        log: { enabled: false },
+      }),
+    ).toThrow(/zod schema/iu);
+  });
+
   it("rejects duplicate target kinds and empty target kind lists", () => {
     expect(() =>
       defineInformationKind({
