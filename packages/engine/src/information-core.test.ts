@@ -1,8 +1,9 @@
 /**
  * 架构说明：本测试覆盖信息 Core 的启动、追加、引用校验与订阅边界，
- * 以证明原子写入、快照隔离和 kind 注册之间的联动关系。
- * 代码库关系：`InformationCore` 连接 registry、store 与 bus；这里的测试
- * 使用内存 store double 来验证“先落库、后发布”的完整流程。
+ * 以证明 registry、store 与 bus 组合后的写入路径只信任注册表中的正式定义，
+ * 并且不会把可变输入、未注册 kind 或关闭后的调用继续放行。
+ * 代码库关系：`InformationCore` 连接 registry、store 与 bus；这里的测试使用
+ * 内存 store double 验证“先落库、后发布”、冻结快照、ID 冲突与关闭语义。
  */
 import {
   type DeepReadonly,
@@ -16,14 +17,25 @@ import { describe, expect, it } from "vitest";
 
 import {
   InformationCore,
+  InformationCoreClosedError,
   InformationIdCollisionError,
   InformationReferenceValidationError,
   InvalidInformationIdError,
 } from "./information-core.js";
-import { InformationKindRegistry } from "./information-kind-registry.js";
+import {
+  InformationKindRegistry,
+  UnknownInformationKindError,
+} from "./information-kind-registry.js";
 
 const parentDefinition = defineInformationKind({
   kind: "acme.message.parent",
+  payloadSchema: z.object({ text: z.string() }).strict(),
+  references: {},
+  log: { enabled: false },
+});
+
+const otherParentDefinition = defineInformationKind({
+  kind: "acme.message.other-parent",
   payloadSchema: z.object({ text: z.string() }).strict(),
   references: {},
   log: { enabled: false },
@@ -42,13 +54,30 @@ const childDefinition = defineInformationKind({
   log: { enabled: false },
 });
 
+const frozenDefinition = defineInformationKind({
+  kind: "acme.message.frozen",
+  payloadSchema: z
+    .object({
+      nested: z
+        .object({
+          values: z.array(z.string()),
+        })
+        .strict(),
+    })
+    .strict(),
+  references: {},
+  log: { enabled: false },
+});
+
 class MemoryInformationStore {
   readonly atoms = new Map<string, DeepReadonly<InformationAtom>>();
   readonly synchronisedKinds: string[][] = [];
   readonly appendOrder: string[] = [];
 
   constructor(
-    private readonly options: { readonly onAppend?: (atom: InformationAtom) => void } = {},
+    private readonly options: {
+      readonly onAppend?: (atom: DeepReadonly<InformationAtom>) => void;
+    } = {},
   ) {}
 
   async synchronizeKinds(kinds: readonly string[]): Promise<void> {
@@ -69,7 +98,7 @@ class MemoryInformationStore {
     }
     validateReferences(this.atoms, atom, expectations);
     this.appendOrder.push(atom.kind);
-    this.options.onAppend?.(atom as InformationAtom);
+    this.options.onAppend?.(atom);
     const snapshot = freezeInformationAtom(atom as InformationAtom);
     this.atoms.set(atom.informationId, snapshot);
   }
@@ -151,10 +180,10 @@ function validateReferences(
   }
 }
 
-function createStartedCore(
+async function createStartedCore(
   store: MemoryInformationStore,
   kinds: readonly InformationKindDefinition<string, any>[],
-) {
+): Promise<InformationCore> {
   const registry = new InformationKindRegistry();
   for (const kind of kinds) {
     registry.register(kind);
@@ -164,18 +193,26 @@ function createStartedCore(
     store,
     nextInformationId: createDeterministicIdGenerator(),
   });
-  return core.start().then(() => core);
+  await core.start();
+  return core;
 }
 
-function createCore(store: MemoryInformationStore, nextInformationId: () => string) {
+async function createCoreWithGenerator(
+  store: MemoryInformationStore,
+  nextInformationId: () => string,
+  kinds: readonly InformationKindDefinition<string, any>[],
+): Promise<InformationCore> {
   const registry = new InformationKindRegistry();
-  registry.register(parentDefinition);
+  for (const kind of kinds) {
+    registry.register(kind);
+  }
   const core = new InformationCore({
     registry,
     store,
     nextInformationId,
   });
-  return core.start().then(() => core);
+  await core.start();
+  return core;
 }
 
 function createDeterministicIdGenerator() {
@@ -212,31 +249,34 @@ describe("InformationCore", () => {
     });
   });
 
-  it("rejects invalid ids and validates references before storing", async () => {
+  it("rejects spoofed payload schemas and spoofed reference rules", async () => {
     const store = new MemoryInformationStore();
     const core = await createStartedCore(store, [parentDefinition, childDefinition]);
-    const parent = await core.append(parentDefinition, {
-      kind: parentDefinition.kind,
-      occurredAt: "2026-09-01T00:00:00.000Z",
-      source: "module:acme",
-      payload: { text: "parent" },
-      references: [],
+    const spoofedPayloadDefinition = defineInformationKind({
+      kind: childDefinition.kind,
+      payloadSchema: z.object({ spoof: z.string() }).strict(),
+      references: {},
+      log: { enabled: false },
+    });
+    const spoofedReferenceDefinition = defineInformationKind({
+      kind: childDefinition.kind,
+      payloadSchema: z.object({ text: z.string() }).strict(),
+      references: {},
+      log: { enabled: false },
     });
 
     await expect(
-      core.append(childDefinition, {
+      core.append(spoofedPayloadDefinition, {
         kind: childDefinition.kind,
         occurredAt: "2026-09-01T00:00:00.000Z",
         source: "module:acme",
-        payload: { text: "child" },
-        references: [
-          { relation: "acme:parent", informationId: parent.informationId },
-        ],
+        payload: { spoof: "shadow" },
+        references: [],
       }),
-    ).resolves.toMatchObject({ kind: childDefinition.kind });
+    ).rejects.toThrow();
 
     await expect(
-      core.append(childDefinition, {
+      core.append(spoofedReferenceDefinition, {
         kind: childDefinition.kind,
         occurredAt: "2026-09-01T00:00:00.000Z",
         source: "module:acme",
@@ -244,10 +284,51 @@ describe("InformationCore", () => {
         references: [],
       }),
     ).rejects.toBeInstanceOf(InformationReferenceValidationError);
+  });
 
-    const badCore = await createCore(store, () => " ");
+  it("rejects unknown definitions, collisions, and invalid ids", async () => {
+    const store = new MemoryInformationStore();
+    const core = await createStartedCore(store, [parentDefinition]);
+
     await expect(
-      badCore.append(parentDefinition, {
+      core.append(childDefinition, {
+        kind: childDefinition.kind,
+        occurredAt: "2026-09-01T00:00:00.000Z",
+        source: "module:acme",
+        payload: { text: "child" },
+        references: [],
+      }),
+    ).rejects.toBeInstanceOf(UnknownInformationKindError);
+
+    const collisionCore = await createCoreWithGenerator(
+      store,
+      () => "atom-collision",
+      [parentDefinition],
+    );
+    await collisionCore.append(parentDefinition, {
+      kind: parentDefinition.kind,
+      occurredAt: "2026-09-01T00:00:00.000Z",
+      source: "module:acme",
+      payload: { text: "one" },
+      references: [],
+    });
+    await expect(
+      collisionCore.append(parentDefinition, {
+        kind: parentDefinition.kind,
+        occurredAt: "2026-09-01T00:00:00.000Z",
+        source: "module:acme",
+        payload: { text: "two" },
+        references: [],
+      }),
+    ).rejects.toBeInstanceOf(InformationIdCollisionError);
+
+    const invalidIdCore = await createCoreWithGenerator(
+      new MemoryInformationStore(),
+      () => " ",
+      [parentDefinition],
+    );
+    await expect(
+      invalidIdCore.append(parentDefinition, {
         kind: parentDefinition.kind,
         occurredAt: "2026-09-01T00:00:00.000Z",
         source: "module:acme",
@@ -255,5 +336,135 @@ describe("InformationCore", () => {
         references: [],
       }),
     ).rejects.toBeInstanceOf(InvalidInformationIdError);
+  });
+
+  it("rejects undeclared, duplicate, and mismatched reference targets", async () => {
+    const declaredStore = new MemoryInformationStore();
+    const declaredCore = await createStartedCore(declaredStore, [parentDefinition, childDefinition]);
+    const parent = await declaredCore.append(parentDefinition, {
+      kind: parentDefinition.kind,
+      occurredAt: "2026-09-01T00:00:00.000Z",
+      source: "module:acme",
+      payload: { text: "parent" },
+      references: [],
+    });
+    await expect(
+      declaredCore.append(childDefinition, {
+        kind: childDefinition.kind,
+        occurredAt: "2026-09-01T00:00:00.000Z",
+        source: "module:acme",
+        payload: { text: "child" },
+        references: [
+          { relation: "acme:parent", informationId: parent.informationId },
+          { relation: "acme:rogue", informationId: parent.informationId },
+        ],
+      }),
+    ).rejects.toBeInstanceOf(InformationReferenceValidationError);
+
+    const duplicateCore = await createStartedCore(
+      new MemoryInformationStore(),
+      [parentDefinition, childDefinition],
+    );
+    const duplicateParent = await duplicateCore.append(parentDefinition, {
+      kind: parentDefinition.kind,
+      occurredAt: "2026-09-01T00:00:00.000Z",
+      source: "module:acme",
+      payload: { text: "parent" },
+      references: [],
+    });
+    await expect(
+      duplicateCore.append(childDefinition, {
+        kind: childDefinition.kind,
+        occurredAt: "2026-09-01T00:00:00.000Z",
+        source: "module:acme",
+        payload: { text: "child" },
+        references: [
+          { relation: "acme:parent", informationId: duplicateParent.informationId },
+          { relation: "acme:parent", informationId: duplicateParent.informationId },
+        ],
+      }),
+    ).rejects.toBeInstanceOf(InformationReferenceValidationError);
+
+    const mismatchedCore = await createStartedCore(
+      new MemoryInformationStore(),
+      [otherParentDefinition, childDefinition],
+    );
+    const otherParent = await mismatchedCore.append(otherParentDefinition, {
+      kind: otherParentDefinition.kind,
+      occurredAt: "2026-09-01T00:00:00.000Z",
+      source: "module:acme",
+      payload: { text: "other" },
+      references: [],
+    });
+    await expect(
+      mismatchedCore.append(childDefinition, {
+        kind: childDefinition.kind,
+        occurredAt: "2026-09-01T00:00:00.000Z",
+        source: "module:acme",
+        payload: { text: "child" },
+        references: [
+          { relation: "acme:parent", informationId: otherParent.informationId },
+        ],
+      }),
+    ).rejects.toBeInstanceOf(InformationReferenceValidationError);
+  });
+
+  it("does not mutate caller aliases and returns deeply frozen reads", async () => {
+    const store = new MemoryInformationStore();
+    const core = await createStartedCore(store, [frozenDefinition]);
+    const payload = { nested: { values: ["moon"] } };
+    const references: [] = [];
+
+    const pending = core.append(frozenDefinition, {
+      kind: frozenDefinition.kind,
+      occurredAt: "2026-09-01T00:00:00.000Z",
+      source: "module:acme",
+      payload,
+      references,
+    });
+    payload.nested.values[0] = "changed";
+
+    const atom = await pending;
+    const stored = await core.getById(atom.informationId);
+
+    expect(atom.payload).toEqual({ nested: { values: ["moon"] } });
+    expect(stored).toBeDefined();
+    expect(stored).not.toBeUndefined();
+    expect(Object.isFrozen(stored as object)).toBe(true);
+    expect(Object.isFrozen(stored!.payload)).toBe(true);
+    const frozenPayload = stored!.payload as {
+      readonly nested: {
+        readonly values: readonly string[];
+      };
+    };
+    expect(Object.isFrozen(frozenPayload.nested)).toBe(true);
+    expect(Object.isFrozen(frozenPayload.nested.values)).toBe(true);
+    expect(stored!.payload).toEqual({ nested: { values: ["moon"] } });
+  });
+
+  it("stops new work after close", async () => {
+    const store = new MemoryInformationStore();
+    const core = await createStartedCore(store, [parentDefinition]);
+    let observed = 0;
+
+    core.subscribe(parentDefinition.kind, () => {
+      observed += 1;
+    });
+
+    await core.close();
+
+    expect(() => core.subscribe(parentDefinition.kind, () => undefined)).toThrow(
+      InformationCoreClosedError,
+    );
+    await expect(
+      core.append(parentDefinition, {
+        kind: parentDefinition.kind,
+        occurredAt: "2026-09-01T00:00:00.000Z",
+        source: "module:acme",
+        payload: { text: "after-close" },
+        references: [],
+      }),
+    ).rejects.toBeInstanceOf(InformationCoreClosedError);
+    expect(observed).toBe(0);
   });
 });

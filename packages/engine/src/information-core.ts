@@ -111,17 +111,19 @@ export class InformationCore {
     input: InformationAppendInput<K, P>,
   ): Promise<DeepReadonly<InformationAtom<K, P>>> {
     this.assertState("started");
-    this.registry.assertRegistered(definition as InformationKindDefinition<string, any>);
-    this.assertAppendKind(definition, input);
+    const registered = this.registry.assertRegistered(
+      definition as InformationKindDefinition<string, any>,
+    ) as InformationKindDefinition<K, P>;
+    this.assertAppendKind(registered, input);
 
     const informationId = this.parseInformationId(this.#nextInformationId());
-    const payload = definition.payloadSchema.parse(input.payload);
+    const payload = registered.payloadSchema.parse(input.payload);
     const references = input.references.map((reference) =>
       informationReferenceSchema.parse(reference),
     );
     const candidate = informationAtomSchema.parse({
       informationId,
-      kind: definition.kind,
+      kind: registered.kind,
       occurredAt: input.occurredAt,
       source: input.source,
       payload,
@@ -131,7 +133,7 @@ export class InformationCore {
       InformationAtom<K, P>
     >;
 
-    await this.store.append(atom, buildReferenceExpectations(definition.references));
+    await this.store.append(atom, buildReferenceExpectations(registered.references));
     return this.#bus.publish(atom as unknown as InformationAtom) as Promise<
       DeepReadonly<InformationAtom<K, P>>
     >;
