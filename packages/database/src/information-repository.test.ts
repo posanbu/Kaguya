@@ -148,7 +148,6 @@ describe("information repository", () => {
     await database.information.append(inboundAtom, [
       {
         relation: "core:context",
-        informationId: contextAtom.informationId,
         targetKinds: [contextKind.kind],
         required: true,
         multiple: false,
