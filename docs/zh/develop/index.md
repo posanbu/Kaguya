@@ -20,7 +20,7 @@ flowchart LR
 
 开发模式下 Vite middleware 和 HMR 挂在同一个 Fastify 实例；生产模式由该实例提供 `apps/web/dist`。NapCat 是可选 ingress 与 transport，连接失败不会停止 HTTP 服务。
 
-正常启动顺序为：加载并冻结配置 profile registry，打开并迁移数据库，注册 transport，创建并启动 ModuleHost，最后启动 HTTP 与 adapter ingress。若 profile store 尚未初始化、默认 profile 不完整或可选项尚未确认，则进入 setup mode，只启动 HTTP 与 Web UI；配置保存后必须重启，才会继续加载 Runtime 和 adapter ingress。配置文件损坏、路径或权限异常仍会拒绝启动，不会由引导流程覆盖。
+正常启动顺序为：加载并冻结配置 profile registry，打开并迁移数据库，注册 transport，创建并启动 ModuleHost，最后启动 HTTP 与 adapter ingress。若 profile store 尚未初始化、当前全局选中的 profile 不完整或可选项尚未确认，则进入 setup mode，只启动 HTTP 与 Web UI；当 selected Profile 仍处于 `invalid` 或 `review_required` 时，页面继续显示 readiness 状态。只有当用户选择某个 Profile，或完整替换当前 selected Profile，且该 selected Profile 已 ready 时，页面才会进入 `restart_required`，用户重启后 Runtime 和 adapter ingress 才会继续加载。配置文件损坏、路径或权限异常仍会拒绝启动，不会由引导流程覆盖。
 
 ## 包职责
 
@@ -56,7 +56,7 @@ sequenceDiagram
   Filter->>Bus: reply.requested(targetInstanceId)
   Bus->>Reply: targeted delivery
   Reply->>DB: get current message by ID
-  Reply->>LLM: profileId? + light/heavy + one-shot prompt
+  Reply->>LLM: light/heavy + one-shot prompt
   LLM-->>Reply: validated output
   Reply->>Bus: message.outbound.requested
   Bus->>Core: generic outbound request
@@ -90,7 +90,7 @@ HTTP 输入只包含文本和由网关生成的 `requestId`。默认 reply 模�
 
 ## 配置、LLM 与数据
 
-Server 从 `KAGUYA_CONFIG_ROOT` 加载 profile registry。每个模块 LLM request 显式选择 `{profileId?, modelTier}`；省略 profile 时使用默认 profile。`light` 与 `heavy` 必须指向两个不同、有效、enabled 的 provider/model target，可跨 provider。选择失败不 fallback。
+Server 从 `KAGUYA_CONFIG_ROOT` 加载 profile registry，并在启动时解析唯一的 `selectedProfileId`。每个模块 LLM request 只声明 `{modelTier}`；模块、消息和请求都不能覆盖 Profile。`light` 与 `heavy` 必须指向两个不同、有效、enabled 的 provider/model target，可跨 provider。选中 Profile 缺失、未知或未就绪时，Runtime 不启动，也不 fallback 到其他 Profile、provider 或模型。
 
 Provider key 只存在于权限保护的 profile JSON、配置管理器与 provider factory。模块 settings、事件、Prompt、trace 和日志都不接收 key。完整存储约束见 [`@kaguya/config`](../packages/config/README.md)。
 

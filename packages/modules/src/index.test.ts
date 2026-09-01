@@ -1,3 +1,17 @@
+/**
+ * 功能概述：本文件验证 `packages/modules` 中消息过滤模块与 LLM 回复模块的公开契约，
+ * 重点覆盖消息入站后如何生成定向回复请求、如何把模块设置转换成运行时 LLM 调用，
+ * 以及回复模块对外发消息参数的选择规则。
+ * 主要职责：`alwaysReplyFilterModule` 相关用例确保每条入站消息都会被转成指向指定回复实例
+ * 的 `replyRequestedEvent`；`createLlmReplyModule` 相关用例验证 prompt 编译、出站消息构造、
+ * LLM 失败传播，以及本次变更要求的“模块只能声明 `modelTier`，不得再携带 `profileId`”。
+ * 代码库关系：这里直接依赖 `llm-reply.ts` 的 schema 与模块工厂、`events.ts` 的事件定义，
+ * 并通过 `@kaguya/schema`/`@kaguya/sdk` 的真实类型约束调用面；运行时 `packages/runtime`
+ * 和服务启动层 `apps/server` 依赖这些契约把 Profile 选择固定到服务启动阶段。
+ * 输入输出与副作用：测试通过内存事件数组和伪造的 LLM 执行器观察模块输出，不触碰真实网络
+ * 或数据库；当 schema、事件 payload 或 LLM selection 结构改变时，本文件会作为回归保护，
+ * 防止模块重新接受按调用覆盖 Profile 的旧行为。
+ */
 import { PromptCompiler } from "@kaguya/prompt";
 import type { EventEnvelope, MessageRecord } from "@kaguya/schema";
 import type {
@@ -198,7 +212,6 @@ describe("createLlmReplyModule", () => {
       definition,
       "reply.fixed",
       llmReplySettingsSchema.parse({
-        profileId: "profile-2",
         modelTier: "light",
         outbound: {
           mode: "fixed",
@@ -226,7 +239,15 @@ describe("createLlmReplyModule", () => {
     });
   });
 
-  it("keeps profile and tier selection independent across reply instances", async () => {
+  it("rejects profile overrides and keeps only tier selection across reply instances", async () => {
+    expect(
+      llmReplySettingsSchema.safeParse({
+        profileId: globalThis.crypto.randomUUID(),
+        modelTier: "light",
+        outbound: { mode: "source", messageKind: "text" },
+      }).success,
+    ).toBe(false);
+
     const selections: unknown[] = [];
     const definition = createLlmReplyModule({
       messageReader: { getById: () => userMessage },
@@ -242,7 +263,6 @@ describe("createLlmReplyModule", () => {
       definition,
       "reply.light",
       llmReplySettingsSchema.parse({
-        profileId: "profile-light",
         modelTier: "light",
         outbound: { mode: "source", messageKind: "text" },
       }),
@@ -251,7 +271,6 @@ describe("createLlmReplyModule", () => {
       definition,
       "reply.heavy",
       llmReplySettingsSchema.parse({
-        profileId: "profile-heavy",
         modelTier: "heavy",
         outbound: { mode: "source", messageKind: "reply" },
       }),
@@ -278,8 +297,8 @@ describe("createLlmReplyModule", () => {
     );
 
     expect(selections).toEqual([
-      { profileId: "profile-light", modelTier: "light" },
-      { profileId: "profile-heavy", modelTier: "heavy" },
+      { modelTier: "light" },
+      { modelTier: "heavy" },
     ]);
   });
 

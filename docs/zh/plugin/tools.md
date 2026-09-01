@@ -39,6 +39,7 @@ from maibot_sdk.types import ToolParameterInfo, ToolParamType
 - **`parameters`** `list | dict | None` — 工具参数定义，支持两种格式（见下文）
 
 描述字段约定：
+
 - `description`：关于工具的描述，包括使用方法，使用情景，注意事项。当 `brief_description` 为空时，`description` 会作为回退描述。
 - `brief_description`：给主程序或小模型快速判断"这个工具是做什么的"的简要描述
 - `detailed_description`：描述参数、必填项、可选项和调用约束的详细描述
@@ -244,11 +245,12 @@ SDK 会自动为工具生成完整的描述信息，优先级如下：
 4. **自动生成**：如果上述字段都未提供，SDK 会使用 `"工具 {name}"` 作为描述
 
 自动生成的参数说明格式为：
-   ```
-   参数说明：
-   - query：string，必填。搜索关键词
-   - limit：integer，可选。返回结果数量上限。默认值：5
-   ```
+
+```
+参数说明：
+- query：string，必填。搜索关键词
+- limit：integer，可选。返回结果数量上限。默认值：5
+```
 
 ## 完整示例
 

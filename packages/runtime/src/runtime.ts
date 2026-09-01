@@ -1,3 +1,19 @@
+/**
+ * 功能概述：本文件实现 `KaguyaRuntime`，把入站消息标准化后写入数据库、投递到模块事件总线，
+ * 并将模块产生的出站消息与 LLM 调用统一纳入审计、日志和生命周期管理。
+ * 主要职责：`KaguyaRuntime` 负责 transport 注册、start/dispatch/close 生命周期、
+ * 事件观察与出站投递；`RuntimeModelSelectionResolver` 定义运行时解析 LLM 模型的契约，
+ * 本次变更要求它只接收模块声明的 `modelTier`，不再承担任何 Profile 选择逻辑；
+ * `createReplyLlmExecutor` 将模块的 tier 选择交给注入的 resolver，再通过
+ * `LlmLifecycleClient` 记录请求/完成/失败事件；其余 helper 负责默认激活、trace ID、
+ * 安全收据与失败记录构造。
+ * 代码库关系：本文件消费 `@kaguya/modules` 的默认过滤/回复模块、`@kaguya/database`
+ * 的仓储、`@kaguya/engine` 的事件总线和 `apps/server` 在启动时创建的 resolver；
+ * 服务器层必须先冻结 selected Profile，再把 tier-only resolver 注入到这里。
+ * 输入输出与副作用：运行时会创建并迁移 SQLite、注册事件观察器、落盘消息与出站审计，
+ * 并在 dispatch 时触发真实 LLM/transport 调用；错误会以固定文案写入持久化记录，
+ * 但不会把 provider secret 或动态 Profile 覆盖写入数据库。
+ */
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 

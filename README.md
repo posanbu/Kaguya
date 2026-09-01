@@ -25,7 +25,7 @@ export KAGUYA_CONFIG_ROOT="/absolute/path/to/kaguya-config"
 pnpm dev
 ```
 
-`KAGUYA_CONFIG_ROOT` 指向权限受保护的 profile store。目录尚未初始化、默认 profile 不完整或可选配置尚未确认时，Server 会进入统一配置模式并显示引导页；保存 Provider 后需要重启服务。配置文件损坏或权限异常仍会拒绝启动，不会自动覆盖。初始化格式与密钥边界见 [`@kaguya/config`](packages/config/README.md)。打开 `http://127.0.0.1:3000` 后，页面和 API 使用同源路径。
+`KAGUYA_CONFIG_ROOT` 指向权限受保护的 profile store。目录尚未初始化、当前全局选中的 profile 不完整或可选配置尚未确认时，Server 会进入统一配置模式并显示引导页；如果当前 selected Profile 仍然 `invalid` 或 `review_required`，页面会继续展示 readiness 问题。只有当用户选择了某个 Profile，或完整替换了当前 selected Profile，且该 selected Profile 已 ready 时，页面才会进入 `restart_required` 并要求重启服务。配置文件损坏或权限异常仍会拒绝启动，不会自动覆盖。初始化格式与密钥边界见 [`@kaguya/config`](packages/config/README.md)。打开 `http://127.0.0.1:3000` 后，页面和 API 使用同源路径。
 
 生产运行：
 
@@ -79,7 +79,7 @@ Server 不从环境变量读取 provider key、base URL 或 model。检测到旧
 
 旧变量 `KAGUYA_API_HOST`、`KAGUYA_API_PORT`、`KAGUYA_API_DATABASE_PATH`、`KAGUYA_BOT_DATABASE_PATH` 会让启动直接失败，并提示改用统一变量。
 
-日志变量和事件表见 [结构化日志](docs/logging.md)。
+日志变量见[环境变量参考](docs/reference/environment-variables.md)，执行链与脱敏边界见[运行时架构](docs/developers/architecture.md)。
 
 ## 仓库结构
 
@@ -100,11 +100,13 @@ packages/sdk/       事件、模块、节点与工作流定义 API
 
 ## 文档
 
-- [架构说明](docs/architecture.md)
-- [HTTP API 与统一 Server](docs/api-gateway.md)
-- [Web UI](docs/web-ui.md)
-- [结构化日志](docs/logging.md)
-- [LLM Client](docs/llm-client.md)
+- [文档站首页](docs/index.md)
+- [安装与启动](docs/guide/installation.md)
+- [配置 Kaguya](docs/guide/configuration.md)
+- [Web UI](docs/guide/webui.md)
+- [运行时架构](docs/developers/architecture.md)
+- [HTTP API](docs/reference/http-api.md)
+- [环境变量](docs/reference/environment-variables.md)
 - [配置包说明](packages/config/README.md)
 - [贡献指南](CONTRIBUTING.md)
 

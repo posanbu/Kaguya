@@ -1,6 +1,7 @@
 ---
 title: Discord 适配器
 ---
+
 # Discord 适配器
 
 MaiBot 的 Discord 平台适配器插件，通过 Discord Gateway WebSocket 将 Discord Bot 与 MaiBot 无缝桥接，支持 Guild 频道、DM 私聊、Thread 子区、Reaction 及语音功能。
@@ -174,10 +175,11 @@ channel_list = ["你的频道ID"]
 - **`typing_indicator_timeout_sec`** — "正在输入"状态的最长保持时间（秒），设为 0 表示直到回复发出前都不主动超时。默认 0
 
 ::: tip 聊天过滤说明
+
 - **白名单模式**：只处理名单中的服务器/频道/用户消息，其余丢弃
 - **黑名单模式**：处理所有消息，但丢弃名单中的服务器/频道/用户消息
 - 默认所有名单模式均为黑名单（即允许所有），如果发现 Bot 已连接但没有反应，优先检查名单配置
-:::
+  :::
 
 ### `[platform]` — 平台设置
 
@@ -208,7 +210,7 @@ channel_list = ["你的频道ID"]
 - `voice.enabled = true`
 - `connection.intent_voice_states = true`
 - Bot 对目标语音频道拥有 `View Channel`、`Connect`、`Speak` 权限
-:::
+  :::
 
 ### `[siliconflow_tts]` — SiliconFlow TTS
 

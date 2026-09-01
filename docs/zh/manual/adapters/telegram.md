@@ -1,6 +1,7 @@
 ---
 title: Telegram 适配器
 ---
+
 # Telegram 适配器
 
 MaiBot 的 Telegram 平台适配器，通过 Telegram Bot API 长轮询将 Telegram Bot 与 MaiBot 无缝桥接。
@@ -133,10 +134,11 @@ platforms = ["telegram:123456789"]
 - **`ban_user_id`** — 全局屏蔽的用户 ID 列表，被屏蔽用户的消息会被直接丢弃。默认为空
 
 ::: tip 聊天过滤说明
+
 - **白名单模式**：只处理名单中的群聊/私聊消息，其余丢弃
 - **黑名单模式**：处理所有消息，但丢弃名单中的群聊/私聊消息
 - 默认群聊为白名单模式，如果发现 Bot 已连接但群里没有反应，优先检查 `group_list` 是否填写了对应的 chat_id
-:::
+  :::
 
 ## 消息类型支持
 
@@ -236,6 +238,7 @@ Telegram 超级群组支持 Topic（话题）功能。适配器会自动将同�
 3. **文本兜底匹配**：当以上方式均未匹配时，通过正则匹配消息文本中的 `@bot_username`
 
 当识别到 @Bot 时，适配器会：
+
 - 在消息段中插入 `at` 类型的组件，标记 `target_user_id` 为 Bot ID
 - 设置 `is_mentioned` 和 `is_at` 为 `true`
 - 移除文本开头重复的 `@bot_username` 文本，避免 Prompt 中出现两份 @

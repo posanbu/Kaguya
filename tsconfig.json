@@ -3,8 +3,8 @@
   "references": [
     { "path": "./packages/schema" },
     { "path": "./packages/config" },
-    { "path": "./packages/logger" },
     { "path": "./packages/sdk" },
+    { "path": "./packages/logger" },
     { "path": "./packages/engine" },
     { "path": "./packages/modules" },
     { "path": "./packages/prompt" },

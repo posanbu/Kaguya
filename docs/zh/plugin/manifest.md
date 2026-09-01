@@ -7,10 +7,11 @@ title: Manifest
 每个 MaiBot 插件必须在其根目录下包含一个 `_manifest.json` 文件，用于声明插件的元信息、版本兼容性、依赖关系和能力需求。Host 侧的 `ManifestValidator` 会在加载前严格校验此文件。
 
 ::: tip 插件元信息与运行时配置
+
 - `_manifest.json`：声明插件 ID、版本、依赖和能力，由 Host 校验和管理
 - `plugin.py` 中的 `config_model`：声明配置结构、默认值和 WebUI 元数据
 - `config.toml`：保存当前安装实例的运行时配置，由 Runner 根据 `config_model` 生成和维护
-:::
+  :::
 
 ## _manifest.json 结构
 

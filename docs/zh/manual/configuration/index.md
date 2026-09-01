@@ -1,10 +1,10 @@
-# 网关入站白名单与统一配置引导
+# 网关入站白名单与 Profile 配置引导
 
 ## 为什么需要这次更新
 
-此前，平台消息进入 Runtime 后会直接落库并发布事件，缺少一个位于业务副作用之前的访问控制边界。即使后续回复模块选择忽略消息，其他订阅模块仍可能已经看到它。与此同时，只有“配置仓库不存在”能够进入首次配置页面；默认 profile 缺少模型配置或尚未确认可选项时，Server 会在 Web UI 启动前终止，用户无法从同一个入口完成修复。
+此前，平台消息进入 Runtime 后会直接落库并发布事件，缺少一个位于业务副作用之前的访问控制边界。即使后续回复模块选择忽略消息，其他订阅模块仍可能已经看到它。与此同时，旧配置引导只把“配置仓库不存在”视为可修复状态；一旦当前全局选中的 Profile 不完整，或者 warning 尚未确认，Server 可能在暴露 Web UI 修复入口之前就终止。
 
-本次更新解决这两个相邻问题：先在 Runtime 入站边界筛选平台消息，再把可安全修复的配置缺失状态收敛到统一 Web UI。这样，未授权消息不会进入业务链，而配置不足也不会表现为缺少解释的退出。
+现行设计把这两个边界一起收紧：先在 Runtime 入站边界筛选平台消息，再把可安全修复的 selected Profile 状态收敛到统一的 Web UI Profile 管理页面。这样，未授权消息不会进入业务链，而配置不足也会得到明确、单一的修复路径。
 
 ## 本次改动如何工作
 
@@ -16,25 +16,27 @@ Server 配置新增三个逗号分隔的环境变量：
 - `KAGUYA_GATEWAY_ALLOWLIST_USER_IDS`
 - `KAGUYA_GATEWAY_ALLOWLIST_GROUP_IDS`
 
-配置引导现在统一处理 `setup_required`、`invalid` 和 `review_required`。遇到这些状态时，Server 只启动 HTTP 与 Web UI，暂停 Runtime 和 NapCat，并在日志中给出配置地址。`GET /api/v1/setup` 返回不含密钥的 readiness；经过 Bearer 认证的 `POST /api/v1/setup` 使用现有 `FileUserConfigManager` 创建首个 profile，或修复已有的默认 profile。
+配置引导现在围绕全局 `selectedProfileId` 统一处理 `setup_required`、`invalid`、`review_required` 与 `restart_required`。遇到 selected Profile 未就绪时，Server 只启动 HTTP 与 Web UI，暂停 Runtime 和 NapCat，并通过 `GET /api/v1/setup` 返回不含密钥的 setup 状态。
 
-Web UI 会在聊天界面之前检查 readiness。需要配置时显示独立、简洁的表单，收集 OpenAI-compatible Provider URL、API Key 和互不相同的 light/heavy 模型 ID。API Key 不写入浏览器存储。保存后页面进入 `restart_required`，要求用户重启 Server，使 Runtime 在完整生命周期中重新冻结 profile 并创建模型客户端。
+配置写入已经不再通过 `POST /api/v1/setup` 完成。Web UI 现在使用显式的 Profile 管理接口：
+
+- `GET /api/v1/profiles`：读取 metadata 集合和 `selectedProfileId`
+- `POST /api/v1/profiles`：创建命名 Profile
+- `GET /api/v1/profiles/:profileId`：读取完整、含密钥的指定 Profile
+- `PUT /api/v1/profiles/:profileId`：完整替换指定 Profile
+- `PUT /api/v1/profiles/selection`：显式修改 `selectedProfileId`
+- `DELETE /api/v1/profiles/:profileId`：删除允许删除的 Profile
+
+对于全新配置根，显式 bootstrap 会创建保留的空 `default` Profile，并将 `selectedProfileId` 设为 `"default"`。用户随后可以配置 `default`，或者创建新的命名 Profile，再单独选择它。
+
+Web UI 会在聊天界面之前检查 setup 状态。需要配置时会进入 Profile 管理界面，按 `profileId` 加载当前 Profile，并在完整正文基础上编辑，而不是用空表单覆盖未显示字段。API Key 不写入浏览器存储。如果保存或切换后，当前 selected Profile 仍然处于 `invalid` 或 `review_required`，页面会继续展示 readiness issues 与 warnings，而不会提示重启。选择某个 Profile，或完整替换当前 selected Profile，都会锁存一次重启要求；只有当该 selected Profile 已经 ready 时，页面才会进入 `restart_required`，要求用户重启 Server，使 Runtime 在下一个启动周期里加载该 selected Profile 并创建模型客户端。
 
 ## 安全边界没有被配置便利性削弱
 
-统一入口只处理配置缺失和显式确认，不处理存储损坏。配置索引损坏、profile 文件丢失、路径越界、符号链接或权限异常仍会拒绝启动，避免自动流程覆盖可能需要恢复的数据。
+可恢复的统一入口只处理 selected Profile 缺失、未完成或 warning 待确认这类状态，不处理存储损坏。配置索引损坏、Profile 文件丢失、路径越界、符号链接或权限异常仍会拒绝启动，避免自动流程覆盖可能需要恢复的数据。
 
-`KAGUYA_GATEWAY_TOKEN` 仍是启动前必须提供的引导凭据，配置写入接口不会退化为匿名接口。已经处于 `ready` 状态的 profile 也不能通过 setup API 覆盖。配置提交继续采用严格 schema，并在服务端校验 light/heavy 模型不同，不能仅依赖浏览器表单约束。
+`KAGUYA_GATEWAY_TOKEN` 仍是启动前必须提供的引导凭据，配置写入接口不会退化为匿名接口。匿名 setup 模式只能看到 metadata、issues 与 warnings；完整 Profile 的读取和修改仍要求管理认证。配置提交继续采用严格 schema，并在服务端校验 light/heavy 模型不同，不能仅依赖浏览器表单约束。
 
 ## 文档与验证
 
-README、网关说明、架构说明、Web UI 文档和配置包文档均已更新；更完整的行为解释见 `docs/updates/2026-08-16-gateway-allowlist-and-configuration-guide.md`。
-
-已完成以下验证：
-
-- TypeScript 全仓构建与 Server/Web 类型检查通过；
-- ESLint、Prettier 和 `git diff --check` 通过；
-- 全仓 343 项测试通过；
-- 两项 Windows symlink 安全测试在创建测试符号链接时因系统权限返回 `EPERM`，属于既有环境限制，测试尚未进入被测逻辑。
-
-测试覆盖白名单通配与组合匹配、过滤前无副作用、首次配置、无效 profile 修复、待确认 profile 修复、重复模型拒绝，以及已就绪配置不可覆盖等关键边界。
+当前生效的配置文档与服务端文档都已经统一到 v3 registry 契约：运行时只有一个显式的 `selectedProfileId`，`GET /api/v1/setup` 只暴露 setup 状态，Profile 创建/读取/替换/选择/删除全部通过 `/api/v1/profiles*` 完成；当用户选择某个 Profile，或替换当前 selected Profile 后，只要该 selected Profile 已 ready，页面就会进入 `restart_required`，并在重启后真正进入 Runtime。
