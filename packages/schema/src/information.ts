@@ -97,12 +97,8 @@ export const informationAtomSchema = z
   })
   .strict();
 
-export function parseInformationAtom<K extends string, P extends JsonObject>(
-  value: unknown,
-): DeepReadonly<InformationAtom<K, P>> {
-  return freezeInformationAtom(
-    informationAtomSchema.parse(value) as InformationAtom<K, P>,
-  );
+export function parseInformationAtom(value: unknown): InformationAtom {
+  return informationAtomSchema.parse(value);
 }
 
 export function freezeInformationAtom<K extends string, P extends JsonObject>(
@@ -207,7 +203,7 @@ function cloneJsonValue(
     return invalidJsonValue;
   }
 
-  const clone = Object.create(null) as JsonObject;
+  const clone: JsonObject = {};
   ancestors.add(value);
   try {
     for (const key of Reflect.ownKeys(value)) {

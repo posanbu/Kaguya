@@ -4,11 +4,13 @@
  * 代码库关系：`packages/schema/src/index.ts` 与下游包会消费这里定义的
  * `information*` 导出；这些断言必须独立于实现细节，直接描述公共 API。
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
+  parseInformationAtom,
   freezeInformationAtom,
   informationAtomSchema,
+  type InformationAtom,
   informationIdSchema,
 } from "./information.js";
 
@@ -43,5 +45,35 @@ describe("freezeInformationAtom", () => {
 
     expect(atom.payload).toEqual({ nested: { values: ["moon"] } });
     expect(Object.isFrozen(atom.payload.nested.values)).toBe(true);
+  });
+});
+
+describe("parseInformationAtom", () => {
+  it("returns plain JSON objects in the parsed payload", () => {
+    const parsed = parseInformationAtom({
+      informationId: "atom-2",
+      kind: "acme.message.created",
+      occurredAt: "2026-09-01T00:00:00.000Z",
+      source: "module:acme",
+      payload: { nested: { values: ["moon"] } },
+      references: [],
+    });
+
+    expect(Object.getPrototypeOf(parsed.payload)).toBe(Object.prototype);
+  });
+
+  it("does not accept caller-selected generic output types", () => {
+    if (false) {
+      // @ts-expect-error parseInformationAtom is intentionally not generic
+      const parsed = parseInformationAtom<"wrong.kind", { impossible: true }>({
+        informationId: "atom-3",
+        kind: "acme.message.created",
+        occurredAt: "2026-09-01T00:00:00.000Z",
+        source: "module:acme",
+        payload: { nested: { values: ["moon"] } },
+        references: [],
+      });
+      expectTypeOf(parsed).toEqualTypeOf<InformationAtom>();
+    }
   });
 });
