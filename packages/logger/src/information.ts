@@ -35,12 +35,13 @@ export interface CreateInformationAtomLogSinkOptions {
   readonly emergencyReporter?: InformationAtomLogEmergencyReporter;
 }
 
-const PROJECTED_IDENTITY_KEYS = Object.freeze([
-  "informationId",
-  "kind",
-  "occurredAt",
-  "source",
-] as const);
+const FORBIDDEN_PROJECTION_KEYS = new Set([
+  "prompt",
+  "response",
+  "credentials",
+  "raw",
+  "headers",
+]);
 
 export function previewInformationContent(input: string): {
   readonly contentPreview: string;
@@ -171,13 +172,12 @@ function normalizeProjection(
 
 function cloneJsonObject(value: JsonObject): JsonObject | undefined {
   const clone: JsonObject = {};
-  const forbidden = new Set(["prompt", "response", "credentials", "raw", "headers"]);
   for (const key of Reflect.ownKeys(value)) {
     if (typeof key !== "string") {
       return undefined;
     }
-    if (forbidden.has(key)) {
-      return undefined;
+    if (FORBIDDEN_PROJECTION_KEYS.has(key)) {
+      continue;
     }
 
     const descriptor = Object.getOwnPropertyDescriptor(value, key);

@@ -322,15 +322,54 @@ describe("information atom log projection", () => {
     expect(errors).toEqual([{ informationId: "atom-throw", kind: definition.kind, errorType: "projection_failed" }]);
   });
 
-  it("rejects sensitive projection keys", async () => {
+  it("strips sensitive projection keys before serialization", async () => {
     const stream = new MemoryStream();
     const logger = createLogger({ service: "test", level: "trace", stream });
-    const definition = defineInformationKind({ kind: "core.system.log.sensitive", payloadSchema: z.object({ content: z.string() }).strict(), references: {}, log: { enabled: true, level: "info", project() { return { response: "secret" } as JsonObject; } } });
-    const atom = { informationId: "atom-sensitive", kind: definition.kind, occurredAt: "2026-09-01T00:00:00.000Z", source: "test", payload: { content: "x" }, references: [] } as InformationAtom;
+    const definition = defineInformationKind({
+      kind: "core.system.log.sensitive",
+      payloadSchema: z.object({ content: z.string() }).strict(),
+      references: {},
+      log: {
+        enabled: true,
+        level: "info",
+        project() {
+          return {
+            contentPreview: "safe-preview",
+            response: "secret",
+            nested: {
+              prompt: "hidden",
+              credentials: "hidden",
+              raw: "hidden",
+              headers: "hidden",
+            },
+          } as JsonObject;
+        },
+      },
+    });
+    const atom = {
+      informationId: "atom-sensitive",
+      kind: definition.kind,
+      occurredAt: "2026-09-01T00:00:00.000Z",
+      source: "test",
+      payload: { content: "x" },
+      references: [],
+    } as InformationAtom;
     const errors: unknown[] = [];
-    await projectInformationAtomLog(logger, definition as any, atom, (e) => { errors.push(e); });
-    expect(errors).toEqual([{ informationId: "atom-sensitive", kind: definition.kind, errorType: "invalid_projection_result" }]);
-    expect(stream.logs()).toEqual([]);
+    await projectInformationAtomLog(logger, definition as any, atom, (e) => {
+      errors.push(e);
+    });
+    expect(errors).toEqual([]);
+    expect(stream.logs()[0]).toMatchObject({
+      informationId: "atom-sensitive",
+      kind: definition.kind,
+      occurredAt: "2026-09-01T00:00:00.000Z",
+      source: "test",
+      contentPreview: "safe-preview",
+      nested: {},
+    });
+    const serialized = JSON.stringify(stream.logs());
+    expect(serialized).not.toContain("secret");
+    expect(serialized).not.toContain("hidden");
   });
 
   it("reports unknown kinds from a sink", async () => {
