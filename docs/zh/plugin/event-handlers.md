@@ -243,6 +243,7 @@ class SendAuditPlugin(MaiBotPlugin):
 - **适用场景**：`@EventHandler` 消息流程的固定阶段 → `@HookHandler` 主程序定义的任意扩展点
 
 一般原则：
+
 - 如果需要在消息流程的**固定阶段**（如收到消息、LLM 返回后）执行逻辑，使用 `@EventHandler`
 - 如果需要订阅主程序定义的**特定命名 Hook 点**（如 `heart_fc.heart_flow_cycle_start`），使用 `@HookHandler`
 

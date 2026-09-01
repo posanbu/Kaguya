@@ -1,9 +1,32 @@
+/**
+ * 功能概述：本文件组装 Kaguya 服务端的 Fastify HTTP 应用，承载匿名健康检查、
+ * OpenAPI 文档、首屏配置状态查询、带鉴权的全局 Profile Registry 管理接口，以及
+ * Runtime 消息入口；它是“selected Profile 唯一生效”服务端约束的 HTTP 落点。
+ * 主要职责：`createHttpApplication` 统一注册 CORS、限流、OpenAPI 与错误处理，
+ * 再根据 `runtime` 与 `setup` 是否存在决定 ready 模式和 setup 模式的可见路由；
+ * `/api/v1/setup` 现在只返回无 secret 的 readiness 元数据，Profile 的创建、读取、
+ * 完整替换、显式选择与删除分别由 `/api/v1/profiles*` 路由承载，并统一通过
+ * `requireManagementToken` 在任何路径/正文校验前拒绝未授权请求。
+ * 代码库关系：本模块消费 `setup.ts` 的 `ConfigurationManagement` 门面与
+ * `@kaguya/config` 暴露的 schema 边界、错误码和 Profile 类型；`server.ts`
+ * 会把唯一管理实例传入这里，WebUI 与外部管理客户端都通过这些路由驱动 selected
+ * Profile，而不是直接访问底层 config manager。
+ * 输入输出与副作用：运行时会创建 Fastify 实例并注册中间件；Profile 路由在管理认证
+ * 通过后可能写入配置目录并返回无脱敏的 Profile 正文；消息路由仅在 `runtime`
+ * 就绪时转发消息，否则返回明确的 503 setup-required/core-unavailable 错误。
+ */
 import { randomUUID, timingSafeEqual } from "node:crypto";
 
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import swagger from "@fastify/swagger";
-import { ConfigError } from "@kaguya/config";
+import {
+  ConfigError,
+  aiConfigSchema,
+  platformConfigSchema,
+  pluginConfigSchema,
+  profileIdSchema,
+} from "@kaguya/config";
 import { runWithLogContext } from "@kaguya/logger";
 import type { RuntimeWebMessage } from "@kaguya/runtime";
 import { z } from "@kaguya/schema";
@@ -16,11 +39,7 @@ import Fastify, {
 } from "fastify";
 
 import type { ServerConfig } from "./config.js";
-import {
-  isConfigurationInputError,
-  type ConfigurationSetup,
-  type InitialConfigurationInput,
-} from "./setup.js";
+import type { ConfigurationManagement } from "./setup.js";
 
 const MAX_MESSAGE_TEXT_LENGTH = 131_072;
 const MAX_REQUEST_ID_LENGTH = 128;
@@ -49,43 +68,206 @@ const messageBodyJsonSchema = {
   },
 } as const;
 
-const setupRequestSchema = z
+const createProfileRequestSchema = z
   .object({
-    profileName: z.string().trim().min(1).max(100),
-    baseUrl: z.string().trim().url(),
-    apiKey: z.string().min(1).max(4096),
-    lightModel: z.string().trim().min(1).max(256),
-    heavyModel: z.string().trim().min(1).max(256),
-    acknowledgeOptional: z.boolean(),
-  })
-  .refine(({ lightModel, heavyModel }) => lightModel !== heavyModel, {
-    message: "Light and heavy models must be different",
-    path: ["heavyModel"],
+    name: z.string().trim().min(1).max(100),
   })
   .strict();
 
-const setupRequestJsonSchema = {
+const selectionRequestSchema = z
+  .object({
+    selectedProfileId: profileIdSchema,
+  })
+  .strict();
+
+const replaceProfileRequestSchema = z
+  .object({
+    name: z.string().trim().min(1).max(100),
+    ai: aiConfigSchema,
+    platforms: z.array(platformConfigSchema),
+    plugins: z.array(pluginConfigSchema),
+    acknowledgedWarnings: z.array(z.string().trim().min(1)),
+  })
+  .strict();
+
+const createProfileRequestJsonSchema = {
   type: "object",
   additionalProperties: false,
-  required: [
-    "profileName",
-    "baseUrl",
-    "apiKey",
-    "lightModel",
-    "heavyModel",
-    "acknowledgeOptional",
-  ],
+  required: ["name"],
   properties: {
-    profileName: { type: "string", minLength: 1, maxLength: 100 },
-    baseUrl: { type: "string", format: "uri" },
-    apiKey: { type: "string", minLength: 1, maxLength: 4096 },
-    lightModel: { type: "string", minLength: 1, maxLength: 256 },
-    heavyModel: { type: "string", minLength: 1, maxLength: 256 },
-    acknowledgeOptional: { type: "boolean" },
+    name: { type: "string", minLength: 1, maxLength: 100 },
   },
 } as const;
 
-const setupResponseJsonSchema = {
+const profileIdJsonSchema = {
+  anyOf: [{ const: "default" }, { type: "string", format: "uuid" }],
+} as const;
+
+const profileMetadataJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["id", "name", "createdAt", "updatedAt"],
+  properties: {
+    id: profileIdJsonSchema,
+    name: { type: "string", minLength: 1 },
+    createdAt: { type: "string", format: "date-time" },
+    updatedAt: { type: "string", format: "date-time" },
+  },
+} as const;
+
+const configurationIssueJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["id", "path", "message"],
+  properties: {
+    id: { type: "string", minLength: 1 },
+    path: { type: "string" },
+    message: { type: "string", minLength: 1 },
+  },
+} as const;
+
+const modelTierTargetJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["providerId", "modelId"],
+  properties: {
+    providerId: { type: "string", minLength: 1 },
+    modelId: { type: "string", minLength: 1 },
+  },
+} as const;
+
+const aiProviderConfigJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["id", "type", "enabled", "models", "settings"],
+  properties: {
+    id: { type: "string", minLength: 1 },
+    type: { type: "string", minLength: 1 },
+    enabled: { type: "boolean" },
+    baseUrl: { type: "string", format: "uri" },
+    apiKey: { type: "string" },
+    models: {
+      type: "array",
+      items: { type: "string", minLength: 1 },
+    },
+    settings: { type: "object", additionalProperties: true },
+  },
+} as const;
+
+const aiConfigJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["providers"],
+  properties: {
+    defaultProviderId: { type: "string", minLength: 1 },
+    modelTiers: {
+      type: "object",
+      additionalProperties: false,
+      required: ["light", "heavy"],
+      properties: {
+        light: modelTierTargetJsonSchema,
+        heavy: modelTierTargetJsonSchema,
+      },
+    },
+    providers: {
+      type: "array",
+      items: aiProviderConfigJsonSchema,
+    },
+  },
+} as const;
+
+const platformConfigJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["id", "type", "enabled", "credentials", "settings"],
+  properties: {
+    id: { type: "string", minLength: 1 },
+    type: { type: "string", minLength: 1 },
+    enabled: { type: "boolean" },
+    credentials: { type: "object", additionalProperties: true },
+    settings: { type: "object", additionalProperties: true },
+  },
+} as const;
+
+const pluginConfigJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["id", "enabled", "settings"],
+  properties: {
+    id: { type: "string", minLength: 1 },
+    enabled: { type: "boolean" },
+    settings: { type: "object", additionalProperties: true },
+  },
+} as const;
+
+const profileReviewJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["acknowledgedWarnings"],
+  properties: {
+    acknowledgedWarnings: {
+      type: "array",
+      items: { type: "string", minLength: 1 },
+    },
+  },
+} as const;
+
+const userConfigProfileJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["version", "id", "name", "ai", "platforms", "plugins"],
+  properties: {
+    version: { type: "integer", enum: [1] },
+    id: profileIdJsonSchema,
+    name: { type: "string", minLength: 1 },
+    ai: aiConfigJsonSchema,
+    platforms: {
+      type: "array",
+      items: platformConfigJsonSchema,
+    },
+    plugins: {
+      type: "array",
+      items: pluginConfigJsonSchema,
+    },
+    review: profileReviewJsonSchema,
+  },
+} as const;
+
+const selectionRequestJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["selectedProfileId"],
+  properties: {
+    selectedProfileId: profileIdJsonSchema,
+  },
+} as const;
+
+const profilePathParamsJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["profileId"],
+  properties: {
+    profileId: profileIdJsonSchema,
+  },
+} as const;
+
+const replaceProfileRequestJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["name", "ai", "platforms", "plugins", "acknowledgedWarnings"],
+  properties: {
+    name: { type: "string", minLength: 1, maxLength: 100 },
+    ai: aiConfigJsonSchema,
+    platforms: { type: "array", items: platformConfigJsonSchema },
+    plugins: { type: "array", items: pluginConfigJsonSchema },
+    acknowledgedWarnings: {
+      type: "array",
+      items: { type: "string", minLength: 1 },
+    },
+  },
+} as const;
+
+const setupStatusResponseJsonSchema = {
   type: "object",
   additionalProperties: false,
   required: ["data"],
@@ -93,9 +275,83 @@ const setupResponseJsonSchema = {
     data: {
       type: "object",
       additionalProperties: false,
-      required: ["status", "restartRequired"],
+      required: ["status", "selectedProfileId", "profiles"],
       properties: {
-        status: { type: "string", enum: ["configured"] },
+        status: {
+          type: "string",
+          enum: [
+            "setup_required",
+            "invalid",
+            "review_required",
+            "restart_required",
+            "ready",
+          ],
+        },
+        selectedProfileId: profileIdJsonSchema,
+        profiles: {
+          type: "array",
+          items: profileMetadataJsonSchema,
+        },
+        issues: {
+          type: "array",
+          items: configurationIssueJsonSchema,
+        },
+        warnings: {
+          type: "array",
+          items: configurationIssueJsonSchema,
+        },
+      },
+    },
+  },
+} as const;
+
+const profileRegistryResponseJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["data"],
+  properties: {
+    data: {
+      type: "object",
+      additionalProperties: false,
+      required: ["selectedProfileId", "profiles"],
+      properties: {
+        selectedProfileId: profileIdJsonSchema,
+        profiles: {
+          type: "array",
+          items: profileMetadataJsonSchema,
+        },
+      },
+    },
+  },
+} as const;
+
+const profileResponseJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["data"],
+  properties: {
+    data: {
+      type: "object",
+      additionalProperties: false,
+      required: ["profile"],
+      properties: {
+        profile: userConfigProfileJsonSchema,
+      },
+    },
+  },
+} as const;
+
+const profileMutationResponseJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["data"],
+  properties: {
+    data: {
+      type: "object",
+      additionalProperties: false,
+      required: ["profile", "restartRequired"],
+      properties: {
+        profile: userConfigProfileJsonSchema,
         restartRequired: { type: "boolean" },
       },
     },
@@ -140,7 +396,7 @@ const errorResponseJsonSchema = {
 export interface CreateHttpApplicationOptions {
   config: ServerConfig;
   runtime?: RuntimeDispatcher;
-  setup?: ConfigurationSetup;
+  setup?: ConfigurationManagement;
   logger?: FastifyBaseLogger;
 }
 
@@ -177,7 +433,7 @@ export async function createHttpApplication(
       options.config.corsOrigins.length === 0
         ? false
         : [...options.config.corsOrigins],
-    methods: ["GET", "POST"],
+    methods: ["GET", "POST", "PUT", "DELETE"],
     allowedHeaders: ["authorization", "content-type", "x-request-id"],
   });
   await app.register(rateLimit, {
@@ -232,40 +488,50 @@ export async function createHttpApplication(
     {
       config: { rateLimit: false },
       schema: {
-        hide: true,
         tags: ["System"],
         summary: "Inspect first-run configuration readiness",
+        response: {
+          200: setupStatusResponseJsonSchema,
+        },
       },
     },
     async () => ({
-      data: (await options.setup?.inspect()) ?? { status: "ready" as const },
+      data: (await options.setup?.inspect()) ?? readySetupStatus(),
+    }),
+  );
+
+  app.get(
+    "/api/v1/profiles",
+    {
+      onRequest: requireManagementToken(options.config.gatewayToken),
+      schema: {
+        tags: ["Profiles"],
+        summary: "List profile metadata and the selected global profile",
+        security: [{ bearerAuth: [] }],
+        response: {
+          200: profileRegistryResponseJsonSchema,
+          401: errorResponseJsonSchema,
+          429: errorResponseJsonSchema,
+          500: errorResponseJsonSchema,
+        },
+      },
+    },
+    async () => ({
+      data: await requireManagement(options.setup).listProfiles(),
     }),
   );
 
   app.post(
-    "/api/v1/setup",
+    "/api/v1/profiles",
     {
-      onRequest: async (request, reply) => {
-        if (!hasValidGatewayToken(request, options.config.gatewayToken)) {
-          return reply
-            .code(401)
-            .send(
-              errorBody(
-                "unauthorized",
-                "A valid gateway Bearer token is required",
-                request.id,
-              ),
-            );
-        }
-      },
+      onRequest: requireManagementToken(options.config.gatewayToken),
       schema: {
-        hide: true,
-        tags: ["System"],
-        summary: "Initialize the first configuration profile",
+        tags: ["Profiles"],
+        summary: "Create a named profile without selecting it",
         security: [{ bearerAuth: [] }],
-        body: setupRequestJsonSchema,
+        body: createProfileRequestJsonSchema,
         response: {
-          201: setupResponseJsonSchema,
+          201: profileMutationResponseJsonSchema,
           400: errorResponseJsonSchema,
           401: errorResponseJsonSchema,
           409: errorResponseJsonSchema,
@@ -275,74 +541,141 @@ export async function createHttpApplication(
       },
     },
     async (request, reply) => {
-      const setup = options.setup;
-      if (setup === undefined) {
-        throw new ApiGatewayError(
-          "configuration_not_required",
-          "Configuration setup is not required",
-          409,
-        );
-      }
-      const setupStatus = await setup.inspect();
-      if (
-        setupStatus.status === "ready" ||
-        setupStatus.status === "restart_required"
-      ) {
-        throw new ApiGatewayError(
-          "configuration_not_required",
-          "Configuration setup is not required",
-          409,
-        );
-      }
-      const parsed = setupRequestSchema.parse(request.body);
-      try {
-        await setup.initialize(parsed satisfies InitialConfigurationInput);
-      } catch (error) {
-        if (isConfigurationInputError(error)) {
-          throw new ApiGatewayError(
-            "configuration_invalid",
-            "Configuration input is invalid or incomplete",
-            400,
-          );
-        }
-        if (
-          error instanceof ConfigError &&
-          error.code === "CONFIG_CORRUPT_STORE"
-        ) {
-          throw new ApiGatewayError(
-            "configuration_unavailable",
-            "Configuration store is unavailable",
-            409,
-          );
-        }
-        throw error;
-      }
-      request.log.info(
-        { event: "configuration.setup.completed" },
-        "Configuration saved; restart required",
+      const body = createProfileRequestSchema.parse(request.body);
+      const result = await requireManagement(options.setup).createProfile(
+        body.name,
       );
-      return reply.code(201).send({
-        data: { status: "configured", restartRequired: true },
-      });
+      return reply.code(201).send({ data: result });
+    },
+  );
+
+  app.put(
+    "/api/v1/profiles/selection",
+    {
+      onRequest: requireManagementToken(options.config.gatewayToken),
+      schema: {
+        tags: ["Profiles"],
+        summary: "Select the global runtime profile",
+        security: [{ bearerAuth: [] }],
+        body: selectionRequestJsonSchema,
+        response: {
+          200: profileMutationResponseJsonSchema,
+          400: errorResponseJsonSchema,
+          401: errorResponseJsonSchema,
+          404: errorResponseJsonSchema,
+          429: errorResponseJsonSchema,
+          500: errorResponseJsonSchema,
+        },
+      },
+    },
+    async (request) => {
+      const body = selectionRequestSchema.parse(request.body);
+      return {
+        data: await requireManagement(options.setup).selectProfile(
+          parseProfileId(body.selectedProfileId),
+        ),
+      };
+    },
+  );
+
+  app.get(
+    "/api/v1/profiles/:profileId",
+    {
+      onRequest: requireManagementToken(options.config.gatewayToken),
+      schema: {
+        tags: ["Profiles"],
+        summary: "Read one profile by explicit profile id",
+        security: [{ bearerAuth: [] }],
+        params: profilePathParamsJsonSchema,
+        response: {
+          200: profileResponseJsonSchema,
+          400: errorResponseJsonSchema,
+          401: errorResponseJsonSchema,
+          404: errorResponseJsonSchema,
+          409: errorResponseJsonSchema,
+          429: errorResponseJsonSchema,
+          500: errorResponseJsonSchema,
+        },
+      },
+    },
+    async (request) => {
+      const params = profilePathParamsSchema.parse(request.params);
+      return {
+        data: {
+          profile: await requireManagement(options.setup).getProfile(
+            parseProfileId(params.profileId),
+          ),
+        },
+      };
+    },
+  );
+
+  app.put(
+    "/api/v1/profiles/:profileId",
+    {
+      onRequest: requireManagementToken(options.config.gatewayToken),
+      schema: {
+        tags: ["Profiles"],
+        summary: "Replace one profile by explicit profile id",
+        security: [{ bearerAuth: [] }],
+        params: profilePathParamsJsonSchema,
+        body: replaceProfileRequestJsonSchema,
+        response: {
+          200: profileMutationResponseJsonSchema,
+          400: errorResponseJsonSchema,
+          401: errorResponseJsonSchema,
+          404: errorResponseJsonSchema,
+          409: errorResponseJsonSchema,
+          429: errorResponseJsonSchema,
+          500: errorResponseJsonSchema,
+        },
+      },
+    },
+    async (request) => {
+      const params = profilePathParamsSchema.parse(request.params);
+      const body = replaceProfileRequestSchema.parse(request.body);
+      return {
+        data: await requireManagement(options.setup).replaceProfile(
+          parseProfileId(params.profileId),
+          body,
+        ),
+      };
+    },
+  );
+
+  app.delete(
+    "/api/v1/profiles/:profileId",
+    {
+      onRequest: requireManagementToken(options.config.gatewayToken),
+      schema: {
+        tags: ["Profiles"],
+        summary: "Delete one non-default, non-selected profile",
+        security: [{ bearerAuth: [] }],
+        params: profilePathParamsJsonSchema,
+        response: {
+          204: { type: "null" },
+          400: errorResponseJsonSchema,
+          401: errorResponseJsonSchema,
+          404: errorResponseJsonSchema,
+          409: errorResponseJsonSchema,
+          429: errorResponseJsonSchema,
+          500: errorResponseJsonSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const params = profilePathParamsSchema.parse(request.params);
+      await requireManagement(options.setup).deleteProfile(
+        parseProfileId(params.profileId),
+      );
+      return reply.code(204).send();
     },
   );
 
   app.post(
     "/api/v1/messages",
     {
-      onRequest: async (request, reply) => {
-        if (!hasValidGatewayToken(request, options.config.gatewayToken)) {
-          return reply
-            .code(401)
-            .send(
-              errorBody(
-                "unauthorized",
-                "A valid gateway Bearer token is required",
-                request.id,
-              ),
-            );
-        }
-      },
+      onRequest: requireManagementToken(options.config.gatewayToken),
       schema: {
         tags: ["Messages"],
         summary: "Validate and dispatch a message to Kaguya Runtime",
@@ -421,6 +754,14 @@ export async function createHttpApplication(
         .code(error.statusCode)
         .send(errorBody(error.code, error.message, request.id));
     }
+    if (error instanceof ConfigError) {
+      const mapped = mapConfigError(error);
+      if (mapped !== undefined) {
+        return reply
+          .code(mapped.statusCode)
+          .send(errorBody(mapped.code, mapped.message, request.id));
+      }
+    }
     if (
       isHttpError(error) &&
       error.statusCode >= 400 &&
@@ -450,6 +791,12 @@ export async function createHttpApplication(
   return app;
 }
 
+const profilePathParamsSchema = z
+  .object({
+    profileId: z.string(),
+  })
+  .strict();
+
 function canServeSpaFallback(
   request: FastifyRequest,
   reply: FastifyReply,
@@ -473,6 +820,95 @@ class ApiGatewayError extends Error {
   ) {
     super(message);
     this.name = "ApiGatewayError";
+  }
+}
+
+function requireManagementToken(expectedToken: string) {
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!hasValidGatewayToken(request, expectedToken)) {
+      return reply
+        .code(401)
+        .send(
+          errorBody(
+            "unauthorized",
+            "A valid gateway Bearer token is required",
+            request.id,
+          ),
+        );
+    }
+  };
+}
+
+function requireManagement(
+  setup: ConfigurationManagement | undefined,
+): ConfigurationManagement {
+  if (setup === undefined) {
+    throw new ApiGatewayError(
+      "configuration_unavailable",
+      "Configuration store is unavailable",
+      409,
+    );
+  }
+  return setup;
+}
+
+function parseProfileId(profileId: string) {
+  const parsed = profileIdSchema.safeParse(profileId);
+  if (!parsed.success) {
+    throw new ConfigError("CONFIG_INVALID_INPUT", "Profile ID is invalid");
+  }
+  return parsed.data;
+}
+
+function readySetupStatus() {
+  return {
+    status: "ready" as const,
+    selectedProfileId: "default",
+    profiles: [
+      {
+        id: "default",
+        name: "default",
+        createdAt: "",
+        updatedAt: "",
+      },
+    ],
+  };
+}
+
+function mapConfigError(error: ConfigError) {
+  switch (error.code) {
+    case "CONFIG_INVALID_INPUT":
+      return {
+        statusCode: 400,
+        code: "profile_invalid",
+        message: "Profile input is invalid",
+      } as const;
+    case "CONFIG_PROFILE_NOT_FOUND":
+      return {
+        statusCode: 404,
+        code: "profile_not_found",
+        message: "Profile was not found",
+      } as const;
+    case "CONFIG_PROFILE_NAME_CONFLICT":
+      return {
+        statusCode: 409,
+        code: "profile_name_conflict",
+        message: "Profile name already exists",
+      } as const;
+    case "CONFIG_DEFAULT_PROFILE_PROTECTED":
+      return {
+        statusCode: 409,
+        code: "profile_protected",
+        message: "The default profile is protected",
+      } as const;
+    case "CONFIG_PROFILE_IN_USE":
+      return {
+        statusCode: 409,
+        code: "profile_in_use",
+        message: "The selected profile cannot be deleted",
+      } as const;
+    default:
+      return undefined;
   }
 }
 

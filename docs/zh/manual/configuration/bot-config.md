@@ -2,17 +2,17 @@
 
 ## Summary
 
-`@kaguya/config` 保存多份 AI、平台和插件配置，并提供默认 Profile 与按明确
-`profileId` 选择的读取接口。配置选择不从消息来源或用户身份推导。
+`@kaguya/config` 保存多份 AI、平台和插件配置，并通过 v3 registry 维护唯一的
+`selectedProfileId`。配置选择不从消息来源、用户身份或模块参数推导。
 
 ## Current contract
 
-- `inspect()` 无副作用地返回配置就绪状态，`initialize()` 显式创建第一份 Profile。
-- 索引格式为 v2，只保存 `defaultProfileId` 和 Profile 元数据；Profile 文件格式仍为 v1。
-- `resolveProfileById(profileId?)` 解析明确指定或默认 Profile，不回退其他 Profile、provider 或模型。
+- `inspect()` 无副作用地返回配置就绪状态，`bootstrap()` 显式创建空 registry 和保留 `default` Profile。
+- 索引格式为 v3，保存 `selectedProfileId` 和 Profile 元数据；Profile 文件格式仍为 v1。
+- `resolveProfileById(profileId)` 必须显式提供 ID，不回退其他 Profile、provider 或模型。
 - 完整更新会清除 warning 确认；重新使用前必须再次检查并显式确认。
 - 明文密钥只写入权限保护的敏感 JSON 文件，写入具备原子替换、路径和符号链接防护。
-- v1 索引以 `CONFIG_UNSUPPORTED_VERSION` 拒绝，不自动迁移或删除；用户必须先备份再重新初始化。
+- v1/v2 索引以 `CONFIG_UNSUPPORTED_VERSION` 拒绝，不自动迁移或删除；用户必须先备份再重新初始化。
 
 ## Known limitations
 

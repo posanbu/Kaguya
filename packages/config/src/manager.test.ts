@@ -1,5 +1,21 @@
+/**
+ * 功能概述：本测试文件覆盖 `packages/config/src/manager.ts` 的文件制配置注册表实现，
+ * 重点验证 v3 `index.json` 与各 Profile 文件之间的持久化契约、显式 bootstrap 流程、
+ * Profile 生命周期、回滚/原子写入语义，以及运行时输入边界的失败关闭行为。
+ * 主要职责：`bootstrap` 相关用例验证仅在缺失或空根目录下创建保留 `default` Profile，
+ * 且按“先写 Profile、后发布 index”的顺序落盘；生命周期用例验证创建、完整替换、
+ * 显式选择、删除保护与必填 ID 解析；损坏与输入校验用例验证 legacy 版本拒绝、
+ * 敏感字段不泄漏、路径防护和串行化 mutation queue 在失败后仍可继续使用。
+ * 代码库关系：该文件直接驱动 `FileUserConfigManager` 的公开 API，并通过 mock
+ * `secure-files` 与 `node:fs/promises` 注入 index/profile 写入失败和目录 fsync 故障，
+ * 以保护 `secure-files.ts` 的原子写实现和 `model.ts` 的 v3 schema 不变量不被回归。
+ * 输入输出与副作用：测试会在系统临时目录创建隔离根目录，真实读写 `index.json`
+ * 与 `profiles/profile_<id>.json`，然后在 `afterEach` 中清理；断言内容同时覆盖敏感权限
+ * 写入、磁盘字节不变、错误码稳定性，以及默认/已选中 Profile 的删除保护。
+ */
 import {
   access,
+  mkdir,
   mkdtemp,
   readFile,
   readdir,
@@ -16,6 +32,9 @@ import { FileUserConfigManager } from "./manager.js";
 import type { JsonObject, UserConfigProfileSettings } from "./model.js";
 import { configurationSetupGuidance } from "./readiness.js";
 
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 const atomicWriteFaults = vi.hoisted(() => ({
   postRenameDirectoryFailure: undefined as
     | {
@@ -31,6 +50,7 @@ const sensitiveFileFaults = vi.hoisted(() => ({
     message: string;
   }[],
   remove: [] as string[],
+  ensureDirectoryCalls: 0,
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -101,6 +121,10 @@ vi.mock("./secure-files.js", async (importOriginal) => {
 
   return {
     ...actual,
+    async ensureSensitiveDirectory(path: string): Promise<void> {
+      sensitiveFileFaults.ensureDirectoryCalls += 1;
+      await actual.ensureSensitiveDirectory(path);
+    },
     async writeSensitiveJson(path: string, value: unknown): Promise<void> {
       const target = path.endsWith("index.json") ? "index" : "profile";
       const fault = sensitiveFileFaults.write[0];
@@ -122,10 +146,15 @@ vi.mock("./secure-files.js", async (importOriginal) => {
 
 const roots: string[] = [];
 
-async function createRoot(): Promise<string> {
+async function createEmptyRoot(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "kaguya-config-manager-"));
   roots.push(root);
-  await initializeReadyManager(root);
+  return root;
+}
+
+async function createBootstrappedRoot(): Promise<string> {
+  const root = await createEmptyRoot();
+  await FileUserConfigManager.bootstrap({ rootDir: root });
   return root;
 }
 
@@ -190,98 +219,131 @@ function reviewSettings(): UserConfigProfileSettings {
   };
 }
 
-async function initializeReadyManager(
-  rootDir: string,
-): Promise<FileUserConfigManager> {
-  return FileUserConfigManager.initialize({
-    rootDir,
-    name: "default",
-    settings: readySettings(["model-a", "model-b"]),
-  });
+async function readJson(path: string): Promise<unknown> {
+  return JSON.parse(await readFile(path, "utf8"));
 }
 
 afterEach(async () => {
   atomicWriteFaults.postRenameDirectoryFailure = undefined;
   sensitiveFileFaults.write.splice(0);
   sensitiveFileFaults.remove.splice(0);
+  sensitiveFileFaults.ensureDirectoryCalls = 0;
   await Promise.all(
     roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
   );
 });
 
 describe("FileUserConfigManager profile lifecycle", () => {
-  it("inspects a missing store without creating files", async () => {
-    const rootDir = await createRoot();
-    const missingRootDir = join(rootDir, "not-created");
+  it.each([
+    ["missing root", false],
+    ["empty root", true],
+  ])(
+    "bootstrap creates a reserved default profile for a %s",
+    async (_label, precreateRoot) => {
+      const parent = await createEmptyRoot();
+      const rootDir = join(parent, precreateRoot ? "empty" : "missing");
+      if (precreateRoot) {
+        await mkdir(rootDir);
+      }
 
-    await expect(
-      FileUserConfigManager.inspect({ rootDir: missingRootDir }),
-    ).resolves.toEqual({
-      status: "setup_required",
-      guidance: configurationSetupGuidance,
-    });
-    await expect(access(missingRootDir)).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    await expect(
-      FileUserConfigManager.open({ rootDir: missingRootDir }),
-    ).rejects.toMatchObject({
-      code: "CONFIG_SETUP_REQUIRED",
-    });
-    await expect(access(missingRootDir)).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+      await expect(FileUserConfigManager.inspect({ rootDir })).resolves.toEqual(
+        {
+          status: "setup_required",
+          guidance: configurationSetupGuidance,
+        },
+      );
+      await expect(access(join(rootDir, "index.json"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+
+      const manager = await FileUserConfigManager.bootstrap({ rootDir });
+
+      expect(await readJson(join(rootDir, "index.json"))).toEqual({
+        version: 3,
+        selectedProfileId: "default",
+        profiles: [expect.objectContaining({ id: "default", name: "default" })],
+      });
+      expect(
+        await readJson(join(rootDir, "profiles/profile_default.json")),
+      ).toEqual({
+        version: 1,
+        id: "default",
+        name: "default",
+        ai: { providers: [] },
+        platforms: [],
+        plugins: [],
+      });
+      await expect(FileUserConfigManager.inspect({ rootDir })).resolves.toEqual(
+        expect.objectContaining({
+          status: "invalid",
+          selectedProfileId: "default",
+          profiles: [
+            expect.objectContaining({ id: "default", name: "default" }),
+          ],
+        }),
+      );
+      expect(manager.getSelectedProfileId()).toBe("default");
+    },
+  );
+
+  it("inspects a bootstrapped store without preparing directories", async () => {
+    const rootDir = await createBootstrappedRoot();
+    sensitiveFileFaults.ensureDirectoryCalls = 0;
+
+    await expect(FileUserConfigManager.inspect({ rootDir })).resolves.toEqual(
+      expect.objectContaining({
+        status: "invalid",
+        selectedProfileId: "default",
+      }),
+    );
+
+    expect(sensitiveFileFaults.ensureDirectoryCalls).toBe(0);
   });
 
-  it("initializes only a complete acknowledged candidate", async () => {
-    const parent = await createRoot();
-    const incompleteRootDir = join(parent, "incomplete");
-    const reviewRootDir = join(parent, "review");
-    const readyRootDir = join(parent, "ready");
+  it.each(["stray file", "orphaned profiles directory", "existing index"])(
+    "bootstrap refuses a %s root without writing",
+    async (fixture) => {
+      const parent = await createEmptyRoot();
+      const rootDir = join(parent, fixture.replaceAll(" ", "-"));
+      const indexPath = join(rootDir, "index.json");
+      const profilesDir = join(rootDir, "profiles");
 
-    await expect(
-      FileUserConfigManager.initialize({
-        rootDir: incompleteRootDir,
-        name: "incomplete",
-        settings: readySettings(["model-a"]),
-      }),
-    ).rejects.toMatchObject({ code: "CONFIG_INCOMPLETE" });
-    await expect(access(incompleteRootDir)).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+      if (fixture === "stray file") {
+        await writeFile(rootDir, "occupied", "utf8");
+      } else if (fixture === "orphaned profiles directory") {
+        await mkdir(rootDir);
+        await mkdir(profilesDir);
+      } else {
+        await FileUserConfigManager.bootstrap({ rootDir });
+      }
 
-    await expect(
-      FileUserConfigManager.initialize({
-        rootDir: reviewRootDir,
-        name: "review",
-        settings: readySettings(["model-a", "model-b"], { baseUrl: false }),
-      }),
-    ).rejects.toMatchObject({ code: "CONFIG_REVIEW_REQUIRED" });
-    await expect(access(reviewRootDir)).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+      const beforeIndex = await readFile(indexPath, "utf8").catch(
+        () => undefined,
+      );
+      const beforeProfiles = await readdir(profilesDir).catch(() => undefined);
 
-    const initialized = await FileUserConfigManager.initialize({
-      rootDir: readyRootDir,
-      name: "ready",
-      settings: readySettings(["model-a", "model-b"]),
-    });
-    const initializedId = initialized.getDefaultProfileId();
-    const reopened = await FileUserConfigManager.open({
-      rootDir: readyRootDir,
-    });
+      await expect(
+        FileUserConfigManager.bootstrap({ rootDir }),
+      ).rejects.toMatchObject({
+        code: "CONFIG_INVALID_INPUT",
+      });
 
-    expect(reopened.getDefaultProfileId()).toBe(initializedId);
-    await expect(reopened.getProfile(initializedId)).resolves.toMatchObject({
-      name: "ready",
-      ai: { defaultProviderId: "provider-1" },
-    });
-  });
+      await expect(
+        readFile(indexPath, "utf8").catch(() => undefined),
+      ).resolves.toBe(beforeIndex);
+      await expect(
+        readdir(profilesDir).catch(() => undefined),
+      ).resolves.toEqual(beforeProfiles);
+    },
+  );
 
   it("round-trips plaintext secrets without listing them", async () => {
-    const rootDir = await createRoot();
+    const rootDir = await createBootstrappedRoot();
     const manager = await FileUserConfigManager.open({ rootDir });
-    const created = await manager.createProfile("work", {
+    const created = await manager.createProfile("work");
+    await manager.replaceProfile(created.id, {
+      acknowledgedWarnings: [],
+      name: created.name,
       ai: {
         defaultProviderId: "provider-1",
         providers: [
@@ -316,11 +378,8 @@ describe("FileUserConfigManager profile lifecycle", () => {
   it.each(["baseUrl", "apiKey", "defaultProviderId"] as const)(
     "rejects an own optional %s key with undefined before changing disk",
     async (field) => {
-      const rootDir = await createRoot();
+      const rootDir = await createBootstrappedRoot();
       const manager = await FileUserConfigManager.open({ rootDir });
-      const indexPath = join(rootDir, "index.json");
-      const beforeIndex = await readFile(indexPath, "utf8");
-      const beforeProfiles = await readdir(join(rootDir, "profiles"));
       const provider = {
         id: "provider-1",
         type: "test",
@@ -341,8 +400,16 @@ describe("FileUserConfigManager profile lifecycle", () => {
         plugins: [],
       };
 
+      const created = await manager.createProfile(`invalid-${field}`);
+      const indexPath = join(rootDir, "index.json");
+      const beforeIndex = await readFile(indexPath, "utf8");
+      const beforeProfiles = await readdir(join(rootDir, "profiles"));
       const error = await manager
-        .createProfile(`invalid-${field}`, initial as never)
+        .replaceProfile(created.id, {
+          acknowledgedWarnings: [],
+          name: created.name,
+          ...initial,
+        } as never)
         .catch((caught: unknown) => caught);
 
       expect(error).toMatchObject({
@@ -352,6 +419,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
       expect((error as { cause?: unknown }).cause).toBeUndefined();
       expect(manager.listProfiles().map(({ name }) => name)).toEqual([
         "default",
+        created.name,
       ]);
       expect(await readFile(indexPath, "utf8")).toBe(beforeIndex);
       expect(await readdir(join(rootDir, "profiles"))).toEqual(beforeProfiles);
@@ -359,9 +427,12 @@ describe("FileUserConfigManager profile lifecycle", () => {
   );
 
   it("keeps absent optional keys absent across create and reopen", async () => {
-    const rootDir = await createRoot();
+    const rootDir = await createBootstrappedRoot();
     const manager = await FileUserConfigManager.open({ rootDir });
-    const created = await manager.createProfile("omitted-optionals", {
+    const created = await manager.createProfile("omitted-optionals");
+    const replaced = await manager.replaceProfile(created.id, {
+      acknowledgedWarnings: [],
+      name: created.name,
       ai: {
         providers: [
           {
@@ -379,31 +450,20 @@ describe("FileUserConfigManager profile lifecycle", () => {
     const reopened = await FileUserConfigManager.open({ rootDir });
     const reopenedProfile = await reopened.getProfile(created.id);
 
-    expect(reopenedProfile).toEqual(created);
-    expect(Object.hasOwn(created.ai, "defaultProviderId")).toBe(false);
-    expect(Object.hasOwn(created.ai.providers[0]!, "baseUrl")).toBe(false);
-    expect(Object.hasOwn(created.ai.providers[0]!, "apiKey")).toBe(false);
-  });
-
-  it("treats an undefined initial value as omitted", async () => {
-    const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
-    });
-
-    await expect(
-      manager.createProfile("omitted-initial", undefined),
-    ).resolves.toMatchObject({
-      ai: { providers: [] },
-      platforms: [],
-      plugins: [],
-    });
+    expect(reopenedProfile).toEqual(replaced);
+    expect(Object.hasOwn(replaced.ai, "defaultProviderId")).toBe(false);
+    expect(Object.hasOwn(replaced.ai.providers[0]!, "baseUrl")).toBe(false);
+    expect(Object.hasOwn(replaced.ai.providers[0]!, "apiKey")).toBe(false);
   });
 
   it("returns detached profile values", async () => {
     const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
+      rootDir: await createBootstrappedRoot(),
     });
-    const created = await manager.createProfile("work", {
+    const created = await manager.createProfile("work");
+    const replaced = await manager.replaceProfile(created.id, {
+      acknowledgedWarnings: [],
+      name: created.name,
       ai: {
         providers: [
           {
@@ -420,7 +480,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
       plugins: [],
     });
 
-    created.ai.providers[0]!.apiKey = "mutated";
+    replaced.ai.providers[0]!.apiKey = "mutated";
     expect((await manager.getProfile(created.id)).ai.providers[0]?.apiKey).toBe(
       "test-plaintext-key",
     );
@@ -428,7 +488,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
 
   it("returns detached profile metadata", async () => {
     const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
+      rootDir: await createBootstrappedRoot(),
     });
     const listed = manager.listProfiles();
 
@@ -437,13 +497,14 @@ describe("FileUserConfigManager profile lifecycle", () => {
     expect(manager.listProfiles()[0]?.name).toBe("default");
   });
 
-  it("replaces complete settings and normalizes a new name", async () => {
+  it("replaces a profile with a complete payload and keeps the reserved default name", async () => {
     const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
+      rootDir: await createBootstrappedRoot(),
     });
     const work = await manager.createProfile(" work ");
     await expect(
-      manager.updateProfile(work.id, {
+      manager.replaceProfile(work.id, {
+        acknowledgedWarnings: [],
         name: " renamed ",
         ai: { providers: [] },
         platforms: [],
@@ -457,13 +518,14 @@ describe("FileUserConfigManager profile lifecycle", () => {
 
   it("rejects a duplicate normalized profile name", async () => {
     const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
+      rootDir: await createBootstrappedRoot(),
     });
     const work = await manager.createProfile("work");
     await manager.createProfile("personal");
 
     await expect(
-      manager.updateProfile(work.id, {
+      manager.replaceProfile(work.id, {
+        acknowledgedWarnings: [],
         name: " personal ",
         ai: { providers: [] },
         platforms: [],
@@ -472,38 +534,31 @@ describe("FileUserConfigManager profile lifecycle", () => {
     ).rejects.toMatchObject({ code: "CONFIG_PROFILE_NAME_CONFLICT" });
   });
 
-  it("protects the current default from deletion", async () => {
+  it("protects the reserved default from deletion", async () => {
     const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
+      rootDir: await createBootstrappedRoot(),
     });
-    const defaultId = manager.getDefaultProfileId();
-
-    await expect(manager.deleteProfile(defaultId)).rejects.toMatchObject({
+    await expect(manager.deleteProfile("default")).rejects.toMatchObject({
       code: "CONFIG_DEFAULT_PROFILE_PROTECTED",
     });
   });
 
-  it("protects the current default from renaming", async () => {
+  it("protects the selected profile from deletion after explicit selection", async () => {
     const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
+      rootDir: await createBootstrappedRoot(),
     });
-    const defaultId = manager.getDefaultProfileId();
+    const created = await manager.createProfile("work");
+    await manager.selectProfile(created.id);
 
-    await expect(
-      manager.updateProfile(defaultId, {
-        name: "renamed-default",
-        ai: { providers: [] },
-        platforms: [],
-        plugins: [],
-      }),
-    ).rejects.toMatchObject({
-      code: "CONFIG_DEFAULT_PROFILE_PROTECTED",
+    expect(manager.getSelectedProfileId()).toBe(created.id);
+    await expect(manager.deleteProfile(created.id)).rejects.toMatchObject({
+      code: "CONFIG_PROFILE_IN_USE",
     });
   });
 
   it("deletes an unused non-default profile", async () => {
     const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
+      rootDir: await createBootstrappedRoot(),
     });
     const removable = await manager.createProfile("removable");
 
@@ -513,19 +568,23 @@ describe("FileUserConfigManager profile lifecycle", () => {
     });
   });
 
-  it("changes the default to an existing profile", async () => {
+  it("creates an empty profile without selecting it and supports explicit selection", async () => {
     const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
+      rootDir: await createBootstrappedRoot(),
     });
     const replacement = await manager.createProfile("replacement");
 
-    await manager.setDefaultProfile(replacement.id);
-    expect(manager.getDefaultProfileId()).toBe(replacement.id);
+    expect(replacement.id).toMatch(UUID_PATTERN);
+    expect(replacement.ai.providers).toEqual([]);
+    expect(manager.getSelectedProfileId()).toBe("default");
+
+    await manager.selectProfile(replacement.id);
+    expect(manager.getSelectedProfileId()).toBe(replacement.id);
   });
 
   it("serializes competing profile names", async () => {
     const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
+      rootDir: await createBootstrappedRoot(),
     });
 
     const results = await Promise.allSettled([
@@ -542,7 +601,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
 
   it("keeps the mutation queue usable after a rejected operation", async () => {
     const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
+      rootDir: await createBootstrappedRoot(),
     });
     await manager.createProfile("shared");
     await expect(manager.createProfile("shared")).rejects.toMatchObject({
@@ -559,7 +618,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
   it.each(["open", "sync", "close"] as const)(
     "commits create when post-rename directory %s fails",
     async (failure) => {
-      const rootDir = await createRoot();
+      const rootDir = await createBootstrappedRoot();
       const manager = await FileUserConfigManager.open({ rootDir });
       atomicWriteFaults.postRenameDirectoryFailure = {
         kind: failure,
@@ -600,9 +659,9 @@ describe("FileUserConfigManager profile lifecycle", () => {
   );
 
   it.each(["open", "sync", "close"] as const)(
-    "commits update when post-rename directory %s fails",
+    "commits profile replacement when post-rename directory %s fails",
     async (failure) => {
-      const rootDir = await createRoot();
+      const rootDir = await createBootstrappedRoot();
       const manager = await FileUserConfigManager.open({ rootDir });
       const created = await manager.createProfile("before-update");
       atomicWriteFaults.postRenameDirectoryFailure = {
@@ -610,7 +669,8 @@ describe("FileUserConfigManager profile lifecycle", () => {
         remainingDirectoryOpens: 2,
       };
 
-      const updated = await manager.updateProfile(created.id, {
+      const updated = await manager.replaceProfile(created.id, {
+        acknowledgedWarnings: [],
         name: "after-update",
         ai: { providers: [] },
         platforms: [],
@@ -650,14 +710,16 @@ describe("FileUserConfigManager profile lifecycle", () => {
   );
 
   it("rejects non-JSON settings before changing metadata or disk", async () => {
-    const rootDir = await createRoot();
+    const rootDir = await createBootstrappedRoot();
     const manager = await FileUserConfigManager.open({ rootDir });
     const indexPath = join(rootDir, "index.json");
     const beforeIndex = await readFile(indexPath, "utf8");
     const beforeProfiles = await readdir(join(rootDir, "profiles"));
 
     await expect(
-      manager.createProfile("invalid-json", {
+      manager.replaceProfile(manager.getSelectedProfileId(), {
+        acknowledgedWarnings: [],
+        name: "default",
         ai: {
           providers: [
             {
@@ -684,11 +746,13 @@ describe("FileUserConfigManager profile lifecycle", () => {
 
   it("rejects a secret-bearing toJSON value without exposing the secret", async () => {
     const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
+      rootDir: await createBootstrappedRoot(),
     });
     const secret = "rejected-to-json-secret";
     const error = await manager
-      .createProfile("invalid-to-json", {
+      .replaceProfile(manager.getSelectedProfileId(), {
+        acknowledgedWarnings: [],
+        name: "default",
         ai: { providers: [] },
         platforms: [],
         plugins: [
@@ -717,7 +781,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
   });
 
   it("round-trips prototype-like JSON keys through create, get, and reopen", async () => {
-    const rootDir = await createRoot();
+    const rootDir = await createBootstrappedRoot();
     const manager = await FileUserConfigManager.open({ rootDir });
     const settings = JSON.parse(
       '{"__proto__":{"constructor":{"prototype":"nested-secret"}},"constructor":"own-constructor","prototype":["own-prototype"]}',
@@ -726,7 +790,10 @@ describe("FileUserConfigManager profile lifecycle", () => {
       '{"__proto__":"credential-proto","constructor":"credential-constructor","prototype":"credential-prototype"}',
     ) as JsonObject;
 
-    const created = await manager.createProfile("prototype-keys", {
+    const created = await manager.createProfile("prototype-keys");
+    const replaced = await manager.replaceProfile(created.id, {
+      acknowledgedWarnings: [],
+      name: created.name,
       ai: { providers: [] },
       platforms: [
         {
@@ -743,7 +810,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
     const reopened = await FileUserConfigManager.open({ rootDir });
     const reopenedRead = await reopened.getProfile(created.id);
 
-    for (const profile of [created, firstRead, reopenedRead]) {
+    for (const profile of [replaced, firstRead, reopenedRead]) {
       const pluginSettings = profile.plugins[0]!.settings;
       const platformCredentials = profile.platforms[0]!.credentials;
       expect(Object.hasOwn(pluginSettings, "__proto__")).toBe(true);
@@ -759,7 +826,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
   });
 
   it("removes a new profile when its index write fails", async () => {
-    const rootDir = await createRoot();
+    const rootDir = await createBootstrappedRoot();
     const manager = await FileUserConfigManager.open({ rootDir });
     sensitiveFileFaults.write.push({
       target: "index",
@@ -775,10 +842,34 @@ describe("FileUserConfigManager profile lifecycle", () => {
     expect(await readdir(join(rootDir, "profiles"))).toHaveLength(1);
   });
 
-  it("restores the old profile when its update index write fails", async () => {
-    const rootDir = await createRoot();
+  it("reports bootstrap cleanup failure after an index write failure", async () => {
+    const rootDir = await createEmptyRoot();
+    const profilePath = join(rootDir, "profiles", "profile_default.json");
+    sensitiveFileFaults.write.push({
+      target: "index",
+      message: "injected bootstrap index failure",
+    });
+    sensitiveFileFaults.remove.push("injected bootstrap cleanup failure");
+
+    await expect(
+      FileUserConfigManager.bootstrap({ rootDir }),
+    ).rejects.toMatchObject({
+      code: "CONFIG_IO_ERROR",
+      message: `Failed to remove bootstrapped profile after index write failure: ${profilePath}`,
+      cause: {
+        code: "CONFIG_IO_ERROR",
+        message: "injected bootstrap cleanup failure",
+      },
+    });
+  });
+
+  it("restores the old profile when its replacement index write fails", async () => {
+    const rootDir = await createBootstrappedRoot();
     const manager = await FileUserConfigManager.open({ rootDir });
-    const work = await manager.createProfile("work", {
+    const work = await manager.createProfile("work");
+    await manager.replaceProfile(work.id, {
+      acknowledgedWarnings: [],
+      name: work.name,
       ai: { providers: [] },
       platforms: [],
       plugins: [{ id: "old-plugin", enabled: true, settings: {} }],
@@ -789,7 +880,9 @@ describe("FileUserConfigManager profile lifecycle", () => {
     });
 
     await expect(
-      manager.updateProfile(work.id, {
+      manager.replaceProfile(work.id, {
+        acknowledgedWarnings: [],
+        name: work.name,
         ai: { providers: [] },
         platforms: [],
         plugins: [{ id: "new-plugin", enabled: true, settings: {} }],
@@ -809,10 +902,17 @@ describe("FileUserConfigManager profile lifecycle", () => {
     ).toEqual([{ id: "old-plugin", enabled: true, settings: {} }]);
   });
 
-  it("reports a failed update rollback as the cause", async () => {
-    const rootDir = await createRoot();
+  it("reports a failed replacement rollback as the cause", async () => {
+    const rootDir = await createBootstrappedRoot();
     const manager = await FileUserConfigManager.open({ rootDir });
     const work = await manager.createProfile("work");
+    await manager.replaceProfile(work.id, {
+      acknowledgedWarnings: [],
+      name: work.name,
+      ai: { providers: [] },
+      platforms: [],
+      plugins: [],
+    });
     const path = join(rootDir, "profiles", `profile_${work.id}.json`);
     sensitiveFileFaults.write.push(
       {
@@ -826,7 +926,9 @@ describe("FileUserConfigManager profile lifecycle", () => {
     );
 
     await expect(
-      manager.updateProfile(work.id, {
+      manager.replaceProfile(work.id, {
+        acknowledgedWarnings: [],
+        name: work.name,
         ai: { providers: [] },
         platforms: [],
         plugins: [{ id: "new-plugin", enabled: true, settings: {} }],
@@ -842,7 +944,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
   });
 
   it("commits deletion before reporting a profile removal failure", async () => {
-    const rootDir = await createRoot();
+    const rootDir = await createBootstrappedRoot();
     const manager = await FileUserConfigManager.open({ rootDir });
     const removable = await manager.createProfile("removable");
     const path = join(rootDir, "profiles", `profile_${removable.id}.json`);
@@ -864,7 +966,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
 
   it("keeps the mutation queue usable after an index write failure", async () => {
     const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
+      rootDir: await createBootstrappedRoot(),
     });
     sensitiveFileFaults.write.push({
       target: "index",
@@ -885,17 +987,21 @@ describe("FileUserConfigManager profile lifecycle", () => {
 });
 
 describe("FileUserConfigManager profile resolution", () => {
-  it("resolves the default or an explicit profile by ID", async () => {
+  it("requires an explicit profile ID and resolves a ready profile by ID", async () => {
     const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
+      rootDir: await createBootstrappedRoot(),
     });
-    const profile = await manager.createProfile(
-      "work",
-      readySettings(["model-a", "model-b"]),
-    );
+    const profile = await manager.createProfile("work");
+    await manager.replaceProfile(profile.id, {
+      acknowledgedWarnings: [],
+      name: profile.name,
+      ...readySettings(["model-a", "model-b"]),
+    });
 
-    await expect(manager.resolveProfileById()).resolves.toMatchObject({
-      id: manager.getDefaultProfileId(),
+    await expect(
+      manager.resolveProfileById(undefined as never),
+    ).rejects.toMatchObject({
+      code: "CONFIG_INVALID_INPUT",
     });
     await expect(manager.resolveProfileById(profile.id)).resolves.toMatchObject(
       {
@@ -906,9 +1012,14 @@ describe("FileUserConfigManager profile resolution", () => {
 
   it("requires configuration warnings to be acknowledged", async () => {
     const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
+      rootDir: await createBootstrappedRoot(),
     });
-    const profile = await manager.createProfile("review", reviewSettings());
+    const profile = await manager.createProfile("review");
+    await manager.replaceProfile(profile.id, {
+      acknowledgedWarnings: [],
+      name: profile.name,
+      ...reviewSettings(),
+    });
     const warningIds = [
       "provider-base-url-missing:provider-1",
       "provider-api-key-missing:provider-1",
@@ -929,10 +1040,13 @@ describe("FileUserConfigManager profile resolution", () => {
 
   it("does not expose provider secrets in incomplete-profile errors", async () => {
     const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
+      rootDir: await createBootstrappedRoot(),
     });
     const secret = "readiness-error-secret";
-    const incomplete = await manager.createProfile("incomplete", {
+    const incomplete = await manager.createProfile("incomplete");
+    await manager.replaceProfile(incomplete.id, {
+      acknowledgedWarnings: [],
+      name: incomplete.name,
       ai: {
         defaultProviderId: "provider-1",
         providers: [
@@ -961,7 +1075,7 @@ describe("FileUserConfigManager profile resolution", () => {
 
 describe("FileUserConfigManager corruption safety", () => {
   it("fails closed with a fixed error when index JSON is corrupt", async () => {
-    const rootDir = await createRoot();
+    const rootDir = await createBootstrappedRoot();
     await FileUserConfigManager.open({ rootDir });
     const secret = "corrupt-index-secret";
     await writeFile(
@@ -983,34 +1097,49 @@ describe("FileUserConfigManager corruption safety", () => {
     expect(JSON.stringify(error)).not.toContain(secret);
   });
 
-  it("rejects a version 1 index without modifying it", async () => {
-    const rootDir = await createRoot();
-    await FileUserConfigManager.open({ rootDir });
-    const path = join(rootDir, "index.json");
-    const index = JSON.parse(await readFile(path, "utf8")) as Record<
-      string,
-      unknown
-    >;
-    index.version = 1;
-    index.sessionBindings = {};
-    await writeFile(path, JSON.stringify(index), "utf8");
-    const beforeOpen = await readFile(path, "utf8");
+  it.each([1, 2] as const)(
+    "rejects a version %i index without modifying it",
+    async (version) => {
+      const rootDir = await createBootstrappedRoot();
+      await FileUserConfigManager.open({ rootDir });
+      const path = join(rootDir, "index.json");
+      const index = JSON.parse(await readFile(path, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      index.version = version;
+      if (version === 1) {
+        index.sessionBindings = {};
+      }
+      if (version === 2) {
+        index.defaultProfileId = "default";
+        delete index.selectedProfileId;
+      }
+      await writeFile(path, JSON.stringify(index), "utf8");
+      const beforeOpen = await readFile(path, "utf8");
 
-    const error = await FileUserConfigManager.open({ rootDir }).catch(
-      (caught: unknown) => caught,
-    );
+      for (const operation of [
+        () => FileUserConfigManager.inspect({ rootDir }),
+        () => FileUserConfigManager.open({ rootDir }),
+        () => FileUserConfigManager.bootstrap({ rootDir }),
+      ]) {
+        const error = await operation().catch((caught: unknown) => caught);
 
-    expect(error).toMatchObject({
-      code: "CONFIG_UNSUPPORTED_VERSION",
-    });
-    expect((error as { cause?: unknown }).cause).toBeUndefined();
-    await expect(readFile(path, "utf8")).resolves.toBe(beforeOpen);
-  });
+        expect(error).toMatchObject({
+          code: "CONFIG_UNSUPPORTED_VERSION",
+          message:
+            "Configuration index version 1 or 2 is unsupported; back up the configuration and reinitialize it.",
+        });
+        expect((error as { cause?: unknown }).cause).toBeUndefined();
+        await expect(readFile(path, "utf8")).resolves.toBe(beforeOpen);
+      }
+    },
+  );
 
   it("rejects a malformed referenced profile without exposing its secret", async () => {
-    const rootDir = await createRoot();
+    const rootDir = await createBootstrappedRoot();
     const manager = await FileUserConfigManager.open({ rootDir });
-    const profileId = manager.getDefaultProfileId();
+    const profileId = manager.getSelectedProfileId();
     const path = join(rootDir, "profiles", `profile_${profileId}.json`);
     const secret = "corrupt-profile-secret";
     await writeFile(
@@ -1040,9 +1169,9 @@ describe("FileUserConfigManager corruption safety", () => {
   });
 
   it("maps a missing referenced profile to a path-free corrupt-store error", async () => {
-    const rootDir = await createRoot();
+    const rootDir = await createBootstrappedRoot();
     const manager = await FileUserConfigManager.open({ rootDir });
-    const profileId = manager.getDefaultProfileId();
+    const profileId = manager.getSelectedProfileId();
     await unlink(join(rootDir, "profiles", `profile_${profileId}.json`));
 
     const error = await FileUserConfigManager.open({ rootDir }).catch(
@@ -1062,12 +1191,14 @@ describe("FileUserConfigManager corruption safety", () => {
 
   it("does not expose rejected secrets in validation errors", async () => {
     const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
+      rootDir: await createBootstrappedRoot(),
     });
     const secret = "never-include-this-secret";
 
     const error = await manager
-      .createProfile("invalid", {
+      .replaceProfile(manager.getSelectedProfileId(), {
+        acknowledgedWarnings: [],
+        name: "default",
         ai: {
           defaultProviderId: "missing",
           providers: [],
@@ -1120,25 +1251,17 @@ describe("FileUserConfigManager runtime input validation", () => {
 
   it("normalizes invalid public method arguments without native exceptions", async () => {
     const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
+      rootDir: await createBootstrappedRoot(),
     });
-    const profileId = manager.getDefaultProfileId();
+    const profileId = manager.getSelectedProfileId();
     const operations: [string, () => Promise<unknown>][] = [
       ["null profile name", () => manager.createProfile(null as never)],
       [
-        "null initial settings",
-        () => manager.createProfile("null-initial", null as never),
+        "null replacement",
+        () => manager.replaceProfile(profileId, null as never),
       ],
-      [
-        "primitive initial settings",
-        () => manager.createProfile("primitive-initial", 42 as never),
-      ],
-      ["null update", () => manager.updateProfile(profileId, null as never)],
       ["null get profile ID", () => manager.getProfile(null as never)],
-      [
-        "numeric default profile ID",
-        () => manager.setDefaultProfile(42 as never),
-      ],
+      ["numeric selected profile ID", () => manager.selectProfile(42 as never)],
       [
         "symbol delete profile ID",
         () => manager.deleteProfile(Symbol(secret) as never),
@@ -1160,9 +1283,9 @@ describe("FileUserConfigManager runtime input validation", () => {
 
   it("normalizes revoked proxies across every public input boundary", async () => {
     const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
+      rootDir: await createBootstrappedRoot(),
     });
-    const profileId = manager.getDefaultProfileId();
+    const profileId = manager.getSelectedProfileId();
     const revokedProxy = (): object => {
       const revocable = Proxy.revocable({}, {});
       revocable.revoke();
@@ -1180,14 +1303,14 @@ describe("FileUserConfigManager runtime input validation", () => {
         () => manager.createProfile(revokedProxy() as never),
       ],
       [
-        "initial settings",
+        "replacement payload",
         "Configuration profile input failed validation",
-        () => manager.createProfile("revoked-initial", revokedProxy() as never),
+        () => manager.replaceProfile(profileId, revokedProxy() as never),
       ],
       [
-        "profile update",
+        "profile replacement",
         "Configuration profile input failed validation",
-        () => manager.updateProfile(profileId, revokedProxy() as never),
+        () => manager.replaceProfile(profileId, revokedProxy() as never),
       ],
       [
         "get profile ID",
@@ -1195,9 +1318,9 @@ describe("FileUserConfigManager runtime input validation", () => {
         () => manager.getProfile(revokedProxy() as never),
       ],
       [
-        "default profile ID",
+        "selected profile ID",
         "Configuration profile ID is invalid",
-        () => manager.setDefaultProfile(revokedProxy() as never),
+        () => manager.selectProfile(revokedProxy() as never),
       ],
       [
         "delete profile ID",
@@ -1226,7 +1349,7 @@ describe("FileUserConfigManager runtime input validation", () => {
 
   it("drops a secret-bearing proxy trap from update errors", async () => {
     const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
+      rootDir: await createBootstrappedRoot(),
     });
     const hostileUpdate = new Proxy(
       {},
@@ -1238,7 +1361,7 @@ describe("FileUserConfigManager runtime input validation", () => {
     );
 
     const error = await manager
-      .updateProfile(manager.getDefaultProfileId(), hostileUpdate as never)
+      .replaceProfile(manager.getSelectedProfileId(), hostileUpdate as never)
       .catch((caught: unknown) => caught);
 
     expect(error).toMatchObject({
@@ -1250,9 +1373,9 @@ describe("FileUserConfigManager runtime input validation", () => {
     expect(JSON.stringify(error)).not.toContain(secret);
   });
 
-  it("replaces getter-thrown ConfigErrors at create and update boundaries", async () => {
+  it("replaces getter-thrown ConfigErrors at replacement boundaries", async () => {
     const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
+      rootDir: await createBootstrappedRoot(),
     });
     const attackerError = new ConfigError(
       "CONFIG_IO_ERROR",
@@ -1270,14 +1393,10 @@ describe("FileUserConfigManager runtime input validation", () => {
       );
     const operations: [string, () => Promise<unknown>][] = [
       [
-        "create",
-        () => manager.createProfile("hostile-create", throwingInput() as never),
-      ],
-      [
-        "update",
+        "replacement",
         () =>
-          manager.updateProfile(
-            manager.getDefaultProfileId(),
+          manager.replaceProfile(
+            manager.getSelectedProfileId(),
             throwingInput() as never,
           ),
       ],
@@ -1300,54 +1419,47 @@ describe("FileUserConfigManager runtime input validation", () => {
     expect(manager.listProfiles().map(({ name }) => name)).toEqual(["default"]);
   });
 
-  it.each(["name", "settings", "acknowledgedWarnings"] as const)(
-    "replaces a getter-thrown ConfigError while reading initialize %s",
-    async (field) => {
-      const rootDir = await mkdtemp(join(tmpdir(), "kaguya-config-manager-"));
-      roots.push(rootDir);
-      const attackerError = new ConfigError(
-        "CONFIG_IO_ERROR",
-        `${secret}-message`,
-        { cause: { attackerCause: secret } },
-      );
-      const options = new Proxy(
-        {
-          rootDir,
-          name: "hostile-initialize",
-          settings: readySettings(["model-a", "model-b"]),
-          acknowledgedWarnings: [],
+  it("replaces a getter-thrown ConfigError while reading bootstrap options", async () => {
+    const rootDir = await createEmptyRoot();
+    const attackerError = new ConfigError(
+      "CONFIG_IO_ERROR",
+      `${secret}-message`,
+      { cause: { attackerCause: secret } },
+    );
+    const options = new Proxy(
+      {
+        rootDir,
+      },
+      {
+        get(target, property, receiver): unknown {
+          if (property === "rootDir") {
+            throw attackerError;
+          }
+          return Reflect.get(target, property, receiver);
         },
-        {
-          get(target, property, receiver): unknown {
-            if (property === field) {
-              throw attackerError;
-            }
-            return Reflect.get(target, property, receiver);
-          },
-        },
-      );
+      },
+    );
 
-      const error = await FileUserConfigManager.initialize(
-        options as never,
-      ).catch((caught: unknown) => caught);
+    const error = await FileUserConfigManager.bootstrap(options as never).catch(
+      (caught: unknown) => caught,
+    );
 
-      expect(error).not.toBe(attackerError);
-      expect(error).toMatchObject({
-        code: "CONFIG_INVALID_INPUT",
-        message: "Configuration profile input failed validation",
-      });
-      expect((error as { cause?: unknown }).cause).toBeUndefined();
-      for (const representation of [String(error), JSON.stringify(error)]) {
-        expect(representation).not.toContain(secret);
-        expect(representation).not.toContain("CONFIG_IO_ERROR");
-        expect(representation).not.toContain("attackerCause");
-      }
-    },
-  );
+    expect(error).not.toBe(attackerError);
+    expect(error).toMatchObject({
+      code: "CONFIG_INVALID_INPUT",
+      message: "Configuration root is invalid",
+    });
+    expect((error as { cause?: unknown }).cause).toBeUndefined();
+    for (const representation of [String(error), JSON.stringify(error)]) {
+      expect(representation).not.toContain(secret);
+      expect(representation).not.toContain("CONFIG_IO_ERROR");
+      expect(representation).not.toContain("attackerCause");
+    }
+  });
 
-  it("does not inspect getter-thrown revoked proxies at create and update boundaries", async () => {
+  it("does not inspect getter-thrown revoked proxies at replacement boundaries", async () => {
     const manager = await FileUserConfigManager.open({
-      rootDir: await createRoot(),
+      rootDir: await createBootstrappedRoot(),
     });
     const throwingInput = (): object =>
       new Proxy(
@@ -1362,14 +1474,10 @@ describe("FileUserConfigManager runtime input validation", () => {
       );
     const operations: [string, () => Promise<unknown>][] = [
       [
-        "create",
-        () => manager.createProfile("revoked-create", throwingInput() as never),
-      ],
-      [
-        "update",
+        "replacement",
         () =>
-          manager.updateProfile(
-            manager.getDefaultProfileId(),
+          manager.replaceProfile(
+            manager.getSelectedProfileId(),
             throwingInput() as never,
           ),
       ],

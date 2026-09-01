@@ -1,3 +1,19 @@
+/**
+ * 功能概述：本文件定义消息回复模块 `demo.reply.llm`，负责把一条已持久化的用户消息
+ * 解析成 Prompt、调用运行时注入的 LLM 执行器，并把结果转成平台出站消息请求。
+ * 主要职责：`modelTierSchema` 与 `ModuleModelSelection` 定义模块能向运行时声明的
+ * 唯一模型选择维度；`llmReplySettingsSchema` 约束实例配置，只允许声明 tier、出站模式
+ * 与 persona/instruction；`createLlmReplyModule` 负责读取消息、校验 metadata、构造 prompt、
+ * 调用 LLM 并发布 `outboundMessageRequestedEvent`；`selectOutbound` 根据 source/fixed 规则
+ * 选择回包目标；`compileReplyPrompt`/`fragment` 负责稳定生成 Prompt 片段。
+ * 代码库关系：本文件被 `packages/modules/src/index.ts` 导出，并由 `packages/runtime`
+ * 在启动时注册为默认回复模块，由 `apps/server` 提供的 Runtime resolver 根据
+ * 当前 selected Profile 解析 tier；本次变更明确禁止模块实例、消息或单次调用传入
+ * `profileId`，Profile 选择只属于服务启动阶段。
+ * 输入输出与副作用：输入是回复请求事件和模块实例设置，输出是一次 LLM 调用与可选的
+ * 出站消息事件；当消息记录缺失、metadata 非法或 LLM 输出不匹配 schema 时会直接抛错，
+ * 不做 provider/profile fallback，也不缓存跨请求状态。
+ */
 import { replyOutputSchema, type ReplyOutput } from "@kaguya/llm/schemas";
 import { PromptCompiler } from "@kaguya/prompt";
 import {
@@ -28,7 +44,6 @@ export const modelTierSchema = z.enum(["light", "heavy"]);
 export type ModelTier = z.infer<typeof modelTierSchema>;
 
 export interface ModuleModelSelection {
-  readonly profileId?: string;
   readonly modelTier: ModelTier;
 }
 
@@ -84,7 +99,6 @@ const fixedDestinationSchema = z
 
 export const llmReplySettingsSchema = z
   .object({
-    profileId: z.string().trim().min(1).optional(),
     modelTier: modelTierSchema,
     outbound: z.discriminatedUnion("mode", [
       sourceDestinationSchema,
@@ -135,12 +149,7 @@ export function createLlmReplyModule(
             await dependencies.llm.generate(
               {
                 kind: "reply",
-                selection: {
-                  ...(settings.profileId === undefined
-                    ? {}
-                    : { profileId: settings.profileId }),
-                  modelTier: settings.modelTier,
-                },
+                selection: { modelTier: settings.modelTier },
                 prompt,
                 traceId: context.traceId,
                 workflowId: "message-module-pipeline",

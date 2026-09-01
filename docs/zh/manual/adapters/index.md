@@ -9,15 +9,18 @@ title: 适配器概览
 ## 选择适配器
 
 **QQ 平台** — 首次部署推荐
+
 - [NapCat](./napcat.md)（推荐使用）— 麦麦官方维护的 QQ 适配器，支持插件版和独立版，插件版是当前推荐方案
 - [GoCQ](./gocq.md)（可用，偏旧）— 基于 go-cqhttp / AstralGocq 的 QQ 适配方案，适合已有 GoCQ 环境或特定需求
 - [SnowLuma](./snowluma.md)（可用，测试中）— 新一代 QQ 适配方案
 
 **其他平台** — 社区适配
+
 - [Telegram](./telegram.md) — Telegram 平台适配方案
 - [Discord](./discord.md) — Discord 平台适配方案
 
 **更多社区适配器**
+
 - [桌宠适配器](https://github.com/MaiM-with-u/MaiM-desktop-pet) — 将 MaiBot 接入桌面宠物交互场景
 - [微信 - wxauto Adapter](https://github.com/Angela459/WeMai) — 基于 wxauto 的微信平台适配方案
 - 更多第三方适配器 — 关注 [MaiBot GitHub 组织](https://github.com/Mai-with-u) 或社区交流群获取信息

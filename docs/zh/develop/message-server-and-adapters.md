@@ -53,16 +53,22 @@ NapCat 配置：
 
 ## 统一配置引导
 
-`KAGUYA_CONFIG_ROOT` 尚未初始化、默认 profile 不完整，或者可选配置尚未确认时，Server 都会进入统一的配置模式。此时 HTTP 和 Web UI 继续启动，但 Runtime 消息处理和 NapCat 入站不会启动。浏览器访问服务根路径会显示同一个配置页面，要求填写 OpenAI-compatible Provider 的 Base URL、API Key 以及 light/heavy 两个不同的模型 ID。
+`KAGUYA_CONFIG_ROOT` 尚未初始化、当前 `selectedProfileId` 对应的 Profile 不完整，或者可选配置尚未确认时，Server 都会进入统一的配置模式。此时 HTTP 和 Web UI 继续启动，但 Runtime 消息处理和 NapCat 入站不会启动。浏览器访问服务根路径会显示同一个 Profile 管理页面，而不是单独的“首次配置写接口”。
 
-配置页面通过以下接口完成引导：
+配置页面首先通过 `GET /api/v1/setup` 读取 `setup_required`、`invalid`、`review_required`、`restart_required` 或 `ready` 状态。该接口只返回 secret-safe metadata、`selectedProfileId`、issues 和 warnings，不返回完整 Profile 或密钥。
 
-- `GET /api/v1/setup`：读取 `setup_required`、`restart_required`、`ready`、`invalid` 或 `review_required` 状态；该接口不返回密钥或完整 profile。
-- `POST /api/v1/setup`：使用网关 Bearer Token 提交或修复配置。请求成功返回 `201` 和 `restartRequired: true`。
+真正的配置修改通过显式 Profile 管理接口完成：
 
-提交时必须明确确认暂不配置平台和插件。配置仓库不存在时会创建首个 profile；默认 profile 已存在但不完整时，会通过配置管理器替换其 AI 配置并保留 profile ID 与名称。保存成功后重启 Server，再刷新 Web UI；重启过程会重新加载 profile、模型客户端和平台连接。
+- `GET /api/v1/profiles`
+- `POST /api/v1/profiles`
+- `GET /api/v1/profiles/:profileId`
+- `PUT /api/v1/profiles/:profileId`
+- `PUT /api/v1/profiles/selection`
+- `DELETE /api/v1/profiles/:profileId`
 
-配置文件损坏、路径越界、符号链接或权限错误不属于可自动修复的“缺失配置”，Server 会拒绝启动并保留原文件，避免引导流程覆盖需要人工恢复的数据。`KAGUYA_GATEWAY_TOKEN` 仍是启动 HTTP 前必须提供的安全凭据，不能通过未认证的首次配置页面创建。
+全新配置根会先通过 bootstrap 创建保留的空 `default` Profile，并把 `selectedProfileId` 设为 `"default"`。之后，用户可以配置 `default`，或者先创建并命名新的 Profile，再显式选择它。如果保存或切换后，当前 selected Profile 仍然是 `invalid` 或 `review_required`，页面会继续停留在 readiness 引导状态，而不会提示重启。选择某个 Profile，或完整替换当前 selected Profile，都会锁存一次重启要求；只有当该 selected Profile 已经 ready 时，页面才会进入 `restart_required`。只有重启 Server，Runtime 才会在新的启动周期里重新加载全局 Profile、模型客户端和平台连接。
+
+配置文件损坏、路径越界、符号链接或权限错误不属于可自动修复的“缺失配置”，Server 会拒绝启动并保留原文件，避免引导流程覆盖需要人工恢复的数据。`KAGUYA_GATEWAY_TOKEN` 仍是启动 HTTP 前必须提供的安全凭据；匿名 setup 模式不能读取完整 Profile，也不能写入配置。
 
 ## 平台入站白名单
 

@@ -1,6 +1,7 @@
 ---
 title: SnowLuma 适配器
 ---
+
 # SnowLuma 适配器
 
 SnowLuma 适配器让 MaiBot 通过 [SnowLuma](https://github.com/Mai-with-u/MaiBot-SnowLuma-Adapter) 连接到 QQ 平台，收发消息、处理群聊和私聊。
