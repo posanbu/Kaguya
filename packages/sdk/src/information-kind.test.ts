@@ -91,6 +91,41 @@ describe("defineInformationKind", () => {
         log: { enabled: false },
       }),
     ).toThrow(/strict/iu);
+
+    expect(() =>
+      defineInformationKind({
+        kind: "acme.message.created",
+        payloadSchema: z.object({ when: z.date() }).strict() as never,
+        references: {},
+        log: { enabled: false },
+      }),
+    ).toThrow(/date|json object/iu);
+
+    expect(() =>
+      defineInformationKind({
+        kind: "acme.message.created",
+        payloadSchema: z.object({ total: z.bigint() }).strict() as never,
+        references: {},
+        log: { enabled: false },
+      }),
+    ).toThrow(/bigint|json object/iu);
+
+    expect(() =>
+      defineInformationKind({
+        kind: "acme.message.created",
+        payloadSchema: z
+          .object({
+            items: z.array(
+              z.object({
+                when: z.date(),
+              }).strict(),
+            ),
+          })
+          .strict() as never,
+        references: {},
+        log: { enabled: false },
+      }),
+    ).toThrow(/date|json object/iu);
   });
 
   it("rejects duplicate target kinds and empty target kind lists", () => {
