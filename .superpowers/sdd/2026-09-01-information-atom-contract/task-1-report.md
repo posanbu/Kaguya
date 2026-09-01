@@ -1,8 +1,12 @@
 ## Task 1 Report
 
+Status:
+
+- fixed
+
 Commit:
 
-- `bc051b1ded4b40682bfeb9644055839b7ab9cd2c` (`fix(schema): tighten information atom contract`)
+- `f1f03d689a5fcc88173d8474dbcc667dd6f7ba76` (`fix(schema): restore frozen information parse`)
 
 Changed files:
 
