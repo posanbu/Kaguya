@@ -41,19 +41,12 @@ import { approvedEventDefinitions } from "./events.js";
 import { LlmLifecycleClient } from "./llm-lifecycle.js";
 import { GatewayAllowlist } from "./gateway-allowlist.js";
 
-export interface RuntimeWebMessage {
-  readonly kind: "web";
-  readonly requestId: string;
-  readonly text: string;
-  readonly occurredAt?: string;
-}
-
 export interface RuntimePlatformMessage {
   readonly kind: "platform";
   readonly message: PlatformInboundMessage;
 }
 
-export type RuntimeInboundMessage = RuntimeWebMessage | RuntimePlatformMessage;
+export type RuntimeInboundMessage = RuntimePlatformMessage;
 
 export interface RuntimeDispatchResult {
   readonly traceId: string;
@@ -63,11 +56,6 @@ export interface RuntimeDispatchResult {
   readonly delivery?: PlatformDeliveryReceipt;
   readonly interrupted: boolean;
   readonly filtered: boolean;
-}
-
-export interface RuntimeEnqueueReceipt {
-  readonly traceId: string;
-  readonly messageId: string;
 }
 
 export interface ResolvedRuntimeModel {
@@ -256,45 +244,6 @@ export class KaguyaRuntime {
     return operation;
   }
 
-  enqueue(
-    message: Omit<RuntimeWebMessage, "kind">,
-  ): Promise<RuntimeEnqueueReceipt> {
-    if (this.#state !== "started") {
-      return Promise.reject(new RuntimeUnavailableError());
-    }
-    const startedAt = this.#now().getTime();
-    const webMessage: RuntimeWebMessage = { kind: "web", ...message };
-    const ingested = this.#ingest(webMessage);
-    const processing = runWithLogContext(
-      { traceId: ingested.traceId },
-      async () => {
-        try {
-          return await this.#process(ingested, webMessage, startedAt);
-        } catch (error) {
-          this.#runtimeLogger?.error(
-            {
-              event: "message.processing.failed",
-              sourceKind: "web",
-              durationMs: Math.max(0, this.#now().getTime() - startedAt),
-              err: error,
-            },
-            "Background message processing failed",
-          );
-          throw error;
-        }
-      },
-    );
-    this.#inFlight.add(processing);
-    void processing.then(
-      () => this.#inFlight.delete(processing),
-      () => this.#inFlight.delete(processing),
-    );
-    return Promise.resolve({
-      traceId: ingested.traceId,
-      messageId: ingested.record.id,
-    });
-  }
-
   close(): Promise<void> {
     if (this.#closePromise !== undefined) return this.#closePromise;
     if (this.#state === "closed") return Promise.resolve();
@@ -336,10 +285,7 @@ export class KaguyaRuntime {
     const traceId = traceIdOf(input);
     const startedAt = this.#now().getTime();
     return runWithLogContext({ traceId }, async () => {
-      if (
-        input.kind === "platform" &&
-        this.options.gatewayAllowlist?.allows(input.message) === false
-      ) {
+      if (this.options.gatewayAllowlist?.allows(input.message) === false) {
         this.#runtimeLogger?.info(
           {
             event: "message.dispatch.filtered",
@@ -379,7 +325,7 @@ export class KaguyaRuntime {
   }
 
   #ingest(input: RuntimeInboundMessage): IngestedMessage {
-    const normalized = normalizeInboundMessage(input, this.#now, (prefix) =>
+    const normalized = normalizeInboundMessage(input, (prefix) =>
       this.#nextId(traceIdOf(input), prefix),
     );
     this.#runtimeLogger?.debug(
@@ -605,54 +551,37 @@ interface IngestedMessage {
 
 function normalizeInboundMessage(
   input: RuntimeInboundMessage,
-  now: () => Date,
   nextId: (prefix: string) => string,
 ): IngestedMessage {
-  const traceId = traceIdOf(input);
-  const occurredAt =
-    input.kind === "web"
-      ? (input.occurredAt ?? now().toISOString())
-      : input.message.occurredAt;
+  const message = input.message;
+  const traceId = message.traceId;
+  const occurredAt = message.occurredAt;
   const messageId = nextId("message");
   const moduleMessage = moduleMessageSchema.parse({
     messageId,
-    text: input.kind === "web" ? input.text : input.message.text,
+    text: message.text,
     occurredAt,
-    source:
-      input.kind === "web"
-        ? {
-            kind: "web",
-            requestId: input.requestId,
-          }
-        : {
-            kind: "platform",
-            platform: input.message.platform,
-            adapterId: input.message.adapterId,
-            platformMessageId: input.message.platformMessageId,
-            ...(input.message.selfId === undefined
-              ? {}
-              : { selfId: input.message.selfId }),
-            destination: input.message.target,
-            sender: {
-              id: input.message.sender.userId,
-              ...((input.message.sender.card ??
-                input.message.sender.nickname) === undefined
-                ? {}
-                : {
-                    displayName:
-                      input.message.sender.card ??
-                      input.message.sender.nickname,
-                  }),
-            },
-            mentions: input.message.mentions,
-          },
+    source: {
+      kind: "platform",
+      platform: message.platform,
+      adapterId: message.adapterId,
+      platformMessageId: message.platformMessageId,
+      ...(message.selfId === undefined ? {} : { selfId: message.selfId }),
+      destination: message.target,
+      sender: {
+        id: message.sender.userId,
+        ...((message.sender.card ?? message.sender.nickname) === undefined
+          ? {}
+          : { displayName: message.sender.card ?? message.sender.nickname }),
+      },
+      mentions: message.mentions,
+    },
   });
   const eventId = nextId("event");
   const event = messageIngestedEvent.create(
     {
       id: eventId,
-      source:
-        input.kind === "web" ? "webui" : `adapter:${input.message.adapterId}`,
+      source: `adapter:${message.adapterId}`,
       occurredAt,
       traceId,
       metadata: { rootEventId: eventId },
@@ -780,21 +709,17 @@ function deliveryReceipts(
 }
 
 function traceIdOf(input: RuntimeInboundMessage): string {
-  return input.kind === "web"
-    ? `webui-${input.requestId}`
-    : input.message.traceId;
+  return input.message.traceId;
 }
 
 function platformLogFields(
   input: RuntimeInboundMessage,
 ): Record<string, unknown> {
-  return input.kind === "platform"
-    ? {
-        adapterId: input.message.adapterId,
-        platform: input.message.platform,
-        targetKind: input.message.target.kind,
-      }
-    : {};
+  return {
+    adapterId: input.message.adapterId,
+    platform: input.message.platform,
+    targetKind: input.message.target.kind,
+  };
 }
 
 function transportKey(adapterId: string, platform: string): string {

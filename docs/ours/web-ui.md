@@ -40,7 +40,7 @@ UI 不接收 provider、模型、API key 或 base URL。模型和工作流由 Se
 
 ## 响应边界
 
-消息 API 保留 `202 accepted`，没有回复查询或 SSE，因此页面只展示提交状态，不伪造机器人回答。Runtime 会把确定性回复写入同一 SQLite；只有平台入站携带 reply sender 时，工作流才把回复投递到平台。
+消息 API 保留 `202 accepted`，没有回复查询或 SSE，因此页面只展示提交状态，不伪造机器人回答。`202` 在用户消息持久化后立即返回，默认 filter/LLM 模块链（含一次 LLM 请求）在后台继续执行；后台处理失败只记录 `message.processing.failed` 日志，不影响已返回的 `202`。Web 输入不会推导 transport destination，回复也不会作为消息写入数据库；只有平台入站携带 reply sender 时，工作流才把回复投递到平台。
 
 ## 排障
 

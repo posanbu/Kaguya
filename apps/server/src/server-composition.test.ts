@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { KaguyaDatabase } from "@kaguya/database";
 import { FileUserConfigManager } from "@kaguya/config";
+import { createLogger } from "@kaguya/logger";
 import { KaguyaRuntime } from "@kaguya/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -12,6 +13,7 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { createHttpApplication } from "./app.js";
 import type { ServerConfig } from "./config.js";
 import { createRuntimeModelSelectionResolver } from "./server.js";
+import { createWebMessageGateway } from "./web-gateway.js";
 import { registerWebUi } from "./web.js";
 
 const chatModel = vi.fn((modelId: string) => ({ modelId }));
@@ -58,13 +60,21 @@ function config(databasePath: string): ServerConfig {
 }
 
 describe("unified server composition", () => {
-  it("enqueues Web messages through the shared Runtime", async () => {
+  it("ingests Web messages through the shared Runtime as a platform adapter", async () => {
     const databasePath = tempDatabasePath();
     const runtime = new KaguyaRuntime({ databasePath });
     await runtime.start();
+    const webGateway = createWebMessageGateway({
+      adapterId: "web.ui.main",
+      runtime,
+      logger: createLogger({
+        service: "kaguya-server-composition-test",
+        level: "silent",
+      }),
+    });
     const app = await createHttpApplication({
       config: config(databasePath),
-      messageIngress: runtime,
+      webGateway,
     });
 
     const response = await app.inject({
@@ -88,11 +98,23 @@ describe("unified server composition", () => {
 
     const database = KaguyaDatabase.open(databasePath);
     try {
+      const [message] = database.messages.listRecent(10);
+      expect(message?.role).toBe("user");
+      expect(message?.metadata).toMatchObject({
+        traceId: "web:request-server-1",
+        moduleMessage: {
+          source: {
+            kind: "platform",
+            platform: "web",
+            adapterId: "web.ui.main",
+            platformMessageId: "request-server-1",
+            destination: { kind: "web" },
+            sender: { id: "web" },
+          },
+        },
+      });
       expect(
-        database.messages.listRecent(10).map((message) => message.role),
-      ).toEqual(["user"]);
-      expect(
-        database.llmTraces.listByTrace("webui-request-server-1"),
+        database.llmTraces.listByTrace("web:request-server-1"),
       ).toHaveLength(1);
     } finally {
       database.close();

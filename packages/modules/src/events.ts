@@ -19,26 +19,18 @@ export const messageSenderSchema = z
   })
   .strict();
 
-export const moduleMessageSourceSchema = z.discriminatedUnion("kind", [
-  z
-    .object({
-      kind: z.literal("web"),
-      requestId: nonBlankStringSchema,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("platform"),
-      platform: nonBlankStringSchema,
-      adapterId: nonBlankStringSchema,
-      platformMessageId: nonBlankStringSchema,
-      selfId: nonBlankStringSchema.optional(),
-      destination: platformDestinationSchema,
-      sender: messageSenderSchema,
-      mentions: z.array(messageMentionSchema),
-    })
-    .strict(),
-]);
+export const moduleMessageSourceSchema = z
+  .object({
+    kind: z.literal("platform"),
+    platform: nonBlankStringSchema,
+    adapterId: nonBlankStringSchema,
+    platformMessageId: nonBlankStringSchema,
+    selfId: nonBlankStringSchema.optional(),
+    destination: platformDestinationSchema,
+    sender: messageSenderSchema,
+    mentions: z.array(messageMentionSchema),
+  })
+  .strict();
 
 export const moduleMessageSchema = z
   .object({

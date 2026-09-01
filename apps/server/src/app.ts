@@ -5,7 +5,6 @@ import rateLimit from "@fastify/rate-limit";
 import swagger from "@fastify/swagger";
 import { ConfigError } from "@kaguya/config";
 import { runWithLogContext } from "@kaguya/logger";
-import { RuntimeUnavailableError } from "@kaguya/runtime";
 import { z } from "@kaguya/schema";
 import Fastify, {
   LogController,
@@ -21,6 +20,7 @@ import {
   type ConfigurationSetup,
   type InitialConfigurationInput,
 } from "./setup.js";
+import type { WebMessageGateway } from "./web-gateway.js";
 
 const MAX_MESSAGE_TEXT_LENGTH = 131_072;
 const MAX_REQUEST_ID_LENGTH = 128;
@@ -137,23 +137,9 @@ const errorResponseJsonSchema = {
   },
 } as const;
 
-export interface MessageIngressCommand {
-  readonly text: string;
-  readonly requestId: string;
-}
-
-export interface MessageIngressReceipt {
-  readonly traceId: string;
-  readonly messageId: string;
-}
-
-export interface MessageIngress {
-  enqueue(command: MessageIngressCommand): Promise<MessageIngressReceipt>;
-}
-
 export interface CreateHttpApplicationOptions {
   config: ServerConfig;
-  messageIngress?: MessageIngress;
+  webGateway?: WebMessageGateway;
   setup?: ConfigurationSetup;
   logger?: FastifyBaseLogger;
 }
@@ -373,37 +359,27 @@ export async function createHttpApplication(
     },
     async (request, reply) => {
       const parsed = messageRequestSchema.parse(request.body);
-      const messageIngress = options.messageIngress;
-      if (messageIngress === undefined) {
+      const webGateway = options.webGateway;
+      if (webGateway === undefined) {
         throw coreUnavailableError(options.setup);
       }
-      return runWithLogContext({}, async () => {
-        let receipt: MessageIngressReceipt;
-        try {
-          receipt = await messageIngress.enqueue({
-            text: parsed.text,
-            requestId: request.id,
-          });
-        } catch (error) {
-          if (error instanceof RuntimeUnavailableError) {
-            throw coreUnavailableError(options.setup);
-          }
-          throw error;
-        }
-        request.log.info(
-          {
-            event: "http.message.accepted",
-            messageId: receipt.messageId,
-            traceId: receipt.traceId,
-          },
-          "Message accepted by Kaguya Runtime",
-        );
-        return reply.code(202).send({
-          data: {
-            status: "accepted",
-            requestId: request.id,
-          },
-        });
+      webGateway.ingest({
+        text: parsed.text,
+        requestId: request.id,
+      });
+      request.log.info(
+        {
+          event: "http.message.accepted",
+          requestId: request.id,
+          traceId: `web:${request.id}`,
+        },
+        "Message accepted by Web gateway",
+      );
+      return reply.code(202).send({
+        data: {
+          status: "accepted",
+          requestId: request.id,
+        },
       });
     },
   );

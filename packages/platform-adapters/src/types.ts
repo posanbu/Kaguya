@@ -1,4 +1,4 @@
-export type PlatformName = "qq";
+export type PlatformName = "qq" | "web";
 
 import type {
   OutboundMessageContent,

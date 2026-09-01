@@ -48,6 +48,24 @@ function platformMessage(adapterId = "napcat.qq.main") {
   };
 }
 
+function webMessage(requestId = "request-1") {
+  return {
+    kind: "platform" as const,
+    message: {
+      platform: "web" as const,
+      adapterId: "web.ui.main",
+      traceId: `web:${requestId}`,
+      platformMessageId: requestId,
+      occurredAt: "2026-08-14T00:00:00.000Z",
+      text: "hello from web",
+      mentions: [],
+      target: { kind: "web" as const },
+      sender: { userId: "web" },
+      raw: {},
+    },
+  };
+}
+
 describe("KaguyaRuntime", () => {
   it("filters a platform message before persistence and reply generation", async () => {
     const databasePath = path();
@@ -159,117 +177,64 @@ describe("KaguyaRuntime", () => {
     database.close();
   });
 
-  it("keeps only the request receipt on a Web source", async () => {
+  it("persists a web platform message and completes the pipeline without outbound", async () => {
     const databasePath = path();
     const runtime = new KaguyaRuntime({ databasePath });
     await runtime.start();
-    const result = await runtime.dispatch({
-      kind: "web",
-      requestId: "request-1",
-      text: "hello from web",
-    });
+    const result = await runtime.dispatch(webMessage());
     await runtime.close();
 
+    expect(result.filtered).toBe(false);
+    expect(result.interrupted).toBe(false);
     expect(result.deliveries).toEqual([]);
+
     const database = KaguyaDatabase.open(databasePath);
-    expect(database.messages.listRecent(10)[0]?.metadata).toMatchObject({
+    const [message] = database.messages.listRecent(10);
+    expect(message?.role).toBe("user");
+    expect(message?.metadata).toMatchObject({
+      traceId: "web:request-1",
       moduleMessage: {
+        text: "hello from web",
         source: {
-          kind: "web",
-          requestId: "request-1",
+          kind: "platform",
+          platform: "web",
+          adapterId: "web.ui.main",
+          platformMessageId: "request-1",
+          destination: { kind: "web" },
+          sender: { id: "web" },
+          mentions: [],
         },
       },
     });
+    expect(database.outboundMessages.listByTrace("web:request-1")).toEqual([]);
+    expect(database.llmTraces.listByTrace("web:request-1")).toHaveLength(1);
     database.close();
   });
 
-  it("resolves enqueue after persistence and before reply generation", async () => {
+  it("filters a web platform message by the gateway allowlist", async () => {
     const databasePath = path();
-    const deferred = createDeferredDeterministicModel({ text: "done" });
     const runtime = new KaguyaRuntime({
       databasePath,
-      resolveModelSelection: ({ modelTier }) => ({
-        modelId: `deferred-${modelTier}`,
-        model: deferred.model,
-      }),
+      gatewayAllowlist: new GatewayAllowlist({ platforms: ["qq"] }),
     });
     await runtime.start();
 
-    const receipt = await runtime.enqueue({
-      requestId: "request-1",
-      text: "hello from web",
-    });
-    expect(receipt.traceId).toBe("webui-request-1");
-    expect(receipt.messageId).toMatch(/^webui-request-1-message-\d{6}$/u);
-
-    const pending = KaguyaDatabase.open(databasePath);
-    expect(
-      pending.messages.listRecent(10).map((record) => record.role),
-    ).toEqual(["user"]);
-    pending.close();
-
-    deferred.release();
+    const result = await runtime.dispatch(webMessage());
     await runtime.close();
 
-    const database = KaguyaDatabase.open(databasePath);
-    expect(
-      database.messages.listRecent(10).map((record) => record.role),
-    ).toEqual(["user"]);
-    expect(database.llmTraces.listByTrace("webui-request-1")).toHaveLength(1);
-    database.close();
-  });
-
-  it("rejects enqueue while the runtime is unavailable", async () => {
-    const databasePath = path();
-    const runtime = new KaguyaRuntime({ databasePath });
-    await expect(
-      runtime.enqueue({ requestId: "request-1", text: "hello" }),
-    ).rejects.toBeInstanceOf(RuntimeUnavailableError);
-
-    await runtime.start();
-    await runtime.enqueue({ requestId: "request-1", text: "hello" });
-    await runtime.close();
-    await expect(
-      runtime.enqueue({ requestId: "request-2", text: "again" }),
-    ).rejects.toBeInstanceOf(RuntimeUnavailableError);
-
-    const database = KaguyaDatabase.open(databasePath);
-    expect(
-      database.messages.listRecent(10).map((record) => record.role),
-    ).toEqual(["user"]);
-    database.close();
-  });
-
-  it("waits for background enqueue processing before close", async () => {
-    const databasePath = path();
-    const deferred = createDeferredDeterministicModel({ text: "done" });
-    const runtime = new KaguyaRuntime({
-      databasePath,
-      resolveModelSelection: ({ modelTier }) => ({
-        modelId: `deferred-${modelTier}`,
-        model: deferred.model,
-      }),
+    expect(result).toMatchObject({
+      filtered: true,
+      interrupted: true,
+      completedNodeIds: [],
+      deliveries: [],
     });
-    await runtime.start();
-    const receipt = await runtime.enqueue({
-      requestId: "request-1",
-      text: "hello from web",
-    });
-    await deferred.started;
-    const close = runtime.close();
-    deferred.release();
-    await close;
 
-    expect(receipt.traceId).toBe("webui-request-1");
     const database = KaguyaDatabase.open(databasePath);
-    expect(
-      database.messages.listRecent(10).map((record) => record.role),
-    ).toEqual(["user"]);
-    expect(database.llmTraces.listByTrace("webui-request-1")).toHaveLength(1);
+    expect(database.messages.listRecent(10)).toEqual([]);
     database.close();
   });
 
-  it("absorbs a background enqueue failure instead of rejecting the receipt", async () => {
+  it("keeps the persisted message when a web dispatch fails after ingest", async () => {
     const databasePath = path();
     const runtime = new KaguyaRuntime({
       databasePath,
@@ -279,12 +244,66 @@ describe("KaguyaRuntime", () => {
     });
     await runtime.start();
 
-    const receipt = await runtime.enqueue({
-      requestId: "request-1",
-      text: "hello",
-    });
-    expect(receipt.traceId).toBe("webui-request-1");
+    const failure = await runtime
+      .dispatch(webMessage())
+      .catch((error: unknown) => error);
     await runtime.close();
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(
+      (failure as AggregateError).errors.some(
+        (error) =>
+          error instanceof Error &&
+          error.message === "model resolver exploded",
+      ),
+    ).toBe(true);
+
+    const database = KaguyaDatabase.open(databasePath);
+    expect(
+      database.messages.listRecent(10).map((record) => record.role),
+    ).toEqual(["user"]);
+    database.close();
+  });
+
+  it("waits for an in-flight web dispatch before close", async () => {
+    const databasePath = path();
+    const deferred = createDeferredDeterministicModel({ text: "done" });
+    const runtime = new KaguyaRuntime({
+      databasePath,
+      resolveModelSelection: ({ modelTier }) => ({
+        modelId: `deferred-${modelTier}`,
+        model: deferred.model,
+      }),
+    });
+    await runtime.start();
+    const dispatch = runtime.dispatch(webMessage());
+    await deferred.started;
+    const close = runtime.close();
+    deferred.release();
+    await close;
+    await dispatch;
+
+    const database = KaguyaDatabase.open(databasePath);
+    expect(
+      database.messages.listRecent(10).map((record) => record.role),
+    ).toEqual(["user"]);
+    expect(database.llmTraces.listByTrace("web:request-1")).toHaveLength(1);
+    database.close();
+  });
+
+  it("rejects dispatch while the runtime is unavailable", async () => {
+    const databasePath = path();
+    const runtime = new KaguyaRuntime({ databasePath });
+    await expect(runtime.dispatch(webMessage())).rejects.toBeInstanceOf(
+      RuntimeUnavailableError,
+    );
+
+    await runtime.start();
+    await runtime.dispatch(webMessage());
+    await runtime.close();
+    await expect(runtime.dispatch(webMessage("request-2"))).rejects.toBeInstanceOf(
+      RuntimeUnavailableError,
+    );
 
     const database = KaguyaDatabase.open(databasePath);
     expect(

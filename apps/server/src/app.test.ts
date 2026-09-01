@@ -10,11 +10,11 @@ import {
   type LogContext,
 } from "@kaguya/logger";
 import { configurationSetupGuidance } from "@kaguya/config";
-import { RuntimeUnavailableError } from "@kaguya/runtime";
 
-import { createHttpApplication, type MessageIngress } from "./app.js";
+import { createHttpApplication } from "./app.js";
 import type { ServerConfig } from "./config.js";
 import type { ConfigurationSetup } from "./setup.js";
+import type { WebMessageGateway } from "./web-gateway.js";
 
 const gatewayToken = "test-gateway-token-12345";
 const config: ServerConfig = {
@@ -162,7 +162,7 @@ describe("application API gateway", () => {
   it("exposes health, OpenAPI, and only the core message ingress contract", async () => {
     const app = await createApiGateway({
       config,
-      messageIngress: fakeIngress(),
+      webGateway: fakeGateway(),
     });
 
     const health = await app.inject({ method: "GET", url: "/healthz" });
@@ -267,10 +267,10 @@ describe("application API gateway", () => {
   });
 
   it("does not expose the removed model route", async () => {
-    const enqueue = vi.fn(() => Promise.resolve(fakeReceipt()));
+    const ingest = vi.fn();
     const app = await createApiGateway({
       config,
-      messageIngress: { enqueue },
+      webGateway: { ingest },
     });
 
     const response = await app.inject({
@@ -290,15 +290,15 @@ describe("application API gateway", () => {
     expect(response.json()).toMatchObject({
       error: { code: "not_found", message: "Route not found" },
     });
-    expect(enqueue).not.toHaveBeenCalled();
+    expect(ingest).not.toHaveBeenCalled();
     await app.close();
   });
 
   it("uses bounded client request IDs and replaces unsafe values", async () => {
-    const enqueue = vi.fn(() => Promise.resolve(fakeReceipt()));
+    const ingest = vi.fn();
     const app = await createApiGateway({
       config,
-      messageIngress: { enqueue },
+      webGateway: { ingest },
     });
     const unsafeRequestId = "x".repeat(10_000);
 
@@ -316,7 +316,7 @@ describe("application API gateway", () => {
     const responseRequestId = response.json().data.requestId as string;
     expect(responseRequestId).not.toBe(unsafeRequestId);
     expect(responseRequestId.length).toBeLessThanOrEqual(128);
-    expect(enqueue).toHaveBeenCalledWith({
+    expect(ingest).toHaveBeenCalledWith({
       ...requestBody,
       requestId: responseRequestId,
     });
@@ -324,10 +324,10 @@ describe("application API gateway", () => {
   });
 
   it("rejects the removed sessionId request field", async () => {
-    const enqueue = vi.fn(() => Promise.resolve(fakeReceipt()));
+    const ingest = vi.fn();
     const app = await createApiGateway({
       config,
-      messageIngress: { enqueue },
+      webGateway: { ingest },
     });
     const rejected = await app.inject({
       method: "POST",
@@ -337,11 +337,11 @@ describe("application API gateway", () => {
     });
 
     expect(rejected.statusCode).toBe(400);
-    expect(enqueue).not.toHaveBeenCalled();
+    expect(ingest).not.toHaveBeenCalled();
     await app.close();
   });
 
-  it("maps a rejected enqueue to the setup-required status", async () => {
+  it("maps a missing web gateway to the setup-required status", async () => {
     const setup: ConfigurationSetup = {
       inspect: vi.fn(async () => ({
         status: "setup_required" as const,
@@ -352,9 +352,6 @@ describe("application API gateway", () => {
     const app = await createApiGateway({
       config,
       setup,
-      messageIngress: {
-        enqueue: () => Promise.reject(new RuntimeUnavailableError()),
-      },
     });
 
     const response = await app.inject({
@@ -372,10 +369,10 @@ describe("application API gateway", () => {
   });
 
   it("authenticates before parsing or validating a message", async () => {
-    const enqueue = vi.fn(() => Promise.resolve(fakeReceipt()));
+    const ingest = vi.fn();
     const app = await createApiGateway({
       config,
-      messageIngress: { enqueue },
+      webGateway: { ingest },
     });
 
     const response = await app.inject({
@@ -388,15 +385,15 @@ describe("application API gateway", () => {
     expect(response.json()).toMatchObject({
       error: { code: "unauthorized" },
     });
-    expect(enqueue).not.toHaveBeenCalled();
+    expect(ingest).not.toHaveBeenCalled();
     await app.close();
   });
 
-  it("validates and enqueues a message without model configuration", async () => {
-    const enqueue = vi.fn(() => Promise.resolve(fakeReceipt()));
+  it("validates and ingests a message without model configuration", async () => {
+    const ingest = vi.fn();
     const app = await createApiGateway({
       config,
-      messageIngress: { enqueue },
+      webGateway: { ingest },
     });
 
     const response = await app.inject({
@@ -413,8 +410,8 @@ describe("application API gateway", () => {
     expect(response.json()).toEqual({
       data: { status: "accepted", requestId: "request-123" },
     });
-    expect(enqueue).toHaveBeenCalledTimes(1);
-    expect(enqueue).toHaveBeenCalledWith({
+    expect(ingest).toHaveBeenCalledTimes(1);
+    expect(ingest).toHaveBeenCalledWith({
       text: " Hello ",
       requestId: "request-123",
     });
@@ -425,10 +422,9 @@ describe("application API gateway", () => {
     let capturedContext: Readonly<LogContext> | undefined;
     const app = await createApiGateway({
       config,
-      messageIngress: {
-        enqueue: () => {
+      webGateway: {
+        ingest: () => {
           capturedContext = getLogContext();
-          return Promise.resolve(fakeReceipt());
         },
       },
     });
@@ -457,7 +453,7 @@ describe("application API gateway", () => {
     const app = await createApiGateway({
       config,
       logger,
-      messageIngress: fakeIngress(),
+      webGateway: fakeGateway(),
     });
 
     const response = await app.inject({
@@ -487,10 +483,10 @@ describe("application API gateway", () => {
   });
 
   it("rejects model, provider, prompt, and workflow routing fields", async () => {
-    const enqueue = vi.fn(() => Promise.resolve(fakeReceipt()));
+    const ingest = vi.fn();
     const app = await createApiGateway({
       config,
-      messageIngress: { enqueue },
+      webGateway: { ingest },
     });
 
     for (const field of [
@@ -514,15 +510,15 @@ describe("application API gateway", () => {
         error: { code: "invalid_request" },
       });
     }
-    expect(enqueue).not.toHaveBeenCalled();
+    expect(ingest).not.toHaveBeenCalled();
     await app.close();
   });
 
   it("rejects blank messages", async () => {
-    const enqueue = vi.fn(() => Promise.resolve(fakeReceipt()));
+    const ingest = vi.fn();
     const app = await createApiGateway({
       config,
-      messageIngress: { enqueue },
+      webGateway: { ingest },
     });
 
     const response = await app.inject({
@@ -536,15 +532,15 @@ describe("application API gateway", () => {
     expect(response.json()).toMatchObject({
       error: { code: "invalid_request" },
     });
-    expect(enqueue).not.toHaveBeenCalled();
+    expect(ingest).not.toHaveBeenCalled();
     await app.close();
   });
 
   it("reports malformed JSON as an invalid request", async () => {
-    const enqueue = vi.fn(() => Promise.resolve(fakeReceipt()));
+    const ingest = vi.fn();
     const app = await createApiGateway({
       config,
-      messageIngress: { enqueue },
+      webGateway: { ingest },
     });
 
     const response = await app.inject({
@@ -561,15 +557,15 @@ describe("application API gateway", () => {
     expect(response.json()).toMatchObject({
       error: { code: "invalid_request" },
     });
-    expect(enqueue).not.toHaveBeenCalled();
+    expect(ingest).not.toHaveBeenCalled();
     await app.close();
   });
 
   it("normalizes unsupported media types and oversized bodies", async () => {
-    const enqueue = vi.fn(() => Promise.resolve(fakeReceipt()));
+    const ingest = vi.fn();
     const app = await createApiGateway({
       config,
-      messageIngress: { enqueue },
+      webGateway: { ingest },
     });
 
     const unsupported = await app.inject({
@@ -598,7 +594,7 @@ describe("application API gateway", () => {
     expect(oversized.json()).toMatchObject({
       error: { code: "request_rejected" },
     });
-    expect(enqueue).not.toHaveBeenCalled();
+    expect(ingest).not.toHaveBeenCalled();
     await app.close();
   });
 
@@ -625,8 +621,10 @@ describe("application API gateway", () => {
   it("does not expose dispatcher failures", async () => {
     const app = await createApiGateway({
       config,
-      messageIngress: {
-        enqueue: () => Promise.reject(new Error("internal queue details")),
+      webGateway: {
+        ingest: () => {
+          throw new Error("internal queue details");
+        },
       },
     });
 
@@ -648,7 +646,7 @@ describe("application API gateway", () => {
   it("separates authenticated and unauthenticated rate-limit quotas", async () => {
     const app = await createApiGateway({
       config: { ...config, rateLimitMax: 1 },
-      messageIngress: fakeIngress(),
+      webGateway: fakeGateway(),
     });
 
     const unauthorized = await app.inject({
@@ -682,7 +680,7 @@ describe("application API gateway", () => {
         rateLimitMax: 1,
         trustProxy: ["127.0.0.1"],
       },
-      messageIngress: fakeIngress(),
+      webGateway: fakeGateway(),
     });
     const firstTrustedClient = await injectFrom(trustedApp, "198.51.100.1");
     const secondTrustedClient = await injectFrom(trustedApp, "198.51.100.2");
@@ -693,7 +691,7 @@ describe("application API gateway", () => {
 
     const untrustedApp = await createApiGateway({
       config: { ...config, rateLimitMax: 1 },
-      messageIngress: fakeIngress(),
+      webGateway: fakeGateway(),
     });
     const spoofedFirstClient = await injectFrom(untrustedApp, "198.51.100.1");
     const spoofedSecondClient = await injectFrom(untrustedApp, "198.51.100.2");
@@ -704,28 +702,21 @@ describe("application API gateway", () => {
   });
 });
 
-function fakeReceipt() {
-  return {
-    traceId: "webui-request-fake",
-    messageId: "webui-request-fake-message-000001",
-  };
-}
-
-function fakeIngress(): MessageIngress {
-  return { enqueue: () => Promise.resolve(fakeReceipt()) };
+function fakeGateway(): WebMessageGateway {
+  return { ingest: vi.fn() };
 }
 
 function createApiGateway(options: {
   config: ServerConfig;
-  messageIngress?: MessageIngress;
+  webGateway?: WebMessageGateway;
   setup?: ConfigurationSetup;
   logger?: Parameters<typeof createHttpApplication>[0]["logger"];
 }) {
   return createHttpApplication({
     config: options.config,
-    ...(options.messageIngress === undefined
+    ...(options.webGateway === undefined
       ? {}
-      : { messageIngress: options.messageIngress }),
+      : { webGateway: options.webGateway }),
     ...(options.setup === undefined ? {} : { setup: options.setup }),
     ...(options.logger === undefined ? {} : { logger: options.logger }),
   });

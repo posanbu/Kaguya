@@ -30,6 +30,7 @@ import {
   type NapCatConnectionSupervisor,
 } from "./napcat.js";
 import { createConfigurationSetup } from "./setup.js";
+import { createWebMessageGateway } from "./web-gateway.js";
 import { registerWebUi, type WebUiHandle } from "./web.js";
 
 export interface StartedKaguyaServer {
@@ -45,6 +46,7 @@ export async function startKaguyaServer(
   const serverLogger = createModuleLogger(rootLogger, "server");
   const httpLogger = createModuleLogger(rootLogger, "server:http");
   const napcatLogger = createModuleLogger(rootLogger, "adapter:napcat");
+  const webLogger = createModuleLogger(rootLogger, "adapter:web");
   const setup = createConfigurationSetup(config.configRoot);
   let resolveModelSelection: RuntimeModelSelectionResolver | undefined;
   try {
@@ -72,6 +74,13 @@ export async function startKaguyaServer(
     gatewayAllowlist: new GatewayAllowlist(config.gatewayAllowlist),
   });
   const runtimeReady = resolveModelSelection !== undefined;
+  const webGateway = runtimeReady
+    ? createWebMessageGateway({
+        adapterId: "web.ui.main",
+        runtime,
+        logger: webLogger,
+      })
+    : undefined;
 
   let app: FastifyInstance | undefined;
   let webUi: WebUiHandle | undefined;
@@ -118,7 +127,7 @@ export async function startKaguyaServer(
     }
     app = await createHttpApplication({
       config,
-      ...(runtimeReady ? { messageIngress: runtime } : {}),
+      ...(runtimeReady ? { webGateway } : {}),
       setup,
       logger: httpLogger,
     });

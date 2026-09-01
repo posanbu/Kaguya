@@ -23,3 +23,8 @@ export {
   type NapCatInboundErrorContext,
   type NapCatOneBotAdapterOptions,
 } from "./napcat.js";
+export {
+  normalizeWebInboundMessage,
+  type NormalizeWebInboundOptions,
+  type WebInboundInput,
+} from "./web.js";

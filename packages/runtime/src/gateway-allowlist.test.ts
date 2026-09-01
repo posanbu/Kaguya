@@ -59,4 +59,41 @@ describe("GatewayAllowlist", () => {
     });
     expect(allowlist.allows(baseMessage)).toBe(true);
   });
+
+  it("applies the same dimensions to web platform messages", () => {
+    const webMessage = {
+      ...baseMessage,
+      platform: "web" as const,
+      adapterId: "web.ui.main",
+      selfId: undefined,
+      traceId: "web:request-1",
+      platformMessageId: "request-1",
+      target: { kind: "web" as const },
+      sender: { userId: "web" },
+      raw: {},
+    };
+
+    expect(new GatewayAllowlist().allows(webMessage)).toBe(true);
+    expect(
+      new GatewayAllowlist({ platforms: ["web"] }).allows(webMessage),
+    ).toBe(true);
+    expect(
+      new GatewayAllowlist({ platforms: ["qq"] }).allows(webMessage),
+    ).toBe(false);
+    expect(
+      new GatewayAllowlist({ userIds: ["web"] }).allows(webMessage),
+    ).toBe(true);
+    expect(
+      new GatewayAllowlist({ userIds: ["112233"] }).allows(webMessage),
+    ).toBe(false);
+    expect(
+      new GatewayAllowlist({ groupIds: ["group-1"] }).allows(webMessage),
+    ).toBe(false);
+    expect(
+      new GatewayAllowlist({
+        platforms: ["web"],
+        userIds: ["web"],
+      }).allows(webMessage),
+    ).toBe(true);
+  });
 });
