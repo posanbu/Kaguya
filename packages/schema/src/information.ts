@@ -97,8 +97,8 @@ export const informationAtomSchema = z
   })
   .strict();
 
-export function parseInformationAtom(value: unknown): InformationAtom {
-  return informationAtomSchema.parse(value);
+export function parseInformationAtom(value: unknown): DeepReadonly<InformationAtom> {
+  return freezeInformationAtom(informationAtomSchema.parse(value));
 }
 
 export function freezeInformationAtom<K extends string, P extends JsonObject>(

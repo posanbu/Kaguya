@@ -4,13 +4,12 @@
  * 代码库关系：`packages/schema/src/index.ts` 与下游包会消费这里定义的
  * `information*` 导出；这些断言必须独立于实现细节，直接描述公共 API。
  */
-import { describe, expect, expectTypeOf, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   parseInformationAtom,
   freezeInformationAtom,
   informationAtomSchema,
-  type InformationAtom,
   informationIdSchema,
 } from "./information.js";
 
@@ -49,7 +48,7 @@ describe("freezeInformationAtom", () => {
 });
 
 describe("parseInformationAtom", () => {
-  it("returns plain JSON objects in the parsed payload", () => {
+  it("returns a deeply frozen plain JSON payload", () => {
     const parsed = parseInformationAtom({
       informationId: "atom-2",
       kind: "acme.message.created",
@@ -60,6 +59,14 @@ describe("parseInformationAtom", () => {
     });
 
     expect(Object.getPrototypeOf(parsed.payload)).toBe(Object.prototype);
+    expect(Object.isFrozen(parsed)).toBe(true);
+    expect(Object.isFrozen(parsed.payload)).toBe(true);
+    expect(
+      Object.isFrozen(
+        (parsed.payload as { nested: { values: readonly string[] } }).nested
+          .values,
+      ),
+    ).toBe(true);
   });
 
   it("does not accept caller-selected generic output types", () => {
@@ -73,7 +80,6 @@ describe("parseInformationAtom", () => {
         payload: { nested: { values: ["moon"] } },
         references: [],
       });
-      expectTypeOf(parsed).toEqualTypeOf<InformationAtom>();
     }
   });
 });
