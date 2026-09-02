@@ -82,24 +82,33 @@ const replacement = {
 } as const;
 
 describe("sendMessage", () => {
-  it("sends the gateway message contract and returns the request id", async () => {
-    const request = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(
-        Response.json(
-          { data: { status: "accepted", requestId: "request-1" } },
-          { status: 202 },
-        ),
-      );
+  it("sends the gateway message contract and returns the receipt", async () => {
+    const request = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json(
+        {
+          data: {
+            status: "accepted",
+            requestId: "request-1",
+          },
+        },
+        { status: 202 },
+      ),
+    );
 
     await expect(
       sendMessage(config, { text: " Hello " }, request),
-    ).resolves.toEqual({ status: "accepted", requestId: "request-1" });
+    ).resolves.toEqual({
+      status: "accepted",
+      requestId: "request-1",
+    });
     expect(request).toHaveBeenCalledWith("/api/v1/messages", {
       method: "POST",
       headers: {
         authorization: "Bearer test-gateway-token",
         "content-type": "application/json",
+        "x-request-id": expect.stringMatching(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u,
+        ),
       },
       body: JSON.stringify({ text: " Hello " }),
     });

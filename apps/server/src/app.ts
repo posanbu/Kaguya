@@ -28,7 +28,6 @@ import {
   profileIdSchema,
 } from "@kaguya/config";
 import { runWithLogContext } from "@kaguya/logger";
-import type { RuntimeWebMessage } from "@kaguya/runtime";
 import { z } from "@kaguya/schema";
 import Fastify, {
   LogController,
@@ -40,6 +39,7 @@ import Fastify, {
 
 import type { ServerConfig } from "./config.js";
 import type { ConfigurationManagement } from "./setup.js";
+import type { WebMessageGateway } from "./web-gateway.js";
 
 const MAX_MESSAGE_TEXT_LENGTH = 131_072;
 const MAX_REQUEST_ID_LENGTH = 128;
@@ -395,13 +395,9 @@ const errorResponseJsonSchema = {
 
 export interface CreateHttpApplicationOptions {
   config: ServerConfig;
-  runtime?: RuntimeDispatcher;
+  webGateway?: WebMessageGateway;
   setup?: ConfigurationManagement;
   logger?: FastifyBaseLogger;
-}
-
-export interface RuntimeDispatcher {
-  dispatch(message: RuntimeWebMessage): Promise<unknown>;
 }
 
 export async function createHttpApplication(
@@ -420,6 +416,7 @@ export async function createHttpApplication(
     ajv: {
       customOptions: {
         removeAdditional: false,
+        coerceTypes: false,
       },
     },
   });
@@ -695,35 +692,27 @@ export async function createHttpApplication(
     },
     async (request, reply) => {
       const parsed = messageRequestSchema.parse(request.body);
-      const runtime = options.runtime;
-      if (runtime === undefined) {
-        throw new ApiGatewayError(
-          options.setup === undefined
-            ? "core_unavailable"
-            : "configuration_setup_required",
-          options.setup === undefined
-            ? "Core message ingress is not configured"
-            : "Configuration must be completed before messages can be processed",
-          503,
-        );
+      const webGateway = options.webGateway;
+      if (webGateway === undefined) {
+        throw coreUnavailableError(options.setup);
       }
-
-      return runWithLogContext({}, async () => {
-        await runtime.dispatch({
-          kind: "web",
-          text: parsed.text,
+      webGateway.ingest({
+        text: parsed.text,
+        requestId: request.id,
+      });
+      request.log.info(
+        {
+          event: "http.message.accepted",
           requestId: request.id,
-        });
-        request.log.info(
-          { event: "http.message.accepted" },
-          "Message accepted by Kaguya Runtime",
-        );
-        return reply.code(202).send({
-          data: {
-            status: "accepted",
-            requestId: request.id,
-          },
-        });
+          traceId: `web:${request.id}`,
+        },
+        "Message accepted by Web gateway",
+      );
+      return reply.code(202).send({
+        data: {
+          status: "accepted",
+          requestId: request.id,
+        },
       });
     },
   );
@@ -821,6 +810,18 @@ class ApiGatewayError extends Error {
     super(message);
     this.name = "ApiGatewayError";
   }
+}
+
+function coreUnavailableError(
+  setup: ConfigurationManagement | undefined,
+): ApiGatewayError {
+  return new ApiGatewayError(
+    setup === undefined ? "core_unavailable" : "configuration_setup_required",
+    setup === undefined
+      ? "Core message ingress is not configured"
+      : "Configuration must be completed before messages can be processed",
+    503,
+  );
 }
 
 function requireManagementToken(expectedToken: string) {

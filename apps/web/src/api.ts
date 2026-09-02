@@ -376,7 +376,10 @@ export async function sendMessage(
     "/api/v1/messages",
     {
       method: "POST",
-      headers: jsonHeaders(token),
+      headers: {
+        ...jsonHeaders(token),
+        "x-request-id": crypto.randomUUID(),
+      },
       body: JSON.stringify({ text: input.text }),
     },
     fetchImplementation,

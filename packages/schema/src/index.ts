@@ -63,6 +63,7 @@ export type MessageRecord = z.infer<typeof messageRecordSchema>;
 export const platformDestinationSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("private"), userId: z.string().min(1) }).strict(),
   z.object({ kind: z.literal("group"), groupId: z.string().min(1) }).strict(),
+  z.object({ kind: z.literal("web") }).strict(),
 ]);
 
 export type PlatformDestination = z.infer<typeof platformDestinationSchema>;

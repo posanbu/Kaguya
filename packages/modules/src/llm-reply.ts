@@ -205,7 +205,7 @@ function selectOutbound(
       platformMessageId: "unused",
     };
   }
-  if (message.source.kind !== "platform") {
+  if (message.source.destination.kind === "web") {
     return undefined;
   }
   return {
