@@ -13,10 +13,11 @@ MaiBot 插件支持声明式的配置管理机制，通过 `PluginConfigBase` �
 插件源码仓库以 `config_model` 为配置定义，`.gitignore` 应包含 `/config.toml`。用户通过 WebUI 或运行时配置接口修改的值保存在安装目录中的 `config.toml`。
 
 ::: tip 配置相关文件的职责
+
 - `plugin.py` 中的 `config_model`：定义配置结构、类型、默认值和 WebUI 展示信息
 - `config.toml`：保存当前安装实例的运行时配置，由 Runner 生成和维护
 - `_manifest.json`：声明插件 ID、版本、依赖和能力，由 Host 校验和管理
-:::
+  :::
 
 ## PluginConfigBase 配置模型
 
@@ -114,7 +115,7 @@ Field(
 - **`description`** `str` — 字段描述，WebUI 中显示为表单标签
 - **`json_schema_extra`** `dict` — 额外元数据，传递给 WebUI Schema 生成器。常用键: `placeholder`（输入框占位符文本）、`group`（UI 分组提示）
 
-### __ui_label__
+### **ui_label**
 
 `PluginConfigBase` 子类可通过 `__ui_label__` 类属性设置在 WebUI 中显示的分组标题：
 
@@ -128,7 +129,7 @@ class PluginSection(PluginConfigBase):
 
 :::
 
-### __ui_icon__
+### **ui_icon**
 
 `PluginConfigBase` 子类可通过 `__ui_icon__` 类属性设置在 WebUI 中显示的分组图标，接受 [Material Icons](https://fonts.google.com/icons) 图标名称：
 
@@ -143,7 +144,7 @@ class PluginSection(PluginConfigBase):
 
 :::
 
-### __ui_order__
+### **ui_order**
 
 `PluginConfigBase` 子类可通过 `__ui_order__` 类属性设置分组在 WebUI 中的显示顺序，数值越小越靠前：
 
@@ -200,9 +201,10 @@ class MyPlugin(MaiBotPlugin):
 ```
 
 ::: warning 注意
+
 - 未声明 `config_model` 时调用 `self.config` 会抛出 `RuntimeError`
 - 配置尚未注入时调用 `self.config` 也会抛出 `RuntimeError`
-:::
+  :::
 
 ### 原始字典访问
 

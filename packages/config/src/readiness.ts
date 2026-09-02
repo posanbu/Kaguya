@@ -1,5 +1,15 @@
+/**
+ * 架构说明：本模块只负责把单个 Profile 的健康度判定组合成安全的
+ * 配置就绪态输出，不修改 Profile 判定逻辑本身。Registry 元数据与
+ * selectedProfileId 通过独立组合帮助器附加，保证现存仓库状态只暴露
+ * 可公开的元数据而不泄漏敏感配置正文。
+ */
 import { ConfigError } from "./errors.js";
-import type { UserConfigProfile } from "./model.js";
+import type {
+  ProfileId,
+  UserConfigProfile,
+  UserConfigProfileMetadata,
+} from "./model.js";
 
 export interface ConfigurationGuidanceStep {
   readonly id:
@@ -38,12 +48,18 @@ export type ProfileReadiness =
     }
   | { readonly status: "ready" };
 
+export type ExistingConfigurationReadiness = ProfileReadiness & {
+  readonly profiles: readonly UserConfigProfileMetadata[];
+  readonly selectedProfileId: ProfileId;
+};
+
 export type ConfigurationReadiness =
   | {
       readonly status: "setup_required";
       readonly guidance: ConfigurationGuidance;
     }
-  | ProfileReadiness;
+  | ProfileReadiness
+  | ExistingConfigurationReadiness;
 
 export const configurationSetupGuidance: ConfigurationGuidance = Object.freeze({
   steps: Object.freeze([
@@ -89,6 +105,19 @@ export function inspectUserConfigProfile(
   }
 
   return { status: "ready" };
+}
+
+export function withRegistryReadiness(
+  profiles: readonly UserConfigProfileMetadata[],
+  selectedProfileId: ProfileId,
+  readiness: ProfileReadiness,
+): ExistingConfigurationReadiness {
+  const profilesSnapshot = profiles.map((profile) => structuredClone(profile));
+  return {
+    ...readiness,
+    profiles: profilesSnapshot,
+    selectedProfileId,
+  };
 }
 
 export function deriveConfigurationWarnings(

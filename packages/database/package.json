@@ -6,6 +6,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "default": "./dist/testing.js"
     }
   },
   "scripts": {
@@ -13,6 +17,13 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
-    "@kaguya/schema": "workspace:*"
+    "@kaguya/engine": "workspace:*",
+    "@kaguya/schema": "workspace:*",
+    "@kaguya/sdk": "workspace:*",
+    "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@types/pg": "^8.23.1"
   }
 }

@@ -1,9 +1,24 @@
+/**
+ * 功能概述：本文件验证 `KaguyaRuntime` 在数据库、模块宿主、LLM 执行器与平台传输之间
+ * 的整合行为，覆盖消息过滤、持久化、事件驱动回复、关闭时序以及模型选择解析器的契约。
+ * 主要职责：已有用例确保平台/Web 消息的标准流水线、错误审计与 shutdown 语义稳定；
+ * 本次变更新增回归测试，要求多个回复模块共享同一个运行时解析器，传入的 selection
+ * 只能包含 `modelTier`，并且任何持久化消息都不能再出现 `profileId` 覆盖痕迹。
+ * 代码库关系：测试直接实例化 `runtime.ts`，并通过 `@kaguya/database` 检查落盘记录；
+ * 它依赖 `@kaguya/modules` 默认模块与自定义 activation 的组合来覆盖真实 dispatch 流程，
+ * 从而约束服务层 `apps/server` 提供的 resolver 必须符合运行时的最小接口。
+ * 输入输出与副作用：每个用例在临时 SQLite 文件中运行完整 Runtime 生命周期，注册内存版
+ * transport 或伪造 resolver 来观察调用参数；测试结束会删除临时目录，避免污染工作区。
+ */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { KaguyaDatabase } from "@kaguya/database";
-import { createDeferredDeterministicModel } from "@kaguya/llm/testing";
+import {
+  createDeferredDeterministicModel,
+  createRepeatingDeterministicModel,
+} from "@kaguya/llm/testing";
 import type { PlatformOutboundTransport } from "@kaguya/platform-adapters";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -406,5 +421,81 @@ describe("KaguyaRuntime", () => {
     deferred.release();
     await dispatch;
     await close;
+  });
+
+  it("shares one tier-only resolver across reply modules", async () => {
+    const databasePath = path();
+    const selections: unknown[] = [];
+    const runtime = new KaguyaRuntime({
+      databasePath,
+      resolveModelSelection: vi.fn((selection) => {
+        selections.push(selection);
+        return {
+          modelId: `resolved-${selection.modelTier}`,
+          model: createRepeatingDeterministicModel({
+            text: selection.modelTier,
+          }),
+        };
+      }),
+      moduleActivations: [
+        {
+          instanceId: "filter.light",
+          definitionId: "demo.filter.always",
+          settings: { replyTargetInstanceId: "reply.light" },
+        },
+        {
+          instanceId: "filter.heavy",
+          definitionId: "demo.filter.always",
+          settings: { replyTargetInstanceId: "reply.heavy" },
+        },
+        {
+          instanceId: "reply.light",
+          definitionId: "demo.reply.llm",
+          settings: {
+            modelTier: "light",
+            outbound: { mode: "source", messageKind: "text" },
+          },
+        },
+        {
+          instanceId: "reply.heavy",
+          definitionId: "demo.reply.llm",
+          settings: {
+            modelTier: "heavy",
+            outbound: { mode: "source", messageKind: "reply" },
+          },
+        },
+      ],
+      gatewayAllowlist: new GatewayAllowlist({
+        platforms: ["qq"],
+        userIds: ["112233"],
+        groupIds: ["778899"],
+      }),
+    });
+    runtime.registerTransport({
+      adapterId: "napcat.qq.main",
+      platform: "qq",
+      transport: {
+        sendMessage: async (target) => ({
+          ok: true,
+          adapterId: "napcat.qq.main",
+          platform: "qq",
+          target,
+        }),
+      },
+    });
+    await runtime.start();
+
+    await runtime.dispatch(platformMessage());
+    await runtime.close();
+
+    expect(selections).toEqual([
+      { modelTier: "light" },
+      { modelTier: "heavy" },
+    ]);
+    const database = KaguyaDatabase.open(databasePath);
+    expect(JSON.stringify(database.messages.listRecent(10))).not.toContain(
+      "profileId",
+    );
+    database.close();
   });
 });

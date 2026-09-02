@@ -1,3 +1,23 @@
+/**
+ * 功能概述：本文件是 Kaguya 服务端主入口，负责读取 ServerConfig、组装 HTTP 应用、
+ * Web UI、NapCat 连接与 Runtime，并把配置 Registry 中当前选中的 Profile 冻结成
+ * 一个供 Runtime 使用的 tier-only 模型解析器。
+ * 主要职责：`startKaguyaServer` 会先在统一的启动保护区内创建异步
+ * `ConfigurationManagement`，让缺失仓库先完成 bootstrap/open，再根据 selected
+ * Profile readiness 决定当前进程是正常启动 Runtime，还是进入 setup-mode 暂停
+ * Runtime/NapCat 仅提供配置入口；即使 bootstrap/open 阶段遇到
+ * `CONFIG_UNSUPPORTED_VERSION` 或 `CONFIG_CORRUPT_STORE`，也必须沿用已有的
+ * startup failed 日志与 logger 关闭路径。`createRuntimeModelSelectionResolver`
+ * 继续在启动时读取当前 selected Profile 并校验；`openAICompatibleProviderSettings`
+ * 提取 provider 能力开关；`assertProfileReady` 保持 readiness 错误固定且无 secret；
+ * 其余 helper 管理资源关闭与进程信号处理。
+ * 代码库关系：本文件消费 `@kaguya/config` 的 Profile Registry、`@kaguya/runtime`
+ * 的运行时注入点、Fastify HTTP 组装和 NapCat 适配器；模块层 `packages/modules`
+ * 已不再携带 `profileId`，因此 Profile 选择只能在这里于服务启动时完成一次。
+ * 输入输出与副作用：启动时会创建 logger、检查配置 readiness、按需启动 Runtime/HTTP/NapCat；
+ * resolver 会缓存已选 Profile 下 provider client，并在 light/heavy tier 缺失时于启动期失败，
+ * 防止服务接受请求后再暴露可变 Profile 覆盖路径。
+ */
 import { pathToFileURL } from "node:url";
 
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
@@ -29,7 +49,7 @@ import {
   createNapCatSupervisor,
   type NapCatConnectionSupervisor,
 } from "./napcat.js";
-import { createConfigurationSetup } from "./setup.js";
+import { createConfigurationManagement } from "./setup.js";
 import { createWebMessageGateway } from "./web-gateway.js";
 import { registerWebUi, type WebUiHandle } from "./web.js";
 
@@ -47,45 +67,11 @@ export async function startKaguyaServer(
   const httpLogger = createModuleLogger(rootLogger, "server:http");
   const napcatLogger = createModuleLogger(rootLogger, "adapter:napcat");
   const webLogger = createModuleLogger(rootLogger, "adapter:web");
-  const setup = createConfigurationSetup(config.configRoot);
-  let resolveModelSelection: RuntimeModelSelectionResolver | undefined;
-  try {
-    resolveModelSelection = await createRuntimeModelSelectionResolver(
-      config.configRoot,
-    );
-  } catch (error) {
-    if (!isRecoverableConfigurationError(error)) {
-      await closeLogger(rootLogger);
-      throw error;
-    }
-    serverLogger.warn(
-      {
-        event: "server.configuration.required",
-        reason: error.code,
-        setupUrl: `http://${config.host}:${config.port}/`,
-      },
-      "Configuration is not ready; open the Web UI to complete setup",
-    );
-  }
-  const runtime = new KaguyaRuntime({
-    databasePath: config.databasePath,
-    logger: rootLogger,
-    ...(resolveModelSelection === undefined ? {} : { resolveModelSelection }),
-    gatewayAllowlist: new GatewayAllowlist(config.gatewayAllowlist),
-  });
-  const runtimeReady = resolveModelSelection !== undefined;
-  const webGateway = runtimeReady
-    ? createWebMessageGateway({
-        adapterId: "web.ui.main",
-        runtime,
-        logger: webLogger,
-      })
-    : undefined;
-
   let app: FastifyInstance | undefined;
   let webUi: WebUiHandle | undefined;
   let napcat: NapCatConnectionSupervisor | undefined;
   let closePromise: Promise<void> | undefined;
+  let runtime: KaguyaRuntime | undefined;
 
   const close = (): Promise<void> => {
     closePromise ??= closeResources({
@@ -100,6 +86,52 @@ export async function startKaguyaServer(
   };
 
   try {
+    const setup = await createConfigurationManagement(config.configRoot);
+    const setupStatus = await setup.inspect();
+    let resolveModelSelection: RuntimeModelSelectionResolver | undefined;
+    if (setupStatus.status === "ready") {
+      try {
+        resolveModelSelection = await createRuntimeModelSelectionResolver(
+          config.configRoot,
+        );
+      } catch (error) {
+        if (!isRecoverableConfigurationError(error)) {
+          throw error;
+        }
+        serverLogger.warn(
+          {
+            event: "server.configuration.required",
+            reason: error.code,
+            setupUrl: `http://${config.host}:${config.port}/`,
+          },
+          "Configuration is not ready; open the Web UI to complete setup",
+        );
+      }
+    } else {
+      serverLogger.warn(
+        {
+          event: "server.configuration.required",
+          reason: setupStatus.status,
+          setupUrl: `http://${config.host}:${config.port}/`,
+        },
+        "Configuration is not ready; open the Web UI to complete setup",
+      );
+    }
+    runtime = new KaguyaRuntime({
+      databasePath: config.databasePath,
+      logger: rootLogger,
+      ...(resolveModelSelection === undefined ? {} : { resolveModelSelection }),
+      gatewayAllowlist: new GatewayAllowlist(config.gatewayAllowlist),
+    });
+    const runtimeReady = resolveModelSelection !== undefined;
+    const webGateway = runtimeReady
+      ? createWebMessageGateway({
+          adapterId: "web.ui.main",
+          runtime,
+          logger: webLogger,
+        })
+      : undefined;
+
     serverLogger.info(
       {
         event: "server.starting",
@@ -187,28 +219,18 @@ export async function createRuntimeModelSelectionResolver(
   configRoot: string,
 ): Promise<RuntimeModelSelectionResolver> {
   const manager = await FileUserConfigManager.open({ rootDir: configRoot });
-  const defaultProfileId = manager.getDefaultProfileId();
-  await manager.resolveProfileById(defaultProfileId);
-  const profiles = new Map<string, UserConfigProfile>();
-  for (const metadata of manager.listProfiles()) {
-    profiles.set(metadata.id, await manager.getProfile(metadata.id));
-  }
+  const selectedProfileId = manager.getSelectedProfileId();
+  const profile = await manager.resolveProfileById(selectedProfileId);
   const providerCache = new Map<
     string,
     ReturnType<typeof createOpenAICompatible>
   >();
 
   const resolver: RuntimeModelSelectionResolver = (selection) => {
-    const profileId = selection.profileId ?? defaultProfileId;
-    const profile = profiles.get(profileId);
-    if (profile === undefined) {
-      throw new Error(`Configuration profile was not found: ${profileId}`);
-    }
-    assertProfileReady(profile);
     const target = profile.ai.modelTiers?.[selection.modelTier];
     if (target === undefined) {
       throw new Error(
-        `Model tier is unavailable in profile ${profileId}: ${selection.modelTier}`,
+        `Model tier is unavailable in selected profile ${selectedProfileId}: ${selection.modelTier}`,
       );
     }
     const provider = profile.ai.providers.find(
@@ -216,24 +238,24 @@ export async function createRuntimeModelSelectionResolver(
     );
     if (provider === undefined || !provider.enabled) {
       throw new Error(
-        `Model tier provider is unavailable in profile ${profileId}`,
+        `Model tier provider is unavailable in selected profile ${selectedProfileId}`,
       );
     }
     if (provider.type !== "openai-compatible") {
       throw new Error(
-        `Unsupported AI provider type in profile ${profileId}: ${provider.type}`,
+        `Unsupported AI provider type in selected profile ${selectedProfileId}: ${provider.type}`,
       );
     }
     if (provider.apiKey === undefined || provider.baseUrl === undefined) {
       throw new Error(
-        `AI provider credentials are incomplete in profile ${profileId}`,
+        `AI provider credentials are incomplete in selected profile ${selectedProfileId}`,
       );
     }
-    const cacheKey = `${profileId}:${provider.id}`;
+    const cacheKey = provider.id;
     let client = providerCache.get(cacheKey);
     if (client === undefined) {
       client = createOpenAICompatible({
-        name: `kaguya-${profileId}-${provider.id}`,
+        name: `kaguya-${selectedProfileId}-${provider.id}`,
         apiKey: provider.apiKey,
         baseURL: provider.baseUrl,
         ...openAICompatibleProviderSettings(provider.settings),
@@ -271,7 +293,7 @@ async function closeResources(options: {
   readonly app: FastifyInstance | undefined;
   readonly webUi: WebUiHandle | undefined;
   readonly napcat: NapCatConnectionSupervisor | undefined;
-  readonly runtime: KaguyaRuntime;
+  readonly runtime: KaguyaRuntime | undefined;
   readonly rootLogger: KaguyaLogger;
   readonly serverLogger: KaguyaLogger;
 }): Promise<void> {
@@ -286,10 +308,12 @@ async function closeResources(options: {
   ]);
   collectFailures(ingressResults, failures);
 
-  try {
-    await options.runtime.close();
-  } catch (error) {
-    failures.push(error);
+  if (options.runtime !== undefined) {
+    try {
+      await options.runtime.close();
+    } catch (error) {
+      failures.push(error);
+    }
   }
   try {
     await options.webUi?.close();

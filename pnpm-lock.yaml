@@ -22,7 +22,7 @@ importers:
         version: 3.9.6
       promptfoo:
         specifier: 0.121.19
-        version: 0.121.19(@aws-sdk/credential-provider-node@3.972.71)(@smithy/signature-v4@5.6.8)(@types/json-schema@7.0.15)(@types/node@24.13.3)(pg@8.22.0)(playwright-core@1.61.1)(socks@2.8.9)
+        version: 0.121.19(@aws-sdk/credential-provider-node@3.972.71)(@electric-sql/pglite@0.5.8)(@smithy/signature-v4@5.6.8)(@types/json-schema@7.0.15)(@types/node@24.13.3)(@types/pg@8.23.1)(pg@8.22.0)(playwright-core@1.61.1)(socks@2.8.9)
       tsx:
         specifier: 4.23.1
         version: 4.23.1
@@ -139,9 +139,25 @@ importers:
 
   packages/database:
     dependencies:
+      '@kaguya/engine':
+        specifier: workspace:*
+        version: link:../engine
       '@kaguya/schema':
         specifier: workspace:*
         version: link:../schema
+      '@kaguya/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+      pg:
+        specifier: ^8.23.0
+        version: 8.23.0
+    devDependencies:
+      '@electric-sql/pglite':
+        specifier: ^0.5.8
+        version: 0.5.8
+      '@types/pg':
+        specifier: ^8.23.1
+        version: 8.23.1
 
   packages/engine:
     dependencies:
@@ -169,6 +185,12 @@ importers:
 
   packages/logger:
     dependencies:
+      '@kaguya/schema':
+        specifier: workspace:*
+        version: link:../schema
+      '@kaguya/sdk':
+        specifier: workspace:*
+        version: link:../sdk
       pino:
         specifier: 10.3.1
         version: 10.3.1
@@ -663,6 +685,9 @@ packages:
 
   '@dabh/diagnostics@2.0.8':
     resolution: {integrity: sha512-R4MSXTVnuMzGD7bzHdW2ZhhdPC/igELENcq5IjEverBvq5hn1SXCWcsi6eSsdWP0/Ur+SItRRjAktmdoX/8R/Q==}
+
+  '@electric-sql/pglite@0.5.8':
+    resolution: {integrity: sha512-n9tsbUOhwx2epK1V0ZG9Ar4SHWUju04dhmzZXiSBXwBoleOvIfals33NAaWgagQVAL4Rbvx/Ptsu3P+pA09f6Q==}
 
   '@emnapi/core@1.11.1':
     resolution: {integrity: sha512-RSvbQmHzdKzNsLYa/wHrbc3KN4sYLKAdPZxqiM2HATqv/SBk2/ENSHpvXGaLOMcsAyz0poEGqkmmKYG3OWiJEQ==}
@@ -2238,6 +2263,9 @@ packages:
 
   '@types/pegjs@0.10.6':
     resolution: {integrity: sha512-eLYXDbZWXh2uxf+w8sXS8d6KSoXTswfps6fvCUuVAGN8eRpfe7h9eSRydxiSJvo9Bf+GzifsDOr9TMQlmJdmkw==}
+
+  '@types/pg@8.23.1':
+    resolution: {integrity: sha512-fKVHpikPdg4GKks3JuLEhvwSyvwzF23hnabPy6DD8ljVbC7+6J5dQzdv4arV6jqq57djnMgs1HKBxX4P8aBI3A==}
 
   '@types/react-dom@19.2.4':
     resolution: {integrity: sha512-Bsc+QHgp+P/F02XDzNCY9jnZNCUuLki36KT7VKrTXXLdHf+vHMNZnW1rVu5DNW/rCK+fya3DATySbLM4yhtKUw==}
@@ -4280,8 +4308,8 @@ packages:
     peerDependencies:
       pg: '>=8.0'
 
-  pg-protocol@1.15.0:
-    resolution: {integrity: sha512-cq9sECI5s0+uPUXjbz8ioyPJni6RzsRib0US67i5IoTZKw8fNeYlVE7u8F4dG7vEJJtc5wdD1K189lCCUwqWTQ==}
+  pg-protocol@1.16.0:
+    resolution: {integrity: sha512-sILXutLVjCLjcDuOmvhX5e2Z4cS5qG/6Bu3VkpFwdf/633ElGLpEh9bgmuI5I4sqKqkifQiGyiCcx1HdtrK7tg==}
 
   pg-types@2.2.0:
     resolution: {integrity: sha512-qTAAlrEsl8s4OiEQY69wDvcMIdQN6wdz5ojQiOy6YRMuynxenON0O5oCpJI6lshc6scgAY8qvJ2On/p+CXY0GA==}
@@ -4289,6 +4317,15 @@ packages:
 
   pg@8.22.0:
     resolution: {integrity: sha512-8wih1vVIBMxoUM2oB4soJsD9tDnDpLv4OXBJ+EJzFsvycD+lfyIreC2gGHq78f8jbLLt+bvlPTFdFZfJkOuzAA==}
+    engines: {node: '>= 16.0.0'}
+    peerDependencies:
+      pg-native: '>=3.0.1'
+    peerDependenciesMeta:
+      pg-native:
+        optional: true
+
+  pg@8.23.0:
+    resolution: {integrity: sha512-Ip2EQCngowJLGOfCwkFhPXU7/ljlhn6Rxlmy4XYfL2Y+vyRM59+8uR2xqRWKdYmbXmxCFOAmKxBuSUCdF34qLg==}
     engines: {node: '>= 16.0.0'}
     peerDependencies:
       pg-native: '>=3.0.1'
@@ -5942,6 +5979,8 @@ snapshots:
       enabled: 2.0.0
       kuler: 2.0.0
 
+  '@electric-sql/pglite@0.5.8': {}
+
   '@emnapi/core@1.11.1':
     dependencies:
       '@emnapi/wasi-threads': 1.2.2
@@ -7295,6 +7334,12 @@ snapshots:
   '@types/pegjs@0.10.6':
     optional: true
 
+  '@types/pg@8.23.1':
+    dependencies:
+      '@types/node': 24.13.3
+      pg-protocol: 1.16.0
+      pg-types: 2.2.0
+
   '@types/react-dom@19.2.4(@types/react@19.2.17)':
     dependencies:
       '@types/react': 19.2.17
@@ -7931,10 +7976,12 @@ snapshots:
 
   dotenv@17.4.2: {}
 
-  drizzle-orm@0.45.2(@libsql/client@0.17.4)(@opentelemetry/api@1.9.1)(pg@8.22.0):
+  drizzle-orm@0.45.2(@electric-sql/pglite@0.5.8)(@libsql/client@0.17.4)(@opentelemetry/api@1.9.1)(@types/pg@8.23.1)(pg@8.22.0):
     optionalDependencies:
+      '@electric-sql/pglite': 0.5.8
       '@libsql/client': 0.17.4
       '@opentelemetry/api': 1.9.1
+      '@types/pg': 8.23.1
       pg: 8.22.0
 
   dunder-proto@1.0.1:
@@ -9460,19 +9507,20 @@ snapshots:
   pg-cloudflare@1.4.0:
     optional: true
 
-  pg-connection-string@2.14.0:
-    optional: true
+  pg-connection-string@2.14.0: {}
 
-  pg-int8@1.0.1:
-    optional: true
+  pg-int8@1.0.1: {}
 
   pg-pool@3.14.0(pg@8.22.0):
     dependencies:
       pg: 8.22.0
     optional: true
 
-  pg-protocol@1.15.0:
-    optional: true
+  pg-pool@3.14.0(pg@8.23.0):
+    dependencies:
+      pg: 8.23.0
+
+  pg-protocol@1.16.0: {}
 
   pg-types@2.2.0:
     dependencies:
@@ -9481,23 +9529,31 @@ snapshots:
       postgres-bytea: 1.0.1
       postgres-date: 1.0.7
       postgres-interval: 1.1.0
-    optional: true
 
   pg@8.22.0:
     dependencies:
       pg-connection-string: 2.14.0
       pg-pool: 3.14.0(pg@8.22.0)
-      pg-protocol: 1.15.0
+      pg-protocol: 1.16.0
       pg-types: 2.2.0
       pgpass: 1.0.5
     optionalDependencies:
       pg-cloudflare: 1.4.0
     optional: true
 
+  pg@8.23.0:
+    dependencies:
+      pg-connection-string: 2.14.0
+      pg-pool: 3.14.0(pg@8.23.0)
+      pg-protocol: 1.16.0
+      pg-types: 2.2.0
+      pgpass: 1.0.5
+    optionalDependencies:
+      pg-cloudflare: 1.4.0
+
   pgpass@1.0.5:
     dependencies:
       split2: 4.2.0
-    optional: true
 
   picocolors@1.1.1: {}
 
@@ -9571,19 +9627,15 @@ snapshots:
       picocolors: 1.1.1
       source-map-js: 1.2.1
 
-  postgres-array@2.0.0:
-    optional: true
+  postgres-array@2.0.0: {}
 
-  postgres-bytea@1.0.1:
-    optional: true
+  postgres-bytea@1.0.1: {}
 
-  postgres-date@1.0.7:
-    optional: true
+  postgres-date@1.0.7: {}
 
   postgres-interval@1.1.0:
     dependencies:
       xtend: 4.0.2
-    optional: true
 
   posthog-node@5.24.17:
     dependencies:
@@ -9603,7 +9655,7 @@ snapshots:
 
   promise-limit@2.7.0: {}
 
-  promptfoo@0.121.19(@aws-sdk/credential-provider-node@3.972.71)(@smithy/signature-v4@5.6.8)(@types/json-schema@7.0.15)(@types/node@24.13.3)(pg@8.22.0)(playwright-core@1.61.1)(socks@2.8.9):
+  promptfoo@0.121.19(@aws-sdk/credential-provider-node@3.972.71)(@electric-sql/pglite@0.5.8)(@smithy/signature-v4@5.6.8)(@types/json-schema@7.0.15)(@types/node@24.13.3)(@types/pg@8.23.1)(pg@8.22.0)(playwright-core@1.61.1)(socks@2.8.9):
     dependencies:
       '@anthropic-ai/sdk': 0.110.0(zod@4.4.3)
       '@apidevtools/json-schema-ref-parser': 15.5.0(@types/json-schema@7.0.15)
@@ -9641,7 +9693,7 @@ snapshots:
       debounce: 3.0.0
       dedent: 1.7.2
       dotenv: 17.4.2
-      drizzle-orm: 0.45.2(@libsql/client@0.17.4)(@opentelemetry/api@1.9.1)(pg@8.22.0)
+      drizzle-orm: 0.45.2(@electric-sql/pglite@0.5.8)(@libsql/client@0.17.4)(@opentelemetry/api@1.9.1)(@types/pg@8.23.1)(pg@8.22.0)
       execa: 9.6.1
       express: 5.2.1
       exsolve: 1.1.0
@@ -10634,8 +10686,7 @@ snapshots:
 
   xmlhttprequest-ssl@2.1.2: {}
 
-  xtend@4.0.2:
-    optional: true
+  xtend@4.0.2: {}
 
   yallist@3.1.1: {}
 
