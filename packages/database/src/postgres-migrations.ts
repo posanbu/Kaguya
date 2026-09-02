@@ -1,14 +1,16 @@
 /**
  * 架构说明：本模块承载 PostgreSQL 版信息原子仓储的模式迁移，
- * 包括 migration ledger、kind 注册表、原子表、引用表以及 append-only 触发器。
+ * 包括 migration ledger、kind 注册表、原子表、引用表、日志投影 outbox 与 append-only 触发器。
  * 代码库关系：`PostgresKaguyaDatabase.migrate()` 与测试 helper 都调用这里的函数；
  * 仓储逻辑假定这些表、索引与触发器已经存在，并用它们实现事务性写入与只追加约束。
  */
 import type { SqlDatabase } from "./postgres-driver.js";
 
-const POSTGRES_SCHEMA_VERSION = 1;
+const POSTGRES_SCHEMA_VERSION = 2;
 
-export async function migratePostgresDatabase(database: SqlDatabase): Promise<void> {
+export async function migratePostgresDatabase(
+  database: SqlDatabase,
+): Promise<void> {
   await database.transaction(async (tx) => {
     await tx.exec(`
       CREATE TABLE IF NOT EXISTS kaguya_schema_migrations (
@@ -36,11 +38,23 @@ export async function migratePostgresDatabase(database: SqlDatabase): Promise<vo
         PRIMARY KEY (information_id, ordinal)
       );
 
+      CREATE TABLE IF NOT EXISTS information_log_outbox (
+        information_id text PRIMARY KEY REFERENCES information_atoms (information_id) ON DELETE RESTRICT,
+        created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        projected_at timestamptz,
+        attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+        last_error text
+      );
+
       CREATE INDEX IF NOT EXISTS information_atoms_kind_occurred_at_idx
         ON information_atoms (kind, occurred_at, information_id);
 
       CREATE INDEX IF NOT EXISTS information_references_target_relation_idx
         ON information_references (target_information_id, relation, information_id, ordinal);
+
+      CREATE INDEX IF NOT EXISTS information_log_outbox_pending_idx
+        ON information_log_outbox (attempt_count, created_at, information_id)
+        WHERE projected_at IS NULL;
 
       CREATE OR REPLACE FUNCTION kaguya_reject_information_mutation()
       RETURNS trigger

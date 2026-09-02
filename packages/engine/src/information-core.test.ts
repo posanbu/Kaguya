@@ -12,7 +12,10 @@ import {
   type InformationAtom,
   z,
 } from "@kaguya/schema";
-import { defineInformationKind, type InformationKindDefinition } from "@kaguya/sdk";
+import {
+  defineInformationKind,
+  type InformationKindDefinition,
+} from "@kaguya/sdk";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -73,6 +76,7 @@ class MemoryInformationStore {
   readonly atoms = new Map<string, DeepReadonly<InformationAtom>>();
   readonly synchronisedKinds: string[][] = [];
   readonly appendOrder: string[] = [];
+  readonly appendOptions: { readonly enqueueLogProjection?: boolean }[] = [];
 
   constructor(
     private readonly options: {
@@ -92,24 +96,41 @@ class MemoryInformationStore {
       readonly multiple: boolean;
       readonly targetKinds?: readonly string[];
     }[],
+    options: { readonly enqueueLogProjection?: boolean } = {},
   ): Promise<void> {
     if (this.atoms.has(atom.informationId)) {
       throw new InformationIdCollisionError(atom.informationId);
     }
     validateReferences(this.atoms, atom, expectations);
     this.appendOrder.push(atom.kind);
+    this.appendOptions.push(options);
     this.options.onAppend?.(atom);
     const snapshot = freezeInformationAtom(atom as InformationAtom);
     this.atoms.set(atom.informationId, snapshot);
   }
 
-  async getById(
+  async get(
     informationId: string,
   ): Promise<DeepReadonly<InformationAtom> | undefined> {
     return this.atoms.get(informationId);
   }
 
-  async listByReference(): Promise<DeepReadonly<InformationAtom>[]> {
+  async getById(
+    informationId: string,
+  ): Promise<DeepReadonly<InformationAtom> | undefined> {
+    return this.get(informationId);
+  }
+
+  async getMany(
+    informationIds: readonly string[],
+  ): Promise<DeepReadonly<InformationAtom>[]> {
+    return informationIds.flatMap((informationId) => {
+      const atom = this.atoms.get(informationId);
+      return atom === undefined ? [] : [atom];
+    });
+  }
+
+  async query(): Promise<DeepReadonly<InformationAtom>[]> {
     return [...this.atoms.values()];
   }
 }
@@ -125,7 +146,9 @@ function validateReferences(
   }[],
 ): void {
   const expectationsByRelation = new Map(
-    expectations.map((expectation) => [expectation.relation, expectation] as const),
+    expectations.map(
+      (expectation) => [expectation.relation, expectation] as const,
+    ),
   );
   const seen = new Map<string, number>();
 
@@ -249,9 +272,51 @@ describe("InformationCore", () => {
     });
   });
 
+  it("queues enabled kind logs after commit and replays pending logs at startup", async () => {
+    const loggedDefinition = defineInformationKind({
+      kind: "acme.runtime.logged",
+      payloadSchema: z.object({ text: z.string() }).strict(),
+      references: {},
+      log: {
+        enabled: true,
+        level: "info",
+        project: () => ({ event: "acme.runtime.logged" }),
+      },
+    });
+    const store = new MemoryInformationStore();
+    let projections = 0;
+    const registry = new InformationKindRegistry();
+    registry.register(loggedDefinition);
+    const core = new InformationCore({
+      registry,
+      store,
+      nextInformationId: createDeterministicIdGenerator(),
+      logProjectionRunner: {
+        projectPending: async () => {
+          projections += 1;
+        },
+      },
+    });
+
+    await core.start();
+    await core.append(loggedDefinition, {
+      kind: loggedDefinition.kind,
+      occurredAt: "2026-09-01T00:00:00.000Z",
+      source: "module:acme",
+      payload: { text: "moon" },
+      references: [],
+    });
+
+    expect(store.appendOptions).toEqual([{ enqueueLogProjection: true }]);
+    expect(projections).toBe(2);
+  });
+
   it("rejects spoofed payload schemas and spoofed reference rules", async () => {
     const store = new MemoryInformationStore();
-    const core = await createStartedCore(store, [parentDefinition, childDefinition]);
+    const core = await createStartedCore(store, [
+      parentDefinition,
+      childDefinition,
+    ]);
     const spoofedPayloadDefinition = defineInformationKind({
       kind: childDefinition.kind,
       payloadSchema: z.object({ spoof: z.string() }).strict(),
@@ -340,7 +405,10 @@ describe("InformationCore", () => {
 
   it("rejects undeclared, duplicate, and mismatched reference targets", async () => {
     const declaredStore = new MemoryInformationStore();
-    const declaredCore = await createStartedCore(declaredStore, [parentDefinition, childDefinition]);
+    const declaredCore = await createStartedCore(declaredStore, [
+      parentDefinition,
+      childDefinition,
+    ]);
     const parent = await declaredCore.append(parentDefinition, {
       kind: parentDefinition.kind,
       occurredAt: "2026-09-01T00:00:00.000Z",
@@ -379,8 +447,14 @@ describe("InformationCore", () => {
         source: "module:acme",
         payload: { text: "child" },
         references: [
-          { relation: "acme:parent", informationId: duplicateParent.informationId },
-          { relation: "acme:parent", informationId: duplicateParent.informationId },
+          {
+            relation: "acme:parent",
+            informationId: duplicateParent.informationId,
+          },
+          {
+            relation: "acme:parent",
+            informationId: duplicateParent.informationId,
+          },
         ],
       }),
     ).rejects.toBeInstanceOf(InformationReferenceValidationError);
@@ -453,9 +527,9 @@ describe("InformationCore", () => {
 
     await core.close();
 
-    expect(() => core.subscribe(parentDefinition.kind, () => undefined)).toThrow(
-      InformationCoreClosedError,
-    );
+    expect(() =>
+      core.subscribe(parentDefinition.kind, () => undefined),
+    ).toThrow(InformationCoreClosedError);
     await expect(
       core.append(parentDefinition, {
         kind: parentDefinition.kind,

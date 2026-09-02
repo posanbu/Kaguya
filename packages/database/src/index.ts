@@ -14,9 +14,7 @@ import {
   MessageRepository,
   OutboundMessageRepository,
 } from "./repositories.js";
-import {
-  InformationRepository,
-} from "./information-repository.js";
+import { InformationRepository } from "./information-repository.js";
 import { migratePostgresDatabase } from "./postgres-migrations.js";
 import { PgDatabase, type SqlDatabase } from "./postgres-driver.js";
 
@@ -35,7 +33,14 @@ export {
   InformationRepository,
   InformationStoreError,
   InvalidInformationReferenceError,
+  type PendingInformationLogProjection,
 } from "./information-repository.js";
+export {
+  InformationLogProjectionRunner,
+  type InformationAtomLogSink,
+  type InformationLogProjectionFailure,
+  type InformationLogProjectionRunnerOptions,
+} from "./information-log-projection.js";
 
 export class PostgresKaguyaDatabase {
   readonly information: InformationRepository;
@@ -44,7 +49,9 @@ export class PostgresKaguyaDatabase {
     this.information = new InformationRepository(sql);
   }
 
-  static async connect(options: { readonly connectionString: string }): Promise<PostgresKaguyaDatabase> {
+  static async connect(options: {
+    readonly connectionString: string;
+  }): Promise<PostgresKaguyaDatabase> {
     return new PostgresKaguyaDatabase(
       await PgDatabase.connect({ connectionString: options.connectionString }),
     );
