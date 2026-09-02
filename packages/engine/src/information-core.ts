@@ -53,26 +53,53 @@ export interface InformationReferenceQuery {
   readonly relation?: string;
 }
 
-export interface InformationAtomStore {
+/**
+ * Append-only persistence boundary for information atoms.
+ *
+ * The interface deliberately exposes only append and constrained reads.  It has
+ * no update, delete, TTL, or compaction operation: a state change is a new atom.
+ */
+export interface InformationLedger {
   synchronizeKinds(kinds: readonly string[]): Promise<void>;
   append(
     atom: DeepReadonly<InformationAtom>,
     expectations: readonly InformationReferenceExpectation[],
+    options?: InformationAppendOptions,
   ): Promise<void>;
-  getById(
+  get(
     informationId: InformationId,
   ): Promise<DeepReadonly<InformationAtom> | undefined>;
-  listByReference(
+  getMany(
+    informationIds: readonly InformationId[],
+  ): Promise<readonly DeepReadonly<InformationAtom>[]>;
+  query(
     query: InformationReferenceQuery,
   ): Promise<readonly DeepReadonly<InformationAtom>[]>;
 }
 
+/** @deprecated Use InformationLedger. Kept for #38 consumers. */
+export type InformationAtomStore = InformationLedger;
+
+export interface InformationAppendOptions {
+  /** Queue a durable, post-commit log projection for this atom. */
+  readonly enqueueLogProjection?: boolean;
+}
+
+/**
+ * A post-commit projection runner.  Its implementation must isolate projection
+ * failures: a console failure must never undo a committed atom.
+ */
+export interface InformationLogProjectionRunner {
+  projectPending(): Promise<void>;
+}
+
 export interface InformationCoreOptions {
   readonly registry: InformationKindRegistry;
-  readonly store: InformationAtomStore;
+  readonly store: InformationLedger;
   readonly nextInformationId: () => string;
   readonly now?: () => Date;
   readonly bus?: InformationBusOptions;
+  readonly logProjectionRunner?: InformationLogProjectionRunner;
 }
 
 type InformationSubscriber = (
@@ -83,10 +110,11 @@ type CoreState = "new" | "started" | "closed";
 
 export class InformationCore {
   readonly registry: InformationKindRegistry;
-  readonly store: InformationAtomStore;
+  readonly store: InformationLedger;
   #bus: InformationBus;
   #nextInformationId: () => string;
   #now: () => Date;
+  #logProjectionRunner: InformationLogProjectionRunner | undefined;
   #state: CoreState = "new";
 
   constructor(options: InformationCoreOptions) {
@@ -95,6 +123,7 @@ export class InformationCore {
     this.#bus = new InformationBus(options.bus);
     this.#nextInformationId = options.nextInformationId;
     this.#now = options.now ?? (() => new Date());
+    this.#logProjectionRunner = options.logProjectionRunner;
   }
 
   async start(): Promise<void> {
@@ -104,6 +133,7 @@ export class InformationCore {
       this.registry.definitions().map((definition) => definition.kind),
     );
     this.#state = "started";
+    await this.projectPendingLogs();
   }
 
   async append<K extends string, P extends JsonObject>(
@@ -129,21 +159,57 @@ export class InformationCore {
       payload,
       references,
     }) as InformationAtom<K, P>;
-    const atom = freezeInformationAtom(candidate as InformationAtom) as DeepReadonly<
-      InformationAtom<K, P>
-    >;
+    const atom = freezeInformationAtom(
+      candidate as InformationAtom,
+    ) as DeepReadonly<InformationAtom<K, P>>;
 
-    await this.store.append(atom, buildReferenceExpectations(registered.references));
-    return this.#bus.publish(atom as unknown as InformationAtom) as Promise<
-      DeepReadonly<InformationAtom<K, P>>
-    >;
+    await this.store.append(
+      atom,
+      buildReferenceExpectations(registered.references),
+      {
+        enqueueLogProjection: registered.log.enabled,
+      },
+    );
+    const published = (await this.#bus.publish(
+      atom as unknown as InformationAtom,
+    )) as DeepReadonly<InformationAtom<K, P>>;
+    await this.projectPendingLogs();
+    return published;
   }
 
-  async getById(
+  async get(
     informationId: InformationId,
   ): Promise<DeepReadonly<InformationAtom> | undefined> {
     this.assertState("started");
-    return this.store.getById(informationId);
+    return this.store.get(informationId);
+  }
+
+  /** @deprecated Use get(). */
+  async getById(
+    informationId: InformationId,
+  ): Promise<DeepReadonly<InformationAtom> | undefined> {
+    return this.get(informationId);
+  }
+
+  async getMany(
+    informationIds: readonly InformationId[],
+  ): Promise<readonly DeepReadonly<InformationAtom>[]> {
+    this.assertState("started");
+    return this.store.getMany(informationIds);
+  }
+
+  async query(
+    query: InformationReferenceQuery,
+  ): Promise<readonly DeepReadonly<InformationAtom>[]> {
+    this.assertState("started");
+    return this.store.query(query);
+  }
+
+  /** @deprecated Use query(). */
+  async listByReference(
+    query: InformationReferenceQuery,
+  ): Promise<readonly DeepReadonly<InformationAtom>[]> {
+    return this.query(query);
   }
 
   subscribe<K extends string, P extends JsonObject>(
@@ -156,9 +222,7 @@ export class InformationCore {
     return this.#bus.subscribe(kind, handler as InformationSubscriber);
   }
 
-  subscribeAll(
-    handler: InformationSubscriber,
-  ): () => void {
+  subscribeAll(handler: InformationSubscriber): () => void {
     this.assertOpen();
     return this.#bus.subscribeAll(handler);
   }
@@ -176,7 +240,18 @@ export class InformationCore {
     input: InformationAppendInput<K, P>,
   ): void {
     if (definition.kind !== input.kind) {
-      throw new Error(`Append input kind must match definition kind: ${definition.kind}`);
+      throw new Error(
+        `Append input kind must match definition kind: ${definition.kind}`,
+      );
+    }
+  }
+
+  private async projectPendingLogs(): Promise<void> {
+    try {
+      await this.#logProjectionRunner?.projectPending();
+    } catch {
+      // Projection recovery is an observer of durable facts. It cannot make an
+      // accepted atom append fail or force a rollback after commit.
     }
   }
 

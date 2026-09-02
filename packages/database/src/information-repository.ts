@@ -15,7 +15,8 @@ import {
   type JsonObject,
 } from "@kaguya/schema";
 import type {
-  InformationAtomStore,
+  InformationAppendOptions,
+  InformationLedger,
   InformationReferenceExpectation,
   InformationReferenceQuery,
 } from "@kaguya/engine";
@@ -48,7 +49,10 @@ export class InformationStoreError extends Error {
 }
 
 export class InformationIdConflictError extends InformationStoreError {
-  constructor(readonly informationId: string, options?: ErrorOptions) {
+  constructor(
+    readonly informationId: string,
+    options?: ErrorOptions,
+  ) {
     super(`Information id conflict: ${informationId}`, options);
   }
 }
@@ -58,14 +62,13 @@ export class InvalidInformationReferenceError extends InformationStoreError {
     readonly kind: string,
     readonly relation: string,
     readonly reason:
-      | "undeclared"
-      | "multiple"
-      | "missing-target"
-      | "target-kind"
-      | "required",
+      "undeclared" | "multiple" | "missing-target" | "target-kind" | "required",
     options?: ErrorOptions,
   ) {
-    super(`Invalid information reference ${relation} on ${kind}: ${reason}`, options);
+    super(
+      `Invalid information reference ${relation} on ${kind}: ${reason}`,
+      options,
+    );
   }
 }
 
@@ -78,7 +81,17 @@ export class InformationKindSetMismatchError extends InformationStoreError {
   }
 }
 
-export class InformationRepository implements InformationAtomStore {
+export interface PendingInformationLogProjection {
+  readonly informationId: InformationId;
+  readonly attemptCount: number;
+}
+
+/**
+ * PostgreSQL implementation of the append-only InformationLedger boundary.
+ * Log jobs live in a separate outbox so delivery bookkeeping never mutates an
+ * information atom.
+ */
+export class InformationRepository implements InformationLedger {
   constructor(private readonly database: SqlDatabase) {}
 
   async synchronizeKinds(kinds: readonly string[]): Promise<void> {
@@ -106,6 +119,7 @@ export class InformationRepository implements InformationAtomStore {
   async append(
     atom: DeepReadonly<InformationAtom>,
     expectations: readonly InformationReferenceExpectation[],
+    options: InformationAppendOptions = {},
   ): Promise<void> {
     await this.database.transaction(async (tx) => {
       try {
@@ -123,7 +137,9 @@ export class InformationRepository implements InformationAtomStore {
         );
 
         const expectationsByRelation = new Map(
-          expectations.map((expectation) => [expectation.relation, expectation] as const),
+          expectations.map(
+            (expectation) => [expectation.relation, expectation] as const,
+          ),
         );
         const seenRelations = new Map<string, number>();
         const targetIds = new Set<string>();
@@ -137,7 +153,10 @@ export class InformationRepository implements InformationAtomStore {
               "undeclared",
             );
           }
-          if (expectation.multiple !== true && seenRelations.has(reference.relation)) {
+          if (
+            expectation.multiple !== true &&
+            seenRelations.has(reference.relation)
+          ) {
             throw new InvalidInformationReferenceError(
               atom.kind,
               reference.relation,
@@ -152,7 +171,10 @@ export class InformationRepository implements InformationAtomStore {
         }
 
         for (const expectation of expectations) {
-          if (expectation.required === true && (seenRelations.get(expectation.relation) ?? 0) === 0) {
+          if (
+            expectation.required === true &&
+            (seenRelations.get(expectation.relation) ?? 0) === 0
+          ) {
             throw new InvalidInformationReferenceError(
               atom.kind,
               expectation.relation,
@@ -202,19 +224,51 @@ export class InformationRepository implements InformationAtomStore {
             ],
           );
         }
+
+        if (options.enqueueLogProjection === true) {
+          await tx.query(
+            `INSERT INTO information_log_outbox (information_id)
+             VALUES ($1)`,
+            [atom.informationId],
+          );
+        }
       } catch (error) {
         throw mapStoreError(atom.informationId, error);
       }
     });
   }
 
+  async get(
+    informationId: InformationId,
+  ): Promise<DeepReadonly<InformationAtom> | undefined> {
+    return this.database.transaction(async (tx) =>
+      readAtomById(tx, informationId),
+    );
+  }
+
+  /** @deprecated Use get(). */
   async getById(
     informationId: InformationId,
   ): Promise<DeepReadonly<InformationAtom> | undefined> {
-    return this.database.transaction(async (tx) => readAtomById(tx, informationId));
+    return this.get(informationId);
   }
 
-  async listByReference(
+  async getMany(
+    informationIds: readonly InformationId[],
+  ): Promise<readonly DeepReadonly<InformationAtom>[]> {
+    return this.database.transaction(async (tx) => {
+      const atoms: DeepReadonly<InformationAtom>[] = [];
+      for (const informationId of informationIds) {
+        const atom = await readAtomById(tx, informationId);
+        if (atom !== undefined) {
+          atoms.push(atom);
+        }
+      }
+      return atoms;
+    });
+  }
+
+  async query(
     query: InformationReferenceQuery,
   ): Promise<readonly DeepReadonly<InformationAtom>[]> {
     return this.database.transaction(async (tx) => {
@@ -256,6 +310,76 @@ export class InformationRepository implements InformationAtomStore {
         }
       }
       return atoms;
+    });
+  }
+
+  /** @deprecated Use query(). */
+  async listByReference(
+    query: InformationReferenceQuery,
+  ): Promise<readonly DeepReadonly<InformationAtom>[]> {
+    return this.query(query);
+  }
+
+  async listPendingLogProjections(
+    limit: number,
+  ): Promise<readonly PendingInformationLogProjection[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) {
+      throw new InformationStoreError(
+        "log projection limit must be between 1 and 1000",
+      );
+    }
+    return this.database.transaction(async (tx) => {
+      const rows = await tx.query<{
+        information_id: string;
+        attempt_count: number;
+      }>(
+        `
+          SELECT information_id, attempt_count
+          FROM information_log_outbox
+          WHERE projected_at IS NULL
+          ORDER BY attempt_count ASC, created_at ASC, information_id ASC
+          LIMIT $1
+        `,
+        [limit],
+      );
+      return rows.rows.map((row) => ({
+        informationId: row.information_id as InformationId,
+        attemptCount: row.attempt_count,
+      }));
+    });
+  }
+
+  async markLogProjectionDelivered(
+    informationId: InformationId,
+  ): Promise<void> {
+    await this.database.transaction(async (tx) => {
+      await tx.query(
+        `
+          UPDATE information_log_outbox
+          SET projected_at = CURRENT_TIMESTAMP,
+              last_error = NULL
+          WHERE information_id = $1
+        `,
+        [informationId],
+      );
+    });
+  }
+
+  async recordLogProjectionFailure(
+    informationId: InformationId,
+    errorType: string,
+  ): Promise<void> {
+    await this.database.transaction(async (tx) => {
+      await tx.query(
+        `
+          UPDATE information_log_outbox
+          SET attempt_count = attempt_count + 1,
+              last_error = $2
+          WHERE information_id = $1
+            AND projected_at IS NULL
+        `,
+        [informationId, errorType.slice(0, 120)],
+      );
     });
   }
 }
@@ -321,10 +445,15 @@ async function loadTargetKinds(
     [informationIds],
   );
 
-  return new Map(rows.rows.map((row) => [row.information_id, row.kind] as const));
+  return new Map(
+    rows.rows.map((row) => [row.information_id, row.kind] as const),
+  );
 }
 
-async function insertKinds(tx: SqlTransaction, kinds: readonly string[]): Promise<void> {
+async function insertKinds(
+  tx: SqlTransaction,
+  kinds: readonly string[],
+): Promise<void> {
   await tx.query(
     `
       INSERT INTO information_kinds (kind)
@@ -342,7 +471,10 @@ function normalizeKinds(kinds: readonly string[]): readonly string[] {
   return uniqueKinds.sort((left, right) => left.localeCompare(right));
 }
 
-function areKindsEqual(left: readonly string[], right: readonly string[]): boolean {
+function areKindsEqual(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
   if (left.length !== right.length) {
     return false;
   }
@@ -376,6 +508,8 @@ function mapStoreError(informationId: string, error: unknown): Error {
   });
 }
 
-function isPgConflict(error: unknown): error is { code?: string; constraint?: string } {
+function isPgConflict(
+  error: unknown,
+): error is { code?: string; constraint?: string } {
   return typeof error === "object" && error !== null && "code" in error;
 }
