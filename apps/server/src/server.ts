@@ -60,13 +60,31 @@ export interface StartedKaguyaServer {
 }
 
 export async function startKaguyaServer(
-  config: ServerConfig = readServerConfig(),
+  providedConfig?: ServerConfig,
 ): Promise<StartedKaguyaServer> {
+  const resolved =
+    providedConfig === undefined
+      ? readServerConfig()
+      : {
+          config: providedConfig,
+          gatewayTokenSource: "environment" as const,
+        };
+  const config = resolved.config;
   const rootLogger = createLogger(readLoggerOptions("kaguya"));
   const serverLogger = createModuleLogger(rootLogger, "server");
   const httpLogger = createModuleLogger(rootLogger, "server:http");
   const napcatLogger = createModuleLogger(rootLogger, "adapter:napcat");
   const webLogger = createModuleLogger(rootLogger, "adapter:web");
+  if (resolved.gatewayTokenSource === "generated") {
+    serverLogger.info(
+      {
+        event: "server.token.generated",
+        token: config.gatewayToken,
+        setupUrl: `http://${config.host}:${config.port}/`,
+      },
+      "Gateway token generated for this run; the Web UI fetches it automatically",
+    );
+  }
   let app: FastifyInstance | undefined;
   let webUi: WebUiHandle | undefined;
   let napcat: NapCatConnectionSupervisor | undefined;

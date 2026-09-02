@@ -15,7 +15,9 @@ description: Kaguya 统一 Server 的路由、认证、请求和错误协议。
 
 **`GET /api/v1/openapi.json`** — 无需认证、不限流，返回 OpenAPI 3 描述。
 
-**`GET /api/v1/setup`** — 无需认证、不限流，只返回无密钥的配置 readiness 状态。
+**`GET /api/v1/setup`** — 无需认证、不限流，返回配置 readiness 状态（不含 Provider 密钥或完整 profile），并附带本实例分发的网关 token。
+
+**`GET /api/v1/gateway/token`** — 无需认证、不限流，返回本实例分发的网关 token。
 
 **`POST /api/v1/setup`** — 需要 Bearer Token，创建或修复默认 profile。
 
@@ -37,9 +39,11 @@ Authorization: Bearer replace-with-at-least-16-characters
 
 认证发生在业务 schema 校验之前。认证和未认证请求使用不同的限流 key，避免未认证流量消耗已认证配额。
 
+未显式设置 `KAGUYA_GATEWAY_TOKEN` 时，可先通过 `GET /api/v1/gateway/token` 读取当前实例的 token。
+
 ## 查询配置状态
 
-`GET /api/v1/setup` 的 `data.status` 可能是 `setup_required`、`review_required`、`restart_required`、`ready` 或 `invalid`。响应不包含 API Key 或完整 profile。
+`GET /api/v1/setup` 的 `data.status` 可能是 `setup_required`、`review_required`、`restart_required`、`ready` 或 `invalid`。响应不包含 API Key 或完整 profile，包含本实例分发的网关 token。
 
 ## 提交首次配置
 

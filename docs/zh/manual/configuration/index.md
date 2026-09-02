@@ -35,7 +35,7 @@ Web UI 会在聊天界面之前检查 setup 状态。需要配置时会进入 Pr
 
 可恢复的统一入口只处理 selected Profile 缺失、未完成或 warning 待确认这类状态，不处理存储损坏。配置索引损坏、Profile 文件丢失、路径越界、符号链接或权限异常仍会拒绝启动，避免自动流程覆盖可能需要恢复的数据。
 
-`KAGUYA_GATEWAY_TOKEN` 仍是启动前必须提供的引导凭据，配置写入接口不会退化为匿名接口。匿名 setup 模式只能看到 metadata、issues 与 warnings；完整 Profile 的读取和修改仍要求管理认证。配置提交继续采用严格 schema，并在服务端校验 light/heavy 模型不同，不能仅依赖浏览器表单约束。
+网关 token 由 Server 在启动时确定：未设置 `KAGUYA_GATEWAY_TOKEN` 时自动生成（日志 `server.token.generated`），Web UI 加载页面时自动获取，配置写入接口不会退化为匿名接口。匿名 setup 模式只能看到 metadata、issues 与 warnings；完整 Profile 的读取和修改仍要求管理认证。配置提交继续采用严格 schema，并在服务端校验 light/heavy 模型不同，不能仅依赖浏览器表单约束。
 
 ## 文档与验证
 

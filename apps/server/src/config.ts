@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 const defaultDatabasePath = fileURLToPath(
@@ -50,14 +51,22 @@ export interface NapCatConfig {
   readonly reconnectMs: number;
 }
 
+export interface ResolvedServerConfig {
+  readonly config: ServerConfig;
+  readonly gatewayTokenSource: "environment" | "generated";
+}
+
 export function readServerConfig(
   environment: NodeJS.ProcessEnv = process.env,
-): ServerConfig {
+): ResolvedServerConfig {
   rejectLegacyEnvironment(environment);
-  const gatewayToken = requiredEnvironmentValue(
-    environment,
-    "KAGUYA_GATEWAY_TOKEN",
-  );
+  const envGatewayToken = optionalText(environment.KAGUYA_GATEWAY_TOKEN);
+  const gatewayTokenSource =
+    envGatewayToken === undefined
+      ? ("generated" as const)
+      : ("environment" as const);
+  const gatewayToken =
+    envGatewayToken ?? randomBytes(32).toString("base64url");
   if (gatewayToken.length < 16) {
     throw new Error("KAGUYA_GATEWAY_TOKEN must contain at least 16 characters");
   }
@@ -74,7 +83,7 @@ export function readServerConfig(
     );
   }
 
-  return {
+  const config: ServerConfig = {
     host: optionalText(environment.KAGUYA_HOST) ?? "127.0.0.1",
     port: integerEnvironmentValue(
       environment.KAGUYA_PORT,
@@ -135,6 +144,7 @@ export function readServerConfig(
       ),
     },
   };
+  return { config, gatewayTokenSource };
 }
 
 function rejectLegacyEnvironment(environment: NodeJS.ProcessEnv): void {
@@ -146,17 +156,6 @@ function rejectLegacyEnvironment(environment: NodeJS.ProcessEnv): void {
       `${configured.join(", ")} are no longer supported; use KAGUYA_CONFIG_ROOT and profile configuration`,
     );
   }
-}
-
-function requiredEnvironmentValue(
-  environment: NodeJS.ProcessEnv,
-  name: string,
-): string {
-  const value = optionalText(environment[name]);
-  if (value === undefined) {
-    throw new Error(`${name} is required`);
-  }
-  return value;
 }
 
 function optionalText(value: string | undefined): string | undefined {

@@ -20,10 +20,11 @@ Kaguya 是一个事件驱动、模块可插拔的 TypeScript AI Bot Runtime。�
 ```bash
 corepack enable
 pnpm install
-export KAGUYA_GATEWAY_TOKEN="replace-with-at-least-16-characters"
 export KAGUYA_CONFIG_ROOT="/absolute/path/to/kaguya-config"
 pnpm dev
 ```
+
+`KAGUYA_GATEWAY_TOKEN` 可选：未设置时每次启动生成随机 token（`server.token.generated` 日志中打印），Web UI 打开页面时自动获取；显式设置（至少 16 字符）可获得跨重启稳定的 token。
 
 `KAGUYA_CONFIG_ROOT` 指向权限受保护的 profile store。目录尚未初始化、当前全局选中的 profile 不完整或可选配置尚未确认时，Server 会进入统一配置模式并显示引导页；如果当前 selected Profile 仍然 `invalid` 或 `review_required`，页面会继续展示 readiness 问题。只有当用户选择了某个 Profile，或完整替换了当前 selected Profile，且该 selected Profile 已 ready 时，页面才会进入 `restart_required` 并要求重启服务。配置文件损坏或权限异常仍会拒绝启动，不会自动覆盖。初始化格式与密钥边界见 [`@kaguya/config`](packages/config/README.md)。打开 `http://127.0.0.1:3000` 后，页面和 API 使用同源路径。
 
@@ -31,7 +32,6 @@ pnpm dev
 
 ```bash
 pnpm build
-export KAGUYA_GATEWAY_TOKEN="replace-with-at-least-16-characters"
 export KAGUYA_CONFIG_ROOT="/absolute/path/to/kaguya-config"
 pnpm start
 ```
@@ -57,7 +57,7 @@ pnpm start
 
 | 环境变量                             | 默认值                | 说明                                   |
 | ------------------------------------ | --------------------- | -------------------------------------- |
-| `KAGUYA_GATEWAY_TOKEN`               | 无                    | 必填，至少 16 个字符                   |
+| `KAGUYA_GATEWAY_TOKEN`               | 无                    | 可选；未设时启动自动生成并分发给 Web UI |
 | `KAGUYA_HOST`                        | `127.0.0.1`           | 唯一服务监听地址                       |
 | `KAGUYA_PORT`                        | `3000`                | 唯一服务监听端口                       |
 | `KAGUYA_DATABASE_PATH`               | `.data/kaguya.sqlite` | Runtime SQLite 文件                    |

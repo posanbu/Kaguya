@@ -187,7 +187,12 @@ describe("unified server composition", () => {
                     schema: {
                       properties: {
                         data: {
-                          required: ["status", "selectedProfileId", "profiles"],
+                          required: [
+                            "status",
+                            "selectedProfileId",
+                            "profiles",
+                            "gatewayToken",
+                          ],
                         },
                       },
                     },
@@ -213,6 +218,7 @@ describe("unified server composition", () => {
             updatedAt: "",
           },
         ],
+        gatewayToken,
       },
     });
     expect(missingApi.statusCode).toBe(404);

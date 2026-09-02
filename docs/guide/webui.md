@@ -23,15 +23,15 @@ http://127.0.0.1:3000
 
 ## 首次配置页面
 
-当默认 profile 尚未就绪时，首页显示配置引导，而不是消息界面。引导页会收集 OpenAI-compatible Provider 的 Base URL、API Key、light/heavy 模型 ID 和 Gateway Token。
+当默认 profile 尚未就绪时，首页显示配置引导，而不是消息界面。引导页会收集 OpenAI-compatible Provider 的 Base URL、API Key、light/heavy 模型 ID。
 
 API Key 只通过受保护的配置接口提交，不写入浏览器存储。保存完成后，页面会提示重启 Server；重启并刷新页面后才能进入正常消息界面。
 
 ## Gateway Token
 
-Gateway Token 用于调用受保护的配置和消息接口。浏览器只把它保存到当前标签页的 `sessionStorage`，键名是 `kaguya.gatewayToken`。
+Gateway Token 用于调用受保护的配置和消息接口。它由 Server 在启动时确定：未设置 `KAGUYA_GATEWAY_TOKEN` 时自动生成随机 token（日志 `server.token.generated`），页面加载时自动获取，无需手填。
 
-关闭标签页后需要重新输入 Token。不要把 Token 放进 `VITE_*` 环境变量，因为这类变量会进入前端构建产物。
+Token 不写入任何浏览器存储，也不应放进 `VITE_*` 环境变量（这类变量会进入前端构建产物）；它每次页面加载时从 Server 重新获取。
 
 ## 当前交互能力
 
@@ -59,7 +59,7 @@ Gateway Token 用于调用受保护的配置和消息接口。浏览器只把它
 
 ### 返回 401
 
-页面填写的 Token 必须与 Server 的 `KAGUYA_GATEWAY_TOKEN` 完全一致。
+Token 由 Server 分发并在页面加载时自动获取。未显式设置 `KAGUYA_GATEWAY_TOKEN` 时，Server 重启后生成的 token 会变化，刷新页面重新获取即可。
 
 ### 配置保存后仍显示引导页
 

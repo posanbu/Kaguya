@@ -5,11 +5,12 @@
 ## 启动
 
 ```bash
-export KAGUYA_GATEWAY_TOKEN="replace-with-at-least-16-characters"
 pnpm dev
 ```
 
 打开 `http://127.0.0.1:3000`。开发模式由 Fastify 内挂 Vite middleware 并在同一端口提供 HMR。生产模式先执行 `pnpm build`，再由 Fastify 提供 `apps/web/dist`。
+
+网关 token 由 Server 在启动时确定：未设置 `KAGUYA_GATEWAY_TOKEN` 时自动生成（日志 `server.token.generated`），页面加载时自动获取，无需手填。
 
 不再使用 `pnpm web`、第二个 5173 端口或 `VITE_KAGUYA_API_URL`。
 
@@ -24,10 +25,10 @@ pnpm dev
 | 数据         | 存储                                      | 生命周期                                    |
 | ------------ | ----------------------------------------- | ------------------------------------------- |
 | Source ID    | `localStorage` 的 `kaguya.sessionId`      | 兼容 API 字段；Core 不赋予 session/历史语义 |
-| Bearer Token | `sessionStorage` 的 `kaguya.gatewayToken` | 仅当前标签页会话                            |
+| 网关 token   | 不存储；页面加载时从 Server 自动获取      | 仅当前页面内存                              |
 | Server 地址  | 不存储                                    | 始终使用页面同源地址                        |
 
-Token 不应写入 `VITE_*` 环境变量，因为这类值会被打包进浏览器产物。
+网关 token 不写入任何浏览器存储，也不应写入 `VITE_*` 环境变量（这类值会被打包进浏览器产物）；它每次页面加载时从 Server 重新获取。
 
 ## 当前能力
 
@@ -49,6 +50,6 @@ UI 不接收 provider、模型、API key 或 base URL。模型和工作流由 Se
 
 - 页面打不开：确认 `pnpm dev` 仍在运行，并检查 `server.start.failed` 或 Vite 启动错误；
 - 健康检查失败：确认浏览器访问的就是 `KAGUYA_HOST:KAGUYA_PORT`，页面不支持另填网关地址；
-- 返回 401：页面中填写的 Token 必须与 Server 的 `KAGUYA_GATEWAY_TOKEN` 完全一致；
+- 返回 401：token 由 Server 分发并在页面加载时自动获取；未显式设置 `KAGUYA_GATEWAY_TOKEN` 时，Server 重启后生成的 token 会变化，刷新页面重新获取即可；
 - 页面可用但 NapCat 无响应：检查 `adapter:napcat` 日志；平台连接状态不影响 Web UI；
 - 深层页面生产环境 404：确认 `apps/web/dist/index.html` 存在并由 `pnpm build` 生成。

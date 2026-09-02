@@ -9,7 +9,7 @@ description: Kaguya Server、白名单、NapCat 与日志环境变量参考。
 
 ## Server 核心配置
 
-**`KAGUYA_GATEWAY_TOKEN`** — 必填，至少 16 个字符。用于配置和消息 API 的 Bearer 认证。
+**`KAGUYA_GATEWAY_TOKEN`** — 可选。未设置时每次启动自动生成随机 token（至少 16 字符，日志事件 `server.token.generated`），Web UI 页面加载时自动获取；显式设置需至少 16 个字符，可获得跨重启稳定的 token。用于配置和消息 API 的 Bearer 认证。
 
 **`KAGUYA_HOST`** — 默认 `127.0.0.1`。唯一 Server 监听地址。
 
