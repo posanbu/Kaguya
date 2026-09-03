@@ -1,8 +1,8 @@
 /**
  * 功能概述：用真实 PGlite、Core 和 ModuleHost 验证 `KaguyaRuntime` 的完整信息 DAG。
- * 主要职责：覆盖 Web 入站到投递成功的直接因果链、三类 transport 失败、无订阅持久化、
- * 同 kind 消费并发与双实例归属、start/close 确定性交错、in-flight 关闭、关闭后 ingress
- * 拒绝，以及消费者失败与其他结果并存。
+ * 主要职责：覆盖 Web 入站到投递成功的直接因果链、生成失败不会继续 assistant/outbound/delivery、
+ * 三类 transport 失败、无订阅持久化、同 kind 消费并发与双实例归属、start/close 确定性交错、
+ * in-flight 关闭、关闭后 ingress 拒绝，以及消费者失败与其他结果并存。
  * 代码库关系：测试直接消费 Runtime 的 `InformationIngress.submit` 和注入数据库选项；默认业务
  * 模块来自 `@kaguya/modules`，自定义 fixture 只用于隔离并发和消费者故障语义。
  * 输入输出与副作用：每个用例创建隔离的内存 PostgreSQL 数据库，Runtime 只写 information
@@ -10,7 +10,10 @@
  */
 import { KaguyaDatabase } from "@kaguya/database";
 import { createTestingDatabase } from "@kaguya/database/testing";
-import { createDeferredDeterministicModel } from "@kaguya/llm/testing";
+import {
+  createDeferredDeterministicModel,
+  createRepeatingDeterministicModel,
+} from "@kaguya/llm/testing";
 import {
   alwaysReplyFilterModule,
   inboundTextInformationKind,
@@ -349,6 +352,54 @@ describe("KaguyaRuntime", () => {
       expect(JSON.stringify(graph)).not.toMatch(
         /raw-must-not-enter-ledger|receipt-raw-must-not-enter-ledger/,
       );
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "does not derive assistant or delivery facts when generation fails",
+    async () => {
+      const sendMessage = vi.fn<PlatformOutboundTransport["sendMessage"]>(
+        async (target) => ({
+          ok: true,
+          adapterId: "web.ui.main",
+          platform: "web",
+          target,
+        }),
+      );
+      const { runtime, database } = await createRuntime({
+        resolveModelSelection: () => ({
+          modelId: "invalid-output-model",
+          model: createRepeatingDeterministicModel({ text: "" }),
+        }),
+      });
+      runtime.registerTransport({
+        adapterId: "web.ui.main",
+        platform: "web",
+        transport: { sendMessage },
+      });
+      await runtime.start();
+
+      const result = await runtime.submit(webMessage());
+      const kinds = (
+        await database.information.query({
+          informationId: result.rootInformationId,
+        })
+      ).map(({ kind }) => kind);
+
+      expect(kinds).toEqual(
+        expect.arrayContaining(["core.llm.requested", "core.llm.failed"]),
+      );
+      expect(kinds).not.toEqual(
+        expect.arrayContaining([
+          "core.message.assistant.text",
+          "core.delivery.requested",
+          "core.delivery.delivered",
+          "core.delivery.failed",
+        ]),
+      );
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(result.deliveries).toEqual([]);
     },
     TEST_TIMEOUT,
   );
