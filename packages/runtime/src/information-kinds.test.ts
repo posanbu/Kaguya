@@ -1,7 +1,8 @@
 /**
  * 功能概述：锁定 Runtime 信息 DAG 的完整内建 kind 集合、唯一对象所有权和关键引用契约。
  * 主要职责：验证 context、Engine 消费失败、modules 消息/过滤/投递请求、Runtime LLM 与投递
- * 结果 definition 各出现一次，并检查 Runtime 聚合复用上游导出的原始对象。
+ * 结果 definition 各出现一次，并检查 Runtime 聚合复用上游导出的原始对象；requested prompt
+ * 接受 canonical JSON metadata，同时明确拒绝把动态 profile 选择写入信息账本。
  * 代码库关系：直接约束 `information-kinds.ts` composition 输出；`KaguyaRuntime.start()` 会按
  * 此集合注册 Registry，ModuleHost 和 lifecycle/delivery consumer 必须使用同一 definition 身份。
  * 输入输出与副作用：纯内存检查 schema、引用规则和日志投影；不会启动 Core 或连接数据库。
@@ -27,6 +28,74 @@ import {
 } from "./information-kinds.js";
 
 describe("runtime information kinds", () => {
+  it("accepts canonical prompt fragment metadata", () => {
+    const parsed = llmRequestedInformationKind.payloadSchema.parse({
+      kind: "reply",
+      modelId: "model-heavy",
+      workflowId: "message-module-pipeline",
+      nodeId: "reply.information",
+      originatingModuleInstanceId: "reply.one",
+      prompt: {
+        kind: "reply",
+        text: "hello",
+        fragments: [
+          {
+            id: "template-1",
+            source: "template",
+            priority: 10,
+            content: "hello",
+            metadata: { version: 2 },
+          },
+        ],
+        provenance: [
+          {
+            fragmentId: "template-1",
+            source: "template",
+            priority: 10,
+            contentDigest: "sha256:template-1",
+          },
+        ],
+      },
+    });
+
+    expect(parsed.prompt.fragments[0]?.metadata).toEqual({ version: 2 });
+  });
+
+  it("rejects profileId in prompt fragment metadata", () => {
+    const result = llmRequestedInformationKind.payloadSchema.safeParse({
+      kind: "reply",
+      modelId: "model-heavy",
+      workflowId: "message-module-pipeline",
+      nodeId: "reply.information",
+      originatingModuleInstanceId: "reply.one",
+      prompt: {
+        kind: "reply",
+        text: "hello",
+        fragments: [
+          {
+            id: "template-1",
+            source: "template",
+            priority: 10,
+            content: "hello",
+            metadata: { version: 2, profileId: "profile-secret" },
+          },
+        ],
+        provenance: [],
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: ["prompt", "fragments", 0, "metadata", "profileId"],
+          }),
+        ]),
+      );
+    }
+  });
+
   it("aggregates every owned definition exactly once", () => {
     expect(builtInInformationKinds.map(({ kind }) => kind)).toEqual([
       "core.runtime.context",

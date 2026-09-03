@@ -1,14 +1,14 @@
 /**
  * 功能概述：以 PostgreSQL information ledger 为唯一事实源组合 `KaguyaRuntime`，把外部消息
  * 注册为 context/inbound 原子，并由实时模块广播继续 LLM、assistant 与 delivery DAG。
- * 主要职责：`KaguyaRuntime` 实现窄 `InformationIngress.submit`、transport 注册、异步 start/close；
+ * 主要职责：`KaguyaRuntime` 实现窄 `InformationIngress.submit`、transport 注册、串行化 start/close；
  * 启动时注册内建与模块 kind、启动 Core/ModuleHost、安装 `runtime:delivery` 系统消费者；
  * 内部 executor 将模块 tier 解析为无持久化 client，再交给原子 lifecycle。
  * 代码库关系：依赖 `PostgresKaguyaDatabase`、Engine InformationCore/ModuleHost、modules 拥有的
  * kind/模块工厂和 Runtime 自有 lifecycle/result kind；Task 5 的 Gateway/adapter 只需持有 ingress。
  * 输入输出与副作用：submit 返回 context 根 `informationId` 与本次调用实际收到的安全 receipt；
- * 不生成 trace/message/event ID，不写旧 SQLite repositories。关闭先停止 ingress、等待 in-flight，
- * 再停模块/Core；仅关闭由 databaseUrl 创建的连接，注入测试数据库仍归调用方所有。
+ * 不生成 trace/message/event ID，不写旧 SQLite repositories。starting 期间的 close 会先等待或
+ * 取消共享启动任务，再执行一次资源清理；仅关闭由 databaseUrl 创建的连接，注入数据库归调用方。
  */
 import { randomUUID } from "node:crypto";
 
@@ -156,7 +156,7 @@ export class OutboundTransportError extends Error {
   }
 }
 
-type RuntimeState = "new" | "started" | "closing" | "closed";
+type RuntimeState = "new" | "starting" | "started" | "closing" | "closed";
 
 type DeliveryRequestedAtom = DeepReadonly<
   InformationAtom<
@@ -183,7 +183,9 @@ export class KaguyaRuntime implements InformationIngress {
   readonly #runtimeLogger: KaguyaLogger | undefined;
 
   #state: RuntimeState = "new";
+  #startPromise: Promise<void> | undefined;
   #closePromise: Promise<void> | undefined;
+  #cleanupPromise: Promise<unknown[]> | undefined;
   #database: PostgresKaguyaDatabase | undefined;
   #ownsDatabase = false;
   #core: InformationCore | undefined;
@@ -215,22 +217,34 @@ export class KaguyaRuntime implements InformationIngress {
     this.#transports.set(key, registration);
   }
 
-  async start(): Promise<void> {
-    if (this.#state === "started") return;
+  start(): Promise<void> {
+    if (this.#state === "starting") {
+      return required(this.#startPromise, "runtime start");
+    }
+    if (this.#state === "started") return Promise.resolve();
     if (this.#state !== "new") {
-      throw new RuntimeUnavailableError("Kaguya runtime cannot be restarted");
+      return Promise.reject(
+        new RuntimeUnavailableError("Kaguya runtime cannot be restarted"),
+      );
     }
 
-    const database =
-      this.options.database ??
-      (await PostgresKaguyaDatabase.connect({
-        connectionString: this.options.databaseUrl,
-      }));
-    const ownsDatabase = this.options.database === undefined;
-    let core: InformationCore | undefined;
-    let moduleHost: InformationModuleHost | undefined;
+    this.#state = "starting";
+    this.#startPromise = this.#startRuntime();
+    return this.#startPromise;
+  }
+
+  async #startRuntime(): Promise<void> {
     try {
+      const database =
+        this.options.database ??
+        (await PostgresKaguyaDatabase.connect({
+          connectionString: this.options.databaseUrl,
+        }));
+      this.#database = database;
+      this.#ownsDatabase = this.options.database === undefined;
+      this.#assertStarting();
       await database.migrate();
+      this.#assertStarting();
       const replyModule = createLlmInformationReplyModule({
         executor: { execute: (input) => this.#executeLlm(input) },
         llmCompletedInformationKind:
@@ -274,7 +288,7 @@ export class KaguyaRuntime implements InformationIngress {
           );
         },
       });
-      core = new InformationCore({
+      const core = new InformationCore({
         registry,
         store: database.information,
         nextInformationId: this.#nextInformationId,
@@ -290,25 +304,26 @@ export class KaguyaRuntime implements InformationIngress {
         },
         logProjectionRunner,
       });
+      this.#core = core;
       await core.start();
-      moduleHost = new InformationModuleHost({ core, now: this.#now });
+      this.#assertStarting();
+      const moduleHost = new InformationModuleHost({ core, now: this.#now });
+      this.#moduleHost = moduleHost;
       for (const definition of definitions) moduleHost.register(definition);
 
-      this.#database = database;
-      this.#ownsDatabase = ownsDatabase;
-      this.#core = core;
-      this.#moduleHost = moduleHost;
       await moduleHost.start(
         this.options.moduleActivations ??
           (this.options.moduleDefinitions === undefined
             ? defaultModuleActivations()
             : []),
       );
+      this.#assertStarting();
       this.#unsubscribeDelivery = core.on(
         deliveryRequestedInformationKind,
         { consumerId: "runtime:delivery" },
         (request) => this.#deliver(request),
       );
+      this.#assertStarting();
       this.#state = "started";
       this.#runtimeLogger?.info(
         {
@@ -318,16 +333,11 @@ export class KaguyaRuntime implements InformationIngress {
         "Kaguya runtime started",
       );
     } catch (error) {
-      this.#unsubscribeDelivery?.();
-      this.#unsubscribeDelivery = undefined;
-      await moduleHost?.stop().catch(() => undefined);
-      await core?.close().catch(() => undefined);
-      if (ownsDatabase) await database.close().catch(() => undefined);
-      this.#database = undefined;
-      this.#core = undefined;
-      this.#moduleHost = undefined;
-      this.#ownsDatabase = false;
-      this.#state = "closed";
+      if (this.#state !== "closing") {
+        this.#state = "closing";
+        await this.#cleanupResources();
+        this.#state = "closed";
+      }
       throw error;
     }
   }
@@ -354,9 +364,28 @@ export class KaguyaRuntime implements InformationIngress {
     if (this.#closePromise !== undefined) return this.#closePromise;
     if (this.#state === "closed") return Promise.resolve();
 
+    const starting =
+      this.#state === "starting" ? this.#startPromise : undefined;
     this.#state = "closing";
     this.#closePromise = (async () => {
+      await starting?.catch(() => undefined);
       await Promise.allSettled([...this.#inFlight]);
+      const failures = await this.#cleanupResources();
+      this.#state = "closed";
+      this.#runtimeLogger?.info(
+        { event: "runtime.stopped", failureCount: failures.length },
+        "Kaguya runtime stopped",
+      );
+      if (failures.length > 0) {
+        throw new AggregateError(failures, "Kaguya runtime shutdown failed");
+      }
+    })();
+    return this.#closePromise;
+  }
+
+  #cleanupResources(): Promise<unknown[]> {
+    if (this.#cleanupPromise !== undefined) return this.#cleanupPromise;
+    this.#cleanupPromise = (async () => {
       const failures: unknown[] = [];
       try {
         await this.#moduleHost?.stop();
@@ -381,16 +410,15 @@ export class KaguyaRuntime implements InformationIngress {
       this.#core = undefined;
       this.#moduleHost = undefined;
       this.#ownsDatabase = false;
-      this.#state = "closed";
-      this.#runtimeLogger?.info(
-        { event: "runtime.stopped", failureCount: failures.length },
-        "Kaguya runtime stopped",
-      );
-      if (failures.length > 0) {
-        throw new AggregateError(failures, "Kaguya runtime shutdown failed");
-      }
+      return failures;
     })();
-    return this.#closePromise;
+    return this.#cleanupPromise;
+  }
+
+  #assertStarting(): void {
+    if (this.#state !== "starting") {
+      throw new RuntimeUnavailableError("Kaguya runtime start was cancelled");
+    }
   }
 
   async #executeLlm(
@@ -414,6 +442,7 @@ export class KaguyaRuntime implements InformationIngress {
         modelId: resolved.modelId,
         workflowId: "message-module-pipeline",
         nodeId: "reply.information",
+        originatingModuleInstanceId: input.originatingModuleInstanceId,
         prompt: {
           kind: "reply",
           text: input.reply.payload.text,

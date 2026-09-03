@@ -101,19 +101,27 @@ class MemoryInformationLedger implements InformationLedger {
     atom: DeepReadonly<InformationAtom>,
     expectations: readonly InformationReferenceExpectation[],
   ): Promise<void> {
-    if (this.atoms.has(atom.informationId)) throw new Error("duplicate information id");
-    const byRelation = new Map(expectations.map((expectation) => [expectation.relation, expectation]));
+    if (this.atoms.has(atom.informationId))
+      throw new Error("duplicate information id");
+    const byRelation = new Map(
+      expectations.map((expectation) => [expectation.relation, expectation]),
+    );
     const counts = new Map<string, number>();
     for (const reference of atom.references) {
       const expectation = byRelation.get(reference.relation);
-      if (expectation === undefined) throw new Error(`undeclared reference: ${reference.relation}`);
+      if (expectation === undefined)
+        throw new Error(`undeclared reference: ${reference.relation}`);
       counts.set(reference.relation, (counts.get(reference.relation) ?? 0) + 1);
       if (!expectation.multiple && counts.get(reference.relation)! > 1) {
         throw new Error(`multiple references: ${reference.relation}`);
       }
       const target = this.atoms.get(reference.informationId);
-      if (target === undefined) throw new Error(`missing reference: ${reference.informationId}`);
-      if (expectation.targetKinds !== undefined && !expectation.targetKinds.includes(target.kind)) {
+      if (target === undefined)
+        throw new Error(`missing reference: ${reference.informationId}`);
+      if (
+        expectation.targetKinds !== undefined &&
+        !expectation.targetKinds.includes(target.kind)
+      ) {
         throw new Error(`wrong reference kind: ${reference.relation}`);
       }
     }
@@ -122,7 +130,10 @@ class MemoryInformationLedger implements InformationLedger {
         throw new Error(`missing required reference: ${expectation.relation}`);
       }
     }
-    this.atoms.set(atom.informationId, freezeInformationAtom(atom as InformationAtom));
+    this.atoms.set(
+      atom.informationId,
+      freezeInformationAtom(atom as InformationAtom),
+    );
   }
 
   async get(informationId: InformationId) {
@@ -170,7 +181,11 @@ function completedAtom() {
     kind: llmCompletedInformationKind.kind,
     occurredAt: "2026-09-04T00:00:01.000Z",
     source: "runtime:llm",
-    payload: { output: { text: "Hello." }, reply: reply.payload },
+    payload: {
+      output: { text: "Hello." },
+      reply: reply.payload,
+      originatingModuleInstanceId: "reply-1",
+    },
     references: [
       { relation: "core:caused-by", informationId: reply.informationId },
       { relation: "core:context", informationId: contextId },
@@ -185,7 +200,11 @@ function assistantAtom() {
     kind: assistantTextInformationKind.kind,
     occurredAt: "2026-09-04T00:00:02.000Z",
     source: "module:reply-1",
-    payload: { text: "Hello.", source: completed.payload.reply.source },
+    payload: {
+      text: "Hello.",
+      source: completed.payload.reply.source,
+      originatingModuleInstanceId: "reply-1",
+    },
     references: [
       { relation: "core:caused-by", informationId: completed.informationId },
       { relation: "core:context", informationId: contextId },
@@ -205,15 +224,19 @@ function handlerContext(
   sourceAtom: DeepReadonly<InformationAtom>,
   registrations: Registration[],
   result: DeepReadonly<InformationAtom> = sourceAtom,
+  instanceId = "test.instance",
 ): InformationModuleHandlerContext {
   return {
     definitionId: "test.definition",
-    instanceId: "test.instance",
+    instanceId,
     sourceAtom,
     now: () => new Date("2026-09-04T00:00:00.000Z"),
     register: async (definition, input) => {
       registrations.push({
-        definition: definition as unknown as InformationKindDefinition<string, JsonObject>,
+        definition: definition as unknown as InformationKindDefinition<
+          string,
+          JsonObject
+        >,
         input: input as Registration["input"],
       });
       return result as never;
@@ -235,12 +258,14 @@ describe("alwaysReplyInformationFilterModule", () => {
       handlerContext(atom, registrations),
     );
 
-    expect(alwaysReplyInformationFilterModule.manifest.informationKinds).toEqual([
-      inboundTextInformationKind,
-      replyRequestedInformationKind,
-    ]);
+    expect(
+      alwaysReplyInformationFilterModule.manifest.informationKinds,
+    ).toEqual([inboundTextInformationKind, replyRequestedInformationKind]);
     expect(registrations).toEqual([
-      { definition: replyRequestedInformationKind, input: { payload: atom.payload } },
+      {
+        definition: replyRequestedInformationKind,
+        input: { payload: atom.payload },
+      },
     ]);
   });
 
@@ -251,7 +276,10 @@ describe("alwaysReplyInformationFilterModule", () => {
         definitionId: "test.filter.rejecting",
         displayName: "Rejecting filter",
         settingsSchema: z.object({}).strict(),
-        informationKinds: [inboundTextInformationKind, filterDecisionInformationKind],
+        informationKinds: [
+          inboundTextInformationKind,
+          filterDecisionInformationKind,
+        ],
       },
       create: () => ({
         subscriptions: [
@@ -269,7 +297,10 @@ describe("alwaysReplyInformationFilterModule", () => {
     });
     const atom = inboundAtom();
     const registrations: Registration[] = [];
-    const instance = await rejectingFilter.create({ instanceId: "reject-1", settings: {} });
+    const instance = await rejectingFilter.create({
+      instanceId: "reject-1",
+      settings: {},
+    });
 
     await instance.subscriptions[0]?.handle(
       atom,
@@ -324,17 +355,25 @@ describe("createLlmInformationReplyModule", () => {
     const replyModule = createLlmInformationReplyModule({
       llmCompletedInformationKind,
       executor: {
-        async execute({ reply }) {
+        async execute({ reply, originatingModuleInstanceId }) {
           const context = reply.references.find(
             ({ relation }) => relation === "core:context",
           );
-          if (context === undefined) throw new Error("reply context is required");
+          if (context === undefined)
+            throw new Error("reply context is required");
           return core.register(llmCompletedInformationKind, {
             occurredAt: "2026-09-04T00:00:01.000Z",
             source: "runtime:llm",
-            payload: { output: { text: "Hello." }, reply: reply.payload },
+            payload: {
+              output: { text: "Hello." },
+              reply: reply.payload,
+              originatingModuleInstanceId,
+            },
             references: [
-              { relation: "core:caused-by", informationId: reply.informationId },
+              {
+                relation: "core:caused-by",
+                informationId: reply.informationId,
+              },
               context,
             ],
           });
@@ -354,7 +393,10 @@ describe("createLlmInformationReplyModule", () => {
       {
         instanceId: "reply-1",
         definitionId: replyModule.manifest.definitionId,
-        settings: { modelTier: "heavy", outbound: { mode: "source", messageKind: "reply" } },
+        settings: {
+          modelTier: "heavy",
+          outbound: { mode: "source", messageKind: "reply" },
+        },
       },
     ]);
 
@@ -369,13 +411,23 @@ describe("createLlmInformationReplyModule", () => {
         occurredAt: "2026-09-04T00:00:00.000Z",
         source: "adapter:test",
         payload: inboundPayload,
-        references: [{ relation: "core:context", informationId: context.informationId }],
+        references: [
+          { relation: "core:context", informationId: context.informationId },
+        ],
       });
       const atoms = [...ledger.atoms.values()];
-      const reply = atoms.find(({ kind }) => kind === replyRequestedInformationKind.kind);
-      const completed = atoms.find(({ kind }) => kind === llmCompletedInformationKind.kind);
-      const assistant = atoms.find(({ kind }) => kind === assistantTextInformationKind.kind);
-      const delivery = atoms.find(({ kind }) => kind === deliveryRequestedInformationKind.kind);
+      const reply = atoms.find(
+        ({ kind }) => kind === replyRequestedInformationKind.kind,
+      );
+      const completed = atoms.find(
+        ({ kind }) => kind === llmCompletedInformationKind.kind,
+      );
+      const assistant = atoms.find(
+        ({ kind }) => kind === assistantTextInformationKind.kind,
+      );
+      const delivery = atoms.find(
+        ({ kind }) => kind === deliveryRequestedInformationKind.kind,
+      );
 
       expect(atoms.map(({ kind }) => kind)).toEqual([
         runtimeContextInformationKind.kind,
@@ -437,7 +489,10 @@ describe("createLlmInformationReplyModule", () => {
       modelTier: "heavy",
       outbound: { mode: "source", messageKind: "reply" },
     });
-    const instance = await definition.create({ instanceId: "reply-1", settings });
+    const instance = await definition.create({
+      instanceId: "reply-1",
+      settings,
+    });
     const reply = replyAtom();
     const completion = completedAtom();
     const assistant = assistantAtom();
@@ -453,27 +508,32 @@ describe("createLlmInformationReplyModule", () => {
 
     await instance.subscriptions[0]?.handle(
       reply,
-      handlerContext(reply, executionRegistrations),
+      handlerContext(reply, executionRegistrations, reply, "reply-1"),
     );
     await instance.subscriptions[1]?.handle(
       completion,
-      handlerContext(completion, assistantRegistrations, assistant),
+      handlerContext(completion, assistantRegistrations, assistant, "reply-1"),
     );
     await instance.subscriptions[2]?.handle(
       assistant,
-      handlerContext(assistant, deliveryRegistrations),
+      handlerContext(assistant, deliveryRegistrations, assistant, "reply-1"),
     );
 
     expect(execute).toHaveBeenCalledWith({
       reply,
       selection: { modelTier: "heavy" },
+      originatingModuleInstanceId: "reply-1",
     });
     expect(executionRegistrations).toEqual([]);
     expect(assistantRegistrations).toEqual([
       {
         definition: assistantTextInformationKind,
         input: {
-          payload: { text: "Hello.", source: reply.payload.source },
+          payload: {
+            text: "Hello.",
+            source: reply.payload.source,
+            originatingModuleInstanceId: "reply-1",
+          },
         },
       },
     ]);

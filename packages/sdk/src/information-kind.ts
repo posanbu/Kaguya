@@ -1,6 +1,6 @@
 /**
- * 架构说明：本模块定义信息 kind 的声明契约、引用规则、日志策略与注册输入，
- * 供 Core 启动前完成注册，并让提交方只能通过 definition 确定 kind 与身份。
+ * 架构说明：本模块定义信息 kind 的声明契约、引用规则、日志策略与注册输入，并以
+ * 当前递归路径校验 JSON schema，使 pipe 可安全复用同一个非递归子 schema。
  * 代码库关系：`packages/sdk/src/index.ts` 通过此模块向外暴露 `defineInformationKind`
  * 与相关类型；`packages/engine` 会在 Registry 生命周期中消费这些定义。
  */
@@ -298,81 +298,85 @@ function buildRepresentativeValue(schema: any, seen: Set<any>): unknown {
   }
   seen.add(schema);
 
-  const def = getSchemaDef(schema);
-  switch (def.type) {
-    case "string":
-      return "probe";
-    case "number":
-      return 0;
-    case "boolean":
-      return true;
-    case "null":
-      return null;
-    case "literal":
-      return getLiteralValue(def);
-    case "enum":
-      return getEnumValue(def);
-    case "bigint":
-      return 1n;
-    case "date":
-      return new Date("2026-09-01T00:00:00.000Z");
-    case "array": {
-      const item = buildRepresentativeValue(def.element, seen);
-      return item === undefined ? [] : [item];
-    }
-    case "tuple":
-      return (Array.isArray(def.items) ? def.items : []).map((item: any) =>
-        buildRepresentativeValue(item, seen),
-      );
-    case "object": {
-      const shape = getObjectShape(def);
-      const result: Record<string, unknown> = {};
-      for (const [key, fieldSchema] of Object.entries(shape)) {
-        const value = buildRepresentativeValue(fieldSchema, seen);
-        if (value !== undefined) {
-          result[key] = value;
+  try {
+    const def = getSchemaDef(schema);
+    switch (def.type) {
+      case "string":
+        return "probe";
+      case "number":
+        return 0;
+      case "boolean":
+        return true;
+      case "null":
+        return null;
+      case "literal":
+        return getLiteralValue(def);
+      case "enum":
+        return getEnumValue(def);
+      case "bigint":
+        return 1n;
+      case "date":
+        return new Date("2026-09-01T00:00:00.000Z");
+      case "array": {
+        const item = buildRepresentativeValue(def.element, seen);
+        return item === undefined ? [] : [item];
+      }
+      case "tuple":
+        return (Array.isArray(def.items) ? def.items : []).map((item: any) =>
+          buildRepresentativeValue(item, seen),
+        );
+      case "object": {
+        const shape = getObjectShape(def);
+        const result: Record<string, unknown> = {};
+        for (const [key, fieldSchema] of Object.entries(shape)) {
+          const value = buildRepresentativeValue(fieldSchema, seen);
+          if (value !== undefined) {
+            result[key] = value;
+          }
         }
+        return result;
       }
-      return result;
-    }
-    case "record": {
-      const value = buildRepresentativeValue(def.valueType, seen);
-      return value === undefined ? {} : { probe: value };
-    }
-    case "union":
-    case "discriminatedUnion":
-    case "xor": {
-      const [firstOption] = getSchemaOptions(def);
-      return firstOption === undefined
-        ? undefined
-        : buildRepresentativeValue(firstOption, seen);
-    }
-    case "intersection": {
-      const left = buildRepresentativeValue(def.left, seen);
-      const right = buildRepresentativeValue(def.right, seen);
-      if (isPlainJsonObject(left) && isPlainJsonObject(right)) {
-        return { ...left, ...right };
+      case "record": {
+        const value = buildRepresentativeValue(def.valueType, seen);
+        return value === undefined ? {} : { probe: value };
       }
-      return left ?? right;
+      case "union":
+      case "discriminatedUnion":
+      case "xor": {
+        const [firstOption] = getSchemaOptions(def);
+        return firstOption === undefined
+          ? undefined
+          : buildRepresentativeValue(firstOption, seen);
+      }
+      case "intersection": {
+        const left = buildRepresentativeValue(def.left, seen);
+        const right = buildRepresentativeValue(def.right, seen);
+        if (isPlainJsonObject(left) && isPlainJsonObject(right)) {
+          return { ...left, ...right };
+        }
+        return left ?? right;
+      }
+      case "optional":
+      case "nullable":
+      case "default":
+      case "prefault":
+      case "nonoptional":
+      case "readonly":
+      case "catch":
+      case "success":
+        return buildRepresentativeValue(def.innerType, seen);
+      case "pipe":
+      case "transform": {
+        const inputSchema = def.in ?? def.innerType ?? def.input;
+        return inputSchema === undefined
+          ? undefined
+          : buildRepresentativeValue(inputSchema, seen);
+      }
+      default:
+        return undefined;
     }
-    case "optional":
-    case "nullable":
-    case "default":
-    case "prefault":
-    case "nonoptional":
-    case "readonly":
-    case "catch":
-    case "success":
-      return buildRepresentativeValue(def.innerType, seen);
-    case "pipe":
-    case "transform": {
-      const inputSchema = def.in ?? def.innerType ?? def.input;
-      return inputSchema === undefined
-        ? undefined
-        : buildRepresentativeValue(inputSchema, seen);
-    }
-    default:
-      return undefined;
+  } finally {
+    seen.delete(schema);
   }
 }
 

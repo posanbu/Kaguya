@@ -5,8 +5,8 @@
  * 过滤、assistant、投递请求 definition，保证每个字面 kind 只存在一个对象定义。
  * 代码库关系：`runtime.ts` 用聚合集合初始化 Registry；`llm-lifecycle.ts` 写 LLM 原子；系统
  * delivery consumer 写 delivered/failed 原子；业务模块接收同一 completed definition 实例。
- * 输入输出与副作用：所有导出都是无 I/O 的 definition/tuple。requested payload 可审计 prompt，
- * 但 projector 只输出模型与状态元数据；completed projector 不输出 output，投递 projector 不输出 raw。
+ * 输入输出与副作用：所有导出都是无 I/O 的 schema/definition/tuple。requested prompt 接受
+ * canonical JSON metadata 但拒绝 `profileId`；projector 不输出 prompt/output/raw 或凭据。
  */
 import { consumerFailedInformationKind } from "@kaguya/engine";
 import {
@@ -18,54 +18,51 @@ import {
   llmCompletedInformationPayloadSchema as moduleLlmCompletedPayloadSchema,
   replyRequestedInformationKind,
 } from "@kaguya/modules";
-import { platformDestinationSchema, z } from "@kaguya/schema";
+import {
+  compiledPromptSchema,
+  jsonObjectSchema,
+  platformDestinationSchema,
+  promptKindSchema,
+  z,
+} from "@kaguya/schema";
 import {
   defineInformationKind,
   type InformationKindDefinition,
 } from "@kaguya/sdk";
 
 const nonBlankString = z.string().trim().min(1);
-const llmKindSchema = z.enum(["route", "reply", "state", "memory"]);
-const promptFragmentSourceSchema = z.enum([
-  "template",
-  "history",
-  "memory",
-  "persona",
-  "policy",
-  "state",
-]);
-const runtimeCompiledPromptSchema = z
-  .object({
-    kind: llmKindSchema,
-    text: z.string(),
-    fragments: z.array(
-      z
-        .object({
-          id: nonBlankString,
-          source: promptFragmentSourceSchema,
-          priority: z.number(),
-          content: z.string(),
-          metadata: z.object({}).strict(),
-        })
-        .strict(),
-    ),
-    provenance: z.array(
-      z
-        .object({
-          fragmentId: nonBlankString,
-          source: promptFragmentSourceSchema,
-          priority: z.number(),
-          contentDigest: nonBlankString,
-        })
-        .strict(),
-    ),
-  })
-  .strict();
+const llmKindSchema = promptKindSchema;
+export const informationCompiledPromptSchema = compiledPromptSchema.transform(
+  (prompt, context) => {
+    const fragments = prompt.fragments.map((fragment, index) => {
+      const metadata = jsonObjectSchema.safeParse(fragment.metadata);
+      if (!metadata.success) {
+        for (const issue of metadata.error.issues) {
+          context.addIssue({
+            ...issue,
+            path: ["fragments", index, "metadata", ...issue.path],
+          });
+        }
+        return { ...fragment, metadata: {} };
+      }
+      if (Object.prototype.hasOwnProperty.call(metadata.data, "profileId")) {
+        context.addIssue({
+          code: "custom",
+          message: "Prompt metadata must not contain profileId",
+          path: ["fragments", index, "metadata", "profileId"],
+        });
+      }
+      return { ...fragment, metadata: metadata.data };
+    });
+    return { ...prompt, fragments };
+  },
+);
 const llmMetadataShape = {
   kind: llmKindSchema,
   modelId: nonBlankString,
   workflowId: nonBlankString,
   nodeId: nonBlankString,
+  originatingModuleInstanceId: nonBlankString,
 };
 const contextReference = {
   required: true,
@@ -85,7 +82,7 @@ export const llmRequestedInformationKind = defineInformationKind({
   payloadSchema: z
     .object({
       ...llmMetadataShape,
-      prompt: runtimeCompiledPromptSchema,
+      prompt: informationCompiledPromptSchema,
     })
     .strict(),
   references: {
@@ -106,6 +103,7 @@ export const llmRequestedInformationKind = defineInformationKind({
       modelId: payload.modelId,
       workflowId: payload.workflowId,
       nodeId: payload.nodeId,
+      originatingModuleInstanceId: payload.originatingModuleInstanceId,
     }),
   },
 });
@@ -154,6 +152,7 @@ export const llmCompletedInformationKind = defineInformationKind({
       modelId: payload.modelId,
       workflowId: payload.workflowId,
       nodeId: payload.nodeId,
+      originatingModuleInstanceId: payload.originatingModuleInstanceId,
       durationMs: payload.durationMs,
     }),
   },
@@ -196,6 +195,7 @@ export const llmFailedInformationKind = defineInformationKind({
       modelId: payload.modelId,
       workflowId: payload.workflowId,
       nodeId: payload.nodeId,
+      originatingModuleInstanceId: payload.originatingModuleInstanceId,
       errorType: payload.error.name,
       errorKind: payload.error.kind,
     }),

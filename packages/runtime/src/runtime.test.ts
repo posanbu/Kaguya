@@ -1,12 +1,14 @@
 /**
  * 功能概述：用真实 PGlite、Core 和 InformationModuleHost 验证 `KaguyaRuntime` 的完整信息 DAG。
  * 主要职责：覆盖 Web 入站到投递成功的直接因果链、三类 transport 失败、无订阅持久化、
- * 同 kind 消费并发、in-flight 关闭、关闭后 ingress 拒绝，以及消费者失败与其他结果并存。
+ * 同 kind 消费并发与双实例归属、start/close 确定性交错、in-flight 关闭、关闭后 ingress
+ * 拒绝，以及消费者失败与其他结果并存。
  * 代码库关系：测试直接消费 Runtime 的 `InformationIngress.submit` 和注入数据库选项；默认业务
  * 模块来自 `@kaguya/modules`，自定义 fixture 只用于隔离并发和消费者故障语义。
  * 输入输出与副作用：每个用例创建隔离的内存 PostgreSQL 数据库，Runtime 只写 information
  * ledger；测试结束显式关闭注入数据库，并检查持久化 payload 不包含 raw/provider secret/trace。
  */
+import { PostgresKaguyaDatabase } from "@kaguya/database";
 import { createTestingDatabase } from "@kaguya/database/testing";
 import { createDeferredDeterministicModel } from "@kaguya/llm/testing";
 import {
@@ -39,6 +41,39 @@ const resources: Array<{
   runtime?: KaguyaRuntime;
   database: Awaited<ReturnType<typeof createTestingDatabase>>;
 }> = [];
+
+class GatedMigrationDatabase extends PostgresKaguyaDatabase {
+  readonly migrationStarted: Promise<void>;
+  migrateCalls = 0;
+  readonly #markMigrationStarted: () => void;
+  readonly #migrationGate: Promise<void>;
+  readonly #releaseMigration: () => void;
+
+  constructor(sql: ConstructorParameters<typeof PostgresKaguyaDatabase>[0]) {
+    super(sql);
+    let markMigrationStarted!: () => void;
+    let releaseMigration!: () => void;
+    this.migrationStarted = new Promise<void>((resolve) => {
+      markMigrationStarted = resolve;
+    });
+    this.#migrationGate = new Promise<void>((resolve) => {
+      releaseMigration = resolve;
+    });
+    this.#markMigrationStarted = markMigrationStarted;
+    this.#releaseMigration = releaseMigration;
+  }
+
+  override async migrate(): Promise<void> {
+    this.migrateCalls += 1;
+    this.#markMigrationStarted();
+    await this.#migrationGate;
+    await super.migrate();
+  }
+
+  releaseMigration(): void {
+    this.#releaseMigration();
+  }
+}
 
 afterEach(async () => {
   for (const resource of resources.splice(0)) {
@@ -78,27 +113,6 @@ function platformMessage(adapterId = "napcat.qq.main"): PlatformInboundMessage {
   };
 }
 
-const fixedWebActivations = [
-  {
-    instanceId: "filter.default",
-    definitionId: "demo.filter.always-information",
-    settings: {},
-  },
-  {
-    instanceId: "reply.default",
-    definitionId: "demo.reply.llm-information",
-    settings: {
-      modelTier: "heavy",
-      outbound: {
-        mode: "fixed",
-        adapterId: "web.ui.main",
-        platform: "web",
-        destination: { kind: "group", groupId: "web-room" },
-      },
-    },
-  },
-] as const;
-
 async function createRuntime(
   overrides: Partial<{
     now: NonNullable<ConstructorParameters<typeof KaguyaRuntime>[0]["now"]>;
@@ -128,6 +142,22 @@ async function createRuntime(
   return { runtime, database };
 }
 
+async function createGatedRuntime() {
+  const base = await createTestingDatabase();
+  const database = new GatedMigrationDatabase(base.sql);
+  const runtime = new KaguyaRuntime({
+    database,
+    moduleDefinitions: [],
+    moduleActivations: [],
+  });
+  resources.push({ runtime, database });
+  return { runtime, database };
+}
+
+async function flushMicrotasks(turns = 10): Promise<void> {
+  for (let turn = 0; turn < turns; turn += 1) await Promise.resolve();
+}
+
 function parentId(
   atom: {
     readonly references: readonly { relation: string; informationId: string }[];
@@ -140,11 +170,120 @@ function parentId(
 
 describe("KaguyaRuntime", () => {
   it(
-    "persists the complete Web input, LLM, assistant, and delivery DAG",
+    "shares one setup promise across concurrent start calls",
     async () => {
-      const { runtime, database } = await createRuntime({
-        moduleActivations: fixedWebActivations,
+      const { runtime, database } = await createGatedRuntime();
+
+      const firstStart = runtime.start();
+      await database.migrationStarted;
+      const secondStart = runtime.start();
+
+      expect(secondStart).toBe(firstStart);
+      expect(database.migrateCalls).toBe(1);
+      database.releaseMigration();
+      await Promise.all([firstStart, secondStart]);
+      expect(database.migrateCalls).toBe(1);
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "rejects transport registration as soon as start begins",
+    async () => {
+      const { runtime, database } = await createGatedRuntime();
+      const starting = runtime.start();
+      await database.migrationStarted;
+
+      expect(() =>
+        runtime.registerTransport({
+          adapterId: "late.web",
+          platform: "web",
+          transport: {
+            sendMessage: async (target) => ({
+              ok: true,
+              adapterId: "late.web",
+              platform: "web",
+              target,
+            }),
+          },
+        }),
+      ).toThrow(RuntimeUnavailableError);
+
+      database.releaseMigration();
+      await starting;
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "waits for starting work before closing resources exactly once",
+    async () => {
+      let markCreating!: () => void;
+      let releaseCreation!: () => void;
+      const creating = new Promise<void>((resolve) => {
+        markCreating = resolve;
       });
+      const creationGate = new Promise<void>((resolve) => {
+        releaseCreation = resolve;
+      });
+      let disposeCalls = 0;
+      const gatedModule = defineInformationModule({
+        manifest: {
+          apiVersion: 1,
+          definitionId: "test.lifecycle.gated",
+          displayName: "Gated lifecycle module",
+          settingsSchema: z.object({}).strict(),
+          informationKinds: [],
+        },
+        create: async () => {
+          markCreating();
+          await creationGate;
+          return {
+            subscriptions: [],
+            dispose: () => {
+              disposeCalls += 1;
+            },
+          };
+        },
+      });
+      const { runtime } = await createRuntime({
+        moduleDefinitions: [gatedModule],
+        moduleActivations: [
+          {
+            instanceId: "gated.one",
+            definitionId: "test.lifecycle.gated",
+            settings: {},
+          },
+        ],
+      });
+
+      const starting = runtime.start();
+      await creating;
+      let closeSettled = false;
+      const closing = runtime.close().then(() => {
+        closeSettled = true;
+      });
+      await flushMicrotasks();
+      expect(closeSettled).toBe(false);
+
+      releaseCreation();
+      await expect(starting).rejects.toBeInstanceOf(RuntimeUnavailableError);
+      await closing;
+      expect(disposeCalls).toBe(1);
+      await expect(runtime.submit(webMessage())).rejects.toBeInstanceOf(
+        RuntimeUnavailableError,
+      );
+      await expect(runtime.start()).rejects.toBeInstanceOf(
+        RuntimeUnavailableError,
+      );
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "persists the complete default source-mode Web delivery DAG",
+    async () => {
+      const { runtime, database } = await createRuntime();
       const sendMessage = vi.fn<PlatformOutboundTransport["sendMessage"]>(
         async (target) => ({
           ok: true,
@@ -186,7 +325,7 @@ describe("KaguyaRuntime", () => {
         platformMessageId: "sent-1",
       });
       expect(sendMessage).toHaveBeenCalledWith(
-        { kind: "group", groupId: "web-room" },
+        { kind: "web" },
         { kind: "text", text: "It is a lovely night for watching the moon." },
         { rootInformationId: result.rootInformationId },
       );
@@ -215,6 +354,72 @@ describe("KaguyaRuntime", () => {
       expect(JSON.stringify(graph)).not.toMatch(
         /legacy-trace-must-not-enter-ledger|raw-must-not-enter-ledger|receipt-raw-must-not-enter-ledger/,
       );
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "lets two reply instances derive exactly one assistant and delivery each",
+    async () => {
+      const { runtime, database } = await createRuntime({
+        moduleActivations: [
+          {
+            instanceId: "filter.default",
+            definitionId: "demo.filter.always-information",
+            settings: {},
+          },
+          ...["reply.one", "reply.two"].map((instanceId) => ({
+            instanceId,
+            definitionId: "demo.reply.llm-information",
+            settings: {
+              modelTier: "heavy" as const,
+              outbound: {
+                mode: "fixed" as const,
+                adapterId: "web.ui.main",
+                platform: "web",
+                destination: { kind: "group" as const, groupId: "web-room" },
+              },
+            },
+          })),
+        ],
+      });
+      const sendMessage = vi.fn<PlatformOutboundTransport["sendMessage"]>(
+        async (target) => ({
+          ok: true,
+          adapterId: "web.ui.main",
+          platform: "web",
+          target,
+        }),
+      );
+      runtime.registerTransport({
+        adapterId: "web.ui.main",
+        platform: "web",
+        transport: { sendMessage },
+      });
+      await runtime.start();
+
+      const result = await runtime.submit(webMessage());
+      const graph = await database.information.query({
+        informationId: result.rootInformationId,
+      });
+      const count = (kind: string) =>
+        graph.filter((atom) => atom.kind === kind).length;
+
+      expect(count("core.llm.completed")).toBe(2);
+      expect(count("core.message.assistant.text")).toBe(2);
+      expect(count("core.delivery.requested")).toBe(2);
+      expect(sendMessage).toHaveBeenCalledTimes(2);
+      for (const kind of [
+        "core.llm.completed",
+        "core.message.assistant.text",
+      ]) {
+        expect(
+          graph
+            .filter((atom) => atom.kind === kind)
+            .map(({ payload }) => payload.originatingModuleInstanceId)
+            .sort(),
+        ).toEqual(["reply.one", "reply.two"]);
+      }
     },
     TEST_TIMEOUT,
   );

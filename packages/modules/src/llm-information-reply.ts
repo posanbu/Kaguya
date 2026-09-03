@@ -6,9 +6,10 @@
  * 输出契约；`createLlmInformationReplyModule` 分别执行 LLM、产生 assistant、产生 delivery。
  * 代码库关系：依赖 `information-kinds.ts` 的模块拥有 kind；Runtime 注入同一份
  * `core.llm.completed` definition 和 executor，executor 负责注册 LLM requested/completed
- * 生命周期 atom，InformationModuleHost 则为 assistant 与 delivery 自动补齐直接因果和 context。
+ * 生命周期 atom，InformationModuleHost 则为 assistant 与 delivery 自动补齐直接因果和 context；
+ * completed/assistant 的 originating instance 字段在全量广播下提供阶段归属，不改变 Core 路由。
  * 输入输出与副作用：reply handler 只调用注入 executor；completed handler 从其严格 payload
- * 注册 assistant；assistant handler 按 source/fixed 设置注册投递或跳过 web source。执行器抛错
+ * 注册 assistant；assistant handler 仅为本实例拥有的 atom 按 source/fixed 设置注册投递。执行器抛错
  * 会交由 Core 记录 consumer.failed，模块不吞掉错误、不保存跨请求状态。
  */
 import {
@@ -52,8 +53,12 @@ const fixedOutboundSchema = z
     adapterId: z.string().trim().min(1),
     platform: z.string().trim().min(1),
     destination: z.discriminatedUnion("kind", [
-      z.object({ kind: z.literal("private"), userId: z.string().min(1) }).strict(),
-      z.object({ kind: z.literal("group"), groupId: z.string().min(1) }).strict(),
+      z
+        .object({ kind: z.literal("private"), userId: z.string().min(1) })
+        .strict(),
+      z
+        .object({ kind: z.literal("group"), groupId: z.string().min(1) })
+        .strict(),
     ]),
   })
   .strict();
@@ -61,7 +66,10 @@ const fixedOutboundSchema = z
 export const llmInformationReplySettingsSchema = z
   .object({
     modelTier: modelTierSchema,
-    outbound: z.discriminatedUnion("mode", [sourceOutboundSchema, fixedOutboundSchema]),
+    outbound: z.discriminatedUnion("mode", [
+      sourceOutboundSchema,
+      fixedOutboundSchema,
+    ]),
   })
   .strict();
 export type LlmInformationReplySettings = z.infer<
@@ -72,6 +80,7 @@ export const llmCompletedInformationPayloadSchema = z
   .object({
     output: z.object({ text: z.string().min(1) }).strict(),
     reply: replyRequestedInformationPayloadSchema,
+    originatingModuleInstanceId: z.string().trim().min(1),
   })
   .strict();
 export type LlmCompletedInformationPayload = z.infer<
@@ -84,6 +93,7 @@ export interface LlmInformationReplyExecutor {
       InformationAtom<"core.reply.requested", ReplyRequestedInformationPayload>
     >;
     readonly selection: ModuleModelSelection;
+    readonly originatingModuleInstanceId: string;
   }): Promise<
     DeepReadonly<
       InformationAtom<"core.llm.completed", LlmCompletedInformationPayload>
@@ -117,31 +127,49 @@ export function createLlmInformationReplyModule(
     },
     create: ({ settings }) => ({
       subscriptions: [
-        onInformation(replyRequestedInformationKind, async (reply) => {
+        onInformation(replyRequestedInformationKind, async (reply, context) => {
           await dependencies.executor.execute({
             reply,
             selection: { modelTier: settings.modelTier },
+            originatingModuleInstanceId: context.instanceId,
           });
         }),
-        onInformation(dependencies.llmCompletedInformationKind, async (completed, context) => {
-          await context.register(assistantTextInformationKind, {
-            payload: {
-              text: completed.payload.output.text,
-              source: completed.payload.reply.source,
-            },
-          });
-        }),
-        onInformation(assistantTextInformationKind, async (assistant, context) => {
-          const outbound = selectOutbound(
-            assistant.payload.source,
-            settings.outbound,
-            assistant.payload.text,
-          );
-          if (outbound === undefined) return;
-          await context.register(deliveryRequestedInformationKind, {
-            payload: outbound,
-          });
-        }),
+        onInformation(
+          dependencies.llmCompletedInformationKind,
+          async (completed, context) => {
+            if (
+              completed.payload.originatingModuleInstanceId !==
+              context.instanceId
+            )
+              return;
+            await context.register(assistantTextInformationKind, {
+              payload: {
+                text: completed.payload.output.text,
+                source: completed.payload.reply.source,
+                originatingModuleInstanceId: context.instanceId,
+              },
+            });
+          },
+        ),
+        onInformation(
+          assistantTextInformationKind,
+          async (assistant, context) => {
+            if (
+              assistant.payload.originatingModuleInstanceId !==
+              context.instanceId
+            )
+              return;
+            const outbound = selectOutbound(
+              assistant.payload.source,
+              settings.outbound,
+              assistant.payload.text,
+            );
+            if (outbound === undefined) return;
+            await context.register(deliveryRequestedInformationKind, {
+              payload: outbound,
+            });
+          },
+        ),
       ],
     }),
   });
@@ -151,12 +179,14 @@ function selectOutbound(
   source: ReplyRequestedInformationPayload["source"],
   setting: LlmInformationReplySettings["outbound"],
   text: string,
-): {
-  readonly adapterId: string;
-  readonly platform: string;
-  readonly destination: PlatformDestination;
-  readonly message: OutboundMessageContent;
-} | undefined {
+):
+  | {
+      readonly adapterId: string;
+      readonly platform: string;
+      readonly destination: PlatformDestination;
+      readonly message: OutboundMessageContent;
+    }
+  | undefined {
   if (setting.mode === "fixed") {
     return {
       adapterId: setting.adapterId,
@@ -165,7 +195,14 @@ function selectOutbound(
       message: { kind: "text", text },
     };
   }
-  if (source.destination.kind === "web") return undefined;
+  if (source.destination.kind === "web") {
+    return {
+      adapterId: source.adapterId,
+      platform: source.platform,
+      destination: source.destination,
+      message: { kind: "text", text },
+    };
+  }
   return {
     adapterId: source.adapterId,
     platform: source.platform,

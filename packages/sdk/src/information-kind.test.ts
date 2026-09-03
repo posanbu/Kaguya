@@ -1,6 +1,6 @@
 /**
- * 架构说明：本测试覆盖信息 kind 的定义校验、引用规则快照与日志策略冻结，
- * 确保 SDK 入口在 Core 启动前提供一致的可注册契约。
+ * 架构说明：本测试覆盖信息 kind 的定义校验、引用规则快照、日志策略冻结，以及 pipe
+ * schema 中共享子 schema 的非递归复用，确保 SDK 在 Core 启动前提供一致的可注册契约。
  * 代码库关系：这些测试直接消费 `packages/sdk/src/index.ts` 的公开导出，
  * 以避免新的 kind contract 只存在于内部实现而未进入公共 API。
  */
@@ -51,6 +51,28 @@ describe("defineInformationKind", () => {
     expect(definition.references["acme:parent"]?.targetKinds).toEqual([
       "acme.message.parent",
     ]);
+  });
+
+  it("accepts a shared schema reused by separate fields inside a pipe", () => {
+    const sharedSource = z.enum(["template", "history"]);
+    const input = z
+      .object({ first: sharedSource, second: sharedSource })
+      .strict();
+    const output = z
+      .object({
+        first: z.enum(["template", "history"]),
+        second: z.enum(["template", "history"]),
+      })
+      .strict();
+
+    expect(() =>
+      defineInformationKind({
+        kind: "acme.prompt.created",
+        payloadSchema: z.object({ value: input.pipe(output) }).strict(),
+        references: {},
+        log: { enabled: false },
+      }),
+    ).not.toThrow();
   });
 
   it("rejects malformed relation names", () => {

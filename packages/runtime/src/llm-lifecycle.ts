@@ -1,7 +1,8 @@
 /**
  * 功能概述：把一次 reply LLM 调用表达为 PostgreSQL 信息账本中的 requested 与单一终态原子。
  * 主要职责：`LlmLifecycleClient.generate` 在 provider 调用前注册 requested，成功后注册包含
- * output/usage/duration 的 completed，失败后注册脱敏 failed 并重新抛出分类后的 `KaguyaLlmError`。
+ * output/usage/duration 与 originating module instance 的 completed，失败后注册脱敏 failed
+ * 并重新抛出分类后的 `KaguyaLlmError`。
  * 代码库关系：依赖底层无持久化 `KaguyaLlmClient` 和 Runtime 自有 lifecycle definitions；
  * `runtime.ts` 将本类适配为 `createLlmInformationReplyModule` 所需的 executor。
  * 输入输出与副作用：输入 context 与 reply atom 必须属于同一 context；所有生命周期 atom 使用
@@ -21,6 +22,7 @@ import type {
 } from "@kaguya/schema";
 
 import {
+  informationCompiledPromptSchema,
   llmCompletedInformationKind,
   llmFailedInformationKind,
   llmRequestedInformationKind,
@@ -32,6 +34,7 @@ export interface LlmLifecycleRequest {
   readonly modelId: string;
   readonly workflowId: string;
   readonly nodeId: string;
+  readonly originatingModuleInstanceId: string;
   readonly prompt: CompiledPrompt;
   readonly reply: ReplyRequestedInformationPayload;
 }
@@ -70,11 +73,13 @@ export class LlmLifecycleClient {
       modelId: request.modelId,
       workflowId: request.workflowId,
       nodeId: request.nodeId,
+      originatingModuleInstanceId: request.originatingModuleInstanceId,
     } as const;
+    const prompt = informationCompiledPromptSchema.parse(request.prompt);
     const requested = await this.#core.register(llmRequestedInformationKind, {
       occurredAt: this.#now().toISOString(),
       source: "runtime:llm",
-      payload: { ...metadata, prompt: request.prompt as never },
+      payload: { ...metadata, prompt },
       references: [
         {
           relation: "core:caused-by",
