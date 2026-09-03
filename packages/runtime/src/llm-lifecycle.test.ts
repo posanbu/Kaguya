@@ -3,7 +3,7 @@
  * 主要职责：成功路径检查直接因果、status-of、context、usage 与 duration；失败路径检查先落账
  * `core.llm.failed` 再重抛分类后的 `KaguyaLlmError`；同时约束日志投影不暴露敏感正文。
  * 代码库关系：测试组合 `InformationCore`、Runtime kind 和底层 `KaguyaLlmClient`，对应
- * `createLlmInformationReplyModule` 注入 executor 的真实持久化边界。
+ * `createLlmReplyModule` 注入 executor 的真实持久化边界。
  * 输入输出与副作用：每个用例创建隔离的内存 PostgreSQL 实例，注册完整内建 kind，结束后
  * 关闭 Core 与数据库；provider secret/database URL 只作为泄漏探针，不应出现在投影中。
  */

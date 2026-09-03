@@ -2,7 +2,7 @@
  * 架构说明：本模块把 registry、store 与 bus 组合成信息 Core，
  * 负责启动前注册同步、注册时的 ID 生成、引用 expectations 传递、并发广播与故障事实。
  * 主要职责：`register` 校验、落账并广播新 atom；`on` 校验非空 typed consumer 身份后订阅；
- * `get`/`getMany`/`query` 只读账本。`append` 与 string `subscribe` 仍是暂存 API。
+ * `get`/`getMany`/`query` 只读账本；公开写入和订阅分别只有 `register` 与 typed `on`。
  * 代码库关系：Core 是信息原子体系的入口编排层，依赖 Registry、Ledger 与 Bus；
  * `information-kinds.ts` 提供唯一的 `consumer.failed` 定义，Runtime 后续复用它。
  * 输入输出与副作用：提交成功才广播当前快照，拒绝的消费者被记录为失败 atom；失败
@@ -22,7 +22,6 @@ import {
   type JsonObject,
 } from "@kaguya/schema";
 import type {
-  InformationAppendInput,
   InformationKindDefinition,
   InformationRegistrationInput,
   InformationReferenceRule,
@@ -87,9 +86,6 @@ export interface InformationLedger {
   ): Promise<readonly DeepReadonly<InformationAtom>[]>;
 }
 
-/** @deprecated Use InformationLedger. Kept for #38 consumers. */
-export type InformationAtomStore = InformationLedger;
-
 export interface InformationAppendOptions {
   /** Queue a durable, post-commit log projection for this atom. */
   readonly enqueueLogProjection?: boolean;
@@ -123,7 +119,6 @@ export class InformationCore {
   #bootstrapReporter: (error: unknown) => void | Promise<void>;
   #logProjectionRunner: InformationLogProjectionRunner | undefined;
   #state: CoreState = "new";
-  #legacySubscriptionId = 0;
 
   constructor(options: InformationCoreOptions) {
     this.registry = options.registry;
@@ -144,14 +139,6 @@ export class InformationCore {
     );
     this.#state = "started";
     await this.projectPendingLogs();
-  }
-
-  async append<K extends string, P extends JsonObject>(
-    definition: InformationKindDefinition<K, P>,
-    input: InformationAppendInput<K, P>,
-  ): Promise<DeepReadonly<InformationAtom<K, P>>> {
-    this.assertAppendKind(definition, input);
-    return this.register(definition, input);
   }
 
   async register<K extends string, P extends JsonObject>(
@@ -245,13 +232,6 @@ export class InformationCore {
     return this.store.get(informationId);
   }
 
-  /** @deprecated Use get(). */
-  async getById(
-    informationId: InformationId,
-  ): Promise<DeepReadonly<InformationAtom> | undefined> {
-    return this.get(informationId);
-  }
-
   async getMany(
     informationIds: readonly InformationId[],
   ): Promise<readonly DeepReadonly<InformationAtom>[]> {
@@ -266,52 +246,12 @@ export class InformationCore {
     return this.store.query(query);
   }
 
-  /** @deprecated Use query(). */
-  async listByReference(
-    query: InformationReferenceQuery,
-  ): Promise<readonly DeepReadonly<InformationAtom>[]> {
-    return this.query(query);
-  }
-
-  subscribe<K extends string, P extends JsonObject>(
-    kind: string,
-    handler: (
-      atom: DeepReadonly<InformationAtom<K, P>>,
-    ) => unknown | Promise<unknown>,
-  ): () => void {
-    this.assertOpen();
-    return this.#bus.on(
-      kind,
-      { consumerId: `legacy:${++this.#legacySubscriptionId}` },
-      handler as InformationSubscriber,
-    );
-  }
-
-  subscribeAll(handler: InformationSubscriber): () => void {
-    this.assertOpen();
-    return this.#bus.onAll(
-      { consumerId: `legacy:${++this.#legacySubscriptionId}` },
-      handler,
-    );
-  }
-
   async close(): Promise<void> {
     if (this.#state === "closed") {
       return;
     }
     this.#bus.clear();
     this.#state = "closed";
-  }
-
-  private assertAppendKind<K extends string, P extends JsonObject>(
-    definition: InformationKindDefinition<K, P>,
-    input: InformationAppendInput<K, P>,
-  ): void {
-    if (definition.kind !== input.kind) {
-      throw new Error(
-        `Append input kind must match definition kind: ${definition.kind}`,
-      );
-    }
   }
 
   private async recordConsumerFailure(

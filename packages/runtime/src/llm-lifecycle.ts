@@ -4,7 +4,7 @@
  * output/usage/duration 与 originating module instance 的 completed，失败后注册脱敏 failed
  * 并重新抛出分类后的 `KaguyaLlmError`。
  * 代码库关系：依赖底层无持久化 `KaguyaLlmClient` 和 Runtime 自有 lifecycle definitions；
- * `runtime.ts` 将本类适配为 `createLlmInformationReplyModule` 所需的 executor。
+ * `runtime.ts` 将本类适配为 `createLlmReplyModule` 所需的 executor。
  * 输入输出与副作用：输入 context 与 reply atom 必须属于同一 context；所有生命周期 atom 使用
  * `runtime:llm` source，终态的 caused-by/status-of 都直接指向 requested，且继承唯一 context。
  */

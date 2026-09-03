@@ -1,8 +1,12 @@
 /**
- * 架构说明：本测试覆盖信息原子仓储的 append、查询、引用约束与冲突语义，
+ * 功能概述：本测试覆盖信息原子仓储的 append、查询、引用约束与冲突语义，
  * 先以真实 PostgreSQL 行为锁定 append-only 关系图的读写契约，再交由实现补齐。
- * 代码库关系：测试只面向未来的 `createTestingDatabase()` 返回值和 `information`
+ * 主要职责：验证缺失/错误目标、重复 ID、并发写入、引用顺序、反向查询顺序与日志
+ * outbox 生命周期，所有读取只使用最终 `get/query` API。
+ * 代码库关系：测试只面向 `createTestingDatabase()` 返回值和 `information`
  * 仓储接口，验证引用顺序、目标 kind 校验、冲突错误与反向引用查询顺序。
+ * 输入输出与副作用：每个用例创建、迁移并关闭独立 PGlite 数据库；断言直接观察真实
+ * SQL 事务结果，不连接外部 PostgreSQL 服务。
  */
 import { describe, expect, it } from "vitest";
 
@@ -112,7 +116,7 @@ describe("information repository", () => {
       ).rejects.toBeInstanceOf(InvalidInformationReferenceError);
 
       expect(
-        await database.information.getById(inboundAtom.informationId),
+        await database.information.get(inboundAtom.informationId),
       ).toBeUndefined();
       const outbox = await database.sql.query<{ count: string }>(
         "SELECT COUNT(*)::text AS count FROM information_log_outbox",
@@ -166,8 +170,7 @@ describe("information repository", () => {
       ]);
 
       expect(
-        (await database.information.getById(inboundAtom.informationId))
-          ?.references,
+        (await database.information.get(inboundAtom.informationId))?.references,
       ).toEqual([
         {
           relation: "core:context",
@@ -317,7 +320,7 @@ describe("information repository", () => {
         },
       ]);
 
-      const replies = await database.information.listByReference({
+      const replies = await database.information.query({
         relation: "core:caused-by",
         informationId: contextAtom.informationId,
       });

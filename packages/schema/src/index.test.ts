@@ -1,43 +1,15 @@
+/**
+ * 功能概述：验证 schema 包保留的信息原子时代共享边界，覆盖 Prompt fragment 与平台
+ * 消息内容的严格解析，不再为已删除的事件或记录身份建立测试依赖。
+ * 主要职责：确认 fragment source 拒绝未知值；确认 reply 内容保留外部平台消息 ID，
+ * 且严格 schema 会拒绝未声明字段。
+ * 代码库关系：直接测试 `index.ts` 的公共 schema；prompt、modules 与 platform adapters
+ * 依赖相同解析结果，因此这些断言保护跨包 wire contract。
+ * 输入输出与副作用：测试只解析内存对象，不访问网络或持久化；失败以 Zod 异常体现。
+ */
 import { describe, expect, it } from "vitest";
 
-import {
-  eventEnvelopeSchema,
-  llmTraceSchema,
-  promptFragmentSchema,
-} from "./index.js";
-
-describe("eventEnvelopeSchema", () => {
-  it("accepts events without a Core session", () => {
-    expect(eventEnvelopeSchema).toBeDefined();
-
-    expect(
-      eventEnvelopeSchema.parse({
-        id: "event-1",
-        type: "message.received",
-        source: "test",
-        occurredAt: "2026-07-23T00:00:00.000Z",
-        traceId: "trace-1",
-        payload: {},
-        metadata: {},
-      }),
-    ).toMatchObject({ traceId: "trace-1" });
-  });
-
-  it("rejects the removed top-level sessionId field", () => {
-    expect(() =>
-      eventEnvelopeSchema.parse({
-        id: "event-1",
-        type: "message.received",
-        source: "test",
-        occurredAt: "2026-07-23T00:00:00.000Z",
-        traceId: "trace-1",
-        sessionId: "legacy-session",
-        payload: {},
-        metadata: {},
-      }),
-    ).toThrow();
-  });
-});
+import { outboundMessageContentSchema, promptFragmentSchema } from "./index.js";
 
 describe("promptFragmentSchema", () => {
   it("rejects an unsupported fragment source", () => {
@@ -55,71 +27,28 @@ describe("promptFragmentSchema", () => {
   });
 });
 
-describe("llmTraceSchema", () => {
-  const prompt = {
-    kind: "route" as const,
-    text: '<policy source="policy-id">decide</policy>',
-    fragments: [
-      {
-        id: "policy-id",
-        source: "policy" as const,
-        priority: 1,
-        content: "decide",
-        metadata: {},
-      },
-    ],
-    provenance: [
-      {
-        fragmentId: "policy-id",
-        source: "policy" as const,
-        priority: 1,
-        contentDigest: "digest",
-      },
-    ],
-  };
-
-  it("preserves the complete prompt on completed traces", () => {
-    const parsed = llmTraceSchema.parse({
-      id: "llm-trace-1",
-      traceId: "trace-1",
-      workflowId: "workflow-1",
-      nodeId: "node-1",
-      kind: "route",
-      modelId: "model-1",
-      prompt,
-      startedAt: "2026-07-23T00:00:00.000Z",
-      completedAt: "2026-07-23T00:00:00.010Z",
-      durationMs: 10,
-      status: "completed",
-      response: { shouldReply: true },
+describe("outboundMessageContentSchema", () => {
+  it("preserves an external platform reply identity", () => {
+    expect(
+      outboundMessageContentSchema.parse({
+        kind: "reply",
+        replyToPlatformMessageId: "platform-1",
+        text: "hello",
+      }),
+    ).toEqual({
+      kind: "reply",
+      replyToPlatformMessageId: "platform-1",
+      text: "hello",
     });
-
-    expect(parsed).toMatchObject({ prompt });
   });
 
-  it("preserves prompt and normalized error kind on failed traces", () => {
-    const parsed = llmTraceSchema.parse({
-      id: "llm-trace-2",
-      traceId: "trace-1",
-      workflowId: "workflow-1",
-      nodeId: "node-1",
-      kind: "route",
-      modelId: "model-1",
-      prompt,
-      startedAt: "2026-07-23T00:00:00.000Z",
-      completedAt: "2026-07-23T00:00:00.010Z",
-      durationMs: 10,
-      status: "failed",
-      error: {
-        name: "KaguyaLlmError",
-        message: "provider unavailable",
-        kind: "retryable",
-      },
-    });
-
-    expect(parsed).toMatchObject({
-      prompt,
-      error: { kind: "retryable" },
-    });
+  it("rejects undeclared message fields", () => {
+    expect(() =>
+      outboundMessageContentSchema.parse({
+        kind: "text",
+        text: "hello",
+        internalIdentity: "legacy",
+      }),
+    ).toThrow();
   });
 });

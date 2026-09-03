@@ -5,8 +5,8 @@
  * 过滤、assistant、投递请求 definition，保证每个字面 kind 只存在一个对象定义。
  * 代码库关系：`runtime.ts` 用聚合集合初始化 Registry；`llm-lifecycle.ts` 写 LLM 原子；系统
  * delivery consumer 写 delivered/failed 原子；业务模块接收同一 completed definition 实例。
- * 输入输出与副作用：所有导出都是无 I/O 的 schema/definition/tuple。requested prompt 接受
- * canonical JSON metadata 但拒绝 `profileId`；projector 不输出 prompt/output/raw 或凭据。
+ * 输入输出与副作用：所有导出都是无 I/O 的 schema/definition/tuple。requested prompt 会把
+ * fragment metadata 规范为 JSON；projector 不输出 prompt/output/raw 或凭据。
  */
 import { consumerFailedInformationKind } from "@kaguya/engine";
 import {
@@ -44,13 +44,6 @@ export const informationCompiledPromptSchema = compiledPromptSchema.transform(
           });
         }
         return { ...fragment, metadata: {} };
-      }
-      if (Object.prototype.hasOwnProperty.call(metadata.data, "profileId")) {
-        context.addIssue({
-          code: "custom",
-          message: "Prompt metadata must not contain profileId",
-          path: ["fragments", index, "metadata", "profileId"],
-        });
       }
       return { ...fragment, metadata: metadata.data };
     });

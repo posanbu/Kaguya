@@ -1,8 +1,12 @@
 /**
  * 架构说明：本模块定义信息 kind 的声明契约、引用规则、日志策略与注册输入，并以
  * 当前递归路径校验 JSON schema，使 pipe 可安全复用同一个非递归子 schema。
+ * 主要职责：`defineInformationKind` 校验 dotted kind、严格 JSON payload schema、引用
+ * 规则和日志策略；`InformationRegistrationInput` 是 Core 接受的唯一公开注册输入。
  * 代码库关系：`packages/sdk/src/index.ts` 通过此模块向外暴露 `defineInformationKind`
  * 与相关类型；`packages/engine` 会在 Registry 生命周期中消费这些定义。
+ * 输入输出与副作用：定义创建会同步验证并冻结契约，不做 I/O；注册输入不允许调用方
+ * 自行携带 kind 或 `informationId`。
  */
 import {
   type InformationAtom,
@@ -63,11 +67,6 @@ export interface InformationReferenceRuleInput {
   readonly multiple: boolean;
   readonly targetKinds?: readonly string[];
 }
-
-export type InformationAppendInput<
-  K extends string,
-  P extends JsonObject,
-> = Omit<InformationAtom<K, P>, "informationId">;
 
 /**
  * 提交新信息原子的公开输入。kind 和 informationId 分别由 definition 与 Core

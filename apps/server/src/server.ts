@@ -16,7 +16,7 @@
  * 其余 helper 管理资源关闭与进程信号处理。
  * 代码库关系：本文件消费 `@kaguya/config` 的 Profile Registry、`@kaguya/runtime`
  * 的运行时注入点、Fastify HTTP 组装和 NapCat 适配器；模块层 `packages/modules`
- * 已不再携带 `profileId`，因此 Profile 选择只能在这里于服务启动时完成一次。
+ * 已不再携带模块级 Profile 标识，因此 Profile 选择只能在这里于服务启动时完成一次。
  * 输入输出与副作用：启动时会创建 logger、检查配置 readiness、按需连接数据库并启动 Runtime/HTTP/NapCat；
  * resolver 会缓存已选 Profile 下 provider client，并在 light/heavy tier 缺失时于启动期失败，
  * 防止服务接受请求后再暴露可变 Profile 覆盖路径；关闭时 Runtime 先排空，
@@ -32,7 +32,7 @@ import {
   inspectUserConfigProfile,
   type UserConfigProfile,
 } from "@kaguya/config";
-import { PostgresKaguyaDatabase } from "@kaguya/database";
+import { KaguyaDatabase } from "@kaguya/database";
 import {
   closeLogger,
   createLogger,
@@ -100,7 +100,7 @@ export async function startKaguyaServer(
   let napcat: NapCatConnectionSupervisor | undefined;
   let closePromise: Promise<void> | undefined;
   let runtime: KaguyaRuntime | undefined;
-  let database: PostgresKaguyaDatabase | undefined;
+  let database: KaguyaDatabase | undefined;
 
   const close = (): Promise<void> => {
     closePromise ??= closeResources({
@@ -353,9 +353,9 @@ export class InformationDatabaseConnectionError extends Error {
 
 async function connectInformationDatabase(
   databaseUrl: string,
-): Promise<PostgresKaguyaDatabase> {
+): Promise<KaguyaDatabase> {
   try {
-    return await PostgresKaguyaDatabase.connect({
+    return await KaguyaDatabase.connect({
       connectionString: databaseUrl,
     });
   } catch (error) {
@@ -394,7 +394,7 @@ async function closeResources(options: {
   readonly webUi: WebUiHandle | undefined;
   readonly napcat: NapCatConnectionSupervisor | undefined;
   readonly runtime: KaguyaRuntime | undefined;
-  readonly database: PostgresKaguyaDatabase | undefined;
+  readonly database: KaguyaDatabase | undefined;
   readonly rootLogger: KaguyaLogger;
   readonly serverLogger: KaguyaLogger;
 }): Promise<void> {

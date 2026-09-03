@@ -1,3 +1,13 @@
+/**
+ * 功能概述：提供 Kaguya 的结构化 Pino logger、异步上下文、命名空间级别配置、
+ * 安全错误摘要与敏感字段脱敏。
+ * 主要职责：`createLogger/createModuleLogger` 构造 logger；`runWithLogContext` 传播
+ * information/request/workflow/node 上下文；配置解析、serializer 与关闭 helper 统一日志边界。
+ * 代码库关系：Server、Runtime、数据库投影和 adapters 共用本入口；`information.ts`
+ * 提供 atom 日志投影并由这里重新导出。
+ * 输入输出与副作用：logger 会向 stdout、文件或注入 stream 写记录；异步上下文仅接受
+ * 白名单非空字符串，旧事件执行身份不再进入日志字段。
+ */
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import pino, {
@@ -24,9 +34,9 @@ const MAX_CONTEXT_VALUE_LENGTH = 512;
 const MAX_NAMESPACE_LENGTH = 128;
 const NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
 const LOG_CONTEXT_KEYS = new Set<keyof LogContext>([
-  "traceId",
-  "eventId",
-  "runId",
+  "informationId",
+  "kind",
+  "source",
   "requestId",
   "workflowId",
   "nodeId",
@@ -92,9 +102,9 @@ export type LogLevel = LevelWithSilent;
 export type LogFormat = "json" | "pretty";
 
 export interface LogContext {
-  readonly traceId?: string;
-  readonly eventId?: string;
-  readonly runId?: string;
+  readonly informationId?: string;
+  readonly kind?: string;
+  readonly source?: string;
   readonly requestId?: string;
   readonly workflowId?: string;
   readonly nodeId?: string;

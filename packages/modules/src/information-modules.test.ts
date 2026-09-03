@@ -3,8 +3,8 @@
  * 不再以旧事件、target instance 或成功 decision 驱动下一步。
  * 主要职责：过滤器用例验证通过时只注册回复请求、拒绝 fixture 只注册拒绝事实；回复用例
  * 验证三个订阅分别承担回复执行、LLM 完成到 assistant、assistant 到投递的直接因果阶段。
- * 代码库关系：覆盖 `always-reply-information-filter.ts`、`llm-information-reply.ts` 和
- * `information-kinds.ts`；`InformationModuleHost` 为每一次 register 自动补齐直接的
+ * 代码库关系：覆盖最终 `always-reply-filter.ts`、`llm-reply.ts` 和
+ * `information-kinds.ts`；engine `ModuleHost` 为每一次 register 自动补齐直接的
  * `core:caused-by` 与继承的 `core:context`，因此模块 handler 不伪造这些保留引用。
  * 输入输出与副作用：单元用例使用冻结 atom 与内存 register；集成用例使用真实 Core、宿主和
  * 校验引用规则的内存账本，断言实际 ID、持久化顺序及 context 继承，不访问真实 LLM；schema
@@ -32,15 +32,15 @@ import { describe, expect, it, vi } from "vitest";
 import {
   InformationCore,
   InformationKindRegistry,
-  InformationModuleHost,
+  ModuleHost,
   type InformationLedger,
   type InformationReferenceExpectation,
 } from "@kaguya/engine";
 
 import {
-  alwaysReplyInformationFilterModule,
-  alwaysReplyInformationFilterSettingsSchema,
-} from "./always-reply-information-filter.js";
+  alwaysReplyFilterModule,
+  alwaysReplyFilterSettingsSchema,
+} from "./always-reply-filter.js";
 import {
   assistantTextInformationKind,
   deliveryRequestedInformationKind,
@@ -50,10 +50,10 @@ import {
   replyRequestedInformationPayloadSchema,
 } from "./information-kinds.js";
 import {
-  createLlmInformationReplyModule,
+  createLlmReplyModule,
   llmCompletedInformationPayloadSchema,
-  llmInformationReplySettingsSchema,
-} from "./llm-information-reply.js";
+  llmReplySettingsSchema,
+} from "./llm-reply.js";
 
 const contextId = informationIdSchema.parse("context-1");
 const inboundPayload = replyRequestedInformationPayloadSchema.parse({
@@ -244,11 +244,11 @@ function handlerContext(
   };
 }
 
-describe("alwaysReplyInformationFilterModule", () => {
+describe("alwaysReplyFilterModule", () => {
   it("registers the next kind when the filter passes", async () => {
-    const instance = await alwaysReplyInformationFilterModule.create({
+    const instance = await alwaysReplyFilterModule.create({
       instanceId: "filter-1",
-      settings: alwaysReplyInformationFilterSettingsSchema.parse({}),
+      settings: alwaysReplyFilterSettingsSchema.parse({}),
     });
     const atom = inboundAtom();
     const registrations: Registration[] = [];
@@ -258,9 +258,10 @@ describe("alwaysReplyInformationFilterModule", () => {
       handlerContext(atom, registrations),
     );
 
-    expect(
-      alwaysReplyInformationFilterModule.manifest.informationKinds,
-    ).toEqual([inboundTextInformationKind, replyRequestedInformationKind]);
+    expect(alwaysReplyFilterModule.manifest.informationKinds).toEqual([
+      inboundTextInformationKind,
+      replyRequestedInformationKind,
+    ]);
     expect(registrations).toEqual([
       {
         definition: replyRequestedInformationKind,
@@ -323,19 +324,19 @@ describe("alwaysReplyInformationFilterModule", () => {
 
   it("strictly rejects removed reply targets", () => {
     expect(
-      alwaysReplyInformationFilterSettingsSchema.safeParse({
+      alwaysReplyFilterSettingsSchema.safeParse({
         replyTargetInstanceId: "reply-1",
       }).success,
     ).toBe(false);
     expect(
-      alwaysReplyInformationFilterSettingsSchema.safeParse({
+      alwaysReplyFilterSettingsSchema.safeParse({
         profileId: "profile-1",
       }).success,
     ).toBe(false);
   });
 });
 
-describe("createLlmInformationReplyModule", () => {
+describe("createLlmReplyModule", () => {
   it("persists the full DAG with direct causes and one inherited context", async () => {
     const registry = new InformationKindRegistry();
     registry.registerBuiltin(runtimeContextInformationKind);
@@ -352,7 +353,7 @@ describe("createLlmInformationReplyModule", () => {
       nextInformationId: () => `information-${++sequence}`,
       now: () => new Date("2026-09-04T00:00:00.000Z"),
     });
-    const replyModule = createLlmInformationReplyModule({
+    const replyModule = createLlmReplyModule({
       llmCompletedInformationKind,
       executor: {
         async execute({ reply, originatingModuleInstanceId }) {
@@ -380,14 +381,14 @@ describe("createLlmInformationReplyModule", () => {
         },
       },
     });
-    const host = new InformationModuleHost({ core });
-    host.register(alwaysReplyInformationFilterModule);
+    const host = new ModuleHost({ core });
+    host.register(alwaysReplyFilterModule);
     host.register(replyModule);
     await core.start();
     await host.start([
       {
         instanceId: "filter-1",
-        definitionId: alwaysReplyInformationFilterModule.manifest.definitionId,
+        definitionId: alwaysReplyFilterModule.manifest.definitionId,
         settings: {},
       },
       {
@@ -481,11 +482,11 @@ describe("createLlmInformationReplyModule", () => {
 
   it("moves reply, completion and assistant through direct derived stages", async () => {
     const execute = vi.fn(async () => completedAtom());
-    const definition = createLlmInformationReplyModule({
+    const definition = createLlmReplyModule({
       executor: { execute },
       llmCompletedInformationKind,
     });
-    const settings = llmInformationReplySettingsSchema.parse({
+    const settings = llmReplySettingsSchema.parse({
       modelTier: "heavy",
       outbound: { mode: "source", messageKind: "reply" },
     });
@@ -562,13 +563,13 @@ describe("createLlmInformationReplyModule", () => {
       outbound: { mode: "source", messageKind: "text" },
     };
     expect(
-      llmInformationReplySettingsSchema.safeParse({
+      llmReplySettingsSchema.safeParse({
         ...base,
         profileId: "profile-1",
       }).success,
     ).toBe(false);
     expect(
-      llmInformationReplySettingsSchema.safeParse({
+      llmReplySettingsSchema.safeParse({
         ...base,
         replyTargetInstanceId: "reply-1",
       }).success,

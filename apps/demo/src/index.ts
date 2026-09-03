@@ -4,14 +4,14 @@
  * 主要职责：`readDemoDatabaseUrl` 要求共享 `KAGUYA_DATABASE_URL`；`runDemo`
  * 注册确定性 Web transport，通过 `runtime.submit` 提交固定输入，查询 context
  * 相关的所有派生原子并输出排序后计数；`main` 负责连接/关闭数据库。
- * 代码库关系：数据库连接与 Server 使用同一 `PostgresKaguyaDatabase` 入口，
+ * 代码库关系：数据库连接与 Server 使用同一 `KaguyaDatabase` 入口，
  * Web 正规化器来自 platform-adapters，Runtime 是唯一 Core ingress 实现与 DAG 组合者。
  * 输入输出与副作用：CLI 会建立一个 PostgreSQL 连接、执行迁移/账本写入并输出统计；
  * 连接或运行失败只输出安全错误类型，不回显数据库 URL 或原始异常。
  */
 import { pathToFileURL } from "node:url";
 
-import { PostgresKaguyaDatabase } from "@kaguya/database";
+import { KaguyaDatabase } from "@kaguya/database";
 import {
   normalizeWebInboundMessage,
   type InboundReceipt,
@@ -19,7 +19,7 @@ import {
 import { KaguyaRuntime } from "@kaguya/runtime";
 
 export interface RunDemoOptions {
-  readonly database: PostgresKaguyaDatabase;
+  readonly database: KaguyaDatabase;
   readonly writeLine?: (line: string) => void;
 }
 
@@ -98,7 +98,7 @@ export async function runDemo(
 }
 
 async function main(): Promise<void> {
-  const database = await PostgresKaguyaDatabase.connect({
+  const database = await KaguyaDatabase.connect({
     connectionString: readDemoDatabaseUrl(),
   });
   try {

@@ -4,7 +4,7 @@
  * 主要职责：`KaguyaRuntime` 实现窄 `InformationIngress.submit`、transport 注册、串行化 start/close；
  * 启动时注册内建与模块 kind、启动 Core/ModuleHost、安装 `runtime:delivery` 系统消费者；
  * 内部 executor 将模块 tier 解析为无持久化 client，再交给原子 lifecycle。
- * 代码库关系：依赖 `PostgresKaguyaDatabase`、Engine InformationCore/ModuleHost、modules 拥有的
+ * 代码库关系：依赖 `KaguyaDatabase`、Engine InformationCore/ModuleHost、modules 拥有的
  * kind/模块工厂和 Runtime 自有 lifecycle/result kind；Task 5 的 Gateway/adapter 只需持有 ingress。
  * 输入输出与副作用：submit 返回 context 根 `informationId` 与本次调用实际收到的安全 receipt；
  * 不生成 trace/message/event ID，不写旧 SQLite repositories。starting 期间的 close 会先等待或
@@ -14,12 +14,12 @@ import { randomUUID } from "node:crypto";
 
 import {
   InformationLogProjectionRunner,
-  PostgresKaguyaDatabase,
+  KaguyaDatabase,
 } from "@kaguya/database";
 import {
   InformationCore,
   InformationKindRegistry,
-  InformationModuleHost,
+  ModuleHost,
   consumerFailedInformationKind,
 } from "@kaguya/engine";
 import {
@@ -33,12 +33,12 @@ import {
   type KaguyaLogger,
 } from "@kaguya/logger";
 import {
-  alwaysReplyInformationFilterModule,
-  createLlmInformationReplyModule,
+  alwaysReplyFilterModule,
+  createLlmReplyModule,
   deliveryRequestedInformationKind,
   inboundTextInformationKind,
   type LlmCompletedInformationPayload as ModuleLlmCompletedInformationPayload,
-  type LlmInformationReplyExecutor,
+  type LlmReplyExecutor,
   type ModuleModelSelection,
 } from "@kaguya/modules";
 import type {
@@ -103,19 +103,10 @@ export type KaguyaRuntimeOptions = KaguyaRuntimeBaseOptions &
         readonly database?: never;
       }
     | {
-        readonly database: PostgresKaguyaDatabase;
+        readonly database: KaguyaDatabase;
         readonly databaseUrl?: never;
       }
   );
-
-/** @deprecated Task 5 adapters call InformationIngress.submit directly. */
-export interface RuntimePlatformMessage {
-  readonly kind: "platform";
-  readonly message: PlatformInboundMessage;
-}
-
-/** @deprecated Task 5 adapters call InformationIngress.submit directly. */
-export type RuntimeInboundMessage = RuntimePlatformMessage;
 
 export class RuntimeUnavailableError extends Error {
   constructor(message = "Kaguya runtime is not accepting information") {
@@ -178,10 +169,10 @@ export class KaguyaRuntime implements InformationIngress {
   #startPromise: Promise<void> | undefined;
   #closePromise: Promise<void> | undefined;
   #cleanupPromise: Promise<unknown[]> | undefined;
-  #database: PostgresKaguyaDatabase | undefined;
+  #database: KaguyaDatabase | undefined;
   #ownsDatabase = false;
   #core: InformationCore | undefined;
-  #moduleHost: InformationModuleHost | undefined;
+  #moduleHost: ModuleHost | undefined;
   #unsubscribeDelivery: (() => void) | undefined;
 
   constructor(private readonly options: KaguyaRuntimeOptions) {
@@ -229,7 +220,7 @@ export class KaguyaRuntime implements InformationIngress {
     try {
       const database =
         this.options.database ??
-        (await PostgresKaguyaDatabase.connect({
+        (await KaguyaDatabase.connect({
           connectionString: this.options.databaseUrl,
         }));
       this.#database = database;
@@ -237,7 +228,7 @@ export class KaguyaRuntime implements InformationIngress {
       this.#assertStarting();
       await database.migrate();
       this.#assertStarting();
-      const replyModule = createLlmInformationReplyModule({
+      const replyModule = createLlmReplyModule({
         executor: { execute: (input) => this.#executeLlm(input) },
         llmCompletedInformationKind:
           llmCompletedInformationKind as unknown as InformationKindDefinition<
@@ -246,7 +237,7 @@ export class KaguyaRuntime implements InformationIngress {
           >,
       });
       const definitions = this.options.moduleDefinitions ?? [
-        alwaysReplyInformationFilterModule,
+        alwaysReplyFilterModule,
         replyModule,
       ];
       const registry = createRegistry(definitions);
@@ -299,7 +290,7 @@ export class KaguyaRuntime implements InformationIngress {
       this.#core = core;
       await core.start();
       this.#assertStarting();
-      const moduleHost = new InformationModuleHost({ core, now: this.#now });
+      const moduleHost = new ModuleHost({ core, now: this.#now });
       this.#moduleHost = moduleHost;
       for (const definition of definitions) moduleHost.register(definition);
 
@@ -345,11 +336,6 @@ export class KaguyaRuntime implements InformationIngress {
       () => this.#inFlight.delete(operation),
     );
     return operation;
-  }
-
-  /** @deprecated Task 5 adapters call submit(message). */
-  dispatch(input: RuntimeInboundMessage): Promise<InboundReceipt> {
-    return this.submit(input.message);
   }
 
   close(): Promise<void> {
@@ -414,8 +400,8 @@ export class KaguyaRuntime implements InformationIngress {
   }
 
   async #executeLlm(
-    input: Parameters<LlmInformationReplyExecutor["execute"]>[0],
-  ): ReturnType<LlmInformationReplyExecutor["execute"]> {
+    input: Parameters<LlmReplyExecutor["execute"]>[0],
+  ): ReturnType<LlmReplyExecutor["execute"]> {
     const core = required(this.#core, "information core");
     const contextReference = uniqueContextReference(input.reply);
     const context = await core.get(contextReference.informationId);
@@ -433,7 +419,7 @@ export class KaguyaRuntime implements InformationIngress {
         kind: "reply",
         modelId: resolved.modelId,
         workflowId: "message-module-pipeline",
-        nodeId: "reply.information",
+        nodeId: "reply",
         originatingModuleInstanceId: input.originatingModuleInstanceId,
         prompt: {
           kind: "reply",
@@ -630,12 +616,12 @@ function defaultModuleActivations(): readonly InformationModuleActivation[] {
   return [
     {
       instanceId: "filter.default",
-      definitionId: "demo.filter.always-information",
+      definitionId: "demo.filter.always",
       settings: {},
     },
     {
       instanceId: "reply.default",
-      definitionId: "demo.reply.llm-information",
+      definitionId: "demo.reply.llm",
       settings: {
         modelTier: "heavy",
         outbound: { mode: "source", messageKind: "reply" },

@@ -1,9 +1,13 @@
 /**
- * 架构说明：本模块实现信息原子在 PostgreSQL 中的 append-only 仓储，
+ * 功能概述：本模块实现信息原子在 PostgreSQL 中的 append-only 仓储，
  * 负责 kind 同步、原子追加、按 id 读取与反向引用查询，并把数据库错误
- * 归一为仓储层错误，供 engine 的 `InformationAtomStore` 直接消费。
- * 代码库关系：`InformationCore` 只会看到这里实现的 store 端口；`postgres-driver.ts`
- * 提供事务与 query 抽象，`postgres-migrations.ts` 则先建立表结构、索引和 mutation 触发器。
+ * 归一为仓储层错误，供 engine 的 `InformationLedger` 直接消费。
+ * 主要职责：`InformationRepository` 校验引用 expectations、事务写入 atom/reference/outbox、
+ * 提供 `get/getMany/query`，并管理待投影日志的读取、成功确认与失败计数。
+ * 代码库关系：`InformationCore` 只会看到这里实现的 ledger 端口；`driver.ts`
+ * 提供事务与 query 抽象，`migrations.ts` 则先建立表结构、索引和 mutation 触发器。
+ * 输入输出与副作用：写入全部在数据库事务中完成，冲突和引用错误映射为稳定错误类型；
+ * 读取返回经过 schema 校验并深冻结的 atom，不允许通过返回值修改持久化事实。
  */
 import {
   freezeInformationAtom,
@@ -21,7 +25,7 @@ import type {
   InformationReferenceQuery,
 } from "@kaguya/engine";
 
-import type { SqlDatabase, SqlTransaction } from "./postgres-driver.js";
+import type { SqlDatabase, SqlTransaction } from "./driver.js";
 
 type AtomRow = {
   information_id: string;
@@ -246,13 +250,6 @@ export class InformationRepository implements InformationLedger {
     );
   }
 
-  /** @deprecated Use get(). */
-  async getById(
-    informationId: InformationId,
-  ): Promise<DeepReadonly<InformationAtom> | undefined> {
-    return this.get(informationId);
-  }
-
   async getMany(
     informationIds: readonly InformationId[],
   ): Promise<readonly DeepReadonly<InformationAtom>[]> {
@@ -311,13 +308,6 @@ export class InformationRepository implements InformationLedger {
       }
       return atoms;
     });
-  }
-
-  /** @deprecated Use query(). */
-  async listByReference(
-    query: InformationReferenceQuery,
-  ): Promise<readonly DeepReadonly<InformationAtom>[]> {
-    return this.query(query);
   }
 
   async listPendingLogProjections(

@@ -1,5 +1,5 @@
 /**
- * 功能概述：用真实 PGlite、Core 和 InformationModuleHost 验证 `KaguyaRuntime` 的完整信息 DAG。
+ * 功能概述：用真实 PGlite、Core 和 ModuleHost 验证 `KaguyaRuntime` 的完整信息 DAG。
  * 主要职责：覆盖 Web 入站到投递成功的直接因果链、三类 transport 失败、无订阅持久化、
  * 同 kind 消费并发与双实例归属、start/close 确定性交错、in-flight 关闭、关闭后 ingress
  * 拒绝，以及消费者失败与其他结果并存。
@@ -8,11 +8,11 @@
  * 输入输出与副作用：每个用例创建隔离的内存 PostgreSQL 数据库，Runtime 只写 information
  * ledger；测试结束显式关闭注入数据库，并检查持久化 payload 不包含 raw/provider secret。
  */
-import { PostgresKaguyaDatabase } from "@kaguya/database";
+import { KaguyaDatabase } from "@kaguya/database";
 import { createTestingDatabase } from "@kaguya/database/testing";
 import { createDeferredDeterministicModel } from "@kaguya/llm/testing";
 import {
-  alwaysReplyInformationFilterModule,
+  alwaysReplyFilterModule,
   inboundTextInformationKind,
   replyRequestedInformationKind,
 } from "@kaguya/modules";
@@ -42,14 +42,14 @@ const resources: Array<{
   database: Awaited<ReturnType<typeof createTestingDatabase>>;
 }> = [];
 
-class GatedMigrationDatabase extends PostgresKaguyaDatabase {
+class GatedMigrationDatabase extends KaguyaDatabase {
   readonly migrationStarted: Promise<void>;
   migrateCalls = 0;
   readonly #markMigrationStarted: () => void;
   readonly #migrationGate: Promise<void>;
   readonly #releaseMigration: () => void;
 
-  constructor(sql: ConstructorParameters<typeof PostgresKaguyaDatabase>[0]) {
+  constructor(sql: ConstructorParameters<typeof KaguyaDatabase>[0]) {
     super(sql);
     let markMigrationStarted!: () => void;
     let releaseMigration!: () => void;
@@ -363,12 +363,12 @@ describe("KaguyaRuntime", () => {
         moduleActivations: [
           {
             instanceId: "filter.default",
-            definitionId: "demo.filter.always-information",
+            definitionId: "demo.filter.always",
             settings: {},
           },
           ...["reply.one", "reply.two"].map((instanceId) => ({
             instanceId,
-            definitionId: "demo.reply.llm-information",
+            definitionId: "demo.reply.llm",
             settings: {
               modelTier: "heavy" as const,
               outbound: {
@@ -587,11 +587,11 @@ describe("KaguyaRuntime", () => {
         }),
       });
       const { runtime } = await createRuntime({
-        moduleDefinitions: [alwaysReplyInformationFilterModule, observer],
+        moduleDefinitions: [alwaysReplyFilterModule, observer],
         moduleActivations: [
           {
             instanceId: "filter.default",
-            definitionId: "demo.filter.always-information",
+            definitionId: "demo.filter.always",
             settings: {},
           },
           {

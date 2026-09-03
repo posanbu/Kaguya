@@ -4,7 +4,7 @@
  * 主要职责：`readServerConfig` 校验/生成 gateway token，解析 host、port、
  * CORS、proxy、限流、config/web 路径、allowlist 与 NapCat，并要求非空
  * `KAGUYA_DATABASE_URL`；helper 负责文本、列表和整数边界的一致处理。
- * 代码库关系：`server.ts` 消费 `databaseUrl` 并创建 `PostgresKaguyaDatabase`；
+ * 代码库关系：`server.ts` 消费 `databaseUrl` 并创建 `KaguyaDatabase`；
  * `app.ts`、`web.ts` 和 NapCat supervisor 复用同一份其余配置。
  * 输入输出与副作用：除了使用安全随机数生成缺失的 token 外无 I/O；
  * 错误只命名非法/旧配置项，绝不回显 URL、token 或其他环境变量值。

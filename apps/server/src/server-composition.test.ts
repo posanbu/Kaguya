@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
 
-import { PostgresKaguyaDatabase } from "@kaguya/database";
+import { KaguyaDatabase } from "@kaguya/database";
 import { createTestingDatabase } from "@kaguya/database/testing";
 import { FileUserConfigManager } from "@kaguya/config";
 import { closeLogger, createLogger, createModuleLogger } from "@kaguya/logger";
@@ -35,7 +35,7 @@ import {
 } from "./server.js";
 import { createWebMessageGateway } from "./web-gateway.js";
 import { registerWebUi } from "./web.js";
-import { llmInformationReplySettingsSchema } from "../../../packages/modules/src/llm-information-reply.js";
+import { llmReplySettingsSchema } from "../../../packages/modules/src/llm-reply.js";
 
 const chatModel = vi.fn((modelId: string) => ({ modelId }));
 
@@ -345,7 +345,7 @@ describe("unified server composition", () => {
     const databaseUrl =
       "postgresql://ledger:database-password@127.0.0.1:5432/kaguya";
     const connect = vi
-      .spyOn(PostgresKaguyaDatabase, "connect")
+      .spyOn(KaguyaDatabase, "connect")
       .mockRejectedValueOnce(new Error(`connection failed: ${databaseUrl}`));
     const stream = new LogStream();
     const rootLogger = createLogger({ service: "kaguya-server-test", stream });
@@ -406,7 +406,7 @@ describe("unified server composition", () => {
         new Error(`authentication failed: ${databaseUrl}`),
       );
     const close = vi.spyOn(database, "close");
-    vi.spyOn(PostgresKaguyaDatabase, "connect").mockResolvedValueOnce(database);
+    vi.spyOn(KaguyaDatabase, "connect").mockResolvedValueOnce(database);
     const stream = new LogStream();
     const rootLogger = createLogger({ service: "kaguya-server-test", stream });
     vi.spyOn(await import("@kaguya/logger"), "createLogger").mockReturnValue(
@@ -465,7 +465,7 @@ describe("unified server composition", () => {
     mkdirSync(webDistPath, { recursive: true });
     writeFileSync(join(webDistPath, "index.html"), "<main>Kaguya UI</main>");
     const database = await createTestingDatabase();
-    vi.spyOn(PostgresKaguyaDatabase, "connect").mockResolvedValueOnce(database);
+    vi.spyOn(KaguyaDatabase, "connect").mockResolvedValueOnce(database);
     const rootLogger = createLogger({
       service: "kaguya-server-composition-test",
       level: "silent",
@@ -640,7 +640,7 @@ describe("unified server composition", () => {
       createRuntimeModelSelectionResolver(await selectedProfile(manager));
 
     expect(
-      llmInformationReplySettingsSchema.safeParse({
+      llmReplySettingsSchema.safeParse({
         profileId: "profile-override",
         modelTier: "light",
         outbound: { mode: "source", messageKind: "text" },

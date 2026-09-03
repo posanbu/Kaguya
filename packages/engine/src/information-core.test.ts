@@ -1,10 +1,14 @@
 /**
- * 架构说明：本测试覆盖信息 Core 的启动、注册、definition/消费者身份校验、并发消费者与故障事实边界，
+ * 功能概述：本测试覆盖信息 Core 的启动、注册、definition/消费者身份校验、并发消费者与故障事实边界，
  * 以证明 registry、store 与 bus 组合后的写入路径只信任注册表中的正式定义，
  * 并且不会把可变输入、未注册 kind 或关闭后的调用继续放行。
+ * 主要职责：验证最终 `register/on/get/query` API、落账先于广播、引用校验、深冻结、
+ * ID 冲突、消费者失败事实与关闭状态。
  * 代码库关系：`InformationCore` 连接 registry、store 与 bus；这里的测试使用
  * 内存 ledger double 验证“先落库、后并发发布”、冻结快照、失败递归保护、故障 context
  * 继承、ID 冲突与关闭语义；不会以 mock 掩盖账本和广播的实际交互。
+ * 输入输出与副作用：只操作内存 ledger 与同步 registry；异步消费者通过真实 bus 并发，
+ * bootstrap reporter 仅用 spy 观察，不访问数据库或网络。
  */
 import {
   type DeepReadonly,
@@ -143,12 +147,6 @@ class MemoryInformationStore {
     informationId: string,
   ): Promise<DeepReadonly<InformationAtom> | undefined> {
     return this.atoms.get(informationId);
-  }
-
-  async getById(
-    informationId: string,
-  ): Promise<DeepReadonly<InformationAtom> | undefined> {
-    return this.get(informationId);
   }
 
   async getMany(
@@ -587,13 +585,12 @@ describe("InformationCore", () => {
     });
     const core = await createStartedCore(store, [parentDefinition]);
 
-    core.subscribe(parentDefinition.kind, () => {
+    core.on(parentDefinition, { consumerId: "observer" }, () => {
       order.push("observer");
       throw new Error("observer failed");
     });
 
-    const atom = await core.append(parentDefinition, {
-      kind: parentDefinition.kind,
+    const atom = await core.register(parentDefinition, {
       occurredAt: "2026-09-01T00:00:00.000Z",
       source: "module:acme",
       payload: { text: "moon" },
@@ -601,7 +598,7 @@ describe("InformationCore", () => {
     });
 
     expect(order).toEqual(["store", "observer", "store"]);
-    expect((await store.getById(atom.informationId))?.payload).toEqual({
+    expect((await store.get(atom.informationId))?.payload).toEqual({
       text: "moon",
     });
   });
@@ -633,8 +630,7 @@ describe("InformationCore", () => {
     });
 
     await core.start();
-    await core.append(loggedDefinition, {
-      kind: loggedDefinition.kind,
+    await core.register(loggedDefinition, {
       occurredAt: "2026-09-01T00:00:00.000Z",
       source: "module:acme",
       payload: { text: "moon" },
@@ -665,8 +661,7 @@ describe("InformationCore", () => {
     });
 
     await expect(
-      core.append(spoofedPayloadDefinition, {
-        kind: childDefinition.kind,
+      core.register(spoofedPayloadDefinition, {
         occurredAt: "2026-09-01T00:00:00.000Z",
         source: "module:acme",
         payload: { spoof: "shadow" },
@@ -677,8 +672,7 @@ describe("InformationCore", () => {
     );
 
     await expect(
-      core.append(spoofedReferenceDefinition, {
-        kind: childDefinition.kind,
+      core.register(spoofedReferenceDefinition, {
         occurredAt: "2026-09-01T00:00:00.000Z",
         source: "module:acme",
         payload: { text: "child" },
@@ -694,8 +688,7 @@ describe("InformationCore", () => {
     const core = await createStartedCore(store, [parentDefinition]);
 
     await expect(
-      core.append(childDefinition, {
-        kind: childDefinition.kind,
+      core.register(childDefinition, {
         occurredAt: "2026-09-01T00:00:00.000Z",
         source: "module:acme",
         payload: { text: "child" },
@@ -708,16 +701,14 @@ describe("InformationCore", () => {
       () => "atom-collision",
       [parentDefinition],
     );
-    await collisionCore.append(parentDefinition, {
-      kind: parentDefinition.kind,
+    await collisionCore.register(parentDefinition, {
       occurredAt: "2026-09-01T00:00:00.000Z",
       source: "module:acme",
       payload: { text: "one" },
       references: [],
     });
     await expect(
-      collisionCore.append(parentDefinition, {
-        kind: parentDefinition.kind,
+      collisionCore.register(parentDefinition, {
         occurredAt: "2026-09-01T00:00:00.000Z",
         source: "module:acme",
         payload: { text: "two" },
@@ -731,8 +722,7 @@ describe("InformationCore", () => {
       [parentDefinition],
     );
     await expect(
-      invalidIdCore.append(parentDefinition, {
-        kind: parentDefinition.kind,
+      invalidIdCore.register(parentDefinition, {
         occurredAt: "2026-09-01T00:00:00.000Z",
         source: "module:acme",
         payload: { text: "bad" },
@@ -747,16 +737,14 @@ describe("InformationCore", () => {
       parentDefinition,
       childDefinition,
     ]);
-    const parent = await declaredCore.append(parentDefinition, {
-      kind: parentDefinition.kind,
+    const parent = await declaredCore.register(parentDefinition, {
       occurredAt: "2026-09-01T00:00:00.000Z",
       source: "module:acme",
       payload: { text: "parent" },
       references: [],
     });
     await expect(
-      declaredCore.append(childDefinition, {
-        kind: childDefinition.kind,
+      declaredCore.register(childDefinition, {
         occurredAt: "2026-09-01T00:00:00.000Z",
         source: "module:acme",
         payload: { text: "child" },
@@ -771,16 +759,14 @@ describe("InformationCore", () => {
       new MemoryInformationStore(),
       [parentDefinition, childDefinition],
     );
-    const duplicateParent = await duplicateCore.append(parentDefinition, {
-      kind: parentDefinition.kind,
+    const duplicateParent = await duplicateCore.register(parentDefinition, {
       occurredAt: "2026-09-01T00:00:00.000Z",
       source: "module:acme",
       payload: { text: "parent" },
       references: [],
     });
     await expect(
-      duplicateCore.append(childDefinition, {
-        kind: childDefinition.kind,
+      duplicateCore.register(childDefinition, {
         occurredAt: "2026-09-01T00:00:00.000Z",
         source: "module:acme",
         payload: { text: "child" },
@@ -801,16 +787,14 @@ describe("InformationCore", () => {
       new MemoryInformationStore(),
       [otherParentDefinition, childDefinition],
     );
-    const otherParent = await mismatchedCore.append(otherParentDefinition, {
-      kind: otherParentDefinition.kind,
+    const otherParent = await mismatchedCore.register(otherParentDefinition, {
       occurredAt: "2026-09-01T00:00:00.000Z",
       source: "module:acme",
       payload: { text: "other" },
       references: [],
     });
     await expect(
-      mismatchedCore.append(childDefinition, {
-        kind: childDefinition.kind,
+      mismatchedCore.register(childDefinition, {
         occurredAt: "2026-09-01T00:00:00.000Z",
         source: "module:acme",
         payload: { text: "child" },
@@ -827,8 +811,7 @@ describe("InformationCore", () => {
     const payload = { nested: { values: ["moon"] } };
     const references: [] = [];
 
-    const pending = core.append(frozenDefinition, {
-      kind: frozenDefinition.kind,
+    const pending = core.register(frozenDefinition, {
       occurredAt: "2026-09-01T00:00:00.000Z",
       source: "module:acme",
       payload,
@@ -837,7 +820,7 @@ describe("InformationCore", () => {
     payload.nested.values[0] = "changed";
 
     const atom = await pending;
-    const stored = await core.getById(atom.informationId);
+    const stored = await core.get(atom.informationId);
 
     expect(atom.payload).toEqual({ nested: { values: ["moon"] } });
     expect(stored).toBeDefined();
@@ -859,18 +842,17 @@ describe("InformationCore", () => {
     const core = await createStartedCore(store, [parentDefinition]);
     let observed = 0;
 
-    core.subscribe(parentDefinition.kind, () => {
+    core.on(parentDefinition, { consumerId: "observer" }, () => {
       observed += 1;
     });
 
     await core.close();
 
     expect(() =>
-      core.subscribe(parentDefinition.kind, () => undefined),
+      core.on(parentDefinition, { consumerId: "closed" }, () => undefined),
     ).toThrow(InformationCoreClosedError);
     await expect(
-      core.append(parentDefinition, {
-        kind: parentDefinition.kind,
+      core.register(parentDefinition, {
         occurredAt: "2026-09-01T00:00:00.000Z",
         source: "module:acme",
         payload: { text: "after-close" },
