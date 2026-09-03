@@ -1,6 +1,6 @@
 /**
- * 架构说明：本模块只服务于数据库包自身测试，提供一个隔离的内存 PGlite
- * 实例以及它上面的最终 PostgreSQL 数据库，避免测试依赖真实外部数据库。
+ * 架构说明：本模块为 database 包、Runtime、Server 与 demo 的集成测试提供隔离内存 PGlite
+ * 实例以及它上面的最终 PostgreSQL 数据库，避免这些跨包测试依赖真实外部数据库。
  * 主要职责：`createTestingDatabase` 创建驱动并返回使用生产仓储与迁移逻辑的
  * `KaguyaDatabase`，不额外包装或自动迁移。
  * 代码库关系：本文件从同包 `driver.ts` 取得仅测试使用的 `PGliteDatabase`，并从

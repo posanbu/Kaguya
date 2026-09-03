@@ -390,14 +390,14 @@ describe("KaguyaRuntime", () => {
       expect(kinds).toEqual(
         expect.arrayContaining(["core.llm.requested", "core.llm.failed"]),
       );
-      expect(kinds).not.toEqual(
-        expect.arrayContaining([
-          "core.message.assistant.text",
-          "core.delivery.requested",
-          "core.delivery.delivered",
-          "core.delivery.failed",
-        ]),
-      );
+      for (const forbiddenKind of [
+        "core.message.assistant.text",
+        "core.delivery.requested",
+        "core.delivery.delivered",
+        "core.delivery.failed",
+      ]) {
+        expect(kinds).not.toContain(forbiddenKind);
+      }
       expect(sendMessage).not.toHaveBeenCalled();
       expect(result.deliveries).toEqual([]);
     },

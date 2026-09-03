@@ -3,8 +3,8 @@
  * 兼容 wrapper/别名以及旧工作流 API 再次进入 production TypeScript。
  * 主要职责：`collectProductionSources` 以 POSIX 相对路径遍历 packages/apps；
  * `isProductionTypeScript` 和 `findSourceViolations` 是可独立测试的纯函数；唯一额外
- * profileId 白名单是 schema 的拒绝实现本身；CLI `main`
- * 汇总违规并以非零失败。Vitest 收集本文件时只运行纯函数 suite，不扫描工作区。
+ * profileId 白名单是 schema 的拒绝实现本身；`scanInformationArchitecture` 供 CLI 和
+ * Vitest 共用同一次扫描逻辑，`main` 汇总违规并以非零失败。
  * 代码库关系：迁移验收通过 `pnpm exec tsx scripts/information-architecture.test.ts` 调用；
  * 根 `pnpm test` 也收集本文件，防止此前零测试 suite 的配置回归。
  * 输入输出与副作用：扫描只读取 production .ts/.tsx；路径先正规化为 POSIX，因而 Windows
@@ -143,8 +143,14 @@ async function findViolations(
   ).flat();
 }
 
+export async function scanInformationArchitecture(): Promise<
+  readonly string[]
+> {
+  return findViolations(await collectProductionSources());
+}
+
 async function main(): Promise<void> {
-  const violations = await findViolations(await collectProductionSources());
+  const violations = await scanInformationArchitecture();
   if (violations.length > 0) {
     throw new Error(
       `Information architecture violations:\n${violations.map((violation) => `- ${violation}`).join("\n")}`,
@@ -183,6 +189,10 @@ if (process.env.VITEST) {
         "packages/runtime/src/legacy.ts:1: WorkflowEngine",
         "packages/runtime/src/legacy.ts:2: profileId",
       ]);
+    });
+
+    it("scans the current production workspace", async () => {
+      await expect(scanInformationArchitecture()).resolves.toEqual([]);
     });
   });
 } else {
