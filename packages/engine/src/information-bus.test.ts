@@ -1,12 +1,12 @@
 /**
- * 架构说明：本测试覆盖信息 atom bus 的快照隔离、订阅顺序与错误汇报，
- * 以保证发布阶段不会把可变对象引用泄漏给观察者。
+ * 架构说明：本测试覆盖信息 atom bus 的快照隔离、typed consumer 结果与失败隔离，
+ * 以保证发布阶段不会把可变对象引用泄漏给观察者或吞掉失败归属。
  * 代码库关系：`InformationCore` 依赖这里的发布语义完成“先持久化、后广播”，
  * 因此 bus 的行为必须独立可测并与存储层解耦。
  */
 import { freezeInformationAtom, informationIdSchema, z } from "@kaguya/schema";
 import { defineInformationKind } from "@kaguya/sdk";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { InformationBus } from "./information-bus.js";
 
@@ -27,46 +27,50 @@ const atom = freezeInformationAtom({
 });
 
 describe("InformationBus", () => {
-  it("delivers same-kind subscribers in registration order and isolates failures", async () => {
+  it("returns each typed consumer outcome while isolating failures", async () => {
     const order: string[] = [];
-    const onSubscriberError = vi.fn();
-    const bus = new InformationBus({ onSubscriberError });
+    const bus = new InformationBus();
 
-    bus.subscribe(messageDefinition.kind, () => {
+    bus.on(messageDefinition.kind, { consumerId: "first" }, () => {
       order.push("first");
     });
-    bus.subscribe(messageDefinition.kind, () => {
+    bus.on(messageDefinition.kind, { consumerId: "second" }, () => {
       order.push("second");
       throw new Error("observer failed");
     });
-    bus.subscribeAll(() => {
+    bus.onAll({ consumerId: "all" }, () => {
       order.push("all");
     });
 
-    const published = await bus.publish(atom);
+    const results = await bus.publish(atom);
 
     expect(order).toEqual(["first", "second", "all"]);
-    expect(onSubscriberError).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "observer failed" }),
-    );
-    expect(Object.isFrozen(published)).toBe(true);
-    expect(Object.getPrototypeOf(published.payload)).toBe(Object.prototype);
+    expect(results).toEqual([
+      { consumer: { consumerId: "first" }, status: "fulfilled" },
+      {
+        consumer: { consumerId: "second" },
+        status: "rejected",
+        reason: expect.objectContaining({ message: "observer failed" }),
+      },
+      { consumer: { consumerId: "all" }, status: "fulfilled" },
+    ]);
   });
 
   it("returns a frozen snapshot that cannot be mutated by observers", async () => {
     const bus = new InformationBus();
     const seen: Array<unknown> = [];
 
-    bus.subscribe(messageDefinition.kind, (candidate) => {
+    bus.on(messageDefinition.kind, { consumerId: "observer" }, (candidate) => {
       seen.push(candidate);
     });
 
-    const published = await bus.publish(atom);
+    await bus.publish(atom);
 
     expect(seen).toHaveLength(1);
-    expect(seen[0]).toBe(published);
     expect(Object.isFrozen(seen[0] as object)).toBe(true);
-    expect(Object.isFrozen((published as { payload: object }).payload)).toBe(true);
+    expect(Object.isFrozen((seen[0] as { payload: object }).payload)).toBe(
+      true,
+    );
     expect(atom.payload.text).toBe("moon");
   });
 });

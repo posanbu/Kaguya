@@ -1,10 +1,15 @@
 /**
- * 架构说明：本模块定义信息 kind 的声明契约、引用规则、日志策略与追加输入，
- * 供 Core 启动前完成注册并在后续追加路径中复用同一套校验与冻结快照逻辑。
+ * 架构说明：本模块定义信息 kind 的声明契约、引用规则、日志策略与注册输入，
+ * 供 Core 启动前完成注册，并让提交方只能通过 definition 确定 kind 与身份。
  * 代码库关系：`packages/sdk/src/index.ts` 通过此模块向外暴露 `defineInformationKind`
  * 与相关类型；`packages/engine` 会在 Registry 生命周期中消费这些定义。
  */
-import { type InformationAtom, type JsonObject, z } from "@kaguya/schema";
+import {
+  type InformationAtom,
+  type InformationReference,
+  type JsonObject,
+  z,
+} from "@kaguya/schema";
 
 export type InformationLogLevel = "debug" | "info" | "warn" | "error";
 
@@ -20,15 +25,18 @@ export interface InformationLogDisabledPolicy {
   readonly enabled: false;
 }
 
-export interface InformationLogEnabledPolicy<P extends JsonObject = JsonObject> {
+export interface InformationLogEnabledPolicy<
+  P extends JsonObject = JsonObject,
+> {
   readonly enabled: true;
   readonly level: InformationLogLevel;
-  readonly project: (atom: InformationAtom<string, P>) => InformationLogProjection;
+  readonly project: (
+    atom: InformationAtom<string, P>,
+  ) => InformationLogProjection;
 }
 
 export type InformationLogPolicy<P extends JsonObject = JsonObject> =
-  | InformationLogDisabledPolicy
-  | InformationLogEnabledPolicy<P>;
+  InformationLogDisabledPolicy | InformationLogEnabledPolicy<P>;
 
 export interface InformationKindDefinition<
   K extends string,
@@ -61,6 +69,20 @@ export type InformationAppendInput<
   P extends JsonObject,
 > = Omit<InformationAtom<K, P>, "informationId">;
 
+/**
+ * 提交新信息原子的公开输入。kind 和 informationId 分别由 definition 与 Core
+ * 唯一确定，调用方不能伪造或重复携带它们。
+ */
+export type InformationRegistrationInput<
+  K extends string,
+  P extends JsonObject,
+> = {
+  readonly occurredAt: string;
+  readonly source: string;
+  readonly payload: P;
+  readonly references: readonly InformationReference[];
+};
+
 const kindNamePattern = /^[a-z][a-z0-9._-]*(?:\.[a-z][a-z0-9._-]*)+$/u;
 const relationNamePattern =
   /^(?:core:[a-z][a-z0-9._-]*|[a-z][a-z0-9._-]*:[a-z][a-z0-9._-]*)$/u;
@@ -89,7 +111,9 @@ function assertKindName(kind: string): void {
   }
 }
 
-function assertPayloadSchema(payloadSchema: unknown): asserts payloadSchema is z.ZodType<JsonObject> {
+function assertPayloadSchema(
+  payloadSchema: unknown,
+): asserts payloadSchema is z.ZodType<JsonObject> {
   if (!(payloadSchema instanceof z.ZodType)) {
     throw new Error("payload schema must be a Zod schema");
   }
@@ -116,7 +140,10 @@ function assertJsonObjectSchema(schema: any, seen: Set<any>): void {
     case "pipe":
     case "transform": {
       const inputSchema = def.in ?? def.innerType ?? def.input;
-      const sample = inputSchema === undefined ? undefined : buildRepresentativeValue(inputSchema, seen);
+      const sample =
+        inputSchema === undefined
+          ? undefined
+          : buildRepresentativeValue(inputSchema, seen);
       if (sample === undefined) {
         throw new Error("payload schema must produce a JSON object");
       }
@@ -214,7 +241,9 @@ function assertJsonValue(schema: any, seen: Set<any>): void {
     case "custom":
       throw new Error(`payload schema contains unsupported ${def.type} fields`);
     default:
-      throw new Error(`payload schema contains unsupported ${String(def.type)} fields`);
+      throw new Error(
+        `payload schema contains unsupported ${String(def.type)} fields`,
+      );
   }
 }
 
@@ -224,7 +253,10 @@ function assertJsonValueOrObjectViaParse(
   seen: Set<any>,
 ): void {
   const inputSchema = def.in ?? def.innerType ?? def.input;
-  const sample = inputSchema === undefined ? undefined : buildRepresentativeValue(inputSchema, seen);
+  const sample =
+    inputSchema === undefined
+      ? undefined
+      : buildRepresentativeValue(inputSchema, seen);
   if (sample === undefined) {
     throw new Error("payload schema must produce a JSON-compatible value");
   }
@@ -402,7 +434,11 @@ function getEnumValue(def: any): unknown {
 function cloneAndValidateReferenceRules(
   references: Record<string, InformationReferenceRuleInput>,
 ): Readonly<Record<string, InformationReferenceRule>> {
-  if (typeof references !== "object" || references === null || Array.isArray(references)) {
+  if (
+    typeof references !== "object" ||
+    references === null ||
+    Array.isArray(references)
+  ) {
     throw new Error("reference rules must be an object");
   }
 
@@ -414,10 +450,14 @@ function cloneAndValidateReferenceRules(
       throw new Error(`reference rule must be an object: ${relation}`);
     }
     if (typeof rule.required !== "boolean") {
-      throw new Error(`reference rule required flag must be boolean: ${relation}`);
+      throw new Error(
+        `reference rule required flag must be boolean: ${relation}`,
+      );
     }
     if (typeof rule.multiple !== "boolean") {
-      throw new Error(`reference rule multiple flag must be boolean: ${relation}`);
+      throw new Error(
+        `reference rule multiple flag must be boolean: ${relation}`,
+      );
     }
 
     const targetKinds = rule.targetKinds;
@@ -435,7 +475,9 @@ function cloneAndValidateReferenceRules(
       for (const targetKind of targetKinds) {
         assertKindName(targetKind);
         if (targetKindSet.has(targetKind)) {
-          throw new Error(`reference targetKinds must not contain duplicates: ${relation}`);
+          throw new Error(
+            `reference targetKinds must not contain duplicates: ${relation}`,
+          );
         }
         targetKindSet.add(targetKind);
         normalizedTargetKinds.push(targetKind);

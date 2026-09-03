@@ -7,9 +7,31 @@
 import { z } from "@kaguya/schema";
 import { describe, expect, it } from "vitest";
 
-import { defineInformationKind } from "./index.js";
+import {
+  defineInformationKind,
+  type InformationRegistrationInput,
+} from "./index.js";
 
 describe("defineInformationKind", () => {
+  it("exposes registration input without a duplicate kind or information id", () => {
+    const input: InformationRegistrationInput<
+      "acme.message.created",
+      { text: string }
+    > = {
+      occurredAt: "2026-09-04T00:00:00.000Z",
+      source: "adapter:test",
+      payload: { text: "moon" },
+      references: [],
+    };
+
+    expect(input).toEqual({
+      occurredAt: "2026-09-04T00:00:00.000Z",
+      source: "adapter:test",
+      payload: { text: "moon" },
+      references: [],
+    });
+  });
+
   it("requires a schema, declared references, and explicit logging", () => {
     const definition = defineInformationKind({
       kind: "acme.message.created",
@@ -116,9 +138,11 @@ describe("defineInformationKind", () => {
         payloadSchema: z
           .object({
             items: z.array(
-              z.object({
-                when: z.date(),
-              }).strict(),
+              z
+                .object({
+                  when: z.date(),
+                })
+                .strict(),
             ),
           })
           .strict() as never,

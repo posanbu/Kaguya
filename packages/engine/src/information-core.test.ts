@@ -1,22 +1,24 @@
 /**
- * 架构说明：本测试覆盖信息 Core 的启动、追加、引用校验与订阅边界，
+ * 架构说明：本测试覆盖信息 Core 的启动、注册、引用校验、并发消费者与故障事实边界，
  * 以证明 registry、store 与 bus 组合后的写入路径只信任注册表中的正式定义，
  * 并且不会把可变输入、未注册 kind 或关闭后的调用继续放行。
  * 代码库关系：`InformationCore` 连接 registry、store 与 bus；这里的测试使用
- * 内存 store double 验证“先落库、后发布”、冻结快照、ID 冲突与关闭语义。
+ * 内存 ledger double 验证“先落库、后并发发布”、冻结快照、失败递归保护、ID 冲突
+ * 与关闭语义；不会以 mock 掩盖账本和广播的实际交互。
  */
 import {
   type DeepReadonly,
   freezeInformationAtom,
   informationIdSchema,
   type InformationAtom,
+  type JsonObject,
   z,
 } from "@kaguya/schema";
 import {
   defineInformationKind,
   type InformationKindDefinition,
 } from "@kaguya/sdk";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   InformationCore,
@@ -72,15 +74,19 @@ const frozenDefinition = defineInformationKind({
   log: { enabled: false },
 });
 
+const consumerFailedKind = "consumer.failed";
+
 class MemoryInformationStore {
   readonly atoms = new Map<string, DeepReadonly<InformationAtom>>();
   readonly synchronisedKinds: string[][] = [];
   readonly appendOrder: string[] = [];
   readonly appendOptions: { readonly enqueueLogProjection?: boolean }[] = [];
+  readonly operations: string[] = [];
 
   constructor(
     private readonly options: {
       readonly onAppend?: (atom: DeepReadonly<InformationAtom>) => void;
+      readonly rejectAppend?: (atom: DeepReadonly<InformationAtom>) => boolean;
     } = {},
   ) {}
 
@@ -98,11 +104,15 @@ class MemoryInformationStore {
     }[],
     options: { readonly enqueueLogProjection?: boolean } = {},
   ): Promise<void> {
+    if (this.options.rejectAppend?.(atom)) {
+      throw new Error(`append rejected: ${atom.kind}`);
+    }
     if (this.atoms.has(atom.informationId)) {
       throw new InformationIdCollisionError(atom.informationId);
     }
     validateReferences(this.atoms, atom, expectations);
     this.appendOrder.push(atom.kind);
+    this.operations.push(`append:${atom.informationId}`);
     this.appendOptions.push(options);
     this.options.onAppend?.(atom);
     const snapshot = freezeInformationAtom(atom as InformationAtom);
@@ -133,6 +143,23 @@ class MemoryInformationStore {
   async query(): Promise<DeepReadonly<InformationAtom>[]> {
     return [...this.atoms.values()];
   }
+}
+
+function registration<P extends JsonObject>(payload: P) {
+  return {
+    occurredAt: "2026-09-04T00:00:00.000Z",
+    source: "adapter:test",
+    payload,
+    references: [],
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 function validateReferences(
@@ -244,6 +271,186 @@ function createDeterministicIdGenerator() {
 }
 
 describe("InformationCore", () => {
+  it("starts every current consumer concurrently after commit", async () => {
+    const started: string[] = [];
+    const release = deferred<void>();
+    const ledger = new MemoryInformationStore();
+    const core = await createStartedCore(ledger, [parentDefinition]);
+
+    core.on(parentDefinition, { consumerId: "first" }, async () => {
+      started.push("first");
+      await release.promise;
+    });
+    core.on(parentDefinition, { consumerId: "second" }, async () => {
+      started.push("second");
+      await release.promise;
+    });
+
+    const registering = core.register(
+      parentDefinition,
+      registration({ text: "月" }),
+    );
+    await vi.waitFor(() =>
+      expect(new Set(started)).toEqual(new Set(["first", "second"])),
+    );
+    expect(ledger.operations.slice(0, 1)).toEqual(["append:atom-1"]);
+    release.resolve();
+    await registering;
+  });
+
+  it("persists an atom without consumers so it remains readable", async () => {
+    const ledger = new MemoryInformationStore();
+    const core = await createStartedCore(ledger, [parentDefinition]);
+
+    const atom = await core.register(
+      parentDefinition,
+      registration({ text: "moon" }),
+    );
+
+    await expect(core.get(atom.informationId)).resolves.toEqual(atom);
+  });
+
+  it("does not start consumers when the ledger rejects the commit", async () => {
+    let calls = 0;
+    const ledger = new MemoryInformationStore({ rejectAppend: () => true });
+    const core = await createStartedCore(ledger, [parentDefinition]);
+    core.on(parentDefinition, { consumerId: "observer" }, () => {
+      calls += 1;
+    });
+
+    await expect(
+      core.register(parentDefinition, registration({ text: "moon" })),
+    ).rejects.toThrow("append rejected");
+    expect(calls).toBe(0);
+  });
+
+  it("does not replay atoms committed before a consumer subscribes", async () => {
+    const seen: string[] = [];
+    const ledger = new MemoryInformationStore();
+    const core = await createStartedCore(ledger, [parentDefinition]);
+    await core.register(parentDefinition, registration({ text: "before" }));
+
+    core.on(parentDefinition, { consumerId: "late" }, (atom) => {
+      seen.push(atom.payload.text);
+    });
+    await core.register(parentDefinition, registration({ text: "after" }));
+
+    expect(seen).toEqual(["after"]);
+  });
+
+  it("keeps successful consumers independent from a failing consumer", async () => {
+    const completed: string[] = [];
+    const ledger = new MemoryInformationStore();
+    const core = await createStartedCore(ledger, [parentDefinition]);
+    core.on(parentDefinition, { consumerId: "failing" }, () => {
+      throw new Error("consumer exploded");
+    });
+    core.on(parentDefinition, { consumerId: "successful" }, () => {
+      completed.push("successful");
+    });
+
+    await core.register(parentDefinition, registration({ text: "moon" }));
+
+    expect(completed).toEqual(["successful"]);
+  });
+
+  it("records one consumer.failed atom for a failed consumer", async () => {
+    const ledger = new MemoryInformationStore();
+    const core = await createStartedCore(ledger, [parentDefinition]);
+    core.on(
+      parentDefinition,
+      { consumerId: "failing", definitionId: "acme.worker", instanceId: "one" },
+      () => {
+        throw new TypeError("consumer exploded");
+      },
+    );
+
+    const source = await core.register(
+      parentDefinition,
+      registration({ text: "moon" }),
+    );
+    const failures = [...ledger.atoms.values()].filter(
+      (atom) => atom.kind === consumerFailedKind,
+    );
+
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({
+      payload: {
+        consumer: {
+          consumerId: "failing",
+          definitionId: "acme.worker",
+          instanceId: "one",
+        },
+        error: { errorType: "TypeError", message: "Consumer handler failed" },
+      },
+      references: [
+        { relation: "core:caused-by", informationId: source.informationId },
+      ],
+    });
+    expect(failures[0]?.payload).not.toHaveProperty("stack");
+  });
+
+  it("does not retry a consumer after it fails", async () => {
+    let calls = 0;
+    const ledger = new MemoryInformationStore();
+    const core = await createStartedCore(ledger, [parentDefinition]);
+    core.on(parentDefinition, { consumerId: "failing" }, () => {
+      calls += 1;
+      throw new Error("consumer exploded");
+    });
+
+    await core.register(parentDefinition, registration({ text: "moon" }));
+
+    expect(calls).toBe(1);
+  });
+
+  it("does not recursively record a failure from a consumer.failed consumer", async () => {
+    const ledger = new MemoryInformationStore();
+    const core = await createStartedCore(ledger, [parentDefinition]);
+    core.on(parentDefinition, { consumerId: "failing" }, () => {
+      throw new Error("input failed");
+    });
+    core.on(
+      core.registry.get(consumerFailedKind),
+      { consumerId: "failure-observer" },
+      () => {
+        throw new Error("failure observer failed");
+      },
+    );
+
+    await core.register(parentDefinition, registration({ text: "moon" }));
+
+    expect(
+      [...ledger.atoms.values()].filter(
+        (atom) => atom.kind === consumerFailedKind,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("reports to bootstrap when it cannot commit a consumer.failed atom", async () => {
+    const bootstrapReporter = vi.fn();
+    const ledger = new MemoryInformationStore({
+      rejectAppend: (atom) => atom.kind === consumerFailedKind,
+    });
+    const registry = new InformationKindRegistry();
+    registry.register(parentDefinition);
+    const core = new InformationCore({
+      registry,
+      store: ledger,
+      nextInformationId: createDeterministicIdGenerator(),
+      bootstrapReporter,
+    });
+    await core.start();
+    core.on(parentDefinition, { consumerId: "failing" }, () => {
+      throw new Error("input failed");
+    });
+
+    await core.register(parentDefinition, registration({ text: "moon" }));
+
+    expect(bootstrapReporter).toHaveBeenCalledTimes(1);
+    expect([...ledger.atoms.values()]).toHaveLength(1);
+  });
+
   it("persists before publishing and isolates observer failures", async () => {
     const order: string[] = [];
     const store = new MemoryInformationStore({
@@ -266,7 +473,7 @@ describe("InformationCore", () => {
       references: [],
     });
 
-    expect(order).toEqual(["store", "observer"]);
+    expect(order).toEqual(["store", "observer", "store"]);
     expect((await store.getById(atom.informationId))?.payload).toEqual({
       text: "moon",
     });

@@ -1,6 +1,6 @@
 /**
  * 架构说明：本入口聚合 SDK 的稳定公开 API，包括事件、模块、
- * 工作流与信息 kind 契约，供上层 composition root 统一消费。
+ * 工作流、信息 kind 契约与注册输入，供上层 composition root 统一消费。
  * 代码库关系：`packages/schema` 提供基础 wire contract，`packages/sdk`
  * 则在此基础上继续提供可注册的高层定义与构建器。
  */
@@ -234,6 +234,7 @@ export {
   defineInformationKind,
   type DefineInformationKindInput,
   type InformationAppendInput,
+  type InformationRegistrationInput,
   type InformationKindDefinition,
   type InformationLogDisabledPolicy,
   type InformationLogEnabledPolicy,

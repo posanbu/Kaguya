@@ -2,7 +2,7 @@
  * 架构说明：本入口汇总 engine 层的事件总线、工作流、模块宿主与信息原子编排能力，
  * 供下游包通过一个稳定的公共面导入运行时基础设施。
  * 主要职责：向外导出 EventBus/WorkflowEngine/ModuleHost 这组旧能力，以及
- * InformationBus/InformationCore/InformationKindRegistry 与相关错误类型，
+ * InformationBus/InformationCore/InformationKindRegistry、消费者身份与相关错误类型，
  * 让信息原子链路能够在 engine 层闭合并被后续 Runtime、数据库和模块代码复用。
  * 代码库关系：`packages/engine/src/*.ts` 的实现会被 `packages/runtime`、`packages/modules`
  * 和测试套件直接消费；本文件不包含业务逻辑，只负责稳定导出。
@@ -21,7 +21,9 @@ export {
 } from "./event-bus.js";
 export {
   InformationBus,
-  type InformationBusOptions,
+  type InformationBroadcastResult,
+  type InformationConsumer,
+  type InformationSubscriber,
 } from "./information-bus.js";
 export {
   DuplicateInformationKindError,
@@ -45,6 +47,7 @@ export {
   type InformationReferenceExpectation,
   type InformationReferenceQuery,
 } from "./information-core.js";
+export { consumerFailedInformationKind } from "./information-kinds.js";
 export { InformationKindRegistry } from "./information-kind-registry.js";
 export {
   AbortError,

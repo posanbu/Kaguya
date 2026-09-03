@@ -1,8 +1,12 @@
 /**
  * 架构说明：本模块把 registry、store 与 bus 组合成信息 Core，
- * 负责启动前注册同步、追加时的 ID 生成、引用 expectations 传递与订阅分发。
- * 代码库关系：Core 是信息原子体系的入口编排层，后续 Runtime 与 PostgreSQL
- * 存储实现都会依赖这里定义的 store 端口和追加语义。
+ * 负责启动前注册同步、注册时的 ID 生成、引用 expectations 传递、并发广播与故障事实。
+ * 主要职责：`register` 校验、落账并广播新 atom；`on` 以 typed consumer 身份订阅；
+ * `get`/`getMany`/`query` 只读账本。`append` 与 string `subscribe` 仍是暂存 API。
+ * 代码库关系：Core 是信息原子体系的入口编排层，依赖 Registry、Ledger 与 Bus；
+ * `information-kinds.ts` 提供唯一的 `consumer.failed` 定义，Runtime 后续复用它。
+ * 输入输出与副作用：提交成功才广播当前快照，拒绝的消费者被记录为失败 atom；失败
+ * atom 的消费者或持久化失败只进入 bootstrap reporter，绝不递归产生故障链。
  */
 import {
   type DeepReadonly,
@@ -17,12 +21,14 @@ import {
 import type {
   InformationAppendInput,
   InformationKindDefinition,
+  InformationRegistrationInput,
   InformationReferenceRule,
 } from "@kaguya/sdk";
 
 import {
   InformationBus,
-  type InformationBusOptions,
+  type InformationConsumer,
+  type InformationSubscriber,
 } from "./information-bus.js";
 import {
   InformationCoreClosedError,
@@ -32,6 +38,7 @@ import {
   InformationReferenceValidationError,
 } from "./information-errors.js";
 import { InformationKindRegistry } from "./information-kind-registry.js";
+import { consumerFailedInformationKind } from "./information-kinds.js";
 
 export {
   InformationCoreClosedError,
@@ -98,13 +105,9 @@ export interface InformationCoreOptions {
   readonly store: InformationLedger;
   readonly nextInformationId: () => string;
   readonly now?: () => Date;
-  readonly bus?: InformationBusOptions;
+  readonly bootstrapReporter?: (error: unknown) => void | Promise<void>;
   readonly logProjectionRunner?: InformationLogProjectionRunner;
 }
-
-type InformationSubscriber = (
-  atom: DeepReadonly<InformationAtom>,
-) => unknown | Promise<unknown>;
 
 type CoreState = "new" | "started" | "closed";
 
@@ -114,15 +117,19 @@ export class InformationCore {
   #bus: InformationBus;
   #nextInformationId: () => string;
   #now: () => Date;
+  #bootstrapReporter: (error: unknown) => void | Promise<void>;
   #logProjectionRunner: InformationLogProjectionRunner | undefined;
   #state: CoreState = "new";
+  #legacySubscriptionId = 0;
 
   constructor(options: InformationCoreOptions) {
     this.registry = options.registry;
     this.store = options.store;
-    this.#bus = new InformationBus(options.bus);
+    this.registry.registerBuiltin(consumerFailedInformationKind);
+    this.#bus = new InformationBus();
     this.#nextInformationId = options.nextInformationId;
     this.#now = options.now ?? (() => new Date());
+    this.#bootstrapReporter = options.bootstrapReporter ?? (() => undefined);
     this.#logProjectionRunner = options.logProjectionRunner;
   }
 
@@ -140,11 +147,44 @@ export class InformationCore {
     definition: InformationKindDefinition<K, P>,
     input: InformationAppendInput<K, P>,
   ): Promise<DeepReadonly<InformationAtom<K, P>>> {
+    this.assertAppendKind(definition, input);
+    return this.register(definition, input);
+  }
+
+  async register<K extends string, P extends JsonObject>(
+    definition: InformationKindDefinition<K, P>,
+    input: InformationRegistrationInput<K, P>,
+  ): Promise<DeepReadonly<InformationAtom<K, P>>> {
+    return this.registerInternal(definition, input, true);
+  }
+
+  on<K extends string, P extends JsonObject>(
+    definition: InformationKindDefinition<K, P>,
+    consumer: InformationConsumer,
+    handler: (
+      atom: DeepReadonly<InformationAtom<K, P>>,
+    ) => unknown | Promise<unknown>,
+  ): () => void {
+    this.assertOpen();
+    const registered = this.registry.assertRegistered(
+      definition as InformationKindDefinition<string, any>,
+    ) as InformationKindDefinition<K, P>;
+    return this.#bus.on(
+      registered.kind,
+      consumer,
+      handler as InformationSubscriber,
+    );
+  }
+
+  private async registerInternal<K extends string, P extends JsonObject>(
+    definition: InformationKindDefinition<K, P>,
+    input: InformationRegistrationInput<K, P>,
+    recordConsumerFailures: boolean,
+  ): Promise<DeepReadonly<InformationAtom<K, P>>> {
     this.assertState("started");
     const registered = this.registry.assertRegistered(
       definition as InformationKindDefinition<string, any>,
     ) as InformationKindDefinition<K, P>;
-    this.assertAppendKind(registered, input);
 
     const informationId = this.parseInformationId(this.#nextInformationId());
     const payload = registered.payloadSchema.parse(input.payload);
@@ -170,11 +210,28 @@ export class InformationCore {
         enqueueLogProjection: registered.log.enabled,
       },
     );
-    const published = (await this.#bus.publish(
+    const outcomes = await this.#bus.publish(
       atom as unknown as InformationAtom,
-    )) as DeepReadonly<InformationAtom<K, P>>;
+    );
+    if (recordConsumerFailures) {
+      for (const outcome of outcomes) {
+        if (outcome.status === "rejected") {
+          await this.recordConsumerFailure(
+            atom,
+            outcome.consumer,
+            outcome.reason,
+          );
+        }
+      }
+    } else {
+      for (const outcome of outcomes) {
+        if (outcome.status === "rejected") {
+          await this.reportBootstrap(outcome.reason);
+        }
+      }
+    }
     await this.projectPendingLogs();
-    return published;
+    return atom;
   }
 
   async get(
@@ -219,12 +276,19 @@ export class InformationCore {
     ) => unknown | Promise<unknown>,
   ): () => void {
     this.assertOpen();
-    return this.#bus.subscribe(kind, handler as InformationSubscriber);
+    return this.#bus.on(
+      kind,
+      { consumerId: `legacy:${++this.#legacySubscriptionId}` },
+      handler as InformationSubscriber,
+    );
   }
 
   subscribeAll(handler: InformationSubscriber): () => void {
     this.assertOpen();
-    return this.#bus.subscribeAll(handler);
+    return this.#bus.onAll(
+      { consumerId: `legacy:${++this.#legacySubscriptionId}` },
+      handler,
+    );
   }
 
   async close(): Promise<void> {
@@ -243,6 +307,51 @@ export class InformationCore {
       throw new Error(
         `Append input kind must match definition kind: ${definition.kind}`,
       );
+    }
+  }
+
+  private async recordConsumerFailure(
+    sourceAtom: DeepReadonly<InformationAtom>,
+    consumer: InformationConsumer,
+    reason: unknown,
+  ): Promise<void> {
+    try {
+      await this.registerInternal(
+        consumerFailedInformationKind,
+        {
+          occurredAt: this.#now().toISOString(),
+          source: "core:information-core",
+          payload: {
+            consumer: {
+              consumerId: consumer.consumerId,
+              ...(consumer.definitionId === undefined
+                ? {}
+                : { definitionId: consumer.definitionId }),
+              ...(consumer.instanceId === undefined
+                ? {}
+                : { instanceId: consumer.instanceId }),
+            },
+            error: summarizeConsumerError(reason),
+          },
+          references: [
+            {
+              relation: "core:caused-by",
+              informationId: sourceAtom.informationId,
+            },
+          ],
+        },
+        false,
+      );
+    } catch (error) {
+      await this.reportBootstrap(error);
+    }
+  }
+
+  private async reportBootstrap(error: unknown): Promise<void> {
+    try {
+      await this.#bootstrapReporter(error);
+    } catch {
+      // Bootstrap reporter 是最后一道诊断边界，不能制造未处理 rejection。
     }
   }
 
@@ -277,6 +386,22 @@ export class InformationCore {
       throw new InformationCoreClosedError();
     }
   }
+}
+
+function summarizeConsumerError(reason: unknown): {
+  readonly errorType: string;
+  readonly message: string;
+} {
+  if (reason instanceof Error) {
+    return {
+      errorType: reason.name || "Error",
+      message: "Consumer handler failed",
+    };
+  }
+  return {
+    errorType: "NonErrorRejection",
+    message: "Consumer rejected with a non-Error value",
+  };
 }
 
 function buildReferenceExpectations(
