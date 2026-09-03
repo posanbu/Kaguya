@@ -11,7 +11,8 @@
  * startup failed 日志与 logger 关闭路径。`createRuntimeModelSelectionResolver`
  * 只接收 `setup.inspect()` 已选中的 Profile 快照并校验，不再次读取 Registry；`openAICompatibleProviderSettings`
  * 提取 provider 能力开关；`assertProfileReady` 保持 readiness 错误固定且无 secret；
- * `connectInformationDatabase` 将连接失败收窄为不包含 URL/凭据的错误；
+ * `connectInformationDatabase` 与 `startInformationRuntime` 将 lazy Pool 创建及
+ * 首次 migrate/I/O 失败统一收窄为不包含 URL、cause 或凭据的固定错误；
  * 其余 helper 管理资源关闭与进程信号处理。
  * 代码库关系：本文件消费 `@kaguya/config` 的 Profile Registry、`@kaguya/runtime`
  * 的运行时注入点、Fastify HTTP 组装和 NapCat 适配器；模块层 `packages/modules`
@@ -181,7 +182,7 @@ export async function startKaguyaServer(
       });
     }
     if (runtimeReady) {
-      await required(runtime, "runtime").start();
+      await startInformationRuntime(required(runtime, "runtime"));
     }
     app = await createHttpApplication({
       config: effectiveConfig,
@@ -357,6 +358,14 @@ async function connectInformationDatabase(
     return await PostgresKaguyaDatabase.connect({
       connectionString: databaseUrl,
     });
+  } catch (error) {
+    throw new InformationDatabaseConnectionError(error);
+  }
+}
+
+async function startInformationRuntime(runtime: KaguyaRuntime): Promise<void> {
+  try {
+    await runtime.start();
   } catch (error) {
     throw new InformationDatabaseConnectionError(error);
   }

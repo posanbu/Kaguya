@@ -35,7 +35,7 @@ import {
 } from "./server.js";
 import { createWebMessageGateway } from "./web-gateway.js";
 import { registerWebUi } from "./web.js";
-import { llmReplySettingsSchema } from "../../../packages/modules/src/llm-reply.js";
+import { llmInformationReplySettingsSchema } from "../../../packages/modules/src/llm-information-reply.js";
 
 const chatModel = vi.fn((modelId: string) => ({ modelId }));
 
@@ -381,6 +381,68 @@ describe("unified server composition", () => {
     await closeLogger(rootLogger);
   });
 
+  it("redacts credentials when the first database I/O fails during Runtime startup", async () => {
+    const root = mkdtempSync(join(tmpdir(), "kaguya-database-migrate-"));
+    roots.push(root);
+    const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+    const selectedProfileId = manager.getSelectedProfileId();
+    await manager.replaceProfile(
+      selectedProfileId,
+      readyProfileReplacement(
+        "default",
+        readyProfileSettings("default-light", "default-heavy"),
+      ),
+    );
+    await manager.acknowledgeConfigurationWarnings(selectedProfileId, [
+      "platforms-empty",
+      "plugins-empty",
+    ]);
+    const databaseUrl =
+      "postgresql://ledger:runtime-start-password@127.0.0.1:5432/kaguya";
+    const database = await createTestingDatabase();
+    const migrate = vi
+      .spyOn(database, "migrate")
+      .mockRejectedValueOnce(
+        new Error(`authentication failed: ${databaseUrl}`),
+      );
+    const close = vi.spyOn(database, "close");
+    vi.spyOn(PostgresKaguyaDatabase, "connect").mockResolvedValueOnce(database);
+    const stream = new LogStream();
+    const rootLogger = createLogger({ service: "kaguya-server-test", stream });
+    vi.spyOn(await import("@kaguya/logger"), "createLogger").mockReturnValue(
+      rootLogger,
+    );
+
+    const error = await startKaguyaServer({
+      ...config(join(root, "database")),
+      configRoot: root,
+      databaseUrl,
+      port: 0,
+    }).catch((thrown: unknown) => thrown);
+
+    expect(migrate).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+    expect(error).toMatchObject({
+      name: "InformationDatabaseConnectionError",
+      message: "Information database connection failed",
+      failureType: "Error",
+    });
+    expect(error).not.toHaveProperty("cause");
+    expect(stream.logs()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "server.start.failed",
+          errorType: "InformationDatabaseConnectionError",
+        }),
+      ]),
+    );
+    const serialized = `${String(error)}\n${JSON.stringify(error)}\n${JSON.stringify(stream.logs())}`;
+    expect(serialized).not.toContain(databaseUrl);
+    expect(serialized).not.toContain("runtime-start-password");
+
+    await closeLogger(rootLogger);
+  });
+
   it("resolves the globally selected profile exactly once during startup", async () => {
     const root = mkdtempSync(
       join(tmpdir(), "kaguya-selected-profile-startup-"),
@@ -578,7 +640,7 @@ describe("unified server composition", () => {
       createRuntimeModelSelectionResolver(await selectedProfile(manager));
 
     expect(
-      llmReplySettingsSchema.safeParse({
+      llmInformationReplySettingsSchema.safeParse({
         profileId: "profile-override",
         modelTier: "light",
         outbound: { mode: "source", messageKind: "text" },
