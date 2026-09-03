@@ -3,7 +3,8 @@
  * 注册为 context/inbound 原子，并由实时模块广播继续 LLM、assistant 与 delivery DAG。
  * 主要职责：`KaguyaRuntime` 实现窄 `InformationIngress.submit`、transport 注册、串行化 start/close；
  * 启动时注册内建与模块 kind、启动 Core/ModuleHost、安装 `runtime:delivery` 系统消费者；
- * 内部 executor 将模块 tier 解析为无持久化 client，再交给原子 lifecycle。
+ * 内部 executor 将模块 tier 解析为无持久化 client，并把模块从账本选择、编译的 Prompt
+ * 与 contextAtoms 原样交给原子 lifecycle，不重新构造隐式历史。
  * 代码库关系：依赖 `KaguyaDatabase`、Engine InformationCore/ModuleHost、modules 拥有的
  * kind/模块工厂和 Runtime 自有 lifecycle/result kind；Task 5 的 Gateway/adapter 只需持有 ingress。
  * 输入输出与副作用：submit 返回 context 根 `informationId` 与本次调用实际收到的安全 receipts，
@@ -438,12 +439,8 @@ export class KaguyaRuntime implements InformationIngress {
         workflowId: "message-module-pipeline",
         nodeId: "reply",
         originatingModuleInstanceId: input.originatingModuleInstanceId,
-        prompt: {
-          kind: "reply",
-          text: input.reply.payload.text,
-          fragments: [],
-          provenance: [],
-        },
+        prompt: input.prompt,
+        contextAtoms: input.contextAtoms,
         reply: input.reply.payload,
       },
       context as DeepReadonly<InformationAtom<"core.runtime.context">>,

@@ -1,8 +1,8 @@
 /**
  * 功能概述：定义 Runtime 自有的 context、LLM 生命周期和投递结果 kind，并聚合整个内建 DAG。
- * 主要职责：Runtime definition 约束严格 payload、直接 caused-by/status-of/context 引用与脱敏
- * 日志投影；`builtInInformationKinds` 原样复用 Engine 的 consumer failure 和 modules 的消息、
- * 过滤、assistant、投递请求 definition，保证每个字面 kind 只存在一个对象定义。
+ * 主要职责：Runtime definition 约束严格 payload、直接 caused-by/status-of/context 与
+ * requested uses-context 引用及脱敏日志投影；`builtInInformationKinds` 原样复用 Engine
+ * 与 modules 的 definitions，保证每个字面 kind 只存在一个对象定义。
  * 代码库关系：`runtime.ts` 用聚合集合初始化 Registry；`llm-lifecycle.ts` 写 LLM 原子；系统
  * delivery consumer 写 delivered/failed 原子；业务模块接收同一 completed definition 实例。
  * 输入输出与副作用：所有导出都是无 I/O 的 schema/definition/tuple。requested prompt 会把
@@ -19,6 +19,10 @@ import {
   replyRequestedInformationKind,
 } from "@kaguya/modules";
 import {
+  type CompiledPrompt,
+  type InformationId,
+  type JsonObject,
+  type PromptFragmentSource,
   compiledPromptSchema,
   informationPayloadSchema,
   platformDestinationSchema,
@@ -32,24 +36,86 @@ import {
 
 const nonBlankString = z.string().trim().min(1);
 const llmKindSchema = promptKindSchema;
-export const informationCompiledPromptSchema = compiledPromptSchema.transform(
-  (prompt, context) => {
-    const fragments = prompt.fragments.map((fragment, index) => {
-      const metadata = informationPayloadSchema.safeParse(fragment.metadata);
-      if (!metadata.success) {
-        for (const issue of metadata.error.issues) {
-          context.addIssue({
-            ...issue,
-            path: ["fragments", index, "metadata", ...issue.path],
-          });
-        }
-        return { ...fragment, metadata: {} };
-      }
-      return { ...fragment, metadata: metadata.data };
-    });
-    return { ...prompt, fragments };
-  },
-);
+type InformationPromptFragment = JsonObject & {
+  id: string;
+  informationId?: InformationId;
+  source: PromptFragmentSource;
+  priority: number;
+  content: string;
+  metadata: JsonObject;
+};
+type InformationPromptProvenance = JsonObject & {
+  fragmentId: string;
+  informationId?: InformationId;
+  source: PromptFragmentSource;
+  priority: number;
+  contentDigest: string;
+};
+export type InformationCompiledPrompt = JsonObject & {
+  kind: CompiledPrompt["kind"];
+  text: string;
+  fragments: InformationPromptFragment[];
+  provenance: InformationPromptProvenance[];
+};
+
+export const informationCompiledPromptSchema =
+  compiledPromptSchema.transform<InformationCompiledPrompt>(
+    (prompt, context) => {
+      const fragments: InformationPromptFragment[] = prompt.fragments.map(
+        (fragment, index) => {
+          const metadata = informationPayloadSchema.safeParse(
+            fragment.metadata,
+          );
+          if (!metadata.success) {
+            for (const issue of metadata.error.issues) {
+              context.addIssue({
+                ...issue,
+                path: ["fragments", index, "metadata", ...issue.path],
+              });
+            }
+            return {
+              id: fragment.id,
+              ...(fragment.informationId === undefined
+                ? {}
+                : { informationId: fragment.informationId }),
+              source: fragment.source,
+              priority: fragment.priority,
+              content: fragment.content,
+              metadata: {},
+            } as InformationPromptFragment;
+          }
+          return {
+            id: fragment.id,
+            ...(fragment.informationId === undefined
+              ? {}
+              : { informationId: fragment.informationId }),
+            source: fragment.source,
+            priority: fragment.priority,
+            content: fragment.content,
+            metadata: metadata.data,
+          } as InformationPromptFragment;
+        },
+      );
+      const provenance: InformationPromptProvenance[] = prompt.provenance.map(
+        (entry) =>
+          ({
+            fragmentId: entry.fragmentId,
+            ...(entry.informationId === undefined
+              ? {}
+              : { informationId: entry.informationId }),
+            source: entry.source,
+            priority: entry.priority,
+            contentDigest: entry.contentDigest,
+          }) as InformationPromptProvenance,
+      );
+      return {
+        kind: prompt.kind,
+        text: prompt.text,
+        fragments,
+        provenance,
+      } as InformationCompiledPrompt;
+    },
+  );
 const llmMetadataShape = {
   kind: llmKindSchema,
   modelId: nonBlankString,
@@ -85,6 +151,10 @@ export const llmRequestedInformationKind = defineInformationKind({
       targetKinds: [replyRequestedInformationKind.kind],
     },
     "core:context": contextReference,
+    "core:uses-context": {
+      required: true,
+      multiple: true,
+    },
   },
   log: {
     enabled: true,

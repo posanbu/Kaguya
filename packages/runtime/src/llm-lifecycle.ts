@@ -1,8 +1,8 @@
 /**
  * 功能概述：把一次 reply LLM 调用表达为 PostgreSQL 信息账本中的 requested 与单一终态原子。
- * 主要职责：`LlmLifecycleClient.generate` 在 provider 调用前注册 requested，成功后注册包含
- * output/usage/duration 与 originating module instance 的 completed，失败后注册脱敏 failed
- * 并重新抛出分类后的 `KaguyaLlmError`。
+ * 主要职责：`LlmLifecycleClient.generate` 在 provider 调用前验证 Prompt provenance 与已选
+ * 原子顺序、注册带 uses-context 的 requested，成功后注册 completed，失败后注册脱敏
+ * failed 并重新抛出分类后的 `KaguyaLlmError`。
  * 代码库关系：依赖底层无持久化 `KaguyaLlmClient` 和 Runtime 自有 lifecycle definitions；
  * `runtime.ts` 将本类适配为 `createLlmReplyModule` 所需的 executor。
  * 输入输出与副作用：输入 context 与 reply atom 必须属于同一 context；所有生命周期 atom 使用
@@ -36,6 +36,7 @@ export interface LlmLifecycleRequest {
   readonly nodeId: string;
   readonly originatingModuleInstanceId: string;
   readonly prompt: CompiledPrompt;
+  readonly contextAtoms: readonly DeepReadonly<InformationAtom>[];
   readonly reply: ReplyRequestedInformationPayload;
 }
 
@@ -76,6 +77,7 @@ export class LlmLifecycleClient {
       originatingModuleInstanceId: request.originatingModuleInstanceId,
     } as const;
     const prompt = informationCompiledPromptSchema.parse(request.prompt);
+    assertPromptContext(prompt, request.contextAtoms, causedByAtom);
     const requested = await this.#core.register(llmRequestedInformationKind, {
       occurredAt: this.#now().toISOString(),
       source: "runtime:llm",
@@ -89,6 +91,10 @@ export class LlmLifecycleClient {
           relation: "core:context",
           informationId: contextAtom.informationId,
         },
+        ...request.contextAtoms.map(({ informationId }) => ({
+          relation: "core:uses-context" as const,
+          informationId,
+        })),
       ],
     });
 
@@ -135,6 +141,30 @@ export class LlmLifecycleClient {
         contextAtom.informationId,
       ),
     });
+  }
+}
+
+function assertPromptContext(
+  prompt: CompiledPrompt,
+  contextAtoms: readonly DeepReadonly<InformationAtom>[],
+  causedByAtom: DeepReadonly<InformationAtom>,
+): void {
+  const selectedIds = contextAtoms.map(({ informationId }) => informationId);
+  const provenanceIds = prompt.provenance.flatMap(({ informationId }) =>
+    informationId === undefined ? [] : [informationId],
+  );
+  if (
+    selectedIds.length !== provenanceIds.length ||
+    selectedIds.some(
+      (informationId, index) => informationId !== provenanceIds[index],
+    )
+  ) {
+    throw new Error(
+      "Prompt provenance must match selected information order",
+    );
+  }
+  if (!selectedIds.includes(causedByAtom.informationId)) {
+    throw new Error("Selected information must include the reply source");
   }
 }
 
