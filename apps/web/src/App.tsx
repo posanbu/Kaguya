@@ -620,7 +620,7 @@ function ProfileManagementScreen({
         </div>
         <div>
           <h1>Kaguya</h1>
-          <p>Profile 管理</p>
+          <p>配置引导</p>
         </div>
       </header>
 
@@ -632,8 +632,8 @@ function ProfileManagementScreen({
           >
             <div className="panel-heading profile-sidebar-heading">
               <div>
-                <p className="eyebrow">Registry</p>
-                <h2 id="profiles-title">Profiles</h2>
+                <p className="eyebrow">第一步</p>
+                <h2 id="profiles-title">选择配置</h2>
               </div>
               {canClose ? (
                 <button
@@ -660,16 +660,16 @@ function ProfileManagementScreen({
                 }}
               >
                 <Plus size={16} />
-                <span>Create Profile</span>
+                <span>新建 Profile</span>
               </button>
               {createExpanded ? (
                 <div className="profile-create-form">
                   <label className="field compact-field">
-                    <span>Profile name</span>
+                    <span>Profile 名称</span>
                     <input
                       value={createName}
                       onChange={(event) => setCreateName(event.target.value)}
-                      placeholder="Production"
+                      placeholder="例如：生产环境"
                       autoComplete="off"
                     />
                   </label>
@@ -684,7 +684,7 @@ function ProfileManagementScreen({
                     ) : (
                       <Plus size={16} />
                     )}
-                    <span>{mutating ? "Creating" : "Create"}</span>
+                    <span>{mutating ? "创建中" : "创建"}</span>
                   </button>
                 </div>
               ) : null}
@@ -703,7 +703,7 @@ function ProfileManagementScreen({
                   >
                     <span className="profile-list-name">{profile.name}</span>
                     <span className="profile-list-meta">
-                      {selected ? "Selected" : "Available"}
+                      {selected ? "当前选中" : "可用配置"}
                     </span>
                   </button>
                 );
@@ -724,11 +724,11 @@ function ProfileManagementScreen({
           >
             <div className="panel-heading">
               <div>
-                <p className="eyebrow">Editor</p>
+                <p className="eyebrow">第二步</p>
                 <h2 id="profile-editor-title">
                   {openedProfileId === undefined
-                    ? "Select a profile"
-                    : "Profile details"}
+                    ? "请选择配置"
+                    : "填写模型信息"}
                 </h2>
               </div>
               <div className="editor-actions">
@@ -738,7 +738,7 @@ function ProfileManagementScreen({
                   disabled={openedProfileId === undefined || mutating}
                   onClick={() => void handleSelectProfile()}
                 >
-                  Select
+                  选为当前配置
                 </button>
                 <button
                   type="button"
@@ -747,15 +747,15 @@ function ProfileManagementScreen({
                   onClick={() => void handleDeleteProfile()}
                 >
                   <Trash2 size={16} />
-                  <span>Delete</span>
+                  <span>删除</span>
                 </button>
               </div>
             </div>
 
             <p className="setup-intro profile-intro">
-              Load a full profile with the management token, then save or select
-              it explicitly. Creation, replacement, selection, and deletion
-              remain separate actions.
+              填写模型服务地址和两个模型层级，保存后 Kaguya
+              会在重启时加载当前配置。
+              如果暂时不接入平台或插件，也可以在下方明确确认。
             </p>
 
             {panelError ? (
@@ -795,7 +795,7 @@ function ProfileManagementScreen({
                 }}
               >
                 <label className="field">
-                  <span>Profile name</span>
+                  <span>Profile 名称</span>
                   <input
                     value={editorFields.name}
                     disabled={loadedProfile.id === "default"}
@@ -812,7 +812,7 @@ function ProfileManagementScreen({
                   />
                 </label>
                 <label className="field">
-                  <span>Model service URL</span>
+                  <span>模型服务地址</span>
                   <input
                     type="url"
                     value={editorFields.baseUrl}
@@ -828,7 +828,7 @@ function ProfileManagementScreen({
                   />
                 </label>
                 <label className="field">
-                  <span>Model service API key</span>
+                  <span>模型服务 API Key</span>
                   <div className="password-field">
                     <input
                       type={showApiKey ? "text" : "password"}
@@ -856,7 +856,7 @@ function ProfileManagementScreen({
                 </label>
                 <div className="setup-model-grid">
                   <label className="field">
-                    <span>Light model</span>
+                    <span>轻量模型</span>
                     <input
                       value={editorFields.lightModel}
                       onChange={(event) =>
@@ -871,7 +871,7 @@ function ProfileManagementScreen({
                     />
                   </label>
                   <label className="field">
-                    <span>Heavy model</span>
+                    <span>重量模型</span>
                     <input
                       value={editorFields.heavyModel}
                       onChange={(event) =>
@@ -901,10 +901,7 @@ function ProfileManagementScreen({
                       )
                     }
                   />
-                  <span>
-                    I understand that platforms and plugins are still
-                    unconfigured.
-                  </span>
+                  <span>我确认当前尚未配置平台与插件，稍后再配置也可以。</span>
                 </label>
 
                 <button
@@ -917,7 +914,7 @@ function ProfileManagementScreen({
                   ) : (
                     <Save size={18} />
                   )}
-                  <span>{mutating ? "Saving" : "Save Profile"}</span>
+                  <span>{mutating ? "保存中" : "保存配置"}</span>
                 </button>
               </form>
             ) : null}
@@ -942,13 +939,13 @@ function ReadinessPanel({
   return (
     <section className="readiness-card" aria-labelledby="readiness-title">
       <div className="readiness-heading">
-        <p className="eyebrow">Selected Profile</p>
+        <p className="eyebrow">配置检查</p>
         <h3 id="readiness-title">{selectedProfileId}</h3>
       </div>
-      <p className="readiness-status">Status: {statusLabel(status)}</p>
+      <p className="readiness-status">当前状态：{statusLabel(status)}</p>
       {issues.length > 0 ? (
         <div className="readiness-group">
-          <strong>Issues</strong>
+          <strong>需要处理</strong>
           <ul className="readiness-list">
             {issues.map((issue) => (
               <li key={`${issue.id}:${issue.path}`}>
@@ -961,7 +958,7 @@ function ReadinessPanel({
       ) : null}
       {warnings.length > 0 ? (
         <div className="readiness-group">
-          <strong>Warnings</strong>
+          <strong>提醒</strong>
           <ul className="readiness-list">
             {warnings.map((warning) => (
               <li key={`${warning.id}:${warning.path}`}>
@@ -973,9 +970,7 @@ function ReadinessPanel({
         </div>
       ) : null}
       {issues.length === 0 && warnings.length === 0 ? (
-        <p className="readiness-empty">
-          No readiness issues for the selected profile.
-        </p>
+        <p className="readiness-empty">当前配置已通过检查。</p>
       ) : null}
     </section>
   );
