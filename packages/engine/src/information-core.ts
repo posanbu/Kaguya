@@ -27,6 +27,7 @@ import type {
   InformationKindDefinition,
   InformationRegistrationInput,
   InformationReferenceRule,
+  InformationSelectorDefinition,
 } from "@kaguya/sdk";
 
 import {
@@ -43,6 +44,10 @@ import {
 } from "./information-errors.js";
 import { InformationKindRegistry } from "./information-kind-registry.js";
 import { consumerFailedInformationKind } from "./information-kinds.js";
+import {
+  InformationSelectorExecutor,
+  type InformationRetrievalStrategy,
+} from "./information-selector.js";
 
 export {
   InformationCoreClosedError,
@@ -112,6 +117,7 @@ export interface InformationCoreOptions {
   readonly now?: () => Date;
   readonly bootstrapReporter?: (error: unknown) => void | Promise<void>;
   readonly logProjectionRunner?: InformationLogProjectionRunner;
+  readonly retrievalStrategies?: readonly InformationRetrievalStrategy[];
 }
 
 type CoreState = "new" | "starting" | "started" | "closing" | "closed";
@@ -124,6 +130,7 @@ export class InformationCore {
   #now: () => Date;
   #bootstrapReporter: (error: unknown) => void | Promise<void>;
   #logProjectionRunner: InformationLogProjectionRunner | undefined;
+  #selectorExecutor: InformationSelectorExecutor;
   #state: CoreState = "new";
   #startPromise: Promise<void> | undefined;
   #closePromise: Promise<void> | undefined;
@@ -138,6 +145,10 @@ export class InformationCore {
     this.#now = options.now ?? (() => new Date());
     this.#bootstrapReporter = options.bootstrapReporter ?? (() => undefined);
     this.#logProjectionRunner = options.logProjectionRunner;
+    this.#selectorExecutor = new InformationSelectorExecutor(
+      this.store,
+      options.retrievalStrategies,
+    );
   }
 
   start(): Promise<void> {
@@ -257,6 +268,17 @@ export class InformationCore {
   ): Promise<readonly DeepReadonly<InformationAtom>[]> {
     this.assertState("started");
     return this.store.getMany(informationIds);
+  }
+
+  async select(
+    selector: InformationSelectorDefinition,
+    sourceInformationId: InformationId,
+  ): Promise<readonly DeepReadonly<InformationAtom>[]> {
+    this.assertState("started");
+    return this.#selectorExecutor.select(
+      selector,
+      this.parseInformationId(sourceInformationId),
+    );
   }
 
   async query(
