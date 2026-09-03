@@ -1,14 +1,16 @@
 /**
  * 功能概述：本模块定义信息原子模块的 SDK 契约，使模块只能订阅已声明 kind，
- * 并通过 handler context 注册由输入 atom 因果派生的新 atom。
+ * 并通过 handler context 注册由输入 atom 因果派生的新 atom、显式选择账本上下文。
  * 主要职责：`defineInformationModule` 校验清单基础约束；`onInformation` 将精确的
  * kind definition 与处理器封装为订阅；`InformationModuleHandlerContext.register`
- * 让宿主补齐 source、时间和受保护引用后交给 InformationCore。
+ * 让宿主补齐 source、时间和受保护引用后交给 InformationCore；`context.select` 将
+ * Selector 交由 Core 执行，并只返回 Core 校验和重新加载的不可变原子。
  * 代码库关系：由 `packages/sdk/src/index.ts` 对外导出，engine 的 `ModuleHost`
  * 消费 subscription 的 definition 并调用 Core.on；模块实现只依赖本文件而不接触
  * Core 的持久化、消费者故障记录或旧 Event ModuleHost。
  * 输入输出与副作用：定义和订阅均为内存值；清单拒绝空标识与重复 kind；handler
- * 取得只读输入 atom，register 返回 Core 已持久化且深冻结的派生 atom。
+ * 取得只读输入 atom，register 返回 Core 已持久化且深冻结的派生 atom；select 可能
+ * 执行只读持久化查询，但不允许模块绕过账本拼装上下文。
  */
 import type {
   DeepReadonly,
@@ -19,6 +21,7 @@ import type {
 import { z } from "@kaguya/schema";
 
 import type { InformationKindDefinition } from "./information-kind.js";
+import type { InformationSelectorDefinition } from "./information-selector.js";
 
 export interface InformationModuleManifest<TSettings = unknown> {
   readonly apiVersion: 1;
@@ -38,6 +41,9 @@ export interface InformationModuleHandlerContext extends InformationExecutionCon
   readonly definitionId: string;
   readonly instanceId: string;
   readonly sourceAtom: DeepReadonly<InformationAtom>;
+  select(
+    selector: InformationSelectorDefinition,
+  ): Promise<readonly DeepReadonly<InformationAtom>[]>;
   register<K extends string, P extends JsonObject>(
     definition: InformationKindDefinition<K, P>,
     input: {
