@@ -4,8 +4,7 @@
  * 历史；原子到 Prompt 仅显式渲染 reply 与 Memory kind，并保留选择顺序和 provenance。
  * 代码库关系：`llm-reply.ts` 使用这里的 Selector；Engine 负责校验并重新加载结果，
  * PromptCompiler 负责产生可持久化 provenance。
- * 输入输出与副作用：默认选择是纯函数且不调用 reader；不保存 Session、contextKey 或
- * 跨请求状态。
+ * 输入输出与副作用：默认选择是纯函数且不调用 reader；不保存会话键或跨请求状态。
  */
 import type {
   CompiledPrompt,

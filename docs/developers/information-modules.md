@@ -25,6 +25,50 @@ onInformation(inboundTextKind, async (atom, context) => {
 
 `context.register()` 不接受调用方提供的 `informationId`、`source` 或发生时间。宿主会补齐 `source: module:<instanceId>`、当前时间、指向输入的 `core:caused-by`，以及输入已有的唯一 `core:context` 引用。调用方提供的额外 relation 必须不是这两个保留 relation，并且必须预先声明在目标 Kind definition 的 `references` 中；否则 Core 在提交时拒绝该原子。
 
+## 显式选择运行上下文
+
+需要为 Prompt 或其他派生计算加载上下文时，模块先用 `defineInformationSelector()` 声明选择规则，再在 handler 中调用 `context.select()`。Selector 接触的是受限只读账本，只能返回有序的 `informationId` 列表；Core 会校验列表、按该顺序重新加载原子，并把冻结后的原子返回给模块。模块不能把查询结果中的 payload 直接拼成未落账上下文。
+
+::: code-group
+
+```ts [按引用选择当前输入与 Memory ~vscode-icons:file-type-typescript~]
+const replyContextSelector = defineInformationSelector({
+  selectorId: "reply.with-referenced-memory",
+  async select({ sourceAtom, ledger }) {
+    const memories = await ledger.related({
+      from: [sourceAtom.informationId],
+      relation: "core:uses-context",
+      direction: "incoming",
+      limit: 8,
+    });
+
+    return [
+      sourceAtom.informationId,
+      ...memories.map((memory) => memory.informationId),
+    ];
+  },
+});
+
+onInformation(replyRequestedKind, async (atom, context) => {
+  const contextAtoms = await context.select(replyContextSelector);
+  // 这里只渲染 Core 已校验并重新加载的账本原子。
+});
+```
+
+:::
+
+只读账本提供三种受控入口：`find()` 按 kind、来源和发生时间筛选；`related()` 沿引用图单跳读取；`retrieve()` 调用 Core 配置的命名检索策略。每次查询都必须给出 `limit`，`find()` 还必须至少给出一个筛选条件。读取器返回的候选只在本次选择调用中授权，并发调用之间不共享授权状态。
+
+Selector 的最终结果不能包含重复 ID，也不能包含当前输入或本次读取器从未授权的 ID。未知、重复、越权，以及选择后重新加载时消失的原子都会由 Core 明确报错；模块不应捕获这些错误后自行回退到历史数据。
+
+内置 reply 默认 Selector 只返回当前已接受的 `core.reply.requested` 原子，不按用户、群组、时间窗口、`core:context` 或其他字段自动聚合历史。需要更多上下文时，必须用新的 Selector 显式查询并返回相应 ID。
+
+## Prompt 与 Memory 的可追溯性
+
+reply Prompt 只渲染当前输入和 Selector 选中的、已有明确 renderer 的账本原子。每个 Prompt fragment 都携带来源 `informationId`；LLM requested 原子再以相同顺序写入 `core:uses-context` 引用，因此可以从请求追溯到实际输入原子。未知 Kind 不会被当作文本静默注入 Prompt。
+
+Memory 是普通的 `core.memory.text` information kind，payload 只保存文本。产生 Memory 的模块应通过一个或多个有序 `core:uses-context` 引用指向其输入原子；Memory 只有被 Selector 明确选中时才进入 Prompt。Memory、Prompt 和 reply 路径不使用 `sessionId` 或 `contextKey`，也不存在以隐式会话桶恢复历史的旁路。
+
 ## 广播、过滤与阶段关系
 
 一个 Kind 可以有多个订阅者。Core 在原子持久化后对当前订阅者并发广播；注册先后与模块配置顺序不表达业务优先级。需要顺序时，前一阶段必须注册新的 Kind，后一阶段订阅该 Kind。
