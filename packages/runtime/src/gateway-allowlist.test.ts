@@ -1,8 +1,8 @@
 /**
- * 功能概述：验证历史 GatewayAllowlist 对平台、用户与群目标的组合匹配，
+ * 功能概述：验证 GatewayAllowlist 对平台、用户与群目标的组合匹配，
  * 使用不含 Core identity 的 `PlatformInboundMessage` fixture。
  * 主要职责：覆盖空维度通配、多维同时命中、群白名单拒绝私聊、
- * ID 修剪/去重与 Web 消息的同等判定。
+ * ID 修剪/去重，以及 Web 消息始终交由 bearer token 边界而不受平台名单拒绝。
  * 代码库关系：直接测试 `gateway-allowlist.ts`；该类属于 Runtime 的暂存公共面，
  * Task 5 的 Web/NapCat ingress 收口不向 adapter 暴露它。
  * 输入输出与副作用：测试只构造内存消息并调用同步 `allows`，无 I/O。
@@ -68,7 +68,7 @@ describe("GatewayAllowlist", () => {
     expect(allowlist.allows(baseMessage)).toBe(true);
   });
 
-  it("applies the same dimensions to web platform messages", () => {
+  it("leaves Web messages to the bearer-token boundary", () => {
     const webMessage = {
       platform: "web" as const,
       adapterId: "web.ui.main",
@@ -81,26 +81,11 @@ describe("GatewayAllowlist", () => {
       raw: {},
     };
 
-    expect(new GatewayAllowlist().allows(webMessage)).toBe(true);
-    expect(
-      new GatewayAllowlist({ platforms: ["web"] }).allows(webMessage),
-    ).toBe(true);
-    expect(new GatewayAllowlist({ platforms: ["qq"] }).allows(webMessage)).toBe(
-      false,
-    );
-    expect(new GatewayAllowlist({ userIds: ["web"] }).allows(webMessage)).toBe(
-      true,
-    );
-    expect(
-      new GatewayAllowlist({ userIds: ["112233"] }).allows(webMessage),
-    ).toBe(false);
-    expect(
-      new GatewayAllowlist({ groupIds: ["group-1"] }).allows(webMessage),
-    ).toBe(false);
     expect(
       new GatewayAllowlist({
-        platforms: ["web"],
-        userIds: ["web"],
+        platforms: ["qq"],
+        userIds: ["112233"],
+        groupIds: ["group-1"],
       }).allows(webMessage),
     ).toBe(true);
   });

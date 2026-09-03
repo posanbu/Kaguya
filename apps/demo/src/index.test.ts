@@ -6,7 +6,8 @@
  * 代码库关系：直接调用 `index.ts` 导出的 `readDemoDatabaseUrl`/`runDemo`；
  * 测试数据库来自 `@kaguya/database/testing`，实际 CLI 则由同一 URL 连接方式启动。
  * 输入输出与副作用：用例收集内存输出行并显式关闭 PGlite；
- * 每次执行使用固定消息与可预测 ID，不调用外部平台或模型。
+ * 单次展示用例注入可预测 ID，重复运行用例验证生产 UUID 在同一持久账本不冲突；
+ * 不调用外部平台或模型。
  */
 import { createTestingDatabase } from "@kaguya/database/testing";
 import { afterEach, describe, expect, it } from "vitest";
@@ -37,10 +38,12 @@ describe("demo entry point", () => {
     const database = await createTestingDatabase();
     databases.push(database);
     const output: string[] = [];
+    let sequence = 0;
 
     const receipt = await runDemo({
       database,
       writeLine: (line) => output.push(line),
+      informationIdGenerator: () => `demo-information-${++sequence}`,
     });
 
     expect(receipt.rootInformationId).toBe("demo-information-1");
@@ -55,5 +58,21 @@ describe("demo entry point", () => {
       "core.reply.requested: 1",
       "core.runtime.context: 1",
     ]);
+  }, 20_000);
+
+  it("can run twice against the same persistent ledger with production ids", async () => {
+    const database = await createTestingDatabase();
+    databases.push(database);
+
+    const first = await runDemo({ database, writeLine: () => undefined });
+    const second = await runDemo({ database, writeLine: () => undefined });
+
+    expect(first.rootInformationId).not.toBe(second.rootInformationId);
+    expect(
+      await database.information.get(first.rootInformationId),
+    ).toBeDefined();
+    expect(
+      await database.information.get(second.rootInformationId),
+    ).toBeDefined();
   }, 20_000);
 });

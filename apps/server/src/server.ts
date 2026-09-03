@@ -12,7 +12,8 @@
  * 只接收 `setup.inspect()` 已选中的 Profile 快照并校验，不再次读取 Registry；`openAICompatibleProviderSettings`
  * 提取 provider 能力开关；`assertProfileReady` 保持 readiness 错误固定且无 secret；
  * `connectInformationDatabase` 与 `startInformationRuntime` 将 lazy Pool 创建及
- * 首次 migrate/I/O 失败统一收窄为不包含 URL、cause 或凭据的固定错误；
+ * 首次 migrate/I/O 失败收窄为 database error，其他 Runtime/模块启动失败收窄为
+ * 独立 runtime startup error；两类错误都不包含 URL、cause 或凭据；
  * 其余 helper 管理资源关闭与进程信号处理。
  * 代码库关系：本文件消费 `@kaguya/config` 的 Profile Registry、`@kaguya/runtime`
  * 的运行时注入点、Fastify HTTP 组装和 NapCat 适配器；模块层 `packages/modules`
@@ -41,7 +42,9 @@ import {
   type KaguyaLogger,
 } from "@kaguya/logger";
 import {
+  GatewayAllowlist,
   KaguyaRuntime,
+  RuntimeDatabaseInitializationError,
   type RuntimeModelSelectionResolver,
 } from "@kaguya/runtime";
 import type { FastifyInstance } from "fastify";
@@ -170,10 +173,14 @@ export async function startKaguyaServer(
       "Kaguya server starting",
     );
     if (runtimeReady && effectiveConfig.napcat.enabled) {
+      const gatewayAllowlist = new GatewayAllowlist(
+        effectiveConfig.gatewayAllowlist,
+      );
       napcat = createNapCatSupervisor({
         config: effectiveConfig.napcat,
         ingress: required(runtime, "runtime ingress"),
         logger: napcatLogger,
+        allowsInbound: (message) => gatewayAllowlist.allows(message),
       });
       required(runtime, "runtime").registerTransport({
         adapterId: effectiveConfig.napcat.adapterId,
@@ -344,9 +351,19 @@ export function createRuntimeModelSelectionResolver(
 export class InformationDatabaseConnectionError extends Error {
   readonly failureType: string;
 
-  constructor(error: unknown) {
+  constructor(error: unknown, failureType = safeErrorType(error)) {
     super("Information database connection failed");
     this.name = "InformationDatabaseConnectionError";
+    this.failureType = failureType;
+  }
+}
+
+export class InformationRuntimeStartupError extends Error {
+  readonly failureType: string;
+
+  constructor(error: unknown) {
+    super("Information runtime startup failed");
+    this.name = "InformationRuntimeStartupError";
     this.failureType = safeErrorType(error);
   }
 }
@@ -367,7 +384,10 @@ async function startInformationRuntime(runtime: KaguyaRuntime): Promise<void> {
   try {
     await runtime.start();
   } catch (error) {
-    throw new InformationDatabaseConnectionError(error);
+    if (error instanceof RuntimeDatabaseInitializationError) {
+      throw new InformationDatabaseConnectionError(error, error.failureType);
+    }
+    throw new InformationRuntimeStartupError(error);
   }
 }
 
@@ -452,7 +472,9 @@ function safeErrorType(error: unknown): string {
   if (error instanceof AggregateError) return "AggregateError";
   if (error instanceof Error) {
     const type = error.constructor.name;
-    return /^[A-Za-z][A-Za-z0-9]*$/u.test(type) ? type : "Error";
+    return type.length <= 128 && /^[A-Za-z][A-Za-z0-9]*$/u.test(type)
+      ? type
+      : "Error";
   }
   return "UnknownError";
 }

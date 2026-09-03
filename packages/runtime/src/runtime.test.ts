@@ -2,7 +2,7 @@
  * 功能概述：用真实 PGlite、Core 和 ModuleHost 验证 `KaguyaRuntime` 的完整信息 DAG。
  * 主要职责：覆盖 Web 入站到投递成功的直接因果链、生成失败不会继续 assistant/outbound/delivery、
  * 三类 transport 失败、无订阅持久化、同 kind 消费并发与双实例归属、start/close 确定性交错、
- * in-flight 关闭、关闭后 ingress 拒绝，以及消费者失败与其他结果并存。
+ * in-flight 关闭、关闭后 ingress 拒绝、数据库初始化错误脱敏分类，以及消费者失败与其他结果并存。
  * 代码库关系：测试直接消费 Runtime 的 `InformationIngress.submit` 和注入数据库选项；默认业务
  * 模块来自 `@kaguya/modules`，自定义 fixture 只用于隔离并发和消费者故障语义。
  * 输入输出与副作用：每个用例创建隔离的内存 PostgreSQL 数据库，Runtime 只写 information
@@ -170,6 +170,28 @@ function parentId(
 }
 
 describe("KaguyaRuntime", () => {
+  it("classifies migration failures without retaining database details", async () => {
+    const database = await createTestingDatabase();
+    const secret = "postgresql://ledger:runtime-secret@db.internal/kaguya";
+    vi.spyOn(database, "migrate").mockRejectedValueOnce(
+      new Error(`authentication failed: ${secret}`),
+    );
+    const runtime = new KaguyaRuntime({ database });
+    resources.push({ runtime, database });
+
+    const error = await runtime.start().catch((thrown: unknown) => thrown);
+
+    expect(error).toMatchObject({
+      name: "RuntimeDatabaseInitializationError",
+      message: "Runtime database initialization failed",
+      failureType: "Error",
+    });
+    expect(error).not.toHaveProperty("cause");
+    expect(`${String(error)}\n${JSON.stringify(error)}`).not.toContain(
+      "runtime-secret",
+    );
+  });
+
   it(
     "shares one setup promise across concurrent start calls",
     async () => {

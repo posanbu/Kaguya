@@ -7,8 +7,9 @@
  * `information-kinds.ts` 提供唯一的 `consumer.failed` 定义，Runtime 后续复用它。
  * 输入输出与副作用：提交成功才广播当前快照，拒绝的消费者被记录为失败 atom；失败
  * atom 的消费者或持久化失败只进入 bootstrap reporter，绝不递归产生故障链；失败事实
- * 会继承输入唯一的 `core:context`，错误类型截断到 kind schema 的上限，确保每个接受的
- * 消费者错误都可表达为可查询且不泄漏原异常正文的事实。
+ * 会继承输入唯一的 `core:context`，错误类型只接受有限的安全标识符。start/close 共享
+ * promise；关闭先拒绝新注册、等待已接受的落账和广播，再排空日志投影并清理订阅，
+ * 确保并发调用不能重复初始化、复活 Core 或泄漏原异常正文。
  */
 import {
   type DeepReadonly,
@@ -97,6 +98,7 @@ export interface InformationAppendOptions {
  */
 export interface InformationLogProjectionRunner {
   projectPending(): Promise<void>;
+  drainPending(): Promise<void>;
 }
 
 export interface InformationCoreOptions {
@@ -108,7 +110,7 @@ export interface InformationCoreOptions {
   readonly logProjectionRunner?: InformationLogProjectionRunner;
 }
 
-type CoreState = "new" | "started" | "closed";
+type CoreState = "new" | "starting" | "started" | "closing" | "closed";
 
 export class InformationCore {
   readonly registry: InformationKindRegistry;
@@ -119,6 +121,9 @@ export class InformationCore {
   #bootstrapReporter: (error: unknown) => void | Promise<void>;
   #logProjectionRunner: InformationLogProjectionRunner | undefined;
   #state: CoreState = "new";
+  #startPromise: Promise<void> | undefined;
+  #closePromise: Promise<void> | undefined;
+  readonly #inFlight = new Set<Promise<unknown>>();
 
   constructor(options: InformationCoreOptions) {
     this.registry = options.registry;
@@ -131,21 +136,33 @@ export class InformationCore {
     this.#logProjectionRunner = options.logProjectionRunner;
   }
 
-  async start(): Promise<void> {
-    this.assertState("new");
-    this.registry.seal();
-    await this.store.synchronizeKinds(
-      this.registry.definitions().map((definition) => definition.kind),
-    );
-    this.#state = "started";
-    await this.projectPendingLogs();
+  start(): Promise<void> {
+    if (this.#state === "starting") {
+      return this.#startPromise!;
+    }
+    if (this.#state === "started") {
+      return Promise.resolve();
+    }
+    if (this.#state !== "new") {
+      return Promise.reject(new InformationCoreClosedError());
+    }
+    this.#state = "starting";
+    this.#startPromise = this.startCore();
+    return this.#startPromise;
   }
 
   async register<K extends string, P extends JsonObject>(
     definition: InformationKindDefinition<K, P>,
     input: InformationRegistrationInput<K, P>,
   ): Promise<DeepReadonly<InformationAtom<K, P>>> {
-    return this.registerInternal(definition, input, true);
+    this.assertState("started");
+    const operation = this.registerInternal(definition, input, true);
+    this.#inFlight.add(operation);
+    void operation.then(
+      () => this.#inFlight.delete(operation),
+      () => this.#inFlight.delete(operation),
+    );
+    return operation;
   }
 
   on<K extends string, P extends JsonObject>(
@@ -172,7 +189,6 @@ export class InformationCore {
     input: InformationRegistrationInput<K, P>,
     recordConsumerFailures: boolean,
   ): Promise<DeepReadonly<InformationAtom<K, P>>> {
-    this.assertState("started");
     const registered = this.registry.assertRegistered(
       definition as InformationKindDefinition<string, any>,
     ) as InformationKindDefinition<K, P>;
@@ -246,12 +262,45 @@ export class InformationCore {
     return this.store.query(query);
   }
 
-  async close(): Promise<void> {
-    if (this.#state === "closed") {
-      return;
+  close(): Promise<void> {
+    if (this.#closePromise !== undefined) {
+      return this.#closePromise;
     }
-    this.#bus.clear();
-    this.#state = "closed";
+    if (this.#state === "closed") {
+      return Promise.resolve();
+    }
+    const starting =
+      this.#state === "starting" ? this.#startPromise : undefined;
+    this.#state = "closing";
+    this.#closePromise = (async () => {
+      await starting?.catch(() => undefined);
+      await Promise.allSettled([...this.#inFlight]);
+      await this.projectPendingLogs(true);
+      this.#bus.clear();
+      this.#state = "closed";
+    })();
+    return this.#closePromise;
+  }
+
+  private async startCore(): Promise<void> {
+    try {
+      this.registry.seal();
+      await this.store.synchronizeKinds(
+        this.registry.definitions().map((definition) => definition.kind),
+      );
+      if (this.#state !== "starting") {
+        return;
+      }
+      await this.projectPendingLogs();
+      if (this.#state === "starting") {
+        this.#state = "started";
+      }
+    } catch (error) {
+      if (this.#state !== "closing") {
+        this.#state = "closed";
+      }
+      throw error;
+    }
   }
 
   private async recordConsumerFailure(
@@ -300,9 +349,13 @@ export class InformationCore {
     }
   }
 
-  private async projectPendingLogs(): Promise<void> {
+  private async projectPendingLogs(drain = false): Promise<void> {
     try {
-      await this.#logProjectionRunner?.projectPending();
+      if (drain) {
+        await this.#logProjectionRunner?.drainPending();
+      } else {
+        await this.#logProjectionRunner?.projectPending();
+      }
     } catch {
       // Projection recovery is an observer of durable facts. It cannot make an
       // accepted atom append fail or force a rollback after commit.
@@ -348,7 +401,7 @@ function summarizeConsumerError(reason: unknown): {
 } {
   if (reason instanceof Error) {
     return {
-      errorType: truncate(reason.name || "Error", 128),
+      errorType: safeConsumerErrorType(reason),
       message: "Consumer handler failed",
     };
   }
@@ -356,6 +409,17 @@ function summarizeConsumerError(reason: unknown): {
     errorType: "NonErrorRejection",
     message: "Consumer rejected with a non-Error value",
   };
+}
+
+function safeConsumerErrorType(error: Error): string {
+  try {
+    const name = error.name;
+    return name.length <= 128 && /^[A-Za-z][A-Za-z0-9]*$/u.test(name)
+      ? name
+      : "Error";
+  } catch {
+    return "Error";
+  }
 }
 
 function assertConsumerIdentity(consumer: InformationConsumer): void {
@@ -375,10 +439,6 @@ function assertNonBlankConsumerField(
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new Error(`${field} must not be blank`);
   }
-}
-
-function truncate(value: string, maximumLength: number): string {
-  return value.slice(0, maximumLength);
 }
 
 function buildReferenceExpectations(

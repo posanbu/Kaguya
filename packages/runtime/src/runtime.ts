@@ -9,7 +9,9 @@
  * 输入输出与副作用：submit 返回 context 根 `informationId` 与本次调用实际收到的安全 receipts，
  * 不保留单数 delivery 兼容别名；
  * 不生成 trace/message/event ID，不写旧 SQLite repositories。starting 期间的 close 会先等待或
- * 取消共享启动任务，再执行一次资源清理；仅关闭由 databaseUrl 创建的连接，注入数据库归调用方。
+ * 取消共享启动任务，再执行一次资源清理；数据库 migrate 失败转换为不保留 cause/URL 的
+ * `RuntimeDatabaseInitializationError`，供 Server 与模块生命周期失败区分；仅关闭由
+ * databaseUrl 创建的连接，注入数据库归调用方。
  */
 import { randomUUID } from "node:crypto";
 
@@ -113,6 +115,16 @@ export class RuntimeUnavailableError extends Error {
   constructor(message = "Kaguya runtime is not accepting information") {
     super(message);
     this.name = "RuntimeUnavailableError";
+  }
+}
+
+export class RuntimeDatabaseInitializationError extends Error {
+  readonly failureType: string;
+
+  constructor(error: unknown) {
+    super("Runtime database initialization failed");
+    this.name = "RuntimeDatabaseInitializationError";
+    this.failureType = safeErrorType(error);
   }
 }
 
@@ -227,7 +239,11 @@ export class KaguyaRuntime implements InformationIngress {
       this.#database = database;
       this.#ownsDatabase = this.options.database === undefined;
       this.#assertStarting();
-      await database.migrate();
+      try {
+        await database.migrate();
+      } catch (error) {
+        throw new RuntimeDatabaseInitializationError(error);
+      }
       this.#assertStarting();
       const replyModule = createLlmReplyModule({
         executor: { execute: (input) => this.#executeLlm(input) },
@@ -708,9 +724,11 @@ function transportKey(adapterId: string, platform: string): string {
 }
 
 function safeErrorType(error: unknown): string {
-  return error instanceof Error && error.name.length > 0
-    ? error.name.slice(0, 128)
-    : "UnknownError";
+  if (!(error instanceof Error)) return "UnknownError";
+  const name = error.constructor.name;
+  return name.length <= 128 && /^[A-Za-z][A-Za-z0-9]*$/u.test(name)
+    ? name
+    : "Error";
 }
 
 function required<T>(value: T | undefined, label: string): T {

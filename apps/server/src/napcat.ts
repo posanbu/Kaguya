@@ -4,7 +4,8 @@
  * `PlatformOutboundTransport.sendMessage`。
  * 主要职责：`WebSocketJsonTransport` 处理 token URL、JSON frame 与 close/error；
  * `NapCatConnectionSupervisor` 创建、退役和重建整条连接，同时实现 Runtime 的出站 transport；
- * `createNapCatSupervisor` 将入站 frame 直接交给 ingress，并为连接/提交失败记录安全上下文。
+ * `createNapCatSupervisor` 在正规化 frame 后先执行 Server 注入的 allowlist 谓词，再交给
+ * ingress，并为连接/提交失败记录安全上下文。
  * 代码库关系：复用 `@kaguya/platform-adapters` 的 NapCat adapter/action client；
  * `server.ts` 传入统一 ingress，并将返回的 supervisor 注册为 Runtime 出站 transport。
  * 输入输出与副作用：会建立 WebSocket、写出 JSON、设置重连/超时计时器并在
@@ -16,6 +17,7 @@ import {
   type InformationIngress,
   type JsonMessageTransport,
   type PlatformDeliveryReceipt,
+  type PlatformInboundMessage,
   type PlatformMessageTarget,
   type PlatformOutboundTransport,
 } from "@kaguya/platform-adapters";
@@ -222,6 +224,7 @@ export function createNapCatSupervisor(options: {
   readonly config: NapCatConfig;
   readonly ingress: InformationIngress;
   readonly logger: KaguyaLogger;
+  readonly allowsInbound?: (message: PlatformInboundMessage) => boolean;
 }): NapCatConnectionSupervisor {
   let supervisor: NapCatConnectionSupervisor;
   supervisor = new NapCatConnectionSupervisor({
@@ -246,6 +249,9 @@ export function createNapCatSupervisor(options: {
         transport,
         now: () => new Date(),
         ingress: options.ingress,
+        ...(options.allowsInbound === undefined
+          ? {}
+          : { allowsInbound: options.allowsInbound }),
         onInboundError: (error, context) => {
           options.logger.error(
             {

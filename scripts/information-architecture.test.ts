@@ -3,7 +3,8 @@
  * 兼容 wrapper/别名以及旧工作流 API 再次进入 production TypeScript。
  * 主要职责：`collectProductionSources` 以 POSIX 相对路径遍历 packages/apps；
  * `isProductionTypeScript` 和 `findSourceViolations` 是可独立测试的纯函数；唯一额外
- * profileId 白名单是 schema 的拒绝实现本身；`scanInformationArchitecture` 供 CLI 和
+ * profileId 白名单是 schema 的拒绝实现本身；旧 `emit` 也作为独立规则阻止事件 API 回归；
+ * `scanInformationArchitecture` 供 CLI 和
  * Vitest 共用同一次扫描逻辑，`main` 汇总违规并以非零失败。
  * 代码库关系：迁移验收通过 `pnpm exec tsx scripts/information-architecture.test.ts` 调用；
  * 根 `pnpm test` 也收集本文件，防止此前零测试 suite 的配置回归。
@@ -41,6 +42,7 @@ const forbidden: readonly ForbiddenRule[] = [
   { name: "defineWorkflow", pattern: /\bdefineWorkflow\b/ },
   { name: "onEvent", pattern: /\bonEvent\b/ },
   { name: "onTargetedEvent", pattern: /\bonTargetedEvent\b/ },
+  { name: "emit", pattern: /\bemit\b/ },
   { name: "traceId", pattern: /\btraceId\b/ },
   { name: "eventId", pattern: /\beventId\b/ },
   { name: "messageId", pattern: /\bmessageId\b/ },
@@ -189,6 +191,15 @@ if (process.env.VITEST) {
         "packages/runtime/src/legacy.ts:1: WorkflowEngine",
         "packages/runtime/src/legacy.ts:2: profileId",
       ]);
+    });
+
+    it("rejects the retired emit API when it reappears in production source", () => {
+      expect(
+        findSourceViolations(
+          "packages/runtime/src/legacy.ts",
+          "await runtime.emit(input);",
+        ),
+      ).toEqual(["packages/runtime/src/legacy.ts:1: emit"]);
     });
 
     it("scans the current production workspace", async () => {

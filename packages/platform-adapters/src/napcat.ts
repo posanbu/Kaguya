@@ -2,7 +2,8 @@
  * 功能概述：实现 NapCat/OneBot 的出站 action client 与入站 adapter，两者可安全
  * 共享一个 JSON transport；入站端只持有 `InformationIngress`，不接触 Runtime 其他能力。
  * 主要职责：`NapCatActionClient.sendMessage` 编号 echo、匹配成功/失败回执、处理超时与断线；
- * `NapCatOneBotAdapter` 正规化 frame、过滤 self ID/action response、调用 `ingress.submit`，
+ * `NapCatOneBotAdapter` 正规化 frame、过滤 self ID/action response、执行注入的入站谓词后
+ * 调用 `ingress.submit`，
  * 并在 stop 时停止接收、关闭 transport、排空已提交任务。
  * 代码库关系：`onebot.ts` 提供正规化/action builder，Server `napcat.ts` 提供
  * WebSocket transport、窄 ingress 和日志；`types.ts` 定义入站与投递契约。
@@ -13,6 +14,7 @@ import type { OutboundMessageContent } from "@kaguya/schema";
 
 import type {
   InformationIngress,
+  PlatformInboundMessage,
   PlatformDeliveryReceipt,
   PlatformMessageTarget,
   PlatformOutboundTransport,
@@ -179,6 +181,7 @@ export interface NapCatOneBotAdapterOptions {
   readonly transport: JsonMessageTransport;
   readonly now: () => Date;
   readonly ingress: InformationIngress;
+  readonly allowsInbound?: (message: PlatformInboundMessage) => boolean;
   readonly onInboundError?: (
     error: unknown,
     context: NapCatInboundErrorContext,
@@ -228,6 +231,9 @@ export class NapCatOneBotAdapter {
       this.options.expectedSelfId !== undefined &&
       inbound.selfId !== this.options.expectedSelfId
     ) {
+      return;
+    }
+    if (this.options.allowsInbound?.(inbound) === false) {
       return;
     }
 

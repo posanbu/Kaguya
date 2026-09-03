@@ -3,7 +3,8 @@
  * 派生 atom 注册与故障归属行为。
  * 主要职责：验证模块 context.register 注入模块 source、因果与 context 引用；
  * 验证保留引用和未声明输出被拒绝、输入快照深冻结、同 kind 多实例均被广播，以及
- * handler 故障由 Core 记录为带模块消费者身份的 `consumer.failed`。
+ * handler 故障由 Core 记录为带模块消费者身份的 `consumer.failed`；并直接覆盖共享
+ * start/stop promise、停止与创建竞态、在途 handler 等待及 instance source grammar。
  * 代码库关系：覆盖最终 `module-host.ts` 对 SDK `onInformation` 和 Core
  * `on`/`register` 的适配；MemoryLedger 模拟 Core 所要求的 append-only 存储边界。
  * 输入输出与副作用：测试只写入进程内账本，注册的 atom 必须先满足引用存在性；每个
@@ -153,6 +154,150 @@ async function startHost(
 }
 
 describe("ModuleHost", () => {
+  it("shares concurrent startup without creating duplicate module instances", async () => {
+    const { core } = createCore();
+    await core.start();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let creates = 0;
+    const module = defineInformationModule({
+      manifest: {
+        apiVersion: 1,
+        definitionId: "acme.concurrent-start",
+        displayName: "Concurrent start",
+        settingsSchema: z.object({}).strict(),
+        informationKinds: [inboundKind],
+      },
+      create: async () => {
+        creates += 1;
+        await gate;
+        return { subscriptions: [] };
+      },
+    });
+    const host = new ModuleHost({ core });
+    host.register(module);
+    const activations = [
+      {
+        instanceId: "reply.one",
+        definitionId: module.manifest.definitionId,
+        settings: {},
+      },
+    ];
+
+    const first = host.start(activations);
+    const second = host.start(activations);
+    expect(second).toBe(first);
+    release();
+    await Promise.all([first, second]);
+
+    expect(creates).toBe(1);
+    await host.stop();
+  });
+
+  it("waits for startup and disposes created resources when stop races start", async () => {
+    const { core } = createCore();
+    await core.start();
+    let entered!: () => void;
+    const enteredCreate = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let disposed = 0;
+    const module = defineInformationModule({
+      manifest: {
+        apiVersion: 1,
+        definitionId: "acme.stop-during-start",
+        displayName: "Stop during start",
+        settingsSchema: z.object({}).strict(),
+        informationKinds: [inboundKind],
+      },
+      create: async () => {
+        entered();
+        await gate;
+        return {
+          subscriptions: [],
+          dispose: () => {
+            disposed += 1;
+          },
+        };
+      },
+    });
+    const host = new ModuleHost({ core });
+    host.register(module);
+    const starting = host.start([
+      {
+        instanceId: "reply.one",
+        definitionId: module.manifest.definitionId,
+        settings: {},
+      },
+    ]);
+    await enteredCreate;
+    const stopping = host.stop();
+    expect(host.stop()).toBe(stopping);
+    release();
+
+    await Promise.allSettled([starting, stopping]);
+    expect(disposed).toBe(1);
+    await expect(
+      host.start([
+        {
+          instanceId: "reply.two",
+          definitionId: module.manifest.definitionId,
+          settings: {},
+        },
+      ]),
+    ).rejects.toThrow("ModuleHost cannot be restarted");
+  });
+
+  it("rejects an unsafe instance source and disposes resources created earlier in the startup", async () => {
+    const { core } = createCore();
+    await core.start();
+    let creates = 0;
+    let disposed = 0;
+    const module = defineInformationModule({
+      manifest: {
+        apiVersion: 1,
+        definitionId: "acme.instance-source",
+        displayName: "Instance source",
+        settingsSchema: z.object({}).strict(),
+        informationKinds: [inboundKind],
+      },
+      create: () => {
+        creates += 1;
+        return {
+          subscriptions: [],
+          dispose: () => {
+            disposed += 1;
+          },
+        };
+      },
+    });
+    const host = new ModuleHost({ core });
+    host.register(module);
+
+    await expect(
+      host.start([
+        {
+          instanceId: "reply.one",
+          definitionId: module.manifest.definitionId,
+          settings: {},
+        },
+        {
+          instanceId: "Reply.One",
+          definitionId: module.manifest.definitionId,
+          settings: {},
+        },
+      ]),
+    ).rejects.toThrow("Information module instance id must form a safe source");
+    expect(creates).toBe(1);
+    expect(disposed).toBe(1);
+  });
+
   it("registers a derived atom with module identity and causal references", async () => {
     const { core, store } = createCore();
     await core.start();

@@ -2,7 +2,8 @@
  * 功能概述：验证 Server 作为唯一 composition root 组合 PostgreSQL information
  * database、Runtime、Web/NapCat ingress、HTTP 与启动期选定的全局 Profile。
  * 主要职责：用真实 PGlite 覆盖 Web 到 information DAG，验证 HTTP/Web UI/Vite
- * 组合和启动失败关闭；`createRuntimeModelSelectionResolver` 用例保证 selected Profile
+ * 组合和启动失败关闭；并区分数据库初始化与模块/Runtime 生命周期失败的安全错误分类；
+ * `createRuntimeModelSelectionResolver` 用例保证 selected Profile
  * 在启动时冻结、light/heavy 共用一个 tier-only resolver，且模块不能传 `profileId`。
  * 代码库关系：直接驱动 `server.ts`、`app.ts`、`web-gateway.ts` 与 `web.ts`；
  * 真实配置 Registry 来自 `@kaguya/config`，信息账本来自 `@kaguya/database/testing`，
@@ -440,6 +441,52 @@ describe("unified server composition", () => {
     expect(serialized).not.toContain(databaseUrl);
     expect(serialized).not.toContain("runtime-start-password");
 
+    await closeLogger(rootLogger);
+  });
+
+  it("classifies non-database Runtime startup failures without leaking their details", async () => {
+    const root = mkdtempSync(join(tmpdir(), "kaguya-runtime-startup-"));
+    roots.push(root);
+    const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+    const selectedProfileId = manager.getSelectedProfileId();
+    await manager.replaceProfile(
+      selectedProfileId,
+      readyProfileReplacement(
+        "default",
+        readyProfileSettings("default-light", "default-heavy"),
+      ),
+    );
+    await manager.acknowledgeConfigurationWarnings(selectedProfileId, [
+      "platforms-empty",
+      "plugins-empty",
+    ]);
+    const database = await createTestingDatabase();
+    vi.spyOn(KaguyaDatabase, "connect").mockResolvedValueOnce(database);
+    const secret = "postgresql://module:module-secret@db.internal/kaguya";
+    vi.spyOn(KaguyaRuntime.prototype, "start").mockRejectedValueOnce(
+      new Error(`module initialization failed: ${secret}`),
+    );
+    const stream = new LogStream();
+    const rootLogger = createLogger({ service: "kaguya-server-test", stream });
+    vi.spyOn(await import("@kaguya/logger"), "createLogger").mockReturnValue(
+      rootLogger,
+    );
+
+    const error = await startKaguyaServer({
+      ...config(join(root, "database")),
+      configRoot: root,
+      port: 0,
+    }).catch((thrown: unknown) => thrown);
+
+    expect(error).toMatchObject({
+      name: "InformationRuntimeStartupError",
+      message: "Information runtime startup failed",
+      failureType: "Error",
+    });
+    expect(error).not.toHaveProperty("cause");
+    const serialized = `${String(error)}\n${JSON.stringify(error)}\n${JSON.stringify(stream.logs())}`;
+    expect(serialized).not.toContain("module-secret");
+    expect(serialized).not.toContain("postgresql://");
     await closeLogger(rootLogger);
   });
 

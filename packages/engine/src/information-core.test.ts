@@ -3,7 +3,7 @@
  * 以证明 registry、store 与 bus 组合后的写入路径只信任注册表中的正式定义，
  * 并且不会把可变输入、未注册 kind 或关闭后的调用继续放行。
  * 主要职责：验证最终 `register/on/get/query` API、落账先于广播、引用校验、深冻结、
- * ID 冲突、消费者失败事实与关闭状态。
+ * ID 冲突、消费者失败安全脱敏、共享 start/close promise、关闭等待在途广播及最终日志排空。
  * 代码库关系：`InformationCore` 连接 registry、store 与 bus；这里的测试使用
  * 内存 ledger double 验证“先落库、后并发发布”、冻结快照、失败递归保护、故障 context
  * 继承、ID 冲突与关闭语义；不会以 mock 掩盖账本和广播的实际交互。
@@ -494,7 +494,7 @@ describe("InformationCore", () => {
     });
   });
 
-  it("truncates an overlong error name before recording consumer.failed", async () => {
+  it("replaces an overlong error name before recording consumer.failed", async () => {
     const ledger = new MemoryInformationStore();
     const core = await createStartedCore(ledger, [parentDefinition]);
     const error = new Error("consumer exploded");
@@ -510,7 +510,7 @@ describe("InformationCore", () => {
     );
     expect(failure).toMatchObject({
       payload: {
-        error: { errorType: "x".repeat(128) },
+        error: { errorType: "Error" },
       },
     });
   });
@@ -626,6 +626,7 @@ describe("InformationCore", () => {
         projectPending: async () => {
           projections += 1;
         },
+        drainPending: async () => undefined,
       },
     });
 
@@ -639,6 +640,94 @@ describe("InformationCore", () => {
 
     expect(store.appendOptions).toEqual([{ enqueueLogProjection: true }]);
     expect(projections).toBe(2);
+  });
+
+  it("shares concurrent startup and cannot become started after close begins", async () => {
+    const synchronized = deferred<void>();
+    const release = deferred<void>();
+    const store = new MemoryInformationStore();
+    const synchronize = vi
+      .spyOn(store, "synchronizeKinds")
+      .mockImplementation(async (kinds) => {
+        store.synchronisedKinds.push([...kinds]);
+        synchronized.resolve();
+        await release.promise;
+      });
+    const registry = new InformationKindRegistry();
+    registry.register(parentDefinition);
+    const core = new InformationCore({
+      registry,
+      store,
+      nextInformationId: createDeterministicIdGenerator(),
+    });
+
+    const firstStart = core.start();
+    const secondStart = core.start();
+    expect(secondStart).toBe(firstStart);
+    await synchronized.promise;
+    const closing = core.close();
+    release.resolve();
+
+    await expect(Promise.all([firstStart, closing])).resolves.toEqual([
+      undefined,
+      undefined,
+    ]);
+    expect(synchronize).toHaveBeenCalledOnce();
+    await expect(
+      core.register(parentDefinition, registration({ text: "closed" })),
+    ).rejects.toBeInstanceOf(InformationCoreClosedError);
+  });
+
+  it("waits for an accepted broadcast before clearing subscribers", async () => {
+    const store = new MemoryInformationStore();
+    const core = await createStartedCore(store, [parentDefinition]);
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    let completed = false;
+    core.on(parentDefinition, { consumerId: "slow" }, async () => {
+      entered.resolve();
+      await release.promise;
+      completed = true;
+    });
+
+    const registrationPromise = core.register(
+      parentDefinition,
+      registration({ text: "accepted" }),
+    );
+    await entered.promise;
+    const closePromise = core.close();
+    expect(core.close()).toBe(closePromise);
+    let closed = false;
+    void closePromise.then(() => {
+      closed = true;
+    });
+    await Promise.resolve();
+    expect(closed).toBe(false);
+
+    release.resolve();
+    await Promise.all([registrationPromise, closePromise]);
+    expect(completed).toBe(true);
+  });
+
+  it("drains all pending log batches while closing", async () => {
+    const store = new MemoryInformationStore();
+    const registry = new InformationKindRegistry();
+    registry.register(parentDefinition);
+    const drainPending = vi.fn(async () => undefined);
+    const core = new InformationCore({
+      registry,
+      store,
+      nextInformationId: createDeterministicIdGenerator(),
+      logProjectionRunner: {
+        projectPending: async () => undefined,
+        drainPending,
+      } as any,
+    });
+
+    await core.start();
+    await core.close();
+
+    expect(drainPending).toHaveBeenCalledOnce();
   });
 
   it("rejects spoofed definition objects before payload or reference validation", async () => {
@@ -860,5 +949,30 @@ describe("InformationCore", () => {
       }),
     ).rejects.toBeInstanceOf(InformationCoreClosedError);
     expect(observed).toBe(0);
+  });
+
+  it("redacts unsafe Error names and messages from consumer failure facts", async () => {
+    const store = new MemoryInformationStore();
+    const core = await createStartedCore(store, [parentDefinition]);
+    const credential = "postgresql://admin:very-secret@db.internal/kaguya";
+    const failure = new Error(`failed with ${credential}`);
+    failure.name = `CredentialError:${credential}`;
+    core.on(parentDefinition, { consumerId: "unsafe-error" }, () => {
+      throw failure;
+    });
+
+    await core.register(parentDefinition, registration({ text: "moon" }));
+
+    const fact = [...store.atoms.values()].find(
+      (atom) => atom.kind === consumerFailedKind,
+    );
+    expect(fact?.payload).toMatchObject({
+      error: {
+        errorType: "Error",
+        message: "Consumer handler failed",
+      },
+    });
+    expect(JSON.stringify(fact)).not.toContain("very-secret");
+    expect(JSON.stringify(fact)).not.toContain("postgresql://");
   });
 });

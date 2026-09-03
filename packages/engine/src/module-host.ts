@@ -1,14 +1,15 @@
 /**
  * 功能概述：本模块把 SDK 定义的信息模块实例接入 `InformationCore`，并为每个订阅
  * 赋予稳定的模块消费者身份和可注册派生 atom 的 handler context。
- * 主要职责：`ModuleHost.register/start/stop` 管理模块生命周期；启动时
+ * 主要职责：`ModuleHost.register/start/stop` 以共享 promise 管理并发生命周期；启动时
  * 先验证每个 subscription 的 definition 与 manifest 同一对象，再调用 Core.on；
  * `createContext` 只允许 manifest 声明的输出，
  * 为 Core.register 补齐模块 source、因果关系与唯一继承的 context 引用。
  * 代码库关系：依赖 SDK 的 information-module 契约和 Core 的最终 on/register API；
  * Core 负责广播并记录 consumer.failed，因此本宿主不吞掉或二次记录 handler 故障。
- * 输入输出与副作用：启动和停止会增删 Core 订阅并调用模块 dispose；context.register
- * 会持久化新 atom，且拒绝调用方覆盖 core:caused-by 或 core:context 保留关系。
+ * 输入输出与副作用：启动验证 instanceId 能组成小写安全 source；停止先撤销订阅、等待
+ * 已进入的 handler，再调用模块 dispose。启动/停止竞态不会重复创建、重复释放或复活宿主；
+ * context.register 会持久化新 atom，且拒绝调用方覆盖 Core 保留关系。
  */
 import type {
   DeepReadonly,
@@ -54,7 +55,10 @@ export class ModuleHost {
   readonly #definitions = new Map<string, InformationModuleDefinition>();
   readonly #active = new Map<string, ActiveInformationModule>();
   readonly #unsubscribe: Array<() => void> = [];
-  #state: "new" | "started" | "stopped" = "new";
+  readonly #inFlight = new Set<Promise<unknown>>();
+  #state: "new" | "starting" | "started" | "stopping" | "stopped" = "new";
+  #startPromise: Promise<void> | undefined;
+  #stopPromise: Promise<void> | undefined;
 
   constructor(options: ModuleHostOptions) {
     this.#options = options;
@@ -75,17 +79,27 @@ export class ModuleHost {
     this.#definitions.set(definitionId, definition);
   }
 
-  async start(
+  start(activations: readonly InformationModuleActivation[]): Promise<void> {
+    if (this.#state === "starting") {
+      return this.#startPromise!;
+    }
+    if (this.#state === "started") return Promise.resolve();
+    if (this.#state !== "new") {
+      return Promise.reject(new Error("ModuleHost cannot be restarted"));
+    }
+    this.#state = "starting";
+    this.#startPromise = this.startHost(activations);
+    return this.#startPromise;
+  }
+
+  private async startHost(
     activations: readonly InformationModuleActivation[],
   ): Promise<void> {
-    if (this.#state !== "new") {
-      throw new Error("ModuleHost can only be started once");
-    }
-
-    const parsed = this.validateActivations(activations);
     const created: ActiveInformationModule[] = [];
     try {
+      const parsed = this.validateActivations(activations);
       for (const activation of parsed) {
+        assertSafeInstanceSource(activation.instanceId);
         const instance = await activation.definition.create({
           instanceId: activation.instanceId,
           settings: activation.settings,
@@ -97,9 +111,11 @@ export class ModuleHost {
         };
         // create 已取得资源后，任何本地校验失败都必须纳入回滚集合。
         created.push(active);
+        this.assertStarting();
         this.validateSubscriptions(activation.definition, instance);
       }
 
+      this.assertStarting();
       for (const module of created) {
         for (const subscription of module.instance.subscriptions) {
           this.#unsubscribe.push(
@@ -111,7 +127,9 @@ export class ModuleHost {
                 instanceId: module.instanceId,
               },
               (atom) =>
-                subscription.handle(atom, this.createContext(module, atom)),
+                this.trackHandler(() =>
+                  subscription.handle(atom, this.createContext(module, atom)),
+                ),
             ),
           );
         }
@@ -122,23 +140,53 @@ export class ModuleHost {
       for (const unsubscribe of this.#unsubscribe.splice(0)) unsubscribe();
       this.#active.clear();
       await disposeModules(created);
+      if (this.#state === "starting") {
+        this.#state = "stopped";
+      }
       throw error;
     }
   }
 
-  async stop(): Promise<void> {
-    if (this.#state === "stopped") return;
-    for (const unsubscribe of this.#unsubscribe.splice(0)) unsubscribe();
-    const active = [...this.#active.values()];
-    this.#active.clear();
-    this.#state = "stopped";
-    const failures = await disposeModules(active);
-    if (failures.length > 0) {
-      throw new AggregateError(
-        failures,
-        "One or more information modules failed to stop",
-      );
+  stop(): Promise<void> {
+    if (this.#stopPromise !== undefined) return this.#stopPromise;
+    if (this.#state === "stopped") return Promise.resolve();
+    const starting =
+      this.#state === "starting" ? this.#startPromise : undefined;
+    this.#state = "stopping";
+    this.#stopPromise = (async () => {
+      await starting?.catch(() => undefined);
+      for (const unsubscribe of this.#unsubscribe.splice(0)) unsubscribe();
+      await Promise.allSettled([...this.#inFlight]);
+      const active = [...this.#active.values()];
+      this.#active.clear();
+      const failures = await disposeModules(active);
+      this.#state = "stopped";
+      if (failures.length > 0) {
+        throw new AggregateError(
+          failures,
+          "One or more information modules failed to stop",
+        );
+      }
+    })();
+    return this.#stopPromise;
+  }
+
+  private assertStarting(): void {
+    if (this.#state !== "starting") {
+      throw new Error("ModuleHost startup was cancelled");
     }
+  }
+
+  private trackHandler(
+    handler: () => unknown | Promise<unknown>,
+  ): Promise<unknown> {
+    const operation = Promise.resolve().then(handler);
+    this.#inFlight.add(operation);
+    void operation.then(
+      () => this.#inFlight.delete(operation),
+      () => this.#inFlight.delete(operation),
+    );
+    return operation;
   }
 
   private validateActivations(
@@ -282,6 +330,12 @@ function contextReferences(
 
 function isReservedRelation(relation: string): boolean {
   return relation === "core:caused-by" || relation === "core:context";
+}
+
+function assertSafeInstanceSource(instanceId: string): void {
+  if (!/^[a-z][a-z0-9._-]*$/u.test(instanceId)) {
+    throw new Error("Information module instance id must form a safe source");
+  }
 }
 
 async function disposeModules(
