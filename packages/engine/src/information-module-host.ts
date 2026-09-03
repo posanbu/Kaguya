@@ -1,11 +1,20 @@
+/**
+ * 功能概述：本模块把 SDK 定义的信息模块实例接入 `InformationCore`，并为每个订阅
+ * 赋予稳定的模块消费者身份和可注册派生 atom 的 handler context。
+ * 主要职责：`InformationModuleHost.register/start/stop` 管理模块生命周期；启动时
+ * 对每个 subscription 调用 Core.on，`createContext` 只允许 manifest 声明的输出，
+ * 为 Core.register 补齐模块 source、因果关系与唯一继承的 context 引用。
+ * 代码库关系：依赖 SDK 的 information-module 契约和 Core 的最终 on/register API；
+ * Core 负责广播并记录 consumer.failed，因此本宿主不吞掉或二次记录 handler 故障。
+ * 输入输出与副作用：启动和停止会增删 Core 订阅并调用模块 dispose；context.register
+ * 会持久化新 atom，且拒绝调用方覆盖 core:caused-by 或 core:context 保留关系。
+ */
 import type {
   DeepReadonly,
   InformationAtom,
   InformationReference,
-  JsonObject,
 } from "@kaguya/schema";
 import type {
-  InformationAppendInput,
   InformationKindDefinition,
 } from "@kaguya/sdk";
 import {
@@ -13,9 +22,6 @@ import {
   type InformationModuleDefinition,
   type InformationModuleHandlerContext,
   type InformationModuleInstance,
-  type InformationModuleRunLifecycle,
-  type InformationModuleRunLifecycleInput,
-  type InformationModuleSubscription,
 } from "@kaguya/sdk";
 
 import { InformationCore } from "./information-core.js";
@@ -23,24 +29,12 @@ import { InformationCore } from "./information-core.js";
 export interface InformationModuleHostOptions {
   readonly core: InformationCore;
   readonly now?: () => Date;
-  readonly runLifecycle?: InformationModuleRunLifecycle;
-  readonly onHandlerError?: (error: unknown) => void | Promise<void>;
 }
 
 export class InformationModuleDefinitionNotFoundError extends Error {
   constructor(readonly definitionId: string) {
     super(`Information module definition is not registered: ${definitionId}`);
     this.name = "InformationModuleDefinitionNotFoundError";
-  }
-}
-
-export class InformationModuleTargetNotFoundError extends Error {
-  constructor(
-    readonly kind: string,
-    readonly targetInstanceId: string,
-  ) {
-    super(`No active information module handles ${kind}: ${targetInstanceId}`);
-    this.name = "InformationModuleTargetNotFoundError";
   }
 }
 
@@ -97,14 +91,20 @@ export class InformationModuleHost {
         });
       }
 
-      const grouped = groupSubscriptions(created);
-      for (const [kind, subscriptions] of grouped) {
-        assertCompatibleSubscriptions(kind, subscriptions);
-        this.#unsubscribe.push(
-          this.#options.core.subscribe(kind, async (atom) => {
-            await this.handleAtom(atom, subscriptions);
-          }),
-        );
+      for (const module of created) {
+        for (const subscription of module.instance.subscriptions) {
+          this.#unsubscribe.push(
+            this.#options.core.on(
+              subscription.definition,
+              {
+                consumerId: `module:${module.instanceId}`,
+                definitionId: module.definition.manifest.definitionId,
+                instanceId: module.instanceId,
+              },
+              (atom) => subscription.handle(atom, this.createContext(module, atom)),
+            ),
+          );
+        }
       }
       for (const active of created) this.#active.set(active.instanceId, active);
       this.#state = "started";
@@ -173,48 +173,6 @@ export class InformationModuleHost {
     }
   }
 
-  private async handleAtom(
-    atom: DeepReadonly<InformationAtom>,
-    subscriptions: readonly ActiveInformationSubscription[],
-  ): Promise<void> {
-    let matching = subscriptions;
-    if (subscriptions[0]?.subscription.targeted === true) {
-      const targetInstanceId = targetOf(atom);
-      matching = subscriptions.filter(({ module }) => module.instanceId === targetInstanceId);
-      if (matching.length === 0) {
-        throw new InformationModuleTargetNotFoundError(atom.kind, targetInstanceId);
-      }
-    }
-
-    await Promise.allSettled(
-      matching.map(async ({ module, subscription }) => {
-        const lifecycleInput = {
-          definitionId: module.definition.manifest.definitionId,
-          instanceId: module.instanceId,
-          sourceAtom: atom,
-        };
-        await invokeLifecycle(this.#options.runLifecycle, "started", lifecycleInput);
-        try {
-          await subscription.handle(atom, this.createContext(module, atom));
-          await invokeLifecycle(this.#options.runLifecycle, "completed", lifecycleInput);
-        } catch (error) {
-          if (isCancelled(error)) {
-            await invokeLifecycle(this.#options.runLifecycle, "cancelled", {
-              ...lifecycleInput,
-              error,
-            });
-          } else {
-            await invokeLifecycle(this.#options.runLifecycle, "failed", {
-              ...lifecycleInput,
-              error,
-            });
-          }
-          await reportError(this.#options.onHandlerError, error);
-        }
-      }),
-    );
-  }
-
   private createContext(
     module: ActiveInformationModule,
     sourceAtom: DeepReadonly<InformationAtom>,
@@ -225,7 +183,7 @@ export class InformationModuleHost {
       instanceId: module.instanceId,
       sourceAtom,
       now,
-      append: async (definition, input) => {
+      register: async (definition, input) => {
         if (!this.isDeclaredOutput(module.definition, definition)) {
           throw new InformationModuleKindNotDeclaredError(
             module.definition.manifest.definitionId,
@@ -241,13 +199,12 @@ export class InformationModuleHost {
           ...contextReferences(sourceAtom),
           ...customReferences,
         ];
-        return this.#options.core.append(definition, {
-          ...(input as Omit<InformationAppendInput<any, any>, "occurredAt" | "source" | "references">),
-          kind: definition.kind,
+        return this.#options.core.register(definition, {
           occurredAt: now().toISOString(),
           source: `module:${module.instanceId}`,
+          payload: input.payload,
           references,
-        } as InformationAppendInput<any, any>);
+        });
       },
     };
   }
@@ -267,46 +224,6 @@ interface ActiveInformationModule {
   readonly instance: InformationModuleInstance;
 }
 
-interface ActiveInformationSubscription {
-  readonly module: ActiveInformationModule;
-  readonly subscription: InformationModuleSubscription;
-}
-
-function groupSubscriptions(
-  modules: readonly ActiveInformationModule[],
-): Map<string, ActiveInformationSubscription[]> {
-  const grouped = new Map<string, ActiveInformationSubscription[]>();
-  for (const module of modules) {
-    for (const subscription of module.instance.subscriptions) {
-      const current = grouped.get(subscription.kind) ?? [];
-      current.push({ module, subscription });
-      grouped.set(subscription.kind, current);
-    }
-  }
-  return grouped;
-}
-
-function assertCompatibleSubscriptions(
-  kind: string,
-  subscriptions: readonly ActiveInformationSubscription[],
-): void {
-  const first = subscriptions[0];
-  if (first === undefined) return;
-  for (const current of subscriptions.slice(1)) {
-    if (current.subscription.targeted !== first.subscription.targeted) {
-      throw new Error(`Information kind cannot mix targeted and broadcast subscriptions: ${kind}`);
-    }
-  }
-}
-
-function targetOf(atom: DeepReadonly<InformationAtom>): string {
-  const payload = atom.payload as Record<string, unknown>;
-  if (typeof payload.targetInstanceId !== "string" || payload.targetInstanceId.trim().length === 0) {
-    throw new TypeError(`Targeted information ${atom.kind} requires targetInstanceId`);
-  }
-  return payload.targetInstanceId;
-}
-
 function contextReferences(atom: DeepReadonly<InformationAtom>): InformationReference[] {
   const references = atom.references.filter((reference) => reference.relation === "core:context");
   if (references.length > 0) return references.map((reference) => ({ ...reference }));
@@ -318,40 +235,6 @@ function contextReferences(atom: DeepReadonly<InformationAtom>): InformationRefe
 
 function isReservedRelation(relation: string): boolean {
   return relation === "core:caused-by" || relation === "core:context";
-}
-
-function isCancelled(error: unknown): boolean {
-  return (
-    (typeof error === "object" && error !== null && "kind" in error && error.kind === "cancelled") ||
-    (typeof error === "object" && error !== null && "name" in error && error.name === "AbortError")
-  );
-}
-
-async function invokeLifecycle(
-  lifecycle: InformationModuleRunLifecycle | undefined,
-  phase: "started" | "completed" | "failed" | "cancelled",
-  input: InformationModuleRunLifecycleInput & { readonly error?: unknown },
-): Promise<void> {
-  try {
-    if (lifecycle === undefined) return;
-    if (phase === "started") await lifecycle.started(input);
-    if (phase === "completed") await lifecycle.completed(input);
-    if (phase === "failed") await lifecycle.failed(input as InformationModuleRunLifecycleInput & { readonly error: unknown });
-    if (phase === "cancelled") await lifecycle.cancelled(input);
-  } catch {
-    // Lifecycle bookkeeping must not alter the business handler result.
-  }
-}
-
-async function reportError(
-  reporter: ((error: unknown) => void | Promise<void>) | undefined,
-  error: unknown,
-): Promise<void> {
-  try {
-    await reporter?.(error);
-  } catch {
-    // Error reporting is best effort.
-  }
 }
 
 async function disposeModules(modules: readonly ActiveInformationModule[]): Promise<unknown[]> {

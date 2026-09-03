@@ -246,7 +246,6 @@ export {
 export {
   defineInformationModule,
   onInformation,
-  onTargetedInformation,
   type CreateInformationModuleInstanceOptions,
   type InformationExecutionContext,
   type InformationModuleActivation,
@@ -254,7 +253,5 @@ export {
   type InformationModuleHandlerContext,
   type InformationModuleInstance,
   type InformationModuleManifest,
-  type InformationModuleRunLifecycle,
-  type InformationModuleRunLifecycleInput,
   type InformationModuleSubscription,
 } from "./information-modules.js";

@@ -1,3 +1,15 @@
+/**
+ * 功能概述：本模块定义信息原子模块的 SDK 契约，使模块只能订阅已声明 kind，
+ * 并通过 handler context 注册由输入 atom 因果派生的新 atom。
+ * 主要职责：`defineInformationModule` 校验清单基础约束；`onInformation` 将精确的
+ * kind definition 与处理器封装为订阅；`InformationModuleHandlerContext.register`
+ * 让宿主补齐 source、时间和受保护引用后交给 InformationCore。
+ * 代码库关系：由 `packages/sdk/src/index.ts` 对外导出，`InformationModuleHost`
+ * 消费 subscription 的 definition 并调用 Core.on；模块实现只依赖本文件而不接触
+ * Core 的持久化、消费者故障记录或旧 Event ModuleHost。
+ * 输入输出与副作用：定义和订阅均为内存值；清单拒绝空标识与重复 kind；handler
+ * 取得只读输入 atom，register 返回 Core 已持久化且深冻结的派生 atom。
+ */
 import type {
   DeepReadonly,
   InformationAtom,
@@ -5,7 +17,6 @@ import type {
   JsonObject,
 } from "@kaguya/schema";
 import type {
-  InformationAppendInput,
   InformationKindDefinition,
 } from "./information-kind.js";
 import { z } from "@kaguya/schema";
@@ -28,9 +39,10 @@ export interface InformationModuleHandlerContext extends InformationExecutionCon
   readonly definitionId: string;
   readonly instanceId: string;
   readonly sourceAtom: DeepReadonly<InformationAtom>;
-  append<K extends string, P extends JsonObject>(
+  register<K extends string, P extends JsonObject>(
     definition: InformationKindDefinition<K, P>,
-    input: Omit<InformationAppendInput<K, P>, "kind" | "occurredAt" | "source" | "references"> & {
+    input: {
+      readonly payload: P;
       readonly references?: readonly InformationReference[];
     },
   ): Promise<DeepReadonly<InformationAtom<K, P>>>;
@@ -42,7 +54,7 @@ export interface InformationExecutionContext {
 
 export interface InformationModuleSubscription {
   readonly kind: string;
-  readonly targeted: boolean;
+  readonly definition: InformationKindDefinition<string, JsonObject>;
   readonly handle: (
     atom: DeepReadonly<InformationAtom>,
     context: InformationModuleHandlerContext,
@@ -96,43 +108,9 @@ export function onInformation<K extends string, P extends JsonObject>(
 ): InformationModuleSubscription {
   return {
     kind: definition.kind,
-    targeted: false,
+    definition: definition as unknown as InformationKindDefinition<string, JsonObject>,
     handle: handle as InformationModuleSubscription["handle"],
   };
-}
-
-export function onTargetedInformation<
-  K extends string,
-  P extends JsonObject,
->(
-  definition: InformationKindDefinition<K, P>,
-  handle: (
-    atom: DeepReadonly<InformationAtom<K, P>>,
-    context: InformationModuleHandlerContext,
-  ) => Promise<void> | void,
-): InformationModuleSubscription {
-  return {
-    kind: definition.kind,
-    targeted: true,
-    handle: handle as InformationModuleSubscription["handle"],
-  };
-}
-
-export interface InformationModuleRunLifecycle {
-  started(input: InformationModuleRunLifecycleInput): Promise<void> | void;
-  completed(input: InformationModuleRunLifecycleInput): Promise<void> | void;
-  failed(
-    input: InformationModuleRunLifecycleInput & { readonly error: unknown },
-  ): Promise<void> | void;
-  cancelled(
-    input: InformationModuleRunLifecycleInput & { readonly error?: unknown },
-  ): Promise<void> | void;
-}
-
-export interface InformationModuleRunLifecycleInput {
-  readonly definitionId: string;
-  readonly instanceId: string;
-  readonly sourceAtom: DeepReadonly<InformationAtom>;
 }
 
 function assertNonBlank(value: string, label: string): void {

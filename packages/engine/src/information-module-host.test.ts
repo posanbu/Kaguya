@@ -1,3 +1,14 @@
+/**
+ * 功能概述：本文件在真实 `InformationCore` 和内存账本上验证信息模块宿主的订阅、
+ * 派生 atom 注册与故障归属行为。
+ * 主要职责：验证模块 context.register 注入模块 source、因果与 context 引用；
+ * 验证保留引用和未声明输出被拒绝、输入快照深冻结、同 kind 多实例均被广播，以及
+ * handler 故障由 Core 记录为带模块消费者身份的 `consumer.failed`。
+ * 代码库关系：覆盖 `information-module-host.ts` 对 SDK `onInformation` 和 Core
+ * `on`/`register` 的适配；MemoryLedger 模拟 Core 所要求的 append-only 存储边界。
+ * 输入输出与副作用：测试只写入进程内账本，注册的 atom 必须先满足引用存在性；每个
+ * 宿主在断言后停止，以撤销 Core 订阅并释放模块实例。
+ */
 import {
   freezeInformationAtom,
   informationIdSchema,
@@ -11,12 +22,14 @@ import {
   defineInformationKind,
   defineInformationModule,
   onInformation,
-  onTargetedInformation,
 } from "@kaguya/sdk";
 import { describe, expect, it, vi } from "vitest";
 
 import { InformationCore, InformationKindRegistry } from "./index.js";
-import { InformationModuleHost } from "./information-module-host.js";
+import {
+  InformationModuleHost,
+  InformationModuleKindNotDeclaredError,
+} from "./information-module-host.js";
 
 class MemoryLedger {
   readonly atoms = new Map<string, DeepReadonly<InformationAtom>>();
@@ -90,8 +103,7 @@ function createCore(extra: readonly any[] = []) {
 }
 
 async function appendContext(core: InformationCore) {
-  return core.append(contextKind, {
-    kind: contextKind.kind,
+  return core.register(contextKind, {
     occurredAt: "2026-09-03T00:00:00.000Z",
     source: "core:test",
     payload: { requestId: "req-1" },
@@ -99,12 +111,35 @@ async function appendContext(core: InformationCore) {
   });
 }
 
+function registration(
+  payload: { readonly text: string },
+  context: DeepReadonly<InformationAtom>,
+) {
+  return {
+    occurredAt: "2026-09-03T00:00:00.000Z",
+    source: "adapter:test",
+    payload,
+    references: [{ relation: "core:context", informationId: context.informationId }],
+  } as const;
+}
+
+async function startHost(
+  module: ReturnType<typeof defineInformationModule>,
+  core: InformationCore,
+  instanceId = "echo.default",
+): Promise<InformationModuleHost> {
+  const host = new InformationModuleHost({ core });
+  host.register(module);
+  await host.start([{ instanceId, definitionId: module.manifest.definitionId, settings: {} }]);
+  return host;
+}
+
 describe("InformationModuleHost", () => {
-  it("appends derived atoms with causal and context references", async () => {
+  it("registers a derived atom with module identity and causal references", async () => {
     const { core, store } = createCore();
     await core.start();
     const context = await appendContext(core);
-    const observed: InformationAtom[] = [];
+    const derived: DeepReadonly<InformationAtom>[] = [];
     const module = defineInformationModule({
       manifest: {
         apiVersion: 1,
@@ -116,28 +151,95 @@ describe("InformationModuleHost", () => {
       create: () => ({
         subscriptions: [
           onInformation(inboundKind, async (atom, handlerContext) => {
-            observed.push(await handlerContext.append(outputKind, { payload: { text: atom.payload.text } }) as unknown as InformationAtom);
+            derived.push(await handlerContext.register(outputKind, {
+              payload: { text: atom.payload.text },
+            }));
           }),
         ],
       }),
     });
-    const host = new InformationModuleHost({ core });
-    host.register(module);
-    await host.start([{ instanceId: "echo-1", definitionId: module.manifest.definitionId, settings: {} }]);
-    const inbound = await core.append(inboundKind, {
-      kind: inboundKind.kind,
-      occurredAt: "2026-09-03T00:00:00.000Z",
-      source: "adapter:test",
-      payload: { text: "hello" },
-      references: [{ relation: "core:context", informationId: context.informationId }],
-    });
+    const host = await startHost(module, core);
+    const inbound = await core.register(inboundKind, registration({ text: "moon" }, context));
 
-    expect(observed).toHaveLength(1);
-    expect(observed[0]?.references).toEqual([
-      { relation: "core:caused-by", informationId: inbound.informationId },
+    expect(derived[0]?.source).toBe("module:echo.default");
+    expect(derived[0]?.references).toContainEqual({ relation: "core:caused-by", informationId: inbound.informationId });
+    expect(derived[0]?.references.filter((reference) => reference.relation === "core:context")).toEqual([
       { relation: "core:context", informationId: context.informationId },
     ]);
-    expect(await store.get(observed[0]!.informationId)).toBeDefined();
+    expect(await store.get(derived[0]!.informationId)).toBeDefined();
+    await host.stop();
+  });
+
+  it("rejects caller-supplied reserved references", async () => {
+    const { core } = createCore();
+    await core.start();
+    const context = await appendContext(core);
+    let rejection: unknown;
+    const module = defineInformationModule({
+      manifest: { apiVersion: 1, definitionId: "acme.reserved", displayName: "Reserved", settingsSchema: z.object({}).strict(), informationKinds: [inboundKind, outputKind] },
+      create: () => ({ subscriptions: [onInformation(inboundKind, async (_atom, handlerContext) => {
+        try {
+          await handlerContext.register(outputKind, {
+            payload: { text: "blocked" },
+            references: [{ relation: "core:caused-by", informationId: context.informationId }],
+          });
+        } catch (error) {
+          rejection = error;
+        }
+      })] }),
+    });
+    const host = await startHost(module, core);
+
+    await core.register(inboundKind, registration({ text: "moon" }, context));
+    expect(rejection).toMatchObject({ message: "Information module cannot override core causal references" });
+    await host.stop();
+  });
+
+  it("rejects outputs absent from the module manifest", async () => {
+    const undeclaredKind = defineInformationKind({
+      kind: "acme.message.undeclared",
+      payloadSchema: z.object({ text: z.string() }).strict(),
+      references: {},
+      log: { enabled: false },
+    });
+    const { core } = createCore([undeclaredKind]);
+    await core.start();
+    const context = await appendContext(core);
+    let rejection: unknown;
+    const module = defineInformationModule({
+      manifest: { apiVersion: 1, definitionId: "acme.undeclared", displayName: "Undeclared", settingsSchema: z.object({}).strict(), informationKinds: [inboundKind] },
+      create: () => ({ subscriptions: [onInformation(inboundKind, async (_atom, handlerContext) => {
+        try {
+          await handlerContext.register(undeclaredKind, { payload: { text: "blocked" } });
+        } catch (error) {
+          rejection = error;
+        }
+      })] }),
+    });
+    const host = await startHost(module, core);
+
+    await core.register(inboundKind, registration({ text: "moon" }, context));
+    expect(rejection).toBeInstanceOf(InformationModuleKindNotDeclaredError);
+    await host.stop();
+  });
+
+  it("passes a deeply frozen input atom to each handler", async () => {
+    const { core } = createCore();
+    await core.start();
+    const context = await appendContext(core);
+    let atom: DeepReadonly<InformationAtom> | undefined;
+    const module = defineInformationModule({
+      manifest: { apiVersion: 1, definitionId: "acme.frozen", displayName: "Frozen", settingsSchema: z.object({}).strict(), informationKinds: [inboundKind] },
+      create: () => ({ subscriptions: [onInformation(inboundKind, (input) => { atom = input; })] }),
+    });
+    const host = await startHost(module, core);
+
+    await core.register(inboundKind, registration({ text: "moon" }, context));
+
+    expect(Object.isFrozen(atom)).toBe(true);
+    expect(Object.isFrozen(atom?.payload)).toBe(true);
+    expect(Object.isFrozen(atom?.references)).toBe(true);
+    expect(Object.isFrozen(atom?.references[0])).toBe(true);
     await host.stop();
   });
 
@@ -161,36 +263,33 @@ describe("InformationModuleHost", () => {
       { instanceId: "second", definitionId: second.manifest.definitionId, settings: {} },
     ]);
     const context = await appendContext(core);
-    const pending = core.append(inboundKind, { kind: inboundKind.kind, occurredAt: "2026-09-03T00:00:00.000Z", source: "adapter:test", payload: { text: "x" }, references: [{ relation: "core:context", informationId: context.informationId }] });
+    const pending = core.register(inboundKind, registration({ text: "x" }, context));
     await vi.waitFor(() => expect(entered).toHaveLength(2));
     release();
     await pending;
     await host.stop();
   });
 
-  it("rejects mixed targeted and broadcast subscriptions", async () => {
-    const targetedKind = defineInformationKind({
-      kind: "acme.targeted.input",
-      payloadSchema: z.object({ targetInstanceId: z.string(), text: z.string() }).strict(),
-      references: {},
-      log: { enabled: false },
-    });
-    const { core } = createCore([targetedKind]);
+  it("records handler failures with module consumer identity", async () => {
+    const { core, store } = createCore();
     await core.start();
-    const broadcast = defineInformationModule({
-      manifest: { apiVersion: 1, definitionId: "acme.broadcast", displayName: "broadcast", settingsSchema: z.object({}).strict(), informationKinds: [targetedKind] },
-      create: () => ({ subscriptions: [onInformation(targetedKind, () => undefined)] }),
+    const context = await appendContext(core);
+    const module = defineInformationModule({
+      manifest: { apiVersion: 1, definitionId: "acme.failure", displayName: "Failure", settingsSchema: z.object({}).strict(), informationKinds: [inboundKind] },
+      create: () => ({ subscriptions: [onInformation(inboundKind, () => { throw new Error("expected failure"); })] }),
     });
-    const targeted = defineInformationModule({
-      manifest: { apiVersion: 1, definitionId: "acme.targeted", displayName: "targeted", settingsSchema: z.object({}).strict(), informationKinds: [targetedKind] },
-      create: () => ({ subscriptions: [onTargetedInformation(targetedKind, () => undefined)] }),
+    const host = await startHost(module, core, "failure.default");
+
+    await core.register(inboundKind, registration({ text: "moon" }, context));
+
+    const failure = [...store.atoms.values()].find((atom) => atom.kind === "consumer.failed");
+    expect(failure?.payload).toMatchObject({
+      consumer: {
+        consumerId: "module:failure.default",
+        definitionId: "acme.failure",
+        instanceId: "failure.default",
+      },
     });
-    const host = new InformationModuleHost({ core });
-    host.register(broadcast);
-    host.register(targeted);
-    await expect(host.start([
-      { instanceId: "broadcast", definitionId: broadcast.manifest.definitionId, settings: {} },
-      { instanceId: "targeted", definitionId: targeted.manifest.definitionId, settings: {} },
-    ])).rejects.toThrow("cannot mix targeted and broadcast");
+    await host.stop();
   });
 });

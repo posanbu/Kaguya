@@ -68,6 +68,5 @@ export {
   InformationModuleDefinitionNotFoundError,
   InformationModuleHost,
   InformationModuleKindNotDeclaredError,
-  InformationModuleTargetNotFoundError,
   type InformationModuleHostOptions,
 } from "./information-module-host.js";
