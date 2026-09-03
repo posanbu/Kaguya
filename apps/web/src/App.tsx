@@ -671,7 +671,15 @@ function ProfileManagementScreen({
 
   return (
     <div className="setup-shell">
-      <SetupHeader subtitle="配置引导" />
+      <header className="topbar">
+        <div className="brand-mark" aria-hidden="true">
+          K
+        </div>
+        <div>
+          <h1>Kaguya</h1>
+          <p>配置引导</p>
+        </div>
+      </header>
 
       <main className="setup-main profile-main">
         <div className="profile-workspace">
@@ -812,6 +820,7 @@ function ProfileManagementScreen({
             <p className="setup-intro profile-intro">
               填写模型服务地址和两个模型层级，保存后 Kaguya
               会在重启时加载当前配置。
+              如果暂时不接入平台或插件，也可以在下方明确确认。
             </p>
 
             {panelError ? (
@@ -942,6 +951,24 @@ function ProfileManagementScreen({
                     />
                   </label>
                 </div>
+                <label className="setup-check">
+                  <input
+                    type="checkbox"
+                    checked={editorFields.acknowledgeOptional}
+                    onChange={(event) =>
+                      setEditorFields((current) =>
+                        current === undefined
+                          ? current
+                          : {
+                              ...current,
+                              acknowledgeOptional: event.target.checked,
+                            },
+                      )
+                    }
+                  />
+                  <span>我确认当前尚未配置平台与插件，稍后再配置也可以。</span>
+                </label>
+
                 <button
                   className="setup-button"
                   type="submit"
