@@ -2,7 +2,8 @@
  * 功能概述：本模块把 SDK 定义的信息模块实例接入 `InformationCore`，并为每个订阅
  * 赋予稳定的模块消费者身份和可注册派生 atom 的 handler context。
  * 主要职责：`InformationModuleHost.register/start/stop` 管理模块生命周期；启动时
- * 对每个 subscription 调用 Core.on，`createContext` 只允许 manifest 声明的输出，
+ * 先验证每个 subscription 的 definition 与 manifest 同一对象，再调用 Core.on；
+ * `createContext` 只允许 manifest 声明的输出，
  * 为 Core.register 补齐模块 source、因果关系与唯一继承的 context 引用。
  * 代码库关系：依赖 SDK 的 information-module 契约和 Core 的最终 on/register API；
  * Core 负责广播并记录 consumer.failed，因此本宿主不吞掉或二次记录 handler 故障。
@@ -167,6 +168,9 @@ export class InformationModuleHost {
       const declaredDefinition = definition.manifest.informationKinds.find(
         (kind) => kind.kind === subscription.kind,
       );
+      if (subscription.definition !== declaredDefinition) {
+        throw new Error(`Information subscription definition mismatch: ${subscription.kind}`);
+      }
       if (registered !== declaredDefinition) {
         throw new Error(`Information kind definition mismatch: ${subscription.kind}`);
       }

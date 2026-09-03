@@ -22,6 +22,7 @@ import {
   defineInformationKind,
   defineInformationModule,
   onInformation,
+  type InformationModuleSubscription,
 } from "@kaguya/sdk";
 import { describe, expect, it, vi } from "vitest";
 
@@ -170,29 +171,56 @@ describe("InformationModuleHost", () => {
     await host.stop();
   });
 
-  it("rejects caller-supplied reserved references", async () => {
+  it("rejects each caller-supplied reserved reference", async () => {
     const { core } = createCore();
     await core.start();
     const context = await appendContext(core);
-    let rejection: unknown;
+    const rejections: unknown[] = [];
     const module = defineInformationModule({
       manifest: { apiVersion: 1, definitionId: "acme.reserved", displayName: "Reserved", settingsSchema: z.object({}).strict(), informationKinds: [inboundKind, outputKind] },
       create: () => ({ subscriptions: [onInformation(inboundKind, async (_atom, handlerContext) => {
-        try {
-          await handlerContext.register(outputKind, {
-            payload: { text: "blocked" },
-            references: [{ relation: "core:caused-by", informationId: context.informationId }],
-          });
-        } catch (error) {
-          rejection = error;
+        for (const relation of ["core:caused-by", "core:context"] as const) {
+          try {
+            await handlerContext.register(outputKind, {
+              payload: { text: "blocked" },
+              references: [{ relation, informationId: context.informationId }],
+            });
+          } catch (error) {
+            rejections.push(error);
+          }
         }
       })] }),
     });
     const host = await startHost(module, core);
 
     await core.register(inboundKind, registration({ text: "moon" }, context));
-    expect(rejection).toMatchObject({ message: "Information module cannot override core causal references" });
+    expect(rejections).toHaveLength(2);
+    expect(rejections).toEqual([
+      expect.objectContaining({ message: "Information module cannot override core causal references" }),
+      expect.objectContaining({ message: "Information module cannot override core causal references" }),
+    ]);
     await host.stop();
+  });
+
+  it("rejects a structural subscription with a different manifest definition", async () => {
+    const { core } = createCore();
+    await core.start();
+    const module = defineInformationModule({
+      manifest: { apiVersion: 1, definitionId: "acme.mismatch", displayName: "Mismatch", settingsSchema: z.object({}).strict(), informationKinds: [inboundKind, outputKind] },
+      create: () => ({
+        subscriptions: [{
+          kind: inboundKind.kind,
+          definition: outputKind,
+          handle: () => undefined,
+        } as unknown as InformationModuleSubscription],
+      }),
+    });
+    const host = new InformationModuleHost({ core });
+    host.register(module);
+
+    await expect(host.start([
+      { instanceId: "mismatch.default", definitionId: module.manifest.definitionId, settings: {} },
+    ])).rejects.toThrow(`Information subscription definition mismatch: ${inboundKind.kind}`);
   });
 
   it("rejects outputs absent from the module manifest", async () => {
