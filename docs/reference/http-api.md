@@ -114,9 +114,17 @@ Runtime 成功处理时会由 Core 生成唯一 `informationId`，持久化 `cor
 
 **`invalid_request` / 400** — JSON、路径参数或 schema 不合法。
 
-**`configuration_invalid` / 400** — Profile 输入不完整或不满足 readiness。
+**`profile_invalid` / 400** — 已通过 HTTP JSON/schema 读取、但被 Profile 管理逻辑拒绝的输入。
 
-**`configuration_unavailable` / 409** — 配置仓库损坏或不可安全访问。
+**`profile_not_found` / 404** — 请求的 Profile 不存在。
+
+**`profile_name_conflict` / 409** — 创建或替换时的 Profile 名称已存在。
+
+**`profile_protected` / 409** — 不能删除保留的 `default` Profile。
+
+**`profile_in_use` / 409** — 不能删除当前 `selectedProfileId` 指向的 Profile。
+
+**`configuration_unavailable` / 409** — 此 HTTP application 没有注入 Profile management facade。这是嵌入或测试构造边界，不表示配置目录损坏；配置目录损坏或无法安全访问会在 Server 启动阶段失败，而不会以此路由错误继续运行。
 
 **`not_found` / 404** — 路由或 Profile 不存在。
 

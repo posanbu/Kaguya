@@ -16,8 +16,8 @@ flowchart LR
   Browser[浏览器 / Web UI] --> Server[apps/server / Fastify]
   NapCat[NapCat / OneBot] --> Server
   Server --> Runtime[KaguyaRuntime / InformationIngress]
-  Runtime --> Ledger[(PostgreSQL 信息账本)]
-  Ledger --> Core[InformationCore]
+  Runtime --> Core[InformationCore]
+  Core --> Ledger[(PostgreSQL 信息账本)]
   Core --> Modules[Filter / LLM / 自定义模块]
   Modules --> LLM[LLM 生命周期原子]
   Modules --> Delivery[投递请求原子]
@@ -29,7 +29,7 @@ flowchart LR
 
 ## 持久化优先的信息流
 
-`InformationCore.register()` 是唯一的原子写入入口。它固定按以下顺序工作：确认 Core 状态与已注册 Kind，校验 payload 和引用，生成 `informationId`，提交 PostgreSQL 账本，取得该 Kind 的当前消费者快照，再并发执行消费者。
+`InformationCore.register()` 是唯一的原子写入入口。它生成信息原子并完成 Kind、payload 与引用校验，提交 PostgreSQL 账本；提交成功后，Core 取得该 Kind 的当前消费者快照并并发执行消费者。
 
 ```mermaid
 flowchart LR
@@ -57,10 +57,13 @@ core.runtime.context
   -> core.message.inbound.text
   -> core.reply.requested
   -> core.llm.requested
-  -> core.llm.completed | core.llm.failed
+  -> core.llm.completed
   -> core.message.assistant.text
   -> core.delivery.requested
   -> core.delivery.delivered | core.delivery.failed
+
+core.llm.requested
+  -> core.llm.failed（终止该分支）
 ```
 
 每条派生边都带有直接输入的 `core:caused-by` 引用，并继承唯一的 `core:context`。过滤器通过时显式注册 `core.reply.requested`；拒绝时只注册 `filter.decision`，其中记录 `accepted: false`、原因和过滤器定义 ID。Core 不解释“下一过滤器”或成功标记，也不负责模块执行顺序。

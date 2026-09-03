@@ -2,7 +2,7 @@
 
 Kaguya 是一个以持久化信息原子（Information Atom）组织消息处理的 TypeScript AI Bot Runtime。`apps/server` 是唯一长期运行入口：它在同一进程和端口提供 Web UI、HTTP API 与可选的 NapCat 连接，并把正规化后的平台内容提交给唯一的 `@kaguya/runtime` ingress。
 
-每一项 Core 运行事实只有一个身份：`informationId`。入站文本、过滤结果、LLM 生命周期、assistant 文本、投递请求与投递结果都是不可变原子；原子之间用显式引用构成 DAG，而不是依赖 EventBus、会话或 trace 身份。
+每一项 Core 运行事实只有一个身份：`informationId`。入站文本、过滤结果、LLM 生命周期、assistant 文本、投递请求与投递结果都是不可变原子；原子之间用显式引用构成 DAG，而不是依赖隐式的执行身份。
 
 ## 快速开始
 
@@ -33,7 +33,7 @@ pnpm start
 
 ## 信息 DAG
 
-Runtime 为入站内容创建 context 根原子，再注册 `core.message.inbound.text`。每次 `InformationCore.register()` 都先校验 Kind、payload 和引用，生成 `informationId` 并提交 PostgreSQL 账本；只有提交成功后，才向该 Kind 的当前消费者并发广播。没有消费者的原子同样会保留。
+Runtime 为入站内容创建 context 根原子，再注册 `core.message.inbound.text`。`InformationCore.register()` 会生成信息原子、完成校验并提交 PostgreSQL 账本；只有提交成功后，才向该 Kind 的当前消费者并发广播。没有消费者的原子同样会保留。
 
 默认链路是：
 
@@ -42,10 +42,13 @@ core.runtime.context
   -> core.message.inbound.text
   -> core.reply.requested
   -> core.llm.requested
-  -> core.llm.completed | core.llm.failed
+  -> core.llm.completed
   -> core.message.assistant.text
   -> core.delivery.requested
   -> core.delivery.delivered | core.delivery.failed
+
+core.llm.requested
+  -> core.llm.failed（终止该分支）
 ```
 
 过滤器通过注册下一个 Kind 来推进链路；拒绝时只注册 `filter.decision`。消费者抛出或 reject 时，输入原子不会回滚，其他消费者仍会独立完成，Core 会追加 `consumer.failed` 作为失败事实。消费者不会因此自动重试。

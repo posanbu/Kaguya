@@ -23,7 +23,7 @@ onInformation(inboundTextKind, async (atom, context) => {
 
 :::
 
-`context.register()` 不接受调用方提供的 `informationId`、`source` 或发生时间。宿主会补齐 `source: module:<instanceId>`、当前时间、指向输入的 `core:caused-by`，以及输入已有的唯一 `core:context` 引用。调用方可提供额外的非保留 relation，但不能覆盖或重复这两个 Core 关系。
+`context.register()` 不接受调用方提供的 `informationId`、`source` 或发生时间。宿主会补齐 `source: module:<instanceId>`、当前时间、指向输入的 `core:caused-by`，以及输入已有的唯一 `core:context` 引用。调用方提供的额外 relation 必须不是这两个保留 relation，并且必须预先声明在目标 Kind definition 的 `references` 中；否则 Core 在提交时拒绝该原子。
 
 ## 广播、过滤与阶段关系
 

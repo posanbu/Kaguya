@@ -5,7 +5,7 @@ description: 安装固定版本工具链并以 PostgreSQL 启动 Kaguya Server �
 
 # 安装与启动
 
-Kaguya 锁定 Node.js 24.18.0 和 pnpm 11.9.0，并要求一个 PostgreSQL information ledger。Server 与 demo 都必须设置 `KAGUYA_DATABASE_URL`；不再支持 `node:sqlite` 或数据库路径配置。
+Kaguya 锁定 Node.js 24.18.0 和 pnpm 11.9.0，并要求一个 PostgreSQL information ledger。Server 与 demo 都必须设置 `KAGUYA_DATABASE_URL`；不再支持本地 SQLite 或数据库路径配置。
 
 ## 准备工具链
 
