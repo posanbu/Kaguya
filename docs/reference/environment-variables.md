@@ -9,7 +9,7 @@ description: Kaguya Server、白名单、NapCat 与日志环境变量参考。
 
 ## Server 核心配置
 
-**`KAGUYA_GATEWAY_TOKEN`** — 可选。未设置时每次启动自动生成随机 token（至少 16 字符，日志事件 `server.token.generated`），Web UI 页面加载时自动获取；显式设置需至少 16 个字符，可获得跨重启稳定的 token。用于配置和消息 API 的 Bearer 认证。
+**`KAGUYA_GATEWAY_TOKEN`** — 可选。显式设置需至少 16 个字符，并覆盖持久化或 bootstrap 凭据；全新本地配置未设置时由 Server 在终端展示一次性 bootstrap Token，首次配置成功后使用持久化正式凭据。
 
 **`KAGUYA_HOST`** — 默认 `127.0.0.1`。唯一 Server 监听地址。
 
@@ -100,4 +100,3 @@ KAGUYA_LOG_DESTINATION=.data/logs/kaguya.jsonl
 **旧模型变量** — `KAGUYA_LLM_API_KEY`、`KAGUYA_LLM_BASE_URL`、`KAGUYA_LLM_MODEL`。
 
 模型配置应迁移到 profile store；Server 地址和数据库应使用统一变量。
-

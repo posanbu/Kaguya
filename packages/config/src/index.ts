@@ -35,6 +35,10 @@ export type { FileUserConfigManagerOptions } from "./manager.js";
 export { REDACTED_CONFIG_VALUE, redactConfigValue } from "./redact.js";
 export type { RedactedConfigValue } from "./redact.js";
 export {
+  readSensitiveJson,
+  writeSensitiveJson,
+} from "./secure-files.js";
+export {
   aiConfigSchema,
   aiProviderConfigSchema,
   emptyUserConfigProfileSettings,

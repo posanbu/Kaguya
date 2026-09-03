@@ -19,6 +19,7 @@
  * 防止服务接受请求后再暴露可变 Profile 覆盖路径。
  */
 import { pathToFileURL } from "node:url";
+import { readdir } from "node:fs/promises";
 
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
@@ -46,10 +47,23 @@ import type { FastifyInstance } from "fastify";
 import { createHttpApplication } from "./app.js";
 import { readServerConfig, type ServerConfig } from "./config.js";
 import {
+  createBootstrapGatewayAuthenticator,
+  createEnvironmentGatewayAuthenticator,
+  createPersistentGatewayAuthenticator,
+  type GatewayAuthenticator,
+} from "./gateway-auth.js";
+import { loadPersistentGatewayCredential } from "./gateway-credentials.js";
+import {
   createNapCatSupervisor,
   type NapCatConnectionSupervisor,
 } from "./napcat.js";
 import { createConfigurationManagement } from "./setup.js";
+import {
+  defaultNapCatSettings,
+  hasNapCatSettings,
+  loadNapCatSettings,
+  toNapCatConfig,
+} from "./napcat-config.js";
 import { createWebMessageGateway } from "./web-gateway.js";
 import { registerWebUi, type WebUiHandle } from "./web.js";
 
@@ -70,21 +84,15 @@ export async function startKaguyaServer(
           gatewayTokenSource: "environment" as const,
         };
   const config = resolved.config;
+  const gatewayAuth = await resolveGatewayAuthenticator(
+    config,
+    resolved.gatewayTokenSource,
+  );
   const rootLogger = createLogger(readLoggerOptions("kaguya"));
   const serverLogger = createModuleLogger(rootLogger, "server");
   const httpLogger = createModuleLogger(rootLogger, "server:http");
   const napcatLogger = createModuleLogger(rootLogger, "adapter:napcat");
   const webLogger = createModuleLogger(rootLogger, "adapter:web");
-  if (resolved.gatewayTokenSource === "generated") {
-    serverLogger.info(
-      {
-        event: "server.token.generated",
-        token: config.gatewayToken,
-        setupUrl: `http://${config.host}:${config.port}/`,
-      },
-      "Gateway token generated for this run; the Web UI fetches it automatically",
-    );
-  }
   let app: FastifyInstance | undefined;
   let webUi: WebUiHandle | undefined;
   let napcat: NapCatConnectionSupervisor | undefined;
@@ -105,12 +113,22 @@ export async function startKaguyaServer(
 
   try {
     const setup = await createConfigurationManagement(config.configRoot);
+    const hasPersistedNapCat = await hasNapCatSettings(config.configRoot);
+    const persistedNapCat = hasPersistedNapCat
+      ? await loadNapCatSettings(config.configRoot)
+      : defaultNapCatSettings;
+    const effectiveConfig: ServerConfig = {
+      ...config,
+      napcat: hasPersistedNapCat
+        ? toNapCatConfig(persistedNapCat)
+        : config.napcat,
+    };
     const setupStatus = await setup.inspect();
     let resolveModelSelection: RuntimeModelSelectionResolver | undefined;
     if (setupStatus.status === "ready") {
       try {
         resolveModelSelection = await createRuntimeModelSelectionResolver(
-          config.configRoot,
+          effectiveConfig.configRoot,
         );
       } catch (error) {
         if (!isRecoverableConfigurationError(error)) {
@@ -136,10 +154,10 @@ export async function startKaguyaServer(
       );
     }
     runtime = new KaguyaRuntime({
-      databasePath: config.databasePath,
+      databasePath: effectiveConfig.databasePath,
       logger: rootLogger,
       ...(resolveModelSelection === undefined ? {} : { resolveModelSelection }),
-      gatewayAllowlist: new GatewayAllowlist(config.gatewayAllowlist),
+      gatewayAllowlist: new GatewayAllowlist(effectiveConfig.gatewayAllowlist),
     });
     const runtimeReady = resolveModelSelection !== undefined;
     const webGateway = runtimeReady
@@ -153,21 +171,21 @@ export async function startKaguyaServer(
     serverLogger.info(
       {
         event: "server.starting",
-        host: config.host,
-        port: config.port,
+        host: effectiveConfig.host,
+        port: effectiveConfig.port,
         development: config.development,
-        napcatEnabled: runtimeReady && config.napcat.enabled,
+        napcatEnabled: runtimeReady && effectiveConfig.napcat.enabled,
       },
       "Kaguya server starting",
     );
-    if (runtimeReady && config.napcat.enabled) {
+    if (runtimeReady && effectiveConfig.napcat.enabled) {
       napcat = createNapCatSupervisor({
-        config: config.napcat,
+        config: effectiveConfig.napcat,
         runtime,
         logger: napcatLogger,
       });
       runtime.registerTransport({
-        adapterId: config.napcat.adapterId,
+        adapterId: effectiveConfig.napcat.adapterId,
         platform: "qq",
         transport: napcat,
       });
@@ -176,15 +194,19 @@ export async function startKaguyaServer(
       await runtime.start();
     }
     app = await createHttpApplication({
-      config,
+      config: effectiveConfig,
+      gatewayAuth,
       ...(webGateway !== undefined ? { webGateway } : {}),
       setup,
       logger: httpLogger,
     });
-    webUi = await registerWebUi(app, config);
-    await app.listen({ host: config.host, port: config.port });
+    webUi = await registerWebUi(app, effectiveConfig);
+    await app.listen({
+      host: effectiveConfig.host,
+      port: effectiveConfig.port,
+    });
 
-    if (runtimeReady && config.napcat.enabled) {
+    if (runtimeReady && effectiveConfig.napcat.enabled) {
       napcatLogger.info(
         {
           event: "napcat.connection.starting",
@@ -198,9 +220,9 @@ export async function startKaguyaServer(
     serverLogger.info(
       {
         event: "server.started",
-        host: config.host,
-        port: config.port,
-        napcatEnabled: runtimeReady && config.napcat.enabled,
+        host: effectiveConfig.host,
+        port: effectiveConfig.port,
+        napcatEnabled: runtimeReady && effectiveConfig.napcat.enabled,
       },
       "Kaguya server started",
     );
@@ -230,6 +252,57 @@ function isRecoverableConfigurationError(
     error instanceof ConfigSetupRequiredError ||
     error instanceof ConfigIncompleteError ||
     error instanceof ConfigReviewRequiredError
+  );
+}
+
+async function resolveGatewayAuthenticator(
+  config: ServerConfig,
+  source: "environment" | "generated",
+): Promise<GatewayAuthenticator> {
+  if (source === "environment") {
+    return createEnvironmentGatewayAuthenticator(config.gatewayToken);
+  }
+
+  const persisted = await loadPersistentGatewayCredential(config.configRoot);
+  if (persisted !== null) {
+    return createPersistentGatewayAuthenticator(config.configRoot);
+  }
+  if (!isLoopbackHost(config.host) || !(await isFreshConfigurationRoot(config.configRoot))) {
+    throw new Error(
+      "KAGUYA_GATEWAY_TOKEN is required for non-loopback or existing configuration roots without a persistent gateway credential",
+    );
+  }
+
+  const authenticator = await createBootstrapGatewayAuthenticator(
+    config.configRoot,
+  );
+  process.stdout.write(
+    `Kaguya first-run setup URL: http://${config.host}:${config.port}/#bootstrapToken=${authenticator.bootstrapToken}\n`,
+  );
+  return authenticator;
+}
+
+async function isFreshConfigurationRoot(rootDir: string): Promise<boolean> {
+  try {
+    return (await readdir(rootDir)).length === 0;
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return true;
+    }
+    throw error;
+  }
+}
+
+function isLoopbackHost(host: string): boolean {
+  return host === "127.0.0.1" || host === "localhost" || host === "::1";
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "ENOENT"
   );
 }
 

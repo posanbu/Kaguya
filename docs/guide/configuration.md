@@ -37,9 +37,9 @@ flowchart TD
 
 **Heavy Model** — 用于重量任务的模型 ID，必须与 Light Model 不同。
 
-**可选配置确认** — 必须明确确认当前可以暂不配置平台与插件；系统不会替用户静默作出决定。
+平台与插件不是 Provider 配置的必填项。NapCat 使用独立的 WebUI 页面配置，保存到 `KAGUYA_CONFIG_ROOT/napcat.json`，并在重启后由 Server 创建连接。
 
-保存成功会返回 `restartRequired: true`。重启是必要步骤，因为模型客户端和 profile registry 在 Runtime 启动时创建并冻结。
+保存成功会返回 `restartRequired: true`。重启是必要步骤，因为模型客户端、profile registry 和 NapCat supervisor 都在服务启动时创建并冻结。
 
 ## Profile 与模型选择
 
@@ -68,4 +68,3 @@ Profile JSON 中的 API Key 和凭据以明文保存，因此整个配置根目�
 完整服务变量见[环境变量参考](../reference/environment-variables)。Server 不从 `KAGUYA_LLM_API_KEY`、`KAGUYA_LLM_BASE_URL` 或 `KAGUYA_LLM_MODEL` 读取模型配置；检测到这些旧变量会在启动前失败，并提示迁移到 profile store。
 
 旧版配置索引会被明确拒绝，不会自动迁移或删除。升级前应先备份敏感目录，并在受控环境中建立新格式配置。
-

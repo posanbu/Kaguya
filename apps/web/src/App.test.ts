@@ -16,7 +16,16 @@ import {
   clearLoadedProfileStateSnapshot,
   deriveConfigurationView,
   readRegistryMetadata,
+  readBootstrapToken,
 } from "./App.js";
+
+describe("readBootstrapToken", () => {
+  it("reads the one-time bootstrap token from the setup URL fragment", () => {
+    expect(readBootstrapToken("#bootstrapToken=bootstrap-secret")).toBe(
+      "bootstrap-secret",
+    );
+  });
+});
 
 describe("deriveConfigurationView", () => {
   it("routes setup_required into profile management instead of chat", () => {
@@ -26,7 +35,6 @@ describe("deriveConfigurationView", () => {
           status: "setup_required",
           selectedProfileId: "default",
           profiles: [],
-          gatewayToken: "token",
         },
         "checking",
         false,
@@ -67,7 +75,6 @@ describe("readRegistryMetadata", () => {
             updatedAt: "2026-08-30T00:00:00.000Z",
           },
         ],
-        gatewayToken: "token",
         issues: [],
         warnings: [],
       }),

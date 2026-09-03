@@ -24,9 +24,11 @@ export KAGUYA_CONFIG_ROOT="/absolute/path/to/kaguya-config"
 pnpm dev
 ```
 
-`KAGUYA_GATEWAY_TOKEN` 可选：未设置时每次启动生成随机 token（`server.token.generated` 日志中打印），Web UI 打开页面时自动获取；显式设置（至少 16 字符）可获得跨重启稳定的 token。
+`KAGUYA_GATEWAY_TOKEN` 可选：显式设置（至少 16 字符）时作为最高优先级 Gateway Token。全新本地配置且仅监听 loopback 时，Server 会在终端展示一次性引导 Token；首次配置成功后生成并持久化正式凭据。
 
-`KAGUYA_CONFIG_ROOT` 指向权限受保护的 profile store。目录尚未初始化、当前全局选中的 profile 不完整或可选配置尚未确认时，Server 会进入统一配置模式并显示引导页；如果当前 selected Profile 仍然 `invalid` 或 `review_required`，页面会继续展示 readiness 问题。只有当用户选择了某个 Profile，或完整替换了当前 selected Profile，且该 selected Profile 已 ready 时，页面才会进入 `restart_required` 并要求重启服务。配置文件损坏或权限异常仍会拒绝启动，不会自动覆盖。初始化格式与密钥边界见 [`@kaguya/config`](packages/config/README.md)。打开 `http://127.0.0.1:3000` 后，页面和 API 使用同源路径。
+`KAGUYA_CONFIG_ROOT` 指向权限受保护的 profile store。目录尚未初始化或当前全局选中的 profile 不完整时，Server 会进入统一配置模式并显示引导页；如果当前 selected Profile 仍然 `invalid` 或存在未解决的 Provider 配置问题，页面会继续展示 readiness 问题。只有当用户选择了某个 Profile，或完整替换了当前 selected Profile，且该 selected Profile 已 ready 时，页面才会进入 `restart_required` 并要求重启服务。配置文件损坏或权限异常仍会拒绝启动，不会自动覆盖。初始化格式与密钥边界见 [`@kaguya/config`](packages/config/README.md)。打开 `http://127.0.0.1:3000` 后，页面和 API 使用同源路径。
+
+WebUI 的 Profile 页面旁提供独立的 NapCat 配置页。NapCat 配置实际保存到 `KAGUYA_CONFIG_ROOT/napcat.json`，保存后重启服务即可生效；若未保存过该文件，仍可使用 `KAGUYA_NAPCAT_*` 环境变量配置。
 
 生产运行：
 

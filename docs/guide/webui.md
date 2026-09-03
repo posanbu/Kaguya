@@ -45,6 +45,10 @@ Token 不写入任何浏览器存储，也不应放进 `VITE_*` 环境变量（�
 
 **响应式布局** — 支持桌面与移动视口。
 
+**NapCat 配置** — 在 Profile 管理页点击“NapCat 配置”，可以填写启用状态、反向 WebSocket 地址、Access Token、机器人 QQ 号和重连间隔。保存后配置写入 `KAGUYA_CONFIG_ROOT/napcat.json`，重启 Kaguya 才会创建连接；已保存的 Access Token 只显示为“已保存”，不会通过读取接口返回原文。
+
+Provider 配置不再要求确认“平台与插件稍后配置”。平台和插件可以保持为空，NapCat 则在独立页面中按需配置。
+
 ## 当前响应边界
 
 `POST /api/v1/messages` 成功时返回 `202 accepted`，只表示 Runtime 已完成本次 dispatch。当前没有回复查询或 SSE，因此页面不会伪造机器人回答。

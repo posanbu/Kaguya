@@ -147,7 +147,6 @@ describe("profileToEditorFields", () => {
       apiKey: "provider-secret",
       lightModel: "light-model",
       heavyModel: "heavy-model",
-      acknowledgeOptional: true,
     });
   });
 
@@ -158,7 +157,6 @@ describe("profileToEditorFields", () => {
       apiKey: "",
       lightModel: "",
       heavyModel: "",
-      acknowledgeOptional: false,
     });
   });
 });
@@ -173,7 +171,6 @@ describe("mergeProfileEditorFields", () => {
       apiKey: "provider-secret-v2",
       lightModel: "light-model-v2",
       heavyModel: "heavy-model-v2",
-      acknowledgeOptional: false,
     });
 
     expect(merged).toEqual({
@@ -256,12 +253,11 @@ describe("mergeProfileEditorFields", () => {
       apiKey: "provider-secret",
       lightModel: "light-model",
       heavyModel: "heavy-model",
-      acknowledgeOptional: true,
     });
 
     expect(merged).toEqual({
       name: "default",
-      acknowledgedWarnings: ["platforms-empty", "plugins-empty"],
+      acknowledgedWarnings: [],
       ai: {
         defaultProviderId: "default-provider",
         modelTiers: {
@@ -289,19 +285,14 @@ describe("mergeProfileEditorFields", () => {
     const merged = mergeProfileEditorFields(warningProfile, {
       ...profileToEditorFields(warningProfile),
       baseUrl: "https://api.example/v2",
-      acknowledgeOptional: true,
     });
 
-    expect(merged.acknowledgedWarnings).toEqual([
-      "platforms-empty",
-      "plugins-empty",
-    ]);
+    expect(merged.acknowledgedWarnings).toEqual([]);
   });
 
-  it("removes only the optional warning ids when the checkbox is cleared", () => {
+  it("keeps unresolved provider warnings without optional configuration warnings", () => {
     const merged = mergeProfileEditorFields(warningProfile, {
       ...profileToEditorFields(warningProfile),
-      acknowledgeOptional: false,
     });
 
     expect(merged.acknowledgedWarnings).toEqual([

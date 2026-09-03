@@ -16,11 +16,30 @@
  * 服务端返回错误 JSON，这里会抛出 `GatewayRequestError`。
  */
 export const MAX_MESSAGE_LENGTH = 131_072;
-const OPENAI_COMPATIBLE_PROVIDER_TYPE = "openai-compatible";
-const DEFAULT_PROVIDER_ID = "default-provider";
 
 export interface GatewayConfig {
   readonly token: string;
+}
+
+export interface NapCatStatus {
+  readonly enabled: boolean;
+  readonly wsUrl?: string;
+  readonly hasAccessToken: boolean;
+  readonly selfId?: string;
+  readonly reconnectMs: number;
+}
+
+export interface NapCatSettingsInput {
+  readonly enabled: boolean;
+  readonly wsUrl: string;
+  readonly accessToken: string;
+  readonly selfId: string;
+  readonly reconnectMs: number;
+}
+
+export interface NapCatMutationResult {
+  readonly status: NapCatStatus;
+  readonly restartRequired: true;
 }
 
 export interface SendMessageInput {
@@ -120,7 +139,6 @@ export interface ConfigurationStatus {
     | "review_required";
   readonly selectedProfileId: string;
   readonly profiles: readonly ProfileMetadata[];
-  readonly gatewayToken: string;
   readonly issues?: readonly ConfigurationIssue[];
   readonly warnings?: readonly ConfigurationWarning[];
 }
@@ -171,6 +189,37 @@ export interface ConfigurationSaved {
   readonly restartRequired: true;
 }
 
+export async function completeInitialConfiguration(
+  config: GatewayConfig,
+  input: Omit<InitialConfigurationInput, "acknowledgeOptional">,
+  fetchImplementation: typeof fetch = fetch,
+): Promise<ConfigurationSaved> {
+  const response = await requestAuthenticatedJson(
+    config,
+    "/api/v1/setup",
+    {
+      method: "POST",
+      headers: jsonHeaders(requireToken(config)),
+      body: JSON.stringify(input),
+    },
+    fetchImplementation,
+  );
+  const payload = await readJson(response);
+  if (!response.ok || !isInitialConfigurationResponse(payload)) {
+    const gatewayError = isErrorResponse(payload) ? payload.error : undefined;
+    throw new GatewayRequestError(
+      gatewayError?.message ?? `初始化配置失败（HTTP ${response.status}）`,
+      gatewayError?.code ?? "configuration_setup_failed",
+      response.status,
+      gatewayError?.requestId,
+    );
+  }
+  if (typeof sessionStorage !== "undefined") {
+    sessionStorage.setItem("kaguya.gatewayToken", payload.data.gatewayToken);
+  }
+  return { status: "configured", restartRequired: true };
+}
+
 export class GatewayRequestError extends Error {
   constructor(
     message: string,
@@ -181,6 +230,53 @@ export class GatewayRequestError extends Error {
     super(message);
     this.name = "GatewayRequestError";
   }
+}
+
+export async function getNapCatStatus(
+  config: GatewayConfig,
+  fetchImplementation: typeof fetch = fetch,
+): Promise<NapCatStatus> {
+  const response = await requestAuthenticatedJson(
+    config,
+    "/api/v1/napcat",
+    { method: "GET" },
+    fetchImplementation,
+  );
+  const payload = await readJson(response);
+  if (!response.ok || !isNapCatStatusResponse(payload)) {
+    throw new GatewayRequestError(
+      `无法读取 NapCat 配置（HTTP ${response.status}）`,
+      "napcat_status_failed",
+      response.status,
+    );
+  }
+  return payload.data;
+}
+
+export async function saveNapCatSettings(
+  config: GatewayConfig,
+  input: NapCatSettingsInput,
+  fetchImplementation: typeof fetch = fetch,
+): Promise<NapCatMutationResult> {
+  const response = await requestAuthenticatedJson(
+    config,
+    "/api/v1/napcat",
+    {
+      method: "PUT",
+      headers: jsonHeaders(requireToken(config)),
+      body: JSON.stringify(input),
+    },
+    fetchImplementation,
+  );
+  const payload = await readJson(response);
+  if (!response.ok || !isNapCatMutationResponse(payload)) {
+    throw new GatewayRequestError(
+      `无法保存 NapCat 配置（HTTP ${response.status}）`,
+      "napcat_save_failed",
+      response.status,
+    );
+  }
+  return payload.data;
 }
 
 export async function getConfigurationStatus(
@@ -337,31 +433,6 @@ export async function deleteProfile(
   );
 }
 
-export async function getGatewayToken(
-  fetchImplementation: typeof fetch = fetch,
-): Promise<string> {
-  const response = await requestJson(
-    "/api/v1/gateway/token",
-    { method: "GET" },
-    fetchImplementation,
-  );
-  const payload = await readJson(response);
-  if (
-    !response.ok ||
-    !isRecord(payload) ||
-    !isRecord(payload.data) ||
-    typeof payload.data.gatewayToken !== "string" ||
-    payload.data.gatewayToken.length === 0
-  ) {
-    throw new GatewayRequestError(
-      `无法获取服务令牌（HTTP ${response.status}）`,
-      "gateway_token_failed",
-      response.status,
-    );
-  }
-  return payload.data.gatewayToken;
-}
-
 export async function checkGatewayHealth(
   fetchImplementation: typeof fetch = fetch,
 ): Promise<void> {
@@ -449,53 +520,33 @@ export async function initializeConfiguration(
   input: InitialConfigurationInput,
   fetchImplementation: typeof fetch = fetch,
 ): Promise<ConfigurationSaved> {
-  const profileId =
-    input.profileName.trim() === "default"
-      ? "default"
-      : (
-          await createProfile(
-            config,
-            { name: input.profileName },
-            fetchImplementation,
-          )
-        ).profile.id;
-  await replaceProfile(
-    config,
-    profileId,
-    {
-      name: input.profileName,
-      acknowledgedWarnings: input.acknowledgeOptional
-        ? ["platforms-empty", "plugins-empty"]
-        : [],
-      ai: {
-        defaultProviderId: DEFAULT_PROVIDER_ID,
-        modelTiers: {
-          light: {
-            providerId: DEFAULT_PROVIDER_ID,
-            modelId: input.lightModel,
-          },
-          heavy: {
-            providerId: DEFAULT_PROVIDER_ID,
-            modelId: input.heavyModel,
-          },
-        },
-        providers: [
-          {
-            id: DEFAULT_PROVIDER_ID,
-            type: OPENAI_COMPATIBLE_PROVIDER_TYPE,
-            enabled: true,
-            baseUrl: input.baseUrl,
-            apiKey: input.apiKey,
-            models: [input.lightModel, input.heavyModel],
-            settings: {},
-          },
-        ],
+  const profileId = input.profileName.trim() === "default"
+    ? "default"
+    : (await createProfile(config, { name: input.profileName }, fetchImplementation)).profile.id;
+  await replaceProfile(config, profileId, {
+    name: input.profileName,
+    acknowledgedWarnings: input.acknowledgeOptional
+      ? ["platforms-empty", "plugins-empty"]
+      : [],
+    ai: {
+      defaultProviderId: "default-provider",
+      modelTiers: {
+        light: { providerId: "default-provider", modelId: input.lightModel },
+        heavy: { providerId: "default-provider", modelId: input.heavyModel },
       },
-      platforms: [],
-      plugins: [],
+      providers: [{
+        id: "default-provider",
+        type: "openai-compatible",
+        enabled: true,
+        baseUrl: input.baseUrl,
+        apiKey: input.apiKey,
+        models: [input.lightModel, input.heavyModel],
+        settings: {},
+      }],
     },
-    fetchImplementation,
-  );
+    platforms: [],
+    plugins: [],
+  }, fetchImplementation);
   return {
     status: "configured",
     restartRequired: true,
@@ -598,6 +649,34 @@ function isAcceptedMessageResponse(
   );
 }
 
+function isNapCatStatusResponse(
+  value: unknown,
+): value is { data: NapCatStatus } {
+  return isRecord(value) && isRecord(value.data) && isNapCatStatus(value.data);
+}
+
+function isNapCatMutationResponse(
+  value: unknown,
+): value is { data: NapCatMutationResult } {
+  return (
+    isRecord(value) &&
+    isRecord(value.data) &&
+    value.data.restartRequired === true &&
+    isNapCatStatus(value.data.status)
+  );
+}
+
+function isNapCatStatus(value: unknown): value is NapCatStatus {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.enabled === "boolean" &&
+    typeof value.hasAccessToken === "boolean" &&
+    typeof value.reconnectMs === "number" &&
+    (value.wsUrl === undefined || typeof value.wsUrl === "string") &&
+    (value.selfId === undefined || typeof value.selfId === "string")
+  );
+}
+
 function isConfigurationStatusResponse(
   value: unknown,
 ): value is { data: ConfigurationStatus } {
@@ -619,8 +698,6 @@ function isConfigurationStatusResponse(
   return (
     typeof value.data.selectedProfileId === "string" &&
     isProfileMetadataArray(value.data.profiles) &&
-    typeof value.data.gatewayToken === "string" &&
-    value.data.gatewayToken.length > 0 &&
     isOptionalConfigurationIssueArray(value.data.issues) &&
     isOptionalConfigurationWarningArray(value.data.warnings)
   );
@@ -656,6 +733,19 @@ function isProfileMutationResultResponse(
     isRecord(value.data) &&
     isUserConfigProfile(value.data.profile) &&
     typeof value.data.restartRequired === "boolean"
+  );
+}
+
+function isInitialConfigurationResponse(
+  value: unknown,
+): value is { data: ProfileMutationResult & { gatewayToken: string } } {
+  return (
+    isRecord(value) &&
+    isRecord(value.data) &&
+    isUserConfigProfile(value.data.profile) &&
+    typeof value.data.restartRequired === "boolean" &&
+    typeof value.data.gatewayToken === "string" &&
+    value.data.gatewayToken.length > 0
   );
 }
 

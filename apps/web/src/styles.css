@@ -311,6 +311,116 @@ button:disabled {
   color: #8a6f5d;
 }
 
+.setup-topbar {
+  gap: 14px;
+}
+
+.setup-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: #3a2a21;
+  font-size: 17px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.setup-brand img {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+  filter: drop-shadow(0 3px 7px rgb(168 73 20 / 20%));
+}
+
+.setup-subtitle {
+  padding-left: 14px;
+  border-left: 1px solid #eadfd5;
+  color: #9a7c68;
+  font-size: 13px;
+}
+
+.setup-header-spacer {
+  flex: 1 1 auto;
+}
+
+.setup-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 6px 9px 6px 12px;
+  border: 1px solid #f0e6de;
+  border-radius: 9px;
+  background: #fffaf5;
+  color: #756255;
+  font-size: 12px;
+}
+
+.setup-search kbd {
+  padding: 3px 6px;
+  border: 1px solid #e4d8ce;
+  border-radius: 5px;
+  background: #ffffff;
+  color: #927866;
+  font-size: 10px;
+}
+
+.setup-docs-nav {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  margin-left: 8px;
+}
+
+.setup-docs-nav a,
+.setup-github-link {
+  color: #4f4138;
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.setup-docs-nav a:first-child,
+.setup-docs-nav a:hover,
+.setup-github-link:hover {
+  color: #c95d20;
+}
+
+.setup-theme-button,
+.setup-github-link {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid #e2d7ce;
+  border-radius: 999px;
+  background: transparent;
+  color: #6f625a;
+}
+
+.setup-theme-button {
+  margin-left: 2px;
+}
+
+.setup-theme-button:hover {
+  border-color: #df6f28;
+  color: #c95d20;
+}
+
+.setup-github-link {
+  border: 0;
+  border-left: 1px solid #eadfd5;
+  border-radius: 0;
+  padding-left: 16px;
+}
+
+.setup-github-link svg {
+  width: 20px;
+  height: 20px;
+  fill: currentColor;
+}
+
 .setup-shell .eyebrow {
   color: #b56a3a;
   letter-spacing: 0.08em;
@@ -831,6 +941,10 @@ button:disabled {
   .setup-model-grid {
     grid-template-columns: 1fr;
   }
+
+  .setup-docs-nav {
+    display: none;
+  }
 }
 
 @media (max-width: 520px) {
@@ -862,6 +976,13 @@ button:disabled {
 
   .message-row {
     width: 100%;
+  }
+
+  .setup-subtitle,
+  .setup-search,
+  .setup-theme-button,
+  .setup-github-link {
+    display: none;
   }
 }
 
