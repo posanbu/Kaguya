@@ -126,7 +126,7 @@ Runtime 成功处理时会由 Core 生成唯一 `informationId`，持久化 `cor
 
 **`configuration_unavailable` / 409** — 此 HTTP application 没有注入 Profile management facade。这是嵌入或测试构造边界，不表示配置目录损坏；配置目录损坏或无法安全访问会在 Server 启动阶段失败，而不会以此路由错误继续运行。
 
-**`not_found` / 404** — 路由或 Profile 不存在。
+**`not_found` / 404** — 未知 HTTP 路由。
 
 **`rate_limited` / 429** — 超过来源限流。
 
