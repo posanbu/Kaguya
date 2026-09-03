@@ -1,52 +1,38 @@
 ---
 title: 信息模块 SDK 与 Core 宿主
-description: 说明信息原子模块如何声明输入 Kind、追加派生原子并交给 Core 广播。
+description: 说明模块如何订阅 Information Kind 并注册因果派生原子。
 ---
 
 # 信息模块 SDK 与 Core 宿主
 
-Issue #40 的迁移以信息原子为边界。模块不再接触数据库连接，也不通过事件包装层传递业务结果；它们只声明自己消费的 Kind，并通过宿主提供的上下文追加新的信息原子。
+模块不接触数据库连接，也不通过事件包装层传递业务结果。一个模块声明自己会消费或产生的 Kind，用 `onInformation` 订阅输入，并在 handler 中调用 `context.register()` 产生下一项不可变事实。
 
-## 模块声明输入与输出
+## 声明输入与输出
 
-`@kaguya/sdk` 提供 `defineInformationModule`、`onInformation` 和 `onTargetedInformation`。模块清单中的 `informationKinds` 必须列出模块可能订阅或追加的 Kind。Runtime 在启动 Core 之前注册这些 Kind，宿主启动时会检查清单与 Registry 中的定义对象是否一致，避免同名 Kind 被不同 schema 偷换。
+模块 manifest 的 `informationKinds` 必须包含它订阅和注册的每一个 Kind。Runtime 启动前将这些定义注册到 Core；ModuleHost 在启动时检查 manifest、订阅和 Registry 使用的是同一个 Kind definition，避免同名 Kind 被不同 schema 替换。
 
-```ts
-const echo = defineInformationModule({
-  manifest: {
-    apiVersion: 1,
-    definitionId: "example.echo",
-    displayName: "Echo",
-    settingsSchema: z.object({}).strict(),
-    informationKinds: [inboundKind, outputKind],
-  },
-  create: () => ({
-    subscriptions: [
-      onInformation(inboundKind, async (atom, context) => {
-        await context.append(outputKind, {
-          payload: { text: atom.payload.text },
-        });
-      }),
-    ],
-  }),
+::: code-group
+
+```ts [信息模块订阅 ~vscode-icons:file-type-typescript~]
+onInformation(inboundTextKind, async (atom, context) => {
+  await context.register(replyRequestedKind, {
+    payload: { text: atom.payload.text, source: atom.payload.source },
+  });
 });
 ```
 
-`onTargetedInformation` 只把 payload 中 `targetInstanceId` 与当前模块实例匹配的原子交给处理器。同一 Kind 不允许同时存在广播订阅和目标订阅，以免同一输入在不同语义下被重复解释。
+:::
 
-## 派生原子的因果关系
+`context.register()` 不接受调用方提供的 `informationId`、`source` 或发生时间。宿主会补齐 `source: module:<instanceId>`、当前时间、指向输入的 `core:caused-by`，以及输入已有的唯一 `core:context` 引用。调用方可提供额外的非保留 relation，但不能覆盖或重复这两个 Core 关系。
 
-`context.append` 会由宿主补齐以下字段：
+## 广播、过滤与阶段关系
 
-- `source` 固定为 `module:<instanceId>`；
-- `occurredAt` 由宿主时钟生成；
-- `core:caused-by` 指向当前输入原子；
-- 输入原子已有的 `core:context` 引用会被继承。
+一个 Kind 可以有多个订阅者。Core 在原子持久化后对当前订阅者并发广播；注册先后与模块配置顺序不表达业务优先级。需要顺序时，前一阶段必须注册新的 Kind，后一阶段订阅该 Kind。
 
-模块可以追加业务关系，但不能覆盖或重复 `core:caused-by`、`core:context`。所有写入仍经过 `InformationCore.append`，因此 Kind schema、引用目标、数量限制和 append-only 约束由 Core 统一执行。
+过滤也是普通的显式 DAG：通过时注册约定的下一 Kind，例如 `core.reply.requested`；拒绝时注册 `filter.decision`，并且不注册下一阶段。`filter.decision` 仅记录拒绝事实，不做定向路由。SDK 没有 targeted subscription、priority 或 interceptor API。
 
-## 并发与故障边界
+## 故障与生命周期
 
-Core 广播会并发启动同一 Kind 的全部消费者，并以 `Promise.allSettled` 隔离单个消费者故障。一个消费者失败不会回滚已经提交的输入原子，也不会阻止其他消费者继续处理。宿主可注入 `InformationModuleRunLifecycle`，在处理前后记录 started、completed、failed 或 cancelled 生命周期事实；生命周期记录失败不会反向改变业务原子的提交结果。
+handler 抛出或 reject 时，Core 会记录一条 `consumer.failed`，其 `core:caused-by` 指向输入原子。该失败不会回滚输入，也不会阻止同一 Kind 的其他消费者；模块无需捕获错误再注册另一套失败事件。
 
-当前仓库仍保留旧 EventBus/ModuleHost 以支持渐进迁移；Runtime 主链路切换到 InformationCore、内置 Kind 和原子化 delivery/LLM 生命周期属于后续阶段。换言之，本页描述的是已落地的模块 SDK 与宿主边界，不代表整个 Issue #40 已关闭。
+Core 不会自动重试失败模块，也不为离线模块保存订阅或补投历史原子。模块应把可恢复策略建模为显式 Kind 与自身业务逻辑，而不是假定宿主提供队列语义。
