@@ -3,7 +3,8 @@
  * 以证明 registry、store 与 bus 组合后的写入路径只信任注册表中的正式定义，
  * 并且不会把可变输入、未注册 kind 或关闭后的调用继续放行。
  * 主要职责：验证最终 `register/on/get/query` API、落账先于广播、引用校验、深冻结、
- * ID 冲突、消费者失败安全脱敏、共享 start/close promise、关闭等待在途广播及最终日志排空。
+ * ID 冲突、消费者失败固定分类、抛出型错误 getter、共享 start/close promise、closing
+ * 阶段拒绝订阅、关闭等待在途广播及最终日志排空。
  * 代码库关系：`InformationCore` 连接 registry、store 与 bus；这里的测试使用
  * 内存 ledger double 验证“先落库、后并发发布”、冻结快照、失败递归保护、故障 context
  * 继承、ID 冲突与关闭语义；不会以 mock 掩盖账本和广播的实际交互。
@@ -436,7 +437,7 @@ describe("InformationCore", () => {
           definitionId: "acme.worker",
           instanceId: "one",
         },
-        error: { errorType: "TypeError", message: "Consumer handler failed" },
+        error: { errorType: "Error", message: "Consumer handler failed" },
       },
       references: [
         { relation: "core:caused-by", informationId: source.informationId },
@@ -730,6 +731,35 @@ describe("InformationCore", () => {
     expect(drainPending).toHaveBeenCalledOnce();
   });
 
+  it("rejects subscriptions while close is still draining", async () => {
+    const store = new MemoryInformationStore();
+    const registry = new InformationKindRegistry();
+    registry.register(parentDefinition);
+    const draining = deferred<void>();
+    const release = deferred<void>();
+    const core = new InformationCore({
+      registry,
+      store,
+      nextInformationId: createDeterministicIdGenerator(),
+      logProjectionRunner: {
+        projectPending: async () => undefined,
+        drainPending: async () => {
+          draining.resolve();
+          await release.promise;
+        },
+      },
+    });
+    await core.start();
+
+    const closing = core.close();
+    await draining.promise;
+    expect(() =>
+      core.on(parentDefinition, { consumerId: "too-late" }, () => undefined),
+    ).toThrow(InformationCoreClosedError);
+    release.resolve();
+    await closing;
+  });
+
   it("rejects spoofed definition objects before payload or reference validation", async () => {
     const store = new MemoryInformationStore();
     const core = await createStartedCore(store, [
@@ -974,5 +1004,49 @@ describe("InformationCore", () => {
     });
     expect(JSON.stringify(fact)).not.toContain("very-secret");
     expect(JSON.stringify(fact)).not.toContain("postgresql://");
+  });
+
+  it("does not treat an alphanumeric secret as a safe consumer error type", async () => {
+    const store = new MemoryInformationStore();
+    const core = await createStartedCore(store, [parentDefinition]);
+    const failure = new Error("DatabasePassword123 message");
+    failure.name = "DatabasePassword123";
+    core.on(parentDefinition, { consumerId: "secret-name" }, () => {
+      throw failure;
+    });
+
+    await core.register(parentDefinition, registration({ text: "moon" }));
+
+    const fact = [...store.atoms.values()].find(
+      (atom) => atom.kind === consumerFailedKind,
+    );
+    expect(fact?.payload).toMatchObject({
+      error: { errorType: "Error", message: "Consumer handler failed" },
+    });
+    expect(JSON.stringify(fact)).not.toContain("DatabasePassword123");
+  });
+
+  it("records a safe fact when an Error name getter throws", async () => {
+    const store = new MemoryInformationStore();
+    const core = await createStartedCore(store, [parentDefinition]);
+    const failure = new Error("getter-secret");
+    Object.defineProperty(failure, "name", {
+      get() {
+        throw new Error("name-getter-secret");
+      },
+    });
+    core.on(parentDefinition, { consumerId: "throwing-name" }, () => {
+      throw failure;
+    });
+
+    await core.register(parentDefinition, registration({ text: "moon" }));
+
+    const fact = [...store.atoms.values()].find(
+      (atom) => atom.kind === consumerFailedKind,
+    );
+    expect(fact?.payload).toMatchObject({
+      error: { errorType: "Error", message: "Consumer handler failed" },
+    });
+    expect(JSON.stringify(fact)).not.toContain("getter-secret");
   });
 });

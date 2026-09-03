@@ -724,11 +724,11 @@ function transportKey(adapterId: string, platform: string): string {
 }
 
 function safeErrorType(error: unknown): string {
-  if (!(error instanceof Error)) return "UnknownError";
-  const name = error.constructor.name;
-  return name.length <= 128 && /^[A-Za-z][A-Za-z0-9]*$/u.test(name)
-    ? name
-    : "Error";
+  try {
+    return error instanceof Error ? "Error" : "UnknownError";
+  } catch {
+    return "UnknownError";
+  }
 }
 
 function required<T>(value: T | undefined, label: string): T {

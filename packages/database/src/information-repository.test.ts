@@ -2,7 +2,8 @@
  * 功能概述：本测试覆盖信息原子仓储的 append、查询、引用约束与冲突语义，
  * 先以真实 PostgreSQL 行为锁定 append-only 关系图的读写契约，再交由实现补齐。
  * 主要职责：验证缺失/错误目标、重复 ID、并发写入、引用顺序、反向查询顺序与日志
- * outbox 生命周期、runner 并发去重与跨批次排空，所有读取只使用最终 `get/query` API。
+ * outbox 生命周期、runner 并发去重、短批次并发入队与以真实空批次为终点的排空，
+ * 所有读取只使用最终 `get/query` API。
  * 代码库关系：测试只面向 `createTestingDatabase()` 返回值和 `information`
  * 仓储接口，验证引用顺序、目标 kind 校验、冲突错误与反向引用查询顺序。
  * 输入输出与副作用：每个用例创建、迁移并关闭独立 PGlite 数据库；断言直接观察真实
@@ -571,6 +572,54 @@ describe("information repository", () => {
         "atom-drain-b",
         "atom-drain-c",
       ]);
+      expect(await database.information.listPendingLogProjections(10)).toEqual(
+        [],
+      );
+      await database.close();
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "checks for a real empty batch when a concurrent short batch enqueues more work",
+    async () => {
+      const database = await createTestingDatabase();
+      await database.migrate();
+      await database.information.synchronizeKinds([contextKind.kind]);
+      const first = createAtom(
+        "atom-short-batch-first",
+        contextKind.kind,
+        "2026-09-01T00:00:00.000Z",
+        { name: "first" },
+        [],
+      );
+      const second = createAtom(
+        "atom-short-batch-second",
+        contextKind.kind,
+        "2026-09-01T00:01:00.000Z",
+        { name: "second" },
+        [],
+      );
+      await database.information.append(first, [], {
+        enqueueLogProjection: true,
+      });
+      const projected: string[] = [];
+      const runner = new InformationLogProjectionRunner({
+        repository: database.information,
+        batchSize: 100,
+        sink: async (atom) => {
+          projected.push(atom.informationId);
+          if (atom.informationId === first.informationId) {
+            await database.information.append(second, [], {
+              enqueueLogProjection: true,
+            });
+          }
+        },
+      });
+
+      await Promise.all([runner.projectPending(), runner.drainPending()]);
+
+      expect(projected).toEqual([first.informationId, second.informationId]);
       expect(await database.information.listPendingLogProjections(10)).toEqual(
         [],
       );

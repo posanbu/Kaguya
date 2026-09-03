@@ -2,7 +2,8 @@
  * 功能概述：验证 Server 作为唯一 composition root 组合 PostgreSQL information
  * database、Runtime、Web/NapCat ingress、HTTP 与启动期选定的全局 Profile。
  * 主要职责：用真实 PGlite 覆盖 Web 到 information DAG，验证 HTTP/Web UI/Vite
- * 组合和启动失败关闭；并区分数据库初始化与模块/Runtime 生命周期失败的安全错误分类；
+ * 组合和启动失败关闭；并区分数据库初始化与模块/Runtime 生命周期失败的固定错误分类，
+ * 覆盖未知字母数字类名和抛出型 constructor/name getter；
  * `createRuntimeModelSelectionResolver` 用例保证 selected Profile
  * 在启动时冻结、light/heavy 共用一个 tier-only resolver，且模块不能传 `profileId`。
  * 代码库关系：直接驱动 `server.ts`、`app.ts`、`web-gateway.ts` 与 `web.ts`；
@@ -32,6 +33,7 @@ import { createHttpApplication } from "./app.js";
 import type { ServerConfig } from "./config.js";
 import {
   createRuntimeModelSelectionResolver,
+  InformationRuntimeStartupError,
   startKaguyaServer,
 } from "./server.js";
 import { createWebMessageGateway } from "./web-gateway.js";
@@ -83,6 +85,34 @@ function config(workspacePath: string): ServerConfig {
 }
 
 describe("unified server composition", () => {
+  it("sanitizes unknown and throwing Runtime startup error properties", () => {
+    class DatabasePassword123 extends Error {}
+    const named = new InformationRuntimeStartupError(
+      new DatabasePassword123("runtime-password"),
+    );
+    const reflective = new Error("runtime-message-secret");
+    Object.defineProperties(reflective, {
+      constructor: {
+        get() {
+          throw new Error("constructor-getter-secret");
+        },
+      },
+      name: {
+        get() {
+          throw new Error("name-getter-secret");
+        },
+      },
+    });
+
+    const throwing = new InformationRuntimeStartupError(reflective);
+
+    expect(named).toMatchObject({ failureType: "Error" });
+    expect(throwing).toMatchObject({ failureType: "Error" });
+    expect(JSON.stringify([named, throwing])).not.toMatch(
+      /DatabasePassword123|password|getter-secret|message-secret/u,
+    );
+  });
+
   it("ingests Web messages through the shared Runtime as a platform adapter", async () => {
     const databasePath = tempDatabasePath();
     const database = await createTestingDatabase();

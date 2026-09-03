@@ -7,7 +7,7 @@
  * `information-kinds.ts` 提供唯一的 `consumer.failed` 定义，Runtime 后续复用它。
  * 输入输出与副作用：提交成功才广播当前快照，拒绝的消费者被记录为失败 atom；失败
  * atom 的消费者或持久化失败只进入 bootstrap reporter，绝不递归产生故障链；失败事实
- * 会继承输入唯一的 `core:context`，错误类型只接受有限的安全标识符。start/close 共享
+ * 会继承输入唯一的 `core:context`，Error rejection 的类型固定为 `Error`。start/close 共享
  * promise；关闭先拒绝新注册、等待已接受的落账和广播，再排空日志投影并清理订阅，
  * 确保并发调用不能重复初始化、复活 Core 或泄漏原异常正文。
  */
@@ -380,7 +380,7 @@ export class InformationCore {
   }
 
   private assertOpen(): void {
-    if (this.#state === "closed") {
+    if (this.#state === "closing" || this.#state === "closed") {
       throw new InformationCoreClosedError();
     }
   }
@@ -399,9 +399,9 @@ function summarizeConsumerError(reason: unknown): {
   readonly errorType: string;
   readonly message: string;
 } {
-  if (reason instanceof Error) {
+  if (isError(reason)) {
     return {
-      errorType: safeConsumerErrorType(reason),
+      errorType: "Error",
       message: "Consumer handler failed",
     };
   }
@@ -411,14 +411,11 @@ function summarizeConsumerError(reason: unknown): {
   };
 }
 
-function safeConsumerErrorType(error: Error): string {
+function isError(value: unknown): boolean {
   try {
-    const name = error.name;
-    return name.length <= 128 && /^[A-Za-z][A-Za-z0-9]*$/u.test(name)
-      ? name
-      : "Error";
+    return value instanceof Error;
   } catch {
-    return "Error";
+    return false;
   }
 }
 

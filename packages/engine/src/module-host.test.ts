@@ -4,7 +4,8 @@
  * 主要职责：验证模块 context.register 注入模块 source、因果与 context 引用；
  * 验证保留引用和未声明输出被拒绝、输入快照深冻结、同 kind 多实例均被广播，以及
  * handler 故障由 Core 记录为带模块消费者身份的 `consumer.failed`；并直接覆盖共享
- * start/stop promise、停止与创建竞态、在途 handler 等待及 instance source grammar。
+ * start/stop promise、停止与创建竞态、rollback/dispose 全量失败聚合、在途 handler 等待
+ * 及 instance source grammar。
  * 代码库关系：覆盖最终 `module-host.ts` 对 SDK `onInformation` 和 Core
  * `on`/`register` 的适配；MemoryLedger 模拟 Core 所要求的 append-only 存储边界。
  * 输入输出与副作用：测试只写入进程内账本，注册的 atom 必须先满足引用存在性；每个
@@ -252,6 +253,112 @@ describe("ModuleHost", () => {
         },
       ]),
     ).rejects.toThrow("ModuleHost cannot be restarted");
+  });
+
+  it("reports rollback disposal failures to stop when stop races startup", async () => {
+    const { core } = createCore();
+    await core.start();
+    let entered!: () => void;
+    const enteredCreate = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const rollbackFailure = new Error("async rollback failed");
+    const module = defineInformationModule({
+      manifest: {
+        apiVersion: 1,
+        definitionId: "acme.rollback-failure",
+        displayName: "Rollback failure",
+        settingsSchema: z.object({}).strict(),
+        informationKinds: [inboundKind],
+      },
+      create: async () => {
+        entered();
+        await gate;
+        return {
+          subscriptions: [],
+          dispose: async () => Promise.reject(rollbackFailure),
+        };
+      },
+    });
+    const host = new ModuleHost({ core });
+    host.register(module);
+    const starting = host.start([
+      {
+        instanceId: "reply.rollback",
+        definitionId: module.manifest.definitionId,
+        settings: {},
+      },
+    ]);
+    await enteredCreate;
+    const stopping = host.stop();
+    release();
+
+    const [startResult, stopResult] = await Promise.allSettled([
+      starting,
+      stopping,
+    ]);
+    expect(startResult).toMatchObject({ status: "rejected" });
+    expect(stopResult).toMatchObject({
+      status: "rejected",
+      reason: expect.objectContaining({
+        name: "AggregateError",
+        message: "Information module startup rollback failed",
+        errors: [rollbackFailure],
+      }),
+    });
+  });
+
+  it("attempts every module dispose when synchronous and asynchronous failures coexist", async () => {
+    const { core } = createCore();
+    await core.start();
+    const attempts: string[] = [];
+    const synchronousFailure = new Error("sync dispose failed");
+    const asynchronousFailure = new Error("async dispose failed");
+    const module = defineInformationModule({
+      manifest: {
+        apiVersion: 1,
+        definitionId: "acme.dispose-all",
+        displayName: "Dispose all",
+        settingsSchema: z.object({}).strict(),
+        informationKinds: [inboundKind],
+      },
+      create: ({ instanceId }) => ({
+        subscriptions: [],
+        dispose: () => {
+          attempts.push(instanceId);
+          if (instanceId === "dispose.sync") throw synchronousFailure;
+          if (instanceId === "dispose.async") {
+            return Promise.reject(asynchronousFailure);
+          }
+        },
+      }),
+    });
+    const host = new ModuleHost({ core });
+    host.register(module);
+    await host.start(
+      ["dispose.sync", "dispose.async", "dispose.success"].map(
+        (instanceId) => ({
+          instanceId,
+          definitionId: module.manifest.definitionId,
+          settings: {},
+        }),
+      ),
+    );
+
+    await expect(host.stop()).rejects.toMatchObject({
+      name: "AggregateError",
+      message: "One or more information modules failed to stop",
+      errors: [synchronousFailure, asynchronousFailure],
+    });
+    expect(attempts).toEqual([
+      "dispose.sync",
+      "dispose.async",
+      "dispose.success",
+    ]);
   });
 
   it("rejects an unsafe instance source and disposes resources created earlier in the startup", async () => {

@@ -351,10 +351,10 @@ export function createRuntimeModelSelectionResolver(
 export class InformationDatabaseConnectionError extends Error {
   readonly failureType: string;
 
-  constructor(error: unknown, failureType = safeErrorType(error)) {
+  constructor(error: unknown) {
     super("Information database connection failed");
     this.name = "InformationDatabaseConnectionError";
-    this.failureType = failureType;
+    this.failureType = safeErrorType(error);
   }
 }
 
@@ -384,8 +384,8 @@ async function startInformationRuntime(runtime: KaguyaRuntime): Promise<void> {
   try {
     await runtime.start();
   } catch (error) {
-    if (error instanceof RuntimeDatabaseInitializationError) {
-      throw new InformationDatabaseConnectionError(error, error.failureType);
+    if (isRuntimeDatabaseInitializationError(error)) {
+      throw new InformationDatabaseConnectionError(error);
     }
     throw new InformationRuntimeStartupError(error);
   }
@@ -469,14 +469,28 @@ async function closeResources(options: {
 }
 
 function safeErrorType(error: unknown): string {
-  if (error instanceof AggregateError) return "AggregateError";
-  if (error instanceof Error) {
-    const type = error.constructor.name;
-    return type.length <= 128 && /^[A-Za-z][A-Za-z0-9]*$/u.test(type)
-      ? type
-      : "Error";
+  try {
+    if (error instanceof AggregateError) return "AggregateError";
+    if (error instanceof InformationDatabaseConnectionError) {
+      return "InformationDatabaseConnectionError";
+    }
+    if (error instanceof InformationRuntimeStartupError) {
+      return "InformationRuntimeStartupError";
+    }
+    return error instanceof Error ? "Error" : "UnknownError";
+  } catch {
+    return "UnknownError";
   }
-  return "UnknownError";
+}
+
+function isRuntimeDatabaseInitializationError(
+  error: unknown,
+): error is RuntimeDatabaseInitializationError {
+  try {
+    return error instanceof RuntimeDatabaseInitializationError;
+  } catch {
+    return false;
+  }
 }
 
 function required<T>(value: T | undefined, label: string): T {

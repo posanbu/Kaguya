@@ -2,7 +2,8 @@
  * 功能概述：用真实 PGlite、Core 和 ModuleHost 验证 `KaguyaRuntime` 的完整信息 DAG。
  * 主要职责：覆盖 Web 入站到投递成功的直接因果链、生成失败不会继续 assistant/outbound/delivery、
  * 三类 transport 失败、无订阅持久化、同 kind 消费并发与双实例归属、start/close 确定性交错、
- * in-flight 关闭、关闭后 ingress 拒绝、数据库初始化错误脱敏分类，以及消费者失败与其他结果并存。
+ * in-flight 关闭、关闭后 ingress 拒绝、数据库初始化错误固定分类及抛出型反射属性，
+ * 以及消费者失败与其他结果并存。
  * 代码库关系：测试直接消费 Runtime 的 `InformationIngress.submit` 和注入数据库选项；默认业务
  * 模块来自 `@kaguya/modules`，自定义 fixture 只用于隔离并发和消费者故障语义。
  * 输入输出与副作用：每个用例创建隔离的内存 PostgreSQL 数据库，Runtime 只写 information
@@ -190,6 +191,54 @@ describe("KaguyaRuntime", () => {
     expect(`${String(error)}\n${JSON.stringify(error)}`).not.toContain(
       "runtime-secret",
     );
+  });
+
+  it("does not preserve an unknown alphanumeric migration error class", async () => {
+    class DatabasePassword123 extends Error {}
+    const database = await createTestingDatabase();
+    vi.spyOn(database, "migrate").mockRejectedValueOnce(
+      new DatabasePassword123("database-secret"),
+    );
+    const runtime = new KaguyaRuntime({ database });
+    resources.push({ runtime, database });
+
+    const error = await runtime.start().catch((thrown: unknown) => thrown);
+
+    expect(error).toMatchObject({
+      name: "RuntimeDatabaseInitializationError",
+      failureType: "Error",
+    });
+    expect(JSON.stringify(error)).not.toContain("DatabasePassword123");
+    expect(JSON.stringify(error)).not.toContain("database-secret");
+  });
+
+  it("classifies migration errors whose reflective properties throw", async () => {
+    const database = await createTestingDatabase();
+    const malicious = new Error("database-message-secret");
+    Object.defineProperties(malicious, {
+      constructor: {
+        get() {
+          throw new Error("constructor-getter-secret");
+        },
+      },
+      name: {
+        get() {
+          throw new Error("name-getter-secret");
+        },
+      },
+    });
+    vi.spyOn(database, "migrate").mockRejectedValueOnce(malicious);
+    const runtime = new KaguyaRuntime({ database });
+    resources.push({ runtime, database });
+
+    const error = await runtime.start().catch((thrown: unknown) => thrown);
+
+    expect(error).toMatchObject({
+      name: "RuntimeDatabaseInitializationError",
+      message: "Runtime database initialization failed",
+      failureType: "Error",
+    });
+    expect(JSON.stringify(error)).not.toMatch(/getter-secret|message-secret/u);
   });
 
   it(
@@ -827,7 +876,7 @@ describe("KaguyaRuntime", () => {
           definitionId: "test.inbound.failing",
           instanceId: "failure.one",
         },
-        error: { errorType: "TypeError", message: "Consumer handler failed" },
+        error: { errorType: "Error", message: "Consumer handler failed" },
       });
       expect(JSON.stringify(graph)).not.toContain(
         "credential-must-not-enter-ledger",

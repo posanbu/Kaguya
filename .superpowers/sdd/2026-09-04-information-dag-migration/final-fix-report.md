@@ -6,7 +6,7 @@
 
 NapCat 入站现在由 Server 根据 `KAGUYA_GATEWAY_ALLOWLIST_PLATFORMS`、`KAGUYA_GATEWAY_ALLOWLIST_USER_IDS` 和 `KAGUYA_GATEWAY_ALLOWLIST_GROUP_IDS` 构造 `GatewayAllowlist`，再把纯布尔谓词注入 NapCat adapter。OneBot frame 正规化并核验 self ID 后，必须先通过该谓词，才会调用 `InformationIngress.submit()`。拒绝路径不会调用 ingress，因此不会创建 context/inbound atom，也不会进入模型或投递链。Web gateway 不使用这个谓词；`GatewayAllowlist` 对 Web 消息也显式返回允许，Web 继续由 HTTP Bearer Token 边界控制。
 
-`consumer.failed` 不再直接信任 `Error.name`。错误类型只有在长度不超过 128 且满足 ASCII 字母开头、其余仅字母或数字时才保留；否则固定为 `Error`。错误摘要仍为固定文本。回归测试把数据库 URL、密码同时放入 `name` 与 `message`，并确认账本事实中没有明文。
+`consumer.failed` 不再读取或信任 `Error.name`。所有 Error rejection 都固定记录为 `Error`，错误摘要仍为固定文本；非 Error rejection 使用固定的 `NonErrorRejection`。回归测试覆盖数据库 URL、字母数字形式的伪错误类型 `DatabasePassword123`，以及会抛异常的 `name` getter，并确认账本事实中没有明文。
 
 `InformationCore` 与 `ModuleHost` 现使用明确的 starting/closing 或 starting/stopping 状态和共享 promise。并发 start 不重复同步 kind 或创建模块实例；close/stop 与 start 交错时会等待启动工作并最终停在终态，不会重新变为 started。Core 关闭会先拒绝新注册，等待已接受的 register/broadcast 完成，再排空日志投影并清订阅。ModuleHost 停止会撤销新订阅入口，等待已进入 handler，再 dispose 实例。
 
@@ -14,9 +14,11 @@ ModuleHost 在创建每个实例前校验 `module:<instanceId>` 的 suffix：必
 
 demo 的生产默认 ID 改为 `randomUUID`，测试通过 `RunDemoOptions.informationIdGenerator` 注入确定性序列，因此输出断言不变，同一持久账本连续执行两次也不会产生主键冲突。
 
-日志投影 runner 会合并同进程并发批次，避免两个调用读取同一 pending job 并重复写 sink。新增 `drainPending()` 会持续读取成功批次直到 outbox 为空；如果一个批次发生失败则停止本轮 drain，把失败 job 留给后续调用或进程重启，避免关闭过程无限循环。Core.close 会在已接受工作结束后调用最终 drain。
+日志投影 runner 会合并同进程并发批次，避免两个调用读取同一 pending job 并重复写 sink。新增 `drainPending()` 会在每个成功批次后继续读取，只有实际读到零个 pending job 才确认 outbox 为空；不能用“本批少于 batchSize”推断完成。如果一个批次发生失败则停止本轮 drain，把失败 job 留给后续调用或进程重启，避免关闭过程无限循环。Core.close 会在已接受工作结束后调用最终 drain。
 
-Runtime 把 `database.migrate()` 的异常转换为不携带 cause 的 `RuntimeDatabaseInitializationError`。Server 将该类继续映射为 `InformationDatabaseConnectionError`；其余 Runtime 或模块启动异常映射为 `InformationRuntimeStartupError`。两种 Server 错误都只保留通过 grammar/长度检查的 `failureType`，不保存数据库 URL、凭据或原异常消息。
+Runtime 把 `database.migrate()` 的异常转换为不携带 cause 的 `RuntimeDatabaseInitializationError`。Server 将该类继续映射为 `InformationDatabaseConnectionError`；其余 Runtime 或模块启动异常映射为 `InformationRuntimeStartupError`。底层任意 Error 只分类为固定 `Error`，Server 日志仅通过 `instanceof` 保留自身三个固定 wrapper/AggregateError 名称；代码不读取任意错误的 `constructor`、`name` 或 `message`。回归测试覆盖未知字母数字类名以及会抛异常的 `constructor`/`name` getter。
+
+Module dispose 现在把每次调用延迟到独立的 Promise microtask，再用 `Promise.allSettled` 汇总，因此一个同步 throw 不会阻止其余实例执行 dispose。正常 stop 以激活顺序返回 `AggregateError.errors`；若 stop 与 start 竞态，start 的 rollback 失败既包含在 start 的 aggregate 中，也由 stop 以 `Information module startup rollback failed` 的稳定 AggregateError 合约返回。
 
 架构扫描新增独立 `emit` 规则并由 Vitest mutation-style fixture 验证。未加入“所有 production 信息写入只能出现 `core.register` 字面量”的规则：Runtime lifecycle、ModuleHost 与 Core 内部 ledger append 分属不同合法层级，基于调用文本的静态正则容易把端口实现和组合测试误判；现有门禁已经禁止旧 `emit`，而唯一写入口继续由类型边界与集成测试约束。
 
@@ -26,11 +28,13 @@ Runtime 把 `database.migrate()` 的异常转换为不携带 cause 的 `RuntimeD
 
 最小实现后，聚焦命令覆盖 Engine、Database、Runtime、Server/NapCat、demo 与架构脚本，共 9 个测试文件、95 项测试，全部通过。随后全仓运行 43 个测试文件、462 项测试，全部通过。
 
+Scoped re-review 追加测试后，第二轮 RED 得到 8 个与审查意见逐一对应的失败：字母数字 secret 类型、抛出型 getter、closing/on、同步 dispose 中断、rollback 失败未传给 stop、短批次错误终止等。修复后聚焦命令覆盖 5 个文件、87 项测试并全部通过；全仓最终为 43 个文件、471 项测试。
+
 ## 验证结果
 
 - `pnpm lint`：通过。
 - `pnpm typecheck`：通过。
-- `pnpm test`：通过，43 files / 462 tests。
+- `pnpm test`：通过，43 files / 471 tests。
 - `pnpm build`：通过，TypeScript project build 与 Web Vite production build 均成功。
 - `pnpm --dir docs docs:check`：通过，VitePress 完成 client/server bundle 与页面渲染；仅有既有的大 chunk 警告。
 - `pnpm exec tsx scripts/information-architecture.test.ts`：通过。

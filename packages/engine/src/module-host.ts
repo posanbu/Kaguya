@@ -8,7 +8,8 @@
  * 代码库关系：依赖 SDK 的 information-module 契约和 Core 的最终 on/register API；
  * Core 负责广播并记录 consumer.failed，因此本宿主不吞掉或二次记录 handler 故障。
  * 输入输出与副作用：启动验证 instanceId 能组成小写安全 source；停止先撤销订阅、等待
- * 已进入的 handler，再调用模块 dispose。启动/停止竞态不会重复创建、重复释放或复活宿主；
+ * 已进入的 handler，再以 all-settled 方式调用全部模块 dispose；启动 rollback 的释放失败
+ * 同时反馈给 start 与并发 stop。启动/停止竞态不会重复创建、重复释放或复活宿主；
  * context.register 会持久化新 atom，且拒绝调用方覆盖 Core 保留关系。
  */
 import type {
@@ -59,6 +60,7 @@ export class ModuleHost {
   #state: "new" | "starting" | "started" | "stopping" | "stopped" = "new";
   #startPromise: Promise<void> | undefined;
   #stopPromise: Promise<void> | undefined;
+  readonly #startupRollbackFailures: unknown[] = [];
 
   constructor(options: ModuleHostOptions) {
     this.#options = options;
@@ -139,9 +141,16 @@ export class ModuleHost {
     } catch (error) {
       for (const unsubscribe of this.#unsubscribe.splice(0)) unsubscribe();
       this.#active.clear();
-      await disposeModules(created);
+      const rollbackFailures = await disposeModules(created);
+      this.#startupRollbackFailures.push(...rollbackFailures);
       if (this.#state === "starting") {
         this.#state = "stopped";
+      }
+      if (rollbackFailures.length > 0) {
+        throw new AggregateError(
+          [error, ...rollbackFailures],
+          "Information module startup failed during rollback",
+        );
       }
       throw error;
     }
@@ -159,12 +168,15 @@ export class ModuleHost {
       await Promise.allSettled([...this.#inFlight]);
       const active = [...this.#active.values()];
       this.#active.clear();
-      const failures = await disposeModules(active);
+      const rollbackFailures = this.#startupRollbackFailures.splice(0);
+      const failures = [...rollbackFailures, ...(await disposeModules(active))];
       this.#state = "stopped";
       if (failures.length > 0) {
         throw new AggregateError(
           failures,
-          "One or more information modules failed to stop",
+          rollbackFailures.length > 0
+            ? "Information module startup rollback failed"
+            : "One or more information modules failed to stop",
         );
       }
     })();
@@ -342,7 +354,9 @@ async function disposeModules(
   modules: readonly ActiveInformationModule[],
 ): Promise<unknown[]> {
   const results = await Promise.allSettled(
-    modules.map(({ instance }) => Promise.resolve(instance.dispose?.())),
+    modules.map(({ instance }) =>
+      Promise.resolve().then(() => instance.dispose?.()),
+    ),
   );
   return results.flatMap((result) =>
     result.status === "rejected" ? [result.reason] : [],

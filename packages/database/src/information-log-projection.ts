@@ -59,11 +59,7 @@ export class InformationLogProjectionRunner {
     this.#drainPromise = (async () => {
       while (true) {
         const result = await this.runSharedBatch();
-        if (
-          result.pendingCount === 0 ||
-          result.failedCount > 0 ||
-          result.pendingCount < this.#batchSize
-        ) {
+        if (result.pendingCount === 0 || result.failedCount > 0) {
           return;
         }
       }
