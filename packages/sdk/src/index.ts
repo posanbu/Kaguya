@@ -242,3 +242,18 @@ export {
   type InformationLogProjection,
   type InformationReferenceRule,
 } from "./information-kind.js";
+export {
+  defineInformationModule,
+  onInformation,
+  onTargetedInformation,
+  type CreateInformationModuleInstanceOptions,
+  type InformationExecutionContext,
+  type InformationModuleActivation,
+  type InformationModuleDefinition,
+  type InformationModuleHandlerContext,
+  type InformationModuleInstance,
+  type InformationModuleManifest,
+  type InformationModuleRunLifecycle,
+  type InformationModuleRunLifecycleInput,
+  type InformationModuleSubscription,
+} from "./information-modules.js";

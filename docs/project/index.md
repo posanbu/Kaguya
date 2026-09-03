@@ -18,6 +18,7 @@ description: Kaguya 当前已实现能力、明确边界和后续演进顺序。
 - 入站消息落库后广播 `message.ingested`。
 - ModuleHost 支持广播、定向事件和不可改写的因果字段。
 - 默认演示链完成 filter、LLM reply 与显式 outbound request。
+- 信息模块 SDK 与 `InformationModuleHost` 已提供原子订阅、派生引用和并发消费者隔离；旧 EventBus 主链仍在渐进迁移。
 :::
 
 ::: timeline 配置、模型与审计
@@ -52,7 +53,7 @@ description: Kaguya 当前已实现能力、明确边界和后续演进顺序。
 
 ### #40 Core DAG 与模块 SDK
 
-模块显式订阅输入 Kind、产生输出 Kind。Core 只负责类型校验、DAG 调度、因果关系与失败传播，不自动推导处理链。
+已完成信息模块 SDK、`InformationModuleHost` 和并发广播基础：模块可以显式订阅输入 Kind，并通过 Core 追加带有 `core:caused-by`、`core:context` 的输出原子。Runtime 入站、LLM、delivery 和失败原子仍待迁移，Issue 尚未整体完成。
 
 ### #41 Selector、Prompt 与 Memory
 
