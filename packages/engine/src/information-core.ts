@@ -6,8 +6,9 @@
  * 代码库关系：Core 是信息原子体系的入口编排层，依赖 Registry、Ledger 与 Bus；
  * `information-kinds.ts` 提供唯一的 `consumer.failed` 定义，Runtime 后续复用它。
  * 输入输出与副作用：提交成功才广播当前快照，拒绝的消费者被记录为失败 atom；失败
- * atom 的消费者或持久化失败只进入 bootstrap reporter，绝不递归产生故障链；错误类型
- * 截断到 kind schema 的上限，确保每个接受的消费者错误都可表达为失败事实。
+ * atom 的消费者或持久化失败只进入 bootstrap reporter，绝不递归产生故障链；失败事实
+ * 会继承输入唯一的 `core:context`，错误类型截断到 kind schema 的上限，确保每个接受的
+ * 消费者错误都可表达为可查询且不泄漏原异常正文的事实。
  */
 import {
   type DeepReadonly,
@@ -17,6 +18,7 @@ import {
   informationReferenceSchema,
   type InformationAtom,
   type InformationId,
+  type InformationReference,
   type JsonObject,
 } from "@kaguya/schema";
 import type {
@@ -340,6 +342,7 @@ export class InformationCore {
               relation: "core:caused-by",
               informationId: sourceAtom.informationId,
             },
+            ...consumerFailureContextReferences(sourceAtom),
           ],
         },
         false,
@@ -388,6 +391,15 @@ export class InformationCore {
       throw new InformationCoreClosedError();
     }
   }
+}
+
+function consumerFailureContextReferences(
+  atom: DeepReadonly<InformationAtom>,
+): InformationReference[] {
+  const contexts = atom.references.filter(
+    (reference) => reference.relation === "core:context",
+  );
+  return contexts.length === 1 ? [{ ...contexts[0]! }] : [];
 }
 
 function summarizeConsumerError(reason: unknown): {

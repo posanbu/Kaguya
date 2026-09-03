@@ -1,25 +1,30 @@
 /**
- * 功能概述：本文件验证 `KaguyaRuntime` 在数据库、模块宿主、LLM 执行器与平台传输之间
- * 的整合行为，覆盖消息过滤、持久化、事件驱动回复、关闭时序以及模型选择解析器的契约。
- * 主要职责：已有用例确保平台/Web 消息的标准流水线、错误审计与 shutdown 语义稳定；
- * 本次变更新增回归测试，要求多个回复模块共享同一个运行时解析器，传入的 selection
- * 只能包含 `modelTier`，并且任何持久化消息都不能再出现 `profileId` 覆盖痕迹。
- * 代码库关系：测试直接实例化 `runtime.ts`，并通过 `@kaguya/database` 检查落盘记录；
- * 它依赖 `@kaguya/modules` 默认模块与自定义 activation 的组合来覆盖真实 dispatch 流程，
- * 从而约束服务层 `apps/server` 提供的 resolver 必须符合运行时的最小接口。
- * 输入输出与副作用：每个用例在临时 SQLite 文件中运行完整 Runtime 生命周期，注册内存版
- * transport 或伪造 resolver 来观察调用参数；测试结束会删除临时目录，避免污染工作区。
+ * 功能概述：用真实 PGlite、Core 和 InformationModuleHost 验证 `KaguyaRuntime` 的完整信息 DAG。
+ * 主要职责：覆盖 Web 入站到投递成功的直接因果链、三类 transport 失败、无订阅持久化、
+ * 同 kind 消费并发、in-flight 关闭、关闭后 ingress 拒绝，以及消费者失败与其他结果并存。
+ * 代码库关系：测试直接消费 Runtime 的 `InformationIngress.submit` 和注入数据库选项；默认业务
+ * 模块来自 `@kaguya/modules`，自定义 fixture 只用于隔离并发和消费者故障语义。
+ * 输入输出与副作用：每个用例创建隔离的内存 PostgreSQL 数据库，Runtime 只写 information
+ * ledger；测试结束显式关闭注入数据库，并检查持久化 payload 不包含 raw/provider secret/trace。
  */
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
-import { KaguyaDatabase } from "@kaguya/database";
+import { createTestingDatabase } from "@kaguya/database/testing";
+import { createDeferredDeterministicModel } from "@kaguya/llm/testing";
 import {
-  createDeferredDeterministicModel,
-  createRepeatingDeterministicModel,
-} from "@kaguya/llm/testing";
-import type { PlatformOutboundTransport } from "@kaguya/platform-adapters";
+  alwaysReplyInformationFilterModule,
+  inboundTextInformationKind,
+  replyRequestedInformationKind,
+} from "@kaguya/modules";
+import type {
+  PlatformDeliveryReceipt,
+  PlatformInboundMessage,
+  PlatformOutboundTransport,
+} from "@kaguya/platform-adapters";
+import { z } from "@kaguya/schema";
+import {
+  defineInformationKind,
+  defineInformationModule,
+  onInformation,
+} from "@kaguya/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -28,474 +33,528 @@ import {
   OutboundTransportNotFoundError,
   RuntimeUnavailableError,
 } from "./runtime.js";
-import { GatewayAllowlist } from "./gateway-allowlist.js";
 
-const directories: string[] = [];
+const TEST_TIMEOUT = 15_000;
+const resources: Array<{
+  runtime?: KaguyaRuntime;
+  database: Awaited<ReturnType<typeof createTestingDatabase>>;
+}> = [];
 
-afterEach(() => {
-  for (const directory of directories.splice(0)) {
-    rmSync(directory, { recursive: true, force: true });
+afterEach(async () => {
+  for (const resource of resources.splice(0)) {
+    await resource.runtime?.close().catch(() => undefined);
+    await resource.database.close().catch(() => undefined);
   }
 });
 
-function path(): string {
-  const directory = mkdtempSync(join(tmpdir(), "kaguya-runtime-"));
-  directories.push(directory);
-  return join(directory, "kaguya.sqlite");
-}
-
-function platformMessage(adapterId = "napcat.qq.main") {
+function webMessage(text = "hello"): PlatformInboundMessage {
   return {
-    kind: "platform" as const,
-    message: {
-      platform: "qq" as const,
-      adapterId,
-      selfId: "998877",
-      traceId: "napcat:998877:message-1",
-      platformMessageId: "message-1",
-      occurredAt: "2026-08-14T00:00:00.000Z",
-      text: "hello without a mention",
-      mentions: [],
-      target: { kind: "group" as const, groupId: "778899" },
-      sender: { userId: "112233", nickname: "Ada" },
-      raw: { mustNotBePersisted: "secret-raw" },
-    },
+    platform: "web",
+    adapterId: "web.ui.main",
+    traceId: "legacy-trace-must-not-enter-ledger",
+    platformMessageId: "request-1",
+    occurredAt: "2026-09-04T00:00:00.000Z",
+    text,
+    mentions: [],
+    target: { kind: "web" },
+    sender: { userId: "web" },
+    raw: { credential: "raw-must-not-enter-ledger" },
   };
 }
 
-function webMessage(requestId = "request-1") {
+function platformMessage(adapterId = "napcat.qq.main"): PlatformInboundMessage {
   return {
-    kind: "platform" as const,
-    message: {
-      platform: "web" as const,
-      adapterId: "web.ui.main",
-      traceId: `web:${requestId}`,
-      platformMessageId: requestId,
-      occurredAt: "2026-08-14T00:00:00.000Z",
-      text: "hello from web",
-      mentions: [],
-      target: { kind: "web" as const },
-      sender: { userId: "web" },
-      raw: {},
-    },
+    platform: "qq",
+    adapterId,
+    selfId: "998877",
+    traceId: "legacy-trace-must-not-enter-ledger",
+    platformMessageId: "message-1",
+    occurredAt: "2026-09-04T00:00:00.000Z",
+    text: "hello from qq",
+    mentions: [],
+    target: { kind: "group", groupId: "778899" },
+    sender: { userId: "112233", nickname: "Ada" },
+    raw: { credential: "raw-must-not-enter-ledger" },
   };
 }
 
-function errorMessages(error: unknown): string[] {
-  if (error instanceof AggregateError) {
-    return error.errors.flatMap((nested) => errorMessages(nested));
-  }
-  return error instanceof Error ? [error.message] : [];
+const fixedWebActivations = [
+  {
+    instanceId: "filter.default",
+    definitionId: "demo.filter.always-information",
+    settings: {},
+  },
+  {
+    instanceId: "reply.default",
+    definitionId: "demo.reply.llm-information",
+    settings: {
+      modelTier: "heavy",
+      outbound: {
+        mode: "fixed",
+        adapterId: "web.ui.main",
+        platform: "web",
+        destination: { kind: "group", groupId: "web-room" },
+      },
+    },
+  },
+] as const;
+
+async function createRuntime(
+  overrides: Partial<{
+    now: NonNullable<ConstructorParameters<typeof KaguyaRuntime>[0]["now"]>;
+    informationIdGenerator: NonNullable<
+      ConstructorParameters<typeof KaguyaRuntime>[0]["informationIdGenerator"]
+    >;
+    resolveModelSelection: NonNullable<
+      ConstructorParameters<typeof KaguyaRuntime>[0]["resolveModelSelection"]
+    >;
+    moduleDefinitions: NonNullable<
+      ConstructorParameters<typeof KaguyaRuntime>[0]["moduleDefinitions"]
+    >;
+    moduleActivations: NonNullable<
+      ConstructorParameters<typeof KaguyaRuntime>[0]["moduleActivations"]
+    >;
+  }> = {},
+) {
+  const database = await createTestingDatabase();
+  let id = 0;
+  const runtime = new KaguyaRuntime({
+    database,
+    now: () => new Date("2026-09-04T00:00:01.000Z"),
+    informationIdGenerator: () => `runtime-atom-${++id}`,
+    ...overrides,
+  });
+  resources.push({ runtime, database });
+  return { runtime, database };
+}
+
+function parentId(
+  atom: {
+    readonly references: readonly { relation: string; informationId: string }[];
+  },
+  relation = "core:caused-by",
+): string | undefined {
+  return atom.references.find((reference) => reference.relation === relation)
+    ?.informationId;
 }
 
 describe("KaguyaRuntime", () => {
-  it("filters a platform message before persistence and reply generation", async () => {
-    const databasePath = path();
-    const resolveModelSelection = vi.fn(() => {
-      throw new Error("Filtered messages must not resolve an LLM");
-    });
-    const sendMessage = vi.fn<PlatformOutboundTransport["sendMessage"]>(
-      async (target) => ({
-        ok: true,
-        adapterId: "napcat.qq.main",
-        platform: "qq",
-        target,
-      }),
-    );
-    const runtime = new KaguyaRuntime({
-      databasePath,
-      resolveModelSelection,
-      gatewayAllowlist: new GatewayAllowlist({ groupIds: ["allowed-group"] }),
-    });
-    runtime.registerTransport({
-      adapterId: "napcat.qq.main",
-      platform: "qq",
-      transport: { sendMessage },
-    });
-    await runtime.start();
-
-    const result = await runtime.dispatch(platformMessage());
-    await runtime.close();
-
-    expect(result).toMatchObject({
-      filtered: true,
-      interrupted: true,
-      completedNodeIds: [],
-      deliveries: [],
-    });
-    expect(sendMessage).not.toHaveBeenCalled();
-    expect(resolveModelSelection).not.toHaveBeenCalled();
-
-    const database = KaguyaDatabase.open(databasePath);
-    expect(database.messages.listRecent(10)).toEqual([]);
-    database.close();
-  });
-
-  it("persists, runs modules, and transports a platform reply", async () => {
-    const databasePath = path();
-    const sendMessage = vi.fn<PlatformOutboundTransport["sendMessage"]>(
-      async (target) => ({
-        ok: true,
-        adapterId: "napcat.qq.main",
-        platform: "qq",
-        target,
-        platformMessageId: "sent-1",
-        raw: { mustNotBePersisted: true },
-      }),
-    );
-    const runtime = new KaguyaRuntime({
-      databasePath,
-      gatewayAllowlist: new GatewayAllowlist({
-        platforms: ["qq"],
-        userIds: ["112233"],
-        groupIds: ["778899"],
-      }),
-    });
-    runtime.registerTransport({
-      adapterId: "napcat.qq.main",
-      platform: "qq",
-      transport: { sendMessage },
-    });
-    await runtime.start();
-
-    const result = await runtime.dispatch(platformMessage());
-    await runtime.close();
-
-    expect(sendMessage).toHaveBeenCalledWith(
-      { kind: "group", groupId: "778899" },
-      expect.objectContaining({
-        kind: "reply",
-        replyToPlatformMessageId: "message-1",
-      }),
-      expect.objectContaining({ traceId: "napcat:998877:message-1" }),
-    );
-    expect(result.deliveries).toEqual([
-      expect.objectContaining({ ok: true, platformMessageId: "sent-1" }),
-    ]);
-    expect(result.filtered).toBe(false);
-
-    const database = KaguyaDatabase.open(databasePath);
-    const messages = database.messages.listRecent(10);
-    expect(messages).toHaveLength(1);
-    expect(messages[0]).not.toHaveProperty("sessionId");
-    expect(JSON.stringify(messages)).not.toContain("secret-raw");
-    expect(
-      database.outboundMessages.listByTrace("napcat:998877:message-1"),
-    ).toEqual([
-      expect.objectContaining({
-        status: "delivered",
-        destination: { kind: "group", groupId: "778899" },
-        metadata: expect.objectContaining({
-          causationEventId: expect.any(String),
-          rootEventId: expect.any(String),
-        }),
-      }),
-    ]);
-    expect(
-      JSON.stringify(
-        database.outboundMessages.listByTrace("napcat:998877:message-1"),
-      ),
-    ).not.toContain("mustNotBePersisted");
-    database.close();
-  });
-
-  it("persists a web platform message and completes the pipeline without outbound", async () => {
-    const databasePath = path();
-    const runtime = new KaguyaRuntime({ databasePath });
-    await runtime.start();
-    const result = await runtime.dispatch(webMessage());
-    await runtime.close();
-
-    expect(result.filtered).toBe(false);
-    expect(result.interrupted).toBe(false);
-    expect(result.deliveries).toEqual([]);
-
-    const database = KaguyaDatabase.open(databasePath);
-    const [message] = database.messages.listRecent(10);
-    expect(message?.role).toBe("user");
-    expect(message?.metadata).toMatchObject({
-      traceId: "web:request-1",
-      moduleMessage: {
-        text: "hello from web",
-        source: {
-          kind: "platform",
-          platform: "web",
+  it(
+    "persists the complete Web input, LLM, assistant, and delivery DAG",
+    async () => {
+      const { runtime, database } = await createRuntime({
+        moduleActivations: fixedWebActivations,
+      });
+      const sendMessage = vi.fn<PlatformOutboundTransport["sendMessage"]>(
+        async (target) => ({
+          ok: true,
           adapterId: "web.ui.main",
-          platformMessageId: "request-1",
-          destination: { kind: "web" },
-          sender: { id: "web" },
-          mentions: [],
-        },
-      },
-    });
-    expect(database.outboundMessages.listByTrace("web:request-1")).toEqual([]);
-    expect(database.llmTraces.listByTrace("web:request-1")).toHaveLength(1);
-    database.close();
-  });
-
-  it("filters a web platform message by the gateway allowlist", async () => {
-    const databasePath = path();
-    const runtime = new KaguyaRuntime({
-      databasePath,
-      gatewayAllowlist: new GatewayAllowlist({ platforms: ["qq"] }),
-    });
-    await runtime.start();
-
-    const result = await runtime.dispatch(webMessage());
-    await runtime.close();
-
-    expect(result).toMatchObject({
-      filtered: true,
-      interrupted: true,
-      completedNodeIds: [],
-      deliveries: [],
-    });
-
-    const database = KaguyaDatabase.open(databasePath);
-    expect(database.messages.listRecent(10)).toEqual([]);
-    database.close();
-  });
-
-  it("keeps the persisted message when a web dispatch fails after ingest", async () => {
-    const databasePath = path();
-    const runtime = new KaguyaRuntime({
-      databasePath,
-      resolveModelSelection: () => {
-        throw new Error("model resolver exploded");
-      },
-    });
-    await runtime.start();
-
-    const failure = await runtime
-      .dispatch(webMessage())
-      .catch((error: unknown) => error);
-    await runtime.close();
-
-    expect(failure).toBeInstanceOf(AggregateError);
-    expect(errorMessages(failure)).toContain("model resolver exploded");
-
-    const database = KaguyaDatabase.open(databasePath);
-    expect(
-      database.messages.listRecent(10).map((record) => record.role),
-    ).toEqual(["user"]);
-    database.close();
-  });
-
-  it("waits for an in-flight web dispatch before close", async () => {
-    const databasePath = path();
-    const deferred = createDeferredDeterministicModel({ text: "done" });
-    const runtime = new KaguyaRuntime({
-      databasePath,
-      resolveModelSelection: ({ modelTier }) => ({
-        modelId: `deferred-${modelTier}`,
-        model: deferred.model,
-      }),
-    });
-    await runtime.start();
-    const dispatch = runtime.dispatch(webMessage());
-    await deferred.started;
-    const close = runtime.close();
-    deferred.release();
-    await close;
-    await dispatch;
-
-    const database = KaguyaDatabase.open(databasePath);
-    expect(
-      database.messages.listRecent(10).map((record) => record.role),
-    ).toEqual(["user"]);
-    expect(database.llmTraces.listByTrace("web:request-1")).toHaveLength(1);
-    database.close();
-  });
-
-  it("rejects dispatch while the runtime is unavailable", async () => {
-    const databasePath = path();
-    const runtime = new KaguyaRuntime({ databasePath });
-    await expect(runtime.dispatch(webMessage())).rejects.toBeInstanceOf(
-      RuntimeUnavailableError,
-    );
-
-    await runtime.start();
-    await runtime.dispatch(webMessage());
-    await runtime.close();
-    await expect(runtime.dispatch(webMessage("request-2"))).rejects.toBeInstanceOf(
-      RuntimeUnavailableError,
-    );
-
-    const database = KaguyaDatabase.open(databasePath);
-    expect(
-      database.messages.listRecent(10).map((record) => record.role),
-    ).toEqual(["user"]);
-    database.close();
-  });
-
-  it("audits an unknown transport and reports a clear failure", async () => {
-    const databasePath = path();
-    const runtime = new KaguyaRuntime({ databasePath });
-    await runtime.start();
-    await expect(
-      runtime.dispatch(platformMessage("missing")),
-    ).rejects.toBeInstanceOf(AggregateError);
-    await runtime.close();
-
-    const database = KaguyaDatabase.open(databasePath);
-    const records = database.outboundMessages.listByTrace(
-      "napcat:998877:message-1",
-    );
-    expect(records).toEqual([
-      expect.objectContaining({
-        status: "failed",
-        error: expect.stringContaining("not registered"),
-      }),
-    ]);
-    database.close();
-    expect(new OutboundTransportNotFoundError("a", "qq").message).toContain(
-      "not registered",
-    );
-  });
-
-  it("audits a thrown transport failure without persisting its details", async () => {
-    const databasePath = path();
-    const runtime = new KaguyaRuntime({ databasePath });
-    runtime.registerTransport({
-      adapterId: "napcat.qq.main",
-      platform: "qq",
-      transport: {
-        sendMessage: () =>
-          Promise.reject(new Error("provider-token-must-not-be-persisted")),
-      },
-    });
-    await runtime.start();
-
-    await expect(runtime.dispatch(platformMessage())).rejects.toBeInstanceOf(
-      AggregateError,
-    );
-    await runtime.close();
-
-    const database = KaguyaDatabase.open(databasePath);
-    const records = database.outboundMessages.listByTrace(
-      "napcat:998877:message-1",
-    );
-    expect(records).toEqual([
-      expect.objectContaining({
-        status: "failed",
-        error: "Platform transport failed",
-      }),
-    ]);
-    expect(JSON.stringify(records)).not.toContain(
-      "provider-token-must-not-be-persisted",
-    );
-    database.close();
-    expect(
-      new OutboundTransportError("adapter", "qq", new Error()).message,
-    ).toContain("Outbound transport failed");
-  });
-
-  it("waits for an in-flight module LLM call before close", async () => {
-    const deferred = createDeferredDeterministicModel({ text: "done" });
-    const runtime = new KaguyaRuntime({
-      databasePath: path(),
-      resolveModelSelection: ({ modelTier }) => ({
-        modelId: `deferred-${modelTier}`,
-        model: deferred.model,
-      }),
-    });
-    runtime.registerTransport({
-      adapterId: "napcat.qq.main",
-      platform: "qq",
-      transport: {
-        sendMessage: async (target) => ({
-          ok: true,
-          adapterId: "napcat.qq.main",
-          platform: "qq",
+          platform: "web",
           target,
+          platformMessageId: "sent-1",
+          raw: { credential: "receipt-raw-must-not-enter-ledger" },
         }),
-      },
-    });
-    await runtime.start();
-    const dispatch = runtime.dispatch(platformMessage());
-    await deferred.started;
-    const close = runtime.close();
-    await expect(runtime.dispatch(platformMessage())).rejects.toBeInstanceOf(
-      RuntimeUnavailableError,
-    );
-    deferred.release();
-    await dispatch;
-    await close;
-  });
+      );
+      runtime.registerTransport({
+        adapterId: "web.ui.main",
+        platform: "web",
+        transport: { sendMessage },
+      });
+      await runtime.start();
 
-  it("shares one tier-only resolver across reply modules", async () => {
-    const databasePath = path();
-    const selections: unknown[] = [];
-    const runtime = new KaguyaRuntime({
-      databasePath,
-      resolveModelSelection: vi.fn((selection) => {
-        selections.push(selection);
-        return {
-          modelId: `resolved-${selection.modelTier}`,
-          model: createRepeatingDeterministicModel({
-            text: selection.modelTier,
-          }),
-        };
-      }),
-      moduleActivations: [
-        {
-          instanceId: "filter.light",
-          definitionId: "demo.filter.always",
-          settings: { replyTargetInstanceId: "reply.light" },
+      const result = await runtime.submit(webMessage("hello"));
+      const graph = await database.information.query({
+        informationId: result.rootInformationId,
+      });
+
+      expect(new Set(graph.map(({ kind }) => kind))).toEqual(
+        new Set([
+          "core.message.inbound.text",
+          "core.reply.requested",
+          "core.llm.requested",
+          "core.llm.completed",
+          "core.message.assistant.text",
+          "core.delivery.requested",
+          "core.delivery.delivered",
+        ]),
+      );
+      expect(result.deliveries).toEqual([
+        expect.objectContaining({ ok: true, platformMessageId: "sent-1" }),
+      ]);
+      expect(result.delivery).toMatchObject({
+        ok: true,
+        platformMessageId: "sent-1",
+      });
+      expect(sendMessage).toHaveBeenCalledWith(
+        { kind: "group", groupId: "web-room" },
+        { kind: "text", text: "It is a lovely night for watching the moon." },
+        { rootInformationId: result.rootInformationId },
+      );
+
+      const byKind = new Map(graph.map((atom) => [atom.kind, atom]));
+      const chain = [
+        ["core.reply.requested", "core.message.inbound.text"],
+        ["core.llm.requested", "core.reply.requested"],
+        ["core.llm.completed", "core.llm.requested"],
+        ["core.message.assistant.text", "core.llm.completed"],
+        ["core.delivery.requested", "core.message.assistant.text"],
+        ["core.delivery.delivered", "core.delivery.requested"],
+      ] as const;
+      for (const [childKind, parentKind] of chain) {
+        expect(parentId(byKind.get(childKind)!)).toBe(
+          byKind.get(parentKind)?.informationId,
+        );
+      }
+      for (const atom of graph) {
+        expect(
+          atom.references.filter(({ relation }) => relation === "core:context"),
+        ).toEqual([
+          { relation: "core:context", informationId: result.rootInformationId },
+        ]);
+      }
+      expect(JSON.stringify(graph)).not.toMatch(
+        /legacy-trace-must-not-enter-ledger|raw-must-not-enter-ledger|receipt-raw-must-not-enter-ledger/,
+      );
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "records a missing transport as delivery.failed and consumer.failed",
+    async () => {
+      const { runtime, database } = await createRuntime();
+      await runtime.start();
+
+      const result = await runtime.submit(platformMessage("missing.qq"));
+      const graph = await database.information.query({
+        informationId: result.rootInformationId,
+      });
+
+      expect(result.deliveries).toEqual([]);
+      expect(graph.map(({ kind }) => kind)).toContain("core.delivery.failed");
+      expect(graph.map(({ kind }) => kind)).toContain("consumer.failed");
+      const failed = graph.find(({ kind }) => kind === "core.delivery.failed")!;
+      const requested = graph.find(
+        ({ kind }) => kind === "core.delivery.requested",
+      )!;
+      expect(failed.payload).toMatchObject({
+        ok: false,
+        error: "Outbound transport is not registered",
+      });
+      expect(parentId(failed)).toBe(requested.informationId);
+      expect(parentId(failed, "core:status-of")).toBe(requested.informationId);
+      const consumerFailure = graph.find(
+        ({ kind }) => kind === "consumer.failed",
+      )!;
+      expect(consumerFailure.payload).toMatchObject({
+        consumer: { consumerId: "runtime:delivery" },
+      });
+      expect(consumerFailure.references).toContainEqual({
+        relation: "core:context",
+        informationId: result.rootInformationId,
+      });
+      expect(new OutboundTransportNotFoundError("a", "qq").message).toContain(
+        "not registered",
+      );
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "records a rejected transport without persisting provider details",
+    async () => {
+      const { runtime, database } = await createRuntime();
+      runtime.registerTransport({
+        adapterId: "napcat.qq.main",
+        platform: "qq",
+        transport: {
+          sendMessage: () =>
+            Promise.reject(new Error("provider-token-must-not-enter-ledger")),
         },
-        {
-          instanceId: "filter.heavy",
-          definitionId: "demo.filter.always",
-          settings: { replyTargetInstanceId: "reply.heavy" },
+      });
+      await runtime.start();
+
+      const result = await runtime.submit(platformMessage());
+      const graph = await database.information.query({
+        informationId: result.rootInformationId,
+      });
+
+      expect(result.deliveries).toEqual([]);
+      expect(graph.map(({ kind }) => kind)).toContain("core.delivery.failed");
+      expect(graph.map(({ kind }) => kind)).toContain("consumer.failed");
+      expect(JSON.stringify(graph)).not.toContain(
+        "provider-token-must-not-enter-ledger",
+      );
+      expect(
+        new OutboundTransportError("adapter", "qq", new Error()).message,
+      ).toContain("Outbound transport failed");
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "records and returns a platform failure receipt without consumer failure",
+    async () => {
+      const receipt: PlatformDeliveryReceipt = {
+        ok: false,
+        adapterId: "napcat.qq.main",
+        platform: "qq",
+        target: { kind: "group", groupId: "778899" },
+        error: "provider-specific failure",
+        raw: { credential: "failed-receipt-raw" },
+      };
+      const { runtime, database } = await createRuntime();
+      runtime.registerTransport({
+        adapterId: "napcat.qq.main",
+        platform: "qq",
+        transport: { sendMessage: () => Promise.resolve(receipt) },
+      });
+      await runtime.start();
+
+      const result = await runtime.submit(platformMessage());
+      const graph = await database.information.query({
+        informationId: result.rootInformationId,
+      });
+
+      expect(result.deliveries).toEqual([
+        expect.objectContaining({
+          ok: false,
+          error: "provider-specific failure",
+        }),
+      ]);
+      expect(graph.map(({ kind }) => kind)).toContain("core.delivery.failed");
+      expect(graph.map(({ kind }) => kind)).not.toContain("consumer.failed");
+      expect(JSON.stringify(graph)).not.toMatch(
+        /provider-specific failure|failed-receipt-raw/,
+      );
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "keeps an inbound atom when its kind has no subscribers",
+    async () => {
+      const { runtime, database } = await createRuntime({
+        moduleDefinitions: [],
+        moduleActivations: [],
+      });
+      await runtime.start();
+
+      const result = await runtime.submit(webMessage());
+      const graph = await database.information.query({
+        informationId: result.rootInformationId,
+      });
+
+      expect(graph.map(({ kind }) => kind)).toEqual([
+        "core.message.inbound.text",
+      ]);
+      expect(result.deliveries).toEqual([]);
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "starts two reply consumers concurrently",
+    async () => {
+      let starts = 0;
+      let markBothStarted!: () => void;
+      let release!: () => void;
+      const bothStarted = new Promise<void>((resolve) => {
+        markBothStarted = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const observer = defineInformationModule({
+        manifest: {
+          apiVersion: 1,
+          definitionId: "test.reply.observer",
+          displayName: "Concurrent reply observer",
+          settingsSchema: z.object({}).strict(),
+          informationKinds: [replyRequestedInformationKind],
         },
-        {
-          instanceId: "reply.light",
-          definitionId: "demo.reply.llm",
-          settings: {
-            modelTier: "light",
-            outbound: { mode: "source", messageKind: "text" },
+        create: () => ({
+          subscriptions: [
+            onInformation(replyRequestedInformationKind, async () => {
+              starts += 1;
+              if (starts === 2) markBothStarted();
+              await gate;
+            }),
+          ],
+        }),
+      });
+      const { runtime } = await createRuntime({
+        moduleDefinitions: [alwaysReplyInformationFilterModule, observer],
+        moduleActivations: [
+          {
+            instanceId: "filter.default",
+            definitionId: "demo.filter.always-information",
+            settings: {},
+          },
+          {
+            instanceId: "observer.one",
+            definitionId: "test.reply.observer",
+            settings: {},
+          },
+          {
+            instanceId: "observer.two",
+            definitionId: "test.reply.observer",
+            settings: {},
+          },
+        ],
+      });
+      await runtime.start();
+
+      const submission = runtime.submit(webMessage());
+      await bothStarted;
+      expect(starts).toBe(2);
+      release();
+      await submission;
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "waits for in-flight ingress and rejects new ingress while closing",
+    async () => {
+      const deferred = createDeferredDeterministicModel({ text: "done" });
+      const { runtime, database } = await createRuntime({
+        resolveModelSelection: ({ modelTier }) => ({
+          modelId: `deferred-${modelTier}`,
+          model: deferred.model,
+        }),
+      });
+      await runtime.start();
+      const submission = runtime.submit(platformMessage());
+      await deferred.started;
+
+      let closed = false;
+      const close = runtime.close().then(() => {
+        closed = true;
+      });
+      await expect(runtime.submit(platformMessage())).rejects.toBeInstanceOf(
+        RuntimeUnavailableError,
+      );
+      await Promise.resolve();
+      expect(closed).toBe(false);
+      deferred.release();
+      const result = await submission;
+      await close;
+
+      expect(
+        (
+          await database.information.query({
+            informationId: result.rootInformationId,
+          })
+        ).map(({ kind }) => kind),
+      ).toContain("core.llm.completed");
+      await expect(runtime.submit(webMessage())).rejects.toBeInstanceOf(
+        RuntimeUnavailableError,
+      );
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "keeps another consumer result when one consumer fails",
+    async () => {
+      const outcomeKind = defineInformationKind({
+        kind: "test.inbound.observed",
+        payloadSchema: z.object({ observed: z.literal(true) }).strict(),
+        references: {
+          "core:caused-by": {
+            required: true,
+            multiple: false,
+            targetKinds: [inboundTextInformationKind.kind],
+          },
+          "core:context": {
+            required: true,
+            multiple: false,
+            targetKinds: ["core.runtime.context"],
           },
         },
-        {
-          instanceId: "reply.heavy",
-          definitionId: "demo.reply.llm",
-          settings: {
-            modelTier: "heavy",
-            outbound: { mode: "source", messageKind: "reply" },
-          },
+        log: { enabled: false },
+      });
+      const failing = defineInformationModule({
+        manifest: {
+          apiVersion: 1,
+          definitionId: "test.inbound.failing",
+          displayName: "Failing inbound consumer",
+          settingsSchema: z.object({}).strict(),
+          informationKinds: [inboundTextInformationKind],
         },
-      ],
-      gatewayAllowlist: new GatewayAllowlist({
-        platforms: ["qq"],
-        userIds: ["112233"],
-        groupIds: ["778899"],
-      }),
-    });
-    runtime.registerTransport({
-      adapterId: "napcat.qq.main",
-      platform: "qq",
-      transport: {
-        sendMessage: async (target) => ({
-          ok: true,
-          adapterId: "napcat.qq.main",
-          platform: "qq",
-          target,
+        create: () => ({
+          subscriptions: [
+            onInformation(inboundTextInformationKind, () => {
+              throw new TypeError("credential-must-not-enter-ledger");
+            }),
+          ],
         }),
-      },
-    });
-    await runtime.start();
+      });
+      const successful = defineInformationModule({
+        manifest: {
+          apiVersion: 1,
+          definitionId: "test.inbound.successful",
+          displayName: "Successful inbound consumer",
+          settingsSchema: z.object({}).strict(),
+          informationKinds: [inboundTextInformationKind, outcomeKind],
+        },
+        create: () => ({
+          subscriptions: [
+            onInformation(
+              inboundTextInformationKind,
+              async (_atom, context) => {
+                await context.register(outcomeKind, {
+                  payload: { observed: true },
+                });
+              },
+            ),
+          ],
+        }),
+      });
+      const { runtime, database } = await createRuntime({
+        moduleDefinitions: [failing, successful],
+        moduleActivations: [
+          {
+            instanceId: "failure.one",
+            definitionId: "test.inbound.failing",
+            settings: {},
+          },
+          {
+            instanceId: "success.one",
+            definitionId: "test.inbound.successful",
+            settings: {},
+          },
+        ],
+      });
+      await runtime.start();
 
-    await runtime.dispatch(platformMessage());
-    await runtime.close();
+      const result = await runtime.submit(webMessage());
+      const graph = await database.information.query({
+        informationId: result.rootInformationId,
+      });
 
-    expect(selections).toEqual([
-      { modelTier: "light" },
-      { modelTier: "heavy" },
-    ]);
-    const database = KaguyaDatabase.open(databasePath);
-    expect(JSON.stringify(database.messages.listRecent(10))).not.toContain(
-      "profileId",
-    );
-    database.close();
-  });
+      expect(graph.map(({ kind }) => kind)).toEqual(
+        expect.arrayContaining([
+          "core.message.inbound.text",
+          "test.inbound.observed",
+          "consumer.failed",
+        ]),
+      );
+      expect(
+        graph.find(({ kind }) => kind === "consumer.failed")?.payload,
+      ).toMatchObject({
+        consumer: {
+          consumerId: "module:failure.one",
+          definitionId: "test.inbound.failing",
+          instanceId: "failure.one",
+        },
+        error: { errorType: "TypeError", message: "Consumer handler failed" },
+      });
+      expect(JSON.stringify(graph)).not.toContain(
+        "credential-must-not-enter-ledger",
+      );
+    },
+    TEST_TIMEOUT,
+  );
 });

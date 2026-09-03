@@ -1,9 +1,11 @@
 /**
  * 架构说明：本入口同时暴露旧 SQLite 版数据库与 staged 的 PostgreSQL 版数据库，
- * 以便在 Task 11 完成最终替换前，已存在的调用方仍能继续编译和运行。
+ * 以便在 Task 6 完成旧入口清理前，已存在的调用方仍能继续编译和运行。
  * 代码库关系：旧的 `KaguyaDatabase` 继续使用 `node:sqlite` 与历史仓储实现；新增
  * 的 `PostgresKaguyaDatabase` 则组合 `postgres-driver`、`information-repository`
- * 与迁移模块，形成面向 InformationAtomStore 的新入口。
+ * 与迁移模块，形成 Runtime 可注入或按 URL 连接的信息账本入口。
+ * 输入输出与副作用：`PostgresKaguyaDatabase` 公开只读 `sql` 以支持 PGlite 集成测试，
+ * `migrate/close` 均为异步；旧 `KaguyaDatabase` 仍暂存到后续清理任务。
  */
 import { DatabaseSync } from "node:sqlite";
 
@@ -45,7 +47,7 @@ export {
 export class PostgresKaguyaDatabase {
   readonly information: InformationRepository;
 
-  constructor(private readonly sql: SqlDatabase) {
+  constructor(readonly sql: SqlDatabase) {
     this.information = new InformationRepository(sql);
   }
 

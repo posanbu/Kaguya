@@ -3,8 +3,8 @@
  * 以证明 registry、store 与 bus 组合后的写入路径只信任注册表中的正式定义，
  * 并且不会把可变输入、未注册 kind 或关闭后的调用继续放行。
  * 代码库关系：`InformationCore` 连接 registry、store 与 bus；这里的测试使用
- * 内存 ledger double 验证“先落库、后并发发布”、冻结快照、失败递归保护、ID 冲突
- * 与关闭语义；不会以 mock 掩盖账本和广播的实际交互。
+ * 内存 ledger double 验证“先落库、后并发发布”、冻结快照、失败递归保护、故障 context
+ * 继承、ID 冲突与关闭语义；不会以 mock 掩盖账本和广播的实际交互。
  */
 import {
   type DeepReadonly,
@@ -43,6 +43,26 @@ const otherParentDefinition = defineInformationKind({
   kind: "acme.message.other-parent",
   payloadSchema: z.object({ text: z.string() }).strict(),
   references: {},
+  log: { enabled: false },
+});
+
+const runtimeContextDefinition = defineInformationKind({
+  kind: "core.runtime.context",
+  payloadSchema: z.object({}).strict(),
+  references: {},
+  log: { enabled: false },
+});
+
+const contextualParentDefinition = defineInformationKind({
+  kind: "acme.message.contextual-parent",
+  payloadSchema: z.object({ text: z.string() }).strict(),
+  references: {
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: [runtimeContextDefinition.kind],
+    },
+  },
   log: { enabled: false },
 });
 
@@ -391,7 +411,7 @@ describe("InformationCore", () => {
     expect(completed).toEqual(["successful"]);
   });
 
-  it("records one consumer.failed atom for a failed consumer", async () => {
+  it("records one consumer.failed atom without context when its source has none", async () => {
     const ledger = new MemoryInformationStore();
     const core = await createStartedCore(ledger, [parentDefinition]);
     core.on(
@@ -425,6 +445,55 @@ describe("InformationCore", () => {
       ],
     });
     expect(failures[0]?.payload).not.toHaveProperty("stack");
+  });
+
+  it("inherits the source atom's single context on consumer.failed", async () => {
+    const ledger = new MemoryInformationStore();
+    const registry = new InformationKindRegistry();
+    registry.registerBuiltin(runtimeContextDefinition);
+    registry.register(contextualParentDefinition);
+    const core = new InformationCore({
+      registry,
+      store: ledger,
+      nextInformationId: createDeterministicIdGenerator(),
+    });
+    await core.start();
+    core.on(
+      contextualParentDefinition,
+      { consumerId: "contextual-failure" },
+      () => {
+        throw new Error("consumer exploded");
+      },
+    );
+    const context = await core.register(runtimeContextDefinition, {
+      occurredAt: "2026-09-04T00:00:00.000Z",
+      source: "runtime:test",
+      payload: {},
+      references: [],
+    });
+
+    const source = await core.register(contextualParentDefinition, {
+      occurredAt: "2026-09-04T00:00:01.000Z",
+      source: "runtime:test",
+      payload: { text: "moon" },
+      references: [
+        {
+          relation: "core:context",
+          informationId: context.informationId,
+        },
+      ],
+    });
+
+    const failure = [...ledger.atoms.values()].find(
+      (atom) => atom.kind === consumerFailedKind,
+    );
+    expect(failure?.references).toEqual([
+      { relation: "core:caused-by", informationId: source.informationId },
+      { relation: "core:context", informationId: context.informationId },
+    ]);
+    expect(core.registry.get(consumerFailedKind).references).toMatchObject({
+      "core:context": { required: false, multiple: false },
+    });
   });
 
   it("truncates an overlong error name before recording consumer.failed", async () => {

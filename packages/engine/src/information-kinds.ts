@@ -1,7 +1,8 @@
 /**
  * 功能概述：定义 Engine 内建的信息 kind；当前唯一内建事实是消费者失败记录。
  * 主要职责：`consumerFailedInformationKind` 约束失败消费者身份、无堆栈的错误摘要，
- * 并要求用 `core:caused-by` 引用触发失败的已提交原子。
+ * 并要求用 `core:caused-by` 引用触发失败的已提交原子；若输入属于单一运行 context，
+ * `consumer.failed` 还可继承一个不绑定 Runtime kind 的 `core:context` 引用。
  * 代码库关系：`InformationCore` 在消费者 reject 后注册此定义，并在构造时将其作为
  * Registry 内建 kind 注册；Runtime 后续只能复用此同一导出，不能重新定义该 kind。
  * 输入输出与副作用：仅创建冻结的 kind 定义，无 I/O；payload 只包含 consumer 与
@@ -47,6 +48,10 @@ export const consumerFailedInformationKind = defineInformationKind({
   references: {
     "core:caused-by": {
       required: true,
+      multiple: false,
+    },
+    "core:context": {
+      required: false,
       multiple: false,
     },
   },
