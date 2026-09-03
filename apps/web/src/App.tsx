@@ -16,7 +16,9 @@
  * 页面不持久化；所有 Profile 修改都通过 HTTP 请求落到服务端，不在浏览器端
  * 推断默认 Profile；当 selected
  * Profile 已 ready 且本次 replace/select 改变冻结运行配置时，本文件只切到
- * restart 视图提示用户重启，不做热切换。
+ * restart 视图提示用户重启，不做热切换。Profile 管理子组件会记忆同一
+ * token 对应的网关配置对象，避免读取 Profile 的副作用 effect 因对象引用变化
+ * 而重复请求并触发服务端限流。
  */
 import {
   AlertCircle,
@@ -31,7 +33,14 @@ import {
   Settings2,
   Trash2,
 } from "lucide-react";
-import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
+import {
+  FormEvent,
+  KeyboardEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import {
   checkGatewayHealth,
@@ -393,7 +402,7 @@ function ProfileManagementScreen({
   const [notice, setNotice] = useState<string>();
   const requestSequence = useRef(0);
 
-  const config: GatewayConfig = { token };
+  const config: GatewayConfig = useMemo(() => ({ token }), [token]);
 
   useEffect(() => {
     const nextRegistry = readRegistryMetadata(initialStatus);
