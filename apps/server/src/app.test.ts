@@ -124,6 +124,7 @@ describe("application API gateway", () => {
         status: "invalid",
         selectedProfileId: "default",
         profiles: [expect.objectContaining({ id: "default", name: "default" })],
+        gatewayToken,
         issues: [expect.objectContaining({ id: "default-provider-missing" })],
         warnings: [expect.objectContaining({ id: "platforms-empty" })],
       },
@@ -142,6 +143,19 @@ describe("application API gateway", () => {
     expect(message.json()).toMatchObject({
       error: { code: "configuration_setup_required" },
     });
+    await app.close();
+  });
+
+  it("serves the distributed gateway token anonymously", async () => {
+    const app = await createHttpApplication({ config });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/gateway/token",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ data: { gatewayToken } });
     await app.close();
   });
 
@@ -355,6 +369,7 @@ describe("application API gateway", () => {
             updatedAt: "",
           },
         ],
+        gatewayToken,
       },
     });
     await app.close();
@@ -534,7 +549,12 @@ describe("application API gateway", () => {
                     schema: {
                       properties: {
                         data: {
-                          required: ["status", "selectedProfileId", "profiles"],
+                          required: [
+                            "status",
+                            "selectedProfileId",
+                            "profiles",
+                            "gatewayToken",
+                          ],
                           properties: {
                             profiles: {
                               items: {

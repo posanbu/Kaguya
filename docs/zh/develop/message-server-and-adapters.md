@@ -5,16 +5,16 @@
 ## 启动
 
 ```bash
-export KAGUYA_GATEWAY_TOKEN="replace-with-at-least-16-characters"
 export KAGUYA_CONFIG_ROOT="/absolute/path/to/kaguya-config"
 pnpm dev
 ```
+
+`KAGUYA_GATEWAY_TOKEN` 可选：未设置时每次启动生成随机 token（日志 `server.token.generated`），Web UI 通过 `GET /api/v1/gateway/token` 自动获取；显式设置（至少 16 字符）可获得跨重启稳定的 token。
 
 开发时 UI、HMR 与 API 共用 `http://127.0.0.1:3000`。生产运行：
 
 ```bash
 pnpm build
-export KAGUYA_GATEWAY_TOKEN="replace-with-at-least-16-characters"
 export KAGUYA_CONFIG_ROOT="/absolute/path/to/kaguya-config"
 pnpm start
 ```
@@ -23,7 +23,7 @@ pnpm start
 
 | 环境变量                             | 默认值                | 约束/用途                                    |
 | ------------------------------------ | --------------------- | -------------------------------------------- |
-| `KAGUYA_GATEWAY_TOKEN`               | 无                    | 必填，至少 16 字符；消息 API Bearer Token    |
+| `KAGUYA_GATEWAY_TOKEN`               | 无                    | 可选；未设时生成并分发给 Web UI；Bearer Token |
 | `KAGUYA_HOST`                        | `127.0.0.1`           | 唯一监听地址                                 |
 | `KAGUYA_PORT`                        | `3000`                | `1..65535`                                   |
 | `KAGUYA_DATABASE_PATH`               | `.data/kaguya.sqlite` | 唯一 Runtime 数据库                          |
@@ -55,7 +55,7 @@ NapCat 配置：
 
 `KAGUYA_CONFIG_ROOT` 尚未初始化、当前 `selectedProfileId` 对应的 Profile 不完整，或者可选配置尚未确认时，Server 都会进入统一的配置模式。此时 HTTP 和 Web UI 继续启动，但 Runtime 消息处理和 NapCat 入站不会启动。浏览器访问服务根路径会显示同一个 Profile 管理页面，而不是单独的“首次配置写接口”。
 
-配置页面首先通过 `GET /api/v1/setup` 读取 `setup_required`、`invalid`、`review_required`、`restart_required` 或 `ready` 状态。该接口只返回 secret-safe metadata、`selectedProfileId`、issues 和 warnings，不返回完整 Profile 或密钥。
+配置页面首先通过 `GET /api/v1/setup` 读取 `setup_required`、`invalid`、`review_required`、`restart_required` 或 `ready` 状态。该接口只返回 secret-safe metadata、`selectedProfileId`、issues 和 warnings，不返回完整 Profile 或 Provider 密钥；响应中附带本实例分发的网关 token。
 
 真正的配置修改通过显式 Profile 管理接口完成：
 
@@ -68,7 +68,7 @@ NapCat 配置：
 
 全新配置根会先通过 bootstrap 创建保留的空 `default` Profile，并把 `selectedProfileId` 设为 `"default"`。之后，用户可以配置 `default`，或者先创建并命名新的 Profile，再显式选择它。如果保存或切换后，当前 selected Profile 仍然是 `invalid` 或 `review_required`，页面会继续停留在 readiness 引导状态，而不会提示重启。选择某个 Profile，或完整替换当前 selected Profile，都会锁存一次重启要求；只有当该 selected Profile 已经 ready 时，页面才会进入 `restart_required`。只有重启 Server，Runtime 才会在新的启动周期里重新加载全局 Profile、模型客户端和平台连接。
 
-配置文件损坏、路径越界、符号链接或权限错误不属于可自动修复的“缺失配置”，Server 会拒绝启动并保留原文件，避免引导流程覆盖需要人工恢复的数据。`KAGUYA_GATEWAY_TOKEN` 仍是启动 HTTP 前必须提供的安全凭据；匿名 setup 模式不能读取完整 Profile，也不能写入配置。
+配置文件损坏、路径越界、符号链接或权限错误不属于可自动修复的“缺失配置”，Server 会拒绝启动并保留原文件，避免引导流程覆盖需要人工恢复的数据。网关 token 由 Server 在启动时确定：未设置 `KAGUYA_GATEWAY_TOKEN` 时自动生成（日志 `server.token.generated`），Web UI 加载页面时自动获取，配置页面本身不创建 token；匿名 setup 模式不能读取完整 Profile，也不能写入配置。注意 token 可通过公开接口 `GET /api/v1/gateway/token` 获取——任何能访问该服务端口（默认 `127.0.0.1`）的客户端都等同于持有 token，绑定其他网络地址时需要知晓这一取舍。
 
 ## 平台入站白名单
 
@@ -80,12 +80,13 @@ ID 会在读取配置时按逗号拆分、去除首尾空白并去重。过滤�
 
 ## 路由
 
-| 方法和路径                 | 认证         | 用途                       |
-| -------------------------- | ------------ | -------------------------- |
-| `GET /` 和静态资源         | 无           | Web UI                     |
-| `GET /healthz`             | 无           | 服务存活检查               |
-| `GET /api/v1/openapi.json` | 无           | OpenAPI 文档               |
-| `POST /api/v1/messages`    | Bearer Token | Web 消息落库并发布模块事件 |
+| 方法和路径                    | 认证         | 用途                       |
+| ----------------------------- | ------------ | -------------------------- |
+| `GET /` 和静态资源            | 无           | Web UI                     |
+| `GET /healthz`                | 无           | 服务存活检查               |
+| `GET /api/v1/openapi.json`    | 无           | OpenAPI 文档               |
+| `GET /api/v1/gateway/token`   | 无           | 获取本实例分发的网关 token |
+| `POST /api/v1/messages`       | Bearer Token | Web 消息落库并发布模块事件 |
 
 生产 SPA fallback 只接受带 `text/html` 的 GET 页面请求，且显式排除 `/api/*` 和 `/healthz`。未知 API 仍返回结构化 `404 not_found`。
 
@@ -104,6 +105,8 @@ ID 会在读取配置时按逗号拆分、去除首尾空白并去重。过滤�
 - `text` trim 后必须非空，最多 131072 个 Unicode code point，工作流保留原始空白；
 - 请求体最多 256 KiB；
 - 任何额外字段都会被严格 schema 拒绝。
+
+未显式设置 `KAGUYA_GATEWAY_TOKEN` 时，可先 `curl http://127.0.0.1:3000/api/v1/gateway/token` 读取当前实例的 token。
 
 ```bash
 curl http://127.0.0.1:3000/api/v1/messages \

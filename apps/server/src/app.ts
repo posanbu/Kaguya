@@ -4,7 +4,8 @@
  * Runtime 消息入口；它是“selected Profile 唯一生效”服务端约束的 HTTP 落点。
  * 主要职责：`createHttpApplication` 统一注册 CORS、限流、OpenAPI 与错误处理，
  * 再根据 `runtime` 与 `setup` 是否存在决定 ready 模式和 setup 模式的可见路由；
- * `/api/v1/setup` 现在只返回无 secret 的 readiness 元数据，Profile 的创建、读取、
+ * `/api/v1/setup` 返回无 secret 的 readiness 元数据，以及本实例分发的网关 token，
+ * 供 Web UI 加载页面时自动取用；Profile 的创建、读取、
  * 完整替换、显式选择与删除分别由 `/api/v1/profiles*` 路由承载，并统一通过
  * `requireManagementToken` 在任何路径/正文校验前拒绝未授权请求。
  * 代码库关系：本模块消费 `setup.ts` 的 `ConfigurationManagement` 门面与
@@ -275,7 +276,7 @@ const setupStatusResponseJsonSchema = {
     data: {
       type: "object",
       additionalProperties: false,
-      required: ["status", "selectedProfileId", "profiles"],
+      required: ["status", "selectedProfileId", "profiles", "gatewayToken"],
       properties: {
         status: {
           type: "string",
@@ -292,6 +293,7 @@ const setupStatusResponseJsonSchema = {
           type: "array",
           items: profileMetadataJsonSchema,
         },
+        gatewayToken: { type: "string", minLength: 1 },
         issues: {
           type: "array",
           items: configurationIssueJsonSchema,
@@ -300,6 +302,22 @@ const setupStatusResponseJsonSchema = {
           type: "array",
           items: configurationIssueJsonSchema,
         },
+      },
+    },
+  },
+} as const;
+
+const gatewayTokenResponseJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["data"],
+  properties: {
+    data: {
+      type: "object",
+      additionalProperties: false,
+      required: ["gatewayToken"],
+      properties: {
+        gatewayToken: { type: "string", minLength: 1 },
       },
     },
   },
@@ -492,9 +510,26 @@ export async function createHttpApplication(
         },
       },
     },
-    async () => ({
-      data: (await options.setup?.inspect()) ?? readySetupStatus(),
-    }),
+    async () => {
+      const status = (await options.setup?.inspect()) ?? readySetupStatus();
+      return { data: { ...status, gatewayToken: options.config.gatewayToken } };
+    },
+  );
+
+  app.get(
+    "/api/v1/gateway/token",
+    {
+      config: { rateLimit: false },
+      schema: {
+        tags: ["System"],
+        summary:
+          "Fetch the gateway token distributed by this server instance",
+        response: {
+          200: gatewayTokenResponseJsonSchema,
+        },
+      },
+    },
+    async () => ({ data: { gatewayToken: options.config.gatewayToken } }),
   );
 
   app.get(

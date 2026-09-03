@@ -55,18 +55,16 @@ pnpm install
 
 ## 以开发模式启动
 
-至少需要一个长度不小于 16 个字符的 Gateway Token。配置目录可以使用默认的 `.data/kaguya-config`，也可以显式指定绝对路径。
+Gateway Token 可选：未设置时每次启动自动生成随机 token（日志 `server.token.generated`），Web UI 页面加载时自动获取；需要跨重启稳定的 token 时可显式设置（至少 16 个字符）。配置目录可以使用默认的 `.data/kaguya-config`，也可以显式指定绝对路径。
 
 ::: code-group
 
 ```powershell [PowerShell ~vscode-icons:file-type-powershell~]
-$env:KAGUYA_GATEWAY_TOKEN = "replace-with-at-least-16-characters"
 $env:KAGUYA_CONFIG_ROOT = ".data/kaguya-config"
 pnpm dev
 ```
 
 ```bash [POSIX shell ~vscode-icons:file-type-shell~]
-export KAGUYA_GATEWAY_TOKEN="replace-with-at-least-16-characters"
 export KAGUYA_CONFIG_ROOT=".data/kaguya-config"
 pnpm dev
 ```
@@ -91,14 +89,12 @@ curl http://127.0.0.1:3000/healthz
 
 ```powershell [PowerShell ~vscode-icons:file-type-powershell~]
 pnpm build
-$env:KAGUYA_GATEWAY_TOKEN = "replace-with-at-least-16-characters"
 $env:KAGUYA_CONFIG_ROOT = ".data/kaguya-config"
 pnpm start
 ```
 
 ```bash [POSIX shell ~vscode-icons:file-type-shell~]
 pnpm build
-export KAGUYA_GATEWAY_TOKEN="replace-with-at-least-16-characters"
 export KAGUYA_CONFIG_ROOT=".data/kaguya-config"
 pnpm start
 ```

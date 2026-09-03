@@ -24,26 +24,29 @@ describe("readServerConfig", () => {
     });
 
     expect(config).toMatchObject({
-      host: "0.0.0.0",
-      port: 4100,
-      gatewayToken: "a-secure-gateway-token",
-      corsOrigins: ["https://ui.example"],
-      trustProxy: ["127.0.0.1", "10.0.0.0/8"],
-      rateLimitMax: 20,
-      rateLimitWindowMs: 10_000,
-      databasePath: "/tmp/kaguya-test.sqlite",
-      configRoot: "/tmp/kaguya-config-test",
-      development: true,
-      gatewayAllowlist: {
-        platforms: ["qq"],
-        userIds: ["user-1", "user-2"],
-        groupIds: ["group-1"],
-      },
-      napcat: {
-        enabled: true,
-        adapterId: "napcat.qq.main",
-        wsUrl: "ws://127.0.0.1:3001",
-        reconnectMs: 500,
+      gatewayTokenSource: "environment",
+      config: {
+        host: "0.0.0.0",
+        port: 4100,
+        gatewayToken: "a-secure-gateway-token",
+        corsOrigins: ["https://ui.example"],
+        trustProxy: ["127.0.0.1", "10.0.0.0/8"],
+        rateLimitMax: 20,
+        rateLimitWindowMs: 10_000,
+        databasePath: "/tmp/kaguya-test.sqlite",
+        configRoot: "/tmp/kaguya-config-test",
+        development: true,
+        gatewayAllowlist: {
+          platforms: ["qq"],
+          userIds: ["user-1", "user-2"],
+          groupIds: ["group-1"],
+        },
+        napcat: {
+          enabled: true,
+          adapterId: "napcat.qq.main",
+          wsUrl: "ws://127.0.0.1:3001",
+          reconnectMs: 500,
+        },
       },
     });
   });
@@ -53,14 +56,21 @@ describe("readServerConfig", () => {
       KAGUYA_GATEWAY_TOKEN: "a-secure-gateway-token",
     });
 
-    expect(config.databasePath).toMatch(/[/\\]\.data[/\\]kaguya\.sqlite$/u);
+    expect(config.config.databasePath).toMatch(
+      /[/\\]\.data[/\\]kaguya\.sqlite$/u,
+    );
     expect(config).toMatchObject({
-      host: "127.0.0.1",
-      port: 3000,
-      development: false,
-      napcat: { enabled: false, reconnectMs: 3000 },
+      gatewayTokenSource: "environment",
+      config: {
+        host: "127.0.0.1",
+        port: 3000,
+        development: false,
+        napcat: { enabled: false, reconnectMs: 3000 },
+      },
     });
-    expect(config.configRoot).toMatch(/[/\\]\.data[/\\]kaguya-config$/u);
+    expect(config.config.configRoot).toMatch(
+      /[/\\]\.data[/\\]kaguya-config$/u,
+    );
   });
 
   it("rejects legacy split-service variables", () => {
@@ -79,10 +89,17 @@ describe("readServerConfig", () => {
     }
   });
 
-  it("requires a non-trivial token and a URL for enabled NapCat", () => {
-    expect(() => readServerConfig({})).toThrow(
-      "KAGUYA_GATEWAY_TOKEN is required",
+  it("generates a random token when KAGUYA_GATEWAY_TOKEN is unset", () => {
+    const resolved = readServerConfig({});
+
+    expect(resolved.gatewayTokenSource).toBe("generated");
+    expect(resolved.config.gatewayToken).toMatch(/^[A-Za-z0-9_-]{16,}$/u);
+    expect(readServerConfig({}).config.gatewayToken).not.toBe(
+      resolved.config.gatewayToken,
     );
+  });
+
+  it("requires a non-trivial token and a URL for enabled NapCat", () => {
     expect(() => readServerConfig({ KAGUYA_GATEWAY_TOKEN: "short" })).toThrow(
       "at least 16 characters",
     );
