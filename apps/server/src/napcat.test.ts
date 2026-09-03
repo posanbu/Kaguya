@@ -1,11 +1,25 @@
+/**
+ * 功能概述：验证 Server 侧 NapCat WebSocket transport、连接重建与窄
+ * `InformationIngress` 组合，防止平台连接获得完整 Runtime 或业务模块。
+ * 主要职责：覆盖 JSON 解析、access token URL、transport 异常透传、
+ * supervisor 重连/退役/停止，以及真实 OneBot frame 到 `ingress.submit` 的连接。
+ * 代码库关系：直接驱动 `napcat.ts`，并经由 platform-adapters 的
+ * `NapCatOneBotAdapter` 正规化入站消息；Server 启动时只注入 ingress 与 logger。
+ * 输入输出与副作用：用内存 FakeWebSocket/transport 触发连接事件和计时器；
+ * 测试结束会恢复全局 WebSocket 并停止 supervisor。
+ */
+import { closeLogger, createLogger } from "@kaguya/logger";
 import type {
+  InformationIngress,
   JsonMessageTransport,
+  PlatformInboundMessage,
   PlatformDeliveryReceipt,
   PlatformReplySender,
 } from "@kaguya/platform-adapters";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  createNapCatSupervisor,
   NapCatConnectionSupervisor,
   WebSocketJsonTransport,
 } from "./napcat.js";
@@ -101,6 +115,54 @@ describe("WebSocketJsonTransport", () => {
     expect(closeError?.message).toBe("NapCat WebSocket error");
     expect(FakeWebSocket.latest?.closed).toBe(true);
   });
+});
+
+it("submits NapCat frames through the ingress without a Runtime dependency", async () => {
+  globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+  const submitted: PlatformInboundMessage[] = [];
+  const ingress: InformationIngress = {
+    submit: async (message) => {
+      submitted.push(message);
+      return { rootInformationId: "information-1", deliveries: [] };
+    },
+  };
+  const logger = createLogger({
+    service: "napcat-composition-test",
+    level: "silent",
+  });
+  const supervisor = createNapCatSupervisor({
+    config: {
+      enabled: true,
+      adapterId: "napcat.qq.main",
+      wsUrl: "ws://127.0.0.1:3001",
+      selfId: "998877",
+      reconnectMs: 250,
+    },
+    ingress,
+    logger,
+  });
+
+  await supervisor.start();
+  FakeWebSocket.latest?.emit("message", {
+    data: JSON.stringify({
+      post_type: "message",
+      message_type: "private",
+      self_id: 998877,
+      message_id: 12345,
+      user_id: 112233,
+      message: "hello",
+    }),
+  });
+  await vi.waitFor(() => expect(submitted).toHaveLength(1));
+
+  expect(submitted[0]).toMatchObject({
+    adapterId: "napcat.qq.main",
+    platformMessageId: "12345",
+    text: "hello",
+  });
+  expect(submitted[0]).not.toHaveProperty("traceId");
+  await supervisor.stop();
+  await closeLogger(logger);
 });
 
 class SupervisorTransport implements JsonMessageTransport {

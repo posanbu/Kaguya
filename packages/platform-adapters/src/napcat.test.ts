@@ -1,3 +1,18 @@
+/**
+ * 功能概述：验证 NapCat 的 action client 、OneBot 入站 adapter 与共享 JSON
+ * transport 的边界，特别保证 adapter 只依赖窄 `InformationIngress`。
+ * 主要职责：覆盖 action 回执/超时/断线、共享 transport、入站提交、
+ * self ID 过滤、错误上下文与 stop 排空 in-flight 提交。
+ * 代码库关系：直接测试 `napcat.ts`，其入站消息由 `onebot.ts`正规化，
+ * 服务端 supervisor 只需向 adapter 传入同一 ingress，不传数据库或模块宿主。
+ * 输入输出与副作用：`FakeTransport` 在内存中触发 frame 与 close；
+ * adapter 异步提交并在停止时等待已接收的消息，不产生 Core ID。
+ */
+import type {
+  InboundReceipt,
+  InformationIngress,
+  PlatformInboundMessage,
+} from "./types.js";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -108,17 +123,18 @@ describe("NapCatActionClient", () => {
   });
 });
 
-it("dispatches normalized inbound messages and ignores action responses", async () => {
+it("submits normalized inbound messages through the ingress only", async () => {
   const transport = new FakeTransport();
-  const inboundMessages: unknown[] = [];
-  const onInboundMessage = async (message: unknown) => {
+  const inboundMessages: PlatformInboundMessage[] = [];
+  const ingress = ingressWith(async (message) => {
     inboundMessages.push(message);
-  };
+    return receipt;
+  });
   const adapter = new NapCatOneBotAdapter({
     adapterId: "napcat.qq.main",
     transport,
     now: () => new Date("2026-07-28T01:02:03.000Z"),
-    onInboundMessage,
+    ingress,
   });
 
   await adapter.start();
@@ -135,8 +151,11 @@ it("dispatches normalized inbound messages and ignores action responses", async 
 
   expect(inboundMessages).toHaveLength(1);
   expect(inboundMessages[0]).toMatchObject({
+    platformMessageId: "123",
     text: "hello",
   });
+  expect(inboundMessages[0]).not.toHaveProperty("traceId");
+  expect(inboundMessages[0]).not.toHaveProperty("informationId");
 });
 
 it("supports an action client and adapter sharing one transport", async () => {
@@ -152,9 +171,10 @@ it("supports an action client and adapter sharing one transport", async () => {
     adapterId: "napcat.qq.main",
     transport,
     now: () => new Date("2026-07-28T01:02:03.000Z"),
-    onInboundMessage: async (message) => {
+    ingress: ingressWith(async (message) => {
       inboundMessages.push(message);
-    },
+      return receipt;
+    }),
   });
 
   await adapter.start();
@@ -228,20 +248,18 @@ it("returns failed receipts when the NapCat transport closes", async () => {
   });
 });
 
-it("surfaces rejected inbound dispatches with trace context", async () => {
+it("surfaces rejected inbound submissions with external message context", async () => {
   const transport = new FakeTransport();
   const dispatchError = new Error("workflow failed");
   const failures: Array<{
     error: unknown;
-    context: { adapterId: string; traceId: string };
+    context: { adapterId: string; platformMessageId: string };
   }> = [];
   const adapter = new NapCatOneBotAdapter({
     adapterId: "napcat.qq.main",
     transport,
     now: () => new Date("2026-07-28T01:02:03.000Z"),
-    onInboundMessage: async () => {
-      throw dispatchError;
-    },
+    ingress: ingressWith(async () => Promise.reject(dispatchError)),
     onInboundError: (error, context) => {
       failures.push({ error, context });
     },
@@ -263,7 +281,7 @@ it("surfaces rejected inbound dispatches with trace context", async () => {
       error: dispatchError,
       context: {
         adapterId: "napcat.qq.main",
-        traceId: "napcat:998877:12345",
+        platformMessageId: "12345",
       },
     },
   ]);
@@ -280,10 +298,11 @@ it("stops accepting frames and drains in-flight dispatches before stopping", asy
     adapterId: "napcat.qq.main",
     transport,
     now: () => new Date("2026-07-28T01:02:03.000Z"),
-    onInboundMessage: async (message) => {
+    ingress: ingressWith(async (message) => {
       dispatchedIds.push(message.platformMessageId);
       await dispatchGate;
-    },
+      return receipt;
+    }),
   });
 
   await adapter.start();
@@ -324,9 +343,10 @@ it("ignores inbound events for a different configured bot account", async () => 
     expectedSelfId: "998877",
     transport,
     now: () => new Date("2026-07-28T01:02:03.000Z"),
-    onInboundMessage: async (message) => {
+    ingress: ingressWith(async (message) => {
       dispatchedIds.push(message.platformMessageId);
-    },
+      return receipt;
+    }),
   });
 
   await adapter.start();
@@ -348,3 +368,12 @@ it("ignores inbound events for a different configured bot account", async () => 
 
   expect(dispatchedIds).toEqual(["3"]);
 });
+
+const receipt: InboundReceipt = {
+  rootInformationId: "information-1",
+  deliveries: [],
+};
+
+function ingressWith(submit: InformationIngress["submit"]): InformationIngress {
+  return { submit };
+}

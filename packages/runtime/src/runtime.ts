@@ -42,6 +42,8 @@ import {
   type ModuleModelSelection,
 } from "@kaguya/modules";
 import type {
+  InboundReceipt,
+  InformationIngress,
   PlatformDeliveryReceipt,
   PlatformInboundMessage,
   PlatformOutboundTransport,
@@ -67,16 +69,6 @@ import {
   runtimeContextInformationKind,
 } from "./information-kinds.js";
 import { LlmLifecycleClient } from "./llm-lifecycle.js";
-
-export interface InformationIngress {
-  submit(input: PlatformInboundMessage): Promise<RuntimeDispatchResult>;
-}
-
-export interface RuntimeDispatchResult {
-  readonly rootInformationId: InformationId;
-  readonly deliveries: readonly PlatformDeliveryReceipt[];
-  readonly delivery?: PlatformDeliveryReceipt;
-}
 
 export interface ResolvedRuntimeModel {
   readonly modelId: string;
@@ -175,7 +167,7 @@ export class KaguyaRuntime implements InformationIngress {
   readonly #nextInformationId: InformationIdGenerator;
   readonly #resolveModelSelection: RuntimeModelSelectionResolver;
   readonly #transports = new Map<string, RuntimeTransportRegistration>();
-  readonly #inFlight = new Set<Promise<RuntimeDispatchResult>>();
+  readonly #inFlight = new Set<Promise<InboundReceipt>>();
   readonly #deliveriesByContext = new Map<
     InformationId,
     PlatformDeliveryReceipt[]
@@ -342,7 +334,7 @@ export class KaguyaRuntime implements InformationIngress {
     }
   }
 
-  submit(input: PlatformInboundMessage): Promise<RuntimeDispatchResult> {
+  submit(input: PlatformInboundMessage): Promise<InboundReceipt> {
     if (this.#state !== "started") {
       return Promise.reject(new RuntimeUnavailableError());
     }
@@ -356,7 +348,7 @@ export class KaguyaRuntime implements InformationIngress {
   }
 
   /** @deprecated Task 5 adapters call submit(message). */
-  dispatch(input: RuntimeInboundMessage): Promise<RuntimeDispatchResult> {
+  dispatch(input: RuntimeInboundMessage): Promise<InboundReceipt> {
     return this.submit(input.message);
   }
 
@@ -456,7 +448,7 @@ export class KaguyaRuntime implements InformationIngress {
     );
   }
 
-  async #submit(input: PlatformInboundMessage): Promise<RuntimeDispatchResult> {
+  async #submit(input: PlatformInboundMessage): Promise<InboundReceipt> {
     const core = required(this.#core, "information core");
     const context = await core.register(runtimeContextInformationKind, {
       occurredAt: input.occurredAt,

@@ -6,7 +6,7 @@
  * 代码库关系：测试直接消费 Runtime 的 `InformationIngress.submit` 和注入数据库选项；默认业务
  * 模块来自 `@kaguya/modules`，自定义 fixture 只用于隔离并发和消费者故障语义。
  * 输入输出与副作用：每个用例创建隔离的内存 PostgreSQL 数据库，Runtime 只写 information
- * ledger；测试结束显式关闭注入数据库，并检查持久化 payload 不包含 raw/provider secret/trace。
+ * ledger；测试结束显式关闭注入数据库，并检查持久化 payload 不包含 raw/provider secret。
  */
 import { PostgresKaguyaDatabase } from "@kaguya/database";
 import { createTestingDatabase } from "@kaguya/database/testing";
@@ -86,7 +86,6 @@ function webMessage(text = "hello"): PlatformInboundMessage {
   return {
     platform: "web",
     adapterId: "web.ui.main",
-    traceId: "legacy-trace-must-not-enter-ledger",
     platformMessageId: "request-1",
     occurredAt: "2026-09-04T00:00:00.000Z",
     text,
@@ -102,7 +101,6 @@ function platformMessage(adapterId = "napcat.qq.main"): PlatformInboundMessage {
     platform: "qq",
     adapterId,
     selfId: "998877",
-    traceId: "legacy-trace-must-not-enter-ledger",
     platformMessageId: "message-1",
     occurredAt: "2026-09-04T00:00:00.000Z",
     text: "hello from qq",
@@ -352,7 +350,7 @@ describe("KaguyaRuntime", () => {
         ]);
       }
       expect(JSON.stringify(graph)).not.toMatch(
-        /legacy-trace-must-not-enter-ledger|raw-must-not-enter-ledger|receipt-raw-must-not-enter-ledger/,
+        /raw-must-not-enter-ledger|receipt-raw-must-not-enter-ledger/,
       );
     },
     TEST_TIMEOUT,

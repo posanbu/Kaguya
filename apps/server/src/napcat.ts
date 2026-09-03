@@ -1,6 +1,18 @@
+/**
+ * 功能概述：在 Server 侧组合 NapCat WebSocket JSON transport、OneBot adapter、
+ * action client 与可重连 supervisor，入站端只接收窄 `InformationIngress`。
+ * 主要职责：`WebSocketJsonTransport` 处理 token URL、JSON frame 与 close/error；
+ * `NapCatConnectionSupervisor` 创建、退役和重建整条连接，同时实现 Runtime 的出站 transport；
+ * `createNapCatSupervisor` 将入站 frame 直接交给 ingress，并为连接/提交失败记录安全上下文。
+ * 代码库关系：复用 `@kaguya/platform-adapters` 的 NapCat adapter/action client；
+ * `server.ts` 传入统一 ingress，并将返回的 supervisor 注册为 Runtime 出站 transport。
+ * 输入输出与副作用：会建立 WebSocket、写出 JSON、设置重连/超时计时器并在
+ * stop 时排空退役；日志不保留消息正文、access token 或 Core trace identity。
+ */
 import {
   NapCatActionClient,
   NapCatOneBotAdapter,
+  type InformationIngress,
   type JsonMessageTransport,
   type PlatformDeliveryReceipt,
   type PlatformMessageTarget,
@@ -9,7 +21,6 @@ import {
 } from "@kaguya/platform-adapters";
 import type { OutboundMessageContent } from "@kaguya/schema";
 import type { KaguyaLogger } from "@kaguya/logger";
-import type { KaguyaRuntime } from "@kaguya/runtime";
 
 import type { NapCatConfig } from "./config.js";
 
@@ -222,7 +233,7 @@ export class NapCatConnectionSupervisor
 
 export function createNapCatSupervisor(options: {
   readonly config: NapCatConfig;
-  readonly runtime: KaguyaRuntime;
+  readonly ingress: InformationIngress;
   readonly logger: KaguyaLogger;
 }): NapCatConnectionSupervisor {
   let supervisor: NapCatConnectionSupervisor;
@@ -247,18 +258,12 @@ export function createNapCatSupervisor(options: {
           : { expectedSelfId: options.config.selfId }),
         transport,
         now: () => new Date(),
-        onInboundMessage: (message) =>
-          options.runtime
-            .dispatch({
-              kind: "platform",
-              message,
-            })
-            .then(() => undefined),
+        ingress: options.ingress,
         onInboundError: (error, context) => {
           options.logger.error(
             {
               event: "napcat.inbound.failed",
-              traceId: context.traceId,
+              platformMessageId: context.platformMessageId,
               adapterId: context.adapterId,
               err: error,
             },

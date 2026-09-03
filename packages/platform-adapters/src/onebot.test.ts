@@ -1,3 +1,14 @@
+/**
+ * 功能概述：验证 OneBot 入站事件仅被正规化为平台内容与外部身份，
+ * 以及出站文本/回复如何编码为 OneBot action，不允许 adapter 生成 Core 身份。
+ * 主要职责：覆盖私聊、群聊、mention、降级 segment、自身消息过滤和发送 action；
+ * 关键断言保留 `platformMessageId`、sender、destination 与外部时间，并排除 `traceId`
+ * 和 `informationId`。
+ * 代码库关系：直接测试 `onebot.ts`；`NapCatOneBotAdapter` 复用同一正规化器，
+ * Runtime 随后才会为该内容创建 `informationId`。
+ * 输入输出与副作用：所有 fixture 都是内存对象，无网络或持久化副作用；
+ * 无效、空白或机器人自发事件必须返回 `undefined`。
+ */
 import { describe, expect, it } from "vitest";
 
 import {
@@ -28,7 +39,6 @@ describe("normalizeOneBotMessageEvent", () => {
       platform: "qq",
       adapterId: "napcat.qq.main",
       selfId: "998877",
-      traceId: "napcat:998877:12345",
       platformMessageId: "12345",
       occurredAt: "2026-07-28T01:02:03.000Z",
       text: "hello kaguya",
@@ -36,6 +46,8 @@ describe("normalizeOneBotMessageEvent", () => {
       target: { kind: "private", userId: "112233" },
       sender: { userId: "112233", nickname: "Ada" },
     });
+    expect(message).not.toHaveProperty("traceId");
+    expect(message).not.toHaveProperty("informationId");
   });
 });
 
@@ -123,12 +135,14 @@ it("maps group messages to structured targets and degraded segment text", () => 
   );
 
   expect(message).toMatchObject({
-    traceId: "napcat:998877:abc-1",
+    platformMessageId: "abc-1",
     text: "[reply:old-msg]@998877hi[image]",
     mentions: [{ kind: "user", id: "998877" }],
     target: { kind: "group", groupId: "778899" },
     sender: { userId: "445566", nickname: "Lin", card: "林" },
   });
+  expect(message).not.toHaveProperty("traceId");
+  expect(message).not.toHaveProperty("informationId");
 });
 
 it("ignores non-message events and blank normalized messages", () => {
