@@ -206,7 +206,20 @@ class SelectorReadScope {
         parsed.error,
       );
     }
-    const atoms = stableUniqueAtoms(await this.ledger.find(parsed.data)).slice(
+    const normalized: InformationFindQuery = {
+      limit: parsed.data.limit,
+      ...(parsed.data.kinds === undefined ? {} : { kinds: parsed.data.kinds }),
+      ...(parsed.data.sources === undefined
+        ? {}
+        : { sources: parsed.data.sources }),
+      ...(parsed.data.occurredAfter === undefined
+        ? {}
+        : { occurredAfter: parsed.data.occurredAfter }),
+      ...(parsed.data.occurredBefore === undefined
+        ? {}
+        : { occurredBefore: parsed.data.occurredBefore }),
+    };
+    const atoms = stableUniqueAtoms(await this.ledger.find(normalized)).slice(
       0,
       parsed.data.limit,
     );
@@ -241,10 +254,15 @@ class SelectorReadScope {
       }
     }
 
+    const normalized = {
+      from: parsed.data.from,
+      relation: parsed.data.relation,
+      limit: parsed.data.limit,
+    };
     const atoms =
       parsed.data.direction === "outgoing"
-        ? await this.loadOutgoing(parsed.data)
-        : await this.loadIncoming(parsed.data);
+        ? await this.loadOutgoing(normalized)
+        : await this.loadIncoming(normalized);
     this.authorize(atoms);
     return Object.freeze(atoms);
   }
@@ -291,7 +309,7 @@ class SelectorReadScope {
 
   private async loadOutgoing(query: {
     readonly from: readonly InformationId[];
-    readonly relation?: string;
+    readonly relation: string | undefined;
     readonly limit: number;
   }): Promise<DeepReadonly<InformationAtom>[]> {
     const targetIds = stableUniqueIds(
@@ -321,7 +339,7 @@ class SelectorReadScope {
 
   private async loadIncoming(query: {
     readonly from: readonly InformationId[];
-    readonly relation?: string;
+    readonly relation: string | undefined;
     readonly limit: number;
   }): Promise<DeepReadonly<InformationAtom>[]> {
     const atoms: DeepReadonly<InformationAtom>[] = [];

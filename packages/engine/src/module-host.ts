@@ -1,16 +1,17 @@
 /**
  * 功能概述：本模块把 SDK 定义的信息模块实例接入 `InformationCore`，并为每个订阅
- * 赋予稳定的模块消费者身份和可注册派生 atom 的 handler context。
+ * 赋予稳定的模块消费者身份和可注册派生 atom、选择账本上下文的 handler context。
  * 主要职责：`ModuleHost.register/start/stop` 以共享 promise 管理并发生命周期；启动时
  * 先验证每个 subscription 的 definition 与 manifest 同一对象，再调用 Core.on；
- * `createContext` 只允许 manifest 声明的输出，
- * 为 Core.register 补齐模块 source、因果关系与唯一继承的 context 引用。
+ * `createContext` 只允许 manifest 声明的输出，为 Core.register 补齐模块 source、因果
+ * 与 context 引用，并把 Selector 委托给 Core 以重新加载已授权原子。
  * 代码库关系：依赖 SDK 的 information-module 契约和 Core 的最终 on/register API；
  * Core 负责广播并记录 consumer.failed，因此本宿主不吞掉或二次记录 handler 故障。
  * 输入输出与副作用：启动验证 instanceId 能组成小写安全 source；停止先撤销订阅、等待
  * 已进入的 handler，再以 all-settled 方式调用全部模块 dispose；启动 rollback 的释放失败
  * 同时反馈给 start 与并发 stop。启动/停止竞态不会重复创建、重复释放或复活宿主；
- * context.register 会持久化新 atom，且拒绝调用方覆盖 Core 保留关系。
+ * context.select 只读账本且错误沿 handler 结算；context.register 会持久化新 atom，
+ * 且拒绝调用方覆盖 Core 保留关系。
  */
 import type {
   DeepReadonly,
@@ -271,6 +272,8 @@ export class ModuleHost {
       instanceId: module.instanceId,
       sourceAtom,
       now,
+      select: (selector) =>
+        this.#options.core.select(selector, sourceAtom.informationId),
       register: async (definition, input) => {
         if (!this.isDeclaredOutput(module.definition, definition)) {
           throw new ModuleKindNotDeclaredError(

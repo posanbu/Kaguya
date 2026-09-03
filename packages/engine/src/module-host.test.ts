@@ -1,7 +1,8 @@
 /**
  * 功能概述：本文件在真实 `InformationCore` 和内存账本上验证信息模块宿主的订阅、
  * 派生 atom 注册与故障归属行为。
- * 主要职责：验证模块 context.register 注入模块 source、因果与 context 引用；
+ * 主要职责：验证模块 context.register 注入模块 source、因果与 context 引用，并验证
+ * `context.select` 委托 Core 从账本重新加载显式上下文；
  * 验证保留引用和未声明输出被拒绝、输入快照深冻结、同 kind 多实例均被广播，以及
  * handler 故障由 Core 记录为带模块消费者身份的 `consumer.failed`；并直接覆盖共享
  * start/stop promise、停止与创建竞态、rollback/dispose 全量失败聚合、在途 handler 等待
@@ -24,6 +25,7 @@ import {
 import {
   defineInformationKind,
   defineInformationModule,
+  defineInformationSelector,
   onInformation,
   type InformationFindQuery,
   type InformationModuleSubscription,
@@ -124,6 +126,24 @@ const outputKind = defineInformationKind({
   log: { enabled: false },
 });
 
+const selectedOutputKind = defineInformationKind({
+  kind: "acme.message.selected-output",
+  payloadSchema: z.object({ selectedId: z.string().min(1) }).strict(),
+  references: {
+    "core:caused-by": {
+      required: true,
+      multiple: false,
+      targetKinds: [inboundKind.kind],
+    },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: [contextKind.kind],
+    },
+  },
+  log: { enabled: false },
+});
+
 function createCore(extra: readonly any[] = []) {
   const registry = new InformationKindRegistry();
   registry.registerBuiltin(contextKind);
@@ -177,6 +197,95 @@ async function startHost(
 }
 
 describe("ModuleHost", () => {
+  it("selects the persisted source through the handler context", async () => {
+    const { core, store } = createCore([selectedOutputKind]);
+    await core.start();
+    const context = await appendContext(core);
+    const currentSelector = defineInformationSelector({
+      selectorId: "test.current",
+      select: ({ sourceAtom }) => [sourceAtom.informationId],
+    });
+    const module = defineInformationModule({
+      manifest: {
+        apiVersion: 1,
+        definitionId: "acme.selector-consumer",
+        displayName: "Selector consumer",
+        settingsSchema: z.object({}).strict(),
+        informationKinds: [inboundKind, selectedOutputKind],
+      },
+      create: () => ({
+        subscriptions: [
+          onInformation(inboundKind, async (_atom, handlerContext) => {
+            const selected = await handlerContext.select(currentSelector);
+            await handlerContext.register(selectedOutputKind, {
+              payload: { selectedId: selected[0]!.informationId },
+            });
+          }),
+        ],
+      }),
+    });
+    const host = await startHost(module, core, "selector.default");
+
+    const inbound = await core.register(
+      inboundKind,
+      registration({ text: "moon" }, context),
+    );
+
+    const output = [...store.atoms.values()].find(
+      (atom) => atom.kind === selectedOutputKind.kind,
+    );
+    expect(output?.payload).toEqual({ selectedId: inbound.informationId });
+    await host.stop();
+  });
+
+  it("records a selector failure as one consumer failure", async () => {
+    const { core, store } = createCore();
+    await core.start();
+    const context = await appendContext(core);
+    const select = vi.fn(() => {
+      throw new Error("selection failed");
+    });
+    const failingSelector = defineInformationSelector({
+      selectorId: "test.failure",
+      select,
+    });
+    const module = defineInformationModule({
+      manifest: {
+        apiVersion: 1,
+        definitionId: "acme.selector-failure",
+        displayName: "Selector failure",
+        settingsSchema: z.object({}).strict(),
+        informationKinds: [inboundKind],
+      },
+      create: () => ({
+        subscriptions: [
+          onInformation(inboundKind, async (_atom, handlerContext) => {
+            await handlerContext.select(failingSelector);
+          }),
+        ],
+      }),
+    });
+    const host = await startHost(module, core, "selector.failure");
+
+    const inbound = await core.register(
+      inboundKind,
+      registration({ text: "moon" }, context),
+    );
+
+    expect(select).toHaveBeenCalledTimes(1);
+    const failures = [...store.atoms.values()].filter(
+      (atom) =>
+        atom.kind === "consumer.failed" &&
+        atom.references.some(
+          (reference) =>
+            reference.relation === "core:caused-by" &&
+            reference.informationId === inbound.informationId,
+        ),
+    );
+    expect(failures).toHaveLength(1);
+    await host.stop();
+  });
+
   it("shares concurrent startup without creating duplicate module instances", async () => {
     const { core } = createCore();
     await core.start();
