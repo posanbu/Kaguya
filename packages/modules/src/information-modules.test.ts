@@ -6,14 +6,16 @@
  * 代码库关系：覆盖 `always-reply-information-filter.ts`、`llm-information-reply.ts` 和
  * `information-kinds.ts`；`InformationModuleHost` 为每一次 register 自动补齐直接的
  * `core:caused-by` 与继承的 `core:context`，因此模块 handler 不伪造这些保留引用。
- * 输入输出与副作用：测试使用冻结 atom 和内存 register 记录，不访问 Core、账本或真实 LLM；
- * schema 断言保护删除的 profile 与 reply target 设置不会重新进入模块契约。
+ * 输入输出与副作用：单元用例使用冻结 atom 与内存 register；集成用例使用真实 Core、宿主和
+ * 校验引用规则的内存账本，断言实际 ID、持久化顺序及 context 继承，不访问真实 LLM；schema
+ * 断言保护删除的 profile 与 reply target 设置不会重新进入模块契约。
  */
 import {
   type DeepReadonly,
   freezeInformationAtom,
   informationIdSchema,
   type InformationAtom,
+  type InformationId,
   type InformationReference,
   type JsonObject,
   z,
@@ -26,6 +28,14 @@ import {
   type InformationModuleHandlerContext,
 } from "@kaguya/sdk";
 import { describe, expect, it, vi } from "vitest";
+
+import {
+  InformationCore,
+  InformationKindRegistry,
+  InformationModuleHost,
+  type InformationLedger,
+  type InformationReferenceExpectation,
+} from "@kaguya/engine";
 
 import {
   alwaysReplyInformationFilterModule,
@@ -74,6 +84,62 @@ const llmCompletedInformationKind = defineInformationKind({
   },
   log: { enabled: false },
 });
+
+const runtimeContextInformationKind = defineInformationKind({
+  kind: "core.runtime.context",
+  payloadSchema: z.object({ requestId: z.string().min(1) }).strict(),
+  references: {},
+  log: { enabled: false },
+});
+
+class MemoryInformationLedger implements InformationLedger {
+  readonly atoms = new Map<string, DeepReadonly<InformationAtom>>();
+
+  async synchronizeKinds(): Promise<void> {}
+
+  async append(
+    atom: DeepReadonly<InformationAtom>,
+    expectations: readonly InformationReferenceExpectation[],
+  ): Promise<void> {
+    if (this.atoms.has(atom.informationId)) throw new Error("duplicate information id");
+    const byRelation = new Map(expectations.map((expectation) => [expectation.relation, expectation]));
+    const counts = new Map<string, number>();
+    for (const reference of atom.references) {
+      const expectation = byRelation.get(reference.relation);
+      if (expectation === undefined) throw new Error(`undeclared reference: ${reference.relation}`);
+      counts.set(reference.relation, (counts.get(reference.relation) ?? 0) + 1);
+      if (!expectation.multiple && counts.get(reference.relation)! > 1) {
+        throw new Error(`multiple references: ${reference.relation}`);
+      }
+      const target = this.atoms.get(reference.informationId);
+      if (target === undefined) throw new Error(`missing reference: ${reference.informationId}`);
+      if (expectation.targetKinds !== undefined && !expectation.targetKinds.includes(target.kind)) {
+        throw new Error(`wrong reference kind: ${reference.relation}`);
+      }
+    }
+    for (const expectation of expectations) {
+      if (expectation.required && !counts.has(expectation.relation)) {
+        throw new Error(`missing required reference: ${expectation.relation}`);
+      }
+    }
+    this.atoms.set(atom.informationId, freezeInformationAtom(atom as InformationAtom));
+  }
+
+  async get(informationId: InformationId) {
+    return this.atoms.get(informationId);
+  }
+
+  async getMany(informationIds: readonly InformationId[]) {
+    return informationIds.flatMap((informationId) => {
+      const atom = this.atoms.get(informationId);
+      return atom === undefined ? [] : [atom];
+    });
+  }
+
+  async query() {
+    return [...this.atoms.values()];
+  }
+}
 
 function inboundAtom() {
   return freezeInformationAtom({
@@ -239,6 +305,113 @@ describe("alwaysReplyInformationFilterModule", () => {
 });
 
 describe("createLlmInformationReplyModule", () => {
+  it("persists the full DAG with direct causes and one inherited context", async () => {
+    const registry = new InformationKindRegistry();
+    registry.registerBuiltin(runtimeContextInformationKind);
+    registry.registerBuiltin(inboundTextInformationKind);
+    registry.registerBuiltin(replyRequestedInformationKind);
+    registry.registerBuiltin(llmCompletedInformationKind);
+    registry.registerBuiltin(assistantTextInformationKind);
+    registry.registerBuiltin(deliveryRequestedInformationKind);
+    const ledger = new MemoryInformationLedger();
+    let sequence = 0;
+    const core = new InformationCore({
+      registry,
+      store: ledger,
+      nextInformationId: () => `information-${++sequence}`,
+      now: () => new Date("2026-09-04T00:00:00.000Z"),
+    });
+    const replyModule = createLlmInformationReplyModule({
+      llmCompletedInformationKind,
+      executor: {
+        async execute({ reply }) {
+          const context = reply.references.find(
+            ({ relation }) => relation === "core:context",
+          );
+          if (context === undefined) throw new Error("reply context is required");
+          return core.register(llmCompletedInformationKind, {
+            occurredAt: "2026-09-04T00:00:01.000Z",
+            source: "runtime:llm",
+            payload: { output: { text: "Hello." }, reply: reply.payload },
+            references: [
+              { relation: "core:caused-by", informationId: reply.informationId },
+              context,
+            ],
+          });
+        },
+      },
+    });
+    const host = new InformationModuleHost({ core });
+    host.register(alwaysReplyInformationFilterModule);
+    host.register(replyModule);
+    await core.start();
+    await host.start([
+      {
+        instanceId: "filter-1",
+        definitionId: alwaysReplyInformationFilterModule.manifest.definitionId,
+        settings: {},
+      },
+      {
+        instanceId: "reply-1",
+        definitionId: replyModule.manifest.definitionId,
+        settings: { modelTier: "heavy", outbound: { mode: "source", messageKind: "reply" } },
+      },
+    ]);
+
+    try {
+      const context = await core.register(runtimeContextInformationKind, {
+        occurredAt: "2026-09-04T00:00:00.000Z",
+        source: "core:runtime",
+        payload: { requestId: "request-1" },
+        references: [],
+      });
+      const inbound = await core.register(inboundTextInformationKind, {
+        occurredAt: "2026-09-04T00:00:00.000Z",
+        source: "adapter:test",
+        payload: inboundPayload,
+        references: [{ relation: "core:context", informationId: context.informationId }],
+      });
+      const atoms = [...ledger.atoms.values()];
+      const reply = atoms.find(({ kind }) => kind === replyRequestedInformationKind.kind);
+      const completed = atoms.find(({ kind }) => kind === llmCompletedInformationKind.kind);
+      const assistant = atoms.find(({ kind }) => kind === assistantTextInformationKind.kind);
+      const delivery = atoms.find(({ kind }) => kind === deliveryRequestedInformationKind.kind);
+
+      expect(atoms.map(({ kind }) => kind)).toEqual([
+        runtimeContextInformationKind.kind,
+        inboundTextInformationKind.kind,
+        replyRequestedInformationKind.kind,
+        llmCompletedInformationKind.kind,
+        assistantTextInformationKind.kind,
+        deliveryRequestedInformationKind.kind,
+      ]);
+      expect(reply?.references).toContainEqual({
+        relation: "core:caused-by",
+        informationId: inbound.informationId,
+      });
+      expect(completed?.references).toContainEqual({
+        relation: "core:caused-by",
+        informationId: reply?.informationId,
+      });
+      expect(assistant?.references).toContainEqual({
+        relation: "core:caused-by",
+        informationId: completed?.informationId,
+      });
+      expect(delivery?.references).toContainEqual({
+        relation: "core:caused-by",
+        informationId: assistant?.informationId,
+      });
+      for (const atom of [inbound, reply, completed, assistant, delivery]) {
+        expect(atom?.references).toContainEqual({
+          relation: "core:context",
+          informationId: context.informationId,
+        });
+      }
+    } finally {
+      await host.stop();
+    }
+  });
+
   it("declares each direct causal edge and the shared context requirement", () => {
     expect(replyRequestedInformationKind.references).toMatchObject({
       "core:caused-by": { targetKinds: [inboundTextInformationKind.kind] },

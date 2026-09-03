@@ -6,8 +6,9 @@
  * 代码库关系：始终回复过滤器消费入站并产生回复请求；LLM 回复模块消费回复请求、外部
  * 注入的 LLM completed definition 与 assistant，随后产生后续 kind；Runtime 负责 LLM
  * 生命周期和投递结果 kind，不能重新定义本文件已经拥有的 literal kind。
- * 输入输出与副作用：所有导出都是冻结的纯定义，无 I/O；payload 和引用在 Core 注册前
- * 受校验，模块宿主会自动补齐 `core:caused-by` 与继承的 `core:context`。
+ * 输入输出与副作用：由 `defineInformationKind` 返回的 definition 为冻结的纯定义，无 I/O；
+ * Zod schema 与数组仍按各自库的常规语义使用。payload 和引用在 Core 注册前受校验，模块宿主
+ * 会自动补齐 `core:caused-by` 与继承的 `core:context`。
  */
 import {
   outboundMessageContentSchema,

@@ -212,6 +212,10 @@ importers:
       '@kaguya/sdk':
         specifier: workspace:*
         version: link:../sdk
+    devDependencies:
+      '@kaguya/engine':
+        specifier: workspace:*
+        version: link:../engine
 
   packages/platform-adapters:
     dependencies:
