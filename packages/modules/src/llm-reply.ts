@@ -1,19 +1,21 @@
 /**
  * 功能概述：本文件定义信息原子版 LLM 回复模块，把回复请求、LLM 生命周期完成、assistant
  * 文本和投递请求拆成三个由 kind 连接的消费者阶段，保证每一条边都有直接因果引用。
- * 主要职责：`llmReplySettingsSchema` 仅允许模型 tier 与出站方式；
+ * 主要职责：`llmReplySettingsSchema` 仅允许模型 tier 与出站方式；reply handler 通过
+ * `context.select` 取得 Core 重载原子并编译可追溯 Prompt；
  * `llmCompletedInformationPayloadSchema` 是 Runtime 注入的 completed kind 与本模块共享的
  * 输出契约；`createLlmReplyModule` 分别执行 LLM、产生 assistant、产生 delivery。
  * 代码库关系：依赖 `information-kinds.ts` 的模块拥有 kind；Runtime 注入同一份
  * `core.llm.completed` definition 和 executor，executor 负责注册 LLM requested/completed
  * 生命周期 atom，engine `ModuleHost` 则为 assistant 与 delivery 自动补齐直接因果和 context；
  * completed/assistant 的 originating instance 字段在全量广播下提供阶段归属，不改变 Core 路由。
- * 输入输出与副作用：reply handler 只调用注入 executor；completed handler 从其严格 payload
- * 注册 assistant；assistant handler 仅为本实例拥有的 atom 按 source/fixed 设置注册投递。执行器抛错
- * 会交由 Core 记录 consumer.failed，模块不吞掉错误、不保存跨请求状态。
+ * 输入输出与副作用：reply handler 只读选择账本并调用注入 executor；completed handler 从
+ * 严格 payload 注册 assistant；assistant handler 仅为本实例拥有的 atom 按 source/fixed
+ * 设置注册投递。执行器抛错会交由 Core 记录 consumer.failed，模块不保存跨请求状态。
  */
 import {
   type DeepReadonly,
+  type CompiledPrompt,
   type InformationAtom,
   type OutboundMessageContent,
   type PlatformDestination,
@@ -23,7 +25,9 @@ import {
   defineInformationModule,
   onInformation,
   type InformationKindDefinition,
+  type InformationSelectorDefinition,
 } from "@kaguya/sdk";
+import { PromptCompiler } from "@kaguya/prompt";
 
 import {
   assistantTextInformationKind,
@@ -32,6 +36,10 @@ import {
   replyRequestedInformationPayloadSchema,
   type ReplyRequestedInformationPayload,
 } from "./information-kinds.js";
+import {
+  compileReplyPromptFromInformation,
+  currentAcceptedMessageSelector,
+} from "./reply-context.js";
 
 export const modelTierSchema = z.enum(["light", "heavy"]);
 export type ModelTier = z.infer<typeof modelTierSchema>;
@@ -90,6 +98,8 @@ export interface LlmReplyExecutor {
     readonly reply: DeepReadonly<
       InformationAtom<"core.reply.requested", ReplyRequestedInformationPayload>
     >;
+    readonly prompt: CompiledPrompt;
+    readonly contextAtoms: readonly DeepReadonly<InformationAtom>[];
     readonly selection: ModuleModelSelection;
     readonly originatingModuleInstanceId: string;
   }): Promise<
@@ -105,11 +115,15 @@ export interface CreateLlmReplyModuleOptions {
     "core.llm.completed",
     LlmCompletedInformationPayload
   >;
+  readonly selector?: InformationSelectorDefinition;
+  readonly promptCompiler?: PromptCompiler;
 }
 
 export function createLlmReplyModule(
   dependencies: CreateLlmReplyModuleOptions,
 ) {
+  const selector = dependencies.selector ?? currentAcceptedMessageSelector;
+  const promptCompiler = dependencies.promptCompiler ?? new PromptCompiler();
   return defineInformationModule({
     manifest: {
       apiVersion: 1,
@@ -126,8 +140,20 @@ export function createLlmReplyModule(
     create: ({ settings }) => ({
       subscriptions: [
         onInformation(replyRequestedInformationKind, async (reply, context) => {
+          const contextAtoms = await context.select(selector);
+          const persistedReply = requireSelectedReply(
+            contextAtoms,
+            reply.informationId,
+          );
+          const prompt = compileReplyPromptFromInformation(
+            promptCompiler,
+            contextAtoms,
+            reply.informationId,
+          );
           await dependencies.executor.execute({
-            reply,
+            reply: persistedReply,
+            prompt,
+            contextAtoms,
             selection: { modelTier: settings.modelTier },
             originatingModuleInstanceId: context.instanceId,
           });
@@ -171,6 +197,27 @@ export function createLlmReplyModule(
       ],
     }),
   });
+}
+
+function requireSelectedReply(
+  atoms: readonly DeepReadonly<InformationAtom>[],
+  informationId: string,
+): DeepReadonly<
+  InformationAtom<"core.reply.requested", ReplyRequestedInformationPayload>
+> {
+  const reply = atoms.find((atom) => atom.informationId === informationId);
+  if (reply === undefined) {
+    throw new Error("Reply selection must include the current input");
+  }
+  if (reply.kind !== replyRequestedInformationKind.kind) {
+    throw new Error(
+      `Selected reply has unexpected information kind: ${reply.kind}`,
+    );
+  }
+  replyRequestedInformationPayloadSchema.parse(reply.payload);
+  return reply as DeepReadonly<
+    InformationAtom<"core.reply.requested", ReplyRequestedInformationPayload>
+  >;
 }
 
 function selectOutbound(

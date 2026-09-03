@@ -1,6 +1,6 @@
 /**
  * 功能概述：本文件声明 modules 包拥有的消息 DAG kind，明确区分入站、过滤通过后的
- * 回复请求、过滤拒绝、assistant 文本和平台投递请求，替代旧事件与定向回复语义。
+ * 回复请求、过滤拒绝、Memory、assistant 文本和平台投递请求，替代旧事件与定向回复语义。
  * 主要职责：每个 definition 固定 payload 的严格 schema 和直接因果/context 引用规则；
  * `informationModuleKinds` 供 Runtime 在启动 Core 前一次注册同一批 definition。
  * 代码库关系：始终回复过滤器消费入站并产生回复请求；LLM 回复模块消费回复请求、外部
@@ -98,6 +98,27 @@ export const filterDecisionInformationKind = defineInformationKind({
   log: { enabled: false },
 });
 
+export const coreMemoryTextInformationKind = defineInformationKind({
+  kind: "core.memory.text",
+  payloadSchema: z.object({ text: z.string().trim().min(1) }).strict(),
+  references: {
+    "core:caused-by": {
+      required: true,
+      multiple: false,
+    },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
+    "core:uses-context": {
+      required: true,
+      multiple: true,
+    },
+  },
+  log: { enabled: false },
+});
+
 export const assistantTextInformationKind = defineInformationKind({
   kind: "core.message.assistant.text",
   payloadSchema: z
@@ -151,6 +172,7 @@ export const informationModuleKinds = [
   inboundTextInformationKind,
   replyRequestedInformationKind,
   filterDecisionInformationKind,
+  coreMemoryTextInformationKind,
   assistantTextInformationKind,
   deliveryRequestedInformationKind,
 ] as const satisfies readonly InformationKindDefinition<string, any>[];
