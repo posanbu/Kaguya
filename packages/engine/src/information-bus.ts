@@ -44,15 +44,18 @@ export class InformationBus {
     atom: InformationAtom | DeepReadonly<InformationAtom>,
   ): Promise<DeepReadonly<InformationAtom>> {
     const snapshot = freezeSnapshot(atom);
-    const subscribers = this.#subscriptions
-      .filter((subscription) => subscription.kind === null || subscription.kind === snapshot.kind)
-      .sort((left, right) => left.id - right.id);
-
-    for (const subscription of subscribers) {
-      try {
-        await subscription.handler(snapshot);
-      } catch (error) {
-        await this.reportSubscriberError(error);
+    const subscribers = this.#subscriptions.filter(
+      (subscription) =>
+        subscription.kind === null || subscription.kind === snapshot.kind,
+    );
+    const results = await Promise.allSettled(
+      subscribers.map((subscription) =>
+        Promise.resolve().then(() => subscription.handler(snapshot)),
+      ),
+    );
+    for (const result of results) {
+      if (result.status === "rejected") {
+        await this.reportSubscriberError(result.reason);
       }
     }
 

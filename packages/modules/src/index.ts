@@ -26,3 +26,14 @@ export {
   type ReplyLlmExecutor,
   type ReplyMessageReader,
 } from "./llm-reply.js";
+export {
+  assistantTextInformationKind,
+  deliveryRequestedInformationKind,
+  filterDecisionInformationKind,
+  inboundTextInformationKind,
+  informationModuleKinds,
+} from "./information-kinds.js";
+export {
+  alwaysReplyInformationFilterModule,
+  alwaysReplyInformationFilterSettingsSchema,
+} from "./always-reply-information-filter.js";
