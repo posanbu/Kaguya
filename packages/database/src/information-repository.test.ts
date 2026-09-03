@@ -16,6 +16,7 @@ import { defineInformationKind } from "@kaguya/sdk";
 
 import {
   InformationIdConflictError,
+  InformationLogProjectionRunner,
   InvalidInformationReferenceError,
 } from "./index.js";
 import { createTestingDatabase } from "./testing.js";
@@ -76,259 +77,418 @@ function createAtom(
 }
 
 describe("information repository", () => {
-  it("rolls back an atom when a target reference is missing", async () => {
-    const database = await createTestingDatabase();
-    await database.migrate();
-    await database.information.synchronizeKinds([
-      contextKind.kind,
-      inboundKind.kind,
-    ]);
+  it(
+    "rolls back an atom when a target reference is missing",
+    async () => {
+      const database = await createTestingDatabase();
+      await database.migrate();
+      await database.information.synchronizeKinds([
+        contextKind.kind,
+        inboundKind.kind,
+      ]);
 
-    const inboundAtom = createAtom(
-      "atom-missing-target",
-      inboundKind.kind,
-      "2026-09-01T00:00:00.000Z",
-      { text: "hello" },
-      [
-        {
-          relation: "core:context",
-          informationId: "missing-context",
-        },
-      ],
-    );
-
-    await expect(
-      database.information.append(inboundAtom, [
-        {
-          relation: "core:context",
-          targetKinds: [contextKind.kind],
-          required: true,
-          multiple: false,
-        },
-      ]),
-    ).rejects.toBeInstanceOf(InvalidInformationReferenceError);
-
-    expect(
-      await database.information.getById(inboundAtom.informationId),
-    ).toBeUndefined();
-
-    await database.close();
-  }, TEST_TIMEOUT);
-
-  it("keeps reference order when storing and reading atoms", async () => {
-    const database = await createTestingDatabase();
-    await database.migrate();
-    await database.information.synchronizeKinds([
-      contextKind.kind,
-      inboundKind.kind,
-    ]);
-
-    const contextAtom = createAtom(
-      "atom-context",
-      contextKind.kind,
-      "2026-09-01T00:00:00.000Z",
-      { name: "context" },
-      [],
-    );
-    await database.information.append(contextAtom, []);
-
-    const inboundAtom = createAtom(
-      "atom-references",
-      inboundKind.kind,
-      "2026-09-01T00:01:00.000Z",
-      { text: "hello" },
-      [
-        {
-          relation: "core:context",
-          informationId: contextAtom.informationId,
-        },
-      ],
-    );
-
-    await database.information.append(inboundAtom, [
-      {
-        relation: "core:context",
-        targetKinds: [contextKind.kind],
-        required: true,
-        multiple: false,
-      },
-    ]);
-
-    expect((await database.information.getById(inboundAtom.informationId))?.references).toEqual([
-      {
-        relation: "core:context",
-        informationId: contextAtom.informationId,
-      },
-    ]);
-
-    await database.close();
-  }, TEST_TIMEOUT);
-
-  it("rejects a target kind mismatch", async () => {
-    const database = await createTestingDatabase();
-    await database.migrate();
-    await database.information.synchronizeKinds([
-      contextKind.kind,
-      inboundKind.kind,
-    ]);
-
-    const wrongTarget = createAtom(
-      "atom-wrong-target",
-      inboundKind.kind,
-      "2026-09-01T00:00:00.000Z",
-      { text: "hello" },
-      [
-        {
-          relation: "core:context",
-          informationId: "atom-wrong-context",
-        },
-      ],
-    );
-
-    await database.information.append(
-      createAtom(
-        "atom-wrong-context",
+      const inboundAtom = createAtom(
+        "atom-missing-target",
         inboundKind.kind,
         "2026-09-01T00:00:00.000Z",
-        { text: "not-context" },
-        [],
-      ),
-      [],
-    );
+        { text: "hello" },
+        [
+          {
+            relation: "core:context",
+            informationId: "missing-context",
+          },
+        ],
+      );
 
-    await expect(
-      database.information.append(wrongTarget, [
+      await expect(
+        database.information.append(inboundAtom, [
+          {
+            relation: "core:context",
+            targetKinds: [contextKind.kind],
+            required: true,
+            multiple: false,
+          },
+        ]),
+      ).rejects.toBeInstanceOf(InvalidInformationReferenceError);
+
+      expect(
+        await database.information.getById(inboundAtom.informationId),
+      ).toBeUndefined();
+      const outbox = await database.sql.query<{ count: string }>(
+        "SELECT COUNT(*)::text AS count FROM information_log_outbox",
+      );
+      expect(outbox.rows[0]?.count).toBe("0");
+
+      await database.close();
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "keeps reference order when storing and reading atoms",
+    async () => {
+      const database = await createTestingDatabase();
+      await database.migrate();
+      await database.information.synchronizeKinds([
+        contextKind.kind,
+        inboundKind.kind,
+      ]);
+
+      const contextAtom = createAtom(
+        "atom-context",
+        contextKind.kind,
+        "2026-09-01T00:00:00.000Z",
+        { name: "context" },
+        [],
+      );
+      await database.information.append(contextAtom, []);
+
+      const inboundAtom = createAtom(
+        "atom-references",
+        inboundKind.kind,
+        "2026-09-01T00:01:00.000Z",
+        { text: "hello" },
+        [
+          {
+            relation: "core:context",
+            informationId: contextAtom.informationId,
+          },
+        ],
+      );
+
+      await database.information.append(inboundAtom, [
         {
           relation: "core:context",
           targetKinds: [contextKind.kind],
           required: true,
           multiple: false,
         },
-      ]),
-    ).rejects.toBeInstanceOf(InvalidInformationReferenceError);
+      ]);
 
-    await database.close();
-  }, TEST_TIMEOUT);
-
-  it("rejects duplicate information ids", async () => {
-    const database = await createTestingDatabase();
-    await database.migrate();
-    await database.information.synchronizeKinds([contextKind.kind]);
-
-    const atom = createAtom(
-      "atom-duplicate",
-      contextKind.kind,
-      "2026-09-01T00:00:00.000Z",
-      { name: "context" },
-      [],
-    );
-
-    await database.information.append(atom, []);
-    await expect(database.information.append(atom, [])).rejects.toBeInstanceOf(
-      InformationIdConflictError,
-    );
-
-    await database.close();
-  }, TEST_TIMEOUT);
-
-  it("orders reverse-reference reads by atom occurrence and id", async () => {
-    const database = await createTestingDatabase();
-    await database.migrate();
-    await database.information.synchronizeKinds([
-      contextKind.kind,
-      inboundKind.kind,
-      replyKind.kind,
-    ]);
-
-    const contextAtom = createAtom(
-      "atom-root",
-      contextKind.kind,
-      "2026-09-01T00:00:00.000Z",
-      { name: "context" },
-      [],
-    );
-    await database.information.append(contextAtom, []);
-
-    const laterReply = createAtom(
-      "atom-reply-b",
-      replyKind.kind,
-      "2026-09-01T00:02:00.000Z",
-      { text: "b" },
-      [
+      expect(
+        (await database.information.getById(inboundAtom.informationId))
+          ?.references,
+      ).toEqual([
         {
-          relation: "core:caused-by",
+          relation: "core:context",
           informationId: contextAtom.informationId,
         },
-      ],
-    );
-    const earlierReply = createAtom(
-      "atom-reply-a",
-      replyKind.kind,
-      "2026-09-01T00:01:00.000Z",
-      { text: "a" },
-      [
+      ]);
+
+      await database.close();
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "rejects a target kind mismatch",
+    async () => {
+      const database = await createTestingDatabase();
+      await database.migrate();
+      await database.information.synchronizeKinds([
+        contextKind.kind,
+        inboundKind.kind,
+      ]);
+
+      const wrongTarget = createAtom(
+        "atom-wrong-target",
+        inboundKind.kind,
+        "2026-09-01T00:00:00.000Z",
+        { text: "hello" },
+        [
+          {
+            relation: "core:context",
+            informationId: "atom-wrong-context",
+          },
+        ],
+      );
+
+      await database.information.append(
+        createAtom(
+          "atom-wrong-context",
+          inboundKind.kind,
+          "2026-09-01T00:00:00.000Z",
+          { text: "not-context" },
+          [],
+        ),
+        [],
+      );
+
+      await expect(
+        database.information.append(wrongTarget, [
+          {
+            relation: "core:context",
+            targetKinds: [contextKind.kind],
+            required: true,
+            multiple: false,
+          },
+        ]),
+      ).rejects.toBeInstanceOf(InvalidInformationReferenceError);
+
+      await database.close();
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "rejects duplicate information ids",
+    async () => {
+      const database = await createTestingDatabase();
+      await database.migrate();
+      await database.information.synchronizeKinds([contextKind.kind]);
+
+      const atom = createAtom(
+        "atom-duplicate",
+        contextKind.kind,
+        "2026-09-01T00:00:00.000Z",
+        { name: "context" },
+        [],
+      );
+
+      await database.information.append(atom, []);
+      await expect(
+        database.information.append(atom, []),
+      ).rejects.toBeInstanceOf(InformationIdConflictError);
+
+      await database.close();
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "orders reverse-reference reads by atom occurrence and id",
+    async () => {
+      const database = await createTestingDatabase();
+      await database.migrate();
+      await database.information.synchronizeKinds([
+        contextKind.kind,
+        inboundKind.kind,
+        replyKind.kind,
+      ]);
+
+      const contextAtom = createAtom(
+        "atom-root",
+        contextKind.kind,
+        "2026-09-01T00:00:00.000Z",
+        { name: "context" },
+        [],
+      );
+      await database.information.append(contextAtom, []);
+
+      const laterReply = createAtom(
+        "atom-reply-b",
+        replyKind.kind,
+        "2026-09-01T00:02:00.000Z",
+        { text: "b" },
+        [
+          {
+            relation: "core:caused-by",
+            informationId: contextAtom.informationId,
+          },
+        ],
+      );
+      const earlierReply = createAtom(
+        "atom-reply-a",
+        replyKind.kind,
+        "2026-09-01T00:01:00.000Z",
+        { text: "a" },
+        [
+          {
+            relation: "core:caused-by",
+            informationId: contextAtom.informationId,
+          },
+        ],
+      );
+
+      await database.information.append(laterReply, [
         {
           relation: "core:caused-by",
-          informationId: contextAtom.informationId,
+          targetKinds: [contextKind.kind],
+          required: true,
+          multiple: false,
         },
-      ],
-    );
+      ]);
+      await database.information.append(earlierReply, [
+        {
+          relation: "core:caused-by",
+          targetKinds: [contextKind.kind],
+          required: true,
+          multiple: false,
+        },
+      ]);
 
-    await database.information.append(laterReply, [
-      {
+      const replies = await database.information.listByReference({
         relation: "core:caused-by",
-        targetKinds: [contextKind.kind],
-        required: true,
-        multiple: false,
-      },
-    ]);
-    await database.information.append(earlierReply, [
-      {
-        relation: "core:caused-by",
-        targetKinds: [contextKind.kind],
-        required: true,
-        multiple: false,
-      },
-    ]);
+        informationId: contextAtom.informationId,
+      });
 
-    const replies = await database.information.listByReference({
-      relation: "core:caused-by",
-      informationId: contextAtom.informationId,
-    });
+      expect(replies.map((atom) => atom.informationId)).toEqual([
+        earlierReply.informationId,
+        laterReply.informationId,
+      ]);
 
-    expect(replies.map((atom) => atom.informationId)).toEqual([
-      earlierReply.informationId,
-      laterReply.informationId,
-    ]);
+      await database.close();
+    },
+    TEST_TIMEOUT,
+  );
 
-    await database.close();
-  }, TEST_TIMEOUT);
+  it(
+    "rejects two concurrent appends with the same id",
+    async () => {
+      const database = await createTestingDatabase();
+      await database.migrate();
+      await database.information.synchronizeKinds([contextKind.kind]);
 
-  it("rejects two concurrent appends with the same id", async () => {
-    const database = await createTestingDatabase();
-    await database.migrate();
-    await database.information.synchronizeKinds([contextKind.kind]);
+      const atom = createAtom(
+        "atom-race",
+        contextKind.kind,
+        "2026-09-01T00:00:00.000Z",
+        { name: "context" },
+        [],
+      );
 
-    const atom = createAtom(
-      "atom-race",
-      contextKind.kind,
-      "2026-09-01T00:00:00.000Z",
-      { name: "context" },
-      [],
-    );
+      const results = await Promise.allSettled([
+        database.information.append(atom, []),
+        database.information.append(atom, []),
+      ]);
 
-    const results = await Promise.allSettled([
-      database.information.append(atom, []),
-      database.information.append(atom, []),
-    ]);
+      expect(
+        results.filter((result) => result.status === "fulfilled"),
+      ).toHaveLength(1);
+      expect(
+        results.filter((result) => result.status === "rejected"),
+      ).toHaveLength(1);
+      expect(
+        results.find(
+          (result): result is PromiseRejectedResult =>
+            result.status === "rejected",
+        )?.reason,
+      ).toBeInstanceOf(InformationIdConflictError);
 
-    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
-    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
-    expect(
-      results.find((result): result is PromiseRejectedResult => result.status === "rejected")
-        ?.reason,
-    ).toBeInstanceOf(InformationIdConflictError);
+      await database.close();
+    },
+    TEST_TIMEOUT,
+  );
 
-    await database.close();
-  }, TEST_TIMEOUT);
+  it(
+    "keeps the atom and its enabled log projection job in one transaction",
+    async () => {
+      const database = await createTestingDatabase();
+      await database.migrate();
+      await database.information.synchronizeKinds([contextKind.kind]);
+
+      const atom = createAtom(
+        "atom-outbox",
+        contextKind.kind,
+        "2026-09-01T00:00:00.000Z",
+        { name: "context" },
+        [],
+      );
+      await database.information.append(atom, [], {
+        enqueueLogProjection: true,
+      });
+
+      expect(await database.information.get(atom.informationId)).toMatchObject({
+        informationId: atom.informationId,
+      });
+      expect(await database.information.listPendingLogProjections(10)).toEqual([
+        { informationId: atom.informationId, attemptCount: 0 },
+      ]);
+
+      await database.close();
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "returns only existing atoms from getMany in caller order",
+    async () => {
+      const database = await createTestingDatabase();
+      await database.migrate();
+      await database.information.synchronizeKinds([contextKind.kind]);
+
+      const first = createAtom(
+        "atom-many-a",
+        contextKind.kind,
+        "2026-09-01T00:00:00.000Z",
+        { name: "a" },
+        [],
+      );
+      const second = createAtom(
+        "atom-many-b",
+        contextKind.kind,
+        "2026-09-01T00:01:00.000Z",
+        { name: "b" },
+        [],
+      );
+      await database.information.append(first, []);
+      await database.information.append(second, []);
+
+      const results = await database.information.getMany([
+        second.informationId,
+        informationIdSchema.parse("atom-missing"),
+        first.informationId,
+      ]);
+      expect(results.map((atom) => atom.informationId)).toEqual([
+        second.informationId,
+        first.informationId,
+      ]);
+
+      await database.close();
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "retries a failed log projection after the runner is recreated",
+    async () => {
+      const database = await createTestingDatabase();
+      await database.migrate();
+      await database.information.synchronizeKinds([contextKind.kind]);
+
+      const atom = createAtom(
+        "atom-retry-log",
+        contextKind.kind,
+        "2026-09-01T00:00:00.000Z",
+        { name: "retry" },
+        [],
+      );
+      await database.information.append(atom, [], {
+        enqueueLogProjection: true,
+      });
+
+      const failures: string[] = [];
+      const failingRunner = new InformationLogProjectionRunner({
+        repository: database.information,
+        sink: async () => {
+          throw new Error("console is unavailable");
+        },
+        reportFailure: (failure) => {
+          failures.push(failure.errorType);
+        },
+      });
+      await expect(failingRunner.projectPending()).resolves.toBeUndefined();
+      expect(await database.information.get(atom.informationId)).toBeDefined();
+      expect(await database.information.listPendingLogProjections(10)).toEqual([
+        { informationId: atom.informationId, attemptCount: 1 },
+      ]);
+      expect(failures).toEqual(["sink_failed"]);
+
+      const projected: string[] = [];
+      const recoveredRunner = new InformationLogProjectionRunner({
+        repository: database.information,
+        sink: async (projectedAtom) => {
+          projected.push(projectedAtom.informationId);
+        },
+      });
+      await recoveredRunner.projectPending();
+      expect(projected).toEqual([atom.informationId]);
+      expect(await database.information.listPendingLogProjections(10)).toEqual(
+        [],
+      );
+
+      await database.close();
+    },
+    TEST_TIMEOUT,
+  );
 });

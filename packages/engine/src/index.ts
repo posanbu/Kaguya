@@ -38,13 +38,14 @@ export {
 export {
   InformationCore,
   type InformationAtomStore,
+  type InformationAppendOptions,
   type InformationCoreOptions,
+  type InformationLedger,
+  type InformationLogProjectionRunner,
   type InformationReferenceExpectation,
   type InformationReferenceQuery,
 } from "./information-core.js";
-export {
-  InformationKindRegistry,
-} from "./information-kind-registry.js";
+export { InformationKindRegistry } from "./information-kind-registry.js";
 export {
   AbortError,
   RetryableError,
