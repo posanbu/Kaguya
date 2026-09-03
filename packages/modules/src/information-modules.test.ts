@@ -7,8 +7,8 @@
  * `information-kinds.ts`；engine `ModuleHost` 为每一次 register 自动补齐直接的
  * `core:caused-by` 与继承的 `core:context`，因此模块 handler 不伪造这些保留引用。
  * 输入输出与副作用：单元用例使用冻结 atom 与内存 register；集成用例使用真实 Core、宿主和
- * 校验引用规则的内存账本，断言实际 ID、持久化顺序及 context 继承，不访问真实 LLM；schema
- * 断言保护删除的 profile 与 reply target 设置不会重新进入模块契约。
+ * 校验引用规则和结构化 find 的内存账本，断言实际 ID、持久化顺序及 context 继承，
+ * 不访问真实 LLM；schema 断言保护删除的 profile 与 reply target 设置不会重新进入模块契约。
  */
 import {
   type DeepReadonly,
@@ -24,6 +24,7 @@ import {
   defineInformationKind,
   defineInformationModule,
   onInformation,
+  type InformationFindQuery,
   type InformationKindDefinition,
   type InformationModuleHandlerContext,
 } from "@kaguya/sdk";
@@ -145,6 +146,26 @@ class MemoryInformationLedger implements InformationLedger {
       const atom = this.atoms.get(informationId);
       return atom === undefined ? [] : [atom];
     });
+  }
+
+  async find(query: InformationFindQuery) {
+    return [...this.atoms.values()]
+      .filter(
+        (atom) =>
+          (query.kinds === undefined || query.kinds.includes(atom.kind)) &&
+          (query.sources === undefined ||
+            query.sources.includes(atom.source)) &&
+          (query.occurredAfter === undefined ||
+            Date.parse(atom.occurredAt) >= Date.parse(query.occurredAfter)) &&
+          (query.occurredBefore === undefined ||
+            Date.parse(atom.occurredAt) < Date.parse(query.occurredBefore)),
+      )
+      .sort(
+        (left, right) =>
+          Date.parse(left.occurredAt) - Date.parse(right.occurredAt) ||
+          left.informationId.localeCompare(right.informationId),
+      )
+      .slice(0, query.limit);
   }
 
   async query() {

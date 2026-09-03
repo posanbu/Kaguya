@@ -2,7 +2,7 @@
  * 功能概述：本模块承载 PostgreSQL 版信息原子仓储的模式迁移，
  * 包括 migration ledger、kind 注册表、原子表、引用表、日志投影 outbox 与 append-only 触发器。
  * 主要职责：`migrateDatabase` 幂等创建 schema 版本、kind、atom、reference 与日志
- * outbox，并安装拒绝 UPDATE/DELETE 的触发器。
+ * outbox，建立按 kind/source 与发生时间读取的索引，并安装拒绝 UPDATE/DELETE 的触发器。
  * 代码库关系：`KaguyaDatabase.migrate()` 与测试 helper 都调用这里的函数；
  * 仓储逻辑假定这些表、索引与触发器已经存在，并用它们实现事务性写入与只追加约束。
  * 输入输出与副作用：接收 `SqlDatabase` 并在单个事务中执行 DDL、写入版本记录；成功
@@ -10,7 +10,7 @@
  */
 import type { SqlDatabase } from "./driver.js";
 
-const POSTGRES_SCHEMA_VERSION = 2;
+const POSTGRES_SCHEMA_VERSION = 3;
 
 export async function migrateDatabase(database: SqlDatabase): Promise<void> {
   await database.transaction(async (tx) => {
@@ -50,6 +50,9 @@ export async function migrateDatabase(database: SqlDatabase): Promise<void> {
 
       CREATE INDEX IF NOT EXISTS information_atoms_kind_occurred_at_idx
         ON information_atoms (kind, occurred_at, information_id);
+
+      CREATE INDEX IF NOT EXISTS information_atoms_source_occurred_at_idx
+        ON information_atoms (source, occurred_at, information_id);
 
       CREATE INDEX IF NOT EXISTS information_references_target_relation_idx
         ON information_references (target_information_id, relation, information_id, ordinal);

@@ -2,7 +2,7 @@
  * 功能概述：本测试覆盖信息 Core 的启动、注册、definition/消费者身份校验、并发消费者与故障事实边界，
  * 以证明 registry、store 与 bus 组合后的写入路径只信任注册表中的正式定义，
  * 并且不会把可变输入、未注册 kind 或关闭后的调用继续放行。
- * 主要职责：验证最终 `register/on/get/query` API、落账先于广播、引用校验、深冻结、
+ * 主要职责：验证最终 `register/on/get/find/query` API、落账先于广播、引用校验、深冻结、
  * ID 冲突、消费者失败固定分类、抛出型错误 getter、共享 start/close promise、closing
  * 阶段拒绝订阅、关闭等待在途广播及最终日志排空。
  * 代码库关系：`InformationCore` 连接 registry、store 与 bus；这里的测试使用
@@ -21,6 +21,7 @@ import {
 } from "@kaguya/schema";
 import {
   defineInformationKind,
+  type InformationFindQuery,
   type InformationKindDefinition,
 } from "@kaguya/sdk";
 import { describe, expect, it, vi } from "vitest";
@@ -157,6 +158,28 @@ class MemoryInformationStore {
       const atom = this.atoms.get(informationId);
       return atom === undefined ? [] : [atom];
     });
+  }
+
+  async find(
+    query: InformationFindQuery,
+  ): Promise<DeepReadonly<InformationAtom>[]> {
+    return [...this.atoms.values()]
+      .filter(
+        (atom) =>
+          (query.kinds === undefined || query.kinds.includes(atom.kind)) &&
+          (query.sources === undefined ||
+            query.sources.includes(atom.source)) &&
+          (query.occurredAfter === undefined ||
+            Date.parse(atom.occurredAt) >= Date.parse(query.occurredAfter)) &&
+          (query.occurredBefore === undefined ||
+            Date.parse(atom.occurredAt) < Date.parse(query.occurredBefore)),
+      )
+      .sort(
+        (left, right) =>
+          Date.parse(left.occurredAt) - Date.parse(right.occurredAt) ||
+          left.informationId.localeCompare(right.informationId),
+      )
+      .slice(0, query.limit);
   }
 
   async query(): Promise<DeepReadonly<InformationAtom>[]> {

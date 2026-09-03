@@ -1,9 +1,9 @@
 /**
  * 功能概述：本测试覆盖信息原子仓储的 append、查询、引用约束与冲突语义，
  * 先以真实 PostgreSQL 行为锁定 append-only 关系图的读写契约，再交由实现补齐。
- * 主要职责：验证缺失/错误目标、重复 ID、并发写入、引用顺序、反向查询顺序与日志
- * outbox 生命周期、runner 并发去重、短批次并发入队与以真实空批次为终点的排空，
- * 所有读取只使用最终 `get/query` API。
+ * 主要职责：验证缺失/错误目标、重复 ID、并发写入、引用顺序、结构化筛选顺序、
+ * 反向查询顺序与日志 outbox 生命周期、runner 并发去重、短批次并发入队与以真实
+ * 空批次为终点的排空，所有读取只使用最终 `get/getMany/find/query` API。
  * 代码库关系：测试只面向 `createTestingDatabase()` 返回值和 `information`
  * 仓储接口，验证引用顺序、目标 kind 校验、冲突错误与反向引用查询顺序。
  * 输入输出与副作用：每个用例创建、迁移并关闭独立 PGlite 数据库；断言直接观察真实
@@ -70,18 +70,211 @@ function createAtom(
     relation: string;
     informationId: string;
   }[],
+  source = "module:test",
 ) {
   return freezeInformationAtom({
     informationId: informationIdSchema.parse(informationId),
     kind,
     occurredAt,
-    source: "module:test",
+    source,
     payload,
     references: [...references],
   });
 }
 
 describe("information repository", () => {
+  it(
+    "finds atoms by kind and source in chronological order",
+    async () => {
+      const database = await createTestingDatabase();
+      await database.migrate();
+      await database.information.synchronizeKinds([
+        contextKind.kind,
+        inboundKind.kind,
+        replyKind.kind,
+      ]);
+
+      const inbound = createAtom(
+        "atom-find-inbound",
+        inboundKind.kind,
+        "2026-09-03T23:59:00.000Z",
+        { text: "input" },
+        [],
+      );
+      await database.information.append(inbound, []);
+
+      const causedBy = [
+        {
+          relation: "core:caused-by",
+          informationId: inbound.informationId,
+        },
+      ];
+      const expectation = [
+        {
+          relation: "core:caused-by",
+          targetKinds: [inboundKind.kind],
+          required: true,
+          multiple: false,
+        },
+      ];
+      await database.information.append(
+        createAtom(
+          "atom-other-kind",
+          contextKind.kind,
+          "2026-09-04T00:00:00.000Z",
+          { name: "other" },
+          [],
+          "module:reply",
+        ),
+        [],
+      );
+      await database.information.append(
+        createAtom(
+          "atom-reply-later",
+          replyKind.kind,
+          "2026-09-04T00:00:01.000Z",
+          { text: "later" },
+          causedBy,
+          "module:reply",
+        ),
+        expectation,
+      );
+      await database.information.append(
+        createAtom(
+          "atom-reply-earlier",
+          replyKind.kind,
+          "2026-09-04T08:00:00+08:00",
+          { text: "earlier" },
+          causedBy,
+          "module:reply",
+        ),
+        expectation,
+      );
+      await database.information.append(
+        createAtom(
+          "atom-other-source",
+          replyKind.kind,
+          "2026-09-03T23:59:59.000Z",
+          { text: "other source" },
+          causedBy,
+          "module:other",
+        ),
+        expectation,
+      );
+
+      const found = await database.information.find({
+        kinds: [replyKind.kind],
+        sources: ["module:reply"],
+        limit: 10,
+      });
+
+      expect(found.map(({ informationId }) => informationId)).toEqual([
+        "atom-reply-earlier",
+        "atom-reply-later",
+      ]);
+      await database.close();
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "uses a half-open occurredAt interval",
+    async () => {
+      const database = await createTestingDatabase();
+      await database.migrate();
+      await database.information.synchronizeKinds([contextKind.kind]);
+      for (const [informationId, occurredAt] of [
+        ["atom-before-window", "2026-09-04T00:00:00.999Z"],
+        ["atom-at-lower-bound", "2026-09-04T00:00:01.000Z"],
+        ["atom-inside-window", "2026-09-04T00:00:02.000Z"],
+        ["atom-at-upper-bound", "2026-09-04T00:00:03.000Z"],
+      ] as const) {
+        await database.information.append(
+          createAtom(
+            informationId,
+            contextKind.kind,
+            occurredAt,
+            { name: informationId },
+            [],
+          ),
+          [],
+        );
+      }
+
+      const found = await database.information.find({
+        occurredAfter: "2026-09-04T00:00:01.000Z",
+        occurredBefore: "2026-09-04T00:00:03.000Z",
+        limit: 10,
+      });
+
+      expect(found.map(({ informationId }) => informationId)).toEqual([
+        "atom-at-lower-bound",
+        "atom-inside-window",
+      ]);
+      await database.close();
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "applies limit after deterministic ordering",
+    async () => {
+      const database = await createTestingDatabase();
+      await database.migrate();
+      await database.information.synchronizeKinds([
+        inboundKind.kind,
+        replyKind.kind,
+      ]);
+      const inbound = createAtom(
+        "atom-limit-inbound",
+        inboundKind.kind,
+        "2026-09-03T23:59:00.000Z",
+        { text: "input" },
+        [],
+      );
+      await database.information.append(inbound, []);
+      const expectation = [
+        {
+          relation: "core:caused-by",
+          targetKinds: [inboundKind.kind],
+          required: true,
+          multiple: false,
+        },
+      ];
+      for (const [informationId, occurredAt] of [
+        ["atom-reply-later", "2026-09-04T00:00:02.000Z"],
+        ["atom-reply-earlier", "2026-09-04T00:00:01.000Z"],
+      ] as const) {
+        await database.information.append(
+          createAtom(
+            informationId,
+            replyKind.kind,
+            occurredAt,
+            { text: informationId },
+            [
+              {
+                relation: "core:caused-by",
+                informationId: inbound.informationId,
+              },
+            ],
+          ),
+          expectation,
+        );
+      }
+
+      const found = await database.information.find({
+        kinds: [replyKind.kind],
+        limit: 1,
+      });
+
+      expect(found.map(({ informationId }) => informationId)).toEqual([
+        "atom-reply-earlier",
+      ]);
+      await database.close();
+    },
+    TEST_TIMEOUT,
+  );
+
   it(
     "rolls back an atom when a target reference is missing",
     async () => {

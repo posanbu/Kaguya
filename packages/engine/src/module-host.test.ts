@@ -7,7 +7,8 @@
  * start/stop promise、停止与创建竞态、rollback/dispose 全量失败聚合、在途 handler 等待
  * 及 instance source grammar。
  * 代码库关系：覆盖最终 `module-host.ts` 对 SDK `onInformation` 和 Core
- * `on`/`register` 的适配；MemoryLedger 模拟 Core 所要求的 append-only 存储边界。
+ * `on`/`register` 的适配；MemoryLedger 模拟 Core 所要求的 append-only 与结构化只读
+ * 存储边界。
  * 输入输出与副作用：测试只写入进程内账本，注册的 atom 必须先满足引用存在性；每个
  * 宿主在断言后停止，以撤销 Core 订阅并释放模块实例。
  */
@@ -24,6 +25,7 @@ import {
   defineInformationKind,
   defineInformationModule,
   onInformation,
+  type InformationFindQuery,
   type InformationModuleSubscription,
 } from "@kaguya/sdk";
 import { describe, expect, it, vi } from "vitest";
@@ -57,6 +59,26 @@ class MemoryLedger {
       const atom = this.atoms.get(id);
       return atom === undefined ? [] : [atom];
     });
+  }
+
+  async find(query: InformationFindQuery) {
+    return [...this.atoms.values()]
+      .filter(
+        (atom) =>
+          (query.kinds === undefined || query.kinds.includes(atom.kind)) &&
+          (query.sources === undefined ||
+            query.sources.includes(atom.source)) &&
+          (query.occurredAfter === undefined ||
+            Date.parse(atom.occurredAt) >= Date.parse(query.occurredAfter)) &&
+          (query.occurredBefore === undefined ||
+            Date.parse(atom.occurredAt) < Date.parse(query.occurredBefore)),
+      )
+      .sort(
+        (left, right) =>
+          Date.parse(left.occurredAt) - Date.parse(right.occurredAt) ||
+          left.informationId.localeCompare(right.informationId),
+      )
+      .slice(0, query.limit);
   }
 
   async query() {

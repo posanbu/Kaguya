@@ -2,7 +2,7 @@
  * 架构说明：本模块把 registry、store 与 bus 组合成信息 Core，
  * 负责启动前注册同步、注册时的 ID 生成、引用 expectations 传递、并发广播与故障事实。
  * 主要职责：`register` 校验、落账并广播新 atom；`on` 校验非空 typed consumer 身份后订阅；
- * `get`/`getMany`/`query` 只读账本；公开写入和订阅分别只有 `register` 与 typed `on`。
+ * `get`/`getMany`/`find`/`query` 只读账本；公开写入和订阅分别只有 `register` 与 typed `on`。
  * 代码库关系：Core 是信息原子体系的入口编排层，依赖 Registry、Ledger 与 Bus；
  * `information-kinds.ts` 提供唯一的 `consumer.failed` 定义，Runtime 后续复用它。
  * 输入输出与副作用：提交成功才广播当前快照，拒绝的消费者被记录为失败 atom；失败
@@ -23,6 +23,7 @@ import {
   type JsonObject,
 } from "@kaguya/schema";
 import type {
+  InformationFindQuery,
   InformationKindDefinition,
   InformationRegistrationInput,
   InformationReferenceRule,
@@ -81,6 +82,9 @@ export interface InformationLedger {
   ): Promise<DeepReadonly<InformationAtom> | undefined>;
   getMany(
     informationIds: readonly InformationId[],
+  ): Promise<readonly DeepReadonly<InformationAtom>[]>;
+  find(
+    query: InformationFindQuery,
   ): Promise<readonly DeepReadonly<InformationAtom>[]>;
   query(
     query: InformationReferenceQuery,
