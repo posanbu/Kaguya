@@ -5,16 +5,16 @@
 ## 启动
 
 ```bash
-export KAGUYA_GATEWAY_TOKEN="replace-with-at-least-16-characters"
 export KAGUYA_CONFIG_ROOT="/absolute/path/to/kaguya-config"
 pnpm dev
 ```
+
+`KAGUYA_GATEWAY_TOKEN` 可选：未设置时每次启动生成随机 token（日志 `server.token.generated`），Web UI 通过 `GET /api/v1/gateway/token` 自动获取；显式设置（至少 16 字符）可获得跨重启稳定的 token。
 
 开发时 UI、HMR 与 API 共用 `http://127.0.0.1:3000`。生产运行：
 
 ```bash
 pnpm build
-export KAGUYA_GATEWAY_TOKEN="replace-with-at-least-16-characters"
 export KAGUYA_CONFIG_ROOT="/absolute/path/to/kaguya-config"
 pnpm start
 ```
@@ -23,7 +23,7 @@ pnpm start
 
 | 环境变量                             | 默认值                | 约束/用途                                    |
 | ------------------------------------ | --------------------- | -------------------------------------------- |
-| `KAGUYA_GATEWAY_TOKEN`               | 无                    | 必填，至少 16 字符；消息 API Bearer Token    |
+| `KAGUYA_GATEWAY_TOKEN`               | 无                    | 可选；未设时生成并分发给 Web UI；Bearer Token |
 | `KAGUYA_HOST`                        | `127.0.0.1`           | 唯一监听地址                                 |
 | `KAGUYA_PORT`                        | `3000`                | `1..65535`                                   |
 | `KAGUYA_DATABASE_PATH`               | `.data/kaguya.sqlite` | 唯一 Runtime 数据库                          |
@@ -57,12 +57,12 @@ NapCat 配置：
 
 配置页面通过以下接口完成引导：
 
-- `GET /api/v1/setup`：读取 `setup_required`、`restart_required`、`ready`、`invalid` 或 `review_required` 状态；该接口不返回密钥或完整 profile。
+- `GET /api/v1/setup`：读取 `setup_required`、`restart_required`、`ready`、`invalid` 或 `review_required` 状态；该接口不返回 Provider 密钥或完整 profile，但会附带本实例分发的网关 token。
 - `POST /api/v1/setup`：使用网关 Bearer Token 提交或修复配置。请求成功返回 `201` 和 `restartRequired: true`。
 
 提交时必须明确确认暂不配置平台和插件。配置仓库不存在时会创建首个 profile；默认 profile 已存在但不完整时，会通过配置管理器替换其 AI 配置并保留 profile ID 与名称。保存成功后重启 Server，再刷新 Web UI；重启过程会重新加载 profile、模型客户端和平台连接。
 
-配置文件损坏、路径越界、符号链接或权限错误不属于可自动修复的“缺失配置”，Server 会拒绝启动并保留原文件，避免引导流程覆盖需要人工恢复的数据。`KAGUYA_GATEWAY_TOKEN` 仍是启动 HTTP 前必须提供的安全凭据，不能通过未认证的首次配置页面创建。
+配置文件损坏、路径越界、符号链接或权限错误不属于可自动修复的“缺失配置”，Server 会拒绝启动并保留原文件，避免引导流程覆盖需要人工恢复的数据。网关 token 由 Server 在启动时确定：未设置 `KAGUYA_GATEWAY_TOKEN` 时自动生成（日志 `server.token.generated`），Web UI 加载页面时自动获取，配置页面本身不创建 token。注意 token 可通过公开接口 `GET /api/v1/gateway/token` 获取——任何能访问该服务端口（默认 `127.0.0.1`）的客户端都等同于持有 token，绑定其他网络地址时需要知晓这一取舍。
 
 ## 平台入站白名单
 
@@ -74,12 +74,13 @@ ID 会在读取配置时按逗号拆分、去除首尾空白并去重。过滤�
 
 ## 路由
 
-| 方法和路径                 | 认证         | 用途                       |
-| -------------------------- | ------------ | -------------------------- |
-| `GET /` 和静态资源         | 无           | Web UI                     |
-| `GET /healthz`             | 无           | 服务存活检查               |
-| `GET /api/v1/openapi.json` | 无           | OpenAPI 文档               |
-| `POST /api/v1/messages`    | Bearer Token | Web 消息落库并发布模块事件 |
+| 方法和路径                    | 认证         | 用途                       |
+| ----------------------------- | ------------ | -------------------------- |
+| `GET /` 和静态资源            | 无           | Web UI                     |
+| `GET /healthz`                | 无           | 服务存活检查               |
+| `GET /api/v1/openapi.json`    | 无           | OpenAPI 文档               |
+| `GET /api/v1/gateway/token`   | 无           | 获取本实例分发的网关 token |
+| `POST /api/v1/messages`       | Bearer Token | Web 消息落库并发布模块事件 |
 
 生产 SPA fallback 只接受带 `text/html` 的 GET 页面请求，且显式排除 `/api/*` 和 `/healthz`。未知 API 仍返回结构化 `404 not_found`。
 
@@ -96,6 +97,8 @@ ID 会在读取配置时按逗号拆分、去除首尾空白并去重。过滤�
 - `text` trim 后必须非空，最多 131072 个 Unicode code point，工作流保留原始空白；
 - 请求体最多 256 KiB；
 - 任何额外字段都会被严格 schema 拒绝。
+
+未显式设置 `KAGUYA_GATEWAY_TOKEN` 时，可先 `curl http://127.0.0.1:3000/api/v1/gateway/token` 读取当前实例的 token。
 
 ```bash
 curl http://127.0.0.1:3000/api/v1/messages \

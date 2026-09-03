@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 
 import { KaguyaDatabase } from "@kaguya/database";
+import { normalizeWebInboundMessage } from "@kaguya/platform-adapters";
 import { KaguyaRuntime } from "@kaguya/runtime";
 
 const defaultDatabasePath = fileURLToPath(
@@ -12,11 +13,17 @@ const databasePath =
 async function main(): Promise<void> {
   const runtime = new KaguyaRuntime({ databasePath });
   await runtime.start();
-  const result = await runtime.dispatch({
-    kind: "web",
-    requestId: `demo-${Date.now()}`,
-    text: "Is tonight good for watching the moon?",
-  });
+  const inbound = normalizeWebInboundMessage(
+    {
+      requestId: `demo-${Date.now()}`,
+      text: "Is tonight good for watching the moon?",
+    },
+    { adapterId: "demo.web.main" },
+  );
+  if (inbound === undefined) {
+    throw new Error("Demo web message is invalid");
+  }
+  const result = await runtime.dispatch({ kind: "platform", message: inbound });
   await runtime.close();
 
   const database = KaguyaDatabase.open(databasePath);

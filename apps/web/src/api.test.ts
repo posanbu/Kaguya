@@ -23,6 +23,7 @@ import {
   deleteProfile,
   GatewayRequestError,
   getConfigurationStatus,
+  getGatewayToken,
   getProfile,
   listProfiles,
   initializeConfiguration,
@@ -82,24 +83,33 @@ const replacement = {
 } as const;
 
 describe("sendMessage", () => {
-  it("sends the gateway message contract and returns the request id", async () => {
-    const request = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(
-        Response.json(
-          { data: { status: "accepted", requestId: "request-1" } },
-          { status: 202 },
-        ),
-      );
+  it("sends the gateway message contract and returns the receipt", async () => {
+    const request = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json(
+        {
+          data: {
+            status: "accepted",
+            requestId: "request-1",
+          },
+        },
+        { status: 202 },
+      ),
+    );
 
     await expect(
       sendMessage(config, { text: " Hello " }, request),
-    ).resolves.toEqual({ status: "accepted", requestId: "request-1" });
+    ).resolves.toEqual({
+      status: "accepted",
+      requestId: "request-1",
+    });
     expect(request).toHaveBeenCalledWith("/api/v1/messages", {
       method: "POST",
       headers: {
         authorization: "Bearer test-gateway-token",
         "content-type": "application/json",
+        "x-request-id": expect.stringMatching(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u,
+        ),
       },
       body: JSON.stringify({ text: " Hello " }),
     });
@@ -178,6 +188,39 @@ describe("checkGatewayHealth", () => {
   });
 });
 
+describe("getGatewayToken", () => {
+  it("reads the token distributed by the server", async () => {
+    const request = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({ data: { gatewayToken: "distributed-token" } }),
+    );
+
+    await expect(getGatewayToken(request)).resolves.toBe(
+      "distributed-token",
+    );
+    expect(request).toHaveBeenCalledWith("/api/v1/gateway/token", {
+      method: "GET",
+    });
+  });
+
+  it("rejects an unavailable or malformed token response", async () => {
+    const unavailable = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json({ error: {} }, { status: 503 }));
+    await expect(getGatewayToken(unavailable)).rejects.toMatchObject({
+      code: "gateway_token_failed",
+      status: 503,
+    });
+
+    const malformed = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json({ data: { gatewayToken: "" } }));
+    await expect(getGatewayToken(malformed)).rejects.toMatchObject({
+      code: "gateway_token_failed",
+      status: 200,
+    });
+  });
+});
+
 describe("configuration setup", () => {
   it("reads anonymous setup status with selected profile metadata", async () => {
     const request = vi.fn<typeof fetch>().mockResolvedValue(
@@ -193,6 +236,7 @@ describe("configuration setup", () => {
               updatedAt: "2026-08-30T00:00:00.000Z",
             },
           ],
+          gatewayToken: "distributed-token",
           issues: [
             {
               id: "default-provider-missing",
@@ -222,6 +266,7 @@ describe("configuration setup", () => {
           updatedAt: "2026-08-30T00:00:00.000Z",
         },
       ],
+      gatewayToken: "distributed-token",
       issues: [
         {
           id: "default-provider-missing",

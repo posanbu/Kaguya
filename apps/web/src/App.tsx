@@ -2,8 +2,9 @@
  * 功能概述：本文件承载 WebUI 的顶层状态机，在匿名 setup 状态、Profile 管理、
  * 待重启提示与消息聊天之间做显式切换，落实“全局 selected Profile 唯一生效、
  * 切换后必须重启 Runtime”的产品契约。
- * 主要职责：`App` 负责首次读取 `/api/v1/setup`、保存网关 token、根据 selected
- * Profile 的 readiness 决定当前视图，并在 ready 状态下提供聊天入口与 Settings
+ * 主要职责：`App` 负责首次读取 `/api/v1/setup`（并从中获取服务端分发的网关
+ * token）、根据 selected Profile 的 readiness 决定当前视图，并在 ready 状态下
+ * 提供聊天入口与 Settings
  * 按钮；`ProfileManagementScreen` 负责展示 Profile 元数据列表、按 ID 加载完整
  * Profile、独立执行 create/replace/select/delete 动作，并在切换 Profile 或离开
  * 管理页时清空包含 secret 的已加载正文与编辑字段；其余小组件负责重启提示、
@@ -11,8 +12,9 @@
  * 代码库关系：本文件消费 `api.ts` 的匿名状态、消息接口与 Profile Registry 管理
  * API，以及 `profile-editor.ts` 的纯函数合并逻辑；样式由同目录 `styles.css`
  * 提供，服务端实现位于 `apps/server/src/app.ts` 与 `setup.ts`。
- * 输入输出与副作用：页面会读写 `sessionStorage` 里的网关 token；所有 Profile
- * 修改都通过 HTTP 请求落到服务端，不在浏览器端推断默认 Profile；当 selected
+ * 输入输出与副作用：网关 token 由服务端在启动时分发、页面加载时自动获取，
+ * 页面不持久化；所有 Profile 修改都通过 HTTP 请求落到服务端，不在浏览器端
+ * 推断默认 Profile；当 selected
  * Profile 已 ready 且本次 replace/select 改变冻结运行配置时，本文件只切到
  * restart 视图提示用户重启，不做热切换。
  */
@@ -57,8 +59,6 @@ import {
   type ProfileEditorFields,
 } from "./profile-editor.js";
 
-const TOKEN_KEY = "kaguya.gatewayToken";
-
 type DeliveryState = "sending" | "accepted" | "failed";
 type HealthState = "idle" | "checking" | "online" | "offline";
 type ConfigurationView = "checking" | "profiles" | "restart" | "chat" | "error";
@@ -81,15 +81,12 @@ interface ClearedLoadedProfileStateSnapshot {
 }
 
 export function App() {
-  const [token, setToken] = useState(() =>
-    readStorage(sessionStorage, TOKEN_KEY, ""),
-  );
+  const [token, setToken] = useState("");
   const [configurationView, setConfigurationView] =
     useState<ConfigurationView>("checking");
   const [configurationStatus, setConfigurationStatus] =
     useState<ConfigurationStatus>();
   const [configurationError, setConfigurationError] = useState<string>();
-  const [showToken, setShowToken] = useState(false);
   const [healthState, setHealthState] = useState<HealthState>("idle");
   const [draft, setDraft] = useState("");
   const [messages, setMessages] = useState<readonly ChatMessage[]>([]);
@@ -123,6 +120,7 @@ export function App() {
         if (!active) {
           return;
         }
+        setToken(status.gatewayToken);
         setConfigurationStatus(status);
         setConfigurationView(
           deriveConfigurationView(status, "checking", false),
@@ -141,14 +139,9 @@ export function App() {
     };
   }, []);
 
-  const persistConnection = () => {
-    sessionStorage.setItem(TOKEN_KEY, token);
-  };
-
   const checkConnection = async () => {
     setHealthState("checking");
     setFormError(undefined);
-    persistConnection();
     try {
       await checkGatewayHealth();
       setHealthState("online");
@@ -164,7 +157,6 @@ export function App() {
       return;
     }
 
-    persistConnection();
     setFormError(undefined);
     const text = draft;
     const id = crypto.randomUUID();
@@ -227,10 +219,6 @@ export function App() {
       <ProfileManagementScreen
         token={token}
         initialStatus={configurationStatus}
-        onTokenChange={(value) => {
-          setToken(value);
-          sessionStorage.setItem(TOKEN_KEY, value);
-        }}
         onStatusChange={(status) => {
           setConfigurationStatus(status);
         }}
@@ -282,29 +270,6 @@ export function App() {
               <span>{healthLabel(healthState)}</span>
             </button>
           </div>
-
-          <label className="field">
-            <span>Bearer Token</span>
-            <div className="password-field">
-              <input
-                type={showToken ? "text" : "password"}
-                value={token}
-                onChange={(event) => setToken(event.target.value)}
-                onBlur={persistConnection}
-                placeholder="输入服务令牌"
-                autoComplete="current-password"
-              />
-              <button
-                type="button"
-                className="icon-button"
-                onClick={() => setShowToken((current) => !current)}
-                aria-label={showToken ? "隐藏令牌" : "显示令牌"}
-                title={showToken ? "隐藏令牌" : "显示令牌"}
-              >
-                {showToken ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
-            </div>
-          </label>
 
           <div className="boundary-note">
             <p>当前服务仅接受消息。</p>
@@ -396,7 +361,6 @@ export function App() {
 function ProfileManagementScreen({
   token,
   initialStatus,
-  onTokenChange,
   onStatusChange,
   onReloadStatus,
   onClose,
@@ -404,7 +368,6 @@ function ProfileManagementScreen({
 }: {
   readonly token: string;
   readonly initialStatus: ConfigurationStatus | undefined;
-  readonly onTokenChange: (value: string) => void;
   readonly onStatusChange: (status: ConfigurationStatus) => void;
   readonly onReloadStatus: (options?: {
     readonly keepProfilesOpen?: boolean;
@@ -529,11 +492,7 @@ function ProfileManagementScreen({
     setOpenedProfileId(profileId);
     clearLoadedProfileState();
     setPanelError(undefined);
-    setNotice(
-      token.trim().length === 0
-        ? "Enter the gateway token to load this profile."
-        : undefined,
-    );
+    setNotice(undefined);
   };
 
   const handleCreateProfile = async () => {
@@ -790,17 +749,6 @@ function ProfileManagementScreen({
               remain separate actions.
             </p>
 
-            <label className="field">
-              <span>Gateway token</span>
-              <input
-                type="password"
-                value={token}
-                onChange={(event) => onTokenChange(event.target.value)}
-                autoComplete="current-password"
-                placeholder="KAGUYA_GATEWAY_TOKEN"
-              />
-            </label>
-
             {panelError ? (
               <div className="error-banner" role="alert">
                 <AlertCircle size={17} />
@@ -825,11 +773,7 @@ function ProfileManagementScreen({
             loadedProfile === undefined &&
             !loadingProfile ? (
               <div className="profile-placeholder">
-                <p>
-                  {token.trim().length === 0
-                    ? "Enter the gateway token to load this profile body."
-                    : "Select a profile again if loading failed."}
-                </p>
+                <p>Select a profile again if loading failed.</p>
               </div>
             ) : null}
 
@@ -1227,14 +1171,6 @@ function healthLabel(state: HealthState): string {
     return "连接失败";
   }
   return "检测连接";
-}
-
-function readStorage(storage: Storage, key: string, fallback: string): string {
-  try {
-    return storage.getItem(key) ?? fallback;
-  } catch {
-    return fallback;
-  }
 }
 
 function formatTime(value: Date): string {

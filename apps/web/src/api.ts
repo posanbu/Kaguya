@@ -120,6 +120,7 @@ export interface ConfigurationStatus {
     | "review_required";
   readonly selectedProfileId: string;
   readonly profiles: readonly ProfileMetadata[];
+  readonly gatewayToken: string;
   readonly issues?: readonly ConfigurationIssue[];
   readonly warnings?: readonly ConfigurationWarning[];
 }
@@ -336,6 +337,31 @@ export async function deleteProfile(
   );
 }
 
+export async function getGatewayToken(
+  fetchImplementation: typeof fetch = fetch,
+): Promise<string> {
+  const response = await requestJson(
+    "/api/v1/gateway/token",
+    { method: "GET" },
+    fetchImplementation,
+  );
+  const payload = await readJson(response);
+  if (
+    !response.ok ||
+    !isRecord(payload) ||
+    !isRecord(payload.data) ||
+    typeof payload.data.gatewayToken !== "string" ||
+    payload.data.gatewayToken.length === 0
+  ) {
+    throw new GatewayRequestError(
+      `无法获取服务令牌（HTTP ${response.status}）`,
+      "gateway_token_failed",
+      response.status,
+    );
+  }
+  return payload.data.gatewayToken;
+}
+
 export async function checkGatewayHealth(
   fetchImplementation: typeof fetch = fetch,
 ): Promise<void> {
@@ -376,7 +402,10 @@ export async function sendMessage(
     "/api/v1/messages",
     {
       method: "POST",
-      headers: jsonHeaders(token),
+      headers: {
+        ...jsonHeaders(token),
+        "x-request-id": crypto.randomUUID(),
+      },
       body: JSON.stringify({ text: input.text }),
     },
     fetchImplementation,
@@ -590,6 +619,8 @@ function isConfigurationStatusResponse(
   return (
     typeof value.data.selectedProfileId === "string" &&
     isProfileMetadataArray(value.data.profiles) &&
+    typeof value.data.gatewayToken === "string" &&
+    value.data.gatewayToken.length > 0 &&
     isOptionalConfigurationIssueArray(value.data.issues) &&
     isOptionalConfigurationWarningArray(value.data.warnings)
   );

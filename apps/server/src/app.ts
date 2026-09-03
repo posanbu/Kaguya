@@ -4,7 +4,8 @@
  * Runtime 消息入口；它是“selected Profile 唯一生效”服务端约束的 HTTP 落点。
  * 主要职责：`createHttpApplication` 统一注册 CORS、限流、OpenAPI 与错误处理，
  * 再根据 `runtime` 与 `setup` 是否存在决定 ready 模式和 setup 模式的可见路由；
- * `/api/v1/setup` 现在只返回无 secret 的 readiness 元数据，Profile 的创建、读取、
+ * `/api/v1/setup` 返回无 secret 的 readiness 元数据，以及本实例分发的网关 token，
+ * 供 Web UI 加载页面时自动取用；Profile 的创建、读取、
  * 完整替换、显式选择与删除分别由 `/api/v1/profiles*` 路由承载，并统一通过
  * `requireManagementToken` 在任何路径/正文校验前拒绝未授权请求。
  * 代码库关系：本模块消费 `setup.ts` 的 `ConfigurationManagement` 门面与
@@ -28,7 +29,6 @@ import {
   profileIdSchema,
 } from "@kaguya/config";
 import { runWithLogContext } from "@kaguya/logger";
-import type { RuntimeWebMessage } from "@kaguya/runtime";
 import { z } from "@kaguya/schema";
 import Fastify, {
   LogController,
@@ -40,6 +40,7 @@ import Fastify, {
 
 import type { ServerConfig } from "./config.js";
 import type { ConfigurationManagement } from "./setup.js";
+import type { WebMessageGateway } from "./web-gateway.js";
 
 const MAX_MESSAGE_TEXT_LENGTH = 131_072;
 const MAX_REQUEST_ID_LENGTH = 128;
@@ -275,7 +276,7 @@ const setupStatusResponseJsonSchema = {
     data: {
       type: "object",
       additionalProperties: false,
-      required: ["status", "selectedProfileId", "profiles"],
+      required: ["status", "selectedProfileId", "profiles", "gatewayToken"],
       properties: {
         status: {
           type: "string",
@@ -292,6 +293,7 @@ const setupStatusResponseJsonSchema = {
           type: "array",
           items: profileMetadataJsonSchema,
         },
+        gatewayToken: { type: "string", minLength: 1 },
         issues: {
           type: "array",
           items: configurationIssueJsonSchema,
@@ -300,6 +302,22 @@ const setupStatusResponseJsonSchema = {
           type: "array",
           items: configurationIssueJsonSchema,
         },
+      },
+    },
+  },
+} as const;
+
+const gatewayTokenResponseJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["data"],
+  properties: {
+    data: {
+      type: "object",
+      additionalProperties: false,
+      required: ["gatewayToken"],
+      properties: {
+        gatewayToken: { type: "string", minLength: 1 },
       },
     },
   },
@@ -395,13 +413,9 @@ const errorResponseJsonSchema = {
 
 export interface CreateHttpApplicationOptions {
   config: ServerConfig;
-  runtime?: RuntimeDispatcher;
+  webGateway?: WebMessageGateway;
   setup?: ConfigurationManagement;
   logger?: FastifyBaseLogger;
-}
-
-export interface RuntimeDispatcher {
-  dispatch(message: RuntimeWebMessage): Promise<unknown>;
 }
 
 export async function createHttpApplication(
@@ -420,6 +434,7 @@ export async function createHttpApplication(
     ajv: {
       customOptions: {
         removeAdditional: false,
+        coerceTypes: false,
       },
     },
   });
@@ -495,9 +510,26 @@ export async function createHttpApplication(
         },
       },
     },
-    async () => ({
-      data: (await options.setup?.inspect()) ?? readySetupStatus(),
-    }),
+    async () => {
+      const status = (await options.setup?.inspect()) ?? readySetupStatus();
+      return { data: { ...status, gatewayToken: options.config.gatewayToken } };
+    },
+  );
+
+  app.get(
+    "/api/v1/gateway/token",
+    {
+      config: { rateLimit: false },
+      schema: {
+        tags: ["System"],
+        summary:
+          "Fetch the gateway token distributed by this server instance",
+        response: {
+          200: gatewayTokenResponseJsonSchema,
+        },
+      },
+    },
+    async () => ({ data: { gatewayToken: options.config.gatewayToken } }),
   );
 
   app.get(
@@ -695,35 +727,27 @@ export async function createHttpApplication(
     },
     async (request, reply) => {
       const parsed = messageRequestSchema.parse(request.body);
-      const runtime = options.runtime;
-      if (runtime === undefined) {
-        throw new ApiGatewayError(
-          options.setup === undefined
-            ? "core_unavailable"
-            : "configuration_setup_required",
-          options.setup === undefined
-            ? "Core message ingress is not configured"
-            : "Configuration must be completed before messages can be processed",
-          503,
-        );
+      const webGateway = options.webGateway;
+      if (webGateway === undefined) {
+        throw coreUnavailableError(options.setup);
       }
-
-      return runWithLogContext({}, async () => {
-        await runtime.dispatch({
-          kind: "web",
-          text: parsed.text,
+      webGateway.ingest({
+        text: parsed.text,
+        requestId: request.id,
+      });
+      request.log.info(
+        {
+          event: "http.message.accepted",
           requestId: request.id,
-        });
-        request.log.info(
-          { event: "http.message.accepted" },
-          "Message accepted by Kaguya Runtime",
-        );
-        return reply.code(202).send({
-          data: {
-            status: "accepted",
-            requestId: request.id,
-          },
-        });
+          traceId: `web:${request.id}`,
+        },
+        "Message accepted by Web gateway",
+      );
+      return reply.code(202).send({
+        data: {
+          status: "accepted",
+          requestId: request.id,
+        },
       });
     },
   );
@@ -821,6 +845,18 @@ class ApiGatewayError extends Error {
     super(message);
     this.name = "ApiGatewayError";
   }
+}
+
+function coreUnavailableError(
+  setup: ConfigurationManagement | undefined,
+): ApiGatewayError {
+  return new ApiGatewayError(
+    setup === undefined ? "core_unavailable" : "configuration_setup_required",
+    setup === undefined
+      ? "Core message ingress is not configured"
+      : "Configuration must be completed before messages can be processed",
+    503,
+  );
 }
 
 function requireManagementToken(expectedToken: string) {

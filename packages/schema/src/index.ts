@@ -1,6 +1,32 @@
+/**
+ * 架构说明：本入口聚合 schema 包的稳定公开 API，既向下游导出旧有记录
+ * 契约，也暴露信息原子与 JSON 边界工具，作为跨包 wire contract 的单一入口。
+ * 代码库关系：`packages/config`、`packages/modules`、`packages/runtime` 与其他
+ * 消费者通过此文件获取类型与 schema；在 Task 11 删除旧记录前，这里必须继续
+ * 保留旧导出，避免下游编译中断。
+ */
 import { z } from "zod";
 
 export { z };
+
+export {
+  freezeInformationAtom,
+  informationAtomSchema,
+  informationIdSchema,
+  informationReferenceSchema,
+  jsonObjectSchema,
+  jsonValueSchema,
+  parseInformationAtom,
+} from "./information.js";
+export type {
+  DeepReadonly,
+  InformationAtom,
+  InformationId,
+  InformationReference,
+  JsonObject,
+  JsonPrimitive,
+  JsonValue,
+} from "./information.js";
 
 export interface EventEnvelope<TType = string, TPayload = unknown> {
   id: string;
@@ -37,6 +63,7 @@ export type MessageRecord = z.infer<typeof messageRecordSchema>;
 export const platformDestinationSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("private"), userId: z.string().min(1) }).strict(),
   z.object({ kind: z.literal("group"), groupId: z.string().min(1) }).strict(),
+  z.object({ kind: z.literal("web") }).strict(),
 ]);
 
 export type PlatformDestination = z.infer<typeof platformDestinationSchema>;
