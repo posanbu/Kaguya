@@ -63,9 +63,9 @@ describe("NapCatActionClient", () => {
       timeoutMs: 1000,
     });
 
-    const promise = client.sendTextReply(
+    const promise = client.sendMessage(
       { kind: "private", userId: "112233" },
-      "hi",
+      { kind: "text", text: "hi" },
     );
 
     expect(transport.sent).toEqual([
@@ -104,9 +104,9 @@ describe("NapCatActionClient", () => {
       timeoutMs: 1000,
     });
 
-    const promise = client.sendTextReply(
+    const promise = client.sendMessage(
       { kind: "group", groupId: "778899" },
-      "nope",
+      { kind: "text", text: "nope" },
     );
     transport.receive({
       status: "failed",
@@ -178,9 +178,9 @@ it("supports an action client and adapter sharing one transport", async () => {
   });
 
   await adapter.start();
-  const receiptPromise = client.sendTextReply(
+  const receiptPromise = client.sendMessage(
     { kind: "private", userId: "112233" },
-    "hi",
+    { kind: "text", text: "hi" },
   );
   transport.receive({
     post_type: "message",
@@ -217,7 +217,10 @@ it("returns a failed receipt when a NapCat action times out", async () => {
   });
 
   await expect(
-    client.sendTextReply({ kind: "group", groupId: "778899" }, "later"),
+    client.sendMessage(
+      { kind: "group", groupId: "778899" },
+      { kind: "text", text: "later" },
+    ),
   ).resolves.toMatchObject({
     ok: false,
     adapterId: "napcat.qq.main",
@@ -235,9 +238,9 @@ it("returns failed receipts when the NapCat transport closes", async () => {
     timeoutMs: 1000,
   });
 
-  const receiptPromise = client.sendTextReply(
+  const receiptPromise = client.sendMessage(
     { kind: "private", userId: "112233" },
-    "during-close",
+    { kind: "text", text: "during-close" },
   );
   transport.close();
 

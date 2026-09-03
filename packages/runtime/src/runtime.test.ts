@@ -318,10 +318,7 @@ describe("KaguyaRuntime", () => {
       expect(result.deliveries).toEqual([
         expect.objectContaining({ ok: true, platformMessageId: "sent-1" }),
       ]);
-      expect(result.delivery).toMatchObject({
-        ok: true,
-        platformMessageId: "sent-1",
-      });
+      expect(result).not.toHaveProperty("delivery");
       expect(sendMessage).toHaveBeenCalledWith(
         { kind: "web" },
         { kind: "text", text: "It is a lovely night for watching the moon." },
@@ -407,6 +404,11 @@ describe("KaguyaRuntime", () => {
       expect(count("core.message.assistant.text")).toBe(2);
       expect(count("core.delivery.requested")).toBe(2);
       expect(sendMessage).toHaveBeenCalledTimes(2);
+      expect(sendMessage).toHaveBeenCalledWith(
+        { kind: "group", groupId: "web-room" },
+        expect.any(Object),
+        { rootInformationId: result.rootInformationId },
+      );
       for (const kind of [
         "core.llm.completed",
         "core.message.assistant.text",

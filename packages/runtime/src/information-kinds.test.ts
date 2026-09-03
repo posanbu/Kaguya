@@ -61,6 +61,39 @@ describe("runtime information kinds", () => {
     expect(parsed.prompt.fragments[0]?.metadata).toEqual({ version: 2 });
   });
 
+  it("rejects profile identity from LLM information metadata", () => {
+    expect(() =>
+      llmRequestedInformationKind.payloadSchema.parse({
+        kind: "reply",
+        modelId: "model-heavy",
+        workflowId: "message-module-pipeline",
+        nodeId: "reply",
+        originatingModuleInstanceId: "reply.one",
+        prompt: {
+          kind: "reply",
+          text: "hello",
+          fragments: [
+            {
+              id: "template-1",
+              source: "template",
+              priority: 10,
+              content: "hello",
+              metadata: { profileId: "must-not-be-an-atom-field" },
+            },
+          ],
+          provenance: [
+            {
+              fragmentId: "template-1",
+              source: "template",
+              priority: 10,
+              contentDigest: "sha256:template-1",
+            },
+          ],
+        },
+      }),
+    ).toThrow(/profileId/);
+  });
+
   it("aggregates every owned definition exactly once", () => {
     expect(builtInInformationKinds.map(({ kind }) => kind)).toEqual([
       "core.runtime.context",

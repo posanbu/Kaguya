@@ -3,8 +3,9 @@
  * `KaguyaRuntime` ingress。
  * 主要职责：稳定 re-export，不创建数据库、Core、模块或 transport；事件 dispatch、
  * workflow 和旧 service locator 已从公共面删除。
- * 代码库关系：apps/server、demo 和 platform adapters 从包入口消费 Runtime；所有入站
- * 数据都通过 `InformationIngress.submit`，无需事件桥接或重复 definition。
+ * 代码库关系：apps/server、demo 和 platform adapters 从包入口消费 Runtime；本 barrel
+ * 依次重导出 allowlist、kind、lifecycle 与组合 Runtime，所有入站数据都通过
+ * `InformationIngress.submit`，无需事件桥接或重复 definition。
  * 输入输出与副作用：仅静态导出符号，无运行时 I/O；所有 kind definition 保持其原始对象身份。
  */
 export * from "./gateway-allowlist.js";

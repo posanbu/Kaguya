@@ -6,7 +6,8 @@
  * 内部 executor 将模块 tier 解析为无持久化 client，再交给原子 lifecycle。
  * 代码库关系：依赖 `KaguyaDatabase`、Engine InformationCore/ModuleHost、modules 拥有的
  * kind/模块工厂和 Runtime 自有 lifecycle/result kind；Task 5 的 Gateway/adapter 只需持有 ingress。
- * 输入输出与副作用：submit 返回 context 根 `informationId` 与本次调用实际收到的安全 receipt；
+ * 输入输出与副作用：submit 返回 context 根 `informationId` 与本次调用实际收到的安全 receipts，
+ * 不保留单数 delivery 兼容别名；
  * 不生成 trace/message/event ID，不写旧 SQLite repositories。starting 期间的 close 会先等待或
  * 取消共享启动任务，再执行一次资源清理；仅关闭由 databaseUrl 创建的连接，注入数据库归调用方。
  */
@@ -466,11 +467,9 @@ export class KaguyaRuntime implements InformationIngress {
         ],
       });
       const deliveries = Object.freeze([...receipts]);
-      const delivery = deliveries.at(-1);
       return {
         rootInformationId: context.informationId,
         deliveries,
-        ...(delivery === undefined ? {} : { delivery }),
       };
     } finally {
       this.#deliveriesByContext.delete(context.informationId);

@@ -90,12 +90,14 @@ export class ModuleHost {
           instanceId: activation.instanceId,
           settings: activation.settings,
         });
-        this.validateSubscriptions(activation.definition, instance);
-        created.push({
+        const active = {
           definition: activation.definition,
           instanceId: activation.instanceId,
           instance,
-        });
+        };
+        // create 已取得资源后，任何本地校验失败都必须纳入回滚集合。
+        created.push(active);
+        this.validateSubscriptions(activation.definition, instance);
       }
 
       for (const module of created) {

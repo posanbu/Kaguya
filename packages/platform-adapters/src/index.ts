@@ -17,7 +17,6 @@ export type {
   PlatformMessageTarget,
   PlatformName,
   PlatformOutboundTransport,
-  PlatformReplySender,
 } from "./types.js";
 export {
   buildOneBotSendAction,

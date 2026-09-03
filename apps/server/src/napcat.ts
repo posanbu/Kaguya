@@ -1,6 +1,7 @@
 /**
  * 功能概述：在 Server 侧组合 NapCat WebSocket JSON transport、OneBot adapter、
- * action client 与可重连 supervisor，入站端只接收窄 `InformationIngress`。
+ * action client 与可重连 supervisor，入站端只接收窄 `InformationIngress`，出站只实现
+ * `PlatformOutboundTransport.sendMessage`。
  * 主要职责：`WebSocketJsonTransport` 处理 token URL、JSON frame 与 close/error；
  * `NapCatConnectionSupervisor` 创建、退役和重建整条连接，同时实现 Runtime 的出站 transport；
  * `createNapCatSupervisor` 将入站 frame 直接交给 ingress，并为连接/提交失败记录安全上下文。
@@ -17,7 +18,6 @@ import {
   type PlatformDeliveryReceipt,
   type PlatformMessageTarget,
   type PlatformOutboundTransport,
-  type PlatformReplySender,
 } from "@kaguya/platform-adapters";
 import type { OutboundMessageContent } from "@kaguya/schema";
 import type { KaguyaLogger } from "@kaguya/logger";
@@ -80,7 +80,7 @@ export interface NapCatManagedAdapter {
 
 export interface NapCatConnection {
   readonly transport: JsonMessageTransport;
-  readonly sender: PlatformReplySender | PlatformOutboundTransport;
+  readonly sender: PlatformOutboundTransport;
   readonly adapter: NapCatManagedAdapter;
 }
 
@@ -94,9 +94,7 @@ export interface NapCatConnectionSupervisorOptions {
   readonly onConnectionError?: (error: unknown) => void;
 }
 
-export class NapCatConnectionSupervisor
-  implements PlatformReplySender, PlatformOutboundTransport
-{
+export class NapCatConnectionSupervisor implements PlatformOutboundTransport {
   private connection: NapCatConnection | undefined;
   private reconnectTimer: NodeJS.Timeout | undefined;
   private readonly retirements = new Map<NapCatConnection, Promise<void>>();
@@ -126,14 +124,6 @@ export class NapCatConnectionSupervisor
     await Promise.allSettled([...this.retirements.values()]);
   }
 
-  async sendTextReply(
-    target: PlatformMessageTarget,
-    text: string,
-    metadata?: Record<string, unknown>,
-  ): Promise<PlatformDeliveryReceipt> {
-    return this.sendMessage(target, { kind: "text", text }, metadata);
-  }
-
   async sendMessage(
     target: PlatformMessageTarget,
     message: OutboundMessageContent,
@@ -149,10 +139,7 @@ export class NapCatConnectionSupervisor
         error: "NapCat connection unavailable",
       };
     }
-    if ("sendMessage" in sender) {
-      return sender.sendMessage(target, message, metadata);
-    }
-    return sender.sendTextReply(target, message.text, metadata);
+    return sender.sendMessage(target, message, metadata);
   }
 
   private async connect(): Promise<void> {

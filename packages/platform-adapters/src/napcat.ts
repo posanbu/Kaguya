@@ -1,7 +1,7 @@
 /**
  * 功能概述：实现 NapCat/OneBot 的出站 action client 与入站 adapter，两者可安全
  * 共享一个 JSON transport；入站端只持有 `InformationIngress`，不接触 Runtime 其他能力。
- * 主要职责：`NapCatActionClient` 编号 echo、匹配成功/失败回执、处理超时与断线；
+ * 主要职责：`NapCatActionClient.sendMessage` 编号 echo、匹配成功/失败回执、处理超时与断线；
  * `NapCatOneBotAdapter` 正规化 frame、过滤 self ID/action response、调用 `ingress.submit`，
  * 并在 stop 时停止接收、关闭 transport、排空已提交任务。
  * 代码库关系：`onebot.ts` 提供正规化/action builder，Server `napcat.ts` 提供
@@ -16,7 +16,6 @@ import type {
   PlatformDeliveryReceipt,
   PlatformMessageTarget,
   PlatformOutboundTransport,
-  PlatformReplySender,
 } from "./types.js";
 import {
   buildOneBotSendAction,
@@ -67,9 +66,7 @@ interface PendingAction {
   readonly timer: NodeJS.Timeout;
 }
 
-export class NapCatActionClient
-  implements PlatformReplySender, PlatformOutboundTransport
-{
+export class NapCatActionClient implements PlatformOutboundTransport {
   private readonly pending = new Map<string, PendingAction>();
 
   constructor(private readonly options: NapCatActionClientOptions) {
@@ -79,13 +76,6 @@ export class NapCatActionClient
     options.transport.onClose((error) => {
       this.rejectAll(error?.message ?? "NapCat connection closed");
     });
-  }
-
-  async sendTextReply(
-    target: PlatformMessageTarget,
-    text: string,
-  ): Promise<PlatformDeliveryReceipt> {
-    return this.sendMessage(target, { kind: "text", text });
   }
 
   async sendMessage(

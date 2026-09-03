@@ -37,6 +37,7 @@ const prompt = {
 
 async function createFixture(
   model: ReturnType<typeof createRepeatingDeterministicModel>,
+  client?: KaguyaLlmClient,
 ) {
   const database = await createTestingDatabase();
   await database.migrate();
@@ -88,16 +89,18 @@ async function createFixture(
   });
   const lifecycle = new LlmLifecycleClient({
     core,
-    client: new KaguyaLlmClient({
-      model,
-      now: (() => {
-        const values = [
-          new Date("2026-09-04T00:00:03.000Z"),
-          new Date("2026-09-04T00:00:03.025Z"),
-        ];
-        return () => values.shift() ?? new Date("2026-09-04T00:00:03.025Z");
-      })(),
-    }),
+    client:
+      client ??
+      new KaguyaLlmClient({
+        model,
+        now: (() => {
+          const values = [
+            new Date("2026-09-04T00:00:03.000Z"),
+            new Date("2026-09-04T00:00:03.025Z"),
+          ];
+          return () => values.shift() ?? new Date("2026-09-04T00:00:03.025Z");
+        })(),
+      }),
     now: () => new Date("2026-09-04T00:00:03.000Z"),
   });
   return { database, core, context, reply, lifecycle };
@@ -229,6 +232,49 @@ describe("LlmLifecycleClient", () => {
         },
       });
 
+      await fixture.core.close();
+      await fixture.database.close();
+    },
+    TEST_TIMEOUT,
+  );
+
+  it.each(["retryable", "cancelled"] as const)(
+    "persists a %s generation failure fact",
+    async (kind) => {
+      const classified = new KaguyaLlmError("provider failure", {
+        kind,
+        cause: new Error("provider failure"),
+      });
+      const fixture = await createFixture(
+        createRepeatingDeterministicModel({ text: "unused" }),
+        {
+          generate: async () => Promise.reject(classified),
+        } as unknown as KaguyaLlmClient,
+      );
+
+      await expect(
+        fixture.lifecycle.generate(
+          {
+            kind: "reply",
+            modelId: "provider-heavy",
+            workflowId: "message-module-pipeline",
+            nodeId: "reply.default",
+            originatingModuleInstanceId: "reply.default",
+            prompt,
+            reply: fixture.reply.payload,
+          },
+          fixture.context,
+          fixture.reply,
+        ),
+      ).rejects.toMatchObject({ kind });
+
+      const observed = await fixture.database.information.query({
+        informationId: fixture.context.informationId,
+      });
+      expect(
+        observed.find(({ kind: atomKind }) => atomKind === "core.llm.failed")
+          ?.payload,
+      ).toMatchObject({ error: { kind } });
       await fixture.core.close();
       await fixture.database.close();
     },

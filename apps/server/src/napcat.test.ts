@@ -14,7 +14,7 @@ import type {
   JsonMessageTransport,
   PlatformInboundMessage,
   PlatformDeliveryReceipt,
-  PlatformReplySender,
+  PlatformOutboundTransport,
 } from "@kaguya/platform-adapters";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -190,7 +190,7 @@ describe("NapCatConnectionSupervisor", () => {
     vi.useFakeTimers();
     const connections: Array<{
       transport: SupervisorTransport;
-      sender: PlatformReplySender;
+      sender: PlatformOutboundTransport;
       adapter: {
         starts: number;
         stops: number;
@@ -204,8 +204,8 @@ describe("NapCatConnectionSupervisor", () => {
       createConnection: () => {
         const connectionNumber = connections.length + 1;
         const transport = new SupervisorTransport();
-        const sender: PlatformReplySender = {
-          async sendTextReply(target): Promise<PlatformDeliveryReceipt> {
+        const sender: PlatformOutboundTransport = {
+          async sendMessage(target): Promise<PlatformDeliveryReceipt> {
             return {
               ok: true,
               adapterId: "napcat.qq.main",
@@ -244,7 +244,10 @@ describe("NapCatConnectionSupervisor", () => {
       expect(connections[0]?.adapter.stops).toBe(1);
       expect(connections[1]?.adapter.starts).toBe(1);
       await expect(
-        supervisor.sendTextReply({ kind: "private", userId: "112233" }, "hi"),
+        supervisor.sendMessage(
+          { kind: "private", userId: "112233" },
+          { kind: "text", text: "hi" },
+        ),
       ).resolves.toMatchObject({ platformMessageId: "connection-2" });
 
       await supervisor.stop();

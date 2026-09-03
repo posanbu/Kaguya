@@ -287,6 +287,48 @@ describe("ModuleHost", () => {
     );
   });
 
+  it("disposes an instance when subscription validation fails after creation", async () => {
+    const { core } = createCore();
+    await core.start();
+    let disposed = 0;
+    const module = defineInformationModule({
+      manifest: {
+        apiVersion: 1,
+        definitionId: "acme.dispose-on-invalid-subscription",
+        displayName: "Dispose invalid instance",
+        settingsSchema: z.object({}).strict(),
+        informationKinds: [inboundKind],
+      },
+      create: () => ({
+        subscriptions: [
+          {
+            kind: inboundKind.kind,
+            definition: outputKind,
+            handle: () => undefined,
+          } as unknown as InformationModuleSubscription,
+        ],
+        dispose: () => {
+          disposed += 1;
+        },
+      }),
+    });
+    const host = new ModuleHost({ core });
+    host.register(module);
+
+    await expect(
+      host.start([
+        {
+          instanceId: "invalid.default",
+          definitionId: module.manifest.definitionId,
+          settings: {},
+        },
+      ]),
+    ).rejects.toThrow(
+      `Information subscription definition mismatch: ${inboundKind.kind}`,
+    );
+    expect(disposed).toBe(1);
+  });
+
   it("rejects outputs absent from the module manifest", async () => {
     const undeclaredKind = defineInformationKind({
       kind: "acme.message.undeclared",

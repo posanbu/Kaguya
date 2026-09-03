@@ -20,7 +20,7 @@ import {
 } from "@kaguya/modules";
 import {
   compiledPromptSchema,
-  jsonObjectSchema,
+  informationPayloadSchema,
   platformDestinationSchema,
   promptKindSchema,
   z,
@@ -35,7 +35,7 @@ const llmKindSchema = promptKindSchema;
 export const informationCompiledPromptSchema = compiledPromptSchema.transform(
   (prompt, context) => {
     const fragments = prompt.fragments.map((fragment, index) => {
-      const metadata = jsonObjectSchema.safeParse(fragment.metadata);
+      const metadata = informationPayloadSchema.safeParse(fragment.metadata);
       if (!metadata.success) {
         for (const issue of metadata.error.issues) {
           context.addIssue({
