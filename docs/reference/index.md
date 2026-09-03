@@ -13,6 +13,10 @@ description: Kaguya HTTP、配置、事件与存储边界的查询入口。
 
 [HTTP API](./http-api)记录统一 Server 的路由、Bearer 认证、请求/响应、错误码和 requestId 规则。
 
+### Profile API
+
+[Profile API](./profile-api)记录多 Profile Registry 的创建、完整替换、选择和删除契约。
+
 ### 环境变量
 
 [环境变量](./environment-variables)记录 Server、白名单、NapCat 和日志配置，以及会导致启动失败的旧变量。
@@ -35,7 +39,7 @@ description: Kaguya HTTP、配置、事件与存储边界的查询入口。
 
 **requestId** — Fastify 请求标识，可由合法 `X-Request-Id` 提供，否则生成 UUID。
 
-**traceId** — 一次 Runtime dispatch 的主关联标识。Web trace 使用 `webui-${requestId}`。
+**traceId** — 一次 Runtime dispatch 的主关联标识。Web trace 使用 `web:${requestId}`。
 
 **eventId** — 单个事件实例标识。
 
@@ -53,5 +57,6 @@ description: Kaguya HTTP、配置、事件与存储边界的查询入口。
 
 **`.data/kaguya-config`** — 默认 profile store，包含明文凭据，必须按敏感数据保护。
 
-旧数据库和旧配置格式会被明确拒绝，不会自动迁移、合并或删除。
+**PostgreSQL / PGlite 信息账本** — 追加式 InformationAtom、引用与日志 outbox 已作为分阶段子系统实现，但尚未接入当前 Server 的 SQLite 主 Runtime；参见[信息账本](../developers/information-ledger)。
 
+旧数据库和旧配置格式会被明确拒绝，不会自动迁移、合并或删除。

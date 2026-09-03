@@ -21,7 +21,7 @@ Kaguya 采用 pnpm workspace 和 TypeScript project references 组织代码。�
 
 **`packages/modules`** — 标准 `message.*` 事件和最小 filter/LLM 演示模块。
 
-**`packages/database`** — SQLite 迁移、repository 和行映射。
+**`packages/database`** — 当前 Runtime 的 SQLite 仓储，以及分阶段引入的 PostgreSQL 信息账本与日志 outbox。
 
 **`packages/config`** — Profile store、readiness、权限和安全写入。
 
@@ -38,6 +38,8 @@ Kaguya 采用 pnpm workspace 和 TypeScript project references 组织代码。�
 **`packages/platform-adapters`** — OneBot/NapCat 规范化和 transport 实现。
 
 **`packages/scheduler`** — 显式调度原语。
+
+当前仓库同时存在两条数据路径：正在运行的消息链仍使用 SQLite；InformationAtom、Kind Registry、PostgreSQL Ledger 和日志投影已经实现并测试，但尚未接入 `apps/server` 的主 Runtime。阅读代码时不要把“已存在的基础设施”误认为“已经对用户生效”。
 
 ## 依赖方向
 
@@ -65,6 +67,14 @@ flowchart LR
 
 阅读[运行时架构](./architecture)，了解统一 Server、Runtime、事件分发和 outbound transport。
 
+### 理解启动配置
+
+阅读[配置生命周期](./configuration-lifecycle)，了解 Server 为什么先检查 selected Profile，以及哪些修改需要重启。
+
+### 理解下一代数据核心
+
+阅读[信息账本](./information-ledger)，区分已实现的追加式 PostgreSQL 子系统与当前 SQLite Runtime。
+
 ### 修改代码
 
 阅读[参与贡献](./contributing)，准备固定版本工具链并运行构建、测试和检查。
@@ -76,4 +86,3 @@ flowchart LR
 ### 查询接口
 
 进入[参考资料](../reference/)，查阅 HTTP API 与环境变量的精确定义。
-

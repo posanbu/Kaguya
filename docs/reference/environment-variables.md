@@ -29,6 +29,10 @@ description: Kaguya Server、白名单、NapCat 与日志环境变量参考。
 
 **`KAGUYA_RATE_LIMIT_WINDOW_MS`** — 默认 `60000`，允许范围 1000 至 3600000 毫秒。
 
+::: danger 暴露端口前先建立可信边界
+`GET /api/v1/setup` 和 `GET /api/v1/gateway/token` 会公开本实例 token，目的是让同源 Web UI 免手填。因此任何能访问监听端口的人都可以取得受保护接口权限。默认保留 `KAGUYA_HOST=127.0.0.1`；远程部署应使用可信网络或带 TLS 与独立认证的反向代理。
+:::
+
 ## 平台入站白名单
 
 **`KAGUYA_GATEWAY_ALLOWLIST_PLATFORMS`** — 逗号分隔的平台 ID；空值表示不限制平台。
@@ -100,4 +104,3 @@ KAGUYA_LOG_DESTINATION=.data/logs/kaguya.jsonl
 **旧模型变量** — `KAGUYA_LLM_API_KEY`、`KAGUYA_LLM_BASE_URL`、`KAGUYA_LLM_MODEL`。
 
 模型配置应迁移到 profile store；Server 地址和数据库应使用统一变量。
-
