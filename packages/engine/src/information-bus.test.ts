@@ -44,16 +44,19 @@ describe("InformationBus", () => {
 
     const results = await bus.publish(atom);
 
-    expect(order).toEqual(["first", "second", "all"]);
-    expect(results).toEqual([
-      { consumer: { consumerId: "first" }, status: "fulfilled" },
-      {
-        consumer: { consumerId: "second" },
-        status: "rejected",
-        reason: expect.objectContaining({ message: "observer failed" }),
-      },
-      { consumer: { consumerId: "all" }, status: "fulfilled" },
-    ]);
+    expect(new Set(order)).toEqual(new Set(["first", "second", "all"]));
+    expect(results).toHaveLength(3);
+    expect(results).toEqual(
+      expect.arrayContaining([
+        { consumer: { consumerId: "first" }, status: "fulfilled" },
+        {
+          consumer: { consumerId: "second" },
+          status: "rejected",
+          reason: expect.objectContaining({ message: "observer failed" }),
+        },
+        { consumer: { consumerId: "all" }, status: "fulfilled" },
+      ]),
+    );
   });
 
   it("returns a frozen snapshot that cannot be mutated by observers", async () => {

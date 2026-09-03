@@ -1,5 +1,5 @@
 /**
- * 架构说明：本测试覆盖信息 Core 的启动、注册、引用校验、并发消费者与故障事实边界，
+ * 架构说明：本测试覆盖信息 Core 的启动、注册、definition/消费者身份校验、并发消费者与故障事实边界，
  * 以证明 registry、store 与 bus 组合后的写入路径只信任注册表中的正式定义，
  * 并且不会把可变输入、未注册 kind 或关闭后的调用继续放行。
  * 代码库关系：`InformationCore` 连接 registry、store 与 bus；这里的测试使用
@@ -271,6 +271,43 @@ function createDeterministicIdGenerator() {
 }
 
 describe("InformationCore", () => {
+  it.each([
+    [{ consumerId: "" }, "consumerId"],
+    [{ consumerId: "   " }, "consumerId"],
+    [{ consumerId: "consumer", definitionId: "" }, "definitionId"],
+    [{ consumerId: "consumer", definitionId: "   " }, "definitionId"],
+    [{ consumerId: "consumer", instanceId: "" }, "instanceId"],
+    [{ consumerId: "consumer", instanceId: "   " }, "instanceId"],
+  ] as const)("rejects a blank consumer %s", async (consumer, field) => {
+    const core = await createStartedCore(new MemoryInformationStore(), [
+      parentDefinition,
+    ]);
+
+    expect(() => core.on(parentDefinition, consumer, () => undefined)).toThrow(
+      `${field} must not be blank`,
+    );
+  });
+
+  it("rejects a same-kind definition that is not the registered object", async () => {
+    const fakeDefinition = defineInformationKind({
+      kind: parentDefinition.kind,
+      payloadSchema: z.object({ other: z.string() }).strict(),
+      references: {},
+      log: { enabled: false },
+    });
+    const core = await createStartedCore(new MemoryInformationStore(), [
+      parentDefinition,
+    ]);
+
+    expect(() =>
+      core.on(
+        fakeDefinition,
+        { consumerId: "fake-definition" },
+        () => undefined,
+      ),
+    ).toThrow(`Information kind definition mismatch: ${parentDefinition.kind}`);
+  });
+
   it("starts every current consumer concurrently after commit", async () => {
     const started: string[] = [];
     const release = deferred<void>();
@@ -388,6 +425,27 @@ describe("InformationCore", () => {
       ],
     });
     expect(failures[0]?.payload).not.toHaveProperty("stack");
+  });
+
+  it("truncates an overlong error name before recording consumer.failed", async () => {
+    const ledger = new MemoryInformationStore();
+    const core = await createStartedCore(ledger, [parentDefinition]);
+    const error = new Error("consumer exploded");
+    error.name = "x".repeat(129);
+    core.on(parentDefinition, { consumerId: "failing" }, () => {
+      throw error;
+    });
+
+    await core.register(parentDefinition, registration({ text: "moon" }));
+
+    const failure = [...ledger.atoms.values()].find(
+      (atom) => atom.kind === consumerFailedKind,
+    );
+    expect(failure).toMatchObject({
+      payload: {
+        error: { errorType: "x".repeat(128) },
+      },
+    });
   });
 
   it("does not retry a consumer after it fails", async () => {
@@ -518,7 +576,7 @@ describe("InformationCore", () => {
     expect(projections).toBe(2);
   });
 
-  it("rejects spoofed payload schemas and spoofed reference rules", async () => {
+  it("rejects spoofed definition objects before payload or reference validation", async () => {
     const store = new MemoryInformationStore();
     const core = await createStartedCore(store, [
       parentDefinition,
@@ -545,7 +603,9 @@ describe("InformationCore", () => {
         payload: { spoof: "shadow" },
         references: [],
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(
+      `Information kind definition mismatch: ${childDefinition.kind}`,
+    );
 
     await expect(
       core.append(spoofedReferenceDefinition, {
@@ -555,7 +615,9 @@ describe("InformationCore", () => {
         payload: { text: "child" },
         references: [],
       }),
-    ).rejects.toBeInstanceOf(InformationReferenceValidationError);
+    ).rejects.toThrow(
+      `Information kind definition mismatch: ${childDefinition.kind}`,
+    );
   });
 
   it("rejects unknown definitions, collisions, and invalid ids", async () => {

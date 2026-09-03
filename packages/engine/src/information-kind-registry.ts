@@ -1,6 +1,7 @@
 /**
  * 架构说明：本模块实现信息 kind registry 的封锁生命周期，
- * 负责区分 Engine 内建 kind 与业务自定义 kind，并在 Core 启动前冻结注册表。
+ * 负责区分 Engine 内建 kind 与业务自定义 kind、确认 definition 对象身份，
+ * 并在 Core 启动前冻结注册表。
  * 代码库关系：`InformationCore` 构造时在此注册 `consumer.failed`，`start()` 依赖
  * 这里的定义快照同步到存储层，
  * 而 `packages/engine/src/index.ts` 将 Registry 作为 engine 公共入口导出。
@@ -70,7 +71,13 @@ export class InformationKindRegistry {
   assertRegistered(
     definition: RegisteredInformationKind,
   ): RegisteredInformationKind {
-    return this.get(definition.kind);
+    const registered = this.get(definition.kind);
+    if (registered !== definition) {
+      throw new Error(
+        `Information kind definition mismatch: ${definition.kind}`,
+      );
+    }
+    return registered;
   }
 
   private add(definition: RegisteredInformationKind): void {

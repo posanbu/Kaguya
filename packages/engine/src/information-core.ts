@@ -1,12 +1,13 @@
 /**
  * 架构说明：本模块把 registry、store 与 bus 组合成信息 Core，
  * 负责启动前注册同步、注册时的 ID 生成、引用 expectations 传递、并发广播与故障事实。
- * 主要职责：`register` 校验、落账并广播新 atom；`on` 以 typed consumer 身份订阅；
+ * 主要职责：`register` 校验、落账并广播新 atom；`on` 校验非空 typed consumer 身份后订阅；
  * `get`/`getMany`/`query` 只读账本。`append` 与 string `subscribe` 仍是暂存 API。
  * 代码库关系：Core 是信息原子体系的入口编排层，依赖 Registry、Ledger 与 Bus；
  * `information-kinds.ts` 提供唯一的 `consumer.failed` 定义，Runtime 后续复用它。
  * 输入输出与副作用：提交成功才广播当前快照，拒绝的消费者被记录为失败 atom；失败
- * atom 的消费者或持久化失败只进入 bootstrap reporter，绝不递归产生故障链。
+ * atom 的消费者或持久化失败只进入 bootstrap reporter，绝不递归产生故障链；错误类型
+ * 截断到 kind schema 的上限，确保每个接受的消费者错误都可表达为失败事实。
  */
 import {
   type DeepReadonly,
@@ -166,6 +167,7 @@ export class InformationCore {
     ) => unknown | Promise<unknown>,
   ): () => void {
     this.assertOpen();
+    assertConsumerIdentity(consumer);
     const registered = this.registry.assertRegistered(
       definition as InformationKindDefinition<string, any>,
     ) as InformationKindDefinition<K, P>;
@@ -394,7 +396,7 @@ function summarizeConsumerError(reason: unknown): {
 } {
   if (reason instanceof Error) {
     return {
-      errorType: reason.name || "Error",
+      errorType: truncate(reason.name || "Error", 128),
       message: "Consumer handler failed",
     };
   }
@@ -402,6 +404,29 @@ function summarizeConsumerError(reason: unknown): {
     errorType: "NonErrorRejection",
     message: "Consumer rejected with a non-Error value",
   };
+}
+
+function assertConsumerIdentity(consumer: InformationConsumer): void {
+  assertNonBlankConsumerField(consumer.consumerId, "consumerId", true);
+  assertNonBlankConsumerField(consumer.definitionId, "definitionId", false);
+  assertNonBlankConsumerField(consumer.instanceId, "instanceId", false);
+}
+
+function assertNonBlankConsumerField(
+  value: unknown,
+  field: "consumerId" | "definitionId" | "instanceId",
+  required: boolean,
+): void {
+  if (value === undefined && !required) {
+    return;
+  }
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`${field} must not be blank`);
+  }
+}
+
+function truncate(value: string, maximumLength: number): string {
+  return value.slice(0, maximumLength);
 }
 
 function buildReferenceExpectations(
