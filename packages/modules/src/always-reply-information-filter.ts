@@ -1,13 +1,12 @@
 /**
- * 功能概述：本模块提供演示用的“始终回复”信息过滤器，将每个入站文本原子转换为
- * `filter.decision` 原子，而不承担后续回复选择或定向路由。
- * 主要职责：导出严格设置 schema，并在 `alwaysReplyInformationFilterModule` 的
- * `onInformation` handler 中通过 context.register 保留原有 shouldReply、reason 与
- * targetInstanceId payload；输入 atom 仅触发派生注册，不会被修改。
- * 代码库关系：依赖 `information-kinds.ts` 的入站文本和决策 definition，由模块包的
- * 测试和后续 Runtime 组合；InformationModuleHost 负责为 register 注入 source 与引用。
- * 输入输出与副作用：设置必须包含非空 replyTargetInstanceId；每次入站会请求注册一个
- * 决策 atom，Core 最终负责持久化、广播和消费者故障记录。
+ * 功能概述：本模块提供演示用的始终通过过滤器，把每个入站文本原子显式推进为回复请求。
+ * 主要职责：`alwaysReplyInformationFilterSettingsSchema` 是无字段的严格设置 schema；
+ * `alwaysReplyInformationFilterModule` 订阅入站 kind，并以原 payload 注册回复请求 kind。
+ * 代码库关系：依赖 `information-kinds.ts` 的同一 definition；`InformationModuleHost`
+ * 在注册回复请求时补齐指向入站 atom 的直接 `core:caused-by` 与同一 context，因此过滤器
+ * 不产生成功 decision，也不包含已删除的 target instance 配置。
+ * 输入输出与副作用：任意非空设置会被 schema 拒绝；每条入站文本只调用一次 context.register，
+ * Core 随后持久化和广播回复请求，模块本身没有数据库或网络副作用。
  */
 import { z } from "@kaguya/schema";
 import {
@@ -16,13 +15,11 @@ import {
 } from "@kaguya/sdk";
 
 import {
-  filterDecisionInformationKind,
   inboundTextInformationKind,
+  replyRequestedInformationKind,
 } from "./information-kinds.js";
 
-export const alwaysReplyInformationFilterSettingsSchema = z
-  .object({ replyTargetInstanceId: z.string().trim().min(1) })
-  .strict();
+export const alwaysReplyInformationFilterSettingsSchema = z.object({}).strict();
 
 export const alwaysReplyInformationFilterModule = defineInformationModule({
   manifest: {
@@ -30,19 +27,14 @@ export const alwaysReplyInformationFilterModule = defineInformationModule({
     definitionId: "demo.filter.always-information",
     displayName: "Always reply information filter",
     settingsSchema: alwaysReplyInformationFilterSettingsSchema,
-    informationKinds: [inboundTextInformationKind, filterDecisionInformationKind],
+    informationKinds: [inboundTextInformationKind, replyRequestedInformationKind],
   },
-  create: ({ settings }) => ({
+  create: () => ({
     subscriptions: [
       onInformation(inboundTextInformationKind, async (atom, context) => {
-        await context.register(filterDecisionInformationKind, {
-          payload: {
-            shouldReply: true,
-            reason: "always-reply",
-            targetInstanceId: settings.replyTargetInstanceId,
-          },
+        await context.register(replyRequestedInformationKind, {
+          payload: atom.payload,
         });
-        void atom;
       }),
     ],
   }),
