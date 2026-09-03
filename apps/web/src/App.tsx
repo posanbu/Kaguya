@@ -951,24 +951,6 @@ function ProfileManagementScreen({
                     />
                   </label>
                 </div>
-                <label className="setup-check">
-                  <input
-                    type="checkbox"
-                    checked={editorFields.acknowledgeOptional}
-                    onChange={(event) =>
-                      setEditorFields((current) =>
-                        current === undefined
-                          ? current
-                          : {
-                              ...current,
-                              acknowledgeOptional: event.target.checked,
-                            },
-                      )
-                    }
-                  />
-                  <span>我确认当前尚未配置平台与插件，稍后再配置也可以。</span>
-                </label>
-
                 <button
                   className="setup-button"
                   type="submit"
