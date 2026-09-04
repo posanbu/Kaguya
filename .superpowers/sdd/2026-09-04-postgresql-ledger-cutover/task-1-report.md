@@ -51,3 +51,38 @@ exit 0
 ## 自审与关注点
 
 我检查了 schema 标识符的生成约束、pool 关闭顺序、factory 失败清理、错误字符串与连接串隔离，以及生产导入边界。真实 PostgreSQL 契约使用临时服务 `127.0.0.1:54329` 已验证。唯一的运行前提是 `test:postgres` 需要调用方提供一个有 `CREATE SCHEMA`/`DROP SCHEMA` 权限的 PostgreSQL URL；这是隔离和清理所必需的权限。
+
+## 修复轮 1：补足真实索引、引用顺序和 outbox 回滚覆盖
+
+审查指出三处测试边界缺口。本轮将真实 PostgreSQL 的索引检查加入 `postgres-index.test.ts`，并将其纳入 `test:postgres`：测试查询实际测试 schema 的 `pg_indexes`，确认 kind/time、source/time、反向引用和 pending outbox 的索引定义。原有的 PGlite migration append-only 触发器检查保持不变。
+
+共享 ledger contract 的引用恢复用例现在写入两个相同 `core:contexts` relation，目标 ID 故意按 `atom-reference-z`、`atom-reference-a` 的非排序顺序追加，并逐项断言读回顺序相同。outbox 用例则在 `information_log_outbox` 上安装真实 `BEFORE INSERT` 触发器并强制异常，验证事务最终既没有 atom 也没有 outbox 行；不依赖 mock 调用计数。
+
+测试先行记录如下。最初运行：
+
+```text
+pnpm vitest run packages/database/src/information-repository.test.ts packages/database/src/postgres-index.test.ts
+1 failed: outbox INSERT 触发器异常被仓储归一化为 “information repository operation failed”，
+而初始测试错误地要求底层异常文本。
+
+KAGUYA_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54329/postgres pnpm test:postgres
+1 failed: bind message supplies 3 parameters, but prepared statement requires 1
+```
+
+前者改为断言稳定公共 `InformationStoreError`；后者把三个表名作为一个 `text[]` 参数传入。GREEN 命令与输出：
+
+```text
+pnpm vitest run packages/database/src/information-repository.test.ts packages/database/src/postgres-index.test.ts
+2 passed, 23 passed, 1 skipped
+
+KAGUYA_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54329/postgres pnpm test:postgres
+2 passed, 25 passed
+
+pnpm --filter @kaguya/database typecheck
+exit 0
+
+pnpm typecheck
+exit 0
+```
+
+覆盖文件为 `packages/database/src/information-repository.test.ts`（注册 PGlite contract）、`packages/database/src/postgres-information-ledger.test.ts`（注册真实 ledger contract）、`packages/database/src/information-ledger.contract.ts`（共享行为）与 `packages/database/src/postgres-index.test.ts`（真实 PostgreSQL 索引）。本轮未实现 close/reconnect recovery；该生命周期场景依照既定计划保留给 Task 2。

@@ -62,6 +62,19 @@ const replyKind = defineInformationKind({
   log: { enabled: false },
 });
 
+const multiReferenceKind = defineInformationKind({
+  kind: "core.runtime.context.bundle",
+  payloadSchema: z.object({ name: z.string() }).strict(),
+  references: {
+    "core:contexts": {
+      required: true,
+      multiple: true,
+      targetKinds: [contextKind.kind],
+    },
+  },
+  log: { enabled: false },
+});
+
 const plainKind = defineInformationKind({
   kind: "core.runtime.snapshot",
   payloadSchema: z
@@ -381,37 +394,49 @@ export function defineInformationLedgerContract(
         const database = await createMigratedDatabase();
         await database.information.synchronizeKinds([
           contextKind.kind,
-          inboundKind.kind,
+          multiReferenceKind.kind,
         ]);
 
-        const contextAtom = createAtom(
-          "atom-context",
+        const firstContext = createAtom(
+          "atom-reference-z",
           contextKind.kind,
           "2026-09-01T00:00:00.000Z",
-          { name: "context" },
+          { name: "z" },
           [],
         );
-        await database.information.append(contextAtom, []);
+        const secondContext = createAtom(
+          "atom-reference-a",
+          contextKind.kind,
+          "2026-09-01T00:00:01.000Z",
+          { name: "a" },
+          [],
+        );
+        await database.information.append(firstContext, []);
+        await database.information.append(secondContext, []);
 
         const inboundAtom = createAtom(
           "atom-references",
-          inboundKind.kind,
-          "2026-09-01T00:01:00.000Z",
-          { text: "hello" },
+          multiReferenceKind.kind,
+          "2026-09-01T00:02:00.000Z",
+          { name: "bundle" },
           [
             {
-              relation: "core:context",
-              informationId: contextAtom.informationId,
+              relation: "core:contexts",
+              informationId: firstContext.informationId,
+            },
+            {
+              relation: "core:contexts",
+              informationId: secondContext.informationId,
             },
           ],
         );
 
         await database.information.append(inboundAtom, [
           {
-            relation: "core:context",
+            relation: "core:contexts",
             targetKinds: [contextKind.kind],
             required: true,
-            multiple: false,
+            multiple: true,
           },
         ]);
 
@@ -420,8 +445,12 @@ export function defineInformationLedgerContract(
             ?.references,
         ).toEqual([
           {
-            relation: "core:context",
-            informationId: contextAtom.informationId,
+            relation: "core:contexts",
+            informationId: firstContext.informationId,
+          },
+          {
+            relation: "core:contexts",
+            informationId: secondContext.informationId,
           },
         ]);
       },
@@ -771,6 +800,51 @@ export function defineInformationLedgerContract(
         expect(
           await database.information.listPendingLogProjections(10),
         ).toEqual([{ informationId: atom.informationId, attemptCount: 0 }]);
+      },
+      TEST_TIMEOUT,
+    );
+
+    it(
+      "rolls back an atom when its outbox insert fails",
+      async () => {
+        const database = await createMigratedDatabase();
+        await database.information.synchronizeKinds([contextKind.kind]);
+        await database.sql.exec(`
+        CREATE OR REPLACE FUNCTION fail_information_log_outbox_insert()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $$
+        BEGIN
+          RAISE EXCEPTION 'forced outbox failure';
+        END;
+        $$;
+
+        CREATE TRIGGER information_log_outbox_force_failure
+          BEFORE INSERT ON information_log_outbox
+          FOR EACH ROW
+          EXECUTE FUNCTION fail_information_log_outbox_insert();
+      `);
+        const atom = createAtom(
+          "atom-outbox-rollback",
+          contextKind.kind,
+          "2026-09-01T00:00:00.000Z",
+          { name: "rollback" },
+          [],
+        );
+
+        await expect(
+          database.information.append(atom, [], { enqueueLogProjection: true }),
+        ).rejects.toBeInstanceOf(InformationStoreError);
+        expect(
+          await database.information.get(atom.informationId),
+        ).toBeUndefined();
+        expect(
+          (
+            await database.sql.query<{ count: string }>(
+              "SELECT COUNT(*)::text AS count FROM information_log_outbox",
+            )
+          ).rows[0]?.count,
+        ).toBe("0");
       },
       TEST_TIMEOUT,
     );
