@@ -2,8 +2,9 @@
  * 功能概述：本模块实现信息原子在 PostgreSQL 中的 append-only 仓储，
  * 负责 kind 同步、原子追加、按 id 读取与反向引用查询，并把数据库错误
  * 归一为仓储层错误，供 engine 的 `InformationLedger` 直接消费。
- * 主要职责：`InformationRepository` 校验引用 expectations、事务写入 atom/reference/outbox、
- * 提供 `get/getMany/find/query`，并管理待投影日志的读取、成功确认与失败计数。
+ * 主要职责：`InformationRepository` 在启动期以幂等方式登记当前 kind，并拒绝缺失历史 kind 的
+ * Registry；它还校验引用 expectations、事务写入 atom/reference/outbox、提供 `get/getMany/find/query`，
+ * 并管理待投影日志的读取、成功确认与失败计数。
  * 代码库关系：`InformationCore` 只会看到这里实现的 ledger 端口；`driver.ts`
  * 提供事务与 query 抽象，`migrations.ts` 则先建立表结构、索引和 mutation 触发器。
  * 输入输出与副作用：写入全部在数据库事务中完成，冲突和引用错误映射为稳定错误类型；
@@ -103,20 +104,13 @@ export class InformationRepository implements InformationLedger {
   async synchronizeKinds(kinds: readonly string[]): Promise<void> {
     await this.database.transaction(async (tx) => {
       const desiredKinds = normalizeKinds(kinds);
+      await insertKinds(tx, desiredKinds);
       const existingRows = await tx.query<KindRow>(
         "SELECT kind FROM information_kinds ORDER BY kind ASC",
       );
       const existingKinds = existingRows.rows.map(({ kind }) => kind);
 
-      if (existingKinds.length === 0) {
-        if (desiredKinds.length === 0) {
-          return;
-        }
-        await insertKinds(tx, desiredKinds);
-        return;
-      }
-
-      if (!areKindsEqual(existingKinds, desiredKinds)) {
+      if (!areKindsIncludedIn(existingKinds, desiredKinds)) {
         throw new InformationKindSetMismatchError(desiredKinds, existingKinds);
       }
     });
@@ -505,6 +499,7 @@ async function insertKinds(
     `
       INSERT INTO information_kinds (kind)
       SELECT UNNEST($1::text[])
+      ON CONFLICT (kind) DO NOTHING
     `,
     [kinds],
   );
@@ -518,14 +513,12 @@ function normalizeKinds(kinds: readonly string[]): readonly string[] {
   return uniqueKinds.sort((left, right) => left.localeCompare(right));
 }
 
-function areKindsEqual(
-  left: readonly string[],
-  right: readonly string[],
+function areKindsIncludedIn(
+  existingKinds: readonly string[],
+  desiredKinds: readonly string[],
 ): boolean {
-  if (left.length !== right.length) {
-    return false;
-  }
-  return left.every((kind, index) => kind === right[index]);
+  const desiredKindSet = new Set(desiredKinds);
+  return existingKinds.every((kind) => desiredKindSet.has(kind));
 }
 
 function decodeJsonObject(value: unknown): JsonObject {

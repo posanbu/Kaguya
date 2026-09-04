@@ -5,7 +5,7 @@ description: Kaguya Server、PostgreSQL、白名单、NapCat 与日志环境变�
 
 # 环境变量
 
-环境变量由 `apps/server` 在启动时读取。Provider Key、Base URL 和模型 ID 不属于环境变量，统一存放在 `KAGUYA_CONFIG_ROOT` 指向的 Profile Registry；Runtime 只使用启动时全局选中的 `selectedProfileId`。
+除 `KAGUYA_TEST_DATABASE_URL` 仅由测试命令读取外，下列环境变量由 `apps/server` 在启动时读取。Provider Key、Base URL 和模型 ID 不属于环境变量，统一存放在 `KAGUYA_CONFIG_ROOT` 指向的 Profile Registry；Runtime 只使用启动时全局选中的 `selectedProfileId`。
 
 ## Server 与 PostgreSQL
 
@@ -20,6 +20,8 @@ description: Kaguya Server、PostgreSQL、白名单、NapCat 与日志环境变�
 ## 测试专用 PostgreSQL
 
 **`KAGUYA_TEST_DATABASE_URL`** — 仅供 `pnpm test:postgres` 连接真实 PostgreSQL，运行共享账本契约、索引与重连测试。CI 为它创建临时服务；`apps/server` 不读取此变量，生产环境必须配置 `KAGUYA_DATABASE_URL`。
+
+## Server
 
 **`KAGUYA_CONFIG_ROOT`** — 默认 `.data/kaguya-config`。权限受保护的 Profile Registry 根目录。
 

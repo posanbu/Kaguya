@@ -1,6 +1,6 @@
 /**
  * 功能概述：此测试模块把 information ledger 的持久化行为定义为可由多个数据库后端注册的契约，防止 PGlite 与真实 PostgreSQL 的语义漂移。
- * 主要职责：`defineInformationLedgerContract` 接收显示名称和 `KaguyaDatabase` factory，注册原子追加、引用校验、读取排序与 outbox 投影的共享行为测试。
+ * 主要职责：`defineInformationLedgerContract` 接收显示名称和 `KaguyaDatabase` factory，注册 kind 的新增登记与历史缺失拒绝、原子追加、引用校验、读取排序与 outbox 投影的共享行为测试。
  * 代码库关系：`information-repository.test.ts` 用 PGlite factory 注册；`postgres-information-ledger.test.ts` 用 schema 隔离的 PostgreSQL factory 注册；仓储、迁移和 runner 是被测的生产边界。
  * 输入输出与副作用：每个用例迁移独立数据库，并在 `afterEach` 关闭它；断言只通过公开数据库 API 与原始 SQL 观察持久化及事务结果。
  */
@@ -122,15 +122,16 @@ export function defineInformationLedgerContract(
     });
 
     it(
-      "synchronizes one immutable kind set",
+      "registers added kinds but rejects removing persisted kinds",
       async () => {
         const database = await createMigratedDatabase();
         await database.information.synchronizeKinds([contextKind.kind]);
+        await database.information.synchronizeKinds([
+          contextKind.kind,
+          inboundKind.kind,
+        ]);
         await expect(
-          database.information.synchronizeKinds([
-            contextKind.kind,
-            inboundKind.kind,
-          ]),
+          database.information.synchronizeKinds([contextKind.kind]),
         ).rejects.toBeInstanceOf(InformationStoreError);
       },
       TEST_TIMEOUT,
