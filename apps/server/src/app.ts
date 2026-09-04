@@ -4,8 +4,7 @@
  * Runtime 消息入口；它是“selected Profile 唯一生效”服务端约束的 HTTP 落点。
  * 主要职责：`createHttpApplication` 统一注册 CORS、限流、OpenAPI 与错误处理，
  * 再根据 `runtime` 与 `setup` 是否存在决定 ready 模式和 setup 模式的可见路由；
- * `/api/v1/setup` 返回无 secret 的 readiness 元数据，以及本实例分发的网关 token，
- * 供 Web UI 加载页面时自动取用；Profile 的创建、读取、
+ * `/api/v1/setup` 只返回无 secret 的 readiness 元数据；Profile 的创建、读取、
  * 完整替换、显式选择与删除分别由 `/api/v1/profiles*` 路由承载，并统一通过
  * `requireManagementToken` 在任何路径/正文校验前拒绝未授权请求。
  * 代码库关系：本模块消费 `setup.ts` 的 `ConfigurationManagement` 门面与
@@ -39,7 +38,16 @@ import Fastify, {
 } from "fastify";
 
 import type { ServerConfig } from "./config.js";
-import type { ConfigurationManagement } from "./setup.js";
+import {
+  initializeConfigurationProfile,
+  type ConfigurationManagement,
+} from "./setup.js";
+import {
+  createEnvironmentGatewayAuthenticator,
+  type GatewayAuthenticator,
+  type GatewayScope,
+} from "./gateway-auth.js";
+import { defaultNapCatSettings, toNapCatStatus } from "./napcat-config.js";
 import type { WebMessageGateway } from "./web-gateway.js";
 
 const MAX_MESSAGE_TEXT_LENGTH = 131_072;
@@ -75,6 +83,16 @@ const createProfileRequestSchema = z
   })
   .strict();
 
+const initialConfigurationRequestSchema = z
+  .object({
+    profileName: z.string().trim().min(1).max(100),
+    baseUrl: z.string().trim().url(),
+    apiKey: z.string().min(1),
+    lightModel: z.string().trim().min(1),
+    heavyModel: z.string().trim().min(1),
+  })
+  .strict();
+
 const selectionRequestSchema = z
   .object({
     selectedProfileId: profileIdSchema,
@@ -91,12 +109,35 @@ const replaceProfileRequestSchema = z
   })
   .strict();
 
+const napCatSettingsRequestSchema = z
+  .object({
+    enabled: z.boolean(),
+    wsUrl: z.string().trim().optional(),
+    accessToken: z.string().optional(),
+    selfId: z.string().trim().optional(),
+    reconnectMs: z.number().int().min(100).max(3_600_000),
+  })
+  .strict();
+
 const createProfileRequestJsonSchema = {
   type: "object",
   additionalProperties: false,
   required: ["name"],
   properties: {
     name: { type: "string", minLength: 1, maxLength: 100 },
+  },
+} as const;
+
+const initialConfigurationRequestJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["profileName", "baseUrl", "apiKey", "lightModel", "heavyModel"],
+  properties: {
+    profileName: { type: "string", minLength: 1, maxLength: 100 },
+    baseUrl: { type: "string", format: "uri" },
+    apiKey: { type: "string", minLength: 1 },
+    lightModel: { type: "string", minLength: 1 },
+    heavyModel: { type: "string", minLength: 1 },
   },
 } as const;
 
@@ -276,7 +317,7 @@ const setupStatusResponseJsonSchema = {
     data: {
       type: "object",
       additionalProperties: false,
-      required: ["status", "selectedProfileId", "profiles", "gatewayToken"],
+      required: ["status", "selectedProfileId", "profiles"],
       properties: {
         status: {
           type: "string",
@@ -293,7 +334,6 @@ const setupStatusResponseJsonSchema = {
           type: "array",
           items: profileMetadataJsonSchema,
         },
-        gatewayToken: { type: "string", minLength: 1 },
         issues: {
           type: "array",
           items: configurationIssueJsonSchema,
@@ -302,22 +342,6 @@ const setupStatusResponseJsonSchema = {
           type: "array",
           items: configurationIssueJsonSchema,
         },
-      },
-    },
-  },
-} as const;
-
-const gatewayTokenResponseJsonSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["data"],
-  properties: {
-    data: {
-      type: "object",
-      additionalProperties: false,
-      required: ["gatewayToken"],
-      properties: {
-        gatewayToken: { type: "string", minLength: 1 },
       },
     },
   },
@@ -413,6 +437,7 @@ const errorResponseJsonSchema = {
 
 export interface CreateHttpApplicationOptions {
   config: ServerConfig;
+  gatewayAuth?: GatewayAuthenticator;
   webGateway?: WebMessageGateway;
   setup?: ConfigurationManagement;
   logger?: FastifyBaseLogger;
@@ -512,30 +537,82 @@ export async function createHttpApplication(
     },
     async () => {
       const status = (await options.setup?.inspect()) ?? readySetupStatus();
-      return { data: { ...status, gatewayToken: options.config.gatewayToken } };
+      return { data: status };
+    },
+  );
+
+  app.post(
+    "/api/v1/setup",
+    {
+      onRequest: requireGatewayToken(options, "setup"),
+      schema: {
+        tags: ["System"],
+        summary: "Complete first-run configuration",
+        body: initialConfigurationRequestJsonSchema,
+      },
+    },
+    async (request) => {
+      const body = initialConfigurationRequestSchema.parse(request.body);
+      const management = requireManagement(options.setup);
+      const result = await initializeConfigurationProfile(management, body);
+      const gatewayToken = await (options.gatewayAuth ??
+        createEnvironmentGatewayAuthenticator(options.config.gatewayToken)
+      ).completeBootstrap();
+      return { data: { ...result, gatewayToken } };
     },
   );
 
   app.get(
-    "/api/v1/gateway/token",
+    "/api/v1/napcat",
     {
-      config: { rateLimit: false },
-      schema: {
-        tags: ["System"],
-        summary:
-          "Fetch the gateway token distributed by this server instance",
-        response: {
-          200: gatewayTokenResponseJsonSchema,
-        },
-      },
+      onRequest: requireGatewayToken(options, "management"),
+      schema: { tags: ["NapCat"], summary: "Read NapCat configuration status" },
     },
-    async () => ({ data: { gatewayToken: options.config.gatewayToken } }),
+    async () => {
+      const settings =
+        (await requireManagement(options.setup).getNapCatSettings?.()) ??
+        defaultNapCatSettings;
+      return { data: toNapCatStatus(settings) };
+    },
+  );
+
+  app.put(
+    "/api/v1/napcat",
+    {
+      onRequest: requireGatewayToken(options, "management"),
+      schema: { tags: ["NapCat"], summary: "Save NapCat configuration" },
+    },
+    async (request) => {
+      const body = napCatSettingsRequestSchema.parse(request.body);
+      const management = requireManagement(options.setup);
+      if (
+        management.getNapCatSettings === undefined ||
+        management.saveNapCatSettings === undefined
+      ) {
+        throw new Error("NapCat configuration management is unavailable");
+      }
+      const current = await management.getNapCatSettings();
+      const settings = await management.saveNapCatSettings({
+        enabled: body.enabled,
+        ...(body.wsUrl ? { wsUrl: body.wsUrl } : {}),
+        ...(body.accessToken?.trim()
+          ? { accessToken: body.accessToken.trim() }
+          : current.accessToken === undefined
+            ? {}
+            : { accessToken: current.accessToken }),
+        ...(body.selfId ? { selfId: body.selfId } : {}),
+        reconnectMs: body.reconnectMs,
+      });
+      return {
+        data: { status: toNapCatStatus(settings), restartRequired: true },
+      };
+    },
   );
 
   app.get(
     "/api/v1/profiles",
     {
-      onRequest: requireManagementToken(options.config.gatewayToken),
+      onRequest: requireGatewayToken(options, "management"),
       schema: {
         tags: ["Profiles"],
         summary: "List profile metadata and the selected global profile",
@@ -556,7 +633,7 @@ export async function createHttpApplication(
   app.post(
     "/api/v1/profiles",
     {
-      onRequest: requireManagementToken(options.config.gatewayToken),
+      onRequest: requireGatewayToken(options, "management"),
       schema: {
         tags: ["Profiles"],
         summary: "Create a named profile without selecting it",
@@ -584,7 +661,7 @@ export async function createHttpApplication(
   app.put(
     "/api/v1/profiles/selection",
     {
-      onRequest: requireManagementToken(options.config.gatewayToken),
+      onRequest: requireGatewayToken(options, "management"),
       schema: {
         tags: ["Profiles"],
         summary: "Select the global runtime profile",
@@ -613,7 +690,7 @@ export async function createHttpApplication(
   app.get(
     "/api/v1/profiles/:profileId",
     {
-      onRequest: requireManagementToken(options.config.gatewayToken),
+      onRequest: requireGatewayToken(options, "management"),
       schema: {
         tags: ["Profiles"],
         summary: "Read one profile by explicit profile id",
@@ -645,7 +722,7 @@ export async function createHttpApplication(
   app.put(
     "/api/v1/profiles/:profileId",
     {
-      onRequest: requireManagementToken(options.config.gatewayToken),
+      onRequest: requireGatewayToken(options, "management"),
       schema: {
         tags: ["Profiles"],
         summary: "Replace one profile by explicit profile id",
@@ -678,7 +755,7 @@ export async function createHttpApplication(
   app.delete(
     "/api/v1/profiles/:profileId",
     {
-      onRequest: requireManagementToken(options.config.gatewayToken),
+      onRequest: requireGatewayToken(options, "management"),
       schema: {
         tags: ["Profiles"],
         summary: "Delete one non-default, non-selected profile",
@@ -707,7 +784,7 @@ export async function createHttpApplication(
   app.post(
     "/api/v1/messages",
     {
-      onRequest: requireManagementToken(options.config.gatewayToken),
+      onRequest: requireGatewayToken(options, "messages"),
       schema: {
         tags: ["Messages"],
         summary: "Validate and dispatch a message to Kaguya Runtime",
@@ -859,9 +936,18 @@ function coreUnavailableError(
   );
 }
 
-function requireManagementToken(expectedToken: string) {
+function requireGatewayToken(
+  options: CreateHttpApplicationOptions,
+  scope: GatewayScope,
+) {
+  const authenticator =
+    options.gatewayAuth ??
+    createEnvironmentGatewayAuthenticator(options.config.gatewayToken);
   return async (request: FastifyRequest, reply: FastifyReply) => {
-    if (!hasValidGatewayToken(request, expectedToken)) {
+    const authorization = request.headers.authorization?.trim() ?? "";
+    const match = /^Bearer[ \t]+(.+)$/i.exec(authorization);
+    const suppliedToken = match?.[1]?.trim() ?? "";
+    if (!(await authenticator.authorize(suppliedToken, scope))) {
       return reply
         .code(401)
         .send(

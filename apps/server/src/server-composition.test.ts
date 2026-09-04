@@ -191,7 +191,6 @@ describe("unified server composition", () => {
                             "status",
                             "selectedProfileId",
                             "profiles",
-                            "gatewayToken",
                           ],
                         },
                       },
@@ -218,7 +217,6 @@ describe("unified server composition", () => {
             updatedAt: "",
           },
         ],
-        gatewayToken,
       },
     });
     expect(missingApi.statusCode).toBe(404);

@@ -831,6 +831,10 @@ button:disabled {
   .setup-model-grid {
     grid-template-columns: 1fr;
   }
+
+  .setup-docs-nav {
+    display: none;
+  }
 }
 
 @media (max-width: 520px) {
@@ -862,6 +866,13 @@ button:disabled {
 
   .message-row {
     width: 100%;
+  }
+
+  .setup-subtitle,
+  .setup-search,
+  .setup-theme-button,
+  .setup-github-link {
+    display: none;
   }
 }
 

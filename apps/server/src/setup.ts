@@ -30,6 +30,12 @@ import {
   type UserConfigProfileMetadata,
 } from "@kaguya/config";
 
+import {
+  loadNapCatSettings,
+  saveNapCatSettings,
+  type NapCatSettings,
+} from "./napcat-config.js";
+
 export type ConfigurationSetupStatus =
   | ExistingConfigurationReadiness
   | (Omit<ExistingConfigurationReadiness, "status"> & {
@@ -57,6 +63,8 @@ export interface ConfigurationManagement {
   ): Promise<ProfileMutationResult>;
   selectProfile(profileId: string): Promise<ProfileMutationResult>;
   deleteProfile(profileId: string): Promise<ProfileMutationResult>;
+  getNapCatSettings?: () => Promise<NapCatSettings>;
+  saveNapCatSettings?: (settings: NapCatSettings) => Promise<NapCatSettings>;
 }
 
 export interface InitialConfigurationInput {
@@ -65,7 +73,6 @@ export interface InitialConfigurationInput {
   readonly apiKey: string;
   readonly lightModel: string;
   readonly heavyModel: string;
-  readonly acknowledgeOptional: boolean;
 }
 
 export async function createConfigurationManagement(
@@ -128,6 +135,14 @@ export async function createConfigurationManagement(
       await manager.deleteProfile(profileId);
       return { profile, restartRequired };
     },
+    getNapCatSettings() {
+      return loadNapCatSettings(rootDir);
+    },
+    async saveNapCatSettings(settings) {
+      const saved = await saveNapCatSettings(rootDir, settings);
+      restartRequired = true;
+      return saved;
+    },
   };
 }
 
@@ -143,13 +158,6 @@ export async function initializeConfigurationProfile(
       "Light and heavy models must be different",
     );
   }
-  if (!input.acknowledgeOptional) {
-    throw new ConfigError(
-      "CONFIG_REVIEW_REQUIRED",
-      "Optional configuration must be reviewed",
-    );
-  }
-
   const status = await management.inspect();
   if (status.status === "ready" || status.status === "restart_required") {
     throw new ConfigurationSetupNotRequiredError();
@@ -182,7 +190,7 @@ function initialProfileReplacement(
 ): ReplaceUserConfigProfileInput {
   return {
     name: profileName,
-    acknowledgedWarnings: ["platforms-empty", "plugins-empty"],
+    acknowledgedWarnings: [],
     ai: {
       defaultProviderId: initialProviderId,
       modelTiers: {
