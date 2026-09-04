@@ -16,6 +16,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
+    "test:postgres": "cross-env KAGUYA_REQUIRE_POSTGRES_TESTS=1 vitest run packages/database/src/postgres-information-ledger.test.ts",
     "prompt:test": "cross-env PROMPTFOO_DISABLE_TELEMETRY=1 PROMPTFOO_DISABLE_UPDATE=1 HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9 ALL_PROXY=http://127.0.0.1:9 NO_PROXY= https_proxy=http://127.0.0.1:9 http_proxy=http://127.0.0.1:9 all_proxy=http://127.0.0.1:9 no_proxy= promptfoo eval --no-cache",
     "demo": "pnpm --filter @kaguya/demo start"
   },

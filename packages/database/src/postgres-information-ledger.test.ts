@@ -1,0 +1,44 @@
+/**
+ * 功能概述：本文件是 information ledger 共享契约的真实 PostgreSQL 注册入口。
+ * 主要职责：读取测试连接串、在要求集成测试时拒绝缺失配置，并确认服务器版本后以真实
+ * PostgreSQL factory 注册共享契约；普通测试运行可跳过这一外部服务依赖。
+ * 代码库关系：依赖 `testing.ts` 将连接隔离到临时 schema，并将断言委托给
+ * `information-ledger.contract.ts`；根 `test:postgres` 脚本设置强制执行模式。
+ * 输入输出与副作用：测试会创建并清理临时 PostgreSQL schema；连接串不会写入错误消息。
+ */
+import { describe, expect, it } from "vitest";
+
+import { defineInformationLedgerContract } from "./information-ledger.contract.js";
+import * as testing from "./testing.js";
+
+const connectionString = process.env.KAGUYA_TEST_DATABASE_URL;
+const requirePostgres = process.env.KAGUYA_REQUIRE_POSTGRES_TESTS === "1";
+
+if (requirePostgres && connectionString === undefined) {
+  throw new Error(
+    "KAGUYA_TEST_DATABASE_URL is required when PostgreSQL contract tests are required",
+  );
+}
+
+const describePostgres =
+  connectionString === undefined ? describe.skip : describe;
+const createPostgresTestingDatabase = testing.createPostgresTestingDatabase;
+
+describePostgres("information repository (PostgreSQL)", () => {
+  it("connects to a real PostgreSQL server", async () => {
+    const database = await createPostgresTestingDatabase(connectionString!);
+    try {
+      const result = await database.sql.query<{ server_version: string }>(
+        "SHOW server_version",
+      );
+      expect(result.rows[0]?.server_version).toBeTruthy();
+    } finally {
+      await database.close();
+    }
+  });
+
+  defineInformationLedgerContract({
+    name: "information ledger contract (PostgreSQL)",
+    createDatabase: () => createPostgresTestingDatabase(connectionString!),
+  });
+});
