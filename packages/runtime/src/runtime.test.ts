@@ -7,7 +7,8 @@
  * 代码库关系：测试直接消费 Runtime 的 `InformationIngress.submit` 和注入数据库选项；默认业务
  * 模块来自 `@kaguya/modules`，自定义 fixture 只用于隔离并发和消费者故障语义。
  * 输入输出与副作用：每个用例创建隔离的内存 PostgreSQL 数据库，Runtime 只写 information
- * ledger；测试结束显式关闭注入数据库，并检查持久化 payload 不包含 raw/provider secret。
+ * ledger；所有创建 PGlite 的用例共享 15 秒跨平台超时，测试结束显式关闭注入数据库，
+ * 并检查持久化 payload 不包含 raw/provider secret。
  */
 import { KaguyaDatabase } from "@kaguya/database";
 import { createTestingDatabase } from "@kaguya/database/testing";
@@ -171,75 +172,89 @@ function parentId(
 }
 
 describe("KaguyaRuntime", () => {
-  it("classifies migration failures without retaining database details", async () => {
-    const database = await createTestingDatabase();
-    const secret = "postgresql://ledger:runtime-secret@db.internal/kaguya";
-    vi.spyOn(database, "migrate").mockRejectedValueOnce(
-      new Error(`authentication failed: ${secret}`),
-    );
-    const runtime = new KaguyaRuntime({ database });
-    resources.push({ runtime, database });
+  it(
+    "classifies migration failures without retaining database details",
+    async () => {
+      const database = await createTestingDatabase();
+      const secret = "postgresql://ledger:runtime-secret@db.internal/kaguya";
+      vi.spyOn(database, "migrate").mockRejectedValueOnce(
+        new Error(`authentication failed: ${secret}`),
+      );
+      const runtime = new KaguyaRuntime({ database });
+      resources.push({ runtime, database });
 
-    const error = await runtime.start().catch((thrown: unknown) => thrown);
+      const error = await runtime.start().catch((thrown: unknown) => thrown);
 
-    expect(error).toMatchObject({
-      name: "RuntimeDatabaseInitializationError",
-      message: "Runtime database initialization failed",
-      failureType: "Error",
-    });
-    expect(error).not.toHaveProperty("cause");
-    expect(`${String(error)}\n${JSON.stringify(error)}`).not.toContain(
-      "runtime-secret",
-    );
-  });
+      expect(error).toMatchObject({
+        name: "RuntimeDatabaseInitializationError",
+        message: "Runtime database initialization failed",
+        failureType: "Error",
+      });
+      expect(error).not.toHaveProperty("cause");
+      expect(`${String(error)}\n${JSON.stringify(error)}`).not.toContain(
+        "runtime-secret",
+      );
+    },
+    TEST_TIMEOUT,
+  );
 
-  it("does not preserve an unknown alphanumeric migration error class", async () => {
-    class DatabasePassword123 extends Error {}
-    const database = await createTestingDatabase();
-    vi.spyOn(database, "migrate").mockRejectedValueOnce(
-      new DatabasePassword123("database-secret"),
-    );
-    const runtime = new KaguyaRuntime({ database });
-    resources.push({ runtime, database });
+  it(
+    "does not preserve an unknown alphanumeric migration error class",
+    async () => {
+      class DatabasePassword123 extends Error {}
+      const database = await createTestingDatabase();
+      vi.spyOn(database, "migrate").mockRejectedValueOnce(
+        new DatabasePassword123("database-secret"),
+      );
+      const runtime = new KaguyaRuntime({ database });
+      resources.push({ runtime, database });
 
-    const error = await runtime.start().catch((thrown: unknown) => thrown);
+      const error = await runtime.start().catch((thrown: unknown) => thrown);
 
-    expect(error).toMatchObject({
-      name: "RuntimeDatabaseInitializationError",
-      failureType: "Error",
-    });
-    expect(JSON.stringify(error)).not.toContain("DatabasePassword123");
-    expect(JSON.stringify(error)).not.toContain("database-secret");
-  });
+      expect(error).toMatchObject({
+        name: "RuntimeDatabaseInitializationError",
+        failureType: "Error",
+      });
+      expect(JSON.stringify(error)).not.toContain("DatabasePassword123");
+      expect(JSON.stringify(error)).not.toContain("database-secret");
+    },
+    TEST_TIMEOUT,
+  );
 
-  it("classifies migration errors whose reflective properties throw", async () => {
-    const database = await createTestingDatabase();
-    const malicious = new Error("database-message-secret");
-    Object.defineProperties(malicious, {
-      constructor: {
-        get() {
-          throw new Error("constructor-getter-secret");
+  it(
+    "classifies migration errors whose reflective properties throw",
+    async () => {
+      const database = await createTestingDatabase();
+      const malicious = new Error("database-message-secret");
+      Object.defineProperties(malicious, {
+        constructor: {
+          get() {
+            throw new Error("constructor-getter-secret");
+          },
         },
-      },
-      name: {
-        get() {
-          throw new Error("name-getter-secret");
+        name: {
+          get() {
+            throw new Error("name-getter-secret");
+          },
         },
-      },
-    });
-    vi.spyOn(database, "migrate").mockRejectedValueOnce(malicious);
-    const runtime = new KaguyaRuntime({ database });
-    resources.push({ runtime, database });
+      });
+      vi.spyOn(database, "migrate").mockRejectedValueOnce(malicious);
+      const runtime = new KaguyaRuntime({ database });
+      resources.push({ runtime, database });
 
-    const error = await runtime.start().catch((thrown: unknown) => thrown);
+      const error = await runtime.start().catch((thrown: unknown) => thrown);
 
-    expect(error).toMatchObject({
-      name: "RuntimeDatabaseInitializationError",
-      message: "Runtime database initialization failed",
-      failureType: "Error",
-    });
-    expect(JSON.stringify(error)).not.toMatch(/getter-secret|message-secret/u);
-  });
+      expect(error).toMatchObject({
+        name: "RuntimeDatabaseInitializationError",
+        message: "Runtime database initialization failed",
+        failureType: "Error",
+      });
+      expect(JSON.stringify(error)).not.toMatch(
+        /getter-secret|message-secret/u,
+      );
+    },
+    TEST_TIMEOUT,
+  );
 
   it(
     "shares one setup promise across concurrent start calls",
