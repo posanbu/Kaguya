@@ -26,13 +26,14 @@ Kaguya 是一个以持久化信息 DAG 组织运行事实、模块可插拔的 T
 ```mermaid
 flowchart LR
   A[准备 Node.js 与 pnpm] --> B[安装依赖]
-  B --> C[设置 Gateway Token]
-  C --> D[启动统一 Server]
-  D --> E{配置是否就绪}
-  E -- 否 --> F[在 Web UI 完成配置]
-  F --> G[重启 Server]
-  E -- 是 --> H[进入消息界面]
-  G --> H
+  B --> C[设置 PostgreSQL URL]
+  C --> D[设置 Gateway Token]
+  D --> E[启动统一 Server]
+  E --> F{配置是否就绪}
+  F -- 否 --> G[在 Web UI 完成配置]
+  G --> H[重启 Server]
+  F -- 是 --> I[进入消息界面]
+  H --> I
 ```
 
 ## 继续阅读
@@ -51,4 +52,4 @@ flowchart LR
 
 ## 需要提前知道的边界
 
-Kaguya 当前没有持久订阅、离线补投、工作队列、自动重试、去重、模块热更新或沙箱。HTTP 消息接口返回 `202 accepted` 时只表示 Server 已开始异步提交，不返回模型回答，也不提供 SSE。Core 不按用户、群聊或来源自动组织上下文；后续数据关系需要由显式信息引用和模块逻辑表达。旧 SQLite 数据不会自动迁移。
+Kaguya 当前没有持久订阅、离线补投、工作队列、自动重试、去重、模块热更新或沙箱。HTTP 消息接口返回 `202 accepted` 时只表示 Server 已开始异步提交，不返回模型回答，也不提供 SSE。Core 不按用户、群聊或来源自动组织上下文；后续数据关系需要由显式信息引用和模块逻辑表达。Server 需要 `KAGUYA_DATABASE_URL` 才能连接 PostgreSQL；旧 SQLite 数据不会自动迁移。

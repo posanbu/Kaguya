@@ -129,7 +129,7 @@ pnpm --ignore-workspace docs:preview
 
 ## 数据与迁移边界
 
-`KAGUYA_DATABASE_URL` 指向 PostgreSQL 中的 information ledger。启动 Runtime 后会创建并迁移账本 schema，原子与引用只允许追加。旧 `.data/*.sqlite` 文件不会被读取、合并、删除或自动转换；请自行保留或处理历史数据。
+`KAGUYA_DATABASE_URL` 指向 PostgreSQL 中的 information ledger。Runtime 就绪后通过 `KaguyaDatabase.connect()` 连接该 URL，并在一个事务中创建或迁移可重复执行的 schema。payload 保存为 `JSONB`，原子和显式引用由外键保护；原子、引用与日志投影 outbox 在同一事务写入，日志随后异步投影。原子与引用只允许追加。旧 `.data/*.sqlite` 文件不会被读取、合并、删除或自动转换；请自行保留或处理历史数据。
 
 ::: warning 保护凭据与数据
 数据库 URL、Profile store、平台凭据与本地数据都可能包含敏感信息。不要把它们上传到 Git、Issue、PR 或聊天记录。

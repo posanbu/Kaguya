@@ -39,7 +39,7 @@ pnpm install
 export KAGUYA_DATABASE_URL="postgresql://kaguya:password@127.0.0.1:5432/kaguya"
 ```
 
-`KAGUYA_DATABASE_PATH` 和其他旧 SQLite 环境变量会被 Server 拒绝。旧 SQLite 文件没有自动导入、转换、合并或删除路径。
+`KAGUYA_DATABASE_PATH` 和其他旧 SQLite 路径不是 Server 配置；运行期只通过 `KAGUYA_DATABASE_URL` 连接 PostgreSQL。旧 SQLite 文件没有自动导入、转换、合并或删除路径。
 
 ## 配置与敏感数据
 
@@ -75,6 +75,7 @@ pnpm build
 pnpm typecheck
 pnpm lint
 pnpm test
+pnpm test:postgres
 pnpm prompt:test
 pnpm demo
 ```
@@ -82,7 +83,8 @@ pnpm demo
 - `build` 构建 TypeScript project references 和 Web 产物。
 - `typecheck` 检查 TypeScript project references 与 Web；它使用 build mode，可能更新 `dist/` 和增量构建信息。
 - `lint` 检查 TypeScript、JavaScript 和 CommonJS 辅助脚本。
-- `test` 运行 Vitest 单元与集成测试。
+- `test` 运行跨平台的 Vitest 单元与集成测试，不要求外部数据库。
+- `test:postgres` 使用 `KAGUYA_TEST_DATABASE_URL` 运行真实 PostgreSQL 账本契约、索引和重连测试；它只用于测试，不能替代 Server 必需的 `KAGUYA_DATABASE_URL`。CI 为此提供临时 PostgreSQL 服务。
 - `prompt:test` 在阻断外部出口的前提下验证 Prompt 结构，不读取 API key。
 - `demo` 使用 `KAGUYA_DATABASE_URL` 运行确定性信息 DAG，并输出根 `informationId` 与 Kind 计数。
 
@@ -103,7 +105,7 @@ pnpm --dir docs --ignore-workspace docs:check
 - **Schema 与 SDK**：校验 Information Atom、Kind definition、payload、引用规则与模块 API。
 - **Engine**：验证 Kind Registry、提交先于广播、同 Kind 消费者并发、因果引用，以及 `consumer.failed` 的隔离和递归保护。
 - **Modules 与 Runtime**：验证过滤 DAG、LLM requested/completed/failed、assistant、delivery requested/delivered/failed、关闭 drain 与 ingress 生命周期。
-- **Database**：使用 PGlite 或测试注入的 PostgreSQL 兼容数据库，验证 append-only 原子、引用和日志投影 outbox；不读取个人数据库。
+- **Database**：普通测试使用 PGlite；同一账本契约也在 CI 的真实 PostgreSQL 服务上运行，验证 append-only 原子、JSONB payload、引用和日志投影 outbox；不读取个人数据库。
 - **Config、Server 与 Web**：验证全局 `selectedProfileId`、Profile management、认证、HTTP 响应、窄 ingress 和 setup mode。
 - **平台适配器与 demo**：验证平台内容正规化、transport receipt 与 PostgreSQL demo。
 
@@ -126,7 +128,7 @@ pnpm exec vitest run apps/web/src
 
 功能和修复遵循小步 RED、GREEN、REFACTOR：先写并运行能表达行为的失败测试，再实现最小改动，最后整理命名与重复。修复 bug 时必须先加入回归测试。涉及信息图的测试应断言已提交原子、Kind 和直接引用，而不是只断言内部调用次数。
 
-PostgreSQL 模式迁移位于 `packages/database/src/migrations.ts`，由 `KaguyaDatabase.migrate()` 在数据库事务中执行。迁移必须保持可重复执行，SQL 值使用参数化查询，信息原子与引用只能追加；状态变化应注册新原子，不能更新或删除旧记录。不要在应用或其他包中执行临时 DDL，也不要保留 SQLite 兼容写入路径。
+PostgreSQL 模式迁移位于 `packages/database/src/migrations.ts`，由 `KaguyaDatabase.migrate()` 在数据库事务中执行。迁移必须保持可重复执行，SQL 值使用参数化查询；payload 是 `JSONB`，原子和显式引用由外键保护，且原子、引用和待投影日志 outbox 在同一事务写入。信息原子与引用只能追加；状态变化应注册新原子，不能更新或删除旧记录。不要在应用或其他包中执行临时 DDL，也不要保留 SQLite 兼容写入路径。
 
 包依赖必须保持单向：`schema` 不依赖其他 Kaguya 包；`sdk` 可依赖 `schema`；`engine` 可依赖 `sdk` 和 `schema`；Runtime 负责组合 Engine、Database、LLM、Modules 与 transport；`apps/*` 是 composition root，基础包不得反向导入应用。新增 workspace 包时，同步更新 `package.json`、TypeScript references、根 `tsconfig.json` 和 lockfile。
 

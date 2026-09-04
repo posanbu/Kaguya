@@ -39,7 +39,7 @@ description: Kaguya HTTP、配置、信息 Kind 与存储边界的查询入口�
 
 ## 数据与回放边界
 
-**PostgreSQL information ledger** — 由 `KAGUYA_DATABASE_URL` 连接，保存 append-only 原子、引用、Kind 和日志投影 outbox。没有 SQLite runtime 数据库或平行消息/trace/outbound 表。
+**PostgreSQL information ledger** — 由 `KAGUYA_DATABASE_URL` 连接。迁移在事务中执行，payload 为 `JSONB`，Kind、原子和显式引用由外键保护；原子、引用和日志投影 outbox 原子写入。PGlite 与 CI 的真实 PostgreSQL 服务运行同一份账本契约。没有 SQLite runtime 数据库或平行消息/trace/outbound 表。
 
 **Profile Registry** — 默认位于 `.data/kaguya-config`，保存 Profile metadata 和显式 `selectedProfileId`。其中可能包含明文凭据，必须按敏感数据保护。
 
