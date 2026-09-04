@@ -83,7 +83,6 @@ describe("readServerConfig", () => {
       "KAGUYA_API_PORT",
       "KAGUYA_API_DATABASE_PATH",
       "KAGUYA_BOT_DATABASE_PATH",
-      "KAGUYA_DATABASE_PATH",
     ]) {
       expect(() =>
         readServerConfig({

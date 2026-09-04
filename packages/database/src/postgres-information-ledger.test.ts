@@ -8,7 +8,11 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { freezeInformationAtom, informationIdSchema, z } from "@kaguya/schema";
+import { defineInformationKind } from "@kaguya/sdk";
+
 import { defineInformationLedgerContract } from "./information-ledger.contract.js";
+import { InformationLogProjectionRunner } from "./index.js";
 import * as testing from "./testing.js";
 
 const connectionString = process.env.KAGUYA_TEST_DATABASE_URL;
@@ -23,6 +27,16 @@ if (requirePostgres && connectionString === undefined) {
 const describePostgres =
   connectionString === undefined ? describe.skip : describe;
 const createPostgresTestingDatabase = testing.createPostgresTestingDatabase;
+const restartKind = defineInformationKind({
+  kind: "core.runtime.restart",
+  payloadSchema: z.object({ name: z.string() }).strict(),
+  references: {},
+  log: {
+    enabled: true,
+    level: "info",
+    project: () => ({ event: "core.runtime.restart" }),
+  },
+});
 
 describePostgres("information repository (PostgreSQL)", () => {
   it("connects to a real PostgreSQL server", async () => {
@@ -34,6 +48,61 @@ describePostgres("information repository (PostgreSQL)", () => {
       expect(result.rows[0]?.server_version).toBeTruthy();
     } finally {
       await database.close();
+    }
+  });
+
+  it("retains an atom and pending log projection after reconnecting its schema", async () => {
+    const scope = await testing.createPostgresTestingDatabaseScope(
+      connectionString!,
+    );
+    let firstConnection: Awaited<ReturnType<typeof scope.connect>> | undefined;
+    try {
+      firstConnection = await scope.connect();
+      await firstConnection.migrate();
+      await firstConnection.information.synchronizeKinds([restartKind.kind]);
+      const atom = freezeInformationAtom({
+        informationId: informationIdSchema.parse("atom-restart-recovery"),
+        kind: restartKind.kind,
+        occurredAt: "2026-09-04T00:00:00.000Z",
+        source: "module:test",
+        payload: { name: "restart" },
+        references: [],
+      });
+      await firstConnection.information.append(atom, [], {
+        enqueueLogProjection: true,
+      });
+
+      await firstConnection.close();
+      firstConnection = undefined;
+
+      const reconnected = await scope.reconnect();
+      try {
+        expect(await reconnected.information.get(atom.informationId)).toEqual(
+          atom,
+        );
+        expect(
+          await reconnected.information.listPendingLogProjections(10),
+        ).toEqual([{ informationId: atom.informationId, attemptCount: 0 }]);
+
+        const projected: string[] = [];
+        const runner = new InformationLogProjectionRunner({
+          repository: reconnected.information,
+          sink: async (projectedAtom) => {
+            projected.push(projectedAtom.informationId);
+          },
+        });
+        await runner.projectPending();
+
+        expect(projected).toEqual([atom.informationId]);
+        expect(
+          await reconnected.information.listPendingLogProjections(10),
+        ).toEqual([]);
+      } finally {
+        await reconnected.close();
+      }
+    } finally {
+      await firstConnection?.close();
+      await scope.close();
     }
   });
 

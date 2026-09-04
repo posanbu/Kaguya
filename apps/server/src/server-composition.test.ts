@@ -56,13 +56,13 @@ afterEach(() => {
   }
 });
 
-function tempDatabasePath(): string {
+function tempWorkspaceRoot(): string {
   const root = mkdtempSync(join(tmpdir(), "kaguya-server-composition-"));
   roots.push(root);
-  return join(root, "kaguya.sqlite");
+  return root;
 }
 
-function config(workspacePath: string): ServerConfig {
+function config(workspaceRoot: string): ServerConfig {
   return {
     host: "127.0.0.1",
     port: 3000,
@@ -72,9 +72,9 @@ function config(workspacePath: string): ServerConfig {
     rateLimitMax: 30,
     rateLimitWindowMs: 60_000,
     databaseUrl: "postgresql://kaguya@database.example:5432/kaguya",
-    configRoot: join(dirnameOf(workspacePath), "config"),
+    configRoot: join(workspaceRoot, "config"),
     development: false,
-    webDistPath: join(dirnameOf(workspacePath), "web"),
+    webDistPath: join(workspaceRoot, "web"),
     gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
     napcat: {
       enabled: false,
@@ -114,7 +114,7 @@ describe("unified server composition", () => {
   });
 
   it("ingests Web messages through the shared Runtime as a platform adapter", async () => {
-    const databasePath = tempDatabasePath();
+    const workspaceRoot = tempWorkspaceRoot();
     const database = await createTestingDatabase();
     const runtime = new KaguyaRuntime({ database });
     runtime.registerTransport({
@@ -148,7 +148,7 @@ describe("unified server composition", () => {
       logger: rootLogger,
     });
     const app = await createHttpApplication({
-      config: config(databasePath),
+      config: config(workspaceRoot),
       webGateway,
     });
 
@@ -206,12 +206,12 @@ describe("unified server composition", () => {
   }, 20_000);
 
   it("serves the Web UI, health, OpenAPI, and SPA fallback on one app", async () => {
-    const databasePath = tempDatabasePath();
-    const webDistPath = join(dirnameOf(databasePath), "web");
+    const workspaceRoot = tempWorkspaceRoot();
+    const webDistPath = join(workspaceRoot, "web");
     mkdirSync(webDistPath, { recursive: true });
     writeFileSync(join(webDistPath, "index.html"), "<main>Kaguya UI</main>");
     writeFileSync(join(webDistPath, "app.js"), "globalThis.kaguya = true;");
-    const serverConfig = { ...config(databasePath), webDistPath };
+    const serverConfig = { ...config(workspaceRoot), webDistPath };
     const app = await createHttpApplication({ config: serverConfig });
     const webUi = await registerWebUi(app, serverConfig);
 
@@ -288,8 +288,8 @@ describe("unified server composition", () => {
   });
 
   it("keeps API and health routes ahead of Vite middleware in development", async () => {
-    const databasePath = tempDatabasePath();
-    const serverConfig = { ...config(databasePath), development: true };
+    const workspaceRoot = tempWorkspaceRoot();
+    const serverConfig = { ...config(workspaceRoot), development: true };
     const app = await createHttpApplication({ config: serverConfig });
     const webUi = await registerWebUi(app, serverConfig);
 
@@ -314,8 +314,8 @@ describe("unified server composition", () => {
   });
 
   it("keeps unrecoverable management creation on the startup fatal-and-close path", async () => {
-    const databasePath = tempDatabasePath();
-    const configRoot = join(dirnameOf(databasePath), "config");
+    const workspaceRoot = tempWorkspaceRoot();
+    const configRoot = join(workspaceRoot, "config");
     mkdirSync(configRoot, { recursive: true });
     writeFileSync(
       join(configRoot, "index.json"),
@@ -333,9 +333,9 @@ describe("unified server composition", () => {
     );
 
     const error = await startKaguyaServer({
-      ...config(databasePath),
+      ...config(workspaceRoot),
       configRoot,
-      webDistPath: join(dirnameOf(databasePath), "web"),
+      webDistPath: join(workspaceRoot, "web"),
     }).catch((thrown: unknown) => thrown);
 
     expect(error).toMatchObject({ code: "CONFIG_UNSUPPORTED_VERSION" });
@@ -736,10 +736,6 @@ describe("unified server composition", () => {
     expect(chatModel).toHaveBeenCalledWith("default-light");
   });
 });
-
-function dirnameOf(path: string): string {
-  return path.slice(0, path.lastIndexOf("/"));
-}
 
 async function selectedProfile(manager: FileUserConfigManager) {
   return manager.resolveProfileById(manager.getSelectedProfileId());
