@@ -106,6 +106,56 @@ describePostgres("information repository (PostgreSQL)", () => {
     }
   });
 
+  it("does not lose a pool when connect and reconnect overlap", async () => {
+    const scope = await testing.createPostgresTestingDatabaseScope(
+      connectionString!,
+    );
+    let databases: Awaited<ReturnType<typeof scope.connect>>[] = [];
+    try {
+      const results = await Promise.allSettled([
+        scope.connect(),
+        scope.reconnect(),
+      ]);
+      databases = results.flatMap((result) =>
+        result.status === "fulfilled" ? [result.value] : [],
+      );
+
+      expect(databases).toHaveLength(1);
+      expect(
+        results.filter((result) => result.status === "rejected"),
+      ).toHaveLength(1);
+
+      await scope.close();
+      await expect(databases[0]!.sql.query("SELECT 1")).rejects.toThrow();
+    } finally {
+      await Promise.allSettled(databases.map((database) => database.close()));
+      await scope.close();
+    }
+  });
+
+  it("does not return a usable pool when its scope closes while opening", async () => {
+    const scope = await testing.createPostgresTestingDatabaseScope(
+      connectionString!,
+    );
+    let database: Awaited<ReturnType<typeof scope.connect>> | undefined;
+    try {
+      const opening = scope.connect().then(
+        (opened) => ({ database: opened }),
+        () => ({ database: undefined }),
+      );
+      await scope.close();
+      ({ database } = await opening);
+
+      expect(database).toBeUndefined();
+      await expect(scope.connect()).rejects.toThrow(
+        "PostgreSQL testing scope is already closed",
+      );
+    } finally {
+      await database?.close();
+      await scope.close();
+    }
+  });
+
   defineInformationLedgerContract({
     name: "information ledger contract (PostgreSQL)",
     createDatabase: () => createPostgresTestingDatabase(connectionString!),

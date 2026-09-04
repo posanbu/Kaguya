@@ -67,3 +67,45 @@ $ tsc --noEmit --pretty false
 逐项复核确认：scope 不会在 reconnect 时新建或清空 schema；连接关闭不会泄漏 pool；scope 的 `close()` 幂等且在失败路径仍尝试所有清理步骤；旧 factory 的关闭语义仍保留；静态扫描保留 docs 与测试文件排除规则。`git diff --check` 无空白错误。
 
 唯一环境注意事项是 PostgreSQL 服务端口：本次使用任务上下文指定的 `54329`，而非简报示例的 `5432`。没有剩余代码层面的已知问题。
+
+## Fix round 1：串行化 scope 打开与关闭
+
+评审指出 `openConnection()` 在首次 await 之前只检查了 `#closed` 和 `#connection`，却没有占位 in-flight 打开状态。因此两个并发打开可各自创建 pool；并且 `close()` 可在打开恢复前完成，使后续调用把仍可用 pool 装入已关闭 scope。
+
+实现新增私有 `#opening` promise。发起打开时立即记录该 promise，第二个 `connect()` 或 `reconnect()` 因 scope 已有活动或 in-flight 连接而被拒绝。`close()` 首先标记 closed，再等待 in-flight 打开 settle，最后关闭活动连接、删除 schema 与结束管理 pool。打开流程在创建 pool 后及健康检查后均重新检查 closed；若 scope 已关闭，会先关闭该 pool 再拒绝，因此不能把连接安装或交还给调用方。
+
+真实 PostgreSQL 回归新增两项：并发 `connect()` / `reconnect()` 只有一个成功且最终关闭后该 pool 不可用；在 `connect()` 打开期间调用 `scope.close()` 后，打开 promise 不会交还数据库，且 scope 永远不能再次打开。
+
+### 本轮 RED
+
+```text
+$ KAGUYA_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54329/postgres pnpm test:postgres
+Test Files  1 failed | 1 passed (2)
+Tests  2 failed | 26 passed (28)
+
+does not lose a pool when connect and reconnect overlap
+expected ... to have a length of 1 but got 2
+
+does not return a usable pool when its scope closes while opening
+promise resolved "{ rows: [ { '?column?': 1 } ], ... }" instead of rejecting
+```
+
+### 本轮 GREEN
+
+```text
+$ KAGUYA_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54329/postgres pnpm test:postgres
+Test Files  2 passed (2)
+Tests  28 passed (28)
+```
+
+```text
+$ pnpm vitest run scripts/information-architecture.test.ts apps/server/src/config.test.ts apps/server/src/server-composition.test.ts
+Test Files  3 passed (3)
+Tests  26 passed (26)
+
+$ pnpm typecheck
+$ tsc -b --pretty false && pnpm --filter @kaguya/web typecheck
+$ tsc --noEmit --pretty false
+```
+
+本轮 `git diff --check` 和 touched-file Prettier 检查均通过。未发现剩余 lifecycle 竞态；并发打开在第二个调用到达前即由 `#opening` 保留，关闭与打开重叠时则由关闭路径等待并收束该 promise。

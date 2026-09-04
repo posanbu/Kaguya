@@ -91,6 +91,7 @@ export async function createPostgresTestingDatabaseScope(
 class SchemaIsolatedPostgresTestingScope implements PostgresTestingDatabaseScope {
   #closed = false;
   #connection: SchemaIsolatedPostgresConnection | undefined;
+  #opening: Promise<KaguyaDatabase> | undefined;
 
   constructor(
     private readonly connectionString: string,
@@ -112,6 +113,7 @@ class SchemaIsolatedPostgresTestingScope implements PostgresTestingDatabaseScope
 
     let failure: unknown;
     try {
+      await this.#opening?.catch(() => undefined);
       await this.#connection?.close();
     } catch (cause) {
       failure = cause;
@@ -137,24 +139,46 @@ class SchemaIsolatedPostgresTestingScope implements PostgresTestingDatabaseScope
     }
   }
 
-  private async openConnection(): Promise<KaguyaDatabase> {
+  private openConnection(): Promise<KaguyaDatabase> {
     if (this.#closed) {
-      throw new Error("PostgreSQL testing scope is already closed");
+      return Promise.reject(
+        new Error("PostgreSQL testing scope is already closed"),
+      );
     }
-    if (this.#connection !== undefined) {
-      throw new Error(
-        "PostgreSQL testing scope must close its current connection before reconnecting",
+    if (this.#connection !== undefined || this.#opening !== undefined) {
+      return Promise.reject(
+        new Error(
+          "PostgreSQL testing scope must close its current connection before reconnecting",
+        ),
       );
     }
 
+    const opening = this.createConnection();
+    this.#opening = opening;
+    return opening.finally(() => {
+      if (this.#opening === opening) {
+        this.#opening = undefined;
+      }
+    });
+  }
+
+  private async createConnection(): Promise<KaguyaDatabase> {
     const testing = await PgDatabase.connect({
       connectionString: this.connectionString,
       startupOptions: `-c search_path=${this.schema}`,
     });
     const connection = new SchemaIsolatedPostgresConnection(testing, this);
+    if (this.#closed) {
+      await connection.close();
+      throw new Error("PostgreSQL testing scope is already closed");
+    }
     this.#connection = connection;
     try {
       await testing.query("SELECT 1");
+      if (this.#closed) {
+        await connection.close();
+        throw new Error("PostgreSQL testing scope is already closed");
+      }
       return new KaguyaDatabase(connection);
     } catch (cause) {
       await connection.close();
