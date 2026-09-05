@@ -21,7 +21,7 @@ Kaguya 采用 pnpm workspace 和 TypeScript project references。应用负责装
 
 **`packages/modules`** — 入站、过滤、回复、assistant 与投递请求 Kind，以及默认 filter/LLM 模块。
 
-**`packages/database`** — PostgreSQL 信息账本、append-only schema、引用查询与日志投影 outbox。
+**`packages/database`** — PostgreSQL 信息账本、append-only schema、`JSONB` payload、外键保护的引用查询与日志投影 outbox；PGlite 与 CI 真实 PostgreSQL 共用账本契约。
 
 **`packages/config`** — Profile Registry、`selectedProfileId`、readiness、权限和安全写入。
 

@@ -28,6 +28,8 @@ description: Kaguya 当前已实现能力、明确边界和后续演进方向。
 
 - Profile Registry 管理一组 Profile 与唯一的 `selectedProfileId`；模块与消息没有 Profile 覆盖入口。
 - PostgreSQL information ledger 保存 append-only 原子与引用；日志投影是提交后的观察者。
+- payload 使用 `JSONB`，原子与显式引用由外键保护；原子、引用和日志 outbox 在同一事务写入。
+- PGlite 与 CI 的真实 PostgreSQL 服务共用账本契约、索引和重连验收。
 - Web、OneBot/NapCat adapter 只正规化平台内容并提交窄 `InformationIngress`。
   :::
 

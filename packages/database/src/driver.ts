@@ -1,20 +1,14 @@
 /**
- * 功能概述：本模块提供数据库访问抽象与两种 PostgreSQL 执行器，
- * 让仓储层只依赖统一的 query / transaction / exec 语义，而不直接依赖
- * `pg` 的 Pool 或 PGlite 的 WASM 细节。
- * 主要职责：`PgDatabase.connect` 管理真实连接池；`PGliteDatabase.create` 创建内存库；
- * 两个实现都适配 query、批量 exec、事务回滚和 close，内部 adapter 约束事务句柄。
+ * 功能概述：本模块提供生产 PostgreSQL 的数据库访问抽象与 `pg` 适配器，
+ * 让仓储层只依赖统一的 query / transaction / exec 语义。
+ * 主要职责：`PgDatabase.connect` 管理真实连接池（可传入 PostgreSQL startup options）；
+ * `PgTransaction` 适配事务 client，并确保业务失败优先于尽力回滚的失败。
  * 代码库关系：`information-repository.ts` 与 `migrations.ts` 只面向这里的
- * `SqlDatabase`/`SqlTransaction` 端口；`testing.ts` 用 `PGliteDatabase` 构造隔离测试库，
- * `index.ts` 的最终 `KaguyaDatabase` 入口则通过 `PgDatabase` 连接真实 PostgreSQL。
+ * `SqlDatabase`/`SqlTransaction` 端口；`index.ts` 用它建立生产连接；PGlite 测试驱动
+ * 位于只由 `testing.ts` 加载的 `pglite-driver.ts`，因此生产入口不解析 dev-only 依赖。
  * 输入输出与副作用：方法接收 SQL 与参数并异步返回 rows/rowCount；连接、事务与关闭
- * 会改变底层数据库资源状态，失败时保留原始异常，回滚失败不会覆盖业务失败。
+ * 会改变底层 PostgreSQL 资源状态，失败保留原始业务异常。
  */
-import {
-  PGlite,
-  type PGliteInterface,
-  type Transaction as PGliteTransaction,
-} from "@electric-sql/pglite";
 import { Pool, type PoolClient } from "pg";
 
 export interface SqlResult<
@@ -45,9 +39,13 @@ export class PgDatabase implements SqlDatabase {
 
   static async connect(options: {
     readonly connectionString: string;
+    readonly startupOptions?: string;
   }): Promise<PgDatabase> {
     return new PgDatabase(
-      new Pool({ connectionString: options.connectionString }),
+      new Pool({
+        connectionString: options.connectionString,
+        options: options.startupOptions,
+      }),
     );
   }
 
@@ -95,47 +93,6 @@ export class PgDatabase implements SqlDatabase {
   }
 }
 
-export class PGliteDatabase implements SqlDatabase {
-  constructor(private readonly database: PGliteInterface) {}
-
-  static async create(): Promise<PGliteDatabase> {
-    return new PGliteDatabase(await PGlite.create());
-  }
-
-  async query<Row extends Record<string, unknown>>(
-    text: string,
-    values?: readonly unknown[],
-  ): Promise<SqlResult<Row>> {
-    const result = await this.database.query<Row>(
-      text,
-      values === undefined ? undefined : [...values],
-    );
-    return {
-      rows: result.rows,
-      rowCount:
-        typeof result.rowCount === "number"
-          ? result.rowCount
-          : result.rows.length,
-    };
-  }
-
-  async exec(sql: string): Promise<void> {
-    await this.database.exec(sql);
-  }
-
-  async transaction<Result>(
-    run: (tx: SqlTransaction) => Promise<Result>,
-  ): Promise<Result> {
-    return this.database.transaction(async (tx) =>
-      run(new PGliteTransactionAdapter(tx)),
-    );
-  }
-
-  async close(): Promise<void> {
-    await this.database.close();
-  }
-}
-
 class PgTransaction implements SqlTransaction {
   constructor(private readonly client: PoolClient) {}
 
@@ -155,30 +112,5 @@ class PgTransaction implements SqlTransaction {
 
   async exec(sql: string): Promise<void> {
     await this.client.query(sql);
-  }
-}
-
-class PGliteTransactionAdapter implements SqlTransaction {
-  constructor(private readonly transaction: PGliteTransaction) {}
-
-  async query<Row extends Record<string, unknown>>(
-    text: string,
-    values?: readonly unknown[],
-  ): Promise<SqlResult<Row>> {
-    const result = await this.transaction.query<Row>(
-      text,
-      values === undefined ? undefined : [...values],
-    );
-    return {
-      rows: result.rows,
-      rowCount:
-        typeof result.rowCount === "number"
-          ? result.rowCount
-          : result.rows.length,
-    };
-  }
-
-  async exec(sql: string): Promise<void> {
-    await this.transaction.exec(sql);
   }
 }

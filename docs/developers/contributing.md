@@ -31,6 +31,7 @@ pnpm format:check
 pnpm lint
 pnpm typecheck
 pnpm test
+pnpm test:postgres
 pnpm prompt:test
 pnpm build
 git diff --check
@@ -54,7 +55,7 @@ pnpm exec vitest run apps/server/src
 
 **模型** — 使用 `ai/test` 的确定性模型，禁止访问真实 Provider。
 
-**数据库** — 使用 PGlite 或测试注入的 PostgreSQL 兼容数据库，不读取个人环境中的数据库或配置目录。
+**数据库** — 普通测试使用 PGlite，不读取个人环境中的数据库或配置目录。`pnpm test:postgres` 使用测试专用的 `KAGUYA_TEST_DATABASE_URL`，在 CI 提供的真实 PostgreSQL 服务上运行与 PGlite 共用的账本契约、索引和重连检查；它不是 Server 的生产配置。
 
 **信息 DAG** — 测试提交优先于广播、多个消费者的并发与隔离、派生原子的 `core:caused-by`/`core:context`，以及 `consumer.failed`、LLM 失败和投递失败的持久化事实。
 
@@ -82,7 +83,7 @@ pnpm exec vitest run apps/server/src
 
 ## PostgreSQL 账本迁移
 
-数据库模式由 `packages/database/src/migrations.ts` 管理，并由 `KaguyaDatabase.migrate()` 以事务创建或更新。信息原子与引用只允许追加；状态变化必须注册新原子，而不能更新或删除旧记录。
+数据库模式由 `packages/database/src/migrations.ts` 管理，并由 `KaguyaDatabase.migrate()` 在事务中创建或更新。payload 使用 `JSONB`；原子与显式引用由外键保护，原子、引用和日志投影 outbox 在同一事务写入。信息原子与引用只允许追加；状态变化必须注册新原子，而不能更新或删除旧记录。
 
 不要为 SQLite 保留兼容写入路径，也不要实现旧 SQLite 文件的自动导入或转换。迁移或连接失败必须显式报告，且日志不得包含完整数据库 URL、凭据、消息正文、Prompt 或模型输出。
 

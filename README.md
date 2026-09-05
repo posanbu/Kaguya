@@ -6,7 +6,7 @@ Kaguya 是一个以持久化信息原子（Information Atom）组织消息处理
 
 ## 快速开始
 
-需要 Node.js 24.18.0、pnpm 11.9.0，以及一个可连接的 PostgreSQL 数据库。`KAGUYA_DATABASE_URL` 必填；Server 不再创建 SQLite 文件，也不会转换旧 SQLite 数据。
+需要 Node.js 24.18.0、pnpm 11.9.0，以及一个可连接的 PostgreSQL 数据库。`KAGUYA_DATABASE_URL` 必填；Server 不再创建 SQLite 文件，也不会转换旧 SQLite 数据。Runtime 启动时通过 `KaguyaDatabase.connect()` 连接该 URL，并在单个数据库事务中执行可重复的账本迁移。
 
 ```bash
 corepack enable
@@ -53,6 +53,8 @@ core.llm.requested
 
 过滤器通过注册下一个 Kind 来推进链路；拒绝时只注册 `filter.decision`。消费者抛出或 reject 时，输入原子不会回滚，其他消费者仍会独立完成，Core 会追加 `consumer.failed` 作为失败事实。消费者不会因此自动重试。
 
+账本把 payload 保存为 PostgreSQL `JSONB`，并用外键保护原子与引用关系。原子、引用及其日志投影 outbox 会在同一事务中写入；outbox 在提交后再交给日志 sink 投影，因此日志失败不会改变已经提交的运行事实。
+
 ## 常用命令
 
 - `pnpm dev`：以开发模式启动唯一 Kaguya Server 与内嵌 Vite。
@@ -60,6 +62,7 @@ core.llm.requested
 - `pnpm start`：以生产模式启动构建后的 Server。
 - `pnpm demo`：连接 `KAGUYA_DATABASE_URL`，运行确定性信息 DAG，并输出根 `informationId` 与 Kind 计数。
 - `pnpm test`：运行单元和集成测试。
+- `pnpm test:postgres`：以 `KAGUYA_TEST_DATABASE_URL` 运行真实 PostgreSQL 账本契约、索引与重连测试；CI 使用专用临时服务，生产 Server 不读取此变量。
 - `pnpm typecheck`：检查 TypeScript project references 和 Web。
 - `pnpm lint`：运行 ESLint。
 - `pnpm prompt:test`：在阻断外部出口后验证 Prompt 结构。
@@ -80,7 +83,7 @@ core.llm.requested
 
 **`KAGUYA_NAPCAT_ENABLED`、`KAGUYA_NAPCAT_WS_URL`、`KAGUYA_NAPCAT_ACCESS_TOKEN`、`KAGUYA_NAPCAT_SELF_ID`、`KAGUYA_NAPCAT_RECONNECT_MS`** — 可选 NapCat 连接配置。
 
-`KAGUYA_DATABASE_PATH` 和旧的多应用 SQLite 变量会导致启动失败。Provider key、base URL 与模型不从环境变量读取，而是由当前全局选中的 Profile 提供。完整列表见[环境变量参考](docs/reference/environment-variables.md)。
+`KAGUYA_DATABASE_PATH` 与其他旧 SQLite 路径不是 Runtime 配置；Server 只使用 `KAGUYA_DATABASE_URL` 连接 PostgreSQL，且不会导入旧 SQLite 数据。Provider key、base URL 与模型不从环境变量读取，而是由当前全局选中的 Profile 提供。完整列表见[环境变量参考](docs/reference/environment-variables.md)。
 
 ## 仓库结构
 

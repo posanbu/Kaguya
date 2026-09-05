@@ -66,6 +66,14 @@ const forbidden: readonly ForbiddenRule[] = [
   { name: "sendTextReply", pattern: /\bsendTextReply\b/ },
   { name: "InboundReceipt.delivery", pattern: /\breadonly\s+delivery\??\s*:/ },
   { name: "node:sqlite", pattern: /\bnode:sqlite\b/ },
+  { name: "DatabaseSync", pattern: /\bDatabaseSync\b/ },
+  { name: ".sqlite", pattern: /\.sqlite\b/ },
+  { name: "databasePath", pattern: /\bdatabasePath\b/ },
+  { name: "KAGUYA_DATABASE_PATH", pattern: /\bKAGUYA_DATABASE_PATH\b/ },
+  {
+    name: "KAGUYA_DEMO_DATABASE_PATH",
+    pattern: /\bKAGUYA_DEMO_DATABASE_PATH\b/,
+  },
   { name: "getById", pattern: /\bgetById\b/ },
   { name: "listByReference", pattern: /\blistByReference\b/ },
 ];
@@ -225,6 +233,27 @@ if (process.env.VITEST) {
           "await runtime.emit(input);",
         ),
       ).toEqual(["packages/runtime/src/legacy.ts:1: emit"]);
+    });
+
+    it("rejects retired SQLite runtime identifiers in production source", () => {
+      expect(
+        findSourceViolations(
+          "packages/runtime/src/legacy.ts",
+          [
+            'import { DatabaseSync } from "node:sqlite";',
+            'const databasePath = "kaguya.sqlite";',
+            "const path = process.env.KAGUYA_DATABASE_PATH;",
+            "const demoPath = process.env.KAGUYA_DEMO_DATABASE_PATH;",
+          ].join("\n"),
+        ),
+      ).toEqual([
+        "packages/runtime/src/legacy.ts:1: node:sqlite",
+        "packages/runtime/src/legacy.ts:1: DatabaseSync",
+        "packages/runtime/src/legacy.ts:2: .sqlite",
+        "packages/runtime/src/legacy.ts:2: databasePath",
+        "packages/runtime/src/legacy.ts:3: KAGUYA_DATABASE_PATH",
+        "packages/runtime/src/legacy.ts:4: KAGUYA_DEMO_DATABASE_PATH",
+      ]);
     });
 
     it("rejects implicit context keys only in Prompt, Memory, and reply paths", () => {

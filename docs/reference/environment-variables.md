@@ -5,7 +5,7 @@ description: Kaguya Server、PostgreSQL、白名单、NapCat 与日志环境变�
 
 # 环境变量
 
-环境变量由 `apps/server` 在启动时读取。Provider Key、Base URL 和模型 ID 不属于环境变量，统一存放在 `KAGUYA_CONFIG_ROOT` 指向的 Profile Registry；Runtime 只使用启动时全局选中的 `selectedProfileId`。
+除 `KAGUYA_TEST_DATABASE_URL` 仅由测试命令读取外，下列环境变量由 `apps/server` 在启动时读取。Provider Key、Base URL 和模型 ID 不属于环境变量，统一存放在 `KAGUYA_CONFIG_ROOT` 指向的 Profile Registry；Runtime 只使用启动时全局选中的 `selectedProfileId`。
 
 ## Server 与 PostgreSQL
 
@@ -16,6 +16,12 @@ description: Kaguya Server、PostgreSQL、白名单、NapCat 与日志环境变�
 **`KAGUYA_HOST`** — 默认 `127.0.0.1`。唯一 Server 监听地址。
 
 **`KAGUYA_PORT`** — 默认 `3000`，允许范围 1 至 65535。
+
+## 测试专用 PostgreSQL
+
+**`KAGUYA_TEST_DATABASE_URL`** — 仅供 `pnpm test:postgres` 连接真实 PostgreSQL，运行共享账本契约、索引与重连测试。CI 为它创建临时服务；`apps/server` 不读取此变量，生产环境必须配置 `KAGUYA_DATABASE_URL`。
+
+## Server
 
 **`KAGUYA_CONFIG_ROOT`** — 默认 `.data/kaguya-config`。权限受保护的 Profile Registry 根目录。
 
@@ -100,12 +106,6 @@ KAGUYA_LOG_DESTINATION=.data/logs/kaguya.jsonl
 
 :::
 
-## 已拒绝的旧变量
+## 不再作为 Runtime 配置的旧值
 
-检测到以下任一变量时，Server 会在启动前失败，不读取其值，也不自动迁移：
-
-**旧多应用与 SQLite 变量** — `KAGUYA_API_HOST`、`KAGUYA_API_PORT`、`KAGUYA_API_DATABASE_PATH`、`KAGUYA_BOT_DATABASE_PATH`、`KAGUYA_DATABASE_PATH`。
-
-**旧模型变量** — `KAGUYA_LLM_API_KEY`、`KAGUYA_LLM_BASE_URL`、`KAGUYA_LLM_MODEL`。
-
-请使用 `KAGUYA_DATABASE_URL` 连接 PostgreSQL，并在 Profile Registry 中配置模型。旧 SQLite 数据不会自动导入、转换或删除。
+旧 SQLite 路径（包括 `KAGUYA_DATABASE_PATH`）不会决定 Runtime 的存储位置；Server 只使用 `KAGUYA_DATABASE_URL` 连接 PostgreSQL。旧 SQLite 数据不会自动导入、转换或删除。模型凭据、Base URL 和模型 ID 也不从旧环境变量读取，应在 Profile Registry 中配置。
