@@ -335,6 +335,7 @@ const setupStatusResponseJsonSchema = {
           type: "array",
           items: profileMetadataJsonSchema,
         },
+        gatewayToken: { type: "string", minLength: 1 },
         issues: {
           type: "array",
           items: configurationIssueJsonSchema,
@@ -538,7 +539,12 @@ export async function createHttpApplication(
     },
     async () => {
       const status = (await options.setup?.inspect()) ?? readySetupStatus();
-      return { data: status };
+      const gatewayToken = await (options.gatewayAuth ??
+        createEnvironmentGatewayAuthenticator(options.config.gatewayToken)
+      ).distributeToken();
+      return {
+        data: gatewayToken === undefined ? status : { ...status, gatewayToken },
+      };
     },
   );
 

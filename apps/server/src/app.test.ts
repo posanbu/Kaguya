@@ -355,6 +355,7 @@ describe("application API gateway", () => {
             updatedAt: "",
           },
         ],
+        gatewayToken,
       },
     });
     await app.close();
