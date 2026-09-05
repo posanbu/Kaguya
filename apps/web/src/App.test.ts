@@ -16,14 +16,16 @@ import {
   clearLoadedProfileStateSnapshot,
   deriveConfigurationView,
   readRegistryMetadata,
-  readBootstrapToken,
+  readGatewayToken,
 } from "./App.js";
 
-describe("readBootstrapToken", () => {
-  it("reads the one-time bootstrap token from the setup URL fragment", () => {
-    expect(readBootstrapToken("#bootstrapToken=bootstrap-secret")).toBe(
-      "bootstrap-secret",
+describe("readGatewayToken", () => {
+  it("reads only the gateway token URL fragment", () => {
+    expect(readGatewayToken("#gatewayToken=current-secret")).toBe(
+      "current-secret",
     );
+    expect(readGatewayToken("#bootstrapToken=old-secret")).toBe("");
+    expect(readGatewayToken("#gatewayToken=%ZZ")).toBe("");
   });
 });
 

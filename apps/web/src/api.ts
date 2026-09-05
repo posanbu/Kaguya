@@ -1,13 +1,13 @@
 /**
  * 架构说明：本模块是 Web 端唯一的 Kaguya HTTP 客户端门面，
  * 负责把界面动作翻译成显式的 `/api/v1/setup` 与 Profile Registry 请求。
- * 它必须只暴露最小必需的 wire contract：读取匿名 setup 状态、发送消息、
+ * 它必须只暴露最小必需的 wire contract：读取受保护的 setup 状态、发送消息、
  * 检查健康，以及对 Profile 集合执行列出、创建、读取、完整替换、
  * 显式选择和删除；所有请求都要在本地先校验 token，再拼出精确的
  * method / URL / Bearer 头 / JSON body，避免把鉴权或隐藏字段交给浏览器猜测。
  * 主要职责：为 App 及后续 Profile 管理页面提供稳定的 typed API，
  * 同时保留旧的消息与健康检查路径；Profile 请求必须编码 path 参数，
- * 匿名 setup 状态要能返回安全的 Registry 元数据，但不能包含任何 secret。
+ * setup 状态要能返回安全的 Registry 元数据，但不能包含任何 secret。
  * 代码库关系：该文件依赖 `@kaguya/config` 的 Profile JSON 结构作为返回值
  * 类型参考，但不会持有任何持久化密钥；Task 6 的 editor helper 会把
  * 表单字段转成完整的替换体，Task 7 再消费这里的客户端函数。
@@ -16,6 +16,7 @@
  * 服务端返回错误 JSON，这里会抛出 `GatewayRequestError`。
  */
 export const MAX_MESSAGE_LENGTH = 131_072;
+export const GATEWAY_UNAUTHORIZED_EVENT = "kaguya:gateway-unauthorized";
 
 export interface GatewayConfig {
   readonly token: string;
@@ -125,10 +126,10 @@ export interface ConfigurationWarning {
 
 /**
  * 说明：Web 客户端保留 `setup_required` 这个状态，是为了对齐底层配置库在
- * bootstrap 之前的只读 inspect 契约。正常的 Kaguya Server 启动流程会先创建
+ * Profile Registry 初始化之前的只读 inspect 契约。正常的 Kaguya Server 启动流程会先创建
  * 空 registry，因此 `/api/v1/setup` 通常返回 `invalid`、`review_required`、
  * `restart_required` 或 `ready`，但客户端仍接受 `setup_required`，以兼容
- * 未来显式 bootstrap/setup mode 或更底层的管理调用。
+ * 更底层的管理调用。
  */
 export interface ConfigurationStatus {
   readonly status:
@@ -183,42 +184,6 @@ export interface ReplaceProfileInput {
 }
 
 export type ProfileReplacementInput = ReplaceProfileInput;
-
-export interface ConfigurationSaved {
-  readonly status: "configured";
-  readonly restartRequired: true;
-}
-
-export async function completeInitialConfiguration(
-  config: GatewayConfig,
-  input: Omit<InitialConfigurationInput, "acknowledgeOptional">,
-  fetchImplementation: typeof fetch = fetch,
-): Promise<ConfigurationSaved> {
-  const response = await requestAuthenticatedJson(
-    config,
-    "/api/v1/setup",
-    {
-      method: "POST",
-      headers: jsonHeaders(requireToken(config)),
-      body: JSON.stringify(input),
-    },
-    fetchImplementation,
-  );
-  const payload = await readJson(response);
-  if (!response.ok || !isInitialConfigurationResponse(payload)) {
-    const gatewayError = isErrorResponse(payload) ? payload.error : undefined;
-    throw new GatewayRequestError(
-      gatewayError?.message ?? `初始化配置失败（HTTP ${response.status}）`,
-      gatewayError?.code ?? "configuration_setup_failed",
-      response.status,
-      gatewayError?.requestId,
-    );
-  }
-  if (typeof sessionStorage !== "undefined") {
-    sessionStorage.setItem("kaguya.gatewayToken", payload.data.gatewayToken);
-  }
-  return { status: "configured", restartRequired: true };
-}
 
 export class GatewayRequestError extends Error {
   constructor(
@@ -280,9 +245,11 @@ export async function saveNapCatSettings(
 }
 
 export async function getConfigurationStatus(
+  config: GatewayConfig,
   fetchImplementation: typeof fetch = fetch,
 ): Promise<ConfigurationStatus> {
-  const response = await requestJson(
+  const response = await requestAuthenticatedJson(
+    config,
     "/api/v1/setup",
     { method: "GET" },
     fetchImplementation,
@@ -502,57 +469,6 @@ export async function sendMessage(
   return payload.data;
 }
 
-/**
- * 兼容旧的 setup 聚合写入口，供当前尚未切换到 Profile 管理页的界面使用。
- * 后续 UI 迁移完成后应移除。
- */
-export interface InitialConfigurationInput {
-  readonly profileName: string;
-  readonly baseUrl: string;
-  readonly apiKey: string;
-  readonly lightModel: string;
-  readonly heavyModel: string;
-  readonly acknowledgeOptional: boolean;
-}
-
-export async function initializeConfiguration(
-  config: GatewayConfig,
-  input: InitialConfigurationInput,
-  fetchImplementation: typeof fetch = fetch,
-): Promise<ConfigurationSaved> {
-  const profileId = input.profileName.trim() === "default"
-    ? "default"
-    : (await createProfile(config, { name: input.profileName }, fetchImplementation)).profile.id;
-  await replaceProfile(config, profileId, {
-    name: input.profileName,
-    acknowledgedWarnings: input.acknowledgeOptional
-      ? ["platforms-empty", "plugins-empty"]
-      : [],
-    ai: {
-      defaultProviderId: "default-provider",
-      modelTiers: {
-        light: { providerId: "default-provider", modelId: input.lightModel },
-        heavy: { providerId: "default-provider", modelId: input.heavyModel },
-      },
-      providers: [{
-        id: "default-provider",
-        type: "openai-compatible",
-        enabled: true,
-        baseUrl: input.baseUrl,
-        apiKey: input.apiKey,
-        models: [input.lightModel, input.heavyModel],
-        settings: {},
-      }],
-    },
-    platforms: [],
-    plugins: [],
-  }, fetchImplementation);
-  return {
-    status: "configured",
-    restartRequired: true,
-  };
-}
-
 async function readProfileMutationResult(
   response: Response,
   failureCode: string,
@@ -597,7 +513,11 @@ async function requestJson(
   fetchImplementation: typeof fetch,
 ): Promise<Response> {
   try {
-    return await fetchImplementation(path, init);
+    const response = await fetchImplementation(path, init);
+    if (response.status === 401 && hasAuthorizationHeader(init.headers)) {
+      globalThis.window?.dispatchEvent(new Event(GATEWAY_UNAUTHORIZED_EVENT));
+    }
+    return response;
   } catch (error) {
     throw new GatewayRequestError(
       error instanceof Error && error.name === "AbortError"
@@ -607,6 +527,10 @@ async function requestJson(
       0,
     );
   }
+}
+
+function hasAuthorizationHeader(headers: HeadersInit | undefined): boolean {
+  return headers !== undefined && new Headers(headers).has("authorization");
 }
 
 async function readJson(response: Response): Promise<unknown> {
@@ -733,19 +657,6 @@ function isProfileMutationResultResponse(
     isRecord(value.data) &&
     isUserConfigProfile(value.data.profile) &&
     typeof value.data.restartRequired === "boolean"
-  );
-}
-
-function isInitialConfigurationResponse(
-  value: unknown,
-): value is { data: ProfileMutationResult & { gatewayToken: string } } {
-  return (
-    isRecord(value) &&
-    isRecord(value.data) &&
-    isUserConfigProfile(value.data.profile) &&
-    typeof value.data.restartRequired === "boolean" &&
-    typeof value.data.gatewayToken === "string" &&
-    value.data.gatewayToken.length > 0
   );
 }
 

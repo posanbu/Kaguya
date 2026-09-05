@@ -135,10 +135,9 @@ it("applies configured NapCat allowlists before submitting through ingress", asy
   });
   const serverConfig = readServerConfig({
     KAGUYA_DATABASE_URL: "postgresql://localhost/kaguya",
-    KAGUYA_GATEWAY_TOKEN: "0123456789abcdef",
     KAGUYA_GATEWAY_ALLOWLIST_PLATFORMS: "qq",
     KAGUYA_GATEWAY_ALLOWLIST_USER_IDS: "112233",
-  }).config;
+  });
   const allowlist = new GatewayAllowlist(serverConfig.gatewayAllowlist);
   const supervisor = createNapCatSupervisor({
     config: {

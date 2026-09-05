@@ -27,18 +27,20 @@ description: Kaguya 当前已实现能力、明确边界和后续演进方向。
 ::: timeline 配置与审计
 
 ::: timeline 配置、模型与审计
+
 - 多 Profile Registry 支持创建、完整替换、显式全局选择和受限删除。
-- Server 未设置 Gateway Token 时自动生成，Web UI 页面加载时自动取得。
+- Server 每次启动生成新的 Gateway Token，并在成功监听后打印带 fragment 的完整 Web UI 访问链接。
 - Vercel AI SDK Core 统一模型调用、结构化输出和错误分类。
 - SQLite 与结构化日志记录消息、LLM trace 和出站状态。
-:::
+  :::
 
 ::: timeline 信息原子与异步账本基础设施
+
 - InformationAtom、显式引用与可封锁 Kind Registry 已实现。
 - InformationLedger 提供异步 append、get、getMany 与反向引用 query。
 - PostgreSQL/PGlite 仓储以追加式事务维护原子、引用和 Kind 集合。
 - 持久 outbox 将日志作为提交后的单向投影，失败任务保留待重试。
-:::
+  :::
 
 ## 当前明确没有
 

@@ -27,7 +27,7 @@ Kaguya 是一个以持久化信息 DAG 组织运行事实、模块可插拔的 T
 flowchart LR
   A[准备 Node.js 与 pnpm] --> B[安装依赖]
   B --> C[启动统一 Server]
-  C --> D[页面自动取得 Gateway Token]
+  C --> D[打开终端打印的完整访问链接]
   D --> E{配置是否就绪}
   E -- 否 --> F[在 Web UI 补齐或确认配置]
   F --> G[重启 Server]
@@ -47,7 +47,7 @@ flowchart LR
 
 ### 浏览器界面
 
-查看[使用 Web UI](./webui)，了解同源页面、Gateway Token 的保存位置以及当前响应边界。
+查看[使用 Web UI](./webui)，了解同源页面、每次启动的访问链接以及当前响应边界。
 
 ### 遇到问题
 

@@ -330,6 +330,17 @@ button:disabled {
   line-height: 1.6;
 }
 
+.access-link-example {
+  max-width: 100%;
+  padding: 9px 11px;
+  overflow-wrap: anywhere;
+  border: 1px solid rgb(207 95 47 / 22%);
+  border-radius: 8px;
+  background: rgb(255 255 255 / 62%);
+  color: #414852;
+  font-size: 12px;
+}
+
 .topbar {
   display: flex;
   align-items: center;
@@ -1124,6 +1135,12 @@ button:disabled {
 :root[data-theme="dark"] .setup-status,
 :root[data-theme="dark"] .setup-status-card {
   color: #d7c8c1;
+}
+
+:root[data-theme="dark"] .access-link-example {
+  border-color: rgb(104 224 226 / 30%);
+  background: rgb(255 255 255 / 5%);
+  color: #e5d7d0;
 }
 
 :root[data-theme="dark"] .eyebrow,

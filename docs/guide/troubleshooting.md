@@ -33,7 +33,7 @@ curl http://127.0.0.1:3000/healthz
 
 ## 重启后出现 401
 
-若没有显式设置 `KAGUYA_GATEWAY_TOKEN`，每次启动都会生成新 token。刷新整个页面，让客户端重新请求 `/api/v1/setup`。外部脚本需要重新获取 token，或使用至少 16 字符的稳定环境变量。
+Server 每次启动都会生成新 token，旧链接随即失效。回到当前运行 `pnpm dev` 或 `pnpm start` 的终端，重新打开完整的 `Kaguya access URL`；只刷新旧链接仍会继续使用旧 fragment。
 
 ## 配置目录无法打开
 

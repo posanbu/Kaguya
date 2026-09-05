@@ -55,7 +55,7 @@ pnpm install
 
 ## 以开发模式启动
 
-Gateway Token 可选：未设置时每次启动自动生成随机 token，Web UI 页面加载时自动获取；需要跨重启稳定的 token 时可显式设置至少 16 个字符。配置目录可以使用默认 `.data/kaguya-config`，也可以指定绝对路径。
+Server 每次启动自动生成随机 Gateway Token。配置目录可以使用默认 `.data/kaguya-config`，也可以指定绝对路径。
 
 ::: code-group
 
@@ -73,7 +73,7 @@ pnpm dev
 
 :::
 
-打开 `http://127.0.0.1:3000`。开发模式把 Vite middleware 和 HMR 挂在 Fastify 内部，不需要第二个 5173 端口。
+成功监听后，从终端打开完整的 `Kaguya access URL`，其中包含本次启动的 `#gatewayToken=` fragment。根地址不会自动取得 token。开发模式把 Vite middleware 和 HMR 挂在 Fastify 内部，不需要第二个 5173 端口。
 
 ::: code-group
 

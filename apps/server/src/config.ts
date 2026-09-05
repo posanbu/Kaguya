@@ -59,24 +59,11 @@ export interface NapCatConfig {
   readonly reconnectMs: number;
 }
 
-export interface ResolvedServerConfig {
-  readonly config: ServerConfig;
-  readonly gatewayTokenSource: "environment" | "generated";
-}
-
 export function readServerConfig(
   environment: NodeJS.ProcessEnv = process.env,
-): ResolvedServerConfig {
+): ServerConfig {
   rejectLegacyEnvironment(environment);
-  const envGatewayToken = optionalText(environment.KAGUYA_GATEWAY_TOKEN);
-  const gatewayTokenSource =
-    envGatewayToken === undefined
-      ? ("generated" as const)
-      : ("environment" as const);
-  const gatewayToken = envGatewayToken ?? randomBytes(32).toString("base64url");
-  if (gatewayToken.length < 16) {
-    throw new Error("KAGUYA_GATEWAY_TOKEN must contain at least 16 characters");
-  }
+  const gatewayToken = randomBytes(32).toString("base64url");
   const databaseUrl = optionalText(environment.KAGUYA_DATABASE_URL);
   if (databaseUrl === undefined) {
     throw new Error("KAGUYA_DATABASE_URL is required");
@@ -94,8 +81,10 @@ export function readServerConfig(
     );
   }
 
-  const config: ServerConfig = {
-    host: optionalText(environment.KAGUYA_HOST) ?? "127.0.0.1",
+  const host = optionalText(environment.KAGUYA_HOST) ?? "127.0.0.1";
+  assertLoopbackHost(host);
+  return {
+    host,
     port: integerEnvironmentValue(
       environment.KAGUYA_PORT,
       3000,
@@ -154,7 +143,12 @@ export function readServerConfig(
       ),
     },
   };
-  return { config, gatewayTokenSource };
+}
+
+export function assertLoopbackHost(host: string): void {
+  if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1") {
+    throw new Error("KAGUYA_HOST must be 127.0.0.1, localhost, or ::1");
+  }
 }
 
 function rejectLegacyEnvironment(environment: NodeJS.ProcessEnv): void {

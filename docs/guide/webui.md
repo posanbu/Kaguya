@@ -9,12 +9,12 @@ description: 通过同源 Web UI 管理 Profile、提交消息并理解当前响
 
 ## 打开页面
 
-先按[安装与启动](./installation)运行 Server，再打开：
+先按[安装与启动](./installation)运行 Server。成功监听后，终端会打印类似下面的完整访问链接：
 
 ::: code-group
 
 ```text [默认地址 ~vscode-icons:file-type-url~]
-http://127.0.0.1:3000
+Kaguya access URL: http://127.0.0.1:3000/#gatewayToken=<本次启动生成的 token>
 ```
 
 :::
@@ -23,7 +23,9 @@ http://127.0.0.1:3000
 
 ## 页面如何决定显示内容
 
-页面加载时先请求 `/api/v1/setup`，取得 readiness、Profile 摘要和本实例 Gateway Token。随后进入以下状态之一：
+页面只从 `#gatewayToken=` fragment 读取 token，再携带 Bearer 认证请求 `/api/v1/setup`，取得 readiness 和 Profile 摘要。随后进入以下状态之一：
+
+**访问受限** — 根地址没有 token，或链接来自上一次 Server 启动；页面要求重新打开当前终端中的完整链接。
 
 **检查中** — 等待 Server 返回配置状态。
 
@@ -39,9 +41,9 @@ http://127.0.0.1:3000
 
 ## Gateway Token 与访问边界
 
-Gateway Token 保护 Profile 和消息接口。未设置 `KAGUYA_GATEWAY_TOKEN` 时，Server 每次启动生成随机 token；Web UI 从 `/api/v1/setup` 或 `/api/v1/gateway/token` 自动取得，不要求手填，也不写入浏览器持久存储。
+Gateway Token 保护 setup 状态、Profile、NapCat 和消息接口。Server 每次启动生成新的全权限 token，并只通过监听成功后打印的 URL 交给用户。前端保留 fragment 以支持刷新，只在页面内存中使用 token，不写入浏览器存储。fragment 不随 HTTP 请求或 Referer 发送，前端会显式把 token 放入 `Authorization` 请求头。
 
-这两个取 token 的接口本身是公开的。因此，**任何能访问 Kaguya 监听端口的人，实际上都能取得管理与消息权限**。默认只监听 `127.0.0.1`；不要仅靠这个 token 把服务直接暴露到公网。需要远程访问时，应放在可信网络或具备 TLS 与独立认证的反向代理之后。
+Server 只允许监听 `127.0.0.1`、`localhost` 或 `::1`；配置其他 `KAGUYA_HOST` 会拒绝启动。完整访问链接等同管理权限，请勿分享。
 
 ## 管理 Profile
 
@@ -61,7 +63,7 @@ Web gateway 会把输入规范化为 `web` 平台消息，使用 `web:${requestI
 
 ## 常见操作结果
 
-**401 unauthorized** — Token 与当前 Server 实例不一致。Server 重启后刷新页面，让客户端重新取得 token。
+**401 unauthorized** — Token 与当前 Server 实例不一致。页面会切换到访问受限状态；从当前 Server 终端重新打开完整链接。
 
 **503 configuration_setup_required** — 所选 Profile 未 ready，Runtime ingress 没有启动。返回 Profile 管理补齐配置。
 
