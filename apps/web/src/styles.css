@@ -218,6 +218,18 @@ button:disabled {
   line-height: 1.5;
 }
 
+.setup-check span {
+  display: grid;
+  gap: 4px;
+}
+
+.setup-check small {
+  color: #8a6f5d;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.6;
+}
+
 .setup-check input {
   width: 16px;
   height: 16px;
@@ -434,7 +446,8 @@ button:disabled {
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(250px, 310px) minmax(0, 900px);
+  grid-template-columns: minmax(0, 900px);
+  justify-content: center;
   gap: 24px;
   width: min(1240px, 100%);
   min-height: calc(100vh - 72px);

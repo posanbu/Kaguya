@@ -24,6 +24,7 @@ export interface GatewayAuthenticator {
   readonly bootstrapToken?: string;
   authorize(token: string, scope: GatewayScope): Promise<boolean>;
   completeBootstrap(): Promise<string>;
+  distributeToken(): Promise<string | undefined>;
 }
 
 export async function createBootstrapGatewayAuthenticator(
@@ -56,6 +57,9 @@ export async function createBootstrapGatewayAuthenticator(
       });
       return completion;
     },
+    async distributeToken() {
+      return active ? bootstrapToken : persistentToken;
+    },
   };
 }
 
@@ -75,6 +79,9 @@ export function createPersistentGatewayAuthenticator(
     completeBootstrap() {
       return Promise.reject(new Error("Bootstrap gateway token is unavailable"));
     },
+    async distributeToken() {
+      return undefined;
+    },
   };
 }
 
@@ -87,6 +94,9 @@ function createStaticGatewayAuthenticator(
     },
     completeBootstrap() {
       return Promise.reject(new Error("Bootstrap gateway token is unavailable"));
+    },
+    async distributeToken() {
+      return expectedToken;
     },
   };
 }

@@ -278,6 +278,7 @@ describe("unified server composition", () => {
             updatedAt: "",
           },
         ],
+        gatewayToken,
       },
     });
     expect(missingApi.statusCode).toBe(404);

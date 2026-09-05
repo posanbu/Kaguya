@@ -70,7 +70,7 @@ describe("first-run gateway bootstrap", () => {
 
     const readiness = await app.inject({ method: "GET", url: "/api/v1/setup" });
     expect(readiness.statusCode).toBe(200);
-    expect(readiness.body).not.toContain("gatewayToken");
+    expect(readiness.json().data.gatewayToken).toBe(persistentToken);
     expect(await auth.authorize(auth.bootstrapToken!, "setup")).toBe(false);
     expect(await auth.authorize(persistentToken, "management")).toBe(true);
     expect(await loadPersistentGatewayCredential(join(root, "config"))).not.toBeNull();
