@@ -15,6 +15,7 @@ export const sidebar: DefaultTheme.SidebarItem[] = [
     items: [
       { text: "开发概览", link: "/developers/" },
       { text: "运行时架构", link: "/developers/architecture" },
+      { text: "信息模块 SDK 与 Core 宿主", link: "/developers/information-modules" },
       { text: "参与贡献", link: "/developers/contributing" },
       { text: "文档编写规范", link: "/developers/markdown-features" },
     ],

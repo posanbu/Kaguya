@@ -1,14 +1,31 @@
+/**
+ * 功能概述：验证 Server 侧 NapCat WebSocket transport、连接重建与窄
+ * `InformationIngress` 组合，防止平台连接获得完整 Runtime 或业务模块。
+ * 主要职责：覆盖 JSON 解析、access token URL、transport 异常透传、
+ * supervisor 重连/退役/停止，以及非空 Server allowlist 从环境配置到真实 OneBot frame
+ * 的贯通：拒绝消息不得调用 ingress，允许消息才调用 `ingress.submit`。
+ * 代码库关系：直接驱动 `napcat.ts`，并经由 platform-adapters 的
+ * `NapCatOneBotAdapter` 正规化入站消息；Server 启动时只注入 ingress 与 logger。
+ * 输入输出与副作用：用内存 FakeWebSocket/transport 触发连接事件和计时器；
+ * 测试结束会恢复全局 WebSocket 并停止 supervisor。
+ */
+import { closeLogger, createLogger } from "@kaguya/logger";
+import { GatewayAllowlist } from "@kaguya/runtime";
 import type {
+  InformationIngress,
   JsonMessageTransport,
+  PlatformInboundMessage,
   PlatformDeliveryReceipt,
-  PlatformReplySender,
+  PlatformOutboundTransport,
 } from "@kaguya/platform-adapters";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  createNapCatSupervisor,
   NapCatConnectionSupervisor,
   WebSocketJsonTransport,
 } from "./napcat.js";
+import { readServerConfig } from "./config.js";
 
 class FakeWebSocket {
   static latest: FakeWebSocket | undefined;
@@ -103,6 +120,76 @@ describe("WebSocketJsonTransport", () => {
   });
 });
 
+it("applies configured NapCat allowlists before submitting through ingress", async () => {
+  globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+  const submitted: PlatformInboundMessage[] = [];
+  const ingress: InformationIngress = {
+    submit: async (message) => {
+      submitted.push(message);
+      return { rootInformationId: "information-1", deliveries: [] };
+    },
+  };
+  const logger = createLogger({
+    service: "napcat-composition-test",
+    level: "silent",
+  });
+  const serverConfig = readServerConfig({
+    KAGUYA_DATABASE_URL: "postgresql://localhost/kaguya",
+    KAGUYA_GATEWAY_TOKEN: "0123456789abcdef",
+    KAGUYA_GATEWAY_ALLOWLIST_PLATFORMS: "qq",
+    KAGUYA_GATEWAY_ALLOWLIST_USER_IDS: "112233",
+  }).config;
+  const allowlist = new GatewayAllowlist(serverConfig.gatewayAllowlist);
+  const supervisor = createNapCatSupervisor({
+    config: {
+      enabled: true,
+      adapterId: "napcat.qq.main",
+      wsUrl: "ws://127.0.0.1:3001",
+      selfId: "998877",
+      reconnectMs: 250,
+    },
+    ingress,
+    logger,
+    allowsInbound: (message: PlatformInboundMessage) =>
+      allowlist.allows(message),
+  });
+
+  await supervisor.start();
+  FakeWebSocket.latest?.emit("message", {
+    data: JSON.stringify({
+      post_type: "message",
+      message_type: "private",
+      self_id: 998877,
+      message_id: 12344,
+      user_id: 445566,
+      message: "denied",
+    }),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(submitted).toEqual([]);
+
+  FakeWebSocket.latest?.emit("message", {
+    data: JSON.stringify({
+      post_type: "message",
+      message_type: "private",
+      self_id: 998877,
+      message_id: 12345,
+      user_id: 112233,
+      message: "hello",
+    }),
+  });
+  await vi.waitFor(() => expect(submitted).toHaveLength(1));
+
+  expect(submitted[0]).toMatchObject({
+    adapterId: "napcat.qq.main",
+    platformMessageId: "12345",
+    text: "hello",
+  });
+  expect(submitted[0]).not.toHaveProperty("traceId");
+  await supervisor.stop();
+  await closeLogger(logger);
+});
+
 class SupervisorTransport implements JsonMessageTransport {
   private readonly closeHandlers = new Set<(error?: Error) => void>();
 
@@ -128,7 +215,7 @@ describe("NapCatConnectionSupervisor", () => {
     vi.useFakeTimers();
     const connections: Array<{
       transport: SupervisorTransport;
-      sender: PlatformReplySender;
+      sender: PlatformOutboundTransport;
       adapter: {
         starts: number;
         stops: number;
@@ -142,8 +229,8 @@ describe("NapCatConnectionSupervisor", () => {
       createConnection: () => {
         const connectionNumber = connections.length + 1;
         const transport = new SupervisorTransport();
-        const sender: PlatformReplySender = {
-          async sendTextReply(target): Promise<PlatformDeliveryReceipt> {
+        const sender: PlatformOutboundTransport = {
+          async sendMessage(target): Promise<PlatformDeliveryReceipt> {
             return {
               ok: true,
               adapterId: "napcat.qq.main",
@@ -182,7 +269,10 @@ describe("NapCatConnectionSupervisor", () => {
       expect(connections[0]?.adapter.stops).toBe(1);
       expect(connections[1]?.adapter.starts).toBe(1);
       await expect(
-        supervisor.sendTextReply({ kind: "private", userId: "112233" }, "hi"),
+        supervisor.sendMessage(
+          { kind: "private", userId: "112233" },
+          { kind: "text", text: "hi" },
+        ),
       ).resolves.toMatchObject({ platformMessageId: "connection-2" });
 
       await supervisor.stop();

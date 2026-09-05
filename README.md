@@ -1,32 +1,24 @@
 # Kaguya
 
-Kaguya 是一个事件驱动、模块可插拔的 TypeScript AI Bot Runtime。仓库只有一个长期运行的应用入口：`apps/server` 在同一进程、同一端口上提供 Web UI、HTTP API 和可选 NapCat 连接，并通过唯一的 `@kaguya/runtime` 处理消息。
+Kaguya 是一个以持久化信息原子（Information Atom）组织消息处理的 TypeScript AI Bot Runtime。`apps/server` 是唯一长期运行入口：它在同一进程和端口提供 Web UI、HTTP API 与可选的 NapCat 连接，并把正规化后的平台内容提交给唯一的 `@kaguya/runtime` ingress。
 
-核心能力包括：
-
-- `KaguyaRuntime` 统一持有 SQLite、EventBus、ModuleHost、LLM execution port 和 outbound transport registry；
-- 入站消息先落库并广播 `message.ingested`；模块自行过滤、组织上下文、请求 LLM 和选择出站目标；
-- 入站消息不包含分组标识，Core 不根据私聊、群聊、用户或 HTTP 字段建立或隔离历史；
-- Fastify 同端口提供 UI、`/healthz`、OpenAPI 和受 Bearer Token 保护的消息 API；
-- 开发环境由 Fastify 内挂 Vite middleware，HMR 不需要第二个 Web 服务；
-- NapCat 可选且独立重连，断线不会影响 HTTP 和 Web UI；
-- 开发默认 pretty 日志、生产默认 JSON，并统一关联 request、trace、event 和 workflow node；
-- 默认 demo 模块链为 `always filter → LLM reply → outbound request`。
+每一项 Core 运行事实只有一个身份：`informationId`。入站文本、过滤结果、LLM 生命周期、assistant 文本、投递请求与投递结果都是不可变原子；原子之间用显式引用构成 DAG，而不是依赖隐式的执行身份。
 
 ## 快速开始
 
-需要 Node.js 24.18.0 和 pnpm 11.9.0。
+需要 Node.js 24.18.0、pnpm 11.9.0，以及一个可连接的 PostgreSQL 数据库。`KAGUYA_DATABASE_URL` 必填；Server 不再创建 SQLite 文件，也不会转换旧 SQLite 数据。
 
 ```bash
 corepack enable
 pnpm install
 export KAGUYA_CONFIG_ROOT="/absolute/path/to/kaguya-config"
+export KAGUYA_DATABASE_URL="postgresql://kaguya:password@127.0.0.1:5432/kaguya"
 pnpm dev
 ```
 
 `KAGUYA_GATEWAY_TOKEN` 可选：显式设置（至少 16 字符）时作为最高优先级 Gateway Token。全新本地配置且仅监听 loopback 时，Server 会在终端展示一次性引导 Token；首次配置成功后生成并持久化正式凭据。
 
-`KAGUYA_CONFIG_ROOT` 指向权限受保护的 profile store。目录尚未初始化或当前全局选中的 profile 不完整时，Server 会进入统一配置模式并显示引导页；如果当前 selected Profile 仍然 `invalid` 或存在未解决的 Provider 配置问题，页面会继续展示 readiness 问题。只有当用户选择了某个 Profile，或完整替换了当前 selected Profile，且该 selected Profile 已 ready 时，页面才会进入 `restart_required` 并要求重启服务。配置文件损坏或权限异常仍会拒绝启动，不会自动覆盖。初始化格式与密钥边界见 [`@kaguya/config`](packages/config/README.md)。打开 `http://127.0.0.1:3000` 后，页面和 API 使用同源路径。
+`KAGUYA_CONFIG_ROOT` 指向权限受保护的 Profile Registry。Registry 有且只有一个显式的 `selectedProfileId`；Server 仅在启动时读取这个选中的 Profile 并构造共享模型解析器，不会按消息、模块或用户选择另一个 Profile。目录尚未初始化或选中的 Profile 未就绪时，HTTP 与 Web UI 仍可用于配置，但 Runtime 和 NapCat ingress 不会启动。修改或切换选中的 Profile 后需要重启 Server 才会应用新配置。配置文件损坏或权限异常仍会拒绝启动，不会自动覆盖。初始化格式与密钥边界见 [`@kaguya/config`](packages/config/README.md)。
 
 WebUI 的 Profile 页面旁提供独立的 NapCat 配置页。NapCat 配置实际保存到 `KAGUYA_CONFIG_ROOT/napcat.json`，保存后重启服务即可生效；若未保存过该文件，仍可使用 `KAGUYA_NAPCAT_*` 环境变量配置。
 
@@ -35,69 +27,77 @@ WebUI 的 Profile 页面旁提供独立的 NapCat 配置页。NapCat 配置实�
 ```bash
 pnpm build
 export KAGUYA_CONFIG_ROOT="/absolute/path/to/kaguya-config"
+export KAGUYA_DATABASE_URL="postgresql://kaguya:password@127.0.0.1:5432/kaguya"
 pnpm start
 ```
 
-新 Runtime 默认使用 `.data/kaguya.sqlite`。历史的 `.data/kaguya-api.sqlite` 和 `.data/kaguya-bot.sqlite` 不会被读取、合并或删除。
+## 信息 DAG
+
+Runtime 为入站内容创建 context 根原子，再注册 `core.message.inbound.text`。`InformationCore.register()` 会生成信息原子、完成校验并提交 PostgreSQL 账本；只有提交成功后，才向该 Kind 的当前消费者并发广播。没有消费者的原子同样会保留。
+
+默认链路是：
+
+```text
+core.runtime.context
+  -> core.message.inbound.text
+  -> core.reply.requested
+  -> core.llm.requested
+  -> core.llm.completed
+  -> core.message.assistant.text
+  -> core.delivery.requested
+  -> core.delivery.delivered | core.delivery.failed
+
+core.llm.requested
+  -> core.llm.failed（终止该分支）
+```
+
+过滤器通过注册下一个 Kind 来推进链路；拒绝时只注册 `filter.decision`。消费者抛出或 reject 时，输入原子不会回滚，其他消费者仍会独立完成，Core 会追加 `consumer.failed` 作为失败事实。消费者不会因此自动重试。
 
 ## 常用命令
 
-| 命令               | 用途                                          |
-| ------------------ | --------------------------------------------- |
-| `pnpm dev`         | 以开发模式启动唯一 Kaguya Server 和内嵌 Vite  |
-| `pnpm build`       | 构建 packages、Server 和 Web 产物             |
-| `pnpm start`       | 以生产模式启动构建后的唯一 Server             |
-| `pnpm demo`        | 显式运行确定性的模块消息链                    |
-| `pnpm test`        | 运行单元和集成测试                            |
-| `pnpm typecheck`   | 检查全部 TypeScript project references 和 Web |
-| `pnpm lint`        | 运行 ESLint                                   |
-| `pnpm prompt:test` | 在阻断外部出口后验证四类 Prompt 结构          |
-
-`pnpm demo` 写入 `.data/kaguya-demo.sqlite`，与 Server 数据库隔离。
+- `pnpm dev`：以开发模式启动唯一 Kaguya Server 与内嵌 Vite。
+- `pnpm build`：构建 packages、Server 与 Web 产物。
+- `pnpm start`：以生产模式启动构建后的 Server。
+- `pnpm demo`：连接 `KAGUYA_DATABASE_URL`，运行确定性信息 DAG，并输出根 `informationId` 与 Kind 计数。
+- `pnpm test`：运行单元和集成测试。
+- `pnpm typecheck`：检查 TypeScript project references 和 Web。
+- `pnpm lint`：运行 ESLint。
+- `pnpm prompt:test`：在阻断外部出口后验证 Prompt 结构。
 
 ## 统一配置
 
-| 环境变量                             | 默认值                | 说明                                   |
-| ------------------------------------ | --------------------- | -------------------------------------- |
-| `KAGUYA_GATEWAY_TOKEN`               | 无                    | 可选；未设时启动自动生成并分发给 Web UI |
-| `KAGUYA_HOST`                        | `127.0.0.1`           | 唯一服务监听地址                       |
-| `KAGUYA_PORT`                        | `3000`                | 唯一服务监听端口                       |
-| `KAGUYA_DATABASE_PATH`               | `.data/kaguya.sqlite` | Runtime SQLite 文件                    |
-| `KAGUYA_CORS_ORIGINS`                | 空                    | 逗号分隔的允许来源；同源 UI 不需要配置 |
-| `KAGUYA_TRUST_PROXY`                 | 空                    | 逗号分隔的可信代理地址/CIDR            |
-| `KAGUYA_RATE_LIMIT_MAX`              | `30`                  | 每个限流窗口的请求数                   |
-| `KAGUYA_RATE_LIMIT_WINDOW_MS`        | `60000`               | 限流窗口毫秒数                         |
-| `KAGUYA_CONFIG_ROOT`                 | `.data/kaguya-config` | profile registry；含 provider 与 tier  |
-| `KAGUYA_GATEWAY_ALLOWLIST_PLATFORMS` | 空                    | 逗号分隔的平台 ID；空值表示不限制      |
-| `KAGUYA_GATEWAY_ALLOWLIST_USER_IDS`  | 空                    | 逗号分隔的用户 ID；空值表示不限制      |
-| `KAGUYA_GATEWAY_ALLOWLIST_GROUP_IDS` | 空                    | 逗号分隔的群组 ID；空值表示不限制      |
-| `KAGUYA_NAPCAT_ENABLED`              | `false`               | 是否启用 NapCat                        |
-| `KAGUYA_NAPCAT_WS_URL`               | 无                    | 启用 NapCat 时必填                     |
-| `KAGUYA_NAPCAT_ACCESS_TOKEN`         | 无                    | NapCat access token                    |
-| `KAGUYA_NAPCAT_SELF_ID`              | 无                    | 可选的预期机器人 ID                    |
-| `KAGUYA_NAPCAT_RECONNECT_MS`         | `3000`                | 重连间隔                               |
+**`KAGUYA_DATABASE_URL`** — 必填。PostgreSQL information ledger 的连接 URL；不会写入普通日志。
 
-Server 不从环境变量读取 provider key、base URL 或 model。检测到旧的 `KAGUYA_LLM_API_KEY`、`KAGUYA_LLM_BASE_URL` 或 `KAGUYA_LLM_MODEL` 会在启动前失败并提示迁移到 profile；错误不会包含变量值。直接嵌入 `KaguyaRuntime` 的测试和 demo 仍可注入确定性模型。
+**`KAGUYA_CONFIG_ROOT`** — 默认 `.data/kaguya-config`。保存 Profile Registry、Provider 和模型配置，必须按敏感数据保护。
 
-旧变量 `KAGUYA_API_HOST`、`KAGUYA_API_PORT`、`KAGUYA_API_DATABASE_PATH`、`KAGUYA_BOT_DATABASE_PATH` 会让启动直接失败，并提示改用统一变量。
+**`KAGUYA_GATEWAY_TOKEN`** — 可选。用于受保护的配置与消息 API。
 
-日志变量见[环境变量参考](docs/reference/environment-variables.md)，执行链与脱敏边界见[运行时架构](docs/developers/architecture.md)。
+**`KAGUYA_HOST` / `KAGUYA_PORT`** — 默认 `127.0.0.1` / `3000`。唯一 Server 监听地址与端口。
+
+**`KAGUYA_CORS_ORIGINS`、`KAGUYA_TRUST_PROXY`、`KAGUYA_RATE_LIMIT_MAX`、`KAGUYA_RATE_LIMIT_WINDOW_MS`** — 跨域、反向代理与请求限流配置。
+
+**`KAGUYA_GATEWAY_ALLOWLIST_PLATFORMS`、`KAGUYA_GATEWAY_ALLOWLIST_USER_IDS`、`KAGUYA_GATEWAY_ALLOWLIST_GROUP_IDS`** — 平台入站白名单；命中检查在提交 Runtime 前执行。
+
+**`KAGUYA_NAPCAT_ENABLED`、`KAGUYA_NAPCAT_WS_URL`、`KAGUYA_NAPCAT_ACCESS_TOKEN`、`KAGUYA_NAPCAT_SELF_ID`、`KAGUYA_NAPCAT_RECONNECT_MS`** — 可选 NapCat 连接配置。
+
+`KAGUYA_DATABASE_PATH` 和旧的多应用 SQLite 变量会导致启动失败。Provider key、base URL 与模型不从环境变量读取，而是由当前全局选中的 Profile 提供。完整列表见[环境变量参考](docs/reference/environment-variables.md)。
 
 ## 仓库结构
 
 ```text
-apps/server/        唯一 composition root：HTTP、Web、NapCat、Runtime、关闭流程
+apps/server/        唯一 composition root：HTTP、Web、NapCat、Runtime 与关闭流程
 apps/web/           React/Vite 同源浏览器客户端
-apps/demo/          确定性消息模块链的显式演示 runner
-packages/runtime/   消息 ingress、模块装配、LLM execution 与 outbound transport
-packages/engine/    EventBus 与 WorkflowEngine
-packages/modules/   标准消息事件与最小 filter/LLM demo 模块
-packages/database/  SQLite 迁移和 repositories
-packages/llm/       LLM 调用、输出校验和 trace
+apps/demo/          PostgreSQL 信息 DAG 的确定性演示 runner
+packages/runtime/   信息 ingress、DAG 组合、LLM 生命周期与投递结果
+packages/engine/    InformationCore、Kind Registry、并发广播与 ModuleHost
+packages/modules/   消息 Kind 与 filter/LLM 回复模块
+packages/database/  PostgreSQL 信息账本、迁移与日志投影 outbox
+packages/llm/       LLM 调用、输出校验与错误归一化
 packages/prompt/    Prompt 编译与 provenance
-packages/logger/    统一日志、上下文与脱敏
+packages/logger/    结构化日志、上下文与脱敏
 packages/schema/    跨包数据契约
-packages/sdk/       事件、模块、节点与工作流定义 API
+packages/sdk/       Information Kind 与模块定义 API
+packages/platform-adapters/ OneBot/NapCat/Web 正规化与 transport 契约
 ```
 
 ## 文档
@@ -107,6 +107,7 @@ packages/sdk/       事件、模块、节点与工作流定义 API
 - [配置 Kaguya](docs/guide/configuration.md)
 - [Web UI](docs/guide/webui.md)
 - [运行时架构](docs/developers/architecture.md)
+- [信息模块 SDK](docs/developers/information-modules.md)
 - [HTTP API](docs/reference/http-api.md)
 - [环境变量](docs/reference/environment-variables.md)
 - [配置包说明](packages/config/README.md)
@@ -114,4 +115,4 @@ packages/sdk/       事件、模块、节点与工作流定义 API
 
 ## 当前边界
 
-模块是受信任的同进程代码，可向任意已注册 transport destination 发消息。系统没有持久事件队列、重试、去重、热更新或模块沙箱。HTTP 消息只携带文本；`202 accepted` 不返回模型回答，也不会自动推导 Web 出站地址。旧配置索引和旧 SQLite 格式会被明确拒绝，不会自动迁移或删除。
+模块是受信任的同进程代码。Core 按当前订阅者快照实时广播：没有持久订阅、离线补投、工作队列、消费者优先级或自动重试。系统同样没有去重、热更新、模块沙箱、隐式会话分组或 Web 回复读取/SSE 通道。旧 SQLite 数据与旧配置索引不会自动导入、转换或删除。

@@ -47,7 +47,7 @@ const config: ServerConfig = {
   trustProxy: false,
   rateLimitMax: 30,
   rateLimitWindowMs: 60_000,
-  databasePath: "/tmp/kaguya-api-test.sqlite",
+  databaseUrl: "postgresql://kaguya@database.example:5432/kaguya",
   configRoot: "/tmp/kaguya-config-test",
   development: false,
   webDistPath: "/tmp/kaguya-web-test",
@@ -850,6 +850,7 @@ describe("application API gateway", () => {
     const serialized = JSON.stringify(logs);
     expect(serialized).not.toContain(gatewayToken);
     expect(serialized).not.toContain(requestBody.text);
+    expect(serialized).not.toContain("traceId");
   });
 
   it("rejects model, provider, prompt, and workflow routing fields", async () => {

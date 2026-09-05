@@ -42,7 +42,7 @@ describe("first-run gateway bootstrap", () => {
       trustProxy: false,
       rateLimitMax: 30,
       rateLimitWindowMs: 60_000,
-      databasePath: join(root, "kaguya.sqlite"),
+      databaseUrl: "postgresql://kaguya@database.example:5432/kaguya",
       configRoot: join(root, "config"),
       development: false,
       webDistPath: join(root, "web"),

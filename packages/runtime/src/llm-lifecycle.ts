@@ -1,197 +1,188 @@
-import { type EventBus } from "@kaguya/engine";
-import { KaguyaLlmClient, type KaguyaLlmRequest } from "@kaguya/llm/client";
-import type { KaguyaLlmOutputByKind } from "@kaguya/llm/schemas";
-import type { EventEnvelope, LlmErrorKind } from "@kaguya/schema";
-import type { ExecutionContext } from "@kaguya/sdk";
-
-import { emitDefinedEvent } from "./dispatch.js";
+/**
+ * 功能概述：把一次 reply LLM 调用表达为 PostgreSQL 信息账本中的 requested 与单一终态原子。
+ * 主要职责：`LlmLifecycleClient.generate` 在 provider 调用前注册 requested，成功后注册包含
+ * output/usage/duration 与 originating module instance 的 completed，失败后注册脱敏 failed
+ * 并重新抛出分类后的 `KaguyaLlmError`。
+ * 代码库关系：依赖底层无持久化 `KaguyaLlmClient` 和 Runtime 自有 lifecycle definitions；
+ * `runtime.ts` 将本类适配为 `createLlmReplyModule` 所需的 executor。
+ * 输入输出与副作用：输入 context 与 reply atom 必须属于同一 context；所有生命周期 atom 使用
+ * `runtime:llm` source，终态的 caused-by/status-of 都直接指向 requested，且继承唯一 context。
+ */
+import { InformationCore } from "@kaguya/engine";
 import {
-  llmCompletedEvent,
-  llmFailedEvent,
-  llmRequestedEvent,
-} from "./events.js";
+  KaguyaLlmClient,
+  KaguyaLlmError,
+  type KaguyaLlmErrorKind,
+} from "@kaguya/llm/client";
+import type { ReplyRequestedInformationPayload } from "@kaguya/modules";
+import type {
+  CompiledPrompt,
+  DeepReadonly,
+  InformationAtom,
+} from "@kaguya/schema";
+
+import {
+  informationCompiledPromptSchema,
+  llmCompletedInformationKind,
+  llmFailedInformationKind,
+  llmRequestedInformationKind,
+  type LlmCompletedInformationPayload,
+} from "./information-kinds.js";
+
+export interface LlmLifecycleRequest {
+  readonly kind: "reply";
+  readonly modelId: string;
+  readonly workflowId: string;
+  readonly nodeId: string;
+  readonly originatingModuleInstanceId: string;
+  readonly prompt: CompiledPrompt;
+  readonly reply: ReplyRequestedInformationPayload;
+}
+
+export interface LlmLifecycleClientOptions {
+  readonly core: InformationCore;
+  readonly client: KaguyaLlmClient;
+  readonly now?: () => Date;
+}
 
 export class LlmLifecycleClient {
-  constructor(
-    private readonly client: KaguyaLlmClient,
-    private readonly eventBus: EventBus,
-  ) {}
+  readonly #core: InformationCore;
+  readonly #client: KaguyaLlmClient;
+  readonly #now: () => Date;
 
-  async generate<K extends KaguyaLlmRequest["kind"]>(
-    request: KaguyaLlmRequest & { kind: K },
-    context: ExecutionContext,
-  ): Promise<KaguyaLlmOutputByKind[K]> {
-    const lifecyclePayload = {
+  constructor(options: LlmLifecycleClientOptions) {
+    this.#core = options.core;
+    this.#client = options.client;
+    this.#now = options.now ?? (() => new Date());
+  }
+
+  async generate(
+    request: LlmLifecycleRequest,
+    contextAtom: DeepReadonly<InformationAtom<"core.runtime.context">>,
+    causedByAtom: DeepReadonly<
+      InformationAtom<"core.reply.requested", ReplyRequestedInformationPayload>
+    >,
+  ): Promise<
+    DeepReadonly<
+      InformationAtom<"core.llm.completed", LlmCompletedInformationPayload>
+    >
+  > {
+    assertSharedContext(contextAtom, causedByAtom);
+    const metadata = {
       kind: request.kind,
       modelId: request.modelId,
       workflowId: request.workflowId,
       nodeId: request.nodeId,
-    };
-    const sourceEvent = contextSourceEvent(context);
-    const requestedEvent = llmRequestedEvent.create(
-      eventBase(request.nodeId, context, sourceEvent),
-      lifecyclePayload,
-    );
-    const requested = await emitDefinedEvent({
-      definition: llmRequestedEvent,
-      event: requestedEvent,
-      eventBus: this.eventBus,
-      validate: (candidate) =>
-        protectLifecycleProvenance(requestedEvent, candidate),
+      originatingModuleInstanceId: request.originatingModuleInstanceId,
+    } as const;
+    const prompt = informationCompiledPromptSchema.parse(request.prompt);
+    const requested = await this.#core.register(llmRequestedInformationKind, {
+      occurredAt: this.#now().toISOString(),
+      source: "runtime:llm",
+      payload: { ...metadata, prompt },
+      references: [
+        {
+          relation: "core:caused-by",
+          informationId: causedByAtom.informationId,
+        },
+        {
+          relation: "core:context",
+          informationId: contextAtom.informationId,
+        },
+      ],
     });
 
-    let output: KaguyaLlmOutputByKind[K];
+    let generation;
     try {
-      output = await this.client.generate({
-        ...request,
-        traceRecordId: context.nextId("llm-trace"),
-        ...(sourceEvent === undefined
-          ? {}
-          : {
-              causationEventId: sourceEvent.id,
-              rootEventId: causationRootEventId(sourceEvent),
-            }),
+      generation = await this.#client.generate({
+        kind: request.kind,
+        modelId: request.modelId,
+        prompt: request.prompt,
       });
     } catch (error) {
-      const failedEvent = llmFailedEvent.create(
-        eventBase(request.nodeId, context, requested.event),
-        {
-          ...lifecyclePayload,
-          error: lifecycleError(error),
+      const classified = classifyLlmError(error);
+      await this.#core.register(llmFailedInformationKind, {
+        occurredAt: this.#now().toISOString(),
+        source: "runtime:llm",
+        payload: {
+          ...metadata,
+          error: {
+            name: classified.name,
+            kind: classified.kind,
+            message: safeFailureMessage(classified.kind),
+          },
         },
-      );
-      await emitDefinedEvent({
-        definition: llmFailedEvent,
-        event: failedEvent,
-        eventBus: this.eventBus,
-        validate: (candidate) =>
-          protectLifecycleProvenance(failedEvent, candidate),
+        references: terminalReferences(
+          requested.informationId,
+          contextAtom.informationId,
+        ),
       });
-      throw error;
+      throw classified;
     }
 
-    const completedEvent = llmCompletedEvent.create(
-      eventBase(request.nodeId, context, requested.event),
-      lifecyclePayload,
-    );
-    await emitDefinedEvent({
-      definition: llmCompletedEvent,
-      event: completedEvent,
-      eventBus: this.eventBus,
-      validate: (candidate) =>
-        protectLifecycleProvenance(completedEvent, candidate),
+    return this.#core.register(llmCompletedInformationKind, {
+      occurredAt: this.#now().toISOString(),
+      source: "runtime:llm",
+      payload: {
+        ...metadata,
+        output: generation.output,
+        reply: request.reply,
+        ...(generation.usage === undefined ? {} : { usage: generation.usage }),
+        durationMs: generation.durationMs,
+      },
+      references: terminalReferences(
+        requested.informationId,
+        contextAtom.informationId,
+      ),
     });
-    return output;
   }
 }
 
-function eventBase(
-  nodeId: string,
-  context: ExecutionContext,
-  causation: EventEnvelope | undefined,
+function terminalReferences(
+  requestedInformationId: string,
+  contextInformationId: string,
 ) {
-  const rootEventId =
-    causation === undefined ? undefined : causationRootEventId(causation);
-  return {
-    id: context.nextId("event"),
-    source: `runtime-llm/${nodeId}`,
-    occurredAt: context.now().toISOString(),
-    traceId: context.traceId,
-    metadata: {
-      nodeId,
-      ...(causation === undefined
-        ? {}
-        : { causationEventId: causation.id, rootEventId }),
-      ...contextModuleIdentity(context),
+  return [
+    {
+      relation: "core:caused-by",
+      informationId: requestedInformationId,
     },
-  };
+    {
+      relation: "core:status-of",
+      informationId: requestedInformationId,
+    },
+    {
+      relation: "core:context",
+      informationId: contextInformationId,
+    },
+  ];
 }
 
-function contextSourceEvent(
-  context: ExecutionContext,
-): EventEnvelope | undefined {
-  if (
-    !("sourceEvent" in context) ||
-    typeof context.sourceEvent !== "object" ||
-    context.sourceEvent === null ||
-    !("id" in context.sourceEvent) ||
-    !("traceId" in context.sourceEvent) ||
-    typeof context.sourceEvent.id !== "string" ||
-    context.sourceEvent.traceId !== context.traceId
-  ) {
-    return undefined;
-  }
-  return context.sourceEvent as EventEnvelope;
-}
-
-function contextModuleIdentity(
-  context: ExecutionContext,
-): Record<string, string> {
-  if (
-    !("definitionId" in context) ||
-    !("instanceId" in context) ||
-    typeof context.definitionId !== "string" ||
-    typeof context.instanceId !== "string"
-  ) {
-    return {};
-  }
-  return {
-    moduleDefinitionId: context.definitionId,
-    moduleInstanceId: context.instanceId,
-  };
-}
-
-function causationRootEventId(event: EventEnvelope): string {
-  const root = event.metadata.rootEventId;
-  return typeof root === "string" && root.length > 0 ? root : event.id;
-}
-
-function protectLifecycleProvenance(
-  original: EventEnvelope,
-  candidate: EventEnvelope,
+function assertSharedContext(
+  contextAtom: DeepReadonly<InformationAtom<"core.runtime.context">>,
+  causedByAtom: DeepReadonly<InformationAtom>,
 ): void {
-  for (const key of ["id", "source", "occurredAt", "traceId"] as const) {
-    if (candidate[key] !== original[key]) {
-      throw new TypeError(`LLM lifecycle ${key} cannot be rewritten`);
-    }
-  }
-  for (const key of [
-    "causationEventId",
-    "rootEventId",
-    "moduleDefinitionId",
-    "moduleInstanceId",
-  ]) {
-    if (candidate.metadata[key] !== original.metadata[key]) {
-      throw new TypeError(`LLM lifecycle metadata.${key} cannot be rewritten`);
-    }
+  const contexts = causedByAtom.references.filter(
+    ({ relation }) => relation === "core:context",
+  );
+  if (
+    contexts.length !== 1 ||
+    contexts[0]?.informationId !== contextAtom.informationId
+  ) {
+    throw new Error("LLM source atom must belong to the supplied context");
   }
 }
 
-function lifecycleError(error: unknown): {
-  name: string;
-  message: string;
-  kind: LlmErrorKind;
-} {
-  const name =
-    typeof error === "object" &&
-    error !== null &&
-    "name" in error &&
-    typeof error.name === "string" &&
-    error.name.length > 0
-      ? error.name
-      : "Error";
-  const kind =
-    typeof error === "object" &&
-    error !== null &&
-    "kind" in error &&
-    (error.kind === "cancelled" ||
-      error.kind === "non-retryable" ||
-      error.kind === "retryable")
-      ? error.kind
-      : "non-retryable";
-  const message =
-    kind === "cancelled"
-      ? "Language model generation was cancelled"
-      : "Language model generation failed";
-  return { name, message, kind };
+function classifyLlmError(error: unknown): KaguyaLlmError {
+  if (error instanceof KaguyaLlmError) return error;
+  return new KaguyaLlmError("Language model generation failed", {
+    kind: "non-retryable",
+    cause: error,
+  });
+}
+
+function safeFailureMessage(kind: KaguyaLlmErrorKind): string {
+  return kind === "cancelled"
+    ? "Language model generation was cancelled"
+    : "Language model generation failed";
 }

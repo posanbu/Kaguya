@@ -5,14 +5,14 @@ description: 理解首次配置、Profile、模型层级和敏感文件边界。
 
 # 配置 Kaguya
 
-Kaguya 把服务运行参数和用户模型配置分开管理：监听地址、端口和平台连接来自环境变量；Provider、API Key 与模型目标保存在 profile store。
+Kaguya 把服务运行参数和用户模型配置分开管理：监听地址、端口、PostgreSQL URL 和平台连接来自环境变量；Provider、API Key 与模型目标保存在 Profile Registry。
 
 ## 首次配置流程
 
 ```mermaid
 flowchart TD
-  A[Server 检查 KAGUYA_CONFIG_ROOT] --> B{默认 Profile 是否就绪}
-  B -- 是 --> C[加载并冻结 Profile Registry]
+  A[Server 检查 KAGUYA_CONFIG_ROOT] --> B{selected Profile 是否就绪}
+  B -- 是 --> C[读取 selectedProfileId 并构造模型解析器]
   C --> D[启动 Runtime 与 Adapter ingress]
   B -- 否 --> E[进入 setup mode]
   E --> F[Web UI 收集 Provider 与模型信息]
@@ -21,7 +21,7 @@ flowchart TD
   H --> C
 ```
 
-以下情况会进入 setup mode：配置目录尚未初始化、默认 profile 不完整，或平台和插件等可选配置尚未明确确认。此时 `/healthz`、Web UI 和配置接口可用，消息 Runtime 与 NapCat ingress 不启动。
+以下情况会进入 setup mode：配置目录尚未初始化、当前 `selectedProfileId` 指向的 Profile 不完整，或平台和插件等可选配置尚未明确确认。此时 `/healthz`、Web UI 和配置接口可用，消息 Runtime 与 NapCat ingress 不启动。`KAGUYA_DATABASE_URL` 仍是启动配置的必填项；只有 selected Profile ready 后 Server 才会连接数据库并启动 Runtime。
 
 配置文件损坏、路径越界、符号链接或权限错误不会进入自动修复流程，Server 会拒绝启动并保留原文件。
 
@@ -43,9 +43,9 @@ flowchart TD
 
 ## Profile 与模型选择
 
-每个 profile 包含 AI Provider、light/heavy 模型层级、平台和插件配置。模块可以显式指定 `profileId` 与 `modelTier`；未指定 profile 时使用默认 profile。
+每个 Profile 包含 AI Provider、light/heavy 模型层级、平台和插件配置。Registry 只维护一个显式 `selectedProfileId`；Server 在启动时读取它一次，并为全部模块共享同一个模型解析器。模块只能声明 `modelTier`，不能指定 `profileId`；消息和信息原子也不能覆盖或选择 Profile。
 
-选中的 profile 或模型失败时，系统不会自动回退到默认 profile、另一个 Provider 或另一个模型。这样可以让执行结果和错误边界保持可审计。
+选中的 Profile 或模型失败时，系统不会自动回退到默认 Profile、另一个 Provider 或另一个模型。创建 Profile 不会改变当前选择；显式选择 Profile，或完整替换当前 selected Profile 后，必须重启 Server 才能让 Runtime 使用新配置。
 
 ## 敏感文件边界
 
