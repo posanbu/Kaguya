@@ -1,19 +1,19 @@
 /**
- * 功能概述：本文件承载 WebUI 的顶层状态机，在匿名 setup 状态、Profile 管理、
+ * 功能概述：本文件承载 WebUI 的顶层状态机，在访问链接认证、Profile 管理、
  * 待重启提示与消息聊天之间做显式切换，落实“全局 selected Profile 唯一生效、
  * 切换后必须重启 Runtime”的产品契约。
- * 主要职责：`App` 负责首次读取 `/api/v1/setup`，从当前页面会话或首次启动 URL
- * fragment 获取网关 token，根据 selected Profile 的 readiness 决定当前视图，并在 ready 状态下
+ * 主要职责：`App` 负责从当前 URL fragment 获取网关 token，再读取 `/api/v1/setup`，
+ * 根据 selected Profile 的 readiness 决定当前视图，并在 ready 状态下
  * 提供聊天入口与 Settings
  * 按钮；`ProfileManagementScreen` 负责展示 Profile 元数据列表、按 ID 加载完整
  * Profile、独立执行 create/replace/select/delete 动作，并在切换 Profile 或离开
  * 管理页时清空包含 secret 的已加载正文与编辑字段；其余小组件负责重启提示、
  * readiness 呈现与消息投递反馈。
- * 代码库关系：本文件消费 `api.ts` 的匿名状态、消息接口与 Profile Registry 管理
+ * 代码库关系：本文件消费 `api.ts` 的受保护状态、消息接口与 Profile Registry 管理
  * API，以及 `profile-editor.ts` 的纯函数合并逻辑；样式由同目录 `styles.css`
  * 提供，服务端实现位于 `apps/server/src/app.ts` 与 `setup.ts`。
- * 输入输出与副作用：bootstrap token 只在当前页面内存中使用，正式 token 在首次
- * 配置成功后写入 sessionStorage；所有 Profile 修改都通过 HTTP 请求落到服务端，不在浏览器端
+ * 输入输出与副作用：gateway token 仅从 fragment 读取并保留在页面内存中；所有
+ * Profile 修改都通过 HTTP 请求落到服务端，不在浏览器端
  * 推断默认 Profile；当 selected
  * Profile 已 ready 且本次 replace/select 改变冻结运行配置时，本文件只切到
  * restart 视图提示用户重启，不做热切换。Profile 管理子组件会记忆同一
@@ -26,6 +26,7 @@ import {
   Eye,
   EyeOff,
   LoaderCircle,
+  LockKeyhole,
   Moon,
   Plus,
   RefreshCw,
@@ -46,11 +47,11 @@ import {
 
 import {
   checkGatewayHealth,
-  completeInitialConfiguration,
   createProfile,
   deleteProfile,
   GatewayConfig,
   GatewayRequestError,
+  GATEWAY_UNAUTHORIZED_EVENT,
   getConfigurationStatus,
   getNapCatStatus,
   getProfile,
@@ -76,7 +77,7 @@ import {
 type DeliveryState = "sending" | "accepted" | "failed";
 type HealthState = "idle" | "checking" | "online" | "offline";
 type ConfigurationView =
-  "checking" | "profiles" | "napcat" | "restart" | "chat" | "error";
+  "locked" | "checking" | "profiles" | "napcat" | "restart" | "chat" | "error";
 
 interface ChatMessage {
   readonly id: string;
@@ -96,14 +97,11 @@ interface ClearedLoadedProfileStateSnapshot {
 }
 
 export function App() {
-  const [bootstrapMode, setBootstrapMode] = useState(
-    () => readBootstrapToken() !== "",
+  const [token] = useState(() => readGatewayToken());
+  const [configurationView, setConfigurationView] = useState<ConfigurationView>(
+    () => (token === "" ? "locked" : "checking"),
   );
-  const [token, setToken] = useState(
-    () => readGatewayToken() || readBootstrapToken(),
-  );
-  const [configurationView, setConfigurationView] =
-    useState<ConfigurationView>("checking");
+  const [invalidAccessLink, setInvalidAccessLink] = useState(false);
   const [configurationStatus, setConfigurationStatus] =
     useState<ConfigurationStatus>();
   const [configurationError, setConfigurationError] = useState<string>();
@@ -113,12 +111,6 @@ export function App() {
   const [formError, setFormError] = useState<string>();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  useEffect(() => {
-    if (readBootstrapToken() !== "") {
-      history.replaceState(null, "", `${location.pathname}${location.search}`);
-    }
-  }, []);
-
   const isSending = messages.some((message) => message.state === "sending");
   const draftLength = [...draft].length;
   const canSend =
@@ -127,7 +119,7 @@ export function App() {
   const loadConfigurationStatus = async (options?: {
     readonly keepProfilesOpen?: boolean;
   }) => {
-    const status = await getConfigurationStatus();
+    const status = await getConfigurationStatus({ token });
     setConfigurationStatus(status);
     setConfigurationView((current) =>
       deriveConfigurationView(
@@ -140,8 +132,11 @@ export function App() {
   };
 
   useEffect(() => {
+    if (token === "") {
+      return;
+    }
     let active = true;
-    void getConfigurationStatus().then(
+    void getConfigurationStatus({ token }).then(
       (status) => {
         if (!active) {
           return;
@@ -155,13 +150,27 @@ export function App() {
         if (!active) {
           return;
         }
-        setConfigurationError(errorMessage(error));
-        setConfigurationView("error");
+        if (isUnauthorized(error)) {
+          setInvalidAccessLink(true);
+          setConfigurationView("locked");
+        } else {
+          setConfigurationError(errorMessage(error));
+          setConfigurationView("error");
+        }
       },
     );
     return () => {
       active = false;
     };
+  }, [token]);
+
+  useEffect(() => {
+    const lock = () => {
+      setInvalidAccessLink(true);
+      setConfigurationView("locked");
+    };
+    window.addEventListener(GATEWAY_UNAUTHORIZED_EVENT, lock);
+    return () => window.removeEventListener(GATEWAY_UNAUTHORIZED_EVENT, lock);
   }, []);
 
   const checkConnection = async () => {
@@ -231,6 +240,10 @@ export function App() {
     }
   };
 
+  if (configurationView === "locked") {
+    return <AccessLinkRequired invalid={invalidAccessLink} />;
+  }
+
   if (configurationView === "checking") {
     return <ConfigurationLoading />;
   }
@@ -243,11 +256,6 @@ export function App() {
     return (
       <ProfileManagementScreen
         token={token}
-        bootstrapMode={bootstrapMode}
-        onBootstrapCompleted={(nextToken) => {
-          setBootstrapMode(false);
-          setToken(nextToken);
-        }}
         initialStatus={configurationStatus}
         onStatusChange={(status) => {
           setConfigurationStatus(status);
@@ -397,8 +405,6 @@ export function App() {
 
 function ProfileManagementScreen({
   token,
-  bootstrapMode,
-  onBootstrapCompleted,
   initialStatus,
   onStatusChange,
   onReloadStatus,
@@ -407,8 +413,6 @@ function ProfileManagementScreen({
   onOpenNapCat,
 }: {
   readonly token: string;
-  readonly bootstrapMode: boolean;
-  readonly onBootstrapCompleted: (token: string) => void;
   readonly initialStatus: ConfigurationStatus | undefined;
   readonly onStatusChange: (status: ConfigurationStatus) => void;
   readonly onReloadStatus: (options?: {
@@ -452,13 +456,6 @@ function ProfileManagementScreen({
   }, [token]);
 
   useEffect(() => {
-    if (bootstrapMode && openedProfileId === "default") {
-      const profile = emptyBootstrapProfile();
-      setLoadedProfile(profile);
-      setEditorFields(profileToEditorFields(profile));
-      setLoadingProfile(false);
-      return;
-    }
     if (!openedProfileId || token.trim().length === 0) {
       return;
     }
@@ -485,14 +482,14 @@ function ProfileManagementScreen({
         setLoadingProfile(false);
       },
     );
-  }, [bootstrapMode, config, openedProfileId, token]);
+  }, [config, openedProfileId, token]);
 
   useEffect(() => {
-    if (bootstrapMode || token.trim().length === 0) {
+    if (token.trim().length === 0) {
       return;
     }
     void refreshRegistry();
-  }, [bootstrapMode, token]);
+  }, [token]);
 
   if (registry === undefined) {
     return <ConfigurationLoading />;
@@ -579,22 +576,6 @@ function ProfileManagementScreen({
     setNotice(undefined);
     try {
       const replacement = mergeProfileEditorFields(loadedProfile, editorFields);
-      if (bootstrapMode) {
-        const saved = await completeInitialConfiguration(config, {
-          profileName: editorFields.name,
-          baseUrl: editorFields.baseUrl,
-          apiKey: editorFields.apiKey,
-          lightModel: editorFields.lightModel,
-          heavyModel: editorFields.heavyModel,
-        });
-        onBootstrapCompleted(readGatewayToken());
-        setNotice(
-          saved.status === "configured"
-            ? "配置已保存，请重启服务。"
-            : undefined,
-        );
-        return;
-      }
       const result = await replaceProfile(
         config,
         loadedProfile.id,
@@ -1231,6 +1212,26 @@ function ConfigurationStatusError({
   );
 }
 
+function AccessLinkRequired({ invalid }: { readonly invalid: boolean }) {
+  return (
+    <div className="setup-shell">
+      <SetupHeader subtitle="访问受限" />
+      <section className="setup-card setup-status-card" role="alert">
+        <LockKeyhole size={22} />
+        <h1>{invalid ? "访问链接已失效" : "需要启动访问链接"}</h1>
+        <p>
+          {invalid
+            ? "Server 每次重启都会生成新链接。请回到当前 Kaguya Server 的终端，重新打开完整链接。"
+            : "请回到 Kaguya Server 的终端，打开其中显示的完整 Kaguya access URL。"}
+        </p>
+        <code className="access-link-example">
+          Kaguya access URL: …/#gatewayToken=…
+        </code>
+      </section>
+    </div>
+  );
+}
+
 function RestartRequired() {
   return (
     <div className="setup-shell">
@@ -1336,29 +1337,18 @@ function DeliveryStatus({ message }: { readonly message: ChatMessage }) {
   );
 }
 
-function emptyBootstrapProfile(): UserConfigProfile {
-  return {
-    version: 1,
-    id: "default",
-    name: "default",
-    ai: { providers: [] },
-    platforms: [],
-    plugins: [],
-  };
-}
-
-export function readBootstrapToken(
+export function readGatewayToken(
   hash = typeof location === "undefined" ? "" : location.hash,
 ): string {
-  const match = /^#bootstrapToken=([^&]*)$/u.exec(hash);
-  return match === null ? "" : decodeURIComponent(match[1] ?? "");
-}
-
-function readGatewayToken(): string {
-  if (typeof sessionStorage === "undefined") {
+  const match = /^#gatewayToken=([^&]*)$/u.exec(hash);
+  if (match === null) {
     return "";
   }
-  return sessionStorage.getItem("kaguya.gatewayToken") ?? "";
+  try {
+    return decodeURIComponent(match[1] ?? "");
+  } catch {
+    return "";
+  }
 }
 
 export function deriveConfigurationView(
@@ -1466,6 +1456,10 @@ function errorMessage(error: unknown): string {
     return error.message;
   }
   return "发送消息时发生未知错误";
+}
+
+function isUnauthorized(error: unknown): boolean {
+  return error instanceof GatewayRequestError && error.status === 401;
 }
 
 function healthLabel(state: HealthState): string {

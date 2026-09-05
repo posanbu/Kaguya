@@ -33,6 +33,7 @@ import { createHttpApplication } from "./app.js";
 import type { ServerConfig } from "./config.js";
 import {
   createRuntimeModelSelectionResolver,
+  formatAccessUrl,
   InformationRuntimeStartupError,
   startKaguyaServer,
 } from "./server.js";
@@ -85,6 +86,14 @@ function config(workspaceRoot: string): ServerConfig {
 }
 
 describe("unified server composition", () => {
+  it("formats loopback access links including IPv6", () => {
+    expect(
+      formatAccessUrl({ host: "127.0.0.1", port: 3000, gatewayToken: "a b" }),
+    ).toBe("Kaguya access URL: http://127.0.0.1:3000/#gatewayToken=a%20b");
+    expect(
+      formatAccessUrl({ host: "::1", port: 4100, gatewayToken: "token" }),
+    ).toBe("Kaguya access URL: http://[::1]:4100/#gatewayToken=token");
+  });
   it("sanitizes unknown and throwing Runtime startup error properties", () => {
     class DatabasePassword123 extends Error {}
     const named = new InformationRuntimeStartupError(
@@ -248,11 +257,7 @@ describe("unified server composition", () => {
                     schema: {
                       properties: {
                         data: {
-                          required: [
-                            "status",
-                            "selectedProfileId",
-                            "profiles",
-                          ],
+                          required: ["status", "selectedProfileId", "profiles"],
                         },
                       },
                     },
@@ -265,7 +270,13 @@ describe("unified server composition", () => {
       },
     });
     expect(
-      (await app.inject({ method: "GET", url: "/api/v1/setup" })).json(),
+      (
+        await app.inject({
+          method: "GET",
+          url: "/api/v1/setup",
+          headers: { authorization: `Bearer ${gatewayToken}` },
+        })
+      ).json(),
     ).toEqual({
       data: {
         status: "ready",

@@ -39,12 +39,9 @@ import Fastify, {
 } from "fastify";
 
 import type { ServerConfig } from "./config.js";
+import type { ConfigurationManagement } from "./setup.js";
 import {
-  initializeConfigurationProfile,
-  type ConfigurationManagement,
-} from "./setup.js";
-import {
-  createEnvironmentGatewayAuthenticator,
+  createGatewayAuthenticator,
   type GatewayAuthenticator,
   type GatewayScope,
 } from "./gateway-auth.js";
@@ -84,16 +81,6 @@ const createProfileRequestSchema = z
   })
   .strict();
 
-const initialConfigurationRequestSchema = z
-  .object({
-    profileName: z.string().trim().min(1).max(100),
-    baseUrl: z.string().trim().url(),
-    apiKey: z.string().min(1),
-    lightModel: z.string().trim().min(1),
-    heavyModel: z.string().trim().min(1),
-  })
-  .strict();
-
 const selectionRequestSchema = z
   .object({
     selectedProfileId: profileIdSchema,
@@ -126,19 +113,6 @@ const createProfileRequestJsonSchema = {
   required: ["name"],
   properties: {
     name: { type: "string", minLength: 1, maxLength: 100 },
-  },
-} as const;
-
-const initialConfigurationRequestJsonSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["profileName", "baseUrl", "apiKey", "lightModel", "heavyModel"],
-  properties: {
-    profileName: { type: "string", minLength: 1, maxLength: 100 },
-    baseUrl: { type: "string", format: "uri" },
-    apiKey: { type: "string", minLength: 1 },
-    lightModel: { type: "string", minLength: 1 },
-    heavyModel: { type: "string", minLength: 1 },
   },
 } as const;
 
@@ -527,7 +501,7 @@ export async function createHttpApplication(
   app.get(
     "/api/v1/setup",
     {
-      config: { rateLimit: false },
+      onRequest: requireGatewayToken(options, "setup"),
       schema: {
         tags: ["System"],
         summary: "Inspect first-run configuration readiness",
@@ -539,27 +513,6 @@ export async function createHttpApplication(
     async () => {
       const status = (await options.setup?.inspect()) ?? readySetupStatus();
       return { data: status };
-    },
-  );
-
-  app.post(
-    "/api/v1/setup",
-    {
-      onRequest: requireGatewayToken(options, "setup"),
-      schema: {
-        tags: ["System"],
-        summary: "Complete first-run configuration",
-        body: initialConfigurationRequestJsonSchema,
-      },
-    },
-    async (request) => {
-      const body = initialConfigurationRequestSchema.parse(request.body);
-      const management = requireManagement(options.setup);
-      const result = await initializeConfigurationProfile(management, body);
-      const gatewayToken = await (options.gatewayAuth ??
-        createEnvironmentGatewayAuthenticator(options.config.gatewayToken)
-      ).completeBootstrap();
-      return { data: { ...result, gatewayToken } };
     },
   );
 
@@ -942,7 +895,7 @@ function requireGatewayToken(
 ) {
   const authenticator =
     options.gatewayAuth ??
-    createEnvironmentGatewayAuthenticator(options.config.gatewayToken);
+    createGatewayAuthenticator(options.config.gatewayToken);
   return async (request: FastifyRequest, reply: FastifyReply) => {
     const authorization = request.headers.authorization?.trim() ?? "";
     const match = /^Bearer[ \t]+(.+)$/i.exec(authorization);

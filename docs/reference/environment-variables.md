@@ -11,9 +11,7 @@ description: Kaguya Server、PostgreSQL、白名单、NapCat 与日志环境变�
 
 **`KAGUYA_DATABASE_URL`** — 必填。非空 PostgreSQL 连接 URL，供 information ledger 使用。Server 不在普通日志、启动错误或失败事实中回显该 URL。
 
-**`KAGUYA_GATEWAY_TOKEN`** — 可选。显式设置需至少 16 个字符，并覆盖持久化或 bootstrap 凭据；全新本地配置未设置时由 Server 在终端展示一次性 bootstrap Token，首次配置成功后使用持久化正式凭据。
-
-**`KAGUYA_HOST`** — 默认 `127.0.0.1`。唯一 Server 监听地址。
+**`KAGUYA_HOST`** — 默认 `127.0.0.1`。只接受 `127.0.0.1`、`localhost` 或 `::1`；其他值会拒绝启动。
 
 **`KAGUYA_PORT`** — 默认 `3000`，允许范围 1 至 65535。
 
@@ -35,8 +33,8 @@ description: Kaguya Server、PostgreSQL、白名单、NapCat 与日志环境变�
 
 **`KAGUYA_RATE_LIMIT_WINDOW_MS`** — 默认 `60000`，允许范围 1000 至 3600000 毫秒。
 
-::: danger 暴露端口前先建立可信边界
-`GET /api/v1/setup` 和 `GET /api/v1/gateway/token` 会公开本实例 token，目的是让同源 Web UI 免手填。因此任何能访问监听端口的人都可以取得受保护接口权限。默认保留 `KAGUYA_HOST=127.0.0.1`；远程部署应使用可信网络或带 TLS 与独立认证的反向代理。
+::: warning 使用终端中的完整访问链接
+Server 每次成功监听后生成并打印带 `#gatewayToken=` fragment 的访问链接。该 token 对 setup、Profile、NapCat 和消息接口均有效，只在当前进程生命周期内有效；重启后需要重新打开新链接。
 :::
 
 ## 平台入站白名单

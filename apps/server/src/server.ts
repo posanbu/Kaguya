@@ -24,7 +24,6 @@
  * 再由 Server 关闭它所有的数据库连接。
  */
 import { pathToFileURL } from "node:url";
-import { readdir } from "node:fs/promises";
 
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
@@ -50,14 +49,12 @@ import {
 import type { FastifyInstance } from "fastify";
 
 import { createHttpApplication } from "./app.js";
-import { readServerConfig, type ServerConfig } from "./config.js";
 import {
-  createBootstrapGatewayAuthenticator,
-  createEnvironmentGatewayAuthenticator,
-  createPersistentGatewayAuthenticator,
-  type GatewayAuthenticator,
-} from "./gateway-auth.js";
-import { loadPersistentGatewayCredential } from "./gateway-credentials.js";
+  assertLoopbackHost,
+  readServerConfig,
+  type ServerConfig,
+} from "./config.js";
+import { createGatewayAuthenticator } from "./gateway-auth.js";
 import {
   createNapCatSupervisor,
   type NapCatConnectionSupervisor,
@@ -81,18 +78,9 @@ export interface StartedKaguyaServer {
 export async function startKaguyaServer(
   providedConfig?: ServerConfig,
 ): Promise<StartedKaguyaServer> {
-  const resolved =
-    providedConfig === undefined
-      ? readServerConfig()
-      : {
-          config: providedConfig,
-          gatewayTokenSource: "environment" as const,
-        };
-  const config = resolved.config;
-  const gatewayAuth = await resolveGatewayAuthenticator(
-    config,
-    resolved.gatewayTokenSource,
-  );
+  const config = providedConfig ?? readServerConfig();
+  assertLoopbackHost(config.host);
+  const gatewayAuth = createGatewayAuthenticator(config.gatewayToken);
   const rootLogger = createLogger(readLoggerOptions("kaguya"));
   const serverLogger = createModuleLogger(rootLogger, "server");
   const httpLogger = createModuleLogger(rootLogger, "server:http");
@@ -140,9 +128,8 @@ export async function startKaguyaServer(
         {
           event: "server.configuration.required",
           reason: setupStatus.status,
-          setupUrl: `http://${config.host}:${config.port}/`,
         },
-        "Configuration is not ready; open the Web UI to complete setup",
+        "Configuration is not ready; use the access URL after the server starts",
       );
     }
     const runtimeReady = resolveModelSelection !== undefined;
@@ -203,6 +190,14 @@ export async function startKaguyaServer(
       host: effectiveConfig.host,
       port: effectiveConfig.port,
     });
+    const listeningAddress = app.server.address();
+    const listeningPort =
+      typeof listeningAddress === "object" && listeningAddress !== null
+        ? listeningAddress.port
+        : effectiveConfig.port;
+    process.stdout.write(
+      `${formatAccessUrl({ ...effectiveConfig, port: listeningPort })}\n`,
+    );
 
     if (runtimeReady && effectiveConfig.napcat.enabled) {
       napcatLogger.info(
@@ -242,55 +237,11 @@ export async function startKaguyaServer(
   return started;
 }
 
-async function resolveGatewayAuthenticator(
-  config: ServerConfig,
-  source: "environment" | "generated",
-): Promise<GatewayAuthenticator> {
-  if (source === "environment") {
-    return createEnvironmentGatewayAuthenticator(config.gatewayToken);
-  }
-
-  const persisted = await loadPersistentGatewayCredential(config.configRoot);
-  if (persisted !== null) {
-    return createPersistentGatewayAuthenticator(config.configRoot);
-  }
-  if (!isLoopbackHost(config.host) || !(await isFreshConfigurationRoot(config.configRoot))) {
-    throw new Error(
-      "KAGUYA_GATEWAY_TOKEN is required for non-loopback or existing configuration roots without a persistent gateway credential",
-    );
-  }
-
-  const authenticator = await createBootstrapGatewayAuthenticator(
-    config.configRoot,
-  );
-  process.stdout.write(
-    `Kaguya first-run setup URL: http://${config.host}:${config.port}/#bootstrapToken=${authenticator.bootstrapToken}\n`,
-  );
-  return authenticator;
-}
-
-async function isFreshConfigurationRoot(rootDir: string): Promise<boolean> {
-  try {
-    return (await readdir(rootDir)).length === 0;
-  } catch (error) {
-    if (isMissingFileError(error)) {
-      return true;
-    }
-    throw error;
-  }
-}
-
-function isLoopbackHost(host: string): boolean {
-  return host === "127.0.0.1" || host === "localhost" || host === "::1";
-}
-
-function isMissingFileError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: unknown }).code === "ENOENT"
-  );
+export function formatAccessUrl(
+  config: Pick<ServerConfig, "host" | "port" | "gatewayToken">,
+): string {
+  const host = config.host === "::1" ? "[::1]" : config.host;
+  return `Kaguya access URL: http://${host}:${config.port}/#gatewayToken=${encodeURIComponent(config.gatewayToken)}`;
 }
 
 export function createRuntimeModelSelectionResolver(

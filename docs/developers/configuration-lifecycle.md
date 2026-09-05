@@ -33,7 +33,7 @@ sequenceDiagram
   end
 ```
 
-`/healthz` 表示 HTTP 进程存活，不等于 Runtime 一定可接收消息。配置模式仍提供 Web UI、setup 状态、Gateway Token 和 Profile 管理接口；消息接口返回 `configuration_setup_required`。
+`/healthz` 表示 HTTP 进程存活，不等于 Runtime 一定可接收消息。配置模式仍提供 Web UI、受保护的 setup 状态和 Profile 管理接口；消息接口返回 `configuration_setup_required`。每次 Server 启动的随机 Gateway Token 只在进程内保存，并在成功监听后通过终端访问链接交给用户。
 
 ## 为什么只使用 selected Profile
 

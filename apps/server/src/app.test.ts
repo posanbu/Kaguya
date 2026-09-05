@@ -1,5 +1,5 @@
 /**
- * 功能概述：本文件验证 HTTP 应用在匿名 setup 可见性、带鉴权的 Profile 管理接口、
+ * 功能概述：本文件验证 HTTP 应用在受保护 setup 状态、Profile 管理接口、
  * 消息入口与统一错误映射上的外部契约，确保服务端只暴露显式的全局 Profile Registry
  * 行为，不再保留临时 setup 写桥接或隐式 default 回退。
  * 主要职责：前几组用例覆盖 `/api/v1/setup` 仅返回无密钥元数据、`/api/v1/profiles`
@@ -65,7 +65,7 @@ function authorization(scheme = "Bearer") {
 }
 
 describe("application API gateway", () => {
-  it("serves anonymous setup status without secrets", async () => {
+  it("serves authenticated setup status without secrets", async () => {
     const setup: ConfigurationManagement = {
       inspect: vi.fn(async () => ({
         status: "invalid" as const,
@@ -117,7 +117,11 @@ describe("application API gateway", () => {
     };
     const app = await createHttpApplication({ config, setup });
 
-    const status = await app.inject({ method: "GET", url: "/api/v1/setup" });
+    const status = await app.inject({
+      method: "GET",
+      url: "/api/v1/setup",
+      headers: authorization(),
+    });
     expect(status.statusCode).toBe(200);
     expect(status.json()).toMatchObject({
       data: {
@@ -340,6 +344,7 @@ describe("application API gateway", () => {
     const response = await app.inject({
       method: "GET",
       url: "/api/v1/setup",
+      headers: authorization(),
     });
 
     expect(response.statusCode).toBe(200);
@@ -442,19 +447,18 @@ describe("application API gateway", () => {
     });
 
     const response = await app.inject({
-      method: "POST",
+      method: "GET",
       url: "/api/v1/setup",
       headers: { authorization: "Bearer wrong-token" },
-      payload: {
-        profileName: "default",
-        baseUrl: "https://api.example/v1",
-        apiKey: "provider-secret",
-        lightModel: "small-model",
-        heavyModel: "large-model",
-      },
     });
 
     expect(response.statusCode).toBe(401);
+    const removed = await app.inject({
+      method: "POST",
+      url: "/api/v1/setup",
+      headers: authorization(),
+    });
+    expect(removed.statusCode).toBe(404);
     await app.close();
   });
 
@@ -530,11 +534,7 @@ describe("application API gateway", () => {
                     schema: {
                       properties: {
                         data: {
-                          required: [
-                            "status",
-                            "selectedProfileId",
-                            "profiles",
-                          ],
+                          required: ["status", "selectedProfileId", "profiles"],
                           properties: {
                             profiles: {
                               items: {

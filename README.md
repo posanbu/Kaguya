@@ -16,7 +16,7 @@ export KAGUYA_DATABASE_URL="postgresql://kaguya:password@127.0.0.1:5432/kaguya"
 pnpm dev
 ```
 
-`KAGUYA_GATEWAY_TOKEN` 可选：显式设置（至少 16 字符）时作为最高优先级 Gateway Token。全新本地配置且仅监听 loopback 时，Server 会在终端展示一次性引导 Token；首次配置成功后生成并持久化正式凭据。
+Server 每次启动都会生成新的 Gateway Token，并在成功监听后打印完整的 `Kaguya access URL`。必须通过该链接进入 Web UI；刷新会保留 URL fragment 中的 token，Server 重启后需要使用终端打印的新链接。Server 只允许监听 `127.0.0.1`、`localhost` 或 `::1`。
 
 `KAGUYA_CONFIG_ROOT` 指向权限受保护的 Profile Registry。Registry 有且只有一个显式的 `selectedProfileId`；Server 仅在启动时读取这个选中的 Profile 并构造共享模型解析器，不会按消息、模块或用户选择另一个 Profile。目录尚未初始化或选中的 Profile 未就绪时，HTTP 与 Web UI 仍可用于配置，但 Runtime 和 NapCat ingress 不会启动。修改或切换选中的 Profile 后需要重启 Server 才会应用新配置。配置文件损坏或权限异常仍会拒绝启动，不会自动覆盖。初始化格式与密钥边界见 [`@kaguya/config`](packages/config/README.md)。
 
@@ -73,9 +73,7 @@ core.llm.requested
 
 **`KAGUYA_CONFIG_ROOT`** — 默认 `.data/kaguya-config`。保存 Profile Registry、Provider 和模型配置，必须按敏感数据保护。
 
-**`KAGUYA_GATEWAY_TOKEN`** — 可选。用于受保护的配置与消息 API。
-
-**`KAGUYA_HOST` / `KAGUYA_PORT`** — 默认 `127.0.0.1` / `3000`。唯一 Server 监听地址与端口。
+**`KAGUYA_HOST` / `KAGUYA_PORT`** — 默认 `127.0.0.1` / `3000`。监听地址只允许 `127.0.0.1`、`localhost` 或 `::1`。
 
 **`KAGUYA_CORS_ORIGINS`、`KAGUYA_TRUST_PROXY`、`KAGUYA_RATE_LIMIT_MAX`、`KAGUYA_RATE_LIMIT_WINDOW_MS`** — 跨域、反向代理与请求限流配置。
 

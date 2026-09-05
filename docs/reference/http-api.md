@@ -15,9 +15,7 @@ description: Kaguya 统一 Server 的路由、认证、Profile 与消息协议�
 
 **`GET /api/v1/openapi.json`** — 无需认证、不限流，返回 OpenAPI 3 描述。
 
-**`GET /api/v1/setup`** — 无需认证、不限流，返回配置 readiness 状态（不含 Provider 密钥或完整 profile），并附带本实例分发的网关 token。
-
-**`GET /api/v1/gateway/token`** — 无需认证、不限流，返回本实例分发的网关 token。
+**`GET /api/v1/setup`** — 需要 Bearer Token，返回配置 readiness 状态，不含 Provider 密钥或完整 profile。
 
 **`GET /api/v1/profiles`** — 需要 Bearer Token，返回 Profile 摘要与全局 selected Profile。
 
@@ -49,11 +47,7 @@ Authorization: Bearer replace-with-at-least-16-characters
 
 认证发生在业务 schema 校验之前。认证和未认证请求使用不同限流 key，避免未认证流量消耗已认证配额。
 
-首次配置使用终端展示的一次性 bootstrap Token；配置成功后，正式 Token 仅在成功响应中返回一次。
-
-**`POST /api/v1/setup`** — 使用一次性 bootstrap Token 创建或修复默认 Profile。成功后返回正式 Token，并立即撤销 bootstrap 权限。
-
-## 管理全局 Profile
+Server 每次启动生成一个新的全权限 token，成功监听后通过 `Kaguya access URL` 的 `#gatewayToken=` fragment 输出。该 token 同时授权 setup、management 和 messages 范围；重启后旧 token 返回 `401 unauthorized`。
 
 ## 管理配置
 
