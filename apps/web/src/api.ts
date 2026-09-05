@@ -139,7 +139,6 @@ export interface ConfigurationStatus {
     | "review_required";
   readonly selectedProfileId: string;
   readonly profiles: readonly ProfileMetadata[];
-  readonly gatewayToken?: string;
   readonly issues?: readonly ConfigurationIssue[];
   readonly warnings?: readonly ConfigurationWarning[];
 }
@@ -215,8 +214,8 @@ export async function completeInitialConfiguration(
       gatewayError?.requestId,
     );
   }
-  if (typeof localStorage !== "undefined") {
-    localStorage.setItem("kaguya.gatewayToken", payload.data.gatewayToken);
+  if (typeof sessionStorage !== "undefined") {
+    sessionStorage.setItem("kaguya.gatewayToken", payload.data.gatewayToken);
   }
   return { status: "configured", restartRequired: true };
 }
@@ -699,7 +698,6 @@ function isConfigurationStatusResponse(
   return (
     typeof value.data.selectedProfileId === "string" &&
     isProfileMetadataArray(value.data.profiles) &&
-    isOptionalString(value.data.gatewayToken) &&
     isOptionalConfigurationIssueArray(value.data.issues) &&
     isOptionalConfigurationWarningArray(value.data.warnings)
   );
