@@ -4,6 +4,7 @@
  * 主要职责：`collectProductionSources` 以 POSIX 相对路径遍历 packages/apps；
  * `isProductionTypeScript` 和 `findSourceViolations` 是可独立测试的纯函数；唯一额外
  * profileId 白名单是 schema 的拒绝实现本身；旧 `emit` 也作为独立规则阻止事件 API 回归；
+ * Prompt、Memory 与 reply 生产路径另有路径化规则，禁止隐式会话键重新进入上下文；
  * `scanInformationArchitecture` 供 CLI 和
  * Vitest 共用同一次扫描逻辑，`main` 汇总违规并以非零失败。
  * 代码库关系：迁移验收通过 `pnpm exec tsx scripts/information-architecture.test.ts` 调用；
@@ -30,6 +31,12 @@ const profileIdAllowedPaths = [
   "apps/web/src/api.ts",
   "apps/web/src/profile-editor.ts",
   "packages/schema/src/information.ts",
+] as const;
+const noImplicitContextPaths = [
+  "packages/prompt/src/",
+  "packages/modules/src/llm-reply.ts",
+  "packages/modules/src/reply-context.ts",
+  "packages/modules/src/information-kinds.ts",
 ] as const;
 const forbidden: readonly ForbiddenRule[] = [
   { name: "EventEnvelope", pattern: /\bEventEnvelope\b/ },
@@ -87,6 +94,15 @@ export function isProfileIdAllowedPath(path: string): boolean {
   );
 }
 
+export function isNoImplicitContextPath(path: string): boolean {
+  const normalized = toPosixPath(path);
+  return noImplicitContextPaths.some((restrictedPath) =>
+    restrictedPath.endsWith("/")
+      ? normalized.startsWith(restrictedPath)
+      : normalized === restrictedPath,
+  );
+}
+
 export function findSourceViolations(
   path: string,
   source: string,
@@ -101,6 +117,15 @@ export function findSourceViolations(
     }
     if (/\bprofileId\b/.test(line) && !isProfileIdAllowedPath(normalizedPath)) {
       violations.push(`${normalizedPath}:${index + 1}: profileId`);
+    }
+    if (isNoImplicitContextPath(normalizedPath)) {
+      for (const implicitContextKey of ["sessionId", "contextKey"] as const) {
+        if (new RegExp(`\\b${implicitContextKey}\\b`).test(line)) {
+          violations.push(
+            `${normalizedPath}:${index + 1}: ${implicitContextKey}`,
+          );
+        }
+      }
     }
   }
   return violations;
@@ -200,6 +225,24 @@ if (process.env.VITEST) {
           "await runtime.emit(input);",
         ),
       ).toEqual(["packages/runtime/src/legacy.ts:1: emit"]);
+    });
+
+    it("rejects implicit context keys only in Prompt, Memory, and reply paths", () => {
+      expect(
+        findSourceViolations(
+          "packages/modules/src/reply-context.ts",
+          "const sessionId = input.sessionId;\nconst contextKey = input.contextKey;",
+        ),
+      ).toEqual([
+        "packages/modules/src/reply-context.ts:1: sessionId",
+        "packages/modules/src/reply-context.ts:2: contextKey",
+      ]);
+      expect(
+        findSourceViolations(
+          "apps/server/src/legacy-request-validation.ts",
+          "schema.reject({ sessionId, contextKey });",
+        ),
+      ).toEqual([]);
     });
 
     it("scans the current production workspace", async () => {

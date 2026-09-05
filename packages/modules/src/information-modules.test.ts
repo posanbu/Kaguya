@@ -7,8 +7,8 @@
  * `information-kinds.ts`；engine `ModuleHost` 为每一次 register 自动补齐直接的
  * `core:caused-by` 与继承的 `core:context`，因此模块 handler 不伪造这些保留引用。
  * 输入输出与副作用：单元用例使用冻结 atom 与内存 register；集成用例使用真实 Core、宿主和
- * 校验引用规则的内存账本，断言实际 ID、持久化顺序及 context 继承，不访问真实 LLM；schema
- * 断言保护删除的 profile 与 reply target 设置不会重新进入模块契约。
+ * 校验引用规则和结构化 find 的内存账本，断言实际 ID、持久化顺序及 context 继承，
+ * 不访问真实 LLM；schema 断言保护删除的 profile 与 reply target 设置不会重新进入模块契约。
  */
 import {
   type DeepReadonly,
@@ -24,6 +24,7 @@ import {
   defineInformationKind,
   defineInformationModule,
   onInformation,
+  type InformationFindQuery,
   type InformationKindDefinition,
   type InformationModuleHandlerContext,
 } from "@kaguya/sdk";
@@ -43,6 +44,7 @@ import {
 } from "./always-reply-filter.js";
 import {
   assistantTextInformationKind,
+  coreMemoryTextInformationKind,
   deliveryRequestedInformationKind,
   filterDecisionInformationKind,
   inboundTextInformationKind,
@@ -53,7 +55,9 @@ import {
   createLlmReplyModule,
   llmCompletedInformationPayloadSchema,
   llmReplySettingsSchema,
+  type LlmReplyExecutor,
 } from "./llm-reply.js";
+import * as informationKinds from "./information-kinds.js";
 
 const contextId = informationIdSchema.parse("context-1");
 const inboundPayload = replyRequestedInformationPayloadSchema.parse({
@@ -147,6 +151,26 @@ class MemoryInformationLedger implements InformationLedger {
     });
   }
 
+  async find(query: InformationFindQuery) {
+    return [...this.atoms.values()]
+      .filter(
+        (atom) =>
+          (query.kinds === undefined || query.kinds.includes(atom.kind)) &&
+          (query.sources === undefined ||
+            query.sources.includes(atom.source)) &&
+          (query.occurredAfter === undefined ||
+            Date.parse(atom.occurredAt) >= Date.parse(query.occurredAfter)) &&
+          (query.occurredBefore === undefined ||
+            Date.parse(atom.occurredAt) < Date.parse(query.occurredBefore)),
+      )
+      .sort(
+        (left, right) =>
+          Date.parse(left.occurredAt) - Date.parse(right.occurredAt) ||
+          left.informationId.localeCompare(right.informationId),
+      )
+      .slice(0, query.limit);
+  }
+
   async query() {
     return [...this.atoms.values()];
   }
@@ -171,6 +195,17 @@ function replyAtom() {
     source: "module:filter-1",
     payload: inboundPayload,
     references: [{ relation: "core:context", informationId: contextId }],
+  });
+}
+
+function memoryAtom() {
+  return freezeInformationAtom({
+    informationId: informationIdSchema.parse("memory-1"),
+    kind: coreMemoryTextInformationKind.kind,
+    occurredAt: "2026-09-04T00:00:00.000Z",
+    source: "module:memory",
+    payload: { text: "likes tea" },
+    references: [],
   });
 }
 
@@ -225,12 +260,14 @@ function handlerContext(
   registrations: Registration[],
   result: DeepReadonly<InformationAtom> = sourceAtom,
   instanceId = "test.instance",
+  selectedAtoms: readonly DeepReadonly<InformationAtom>[] = [sourceAtom],
 ): InformationModuleHandlerContext {
   return {
     definitionId: "test.definition",
     instanceId,
     sourceAtom,
     now: () => new Date("2026-09-04T00:00:00.000Z"),
+    select: async () => selectedAtoms,
     register: async (definition, input) => {
       registrations.push({
         definition: definition as unknown as InformationKindDefinition<
@@ -337,6 +374,121 @@ describe("alwaysReplyFilterModule", () => {
 });
 
 describe("createLlmReplyModule", () => {
+  it("stores Memory with ordered uses-context references", async () => {
+    expect(informationKinds).toHaveProperty("coreMemoryTextInformationKind");
+    const memoryKind = (
+      informationKinds as typeof informationKinds & {
+        coreMemoryTextInformationKind: InformationKindDefinition<
+          "core.memory.text",
+          { text: string }
+        >;
+      }
+    ).coreMemoryTextInformationKind;
+    expect(memoryKind.references).toMatchObject({
+      "core:caused-by": { required: true, multiple: false },
+      "core:context": {
+        required: true,
+        multiple: false,
+        targetKinds: ["core.runtime.context"],
+      },
+      "core:uses-context": { required: true, multiple: true },
+    });
+
+    const registry = new InformationKindRegistry();
+    registry.registerBuiltin(runtimeContextInformationKind);
+    registry.registerBuiltin(inboundTextInformationKind);
+    registry.registerBuiltin(memoryKind);
+    const ledger = new MemoryInformationLedger();
+    let sequence = 0;
+    const core = new InformationCore({
+      registry,
+      store: ledger,
+      nextInformationId: () => `memory-test-${++sequence}`,
+      now: () => new Date("2026-09-04T00:00:02.000Z"),
+    });
+    const memoryModule = defineInformationModule({
+      manifest: {
+        apiVersion: 1,
+        definitionId: "test.memory-writer",
+        displayName: "Memory writer",
+        settingsSchema: z.object({}).strict(),
+        informationKinds: [inboundTextInformationKind, memoryKind],
+      },
+      create: () => ({
+        subscriptions: [
+          onInformation(
+            inboundTextInformationKind,
+            async (inbound, context) => {
+              const runtimeContext = inbound.references.find(
+                ({ relation }) => relation === "core:context",
+              );
+              if (runtimeContext === undefined) {
+                throw new Error("runtime context is required");
+              }
+              await context.register(memoryKind, {
+                payload: { text: "likes tea" },
+                references: [
+                  {
+                    relation: "core:uses-context",
+                    informationId: runtimeContext.informationId,
+                  },
+                  {
+                    relation: "core:uses-context",
+                    informationId: inbound.informationId,
+                  },
+                ],
+              });
+            },
+          ),
+        ],
+      }),
+    });
+    const host = new ModuleHost({ core });
+    host.register(memoryModule);
+    await core.start();
+    await host.start([
+      {
+        instanceId: "memory.writer",
+        definitionId: memoryModule.manifest.definitionId,
+        settings: {},
+      },
+    ]);
+
+    try {
+      const runtimeContext = await core.register(
+        runtimeContextInformationKind,
+        {
+          occurredAt: "2026-09-04T00:00:00.000Z",
+          source: "core:runtime",
+          payload: { requestId: "request-memory" },
+          references: [],
+        },
+      );
+      const inbound = await core.register(inboundTextInformationKind, {
+        occurredAt: "2026-09-04T00:00:01.000Z",
+        source: "adapter:test",
+        payload: inboundPayload,
+        references: [
+          {
+            relation: "core:context",
+            informationId: runtimeContext.informationId,
+          },
+        ],
+      });
+      const memory = [...ledger.atoms.values()].find(
+        ({ kind }) => kind === memoryKind.kind,
+      );
+
+      expect(
+        memory?.references
+          .filter(({ relation }) => relation === "core:uses-context")
+          .map(({ informationId }) => informationId),
+      ).toEqual([runtimeContext.informationId, inbound.informationId]);
+    } finally {
+      await host.stop();
+    }
+  });
+
   it("persists the full DAG with direct causes and one inherited context", async () => {
     const registry = new InformationKindRegistry();
     registry.registerBuiltin(runtimeContextInformationKind);
@@ -481,7 +633,13 @@ describe("createLlmReplyModule", () => {
   });
 
   it("moves reply, completion and assistant through direct derived stages", async () => {
-    const execute = vi.fn(async () => completedAtom());
+    let executionInput: Parameters<LlmReplyExecutor["execute"]>[0] | undefined;
+    const execute = vi.fn(
+      async (input: Parameters<LlmReplyExecutor["execute"]>[0]) => {
+        executionInput = input;
+        return completedAtom();
+      },
+    );
     const definition = createLlmReplyModule({
       executor: { execute },
       llmCompletedInformationKind,
@@ -495,6 +653,9 @@ describe("createLlmReplyModule", () => {
       settings,
     });
     const reply = replyAtom();
+    const persistedReply = replyAtom();
+    const memory = memoryAtom();
+    const selectedAtoms = [memory, persistedReply] as const;
     const completion = completedAtom();
     const assistant = assistantAtom();
     const executionRegistrations: Registration[] = [];
@@ -509,7 +670,13 @@ describe("createLlmReplyModule", () => {
 
     await instance.subscriptions[0]?.handle(
       reply,
-      handlerContext(reply, executionRegistrations, reply, "reply-1"),
+      handlerContext(
+        reply,
+        executionRegistrations,
+        reply,
+        "reply-1",
+        selectedAtoms,
+      ),
     );
     await instance.subscriptions[1]?.handle(
       completion,
@@ -521,10 +688,21 @@ describe("createLlmReplyModule", () => {
     );
 
     expect(execute).toHaveBeenCalledWith({
-      reply,
+      reply: persistedReply,
+      prompt: expect.objectContaining({
+        provenance: [
+          expect.objectContaining({ informationId: memory.informationId }),
+          expect.objectContaining({
+            informationId: persistedReply.informationId,
+          }),
+        ],
+      }),
+      contextAtoms: selectedAtoms,
       selection: { modelTier: "heavy" },
       originatingModuleInstanceId: "reply-1",
     });
+    expect(executionInput?.reply).toBe(persistedReply);
+    expect(executionInput?.reply).not.toBe(reply);
     expect(executionRegistrations).toEqual([]);
     expect(assistantRegistrations).toEqual([
       {

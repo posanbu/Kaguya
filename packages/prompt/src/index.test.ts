@@ -1,3 +1,11 @@
+/**
+ * 功能概述：验证 PromptCompiler 的稳定排序、作用域、转义与 informationId provenance。
+ * 主要职责：证明动态账本 fragment 把原子 ID 复制到 provenance，静态 fragment 保持
+ * 无 ID，并继续使用原始内容计算 SHA-256 摘要。
+ * 代码库关系：测试 schema 的 PromptFragment 契约与 `index.ts` 编译实现；Runtime 会
+ * 持久化这里产出的 Prompt，供 informationId 追溯。
+ * 输入输出与副作用：只在内存中编译 fragment，唯一计算副作用是确定性的哈希。
+ */
 import { createHash } from "node:crypto";
 
 import type { PromptFragment, PromptFragmentSource } from "@kaguya/schema";
@@ -61,6 +69,23 @@ describe("PromptCompiler", () => {
         contentDigest: createHash("sha256").update("be kind").digest("hex"),
       },
     ]);
+    expect(compiled.provenance[0]).not.toHaveProperty("informationId");
+  });
+
+  it("copies a dynamic information id into provenance", () => {
+    const compiled = compiler.compile("reply", [
+      {
+        ...fragment("history", 20, "hello"),
+        informationId: "reply-42",
+      },
+    ]);
+
+    expect(compiled.provenance[0]).toMatchObject({
+      fragmentId: "history-id",
+      informationId: "reply-42",
+      source: "history",
+      priority: 20,
+    });
   });
 
   it("escapes fragment body delimiters without changing its provenance digest", () => {

@@ -1,6 +1,6 @@
 /**
  * 架构说明：本模块集中声明信息原子体系在 engine 层的错误类型，
- * 让 registry、bus、core 与后续 storage 实现共享同一组可判定异常。
+ * 让 registry、bus、core、Selector 与后续 storage 实现共享同一组可判定异常。
  * 代码库关系：`packages/engine/src/index.ts` 统一导出这里的错误类，
  * 下游在启动、注册、追加与订阅阶段可据此区分可恢复与不可恢复失败。
  */
@@ -24,7 +24,10 @@ export class UnknownInformationKindError extends InformationEngineError {
 }
 
 export class ReservedInformationKindError extends InformationEngineError {
-  constructor(readonly kind: string, readonly operation: "register" | "registerBuiltin") {
+  constructor(
+    readonly kind: string,
+    readonly operation: "register" | "registerBuiltin",
+  ) {
     super(`Information kind is reserved for core use: ${kind}`);
   }
 }
@@ -36,7 +39,10 @@ export class InformationRegistrySealedError extends InformationEngineError {
 }
 
 export class InvalidInformationIdError extends InformationEngineError {
-  constructor(readonly informationId: string, cause?: unknown) {
+  constructor(
+    readonly informationId: string,
+    cause?: unknown,
+  ) {
     super(`Invalid information id: ${informationId}`, { cause });
   }
 }
@@ -52,11 +58,7 @@ export class InformationReferenceValidationError extends InformationEngineError 
     readonly kind: string,
     readonly relation: string,
     readonly reason:
-      | "undeclared"
-      | "multiple"
-      | "missing-target"
-      | "target-kind"
-      | "required",
+      "undeclared" | "multiple" | "missing-target" | "target-kind" | "required",
   ) {
     super(`Invalid information reference ${relation} on ${kind}: ${reason}`);
   }
@@ -71,5 +73,90 @@ export class InformationCoreNotStartedError extends InformationEngineError {
 export class InformationCoreClosedError extends InformationEngineError {
   constructor() {
     super("Information core has been closed");
+  }
+}
+
+export class InvalidInformationSelectionError extends InformationEngineError {
+  constructor(
+    readonly selectorId: string,
+    cause?: unknown,
+  ) {
+    super(`Invalid information selection: ${selectorId}`, { cause });
+  }
+}
+
+export class SelectorSourceInformationMissingError extends InformationEngineError {
+  constructor(
+    readonly selectorId: string,
+    readonly informationId: string,
+  ) {
+    super(
+      `Selector source information is missing: ${selectorId} -> ${informationId}`,
+    );
+  }
+}
+
+export class DuplicateSelectedInformationIdError extends InformationEngineError {
+  constructor(
+    readonly selectorId: string,
+    readonly informationId: string,
+  ) {
+    super(
+      `Selector returned duplicate information id: ${selectorId} -> ${informationId}`,
+    );
+  }
+}
+
+export class UnknownSelectedInformationIdError extends InformationEngineError {
+  constructor(
+    readonly selectorId: string,
+    readonly informationId: string,
+  ) {
+    super(
+      `Selector returned unknown information id: ${selectorId} -> ${informationId}`,
+    );
+  }
+}
+
+export class UnauthorizedSelectedInformationIdError extends InformationEngineError {
+  constructor(
+    readonly selectorId: string,
+    readonly informationId: string,
+  ) {
+    super(
+      `Selector returned unauthorized information id: ${selectorId} -> ${informationId}`,
+    );
+  }
+}
+
+export class SelectedInformationMissingError extends InformationEngineError {
+  constructor(
+    readonly selectorId: string,
+    readonly informationId: string,
+  ) {
+    super(
+      `Selected information disappeared during load: ${selectorId} -> ${informationId}`,
+    );
+  }
+}
+
+export class InvalidSelectorQueryError extends InformationEngineError {
+  constructor(
+    readonly selectorId: string,
+    readonly operation: "find" | "related" | "retrieve",
+    cause?: unknown,
+  ) {
+    super(`Invalid selector query: ${selectorId} -> ${operation}`, { cause });
+  }
+}
+
+export class UnknownRetrievalStrategyError extends InformationEngineError {
+  constructor(
+    readonly selectorId: string,
+    readonly strategyId: string,
+  ) {
+    super(
+      `Unknown information retrieval strategy: ${selectorId} -> ${strategyId}`,
+    );
   }
 }

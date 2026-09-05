@@ -15,14 +15,22 @@ export {
 } from "./information-bus.js";
 export {
   DuplicateInformationKindError,
+  DuplicateSelectedInformationIdError,
   InformationCoreClosedError,
   InformationCoreNotStartedError,
   InformationEngineError,
   InformationIdCollisionError,
+  InvalidInformationSelectionError,
+  InvalidSelectorQueryError,
   InformationRegistrySealedError,
   InformationReferenceValidationError,
   InvalidInformationIdError,
+  SelectedInformationMissingError,
+  SelectorSourceInformationMissingError,
   ReservedInformationKindError,
+  UnauthorizedSelectedInformationIdError,
+  UnknownRetrievalStrategyError,
+  UnknownSelectedInformationIdError,
   UnknownInformationKindError,
 } from "./information-errors.js";
 export {
@@ -36,6 +44,10 @@ export {
 } from "./information-core.js";
 export { consumerFailedInformationKind } from "./information-kinds.js";
 export { InformationKindRegistry } from "./information-kind-registry.js";
+export {
+  InformationSelectorExecutor,
+  type InformationRetrievalStrategy,
+} from "./information-selector.js";
 export {
   ModuleDefinitionNotFoundError,
   ModuleHost,

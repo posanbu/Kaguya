@@ -3,7 +3,8 @@
  * 主要职责：覆盖 Web 入站到投递成功的直接因果链、生成失败不会继续 assistant/outbound/delivery、
  * 三类 transport 失败、无订阅持久化、同 kind 消费并发与双实例归属、start/close 确定性交错、
  * in-flight 关闭、关闭后 ingress 拒绝、数据库初始化错误固定分类及抛出型反射属性，
- * 以及消费者失败与其他结果并存。
+ * 以及消费者失败与其他结果并存；默认 reply Prompt 必须带原子 provenance 和有序
+ * uses-context 引用。
  * 代码库关系：测试直接消费 Runtime 的 `InformationIngress.submit` 和注入数据库选项；默认业务
  * 模块来自 `@kaguya/modules`，自定义 fixture 只用于隔离并发和消费者故障语义。
  * 输入输出与副作用：每个用例创建隔离的内存 PostgreSQL 数据库，Runtime 只写 information
@@ -40,6 +41,7 @@ import {
   OutboundTransportNotFoundError,
   RuntimeUnavailableError,
 } from "./runtime.js";
+import { llmRequestedInformationKind } from "./information-kinds.js";
 
 const TEST_TIMEOUT = 15_000;
 const resources: Array<{
@@ -172,6 +174,41 @@ function parentId(
 }
 
 describe("KaguyaRuntime", () => {
+  it(
+    "traces default reply Prompt to the selected current input",
+    async () => {
+      const { runtime, database } = await createRuntime();
+      await runtime.start();
+
+      const result = await runtime.submit(webMessage("hello"));
+      const graph = await database.information.query({
+        informationId: result.rootInformationId,
+      });
+      const reply = graph.find(({ kind }) => kind === "core.reply.requested")!;
+      const requested = graph.find(
+        ({ kind }) => kind === "core.llm.requested",
+      )!;
+
+      expect(
+        requested.references.filter(
+          ({ relation }) => relation === "core:uses-context",
+        ),
+      ).toEqual([
+        {
+          relation: "core:uses-context",
+          informationId: reply.informationId,
+        },
+      ]);
+      const requestedPayload = llmRequestedInformationKind.payloadSchema.parse(
+        requested.payload,
+      );
+      expect(requestedPayload.prompt.provenance).toMatchObject([
+        { informationId: reply.informationId, source: "history" },
+      ]);
+    },
+    TEST_TIMEOUT,
+  );
+
   it(
     "classifies migration failures without retaining database details",
     async () => {

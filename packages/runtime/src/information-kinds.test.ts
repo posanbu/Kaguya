@@ -2,7 +2,7 @@
  * 功能概述：锁定 Runtime 信息 DAG 的完整内建 kind 集合、唯一对象所有权和关键引用契约。
  * 主要职责：验证 context、Engine 消费失败、modules 消息/过滤/投递请求、Runtime LLM 与投递
  * 结果 definition 各出现一次，并检查 Runtime 聚合复用上游导出的原始对象；requested prompt
- * 接受 canonical JSON metadata。
+ * 接受 canonical JSON metadata，并要求有序 uses-context 引用。
  * 代码库关系：直接约束 `information-kinds.ts` composition 输出；`KaguyaRuntime.start()` 会按
  * 此集合注册 Registry，ModuleHost 和 lifecycle/delivery consumer 必须使用同一 definition 身份。
  * 输入输出与副作用：纯内存检查 schema、引用规则和日志投影；不会启动 Core 或连接数据库。
@@ -10,6 +10,7 @@
 import { consumerFailedInformationKind } from "@kaguya/engine";
 import {
   assistantTextInformationKind,
+  coreMemoryTextInformationKind,
   deliveryRequestedInformationKind,
   filterDecisionInformationKind,
   inboundTextInformationKind,
@@ -101,6 +102,7 @@ describe("runtime information kinds", () => {
       "core.message.inbound.text",
       "core.reply.requested",
       "filter.decision",
+      "core.memory.text",
       "core.message.assistant.text",
       "core.delivery.requested",
       "core.llm.requested",
@@ -120,6 +122,7 @@ describe("runtime information kinds", () => {
       inboundTextInformationKind,
       replyRequestedInformationKind,
       filterDecisionInformationKind,
+      coreMemoryTextInformationKind,
       assistantTextInformationKind,
       deliveryRequestedInformationKind,
     ]) {
@@ -136,6 +139,7 @@ describe("runtime information kinds", () => {
         targetKinds: [replyRequestedInformationKind.kind],
       },
       "core:context": { required: true, multiple: false },
+      "core:uses-context": { required: true, multiple: true },
     });
     for (const definition of [
       llmCompletedInformationKind,

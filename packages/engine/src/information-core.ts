@@ -2,7 +2,7 @@
  * 架构说明：本模块把 registry、store 与 bus 组合成信息 Core，
  * 负责启动前注册同步、注册时的 ID 生成、引用 expectations 传递、并发广播与故障事实。
  * 主要职责：`register` 校验、落账并广播新 atom；`on` 校验非空 typed consumer 身份后订阅；
- * `get`/`getMany`/`query` 只读账本；公开写入和订阅分别只有 `register` 与 typed `on`。
+ * `get`/`getMany`/`find`/`query` 只读账本；公开写入和订阅分别只有 `register` 与 typed `on`。
  * 代码库关系：Core 是信息原子体系的入口编排层，依赖 Registry、Ledger 与 Bus；
  * `information-kinds.ts` 提供唯一的 `consumer.failed` 定义，Runtime 后续复用它。
  * 输入输出与副作用：提交成功才广播当前快照，拒绝的消费者被记录为失败 atom；失败
@@ -23,9 +23,11 @@ import {
   type JsonObject,
 } from "@kaguya/schema";
 import type {
+  InformationFindQuery,
   InformationKindDefinition,
   InformationRegistrationInput,
   InformationReferenceRule,
+  InformationSelectorDefinition,
 } from "@kaguya/sdk";
 
 import {
@@ -42,6 +44,10 @@ import {
 } from "./information-errors.js";
 import { InformationKindRegistry } from "./information-kind-registry.js";
 import { consumerFailedInformationKind } from "./information-kinds.js";
+import {
+  InformationSelectorExecutor,
+  type InformationRetrievalStrategy,
+} from "./information-selector.js";
 
 export {
   InformationCoreClosedError,
@@ -82,6 +88,9 @@ export interface InformationLedger {
   getMany(
     informationIds: readonly InformationId[],
   ): Promise<readonly DeepReadonly<InformationAtom>[]>;
+  find(
+    query: InformationFindQuery,
+  ): Promise<readonly DeepReadonly<InformationAtom>[]>;
   query(
     query: InformationReferenceQuery,
   ): Promise<readonly DeepReadonly<InformationAtom>[]>;
@@ -108,6 +117,7 @@ export interface InformationCoreOptions {
   readonly now?: () => Date;
   readonly bootstrapReporter?: (error: unknown) => void | Promise<void>;
   readonly logProjectionRunner?: InformationLogProjectionRunner;
+  readonly retrievalStrategies?: readonly InformationRetrievalStrategy[];
 }
 
 type CoreState = "new" | "starting" | "started" | "closing" | "closed";
@@ -120,6 +130,7 @@ export class InformationCore {
   #now: () => Date;
   #bootstrapReporter: (error: unknown) => void | Promise<void>;
   #logProjectionRunner: InformationLogProjectionRunner | undefined;
+  #selectorExecutor: InformationSelectorExecutor;
   #state: CoreState = "new";
   #startPromise: Promise<void> | undefined;
   #closePromise: Promise<void> | undefined;
@@ -134,6 +145,10 @@ export class InformationCore {
     this.#now = options.now ?? (() => new Date());
     this.#bootstrapReporter = options.bootstrapReporter ?? (() => undefined);
     this.#logProjectionRunner = options.logProjectionRunner;
+    this.#selectorExecutor = new InformationSelectorExecutor(
+      this.store,
+      options.retrievalStrategies,
+    );
   }
 
   start(): Promise<void> {
@@ -253,6 +268,17 @@ export class InformationCore {
   ): Promise<readonly DeepReadonly<InformationAtom>[]> {
     this.assertState("started");
     return this.store.getMany(informationIds);
+  }
+
+  async select(
+    selector: InformationSelectorDefinition,
+    sourceInformationId: InformationId,
+  ): Promise<readonly DeepReadonly<InformationAtom>[]> {
+    this.assertState("started");
+    return this.#selectorExecutor.select(
+      selector,
+      this.parseInformationId(sourceInformationId),
+    );
   }
 
   async query(
