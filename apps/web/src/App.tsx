@@ -28,6 +28,7 @@ import {
   LoaderCircle,
   Moon,
   Plus,
+  RefreshCw,
   Save,
   SendHorizontal,
   Settings2,
@@ -44,6 +45,7 @@ import {
 } from "react";
 
 import {
+  checkGatewayHealth,
   completeInitialConfiguration,
   createProfile,
   deleteProfile,
@@ -72,6 +74,7 @@ import {
 } from "./profile-editor.js";
 
 type DeliveryState = "sending" | "accepted" | "failed";
+type HealthState = "idle" | "checking" | "online" | "offline";
 type ConfigurationView =
   "checking" | "profiles" | "napcat" | "restart" | "chat" | "error";
 
@@ -104,6 +107,7 @@ export function App() {
   const [configurationStatus, setConfigurationStatus] =
     useState<ConfigurationStatus>();
   const [configurationError, setConfigurationError] = useState<string>();
+  const [healthState, setHealthState] = useState<HealthState>("idle");
   const [draft, setDraft] = useState("");
   const [messages, setMessages] = useState<readonly ChatMessage[]>([]);
   const [formError, setFormError] = useState<string>();
@@ -143,9 +147,6 @@ export function App() {
           return;
         }
         setConfigurationStatus(status);
-        if (status.gatewayToken !== undefined) {
-          setToken(status.gatewayToken);
-        }
         setConfigurationView(
           deriveConfigurationView(status, "checking", false),
         );
@@ -162,6 +163,18 @@ export function App() {
       active = false;
     };
   }, []);
+
+  const checkConnection = async () => {
+    setHealthState("checking");
+    setFormError(undefined);
+    try {
+      await checkGatewayHealth();
+      setHealthState("online");
+    } catch (error) {
+      setHealthState("offline");
+      setFormError(errorMessage(error));
+    }
+  };
 
   const submitMessage = async (event?: FormEvent) => {
     event?.preventDefault();
@@ -255,8 +268,7 @@ export function App() {
     return (
       <NapCatManagementScreen
         token={token}
-        onBack={() => setConfigurationView("profiles")}
-        onOpenChat={() => setConfigurationView("chat")}
+        onClose={() => setConfigurationView("chat")}
         onRestartRequired={() => setConfigurationView("restart")}
       />
     );
@@ -275,6 +287,33 @@ export function App() {
       </header>
 
       <main className="workspace">
+        <aside className="connection-panel" aria-labelledby="connection-title">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">连接配置</p>
+              <h2 id="connection-title">Kaguya 服务</h2>
+            </div>
+            <button
+              type="button"
+              className={`health-button ${healthState}`}
+              onClick={() => void checkConnection()}
+              disabled={healthState === "checking"}
+              title="检测 Kaguya 服务连接"
+            >
+              <RefreshCw
+                className={healthState === "checking" ? "spin" : undefined}
+                size={15}
+              />
+              <span>{healthLabel(healthState)}</span>
+            </button>
+          </div>
+
+          <div className="boundary-note">
+            <p>当前服务仅接受消息。</p>
+            <span>模型配置和回复由核心层管理。</span>
+          </div>
+        </aside>
+
         <section className="chat-panel" aria-labelledby="chat-title">
           <header className="chat-heading">
             <div>
@@ -931,13 +970,11 @@ function ProfileManagementScreen({
 
 function NapCatManagementScreen({
   token,
-  onBack,
-  onOpenChat,
+  onClose,
   onRestartRequired,
 }: {
   readonly token: string;
-  readonly onBack: () => void;
-  readonly onOpenChat: () => void;
+  readonly onClose: () => void;
   readonly onRestartRequired: () => void;
 }) {
   const config = useMemo(() => ({ token }), [token]);
@@ -1000,23 +1037,13 @@ function NapCatManagementScreen({
               <p className="eyebrow">平台连接</p>
               <h2 id="napcat-title">配置 NapCat</h2>
             </div>
-            <div className="editor-actions">
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={onOpenChat}
-              >
-                <SendHorizontal size={16} />
-                <span>对话</span>
-              </button>
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={onBack}
-              >
-                上一步
-              </button>
-            </div>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={onClose}
+            >
+              返回
+            </button>
           </div>
           <p className="setup-intro">
             填写 NapCat OneBot 反向 WebSocket 参数。保存后需要重启
@@ -1045,13 +1072,7 @@ function NapCatManagementScreen({
                   checked={enabled}
                   onChange={(event) => setEnabled(event.target.checked)}
                 />
-                <span>
-                  启用 NapCat
-                  <small>
-                    勾选后，重启时才会连接 QQ 的 NapCat OneBot 服务；不接 QQ
-                    可以直接跳过这一页。
-                  </small>
-                </span>
+                <span>启用 NapCat</span>
               </label>
               <label className="field">
                 <span>反向 WebSocket 地址</span>
@@ -1334,10 +1355,10 @@ export function readBootstrapToken(
 }
 
 function readGatewayToken(): string {
-  if (typeof localStorage === "undefined") {
+  if (typeof sessionStorage === "undefined") {
     return "";
   }
-  return localStorage.getItem("kaguya.gatewayToken") ?? "";
+  return sessionStorage.getItem("kaguya.gatewayToken") ?? "";
 }
 
 export function deriveConfigurationView(
@@ -1445,6 +1466,19 @@ function errorMessage(error: unknown): string {
     return error.message;
   }
   return "发送消息时发生未知错误";
+}
+
+function healthLabel(state: HealthState): string {
+  if (state === "checking") {
+    return "检测中";
+  }
+  if (state === "online") {
+    return "服务可用";
+  }
+  if (state === "offline") {
+    return "连接失败";
+  }
+  return "检测连接";
 }
 
 function formatTime(value: Date): string {
