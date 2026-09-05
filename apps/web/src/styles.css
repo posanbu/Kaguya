@@ -13,8 +13,19 @@
  * 当用户偏好减少动画时停止旋转与过渡。
  */
 :root {
-  color: #2f241e;
-  background: #fffaf5;
+  color: #33251f;
+  background: #fff8ef;
+  color-scheme: light dark;
+  --kaguya-coral: #cf5f2f;
+  --kaguya-coral-strong: #a93f1d;
+  --kaguya-gold: #e5a84c;
+  --kaguya-ink: #33251f;
+  --kaguya-muted: #775f52;
+  --kaguya-paper: #fffdf9;
+  --kaguya-paper-soft: #fff6e9;
+  --kaguya-line: #e4cdbb;
+  --kaguya-cyan: #0f8c92;
+  --kaguya-focus: rgb(207 95 47 / 20%);
   font-family:
     Inter,
     "Segoe UI",
@@ -38,6 +49,20 @@ body,
   margin: 0;
 }
 
+body {
+  background: #fff8ef;
+}
+
+::selection {
+  background: rgb(207 95 47 / 24%);
+  color: #61260f;
+}
+
+:focus-visible {
+  outline: 3px solid var(--kaguya-focus);
+  outline-offset: 3px;
+}
+
 button,
 input,
 textarea {
@@ -53,21 +78,46 @@ button:disabled {
   cursor: not-allowed;
 }
 
-.app-shell {
+.app-shell,
+.setup-shell {
+  position: relative;
+  isolation: isolate;
   min-height: 100vh;
+  overflow: hidden;
+  background-color: #efece9;
+  background-image: url("/theme/bg-light.png");
+  background-size: 77px 133px;
+  background-attachment: fixed;
 }
 
 .setup-shell {
   min-height: 100vh;
-  background-color: #fffaf5;
-  background-image:
-    radial-gradient(circle at 8% 10%, rgb(239 138 67 / 10%), transparent 24rem),
-    radial-gradient(
-      circle at 92% 12%,
-      rgb(255 207 146 / 14%),
-      transparent 22rem
-    );
-  background-attachment: fixed;
+}
+
+.app-shell::after,
+.setup-shell::after {
+  position: fixed;
+  z-index: -1;
+  inset: 72px 0 0;
+  background-image: url("/theme/cloud.webp"), url("/theme/cloud.webp");
+  background-repeat: no-repeat;
+  background-position:
+    5% 9%,
+    88% 68%;
+  background-size:
+    202px 72px,
+    152px auto;
+  content: "";
+  opacity: 0.12;
+  pointer-events: none;
+}
+
+.topbar,
+.workspace,
+.setup-main,
+.setup-status {
+  position: relative;
+  z-index: 1;
 }
 
 .setup-main {
@@ -286,20 +336,60 @@ button:disabled {
   gap: 12px;
   min-height: 72px;
   padding: 12px clamp(18px, 4vw, 48px);
-  border-bottom: 1px solid #dfe3e8;
-  background: #ffffff;
+  border-bottom: 1px solid rgb(207 95 47 / 20%);
+  background: rgb(255 253 249 / 94%);
+  box-shadow: 0 8px 28px rgb(111 54 27 / 7%);
+}
+
+.brand-identity {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-logo {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+  object-fit: contain;
+  filter: drop-shadow(0 7px 12px rgb(168 73 20 / 18%));
+}
+
+.topbar-spacer {
+  flex: 1 1 auto;
+}
+
+.theme-button {
+  display: inline-flex;
+  min-width: 82px;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 8px 12px;
+  border: 1px solid #e2d2c4;
+  border-radius: 7px;
+  background: #fffdf9;
+  color: #694c3b;
+  font-size: 13px;
+  font-weight: 700;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    color 160ms ease;
+}
+
+.theme-button:hover {
+  border-color: var(--kaguya-coral);
+  background: #fff3e7;
+  color: #9b421f;
 }
 
 .setup-shell .topbar {
   border-bottom-color: #eadfd5;
   background: rgb(255 255 255 / 82%);
   backdrop-filter: blur(12px);
-}
-
-.setup-shell .brand-mark {
-  border-radius: 9px;
-  background: #c95d20;
-  box-shadow: 0 6px 14px rgb(168 73 20 / 20%);
 }
 
 .setup-shell .topbar h1 {
@@ -331,18 +421,6 @@ button:disabled {
   color: #c95d20;
 }
 
-.brand-mark {
-  display: grid;
-  width: 38px;
-  height: 38px;
-  place-items: center;
-  border-radius: 7px;
-  background: #20242a;
-  color: #ffffff;
-  font-size: 18px;
-  font-weight: 700;
-}
-
 .topbar h1 {
   font-size: 17px;
   line-height: 1.25;
@@ -372,9 +450,10 @@ button:disabled {
 
 .connection-panel,
 .chat-panel {
-  border: 1px solid #dfe3e8;
-  border-radius: 8px;
-  background: #ffffff;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 12px;
+  background: rgb(255 253 249 / 97%);
+  box-shadow: 0 18px 46px rgb(111 54 27 / 9%);
 }
 
 .connection-panel {
@@ -469,7 +548,7 @@ button:disabled {
 }
 
 .field input {
-  min-height: 42px;
+  min-height: 44px;
   padding: 9px 11px;
   font-size: 14px;
   font-weight: 400;
@@ -486,16 +565,16 @@ button:disabled {
 }
 
 .password-field input {
-  padding-right: 43px;
+  padding-right: 49px;
 }
 
 .icon-button {
   position: absolute;
-  top: 3px;
-  right: 3px;
+  top: 0;
+  right: 0;
   display: grid;
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
   place-items: center;
   border: 0;
   border-radius: 5px;
@@ -540,13 +619,25 @@ button:disabled {
 .message-list {
   overflow-y: auto;
   padding: 22px;
-  background: #fafbfc;
+  background:
+    linear-gradient(rgb(255 253 249 / 88%), rgb(255 250 243 / 88%)),
+    conic-gradient(
+      from 45deg,
+      rgb(229 168 76 / 10%),
+      transparent 25% 75%,
+      rgb(207 95 47 / 8%)
+    );
+  background-size:
+    cover,
+    72px 72px;
 }
 
 .empty-state {
   display: grid;
   min-height: 100%;
+  align-content: center;
   place-items: center;
+  gap: 12px;
   color: #858e99;
   font-size: 14px;
 }
@@ -555,9 +646,9 @@ button:disabled {
   width: min(82%, 680px);
   margin-left: auto;
   padding: 14px 16px;
-  border: 1px solid #d9e8df;
+  border: 1px solid #e8b994;
   border-radius: 8px 8px 2px 8px;
-  background: #f1f8f4;
+  background: #fff0df;
 }
 
 .message-row + .message-row {
@@ -574,7 +665,7 @@ button:disabled {
 }
 
 .message-meta strong {
-  color: #286543;
+  color: #9b421f;
   font-size: 12px;
 }
 
@@ -616,7 +707,7 @@ button:disabled {
 .composer {
   padding: 16px 18px 18px;
   border-top: 1px solid #e3e7eb;
-  background: #ffffff;
+  background: #fffdf9;
 }
 
 .composer textarea {
@@ -843,6 +934,27 @@ button:disabled {
     padding: 10px 16px;
   }
 
+  .brand-logo {
+    width: 40px;
+    height: 40px;
+  }
+
+  .theme-button {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 8px;
+  }
+
+  .theme-button span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
   .workspace,
   .setup-main {
     min-height: calc(100vh - 64px);
@@ -883,4 +995,299 @@ button:disabled {
     transition: none;
     animation: none;
   }
+}
+
+:root[data-theme="dark"] {
+  color: #f8eee7;
+  background: #071526;
+  --kaguya-coral: #f08a70;
+  --kaguya-coral-strong: #ffc0a8;
+  --kaguya-gold: #f2d995;
+  --kaguya-ink: #f8eee7;
+  --kaguya-muted: #c5b5ae;
+  --kaguya-paper: #111d31;
+  --kaguya-paper-soft: #17253a;
+  --kaguya-line: rgb(88 211 215 / 44%);
+  --kaguya-cyan: #68e0e2;
+  --kaguya-focus: rgb(104 224 226 / 34%);
+}
+
+:root[data-theme="dark"] body {
+  background: #071526;
+}
+
+:root[data-theme="dark"] ::selection {
+  background: rgb(104 224 226 / 30%);
+  color: #ffffff;
+}
+
+:root[data-theme="dark"] .app-shell,
+:root[data-theme="dark"] .setup-shell {
+  background-color: #071526;
+  background-image:
+    linear-gradient(180deg, rgb(5 17 35 / 26%) 0 48%, rgb(29 12 34 / 48%) 100%),
+    url("/theme/bg-dark.webp");
+  background-size: cover;
+}
+
+:root[data-theme="dark"] .app-shell::before,
+:root[data-theme="dark"] .setup-shell::before {
+  position: fixed;
+  z-index: -1;
+  inset: 72px 0 0;
+  background-image: url("/theme/torii.svg");
+  background-repeat: no-repeat;
+  background-position: center bottom -34px;
+  background-size: min(1120px, 96vw) auto;
+  content: "";
+  opacity: 0.48;
+  pointer-events: none;
+}
+
+:root[data-theme="dark"] .app-shell::after,
+:root[data-theme="dark"] .setup-shell::after {
+  z-index: 2;
+  inset: 72px 0 0;
+  width: auto;
+  height: auto;
+  background-image:
+    url("/theme/neon-cloud-1.webp"), url("/theme/neon-cloud-2.webp"),
+    url("/theme/neon-fish.webp"), url("/theme/neon-octopus.webp");
+  background-repeat: no-repeat;
+  background-position:
+    left -34px top 14%,
+    right -30px top 42%,
+    left 2px bottom 5%,
+    right 2px bottom 7%;
+  background-size:
+    184px auto,
+    178px auto,
+    92px auto,
+    98px auto;
+  opacity: 0.4;
+  filter: drop-shadow(0 0 7px rgb(104 224 226 / 32%));
+  mix-blend-mode: screen;
+}
+
+:root[data-theme="dark"] .topbar,
+:root[data-theme="dark"] .setup-shell .topbar {
+  border-bottom-color: rgb(104 224 226 / 32%);
+  background: rgb(7 17 34 / 95%);
+  box-shadow: 0 10px 34px rgb(0 0 0 / 28%);
+  backdrop-filter: none;
+}
+
+:root[data-theme="dark"] .brand-logo {
+  filter: drop-shadow(0 0 14px rgb(240 138 112 / 30%));
+}
+
+:root[data-theme="dark"] .theme-button {
+  border-color: rgb(104 224 226 / 34%);
+  background: #111f34;
+  color: #dff9f7;
+}
+
+:root[data-theme="dark"] .theme-button:hover {
+  border-color: var(--kaguya-cyan);
+  background: #172941;
+  color: #ffffff;
+}
+
+:root[data-theme="dark"] .topbar h1,
+:root[data-theme="dark"] .setup-shell .topbar h1,
+:root[data-theme="dark"] .panel-heading h2,
+:root[data-theme="dark"] .chat-heading h2,
+:root[data-theme="dark"] .setup-heading h1,
+:root[data-theme="dark"] .setup-status-card h1,
+:root[data-theme="dark"] .profile-list-name,
+:root[data-theme="dark"] .message-body {
+  color: #fff8f2;
+}
+
+:root[data-theme="dark"] .topbar p,
+:root[data-theme="dark"] .setup-shell .topbar p,
+:root[data-theme="dark"] .setup-intro,
+:root[data-theme="dark"] .setup-check,
+:root[data-theme="dark"] .boundary-note,
+:root[data-theme="dark"] .profile-list-meta,
+:root[data-theme="dark"] .readiness-list,
+:root[data-theme="dark"] .readiness-empty,
+:root[data-theme="dark"] .profile-loading,
+:root[data-theme="dark"] .profile-placeholder,
+:root[data-theme="dark"] .message-meta,
+:root[data-theme="dark"] .limit,
+:root[data-theme="dark"] .delivery-status.sending,
+:root[data-theme="dark"] .delivery-status code {
+  color: #c9bab4;
+}
+
+:root[data-theme="dark"] .setup-status,
+:root[data-theme="dark"] .setup-status-card {
+  color: #d7c8c1;
+}
+
+:root[data-theme="dark"] .eyebrow,
+:root[data-theme="dark"] .setup-shell .eyebrow {
+  color: var(--kaguya-cyan);
+}
+
+:root[data-theme="dark"] .setup-card,
+:root[data-theme="dark"] .connection-panel,
+:root[data-theme="dark"] .chat-panel {
+  border-color: rgb(104 224 226 / 42%);
+  background: rgb(13 25 44 / 96%);
+  box-shadow:
+    0 20px 54px rgb(0 0 0 / 36%),
+    inset 0 0 0 1px rgb(104 224 226 / 8%);
+}
+
+:root[data-theme="dark"] .chat-panel {
+  position: relative;
+}
+
+:root[data-theme="dark"] .chat-panel::before,
+:root[data-theme="dark"] .setup-card::before,
+:root[data-theme="dark"] .connection-panel::before {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  border-top: 2px solid rgb(104 224 226 / 72%);
+  border-right: 2px solid rgb(104 224 226 / 72%);
+  content: "";
+  pointer-events: none;
+}
+
+:root[data-theme="dark"] .setup-card,
+:root[data-theme="dark"] .connection-panel {
+  position: relative;
+}
+
+:root[data-theme="dark"] .message-list {
+  background:
+    linear-gradient(rgb(8 19 35 / 84%), rgb(11 23 40 / 88%)),
+    repeating-linear-gradient(
+      180deg,
+      transparent 0 5px,
+      rgb(104 224 226 / 7%) 5px 6px
+    );
+}
+
+:root[data-theme="dark"] .chat-heading,
+:root[data-theme="dark"] .composer {
+  border-color: rgb(104 224 226 / 20%);
+  background: #0f1d31;
+}
+
+:root[data-theme="dark"] .message-row {
+  border-color: rgb(240 138 112 / 46%);
+  background: #2a2331;
+}
+
+:root[data-theme="dark"] .message-meta strong,
+:root[data-theme="dark"] .delivery-status.accepted {
+  color: #91e7d0;
+}
+
+:root[data-theme="dark"] .field,
+:root[data-theme="dark"] .readiness-group strong,
+:root[data-theme="dark"] .readiness-status {
+  color: #f0e4dc;
+}
+
+:root[data-theme="dark"] .readiness-list code {
+  color: #9bdfe1;
+}
+
+:root[data-theme="dark"] .field input,
+:root[data-theme="dark"] .composer textarea,
+:root[data-theme="dark"] .profile-list-item,
+:root[data-theme="dark"] .health-button,
+:root[data-theme="dark"] .secondary-button {
+  border-color: rgb(104 224 226 / 28%);
+  background: #111f34;
+  color: #f8eee7;
+}
+
+:root[data-theme="dark"] .field input::placeholder,
+:root[data-theme="dark"] .composer textarea::placeholder {
+  color: #9b8e8a;
+}
+
+:root[data-theme="dark"] .field input:focus,
+:root[data-theme="dark"] .composer textarea:focus {
+  border-color: var(--kaguya-cyan);
+  box-shadow: 0 0 0 3px rgb(104 224 226 / 18%);
+}
+
+:root[data-theme="dark"] .secondary-button:hover:not(:disabled),
+:root[data-theme="dark"] .setup-shell .secondary-button:hover:not(:disabled),
+:root[data-theme="dark"] .health-button:hover:not(:disabled),
+:root[data-theme="dark"] .profile-list-item:hover {
+  border-color: var(--kaguya-cyan);
+  background: #172941;
+  color: #ffffff;
+}
+
+:root[data-theme="dark"] .profile-list-item.active {
+  border-color: #f08a70;
+  background: #352334;
+}
+
+:root[data-theme="dark"] .boundary-note,
+:root[data-theme="dark"] .readiness-card {
+  border-color: rgb(104 224 226 / 18%);
+}
+
+:root[data-theme="dark"] .icon-button {
+  color: #bfb2ad;
+}
+
+:root[data-theme="dark"] .icon-button:hover {
+  background: #1c2d45;
+  color: #ffffff;
+}
+
+:root[data-theme="dark"] .setup-success,
+:root[data-theme="dark"] .health-button.online {
+  border-color: rgb(105 206 170 / 42%);
+  background: rgb(37 94 78 / 32%);
+  color: #a9ead3;
+}
+
+:root[data-theme="dark"] .error-banner,
+:root[data-theme="dark"] .health-button.offline,
+:root[data-theme="dark"] .danger-button {
+  border-color: rgb(240 138 112 / 48%);
+  background: rgb(104 37 48 / 36%);
+  color: #ffc3b5;
+}
+
+:root[data-theme="dark"] .setup-button:disabled,
+:root[data-theme="dark"] .send-button:disabled,
+:root[data-theme="dark"] .secondary-button:disabled,
+:root[data-theme="dark"] .danger-button:disabled {
+  border-color: #34445b;
+  background: #34445b;
+  color: #98a2b0;
+}
+
+:root[data-theme="dark"] .empty-state {
+  color: #b8aaa5;
+}
+
+:root[data-theme="dark"] ::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+:root[data-theme="dark"] ::-webkit-scrollbar-track {
+  background: #0a1729;
+}
+
+:root[data-theme="dark"] ::-webkit-scrollbar-thumb {
+  border: 2px solid #0a1729;
+  border-radius: 999px;
+  background: #3a6371;
 }

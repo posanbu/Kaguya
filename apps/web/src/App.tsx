@@ -26,10 +26,10 @@ import {
   Eye,
   EyeOff,
   LoaderCircle,
+  Moon,
   Plus,
   RefreshCw,
   Save,
-  Search,
   SendHorizontal,
   Settings2,
   Sun,
@@ -78,14 +78,6 @@ type HealthState = "idle" | "checking" | "online" | "offline";
 type ConfigurationView =
   "checking" | "profiles" | "napcat" | "restart" | "chat" | "error";
 
-const DOCS_BASE_URL = "https://posanbu.github.io/Kaguya";
-const DOCS_LINKS = [
-  { label: "使用指南", path: "/guide/" },
-  { label: "开发文档", path: "/developers/" },
-  { label: "参考资料", path: "/reference/" },
-  { label: "项目", path: "/project/" },
-] as const;
-
 interface ChatMessage {
   readonly id: string;
   readonly text: string;
@@ -104,8 +96,12 @@ interface ClearedLoadedProfileStateSnapshot {
 }
 
 export function App() {
-  const [bootstrapMode, setBootstrapMode] = useState(() => readBootstrapToken() !== "");
-  const [token, setToken] = useState(() => readGatewayToken() || readBootstrapToken());
+  const [bootstrapMode, setBootstrapMode] = useState(
+    () => readBootstrapToken() !== "",
+  );
+  const [token, setToken] = useState(
+    () => readGatewayToken() || readBootstrapToken(),
+  );
   const [configurationView, setConfigurationView] =
     useState<ConfigurationView>("checking");
   const [configurationStatus, setConfigurationStatus] =
@@ -285,13 +281,9 @@ export function App() {
   return (
     <div className="app-shell">
       <header className="topbar">
-        <div className="brand-mark" aria-hidden="true">
-          K
-        </div>
-        <div>
-          <h1>Kaguya</h1>
-          <p>统一消息服务</p>
-        </div>
+        <BrandIdentity subtitle="统一消息服务" />
+        <div className="topbar-spacer" />
+        <ThemeToggle />
       </header>
 
       <main className="workspace">
@@ -596,10 +588,18 @@ function ProfileManagementScreen({
           heavyModel: editorFields.heavyModel,
         });
         onBootstrapCompleted(readGatewayToken());
-        setNotice(saved.status === "configured" ? "配置已保存，请重启服务。" : undefined);
+        setNotice(
+          saved.status === "configured"
+            ? "配置已保存，请重启服务。"
+            : undefined,
+        );
         return;
       }
-      const result = await replaceProfile(config, loadedProfile.id, replacement);
+      const result = await replaceProfile(
+        config,
+        loadedProfile.id,
+        replacement,
+      );
       setLoadedProfile(result.profile);
       setEditorFields(profileToEditorFields(result.profile));
       await refreshRegistry();
@@ -672,13 +672,9 @@ function ProfileManagementScreen({
   return (
     <div className="setup-shell">
       <header className="topbar">
-        <div className="brand-mark" aria-hidden="true">
-          K
-        </div>
-        <div>
-          <h1>Kaguya</h1>
-          <p>配置引导</p>
-        </div>
+        <BrandIdentity subtitle="配置引导" />
+        <div className="topbar-spacer" />
+        <ThemeToggle />
       </header>
 
       <main className="setup-main profile-main">
@@ -1259,43 +1255,59 @@ function RestartRequired() {
 
 function SetupHeader({ subtitle }: { readonly subtitle: string }) {
   return (
-    <header className="topbar setup-topbar">
-      <a className="setup-brand" href={`${DOCS_BASE_URL}/`}>
-        <img src="/kaguya-logo.png" alt="Kaguya" />
-        <span>Kaguya</span>
-      </a>
-      <span className="setup-subtitle">{subtitle}</span>
-      <div className="setup-header-spacer" />
-      <div className="setup-search" aria-label="搜索文档">
-        <Search size={15} />
-        <span>搜索</span>
-        <kbd>⌘ K</kbd>
-      </div>
-      <nav className="setup-docs-nav" aria-label="文档导航">
-        {DOCS_LINKS.map((link) => (
-          <a key={link.path} href={`${DOCS_BASE_URL}${link.path}`}>
-            {link.label}
-          </a>
-        ))}
-      </nav>
-      <button
-        className="setup-theme-button"
-        type="button"
-        aria-label="切换主题"
-      >
-        <Sun size={16} />
-      </button>
-      <a
-        className="setup-github-link"
-        href="https://github.com/posanbu/Kaguya"
-        aria-label="在 GitHub 查看 Kaguya"
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M12 .7a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2.2c-3.3.7-4-1.6-4-1.6-.5-1.4-1.3-1.7-1.3-1.7-1.1-.8.1-.8.1-.8 1.2.1 1.8 1.3 1.8 1.3 1.1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.3-5.5-5.9 0-1.3.5-2.4 1.3-3.2-.1-.3-.6-1.6.1-3.2 0 0 1-.3 3.3 1.2a11.3 11.3 0 0 1 6 0c2.3-1.5 3.3-1.2 3.3-1.2.7 1.6.3 2.9.1 3.2.8.8 1.3 1.9 1.3 3.2 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.2c0 .3.2.7.8.6A12 12 0 0 0 12 .7Z" />
-        </svg>
-      </a>
+    <header className="topbar">
+      <BrandIdentity subtitle={subtitle} />
+      <div className="topbar-spacer" />
+      <ThemeToggle />
     </header>
   );
+}
+
+function BrandIdentity({ subtitle }: { readonly subtitle: string }) {
+  return (
+    <div className="brand-identity">
+      <img className="brand-logo" src="/kaguya-logo.png" alt="" />
+      <div>
+        <h1>Kaguya</h1>
+        <p>{subtitle}</p>
+      </div>
+    </div>
+  );
+}
+
+type Theme = "light" | "dark";
+
+function ThemeToggle() {
+  const [theme, setTheme] = useState<Theme>(() => readTheme());
+  const nextTheme = theme === "light" ? "dark" : "light";
+  const nextThemeLabel = nextTheme === "dark" ? "深色" : "浅色";
+
+  const toggleTheme = () => {
+    document.documentElement.dataset.theme = nextTheme;
+    try {
+      localStorage.setItem("kaguya.theme", nextTheme);
+    } catch {
+      // The selected theme still applies for this page when storage is unavailable.
+    }
+    setTheme(nextTheme);
+  };
+
+  return (
+    <button
+      className="theme-button"
+      type="button"
+      onClick={toggleTheme}
+      aria-label={`切换至${nextThemeLabel}主题`}
+      title={`切换至${nextThemeLabel}主题`}
+    >
+      {nextTheme === "dark" ? <Moon size={17} /> : <Sun size={17} />}
+      <span>{nextThemeLabel}</span>
+    </button>
+  );
+}
+
+function readTheme(): Theme {
+  return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
 }
 
 function DeliveryStatus({ message }: { readonly message: ChatMessage }) {
@@ -1335,7 +1347,9 @@ function emptyBootstrapProfile(): UserConfigProfile {
   };
 }
 
-export function readBootstrapToken(hash = typeof location === "undefined" ? "" : location.hash): string {
+export function readBootstrapToken(
+  hash = typeof location === "undefined" ? "" : location.hash,
+): string {
   const match = /^#bootstrapToken=([^&]*)$/u.exec(hash);
   return match === null ? "" : decodeURIComponent(match[1] ?? "");
 }
