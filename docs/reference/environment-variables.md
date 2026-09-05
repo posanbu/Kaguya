@@ -35,13 +35,8 @@ description: Kaguya Server、PostgreSQL、白名单、NapCat 与日志环境变�
 
 **`KAGUYA_RATE_LIMIT_WINDOW_MS`** — 默认 `60000`，允许范围 1000 至 3600000 毫秒。
 
-::: code-group
-
-```dotenv [开发 Server ~vscode-icons:file-type-dotenv~]
-KAGUYA_DATABASE_URL=postgresql://kaguya:password@127.0.0.1:5432/kaguya
-KAGUYA_CONFIG_ROOT=.data/kaguya-config
-```
-
+::: danger 暴露端口前先建立可信边界
+`GET /api/v1/setup` 和 `GET /api/v1/gateway/token` 会公开本实例 token，目的是让同源 Web UI 免手填。因此任何能访问监听端口的人都可以取得受保护接口权限。默认保留 `KAGUYA_HOST=127.0.0.1`；远程部署应使用可信网络或带 TLS 与独立认证的反向代理。
 :::
 
 ## 平台入站白名单
@@ -106,6 +101,12 @@ KAGUYA_LOG_DESTINATION=.data/logs/kaguya.jsonl
 
 :::
 
-## 不再作为 Runtime 配置的旧值
+## 已废弃并拒绝的变量
 
-旧 SQLite 路径（包括 `KAGUYA_DATABASE_PATH`）不会决定 Runtime 的存储位置；Server 只使用 `KAGUYA_DATABASE_URL` 连接 PostgreSQL。旧 SQLite 数据不会自动导入、转换或删除。模型凭据、Base URL 和模型 ID 也不从旧环境变量读取，应在 Profile Registry 中配置。
+检测到以下任一变量时，Server 会在启动前失败，不读取其值，也不自动迁移：
+
+**旧多应用变量** — `KAGUYA_API_HOST`、`KAGUYA_API_PORT`、`KAGUYA_API_DATABASE_PATH`、`KAGUYA_BOT_DATABASE_PATH`。
+
+**旧模型变量** — `KAGUYA_LLM_API_KEY`、`KAGUYA_LLM_BASE_URL`、`KAGUYA_LLM_MODEL`。
+
+模型配置应迁移到 profile store；Server 地址和数据库应使用统一变量。

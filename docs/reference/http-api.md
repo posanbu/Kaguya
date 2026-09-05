@@ -5,7 +5,7 @@ description: Kaguya 统一 Server 的路由、认证、Profile 与消息协议�
 
 # HTTP API
 
-`apps/server` 在一个 Fastify 实例中提供 Web UI、健康检查、OpenAPI、Profile Registry 管理和 Web 消息入口。默认地址是 `http://127.0.0.1:3000`。
+`apps/server` 在一个 Fastify 实例中提供 Web UI、健康检查、OpenAPI、配置管理和消息入口。默认地址是 `http://127.0.0.1:3000`。
 
 ## 公共路由
 
@@ -15,7 +15,23 @@ description: Kaguya 统一 Server 的路由、认证、Profile 与消息协议�
 
 **`GET /api/v1/openapi.json`** — 无需认证、不限流，返回 OpenAPI 3 描述。
 
-**`GET /api/v1/setup`** — 无需认证、不限流，返回不含 Provider 密钥或 Gateway Token 的 readiness、`selectedProfileId` 与 Profile metadata。状态可能为 `setup_required`、`invalid`、`review_required`、`restart_required` 或 `ready`。
+**`GET /api/v1/setup`** — 无需认证、不限流，返回配置 readiness 状态（不含 Provider 密钥或完整 profile），并附带本实例分发的网关 token。
+
+**`GET /api/v1/gateway/token`** — 无需认证、不限流，返回本实例分发的网关 token。
+
+**`GET /api/v1/profiles`** — 需要 Bearer Token，返回 Profile 摘要与全局 selected Profile。
+
+**`POST /api/v1/profiles`** — 需要 Bearer Token，创建一个未选中的空 Profile。
+
+**`GET /api/v1/profiles/:profileId`** — 需要 Bearer Token，返回包含敏感配置的完整 Profile。
+
+**`PUT /api/v1/profiles/:profileId`** — 需要 Bearer Token，完整替换一个 Profile。
+
+**`PUT /api/v1/profiles/selection`** — 需要 Bearer Token，修改全局 selected Profile。
+
+**`DELETE /api/v1/profiles/:profileId`** — 需要 Bearer Token，删除非 `default`、非 selected Profile。
+
+**`POST /api/v1/messages`** — 需要 Bearer Token，校验并把一条 Web 文本消息交给 gateway 后台分发。
 
 生产 SPA fallback 只处理接受 `text/html` 的 GET 页面请求，显式排除 `/api/*` 与 `/healthz`。未知 API 返回结构化 `404 not_found`。
 
@@ -39,31 +55,9 @@ Authorization: Bearer replace-with-at-least-16-characters
 
 ## 管理全局 Profile
 
-Profile API 以 Registry 中唯一的 `selectedProfileId` 为运行时选择边界。所有以下路由都需要 Bearer Token：
+## 管理配置
 
-**`GET /api/v1/profiles`** — 返回 Profile metadata 列表与当前 `selectedProfileId`。
-
-**`POST /api/v1/profiles`** — 接收严格的 `{ "name": "..." }`，创建一个命名 Profile，但不会选中它。
-
-**`PUT /api/v1/profiles/selection`** — 接收严格的 `{ "selectedProfileId": "..." }`，显式选择全局 Profile。
-
-**`GET /api/v1/profiles/:profileId`** — 读取一个明确指定的 Profile。
-
-**`PUT /api/v1/profiles/:profileId`** — 完整替换一个 Profile。请求需要 `name`、`ai`、`platforms`、`plugins` 与 `acknowledgedWarnings`。
-
-**`DELETE /api/v1/profiles/:profileId`** — 删除一个非 `default` 且非当前选中的 Profile，成功时返回 `204`。
-
-创建、替换或选择成功时返回 Profile 与 `restartRequired`。选中 Profile 的变更不会热加载；Server 只在下一次启动时读取它并构造共享模型解析器。
-
-::: code-group
-
-```json [选择全局 Profile ~vscode-icons:file-type-json~]
-{
-  "selectedProfileId": "default"
-}
-```
-
-:::
+当前代码不提供 `POST /api/v1/setup`。首次配置与后续修改统一通过细粒度 Profile API 完成；请求示例、完整替换语义与删除限制见[Profile API](./profile-api)。
 
 ## 提交消息
 
@@ -90,9 +84,7 @@ curl http://127.0.0.1:3000/api/v1/messages \
 
 :::
 
-Web 网关会正规化文本，并异步调用 `InformationIngress.submit()`。因此 `202 accepted` 表示 Server 已接收请求并开始提交，不表示 context 或入站原子已经持久化，也不表示 LLM、回复或投递已经完成。当前 HTTP API 没有回复查询或 SSE。
-
-Runtime 成功处理时会由 Core 生成唯一 `informationId`，持久化 `core.runtime.context` 与入站原子后才广播给模块；该内部 ID 不会作为 HTTP `202` 的另一套响应身份暴露。
+`202 accepted` 只表示 Web gateway 已接受消息。gateway 随后以 `web:${requestId}` 作为 traceId，在后台异步调用 Runtime；响应不等待 dispatch、模型调用或出站投递完成。当前接口没有回复查询或 SSE。
 
 ## 错误格式
 
@@ -118,9 +110,7 @@ Runtime 成功处理时会由 Core 生成唯一 `informationId`，持久化 `cor
 
 **`profile_not_found` / 404** — 请求的 Profile 不存在。
 
-**`profile_name_conflict` / 409** — 创建或替换时的 Profile 名称已存在。
-
-**`profile_protected` / 409** — 不能删除保留的 `default` Profile。
+**`configuration_invalid` / 400** — Profile 输入不完整、引用不一致或不满足 readiness。
 
 **`profile_in_use` / 409** — 不能删除当前 `selectedProfileId` 指向的 Profile。
 
@@ -132,7 +122,7 @@ Runtime 成功处理时会由 Core 生成唯一 `informationId`，持久化 `cor
 
 **`request_rejected` / 413 或 415** — Fastify 在进入 Runtime 前拒绝请求。
 
-**`configuration_setup_required` / 503** — 当前 selected Profile 未就绪，Runtime ingress 尚未启动。
+**`configuration_setup_required` / 503** — selected Profile 未 ready，Runtime ingress 未启动。
 
 **`core_unavailable` / 503** — 嵌入或测试场景没有提供 Runtime ingress。
 

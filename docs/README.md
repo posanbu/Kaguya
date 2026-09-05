@@ -5,8 +5,9 @@
 ## 目录结构
 
 - `guide/`：安装、配置与 Web UI 使用。
+- `design/`：UI 目标、视觉原则与配置流程设计。
 - `developers/`：架构、贡献流程和文档规范。
-- `reference/`：HTTP API、环境变量与公共契约。
+- `reference/`：HTTP API、Profile API、环境变量与公共契约。
 - `project/`：当前边界与路线图。
 - `.vitepress/`：站点配置、导航和主题。
 - `public/`：项目图标与静态资源。

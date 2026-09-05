@@ -26,12 +26,19 @@ description: Kaguya 当前已实现能力、明确边界和后续演进方向。
 
 ::: timeline 配置与审计
 
-- Profile Registry 管理一组 Profile 与唯一的 `selectedProfileId`；模块与消息没有 Profile 覆盖入口。
-- PostgreSQL information ledger 保存 append-only 原子与引用；日志投影是提交后的观察者。
-- payload 使用 `JSONB`，原子与显式引用由外键保护；原子、引用和日志 outbox 在同一事务写入。
-- PGlite 与 CI 的真实 PostgreSQL 服务共用账本契约、索引和重连验收。
-- Web、OneBot/NapCat adapter 只正规化平台内容并提交窄 `InformationIngress`。
-  :::
+::: timeline 配置、模型与审计
+- 多 Profile Registry 支持创建、完整替换、显式全局选择和受限删除。
+- Server 未设置 Gateway Token 时自动生成，Web UI 页面加载时自动取得。
+- Vercel AI SDK Core 统一模型调用、结构化输出和错误分类。
+- SQLite 与结构化日志记录消息、LLM trace 和出站状态。
+:::
+
+::: timeline 信息原子与异步账本基础设施
+- InformationAtom、显式引用与可封锁 Kind Registry 已实现。
+- InformationLedger 提供异步 append、get、getMany 与反向引用 query。
+- PostgreSQL/PGlite 仓储以追加式事务维护原子、引用和 Kind 集合。
+- 持久 outbox 将日志作为提交后的单向投影，失败任务保留待重试。
+:::
 
 ## 当前明确没有
 
@@ -43,7 +50,21 @@ description: Kaguya 当前已实现能力、明确边界和后续演进方向。
 
 **隐式对话分组** — Core 不按用户、群聊、来源或 HTTP 字段建立 session。
 
-**Web 回复读取通道** — 消息 API 返回 `202 accepted`，没有回复查询或 SSE。
+**Web 回复读取通道** — 消息 API 只返回 `202 accepted`，没有回复查询或 SSE。
+
+**旧数据自动迁移** — 旧 SQLite 与旧配置索引会被拒绝，不会自动删除或转换。
+
+**InformationLedger 接入主 Runtime** — 新账本基础设施尚未替换 `apps/server` 当前的 SQLite 数据路径。
+
+## 后续实施顺序
+
+### 已完成：#38 信息原子与 Kind Registry
+
+定义只依赖 `informationId` 的不可变信息原子，通过 Kind 注册和校验不同载荷，并允许信息 ID 之间建立显式类型引用。
+
+### 已完成：#39 异步账本、PostgreSQL 与日志投影
+
+InformationLedger 已改为异步端口；PostgreSQL/PGlite 实现追加式存储、引用约束和持久日志 outbox。日志从已提交原子单向投影，失败不回滚事实。该子系统尚未接入当前 Server 主链。
 
 **旧 SQLite 数据自动迁移** — 旧 SQLite 文件与旧配置索引不会自动读取、转换、合并或删除。
 
@@ -53,13 +74,13 @@ description: Kaguya 当前已实现能力、明确边界和后续演进方向。
 
 后续上下文选择、Prompt provenance 与 Memory 若实现，应建立在已持久化的信息原子和显式引用上，不恢复隐式会话或事件身份。
 
-### 额外的可靠性能力
+### 主 Runtime 接入与迁移
 
-若未来引入回放、队列或重试，必须明确其消费语义、失败边界与用户可见状态，并以 ledger 中的 `informationId` 为边界；这些能力目前尚未提供。
+在信息 Kind、DAG 与模块边界稳定后，把 `apps/server` 从旧 SQLite 消息路径迁移到 PostgreSQL 账本，同时明确兼容与数据迁移策略。
 
 ## 文档状态
 
-当前静态站已经用根 README、Server/Runtime 代码和 package public API 填充安装、配置、Web UI、架构、API 与环境变量页面。`docs/ours/` 与 `docs/zh/` 是不参与公开构建的历史核对资料，不代表当前接口。
+当前静态站按 UI 设计、用户文档和开发者架构三层组织，并用根 README、`CONTRIBUTING.md`、Server/Runtime 代码、schema 与 package README 核对事实。旧 `zh/` 和 `ours/` 资料仍留在仓库中用于核对，但不参与公开构建。
 
 后续代码 PR 如果改变公开行为，应在同一 PR 更新对应页面，避免静态站再次与实现脱节。
 

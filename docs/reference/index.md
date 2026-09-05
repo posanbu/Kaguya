@@ -13,6 +13,10 @@ description: Kaguya HTTP、配置、信息 Kind 与存储边界的查询入口�
 
 [HTTP API](./http-api)记录统一 Server 的路由、Bearer 认证、全局 Profile 管理、消息请求/响应与错误码。
 
+### Profile API
+
+[Profile API](./profile-api)记录多 Profile Registry 的创建、完整替换、选择和删除契约。
+
 ### 环境变量
 
 [环境变量](./environment-variables)记录 PostgreSQL、Server、白名单、NapCat 和日志配置，以及会导致启动失败的旧变量。
@@ -35,12 +39,24 @@ description: Kaguya HTTP、配置、信息 Kind 与存储边界的查询入口�
 
 **`consumer.failed`** — 某个消费者抛出或 reject 后的脱敏失败事实；它不会回滚输入或触发自动重试。
 
-每个 Core 事实只使用 `informationId`。派生原子用 `core:caused-by` 指向直接输入，并继承 `core:context`；`core.llm.*` 与 `core.delivery.*` 的结果还用 `core:status-of` 指向所对应的请求。
+**traceId** — 一次 Runtime dispatch 的主关联标识。Web trace 使用 `web:${requestId}`。
 
 ## 数据与回放边界
 
 **PostgreSQL information ledger** — 由 `KAGUYA_DATABASE_URL` 连接。迁移在事务中执行，payload 为 `JSONB`，Kind、原子和显式引用由外键保护；原子、引用和日志投影 outbox 原子写入。PGlite 与 CI 的真实 PostgreSQL 服务运行同一份账本契约。没有 SQLite runtime 数据库或平行消息/trace/outbound 表。
 
-**Profile Registry** — 默认位于 `.data/kaguya-config`，保存 Profile metadata 和显式 `selectedProfileId`。其中可能包含明文凭据，必须按敏感数据保护。
+**moduleDefinitionId / moduleInstanceId** — 标记产生事件的模块定义和实例。
 
-账本允许按显式引用读取 DAG，但没有持久订阅、离线补投、工作队列或自动重试。旧 SQLite 数据和旧配置索引不会自动迁移、合并、转换或删除。
+这些字段用于观测与审计，不表示用户会话、权限或上下文隔离。
+
+## 数据存储
+
+**`.data/kaguya.sqlite`** — 默认 Runtime SQLite，保存规范化消息、LLM trace 和出站审计。
+
+**`.data/kaguya-demo.sqlite`** — `pnpm demo` 的隔离数据库。
+
+**`.data/kaguya-config`** — 默认 profile store，包含明文凭据，必须按敏感数据保护。
+
+**PostgreSQL / PGlite 信息账本** — 追加式 InformationAtom、引用与日志 outbox 已作为分阶段子系统实现，但尚未接入当前 Server 的 SQLite 主 Runtime；参见[信息账本](../developers/information-ledger)。
+
+旧数据库和旧配置格式会被明确拒绝，不会自动迁移、合并或删除。

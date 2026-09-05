@@ -14,18 +14,21 @@ Core 中每项运行事实都是不可变 `InformationAtom`，且只以 `informa
 ```mermaid
 flowchart LR
   Browser[浏览器 / Web UI] --> Server[apps/server / Fastify]
-  NapCat[NapCat / OneBot] --> Server
-  Server --> Runtime[KaguyaRuntime / InformationIngress]
-  Runtime --> Core[InformationCore]
-  Core --> Ledger[(PostgreSQL 信息账本)]
-  Core --> Modules[Filter / LLM / 自定义模块]
-  Modules --> LLM[LLM 生命周期原子]
-  Modules --> Delivery[投递请求原子]
-  Delivery --> Transport[平台 transport]
-  Transport --> Receipt[投递结果原子]
+  NapCat[NapCat / OneBot] --> Adapter[平台适配器]
+  Server --> WebAdapter[Web 平台适配器]
+  WebAdapter --> Runtime[KaguyaRuntime]
+  Adapter --> Runtime
+  Runtime --> DB[(SQLite)]
+  Runtime --> Bus[EventBus]
+  Bus --> Host[ModuleHost]
+  Host --> Modules[Filter / LLM / 自定义模块]
+  Modules --> LLM[LLM execution port]
+  Modules --> Outbound[message.outbound.requested]
+  Outbound --> Runtime
+  Runtime --> Transport[Outbound transport registry]
 ```
 
-开发模式把 Vite middleware 与 HMR 挂在 Fastify 内；生产模式由同一实例提供 `apps/web/dist`。NapCat 是可选 ingress 与 transport，连接失败不会停止 HTTP 服务或改变 `/healthz`。
+开发模式把 Vite middleware 与 HMR 挂在 Fastify 内；生产模式由同一实例提供 `apps/web/dist`。Web 消息也先规范化为平台 `web`、adapter `web.ui.main` 的入站消息，再异步交给 Runtime。NapCat 是可选 ingress 与 transport，连接失败不会停止 HTTP 服务或改变 `/healthz`。
 
 ## 持久化优先的信息流
 
@@ -48,7 +51,9 @@ flowchart LR
 
 提交失败时不会广播；提交成功后，即使没有消费者，原子也保留。广播只面向注册瞬间的消费者快照，多个消费者独立并发执行，不存在优先级、拦截器、短路或定向派发。后来注册的消费者不会收到历史原子。
 
-## 显式 Kind 推进业务 DAG
+Web HTTP 请求只允许文本和 requestId。Web adapter 会补齐平台、sender 与 target 等规范字段；其他平台入站还包含经过 schema 校验的 adapter、平台消息 ID、self ID、destination、sender 和 mentions。adapter 原始 payload 不进入事件或持久化 metadata。
+
+HTTP `202 accepted` 在 Web gateway 接收消息后立即返回；Runtime dispatch 在后台继续。该状态不证明事件链、模型调用或投递已经完成。
 
 默认模块链通过注册下一个 Kind 表达阶段关系：
 
@@ -72,7 +77,7 @@ LLM 失败与投递失败同样是账本中的事实，分别以 `core.llm.faile
 
 ## 消费者失败不会回滚已提交事实
 
-订阅者抛出或 reject 时，Core 追加 `consumer.failed`。其中包含稳定的消费者身份与脱敏后的错误类别，不保存 stack、原始 provider 错误、凭据或数据库 URL。输入原子不会回滚，其他消费者不会被取消，原始 `register()` 调用也不会因该消费者失败而失败。
+Server 启动时打开 Profile Registry，检查全局 selected Profile，再为 light/heavy target 创建模型客户端。Provider key 只存在于权限保护的 Profile JSON、配置管理器和 provider factory，不进入模块 settings、事件、Prompt 或日志。配置未 ready 时，HTTP 与 Web UI 仍可用，但 Runtime 和 NapCat ingress 不创建；完整流程见[配置生命周期](./configuration-lifecycle)。
 
 `consumer.failed` 的消费者若再次失败，或失败事实无法提交，Core 只交给 bootstrap 诊断边界，不递归生成失败原子。因此系统没有自动重试，也没有内建工作队列。
 
@@ -82,12 +87,10 @@ LLM 失败与投递失败同样是账本中的事实，分别以 `core.llm.faile
 
 Profile Registry 维护一个全局 `selectedProfileId`。Server 在启动时只读取该 Profile 并构造共享 light/heavy 模型解析器；模块 settings、入站 payload 和信息原子不携带 `profileId`，也没有回退到其他 Profile、Provider 或模型的路径。
 
+仓库还包含追加式 InformationLedger、PostgreSQL/PGlite 仓储和持久日志 outbox。这是下一阶段数据核心，当前未替换上述 SQLite 消息、LLM trace 与 outbound audit 路径；详见[信息账本](./information-ledger)。
+
 ## 启动与关闭顺序
 
-准备就绪的 Server 会加载配置、解析选中的 Profile、连接 PostgreSQL、构造 Runtime，注册 transport，启动 Core 和 ModuleHost，最后开放 HTTP 与平台 ingress。选中的 Profile 未就绪时，Server 只提供配置相关 HTTP/Web UI，Runtime、数据库连接和 NapCat ingress 不启动。
+正常启动先解析环境变量并打开配置管理；selected Profile ready 时，再打开并迁移 SQLite、注册 transport、创建 ModuleHost 与 Runtime，最后开放 HTTP 和可选 adapter ingress。若配置未 ready，只开放可用于修正配置的 HTTP 与 Web UI。
 
-关闭时先停止 HTTP 与平台 ingress，再等待 Runtime 在途链路完成，取消模块订阅并关闭 Core，最后关闭数据库、Web 资源与 Logger。这个顺序防止新输入进入已经开始释放的资源。
-
-## 有意保留的边界
-
-当前实现没有持久订阅、离线补投、工作队列、自动重试、去重、热更新或模块沙箱。信息账本可供按显式引用查询，但它不是消费者回放机制；任何后续能力都应继续以 `informationId` 和显式 Kind 为边界。
+正常关闭先停止 ingress，等待 Runtime 在途 dispatch，停止 ModuleHost，再关闭数据库、Web 资源和 Logger。这个顺序避免新消息进入已经开始释放的基础设施。

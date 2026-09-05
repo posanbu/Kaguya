@@ -21,7 +21,7 @@ Kaguya 采用 pnpm workspace 和 TypeScript project references。应用负责装
 
 **`packages/modules`** — 入站、过滤、回复、assistant 与投递请求 Kind，以及默认 filter/LLM 模块。
 
-**`packages/database`** — PostgreSQL 信息账本、append-only schema、`JSONB` payload、外键保护的引用查询与日志投影 outbox；PGlite 与 CI 真实 PostgreSQL 共用账本契约。
+**`packages/database`** — 当前 Runtime 的 SQLite 仓储，以及分阶段引入的 PostgreSQL 信息账本与日志 outbox。
 
 **`packages/config`** — Profile Registry、`selectedProfileId`、readiness、权限和安全写入。
 
@@ -38,6 +38,8 @@ Kaguya 采用 pnpm workspace 和 TypeScript project references。应用负责装
 **`packages/platform-adapters`** — OneBot/NapCat/Web 正规化、窄 ingress 契约与 transport 类型。
 
 **`packages/scheduler`** — 显式调度原语。
+
+当前仓库同时存在两条数据路径：正在运行的消息链仍使用 SQLite；InformationAtom、Kind Registry、PostgreSQL Ledger 和日志投影已经实现并测试，但尚未接入 `apps/server` 的主 Runtime。阅读代码时不要把“已存在的基础设施”误认为“已经对用户生效”。
 
 ## 依赖方向
 
@@ -68,6 +70,14 @@ flowchart LR
 ### 编写模块
 
 阅读[信息模块 SDK](./information-modules)，使用 `onInformation` 消费输入并以 `context.register()` 派生下一原子。
+
+### 理解启动配置
+
+阅读[配置生命周期](./configuration-lifecycle)，了解 Server 为什么先检查 selected Profile，以及哪些修改需要重启。
+
+### 理解下一代数据核心
+
+阅读[信息账本](./information-ledger)，区分已实现的追加式 PostgreSQL 子系统与当前 SQLite Runtime。
 
 ### 修改代码
 
