@@ -47,7 +47,7 @@ const config: ServerConfig = {
   trustProxy: false,
   rateLimitMax: 30,
   rateLimitWindowMs: 60_000,
-  databasePath: "/tmp/kaguya-api-test.sqlite",
+  databaseUrl: "postgresql://kaguya@database.example:5432/kaguya",
   configRoot: "/tmp/kaguya-config-test",
   development: false,
   webDistPath: "/tmp/kaguya-web-test",
@@ -124,7 +124,6 @@ describe("application API gateway", () => {
         status: "invalid",
         selectedProfileId: "default",
         profiles: [expect.objectContaining({ id: "default", name: "default" })],
-        gatewayToken,
         issues: [expect.objectContaining({ id: "default-provider-missing" })],
         warnings: [expect.objectContaining({ id: "platforms-empty" })],
       },
@@ -143,19 +142,6 @@ describe("application API gateway", () => {
     expect(message.json()).toMatchObject({
       error: { code: "configuration_setup_required" },
     });
-    await app.close();
-  });
-
-  it("serves the distributed gateway token anonymously", async () => {
-    const app = await createHttpApplication({ config });
-
-    const response = await app.inject({
-      method: "GET",
-      url: "/api/v1/gateway/token",
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ data: { gatewayToken } });
     await app.close();
   });
 
@@ -369,7 +355,6 @@ describe("application API gateway", () => {
             updatedAt: "",
           },
         ],
-        gatewayToken,
       },
     });
     await app.close();
@@ -450,7 +435,7 @@ describe("application API gateway", () => {
     });
   });
 
-  it("removes the temporary setup write endpoint", async () => {
+  it("requires the setup authorization contract", async () => {
     const app = await createApiGateway({
       config,
       setup: stubManagement(),
@@ -459,21 +444,17 @@ describe("application API gateway", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/setup",
-      headers: authorization(),
+      headers: { authorization: "Bearer wrong-token" },
       payload: {
         profileName: "default",
         baseUrl: "https://api.example/v1",
         apiKey: "provider-secret",
         lightModel: "small-model",
         heavyModel: "large-model",
-        acknowledgeOptional: true,
       },
     });
 
-    expect(response.statusCode).toBe(404);
-    expect(response.json()).toMatchObject({
-      error: { code: "not_found", message: "Route not found" },
-    });
+    expect(response.statusCode).toBe(401);
     await app.close();
   });
 
@@ -553,7 +534,6 @@ describe("application API gateway", () => {
                             "status",
                             "selectedProfileId",
                             "profiles",
-                            "gatewayToken",
                           ],
                           properties: {
                             profiles: {
@@ -673,7 +653,7 @@ describe("application API gateway", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/llm/chat",
-      headers: authorization(),
+      headers: { authorization: "Bearer wrong-token" },
       payload: {
         apiKey: "provider-secret",
         baseUrl: "https://gateway.example/v1",
@@ -870,6 +850,7 @@ describe("application API gateway", () => {
     const serialized = JSON.stringify(logs);
     expect(serialized).not.toContain(gatewayToken);
     expect(serialized).not.toContain(requestBody.text);
+    expect(serialized).not.toContain("traceId");
   });
 
   it("rejects model, provider, prompt, and workflow routing fields", async () => {

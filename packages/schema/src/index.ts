@@ -1,11 +1,17 @@
 /**
- * 架构说明：本入口聚合 schema 包的稳定公开 API，既向下游导出旧有记录
- * 契约，也暴露信息原子与 JSON 边界工具，作为跨包 wire contract 的单一入口。
- * 代码库关系：`packages/config`、`packages/modules`、`packages/runtime` 与其他
- * 消费者通过此文件获取类型与 schema；在 Task 11 删除旧记录前，这里必须继续
- * 保留旧导出，避免下游编译中断。
+ * 功能概述：聚合 Kaguya 跨包共享的稳定 wire schema，包括信息原子、平台投递内容、
+ * Prompt 结构与 LLM 错误分类；旧事件信封和持久化记录身份不再属于公共契约。
+ * 主要职责：重新导出 `information.ts` 的不可变原子类型；本文件声明平台目标与消息
+ * 内容 schema、可追溯 informationId 的 Prompt fragment/compiled prompt schema、拒绝
+ * Profile 身份字段的 information payload schema，以及低层 LLM 错误种类。
+ * 代码库关系：platform adapters、modules、prompt、llm 与 runtime 都从本入口消费数据
+ * 边界；持久化事实统一使用 `InformationAtom`，数据库不再依赖事件或消息记录 schema。
+ * 输入输出与副作用：所有 schema 只做同步解析与校验，不产生 I/O；严格对象 schema
+ * 会拒绝未声明字段，平台返回的 `platformMessageId` 仍作为合法外部身份保留。
  */
 import { z } from "zod";
+
+import { informationIdSchema } from "./information.js";
 
 export { z };
 
@@ -13,6 +19,7 @@ export {
   freezeInformationAtom,
   informationAtomSchema,
   informationIdSchema,
+  informationPayloadSchema,
   informationReferenceSchema,
   jsonObjectSchema,
   jsonValueSchema,
@@ -27,38 +34,6 @@ export type {
   JsonPrimitive,
   JsonValue,
 } from "./information.js";
-
-export interface EventEnvelope<TType = string, TPayload = unknown> {
-  id: string;
-  type: TType;
-  source: string;
-  occurredAt: string;
-  traceId: string;
-  payload: TPayload;
-  metadata: Record<string, unknown>;
-}
-
-export const eventEnvelopeSchema = z
-  .object({
-    id: z.string().min(1),
-    type: z.string().min(1),
-    source: z.string().min(1),
-    occurredAt: z.iso.datetime(),
-    traceId: z.string().min(1),
-    payload: z.unknown(),
-    metadata: z.record(z.string(), z.unknown()),
-  })
-  .strict();
-
-export const messageRecordSchema = z.object({
-  id: z.string().min(1),
-  role: z.enum(["user", "assistant", "system"]),
-  content: z.string(),
-  occurredAt: z.iso.datetime(),
-  metadata: z.record(z.string(), z.unknown()),
-});
-
-export type MessageRecord = z.infer<typeof messageRecordSchema>;
 
 export const platformDestinationSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("private"), userId: z.string().min(1) }).strict(),
@@ -83,33 +58,6 @@ export type OutboundMessageContent = z.infer<
   typeof outboundMessageContentSchema
 >;
 
-const outboundMessageRecordBaseSchema = z.object({
-  id: z.string().min(1),
-  traceId: z.string().min(1),
-  adapterId: z.string().min(1),
-  platform: z.string().min(1),
-  destination: platformDestinationSchema,
-  message: outboundMessageContentSchema,
-  occurredAt: z.iso.datetime(),
-  metadata: z.record(z.string(), z.unknown()),
-});
-
-export const outboundMessageRecordSchema = z.discriminatedUnion("status", [
-  outboundMessageRecordBaseSchema.extend({ status: z.literal("requested") }),
-  outboundMessageRecordBaseSchema.extend({
-    status: z.literal("delivered"),
-    completedAt: z.iso.datetime(),
-    receipt: z.record(z.string(), z.unknown()),
-  }),
-  outboundMessageRecordBaseSchema.extend({
-    status: z.literal("failed"),
-    completedAt: z.iso.datetime(),
-    error: z.string().min(1),
-  }),
-]);
-
-export type OutboundMessageRecord = z.infer<typeof outboundMessageRecordSchema>;
-
 export type PromptFragmentSource =
   "template" | "history" | "memory" | "persona" | "policy" | "state";
 
@@ -124,6 +72,7 @@ export const promptFragmentSourceSchema = z.enum([
 
 export const promptFragmentSchema = z.object({
   id: z.string().min(1),
+  informationId: informationIdSchema.optional(),
   source: promptFragmentSourceSchema,
   priority: z.number(),
   content: z.string(),
@@ -141,6 +90,7 @@ export const compiledPromptSchema = z.object({
   provenance: z.array(
     z.object({
       fragmentId: z.string().min(1),
+      informationId: informationIdSchema.optional(),
       source: promptFragmentSourceSchema,
       priority: z.number(),
       contentDigest: z.string().min(1),
@@ -157,69 +107,3 @@ export const llmErrorKindSchema = z.enum([
 ]);
 
 export type LlmErrorKind = z.infer<typeof llmErrorKindSchema>;
-
-const traceBaseSchema = z.object({
-  id: z.string().min(1),
-  traceId: z.string().min(1),
-  workflowId: z.string().min(1),
-  nodeId: z.string().min(1),
-  kind: promptKindSchema,
-  modelId: z.string().min(1),
-  causationEventId: z.string().min(1).optional(),
-  rootEventId: z.string().min(1).optional(),
-  prompt: compiledPromptSchema,
-  startedAt: z.iso.datetime(),
-  durationMs: z.number().nonnegative(),
-  usage: z.record(z.string(), z.unknown()).optional(),
-});
-
-export const llmTraceSchema = z.discriminatedUnion("status", [
-  traceBaseSchema.extend({
-    status: z.literal("completed"),
-    completedAt: z.iso.datetime(),
-    response: z.unknown(),
-  }),
-  traceBaseSchema.extend({
-    status: z.literal("failed"),
-    completedAt: z.iso.datetime(),
-    error: z.object({
-      name: z.string().min(1),
-      message: z.string().min(1),
-      kind: llmErrorKindSchema,
-    }),
-  }),
-]);
-
-export type LlmTrace = z.infer<typeof llmTraceSchema>;
-
-const eventRunBaseSchema = z.object({
-  id: z.string().min(1),
-  traceId: z.string().min(1),
-  workflowId: z.string().min(1),
-  nodeId: z.string().min(1),
-  startedAt: z.iso.datetime(),
-});
-
-export const eventRunSchema = z.discriminatedUnion("status", [
-  eventRunBaseSchema.extend({ status: z.literal("running") }),
-  eventRunBaseSchema.extend({
-    status: z.literal("completed"),
-    completedAt: z.iso.datetime(),
-    output: z.unknown(),
-  }),
-  eventRunBaseSchema.extend({
-    status: z.literal("failed"),
-    completedAt: z.iso.datetime(),
-    retryable: z.boolean(),
-    error: z.object({
-      name: z.string().min(1),
-      message: z.string().min(1),
-    }),
-  }),
-  eventRunBaseSchema.extend({
-    status: z.literal("cancelled"),
-    completedAt: z.iso.datetime(),
-  }),
-]);
-
-export type EventRun = z.infer<typeof eventRunSchema>;

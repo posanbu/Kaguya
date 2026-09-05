@@ -1,7 +1,17 @@
-import type { CompiledPrompt, LlmTrace } from "@kaguya/schema";
+/**
+ * 功能概述：验证底层 `KaguyaLlmClient` 只负责模型调用、结构化输出校验、错误分类与耗时统计，
+ * 不再承担 trace 或其他持久化副作用。
+ * 主要职责：覆盖成功结果的 output/usage/duration、四类结构化输出、字符串规范化、SDK JSON
+ * 输出请求，以及 provider、AbortError、无效 JSON/结构的 `KaguyaLlmError` 分类。
+ * 代码库关系：测试使用 `ai/test` 的确定性模型驱动 `client.ts`；Runtime 的 LLM lifecycle
+ * 会消费这里返回的 `KaguyaLlmGeneration` 并把 requested/completed/failed 事实写入信息账本。
+ * 输入输出与副作用：测试仅执行内存模型，不连接数据库；断言构造 client 和调用 generate
+ * 都不需要 trace writer，避免低层 client 恢复旧 `LlmTrace` 写入边界。
+ */
+import type { CompiledPrompt } from "@kaguya/schema";
 import { APICallError } from "ai";
 import { MockLanguageModelV3 } from "ai/test";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { KaguyaLlmClient, KaguyaLlmError } from "./client.js";
 import * as llm from "./index.js";
@@ -31,18 +41,11 @@ function modelResult(text: string) {
   };
 }
 
-function request(
-  kind: CompiledPrompt["kind"] = "route",
-  traceRecordId = "llm-trace-1",
-) {
+function request(kind: CompiledPrompt["kind"] = "route") {
   return {
     kind,
     modelId: "deterministic-model",
     prompt: { ...prompt, kind },
-    traceId: "trace-1",
-    workflowId: "message-workflow",
-    nodeId: "decide-route",
-    traceRecordId,
   };
 }
 
@@ -50,213 +53,65 @@ function deterministicClock(...timestamps: string[]) {
   const dates = timestamps.map((timestamp) => new Date(timestamp));
   return () => {
     const next = dates.shift();
-    if (next === undefined) {
-      throw new Error("test clock exhausted");
-    }
+    if (next === undefined) throw new Error("test clock exhausted");
     return next;
   };
 }
 
+function clientFor(output: unknown): KaguyaLlmClient {
+  return new KaguyaLlmClient({
+    model: createDeterministicModel([output]),
+    now: deterministicClock(
+      "2026-09-04T00:00:00.000Z",
+      "2026-09-04T00:00:00.025Z",
+    ),
+  });
+}
+
 describe("KaguyaLlmClient", () => {
-  it("writes a completed trace with normalized usage", async () => {
-    const traces: LlmTrace[] = [];
+  it("returns validated output, normalized usage, and duration without persistence", async () => {
     const model = new MockLanguageModelV3({
       modelId: "deterministic-model",
-      doGenerate: modelResult(
-        '{"shouldReply":true,"reason":"direct question"}',
-      ),
+      doGenerate: modelResult('{"text":"Moonlight."}'),
     });
     const client = new KaguyaLlmClient({
       model,
-      traceWriter: {
-        write(trace) {
-          traces.push(trace);
-          return Promise.resolve();
-        },
-      },
       now: deterministicClock(
-        "2026-07-23T00:00:00.000Z",
-        "2026-07-23T00:00:00.025Z",
+        "2026-09-04T00:00:00.000Z",
+        "2026-09-04T00:00:00.025Z",
       ),
     });
 
-    await expect(client.generate(request())).resolves.toEqual({
-      shouldReply: true,
-      reason: "direct question",
+    await expect(client.generate(request("reply"))).resolves.toEqual({
+      output: { text: "Moonlight." },
+      usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
+      durationMs: 25,
     });
     expect(model.doGenerateCalls).toHaveLength(1);
-    expect(traces).toEqual([
-      {
-        id: "llm-trace-1",
-        traceId: "trace-1",
-        workflowId: "message-workflow",
-        nodeId: "decide-route",
-        kind: "route",
-        modelId: "deterministic-model",
-        prompt,
-        startedAt: "2026-07-23T00:00:00.000Z",
-        completedAt: "2026-07-23T00:00:00.025Z",
-        durationMs: 25,
-        status: "completed",
-        usage: {
-          inputTokens: 3,
-          outputTokens: 2,
-          totalTokens: 5,
-        },
-        response: { shouldReply: true, reason: "direct question" },
-      },
-    ]);
   });
 
-  it("writes a failed trace before rethrowing a normalized provider error", async () => {
-    const order: string[] = [];
+  it("rethrows a normalized provider error without a persistence dependency", async () => {
     const providerError = new APICallError({
       message: "provider unavailable",
       url: "https://provider.invalid/generate",
       requestBodyValues: {},
       isRetryable: false,
     });
-    const model = new MockLanguageModelV3({
-      doGenerate: () => Promise.reject(providerError),
-    });
-    const write = vi.fn((trace: LlmTrace) => {
-      order.push(`write:${trace.status}`);
-      return Promise.resolve();
-    });
-    const client = new KaguyaLlmClient({
-      model,
-      traceWriter: { write },
-      now: deterministicClock(
-        "2026-07-23T00:00:00.000Z",
-        "2026-07-23T00:00:00.010Z",
-      ),
-    });
-
-    const caught = await client
-      .generate(request("route", "llm-trace-2"))
-      .catch((error: unknown) => {
-        order.push("caught");
-        return error;
-      });
-
-    expect(caught).toBeInstanceOf(KaguyaLlmError);
-    expect(caught).toMatchObject({
-      kind: "non-retryable",
-      message: "provider unavailable",
-      cause: providerError,
-    });
-    expect(order).toEqual(["write:failed", "caught"]);
-    expect(write).toHaveBeenCalledWith({
-      id: "llm-trace-2",
-      traceId: "trace-1",
-      workflowId: "message-workflow",
-      nodeId: "decide-route",
-      kind: "route",
-      modelId: "deterministic-model",
-      prompt,
-      startedAt: "2026-07-23T00:00:00.000Z",
-      completedAt: "2026-07-23T00:00:00.010Z",
-      durationMs: 10,
-      status: "failed",
-      error: {
-        name: "KaguyaLlmError",
-        message: "Language model generation failed",
-        kind: "non-retryable",
-      },
-    });
-  });
-
-  it("keeps the generation error primary when failed-trace persistence rejects", async () => {
-    const providerError = new APICallError({
-      message: "provider unavailable",
-      url: "https://provider.invalid/generate",
-      requestBodyValues: {},
-      isRetryable: false,
-    });
-    const traceWriteError = new Error("trace store unavailable");
     const client = new KaguyaLlmClient({
       model: new MockLanguageModelV3({
         doGenerate: () => Promise.reject(providerError),
       }),
-      traceWriter: {
-        write: () => Promise.reject(traceWriteError),
-      },
       now: deterministicClock(
-        "2026-07-23T00:00:00.000Z",
-        "2026-07-23T00:00:00.010Z",
+        "2026-09-04T00:00:00.000Z",
+        "2026-09-04T00:00:00.010Z",
       ),
     });
 
-    const caught = await client
-      .generate(request())
-      .catch((error: unknown) => error);
-
-    expect(caught).toBeInstanceOf(KaguyaLlmError);
-    expect(caught).toMatchObject({
+    await expect(client.generate(request())).rejects.toMatchObject({
+      name: "KaguyaLlmError",
       kind: "non-retryable",
+      message: "provider unavailable",
       cause: providerError,
-      traceWriteError,
-    });
-  });
-
-  it("does not persist provider details in a failed trace", async () => {
-    const secret = "provider-api-key-must-not-enter-trace";
-    const traces: LlmTrace[] = [];
-    const client = new KaguyaLlmClient({
-      model: new MockLanguageModelV3({
-        doGenerate: () =>
-          Promise.reject(
-            new APICallError({
-              message: `provider reflected ${secret}`,
-              url: "https://provider.invalid/generate",
-              requestBodyValues: {},
-              isRetryable: false,
-            }),
-          ),
-      }),
-      traceWriter: {
-        write(trace) {
-          traces.push(trace);
-          return Promise.resolve();
-        },
-      },
-      now: deterministicClock(
-        "2026-07-23T00:00:00.000Z",
-        "2026-07-23T00:00:00.010Z",
-      ),
-    });
-
-    await expect(client.generate(request())).rejects.toBeInstanceOf(
-      KaguyaLlmError,
-    );
-    expect(JSON.stringify(traces)).not.toContain(secret);
-    expect(traces[0]).toMatchObject({
-      status: "failed",
-      error: { message: "Language model generation failed" },
-    });
-  });
-
-  it("throws TracePersistenceError when completed-trace persistence rejects", async () => {
-    const traceWriteError = new Error("trace store unavailable");
-    const client = new KaguyaLlmClient({
-      model: createDeterministicModel([{ shouldReply: true }]),
-      traceWriter: {
-        write: () => Promise.reject(traceWriteError),
-      },
-      now: deterministicClock(
-        "2026-07-23T00:00:00.000Z",
-        "2026-07-23T00:00:00.010Z",
-      ),
-    });
-
-    const caught = await client
-      .generate(request())
-      .catch((error: unknown) => error);
-
-    expect(caught).toMatchObject({
-      name: "TracePersistenceError",
-      message: "Failed to persist LLM trace",
-      cause: traceWriteError,
     });
   });
 
@@ -268,15 +123,13 @@ describe("KaguyaLlmClient", () => {
       responseHeaders: { "retry-after-ms": "0" },
       isRetryable: true,
     });
-    const model = new MockLanguageModelV3({
-      doGenerate: () => Promise.reject(providerError),
-    });
     const client = new KaguyaLlmClient({
-      model,
-      traceWriter: { write: () => Promise.resolve() },
+      model: new MockLanguageModelV3({
+        doGenerate: () => Promise.reject(providerError),
+      }),
       now: deterministicClock(
-        "2026-07-23T00:00:00.000Z",
-        "2026-07-23T00:00:00.001Z",
+        "2026-09-04T00:00:00.000Z",
+        "2026-09-04T00:00:00.001Z",
       ),
     });
 
@@ -288,15 +141,13 @@ describe("KaguyaLlmClient", () => {
   it("normalizes AbortError as cancelled", async () => {
     const abortError = new Error("cancelled by caller");
     abortError.name = "AbortError";
-    const model = new MockLanguageModelV3({
-      doGenerate: () => Promise.reject(abortError),
-    });
     const client = new KaguyaLlmClient({
-      model,
-      traceWriter: { write: () => Promise.resolve() },
+      model: new MockLanguageModelV3({
+        doGenerate: () => Promise.reject(abortError),
+      }),
       now: deterministicClock(
-        "2026-07-23T00:00:00.000Z",
-        "2026-07-23T00:00:00.001Z",
+        "2026-09-04T00:00:00.000Z",
+        "2026-09-04T00:00:00.001Z",
       ),
     });
 
@@ -305,43 +156,22 @@ describe("KaguyaLlmClient", () => {
     });
   });
 
-  it("rejects invalid JSON structure as a non-retryable response error", async () => {
-    const traces: LlmTrace[] = [];
-    const client = new KaguyaLlmClient({
-      model: createDeterministicModel([{ shouldReply: "yes" }]),
-      traceWriter: {
-        write(trace) {
-          traces.push(trace);
-          return Promise.resolve();
-        },
-      },
-      now: deterministicClock(
-        "2026-07-23T00:00:00.000Z",
-        "2026-07-23T00:00:00.001Z",
-      ),
-    });
-
+  it("rejects invalid structured output as non-retryable", async () => {
     await expect(
-      client.generate(request("route", "llm-trace-3")),
+      clientFor({ shouldReply: "yes" }).generate(request("route")),
     ).rejects.toMatchObject({
+      name: "KaguyaLlmError",
       kind: "non-retryable",
       message: "Invalid response structure for structured output",
     });
-    expect(traces[0]).toMatchObject({
-      status: "failed",
-      error: { name: "KaguyaLlmError" },
-    });
   });
 
-  it("normalizes malformed structured output without parsing it manually", async () => {
+  it("normalizes malformed JSON without parsing it manually", async () => {
     const client = new KaguyaLlmClient({
-      model: new MockLanguageModelV3({
-        doGenerate: modelResult("plain text"),
-      }),
-      traceWriter: { write: () => Promise.resolve() },
+      model: new MockLanguageModelV3({ doGenerate: modelResult("plain text") }),
       now: deterministicClock(
-        "2026-07-23T00:00:00.000Z",
-        "2026-07-23T00:00:00.001Z",
+        "2026-09-04T00:00:00.000Z",
+        "2026-09-04T00:00:00.001Z",
       ),
     });
 
@@ -364,16 +194,12 @@ describe("KaguyaLlmClient", () => {
     ],
     ["memory", { memories: ["The user likes tea."] }],
   ] as const)("strictly parses %s outputs", async (kind, output) => {
-    const client = new KaguyaLlmClient({
-      model: createDeterministicModel([output]),
-      traceWriter: { write: () => Promise.resolve() },
-      now: deterministicClock(
-        "2026-07-23T00:00:00.000Z",
-        "2026-07-23T00:00:00.001Z",
-      ),
+    await expect(
+      clientFor(output).generate(request(kind)),
+    ).resolves.toMatchObject({
+      output,
+      durationMs: 25,
     });
-
-    await expect(client.generate(request(kind))).resolves.toEqual(output);
   });
 
   it("requests structured output from the SDK for reply generation", async () => {
@@ -383,23 +209,19 @@ describe("KaguyaLlmClient", () => {
     });
     const client = new KaguyaLlmClient({
       model,
-      traceWriter: { write: () => Promise.resolve() },
       now: deterministicClock(
-        "2026-07-23T00:00:00.000Z",
-        "2026-07-23T00:00:00.001Z",
+        "2026-09-04T00:00:00.000Z",
+        "2026-09-04T00:00:00.001Z",
       ),
     });
 
-    await expect(client.generate(request("reply"))).resolves.toEqual({
-      text: "hello",
+    await expect(client.generate(request("reply"))).resolves.toMatchObject({
+      output: { text: "hello" },
     });
     expect(model.doGenerateCalls[0]?.responseFormat).toMatchObject({
       type: "json",
       name: "replyOutput",
-      schema: {
-        type: "object",
-        required: ["text"],
-      },
+      schema: { type: "object", required: ["text"] },
     });
   });
 
@@ -414,49 +236,13 @@ describe("KaguyaLlmClient", () => {
   it.each([
     ["route", { shouldReply: true, reason: "   " }],
     ["reply", { text: "" }],
-    [
-      "state",
-      {
-        mood: " ",
-        relationship: "trusted",
-        shortTermMemories: [],
-      },
-    ],
-    [
-      "state",
-      {
-        mood: "calm",
-        relationship: "\n\t",
-        shortTermMemories: [],
-      },
-    ],
-    [
-      "state",
-      {
-        mood: "calm",
-        relationship: "trusted",
-        shortTermMemories: ["valid", " "],
-      },
-    ],
+    ["state", { mood: " ", relationship: "trusted", shortTermMemories: [] }],
     ["memory", { memories: ["\n"] }],
-  ] as const)(
-    "rejects blank generated %s content as non-retryable",
-    async (kind, output) => {
-      const client = new KaguyaLlmClient({
-        model: createDeterministicModel([output]),
-        traceWriter: { write: () => Promise.resolve() },
-        now: deterministicClock(
-          "2026-07-23T00:00:00.000Z",
-          "2026-07-23T00:00:00.001Z",
-        ),
-      });
-
-      await expect(client.generate(request(kind))).rejects.toMatchObject({
-        name: "KaguyaLlmError",
-        kind: "non-retryable",
-      });
-    },
-  );
+  ] as const)("rejects blank generated %s content", async (kind, output) => {
+    await expect(
+      clientFor(output).generate(request(kind)),
+    ).rejects.toBeInstanceOf(KaguyaLlmError);
+  });
 
   it("trims every accepted generated string", async () => {
     const outputs = [
@@ -476,17 +262,8 @@ describe("KaguyaLlmClient", () => {
       ["state", outputs[2]],
       ["memory", outputs[3]],
     ] as const) {
-      const client = new KaguyaLlmClient({
-        model: createDeterministicModel([output]),
-        traceWriter: { write: () => Promise.resolve() },
-        now: deterministicClock(
-          "2026-07-23T00:00:00.000Z",
-          "2026-07-23T00:00:00.001Z",
-        ),
-      });
-
-      const result = await client.generate(request(kind));
-      expect(JSON.stringify(result)).not.toMatch(/  /);
+      const result = await clientFor(output).generate(request(kind));
+      expect(JSON.stringify(result.output)).not.toMatch(/  /);
     }
   });
 });

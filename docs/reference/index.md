@@ -1,6 +1,6 @@
 ---
 title: 参考资料
-description: Kaguya HTTP、配置、事件与存储边界的查询入口。
+description: Kaguya HTTP、配置、信息 Kind 与存储边界的查询入口。
 ---
 
 # 参考资料
@@ -11,7 +11,7 @@ description: Kaguya HTTP、配置、事件与存储边界的查询入口。
 
 ### HTTP API
 
-[HTTP API](./http-api)记录统一 Server 的路由、Bearer 认证、请求/响应、错误码和 requestId 规则。
+[HTTP API](./http-api)记录统一 Server 的路由、Bearer 认证、全局 Profile 管理、消息请求/响应与错误码。
 
 ### Profile API
 
@@ -19,31 +19,31 @@ description: Kaguya HTTP、配置、事件与存储边界的查询入口。
 
 ### 环境变量
 
-[环境变量](./environment-variables)记录 Server、白名单、NapCat 和日志配置，以及会导致启动失败的旧变量。
+[环境变量](./environment-variables)记录 PostgreSQL、Server、白名单、NapCat 和日志配置，以及会导致启动失败的旧变量。
 
-## 核心事件
+## 核心信息 Kind
 
-**`message.ingested`** — 入站消息通过白名单并落库后广播给模块。
+**`core.runtime.context`** — 一次 ingress 提交的 context 根原子；回执中的 `rootInformationId` 指向它。
 
-**`reply.requested`** — Filter 模块定向请求某个模块实例生成回复。
+**`core.message.inbound.text`** — 已被 Runtime 注册的正规化入站文本。
 
-**`message.outbound.requested`** — 模块显式指定 adapter、platform、destination 与消息内容，请求 Runtime 投递。
+**`core.reply.requested`** — 过滤通过后显式注册的下一阶段请求。
 
-**`message.outbound.delivered`** — transport 成功，出站审计已经更新为 delivered。
+**`filter.decision`** — 过滤拒绝事实，payload 固定包含 `accepted: false`、原因和过滤器定义 ID；它不承担定向路由。
 
-**`message.outbound.failed`** — transport 失败，事件只携带稳定错误文本，不暴露底层凭据。
+**`core.llm.requested`、`core.llm.completed`、`core.llm.failed`** — LLM 生命周期事实。
 
-**`llm.requested / completed / failed`** — LLM execution 生命周期事件，关联 prompt kind、modelId、workflowId 与 nodeId。
+**`core.message.assistant.text`** — LLM 完成后派生的 assistant 文本。
 
-## 关联标识
+**`core.delivery.requested`、`core.delivery.delivered`、`core.delivery.failed`** — 平台投递请求与其结果事实。
 
-**requestId** — Fastify 请求标识，可由合法 `X-Request-Id` 提供，否则生成 UUID。
+**`consumer.failed`** — 某个消费者抛出或 reject 后的脱敏失败事实；它不会回滚输入或触发自动重试。
 
 **traceId** — 一次 Runtime dispatch 的主关联标识。Web trace 使用 `web:${requestId}`。
 
-**eventId** — 单个事件实例标识。
+## 数据与回放边界
 
-**causationEventId / rootEventId** — 记录逐级原因与根事件，构成不可被模块 metadata 改写的因果链。
+**PostgreSQL information ledger** — 由 `KAGUYA_DATABASE_URL` 连接。迁移在事务中执行，payload 为 `JSONB`，Kind、原子和显式引用由外键保护；原子、引用和日志投影 outbox 原子写入。PGlite 与 CI 的真实 PostgreSQL 服务运行同一份账本契约。没有 SQLite runtime 数据库或平行消息/trace/outbound 表。
 
 **moduleDefinitionId / moduleInstanceId** — 标记产生事件的模块定义和实例。
 

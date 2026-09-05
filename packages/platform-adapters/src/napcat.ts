@@ -1,11 +1,23 @@
+/**
+ * 功能概述：实现 NapCat/OneBot 的出站 action client 与入站 adapter，两者可安全
+ * 共享一个 JSON transport；入站端只持有 `InformationIngress`，不接触 Runtime 其他能力。
+ * 主要职责：`NapCatActionClient.sendMessage` 编号 echo、匹配成功/失败回执、处理超时与断线；
+ * `NapCatOneBotAdapter` 正规化 frame、过滤 self ID/action response、执行注入的入站谓词后
+ * 调用 `ingress.submit`，
+ * 并在 stop 时停止接收、关闭 transport、排空已提交任务。
+ * 代码库关系：`onebot.ts` 提供正规化/action builder，Server `napcat.ts` 提供
+ * WebSocket transport、窄 ingress 和日志；`types.ts` 定义入站与投递契约。
+ * 输入输出与副作用：出站会写 JSON transport 并创建 timeout；入站提交
+ * 异常通过可选 callback 报告，context 仅含 adapter ID 和外部 platform message ID。
+ */
 import type { OutboundMessageContent } from "@kaguya/schema";
 
 import type {
-  PlatformDeliveryReceipt,
+  InformationIngress,
   PlatformInboundMessage,
+  PlatformDeliveryReceipt,
   PlatformMessageTarget,
   PlatformOutboundTransport,
-  PlatformReplySender,
 } from "./types.js";
 import {
   buildOneBotSendAction,
@@ -56,9 +68,7 @@ interface PendingAction {
   readonly timer: NodeJS.Timeout;
 }
 
-export class NapCatActionClient
-  implements PlatformReplySender, PlatformOutboundTransport
-{
+export class NapCatActionClient implements PlatformOutboundTransport {
   private readonly pending = new Map<string, PendingAction>();
 
   constructor(private readonly options: NapCatActionClientOptions) {
@@ -68,13 +78,6 @@ export class NapCatActionClient
     options.transport.onClose((error) => {
       this.rejectAll(error?.message ?? "NapCat connection closed");
     });
-  }
-
-  async sendTextReply(
-    target: PlatformMessageTarget,
-    text: string,
-  ): Promise<PlatformDeliveryReceipt> {
-    return this.sendMessage(target, { kind: "text", text });
   }
 
   async sendMessage(
@@ -177,7 +180,8 @@ export interface NapCatOneBotAdapterOptions {
   readonly expectedSelfId?: string;
   readonly transport: JsonMessageTransport;
   readonly now: () => Date;
-  readonly onInboundMessage: (message: PlatformInboundMessage) => Promise<void>;
+  readonly ingress: InformationIngress;
+  readonly allowsInbound?: (message: PlatformInboundMessage) => boolean;
   readonly onInboundError?: (
     error: unknown,
     context: NapCatInboundErrorContext,
@@ -186,7 +190,7 @@ export interface NapCatOneBotAdapterOptions {
 
 export interface NapCatInboundErrorContext {
   readonly adapterId: string;
-  readonly traceId: string;
+  readonly platformMessageId: string;
 }
 
 export class NapCatOneBotAdapter {
@@ -229,17 +233,20 @@ export class NapCatOneBotAdapter {
     ) {
       return;
     }
+    if (this.options.allowsInbound?.(inbound) === false) {
+      return;
+    }
 
-    const dispatch = Promise.resolve().then(() =>
-      this.options.onInboundMessage(inbound),
-    );
+    const dispatch = Promise.resolve()
+      .then(() => this.options.ingress.submit(inbound))
+      .then(() => undefined);
     let tracked: Promise<void>;
     tracked = dispatch
       .catch((error: unknown) => {
         try {
           this.options.onInboundError?.(error, {
             adapterId: this.options.adapterId,
-            traceId: inbound.traceId,
+            platformMessageId: inbound.platformMessageId,
           });
         } catch {
           // Error reporting must not create a second unhandled rejection.

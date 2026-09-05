@@ -1,13 +1,13 @@
 ---
 title: HTTP API
-description: Kaguya 统一 Server 的路由、认证、请求和错误协议。
+description: Kaguya 统一 Server 的路由、认证、Profile 与消息协议。
 ---
 
 # HTTP API
 
 `apps/server` 在一个 Fastify 实例中提供 Web UI、健康检查、OpenAPI、配置管理和消息入口。默认地址是 `http://127.0.0.1:3000`。
 
-## 路由
+## 公共路由
 
 **`GET /` 与静态资源** — 无需认证，提供 Web UI。
 
@@ -47,13 +47,13 @@ Authorization: Bearer replace-with-at-least-16-characters
 
 :::
 
-认证发生在业务 schema 校验之前。认证和未认证请求使用不同的限流 key，避免未认证流量消耗已认证配额。
+认证发生在业务 schema 校验之前。认证和未认证请求使用不同限流 key，避免未认证流量消耗已认证配额。
 
-未显式设置 `KAGUYA_GATEWAY_TOKEN` 时，可先通过 `GET /api/v1/gateway/token` 读取当前实例的 token。
+首次配置使用终端展示的一次性 bootstrap Token；配置成功后，正式 Token 仅在成功响应中返回一次。
 
-## 查询配置状态
+**`POST /api/v1/setup`** — 使用一次性 bootstrap Token 创建或修复默认 Profile。成功后返回正式 Token，并立即撤销 bootstrap 权限。
 
-`GET /api/v1/setup` 的 `data.status` 可能是 `setup_required`、`review_required`、`restart_required`、`ready` 或 `invalid`。响应不包含 API Key 或完整 profile，包含本实例分发的网关 token。
+## 管理全局 Profile
 
 ## 管理配置
 
@@ -61,7 +61,7 @@ Authorization: Bearer replace-with-at-least-16-characters
 
 ## 提交消息
 
-请求体只允许 `text` 字段。文本必须非空，trim 后不能只剩空白，最多 131072 个 Unicode code point；整个请求体最多 256 KiB。
+`POST /api/v1/messages` 需要 Bearer Token。请求体只允许 `text` 字段：文本必须非空，trim 后不能只剩空白，最多 131072 个 Unicode code point；整个请求体最多 256 KiB。
 
 ::: code-group
 
@@ -104,13 +104,19 @@ curl http://127.0.0.1:3000/api/v1/messages \
 
 **`unauthorized` / 401** — Bearer Token 缺失或错误。
 
-**`invalid_request` / 400** — JSON 或 schema 不合法。
+**`invalid_request` / 400** — JSON、路径参数或 schema 不合法。
+
+**`profile_invalid` / 400** — 已通过 HTTP JSON/schema 读取、但被 Profile 管理逻辑拒绝的输入。
+
+**`profile_not_found` / 404** — 请求的 Profile 不存在。
 
 **`configuration_invalid` / 400** — Profile 输入不完整、引用不一致或不满足 readiness。
 
-**`configuration_unavailable` / 409** — 配置仓库损坏或不可安全访问。
+**`profile_in_use` / 409** — 不能删除当前 `selectedProfileId` 指向的 Profile。
 
-**`not_found` / 404** — 路由不存在。
+**`configuration_unavailable` / 409** — 此 HTTP application 没有注入 Profile management facade。这是嵌入或测试构造边界，不表示配置目录损坏；配置目录损坏或无法安全访问会在 Server 启动阶段失败，而不会以此路由错误继续运行。
+
+**`not_found` / 404** — 未知 HTTP 路由。
 
 **`rate_limited` / 429** — 超过来源限流。
 
@@ -118,12 +124,12 @@ curl http://127.0.0.1:3000/api/v1/messages \
 
 **`configuration_setup_required` / 503** — selected Profile 未 ready，Runtime ingress 未启动。
 
-**`core_unavailable` / 503** — 测试或嵌入场景没有配置 Runtime dispatcher。
+**`core_unavailable` / 503** — 嵌入或测试场景没有提供 Runtime ingress。
 
-**`internal_error` / 500** — Runtime dispatch 或 Server 内部失败。
+**`internal_error` / 500** — Server 内部失败。
 
-## Request ID
+## Request ID 与日志
 
-合法 `X-Request-Id` 长度为 1 至 128 个 ASCII 字符。首字符必须是字母或数字，其余仅允许字母、数字、点、下划线、冒号和连字符。非法值会被 UUID 替换。
+合法 `X-Request-Id` 长度为 1 至 128 个 ASCII 字符。首字符必须是字母或数字，其余仅允许字母、数字、点、下划线、冒号和连字符；非法值会被 UUID 替换。
 
 HTTP 日志不记录 Authorization、body、query 或消息正文。生产部署仍需在边界层配置 TLS、连接数和超时。

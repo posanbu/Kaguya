@@ -16,8 +16,7 @@ export interface ConfigurationGuidanceStep {
     | "create-profile"
     | "add-enabled-provider"
     | "configure-model-tiers"
-    | "select-default-provider"
-    | "review-optional-configuration";
+    | "select-default-provider";
   readonly message: string;
 }
 
@@ -79,10 +78,6 @@ export const configurationSetupGuidance: ConfigurationGuidance = Object.freeze({
       id: "select-default-provider" as const,
       message: "Select a default provider.",
     }),
-    Object.freeze({
-      id: "review-optional-configuration" as const,
-      message: "Review and acknowledge optional configuration.",
-    }),
   ]),
 });
 
@@ -98,7 +93,9 @@ export function inspectUserConfigProfile(
     profile.review?.acknowledgedWarnings ?? [],
   );
   const warnings = deriveConfigurationWarnings(profile).filter(
-    (warning) => !acknowledgedWarnings.has(warning.id),
+    (warning) =>
+      !isOptionalConfigurationWarning(warning.id) &&
+      !acknowledgedWarnings.has(warning.id),
   );
   if (warnings.length > 0) {
     return { status: "review_required", warnings };
@@ -145,6 +142,8 @@ export function deriveConfigurationWarnings(
     }
   }
 
+  // Keep these legacy warning IDs valid for old profile files, but do not
+  // surface them as blockers for new configurations.
   if (profile.platforms.length === 0) {
     warnings.push({
       id: "platforms-empty",
@@ -161,6 +160,10 @@ export function deriveConfigurationWarnings(
   }
 
   return warnings;
+}
+
+function isOptionalConfigurationWarning(id: string): boolean {
+  return id === "platforms-empty" || id === "plugins-empty";
 }
 
 function deriveConfigurationIssues(

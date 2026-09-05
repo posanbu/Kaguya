@@ -1,8 +1,12 @@
 /**
- * 架构说明：本模块把信息原子投影成对外可见的日志行，负责正文预览、
+ * 功能概述：本模块把信息原子投影成对外可见的日志行，负责正文预览、
  * 统一身份字段回填、投影结果校验与失败汇报，避免日志路径泄漏原始负载。
+ * 主要职责：`projectInformationAtomLog` 根据 kind policy 生成安全日志；
+ * `createInformationAtomLogSink` 写 logger；preview helper 按 code point 截断正文。
  * 代码库关系：`packages/logger/src/index.ts` 通过这里导出正文预览、
- * 投影与 sink 工厂；`InformationCore.subscribeAll()` 可以注册这里生成的 sink。
+ * 投影与 sink 工厂；数据库 outbox runner 会把待投影 atom 交给这里生成的 sink。
+ * 输入输出与副作用：投影函数保持纯计算；sink 会写一条结构化日志，policy 或 logger
+ * 失败时只向 emergency reporter 发送脱敏错误摘要。
  */
 import type { InformationAtom, JsonObject, JsonValue } from "@kaguya/schema";
 import type {
@@ -23,9 +27,7 @@ export type InformationAtomLogEmergencyReporter = (
   error: InformationAtomLogError,
 ) => void | Promise<void>;
 
-export type InformationAtomLogSink = (
-  atom: InformationAtom,
-) => Promise<void>;
+export type InformationAtomLogSink = (atom: InformationAtom) => Promise<void>;
 
 export interface CreateInformationAtomLogSinkOptions {
   readonly logger: Logger;
@@ -55,7 +57,9 @@ export function previewInformationContent(input: string): {
     ? codePoints.slice(0, MAX_INFORMATION_CONTENT_CODE_POINTS)
     : codePoints;
   return {
-    contentPreview: visible.map(escapePreviewCodePoint).join("") + (contentTruncated ? "…" : ""),
+    contentPreview:
+      visible.map(escapePreviewCodePoint).join("") +
+      (contentTruncated ? "…" : ""),
     contentLength,
     contentTruncated,
   };
@@ -155,9 +159,7 @@ function normalizeDefinitions(
   return normalized;
 }
 
-function normalizeProjection(
-  projection: unknown,
-): JsonObject | undefined {
+function normalizeProjection(projection: unknown): JsonObject | undefined {
   if (!isPlainObject(projection)) {
     return undefined;
   }

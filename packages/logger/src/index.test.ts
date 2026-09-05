@@ -1,3 +1,13 @@
+/**
+ * 功能概述：验证结构化 logger 的格式、信息原子上下文隔离、命名空间级别、脱敏、
+ * 错误摘要、配置解析与异步写入顺序。
+ * 主要职责：用内存 stream 检查日志对象；用并发异步任务验证 `informationId/kind/source`
+ * 上下文合并；用临时文件验证 worker transport 按序刷新。
+ * 代码库关系：直接覆盖 `index.ts` 的公共 logger API；Server 与 Runtime 依赖相同的
+ * serializer、context 和关闭语义。
+ * 输入输出与副作用：大部分用例只写内存；异步 transport 用例创建并清理临时目录，
+ * 不访问网络或真实服务日志。
+ */
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,22 +47,30 @@ describe("Kaguya logger", () => {
     ]);
   });
 
-  it("isolates concurrent async trace contexts and merges nested context", async () => {
+  it("isolates concurrent information contexts and merges nested context", async () => {
     const stream = new MemoryStream();
     const logger = createLogger({ service: "kaguya-test", stream });
 
     await Promise.all([
       runWithLogContext(
-        { traceId: "trace-a", requestId: "request-a" },
+        {
+          informationId: "information-a",
+          kind: "core.message.inbound.text",
+          requestId: "request-a",
+        },
         async () => {
           await Promise.resolve();
           runWithLogContext({ nodeId: "node-a" }, () => {
-            logger.info({ event: "node.completed", traceId: "spoofed" });
+            logger.info({ event: "node.completed", informationId: "spoofed" });
           });
         },
       ),
       runWithLogContext(
-        { traceId: "trace-b", requestId: "request-b" },
+        {
+          informationId: "information-b",
+          source: "runtime:ingress",
+          requestId: "request-b",
+        },
         async () => {
           await new Promise((resolve) => setTimeout(resolve, 0));
           logger.info({ event: "message.received" });
@@ -60,16 +78,18 @@ describe("Kaguya logger", () => {
       ),
     ]);
 
-    const byTrace = Object.fromEntries(
-      stream.logs().map((entry) => [entry.traceId, entry]),
+    const byInformation = Object.fromEntries(
+      stream.logs().map((entry) => [entry.informationId, entry]),
     );
-    expect(byTrace["trace-a"]).toMatchObject({
-      traceId: "trace-a",
+    expect(byInformation["information-a"]).toMatchObject({
+      informationId: "information-a",
+      kind: "core.message.inbound.text",
       requestId: "request-a",
       nodeId: "node-a",
     });
-    expect(byTrace["trace-b"]).toMatchObject({
-      traceId: "trace-b",
+    expect(byInformation["information-b"]).toMatchObject({
+      informationId: "information-b",
+      source: "runtime:ingress",
       requestId: "request-b",
     });
     expect(getLogContext()).toBeUndefined();
@@ -287,9 +307,9 @@ describe("Kaguya logger", () => {
     expect(() =>
       readLoggerOptions("kaguya", { KAGUYA_LOG_FORMAT: "text" }),
     ).toThrow("json or pretty");
-    expect(() => runWithLogContext({ traceId: "" }, () => undefined)).toThrow(
-      "traceId must be a non-empty string",
-    );
+    expect(() =>
+      runWithLogContext({ informationId: "" }, () => undefined),
+    ).toThrow("informationId must be a non-empty string");
     expect(() =>
       runWithLogContext(
         { unknownId: "value" } as unknown as Parameters<

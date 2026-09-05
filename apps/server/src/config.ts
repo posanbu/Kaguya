@@ -1,9 +1,17 @@
+/**
+ * 功能概述：把进程环境解析为统一 `ServerConfig`，并把必需的
+ * PostgreSQL information ledger URL 作为启动前置条件，彻底移除 SQLite path 默认。
+ * 主要职责：`readServerConfig` 校验/生成 gateway token，解析 host、port、
+ * CORS、proxy、限流、config/web 路径、allowlist 与 NapCat，并要求非空
+ * `KAGUYA_DATABASE_URL`；helper 负责文本、列表和整数边界的一致处理。
+ * 代码库关系：`server.ts` 消费 `databaseUrl` 并创建 `KaguyaDatabase`；
+ * `app.ts`、`web.ts` 和 NapCat supervisor 复用同一份其余配置。
+ * 输入输出与副作用：除了使用安全随机数生成缺失的 token 外无 I/O；
+ * 错误只命名非法/旧配置项，绝不回显 URL、token 或其他环境变量值。
+ */
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
-const defaultDatabasePath = fileURLToPath(
-  new URL("../../../.data/kaguya.sqlite", import.meta.url),
-);
 const defaultWebDistPath = fileURLToPath(
   new URL("../../web/dist", import.meta.url),
 );
@@ -28,7 +36,7 @@ export interface ServerConfig {
   readonly trustProxy: false | string[];
   readonly rateLimitMax: number;
   readonly rateLimitWindowMs: number;
-  readonly databasePath: string;
+  readonly databaseUrl: string;
   readonly configRoot: string;
   readonly development: boolean;
   readonly webDistPath: string;
@@ -65,10 +73,13 @@ export function readServerConfig(
     envGatewayToken === undefined
       ? ("generated" as const)
       : ("environment" as const);
-  const gatewayToken =
-    envGatewayToken ?? randomBytes(32).toString("base64url");
+  const gatewayToken = envGatewayToken ?? randomBytes(32).toString("base64url");
   if (gatewayToken.length < 16) {
     throw new Error("KAGUYA_GATEWAY_TOKEN must contain at least 16 characters");
+  }
+  const databaseUrl = optionalText(environment.KAGUYA_DATABASE_URL);
+  if (databaseUrl === undefined) {
+    throw new Error("KAGUYA_DATABASE_URL is required");
   }
 
   const napcatEnabled = environment.KAGUYA_NAPCAT_ENABLED?.trim() === "true";
@@ -109,8 +120,7 @@ export function readServerConfig(
       3_600_000,
       "KAGUYA_RATE_LIMIT_WINDOW_MS",
     ),
-    databasePath:
-      optionalText(environment.KAGUYA_DATABASE_PATH) ?? defaultDatabasePath,
+    databaseUrl,
     configRoot:
       optionalText(environment.KAGUYA_CONFIG_ROOT) ?? defaultConfigRoot,
     development: environment.NODE_ENV === "development",

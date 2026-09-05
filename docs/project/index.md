@@ -1,24 +1,30 @@
 ---
 title: 项目状态与路线图
-description: Kaguya 当前已实现能力、明确边界和后续演进顺序。
+description: Kaguya 当前已实现能力、明确边界和后续演进方向。
 ---
 
 # 项目状态与路线图
 
-本页只把有代码、测试或可追踪设计作为当前事实。路线图来自仓库现有后续工作说明，接口和交付时间仍可能在 Issue 与 PR 中调整。
+本页只把有代码和测试支持的行为作为当前事实。后续方向可能在 Issue 与 PR 中调整，不应被当作已交付接口。
 
 ## 当前已实现
 
 ::: timeline 统一运行入口
+
 - `apps/server` 在同一 Fastify 实例提供 Web UI、HTTP API 与可选 NapCat。
 - 开发模式内嵌 Vite middleware，生产模式提供构建后的静态资源。
-:::
+- Server 以必填 `KAGUYA_DATABASE_URL` 使用 PostgreSQL，并在启动时只解析全局 `selectedProfileId`。
+  :::
 
-::: timeline 事件与模块 Runtime
-- 入站消息落库后广播 `message.ingested`。
-- ModuleHost 支持广播、定向事件和不可改写的因果字段。
-- 默认演示链完成 filter、LLM reply 与显式 outbound request。
-:::
+::: timeline 持久化信息 DAG
+
+- Core 以 `informationId` 作为运行事实的唯一身份，先提交信息账本，再向当前消费者并发广播。
+- 入站、过滤、回复请求、LLM、assistant、投递与结果均以显式 Information Kind 和因果引用组成 DAG。
+- 过滤通过注册下一 Kind；过滤拒绝只记录 `filter.decision`。
+- 消费者、LLM 和投递失败都会保留为失败事实，已提交输入与其他消费者结果不会回滚。
+  :::
+
+::: timeline 配置与审计
 
 ::: timeline 配置、模型与审计
 - 多 Profile Registry 支持创建、完整替换、显式全局选择和受限删除。
@@ -36,9 +42,9 @@ description: Kaguya 当前已实现能力、明确边界和后续演进顺序。
 
 ## 当前明确没有
 
-**持久事件队列** — 事件仍在进程内分发。
+**持久订阅与离线补投** — 广播只面向当前订阅者；后来注册的消费者不接收历史原子。
 
-**自动重试与去重** — transport 或模块失败会被审计，但 Core 不静默重试。
+**工作队列、消费者优先级与自动重试** — 消费者按当前快照并发执行。失败记录为 `consumer.failed`、LLM failed 或 delivery failed，不在 Core 中静默重试。
 
 **模块热更新与沙箱** — 模块是受信任的同进程代码。
 
@@ -60,13 +66,13 @@ description: Kaguya 当前已实现能力、明确边界和后续演进顺序。
 
 InformationLedger 已改为异步端口；PostgreSQL/PGlite 实现追加式存储、引用约束和持久日志 outbox。日志从已提交原子单向投影，失败不回滚事实。该子系统尚未接入当前 Server 主链。
 
-### #40 Core DAG 与模块 SDK
+**旧 SQLite 数据自动迁移** — 旧 SQLite 文件与旧配置索引不会自动读取、转换、合并或删除。
 
-模块显式订阅输入 Kind、产生输出 Kind。Core 只负责类型校验、DAG 调度、因果关系与失败传播，不自动推导处理链。
+## 后续方向
 
-### #41 Selector、Prompt 与 Memory
+### Selector、Prompt 与 Memory
 
-Selector 通过显式信息引用选择上下文；Prompt provenance 与 Memory 建立在信息原子和账本上，不恢复隐式分组。
+后续上下文选择、Prompt provenance 与 Memory 若实现，应建立在已持久化的信息原子和显式引用上，不恢复隐式会话或事件身份。
 
 ### 主 Runtime 接入与迁移
 

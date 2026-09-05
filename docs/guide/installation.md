@@ -1,11 +1,11 @@
 ---
 title: 安装与启动
-description: 安装固定版本工具链并运行 Kaguya Server 或文档站。
+description: 安装固定版本工具链并以 PostgreSQL 启动 Kaguya Server 或文档站。
 ---
 
 # 安装与启动
 
-Kaguya 锁定 Node.js 24.18.0 和 pnpm 11.9.0。项目使用 `node:sqlite`，因此不要用相近大版本替代固定版本。
+Kaguya 锁定 Node.js 24.18.0 和 pnpm 11.9.0，并要求一个 PostgreSQL information ledger。Server 与 demo 都必须设置 `KAGUYA_DATABASE_URL`；不再支持本地 SQLite 或数据库路径配置。
 
 ## 准备工具链
 
@@ -55,17 +55,19 @@ pnpm install
 
 ## 以开发模式启动
 
-Gateway Token 可选：未设置时每次启动自动生成随机 token（日志 `server.token.generated`），Web UI 页面加载时自动获取；需要跨重启稳定的 token 时可显式设置（至少 16 个字符）。配置目录可以使用默认的 `.data/kaguya-config`，也可以显式指定绝对路径。
+Gateway Token 可选：未设置时每次启动自动生成随机 token，Web UI 页面加载时自动获取；需要跨重启稳定的 token 时可显式设置至少 16 个字符。配置目录可以使用默认 `.data/kaguya-config`，也可以指定绝对路径。
 
 ::: code-group
 
 ```powershell [PowerShell ~vscode-icons:file-type-powershell~]
 $env:KAGUYA_CONFIG_ROOT = ".data/kaguya-config"
+$env:KAGUYA_DATABASE_URL = "postgresql://kaguya:password@127.0.0.1:5432/kaguya"
 pnpm dev
 ```
 
 ```bash [POSIX shell ~vscode-icons:file-type-shell~]
 export KAGUYA_CONFIG_ROOT=".data/kaguya-config"
+export KAGUYA_DATABASE_URL="postgresql://kaguya:password@127.0.0.1:5432/kaguya"
 pnpm dev
 ```
 
@@ -81,7 +83,7 @@ curl http://127.0.0.1:3000/healthz
 
 :::
 
-正常响应为 `{"status":"ok"}`。如果配置尚未完成，HTTP 与 Web UI 仍会启动，但 Runtime 和 NapCat ingress 会等待配置完成并重启。
+正常响应为 `{"status":"ok"}`。首次启动时 Registry 会有一个选中的 `selectedProfileId`；若该 Profile 未就绪，HTTP 与 Web UI 仍启动以供配置，但 Runtime、数据库连接和 NapCat ingress 会等待 Profile 就绪并在重启后启动。
 
 ## 生产构建与运行
 
@@ -90,12 +92,14 @@ curl http://127.0.0.1:3000/healthz
 ```powershell [PowerShell ~vscode-icons:file-type-powershell~]
 pnpm build
 $env:KAGUYA_CONFIG_ROOT = ".data/kaguya-config"
+$env:KAGUYA_DATABASE_URL = "postgresql://kaguya:password@127.0.0.1:5432/kaguya"
 pnpm start
 ```
 
 ```bash [POSIX shell ~vscode-icons:file-type-shell~]
 pnpm build
 export KAGUYA_CONFIG_ROOT=".data/kaguya-config"
+export KAGUYA_DATABASE_URL="postgresql://kaguya:password@127.0.0.1:5432/kaguya"
 pnpm start
 ```
 
@@ -123,11 +127,10 @@ pnpm --ignore-workspace docs:preview
 
 文档生产预览使用 `/Kaguya/` 基础路径，与 GitHub Pages 保持一致。
 
-## 数据文件
+## 数据与迁移边界
 
-默认 Runtime 数据库是 `.data/kaguya.sqlite`，demo 使用独立的 `.data/kaguya-demo.sqlite`。历史 `.data/kaguya-api.sqlite` 和 `.data/kaguya-bot.sqlite` 不会被读取、合并或删除。
+`KAGUYA_DATABASE_URL` 指向 PostgreSQL 中的 information ledger。启动期间，Runtime 会在 Core 就绪前通过 `KaguyaDatabase.connect()` 连接该 URL，并在一个事务中创建或迁移可重复执行的 schema。payload 保存为 `JSONB`，原子和显式引用由外键保护；原子、引用与日志投影 outbox 在同一事务写入，日志随后异步投影。原子与引用只允许追加。旧 `.data/*.sqlite` 文件不会被读取、合并、删除或自动转换；请自行保留或处理历史数据。
 
-::: warning 不要提交本地数据
-`.data/` 中可能包含 API Key、平台凭据、消息、Prompt 和模型 trace。不要把这些文件上传到 Git、Issue、PR 或聊天记录。
+::: warning 保护凭据与数据
+数据库 URL、Profile store、平台凭据与本地数据都可能包含敏感信息。不要把它们上传到 Git、Issue、PR 或聊天记录。
 :::
-

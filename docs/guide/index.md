@@ -5,7 +5,7 @@ description: 从安装、首次配置到 Web UI 的 Kaguya 使用入口。
 
 # 使用指南
 
-Kaguya 是一个事件驱动、模块可插拔的 TypeScript AI Bot Runtime。当前唯一长期运行入口是 `apps/server`：它在同一进程、同一端口提供 Web UI、HTTP API，并可选连接 NapCat。
+Kaguya 是一个以持久化信息 DAG 组织运行事实、模块可插拔的 TypeScript AI Bot Runtime。当前唯一长期运行入口是 `apps/server`：它在同一进程、同一端口提供 Web UI、HTTP API，并可选连接 NapCat。
 
 ::: tip 推荐阅读顺序
 第一次使用时，依次阅读“安装与启动 → 配置 Kaguya → 使用 Web UI”。如果需要接入模块或理解消息为什么这样流动，再进入开发文档。
@@ -15,11 +15,11 @@ Kaguya 是一个事件驱动、模块可插拔的 TypeScript AI Bot Runtime。�
 
 **接收消息** — Web UI 通过 HTTP 提交文本；NapCat 可以把 OneBot 消息标准化后交给同一个 Runtime。
 
-**运行模块链** — 默认演示链由 always filter、LLM reply 和 outbound request 组成。模块也可以选择不回复，或发布自己的事件。
+**运行模块链** — 默认链以 Kind 显式连接入站、过滤、回复请求、LLM、assistant 和投递。模块也可以选择不回复，或注册自己的信息原子。
 
 **管理模型配置** — Web UI 可以创建、编辑、选择和删除 Profile。Provider、API Key 和 light/heavy 模型目标保存在权限受保护的 profile store。
 
-**记录执行过程** — SQLite 保存消息、LLM trace 与出站审计；结构化日志通过 requestId、traceId 和事件因果字段关联执行过程。
+**记录执行过程** — PostgreSQL information ledger 保存不可变原子和显式引用；每个 Core 事实只使用 `informationId`。
 
 ## 一次典型启动
 

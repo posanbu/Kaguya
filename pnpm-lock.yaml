@@ -83,6 +83,9 @@ importers:
       '@kaguya/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@kaguya/database':
+        specifier: workspace:*
+        version: link:../../packages/database
       '@kaguya/logger':
         specifier: workspace:*
         version: link:../../packages/logger
@@ -101,10 +104,6 @@ importers:
       vite:
         specifier: 7.3.6
         version: 7.3.6(@types/node@24.13.3)(lightningcss@1.33.0)(tsx@4.23.1)(yaml@2.9.0)
-    devDependencies:
-      '@kaguya/database':
-        specifier: workspace:*
-        version: link:../../packages/database
 
   apps/web:
     dependencies:
@@ -212,6 +211,10 @@ importers:
       '@kaguya/sdk':
         specifier: workspace:*
         version: link:../sdk
+    devDependencies:
+      '@kaguya/engine':
+        specifier: workspace:*
+        version: link:../engine
 
   packages/platform-adapters:
     dependencies:

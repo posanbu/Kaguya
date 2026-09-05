@@ -1,23 +1,29 @@
 ---
 title: 环境变量
-description: Kaguya Server、白名单、NapCat 与日志环境变量参考。
+description: Kaguya Server、PostgreSQL、白名单、NapCat 与日志环境变量参考。
 ---
 
 # 环境变量
 
-环境变量由 `apps/server` 在启动时读取。Provider Key、Base URL 和模型 ID 不属于环境变量，统一存放在 `KAGUYA_CONFIG_ROOT` 指向的 profile store。
+除 `KAGUYA_TEST_DATABASE_URL` 仅由测试命令读取外，下列环境变量由 `apps/server` 在启动时读取。Provider Key、Base URL 和模型 ID 不属于环境变量，统一存放在 `KAGUYA_CONFIG_ROOT` 指向的 Profile Registry；Runtime 只使用启动时全局选中的 `selectedProfileId`。
 
-## Server 核心配置
+## Server 与 PostgreSQL
 
-**`KAGUYA_GATEWAY_TOKEN`** — 可选。未设置时每次启动自动生成随机 token（至少 16 字符，日志事件 `server.token.generated`），Web UI 页面加载时自动获取；显式设置需至少 16 个字符，可获得跨重启稳定的 token。用于配置和消息 API 的 Bearer 认证。
+**`KAGUYA_DATABASE_URL`** — 必填。非空 PostgreSQL 连接 URL，供 information ledger 使用。Server 不在普通日志、启动错误或失败事实中回显该 URL。
+
+**`KAGUYA_GATEWAY_TOKEN`** — 可选。显式设置需至少 16 个字符，并覆盖持久化或 bootstrap 凭据；全新本地配置未设置时由 Server 在终端展示一次性 bootstrap Token，首次配置成功后使用持久化正式凭据。
 
 **`KAGUYA_HOST`** — 默认 `127.0.0.1`。唯一 Server 监听地址。
 
 **`KAGUYA_PORT`** — 默认 `3000`，允许范围 1 至 65535。
 
-**`KAGUYA_DATABASE_PATH`** — 默认 `.data/kaguya.sqlite`。Runtime SQLite 文件。
+## 测试专用 PostgreSQL
 
-**`KAGUYA_CONFIG_ROOT`** — 默认 `.data/kaguya-config`。权限受保护的 profile registry。
+**`KAGUYA_TEST_DATABASE_URL`** — 仅供 `pnpm test:postgres` 连接真实 PostgreSQL，运行共享账本契约、索引与重连测试。CI 为它创建临时服务；`apps/server` 不读取此变量，生产环境必须配置 `KAGUYA_DATABASE_URL`。
+
+## Server
+
+**`KAGUYA_CONFIG_ROOT`** — 默认 `.data/kaguya-config`。权限受保护的 Profile Registry 根目录。
 
 **`KAGUYA_WEB_DIST_PATH`** — 默认 `apps/web/dist`。生产静态产物目录，主要供测试和部署覆盖。
 
@@ -41,7 +47,7 @@ description: Kaguya Server、白名单、NapCat 与日志环境变量参考。
 
 **`KAGUYA_GATEWAY_ALLOWLIST_GROUP_IDS`** — 逗号分隔的群组 ID；空值表示不限制群组。
 
-只要某一维度配置了值，入站消息对应字段就必须命中；多个维度同时配置时需要全部满足。过滤发生在落库和事件发布之前。
+只要某一维度配置了值，入站消息对应字段就必须命中；多个维度同时配置时需要全部满足。检查发生在 adapter 向 Runtime 提交内容之前，因此未命中的内容不会生成信息原子或触发模块。
 
 ::: code-group
 
@@ -61,9 +67,9 @@ KAGUYA_GATEWAY_ALLOWLIST_GROUP_IDS=123,456
 
 **`KAGUYA_NAPCAT_SELF_ID`** — 可选，用于校验事件中的机器人 ID。
 
-**`KAGUYA_NAPCAT_RECONNECT_MS`** — 默认 `3000`，允许范围 100 至 3600000 毫秒。
+**`KAGUYA_NAPCAT_RECONNECT_MS`** — 默认 `3000`，允许范围 100 至 3600000 毫秒。它只控制 NapCat 连接 supervisor 的重连间隔，不是信息消费者或投递的自动重试。
 
-NapCat 断线会产生可审计投递失败并按配置重连，不会停止 Fastify 或改变健康检查。
+NapCat 断线会按连接配置重连，不会停止 Fastify 或改变健康检查。一次已经注册的投递请求仍只产生相应成功或失败事实，Core 不会将其放入工作队列或自动重试。
 
 ## 日志
 
@@ -83,7 +89,7 @@ NapCat 断线会产生可审计投递失败并按配置重连，不会停止 Fas
 
 ```dotenv [开发调试 ~vscode-icons:file-type-dotenv~]
 KAGUYA_LOG_LEVEL=info
-KAGUYA_LOG_LEVELS=runtime:event=debug,runtime:workflow=debug
+KAGUYA_LOG_LEVELS=runtime=debug
 ```
 
 ```dotenv [生产 JSON 文件 ~vscode-icons:file-type-dotenv~]

@@ -1,10 +1,19 @@
 /**
- * 架构说明：本模块定义信息 kind 的声明契约、引用规则、日志策略与追加输入，
- * 供 Core 启动前完成注册并在后续追加路径中复用同一套校验与冻结快照逻辑。
+ * 架构说明：本模块定义信息 kind 的声明契约、引用规则、日志策略与注册输入，并以
+ * 当前递归路径校验 JSON schema，使 pipe 可安全复用同一个非递归子 schema。
+ * 主要职责：`defineInformationKind` 校验 dotted kind、严格 JSON payload schema、引用
+ * 规则和日志策略；`InformationRegistrationInput` 是 Core 接受的唯一公开注册输入。
  * 代码库关系：`packages/sdk/src/index.ts` 通过此模块向外暴露 `defineInformationKind`
  * 与相关类型；`packages/engine` 会在 Registry 生命周期中消费这些定义。
+ * 输入输出与副作用：定义创建会同步验证并冻结契约，不做 I/O；注册输入不允许调用方
+ * 自行携带 kind 或 `informationId`。
  */
-import { type InformationAtom, type JsonObject, z } from "@kaguya/schema";
+import {
+  type InformationAtom,
+  type InformationReference,
+  type JsonObject,
+  z,
+} from "@kaguya/schema";
 
 export type InformationLogLevel = "debug" | "info" | "warn" | "error";
 
@@ -20,15 +29,18 @@ export interface InformationLogDisabledPolicy {
   readonly enabled: false;
 }
 
-export interface InformationLogEnabledPolicy<P extends JsonObject = JsonObject> {
+export interface InformationLogEnabledPolicy<
+  P extends JsonObject = JsonObject,
+> {
   readonly enabled: true;
   readonly level: InformationLogLevel;
-  readonly project: (atom: InformationAtom<string, P>) => InformationLogProjection;
+  readonly project: (
+    atom: InformationAtom<string, P>,
+  ) => InformationLogProjection;
 }
 
 export type InformationLogPolicy<P extends JsonObject = JsonObject> =
-  | InformationLogDisabledPolicy
-  | InformationLogEnabledPolicy<P>;
+  InformationLogDisabledPolicy | InformationLogEnabledPolicy<P>;
 
 export interface InformationKindDefinition<
   K extends string,
@@ -56,10 +68,19 @@ export interface InformationReferenceRuleInput {
   readonly targetKinds?: readonly string[];
 }
 
-export type InformationAppendInput<
+/**
+ * 提交新信息原子的公开输入。kind 和 informationId 分别由 definition 与 Core
+ * 唯一确定，调用方不能伪造或重复携带它们。
+ */
+export type InformationRegistrationInput<
   K extends string,
   P extends JsonObject,
-> = Omit<InformationAtom<K, P>, "informationId">;
+> = {
+  readonly occurredAt: string;
+  readonly source: string;
+  readonly payload: P;
+  readonly references: readonly InformationReference[];
+};
 
 const kindNamePattern = /^[a-z][a-z0-9._-]*(?:\.[a-z][a-z0-9._-]*)+$/u;
 const relationNamePattern =
@@ -89,7 +110,9 @@ function assertKindName(kind: string): void {
   }
 }
 
-function assertPayloadSchema(payloadSchema: unknown): asserts payloadSchema is z.ZodType<JsonObject> {
+function assertPayloadSchema(
+  payloadSchema: unknown,
+): asserts payloadSchema is z.ZodType<JsonObject> {
   if (!(payloadSchema instanceof z.ZodType)) {
     throw new Error("payload schema must be a Zod schema");
   }
@@ -116,7 +139,10 @@ function assertJsonObjectSchema(schema: any, seen: Set<any>): void {
     case "pipe":
     case "transform": {
       const inputSchema = def.in ?? def.innerType ?? def.input;
-      const sample = inputSchema === undefined ? undefined : buildRepresentativeValue(inputSchema, seen);
+      const sample =
+        inputSchema === undefined
+          ? undefined
+          : buildRepresentativeValue(inputSchema, seen);
       if (sample === undefined) {
         throw new Error("payload schema must produce a JSON object");
       }
@@ -214,7 +240,9 @@ function assertJsonValue(schema: any, seen: Set<any>): void {
     case "custom":
       throw new Error(`payload schema contains unsupported ${def.type} fields`);
     default:
-      throw new Error(`payload schema contains unsupported ${String(def.type)} fields`);
+      throw new Error(
+        `payload schema contains unsupported ${String(def.type)} fields`,
+      );
   }
 }
 
@@ -224,7 +252,10 @@ function assertJsonValueOrObjectViaParse(
   seen: Set<any>,
 ): void {
   const inputSchema = def.in ?? def.innerType ?? def.input;
-  const sample = inputSchema === undefined ? undefined : buildRepresentativeValue(inputSchema, seen);
+  const sample =
+    inputSchema === undefined
+      ? undefined
+      : buildRepresentativeValue(inputSchema, seen);
   if (sample === undefined) {
     throw new Error("payload schema must produce a JSON-compatible value");
   }
@@ -266,81 +297,85 @@ function buildRepresentativeValue(schema: any, seen: Set<any>): unknown {
   }
   seen.add(schema);
 
-  const def = getSchemaDef(schema);
-  switch (def.type) {
-    case "string":
-      return "probe";
-    case "number":
-      return 0;
-    case "boolean":
-      return true;
-    case "null":
-      return null;
-    case "literal":
-      return getLiteralValue(def);
-    case "enum":
-      return getEnumValue(def);
-    case "bigint":
-      return 1n;
-    case "date":
-      return new Date("2026-09-01T00:00:00.000Z");
-    case "array": {
-      const item = buildRepresentativeValue(def.element, seen);
-      return item === undefined ? [] : [item];
-    }
-    case "tuple":
-      return (Array.isArray(def.items) ? def.items : []).map((item: any) =>
-        buildRepresentativeValue(item, seen),
-      );
-    case "object": {
-      const shape = getObjectShape(def);
-      const result: Record<string, unknown> = {};
-      for (const [key, fieldSchema] of Object.entries(shape)) {
-        const value = buildRepresentativeValue(fieldSchema, seen);
-        if (value !== undefined) {
-          result[key] = value;
+  try {
+    const def = getSchemaDef(schema);
+    switch (def.type) {
+      case "string":
+        return "probe";
+      case "number":
+        return 0;
+      case "boolean":
+        return true;
+      case "null":
+        return null;
+      case "literal":
+        return getLiteralValue(def);
+      case "enum":
+        return getEnumValue(def);
+      case "bigint":
+        return 1n;
+      case "date":
+        return new Date("2026-09-01T00:00:00.000Z");
+      case "array": {
+        const item = buildRepresentativeValue(def.element, seen);
+        return item === undefined ? [] : [item];
+      }
+      case "tuple":
+        return (Array.isArray(def.items) ? def.items : []).map((item: any) =>
+          buildRepresentativeValue(item, seen),
+        );
+      case "object": {
+        const shape = getObjectShape(def);
+        const result: Record<string, unknown> = {};
+        for (const [key, fieldSchema] of Object.entries(shape)) {
+          const value = buildRepresentativeValue(fieldSchema, seen);
+          if (value !== undefined) {
+            result[key] = value;
+          }
         }
+        return result;
       }
-      return result;
-    }
-    case "record": {
-      const value = buildRepresentativeValue(def.valueType, seen);
-      return value === undefined ? {} : { probe: value };
-    }
-    case "union":
-    case "discriminatedUnion":
-    case "xor": {
-      const [firstOption] = getSchemaOptions(def);
-      return firstOption === undefined
-        ? undefined
-        : buildRepresentativeValue(firstOption, seen);
-    }
-    case "intersection": {
-      const left = buildRepresentativeValue(def.left, seen);
-      const right = buildRepresentativeValue(def.right, seen);
-      if (isPlainJsonObject(left) && isPlainJsonObject(right)) {
-        return { ...left, ...right };
+      case "record": {
+        const value = buildRepresentativeValue(def.valueType, seen);
+        return value === undefined ? {} : { probe: value };
       }
-      return left ?? right;
+      case "union":
+      case "discriminatedUnion":
+      case "xor": {
+        const [firstOption] = getSchemaOptions(def);
+        return firstOption === undefined
+          ? undefined
+          : buildRepresentativeValue(firstOption, seen);
+      }
+      case "intersection": {
+        const left = buildRepresentativeValue(def.left, seen);
+        const right = buildRepresentativeValue(def.right, seen);
+        if (isPlainJsonObject(left) && isPlainJsonObject(right)) {
+          return { ...left, ...right };
+        }
+        return left ?? right;
+      }
+      case "optional":
+      case "nullable":
+      case "default":
+      case "prefault":
+      case "nonoptional":
+      case "readonly":
+      case "catch":
+      case "success":
+        return buildRepresentativeValue(def.innerType, seen);
+      case "pipe":
+      case "transform": {
+        const inputSchema = def.in ?? def.innerType ?? def.input;
+        return inputSchema === undefined
+          ? undefined
+          : buildRepresentativeValue(inputSchema, seen);
+      }
+      default:
+        return undefined;
     }
-    case "optional":
-    case "nullable":
-    case "default":
-    case "prefault":
-    case "nonoptional":
-    case "readonly":
-    case "catch":
-    case "success":
-      return buildRepresentativeValue(def.innerType, seen);
-    case "pipe":
-    case "transform": {
-      const inputSchema = def.in ?? def.innerType ?? def.input;
-      return inputSchema === undefined
-        ? undefined
-        : buildRepresentativeValue(inputSchema, seen);
-    }
-    default:
-      return undefined;
+  } finally {
+    seen.delete(schema);
   }
 }
 
@@ -402,7 +437,11 @@ function getEnumValue(def: any): unknown {
 function cloneAndValidateReferenceRules(
   references: Record<string, InformationReferenceRuleInput>,
 ): Readonly<Record<string, InformationReferenceRule>> {
-  if (typeof references !== "object" || references === null || Array.isArray(references)) {
+  if (
+    typeof references !== "object" ||
+    references === null ||
+    Array.isArray(references)
+  ) {
     throw new Error("reference rules must be an object");
   }
 
@@ -414,10 +453,14 @@ function cloneAndValidateReferenceRules(
       throw new Error(`reference rule must be an object: ${relation}`);
     }
     if (typeof rule.required !== "boolean") {
-      throw new Error(`reference rule required flag must be boolean: ${relation}`);
+      throw new Error(
+        `reference rule required flag must be boolean: ${relation}`,
+      );
     }
     if (typeof rule.multiple !== "boolean") {
-      throw new Error(`reference rule multiple flag must be boolean: ${relation}`);
+      throw new Error(
+        `reference rule multiple flag must be boolean: ${relation}`,
+      );
     }
 
     const targetKinds = rule.targetKinds;
@@ -435,7 +478,9 @@ function cloneAndValidateReferenceRules(
       for (const targetKind of targetKinds) {
         assertKindName(targetKind);
         if (targetKindSet.has(targetKind)) {
-          throw new Error(`reference targetKinds must not contain duplicates: ${relation}`);
+          throw new Error(
+            `reference targetKinds must not contain duplicates: ${relation}`,
+          );
         }
         targetKindSet.add(targetKind);
         normalizedTargetKinds.push(targetKind);
