@@ -1,13 +1,19 @@
 /**
- * 架构说明：本模块实现信息原子在 PostgreSQL 中的 append-only 仓储，
+ * 功能概述：本模块实现信息原子在 PostgreSQL 中的 append-only 仓储，
  * 负责 kind 同步、原子追加、按 id 读取与反向引用查询，并把数据库错误
- * 归一为仓储层错误，供 engine 的 `InformationAtomStore` 直接消费。
- * 代码库关系：`InformationCore` 只会看到这里实现的 store 端口；`postgres-driver.ts`
- * 提供事务与 query 抽象，`postgres-migrations.ts` 则先建立表结构、索引和 mutation 触发器。
+ * 归一为仓储层错误，供 engine 的 `InformationLedger` 直接消费。
+ * 主要职责：`InformationRepository` 在启动期以幂等方式登记当前 kind，并拒绝缺失历史 kind 的
+ * Registry；它还校验引用 expectations、事务写入 atom/reference/outbox、提供 `get/getMany/find/query`，
+ * 并管理待投影日志的读取、成功确认与失败计数。
+ * 代码库关系：`InformationCore` 只会看到这里实现的 ledger 端口；`driver.ts`
+ * 提供事务与 query 抽象，`migrations.ts` 则先建立表结构、索引和 mutation 触发器。
+ * 输入输出与副作用：写入全部在数据库事务中完成，冲突和引用错误映射为稳定错误类型；
+ * 读取返回经过 schema 校验并深冻结的 atom，不允许通过返回值修改持久化事实。
  */
 import {
   freezeInformationAtom,
   informationAtomSchema,
+  informationIdSchema,
   informationReferenceSchema,
   type DeepReadonly,
   type InformationAtom,
@@ -20,8 +26,9 @@ import type {
   InformationReferenceExpectation,
   InformationReferenceQuery,
 } from "@kaguya/engine";
+import type { InformationFindQuery } from "@kaguya/sdk";
 
-import type { SqlDatabase, SqlTransaction } from "./postgres-driver.js";
+import type { SqlDatabase, SqlTransaction } from "./driver.js";
 
 type AtomRow = {
   information_id: string;
@@ -97,20 +104,13 @@ export class InformationRepository implements InformationLedger {
   async synchronizeKinds(kinds: readonly string[]): Promise<void> {
     await this.database.transaction(async (tx) => {
       const desiredKinds = normalizeKinds(kinds);
+      await insertKinds(tx, desiredKinds);
       const existingRows = await tx.query<KindRow>(
         "SELECT kind FROM information_kinds ORDER BY kind ASC",
       );
       const existingKinds = existingRows.rows.map(({ kind }) => kind);
 
-      if (existingKinds.length === 0) {
-        if (desiredKinds.length === 0) {
-          return;
-        }
-        await insertKinds(tx, desiredKinds);
-        return;
-      }
-
-      if (!areKindsEqual(existingKinds, desiredKinds)) {
+      if (!areKindsIncludedIn(existingKinds, desiredKinds)) {
         throw new InformationKindSetMismatchError(desiredKinds, existingKinds);
       }
     });
@@ -246,13 +246,6 @@ export class InformationRepository implements InformationLedger {
     );
   }
 
-  /** @deprecated Use get(). */
-  async getById(
-    informationId: InformationId,
-  ): Promise<DeepReadonly<InformationAtom> | undefined> {
-    return this.get(informationId);
-  }
-
   async getMany(
     informationIds: readonly InformationId[],
   ): Promise<readonly DeepReadonly<InformationAtom>[]> {
@@ -265,6 +258,51 @@ export class InformationRepository implements InformationLedger {
         }
       }
       return atoms;
+    });
+  }
+
+  async find(
+    query: InformationFindQuery,
+  ): Promise<readonly DeepReadonly<InformationAtom>[]> {
+    return this.database.transaction(async (tx) => {
+      const values: unknown[] = [];
+      const predicates: string[] = [];
+      const bind = (value: unknown): string => {
+        values.push(value);
+        return `$${values.length}`;
+      };
+
+      if (query.kinds !== undefined) {
+        predicates.push(`a.kind = ANY(${bind([...query.kinds])}::text[])`);
+      }
+      if (query.sources !== undefined) {
+        predicates.push(`a.source = ANY(${bind([...query.sources])}::text[])`);
+      }
+      if (query.occurredAfter !== undefined) {
+        predicates.push(
+          `a.occurred_at::timestamptz >= ${bind(query.occurredAfter)}::timestamptz`,
+        );
+      }
+      if (query.occurredBefore !== undefined) {
+        predicates.push(
+          `a.occurred_at::timestamptz < ${bind(query.occurredBefore)}::timestamptz`,
+        );
+      }
+      if (predicates.length === 0) {
+        throw new InformationStoreError(
+          "information find query requires at least one filter",
+        );
+      }
+      const limit = bind(query.limit);
+      const rows = await tx.query<{ information_id: string }>(
+        `SELECT a.information_id
+         FROM information_atoms a
+         WHERE ${predicates.join(" AND ")}
+         ORDER BY a.occurred_at::timestamptz ASC, a.information_id ASC
+         LIMIT ${limit}`,
+        values,
+      );
+      return readAtomsByRows(tx, rows.rows);
     });
   }
 
@@ -302,22 +340,8 @@ export class InformationRepository implements InformationLedger {
           : [query.informationId, query.relation],
       );
 
-      const atoms: DeepReadonly<InformationAtom>[] = [];
-      for (const row of rows.rows) {
-        const atom = await readAtomById(tx, row.information_id);
-        if (atom !== undefined) {
-          atoms.push(atom);
-        }
-      }
-      return atoms;
+      return readAtomsByRows(tx, rows.rows);
     });
-  }
-
-  /** @deprecated Use query(). */
-  async listByReference(
-    query: InformationReferenceQuery,
-  ): Promise<readonly DeepReadonly<InformationAtom>[]> {
-    return this.query(query);
   }
 
   async listPendingLogProjections(
@@ -428,6 +452,23 @@ async function readAtomById(
   );
 }
 
+async function readAtomsByRows(
+  tx: SqlTransaction,
+  rows: readonly { information_id: string }[],
+): Promise<readonly DeepReadonly<InformationAtom>[]> {
+  const atoms: DeepReadonly<InformationAtom>[] = [];
+  for (const row of rows) {
+    const atom = await readAtomById(
+      tx,
+      informationIdSchema.parse(row.information_id),
+    );
+    if (atom !== undefined) {
+      atoms.push(atom);
+    }
+  }
+  return atoms;
+}
+
 async function loadTargetKinds(
   tx: SqlTransaction,
   informationIds: readonly string[],
@@ -458,6 +499,7 @@ async function insertKinds(
     `
       INSERT INTO information_kinds (kind)
       SELECT UNNEST($1::text[])
+      ON CONFLICT (kind) DO NOTHING
     `,
     [kinds],
   );
@@ -471,14 +513,12 @@ function normalizeKinds(kinds: readonly string[]): readonly string[] {
   return uniqueKinds.sort((left, right) => left.localeCompare(right));
 }
 
-function areKindsEqual(
-  left: readonly string[],
-  right: readonly string[],
+function areKindsIncludedIn(
+  existingKinds: readonly string[],
+  desiredKinds: readonly string[],
 ): boolean {
-  if (left.length !== right.length) {
-    return false;
-  }
-  return left.every((kind, index) => kind === right[index]);
+  const desiredKindSet = new Set(desiredKinds);
+  return existingKinds.every((kind) => desiredKindSet.has(kind));
 }
 
 function decodeJsonObject(value: unknown): JsonObject {

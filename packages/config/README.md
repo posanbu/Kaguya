@@ -69,33 +69,7 @@ await configs.replaceProfile("default", {
       },
     ],
   },
-  runtime: {
-    host: "127.0.0.1",
-    port: 7897,
-    gatewayToken: "test-only-placeholder-token",
-    databasePath: ".data/kaguya.sqlite",
-    webDistPath: "apps/web/dist",
-    corsOrigins: [],
-    trustProxy: false,
-    rateLimitMax: 30,
-    rateLimitWindowMs: 60000,
-    logLevel: "info",
-    logFormat: "json",
-    gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
-  },
-  platforms: [
-    {
-      id: "napcat.qq.main",
-      type: "napcat",
-      enabled: true,
-      credentials: { accessToken: "test-only-placeholder" },
-      settings: {
-        adapterId: "napcat.qq.main",
-        wsUrl: "ws://127.0.0.1:3001",
-        reconnectMs: 3000,
-      },
-    },
-  ],
+  platforms: [],
   plugins: [],
   // Add these only after the user explicitly reviews and confirms them.
   acknowledgedWarnings: ["platforms-empty", "plugins-empty"],
@@ -160,20 +134,17 @@ version 3 and contains metadata plus `selectedProfileId`. Versions 1 and 2 are
 rejected with `CONFIG_UNSUPPORTED_VERSION`; callers must back up the store and
 bootstrap a new index. No automatic migration or deletion is performed.
 
-## 启动配置校验
-
-服务启动时通过 `KAGUYA_CONFIG_ROOT`（未设置时为 `.data/kaguya-config`）读取
-selected Profile，并调用 `validateStartupConfiguration()` 检查 Registry、
-`runtime`、AI provider/model tier 和平台适配器。校验失败会抛出
-`StartupConfigurationError`，其中每个 issue 只包含 `code`、字段 `path`、
-用户可读的 `message` 和可选 `hint`，不会携带 API key、access token 或完整
-凭据。
-
-启动校验通过后，Server 才会创建 HTTP、Runtime 和平台 ingress。配置目录缺失、
-Profile 不完整、runtime 字段非法、NapCat 条目无效或没有启用的非 Web 平台，
-都会阻止启动；Web UI 是内建适配器，不计入外部平台数量。插件可以为空，但
-仍需符合 schema。服务不会回退到另一个 Profile、Provider 或模型，也不会再
-读取或迁移旧的服务环境变量。
+At server startup, `KAGUYA_CONFIG_ROOT` is loaded into a frozen profile
+registry. When the store is missing, the selected profile is incomplete, or its
+optional warnings are unreviewed, HTTP starts in setup mode so the Web UI can
+bootstrap, configure, or repair profiles. Runtime and adapter ingress remain
+stopped until the server is restarted. Corrupt stores and unsafe or
+inaccessible paths still fail startup and are never overwritten by setup. A
+module may request only a `modelTier`; it cannot override the selected profile.
+Failure of the selected profile stops runtime startup; there is no fallback to
+another profile, provider, or model. The legacy `KAGUYA_LLM_API_KEY`,
+`KAGUYA_LLM_BASE_URL`, and `KAGUYA_LLM_MODEL` variables are rejected with a
+value-free migration error.
 
 Existing incomplete profiles can still be opened and edited for repair. The
 provider execution layer returns provider/network/authentication failures

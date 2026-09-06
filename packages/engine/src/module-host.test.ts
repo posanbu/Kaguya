@@ -1,516 +1,877 @@
-import { z } from "@kaguya/schema";
+/**
+ * 功能概述：本文件在真实 `InformationCore` 和内存账本上验证信息模块宿主的订阅、
+ * 派生 atom 注册与故障归属行为。
+ * 主要职责：验证模块 context.register 注入模块 source、因果与 context 引用，并验证
+ * `context.select` 委托 Core 从账本重新加载显式上下文；
+ * 验证保留引用和未声明输出被拒绝、输入快照深冻结、同 kind 多实例均被广播，以及
+ * handler 故障由 Core 记录为带模块消费者身份的 `consumer.failed`；并直接覆盖共享
+ * start/stop promise、停止与创建竞态、rollback/dispose 全量失败聚合、在途 handler 等待
+ * 及 instance source grammar。
+ * 代码库关系：覆盖最终 `module-host.ts` 对 SDK `onInformation` 和 Core
+ * `on`/`register` 的适配；MemoryLedger 模拟 Core 所要求的 append-only 与结构化只读
+ * 存储边界。
+ * 输入输出与副作用：测试只写入进程内账本，注册的 atom 必须先满足引用存在性；每个
+ * 宿主在断言后停止，以撤销 Core 订阅并释放模块实例。
+ */
 import {
-  defineEvent,
-  defineModule,
-  onEvent,
-  onTargetedEvent,
-  type ModuleDefinition,
+  freezeInformationAtom,
+  informationIdSchema,
+  type DeepReadonly,
+  type InformationAtom,
+  type InformationId,
+  type JsonObject,
+  z,
+} from "@kaguya/schema";
+import {
+  defineInformationKind,
+  defineInformationModule,
+  defineInformationSelector,
+  onInformation,
+  type InformationFindQuery,
+  type InformationModuleSubscription,
 } from "@kaguya/sdk";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { EventBus } from "./event-bus.js";
-import {
-  ModuleDefinitionNotFoundError,
-  ModuleHost,
-  ModuleTargetNotFoundError,
-} from "./module-host.js";
+import { InformationCore, InformationKindRegistry } from "./index.js";
+import { ModuleHost, ModuleKindNotDeclaredError } from "./module-host.js";
 
-const broadcastEvent = defineEvent(
-  "module.test.broadcast",
-  z.object({ value: z.string() }).strict(),
-);
-const targetedEvent = defineEvent(
-  "module.test.targeted",
-  z.object({ targetInstanceId: z.string().min(1), value: z.string() }).strict(),
-);
+class MemoryLedger {
+  readonly atoms = new Map<string, DeepReadonly<InformationAtom>>();
 
-function baseEvent<TType extends string, TPayload>(
-  definition: Parameters<typeof createHostEvent<TType, TPayload>>[0],
-  payload: TPayload,
-) {
-  return createHostEvent(definition, payload);
+  async synchronizeKinds(): Promise<void> {}
+
+  async append(atom: DeepReadonly<InformationAtom>): Promise<void> {
+    if (this.atoms.has(atom.informationId)) throw new Error("collision");
+    for (const reference of atom.references) {
+      if (!this.atoms.has(reference.informationId))
+        throw new Error("missing reference");
+    }
+    this.atoms.set(
+      atom.informationId,
+      freezeInformationAtom(atom as InformationAtom),
+    );
+  }
+
+  async get(id: InformationId) {
+    return this.atoms.get(id);
+  }
+
+  async getMany(ids: readonly InformationId[]) {
+    return ids.flatMap((id) => {
+      const atom = this.atoms.get(id);
+      return atom === undefined ? [] : [atom];
+    });
+  }
+
+  async find(query: InformationFindQuery) {
+    return [...this.atoms.values()]
+      .filter(
+        (atom) =>
+          (query.kinds === undefined || query.kinds.includes(atom.kind)) &&
+          (query.sources === undefined ||
+            query.sources.includes(atom.source)) &&
+          (query.occurredAfter === undefined ||
+            Date.parse(atom.occurredAt) >= Date.parse(query.occurredAfter)) &&
+          (query.occurredBefore === undefined ||
+            Date.parse(atom.occurredAt) < Date.parse(query.occurredBefore)),
+      )
+      .sort(
+        (left, right) =>
+          Date.parse(left.occurredAt) - Date.parse(right.occurredAt) ||
+          left.informationId.localeCompare(right.informationId),
+      )
+      .slice(0, query.limit);
+  }
+
+  async query() {
+    return [] as readonly DeepReadonly<InformationAtom>[];
+  }
 }
 
-function createHostEvent<TType extends string, TPayload>(
-  definition: {
-    create(
-      base: {
-        id: string;
-        source: string;
-        occurredAt: string;
-        traceId: string;
-        metadata: Record<string, unknown>;
-      },
-      payload: TPayload,
-    ): unknown;
-  },
-  payload: TPayload,
-) {
-  return definition.create(
-    {
-      id: "event-1",
-      source: "test",
-      occurredAt: "2026-08-13T00:00:00.000Z",
-      traceId: "trace-1",
-      metadata: {},
+const contextKind = defineInformationKind({
+  kind: "core.runtime.context",
+  payloadSchema: z.object({ requestId: z.string() }).strict(),
+  references: {},
+  log: { enabled: false },
+});
+
+const inboundKind = defineInformationKind({
+  kind: "acme.message.inbound",
+  payloadSchema: z.object({ text: z.string() }).strict(),
+  references: {
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: [contextKind.kind],
     },
-    payload,
-  ) as ReturnType<(typeof broadcastEvent)["create"]>;
-}
+  },
+  log: { enabled: false },
+});
 
-function host(eventBus = new EventBus()) {
+const outputKind = defineInformationKind({
+  kind: "acme.message.output",
+  payloadSchema: z.object({ text: z.string() }).strict(),
+  references: {
+    "core:caused-by": {
+      required: true,
+      multiple: false,
+      targetKinds: [inboundKind.kind],
+    },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: [contextKind.kind],
+    },
+  },
+  log: { enabled: false },
+});
+
+const selectedOutputKind = defineInformationKind({
+  kind: "acme.message.selected-output",
+  payloadSchema: z.object({ selectedId: z.string().min(1) }).strict(),
+  references: {
+    "core:caused-by": {
+      required: true,
+      multiple: false,
+      targetKinds: [inboundKind.kind],
+    },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: [contextKind.kind],
+    },
+  },
+  log: { enabled: false },
+});
+
+function createCore(extra: readonly any[] = []) {
+  const registry = new InformationKindRegistry();
+  registry.registerBuiltin(contextKind);
+  registry.register(inboundKind);
+  registry.register(outputKind);
+  for (const definition of extra) registry.register(definition);
+  const store = new MemoryLedger();
   let sequence = 0;
-  return {
-    eventBus,
-    host: new ModuleHost({
-      eventBus,
-      now: () => new Date("2026-08-13T00:00:01.000Z"),
-      nextId: (traceId, prefix) => `${traceId}-${prefix}-${++sequence}`,
-    }),
-  };
+  const core = new InformationCore({
+    registry,
+    store,
+    nextInformationId: () => `atom-${++sequence}`,
+  });
+  return { core, store };
 }
 
-function definition(
-  definitionId: string,
-  handlers: {
-    readonly broadcast?: (value: string) => Promise<void> | void;
-    readonly targeted?: (value: string) => Promise<void> | void;
-  },
-): ModuleDefinition<{ label: string }> {
-  return defineModule({
-    manifest: {
-      apiVersion: 1,
-      definitionId,
-      displayName: definitionId,
-      settingsSchema: z.object({ label: z.string().min(1) }).strict(),
-    },
-    create: () => ({
-      subscriptions: [
-        ...(handlers.broadcast === undefined
-          ? []
-          : [
-              onEvent(broadcastEvent, async (event) => {
-                await handlers.broadcast?.(event.payload.value);
-              }),
-            ]),
-        ...(handlers.targeted === undefined
-          ? []
-          : [
-              onTargetedEvent(targetedEvent, async (event) => {
-                await handlers.targeted?.(event.payload.value);
-              }),
-            ]),
-      ],
-    }),
+async function appendContext(core: InformationCore) {
+  return core.register(contextKind, {
+    occurredAt: "2026-09-03T00:00:00.000Z",
+    source: "core:test",
+    payload: { requestId: "req-1" },
+    references: [],
   });
+}
+
+function registration(
+  payload: { readonly text: string },
+  context: DeepReadonly<InformationAtom>,
+) {
+  return {
+    occurredAt: "2026-09-03T00:00:00.000Z",
+    source: "adapter:test",
+    payload,
+    references: [
+      { relation: "core:context", informationId: context.informationId },
+    ],
+  } as const;
+}
+
+async function startHost(
+  module: ReturnType<typeof defineInformationModule>,
+  core: InformationCore,
+  instanceId = "echo.default",
+): Promise<ModuleHost> {
+  const host = new ModuleHost({ core });
+  host.register(module);
+  await host.start([
+    { instanceId, definitionId: module.manifest.definitionId, settings: {} },
+  ]);
+  return host;
 }
 
 describe("ModuleHost", () => {
-  it("validates every activation before creating any module", async () => {
-    const runtime = host();
-    let created = 0;
-    const module = defineModule({
+  it("selects the persisted source through the handler context", async () => {
+    const { core, store } = createCore([selectedOutputKind]);
+    await core.start();
+    const context = await appendContext(core);
+    const currentSelector = defineInformationSelector({
+      selectorId: "test.current",
+      select: ({ sourceAtom }) => [sourceAtom.informationId],
+    });
+    const module = defineInformationModule({
       manifest: {
         apiVersion: 1,
-        definitionId: "test.validated",
-        displayName: "Validated",
-        settingsSchema: z.object({ value: z.string().min(1) }).strict(),
+        definitionId: "acme.selector-consumer",
+        displayName: "Selector consumer",
+        settingsSchema: z.object({}).strict(),
+        informationKinds: [inboundKind, selectedOutputKind],
       },
-      create: () => {
-        created += 1;
+      create: () => ({
+        subscriptions: [
+          onInformation(inboundKind, async (_atom, handlerContext) => {
+            const selected = await handlerContext.select(currentSelector);
+            await handlerContext.register(selectedOutputKind, {
+              payload: { selectedId: selected[0]!.informationId },
+            });
+          }),
+        ],
+      }),
+    });
+    const host = await startHost(module, core, "selector.default");
+
+    const inbound = await core.register(
+      inboundKind,
+      registration({ text: "moon" }, context),
+    );
+
+    const output = [...store.atoms.values()].find(
+      (atom) => atom.kind === selectedOutputKind.kind,
+    );
+    expect(output?.payload).toEqual({ selectedId: inbound.informationId });
+    await host.stop();
+  });
+
+  it("records a selector failure as one consumer failure", async () => {
+    const { core, store } = createCore();
+    await core.start();
+    const context = await appendContext(core);
+    const select = vi.fn(() => {
+      throw new Error("selection failed");
+    });
+    const failingSelector = defineInformationSelector({
+      selectorId: "test.failure",
+      select,
+    });
+    const module = defineInformationModule({
+      manifest: {
+        apiVersion: 1,
+        definitionId: "acme.selector-failure",
+        displayName: "Selector failure",
+        settingsSchema: z.object({}).strict(),
+        informationKinds: [inboundKind],
+      },
+      create: () => ({
+        subscriptions: [
+          onInformation(inboundKind, async (_atom, handlerContext) => {
+            await handlerContext.select(failingSelector);
+          }),
+        ],
+      }),
+    });
+    const host = await startHost(module, core, "selector.failure");
+
+    const inbound = await core.register(
+      inboundKind,
+      registration({ text: "moon" }, context),
+    );
+
+    expect(select).toHaveBeenCalledTimes(1);
+    const failures = [...store.atoms.values()].filter(
+      (atom) =>
+        atom.kind === "consumer.failed" &&
+        atom.references.some(
+          (reference) =>
+            reference.relation === "core:caused-by" &&
+            reference.informationId === inbound.informationId,
+        ),
+    );
+    expect(failures).toHaveLength(1);
+    await host.stop();
+  });
+
+  it("shares concurrent startup without creating duplicate module instances", async () => {
+    const { core } = createCore();
+    await core.start();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let creates = 0;
+    const module = defineInformationModule({
+      manifest: {
+        apiVersion: 1,
+        definitionId: "acme.concurrent-start",
+        displayName: "Concurrent start",
+        settingsSchema: z.object({}).strict(),
+        informationKinds: [inboundKind],
+      },
+      create: async () => {
+        creates += 1;
+        await gate;
         return { subscriptions: [] };
       },
     });
-    runtime.host.register(module);
-
-    await expect(
-      runtime.host.start([
-        {
-          instanceId: "valid",
-          definitionId: "test.validated",
-          settings: { value: "yes" },
-        },
-        {
-          instanceId: "invalid",
-          definitionId: "test.validated",
-          settings: { value: "" },
-        },
-      ]),
-    ).rejects.toThrow();
-    expect(created).toBe(0);
-  });
-
-  it("rejects duplicate registrations, instances, and missing definitions", async () => {
-    const runtime = host();
-    const module = definition("test.one", {});
-    runtime.host.register(module);
-    expect(() => runtime.host.register(module)).toThrow(
-      "Duplicate module definition id",
-    );
-    await expect(
-      runtime.host.start([
-        {
-          instanceId: "same",
-          definitionId: "test.one",
-          settings: { label: "one" },
-        },
-        {
-          instanceId: "same",
-          definitionId: "test.one",
-          settings: { label: "two" },
-        },
-      ]),
-    ).rejects.toThrow("Duplicate module instance id");
-
-    const missing = host().host;
-    await expect(
-      missing.start([
-        { instanceId: "x", definitionId: "missing", settings: {} },
-      ]),
-    ).rejects.toBeInstanceOf(ModuleDefinitionNotFoundError);
-  });
-
-  it("fans broadcast events out and reports failures after all handlers run", async () => {
-    const runtime = host();
-    const calls: string[] = [];
-    runtime.host.register(
-      definition("test.good", {
-        broadcast: (value) => {
-          calls.push(value);
-        },
-      }),
-    );
-    runtime.host.register(
-      definition("test.bad", {
-        broadcast: () => {
-          calls.push("bad");
-          throw new Error("broken module");
-        },
-      }),
-    );
-    await runtime.host.start([
+    const host = new ModuleHost({ core });
+    host.register(module);
+    const activations = [
       {
-        instanceId: "good",
-        definitionId: "test.good",
-        settings: { label: "good" },
+        instanceId: "reply.one",
+        definitionId: module.manifest.definitionId,
+        settings: {},
       },
-      {
-        instanceId: "bad",
-        definitionId: "test.bad",
-        settings: { label: "bad" },
-      },
-    ]);
+    ];
 
-    await expect(
-      runtime.eventBus.emit(baseEvent(broadcastEvent, { value: "received" })),
-    ).rejects.toBeInstanceOf(AggregateError);
-    expect(calls).toEqual(expect.arrayContaining(["received", "bad"]));
+    const first = host.start(activations);
+    const second = host.start(activations);
+    expect(second).toBe(first);
+    release();
+    await Promise.all([first, second]);
+
+    expect(creates).toBe(1);
+    await host.stop();
   });
 
-  it("routes targeted events to one instance and rejects unknown targets", async () => {
-    const runtime = host();
-    const calls: string[] = [];
-    const module = definition("test.target", {
-      targeted: (value) => {
-        calls.push(value);
+  it("waits for startup and disposes created resources when stop races start", async () => {
+    const { core } = createCore();
+    await core.start();
+    let entered!: () => void;
+    const enteredCreate = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let disposed = 0;
+    const module = defineInformationModule({
+      manifest: {
+        apiVersion: 1,
+        definitionId: "acme.stop-during-start",
+        displayName: "Stop during start",
+        settingsSchema: z.object({}).strict(),
+        informationKinds: [inboundKind],
+      },
+      create: async () => {
+        entered();
+        await gate;
+        return {
+          subscriptions: [],
+          dispose: () => {
+            disposed += 1;
+          },
+        };
       },
     });
-    runtime.host.register(module);
-    runtime.host.register(definition("test.passive", { broadcast: () => {} }));
-    await runtime.host.start([
+    const host = new ModuleHost({ core });
+    host.register(module);
+    const starting = host.start([
       {
-        instanceId: "target.one",
-        definitionId: "test.target",
-        settings: { label: "one" },
-      },
-      {
-        instanceId: "target.two",
-        definitionId: "test.target",
-        settings: { label: "two" },
-      },
-      {
-        instanceId: "target.passive",
-        definitionId: "test.passive",
-        settings: { label: "passive" },
+        instanceId: "reply.one",
+        definitionId: module.manifest.definitionId,
+        settings: {},
       },
     ]);
+    await enteredCreate;
+    const stopping = host.stop();
+    expect(host.stop()).toBe(stopping);
+    release();
 
-    await runtime.eventBus.emit(
-      baseEvent(targetedEvent, {
-        targetInstanceId: "target.two",
-        value: "only-two",
-      }),
-    );
-    expect(calls).toEqual(["only-two"]);
+    await Promise.allSettled([starting, stopping]);
+    expect(disposed).toBe(1);
     await expect(
-      runtime.eventBus.emit(
-        baseEvent(targetedEvent, {
-          targetInstanceId: "missing",
-          value: "nope",
-        }),
-      ),
-    ).rejects.toBeInstanceOf(ModuleTargetNotFoundError);
-    await expect(
-      runtime.eventBus.emit(
-        baseEvent(targetedEvent, {
-          targetInstanceId: "target.passive",
-          value: "unsupported",
-        }),
-      ),
-    ).rejects.toBeInstanceOf(ModuleTargetNotFoundError);
-    expect(() => runtime.host.register(definition("test.late", {}))).toThrow(
-      "before start",
-    );
+      host.start([
+        {
+          instanceId: "reply.two",
+          definitionId: module.manifest.definitionId,
+          settings: {},
+        },
+      ]),
+    ).rejects.toThrow("ModuleHost cannot be restarted");
   });
 
-  it("emits derived events with trace, root identity, and module causation", async () => {
-    const runtime = host();
-    const derived: unknown[] = [];
-    runtime.eventBus.subscribe(
-      targetedEvent.type,
-      (event) => {
-        derived.push(event);
+  it("reports rollback disposal failures to stop when stop races startup", async () => {
+    const { core } = createCore();
+    await core.start();
+    let entered!: () => void;
+    const enteredCreate = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const rollbackFailure = new Error("async rollback failed");
+    const module = defineInformationModule({
+      manifest: {
+        apiVersion: 1,
+        definitionId: "acme.rollback-failure",
+        displayName: "Rollback failure",
+        settingsSchema: z.object({}).strict(),
+        informationKinds: [inboundKind],
       },
-      { mode: "observe" },
-    );
-    runtime.host.register(
-      defineModule({
-        manifest: {
-          apiVersion: 1,
-          definitionId: "test.emitter",
-          displayName: "Emitter",
-          settingsSchema: z.object({ target: z.string() }).strict(),
-        },
-        create: ({ settings }) => ({
-          subscriptions: [
-            onEvent(broadcastEvent, async (event, context) => {
-              await context.emit(targetedEvent, {
-                targetInstanceId: settings.target,
-                value: event.payload.value,
-              });
-            }),
-          ],
-        }),
-      }),
-    );
-    runtime.host.register(definition("test.receiver", { targeted: () => {} }));
-    await runtime.host.start([
-      {
-        instanceId: "emitter",
-        definitionId: "test.emitter",
-        settings: { target: "receiver" },
+      create: async () => {
+        entered();
+        await gate;
+        return {
+          subscriptions: [],
+          dispose: async () => Promise.reject(rollbackFailure),
+        };
       },
+    });
+    const host = new ModuleHost({ core });
+    host.register(module);
+    const starting = host.start([
       {
-        instanceId: "receiver",
-        definitionId: "test.receiver",
-        settings: { label: "receiver" },
+        instanceId: "reply.rollback",
+        definitionId: module.manifest.definitionId,
+        settings: {},
       },
     ]);
+    await enteredCreate;
+    const stopping = host.stop();
+    release();
 
-    await runtime.eventBus.emit(
-      baseEvent(broadcastEvent, { value: "derived" }),
+    const [startResult, stopResult] = await Promise.allSettled([
+      starting,
+      stopping,
+    ]);
+    expect(startResult).toMatchObject({ status: "rejected" });
+    expect(stopResult).toMatchObject({
+      status: "rejected",
+      reason: expect.objectContaining({
+        name: "AggregateError",
+        message: "Information module startup rollback failed",
+        errors: [rollbackFailure],
+      }),
+    });
+  });
+
+  it("attempts every module dispose when synchronous and asynchronous failures coexist", async () => {
+    const { core } = createCore();
+    await core.start();
+    const attempts: string[] = [];
+    const synchronousFailure = new Error("sync dispose failed");
+    const asynchronousFailure = new Error("async dispose failed");
+    const module = defineInformationModule({
+      manifest: {
+        apiVersion: 1,
+        definitionId: "acme.dispose-all",
+        displayName: "Dispose all",
+        settingsSchema: z.object({}).strict(),
+        informationKinds: [inboundKind],
+      },
+      create: ({ instanceId }) => ({
+        subscriptions: [],
+        dispose: () => {
+          attempts.push(instanceId);
+          if (instanceId === "dispose.sync") throw synchronousFailure;
+          if (instanceId === "dispose.async") {
+            return Promise.reject(asynchronousFailure);
+          }
+        },
+      }),
+    });
+    const host = new ModuleHost({ core });
+    host.register(module);
+    await host.start(
+      ["dispose.sync", "dispose.async", "dispose.success"].map(
+        (instanceId) => ({
+          instanceId,
+          definitionId: module.manifest.definitionId,
+          settings: {},
+        }),
+      ),
     );
-    expect(derived).toContainEqual(
+
+    await expect(host.stop()).rejects.toMatchObject({
+      name: "AggregateError",
+      message: "One or more information modules failed to stop",
+      errors: [synchronousFailure, asynchronousFailure],
+    });
+    expect(attempts).toEqual([
+      "dispose.sync",
+      "dispose.async",
+      "dispose.success",
+    ]);
+  });
+
+  it("rejects an unsafe instance source and disposes resources created earlier in the startup", async () => {
+    const { core } = createCore();
+    await core.start();
+    let creates = 0;
+    let disposed = 0;
+    const module = defineInformationModule({
+      manifest: {
+        apiVersion: 1,
+        definitionId: "acme.instance-source",
+        displayName: "Instance source",
+        settingsSchema: z.object({}).strict(),
+        informationKinds: [inboundKind],
+      },
+      create: () => {
+        creates += 1;
+        return {
+          subscriptions: [],
+          dispose: () => {
+            disposed += 1;
+          },
+        };
+      },
+    });
+    const host = new ModuleHost({ core });
+    host.register(module);
+
+    await expect(
+      host.start([
+        {
+          instanceId: "reply.one",
+          definitionId: module.manifest.definitionId,
+          settings: {},
+        },
+        {
+          instanceId: "Reply.One",
+          definitionId: module.manifest.definitionId,
+          settings: {},
+        },
+      ]),
+    ).rejects.toThrow("Information module instance id must form a safe source");
+    expect(creates).toBe(1);
+    expect(disposed).toBe(1);
+  });
+
+  it("registers a derived atom with module identity and causal references", async () => {
+    const { core, store } = createCore();
+    await core.start();
+    const context = await appendContext(core);
+    const derived: DeepReadonly<InformationAtom>[] = [];
+    const module = defineInformationModule({
+      manifest: {
+        apiVersion: 1,
+        definitionId: "acme.echo",
+        displayName: "Echo",
+        settingsSchema: z.object({}).strict(),
+        informationKinds: [inboundKind, outputKind],
+      },
+      create: () => ({
+        subscriptions: [
+          onInformation(inboundKind, async (atom, handlerContext) => {
+            derived.push(
+              await handlerContext.register(outputKind, {
+                payload: { text: atom.payload.text },
+              }),
+            );
+          }),
+        ],
+      }),
+    });
+    const host = await startHost(module, core);
+    const inbound = await core.register(
+      inboundKind,
+      registration({ text: "moon" }, context),
+    );
+
+    expect(derived[0]?.source).toBe("module:echo.default");
+    expect(derived[0]?.references).toContainEqual({
+      relation: "core:caused-by",
+      informationId: inbound.informationId,
+    });
+    expect(
+      derived[0]?.references.filter(
+        (reference) => reference.relation === "core:context",
+      ),
+    ).toEqual([
+      { relation: "core:context", informationId: context.informationId },
+    ]);
+    expect(await store.get(derived[0]!.informationId)).toBeDefined();
+    await host.stop();
+  });
+
+  it("rejects each caller-supplied reserved reference", async () => {
+    const { core } = createCore();
+    await core.start();
+    const context = await appendContext(core);
+    const rejections: unknown[] = [];
+    const module = defineInformationModule({
+      manifest: {
+        apiVersion: 1,
+        definitionId: "acme.reserved",
+        displayName: "Reserved",
+        settingsSchema: z.object({}).strict(),
+        informationKinds: [inboundKind, outputKind],
+      },
+      create: () => ({
+        subscriptions: [
+          onInformation(inboundKind, async (_atom, handlerContext) => {
+            for (const relation of [
+              "core:caused-by",
+              "core:context",
+            ] as const) {
+              try {
+                await handlerContext.register(outputKind, {
+                  payload: { text: "blocked" },
+                  references: [
+                    { relation, informationId: context.informationId },
+                  ],
+                });
+              } catch (error) {
+                rejections.push(error);
+              }
+            }
+          }),
+        ],
+      }),
+    });
+    const host = await startHost(module, core);
+
+    await core.register(inboundKind, registration({ text: "moon" }, context));
+    expect(rejections).toHaveLength(2);
+    expect(rejections).toEqual([
       expect.objectContaining({
-        source: "module:emitter",
-        traceId: "trace-1",
-        payload: { targetInstanceId: "receiver", value: "derived" },
-        metadata: expect.objectContaining({
-          causationEventId: "event-1",
-          rootEventId: "event-1",
-          moduleDefinitionId: "test.emitter",
-          moduleInstanceId: "emitter",
-        }),
+        message: "Information module cannot override core causal references",
       }),
-    );
+      expect.objectContaining({
+        message: "Information module cannot override core causal references",
+      }),
+    ]);
+    await host.stop();
   });
 
-  it("rejects module attempts to overwrite provenance metadata", async () => {
-    const runtime = host();
-    runtime.host.register(
-      defineModule({
-        manifest: {
-          apiVersion: 1,
-          definitionId: "test.reserved",
-          displayName: "Reserved",
-          settingsSchema: z.object({}).strict(),
-        },
-        create: () => ({
-          subscriptions: [
-            onEvent(broadcastEvent, async (_event, context) => {
-              await context.emit(
-                targetedEvent,
-                { targetInstanceId: "receiver", value: "x" },
-                { rootEventId: "forged" },
-              );
-            }),
-          ],
-        }),
-      }),
-    );
-    runtime.host.register(
-      definition("test.receiver.reserved", { targeted: () => {} }),
-    );
-    await runtime.host.start([
-      { instanceId: "reserved", definitionId: "test.reserved", settings: {} },
-      {
-        instanceId: "receiver",
-        definitionId: "test.receiver.reserved",
-        settings: { label: "receiver" },
+  it("rejects a structural subscription with a different manifest definition", async () => {
+    const { core } = createCore();
+    await core.start();
+    const module = defineInformationModule({
+      manifest: {
+        apiVersion: 1,
+        definitionId: "acme.mismatch",
+        displayName: "Mismatch",
+        settingsSchema: z.object({}).strict(),
+        informationKinds: [inboundKind, outputKind],
       },
-    ]);
+      create: () => ({
+        subscriptions: [
+          {
+            kind: inboundKind.kind,
+            definition: outputKind,
+            handle: () => undefined,
+          } as unknown as InformationModuleSubscription,
+        ],
+      }),
+    });
+    const host = new ModuleHost({ core });
+    host.register(module);
 
     await expect(
-      runtime.eventBus.emit(baseEvent(broadcastEvent, { value: "x" })),
-    ).rejects.toBeInstanceOf(AggregateError);
+      host.start([
+        {
+          instanceId: "mismatch.default",
+          definitionId: module.manifest.definitionId,
+          settings: {},
+        },
+      ]),
+    ).rejects.toThrow(
+      `Information subscription definition mismatch: ${inboundKind.kind}`,
+    );
   });
 
-  it("rejects interceptor attempts to rewrite derived-event provenance", async () => {
-    const runtime = host();
-    runtime.eventBus.subscribe(
-      targetedEvent.type,
-      (event) => ({
-        continue: true,
-        event: {
-          ...event,
-          source: "forged-source",
-          metadata: { ...event.metadata, rootEventId: "forged-root" },
+  it("disposes an instance when subscription validation fails after creation", async () => {
+    const { core } = createCore();
+    await core.start();
+    let disposed = 0;
+    const module = defineInformationModule({
+      manifest: {
+        apiVersion: 1,
+        definitionId: "acme.dispose-on-invalid-subscription",
+        displayName: "Dispose invalid instance",
+        settingsSchema: z.object({}).strict(),
+        informationKinds: [inboundKind],
+      },
+      create: () => ({
+        subscriptions: [
+          {
+            kind: inboundKind.kind,
+            definition: outputKind,
+            handle: () => undefined,
+          } as unknown as InformationModuleSubscription,
+        ],
+        dispose: () => {
+          disposed += 1;
         },
       }),
-      { priority: 100, mode: "intercept" },
+    });
+    const host = new ModuleHost({ core });
+    host.register(module);
+
+    await expect(
+      host.start([
+        {
+          instanceId: "invalid.default",
+          definitionId: module.manifest.definitionId,
+          settings: {},
+        },
+      ]),
+    ).rejects.toThrow(
+      `Information subscription definition mismatch: ${inboundKind.kind}`,
     );
-    runtime.host.register(
-      defineModule({
+    expect(disposed).toBe(1);
+  });
+
+  it("rejects outputs absent from the module manifest", async () => {
+    const undeclaredKind = defineInformationKind({
+      kind: "acme.message.undeclared",
+      payloadSchema: z.object({ text: z.string() }).strict(),
+      references: {},
+      log: { enabled: false },
+    });
+    const { core } = createCore([undeclaredKind]);
+    await core.start();
+    const context = await appendContext(core);
+    let rejection: unknown;
+    const module = defineInformationModule({
+      manifest: {
+        apiVersion: 1,
+        definitionId: "acme.undeclared",
+        displayName: "Undeclared",
+        settingsSchema: z.object({}).strict(),
+        informationKinds: [inboundKind],
+      },
+      create: () => ({
+        subscriptions: [
+          onInformation(inboundKind, async (_atom, handlerContext) => {
+            try {
+              await handlerContext.register(undeclaredKind, {
+                payload: { text: "blocked" },
+              });
+            } catch (error) {
+              rejection = error;
+            }
+          }),
+        ],
+      }),
+    });
+    const host = await startHost(module, core);
+
+    await core.register(inboundKind, registration({ text: "moon" }, context));
+    expect(rejection).toBeInstanceOf(ModuleKindNotDeclaredError);
+    await host.stop();
+  });
+
+  it("passes a deeply frozen input atom to each handler", async () => {
+    const { core } = createCore();
+    await core.start();
+    const context = await appendContext(core);
+    let atom: DeepReadonly<InformationAtom> | undefined;
+    const module = defineInformationModule({
+      manifest: {
+        apiVersion: 1,
+        definitionId: "acme.frozen",
+        displayName: "Frozen",
+        settingsSchema: z.object({}).strict(),
+        informationKinds: [inboundKind],
+      },
+      create: () => ({
+        subscriptions: [
+          onInformation(inboundKind, (input) => {
+            atom = input;
+          }),
+        ],
+      }),
+    });
+    const host = await startHost(module, core);
+
+    await core.register(inboundKind, registration({ text: "moon" }, context));
+
+    expect(Object.isFrozen(atom)).toBe(true);
+    expect(Object.isFrozen(atom?.payload)).toBe(true);
+    expect(Object.isFrozen(atom?.references)).toBe(true);
+    expect(Object.isFrozen(atom?.references[0])).toBe(true);
+    await host.stop();
+  });
+
+  it("runs same-kind consumers independently and concurrently", async () => {
+    const { core } = createCore();
+    await core.start();
+    const entered: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const make = (id: string) =>
+      defineInformationModule({
         manifest: {
           apiVersion: 1,
-          definitionId: "test.protected-emitter",
-          displayName: "Protected emitter",
+          definitionId: id,
+          displayName: id,
           settingsSchema: z.object({}).strict(),
+          informationKinds: [inboundKind],
         },
         create: () => ({
           subscriptions: [
-            onEvent(broadcastEvent, async (_event, context) => {
-              await context.emit(targetedEvent, {
-                targetInstanceId: "receiver",
-                value: "x",
-              });
+            onInformation(inboundKind, async () => {
+              entered.push(id);
+              await gate;
             }),
           ],
         }),
-      }),
-    );
-    runtime.host.register(
-      definition("test.protected-receiver", { targeted: () => {} }),
-    );
-    await runtime.host.start([
+      });
+    const first = make("acme.first");
+    const second = make("acme.second");
+    const host = new ModuleHost({ core });
+    host.register(first);
+    host.register(second);
+    await host.start([
       {
-        instanceId: "protected-emitter",
-        definitionId: "test.protected-emitter",
+        instanceId: "first",
+        definitionId: first.manifest.definitionId,
         settings: {},
       },
       {
-        instanceId: "receiver",
-        definitionId: "test.protected-receiver",
-        settings: { label: "receiver" },
+        instanceId: "second",
+        definitionId: second.manifest.definitionId,
+        settings: {},
       },
     ]);
-
-    await expect(
-      runtime.eventBus.emit(baseEvent(broadcastEvent, { value: "x" })),
-    ).rejects.toBeInstanceOf(AggregateError);
+    const context = await appendContext(core);
+    const pending = core.register(
+      inboundKind,
+      registration({ text: "x" }, context),
+    );
+    await vi.waitFor(() => expect(entered).toHaveLength(2));
+    release();
+    await pending;
+    await host.stop();
   });
 
-  it("does not deduplicate requests emitted by multiple module instances", async () => {
-    const runtime = host();
-    const received: string[] = [];
-    runtime.host.register(
-      defineModule({
-        manifest: {
-          apiVersion: 1,
-          definitionId: "test.multi-emitter",
-          displayName: "Multi emitter",
-          settingsSchema: z.object({ target: z.string() }).strict(),
-        },
-        create: ({ instanceId, settings }) => ({
-          subscriptions: [
-            onEvent(broadcastEvent, async (_event, context) => {
-              await context.emit(targetedEvent, {
-                targetInstanceId: settings.target,
-                value: instanceId,
-              });
-            }),
-          ],
-        }),
+  it("records handler failures with module consumer identity", async () => {
+    const { core, store } = createCore();
+    await core.start();
+    const context = await appendContext(core);
+    const module = defineInformationModule({
+      manifest: {
+        apiVersion: 1,
+        definitionId: "acme.failure",
+        displayName: "Failure",
+        settingsSchema: z.object({}).strict(),
+        informationKinds: [inboundKind],
+      },
+      create: () => ({
+        subscriptions: [
+          onInformation(inboundKind, () => {
+            throw new Error("expected failure");
+          }),
+        ],
       }),
-    );
-    runtime.host.register(
-      definition("test.multi-receiver", {
-        targeted: (value) => {
-          received.push(value);
-        },
-      }),
-    );
-    await runtime.host.start([
-      {
-        instanceId: "filter.one",
-        definitionId: "test.multi-emitter",
-        settings: { target: "reply.default" },
-      },
-      {
-        instanceId: "filter.two",
-        definitionId: "test.multi-emitter",
-        settings: { target: "reply.default" },
-      },
-      {
-        instanceId: "reply.default",
-        definitionId: "test.multi-receiver",
-        settings: { label: "reply" },
-      },
-    ]);
+    });
+    const host = await startHost(module, core, "failure.default");
 
-    await runtime.eventBus.emit(
-      baseEvent(broadcastEvent, { value: "message" }),
-    );
+    await core.register(inboundKind, registration({ text: "moon" }, context));
 
-    expect(received.sort()).toEqual(["filter.one", "filter.two"]);
-  });
-
-  it("unsubscribes all instances on stop", async () => {
-    const runtime = host();
-    let calls = 0;
-    let disposals = 0;
-    runtime.host.register(
-      defineModule({
-        manifest: {
-          apiVersion: 1,
-          definitionId: "test.stop",
-          displayName: "Stop",
-          settingsSchema: z.object({ label: z.string() }).strict(),
-        },
-        create: () => ({
-          subscriptions: [
-            onEvent(broadcastEvent, () => {
-              calls += 1;
-            }),
-          ],
-          dispose: () => {
-            disposals += 1;
-          },
-        }),
-      }),
+    const failure = [...store.atoms.values()].find(
+      (atom) => atom.kind === "consumer.failed",
     );
-    await runtime.host.start([
-      {
-        instanceId: "stop",
-        definitionId: "test.stop",
-        settings: { label: "stop" },
+    expect(failure?.payload).toMatchObject({
+      consumer: {
+        consumerId: "module:failure.default",
+        definitionId: "acme.failure",
+        instanceId: "failure.default",
       },
-    ]);
-    await runtime.host.stop();
-    await runtime.eventBus.emit(
-      baseEvent(broadcastEvent, { value: "ignored" }),
-    );
-    expect(calls).toBe(0);
-    expect(disposals).toBe(1);
+    });
+    await host.stop();
   });
 });

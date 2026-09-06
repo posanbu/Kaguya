@@ -20,7 +20,6 @@
  * 重启标记只存在于当前进程实例内，重新创建门面后会重新按磁盘状态计算 readiness。
  */
 import {
-  ConfigError,
   FileUserConfigManager,
   inspectUserConfigProfile,
   withRegistryReadiness,
@@ -29,6 +28,12 @@ import {
   type UserConfigProfile,
   type UserConfigProfileMetadata,
 } from "@kaguya/config";
+
+import {
+  loadNapCatSettings,
+  saveNapCatSettings,
+  type NapCatSettings,
+} from "./napcat-config.js";
 
 export type ConfigurationSetupStatus =
   | ExistingConfigurationReadiness
@@ -57,15 +62,8 @@ export interface ConfigurationManagement {
   ): Promise<ProfileMutationResult>;
   selectProfile(profileId: string): Promise<ProfileMutationResult>;
   deleteProfile(profileId: string): Promise<ProfileMutationResult>;
-}
-
-export interface InitialConfigurationInput {
-  readonly profileName: string;
-  readonly baseUrl: string;
-  readonly apiKey: string;
-  readonly lightModel: string;
-  readonly heavyModel: string;
-  readonly acknowledgeOptional: boolean;
+  getNapCatSettings?: () => Promise<NapCatSettings>;
+  saveNapCatSettings?: (settings: NapCatSettings) => Promise<NapCatSettings>;
 }
 
 export async function createConfigurationManagement(
@@ -128,101 +126,13 @@ export async function createConfigurationManagement(
       await manager.deleteProfile(profileId);
       return { profile, restartRequired };
     },
-  };
-}
-
-const initialProviderId = "default-provider";
-
-export async function initializeConfigurationProfile(
-  management: ConfigurationManagement,
-  input: InitialConfigurationInput,
-): Promise<ProfileMutationResult> {
-  if (input.lightModel.trim() === input.heavyModel.trim()) {
-    throw new ConfigError(
-      "CONFIG_INVALID_INPUT",
-      "Light and heavy models must be different",
-    );
-  }
-  if (!input.acknowledgeOptional) {
-    throw new ConfigError(
-      "CONFIG_REVIEW_REQUIRED",
-      "Optional configuration must be reviewed",
-    );
-  }
-
-  const status = await management.inspect();
-  if (status.status === "ready" || status.status === "restart_required") {
-    throw new ConfigurationSetupNotRequiredError();
-  }
-
-  return management.replaceProfile(
-    status.selectedProfileId,
-    initialProfileReplacement(
-      input.profileName,
-      input.lightModel,
-      input.heavyModel,
-      input.baseUrl,
-      input.apiKey,
-    ),
-  );
-}
-
-export class ConfigurationSetupNotRequiredError extends ConfigError {
-  constructor() {
-    super("CONFIG_INVALID_INPUT", "Configuration setup is not required");
-  }
-}
-
-function initialProfileReplacement(
-  profileName: string,
-  lightModel: string,
-  heavyModel: string,
-  baseUrl: string,
-  apiKey: string,
-): ReplaceUserConfigProfileInput {
-  return {
-    name: profileName,
-    acknowledgedWarnings: ["platforms-empty", "plugins-empty"],
-    ai: {
-      defaultProviderId: initialProviderId,
-      modelTiers: {
-        light: {
-          providerId: initialProviderId,
-          modelId: lightModel,
-        },
-        heavy: {
-          providerId: initialProviderId,
-          modelId: heavyModel,
-        },
-      },
-      providers: [
-        {
-          id: initialProviderId,
-          type: "openai-compatible",
-          enabled: true,
-          baseUrl,
-          apiKey,
-          models: [lightModel, heavyModel],
-          settings: {},
-        },
-      ],
+    getNapCatSettings() {
+      return loadNapCatSettings(rootDir);
     },
-    platforms: [],
-    plugins: [],
+    async saveNapCatSettings(settings) {
+      const saved = await saveNapCatSettings(rootDir, settings);
+      restartRequired = true;
+      return saved;
+    },
   };
-}
-
-export function isConfigurationInputError(error: unknown): boolean {
-  return (
-    error instanceof ConfigError &&
-    (error.code === "CONFIG_INVALID_INPUT" ||
-      error.code === "CONFIG_INCOMPLETE" ||
-      error.code === "CONFIG_REVIEW_REQUIRED")
-  );
-}
-
-export function isConfigurationSetupNotRequiredError(
-  error: unknown,
-): error is ConfigurationSetupNotRequiredError {
-  return error instanceof ConfigurationSetupNotRequiredError;
 }

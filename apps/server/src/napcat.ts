@@ -1,15 +1,28 @@
+/**
+ * 功能概述：在 Server 侧组合 NapCat WebSocket JSON transport、OneBot adapter、
+ * action client 与可重连 supervisor，入站端只接收窄 `InformationIngress`，出站只实现
+ * `PlatformOutboundTransport.sendMessage`。
+ * 主要职责：`WebSocketJsonTransport` 处理 token URL、JSON frame 与 close/error；
+ * `NapCatConnectionSupervisor` 创建、退役和重建整条连接，同时实现 Runtime 的出站 transport；
+ * `createNapCatSupervisor` 在正规化 frame 后先执行 Server 注入的 allowlist 谓词，再交给
+ * ingress，并为连接/提交失败记录安全上下文。
+ * 代码库关系：复用 `@kaguya/platform-adapters` 的 NapCat adapter/action client；
+ * `server.ts` 传入统一 ingress，并将返回的 supervisor 注册为 Runtime 出站 transport。
+ * 输入输出与副作用：会建立 WebSocket、写出 JSON、设置重连/超时计时器并在
+ * stop 时排空退役；日志不保留消息正文、access token 或 Core trace identity。
+ */
 import {
   NapCatActionClient,
   NapCatOneBotAdapter,
+  type InformationIngress,
   type JsonMessageTransport,
   type PlatformDeliveryReceipt,
+  type PlatformInboundMessage,
   type PlatformMessageTarget,
   type PlatformOutboundTransport,
-  type PlatformReplySender,
 } from "@kaguya/platform-adapters";
 import type { OutboundMessageContent } from "@kaguya/schema";
 import type { KaguyaLogger } from "@kaguya/logger";
-import type { KaguyaRuntime } from "@kaguya/runtime";
 
 import type { NapCatConfig } from "./config.js";
 
@@ -69,7 +82,7 @@ export interface NapCatManagedAdapter {
 
 export interface NapCatConnection {
   readonly transport: JsonMessageTransport;
-  readonly sender: PlatformReplySender | PlatformOutboundTransport;
+  readonly sender: PlatformOutboundTransport;
   readonly adapter: NapCatManagedAdapter;
 }
 
@@ -83,9 +96,7 @@ export interface NapCatConnectionSupervisorOptions {
   readonly onConnectionError?: (error: unknown) => void;
 }
 
-export class NapCatConnectionSupervisor
-  implements PlatformReplySender, PlatformOutboundTransport
-{
+export class NapCatConnectionSupervisor implements PlatformOutboundTransport {
   private connection: NapCatConnection | undefined;
   private reconnectTimer: NodeJS.Timeout | undefined;
   private readonly retirements = new Map<NapCatConnection, Promise<void>>();
@@ -115,14 +126,6 @@ export class NapCatConnectionSupervisor
     await Promise.allSettled([...this.retirements.values()]);
   }
 
-  async sendTextReply(
-    target: PlatformMessageTarget,
-    text: string,
-    metadata?: Record<string, unknown>,
-  ): Promise<PlatformDeliveryReceipt> {
-    return this.sendMessage(target, { kind: "text", text }, metadata);
-  }
-
   async sendMessage(
     target: PlatformMessageTarget,
     message: OutboundMessageContent,
@@ -138,10 +141,7 @@ export class NapCatConnectionSupervisor
         error: "NapCat connection unavailable",
       };
     }
-    if ("sendMessage" in sender) {
-      return sender.sendMessage(target, message, metadata);
-    }
-    return sender.sendTextReply(target, message.text, metadata);
+    return sender.sendMessage(target, message, metadata);
   }
 
   private async connect(): Promise<void> {
@@ -222,8 +222,9 @@ export class NapCatConnectionSupervisor
 
 export function createNapCatSupervisor(options: {
   readonly config: NapCatConfig;
-  readonly runtime: KaguyaRuntime;
+  readonly ingress: InformationIngress;
   readonly logger: KaguyaLogger;
+  readonly allowsInbound?: (message: PlatformInboundMessage) => boolean;
 }): NapCatConnectionSupervisor {
   let supervisor: NapCatConnectionSupervisor;
   supervisor = new NapCatConnectionSupervisor({
@@ -247,18 +248,15 @@ export function createNapCatSupervisor(options: {
           : { expectedSelfId: options.config.selfId }),
         transport,
         now: () => new Date(),
-        onInboundMessage: (message) =>
-          options.runtime
-            .dispatch({
-              kind: "platform",
-              message,
-            })
-            .then(() => undefined),
+        ingress: options.ingress,
+        ...(options.allowsInbound === undefined
+          ? {}
+          : { allowsInbound: options.allowsInbound }),
         onInboundError: (error, context) => {
           options.logger.error(
             {
               event: "napcat.inbound.failed",
-              traceId: context.traceId,
+              platformMessageId: context.platformMessageId,
               adapterId: context.adapterId,
               err: error,
             },

@@ -1,4 +1,13 @@
-import type { EventEnvelope } from "@kaguya/schema";
+/**
+ * 功能概述：验证 scheduler 的手动、间隔与 Cron trigger 在泛型 payload 上的调度、取消
+ * 和错误隔离语义，不依赖任何业务事件身份。
+ * 主要职责：ManualTrigger 用例确认原样传递 payload；Interval/Cron 用例覆盖计时边界、
+ * fake timer 触发、取消后不创建 payload，以及 handler/calculator 错误上报。
+ * 代码库关系：直接测试 `index.ts` 的通用 Trigger API；Runtime 可用信息输入或普通值组合它，
+ * scheduler 本身不导入 schema、engine 或数据库。
+ * 输入输出与副作用：使用 Vitest fake timers 或注入 timer doubles，不等待真实长时钟；
+ * 每个用例结束后恢复真实计时器。
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CronTrigger, IntervalTrigger, ManualTrigger } from "./index.js";
@@ -8,29 +17,18 @@ afterEach(() => {
 });
 
 describe("ManualTrigger", () => {
-  it("fires immediately without replacing trace identity", async () => {
-    const trigger = new ManualTrigger<
-      EventEnvelope<"heartbeat.tick", Record<string, never>>
-    >();
-    const event: EventEnvelope<"heartbeat.tick", Record<string, never>> = {
-      id: "heartbeat-1",
-      type: "heartbeat.tick",
-      source: "test",
-      occurredAt: "2026-07-23T00:00:00.000Z",
-      traceId: "trace-heartbeat",
-      payload: {},
-      metadata: {},
-    };
+  it("fires immediately without replacing the payload", async () => {
+    const trigger = new ManualTrigger<{ readonly tick: number }>();
+    const payload = { tick: 1 } as const;
     const handler = vi.fn(
-      async (_event: EventEnvelope<"heartbeat.tick", Record<string, never>>) =>
-        undefined,
+      async (_payload: { readonly tick: number }) => undefined,
     );
     trigger.start(handler);
 
-    const completion = trigger.fire(event);
+    const completion = trigger.fire(payload);
 
-    expect(handler).toHaveBeenCalledWith(event);
-    expect(handler.mock.calls[0]?.[0]).toBe(event);
+    expect(handler).toHaveBeenCalledWith(payload);
+    expect(handler.mock.calls[0]?.[0]).toBe(payload);
     await completion;
   });
 });

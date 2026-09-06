@@ -1,15 +1,37 @@
 /**
- * 架构说明：本测试覆盖信息 kind 的定义校验、引用规则快照与日志策略冻结，
- * 确保 SDK 入口在 Core 启动前提供一致的可注册契约。
+ * 架构说明：本测试覆盖信息 kind 的定义校验、引用规则快照、日志策略冻结，以及 pipe
+ * schema 中共享子 schema 的非递归复用，确保 SDK 在 Core 启动前提供一致的可注册契约。
  * 代码库关系：这些测试直接消费 `packages/sdk/src/index.ts` 的公开导出，
  * 以避免新的 kind contract 只存在于内部实现而未进入公共 API。
  */
 import { z } from "@kaguya/schema";
 import { describe, expect, it } from "vitest";
 
-import { defineInformationKind } from "./index.js";
+import {
+  defineInformationKind,
+  type InformationRegistrationInput,
+} from "./index.js";
 
 describe("defineInformationKind", () => {
+  it("exposes registration input without a duplicate kind or information id", () => {
+    const input: InformationRegistrationInput<
+      "acme.message.created",
+      { text: string }
+    > = {
+      occurredAt: "2026-09-04T00:00:00.000Z",
+      source: "adapter:test",
+      payload: { text: "moon" },
+      references: [],
+    };
+
+    expect(input).toEqual({
+      occurredAt: "2026-09-04T00:00:00.000Z",
+      source: "adapter:test",
+      payload: { text: "moon" },
+      references: [],
+    });
+  });
+
   it("requires a schema, declared references, and explicit logging", () => {
     const definition = defineInformationKind({
       kind: "acme.message.created",
@@ -29,6 +51,28 @@ describe("defineInformationKind", () => {
     expect(definition.references["acme:parent"]?.targetKinds).toEqual([
       "acme.message.parent",
     ]);
+  });
+
+  it("accepts a shared schema reused by separate fields inside a pipe", () => {
+    const sharedSource = z.enum(["template", "history"]);
+    const input = z
+      .object({ first: sharedSource, second: sharedSource })
+      .strict();
+    const output = z
+      .object({
+        first: z.enum(["template", "history"]),
+        second: z.enum(["template", "history"]),
+      })
+      .strict();
+
+    expect(() =>
+      defineInformationKind({
+        kind: "acme.prompt.created",
+        payloadSchema: z.object({ value: input.pipe(output) }).strict(),
+        references: {},
+        log: { enabled: false },
+      }),
+    ).not.toThrow();
   });
 
   it("rejects malformed relation names", () => {
@@ -116,9 +160,11 @@ describe("defineInformationKind", () => {
         payloadSchema: z
           .object({
             items: z.array(
-              z.object({
-                when: z.date(),
-              }).strict(),
+              z
+                .object({
+                  when: z.date(),
+                })
+                .strict(),
             ),
           })
           .strict() as never,

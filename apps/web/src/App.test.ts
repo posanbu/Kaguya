@@ -16,7 +16,18 @@ import {
   clearLoadedProfileStateSnapshot,
   deriveConfigurationView,
   readRegistryMetadata,
+  readGatewayToken,
 } from "./App.js";
+
+describe("readGatewayToken", () => {
+  it("reads only the gateway token URL fragment", () => {
+    expect(readGatewayToken("#gatewayToken=current-secret")).toBe(
+      "current-secret",
+    );
+    expect(readGatewayToken("#bootstrapToken=old-secret")).toBe("");
+    expect(readGatewayToken("#gatewayToken=%ZZ")).toBe("");
+  });
+});
 
 describe("deriveConfigurationView", () => {
   it("routes setup_required into profile management instead of chat", () => {
@@ -26,7 +37,6 @@ describe("deriveConfigurationView", () => {
           status: "setup_required",
           selectedProfileId: "default",
           profiles: [],
-          gatewayToken: "token",
         },
         "checking",
         false,
@@ -67,7 +77,6 @@ describe("readRegistryMetadata", () => {
             updatedAt: "2026-08-30T00:00:00.000Z",
           },
         ],
-        gatewayToken: "token",
         issues: [],
         warnings: [],
       }),

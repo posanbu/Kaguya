@@ -1,3 +1,14 @@
+/**
+ * 功能概述：在 OneBot wire event/action 与 Kaguya 平台消息契约之间做双向转换，
+ * adapter 层只保留外部身份和内容，不产生 Core identity。
+ * 主要职责：`normalizeOneBotMessageEvent` 校验 message event、过滤机器人自身、
+ * 正规化 text/mention/sender/target/occurredAt 并保留 `platformMessageId`；
+ * `buildOneBotSendAction` 将文本或 reply 内容编码为私聊/群聊 action。
+ * 代码库关系：NapCat adapter 复用入站正规化器与出站 action builder；
+ * 输出 `PlatformInboundMessage` 随后由 `InformationIngress` 提交给 Runtime。
+ * 输入输出与副作用：转换函数无 I/O；非法/空白/不支持事件返回 `undefined`，
+ * 缺失外部时间时才调用注入的 `now`，raw 仅留在边界值中。
+ */
 import { z, type OutboundMessageContent } from "@kaguya/schema";
 
 import type {
@@ -84,7 +95,6 @@ export function normalizeOneBotMessageEvent(
     platform: "qq",
     adapterId: options.adapterId,
     ...(selfId === undefined ? {} : { selfId }),
-    traceId: `napcat:${selfId ?? "unknown"}:${platformMessageId}`,
     platformMessageId,
     occurredAt:
       event.time === undefined

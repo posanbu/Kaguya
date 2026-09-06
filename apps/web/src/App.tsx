@@ -1,19 +1,19 @@
 /**
- * 功能概述：本文件承载 WebUI 的顶层状态机，在匿名 setup 状态、Profile 管理、
+ * 功能概述：本文件承载 WebUI 的顶层状态机，在访问链接认证、Profile 管理、
  * 待重启提示与消息聊天之间做显式切换，落实“全局 selected Profile 唯一生效、
  * 切换后必须重启 Runtime”的产品契约。
- * 主要职责：`App` 负责首次读取 `/api/v1/setup`（并从中获取服务端分发的网关
- * token）、根据 selected Profile 的 readiness 决定当前视图，并在 ready 状态下
+ * 主要职责：`App` 负责从当前 URL fragment 获取网关 token，再读取 `/api/v1/setup`，
+ * 根据 selected Profile 的 readiness 决定当前视图，并在 ready 状态下
  * 提供聊天入口与 Settings
  * 按钮；`ProfileManagementScreen` 负责展示 Profile 元数据列表、按 ID 加载完整
  * Profile、独立执行 create/replace/select/delete 动作，并在切换 Profile 或离开
  * 管理页时清空包含 secret 的已加载正文与编辑字段；其余小组件负责重启提示、
  * readiness 呈现与消息投递反馈。
- * 代码库关系：本文件消费 `api.ts` 的匿名状态、消息接口与 Profile Registry 管理
+ * 代码库关系：本文件消费 `api.ts` 的受保护状态、消息接口与 Profile Registry 管理
  * API，以及 `profile-editor.ts` 的纯函数合并逻辑；样式由同目录 `styles.css`
  * 提供，服务端实现位于 `apps/server/src/app.ts` 与 `setup.ts`。
- * 输入输出与副作用：网关 token 由服务端在启动时分发、页面加载时自动获取，
- * 页面不持久化；所有 Profile 修改都通过 HTTP 请求落到服务端，不在浏览器端
+ * 输入输出与副作用：gateway token 仅从 fragment 读取并保留在页面内存中；所有
+ * Profile 修改都通过 HTTP 请求落到服务端，不在浏览器端
  * 推断默认 Profile；当 selected
  * Profile 已 ready 且本次 replace/select 改变冻结运行配置时，本文件只切到
  * restart 视图提示用户重启，不做热切换。Profile 管理子组件会记忆同一
@@ -26,11 +26,14 @@ import {
   Eye,
   EyeOff,
   LoaderCircle,
+  LockKeyhole,
+  Moon,
   Plus,
   RefreshCw,
   Save,
   SendHorizontal,
   Settings2,
+  Sun,
   Trash2,
 } from "lucide-react";
 import {
@@ -48,12 +51,15 @@ import {
   deleteProfile,
   GatewayConfig,
   GatewayRequestError,
+  GATEWAY_UNAUTHORIZED_EVENT,
   getConfigurationStatus,
+  getNapCatStatus,
   getProfile,
   listProfiles,
   MAX_MESSAGE_LENGTH,
   ProfileMetadata,
   replaceProfile,
+  saveNapCatSettings,
   selectProfile,
   sendMessage,
   type ConfigurationIssue,
@@ -70,7 +76,8 @@ import {
 
 type DeliveryState = "sending" | "accepted" | "failed";
 type HealthState = "idle" | "checking" | "online" | "offline";
-type ConfigurationView = "checking" | "profiles" | "restart" | "chat" | "error";
+type ConfigurationView =
+  "locked" | "checking" | "profiles" | "napcat" | "restart" | "chat" | "error";
 
 interface ChatMessage {
   readonly id: string;
@@ -90,9 +97,11 @@ interface ClearedLoadedProfileStateSnapshot {
 }
 
 export function App() {
-  const [token, setToken] = useState("");
-  const [configurationView, setConfigurationView] =
-    useState<ConfigurationView>("checking");
+  const [token] = useState(() => readGatewayToken());
+  const [configurationView, setConfigurationView] = useState<ConfigurationView>(
+    () => (token === "" ? "locked" : "checking"),
+  );
+  const [invalidAccessLink, setInvalidAccessLink] = useState(false);
   const [configurationStatus, setConfigurationStatus] =
     useState<ConfigurationStatus>();
   const [configurationError, setConfigurationError] = useState<string>();
@@ -110,7 +119,7 @@ export function App() {
   const loadConfigurationStatus = async (options?: {
     readonly keepProfilesOpen?: boolean;
   }) => {
-    const status = await getConfigurationStatus();
+    const status = await getConfigurationStatus({ token });
     setConfigurationStatus(status);
     setConfigurationView((current) =>
       deriveConfigurationView(
@@ -123,13 +132,15 @@ export function App() {
   };
 
   useEffect(() => {
+    if (token === "") {
+      return;
+    }
     let active = true;
-    void getConfigurationStatus().then(
+    void getConfigurationStatus({ token }).then(
       (status) => {
         if (!active) {
           return;
         }
-        setToken(status.gatewayToken);
         setConfigurationStatus(status);
         setConfigurationView(
           deriveConfigurationView(status, "checking", false),
@@ -139,13 +150,27 @@ export function App() {
         if (!active) {
           return;
         }
-        setConfigurationError(errorMessage(error));
-        setConfigurationView("error");
+        if (isUnauthorized(error)) {
+          setInvalidAccessLink(true);
+          setConfigurationView("locked");
+        } else {
+          setConfigurationError(errorMessage(error));
+          setConfigurationView("error");
+        }
       },
     );
     return () => {
       active = false;
     };
+  }, [token]);
+
+  useEffect(() => {
+    const lock = () => {
+      setInvalidAccessLink(true);
+      setConfigurationView("locked");
+    };
+    window.addEventListener(GATEWAY_UNAUTHORIZED_EVENT, lock);
+    return () => window.removeEventListener(GATEWAY_UNAUTHORIZED_EVENT, lock);
   }, []);
 
   const checkConnection = async () => {
@@ -215,6 +240,10 @@ export function App() {
     }
   };
 
+  if (configurationView === "locked") {
+    return <AccessLinkRequired invalid={invalidAccessLink} />;
+  }
+
   if (configurationView === "checking") {
     return <ConfigurationLoading />;
   }
@@ -238,6 +267,17 @@ export function App() {
         onRestartRequired={() => {
           setConfigurationView("restart");
         }}
+        onOpenNapCat={() => setConfigurationView("napcat")}
+      />
+    );
+  }
+
+  if (configurationView === "napcat") {
+    return (
+      <NapCatManagementScreen
+        token={token}
+        onClose={() => setConfigurationView("chat")}
+        onRestartRequired={() => setConfigurationView("restart")}
       />
     );
   }
@@ -249,13 +289,9 @@ export function App() {
   return (
     <div className="app-shell">
       <header className="topbar">
-        <div className="brand-mark" aria-hidden="true">
-          K
-        </div>
-        <div>
-          <h1>Kaguya</h1>
-          <p>统一消息服务</p>
-        </div>
+        <BrandIdentity subtitle="统一消息服务" />
+        <div className="topbar-spacer" />
+        <ThemeToggle />
       </header>
 
       <main className="workspace">
@@ -374,6 +410,7 @@ function ProfileManagementScreen({
   onReloadStatus,
   onClose,
   onRestartRequired,
+  onOpenNapCat,
 }: {
   readonly token: string;
   readonly initialStatus: ConfigurationStatus | undefined;
@@ -383,6 +420,7 @@ function ProfileManagementScreen({
   }) => Promise<ConfigurationStatus>;
   readonly onClose: () => void;
   readonly onRestartRequired: () => void;
+  readonly onOpenNapCat: () => void;
 }) {
   const [registry, setRegistry] = useState<ProfileRegistryMetadata | undefined>(
     () => readRegistryMetadata(initialStatus),
@@ -615,13 +653,9 @@ function ProfileManagementScreen({
   return (
     <div className="setup-shell">
       <header className="topbar">
-        <div className="brand-mark" aria-hidden="true">
-          K
-        </div>
-        <div>
-          <h1>Kaguya</h1>
-          <p>配置引导</p>
-        </div>
+        <BrandIdentity subtitle="配置引导" />
+        <div className="topbar-spacer" />
+        <ThemeToggle />
       </header>
 
       <main className="setup-main profile-main">
@@ -732,6 +766,14 @@ function ProfileManagementScreen({
                 </h2>
               </div>
               <div className="editor-actions">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={onOpenNapCat}
+                >
+                  <Settings2 size={16} />
+                  <span>NapCat 配置</span>
+                </button>
                 <button
                   type="button"
                   className="secondary-button"
@@ -886,24 +928,6 @@ function ProfileManagementScreen({
                     />
                   </label>
                 </div>
-                <label className="setup-check">
-                  <input
-                    type="checkbox"
-                    checked={editorFields.acknowledgeOptional}
-                    onChange={(event) =>
-                      setEditorFields((current) =>
-                        current === undefined
-                          ? current
-                          : {
-                              ...current,
-                              acknowledgeOptional: event.target.checked,
-                            },
-                      )
-                    }
-                  />
-                  <span>我确认当前尚未配置平台与插件，稍后再配置也可以。</span>
-                </label>
-
                 <button
                   className="setup-button"
                   type="submit"
@@ -920,6 +944,182 @@ function ProfileManagementScreen({
             ) : null}
           </section>
         </div>
+      </main>
+    </div>
+  );
+}
+
+function NapCatManagementScreen({
+  token,
+  onClose,
+  onRestartRequired,
+}: {
+  readonly token: string;
+  readonly onClose: () => void;
+  readonly onRestartRequired: () => void;
+}) {
+  const config = useMemo(() => ({ token }), [token]);
+  const [enabled, setEnabled] = useState(false);
+  const [wsUrl, setWsUrl] = useState("");
+  const [accessToken, setAccessToken] = useState("");
+  const [selfId, setSelfId] = useState("");
+  const [reconnectMs, setReconnectMs] = useState("3000");
+  const [hasAccessToken, setHasAccessToken] = useState(false);
+  const [showAccessToken, setShowAccessToken] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string>();
+
+  useEffect(() => {
+    void getNapCatStatus(config).then(
+      (status) => {
+        setEnabled(status.enabled);
+        setWsUrl(status.wsUrl ?? "");
+        setSelfId(status.selfId ?? "");
+        setReconnectMs(String(status.reconnectMs));
+        setHasAccessToken(status.hasAccessToken);
+        setLoading(false);
+      },
+      (reason) => {
+        setError(errorMessage(reason));
+        setLoading(false);
+      },
+    );
+  }, [config]);
+
+  const handleSave = async (event: FormEvent) => {
+    event.preventDefault();
+    setSaving(true);
+    setError(undefined);
+    try {
+      const result = await saveNapCatSettings(config, {
+        enabled,
+        wsUrl,
+        accessToken,
+        selfId,
+        reconnectMs: Number(reconnectMs),
+      });
+      setHasAccessToken(result.status.hasAccessToken);
+      onRestartRequired();
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="setup-shell">
+      <SetupHeader subtitle="NapCat 配置" />
+      <main className="setup-main">
+        <section className="setup-card" aria-labelledby="napcat-title">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">平台连接</p>
+              <h2 id="napcat-title">配置 NapCat</h2>
+            </div>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={onClose}
+            >
+              返回
+            </button>
+          </div>
+          <p className="setup-intro">
+            填写 NapCat OneBot 反向 WebSocket 参数。保存后需要重启
+            Kaguya，重启时才会建立连接。
+          </p>
+          {error ? (
+            <div className="error-banner" role="alert">
+              <AlertCircle size={17} />
+              <span>{error}</span>
+            </div>
+          ) : null}
+          {loading ? (
+            <div className="profile-loading" role="status">
+              <LoaderCircle className="spin" size={18} />
+              <span>正在读取 NapCat 配置</span>
+            </div>
+          ) : null}
+          {!loading ? (
+            <form
+              className="setup-form"
+              onSubmit={(event) => void handleSave(event)}
+            >
+              <label className="setup-check">
+                <input
+                  type="checkbox"
+                  checked={enabled}
+                  onChange={(event) => setEnabled(event.target.checked)}
+                />
+                <span>启用 NapCat</span>
+              </label>
+              <label className="field">
+                <span>反向 WebSocket 地址</span>
+                <input
+                  type="url"
+                  value={wsUrl}
+                  onChange={(event) => setWsUrl(event.target.value)}
+                  placeholder="ws://127.0.0.1:3001"
+                />
+              </label>
+              <label className="field">
+                <span>
+                  Access Token{" "}
+                  {hasAccessToken ? "（已保存，留空则保留）" : "（可选）"}
+                </span>
+                <div className="password-field">
+                  <input
+                    type={showAccessToken ? "text" : "password"}
+                    value={accessToken}
+                    onChange={(event) => setAccessToken(event.target.value)}
+                    autoComplete="new-password"
+                    placeholder={
+                      hasAccessToken
+                        ? "留空以保留当前 token"
+                        : "NapCat access token"
+                    }
+                  />
+                  <button
+                    type="button"
+                    className="icon-button"
+                    onClick={() => setShowAccessToken((current) => !current)}
+                    aria-label={
+                      showAccessToken
+                        ? "隐藏 Access Token"
+                        : "显示 Access Token"
+                    }
+                  >
+                    {showAccessToken ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                </div>
+              </label>
+              <label className="field">
+                <span>机器人 QQ 号（可选）</span>
+                <input
+                  value={selfId}
+                  onChange={(event) => setSelfId(event.target.value)}
+                  placeholder="例如 123456789"
+                />
+              </label>
+              <label className="field">
+                <span>断线重连间隔（毫秒）</span>
+                <input
+                  type="number"
+                  min={100}
+                  max={3600000}
+                  step={100}
+                  value={reconnectMs}
+                  onChange={(event) => setReconnectMs(event.target.value)}
+                />
+              </label>
+              <button className="setup-button" type="submit" disabled={saving}>
+                {saving ? "保存中" : "保存并重启"}
+              </button>
+            </form>
+          ) : null}
+        </section>
       </main>
     </div>
   );
@@ -979,6 +1179,7 @@ function ReadinessPanel({
 function ConfigurationLoading() {
   return (
     <div className="setup-shell">
+      <SetupHeader subtitle="配置引导" />
       <div className="setup-status" role="status">
         <LoaderCircle className="spin" size={20} />
         <span>正在读取配置状态</span>
@@ -994,6 +1195,7 @@ function ConfigurationStatusError({
 }) {
   return (
     <div className="setup-shell">
+      <SetupHeader subtitle="配置引导" />
       <section className="setup-card setup-status-card" role="alert">
         <Settings2 size={22} />
         <h1>无法读取配置状态</h1>
@@ -1010,9 +1212,30 @@ function ConfigurationStatusError({
   );
 }
 
+function AccessLinkRequired({ invalid }: { readonly invalid: boolean }) {
+  return (
+    <div className="setup-shell">
+      <SetupHeader subtitle="访问受限" />
+      <section className="setup-card setup-status-card" role="alert">
+        <LockKeyhole size={22} />
+        <h1>{invalid ? "访问链接已失效" : "需要启动访问链接"}</h1>
+        <p>
+          {invalid
+            ? "Server 每次重启都会生成新链接。请回到当前 Kaguya Server 的终端，重新打开完整链接。"
+            : "请回到 Kaguya Server 的终端，打开其中显示的完整 Kaguya access URL。"}
+        </p>
+        <code className="access-link-example">
+          Kaguya access URL: …/#gatewayToken=…
+        </code>
+      </section>
+    </div>
+  );
+}
+
 function RestartRequired() {
   return (
     <div className="setup-shell">
+      <SetupHeader subtitle="配置引导" />
       <section className="setup-card setup-status-card" role="status">
         <CheckCircle2 size={22} />
         <h1>配置已保存</h1>
@@ -1029,6 +1252,63 @@ function RestartRequired() {
       </section>
     </div>
   );
+}
+
+function SetupHeader({ subtitle }: { readonly subtitle: string }) {
+  return (
+    <header className="topbar">
+      <BrandIdentity subtitle={subtitle} />
+      <div className="topbar-spacer" />
+      <ThemeToggle />
+    </header>
+  );
+}
+
+function BrandIdentity({ subtitle }: { readonly subtitle: string }) {
+  return (
+    <div className="brand-identity">
+      <img className="brand-logo" src="/kaguya-logo.png" alt="" />
+      <div>
+        <h1>Kaguya</h1>
+        <p>{subtitle}</p>
+      </div>
+    </div>
+  );
+}
+
+type Theme = "light" | "dark";
+
+function ThemeToggle() {
+  const [theme, setTheme] = useState<Theme>(() => readTheme());
+  const nextTheme = theme === "light" ? "dark" : "light";
+  const nextThemeLabel = nextTheme === "dark" ? "深色" : "浅色";
+
+  const toggleTheme = () => {
+    document.documentElement.dataset.theme = nextTheme;
+    try {
+      localStorage.setItem("kaguya.theme", nextTheme);
+    } catch {
+      // The selected theme still applies for this page when storage is unavailable.
+    }
+    setTheme(nextTheme);
+  };
+
+  return (
+    <button
+      className="theme-button"
+      type="button"
+      onClick={toggleTheme}
+      aria-label={`切换至${nextThemeLabel}主题`}
+      title={`切换至${nextThemeLabel}主题`}
+    >
+      {nextTheme === "dark" ? <Moon size={17} /> : <Sun size={17} />}
+      <span>{nextThemeLabel}</span>
+    </button>
+  );
+}
+
+function readTheme(): Theme {
+  return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
 }
 
 function DeliveryStatus({ message }: { readonly message: ChatMessage }) {
@@ -1055,6 +1335,20 @@ function DeliveryStatus({ message }: { readonly message: ChatMessage }) {
       {message.error ?? "提交失败"}
     </p>
   );
+}
+
+export function readGatewayToken(
+  hash = typeof location === "undefined" ? "" : location.hash,
+): string {
+  const match = /^#gatewayToken=([^&]*)$/u.exec(hash);
+  if (match === null) {
+    return "";
+  }
+  try {
+    return decodeURIComponent(match[1] ?? "");
+  } catch {
+    return "";
+  }
 }
 
 export function deriveConfigurationView(
@@ -1162,6 +1456,10 @@ function errorMessage(error: unknown): string {
     return error.message;
   }
   return "发送消息时发生未知错误";
+}
+
+function isUnauthorized(error: unknown): boolean {
+  return error instanceof GatewayRequestError && error.status === 401;
 }
 
 function healthLabel(state: HealthState): string {

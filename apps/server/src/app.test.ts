@@ -1,5 +1,5 @@
 /**
- * 功能概述：本文件验证 HTTP 应用在匿名 setup 可见性、带鉴权的 Profile 管理接口、
+ * 功能概述：本文件验证 HTTP 应用在受保护 setup 状态、Profile 管理接口、
  * 消息入口与统一错误映射上的外部契约，确保服务端只暴露显式的全局 Profile Registry
  * 行为，不再保留临时 setup 写桥接或隐式 default 回退。
  * 主要职责：前几组用例覆盖 `/api/v1/setup` 仅返回无密钥元数据、`/api/v1/profiles`
@@ -47,7 +47,7 @@ const config: ServerConfig = {
   trustProxy: false,
   rateLimitMax: 30,
   rateLimitWindowMs: 60_000,
-  databasePath: "/tmp/kaguya-api-test.sqlite",
+  databaseUrl: "postgresql://kaguya@database.example:5432/kaguya",
   configRoot: "/tmp/kaguya-config-test",
   development: false,
   webDistPath: "/tmp/kaguya-web-test",
@@ -65,7 +65,7 @@ function authorization(scheme = "Bearer") {
 }
 
 describe("application API gateway", () => {
-  it("serves anonymous setup status without secrets", async () => {
+  it("serves authenticated setup status without secrets", async () => {
     const setup: ConfigurationManagement = {
       inspect: vi.fn(async () => ({
         status: "invalid" as const,
@@ -117,14 +117,17 @@ describe("application API gateway", () => {
     };
     const app = await createHttpApplication({ config, setup });
 
-    const status = await app.inject({ method: "GET", url: "/api/v1/setup" });
+    const status = await app.inject({
+      method: "GET",
+      url: "/api/v1/setup",
+      headers: authorization(),
+    });
     expect(status.statusCode).toBe(200);
     expect(status.json()).toMatchObject({
       data: {
         status: "invalid",
         selectedProfileId: "default",
         profiles: [expect.objectContaining({ id: "default", name: "default" })],
-        gatewayToken,
         issues: [expect.objectContaining({ id: "default-provider-missing" })],
         warnings: [expect.objectContaining({ id: "platforms-empty" })],
       },
@@ -143,19 +146,6 @@ describe("application API gateway", () => {
     expect(message.json()).toMatchObject({
       error: { code: "configuration_setup_required" },
     });
-    await app.close();
-  });
-
-  it("serves the distributed gateway token anonymously", async () => {
-    const app = await createHttpApplication({ config });
-
-    const response = await app.inject({
-      method: "GET",
-      url: "/api/v1/gateway/token",
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ data: { gatewayToken } });
     await app.close();
   });
 
@@ -354,6 +344,7 @@ describe("application API gateway", () => {
     const response = await app.inject({
       method: "GET",
       url: "/api/v1/setup",
+      headers: authorization(),
     });
 
     expect(response.statusCode).toBe(200);
@@ -369,7 +360,6 @@ describe("application API gateway", () => {
             updatedAt: "",
           },
         ],
-        gatewayToken,
       },
     });
     await app.close();
@@ -450,30 +440,25 @@ describe("application API gateway", () => {
     });
   });
 
-  it("removes the temporary setup write endpoint", async () => {
+  it("requires the setup authorization contract", async () => {
     const app = await createApiGateway({
       config,
       setup: stubManagement(),
     });
 
     const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/setup",
+      headers: { authorization: "Bearer wrong-token" },
+    });
+
+    expect(response.statusCode).toBe(401);
+    const removed = await app.inject({
       method: "POST",
       url: "/api/v1/setup",
       headers: authorization(),
-      payload: {
-        profileName: "default",
-        baseUrl: "https://api.example/v1",
-        apiKey: "provider-secret",
-        lightModel: "small-model",
-        heavyModel: "large-model",
-        acknowledgeOptional: true,
-      },
     });
-
-    expect(response.statusCode).toBe(404);
-    expect(response.json()).toMatchObject({
-      error: { code: "not_found", message: "Route not found" },
-    });
+    expect(removed.statusCode).toBe(404);
     await app.close();
   });
 
@@ -549,12 +534,7 @@ describe("application API gateway", () => {
                     schema: {
                       properties: {
                         data: {
-                          required: [
-                            "status",
-                            "selectedProfileId",
-                            "profiles",
-                            "gatewayToken",
-                          ],
+                          required: ["status", "selectedProfileId", "profiles"],
                           properties: {
                             profiles: {
                               items: {
@@ -673,7 +653,7 @@ describe("application API gateway", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/llm/chat",
-      headers: authorization(),
+      headers: { authorization: "Bearer wrong-token" },
       payload: {
         apiKey: "provider-secret",
         baseUrl: "https://gateway.example/v1",
@@ -870,6 +850,7 @@ describe("application API gateway", () => {
     const serialized = JSON.stringify(logs);
     expect(serialized).not.toContain(gatewayToken);
     expect(serialized).not.toContain(requestBody.text);
+    expect(serialized).not.toContain("traceId");
   });
 
   it("rejects model, provider, prompt, and workflow routing fields", async () => {

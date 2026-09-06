@@ -17,5 +17,8 @@
     "@kaguya/prompt": "workspace:*",
     "@kaguya/schema": "workspace:*",
     "@kaguya/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@kaguya/engine": "workspace:*"
   }
 }

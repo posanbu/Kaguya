@@ -26,6 +26,19 @@ describe("informationAtomSchema", () => {
       }),
     ).toThrow();
   });
+
+  it("rejects profile identity anywhere in an information payload", () => {
+    expect(() =>
+      informationAtomSchema.parse({
+        informationId: "atom-profile",
+        kind: "acme.message.created",
+        occurredAt: "2026-09-01T00:00:00.000Z",
+        source: "module:acme",
+        payload: { nested: { profileId: "profile-secret" } },
+        references: [],
+      }),
+    ).toThrow(/profileId/);
+  });
 });
 
 describe("freezeInformationAtom", () => {

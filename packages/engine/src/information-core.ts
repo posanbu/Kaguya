@@ -1,8 +1,15 @@
 /**
  * 架构说明：本模块把 registry、store 与 bus 组合成信息 Core，
- * 负责启动前注册同步、追加时的 ID 生成、引用 expectations 传递与订阅分发。
- * 代码库关系：Core 是信息原子体系的入口编排层，后续 Runtime 与 PostgreSQL
- * 存储实现都会依赖这里定义的 store 端口和追加语义。
+ * 负责启动前注册同步、注册时的 ID 生成、引用 expectations 传递、并发广播与故障事实。
+ * 主要职责：`register` 校验、落账并广播新 atom；`on` 校验非空 typed consumer 身份后订阅；
+ * `get`/`getMany`/`find`/`query` 只读账本；公开写入和订阅分别只有 `register` 与 typed `on`。
+ * 代码库关系：Core 是信息原子体系的入口编排层，依赖 Registry、Ledger 与 Bus；
+ * `information-kinds.ts` 提供唯一的 `consumer.failed` 定义，Runtime 后续复用它。
+ * 输入输出与副作用：提交成功才广播当前快照，拒绝的消费者被记录为失败 atom；失败
+ * atom 的消费者或持久化失败只进入 bootstrap reporter，绝不递归产生故障链；失败事实
+ * 会继承输入唯一的 `core:context`，Error rejection 的类型固定为 `Error`。start/close 共享
+ * promise；关闭先拒绝新注册、等待已接受的落账和广播，再排空日志投影并清理订阅，
+ * 确保并发调用不能重复初始化、复活 Core 或泄漏原异常正文。
  */
 import {
   type DeepReadonly,
@@ -12,17 +19,21 @@ import {
   informationReferenceSchema,
   type InformationAtom,
   type InformationId,
+  type InformationReference,
   type JsonObject,
 } from "@kaguya/schema";
 import type {
-  InformationAppendInput,
+  InformationFindQuery,
   InformationKindDefinition,
+  InformationRegistrationInput,
   InformationReferenceRule,
+  InformationSelectorDefinition,
 } from "@kaguya/sdk";
 
 import {
   InformationBus,
-  type InformationBusOptions,
+  type InformationConsumer,
+  type InformationSubscriber,
 } from "./information-bus.js";
 import {
   InformationCoreClosedError,
@@ -32,6 +43,11 @@ import {
   InformationReferenceValidationError,
 } from "./information-errors.js";
 import { InformationKindRegistry } from "./information-kind-registry.js";
+import { consumerFailedInformationKind } from "./information-kinds.js";
+import {
+  InformationSelectorExecutor,
+  type InformationRetrievalStrategy,
+} from "./information-selector.js";
 
 export {
   InformationCoreClosedError,
@@ -72,13 +88,13 @@ export interface InformationLedger {
   getMany(
     informationIds: readonly InformationId[],
   ): Promise<readonly DeepReadonly<InformationAtom>[]>;
+  find(
+    query: InformationFindQuery,
+  ): Promise<readonly DeepReadonly<InformationAtom>[]>;
   query(
     query: InformationReferenceQuery,
   ): Promise<readonly DeepReadonly<InformationAtom>[]>;
 }
-
-/** @deprecated Use InformationLedger. Kept for #38 consumers. */
-export type InformationAtomStore = InformationLedger;
 
 export interface InformationAppendOptions {
   /** Queue a durable, post-commit log projection for this atom. */
@@ -91,6 +107,7 @@ export interface InformationAppendOptions {
  */
 export interface InformationLogProjectionRunner {
   projectPending(): Promise<void>;
+  drainPending(): Promise<void>;
 }
 
 export interface InformationCoreOptions {
@@ -98,15 +115,12 @@ export interface InformationCoreOptions {
   readonly store: InformationLedger;
   readonly nextInformationId: () => string;
   readonly now?: () => Date;
-  readonly bus?: InformationBusOptions;
+  readonly bootstrapReporter?: (error: unknown) => void | Promise<void>;
   readonly logProjectionRunner?: InformationLogProjectionRunner;
+  readonly retrievalStrategies?: readonly InformationRetrievalStrategy[];
 }
 
-type InformationSubscriber = (
-  atom: DeepReadonly<InformationAtom>,
-) => unknown | Promise<unknown>;
-
-type CoreState = "new" | "started" | "closed";
+type CoreState = "new" | "starting" | "started" | "closing" | "closed";
 
 export class InformationCore {
   readonly registry: InformationKindRegistry;
@@ -114,37 +128,85 @@ export class InformationCore {
   #bus: InformationBus;
   #nextInformationId: () => string;
   #now: () => Date;
+  #bootstrapReporter: (error: unknown) => void | Promise<void>;
   #logProjectionRunner: InformationLogProjectionRunner | undefined;
+  #selectorExecutor: InformationSelectorExecutor;
   #state: CoreState = "new";
+  #startPromise: Promise<void> | undefined;
+  #closePromise: Promise<void> | undefined;
+  readonly #inFlight = new Set<Promise<unknown>>();
 
   constructor(options: InformationCoreOptions) {
     this.registry = options.registry;
     this.store = options.store;
-    this.#bus = new InformationBus(options.bus);
+    this.registry.registerBuiltin(consumerFailedInformationKind);
+    this.#bus = new InformationBus();
     this.#nextInformationId = options.nextInformationId;
     this.#now = options.now ?? (() => new Date());
+    this.#bootstrapReporter = options.bootstrapReporter ?? (() => undefined);
     this.#logProjectionRunner = options.logProjectionRunner;
-  }
-
-  async start(): Promise<void> {
-    this.assertState("new");
-    this.registry.seal();
-    await this.store.synchronizeKinds(
-      this.registry.definitions().map((definition) => definition.kind),
+    this.#selectorExecutor = new InformationSelectorExecutor(
+      this.store,
+      options.retrievalStrategies,
     );
-    this.#state = "started";
-    await this.projectPendingLogs();
   }
 
-  async append<K extends string, P extends JsonObject>(
+  start(): Promise<void> {
+    if (this.#state === "starting") {
+      return this.#startPromise!;
+    }
+    if (this.#state === "started") {
+      return Promise.resolve();
+    }
+    if (this.#state !== "new") {
+      return Promise.reject(new InformationCoreClosedError());
+    }
+    this.#state = "starting";
+    this.#startPromise = this.startCore();
+    return this.#startPromise;
+  }
+
+  async register<K extends string, P extends JsonObject>(
     definition: InformationKindDefinition<K, P>,
-    input: InformationAppendInput<K, P>,
+    input: InformationRegistrationInput<K, P>,
   ): Promise<DeepReadonly<InformationAtom<K, P>>> {
     this.assertState("started");
+    const operation = this.registerInternal(definition, input, true);
+    this.#inFlight.add(operation);
+    void operation.then(
+      () => this.#inFlight.delete(operation),
+      () => this.#inFlight.delete(operation),
+    );
+    return operation;
+  }
+
+  on<K extends string, P extends JsonObject>(
+    definition: InformationKindDefinition<K, P>,
+    consumer: InformationConsumer,
+    handler: (
+      atom: DeepReadonly<InformationAtom<K, P>>,
+    ) => unknown | Promise<unknown>,
+  ): () => void {
+    this.assertOpen();
+    assertConsumerIdentity(consumer);
     const registered = this.registry.assertRegistered(
       definition as InformationKindDefinition<string, any>,
     ) as InformationKindDefinition<K, P>;
-    this.assertAppendKind(registered, input);
+    return this.#bus.on(
+      registered.kind,
+      consumer,
+      handler as InformationSubscriber,
+    );
+  }
+
+  private async registerInternal<K extends string, P extends JsonObject>(
+    definition: InformationKindDefinition<K, P>,
+    input: InformationRegistrationInput<K, P>,
+    recordConsumerFailures: boolean,
+  ): Promise<DeepReadonly<InformationAtom<K, P>>> {
+    const registered = this.registry.assertRegistered(
+      definition as InformationKindDefinition<string, any>,
+    ) as InformationKindDefinition<K, P>;
 
     const informationId = this.parseInformationId(this.#nextInformationId());
     const payload = registered.payloadSchema.parse(input.payload);
@@ -170,11 +232,28 @@ export class InformationCore {
         enqueueLogProjection: registered.log.enabled,
       },
     );
-    const published = (await this.#bus.publish(
+    const outcomes = await this.#bus.publish(
       atom as unknown as InformationAtom,
-    )) as DeepReadonly<InformationAtom<K, P>>;
+    );
+    if (recordConsumerFailures) {
+      for (const outcome of outcomes) {
+        if (outcome.status === "rejected") {
+          await this.recordConsumerFailure(
+            atom,
+            outcome.consumer,
+            outcome.reason,
+          );
+        }
+      }
+    } else {
+      for (const outcome of outcomes) {
+        if (outcome.status === "rejected") {
+          await this.reportBootstrap(outcome.reason);
+        }
+      }
+    }
     await this.projectPendingLogs();
-    return published;
+    return atom;
   }
 
   async get(
@@ -184,18 +263,22 @@ export class InformationCore {
     return this.store.get(informationId);
   }
 
-  /** @deprecated Use get(). */
-  async getById(
-    informationId: InformationId,
-  ): Promise<DeepReadonly<InformationAtom> | undefined> {
-    return this.get(informationId);
-  }
-
   async getMany(
     informationIds: readonly InformationId[],
   ): Promise<readonly DeepReadonly<InformationAtom>[]> {
     this.assertState("started");
     return this.store.getMany(informationIds);
+  }
+
+  async select(
+    selector: InformationSelectorDefinition,
+    sourceInformationId: InformationId,
+  ): Promise<readonly DeepReadonly<InformationAtom>[]> {
+    this.assertState("started");
+    return this.#selectorExecutor.select(
+      selector,
+      this.parseInformationId(sourceInformationId),
+    );
   }
 
   async query(
@@ -205,50 +288,100 @@ export class InformationCore {
     return this.store.query(query);
   }
 
-  /** @deprecated Use query(). */
-  async listByReference(
-    query: InformationReferenceQuery,
-  ): Promise<readonly DeepReadonly<InformationAtom>[]> {
-    return this.query(query);
-  }
-
-  subscribe<K extends string, P extends JsonObject>(
-    kind: string,
-    handler: (
-      atom: DeepReadonly<InformationAtom<K, P>>,
-    ) => unknown | Promise<unknown>,
-  ): () => void {
-    this.assertOpen();
-    return this.#bus.subscribe(kind, handler as InformationSubscriber);
-  }
-
-  subscribeAll(handler: InformationSubscriber): () => void {
-    this.assertOpen();
-    return this.#bus.subscribeAll(handler);
-  }
-
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    if (this.#closePromise !== undefined) {
+      return this.#closePromise;
+    }
     if (this.#state === "closed") {
-      return;
+      return Promise.resolve();
     }
-    this.#bus.clear();
-    this.#state = "closed";
+    const starting =
+      this.#state === "starting" ? this.#startPromise : undefined;
+    this.#state = "closing";
+    this.#closePromise = (async () => {
+      await starting?.catch(() => undefined);
+      await Promise.allSettled([...this.#inFlight]);
+      await this.projectPendingLogs(true);
+      this.#bus.clear();
+      this.#state = "closed";
+    })();
+    return this.#closePromise;
   }
 
-  private assertAppendKind<K extends string, P extends JsonObject>(
-    definition: InformationKindDefinition<K, P>,
-    input: InformationAppendInput<K, P>,
-  ): void {
-    if (definition.kind !== input.kind) {
-      throw new Error(
-        `Append input kind must match definition kind: ${definition.kind}`,
-      );
-    }
-  }
-
-  private async projectPendingLogs(): Promise<void> {
+  private async startCore(): Promise<void> {
     try {
-      await this.#logProjectionRunner?.projectPending();
+      this.registry.seal();
+      await this.store.synchronizeKinds(
+        this.registry.definitions().map((definition) => definition.kind),
+      );
+      if (this.#state !== "starting") {
+        return;
+      }
+      await this.projectPendingLogs();
+      if (this.#state === "starting") {
+        this.#state = "started";
+      }
+    } catch (error) {
+      if (this.#state !== "closing") {
+        this.#state = "closed";
+      }
+      throw error;
+    }
+  }
+
+  private async recordConsumerFailure(
+    sourceAtom: DeepReadonly<InformationAtom>,
+    consumer: InformationConsumer,
+    reason: unknown,
+  ): Promise<void> {
+    try {
+      await this.registerInternal(
+        consumerFailedInformationKind,
+        {
+          occurredAt: this.#now().toISOString(),
+          source: "core:information-core",
+          payload: {
+            consumer: {
+              consumerId: consumer.consumerId,
+              ...(consumer.definitionId === undefined
+                ? {}
+                : { definitionId: consumer.definitionId }),
+              ...(consumer.instanceId === undefined
+                ? {}
+                : { instanceId: consumer.instanceId }),
+            },
+            error: summarizeConsumerError(reason),
+          },
+          references: [
+            {
+              relation: "core:caused-by",
+              informationId: sourceAtom.informationId,
+            },
+            ...consumerFailureContextReferences(sourceAtom),
+          ],
+        },
+        false,
+      );
+    } catch (error) {
+      await this.reportBootstrap(error);
+    }
+  }
+
+  private async reportBootstrap(error: unknown): Promise<void> {
+    try {
+      await this.#bootstrapReporter(error);
+    } catch {
+      // Bootstrap reporter 是最后一道诊断边界，不能制造未处理 rejection。
+    }
+  }
+
+  private async projectPendingLogs(drain = false): Promise<void> {
+    try {
+      if (drain) {
+        await this.#logProjectionRunner?.drainPending();
+      } else {
+        await this.#logProjectionRunner?.projectPending();
+      }
     } catch {
       // Projection recovery is an observer of durable facts. It cannot make an
       // accepted atom append fail or force a rollback after commit.
@@ -273,9 +406,61 @@ export class InformationCore {
   }
 
   private assertOpen(): void {
-    if (this.#state === "closed") {
+    if (this.#state === "closing" || this.#state === "closed") {
       throw new InformationCoreClosedError();
     }
+  }
+}
+
+function consumerFailureContextReferences(
+  atom: DeepReadonly<InformationAtom>,
+): InformationReference[] {
+  const contexts = atom.references.filter(
+    (reference) => reference.relation === "core:context",
+  );
+  return contexts.length === 1 ? [{ ...contexts[0]! }] : [];
+}
+
+function summarizeConsumerError(reason: unknown): {
+  readonly errorType: string;
+  readonly message: string;
+} {
+  if (isError(reason)) {
+    return {
+      errorType: "Error",
+      message: "Consumer handler failed",
+    };
+  }
+  return {
+    errorType: "NonErrorRejection",
+    message: "Consumer rejected with a non-Error value",
+  };
+}
+
+function isError(value: unknown): boolean {
+  try {
+    return value instanceof Error;
+  } catch {
+    return false;
+  }
+}
+
+function assertConsumerIdentity(consumer: InformationConsumer): void {
+  assertNonBlankConsumerField(consumer.consumerId, "consumerId", true);
+  assertNonBlankConsumerField(consumer.definitionId, "definitionId", false);
+  assertNonBlankConsumerField(consumer.instanceId, "instanceId", false);
+}
+
+function assertNonBlankConsumerField(
+  value: unknown,
+  field: "consumerId" | "definitionId" | "instanceId",
+  required: boolean,
+): void {
+  if (value === undefined && !required) {
+    return;
+  }
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`${field} must not be blank`);
   }
 }
 

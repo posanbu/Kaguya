@@ -1,7 +1,7 @@
 /**
  * 架构说明：本模块定义信息原子的 wire contract，负责 JSON 负载校验、
  * 深冻结快照生成与引用结构的稳定序列化边界，避免把外部可变对象直接
- * 暴露给持久化或跨包传输层。
+ * 暴露给持久化或跨包传输层，并禁止 profileId 作为任意信息 payload 的身份字段。
  * 代码库关系：`packages/schema/src/index.ts` 重新导出这里的类型与 schema，
  * 下游包通过入口消费信息原子、引用与 JSON 工具；本模块必须保持纯粹、
  * 可克隆且不依赖任何业务实现细节。
@@ -83,6 +83,23 @@ export const jsonObjectSchema = z
     return cloned;
   });
 
+/**
+ * 信息原子可携带开放的 JSON payload，但不能把 Profile 配置身份混入运行时事实。
+ * Prompt 的通用 metadata 仍使用 `jsonObjectSchema`；只有进入信息原子的值使用本 schema。
+ */
+export const informationPayloadSchema = jsonObjectSchema.superRefine(
+  (payload, context) => {
+    const profilePath = findProfileIdPath(payload);
+    if (profilePath !== undefined) {
+      context.addIssue({
+        code: "custom",
+        path: profilePath,
+        message: "profileId is not permitted in information payloads",
+      });
+    }
+  },
+);
+
 export const informationAtomSchema = z
   .object({
     informationId: informationIdSchema,
@@ -92,12 +109,14 @@ export const informationAtomSchema = z
       .string()
       .trim()
       .regex(/^[a-z][a-z0-9._-]*:[a-z][a-z0-9._-]*$/u),
-    payload: jsonObjectSchema,
+    payload: informationPayloadSchema,
     references: z.array(informationReferenceSchema),
   })
   .strict();
 
-export function parseInformationAtom(value: unknown): DeepReadonly<InformationAtom> {
+export function parseInformationAtom(
+  value: unknown,
+): DeepReadonly<InformationAtom> {
   return freezeInformationAtom(informationAtomSchema.parse(value));
 }
 
@@ -230,4 +249,22 @@ function cloneJsonValue(
   } finally {
     ancestors.delete(value);
   }
+}
+
+function findProfileIdPath(value: JsonValue): (string | number)[] | undefined {
+  if (Array.isArray(value)) {
+    for (const [index, entry] of value.entries()) {
+      const nested = findProfileIdPath(entry);
+      if (nested !== undefined) return [index, ...nested];
+    }
+    return undefined;
+  }
+  if (value !== null && typeof value === "object") {
+    if (Object.hasOwn(value, "profileId")) return ["profileId"];
+    for (const [key, entry] of Object.entries(value)) {
+      const nested = findProfileIdPath(entry);
+      if (nested !== undefined) return [key, ...nested];
+    }
+  }
+  return undefined;
 }

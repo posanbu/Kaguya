@@ -1,7 +1,9 @@
 /**
  * 架构说明：本模块实现信息 kind registry 的封锁生命周期，
- * 负责区分 core 内建 kind 与业务自定义 kind，并在 Core 启动前冻结注册表。
- * 代码库关系：`InformationCore.start()` 依赖这里的定义快照同步到存储层，
+ * 负责区分 Engine 内建 kind 与业务自定义 kind、确认 definition 对象身份，
+ * 并在 Core 启动前冻结注册表。
+ * 代码库关系：`InformationCore` 构造时在此注册 `consumer.failed`，`start()` 依赖
+ * 这里的定义快照同步到存储层，
  * 而 `packages/engine/src/index.ts` 将 Registry 作为 engine 公共入口导出。
  */
 import type { JsonObject } from "@kaguya/schema";
@@ -37,8 +39,11 @@ export class InformationKindRegistry {
 
   registerBuiltin(definition: RegisteredInformationKind): void {
     this.assertWritable("registerBuiltin");
-    if (!this.isCoreKind(definition.kind)) {
-      throw new ReservedInformationKindError(definition.kind, "registerBuiltin");
+    if (!this.isBuiltinKind(definition.kind)) {
+      throw new ReservedInformationKindError(
+        definition.kind,
+        "registerBuiltin",
+      );
     }
     this.add(definition);
   }
@@ -63,8 +68,16 @@ export class InformationKindRegistry {
     return this.#definitions.has(kind);
   }
 
-  assertRegistered(definition: RegisteredInformationKind): RegisteredInformationKind {
-    return this.get(definition.kind);
+  assertRegistered(
+    definition: RegisteredInformationKind,
+  ): RegisteredInformationKind {
+    const registered = this.get(definition.kind);
+    if (registered !== definition) {
+      throw new Error(
+        `Information kind definition mismatch: ${definition.kind}`,
+      );
+    }
+    return registered;
   }
 
   private add(definition: RegisteredInformationKind): void {
@@ -80,13 +93,16 @@ export class InformationKindRegistry {
     }
   }
 
-  private assertCustomKind(kind: string, operation: "register" | "registerBuiltin"): void {
-    if (this.isCoreKind(kind)) {
+  private assertCustomKind(
+    kind: string,
+    operation: "register" | "registerBuiltin",
+  ): void {
+    if (this.isBuiltinKind(kind)) {
       throw new ReservedInformationKindError(kind, operation);
     }
   }
 
-  private isCoreKind(kind: string): boolean {
-    return coreKindPattern.test(kind);
+  private isBuiltinKind(kind: string): boolean {
+    return coreKindPattern.test(kind) || kind === "consumer.failed";
   }
 }

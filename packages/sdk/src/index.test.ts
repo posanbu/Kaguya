@@ -1,185 +1,48 @@
+/**
+ * 功能概述：验证 SDK 包入口只公开信息原子模块所需的可执行定义能力。
+ * 主要职责：通过公共入口创建 kind、模块和订阅，确认设置解析与订阅 definition 身份
+ * 能被最终 `ModuleHost` 直接消费。
+ * 代码库关系：测试 `index.ts` 对 `information-kind.ts` 与 `modules.ts` 的聚合；更细的
+ * kind 递归 schema 和模块订阅约束分别由同包专项测试覆盖。
+ * 输入输出与副作用：仅构造内存 definition，不启动 Core 或访问数据库。
+ */
 import { z } from "@kaguya/schema";
 import { describe, expect, it } from "vitest";
 
 import {
-  defineEvent,
-  defineModule,
-  defineNode,
-  defineWorkflow,
-  onEvent,
-  onTargetedEvent,
+  defineInformationKind,
+  defineInformationModule,
+  onInformation,
 } from "./index.js";
-import * as sdk from "./index.js";
 
-const baseEvent = {
-  id: "event-1",
-  source: "test",
-  occurredAt: "2026-07-23T00:00:00.000Z",
-  traceId: "trace-1",
-  metadata: {},
-};
-
-describe("defineEvent", () => {
-  it("preserves typed event payloads", () => {
-    const messageReceived = defineEvent(
-      "message.received",
-      z.object({ messageId: z.string() }),
-    );
-
-    expect(
-      messageReceived.create(baseEvent, { messageId: "m-1" }).payload.messageId,
-    ).toBe("m-1");
-  });
-});
-
-describe("defineWorkflow", () => {
-  it("rejects duplicate node ids", () => {
-    const node = defineNode({
-      id: "load",
-      run: async (input: string) => input,
+describe("information module SDK public entry", () => {
+  it("creates a typed subscription from the final package entry", async () => {
+    const input = defineInformationKind({
+      kind: "acme.sdk.input",
+      payloadSchema: z.object({ text: z.string() }).strict(),
+      references: {},
+      log: { enabled: false },
     });
-
-    expect(() =>
-      defineWorkflow({ id: "duplicate", nodes: [node, node], edges: [] }),
-    ).toThrow("duplicate node id: load");
-  });
-
-  it("rejects edges with missing endpoints", () => {
-    const node = defineNode({
-      id: "load",
-      run: async (input: string) => input,
-    });
-
-    expect(() =>
-      defineWorkflow({
-        id: "missing-endpoint",
-        nodes: [node],
-        edges: [{ from: "load", to: "save" }],
-      }),
-    ).toThrow("edge endpoint does not exist: load -> save");
-  });
-
-  it("rejects cyclic workflows", () => {
-    const first = defineNode({
-      id: "first",
-      run: async (input: string) => input,
-    });
-    const second = defineNode({
-      id: "second",
-      run: async (input: string) => input,
-    });
-
-    expect(() =>
-      defineWorkflow({
-        id: "cyclic",
-        nodes: [first, second],
-        edges: [
-          { from: "first", to: "second" },
-          { from: "second", to: "first" },
-        ],
-      }),
-    ).toThrow("workflow contains a cycle");
-  });
-});
-
-describe("workflow failure classification", () => {
-  it("exposes a shared structural classifier for retryable, cancelled, and terminal failures", () => {
-    const classifyWorkflowFailure = (
-      sdk as {
-        classifyWorkflowFailure?: (
-          error: unknown,
-        ) => { status: "cancelled" } | { status: "failed"; retryable: boolean };
-      }
-    ).classifyWorkflowFailure;
-
-    expect(classifyWorkflowFailure).toBeTypeOf("function");
-    if (classifyWorkflowFailure === undefined) {
-      throw new Error("classifyWorkflowFailure is unavailable");
-    }
-    expect(classifyWorkflowFailure({ kind: "retryable" })).toEqual({
-      status: "failed",
-      retryable: true,
-    });
-    expect(classifyWorkflowFailure({ kind: "cancelled" })).toEqual({
-      status: "cancelled",
-    });
-    expect(classifyWorkflowFailure({ kind: "non-retryable" })).toEqual({
-      status: "failed",
-      retryable: false,
-    });
-    expect(classifyWorkflowFailure(new Error("unclassified"))).toEqual({
-      status: "failed",
-      retryable: false,
-    });
-    expect(
-      classifyWorkflowFailure(
-        new AggregateError([
-          new AggregateError([{ kind: "retryable" }]),
-          { kind: "retryable" },
-        ]),
-      ),
-    ).toEqual({ status: "failed", retryable: true });
-    expect(
-      classifyWorkflowFailure(
-        new AggregateError([{ kind: "retryable" }, { kind: "non-retryable" }]),
-      ),
-    ).toEqual({ status: "failed", retryable: false });
-  });
-});
-
-describe("module SDK", () => {
-  it("defines modules with discoverable settings and typed subscriptions", () => {
-    const broadcast = defineEvent(
-      "test.broadcast",
-      z.object({ value: z.string() }),
-    );
-    const targeted = defineEvent(
-      "test.targeted",
-      z.object({ targetInstanceId: z.string(), value: z.string() }),
-    );
-    const definition = defineModule({
+    const definition = defineInformationModule({
       manifest: {
         apiVersion: 1,
-        definitionId: "test.module",
-        displayName: "Test module",
-        settingsSchema: z.object({ prefix: z.string() }),
+        definitionId: "acme.sdk.module",
+        displayName: "SDK module",
+        settingsSchema: z.object({}).strict(),
+        informationKinds: [input],
       },
-      create: ({ settings }) => ({
-        subscriptions: [
-          onEvent(broadcast, () => {
-            void settings.prefix;
-          }),
-          onTargetedEvent(targeted, () => {
-            void settings.prefix;
-          }),
-        ],
+      create: () => ({
+        subscriptions: [onInformation(input, () => undefined)],
       }),
     });
 
-    expect(definition.manifest.settingsSchema.parse({ prefix: "ok" })).toEqual({
-      prefix: "ok",
+    const instance = await definition.create({
+      instanceId: "sdk.default",
+      settings: {},
     });
-    expect(
-      definition.create({ instanceId: "test.1", settings: { prefix: "ok" } }),
-    ).toMatchObject({
-      subscriptions: [
-        { targeted: false, event: broadcast },
-        { targeted: true, event: targeted },
-      ],
-    });
-  });
 
-  it("rejects invalid module manifests", () => {
-    expect(() =>
-      defineModule({
-        manifest: {
-          apiVersion: 1,
-          definitionId: " ",
-          displayName: "Invalid",
-          settingsSchema: z.object({}),
-        },
-        create: () => ({ subscriptions: [] }),
-      }),
-    ).toThrow("module definition id must not be empty");
+    expect(instance.subscriptions).toEqual([
+      expect.objectContaining({ kind: input.kind, definition: input }),
+    ]);
   });
 });

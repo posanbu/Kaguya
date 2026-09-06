@@ -25,6 +25,7 @@ export default withMermaid(
       logo: "/kaguya-logo.png",
       siteTitle: "Kaguya",
       nav: [
+        { text: "界面设计", link: "/design/" },
         { text: "使用指南", link: "/guide/" },
         { text: "开发文档", link: "/developers/" },
         { text: "参考资料", link: "/reference/" },

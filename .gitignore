@@ -11,5 +11,6 @@ coverage/
 *.sqlite-wal
 .DS_Store
 .worktrees/
+.impeccable/
 init.sh
 docs/.vitepress/cache/

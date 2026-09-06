@@ -1,11 +1,10 @@
 /**
  * 功能概述：本文件组装 Kaguya 服务端的 Fastify HTTP 应用，承载匿名健康检查、
  * OpenAPI 文档、首屏配置状态查询、带鉴权的全局 Profile Registry 管理接口，以及
- * Runtime 消息入口；它是“selected Profile 唯一生效”服务端约束的 HTTP 落点。
+ * 窄 Web/Core 消息入口；它是“selected Profile 唯一生效”服务端约束的 HTTP 落点。
  * 主要职责：`createHttpApplication` 统一注册 CORS、限流、OpenAPI 与错误处理，
- * 再根据已通过启动校验的 `runtime` 与 `setup` 注册正常运行路由；
- * `/api/v1/setup` 返回无 secret 的 readiness 元数据，以及本实例分发的网关 token，
- * 供 Web UI 加载页面时自动取用；Profile 的创建、读取、
+ * 再根据 `webGateway` 与 `setup` 是否存在决定消息入口和 setup 管理路由的可用状态；
+ * `/api/v1/setup` 只返回无 secret 的 readiness 元数据；Profile 的创建、读取、
  * 完整替换、显式选择与删除分别由 `/api/v1/profiles*` 路由承载，并统一通过
  * `requireManagementToken` 在任何路径/正文校验前拒绝未授权请求。
  * 代码库关系：本模块消费 `setup.ts` 的 `ConfigurationManagement` 门面与
@@ -13,8 +12,9 @@
  * 会把唯一管理实例传入这里，WebUI 与外部管理客户端都通过这些路由驱动 selected
  * Profile，而不是直接访问底层 config manager。
  * 输入输出与副作用：运行时会创建 Fastify 实例并注册中间件；Profile 路由在管理认证
- * 通过后可能写入配置目录并返回无脱敏的 Profile 正文；消息路由仅在 `runtime`
- * 就绪时转发消息，否则返回明确的 503 setup-required/core-unavailable 错误。
+ * 通过后可能写入配置目录并返回无脱敏的 Profile 正文；消息路由仅在 `webGateway`
+ * 就绪时非阻塞转发正规化内容，日志不制造 trace ID，否则返回明确的
+ * 503 setup-required/core-unavailable 错误。
  */
 import { randomUUID, timingSafeEqual } from "node:crypto";
 
@@ -27,7 +27,6 @@ import {
   platformConfigSchema,
   pluginConfigSchema,
   profileIdSchema,
-  runtimeConfigSchema,
 } from "@kaguya/config";
 import { runWithLogContext } from "@kaguya/logger";
 import { z } from "@kaguya/schema";
@@ -41,6 +40,12 @@ import Fastify, {
 
 import type { ServerConfig } from "./config.js";
 import type { ConfigurationManagement } from "./setup.js";
+import {
+  createGatewayAuthenticator,
+  type GatewayAuthenticator,
+  type GatewayScope,
+} from "./gateway-auth.js";
+import { defaultNapCatSettings, toNapCatStatus } from "./napcat-config.js";
 import type { WebMessageGateway } from "./web-gateway.js";
 
 const MAX_MESSAGE_TEXT_LENGTH = 131_072;
@@ -88,8 +93,17 @@ const replaceProfileRequestSchema = z
     ai: aiConfigSchema,
     platforms: z.array(platformConfigSchema),
     plugins: z.array(pluginConfigSchema),
-    runtime: runtimeConfigSchema.optional(),
     acknowledgedWarnings: z.array(z.string().trim().min(1)),
+  })
+  .strict();
+
+const napCatSettingsRequestSchema = z
+  .object({
+    enabled: z.boolean(),
+    wsUrl: z.string().trim().optional(),
+    accessToken: z.string().optional(),
+    selfId: z.string().trim().optional(),
+    reconnectMs: z.number().int().min(100).max(3_600_000),
   })
   .strict();
 
@@ -203,60 +217,6 @@ const pluginConfigJsonSchema = {
   },
 } as const;
 
-const runtimeConfigJsonSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: [
-    "host",
-    "port",
-    "gatewayToken",
-    "databasePath",
-    "webDistPath",
-    "corsOrigins",
-    "trustProxy",
-    "rateLimitMax",
-    "rateLimitWindowMs",
-    "logLevel",
-    "logFormat",
-    "gatewayAllowlist",
-  ],
-  properties: {
-    host: { type: "string", minLength: 1 },
-    port: { type: "integer", minimum: 1, maximum: 65535 },
-    gatewayToken: { type: "string", minLength: 16 },
-    databasePath: { type: "string", minLength: 1 },
-    webDistPath: { type: "string", minLength: 1 },
-    corsOrigins: { type: "array", items: { type: "string", format: "uri" } },
-    trustProxy: {
-      anyOf: [
-        { const: false },
-        { type: "array", items: { type: "string", minLength: 1 } },
-      ],
-    },
-    rateLimitMax: { type: "integer", minimum: 1, maximum: 10000 },
-    rateLimitWindowMs: {
-      type: "integer",
-      minimum: 1000,
-      maximum: 3600000,
-    },
-    logLevel: {
-      type: "string",
-      enum: ["trace", "debug", "info", "warn", "error", "fatal", "silent"],
-    },
-    logFormat: { type: "string", enum: ["json", "pretty"] },
-    gatewayAllowlist: {
-      type: "object",
-      additionalProperties: false,
-      required: ["platforms", "userIds", "groupIds"],
-      properties: {
-        platforms: { type: "array", items: { type: "string", minLength: 1 } },
-        userIds: { type: "array", items: { type: "string", minLength: 1 } },
-        groupIds: { type: "array", items: { type: "string", minLength: 1 } },
-      },
-    },
-  },
-} as const;
-
 const profileReviewJsonSchema = {
   type: "object",
   additionalProperties: false,
@@ -286,7 +246,6 @@ const userConfigProfileJsonSchema = {
       type: "array",
       items: pluginConfigJsonSchema,
     },
-    runtime: runtimeConfigJsonSchema,
     review: profileReviewJsonSchema,
   },
 } as const;
@@ -318,7 +277,6 @@ const replaceProfileRequestJsonSchema = {
     ai: aiConfigJsonSchema,
     platforms: { type: "array", items: platformConfigJsonSchema },
     plugins: { type: "array", items: pluginConfigJsonSchema },
-    runtime: runtimeConfigJsonSchema,
     acknowledgedWarnings: {
       type: "array",
       items: { type: "string", minLength: 1 },
@@ -334,7 +292,7 @@ const setupStatusResponseJsonSchema = {
     data: {
       type: "object",
       additionalProperties: false,
-      required: ["status", "selectedProfileId", "profiles", "gatewayToken"],
+      required: ["status", "selectedProfileId", "profiles"],
       properties: {
         status: {
           type: "string",
@@ -351,7 +309,6 @@ const setupStatusResponseJsonSchema = {
           type: "array",
           items: profileMetadataJsonSchema,
         },
-        gatewayToken: { type: "string", minLength: 1 },
         issues: {
           type: "array",
           items: configurationIssueJsonSchema,
@@ -360,22 +317,6 @@ const setupStatusResponseJsonSchema = {
           type: "array",
           items: configurationIssueJsonSchema,
         },
-      },
-    },
-  },
-} as const;
-
-const gatewayTokenResponseJsonSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["data"],
-  properties: {
-    data: {
-      type: "object",
-      additionalProperties: false,
-      required: ["gatewayToken"],
-      properties: {
-        gatewayToken: { type: "string", minLength: 1 },
       },
     },
   },
@@ -471,6 +412,7 @@ const errorResponseJsonSchema = {
 
 export interface CreateHttpApplicationOptions {
   config: ServerConfig;
+  gatewayAuth?: GatewayAuthenticator;
   webGateway?: WebMessageGateway;
   setup?: ConfigurationManagement;
   logger?: FastifyBaseLogger;
@@ -559,7 +501,7 @@ export async function createHttpApplication(
   app.get(
     "/api/v1/setup",
     {
-      config: { rateLimit: false },
+      onRequest: requireGatewayToken(options, "setup"),
       schema: {
         tags: ["System"],
         summary: "Inspect first-run configuration readiness",
@@ -570,30 +512,61 @@ export async function createHttpApplication(
     },
     async () => {
       const status = (await options.setup?.inspect()) ?? readySetupStatus();
-      return { data: { ...status, gatewayToken: options.config.gatewayToken } };
+      return { data: status };
     },
   );
 
   app.get(
-    "/api/v1/gateway/token",
+    "/api/v1/napcat",
     {
-      config: { rateLimit: false },
-      schema: {
-        tags: ["System"],
-        summary:
-          "Fetch the gateway token distributed by this server instance",
-        response: {
-          200: gatewayTokenResponseJsonSchema,
-        },
-      },
+      onRequest: requireGatewayToken(options, "management"),
+      schema: { tags: ["NapCat"], summary: "Read NapCat configuration status" },
     },
-    async () => ({ data: { gatewayToken: options.config.gatewayToken } }),
+    async () => {
+      const settings =
+        (await requireManagement(options.setup).getNapCatSettings?.()) ??
+        defaultNapCatSettings;
+      return { data: toNapCatStatus(settings) };
+    },
+  );
+
+  app.put(
+    "/api/v1/napcat",
+    {
+      onRequest: requireGatewayToken(options, "management"),
+      schema: { tags: ["NapCat"], summary: "Save NapCat configuration" },
+    },
+    async (request) => {
+      const body = napCatSettingsRequestSchema.parse(request.body);
+      const management = requireManagement(options.setup);
+      if (
+        management.getNapCatSettings === undefined ||
+        management.saveNapCatSettings === undefined
+      ) {
+        throw new Error("NapCat configuration management is unavailable");
+      }
+      const current = await management.getNapCatSettings();
+      const settings = await management.saveNapCatSettings({
+        enabled: body.enabled,
+        ...(body.wsUrl ? { wsUrl: body.wsUrl } : {}),
+        ...(body.accessToken?.trim()
+          ? { accessToken: body.accessToken.trim() }
+          : current.accessToken === undefined
+            ? {}
+            : { accessToken: current.accessToken }),
+        ...(body.selfId ? { selfId: body.selfId } : {}),
+        reconnectMs: body.reconnectMs,
+      });
+      return {
+        data: { status: toNapCatStatus(settings), restartRequired: true },
+      };
+    },
   );
 
   app.get(
     "/api/v1/profiles",
     {
-      onRequest: requireManagementToken(options.config.gatewayToken),
+      onRequest: requireGatewayToken(options, "management"),
       schema: {
         tags: ["Profiles"],
         summary: "List profile metadata and the selected global profile",
@@ -614,7 +587,7 @@ export async function createHttpApplication(
   app.post(
     "/api/v1/profiles",
     {
-      onRequest: requireManagementToken(options.config.gatewayToken),
+      onRequest: requireGatewayToken(options, "management"),
       schema: {
         tags: ["Profiles"],
         summary: "Create a named profile without selecting it",
@@ -642,7 +615,7 @@ export async function createHttpApplication(
   app.put(
     "/api/v1/profiles/selection",
     {
-      onRequest: requireManagementToken(options.config.gatewayToken),
+      onRequest: requireGatewayToken(options, "management"),
       schema: {
         tags: ["Profiles"],
         summary: "Select the global runtime profile",
@@ -671,7 +644,7 @@ export async function createHttpApplication(
   app.get(
     "/api/v1/profiles/:profileId",
     {
-      onRequest: requireManagementToken(options.config.gatewayToken),
+      onRequest: requireGatewayToken(options, "management"),
       schema: {
         tags: ["Profiles"],
         summary: "Read one profile by explicit profile id",
@@ -703,7 +676,7 @@ export async function createHttpApplication(
   app.put(
     "/api/v1/profiles/:profileId",
     {
-      onRequest: requireManagementToken(options.config.gatewayToken),
+      onRequest: requireGatewayToken(options, "management"),
       schema: {
         tags: ["Profiles"],
         summary: "Replace one profile by explicit profile id",
@@ -736,7 +709,7 @@ export async function createHttpApplication(
   app.delete(
     "/api/v1/profiles/:profileId",
     {
-      onRequest: requireManagementToken(options.config.gatewayToken),
+      onRequest: requireGatewayToken(options, "management"),
       schema: {
         tags: ["Profiles"],
         summary: "Delete one non-default, non-selected profile",
@@ -765,7 +738,7 @@ export async function createHttpApplication(
   app.post(
     "/api/v1/messages",
     {
-      onRequest: requireManagementToken(options.config.gatewayToken),
+      onRequest: requireGatewayToken(options, "messages"),
       schema: {
         tags: ["Messages"],
         summary: "Validate and dispatch a message to Kaguya Runtime",
@@ -797,7 +770,6 @@ export async function createHttpApplication(
         {
           event: "http.message.accepted",
           requestId: request.id,
-          traceId: `web:${request.id}`,
         },
         "Message accepted by Web gateway",
       );
@@ -917,9 +889,18 @@ function coreUnavailableError(
   );
 }
 
-function requireManagementToken(expectedToken: string) {
+function requireGatewayToken(
+  options: CreateHttpApplicationOptions,
+  scope: GatewayScope,
+) {
+  const authenticator =
+    options.gatewayAuth ??
+    createGatewayAuthenticator(options.config.gatewayToken);
   return async (request: FastifyRequest, reply: FastifyReply) => {
-    if (!hasValidGatewayToken(request, expectedToken)) {
+    const authorization = request.headers.authorization?.trim() ?? "";
+    const match = /^Bearer[ \t]+(.+)$/i.exec(authorization);
+    const suppliedToken = match?.[1]?.trim() ?? "";
+    if (!(await authenticator.authorize(suppliedToken, scope))) {
       return reply
         .code(401)
         .send(
