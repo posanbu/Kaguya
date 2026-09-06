@@ -18,6 +18,18 @@ export type OneShotScheduleReceipt = { readonly scheduleInformationId: Informati
 export type OneShotReplacementReceipt = OneShotScheduleReceipt & { readonly previousOutcome: "superseded" | "already-terminal"; readonly previousTerminalInformationId: InformationId; };
 export interface OneShotTerminalResult { readonly scheduleInformationId: InformationId; readonly terminalInformationId: InformationId; readonly status: "fired" | "superseded" | "failed"; readonly created: boolean; }
 export interface OneShotDueReceipt { readonly scheduleInformationId: InformationId; readonly dueInformationId: InformationId; readonly created: boolean; }
+export interface OneShotScheduleProjectionStore {
+  create(input: OneShotCreateCommit): Promise<OneShotScheduleReceipt>;
+  replace(input: OneShotReplaceCommit): Promise<OneShotReplacementReceipt>;
+  emitDue(input: OneShotDueCommit): Promise<OneShotDueReceipt>;
+  finish(input: OneShotTerminalCommit): Promise<OneShotTerminalResult>;
+  listOpen(input: { readonly after?: InformationId; readonly limit: number }): Promise<{ readonly arms: readonly { readonly scheduleInformationId: InformationId; readonly dueAt: string }[]; readonly nextCursor?: InformationId }>;
+}
+export interface ScheduleClock {
+  now(): Date;
+  setTimeout(handler: () => void, delayMs: number): unknown;
+  clearTimeout(handle: unknown): void;
+}
 export type OneShotTerminalRequest = { readonly scheduleInformationId: InformationId; readonly status: "fired"; } | { readonly scheduleInformationId: InformationId; readonly status: "failed"; readonly failureKind: "consumer-failed" | "input-unavailable"; };
 export interface OneShotScheduleCapability { schedule(input: OneShotScheduleRequest): Promise<OneShotScheduleReceipt>; replace(input: OneShotScheduleReplacement): Promise<OneShotReplacementReceipt>; finish(input: OneShotTerminalRequest): Promise<OneShotTerminalResult>; }
 export interface OneShotScheduleCorePort { scheduleOneShot(input: OneShotScheduleRequest): Promise<OneShotScheduleReceipt>; replaceOneShot(input: OneShotScheduleReplacement): Promise<OneShotReplacementReceipt>; finishOneShot(input: OneShotTerminalRequest): Promise<OneShotTerminalResult>; }

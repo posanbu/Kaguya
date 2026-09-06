@@ -178,6 +178,9 @@ importers:
 
   packages/engine:
     dependencies:
+      '@kaguya/scheduler':
+        specifier: workspace:*
+        version: link:../scheduler
       '@kaguya/schema':
         specifier: workspace:*
         version: link:../schema
