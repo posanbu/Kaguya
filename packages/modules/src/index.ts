@@ -19,6 +19,10 @@ export {
   type CreateLlmReplyModuleOptions,
   type LlmCompletedInformationPayload,
   type LlmReplySettings,
+  type ModelTaskCapability,
+  type ModelTaskRequest,
+  type ModelTaskResult,
+  type ModelTaskCompletedInformationPayload,
   type ModelTier,
   type ModuleModelSelection,
 } from "./llm-reply.js";

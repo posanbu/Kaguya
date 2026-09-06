@@ -7,7 +7,8 @@
  * `information-kinds.ts`；engine `ModuleHost` 为每一次 register 自动补齐直接的
  * `core:caused-by` 与继承的 `core:context`，因此模块 handler 不伪造这些保留引用。
  * 输入输出与副作用：单元用例使用冻结 atom 与内存 register；集成用例使用真实 Core、宿主和
- * 校验引用规则和结构化 find 的内存账本，断言实际 ID、持久化顺序及 context 继承，
+ * PGlite 账本，模块侧以结构契约 fixture 提供通用任务能力，断言实际 ID、持久化顺序及 context 继承；
+ * 真实 ModelTaskClient 与共享 Runtime token/definition 的装配由 runtime.test.ts 覆盖，避免测试反向包依赖。
  * 不访问真实 LLM；schema 断言保护删除的 profile 与 reply target 设置不会重新进入模块契约。
  */
 import { createTestingDatabase } from "@kaguya/database/testing";
@@ -25,6 +26,7 @@ import {
 import {
   defineInformationKind,
   defineInformationModule,
+  defineModuleCapability,
   onInformation,
   type InformationFindQuery,
   type InformationKindDefinition,
@@ -56,20 +58,9 @@ import {
 import {
   createLlmReplyModule as defineReplyModule,
   llmReplySettingsSchema,
-} from "./llm-reply.js";
-import {
-  ModelTaskClient,
-  modelTaskCapability,
   type ModelTaskCapability,
   type ModelTaskRequest,
-} from "../../runtime/dist/model-task.js";
-import {
-  modelTaskCompletedInformationKind,
-  modelTaskRequestedInformationKind,
-  modelTaskInformationKinds,
-} from "../../runtime/dist/information-kinds.js";
-import { KaguyaLlmClient } from "@kaguya/llm/client";
-import { createRepeatingDeterministicModel } from "@kaguya/llm/testing";
+} from "./llm-reply.js";
 import * as informationKinds from "./information-kinds.js";
 
 const contextId = informationIdSchema.parse("context-1");
@@ -90,6 +81,67 @@ const runtimeContextInformationKind = defineInformationKind({
   references: {},
   log: { enabled: false },
 });
+
+const modelTaskCapability = defineModuleCapability<ModelTaskCapability>(
+  "kaguya:model-task",
+  1,
+);
+
+const modelTaskRequestedInformationKind = defineInformationKind({
+  kind: "core.model.task.requested",
+  payloadSchema: z.object({}).strict(),
+  references: {
+    "core:caused-by": { required: true, multiple: false },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: [runtimeContextInformationKind.kind],
+    },
+    "core:uses-context": { required: true, multiple: true },
+  },
+  log: { enabled: false },
+});
+
+const modelTaskCompletedInformationKind = defineInformationKind({
+  kind: "core.model.task.completed",
+  payloadSchema: z
+    .object({
+      taskId: z.string().min(1),
+      version: z.string().min(1),
+      sourceInformationId: informationIdSchema,
+      activation: z
+        .object({
+          instanceId: z.string().min(1),
+          definitionId: z.string().min(1),
+        })
+        .strict(),
+      output: z.object({ text: z.string().min(1) }).strict(),
+    })
+    .strict(),
+  references: {
+    "core:caused-by": {
+      required: true,
+      multiple: false,
+      targetKinds: [modelTaskRequestedInformationKind.kind],
+    },
+    "core:status-of": {
+      required: true,
+      multiple: false,
+      targetKinds: [modelTaskRequestedInformationKind.kind],
+    },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: [runtimeContextInformationKind.kind],
+    },
+  },
+  log: { enabled: false },
+});
+
+const modelTaskInformationKinds = [
+  modelTaskRequestedInformationKind,
+  modelTaskCompletedInformationKind,
+] as const;
 
 class MemoryInformationLedger implements InformationLedger {
   readonly atoms = new Map<string, DeepReadonly<InformationAtom>>();
@@ -216,14 +268,7 @@ function completedAtom() {
       taskId: "core.reply.generate",
       version: "1",
       sourceInformationId: reply.informationId,
-      contextInformationId: contextId,
-      contextInformationIds: [reply.informationId],
-      promptKind: "reply",
-      provenance: [],
       activation: { instanceId: "reply-1", definitionId: "demo.reply.llm" },
-      selectionPolicy: { tier: "heavy" },
-      resolvedModel: { providerId: "test", modelId: "test-heavy" },
-      durationMs: 1,
     },
     references: [
       { relation: "core:caused-by", informationId: reply.informationId },
@@ -254,7 +299,11 @@ function assistantAtom() {
 const executors = new WeakMap<object, ModelTaskCapability>();
 function createLlmReplyModule(
   options: Omit<
-    Parameters<typeof defineReplyModule>[0],
+    Parameters<
+      typeof defineReplyModule<
+        z.infer<typeof modelTaskCompletedInformationKind.payloadSchema>
+      >
+    >[0],
     "modelTaskCapability"
   > & {
     executor: ModelTaskCapability;
@@ -602,13 +651,77 @@ describe("createLlmReplyModule", () => {
     });
     const replyModule = createLlmReplyModule({
       modelTaskCompletedInformationKind,
-      executor: new ModelTaskClient({
-        core,
-        client: new KaguyaLlmClient({
-          model: createRepeatingDeterministicModel({ text: "Hello." }),
-        }),
-        resolveModel: () => ({ providerId: "test", modelId: "test-heavy" }),
-      }),
+      executor: {
+        async execute(input) {
+          const requested = await core.registerOnce(
+            "test.model-task.requested",
+            input.sourceInformationId,
+            modelTaskRequestedInformationKind,
+            {
+              occurredAt: "2026-09-04T00:00:01.000Z",
+              source: "runtime:model-task",
+              payload: {},
+              references: [
+                {
+                  relation: "core:caused-by",
+                  informationId: input.sourceInformationId,
+                },
+                {
+                  relation: "core:context",
+                  informationId: input.contextInformationId,
+                },
+                ...input.contextAtoms.map(({ informationId }) => ({
+                  relation: "core:uses-context" as const,
+                  informationId,
+                })),
+              ],
+            },
+          );
+          const completed = await core.commitTerminal(
+            "test.model-task.terminal",
+            requested.informationId,
+            modelTaskCompletedInformationKind,
+            {
+              occurredAt: "2026-09-04T00:00:02.000Z",
+              source: "runtime:model-task",
+              payload: {
+                taskId: input.task.taskId,
+                version: input.task.version,
+                sourceInformationId: input.sourceInformationId,
+                activation: { ...input.activation },
+                output: { text: "Hello." },
+              },
+              references: [
+                {
+                  relation: "core:caused-by",
+                  informationId: requested.informationId,
+                },
+                {
+                  relation: "core:status-of",
+                  informationId: requested.informationId,
+                },
+                {
+                  relation: "core:context",
+                  informationId: input.contextInformationId,
+                },
+              ],
+            },
+          );
+          return {
+            status: "completed",
+            output: input.task.outputSchema.parse(
+              modelTaskCompletedInformationKind.payloadSchema.parse(
+                completed.payload,
+              ).output,
+            ),
+            requestedInformationId: requested.informationId,
+            terminalInformationId: completed.informationId,
+          };
+        },
+        cancel: async () => {
+          throw new Error("unexpected cancellation");
+        },
+      },
     });
     const host = new ModuleHost({
       core,
@@ -655,12 +768,27 @@ describe("createLlmReplyModule", () => {
           { relation: "core:context", informationId: context.informationId },
         ],
       });
+      const completedSource = await vi.waitFor(async () => {
+        const completed = (
+          await ledger.query({ informationId: context.informationId })
+        ).find((atom) => atom.kind === modelTaskCompletedInformationKind.kind);
+        expect(completed).toBeDefined();
+        return completed!;
+      });
+      const sourceSelector = replyModule.manifest.selectors.find(
+        (selector) => selector.selectorId === "kaguya.reply.completed-source",
+      )!;
+      expect(
+        (await core.select(sourceSelector, completedSource.informationId)).map(
+          (atom) => atom.informationId,
+        ),
+      ).toEqual([completedSource.payload.sourceInformationId]);
       await vi.waitFor(async () =>
         expect(
-          (await ledger.query({ informationId: context.informationId })).some(
-            (a) => a.kind === deliveryRequestedInformationKind.kind,
+          (await ledger.query({ informationId: context.informationId })).map(
+            (a) => a.kind,
           ),
-        ).toBe(true),
+        ).toContain(deliveryRequestedInformationKind.kind),
       );
       const atoms = [
         context,

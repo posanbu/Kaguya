@@ -2,16 +2,21 @@
  * 功能概述：通过宿主批准的 Model Task 能力将回复请求、通用完成事实、assistant 与投递组成 durable DAG。
  * 主要职责：createLlmReplyModule 声明能力和共享 completed definition；请求 handler 经 context.use
  * 调用 core.reply.generate v1，replyTaskOutputSchema 严格校验文本。完成 handler 仅处理本 activation
- * 的任务赢家，经 completedReplySelector 重载来源 reply，再用 registerOnce 派生 assistant 和 delivery。
+ * 的任务赢家，经 completedReplySelector 沿 completed→requested→reply 授权读取来源，
+ * 再用 registerOnce 派生 assistant 和 delivery。
  * 代码库关系：Runtime 注入 token 和 definition 身份，Host 提供 activation、受限 Selector 与 claim fencing；
  * reply-context 保留原有 Prompt/Memory 顺序与 provenance，selectOutbound 保留 source/fixed 路由。
- * 类型通过 Runtime 构建声明引用，运行时不导入 Runtime、provider、模型、密钥或 Core。
+ * ModelTaskRequest/Result/Capability 是模块侧结构类型；completed definition 的泛型保留宿主 payload
+ * 与日志投影契约，不导入 Runtime source/dist、provider、模型、密钥或 Core，也不创建第二份 token。
  * 输入输出与副作用：requested/terminal 生命周期完全归 ModelTaskClient；failed/cancelled 不触发业务写入，
  * completed 与 assistant 广播按 originating activation 过滤，重投使用唯一操作槽，不保存请求内存状态。
  */
 import {
+  type CompiledPrompt,
   type DeepReadonly,
   type InformationAtom,
+  type JsonObject,
+  type JsonValue,
   type OutboundMessageContent,
   type PlatformDestination,
   z,
@@ -19,13 +24,13 @@ import {
 import {
   defineInformationModule,
   defineInformationSelector,
+  type InformationKindDefinition,
   type ModuleCapability,
+  type ModuleActivationProvenance,
   onInformation,
   type InformationSelectorDefinition,
 } from "@kaguya/sdk";
 import { PromptCompiler } from "@kaguya/prompt";
-import type { ModelTaskCapability } from "../../runtime/dist/model-task.js";
-import type { modelTaskCompletedInformationKind } from "../../runtime/dist/information-kinds.js";
 
 import {
   assistantTextInformationKind,
@@ -98,16 +103,80 @@ export const replyTaskOutputSchema = z
   .object({ text: z.string().min(1) })
   .strict();
 
-export interface CreateLlmReplyModuleOptions {
+export interface ModelTaskRequest<TOutput> {
+  readonly task: {
+    readonly taskId: string;
+    readonly version: string;
+    readonly outputSchema: z.ZodType<TOutput>;
+    readonly allowedTiers: readonly ("light" | "heavy")[];
+  };
+  readonly sourceInformationId: string;
+  readonly contextInformationId: string;
+  readonly activation: ModuleActivationProvenance;
+  readonly selectionPolicy: { readonly tier: "light" | "heavy" };
+  readonly prompt: CompiledPrompt;
+  readonly contextAtoms: readonly DeepReadonly<InformationAtom>[];
+}
+
+type ModelTaskResultIdentity = {
+  readonly requestedInformationId: string;
+  readonly terminalInformationId: string;
+};
+
+export type ModelTaskResult<TOutput> = ModelTaskResultIdentity &
+  (
+    | { readonly status: "completed"; readonly output: TOutput }
+    | {
+        readonly status: "failed";
+        readonly error: {
+          readonly name: "ModelTaskError";
+          readonly kind: "retryable" | "non-retryable";
+          readonly message: "Model task generation failed";
+        };
+      }
+    | {
+        readonly status: "cancelled";
+        readonly reason: "Explicit cancellation requested";
+      }
+  );
+
+export interface ModelTaskCapability {
+  execute<TOutput>(
+    request: ModelTaskRequest<TOutput>,
+  ): Promise<ModelTaskResult<TOutput>>;
+  cancel(request: {
+    readonly requestedInformationId: string;
+    readonly reason: string;
+  }): Promise<ModelTaskResult<unknown>>;
+}
+
+export type ModelTaskCompletedInformationPayload = JsonObject & {
+  readonly taskId: string;
+  readonly version: string;
+  readonly sourceInformationId: string;
+  readonly activation: {
+    readonly instanceId: string;
+    readonly definitionId: string;
+  };
+  readonly output: JsonValue;
+};
+
+export interface CreateLlmReplyModuleOptions<
+  P extends ModelTaskCompletedInformationPayload =
+    ModelTaskCompletedInformationPayload,
+> {
   readonly modelTaskCapability: ModuleCapability<ModelTaskCapability>;
-  readonly modelTaskCompletedInformationKind: typeof modelTaskCompletedInformationKind;
+  readonly modelTaskCompletedInformationKind: InformationKindDefinition<
+    "core.model.task.completed",
+    P
+  >;
   readonly selector?: InformationSelectorDefinition;
   readonly promptCompiler?: PromptCompiler;
 }
 
-export function createLlmReplyModule(
-  dependencies: CreateLlmReplyModuleOptions,
-) {
+export function createLlmReplyModule<
+  P extends ModelTaskCompletedInformationPayload,
+>(dependencies: CreateLlmReplyModuleOptions<P>) {
   const { modelTaskCapability } = dependencies;
   if (
     modelTaskCapability.id !== "kaguya:model-task" ||
@@ -116,6 +185,8 @@ export function createLlmReplyModule(
     throw new Error("Invalid model task capability");
   const selector = dependencies.selector ?? currentAcceptedMessageSelector;
   const promptCompiler = dependencies.promptCompiler ?? new PromptCompiler();
+  const completedInformationKind =
+    dependencies.modelTaskCompletedInformationKind;
   return defineInformationModule({
     manifest: {
       protocolVersion: 1,
@@ -129,7 +200,7 @@ export function createLlmReplyModule(
       settingsSchema: llmReplySettingsSchema,
       consumes: [
         replyRequestedInformationKind,
-        dependencies.modelTaskCompletedInformationKind,
+        completedInformationKind,
         assistantTextInformationKind,
         coreMemoryTextInformationKind,
       ],
@@ -177,7 +248,7 @@ export function createLlmReplyModule(
           },
         ),
         onInformation(
-          dependencies.modelTaskCompletedInformationKind,
+          completedInformationKind,
           {
             subscriptionId: "kaguya.reply.model-task-completed",
             delivery: "durable",
@@ -245,11 +316,33 @@ export function createLlmReplyModule(
 
 const completedReplySelector = defineInformationSelector({
   selectorId: "kaguya.reply.completed-source",
-  select: ({ sourceAtom }) => {
+  select: async ({ sourceAtom, ledger }) => {
     const payload = z
       .object({ sourceInformationId: z.string().min(1) })
       .parse(sourceAtom.payload);
-    return [payload.sourceInformationId];
+    const requested = await ledger.related({
+      from: [sourceAtom.informationId],
+      relation: "core:caused-by",
+      direction: "outgoing",
+      limit: 1,
+    });
+    if (requested[0]?.kind !== "core.model.task.requested")
+      throw new Error("Model task completion must reference its request");
+    const sources = await ledger.related({
+      from: [requested[0].informationId],
+      relation: "core:caused-by",
+      direction: "outgoing",
+      limit: 1,
+    });
+    const reply = sources[0];
+    if (
+      reply?.kind !== replyRequestedInformationKind.kind ||
+      reply.informationId !== payload.sourceInformationId
+    )
+      throw new Error(
+        "Model task completion source must match its reply cause",
+      );
+    return [reply.informationId];
   },
 });
 

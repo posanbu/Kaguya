@@ -1,9 +1,11 @@
 /**
- * 功能概述：在显式 composition root 选择演示业务 Catalog 与 LLM 宿主能力。
- * 主要职责：createReplyComposition 声明模块启用设置，并将模型解析器绑定为受控 executor；
+ * 功能概述：在显式 composition root 选择业务 Catalog 与宿主批准的 Model Task 能力。
+ * 主要职责：createReplyComposition 注入共享 token/definition，按 activation 设置批准 tier，
+ * 并将 provider client 与模型解析器交给 Runtime 构造受控 ModelTaskClient；
  * createDeterministicModelSelectionResolver 为离线演示提供确定性模型。
  * 代码库关系：组合 modules、Runtime 通用生命周期与 LLM client，Runtime 本身不认识回复策略。
- * 输入输出与副作用：构造阶段无网络或连接；能力执行时从 Core 读取因果 context 并运行模型生命周期。
+ * 输入输出与副作用：构造阶段无网络或连接；模型句柄仅存于宿主闭包，
+ * Runtime 校验 activation/policy、重载因果 context 并写通用任务生命周期，模块经 context.use 调用。
  */
 import {
   KaguyaLlmClient,
@@ -13,16 +15,13 @@ import { createRepeatingDeterministicModel } from "@kaguya/llm/testing";
 import {
   createFirstPartyModuleCatalog,
   firstPartyModuleActivations,
-  llmReplyExecutorCapability,
-  type LlmReplyExecutor,
+  llmReplySettingsSchema,
   type ModuleModelSelection,
-  type LlmCompletedInformationPayload,
 } from "@kaguya/modules";
-import { type InformationKindDefinition } from "@kaguya/sdk";
 import {
-  llmCompletedInformationKind,
-  LlmLifecycleClient,
-  type RuntimeCapabilityContext,
+  modelTaskCapability,
+  modelTaskCompletedInformationKind,
+  type RuntimeModelTaskOptions,
 } from "@kaguya/runtime";
 export type RuntimeModelSelectionResolver = (
   selection: ModuleModelSelection,
@@ -40,49 +39,38 @@ export function createReplyComposition(
   resolveModelSelection: RuntimeModelSelectionResolver = createDeterministicModelSelectionResolver(),
 ) {
   const catalog = createFirstPartyModuleCatalog({
-    llmCompletedInformationKind:
-      llmCompletedInformationKind as unknown as InformationKindDefinition<
-        "core.llm.completed",
-        LlmCompletedInformationPayload
-      >,
+    modelTaskCapability,
+    modelTaskCompletedInformationKind,
   });
+  const models = new Map<string, ReturnType<KaguyaLlmModelResolver>>();
+  const modelTask: RuntimeModelTaskOptions = {
+    approvals: firstPartyModuleActivations
+      .filter((activation) => activation.definitionId === "demo.reply.llm")
+      .map((activation) => ({
+        activation: {
+          instanceId: activation.instanceId,
+          definitionId: activation.definitionId,
+        },
+        selectionPolicy: {
+          tier: llmReplySettingsSchema.parse(activation.settings).modelTier,
+        },
+      })),
+    client: new KaguyaLlmClient({
+      resolveModel: ({ modelId }) => {
+        const model = models.get(modelId);
+        if (model === undefined) throw new Error("Unapproved model");
+        return model;
+      },
+    }),
+    resolveModel: ({ tier }) => {
+      const resolved = resolveModelSelection({ modelTier: tier });
+      models.set(resolved.modelId, resolved.model);
+      return { providerId: "host-approved", modelId: resolved.modelId };
+    },
+  };
   return {
     catalog,
     activations: firstPartyModuleActivations,
-    capabilities: ({ core, now }: RuntimeCapabilityContext) => {
-      const executor: LlmReplyExecutor = {
-        execute: async (input) => {
-          const contexts = input.reply.references.filter(
-            (r) => r.relation === "core:context",
-          );
-          if (contexts.length !== 1)
-            throw new Error("Reply must have one context");
-          const context = await core.get(contexts[0]!.informationId);
-          if (context?.kind !== "core.runtime.context")
-            throw new Error("Reply context information is unavailable");
-          const resolved = resolveModelSelection(input.selection);
-          return new LlmLifecycleClient({
-            core,
-            client: new KaguyaLlmClient({ model: resolved.model, now }),
-            now,
-          }).generate(
-            {
-              operationKey: input.operationKey,
-              kind: "reply",
-              modelId: resolved.modelId,
-              workflowId: "message-module-pipeline",
-              nodeId: "reply",
-              originatingModuleInstanceId: input.originatingModuleInstanceId,
-              prompt: input.prompt,
-              contextAtoms: input.contextAtoms,
-              reply: input.reply.payload,
-            },
-            context as Parameters<LlmLifecycleClient["generate"]>[1],
-            input.reply,
-          );
-        },
-      };
-      return [{ capability: llmReplyExecutorCapability, value: executor }];
-    },
+    modelTask,
   };
 }
