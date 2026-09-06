@@ -21,6 +21,7 @@
     "@kaguya/memory": "workspace:*",
     "@kaguya/schema": "workspace:*",
     "@kaguya/sdk": "workspace:*",
+    "@kaguya/scheduler": "workspace:*",
     "pg": "^8.23.0"
   },
   "devDependencies": {

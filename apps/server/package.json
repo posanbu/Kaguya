@@ -19,6 +19,7 @@
     "@kaguya/database": "workspace:*",
     "@kaguya/logger": "workspace:*",
     "@kaguya/platform-adapters": "workspace:*",
+    "@kaguya/scheduler": "workspace:*",
     "@kaguya/runtime": "workspace:*",
     "@kaguya/schema": "workspace:*",
     "fastify": "^5.10.0",

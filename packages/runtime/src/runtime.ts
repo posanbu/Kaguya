@@ -39,6 +39,10 @@ import {
   cadenceInformationKinds,
   installProjectionReconciliationConsumers,
   type CadenceDefinitionInput,
+  DurableOneShotScheduler,
+  OneShotScheduleClient,
+  oneShotInformationKinds,
+  type OneShotScheduleCapability,
 } from "@kaguya/scheduler";
 import type {
   InboundReceipt,
@@ -94,6 +98,7 @@ export type RuntimeModelTaskOptions = Pick<
 export interface RuntimeCapabilityContext {
   readonly core: InformationCore;
   readonly now: () => Date;
+  readonly oneShotSchedule: OneShotScheduleCapability;
 }
 export type RuntimeCapabilities =
   | readonly ModuleCapabilityImplementation[]
@@ -204,6 +209,7 @@ export class KaguyaRuntime implements InformationIngress {
     PlatformDeliveryReceipt[]
   >();
   readonly #runtimeLogger: KaguyaLogger | undefined;
+  readonly #oneShotRecoveryGate: Promise<void> | undefined;
 
   #state: RuntimeState = "new";
   #startPromise: Promise<void> | undefined;
@@ -215,6 +221,11 @@ export class KaguyaRuntime implements InformationIngress {
   #moduleHost: ModuleHost | undefined;
   #cadence: CadenceCoordinator | undefined;
   #cadenceUnsubscribe: readonly (() => void)[] = [];
+  #oneShotSchedule: OneShotScheduleCapability | undefined;
+  #oneShotScheduler: DurableOneShotScheduler | undefined;
+  #oneShotRecoveryPromise: Promise<void> | undefined;
+  #oneShotSchedulerReady = false;
+  readonly #oneShotPendingRefresh = new Set<InformationId>();
 
   constructor(private readonly options: KaguyaRuntimeOptions) {
     if (
@@ -225,6 +236,9 @@ export class KaguyaRuntime implements InformationIngress {
     }
     this.#now = options.now ?? (() => new Date());
     this.#nextInformationId = options.informationIdGenerator ?? randomUUID;
+    this.#oneShotRecoveryGate = (
+      options as { oneShotRecoveryGate?: Promise<void> }
+    ).oneShotRecoveryGate;
     this.#runtimeLogger =
       options.logger === undefined
         ? undefined
@@ -345,15 +359,49 @@ export class KaguyaRuntime implements InformationIngress {
           this.options.cadence.reconciliationBatchSize,
         );
       }
+      const scheduler = new DurableOneShotScheduler({
+        store: database.information.oneShotSchedules,
+        clock: {
+          now: this.#now,
+          setTimeout: globalThis.setTimeout.bind(globalThis),
+          clearTimeout: globalThis.clearTimeout.bind(globalThis),
+        },
+        nextInformationId: this.#nextInformationId,
+        drainTimeoutMs: this.options.drainTimeoutMs ?? 5000,
+      });
+      this.#oneShotScheduler = scheduler;
+      const client = new OneShotScheduleClient(core);
+      const oneShotSchedule: OneShotScheduleCapability = {
+        schedule: async (input) => {
+          const receipt = await client.schedule(input);
+          if (this.#oneShotSchedulerReady) {
+            await scheduler.refresh(receipt.scheduleInformationId);
+          } else this.#oneShotPendingRefresh.add(receipt.scheduleInformationId);
+          return receipt;
+        },
+        replace: async (input) => {
+          const receipt = await client.replace(input);
+          if (this.#oneShotSchedulerReady) {
+            await scheduler.refresh(receipt.scheduleInformationId);
+          } else this.#oneShotPendingRefresh.add(receipt.scheduleInformationId);
+          return receipt;
+        },
+        finish: (input) => client.finish(input),
+      };
+      this.#oneShotSchedule = oneShotSchedule;
       const suppliedCapabilities =
         typeof this.options.capabilities === "function"
-          ? this.options.capabilities({ core, now: this.#now })
+          ? this.options.capabilities({
+              core,
+              now: this.#now,
+              oneShotSchedule,
+            })
           : this.options.capabilities;
       const capabilities = [
         { capability: memoryCapability, value: database.memory },
         ...composeModelTaskCapabilities(
           this.options,
-          { core, now: this.#now },
+          { core, now: this.#now, oneShotSchedule },
           suppliedCapabilities ?? [],
         ),
       ];
@@ -392,6 +440,14 @@ export class KaguyaRuntime implements InformationIngress {
         });
         await this.#cadence.start();
       }
+      this.#oneShotRecoveryPromise = this.#oneShotRecoveryGate;
+      await scheduler.start();
+      await this.#oneShotRecoveryPromise;
+      this.#oneShotSchedulerReady = true;
+      for (const scheduleInformationId of this.#oneShotPendingRefresh) {
+        await scheduler.refresh(scheduleInformationId);
+      }
+      this.#oneShotPendingRefresh.clear();
       this.#state = "started";
       this.#runtimeLogger?.info(
         {
@@ -432,9 +488,10 @@ export class KaguyaRuntime implements InformationIngress {
     const starting =
       this.#state === "starting" ? this.#startPromise : undefined;
     this.#state = "closing";
-    // create/start 可以正在等待 activation signal；必须在等待启动任务之前传播取消。
-    void this.#moduleHost?.stop().catch(() => undefined);
     this.#closePromise = (async () => {
+      // scheduler 必须先停止，随后再让 ModuleHost abort 正在等待的启动或 handler。
+      await this.#oneShotScheduler?.stop().catch(() => undefined);
+      await this.#moduleHost?.stop().catch(() => undefined);
       await starting?.catch(() => undefined);
       await drainRuntimeOperations(
         [...this.#inFlight],
@@ -457,6 +514,11 @@ export class KaguyaRuntime implements InformationIngress {
     if (this.#cleanupPromise !== undefined) return this.#cleanupPromise;
     this.#cleanupPromise = (async () => {
       const failures: unknown[] = [];
+      try {
+        await this.#oneShotScheduler?.stop();
+      } catch (error) {
+        failures.push(error);
+      }
       try {
         await this.#cadence?.stop();
       } catch (error) {
@@ -485,6 +547,11 @@ export class KaguyaRuntime implements InformationIngress {
       this.#database = undefined;
       this.#core = undefined;
       this.#moduleHost = undefined;
+      this.#oneShotSchedule = undefined;
+      this.#oneShotScheduler = undefined;
+      this.#oneShotRecoveryPromise = undefined;
+      this.#oneShotSchedulerReady = false;
+      this.#oneShotPendingRefresh.clear();
       this.#ownsDatabase = false;
       return failures;
     })();
@@ -818,6 +885,7 @@ function collectDefinitions(
       ...builtInInformationKinds,
       ...modelTaskInformationKinds,
       ...cadenceInformationKinds,
+      ...oneShotInformationKinds,
     ].map((definition) => [definition.kind, definition]),
   );
   for (const module of moduleDefinitions) {

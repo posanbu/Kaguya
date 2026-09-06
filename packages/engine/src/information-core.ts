@@ -37,6 +37,21 @@ import type {
   InformationReferenceRule,
   InformationSelectorDefinition,
 } from "@kaguya/sdk";
+import {
+  oneShotRequestedInformationKind,
+  oneShotDueInformationKind,
+  oneShotSupersededInformationKind,
+  oneShotFiredInformationKind,
+  oneShotFailedInformationKind,
+  type OneShotScheduleCorePort,
+  type OneShotScheduleRequest,
+  type OneShotScheduleReplacement,
+  type OneShotTerminalRequest,
+  type OneShotScheduleReceipt,
+  type OneShotReplacementReceipt,
+  type OneShotTerminalResult,
+  type OneShotFencingGuard,
+} from "@kaguya/scheduler";
 
 import {
   InformationBus,
@@ -84,6 +99,7 @@ export interface InformationReferenceQuery {
  * no update, delete, TTL, or compaction operation: a state change is a new atom.
  */
 export interface InformationLedger {
+  readonly oneShotSchedules?: import("@kaguya/scheduler").OneShotScheduleProjectionStore;
   readonly reliable?: import("./reliable-types.js").ReliableInformationLedger;
   synchronizeKinds(kinds: readonly string[]): Promise<void>;
   append(
@@ -141,7 +157,7 @@ type UniqueCommit =
 
 type CoreState = "new" | "starting" | "started" | "closing" | "closed";
 
-export class InformationCore {
+export class InformationCore implements OneShotScheduleCorePort {
   readonly #durableSubscriptions = new Map<
     string,
     ReliableInformationSubscription
@@ -173,6 +189,11 @@ export class InformationCore {
     this.store = options.store;
     this.registry.registerBuiltin(consumerFailedInformationKind);
     this.registry.registerBuiltin(executionExhaustedInformationKind);
+    this.registry.registerBuiltin(oneShotRequestedInformationKind);
+    this.registry.registerBuiltin(oneShotDueInformationKind);
+    this.registry.registerBuiltin(oneShotSupersededInformationKind);
+    this.registry.registerBuiltin(oneShotFiredInformationKind);
+    this.registry.registerBuiltin(oneShotFailedInformationKind);
     this.#bus = new InformationBus();
     this.#nextInformationId = options.nextInformationId;
     this.#now = options.now ?? (() => new Date());
@@ -456,6 +477,188 @@ export class InformationCore {
   ): Promise<DeepReadonly<InformationAtom> | undefined> {
     this.assertState("started");
     return this.store.get(informationId);
+  }
+
+  async scheduleOneShot(
+    input: OneShotScheduleRequest,
+  ): Promise<OneShotScheduleReceipt> {
+    const schedules = this.store.oneShotSchedules;
+    if (!schedules) throw new Error("One-shot scheduling is not configured");
+    const atom = await this.buildOneShotAtom(
+      oneShotRequestedInformationKind,
+      {
+        operationKey: input.operationKey,
+        dueAt: input.dueAt,
+        input: input.input,
+        activation: { ...input.activation },
+      },
+      [
+        {
+          relation: "core:caused-by",
+          informationId: input.sourceInformationId,
+        },
+        ...(input.references ?? []),
+      ],
+    );
+    const guard = this.currentScheduleGuard();
+    const result = await schedules.create({
+      operationKey: input.operationKey,
+      schedule: atom,
+      dueAt: input.dueAt,
+      ...(guard ? { guard } : {}),
+    });
+    return result;
+  }
+
+  async replaceOneShot(
+    input: OneShotScheduleReplacement,
+  ): Promise<OneShotReplacementReceipt> {
+    const schedules = this.store.oneShotSchedules;
+    if (!schedules) throw new Error("One-shot scheduling is not configured");
+    const atom = await this.buildOneShotAtom(
+      oneShotRequestedInformationKind,
+      {
+        operationKey: input.operationKey,
+        dueAt: input.dueAt,
+        input: input.input,
+        activation: { ...input.activation },
+      },
+      [
+        {
+          relation: "core:caused-by",
+          informationId: input.sourceInformationId,
+        },
+        {
+          relation: "core:replaces",
+          informationId: input.previousScheduleInformationId,
+        },
+        ...(input.references ?? []),
+      ],
+    );
+    const superseded = await this.buildOneShotAtom(
+      oneShotSupersededInformationKind,
+      {},
+      [
+        {
+          relation: "core:status-of",
+          informationId: input.previousScheduleInformationId,
+        },
+      ],
+    );
+    const guard = this.currentScheduleGuard();
+    return schedules.replace({
+      operationKey: input.operationKey,
+      previousScheduleInformationId: input.previousScheduleInformationId,
+      schedule: atom,
+      superseded,
+      dueAt: input.dueAt,
+      ...(guard ? { guard } : {}),
+    });
+  }
+
+  async finishOneShot(
+    input: OneShotTerminalRequest,
+  ): Promise<OneShotTerminalResult> {
+    const schedules = this.store.oneShotSchedules;
+    if (!schedules) throw new Error("One-shot scheduling is not configured");
+    const definition =
+      input.status === "fired"
+        ? oneShotFiredInformationKind
+        : oneShotFailedInformationKind;
+    const payload =
+      input.status === "fired" ? {} : { failureKind: input.failureKind };
+    const atom = await this.buildOneShotAtom(definition, payload, [
+      {
+        relation: "core:status-of",
+        informationId: input.scheduleInformationId,
+      },
+    ]);
+    const guard = this.currentScheduleGuard();
+    return schedules.finish({
+      scheduleInformationId: input.scheduleInformationId,
+      terminal: atom,
+      ...(guard ? { guard } : {}),
+    });
+  }
+
+  private currentScheduleGuard(): OneShotFencingGuard | undefined {
+    const execution = this.#execution.getStore();
+    return execution
+      ? { ...execution.claim, signal: execution.signal }
+      : undefined;
+  }
+
+  private async buildOneShotAtom(
+    definition: InformationKindDefinition<string, any>,
+    payload: JsonObject,
+    references: readonly InformationReference[],
+  ): Promise<DeepReadonly<InformationAtom>> {
+    this.assertState("started");
+    const registered = this.registry.assertRegistered(
+      definition as InformationKindDefinition<string, any>,
+    );
+    const parsedPayload = registered.payloadSchema.parse(payload);
+    const parsedReferences = references.map((reference) =>
+      informationReferenceSchema.parse(reference),
+    );
+    const atom = informationAtomSchema.parse({
+      informationId: this.parseInformationId(this.#nextInformationId()),
+      kind: registered.kind,
+      occurredAt: this.#now().toISOString(),
+      source: "core:scheduler",
+      payload: parsedPayload,
+      references: parsedReferences,
+    });
+    const expectations = buildReferenceExpectations(registered.references);
+    const byRelation = new Map<string, InformationReference[]>();
+    for (const reference of parsedReferences)
+      byRelation.set(reference.relation, [
+        ...(byRelation.get(reference.relation) ?? []),
+        reference,
+      ]);
+    for (const reference of parsedReferences) {
+      const expectation = expectations.find(
+        (item) => item.relation === reference.relation,
+      );
+      if (!expectation)
+        throw new InformationReferenceValidationError(
+          registered.kind,
+          reference.relation,
+          "undeclared",
+        );
+      const target = await this.store.get(reference.informationId);
+      if (!target)
+        throw new InformationReferenceValidationError(
+          registered.kind,
+          reference.relation,
+          "missing-target",
+        );
+      if (
+        expectation.targetKinds &&
+        !expectation.targetKinds.includes(target.kind)
+      )
+        throw new InformationReferenceValidationError(
+          registered.kind,
+          reference.relation,
+          "target-kind",
+        );
+    }
+    for (const expectation of expectations) {
+      const values = byRelation.get(expectation.relation) ?? [];
+      if (expectation.required && values.length === 0)
+        throw new InformationReferenceValidationError(
+          registered.kind,
+          expectation.relation,
+          "required",
+        );
+      if (!expectation.multiple && values.length > 1)
+        throw new InformationReferenceValidationError(
+          registered.kind,
+          expectation.relation,
+          "multiple",
+        );
+    }
+    return freezeInformationAtom(atom as InformationAtom);
   }
 
   async getMany(

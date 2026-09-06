@@ -24,6 +24,10 @@ import {
   type InformationFindQuery,
   type InformationKindDefinition,
 } from "@kaguya/sdk";
+import {
+  oneShotRequestedInformationKind,
+  type OneShotScheduleProjectionStore,
+} from "@kaguya/scheduler";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -1071,5 +1075,140 @@ describe("InformationCore", () => {
       error: { errorType: "Error", message: "Consumer handler failed" },
     });
     expect(JSON.stringify(fact)).not.toContain("getter-secret");
+  });
+
+  it("validates one-shot references against the registered target kinds before projection writes", async () => {
+    const ledger = new MemoryInformationStore();
+    const projection: OneShotScheduleProjectionStore = {
+      create: vi.fn(async () => ({
+        scheduleInformationId: "schedule",
+        created: true,
+      })),
+      replace: vi.fn(async () => ({
+        scheduleInformationId: "schedule",
+        created: true,
+        previousOutcome: "superseded" as const,
+        previousTerminalInformationId: "terminal",
+      })),
+      emitDue: vi.fn(),
+      finish: vi.fn(),
+      listOpen: vi.fn(async () => ({ arms: [] })),
+    };
+    (
+      ledger as MemoryInformationStore & {
+        oneShotSchedules?: OneShotScheduleProjectionStore;
+      }
+    ).oneShotSchedules = projection;
+    const core = await createStartedCore(ledger, [parentDefinition]);
+    const source = await core.register(
+      parentDefinition,
+      registration({ text: "source" }),
+    );
+    const request = {
+      operationKey: "one-shot-op",
+      sourceInformationId: source.informationId,
+      dueAt: "2026-09-06T13:00:00.000Z",
+      input: { prompt: "moon" },
+      activation: { instanceId: "instance", definitionId: "definition" },
+    } as const;
+
+    await expect(
+      core.scheduleOneShot({
+        ...request,
+        sourceInformationId: "missing-source" as never,
+      }),
+    ).rejects.toMatchObject({ reason: "missing-target" });
+    await expect(
+      core.scheduleOneShot({ ...request, dueAt: "tomorrow" as never }),
+    ).rejects.toThrow();
+    await expect(
+      core.scheduleOneShot({
+        ...request,
+        references: [
+          { relation: "core:caused-by", informationId: source.informationId },
+        ],
+      }),
+    ).rejects.toMatchObject({ reason: "multiple" });
+    await expect(
+      core.scheduleOneShot({
+        ...request,
+        references: [
+          { relation: "core:rogue", informationId: source.informationId },
+        ],
+      }),
+    ).rejects.toMatchObject({ reason: "undeclared" });
+    await expect(
+      core.replaceOneShot({
+        ...request,
+        previousScheduleInformationId: source.informationId,
+      }),
+    ).rejects.toMatchObject({ reason: "target-kind" });
+    await expect(
+      core.finishOneShot({
+        scheduleInformationId: source.informationId,
+        status: "fired",
+      }),
+    ).rejects.toMatchObject({ reason: "target-kind" });
+    expect(projection.create).not.toHaveBeenCalled();
+    expect(projection.replace).not.toHaveBeenCalled();
+    expect(projection.finish).not.toHaveBeenCalled();
+  });
+
+  it("forwards a valid one-shot request and the active durable claim", async () => {
+    const ledger = new MemoryInformationStore();
+    const projection: OneShotScheduleProjectionStore = {
+      create: vi.fn(async () => ({
+        scheduleInformationId: "schedule",
+        created: true,
+      })),
+      replace: vi.fn(),
+      emitDue: vi.fn(),
+      finish: vi.fn(),
+      listOpen: vi.fn(async () => ({ arms: [] })),
+    };
+    (
+      ledger as MemoryInformationStore & {
+        oneShotSchedules?: OneShotScheduleProjectionStore;
+      }
+    ).oneShotSchedules = projection;
+    const core = await createStartedCore(ledger, [parentDefinition]);
+    const source = await core.register(
+      parentDefinition,
+      registration({ text: "source" }),
+    );
+    const claim = {
+      subscriptionId: "sub",
+      informationId: source.informationId,
+      token: "token",
+      attempt: 1,
+      leaseUntil: "2026-09-06T13:01:00.000Z",
+    } as const;
+    await core.withClaim(claim, new AbortController().signal, () =>
+      core.scheduleOneShot({
+        operationKey: "one-shot-op",
+        sourceInformationId: source.informationId,
+        dueAt: "2026-09-06T13:00:00.000Z",
+        input: { prompt: "moon" },
+        activation: { instanceId: "instance", definitionId: "definition" },
+      }),
+    );
+    expect(projection.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operationKey: "one-shot-op",
+        dueAt: "2026-09-06T13:00:00.000Z",
+        guard: expect.objectContaining(claim),
+      }),
+    );
+    const createCalls = (projection.create as ReturnType<typeof vi.fn>).mock
+      .calls;
+    const commit = createCalls[0]![0] as {
+      schedule: { kind: string; payload: Record<string, unknown> };
+    };
+    expect(commit.schedule.kind).toBe(oneShotRequestedInformationKind.kind);
+    expect(commit.schedule.payload).toMatchObject({
+      operationKey: "one-shot-op",
+      dueAt: "2026-09-06T13:00:00.000Z",
+      input: { prompt: "moon" },
+    });
   });
 });

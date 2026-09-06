@@ -10,6 +10,7 @@
     { "path": "../schema" },
     { "path": "../memory" },
     { "path": "../engine" },
-    { "path": "../sdk" }
+    { "path": "../sdk" },
+    { "path": "../scheduler" }
   ]
 }

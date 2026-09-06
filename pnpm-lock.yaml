@@ -59,6 +59,9 @@ importers:
       '@kaguya/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
+      '@kaguya/scheduler':
+        specifier: workspace:*
+        version: link:../../packages/scheduler
       '@kaguya/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
@@ -104,6 +107,9 @@ importers:
       '@kaguya/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
+      '@kaguya/scheduler':
+        specifier: workspace:*
+        version: link:../../packages/scheduler
       '@kaguya/schema':
         specifier: workspace:*
         version: link:../../packages/schema
@@ -156,6 +162,9 @@ importers:
       '@kaguya/memory':
         specifier: workspace:*
         version: link:../memory
+      '@kaguya/scheduler':
+        specifier: workspace:*
+        version: link:../scheduler
       '@kaguya/schema':
         specifier: workspace:*
         version: link:../schema
@@ -175,6 +184,9 @@ importers:
 
   packages/engine:
     dependencies:
+      '@kaguya/scheduler':
+        specifier: workspace:*
+        version: link:../scheduler
       '@kaguya/schema':
         specifier: workspace:*
         version: link:../schema
@@ -296,9 +308,6 @@ importers:
 
   packages/scheduler:
     dependencies:
-      '@kaguya/engine':
-        specifier: workspace:*
-        version: link:../engine
       '@kaguya/schema':
         specifier: workspace:*
         version: link:../schema

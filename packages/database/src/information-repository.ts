@@ -28,6 +28,10 @@ import type {
 } from "@kaguya/engine";
 import type { InformationFindQuery } from "@kaguya/sdk";
 
+import {
+  OneShotScheduleRepository,
+  type OneShotScheduleProjectionStore,
+} from "./one-shot-schedule-repository.js";
 import { ReliableInformationRepository } from "./reliable-repository.js";
 
 import type { SqlDatabase, SqlTransaction } from "./driver.js";
@@ -102,11 +106,16 @@ export interface PendingInformationLogProjection {
  */
 export class InformationRepository implements InformationLedger {
   readonly reliable: ReliableInformationRepository;
+  readonly oneShotSchedules: OneShotScheduleProjectionStore;
   constructor(private readonly database: SqlDatabase) {
     this.reliable = new ReliableInformationRepository(
       database,
       appendInformationAtom,
       readAtomById,
+    );
+    this.oneShotSchedules = new OneShotScheduleRepository(
+      database,
+      this.reliable,
     );
   }
 

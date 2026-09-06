@@ -175,6 +175,33 @@ export class ReliableInformationRepository implements ReliableInformationLedger 
       guard,
     );
   }
+
+  /**
+   * Commit an operation while the caller owns an already-open transaction.
+   * Scheduler projections use this boundary so the atom, slot, and mutable
+   * arm row share one commit point.
+   */
+  appendOnceInTransaction(
+    tx: SqlTransaction,
+    operation: string,
+    key: string,
+    atom: DeepReadonly<InformationAtom>,
+    expectations: readonly InformationReferenceExpectation[],
+    options: InformationAppendOptions,
+  ): Promise<InformationCommitResult> {
+    identity(operation);
+    if (!key || key.length > 4096)
+      throw new Error("Invalid information operation key");
+    return this.commitInTransaction(
+      tx,
+      "operation",
+      operation,
+      key,
+      atom,
+      expectations,
+      options,
+    );
+  }
   appendTerminal(
     group: string,
     subject: InformationId,
@@ -193,6 +220,27 @@ export class ReliableInformationRepository implements ReliableInformationLedger 
       guard,
     );
   }
+
+  /** See `appendOnceInTransaction`; this variant races a terminal slot. */
+  appendTerminalInTransaction(
+    tx: SqlTransaction,
+    group: string,
+    subject: InformationId,
+    atom: DeepReadonly<InformationAtom>,
+    expectations: readonly InformationReferenceExpectation[],
+    options: InformationAppendOptions,
+  ): Promise<InformationCommitResult> {
+    identity(group);
+    return this.commitInTransaction(
+      tx,
+      "terminal",
+      group,
+      subject,
+      atom,
+      expectations,
+      options,
+    );
+  }
   private async commit(
     type: string,
     namespace: string,
@@ -206,7 +254,7 @@ export class ReliableInformationRepository implements ReliableInformationLedger 
     if (!key || key.length > 4096)
       throw new Error("Invalid information operation key");
     return this.db.transaction(async (tx) => {
-      if (guard) await assertClaim(tx, guard);
+      if (guard) await assertClaimInTransaction(tx, guard);
       if (type === "terminal" && !(await this.read(tx, key as InformationId)))
         throw new Error("Terminal subject does not exist");
       const result = await this.commitInTransaction(
@@ -219,7 +267,7 @@ export class ReliableInformationRepository implements ReliableInformationLedger 
         options,
       );
       // 再检期限，避免在长事务内过期后仍提交结果。
-      if (guard) await assertClaim(tx, guard);
+      if (guard) await assertClaimInTransaction(tx, guard);
       return result;
     });
   }
@@ -260,7 +308,7 @@ export class ReliableInformationRepository implements ReliableInformationLedger 
     expectations: readonly InformationReferenceExpectation[],
   ): Promise<boolean> {
     return this.db.transaction(async (tx) => {
-      await assertClaim(tx, claim);
+      await assertClaimInTransaction(tx, claim);
       await this.commitInTransaction(
         tx,
         "terminal",
@@ -270,7 +318,7 @@ export class ReliableInformationRepository implements ReliableInformationLedger 
         expectations,
         {},
       );
-      await assertClaim(tx, claim);
+      await assertClaimInTransaction(tx, claim);
       const updated = await tx.query(
         "UPDATE information_deliveries SET state='exhausted',token=NULL,lease_until=NULL WHERE subscription_id=$1 AND information_id=$2 AND token=$3 AND lease_until > clock_timestamp()",
         [claim.subscriptionId, claim.informationId, claim.token],
@@ -281,7 +329,7 @@ export class ReliableInformationRepository implements ReliableInformationLedger 
     });
   }
 }
-async function assertClaim(
+export async function assertClaimInTransaction(
   tx: SqlTransaction,
   claim: InformationClaim,
 ): Promise<void> {

@@ -23,7 +23,7 @@ Kaguya 采用 pnpm workspace 和 TypeScript project references。应用负责装
 
 **`packages/memory`** — 独立消息 Memory 契约、原生地址 key、输入边界与 Unicode 稀疏归一规则。
 
-**`packages/database`** — PostgreSQL 信息账本、可靠投递、日志 outbox，以及与账本共用连接和迁移生命周期的独立 Memory 表。
+**`packages/database`** — PostgreSQL 信息账本、可靠投递、日志 outbox、独立 Memory 表与 one-shot arm projection。
 
 **`packages/config`** — Profile Registry、`selectedProfileId`、readiness、权限和安全写入。
 
@@ -39,9 +39,9 @@ Kaguya 采用 pnpm workspace 和 TypeScript project references。应用负责装
 
 **`packages/platform-adapters`** — OneBot/NapCat/Web 正规化、窄 ingress 契约与 transport 类型。
 
-**`packages/scheduler`** — 显式调度原语。
+**`packages/scheduler`** — 可恢复的 Durable Cadence 与绝对时间 One-Shot 调度原语。
 
-当前 Runtime 使用 PostgreSQL Information Ledger。Memory 文档与 2-gram 倒排项保存在独立表中，不写成 Information atom；召回命中后仍以来源 `informationId` 回到不可变账本。消息自动写入、认知提取与向量索引分别属于后续工作，不能把稀疏召回底座描述成已经具备事实演化。
+当前 Runtime 使用 PostgreSQL Information Ledger。Memory 文档与 2-gram 倒排项保存在独立表中，不写成 Information atom；召回命中后仍以来源 `informationId` 回到不可变账本。one-shot scheduler 通过同一数据库保存 requested atom 与 arm projection，Runtime 启动时恢复 open arm。消息自动写入、认知提取与向量索引分别属于后续工作，不能把稀疏召回底座描述成已经具备事实演化。
 
 ## 依赖方向
 
@@ -82,7 +82,11 @@ flowchart LR
 
 ### 理解下一代数据核心
 
-阅读[信息账本](./information-ledger)，区分已实现的追加式 PostgreSQL 子系统与当前 SQLite Runtime。
+阅读[信息账本](./information-ledger)，了解 PostgreSQL 原子、引用、可靠投递与日志 outbox 的边界。
+
+### 理解一次性调度
+
+阅读[Durable One-Shot 调度](./scheduler)，了解 schedule、replacement、due 投递、唯一 terminal 与关闭恢复边界。固定间隔的可恢复周期工作使用 [Durable Cadence](../guide/cadence)；日历、Cron 与时区策略仍属于 #81。
 
 ### 修改代码
 

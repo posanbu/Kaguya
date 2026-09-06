@@ -10,7 +10,7 @@
  */
 import type { SqlDatabase } from "./driver.js";
 
-const POSTGRES_SCHEMA_VERSION = 5;
+const POSTGRES_SCHEMA_VERSION = 6;
 
 export async function migrateDatabase(database: SqlDatabase): Promise<void> {
   await database.transaction(async (tx) => {
@@ -102,6 +102,20 @@ export async function migrateDatabase(database: SqlDatabase): Promise<void> {
         gram text NOT NULL,
         PRIMARY KEY (memory_id, gram)
       );
+
+      CREATE TABLE IF NOT EXISTS information_schedule_arms (
+        schedule_information_id text PRIMARY KEY
+          REFERENCES information_atoms(information_id) ON DELETE RESTRICT,
+        due_at timestamptz NOT NULL,
+        state text NOT NULL CHECK (state IN ('open', 'due', 'terminal')),
+        due_information_id text UNIQUE
+          REFERENCES information_atoms(information_id) DEFERRABLE INITIALLY DEFERRED,
+        terminal_information_id text UNIQUE
+          REFERENCES information_atoms(information_id) DEFERRABLE INITIALLY DEFERRED
+      );
+      CREATE INDEX IF NOT EXISTS information_schedule_arms_open_due_idx
+        ON information_schedule_arms(due_at, schedule_information_id)
+        WHERE state = 'open';
 
       CREATE INDEX IF NOT EXISTS information_atoms_kind_occurred_at_idx
         ON information_atoms (kind, occurred_at, information_id);

@@ -122,6 +122,16 @@ function assertPayloadSchema(
 function assertJsonObjectSchema(schema: any, seen: Set<any>): void {
   const def = getSchemaDef(schema);
   switch (def.type) {
+    case "lazy": {
+      if (seen.has(schema)) return;
+      seen.add(schema);
+      try {
+        assertJsonObjectSchema(def.getter(), seen);
+      } finally {
+        seen.delete(schema);
+      }
+      return;
+    }
     case "object":
       assertStrictObjectSchema(def, seen);
       return;
@@ -176,6 +186,16 @@ function assertStrictObjectSchema(def: any, seen: Set<any>): void {
 function assertJsonValue(schema: any, seen: Set<any>): void {
   const def = getSchemaDef(schema);
   switch (def.type) {
+    case "lazy": {
+      if (seen.has(schema)) return;
+      seen.add(schema);
+      try {
+        assertJsonValue(def.getter(), seen);
+      } finally {
+        seen.delete(schema);
+      }
+      return;
+    }
     case "string":
     case "number":
     case "boolean":
@@ -300,6 +320,15 @@ function buildRepresentativeValue(schema: any, seen: Set<any>): unknown {
   try {
     const def = getSchemaDef(schema);
     switch (def.type) {
+      case "lazy": {
+        if (seen.has(schema)) return {};
+        seen.add(schema);
+        try {
+          return buildRepresentativeValue(def.getter(), seen);
+        } finally {
+          seen.delete(schema);
+        }
+      }
       case "string":
         return "probe";
       case "number":

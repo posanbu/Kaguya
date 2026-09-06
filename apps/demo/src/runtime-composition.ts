@@ -25,7 +25,9 @@ import {
   modelTaskCapability,
   modelTaskCompletedInformationKind,
   type RuntimeModelTaskOptions,
+  type RuntimeCapabilityContext,
 } from "@kaguya/runtime";
+import { oneShotScheduleCapability } from "@kaguya/scheduler";
 export type RuntimeModelSelectionResolver = (
   selection: ModuleModelSelection,
 ) => {
@@ -92,6 +94,9 @@ export function createReplyComposition(
     catalog,
     activations: firstPartyModuleActivations,
     modelTask,
+    capabilities: ({ oneShotSchedule }: RuntimeCapabilityContext) => [
+      { capability: oneShotScheduleCapability, value: oneShotSchedule },
+    ],
   };
 }
 

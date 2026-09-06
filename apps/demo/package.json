@@ -14,6 +14,7 @@
     "@kaguya/modules": "workspace:*",
     "@kaguya/platform-adapters": "workspace:*",
     "@kaguya/prompt": "workspace:*",
+    "@kaguya/scheduler": "workspace:*",
     "@kaguya/runtime": "workspace:*",
     "@kaguya/sdk": "workspace:*"
   }
