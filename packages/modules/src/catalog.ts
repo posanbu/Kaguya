@@ -10,6 +10,8 @@ import {
   defineInformationModuleCatalog,
   type InformationModuleActivation,
 } from "@kaguya/sdk";
+import { alwaysReplyFilterModule } from "./always-reply-filter.js";
+import { associationModule } from "./association.js";
 import { identityModule } from "./identity.js";
 import { speechDecisionModule } from "./speech-decision.js";
 import { turnContextModule } from "./turn-context.js";
@@ -23,6 +25,8 @@ export function createFirstPartyModuleCatalog<
   P extends ModelTaskCompletedInformationPayload,
 >(options: CreateLlmReplyModuleOptions<P>) {
   return defineInformationModuleCatalog(
+    alwaysReplyFilterModule,
+    associationModule,
     identityModule,
     speechDecisionModule,
     turnContextModule,
@@ -39,6 +43,11 @@ export const firstPartyModuleActivations: readonly InformationModuleActivation[]
         modelTier: "heavy",
         outbound: Object.freeze({ mode: "source", messageKind: "reply" }),
       }),
+    }),
+    Object.freeze({
+      instanceId: "association.default",
+      definitionId: "core.association.memory",
+      settings: Object.freeze({}),
     }),
     Object.freeze({
       instanceId: "identity.default",

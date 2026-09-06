@@ -47,12 +47,18 @@ import {
   alwaysReplyFilterModule,
   alwaysReplyFilterSettingsSchema,
 } from "./always-reply-filter.js";
+import { associationModule } from "./association.js";
 import {
+  associationCandidateInformationKind,
+  associationCompletedInformationKind,
+  associationQueryInformationKind,
+  associationRequestedInformationKind,
   assistantTextInformationKind,
   coreMemoryTextInformationKind,
   deliveryRequestedInformationKind,
   filterDecisionInformationKind,
   inboundTextInformationKind,
+  personContextCompletedInformationKind,
   replyRequestedInformationKind,
   replyRequestedInformationPayloadSchema,
   speechDecisionInformationKind,
@@ -283,6 +289,26 @@ function completedAtom() {
       { relation: "core:caused-by", informationId: reply.informationId },
       { relation: "core:context", informationId: contextId },
     ],
+  });
+}
+
+function associationCompletedAtom() {
+  return freezeInformationAtom({
+    informationId: informationIdSchema.parse("association-completed-1"),
+    kind: associationCompletedInformationKind.kind,
+    occurredAt: "2026-09-04T00:00:01.000Z",
+    source: "module:association-1",
+    payload: {
+      requestInformationId: "association-request-1",
+      queryInformationId: "association-query-1",
+      sourceInformationId: "reply-1",
+      route: "reply",
+      method: "lexical-recency",
+      status: "matched",
+      candidateCount: 1,
+      reasonCodes: ["lexical-match", "recency-ranked"],
+    },
+    references: [{ relation: "core:context", informationId: contextId }],
   });
 }
 
@@ -646,11 +672,16 @@ describe("createLlmReplyModule", () => {
     registry.register(turnContextCompletedInformationKind);
     registry.register(speechDecisionInformationKind);
     registry.register(waitRequestedInformationKind);
+    registry.register(associationRequestedInformationKind);
+    registry.register(associationQueryInformationKind);
+    registry.register(associationCandidateInformationKind);
+    registry.register(associationCompletedInformationKind);
     for (const kind of modelTaskInformationKinds)
       registry.registerBuiltin(kind);
     registry.registerBuiltin(assistantTextInformationKind);
     registry.registerBuiltin(deliveryRequestedInformationKind);
     registry.registerBuiltin(coreMemoryTextInformationKind);
+    registry.register(personContextCompletedInformationKind);
     const database = await createTestingDatabase();
     await database.migrate();
     const ledger = database.information;
@@ -742,6 +773,8 @@ describe("createLlmReplyModule", () => {
         turnContextModule,
         speechDecisionModule,
         speechReplyModule,
+        alwaysReplyFilterModule,
+        associationModule,
         replyModule,
       ),
       capabilities: [
@@ -776,6 +809,11 @@ describe("createLlmReplyModule", () => {
           outbound: { mode: "source", messageKind: "reply" },
         },
       },
+      {
+        instanceId: "association-1",
+        definitionId: associationModule.manifest.definitionId,
+        settings: {},
+      },
     ]);
 
     try {
@@ -791,6 +829,22 @@ describe("createLlmReplyModule", () => {
         payload: inboundPayload,
         references: [
           { relation: "core:context", informationId: context.informationId },
+        ],
+      });
+      await core.register(personContextCompletedInformationKind, {
+        occurredAt: "2026-09-04T00:00:00.000Z",
+        source: "module:identity",
+        payload: {
+          status: "unresolved",
+          scopeMode: "ephemeral",
+          platform: "qq",
+          adapterId: "adapter",
+          scopeInformationId: "scope-1",
+        },
+        references: [
+          { relation: "core:caused-by", informationId: inbound.informationId },
+          { relation: "core:context", informationId: context.informationId },
+          { relation: "core:status-of", informationId: inbound.informationId },
         ],
       });
       const completedSource = await vi.waitFor(async () => {
@@ -850,6 +904,10 @@ describe("createLlmReplyModule", () => {
           turnContextCompletedInformationKind.kind,
           speechDecisionInformationKind.kind,
           replyRequestedInformationKind.kind,
+          associationRequestedInformationKind.kind,
+          associationQueryInformationKind.kind,
+          associationCompletedInformationKind.kind,
+          personContextCompletedInformationKind.kind,
           modelTaskRequestedInformationKind.kind,
           modelTaskCompletedInformationKind.kind,
           assistantTextInformationKind.kind,
@@ -976,7 +1034,7 @@ describe("createLlmReplyModule", () => {
     const selected = [memoryAtom(), replyAtom()];
     const registrations: Registration[] = [];
     const context = handlerContext(
-      replyAtom(),
+      associationCompletedAtom(),
       registrations,
       replyAtom(),
       "reply-1",
@@ -984,7 +1042,7 @@ describe("createLlmReplyModule", () => {
       executor,
     );
     const use = vi.spyOn(context, "use");
-    await instance.subscriptions[0]!.handle(replyAtom(), context);
+    await instance.subscriptions[0]!.handle(associationCompletedAtom(), context);
     expect(use).toHaveBeenCalledWith(modelTaskCapability);
     expect(request).toMatchObject({
       task: {
@@ -1014,9 +1072,15 @@ describe("createLlmReplyModule", () => {
     ])
       expect(request!.task.outputSchema.safeParse(output).success).toBe(false);
     expect(registrations).toEqual([]);
-    const unavailable = handlerContext(replyAtom(), []);
+    const unavailable = handlerContext(
+      associationCompletedAtom(),
+      [],
+      associationCompletedAtom(),
+      "test.instance",
+      [replyAtom()],
+    );
     await expect(
-      instance.subscriptions[0]!.handle(replyAtom(), unavailable),
+      instance.subscriptions[0]!.handle(associationCompletedAtom(), unavailable),
     ).rejects.toThrow("undeclared test capability");
   });
 
@@ -1059,9 +1123,9 @@ describe("createLlmReplyModule", () => {
       });
       const registrations: Registration[] = [];
       await instance.subscriptions[0]!.handle(
-        replyAtom(),
+        associationCompletedAtom(),
         handlerContext(
-          replyAtom(),
+          associationCompletedAtom(),
           registrations,
           replyAtom(),
           "reply-1",
@@ -1071,7 +1135,7 @@ describe("createLlmReplyModule", () => {
       );
       expect(registrations).toEqual([]);
       expect(instance.subscriptions.map((s) => s.kind)).toEqual([
-        "core.reply.requested",
+        "agent.association.completed",
         "core.model.task.completed",
         "core.message.assistant.text",
       ]);

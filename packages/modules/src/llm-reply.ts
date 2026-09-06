@@ -1,7 +1,8 @@
 /**
  * 功能概述：通过宿主批准的 Model Task 能力将回复请求、通用完成事实、assistant 与投递组成 durable DAG。
- * 主要职责：createLlmReplyModule 声明能力和共享 completed definition；请求 handler 经 context.use
- * 调用 core.reply.generate v1，replyTaskOutputSchema 严格校验文本。完成 handler 按 task/version/tier
+ * 主要职责：createLlmReplyModule 声明能力和共享 completed definition；association terminal handler 经
+ * context.select 重载 reply 与 canonical Memory，再通过 context.use 调用 core.reply.generate v1，
+ * replyTaskOutputSchema 严格校验文本。完成 handler 按 task/version/tier
  * 与 definitionId 接受可由同一定义多个 activation 共享的任务赢家，经 completedReplySelector 沿
  * completed→requested→reply 授权读取来源，再以包含当前 instanceId 的 registerOnce key 派生各自输出。
  * 代码库关系：Runtime 注入 token 和 definition 身份，Host 提供 activation、受限 Selector 与 claim fencing；
@@ -34,6 +35,7 @@ import {
 import { PromptCompiler } from "@kaguya/prompt";
 
 import {
+  associationCompletedInformationKind,
   assistantTextInformationKind,
   coreMemoryTextInformationKind,
   deliveryRequestedInformationKind,
@@ -42,6 +44,7 @@ import {
   type ReplyRequestedInformationPayload,
 } from "./information-kinds.js";
 import {
+  associationReplyContextSelector,
   compileReplyPromptFromInformation,
   currentAcceptedMessageSelector,
   replyPromptRenderer,
@@ -174,7 +177,7 @@ export function createLlmReplyModule<
     modelTaskCapability.apiVersion !== 1
   )
     throw new Error("Invalid model task capability");
-  const selector = dependencies.selector ?? currentAcceptedMessageSelector;
+  const selector = dependencies.selector ?? associationReplyContextSelector;
   const promptCompiler = dependencies.promptCompiler ?? new PromptCompiler();
   const completedInformationKind =
     dependencies.modelTaskCompletedInformationKind;
@@ -182,7 +185,7 @@ export function createLlmReplyModule<
     manifest: {
       protocolVersion: 1,
       moduleVersion: "1.0.0",
-      selectors: [selector, completedReplySelector],
+      selectors: [selector, currentAcceptedMessageSelector, completedReplySelector],
       promptRenderers: [replyPromptRenderer, memoryPromptRenderer],
       requires: [modelTaskCapability],
       provides: [],
@@ -190,6 +193,7 @@ export function createLlmReplyModule<
       displayName: "LLM reply",
       settingsSchema: llmReplySettingsSchema,
       consumes: [
+        associationCompletedInformationKind,
         replyRequestedInformationKind,
         completedInformationKind,
         assistantTextInformationKind,
@@ -204,18 +208,18 @@ export function createLlmReplyModule<
       provisions: [],
       subscriptions: [
         onInformation(
-          replyRequestedInformationKind,
+          associationCompletedInformationKind,
           { subscriptionId: "kaguya.reply.requested", delivery: "durable" },
-          async (reply, context) => {
+          async (association, context) => {
             const contextAtoms = await context.select(selector);
             const persistedReply = requireSelectedReply(
               contextAtoms,
-              reply.informationId,
+              association.payload.sourceInformationId,
             );
             const prompt = compileReplyPromptFromInformation(
               promptCompiler,
               contextAtoms,
-              reply.informationId,
+              persistedReply.informationId,
             );
             const contexts = persistedReply.references.filter(
               (r) => r.relation === "core:context",

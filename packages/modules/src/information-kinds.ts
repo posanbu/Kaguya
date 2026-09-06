@@ -140,6 +140,195 @@ export const coreMemoryTextInformationKind = defineInformationKind({
   log: { enabled: false },
 });
 
+const associationRouteSchema = z.literal("reply");
+const associationMethodSchema = z.literal("lexical-recency");
+const associationStatusSchema = z.enum([
+  "matched",
+  "empty",
+  "policy-filtered",
+  "unavailable",
+  "failed",
+]);
+const associationIdentitySchema = z
+  .object({
+    status: z.enum([
+      "complete",
+      "unresolved",
+      "ambiguous",
+      "degraded",
+      "failed",
+      "unavailable",
+    ]),
+    personInformationId: nonBlankString.optional(),
+    scopeInformationId: nonBlankString.optional(),
+  })
+  .strict();
+const associationScopeSchema = z
+  .object({
+    platform: nonBlankString,
+    adapterId: nonBlankString,
+    destination: platformDestinationSchema,
+  })
+  .strict();
+
+export const associationRequestedInformationPayloadSchema = z
+  .object({
+    sourceInformationId: nonBlankString,
+    queryText: z.string(),
+    asOf: z.iso.datetime(),
+    route: associationRouteSchema,
+    method: associationMethodSchema,
+    identity: associationIdentitySchema,
+    scope: associationScopeSchema,
+  })
+  .strict() as any;
+export type AssociationRequestedInformationPayload = z.infer<
+  typeof associationRequestedInformationPayloadSchema
+>;
+
+export const associationRequestedInformationKind = defineInformationKind({
+  kind: "agent.association.requested",
+  payloadSchema: associationRequestedInformationPayloadSchema,
+  references: {
+    "core:caused-by": {
+      required: true,
+      multiple: false,
+      targetKinds: [replyRequestedInformationKind.kind],
+    },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
+    "agent:identity-terminal": {
+      required: false,
+      multiple: false,
+      targetKinds: ["agent.person.context.completed"],
+    },
+  },
+  log: { enabled: false },
+});
+
+export const associationQueryInformationPayloadSchema = z
+  .object({
+    requestInformationId: nonBlankString,
+    sourceInformationId: nonBlankString,
+    queryText: z.string(),
+    query: z.string(),
+    asOf: z.iso.datetime(),
+    route: associationRouteSchema,
+    method: associationMethodSchema,
+    identity: associationIdentitySchema,
+    scope: associationScopeSchema,
+    limit: z.number().int().min(1).max(10),
+  })
+  .strict() as any;
+export type AssociationQueryInformationPayload = z.infer<
+  typeof associationQueryInformationPayloadSchema
+>;
+
+export const associationQueryInformationKind = defineInformationKind({
+  kind: "agent.association.query",
+  payloadSchema: associationQueryInformationPayloadSchema,
+  references: {
+    "core:caused-by": {
+      required: true,
+      multiple: false,
+      targetKinds: [associationRequestedInformationKind.kind],
+    },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
+  },
+  log: { enabled: false },
+});
+
+export const associationCandidateInformationPayloadSchema = z
+  .object({
+    rank: z.number().int().nonnegative(),
+    route: z.literal("memory"),
+    strategy: associationMethodSchema,
+    reasonCodes: z.array(nonBlankString).min(1),
+  })
+  .strict();
+export type AssociationCandidateInformationPayload = z.infer<
+  typeof associationCandidateInformationPayloadSchema
+>;
+
+export const associationCandidateInformationKind = defineInformationKind({
+  kind: "agent.association.candidate",
+  payloadSchema: associationCandidateInformationPayloadSchema,
+  references: {
+    "core:caused-by": {
+      required: true,
+      multiple: false,
+      targetKinds: [associationQueryInformationKind.kind],
+    },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
+    "agent:request": {
+      required: true,
+      multiple: false,
+      targetKinds: [associationRequestedInformationKind.kind],
+    },
+    "agent:canonical-source": {
+      required: true,
+      multiple: false,
+      targetKinds: [coreMemoryTextInformationKind.kind],
+    },
+  },
+  log: { enabled: false },
+});
+
+export const associationCompletedInformationPayloadSchema = z
+  .object({
+    requestInformationId: nonBlankString,
+    queryInformationId: nonBlankString,
+    sourceInformationId: nonBlankString,
+    route: associationRouteSchema,
+    method: associationMethodSchema,
+    status: associationStatusSchema,
+    candidateCount: z.number().int().nonnegative(),
+    reasonCodes: z.array(nonBlankString).min(1),
+  })
+  .strict();
+export type AssociationCompletedInformationPayload = z.infer<
+  typeof associationCompletedInformationPayloadSchema
+>;
+
+export const associationCompletedInformationKind = defineInformationKind({
+  kind: "agent.association.completed",
+  payloadSchema: associationCompletedInformationPayloadSchema,
+  references: {
+    "core:caused-by": {
+      required: true,
+      multiple: false,
+      targetKinds: [associationQueryInformationKind.kind],
+    },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
+    "agent:request": {
+      required: true,
+      multiple: false,
+      targetKinds: [associationRequestedInformationKind.kind],
+    },
+    "agent:candidate": {
+      required: false,
+      multiple: true,
+      targetKinds: [associationCandidateInformationKind.kind],
+    },
+  },
+  log: { enabled: false },
+});
+
 export const personFactCandidateInformationPayloadSchema = z
   .object({
     personId: nonBlankString,
@@ -382,6 +571,10 @@ export const informationModuleKinds = [
   replyRequestedInformationKind,
   filterDecisionInformationKind,
   coreMemoryTextInformationKind,
+  associationRequestedInformationKind,
+  associationQueryInformationKind,
+  associationCandidateInformationKind,
+  associationCompletedInformationKind,
   personFactCandidateInformationKind,
   personFactExtractedInformationKind,
   assistantTextInformationKind,
