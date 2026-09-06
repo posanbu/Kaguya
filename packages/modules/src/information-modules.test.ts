@@ -1,8 +1,8 @@
 /**
- * 功能概述：本文件验证信息模块以显式 kind 串接入站、回复、LLM 完成、assistant 和投递阶段，
+ * 功能概述：本文件验证信息模块以显式 kind 串接入站、回复、通用 Model Task 完成、assistant 和投递阶段，
  * 不再以旧事件、target instance 或成功 decision 驱动下一步。
  * 主要职责：过滤器用例验证通过时只注册回复请求、拒绝 fixture 只注册拒绝事实；回复用例
- * 验证三个订阅分别承担回复执行、LLM 完成到 assistant、assistant 到投递的直接因果阶段。
+ * 验证三个订阅分别承担回复执行、Model Task 完成到 assistant、assistant 到投递的直接因果阶段。
  * 代码库关系：覆盖最终 `always-reply-filter.ts`、`llm-reply.ts` 和
  * `information-kinds.ts`；engine `ModuleHost` 为每一次 register 自动补齐直接的
  * `core:caused-by` 与继承的 `core:context`，因此模块 handler 不伪造这些保留引用。
@@ -55,11 +55,21 @@ import {
 } from "./information-kinds.js";
 import {
   createLlmReplyModule as defineReplyModule,
-  llmReplyExecutorCapability,
-  llmCompletedInformationPayloadSchema,
   llmReplySettingsSchema,
-  type LlmReplyExecutor,
 } from "./llm-reply.js";
+import {
+  ModelTaskClient,
+  modelTaskCapability,
+  type ModelTaskCapability,
+  type ModelTaskRequest,
+} from "../../runtime/dist/model-task.js";
+import {
+  modelTaskCompletedInformationKind,
+  modelTaskRequestedInformationKind,
+  modelTaskInformationKinds,
+} from "../../runtime/dist/information-kinds.js";
+import { KaguyaLlmClient } from "@kaguya/llm/client";
+import { createRepeatingDeterministicModel } from "@kaguya/llm/testing";
 import * as informationKinds from "./information-kinds.js";
 
 const contextId = informationIdSchema.parse("context-1");
@@ -72,24 +82,6 @@ const inboundPayload = replyRequestedInformationPayloadSchema.parse({
     destination: { kind: "group", groupId: "group-1" },
     senderId: "sender-1",
   },
-});
-
-const llmCompletedInformationKind = defineInformationKind({
-  kind: "core.llm.completed",
-  payloadSchema: llmCompletedInformationPayloadSchema,
-  references: {
-    "core:caused-by": {
-      required: true,
-      multiple: false,
-      targetKinds: [replyRequestedInformationKind.kind],
-    },
-    "core:context": {
-      required: true,
-      multiple: false,
-      targetKinds: ["core.runtime.context"],
-    },
-  },
-  log: { enabled: false },
 });
 
 const runtimeContextInformationKind = defineInformationKind({
@@ -216,13 +208,22 @@ function completedAtom() {
   const reply = replyAtom();
   return freezeInformationAtom({
     informationId: informationIdSchema.parse("completion-1"),
-    kind: llmCompletedInformationKind.kind,
+    kind: modelTaskCompletedInformationKind.kind,
     occurredAt: "2026-09-04T00:00:01.000Z",
-    source: "runtime:llm",
+    source: "runtime:model-task",
     payload: {
       output: { text: "Hello." },
-      reply: reply.payload,
-      originatingModuleInstanceId: "reply-1",
+      taskId: "core.reply.generate",
+      version: "1",
+      sourceInformationId: reply.informationId,
+      contextInformationId: contextId,
+      contextInformationIds: [reply.informationId],
+      promptKind: "reply",
+      provenance: [],
+      activation: { instanceId: "reply-1", definitionId: "demo.reply.llm" },
+      selectionPolicy: { tier: "heavy" },
+      resolvedModel: { providerId: "test", modelId: "test-heavy" },
+      durationMs: 1,
     },
     references: [
       { relation: "core:caused-by", informationId: reply.informationId },
@@ -240,7 +241,7 @@ function assistantAtom() {
     source: "module:reply-1",
     payload: {
       text: "Hello.",
-      source: completed.payload.reply.source,
+      source: inboundPayload.source,
       originatingModuleInstanceId: "reply-1",
     },
     references: [
@@ -250,14 +251,20 @@ function assistantAtom() {
   });
 }
 
-const executors = new WeakMap<object, LlmReplyExecutor>();
+const executors = new WeakMap<object, ModelTaskCapability>();
 function createLlmReplyModule(
-  options: Parameters<typeof defineReplyModule>[0] & {
-    executor: LlmReplyExecutor;
+  options: Omit<
+    Parameters<typeof defineReplyModule>[0],
+    "modelTaskCapability"
+  > & {
+    executor: ModelTaskCapability;
   },
 ) {
   const { executor, ...definitionOptions } = options;
-  const definition = defineReplyModule(definitionOptions);
+  const definition = defineReplyModule({
+    ...definitionOptions,
+    modelTaskCapability,
+  });
   executors.set(definition, executor);
   return definition;
 }
@@ -299,7 +306,7 @@ function handlerContext(
   result: DeepReadonly<InformationAtom> = sourceAtom,
   instanceId = "test.instance",
   selectedAtoms: readonly DeepReadonly<InformationAtom>[] = [sourceAtom],
-  executor?: LlmReplyExecutor,
+  executor?: ModelTaskCapability,
 ): InformationModuleHandlerContext {
   const context: InformationModuleHandlerContext = {
     registerOnce: async (_operation, _key, definition, input) =>
@@ -307,7 +314,9 @@ function handlerContext(
     commitTerminal: async (_group, _subject, definition, input) =>
       context.register(definition, input),
     signal: new AbortController().signal,
-    use: () => {
+    use: (token) => {
+      if (!Object.is(token, modelTaskCapability))
+        throw new Error("unexpected capability");
       if (!executor) throw new Error("undeclared test capability");
       return executor as never;
     },
@@ -434,6 +443,15 @@ describe("alwaysReplyFilterModule", () => {
 });
 
 describe("createLlmReplyModule", () => {
+  it("declares only the host-approved generic model-call capability", () => {
+    const definition = defineReplyModule({
+      modelTaskCapability,
+      modelTaskCompletedInformationKind,
+    });
+    expect(definition.manifest.requires).toEqual([
+      { id: "kaguya:model-task", apiVersion: 1 },
+    ]);
+  });
   it("stores Memory with ordered uses-context references", async () => {
     expect(informationKinds).toHaveProperty("coreMemoryTextInformationKind");
     const memoryKind = (
@@ -567,7 +585,8 @@ describe("createLlmReplyModule", () => {
     registry.registerBuiltin(runtimeContextInformationKind);
     registry.registerBuiltin(inboundTextInformationKind);
     registry.registerBuiltin(replyRequestedInformationKind);
-    registry.registerBuiltin(llmCompletedInformationKind);
+    for (const kind of modelTaskInformationKinds)
+      registry.registerBuiltin(kind);
     registry.registerBuiltin(assistantTextInformationKind);
     registry.registerBuiltin(deliveryRequestedInformationKind);
     registry.registerBuiltin(coreMemoryTextInformationKind);
@@ -582,37 +601,14 @@ describe("createLlmReplyModule", () => {
       now: () => new Date("2026-09-04T00:00:00.000Z"),
     });
     const replyModule = createLlmReplyModule({
-      llmCompletedInformationKind,
-      executor: {
-        async execute({ reply, originatingModuleInstanceId }) {
-          const context = reply.references.find(
-            ({ relation }) => relation === "core:context",
-          );
-          if (context === undefined)
-            throw new Error("reply context is required");
-          return core.registerOnce(
-            "test.llm.completed",
-            reply.informationId,
-            llmCompletedInformationKind,
-            {
-              occurredAt: "2026-09-04T00:00:01.000Z",
-              source: "runtime:llm",
-              payload: {
-                output: { text: "Hello." },
-                reply: reply.payload,
-                originatingModuleInstanceId,
-              },
-              references: [
-                {
-                  relation: "core:caused-by",
-                  informationId: reply.informationId,
-                },
-                context,
-              ],
-            },
-          );
-        },
-      },
+      modelTaskCompletedInformationKind,
+      executor: new ModelTaskClient({
+        core,
+        client: new KaguyaLlmClient({
+          model: createRepeatingDeterministicModel({ text: "Hello." }),
+        }),
+        resolveModel: () => ({ providerId: "test", modelId: "test-heavy" }),
+      }),
     });
     const host = new ModuleHost({
       core,
@@ -622,7 +618,7 @@ describe("createLlmReplyModule", () => {
       ),
       capabilities: [
         {
-          capability: llmReplyExecutorCapability,
+          capability: modelTaskCapability,
           value: executors.get(replyModule)!,
         },
       ],
@@ -675,8 +671,11 @@ describe("createLlmReplyModule", () => {
       const reply = atoms.find(
         ({ kind }) => kind === replyRequestedInformationKind.kind,
       );
+      const requested = atoms.find(
+        ({ kind }) => kind === modelTaskRequestedInformationKind.kind,
+      );
       const completed = atoms.find(
-        ({ kind }) => kind === llmCompletedInformationKind.kind,
+        ({ kind }) => kind === modelTaskCompletedInformationKind.kind,
       );
       const assistant = atoms.find(
         ({ kind }) => kind === assistantTextInformationKind.kind,
@@ -690,7 +689,8 @@ describe("createLlmReplyModule", () => {
           runtimeContextInformationKind.kind,
           inboundTextInformationKind.kind,
           replyRequestedInformationKind.kind,
-          llmCompletedInformationKind.kind,
+          modelTaskRequestedInformationKind.kind,
+          modelTaskCompletedInformationKind.kind,
           assistantTextInformationKind.kind,
           deliveryRequestedInformationKind.kind,
         ].sort(),
@@ -699,9 +699,13 @@ describe("createLlmReplyModule", () => {
         relation: "core:caused-by",
         informationId: inbound.informationId,
       });
-      expect(completed?.references).toContainEqual({
+      expect(requested?.references).toContainEqual({
         relation: "core:caused-by",
         informationId: reply?.informationId,
+      });
+      expect(completed?.references).toContainEqual({
+        relation: "core:caused-by",
+        informationId: requested?.informationId,
       });
       expect(assistant?.references).toContainEqual({
         relation: "core:caused-by",
@@ -730,7 +734,9 @@ describe("createLlmReplyModule", () => {
       "core:context": { targetKinds: ["core.runtime.context"] },
     });
     expect(assistantTextInformationKind.references).toMatchObject({
-      "core:caused-by": { targetKinds: [llmCompletedInformationKind.kind] },
+      "core:caused-by": {
+        targetKinds: [modelTaskCompletedInformationKind.kind],
+      },
       "core:context": { targetKinds: ["core.runtime.context"] },
     });
     expect(deliveryRequestedInformationKind.references).toMatchObject({
@@ -739,92 +745,187 @@ describe("createLlmReplyModule", () => {
     });
   });
 
-  it("moves reply, completion and assistant through direct derived stages", async () => {
-    let executionInput: Parameters<LlmReplyExecutor["execute"]>[0] | undefined;
-    const execute = vi.fn(
-      async (input: Parameters<LlmReplyExecutor["execute"]>[0]) => {
-        executionInput = input;
-        return completedAtom();
+  it("requires the generic capability and passes the reloaded source, prompt, schema and activation", async () => {
+    let request: ModelTaskRequest<unknown> | undefined;
+    const executor: ModelTaskCapability = {
+      async execute(input) {
+        request = input;
+        return {
+          status: "completed",
+          output: input.task.outputSchema.parse({ text: "Hello." }),
+          requestedInformationId: "requested-1",
+          terminalInformationId: "completion-1",
+        };
       },
-    );
+      cancel: async () => {
+        throw new Error("unexpected cancellation");
+      },
+    };
     const definition = createLlmReplyModule({
-      executor: { execute },
-      llmCompletedInformationKind,
-    });
-    const settings = llmReplySettingsSchema.parse({
-      modelTier: "heavy",
-      outbound: { mode: "source", messageKind: "reply" },
+      executor,
+      modelTaskCompletedInformationKind,
     });
     const instance = await createInstance(definition, {
       instanceId: "reply-1",
-      settings,
+      settings: {
+        modelTier: "heavy",
+        outbound: { mode: "source", messageKind: "reply" },
+      },
     });
-    const reply = replyAtom();
-    const persistedReply = replyAtom();
-    const memory = memoryAtom();
-    const selectedAtoms = [memory, persistedReply] as const;
-    const completion = completedAtom();
-    const assistant = assistantAtom();
-    const executionRegistrations: Registration[] = [];
-    const assistantRegistrations: Registration[] = [];
-    const deliveryRegistrations: Registration[] = [];
-
-    expect(instance.subscriptions.map(({ kind }) => kind)).toEqual([
-      replyRequestedInformationKind.kind,
-      llmCompletedInformationKind.kind,
-      assistantTextInformationKind.kind,
+    expect(definition.manifest.requires).toEqual([
+      { id: "kaguya:model-task", apiVersion: 1 },
     ]);
+    const selected = [memoryAtom(), replyAtom()];
+    const registrations: Registration[] = [];
+    const context = handlerContext(
+      replyAtom(),
+      registrations,
+      replyAtom(),
+      "reply-1",
+      selected,
+      executor,
+    );
+    const use = vi.spyOn(context, "use");
+    await instance.subscriptions[0]!.handle(replyAtom(), context);
+    expect(use).toHaveBeenCalledWith(modelTaskCapability);
+    expect(request).toMatchObject({
+      task: {
+        taskId: "core.reply.generate",
+        version: "1",
+        allowedTiers: ["light", "heavy"],
+      },
+      sourceInformationId: "reply-1",
+      contextInformationId: "context-1",
+      activation: { instanceId: "reply-1", definitionId: "demo.reply.llm" },
+      selectionPolicy: { tier: "heavy" },
+      prompt: {
+        provenance: [
+          expect.objectContaining({ informationId: "memory-1" }),
+          expect.objectContaining({ informationId: "reply-1" }),
+        ],
+      },
+    });
+    expect(request!.contextAtoms).toBe(selected);
+    expect(request!.task.outputSchema.safeParse({ text: "ok" }).success).toBe(
+      true,
+    );
+    for (const output of [
+      { text: "" },
+      { text: 1 },
+      { text: "ok", extra: true },
+    ])
+      expect(request!.task.outputSchema.safeParse(output).success).toBe(false);
+    expect(registrations).toEqual([]);
+    const unavailable = handlerContext(replyAtom(), []);
+    await expect(
+      instance.subscriptions[0]!.handle(replyAtom(), unavailable),
+    ).rejects.toThrow("undeclared test capability");
+  });
 
-    await instance.subscriptions[0]?.handle(
-      reply,
+  it.each(["failed", "cancelled"] as const)(
+    "does not register business atoms for a %s Model Task winner",
+    async (status) => {
+      const executor: ModelTaskCapability = {
+        execute: async () =>
+          status === "failed"
+            ? {
+                status,
+                requestedInformationId: "requested-1",
+                terminalInformationId: "terminal-1",
+                error: {
+                  name: "ModelTaskError",
+                  kind: "non-retryable",
+                  message: "Model task generation failed",
+                },
+              }
+            : {
+                status,
+                requestedInformationId: "requested-1",
+                terminalInformationId: "terminal-1",
+                reason: "Explicit cancellation requested",
+              },
+        cancel: async () => {
+          throw new Error("unexpected cancellation");
+        },
+      };
+      const definition = createLlmReplyModule({
+        executor,
+        modelTaskCompletedInformationKind,
+      });
+      const instance = await createInstance(definition, {
+        instanceId: "reply-1",
+        settings: {
+          modelTier: "heavy",
+          outbound: { mode: "source", messageKind: "reply" },
+        },
+      });
+      const registrations: Registration[] = [];
+      await instance.subscriptions[0]!.handle(
+        replyAtom(),
+        handlerContext(
+          replyAtom(),
+          registrations,
+          replyAtom(),
+          "reply-1",
+          [replyAtom()],
+          executor,
+        ),
+      );
+      expect(registrations).toEqual([]);
+      expect(instance.subscriptions.map((s) => s.kind)).toEqual([
+        "core.reply.requested",
+        "core.model.task.completed",
+        "core.message.assistant.text",
+      ]);
+    },
+  );
+
+  it("derives assistant only from its completed task and preserves source outbound routing", async () => {
+    const definition = defineReplyModule({
+      modelTaskCapability,
+      modelTaskCompletedInformationKind,
+    });
+    const instance = await createInstance(definition, {
+      instanceId: "reply-1",
+      settings: {
+        modelTier: "heavy",
+        outbound: { mode: "source", messageKind: "reply" },
+      },
+    });
+    const completed = completedAtom();
+    const assistantRegistrations: Registration[] = [];
+    await instance.subscriptions[1]!.handle(
+      completed,
       handlerContext(
-        reply,
-        executionRegistrations,
-        reply,
+        completed,
+        assistantRegistrations,
+        assistantAtom(),
         "reply-1",
-        selectedAtoms,
-        { execute },
+        [replyAtom()],
       ),
     );
-    await instance.subscriptions[1]?.handle(
-      completion,
-      handlerContext(completion, assistantRegistrations, assistant, "reply-1"),
-    );
-    await instance.subscriptions[2]?.handle(
-      assistant,
-      handlerContext(assistant, deliveryRegistrations, assistant, "reply-1"),
-    );
-
-    expect(execute).toHaveBeenCalledWith({
-      operationKey: expect.stringMatching(/^reply-v1:reply-1:[a-f0-9]{64}$/),
-      reply: persistedReply,
-      prompt: expect.objectContaining({
-        provenance: [
-          expect.objectContaining({ informationId: memory.informationId }),
-          expect.objectContaining({
-            informationId: persistedReply.informationId,
-          }),
-        ],
-      }),
-      contextAtoms: selectedAtoms,
-      selection: { modelTier: "heavy" },
-      originatingModuleInstanceId: "reply-1",
-    });
-    expect(executionInput?.reply).toBe(persistedReply);
-    expect(executionInput?.reply).not.toBe(reply);
-    expect(executionRegistrations).toEqual([]);
     expect(assistantRegistrations).toEqual([
       {
         definition: assistantTextInformationKind,
         input: {
           payload: {
             text: "Hello.",
-            source: reply.payload.source,
+            source: inboundPayload.source,
             originatingModuleInstanceId: "reply-1",
           },
         },
       },
     ]);
+    const deliveryRegistrations: Registration[] = [];
+    await instance.subscriptions[2]!.handle(
+      assistantAtom(),
+      handlerContext(
+        assistantAtom(),
+        deliveryRegistrations,
+        assistantAtom(),
+        "reply-1",
+      ),
+    );
     expect(deliveryRegistrations).toEqual([
       {
         definition: deliveryRequestedInformationKind,
@@ -842,6 +943,23 @@ describe("createLlmReplyModule", () => {
         },
       },
     ]);
+    for (const payload of [
+      { ...completed.payload, taskId: "other.task" },
+      { ...completed.payload, version: "2" },
+      {
+        ...completed.payload,
+        activation: { instanceId: "other", definitionId: "demo.reply.llm" },
+      },
+    ]) {
+      const registrations: Registration[] = [];
+      await instance.subscriptions[1]!.handle(
+        { ...completed, payload },
+        handlerContext(completed, registrations, assistantAtom(), "reply-1", [
+          replyAtom(),
+        ]),
+      );
+      expect(registrations).toEqual([]);
+    }
   });
 
   it("strictly rejects profile and reply-target settings", () => {

@@ -18,17 +18,17 @@ import {
 import {
   createFirstPartyModuleCatalog,
   firstPartyModuleActivations,
-  llmReplyExecutorCapability,
-  type LlmReplyExecutor,
   type ModuleModelSelection,
-  type LlmCompletedInformationPayload,
 } from "@kaguya/modules";
-import { type InformationKindDefinition } from "@kaguya/sdk";
 import {
-  llmCompletedInformationKind,
-  LlmLifecycleClient,
-  type RuntimeCapabilityContext,
-} from "./index.js";
+  ModelTaskClient,
+  modelTaskCapability,
+  type ModelTaskCapability,
+} from "./model-task.js";
+import {
+  modelTaskCompletedInformationKind,
+  modelTaskRequestedInformationKind,
+} from "./information-kinds.js";
 import { defineInformationModuleCatalog } from "@kaguya/sdk";
 import { KaguyaDatabase } from "@kaguya/database";
 import { createTestingDatabase } from "@kaguya/database/testing";
@@ -60,7 +60,6 @@ import {
   OutboundTransportNotFoundError,
   RuntimeUnavailableError,
 } from "./runtime.js";
-import { llmRequestedInformationKind } from "./information-kinds.js";
 
 const TEST_TIMEOUT = 15_000;
 const resources: Array<{
@@ -145,6 +144,12 @@ async function createRuntime(
       ConstructorParameters<typeof KaguyaRuntime>[0]["informationIdGenerator"]
     >;
     resolveModelSelection: NonNullable<RuntimeModelSelectionResolver>;
+    modelTask: NonNullable<
+      ConstructorParameters<typeof KaguyaRuntime>[0]["modelTask"]
+    >;
+    capabilities: NonNullable<
+      ConstructorParameters<typeof KaguyaRuntime>[0]["capabilities"]
+    >;
     catalog: NonNullable<
       ConstructorParameters<typeof KaguyaRuntime>[0]["catalog"]
     >;
@@ -160,7 +165,10 @@ async function createRuntime(
     database,
     now: () => new Date("2026-09-04T00:00:01.000Z"),
     informationIdGenerator: () => `runtime-atom-${++id}`,
-    ...createReplyComposition(overrides.resolveModelSelection),
+    ...createReplyComposition(
+      overrides.resolveModelSelection,
+      overrides.activations,
+    ),
     ...overrides,
   });
   resources.push({ runtime, database });
@@ -203,6 +211,122 @@ function parentId(
 }
 
 describe("KaguyaRuntime", () => {
+  it("starts with a new durable identity when an old completion subscription is persisted", async () => {
+    const { runtime, database } = await createRuntime();
+    await database.migrate();
+    await database.information.synchronizeKinds(["core.llm.completed"]);
+    await database.information.reliable.configureSubscriptions([
+      {
+        subscriptionId: "reply.default:kaguya.reply.completed",
+        kind: "core.llm.completed",
+      },
+    ]);
+    await expect(runtime.start()).resolves.toBeUndefined();
+  });
+  it.each(["missing", "invalid-value", "invalid-version"] as const)(
+    "rejects %s model capability before module create",
+    async (mode) => {
+      const base = createReplyComposition().catalog.definitions.find(
+        (d) => d.manifest.definitionId === "demo.reply.llm",
+      )!;
+      const create = vi.fn(base.create);
+      const definition = defineInformationModule({ ...base, create });
+      const database = await createTestingDatabase();
+      const runtime = new KaguyaRuntime({
+        database,
+        catalog: defineInformationModuleCatalog(definition),
+        activations: [firstPartyModuleActivations[1]!],
+        capabilities:
+          mode === "missing"
+            ? []
+            : [
+                {
+                  capability:
+                    mode === "invalid-version"
+                      ? { ...modelTaskCapability, apiVersion: 2 }
+                      : modelTaskCapability,
+                  value: { execute: vi.fn(), cancel: vi.fn() },
+                },
+              ],
+      });
+      resources.push({ runtime, database });
+      await expect(runtime.start()).rejects.toThrow(/capability/i);
+      expect(create).not.toHaveBeenCalled();
+    },
+  );
+
+  it("provides only an approved ModelTaskClient and activation, hiding host internals", async () => {
+    let value: ModelTaskCapability | undefined;
+    let activation: unknown;
+    let exposed: string[] = [];
+    const base = createReplyComposition().catalog.definitions.find(
+      (d) => d.manifest.definitionId === "demo.reply.llm",
+    )!;
+    const definition = defineInformationModule({
+      ...base,
+      create: (options, context) => {
+        value = context.use(modelTaskCapability);
+        activation = options.activation;
+        exposed = [
+          ...Object.keys(options),
+          ...Object.keys(context),
+          ...Object.keys(value),
+        ];
+        return { subscriptions: [], provisions: [] };
+      },
+    });
+    const { runtime } = await createRuntime({
+      catalog: defineInformationModuleCatalog(definition),
+      activations: [firstPartyModuleActivations[1]!],
+    });
+    await runtime.start();
+    expect(value).toBeInstanceOf(ModelTaskClient);
+    expect(activation).toEqual({
+      instanceId: "reply.default",
+      definitionId: "demo.reply.llm",
+    });
+    expect(exposed).not.toEqual(expect.arrayContaining(["core"]));
+    for (const forbidden of [
+      "client",
+      "provider",
+      "model",
+      "resolveModel",
+      "secret",
+      "options",
+    ])
+      expect(exposed).not.toContain(forbidden);
+    expect(Object.keys(value!)).toEqual([]);
+    for (const request of [
+      {
+        activation: { instanceId: "forged", definitionId: "demo.reply.llm" },
+        selectionPolicy: { tier: "heavy" as const },
+      },
+      {
+        activation: {
+          instanceId: "reply.default",
+          definitionId: "demo.reply.llm",
+        },
+        selectionPolicy: { tier: "light" as const },
+      },
+    ]) {
+      await expect(
+        value!.execute({
+          ...request,
+          task: {
+            taskId: "core.reply.generate",
+            version: "1",
+            allowedTiers: ["light", "heavy"],
+            outputSchema: z.object({ text: z.string() }).strict(),
+          },
+          sourceInformationId: "source",
+          contextInformationId: "context",
+          contextAtoms: [],
+          prompt: { kind: "reply", text: "", fragments: [], provenance: [] },
+        }),
+      ).rejects.toThrow(/not approved/);
+    }
+  });
+
   it(
     "traces default reply Prompt to the selected current input",
     async () => {
@@ -216,7 +340,7 @@ describe("KaguyaRuntime", () => {
       });
       const reply = graph.find(({ kind }) => kind === "core.reply.requested")!;
       const requested = graph.find(
-        ({ kind }) => kind === "core.llm.requested",
+        ({ kind }) => kind === "core.model.task.requested",
       )!;
 
       expect(
@@ -229,9 +353,22 @@ describe("KaguyaRuntime", () => {
           informationId: reply.informationId,
         },
       ]);
-      const requestedPayload = llmRequestedInformationKind.payloadSchema.parse(
-        requested.payload,
-      );
+      const requestedPayload =
+        modelTaskRequestedInformationKind.payloadSchema.parse(
+          requested.payload,
+        );
+      expect(requestedPayload).toMatchObject({
+        taskId: "core.reply.generate",
+        version: "1",
+        sourceInformationId: reply.informationId,
+        activation: {
+          instanceId: "reply.default",
+          definitionId: "demo.reply.llm",
+        },
+        selectionPolicy: { tier: "heavy" },
+        resolvedModel: { providerId: "test", modelId: "deterministic-heavy" },
+      });
+      expect(graph.some((a) => a.kind.startsWith("core.llm."))).toBe(false);
       expect(requestedPayload.prompt.provenance).toMatchObject([
         { informationId: reply.informationId, source: "history" },
       ]);
@@ -546,8 +683,8 @@ describe("KaguyaRuntime", () => {
         new Set([
           "core.message.inbound.text",
           "core.reply.requested",
-          "core.llm.requested",
-          "core.llm.completed",
+          "core.model.task.requested",
+          "core.model.task.completed",
           "core.message.assistant.text",
           "core.delivery.requested",
           "core.delivery.delivered",
@@ -564,9 +701,9 @@ describe("KaguyaRuntime", () => {
       const byKind = new Map(graph.map((atom) => [atom.kind, atom]));
       const chain = [
         ["core.reply.requested", "core.message.inbound.text"],
-        ["core.llm.requested", "core.reply.requested"],
-        ["core.llm.completed", "core.llm.requested"],
-        ["core.message.assistant.text", "core.llm.completed"],
+        ["core.model.task.requested", "core.reply.requested"],
+        ["core.model.task.completed", "core.model.task.requested"],
+        ["core.message.assistant.text", "core.model.task.completed"],
         ["core.delivery.requested", "core.message.assistant.text"],
         ["core.delivery.delivered", "core.delivery.requested"],
       ] as const;
@@ -622,7 +759,10 @@ describe("KaguyaRuntime", () => {
       ).map(({ kind }) => kind);
 
       expect(kinds).toEqual(
-        expect.arrayContaining(["core.llm.requested", "core.llm.failed"]),
+        expect.arrayContaining([
+          "core.model.task.requested",
+          "core.model.task.failed",
+        ]),
       );
       for (const forbiddenKind of [
         "core.message.assistant.text",
@@ -686,7 +826,7 @@ describe("KaguyaRuntime", () => {
       const count = (kind: string) =>
         graph.filter((atom) => atom.kind === kind).length;
 
-      expect(count("core.llm.completed")).toBe(1);
+      expect(count("core.model.task.completed")).toBe(1);
       expect(count("core.message.assistant.text")).toBe(1);
       expect(count("core.delivery.requested")).toBe(1);
       expect(sendMessage).toHaveBeenCalledTimes(1);
@@ -696,7 +836,7 @@ describe("KaguyaRuntime", () => {
         { rootInformationId: result.rootInformationId },
       );
       for (const kind of [
-        "core.llm.completed",
+        "core.model.task.completed",
         "core.message.assistant.text",
       ]) {
         expect(
@@ -943,7 +1083,7 @@ describe("KaguyaRuntime", () => {
             informationId: result.rootInformationId,
           })
         ).map(({ kind }) => kind),
-      ).not.toContain("core.llm.completed");
+      ).not.toContain("core.model.task.completed");
       expect(
         (await database.information.reliable.health()).pending,
       ).toBeGreaterThan(0);
@@ -1096,51 +1236,42 @@ function createDeterministicModelSelectionResolver(): RuntimeModelSelectionResol
 }
 function createReplyComposition(
   resolveModelSelection: RuntimeModelSelectionResolver = createDeterministicModelSelectionResolver(),
+  activations = firstPartyModuleActivations,
 ) {
   const catalog = createFirstPartyModuleCatalog({
-    llmCompletedInformationKind:
-      llmCompletedInformationKind as unknown as InformationKindDefinition<
-        "core.llm.completed",
-        LlmCompletedInformationPayload
-      >,
+    modelTaskCapability,
+    modelTaskCompletedInformationKind,
   });
+  const models = new Map<string, ReturnType<KaguyaLlmModelResolver>>();
   return {
     catalog,
-    activations: firstPartyModuleActivations,
-    capabilities: ({ core, now }: RuntimeCapabilityContext) => {
-      const executor: LlmReplyExecutor = {
-        execute: async (input) => {
-          const contexts = input.reply.references.filter(
-            (r) => r.relation === "core:context",
-          );
-          if (contexts.length !== 1)
-            throw new Error("Reply must have one context");
-          const context = await core.get(contexts[0]!.informationId);
-          if (context?.kind !== "core.runtime.context")
-            throw new Error("Reply context information is unavailable");
-          const resolved = resolveModelSelection(input.selection);
-          return new LlmLifecycleClient({
-            core,
-            client: new KaguyaLlmClient({ model: resolved.model, now }),
-            now,
-          }).generate(
-            {
-              operationKey: input.operationKey,
-              kind: "reply",
-              modelId: resolved.modelId,
-              workflowId: "message-module-pipeline",
-              nodeId: "reply",
-              originatingModuleInstanceId: input.originatingModuleInstanceId,
-              prompt: input.prompt,
-              contextAtoms: input.contextAtoms,
-              reply: input.reply.payload,
-            },
-            context as Parameters<LlmLifecycleClient["generate"]>[1],
-            input.reply,
-          );
+    activations,
+    modelTask: {
+      approvals: activations
+        .filter((a) => a.definitionId === "demo.reply.llm")
+        .map((a) => ({
+          activation: {
+            instanceId: a.instanceId,
+            definitionId: a.definitionId,
+          },
+          selectionPolicy: {
+            tier: z
+              .object({ modelTier: z.enum(["light", "heavy"]) })
+              .parse(a.settings).modelTier,
+          },
+        })),
+      client: new KaguyaLlmClient({
+        resolveModel: ({ modelId }) => {
+          const model = models.get(modelId);
+          if (!model) throw new Error("Unapproved model");
+          return model;
         },
-      };
-      return [{ capability: llmReplyExecutorCapability, value: executor }];
+      }),
+      resolveModel: ({ tier }: { tier: "light" | "heavy" }) => {
+        const resolved = resolveModelSelection({ modelTier: tier });
+        models.set(resolved.modelId, resolved.model);
+        return { providerId: "test", modelId: resolved.modelId };
+      },
     },
   };
 }

@@ -1,16 +1,16 @@
 /**
- * 功能概述：把回复请求、LLM 完成、assistant 文本和投递请求组成 durable Information DAG。
- * 主要职责：createLlmReplyModule 声明输入/输出、Selector、Prompt renderer 和 llmReplyExecutorCapability；
- * handler 用声明的能力执行模型，并用 registerOnce 为 assistant 和 delivery 提交唯一输出。
- * 代码库关系：composition root 注入共享 completed kind 与受控 executor；Host 负责能力边界和 claim fencing，
- * reply-context 负责选择和可追溯 Prompt。模块不接触模型密钥、数据库或 Runtime 具体装配。
- * 输入输出与副作用：模型 tier 与出站设置经 schema 严格解析；操作键包含输入 ID 与设置 SHA-256，
- * 同语义实例共享结果，不同设置保持独立；handler 失败由可靠执行器有限重试，模块不保存请求状态。
+ * 功能概述：通过宿主批准的 Model Task 能力将回复请求、通用完成事实、assistant 与投递组成 durable DAG。
+ * 主要职责：createLlmReplyModule 声明能力和共享 completed definition；请求 handler 经 context.use
+ * 调用 core.reply.generate v1，replyTaskOutputSchema 严格校验文本。完成 handler 仅处理本 activation
+ * 的任务赢家，经 completedReplySelector 重载来源 reply，再用 registerOnce 派生 assistant 和 delivery。
+ * 代码库关系：Runtime 注入 token 和 definition 身份，Host 提供 activation、受限 Selector 与 claim fencing；
+ * reply-context 保留原有 Prompt/Memory 顺序与 provenance，selectOutbound 保留 source/fixed 路由。
+ * 类型通过 Runtime 构建声明引用，运行时不导入 Runtime、provider、模型、密钥或 Core。
+ * 输入输出与副作用：requested/terminal 生命周期完全归 ModelTaskClient；failed/cancelled 不触发业务写入，
+ * completed 与 assistant 广播按 originating activation 过滤，重投使用唯一操作槽，不保存请求内存状态。
  */
-import { createHash } from "node:crypto";
 import {
   type DeepReadonly,
-  type CompiledPrompt,
   type InformationAtom,
   type OutboundMessageContent,
   type PlatformDestination,
@@ -18,12 +18,14 @@ import {
 } from "@kaguya/schema";
 import {
   defineInformationModule,
-  defineModuleCapability,
+  defineInformationSelector,
+  type ModuleCapability,
   onInformation,
-  type InformationKindDefinition,
   type InformationSelectorDefinition,
 } from "@kaguya/sdk";
 import { PromptCompiler } from "@kaguya/prompt";
+import type { ModelTaskCapability } from "../../runtime/dist/model-task.js";
+import type { modelTaskCompletedInformationKind } from "../../runtime/dist/information-kinds.js";
 
 import {
   assistantTextInformationKind,
@@ -92,31 +94,13 @@ export type LlmCompletedInformationPayload = z.infer<
   typeof llmCompletedInformationPayloadSchema
 >;
 
-export interface LlmReplyExecutor {
-  execute(input: {
-    readonly operationKey: string;
-    readonly reply: DeepReadonly<
-      InformationAtom<"core.reply.requested", ReplyRequestedInformationPayload>
-    >;
-    readonly prompt: CompiledPrompt;
-    readonly contextAtoms: readonly DeepReadonly<InformationAtom>[];
-    readonly selection: ModuleModelSelection;
-    readonly originatingModuleInstanceId: string;
-  }): Promise<
-    DeepReadonly<
-      InformationAtom<"core.llm.completed", LlmCompletedInformationPayload>
-    >
-  >;
-}
-
-export const llmReplyExecutorCapability =
-  defineModuleCapability<LlmReplyExecutor>("kaguya:llm-reply-executor", 1);
+export const replyTaskOutputSchema = z
+  .object({ text: z.string().min(1) })
+  .strict();
 
 export interface CreateLlmReplyModuleOptions {
-  readonly llmCompletedInformationKind: InformationKindDefinition<
-    "core.llm.completed",
-    LlmCompletedInformationPayload
-  >;
+  readonly modelTaskCapability: ModuleCapability<ModelTaskCapability>;
+  readonly modelTaskCompletedInformationKind: typeof modelTaskCompletedInformationKind;
   readonly selector?: InformationSelectorDefinition;
   readonly promptCompiler?: PromptCompiler;
 }
@@ -124,22 +108,28 @@ export interface CreateLlmReplyModuleOptions {
 export function createLlmReplyModule(
   dependencies: CreateLlmReplyModuleOptions,
 ) {
+  const { modelTaskCapability } = dependencies;
+  if (
+    modelTaskCapability.id !== "kaguya:model-task" ||
+    modelTaskCapability.apiVersion !== 1
+  )
+    throw new Error("Invalid model task capability");
   const selector = dependencies.selector ?? currentAcceptedMessageSelector;
   const promptCompiler = dependencies.promptCompiler ?? new PromptCompiler();
   return defineInformationModule({
     manifest: {
       protocolVersion: 1,
       moduleVersion: "1.0.0",
-      selectors: [selector],
+      selectors: [selector, completedReplySelector],
       promptRenderers: [replyPromptRenderer, memoryPromptRenderer],
-      requires: [llmReplyExecutorCapability],
+      requires: [modelTaskCapability],
       provides: [],
       definitionId: "demo.reply.llm",
       displayName: "LLM reply",
       settingsSchema: llmReplySettingsSchema,
       consumes: [
         replyRequestedInformationKind,
-        dependencies.llmCompletedInformationKind,
+        dependencies.modelTaskCompletedInformationKind,
         assistantTextInformationKind,
         coreMemoryTextInformationKind,
       ],
@@ -148,7 +138,7 @@ export function createLlmReplyModule(
         deliveryRequestedInformationKind,
       ],
     },
-    create: ({ settings }) => ({
+    create: ({ settings, activation }) => ({
       provisions: [],
       subscriptions: [
         onInformation(
@@ -165,33 +155,58 @@ export function createLlmReplyModule(
               contextAtoms,
               reply.informationId,
             );
-            await context.use(llmReplyExecutorCapability).execute({
-              operationKey: `reply-v1:${reply.informationId}:${createHash("sha256").update(JSON.stringify(settings)).digest("hex")}`,
-              reply: persistedReply,
+            const contexts = persistedReply.references.filter(
+              (r) => r.relation === "core:context",
+            );
+            if (contexts.length !== 1)
+              throw new Error("Reply must have one context");
+            await context.use(modelTaskCapability).execute({
+              task: {
+                taskId: "core.reply.generate",
+                version: "1",
+                outputSchema: replyTaskOutputSchema,
+                allowedTiers: ["light", "heavy"],
+              },
+              sourceInformationId: persistedReply.informationId,
+              contextInformationId: contexts[0]!.informationId,
+              activation,
+              selectionPolicy: { tier: settings.modelTier },
               prompt,
               contextAtoms,
-              selection: { modelTier: settings.modelTier },
-              originatingModuleInstanceId: context.instanceId,
             });
           },
         ),
         onInformation(
-          dependencies.llmCompletedInformationKind,
-          { subscriptionId: "kaguya.reply.completed", delivery: "durable" },
+          dependencies.modelTaskCompletedInformationKind,
+          {
+            subscriptionId: "kaguya.reply.model-task-completed",
+            delivery: "durable",
+          },
           async (completed, context) => {
             if (
-              completed.payload.originatingModuleInstanceId !==
-              context.instanceId
+              completed.payload.taskId !== "core.reply.generate" ||
+              completed.payload.version !== "1" ||
+              completed.payload.activation.instanceId !==
+                activation.instanceId ||
+              completed.payload.activation.definitionId !==
+                activation.definitionId
             )
               return;
+            const output = replyTaskOutputSchema.parse(
+              completed.payload.output,
+            );
+            const reply = requireSelectedReply(
+              await context.select(completedReplySelector),
+              completed.payload.sourceInformationId,
+            );
             await context.registerOnce(
               "kaguya.reply.assistant.v1",
               completed.informationId,
               assistantTextInformationKind,
               {
                 payload: {
-                  text: completed.payload.output.text,
-                  source: completed.payload.reply.source,
+                  text: output.text,
+                  source: reply.payload.source,
                   originatingModuleInstanceId: context.instanceId,
                 },
               },
@@ -227,6 +242,16 @@ export function createLlmReplyModule(
     }),
   });
 }
+
+const completedReplySelector = defineInformationSelector({
+  selectorId: "kaguya.reply.completed-source",
+  select: ({ sourceAtom }) => {
+    const payload = z
+      .object({ sourceInformationId: z.string().min(1) })
+      .parse(sourceAtom.payload);
+    return [payload.sourceInformationId];
+  },
+});
 
 function requireSelectedReply(
   atoms: readonly DeepReadonly<InformationAtom>[],

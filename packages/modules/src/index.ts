@@ -3,7 +3,7 @@
  * 主要职责：导出最终 `alwaysReplyFilterModule`、`createLlmReplyModule`、默认 reply
  * Selector 名称以及各阶段 kind/schema；旧事件定义和定向事件模块不再公开。
  * 代码库关系：apps composition root 通过 catalog.ts 工厂选择模块，注入 shared completed definition，
- * 并绑定 llmReplyExecutorCapability；Host 只消费显式 Catalog，informationModuleKinds 仅收集本包 kind。
+ * 并传入 modelTaskCapability token；Host 只消费显式 Catalog，informationModuleKinds 仅收集本包 kind。
  * 输入输出与副作用：仅 re-export，导入本文件不会注册 kind、调用 LLM 或发送平台消息。
  */
 export {
@@ -12,13 +12,12 @@ export {
 } from "./always-reply-filter.js";
 export {
   createLlmReplyModule,
-  llmReplyExecutorCapability,
+  replyTaskOutputSchema,
   llmCompletedInformationPayloadSchema,
   llmReplySettingsSchema,
   modelTierSchema,
   type CreateLlmReplyModuleOptions,
   type LlmCompletedInformationPayload,
-  type LlmReplyExecutor,
   type LlmReplySettings,
   type ModelTier,
   type ModuleModelSelection,

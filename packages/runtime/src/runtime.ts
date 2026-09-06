@@ -5,6 +5,9 @@
  * 代码库关系：依赖 Database、Core、ModuleHost 和平台适配契约；具体 Agent 列表与 LLM 模型绑定位于 apps composition root。
  * 输入输出与副作用：连接、迁移、账本写入和 transport I/O 均在生命周期内执行；close 拒绝新入口并停止可靠领取。
  * 数据库初始化错误脱敏；只关闭自行创建的连接。submit 的 deliveries 是当次实际收集快照，可靠链通常异步完成。
+ * Model Task 由 composeModelTaskCapabilities 注入批准的 ModelTaskClient；ApprovedModelTaskClient
+ * 校验宿主 activation/tier 白名单，provider、resolver、Core 与 approval 数据均保存在私有字段，
+ * 模块只通过 #76 的 context.use 获得通用能力。缺少批准或无效 capability 在任何 create 前拒绝。
  */
 import { randomUUID } from "node:crypto";
 
@@ -48,14 +51,34 @@ import type {
   InformationModuleDefinition,
   InformationModuleCatalog,
   ModuleCapabilityImplementation,
+  ModuleActivationProvenance,
 } from "@kaguya/sdk";
+import {
+  ModelTaskClient,
+  modelTaskCapability,
+  type ModelTaskClientOptions,
+  type ModelTaskRequest,
+} from "./model-task.js";
 
 import {
   builtInInformationKinds,
   deliveryDeliveredInformationKind,
   deliveryFailedInformationKind,
   runtimeContextInformationKind,
+  modelTaskSelectionPolicySchema,
+  modelTaskInformationKinds,
 } from "./information-kinds.js";
+
+export interface RuntimeModelTaskApproval {
+  readonly activation: ModuleActivationProvenance;
+  readonly selectionPolicy: ModelTaskRequest<unknown>["selectionPolicy"];
+}
+export type RuntimeModelTaskOptions = Pick<
+  ModelTaskClientOptions,
+  "client" | "resolveModel"
+> & {
+  readonly approvals: readonly RuntimeModelTaskApproval[];
+};
 
 export interface RuntimeCapabilityContext {
   readonly core: InformationCore;
@@ -84,6 +107,7 @@ type KaguyaRuntimeBaseOptions = {
   readonly catalog: InformationModuleCatalog;
   readonly activations: readonly InformationModuleActivation[];
   readonly capabilities?: RuntimeCapabilities;
+  readonly modelTask?: RuntimeModelTaskOptions;
 };
 
 export type KaguyaRuntimeOptions = KaguyaRuntimeBaseOptions &
@@ -285,15 +309,20 @@ export class KaguyaRuntime implements InformationIngress {
       this.#core = core;
       await core.start();
       this.#assertStarting();
-      const capabilities =
+      const suppliedCapabilities =
         typeof this.options.capabilities === "function"
           ? this.options.capabilities({ core, now: this.#now })
           : this.options.capabilities;
+      const capabilities = composeModelTaskCapabilities(
+        this.options,
+        { core, now: this.#now },
+        suppliedCapabilities ?? [],
+      );
       const moduleHost = new ModuleHost({
         drainTimeoutMs: this.options.drainTimeoutMs ?? 5000,
         core,
         catalog: this.options.catalog,
-        ...(capabilities === undefined ? {} : { capabilities }),
+        capabilities,
         now: this.#now,
       });
       this.#moduleHost = moduleHost;
@@ -550,6 +579,101 @@ export class KaguyaRuntime implements InformationIngress {
   }
 }
 
+class ApprovedModelTaskClient extends ModelTaskClient {
+  readonly #approvals: readonly RuntimeModelTaskApproval[];
+  constructor(
+    options: ModelTaskClientOptions,
+    approvals: readonly RuntimeModelTaskApproval[],
+  ) {
+    super(options);
+    this.#approvals = approvals.map(({ activation, selectionPolicy }) => ({
+      activation: Object.freeze({ ...activation }),
+      selectionPolicy: Object.freeze(
+        modelTaskSelectionPolicySchema.parse(selectionPolicy),
+      ),
+    }));
+  }
+
+  override execute<TOutput>(request: ModelTaskRequest<TOutput>) {
+    if (
+      !this.#approvals.some(
+        ({ activation, selectionPolicy }) =>
+          activation.instanceId === request.activation.instanceId &&
+          activation.definitionId === request.activation.definitionId &&
+          selectionPolicy.tier === request.selectionPolicy.tier,
+      )
+    )
+      return Promise.reject(
+        new Error("Model task activation or policy is not approved"),
+      );
+    return super.execute(request);
+  }
+}
+
+function composeModelTaskCapabilities(
+  options: KaguyaRuntimeOptions,
+  context: RuntimeCapabilityContext,
+  supplied: readonly ModuleCapabilityImplementation[],
+): readonly ModuleCapabilityImplementation[] {
+  const capabilities = [...supplied];
+  if (options.modelTask) {
+    const approvals = options.modelTask.approvals.filter(({ activation }) =>
+      options.activations.some(
+        (a) =>
+          a.enabled !== false &&
+          a.instanceId === activation.instanceId &&
+          a.definitionId === activation.definitionId,
+      ),
+    );
+    for (const activation of options.activations) {
+      if (activation.enabled === false) continue;
+      const definition = options.catalog.definitions.find(
+        (d) => d.manifest.definitionId === activation.definitionId,
+      );
+      if (
+        definition?.manifest.requires.some(
+          (c) => c.id === modelTaskCapability.id,
+        ) &&
+        !approvals.some(
+          (a) =>
+            a.activation.instanceId === activation.instanceId &&
+            a.activation.definitionId === activation.definitionId,
+        )
+      )
+        throw new Error("Missing model task capability approval");
+    }
+    capabilities.push({
+      capability: modelTaskCapability,
+      value: new ApprovedModelTaskClient(
+        { ...options.modelTask, ...context },
+        approvals,
+      ),
+    });
+  }
+  for (const implementation of capabilities) {
+    if (implementation.capability.id !== modelTaskCapability.id) continue;
+    if (
+      implementation.capability.apiVersion !== modelTaskCapability.apiVersion ||
+      !(implementation.value instanceof ModelTaskClient)
+    )
+      throw new Error("Invalid host model task capability");
+  }
+  for (const activation of options.activations) {
+    if (activation.enabled === false) continue;
+    const definition = options.catalog.definitions.find(
+      (d) => d.manifest.definitionId === activation.definitionId,
+    );
+    if (
+      definition?.manifest.requires.some(
+        (c) => c.id === modelTaskCapability.id,
+      ) &&
+      !capabilities.some((c) => c.capability.id === modelTaskCapability.id)
+    )
+      throw new Error("Missing host model task capability");
+  }
+  return capabilities;
+}
+
 const deliveryTerminalSelector = defineInformationSelector({
   selectorId: "runtime.delivery.terminal",
   select: async ({ sourceAtom, ledger }) =>
@@ -574,7 +698,10 @@ function createRegistry(
 ): InformationKindRegistry {
   const registry = new InformationKindRegistry();
   const registered = new Map<string, InformationKindDefinition<string, any>>();
-  for (const definition of builtInInformationKinds) {
+  for (const definition of [
+    ...builtInInformationKinds,
+    ...modelTaskInformationKinds,
+  ]) {
     registered.set(definition.kind, definition);
     if (definition === consumerFailedInformationKind) continue;
     if (definition.kind.startsWith("core."))
@@ -606,7 +733,9 @@ function collectDefinitions(
   moduleDefinitions: readonly InformationModuleDefinition[],
 ): readonly InformationKindDefinition<string, any>[] {
   const definitions = new Map<string, InformationKindDefinition<string, any>>(
-    builtInInformationKinds.map((definition) => [definition.kind, definition]),
+    [...builtInInformationKinds, ...modelTaskInformationKinds].map(
+      (definition) => [definition.kind, definition],
+    ),
   );
   for (const module of moduleDefinitions) {
     for (const definition of [
