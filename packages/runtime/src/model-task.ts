@@ -9,6 +9,9 @@
  * 输入输出与副作用：requested 保存 prompt 与来源，终态保存元数据、usage/duration 和安全错误。
  * shutdown/lease abort 只中断执行，不能产生 cancelled；commitTerminal 决定唯一赢家。不同并发
  * 执行和崩溃恢复仍可能重复外部调用，本层保证事实唯一而不承诺 provider exactly-once。
+ * 重放先按指纹读取 requested/terminal，不依赖模型 resolver；新请求仍只经 registerOnce 写入。
+ * provider 仅校验由任务输入导出的无 transform schema；本层唯一执行任务 parse/transform，
+ * 再检查 JSON 与 informationPayloadSchema。重放不执行任务 transform，存储/fencing 异常不转业务失败。
  */
 import { createHash } from "node:crypto";
 import { InformationCore } from "@kaguya/engine";
@@ -19,6 +22,7 @@ import {
   type InformationAtom,
   type JsonValue,
   jsonValueSchema,
+  informationPayloadSchema,
   z,
 } from "@kaguya/schema";
 import {
@@ -78,7 +82,7 @@ export interface ModelTaskCapability {
   cancel(request: ModelTaskCancellation): Promise<ModelTaskResult<unknown>>;
 }
 export const modelTaskCapability = defineModuleCapability<ModelTaskCapability>(
-  "core:model-task",
+  "kaguya:model-task",
   1,
 );
 export interface ModelTaskClientOptions {
@@ -135,18 +139,19 @@ export class ModelTaskClient implements ModelTaskCapability {
     if (!allowed.includes(selectionPolicy.tier))
       throw new Error("Disallowed model tier");
     const prompt = informationCompiledPromptSchema.parse(request.prompt);
-    const metadata = modelTaskMetadataSchema.parse({
-      taskId: task.taskId,
-      version: task.version,
-      sourceInformationId: request.sourceInformationId,
-      contextInformationId: request.contextInformationId,
-      contextInformationIds: request.contextAtoms.map((a) => a.informationId),
-      activation: request.activation,
-      selectionPolicy,
-      promptKind: prompt.kind,
-      provenance: prompt.provenance,
-      resolvedModel: this.#resolveModel(selectionPolicy),
-    });
+    const metadata = modelTaskMetadataSchema
+      .omit({ resolvedModel: true })
+      .parse({
+        taskId: task.taskId,
+        version: task.version,
+        sourceInformationId: request.sourceInformationId,
+        contextInformationId: request.contextInformationId,
+        contextInformationIds: request.contextAtoms.map((a) => a.informationId),
+        activation: request.activation,
+        selectionPolicy,
+        promptKind: prompt.kind,
+        provenance: prompt.provenance,
+      });
     const selected = await this.#core.getMany(metadata.contextInformationIds);
     if (
       selected.length !== request.contextAtoms.length ||
@@ -192,24 +197,28 @@ export class ModelTaskClient implements ModelTaskCapability {
       contexts[0]!.informationId !== metadata.contextInformationId
     )
       throw new Error("Invalid source context");
-    const key = digest(
-      canonical({
-        taskId: metadata.taskId,
-        version: metadata.version,
-        sourceInformationId: metadata.sourceInformationId,
-        promptKind: prompt.kind,
-        provenance: prompt.provenance,
-        selectionPolicy,
-      }),
+    const key = fingerprint(metadata);
+    let requested = await this.readRequested(metadata.sourceInformationId, key);
+    if (requested) {
+      const terminal = await this.readTerminal(requested.informationId);
+      if (terminal)
+        return resultFromWinner<TOutput>(terminal, requested.informationId);
+    }
+    // 输入 JSON schema 不包含任务 transform；真实 client 在此边界只产生未转换输入。
+    const providerSchema = z.fromJSONSchema(
+      z.toJSONSchema(task.outputSchema, { io: "input" }),
     );
-    const requested = await this.#core.registerOnce(
+    const resolvedModel = requested
+      ? undefined
+      : modelTaskResolvedModelSchema.parse(this.#resolveModel(selectionPolicy));
+    requested ??= await this.#core.registerOnce(
       "kaguya.model.task.requested.v1",
       key,
       modelTaskRequestedInformationKind,
       {
         occurredAt: this.#now().toISOString(),
         source: "runtime:model-task",
-        payload: { ...metadata, prompt },
+        payload: { ...metadata, prompt, resolvedModel: resolvedModel! },
         references: [
           {
             relation: "core:caused-by",
@@ -228,11 +237,7 @@ export class ModelTaskClient implements ModelTaskCapability {
     );
     const existing = await this.readTerminal(requested.informationId);
     if (existing)
-      return resultFromWinner(
-        existing,
-        requested.informationId,
-        task.outputSchema,
-      );
+      return resultFromWinner<TOutput>(existing, requested.informationId);
     const persisted = persistedMetadata(requested);
     const startedAt = this.#now().getTime();
     let metrics:
@@ -242,17 +247,23 @@ export class ModelTaskClient implements ModelTaskCapability {
     >;
     try {
       if (
-        canonical(persisted.resolvedModel) !== canonical(metadata.resolvedModel)
+        canonical(persisted.resolvedModel) !==
+        canonical(
+          resolvedModel ??
+            modelTaskResolvedModelSchema.parse(
+              this.#resolveModel(selectionPolicy),
+            ),
+        )
       )
         throw new Error("Recorded model unavailable");
       const signal = this.#core.executionSignal;
       const generation = await this.#client.generate({
         modelId: persisted.resolvedModel.modelId,
         prompt: informationCompiledPromptSchema.parse(requested.payload.prompt),
-        outputSchema: task.outputSchema,
+        outputSchema: providerSchema,
         ...(signal ? { signal } : {}),
       });
-      metrics = {
+      const candidateMetrics = {
         durationMs: z.number().nonnegative().parse(generation.durationMs),
         ...(generation.usage === undefined
           ? {}
@@ -262,6 +273,8 @@ export class ModelTaskClient implements ModelTaskCapability {
                 .parse(generation.usage),
             }),
       };
+      informationPayloadSchema.parse(candidateMetrics);
+      metrics = candidateMetrics;
       const output = jsonValueSchema.parse(
         await task.outputSchema.parseAsync(generation.output),
       );
@@ -270,15 +283,14 @@ export class ModelTaskClient implements ModelTaskCapability {
         output,
         ...metrics,
       });
+      // 与 Core 的 atom payload 使用同一边界：profileId 等账本禁止字段属于输出失败。
+      // 真正 commit 留在此 try 外，数据库故障、关闭及 claim fencing 不生成 failed。
+      informationPayloadSchema.parse(completed);
     } catch (error) {
       if (this.#core.executionSignal?.aborted) {
         const winner = await this.readTerminal(requested.informationId);
         if (winner)
-          return resultFromWinner(
-            winner,
-            requested.informationId,
-            task.outputSchema,
-          );
+          return resultFromWinner<TOutput>(winner, requested.informationId);
         throw new Error("Model task execution interrupted");
       }
       const winner = await this.#core.commitTerminal(
@@ -303,11 +315,7 @@ export class ModelTaskClient implements ModelTaskCapability {
           },
         },
       );
-      return resultFromWinner(
-        winner,
-        requested.informationId,
-        task.outputSchema,
-      );
+      return resultFromWinner<TOutput>(winner, requested.informationId);
     }
     const winner = await this.#core.commitTerminal(
       terminalGroup,
@@ -318,7 +326,7 @@ export class ModelTaskClient implements ModelTaskCapability {
         payload: completed,
       },
     );
-    return resultFromWinner(winner, requested.informationId, task.outputSchema);
+    return resultFromWinner<TOutput>(winner, requested.informationId);
   }
 
   async cancel(
@@ -382,6 +390,28 @@ export class ModelTaskClient implements ModelTaskCapability {
         a.kind === modelTaskCancelledInformationKind.kind,
     );
   }
+  private async readRequested(
+    sourceInformationId: string,
+    key: string,
+  ): Promise<Requested | undefined> {
+    const candidates = await this.#core.query({
+      informationId: sourceInformationId,
+      relation: "core:caused-by",
+    });
+    for (const atom of candidates) {
+      if (atom.kind !== modelTaskRequestedInformationKind.kind) continue;
+      const payload = modelTaskRequestedInformationKind.payloadSchema.parse(
+        atom.payload,
+      );
+      if (fingerprint(payload) === key)
+        return {
+          ...atom,
+          kind: modelTaskRequestedInformationKind.kind,
+          payload,
+        };
+    }
+    return undefined;
+  }
 }
 
 function persistedMetadata(requested: Requested) {
@@ -392,7 +422,6 @@ function persistedMetadata(requested: Requested) {
 async function resultFromWinner<T = unknown>(
   atom: DeepReadonly<InformationAtom>,
   requestedInformationId: string,
-  schema?: z.ZodType<T>,
 ): Promise<ModelTaskResult<T>> {
   const identity = {
     requestedInformationId,
@@ -402,8 +431,6 @@ async function resultFromWinner<T = unknown>(
     const { output } = modelTaskCompletedInformationKind.payloadSchema.parse(
       atom.payload,
     );
-    // 重放仍检验当前 schema，但返回账本赢家，不再次把 transform 的结果当成新输出。
-    if (schema) await schema.parseAsync(output);
     return {
       ...identity,
       status: "completed",
@@ -429,6 +456,28 @@ async function resultFromWinner<T = unknown>(
 }
 function digest(text: string): string {
   return createHash("sha256").update(text).digest("hex");
+}
+function fingerprint(
+  metadata: Pick<
+    z.infer<typeof modelTaskMetadataSchema>,
+    | "taskId"
+    | "version"
+    | "sourceInformationId"
+    | "promptKind"
+    | "provenance"
+    | "selectionPolicy"
+  >,
+): string {
+  return digest(
+    canonical({
+      taskId: metadata.taskId,
+      version: metadata.version,
+      sourceInformationId: metadata.sourceInformationId,
+      promptKind: metadata.promptKind,
+      provenance: metadata.provenance,
+      selectionPolicy: metadata.selectionPolicy,
+    }),
+  );
 }
 function canonical(value: unknown): string {
   const json = jsonValueSchema.parse(value);

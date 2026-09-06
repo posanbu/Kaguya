@@ -1,12 +1,14 @@
 /**
  * 功能概述：用真实 Core/PGlite 验证通用 Model Task 的身份、输出校验和唯一终态。
  * 主要职责：fixture 创建隔离账本；用不同任务 schema 检查去重、预检、取消及 claim fencing。
- * 代码库关系：消费 model-task 与 information-kinds，外部 LLM 以可控 generate 替身隔离。
+ * 代码库关系：消费 model-task 与 information-kinds；transform 测试组合真实 KaguyaLlmClient
+ * 与内存 provider，其余并发场景以可控 generate 替身隔离外部调用。
  * 输入输出与副作用：只写测试数据库；敏感字符串是泄漏探针；每例关闭 Core 与数据库。
  */
 import { createTestingDatabase } from "@kaguya/database/testing";
 import { InformationCore, InformationKindRegistry } from "@kaguya/engine";
-import type { KaguyaLlmClient } from "@kaguya/llm/client";
+import { KaguyaLlmClient } from "@kaguya/llm/client";
+import { createRepeatingDeterministicModel } from "@kaguya/llm/testing";
 import { PromptCompiler } from "@kaguya/prompt";
 import { z } from "@kaguya/schema";
 import {
@@ -171,6 +173,148 @@ it("reuses requested identity across instances and canonical key order, with onl
   expect(
     atoms.find((a) => a.kind === "core.model.task.completed")!.payload,
   ).toMatchObject({ usage: { totalTokens: 7 }, durationMs: 5 });
+});
+
+it("exposes the agreed capability identity", () => {
+  expect(modelTaskCapability.id).toBe("kaguya:model-task");
+  expect(modelTaskCapability.apiVersion).toBe(1);
+});
+
+it.each(["completed", "failed", "cancelled"])(
+  "replays %s without resolving an unavailable model",
+  async (status) => {
+    const f = await fixture();
+    if (status === "failed") f.generate.mockRejectedValue(new Error(secret));
+    if (status === "cancelled")
+      f.generate.mockImplementationOnce(async () => {
+        const requested = (await f.atoms()).find(
+          (a) => a.kind === "core.model.task.requested",
+        )!;
+        await f.client.cancel({
+          requestedInformationId: requested.informationId,
+          reason: "stop",
+        });
+        return { output: { text: "late" }, durationMs: 1 };
+      });
+    const winner = await f.client.execute(f.request);
+    expect(winner.status).toBe(status);
+    const resolveModel = vi.fn(() => {
+      throw new Error(secret);
+    });
+    const replay = new ModelTaskClient({ ...f.options, resolveModel });
+    expect(await replay.execute(f.request)).toEqual(winner);
+    expect(resolveModel).not.toHaveBeenCalled();
+    expect(f.generate).toHaveBeenCalledTimes(1);
+  },
+);
+
+it.each([false, true])(
+  "handles ledger-rejected output safely with cancellation winner=%s",
+  async (cancelled) => {
+    const f = await fixture();
+    f.generate.mockImplementation(async () => {
+      if (cancelled) {
+        const requested = (await f.atoms()).find(
+          (a) => a.kind === "core.model.task.requested",
+        )!;
+        await f.client.cancel({
+          requestedInformationId: requested.informationId,
+          reason: "stop",
+        });
+      }
+      return { output: { profileId: "x" }, durationMs: 1 };
+    });
+    const result = await f.client.execute({
+      ...f.request,
+      task: {
+        ...f.request.task,
+        outputSchema: z.object({ profileId: z.string() }).strict(),
+      },
+    });
+    expect(result.status).toBe(cancelled ? "cancelled" : "failed");
+    const terminals = (await f.atoms()).filter(
+      (a) =>
+        a.kind.startsWith("core.model.task.") &&
+        a.kind !== "core.model.task.requested",
+    );
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0]!.payload).not.toHaveProperty("output");
+    expect(JSON.stringify(result)).not.toContain("profileId");
+  },
+);
+
+it.each(["suffix", "shape"])(
+  "runs a %s transform once with the real provider client and replays the persisted output",
+  async (mode) => {
+    const f = await fixture();
+    let transforms = 0;
+    const outputSchema = z
+      .object({ text: z.string() })
+      .strict()
+      .transform((value) => {
+        transforms++;
+        return mode === "suffix"
+          ? { text: value.text + "!" }
+          : { length: value.text.length };
+      });
+    const model = createRepeatingDeterministicModel({ text: "hello" });
+    const client = new ModelTaskClient({
+      ...f.options,
+      client: new KaguyaLlmClient({ model }),
+    });
+    const request = { ...f.request, task: { ...f.request.task, outputSchema } };
+    const first = await client.execute(request);
+    expect(first.status).toBe("completed");
+    if (first.status === "completed")
+      expect(first.output).toEqual(
+        mode === "suffix" ? { text: "hello!" } : { length: 5 },
+      );
+    expect(await client.execute(request)).toEqual(first);
+    expect(transforms).toBe(1);
+    expect(model.doGenerateCalls).toHaveLength(1);
+    const completed = (await f.atoms()).find(
+      (a) => a.kind === "core.model.task.completed",
+    )!;
+    expect(completed.payload.output).toEqual(
+      mode === "suffix" ? { text: "hello!" } : { length: 5 },
+    );
+  },
+);
+
+it("does not turn terminal storage errors into business failure", async () => {
+  const f = await fixture();
+  const append = vi
+    .spyOn(f.db.information.reliable, "appendTerminal")
+    .mockRejectedValue(new Error(secret));
+  try {
+    await expect(f.client.execute(f.request)).rejects.toThrow(
+      "Model task execution could not be committed",
+    );
+    expect(append).toHaveBeenCalledTimes(1);
+    expect(
+      (await f.atoms())
+        .filter((a) => a.kind.startsWith("core.model.task."))
+        .map((a) => a.kind),
+    ).toEqual(["core.model.task.requested"]);
+  } finally {
+    append.mockRestore();
+  }
+});
+
+it("does not copy ledger-rejected usage into the safe failed payload", async () => {
+  const f = await fixture();
+  f.generate.mockResolvedValue({
+    output: { text: "ok" },
+    usage: { profileId: 1 },
+    durationMs: 1,
+  });
+  const result = await f.client.execute(f.request);
+  expect(result.status).toBe("failed");
+  const failed = (await f.atoms()).find(
+    (a) => a.kind === "core.model.task.failed",
+  )!;
+  expect(failed.payload).not.toHaveProperty("usage");
+  expect(failed.payload).not.toHaveProperty("output");
 });
 
 it("supports a non-reply task-owned schema without a central business union", async () => {
