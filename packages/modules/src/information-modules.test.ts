@@ -882,14 +882,20 @@ describe("createLlmReplyModule", () => {
       });
       // A durable replay of the same turn context must return the existing
       // speech terminal and leave the downstream reply DAG unchanged.
+      const decisionPayload = speechDecisionInformationKind.payloadSchema.parse(
+        decision!.payload,
+      );
+      const candidateInformationId = z.string().parse(
+        decisionPayload.candidateInformationId,
+      );
       const replayedDecision = await core.commitTerminal(
         "core.speech.decision",
-        decision!.payload.candidateInformationId,
+        candidateInformationId,
         speechDecisionInformationKind,
         {
           occurredAt: decision!.occurredAt,
           source: decision!.source,
-          payload: decision!.payload,
+          payload: decisionPayload,
           references: decision!.references,
         },
       );

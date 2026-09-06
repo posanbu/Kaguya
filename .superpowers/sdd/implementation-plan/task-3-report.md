@@ -14,3 +14,19 @@ Runtime fixtures that exercise model capability approval now activate the reply 
 ## Concerns
 
 The complete `pnpm test` run was attempted. It first exposed the same built-in kind expectation regression; that expectation is now updated. The run was lengthy and was stopped before a clean completion, so focused suites provide the current verification evidence.
+
+## Replay fixture fix
+
+The durable replay assertion now parses the stored decision payload through
+`speechDecisionInformationKind.payloadSchema` and validates its candidate ID
+before calling `commitTerminal`. This preserves the runtime idempotency check
+while keeping the test type-safe when queried atoms are represented as generic
+JSON. The Runtime kind expectation includes `agent.turn.context.completed`,
+`agent.speech.decision`, and `agent.wait.requested` exactly once.
+
+Verification after the fix:
+
+- `pnpm vitest run packages/modules/src/information-modules.test.ts packages/runtime/src/information-kinds.test.ts` — 2 files passed, 18 tests passed.
+- `pnpm typecheck` — passed.
+- `pnpm lint` — passed.
+- `pnpm test` — attempted; no output or test progress after roughly 80 seconds, so interrupted. No failure was reported before interruption.
