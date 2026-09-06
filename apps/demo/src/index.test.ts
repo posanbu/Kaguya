@@ -53,6 +53,8 @@ describe("demo entry point", () => {
       "agent.chat.scope.entity: 1",
       "agent.person.context.completed: 1",
       "agent.person.resolution: 1",
+      "agent.speech.decision: 1",
+      "agent.turn.context.completed: 1",
       "core.delivery.delivered: 1",
       "core.delivery.requested: 1",
       "core.message.assistant.text: 1",

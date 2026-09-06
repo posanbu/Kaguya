@@ -213,6 +213,8 @@ describe("unified server composition", () => {
         "agent.chat.scope.binding",
         "agent.chat.scope.entity",
         "agent.person.context.completed",
+        "agent.speech.decision",
+        "agent.turn.context.completed",
         "agent.person.resolution",
         "core.message.inbound.text",
         "core.reply.requested",

@@ -41,6 +41,7 @@ import {
   alwaysReplyFilterModule,
   inboundTextInformationKind,
   replyRequestedInformationKind,
+  speechDecisionInformationKind,
 } from "@kaguya/modules";
 import type {
   PlatformDeliveryReceipt,
@@ -236,7 +237,7 @@ describe("KaguyaRuntime", () => {
       const runtime = new KaguyaRuntime({
         database,
         catalog: defineInformationModuleCatalog(definition),
-        activations: [firstPartyModuleActivations[1]!],
+        activations: [firstPartyModuleActivations[0]!],
         capabilities:
           mode === "missing"
             ? []
@@ -278,7 +279,7 @@ describe("KaguyaRuntime", () => {
     });
     const { runtime } = await createRuntime({
       catalog: defineInformationModuleCatalog(definition),
-      activations: [firstPartyModuleActivations[1]!],
+      activations: [firstPartyModuleActivations[0]!],
     });
     await runtime.start();
     expect(value).toBeInstanceOf(ModelTaskClient);
@@ -692,6 +693,8 @@ describe("KaguyaRuntime", () => {
           "agent.chat.scope.binding",
           "agent.person.resolution",
           "agent.person.context.completed",
+          "agent.speech.decision",
+          "agent.turn.context.completed",
           "core.delivery.delivered",
         ]),
       );
@@ -705,7 +708,8 @@ describe("KaguyaRuntime", () => {
 
       const byKind = new Map(graph.map((atom) => [atom.kind, atom]));
       const chain = [
-        ["core.reply.requested", "core.message.inbound.text"],
+        ["agent.speech.decision", "agent.turn.context.completed"],
+        ["core.reply.requested", "agent.speech.decision"],
         ["core.model.task.requested", "core.reply.requested"],
         ["core.model.task.completed", "core.model.task.requested"],
         ["core.message.assistant.text", "core.model.task.completed"],
@@ -789,11 +793,7 @@ describe("KaguyaRuntime", () => {
     async () => {
       const { runtime, database } = await createRuntime({
         activations: [
-          {
-            instanceId: "filter.default",
-            definitionId: "demo.filter.always",
-            settings: {},
-          },
+          ...firstPartyModuleActivations.filter((a) => a.definitionId !== "demo.reply.llm"),
           ...[
             ["reply.one", "room-one"],
             ["reply.two", "room-two"],
@@ -1001,14 +1001,14 @@ describe("KaguyaRuntime", () => {
           definitionId: "test.reply.observer",
           displayName: "Concurrent reply observer",
           settingsSchema: z.object({}).strict(),
-          consumes: [replyRequestedInformationKind],
-          produces: [replyRequestedInformationKind],
+          consumes: [speechDecisionInformationKind],
+          produces: [speechDecisionInformationKind],
         },
         create: () => ({
           provisions: [],
           subscriptions: [
             onInformation(
-              replyRequestedInformationKind,
+              speechDecisionInformationKind,
               {
                 subscriptionId: "handle-replyrequestedinformationkind",
                 delivery: "live",
@@ -1024,14 +1024,11 @@ describe("KaguyaRuntime", () => {
       });
       const { runtime } = await createRuntime({
         catalog: defineInformationModuleCatalog(
-          ...[alwaysReplyFilterModule, observer],
+          ...createReplyComposition().catalog.definitions,
+          observer,
         ),
         activations: [
-          {
-            instanceId: "filter.default",
-            definitionId: "demo.filter.always",
-            settings: {},
-          },
+          ...firstPartyModuleActivations.filter((a) => a.definitionId !== "demo.reply.llm"),
           {
             instanceId: "observer.one",
             definitionId: "test.reply.observer",
