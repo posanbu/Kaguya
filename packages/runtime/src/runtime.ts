@@ -224,6 +224,7 @@ export class KaguyaRuntime implements InformationIngress {
   #oneShotSchedule: OneShotScheduleCapability | undefined;
   #oneShotScheduler: DurableOneShotScheduler | undefined;
   #oneShotRecoveryPromise: Promise<void> | undefined;
+  #oneShotSchedulerReady = false;
 
   constructor(private readonly options: KaguyaRuntimeOptions) {
     if (
@@ -357,7 +358,35 @@ export class KaguyaRuntime implements InformationIngress {
           this.options.cadence.reconciliationBatchSize,
         );
       }
-      const oneShotSchedule = new OneShotScheduleClient(core);
+      const scheduler = new DurableOneShotScheduler({
+        store: database.information.oneShotSchedules,
+        clock: {
+          now: this.#now,
+          setTimeout: globalThis.setTimeout.bind(globalThis),
+          clearTimeout: globalThis.clearTimeout.bind(globalThis),
+        },
+        nextInformationId: this.#nextInformationId,
+        drainTimeoutMs: this.options.drainTimeoutMs ?? 5000,
+      });
+      this.#oneShotScheduler = scheduler;
+      const client = new OneShotScheduleClient(core);
+      const oneShotSchedule: OneShotScheduleCapability = {
+        schedule: async (input) => {
+          const receipt = await client.schedule(input);
+          if (this.#oneShotSchedulerReady) {
+            await scheduler.refresh(receipt.scheduleInformationId);
+          }
+          return receipt;
+        },
+        replace: async (input) => {
+          const receipt = await client.replace(input);
+          if (this.#oneShotSchedulerReady) {
+            await scheduler.refresh(receipt.scheduleInformationId);
+          }
+          return receipt;
+        },
+        finish: (input) => client.finish(input),
+      };
       this.#oneShotSchedule = oneShotSchedule;
       const suppliedCapabilities =
         typeof this.options.capabilities === "function"
@@ -410,20 +439,10 @@ export class KaguyaRuntime implements InformationIngress {
         });
         await this.#cadence.start();
       }
-      const scheduler = new DurableOneShotScheduler({
-        store: database.information.oneShotSchedules,
-        clock: {
-          now: this.#now,
-          setTimeout: globalThis.setTimeout.bind(globalThis),
-          clearTimeout: globalThis.clearTimeout.bind(globalThis),
-        },
-        nextInformationId: this.#nextInformationId,
-        drainTimeoutMs: this.options.drainTimeoutMs ?? 5000,
-      });
-      this.#oneShotScheduler = scheduler;
       this.#oneShotRecoveryPromise = this.#oneShotRecoveryGate;
       await scheduler.start();
       await this.#oneShotRecoveryPromise;
+      this.#oneShotSchedulerReady = true;
       this.#state = "started";
       this.#runtimeLogger?.info(
         {
@@ -526,6 +545,7 @@ export class KaguyaRuntime implements InformationIngress {
       this.#oneShotSchedule = undefined;
       this.#oneShotScheduler = undefined;
       this.#oneShotRecoveryPromise = undefined;
+      this.#oneShotSchedulerReady = false;
       this.#ownsDatabase = false;
       return failures;
     })();
@@ -838,7 +858,7 @@ function createRegistry(
     ]) {
       const existing = registered.get(definition.kind);
       if (existing !== undefined) {
-        if (existing !== definition && existing.kind !== definition.kind) {
+        if (existing !== definition) {
           throw new Error(
             `Information kind definition mismatch: ${definition.kind}`,
           );
