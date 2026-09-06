@@ -283,7 +283,7 @@ export class ModelTaskClient implements ModelTaskCapability {
         output,
         ...metrics,
       });
-      // 与 Core 的 atom payload 使用同一边界：profileId 等账本禁止字段属于输出失败。
+      // 与 Core 的 atom payload 使用同一边界：账本受限标识字段属于输出失败。
       // 真正 commit 留在此 try 外，数据库故障、关闭及 claim fencing 不生成 failed。
       informationPayloadSchema.parse(completed);
     } catch (error) {
