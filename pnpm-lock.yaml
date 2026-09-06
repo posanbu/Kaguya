@@ -266,6 +266,9 @@ importers:
       '@kaguya/prompt':
         specifier: workspace:*
         version: link:../prompt
+      '@kaguya/scheduler':
+        specifier: workspace:*
+        version: link:../scheduler
       '@kaguya/schema':
         specifier: workspace:*
         version: link:../schema
@@ -275,9 +278,15 @@ importers:
 
   packages/scheduler:
     dependencies:
+      '@kaguya/engine':
+        specifier: workspace:*
+        version: link:../engine
       '@kaguya/schema':
         specifier: workspace:*
         version: link:../schema
+      '@kaguya/sdk':
+        specifier: workspace:*
+        version: link:../sdk
 
   packages/schema:
     dependencies:

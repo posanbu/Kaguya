@@ -15,6 +15,7 @@ export const sidebar: DefaultTheme.SidebarItem[] = [
       { text: "安装与启动", link: "/guide/installation" },
       { text: "配置 Kaguya", link: "/guide/configuration" },
       { text: "使用 Web UI", link: "/guide/webui" },
+      { text: "Durable Cadence", link: "/guide/cadence" },
       { text: "故障排查", link: "/guide/troubleshooting" },
     ],
   },

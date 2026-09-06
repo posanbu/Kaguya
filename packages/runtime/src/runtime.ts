@@ -30,6 +30,12 @@ import {
   deliveryRequestedInformationKind,
   inboundTextInformationKind,
 } from "@kaguya/modules";
+import {
+  CadenceCoordinator,
+  cadenceInformationKinds,
+  installProjectionReconciliationConsumers,
+  type CadenceDefinitionInput,
+} from "@kaguya/scheduler";
 import type {
   InboundReceipt,
   InformationIngress,
@@ -108,6 +114,11 @@ type KaguyaRuntimeBaseOptions = {
   readonly activations: readonly InformationModuleActivation[];
   readonly capabilities?: RuntimeCapabilities;
   readonly modelTask?: RuntimeModelTaskOptions;
+  readonly cadence?: {
+    readonly definitions: readonly CadenceDefinitionInput[];
+    readonly pollIntervalMs?: number;
+    readonly reconciliationBatchSize?: number;
+  };
 };
 
 export type KaguyaRuntimeOptions = KaguyaRuntimeBaseOptions &
@@ -196,6 +207,8 @@ export class KaguyaRuntime implements InformationIngress {
   #ownsDatabase = false;
   #core: InformationCore | undefined;
   #moduleHost: ModuleHost | undefined;
+  #cadence: CadenceCoordinator | undefined;
+  #cadenceUnsubscribe: readonly (() => void)[] = [];
 
   constructor(private readonly options: KaguyaRuntimeOptions) {
     if (
@@ -309,6 +322,13 @@ export class KaguyaRuntime implements InformationIngress {
       this.#core = core;
       await core.start();
       this.#assertStarting();
+      if (this.options.cadence !== undefined) {
+        this.#cadenceUnsubscribe = installProjectionReconciliationConsumers(
+          core,
+          logProjectionRunner,
+          this.options.cadence.reconciliationBatchSize,
+        );
+      }
       const suppliedCapabilities =
         typeof this.options.capabilities === "function"
           ? this.options.capabilities({ core, now: this.#now })
@@ -333,6 +353,26 @@ export class KaguyaRuntime implements InformationIngress {
       );
       await moduleHost.start(this.options.activations);
       this.#assertStarting();
+      if (this.options.cadence !== undefined) {
+        this.#cadence = new CadenceCoordinator({
+          core,
+          definitions: this.options.cadence.definitions,
+          now: this.#now,
+          ...(this.options.cadence.pollIntervalMs === undefined
+            ? {}
+            : { pollIntervalMs: this.options.cadence.pollIntervalMs }),
+          onError: (error) => {
+            this.#runtimeLogger?.error(
+              {
+                event: "scheduler.cadence.failed",
+                errorType: safeErrorType(error),
+              },
+              "Cadence coordinator failed",
+            );
+          },
+        });
+        await this.#cadence.start();
+      }
       this.#state = "started";
       this.#runtimeLogger?.info(
         {
@@ -398,6 +438,14 @@ export class KaguyaRuntime implements InformationIngress {
     if (this.#cleanupPromise !== undefined) return this.#cleanupPromise;
     this.#cleanupPromise = (async () => {
       const failures: unknown[] = [];
+      try {
+        await this.#cadence?.stop();
+      } catch (error) {
+        failures.push(error);
+      }
+      for (const unsubscribe of this.#cadenceUnsubscribe) unsubscribe();
+      this.#cadenceUnsubscribe = [];
+      this.#cadence = undefined;
       try {
         await this.#moduleHost?.stop();
       } catch (error) {
@@ -710,6 +758,7 @@ function createRegistry(
   for (const definition of [
     ...builtInInformationKinds,
     ...modelTaskInformationKinds,
+    ...cadenceInformationKinds,
   ]) {
     registered.set(definition.kind, definition);
     if (definition === consumerFailedInformationKind) continue;
@@ -742,7 +791,7 @@ function collectDefinitions(
   moduleDefinitions: readonly InformationModuleDefinition[],
 ): readonly InformationKindDefinition<string, any>[] {
   const definitions = new Map<string, InformationKindDefinition<string, any>>(
-    [...builtInInformationKinds, ...modelTaskInformationKinds].map(
+    [...builtInInformationKinds, ...modelTaskInformationKinds, ...cadenceInformationKinds].map(
       (definition) => [definition.kind, definition],
     ),
   );
