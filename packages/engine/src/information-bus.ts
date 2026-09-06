@@ -1,11 +1,8 @@
 /**
- * 功能概述：本模块提供信息 atom 的内存广播总线，在提交后的当前订阅者快照上并发调用。
- * 主要职责：`InformationBus.on`/`onAll` 记录带稳定 `InformationConsumer` 身份的 handler；
- * `publish` 冻结 atom，并以一次 `Promise.allSettled` 返回每个消费者的成功或失败结果。
- * 代码库关系：`InformationCore` 是唯一的调用方，负责把 rejected 结果转成
- * `consumer.failed` 事实；本总线不记录故障、不持久化，也不重放历史 atom。
- * 输入输出与副作用：订阅会改变进程内订阅集合；publish 返回消费者结果，handler 总是
- * 接收到同一个冻结快照，单个拒绝不会阻止其他 handler 启动或完成。
+ * 架构说明：本模块提供信息 atom 的发布总线，负责在边界处创建冻结快照，
+ * 再以注册顺序分发给同 kind 订阅者与全量订阅者，隔离观察者异常。
+ * 代码库关系：`InformationCore.append()` 在持久化成功后调用这里的 publish，
+ * 从而保证“先写后看”的一致性，而不会让订阅者直接触碰原始可变输入。
  */
 import {
   freezeInformationAtom,
@@ -13,51 +10,30 @@ import {
   type InformationAtom,
 } from "@kaguya/schema";
 
-export interface InformationConsumer {
-  readonly consumerId: string;
-  readonly definitionId?: string;
-  readonly instanceId?: string;
-}
-
-export type InformationSubscriber = (
-  atom: DeepReadonly<InformationAtom>,
-) => unknown | Promise<unknown>;
-
-export type InformationBroadcastResult =
-  | {
-      readonly consumer: InformationConsumer;
-      readonly status: "fulfilled";
-    }
-  | {
-      readonly consumer: InformationConsumer;
-      readonly status: "rejected";
-      readonly reason: unknown;
-    };
+type InformationSubscriber = (atom: DeepReadonly<InformationAtom>) => unknown | Promise<unknown>;
 
 interface SubscriberRegistration {
   readonly id: number;
   readonly kind: string | null;
-  readonly consumer: InformationConsumer;
   readonly handler: InformationSubscriber;
+}
+
+export interface InformationBusOptions {
+  readonly onSubscriberError?: (error: unknown) => void | Promise<void>;
 }
 
 export class InformationBus {
   #subscriptions: SubscriberRegistration[] = [];
   #nextSubscriptionId = 0;
 
-  on(
-    kind: string,
-    consumer: InformationConsumer,
-    handler: InformationSubscriber,
-  ): () => void {
-    return this.addSubscription(kind, consumer, handler);
+  constructor(private readonly options: InformationBusOptions = {}) {}
+
+  subscribe(kind: string, handler: InformationSubscriber): () => void {
+    return this.addSubscription(kind, handler);
   }
 
-  onAll(
-    consumer: InformationConsumer,
-    handler: InformationSubscriber,
-  ): () => void {
-    return this.addSubscription(null, consumer, handler);
+  subscribeAll(handler: InformationSubscriber): () => void {
+    return this.addSubscription(null, handler);
   }
 
   clear(): void {
@@ -66,34 +42,30 @@ export class InformationBus {
 
   async publish(
     atom: InformationAtom | DeepReadonly<InformationAtom>,
-  ): Promise<readonly InformationBroadcastResult[]> {
+  ): Promise<DeepReadonly<InformationAtom>> {
     const snapshot = freezeSnapshot(atom);
     const subscribers = this.#subscriptions.filter(
       (subscription) =>
         subscription.kind === null || subscription.kind === snapshot.kind,
     );
-    const settled = await Promise.allSettled(
+    const results = await Promise.allSettled(
       subscribers.map((subscription) =>
         Promise.resolve().then(() => subscription.handler(snapshot)),
       ),
     );
-    return settled.map((result, index) => {
-      const consumer = subscribers[index]!.consumer;
-      return result.status === "fulfilled"
-        ? { consumer, status: "fulfilled" }
-        : { consumer, status: "rejected", reason: result.reason };
-    });
+    for (const result of results) {
+      if (result.status === "rejected") {
+        await this.reportSubscriberError(result.reason);
+      }
+    }
+
+    return snapshot;
   }
 
-  private addSubscription(
-    kind: string | null,
-    consumer: InformationConsumer,
-    handler: InformationSubscriber,
-  ): () => void {
+  private addSubscription(kind: string | null, handler: InformationSubscriber): () => void {
     const registration: SubscriberRegistration = {
       id: ++this.#nextSubscriptionId,
       kind,
-      consumer: Object.freeze({ ...consumer }),
       handler,
     };
     this.#subscriptions.push(registration);
@@ -103,6 +75,14 @@ export class InformationBus {
         this.#subscriptions.splice(index, 1);
       }
     };
+  }
+
+  private async reportSubscriberError(error: unknown): Promise<void> {
+    try {
+      await this.options.onSubscriberError?.(error);
+    } catch {
+      // 订阅者错误汇报不得影响已提交的业务结果。
+    }
   }
 }
 

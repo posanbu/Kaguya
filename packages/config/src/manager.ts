@@ -713,6 +713,7 @@ function parseReplacementInput(value: unknown): {
       readonly name?: unknown;
       readonly platforms?: unknown;
       readonly plugins?: unknown;
+      readonly runtime?: unknown;
     };
     return {
       acknowledgedWarnings: parseCurrentWarningAcknowledgements(
@@ -723,6 +724,9 @@ function parseReplacementInput(value: unknown): {
         ai: replacement.ai,
         platforms: replacement.platforms,
         plugins: replacement.plugins,
+        ...(replacement.runtime === undefined
+          ? {}
+          : { runtime: replacement.runtime }),
       }),
     };
   } catch {

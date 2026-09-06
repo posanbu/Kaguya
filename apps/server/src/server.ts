@@ -1,97 +1,122 @@
 /**
- * 功能概述：本文件是 Kaguya 服务端唯一 composition root，负责读取配置、
- * 连接 PostgreSQL information database、组装 Runtime、HTTP/Web UI 与 NapCat，并把启动时
- * 选中的全局 Profile 冻结为一个共享 tier-only 模型解析器。
- * 主要职责：`startKaguyaServer` 会先在统一的启动保护区内创建异步
- * `ConfigurationManagement`，让缺失仓库先完成 bootstrap/open，再根据 selected
- * Profile readiness 决定当前进程是正常启动 Runtime，还是进入 setup-mode 暂停
- * Runtime/database/NapCat 仅提供配置入口；就绪时 Server 自行连接数据库并以
- * 注入形式构造 Runtime，Web/NapCat 只获得该 Runtime 的 `InformationIngress`。即使 bootstrap/open 阶段遇到
- * `CONFIG_UNSUPPORTED_VERSION` 或 `CONFIG_CORRUPT_STORE`，也必须沿用已有的
- * startup failed 日志与 logger 关闭路径。`createRuntimeModelSelectionResolver`
- * 只接收 `setup.inspect()` 已选中的 Profile 快照并校验，不再次读取 Registry；`openAICompatibleProviderSettings`
- * 提取 provider 能力开关；`assertProfileReady` 保持 readiness 错误固定且无 secret；
- * `connectInformationDatabase` 与 `startInformationRuntime` 将 lazy Pool 创建及
- * 首次 migrate/I/O 失败收窄为 database error，其他 Runtime/模块启动失败收窄为
- * 独立 runtime startup error；两类错误都不包含 URL、cause 或凭据；
+ * 功能概述：本文件是 Kaguya 服务端主入口，负责读取 ServerConfig、组装 HTTP 应用、
+ * Web UI、NapCat 连接与 Runtime，并把配置 Registry 中当前选中的 Profile 冻结成
+ * 一个供 Runtime 使用的 tier-only 模型解析器。
+ * 主要职责：`startKaguyaServer` 在创建 HTTP、Runtime 或平台 ingress 之前调用
+ * `validateStartupConfiguration`，把 selected Profile 冻结为可执行的 ServerConfig；
+ * 校验失败时记录脱敏 issue、输出终端指引并沿用统一 logger 关闭路径。随后
+ * `createRuntimeModelSelectionResolver` 从同一 Profile 创建 tier-only 模型解析器；
  * 其余 helper 管理资源关闭与进程信号处理。
  * 代码库关系：本文件消费 `@kaguya/config` 的 Profile Registry、`@kaguya/runtime`
  * 的运行时注入点、Fastify HTTP 组装和 NapCat 适配器；模块层 `packages/modules`
- * 已不再携带模块级 Profile 标识，因此 Profile 选择只能在这里于服务启动时完成一次。
- * 输入输出与副作用：启动时会创建 logger、检查配置 readiness、按需连接数据库并启动 Runtime/HTTP/NapCat；
+ * 已不再携带 `profileId`，因此 Profile 选择只能在这里于服务启动时完成一次。
+ * 输入输出与副作用：启动时会创建 bootstrap logger、执行配置校验并在成功后启动 Runtime/HTTP/NapCat；
  * resolver 会缓存已选 Profile 下 provider client，并在 light/heavy tier 缺失时于启动期失败，
- * 防止服务接受请求后再暴露可变 Profile 覆盖路径；关闭时 Runtime 先排空，
- * 再由 Server 关闭它所有的数据库连接。
+ * 防止服务接受请求后再暴露可变 Profile 覆盖路径。
  */
 import { pathToFileURL } from "node:url";
 
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
-  ConfigIncompleteError,
-  ConfigReviewRequiredError,
-  inspectUserConfigProfile,
+  FileUserConfigManager,
+  StartupConfigurationError,
+  validateStartupConfiguration,
   type UserConfigProfile,
+  type ValidatedStartupConfiguration,
 } from "@kaguya/config";
-import { KaguyaDatabase } from "@kaguya/database";
 import {
   closeLogger,
   createLogger,
   createModuleLogger,
-  readLoggerOptions,
   type KaguyaLogger,
 } from "@kaguya/logger";
 import {
   GatewayAllowlist,
   KaguyaRuntime,
-  RuntimeDatabaseInitializationError,
   type RuntimeModelSelectionResolver,
 } from "@kaguya/runtime";
 import type { FastifyInstance } from "fastify";
 
 import { createHttpApplication } from "./app.js";
-import {
-  assertLoopbackHost,
-  readServerConfig,
-  type ServerConfig,
-} from "./config.js";
-import { createGatewayAuthenticator } from "./gateway-auth.js";
+import { readConfigRoot, type ServerConfig } from "./config.js";
 import {
   createNapCatSupervisor,
   type NapCatConnectionSupervisor,
 } from "./napcat.js";
 import { createConfigurationManagement } from "./setup.js";
-import {
-  defaultNapCatSettings,
-  hasNapCatSettings,
-  loadNapCatSettings,
-  toNapCatConfig,
-} from "./napcat-config.js";
 import { createWebMessageGateway } from "./web-gateway.js";
 import { registerWebUi, type WebUiHandle } from "./web.js";
 
+function serverConfigFromValidated(
+  validated: ValidatedStartupConfiguration,
+): ServerConfig {
+  const napcat = validated.profile.platforms.find(
+    (platform) => platform.enabled && platform.type === "napcat",
+  );
+  const napcatSettings = napcat?.settings ?? {};
+  const napcatCredentials = napcat?.credentials ?? {};
+  const adapterId = stringSetting(napcatSettings.adapterId);
+  const wsUrl = stringSetting(napcatSettings.wsUrl);
+  const selfId = stringSetting(napcatSettings.selfId);
+  const accessToken = stringSetting(napcatCredentials.accessToken);
+  const reconnectMs = numberSetting(napcatSettings.reconnectMs);
+  return {
+    ...validated.runtime,
+    configRoot: validated.configRoot,
+    development: false,
+    napcat: {
+      enabled: napcat !== undefined,
+      adapterId: adapterId ?? "napcat.qq.main",
+      ...(wsUrl === undefined ? {} : { wsUrl }),
+      ...(accessToken === undefined ? {} : { accessToken }),
+      ...(selfId === undefined ? {} : { selfId }),
+      reconnectMs: reconnectMs ?? 3000,
+    },
+  };
+}
+
+function stringSetting(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : undefined;
+}
+
+function numberSetting(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function writeConfigurationFailure(error: StartupConfigurationError): void {
+  const lines = [
+    "Kaguya 启动配置校验失败。",
+    `配置目录：${error.configRoot}`,
+    ...error.issues.map(
+      (issue) => `- [${issue.code}] ${issue.path}: ${issue.message}`,
+    ),
+    "请修正 selected Profile 后重新启动服务。",
+  ];
+  process.stderr.write(`${lines.join("\n")}\n`);
+}
+
 export interface StartedKaguyaServer {
   readonly app: FastifyInstance;
-  readonly runtime?: KaguyaRuntime;
+  readonly runtime: KaguyaRuntime;
   close(): Promise<void>;
 }
 
 export async function startKaguyaServer(
   providedConfig?: ServerConfig,
 ): Promise<StartedKaguyaServer> {
-  const config = providedConfig ?? readServerConfig();
-  assertLoopbackHost(config.host);
-  const gatewayAuth = createGatewayAuthenticator(config.gatewayToken);
-  const rootLogger = createLogger(readLoggerOptions("kaguya"));
-  const serverLogger = createModuleLogger(rootLogger, "server");
-  const httpLogger = createModuleLogger(rootLogger, "server:http");
-  const napcatLogger = createModuleLogger(rootLogger, "adapter:napcat");
-  const webLogger = createModuleLogger(rootLogger, "adapter:web");
+  let config = providedConfig;
+  let rootLogger = createLogger({ service: "kaguya", level: "info" });
+  let serverLogger = createModuleLogger(rootLogger, "server");
+  let httpLogger = createModuleLogger(rootLogger, "server:http");
+  let napcatLogger = createModuleLogger(rootLogger, "adapter:napcat");
+  let webLogger = createModuleLogger(rootLogger, "adapter:web");
   let app: FastifyInstance | undefined;
   let webUi: WebUiHandle | undefined;
   let napcat: NapCatConnectionSupervisor | undefined;
   let closePromise: Promise<void> | undefined;
   let runtime: KaguyaRuntime | undefined;
-  let database: KaguyaDatabase | undefined;
 
   const close = (): Promise<void> => {
     closePromise ??= closeResources({
@@ -99,7 +124,6 @@ export async function startKaguyaServer(
       webUi,
       napcat,
       runtime,
-      database,
       rootLogger,
       serverLogger,
     });
@@ -107,103 +131,88 @@ export async function startKaguyaServer(
   };
 
   try {
-    const setup = await createConfigurationManagement(config.configRoot);
-    const hasPersistedNapCat = await hasNapCatSettings(config.configRoot);
-    const persistedNapCat = hasPersistedNapCat
-      ? await loadNapCatSettings(config.configRoot)
-      : defaultNapCatSettings;
-    const effectiveConfig: ServerConfig = {
-      ...config,
-      napcat: hasPersistedNapCat
-        ? toNapCatConfig(persistedNapCat)
-        : config.napcat,
-    };
-    const setupStatus = await setup.inspect();
-    let resolveModelSelection: RuntimeModelSelectionResolver | undefined;
-    if (setupStatus.status === "ready") {
-      const profile = await setup.getProfile(setupStatus.selectedProfileId);
-      resolveModelSelection = createRuntimeModelSelectionResolver(profile);
-    } else {
-      serverLogger.warn(
-        {
-          event: "server.configuration.required",
-          reason: setupStatus.status,
-        },
-        "Configuration is not ready; use the access URL after the server starts",
-      );
-    }
-    const runtimeReady = resolveModelSelection !== undefined;
-    if (resolveModelSelection !== undefined) {
-      database = await connectInformationDatabase(effectiveConfig.databaseUrl);
-      runtime = new KaguyaRuntime({
-        database,
-        logger: rootLogger,
-        resolveModelSelection,
-      });
-    }
-    const webGateway = runtimeReady
-      ? createWebMessageGateway({
-          adapterId: "web.ui.main",
-          ingress: required(runtime, "runtime ingress"),
-          logger: webLogger,
-        })
-      : undefined;
+    const configRoot = config?.configRoot ?? readConfigRoot();
+    serverLogger.info(
+      { event: "configuration.validation.started", configRoot },
+      "Validating startup configuration",
+    );
+    const validated = await validateStartupConfiguration({ rootDir: configRoot });
+    config = serverConfigFromValidated(validated);
+    await closeLogger(rootLogger);
+    rootLogger = createLogger({
+      service: "kaguya",
+      level: validated.runtime.logLevel,
+      format: validated.runtime.logFormat,
+    });
+    serverLogger = createModuleLogger(rootLogger, "server");
+    httpLogger = createModuleLogger(rootLogger, "server:http");
+    napcatLogger = createModuleLogger(rootLogger, "adapter:napcat");
+    webLogger = createModuleLogger(rootLogger, "adapter:web");
+    serverLogger.info(
+      {
+        event: "configuration.validation.succeeded",
+        configRoot,
+        profileId: validated.selectedProfileId,
+        platformCount: validated.profile.platforms.filter(
+          ({ enabled, type }) => enabled && type !== "web",
+        ).length,
+      },
+      "Startup configuration validated",
+    );
+    const resolvedConfig = config;
+    const setup = await createConfigurationManagement(resolvedConfig.configRoot);
+    const resolveModelSelection = await createRuntimeModelSelectionResolver(
+      resolvedConfig.configRoot,
+    );
+    runtime = new KaguyaRuntime({
+      databasePath: resolvedConfig.databasePath,
+      logger: rootLogger,
+      resolveModelSelection,
+      gatewayAllowlist: new GatewayAllowlist(resolvedConfig.gatewayAllowlist),
+    });
+    const webGateway = createWebMessageGateway({
+      adapterId: "web.ui.main",
+      runtime,
+      logger: webLogger,
+    });
 
     serverLogger.info(
       {
         event: "server.starting",
-        host: effectiveConfig.host,
-        port: effectiveConfig.port,
-        development: config.development,
-        napcatEnabled: runtimeReady && effectiveConfig.napcat.enabled,
+        host: resolvedConfig.host,
+        port: resolvedConfig.port,
+        development: resolvedConfig.development,
+        napcatEnabled: resolvedConfig.napcat.enabled,
       },
       "Kaguya server starting",
     );
-    if (runtimeReady && effectiveConfig.napcat.enabled) {
-      const gatewayAllowlist = new GatewayAllowlist(
-        effectiveConfig.gatewayAllowlist,
-      );
+    if (resolvedConfig.napcat.enabled) {
       napcat = createNapCatSupervisor({
-        config: effectiveConfig.napcat,
-        ingress: required(runtime, "runtime ingress"),
+        config: resolvedConfig.napcat,
+        runtime,
         logger: napcatLogger,
-        allowsInbound: (message) => gatewayAllowlist.allows(message),
       });
-      required(runtime, "runtime").registerTransport({
-        adapterId: effectiveConfig.napcat.adapterId,
+      runtime.registerTransport({
+        adapterId: resolvedConfig.napcat.adapterId,
         platform: "qq",
         transport: napcat,
       });
     }
-    if (runtimeReady) {
-      await startInformationRuntime(required(runtime, "runtime"));
-    }
+    await runtime.start();
     app = await createHttpApplication({
-      config: effectiveConfig,
-      gatewayAuth,
-      ...(webGateway !== undefined ? { webGateway } : {}),
+      config: resolvedConfig,
+      webGateway,
       setup,
       logger: httpLogger,
     });
-    webUi = await registerWebUi(app, effectiveConfig);
-    await app.listen({
-      host: effectiveConfig.host,
-      port: effectiveConfig.port,
-    });
-    const listeningAddress = app.server.address();
-    const listeningPort =
-      typeof listeningAddress === "object" && listeningAddress !== null
-        ? listeningAddress.port
-        : effectiveConfig.port;
-    process.stdout.write(
-      `${formatAccessUrl({ ...effectiveConfig, port: listeningPort })}\n`,
-    );
+    webUi = await registerWebUi(app, resolvedConfig);
+    await app.listen({ host: resolvedConfig.host, port: resolvedConfig.port });
 
-    if (runtimeReady && effectiveConfig.napcat.enabled) {
+    if (resolvedConfig.napcat.enabled) {
       napcatLogger.info(
         {
           event: "napcat.connection.starting",
-          adapterId: config.napcat.adapterId,
+          adapterId: resolvedConfig.napcat.adapterId,
         },
         "NapCat connection starting",
       );
@@ -213,42 +222,51 @@ export async function startKaguyaServer(
     serverLogger.info(
       {
         event: "server.started",
-        host: effectiveConfig.host,
-        port: effectiveConfig.port,
-        napcatEnabled: runtimeReady && effectiveConfig.napcat.enabled,
+        host: resolvedConfig.host,
+        port: resolvedConfig.port,
+        napcatEnabled: resolvedConfig.napcat.enabled,
       },
       "Kaguya server started",
     );
   } catch (error) {
-    serverLogger.fatal(
-      { event: "server.start.failed", errorType: safeErrorType(error) },
-      "Kaguya server startup failed",
-    );
+    if (error instanceof StartupConfigurationError) {
+      serverLogger.error(
+        {
+          event: "configuration.validation.failed",
+          configRoot: error.configRoot,
+          profileId: error.profileId,
+          issueCount: error.issues.length,
+          issues: error.issues,
+          err: error,
+        },
+        "Startup configuration validation failed",
+      );
+      writeConfigurationFailure(error);
+    } else {
+      serverLogger.fatal(
+        { event: "server.start.failed", err: error },
+        "Kaguya server startup failed",
+      );
+    }
     await close();
     throw error;
   }
 
   const started: StartedKaguyaServer = {
     app,
-    ...(runtime === undefined ? {} : { runtime }),
+    runtime,
     close,
   };
   registerShutdownHandlers(started, serverLogger);
   return started;
 }
 
-export function formatAccessUrl(
-  config: Pick<ServerConfig, "host" | "port" | "gatewayToken">,
-): string {
-  const host = config.host === "::1" ? "[::1]" : config.host;
-  return `Kaguya access URL: http://${host}:${config.port}/#gatewayToken=${encodeURIComponent(config.gatewayToken)}`;
-}
-
-export function createRuntimeModelSelectionResolver(
-  profile: UserConfigProfile,
-): RuntimeModelSelectionResolver {
-  assertProfileReady(profile);
-  const selectedProfileId = profile.id;
+export async function createRuntimeModelSelectionResolver(
+  configRoot: string,
+): Promise<RuntimeModelSelectionResolver> {
+  const manager = await FileUserConfigManager.open({ rootDir: configRoot });
+  const selectedProfileId = manager.getSelectedProfileId();
+  const profile = await manager.getProfile(selectedProfileId);
   const providerCache = new Map<
     string,
     ReturnType<typeof createOpenAICompatible>
@@ -299,49 +317,6 @@ export function createRuntimeModelSelectionResolver(
   return resolver;
 }
 
-export class InformationDatabaseConnectionError extends Error {
-  readonly failureType: string;
-
-  constructor(error: unknown) {
-    super("Information database connection failed");
-    this.name = "InformationDatabaseConnectionError";
-    this.failureType = safeErrorType(error);
-  }
-}
-
-export class InformationRuntimeStartupError extends Error {
-  readonly failureType: string;
-
-  constructor(error: unknown) {
-    super("Information runtime startup failed");
-    this.name = "InformationRuntimeStartupError";
-    this.failureType = safeErrorType(error);
-  }
-}
-
-async function connectInformationDatabase(
-  databaseUrl: string,
-): Promise<KaguyaDatabase> {
-  try {
-    return await KaguyaDatabase.connect({
-      connectionString: databaseUrl,
-    });
-  } catch (error) {
-    throw new InformationDatabaseConnectionError(error);
-  }
-}
-
-async function startInformationRuntime(runtime: KaguyaRuntime): Promise<void> {
-  try {
-    await runtime.start();
-  } catch (error) {
-    if (isRuntimeDatabaseInitializationError(error)) {
-      throw new InformationDatabaseConnectionError(error);
-    }
-    throw new InformationRuntimeStartupError(error);
-  }
-}
-
 function openAICompatibleProviderSettings(
   settings: UserConfigProfile["ai"]["providers"][number]["settings"],
 ): { supportsStructuredOutputs?: boolean } {
@@ -350,22 +325,11 @@ function openAICompatibleProviderSettings(
     : {};
 }
 
-function assertProfileReady(profile: UserConfigProfile): void {
-  const readiness = inspectUserConfigProfile(profile);
-  if (readiness.status === "invalid") {
-    throw new ConfigIncompleteError(readiness.issues);
-  }
-  if (readiness.status === "review_required") {
-    throw new ConfigReviewRequiredError(readiness.warnings);
-  }
-}
-
 async function closeResources(options: {
   readonly app: FastifyInstance | undefined;
   readonly webUi: WebUiHandle | undefined;
   readonly napcat: NapCatConnectionSupervisor | undefined;
   readonly runtime: KaguyaRuntime | undefined;
-  readonly database: KaguyaDatabase | undefined;
   readonly rootLogger: KaguyaLogger;
   readonly serverLogger: KaguyaLogger;
 }): Promise<void> {
@@ -388,11 +352,6 @@ async function closeResources(options: {
     }
   }
   try {
-    await options.database?.close();
-  } catch (error) {
-    failures.push(error);
-  }
-  try {
     await options.webUi?.close();
   } catch (error) {
     failures.push(error);
@@ -408,7 +367,7 @@ async function closeResources(options: {
       {
         event: "server.shutdown.failed",
         failureCount: failures.length,
-        errorType: safeErrorType(failures[0]),
+        err: failures[0],
       },
       "Kaguya server shutdown failed",
     );
@@ -417,38 +376,6 @@ async function closeResources(options: {
   if (failures.length > 0) {
     throw new AggregateError(failures, "Kaguya server shutdown failed");
   }
-}
-
-function safeErrorType(error: unknown): string {
-  try {
-    if (error instanceof AggregateError) return "AggregateError";
-    if (error instanceof InformationDatabaseConnectionError) {
-      return "InformationDatabaseConnectionError";
-    }
-    if (error instanceof InformationRuntimeStartupError) {
-      return "InformationRuntimeStartupError";
-    }
-    return error instanceof Error ? "Error" : "UnknownError";
-  } catch {
-    return "UnknownError";
-  }
-}
-
-function isRuntimeDatabaseInitializationError(
-  error: unknown,
-): error is RuntimeDatabaseInitializationError {
-  try {
-    return error instanceof RuntimeDatabaseInitializationError;
-  } catch {
-    return false;
-  }
-}
-
-function required<T>(value: T | undefined, label: string): T {
-  if (value === undefined) {
-    throw new Error(`Missing ${label}`);
-  }
-  return value;
 }
 
 function collectFailures(

@@ -1,13 +1,13 @@
 /**
  * 架构说明：本模块是 Web 端唯一的 Kaguya HTTP 客户端门面，
  * 负责把界面动作翻译成显式的 `/api/v1/setup` 与 Profile Registry 请求。
- * 它必须只暴露最小必需的 wire contract：读取受保护的 setup 状态、发送消息、
+ * 它必须只暴露最小必需的 wire contract：读取匿名 setup 状态、发送消息、
  * 检查健康，以及对 Profile 集合执行列出、创建、读取、完整替换、
  * 显式选择和删除；所有请求都要在本地先校验 token，再拼出精确的
  * method / URL / Bearer 头 / JSON body，避免把鉴权或隐藏字段交给浏览器猜测。
  * 主要职责：为 App 及后续 Profile 管理页面提供稳定的 typed API，
  * 同时保留旧的消息与健康检查路径；Profile 请求必须编码 path 参数，
- * setup 状态要能返回安全的 Registry 元数据，但不能包含任何 secret。
+ * 匿名 setup 状态要能返回安全的 Registry 元数据，但不能包含任何 secret。
  * 代码库关系：该文件依赖 `@kaguya/config` 的 Profile JSON 结构作为返回值
  * 类型参考，但不会持有任何持久化密钥；Task 6 的 editor helper 会把
  * 表单字段转成完整的替换体，Task 7 再消费这里的客户端函数。
@@ -16,31 +16,11 @@
  * 服务端返回错误 JSON，这里会抛出 `GatewayRequestError`。
  */
 export const MAX_MESSAGE_LENGTH = 131_072;
-export const GATEWAY_UNAUTHORIZED_EVENT = "kaguya:gateway-unauthorized";
+const OPENAI_COMPATIBLE_PROVIDER_TYPE = "openai-compatible";
+const DEFAULT_PROVIDER_ID = "default-provider";
 
 export interface GatewayConfig {
   readonly token: string;
-}
-
-export interface NapCatStatus {
-  readonly enabled: boolean;
-  readonly wsUrl?: string;
-  readonly hasAccessToken: boolean;
-  readonly selfId?: string;
-  readonly reconnectMs: number;
-}
-
-export interface NapCatSettingsInput {
-  readonly enabled: boolean;
-  readonly wsUrl: string;
-  readonly accessToken: string;
-  readonly selfId: string;
-  readonly reconnectMs: number;
-}
-
-export interface NapCatMutationResult {
-  readonly status: NapCatStatus;
-  readonly restartRequired: true;
 }
 
 export interface SendMessageInput {
@@ -87,6 +67,25 @@ export interface UserConfigProfilePlugin {
   readonly settings: JsonObject;
 }
 
+export interface UserConfigProfileRuntime {
+  readonly host: string;
+  readonly port: number;
+  readonly gatewayToken: string;
+  readonly databasePath: string;
+  readonly webDistPath: string;
+  readonly corsOrigins: readonly string[];
+  readonly trustProxy: false | readonly string[];
+  readonly rateLimitMax: number;
+  readonly rateLimitWindowMs: number;
+  readonly logLevel: "trace" | "debug" | "info" | "warn" | "error" | "fatal" | "silent";
+  readonly logFormat: "json" | "pretty";
+  readonly gatewayAllowlist: {
+    readonly platforms: readonly string[];
+    readonly userIds: readonly string[];
+    readonly groupIds: readonly string[];
+  };
+}
+
 export interface UserConfigProfile {
   readonly version: 1;
   readonly id: string;
@@ -107,6 +106,7 @@ export interface UserConfigProfile {
   };
   readonly platforms: readonly UserConfigProfilePlatform[];
   readonly plugins: readonly UserConfigProfilePlugin[];
+  readonly runtime?: UserConfigProfileRuntime;
   readonly review?: {
     readonly acknowledgedWarnings: readonly string[];
   };
@@ -126,10 +126,10 @@ export interface ConfigurationWarning {
 
 /**
  * 说明：Web 客户端保留 `setup_required` 这个状态，是为了对齐底层配置库在
- * Profile Registry 初始化之前的只读 inspect 契约。正常的 Kaguya Server 启动流程会先创建
+ * bootstrap 之前的只读 inspect 契约。正常的 Kaguya Server 启动流程会先创建
  * 空 registry，因此 `/api/v1/setup` 通常返回 `invalid`、`review_required`、
  * `restart_required` 或 `ready`，但客户端仍接受 `setup_required`，以兼容
- * 更底层的管理调用。
+ * 未来显式 bootstrap/setup mode 或更底层的管理调用。
  */
 export interface ConfigurationStatus {
   readonly status:
@@ -140,6 +140,7 @@ export interface ConfigurationStatus {
     | "review_required";
   readonly selectedProfileId: string;
   readonly profiles: readonly ProfileMetadata[];
+  readonly gatewayToken: string;
   readonly issues?: readonly ConfigurationIssue[];
   readonly warnings?: readonly ConfigurationWarning[];
 }
@@ -181,9 +182,15 @@ export interface ReplaceProfileInput {
   };
   readonly platforms: readonly UserConfigProfilePlatform[];
   readonly plugins: readonly UserConfigProfilePlugin[];
+  readonly runtime?: UserConfigProfileRuntime;
 }
 
 export type ProfileReplacementInput = ReplaceProfileInput;
+
+export interface ConfigurationSaved {
+  readonly status: "configured";
+  readonly restartRequired: true;
+}
 
 export class GatewayRequestError extends Error {
   constructor(
@@ -197,59 +204,10 @@ export class GatewayRequestError extends Error {
   }
 }
 
-export async function getNapCatStatus(
-  config: GatewayConfig,
-  fetchImplementation: typeof fetch = fetch,
-): Promise<NapCatStatus> {
-  const response = await requestAuthenticatedJson(
-    config,
-    "/api/v1/napcat",
-    { method: "GET" },
-    fetchImplementation,
-  );
-  const payload = await readJson(response);
-  if (!response.ok || !isNapCatStatusResponse(payload)) {
-    throw new GatewayRequestError(
-      `无法读取 NapCat 配置（HTTP ${response.status}）`,
-      "napcat_status_failed",
-      response.status,
-    );
-  }
-  return payload.data;
-}
-
-export async function saveNapCatSettings(
-  config: GatewayConfig,
-  input: NapCatSettingsInput,
-  fetchImplementation: typeof fetch = fetch,
-): Promise<NapCatMutationResult> {
-  const response = await requestAuthenticatedJson(
-    config,
-    "/api/v1/napcat",
-    {
-      method: "PUT",
-      headers: jsonHeaders(requireToken(config)),
-      body: JSON.stringify(input),
-    },
-    fetchImplementation,
-  );
-  const payload = await readJson(response);
-  if (!response.ok || !isNapCatMutationResponse(payload)) {
-    throw new GatewayRequestError(
-      `无法保存 NapCat 配置（HTTP ${response.status}）`,
-      "napcat_save_failed",
-      response.status,
-    );
-  }
-  return payload.data;
-}
-
 export async function getConfigurationStatus(
-  config: GatewayConfig,
   fetchImplementation: typeof fetch = fetch,
 ): Promise<ConfigurationStatus> {
-  const response = await requestAuthenticatedJson(
-    config,
+  const response = await requestJson(
     "/api/v1/setup",
     { method: "GET" },
     fetchImplementation,
@@ -400,6 +358,31 @@ export async function deleteProfile(
   );
 }
 
+export async function getGatewayToken(
+  fetchImplementation: typeof fetch = fetch,
+): Promise<string> {
+  const response = await requestJson(
+    "/api/v1/gateway/token",
+    { method: "GET" },
+    fetchImplementation,
+  );
+  const payload = await readJson(response);
+  if (
+    !response.ok ||
+    !isRecord(payload) ||
+    !isRecord(payload.data) ||
+    typeof payload.data.gatewayToken !== "string" ||
+    payload.data.gatewayToken.length === 0
+  ) {
+    throw new GatewayRequestError(
+      `无法获取服务令牌（HTTP ${response.status}）`,
+      "gateway_token_failed",
+      response.status,
+    );
+  }
+  return payload.data.gatewayToken;
+}
+
 export async function checkGatewayHealth(
   fetchImplementation: typeof fetch = fetch,
 ): Promise<void> {
@@ -469,6 +452,77 @@ export async function sendMessage(
   return payload.data;
 }
 
+/**
+ * 兼容旧的 setup 聚合写入口，供当前尚未切换到 Profile 管理页的界面使用。
+ * 后续 UI 迁移完成后应移除。
+ */
+export interface InitialConfigurationInput {
+  readonly profileName: string;
+  readonly baseUrl: string;
+  readonly apiKey: string;
+  readonly lightModel: string;
+  readonly heavyModel: string;
+  readonly acknowledgeOptional: boolean;
+}
+
+export async function initializeConfiguration(
+  config: GatewayConfig,
+  input: InitialConfigurationInput,
+  fetchImplementation: typeof fetch = fetch,
+): Promise<ConfigurationSaved> {
+  const profileId =
+    input.profileName.trim() === "default"
+      ? "default"
+      : (
+          await createProfile(
+            config,
+            { name: input.profileName },
+            fetchImplementation,
+          )
+        ).profile.id;
+  await replaceProfile(
+    config,
+    profileId,
+    {
+      name: input.profileName,
+      acknowledgedWarnings: input.acknowledgeOptional
+        ? ["platforms-empty", "plugins-empty"]
+        : [],
+      ai: {
+        defaultProviderId: DEFAULT_PROVIDER_ID,
+        modelTiers: {
+          light: {
+            providerId: DEFAULT_PROVIDER_ID,
+            modelId: input.lightModel,
+          },
+          heavy: {
+            providerId: DEFAULT_PROVIDER_ID,
+            modelId: input.heavyModel,
+          },
+        },
+        providers: [
+          {
+            id: DEFAULT_PROVIDER_ID,
+            type: OPENAI_COMPATIBLE_PROVIDER_TYPE,
+            enabled: true,
+            baseUrl: input.baseUrl,
+            apiKey: input.apiKey,
+            models: [input.lightModel, input.heavyModel],
+            settings: {},
+          },
+        ],
+      },
+      platforms: [],
+      plugins: [],
+    },
+    fetchImplementation,
+  );
+  return {
+    status: "configured",
+    restartRequired: true,
+  };
+}
+
 async function readProfileMutationResult(
   response: Response,
   failureCode: string,
@@ -513,11 +567,7 @@ async function requestJson(
   fetchImplementation: typeof fetch,
 ): Promise<Response> {
   try {
-    const response = await fetchImplementation(path, init);
-    if (response.status === 401 && hasAuthorizationHeader(init.headers)) {
-      globalThis.window?.dispatchEvent(new Event(GATEWAY_UNAUTHORIZED_EVENT));
-    }
-    return response;
+    return await fetchImplementation(path, init);
   } catch (error) {
     throw new GatewayRequestError(
       error instanceof Error && error.name === "AbortError"
@@ -527,10 +577,6 @@ async function requestJson(
       0,
     );
   }
-}
-
-function hasAuthorizationHeader(headers: HeadersInit | undefined): boolean {
-  return headers !== undefined && new Headers(headers).has("authorization");
 }
 
 async function readJson(response: Response): Promise<unknown> {
@@ -573,34 +619,6 @@ function isAcceptedMessageResponse(
   );
 }
 
-function isNapCatStatusResponse(
-  value: unknown,
-): value is { data: NapCatStatus } {
-  return isRecord(value) && isRecord(value.data) && isNapCatStatus(value.data);
-}
-
-function isNapCatMutationResponse(
-  value: unknown,
-): value is { data: NapCatMutationResult } {
-  return (
-    isRecord(value) &&
-    isRecord(value.data) &&
-    value.data.restartRequired === true &&
-    isNapCatStatus(value.data.status)
-  );
-}
-
-function isNapCatStatus(value: unknown): value is NapCatStatus {
-  if (!isRecord(value)) return false;
-  return (
-    typeof value.enabled === "boolean" &&
-    typeof value.hasAccessToken === "boolean" &&
-    typeof value.reconnectMs === "number" &&
-    (value.wsUrl === undefined || typeof value.wsUrl === "string") &&
-    (value.selfId === undefined || typeof value.selfId === "string")
-  );
-}
-
 function isConfigurationStatusResponse(
   value: unknown,
 ): value is { data: ConfigurationStatus } {
@@ -622,6 +640,8 @@ function isConfigurationStatusResponse(
   return (
     typeof value.data.selectedProfileId === "string" &&
     isProfileMetadataArray(value.data.profiles) &&
+    typeof value.data.gatewayToken === "string" &&
+    value.data.gatewayToken.length > 0 &&
     isOptionalConfigurationIssueArray(value.data.issues) &&
     isOptionalConfigurationWarningArray(value.data.warnings)
   );

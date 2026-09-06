@@ -14,10 +14,15 @@
  * 输入输出与副作用：函数只处理内存对象；实现必须克隆数组和对象，
  * 不能修改传入的 profile 引用，也不能偷偷删减未展示字段。
  */
-import type { ReplaceProfileInput, UserConfigProfile } from "./api.js";
+import type {
+  ReplaceProfileInput,
+  UserConfigProfile,
+  UserConfigProfileRuntime,
+} from "./api.js";
 
 const DEFAULT_PROVIDER_ID = "default-provider";
 const OPENAI_COMPATIBLE_PROVIDER_TYPE = "openai-compatible";
+const OPTIONAL_WARNING_IDS = ["platforms-empty", "plugins-empty"] as const;
 
 interface MutableProfile {
   name: string;
@@ -37,6 +42,7 @@ interface MutableProfile {
   };
   platforms: MutablePlatform[];
   plugins: MutablePlugin[];
+  runtime?: UserConfigProfileRuntime;
   review?: {
     acknowledgedWarnings: string[];
   };
@@ -72,6 +78,7 @@ export interface ProfileEditorFields {
   readonly apiKey: string;
   readonly lightModel: string;
   readonly heavyModel: string;
+  readonly acknowledgeOptional: boolean;
 }
 
 export function profileToEditorFields(
@@ -89,6 +96,8 @@ export function profileToEditorFields(
       provider?.models[1] ??
       provider?.models[0] ??
       "",
+    acknowledgeOptional:
+      (profile.review?.acknowledgedWarnings?.length ?? 0) > 0,
   };
 }
 
@@ -117,10 +126,14 @@ export function mergeProfileEditorFields(
 
   return {
     name: next.name,
-    acknowledgedWarnings: computeAcknowledgedWarnings(next),
+    acknowledgedWarnings: computeAcknowledgedWarnings(
+      next,
+      fields.acknowledgeOptional,
+    ),
     ai: next.ai as ReplaceProfileInput["ai"],
     platforms: next.platforms,
     plugins: next.plugins,
+    ...(next.runtime === undefined ? {} : { runtime: next.runtime }),
   };
 }
 
@@ -172,14 +185,26 @@ function ensureEditableProvider(
   return profile.ai.providers[profile.ai.providers.length - 1]!;
 }
 
-function computeAcknowledgedWarnings(profile: MutableProfile): string[] {
+function computeAcknowledgedWarnings(
+  profile: MutableProfile,
+  includeOptionalWarnings: boolean,
+): string[] {
   const currentWarnings = deriveWarningIds(profile);
   const warnings = new Set<string>();
   for (const warningId of profile.review?.acknowledgedWarnings ?? []) {
     if (!currentWarnings.has(warningId)) {
       continue;
     }
+    if (!includeOptionalWarnings && isOptionalWarningId(warningId)) {
+      continue;
+    }
     warnings.add(warningId);
+  }
+  if (includeOptionalWarnings && profile.platforms.length === 0) {
+    warnings.add(OPTIONAL_WARNING_IDS[0]);
+  }
+  if (includeOptionalWarnings && profile.plugins.length === 0) {
+    warnings.add(OPTIONAL_WARNING_IDS[1]);
   }
   return [...warnings];
 }
@@ -197,7 +222,20 @@ function deriveWarningIds(profile: MutableProfile): Set<string> {
       warnings.add(`provider-api-key-missing:${provider.id}`);
     }
   }
+  if (profile.platforms.length === 0) {
+    warnings.add(OPTIONAL_WARNING_IDS[0]);
+  }
+  if (profile.plugins.length === 0) {
+    warnings.add(OPTIONAL_WARNING_IDS[1]);
+  }
   return warnings;
+}
+
+function isOptionalWarningId(warningId: string): boolean {
+  return (
+    warningId === OPTIONAL_WARNING_IDS[0] ||
+    warningId === OPTIONAL_WARNING_IDS[1]
+  );
 }
 
 function isMissingString(value: string | undefined): boolean {

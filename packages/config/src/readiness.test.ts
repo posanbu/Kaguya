@@ -180,7 +180,7 @@ describe("inspectUserConfigProfile", () => {
     ).toEqual({ status: "ready" });
   });
 
-  it("reports only unresolved provider configuration warnings", () => {
+  it("reports unacknowledged optional configuration without warning for disabled providers", () => {
     const readiness = inspectUserConfigProfile(
       profileWith(
         [
@@ -214,10 +214,12 @@ describe("inspectUserConfigProfile", () => {
           id: "provider-api-key-missing:provider-1",
           path: "ai.providers.0.apiKey",
         },
+        { id: "platforms-empty", path: "platforms" },
+        { id: "plugins-empty", path: "plugins" },
       ],
     });
     if (readiness.status === "review_required") {
-      expect(readiness.warnings).toHaveLength(2);
+      expect(readiness.warnings).toHaveLength(4);
     }
   });
 

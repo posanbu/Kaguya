@@ -1,16 +1,17 @@
 /**
- * 功能概述：验证 Server 作为唯一 composition root 组合 PostgreSQL information
- * database、Runtime、Web/NapCat ingress、HTTP 与启动期选定的全局 Profile。
- * 主要职责：用真实 PGlite 覆盖 Web 到 information DAG，验证 HTTP/Web UI/Vite
- * 组合和启动失败关闭；并区分数据库初始化与模块/Runtime 生命周期失败的固定错误分类，
- * 覆盖未知字母数字类名和抛出型 constructor/name getter；
- * `createRuntimeModelSelectionResolver` 用例保证 selected Profile
- * 在启动时冻结、light/heavy 共用一个 tier-only resolver，且模块不能传 `profileId`。
- * 代码库关系：直接驱动 `server.ts`、`app.ts`、`web-gateway.ts` 与 `web.ts`；
- * 真实配置 Registry 来自 `@kaguya/config`，信息账本来自 `@kaguya/database/testing`，
- * provider client 创建由 `@ai-sdk/openai-compatible` mock 观察。
- * 输入输出与副作用：每个用例使用独立临时配置目录或内存 PGlite；
- * 启动错误用人工包含密码的连接异常验证返回值与日志均已脱敏。
+ * 功能概述：本文件验证服务层组合逻辑，确保 HTTP、Web UI、Runtime 与配置 Profile
+ * Registry 在统一启动流程下按预期协作，尤其覆盖启动期构造的模型解析器如何从配置中
+ * 冻结一个已选中的 Profile 并向 Runtime 暴露仅含 tier 的解析接口。
+ * 主要职责：前半部分用例覆盖 Web/API/Vite 路由组合与启动失败路径；Profile 解析器
+ * 相关用例验证 `createRuntimeModelSelectionResolver` 会在服务启动时读取当前
+ * selected Profile、校验 light/heavy tier、保留 provider 能力设置，并拒绝模块或
+ * 调用方继续传入 `profileId`。
+ * 代码库关系：测试直接驱动 `server.ts`、`app.ts` 与 `web.ts`，并借助
+ * `@kaguya/config` 的真实文件型 Registry、`@kaguya/runtime` 的共享 Runtime、
+ * `@ai-sdk/openai-compatible` 的 mock 客户端观察 provider client 创建行为。
+ * 输入输出与副作用：每个用例都在临时目录中创建数据库与配置根目录，结束后删除；
+ * 若服务层重新引入按请求切换 Profile、重新扫描全部 Profile、或在错误路径中泄露配置细节，
+ * 本文件会作为回归测试立即失败。
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,7 +19,6 @@ import { join } from "node:path";
 import { Writable } from "node:stream";
 
 import { KaguyaDatabase } from "@kaguya/database";
-import { createTestingDatabase } from "@kaguya/database/testing";
 import { FileUserConfigManager } from "@kaguya/config";
 import { closeLogger, createLogger, createModuleLogger } from "@kaguya/logger";
 import {
@@ -33,8 +33,6 @@ import { createHttpApplication } from "./app.js";
 import type { ServerConfig } from "./config.js";
 import {
   createRuntimeModelSelectionResolver,
-  formatAccessUrl,
-  InformationRuntimeStartupError,
   startKaguyaServer,
 } from "./server.js";
 import { createWebMessageGateway } from "./web-gateway.js";
@@ -51,19 +49,18 @@ const gatewayToken = "test-gateway-token-12345";
 const roots: string[] = [];
 
 afterEach(() => {
-  vi.restoreAllMocks();
   for (const root of roots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-function tempWorkspaceRoot(): string {
+function tempDatabasePath(): string {
   const root = mkdtempSync(join(tmpdir(), "kaguya-server-composition-"));
   roots.push(root);
-  return root;
+  return join(root, "kaguya.sqlite");
 }
 
-function config(workspaceRoot: string): ServerConfig {
+function config(databasePath: string): ServerConfig {
   return {
     host: "127.0.0.1",
     port: 3000,
@@ -72,10 +69,10 @@ function config(workspaceRoot: string): ServerConfig {
     trustProxy: false,
     rateLimitMax: 30,
     rateLimitWindowMs: 60_000,
-    databaseUrl: "postgresql://kaguya@database.example:5432/kaguya",
-    configRoot: join(workspaceRoot, "config"),
+    databasePath,
+    configRoot: join(dirnameOf(databasePath), "config"),
     development: false,
-    webDistPath: join(workspaceRoot, "web"),
+    webDistPath: join(dirnameOf(databasePath), "web"),
     gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
     napcat: {
       enabled: false,
@@ -86,78 +83,20 @@ function config(workspaceRoot: string): ServerConfig {
 }
 
 describe("unified server composition", () => {
-  it("formats loopback access links including IPv6", () => {
-    expect(
-      formatAccessUrl({ host: "127.0.0.1", port: 3000, gatewayToken: "a b" }),
-    ).toBe("Kaguya access URL: http://127.0.0.1:3000/#gatewayToken=a%20b");
-    expect(
-      formatAccessUrl({ host: "::1", port: 4100, gatewayToken: "token" }),
-    ).toBe("Kaguya access URL: http://[::1]:4100/#gatewayToken=token");
-  });
-  it("sanitizes unknown and throwing Runtime startup error properties", () => {
-    class DatabasePassword123 extends Error {}
-    const named = new InformationRuntimeStartupError(
-      new DatabasePassword123("runtime-password"),
-    );
-    const reflective = new Error("runtime-message-secret");
-    Object.defineProperties(reflective, {
-      constructor: {
-        get() {
-          throw new Error("constructor-getter-secret");
-        },
-      },
-      name: {
-        get() {
-          throw new Error("name-getter-secret");
-        },
-      },
-    });
-
-    const throwing = new InformationRuntimeStartupError(reflective);
-
-    expect(named).toMatchObject({ failureType: "Error" });
-    expect(throwing).toMatchObject({ failureType: "Error" });
-    expect(JSON.stringify([named, throwing])).not.toMatch(
-      /DatabasePassword123|password|getter-secret|message-secret/u,
-    );
-  });
-
   it("ingests Web messages through the shared Runtime as a platform adapter", async () => {
-    const workspaceRoot = tempWorkspaceRoot();
-    const database = await createTestingDatabase();
-    const runtime = new KaguyaRuntime({ database });
-    runtime.registerTransport({
-      adapterId: "web.ui.main",
-      platform: "web",
-      transport: {
-        sendMessage: async (target) => ({
-          ok: true,
-          adapterId: "web.ui.main",
-          platform: "web",
-          target,
-          platformMessageId: "web-delivery-1",
-        }),
-      },
-    });
+    const databasePath = tempDatabasePath();
+    const runtime = new KaguyaRuntime({ databasePath });
     await runtime.start();
-    const rootLogger = createLogger({
-      service: "kaguya-server-composition-test",
-      level: "silent",
-    });
-    const receipts: Awaited<ReturnType<KaguyaRuntime["submit"]>>[] = [];
     const webGateway = createWebMessageGateway({
       adapterId: "web.ui.main",
-      ingress: {
-        submit: async (message) => {
-          const receipt = await runtime.submit(message);
-          receipts.push(receipt);
-          return receipt;
-        },
-      },
-      logger: rootLogger,
+      runtime,
+      logger: createLogger({
+        service: "kaguya-server-composition-test",
+        level: "silent",
+      }),
     });
     const app = await createHttpApplication({
-      config: config(workspaceRoot),
+      config: config(databasePath),
       webGateway,
     });
 
@@ -177,50 +116,41 @@ describe("unified server composition", () => {
     expect(response.json()).toMatchObject({
       data: { status: "accepted", requestId: "request-server-1" },
     });
-    await vi.waitFor(() => expect(receipts).toHaveLength(1));
-    const graph = await database.information.query({
-      informationId: receipts[0]!.rootInformationId,
-    });
-    const inbound = graph.find(
-      ({ kind }) => kind === "core.message.inbound.text",
-    );
-    expect(inbound).toMatchObject({
-      payload: {
-        text: "Hello from the browser",
-        source: {
-          platform: "web",
-          adapterId: "web.ui.main",
-          platformMessageId: "request-server-1",
-          destination: { kind: "web" },
-          senderId: "web",
-        },
-      },
-    });
-    expect(new Set(graph.map(({ kind }) => kind))).toEqual(
-      new Set([
-        "core.message.inbound.text",
-        "core.reply.requested",
-        "core.llm.requested",
-        "core.llm.completed",
-        "core.message.assistant.text",
-        "core.delivery.requested",
-        "core.delivery.delivered",
-      ]),
-    );
-    expect(JSON.stringify(graph)).not.toMatch(/traceId|raw/u);
     await app.close();
     await runtime.close();
-    await database.close();
-    await closeLogger(rootLogger);
-  }, 20_000);
+
+    const database = KaguyaDatabase.open(databasePath);
+    try {
+      const [message] = database.messages.listRecent(10);
+      expect(message?.role).toBe("user");
+      expect(message?.metadata).toMatchObject({
+        traceId: "web:request-server-1",
+        moduleMessage: {
+          source: {
+            kind: "platform",
+            platform: "web",
+            adapterId: "web.ui.main",
+            platformMessageId: "request-server-1",
+            destination: { kind: "web" },
+            sender: { id: "web" },
+          },
+        },
+      });
+      expect(
+        database.llmTraces.listByTrace("web:request-server-1"),
+      ).toHaveLength(1);
+    } finally {
+      database.close();
+    }
+  });
 
   it("serves the Web UI, health, OpenAPI, and SPA fallback on one app", async () => {
-    const workspaceRoot = tempWorkspaceRoot();
-    const webDistPath = join(workspaceRoot, "web");
+    const databasePath = tempDatabasePath();
+    const webDistPath = join(dirnameOf(databasePath), "web");
     mkdirSync(webDistPath, { recursive: true });
     writeFileSync(join(webDistPath, "index.html"), "<main>Kaguya UI</main>");
     writeFileSync(join(webDistPath, "app.js"), "globalThis.kaguya = true;");
-    const serverConfig = { ...config(workspaceRoot), webDistPath };
+    const serverConfig = { ...config(databasePath), webDistPath };
     const app = await createHttpApplication({ config: serverConfig });
     const webUi = await registerWebUi(app, serverConfig);
 
@@ -257,7 +187,12 @@ describe("unified server composition", () => {
                     schema: {
                       properties: {
                         data: {
-                          required: ["status", "selectedProfileId", "profiles"],
+                          required: [
+                            "status",
+                            "selectedProfileId",
+                            "profiles",
+                            "gatewayToken",
+                          ],
                         },
                       },
                     },
@@ -270,13 +205,7 @@ describe("unified server composition", () => {
       },
     });
     expect(
-      (
-        await app.inject({
-          method: "GET",
-          url: "/api/v1/setup",
-          headers: { authorization: `Bearer ${gatewayToken}` },
-        })
-      ).json(),
+      (await app.inject({ method: "GET", url: "/api/v1/setup" })).json(),
     ).toEqual({
       data: {
         status: "ready",
@@ -289,6 +218,7 @@ describe("unified server composition", () => {
             updatedAt: "",
           },
         ],
+        gatewayToken,
       },
     });
     expect(missingApi.statusCode).toBe(404);
@@ -299,8 +229,8 @@ describe("unified server composition", () => {
   });
 
   it("keeps API and health routes ahead of Vite middleware in development", async () => {
-    const workspaceRoot = tempWorkspaceRoot();
-    const serverConfig = { ...config(workspaceRoot), development: true };
+    const databasePath = tempDatabasePath();
+    const serverConfig = { ...config(databasePath), development: true };
     const app = await createHttpApplication({ config: serverConfig });
     const webUi = await registerWebUi(app, serverConfig);
 
@@ -325,8 +255,8 @@ describe("unified server composition", () => {
   });
 
   it("keeps unrecoverable management creation on the startup fatal-and-close path", async () => {
-    const workspaceRoot = tempWorkspaceRoot();
-    const configRoot = join(workspaceRoot, "config");
+    const databasePath = tempDatabasePath();
+    const configRoot = join(dirnameOf(databasePath), "config");
     mkdirSync(configRoot, { recursive: true });
     writeFileSync(
       join(configRoot, "index.json"),
@@ -344,9 +274,9 @@ describe("unified server composition", () => {
     );
 
     const error = await startKaguyaServer({
-      ...config(workspaceRoot),
+      ...config(databasePath),
       configRoot,
-      webDistPath: join(workspaceRoot, "web"),
+      webDistPath: join(dirnameOf(databasePath), "web"),
     }).catch((thrown: unknown) => thrown);
 
     expect(error).toMatchObject({ code: "CONFIG_UNSUPPORTED_VERSION" });
@@ -355,8 +285,8 @@ describe("unified server composition", () => {
     expect(stream.logs()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          event: "server.start.failed",
-          level: "fatal",
+          event: "configuration.validation.failed",
+          level: "error",
         }),
         expect.objectContaining({ event: "server.stopping", level: "info" }),
         expect.objectContaining({ event: "server.stopped", level: "info" }),
@@ -367,215 +297,6 @@ describe("unified server composition", () => {
     closeLoggerSpy.mockRestore();
     await closeLogger(rootLogger);
   });
-
-  it("connects the information database once and redacts credentials from startup errors", async () => {
-    const root = mkdtempSync(join(tmpdir(), "kaguya-database-startup-"));
-    roots.push(root);
-    const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
-    const selectedProfileId = manager.getSelectedProfileId();
-    await manager.replaceProfile(
-      selectedProfileId,
-      readyProfileReplacement(
-        "default",
-        readyProfileSettings("default-light", "default-heavy"),
-      ),
-    );
-    await manager.acknowledgeConfigurationWarnings(selectedProfileId, [
-      "platforms-empty",
-      "plugins-empty",
-    ]);
-    const databaseUrl =
-      "postgresql://ledger:database-password@127.0.0.1:5432/kaguya";
-    const connect = vi
-      .spyOn(KaguyaDatabase, "connect")
-      .mockRejectedValueOnce(new Error(`connection failed: ${databaseUrl}`));
-    const stream = new LogStream();
-    const rootLogger = createLogger({ service: "kaguya-server-test", stream });
-    const createLoggerSpy = vi
-      .spyOn(await import("@kaguya/logger"), "createLogger")
-      .mockReturnValue(rootLogger);
-
-    const error = await startKaguyaServer({
-      ...config(join(root, "database")),
-      configRoot: root,
-      databaseUrl,
-      port: 0,
-    }).catch((thrown: unknown) => thrown);
-
-    expect(connect).toHaveBeenCalledOnce();
-    expect(connect).toHaveBeenCalledWith({ connectionString: databaseUrl });
-    expect(error).toMatchObject({
-      name: "InformationDatabaseConnectionError",
-      message: "Information database connection failed",
-      failureType: "Error",
-    });
-    const serialized = JSON.stringify(stream.logs());
-    expect(serialized).toContain(
-      '"errorType":"InformationDatabaseConnectionError"',
-    );
-    expect(`${String(error)}\n${serialized}`).not.toContain(databaseUrl);
-    expect(`${String(error)}\n${serialized}`).not.toContain(
-      "database-password",
-    );
-
-    connect.mockRestore();
-    createLoggerSpy.mockRestore();
-    await closeLogger(rootLogger);
-  });
-
-  it("redacts credentials when the first database I/O fails during Runtime startup", async () => {
-    const root = mkdtempSync(join(tmpdir(), "kaguya-database-migrate-"));
-    roots.push(root);
-    const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
-    const selectedProfileId = manager.getSelectedProfileId();
-    await manager.replaceProfile(
-      selectedProfileId,
-      readyProfileReplacement(
-        "default",
-        readyProfileSettings("default-light", "default-heavy"),
-      ),
-    );
-    await manager.acknowledgeConfigurationWarnings(selectedProfileId, [
-      "platforms-empty",
-      "plugins-empty",
-    ]);
-    const databaseUrl =
-      "postgresql://ledger:runtime-start-password@127.0.0.1:5432/kaguya";
-    const database = await createTestingDatabase();
-    const migrate = vi
-      .spyOn(database, "migrate")
-      .mockRejectedValueOnce(
-        new Error(`authentication failed: ${databaseUrl}`),
-      );
-    const close = vi.spyOn(database, "close");
-    vi.spyOn(KaguyaDatabase, "connect").mockResolvedValueOnce(database);
-    const stream = new LogStream();
-    const rootLogger = createLogger({ service: "kaguya-server-test", stream });
-    vi.spyOn(await import("@kaguya/logger"), "createLogger").mockReturnValue(
-      rootLogger,
-    );
-
-    const error = await startKaguyaServer({
-      ...config(join(root, "database")),
-      configRoot: root,
-      databaseUrl,
-      port: 0,
-    }).catch((thrown: unknown) => thrown);
-
-    expect(migrate).toHaveBeenCalledOnce();
-    expect(close).toHaveBeenCalledOnce();
-    expect(error).toMatchObject({
-      name: "InformationDatabaseConnectionError",
-      message: "Information database connection failed",
-      failureType: "Error",
-    });
-    expect(error).not.toHaveProperty("cause");
-    expect(stream.logs()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          event: "server.start.failed",
-          errorType: "InformationDatabaseConnectionError",
-        }),
-      ]),
-    );
-    const serialized = `${String(error)}\n${JSON.stringify(error)}\n${JSON.stringify(stream.logs())}`;
-    expect(serialized).not.toContain(databaseUrl);
-    expect(serialized).not.toContain("runtime-start-password");
-
-    await closeLogger(rootLogger);
-  });
-
-  it("classifies non-database Runtime startup failures without leaking their details", async () => {
-    const root = mkdtempSync(join(tmpdir(), "kaguya-runtime-startup-"));
-    roots.push(root);
-    const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
-    const selectedProfileId = manager.getSelectedProfileId();
-    await manager.replaceProfile(
-      selectedProfileId,
-      readyProfileReplacement(
-        "default",
-        readyProfileSettings("default-light", "default-heavy"),
-      ),
-    );
-    await manager.acknowledgeConfigurationWarnings(selectedProfileId, [
-      "platforms-empty",
-      "plugins-empty",
-    ]);
-    const database = await createTestingDatabase();
-    vi.spyOn(KaguyaDatabase, "connect").mockResolvedValueOnce(database);
-    const secret = "postgresql://module:module-secret@db.internal/kaguya";
-    vi.spyOn(KaguyaRuntime.prototype, "start").mockRejectedValueOnce(
-      new Error(`module initialization failed: ${secret}`),
-    );
-    const stream = new LogStream();
-    const rootLogger = createLogger({ service: "kaguya-server-test", stream });
-    vi.spyOn(await import("@kaguya/logger"), "createLogger").mockReturnValue(
-      rootLogger,
-    );
-
-    const error = await startKaguyaServer({
-      ...config(join(root, "database")),
-      configRoot: root,
-      port: 0,
-    }).catch((thrown: unknown) => thrown);
-
-    expect(error).toMatchObject({
-      name: "InformationRuntimeStartupError",
-      message: "Information runtime startup failed",
-      failureType: "Error",
-    });
-    expect(error).not.toHaveProperty("cause");
-    const serialized = `${String(error)}\n${JSON.stringify(error)}\n${JSON.stringify(stream.logs())}`;
-    expect(serialized).not.toContain("module-secret");
-    expect(serialized).not.toContain("postgresql://");
-    await closeLogger(rootLogger);
-  });
-
-  it("resolves the globally selected profile exactly once during startup", async () => {
-    const root = mkdtempSync(
-      join(tmpdir(), "kaguya-selected-profile-startup-"),
-    );
-    roots.push(root);
-    const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
-    const selectedProfileId = manager.getSelectedProfileId();
-    await manager.replaceProfile(
-      selectedProfileId,
-      readyProfileReplacement(
-        "default",
-        readyProfileSettings("default-light", "default-heavy"),
-      ),
-    );
-    await manager.acknowledgeConfigurationWarnings(selectedProfileId, [
-      "platforms-empty",
-      "plugins-empty",
-    ]);
-    const webDistPath = join(root, "web");
-    mkdirSync(webDistPath, { recursive: true });
-    writeFileSync(join(webDistPath, "index.html"), "<main>Kaguya UI</main>");
-    const database = await createTestingDatabase();
-    vi.spyOn(KaguyaDatabase, "connect").mockResolvedValueOnce(database);
-    const rootLogger = createLogger({
-      service: "kaguya-server-composition-test",
-      level: "silent",
-    });
-    vi.spyOn(await import("@kaguya/logger"), "createLogger").mockReturnValue(
-      rootLogger,
-    );
-    const selectedProfileReads = vi.spyOn(
-      FileUserConfigManager.prototype,
-      "getSelectedProfileId",
-    );
-
-    const server = await startKaguyaServer({
-      ...config(join(root, "database")),
-      configRoot: root,
-      webDistPath,
-      port: 0,
-    });
-
-    expect(selectedProfileReads).toHaveBeenCalledOnce();
-    await server.close();
-  }, 20_000);
 
   it("creates a heavy/light resolver from frozen profile configuration", async () => {
     const root = mkdtempSync(join(tmpdir(), "kaguya-profile-resolver-"));
@@ -594,9 +315,7 @@ describe("unified server composition", () => {
     );
     await manager.createProfile("incomplete");
 
-    const resolver = createRuntimeModelSelectionResolver(
-      await selectedProfile(manager),
-    );
+    const resolver = await createRuntimeModelSelectionResolver(root);
 
     expect(resolver({ modelTier: "light" })).toEqual({
       modelId: "default-light",
@@ -639,9 +358,7 @@ describe("unified server composition", () => {
     ]);
     await manager.selectProfile(selected.id);
 
-    const resolver = createRuntimeModelSelectionResolver(
-      await selectedProfile(manager),
-    );
+    const resolver = await createRuntimeModelSelectionResolver(root);
     await manager.selectProfile("default");
 
     expect(resolver({ modelTier: "light" })).toEqual({
@@ -689,24 +406,20 @@ describe("unified server composition", () => {
       ["platforms-empty", "plugins-empty"],
     );
 
-    createRuntimeModelSelectionResolver(await selectedProfile(manager));
+    await createRuntimeModelSelectionResolver(root);
 
     expect(createOpenAICompatible).toHaveBeenCalledWith(
       expect.objectContaining({ supportsStructuredOutputs: true }),
     );
   });
 
-  it("rejects an incomplete selected profile before creating provider clients", async () => {
-    const root = mkdtempSync(join(tmpdir(), "kaguya-incomplete-profile-"));
-    roots.push(root);
-    const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
-    vi.mocked(createOpenAICompatible).mockClear();
-    const profile = await manager.getProfile(manager.getSelectedProfileId());
+  it("rejects a missing profile store before creating provider clients", async () => {
+    const parent = mkdtempSync(join(tmpdir(), "kaguya-missing-profile-"));
+    roots.push(parent);
 
-    expect(() => createRuntimeModelSelectionResolver(profile)).toThrow(
-      "Configuration is incomplete",
-    );
-    expect(createOpenAICompatible).not.toHaveBeenCalled();
+    await expect(
+      createRuntimeModelSelectionResolver(join(parent, "missing")),
+    ).rejects.toMatchObject({ code: "CONFIG_SETUP_REQUIRED" });
   });
 
   it("rejects profile overrides at the module boundary and resolver call site", async () => {
@@ -725,7 +438,7 @@ describe("unified server composition", () => {
       ["platforms-empty", "plugins-empty"],
     );
     const resolver: RuntimeModelSelectionResolver =
-      createRuntimeModelSelectionResolver(await selectedProfile(manager));
+      await createRuntimeModelSelectionResolver(root);
 
     expect(
       llmReplySettingsSchema.safeParse({
@@ -748,8 +461,8 @@ describe("unified server composition", () => {
   });
 });
 
-async function selectedProfile(manager: FileUserConfigManager) {
-  return manager.resolveProfileById(manager.getSelectedProfileId());
+function dirnameOf(path: string): string {
+  return path.slice(0, path.lastIndexOf("/"));
 }
 
 function readyProfileSettings(lightModelId: string, heavyModelId: string) {

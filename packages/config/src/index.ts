@@ -14,6 +14,14 @@
 export { ConfigError, configErrorCodes } from "./errors.js";
 export type { ConfigErrorCode } from "./errors.js";
 export {
+  StartupConfigurationError,
+  validateStartupConfiguration,
+} from "./startup-validation.js";
+export type {
+  StartupConfigurationIssue,
+  ValidatedStartupConfiguration,
+} from "./startup-validation.js";
+export {
   configurationSetupGuidance,
   ConfigIncompleteError,
   ConfigReviewRequiredError,
@@ -35,10 +43,6 @@ export type { FileUserConfigManagerOptions } from "./manager.js";
 export { REDACTED_CONFIG_VALUE, redactConfigValue } from "./redact.js";
 export type { RedactedConfigValue } from "./redact.js";
 export {
-  readSensitiveJson,
-  writeSensitiveJson,
-} from "./secure-files.js";
-export {
   aiConfigSchema,
   aiProviderConfigSchema,
   emptyUserConfigProfileSettings,
@@ -48,6 +52,7 @@ export {
   platformConfigSchema,
   pluginConfigSchema,
   profileIdSchema,
+  runtimeConfigSchema,
   userConfigIndexSchema,
   userConfigProfileMetadataSchema,
   userConfigProfileSchema,
@@ -65,4 +70,5 @@ export type {
   UserConfigProfile,
   UserConfigProfileMetadata,
   UserConfigProfileSettings,
+  RuntimeConfig,
 } from "./model.js";

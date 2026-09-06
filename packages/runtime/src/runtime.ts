@@ -1,78 +1,78 @@
 /**
- * 功能概述：以 PostgreSQL information ledger 为唯一事实源组合 `KaguyaRuntime`，把外部消息
- * 注册为 context/inbound 原子，并由实时模块广播继续 LLM、assistant 与 delivery DAG。
- * 主要职责：`KaguyaRuntime` 实现窄 `InformationIngress.submit`、transport 注册、串行化 start/close；
- * 启动时注册内建与模块 kind、启动 Core/ModuleHost、安装 `runtime:delivery` 系统消费者；
- * 内部 executor 将模块 tier 解析为无持久化 client，并把模块从账本选择、编译的 Prompt
- * 与 contextAtoms 原样交给原子 lifecycle，不重新构造隐式历史。
- * 代码库关系：依赖 `KaguyaDatabase`、Engine InformationCore/ModuleHost、modules 拥有的
- * kind/模块工厂和 Runtime 自有 lifecycle/result kind；Task 5 的 Gateway/adapter 只需持有 ingress。
- * 输入输出与副作用：submit 返回 context 根 `informationId` 与本次调用实际收到的安全 receipts，
- * 不保留单数 delivery 兼容别名；
- * 不生成 trace/message/event ID，不写旧 SQLite repositories。starting 期间的 close 会先等待或
- * 取消共享启动任务，再执行一次资源清理；数据库 migrate 失败转换为不保留 cause/URL 的
- * `RuntimeDatabaseInitializationError`，供 Server 与模块生命周期失败区分；仅关闭由
- * databaseUrl 创建的连接，注入数据库归调用方。
+ * 功能概述：本文件实现 `KaguyaRuntime`，把入站消息标准化后写入数据库、投递到模块事件总线，
+ * 并将模块产生的出站消息与 LLM 调用统一纳入审计、日志和生命周期管理。
+ * 主要职责：`KaguyaRuntime` 负责 transport 注册、start/dispatch/close 生命周期、
+ * 事件观察与出站投递；`RuntimeModelSelectionResolver` 定义运行时解析 LLM 模型的契约，
+ * 本次变更要求它只接收模块声明的 `modelTier`，不再承担任何 Profile 选择逻辑；
+ * `createReplyLlmExecutor` 将模块的 tier 选择交给注入的 resolver，再通过
+ * `LlmLifecycleClient` 记录请求/完成/失败事件；其余 helper 负责默认激活、trace ID、
+ * 安全收据与失败记录构造。
+ * 代码库关系：本文件消费 `@kaguya/modules` 的默认过滤/回复模块、`@kaguya/database`
+ * 的仓储、`@kaguya/engine` 的事件总线和 `apps/server` 在启动时创建的 resolver；
+ * 服务器层必须先冻结 selected Profile，再把 tier-only resolver 注入到这里。
+ * 输入输出与副作用：运行时会创建并迁移 SQLite、注册事件观察器、落盘消息与出站审计，
+ * 并在 dispatch 时触发真实 LLM/transport 调用；错误会以固定文案写入持久化记录，
+ * 但不会把 provider secret 或动态 Profile 覆盖写入数据库。
  */
-import { randomUUID } from "node:crypto";
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 
-import {
-  InformationLogProjectionRunner,
-  KaguyaDatabase,
-} from "@kaguya/database";
-import {
-  InformationCore,
-  InformationKindRegistry,
-  ModuleHost,
-  consumerFailedInformationKind,
-} from "@kaguya/engine";
+import { KaguyaDatabase } from "@kaguya/database";
+import { EventBus, ModuleHost } from "@kaguya/engine";
 import {
   KaguyaLlmClient,
   type KaguyaLlmModelResolver,
 } from "@kaguya/llm/client";
 import { createRepeatingDeterministicModel } from "@kaguya/llm/testing";
 import {
-  createInformationAtomLogSink,
   createModuleLogger,
+  runWithLogContext,
   type KaguyaLogger,
 } from "@kaguya/logger";
 import {
   alwaysReplyFilterModule,
   createLlmReplyModule,
-  deliveryRequestedInformationKind,
-  inboundTextInformationKind,
-  type LlmCompletedInformationPayload as ModuleLlmCompletedInformationPayload,
-  type LlmReplyExecutor,
+  messageIngestedEvent,
+  moduleMessageSchema,
+  outboundMessageDeliveredEvent,
+  outboundMessageFailedEvent,
+  outboundMessageRequestedEvent,
   type ModuleModelSelection,
+  type ReplyLlmExecutor,
 } from "@kaguya/modules";
 import type {
-  InboundReceipt,
-  InformationIngress,
   PlatformDeliveryReceipt,
   PlatformInboundMessage,
   PlatformOutboundTransport,
 } from "@kaguya/platform-adapters";
+import { PromptCompiler } from "@kaguya/prompt";
 import type {
-  DeepReadonly,
-  InformationAtom,
-  InformationId,
-  OutboundMessageContent,
-  PlatformDestination,
+  EventEnvelope,
+  MessageRecord,
+  OutboundMessageRecord,
 } from "@kaguya/schema";
-import type {
-  InformationKindDefinition,
-  InformationModuleActivation,
-  InformationModuleDefinition,
-} from "@kaguya/sdk";
+import type { ModuleActivation, ModuleDefinition } from "@kaguya/sdk";
 
-import {
-  builtInInformationKinds,
-  deliveryDeliveredInformationKind,
-  deliveryFailedInformationKind,
-  llmCompletedInformationKind,
-  runtimeContextInformationKind,
-} from "./information-kinds.js";
+import { approvedEventDefinitions } from "./events.js";
 import { LlmLifecycleClient } from "./llm-lifecycle.js";
+import { GatewayAllowlist } from "./gateway-allowlist.js";
+
+export interface RuntimePlatformMessage {
+  readonly kind: "platform";
+  readonly message: PlatformInboundMessage;
+}
+
+export type RuntimeInboundMessage = RuntimePlatformMessage;
+
+export interface RuntimeDispatchResult {
+  readonly traceId: string;
+  readonly workflowId: "message-module-pipeline";
+  readonly completedNodeIds: readonly string[];
+  readonly deliveries: readonly PlatformDeliveryReceipt[];
+  readonly delivery?: PlatformDeliveryReceipt;
+  readonly interrupted: boolean;
+  readonly filtered: boolean;
+}
 
 export interface ResolvedRuntimeModel {
   readonly modelId: string;
@@ -89,43 +89,20 @@ export interface RuntimeTransportRegistration {
   readonly transport: PlatformOutboundTransport;
 }
 
-export type InformationIdGenerator = () => string;
-
-type KaguyaRuntimeBaseOptions = {
+export interface KaguyaRuntimeOptions {
+  readonly databasePath: string;
   readonly logger?: KaguyaLogger;
   readonly now?: () => Date;
-  readonly informationIdGenerator?: InformationIdGenerator;
   readonly resolveModelSelection?: RuntimeModelSelectionResolver;
-  readonly moduleDefinitions?: readonly InformationModuleDefinition[];
-  readonly moduleActivations?: readonly InformationModuleActivation[];
-};
-
-export type KaguyaRuntimeOptions = KaguyaRuntimeBaseOptions &
-  (
-    | {
-        readonly databaseUrl: string;
-        readonly database?: never;
-      }
-    | {
-        readonly database: KaguyaDatabase;
-        readonly databaseUrl?: never;
-      }
-  );
-
-export class RuntimeUnavailableError extends Error {
-  constructor(message = "Kaguya runtime is not accepting information") {
-    super(message);
-    this.name = "RuntimeUnavailableError";
-  }
+  readonly moduleDefinitions?: readonly ModuleDefinition[];
+  readonly moduleActivations?: readonly ModuleActivation[];
+  readonly gatewayAllowlist?: GatewayAllowlist;
 }
 
-export class RuntimeDatabaseInitializationError extends Error {
-  readonly failureType: string;
-
-  constructor(error: unknown) {
-    super("Runtime database initialization failed");
-    this.name = "RuntimeDatabaseInitializationError";
-    this.failureType = safeErrorType(error);
+export class RuntimeUnavailableError extends Error {
+  constructor(message = "Kaguya runtime is not accepting messages") {
+    super(message);
+    this.name = "RuntimeUnavailableError";
   }
 }
 
@@ -153,52 +130,27 @@ export class OutboundTransportError extends Error {
   }
 }
 
-type RuntimeState = "new" | "starting" | "started" | "closing" | "closed";
+type RuntimeState = "new" | "started" | "closing" | "closed";
 
-type DeliveryRequestedAtom = DeepReadonly<
-  InformationAtom<
-    "core.delivery.requested",
-    {
-      adapterId: string;
-      platform: string;
-      destination: PlatformDestination;
-      message: OutboundMessageContent;
-    }
-  >
->;
-
-export class KaguyaRuntime implements InformationIngress {
+export class KaguyaRuntime {
   readonly #now: () => Date;
-  readonly #nextInformationId: InformationIdGenerator;
-  readonly #resolveModelSelection: RuntimeModelSelectionResolver;
+  readonly #inFlight = new Set<Promise<RuntimeDispatchResult>>();
   readonly #transports = new Map<string, RuntimeTransportRegistration>();
-  readonly #inFlight = new Set<Promise<InboundReceipt>>();
-  readonly #deliveriesByContext = new Map<
-    InformationId,
-    PlatformDeliveryReceipt[]
-  >();
+  readonly #traceSequences = new Map<string, number>();
   readonly #runtimeLogger: KaguyaLogger | undefined;
+  readonly #eventLogger: KaguyaLogger | undefined;
 
   #state: RuntimeState = "new";
-  #startPromise: Promise<void> | undefined;
   #closePromise: Promise<void> | undefined;
-  #cleanupPromise: Promise<unknown[]> | undefined;
   #database: KaguyaDatabase | undefined;
-  #ownsDatabase = false;
-  #core: InformationCore | undefined;
+  #eventBus: EventBus | undefined;
   #moduleHost: ModuleHost | undefined;
-  #unsubscribeDelivery: (() => void) | undefined;
+  #unsubscribeOutbound: (() => void) | undefined;
 
   constructor(private readonly options: KaguyaRuntimeOptions) {
     this.#now = options.now ?? (() => new Date());
-    this.#nextInformationId = options.informationIdGenerator ?? randomUUID;
-    this.#resolveModelSelection =
-      options.resolveModelSelection ??
-      createDeterministicModelSelectionResolver();
-    this.#runtimeLogger =
-      options.logger === undefined
-        ? undefined
-        : createModuleLogger(options.logger, "runtime");
+    this.#runtimeLogger = optionalModuleLogger(options.logger, "runtime");
+    this.#eventLogger = optionalModuleLogger(options.logger, "runtime:event");
   }
 
   registerTransport(registration: RuntimeTransportRegistration): void {
@@ -214,117 +166,66 @@ export class KaguyaRuntime implements InformationIngress {
     this.#transports.set(key, registration);
   }
 
-  start(): Promise<void> {
-    if (this.#state === "starting") {
-      return required(this.#startPromise, "runtime start");
-    }
-    if (this.#state === "started") return Promise.resolve();
+  async start(): Promise<void> {
+    if (this.#state === "started") return;
     if (this.#state !== "new") {
-      return Promise.reject(
-        new RuntimeUnavailableError("Kaguya runtime cannot be restarted"),
-      );
+      throw new RuntimeUnavailableError("Kaguya runtime cannot be restarted");
     }
 
-    this.#state = "starting";
-    this.#startPromise = this.#startRuntime();
-    return this.#startPromise;
-  }
-
-  async #startRuntime(): Promise<void> {
+    mkdirSync(dirname(this.options.databasePath), { recursive: true });
+    const database = KaguyaDatabase.open(this.options.databasePath);
+    let moduleHost: ModuleHost | undefined;
     try {
-      const database =
-        this.options.database ??
-        (await KaguyaDatabase.connect({
-          connectionString: this.options.databaseUrl,
-        }));
-      this.#database = database;
-      this.#ownsDatabase = this.options.database === undefined;
-      this.#assertStarting();
-      try {
-        await database.migrate();
-      } catch (error) {
-        throw new RuntimeDatabaseInitializationError(error);
-      }
-      this.#assertStarting();
-      const replyModule = createLlmReplyModule({
-        executor: { execute: (input) => this.#executeLlm(input) },
-        llmCompletedInformationKind:
-          llmCompletedInformationKind as unknown as InformationKindDefinition<
-            "core.llm.completed",
-            ModuleLlmCompletedInformationPayload
-          >,
+      database.migrate();
+      const eventBus = new EventBus({
+        onObserverError: (error) => {
+          this.#eventLogger?.error(
+            { event: "event.observer.failed", err: error },
+            "Event observer failed",
+          );
+        },
       });
-      const definitions = this.options.moduleDefinitions ?? [
+      const promptCompiler = new PromptCompiler();
+      const llm = createReplyLlmExecutor({
+        database,
+        eventBus,
+        now: this.#now,
+        resolveModelSelection:
+          this.options.resolveModelSelection ??
+          createDeterministicModelSelectionResolver(),
+      });
+      const replyModule = createLlmReplyModule({
+        messageReader: database.messages,
+        llm,
+        promptCompiler,
+      });
+      moduleHost = new ModuleHost({
+        eventBus,
+        now: this.#now,
+        nextId: (traceId, prefix) => this.#nextId(traceId, prefix),
+      });
+      for (const definition of this.options.moduleDefinitions ?? [
         alwaysReplyFilterModule,
         replyModule,
-      ];
-      const registry = createRegistry(definitions);
-      const allDefinitions = collectDefinitions(definitions);
-      const logProjectionRunner = new InformationLogProjectionRunner({
-        repository: database.information,
-        sink:
-          this.options.logger === undefined
-            ? async () => undefined
-            : createInformationAtomLogSink({
-                logger: this.options.logger,
-                definitions: allDefinitions,
-                emergencyReporter: (failure) => {
-                  this.#runtimeLogger?.error(
-                    {
-                      event: "information.log.failed",
-                      errorType: failure.errorType,
-                      kind: failure.kind,
-                    },
-                    "Information log projection failed",
-                  );
-                },
-              }),
-        reportFailure: (failure) => {
-          this.#runtimeLogger?.error(
-            {
-              event: "information.log.outbox.failed",
-              errorType: failure.errorType,
-            },
-            "Information log outbox failed",
-          );
-        },
-      });
-      const core = new InformationCore({
-        registry,
-        store: database.information,
-        nextInformationId: this.#nextInformationId,
-        now: this.#now,
-        bootstrapReporter: (error) => {
-          this.#runtimeLogger?.error(
-            {
-              event: "information.bootstrap.failed",
-              errorType: safeErrorType(error),
-            },
-            "Information bootstrap operation failed",
-          );
-        },
-        logProjectionRunner,
-      });
-      this.#core = core;
-      await core.start();
-      this.#assertStarting();
-      const moduleHost = new ModuleHost({ core, now: this.#now });
-      this.#moduleHost = moduleHost;
-      for (const definition of definitions) moduleHost.register(definition);
+      ]) {
+        moduleHost.register(definition);
+      }
 
+      this.#database = database;
+      this.#eventBus = eventBus;
+      this.#moduleHost = moduleHost;
+      this.#unsubscribeOutbound = eventBus.subscribe(
+        outboundMessageRequestedEvent.type,
+        async (event) => {
+          await this.#deliverOutbound(event);
+          return { continue: true, event };
+        },
+        { priority: 100 },
+      );
+      this.#registerEventObservers(eventBus);
       await moduleHost.start(
-        this.options.moduleActivations ??
-          (this.options.moduleDefinitions === undefined
-            ? defaultModuleActivations()
-            : []),
+        this.options.moduleActivations ?? defaultModuleActivations(),
       );
-      this.#assertStarting();
-      this.#unsubscribeDelivery = core.on(
-        deliveryRequestedInformationKind,
-        { consumerId: "runtime:delivery" },
-        (request) => this.#deliver(request),
-      );
-      this.#assertStarting();
       this.#state = "started";
       this.#runtimeLogger?.info(
         {
@@ -334,20 +235,23 @@ export class KaguyaRuntime implements InformationIngress {
         "Kaguya runtime started",
       );
     } catch (error) {
-      if (this.#state !== "closing") {
-        this.#state = "closing";
-        await this.#cleanupResources();
-        this.#state = "closed";
-      }
+      this.#unsubscribeOutbound?.();
+      this.#unsubscribeOutbound = undefined;
+      await moduleHost?.stop().catch(() => undefined);
+      database.close();
+      this.#database = undefined;
+      this.#eventBus = undefined;
+      this.#moduleHost = undefined;
+      this.#state = "closed";
       throw error;
     }
   }
 
-  submit(input: PlatformInboundMessage): Promise<InboundReceipt> {
+  dispatch(message: RuntimeInboundMessage): Promise<RuntimeDispatchResult> {
     if (this.#state !== "started") {
       return Promise.reject(new RuntimeUnavailableError());
     }
-    const operation = this.#submit(input);
+    const operation = this.#dispatch(message);
     this.#inFlight.add(operation);
     void operation.then(
       () => this.#inFlight.delete(operation),
@@ -360,13 +264,25 @@ export class KaguyaRuntime implements InformationIngress {
     if (this.#closePromise !== undefined) return this.#closePromise;
     if (this.#state === "closed") return Promise.resolve();
 
-    const starting =
-      this.#state === "starting" ? this.#startPromise : undefined;
     this.#state = "closing";
     this.#closePromise = (async () => {
-      await starting?.catch(() => undefined);
       await Promise.allSettled([...this.#inFlight]);
-      const failures = await this.#cleanupResources();
+      const failures: unknown[] = [];
+      this.#unsubscribeOutbound?.();
+      this.#unsubscribeOutbound = undefined;
+      try {
+        await this.#moduleHost?.stop();
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        this.#database?.close();
+      } catch (error) {
+        failures.push(error);
+      }
+      this.#database = undefined;
+      this.#eventBus = undefined;
+      this.#moduleHost = undefined;
       this.#state = "closed";
       this.#runtimeLogger?.info(
         { event: "runtime.stopped", failureCount: failures.length },
@@ -379,267 +295,358 @@ export class KaguyaRuntime implements InformationIngress {
     return this.#closePromise;
   }
 
-  #cleanupResources(): Promise<unknown[]> {
-    if (this.#cleanupPromise !== undefined) return this.#cleanupPromise;
-    this.#cleanupPromise = (async () => {
-      const failures: unknown[] = [];
-      try {
-        await this.#moduleHost?.stop();
-      } catch (error) {
-        failures.push(error);
-      }
-      this.#unsubscribeDelivery?.();
-      this.#unsubscribeDelivery = undefined;
-      try {
-        await this.#core?.close();
-      } catch (error) {
-        failures.push(error);
-      }
-      if (this.#ownsDatabase) {
-        try {
-          await this.#database?.close();
-        } catch (error) {
-          failures.push(error);
-        }
-      }
-      this.#database = undefined;
-      this.#core = undefined;
-      this.#moduleHost = undefined;
-      this.#ownsDatabase = false;
-      return failures;
-    })();
-    return this.#cleanupPromise;
-  }
-
-  #assertStarting(): void {
-    if (this.#state !== "starting") {
-      throw new RuntimeUnavailableError("Kaguya runtime start was cancelled");
-    }
-  }
-
-  async #executeLlm(
-    input: Parameters<LlmReplyExecutor["execute"]>[0],
-  ): ReturnType<LlmReplyExecutor["execute"]> {
-    const core = required(this.#core, "information core");
-    const contextReference = uniqueContextReference(input.reply);
-    const context = await core.get(contextReference.informationId);
-    if (context?.kind !== runtimeContextInformationKind.kind) {
-      throw new Error("Reply context information is unavailable");
-    }
-    const resolved = this.#resolveModelSelection(input.selection);
-    const lifecycle = new LlmLifecycleClient({
-      core,
-      client: new KaguyaLlmClient({ model: resolved.model, now: this.#now }),
-      now: this.#now,
-    });
-    return lifecycle.generate(
-      {
-        kind: "reply",
-        modelId: resolved.modelId,
-        workflowId: "message-module-pipeline",
-        nodeId: "reply",
-        originatingModuleInstanceId: input.originatingModuleInstanceId,
-        prompt: input.prompt,
-        contextAtoms: input.contextAtoms,
-        reply: input.reply.payload,
-      },
-      context as DeepReadonly<InformationAtom<"core.runtime.context">>,
-      input.reply,
-    );
-  }
-
-  async #submit(input: PlatformInboundMessage): Promise<InboundReceipt> {
-    const core = required(this.#core, "information core");
-    const context = await core.register(runtimeContextInformationKind, {
-      occurredAt: input.occurredAt,
-      source: "runtime:ingress",
-      payload: {},
-      references: [],
-    });
-    const receipts: PlatformDeliveryReceipt[] = [];
-    this.#deliveriesByContext.set(context.informationId, receipts);
-    try {
-      await core.register(inboundTextInformationKind, {
-        occurredAt: input.occurredAt,
-        source: "runtime:ingress",
-        payload: {
-          text: input.text,
-          source: {
-            adapterId: input.adapterId,
-            platform: input.platform,
-            platformMessageId: input.platformMessageId,
-            destination: input.target,
-            senderId: input.sender.userId,
-          },
-        },
-        references: [
+  async #dispatch(
+    input: RuntimeInboundMessage,
+  ): Promise<RuntimeDispatchResult> {
+    const traceId = traceIdOf(input);
+    const startedAt = this.#now().getTime();
+    return runWithLogContext({ traceId }, async () => {
+      if (this.options.gatewayAllowlist?.allows(input.message) === false) {
+        this.#runtimeLogger?.info(
           {
-            relation: "core:context",
-            informationId: context.informationId,
+            event: "message.dispatch.filtered",
+            sourceKind: input.kind,
+            durationMs: Math.max(0, this.#now().getTime() - startedAt),
+            ...platformLogFields(input),
           },
-        ],
-      });
-      const deliveries = Object.freeze([...receipts]);
-      return {
-        rootInformationId: context.informationId,
-        deliveries,
-      };
-    } finally {
-      this.#deliveriesByContext.delete(context.informationId);
-    }
+          "Message filtered by gateway allowlist",
+        );
+        return {
+          traceId,
+          workflowId: "message-module-pipeline" as const,
+          completedNodeIds: [],
+          deliveries: [],
+          interrupted: true,
+          filtered: true,
+        };
+      }
+
+      try {
+        const ingested = this.#ingest(input);
+        return await this.#process(ingested, input, startedAt);
+      } catch (error) {
+        this.#runtimeLogger?.error(
+          {
+            event: "message.dispatch.failed",
+            sourceKind: input.kind,
+            durationMs: Math.max(0, this.#now().getTime() - startedAt),
+            err: error,
+            ...platformLogFields(input),
+          },
+          "Message dispatch failed",
+        );
+        throw error;
+      }
+    });
   }
 
-  async #deliver(request: DeliveryRequestedAtom): Promise<void> {
-    const context = uniqueContextReference(request);
+  #ingest(input: RuntimeInboundMessage): IngestedMessage {
+    const normalized = normalizeInboundMessage(input, (prefix) =>
+      this.#nextId(traceIdOf(input), prefix),
+    );
+    this.#runtimeLogger?.debug(
+      {
+        event: "message.dispatch.started",
+        sourceKind: input.kind,
+        ...platformLogFields(input),
+      },
+      "Message dispatch started",
+    );
+    required(this.#database, "database").messages.insert(normalized.record);
+    return normalized;
+  }
+
+  async #process(
+    ingested: IngestedMessage,
+    input: RuntimeInboundMessage,
+    startedAt: number,
+  ): Promise<RuntimeDispatchResult> {
+    const result = await required(this.#eventBus, "event bus").emit(
+      ingested.event,
+    );
+    const deliveries = deliveryReceipts(
+      required(this.#database, "database").outboundMessages.listByTrace(
+        ingested.traceId,
+      ),
+    );
+    const durationMs = Math.max(0, this.#now().getTime() - startedAt);
+    const lastDelivery = deliveries.at(-1);
+    this.#runtimeLogger?.info(
+      {
+        event: "message.dispatch.completed",
+        sourceKind: input.kind,
+        durationMs,
+        deliveryCount: deliveries.length,
+        interrupted: !result.continue,
+        ...platformLogFields(input),
+      },
+      "Message dispatch completed",
+    );
+    return {
+      traceId: ingested.traceId,
+      workflowId: "message-module-pipeline",
+      completedNodeIds: ["persist-message", "publish-message-ingested"],
+      deliveries,
+      ...(lastDelivery === undefined ? {} : { delivery: lastDelivery }),
+      interrupted: !result.continue,
+      filtered: false,
+    };
+  }
+
+  async #deliverOutbound(event: EventEnvelope): Promise<void> {
+    const payload = outboundMessageRequestedEvent.payloadSchema.parse(
+      event.payload,
+    );
+    const database = required(this.#database, "database");
+    const id = this.#nextId(event.traceId, "outbound-message");
+    const requested: Extract<OutboundMessageRecord, { status: "requested" }> = {
+      id,
+      traceId: event.traceId,
+      adapterId: payload.adapterId,
+      platform: payload.platform,
+      destination: payload.destination,
+      message: payload.message,
+      occurredAt: this.#now().toISOString(),
+      status: "requested",
+      metadata: {
+        requestEventId: event.id,
+        ...(typeof event.metadata.causationEventId === "string"
+          ? { causationEventId: event.metadata.causationEventId }
+          : {}),
+        ...(typeof event.metadata.rootEventId === "string"
+          ? { rootEventId: event.metadata.rootEventId }
+          : {}),
+        ...(typeof event.metadata.moduleDefinitionId === "string"
+          ? { moduleDefinitionId: event.metadata.moduleDefinitionId }
+          : {}),
+        ...(typeof event.metadata.moduleInstanceId === "string"
+          ? { moduleInstanceId: event.metadata.moduleInstanceId }
+          : {}),
+      },
+    };
+    database.outboundMessages.insert(requested);
+
     const registration = this.#transports.get(
-      transportKey(request.payload.adapterId, request.payload.platform),
+      transportKey(payload.adapterId, payload.platform),
     );
     if (registration === undefined) {
       const error = new OutboundTransportNotFoundError(
-        request.payload.adapterId,
-        request.payload.platform,
+        payload.adapterId,
+        payload.platform,
       );
-      await this.#registerDeliveryFailure(
-        request,
-        context.informationId,
-        "Outbound transport is not registered",
-      );
+      const failed = failedOutbound(requested, this.#now, error.message);
+      database.outboundMessages.complete(failed);
+      await this.#emitOutboundResult(event, failed);
       throw error;
     }
 
     let receipt: PlatformDeliveryReceipt;
     try {
       receipt = await registration.transport.sendMessage(
-        request.payload.destination,
-        request.payload.message,
-        { rootInformationId: context.informationId },
+        payload.destination,
+        payload.message,
+        { traceId: event.traceId, outboundMessageId: id },
       );
     } catch (cause) {
-      await this.#registerDeliveryFailure(
-        request,
-        context.informationId,
-        "Platform transport failed",
-      );
-      throw new OutboundTransportError(
-        request.payload.adapterId,
-        request.payload.platform,
+      const error = new OutboundTransportError(
+        payload.adapterId,
+        payload.platform,
         cause,
       );
+      const failed = failedOutbound(
+        requested,
+        this.#now,
+        "Platform transport failed",
+      );
+      database.outboundMessages.complete(failed);
+      await this.#emitOutboundResult(event, failed);
+      throw error;
     }
-
-    const core = required(this.#core, "information core");
     if (receipt.ok) {
-      await core.register(deliveryDeliveredInformationKind, {
-        occurredAt: this.#now().toISOString(),
-        source: "runtime:delivery",
-        payload: safeDeliveredPayload(receipt),
-        references: deliveryResultReferences(
-          request.informationId,
-          context.informationId,
-        ),
-      });
-    } else {
-      await core.register(deliveryFailedInformationKind, {
-        occurredAt: this.#now().toISOString(),
-        source: "runtime:delivery",
-        payload: safeFailedDeliveryPayload(receipt),
-        references: deliveryResultReferences(
-          request.informationId,
-          context.informationId,
-        ),
-      });
+      const delivered: Extract<OutboundMessageRecord, { status: "delivered" }> =
+        {
+          ...requested,
+          status: "delivered",
+          completedAt: this.#now().toISOString(),
+          receipt: safeReceipt(receipt),
+        };
+      database.outboundMessages.complete(delivered);
+      await this.#emitOutboundResult(event, delivered);
+      return;
     }
-    this.#deliveriesByContext
-      .get(context.informationId)
-      ?.push(safeRuntimeReceipt(receipt));
-  }
-
-  async #registerDeliveryFailure(
-    request: DeliveryRequestedAtom,
-    contextInformationId: InformationId,
-    error: string,
-  ): Promise<void> {
-    await required(this.#core, "information core").register(
-      deliveryFailedInformationKind,
-      {
-        occurredAt: this.#now().toISOString(),
-        source: "runtime:delivery",
-        payload: {
-          ok: false,
-          adapterId: request.payload.adapterId,
-          platform: request.payload.platform,
-          target: request.payload.destination,
-          error,
-        },
-        references: deliveryResultReferences(
-          request.informationId,
-          contextInformationId,
-        ),
-      },
+    const failed = failedOutbound(
+      requested,
+      this.#now,
+      "Platform delivery failed",
     );
+    database.outboundMessages.complete(failed);
+    await this.#emitOutboundResult(event, failed);
   }
-}
 
-function createRegistry(
-  moduleDefinitions: readonly InformationModuleDefinition[],
-): InformationKindRegistry {
-  const registry = new InformationKindRegistry();
-  const registered = new Map<string, InformationKindDefinition<string, any>>();
-  for (const definition of builtInInformationKinds) {
-    registered.set(definition.kind, definition);
-    if (definition === consumerFailedInformationKind) continue;
-    if (definition.kind.startsWith("core."))
-      registry.registerBuiltin(definition);
-    else registry.register(definition);
-  }
-  for (const module of moduleDefinitions) {
-    for (const definition of module.manifest.informationKinds) {
-      const existing = registered.get(definition.kind);
-      if (existing !== undefined) {
-        if (existing !== definition) {
-          throw new Error(
-            `Information kind definition mismatch: ${definition.kind}`,
+  async #emitOutboundResult(
+    source: EventEnvelope,
+    record:
+      | Extract<OutboundMessageRecord, { status: "delivered" }>
+      | Extract<OutboundMessageRecord, { status: "failed" }>,
+  ): Promise<void> {
+    const basePayload = {
+      outboundMessageId: record.id,
+      adapterId: record.adapterId,
+      platform: record.platform,
+    };
+    const resultEvent =
+      record.status === "delivered"
+        ? outboundMessageDeliveredEvent.create(
+            outboundResultBase(source, this.#now, (prefix) =>
+              this.#nextId(source.traceId, prefix),
+            ),
+            basePayload,
+          )
+        : outboundMessageFailedEvent.create(
+            outboundResultBase(source, this.#now, (prefix) =>
+              this.#nextId(source.traceId, prefix),
+            ),
+            { ...basePayload, error: record.error },
           );
-        }
-        continue;
-      }
-      registry.register(definition);
-      registered.set(definition.kind, definition);
+    await required(this.#eventBus, "event bus").emit(resultEvent);
+  }
+
+  #nextId(traceId: string, prefix: string): string {
+    const sequence = (this.#traceSequences.get(traceId) ?? 0) + 1;
+    this.#traceSequences.set(traceId, sequence);
+    return `${traceId}-${prefix}-${String(sequence).padStart(6, "0")}`;
+  }
+
+  #registerEventObservers(eventBus: EventBus): void {
+    for (const definition of approvedEventDefinitions) {
+      eventBus.subscribe(
+        definition.type,
+        (event) => {
+          runWithLogContext({ eventId: event.id }, () => {
+            this.#eventLogger?.debug(
+              {
+                event: "event.emitted",
+                eventType: event.type,
+                eventSource: event.source,
+              },
+              "Runtime event emitted",
+            );
+          });
+        },
+        { mode: "observe" },
+      );
     }
   }
-  return registry;
 }
 
-function collectDefinitions(
-  moduleDefinitions: readonly InformationModuleDefinition[],
-): readonly InformationKindDefinition<string, any>[] {
-  const definitions = new Map<string, InformationKindDefinition<string, any>>(
-    builtInInformationKinds.map((definition) => [definition.kind, definition]),
-  );
-  for (const module of moduleDefinitions) {
-    for (const definition of module.manifest.informationKinds) {
-      definitions.set(definition.kind, definition);
-    }
-  }
-  return [...definitions.values()];
-}
-
-function defaultModuleActivations(): readonly InformationModuleActivation[] {
-  return [
-    {
-      instanceId: "filter.default",
-      definitionId: "demo.filter.always",
-      settings: {},
+function outboundResultBase(
+  source: EventEnvelope,
+  now: () => Date,
+  nextId: (prefix: string) => string,
+) {
+  return {
+    id: nextId("event"),
+    source: "runtime:outbound-transport",
+    occurredAt: now().toISOString(),
+    traceId: source.traceId,
+    metadata: {
+      causationEventId: source.id,
+      rootEventId:
+        typeof source.metadata.rootEventId === "string"
+          ? source.metadata.rootEventId
+          : source.id,
     },
-    {
-      instanceId: "reply.default",
-      definitionId: "demo.reply.llm",
-      settings: {
-        modelTier: "heavy",
-        outbound: { mode: "source", messageKind: "reply" },
+  };
+}
+
+interface IngestedMessage {
+  readonly traceId: string;
+  readonly record: MessageRecord;
+  readonly event: ReturnType<typeof messageIngestedEvent.create>;
+}
+
+function normalizeInboundMessage(
+  input: RuntimeInboundMessage,
+  nextId: (prefix: string) => string,
+): IngestedMessage {
+  const message = input.message;
+  const traceId = message.traceId;
+  const occurredAt = message.occurredAt;
+  const messageId = nextId("message");
+  const moduleMessage = moduleMessageSchema.parse({
+    messageId,
+    text: message.text,
+    occurredAt,
+    source: {
+      kind: "platform",
+      platform: message.platform,
+      adapterId: message.adapterId,
+      platformMessageId: message.platformMessageId,
+      ...(message.selfId === undefined ? {} : { selfId: message.selfId }),
+      destination: message.target,
+      sender: {
+        id: message.sender.userId,
+        ...((message.sender.card ?? message.sender.nickname) === undefined
+          ? {}
+          : { displayName: message.sender.card ?? message.sender.nickname }),
       },
+      mentions: message.mentions,
     },
-  ];
+  });
+  const eventId = nextId("event");
+  const event = messageIngestedEvent.create(
+    {
+      id: eventId,
+      source: `adapter:${message.adapterId}`,
+      occurredAt,
+      traceId,
+      metadata: { rootEventId: eventId },
+    },
+    { message: moduleMessage },
+  );
+  return {
+    traceId,
+    record: {
+      id: messageId,
+      role: "user",
+      content: moduleMessage.text,
+      occurredAt,
+      metadata: { moduleMessage, traceId, eventId },
+    },
+    event,
+  };
+}
+
+function createReplyLlmExecutor(options: {
+  database: KaguyaDatabase;
+  eventBus: EventBus;
+  now: () => Date;
+  resolveModelSelection: RuntimeModelSelectionResolver;
+}): ReplyLlmExecutor {
+  return {
+    async generate(request, context) {
+      const resolved = options.resolveModelSelection(request.selection);
+      const lifecycle = new LlmLifecycleClient(
+        new KaguyaLlmClient({
+          model: resolved.model,
+          traceWriter: options.database.llmTraces,
+          now: options.now,
+        }),
+        options.eventBus,
+      );
+      return lifecycle.generate(
+        {
+          kind: request.kind,
+          modelId: resolved.modelId,
+          prompt: request.prompt,
+          traceId: request.traceId,
+          workflowId: request.workflowId,
+          nodeId: request.nodeId,
+        },
+        context,
+      );
+    },
+  };
 }
 
 function createDeterministicModelSelectionResolver(): RuntimeModelSelectionResolver {
@@ -652,67 +659,82 @@ function createDeterministicModelSelectionResolver(): RuntimeModelSelectionResol
   });
 }
 
-function uniqueContextReference(atom: DeepReadonly<InformationAtom>): {
-  readonly relation: "core:context";
-  readonly informationId: InformationId;
-} {
-  const contexts = atom.references.filter(
-    ({ relation }) => relation === "core:context",
-  );
-  if (contexts.length !== 1) {
-    throw new Error(`Information atom must have one context: ${atom.kind}`);
-  }
-  return {
-    relation: "core:context",
-    informationId: contexts[0]!.informationId,
-  };
-}
-
-function deliveryResultReferences(
-  requestInformationId: InformationId,
-  contextInformationId: InformationId,
-) {
+function defaultModuleActivations(): readonly ModuleActivation[] {
   return [
-    { relation: "core:caused-by", informationId: requestInformationId },
-    { relation: "core:status-of", informationId: requestInformationId },
-    { relation: "core:context", informationId: contextInformationId },
+    {
+      instanceId: "filter.default",
+      definitionId: "demo.filter.always",
+      settings: { replyTargetInstanceId: "reply.default" },
+    },
+    {
+      instanceId: "reply.default",
+      definitionId: "demo.reply.llm",
+      settings: {
+        modelTier: "heavy",
+        outbound: { mode: "source", messageKind: "reply" },
+      },
+    },
   ];
 }
 
-function safeDeliveredPayload(receipt: PlatformDeliveryReceipt) {
+function failedOutbound(
+  requested: Extract<OutboundMessageRecord, { status: "requested" }>,
+  now: () => Date,
+  error: string,
+): Extract<OutboundMessageRecord, { status: "failed" }> {
   return {
-    ok: true as const,
-    adapterId: receipt.adapterId,
-    platform: receipt.platform,
-    target: receipt.target,
-    ...(receipt.platformMessageId === undefined
-      ? {}
-      : { platformMessageId: receipt.platformMessageId }),
+    ...requested,
+    status: "failed",
+    completedAt: now().toISOString(),
+    error,
   };
 }
 
-function safeFailedDeliveryPayload(receipt: PlatformDeliveryReceipt) {
-  return {
-    ok: false as const,
-    adapterId: receipt.adapterId,
-    platform: receipt.platform,
-    target: receipt.target,
-    error: "Platform delivery failed",
-  };
-}
-
-function safeRuntimeReceipt(
+function safeReceipt(
   receipt: PlatformDeliveryReceipt,
-): PlatformDeliveryReceipt {
+): Record<string, unknown> {
   return {
     ok: receipt.ok,
     adapterId: receipt.adapterId,
     platform: receipt.platform,
-    target: receipt.target,
     ...(receipt.platformMessageId === undefined
       ? {}
       : { platformMessageId: receipt.platformMessageId }),
-    ...(receipt.error === undefined ? {} : { error: receipt.error }),
+  };
+}
+
+function deliveryReceipts(
+  records: readonly OutboundMessageRecord[],
+): PlatformDeliveryReceipt[] {
+  return records.flatMap((record) => {
+    if (record.status === "requested") return [];
+    return [
+      {
+        ok: record.status === "delivered",
+        adapterId: record.adapterId,
+        platform: record.platform as PlatformDeliveryReceipt["platform"],
+        target: record.destination,
+        ...(record.status === "delivered" &&
+        typeof record.receipt.platformMessageId === "string"
+          ? { platformMessageId: record.receipt.platformMessageId }
+          : {}),
+        ...(record.status === "failed" ? { error: record.error } : {}),
+      },
+    ];
+  });
+}
+
+function traceIdOf(input: RuntimeInboundMessage): string {
+  return input.message.traceId;
+}
+
+function platformLogFields(
+  input: RuntimeInboundMessage,
+): Record<string, unknown> {
+  return {
+    adapterId: input.message.adapterId,
+    platform: input.message.platform,
+    targetKind: input.message.target.kind,
   };
 }
 
@@ -720,12 +742,13 @@ function transportKey(adapterId: string, platform: string): string {
   return `${platform}:${adapterId}`;
 }
 
-function safeErrorType(error: unknown): string {
-  try {
-    return error instanceof Error ? "Error" : "UnknownError";
-  } catch {
-    return "UnknownError";
-  }
+function optionalModuleLogger(
+  logger: KaguyaLogger | undefined,
+  namespace: string,
+): KaguyaLogger | undefined {
+  return logger === undefined
+    ? undefined
+    : createModuleLogger(logger, namespace);
 }
 
 function required<T>(value: T | undefined, label: string): T {
