@@ -13,8 +13,17 @@ import { APICallError } from "ai";
 import { MockLanguageModelV3 } from "ai/test";
 import { describe, expect, it } from "vitest";
 
-import { KaguyaLlmClient, KaguyaLlmError } from "./client.js";
-import { memoryOutputSchema, replyOutputSchema, routeOutputSchema, stateOutputSchema } from "./schemas.js";
+import {
+  KaguyaLlmClient,
+  KaguyaLlmError,
+  type KaguyaLlmRequest,
+} from "./client.js";
+import {
+  memoryOutputSchema,
+  replyOutputSchema,
+  routeOutputSchema,
+  stateOutputSchema,
+} from "./schemas.js";
 import * as llm from "./index.js";
 import { createDeterministicModel } from "./testing.js";
 
@@ -42,19 +51,51 @@ function modelResult(text: string) {
   };
 }
 
-function request(kind: CompiledPrompt["kind"] = "route") {
-  const outputSchema = kind === "route"
-    ? routeOutputSchema
-    : kind === "reply"
-      ? replyOutputSchema
-      : kind === "state"
-        ? stateOutputSchema
-        : memoryOutputSchema;
-  return {
-    modelId: "deterministic-model",
-    prompt: { ...prompt, kind },
-    outputSchema,
-  };
+type TestRequest =
+  | KaguyaLlmRequest<ReturnType<typeof routeOutputSchema.parse>>
+  | KaguyaLlmRequest<ReturnType<typeof replyOutputSchema.parse>>
+  | KaguyaLlmRequest<ReturnType<typeof stateOutputSchema.parse>>
+  | KaguyaLlmRequest<ReturnType<typeof memoryOutputSchema.parse>>;
+
+function request(
+  kind?: "route",
+): KaguyaLlmRequest<ReturnType<typeof routeOutputSchema.parse>>;
+function request(
+  kind: "reply",
+): KaguyaLlmRequest<ReturnType<typeof replyOutputSchema.parse>>;
+function request(
+  kind: "state",
+): KaguyaLlmRequest<ReturnType<typeof stateOutputSchema.parse>>;
+function request(
+  kind: "memory",
+): KaguyaLlmRequest<ReturnType<typeof memoryOutputSchema.parse>>;
+function request(kind: CompiledPrompt["kind"] = "route"): TestRequest {
+  switch (kind) {
+    case "route":
+      return {
+        modelId: "deterministic-model",
+        prompt: { ...prompt, kind },
+        outputSchema: routeOutputSchema,
+      };
+    case "reply":
+      return {
+        modelId: "deterministic-model",
+        prompt: { ...prompt, kind },
+        outputSchema: replyOutputSchema,
+      };
+    case "state":
+      return {
+        modelId: "deterministic-model",
+        prompt: { ...prompt, kind },
+        outputSchema: stateOutputSchema,
+      };
+    case "memory":
+      return {
+        modelId: "deterministic-model",
+        prompt: { ...prompt, kind },
+        outputSchema: memoryOutputSchema,
+      };
+  }
 }
 
 function deterministicClock(...timestamps: string[]) {
@@ -106,8 +147,8 @@ describe("KaguyaLlmClient", () => {
       isRetryable: false,
     });
     const model = new MockLanguageModelV3({
-        doGenerate: () => Promise.reject(providerError),
-      });
+      doGenerate: () => Promise.reject(providerError),
+    });
     const client = new KaguyaLlmClient({
       model,
       now: deterministicClock(
@@ -132,8 +173,8 @@ describe("KaguyaLlmClient", () => {
       isRetryable: true,
     });
     const model = new MockLanguageModelV3({
-        doGenerate: () => Promise.reject(providerError),
-      });
+      doGenerate: () => Promise.reject(providerError),
+    });
     const client = new KaguyaLlmClient({
       model,
       now: deterministicClock(
@@ -204,9 +245,13 @@ describe("KaguyaLlmClient", () => {
     ],
     ["memory", { memories: ["The user likes tea."] }],
   ] as const)("strictly parses %s outputs", async (kind, output) => {
-    await expect(
-      clientFor(output).generate(request(kind)),
-    ).resolves.toMatchObject({
+    const result =
+      kind === "reply"
+        ? await clientFor(output).generate(request("reply"))
+        : kind === "state"
+          ? await clientFor(output).generate(request("state"))
+          : await clientFor(output).generate(request("memory"));
+    expect(result).toMatchObject({
       output,
       durationMs: 25,
     });
@@ -248,9 +293,16 @@ describe("KaguyaLlmClient", () => {
     ["state", { mood: " ", relationship: "trusted", shortTermMemories: [] }],
     ["memory", { memories: ["\n"] }],
   ] as const)("rejects blank generated %s content", async (kind, output) => {
-    await expect(
-      clientFor(output).generate(request(kind)),
-    ).rejects.toBeInstanceOf(KaguyaLlmError);
+    const client = clientFor(output);
+    const generation =
+      kind === "route"
+        ? client.generate(request("route"))
+        : kind === "reply"
+          ? client.generate(request("reply"))
+          : kind === "state"
+            ? client.generate(request("state"))
+            : client.generate(request("memory"));
+    await expect(generation).rejects.toBeInstanceOf(KaguyaLlmError);
   });
 
   it("trims every accepted generated string", async () => {
@@ -271,7 +323,14 @@ describe("KaguyaLlmClient", () => {
       ["state", outputs[2]],
       ["memory", outputs[3]],
     ] as const) {
-      const result = await clientFor(output).generate(request(kind));
+      const result =
+        kind === "route"
+          ? await clientFor(output).generate(request("route"))
+          : kind === "reply"
+            ? await clientFor(output).generate(request("reply"))
+            : kind === "state"
+              ? await clientFor(output).generate(request("state"))
+              : await clientFor(output).generate(request("memory"));
       expect(JSON.stringify(result.output)).not.toMatch(/  /);
     }
   });
