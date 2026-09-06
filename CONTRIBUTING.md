@@ -146,6 +146,8 @@ pnpm --filter @kaguya/config typecheck
 
 配置测试只能使用 `test-only-placeholder` 一类占位值，绝不能读取真实本地配置根目录。新增或修改 readiness/error 断言时，必须验证输出不含任何明文 credential（包括 API key）。
 
+启动配置校验应通过 `@kaguya/config` 的 `validateStartupConfiguration()` 驱动。校验失败必须同时覆盖 `StartupConfigurationError.issues`、Pino 的 `configuration.validation.failed` 结构化日志和终端 stderr 摘要；测试必须确认 issue、日志和摘要均不包含 API key、access token、完整 URL 凭据或原始 Profile。服务配置统一放入 Profile 的 `runtime` 字段，NapCat 作为 `platforms` 中的 `type: "napcat"` 条目，旧服务环境变量不得重新引入。
+
 Prompt 变更同样先修改 `promptfooconfig.yaml` 的输入和 `promptfoo/assertions.cjs` 的结构断言，确认失败后再改编译或组装逻辑。断言应验证片段来源、ID、顺序和内容，不能只做宽泛的关键词存在检查。
 
 ## 新增 workspace 包

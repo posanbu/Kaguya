@@ -43,7 +43,7 @@ flowchart LR
 
 ### 首次配置
 
-查看[配置 Kaguya](./configuration)，理解 setup mode、profile、模型层级和敏感文件边界。
+查看[配置 Kaguya](./configuration)，理解 Profile、启动校验、模型层级和敏感文件边界。
 
 ### 浏览器界面
 

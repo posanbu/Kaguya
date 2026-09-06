@@ -67,6 +67,25 @@ export interface UserConfigProfilePlugin {
   readonly settings: JsonObject;
 }
 
+export interface UserConfigProfileRuntime {
+  readonly host: string;
+  readonly port: number;
+  readonly gatewayToken: string;
+  readonly databasePath: string;
+  readonly webDistPath: string;
+  readonly corsOrigins: readonly string[];
+  readonly trustProxy: false | readonly string[];
+  readonly rateLimitMax: number;
+  readonly rateLimitWindowMs: number;
+  readonly logLevel: "trace" | "debug" | "info" | "warn" | "error" | "fatal" | "silent";
+  readonly logFormat: "json" | "pretty";
+  readonly gatewayAllowlist: {
+    readonly platforms: readonly string[];
+    readonly userIds: readonly string[];
+    readonly groupIds: readonly string[];
+  };
+}
+
 export interface UserConfigProfile {
   readonly version: 1;
   readonly id: string;
@@ -87,6 +106,7 @@ export interface UserConfigProfile {
   };
   readonly platforms: readonly UserConfigProfilePlatform[];
   readonly plugins: readonly UserConfigProfilePlugin[];
+  readonly runtime?: UserConfigProfileRuntime;
   readonly review?: {
     readonly acknowledgedWarnings: readonly string[];
   };
@@ -162,6 +182,7 @@ export interface ReplaceProfileInput {
   };
   readonly platforms: readonly UserConfigProfilePlatform[];
   readonly plugins: readonly UserConfigProfilePlugin[];
+  readonly runtime?: UserConfigProfileRuntime;
 }
 
 export type ProfileReplacementInput = ReplaceProfileInput;

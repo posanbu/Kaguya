@@ -285,8 +285,8 @@ describe("unified server composition", () => {
     expect(stream.logs()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          event: "server.start.failed",
-          level: "fatal",
+          event: "configuration.validation.failed",
+          level: "error",
         }),
         expect.objectContaining({ event: "server.stopping", level: "info" }),
         expect.objectContaining({ event: "server.stopped", level: "info" }),

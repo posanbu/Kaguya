@@ -138,7 +138,7 @@ curl http://127.0.0.1:3000/api/v1/messages \
 
 **`request_rejected` / 413 或 415** — Fastify 在进入 Runtime 前拒绝请求。
 
-**`configuration_setup_required` / 503** — Server 处于 setup mode，Runtime ingress 未启动。
+**`configuration_setup_required` / 503** — 仅用于兼容旧的 setup API；当前 Server 在启动校验失败时直接退出，不会提供 setup mode。
 
 **`core_unavailable` / 503** — 测试或嵌入场景没有配置 Runtime dispatcher。
 

@@ -81,7 +81,7 @@ curl http://127.0.0.1:3000/healthz
 
 :::
 
-正常响应为 `{"status":"ok"}`。如果配置尚未完成，HTTP 与 Web UI 仍会启动，但 Runtime 和 NapCat ingress 会等待配置完成并重启。
+正常响应为 `{"status":"ok"}`。如果启动配置校验失败，Server 会在 HTTP/Web UI 启动前输出字段路径和修复建议，并以非零状态退出；修复 selected Profile 后重新启动即可。
 
 ## 生产构建与运行
 

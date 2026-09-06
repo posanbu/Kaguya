@@ -14,6 +14,14 @@
 export { ConfigError, configErrorCodes } from "./errors.js";
 export type { ConfigErrorCode } from "./errors.js";
 export {
+  StartupConfigurationError,
+  validateStartupConfiguration,
+} from "./startup-validation.js";
+export type {
+  StartupConfigurationIssue,
+  ValidatedStartupConfiguration,
+} from "./startup-validation.js";
+export {
   configurationSetupGuidance,
   ConfigIncompleteError,
   ConfigReviewRequiredError,
@@ -44,6 +52,7 @@ export {
   platformConfigSchema,
   pluginConfigSchema,
   profileIdSchema,
+  runtimeConfigSchema,
   userConfigIndexSchema,
   userConfigProfileMetadataSchema,
   userConfigProfileSchema,
@@ -61,4 +70,5 @@ export type {
   UserConfigProfile,
   UserConfigProfileMetadata,
   UserConfigProfileSettings,
+  RuntimeConfig,
 } from "./model.js";

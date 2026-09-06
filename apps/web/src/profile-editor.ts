@@ -14,7 +14,11 @@
  * 输入输出与副作用：函数只处理内存对象；实现必须克隆数组和对象，
  * 不能修改传入的 profile 引用，也不能偷偷删减未展示字段。
  */
-import type { ReplaceProfileInput, UserConfigProfile } from "./api.js";
+import type {
+  ReplaceProfileInput,
+  UserConfigProfile,
+  UserConfigProfileRuntime,
+} from "./api.js";
 
 const DEFAULT_PROVIDER_ID = "default-provider";
 const OPENAI_COMPATIBLE_PROVIDER_TYPE = "openai-compatible";
@@ -38,6 +42,7 @@ interface MutableProfile {
   };
   platforms: MutablePlatform[];
   plugins: MutablePlugin[];
+  runtime?: UserConfigProfileRuntime;
   review?: {
     acknowledgedWarnings: string[];
   };
@@ -128,6 +133,7 @@ export function mergeProfileEditorFields(
     ai: next.ai as ReplaceProfileInput["ai"],
     platforms: next.platforms,
     plugins: next.plugins,
+    ...(next.runtime === undefined ? {} : { runtime: next.runtime }),
   };
 }
 

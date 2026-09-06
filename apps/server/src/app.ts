@@ -3,7 +3,7 @@
  * OpenAPI 文档、首屏配置状态查询、带鉴权的全局 Profile Registry 管理接口，以及
  * Runtime 消息入口；它是“selected Profile 唯一生效”服务端约束的 HTTP 落点。
  * 主要职责：`createHttpApplication` 统一注册 CORS、限流、OpenAPI 与错误处理，
- * 再根据 `runtime` 与 `setup` 是否存在决定 ready 模式和 setup 模式的可见路由；
+ * 再根据已通过启动校验的 `runtime` 与 `setup` 注册正常运行路由；
  * `/api/v1/setup` 返回无 secret 的 readiness 元数据，以及本实例分发的网关 token，
  * 供 Web UI 加载页面时自动取用；Profile 的创建、读取、
  * 完整替换、显式选择与删除分别由 `/api/v1/profiles*` 路由承载，并统一通过
@@ -27,6 +27,7 @@ import {
   platformConfigSchema,
   pluginConfigSchema,
   profileIdSchema,
+  runtimeConfigSchema,
 } from "@kaguya/config";
 import { runWithLogContext } from "@kaguya/logger";
 import { z } from "@kaguya/schema";
@@ -87,6 +88,7 @@ const replaceProfileRequestSchema = z
     ai: aiConfigSchema,
     platforms: z.array(platformConfigSchema),
     plugins: z.array(pluginConfigSchema),
+    runtime: runtimeConfigSchema.optional(),
     acknowledgedWarnings: z.array(z.string().trim().min(1)),
   })
   .strict();
@@ -201,6 +203,60 @@ const pluginConfigJsonSchema = {
   },
 } as const;
 
+const runtimeConfigJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "host",
+    "port",
+    "gatewayToken",
+    "databasePath",
+    "webDistPath",
+    "corsOrigins",
+    "trustProxy",
+    "rateLimitMax",
+    "rateLimitWindowMs",
+    "logLevel",
+    "logFormat",
+    "gatewayAllowlist",
+  ],
+  properties: {
+    host: { type: "string", minLength: 1 },
+    port: { type: "integer", minimum: 1, maximum: 65535 },
+    gatewayToken: { type: "string", minLength: 16 },
+    databasePath: { type: "string", minLength: 1 },
+    webDistPath: { type: "string", minLength: 1 },
+    corsOrigins: { type: "array", items: { type: "string", format: "uri" } },
+    trustProxy: {
+      anyOf: [
+        { const: false },
+        { type: "array", items: { type: "string", minLength: 1 } },
+      ],
+    },
+    rateLimitMax: { type: "integer", minimum: 1, maximum: 10000 },
+    rateLimitWindowMs: {
+      type: "integer",
+      minimum: 1000,
+      maximum: 3600000,
+    },
+    logLevel: {
+      type: "string",
+      enum: ["trace", "debug", "info", "warn", "error", "fatal", "silent"],
+    },
+    logFormat: { type: "string", enum: ["json", "pretty"] },
+    gatewayAllowlist: {
+      type: "object",
+      additionalProperties: false,
+      required: ["platforms", "userIds", "groupIds"],
+      properties: {
+        platforms: { type: "array", items: { type: "string", minLength: 1 } },
+        userIds: { type: "array", items: { type: "string", minLength: 1 } },
+        groupIds: { type: "array", items: { type: "string", minLength: 1 } },
+      },
+    },
+  },
+} as const;
+
 const profileReviewJsonSchema = {
   type: "object",
   additionalProperties: false,
@@ -230,6 +286,7 @@ const userConfigProfileJsonSchema = {
       type: "array",
       items: pluginConfigJsonSchema,
     },
+    runtime: runtimeConfigJsonSchema,
     review: profileReviewJsonSchema,
   },
 } as const;
@@ -261,6 +318,7 @@ const replaceProfileRequestJsonSchema = {
     ai: aiConfigJsonSchema,
     platforms: { type: "array", items: platformConfigJsonSchema },
     plugins: { type: "array", items: pluginConfigJsonSchema },
+    runtime: runtimeConfigJsonSchema,
     acknowledgedWarnings: {
       type: "array",
       items: { type: "string", minLength: 1 },

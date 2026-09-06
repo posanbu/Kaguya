@@ -24,9 +24,7 @@ export KAGUYA_CONFIG_ROOT="/absolute/path/to/kaguya-config"
 pnpm dev
 ```
 
-`KAGUYA_GATEWAY_TOKEN` 可选：未设置时每次启动生成随机 token（`server.token.generated` 日志中打印），Web UI 打开页面时自动获取；显式设置（至少 16 字符）可获得跨重启稳定的 token。
-
-`KAGUYA_CONFIG_ROOT` 指向权限受保护的 profile store。目录尚未初始化、当前全局选中的 profile 不完整或可选配置尚未确认时，Server 会进入统一配置模式并显示引导页；如果当前 selected Profile 仍然 `invalid` 或 `review_required`，页面会继续展示 readiness 问题。只有当用户选择了某个 Profile，或完整替换了当前 selected Profile，且该 selected Profile 已 ready 时，页面才会进入 `restart_required` 并要求重启服务。配置文件损坏或权限异常仍会拒绝启动，不会自动覆盖。初始化格式与密钥边界见 [`@kaguya/config`](packages/config/README.md)。打开 `http://127.0.0.1:3000` 后，页面和 API 使用同源路径。
+`KAGUYA_CONFIG_ROOT` 指向权限受保护的 Profile Registry；未设置时使用 `.data/kaguya-config`。端口、网关令牌、数据库、白名单、NapCat、日志和模型参数全部写入 selected Profile。启动前会执行统一配置校验；校验失败时记录 `configuration.validation.failed`，向终端输出字段路径和修复建议，并以非零状态退出，不启动 HTTP/Web UI、Runtime 或平台 ingress。初始化格式与密钥边界见 [`@kaguya/config`](packages/config/README.md)。
 
 生产运行：
 
@@ -55,29 +53,9 @@ pnpm start
 
 ## 统一配置
 
-| 环境变量                             | 默认值                | 说明                                   |
-| ------------------------------------ | --------------------- | -------------------------------------- |
-| `KAGUYA_GATEWAY_TOKEN`               | 无                    | 可选；未设时启动自动生成并分发给 Web UI |
-| `KAGUYA_HOST`                        | `127.0.0.1`           | 唯一服务监听地址                       |
-| `KAGUYA_PORT`                        | `3000`                | 唯一服务监听端口                       |
-| `KAGUYA_DATABASE_PATH`               | `.data/kaguya.sqlite` | Runtime SQLite 文件                    |
-| `KAGUYA_CORS_ORIGINS`                | 空                    | 逗号分隔的允许来源；同源 UI 不需要配置 |
-| `KAGUYA_TRUST_PROXY`                 | 空                    | 逗号分隔的可信代理地址/CIDR            |
-| `KAGUYA_RATE_LIMIT_MAX`              | `30`                  | 每个限流窗口的请求数                   |
-| `KAGUYA_RATE_LIMIT_WINDOW_MS`        | `60000`               | 限流窗口毫秒数                         |
-| `KAGUYA_CONFIG_ROOT`                 | `.data/kaguya-config` | profile registry；含 provider 与 tier  |
-| `KAGUYA_GATEWAY_ALLOWLIST_PLATFORMS` | 空                    | 逗号分隔的平台 ID；空值表示不限制      |
-| `KAGUYA_GATEWAY_ALLOWLIST_USER_IDS`  | 空                    | 逗号分隔的用户 ID；空值表示不限制      |
-| `KAGUYA_GATEWAY_ALLOWLIST_GROUP_IDS` | 空                    | 逗号分隔的群组 ID；空值表示不限制      |
-| `KAGUYA_NAPCAT_ENABLED`              | `false`               | 是否启用 NapCat                        |
-| `KAGUYA_NAPCAT_WS_URL`               | 无                    | 启用 NapCat 时必填                     |
-| `KAGUYA_NAPCAT_ACCESS_TOKEN`         | 无                    | NapCat access token                    |
-| `KAGUYA_NAPCAT_SELF_ID`              | 无                    | 可选的预期机器人 ID                    |
-| `KAGUYA_NAPCAT_RECONNECT_MS`         | `3000`                | 重连间隔                               |
+运行参数位于 Profile 的 `runtime` 字段；NapCat 位于 `platforms` 的 `type: "napcat"` 条目；Provider、模型层级、白名单和插件也由同一个 selected Profile 管理。Web UI 是内建平台，不计入外部平台数量；至少一个已启用的非 Web 平台是启动硬条件。
 
-Server 不从环境变量读取 provider key、base URL 或 model。检测到旧的 `KAGUYA_LLM_API_KEY`、`KAGUYA_LLM_BASE_URL` 或 `KAGUYA_LLM_MODEL` 会在启动前失败并提示迁移到 profile；错误不会包含变量值。直接嵌入 `KaguyaRuntime` 的测试和 demo 仍可注入确定性模型。
-
-旧变量 `KAGUYA_API_HOST`、`KAGUYA_API_PORT`、`KAGUYA_API_DATABASE_PATH`、`KAGUYA_BOT_DATABASE_PATH` 会让启动直接失败，并提示改用统一变量。
+环境变量只保留 `KAGUYA_CONFIG_ROOT`，用于覆盖 Profile 根目录。其余旧服务、白名单、NapCat、日志和模型环境变量不会被读取或迁移，完整说明见[环境变量参考](docs/reference/environment-variables.md)。
 
 日志变量见[环境变量参考](docs/reference/environment-variables.md)，执行链与脱敏边界见[运行时架构](docs/developers/architecture.md)。
 

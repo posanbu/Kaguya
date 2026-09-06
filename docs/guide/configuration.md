@@ -5,23 +5,21 @@ description: 理解首次配置、Profile、模型层级和敏感文件边界。
 
 # 配置 Kaguya
 
-Kaguya 把服务运行参数和用户模型配置分开管理：监听地址、端口和平台连接来自环境变量；Provider、API Key 与模型目标保存在 profile store。
+Kaguya 将启动所需的运行参数与模型、平台配置统一保存在 selected Profile 中。服务只通过固定的默认目录 `.data/kaguya-config`（或 `KAGUYA_CONFIG_ROOT` 指定的目录）定位 Profile，不再从环境变量读取端口、白名单、NapCat 或模型参数。
 
 ## 首次配置流程
 
 ```mermaid
 flowchart TD
   A[Server 检查 KAGUYA_CONFIG_ROOT] --> B{默认 Profile 是否就绪}
-  B -- 是 --> C[加载并冻结 Profile Registry]
-  C --> D[启动 Runtime 与 Adapter ingress]
-  B -- 否 --> E[进入 setup mode]
-  E --> F[Web UI 收集 Provider 与模型信息]
-  F --> G[写入受保护的 Profile Store]
-  G --> H[提示重启 Server]
-  H --> C
+  B -- 是 --> C[启动配置校验]
+  C -- 通过 --> D[加载并冻结 Profile Registry]
+  D --> E[启动 Runtime 与平台适配器]
+  C -- 失败 --> F[记录日志并输出修复指引]
+  F --> G[进程以非零状态退出]
 ```
 
-以下情况会进入 setup mode：配置目录尚未初始化、默认 profile 不完整，或平台和插件等可选配置尚未明确确认。此时 `/healthz`、Web UI 和配置接口可用，消息 Runtime 与 NapCat ingress 不启动。
+启动配置校验会依次检查 Registry 文件、selected Profile、runtime 字段、AI provider/model tier 和平台适配器。校验失败时不会启动 Runtime、NapCat、HTTP 或 Web UI；终端会显示错误码、字段路径和修复提示，Pino 日志会记录同一组脱敏后的结构化 issue。
 
 配置文件损坏、路径越界、符号链接或权限错误不会进入自动修复流程，Server 会拒绝启动并保留原文件。
 
@@ -38,6 +36,16 @@ flowchart TD
 **Heavy Model** — 用于重量任务的模型 ID，必须与 Light Model 不同。
 
 **可选配置确认** — 必须明确确认当前可以暂不配置平台与插件；系统不会替用户静默作出决定。
+
+## Profile 中的运行配置
+
+**`runtime`** — 保存监听地址、端口、网关令牌、数据库路径、Web 静态目录、CORS、代理信任、限流、日志级别、日志格式和网关白名单。
+
+**平台条目** — NapCat 使用通用平台结构 `id/type/enabled/credentials/settings`，其中 `type` 为 `napcat` 时，`settings` 至少包含 `adapterId`、`wsUrl` 和 `reconnectMs`。
+
+**外部平台要求** — Web UI 是内建适配器，不写入 Profile，也不计入平台数量。至少一个已启用的非 Web 平台是启动硬条件；插件可以为空，但仍必须符合 schema。
+
+配置凭据仍以明文保存在受保护的 Profile 文件中。校验日志只记录字段路径和错误摘要，不记录 API key、access token 或完整配置正文。
 
 保存成功会返回 `restartRequired: true`。重启是必要步骤，因为模型客户端和 profile registry 在 Runtime 启动时创建并冻结。
 
@@ -65,7 +73,5 @@ Profile JSON 中的 API Key 和凭据以明文保存，因此整个配置根目�
 
 ## 环境变量与旧配置
 
-完整服务变量见[环境变量参考](../reference/environment-variables)。Server 不从 `KAGUYA_LLM_API_KEY`、`KAGUYA_LLM_BASE_URL` 或 `KAGUYA_LLM_MODEL` 读取模型配置；检测到这些旧变量会在启动前失败，并提示迁移到 profile store。
-
-旧版配置索引会被明确拒绝，不会自动迁移或删除。升级前应先备份敏感目录，并在受控环境中建立新格式配置。
+环境变量只用于定位 Profile 根目录：`KAGUYA_CONFIG_ROOT` 未设置时使用 `.data/kaguya-config`。端口、令牌、数据库、白名单、NapCat、日志和模型配置都必须写入 Profile。旧环境变量不会被读取、迁移或覆盖 Profile；旧版 Registry 仍会被明确拒绝，升级前应备份敏感目录并建立新格式配置。
 
