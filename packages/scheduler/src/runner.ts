@@ -49,7 +49,6 @@ export class DurableOneShotScheduler {
   }
   async stop(): Promise<void> {
     if (this.#state === "stopped") return;
-    if (this.#state === "starting") await this.#startPromise?.catch(() => undefined);
     this.#state = "stopping";
     for (const timer of this.#timers.values()) this.#clock.clearTimeout(timer.handle);
     this.#timers.clear();
@@ -75,10 +74,11 @@ export class DurableOneShotScheduler {
     let cursor: InformationId | undefined;
     do {
       const page = await this.#store.listOpen({ ...(cursor ? { after: cursor } : {}), limit: this.#batch });
+      if (this.#state !== "starting") return;
       for (const arm of page.arms) { this.arm(arm.scheduleInformationId, arm.dueAt); if (Date.parse(arm.dueAt) <= this.#clock.now().getTime()) await this.fire(arm.scheduleInformationId, this.#timers.get(arm.scheduleInformationId)?.generation ?? 0); }
       cursor = page.nextCursor;
-    } while (cursor !== undefined);
-    this.#state = "started";
+    } while (cursor !== undefined && this.#state === "starting");
+    if (this.#state === "starting") this.#state = "started";
   }
   private arm(id: InformationId, dueAt: string): void {
     const previous = this.#timers.get(id); if (previous) this.#clock.clearTimeout(previous.handle);
@@ -98,6 +98,8 @@ export class DurableOneShotScheduler {
     const due = freezeInformationAtom({ informationId: this.#nextInformationId(), kind: oneShotDueInformationKind.kind, occurredAt: this.#clock.now().toISOString(), source: "core:scheduler", payload: { scheduleInformationId: id, dueAt: timer.dueAt, deliveredAt: this.#clock.now().toISOString() }, references: [{ relation: "core:status-of", informationId: id }] });
     const work = this.#store.emitDue({ scheduleInformationId: id, due } as OneShotDueCommit).catch(() => {
       if (this.#state === "started" || this.#state === "starting") {
+        const current = this.#timers.get(id);
+        if (current !== undefined && current.generation !== generation) return;
         timer.handle = this.#clock.setTimeout(() => void this.fire(id, generation), 1_000);
         this.#timers.set(id, timer);
       }

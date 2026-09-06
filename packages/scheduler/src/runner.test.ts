@@ -154,6 +154,26 @@ describe("DurableOneShotScheduler", () => {
     release();
   });
 
+  it("bounds stop while startup recovery delivery is still in flight", async () => {
+    const clock = new FakeScheduleClock("2026-09-06T12:00:00.000Z");
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const emitDue = vi.fn(async () => {
+      await pending;
+      return { scheduleInformationId: "startup-drain", dueInformationId: "due", created: true };
+    });
+    const store = storeFor([{ scheduleInformationId: "startup-drain", dueAt: "2026-09-06T11:59:00.000Z" }], emitDue);
+    const scheduler = new DurableOneShotScheduler({ store: store as any, clock, nextInformationId: idGenerator(), drainTimeoutMs: 500 });
+    const starting = scheduler.start();
+    await vi.waitFor(() => expect(emitDue).toHaveBeenCalledTimes(1));
+    const stopping = scheduler.stop();
+    await clock.advanceTo(new Date("2026-09-06T12:00:00.500Z"));
+    await stopping;
+    expect(clock.pendingTimerCount()).toBe(0);
+    release();
+    await starting;
+  });
+
   it("refreshes an overdue arm and delivers it before resolving", async () => {
     const clock = new FakeScheduleClock("2026-09-06T12:00:00.000Z");
     const emitDue = vi.fn(async () => ({ scheduleInformationId: "refresh", dueInformationId: "due", created: true }));
