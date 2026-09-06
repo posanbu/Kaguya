@@ -23,7 +23,7 @@ validated.profile.ai;
 
 - Registry：确认 `index.json`、Profile 版本和 selected Profile 可以安全读取；
 - Profile：检查 AI provider、模型层级、平台条目和插件条目的 schema；
-- Runtime：检查监听地址、端口、路径、网关令牌、CORS、代理信任、限流和日志参数；
+- Runtime：检查监听地址、端口、PostgreSQL database URL、路径、网关令牌、CORS、代理信任、限流和日志参数；
 - Adapter：对已启用的 NapCat 条目检查 `ws://`/`wss://` 地址、`adapterId`、重连间隔和凭据类型。
 
 至少一个已启用的非 Web 平台是运行前置条件。Web UI 属于内建适配器，不满足这一条件；插件可以为空，但非法插件结构仍会报告错误。

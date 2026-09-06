@@ -138,7 +138,7 @@ export const runtimeConfigSchema = z.strictObject({
   host: z.string().trim().min(1),
   port: z.int().min(1).max(65_535),
   gatewayToken: z.string().min(16),
-  databasePath: z.string().trim().min(1),
+  databaseUrl: z.url(),
   webDistPath: z.string().trim().min(1),
   corsOrigins: z.array(z.url()),
   trustProxy: z.union([z.literal(false), z.array(z.string().trim().min(1))]),

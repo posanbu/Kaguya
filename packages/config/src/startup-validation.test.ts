@@ -89,7 +89,7 @@ function completeReplacement() {
       host: "127.0.0.1",
       port: 7897,
       gatewayToken: "startup-validation-token",
-      databasePath: ".data/kaguya.sqlite",
+      databaseUrl: "postgresql://kaguya:password@127.0.0.1:5432/kaguya",
       webDistPath: "apps/web/dist",
       corsOrigins: [],
       trustProxy: false as const,

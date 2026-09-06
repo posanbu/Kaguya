@@ -172,7 +172,8 @@ remove it from repository history where required.
 Use `validateStartupConfiguration({ rootDir })` for a read-only validation pass
 before constructing runtime services. It opens the existing registry, validates
 the selected Profile and its `runtime` settings, requires an enabled non-Web
-platform, and applies adapter-specific checks to NapCat entries. It does not
+platform, and applies adapter-specific checks to NapCat entries. Runtime
+configuration uses a PostgreSQL `databaseUrl`; it does not
 bootstrap a missing registry or mutate files.
 
 ```ts
