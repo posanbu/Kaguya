@@ -12,6 +12,7 @@ import {
 } from "@kaguya/sdk";
 import { alwaysReplyFilterModule } from "./always-reply-filter.js";
 import { identityModule } from "./identity.js";
+import { speechDecisionModule } from "./speech-decision.js";
 import {
   createLlmReplyModule,
   type CreateLlmReplyModuleOptions,
@@ -23,6 +24,7 @@ export function createFirstPartyModuleCatalog<
   return defineInformationModuleCatalog(
     alwaysReplyFilterModule,
     identityModule,
+    speechDecisionModule,
     createLlmReplyModule(options),
   );
 }

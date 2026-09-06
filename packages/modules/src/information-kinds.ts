@@ -241,6 +241,79 @@ export const deliveryRequestedInformationKind = defineInformationKind({
   log: { enabled: false },
 });
 
+const turnContextPayloadSchema = z.object({
+  candidateInformationId: nonBlankString,
+  source: messageSourceSchema,
+  directness: z.number().min(0).max(1),
+  contentNeed: z.number().min(0).max(1),
+  messageCount: z.number().int().min(0),
+  recentPresencePenalty: z.number().min(0).max(1),
+  frequencyMultiplier: z.number().min(0).max(1),
+  muted: z.boolean(),
+  safe: z.boolean(),
+  destinationAvailable: z.boolean(),
+  stale: z.boolean(),
+  recheckAt: nonBlankString.optional(),
+  attempt: z.number().int().min(0),
+  totalWaitBudget: z.number().int().min(0),
+}).strict() as any;
+
+export type TurnContextCompletedPayload = z.infer<typeof turnContextPayloadSchema>;
+
+export const turnContextCompletedInformationKind = defineInformationKind({
+  kind: "agent.turn.context.completed",
+  payloadSchema: turnContextPayloadSchema,
+  references: {
+    "core:caused-by": { required: true, multiple: false },
+    "core:context": { required: true, multiple: false, targetKinds: ["core.runtime.context"] },
+    "core:uses-context": { required: true, multiple: true },
+  },
+  log: { enabled: false },
+});
+
+const speechDecisionPayloadSchema = z.object({
+  action: z.enum(["speak", "wait", "silent"]),
+  status: z.enum(["decision", "failed", "superseded"]),
+  candidateInformationId: nonBlankString,
+  turnContextInformationId: nonBlankString,
+  score: z.number(),
+  thresholds: z.object({ speak: z.number(), wait: z.number() }).strict(),
+  components: z.object({ directness: z.number(), contentNeed: z.number(), messageCount: z.number(), recentPresencePenalty: z.number(), frequencyMultiplier: z.number() }).strict(),
+  reasonCodes: z.array(nonBlankString),
+  missingInputs: z.array(nonBlankString),
+  policyDigest: nonBlankString,
+  settingsDigest: nonBlankString,
+  recheckAt: nonBlankString.optional(),
+  dueAt: nonBlankString.optional(),
+  delayMs: z.number().int().min(0).optional(),
+  attempt: z.number().int().min(0),
+  totalWaitBudget: z.number().int().min(0),
+  wakePolicy: z.enum(["none", "recheckAt", "cooldown"]).optional(),
+}).strict() as any;
+
+export type SpeechDecisionPayload = z.infer<typeof speechDecisionPayloadSchema>;
+
+export const speechDecisionInformationKind = defineInformationKind({
+  kind: "agent.speech.decision",
+  payloadSchema: speechDecisionPayloadSchema,
+  references: {
+    "core:caused-by": { required: true, multiple: false, targetKinds: [turnContextCompletedInformationKind.kind] },
+    "core:context": { required: true, multiple: false, targetKinds: ["core.runtime.context"] },
+    "core:uses-context": { required: true, multiple: true },
+  },
+  log: { enabled: false },
+});
+
+export const waitRequestedInformationKind = defineInformationKind({
+  kind: "agent.wait.requested",
+  payloadSchema: z.object({ dueAt: nonBlankString, delayMs: z.number().int().min(0), reason: nonBlankString, attempt: z.number().int().min(0), totalWaitBudget: z.number().int().min(0), wakePolicy: z.enum(["recheckAt", "cooldown"]) }).strict() as any,
+  references: {
+    "core:caused-by": { required: true, multiple: false, targetKinds: [speechDecisionInformationKind.kind] },
+    "core:context": { required: true, multiple: false, targetKinds: ["core.runtime.context"] },
+  },
+  log: { enabled: false },
+});
+
 const identityTerminalSchema = z.object({
   status: z.enum(["complete", "unresolved", "ambiguous", "degraded", "failed"]),
   scopeMode: z.enum(["canonical", "ephemeral"]),
@@ -305,4 +378,5 @@ export const informationModuleKinds = [
   platformAccountEntityInformationKind, platformAccountBindingInformationKind,
   personEntityInformationKind, personObservedInformationKind, personResolutionInformationKind,
   personContextCompletedInformationKind,
+  turnContextCompletedInformationKind, speechDecisionInformationKind, waitRequestedInformationKind,
 ] as const satisfies readonly InformationKindDefinition<string, any>[];

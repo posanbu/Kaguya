@@ -12,6 +12,12 @@ export {
 } from "./always-reply-filter.js";
 export { identityModule } from "./identity.js";
 export {
+  scoreTurnContext,
+  speechDecisionModule,
+  speechDecisionSettingsSchema,
+  type SpeechDecisionSettings,
+} from "./speech-decision.js";
+export {
   createLlmReplyModule,
   replyTaskOutputSchema,
   llmReplySettingsSchema,
@@ -60,6 +66,9 @@ export {
   personObservedInformationKind,
   personResolutionInformationKind,
   personContextCompletedInformationKind,
+  turnContextCompletedInformationKind,
+  speechDecisionInformationKind,
+  waitRequestedInformationKind,
   type PersonFactCandidateInformationPayload,
   type PersonFactExtractedPayload,
   type ReplyRequestedInformationPayload,
