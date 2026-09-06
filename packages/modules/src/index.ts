@@ -11,6 +11,8 @@ export {
   alwaysReplyFilterSettingsSchema,
 } from "./always-reply-filter.js";
 export { identityModule } from "./identity.js";
+export { turnContextModule } from "./turn-context.js";
+export { speechReplyModule } from "./speech-reply.js";
 export {
   scoreTurnContext,
   speechDecisionModule,

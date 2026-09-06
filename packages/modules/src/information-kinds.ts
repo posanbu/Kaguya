@@ -79,7 +79,7 @@ export const replyRequestedInformationKind = defineInformationKind({
     "core:caused-by": {
       required: true,
       multiple: false,
-      targetKinds: [inboundTextInformationKind.kind],
+      targetKinds: [inboundTextInformationKind.kind, "agent.speech.decision"],
     },
     "core:context": {
       required: true,
@@ -243,6 +243,7 @@ export const deliveryRequestedInformationKind = defineInformationKind({
 
 const turnContextPayloadSchema = z.object({
   candidateInformationId: nonBlankString,
+  text: z.string(),
   source: messageSourceSchema,
   directness: z.number().min(0).max(1),
   contentNeed: z.number().min(0).max(1),
@@ -274,6 +275,8 @@ export const turnContextCompletedInformationKind = defineInformationKind({
 const speechDecisionPayloadSchema = z.object({
   action: z.enum(["speak", "wait", "silent"]),
   status: z.enum(["decision", "failed", "superseded"]),
+  text: z.string(),
+  source: messageSourceSchema,
   candidateInformationId: nonBlankString,
   turnContextInformationId: nonBlankString,
   score: z.number(),

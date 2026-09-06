@@ -66,14 +66,14 @@ export const speechDecisionModule = defineInformationModule({
       ] : scored.reasonCodes;
       const action = hardGate ? "silent" : scored.score >= settings.speakThreshold ? "speak" : input.recheckAt !== undefined && input.attempt < input.totalWaitBudget && scored.score >= settings.waitThreshold ? "wait" : "silent";
       const payload = {
-        action, status: "decision", candidateInformationId: input.candidateInformationId, turnContextInformationId: atom.informationId,
+        action, status: "decision", text: input.text, source: input.source, candidateInformationId: input.candidateInformationId, turnContextInformationId: atom.informationId,
         score: scored.score, thresholds: { speak: settings.speakThreshold, wait: settings.waitThreshold }, components: scored.components,
         reasonCodes, missingInputs: scored.missingInputs, policyDigest: settings.policyDigest, settingsDigest: settings.settingsDigest,
         ...(input.recheckAt && action === "wait" ? { recheckAt: input.recheckAt, dueAt: input.recheckAt, delayMs: Math.max(0, Date.parse(input.recheckAt) - context.now().getTime()), wakePolicy: "recheckAt" as const } : {}),
         attempt: input.attempt, totalWaitBudget: input.totalWaitBudget,
       } as any;
       const decision = await context.commitTerminal("core.speech.decision", input.candidateInformationId, speechDecisionInformationKind, { payload, references: [{ relation: "core:uses-context", informationId: atom.informationId }] });
-      if (action === "wait") await context.registerOnce("core.speech.wait", decision.informationId, waitRequestedInformationKind, { payload: { dueAt: input.recheckAt!, delayMs: payload.delayMs!, reason: "score-below-speak-threshold", attempt: input.attempt, totalWaitBudget: input.totalWaitBudget, wakePolicy: "recheckAt" }, references: [{ relation: "core:caused-by", informationId: decision.informationId }] });
+      if (action === "wait") await context.registerOnce("core.speech.wait", decision.informationId, waitRequestedInformationKind, { payload: { dueAt: input.recheckAt!, delayMs: payload.delayMs!, reason: "score-below-speak-threshold", attempt: input.attempt, totalWaitBudget: input.totalWaitBudget, wakePolicy: "recheckAt" } });
     })],
   }),
 });

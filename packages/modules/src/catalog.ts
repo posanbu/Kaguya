@@ -13,6 +13,8 @@ import {
 import { alwaysReplyFilterModule } from "./always-reply-filter.js";
 import { identityModule } from "./identity.js";
 import { speechDecisionModule } from "./speech-decision.js";
+import { turnContextModule } from "./turn-context.js";
+import { speechReplyModule } from "./speech-reply.js";
 import {
   createLlmReplyModule,
   type CreateLlmReplyModuleOptions,
@@ -25,6 +27,8 @@ export function createFirstPartyModuleCatalog<
     alwaysReplyFilterModule,
     identityModule,
     speechDecisionModule,
+    turnContextModule,
+    speechReplyModule,
     createLlmReplyModule(options),
   );
 }
@@ -33,6 +37,7 @@ export const firstPartyModuleActivations: readonly InformationModuleActivation[]
     Object.freeze({
       instanceId: "filter.default",
       definitionId: "demo.filter.always",
+      enabled: false,
       settings: Object.freeze({}),
     }),
     Object.freeze({
@@ -48,4 +53,7 @@ export const firstPartyModuleActivations: readonly InformationModuleActivation[]
       definitionId: "core.identity.normalize",
       settings: Object.freeze({}),
     }),
+    Object.freeze({ instanceId: "turn-context.default", definitionId: "core.turn.context", settings: Object.freeze({}) }),
+    Object.freeze({ instanceId: "speech-decision.default", definitionId: "core.speech.decision", settings: Object.freeze({}) }),
+    Object.freeze({ instanceId: "speech-reply.default", definitionId: "core.speech.reply-bridge", settings: Object.freeze({}) }),
   ]);
