@@ -183,6 +183,8 @@ export const speechDecisionModule = defineInformationModule({
                   attempt: input.attempt,
                   totalWaitBudget: input.totalWaitBudget,
                   wakePolicy: "recheckAt",
+                  wakeOnMessage: true,
+                  source: input.source,
                 },
               },
             );

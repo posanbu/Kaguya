@@ -16,6 +16,12 @@ export {
   associationModule,
 } from "./association.js";
 export { identityModule } from "./identity.js";
+export {
+  heartbeatModule,
+  heartbeatSettingsSchema,
+  heartbeatScopeSelector,
+  heartbeatDueSelector,
+} from "./heartbeat.js";
 export { turnContextModule } from "./turn-context.js";
 export { speechReplyModule } from "./speech-reply.js";
 export {
@@ -86,6 +92,11 @@ export {
   turnContextCompletedInformationKind,
   speechDecisionInformationKind,
   waitRequestedInformationKind,
+  heartbeatScheduledInformationKind,
+  heartbeatFiredInformationKind,
+  heartbeatSupersededInformationKind,
+  heartbeatFailedInformationKind,
+  turnCandidateInformationKind,
   type PersonFactCandidateInformationPayload,
   type PersonFactExtractedPayload,
   type AssociationCandidateInformationPayload,

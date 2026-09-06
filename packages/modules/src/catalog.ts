@@ -16,6 +16,7 @@ import { identityModule } from "./identity.js";
 import { speechDecisionModule } from "./speech-decision.js";
 import { turnContextModule } from "./turn-context.js";
 import { speechReplyModule } from "./speech-reply.js";
+import { heartbeatModule } from "./heartbeat.js";
 import {
   createLlmReplyModule,
   type CreateLlmReplyModuleOptions,
@@ -32,6 +33,7 @@ export function createFirstPartyModuleCatalog<
     turnContextModule,
     speechReplyModule,
     createLlmReplyModule(options),
+    heartbeatModule,
   );
 }
 export const firstPartyModuleActivations: readonly InformationModuleActivation[] =

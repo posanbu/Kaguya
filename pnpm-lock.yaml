@@ -244,6 +244,9 @@ importers:
       '@kaguya/prompt':
         specifier: workspace:*
         version: link:../prompt
+      '@kaguya/scheduler':
+        specifier: workspace:*
+        version: link:../scheduler
       '@kaguya/schema':
         specifier: workspace:*
         version: link:../schema

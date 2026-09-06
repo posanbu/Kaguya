@@ -128,6 +128,11 @@ describe("runtime information kinds", () => {
       "agent.turn.context.completed",
       "agent.speech.decision",
       "agent.wait.requested",
+      "agent.heartbeat.scheduled",
+      "agent.heartbeat.fired",
+      "agent.heartbeat.superseded",
+      "agent.heartbeat.failed",
+      "agent.turn.candidate",
       "core.delivery.delivered",
       "core.delivery.failed",
     ]);
