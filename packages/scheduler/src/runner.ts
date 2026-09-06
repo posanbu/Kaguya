@@ -53,7 +53,10 @@ export class DurableOneShotScheduler {
     this.#state = "stopping";
     for (const timer of this.#timers.values()) this.#clock.clearTimeout(timer.handle);
     this.#timers.clear();
-    await Promise.race([Promise.allSettled([...this.#inFlight]), new Promise<void>((resolve) => setTimeout(resolve, this.#drain))]);
+    let timeoutHandle: unknown;
+    const timeout = new Promise<void>((resolve) => { timeoutHandle = this.#clock.setTimeout(resolve, this.#drain); });
+    await Promise.race([Promise.allSettled([...this.#inFlight]), timeout]);
+    if (timeoutHandle !== undefined) this.#clock.clearTimeout(timeoutHandle);
     this.#state = "stopped";
   }
   async refresh(scheduleInformationId: InformationId): Promise<void> {
@@ -93,7 +96,13 @@ export class DurableOneShotScheduler {
     if (remaining > 0) { timer.handle = this.#clock.setTimeout(() => void this.fire(id, generation), Math.min(remaining, MAX_TIMEOUT)); return; }
     this.#timers.delete(id);
     const due = freezeInformationAtom({ informationId: this.#nextInformationId(), kind: oneShotDueInformationKind.kind, occurredAt: this.#clock.now().toISOString(), source: "core:scheduler", payload: { scheduleInformationId: id, dueAt: timer.dueAt, deliveredAt: this.#clock.now().toISOString() }, references: [{ relation: "core:status-of", informationId: id }] });
-    const work = this.#store.emitDue({ scheduleInformationId: id, due } as OneShotDueCommit).catch(() => undefined).finally(() => this.#inFlight.delete(work));
+    const work = this.#store.emitDue({ scheduleInformationId: id, due } as OneShotDueCommit).catch(() => {
+      if (this.#state === "started" || this.#state === "starting") {
+        timer.handle = this.#clock.setTimeout(() => void this.fire(id, generation), 1_000);
+        this.#timers.set(id, timer);
+      }
+    }).finally(() => this.#inFlight.delete(work));
     this.#inFlight.add(work);
+    await work;
   }
 }

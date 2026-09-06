@@ -11,7 +11,7 @@ describe("DurableOneShotScheduler", () => {
     const clock = new FakeScheduleClock("2026-09-06T12:00:00.000Z");
     const emitDue = vi.fn(async () => ({ scheduleInformationId: "x", dueInformationId: "d", created: true }));
     const store = { emitDue, listOpen: vi.fn(async ({ after }: { after?: string }) => after ? { arms: [] } : { arms: [{ scheduleInformationId: "future", dueAt: "2026-09-06T12:01:00.000Z" }, { scheduleInformationId: "overdue", dueAt: "2026-09-06T11:59:00.000Z" }] }) };
-    const scheduler = new DurableOneShotScheduler({ store, clock, nextInformationId: (() => { let n = 0; return () => `due-${++n}` as any; })(), recoveryBatchSize: 1 });
+    const scheduler = new DurableOneShotScheduler({ store: store as any, clock, nextInformationId: (() => { let n = 0; return () => `due-${++n}` as any; })(), recoveryBatchSize: 1 });
     await scheduler.start();
     expect(emitDue).toHaveBeenCalledWith(expect.objectContaining({ scheduleInformationId: "overdue" }));
     expect(clock.pendingTimerCount()).toBe(1);

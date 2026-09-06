@@ -520,6 +520,11 @@ export class InformationCore implements OneShotScheduleCorePort {
     this.assertState("started");
     const registered = this.registry.assertRegistered(definition as InformationKindDefinition<string, any>);
     const atom = informationAtomSchema.parse({ informationId: this.parseInformationId(this.#nextInformationId()), kind: registered.kind, occurredAt: this.#now().toISOString(), source: "core:scheduler", payload, references });
+    const expectations = buildReferenceExpectations(registered.references);
+    const byRelation = new Map(references.map((reference) => [reference.relation, reference]));
+    for (const expectation of expectations) {
+      if (expectation.required && !byRelation.has(expectation.relation)) throw new InformationReferenceValidationError(registered.kind, expectation.relation, "required");
+    }
     return freezeInformationAtom(atom as InformationAtom);
   }
 
