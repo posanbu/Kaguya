@@ -134,7 +134,7 @@ function normalizeError(error: unknown): KaguyaLlmError {
     : isRetryableError(error)
       ? "retryable"
       : "non-retryable";
-  return new KaguyaLlmError(errorMessage(error), { kind, cause: error });
+  return new KaguyaLlmError(controlledErrorMessage(kind), { kind, cause: error });
 }
 
 function isAbortError(error: unknown): boolean {
@@ -160,8 +160,13 @@ function isRetryableError(error: unknown): boolean {
   );
 }
 
-function errorMessage(error: unknown): string {
-  if (error instanceof Error && error.message.length > 0) return error.message;
-  if (typeof error === "string" && error.length > 0) return error;
-  return "Language model generation failed";
+function controlledErrorMessage(kind: KaguyaLlmErrorKind): string {
+  switch (kind) {
+    case "cancelled":
+      return "Language model generation cancelled";
+    case "retryable":
+      return "Language model request failed and may be retried";
+    case "non-retryable":
+      return "Language model generation failed";
+  }
 }

@@ -6,6 +6,7 @@
  */
 import type { CompiledPrompt } from "@kaguya/schema";
 import { z } from "@kaguya/schema";
+import { APICallError } from "ai";
 import { MockLanguageModelV3 } from "ai/test";
 import { describe, expect, it } from "vitest";
 
@@ -15,7 +16,7 @@ const prompt: CompiledPrompt = { kind: "route", text: "hello", fragments: [], pr
 const outputSchema = z.object({ answer: z.string() }).strict();
 
 describe("generic KaguyaLlmClient boundary", () => {
-  it("passes the request signal and disables provider retries", async () => {
+  it("passes the request signal", async () => {
     const signal = new AbortController().signal;
     const model = new MockLanguageModelV3({
       doGenerate: {
@@ -31,6 +32,14 @@ describe("generic KaguyaLlmClient boundary", () => {
       output: { answer: "ok" },
     });
     expect(model.doGenerateCalls[0]?.abortSignal).toBe(signal);
+    expect(model.doGenerateCalls).toHaveLength(1);
+  });
+
+  it("does not retry a retryable provider error when retries are disabled", async () => {
+    const providerError = new APICallError({ message: "secret endpoint", url: "https://secret.invalid", requestBodyValues: {}, isRetryable: true });
+    const model = new MockLanguageModelV3({ doGenerate: () => Promise.reject(providerError) });
+    const client = new KaguyaLlmClient({ model });
+    await expect(client.generate({ modelId: "model", prompt, outputSchema })).rejects.toMatchObject({ kind: "retryable", message: "Language model request failed and may be retried" });
     expect(model.doGenerateCalls).toHaveLength(1);
   });
 

@@ -43,11 +43,17 @@ function modelResult(text: string) {
 }
 
 function request(kind: CompiledPrompt["kind"] = "route") {
-  const outputSchema = { route: routeOutputSchema, reply: replyOutputSchema, state: stateOutputSchema, memory: memoryOutputSchema }[kind];
+  const outputSchema = kind === "route"
+    ? routeOutputSchema
+    : kind === "reply"
+      ? replyOutputSchema
+      : kind === "state"
+        ? stateOutputSchema
+        : memoryOutputSchema;
   return {
     modelId: "deterministic-model",
     prompt: { ...prompt, kind },
-    outputSchema: outputSchema as typeof routeOutputSchema,
+    outputSchema,
   };
 }
 
@@ -94,15 +100,16 @@ describe("KaguyaLlmClient", () => {
 
   it("rethrows a normalized provider error without a persistence dependency", async () => {
     const providerError = new APICallError({
-      message: "provider unavailable",
+      message: "provider unavailable: https://secret.invalid/token=abc",
       url: "https://provider.invalid/generate",
       requestBodyValues: {},
       isRetryable: false,
     });
-    const client = new KaguyaLlmClient({
-      model: new MockLanguageModelV3({
+    const model = new MockLanguageModelV3({
         doGenerate: () => Promise.reject(providerError),
-      }),
+      });
+    const client = new KaguyaLlmClient({
+      model,
       now: deterministicClock(
         "2026-09-04T00:00:00.000Z",
         "2026-09-04T00:00:00.010Z",
@@ -112,7 +119,7 @@ describe("KaguyaLlmClient", () => {
     await expect(client.generate(request())).rejects.toMatchObject({
       name: "KaguyaLlmError",
       kind: "non-retryable",
-      message: "provider unavailable",
+      message: "Language model generation failed",
     });
   });
 
@@ -124,10 +131,11 @@ describe("KaguyaLlmClient", () => {
       responseHeaders: { "retry-after-ms": "0" },
       isRetryable: true,
     });
-    const client = new KaguyaLlmClient({
-      model: new MockLanguageModelV3({
+    const model = new MockLanguageModelV3({
         doGenerate: () => Promise.reject(providerError),
-      }),
+      });
+    const client = new KaguyaLlmClient({
+      model,
       now: deterministicClock(
         "2026-09-04T00:00:00.000Z",
         "2026-09-04T00:00:00.001Z",
@@ -137,6 +145,7 @@ describe("KaguyaLlmClient", () => {
     await expect(client.generate(request())).rejects.toMatchObject({
       kind: "retryable",
     });
+    expect(model.doGenerateCalls).toHaveLength(1);
   });
 
   it("normalizes AbortError as cancelled", async () => {
