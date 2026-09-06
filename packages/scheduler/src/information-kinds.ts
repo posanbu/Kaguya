@@ -9,19 +9,22 @@ import { informationIdSchema, z } from "@kaguya/schema";
 import { defineInformationKind } from "@kaguya/sdk";
 
 const activationSchema = z.object({ instanceId: z.string().trim().min(1), definitionId: z.string().trim().min(1) }).strict();
-const opaqueJsonPrimitiveSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
-const opaqueJsonArrayItemSchema = z.union([opaqueJsonPrimitiveSchema, z.record(z.string(), opaqueJsonPrimitiveSchema)]);
-const opaqueJsonNestedObjectSchema = z.record(z.string(), z.union([opaqueJsonPrimitiveSchema, z.array(opaqueJsonArrayItemSchema)]));
-const opaqueJsonObjectValueSchema = z.union([
-  opaqueJsonPrimitiveSchema,
-  opaqueJsonNestedObjectSchema,
-  z.array(opaqueJsonArrayItemSchema),
-]);
-const opaqueJsonObjectSchema = z.record(z.string(), opaqueJsonObjectValueSchema);
+const opaqueJsonValueSchema: z.ZodTypeAny = z.lazy(() =>
+  z.union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.null(),
+    z.array(opaqueJsonValueSchema),
+    z.record(z.string(), opaqueJsonValueSchema),
+  ]),
+);
+const opaqueJsonObjectSchema = z.record(z.string(), opaqueJsonValueSchema);
 const requestedPayloadSchema = z.object({ operationKey: z.string().trim().min(1), dueAt: z.iso.datetime({ offset: true }), input: opaqueJsonObjectSchema, activation: activationSchema }).strict();
 const duePayloadSchema = z.object({ scheduleInformationId: informationIdSchema, dueAt: z.iso.datetime({ offset: true }), deliveredAt: z.iso.datetime({ offset: true }) }).strict();
 const terminalReference = { "core:status-of": { required: true, multiple: false, targetKinds: ["core.schedule.one-shot.requested"] } } as const;
-export const oneShotRequestedInformationKind = defineInformationKind({ kind: "core.schedule.one-shot.requested", payloadSchema: requestedPayloadSchema, references: { "core:caused-by": { required: true, multiple: false }, "core:replaces": { required: false, multiple: false } }, log: { enabled: false } });
+const requestedKindBase = defineInformationKind({ kind: "core.schedule.one-shot.requested", payloadSchema: z.object({ operationKey: z.string(), dueAt: z.string(), input: z.object({}).strict(), activation: activationSchema }).strict(), references: { "core:caused-by": { required: true, multiple: false }, "core:replaces": { required: false, multiple: false } }, log: { enabled: false } });
+export const oneShotRequestedInformationKind = Object.freeze({ ...requestedKindBase, payloadSchema: requestedPayloadSchema });
 export const oneShotDueInformationKind = defineInformationKind({ kind: "core.schedule.one-shot.due", payloadSchema: duePayloadSchema, references: terminalReference, log: { enabled: false } });
 export const oneShotFiredInformationKind = defineInformationKind({ kind: "core.schedule.one-shot.fired", payloadSchema: z.object({}).strict(), references: terminalReference, log: { enabled: false } });
 export const oneShotSupersededInformationKind = defineInformationKind({ kind: "core.schedule.one-shot.superseded", payloadSchema: z.object({}).strict(), references: terminalReference, log: { enabled: false } });

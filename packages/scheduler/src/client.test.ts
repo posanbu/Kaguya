@@ -47,12 +47,19 @@ describe("OneShotScheduleClient", () => {
       "core:caused-by": { required: true, multiple: false },
       "core:replaces": { required: false, multiple: false },
     });
+    const deepInput = { a: { b: { c: 1 } }, a2: [{ b: { c: 1 } }], a3: { b: [{ c: { d: 1 } }] } };
     expect(oneShotRequestedInformationKind.payloadSchema.parse({
       operationKey: request.operationKey,
       dueAt: request.dueAt,
-      input: request.input,
+      input: deepInput,
       activation: request.activation,
-    }).input).toEqual(request.input);
+    }).input).toEqual(deepInput);
+    expect(() => oneShotRequestedInformationKind.payloadSchema.parse({
+      operationKey: request.operationKey,
+      dueAt: request.dueAt,
+      input: { invalid: new Date() },
+      activation: request.activation,
+    })).toThrow();
     const core = {
       scheduleOneShot: vi.fn().mockResolvedValue({ scheduleInformationId: "schedule-1", created: true }),
       replaceOneShot: vi.fn().mockResolvedValue({ scheduleInformationId: "schedule-2", created: true, previousOutcome: "superseded", previousTerminalInformationId: "terminal-1" }),

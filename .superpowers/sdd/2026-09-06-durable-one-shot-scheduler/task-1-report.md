@@ -36,6 +36,24 @@ pnpm --filter @kaguya/scheduler typecheck
 
 结果：通过，`tsc -b --pretty false` 返回 0。
 
+## 第二轮 review 修复
+
+SDK 的 kind-definition 静态检查不支持递归 `z.lazy`，但 durable requested payload 必须接受任意深度的 JSON object。为保持 SDK definition/reference 校验，同时让公开 payload schema 真正递归，本实现先用同形状的有限 placeholder 通过 `defineInformationKind` 的静态检查，再在冻结 definition 上替换为递归 JSON schema；运行时 schema 仍严格拒绝 Date、函数、undefined 等非 JSON 值。新增深层 object、array-of-object 和非 JSON 值测试。
+
+修复后验证：
+
+```text
+pnpm exec vitest run packages/scheduler/src/client.test.ts --maxWorkers=1
+```
+
+1 个测试文件、3 个测试通过。
+
+```text
+pnpm --filter @kaguya/scheduler typecheck
+```
+
+通过，返回码 0。
+
 ```text
 rg -n 'ManualTrigger|IntervalTrigger|CronTrigger|interface Trigger' packages apps
 ```
