@@ -79,6 +79,10 @@ Host 在任何 `create()` 前完成全部启用实例的 settings parse、深冻
 
 Runtime 的 `submit()` 返回已接受输入的根 ID；可靠回复异步推进，返回时 `deliveries` 通常为空。调用方应通过账本观察终态。外部模型和平台副作用仍是 at-least-once：进程可能在外部动作完成、账本终态提交之前崩溃。
 
+## Durable One-Shot 能力
+
+需要等待、去抖或延迟一次处理的模块可以声明 `kaguya:schedule.one-shot@1`，并把输入身份放在 opaque JSON `input` 中。模块负责决定何时调用 `replace()` 合并输入、如何读取 requested atom，以及在 due consumer 中调用 `finish()`。调度器只负责绝对时间、恢复和唯一终态；它不会启动 Heartbeat、Heartflow、Speaking 或 Model Task，也不会解释模块输入。
+
 ## 显式上下文与 Prompt
 
 Selector 通过受限只读账本的 `find()`、`related()`、`retrieve()` 取得候选，只返回有序 informationId。Core 校验 ID、拒绝重复或越权结果，并按顺序重新加载冻结原子。模块不能把未落账 payload 拼成上下文。

@@ -604,9 +604,6 @@ git commit -m "feat: add SQLite persistence"
 
 - Consumes: all packages.
 - Produces:
-  - `ManualTrigger`
-  - `IntervalTrigger`
-  - `CronTrigger`
   - `createMessageWorkflow()`
   - `createHeartbeatWorkflow()`
   - `createMemoryWorkflow()`
@@ -642,7 +639,7 @@ export interface Trigger<TPayload> {
 }
 ```
 
-`ManualTrigger.fire()` invokes the handler immediately. `IntervalTrigger` uses an injected timer API. `CronTrigger` accepts a six-field expression and injected next-run calculator; invalid expressions fail during construction.
+旧版内存触发器设计已被持久化的 Durable One-Shot 调度协议替代；当前调度器只接受带时区的绝对截止时间，并从数据库 projection 恢复 timer。
 
 - [ ] **Step 5: Implement workflow service composition**
 

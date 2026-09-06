@@ -26,6 +26,7 @@ export const sidebar: DefaultTheme.SidebarItem[] = [
       { text: "运行时架构", link: "/developers/architecture" },
       { text: "配置生命周期", link: "/developers/configuration-lifecycle" },
       { text: "信息账本", link: "/developers/information-ledger" },
+      { text: "Durable One-Shot 调度", link: "/developers/scheduler" },
       { text: "参与贡献", link: "/developers/contributing" },
       { text: "文档编写规范", link: "/developers/markdown-features" },
     ],
