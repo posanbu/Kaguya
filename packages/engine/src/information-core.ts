@@ -519,8 +519,9 @@ export class InformationCore implements OneShotScheduleCorePort {
   private async buildOneShotAtom(definition: InformationKindDefinition<string, any>, payload: JsonObject, references: readonly InformationReference[]): Promise<DeepReadonly<InformationAtom>> {
     this.assertState("started");
     const registered = this.registry.assertRegistered(definition as InformationKindDefinition<string, any>);
+    const parsedPayload = registered.payloadSchema.parse(payload);
     const parsedReferences = references.map((reference) => informationReferenceSchema.parse(reference));
-    const atom = informationAtomSchema.parse({ informationId: this.parseInformationId(this.#nextInformationId()), kind: registered.kind, occurredAt: this.#now().toISOString(), source: "core:scheduler", payload, references: parsedReferences });
+    const atom = informationAtomSchema.parse({ informationId: this.parseInformationId(this.#nextInformationId()), kind: registered.kind, occurredAt: this.#now().toISOString(), source: "core:scheduler", payload: parsedPayload, references: parsedReferences });
     const expectations = buildReferenceExpectations(registered.references);
     const byRelation = new Map<string, InformationReference[]>();
     for (const reference of parsedReferences) byRelation.set(reference.relation, [...(byRelation.get(reference.relation) ?? []), reference]);

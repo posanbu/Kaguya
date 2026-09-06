@@ -1098,6 +1098,7 @@ describe("InformationCore", () => {
     } as const;
 
     await expect(core.scheduleOneShot({ ...request, sourceInformationId: "missing-source" as never })).rejects.toMatchObject({ reason: "missing-target" });
+    await expect(core.scheduleOneShot({ ...request, dueAt: "tomorrow" as never })).rejects.toThrow();
     await expect(core.scheduleOneShot({ ...request, references: [{ relation: "core:caused-by", informationId: source.informationId }] })).rejects.toMatchObject({ reason: "multiple" });
     await expect(core.scheduleOneShot({ ...request, references: [{ relation: "core:rogue", informationId: source.informationId }] })).rejects.toMatchObject({ reason: "undeclared" });
     await expect(core.replaceOneShot({ ...request, previousScheduleInformationId: source.informationId })).rejects.toMatchObject({ reason: "target-kind" });
