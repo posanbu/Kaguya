@@ -130,6 +130,25 @@ describe("DurableOneShotScheduler", () => {
     expect(clock.pendingTimerCount()).toBe(0);
   });
 
+  it("does not resurrect an arm canceled while due delivery is failing", async () => {
+    const clock = new FakeScheduleClock("2026-09-06T12:00:00.000Z");
+    let rejectDue!: (error: Error) => void;
+    const delivery = new Promise<never>((_, reject) => { rejectDue = reject; });
+    let arms: readonly Arm[] = [{ scheduleInformationId: "cancel", dueAt: "2026-09-06T12:01:00.000Z" }];
+    const emitDue = vi.fn(async () => delivery);
+    const store = { emitDue, listOpen: vi.fn(async () => ({ arms })) };
+    const scheduler = new DurableOneShotScheduler({ store: store as any, clock, nextInformationId: idGenerator() });
+    await scheduler.start();
+    await clock.advanceTo(new Date("2026-09-06T12:01:00.000Z"));
+    await vi.waitFor(() => expect(emitDue).toHaveBeenCalledTimes(1));
+    arms = [];
+    await scheduler.refresh("cancel" as never);
+    rejectDue(new Error("delivery failed"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(clock.pendingTimerCount()).toBe(0);
+  });
+
   it("waits for an in-flight callback during bounded stop without finishing the arm", async () => {
     const clock = new FakeScheduleClock("2026-09-06T12:00:00.000Z");
     let release!: () => void;
@@ -212,5 +231,26 @@ describe("DurableOneShotScheduler", () => {
     await scheduler.start();
     expect(listOpen).toHaveBeenCalledTimes(2);
     expect(clock.pendingTimerCount()).toBe(2);
+  });
+
+  it("restores open arms after a restart and delivers overdue work once", async () => {
+    const clock = new FakeScheduleClock("2026-09-06T12:00:00.000Z");
+    let arms: readonly Arm[] = [{ scheduleInformationId: "future", dueAt: "2026-09-06T12:01:00.000Z" }];
+    const emitDue = vi.fn(async ({ scheduleInformationId }: { scheduleInformationId: string }) => ({ scheduleInformationId, dueInformationId: "due", created: true }));
+    const store = { emitDue, listOpen: vi.fn(async () => ({ arms })) };
+    const first = new DurableOneShotScheduler({ store: store as any, clock, nextInformationId: idGenerator() });
+    await first.start();
+    expect(clock.pendingTimerCount()).toBe(1);
+    await first.stop();
+    expect(clock.pendingTimerCount()).toBe(0);
+    arms = [
+      { scheduleInformationId: "future", dueAt: "2026-09-06T12:01:00.000Z" },
+      { scheduleInformationId: "overdue", dueAt: "2026-09-06T11:59:00.000Z" },
+    ];
+    const second = new DurableOneShotScheduler({ store: store as any, clock, nextInformationId: idGenerator() });
+    await second.start();
+    expect(emitDue).toHaveBeenCalledTimes(1);
+    expect(emitDue).toHaveBeenCalledWith(expect.objectContaining({ scheduleInformationId: "overdue" }));
+    expect(clock.pendingTimerCount()).toBe(1);
   });
 });
