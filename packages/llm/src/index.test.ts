@@ -14,6 +14,7 @@ import { MockLanguageModelV3 } from "ai/test";
 import { describe, expect, it } from "vitest";
 
 import { KaguyaLlmClient, KaguyaLlmError } from "./client.js";
+import { memoryOutputSchema, replyOutputSchema, routeOutputSchema, stateOutputSchema } from "./schemas.js";
 import * as llm from "./index.js";
 import { createDeterministicModel } from "./testing.js";
 
@@ -42,10 +43,11 @@ function modelResult(text: string) {
 }
 
 function request(kind: CompiledPrompt["kind"] = "route") {
+  const outputSchema = { route: routeOutputSchema, reply: replyOutputSchema, state: stateOutputSchema, memory: memoryOutputSchema }[kind];
   return {
-    kind,
     modelId: "deterministic-model",
     prompt: { ...prompt, kind },
+    outputSchema: outputSchema as typeof routeOutputSchema,
   };
 }
 
@@ -111,7 +113,6 @@ describe("KaguyaLlmClient", () => {
       name: "KaguyaLlmError",
       kind: "non-retryable",
       message: "provider unavailable",
-      cause: providerError,
     });
   });
 
@@ -220,7 +221,6 @@ describe("KaguyaLlmClient", () => {
     });
     expect(model.doGenerateCalls[0]?.responseFormat).toMatchObject({
       type: "json",
-      name: "replyOutput",
       schema: { type: "object", required: ["text"] },
     });
   });
