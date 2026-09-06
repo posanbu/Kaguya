@@ -254,6 +254,9 @@ const turnContextPayloadSchema = z.object({
   safe: z.boolean(),
   destinationAvailable: z.boolean(),
   stale: z.boolean(),
+  /** Optional enrichments are intentionally advisory and do not affect timing. */
+  memory: z.array(nonBlankString).optional(),
+  association: z.array(nonBlankString).optional(),
   recheckAt: nonBlankString.optional(),
   attempt: z.number().int().min(0),
   totalWaitBudget: z.number().int().min(0),

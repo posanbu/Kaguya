@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { scoreTurnContext, speechDecisionSettingsSchema, speechDecisionModule } from "./speech-decision.js";
+import { decideSpeechAction, scoreTurnContext, speechDecisionSettingsSchema, speechDecisionModule } from "./speech-decision.js";
 
 const context = {
   candidateInformationId: "candidate-1",
@@ -12,6 +12,28 @@ describe("speech decision module", () => {
   it("scores the same immutable context deterministically", () => {
     expect(scoreTurnContext(context)).toEqual(scoreTurnContext(structuredClone(context)));
     expect(scoreTurnContext(context).score).toBeGreaterThan(0.6);
+  });
+
+  it("speaks when the deterministic score clears the speak threshold", () => {
+    expect(decideSpeechAction(context)).toEqual({ action: "speak", reasonCodes: [] });
+  });
+
+  it("waits when score is actionable and a recheck budget remains", () => {
+    const input = { ...context, directness: 0, contentNeed: 1, recheckAt: "2030-01-01T00:00:00.000Z" };
+    expect(scoreTurnContext(input).score).toBeGreaterThanOrEqual(0.35);
+    expect(decideSpeechAction(input)).toEqual({ action: "wait", reasonCodes: [] });
+  });
+
+  it("silently drops low score and hard-gated candidates", () => {
+    expect(decideSpeechAction({ ...context, directness: 0, contentNeed: 0 })).toEqual({ action: "silent", reasonCodes: [] });
+    expect(decideSpeechAction({ ...context, muted: true })).toEqual({ action: "silent", reasonCodes: ["muted"] });
+    expect(decideSpeechAction({ ...context, safe: false })).toEqual({ action: "silent", reasonCodes: ["unsafe"] });
+  });
+
+  it("keeps optional enrichments neutral and reports them as missing", () => {
+    const scored = scoreTurnContext(context);
+    expect(scored.missingInputs).toEqual(["memory", "association", "recheckAt"]);
+    expect(scoreTurnContext({ ...context, memory: ["fact-1"], association: ["association-1"] }).score).toBe(scored.score);
   });
 
   it("hard gates mute and unsafe contexts regardless of score", () => {

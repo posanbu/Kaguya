@@ -21,6 +21,8 @@ export const speechDecisionSettingsSchema = z.object({
 
 export type SpeechDecisionSettings = z.infer<typeof speechDecisionSettingsSchema>;
 
+export type SpeechAction = "speak" | "wait" | "silent";
+
 export function scoreTurnContext(input: TurnContextCompletedPayload): {
   score: number;
   components: Record<string, number>;
@@ -36,8 +38,39 @@ export function scoreTurnContext(input: TurnContextCompletedPayload): {
   };
   const score = Math.max(0, Math.min(1, (components.directness * 0.35 + components.contentNeed * 0.35 + components.messageCount * 0.15 - components.recentPresencePenalty * 0.15) * components.frequencyMultiplier));
   const missingInputs: string[] = [];
+  // Memory and association are optional enrichments. They are deliberately
+  // neutral until a later module provides them, while remaining auditable.
+  if (input.memory === undefined) missingInputs.push("memory");
+  if (input.association === undefined) missingInputs.push("association");
   if (input.recheckAt === undefined) missingInputs.push("recheckAt");
   return { score, components, reasonCodes: [], missingInputs };
+}
+
+export function decideSpeechAction(
+  input: TurnContextCompletedPayload,
+  settings: Pick<SpeechDecisionSettings, "speakThreshold" | "waitThreshold"> = {
+    speakThreshold: 0.6,
+    waitThreshold: 0.35,
+  },
+): { action: SpeechAction; reasonCodes: string[] } {
+  const scored = scoreTurnContext(input);
+  const reasonCodes = [
+    ...(input.muted ? ["muted"] : []),
+    ...(!input.safe ? ["unsafe"] : []),
+    ...(!input.destinationAvailable ? ["no-destination"] : []),
+    ...(input.stale ? ["stale-candidate"] : []),
+    ...(input.frequencyMultiplier <= 0 ? ["frequency-zero"] : []),
+  ];
+  if (reasonCodes.length > 0) return { action: "silent", reasonCodes };
+  if (scored.score >= settings.speakThreshold) return { action: "speak", reasonCodes: [] };
+  if (
+    input.recheckAt !== undefined &&
+    input.attempt < input.totalWaitBudget &&
+    scored.score >= settings.waitThreshold
+  ) {
+    return { action: "wait", reasonCodes: [] };
+  }
+  return { action: "silent", reasonCodes: [] };
 }
 
 export const speechDecisionModule = defineInformationModule({
@@ -56,15 +89,7 @@ export const speechDecisionModule = defineInformationModule({
     subscriptions: [onInformation(turnContextCompletedInformationKind, { subscriptionId: "core.speech.turn-context", delivery: "durable" }, async (atom, context) => {
       const input = atom.payload as TurnContextCompletedPayload;
       const scored = scoreTurnContext(input);
-      const hardGate = input.muted || !input.safe || !input.destinationAvailable || input.stale || input.frequencyMultiplier <= 0;
-      const reasonCodes = hardGate ? [
-        ...(input.muted ? ["muted"] : []),
-        ...(!input.safe ? ["unsafe"] : []),
-        ...(!input.destinationAvailable ? ["no-destination"] : []),
-        ...(input.stale ? ["stale-candidate"] : []),
-        ...(input.frequencyMultiplier <= 0 ? ["frequency-zero"] : []),
-      ] : scored.reasonCodes;
-      const action = hardGate ? "silent" : scored.score >= settings.speakThreshold ? "speak" : input.recheckAt !== undefined && input.attempt < input.totalWaitBudget && scored.score >= settings.waitThreshold ? "wait" : "silent";
+      const { action, reasonCodes } = decideSpeechAction(input, settings);
       const payload = {
         action, status: "decision", text: input.text, source: input.source, candidateInformationId: input.candidateInformationId, turnContextInformationId: atom.informationId,
         score: scored.score, thresholds: { speak: settings.speakThreshold, wait: settings.waitThreshold }, components: scored.components,

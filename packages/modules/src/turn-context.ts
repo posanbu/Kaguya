@@ -25,7 +25,7 @@ export const turnContextModule = defineInformationModule({
       const directness = (source.mentions?.length ?? 0) > 0 || source.replyTo !== undefined ? 1 : 0.8;
       const contentNeed = input.text.trim().length > 0 ? 1 : 0;
       await context.registerOnce("core.turn.context.completed", atom.informationId, turnContextCompletedInformationKind, {
-        payload: {
+        payload: Object.freeze({
           candidateInformationId: atom.informationId,
           text: input.text,
           source,
@@ -40,7 +40,7 @@ export const turnContextModule = defineInformationModule({
           stale: false,
           attempt: 0,
           totalWaitBudget: 0,
-        },
+        }),
         references: [{ relation: "core:uses-context", informationId: atom.informationId }],
       });
     })],
