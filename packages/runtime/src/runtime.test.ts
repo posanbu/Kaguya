@@ -11,6 +11,25 @@
  * ledger；所有创建 PGlite 的用例共享 15 秒跨平台超时，测试结束显式关闭注入数据库，
  * 并检查持久化 payload 不包含 raw/provider secret。
  */
+import {
+  KaguyaLlmClient,
+  type KaguyaLlmModelResolver,
+} from "@kaguya/llm/client";
+import {
+  createFirstPartyModuleCatalog,
+  firstPartyModuleActivations,
+  llmReplyExecutorCapability,
+  type LlmReplyExecutor,
+  type ModuleModelSelection,
+  type LlmCompletedInformationPayload,
+} from "@kaguya/modules";
+import { type InformationKindDefinition } from "@kaguya/sdk";
+import {
+  llmCompletedInformationKind,
+  LlmLifecycleClient,
+  type RuntimeCapabilityContext,
+} from "./index.js";
+import { defineInformationModuleCatalog } from "@kaguya/sdk";
 import { KaguyaDatabase } from "@kaguya/database";
 import { createTestingDatabase } from "@kaguya/database/testing";
 import {
@@ -120,40 +139,50 @@ function platformMessage(adapterId = "napcat.qq.main"): PlatformInboundMessage {
 
 async function createRuntime(
   overrides: Partial<{
+    drainTimeoutMs: number;
     now: NonNullable<ConstructorParameters<typeof KaguyaRuntime>[0]["now"]>;
     informationIdGenerator: NonNullable<
       ConstructorParameters<typeof KaguyaRuntime>[0]["informationIdGenerator"]
     >;
-    resolveModelSelection: NonNullable<
-      ConstructorParameters<typeof KaguyaRuntime>[0]["resolveModelSelection"]
+    resolveModelSelection: NonNullable<RuntimeModelSelectionResolver>;
+    catalog: NonNullable<
+      ConstructorParameters<typeof KaguyaRuntime>[0]["catalog"]
     >;
-    moduleDefinitions: NonNullable<
-      ConstructorParameters<typeof KaguyaRuntime>[0]["moduleDefinitions"]
-    >;
-    moduleActivations: NonNullable<
-      ConstructorParameters<typeof KaguyaRuntime>[0]["moduleActivations"]
+    activations: NonNullable<
+      ConstructorParameters<typeof KaguyaRuntime>[0]["activations"]
     >;
   }> = {},
 ) {
   const database = await createTestingDatabase();
   let id = 0;
   const runtime = new KaguyaRuntime({
+    ...createReplyComposition(),
     database,
     now: () => new Date("2026-09-04T00:00:01.000Z"),
     informationIdGenerator: () => `runtime-atom-${++id}`,
+    ...createReplyComposition(overrides.resolveModelSelection),
     ...overrides,
   });
   resources.push({ runtime, database });
   return { runtime, database };
 }
 
+async function settleDeliveries(database: KaguyaDatabase): Promise<void> {
+  await vi.waitFor(
+    async () =>
+      expect((await database.information.reliable.health()).pending).toBe(0),
+    { timeout: 5000, interval: 25 },
+  );
+}
+
 async function createGatedRuntime() {
   const base = await createTestingDatabase();
   const database = new GatedMigrationDatabase(base.sql);
   const runtime = new KaguyaRuntime({
+    ...createReplyComposition(),
     database,
-    moduleDefinitions: [],
-    moduleActivations: [],
+    catalog: defineInformationModuleCatalog(...[]),
+    activations: [],
   });
   resources.push({ runtime, database });
   return { runtime, database };
@@ -181,6 +210,7 @@ describe("KaguyaRuntime", () => {
       await runtime.start();
 
       const result = await runtime.submit(webMessage("hello"));
+      await settleDeliveries(database);
       const graph = await database.information.query({
         informationId: result.rootInformationId,
       });
@@ -217,7 +247,10 @@ describe("KaguyaRuntime", () => {
       vi.spyOn(database, "migrate").mockRejectedValueOnce(
         new Error(`authentication failed: ${secret}`),
       );
-      const runtime = new KaguyaRuntime({ database });
+      const runtime = new KaguyaRuntime({
+        ...createReplyComposition(),
+        database,
+      });
       resources.push({ runtime, database });
 
       const error = await runtime.start().catch((thrown: unknown) => thrown);
@@ -243,7 +276,10 @@ describe("KaguyaRuntime", () => {
       vi.spyOn(database, "migrate").mockRejectedValueOnce(
         new DatabasePassword123("database-secret"),
       );
-      const runtime = new KaguyaRuntime({ database });
+      const runtime = new KaguyaRuntime({
+        ...createReplyComposition(),
+        database,
+      });
       resources.push({ runtime, database });
 
       const error = await runtime.start().catch((thrown: unknown) => thrown);
@@ -276,7 +312,10 @@ describe("KaguyaRuntime", () => {
         },
       });
       vi.spyOn(database, "migrate").mockRejectedValueOnce(malicious);
-      const runtime = new KaguyaRuntime({ database });
+      const runtime = new KaguyaRuntime({
+        ...createReplyComposition(),
+        database,
+      });
       resources.push({ runtime, database });
 
       const error = await runtime.start().catch((thrown: unknown) => thrown);
@@ -339,6 +378,71 @@ describe("KaguyaRuntime", () => {
     TEST_TIMEOUT,
   );
 
+  it("propagates close abort to an in-progress module create", async () => {
+    let markCreating!: () => void,
+      release!: () => void,
+      aborted = false;
+    const creating = new Promise<void>((resolve) => {
+      markCreating = resolve;
+    });
+    const fallback = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const module = defineInformationModule({
+      manifest: {
+        protocolVersion: 1,
+        moduleVersion: "1.0.0",
+        definitionId: "test.abort",
+        displayName: "Abort",
+        settingsSchema: z.object({}),
+        consumes: [],
+        produces: [],
+        selectors: [],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
+      },
+      create: async (_options, context) => {
+        markCreating();
+        await Promise.race([
+          fallback,
+          new Promise<void>((resolve) =>
+            context.signal.addEventListener(
+              "abort",
+              () => {
+                aborted = true;
+                resolve();
+              },
+              { once: true },
+            ),
+          ),
+        ]);
+        return { subscriptions: [], provisions: [] };
+      },
+    });
+    const { runtime } = await createRuntime({
+      catalog: defineInformationModuleCatalog(module),
+      activations: [
+        {
+          instanceId: "abort.main",
+          definitionId: module.manifest.definitionId,
+          settings: {},
+        },
+      ],
+    });
+    const starting = runtime.start();
+    void starting.catch(() => undefined);
+    await creating;
+    const closing = runtime.close();
+    try {
+      await vi.waitFor(() => expect(aborted).toBe(true));
+    } finally {
+      release();
+      await starting.catch(() => undefined);
+      await closing;
+    }
+  });
+
   it(
     "waits for starting work before closing resources exactly once",
     async () => {
@@ -353,16 +457,23 @@ describe("KaguyaRuntime", () => {
       let disposeCalls = 0;
       const gatedModule = defineInformationModule({
         manifest: {
-          apiVersion: 1,
+          protocolVersion: 1,
+          moduleVersion: "1.0.0",
+          selectors: [],
+          promptRenderers: [],
+          requires: [],
+          provides: [],
           definitionId: "test.lifecycle.gated",
           displayName: "Gated lifecycle module",
           settingsSchema: z.object({}).strict(),
-          informationKinds: [],
+          consumes: [],
+          produces: [],
         },
         create: async () => {
           markCreating();
           await creationGate;
           return {
+            provisions: [],
             subscriptions: [],
             dispose: () => {
               disposeCalls += 1;
@@ -371,8 +482,8 @@ describe("KaguyaRuntime", () => {
         },
       });
       const { runtime } = await createRuntime({
-        moduleDefinitions: [gatedModule],
-        moduleActivations: [
+        catalog: defineInformationModuleCatalog(...[gatedModule]),
+        activations: [
           {
             instanceId: "gated.one",
             definitionId: "test.lifecycle.gated",
@@ -426,6 +537,7 @@ describe("KaguyaRuntime", () => {
       await runtime.start();
 
       const result = await runtime.submit(webMessage("hello"));
+      await settleDeliveries(database);
       const graph = await database.information.query({
         informationId: result.rootInformationId,
       });
@@ -441,9 +553,7 @@ describe("KaguyaRuntime", () => {
           "core.delivery.delivered",
         ]),
       );
-      expect(result.deliveries).toEqual([
-        expect.objectContaining({ ok: true, platformMessageId: "sent-1" }),
-      ]);
+      expect(result.deliveries).toEqual([]);
       expect(result).not.toHaveProperty("delivery");
       expect(sendMessage).toHaveBeenCalledWith(
         { kind: "web" },
@@ -504,6 +614,7 @@ describe("KaguyaRuntime", () => {
       await runtime.start();
 
       const result = await runtime.submit(webMessage());
+      await settleDeliveries(database);
       const kinds = (
         await database.information.query({
           informationId: result.rootInformationId,
@@ -528,10 +639,10 @@ describe("KaguyaRuntime", () => {
   );
 
   it(
-    "lets two reply instances derive exactly one assistant and delivery each",
+    "deduplicates identical semantic jobs across two reply instances",
     async () => {
       const { runtime, database } = await createRuntime({
-        moduleActivations: [
+        activations: [
           {
             instanceId: "filter.default",
             definitionId: "demo.filter.always",
@@ -568,16 +679,17 @@ describe("KaguyaRuntime", () => {
       await runtime.start();
 
       const result = await runtime.submit(webMessage());
+      await settleDeliveries(database);
       const graph = await database.information.query({
         informationId: result.rootInformationId,
       });
       const count = (kind: string) =>
         graph.filter((atom) => atom.kind === kind).length;
 
-      expect(count("core.llm.completed")).toBe(2);
-      expect(count("core.message.assistant.text")).toBe(2);
-      expect(count("core.delivery.requested")).toBe(2);
-      expect(sendMessage).toHaveBeenCalledTimes(2);
+      expect(count("core.llm.completed")).toBe(1);
+      expect(count("core.message.assistant.text")).toBe(1);
+      expect(count("core.delivery.requested")).toBe(1);
+      expect(sendMessage).toHaveBeenCalledTimes(1);
       expect(sendMessage).toHaveBeenCalledWith(
         { kind: "group", groupId: "web-room" },
         expect.any(Object),
@@ -592,26 +704,27 @@ describe("KaguyaRuntime", () => {
             .filter((atom) => atom.kind === kind)
             .map(({ payload }) => payload.originatingModuleInstanceId)
             .sort(),
-        ).toEqual(["reply.one", "reply.two"]);
+        ).toHaveLength(1);
       }
     },
     TEST_TIMEOUT,
   );
 
   it(
-    "records a missing transport as delivery.failed and consumer.failed",
+    "records a missing transport as a durable delivery failure",
     async () => {
       const { runtime, database } = await createRuntime();
       await runtime.start();
 
       const result = await runtime.submit(platformMessage("missing.qq"));
+      await settleDeliveries(database);
       const graph = await database.information.query({
         informationId: result.rootInformationId,
       });
 
       expect(result.deliveries).toEqual([]);
       expect(graph.map(({ kind }) => kind)).toContain("core.delivery.failed");
-      expect(graph.map(({ kind }) => kind)).toContain("consumer.failed");
+      expect(graph.map(({ kind }) => kind)).not.toContain("consumer.failed");
       const failed = graph.find(({ kind }) => kind === "core.delivery.failed")!;
       const requested = graph.find(
         ({ kind }) => kind === "core.delivery.requested",
@@ -622,16 +735,6 @@ describe("KaguyaRuntime", () => {
       });
       expect(parentId(failed)).toBe(requested.informationId);
       expect(parentId(failed, "core:status-of")).toBe(requested.informationId);
-      const consumerFailure = graph.find(
-        ({ kind }) => kind === "consumer.failed",
-      )!;
-      expect(consumerFailure.payload).toMatchObject({
-        consumer: { consumerId: "runtime:delivery" },
-      });
-      expect(consumerFailure.references).toContainEqual({
-        relation: "core:context",
-        informationId: result.rootInformationId,
-      });
       expect(new OutboundTransportNotFoundError("a", "qq").message).toContain(
         "not registered",
       );
@@ -654,13 +757,14 @@ describe("KaguyaRuntime", () => {
       await runtime.start();
 
       const result = await runtime.submit(platformMessage());
+      await settleDeliveries(database);
       const graph = await database.information.query({
         informationId: result.rootInformationId,
       });
 
       expect(result.deliveries).toEqual([]);
       expect(graph.map(({ kind }) => kind)).toContain("core.delivery.failed");
-      expect(graph.map(({ kind }) => kind)).toContain("consumer.failed");
+      expect(graph.map(({ kind }) => kind)).not.toContain("consumer.failed");
       expect(JSON.stringify(graph)).not.toContain(
         "provider-token-must-not-enter-ledger",
       );
@@ -672,7 +776,7 @@ describe("KaguyaRuntime", () => {
   );
 
   it(
-    "records and returns a platform failure receipt without consumer failure",
+    "records a platform failure after returning an acceptance receipt",
     async () => {
       const receipt: PlatformDeliveryReceipt = {
         ok: false,
@@ -691,16 +795,12 @@ describe("KaguyaRuntime", () => {
       await runtime.start();
 
       const result = await runtime.submit(platformMessage());
+      await settleDeliveries(database);
       const graph = await database.information.query({
         informationId: result.rootInformationId,
       });
 
-      expect(result.deliveries).toEqual([
-        expect.objectContaining({
-          ok: false,
-          error: "provider-specific failure",
-        }),
-      ]);
+      expect(result.deliveries).toEqual([]);
       expect(graph.map(({ kind }) => kind)).toContain("core.delivery.failed");
       expect(graph.map(({ kind }) => kind)).not.toContain("consumer.failed");
       expect(JSON.stringify(graph)).not.toMatch(
@@ -714,12 +814,13 @@ describe("KaguyaRuntime", () => {
     "keeps an inbound atom when its kind has no subscribers",
     async () => {
       const { runtime, database } = await createRuntime({
-        moduleDefinitions: [],
-        moduleActivations: [],
+        catalog: defineInformationModuleCatalog(...[]),
+        activations: [],
       });
       await runtime.start();
 
       const result = await runtime.submit(webMessage());
+      await settleDeliveries(database);
       const graph = await database.information.query({
         informationId: result.rootInformationId,
       });
@@ -746,25 +847,41 @@ describe("KaguyaRuntime", () => {
       });
       const observer = defineInformationModule({
         manifest: {
-          apiVersion: 1,
+          protocolVersion: 1,
+          moduleVersion: "1.0.0",
+          selectors: [],
+          promptRenderers: [],
+          requires: [],
+          provides: [],
           definitionId: "test.reply.observer",
           displayName: "Concurrent reply observer",
           settingsSchema: z.object({}).strict(),
-          informationKinds: [replyRequestedInformationKind],
+          consumes: [replyRequestedInformationKind],
+          produces: [replyRequestedInformationKind],
         },
         create: () => ({
+          provisions: [],
           subscriptions: [
-            onInformation(replyRequestedInformationKind, async () => {
-              starts += 1;
-              if (starts === 2) markBothStarted();
-              await gate;
-            }),
+            onInformation(
+              replyRequestedInformationKind,
+              {
+                subscriptionId: "handle-replyrequestedinformationkind",
+                delivery: "live",
+              },
+              async () => {
+                starts += 1;
+                if (starts === 2) markBothStarted();
+                await gate;
+              },
+            ),
           ],
         }),
       });
       const { runtime } = await createRuntime({
-        moduleDefinitions: [alwaysReplyFilterModule, observer],
-        moduleActivations: [
+        catalog: defineInformationModuleCatalog(
+          ...[alwaysReplyFilterModule, observer],
+        ),
+        activations: [
           {
             instanceId: "filter.default",
             definitionId: "demo.filter.always",
@@ -826,7 +943,10 @@ describe("KaguyaRuntime", () => {
             informationId: result.rootInformationId,
           })
         ).map(({ kind }) => kind),
-      ).toContain("core.llm.completed");
+      ).not.toContain("core.llm.completed");
+      expect(
+        (await database.information.reliable.health()).pending,
+      ).toBeGreaterThan(0);
       await expect(runtime.submit(webMessage())).rejects.toBeInstanceOf(
         RuntimeUnavailableError,
       );
@@ -856,32 +976,57 @@ describe("KaguyaRuntime", () => {
       });
       const failing = defineInformationModule({
         manifest: {
-          apiVersion: 1,
+          protocolVersion: 1,
+          moduleVersion: "1.0.0",
+          selectors: [],
+          promptRenderers: [],
+          requires: [],
+          provides: [],
           definitionId: "test.inbound.failing",
           displayName: "Failing inbound consumer",
           settingsSchema: z.object({}).strict(),
-          informationKinds: [inboundTextInformationKind],
+          consumes: [inboundTextInformationKind],
+          produces: [inboundTextInformationKind],
         },
         create: () => ({
+          provisions: [],
           subscriptions: [
-            onInformation(inboundTextInformationKind, () => {
-              throw new TypeError("credential-must-not-enter-ledger");
-            }),
+            onInformation(
+              inboundTextInformationKind,
+              {
+                subscriptionId: "handle-inboundtextinformationkind",
+                delivery: "live",
+              },
+              () => {
+                throw new TypeError("credential-must-not-enter-ledger");
+              },
+            ),
           ],
         }),
       });
       const successful = defineInformationModule({
         manifest: {
-          apiVersion: 1,
+          protocolVersion: 1,
+          moduleVersion: "1.0.0",
+          selectors: [],
+          promptRenderers: [],
+          requires: [],
+          provides: [],
           definitionId: "test.inbound.successful",
           displayName: "Successful inbound consumer",
           settingsSchema: z.object({}).strict(),
-          informationKinds: [inboundTextInformationKind, outcomeKind],
+          consumes: [inboundTextInformationKind, outcomeKind],
+          produces: [inboundTextInformationKind, outcomeKind],
         },
         create: () => ({
+          provisions: [],
           subscriptions: [
             onInformation(
               inboundTextInformationKind,
+              {
+                subscriptionId: "handle-inboundtextinformationkind",
+                delivery: "live",
+              },
               async (_atom, context) => {
                 await context.register(outcomeKind, {
                   payload: { observed: true },
@@ -892,8 +1037,8 @@ describe("KaguyaRuntime", () => {
         }),
       });
       const { runtime, database } = await createRuntime({
-        moduleDefinitions: [failing, successful],
-        moduleActivations: [
+        catalog: defineInformationModuleCatalog(...[failing, successful]),
+        activations: [
           {
             instanceId: "failure.one",
             definitionId: "test.inbound.failing",
@@ -909,6 +1054,7 @@ describe("KaguyaRuntime", () => {
       await runtime.start();
 
       const result = await runtime.submit(webMessage());
+      await settleDeliveries(database);
       const graph = await database.information.query({
         informationId: result.rootInformationId,
       });
@@ -924,7 +1070,7 @@ describe("KaguyaRuntime", () => {
         graph.find(({ kind }) => kind === "consumer.failed")?.payload,
       ).toMatchObject({
         consumer: {
-          consumerId: "module:failure.one",
+          consumerId: "module:failure.one:handle-inboundtextinformationkind",
           definitionId: "test.inbound.failing",
           instanceId: "failure.one",
         },
@@ -937,3 +1083,137 @@ describe("KaguyaRuntime", () => {
     TEST_TIMEOUT,
   );
 });
+
+type RuntimeModelSelectionResolver = (selection: ModuleModelSelection) => {
+  readonly modelId: string;
+  readonly model: ReturnType<KaguyaLlmModelResolver>;
+};
+function createDeterministicModelSelectionResolver(): RuntimeModelSelectionResolver {
+  const model = createRepeatingDeterministicModel({
+    text: "It is a lovely night for watching the moon.",
+  });
+  return ({ modelTier }) => ({ modelId: `deterministic-${modelTier}`, model });
+}
+function createReplyComposition(
+  resolveModelSelection: RuntimeModelSelectionResolver = createDeterministicModelSelectionResolver(),
+) {
+  const catalog = createFirstPartyModuleCatalog({
+    llmCompletedInformationKind:
+      llmCompletedInformationKind as unknown as InformationKindDefinition<
+        "core.llm.completed",
+        LlmCompletedInformationPayload
+      >,
+  });
+  return {
+    catalog,
+    activations: firstPartyModuleActivations,
+    capabilities: ({ core, now }: RuntimeCapabilityContext) => {
+      const executor: LlmReplyExecutor = {
+        execute: async (input) => {
+          const contexts = input.reply.references.filter(
+            (r) => r.relation === "core:context",
+          );
+          if (contexts.length !== 1)
+            throw new Error("Reply must have one context");
+          const context = await core.get(contexts[0]!.informationId);
+          if (context?.kind !== "core.runtime.context")
+            throw new Error("Reply context information is unavailable");
+          const resolved = resolveModelSelection(input.selection);
+          return new LlmLifecycleClient({
+            core,
+            client: new KaguyaLlmClient({ model: resolved.model, now }),
+            now,
+          }).generate(
+            {
+              operationKey: input.operationKey,
+              kind: "reply",
+              modelId: resolved.modelId,
+              workflowId: "message-module-pipeline",
+              nodeId: "reply",
+              originatingModuleInstanceId: input.originatingModuleInstanceId,
+              prompt: input.prompt,
+              contextAtoms: input.contextAtoms,
+              reply: input.reply.payload,
+            },
+            context as Parameters<LlmLifecycleClient["generate"]>[1],
+            input.reply,
+          );
+        },
+      };
+      return [{ capability: llmReplyExecutorCapability, value: executor }];
+    },
+  };
+}
+
+it(
+  "bounds shutdown while a live ingress observer ignores cancellation",
+  async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const observer = defineInformationModule({
+      manifest: {
+        protocolVersion: 1,
+        moduleVersion: "1.0.0",
+        definitionId: "test.hanging-ingress",
+        displayName: "Hanging ingress",
+        settingsSchema: z.object({}),
+        consumes: [inboundTextInformationKind],
+        produces: [],
+        selectors: [],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
+      },
+      create: () => ({
+        provisions: [],
+        subscriptions: [
+          onInformation(
+            inboundTextInformationKind,
+            { subscriptionId: "observe", delivery: "live" },
+            async () => {
+              entered();
+              await gate;
+            },
+          ),
+        ],
+      }),
+    });
+    const { runtime } = await createRuntime({
+      catalog: defineInformationModuleCatalog(observer),
+      activations: [
+        {
+          instanceId: "observer",
+          definitionId: "test.hanging-ingress",
+          settings: {},
+        },
+      ],
+      drainTimeoutMs: 20,
+    });
+    await runtime.start();
+    const submitting = runtime.submit(webMessage());
+    await started;
+    let closed = false;
+    const closing = runtime.close().then(() => {
+      closed = true;
+    });
+    try {
+      await vi.waitFor(() => expect(closed).toBe(true), {
+        timeout: 400,
+        interval: 10,
+      });
+      await expect(runtime.submit(webMessage())).rejects.toThrow(
+        RuntimeUnavailableError,
+      );
+    } finally {
+      release();
+      await Promise.allSettled([submitting, closing]);
+    }
+  },
+  TEST_TIMEOUT,
+);

@@ -23,6 +23,10 @@
  * 防止服务接受请求后再暴露可变 Profile 覆盖路径；关闭时 Runtime 先排空，
  * 再由 Server 关闭它所有的数据库连接。
  */
+import {
+  createReplyComposition,
+  type RuntimeModelSelectionResolver,
+} from "./runtime-composition.js";
 import { pathToFileURL } from "node:url";
 
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
@@ -44,7 +48,6 @@ import {
   GatewayAllowlist,
   KaguyaRuntime,
   RuntimeDatabaseInitializationError,
-  type RuntimeModelSelectionResolver,
 } from "@kaguya/runtime";
 import type { FastifyInstance } from "fastify";
 
@@ -138,7 +141,7 @@ export async function startKaguyaServer(
       runtime = new KaguyaRuntime({
         database,
         logger: rootLogger,
-        resolveModelSelection,
+        ...createReplyComposition(resolveModelSelection),
       });
     }
     const webGateway = runtimeReady

@@ -36,11 +36,15 @@ const outputKind = defineInformationKind({
 
 describe("information module SDK", () => {
   it("defines non-targeted subscriptions that register derived atoms", () => {
-    const subscription = onInformation(inputKind, async (atom, context) => {
-      await context.register(outputKind, {
-        payload: { text: atom.payload.text },
-      });
-    });
+    const subscription = onInformation(
+      inputKind,
+      { subscriptionId: "handle-inputkind", delivery: "live" },
+      async (atom, context) => {
+        await context.register(outputKind, {
+          payload: { text: atom.payload.text },
+        });
+      },
+    );
 
     expect(subscription).toMatchObject({
       kind: inputKind.kind,
@@ -55,14 +59,20 @@ describe("information module SDK", () => {
     expect(() =>
       defineInformationModule({
         manifest: {
-          apiVersion: 1,
+          protocolVersion: 1,
+          moduleVersion: "1.0.0",
+          selectors: [],
+          promptRenderers: [],
+          requires: [],
+          provides: [],
           definitionId: "acme.duplicate",
           displayName: "Duplicate",
           settingsSchema: z.object({}).strict(),
-          informationKinds: [inputKind, inputKind],
+          consumes: [inputKind, inputKind],
+          produces: [inputKind, inputKind],
         },
-        create: () => ({ subscriptions: [] }),
+        create: () => ({ provisions: [], subscriptions: [] }),
       }),
-    ).toThrow(`Duplicate information module kind: ${inputKind.kind}`);
+    ).toThrow(`Duplicate information module consumes: ${inputKind.kind}`);
   });
 });

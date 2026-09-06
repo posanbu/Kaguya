@@ -10,6 +10,8 @@
  * 校验引用规则和结构化 find 的内存账本，断言实际 ID、持久化顺序及 context 继承，
  * 不访问真实 LLM；schema 断言保护删除的 profile 与 reply target 设置不会重新进入模块契约。
  */
+import { createTestingDatabase } from "@kaguya/database/testing";
+import { defineInformationModuleCatalog } from "@kaguya/sdk";
 import {
   type DeepReadonly,
   freezeInformationAtom,
@@ -52,7 +54,8 @@ import {
   replyRequestedInformationPayloadSchema,
 } from "./information-kinds.js";
 import {
-  createLlmReplyModule,
+  createLlmReplyModule as defineReplyModule,
+  llmReplyExecutorCapability,
   llmCompletedInformationPayloadSchema,
   llmReplySettingsSchema,
   type LlmReplyExecutor,
@@ -247,6 +250,41 @@ function assistantAtom() {
   });
 }
 
+const executors = new WeakMap<object, LlmReplyExecutor>();
+function createLlmReplyModule(
+  options: Parameters<typeof defineReplyModule>[0] & {
+    executor: LlmReplyExecutor;
+  },
+) {
+  const { executor, ...definitionOptions } = options;
+  const definition = defineReplyModule(definitionOptions);
+  executors.set(definition, executor);
+  return definition;
+}
+function createInstance(
+  definition: ReturnType<typeof defineInformationModule>,
+  options: { instanceId: string; settings: unknown },
+) {
+  return definition.create(
+    {
+      ...options,
+      activation: {
+        instanceId: options.instanceId,
+        definitionId: definition.manifest.definitionId,
+      },
+    },
+    {
+      signal: new AbortController().signal,
+      now: () => new Date(),
+      use: () => {
+        const value = executors.get(definition);
+        if (!value) throw Error("undeclared");
+        return value as never;
+      },
+    },
+  );
+}
+
 interface Registration {
   readonly definition: InformationKindDefinition<string, JsonObject>;
   readonly input: {
@@ -261,8 +299,18 @@ function handlerContext(
   result: DeepReadonly<InformationAtom> = sourceAtom,
   instanceId = "test.instance",
   selectedAtoms: readonly DeepReadonly<InformationAtom>[] = [sourceAtom],
+  executor?: LlmReplyExecutor,
 ): InformationModuleHandlerContext {
-  return {
+  const context: InformationModuleHandlerContext = {
+    registerOnce: async (_operation, _key, definition, input) =>
+      context.register(definition, input),
+    commitTerminal: async (_group, _subject, definition, input) =>
+      context.register(definition, input),
+    signal: new AbortController().signal,
+    use: () => {
+      if (!executor) throw new Error("undeclared test capability");
+      return executor as never;
+    },
     definitionId: "test.definition",
     instanceId,
     sourceAtom,
@@ -279,11 +327,12 @@ function handlerContext(
       return result as never;
     },
   };
+  return context;
 }
 
 describe("alwaysReplyFilterModule", () => {
   it("registers the next kind when the filter passes", async () => {
-    const instance = await alwaysReplyFilterModule.create({
+    const instance = await createInstance(alwaysReplyFilterModule, {
       instanceId: "filter-1",
       settings: alwaysReplyFilterSettingsSchema.parse({}),
     });
@@ -295,10 +344,10 @@ describe("alwaysReplyFilterModule", () => {
       handlerContext(atom, registrations),
     );
 
-    expect(alwaysReplyFilterModule.manifest.informationKinds).toEqual([
-      inboundTextInformationKind,
-      replyRequestedInformationKind,
-    ]);
+    expect([
+      ...alwaysReplyFilterModule.manifest.consumes,
+      ...alwaysReplyFilterModule.manifest.produces,
+    ]).toEqual([inboundTextInformationKind, replyRequestedInformationKind]);
     expect(registrations).toEqual([
       {
         definition: replyRequestedInformationKind,
@@ -310,32 +359,43 @@ describe("alwaysReplyFilterModule", () => {
   it("records rejection without producing the next kind", async () => {
     const rejectingFilter = defineInformationModule({
       manifest: {
-        apiVersion: 1,
+        protocolVersion: 1,
+        moduleVersion: "1.0.0",
+        selectors: [],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
         definitionId: "test.filter.rejecting",
         displayName: "Rejecting filter",
         settingsSchema: z.object({}).strict(),
-        informationKinds: [
-          inboundTextInformationKind,
-          filterDecisionInformationKind,
-        ],
+        consumes: [inboundTextInformationKind, filterDecisionInformationKind],
+        produces: [inboundTextInformationKind, filterDecisionInformationKind],
       },
       create: () => ({
+        provisions: [],
         subscriptions: [
-          onInformation(inboundTextInformationKind, async (_atom, context) => {
-            await context.register(filterDecisionInformationKind, {
-              payload: {
-                accepted: false,
-                reason: "blocked",
-                filterDefinitionId: "test.filter.rejecting",
-              },
-            });
-          }),
+          onInformation(
+            inboundTextInformationKind,
+            {
+              subscriptionId: "handle-inboundtextinformationkind",
+              delivery: "live",
+            },
+            async (_atom, context) => {
+              await context.register(filterDecisionInformationKind, {
+                payload: {
+                  accepted: false,
+                  reason: "blocked",
+                  filterDefinitionId: "test.filter.rejecting",
+                },
+              });
+            },
+          ),
         ],
       }),
     });
     const atom = inboundAtom();
     const registrations: Registration[] = [];
-    const instance = await rejectingFilter.create({
+    const instance = await createInstance(rejectingFilter, {
       instanceId: "reject-1",
       settings: {},
     });
@@ -408,16 +468,27 @@ describe("createLlmReplyModule", () => {
     });
     const memoryModule = defineInformationModule({
       manifest: {
-        apiVersion: 1,
+        protocolVersion: 1,
+        moduleVersion: "1.0.0",
+        selectors: [],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
         definitionId: "test.memory-writer",
         displayName: "Memory writer",
         settingsSchema: z.object({}).strict(),
-        informationKinds: [inboundTextInformationKind, memoryKind],
+        consumes: [inboundTextInformationKind, memoryKind],
+        produces: [inboundTextInformationKind, memoryKind],
       },
       create: () => ({
+        provisions: [],
         subscriptions: [
           onInformation(
             inboundTextInformationKind,
+            {
+              subscriptionId: "handle-inboundtextinformationkind",
+              delivery: "live",
+            },
             async (inbound, context) => {
               const runtimeContext = inbound.references.find(
                 ({ relation }) => relation === "core:context",
@@ -443,8 +514,10 @@ describe("createLlmReplyModule", () => {
         ],
       }),
     });
-    const host = new ModuleHost({ core });
-    host.register(memoryModule);
+    const host = new ModuleHost({
+      core,
+      catalog: defineInformationModuleCatalog(memoryModule),
+    });
     await core.start();
     await host.start([
       {
@@ -497,7 +570,10 @@ describe("createLlmReplyModule", () => {
     registry.registerBuiltin(llmCompletedInformationKind);
     registry.registerBuiltin(assistantTextInformationKind);
     registry.registerBuiltin(deliveryRequestedInformationKind);
-    const ledger = new MemoryInformationLedger();
+    registry.registerBuiltin(coreMemoryTextInformationKind);
+    const database = await createTestingDatabase();
+    await database.migrate();
+    const ledger = database.information;
     let sequence = 0;
     const core = new InformationCore({
       registry,
@@ -514,28 +590,43 @@ describe("createLlmReplyModule", () => {
           );
           if (context === undefined)
             throw new Error("reply context is required");
-          return core.register(llmCompletedInformationKind, {
-            occurredAt: "2026-09-04T00:00:01.000Z",
-            source: "runtime:llm",
-            payload: {
-              output: { text: "Hello." },
-              reply: reply.payload,
-              originatingModuleInstanceId,
-            },
-            references: [
-              {
-                relation: "core:caused-by",
-                informationId: reply.informationId,
+          return core.registerOnce(
+            "test.llm.completed",
+            reply.informationId,
+            llmCompletedInformationKind,
+            {
+              occurredAt: "2026-09-04T00:00:01.000Z",
+              source: "runtime:llm",
+              payload: {
+                output: { text: "Hello." },
+                reply: reply.payload,
+                originatingModuleInstanceId,
               },
-              context,
-            ],
-          });
+              references: [
+                {
+                  relation: "core:caused-by",
+                  informationId: reply.informationId,
+                },
+                context,
+              ],
+            },
+          );
         },
       },
     });
-    const host = new ModuleHost({ core });
-    host.register(alwaysReplyFilterModule);
-    host.register(replyModule);
+    const host = new ModuleHost({
+      core,
+      catalog: defineInformationModuleCatalog(
+        alwaysReplyFilterModule,
+        replyModule,
+      ),
+      capabilities: [
+        {
+          capability: llmReplyExecutorCapability,
+          value: executors.get(replyModule)!,
+        },
+      ],
+    });
     await core.start();
     await host.start([
       {
@@ -568,7 +659,19 @@ describe("createLlmReplyModule", () => {
           { relation: "core:context", informationId: context.informationId },
         ],
       });
-      const atoms = [...ledger.atoms.values()];
+      await vi.waitFor(async () =>
+        expect(
+          (await ledger.query({ informationId: context.informationId })).some(
+            (a) => a.kind === deliveryRequestedInformationKind.kind,
+          ),
+        ).toBe(true),
+      );
+      const atoms = [
+        context,
+        ...(await ledger.query({
+          informationId: context.informationId,
+        })),
+      ];
       const reply = atoms.find(
         ({ kind }) => kind === replyRequestedInformationKind.kind,
       );
@@ -582,14 +685,16 @@ describe("createLlmReplyModule", () => {
         ({ kind }) => kind === deliveryRequestedInformationKind.kind,
       );
 
-      expect(atoms.map(({ kind }) => kind)).toEqual([
-        runtimeContextInformationKind.kind,
-        inboundTextInformationKind.kind,
-        replyRequestedInformationKind.kind,
-        llmCompletedInformationKind.kind,
-        assistantTextInformationKind.kind,
-        deliveryRequestedInformationKind.kind,
-      ]);
+      expect(atoms.map(({ kind }) => kind).sort()).toEqual(
+        [
+          runtimeContextInformationKind.kind,
+          inboundTextInformationKind.kind,
+          replyRequestedInformationKind.kind,
+          llmCompletedInformationKind.kind,
+          assistantTextInformationKind.kind,
+          deliveryRequestedInformationKind.kind,
+        ].sort(),
+      );
       expect(reply?.references).toContainEqual({
         relation: "core:caused-by",
         informationId: inbound.informationId,
@@ -614,6 +719,8 @@ describe("createLlmReplyModule", () => {
       }
     } finally {
       await host.stop();
+      await core.close();
+      await database.close();
     }
   });
 
@@ -648,7 +755,7 @@ describe("createLlmReplyModule", () => {
       modelTier: "heavy",
       outbound: { mode: "source", messageKind: "reply" },
     });
-    const instance = await definition.create({
+    const instance = await createInstance(definition, {
       instanceId: "reply-1",
       settings,
     });
@@ -676,6 +783,7 @@ describe("createLlmReplyModule", () => {
         reply,
         "reply-1",
         selectedAtoms,
+        { execute },
       ),
     );
     await instance.subscriptions[1]?.handle(
@@ -688,6 +796,7 @@ describe("createLlmReplyModule", () => {
     );
 
     expect(execute).toHaveBeenCalledWith({
+      operationKey: expect.stringMatching(/^reply-v1:reply-1:[a-f0-9]{64}$/),
       reply: persistedReply,
       prompt: expect.objectContaining({
         provenance: [

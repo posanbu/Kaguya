@@ -2,8 +2,17 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "rootDir": "./src",
-    "outDir": "./dist"
+    "types": ["node"],
+    "outDir": "./dist",
+    "types": ["node"]
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../schema" }, { "path": "../sdk" }]
+  "references": [
+    {
+      "path": "../schema"
+    },
+    {
+      "path": "../sdk"
+    }
+  ]
 }

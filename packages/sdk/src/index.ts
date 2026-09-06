@@ -29,15 +29,4 @@ export {
   type InformationSelectorDefinition,
   type InformationSelectorLedger,
 } from "./information-selector.js";
-export {
-  defineInformationModule,
-  onInformation,
-  type CreateInformationModuleInstanceOptions,
-  type InformationExecutionContext,
-  type InformationModuleActivation,
-  type InformationModuleDefinition,
-  type InformationModuleHandlerContext,
-  type InformationModuleInstance,
-  type InformationModuleManifest,
-  type InformationModuleSubscription,
-} from "./modules.js";
+export * from "./modules.js";

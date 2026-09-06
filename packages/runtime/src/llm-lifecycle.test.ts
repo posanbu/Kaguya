@@ -28,10 +28,12 @@ import type {
   InformationAtom,
   InformationId,
 } from "@kaguya/schema";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   builtInInformationKinds,
+  llmRequestedInformationKind,
+  informationCompiledPromptSchema,
   runtimeContextInformationKind,
 } from "./information-kinds.js";
 import { LlmLifecycleClient } from "./llm-lifecycle.js";
@@ -69,6 +71,7 @@ function lifecycleRequest(
   >,
 ) {
   return {
+    operationKey: reply.informationId,
     kind: "reply" as const,
     modelId: "deterministic-heavy",
     workflowId: "message-module-pipeline",
@@ -173,6 +176,111 @@ async function createFixture(
 }
 
 describe("LlmLifecycleClient", () => {
+  it("reuses the requested and terminal winners on sequential redelivery", async () => {
+    const fixture = await createFixture(
+      createRepeatingDeterministicModel({ text: "Moonlight." }),
+    );
+    try {
+      const request = lifecycleRequest(
+        tracedPrompt([fixture.reply.informationId]),
+        [fixture.reply],
+        fixture.reply,
+      );
+      const first = await fixture.lifecycle.generate(
+        request,
+        fixture.context,
+        fixture.reply,
+      );
+      const second = await fixture.lifecycle.generate(
+        request,
+        fixture.context,
+        fixture.reply,
+      );
+      expect(second.informationId).toBe(first.informationId);
+      expect(
+        await llmRequestedAtoms(fixture.database, fixture.context),
+      ).toHaveLength(1);
+    } finally {
+      await fixture.core.close();
+      await fixture.database.close();
+    }
+  });
+  it("recovers the persisted prompt and rejects an unavailable recorded model", async () => {
+    const client = new KaguyaLlmClient({
+      model: createRepeatingDeterministicModel({ text: "recovered" }),
+    });
+    const generate = vi.spyOn(client, "generate");
+    const fixture = await createFixture(
+      createRepeatingDeterministicModel({ text: "unused" }),
+      client,
+    );
+    const prompt = tracedPrompt([fixture.reply.informationId]);
+    const request = lifecycleRequest(prompt, [fixture.reply], fixture.reply);
+    const seed = async (operationKey: string) =>
+      fixture.core.registerOnce(
+        "kaguya.llm.requested.v1",
+        operationKey,
+        llmRequestedInformationKind,
+        {
+          occurredAt: "2026-09-04T00:00:03.000Z",
+          source: "runtime:llm",
+          payload: {
+            kind: request.kind,
+            modelId: request.modelId,
+            workflowId: request.workflowId,
+            nodeId: request.nodeId,
+            originatingModuleInstanceId: request.originatingModuleInstanceId,
+            prompt: informationCompiledPromptSchema.parse(prompt),
+          },
+          references: [
+            {
+              relation: "core:caused-by",
+              informationId: fixture.reply.informationId,
+            },
+            {
+              relation: "core:context",
+              informationId: fixture.context.informationId,
+            },
+            {
+              relation: "core:uses-context",
+              informationId: fixture.reply.informationId,
+            },
+          ],
+        },
+      );
+    try {
+      await seed(request.operationKey);
+      await fixture.lifecycle.generate(
+        {
+          ...request,
+          prompt: { ...prompt, text: "replacement prompt must not execute" },
+        },
+        fixture.context,
+        fixture.reply,
+      );
+      expect(generate.mock.calls[0]?.[0].prompt).toEqual(prompt);
+      const secondKey = request.operationKey + ":unavailable";
+      await seed(secondKey);
+      await expect(
+        fixture.lifecycle.generate(
+          { ...request, operationKey: secondKey, modelId: "replacement-model" },
+          fixture.context,
+          fixture.reply,
+        ),
+      ).rejects.toThrow(/recorded model/);
+      expect(generate).toHaveBeenCalledTimes(1);
+      expect(
+        (
+          await fixture.database.information.query({
+            informationId: fixture.context.informationId,
+          })
+        ).filter((atom) => atom.kind === "core.llm.failed"),
+      ).toHaveLength(1);
+    } finally {
+      await fixture.core.close();
+      await fixture.database.close();
+    }
+  });
   it(
     "registers requested then completed with direct status and context links",
     async () => {

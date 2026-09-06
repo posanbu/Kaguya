@@ -59,6 +59,9 @@ importers:
       '@kaguya/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
+      '@kaguya/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
 
   apps/server:
     dependencies:
@@ -86,9 +89,15 @@ importers:
       '@kaguya/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@kaguya/llm':
+        specifier: workspace:*
+        version: link:../../packages/llm
       '@kaguya/logger':
         specifier: workspace:*
         version: link:../../packages/logger
+      '@kaguya/modules':
+        specifier: workspace:*
+        version: link:../../packages/modules
       '@kaguya/platform-adapters':
         specifier: workspace:*
         version: link:../../packages/platform-adapters
@@ -98,6 +107,9 @@ importers:
       '@kaguya/schema':
         specifier: workspace:*
         version: link:../../packages/schema
+      '@kaguya/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
       fastify:
         specifier: ^5.10.0
         version: 5.10.0
@@ -212,6 +224,9 @@ importers:
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
+      '@kaguya/database':
+        specifier: workspace:*
+        version: link:../database
       '@kaguya/engine':
         specifier: workspace:*
         version: link:../engine

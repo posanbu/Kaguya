@@ -12,6 +12,10 @@
  * 输入输出与副作用：每个用例使用独立临时配置目录或内存 PGlite；
  * 启动错误用人工包含密码的连接异常验证返回值与日志均已脱敏。
  */
+import {
+  createReplyComposition,
+  type RuntimeModelSelectionResolver,
+} from "./runtime-composition.js";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,10 +25,7 @@ import { KaguyaDatabase } from "@kaguya/database";
 import { createTestingDatabase } from "@kaguya/database/testing";
 import { FileUserConfigManager } from "@kaguya/config";
 import { closeLogger, createLogger, createModuleLogger } from "@kaguya/logger";
-import {
-  KaguyaRuntime,
-  type RuntimeModelSelectionResolver,
-} from "@kaguya/runtime";
+import { KaguyaRuntime } from "@kaguya/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
@@ -125,7 +126,10 @@ describe("unified server composition", () => {
   it("ingests Web messages through the shared Runtime as a platform adapter", async () => {
     const workspaceRoot = tempWorkspaceRoot();
     const database = await createTestingDatabase();
-    const runtime = new KaguyaRuntime({ database });
+    const runtime = new KaguyaRuntime({
+      database,
+      ...createReplyComposition(),
+    });
     runtime.registerTransport({
       adapterId: "web.ui.main",
       platform: "web",
@@ -178,6 +182,11 @@ describe("unified server composition", () => {
       data: { status: "accepted", requestId: "request-server-1" },
     });
     await vi.waitFor(() => expect(receipts).toHaveLength(1));
+    await vi.waitFor(
+      async () =>
+        expect((await database.information.reliable.health()).pending).toBe(0),
+      { timeout: 5000 },
+    );
     const graph = await database.information.query({
       informationId: receipts[0]!.rootInformationId,
     });

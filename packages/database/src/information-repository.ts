@@ -4,7 +4,7 @@
  * 归一为仓储层错误，供 engine 的 `InformationLedger` 直接消费。
  * 主要职责：`InformationRepository` 在启动期以幂等方式登记当前 kind，并拒绝缺失历史 kind 的
  * Registry；它还校验引用 expectations、事务写入 atom/reference/outbox、提供 `get/getMany/find/query`，
- * 并管理待投影日志的读取、成功确认与失败计数。
+ * 并通过 reliable 端口提供原子去重与执行表；append 同事务写入 durable 投递意图，管理待投影日志的读取、成功确认与失败计数。
  * 代码库关系：`InformationCore` 只会看到这里实现的 ledger 端口；`driver.ts`
  * 提供事务与 query 抽象，`migrations.ts` 则先建立表结构、索引和 mutation 触发器。
  * 输入输出与副作用：写入全部在数据库事务中完成，冲突和引用错误映射为稳定错误类型；
@@ -27,6 +27,8 @@ import type {
   InformationReferenceQuery,
 } from "@kaguya/engine";
 import type { InformationFindQuery } from "@kaguya/sdk";
+
+import { ReliableInformationRepository } from "./reliable-repository.js";
 
 import type { SqlDatabase, SqlTransaction } from "./driver.js";
 
@@ -99,7 +101,14 @@ export interface PendingInformationLogProjection {
  * information atom.
  */
 export class InformationRepository implements InformationLedger {
-  constructor(private readonly database: SqlDatabase) {}
+  readonly reliable: ReliableInformationRepository;
+  constructor(private readonly database: SqlDatabase) {
+    this.reliable = new ReliableInformationRepository(
+      database,
+      appendInformationAtom,
+      readAtomById,
+    );
+  }
 
   async synchronizeKinds(kinds: readonly string[]): Promise<void> {
     await this.database.transaction(async (tx) => {
@@ -121,121 +130,9 @@ export class InformationRepository implements InformationLedger {
     expectations: readonly InformationReferenceExpectation[],
     options: InformationAppendOptions = {},
   ): Promise<void> {
-    await this.database.transaction(async (tx) => {
-      try {
-        await tx.query(
-          `INSERT INTO information_atoms (
-             information_id, kind, occurred_at, source, payload
-           ) VALUES ($1, $2, $3, $4, $5::jsonb)`,
-          [
-            atom.informationId,
-            atom.kind,
-            atom.occurredAt,
-            atom.source,
-            JSON.stringify(atom.payload),
-          ],
-        );
-
-        const expectationsByRelation = new Map(
-          expectations.map(
-            (expectation) => [expectation.relation, expectation] as const,
-          ),
-        );
-        const seenRelations = new Map<string, number>();
-        const targetIds = new Set<string>();
-
-        for (const reference of atom.references) {
-          const expectation = expectationsByRelation.get(reference.relation);
-          if (expectation === undefined) {
-            throw new InvalidInformationReferenceError(
-              atom.kind,
-              reference.relation,
-              "undeclared",
-            );
-          }
-          if (
-            expectation.multiple !== true &&
-            seenRelations.has(reference.relation)
-          ) {
-            throw new InvalidInformationReferenceError(
-              atom.kind,
-              reference.relation,
-              "multiple",
-            );
-          }
-          seenRelations.set(
-            reference.relation,
-            (seenRelations.get(reference.relation) ?? 0) + 1,
-          );
-          targetIds.add(reference.informationId);
-        }
-
-        for (const expectation of expectations) {
-          if (
-            expectation.required === true &&
-            (seenRelations.get(expectation.relation) ?? 0) === 0
-          ) {
-            throw new InvalidInformationReferenceError(
-              atom.kind,
-              expectation.relation,
-              "required",
-            );
-          }
-        }
-
-        const targetKindsById = await loadTargetKinds(tx, [...targetIds]);
-
-        for (const reference of atom.references) {
-          const expectation = expectationsByRelation.get(reference.relation);
-          if (expectation === undefined) {
-            continue;
-          }
-
-          const targetKind = targetKindsById.get(reference.informationId);
-          if (targetKind === undefined) {
-            throw new InvalidInformationReferenceError(
-              atom.kind,
-              reference.relation,
-              "missing-target",
-            );
-          }
-          if (
-            expectation.targetKinds !== undefined &&
-            !expectation.targetKinds.includes(targetKind)
-          ) {
-            throw new InvalidInformationReferenceError(
-              atom.kind,
-              reference.relation,
-              "target-kind",
-            );
-          }
-        }
-
-        for (const [ordinal, reference] of atom.references.entries()) {
-          await tx.query(
-            `INSERT INTO information_references (
-               information_id, ordinal, relation, target_information_id
-             ) VALUES ($1, $2, $3, $4)`,
-            [
-              atom.informationId,
-              ordinal,
-              reference.relation,
-              reference.informationId,
-            ],
-          );
-        }
-
-        if (options.enqueueLogProjection === true) {
-          await tx.query(
-            `INSERT INTO information_log_outbox (information_id)
-             VALUES ($1)`,
-            [atom.informationId],
-          );
-        }
-      } catch (error) {
-        throw mapStoreError(atom.informationId, error);
-      }
-    });
+    await this.database.transaction((tx) =>
+      appendInformationAtom(tx, atom, expectations, options),
+    );
   }
 
   async get(
@@ -405,6 +302,133 @@ export class InformationRepository implements InformationLedger {
         [informationId, errorType.slice(0, 120)],
       );
     });
+  }
+}
+
+async function appendInformationAtom(
+  tx: SqlTransaction,
+  atom: DeepReadonly<InformationAtom>,
+  expectations: readonly InformationReferenceExpectation[],
+  options: InformationAppendOptions = {},
+): Promise<void> {
+  try {
+    await tx.query(
+      `INSERT INTO information_atoms (
+             information_id, kind, occurred_at, source, payload
+           ) VALUES ($1, $2, $3, $4, $5::jsonb)`,
+      [
+        atom.informationId,
+        atom.kind,
+        atom.occurredAt,
+        atom.source,
+        JSON.stringify(atom.payload),
+      ],
+    );
+
+    const expectationsByRelation = new Map(
+      expectations.map(
+        (expectation) => [expectation.relation, expectation] as const,
+      ),
+    );
+    const seenRelations = new Map<string, number>();
+    const targetIds = new Set<string>();
+
+    for (const reference of atom.references) {
+      const expectation = expectationsByRelation.get(reference.relation);
+      if (expectation === undefined) {
+        throw new InvalidInformationReferenceError(
+          atom.kind,
+          reference.relation,
+          "undeclared",
+        );
+      }
+      if (
+        expectation.multiple !== true &&
+        seenRelations.has(reference.relation)
+      ) {
+        throw new InvalidInformationReferenceError(
+          atom.kind,
+          reference.relation,
+          "multiple",
+        );
+      }
+      seenRelations.set(
+        reference.relation,
+        (seenRelations.get(reference.relation) ?? 0) + 1,
+      );
+      targetIds.add(reference.informationId);
+    }
+
+    for (const expectation of expectations) {
+      if (
+        expectation.required === true &&
+        (seenRelations.get(expectation.relation) ?? 0) === 0
+      ) {
+        throw new InvalidInformationReferenceError(
+          atom.kind,
+          expectation.relation,
+          "required",
+        );
+      }
+    }
+
+    const targetKindsById = await loadTargetKinds(tx, [...targetIds]);
+
+    for (const reference of atom.references) {
+      const expectation = expectationsByRelation.get(reference.relation);
+      if (expectation === undefined) {
+        continue;
+      }
+
+      const targetKind = targetKindsById.get(reference.informationId);
+      if (targetKind === undefined) {
+        throw new InvalidInformationReferenceError(
+          atom.kind,
+          reference.relation,
+          "missing-target",
+        );
+      }
+      if (
+        expectation.targetKinds !== undefined &&
+        !expectation.targetKinds.includes(targetKind)
+      ) {
+        throw new InvalidInformationReferenceError(
+          atom.kind,
+          reference.relation,
+          "target-kind",
+        );
+      }
+    }
+
+    for (const [ordinal, reference] of atom.references.entries()) {
+      await tx.query(
+        `INSERT INTO information_references (
+               information_id, ordinal, relation, target_information_id
+             ) VALUES ($1, $2, $3, $4)`,
+        [
+          atom.informationId,
+          ordinal,
+          reference.relation,
+          reference.informationId,
+        ],
+      );
+    }
+
+    await tx.query(
+      `INSERT INTO information_deliveries(subscription_id, information_id)
+           SELECT subscription_id, $1 FROM information_subscriptions
+           WHERE enabled = true AND kind = $2`,
+      [atom.informationId, atom.kind],
+    );
+    if (options.enqueueLogProjection === true) {
+      await tx.query(
+        `INSERT INTO information_log_outbox (information_id)
+             VALUES ($1)`,
+        [atom.informationId],
+      );
+    }
+  } catch (error) {
+    throw mapStoreError(atom.informationId, error);
   }
 }
 

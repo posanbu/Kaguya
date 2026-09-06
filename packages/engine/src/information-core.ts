@@ -1,16 +1,24 @@
 /**
  * 架构说明：本模块把 registry、store 与 bus 组合成信息 Core，
  * 负责启动前注册同步、注册时的 ID 生成、引用 expectations 传递、并发广播与故障事实。
- * 主要职责：`register` 校验、落账并广播新 atom；`on` 校验非空 typed consumer 身份后订阅；
+ * 主要职责：`registerOnce`/`commitTerminal` 在数据库原子竞争且只广播新赢家；durable handler 由 claim 与 signal 保护；
+ * `register` 用于 ingress 与 live 观测事实，校验、落账并广播新 atom；`on` 校验非空 typed consumer 身份后订阅；
  * `get`/`getMany`/`find`/`query` 只读账本；公开写入和订阅分别只有 `register` 与 typed `on`。
  * 代码库关系：Core 是信息原子体系的入口编排层，依赖 Registry、Ledger 与 Bus；
  * `information-kinds.ts` 提供唯一的 `consumer.failed` 定义，Runtime 后续复用它。
  * 输入输出与副作用：提交成功才广播当前快照，拒绝的消费者被记录为失败 atom；失败
  * atom 的消费者或持久化失败只进入 bootstrap reporter，绝不递归产生故障链；失败事实
  * 会继承输入唯一的 `core:context`，Error rejection 的类型固定为 `Error`。start/close 共享
- * promise；关闭先拒绝新注册、等待已接受的落账和广播，再排空日志投影并清理订阅，
+ * promise；关闭先拒绝新注册、有界等待已接受的落账和广播，再排空日志投影并清理订阅，
  * 确保并发调用不能重复初始化、复活 Core 或泄漏原异常正文。
  */
+import {
+  ReliableInformationRunner,
+  type ReliableInformationSubscription,
+} from "./reliable-runner.js";
+import { AsyncLocalStorage } from "node:async_hooks";
+import type { InformationClaim } from "./reliable-types.js";
+import { executionExhaustedInformationKind } from "./reliable-kinds.js";
 import {
   type DeepReadonly,
   freezeInformationAtom,
@@ -76,6 +84,7 @@ export interface InformationReferenceQuery {
  * no update, delete, TTL, or compaction operation: a state change is a new atom.
  */
 export interface InformationLedger {
+  readonly reliable?: import("./reliable-types.js").ReliableInformationLedger;
   synchronizeKinds(kinds: readonly string[]): Promise<void>;
   append(
     atom: DeepReadonly<InformationAtom>,
@@ -111,6 +120,7 @@ export interface InformationLogProjectionRunner {
 }
 
 export interface InformationCoreOptions {
+  readonly drainTimeoutMs?: number;
   readonly registry: InformationKindRegistry;
   readonly store: InformationLedger;
   readonly nextInformationId: () => string;
@@ -120,9 +130,27 @@ export interface InformationCoreOptions {
   readonly retrievalStrategies?: readonly InformationRetrievalStrategy[];
 }
 
+type UniqueCommit =
+  | {
+      type: "operation" | "terminal";
+      namespace: string;
+      key: string;
+      guard?: InformationClaim;
+    }
+  | { type: "exhaust"; claim: InformationClaim };
+
 type CoreState = "new" | "starting" | "started" | "closing" | "closed";
 
 export class InformationCore {
+  readonly #durableSubscriptions = new Map<
+    string,
+    ReliableInformationSubscription
+  >();
+  #reliableRunner: ReliableInformationRunner | undefined;
+  readonly #execution = new AsyncLocalStorage<{
+    claim: InformationClaim;
+    signal: AbortSignal;
+  }>();
   readonly registry: InformationKindRegistry;
   readonly store: InformationLedger;
   #bus: InformationBus;
@@ -131,15 +159,20 @@ export class InformationCore {
   #bootstrapReporter: (error: unknown) => void | Promise<void>;
   #logProjectionRunner: InformationLogProjectionRunner | undefined;
   #selectorExecutor: InformationSelectorExecutor;
+  readonly #drainTimeoutMs: number;
   #state: CoreState = "new";
   #startPromise: Promise<void> | undefined;
   #closePromise: Promise<void> | undefined;
   readonly #inFlight = new Set<Promise<unknown>>();
 
   constructor(options: InformationCoreOptions) {
+    this.#drainTimeoutMs = options.drainTimeoutMs ?? 5000;
+    if (!Number.isSafeInteger(this.#drainTimeoutMs) || this.#drainTimeoutMs < 0)
+      throw new Error("Invalid core drain timeout");
     this.registry = options.registry;
     this.store = options.store;
     this.registry.registerBuiltin(consumerFailedInformationKind);
+    this.registry.registerBuiltin(executionExhaustedInformationKind);
     this.#bus = new InformationBus();
     this.#nextInformationId = options.nextInformationId;
     this.#now = options.now ?? (() => new Date());
@@ -171,7 +204,142 @@ export class InformationCore {
     input: InformationRegistrationInput<K, P>,
   ): Promise<DeepReadonly<InformationAtom<K, P>>> {
     this.assertState("started");
+    if (this.#execution.getStore())
+      throw new Error(
+        "Durable handlers must use registerOnce or commitTerminal",
+      );
     const operation = this.registerInternal(definition, input, true);
+    this.#inFlight.add(operation);
+    void operation.then(
+      () => this.#inFlight.delete(operation),
+      () => this.#inFlight.delete(operation),
+    );
+    return operation;
+  }
+
+  onDurable<K extends string, P extends JsonObject>(
+    subscriptionId: string,
+    definition: InformationKindDefinition<K, P>,
+    handle: (
+      atom: DeepReadonly<InformationAtom<K, P>>,
+      signal: AbortSignal,
+    ) => Promise<void> | void,
+  ): () => void {
+    this.assertOpen();
+    this.registry.assertRegistered(definition);
+    if (this.#reliableRunner)
+      throw new Error(
+        "Durable subscriptions must be installed before delivery starts",
+      );
+    if (this.#durableSubscriptions.has(subscriptionId))
+      throw new Error("Duplicate durable subscription ID");
+    this.#durableSubscriptions.set(subscriptionId, {
+      subscriptionId,
+      kind: definition.kind,
+      handle: handle as ReliableInformationSubscription["handle"],
+    });
+    return () => {
+      this.#durableSubscriptions.delete(subscriptionId);
+    };
+  }
+  async startReliableDelivery(): Promise<void> {
+    this.assertState("started");
+    if (this.#reliableRunner) return this.#reliableRunner.start();
+    if (!this.store.reliable) {
+      if (this.#durableSubscriptions.size)
+        throw new Error("Reliable information ledger is required");
+      return;
+    }
+    this.#reliableRunner = new ReliableInformationRunner({
+      core: this,
+      subscriptions: [...this.#durableSubscriptions.values()],
+    });
+    await this.#reliableRunner.start();
+  }
+  async stopReliableDelivery(): Promise<void> {
+    await this.#reliableRunner?.stop();
+  }
+  async executionHealth() {
+    if (!this.store.reliable)
+      throw new Error("Reliable information ledger is required");
+    return this.store.reliable.health();
+  }
+
+  get executionSignal(): AbortSignal | undefined {
+    return this.#execution.getStore()?.signal;
+  }
+
+  withClaim<T>(
+    claim: InformationClaim,
+    signal: AbortSignal,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    return this.#execution.run({ claim, signal }, run);
+  }
+
+  registerOnce<K extends string, P extends JsonObject>(
+    operation: string,
+    key: string,
+    definition: InformationKindDefinition<K, P>,
+    input: InformationRegistrationInput<K, P>,
+    guard?: InformationClaim,
+  ): Promise<DeepReadonly<InformationAtom<K, P>>> {
+    return this.registerUnique(definition, input, {
+      type: "operation",
+      namespace: operation,
+      key,
+      ...(guard ? { guard } : {}),
+    });
+  }
+
+  commitTerminal<K extends string, P extends JsonObject>(
+    group: string,
+    subjectInformationId: InformationId,
+    definition: InformationKindDefinition<K, P>,
+    input: InformationRegistrationInput<K, P>,
+    guard?: InformationClaim,
+  ): Promise<DeepReadonly<InformationAtom>> {
+    return this.registerUnique(definition, input, {
+      type: "terminal",
+      namespace: group,
+      key: subjectInformationId,
+      ...(guard ? { guard } : {}),
+    });
+  }
+
+  async exhaustClaim(claim: InformationClaim): Promise<void> {
+    await this.registerUnique(
+      executionExhaustedInformationKind,
+      {
+        occurredAt: this.#now().toISOString(),
+        source: "core:reliable-dag",
+        payload: {
+          subscriptionId: claim.subscriptionId,
+          attempts: claim.attempt,
+        },
+        references: [
+          { relation: "core:caused-by", informationId: claim.informationId },
+          { relation: "core:status-of", informationId: claim.informationId },
+        ],
+      },
+      { type: "exhaust", claim },
+    );
+  }
+
+  private registerUnique<K extends string, P extends JsonObject>(
+    definition: InformationKindDefinition<K, P>,
+    input: InformationRegistrationInput<K, P>,
+    unique: UniqueCommit,
+  ): Promise<DeepReadonly<InformationAtom<K, P>>> {
+    this.assertState("started");
+    const execution = this.#execution.getStore();
+    execution?.signal.throwIfAborted();
+    if (unique.type !== "exhaust" && execution)
+      unique = {
+        ...unique,
+        guard: { ...execution.claim, signal: execution.signal },
+      };
+    const operation = this.registerInternal(definition, input, true, unique);
     this.#inFlight.add(operation);
     void operation.then(
       () => this.#inFlight.delete(operation),
@@ -203,6 +371,7 @@ export class InformationCore {
     definition: InformationKindDefinition<K, P>,
     input: InformationRegistrationInput<K, P>,
     recordConsumerFailures: boolean,
+    unique?: UniqueCommit,
   ): Promise<DeepReadonly<InformationAtom<K, P>>> {
     const registered = this.registry.assertRegistered(
       definition as InformationKindDefinition<string, any>,
@@ -225,13 +394,39 @@ export class InformationCore {
       candidate as InformationAtom,
     ) as DeepReadonly<InformationAtom<K, P>>;
 
-    await this.store.append(
-      atom,
-      buildReferenceExpectations(registered.references),
-      {
-        enqueueLogProjection: registered.log.enabled,
-      },
-    );
+    const expectations = buildReferenceExpectations(registered.references);
+    const appendOptions = { enqueueLogProjection: registered.log.enabled };
+    if (unique) {
+      const reliable = this.store.reliable;
+      if (!reliable) throw new Error("Reliable information ledger is required");
+      this.#execution.getStore()?.signal.throwIfAborted();
+      if (unique.type === "exhaust") {
+        await reliable.exhaust(unique.claim, atom, expectations);
+      } else {
+        const result =
+          unique.type === "operation"
+            ? await reliable.appendOnce(
+                unique.namespace,
+                unique.key,
+                atom,
+                expectations,
+                appendOptions,
+                unique.guard,
+              )
+            : await reliable.appendTerminal(
+                unique.namespace,
+                unique.key,
+                atom,
+                expectations,
+                appendOptions,
+                unique.guard,
+              );
+        if (!result.created)
+          return result.atom as DeepReadonly<InformationAtom<K, P>>;
+      }
+    } else {
+      await this.store.append(atom, expectations, appendOptions);
+    }
     const outcomes = await this.#bus.publish(
       atom as unknown as InformationAtom,
     );
@@ -300,8 +495,15 @@ export class InformationCore {
     this.#state = "closing";
     this.#closePromise = (async () => {
       await starting?.catch(() => undefined);
-      await Promise.allSettled([...this.#inFlight]);
-      await this.projectPendingLogs(true);
+      await this.stopReliableDelivery();
+      await boundedCoreDrain(
+        Promise.allSettled([...this.#inFlight]),
+        this.#drainTimeoutMs,
+      );
+      await boundedCoreDrain(
+        this.projectPendingLogs(true),
+        this.#drainTimeoutMs,
+      );
       this.#bus.clear();
       this.#state = "closed";
     })();
@@ -483,4 +685,21 @@ function buildReferenceExpectations(
           });
     }),
   );
+}
+
+async function boundedCoreDrain(
+  work: Promise<unknown>,
+  timeoutMs: number,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      work.catch(() => undefined),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }

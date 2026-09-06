@@ -13,6 +13,7 @@
  * 输入输出与副作用：测试只写入进程内账本，注册的 atom 必须先满足引用存在性；每个
  * 宿主在断言后停止，以撤销 Core 订阅并释放模块实例。
  */
+import { defineInformationModuleCatalog } from "@kaguya/sdk";
 import {
   freezeInformationAtom,
   informationIdSchema,
@@ -188,8 +189,10 @@ async function startHost(
   core: InformationCore,
   instanceId = "echo.default",
 ): Promise<ModuleHost> {
-  const host = new ModuleHost({ core });
-  host.register(module);
+  const host = new ModuleHost({
+    core,
+    catalog: defineInformationModuleCatalog(module),
+  });
   await host.start([
     { instanceId, definitionId: module.manifest.definitionId, settings: {} },
   ]);
@@ -207,20 +210,31 @@ describe("ModuleHost", () => {
     });
     const module = defineInformationModule({
       manifest: {
-        apiVersion: 1,
+        protocolVersion: 1,
+        moduleVersion: "1.0.0",
+        selectors: [currentSelector],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
         definitionId: "acme.selector-consumer",
         displayName: "Selector consumer",
         settingsSchema: z.object({}).strict(),
-        informationKinds: [inboundKind, selectedOutputKind],
+        consumes: [inboundKind, selectedOutputKind],
+        produces: [inboundKind, selectedOutputKind],
       },
       create: () => ({
+        provisions: [],
         subscriptions: [
-          onInformation(inboundKind, async (_atom, handlerContext) => {
-            const selected = await handlerContext.select(currentSelector);
-            await handlerContext.register(selectedOutputKind, {
-              payload: { selectedId: selected[0]!.informationId },
-            });
-          }),
+          onInformation(
+            inboundKind,
+            { subscriptionId: "handle-inboundkind", delivery: "live" },
+            async (_atom, handlerContext) => {
+              const selected = await handlerContext.select(currentSelector);
+              await handlerContext.register(selectedOutputKind, {
+                payload: { selectedId: selected[0]!.informationId },
+              });
+            },
+          ),
         ],
       }),
     });
@@ -251,17 +265,28 @@ describe("ModuleHost", () => {
     });
     const module = defineInformationModule({
       manifest: {
-        apiVersion: 1,
+        protocolVersion: 1,
+        moduleVersion: "1.0.0",
+        selectors: [failingSelector],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
         definitionId: "acme.selector-failure",
         displayName: "Selector failure",
         settingsSchema: z.object({}).strict(),
-        informationKinds: [inboundKind],
+        consumes: [inboundKind],
+        produces: [inboundKind],
       },
       create: () => ({
+        provisions: [],
         subscriptions: [
-          onInformation(inboundKind, async (_atom, handlerContext) => {
-            await handlerContext.select(failingSelector);
-          }),
+          onInformation(
+            inboundKind,
+            { subscriptionId: "handle-inboundkind", delivery: "live" },
+            async (_atom, handlerContext) => {
+              await handlerContext.select(failingSelector);
+            },
+          ),
         ],
       }),
     });
@@ -296,20 +321,28 @@ describe("ModuleHost", () => {
     let creates = 0;
     const module = defineInformationModule({
       manifest: {
-        apiVersion: 1,
+        protocolVersion: 1,
+        moduleVersion: "1.0.0",
+        selectors: [],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
         definitionId: "acme.concurrent-start",
         displayName: "Concurrent start",
         settingsSchema: z.object({}).strict(),
-        informationKinds: [inboundKind],
+        consumes: [inboundKind],
+        produces: [inboundKind],
       },
       create: async () => {
         creates += 1;
         await gate;
-        return { subscriptions: [] };
+        return { provisions: [], subscriptions: [] };
       },
     });
-    const host = new ModuleHost({ core });
-    host.register(module);
+    const host = new ModuleHost({
+      core,
+      catalog: defineInformationModuleCatalog(module),
+    });
     const activations = [
       {
         instanceId: "reply.one",
@@ -342,16 +375,23 @@ describe("ModuleHost", () => {
     let disposed = 0;
     const module = defineInformationModule({
       manifest: {
-        apiVersion: 1,
+        protocolVersion: 1,
+        moduleVersion: "1.0.0",
+        selectors: [],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
         definitionId: "acme.stop-during-start",
         displayName: "Stop during start",
         settingsSchema: z.object({}).strict(),
-        informationKinds: [inboundKind],
+        consumes: [inboundKind],
+        produces: [inboundKind],
       },
       create: async () => {
         entered();
         await gate;
         return {
+          provisions: [],
           subscriptions: [],
           dispose: () => {
             disposed += 1;
@@ -359,8 +399,10 @@ describe("ModuleHost", () => {
         };
       },
     });
-    const host = new ModuleHost({ core });
-    host.register(module);
+    const host = new ModuleHost({
+      core,
+      catalog: defineInformationModuleCatalog(module),
+    });
     const starting = host.start([
       {
         instanceId: "reply.one",
@@ -400,23 +442,32 @@ describe("ModuleHost", () => {
     const rollbackFailure = new Error("async rollback failed");
     const module = defineInformationModule({
       manifest: {
-        apiVersion: 1,
+        protocolVersion: 1,
+        moduleVersion: "1.0.0",
+        selectors: [],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
         definitionId: "acme.rollback-failure",
         displayName: "Rollback failure",
         settingsSchema: z.object({}).strict(),
-        informationKinds: [inboundKind],
+        consumes: [inboundKind],
+        produces: [inboundKind],
       },
       create: async () => {
         entered();
         await gate;
         return {
+          provisions: [],
           subscriptions: [],
           dispose: async () => Promise.reject(rollbackFailure),
         };
       },
     });
-    const host = new ModuleHost({ core });
-    host.register(module);
+    const host = new ModuleHost({
+      core,
+      catalog: defineInformationModuleCatalog(module),
+    });
     const starting = host.start([
       {
         instanceId: "reply.rollback",
@@ -437,7 +488,7 @@ describe("ModuleHost", () => {
       status: "rejected",
       reason: expect.objectContaining({
         name: "AggregateError",
-        message: "Information module startup rollback failed",
+        message: "One or more information modules failed to stop",
         errors: [rollbackFailure],
       }),
     });
@@ -451,13 +502,20 @@ describe("ModuleHost", () => {
     const asynchronousFailure = new Error("async dispose failed");
     const module = defineInformationModule({
       manifest: {
-        apiVersion: 1,
+        protocolVersion: 1,
+        moduleVersion: "1.0.0",
+        selectors: [],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
         definitionId: "acme.dispose-all",
         displayName: "Dispose all",
         settingsSchema: z.object({}).strict(),
-        informationKinds: [inboundKind],
+        consumes: [inboundKind],
+        produces: [inboundKind],
       },
       create: ({ instanceId }) => ({
+        provisions: [],
         subscriptions: [],
         dispose: () => {
           attempts.push(instanceId);
@@ -468,8 +526,10 @@ describe("ModuleHost", () => {
         },
       }),
     });
-    const host = new ModuleHost({ core });
-    host.register(module);
+    const host = new ModuleHost({
+      core,
+      catalog: defineInformationModuleCatalog(module),
+    });
     await host.start(
       ["dispose.sync", "dispose.async", "dispose.success"].map(
         (instanceId) => ({
@@ -487,27 +547,34 @@ describe("ModuleHost", () => {
     });
     expect(attempts).toEqual([
       "dispose.sync",
-      "dispose.async",
       "dispose.success",
+      "dispose.async",
     ]);
   });
 
-  it("rejects an unsafe instance source and disposes resources created earlier in the startup", async () => {
+  it("rejects an unsafe instance source before creating any resources", async () => {
     const { core } = createCore();
     await core.start();
     let creates = 0;
     let disposed = 0;
     const module = defineInformationModule({
       manifest: {
-        apiVersion: 1,
+        protocolVersion: 1,
+        moduleVersion: "1.0.0",
+        selectors: [],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
         definitionId: "acme.instance-source",
         displayName: "Instance source",
         settingsSchema: z.object({}).strict(),
-        informationKinds: [inboundKind],
+        consumes: [inboundKind],
+        produces: [inboundKind],
       },
       create: () => {
         creates += 1;
         return {
+          provisions: [],
           subscriptions: [],
           dispose: () => {
             disposed += 1;
@@ -515,9 +582,10 @@ describe("ModuleHost", () => {
         };
       },
     });
-    const host = new ModuleHost({ core });
-    host.register(module);
-
+    const host = new ModuleHost({
+      core,
+      catalog: defineInformationModuleCatalog(module),
+    });
     await expect(
       host.start([
         {
@@ -532,8 +600,8 @@ describe("ModuleHost", () => {
         },
       ]),
     ).rejects.toThrow("Information module instance id must form a safe source");
-    expect(creates).toBe(1);
-    expect(disposed).toBe(1);
+    expect(creates).toBe(0);
+    expect(disposed).toBe(0);
   });
 
   it("registers a derived atom with module identity and causal references", async () => {
@@ -543,21 +611,32 @@ describe("ModuleHost", () => {
     const derived: DeepReadonly<InformationAtom>[] = [];
     const module = defineInformationModule({
       manifest: {
-        apiVersion: 1,
+        protocolVersion: 1,
+        moduleVersion: "1.0.0",
+        selectors: [],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
         definitionId: "acme.echo",
         displayName: "Echo",
         settingsSchema: z.object({}).strict(),
-        informationKinds: [inboundKind, outputKind],
+        consumes: [inboundKind, outputKind],
+        produces: [inboundKind, outputKind],
       },
       create: () => ({
+        provisions: [],
         subscriptions: [
-          onInformation(inboundKind, async (atom, handlerContext) => {
-            derived.push(
-              await handlerContext.register(outputKind, {
-                payload: { text: atom.payload.text },
-              }),
-            );
-          }),
+          onInformation(
+            inboundKind,
+            { subscriptionId: "handle-inboundkind", delivery: "live" },
+            async (atom, handlerContext) => {
+              derived.push(
+                await handlerContext.register(outputKind, {
+                  payload: { text: atom.payload.text },
+                }),
+              );
+            },
+          ),
         ],
       }),
     });
@@ -590,31 +669,42 @@ describe("ModuleHost", () => {
     const rejections: unknown[] = [];
     const module = defineInformationModule({
       manifest: {
-        apiVersion: 1,
+        protocolVersion: 1,
+        moduleVersion: "1.0.0",
+        selectors: [],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
         definitionId: "acme.reserved",
         displayName: "Reserved",
         settingsSchema: z.object({}).strict(),
-        informationKinds: [inboundKind, outputKind],
+        consumes: [inboundKind, outputKind],
+        produces: [inboundKind, outputKind],
       },
       create: () => ({
+        provisions: [],
         subscriptions: [
-          onInformation(inboundKind, async (_atom, handlerContext) => {
-            for (const relation of [
-              "core:caused-by",
-              "core:context",
-            ] as const) {
-              try {
-                await handlerContext.register(outputKind, {
-                  payload: { text: "blocked" },
-                  references: [
-                    { relation, informationId: context.informationId },
-                  ],
-                });
-              } catch (error) {
-                rejections.push(error);
+          onInformation(
+            inboundKind,
+            { subscriptionId: "handle-inboundkind", delivery: "live" },
+            async (_atom, handlerContext) => {
+              for (const relation of [
+                "core:caused-by",
+                "core:context",
+              ] as const) {
+                try {
+                  await handlerContext.register(outputKind, {
+                    payload: { text: "blocked" },
+                    references: [
+                      { relation, informationId: context.informationId },
+                    ],
+                  });
+                } catch (error) {
+                  rejections.push(error);
+                }
               }
-            }
-          }),
+            },
+          ),
         ],
       }),
     });
@@ -638,15 +728,24 @@ describe("ModuleHost", () => {
     await core.start();
     const module = defineInformationModule({
       manifest: {
-        apiVersion: 1,
+        protocolVersion: 1,
+        moduleVersion: "1.0.0",
+        selectors: [],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
         definitionId: "acme.mismatch",
         displayName: "Mismatch",
         settingsSchema: z.object({}).strict(),
-        informationKinds: [inboundKind, outputKind],
+        consumes: [inboundKind, outputKind],
+        produces: [inboundKind, outputKind],
       },
       create: () => ({
+        provisions: [],
         subscriptions: [
           {
+            subscriptionId: "invalid",
+            delivery: "live",
             kind: inboundKind.kind,
             definition: outputKind,
             handle: () => undefined,
@@ -654,9 +753,10 @@ describe("ModuleHost", () => {
         ],
       }),
     });
-    const host = new ModuleHost({ core });
-    host.register(module);
-
+    const host = new ModuleHost({
+      core,
+      catalog: defineInformationModuleCatalog(module),
+    });
     await expect(
       host.start([
         {
@@ -676,15 +776,24 @@ describe("ModuleHost", () => {
     let disposed = 0;
     const module = defineInformationModule({
       manifest: {
-        apiVersion: 1,
+        protocolVersion: 1,
+        moduleVersion: "1.0.0",
+        selectors: [],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
         definitionId: "acme.dispose-on-invalid-subscription",
         displayName: "Dispose invalid instance",
         settingsSchema: z.object({}).strict(),
-        informationKinds: [inboundKind],
+        consumes: [inboundKind],
+        produces: [inboundKind],
       },
       create: () => ({
+        provisions: [],
         subscriptions: [
           {
+            subscriptionId: "invalid",
+            delivery: "live",
             kind: inboundKind.kind,
             definition: outputKind,
             handle: () => undefined,
@@ -695,9 +804,10 @@ describe("ModuleHost", () => {
         },
       }),
     });
-    const host = new ModuleHost({ core });
-    host.register(module);
-
+    const host = new ModuleHost({
+      core,
+      catalog: defineInformationModuleCatalog(module),
+    });
     await expect(
       host.start([
         {
@@ -725,23 +835,34 @@ describe("ModuleHost", () => {
     let rejection: unknown;
     const module = defineInformationModule({
       manifest: {
-        apiVersion: 1,
+        protocolVersion: 1,
+        moduleVersion: "1.0.0",
+        selectors: [],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
         definitionId: "acme.undeclared",
         displayName: "Undeclared",
         settingsSchema: z.object({}).strict(),
-        informationKinds: [inboundKind],
+        consumes: [inboundKind],
+        produces: [inboundKind],
       },
       create: () => ({
+        provisions: [],
         subscriptions: [
-          onInformation(inboundKind, async (_atom, handlerContext) => {
-            try {
-              await handlerContext.register(undeclaredKind, {
-                payload: { text: "blocked" },
-              });
-            } catch (error) {
-              rejection = error;
-            }
-          }),
+          onInformation(
+            inboundKind,
+            { subscriptionId: "handle-inboundkind", delivery: "live" },
+            async (_atom, handlerContext) => {
+              try {
+                await handlerContext.register(undeclaredKind, {
+                  payload: { text: "blocked" },
+                });
+              } catch (error) {
+                rejection = error;
+              }
+            },
+          ),
         ],
       }),
     });
@@ -759,17 +880,28 @@ describe("ModuleHost", () => {
     let atom: DeepReadonly<InformationAtom> | undefined;
     const module = defineInformationModule({
       manifest: {
-        apiVersion: 1,
+        protocolVersion: 1,
+        moduleVersion: "1.0.0",
+        selectors: [],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
         definitionId: "acme.frozen",
         displayName: "Frozen",
         settingsSchema: z.object({}).strict(),
-        informationKinds: [inboundKind],
+        consumes: [inboundKind],
+        produces: [inboundKind],
       },
       create: () => ({
+        provisions: [],
         subscriptions: [
-          onInformation(inboundKind, (input) => {
-            atom = input;
-          }),
+          onInformation(
+            inboundKind,
+            { subscriptionId: "handle-inboundkind", delivery: "live" },
+            (input) => {
+              atom = input;
+            },
+          ),
         ],
       }),
     });
@@ -795,26 +927,38 @@ describe("ModuleHost", () => {
     const make = (id: string) =>
       defineInformationModule({
         manifest: {
-          apiVersion: 1,
+          protocolVersion: 1,
+          moduleVersion: "1.0.0",
+          selectors: [],
+          promptRenderers: [],
+          requires: [],
+          provides: [],
           definitionId: id,
           displayName: id,
           settingsSchema: z.object({}).strict(),
-          informationKinds: [inboundKind],
+          consumes: [inboundKind],
+          produces: [inboundKind],
         },
         create: () => ({
+          provisions: [],
           subscriptions: [
-            onInformation(inboundKind, async () => {
-              entered.push(id);
-              await gate;
-            }),
+            onInformation(
+              inboundKind,
+              { subscriptionId: "handle-inboundkind", delivery: "live" },
+              async () => {
+                entered.push(id);
+                await gate;
+              },
+            ),
           ],
         }),
       });
     const first = make("acme.first");
     const second = make("acme.second");
-    const host = new ModuleHost({ core });
-    host.register(first);
-    host.register(second);
+    const host = new ModuleHost({
+      core,
+      catalog: defineInformationModuleCatalog(first, second),
+    });
     await host.start([
       {
         instanceId: "first",
@@ -844,17 +988,28 @@ describe("ModuleHost", () => {
     const context = await appendContext(core);
     const module = defineInformationModule({
       manifest: {
-        apiVersion: 1,
+        protocolVersion: 1,
+        moduleVersion: "1.0.0",
+        selectors: [],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
         definitionId: "acme.failure",
         displayName: "Failure",
         settingsSchema: z.object({}).strict(),
-        informationKinds: [inboundKind],
+        consumes: [inboundKind],
+        produces: [inboundKind],
       },
       create: () => ({
+        provisions: [],
         subscriptions: [
-          onInformation(inboundKind, () => {
-            throw new Error("expected failure");
-          }),
+          onInformation(
+            inboundKind,
+            { subscriptionId: "handle-inboundkind", delivery: "live" },
+            () => {
+              throw new Error("expected failure");
+            },
+          ),
         ],
       }),
     });
@@ -867,7 +1022,7 @@ describe("ModuleHost", () => {
     );
     expect(failure?.payload).toMatchObject({
       consumer: {
-        consumerId: "module:failure.default",
+        consumerId: "module:failure.default:handle-inboundkind",
         definitionId: "acme.failure",
         instanceId: "failure.default",
       },

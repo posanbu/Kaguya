@@ -54,3 +54,13 @@ export {
   ModuleKindNotDeclaredError,
   type ModuleHostOptions,
 } from "./module-host.js";
+
+export * from "./reliable-types.js";
+
+export { executionExhaustedInformationKind } from "./reliable-kinds.js";
+
+export {
+  ReliableInformationRunner,
+  type ReliableInformationRunnerOptions,
+  type ReliableInformationSubscription,
+} from "./reliable-runner.js";

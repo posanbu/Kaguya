@@ -19,6 +19,7 @@
     "@kaguya/sdk": "workspace:*"
   },
   "devDependencies": {
-    "@kaguya/engine": "workspace:*"
+    "@kaguya/engine": "workspace:*",
+    "@kaguya/database": "workspace:*"
   }
 }

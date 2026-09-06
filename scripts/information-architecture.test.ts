@@ -64,7 +64,10 @@ const forbidden: readonly ForbiddenRule[] = [
   { name: "InformationAppendInput", pattern: /\bInformationAppendInput\b/ },
   { name: "PlatformReplySender", pattern: /\bPlatformReplySender\b/ },
   { name: "sendTextReply", pattern: /\bsendTextReply\b/ },
-  { name: "InboundReceipt.delivery", pattern: /\breadonly\s+delivery\??\s*:/ },
+  {
+    name: "InboundReceipt.delivery",
+    pattern: /\breadonly\s+delivery\??\s*:(?!\s*"live"\s*\|\s*"durable")/,
+  },
   { name: "node:sqlite", pattern: /\bnode:sqlite\b/ },
   { name: "DatabaseSync", pattern: /\bDatabaseSync\b/ },
   { name: ".sqlite", pattern: /\.sqlite\b/ },
@@ -272,6 +275,21 @@ if (process.env.VITEST) {
           "schema.reject({ sessionId, contextKey });",
         ),
       ).toEqual([]);
+    });
+
+    it("allows module delivery semantics while rejecting receipt aliases", () => {
+      expect(
+        findSourceViolations(
+          "packages/sdk/src/modules.ts",
+          'readonly delivery: "live" | "durable";',
+        ),
+      ).toEqual([]);
+      expect(
+        findSourceViolations(
+          "packages/platform-adapters/src/types.ts",
+          "readonly delivery?: PlatformDeliveryReceipt;",
+        ).some((v) => v.includes("InboundReceipt.delivery")),
+      ).toBe(true);
     });
 
     it("scans the current production workspace", async () => {

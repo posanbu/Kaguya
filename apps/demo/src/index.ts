@@ -9,6 +9,7 @@
  * 输入输出与副作用：CLI 会建立一个 PostgreSQL 连接、执行迁移/账本写入并输出统计；
  * 连接或运行失败只输出安全错误类型，不回显数据库 URL 或原始异常。
  */
+import { createReplyComposition } from "./runtime-composition.js";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
@@ -39,6 +40,7 @@ export async function runDemo(
   options: RunDemoOptions,
 ): Promise<InboundReceipt> {
   const runtime = new KaguyaRuntime({
+    ...createReplyComposition(),
     database: options.database,
     now: () => new Date("2026-09-04T00:00:00.000Z"),
     informationIdGenerator: options.informationIdGenerator ?? randomUUID,
@@ -72,6 +74,12 @@ export async function runDemo(
       throw new Error("Demo web message is invalid");
     }
     const receipt = await runtime.submit(inbound);
+    const deadline = Date.now() + 10_000;
+    while ((await options.database.information.reliable.health()).pending > 0) {
+      if (Date.now() >= deadline)
+        throw new Error("Demo delivery did not settle within ten seconds");
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
     const graph = await options.database.information.query({
       informationId: receipt.rootInformationId,
     });
