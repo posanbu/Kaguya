@@ -2,13 +2,25 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "rootDir": "./src",
-    "outDir": "./dist"
+    "outDir": "./dist",
+    "types": ["node"]
   },
   "include": ["src/**/*.ts"],
   "references": [
-    { "path": "../schema" },
-    { "path": "../sdk" },
-    { "path": "../prompt" },
-    { "path": "../llm" }
+    {
+      "path": "../schema"
+    },
+    {
+      "path": "../sdk"
+    },
+    {
+      "path": "../prompt"
+    },
+    {
+      "path": "../llm"
+    },
+    {
+      "path": "../database"
+    }
   ]
 }

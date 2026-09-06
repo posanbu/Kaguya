@@ -1,45 +1,51 @@
 /**
- * 功能概述：本模块把 SDK 定义的信息模块实例接入 `InformationCore`，并为每个订阅
- * 赋予稳定的模块消费者身份和可注册派生 atom、选择账本上下文的 handler context。
- * 主要职责：`ModuleHost.register/start/stop` 以共享 promise 管理并发生命周期；启动时
- * 先验证每个 subscription 的 definition 与 manifest 同一对象，再调用 Core.on；
- * `createContext` 只允许 manifest 声明的输出，为 Core.register 补齐模块 source、因果
- * 与 context 引用，并把 Selector 委托给 Core 以重新加载已授权原子。
- * 代码库关系：依赖 SDK 的 information-module 契约和 Core 的最终 on/register API；
- * Core 负责广播并记录 consumer.failed，因此本宿主不吞掉或二次记录 handler 故障。
- * 输入输出与副作用：启动验证 instanceId 能组成小写安全 source；停止先撤销订阅、等待
- * 已进入的 handler，再以 all-settled 方式调用全部模块 dispose；启动 rollback 的释放失败
- * 同时反馈给 start 与并发 stop。启动/停止竞态不会重复创建、重复释放或复活宿主；
- * context.select 只读账本且错误沿 handler 结算；context.register 会持久化新 atom，
- * 且拒绝调用方覆盖 Core 保留关系。
+ * 功能概述：按唯一 SDK Catalog 协议预检并托管模块，严格隔离声明能力与业务原子。
+ * 主要职责：preflight 在任何 create 前验证配置、kind、Selector、renderer 和能力图；
+ * start 按确定性拓扑顺序创建/启动，全部成功后开放订阅；失败逆序 stop/dispose。
+ * 代码库关系：Runtime 先把 catalogInformationKinds 注册到 Core，再调用本宿主；
+ * durable 订阅由 Core 的 ReliableInformationRunner 执行并受 claim fencing 保护；
+ * SDK 的 use/select/registerOnce/commitTerminal 始终受清单约束，Core 负责最终原子验证与故障事实。
+ * 输入输出与副作用：设置 parse 后深冻结；回滚取消全部 prepared activation，关闭有界排空 live handler；
+ * 每个 stop/dispose hook 都受 drainTimeoutMs 限制，超时记录实例与钩子名称并继续逆序清理，
+ * 拒绝迟到写入并聚合清理错误；inspect 仅包含哈希、身份、声明与绑定，不暴露配置值。
  */
-import type {
-  DeepReadonly,
-  InformationAtom,
-  InformationReference,
-} from "@kaguya/schema";
-import type { InformationKindDefinition } from "@kaguya/sdk";
+import { createHash } from "node:crypto";
 import {
+  z,
+  type DeepReadonly,
+  type InformationAtom,
+  type InformationReference,
+  type JsonObject,
+} from "@kaguya/schema";
+import {
+  catalogInformationKinds,
+  defineInformationModuleCatalog,
+  type InformationKindDefinition,
   type InformationModuleActivation,
+  type InformationModuleCatalog,
   type InformationModuleDefinition,
   type InformationModuleHandlerContext,
   type InformationModuleInstance,
+  type InformationModuleCreateContext,
+  type ModuleCapability,
+  type ModuleCapabilityImplementation,
+  type ModuleRegistrationInput,
+  type InformationModuleSubscription,
 } from "@kaguya/sdk";
-
 import { InformationCore } from "./information-core.js";
-
 export interface ModuleHostOptions {
   readonly core: InformationCore;
+  readonly catalog: InformationModuleCatalog;
+  readonly capabilities?: readonly ModuleCapabilityImplementation[];
   readonly now?: () => Date;
+  readonly drainTimeoutMs?: number;
 }
-
 export class ModuleDefinitionNotFoundError extends Error {
   constructor(readonly definitionId: string) {
     super(`Information module definition is not registered: ${definitionId}`);
     this.name = "ModuleDefinitionNotFoundError";
   }
 }
-
 export class ModuleKindNotDeclaredError extends Error {
   constructor(
     readonly definitionId: string,
@@ -51,145 +57,495 @@ export class ModuleKindNotDeclaredError extends Error {
     this.name = "ModuleKindNotDeclaredError";
   }
 }
-
+interface PreparedModule {
+  readonly definition: InformationModuleDefinition;
+  readonly instanceId: string;
+  readonly settings: unknown;
+  readonly controller: AbortController;
+}
+interface ActiveInformationModule extends PreparedModule {
+  readonly instance: InformationModuleInstance;
+  subscriptions: readonly InformationModuleSubscription[];
+  provisions: readonly ModuleCapabilityImplementation[];
+}
 export class ModuleHost {
   readonly #options: ModuleHostOptions;
-  readonly #definitions = new Map<string, InformationModuleDefinition>();
-  readonly #active = new Map<string, ActiveInformationModule>();
+  readonly #active: ActiveInformationModule[] = [];
+  readonly #controllers = new Set<AbortController>();
   readonly #unsubscribe: Array<() => void> = [];
   readonly #inFlight = new Set<Promise<unknown>>();
+  readonly #values = new Map<string, ModuleCapabilityImplementation>();
+  readonly #bindings = new Map<string, Map<string, string>>();
   #state: "new" | "starting" | "started" | "stopping" | "stopped" = "new";
   #startPromise: Promise<void> | undefined;
   #stopPromise: Promise<void> | undefined;
   readonly #startupRollbackFailures: unknown[] = [];
-
   constructor(options: ModuleHostOptions) {
     this.#options = options;
+    if (
+      !Number.isFinite(options.drainTimeoutMs ?? 5000) ||
+      (options.drainTimeoutMs ?? 5000) < 0
+    )
+      throw new Error("invalid module drain timeout");
   }
-
-  register(definition: InformationModuleDefinition): void {
-    if (this.#state !== "new") {
-      throw new Error(
-        "Information module definitions can only be registered before start",
-      );
-    }
-    const definitionId = definition.manifest.definitionId;
-    if (this.#definitions.has(definitionId)) {
-      throw new Error(
-        `Duplicate information module definition id: ${definitionId}`,
-      );
-    }
-    this.#definitions.set(definitionId, definition);
-  }
-
   start(activations: readonly InformationModuleActivation[]): Promise<void> {
-    if (this.#state === "starting") {
-      return this.#startPromise!;
-    }
+    if (this.#state === "starting") return this.#startPromise!;
     if (this.#state === "started") return Promise.resolve();
-    if (this.#state !== "new") {
+    if (this.#state !== "new")
       return Promise.reject(new Error("ModuleHost cannot be restarted"));
-    }
     this.#state = "starting";
     this.#startPromise = this.startHost(activations);
     return this.#startPromise;
   }
-
   private async startHost(
     activations: readonly InformationModuleActivation[],
   ): Promise<void> {
-    const created: ActiveInformationModule[] = [];
     try {
-      const parsed = this.validateActivations(activations);
-      for (const activation of parsed) {
-        assertSafeInstanceSource(activation.instanceId);
-        const instance = await activation.definition.create({
-          instanceId: activation.instanceId,
-          settings: activation.settings,
-        });
-        const active = {
-          definition: activation.definition,
-          instanceId: activation.instanceId,
-          instance,
-        };
-        // create 已取得资源后，任何本地校验失败都必须纳入回滚集合。
-        created.push(active);
+      const prepared = this.preflight(activations);
+      for (const module of prepared) this.#controllers.add(module.controller);
+      for (const activation of prepared) {
         this.assertStarting();
-        this.validateSubscriptions(activation.definition, instance);
+        const context = this.createLifecycleContext(activation);
+        const instance = await activation.definition.create(
+          {
+            instanceId: activation.instanceId,
+            settings: activation.settings,
+            activation: Object.freeze({
+              instanceId: activation.instanceId,
+              definitionId: activation.definition.manifest.definitionId,
+            }),
+          },
+          context,
+        );
+        const active: ActiveInformationModule = {
+          ...activation,
+          instance,
+          subscriptions: [],
+          provisions: [],
+        };
+        this.#active.push(active);
+        this.assertStarting();
+        this.validateInstance(active);
+        for (const value of active.provisions)
+          this.#values.set(value.capability.id, value);
+        await instance.start?.(context);
+        this.assertStarting();
       }
-
-      this.assertStarting();
-      for (const module of created) {
-        for (const subscription of module.instance.subscriptions) {
-          this.#unsubscribe.push(
-            this.#options.core.on(
-              subscription.definition,
-              {
-                consumerId: `module:${module.instanceId}`,
-                definitionId: module.definition.manifest.definitionId,
-                instanceId: module.instanceId,
-              },
-              (atom) =>
-                this.trackHandler(() =>
-                  subscription.handle(atom, this.createContext(module, atom)),
-                ),
-            ),
-          );
+      // 所有 create/start 均成功之后，才安装任何业务订阅。
+      for (const module of this.#active)
+        for (const subscription of module.subscriptions) {
+          if (subscription.delivery === "durable") {
+            this.#unsubscribe.push(
+              this.#options.core.onDurable(
+                `${module.instanceId}:${subscription.subscriptionId}`,
+                subscription.definition,
+                (atom, signal) =>
+                  this.trackHandler(() =>
+                    subscription.handle(
+                      atom,
+                      this.createContext(module, atom, signal),
+                    ),
+                  ).then(() => undefined),
+              ),
+            );
+          } else {
+            this.#unsubscribe.push(
+              this.#options.core.on(
+                subscription.definition,
+                {
+                  consumerId: `module:${module.instanceId}:${subscription.subscriptionId}`,
+                  definitionId: module.definition.manifest.definitionId,
+                  instanceId: module.instanceId,
+                },
+                (atom) =>
+                  this.trackHandler(() =>
+                    subscription.handle(atom, this.createContext(module, atom)),
+                  ),
+              ),
+            );
+          }
         }
-      }
-      for (const active of created) this.#active.set(active.instanceId, active);
+      await this.#options.core.startReliableDelivery();
+      this.assertStarting();
       this.#state = "started";
     } catch (error) {
       for (const unsubscribe of this.#unsubscribe.splice(0)) unsubscribe();
-      this.#active.clear();
-      const rollbackFailures = await disposeModules(created);
-      this.#startupRollbackFailures.push(...rollbackFailures);
-      if (this.#state === "starting") {
-        this.#state = "stopped";
-      }
-      if (rollbackFailures.length > 0) {
+      await this.#options.core.stopReliableDelivery();
+      const failures = await this.cleanup();
+      this.#startupRollbackFailures.push(...failures);
+      if (this.#state === "starting") this.#state = "stopped";
+      if (failures.length)
         throw new AggregateError(
-          [error, ...rollbackFailures],
+          [error, ...failures],
           "Information module startup failed during rollback",
         );
-      }
       throw error;
     }
   }
-
   stop(): Promise<void> {
-    if (this.#stopPromise !== undefined) return this.#stopPromise;
+    if (this.#stopPromise) return this.#stopPromise;
     if (this.#state === "stopped") return Promise.resolve();
     const starting =
       this.#state === "starting" ? this.#startPromise : undefined;
     this.#state = "stopping";
+    const stopDelivery = this.#options.core.stopReliableDelivery();
+    for (const controller of this.#controllers) controller.abort();
     this.#stopPromise = (async () => {
       await starting?.catch(() => undefined);
+      await stopDelivery;
       for (const unsubscribe of this.#unsubscribe.splice(0)) unsubscribe();
-      await Promise.allSettled([...this.#inFlight]);
-      const active = [...this.#active.values()];
-      this.#active.clear();
-      const rollbackFailures = this.#startupRollbackFailures.splice(0);
-      const failures = [...rollbackFailures, ...(await disposeModules(active))];
+      const failures = [
+        ...this.#startupRollbackFailures.splice(0),
+        ...(await this.cleanup()),
+      ];
       this.#state = "stopped";
-      if (failures.length > 0) {
+      if (failures.length)
         throw new AggregateError(
           failures,
-          rollbackFailures.length > 0
-            ? "Information module startup rollback failed"
-            : "One or more information modules failed to stop",
+          "One or more information modules failed to stop",
         );
-      }
     })();
     return this.#stopPromise;
   }
-
-  private assertStarting(): void {
-    if (this.#state !== "starting") {
-      throw new Error("ModuleHost startup was cancelled");
+  private async cleanup(): Promise<unknown[]> {
+    // create 抛出时尚未进入 active，但其已获得的 signal 同样必须取消。
+    for (const controller of this.#controllers) controller.abort();
+    const modules = this.#active.splice(0).reverse(),
+      failures: unknown[] = [];
+    for (const module of modules)
+      try {
+        await runCleanupHook(
+          module,
+          "stop",
+          this.#options.drainTimeoutMs ?? 5000,
+        );
+      } catch (error) {
+        failures.push(error);
+      }
+    await boundedDrain(
+      [...this.#inFlight],
+      this.#options.drainTimeoutMs ?? 5000,
+    );
+    for (const module of modules)
+      try {
+        await runCleanupHook(
+          module,
+          "dispose",
+          this.#options.drainTimeoutMs ?? 5000,
+        );
+      } catch (error) {
+        failures.push(error);
+      }
+    this.#values.clear();
+    this.#controllers.clear();
+    return failures;
+  }
+  private preflight(
+    activations: readonly InformationModuleActivation[],
+  ): PreparedModule[] {
+    const catalog = defineInformationModuleCatalog(
+      ...this.#options.catalog.definitions,
+    );
+    const definitions = new Map(
+      catalog.definitions.map((d) => [d.manifest.definitionId, d]),
+    );
+    const kinds = catalogInformationKinds(catalog);
+    for (const kind of kinds)
+      if (this.#options.core.registry.get(kind.kind) !== kind)
+        throw new Error(`Information kind definition mismatch: ${kind.kind}`);
+    for (const field of ["selectors", "promptRenderers"] as const) {
+      const seen = new Map<string, unknown>();
+      for (const { manifest } of catalog.definitions)
+        for (const item of manifest[field]) {
+          const id = "selectorId" in item ? item.selectorId : item.rendererId;
+          if (seen.has(id) && seen.get(id) !== item)
+            throw new Error(`Conflicting ${field} definition: ${id}`);
+          seen.set(id, item);
+          if ("kinds" in item)
+            for (const kind of item.kinds)
+              if (!kinds.includes(kind))
+                throw new Error(`Renderer kind is not declared: ${kind.kind}`);
+        }
     }
+    const ids = new Set<string>(),
+      prepared: PreparedModule[] = [];
+    for (const activation of activations) {
+      assertSafeInstanceSource(activation.instanceId);
+      if (ids.has(activation.instanceId))
+        throw new Error(
+          `Duplicate information module instance id: ${activation.instanceId}`,
+        );
+      ids.add(activation.instanceId);
+      const definition = definitions.get(activation.definitionId);
+      if (!definition)
+        throw new ModuleDefinitionNotFoundError(activation.definitionId);
+      if (activation.enabled === false) continue;
+      const settings = deepFreeze(
+        definition.manifest.settingsSchema.parse(activation.settings),
+      );
+      // fingerprint 也在 create 前生成，避免 inspection 在资源取得后才发现不可表示的 schema。
+      schemaFingerprint(definition);
+      prepared.push({
+        definition,
+        instanceId: activation.instanceId,
+        settings,
+        controller: new AbortController(),
+      });
+    }
+    const providers = new Map<
+      string,
+      { capability: ModuleCapability<any>; instanceId: string }
+    >();
+    for (const value of this.#options.capabilities ?? []) {
+      if (providers.has(value.capability.id))
+        throw new Error(
+          `Duplicate capability provider: ${value.capability.id}`,
+        );
+      providers.set(value.capability.id, {
+        capability: value.capability,
+        instanceId: "@host",
+      });
+      this.#values.set(value.capability.id, value);
+    }
+    for (const module of prepared)
+      for (const capability of module.definition.manifest.provides) {
+        if (providers.has(capability.id))
+          throw new Error(`Duplicate capability provider: ${capability.id}`);
+        providers.set(capability.id, {
+          capability,
+          instanceId: module.instanceId,
+        });
+      }
+    for (const module of prepared) {
+      const bindings = new Map<string, string>();
+      for (const required of module.definition.manifest.requires) {
+        const provider = providers.get(required.id);
+        if (!provider) throw new Error(`Missing capability: ${required.id}`);
+        if (provider.capability.apiVersion !== required.apiVersion)
+          throw new Error(`Capability version mismatch: ${required.id}`);
+        bindings.set(required.id, provider.instanceId);
+      }
+      this.#bindings.set(module.instanceId, bindings);
+    }
+    const sorted: PreparedModule[] = [],
+      visiting = new Set<string>(),
+      visited = new Set<string>();
+    const visit = (module: PreparedModule) => {
+      if (visited.has(module.instanceId)) return;
+      if (visiting.has(module.instanceId))
+        throw new Error("Module capability dependency cycle");
+      visiting.add(module.instanceId);
+      for (const provider of [
+        ...this.#bindings.get(module.instanceId)!.values(),
+      ].sort())
+        if (provider !== "@host")
+          visit(prepared.find((m) => m.instanceId === provider)!);
+      visiting.delete(module.instanceId);
+      visited.add(module.instanceId);
+      sorted.push(module);
+    };
+    for (const module of prepared.sort((a, b) =>
+      a.instanceId.localeCompare(b.instanceId),
+    ))
+      visit(module);
+    return sorted;
+  }
+  private validateInstance(module: ActiveInformationModule): void {
+    const { manifest } = module.definition;
+    if (
+      !Array.isArray(module.instance.provisions) ||
+      !Array.isArray(module.instance.subscriptions)
+    )
+      throw new Error("Invalid module instance");
+    const provided = new Set<string>();
+    for (const value of module.instance.provisions) {
+      const expected = manifest.provides.find(
+        (c) => c.id === value.capability.id,
+      );
+      if (
+        !expected ||
+        expected.apiVersion !== value.capability.apiVersion ||
+        provided.has(expected.id)
+      )
+        throw new Error(`Module provision mismatch: ${value.capability.id}`);
+      provided.add(expected.id);
+    }
+    if (provided.size !== manifest.provides.length)
+      throw new Error("Module provision mismatch: missing implementation");
+    const ids = new Set<string>();
+    for (const subscription of module.instance.subscriptions) {
+      if (
+        !/^[a-z][a-z0-9._:-]*$/u.test(subscription.subscriptionId) ||
+        ids.has(subscription.subscriptionId)
+      )
+        throw new Error("Invalid or duplicate subscription id");
+      ids.add(subscription.subscriptionId);
+      if (
+        subscription.delivery !== "live" &&
+        subscription.delivery !== "durable"
+      )
+        throw new Error("Invalid subscription delivery");
+      const declared = manifest.consumes.find(
+        (k) => k.kind === subscription.kind,
+      );
+      if (!declared)
+        throw new ModuleKindNotDeclaredError(
+          manifest.definitionId,
+          subscription.kind,
+        );
+      if (declared !== subscription.definition)
+        throw new Error(
+          `Information subscription definition mismatch: ${subscription.kind}`,
+        );
+    }
+    module.subscriptions = Object.freeze(
+      module.instance.subscriptions.map((subscription) =>
+        Object.freeze({ ...subscription }),
+      ),
+    );
+    module.provisions = Object.freeze(
+      module.instance.provisions.map((provision) =>
+        Object.freeze({
+          ...provision,
+          capability: Object.freeze({ ...provision.capability }),
+        }),
+      ),
+    );
+  }
+  private createLifecycleContext(
+    module: PreparedModule,
+  ): InformationModuleCreateContext {
+    return {
+      signal: module.controller.signal,
+      now: this.#options.now ?? (() => new Date()),
+      use: <T>(capability: ModuleCapability<T>): T => {
+        if (module.controller.signal.aborted)
+          throw new Error("Module activation has stopped");
+        const declared = module.definition.manifest.requires.find(
+          (c) =>
+            c.id === capability.id && c.apiVersion === capability.apiVersion,
+        );
+        if (!declared)
+          throw new Error(`Capability is not declared: ${capability.id}`);
+        const value = this.#values.get(capability.id);
+        if (!value || value.capability.apiVersion !== capability.apiVersion)
+          throw new Error(`Capability is unavailable: ${capability.id}`);
+        return value.value as T;
+      },
+    };
+  }
+  private createContext(
+    module: ActiveInformationModule,
+    sourceAtom: DeepReadonly<InformationAtom>,
+    deliverySignal?: AbortSignal,
+  ): InformationModuleHandlerContext {
+    const lifecycle = this.createLifecycleContext(module);
+    const signal = deliverySignal
+      ? AbortSignal.any([lifecycle.signal, deliverySignal])
+      : lifecycle.signal;
+    const prepare = <K extends string, P extends JsonObject>(
+      definition: InformationKindDefinition<K, P>,
+      input: ModuleRegistrationInput<P>,
+    ) => {
+      signal.throwIfAborted();
+      if (
+        !module.definition.manifest.produces.includes(definition) ||
+        this.#options.core.registry.get(definition.kind) !== definition
+      )
+        throw new ModuleKindNotDeclaredError(
+          module.definition.manifest.definitionId,
+          definition.kind,
+        );
+      const custom = input.references ?? [];
+      if (custom.some((reference) => isReservedRelation(reference.relation)))
+        throw new Error(
+          "Information module cannot override core causal references",
+        );
+      return {
+        occurredAt: lifecycle.now().toISOString(),
+        source: `module:${module.instanceId}`,
+        payload: input.payload,
+        references: [
+          {
+            relation: "core:caused-by",
+            informationId: sourceAtom.informationId,
+          },
+          ...contextReferences(sourceAtom),
+          ...custom,
+        ],
+      };
+    };
+    return {
+      ...lifecycle,
+      signal,
+      definitionId: module.definition.manifest.definitionId,
+      instanceId: module.instanceId,
+      sourceAtom,
+      select: (selector) => {
+        signal.throwIfAborted();
+        if (!module.definition.manifest.selectors.includes(selector))
+          throw new Error(`Selector is not declared: ${selector.selectorId}`);
+        return this.#options.core.select(selector, sourceAtom.informationId);
+      },
+      register: async (definition, input) =>
+        this.#options.core.register(definition, prepare(definition, input)),
+      registerOnce: async (operation, key, definition, input) =>
+        this.#options.core.registerOnce(
+          operation,
+          key,
+          definition,
+          prepare(definition, input),
+        ),
+      commitTerminal: async (group, subject, definition, input) =>
+        this.#options.core.commitTerminal(
+          group,
+          subject,
+          definition,
+          prepare(definition, input),
+        ),
+    };
   }
 
+  inspect() {
+    return this.#options.catalog.definitions
+      .map(({ manifest }) => ({
+        definitionId: manifest.definitionId,
+        moduleVersion: manifest.moduleVersion,
+        protocolVersion: manifest.protocolVersion,
+        settingsSchemaFingerprint: schemaFingerprint({
+          manifest,
+        } as InformationModuleDefinition),
+        consumes: manifest.consumes.map((k) => k.kind).sort(),
+        produces: manifest.produces.map((k) => k.kind).sort(),
+        selectors: manifest.selectors.map((s) => s.selectorId).sort(),
+        promptRenderers: manifest.promptRenderers
+          .map((r) => r.rendererId)
+          .sort(),
+        requires: manifest.requires.map((c) => ({
+          id: c.id,
+          apiVersion: c.apiVersion,
+        })),
+        provides: manifest.provides.map((c) => ({
+          id: c.id,
+          apiVersion: c.apiVersion,
+        })),
+        bindings: this.#active
+          .filter(
+            (m) => m.definition.manifest.definitionId === manifest.definitionId,
+          )
+          .map((m) => ({
+            instanceId: m.instanceId,
+            capabilities: [...this.#bindings.get(m.instanceId)!].map(
+              ([capabilityId, provider]) => ({ capabilityId, provider }),
+            ),
+          })),
+      }))
+      .sort((a, b) => a.definitionId.localeCompare(b.definitionId));
+  }
+  private assertStarting(): void {
+    if (this.#state !== "starting")
+      throw new Error("ModuleHost startup was cancelled");
+  }
   private trackHandler(
     handler: () => unknown | Promise<unknown>,
   ): Promise<unknown> {
@@ -201,134 +557,100 @@ export class ModuleHost {
     );
     return operation;
   }
-
-  private validateActivations(
-    activations: readonly InformationModuleActivation[],
-  ): Array<{
-    readonly definition: InformationModuleDefinition;
-    readonly instanceId: string;
-    readonly settings: unknown;
-  }> {
-    const ids = new Set<string>();
-    return activations.map((activation) => {
-      const instanceId = activation.instanceId.trim();
-      if (!instanceId)
-        throw new Error("Information module instance id must not be empty");
-      if (ids.has(instanceId))
-        throw new Error(
-          `Duplicate information module instance id: ${instanceId}`,
-        );
-      ids.add(instanceId);
-      const definition = this.#definitions.get(activation.definitionId);
-      if (definition === undefined) {
-        throw new ModuleDefinitionNotFoundError(activation.definitionId);
-      }
-      return {
-        definition,
-        instanceId,
-        settings: definition.manifest.settingsSchema.parse(activation.settings),
-      };
-    });
-  }
-
-  private validateSubscriptions(
-    definition: InformationModuleDefinition,
-    instance: InformationModuleInstance,
-  ): void {
-    const declared = new Set(
-      definition.manifest.informationKinds.map((kind) => kind.kind),
-    );
-    for (const subscription of instance.subscriptions) {
-      if (!declared.has(subscription.kind)) {
-        throw new ModuleKindNotDeclaredError(
-          definition.manifest.definitionId,
-          subscription.kind,
-        );
-      }
-      const registered = this.#options.core.registry.get(subscription.kind);
-      const declaredDefinition = definition.manifest.informationKinds.find(
-        (kind) => kind.kind === subscription.kind,
-      );
-      if (subscription.definition !== declaredDefinition) {
-        throw new Error(
-          `Information subscription definition mismatch: ${subscription.kind}`,
-        );
-      }
-      if (registered !== declaredDefinition) {
-        throw new Error(
-          `Information kind definition mismatch: ${subscription.kind}`,
-        );
-      }
-    }
-  }
-
-  private createContext(
-    module: ActiveInformationModule,
-    sourceAtom: DeepReadonly<InformationAtom>,
-  ): InformationModuleHandlerContext {
-    const now = this.#options.now ?? (() => new Date());
-    return {
-      definitionId: module.definition.manifest.definitionId,
-      instanceId: module.instanceId,
-      sourceAtom,
-      now,
-      select: (selector) =>
-        this.#options.core.select(selector, sourceAtom.informationId),
-      register: async (definition, input) => {
-        if (!this.isDeclaredOutput(module.definition, definition)) {
-          throw new ModuleKindNotDeclaredError(
-            module.definition.manifest.definitionId,
-            definition.kind,
-          );
-        }
-        const customReferences = input.references ?? [];
-        if (
-          customReferences.some((reference) =>
-            isReservedRelation(reference.relation),
-          )
-        ) {
-          throw new Error(
-            "Information module cannot override core causal references",
-          );
-        }
-        const references = [
-          {
-            relation: "core:caused-by",
-            informationId: sourceAtom.informationId,
-          },
-          ...contextReferences(sourceAtom),
-          ...customReferences,
-        ];
-        return this.#options.core.register(definition, {
-          occurredAt: now().toISOString(),
-          source: `module:${module.instanceId}`,
-          payload: input.payload,
-          references,
-        });
-      },
-    };
-  }
-
-  private isDeclaredOutput(
-    module: InformationModuleDefinition,
-    definition: InformationKindDefinition<string, any>,
-  ): boolean {
-    const declared = module.manifest.informationKinds.find(
-      (kind) => kind.kind === definition.kind,
-    );
-    return (
-      declared === definition &&
-      this.#options.core.registry.get(definition.kind) === definition
-    );
+}
+function deepFreeze<T>(value: T, seen = new Set<object>()): T {
+  if (value && typeof value === "object") {
+    if (
+      seen.has(value) ||
+      (!Array.isArray(value) &&
+        Object.getPrototypeOf(value) !== Object.prototype &&
+        Object.getPrototypeOf(value) !== null)
+    )
+      throw new Error("Module settings must be acyclic JSON data");
+    seen.add(value);
+    for (const child of Object.values(value)) deepFreeze(child, seen);
+    seen.delete(value);
+    Object.freeze(value);
+  } else if (
+    typeof value === "function" ||
+    typeof value === "symbol" ||
+    typeof value === "bigint" ||
+    (typeof value === "number" && !Number.isFinite(value))
+  )
+    throw new Error("Module settings must be JSON data");
+  return value;
+}
+function schemaFingerprint(definition: InformationModuleDefinition): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify(
+        z.toJSONSchema(definition.manifest.settingsSchema, {
+          unrepresentable: "any",
+        }),
+      ),
+    )
+    .digest("hex");
+}
+async function boundedDrain(
+  pending: readonly Promise<unknown>[],
+  timeout: number,
+): Promise<void> {
+  if (!pending.length) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.allSettled(pending),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, timeout);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
-
-interface ActiveInformationModule {
-  readonly definition: InformationModuleDefinition;
-  readonly instanceId: string;
-  readonly instance: InformationModuleInstance;
+/** 清理超时保留可诊断的实例/阶段信息，不包含设置值或 hook 异常正文。 */
+class ModuleLifecycleTimeoutError extends Error {
+  constructor(
+    readonly instanceId: string,
+    readonly hook: "stop" | "dispose",
+    readonly timeoutMs: number,
+  ) {
+    super(
+      `Information module ${hook} timed out: ${instanceId} (${timeoutMs}ms)`,
+    );
+    this.name = "ModuleLifecycleTimeoutError";
+  }
 }
-
+async function runCleanupHook(
+  module: ActiveInformationModule,
+  hook: "stop" | "dispose",
+  timeoutMs: number,
+): Promise<void> {
+  if (!module.instance[hook]) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // race 持续消费原 hook Promise，因此超时后的 reject 不会成为未处理拒绝。
+  const operation = Promise.resolve().then(() => module.instance[hook]?.());
+  try {
+    await Promise.race([
+      operation,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new ModuleLifecycleTimeoutError(
+                module.instanceId,
+                hook,
+                timeoutMs,
+              ),
+            ),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
 function contextReferences(
   atom: DeepReadonly<InformationAtom>,
 ): InformationReference[] {
@@ -351,17 +673,4 @@ function assertSafeInstanceSource(instanceId: string): void {
   if (!/^[a-z][a-z0-9._-]*$/u.test(instanceId)) {
     throw new Error("Information module instance id must form a safe source");
   }
-}
-
-async function disposeModules(
-  modules: readonly ActiveInformationModule[],
-): Promise<unknown[]> {
-  const results = await Promise.allSettled(
-    modules.map(({ instance }) =>
-      Promise.resolve().then(() => instance.dispose?.()),
-    ),
-  );
-  return results.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
 }

@@ -29,6 +29,11 @@ export interface PlatformMessageSender {
 export type PlatformMessageMention =
   { readonly kind: "user"; readonly id: string } | { readonly kind: "all" };
 
+export interface PlatformMessageReplyTo {
+  readonly platformMessageId: string;
+  readonly senderId?: string;
+}
+
 export interface PlatformInboundMessage {
   readonly platform: PlatformName;
   readonly adapterId: string;
@@ -37,6 +42,7 @@ export interface PlatformInboundMessage {
   readonly occurredAt: string;
   readonly text: string;
   readonly mentions: readonly PlatformMessageMention[];
+  readonly replyTo?: PlatformMessageReplyTo;
   readonly target: PlatformMessageTarget;
   readonly sender: PlatformMessageSender;
   readonly raw: Record<string, unknown>;

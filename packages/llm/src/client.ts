@@ -1,12 +1,12 @@
 /**
  * 功能概述：提供无持久化副作用的结构化 LLM 调用边界，只负责模型解析、调用、输出校验、
  * usage 规范化、耗时计算和 provider 错误分类。
- * 主要职责：`KaguyaLlmClient.generate` 返回 `KaguyaLlmGeneration<T>`；`KaguyaLlmError`
- * 把取消、可重试和不可重试失败统一成稳定分类；schema 选择 helper 为四类 prompt 校验输出。
+ * 主要职责：`KaguyaLlmClient.generate` 接收调用方提供的泛型 outputSchema 并返回
+ * `KaguyaLlmGeneration<T>`；`KaguyaLlmError` 把取消、可重试和不可重试失败统一成稳定分类。
  * 代码库关系：Runtime 的 `LlmLifecycleClient` 在此边界外注册 requested/completed/failed 原子；
  * provider 组合层可注入单一 model 或按请求解析 model，本文件不依赖数据库或 trace repository。
- * 输入输出与副作用：输入包含 kind、modelId 和已编译 prompt；调用 AI SDK 后返回 JSON-compatible
- * output、可选数字 usage 与非负 durationMs。失败保留 cause 供调用栈处理，但不会自行记录日志。
+ * 输入输出与副作用：输入包含 modelId、已编译 prompt、outputSchema 和可选 AbortSignal；调用
+ * AI SDK 后返回 JSON-compatible output、可选数字 usage 与非负 durationMs。失败仅暴露分类信息。
  */
 import type { CompiledPrompt, LlmErrorKind } from "@kaguya/schema";
 import {
@@ -21,18 +21,11 @@ import {
   RetryError,
 } from "ai";
 
-import {
-  type KaguyaLlmOutputByKind,
-  memoryOutputSchema,
-  replyOutputSchema,
-  routeOutputSchema,
-  stateOutputSchema,
-} from "./schemas.js";
-
-export interface KaguyaLlmRequest {
-  readonly kind: keyof KaguyaLlmOutputByKind;
+export interface KaguyaLlmRequest<TOutput = unknown> {
   readonly modelId: string;
   readonly prompt: CompiledPrompt;
+  readonly outputSchema: FlexibleSchema<TOutput>;
+  readonly signal?: AbortSignal;
 }
 
 export interface KaguyaLlmGeneration<T> {
@@ -45,22 +38,20 @@ export type KaguyaLlmErrorKind = LlmErrorKind;
 
 export class KaguyaLlmError extends Error {
   readonly kind: KaguyaLlmErrorKind;
-  override readonly cause: unknown;
+  readonly #cause: unknown;
 
   constructor(
     message: string,
     options: { kind: KaguyaLlmErrorKind; cause: unknown },
   ) {
-    super(message, { cause: options.cause });
+    super(message);
     this.name = "KaguyaLlmError";
     this.kind = options.kind;
-    this.cause = options.cause;
+    this.#cause = options.cause;
   }
 }
 
-export type KaguyaLlmModelResolver = (
-  request: KaguyaLlmRequest,
-) => LanguageModel;
+export type KaguyaLlmModelResolver = (request: KaguyaLlmRequest<unknown>) => LanguageModel;
 
 export type KaguyaLlmClientOptions = {
   readonly now?: () => Date;
@@ -85,23 +76,22 @@ export class KaguyaLlmClient {
     this.#now = options.now ?? (() => new Date());
   }
 
-  async generate<K extends KaguyaLlmRequest["kind"]>(
-    request: KaguyaLlmRequest & { readonly kind: K },
-  ): Promise<KaguyaLlmGeneration<KaguyaLlmOutputByKind[K]>> {
+  async generate<TOutput>(
+    request: KaguyaLlmRequest<TOutput>,
+  ): Promise<KaguyaLlmGeneration<TOutput>> {
     const startedAt = this.#now();
     try {
       const result = await generateText({
         model: this.#resolveModel(request),
         prompt: request.prompt.text,
-        output: Output.object({
-          schema: outputSchemaFor(request.kind),
-          name: `${request.kind}Output`,
-        }),
+        output: Output.object({ schema: request.outputSchema }),
+        ...(request.signal === undefined ? {} : { abortSignal: request.signal }),
+        maxRetries: 0,
       });
       const completedAt = this.#now();
       const usage = normalizeUsage(result.usage);
       return {
-        output: result.output,
+        output: result.output as TOutput,
         ...(usage === undefined ? {} : { usage }),
         durationMs: Math.max(0, completedAt.getTime() - startedAt.getTime()),
       };
@@ -109,19 +99,6 @@ export class KaguyaLlmClient {
       throw normalizeError(error);
     }
   }
-}
-
-const outputSchemas = {
-  route: routeOutputSchema,
-  reply: replyOutputSchema,
-  state: stateOutputSchema,
-  memory: memoryOutputSchema,
-} as const;
-
-function outputSchemaFor<K extends keyof KaguyaLlmOutputByKind>(
-  kind: K,
-): FlexibleSchema<KaguyaLlmOutputByKind[K]> {
-  return outputSchemas[kind] as FlexibleSchema<KaguyaLlmOutputByKind[K]>;
 }
 
 function normalizeUsage(
@@ -157,7 +134,7 @@ function normalizeError(error: unknown): KaguyaLlmError {
     : isRetryableError(error)
       ? "retryable"
       : "non-retryable";
-  return new KaguyaLlmError(errorMessage(error), { kind, cause: error });
+  return new KaguyaLlmError(controlledErrorMessage(kind), { kind, cause: error });
 }
 
 function isAbortError(error: unknown): boolean {
@@ -183,8 +160,13 @@ function isRetryableError(error: unknown): boolean {
   );
 }
 
-function errorMessage(error: unknown): string {
-  if (error instanceof Error && error.message.length > 0) return error.message;
-  if (typeof error === "string" && error.length > 0) return error;
-  return "Language model generation failed";
+function controlledErrorMessage(kind: KaguyaLlmErrorKind): string {
+  switch (kind) {
+    case "cancelled":
+      return "Language model generation cancelled";
+    case "retryable":
+      return "Language model request failed and may be retried";
+    case "non-retryable":
+      return "Language model generation failed";
+  }
 }

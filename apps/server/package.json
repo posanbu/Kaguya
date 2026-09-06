@@ -22,6 +22,9 @@
     "@kaguya/runtime": "workspace:*",
     "@kaguya/schema": "workspace:*",
     "fastify": "^5.10.0",
-    "vite": "7.3.6"
+    "vite": "7.3.6",
+    "@kaguya/sdk": "workspace:*",
+    "@kaguya/modules": "workspace:*",
+    "@kaguya/llm": "workspace:*"
   }
 }

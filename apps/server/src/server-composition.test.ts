@@ -5,13 +5,18 @@
  * 组合和启动失败关闭；并区分数据库初始化与模块/Runtime 生命周期失败的固定错误分类，
  * 覆盖未知字母数字类名和抛出型 constructor/name getter；
  * `createRuntimeModelSelectionResolver` 用例保证 selected Profile
- * 在启动时冻结、light/heavy 共用一个 tier-only resolver，且模块不能传 `profileId`。
+ * 在启动时冻结、保留 provider/model 复合身份、light/heavy 共用一个 tier-only resolver，
+ * 且模块不能传 `profileId`；同名 model 的跨 provider 并发调用不得串线。
  * 代码库关系：直接驱动 `server.ts`、`app.ts`、`web-gateway.ts` 与 `web.ts`；
  * 真实配置 Registry 来自 `@kaguya/config`，信息账本来自 `@kaguya/database/testing`，
  * provider client 创建由 `@ai-sdk/openai-compatible` mock 观察。
  * 输入输出与副作用：每个用例使用独立临时配置目录或内存 PGlite；
  * 启动错误用人工包含密码的连接异常验证返回值与日志均已脱敏。
  */
+import {
+  createReplyComposition,
+  type RuntimeModelSelectionResolver,
+} from "./runtime-composition.js";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,10 +26,9 @@ import { KaguyaDatabase } from "@kaguya/database";
 import { createTestingDatabase } from "@kaguya/database/testing";
 import { FileUserConfigManager } from "@kaguya/config";
 import { closeLogger, createLogger, createModuleLogger } from "@kaguya/logger";
-import {
-  KaguyaRuntime,
-  type RuntimeModelSelectionResolver,
-} from "@kaguya/runtime";
+import { createRepeatingDeterministicModel } from "@kaguya/llm/testing";
+import { KaguyaRuntime } from "@kaguya/runtime";
+import { type CompiledPrompt, z } from "@kaguya/schema";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
@@ -125,7 +129,10 @@ describe("unified server composition", () => {
   it("ingests Web messages through the shared Runtime as a platform adapter", async () => {
     const workspaceRoot = tempWorkspaceRoot();
     const database = await createTestingDatabase();
-    const runtime = new KaguyaRuntime({ database });
+    const runtime = new KaguyaRuntime({
+      database,
+      ...createReplyComposition(),
+    });
     runtime.registerTransport({
       adapterId: "web.ui.main",
       platform: "web",
@@ -178,6 +185,11 @@ describe("unified server composition", () => {
       data: { status: "accepted", requestId: "request-server-1" },
     });
     await vi.waitFor(() => expect(receipts).toHaveLength(1));
+    await vi.waitFor(
+      async () =>
+        expect((await database.information.reliable.health()).pending).toBe(0),
+      { timeout: 5000 },
+    );
     const graph = await database.information.query({
       informationId: receipts[0]!.rootInformationId,
     });
@@ -198,15 +210,27 @@ describe("unified server composition", () => {
     });
     expect(new Set(graph.map(({ kind }) => kind))).toEqual(
       new Set([
+        "agent.chat.scope.binding",
+        "agent.chat.scope.entity",
+        "agent.person.context.completed",
+        "agent.person.resolution",
         "core.message.inbound.text",
         "core.reply.requested",
-        "core.llm.requested",
-        "core.llm.completed",
+        "core.model.task.requested",
+        "core.model.task.completed",
         "core.message.assistant.text",
         "core.delivery.requested",
         "core.delivery.delivered",
       ]),
     );
+    expect(
+      graph.find(({ kind }) => kind === "core.model.task.requested")?.payload,
+    ).toMatchObject({
+      resolvedModel: {
+        providerId: "kaguya-deterministic",
+        modelId: "deterministic-heavy",
+      },
+    });
     expect(JSON.stringify(graph)).not.toMatch(/traceId|raw/u);
     await app.close();
     await runtime.close();
@@ -599,10 +623,12 @@ describe("unified server composition", () => {
     );
 
     expect(resolver({ modelTier: "light" })).toEqual({
+      providerId: "provider-1",
       modelId: "default-light",
       model: { modelId: "default-light" },
     });
     expect(resolver({ modelTier: "heavy" })).toEqual({
+      providerId: "provider-1",
       modelId: "default-heavy",
       model: { modelId: "default-heavy" },
     });
@@ -645,10 +671,12 @@ describe("unified server composition", () => {
     await manager.selectProfile("default");
 
     expect(resolver({ modelTier: "light" })).toEqual({
+      providerId: "provider-1",
       modelId: "selected-light",
       model: { modelId: "selected-light" },
     });
     expect(resolver({ modelTier: "heavy" })).toEqual({
+      providerId: "provider-1",
       modelId: "selected-heavy",
       model: { modelId: "selected-heavy" },
     });
@@ -741,10 +769,58 @@ describe("unified server composition", () => {
     };
     expect(invalidSelection.modelTier).toBe("light");
     expect(resolver({ modelTier: "light" })).toEqual({
+      providerId: "provider-1",
       modelId: "default-light",
       model: { modelId: "default-light" },
     });
     expect(chatModel).toHaveBeenCalledWith("default-light");
+  });
+
+  it("routes the same model id through its provider identity without losing audit metadata", async () => {
+    const models = {
+      light: createRepeatingDeterministicModel({ text: "from-provider-one" }),
+      heavy: createRepeatingDeterministicModel({ text: "from-provider-two" }),
+    };
+    const composition = createReplyComposition(({ modelTier }) => ({
+      providerId: modelTier === "light" ? "provider-one" : "provider-two",
+      modelId: "shared-model",
+      model: models[modelTier],
+    }));
+    const prompt: CompiledPrompt = {
+      kind: "reply",
+      text: "hello",
+      fragments: [],
+      provenance: [],
+    };
+    const outputSchema = z.object({ text: z.string() }).strict();
+    let ready = 0;
+    let release!: () => void;
+    const bothResolved = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const run = async (tier: "light" | "heavy") => {
+      const identity = composition.modelTask.resolveModel({ tier });
+      ready += 1;
+      if (ready === 2) release();
+      await bothResolved;
+      const generation = await composition.modelTask.client.generate({
+        modelId: identity.modelId,
+        prompt,
+        outputSchema,
+      });
+      return { identity, output: generation.output };
+    };
+
+    await expect(Promise.all([run("light"), run("heavy")])).resolves.toEqual([
+      {
+        identity: { providerId: "provider-one", modelId: "shared-model" },
+        output: { text: "from-provider-one" },
+      },
+      {
+        identity: { providerId: "provider-two", modelId: "shared-model" },
+        output: { text: "from-provider-two" },
+      },
+    ]);
   });
 });
 

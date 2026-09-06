@@ -7,14 +7,32 @@
   },
   "include": ["src/**/*.ts"],
   "references": [
-    { "path": "../schema" },
-    { "path": "../sdk" },
-    { "path": "../engine" },
-    { "path": "../prompt" },
-    { "path": "../llm" },
-    { "path": "../logger" },
-    { "path": "../modules" },
-    { "path": "../platform-adapters" },
-    { "path": "../database" }
+    {
+      "path": "../schema"
+    },
+    {
+      "path": "../sdk"
+    },
+    {
+      "path": "../engine"
+    },
+    {
+      "path": "../prompt"
+    },
+    {
+      "path": "../llm"
+    },
+    {
+      "path": "../logger"
+    },
+    {
+      "path": "../modules"
+    },
+    {
+      "path": "../platform-adapters"
+    },
+    {
+      "path": "../database"
+    }
   ]
 }

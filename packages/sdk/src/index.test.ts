@@ -25,21 +25,47 @@ describe("information module SDK public entry", () => {
     });
     const definition = defineInformationModule({
       manifest: {
-        apiVersion: 1,
+        protocolVersion: 1,
+        moduleVersion: "1.0.0",
+        selectors: [],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
         definitionId: "acme.sdk.module",
         displayName: "SDK module",
         settingsSchema: z.object({}).strict(),
-        informationKinds: [input],
+        consumes: [input],
+        produces: [input],
       },
       create: () => ({
-        subscriptions: [onInformation(input, () => undefined)],
+        provisions: [],
+        subscriptions: [
+          onInformation(
+            input,
+            { subscriptionId: "handle-input", delivery: "live" },
+            () => undefined,
+          ),
+        ],
       }),
     });
 
-    const instance = await definition.create({
-      instanceId: "sdk.default",
-      settings: {},
-    });
+    const instance = await definition.create(
+      {
+        instanceId: "sdk.default",
+        settings: {},
+        activation: {
+          instanceId: "sdk.default",
+          definitionId: definition.manifest.definitionId,
+        },
+      },
+      {
+        signal: new AbortController().signal,
+        now: () => new Date(),
+        use: () => {
+          throw new Error("undeclared");
+        },
+      },
+    );
 
     expect(instance.subscriptions).toEqual([
       expect.objectContaining({ kind: input.kind, definition: input }),

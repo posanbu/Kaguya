@@ -1,82 +1,86 @@
 ---
-title: 信息模块 SDK 与 Core 宿主
-description: 说明模块如何订阅 Information Kind 并注册因果派生原子。
+title: 信息模块协议与可靠消费
+description: 用显式 Catalog、能力声明与 Information DAG 组合可检查的模块。
 ---
 
-# 信息模块 SDK 与 Core 宿主
+# 信息模块协议与可靠消费
 
-模块不接触数据库连接，也不通过事件包装层传递业务结果。一个模块声明自己会消费或产生的 Kind，用 `onInformation` 订阅输入，并在 handler 中调用 `context.register()` 产生下一项不可变事实。
+模块通过不可变 Information Atom 协作。Catalog 声明哪些受信代码可用，activation 决定哪些实例启用以及各自的设置；新增文件不会自动取得执行权限。Server、Demo 的 composition root 显式导入 `createFirstPartyModuleCatalog()`，并把 Catalog、activations 与宿主 capabilities 传给 `KaguyaRuntime`。第三方 Catalog 必须同样显式 import，再通过 `mergeInformationModuleCatalogs()` 合并。
 
-## 声明输入与输出
+## 唯一模块协议
 
-模块 manifest 的 `informationKinds` 必须包含它订阅和注册的每一个 Kind。Runtime 启动前将这些定义注册到 Core；ModuleHost 在启动时检查 manifest、订阅和 Registry 使用的是同一个 Kind definition，避免同名 Kind 被不同 schema 替换。
+`defineInformationModule()` 的 manifest 必须包含 `protocolVersion: 1`、稳定 `definitionId`、语义版本 `moduleVersion`、`displayName`、`settingsSchema`，以及 `consumes`、`produces`、`selectors`、`promptRenderers`、`requires`、`provides` 六组声明。空声明使用空数组。重复 definition ID、不支持的协议、冲突的同名 kind、Selector 或 renderer 都会拒绝启动。
 
-::: code-group
-
-```ts [信息模块订阅 ~vscode-icons:file-type-typescript~]
-onInformation(inboundTextKind, async (atom, context) => {
-  await context.register(replyRequestedKind, {
-    payload: { text: atom.payload.text, source: atom.payload.source },
-  });
-});
-```
-
-:::
-
-`context.register()` 不接受调用方提供的 `informationId`、`source` 或发生时间。宿主会补齐 `source: module:<instanceId>`、当前时间、指向输入的 `core:caused-by`，以及输入已有的唯一 `core:context` 引用。调用方提供的额外 relation 必须不是这两个保留 relation，并且必须预先声明在目标 Kind definition 的 `references` 中；否则 Core 在提交时拒绝该原子。
-
-## 显式选择运行上下文
-
-需要为 Prompt 或其他派生计算加载上下文时，模块先用 `defineInformationSelector()` 声明选择规则，再在 handler 中调用 `context.select()`。Selector 接触的是受限只读账本，只能返回有序的 `informationId` 列表；Core 会校验列表、按该顺序重新加载原子，并把冻结后的原子返回给模块。模块不能把查询结果中的 payload 直接拼成未落账上下文。
+`consumes` 约束订阅输入，`produces` 约束派生输出。Selector 与 renderer 使用稳定 ID，并列入 manifest；`context.select()` 拒绝未声明的 Selector。订阅与声明必须引用同一份 kind definition，不能用结构相似的对象替代。Catalog 合并顺序不会改变创建顺序。
 
 ::: code-group
 
-```ts [按引用选择当前输入与 Memory ~vscode-icons:file-type-typescript~]
-const replyContextSelector = defineInformationSelector({
-  selectorId: "reply.with-referenced-memory",
-  async select({ sourceAtom, ledger }) {
-    const memories = await ledger.related({
-      from: [sourceAtom.informationId],
-      relation: "core:uses-context",
-      direction: "incoming",
-      limit: 8,
-    });
-
-    return [
-      sourceAtom.informationId,
-      ...memories.map((memory) => memory.informationId),
-    ];
+```ts [显式模块与 Catalog ~vscode-icons:file-type-typescript~]
+const filter = defineInformationModule({
+  manifest: {
+    protocolVersion: 1,
+    definitionId: "example.filter",
+    moduleVersion: "1.0.0",
+    displayName: "Example filter",
+    settingsSchema: z.object({}).strict(),
+    consumes: [inboundTextKind],
+    produces: [replyRequestedKind],
+    selectors: [],
+    promptRenderers: [],
+    requires: [],
+    provides: [],
   },
+  create: () => ({
+    provisions: [],
+    subscriptions: [
+      onInformation(
+        inboundTextKind,
+        { subscriptionId: "example.filter.inbound", delivery: "durable" },
+        async (atom, context) => {
+          await context.registerOnce(
+            "example.filter.reply.v1",
+            atom.informationId,
+            replyRequestedKind,
+            { payload: atom.payload },
+          );
+        },
+      ),
+    ],
+  }),
 });
 
-onInformation(replyRequestedKind, async (atom, context) => {
-  const contextAtoms = await context.select(replyContextSelector);
-  // 这里只渲染 Core 已校验并重新加载的账本原子。
-});
+const catalog = defineInformationModuleCatalog(filter);
+const activations = [
+  { instanceId: "filter.main", definitionId: "example.filter", settings: {} },
+];
 ```
 
 :::
 
-只读账本提供三种受控入口：`find()` 按 kind、来源和发生时间筛选；`related()` 沿引用图单跳读取；`retrieve()` 调用 Core 配置的命名检索策略。每次查询都必须给出 `limit`，`find()` 还必须至少给出一个筛选条件。读取器返回的候选只在本次选择调用中授权，并发调用之间不共享授权状态。
+activation 可设置 `enabled: false`，停用不会删除已持久化的未确认工作。kind 注册必须在 `Core.start()` 封闭 Registry 之前完成；自定义宿主可用 `catalogInformationKinds(catalog)` 收集精确的共享定义。Runtime 已执行这项装配。
 
-Selector 的最终结果不能包含重复 ID，也不能包含当前输入或本次读取器从未授权的 ID。未知、重复、越权，以及选择后重新加载时消失的原子都会由 Core 明确报错；模块不应捕获这些错误后自行回退到历史数据。
+## 能力与生命周期
 
-内置 reply 默认 Selector 只返回当前已接受的 `core.reply.requested` 原子，不按用户、群组、时间窗口、`core:context` 或其他字段自动聚合历史。需要更多上下文时，必须用新的 Selector 显式查询并返回相应 ID。
+`defineModuleCapability<T>("namespace:name", apiVersion)` 定义带类型的稳定 token。manifest 的 `requires` 与 `provides` 声明能力依赖；宿主或 provider 返回 `{ capability, value }` 实现。`context.use(token)` 只允许读取已声明且版本匹配的能力。业务模块之间仍通过原子推进阶段，能力承载受控基础设施服务。
 
-## Prompt 与 Memory 的可追溯性
+Host 在任何 `create()` 前完成全部启用实例的 settings parse、深冻结、kind/Selector/renderer 校验与能力图检查；缺失、重复、版本不匹配或依赖环都立即失败。解析后的设置必须是普通 JSON 对象、数组或标量（可选字段允许 undefined）；Date、Map、Set、自定义实例和循环结构会在 create 前拒绝。随后按确定性拓扑顺序调用 `create(options, context)` 和 `instance.start(context)`，并核对 provisions 与清单精确一致。全部启动成功后才开放订阅，Runtime 最后开放 ingress。
 
-reply Prompt 只渲染当前输入和 Selector 选中的、已有明确 renderer 的账本原子。每个 Prompt fragment 都携带来源 `informationId`；LLM requested 原子再以相同顺序写入 `core:uses-context` 引用，因此可以从请求追溯到实际输入原子。未知 Kind 不会被当作文本静默注入 Prompt。
+`options` 包含只读 settings、instanceId 与 activation 来源身份。create、start、handler 的 context 均有 `AbortSignal`、`now()` 和受限 `use()`。启动失败按逆依赖顺序 stop、dispose，并聚合清理错误。正常停止先拒绝新入口和领取，传播 abort、逆序 stop、有界排空 live handlers，再逆序 dispose。迟到 handler 不能在停用后提交输出。`drainTimeoutMs` 控制 Runtime、Core 和 Host 各关闭阶段的等待上限，默认 5000 毫秒；stop/dispose 钩子超时会记录为清理失败，并继续清理剩余模块。创建失败时同样会取消该实例的 signal。生命周期顺序不表示业务 DAG 顺序。
 
-Memory 是普通的 `core.memory.text` information kind，payload 只保存文本。产生 Memory 的模块应通过一个或多个有序 `core:uses-context` 引用指向其输入原子；Memory 只有被 Selector 明确选中时才进入 Prompt。Memory、Prompt 和 reply 路径不使用 `sessionId` 或 `contextKey`，也不存在以隐式会话桶恢复历史的旁路。
+`host.inspect()` 从 Catalog 与实际绑定生成 definition/module/protocol 版本、settings schema 的 SHA-256 指纹、kind、Selector/renderer ID 和 capability bindings。它不输出 settings 值、URL、凭据、Prompt、人物或记忆正文。
 
-## 广播、过滤与阶段关系
+## 可靠派生与终态
 
-一个 Kind 可以有多个订阅者。Core 在原子持久化后对当前订阅者并发广播；注册先后与模块配置顺序不表达业务优先级。需要顺序时，前一阶段必须注册新的 Kind，后一阶段订阅该 Kind。
+`delivery: "durable"` 的业务订阅使用持久化 delivery、租约 claim、有限重试和 token fencing。订阅只接收登记后的新事实；输入原子与匹配 delivery intent 同事务提交。相同 activation 与 subscription 身份重启后可恢复未确认工作。普通 `live` 订阅用于即时观察，不提供离线恢复。
 
-过滤也是普通的显式 DAG：通过时注册约定的下一 Kind，例如 `core.reply.requested`；拒绝时注册 `filter.decision`，并且不注册下一阶段。`filter.decision` 仅记录拒绝事实，不做定向路由。SDK 没有 targeted subscription、priority 或 interceptor API。
+`context.registerOnce(operation, key, definition, input)` 为逻辑输出使用唯一槽，并返回实际赢家。`context.commitTerminal(group, subjectInformationId, definition, input)` 为同一主体竞争一个跨 kind 的终态，因此返回类型允许不同终态 kind。操作键必须来自稳定业务输入；实例 ID 只标识投递接收方。演示回复以输入 ID 与设置哈希区分语义任务，相同设置的重复实例会复用同一结果。
 
-## 故障与生命周期
+宿主为输出补齐 `module:<instanceId>` source、时间、指向输入的 `core:caused-by` 及继承的 `core:context`。调用方不能覆盖这些保留引用。durable handler 不得用普通 `register()` 绕过去重；其嵌套生命周期写入也受当前 claim 保护。重试耗尽会产生 `execution.exhausted` 可见事实，健康检查只返回 pending、retry、exhausted 与最老 pending 年龄。
 
-handler 抛出或 reject 时，Core 会记录一条 `consumer.failed`，其 `core:caused-by` 指向输入原子。该失败不会回滚输入，也不会阻止同一 Kind 的其他消费者；模块无需捕获错误再注册另一套失败事件。
+Runtime 的 `submit()` 返回已接受输入的根 ID；可靠回复异步推进，返回时 `deliveries` 通常为空。调用方应通过账本观察终态。外部模型和平台副作用仍是 at-least-once：进程可能在外部动作完成、账本终态提交之前崩溃。
 
-Core 不会自动重试失败模块，也不为离线模块保存订阅或补投历史原子。模块应把可恢复策略建模为显式 Kind 与自身业务逻辑，而不是假定宿主提供队列语义。
+## 显式上下文与 Prompt
+
+Selector 通过受限只读账本的 `find()`、`related()`、`retrieve()` 取得候选，只返回有序 informationId。Core 校验 ID、拒绝重复或越权结果，并按顺序重新加载冻结原子。模块不能把未落账 payload 拼成上下文。
+
+默认 reply Selector 只选择当前 `core.reply.requested`。额外 Memory 必须由自定义 Selector 显式选择。reply 和 Memory 的 renderer 在 manifest 中声明；每个 Prompt fragment 保留 informationId，LLM requested 使用同序 `core:uses-context` 引用追溯输入。未知 kind 不会被静默当作文本注入。这里不引入隐式会话桶、历史自动回填或新的 Model Task 抽象。

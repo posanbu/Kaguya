@@ -1,36 +1,41 @@
 /**
- * 功能概述：本文件定义信息原子版 LLM 回复模块，把回复请求、LLM 生命周期完成、assistant
- * 文本和投递请求拆成三个由 kind 连接的消费者阶段，保证每一条边都有直接因果引用。
- * 主要职责：`llmReplySettingsSchema` 仅允许模型 tier 与出站方式；reply handler 通过
- * `context.select` 取得 Core 重载原子并编译可追溯 Prompt；
- * `llmCompletedInformationPayloadSchema` 是 Runtime 注入的 completed kind 与本模块共享的
- * 输出契约；`createLlmReplyModule` 分别执行 LLM、产生 assistant、产生 delivery。
- * 代码库关系：依赖 `information-kinds.ts` 的模块拥有 kind；Runtime 注入同一份
- * `core.llm.completed` definition 和 executor，executor 负责注册 LLM requested/completed
- * 生命周期 atom，engine `ModuleHost` 则为 assistant 与 delivery 自动补齐直接因果和 context；
- * completed/assistant 的 originating instance 字段在全量广播下提供阶段归属，不改变 Core 路由。
- * 输入输出与副作用：reply handler 只读选择账本并调用注入 executor；completed handler 从
- * 严格 payload 注册 assistant；assistant handler 仅为本实例拥有的 atom 按 source/fixed
- * 设置注册投递。执行器抛错会交由 Core 记录 consumer.failed，模块不保存跨请求状态。
+ * 功能概述：通过宿主批准的 Model Task 能力将回复请求、通用完成事实、assistant 与投递组成 durable DAG。
+ * 主要职责：createLlmReplyModule 声明能力和共享 completed definition；请求 handler 经 context.use
+ * 调用 core.reply.generate v1，replyTaskOutputSchema 严格校验文本。完成 handler 按 task/version/tier
+ * 与 definitionId 接受可由同一定义多个 activation 共享的任务赢家，经 completedReplySelector 沿
+ * completed→requested→reply 授权读取来源，再以包含当前 instanceId 的 registerOnce key 派生各自输出。
+ * 代码库关系：Runtime 注入 token 和 definition 身份，Host 提供 activation、受限 Selector 与 claim fencing；
+ * reply-context 保留原有 Prompt/Memory 顺序与 provenance，selectOutbound 保留 source/fixed 路由。
+ * ModelTaskRequest/Result/Capability 是模块侧结构类型；completed definition 的泛型保留宿主 payload
+ * 与日志投影契约，不导入 Runtime source/dist、provider、模型、密钥或 Core，也不创建第二份 token。
+ * 输入输出与副作用：requested/terminal 生命周期完全归 ModelTaskClient；failed/cancelled 不触发业务写入，
+ * completed 广播仅校验获胜 definition、不校验 instance；assistant 按自身 originating instance 过滤，
+ * 重投使用唯一操作槽；旧 reply-only completed payload schema 已删除，公共输出契约由 replyTaskOutputSchema 提供。
  */
 import {
-  type DeepReadonly,
   type CompiledPrompt,
+  type DeepReadonly,
   type InformationAtom,
+  type JsonObject,
+  type JsonValue,
   type OutboundMessageContent,
   type PlatformDestination,
   z,
 } from "@kaguya/schema";
 import {
   defineInformationModule,
-  onInformation,
+  defineInformationSelector,
   type InformationKindDefinition,
+  type ModuleCapability,
+  type ModuleActivationProvenance,
+  onInformation,
   type InformationSelectorDefinition,
 } from "@kaguya/sdk";
 import { PromptCompiler } from "@kaguya/prompt";
 
 import {
   assistantTextInformationKind,
+  coreMemoryTextInformationKind,
   deliveryRequestedInformationKind,
   replyRequestedInformationKind,
   replyRequestedInformationPayloadSchema,
@@ -39,6 +44,8 @@ import {
 import {
   compileReplyPromptFromInformation,
   currentAcceptedMessageSelector,
+  replyPromptRenderer,
+  memoryPromptRenderer,
 } from "./reply-context.js";
 
 export const modelTierSchema = z.enum(["light", "heavy"]);
@@ -82,101 +89,194 @@ export const llmReplySettingsSchema = z
   .strict();
 export type LlmReplySettings = z.infer<typeof llmReplySettingsSchema>;
 
-export const llmCompletedInformationPayloadSchema = z
-  .object({
-    output: z.object({ text: z.string().min(1) }).strict(),
-    reply: replyRequestedInformationPayloadSchema,
-    originatingModuleInstanceId: z.string().trim().min(1),
-  })
+export const replyTaskOutputSchema = z
+  .object({ text: z.string().min(1) })
   .strict();
-export type LlmCompletedInformationPayload = z.infer<
-  typeof llmCompletedInformationPayloadSchema
->;
 
-export interface LlmReplyExecutor {
-  execute(input: {
-    readonly reply: DeepReadonly<
-      InformationAtom<"core.reply.requested", ReplyRequestedInformationPayload>
-    >;
-    readonly prompt: CompiledPrompt;
-    readonly contextAtoms: readonly DeepReadonly<InformationAtom>[];
-    readonly selection: ModuleModelSelection;
-    readonly originatingModuleInstanceId: string;
-  }): Promise<
-    DeepReadonly<
-      InformationAtom<"core.llm.completed", LlmCompletedInformationPayload>
-    >
-  >;
+export interface ModelTaskRequest<TOutput> {
+  readonly task: {
+    readonly taskId: string;
+    readonly version: string;
+    readonly outputSchema: z.ZodType<TOutput>;
+    readonly allowedTiers: readonly ("light" | "heavy")[];
+  };
+  readonly sourceInformationId: string;
+  readonly contextInformationId: string;
+  readonly activation: ModuleActivationProvenance;
+  readonly selectionPolicy: { readonly tier: "light" | "heavy" };
+  readonly prompt: CompiledPrompt;
+  readonly contextAtoms: readonly DeepReadonly<InformationAtom>[];
 }
 
-export interface CreateLlmReplyModuleOptions {
-  readonly executor: LlmReplyExecutor;
-  readonly llmCompletedInformationKind: InformationKindDefinition<
-    "core.llm.completed",
-    LlmCompletedInformationPayload
+type ModelTaskResultIdentity = {
+  readonly requestedInformationId: string;
+  readonly terminalInformationId: string;
+};
+
+export type ModelTaskResult<TOutput> = ModelTaskResultIdentity &
+  (
+    | { readonly status: "completed"; readonly output: TOutput }
+    | {
+        readonly status: "failed";
+        readonly error: {
+          readonly name: "ModelTaskError";
+          readonly kind: "retryable" | "non-retryable";
+          readonly message: "Model task generation failed";
+        };
+      }
+    | {
+        readonly status: "cancelled";
+        readonly reason: "Explicit cancellation requested";
+      }
+  );
+
+export interface ModelTaskCapability {
+  execute<TOutput>(
+    request: ModelTaskRequest<TOutput>,
+  ): Promise<ModelTaskResult<TOutput>>;
+  cancel(request: {
+    readonly requestedInformationId: string;
+    readonly reason: string;
+  }): Promise<ModelTaskResult<unknown>>;
+}
+
+export type ModelTaskCompletedInformationPayload = JsonObject & {
+  readonly taskId: string;
+  readonly version: string;
+  readonly sourceInformationId: string;
+  readonly activation: {
+    readonly instanceId: string;
+    readonly definitionId: string;
+  };
+  readonly selectionPolicy: { readonly tier: "light" | "heavy" };
+  readonly output: JsonValue;
+};
+
+export interface CreateLlmReplyModuleOptions<
+  P extends ModelTaskCompletedInformationPayload =
+    ModelTaskCompletedInformationPayload,
+> {
+  readonly modelTaskCapability: ModuleCapability<ModelTaskCapability>;
+  readonly modelTaskCompletedInformationKind: InformationKindDefinition<
+    "core.model.task.completed",
+    P
   >;
   readonly selector?: InformationSelectorDefinition;
   readonly promptCompiler?: PromptCompiler;
 }
 
-export function createLlmReplyModule(
-  dependencies: CreateLlmReplyModuleOptions,
-) {
+export function createLlmReplyModule<
+  P extends ModelTaskCompletedInformationPayload,
+>(dependencies: CreateLlmReplyModuleOptions<P>) {
+  const { modelTaskCapability } = dependencies;
+  if (
+    modelTaskCapability.id !== "kaguya:model-task" ||
+    modelTaskCapability.apiVersion !== 1
+  )
+    throw new Error("Invalid model task capability");
   const selector = dependencies.selector ?? currentAcceptedMessageSelector;
   const promptCompiler = dependencies.promptCompiler ?? new PromptCompiler();
+  const completedInformationKind =
+    dependencies.modelTaskCompletedInformationKind;
   return defineInformationModule({
     manifest: {
-      apiVersion: 1,
+      protocolVersion: 1,
+      moduleVersion: "1.0.0",
+      selectors: [selector, completedReplySelector],
+      promptRenderers: [replyPromptRenderer, memoryPromptRenderer],
+      requires: [modelTaskCapability],
+      provides: [],
       definitionId: "demo.reply.llm",
       displayName: "LLM reply",
       settingsSchema: llmReplySettingsSchema,
-      informationKinds: [
+      consumes: [
         replyRequestedInformationKind,
-        dependencies.llmCompletedInformationKind,
+        completedInformationKind,
+        assistantTextInformationKind,
+        coreMemoryTextInformationKind,
+      ],
+      produces: [
         assistantTextInformationKind,
         deliveryRequestedInformationKind,
       ],
     },
-    create: ({ settings }) => ({
+    create: ({ settings, activation }) => ({
+      provisions: [],
       subscriptions: [
-        onInformation(replyRequestedInformationKind, async (reply, context) => {
-          const contextAtoms = await context.select(selector);
-          const persistedReply = requireSelectedReply(
-            contextAtoms,
-            reply.informationId,
-          );
-          const prompt = compileReplyPromptFromInformation(
-            promptCompiler,
-            contextAtoms,
-            reply.informationId,
-          );
-          await dependencies.executor.execute({
-            reply: persistedReply,
-            prompt,
-            contextAtoms,
-            selection: { modelTier: settings.modelTier },
-            originatingModuleInstanceId: context.instanceId,
-          });
-        }),
         onInformation(
-          dependencies.llmCompletedInformationKind,
-          async (completed, context) => {
-            if (
-              completed.payload.originatingModuleInstanceId !==
-              context.instanceId
-            )
-              return;
-            await context.register(assistantTextInformationKind, {
-              payload: {
-                text: completed.payload.output.text,
-                source: completed.payload.reply.source,
-                originatingModuleInstanceId: context.instanceId,
+          replyRequestedInformationKind,
+          { subscriptionId: "kaguya.reply.requested", delivery: "durable" },
+          async (reply, context) => {
+            const contextAtoms = await context.select(selector);
+            const persistedReply = requireSelectedReply(
+              contextAtoms,
+              reply.informationId,
+            );
+            const prompt = compileReplyPromptFromInformation(
+              promptCompiler,
+              contextAtoms,
+              reply.informationId,
+            );
+            const contexts = persistedReply.references.filter(
+              (r) => r.relation === "core:context",
+            );
+            if (contexts.length !== 1)
+              throw new Error("Reply must have one context");
+            await context.use(modelTaskCapability).execute({
+              task: {
+                taskId: "core.reply.generate",
+                version: "1",
+                outputSchema: replyTaskOutputSchema,
+                allowedTiers: ["light", "heavy"],
               },
+              sourceInformationId: persistedReply.informationId,
+              contextInformationId: contexts[0]!.informationId,
+              activation,
+              selectionPolicy: { tier: settings.modelTier },
+              prompt,
+              contextAtoms,
             });
           },
         ),
         onInformation(
+          completedInformationKind,
+          {
+            subscriptionId: "kaguya.reply.model-task-completed",
+            delivery: "durable",
+          },
+          async (completed, context) => {
+            if (
+              completed.payload.taskId !== "core.reply.generate" ||
+              completed.payload.version !== "1" ||
+              completed.payload.activation.definitionId !==
+                activation.definitionId ||
+              completed.payload.selectionPolicy.tier !== settings.modelTier
+            )
+              return;
+            const output = replyTaskOutputSchema.parse(
+              completed.payload.output,
+            );
+            const reply = requireSelectedReply(
+              await context.select(completedReplySelector),
+              completed.payload.sourceInformationId,
+            );
+            await context.registerOnce(
+              "kaguya.reply.assistant.v1",
+              `${context.instanceId}:${completed.informationId}`,
+              assistantTextInformationKind,
+              {
+                payload: {
+                  text: output.text,
+                  source: reply.payload.source,
+                  originatingModuleInstanceId: context.instanceId,
+                },
+              },
+            );
+          },
+        ),
+        onInformation(
           assistantTextInformationKind,
+          { subscriptionId: "kaguya.reply.assistant", delivery: "durable" },
           async (assistant, context) => {
             if (
               assistant.payload.originatingModuleInstanceId !==
@@ -189,15 +289,52 @@ export function createLlmReplyModule(
               assistant.payload.text,
             );
             if (outbound === undefined) return;
-            await context.register(deliveryRequestedInformationKind, {
-              payload: outbound,
-            });
+            await context.registerOnce(
+              "kaguya.reply.delivery.v1",
+              `${context.instanceId}:${assistant.informationId}`,
+              deliveryRequestedInformationKind,
+              {
+                payload: outbound,
+              },
+            );
           },
         ),
       ],
     }),
   });
 }
+
+const completedReplySelector = defineInformationSelector({
+  selectorId: "kaguya.reply.completed-source",
+  select: async ({ sourceAtom, ledger }) => {
+    const payload = z
+      .object({ sourceInformationId: z.string().min(1) })
+      .parse(sourceAtom.payload);
+    const requested = await ledger.related({
+      from: [sourceAtom.informationId],
+      relation: "core:caused-by",
+      direction: "outgoing",
+      limit: 1,
+    });
+    if (requested[0]?.kind !== "core.model.task.requested")
+      throw new Error("Model task completion must reference its request");
+    const sources = await ledger.related({
+      from: [requested[0].informationId],
+      relation: "core:caused-by",
+      direction: "outgoing",
+      limit: 1,
+    });
+    const reply = sources[0];
+    if (
+      reply?.kind !== replyRequestedInformationKind.kind ||
+      reply.informationId !== payload.sourceInformationId
+    )
+      throw new Error(
+        "Model task completion source must match its reply cause",
+      );
+    return [reply.informationId];
+  },
+});
 
 function requireSelectedReply(
   atoms: readonly DeepReadonly<InformationAtom>[],

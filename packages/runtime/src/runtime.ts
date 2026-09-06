@@ -1,18 +1,13 @@
 /**
- * 功能概述：以 PostgreSQL information ledger 为唯一事实源组合 `KaguyaRuntime`，把外部消息
- * 注册为 context/inbound 原子，并由实时模块广播继续 LLM、assistant 与 delivery DAG。
- * 主要职责：`KaguyaRuntime` 实现窄 `InformationIngress.submit`、transport 注册、串行化 start/close；
- * 启动时注册内建与模块 kind、启动 Core/ModuleHost、安装 `runtime:delivery` 系统消费者；
- * 内部 executor 将模块 tier 解析为无持久化 client，并把模块从账本选择、编译的 Prompt
- * 与 contextAtoms 原样交给原子 lifecycle，不重新构造隐式历史。
- * 代码库关系：依赖 `KaguyaDatabase`、Engine InformationCore/ModuleHost、modules 拥有的
- * kind/模块工厂和 Runtime 自有 lifecycle/result kind；Task 5 的 Gateway/adapter 只需持有 ingress。
- * 输入输出与副作用：submit 返回 context 根 `informationId` 与本次调用实际收到的安全 receipts，
- * 不保留单数 delivery 兼容别名；
- * 不生成 trace/message/event ID，不写旧 SQLite repositories。starting 期间的 close 会先等待或
- * 取消共享启动任务，再执行一次资源清理；数据库 migrate 失败转换为不保留 cause/URL 的
- * `RuntimeDatabaseInitializationError`，供 Server 与模块生命周期失败区分；仅关闭由
- * databaseUrl 创建的连接，注入数据库归调用方。
+ * 功能概述：以 PostgreSQL information ledger 装配通用 Runtime，接受显式 Catalog、activations 和宿主 capabilities。
+ * 主要职责：start 注册完整 kind 并预检模块，最后开放 ingress；submit 持久化 context/inbound 后返回接受凭据；
+ * 平台投递使用 durable subscription，终态唯一槽避免重放再次落账，已有终态时不重复调用 transport。
+ * 代码库关系：依赖 Database、Core、ModuleHost 和平台适配契约；具体 Agent 列表与 LLM 模型绑定位于 apps composition root。
+ * 输入输出与副作用：连接、迁移、账本写入和 transport I/O 均在生命周期内执行；close 拒绝新入口并停止可靠领取。
+ * 数据库初始化错误脱敏；只关闭自行创建的连接。submit 的 deliveries 是当次实际收集快照，可靠链通常异步完成。
+ * Model Task 由 composeModelTaskCapabilities 注入批准的 ModelTaskClient；ApprovedModelTaskClient
+ * 校验宿主 activation/tier 白名单，provider、resolver、Core 与 approval 数据均保存在私有字段，
+ * 模块只通过 #76 的 context.use 获得通用能力。缺少批准或无效 capability 在任何 create 前拒绝。
  */
 import { randomUUID } from "node:crypto";
 
@@ -27,23 +22,13 @@ import {
   consumerFailedInformationKind,
 } from "@kaguya/engine";
 import {
-  KaguyaLlmClient,
-  type KaguyaLlmModelResolver,
-} from "@kaguya/llm/client";
-import { createRepeatingDeterministicModel } from "@kaguya/llm/testing";
-import {
   createInformationAtomLogSink,
   createModuleLogger,
   type KaguyaLogger,
 } from "@kaguya/logger";
 import {
-  alwaysReplyFilterModule,
-  createLlmReplyModule,
   deliveryRequestedInformationKind,
   inboundTextInformationKind,
-  type LlmCompletedInformationPayload as ModuleLlmCompletedInformationPayload,
-  type LlmReplyExecutor,
-  type ModuleModelSelection,
 } from "@kaguya/modules";
 import type {
   InboundReceipt,
@@ -59,29 +44,51 @@ import type {
   OutboundMessageContent,
   PlatformDestination,
 } from "@kaguya/schema";
+import { defineInformationSelector } from "@kaguya/sdk";
 import type {
   InformationKindDefinition,
   InformationModuleActivation,
   InformationModuleDefinition,
+  InformationModuleCatalog,
+  ModuleCapabilityImplementation,
+  ModuleActivationProvenance,
 } from "@kaguya/sdk";
+import {
+  ModelTaskClient,
+  modelTaskCapability,
+  type ModelTaskClientOptions,
+  type ModelTaskRequest,
+} from "./model-task.js";
 
 import {
   builtInInformationKinds,
   deliveryDeliveredInformationKind,
   deliveryFailedInformationKind,
-  llmCompletedInformationKind,
   runtimeContextInformationKind,
+  modelTaskSelectionPolicySchema,
+  modelTaskInformationKinds,
 } from "./information-kinds.js";
-import { LlmLifecycleClient } from "./llm-lifecycle.js";
 
-export interface ResolvedRuntimeModel {
-  readonly modelId: string;
-  readonly model: ReturnType<KaguyaLlmModelResolver>;
+export interface RuntimeModelTaskApproval {
+  readonly activation: ModuleActivationProvenance;
+  readonly selectionPolicy: ModelTaskRequest<unknown>["selectionPolicy"];
 }
+export type RuntimeModelTaskOptions = Pick<
+  ModelTaskClientOptions,
+  "client" | "resolveModel"
+> & {
+  readonly approvals: readonly RuntimeModelTaskApproval[];
+};
 
-export type RuntimeModelSelectionResolver = (
-  selection: ModuleModelSelection,
-) => ResolvedRuntimeModel;
+export interface RuntimeCapabilityContext {
+  readonly core: InformationCore;
+  readonly now: () => Date;
+}
+export type RuntimeCapabilities =
+  | readonly ModuleCapabilityImplementation[]
+  | ((
+      context: RuntimeCapabilityContext,
+    ) => readonly ModuleCapabilityImplementation[]);
 
 export interface RuntimeTransportRegistration {
   readonly adapterId: string;
@@ -92,12 +99,15 @@ export interface RuntimeTransportRegistration {
 export type InformationIdGenerator = () => string;
 
 type KaguyaRuntimeBaseOptions = {
+  /** 每个关闭阶段等待未完成工作的上限，默认 5000 毫秒。 */
+  readonly drainTimeoutMs?: number;
   readonly logger?: KaguyaLogger;
   readonly now?: () => Date;
   readonly informationIdGenerator?: InformationIdGenerator;
-  readonly resolveModelSelection?: RuntimeModelSelectionResolver;
-  readonly moduleDefinitions?: readonly InformationModuleDefinition[];
-  readonly moduleActivations?: readonly InformationModuleActivation[];
+  readonly catalog: InformationModuleCatalog;
+  readonly activations: readonly InformationModuleActivation[];
+  readonly capabilities?: RuntimeCapabilities;
+  readonly modelTask?: RuntimeModelTaskOptions;
 };
 
 export type KaguyaRuntimeOptions = KaguyaRuntimeBaseOptions &
@@ -170,7 +180,6 @@ type DeliveryRequestedAtom = DeepReadonly<
 export class KaguyaRuntime implements InformationIngress {
   readonly #now: () => Date;
   readonly #nextInformationId: InformationIdGenerator;
-  readonly #resolveModelSelection: RuntimeModelSelectionResolver;
   readonly #transports = new Map<string, RuntimeTransportRegistration>();
   readonly #inFlight = new Set<Promise<InboundReceipt>>();
   readonly #deliveriesByContext = new Map<
@@ -187,14 +196,16 @@ export class KaguyaRuntime implements InformationIngress {
   #ownsDatabase = false;
   #core: InformationCore | undefined;
   #moduleHost: ModuleHost | undefined;
-  #unsubscribeDelivery: (() => void) | undefined;
 
   constructor(private readonly options: KaguyaRuntimeOptions) {
+    if (
+      !Number.isFinite(options.drainTimeoutMs ?? 5000) ||
+      (options.drainTimeoutMs ?? 5000) < 0
+    ) {
+      throw new Error("Runtime drain timeout must be finite and non-negative");
+    }
     this.#now = options.now ?? (() => new Date());
     this.#nextInformationId = options.informationIdGenerator ?? randomUUID;
-    this.#resolveModelSelection =
-      options.resolveModelSelection ??
-      createDeterministicModelSelectionResolver();
     this.#runtimeLogger =
       options.logger === undefined
         ? undefined
@@ -246,18 +257,7 @@ export class KaguyaRuntime implements InformationIngress {
         throw new RuntimeDatabaseInitializationError(error);
       }
       this.#assertStarting();
-      const replyModule = createLlmReplyModule({
-        executor: { execute: (input) => this.#executeLlm(input) },
-        llmCompletedInformationKind:
-          llmCompletedInformationKind as unknown as InformationKindDefinition<
-            "core.llm.completed",
-            ModuleLlmCompletedInformationPayload
-          >,
-      });
-      const definitions = this.options.moduleDefinitions ?? [
-        alwaysReplyFilterModule,
-        replyModule,
-      ];
+      const definitions = this.options.catalog.definitions;
       const registry = createRegistry(definitions);
       const allDefinitions = collectDefinitions(definitions);
       const logProjectionRunner = new InformationLogProjectionRunner({
@@ -290,6 +290,7 @@ export class KaguyaRuntime implements InformationIngress {
         },
       });
       const core = new InformationCore({
+        drainTimeoutMs: this.options.drainTimeoutMs ?? 5000,
         registry,
         store: database.information,
         nextInformationId: this.#nextInformationId,
@@ -308,22 +309,29 @@ export class KaguyaRuntime implements InformationIngress {
       this.#core = core;
       await core.start();
       this.#assertStarting();
-      const moduleHost = new ModuleHost({ core, now: this.#now });
-      this.#moduleHost = moduleHost;
-      for (const definition of definitions) moduleHost.register(definition);
-
-      await moduleHost.start(
-        this.options.moduleActivations ??
-          (this.options.moduleDefinitions === undefined
-            ? defaultModuleActivations()
-            : []),
+      const suppliedCapabilities =
+        typeof this.options.capabilities === "function"
+          ? this.options.capabilities({ core, now: this.#now })
+          : this.options.capabilities;
+      const capabilities = composeModelTaskCapabilities(
+        this.options,
+        { core, now: this.#now },
+        suppliedCapabilities ?? [],
       );
-      this.#assertStarting();
-      this.#unsubscribeDelivery = core.on(
+      const moduleHost = new ModuleHost({
+        drainTimeoutMs: this.options.drainTimeoutMs ?? 5000,
+        core,
+        catalog: this.options.catalog,
+        capabilities,
+        now: this.#now,
+      });
+      this.#moduleHost = moduleHost;
+      core.onDurable(
+        "kaguya.runtime.delivery",
         deliveryRequestedInformationKind,
-        { consumerId: "runtime:delivery" },
         (request) => this.#deliver(request),
       );
+      await moduleHost.start(this.options.activations);
       this.#assertStarting();
       this.#state = "started";
       this.#runtimeLogger?.info(
@@ -339,6 +347,8 @@ export class KaguyaRuntime implements InformationIngress {
         await this.#cleanupResources();
         this.#state = "closed";
       }
+      if (this.#state === "closing")
+        throw new RuntimeUnavailableError("Kaguya runtime start was cancelled");
       throw error;
     }
   }
@@ -363,9 +373,14 @@ export class KaguyaRuntime implements InformationIngress {
     const starting =
       this.#state === "starting" ? this.#startPromise : undefined;
     this.#state = "closing";
+    // create/start 可以正在等待 activation signal；必须在等待启动任务之前传播取消。
+    void this.#moduleHost?.stop().catch(() => undefined);
     this.#closePromise = (async () => {
       await starting?.catch(() => undefined);
-      await Promise.allSettled([...this.#inFlight]);
+      await drainRuntimeOperations(
+        [...this.#inFlight],
+        this.options.drainTimeoutMs ?? 5000,
+      );
       const failures = await this.#cleanupResources();
       this.#state = "closed";
       this.#runtimeLogger?.info(
@@ -388,8 +403,6 @@ export class KaguyaRuntime implements InformationIngress {
       } catch (error) {
         failures.push(error);
       }
-      this.#unsubscribeDelivery?.();
-      this.#unsubscribeDelivery = undefined;
       try {
         await this.#core?.close();
       } catch (error) {
@@ -417,37 +430,6 @@ export class KaguyaRuntime implements InformationIngress {
     }
   }
 
-  async #executeLlm(
-    input: Parameters<LlmReplyExecutor["execute"]>[0],
-  ): ReturnType<LlmReplyExecutor["execute"]> {
-    const core = required(this.#core, "information core");
-    const contextReference = uniqueContextReference(input.reply);
-    const context = await core.get(contextReference.informationId);
-    if (context?.kind !== runtimeContextInformationKind.kind) {
-      throw new Error("Reply context information is unavailable");
-    }
-    const resolved = this.#resolveModelSelection(input.selection);
-    const lifecycle = new LlmLifecycleClient({
-      core,
-      client: new KaguyaLlmClient({ model: resolved.model, now: this.#now }),
-      now: this.#now,
-    });
-    return lifecycle.generate(
-      {
-        kind: "reply",
-        modelId: resolved.modelId,
-        workflowId: "message-module-pipeline",
-        nodeId: "reply",
-        originatingModuleInstanceId: input.originatingModuleInstanceId,
-        prompt: input.prompt,
-        contextAtoms: input.contextAtoms,
-        reply: input.reply.payload,
-      },
-      context as DeepReadonly<InformationAtom<"core.runtime.context">>,
-      input.reply,
-    );
-  }
-
   async #submit(input: PlatformInboundMessage): Promise<InboundReceipt> {
     const core = required(this.#core, "information core");
     const context = await core.register(runtimeContextInformationKind, {
@@ -470,6 +452,15 @@ export class KaguyaRuntime implements InformationIngress {
             platformMessageId: input.platformMessageId,
             destination: input.target,
             senderId: input.sender.userId,
+            sender: {
+              userId: input.sender.userId,
+              ...(input.sender.nickname ? { nickname: input.sender.nickname } : {}),
+              ...(input.sender.card ? { card: input.sender.card } : {}),
+              ...(input.selfId ? { isSelf: input.sender.userId === input.selfId } : {}),
+            },
+            ...(input.selfId ? { selfId: input.selfId } : {}),
+            mentions: [...input.mentions],
+            ...(input.replyTo ? { replyTo: { ...input.replyTo } } : {}),
           },
         },
         references: [
@@ -490,6 +481,12 @@ export class KaguyaRuntime implements InformationIngress {
   }
 
   async #deliver(request: DeliveryRequestedAtom): Promise<void> {
+    const core = required(this.#core, "information core");
+    if (
+      (await core.select(deliveryTerminalSelector, request.informationId))
+        .length > 0
+    )
+      return;
     const context = uniqueContextReference(request);
     const registration = this.#transports.get(
       transportKey(request.payload.adapterId, request.payload.platform),
@@ -527,27 +524,36 @@ export class KaguyaRuntime implements InformationIngress {
       );
     }
 
-    const core = required(this.#core, "information core");
     if (receipt.ok) {
-      await core.register(deliveryDeliveredInformationKind, {
-        occurredAt: this.#now().toISOString(),
-        source: "runtime:delivery",
-        payload: safeDeliveredPayload(receipt),
-        references: deliveryResultReferences(
-          request.informationId,
-          context.informationId,
-        ),
-      });
+      await core.commitTerminal(
+        "kaguya.delivery.result.v1",
+        request.informationId,
+        deliveryDeliveredInformationKind,
+        {
+          occurredAt: this.#now().toISOString(),
+          source: "runtime:delivery",
+          payload: safeDeliveredPayload(receipt),
+          references: deliveryResultReferences(
+            request.informationId,
+            context.informationId,
+          ),
+        },
+      );
     } else {
-      await core.register(deliveryFailedInformationKind, {
-        occurredAt: this.#now().toISOString(),
-        source: "runtime:delivery",
-        payload: safeFailedDeliveryPayload(receipt),
-        references: deliveryResultReferences(
-          request.informationId,
-          context.informationId,
-        ),
-      });
+      await core.commitTerminal(
+        "kaguya.delivery.result.v1",
+        request.informationId,
+        deliveryFailedInformationKind,
+        {
+          occurredAt: this.#now().toISOString(),
+          source: "runtime:delivery",
+          payload: safeFailedDeliveryPayload(receipt),
+          references: deliveryResultReferences(
+            request.informationId,
+            context.informationId,
+          ),
+        },
+      );
     }
     this.#deliveriesByContext
       .get(context.informationId)
@@ -559,7 +565,9 @@ export class KaguyaRuntime implements InformationIngress {
     contextInformationId: InformationId,
     error: string,
   ): Promise<void> {
-    await required(this.#core, "information core").register(
+    await required(this.#core, "information core").commitTerminal(
+      "kaguya.delivery.result.v1",
+      request.informationId,
       deliveryFailedInformationKind,
       {
         occurredAt: this.#now().toISOString(),
@@ -580,12 +588,129 @@ export class KaguyaRuntime implements InformationIngress {
   }
 }
 
+class ApprovedModelTaskClient extends ModelTaskClient {
+  readonly #approvals: readonly RuntimeModelTaskApproval[];
+  constructor(
+    options: ModelTaskClientOptions,
+    approvals: readonly RuntimeModelTaskApproval[],
+  ) {
+    super(options);
+    this.#approvals = approvals.map(({ activation, selectionPolicy }) => ({
+      activation: Object.freeze({ ...activation }),
+      selectionPolicy: Object.freeze(
+        modelTaskSelectionPolicySchema.parse(selectionPolicy),
+      ),
+    }));
+  }
+
+  override execute<TOutput>(request: ModelTaskRequest<TOutput>) {
+    if (
+      !this.#approvals.some(
+        ({ activation, selectionPolicy }) =>
+          activation.instanceId === request.activation.instanceId &&
+          activation.definitionId === request.activation.definitionId &&
+          selectionPolicy.tier === request.selectionPolicy.tier,
+      )
+    )
+      return Promise.reject(
+        new Error("Model task activation or policy is not approved"),
+      );
+    return super.execute(request);
+  }
+}
+
+function composeModelTaskCapabilities(
+  options: KaguyaRuntimeOptions,
+  context: RuntimeCapabilityContext,
+  supplied: readonly ModuleCapabilityImplementation[],
+): readonly ModuleCapabilityImplementation[] {
+  const capabilities = [...supplied];
+  if (options.modelTask) {
+    const approvals = options.modelTask.approvals.filter(({ activation }) =>
+      options.activations.some(
+        (a) =>
+          a.enabled !== false &&
+          a.instanceId === activation.instanceId &&
+          a.definitionId === activation.definitionId,
+      ),
+    );
+    for (const activation of options.activations) {
+      if (activation.enabled === false) continue;
+      const definition = options.catalog.definitions.find(
+        (d) => d.manifest.definitionId === activation.definitionId,
+      );
+      if (
+        definition?.manifest.requires.some(
+          (c) => c.id === modelTaskCapability.id,
+        ) &&
+        !approvals.some(
+          (a) =>
+            a.activation.instanceId === activation.instanceId &&
+            a.activation.definitionId === activation.definitionId,
+        )
+      )
+        throw new Error("Missing model task capability approval");
+    }
+    capabilities.push({
+      capability: modelTaskCapability,
+      value: new ApprovedModelTaskClient(
+        { ...options.modelTask, ...context },
+        approvals,
+      ),
+    });
+  }
+  for (const implementation of capabilities) {
+    if (implementation.capability.id !== modelTaskCapability.id) continue;
+    if (
+      implementation.capability.apiVersion !== modelTaskCapability.apiVersion ||
+      !(implementation.value instanceof ModelTaskClient)
+    )
+      throw new Error("Invalid host model task capability");
+  }
+  for (const activation of options.activations) {
+    if (activation.enabled === false) continue;
+    const definition = options.catalog.definitions.find(
+      (d) => d.manifest.definitionId === activation.definitionId,
+    );
+    if (
+      definition?.manifest.requires.some(
+        (c) => c.id === modelTaskCapability.id,
+      ) &&
+      !capabilities.some((c) => c.capability.id === modelTaskCapability.id)
+    )
+      throw new Error("Missing host model task capability");
+  }
+  return capabilities;
+}
+
+const deliveryTerminalSelector = defineInformationSelector({
+  selectorId: "runtime.delivery.terminal",
+  select: async ({ sourceAtom, ledger }) =>
+    (
+      await ledger.related({
+        from: [sourceAtom.informationId],
+        relation: "core:status-of",
+        direction: "incoming",
+        limit: 2,
+      })
+    )
+      .filter(
+        (atom) =>
+          atom.kind === deliveryDeliveredInformationKind.kind ||
+          atom.kind === deliveryFailedInformationKind.kind,
+      )
+      .map((atom) => atom.informationId),
+});
+
 function createRegistry(
   moduleDefinitions: readonly InformationModuleDefinition[],
 ): InformationKindRegistry {
   const registry = new InformationKindRegistry();
   const registered = new Map<string, InformationKindDefinition<string, any>>();
-  for (const definition of builtInInformationKinds) {
+  for (const definition of [
+    ...builtInInformationKinds,
+    ...modelTaskInformationKinds,
+  ]) {
     registered.set(definition.kind, definition);
     if (definition === consumerFailedInformationKind) continue;
     if (definition.kind.startsWith("core."))
@@ -593,7 +718,10 @@ function createRegistry(
     else registry.register(definition);
   }
   for (const module of moduleDefinitions) {
-    for (const definition of module.manifest.informationKinds) {
+    for (const definition of [
+      ...module.manifest.consumes,
+      ...module.manifest.produces,
+    ]) {
       const existing = registered.get(definition.kind);
       if (existing !== undefined) {
         if (existing !== definition) {
@@ -614,42 +742,19 @@ function collectDefinitions(
   moduleDefinitions: readonly InformationModuleDefinition[],
 ): readonly InformationKindDefinition<string, any>[] {
   const definitions = new Map<string, InformationKindDefinition<string, any>>(
-    builtInInformationKinds.map((definition) => [definition.kind, definition]),
+    [...builtInInformationKinds, ...modelTaskInformationKinds].map(
+      (definition) => [definition.kind, definition],
+    ),
   );
   for (const module of moduleDefinitions) {
-    for (const definition of module.manifest.informationKinds) {
+    for (const definition of [
+      ...module.manifest.consumes,
+      ...module.manifest.produces,
+    ]) {
       definitions.set(definition.kind, definition);
     }
   }
   return [...definitions.values()];
-}
-
-function defaultModuleActivations(): readonly InformationModuleActivation[] {
-  return [
-    {
-      instanceId: "filter.default",
-      definitionId: "demo.filter.always",
-      settings: {},
-    },
-    {
-      instanceId: "reply.default",
-      definitionId: "demo.reply.llm",
-      settings: {
-        modelTier: "heavy",
-        outbound: { mode: "source", messageKind: "reply" },
-      },
-    },
-  ];
-}
-
-function createDeterministicModelSelectionResolver(): RuntimeModelSelectionResolver {
-  const model = createRepeatingDeterministicModel({
-    text: "It is a lovely night for watching the moon.",
-  });
-  return ({ modelTier }) => ({
-    modelId: `deterministic-${modelTier}`,
-    model,
-  });
 }
 
 function uniqueContextReference(atom: DeepReadonly<InformationAtom>): {
@@ -733,4 +838,23 @@ function required<T>(value: T | undefined, label: string): T {
     throw new RuntimeUnavailableError(`${label} is not initialized`);
   }
   return value;
+}
+
+// 入站观察者可能忽略取消；超时后继续清理 Core 与数据库，避免退出被永久阻塞。
+async function drainRuntimeOperations(
+  pending: readonly Promise<unknown>[],
+  timeout: number,
+): Promise<void> {
+  if (pending.length === 0) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.allSettled(pending),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, timeout);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
