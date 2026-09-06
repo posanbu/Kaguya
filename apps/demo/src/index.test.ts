@@ -49,6 +49,9 @@ describe("demo entry point", () => {
     expect(receipt.rootInformationId).toBe("demo-information-1");
     expect(output).toEqual([
       "root informationId: demo-information-1",
+      "agent.association.completed: 1",
+      "agent.association.query: 1",
+      "agent.association.requested: 1",
       "agent.chat.scope.binding: 1",
       "agent.chat.scope.entity: 1",
       "agent.person.context.completed: 1",
