@@ -2,13 +2,42 @@ import type {
   DeepReadonly,
   InformationAtom,
   InformationId,
+  JsonObject,
 } from "@kaguya/schema";
 import { z } from "@kaguya/schema";
 import {
   defineInformationKind,
+  type InformationFindQuery,
   type InformationKindDefinition,
+  type InformationRegistrationInput,
 } from "@kaguya/sdk";
-import type { InformationCore } from "@kaguya/engine";
+
+/** Scheduler 只依赖 Core 的稳定结构端口，避免 scheduler 与 engine 形成包循环。 */
+export interface CadenceInformationCore {
+  onDurable<K extends string, P extends JsonObject>(
+    subscriptionId: string,
+    definition: InformationKindDefinition<K, P>,
+    handle: (
+      atom: DeepReadonly<InformationAtom<K, P>>,
+      signal: AbortSignal,
+    ) => Promise<void> | void,
+  ): () => void;
+  registerOnce<K extends string, P extends JsonObject>(
+    operation: string,
+    key: string,
+    definition: InformationKindDefinition<K, P>,
+    input: InformationRegistrationInput<K, P>,
+  ): Promise<DeepReadonly<InformationAtom<K, P>>>;
+  commitTerminal<K extends string, P extends JsonObject>(
+    group: string,
+    subjectInformationId: InformationId,
+    definition: InformationKindDefinition<K, P>,
+    input: InformationRegistrationInput<K, P>,
+  ): Promise<DeepReadonly<InformationAtom>>;
+  find(
+    query: InformationFindQuery,
+  ): Promise<readonly DeepReadonly<InformationAtom>[]>;
+}
 
 export const cadenceDefinitionPayloadSchema = z
   .object({
@@ -197,7 +226,7 @@ export interface CadenceTimerApi {
 }
 
 export interface CadenceCoordinatorOptions {
-  readonly core: InformationCore;
+  readonly core: CadenceInformationCore;
   readonly definitions: readonly CadenceDefinitionInput[];
   readonly now?: () => Date;
   readonly pollIntervalMs?: number;
@@ -215,7 +244,7 @@ export interface ProjectionReconciliationRunner {
 }
 
 export function installProjectionReconciliationConsumers(
-  core: InformationCore,
+  core: CadenceInformationCore,
   runner: ProjectionReconciliationRunner,
   batchSize = 100,
 ): readonly (() => void)[] {

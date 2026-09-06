@@ -125,7 +125,11 @@ function assertJsonObjectSchema(schema: any, seen: Set<any>): void {
     case "lazy": {
       if (seen.has(schema)) return;
       seen.add(schema);
-      try { assertJsonObjectSchema(def.getter(), seen); } finally { seen.delete(schema); }
+      try {
+        assertJsonObjectSchema(def.getter(), seen);
+      } finally {
+        seen.delete(schema);
+      }
       return;
     }
     case "object":
@@ -185,7 +189,11 @@ function assertJsonValue(schema: any, seen: Set<any>): void {
     case "lazy": {
       if (seen.has(schema)) return;
       seen.add(schema);
-      try { assertJsonValue(def.getter(), seen); } finally { seen.delete(schema); }
+      try {
+        assertJsonValue(def.getter(), seen);
+      } finally {
+        seen.delete(schema);
+      }
       return;
     }
     case "string":
@@ -315,7 +323,11 @@ function buildRepresentativeValue(schema: any, seen: Set<any>): unknown {
       case "lazy": {
         if (seen.has(schema)) return {};
         seen.add(schema);
-        try { return buildRepresentativeValue(def.getter(), seen); } finally { seen.delete(schema); }
+        try {
+          return buildRepresentativeValue(def.getter(), seen);
+        } finally {
+          seen.delete(schema);
+        }
       }
       case "string":
         return "probe";

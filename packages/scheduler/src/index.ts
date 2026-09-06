@@ -8,5 +8,8 @@ export * from "./cadence.js";
 export * from "./contracts.js";
 export * from "./information-kinds.js";
 export { OneShotScheduleClient, normalizeDueAt } from "./client.js";
-export { DurableOneShotScheduler, type DurableOneShotSchedulerOptions } from "./runner.js";
+export {
+  DurableOneShotScheduler,
+  type DurableOneShotSchedulerOptions,
+} from "./runner.js";
 export { FakeScheduleClock } from "./testing.js";

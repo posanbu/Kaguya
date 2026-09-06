@@ -5,7 +5,11 @@
  */
 import type { ScheduleClock } from "./contracts.js";
 
-type Timer = { readonly id: number; readonly deadline: number; readonly handler: () => void };
+type Timer = {
+  readonly id: number;
+  readonly deadline: number;
+  readonly handler: () => void;
+};
 
 export class FakeScheduleClock implements ScheduleClock {
   #nowMs: number;
@@ -17,20 +21,29 @@ export class FakeScheduleClock implements ScheduleClock {
     if (!Number.isFinite(value)) throw new Error("Invalid fake clock time");
     this.#nowMs = value;
   }
-  now(): Date { return new Date(this.#nowMs); }
+  now(): Date {
+    return new Date(this.#nowMs);
+  }
   setTimeout(handler: () => void, delayMs: number): unknown {
     const delay = Math.max(0, Math.min(delayMs, 2_147_483_647));
     const id = this.#nextId++;
     this.#timers.set(id, { id, deadline: this.#nowMs + delay, handler });
     return id;
   }
-  clearTimeout(handle: unknown): void { if (typeof handle === "number") this.#timers.delete(handle); }
-  pendingTimerCount(): number { return this.#timers.size; }
+  clearTimeout(handle: unknown): void {
+    if (typeof handle === "number") this.#timers.delete(handle);
+  }
+  pendingTimerCount(): number {
+    return this.#timers.size;
+  }
   async advanceTo(target: Date): Promise<void> {
     const targetMs = target.getTime();
-    if (!Number.isFinite(targetMs) || targetMs < this.#nowMs) throw new Error("Fake clock cannot move backwards");
+    if (!Number.isFinite(targetMs) || targetMs < this.#nowMs)
+      throw new Error("Fake clock cannot move backwards");
     while (true) {
-      const timer = [...this.#timers.values()].sort((a, b) => a.deadline - b.deadline || a.id - b.id)[0];
+      const timer = [...this.#timers.values()].sort(
+        (a, b) => a.deadline - b.deadline || a.id - b.id,
+      )[0];
       if (!timer || timer.deadline > targetMs) break;
       this.#timers.delete(timer.id);
       this.#nowMs = timer.deadline;

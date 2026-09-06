@@ -5,9 +5,5 @@
     "outDir": "./dist"
   },
   "include": ["src/**/*.ts"],
-  "references": [
-    { "path": "../schema" },
-    { "path": "../sdk" },
-    { "path": "../engine" }
-  ]
+  "references": [{ "path": "../schema" }, { "path": "../sdk" }]
 }

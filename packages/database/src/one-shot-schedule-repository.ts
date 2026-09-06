@@ -60,9 +60,7 @@ const SCHEDULE_OPERATION_NAMESPACE = "kaguya.schedule.one-shot.schedule.v1";
 const DUE_OPERATION_NAMESPACE = "kaguya.schedule.one-shot.due.v1";
 const TERMINAL_NAMESPACE = "kaguya.schedule.one-shot.result.v1";
 
-export class OneShotScheduleRepository
-  implements OneShotScheduleProjectionStore
-{
+export class OneShotScheduleRepository implements OneShotScheduleProjectionStore {
   constructor(
     private readonly database: SqlDatabase,
     private readonly reliable: ReliableInformationRepository,
@@ -221,8 +219,14 @@ export class OneShotScheduleRepository
     readonly after?: InformationId;
     readonly limit: number;
   }): Promise<OpenOneShotPage> {
-    if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 1_000) {
-      throw new Error("one-shot schedule page limit must be between 1 and 1000");
+    if (
+      !Number.isSafeInteger(input.limit) ||
+      input.limit < 1 ||
+      input.limit > 1_000
+    ) {
+      throw new Error(
+        "one-shot schedule page limit must be between 1 and 1000",
+      );
     }
     return this.database.transaction(async (tx) => {
       const result = await tx.query<{
@@ -298,7 +302,8 @@ async function lockArm(
      WHERE schedule_information_id = $1 FOR UPDATE`,
     [scheduleInformationId],
   );
-  if (row.rowCount !== 1) throw new Error("One-shot schedule arm does not exist");
+  if (row.rowCount !== 1)
+    throw new Error("One-shot schedule arm does not exist");
   return row.rows[0]!;
 }
 

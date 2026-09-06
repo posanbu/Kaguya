@@ -61,7 +61,12 @@ function requested(id: string, source = "source", operationKey = id) {
       input: { text: "hello" },
       activation: { instanceId: "instance", definitionId: "definition" },
     },
-    [{ relation: "core:caused-by", informationId: informationIdSchema.parse(source) }],
+    [
+      {
+        relation: "core:caused-by",
+        informationId: informationIdSchema.parse(source),
+      },
+    ],
   );
 }
 function due(id: string, schedule: string) {
@@ -73,7 +78,12 @@ function due(id: string, schedule: string) {
       dueAt: "2026-09-06T04:00:00.000Z",
       deliveredAt: "2026-09-06T04:00:00.000Z",
     },
-    [{ relation: "core:status-of", informationId: informationIdSchema.parse(schedule) }],
+    [
+      {
+        relation: "core:status-of",
+        informationId: informationIdSchema.parse(schedule),
+      },
+    ],
   );
 }
 function terminal(
@@ -85,7 +95,12 @@ function terminal(
     id,
     `core.schedule.one-shot.${kind}`,
     kind === "failed" ? { failureKind: "consumer-failed" } : {},
-    [{ relation: "core:status-of", informationId: informationIdSchema.parse(schedule) }],
+    [
+      {
+        relation: "core:status-of",
+        informationId: informationIdSchema.parse(schedule),
+      },
+    ],
   );
 }
 
@@ -117,8 +132,15 @@ describe("one-shot schedule projection (PGlite)", () => {
     const repeated = await create(db, "schedule-a");
     expect(repeated).toEqual({ ...first, created: false });
     expect(first.created).toBe(true);
-    expect(await db.information.oneShotSchedules.listOpen({ limit: 256 })).toEqual({
-      arms: [{ scheduleInformationId: "schedule-a", dueAt: "2026-09-06T04:00:00.000Z" }],
+    expect(
+      await db.information.oneShotSchedules.listOpen({ limit: 256 }),
+    ).toEqual({
+      arms: [
+        {
+          scheduleInformationId: "schedule-a",
+          dueAt: "2026-09-06T04:00:00.000Z",
+        },
+      ],
     });
   });
 
@@ -153,7 +175,10 @@ describe("one-shot schedule projection (PGlite)", () => {
           exec: (sql) => tx.exec(sql),
           query: async (text, values) => {
             const result = await tx.query(text, values);
-            if (!failed && text.includes("INSERT INTO information_schedule_arms")) {
+            if (
+              !failed &&
+              text.includes("INSERT INTO information_schedule_arms")
+            ) {
               failed = true;
               throw new Error("injected arm projection failure");
             }
@@ -165,8 +190,12 @@ describe("one-shot schedule projection (PGlite)", () => {
     await expect(create(db, "rollback")).rejects.toThrow(
       "injected arm projection failure",
     );
-    expect(await db.information.get(informationIdSchema.parse("rollback"))).toBeUndefined();
-    expect(await db.information.oneShotSchedules.listOpen({ limit: 256 })).toEqual({ arms: [] });
+    expect(
+      await db.information.get(informationIdSchema.parse("rollback")),
+    ).toBeUndefined();
+    expect(
+      await db.information.oneShotSchedules.listOpen({ limit: 256 }),
+    ).toEqual({ arms: [] });
   });
 
   it("atomically supersedes or returns the prior terminal winner", async () => {
@@ -181,9 +210,15 @@ describe("one-shot schedule projection (PGlite)", () => {
     };
     const result = await db.information.oneShotSchedules.replace(replacement);
     expect(result.previousOutcome).toBe("superseded");
-    expect(await db.information.get(informationIdSchema.parse("superseded"))).toBeDefined();
-    expect(await db.information.oneShotSchedules.listOpen({ limit: 256 })).toEqual({
-      arms: [{ scheduleInformationId: "new", dueAt: "2026-09-06T04:00:00.000Z" }],
+    expect(
+      await db.information.get(informationIdSchema.parse("superseded")),
+    ).toBeDefined();
+    expect(
+      await db.information.oneShotSchedules.listOpen({ limit: 256 }),
+    ).toEqual({
+      arms: [
+        { scheduleInformationId: "new", dueAt: "2026-09-06T04:00:00.000Z" },
+      ],
     });
     const fired: OneShotTerminalCommit = {
       scheduleInformationId: informationIdSchema.parse("old"),
@@ -204,15 +239,30 @@ describe("one-shot schedule projection (PGlite)", () => {
     const replacement = await db.information.oneShotSchedules.replace({
       operationKey: "replacement-after-terminal",
       previousScheduleInformationId: informationIdSchema.parse("old-terminal"),
-      schedule: requested("replacement-after-terminal", "source", "replacement-after-terminal"),
+      schedule: requested(
+        "replacement-after-terminal",
+        "source",
+        "replacement-after-terminal",
+      ),
       superseded: terminal("unused-superseded", "superseded", "old-terminal"),
       dueAt: "2026-09-06T04:00:00.000Z",
     });
     expect(replacement.previousOutcome).toBe("already-terminal");
-    expect(replacement.previousTerminalInformationId).toBe(fired.terminalInformationId);
-    expect(await db.information.get(informationIdSchema.parse("unused-superseded"))).toBeUndefined();
-    expect(await db.information.oneShotSchedules.listOpen({ limit: 256 })).toEqual({
-      arms: [{ scheduleInformationId: "replacement-after-terminal", dueAt: "2026-09-06T04:00:00.000Z" }],
+    expect(replacement.previousTerminalInformationId).toBe(
+      fired.terminalInformationId,
+    );
+    expect(
+      await db.information.get(informationIdSchema.parse("unused-superseded")),
+    ).toBeUndefined();
+    expect(
+      await db.information.oneShotSchedules.listOpen({ limit: 256 }),
+    ).toEqual({
+      arms: [
+        {
+          scheduleInformationId: "replacement-after-terminal",
+          dueAt: "2026-09-06T04:00:00.000Z",
+        },
+      ],
     });
   });
 
@@ -222,7 +272,10 @@ describe("one-shot schedule projection (PGlite)", () => {
       { subscriptionId: "test.schedule-guard", kind: "test.source" },
     ]);
     await db.information.append(sourceAtom("guard-source"), []);
-    const claim = (await db.information.reliable.claim("test.schedule-guard", 10_000))!;
+    const claim = (await db.information.reliable.claim(
+      "test.schedule-guard",
+      10_000,
+    ))!;
     await create(db, "guarded-old");
     await db.sql.exec(
       "UPDATE information_deliveries SET lease_until = clock_timestamp() - interval '1 second'",
@@ -253,8 +306,15 @@ describe("one-shot schedule projection (PGlite)", () => {
         guard,
       }),
     ).rejects.toBeInstanceOf(InformationClaimLostError);
-    expect(await db.information.oneShotSchedules.listOpen({ limit: 256 })).toEqual({
-      arms: [{ scheduleInformationId: "guarded-old", dueAt: "2026-09-06T04:00:00.000Z" }],
+    expect(
+      await db.information.oneShotSchedules.listOpen({ limit: 256 }),
+    ).toEqual({
+      arms: [
+        {
+          scheduleInformationId: "guarded-old",
+          dueAt: "2026-09-06T04:00:00.000Z",
+        },
+      ],
     });
   });
 
@@ -270,8 +330,12 @@ describe("one-shot schedule projection (PGlite)", () => {
       due: due("due-after-due", "due-after-terminal"),
     });
     expect(emitted.created).toBe(true);
-    expect(await db.information.get(informationIdSchema.parse("due-after-due"))).toBeDefined();
-    expect(await db.information.oneShotSchedules.listOpen({ limit: 256 })).toEqual({ arms: [] });
+    expect(
+      await db.information.get(informationIdSchema.parse("due-after-due")),
+    ).toBeDefined();
+    expect(
+      await db.information.oneShotSchedules.listOpen({ limit: 256 }),
+    ).toEqual({ arms: [] });
     const arm = await db.sql.query<{
       state: string;
       due_information_id: string | null;
@@ -306,17 +370,20 @@ describe("one-shot schedule projection (PGlite)", () => {
     const winner = fired.created
       ? fired.terminalInformationId
       : replacement.previousTerminalInformationId;
-    expect(
-      fired.created
-        ? replacement.previousOutcome
-        : fired.status,
-    ).toBe(fired.created ? "already-terminal" : "superseded");
+    expect(fired.created ? replacement.previousOutcome : fired.status).toBe(
+      fired.created ? "already-terminal" : "superseded",
+    );
     expect(winner).toBeDefined();
     const terminals = await db.information.query({
       informationId: informationIdSchema.parse("race-old"),
       relation: "core:status-of",
     });
-    expect(terminals.filter((atom) => atom.kind.includes("fired") || atom.kind.includes("superseded"))).toHaveLength(1);
+    expect(
+      terminals.filter(
+        (atom) =>
+          atom.kind.includes("fired") || atom.kind.includes("superseded"),
+      ),
+    ).toHaveLength(1);
   });
 
   it("makes due idempotent and terminal commit single-winner", async () => {
@@ -326,8 +393,12 @@ describe("one-shot schedule projection (PGlite)", () => {
       scheduleInformationId: informationIdSchema.parse("schedule"),
       due: due("due", "schedule"),
     };
-    expect(await db.information.oneShotSchedules.emitDue(dueCommit)).toMatchObject({ created: true });
-    expect(await db.information.oneShotSchedules.emitDue(dueCommit)).toMatchObject({ created: false, dueInformationId: "due" });
+    expect(
+      await db.information.oneShotSchedules.emitDue(dueCommit),
+    ).toMatchObject({ created: true });
+    expect(
+      await db.information.oneShotSchedules.emitDue(dueCommit),
+    ).toMatchObject({ created: false, dueInformationId: "due" });
     const finishes = await Promise.all([
       db.information.oneShotSchedules.finish({
         scheduleInformationId: informationIdSchema.parse("schedule"),
@@ -338,7 +409,9 @@ describe("one-shot schedule projection (PGlite)", () => {
         terminal: terminal("failed", "failed", "schedule"),
       }),
     ]);
-    expect(new Set(finishes.map((result) => result.terminalInformationId)).size).toBe(1);
+    expect(
+      new Set(finishes.map((result) => result.terminalInformationId)).size,
+    ).toBe(1);
     expect(finishes.filter((result) => result.created)).toHaveLength(1);
   });
 });
@@ -361,16 +434,31 @@ describe.skipIf(!url)("one-shot schedule projection (PostgreSQL)", () => {
       });
       await first.close();
       const second = await scope.reconnect();
-      expect(await second.information.oneShotSchedules.listOpen({ limit: 256 })).toEqual({
-        arms: [{ scheduleInformationId: "restart", dueAt: "2026-09-06T04:00:00.000Z" }],
+      expect(
+        await second.information.oneShotSchedules.listOpen({ limit: 256 }),
+      ).toEqual({
+        arms: [
+          {
+            scheduleInformationId: "restart",
+            dueAt: "2026-09-06T04:00:00.000Z",
+          },
+        ],
       });
       const races = await Promise.all([
         ...Array.from({ length: 6 }, (_, index) =>
           second.information.oneShotSchedules.replace({
             operationKey: `replacement-${index}`,
             previousScheduleInformationId: informationIdSchema.parse("restart"),
-            schedule: requested(`replacement-${index}`, "source", `replacement-${index}`),
-            superseded: terminal(`superseded-${index}`, "superseded", "restart"),
+            schedule: requested(
+              `replacement-${index}`,
+              "source",
+              `replacement-${index}`,
+            ),
+            superseded: terminal(
+              `superseded-${index}`,
+              "superseded",
+              "restart",
+            ),
             dueAt: "2026-09-06T04:00:00.000Z",
           }),
         ),
@@ -381,7 +469,15 @@ describe.skipIf(!url)("one-shot schedule projection (PostgreSQL)", () => {
           }),
         ),
       ]);
-      expect(new Set(races.map((result) => "previousOutcome" in result ? result.previousTerminalInformationId : result.terminalInformationId)).size).toBe(1);
+      expect(
+        new Set(
+          races.map((result) =>
+            "previousOutcome" in result
+              ? result.previousTerminalInformationId
+              : result.terminalInformationId,
+          ),
+        ).size,
+      ).toBe(1);
     } finally {
       await scope.close();
     }

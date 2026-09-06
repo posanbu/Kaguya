@@ -849,7 +849,6 @@ function createRegistry(
     ...builtInInformationKinds,
     ...modelTaskInformationKinds,
     ...cadenceInformationKinds,
-    ...oneShotInformationKinds,
   ]) {
     registered.set(definition.kind, definition);
     if (definition === consumerFailedInformationKind) continue;

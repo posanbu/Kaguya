@@ -12,7 +12,10 @@ type Arm = { scheduleInformationId: string; dueAt: string };
 class ManualClock implements ScheduleClock {
   #nowMs: number;
   #nextId = 1;
-  readonly timers = new Map<number, { handler: () => void; delayMs: number; deadline: number }>();
+  readonly timers = new Map<
+    number,
+    { handler: () => void; delayMs: number; deadline: number }
+  >();
 
   constructor(now: string) {
     this.#nowMs = Date.parse(now);
@@ -46,12 +49,19 @@ class ManualClock implements ScheduleClock {
   }
 
   nextTimer(): { id: number; delayMs: number } | undefined {
-    const timer = [...this.timers.entries()].sort((left, right) => left[1].deadline - right[1].deadline)[0];
-    return timer === undefined ? undefined : { id: timer[0], delayMs: timer[1].delayMs };
+    const timer = [...this.timers.entries()].sort(
+      (left, right) => left[1].deadline - right[1].deadline,
+    )[0];
+    return timer === undefined
+      ? undefined
+      : { id: timer[0], delayMs: timer[1].delayMs };
   }
 }
 
-function storeFor(arms: readonly Arm[], emitDue: (commit: unknown) => Promise<unknown>) {
+function storeFor(
+  arms: readonly Arm[],
+  emitDue: (commit: unknown) => Promise<unknown>,
+) {
   return {
     emitDue: vi.fn(emitDue),
     listOpen: vi.fn(async ({ after }: { after?: string }) => {
@@ -69,19 +79,67 @@ function idGenerator() {
 describe("DurableOneShotScheduler", () => {
   it("restores future and overdue arms before start resolves", async () => {
     const clock = new FakeScheduleClock("2026-09-06T12:00:00.000Z");
-    const emitDue = vi.fn(async () => ({ scheduleInformationId: "x", dueInformationId: "d", created: true }));
-    const store = { emitDue, listOpen: vi.fn(async ({ after }: { after?: string }) => after ? { arms: [] } : { arms: [{ scheduleInformationId: "future", dueAt: "2026-09-06T12:01:00.000Z" }, { scheduleInformationId: "overdue", dueAt: "2026-09-06T11:59:00.000Z" }] }) };
-    const scheduler = new DurableOneShotScheduler({ store: store as any, clock, nextInformationId: (() => { let n = 0; return () => `due-${++n}` as any; })(), recoveryBatchSize: 1 });
+    const emitDue = vi.fn(async () => ({
+      scheduleInformationId: "x",
+      dueInformationId: "d",
+      created: true,
+    }));
+    const store = {
+      emitDue,
+      listOpen: vi.fn(async ({ after }: { after?: string }) =>
+        after
+          ? { arms: [] }
+          : {
+              arms: [
+                {
+                  scheduleInformationId: "future",
+                  dueAt: "2026-09-06T12:01:00.000Z",
+                },
+                {
+                  scheduleInformationId: "overdue",
+                  dueAt: "2026-09-06T11:59:00.000Z",
+                },
+              ],
+            },
+      ),
+    };
+    const scheduler = new DurableOneShotScheduler({
+      store: store as any,
+      clock,
+      nextInformationId: (() => {
+        let n = 0;
+        return () => `due-${++n}` as any;
+      })(),
+      recoveryBatchSize: 1,
+    });
     await scheduler.start();
-    expect(emitDue).toHaveBeenCalledWith(expect.objectContaining({ scheduleInformationId: "overdue" }));
+    expect(emitDue).toHaveBeenCalledWith(
+      expect.objectContaining({ scheduleInformationId: "overdue" }),
+    );
     expect(clock.pendingTimerCount()).toBe(1);
   });
 
   it("ignores duplicate and stale generation callbacks", async () => {
     const clock = new ManualClock("2026-09-06T12:00:00.000Z");
-    const emitDue = vi.fn(async () => ({ scheduleInformationId: "schedule", dueInformationId: "due", created: true }));
-    const store = storeFor([{ scheduleInformationId: "schedule", dueAt: "2026-09-06T12:01:00.000Z" }], emitDue);
-    const scheduler = new DurableOneShotScheduler({ store: store as any, clock, nextInformationId: idGenerator() });
+    const emitDue = vi.fn(async () => ({
+      scheduleInformationId: "schedule",
+      dueInformationId: "due",
+      created: true,
+    }));
+    const store = storeFor(
+      [
+        {
+          scheduleInformationId: "schedule",
+          dueAt: "2026-09-06T12:01:00.000Z",
+        },
+      ],
+      emitDue,
+    );
+    const scheduler = new DurableOneShotScheduler({
+      store: store as any,
+      clock,
+      nextInformationId: idGenerator(),
+    });
     await scheduler.start();
     const first = clock.nextTimer();
     expect(first).toBeDefined();
@@ -101,9 +159,20 @@ describe("DurableOneShotScheduler", () => {
 
   it("segments delays larger than the Node timeout limit", async () => {
     const clock = new ManualClock("2026-09-06T12:00:00.000Z");
-    const emitDue = vi.fn(async () => ({ scheduleInformationId: "long", dueInformationId: "due", created: true }));
-    const store = storeFor([{ scheduleInformationId: "long", dueAt: "2026-10-10T12:00:00.000Z" }], emitDue);
-    const scheduler = new DurableOneShotScheduler({ store: store as any, clock, nextInformationId: idGenerator() });
+    const emitDue = vi.fn(async () => ({
+      scheduleInformationId: "long",
+      dueInformationId: "due",
+      created: true,
+    }));
+    const store = storeFor(
+      [{ scheduleInformationId: "long", dueAt: "2026-10-10T12:00:00.000Z" }],
+      emitDue,
+    );
+    const scheduler = new DurableOneShotScheduler({
+      store: store as any,
+      clock,
+      nextInformationId: idGenerator(),
+    });
     await scheduler.start();
     const first = clock.nextTimer();
     expect(first?.delayMs).toBe(2_147_483_647);
@@ -118,10 +187,21 @@ describe("DurableOneShotScheduler", () => {
     const emitDue = vi.fn(async () => {
       attempts += 1;
       if (attempts === 1) throw new Error("temporary database outage");
-      return { scheduleInformationId: "retry", dueInformationId: "due", created: true };
+      return {
+        scheduleInformationId: "retry",
+        dueInformationId: "due",
+        created: true,
+      };
     });
-    const store = storeFor([{ scheduleInformationId: "retry", dueAt: "2026-09-06T11:59:00.000Z" }], emitDue);
-    const scheduler = new DurableOneShotScheduler({ store: store as any, clock, nextInformationId: idGenerator() });
+    const store = storeFor(
+      [{ scheduleInformationId: "retry", dueAt: "2026-09-06T11:59:00.000Z" }],
+      emitDue,
+    );
+    const scheduler = new DurableOneShotScheduler({
+      store: store as any,
+      clock,
+      nextInformationId: idGenerator(),
+    });
     await scheduler.start();
     expect(emitDue).toHaveBeenCalledTimes(1);
     expect(clock.pendingTimerCount()).toBe(1);
@@ -133,11 +213,19 @@ describe("DurableOneShotScheduler", () => {
   it("does not resurrect an arm canceled while due delivery is failing", async () => {
     const clock = new FakeScheduleClock("2026-09-06T12:00:00.000Z");
     let rejectDue!: (error: Error) => void;
-    const delivery = new Promise<never>((_, reject) => { rejectDue = reject; });
-    let arms: readonly Arm[] = [{ scheduleInformationId: "cancel", dueAt: "2026-09-06T12:01:00.000Z" }];
+    const delivery = new Promise<never>((_, reject) => {
+      rejectDue = reject;
+    });
+    let arms: readonly Arm[] = [
+      { scheduleInformationId: "cancel", dueAt: "2026-09-06T12:01:00.000Z" },
+    ];
     const emitDue = vi.fn(async () => delivery);
     const store = { emitDue, listOpen: vi.fn(async () => ({ arms })) };
-    const scheduler = new DurableOneShotScheduler({ store: store as any, clock, nextInformationId: idGenerator() });
+    const scheduler = new DurableOneShotScheduler({
+      store: store as any,
+      clock,
+      nextInformationId: idGenerator(),
+    });
     await scheduler.start();
     await clock.advanceTo(new Date("2026-09-06T12:01:00.000Z"));
     await vi.waitFor(() => expect(emitDue).toHaveBeenCalledTimes(1));
@@ -152,18 +240,34 @@ describe("DurableOneShotScheduler", () => {
   it("waits for an in-flight callback during bounded stop without finishing the arm", async () => {
     const clock = new FakeScheduleClock("2026-09-06T12:00:00.000Z");
     let release!: () => void;
-    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     const emitDue = vi.fn(async () => {
       await pending;
-      return { scheduleInformationId: "drain", dueInformationId: "due", created: true };
+      return {
+        scheduleInformationId: "drain",
+        dueInformationId: "due",
+        created: true,
+      };
     });
-    const store = storeFor([{ scheduleInformationId: "drain", dueAt: "2026-09-06T12:01:00.000Z" }], emitDue);
-    const scheduler = new DurableOneShotScheduler({ store: store as any, clock, nextInformationId: idGenerator(), drainTimeoutMs: 500 });
+    const store = storeFor(
+      [{ scheduleInformationId: "drain", dueAt: "2026-09-06T12:01:00.000Z" }],
+      emitDue,
+    );
+    const scheduler = new DurableOneShotScheduler({
+      store: store as any,
+      clock,
+      nextInformationId: idGenerator(),
+      drainTimeoutMs: 500,
+    });
     await scheduler.start();
     await clock.advanceTo(new Date("2026-09-06T12:01:00.000Z"));
     expect(emitDue).toHaveBeenCalledTimes(1);
     let stopped = false;
-    const stop = scheduler.stop().then(() => { stopped = true; });
+    const stop = scheduler.stop().then(() => {
+      stopped = true;
+    });
     await Promise.resolve();
     expect(stopped).toBe(false);
     await clock.advanceTo(new Date("2026-09-06T12:01:00.500Z"));
@@ -176,13 +280,32 @@ describe("DurableOneShotScheduler", () => {
   it("bounds stop while startup recovery delivery is still in flight", async () => {
     const clock = new FakeScheduleClock("2026-09-06T12:00:00.000Z");
     let release!: () => void;
-    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     const emitDue = vi.fn(async () => {
       await pending;
-      return { scheduleInformationId: "startup-drain", dueInformationId: "due", created: true };
+      return {
+        scheduleInformationId: "startup-drain",
+        dueInformationId: "due",
+        created: true,
+      };
     });
-    const store = storeFor([{ scheduleInformationId: "startup-drain", dueAt: "2026-09-06T11:59:00.000Z" }], emitDue);
-    const scheduler = new DurableOneShotScheduler({ store: store as any, clock, nextInformationId: idGenerator(), drainTimeoutMs: 500 });
+    const store = storeFor(
+      [
+        {
+          scheduleInformationId: "startup-drain",
+          dueAt: "2026-09-06T11:59:00.000Z",
+        },
+      ],
+      emitDue,
+    );
+    const scheduler = new DurableOneShotScheduler({
+      store: store as any,
+      clock,
+      nextInformationId: idGenerator(),
+      drainTimeoutMs: 500,
+    });
     const starting = scheduler.start();
     await vi.waitFor(() => expect(emitDue).toHaveBeenCalledTimes(1));
     const stopping = scheduler.stop();
@@ -195,11 +318,23 @@ describe("DurableOneShotScheduler", () => {
 
   it("refreshes an overdue arm and delivers it before resolving", async () => {
     const clock = new FakeScheduleClock("2026-09-06T12:00:00.000Z");
-    const emitDue = vi.fn(async () => ({ scheduleInformationId: "refresh", dueInformationId: "due", created: true }));
+    const emitDue = vi.fn(async () => ({
+      scheduleInformationId: "refresh",
+      dueInformationId: "due",
+      created: true,
+    }));
     const store = storeFor([], emitDue);
     store.listOpen.mockImplementationOnce(async () => ({ arms: [] }));
-    store.listOpen.mockImplementationOnce(async () => ({ arms: [{ scheduleInformationId: "refresh", dueAt: "2026-09-06T11:59:00.000Z" }] }));
-    const scheduler = new DurableOneShotScheduler({ store: store as any, clock, nextInformationId: idGenerator() });
+    store.listOpen.mockImplementationOnce(async () => ({
+      arms: [
+        { scheduleInformationId: "refresh", dueAt: "2026-09-06T11:59:00.000Z" },
+      ],
+    }));
+    const scheduler = new DurableOneShotScheduler({
+      store: store as any,
+      clock,
+      nextInformationId: idGenerator(),
+    });
     await scheduler.start();
     await scheduler.refresh("refresh" as never);
     expect(emitDue).toHaveBeenCalledTimes(1);
@@ -208,9 +343,20 @@ describe("DurableOneShotScheduler", () => {
 
   it("re-arms when the host clock moves backwards before a callback", async () => {
     const clock = new ManualClock("2026-09-06T12:00:00.000Z");
-    const emitDue = vi.fn(async () => ({ scheduleInformationId: "clock", dueInformationId: "due", created: true }));
-    const store = storeFor([{ scheduleInformationId: "clock", dueAt: "2026-09-06T12:01:00.000Z" }], emitDue);
-    const scheduler = new DurableOneShotScheduler({ store: store as any, clock, nextInformationId: idGenerator() });
+    const emitDue = vi.fn(async () => ({
+      scheduleInformationId: "clock",
+      dueInformationId: "due",
+      created: true,
+    }));
+    const store = storeFor(
+      [{ scheduleInformationId: "clock", dueAt: "2026-09-06T12:01:00.000Z" }],
+      emitDue,
+    );
+    const scheduler = new DurableOneShotScheduler({
+      store: store as any,
+      clock,
+      nextInformationId: idGenerator(),
+    });
     await scheduler.start();
     const timer = clock.nextTimer();
     clock.setNow("2026-09-06T11:59:59.000Z");
@@ -221,13 +367,36 @@ describe("DurableOneShotScheduler", () => {
 
   it("recovers every page of open arms", async () => {
     const clock = new FakeScheduleClock("2026-09-06T12:00:00.000Z");
-    const emitDue = vi.fn(async () => ({ scheduleInformationId: "due", dueInformationId: "atom", created: true }));
+    const emitDue = vi.fn(async () => ({
+      scheduleInformationId: "due",
+      dueInformationId: "atom",
+      created: true,
+    }));
     const pages = [
-      { arms: [{ scheduleInformationId: "first", dueAt: "2026-09-06T12:00:01.000Z" }], nextCursor: "first" },
-      { arms: [{ scheduleInformationId: "second", dueAt: "2026-09-06T12:00:02.000Z" }] },
+      {
+        arms: [
+          { scheduleInformationId: "first", dueAt: "2026-09-06T12:00:01.000Z" },
+        ],
+        nextCursor: "first",
+      },
+      {
+        arms: [
+          {
+            scheduleInformationId: "second",
+            dueAt: "2026-09-06T12:00:02.000Z",
+          },
+        ],
+      },
     ];
-    const listOpen = vi.fn(async ({ after }: { after?: string }) => after === undefined ? pages[0] : pages[1]);
-    const scheduler = new DurableOneShotScheduler({ store: { listOpen, emitDue } as any, clock, nextInformationId: idGenerator(), recoveryBatchSize: 1 });
+    const listOpen = vi.fn(async ({ after }: { after?: string }) =>
+      after === undefined ? pages[0] : pages[1],
+    );
+    const scheduler = new DurableOneShotScheduler({
+      store: { listOpen, emitDue } as any,
+      clock,
+      nextInformationId: idGenerator(),
+      recoveryBatchSize: 1,
+    });
     await scheduler.start();
     expect(listOpen).toHaveBeenCalledTimes(2);
     expect(clock.pendingTimerCount()).toBe(2);
@@ -235,10 +404,22 @@ describe("DurableOneShotScheduler", () => {
 
   it("restores open arms after a restart and delivers overdue work once", async () => {
     const clock = new FakeScheduleClock("2026-09-06T12:00:00.000Z");
-    let arms: readonly Arm[] = [{ scheduleInformationId: "future", dueAt: "2026-09-06T12:01:00.000Z" }];
-    const emitDue = vi.fn(async ({ scheduleInformationId }: { scheduleInformationId: string }) => ({ scheduleInformationId, dueInformationId: "due", created: true }));
+    let arms: readonly Arm[] = [
+      { scheduleInformationId: "future", dueAt: "2026-09-06T12:01:00.000Z" },
+    ];
+    const emitDue = vi.fn(
+      async ({ scheduleInformationId }: { scheduleInformationId: string }) => ({
+        scheduleInformationId,
+        dueInformationId: "due",
+        created: true,
+      }),
+    );
     const store = { emitDue, listOpen: vi.fn(async () => ({ arms })) };
-    const first = new DurableOneShotScheduler({ store: store as any, clock, nextInformationId: idGenerator() });
+    const first = new DurableOneShotScheduler({
+      store: store as any,
+      clock,
+      nextInformationId: idGenerator(),
+    });
     await first.start();
     expect(clock.pendingTimerCount()).toBe(1);
     await first.stop();
@@ -247,30 +428,51 @@ describe("DurableOneShotScheduler", () => {
       { scheduleInformationId: "future", dueAt: "2026-09-06T12:01:00.000Z" },
       { scheduleInformationId: "overdue", dueAt: "2026-09-06T11:59:00.000Z" },
     ];
-    const second = new DurableOneShotScheduler({ store: store as any, clock, nextInformationId: idGenerator() });
+    const second = new DurableOneShotScheduler({
+      store: store as any,
+      clock,
+      nextInformationId: idGenerator(),
+    });
     await second.start();
     expect(emitDue).toHaveBeenCalledTimes(1);
-    expect(emitDue).toHaveBeenCalledWith(expect.objectContaining({ scheduleInformationId: "overdue" }));
+    expect(emitDue).toHaveBeenCalledWith(
+      expect.objectContaining({ scheduleInformationId: "overdue" }),
+    );
     expect(clock.pendingTimerCount()).toBe(1);
   });
 
   it("does not arm a refresh result that arrives after stop", async () => {
     const clock = new FakeScheduleClock("2026-09-06T12:00:00.000Z");
     let resolvePage!: (page: { arms: readonly Arm[] }) => void;
-    const page = new Promise<{ arms: readonly Arm[] }>((resolve) => { resolvePage = resolve; });
-    const emitDue = vi.fn(async () => ({ scheduleInformationId: "refresh", dueInformationId: "due", created: true }));
+    const page = new Promise<{ arms: readonly Arm[] }>((resolve) => {
+      resolvePage = resolve;
+    });
+    const emitDue = vi.fn(async () => ({
+      scheduleInformationId: "refresh",
+      dueInformationId: "due",
+      created: true,
+    }));
     const store = {
       emitDue,
-      listOpen: vi.fn()
+      listOpen: vi
+        .fn()
         .mockResolvedValueOnce({ arms: [] })
         .mockImplementationOnce(() => page),
     };
-    const scheduler = new DurableOneShotScheduler({ store: store as any, clock, nextInformationId: idGenerator() });
+    const scheduler = new DurableOneShotScheduler({
+      store: store as any,
+      clock,
+      nextInformationId: idGenerator(),
+    });
     await scheduler.start();
     const refreshing = scheduler.refresh("refresh" as never);
     await vi.waitFor(() => expect(store.listOpen).toHaveBeenCalledTimes(2));
     const stopping = scheduler.stop();
-    resolvePage({ arms: [{ scheduleInformationId: "refresh", dueAt: "2026-09-06T13:00:00.000Z" }] });
+    resolvePage({
+      arms: [
+        { scheduleInformationId: "refresh", dueAt: "2026-09-06T13:00:00.000Z" },
+      ],
+    });
     await refreshing;
     await stopping;
     expect(clock.pendingTimerCount()).toBe(0);
@@ -279,16 +481,29 @@ describe("DurableOneShotScheduler", () => {
   it("does not arm later startup records after stop interrupts overdue delivery", async () => {
     const clock = new FakeScheduleClock("2026-09-06T12:00:00.000Z");
     let release!: () => void;
-    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     const emitDue = vi.fn(async () => {
       await pending;
-      return { scheduleInformationId: "overdue", dueInformationId: "due", created: true };
+      return {
+        scheduleInformationId: "overdue",
+        dueInformationId: "due",
+        created: true,
+      };
     });
-    const store = storeFor([
-      { scheduleInformationId: "overdue", dueAt: "2026-09-06T11:59:00.000Z" },
-      { scheduleInformationId: "future", dueAt: "2026-09-06T13:00:00.000Z" },
-    ], emitDue);
-    const scheduler = new DurableOneShotScheduler({ store: store as any, clock, nextInformationId: idGenerator() });
+    const store = storeFor(
+      [
+        { scheduleInformationId: "overdue", dueAt: "2026-09-06T11:59:00.000Z" },
+        { scheduleInformationId: "future", dueAt: "2026-09-06T13:00:00.000Z" },
+      ],
+      emitDue,
+    );
+    const scheduler = new DurableOneShotScheduler({
+      store: store as any,
+      clock,
+      nextInformationId: idGenerator(),
+    });
     const starting = scheduler.start();
     await vi.waitFor(() => expect(emitDue).toHaveBeenCalledTimes(1));
     const stopping = scheduler.stop();

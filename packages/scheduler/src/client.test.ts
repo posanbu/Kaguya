@@ -38,17 +38,30 @@ describe("OneShotScheduleClient", () => {
   });
 
   it("normalizes only strict ISO 8601 deadlines", () => {
-    expect(normalizeDueAt("2026-09-06T12:00:00+08:00")).toBe("2026-09-06T04:00:00.000Z");
-    for (const value of ["09/06/2026 12:00:00+08:00", "2026-09-06 12:00:00+08:00", "2026-09-06T12:00:00"]) {
+    expect(normalizeDueAt("2026-09-06T12:00:00+08:00")).toBe(
+      "2026-09-06T04:00:00.000Z",
+    );
+    for (const value of [
+      "09/06/2026 12:00:00+08:00",
+      "2026-09-06 12:00:00+08:00",
+      "2026-09-06T12:00:00",
+    ]) {
       expect(() => normalizeDueAt(value)).toThrow(/absolute dueAt/);
     }
   });
 
   it("forwards a valid schedule with normalized UTC dueAt", async () => {
-    const core = { scheduleOneShot: vi.fn().mockResolvedValue({ scheduleInformationId: "schedule-1", created: true }) };
+    const core = {
+      scheduleOneShot: vi.fn().mockResolvedValue({
+        scheduleInformationId: "schedule-1",
+        created: true,
+      }),
+    };
     const client = new OneShotScheduleClient(core as never);
     await client.schedule({ ...request, dueAt: "2026-09-06T12:00:00+08:00" });
-    expect(core.scheduleOneShot).toHaveBeenCalledWith(expect.objectContaining({ dueAt: "2026-09-06T04:00:00.000Z" }));
+    expect(core.scheduleOneShot).toHaveBeenCalledWith(
+      expect.objectContaining({ dueAt: "2026-09-06T04:00:00.000Z" }),
+    );
   });
 
   it("accepts nested opaque JSON and forwards replacement and finish", async () => {
@@ -56,47 +69,85 @@ describe("OneShotScheduleClient", () => {
       "core:caused-by": { required: true, multiple: false },
       "core:replaces": { required: false, multiple: false },
     });
-    const deepInput = { a: { b: { c: 1 } }, a2: [{ b: { c: 1 } }], a3: { b: [{ c: { d: 1 } }] } };
-    expect(oneShotRequestedInformationKind.payloadSchema.parse({
-      operationKey: request.operationKey,
-      dueAt: request.dueAt,
-      input: deepInput,
-      activation: request.activation,
-    }).input).toEqual(deepInput);
-    expect(() => oneShotRequestedInformationKind.payloadSchema.parse({
-      operationKey: request.operationKey,
-      dueAt: request.dueAt,
-      input: { invalid: new Date() },
-      activation: request.activation,
-    })).toThrow();
+    const deepInput = {
+      a: { b: { c: 1 } },
+      a2: [{ b: { c: 1 } }],
+      a3: { b: [{ c: { d: 1 } }] },
+    };
+    expect(
+      oneShotRequestedInformationKind.payloadSchema.parse({
+        operationKey: request.operationKey,
+        dueAt: request.dueAt,
+        input: deepInput,
+        activation: request.activation,
+      }).input,
+    ).toEqual(deepInput);
+    expect(() =>
+      oneShotRequestedInformationKind.payloadSchema.parse({
+        operationKey: request.operationKey,
+        dueAt: request.dueAt,
+        input: { invalid: new Date() },
+        activation: request.activation,
+      }),
+    ).toThrow();
     const core = {
-      scheduleOneShot: vi.fn().mockResolvedValue({ scheduleInformationId: "schedule-1", created: true }),
-      replaceOneShot: vi.fn().mockResolvedValue({ scheduleInformationId: "schedule-2", created: true, previousOutcome: "superseded", previousTerminalInformationId: "terminal-1" }),
-      finishOneShot: vi.fn().mockResolvedValue({ scheduleInformationId: "schedule-2", terminalInformationId: "terminal-2", status: "fired", created: true }),
+      scheduleOneShot: vi.fn().mockResolvedValue({
+        scheduleInformationId: "schedule-1",
+        created: true,
+      }),
+      replaceOneShot: vi.fn().mockResolvedValue({
+        scheduleInformationId: "schedule-2",
+        created: true,
+        previousOutcome: "superseded",
+        previousTerminalInformationId: "terminal-1",
+      }),
+      finishOneShot: vi.fn().mockResolvedValue({
+        scheduleInformationId: "schedule-2",
+        terminalInformationId: "terminal-2",
+        status: "fired",
+        created: true,
+      }),
     };
     const client = new OneShotScheduleClient(core);
-    await client.replace({ ...request, previousScheduleInformationId: "schedule-1", references: [{ relation: "core:caused-by", informationId: "info-1" }] });
-    await client.finish({ scheduleInformationId: "schedule-2", status: "fired" });
-    expect(core.replaceOneShot).toHaveBeenCalledWith(expect.objectContaining({ dueAt: request.dueAt, previousScheduleInformationId: "schedule-1" }));
-    expect(core.finishOneShot).toHaveBeenCalledWith({ scheduleInformationId: "schedule-2", status: "fired" });
+    await client.replace({
+      ...request,
+      previousScheduleInformationId: "schedule-1",
+      references: [{ relation: "core:caused-by", informationId: "info-1" }],
+    });
+    await client.finish({
+      scheduleInformationId: "schedule-2",
+      status: "fired",
+    });
+    expect(core.replaceOneShot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dueAt: request.dueAt,
+        previousScheduleInformationId: "schedule-1",
+      }),
+    );
+    expect(core.finishOneShot).toHaveBeenCalledWith({
+      scheduleInformationId: "schedule-2",
+      status: "fired",
+    });
   });
 
   it("registers the recursive requested kind in an information module", () => {
-    expect(() => defineInformationModule({
-      manifest: {
-        protocolVersion: 1,
-        definitionId: "test.scheduler",
-        moduleVersion: "1.0.0",
-        displayName: "Scheduler test",
-        settingsSchema: z.object({}).strict(),
-        consumes: [],
-        produces: [oneShotRequestedInformationKind],
-        selectors: [],
-        promptRenderers: [],
-        requires: [],
-        provides: [],
-      },
-      create: () => ({ subscriptions: [], provisions: [] }),
-    })).not.toThrow();
+    expect(() =>
+      defineInformationModule({
+        manifest: {
+          protocolVersion: 1,
+          definitionId: "test.scheduler",
+          moduleVersion: "1.0.0",
+          displayName: "Scheduler test",
+          settingsSchema: z.object({}).strict(),
+          consumes: [],
+          produces: [oneShotRequestedInformationKind],
+          selectors: [],
+          promptRenderers: [],
+          requires: [],
+          provides: [],
+        },
+        create: () => ({ subscriptions: [], provisions: [] }),
+      }),
+    ).not.toThrow();
   });
 });

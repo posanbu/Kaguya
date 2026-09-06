@@ -6,36 +6,134 @@
  * 输入输出与副作用：本文件仅提供类型和 capability token，不执行 I/O、计时或持久化；
  * schedule 与 terminal 请求由调用方携带 operation key、来源信息和 activation 以保证幂等与追溯。
  */
-import type { DeepReadonly, InformationAtom, InformationId, InformationReference, JsonObject } from "@kaguya/schema";
-import { defineModuleCapability, type ModuleActivationProvenance } from "@kaguya/sdk";
+import type {
+  DeepReadonly,
+  InformationAtom,
+  InformationId,
+  InformationReference,
+  JsonObject,
+} from "@kaguya/schema";
+import {
+  defineModuleCapability,
+  type ModuleActivationProvenance,
+} from "@kaguya/sdk";
 
 export type { ModuleActivationProvenance } from "@kaguya/sdk";
-export type { DeepReadonly, InformationAtom, InformationId, InformationReference, JsonObject } from "@kaguya/schema";
+export type {
+  DeepReadonly,
+  InformationAtom,
+  InformationId,
+  InformationReference,
+  JsonObject,
+} from "@kaguya/schema";
 
-export interface OneShotScheduleRequest { readonly operationKey: string; readonly sourceInformationId: InformationId; readonly dueAt: string; readonly input: JsonObject; readonly activation: ModuleActivationProvenance; readonly references?: readonly InformationReference[]; }
-export interface OneShotScheduleReplacement extends OneShotScheduleRequest { readonly previousScheduleInformationId: InformationId; }
-export type OneShotScheduleReceipt = { readonly scheduleInformationId: InformationId; readonly created: boolean; };
-export type OneShotReplacementReceipt = OneShotScheduleReceipt & { readonly previousOutcome: "superseded" | "already-terminal"; readonly previousTerminalInformationId: InformationId; };
-export interface OneShotTerminalResult { readonly scheduleInformationId: InformationId; readonly terminalInformationId: InformationId; readonly status: "fired" | "superseded" | "failed"; readonly created: boolean; }
-export interface OneShotDueReceipt { readonly scheduleInformationId: InformationId; readonly dueInformationId: InformationId; readonly created: boolean; }
+export interface OneShotScheduleRequest {
+  readonly operationKey: string;
+  readonly sourceInformationId: InformationId;
+  readonly dueAt: string;
+  readonly input: JsonObject;
+  readonly activation: ModuleActivationProvenance;
+  readonly references?: readonly InformationReference[];
+}
+export interface OneShotScheduleReplacement extends OneShotScheduleRequest {
+  readonly previousScheduleInformationId: InformationId;
+}
+export type OneShotScheduleReceipt = {
+  readonly scheduleInformationId: InformationId;
+  readonly created: boolean;
+};
+export type OneShotReplacementReceipt = OneShotScheduleReceipt & {
+  readonly previousOutcome: "superseded" | "already-terminal";
+  readonly previousTerminalInformationId: InformationId;
+};
+export interface OneShotTerminalResult {
+  readonly scheduleInformationId: InformationId;
+  readonly terminalInformationId: InformationId;
+  readonly status: "fired" | "superseded" | "failed";
+  readonly created: boolean;
+}
+export interface OneShotDueReceipt {
+  readonly scheduleInformationId: InformationId;
+  readonly dueInformationId: InformationId;
+  readonly created: boolean;
+}
 export interface OneShotScheduleProjectionStore {
   create(input: OneShotCreateCommit): Promise<OneShotScheduleReceipt>;
   replace(input: OneShotReplaceCommit): Promise<OneShotReplacementReceipt>;
   emitDue(input: OneShotDueCommit): Promise<OneShotDueReceipt>;
   finish(input: OneShotTerminalCommit): Promise<OneShotTerminalResult>;
-  listOpen(input: { readonly after?: InformationId; readonly limit: number }): Promise<{ readonly arms: readonly { readonly scheduleInformationId: InformationId; readonly dueAt: string }[]; readonly nextCursor?: InformationId }>;
+  listOpen(input: {
+    readonly after?: InformationId;
+    readonly limit: number;
+  }): Promise<{
+    readonly arms: readonly {
+      readonly scheduleInformationId: InformationId;
+      readonly dueAt: string;
+    }[];
+    readonly nextCursor?: InformationId;
+  }>;
 }
 export interface ScheduleClock {
   now(): Date;
   setTimeout(handler: () => void, delayMs: number): unknown;
   clearTimeout(handle: unknown): void;
 }
-export type OneShotTerminalRequest = { readonly scheduleInformationId: InformationId; readonly status: "fired"; } | { readonly scheduleInformationId: InformationId; readonly status: "failed"; readonly failureKind: "consumer-failed" | "input-unavailable"; };
-export interface OneShotScheduleCapability { schedule(input: OneShotScheduleRequest): Promise<OneShotScheduleReceipt>; replace(input: OneShotScheduleReplacement): Promise<OneShotReplacementReceipt>; finish(input: OneShotTerminalRequest): Promise<OneShotTerminalResult>; }
-export interface OneShotScheduleCorePort { scheduleOneShot(input: OneShotScheduleRequest): Promise<OneShotScheduleReceipt>; replaceOneShot(input: OneShotScheduleReplacement): Promise<OneShotReplacementReceipt>; finishOneShot(input: OneShotTerminalRequest): Promise<OneShotTerminalResult>; }
-export interface OneShotFencingGuard { readonly subscriptionId: string; readonly informationId: InformationId; readonly token: string; readonly attempt: number; readonly leaseUntil: string; readonly signal?: AbortSignal; }
-export interface OneShotCreateCommit { readonly operationKey: string; readonly schedule: DeepReadonly<InformationAtom>; readonly dueAt: string; readonly guard?: OneShotFencingGuard; }
-export interface OneShotReplaceCommit { readonly operationKey: string; readonly previousScheduleInformationId: InformationId; readonly schedule: DeepReadonly<InformationAtom>; readonly superseded: DeepReadonly<InformationAtom>; readonly dueAt: string; readonly guard?: OneShotFencingGuard; }
-export interface OneShotDueCommit { readonly scheduleInformationId: InformationId; readonly due: DeepReadonly<InformationAtom>; }
-export interface OneShotTerminalCommit { readonly scheduleInformationId: InformationId; readonly terminal: DeepReadonly<InformationAtom>; readonly guard?: OneShotFencingGuard; }
-export const oneShotScheduleCapability = defineModuleCapability<OneShotScheduleCapability>("kaguya:schedule.one-shot", 1);
+export type OneShotTerminalRequest =
+  | { readonly scheduleInformationId: InformationId; readonly status: "fired" }
+  | {
+      readonly scheduleInformationId: InformationId;
+      readonly status: "failed";
+      readonly failureKind: "consumer-failed" | "input-unavailable";
+    };
+export interface OneShotScheduleCapability {
+  schedule(input: OneShotScheduleRequest): Promise<OneShotScheduleReceipt>;
+  replace(
+    input: OneShotScheduleReplacement,
+  ): Promise<OneShotReplacementReceipt>;
+  finish(input: OneShotTerminalRequest): Promise<OneShotTerminalResult>;
+}
+export interface OneShotScheduleCorePort {
+  scheduleOneShot(
+    input: OneShotScheduleRequest,
+  ): Promise<OneShotScheduleReceipt>;
+  replaceOneShot(
+    input: OneShotScheduleReplacement,
+  ): Promise<OneShotReplacementReceipt>;
+  finishOneShot(input: OneShotTerminalRequest): Promise<OneShotTerminalResult>;
+}
+export interface OneShotFencingGuard {
+  readonly subscriptionId: string;
+  readonly informationId: InformationId;
+  readonly token: string;
+  readonly attempt: number;
+  readonly leaseUntil: string;
+  readonly signal?: AbortSignal;
+}
+export interface OneShotCreateCommit {
+  readonly operationKey: string;
+  readonly schedule: DeepReadonly<InformationAtom>;
+  readonly dueAt: string;
+  readonly guard?: OneShotFencingGuard;
+}
+export interface OneShotReplaceCommit {
+  readonly operationKey: string;
+  readonly previousScheduleInformationId: InformationId;
+  readonly schedule: DeepReadonly<InformationAtom>;
+  readonly superseded: DeepReadonly<InformationAtom>;
+  readonly dueAt: string;
+  readonly guard?: OneShotFencingGuard;
+}
+export interface OneShotDueCommit {
+  readonly scheduleInformationId: InformationId;
+  readonly due: DeepReadonly<InformationAtom>;
+}
+export interface OneShotTerminalCommit {
+  readonly scheduleInformationId: InformationId;
+  readonly terminal: DeepReadonly<InformationAtom>;
+  readonly guard?: OneShotFencingGuard;
+}
+export const oneShotScheduleCapability =
+  defineModuleCapability<OneShotScheduleCapability>(
+    "kaguya:schedule.one-shot",
+    1,
+  );
