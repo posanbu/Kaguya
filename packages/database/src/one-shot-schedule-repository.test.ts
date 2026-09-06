@@ -192,17 +192,21 @@ describe.skipIf(!url)("one-shot schedule projection (PostgreSQL)", () => {
         arms: [{ scheduleInformationId: "restart", dueAt: "2026-09-06T04:00:00.000Z" }],
       });
       const races = await Promise.all([
-        second.information.oneShotSchedules.replace({
-          operationKey: "replacement-a",
-          previousScheduleInformationId: informationIdSchema.parse("restart"),
-          schedule: requested("replacement-a", "source", "replacement-a"),
-          superseded: terminal("superseded-a", "superseded", "restart"),
-          dueAt: "2026-09-06T04:00:00.000Z",
-        }),
-        second.information.oneShotSchedules.finish({
-          scheduleInformationId: informationIdSchema.parse("restart"),
-          terminal: terminal("fired-race", "fired", "restart"),
-        }),
+        ...Array.from({ length: 6 }, (_, index) =>
+          second.information.oneShotSchedules.replace({
+            operationKey: `replacement-${index}`,
+            previousScheduleInformationId: informationIdSchema.parse("restart"),
+            schedule: requested(`replacement-${index}`, "source", `replacement-${index}`),
+            superseded: terminal(`superseded-${index}`, "superseded", "restart"),
+            dueAt: "2026-09-06T04:00:00.000Z",
+          }),
+        ),
+        ...Array.from({ length: 6 }, (_, index) =>
+          second.information.oneShotSchedules.finish({
+            scheduleInformationId: informationIdSchema.parse("restart"),
+            terminal: terminal(`fired-race-${index}`, "fired", "restart"),
+          }),
+        ),
       ]);
       expect(new Set(races.map((result) => "previousOutcome" in result ? result.previousTerminalInformationId : result.terminalInformationId)).size).toBe(1);
     } finally {
