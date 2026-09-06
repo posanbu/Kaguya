@@ -115,6 +115,7 @@ const modelTaskCompletedInformationKind = defineInformationKind({
           definitionId: z.string().min(1),
         })
         .strict(),
+      selectionPolicy: z.object({ tier: z.enum(["light", "heavy"]) }).strict(),
       output: z.object({ text: z.string().min(1) }).strict(),
     })
     .strict(),
@@ -269,6 +270,7 @@ function completedAtom() {
       version: "1",
       sourceInformationId: reply.informationId,
       activation: { instanceId: "reply-1", definitionId: "demo.reply.llm" },
+      selectionPolicy: { tier: "heavy" },
     },
     references: [
       { relation: "core:caused-by", informationId: reply.informationId },
@@ -689,6 +691,7 @@ describe("createLlmReplyModule", () => {
                 version: input.task.version,
                 sourceInformationId: input.sourceInformationId,
                 activation: { ...input.activation },
+                selectionPolicy: { ...input.selectionPolicy },
                 output: { text: "Hello." },
               },
               references: [
@@ -1022,15 +1025,26 @@ describe("createLlmReplyModule", () => {
     });
     const completed = completedAtom();
     const assistantRegistrations: Registration[] = [];
-    await instance.subscriptions[1]!.handle(
+    const assistantContext = handlerContext(
       completed,
-      handlerContext(
-        completed,
-        assistantRegistrations,
-        assistantAtom(),
-        "reply-1",
-        [replyAtom()],
-      ),
+      assistantRegistrations,
+      assistantAtom(),
+      "reply-1",
+      [replyAtom()],
+    );
+    const registerAssistant = vi.spyOn(assistantContext, "registerOnce");
+    await instance.subscriptions[1]!.handle(
+      {
+        ...completed,
+        payload: {
+          ...completed.payload,
+          activation: {
+            instanceId: "reply-2",
+            definitionId: "demo.reply.llm",
+          },
+        },
+      },
+      assistantContext,
     );
     expect(assistantRegistrations).toEqual([
       {
@@ -1044,16 +1058,21 @@ describe("createLlmReplyModule", () => {
         },
       },
     ]);
-    const deliveryRegistrations: Registration[] = [];
-    await instance.subscriptions[2]!.handle(
-      assistantAtom(),
-      handlerContext(
-        assistantAtom(),
-        deliveryRegistrations,
-        assistantAtom(),
-        "reply-1",
-      ),
+    expect(registerAssistant).toHaveBeenCalledWith(
+      "kaguya.reply.assistant.v1",
+      "reply-1:completion-1",
+      assistantTextInformationKind,
+      expect.any(Object),
     );
+    const deliveryRegistrations: Registration[] = [];
+    const deliveryContext = handlerContext(
+      assistantAtom(),
+      deliveryRegistrations,
+      assistantAtom(),
+      "reply-1",
+    );
+    const registerDelivery = vi.spyOn(deliveryContext, "registerOnce");
+    await instance.subscriptions[2]!.handle(assistantAtom(), deliveryContext);
     expect(deliveryRegistrations).toEqual([
       {
         definition: deliveryRequestedInformationKind,
@@ -1071,12 +1090,18 @@ describe("createLlmReplyModule", () => {
         },
       },
     ]);
+    expect(registerDelivery).toHaveBeenCalledWith(
+      "kaguya.reply.delivery.v1",
+      "reply-1:assistant-1",
+      deliveryRequestedInformationKind,
+      expect.any(Object),
+    );
     for (const payload of [
       { ...completed.payload, taskId: "other.task" },
       { ...completed.payload, version: "2" },
       {
         ...completed.payload,
-        activation: { instanceId: "other", definitionId: "demo.reply.llm" },
+        selectionPolicy: { tier: "light" },
       },
     ]) {
       const registrations: Registration[] = [];

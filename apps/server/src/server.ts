@@ -9,7 +9,8 @@
  * 注入形式构造 Runtime，Web/NapCat 只获得该 Runtime 的 `InformationIngress`。即使 bootstrap/open 阶段遇到
  * `CONFIG_UNSUPPORTED_VERSION` 或 `CONFIG_CORRUPT_STORE`，也必须沿用已有的
  * startup failed 日志与 logger 关闭路径。`createRuntimeModelSelectionResolver`
- * 只接收 `setup.inspect()` 已选中的 Profile 快照并校验，不再次读取 Registry；`openAICompatibleProviderSettings`
+ * 只接收 `setup.inspect()` 已选中的 Profile 快照并校验，返回真实 providerId/modelId 与模型句柄，
+ * 不再次读取 Registry；`openAICompatibleProviderSettings`
  * 提取 provider 能力开关；`assertProfileReady` 保持 readiness 错误固定且无 secret；
  * `connectInformationDatabase` 与 `startInformationRuntime` 将 lazy Pool 创建及
  * 首次 migrate/I/O 失败收窄为 database error，其他 Runtime/模块启动失败收窄为
@@ -293,7 +294,11 @@ export function createRuntimeModelSelectionResolver(
       });
       providerCache.set(cacheKey, client);
     }
-    return { modelId: target.modelId, model: client.chatModel(target.modelId) };
+    return {
+      providerId: provider.id,
+      modelId: target.modelId,
+      model: client.chatModel(target.modelId),
+    };
   };
 
   // Fail before HTTP/adapters start if either default tier is not executable.

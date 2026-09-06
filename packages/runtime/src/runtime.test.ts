@@ -1,7 +1,8 @@
 /**
  * 功能概述：用真实 PGlite、Core 和 ModuleHost 验证 `KaguyaRuntime` 的完整信息 DAG。
  * 主要职责：覆盖 Web 入站到投递成功的直接因果链、生成失败不会继续 assistant/outbound/delivery、
- * 三类 transport 失败、无订阅持久化、同 kind 消费并发与双实例归属、start/close 确定性交错、
+ * 三类 transport 失败、无订阅持久化、同 kind 消费并发与多 reply activation 共享模型任务后
+ * 各自产生正确 outbound、start/close 确定性交错、
  * in-flight 关闭、关闭后 ingress 拒绝、数据库初始化错误固定分类及抛出型反射属性，
  * 以及消费者失败与其他结果并存；默认 reply Prompt 必须带原子 provenance 和有序
  * uses-context 引用。
@@ -739,6 +740,7 @@ describe("KaguyaRuntime", () => {
       );
       const { runtime, database } = await createRuntime({
         resolveModelSelection: () => ({
+          providerId: "test",
           modelId: "invalid-output-model",
           model: createRepeatingDeterministicModel({ text: "" }),
         }),
@@ -779,7 +781,7 @@ describe("KaguyaRuntime", () => {
   );
 
   it(
-    "deduplicates identical semantic jobs across two reply instances",
+    "shares one model task while each reply activation delivers through its own outbound",
     async () => {
       const { runtime, database } = await createRuntime({
         activations: [
@@ -788,8 +790,11 @@ describe("KaguyaRuntime", () => {
             definitionId: "demo.filter.always",
             settings: {},
           },
-          ...["reply.one", "reply.two"].map((instanceId) => ({
-            instanceId,
+          ...[
+            ["reply.one", "room-one"],
+            ["reply.two", "room-two"],
+          ].map(([instanceId, groupId]) => ({
+            instanceId: instanceId!,
             definitionId: "demo.reply.llm",
             settings: {
               modelTier: "heavy" as const,
@@ -797,7 +802,7 @@ describe("KaguyaRuntime", () => {
                 mode: "fixed" as const,
                 adapterId: "web.ui.main",
                 platform: "web",
-                destination: { kind: "group" as const, groupId: "web-room" },
+                destination: { kind: "group" as const, groupId: groupId! },
               },
             },
           })),
@@ -827,25 +832,21 @@ describe("KaguyaRuntime", () => {
         graph.filter((atom) => atom.kind === kind).length;
 
       expect(count("core.model.task.completed")).toBe(1);
-      expect(count("core.message.assistant.text")).toBe(1);
-      expect(count("core.delivery.requested")).toBe(1);
-      expect(sendMessage).toHaveBeenCalledTimes(1);
-      expect(sendMessage).toHaveBeenCalledWith(
-        { kind: "group", groupId: "web-room" },
-        expect.any(Object),
-        { rootInformationId: result.rootInformationId },
+      expect(count("core.message.assistant.text")).toBe(2);
+      expect(count("core.delivery.requested")).toBe(2);
+      expect(sendMessage).toHaveBeenCalledTimes(2);
+      expect(sendMessage.mock.calls.map(([target]) => target)).toEqual(
+        expect.arrayContaining([
+          { kind: "group", groupId: "room-one" },
+          { kind: "group", groupId: "room-two" },
+        ]),
       );
-      for (const kind of [
-        "core.model.task.completed",
-        "core.message.assistant.text",
-      ]) {
-        expect(
-          graph
-            .filter((atom) => atom.kind === kind)
-            .map(({ payload }) => payload.originatingModuleInstanceId)
-            .sort(),
-        ).toHaveLength(1);
-      }
+      expect(
+        graph
+          .filter((atom) => atom.kind === "core.message.assistant.text")
+          .map(({ payload }) => payload.originatingModuleInstanceId)
+          .sort(),
+      ).toEqual(["reply.one", "reply.two"]);
     },
     TEST_TIMEOUT,
   );
@@ -1056,6 +1057,7 @@ describe("KaguyaRuntime", () => {
       const deferred = createDeferredDeterministicModel({ text: "done" });
       const { runtime, database } = await createRuntime({
         resolveModelSelection: ({ modelTier }) => ({
+          providerId: "test",
           modelId: `deferred-${modelTier}`,
           model: deferred.model,
         }),
@@ -1225,6 +1227,7 @@ describe("KaguyaRuntime", () => {
 });
 
 type RuntimeModelSelectionResolver = (selection: ModuleModelSelection) => {
+  readonly providerId: string;
   readonly modelId: string;
   readonly model: ReturnType<KaguyaLlmModelResolver>;
 };
@@ -1232,7 +1235,11 @@ function createDeterministicModelSelectionResolver(): RuntimeModelSelectionResol
   const model = createRepeatingDeterministicModel({
     text: "It is a lovely night for watching the moon.",
   });
-  return ({ modelTier }) => ({ modelId: `deterministic-${modelTier}`, model });
+  return ({ modelTier }) => ({
+    providerId: "test",
+    modelId: `deterministic-${modelTier}`,
+    model,
+  });
 }
 function createReplyComposition(
   resolveModelSelection: RuntimeModelSelectionResolver = createDeterministicModelSelectionResolver(),
@@ -1270,7 +1277,10 @@ function createReplyComposition(
       resolveModel: ({ tier }: { tier: "light" | "heavy" }) => {
         const resolved = resolveModelSelection({ modelTier: tier });
         models.set(resolved.modelId, resolved.model);
-        return { providerId: "test", modelId: resolved.modelId };
+        return {
+          providerId: resolved.providerId,
+          modelId: resolved.modelId,
+        };
       },
     },
   };

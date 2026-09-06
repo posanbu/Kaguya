@@ -1,15 +1,15 @@
 /**
  * 功能概述：通过宿主批准的 Model Task 能力将回复请求、通用完成事实、assistant 与投递组成 durable DAG。
  * 主要职责：createLlmReplyModule 声明能力和共享 completed definition；请求 handler 经 context.use
- * 调用 core.reply.generate v1，replyTaskOutputSchema 严格校验文本。完成 handler 仅处理本 activation
- * 的任务赢家，经 completedReplySelector 沿 completed→requested→reply 授权读取来源，
- * 再用 registerOnce 派生 assistant 和 delivery。
+ * 调用 core.reply.generate v1，replyTaskOutputSchema 严格校验文本。完成 handler 按 task/version/tier
+ * 接受可由多个 activation 共享的任务赢家，经 completedReplySelector 沿 completed→requested→reply
+ * 授权读取来源，再以包含当前 instanceId 的 registerOnce key 派生各自 assistant 和 delivery。
  * 代码库关系：Runtime 注入 token 和 definition 身份，Host 提供 activation、受限 Selector 与 claim fencing；
  * reply-context 保留原有 Prompt/Memory 顺序与 provenance，selectOutbound 保留 source/fixed 路由。
  * ModelTaskRequest/Result/Capability 是模块侧结构类型；completed definition 的泛型保留宿主 payload
  * 与日志投影契约，不导入 Runtime source/dist、provider、模型、密钥或 Core，也不创建第二份 token。
  * 输入输出与副作用：requested/terminal 生命周期完全归 ModelTaskClient；failed/cancelled 不触发业务写入，
- * completed 与 assistant 广播按 originating activation 过滤，重投使用唯一操作槽，不保存请求内存状态。
+ * completed 广播不按获胜 activation 过滤；assistant 按自身 originating instance 过滤，重投使用唯一操作槽。
  */
 import {
   type CompiledPrompt,
@@ -158,6 +158,7 @@ export type ModelTaskCompletedInformationPayload = JsonObject & {
     readonly instanceId: string;
     readonly definitionId: string;
   };
+  readonly selectionPolicy: { readonly tier: "light" | "heavy" };
   readonly output: JsonValue;
 };
 
@@ -257,10 +258,7 @@ export function createLlmReplyModule<
             if (
               completed.payload.taskId !== "core.reply.generate" ||
               completed.payload.version !== "1" ||
-              completed.payload.activation.instanceId !==
-                activation.instanceId ||
-              completed.payload.activation.definitionId !==
-                activation.definitionId
+              completed.payload.selectionPolicy.tier !== settings.modelTier
             )
               return;
             const output = replyTaskOutputSchema.parse(
@@ -272,7 +270,7 @@ export function createLlmReplyModule<
             );
             await context.registerOnce(
               "kaguya.reply.assistant.v1",
-              completed.informationId,
+              `${context.instanceId}:${completed.informationId}`,
               assistantTextInformationKind,
               {
                 payload: {
@@ -301,7 +299,7 @@ export function createLlmReplyModule<
             if (outbound === undefined) return;
             await context.registerOnce(
               "kaguya.reply.delivery.v1",
-              assistant.informationId,
+              `${context.instanceId}:${assistant.informationId}`,
               deliveryRequestedInformationKind,
               {
                 payload: outbound,
