@@ -8,8 +8,8 @@
  * Model Task 由 composeModelTaskCapabilities 注入批准的 ModelTaskClient；ApprovedModelTaskClient
  * 校验宿主 activation/tier 白名单，provider、resolver、Core 与 approval 数据均保存在私有字段，
  * 模块只通过 #76 的 context.use 获得通用能力。缺少批准或无效 capability 在任何 create 前拒绝。
- * Memory association 默认使用独立 Memory 仓储的 sparse Selector strategy；调用方传入空
- * `retrievalStrategies` 可显式禁用它，模块随后只记录 unavailable terminal。
+ * Memory 默认关闭；显式启用时 association 使用独立 Memory 仓储的 sparse Selector
+ * strategy。关闭态仍保留 association terminal 形状，但不注册检索策略或 capability。
  */
 import { randomUUID } from "node:crypto";
 
@@ -29,7 +29,7 @@ import {
   createModuleLogger,
   type KaguyaLogger,
 } from "@kaguya/logger";
-import { memoryCapability } from "@kaguya/memory";
+import { MEMORY_RETRIEVAL_STRATEGY_ID, memoryCapability } from "@kaguya/memory";
 import {
   deliveryRequestedInformationKind,
   inboundTextInformationKind,
@@ -114,6 +114,10 @@ export interface RuntimeTransportRegistration {
 
 export type InformationIdGenerator = () => string;
 
+export interface RuntimeMemoryOptions {
+  readonly enabled: boolean;
+}
+
 type KaguyaRuntimeBaseOptions = {
   /** 每个关闭阶段等待未完成工作的上限，默认 5000 毫秒。 */
   readonly drainTimeoutMs?: number;
@@ -124,6 +128,8 @@ type KaguyaRuntimeBaseOptions = {
   readonly activations: readonly InformationModuleActivation[];
   readonly capabilities?: RuntimeCapabilities;
   readonly retrievalStrategies?: readonly InformationRetrievalStrategy[];
+  /** 默认关闭；开启后装配内置 PostgreSQL Memory capability 与稀疏召回。 */
+  readonly memory?: RuntimeMemoryOptions;
   readonly modelTask?: RuntimeModelTaskOptions;
   readonly cadence?: {
     readonly definitions: readonly CadenceDefinitionInput[];
@@ -322,22 +328,32 @@ export class KaguyaRuntime implements InformationIngress {
           );
         },
       });
+      const memoryEnabled = this.options.memory?.enabled ?? false;
+      const configuredRetrievalStrategies =
+        this.options.retrievalStrategies ??
+        (memoryEnabled
+          ? [
+              new MemoryInformationRetrievalStrategy(database.memory, {
+                reportFailure: ({ errorType }) => {
+                  this.#runtimeLogger?.error(
+                    { event: "memory.recall.failed", errorType },
+                    "Memory recall failed",
+                  );
+                },
+              }),
+            ]
+          : []);
       const core = new InformationCore({
         drainTimeoutMs: this.options.drainTimeoutMs ?? 5000,
         registry,
         store: database.information,
         nextInformationId: this.#nextInformationId,
         now: this.#now,
-        retrievalStrategies: this.options.retrievalStrategies ?? [
-          new MemoryInformationRetrievalStrategy(database.memory, {
-            reportFailure: ({ errorType }) => {
-              this.#runtimeLogger?.error(
-                { event: "memory.recall.failed", errorType },
-                "Memory recall failed",
-              );
-            },
-          }),
-        ],
+        retrievalStrategies: memoryEnabled
+          ? configuredRetrievalStrategies
+          : configuredRetrievalStrategies.filter(
+              ({ strategyId }) => strategyId !== MEMORY_RETRIEVAL_STRATEGY_ID,
+            ),
         bootstrapReporter: (error) => {
           this.#runtimeLogger?.error(
             {
@@ -397,12 +413,19 @@ export class KaguyaRuntime implements InformationIngress {
               oneShotSchedule,
             })
           : this.options.capabilities;
+      const enabledSuppliedCapabilities = memoryEnabled
+        ? (suppliedCapabilities ?? [])
+        : (suppliedCapabilities ?? []).filter(
+            ({ capability }) => capability.id !== memoryCapability.id,
+          );
       const capabilities = [
-        { capability: memoryCapability, value: database.memory },
+        ...(memoryEnabled
+          ? [{ capability: memoryCapability, value: database.memory }]
+          : []),
         ...composeModelTaskCapabilities(
           this.options,
           { core, now: this.#now, oneShotSchedule },
-          suppliedCapabilities ?? [],
+          enabledSuppliedCapabilities,
         ),
       ];
       const moduleHost = new ModuleHost({

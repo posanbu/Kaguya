@@ -53,6 +53,8 @@ flowchart TD
 
 **Heavy Model** — 面向重量任务的模型 ID，必须与 Light Model 形成不同的 `provider:model` 目标。
 
+**启用 Memory** — 默认关闭。关闭时 Runtime 仍保留联想与 Prompt 的处理形状，但不会读取、写入、召回或主动提取实际 Memory；显式开启后才使用内置 PostgreSQL 稀疏召回。
+
 **可选配置确认** — 当前 UI 会要求明确确认平台与插件可以暂时留空；系统不会替用户静默接受警告。
 
 当前表单用一个 ID 为 `default-provider` 的 OpenAI-compatible Provider 建立初始配置。底层 Profile 支持更完整的 Provider、平台和插件结构，但页面只呈现已经实现并验证的操作。

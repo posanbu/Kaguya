@@ -25,6 +25,7 @@ const profile = {
   id: "default",
   name: "default",
   ai: { providers: [] },
+  memory: { enabled: false },
   platforms: [],
   plugins: [],
 };
@@ -49,6 +50,7 @@ const replacement = {
       },
     ],
   },
+  memory: { enabled: false },
   platforms: [],
   plugins: [],
 };
@@ -168,5 +170,8 @@ describe("gateway API client", () => {
         "Bearer test-gateway-token",
       );
     }
+    expect(JSON.parse(String(request.mock.calls[3]?.[1]?.body))).toMatchObject({
+      memory: { enabled: false },
+    });
   });
 });

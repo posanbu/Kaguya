@@ -97,6 +97,7 @@ describe("application API gateway", () => {
         id: "default",
         name: "default",
         ai: { providers: [] },
+        memory: { enabled: false },
         platforms: [],
         plugins: [],
       })),
@@ -107,6 +108,7 @@ describe("application API gateway", () => {
           id: "default",
           name: "default",
           ai: { providers: [] },
+          memory: { enabled: false },
           platforms: [],
           plugins: [],
         },
@@ -218,6 +220,7 @@ describe("application API gateway", () => {
             id: expect.stringMatching(UUID_PATTERN),
             name: "work",
             ai: { providers: [] },
+            memory: { enabled: false },
             platforms: [],
             plugins: [],
           },
@@ -265,6 +268,7 @@ describe("application API gateway", () => {
             id: created.profile.id,
             name: "work",
             ai: { providers: [] },
+            memory: { enabled: false },
             platforms: [],
             plugins: [],
           },
@@ -276,11 +280,10 @@ describe("application API gateway", () => {
   it("replaces profile with the submitted full body", async () => {
     await withManagementApp(async (app, management) => {
       const created = await management.createProfile("work");
-      const payload = readyProfileReplacement(
-        "work",
-        "light-model",
-        "heavy-model",
-      );
+      const payload = {
+        ...readyProfileReplacement("work", "light-model", "heavy-model"),
+        memory: { enabled: true },
+      };
 
       const response = await app.inject({
         method: "PUT",
@@ -297,6 +300,7 @@ describe("application API gateway", () => {
             id: created.profile.id,
             name: "work",
             ai: payload.ai,
+            memory: { enabled: true },
             platforms: [],
             plugins: [],
           },
@@ -1170,6 +1174,7 @@ function stubManagement(): ConfigurationManagement {
       id: "default",
       name: "default",
       ai: { providers: [] },
+      memory: { enabled: false },
       platforms: [],
       plugins: [],
     })),
@@ -1206,6 +1211,7 @@ function readyProfileReplacement(
         },
       ],
     },
+    memory: { enabled: false },
     platforms: [],
     plugins: [],
   };

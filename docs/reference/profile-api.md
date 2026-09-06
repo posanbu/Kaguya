@@ -48,11 +48,11 @@ curl http://127.0.0.1:3000/api/v1/profiles \
 
 :::
 
-响应返回完整 `profile` 和 `restartRequired`。空 Profile 的 Provider、平台和插件数组为空，尚未 ready，应继续使用完整替换接口配置。
+响应返回完整 `profile` 和 `restartRequired`。空 Profile 的 Provider、平台和插件数组为空，`memory.enabled` 为 `false`，尚未 ready，应继续使用完整替换接口配置。
 
 ## 读取与完整替换
 
-`GET /api/v1/profiles/:profileId` 返回完整 Profile。`PUT /api/v1/profiles/:profileId` 要求提供 `name`、`ai`、`platforms`、`plugins` 和 `acknowledgedWarnings` 全部字段；这是 replace，不是 patch，省略字段不会保留旧值。
+`GET /api/v1/profiles/:profileId` 返回完整 Profile。`PUT /api/v1/profiles/:profileId` 接收 `name`、`ai`、`memory`、`platforms`、`plugins` 和 `acknowledgedWarnings`；这是 replace，不是 patch，省略配置不会保留旧值。为兼容缺少新字段的 Profile，省略 `memory` 会确定性解析为 `{ "enabled": false }`。
 
 ::: code-group
 
@@ -77,6 +77,7 @@ curl http://127.0.0.1:3000/api/v1/profiles \
       }
     ]
   },
+  "memory": { "enabled": false },
   "platforms": [],
   "plugins": [],
   "acknowledgedWarnings": ["platforms-empty", "plugins-empty"]
@@ -86,6 +87,8 @@ curl http://127.0.0.1:3000/api/v1/profiles \
 :::
 
 替换 selected Profile 会返回 `restartRequired: true`。完整替换会以请求中的 acknowledgement 为准，不继承先前确认。
+
+`memory.enabled` 只有在 Server 重启、selected Profile 重新装配 Runtime 后生效。关闭时不会注册内置 Memory retrieval strategy，也不会向模块暴露 Memory capability；association 仍以 `unavailable` 空结果完成，因此回复流程不会中断。
 
 ::: warning 示例凭据
 文档、测试、Issue 和 PR 只使用无效占位值。不要把真实 API Key 粘贴到公开记录中。

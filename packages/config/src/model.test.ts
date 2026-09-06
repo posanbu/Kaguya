@@ -244,6 +244,30 @@ describe("user configuration schemas", () => {
     });
   });
 
+  it("defaults missing Memory settings to disabled and preserves explicit enablement", () => {
+    const base = {
+      ai: { providers: [] },
+      platforms: [],
+      plugins: [],
+    };
+
+    expect(userConfigProfileSettingsSchema.parse(base).memory).toEqual({
+      enabled: false,
+    });
+    expect(
+      userConfigProfileSettingsSchema.parse({
+        ...base,
+        memory: { enabled: true },
+      }).memory,
+    ).toEqual({ enabled: true });
+    expect(
+      userConfigProfileSettingsSchema.safeParse({
+        ...base,
+        memory: { enabled: false, provider: "unexpected" },
+      }).success,
+    ).toBe(false);
+  });
+
   it("rejects duplicate provider IDs", () => {
     const duplicateProvider = {
       id: "provider-1",

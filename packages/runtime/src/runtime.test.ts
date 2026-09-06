@@ -33,6 +33,7 @@ import {
 import { defineInformationModuleCatalog } from "@kaguya/sdk";
 import { KaguyaDatabase } from "@kaguya/database";
 import { createTestingDatabase } from "@kaguya/database/testing";
+import { memoryCapability } from "@kaguya/memory";
 import {
   createDeferredDeterministicModel,
   createRepeatingDeterministicModel,
@@ -157,6 +158,12 @@ async function createRuntime(
     >;
     activations: NonNullable<
       ConstructorParameters<typeof KaguyaRuntime>[0]["activations"]
+    >;
+    memory: NonNullable<
+      ConstructorParameters<typeof KaguyaRuntime>[0]["memory"]
+    >;
+    retrievalStrategies: NonNullable<
+      ConstructorParameters<typeof KaguyaRuntime>[0]["retrievalStrategies"]
     >;
   }> = {},
 ) {
@@ -332,7 +339,15 @@ describe("KaguyaRuntime", () => {
   it(
     "traces default reply Prompt to the selected current input",
     async () => {
-      const { runtime, database } = await createRuntime();
+      const customRetrieve = vi.fn(async () => []);
+      const { runtime, database } = await createRuntime({
+        retrievalStrategies: [
+          {
+            strategyId: "kaguya.memory.sparse",
+            retrieve: customRetrieve,
+          },
+        ],
+      });
       await runtime.start();
 
       const result = await runtime.submit(webMessage("hello"));
@@ -374,6 +389,7 @@ describe("KaguyaRuntime", () => {
       expect(requestedPayload.prompt.provenance).toMatchObject([
         { informationId: reply.informationId, source: "history" },
       ]);
+      expect(customRetrieve).not.toHaveBeenCalled();
     },
     TEST_TIMEOUT,
   );
@@ -381,7 +397,9 @@ describe("KaguyaRuntime", () => {
   it(
     "recalls a Web Memory globally through its original inbound provenance",
     async () => {
-      const { runtime, database } = await createRuntime();
+      const { runtime, database } = await createRuntime({
+        memory: { enabled: true },
+      });
       await runtime.start();
 
       const first = await runtime.submit(webMessage("remember moonlight"));
@@ -446,6 +464,116 @@ describe("KaguyaRuntime", () => {
     },
     TEST_TIMEOUT,
   );
+
+  it(
+    "keeps disabled Memory as an unavailable shell without reading stored documents",
+    async () => {
+      const { runtime, database } = await createRuntime();
+      const recall = vi.spyOn(database.memory, "recall");
+      await runtime.start();
+
+      const first = await runtime.submit(webMessage("remember moonlight"));
+      await settleDeliveries(database);
+      const firstGraph = await database.information.query({
+        informationId: first.rootInformationId,
+      });
+      const firstInbound = firstGraph.find(
+        ({ kind }) => kind === inboundTextInformationKind.kind,
+      )!;
+      await database.memory.put({
+        sourceInformationId: firstInbound.informationId,
+        sourceKind: firstInbound.kind,
+        content: "remember moonlight",
+        occurredAt: firstInbound.occurredAt,
+        address: {
+          platform: "web",
+          adapterId: "web.ui.main",
+          platformMessageId: "request-1",
+          accountId: "web",
+          destination: { kind: "web" },
+        },
+      });
+
+      const second = await runtime.submit({
+        ...webMessage("moonlight again"),
+        platformMessageId: "request-2",
+        occurredAt: "2026-09-04T00:00:02.000Z",
+      });
+      await settleDeliveries(database);
+      const secondGraph = await database.information.query({
+        informationId: second.rootInformationId,
+      });
+      const association = secondGraph.find(
+        ({ kind }) => kind === "agent.association.completed",
+      );
+      const requested = secondGraph.find(
+        ({ kind }) => kind === modelTaskRequestedInformationKind.kind,
+      )!;
+      const payload = modelTaskRequestedInformationKind.payloadSchema.parse(
+        requested.payload,
+      );
+
+      expect(recall).not.toHaveBeenCalled();
+      expect(association?.payload).toMatchObject({
+        status: "unavailable",
+        candidateCount: 0,
+        reasonCodes: ["provider-unavailable"],
+      });
+      expect(
+        secondGraph.some(({ kind }) => kind === "agent.association.candidate"),
+      ).toBe(false);
+      expect(payload.prompt.provenance).toEqual([
+        expect.objectContaining({
+          informationId: payload.sourceInformationId,
+          source: "history",
+        }),
+      ]);
+      expect(payload.prompt.text).not.toContain("remember moonlight");
+    },
+    TEST_TIMEOUT,
+  );
+
+  it("does not expose the Memory capability while Memory is disabled", async () => {
+    const create = vi.fn(() => ({ provisions: [], subscriptions: [] }));
+    const consumer = defineInformationModule({
+      manifest: {
+        protocolVersion: 1,
+        moduleVersion: "1.0.0",
+        definitionId: "test.memory.consumer",
+        displayName: "Memory consumer",
+        settingsSchema: z.object({}).strict(),
+        consumes: [],
+        produces: [],
+        selectors: [],
+        promptRenderers: [],
+        requires: [memoryCapability],
+        provides: [],
+      },
+      create,
+    });
+    const database = await createTestingDatabase();
+    const runtime = new KaguyaRuntime({
+      database,
+      catalog: defineInformationModuleCatalog(consumer),
+      activations: [
+        {
+          instanceId: "memory.consumer",
+          definitionId: consumer.manifest.definitionId,
+          settings: {},
+        },
+      ],
+      capabilities: [
+        {
+          capability: memoryCapability,
+          value: database.memory,
+        },
+      ],
+    });
+    resources.push({ runtime, database });
+
+    await expect(runtime.start()).rejects.toThrow(/capability/i);
+    expect(create).not.toHaveBeenCalled();
+  });
 
   it(
     "classifies migration failures without retaining database details",

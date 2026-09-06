@@ -183,6 +183,7 @@ function readySettings(
         },
       ],
     },
+    memory: { enabled: false },
     platforms: [
       {
         id: "platform-1",
@@ -214,6 +215,7 @@ function reviewSettings(): UserConfigProfileSettings {
         },
       ],
     },
+    memory: { enabled: false },
     platforms: [],
     plugins: [],
   };
@@ -270,6 +272,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
         id: "default",
         name: "default",
         ai: { providers: [] },
+        memory: { enabled: false },
         platforms: [],
         plugins: [],
       });
@@ -454,6 +457,26 @@ describe("FileUserConfigManager profile lifecycle", () => {
     expect(Object.hasOwn(replaced.ai, "defaultProviderId")).toBe(false);
     expect(Object.hasOwn(replaced.ai.providers[0]!, "baseUrl")).toBe(false);
     expect(Object.hasOwn(replaced.ai.providers[0]!, "apiKey")).toBe(false);
+  });
+
+  it("persists explicit Memory enablement across replacement and reopen", async () => {
+    const rootDir = await createBootstrappedRoot();
+    const manager = await FileUserConfigManager.open({ rootDir });
+    const created = await manager.createProfile("memory-enabled");
+    const settings = readySettings(["model-a", "model-b"]);
+
+    const replaced = await manager.replaceProfile(created.id, {
+      ...settings,
+      name: created.name,
+      acknowledgedWarnings: [],
+      memory: { enabled: true },
+    });
+    const reopened = await FileUserConfigManager.open({ rootDir });
+
+    expect(replaced.memory).toEqual({ enabled: true });
+    await expect(reopened.getProfile(created.id)).resolves.toMatchObject({
+      memory: { enabled: true },
+    });
   });
 
   it("returns detached profile values", async () => {

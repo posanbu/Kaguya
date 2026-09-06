@@ -35,6 +35,9 @@ export type RuntimeModelSelectionResolver = (
   readonly modelId: string;
   readonly model: ReturnType<KaguyaLlmModelResolver>;
 };
+export interface ReplyCompositionOptions {
+  readonly memoryEnabled?: boolean;
+}
 export function createDeterministicModelSelectionResolver(): RuntimeModelSelectionResolver {
   const model = createRepeatingDeterministicModel({
     text: "It is a lovely night for watching the moon.",
@@ -47,6 +50,7 @@ export function createDeterministicModelSelectionResolver(): RuntimeModelSelecti
 }
 export function createReplyComposition(
   resolveModelSelection: RuntimeModelSelectionResolver = createDeterministicModelSelectionResolver(),
+  options: ReplyCompositionOptions = {},
 ) {
   const catalog = createFirstPartyModuleCatalog({
     modelTaskCapability,
@@ -93,6 +97,7 @@ export function createReplyComposition(
   return {
     catalog,
     activations: firstPartyModuleActivations,
+    memory: { enabled: options.memoryEnabled ?? false },
     modelTask,
     capabilities: ({ oneShotSchedule }: RuntimeCapabilityContext) => [
       { capability: oneShotScheduleCapability, value: oneShotSchedule },

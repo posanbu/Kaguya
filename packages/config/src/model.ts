@@ -128,6 +128,12 @@ const pluginConfigInnerSchema = z.strictObject({
 
 export const pluginConfigSchema = guardSchemaInput(pluginConfigInnerSchema);
 
+const memoryConfigInnerSchema = z.strictObject({
+  enabled: z.boolean(),
+});
+
+export const memoryConfigSchema = guardSchemaInput(memoryConfigInnerSchema);
+
 const runtimeGatewayAllowlistSchema = z.strictObject({
   platforms: z.array(nonEmptyIdSchema),
   userIds: z.array(nonEmptyIdSchema),
@@ -144,7 +150,15 @@ export const runtimeConfigSchema = z.strictObject({
   trustProxy: z.union([z.literal(false), z.array(z.string().trim().min(1))]),
   rateLimitMax: z.int().min(1).max(10_000),
   rateLimitWindowMs: z.int().min(1_000).max(3_600_000),
-  logLevel: z.enum(["trace", "debug", "info", "warn", "error", "fatal", "silent"]),
+  logLevel: z.enum([
+    "trace",
+    "debug",
+    "info",
+    "warn",
+    "error",
+    "fatal",
+    "silent",
+  ]),
   logFormat: z.enum(["json", "pretty"]),
   gatewayAllowlist: runtimeGatewayAllowlistSchema,
 });
@@ -152,6 +166,7 @@ export const runtimeConfigSchema = z.strictObject({
 const userConfigProfileSettingsInnerSchema = z
   .strictObject({
     ai: aiConfigSchema,
+    memory: memoryConfigSchema.default({ enabled: false }),
     platforms: z.array(platformConfigSchema),
     plugins: z.array(pluginConfigSchema),
     runtime: runtimeConfigSchema.optional(),
@@ -415,24 +430,32 @@ export type ModelTierTarget = z.infer<typeof modelTierTargetSchema>;
 export type UserConfigProfileSettings = z.infer<
   typeof userConfigProfileSettingsSchema
 >;
+export type UserConfigProfileSettingsInput = Omit<
+  UserConfigProfileSettings,
+  "memory"
+> & {
+  readonly memory?: MemoryConfig;
+};
 export type RuntimeConfig = z.infer<typeof runtimeConfigSchema>;
+export type MemoryConfig = z.infer<typeof memoryConfigSchema>;
 export type UserConfigProfileMetadata = z.infer<
   typeof userConfigProfileMetadataSchema
 >;
 export type UserConfigIndex = z.infer<typeof userConfigIndexSchema>;
 
-export type ReplaceUserConfigProfileInput = UserConfigProfileSettings & {
+export type ReplaceUserConfigProfileInput = UserConfigProfileSettingsInput & {
   readonly name: string;
   readonly acknowledgedWarnings: readonly string[];
 };
 
-export type UpdateUserConfigProfileInput = UserConfigProfileSettings & {
+export type UpdateUserConfigProfileInput = UserConfigProfileSettingsInput & {
   name?: string;
 };
 
 export function emptyUserConfigProfileSettings(): UserConfigProfileSettings {
   return {
     ai: { providers: [] },
+    memory: { enabled: false },
     platforms: [],
     plugins: [],
   };
