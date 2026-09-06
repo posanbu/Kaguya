@@ -1,7 +1,7 @@
 /**
- * 功能概述：本文件验证信息模块以显式 kind 串接入站、回复、通用 Model Task 完成、assistant 和投递阶段，
+ * 功能概述：本文件验证信息模块以显式 kind 串接入站、turn context、speech decision、回复、通用 Model Task 完成、assistant 和投递阶段，
  * 不再以旧事件、target instance 或成功 decision 驱动下一步。
- * 主要职责：过滤器用例验证通过时只注册回复请求、拒绝 fixture 只注册拒绝事实；回复用例
+ * 主要职责：过滤器用例验证兼容的拒绝事实；speech DAG 用例验证 speak 才注册回复请求，回复用例
  * 验证三个订阅分别承担回复执行、Model Task 完成到 assistant、assistant 到投递的直接因果阶段；
  * completion 仅能跨同 definition 的 instance 共享，其他 definition 的伪造终态不会派生业务输出。
  * 代码库关系：覆盖最终 `always-reply-filter.ts`、`llm-reply.ts` 和
@@ -55,6 +55,9 @@ import {
   inboundTextInformationKind,
   replyRequestedInformationKind,
   replyRequestedInformationPayloadSchema,
+  speechDecisionInformationKind,
+  turnContextCompletedInformationKind,
+  waitRequestedInformationKind,
 } from "./information-kinds.js";
 import {
   createLlmReplyModule as defineReplyModule,
@@ -63,6 +66,9 @@ import {
   type ModelTaskRequest,
 } from "./llm-reply.js";
 import * as informationKinds from "./information-kinds.js";
+import { speechDecisionModule } from "./speech-decision.js";
+import { speechReplyModule } from "./speech-reply.js";
+import { turnContextModule } from "./turn-context.js";
 
 const contextId = informationIdSchema.parse("context-1");
 const inboundPayload = replyRequestedInformationPayloadSchema.parse({
@@ -637,6 +643,9 @@ describe("createLlmReplyModule", () => {
     registry.registerBuiltin(runtimeContextInformationKind);
     registry.registerBuiltin(inboundTextInformationKind);
     registry.registerBuiltin(replyRequestedInformationKind);
+    registry.register(turnContextCompletedInformationKind);
+    registry.register(speechDecisionInformationKind);
+    registry.register(waitRequestedInformationKind);
     for (const kind of modelTaskInformationKinds)
       registry.registerBuiltin(kind);
     registry.registerBuiltin(assistantTextInformationKind);
@@ -730,7 +739,9 @@ describe("createLlmReplyModule", () => {
     const host = new ModuleHost({
       core,
       catalog: defineInformationModuleCatalog(
-        alwaysReplyFilterModule,
+        turnContextModule,
+        speechDecisionModule,
+        speechReplyModule,
         replyModule,
       ),
       capabilities: [
@@ -743,8 +754,18 @@ describe("createLlmReplyModule", () => {
     await core.start();
     await host.start([
       {
-        instanceId: "filter-1",
-        definitionId: alwaysReplyFilterModule.manifest.definitionId,
+        instanceId: "turn-context-1",
+        definitionId: turnContextModule.manifest.definitionId,
+        settings: {},
+      },
+      {
+        instanceId: "speech-decision-1",
+        definitionId: speechDecisionModule.manifest.definitionId,
+        settings: {},
+      },
+      {
+        instanceId: "speech-reply-1",
+        definitionId: speechReplyModule.manifest.definitionId,
         settings: {},
       },
       {
@@ -803,6 +824,12 @@ describe("createLlmReplyModule", () => {
       const reply = atoms.find(
         ({ kind }) => kind === replyRequestedInformationKind.kind,
       );
+      const turnContext = atoms.find(
+        ({ kind }) => kind === turnContextCompletedInformationKind.kind,
+      );
+      const decision = atoms.find(
+        ({ kind }) => kind === speechDecisionInformationKind.kind,
+      );
       const requested = atoms.find(
         ({ kind }) => kind === modelTaskRequestedInformationKind.kind,
       );
@@ -820,6 +847,8 @@ describe("createLlmReplyModule", () => {
         [
           runtimeContextInformationKind.kind,
           inboundTextInformationKind.kind,
+          turnContextCompletedInformationKind.kind,
+          speechDecisionInformationKind.kind,
           replyRequestedInformationKind.kind,
           modelTaskRequestedInformationKind.kind,
           modelTaskCompletedInformationKind.kind,
@@ -829,7 +858,11 @@ describe("createLlmReplyModule", () => {
       );
       expect(reply?.references).toContainEqual({
         relation: "core:caused-by",
-        informationId: inbound.informationId,
+        informationId: decision?.informationId,
+      });
+      expect(reply?.references).toContainEqual({
+        relation: "core:uses-context",
+        informationId: turnContext?.informationId,
       });
       expect(requested?.references).toContainEqual({
         relation: "core:caused-by",
@@ -862,8 +895,12 @@ describe("createLlmReplyModule", () => {
 
   it("declares each direct causal edge and the shared context requirement", () => {
     expect(replyRequestedInformationKind.references).toMatchObject({
-      "core:caused-by": { targetKinds: [inboundTextInformationKind.kind, "agent.speech.decision"] },
+      "core:caused-by": { targetKinds: ["agent.speech.decision"] },
       "core:context": { targetKinds: ["core.runtime.context"] },
+      "core:uses-context": {
+        required: true,
+        targetKinds: ["agent.turn.context.completed"],
+      },
     });
     expect(assistantTextInformationKind.references).toMatchObject({
       "core:caused-by": {

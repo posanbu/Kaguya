@@ -6,7 +6,7 @@
  * `personFactCandidateInformationKind` 表示待提取的非 reply 账本来源，
  * `personFactExtractedInformationKind` 表示模块验证后的业务事实；`informationModuleKinds`
  * 供 Runtime 在启动 Core 前一次注册同一批 definition。
- * 代码库关系：始终回复过滤器消费入站并产生回复请求；LLM 回复模块消费回复请求、外部
+ * 代码库关系：speech reply bridge 是回复请求的唯一生产路径；LLM 回复模块消费回复请求、外部
  * 注入的 Model Task completed definition 与 assistant，person-fact 模块消费候选与通用 completed，
  * 随后产生各自后续 kind；Runtime 负责通用
  * Model Task 生命周期和投递结果 kind，不能重新定义本文件已经拥有的 literal kind；assistant payload
@@ -79,12 +79,17 @@ export const replyRequestedInformationKind = defineInformationKind({
     "core:caused-by": {
       required: true,
       multiple: false,
-      targetKinds: [inboundTextInformationKind.kind, "agent.speech.decision"],
+      targetKinds: ["agent.speech.decision"],
     },
     "core:context": {
       required: true,
       multiple: false,
       targetKinds: ["core.runtime.context"],
+    },
+    "core:uses-context": {
+      required: true,
+      multiple: true,
+      targetKinds: ["agent.turn.context.completed"],
     },
   },
   log: { enabled: false },
