@@ -22,6 +22,12 @@ export {
   type PendingInformationLogProjection,
 } from "./information-repository.js";
 export {
+  OneShotScheduleRepository,
+  type OneShotScheduleProjectionStore,
+  type OpenOneShotArm,
+  type OpenOneShotPage,
+} from "./one-shot-schedule-repository.js";
+export {
   InformationLogProjectionRunner,
   type InformationAtomLogSink,
   type InformationLogProjectionFailure,
