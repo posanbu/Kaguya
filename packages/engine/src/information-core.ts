@@ -519,11 +519,22 @@ export class InformationCore implements OneShotScheduleCorePort {
   private async buildOneShotAtom(definition: InformationKindDefinition<string, any>, payload: JsonObject, references: readonly InformationReference[]): Promise<DeepReadonly<InformationAtom>> {
     this.assertState("started");
     const registered = this.registry.assertRegistered(definition as InformationKindDefinition<string, any>);
-    const atom = informationAtomSchema.parse({ informationId: this.parseInformationId(this.#nextInformationId()), kind: registered.kind, occurredAt: this.#now().toISOString(), source: "core:scheduler", payload, references });
+    const parsedReferences = references.map((reference) => informationReferenceSchema.parse(reference));
+    const atom = informationAtomSchema.parse({ informationId: this.parseInformationId(this.#nextInformationId()), kind: registered.kind, occurredAt: this.#now().toISOString(), source: "core:scheduler", payload, references: parsedReferences });
     const expectations = buildReferenceExpectations(registered.references);
-    const byRelation = new Map(references.map((reference) => [reference.relation, reference]));
+    const byRelation = new Map<string, InformationReference[]>();
+    for (const reference of parsedReferences) byRelation.set(reference.relation, [...(byRelation.get(reference.relation) ?? []), reference]);
+    for (const reference of parsedReferences) {
+      const expectation = expectations.find((item) => item.relation === reference.relation);
+      if (!expectation) throw new InformationReferenceValidationError(registered.kind, reference.relation, "undeclared");
+      const target = await this.store.get(reference.informationId);
+      if (!target) throw new InformationReferenceValidationError(registered.kind, reference.relation, "missing-target");
+      if (expectation.targetKinds && !expectation.targetKinds.includes(target.kind)) throw new InformationReferenceValidationError(registered.kind, reference.relation, "target-kind");
+    }
     for (const expectation of expectations) {
-      if (expectation.required && !byRelation.has(expectation.relation)) throw new InformationReferenceValidationError(registered.kind, expectation.relation, "required");
+      const values = byRelation.get(expectation.relation) ?? [];
+      if (expectation.required && values.length === 0) throw new InformationReferenceValidationError(registered.kind, expectation.relation, "required");
+      if (!expectation.multiple && values.length > 1) throw new InformationReferenceValidationError(registered.kind, expectation.relation, "multiple");
     }
     return freezeInformationAtom(atom as InformationAtom);
   }
