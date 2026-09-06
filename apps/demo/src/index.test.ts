@@ -49,6 +49,10 @@ describe("demo entry point", () => {
     expect(receipt.rootInformationId).toBe("demo-information-1");
     expect(output).toEqual([
       "root informationId: demo-information-1",
+      "agent.chat.scope.binding: 1",
+      "agent.chat.scope.entity: 1",
+      "agent.person.context.completed: 1",
+      "agent.person.resolution: 1",
       "core.delivery.delivered: 1",
       "core.delivery.requested: 1",
       "core.message.assistant.text: 1",

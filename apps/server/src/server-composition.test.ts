@@ -210,6 +210,10 @@ describe("unified server composition", () => {
     });
     expect(new Set(graph.map(({ kind }) => kind))).toEqual(
       new Set([
+        "agent.chat.scope.binding",
+        "agent.chat.scope.entity",
+        "agent.person.context.completed",
+        "agent.person.resolution",
         "core.message.inbound.text",
         "core.reply.requested",
         "core.model.task.requested",
