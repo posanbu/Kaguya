@@ -39,6 +39,7 @@ import {
   assistantTextInformationKind,
   coreMemoryTextInformationKind,
   deliveryRequestedInformationKind,
+  inboundTextInformationKind,
   replyRequestedInformationKind,
   replyRequestedInformationPayloadSchema,
   type ReplyRequestedInformationPayload,
@@ -46,9 +47,10 @@ import {
 import {
   associationReplyContextSelector,
   compileReplyPromptFromInformation,
-  currentAcceptedMessageSelector,
+  inboundMemoryPromptRenderer,
   replyPromptRenderer,
   memoryPromptRenderer,
+  currentAcceptedMessageSelector,
 } from "./reply-context.js";
 
 export const modelTierSchema = z.enum(["light", "heavy"]);
@@ -185,8 +187,16 @@ export function createLlmReplyModule<
     manifest: {
       protocolVersion: 1,
       moduleVersion: "1.0.0",
-      selectors: [selector, currentAcceptedMessageSelector, completedReplySelector],
-      promptRenderers: [replyPromptRenderer, memoryPromptRenderer],
+      selectors: [
+        selector,
+        currentAcceptedMessageSelector,
+        completedReplySelector,
+      ],
+      promptRenderers: [
+        replyPromptRenderer,
+        memoryPromptRenderer,
+        inboundMemoryPromptRenderer,
+      ],
       requires: [modelTaskCapability],
       provides: [],
       definitionId: "demo.reply.llm",
@@ -198,6 +208,7 @@ export function createLlmReplyModule<
         completedInformationKind,
         assistantTextInformationKind,
         coreMemoryTextInformationKind,
+        inboundTextInformationKind,
       ],
       produces: [
         assistantTextInformationKind,

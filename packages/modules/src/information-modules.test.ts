@@ -303,10 +303,10 @@ function associationCompletedAtom() {
       queryInformationId: "association-query-1",
       sourceInformationId: "reply-1",
       route: "reply",
-      method: "lexical-recency",
+      method: "sparse-2gram",
       status: "matched",
       candidateCount: 1,
-      reasonCodes: ["lexical-match", "recency-ranked"],
+      reasonCodes: ["sparse-match", "coverage-ranked"],
     },
     references: [{ relation: "core:context", informationId: contextId }],
   });
@@ -943,9 +943,9 @@ describe("createLlmReplyModule", () => {
       const decisionPayload = speechDecisionInformationKind.payloadSchema.parse(
         decision!.payload,
       );
-      const candidateInformationId = z.string().parse(
-        decisionPayload.candidateInformationId,
-      );
+      const candidateInformationId = z
+        .string()
+        .parse(decisionPayload.candidateInformationId);
       const replayedDecision = await core.commitTerminal(
         "core.speech.decision",
         candidateInformationId,
@@ -962,10 +962,14 @@ describe("createLlmReplyModule", () => {
         informationId: context.informationId,
       });
       expect(
-        replayGraph.filter(({ kind }) => kind === speechDecisionInformationKind.kind),
+        replayGraph.filter(
+          ({ kind }) => kind === speechDecisionInformationKind.kind,
+        ),
       ).toHaveLength(1);
       expect(
-        replayGraph.filter(({ kind }) => kind === replyRequestedInformationKind.kind),
+        replayGraph.filter(
+          ({ kind }) => kind === replyRequestedInformationKind.kind,
+        ),
       ).toHaveLength(1);
       for (const atom of [inbound, reply, completed, assistant, delivery]) {
         expect(atom?.references).toContainEqual({
@@ -1042,7 +1046,10 @@ describe("createLlmReplyModule", () => {
       executor,
     );
     const use = vi.spyOn(context, "use");
-    await instance.subscriptions[0]!.handle(associationCompletedAtom(), context);
+    await instance.subscriptions[0]!.handle(
+      associationCompletedAtom(),
+      context,
+    );
     expect(use).toHaveBeenCalledWith(modelTaskCapability);
     expect(request).toMatchObject({
       task: {
@@ -1080,7 +1087,10 @@ describe("createLlmReplyModule", () => {
       [replyAtom()],
     );
     await expect(
-      instance.subscriptions[0]!.handle(associationCompletedAtom(), unavailable),
+      instance.subscriptions[0]!.handle(
+        associationCompletedAtom(),
+        unavailable,
+      ),
     ).rejects.toThrow("undeclared test capability");
   });
 

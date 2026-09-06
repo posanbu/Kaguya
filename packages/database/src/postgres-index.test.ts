@@ -110,6 +110,8 @@ describePostgres("KaguyaDatabase migrations (PostgreSQL)", () => {
               "information_atoms",
               "information_references",
               "information_log_outbox",
+              "memory_documents",
+              "memory_document_ngrams",
             ],
           ],
         );
@@ -130,6 +132,15 @@ describePostgres("KaguyaDatabase migrations (PostgreSQL)", () => {
         );
         expect(definitions.get("information_log_outbox_pending_idx")).toMatch(
           /\(attempt_count, created_at, information_id\).*projected_at IS NULL/i,
+        );
+        expect(definitions.get("memory_document_ngrams_gram_idx")).toMatch(
+          /\(gram, memory_id\)/i,
+        );
+        expect(definitions.get("memory_documents_account_time_idx")).toMatch(
+          /\(platform, adapter_id, account_id, occurred_at, memory_id\)/i,
+        );
+        expect(definitions.get("memory_documents_scope_time_idx")).toMatch(
+          /\(platform, adapter_id, destination_kind, destination_id, occurred_at, memory_id\)/i,
         );
       } finally {
         await database.close();

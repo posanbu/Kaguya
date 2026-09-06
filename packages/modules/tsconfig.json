@@ -11,6 +11,9 @@
       "path": "../schema"
     },
     {
+      "path": "../memory"
+    },
+    {
       "path": "../sdk"
     },
     {

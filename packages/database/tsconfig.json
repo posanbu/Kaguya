@@ -8,6 +8,7 @@
   "include": ["src/**/*.ts"],
   "references": [
     { "path": "../schema" },
+    { "path": "../memory" },
     { "path": "../engine" },
     { "path": "../sdk" }
   ]

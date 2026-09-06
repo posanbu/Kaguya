@@ -21,6 +21,7 @@ import { describe, expect, it } from "vitest";
 import * as modules from "./index.js";
 import {
   coreMemoryTextInformationKind,
+  inboundTextInformationKind,
   replyRequestedInformationKind,
 } from "./information-kinds.js";
 
@@ -48,6 +49,24 @@ const memoryAtom = freezeInformationAtom({
   occurredAt: "2026-09-04T00:00:01.000Z",
   source: "module:memory",
   payload: { text: "likes tea" },
+  references: [],
+});
+
+const historicalInboundAtom = freezeInformationAtom({
+  informationId: informationIdSchema.parse("inbound-history"),
+  kind: inboundTextInformationKind.kind,
+  occurredAt: "2026-09-03T00:00:00.000Z",
+  source: "runtime:ingress",
+  payload: {
+    text: "previous hello",
+    source: {
+      adapterId: "adapter",
+      platform: "qq",
+      platformMessageId: "platform-history",
+      destination: { kind: "group" as const, groupId: "group-1" },
+      senderId: "sender-1",
+    },
+  },
   references: [],
 });
 
@@ -110,6 +129,54 @@ describe("reply context", () => {
         content: "hello",
       },
     ]);
+  });
+
+  it("renders recalled inbound provenance as Memory before the current message", () => {
+    const prompt = compileReplyPrompt()(
+      new PromptCompiler(),
+      [replyAtom, historicalInboundAtom],
+      replyAtom.informationId,
+    );
+
+    expect(
+      prompt.fragments.map(({ informationId, source }) => ({
+        informationId,
+        source,
+      })),
+    ).toEqual([
+      { informationId: historicalInboundAtom.informationId, source: "memory" },
+      { informationId: replyAtom.informationId, source: "history" },
+    ]);
+    expect(prompt.fragments[0]!.content).toContain("previous hello");
+  });
+
+  it("limits recalled Memory to 4,000 Unicode characters", () => {
+    const oversizedMemory = freezeInformationAtom({
+      informationId: informationIdSchema.parse("inbound-oversized"),
+      kind: inboundTextInformationKind.kind,
+      occurredAt: "2026-09-03T00:00:00.000Z",
+      source: "runtime:ingress",
+      payload: {
+        text: "月".repeat(5_000),
+        source: {
+          adapterId: "adapter",
+          platform: "qq",
+          platformMessageId: "platform-oversized",
+          destination: { kind: "group" as const, groupId: "group-1" },
+          senderId: "sender-1",
+        },
+      },
+      references: [],
+    });
+    const prompt = compileReplyPrompt()(
+      new PromptCompiler(),
+      [oversizedMemory, replyAtom],
+      replyAtom.informationId,
+    );
+
+    expect(Array.from(prompt.fragments[0]!.content)).toHaveLength(4_000);
+    expect(prompt.fragments[0]!.content.endsWith("…")).toBe(true);
+    expect(prompt.fragments[1]!.content).toBe("hello");
   });
 
   it("rejects a selection that omits the current reply", () => {

@@ -52,6 +52,7 @@ export {
   compileReplyPromptFromInformation,
   associationReplyContextSelector,
   currentAcceptedMessageSelector,
+  inboundMemoryPromptRenderer,
 } from "./reply-context.js";
 export {
   associationCandidateInformationKind,

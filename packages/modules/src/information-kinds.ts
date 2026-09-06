@@ -34,18 +34,31 @@ const messageSourceSchema = z
     platformMessageId: nonBlankString,
     destination: platformDestinationSchema,
     senderId: nonBlankString,
-    sender: z.object({
-      userId: nonBlankString,
-      nickname: nonBlankString.optional(),
-      card: nonBlankString.optional(),
-      isSelf: z.boolean().optional(),
-    }).strict().optional(),
+    sender: z
+      .object({
+        userId: nonBlankString,
+        nickname: nonBlankString.optional(),
+        card: nonBlankString.optional(),
+        isSelf: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     selfId: nonBlankString.optional(),
-    mentions: z.array(z.union([
-      z.object({ kind: z.literal("user"), id: nonBlankString }).strict(),
-      z.object({ kind: z.literal("all") }).strict(),
-    ])).optional(),
-    replyTo: z.object({ platformMessageId: nonBlankString, senderId: nonBlankString.optional() }).strict().optional(),
+    mentions: z
+      .array(
+        z.union([
+          z.object({ kind: z.literal("user"), id: nonBlankString }).strict(),
+          z.object({ kind: z.literal("all") }).strict(),
+        ]),
+      )
+      .optional(),
+    replyTo: z
+      .object({
+        platformMessageId: nonBlankString,
+        senderId: nonBlankString.optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict() as any;
 
@@ -141,7 +154,7 @@ export const coreMemoryTextInformationKind = defineInformationKind({
 });
 
 const associationRouteSchema = z.literal("reply");
-const associationMethodSchema = z.literal("lexical-recency");
+const associationMethodSchema = z.literal("sparse-2gram");
 const associationStatusSchema = z.enum([
   "matched",
   "empty",
@@ -279,7 +292,10 @@ export const associationCandidateInformationKind = defineInformationKind({
     "agent:canonical-source": {
       required: true,
       multiple: false,
-      targetKinds: [coreMemoryTextInformationKind.kind],
+      targetKinds: [
+        coreMemoryTextInformationKind.kind,
+        inboundTextInformationKind.kind,
+      ],
     },
   },
   log: { enabled: false },
@@ -435,62 +451,80 @@ export const deliveryRequestedInformationKind = defineInformationKind({
   log: { enabled: false },
 });
 
-const turnContextPayloadSchema = z.object({
-  candidateInformationId: nonBlankString,
-  asOf: nonBlankString.optional(),
-  text: z.string(),
-  source: messageSourceSchema,
-  directness: z.number().min(0).max(1),
-  contentNeed: z.number().min(0).max(1),
-  messageCount: z.number().int().min(0),
-  recentPresencePenalty: z.number().min(0).max(1),
-  frequencyMultiplier: z.number().min(0).max(1),
-  muted: z.boolean(),
-  safe: z.boolean(),
-  destinationAvailable: z.boolean(),
-  stale: z.boolean(),
-  /** Optional enrichments are intentionally advisory and do not affect timing. */
-  memory: z.array(nonBlankString).optional(),
-  association: z.array(nonBlankString).optional(),
-  recheckAt: nonBlankString.optional(),
-  attempt: z.number().int().min(0),
-  totalWaitBudget: z.number().int().min(0),
-}).strict() as any;
+const turnContextPayloadSchema = z
+  .object({
+    candidateInformationId: nonBlankString,
+    asOf: nonBlankString.optional(),
+    text: z.string(),
+    source: messageSourceSchema,
+    directness: z.number().min(0).max(1),
+    contentNeed: z.number().min(0).max(1),
+    messageCount: z.number().int().min(0),
+    recentPresencePenalty: z.number().min(0).max(1),
+    frequencyMultiplier: z.number().min(0).max(1),
+    muted: z.boolean(),
+    safe: z.boolean(),
+    destinationAvailable: z.boolean(),
+    stale: z.boolean(),
+    /** Optional enrichments are intentionally advisory and do not affect timing. */
+    memory: z.array(nonBlankString).optional(),
+    association: z.array(nonBlankString).optional(),
+    recheckAt: nonBlankString.optional(),
+    attempt: z.number().int().min(0),
+    totalWaitBudget: z.number().int().min(0),
+  })
+  .strict() as any;
 
-export type TurnContextCompletedPayload = z.infer<typeof turnContextPayloadSchema>;
+export type TurnContextCompletedPayload = z.infer<
+  typeof turnContextPayloadSchema
+>;
 
 export const turnContextCompletedInformationKind = defineInformationKind({
   kind: "agent.turn.context.completed",
   payloadSchema: turnContextPayloadSchema,
   references: {
     "core:caused-by": { required: true, multiple: false },
-    "core:context": { required: true, multiple: false, targetKinds: ["core.runtime.context"] },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
     "core:uses-context": { required: true, multiple: true },
   },
   log: { enabled: false },
 });
 
-const speechDecisionPayloadSchema = z.object({
-  action: z.enum(["speak", "wait", "silent"]),
-  status: z.enum(["decision", "failed", "superseded"]),
-  text: z.string(),
-  source: messageSourceSchema,
-  candidateInformationId: nonBlankString,
-  turnContextInformationId: nonBlankString,
-  score: z.number(),
-  thresholds: z.object({ speak: z.number(), wait: z.number() }).strict(),
-  components: z.object({ directness: z.number(), contentNeed: z.number(), messageCount: z.number(), recentPresencePenalty: z.number(), frequencyMultiplier: z.number() }).strict(),
-  reasonCodes: z.array(nonBlankString),
-  missingInputs: z.array(nonBlankString),
-  policyDigest: nonBlankString,
-  settingsDigest: nonBlankString,
-  recheckAt: nonBlankString.optional(),
-  dueAt: nonBlankString.optional(),
-  delayMs: z.number().int().min(0).optional(),
-  attempt: z.number().int().min(0),
-  totalWaitBudget: z.number().int().min(0),
-  wakePolicy: z.enum(["none", "recheckAt", "cooldown"]).optional(),
-}).strict() as any;
+const speechDecisionPayloadSchema = z
+  .object({
+    action: z.enum(["speak", "wait", "silent"]),
+    status: z.enum(["decision", "failed", "superseded"]),
+    text: z.string(),
+    source: messageSourceSchema,
+    candidateInformationId: nonBlankString,
+    turnContextInformationId: nonBlankString,
+    score: z.number(),
+    thresholds: z.object({ speak: z.number(), wait: z.number() }).strict(),
+    components: z
+      .object({
+        directness: z.number(),
+        contentNeed: z.number(),
+        messageCount: z.number(),
+        recentPresencePenalty: z.number(),
+        frequencyMultiplier: z.number(),
+      })
+      .strict(),
+    reasonCodes: z.array(nonBlankString),
+    missingInputs: z.array(nonBlankString),
+    policyDigest: nonBlankString,
+    settingsDigest: nonBlankString,
+    recheckAt: nonBlankString.optional(),
+    dueAt: nonBlankString.optional(),
+    delayMs: z.number().int().min(0).optional(),
+    attempt: z.number().int().min(0),
+    totalWaitBudget: z.number().int().min(0),
+    wakePolicy: z.enum(["none", "recheckAt", "cooldown"]).optional(),
+  })
+  .strict() as any;
 
 export type SpeechDecisionPayload = z.infer<typeof speechDecisionPayloadSchema>;
 
@@ -498,8 +532,16 @@ export const speechDecisionInformationKind = defineInformationKind({
   kind: "agent.speech.decision",
   payloadSchema: speechDecisionPayloadSchema,
   references: {
-    "core:caused-by": { required: true, multiple: false, targetKinds: [turnContextCompletedInformationKind.kind] },
-    "core:context": { required: true, multiple: false, targetKinds: ["core.runtime.context"] },
+    "core:caused-by": {
+      required: true,
+      multiple: false,
+      targetKinds: [turnContextCompletedInformationKind.kind],
+    },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
     "core:uses-context": { required: true, multiple: true },
   },
   log: { enabled: false },
@@ -507,63 +549,200 @@ export const speechDecisionInformationKind = defineInformationKind({
 
 export const waitRequestedInformationKind = defineInformationKind({
   kind: "agent.wait.requested",
-  payloadSchema: z.object({ dueAt: nonBlankString, delayMs: z.number().int().min(0), reason: nonBlankString, attempt: z.number().int().min(0), totalWaitBudget: z.number().int().min(0), wakePolicy: z.enum(["recheckAt", "cooldown"]) }).strict() as any,
+  payloadSchema: z
+    .object({
+      dueAt: nonBlankString,
+      delayMs: z.number().int().min(0),
+      reason: nonBlankString,
+      attempt: z.number().int().min(0),
+      totalWaitBudget: z.number().int().min(0),
+      wakePolicy: z.enum(["recheckAt", "cooldown"]),
+    })
+    .strict() as any,
   references: {
-    "core:caused-by": { required: true, multiple: false, targetKinds: [speechDecisionInformationKind.kind] },
-    "core:context": { required: true, multiple: false, targetKinds: ["core.runtime.context"] },
+    "core:caused-by": {
+      required: true,
+      multiple: false,
+      targetKinds: [speechDecisionInformationKind.kind],
+    },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
   },
   log: { enabled: false },
 });
 
-const identityTerminalSchema = z.object({
-  status: z.enum(["complete", "unresolved", "ambiguous", "degraded", "failed"]),
-  scopeMode: z.enum(["canonical", "ephemeral"]),
-  platform: nonBlankString,
-  adapterId: nonBlankString,
-  scopeInformationId: nonBlankString.optional(),
-  accountInformationId: nonBlankString.optional(),
-  personInformationId: nonBlankString.optional(),
-}).strict() as any;
+const identityTerminalSchema = z
+  .object({
+    status: z.enum([
+      "complete",
+      "unresolved",
+      "ambiguous",
+      "degraded",
+      "failed",
+    ]),
+    scopeMode: z.enum(["canonical", "ephemeral"]),
+    platform: nonBlankString,
+    adapterId: nonBlankString,
+    scopeInformationId: nonBlankString.optional(),
+    accountInformationId: nonBlankString.optional(),
+    personInformationId: nonBlankString.optional(),
+  })
+  .strict() as any;
 
 export const chatScopeEntityInformationKind = defineInformationKind({
   kind: "agent.chat.scope.entity",
-  payloadSchema: z.object({ platform: nonBlankString, adapterId: nonBlankString, destination: platformDestinationSchema, scopeMode: z.enum(["canonical", "ephemeral"]) }).strict(),
-  references: { "core:caused-by": { required: true, multiple: false }, "core:context": { required: true, multiple: false, targetKinds: ["core.runtime.context"] } }, log: { enabled: false },
+  payloadSchema: z
+    .object({
+      platform: nonBlankString,
+      adapterId: nonBlankString,
+      destination: platformDestinationSchema,
+      scopeMode: z.enum(["canonical", "ephemeral"]),
+    })
+    .strict(),
+  references: {
+    "core:caused-by": { required: true, multiple: false },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
+  },
+  log: { enabled: false },
 });
 export const chatScopeBindingInformationKind = defineInformationKind({
   kind: "agent.chat.scope.binding",
-  payloadSchema: z.object({ platform: nonBlankString, adapterId: nonBlankString, destination: platformDestinationSchema }).strict(),
-  references: { "core:caused-by": { required: true, multiple: false }, "core:context": { required: true, multiple: false, targetKinds: ["core.runtime.context"] }, "core:binds": { required: true, multiple: false, targetKinds: [chatScopeEntityInformationKind.kind] } }, log: { enabled: false },
+  payloadSchema: z
+    .object({
+      platform: nonBlankString,
+      adapterId: nonBlankString,
+      destination: platformDestinationSchema,
+    })
+    .strict(),
+  references: {
+    "core:caused-by": { required: true, multiple: false },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
+    "core:binds": {
+      required: true,
+      multiple: false,
+      targetKinds: [chatScopeEntityInformationKind.kind],
+    },
+  },
+  log: { enabled: false },
 });
 export const platformAccountEntityInformationKind = defineInformationKind({
   kind: "agent.platform.account.entity",
-  payloadSchema: z.object({ platform: nonBlankString, adapterId: nonBlankString, accountId: nonBlankString }).strict(),
-  references: { "core:caused-by": { required: true, multiple: false }, "core:context": { required: true, multiple: false, targetKinds: ["core.runtime.context"] } }, log: { enabled: false },
+  payloadSchema: z
+    .object({
+      platform: nonBlankString,
+      adapterId: nonBlankString,
+      accountId: nonBlankString,
+    })
+    .strict(),
+  references: {
+    "core:caused-by": { required: true, multiple: false },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
+  },
+  log: { enabled: false },
 });
 export const platformAccountBindingInformationKind = defineInformationKind({
   kind: "agent.platform.account.binding",
-  payloadSchema: z.object({ accountId: nonBlankString, personInformationId: nonBlankString }).strict(),
-  references: { "core:caused-by": { required: true, multiple: false }, "core:context": { required: true, multiple: false, targetKinds: ["core.runtime.context"] }, "core:binds": { required: true, multiple: false, targetKinds: [platformAccountEntityInformationKind.kind] } }, log: { enabled: false },
+  payloadSchema: z
+    .object({ accountId: nonBlankString, personInformationId: nonBlankString })
+    .strict(),
+  references: {
+    "core:caused-by": { required: true, multiple: false },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
+    "core:binds": {
+      required: true,
+      multiple: false,
+      targetKinds: [platformAccountEntityInformationKind.kind],
+    },
+  },
+  log: { enabled: false },
 });
 export const personEntityInformationKind = defineInformationKind({
   kind: "agent.person.entity",
   payloadSchema: z.object({ accountId: nonBlankString }).strict(),
-  references: { "core:caused-by": { required: true, multiple: false }, "core:context": { required: true, multiple: false, targetKinds: ["core.runtime.context"] } }, log: { enabled: false },
+  references: {
+    "core:caused-by": { required: true, multiple: false },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
+  },
+  log: { enabled: false },
 });
 export const personObservedInformationKind = defineInformationKind({
   kind: "agent.person.observed",
-  payloadSchema: z.object({ accountId: nonBlankString, nickname: nonBlankString.optional(), card: nonBlankString.optional(), observedAt: nonBlankString }).strict() as any,
-  references: { "core:caused-by": { required: true, multiple: false }, "core:context": { required: true, multiple: false, targetKinds: ["core.runtime.context"] }, "core:observes": { required: true, multiple: false, targetKinds: [platformAccountEntityInformationKind.kind] } }, log: { enabled: false },
+  payloadSchema: z
+    .object({
+      accountId: nonBlankString,
+      nickname: nonBlankString.optional(),
+      card: nonBlankString.optional(),
+      observedAt: nonBlankString,
+    })
+    .strict() as any,
+  references: {
+    "core:caused-by": { required: true, multiple: false },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
+    "core:observes": {
+      required: true,
+      multiple: false,
+      targetKinds: [platformAccountEntityInformationKind.kind],
+    },
+  },
+  log: { enabled: false },
 });
 export const personResolutionInformationKind = defineInformationKind({
   kind: "agent.person.resolution",
   payloadSchema: identityTerminalSchema,
-  references: { "core:caused-by": { required: true, multiple: false }, "core:context": { required: true, multiple: false, targetKinds: ["core.runtime.context"] } }, log: { enabled: false },
+  references: {
+    "core:caused-by": { required: true, multiple: false },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
+  },
+  log: { enabled: false },
 });
 export const personContextCompletedInformationKind = defineInformationKind({
   kind: "agent.person.context.completed",
   payloadSchema: identityTerminalSchema,
-  references: { "core:caused-by": { required: true, multiple: false }, "core:context": { required: true, multiple: false, targetKinds: ["core.runtime.context"] }, "core:status-of": { required: true, multiple: false, targetKinds: [inboundTextInformationKind.kind] } }, log: { enabled: false },
+  references: {
+    "core:caused-by": { required: true, multiple: false },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
+    "core:status-of": {
+      required: true,
+      multiple: false,
+      targetKinds: [inboundTextInformationKind.kind],
+    },
+  },
+  log: { enabled: false },
 });
 
 export const informationModuleKinds = [
@@ -579,9 +758,15 @@ export const informationModuleKinds = [
   personFactExtractedInformationKind,
   assistantTextInformationKind,
   deliveryRequestedInformationKind,
-  chatScopeEntityInformationKind, chatScopeBindingInformationKind,
-  platformAccountEntityInformationKind, platformAccountBindingInformationKind,
-  personEntityInformationKind, personObservedInformationKind, personResolutionInformationKind,
+  chatScopeEntityInformationKind,
+  chatScopeBindingInformationKind,
+  platformAccountEntityInformationKind,
+  platformAccountBindingInformationKind,
+  personEntityInformationKind,
+  personObservedInformationKind,
+  personResolutionInformationKind,
   personContextCompletedInformationKind,
-  turnContextCompletedInformationKind, speechDecisionInformationKind, waitRequestedInformationKind,
+  turnContextCompletedInformationKind,
+  speechDecisionInformationKind,
+  waitRequestedInformationKind,
 ] as const satisfies readonly InformationKindDefinition<string, any>[];

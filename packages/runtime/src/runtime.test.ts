@@ -379,6 +379,75 @@ describe("KaguyaRuntime", () => {
   );
 
   it(
+    "recalls a Web Memory globally through its original inbound provenance",
+    async () => {
+      const { runtime, database } = await createRuntime();
+      await runtime.start();
+
+      const first = await runtime.submit(webMessage("remember moonlight"));
+      await settleDeliveries(database);
+      const firstGraph = await database.information.query({
+        informationId: first.rootInformationId,
+      });
+      const firstInbound = firstGraph.find(
+        ({ kind }) => kind === inboundTextInformationKind.kind,
+      )!;
+      await database.memory.put({
+        sourceInformationId: firstInbound.informationId,
+        sourceKind: firstInbound.kind,
+        content: "remember moonlight",
+        occurredAt: firstInbound.occurredAt,
+        address: {
+          platform: "web",
+          adapterId: "web.ui.main",
+          platformMessageId: "request-1",
+          accountId: "web",
+          destination: { kind: "web" },
+        },
+      });
+
+      const second = await runtime.submit({
+        ...webMessage("moonlight again"),
+        platformMessageId: "request-2",
+        occurredAt: "2026-09-04T00:00:02.000Z",
+      });
+      let secondGraph: Awaited<ReturnType<typeof database.information.query>> =
+        [];
+      await vi.waitFor(async () => {
+        secondGraph = await database.information.query({
+          informationId: second.rootInformationId,
+        });
+        expect(
+          secondGraph.some(
+            ({ kind }) => kind === modelTaskRequestedInformationKind.kind,
+          ),
+        ).toBe(true);
+      });
+      const requested = secondGraph.find(
+        ({ kind }) => kind === modelTaskRequestedInformationKind.kind,
+      )!;
+      const payload = modelTaskRequestedInformationKind.payloadSchema.parse(
+        requested.payload,
+      );
+
+      expect(payload.prompt.provenance).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            informationId: firstInbound.informationId,
+            source: "memory",
+          }),
+        ]),
+      );
+      expect(payload.prompt.fragments[0]).toMatchObject({
+        informationId: firstInbound.informationId,
+        source: "memory",
+      });
+      expect(payload.prompt.text).toContain("remember moonlight");
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
     "classifies migration failures without retaining database details",
     async () => {
       const database = await createTestingDatabase();
@@ -796,7 +865,9 @@ describe("KaguyaRuntime", () => {
     async () => {
       const { runtime, database } = await createRuntime({
         activations: [
-          ...firstPartyModuleActivations.filter((a) => a.definitionId !== "demo.reply.llm"),
+          ...firstPartyModuleActivations.filter(
+            (a) => a.definitionId !== "demo.reply.llm",
+          ),
           ...[
             ["reply.one", "room-one"],
             ["reply.two", "room-two"],
@@ -1031,7 +1102,9 @@ describe("KaguyaRuntime", () => {
           observer,
         ),
         activations: [
-          ...firstPartyModuleActivations.filter((a) => a.definitionId !== "demo.reply.llm"),
+          ...firstPartyModuleActivations.filter(
+            (a) => a.definitionId !== "demo.reply.llm",
+          ),
           {
             instanceId: "observer.one",
             definitionId: "test.reply.observer",

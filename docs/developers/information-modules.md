@@ -83,4 +83,6 @@ Runtime 的 `submit()` 返回已接受输入的根 ID；可靠回复异步推进
 
 Selector 通过受限只读账本的 `find()`、`related()`、`retrieve()` 取得候选，只返回有序 informationId。Core 校验 ID、拒绝重复或越权结果，并按顺序重新加载冻结原子。模块不能把未落账 payload 拼成上下文。
 
-默认 reply Selector 只选择当前 `core.reply.requested`。额外 Memory 必须由自定义 Selector 显式选择。reply 和 Memory 的 renderer 在 manifest 中声明；每个 Prompt fragment 保留 informationId，LLM requested 使用同序 `core:uses-context` 引用追溯输入。未知 kind 不会被静默当作文本注入。这里不引入隐式会话桶、历史自动回填或新的 Model Task 抽象。
+`createLlmReplyModule()` 默认消费 `agent.association.completed`。first-party Catalog 激活 association 模块，把 requested、query、candidate 和 completed 记录成可审计 DAG；其中 candidate Selector 以当前消息为 query，执行全局召回，最多选择 8 条不晚于当前请求、且排除当前消息的结果。身份结果仍写入审计元数据，但不缩小默认召回范围，Web 和 ephemeral 消息同样进入这条链。Runtime 的命名检索策略只返回来源 ID，Core 随后从追加式账本重新加载并授权原始 inbound atom，因此 candidate 和 Prompt provenance 都直接指向不可变消息，而不是临时 Memory atom。
+
+Memory fragment 排在当前消息之前，合计最多 4,000 个 Unicode 字符；召回失败会退化为空历史，不阻塞当前回复。reply、历史 `core.memory.text` 和原始 inbound 的 renderer 都在 manifest 中声明，每个 fragment 保留 informationId，LLM requested 使用同序 `core:uses-context` 引用追溯输入。未知 kind 不会被静默当作文本注入。这里不引入隐式会话桶、回合拼装、事实提取或演化算法。
