@@ -685,6 +685,9 @@ describe("KaguyaRuntime", () => {
         new Set([
           "core.message.inbound.text",
           "core.reply.requested",
+          "agent.association.requested",
+          "agent.association.query",
+          "agent.association.completed",
           "core.model.task.requested",
           "core.model.task.completed",
           "core.message.assistant.text",

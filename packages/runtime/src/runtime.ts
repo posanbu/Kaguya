@@ -8,6 +8,8 @@
  * Model Task 由 composeModelTaskCapabilities 注入批准的 ModelTaskClient；ApprovedModelTaskClient
  * 校验宿主 activation/tier 白名单，provider、resolver、Core 与 approval 数据均保存在私有字段，
  * 模块只通过 #76 的 context.use 获得通用能力。缺少批准或无效 capability 在任何 create 前拒绝。
+ * Memory association 默认使用本包提供的 lexical-recency Selector strategy；调用方传入空
+ * `retrievalStrategies` 可显式禁用它，模块随后只记录 unavailable terminal。
  */
 import { randomUUID } from "node:crypto";
 
@@ -20,6 +22,7 @@ import {
   InformationKindRegistry,
   ModuleHost,
   consumerFailedInformationKind,
+  type InformationRetrievalStrategy,
 } from "@kaguya/engine";
 import {
   createInformationAtomLogSink,
@@ -74,6 +77,7 @@ import {
   modelTaskSelectionPolicySchema,
   modelTaskInformationKinds,
 } from "./information-kinds.js";
+import { createMemoryLexicalRecencyRetrievalStrategy } from "./memory-retrieval.js";
 
 export interface RuntimeModelTaskApproval {
   readonly activation: ModuleActivationProvenance;
@@ -113,6 +117,7 @@ type KaguyaRuntimeBaseOptions = {
   readonly catalog: InformationModuleCatalog;
   readonly activations: readonly InformationModuleActivation[];
   readonly capabilities?: RuntimeCapabilities;
+  readonly retrievalStrategies?: readonly InformationRetrievalStrategy[];
   readonly modelTask?: RuntimeModelTaskOptions;
   readonly cadence?: {
     readonly definitions: readonly CadenceDefinitionInput[];
@@ -308,6 +313,10 @@ export class KaguyaRuntime implements InformationIngress {
         store: database.information,
         nextInformationId: this.#nextInformationId,
         now: this.#now,
+        retrievalStrategies:
+          this.options.retrievalStrategies ?? [
+            createMemoryLexicalRecencyRetrievalStrategy(database.information),
+          ],
         bootstrapReporter: (error) => {
           this.#runtimeLogger?.error(
             {

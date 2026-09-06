@@ -10,6 +10,11 @@ export {
   alwaysReplyFilterModule,
   alwaysReplyFilterSettingsSchema,
 } from "./always-reply-filter.js";
+export {
+  associationCandidateSelector,
+  associationIdentitySelector,
+  associationModule,
+} from "./association.js";
 export { identityModule } from "./identity.js";
 export { turnContextModule } from "./turn-context.js";
 export { speechReplyModule } from "./speech-reply.js";
@@ -45,9 +50,18 @@ export {
 } from "./person-fact-task.js";
 export {
   compileReplyPromptFromInformation,
+  associationReplyContextSelector,
   currentAcceptedMessageSelector,
 } from "./reply-context.js";
 export {
+  associationCandidateInformationKind,
+  associationCandidateInformationPayloadSchema,
+  associationCompletedInformationKind,
+  associationCompletedInformationPayloadSchema,
+  associationQueryInformationKind,
+  associationQueryInformationPayloadSchema,
+  associationRequestedInformationKind,
+  associationRequestedInformationPayloadSchema,
   assistantTextInformationKind,
   coreMemoryTextInformationKind,
   deliveryRequestedInformationKind,
@@ -73,6 +87,10 @@ export {
   waitRequestedInformationKind,
   type PersonFactCandidateInformationPayload,
   type PersonFactExtractedPayload,
+  type AssociationCandidateInformationPayload,
+  type AssociationCompletedInformationPayload,
+  type AssociationQueryInformationPayload,
+  type AssociationRequestedInformationPayload,
   type ReplyRequestedInformationPayload,
 } from "./information-kinds.js";
 export {
