@@ -29,6 +29,7 @@ import {
   associationCompletedInformationKind,
   associationQueryInformationKind,
   associationRequestedInformationKind,
+  inboundTextInformationKind,
   replyRequestedInformationKind,
   replyRequestedInformationPayloadSchema,
 } from "./information-kinds.js";
@@ -83,12 +84,14 @@ export const associationReplyContextSelector = defineInformationSelector({
       return [replies[0]!.informationId];
     }
 
-    const candidates = (await ledger.related({
-      from: [query[0]!.informationId],
-      relation: "core:caused-by",
-      direction: "incoming",
-      limit: 100,
-    }))
+    const candidates = (
+      await ledger.related({
+        from: [query[0]!.informationId],
+        relation: "core:caused-by",
+        direction: "incoming",
+        limit: 100,
+      })
+    )
       .filter(({ kind }) => kind === associationCandidateInformationKind.kind)
       .sort((left, right) => candidateRank(left) - candidateRank(right));
     const memories: InformationId[] = [];
@@ -101,9 +104,12 @@ export const associationReplyContextSelector = defineInformationSelector({
       });
       if (
         sources.length !== 1 ||
-        sources[0]!.kind !== coreMemoryTextInformationKind.kind
+        (sources[0]!.kind !== coreMemoryTextInformationKind.kind &&
+          sources[0]!.kind !== inboundTextInformationKind.kind)
       ) {
-        throw new Error("Association candidate must reference one Memory source");
+        throw new Error(
+          "Association candidate must reference one Memory source",
+        );
       }
       memories.push(sources[0]!.informationId);
     }
@@ -126,6 +132,25 @@ export const memoryPromptRenderer: InformationPromptRendererDefinition =
       coreMemoryTextInformationKind.payloadSchema.parse(atom.payload).text,
   });
 
+export const inboundMemoryPromptRenderer: InformationPromptRendererDefinition =
+  Object.freeze({
+    rendererId: "kaguya.memory.inbound-text",
+    kinds: [inboundTextInformationKind],
+    render: (atom: DeepReadonly<InformationAtom>) => {
+      const payload = replyRequestedInformationPayloadSchema.parse(
+        atom.payload,
+      );
+      const destination = payload.source.destination;
+      const scope =
+        destination.kind === "group"
+          ? `group:${destination.groupId}`
+          : destination.kind === "private"
+            ? `private:${destination.userId}`
+            : "web";
+      return `[${atom.occurredAt}] [${payload.source.platform}/${payload.source.adapterId}] [${scope}] [account:${payload.source.senderId}]\n${payload.text}`;
+    },
+  });
+
 export function compileReplyPromptFromInformation(
   compiler: PromptCompiler,
   atoms: readonly DeepReadonly<InformationAtom>[],
@@ -136,20 +161,30 @@ export function compileReplyPromptFromInformation(
   ) {
     throw new Error("Reply selection must include the current input");
   }
-  const fragments = atoms.map((atom): PromptFragment => {
+  let remainingMemoryCharacters = 4_000;
+  const fragments = atoms.flatMap((atom): PromptFragment[] => {
     if (atom.kind === replyRequestedInformationKind.kind) {
-      return fragment(
-        atom.informationId,
-        "history",
-        replyPromptRenderer.render(atom),
-      );
+      return [
+        fragment(
+          atom.informationId,
+          "history",
+          replyPromptRenderer.render(atom),
+          20,
+        ),
+      ];
     }
-    if (atom.kind === coreMemoryTextInformationKind.kind) {
-      return fragment(
-        atom.informationId,
-        "memory",
-        memoryPromptRenderer.render(atom),
-      );
+    if (
+      atom.kind === coreMemoryTextInformationKind.kind ||
+      atom.kind === inboundTextInformationKind.kind
+    ) {
+      if (remainingMemoryCharacters === 0) return [];
+      const rendered =
+        atom.kind === coreMemoryTextInformationKind.kind
+          ? memoryPromptRenderer.render(atom)
+          : inboundMemoryPromptRenderer.render(atom);
+      const content = takeCodePoints(rendered, remainingMemoryCharacters);
+      remainingMemoryCharacters -= Array.from(content).length;
+      return [fragment(atom.informationId, "memory", content, 10)];
     }
     throw new Error(`Unsupported reply context information kind: ${atom.kind}`);
   });
@@ -160,12 +195,13 @@ function fragment(
   informationId: InformationId,
   source: PromptFragmentSource,
   content: string,
+  priority: number,
 ): PromptFragment {
   return {
     id: informationId,
     informationId,
     source,
-    priority: 20,
+    priority,
     content,
     metadata: {},
   };
@@ -178,12 +214,14 @@ async function related(
   direction: "outgoing" | "incoming",
   kind: string,
 ): Promise<readonly DeepReadonly<InformationAtom>[]> {
-  return (await context.related({
-    from: [from],
-    relation,
-    direction,
-    limit: 10,
-  })).filter((atom) => atom.kind === kind);
+  return (
+    await context.related({
+      from: [from],
+      relation,
+      direction,
+      limit: 10,
+    })
+  ).filter((atom) => atom.kind === kind);
 }
 
 function candidateRank(atom: DeepReadonly<InformationAtom>): number {
@@ -191,4 +229,11 @@ function candidateRank(atom: DeepReadonly<InformationAtom>): number {
     atom.payload,
   );
   return payload.rank;
+}
+
+function takeCodePoints(value: string, maximum: number): string {
+  const codePoints = Array.from(value);
+  if (codePoints.length <= maximum) return value;
+  if (maximum <= 1) return codePoints.slice(0, maximum).join("");
+  return `${codePoints.slice(0, maximum - 1).join("")}…`;
 }

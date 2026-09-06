@@ -8,7 +8,7 @@
  * Model Task 由 composeModelTaskCapabilities 注入批准的 ModelTaskClient；ApprovedModelTaskClient
  * 校验宿主 activation/tier 白名单，provider、resolver、Core 与 approval 数据均保存在私有字段，
  * 模块只通过 #76 的 context.use 获得通用能力。缺少批准或无效 capability 在任何 create 前拒绝。
- * Memory association 默认使用本包提供的 lexical-recency Selector strategy；调用方传入空
+ * Memory association 默认使用独立 Memory 仓储的 sparse Selector strategy；调用方传入空
  * `retrievalStrategies` 可显式禁用它，模块随后只记录 unavailable terminal。
  */
 import { randomUUID } from "node:crypto";
@@ -29,6 +29,7 @@ import {
   createModuleLogger,
   type KaguyaLogger,
 } from "@kaguya/logger";
+import { memoryCapability } from "@kaguya/memory";
 import {
   deliveryRequestedInformationKind,
   inboundTextInformationKind,
@@ -68,6 +69,7 @@ import {
   type ModelTaskClientOptions,
   type ModelTaskRequest,
 } from "./model-task.js";
+import { MemoryInformationRetrievalStrategy } from "./memory-retrieval.js";
 
 import {
   builtInInformationKinds,
@@ -77,7 +79,6 @@ import {
   modelTaskSelectionPolicySchema,
   modelTaskInformationKinds,
 } from "./information-kinds.js";
-import { createMemoryLexicalRecencyRetrievalStrategy } from "./memory-retrieval.js";
 
 export interface RuntimeModelTaskApproval {
   readonly activation: ModuleActivationProvenance;
@@ -313,10 +314,16 @@ export class KaguyaRuntime implements InformationIngress {
         store: database.information,
         nextInformationId: this.#nextInformationId,
         now: this.#now,
-        retrievalStrategies:
-          this.options.retrievalStrategies ?? [
-            createMemoryLexicalRecencyRetrievalStrategy(database.information),
-          ],
+        retrievalStrategies: this.options.retrievalStrategies ?? [
+          new MemoryInformationRetrievalStrategy(database.memory, {
+            reportFailure: ({ errorType }) => {
+              this.#runtimeLogger?.error(
+                { event: "memory.recall.failed", errorType },
+                "Memory recall failed",
+              );
+            },
+          }),
+        ],
         bootstrapReporter: (error) => {
           this.#runtimeLogger?.error(
             {
@@ -342,11 +349,14 @@ export class KaguyaRuntime implements InformationIngress {
         typeof this.options.capabilities === "function"
           ? this.options.capabilities({ core, now: this.#now })
           : this.options.capabilities;
-      const capabilities = composeModelTaskCapabilities(
-        this.options,
-        { core, now: this.#now },
-        suppliedCapabilities ?? [],
-      );
+      const capabilities = [
+        { capability: memoryCapability, value: database.memory },
+        ...composeModelTaskCapabilities(
+          this.options,
+          { core, now: this.#now },
+          suppliedCapabilities ?? [],
+        ),
+      ];
       const moduleHost = new ModuleHost({
         drainTimeoutMs: this.options.drainTimeoutMs ?? 5000,
         core,
@@ -511,9 +521,13 @@ export class KaguyaRuntime implements InformationIngress {
             senderId: input.sender.userId,
             sender: {
               userId: input.sender.userId,
-              ...(input.sender.nickname ? { nickname: input.sender.nickname } : {}),
+              ...(input.sender.nickname
+                ? { nickname: input.sender.nickname }
+                : {}),
               ...(input.sender.card ? { card: input.sender.card } : {}),
-              ...(input.selfId ? { isSelf: input.sender.userId === input.selfId } : {}),
+              ...(input.selfId
+                ? { isSelf: input.sender.userId === input.selfId }
+                : {}),
             },
             ...(input.selfId ? { selfId: input.selfId } : {}),
             mentions: [...input.mentions],
@@ -800,9 +814,11 @@ function collectDefinitions(
   moduleDefinitions: readonly InformationModuleDefinition[],
 ): readonly InformationKindDefinition<string, any>[] {
   const definitions = new Map<string, InformationKindDefinition<string, any>>(
-    [...builtInInformationKinds, ...modelTaskInformationKinds, ...cadenceInformationKinds].map(
-      (definition) => [definition.kind, definition],
-    ),
+    [
+      ...builtInInformationKinds,
+      ...modelTaskInformationKinds,
+      ...cadenceInformationKinds,
+    ].map((definition) => [definition.kind, definition]),
   );
   for (const module of moduleDefinitions) {
     for (const definition of [

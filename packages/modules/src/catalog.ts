@@ -54,7 +54,19 @@ export const firstPartyModuleActivations: readonly InformationModuleActivation[]
       definitionId: "core.identity.normalize",
       settings: Object.freeze({}),
     }),
-    Object.freeze({ instanceId: "turn-context.default", definitionId: "core.turn.context", settings: Object.freeze({}) }),
-    Object.freeze({ instanceId: "speech-decision.default", definitionId: "core.speech.decision", settings: Object.freeze({}) }),
-    Object.freeze({ instanceId: "speech-reply.default", definitionId: "core.speech.reply-bridge", settings: Object.freeze({}) }),
+    Object.freeze({
+      instanceId: "turn-context.default",
+      definitionId: "core.turn.context",
+      settings: Object.freeze({}),
+    }),
+    Object.freeze({
+      instanceId: "speech-decision.default",
+      definitionId: "core.speech.decision",
+      settings: Object.freeze({}),
+    }),
+    Object.freeze({
+      instanceId: "speech-reply.default",
+      definitionId: "core.speech.reply-bridge",
+      settings: Object.freeze({}),
+    }),
   ]);

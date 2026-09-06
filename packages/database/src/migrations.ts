@@ -10,7 +10,7 @@
  */
 import type { SqlDatabase } from "./driver.js";
 
-const POSTGRES_SCHEMA_VERSION = 4;
+const POSTGRES_SCHEMA_VERSION = 5;
 
 export async function migrateDatabase(database: SqlDatabase): Promise<void> {
   await database.transaction(async (tx) => {
@@ -75,6 +75,34 @@ export async function migrateDatabase(database: SqlDatabase): Promise<void> {
         PRIMARY KEY (slot_type, namespace, key)
       );
 
+      CREATE TABLE IF NOT EXISTS memory_documents (
+        memory_id text PRIMARY KEY,
+        source_information_id text NOT NULL UNIQUE
+          REFERENCES information_atoms(information_id) ON DELETE RESTRICT,
+        source_kind text NOT NULL,
+        content text NOT NULL,
+        occurred_at text NOT NULL,
+        created_at text NOT NULL,
+        platform text NOT NULL,
+        adapter_id text NOT NULL,
+        platform_message_id text NOT NULL,
+        account_id text NOT NULL,
+        destination_kind text NOT NULL
+          CHECK (destination_kind IN ('private', 'group', 'web')),
+        destination_id text,
+        CHECK (
+          (destination_kind = 'web' AND destination_id IS NULL)
+          OR (destination_kind IN ('private', 'group') AND destination_id IS NOT NULL)
+        )
+      );
+
+      CREATE TABLE IF NOT EXISTS memory_document_ngrams (
+        memory_id text NOT NULL
+          REFERENCES memory_documents(memory_id) ON DELETE CASCADE,
+        gram text NOT NULL,
+        PRIMARY KEY (memory_id, gram)
+      );
+
       CREATE INDEX IF NOT EXISTS information_atoms_kind_occurred_at_idx
         ON information_atoms (kind, occurred_at, information_id);
 
@@ -87,6 +115,20 @@ export async function migrateDatabase(database: SqlDatabase): Promise<void> {
       CREATE INDEX IF NOT EXISTS information_log_outbox_pending_idx
         ON information_log_outbox (attempt_count, created_at, information_id)
         WHERE projected_at IS NULL;
+
+      CREATE INDEX IF NOT EXISTS memory_document_ngrams_gram_idx
+        ON memory_document_ngrams (gram, memory_id);
+
+      CREATE INDEX IF NOT EXISTS memory_documents_namespace_time_idx
+        ON memory_documents (platform, adapter_id, occurred_at, memory_id);
+
+      CREATE INDEX IF NOT EXISTS memory_documents_account_time_idx
+        ON memory_documents (platform, adapter_id, account_id, occurred_at, memory_id);
+
+      CREATE INDEX IF NOT EXISTS memory_documents_scope_time_idx
+        ON memory_documents (
+          platform, adapter_id, destination_kind, destination_id, occurred_at, memory_id
+        );
 
       CREATE OR REPLACE FUNCTION kaguya_reject_information_mutation()
       RETURNS trigger

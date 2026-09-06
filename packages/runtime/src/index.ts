@@ -11,6 +11,7 @@
  */
 export * from "./gateway-allowlist.js";
 export * from "./information-kinds.js";
+export * from "./memory-retrieval.js";
 export * from "./model-task.js";
 export * from "./memory-retrieval.js";
 export * from "./runtime.js";

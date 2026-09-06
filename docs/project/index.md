@@ -72,9 +72,11 @@ InformationLedger 已改为异步端口；PostgreSQL/PGlite 实现追加式存�
 
 ## 后续方向
 
-### Selector、Prompt 与 Memory
+### Memory 底座与后续分层
 
-后续上下文选择、Prompt provenance 与 Memory 若实现，应建立在已持久化的信息原子和显式引用上，不恢复隐式会话或事件身份。
+独立消息 Memory、Unicode 2-gram 稀疏召回和 first-party Prompt 接入已由 #74 实现。Memory 行不属于 Information Ledger；检索命中会重新加载原始 inbound atom，使 provenance 保持为不可变消息。默认回复执行全局召回，并排除当前消息和未来消息。
+
+#78 负责可恢复的逐消息写入，不等待 agent reply，也不拼装回合。#90 负责可替换的认知 provider 与许可证决策，Kaguya 不自写事实演化启发式。#91 负责 pgvector、可恢复回填和稀疏/向量混合召回。周期调度与运行维护仍由 #80/#81 负责。
 
 ### 主 Runtime 接入与迁移
 

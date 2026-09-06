@@ -4,12 +4,12 @@
  * 确定性查询、canonical source receipt 与唯一终态。
  * 主要职责：`associationModule` 串接四个 durable handler；`associationIdentitySelector`
  * 从当前回复的 runtime context 找到 identity terminal；`associationCandidateSelector`
- * 只调用宿主注入的受控 Memory retrieval strategy 并返回 informationId；失败时按
+ * 从 reply DAG 重载当前 inbound，并调用宿主注入的受控 Memory retrieval strategy；失败时按
  * unavailable/failed 终态 fail closed，不生成游离文本或触发新的 reply。
  * 代码库关系：消费 `replyRequestedInformationKind` 和 `agent.person.context.completed`，
  * 产生 `information-kinds.ts` 中的四类 association kind；Runtime 注入
- * `kaguya.memory.lexical-recency`，LLM reply 模块消费 completed terminal 并再次由 Core
- * 重载 canonical memory。selector 只能访问 Engine 授权的账本读取端口。
+ * `kaguya.memory.sparse`，LLM reply 模块消费 completed terminal 并再次由 Core
+ * 重载原始 inbound。selector 只能访问 Engine 授权的账本读取端口。
  * 输入输出与副作用：输入为回复 source、identity terminal 和 scope；输出为带因果、context、
  * identity、request/candidate/source 引用的持久原子。重复投递使用 registerOnce/commitTerminal
  * 幂等；检索异常只记录脱敏 reason code，candidate payload 不复制 source 正文。
@@ -18,9 +18,9 @@ import {
   type DeepReadonly,
   type InformationAtom,
   type InformationId,
-  type JsonObject,
   z,
 } from "@kaguya/schema";
+import { MEMORY_RETRIEVAL_STRATEGY_ID } from "@kaguya/memory";
 import {
   defineInformationModule,
   defineInformationSelector,
@@ -34,9 +34,10 @@ import {
   associationQueryInformationPayloadSchema,
   associationRequestedInformationKind,
   associationRequestedInformationPayloadSchema,
-  coreMemoryTextInformationKind,
+  inboundTextInformationKind,
   replyRequestedInformationKind,
   replyRequestedInformationPayloadSchema,
+  turnContextCompletedInformationKind,
   type AssociationCompletedInformationPayload,
   type AssociationQueryInformationPayload,
   type AssociationRequestedInformationPayload,
@@ -66,14 +67,15 @@ export const associationIdentitySelector = defineInformationSelector({
       direction: "outgoing",
       limit: 1,
     });
-    const identity = context.length === 0
-      ? []
-      : await ledger.related({
-          from: [context[0]!.informationId],
-          relation: "core:context",
-          direction: "incoming",
-          limit: 100,
-        });
+    const identity =
+      context.length === 0
+        ? []
+        : await ledger.related({
+            from: [context[0]!.informationId],
+            relation: "core:context",
+            direction: "incoming",
+            limit: 100,
+          });
     const terminals = identity.filter(
       ({ kind }) => kind === "agent.person.context.completed",
     );
@@ -88,29 +90,69 @@ export const associationCandidateSelector = defineInformationSelector({
     const query = associationQueryInformationPayloadSchema.parse(
       sourceAtom.payload,
     );
+    if (query.query === "<empty>") return [];
+    const requests = (
+      await ledger.related({
+        from: [sourceAtom.informationId],
+        relation: "core:caused-by",
+        direction: "outgoing",
+        limit: 2,
+      })
+    ).filter(({ kind }) => kind === associationRequestedInformationKind.kind);
     if (
-      query.identity.status !== "complete" ||
-      query.identity.personInformationId === undefined ||
-      query.identity.scopeInformationId === undefined ||
-      query.query === "<empty>"
+      requests.length !== 1 ||
+      requests[0]!.informationId !== query.requestInformationId
     ) {
-      return [];
+      throw new Error("Association query must reference one request");
     }
-    const input: JsonObject = {
+    const replies = (
+      await ledger.related({
+        from: [requests[0]!.informationId],
+        relation: "core:caused-by",
+        direction: "outgoing",
+        limit: 2,
+      })
+    ).filter(({ kind }) => kind === replyRequestedInformationKind.kind);
+    if (
+      replies.length !== 1 ||
+      replies[0]!.informationId !== query.sourceInformationId
+    ) {
+      throw new Error("Association request must reference one reply");
+    }
+    const turns = (
+      await ledger.related({
+        from: [replies[0]!.informationId],
+        relation: "core:uses-context",
+        direction: "outgoing",
+        limit: 2,
+      })
+    ).filter(({ kind }) => kind === turnContextCompletedInformationKind.kind);
+    if (turns.length !== 1) {
+      throw new Error("Reply must reference one turn context");
+    }
+    const inbound = (
+      await ledger.related({
+        from: [turns[0]!.informationId],
+        relation: "core:uses-context",
+        direction: "outgoing",
+        limit: 2,
+      })
+    ).filter(({ kind }) => kind === inboundTextInformationKind.kind);
+    if (inbound.length !== 1) {
+      throw new Error("Turn context must reference one inbound source");
+    }
+    const input = {
       query: query.query,
-      queryText: query.queryText,
-      asOf: query.asOf,
-      personInformationId: query.identity.personInformationId,
-      scopeInformationId: query.identity.scopeInformationId,
-      scope: query.scope,
+      occurredBefore: inbound[0]!.occurredAt,
+      excludeSourceInformationIds: [inbound[0]!.informationId],
     };
     const memories = await ledger.retrieve({
-      strategyId: "kaguya.memory.lexical-recency",
+      strategyId: MEMORY_RETRIEVAL_STRATEGY_ID,
       input,
       limit: query.limit,
     });
     return memories
-      .filter(({ kind }) => kind === coreMemoryTextInformationKind.kind)
+      .filter(({ kind }) => kind === inboundTextInformationKind.kind)
       .map(({ informationId }) => informationId);
   },
 });
@@ -122,7 +164,11 @@ export const associationModule = defineInformationModule({
     definitionId: "core.association.memory",
     displayName: "Memory association",
     settingsSchema: z.object({}).strict(),
-    consumes: [replyRequestedInformationKind, associationRequestedInformationKind, associationQueryInformationKind],
+    consumes: [
+      replyRequestedInformationKind,
+      associationRequestedInformationKind,
+      associationQueryInformationKind,
+    ],
     produces: [
       associationRequestedInformationKind,
       associationQueryInformationKind,
@@ -144,11 +190,14 @@ export const associationModule = defineInformationModule({
           const payload = replyRequestedInformationPayloadSchema.parse(
             reply.payload,
           );
-          const identityAtoms = await context.select(associationIdentitySelector);
+          const identityAtoms = await context.select(
+            associationIdentitySelector,
+          );
           const identityAtom = identityAtoms[0];
-          const identity = identityAtom === undefined
-            ? { status: "unavailable" as const }
-            : identityTerminalPayloadSchema.parse(identityAtom.payload);
+          const identity =
+            identityAtom === undefined
+              ? { status: "unavailable" as const }
+              : identityTerminalPayloadSchema.parse(identityAtom.payload);
           await context.registerOnce(
             "kaguya.association.requested.v1",
             reply.informationId,
@@ -159,7 +208,7 @@ export const associationModule = defineInformationModule({
                 queryText: payload.text,
                 asOf: reply.occurredAt,
                 route: "reply",
-                method: "lexical-recency",
+                method: "sparse-2gram",
                 identity: {
                   status: identity.status,
                   ...(identity.personInformationId === undefined
@@ -175,14 +224,15 @@ export const associationModule = defineInformationModule({
                   destination: payload.source.destination,
                 },
               },
-              references: identityAtom === undefined
-                ? []
-                : [
-                    {
-                      relation: "agent:identity-terminal" as const,
-                      informationId: identityAtom.informationId,
-                    },
-                  ],
+              references:
+                identityAtom === undefined
+                  ? []
+                  : [
+                      {
+                        relation: "agent:identity-terminal" as const,
+                        informationId: identityAtom.informationId,
+                      },
+                    ],
             },
           );
         },
@@ -209,7 +259,7 @@ export const associationModule = defineInformationModule({
                 method: payload.method,
                 identity: payload.identity,
                 scope: payload.scope,
-                limit: 5,
+                limit: 8,
               },
             },
           );
@@ -226,27 +276,29 @@ export const associationModule = defineInformationModule({
           let status: AssociationCompletedInformationPayload["status"] =
             "empty";
           let reasonCodes = ["no-candidate"];
-          if (
-            payload.identity.status !== "complete" ||
-            payload.identity.personInformationId === undefined ||
-            payload.identity.scopeInformationId === undefined ||
-            payload.query === "<empty>"
-          ) {
+          if (payload.query === "<empty>") {
             status = "policy-filtered";
-            reasonCodes = ["identity-or-query-policy"];
+            reasonCodes = ["empty-query-policy"];
           } else {
             try {
               memories = await context.select(associationCandidateSelector);
               status = memories.length === 0 ? "empty" : "matched";
-              reasonCodes = memories.length === 0
-                ? ["no-lexical-match"]
-                : ["lexical-match", "recency-ranked"];
+              reasonCodes =
+                memories.length === 0
+                  ? ["no-sparse-match"]
+                  : ["sparse-match", "coverage-ranked"];
             } catch (error) {
               const message = error instanceof Error ? error.message : "";
-              status = message.includes("Unknown information retrieval strategy")
+              status = message.includes(
+                "Unknown information retrieval strategy",
+              )
                 ? "unavailable"
                 : "failed";
-              reasonCodes = [status === "unavailable" ? "provider-unavailable" : "retrieval-failed"];
+              reasonCodes = [
+                status === "unavailable"
+                  ? "provider-unavailable"
+                  : "retrieval-failed",
+              ];
             }
           }
 
@@ -260,8 +312,8 @@ export const associationModule = defineInformationModule({
                 payload: {
                   rank,
                   route: "memory" as const,
-                  strategy: "lexical-recency" as const,
-                  reasonCodes: ["lexical-match", "recency-ranked"],
+                  strategy: "sparse-2gram" as const,
+                  reasonCodes: ["sparse-match", "coverage-ranked"],
                 },
                 references: [
                   {
@@ -323,7 +375,10 @@ function findRequestId(
   const request = query.references.find(
     ({ relation }) => relation === "core:caused-by",
   );
-  if (request === undefined || request.informationId !== payload.requestInformationId) {
+  if (
+    request === undefined ||
+    request.informationId !== payload.requestInformationId
+  ) {
     throw new Error("Association query must directly reference its request");
   }
   return request.informationId;

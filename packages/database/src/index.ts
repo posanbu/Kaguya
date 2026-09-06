@@ -10,6 +10,7 @@
  */
 import { PgDatabase, type SqlDatabase } from "./driver.js";
 import { InformationRepository } from "./information-repository.js";
+import { PostgresMemoryStore } from "./memory-store.js";
 import { migrateDatabase } from "./migrations.js";
 
 export {
@@ -27,12 +28,18 @@ export {
   type InformationLogProjectionBatchResult,
   type InformationLogProjectionRunnerOptions,
 } from "./information-log-projection.js";
+export {
+  PostgresMemoryStore,
+  type PostgresMemoryStoreOptions,
+} from "./memory-store.js";
 
 export class KaguyaDatabase {
   readonly information: InformationRepository;
+  readonly memory: PostgresMemoryStore;
 
   constructor(readonly sql: SqlDatabase) {
     this.information = new InformationRepository(sql);
+    this.memory = new PostgresMemoryStore(sql);
   }
 
   static async connect(options: {

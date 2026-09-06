@@ -21,7 +21,9 @@ Kaguya 采用 pnpm workspace 和 TypeScript project references。应用负责装
 
 **`packages/modules`** — 入站、过滤、回复、assistant 与投递请求 Kind，以及默认 filter/LLM 模块。
 
-**`packages/database`** — 当前 Runtime 的 SQLite 仓储，以及分阶段引入的 PostgreSQL 信息账本与日志 outbox。
+**`packages/memory`** — 独立消息 Memory 契约、原生地址 key、输入边界与 Unicode 稀疏归一规则。
+
+**`packages/database`** — PostgreSQL 信息账本、可靠投递、日志 outbox，以及与账本共用连接和迁移生命周期的独立 Memory 表。
 
 **`packages/config`** — Profile Registry、`selectedProfileId`、readiness、权限和安全写入。
 
@@ -39,7 +41,7 @@ Kaguya 采用 pnpm workspace 和 TypeScript project references。应用负责装
 
 **`packages/scheduler`** — 显式调度原语。
 
-当前仓库同时存在两条数据路径：正在运行的消息链仍使用 SQLite；InformationAtom、Kind Registry、PostgreSQL Ledger 和日志投影已经实现并测试，但尚未接入 `apps/server` 的主 Runtime。阅读代码时不要把“已存在的基础设施”误认为“已经对用户生效”。
+当前 Runtime 使用 PostgreSQL Information Ledger。Memory 文档与 2-gram 倒排项保存在独立表中，不写成 Information atom；召回命中后仍以来源 `informationId` 回到不可变账本。消息自动写入、认知提取与向量索引分别属于后续工作，不能把稀疏召回底座描述成已经具备事实演化。
 
 ## 依赖方向
 
@@ -50,9 +52,12 @@ flowchart LR
   Runtime --> Engine[engine]
   Runtime --> Modules[modules]
   Runtime --> Data[database / config]
+  Runtime --> Memory[memory]
   Runtime --> Model[prompt / llm]
   Engine --> SDK[sdk]
   Modules --> SDK
+  Modules --> Memory
+  Data --> Memory
   SDK --> Schema[schema]
   Data --> Schema
   Model --> Schema

@@ -4,6 +4,7 @@
     { "path": "./packages/schema" },
     { "path": "./packages/config" },
     { "path": "./packages/sdk" },
+    { "path": "./packages/memory" },
     { "path": "./packages/logger" },
     { "path": "./packages/engine" },
     { "path": "./packages/modules" },
