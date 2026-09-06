@@ -10,7 +10,7 @@
  * 与日志投影契约，不导入 Runtime source/dist、provider、模型、密钥或 Core，也不创建第二份 token。
  * 输入输出与副作用：requested/terminal 生命周期完全归 ModelTaskClient；failed/cancelled 不触发业务写入，
  * completed 广播仅校验获胜 definition、不校验 instance；assistant 按自身 originating instance 过滤，
- * 重投使用唯一操作槽。
+ * 重投使用唯一操作槽；旧 reply-only completed payload schema 已删除，公共输出契约由 replyTaskOutputSchema 提供。
  */
 import {
   type CompiledPrompt,
@@ -88,17 +88,6 @@ export const llmReplySettingsSchema = z
   })
   .strict();
 export type LlmReplySettings = z.infer<typeof llmReplySettingsSchema>;
-
-export const llmCompletedInformationPayloadSchema = z
-  .object({
-    output: z.object({ text: z.string().min(1) }).strict(),
-    reply: replyRequestedInformationPayloadSchema,
-    originatingModuleInstanceId: z.string().trim().min(1),
-  })
-  .strict();
-export type LlmCompletedInformationPayload = z.infer<
-  typeof llmCompletedInformationPayloadSchema
->;
 
 export const replyTaskOutputSchema = z
   .object({ text: z.string().min(1) })

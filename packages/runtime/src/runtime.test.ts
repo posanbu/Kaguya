@@ -8,7 +8,7 @@
  * uses-context 引用。
  * 代码库关系：测试直接消费 Runtime 的 `InformationIngress.submit` 和注入数据库选项；默认业务
  * 模块来自 `@kaguya/modules`，自定义 fixture 只用于隔离并发和消费者故障语义。
- * 输入输出与副作用：每个用例创建隔离的内存 PostgreSQL 数据库，Runtime 只写 information
+ * 输入输出与副作用：每个用例创建隔离的内存 PGlite 数据库，Runtime 只写 information
  * ledger；所有创建 PGlite 的用例共享 15 秒跨平台超时，测试结束显式关闭注入数据库，
  * 并检查持久化 payload 不包含 raw/provider secret。
  */
@@ -212,14 +212,14 @@ function parentId(
 }
 
 describe("KaguyaRuntime", () => {
-  it("starts with a new durable identity when an old completion subscription is persisted", async () => {
+  it("starts with the migrated generic completion subscription already persisted", async () => {
     const { runtime, database } = await createRuntime();
     await database.migrate();
-    await database.information.synchronizeKinds(["core.llm.completed"]);
+    await database.information.synchronizeKinds(["core.model.task.completed"]);
     await database.information.reliable.configureSubscriptions([
       {
-        subscriptionId: "reply.default:kaguya.reply.completed",
-        kind: "core.llm.completed",
+        subscriptionId: "reply.default:kaguya.reply.model-task-completed",
+        kind: "core.model.task.completed",
       },
     ]);
     await expect(runtime.start()).resolves.toBeUndefined();

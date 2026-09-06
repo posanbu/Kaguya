@@ -1,7 +1,7 @@
 /**
  * 功能概述：锁定 Runtime 信息 DAG 的完整内建 kind 集合、唯一对象所有权和关键引用契约。
- * 主要职责：验证 context、Engine 消费失败、modules 消息/过滤/投递请求、Runtime LLM 与投递
- * 结果 definition 各出现一次，并检查 Runtime 聚合复用上游导出的原始对象；requested prompt
+ * 主要职责：验证 context、Engine 消费失败、modules 消息/过滤/投递请求、Runtime 通用模型任务与投递
+ * 结果 definition 各出现一次，并检查 Runtime 聚合复用上游导出的原始对象；通用模型任务单独注册，requested prompt
  * 接受 canonical JSON metadata，并要求有序 uses-context 引用。
  * 代码库关系：直接约束 `information-kinds.ts` composition 输出；`KaguyaRuntime.start()` 会按
  * 此集合注册 Registry，ModuleHost 和 lifecycle/delivery consumer 必须使用同一 definition 身份。
@@ -22,20 +22,30 @@ import {
   builtInInformationKinds,
   deliveryDeliveredInformationKind,
   deliveryFailedInformationKind,
-  llmCompletedInformationKind,
-  llmFailedInformationKind,
-  llmRequestedInformationKind,
+  modelTaskCompletedInformationKind,
+  modelTaskFailedInformationKind,
+  modelTaskCancelledInformationKind,
+  modelTaskRequestedInformationKind,
   runtimeContextInformationKind,
 } from "./information-kinds.js";
 
+const metadata = {
+  taskId: "test.task",
+  version: "1",
+  sourceInformationId: "source",
+  contextInformationId: "context",
+  contextInformationIds: ["source"],
+  activation: { definitionId: "test.module", instanceId: "test.one" },
+  selectionPolicy: { tier: "heavy" },
+  resolvedModel: { providerId: "test", modelId: "model-heavy" },
+  promptKind: "memory",
+  provenance: [],
+};
+
 describe("runtime information kinds", () => {
   it("accepts canonical prompt fragment metadata", () => {
-    const parsed = llmRequestedInformationKind.payloadSchema.parse({
-      kind: "reply",
-      modelId: "model-heavy",
-      workflowId: "message-module-pipeline",
-      nodeId: "reply",
-      originatingModuleInstanceId: "reply.one",
+    const parsed = modelTaskRequestedInformationKind.payloadSchema.parse({
+      ...metadata,
       prompt: {
         kind: "reply",
         text: "hello",
@@ -62,14 +72,10 @@ describe("runtime information kinds", () => {
     expect(parsed.prompt.fragments[0]?.metadata).toEqual({ version: 2 });
   });
 
-  it("rejects profile identity from LLM information metadata", () => {
+  it("rejects profile identity from Model Task information metadata", () => {
     expect(() =>
-      llmRequestedInformationKind.payloadSchema.parse({
-        kind: "reply",
-        modelId: "model-heavy",
-        workflowId: "message-module-pipeline",
-        nodeId: "reply",
-        originatingModuleInstanceId: "reply.one",
+      modelTaskRequestedInformationKind.payloadSchema.parse({
+        ...metadata,
         prompt: {
           kind: "reply",
           text: "hello",
@@ -103,11 +109,10 @@ describe("runtime information kinds", () => {
       "core.reply.requested",
       "filter.decision",
       "core.memory.text",
+      "core.person.fact.candidate",
+      "core.person.fact.extracted",
       "core.message.assistant.text",
       "core.delivery.requested",
-      "core.llm.requested",
-      "core.llm.completed",
-      "core.llm.failed",
       "core.delivery.delivered",
       "core.delivery.failed",
     ]);
@@ -132,29 +137,29 @@ describe("runtime information kinds", () => {
 
   it("defines direct lifecycle and delivery status links", () => {
     expect(runtimeContextInformationKind.references).toEqual({});
-    expect(llmRequestedInformationKind.references).toMatchObject({
+    expect(modelTaskRequestedInformationKind.references).toMatchObject({
       "core:caused-by": {
         required: true,
         multiple: false,
-        targetKinds: [replyRequestedInformationKind.kind],
       },
       "core:context": { required: true, multiple: false },
       "core:uses-context": { required: true, multiple: true },
     });
     for (const definition of [
-      llmCompletedInformationKind,
-      llmFailedInformationKind,
+      modelTaskCompletedInformationKind,
+      modelTaskFailedInformationKind,
+      modelTaskCancelledInformationKind,
     ]) {
       expect(definition.references).toMatchObject({
         "core:caused-by": {
           required: true,
           multiple: false,
-          targetKinds: [llmRequestedInformationKind.kind],
+          targetKinds: [modelTaskRequestedInformationKind.kind],
         },
         "core:status-of": {
           required: true,
           multiple: false,
-          targetKinds: [llmRequestedInformationKind.kind],
+          targetKinds: [modelTaskRequestedInformationKind.kind],
         },
         "core:context": { required: true, multiple: false },
       });
