@@ -5,6 +5,8 @@
  * 输入输出与副作用：使用内存 fake Core 记录调用；校验失败必须在任何持久化操作前抛出。
  */
 import { describe, expect, it, vi } from "vitest";
+import { defineInformationModule } from "@kaguya/sdk";
+import { z } from "@kaguya/schema";
 
 import {
   OneShotScheduleClient,
@@ -77,5 +79,24 @@ describe("OneShotScheduleClient", () => {
     await client.finish({ scheduleInformationId: "schedule-2", status: "fired" });
     expect(core.replaceOneShot).toHaveBeenCalledWith(expect.objectContaining({ dueAt: request.dueAt, previousScheduleInformationId: "schedule-1" }));
     expect(core.finishOneShot).toHaveBeenCalledWith({ scheduleInformationId: "schedule-2", status: "fired" });
+  });
+
+  it("registers the recursive requested kind in an information module", () => {
+    expect(() => defineInformationModule({
+      manifest: {
+        protocolVersion: 1,
+        definitionId: "test.scheduler",
+        moduleVersion: "1.0.0",
+        displayName: "Scheduler test",
+        settingsSchema: z.object({}).strict(),
+        consumes: [],
+        produces: [oneShotRequestedInformationKind],
+        selectors: [],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
+      },
+      create: () => ({ subscriptions: [], provisions: [] }),
+    })).not.toThrow();
   });
 });

@@ -54,6 +54,26 @@ pnpm --filter @kaguya/scheduler typecheck
 
 通过，返回码 0。
 
+## 第三轮 review 修复
+
+- SDK `defineInformationKind`/module registration 增加递归 `z.lazy` JSON schema 的 cycle guard 与 representative traversal；requested kind 现在直接注册真实递归 schema，不再使用 placeholder 替换。
+- 新增 module manifest registration 回归测试，确认 recursive requested kind 可被 `defineInformationModule` 接受；保留深层 JSON 与非 JSON 拒绝测试。
+
+验证：
+
+```text
+pnpm exec vitest run packages/sdk/src/information-kind.test.ts packages/scheduler/src/client.test.ts --maxWorkers=1
+```
+
+2 个测试文件、12 个测试通过。
+
+```text
+pnpm --filter @kaguya/sdk build
+pnpm --filter @kaguya/scheduler typecheck
+```
+
+均通过。
+
 ```text
 rg -n 'ManualTrigger|IntervalTrigger|CronTrigger|interface Trigger' packages apps
 ```
