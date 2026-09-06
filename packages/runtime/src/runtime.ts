@@ -452,6 +452,15 @@ export class KaguyaRuntime implements InformationIngress {
             platformMessageId: input.platformMessageId,
             destination: input.target,
             senderId: input.sender.userId,
+            sender: {
+              userId: input.sender.userId,
+              ...(input.sender.nickname ? { nickname: input.sender.nickname } : {}),
+              ...(input.sender.card ? { card: input.sender.card } : {}),
+              ...(input.selfId ? { isSelf: input.sender.userId === input.selfId } : {}),
+            },
+            ...(input.selfId ? { selfId: input.selfId } : {}),
+            mentions: [...input.mentions],
+            ...(input.replyTo ? { replyTo: { ...input.replyTo } } : {}),
           },
         },
         references: [

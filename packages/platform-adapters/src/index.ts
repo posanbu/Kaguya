@@ -12,6 +12,7 @@ export type {
   InformationIngress,
   PlatformDeliveryReceipt,
   PlatformInboundMessage,
+  PlatformMessageReplyTo,
   PlatformMessageMention,
   PlatformMessageSender,
   PlatformMessageTarget,

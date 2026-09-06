@@ -102,6 +102,7 @@ export function normalizeOneBotMessageEvent(
         : new Date(event.time * 1000).toISOString(),
     text,
     mentions: normalizedMessage.mentions,
+    ...(normalizedMessage.replyTo ? { replyTo: normalizedMessage.replyTo } : {}),
     target,
     sender: senderFor(event.sender, userId),
     raw: input as Record<string, unknown>,
@@ -160,13 +161,16 @@ function normalizeMessage(
 ): {
   readonly text: string;
   readonly mentions: readonly PlatformMessageMention[];
+  readonly replyTo?: { readonly platformMessageId: string };
 } {
   const mentions: PlatformMessageMention[] = [];
+  const reply = typeof message === "string" ? undefined : message.find((segment) => segment.type === "reply");
+  const replyTo = reply === undefined ? undefined : normalizeOptionalText(reply.data?.id);
   const text =
     typeof message === "string"
       ? normalizeStringMessage(message, mentions)
       : message.map((segment) => segmentToText(segment, mentions)).join("");
-  return { text, mentions };
+  return { text, mentions, ...(replyTo ? { replyTo: { platformMessageId: replyTo } } : {}) };
 }
 
 function segmentToText(

@@ -10,6 +10,7 @@ export {
   alwaysReplyFilterModule,
   alwaysReplyFilterSettingsSchema,
 } from "./always-reply-filter.js";
+export { identityModule } from "./identity.js";
 export {
   createLlmReplyModule,
   replyTaskOutputSchema,
@@ -51,6 +52,14 @@ export {
   personFactExtractedPayloadSchema,
   replyRequestedInformationKind,
   replyRequestedInformationPayloadSchema,
+  chatScopeEntityInformationKind,
+  chatScopeBindingInformationKind,
+  platformAccountEntityInformationKind,
+  platformAccountBindingInformationKind,
+  personEntityInformationKind,
+  personObservedInformationKind,
+  personResolutionInformationKind,
+  personContextCompletedInformationKind,
   type PersonFactCandidateInformationPayload,
   type PersonFactExtractedPayload,
   type ReplyRequestedInformationPayload,

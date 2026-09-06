@@ -688,6 +688,10 @@ describe("KaguyaRuntime", () => {
           "core.model.task.completed",
           "core.message.assistant.text",
           "core.delivery.requested",
+          "agent.chat.scope.entity",
+          "agent.chat.scope.binding",
+          "agent.person.resolution",
+          "agent.person.context.completed",
           "core.delivery.delivered",
         ]),
       );

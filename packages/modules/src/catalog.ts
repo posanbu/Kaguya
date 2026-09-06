@@ -11,6 +11,7 @@ import {
   type InformationModuleActivation,
 } from "@kaguya/sdk";
 import { alwaysReplyFilterModule } from "./always-reply-filter.js";
+import { identityModule } from "./identity.js";
 import {
   createLlmReplyModule,
   type CreateLlmReplyModuleOptions,
@@ -21,6 +22,7 @@ export function createFirstPartyModuleCatalog<
 >(options: CreateLlmReplyModuleOptions<P>) {
   return defineInformationModuleCatalog(
     alwaysReplyFilterModule,
+    identityModule,
     createLlmReplyModule(options),
   );
 }
@@ -38,5 +40,10 @@ export const firstPartyModuleActivations: readonly InformationModuleActivation[]
         modelTier: "heavy",
         outbound: Object.freeze({ mode: "source", messageKind: "reply" }),
       }),
+    }),
+    Object.freeze({
+      instanceId: "identity.default",
+      definitionId: "core.identity.normalize",
+      settings: Object.freeze({}),
     }),
   ]);

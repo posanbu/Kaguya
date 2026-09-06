@@ -42,7 +42,7 @@ export const alwaysReplyFilterModule = defineInformationModule({
             atom.informationId,
             replyRequestedInformationKind,
             {
-              payload: atom.payload,
+              payload: atom.payload as any,
             },
           );
         },
