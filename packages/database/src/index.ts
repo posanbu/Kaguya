@@ -24,6 +24,7 @@ export {
   InformationLogProjectionRunner,
   type InformationAtomLogSink,
   type InformationLogProjectionFailure,
+  type InformationLogProjectionBatchResult,
   type InformationLogProjectionRunnerOptions,
 } from "./information-log-projection.js";
 

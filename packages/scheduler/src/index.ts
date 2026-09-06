@@ -2,6 +2,8 @@ export interface Trigger<TPayload> {
   start(handler: (payload: TPayload) => Promise<void>): () => void;
 }
 
+export * from "./cadence.js";
+
 export interface IntervalTimerApi {
   setInterval(
     handler: () => void,

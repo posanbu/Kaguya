@@ -465,6 +465,13 @@ export class InformationCore {
     return this.store.getMany(informationIds);
   }
 
+  async find(
+    query: InformationFindQuery,
+  ): Promise<readonly DeepReadonly<InformationAtom>[]> {
+    this.assertState("started");
+    return this.store.find(query);
+  }
+
   async select(
     selector: InformationSelectorDefinition,
     sourceInformationId: InformationId,

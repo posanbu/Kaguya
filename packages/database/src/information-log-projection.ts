@@ -18,6 +18,12 @@ export interface InformationLogProjectionFailure {
   readonly errorType: "atom_missing" | "sink_failed" | "outbox_failed";
 }
 
+export interface InformationLogProjectionBatchResult {
+  readonly pending: number;
+  readonly processed: number;
+  readonly failed: number;
+}
+
 export interface InformationLogProjectionRunnerOptions {
   readonly repository: InformationRepository;
   readonly sink: InformationAtomLogSink;
@@ -54,6 +60,15 @@ export class InformationLogProjectionRunner {
     await this.runSharedBatch();
   }
 
+  async projectPendingBatch(): Promise<InformationLogProjectionBatchResult> {
+    const result = await this.runSharedBatch();
+    return {
+      pending: result.pendingCount,
+      processed: result.processedCount,
+      failed: result.failedCount,
+    };
+  }
+
   drainPending(): Promise<void> {
     if (this.#drainPromise !== undefined) return this.#drainPromise;
     this.#drainPromise = (async () => {
@@ -82,6 +97,7 @@ export class InformationLogProjectionRunner {
       this.#batchSize,
     );
     let failedCount = 0;
+    let processedCount = 0;
     for (const job of pending) {
       try {
         const atom = await this.#repository.get(job.informationId);
@@ -99,6 +115,7 @@ export class InformationLogProjectionRunner {
         }
         await this.#sink(atom as InformationAtom);
         await this.#repository.markLogProjectionDelivered(job.informationId);
+        processedCount += 1;
       } catch {
         try {
           await this.#repository.recordLogProjectionFailure(
@@ -120,7 +137,7 @@ export class InformationLogProjectionRunner {
         failedCount += 1;
       }
     }
-    return { pendingCount: pending.length, failedCount };
+    return { pendingCount: pending.length, processedCount, failedCount };
   }
 
   private async report(
@@ -136,5 +153,6 @@ export class InformationLogProjectionRunner {
 
 interface ProjectionBatchResult {
   readonly pendingCount: number;
+  readonly processedCount: number;
   readonly failedCount: number;
 }

@@ -32,6 +32,9 @@
       "path": "../platform-adapters"
     },
     {
+      "path": "../scheduler"
+    },
+    {
       "path": "../database"
     }
   ]
