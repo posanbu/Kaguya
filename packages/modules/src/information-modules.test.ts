@@ -862,7 +862,7 @@ describe("createLlmReplyModule", () => {
 
   it("declares each direct causal edge and the shared context requirement", () => {
     expect(replyRequestedInformationKind.references).toMatchObject({
-      "core:caused-by": { targetKinds: [inboundTextInformationKind.kind] },
+      "core:caused-by": { targetKinds: [inboundTextInformationKind.kind, "agent.speech.decision"] },
       "core:context": { targetKinds: ["core.runtime.context"] },
     });
     expect(assistantTextInformationKind.references).toMatchObject({
