@@ -488,10 +488,10 @@ export class KaguyaRuntime implements InformationIngress {
     const starting =
       this.#state === "starting" ? this.#startPromise : undefined;
     this.#state = "closing";
-    // create/start 可以正在等待 activation signal；必须在等待启动任务之前传播取消。
-    void this.#oneShotScheduler?.stop().catch(() => undefined);
-    void this.#moduleHost?.stop().catch(() => undefined);
     this.#closePromise = (async () => {
+      // scheduler 必须先停止，随后再让 ModuleHost abort 正在等待的启动或 handler。
+      await this.#oneShotScheduler?.stop().catch(() => undefined);
+      await this.#moduleHost?.stop().catch(() => undefined);
       await starting?.catch(() => undefined);
       await drainRuntimeOperations(
         [...this.#inFlight],
