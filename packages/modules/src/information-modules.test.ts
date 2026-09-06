@@ -880,6 +880,29 @@ describe("createLlmReplyModule", () => {
         relation: "core:caused-by",
         informationId: assistant?.informationId,
       });
+      // A durable replay of the same turn context must return the existing
+      // speech terminal and leave the downstream reply DAG unchanged.
+      const replayedDecision = await core.commitTerminal(
+        "core.speech.decision",
+        decision!.payload.candidateInformationId,
+        speechDecisionInformationKind,
+        {
+          occurredAt: decision!.occurredAt,
+          source: decision!.source,
+          payload: decision!.payload,
+          references: decision!.references,
+        },
+      );
+      expect(replayedDecision.informationId).toBe(decision!.informationId);
+      const replayGraph = await ledger.query({
+        informationId: context.informationId,
+      });
+      expect(
+        replayGraph.filter(({ kind }) => kind === speechDecisionInformationKind.kind),
+      ).toHaveLength(1);
+      expect(
+        replayGraph.filter(({ kind }) => kind === replyRequestedInformationKind.kind),
+      ).toHaveLength(1);
       for (const atom of [inbound, reply, completed, assistant, delivery]) {
         expect(atom?.references).toContainEqual({
           relation: "core:context",

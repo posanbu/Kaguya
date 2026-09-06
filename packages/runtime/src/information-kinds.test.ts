@@ -121,6 +121,9 @@ describe("runtime information kinds", () => {
       "agent.person.observed",
       "agent.person.resolution",
       "agent.person.context.completed",
+      "agent.turn.context.completed",
+      "agent.speech.decision",
+      "agent.wait.requested",
       "core.delivery.delivered",
       "core.delivery.failed",
     ]);

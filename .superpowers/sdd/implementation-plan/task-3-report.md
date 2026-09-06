@@ -9,7 +9,8 @@ Runtime fixtures that exercise model capability approval now activate the reply 
 - `pnpm typecheck` — passed.
 - `pnpm vitest run apps/demo/src/index.test.ts packages/runtime/src/runtime.test.ts` — 2 files passed, 27 tests passed.
 - Earlier focused run including `apps/server/src/server-composition.test.ts` — passed for Server (16 tests); Demo and Runtime passed after expectation updates.
+- `pnpm vitest run packages/modules/src/information-modules.test.ts` — 13 tests passed, including durable terminal replay returning the original speech decision and preserving one reply.
 
 ## Concerns
 
-The complete `pnpm test` run is lengthy in this worktree; focused Demo, Server, and Runtime coverage was used after the speech DAG updates. Existing module-level speech tests continue to cover speak, wait, silent, replay/idempotency, and hard-gate behavior.
+The complete `pnpm test` run was attempted. It first exposed the same built-in kind expectation regression; that expectation is now updated. The run was lengthy and was stopped before a clean completion, so focused suites provide the current verification evidence.
