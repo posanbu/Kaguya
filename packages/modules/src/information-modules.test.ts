@@ -2,7 +2,8 @@
  * 功能概述：本文件验证信息模块以显式 kind 串接入站、回复、通用 Model Task 完成、assistant 和投递阶段，
  * 不再以旧事件、target instance 或成功 decision 驱动下一步。
  * 主要职责：过滤器用例验证通过时只注册回复请求、拒绝 fixture 只注册拒绝事实；回复用例
- * 验证三个订阅分别承担回复执行、Model Task 完成到 assistant、assistant 到投递的直接因果阶段。
+ * 验证三个订阅分别承担回复执行、Model Task 完成到 assistant、assistant 到投递的直接因果阶段；
+ * completion 仅能跨同 definition 的 instance 共享，其他 definition 的伪造终态不会派生业务输出。
  * 代码库关系：覆盖最终 `always-reply-filter.ts`、`llm-reply.ts` 和
  * `information-kinds.ts`；engine `ModuleHost` 为每一次 register 自动补齐直接的
  * `core:caused-by` 与继承的 `core:context`，因此模块 handler 不伪造这些保留引用。
@@ -1113,6 +1114,47 @@ describe("createLlmReplyModule", () => {
       );
       expect(registrations).toEqual([]);
     }
+  });
+
+  it("does not derive assistant or delivery from another definition's completed task", async () => {
+    const definition = defineReplyModule({
+      modelTaskCapability,
+      modelTaskCompletedInformationKind,
+    });
+    const instance = await createInstance(definition, {
+      instanceId: "reply-1",
+      settings: {
+        modelTier: "heavy",
+        outbound: { mode: "source", messageKind: "reply" },
+      },
+    });
+    const completed = completedAtom();
+    const registrations: Registration[] = [];
+
+    const completionContext = handlerContext(
+      completed,
+      registrations,
+      assistantAtom(),
+      "reply-1",
+      [replyAtom()],
+    );
+    const registerOnce = vi.spyOn(completionContext, "registerOnce");
+    await instance.subscriptions[1]!.handle(
+      {
+        ...completed,
+        payload: {
+          ...completed.payload,
+          activation: {
+            instanceId: "other-reply-instance",
+            definitionId: "other.reply.definition",
+          },
+        },
+      },
+      completionContext,
+    );
+
+    expect(registerOnce).not.toHaveBeenCalled();
+    expect(registrations).toEqual([]);
   });
 
   it("strictly rejects profile and reply-target settings", () => {
