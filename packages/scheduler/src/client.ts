@@ -7,7 +7,14 @@
  */
 import { informationIdSchema, informationReferenceSchema, jsonObjectSchema, z } from "@kaguya/schema";
 import type { OneShotScheduleCorePort, OneShotScheduleRequest, OneShotScheduleReplacement, OneShotTerminalRequest } from "./contracts.js";
-export function normalizeDueAt(value: string): string { if (!/(?:Z|[+-]\d{2}:\d{2})$/u.test(value)) throw new Error("one-shot schedule requires an absolute dueAt"); const epoch = Date.parse(value); if (!Number.isFinite(epoch)) throw new Error("invalid one-shot dueAt"); return new Date(epoch).toISOString(); }
+export function normalizeDueAt(value: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u.test(value)) {
+    throw new Error("one-shot schedule requires an absolute dueAt");
+  }
+  const epoch = Date.parse(value);
+  if (!Number.isFinite(epoch)) throw new Error("invalid one-shot dueAt");
+  return new Date(epoch).toISOString();
+}
 const activationSchema = z.object({ instanceId: z.string().trim().min(1), definitionId: z.string().trim().min(1) }).strict();
 const scheduleSchema = z.object({ operationKey: z.string().trim().min(1), sourceInformationId: informationIdSchema, dueAt: z.string(), input: jsonObjectSchema, activation: activationSchema, references: z.array(informationReferenceSchema).readonly().optional() }).strict();
 const replacementSchema = scheduleSchema.extend({ previousScheduleInformationId: informationIdSchema }).strict();

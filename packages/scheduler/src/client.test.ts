@@ -8,14 +8,16 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   OneShotScheduleClient,
+  normalizeDueAt,
   oneShotScheduleCapability,
+  oneShotRequestedInformationKind,
 } from "./index.js";
 
-const request = {
+const request: any = {
   operationKey: "reminder:1",
   sourceInformationId: "info-1",
   dueAt: "2026-09-06T12:00:00.000Z",
-  input: { text: "hello" },
+  input: { text: "hello", nested: { values: [1, { ok: true }] } },
   activation: { instanceId: "instance-1", definitionId: "module-1" },
 } as const;
 
@@ -31,5 +33,35 @@ describe("OneShotScheduleClient", () => {
       client.schedule({ ...request, dueAt: "2026-09-06T12:00:00" }),
     ).rejects.toThrow(/absolute dueAt/);
     expect(core.scheduleOneShot).not.toHaveBeenCalled();
+  });
+
+  it("normalizes only strict ISO 8601 deadlines", () => {
+    expect(normalizeDueAt("2026-09-06T12:00:00+08:00")).toBe("2026-09-06T04:00:00.000Z");
+    for (const value of ["09/06/2026 12:00:00+08:00", "2026-09-06 12:00:00+08:00", "2026-09-06T12:00:00"]) {
+      expect(() => normalizeDueAt(value)).toThrow(/absolute dueAt/);
+    }
+  });
+
+  it("accepts nested opaque JSON and forwards replacement and finish", async () => {
+    expect(oneShotRequestedInformationKind.references).toMatchObject({
+      "core:caused-by": { required: true, multiple: false },
+      "core:replaces": { required: false, multiple: false },
+    });
+    expect(oneShotRequestedInformationKind.payloadSchema.parse({
+      operationKey: request.operationKey,
+      dueAt: request.dueAt,
+      input: request.input,
+      activation: request.activation,
+    }).input).toEqual(request.input);
+    const core = {
+      scheduleOneShot: vi.fn().mockResolvedValue({ scheduleInformationId: "schedule-1", created: true }),
+      replaceOneShot: vi.fn().mockResolvedValue({ scheduleInformationId: "schedule-2", created: true, previousOutcome: "superseded", previousTerminalInformationId: "terminal-1" }),
+      finishOneShot: vi.fn().mockResolvedValue({ scheduleInformationId: "schedule-2", terminalInformationId: "terminal-2", status: "fired", created: true }),
+    };
+    const client = new OneShotScheduleClient(core);
+    await client.replace({ ...request, previousScheduleInformationId: "schedule-1", references: [{ relation: "core:caused-by", informationId: "info-1" }] });
+    await client.finish({ scheduleInformationId: "schedule-2", status: "fired" });
+    expect(core.replaceOneShot).toHaveBeenCalledWith(expect.objectContaining({ dueAt: request.dueAt, previousScheduleInformationId: "schedule-1" }));
+    expect(core.finishOneShot).toHaveBeenCalledWith({ scheduleInformationId: "schedule-2", status: "fired" });
   });
 });

@@ -48,3 +48,23 @@ rg -n 'ManualTrigger|IntervalTrigger|CronTrigger|interface Trigger' packages app
 - requested 使用 `core:caused-by`，replacement 可带单条 `core:replaces`；due 与 terminal kinds 使用单条 `core:status-of` 指向 requested。
 - SDK 的 `defineInformationKind` 当前拒绝递归 lazy/transform payload schema，因此 requested 的 opaque input schema 使用可验证的严格 JSON 对象记录（字符串键及 JSON primitive 值）；client 入口仍使用 schema 的 JSON object 校验。
 - 本任务未改动 Model Task、Runtime 或 apps 文件。
+
+## Review 修复
+
+- requested input schema 增加嵌套对象与数组的严格 JSON 分支，并新增 kind payload parse 测试。
+- `normalizeDueAt` 现在要求完整 ISO 8601 date-time（`T` 分隔及 `Z`/数值 offset），新增非 ISO 日期拒绝测试。
+- 新增 replacement、finish、capability forwarding 与 reference rule 断言。
+
+修复后命令：
+
+```text
+pnpm exec vitest run packages/scheduler/src/client.test.ts --maxWorkers=1
+```
+
+结果：通过，1 个测试文件、3 个测试通过。
+
+```text
+pnpm --filter @kaguya/scheduler typecheck
+```
+
+结果：通过，`tsc -b --pretty false` 返回 0。

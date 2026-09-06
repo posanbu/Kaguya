@@ -9,7 +9,15 @@ import { informationIdSchema, z } from "@kaguya/schema";
 import { defineInformationKind } from "@kaguya/sdk";
 
 const activationSchema = z.object({ instanceId: z.string().trim().min(1), definitionId: z.string().trim().min(1) }).strict();
-const opaqueJsonObjectSchema = z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]));
+const opaqueJsonPrimitiveSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
+const opaqueJsonArrayItemSchema = z.union([opaqueJsonPrimitiveSchema, z.record(z.string(), opaqueJsonPrimitiveSchema)]);
+const opaqueJsonNestedObjectSchema = z.record(z.string(), z.union([opaqueJsonPrimitiveSchema, z.array(opaqueJsonArrayItemSchema)]));
+const opaqueJsonObjectValueSchema = z.union([
+  opaqueJsonPrimitiveSchema,
+  opaqueJsonNestedObjectSchema,
+  z.array(opaqueJsonArrayItemSchema),
+]);
+const opaqueJsonObjectSchema = z.record(z.string(), opaqueJsonObjectValueSchema);
 const requestedPayloadSchema = z.object({ operationKey: z.string().trim().min(1), dueAt: z.iso.datetime({ offset: true }), input: opaqueJsonObjectSchema, activation: activationSchema }).strict();
 const duePayloadSchema = z.object({ scheduleInformationId: informationIdSchema, dueAt: z.iso.datetime({ offset: true }), deliveredAt: z.iso.datetime({ offset: true }) }).strict();
 const terminalReference = { "core:status-of": { required: true, multiple: false, targetKinds: ["core.schedule.one-shot.requested"] } } as const;
