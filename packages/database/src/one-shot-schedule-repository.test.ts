@@ -282,7 +282,7 @@ describe("one-shot schedule projection (PGlite)", () => {
     );
     expect(arm.rows[0]).toEqual({
       state: "terminal",
-      due_information_id: null,
+      due_information_id: "due-after-due",
       terminal_information_id: "due-after-fired",
     });
   });

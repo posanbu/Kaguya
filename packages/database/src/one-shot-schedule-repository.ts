@@ -171,6 +171,13 @@ export class OneShotScheduleRepository
            WHERE schedule_information_id = $1`,
           [input.scheduleInformationId, result.atom.informationId],
         );
+      } else if (arm.state === "terminal") {
+        await tx.query(
+          `UPDATE information_schedule_arms
+           SET due_information_id = COALESCE(due_information_id, $2)
+           WHERE schedule_information_id = $1`,
+          [input.scheduleInformationId, result.atom.informationId],
+        );
       }
       return {
         scheduleInformationId: input.scheduleInformationId,
