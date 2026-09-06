@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decideSpeechAction, scoreTurnContext, speechDecisionSettingsSchema, speechDecisionModule } from "./speech-decision.js";
+import { computeWaitDelayMs, decideSpeechAction, scoreTurnContext, speechDecisionSettingsSchema, speechDecisionModule } from "./speech-decision.js";
 
 const context = {
   candidateInformationId: "candidate-1",
@@ -19,9 +19,10 @@ describe("speech decision module", () => {
   });
 
   it("waits when score is actionable and a recheck budget remains", () => {
-    const input = { ...context, directness: 0, contentNeed: 1, recheckAt: "2030-01-01T00:00:00.000Z" };
+    const input = { ...context, directness: 0, contentNeed: 1, asOf: "2029-12-31T23:59:00.000Z", recheckAt: "2030-01-01T00:00:00.000Z" };
     expect(scoreTurnContext(input).score).toBeGreaterThanOrEqual(0.35);
     expect(decideSpeechAction(input)).toEqual({ action: "wait", reasonCodes: [] });
+    expect(computeWaitDelayMs(input.recheckAt, input.asOf)).toBe(60_000);
   });
 
   it("silently drops low score and hard-gated candidates", () => {

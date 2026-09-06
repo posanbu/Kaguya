@@ -23,6 +23,11 @@ export type SpeechDecisionSettings = z.infer<typeof speechDecisionSettingsSchema
 
 export type SpeechAction = "speak" | "wait" | "silent";
 
+export function computeWaitDelayMs(recheckAt: string, asOf: string): number {
+  const delay = Date.parse(recheckAt) - Date.parse(asOf);
+  return Number.isFinite(delay) ? Math.max(0, delay) : 0;
+}
+
 export function scoreTurnContext(input: TurnContextCompletedPayload): {
   score: number;
   components: Record<string, number>;
@@ -94,7 +99,7 @@ export const speechDecisionModule = defineInformationModule({
         action, status: "decision", text: input.text, source: input.source, candidateInformationId: input.candidateInformationId, turnContextInformationId: atom.informationId,
         score: scored.score, thresholds: { speak: settings.speakThreshold, wait: settings.waitThreshold }, components: scored.components,
         reasonCodes, missingInputs: scored.missingInputs, policyDigest: settings.policyDigest, settingsDigest: settings.settingsDigest,
-        ...(input.recheckAt && action === "wait" ? { recheckAt: input.recheckAt, dueAt: input.recheckAt, delayMs: Math.max(0, Date.parse(input.recheckAt) - context.now().getTime()), wakePolicy: "recheckAt" as const } : {}),
+        ...(input.recheckAt && action === "wait" ? { recheckAt: input.recheckAt, dueAt: input.recheckAt, delayMs: computeWaitDelayMs(input.recheckAt, input.asOf ?? atom.occurredAt), wakePolicy: "recheckAt" as const } : {}),
         attempt: input.attempt, totalWaitBudget: input.totalWaitBudget,
       } as any;
       const decision = await context.commitTerminal("core.speech.decision", input.candidateInformationId, speechDecisionInformationKind, { payload, references: [{ relation: "core:uses-context", informationId: atom.informationId }] });

@@ -27,6 +27,7 @@ export const turnContextModule = defineInformationModule({
       await context.registerOnce("core.turn.context.completed", atom.informationId, turnContextCompletedInformationKind, {
         payload: Object.freeze({
           candidateInformationId: atom.informationId,
+          asOf: atom.occurredAt,
           text: input.text,
           source,
           directness,

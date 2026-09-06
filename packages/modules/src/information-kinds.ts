@@ -243,6 +243,7 @@ export const deliveryRequestedInformationKind = defineInformationKind({
 
 const turnContextPayloadSchema = z.object({
   candidateInformationId: nonBlankString,
+  asOf: nonBlankString.optional(),
   text: z.string(),
   source: messageSourceSchema,
   directness: z.number().min(0).max(1),

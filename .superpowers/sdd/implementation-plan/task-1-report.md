@@ -17,3 +17,9 @@ Implemented deterministic turn context and speech decision behavior.
 ## Concerns
 
 Memory and association are currently modeled as optional string-reference arrays and intentionally contribute zero to timing scores until a later module defines their semantics.
+
+## Reviewer fix
+
+Added immutable `asOf` (derived from the inbound atom's `occurredAt`) and now compute wait delay from `recheckAt - asOf`, with a deterministic invalid-date fallback of zero. Regression coverage asserts a one-minute delay independent of wall-clock time.
+
+- `pnpm vitest run packages/modules/src/speech-decision.test.ts packages/modules/src/information-modules.test.ts && pnpm --filter @kaguya/modules typecheck` — 2 files passed, 19 tests passed; typecheck passed.
