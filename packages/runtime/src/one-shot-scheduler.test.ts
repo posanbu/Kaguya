@@ -13,13 +13,13 @@ import {
 import { createRepeatingDeterministicModel } from "@kaguya/llm/testing";
 import { modelTaskCapability } from "./model-task.js";
 import { modelTaskCompletedInformationKind } from "./information-kinds.js";
-import { oneShotScheduleCapability, type OneShotScheduleCapability } from "@kaguya/scheduler";
+import {
+  oneShotScheduleCapability,
+  type OneShotScheduleCapability,
+} from "@kaguya/scheduler";
 import { afterEach, describe, expect, it } from "vitest";
 
-import {
-  KaguyaRuntime,
-  RuntimeUnavailableError,
-} from "./index.js";
+import { KaguyaRuntime, RuntimeUnavailableError } from "./index.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 
@@ -56,7 +56,9 @@ describe("KaguyaRuntime one-shot scheduler lifecycle", () => {
       informationIdGenerator: () => `runtime-scheduler-${++id}`,
       capabilities: ({ oneShotSchedule }) => {
         capability = oneShotSchedule;
-        return [{ capability: oneShotScheduleCapability, value: oneShotSchedule }];
+        return [
+          { capability: oneShotScheduleCapability, value: oneShotSchedule },
+        ];
       },
     });
     cleanups.push(async () => {
@@ -80,12 +82,15 @@ describe("KaguyaRuntime one-shot scheduler lifecycle", () => {
       sourceInformationId: source.rootInformationId,
       dueAt: "2099-01-01T00:00:00.000Z",
       input: { value: { nested: [1, true, null] } },
-      activation: { instanceId: "test.schedule", definitionId: "test.schedule.synthetic" },
+      activation: {
+        instanceId: "test.schedule",
+        definitionId: "test.schedule.synthetic",
+      },
     });
     expect(receipt.created).toBe(true);
-    expect((await database.information.get(receipt.scheduleInformationId))?.kind).toBe(
-      "core.schedule.one-shot.requested",
-    );
+    expect(
+      (await database.information.get(receipt.scheduleInformationId))?.kind,
+    ).toBe("core.schedule.one-shot.requested");
   });
 
   it("does not accept ingress until overdue schedule recovery completes", async () => {
@@ -119,17 +124,19 @@ describe("KaguyaRuntime one-shot scheduler lifecycle", () => {
     cleanups.push(() => runtime.close());
     const starting = runtime.start();
     await Promise.resolve();
-    await expect(runtime.submit({
-      adapterId: "web.ui.main",
-      platform: "web",
-      platformMessageId: "request-1",
-      occurredAt: "2026-09-06T12:00:00.000Z",
-      text: "hello",
-      mentions: [],
-      target: { kind: "web" },
-      sender: { userId: "web" },
-      raw: {},
-    })).rejects.toThrow(RuntimeUnavailableError);
+    await expect(
+      runtime.submit({
+        adapterId: "web.ui.main",
+        platform: "web",
+        platformMessageId: "request-1",
+        occurredAt: "2026-09-06T12:00:00.000Z",
+        text: "hello",
+        mentions: [],
+        target: { kind: "web" },
+        sender: { userId: "web" },
+        raw: {},
+      }),
+    ).rejects.toThrow(RuntimeUnavailableError);
     recovery.resolve();
     await starting;
   });
