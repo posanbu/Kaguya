@@ -42,6 +42,13 @@ describe("OneShotScheduleClient", () => {
     }
   });
 
+  it("forwards a valid schedule with normalized UTC dueAt", async () => {
+    const core = { scheduleOneShot: vi.fn().mockResolvedValue({ scheduleInformationId: "schedule-1", created: true }) };
+    const client = new OneShotScheduleClient(core as never);
+    await client.schedule({ ...request, dueAt: "2026-09-06T12:00:00+08:00" });
+    expect(core.scheduleOneShot).toHaveBeenCalledWith(expect.objectContaining({ dueAt: "2026-09-06T04:00:00.000Z" }));
+  });
+
   it("accepts nested opaque JSON and forwards replacement and finish", async () => {
     expect(oneShotRequestedInformationKind.references).toMatchObject({
       "core:caused-by": { required: true, multiple: false },

@@ -46,7 +46,7 @@ SDK 的 kind-definition 静态检查不支持递归 `z.lazy`，但 durable reque
 pnpm exec vitest run packages/scheduler/src/client.test.ts --maxWorkers=1
 ```
 
-1 个测试文件、3 个测试通过。
+1 个测试文件、4 个测试通过（含 valid schedule 的 offset normalization forwarding）。
 
 ```text
 pnpm --filter @kaguya/scheduler typecheck
