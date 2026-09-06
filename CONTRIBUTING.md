@@ -136,6 +136,8 @@ PostgreSQL 模式迁移位于 `packages/database/src/migrations.ts`，由 `Kaguy
 
 公开 API、Information Kind、模块边界、环境变量、数据库或依赖方向变化时，同一提交更新 README 和相关文档。架构变更更新 `docs/developers/architecture.md`，模块 SDK 变更更新 `docs/developers/information-modules.md`，HTTP/Profile 变更更新 `docs/reference/http-api.md`。文档只陈述当前代码已实现的能力，不把内部设计稿或计划加入公开导航。
 
+配置校验模块的变更必须同时覆盖正常配置、Registry 读取失败、Profile schema 错误、平台适配器参数错误和敏感字段脱敏。测试日志或错误断言不得包含 API key、access token、数据库 URL 或完整 Profile 正文。
+
 提交前从仓库根目录运行：
 
 ```bash

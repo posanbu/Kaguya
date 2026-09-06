@@ -166,3 +166,34 @@ directly; it does not attempt a fallback provider or model.
 
 If a real secret enters Git, revoke or rotate it first. Then assess exposure and
 remove it from repository history where required.
+
+## Startup validation
+
+Use `validateStartupConfiguration({ rootDir })` for a read-only validation pass
+before constructing runtime services. It opens the existing registry, validates
+the selected Profile and its `runtime` settings, requires an enabled non-Web
+platform, and applies adapter-specific checks to NapCat entries. It does not
+bootstrap a missing registry or mutate files.
+
+```ts
+import {
+  StartupConfigurationError,
+  validateStartupConfiguration,
+} from "@kaguya/config";
+
+try {
+  const validated = await validateStartupConfiguration({
+    rootDir: ".data/kaguya-config",
+  });
+  console.log(validated.runtime.port);
+} catch (error) {
+  if (error instanceof StartupConfigurationError) {
+    for (const issue of error.issues) {
+      console.error(issue.code, issue.path, issue.message, issue.hint);
+    }
+  }
+}
+```
+
+Issue messages are intentionally secret-free. Applications should log the
+issue list rather than the Profile object or the original configuration error.

@@ -128,11 +128,33 @@ const pluginConfigInnerSchema = z.strictObject({
 
 export const pluginConfigSchema = guardSchemaInput(pluginConfigInnerSchema);
 
+const runtimeGatewayAllowlistSchema = z.strictObject({
+  platforms: z.array(nonEmptyIdSchema),
+  userIds: z.array(nonEmptyIdSchema),
+  groupIds: z.array(nonEmptyIdSchema),
+});
+
+export const runtimeConfigSchema = z.strictObject({
+  host: z.string().trim().min(1),
+  port: z.int().min(1).max(65_535),
+  gatewayToken: z.string().min(16),
+  databasePath: z.string().trim().min(1),
+  webDistPath: z.string().trim().min(1),
+  corsOrigins: z.array(z.url()),
+  trustProxy: z.union([z.literal(false), z.array(z.string().trim().min(1))]),
+  rateLimitMax: z.int().min(1).max(10_000),
+  rateLimitWindowMs: z.int().min(1_000).max(3_600_000),
+  logLevel: z.enum(["trace", "debug", "info", "warn", "error", "fatal", "silent"]),
+  logFormat: z.enum(["json", "pretty"]),
+  gatewayAllowlist: runtimeGatewayAllowlistSchema,
+});
+
 const userConfigProfileSettingsInnerSchema = z
   .strictObject({
     ai: aiConfigSchema,
     platforms: z.array(platformConfigSchema),
     plugins: z.array(pluginConfigSchema),
+    runtime: runtimeConfigSchema.optional(),
   })
   .superRefine((settings, context) => {
     addDuplicateIdIssues(
@@ -393,6 +415,7 @@ export type ModelTierTarget = z.infer<typeof modelTierTargetSchema>;
 export type UserConfigProfileSettings = z.infer<
   typeof userConfigProfileSettingsSchema
 >;
+export type RuntimeConfig = z.infer<typeof runtimeConfigSchema>;
 export type UserConfigProfileMetadata = z.infer<
   typeof userConfigProfileMetadataSchema
 >;
