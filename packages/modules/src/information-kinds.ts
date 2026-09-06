@@ -1,10 +1,14 @@
 /**
  * 功能概述：本文件声明 modules 包拥有的消息 DAG kind，明确区分入站、过滤通过后的
- * 回复请求、过滤拒绝、Memory、assistant 文本和平台投递请求，替代旧事件与定向回复语义。
+ * 回复请求、过滤拒绝、Memory、person-fact 候选/提取结果、assistant 文本和平台投递请求，
+ * 替代旧事件与定向回复语义。
  * 主要职责：每个 definition 固定 payload 的严格 schema 和直接因果/context 引用规则；
- * `informationModuleKinds` 供 Runtime 在启动 Core 前一次注册同一批 definition。
+ * `personFactCandidateInformationKind` 表示待提取的非 reply 账本来源，
+ * `personFactExtractedInformationKind` 表示模块验证后的业务事实；`informationModuleKinds`
+ * 供 Runtime 在启动 Core 前一次注册同一批 definition。
  * 代码库关系：始终回复过滤器消费入站并产生回复请求；LLM 回复模块消费回复请求、外部
- * 注入的 Model Task completed definition 与 assistant，随后产生后续 kind；Runtime 负责通用
+ * 注入的 Model Task completed definition 与 assistant，person-fact 模块消费候选与通用 completed，
+ * 随后产生各自后续 kind；Runtime 负责通用
  * Model Task 生命周期和投递结果 kind，不能重新定义本文件已经拥有的 literal kind；assistant payload
  * 记录 originating module instance，使全量广播后的下一阶段只由原实例派生。
  * 输入输出与副作用：由 `defineInformationKind` 返回的 definition 为冻结的纯定义，无 I/O；
@@ -119,6 +123,63 @@ export const coreMemoryTextInformationKind = defineInformationKind({
   log: { enabled: false },
 });
 
+export const personFactCandidateInformationPayloadSchema = z
+  .object({
+    personId: nonBlankString,
+    name: nonBlankString,
+    text: nonBlankString,
+  })
+  .strict();
+export type PersonFactCandidateInformationPayload = z.infer<
+  typeof personFactCandidateInformationPayloadSchema
+>;
+
+export const personFactCandidateInformationKind = defineInformationKind({
+  kind: "core.person.fact.candidate",
+  payloadSchema: personFactCandidateInformationPayloadSchema,
+  references: {
+    "core:caused-by": {
+      required: true,
+      multiple: false,
+    },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
+  },
+  log: { enabled: false },
+});
+
+export const personFactExtractedPayloadSchema = z
+  .object({
+    personId: nonBlankString,
+    name: nonBlankString,
+    fact: nonBlankString,
+  })
+  .strict();
+export type PersonFactExtractedPayload = z.infer<
+  typeof personFactExtractedPayloadSchema
+>;
+
+export const personFactExtractedInformationKind = defineInformationKind({
+  kind: "core.person.fact.extracted",
+  payloadSchema: personFactExtractedPayloadSchema,
+  references: {
+    "core:caused-by": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.model.task.completed"],
+    },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
+  },
+  log: { enabled: false },
+});
+
 export const assistantTextInformationKind = defineInformationKind({
   kind: "core.message.assistant.text",
   payloadSchema: z
@@ -173,6 +234,8 @@ export const informationModuleKinds = [
   replyRequestedInformationKind,
   filterDecisionInformationKind,
   coreMemoryTextInformationKind,
+  personFactCandidateInformationKind,
+  personFactExtractedInformationKind,
   assistantTextInformationKind,
   deliveryRequestedInformationKind,
 ] as const satisfies readonly InformationKindDefinition<string, any>[];
