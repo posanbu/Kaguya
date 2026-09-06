@@ -322,7 +322,12 @@ async function setTerminalArm(
 }
 
 function validateDueAt(value: string): void {
-  if (!Number.isFinite(Date.parse(value))) {
+  if (
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u.test(
+      value,
+    ) ||
+    !Number.isFinite(Date.parse(value))
+  ) {
     throw new Error("one-shot schedule requires an absolute dueAt");
   }
 }
