@@ -35,6 +35,14 @@ export type { FileUserConfigManagerOptions } from "./manager.js";
 export { REDACTED_CONFIG_VALUE, redactConfigValue } from "./redact.js";
 export type { RedactedConfigValue } from "./redact.js";
 export {
+  StartupConfigurationError,
+  validateStartupConfiguration,
+} from "./startup-validation.js";
+export type {
+  StartupConfigurationIssue,
+  ValidatedStartupConfiguration,
+} from "./startup-validation.js";
+export {
   readSensitiveJson,
   writeSensitiveJson,
 } from "./secure-files.js";
@@ -48,6 +56,7 @@ export {
   platformConfigSchema,
   pluginConfigSchema,
   profileIdSchema,
+  runtimeConfigSchema,
   userConfigIndexSchema,
   userConfigProfileMetadataSchema,
   userConfigProfileSchema,
@@ -65,4 +74,5 @@ export type {
   UserConfigProfile,
   UserConfigProfileMetadata,
   UserConfigProfileSettings,
+  RuntimeConfig,
 } from "./model.js";
