@@ -225,6 +225,7 @@ export class KaguyaRuntime implements InformationIngress {
   #oneShotScheduler: DurableOneShotScheduler | undefined;
   #oneShotRecoveryPromise: Promise<void> | undefined;
   #oneShotSchedulerReady = false;
+  readonly #oneShotPendingRefresh = new Set<InformationId>();
 
   constructor(private readonly options: KaguyaRuntimeOptions) {
     if (
@@ -375,14 +376,14 @@ export class KaguyaRuntime implements InformationIngress {
           const receipt = await client.schedule(input);
           if (this.#oneShotSchedulerReady) {
             await scheduler.refresh(receipt.scheduleInformationId);
-          }
+          } else this.#oneShotPendingRefresh.add(receipt.scheduleInformationId);
           return receipt;
         },
         replace: async (input) => {
           const receipt = await client.replace(input);
           if (this.#oneShotSchedulerReady) {
             await scheduler.refresh(receipt.scheduleInformationId);
-          }
+          } else this.#oneShotPendingRefresh.add(receipt.scheduleInformationId);
           return receipt;
         },
         finish: (input) => client.finish(input),
@@ -443,6 +444,10 @@ export class KaguyaRuntime implements InformationIngress {
       await scheduler.start();
       await this.#oneShotRecoveryPromise;
       this.#oneShotSchedulerReady = true;
+      for (const scheduleInformationId of this.#oneShotPendingRefresh) {
+        await scheduler.refresh(scheduleInformationId);
+      }
+      this.#oneShotPendingRefresh.clear();
       this.#state = "started";
       this.#runtimeLogger?.info(
         {
@@ -546,6 +551,7 @@ export class KaguyaRuntime implements InformationIngress {
       this.#oneShotScheduler = undefined;
       this.#oneShotRecoveryPromise = undefined;
       this.#oneShotSchedulerReady = false;
+      this.#oneShotPendingRefresh.clear();
       this.#ownsDatabase = false;
       return failures;
     })();
