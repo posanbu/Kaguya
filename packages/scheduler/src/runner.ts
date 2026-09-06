@@ -32,6 +32,7 @@ export class DurableOneShotScheduler {
   readonly #generations = new Map<InformationId, number>();
   #nextGeneration = 0;
   readonly #inFlight = new Set<Promise<unknown>>();
+  #lifecycleGeneration = 0;
   #state: "new" | "starting" | "started" | "stopping" | "stopped" = "new";
   #startPromise?: Promise<void>;
 
@@ -52,6 +53,7 @@ export class DurableOneShotScheduler {
   async stop(): Promise<void> {
     if (this.#state === "stopped") return;
     this.#state = "stopping";
+    this.#lifecycleGeneration += 1;
     for (const timer of this.#timers.values()) this.#clock.clearTimeout(timer.handle);
     this.#timers.clear();
     this.#generations.clear();
@@ -63,22 +65,37 @@ export class DurableOneShotScheduler {
   }
   async refresh(scheduleInformationId: InformationId): Promise<void> {
     if (this.#state !== "started") throw new Error("Scheduler is not started");
+    const lifecycleGeneration = this.#lifecycleGeneration;
     let cursor: InformationId | undefined;
     while (true) {
       const page = await this.#store.listOpen({ ...(cursor ? { after: cursor } : {}), limit: this.#batch });
+      if (this.#state !== "started" || this.#lifecycleGeneration !== lifecycleGeneration) return;
       const arm = page.arms.find((candidate) => candidate.scheduleInformationId === scheduleInformationId);
-      if (arm) { this.arm(arm.scheduleInformationId, arm.dueAt); if (Date.parse(arm.dueAt) <= this.#clock.now().getTime()) await this.fire(arm.scheduleInformationId, this.#timers.get(arm.scheduleInformationId)?.generation ?? 0); return; }
+      if (arm) {
+        if (this.#state !== "started" || this.#lifecycleGeneration !== lifecycleGeneration) return;
+        this.arm(arm.scheduleInformationId, arm.dueAt);
+        if (Date.parse(arm.dueAt) <= this.#clock.now().getTime()) await this.fire(arm.scheduleInformationId, this.#timers.get(arm.scheduleInformationId)?.generation ?? 0);
+        return;
+      }
       if (!page.nextCursor) break;
       cursor = page.nextCursor;
     }
     this.cancel(scheduleInformationId);
   }
   private async recover(): Promise<void> {
+    const lifecycleGeneration = this.#lifecycleGeneration;
     let cursor: InformationId | undefined;
     do {
       const page = await this.#store.listOpen({ ...(cursor ? { after: cursor } : {}), limit: this.#batch });
-      if (this.#state !== "starting") return;
-      for (const arm of page.arms) { this.arm(arm.scheduleInformationId, arm.dueAt); if (Date.parse(arm.dueAt) <= this.#clock.now().getTime()) await this.fire(arm.scheduleInformationId, this.#timers.get(arm.scheduleInformationId)?.generation ?? 0); }
+      if (this.#state !== "starting" || this.#lifecycleGeneration !== lifecycleGeneration) return;
+      for (const arm of page.arms) {
+        if (this.#state !== "starting" || this.#lifecycleGeneration !== lifecycleGeneration) return;
+        this.arm(arm.scheduleInformationId, arm.dueAt);
+        if (Date.parse(arm.dueAt) <= this.#clock.now().getTime()) {
+          await this.fire(arm.scheduleInformationId, this.#timers.get(arm.scheduleInformationId)?.generation ?? 0);
+          if (this.#state !== "starting" || this.#lifecycleGeneration !== lifecycleGeneration) return;
+        }
+      }
       cursor = page.nextCursor;
     } while (cursor !== undefined && this.#state === "starting");
     if (this.#state === "starting") this.#state = "started";

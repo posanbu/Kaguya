@@ -253,4 +253,47 @@ describe("DurableOneShotScheduler", () => {
     expect(emitDue).toHaveBeenCalledWith(expect.objectContaining({ scheduleInformationId: "overdue" }));
     expect(clock.pendingTimerCount()).toBe(1);
   });
+
+  it("does not arm a refresh result that arrives after stop", async () => {
+    const clock = new FakeScheduleClock("2026-09-06T12:00:00.000Z");
+    let resolvePage!: (page: { arms: readonly Arm[] }) => void;
+    const page = new Promise<{ arms: readonly Arm[] }>((resolve) => { resolvePage = resolve; });
+    const emitDue = vi.fn(async () => ({ scheduleInformationId: "refresh", dueInformationId: "due", created: true }));
+    const store = {
+      emitDue,
+      listOpen: vi.fn()
+        .mockResolvedValueOnce({ arms: [] })
+        .mockImplementationOnce(() => page),
+    };
+    const scheduler = new DurableOneShotScheduler({ store: store as any, clock, nextInformationId: idGenerator() });
+    await scheduler.start();
+    const refreshing = scheduler.refresh("refresh" as never);
+    await vi.waitFor(() => expect(store.listOpen).toHaveBeenCalledTimes(2));
+    const stopping = scheduler.stop();
+    resolvePage({ arms: [{ scheduleInformationId: "refresh", dueAt: "2026-09-06T13:00:00.000Z" }] });
+    await refreshing;
+    await stopping;
+    expect(clock.pendingTimerCount()).toBe(0);
+  });
+
+  it("does not arm later startup records after stop interrupts overdue delivery", async () => {
+    const clock = new FakeScheduleClock("2026-09-06T12:00:00.000Z");
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const emitDue = vi.fn(async () => {
+      await pending;
+      return { scheduleInformationId: "overdue", dueInformationId: "due", created: true };
+    });
+    const store = storeFor([
+      { scheduleInformationId: "overdue", dueAt: "2026-09-06T11:59:00.000Z" },
+      { scheduleInformationId: "future", dueAt: "2026-09-06T13:00:00.000Z" },
+    ], emitDue);
+    const scheduler = new DurableOneShotScheduler({ store: store as any, clock, nextInformationId: idGenerator() });
+    const starting = scheduler.start();
+    await vi.waitFor(() => expect(emitDue).toHaveBeenCalledTimes(1));
+    const stopping = scheduler.stop();
+    release();
+    await Promise.all([starting, stopping]);
+    expect(clock.pendingTimerCount()).toBe(0);
+  });
 });
