@@ -14,7 +14,7 @@ Model Task 是一次受宿主权限控制、可审计、可恢复的结构化模
 
 ```ts
 const modelTask = defineModuleCapability<ModelTaskCapability>(
-  "core.model-task",
+  "kaguya:model-task",
   1,
 );
 
@@ -26,7 +26,7 @@ interface ModelTaskCapability {
 }
 ```
 
-`ModelTaskRequest` 至少包含：`taskId`、`taskVersion`、`outputSchema`、稳定 `sourceInformationId`、按 selector 顺序排列的 `contextAtoms`、`compiledPrompt`、宿主批准的 tier/policy、显式 activation provenance，以及可选的执行 signal。调用方用自己的 schema 获得 `TOutput`，但不把 `reply | memory | person-fact` 做成中央联合类型。
+`ModelTaskRequest` 至少包含：`taskId`、`taskVersion`、`outputSchema`、稳定 `sourceInformationId`、按 selector 顺序排列的 `contextAtoms`、`compiledPrompt`、宿主批准的 tier/policy、显式 `ModuleActivationProvenance`，以及可选的执行 signal。模块通过 #76 的 `context.use(modelTaskCapability)` 取得 capability；调用方用自己的 schema 获得 `TOutput`，但不把 `reply | memory | person-fact` 做成中央联合类型。
 
 provider 端只接收已解析的 model handle、modelId、compiled Prompt、task output schema 和 AbortSignal，返回 JSON 输出、规范化 usage 与 duration。provider 适配器不暴露 secret，也不在本层做隐式重试；有界重试只由 #79 durable runner 负责。
 

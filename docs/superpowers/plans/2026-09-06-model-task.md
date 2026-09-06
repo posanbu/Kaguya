@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- #76 的 `defineModuleCapability<T>(id, apiVersion)`、`context.use(token)`、activation provenance 是唯一模块能力入口；不得复制或修改 #76→#79 session 的 SDK/Host 实现。
+- #76 的 `defineModuleCapability<T>(id, apiVersion)`、`context.use(token)`、`ModuleCapabilityImplementation` 和 `ModuleActivationProvenance` 是唯一模块能力入口；Model Task capability ID 固定为 `kaguya:model-task`；不得复制或修改 #76→#79 session 的 SDK/Host 实现。
 - #79 的 `registerOnce(operation, key, definition, input, guard?)` 返回实际赢家；`commitTerminal(group, subjectInformationId, definition, input, guard?)` 原子返回实际赢家；不得使用“查询后普通 register”实现去重或终态。
 - `core.withClaim(claim, signal, run)` 与 `core.executionSignal` 负责 claim fencing；shutdown/lease expiry 不能写业务 cancelled，迟到写入必须被 fencing 拒绝。
 - provider 边界不做隐式 retry；有界 retry 只属于 #79 durable runner，不向调用方承诺 provider side effect exactly-once。
@@ -57,7 +57,7 @@
 - Modify: `packages/runtime/src/index.ts`
 
 **Interfaces:**
-- Consumes: #76 `ModuleCapability` token/value shape, #79 `InformationCore.registerOnce`, `InformationCore.commitTerminal`, `InformationCore.withClaim`, `InformationCore.executionSignal`, `InformationCore.getMany`, and `KaguyaLlmClient.generate<TOutput>` from Task 1.
+- Consumes: #76 `ModuleCapability` token/value shape, `ModuleCapabilityImplementation`, `ModuleActivationProvenance`, #79 `InformationCore.registerOnce`, `InformationCore.commitTerminal`, `InformationCore.withClaim`, `InformationCore.executionSignal`, `InformationCore.getMany`, and `KaguyaLlmClient.generate<TOutput>` from Task 1.
 - Produces: `modelTaskCapability`, `ModelTaskCapability`, `ModelTaskRequest<TOutput>`, `ModelTaskResult<TOutput>`, `ModelTaskCancellation`, and `ModelTaskClient` for Runtime composition and module tests.
 
 - [ ] **Step 1: Write failing tests** for a generic reply-shaped task and a non-reply person-fact-shaped task: same task/source/prompt/policy must reuse requested identity; provenance mismatch and disallowed tier must fail before provider; output schema failure must create failed terminal without exposing output; completed/failed/cancelled must compete in one terminal group; concurrent loser returns the winner.
@@ -79,7 +79,7 @@
 - Modify: `packages/modules/src/index.ts`
 
 **Interfaces:**
-- Consumes: `modelTaskCapability` and `ModelTaskClient` from Task 2; #76 `context.use` and activation provenance.
+- Consumes: `modelTaskCapability` and `ModelTaskClient` from Task 2; #76 `context.use` and `ModuleActivationProvenance`.
 - Produces: Runtime composition that supplies only the host-approved capability; reply module calls the generic capability and receives only a validated terminal result.
 
 - [ ] **Step 1: Write failing integration tests** proving reply obtains capability through `context.use`, does not receive a raw provider/client, uses `taskId: "core.reply.generate"` and a versioned output schema, and still produces assistant/delivery only after a completed winner.
