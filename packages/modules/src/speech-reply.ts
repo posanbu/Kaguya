@@ -6,9 +6,29 @@
  * decision 的直接因果边和 runtime context，本模块显式保留 core:uses-context 指向 turn context。
  * 输入输出与副作用：使用 decision informationId 作为幂等键写一次账本；不保存进程状态、不调用模型或传输层。
  */
-import { defineInformationModule, onInformation } from "@kaguya/sdk";
+import {
+  defineInformationModule,
+  defineModuleDiagnostic,
+  onInformation,
+} from "@kaguya/sdk";
 import { z } from "@kaguya/schema";
-import { replyRequestedInformationKind, speechDecisionInformationKind } from "./information-kinds.js";
+import {
+  replyRequestedInformationKind,
+  speechDecisionInformationKind,
+} from "./information-kinds.js";
+
+export const speechReplySkippedDiagnostic = defineModuleDiagnostic({
+  event: "reply.bridge.skipped",
+  message: "Speech decision did not request a reply",
+  level: "debug",
+  payloadSchema: z
+    .object({
+      status: z.string().min(1),
+      action: z.string().min(1),
+    })
+    .strict(),
+  project: (payload) => ({ ...payload }),
+});
 
 export const speechReplyModule = defineInformationModule({
   manifest: {
@@ -19,17 +39,47 @@ export const speechReplyModule = defineInformationModule({
     settingsSchema: z.object({}).strict(),
     consumes: [speechDecisionInformationKind],
     produces: [replyRequestedInformationKind],
-    selectors: [], promptRenderers: [], requires: [], provides: [],
+    diagnostics: [speechReplySkippedDiagnostic],
+    selectors: [],
+    promptRenderers: [],
+    requires: [],
+    provides: [],
   },
   create: () => ({
     provisions: [],
-    subscriptions: [onInformation(speechDecisionInformationKind, { subscriptionId: "core.speech.reply", delivery: "durable" }, async (atom, context) => {
-      const input = atom.payload as any;
-      if (input.status !== "decision" || input.action !== "speak") return;
-      await context.registerOnce("core.speech.reply.requested", atom.informationId, replyRequestedInformationKind, {
-        payload: { text: input.text, source: input.source },
-        references: [{ relation: "core:uses-context", informationId: input.turnContextInformationId }],
-      });
-    })],
+    describeStartup: () => ({
+      summary: "Speech-to-reply bridge ready",
+      fields: { acceptedAction: "speak" },
+    }),
+    subscriptions: [
+      onInformation(
+        speechDecisionInformationKind,
+        { subscriptionId: "core.speech.reply", delivery: "durable" },
+        async (atom, context) => {
+          const input = atom.payload as any;
+          if (input.status !== "decision" || input.action !== "speak") {
+            await context.report(speechReplySkippedDiagnostic, {
+              status: input.status,
+              action: input.action,
+            });
+            return;
+          }
+          await context.registerOnce(
+            "core.speech.reply.requested",
+            atom.informationId,
+            replyRequestedInformationKind,
+            {
+              payload: { text: input.text, source: input.source },
+              references: [
+                {
+                  relation: "core:uses-context",
+                  informationId: input.turnContextInformationId,
+                },
+              ],
+            },
+          );
+        },
+      ),
+    ],
   }),
 });

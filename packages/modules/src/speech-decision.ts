@@ -12,14 +12,18 @@ import {
   type TurnContextCompletedPayload,
 } from "./information-kinds.js";
 
-export const speechDecisionSettingsSchema = z.object({
-  speakThreshold: z.number().min(0).max(1).default(0.6),
-  waitThreshold: z.number().min(0).max(1).default(0.35),
-  policyDigest: z.string().min(1).default("speech-policy:deterministic-v1"),
-  settingsDigest: z.string().min(1).default("speech-settings:default-v1"),
-}).strict();
+export const speechDecisionSettingsSchema = z
+  .object({
+    speakThreshold: z.number().min(0).max(1).default(0.6),
+    waitThreshold: z.number().min(0).max(1).default(0.35),
+    policyDigest: z.string().min(1).default("speech-policy:deterministic-v1"),
+    settingsDigest: z.string().min(1).default("speech-settings:default-v1"),
+  })
+  .strict();
 
-export type SpeechDecisionSettings = z.infer<typeof speechDecisionSettingsSchema>;
+export type SpeechDecisionSettings = z.infer<
+  typeof speechDecisionSettingsSchema
+>;
 
 export type SpeechAction = "speak" | "wait" | "silent";
 
@@ -41,7 +45,17 @@ export function scoreTurnContext(input: TurnContextCompletedPayload): {
     recentPresencePenalty: input.recentPresencePenalty,
     frequencyMultiplier: input.frequencyMultiplier,
   };
-  const score = Math.max(0, Math.min(1, (components.directness * 0.35 + components.contentNeed * 0.35 + components.messageCount * 0.15 - components.recentPresencePenalty * 0.15) * components.frequencyMultiplier));
+  const score = Math.max(
+    0,
+    Math.min(
+      1,
+      (components.directness * 0.35 +
+        components.contentNeed * 0.35 +
+        components.messageCount * 0.15 -
+        components.recentPresencePenalty * 0.15) *
+        components.frequencyMultiplier,
+    ),
+  );
   const missingInputs: string[] = [];
   // Memory and association are optional enrichments. They are deliberately
   // neutral until a later module provides them, while remaining auditable.
@@ -67,7 +81,8 @@ export function decideSpeechAction(
     ...(input.frequencyMultiplier <= 0 ? ["frequency-zero"] : []),
   ];
   if (reasonCodes.length > 0) return { action: "silent", reasonCodes };
-  if (scored.score >= settings.speakThreshold) return { action: "speak", reasonCodes: [] };
+  if (scored.score >= settings.speakThreshold)
+    return { action: "speak", reasonCodes: [] };
   if (
     input.recheckAt !== undefined &&
     input.attempt < input.totalWaitBudget &&
@@ -87,23 +102,92 @@ export const speechDecisionModule = defineInformationModule({
     settingsSchema: speechDecisionSettingsSchema,
     consumes: [turnContextCompletedInformationKind],
     produces: [speechDecisionInformationKind, waitRequestedInformationKind],
-    selectors: [], promptRenderers: [], requires: [], provides: [],
+    selectors: [],
+    promptRenderers: [],
+    requires: [],
+    provides: [],
   },
   create: ({ settings }) => ({
     provisions: [],
-    subscriptions: [onInformation(turnContextCompletedInformationKind, { subscriptionId: "core.speech.turn-context", delivery: "durable" }, async (atom, context) => {
-      const input = atom.payload as TurnContextCompletedPayload;
-      const scored = scoreTurnContext(input);
-      const { action, reasonCodes } = decideSpeechAction(input, settings);
-      const payload = {
-        action, status: "decision", text: input.text, source: input.source, candidateInformationId: input.candidateInformationId, turnContextInformationId: atom.informationId,
-        score: scored.score, thresholds: { speak: settings.speakThreshold, wait: settings.waitThreshold }, components: scored.components,
-        reasonCodes, missingInputs: scored.missingInputs, policyDigest: settings.policyDigest, settingsDigest: settings.settingsDigest,
-        ...(input.recheckAt && action === "wait" ? { recheckAt: input.recheckAt, dueAt: input.recheckAt, delayMs: computeWaitDelayMs(input.recheckAt, input.asOf ?? atom.occurredAt), wakePolicy: "recheckAt" as const } : {}),
-        attempt: input.attempt, totalWaitBudget: input.totalWaitBudget,
-      } as any;
-      const decision = await context.commitTerminal("core.speech.decision", input.candidateInformationId, speechDecisionInformationKind, { payload, references: [{ relation: "core:uses-context", informationId: atom.informationId }] });
-      if (action === "wait") await context.registerOnce("core.speech.wait", decision.informationId, waitRequestedInformationKind, { payload: { dueAt: input.recheckAt!, delayMs: payload.delayMs!, reason: "score-below-speak-threshold", attempt: input.attempt, totalWaitBudget: input.totalWaitBudget, wakePolicy: "recheckAt" } });
-    })],
+    describeStartup: () => ({
+      summary: "Speech timing policy ready",
+      fields: {
+        speakThreshold: settings.speakThreshold,
+        waitThreshold: settings.waitThreshold,
+        policyDigest: settings.policyDigest,
+      },
+    }),
+    subscriptions: [
+      onInformation(
+        turnContextCompletedInformationKind,
+        { subscriptionId: "core.speech.turn-context", delivery: "durable" },
+        async (atom, context) => {
+          const input = atom.payload as TurnContextCompletedPayload;
+          const scored = scoreTurnContext(input);
+          const { action, reasonCodes } = decideSpeechAction(input, settings);
+          const payload = {
+            action,
+            status: "decision",
+            text: input.text,
+            source: input.source,
+            candidateInformationId: input.candidateInformationId,
+            turnContextInformationId: atom.informationId,
+            score: scored.score,
+            thresholds: {
+              speak: settings.speakThreshold,
+              wait: settings.waitThreshold,
+            },
+            components: scored.components,
+            reasonCodes,
+            missingInputs: scored.missingInputs,
+            policyDigest: settings.policyDigest,
+            settingsDigest: settings.settingsDigest,
+            ...(input.recheckAt && action === "wait"
+              ? {
+                  recheckAt: input.recheckAt,
+                  dueAt: input.recheckAt,
+                  delayMs: computeWaitDelayMs(
+                    input.recheckAt,
+                    input.asOf ?? atom.occurredAt,
+                  ),
+                  wakePolicy: "recheckAt" as const,
+                }
+              : {}),
+            attempt: input.attempt,
+            totalWaitBudget: input.totalWaitBudget,
+          } as any;
+          const decision = await context.commitTerminal(
+            "core.speech.decision",
+            input.candidateInformationId,
+            speechDecisionInformationKind,
+            {
+              payload,
+              references: [
+                {
+                  relation: "core:uses-context",
+                  informationId: atom.informationId,
+                },
+              ],
+            },
+          );
+          if (action === "wait")
+            await context.registerOnce(
+              "core.speech.wait",
+              decision.informationId,
+              waitRequestedInformationKind,
+              {
+                payload: {
+                  dueAt: input.recheckAt!,
+                  delayMs: payload.delayMs!,
+                  reason: "score-below-speak-threshold",
+                  attempt: input.attempt,
+                  totalWaitBudget: input.totalWaitBudget,
+                  wakePolicy: "recheckAt",
+                },
+              },
+            );
+        },
+      ),
+    ],
   }),
 });

@@ -493,8 +493,9 @@ function createOutput(options: CreateLoggerOptions): {
               : false,
         translateTime: "SYS:standard",
         singleLine: true,
-        messageFormat: "{module} {event} {msg}",
-        ignore: "service,module,event,pid,hostname",
+        messageFormat: formatPrettyMessage,
+        ignore:
+          "service,module,event,pid,hostname,informationId,kind,occurredAt,source,references,detail,sensitivity,promptFull,promptFragments",
       }),
       closeStream: false,
     };
@@ -523,6 +524,69 @@ function createOutput(options: CreateLoggerOptions): {
     }),
     closeStream: destination !== 1 && destination !== 2,
   };
+}
+
+export function formatPrettyMessage(log: Record<string, unknown>): string {
+  const namespace = typeof log.module === "string" ? log.module : "";
+  const event = typeof log.event === "string" ? log.event : "";
+  const message = typeof log.msg === "string" ? log.msg : "";
+  const identity =
+    typeof log.informationId === "string" && typeof log.kind === "string"
+      ? `[${shortInformationId(log.informationId)}] ${log.kind}${formatPrettyReferences(log.references)}`
+      : "";
+  const header = [namespace, event, identity, message]
+    .filter(Boolean)
+    .join(" ");
+  if (log.detail !== true || typeof log.promptFull !== "string") return header;
+  const prompt = log.promptFull
+    .split("\n")
+    .map((line) => `    ${line}`)
+    .join("\n");
+  const fragments = Array.isArray(log.promptFragments)
+    ? log.promptFragments
+        .filter(isRecord)
+        .map((fragment) => {
+          const id =
+            typeof fragment.informationId === "string"
+              ? shortInformationId(fragment.informationId)
+              : "-";
+          const fragmentId =
+            typeof fragment.fragmentId === "string"
+              ? fragment.fragmentId
+              : "unknown";
+          const digest =
+            typeof fragment.contentDigest === "string"
+              ? fragment.contentDigest
+              : "unknown";
+          return `    ${fragmentId} information=${id} digest=${digest}`;
+        })
+        .join("\n")
+    : "";
+  return `${header}\n  Prompt:\n${prompt}${fragments ? `\n  Provenance:\n${fragments}` : ""}`;
+}
+
+function formatPrettyReferences(value: unknown): string {
+  if (!Array.isArray(value) || value.length === 0) return "";
+  const grouped = new Map<string, string[]>();
+  for (const reference of value) {
+    if (
+      !isRecord(reference) ||
+      typeof reference.relation !== "string" ||
+      typeof reference.informationId !== "string"
+    )
+      continue;
+    const ids = grouped.get(reference.relation) ?? [];
+    ids.push(shortInformationId(reference.informationId));
+    grouped.set(reference.relation, ids);
+  }
+  if (grouped.size === 0) return "";
+  return ` ← ${[...grouped]
+    .map(([relation, ids]) => `${relation}:${ids.join(",")}`)
+    .join(" · ")}`;
+}
+
+function shortInformationId(informationId: string): string {
+  return Array.from(informationId).slice(0, 8).join("");
 }
 
 function validateOutputOptions(options: CreateLoggerOptions): void {

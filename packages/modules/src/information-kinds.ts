@@ -27,6 +27,45 @@ import {
 
 const nonBlankString = z.string().trim().min(1);
 
+const CONTENT_PREVIEW_LENGTH = 168;
+function contentPreview(text: string) {
+  const codePoints = Array.from(text);
+  const truncated = codePoints.length > CONTENT_PREVIEW_LENGTH;
+  return {
+    contentPreview: sanitizeLoggedContent(
+      codePoints
+        .slice(0, CONTENT_PREVIEW_LENGTH)
+        .map((point) => {
+          const value = point.codePointAt(0) ?? 0;
+          return value < 0x20 && point !== "\n" && point !== "\t"
+            ? `\\u${value.toString(16).padStart(4, "0")}`
+            : point;
+        })
+        .join("") + (truncated ? "…" : ""),
+    ),
+    contentLength: codePoints.length,
+    contentTruncated: truncated,
+  };
+}
+
+function sanitizeLoggedContent(text: string): string {
+  return text
+    .replace(
+      /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s]+/giu,
+      "[REDACTED]",
+    )
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/gu, "[REDACTED]")
+    .replace(
+      /\b(api[_-]?key|authorization|token|password|secret|credential)\s*[:=]\s*[^\s]+/giu,
+      "$1=[REDACTED]",
+    )
+    .replace(/\bBearer\s+[^\s]+/giu, "Bearer [REDACTED]")
+    .replace(
+      /-----BEGIN [^-]+-----[\s\S]*?-----END [^-]+-----/gu,
+      "[REDACTED PRIVATE MATERIAL]",
+    );
+}
+
 const messageSourceSchema = z
   .object({
     adapterId: nonBlankString,
@@ -82,7 +121,19 @@ export const inboundTextInformationKind = defineInformationKind({
       targetKinds: ["core.runtime.context"],
     },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "info",
+    project: ({ payload }) => {
+      const input = payload as any;
+      return {
+        event: "message.inbound",
+        adapterId: input.source.adapterId,
+        platform: input.source.platform,
+        ...contentPreview(input.text),
+      };
+    },
+  },
 });
 
 export const replyRequestedInformationKind = defineInformationKind({
@@ -105,7 +156,19 @@ export const replyRequestedInformationKind = defineInformationKind({
       targetKinds: ["agent.turn.context.completed"],
     },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "info",
+    project: ({ payload }) => {
+      const input = payload as any;
+      return {
+        event: "reply.requested",
+        adapterId: input.source.adapterId,
+        platform: input.source.platform,
+        ...contentPreview(input.text),
+      };
+    },
+  },
 });
 
 export const filterDecisionInformationKind = defineInformationKind({
@@ -129,7 +192,16 @@ export const filterDecisionInformationKind = defineInformationKind({
       targetKinds: ["core.runtime.context"],
     },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "info",
+    project: ({ payload }) => ({
+      event: "filter.decision",
+      status: "rejected",
+      reason: payload.reason,
+      filterDefinitionId: payload.filterDefinitionId,
+    }),
+  },
 });
 
 export const coreMemoryTextInformationKind = defineInformationKind({
@@ -150,7 +222,11 @@ export const coreMemoryTextInformationKind = defineInformationKind({
       multiple: true,
     },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "debug",
+    project: () => ({ event: "memory.text.registered" }),
+  },
 });
 
 const associationRouteSchema = z.literal("reply");
@@ -219,7 +295,19 @@ export const associationRequestedInformationKind = defineInformationKind({
       targetKinds: ["agent.person.context.completed"],
     },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "debug",
+    project: ({ payload }) => {
+      const input = payload as any;
+      return {
+        event: "association.requested",
+        route: input.route,
+        method: input.method,
+        identityStatus: input.identity.status,
+      };
+    },
+  },
 });
 
 export const associationQueryInformationPayloadSchema = z
@@ -255,7 +343,20 @@ export const associationQueryInformationKind = defineInformationKind({
       targetKinds: ["core.runtime.context"],
     },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "debug",
+    project: ({ payload }) => {
+      const input = payload as any;
+      return {
+        event: "association.query",
+        route: input.route,
+        method: input.method,
+        queryLength: Array.from(input.query as string).length,
+        limit: input.limit,
+      };
+    },
+  },
 });
 
 export const associationCandidateInformationPayloadSchema = z
@@ -298,7 +399,16 @@ export const associationCandidateInformationKind = defineInformationKind({
       ],
     },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "debug",
+    project: ({ payload }) => ({
+      event: "association.candidate",
+      rank: payload.rank,
+      strategy: payload.strategy,
+      reasonCodes: payload.reasonCodes,
+    }),
+  },
 });
 
 export const associationCompletedInformationPayloadSchema = z
@@ -342,7 +452,18 @@ export const associationCompletedInformationKind = defineInformationKind({
       targetKinds: [associationCandidateInformationKind.kind],
     },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "info",
+    project: ({ payload }) => ({
+      event: "association.completed",
+      status: payload.status,
+      route: payload.route,
+      method: payload.method,
+      candidateCount: payload.candidateCount,
+      reasonCodes: payload.reasonCodes,
+    }),
+  },
 });
 
 export const personFactCandidateInformationPayloadSchema = z
@@ -370,7 +491,11 @@ export const personFactCandidateInformationKind = defineInformationKind({
       targetKinds: ["core.runtime.context"],
     },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "debug",
+    project: () => ({ event: "person.fact.candidate" }),
+  },
 });
 
 export const personFactExtractedPayloadSchema = z
@@ -399,7 +524,11 @@ export const personFactExtractedInformationKind = defineInformationKind({
       targetKinds: ["core.runtime.context"],
     },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "info",
+    project: () => ({ event: "person.fact.extracted" }),
+  },
 });
 
 export const assistantTextInformationKind = defineInformationKind({
@@ -423,7 +552,15 @@ export const assistantTextInformationKind = defineInformationKind({
       targetKinds: ["core.runtime.context"],
     },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "info",
+    project: ({ payload }) => ({
+      event: "message.assistant",
+      originatingModuleInstanceId: payload.originatingModuleInstanceId,
+      ...contentPreview(payload.text),
+    }),
+  },
 });
 
 export const deliveryRequestedInformationKind = defineInformationKind({
@@ -448,7 +585,16 @@ export const deliveryRequestedInformationKind = defineInformationKind({
       targetKinds: ["core.runtime.context"],
     },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "info",
+    project: ({ payload }) => ({
+      event: "delivery.requested",
+      adapterId: payload.adapterId,
+      platform: payload.platform,
+      messageKind: payload.message.kind,
+    }),
+  },
 });
 
 const turnContextPayloadSchema = z
@@ -491,7 +637,19 @@ export const turnContextCompletedInformationKind = defineInformationKind({
     },
     "core:uses-context": { required: true, multiple: true },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "info",
+    project: ({ payload }) => {
+      const input = payload as any;
+      return {
+        event: "turn.context.completed",
+        directness: input.directness,
+        contentNeed: input.contentNeed,
+        messageCount: input.messageCount,
+      };
+    },
+  },
 });
 
 const speechDecisionPayloadSchema = z
@@ -544,7 +702,21 @@ export const speechDecisionInformationKind = defineInformationKind({
     },
     "core:uses-context": { required: true, multiple: true },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "info",
+    project: ({ payload }) => {
+      const input = payload as any;
+      return {
+        event: "speech.decision",
+        action: input.action,
+        status: input.status,
+        score: input.score,
+        reasonCodes: input.reasonCodes,
+        missingInputs: input.missingInputs,
+      };
+    },
+  },
 });
 
 export const waitRequestedInformationKind = defineInformationKind({
@@ -571,7 +743,19 @@ export const waitRequestedInformationKind = defineInformationKind({
       targetKinds: ["core.runtime.context"],
     },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "info",
+    project: ({ payload }) => {
+      const input = payload as any;
+      return {
+        event: "speech.wait.requested",
+        dueAt: input.dueAt,
+        delayMs: input.delayMs,
+        reason: input.reason,
+      };
+    },
+  },
 });
 
 const identityTerminalSchema = z
@@ -610,7 +794,16 @@ export const chatScopeEntityInformationKind = defineInformationKind({
       targetKinds: ["core.runtime.context"],
     },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "debug",
+    project: ({ payload }) => ({
+      event: "identity.scope.entity",
+      platform: payload.platform,
+      adapterId: payload.adapterId,
+      scopeMode: payload.scopeMode,
+    }),
+  },
 });
 export const chatScopeBindingInformationKind = defineInformationKind({
   kind: "agent.chat.scope.binding",
@@ -634,7 +827,15 @@ export const chatScopeBindingInformationKind = defineInformationKind({
       targetKinds: [chatScopeEntityInformationKind.kind],
     },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "debug",
+    project: ({ payload }) => ({
+      event: "identity.scope.binding",
+      platform: payload.platform,
+      adapterId: payload.adapterId,
+    }),
+  },
 });
 export const platformAccountEntityInformationKind = defineInformationKind({
   kind: "agent.platform.account.entity",
@@ -653,7 +854,15 @@ export const platformAccountEntityInformationKind = defineInformationKind({
       targetKinds: ["core.runtime.context"],
     },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "debug",
+    project: ({ payload }) => ({
+      event: "identity.account.entity",
+      platform: payload.platform,
+      adapterId: payload.adapterId,
+    }),
+  },
 });
 export const platformAccountBindingInformationKind = defineInformationKind({
   kind: "agent.platform.account.binding",
@@ -673,7 +882,11 @@ export const platformAccountBindingInformationKind = defineInformationKind({
       targetKinds: [platformAccountEntityInformationKind.kind],
     },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "debug",
+    project: () => ({ event: "identity.account.binding" }),
+  },
 });
 export const personEntityInformationKind = defineInformationKind({
   kind: "agent.person.entity",
@@ -686,7 +899,11 @@ export const personEntityInformationKind = defineInformationKind({
       targetKinds: ["core.runtime.context"],
     },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "debug",
+    project: () => ({ event: "identity.person.entity" }),
+  },
 });
 export const personObservedInformationKind = defineInformationKind({
   kind: "agent.person.observed",
@@ -711,7 +928,15 @@ export const personObservedInformationKind = defineInformationKind({
       targetKinds: [platformAccountEntityInformationKind.kind],
     },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "debug",
+    project: ({ payload }) => ({
+      event: "identity.person.observed",
+      hasNickname: payload.nickname !== undefined,
+      hasCard: payload.card !== undefined,
+    }),
+  },
 });
 export const personResolutionInformationKind = defineInformationKind({
   kind: "agent.person.resolution",
@@ -724,7 +949,20 @@ export const personResolutionInformationKind = defineInformationKind({
       targetKinds: ["core.runtime.context"],
     },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "debug",
+    project: ({ payload }) => {
+      const input = payload as any;
+      return {
+        event: "identity.person.resolution",
+        status: input.status,
+        scopeMode: input.scopeMode,
+        platform: input.platform,
+        adapterId: input.adapterId,
+      };
+    },
+  },
 });
 export const personContextCompletedInformationKind = defineInformationKind({
   kind: "agent.person.context.completed",
@@ -742,7 +980,20 @@ export const personContextCompletedInformationKind = defineInformationKind({
       targetKinds: [inboundTextInformationKind.kind],
     },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "info",
+    project: ({ payload }) => {
+      const input = payload as any;
+      return {
+        event: "identity.context.completed",
+        status: input.status,
+        scopeMode: input.scopeMode,
+        platform: input.platform,
+        adapterId: input.adapterId,
+      };
+    },
+  },
 });
 
 export const informationModuleKinds = [

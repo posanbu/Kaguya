@@ -22,6 +22,7 @@ import {
 } from "@kaguya/schema";
 import {
   defineInformationModule,
+  defineModuleDiagnostic,
   defineInformationSelector,
   type InformationKindDefinition,
   type InformationPromptRendererDefinition,
@@ -71,6 +72,22 @@ export const personFactTaskSettingsSchema = z
 export type PersonFactTaskSettings = z.infer<
   typeof personFactTaskSettingsSchema
 >;
+
+export const personFactModelDispatchingDiagnostic = defineModuleDiagnostic({
+  event: "person-fact.model.dispatching",
+  message: "Person-fact model task dispatching",
+  level: "info",
+  payloadSchema: z
+    .object({
+      taskId: z.literal("core.person.fact.extract"),
+      taskVersion: z.literal("1"),
+      tier: modelTierSchema,
+      promptCharacters: z.number().int().nonnegative(),
+      promptFragmentCount: z.number().int().nonnegative(),
+    })
+    .strict(),
+  project: (payload) => ({ ...payload }),
+});
 
 export interface CreatePersonFactTaskModuleOptions<
   P extends ModelTaskCompletedInformationPayload =
@@ -135,9 +152,18 @@ export function createPersonFactTaskModule<
       settingsSchema: personFactTaskSettingsSchema,
       consumes: [personFactCandidateInformationKind, completedInformationKind],
       produces: [personFactExtractedInformationKind],
+      diagnostics: [personFactModelDispatchingDiagnostic],
     },
     create: ({ settings, activation }) => ({
       provisions: [],
+      describeStartup: () => ({
+        summary: "Person-fact extraction pipeline ready",
+        fields: {
+          modelTier: settings.modelTier,
+          taskId: "core.person.fact.extract",
+          taskVersion: "1",
+        },
+      }),
       subscriptions: [
         onInformation(
           personFactCandidateInformationKind,
@@ -154,6 +180,18 @@ export function createPersonFactTaskModule<
               candidate.informationId,
             );
             const contextInformationId = requireContextId(persistedCandidate);
+            const prompt = compilePersonFactPrompt(
+              promptCompiler,
+              contextAtoms,
+              persistedCandidate.informationId,
+            );
+            await context.report(personFactModelDispatchingDiagnostic, {
+              taskId: "core.person.fact.extract",
+              taskVersion: "1",
+              tier: settings.modelTier,
+              promptCharacters: Array.from(prompt.text).length,
+              promptFragmentCount: prompt.fragments.length,
+            });
             await context.use(modelTaskCapability).execute({
               task: {
                 taskId: "core.person.fact.extract",
@@ -165,11 +203,7 @@ export function createPersonFactTaskModule<
               contextInformationId,
               activation,
               selectionPolicy: { tier: settings.modelTier },
-              prompt: compilePersonFactPrompt(
-                promptCompiler,
-                contextAtoms,
-                persistedCandidate.informationId,
-              ),
+              prompt,
               contextAtoms,
             });
           },

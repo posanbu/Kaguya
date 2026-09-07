@@ -367,6 +367,7 @@ function createInstance(
     {
       signal: new AbortController().signal,
       now: () => new Date(),
+      report: async () => undefined,
       use: () => {
         const value = executors.get(definition);
         if (!value) throw Error("undeclared");
@@ -398,6 +399,7 @@ function handlerContext(
     commitTerminal: async (_group, _subject, definition, input) =>
       context.register(definition, input),
     signal: new AbortController().signal,
+    report: async () => undefined,
     use: (token) => {
       if (!Object.is(token, modelTaskCapability))
         throw new Error("unexpected capability");

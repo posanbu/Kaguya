@@ -23,6 +23,7 @@ import {
 import { MEMORY_RETRIEVAL_STRATEGY_ID } from "@kaguya/memory";
 import {
   defineInformationModule,
+  defineModuleDiagnostic,
   defineInformationSelector,
   onInformation,
 } from "@kaguya/sdk";
@@ -42,6 +43,20 @@ import {
   type AssociationQueryInformationPayload,
   type AssociationRequestedInformationPayload,
 } from "./information-kinds.js";
+
+export const associationRetrievalStartedDiagnostic = defineModuleDiagnostic({
+  event: "association.retrieval.started",
+  message: "Association retrieval started",
+  level: "info",
+  payloadSchema: z
+    .object({
+      method: z.literal("sparse-2gram"),
+      limit: z.number().int().positive(),
+      queryLength: z.number().int().nonnegative(),
+    })
+    .strict(),
+  project: (payload) => ({ ...payload }),
+});
 
 const identityTerminalPayloadSchema = z
   .object({
@@ -179,9 +194,14 @@ export const associationModule = defineInformationModule({
     promptRenderers: [],
     requires: [],
     provides: [],
+    diagnostics: [associationRetrievalStartedDiagnostic],
   },
   create: () => ({
     provisions: [],
+    describeStartup: () => ({
+      summary: "Memory association ready",
+      fields: { method: "sparse-2gram", candidateLimit: 8 },
+    }),
     subscriptions: [
       onInformation(
         replyRequestedInformationKind,
@@ -280,6 +300,11 @@ export const associationModule = defineInformationModule({
             status = "policy-filtered";
             reasonCodes = ["empty-query-policy"];
           } else {
+            await context.report(associationRetrievalStartedDiagnostic, {
+              method: payload.method,
+              limit: payload.limit,
+              queryLength: Array.from(payload.query).length,
+            });
             try {
               memories = await context.select(associationCandidateSelector);
               status = memories.length === 0 ? "empty" : "matched";

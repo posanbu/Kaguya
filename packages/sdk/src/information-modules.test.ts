@@ -17,6 +17,7 @@ import * as sdk from "./index.js";
 import {
   defineInformationKind,
   defineInformationModule,
+  defineModuleDiagnostic,
   onInformation,
 } from "./index.js";
 
@@ -35,6 +36,63 @@ const outputKind = defineInformationKind({
 });
 
 describe("information module SDK", () => {
+  it("defines frozen, schema-bound module diagnostics", () => {
+    const diagnostic = defineModuleDiagnostic({
+      event: "acme.lookup.started",
+      message: "Lookup started",
+      level: "info",
+      payloadSchema: z.object({ limit: z.number().int().positive() }).strict(),
+      project: ({ limit }) => ({ limit }),
+      detail: {
+        sensitivity: "metadata",
+        project: ({ limit }) => ({ configuredLimit: limit }),
+      },
+    });
+    const module = defineInformationModule({
+      manifest: {
+        protocolVersion: 1,
+        moduleVersion: "1.0.0",
+        selectors: [],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
+        diagnostics: [diagnostic],
+        definitionId: "acme.diagnostics",
+        displayName: "Diagnostics",
+        settingsSchema: z.object({}).strict(),
+        consumes: [],
+        produces: [],
+      },
+      create: () => ({ provisions: [], subscriptions: [] }),
+    });
+
+    expect(module.manifest.diagnostics).toEqual([diagnostic]);
+    expect(Object.isFrozen(diagnostic)).toBe(true);
+    expect(Object.isFrozen(diagnostic.detail)).toBe(true);
+    expect(Object.isFrozen(module.manifest.diagnostics)).toBe(true);
+  });
+
+  it("rejects free-form diagnostic events and non-strict schemas", () => {
+    expect(() =>
+      defineModuleDiagnostic({
+        event: "started",
+        message: "Started",
+        level: "info",
+        payloadSchema: z.object({}),
+        project: () => ({}),
+      }),
+    ).toThrow(/dotted namespace/);
+    expect(() =>
+      defineModuleDiagnostic({
+        event: "acme.started",
+        message: "Started",
+        level: "info",
+        payloadSchema: z.object({ value: z.string() }),
+        project: () => ({}),
+      }),
+    ).toThrow(/strict object/);
+  });
+
   it("defines non-targeted subscriptions that register derived atoms", () => {
     const subscription = onInformation(
       inputKind,

@@ -32,6 +32,10 @@ export const alwaysReplyFilterModule = defineInformationModule({
   },
   create: () => ({
     provisions: [],
+    describeStartup: () => ({
+      summary: "Always-reply filter ready",
+      fields: { policy: "always-reply" },
+    }),
     subscriptions: [
       onInformation(
         inboundTextInformationKind,

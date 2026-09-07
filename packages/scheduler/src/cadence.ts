@@ -99,7 +99,15 @@ export const cadenceDefinitionInformationKind = defineInformationKind({
   kind: "scheduler.cadence.definition",
   payloadSchema: cadenceDefinitionPayloadSchema,
   references: {},
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "debug",
+    project: ({ payload }) => ({
+      event: "scheduler.cadence.definition",
+      intervalMs: payload.intervalMs,
+      policyVersion: payload.policyVersion,
+    }),
+  },
 });
 export const cadenceDisabledInformationKind = defineInformationKind({
   kind: "scheduler.cadence.disabled",
@@ -111,7 +119,15 @@ export const cadenceDisabledInformationKind = defineInformationKind({
       targetKinds: [cadenceDefinitionInformationKind.kind],
     },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "debug",
+    project: ({ payload }) => ({
+      event: "scheduler.cadence.lifecycle",
+      status: "disabled",
+      reason: payload.reason,
+    }),
+  },
 });
 export const cadenceSupersededInformationKind = defineInformationKind({
   kind: "scheduler.cadence.superseded",
@@ -123,7 +139,14 @@ export const cadenceSupersededInformationKind = defineInformationKind({
       targetKinds: [cadenceDefinitionInformationKind.kind],
     },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "debug",
+    project: () => ({
+      event: "scheduler.cadence.lifecycle",
+      status: "superseded",
+    }),
+  },
 });
 export const cadenceTickInformationKind = defineInformationKind({
   kind: "scheduler.cadence.tick",
@@ -135,7 +158,17 @@ export const cadenceTickInformationKind = defineInformationKind({
       targetKinds: [cadenceDefinitionInformationKind.kind],
     },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "debug",
+    project: ({ payload }) => ({
+      event: "scheduler.cadence.tick",
+      windowIndex: payload.windowIndex,
+      scheduledAt: payload.scheduledAt,
+      missedCount: payload.missedCount,
+      policyVersion: payload.policyVersion,
+    }),
+  },
 });
 export const reconciliationRequestedInformationKind = defineInformationKind({
   kind: "maintenance.projection.reconciliation.requested",
@@ -147,7 +180,15 @@ export const reconciliationRequestedInformationKind = defineInformationKind({
       targetKinds: [cadenceTickInformationKind.kind],
     },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "debug",
+    project: ({ payload }) => ({
+      event: "maintenance.projection.reconciliation",
+      status: "requested",
+      batchSize: payload.batchSize,
+    }),
+  },
 });
 export const reconciliationCompletedInformationKind = defineInformationKind({
   kind: "maintenance.projection.reconciliation.completed",
@@ -159,7 +200,17 @@ export const reconciliationCompletedInformationKind = defineInformationKind({
       targetKinds: [reconciliationRequestedInformationKind.kind],
     },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "debug",
+    project: ({ payload }) => ({
+      event: "maintenance.projection.reconciliation",
+      status: "completed",
+      processed: payload.processed,
+      failed: payload.failed,
+      pending: payload.pending,
+    }),
+  },
 });
 export const reconciliationFailedInformationKind = defineInformationKind({
   kind: "maintenance.projection.reconciliation.failed",
@@ -171,7 +222,16 @@ export const reconciliationFailedInformationKind = defineInformationKind({
       targetKinds: [reconciliationRequestedInformationKind.kind],
     },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "error",
+    project: ({ payload }) => ({
+      event: "maintenance.projection.reconciliation",
+      status: "failed",
+      processed: payload.processed,
+      failed: payload.failed,
+    }),
+  },
 });
 
 export const cadenceInformationKinds = [

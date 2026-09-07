@@ -20,6 +20,69 @@ import {
 } from "./information-kind.js";
 import type { InformationSelectorDefinition } from "./information-selector.js";
 
+export interface ModuleDiagnosticDetailDefinition<
+  P extends JsonObject = JsonObject,
+> {
+  readonly sensitivity: "metadata" | "content";
+  project(payload: DeepReadonly<P>): JsonObject;
+}
+
+export interface ModuleDiagnosticDefinition<
+  E extends string = string,
+  P extends JsonObject = JsonObject,
+> {
+  readonly event: E;
+  readonly message: string;
+  readonly level: "debug" | "info" | "warn" | "error";
+  readonly payloadSchema: z.ZodType<P>;
+  project(payload: DeepReadonly<P>): JsonObject;
+  readonly detail?: ModuleDiagnosticDetailDefinition<P>;
+}
+
+export function defineModuleDiagnostic<
+  const E extends string,
+  P extends JsonObject,
+>(
+  definition: ModuleDiagnosticDefinition<E, P>,
+): ModuleDiagnosticDefinition<E, P> {
+  if (!/^[a-z][a-z0-9._-]*(?:\.[a-z][a-z0-9._-]*)+$/u.test(definition.event))
+    throw new Error("module diagnostic event must use dotted namespace naming");
+  if (typeof definition.message !== "string" || !definition.message.trim())
+    throw new Error("module diagnostic message must not be empty");
+  if (
+    definition.level !== "debug" &&
+    definition.level !== "info" &&
+    definition.level !== "warn" &&
+    definition.level !== "error"
+  )
+    throw new Error("invalid module diagnostic level");
+  if (!(definition.payloadSchema instanceof z.ZodType))
+    throw new Error("module diagnostic payload schema must be a Zod schema");
+  const schemaDefinition =
+    (definition.payloadSchema as any)._zod?.def ??
+    (definition.payloadSchema as any)._def;
+  const catchallDefinition =
+    schemaDefinition?.catchall?._zod?.def ?? schemaDefinition?.catchall?._def;
+  if (
+    schemaDefinition?.type !== "object" ||
+    catchallDefinition?.type !== "never"
+  )
+    throw new Error("module diagnostic payload schema must be a strict object");
+  if (typeof definition.project !== "function")
+    throw new Error("module diagnostic project must be a function");
+  if (definition.detail !== undefined) {
+    if (
+      definition.detail.sensitivity !== "metadata" &&
+      definition.detail.sensitivity !== "content"
+    )
+      throw new Error("invalid module diagnostic detail sensitivity");
+    if (typeof definition.detail.project !== "function")
+      throw new Error("module diagnostic detail project must be a function");
+    Object.freeze(definition.detail);
+  }
+  return Object.freeze(definition);
+}
+
 export interface ModuleCapability<T = unknown> {
   readonly id: string;
   readonly apiVersion: number;
@@ -58,6 +121,7 @@ export interface InformationModuleManifest<TSettings = unknown> {
   readonly promptRenderers: readonly InformationPromptRendererDefinition[];
   readonly requires: readonly ModuleCapabilityRequirement[];
   readonly provides: readonly ModuleCapabilityProvision[];
+  readonly diagnostics?: readonly ModuleDiagnosticDefinition<string, any>[];
 }
 export interface ModuleActivationProvenance {
   readonly instanceId: string;
@@ -73,6 +137,10 @@ export interface InformationExecutionContext {
 export interface InformationModuleCreateContext extends InformationExecutionContext {
   readonly signal: AbortSignal;
   use<T>(capability: ModuleCapability<T>): T;
+  report<E extends string, P extends JsonObject>(
+    definition: ModuleDiagnosticDefinition<E, P>,
+    payload: P,
+  ): Promise<void>;
 }
 export type InformationModuleLifecycleContext = InformationModuleCreateContext;
 export interface ModuleRegistrationInput<P> {
@@ -117,8 +185,14 @@ export interface InformationModuleInstance {
   readonly subscriptions: readonly InformationModuleSubscription[];
   readonly provisions: readonly ModuleCapabilityImplementation[];
   start?(context: InformationModuleLifecycleContext): Promise<void> | void;
+  describeStartup?():
+    ModuleStartupDescription | Promise<ModuleStartupDescription>;
   stop?(): Promise<void> | void;
   dispose?(): Promise<void> | void;
+}
+export interface ModuleStartupDescription {
+  readonly summary: string;
+  readonly fields?: JsonObject;
 }
 export interface CreateInformationModuleInstanceOptions<TSettings> {
   readonly instanceId: string;
@@ -188,6 +262,18 @@ export function defineInformationModule<TSettings>(
         throw new Error(`invalid renderer: ${id}`);
     }
   }
+  const diagnostics = m.diagnostics ?? [];
+  if (!Array.isArray(diagnostics))
+    throw new Error("module diagnostics must be an array");
+  const diagnosticEvents = new Set<string>();
+  for (const diagnostic of diagnostics) {
+    defineModuleDiagnostic(diagnostic);
+    if (diagnosticEvents.has(diagnostic.event))
+      throw new Error(
+        `Duplicate information module diagnostic: ${diagnostic.event}`,
+      );
+    diagnosticEvents.add(diagnostic.event);
+  }
   return Object.freeze({
     ...definition,
     manifest: Object.freeze({
@@ -209,6 +295,7 @@ export function defineInformationModule<TSettings>(
       provides: Object.freeze(
         m.provides.map((capability) => Object.freeze({ ...capability })),
       ),
+      diagnostics: Object.freeze([...diagnostics]),
     }),
   });
 }

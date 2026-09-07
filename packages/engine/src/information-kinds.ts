@@ -55,5 +55,19 @@ export const consumerFailedInformationKind = defineInformationKind({
       multiple: false,
     },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "error",
+    project: ({ payload }) => ({
+      event: "consumer.failed",
+      consumerId: payload.consumer.consumerId,
+      ...("definitionId" in payload.consumer
+        ? { definitionId: payload.consumer.definitionId }
+        : {}),
+      ...("instanceId" in payload.consumer
+        ? { instanceId: payload.consumer.instanceId }
+        : {}),
+      errorType: payload.error.errorType,
+    }),
+  },
 });

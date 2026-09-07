@@ -32,6 +32,7 @@ import {
 } from "./information-kinds.js";
 import { defineInformationModuleCatalog } from "@kaguya/sdk";
 import { KaguyaDatabase } from "@kaguya/database";
+import { createLogger, type KaguyaLogger } from "@kaguya/logger";
 import { createTestingDatabase } from "@kaguya/database/testing";
 import { memoryCapability } from "@kaguya/memory";
 import {
@@ -165,6 +166,7 @@ async function createRuntime(
     retrievalStrategies: NonNullable<
       ConstructorParameters<typeof KaguyaRuntime>[0]["retrievalStrategies"]
     >;
+    logger: KaguyaLogger;
   }> = {},
 ) {
   const database = await createTestingDatabase();
@@ -220,6 +222,107 @@ function parentId(
 }
 
 describe("KaguyaRuntime", () => {
+  it(
+    "logs module startup and expands the persisted Information DAG at debug",
+    async () => {
+      const lines: string[] = [];
+      const logger = createLogger({
+        service: "runtime-observability-test",
+        level: "info",
+        namespaceLevels: {
+          "runtime:information": "debug",
+          "runtime:module:demo.reply.llm": "debug",
+        },
+        stream: {
+          write: (line) => {
+            lines.push(line);
+          },
+        },
+      });
+      const { runtime, database } = await createRuntime({ logger });
+      await runtime.start();
+
+      await runtime.submit(webMessage("hello observable moon"));
+      await settleDeliveries(database);
+      await vi.waitFor(
+        () =>
+          expect(lines.some((line) => line.includes('"detail":true'))).toBe(
+            true,
+          ),
+        { timeout: 5000, interval: 25 },
+      );
+      const logs = lines.flatMap((chunk) =>
+        chunk
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line) as Record<string, unknown>),
+      );
+
+      expect(
+        logs
+          .filter(
+            (entry) =>
+              entry.module === "runtime:modules" &&
+              entry.event === "module.started",
+          )
+          .map((entry) => entry.definitionId),
+      ).toEqual([
+        "core.association.memory",
+        "core.identity.normalize",
+        "demo.reply.llm",
+        "core.speech.decision",
+        "core.speech.reply-bridge",
+        "core.turn.context",
+      ]);
+      expect(logs).toContainEqual(
+        expect.objectContaining({
+          module: "runtime:module:demo.reply.llm",
+          event: "reply.model.dispatching",
+          taskId: "core.reply.generate",
+          tier: "heavy",
+        }),
+      );
+      const requestSummary = logs.find(
+        (entry) =>
+          entry.module === "runtime:information" &&
+          entry.kind === "core.model.task.requested" &&
+          entry.detail !== true,
+      );
+      const requestDetail = logs.find(
+        (entry) =>
+          entry.module === "runtime:information" &&
+          entry.kind === "core.model.task.requested" &&
+          entry.detail === true,
+      );
+      expect(requestSummary).toMatchObject({
+        event: "model.task.lifecycle",
+        taskId: "core.reply.generate",
+        tier: "heavy",
+        providerId: "test",
+        modelId: "deterministic-heavy",
+        promptFragmentCount: 1,
+      });
+      expect(requestSummary?.promptPreview).toContain("hello observable moon");
+      expect(requestSummary?.references).toEqual(expect.any(Array));
+      expect(requestDetail).toMatchObject({
+        informationId: requestSummary?.informationId,
+        detail: true,
+        sensitivity: "content",
+      });
+      expect(requestDetail?.promptFull).toContain("hello observable moon");
+      expect(requestDetail?.promptFragments).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            informationId: expect.any(String),
+            contentDigest: expect.any(String),
+          }),
+        ]),
+      );
+    },
+    TEST_TIMEOUT,
+  );
+
   it("starts with the migrated generic completion subscription already persisted", async () => {
     const { runtime, database } = await createRuntime();
     await database.migrate();

@@ -10,6 +10,7 @@
  * 模块只通过 #76 的 context.use 获得通用能力。缺少批准或无效 capability 在任何 create 前拒绝。
  * Memory 默认关闭；显式启用时 association 使用独立 Memory 仓储的 sparse Selector
  * strategy。关闭态仍保留 association terminal 形状，但不注册检索策略或 capability。
+ * ModuleHost observation 在这里映射到 lifecycle/module 命名空间，持久 Atom 单独进入 information logger。
  */
 import { randomUUID } from "node:crypto";
 
@@ -22,7 +23,9 @@ import {
   InformationKindRegistry,
   ModuleHost,
   consumerFailedInformationKind,
+  executionExhaustedInformationKind,
   type InformationRetrievalStrategy,
+  type ModuleHostObservation,
 } from "@kaguya/engine";
 import {
   createInformationAtomLogSink,
@@ -55,6 +58,8 @@ import type {
   DeepReadonly,
   InformationAtom,
   InformationId,
+  JsonObject,
+  JsonValue,
   OutboundMessageContent,
   PlatformDestination,
 } from "@kaguya/schema";
@@ -215,6 +220,9 @@ export class KaguyaRuntime implements InformationIngress {
     PlatformDeliveryReceipt[]
   >();
   readonly #runtimeLogger: KaguyaLogger | undefined;
+  readonly #modulesLogger: KaguyaLogger | undefined;
+  readonly #informationLogger: KaguyaLogger | undefined;
+  readonly #moduleLoggers = new Map<string, KaguyaLogger>();
   readonly #oneShotRecoveryGate: Promise<void> | undefined;
 
   #state: RuntimeState = "new";
@@ -249,6 +257,14 @@ export class KaguyaRuntime implements InformationIngress {
       options.logger === undefined
         ? undefined
         : createModuleLogger(options.logger, "runtime");
+    this.#modulesLogger =
+      options.logger === undefined
+        ? undefined
+        : createModuleLogger(options.logger, "runtime:modules");
+    this.#informationLogger =
+      options.logger === undefined
+        ? undefined
+        : createModuleLogger(options.logger, "runtime:information");
   }
 
   registerTransport(registration: RuntimeTransportRegistration): void {
@@ -305,7 +321,7 @@ export class KaguyaRuntime implements InformationIngress {
           this.options.logger === undefined
             ? async () => undefined
             : createInformationAtomLogSink({
-                logger: this.options.logger,
+                logger: required(this.#informationLogger, "information logger"),
                 definitions: allDefinitions,
                 emergencyReporter: (failure) => {
                   this.#runtimeLogger?.error(
@@ -434,6 +450,7 @@ export class KaguyaRuntime implements InformationIngress {
         catalog: this.options.catalog,
         capabilities,
         now: this.#now,
+        observer: (observation) => this.#observeModule(observation),
       });
       this.#moduleHost = moduleHost;
       core.onDurable(
@@ -585,6 +602,74 @@ export class KaguyaRuntime implements InformationIngress {
     if (this.#state !== "starting") {
       throw new RuntimeUnavailableError("Kaguya runtime start was cancelled");
     }
+  }
+
+  #observeModule(observation: ModuleHostObservation): void {
+    if (observation.category !== "diagnostic") {
+      this.#modulesLogger?.[observation.level](
+        {
+          ...(observation.fields ?? {}),
+          event: observation.event,
+          ...(observation.definitionId === undefined
+            ? {}
+            : { definitionId: observation.definitionId }),
+          ...(observation.instanceId === undefined
+            ? {}
+            : { instanceId: observation.instanceId }),
+        },
+        observation.message,
+      );
+      return;
+    }
+    const diagnostic = required(
+      observation.diagnostic,
+      "module diagnostic definition",
+    );
+    const logger = this.#moduleLogger(
+      required(observation.definitionId, "module diagnostic definition id"),
+    );
+    if (logger === undefined) return;
+    const projection = checkedLogProjection(
+      diagnostic.definition.project(diagnostic.payload),
+    );
+    const identity = {
+      event: observation.event,
+      definitionId: observation.definitionId,
+      instanceId: observation.instanceId,
+      ...(observation.sourceInformationId === undefined
+        ? {}
+        : { sourceInformationId: observation.sourceInformationId }),
+      ...(observation.contextInformationId === undefined
+        ? {}
+        : { contextInformationId: observation.contextInformationId }),
+    };
+    logger[observation.level](
+      { ...projection, ...identity },
+      observation.message,
+    );
+    const detail = diagnostic.definition.detail;
+    if (detail === undefined || !logger.isLevelEnabled("debug")) return;
+    logger.debug(
+      {
+        ...checkedLogProjection(detail.project(diagnostic.payload)),
+        ...identity,
+        detail: true,
+        sensitivity: detail.sensitivity,
+      },
+      observation.message,
+    );
+  }
+
+  #moduleLogger(definitionId: string): KaguyaLogger | undefined {
+    if (this.options.logger === undefined) return undefined;
+    const cached = this.#moduleLoggers.get(definitionId);
+    if (cached !== undefined) return cached;
+    const logger = createModuleLogger(
+      this.options.logger,
+      `runtime:module:${definitionId}`,
+    );
+    this.#moduleLoggers.set(definitionId, logger);
+    return logger;
   }
 
   async #submit(input: PlatformInboundMessage): Promise<InboundReceipt> {
@@ -909,6 +994,7 @@ function collectDefinitions(
       ...modelTaskInformationKinds,
       ...cadenceInformationKinds,
       ...oneShotInformationKinds,
+      executionExhaustedInformationKind,
     ].map((definition) => [definition.kind, definition]),
   );
   for (const module of moduleDefinitions) {
@@ -1003,6 +1089,65 @@ function required<T>(value: T | undefined, label: string): T {
     throw new RuntimeUnavailableError(`${label} is not initialized`);
   }
   return value;
+}
+
+const FORBIDDEN_MODULE_DIAGNOSTIC_KEYS = new Set([
+  "credentials",
+  "headers",
+  "prompt",
+  "raw",
+  "settings",
+  "target",
+]);
+
+function checkedLogProjection(value: JsonObject): JsonObject {
+  const clone = cloneDiagnosticObject(value);
+  if (clone === undefined)
+    throw new Error("Invalid module diagnostic projection");
+  return clone;
+}
+
+function cloneDiagnosticObject(value: unknown): JsonObject | undefined {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  )
+    return undefined;
+  const clone: JsonObject = {};
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string" || FORBIDDEN_MODULE_DIAGNOSTIC_KEYS.has(key))
+      return undefined;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (
+      descriptor === undefined ||
+      !descriptor.enumerable ||
+      !("value" in descriptor)
+    )
+      return undefined;
+    const child = cloneDiagnosticValue(descriptor.value);
+    if (child === undefined) return undefined;
+    clone[key] = child;
+  }
+  return clone;
+}
+
+function cloneDiagnosticValue(value: unknown): JsonValue | undefined {
+  if (value === null || typeof value === "string" || typeof value === "boolean")
+    return value;
+  if (typeof value === "number")
+    return Number.isFinite(value) ? value : undefined;
+  if (Array.isArray(value)) {
+    const clone: JsonValue[] = [];
+    for (const item of value) {
+      const child = cloneDiagnosticValue(item);
+      if (child === undefined) return undefined;
+      clone.push(child);
+    }
+    return clone;
+  }
+  return cloneDiagnosticObject(value);
 }
 
 // 入站观察者可能忽略取消；超时后继续清理 Core 与数据库，避免退出被永久阻塞。

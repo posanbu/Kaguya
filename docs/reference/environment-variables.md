@@ -87,7 +87,7 @@ NapCat 断线会按连接配置重连，不会停止 Fastify 或改变健康检�
 
 ```dotenv [开发调试 ~vscode-icons:file-type-dotenv~]
 KAGUYA_LOG_LEVEL=info
-KAGUYA_LOG_LEVELS=runtime=debug
+KAGUYA_LOG_LEVELS=runtime:information=debug,runtime:module:demo.reply.llm=debug
 ```
 
 ```dotenv [生产 JSON 文件 ~vscode-icons:file-type-dotenv~]
@@ -98,6 +98,8 @@ KAGUYA_LOG_DESTINATION=.data/logs/kaguya.jsonl
 ```
 
 :::
+
+`runtime:information=debug` 会在 info 摘要之后展开完整 Information DAG detail；Model Task requested 的 detail 包含多行 Prompt，并会写入所选 destination。`runtime:module:<definitionId>=debug` 只展开对应模块声明的临时诊断。字段、隐私边界和 Pretty 短 ID 规则见 [Runtime 与 Information 可观测性](../developers/observability)。
 
 ## 已废弃并拒绝的变量
 

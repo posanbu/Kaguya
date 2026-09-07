@@ -8,50 +8,112 @@
  */
 import { describe, expect, it } from "vitest";
 import { freezeInformationAtom, informationIdSchema } from "@kaguya/schema";
-import { computeWaitDelayMs, decideSpeechAction, scoreTurnContext, speechDecisionSettingsSchema, speechDecisionModule } from "./speech-decision.js";
+import {
+  computeWaitDelayMs,
+  decideSpeechAction,
+  scoreTurnContext,
+  speechDecisionSettingsSchema,
+  speechDecisionModule,
+} from "./speech-decision.js";
 import { speechReplyModule } from "./speech-reply.js";
-import { replyRequestedInformationKind, speechDecisionInformationKind } from "./information-kinds.js";
+import {
+  replyRequestedInformationKind,
+  speechDecisionInformationKind,
+} from "./information-kinds.js";
 
 const context = {
   candidateInformationId: "candidate-1",
-  source: { adapterId: "test", platform: "qq", platformMessageId: "m-1", destination: { kind: "private", userId: "u-1" }, senderId: "u-1" },
-  directness: 1, contentNeed: 1, messageCount: 1, recentPresencePenalty: 0, frequencyMultiplier: 1,
-  muted: false, safe: true, destinationAvailable: true, stale: false, attempt: 0, totalWaitBudget: 2,
+  source: {
+    adapterId: "test",
+    platform: "qq",
+    platformMessageId: "m-1",
+    destination: { kind: "private", userId: "u-1" },
+    senderId: "u-1",
+  },
+  directness: 1,
+  contentNeed: 1,
+  messageCount: 1,
+  recentPresencePenalty: 0,
+  frequencyMultiplier: 1,
+  muted: false,
+  safe: true,
+  destinationAvailable: true,
+  stale: false,
+  attempt: 0,
+  totalWaitBudget: 2,
 };
 
 describe("speech decision module", () => {
   it("scores the same immutable context deterministically", () => {
-    expect(scoreTurnContext(context)).toEqual(scoreTurnContext(structuredClone(context)));
+    expect(scoreTurnContext(context)).toEqual(
+      scoreTurnContext(structuredClone(context)),
+    );
     expect(scoreTurnContext(context).score).toBeGreaterThan(0.6);
   });
 
   it("speaks when the deterministic score clears the speak threshold", () => {
-    expect(decideSpeechAction(context)).toEqual({ action: "speak", reasonCodes: [] });
+    expect(decideSpeechAction(context)).toEqual({
+      action: "speak",
+      reasonCodes: [],
+    });
   });
 
   it("waits when score is actionable and a recheck budget remains", () => {
-    const input = { ...context, directness: 0, contentNeed: 1, asOf: "2029-12-31T23:59:00.000Z", recheckAt: "2030-01-01T00:00:00.000Z" };
+    const input = {
+      ...context,
+      directness: 0,
+      contentNeed: 1,
+      asOf: "2029-12-31T23:59:00.000Z",
+      recheckAt: "2030-01-01T00:00:00.000Z",
+    };
     expect(scoreTurnContext(input).score).toBeGreaterThanOrEqual(0.35);
-    expect(decideSpeechAction(input)).toEqual({ action: "wait", reasonCodes: [] });
+    expect(decideSpeechAction(input)).toEqual({
+      action: "wait",
+      reasonCodes: [],
+    });
     expect(computeWaitDelayMs(input.recheckAt, input.asOf)).toBe(60_000);
   });
 
   it("silently drops low score and hard-gated candidates", () => {
-    expect(decideSpeechAction({ ...context, directness: 0, contentNeed: 0 })).toEqual({ action: "silent", reasonCodes: [] });
-    expect(decideSpeechAction({ ...context, muted: true })).toEqual({ action: "silent", reasonCodes: ["muted"] });
-    expect(decideSpeechAction({ ...context, safe: false })).toEqual({ action: "silent", reasonCodes: ["unsafe"] });
+    expect(
+      decideSpeechAction({ ...context, directness: 0, contentNeed: 0 }),
+    ).toEqual({ action: "silent", reasonCodes: [] });
+    expect(decideSpeechAction({ ...context, muted: true })).toEqual({
+      action: "silent",
+      reasonCodes: ["muted"],
+    });
+    expect(decideSpeechAction({ ...context, safe: false })).toEqual({
+      action: "silent",
+      reasonCodes: ["unsafe"],
+    });
   });
 
   it("keeps optional enrichments neutral and reports them as missing", () => {
     const scored = scoreTurnContext(context);
-    expect(scored.missingInputs).toEqual(["memory", "association", "recheckAt"]);
-    expect(scoreTurnContext({ ...context, memory: ["fact-1"], association: ["association-1"] }).score).toBe(scored.score);
+    expect(scored.missingInputs).toEqual([
+      "memory",
+      "association",
+      "recheckAt",
+    ]);
+    expect(
+      scoreTurnContext({
+        ...context,
+        memory: ["fact-1"],
+        association: ["association-1"],
+      }).score,
+    ).toBe(scored.score);
   });
 
   it("hard gates mute and unsafe contexts regardless of score", () => {
-    expect(speechDecisionSettingsSchema.parse({})).toMatchObject({ speakThreshold: 0.6 });
-    expect(speechDecisionModule.manifest.consumes.map(({ kind }) => kind)).toEqual(["agent.turn.context.completed"]);
-    expect(speechDecisionModule.manifest.produces.map(({ kind }) => kind)).toEqual(["agent.speech.decision", "agent.wait.requested"]);
+    expect(speechDecisionSettingsSchema.parse({})).toMatchObject({
+      speakThreshold: 0.6,
+    });
+    expect(
+      speechDecisionModule.manifest.consumes.map(({ kind }) => kind),
+    ).toEqual(["agent.turn.context.completed"]);
+    expect(
+      speechDecisionModule.manifest.produces.map(({ kind }) => kind),
+    ).toEqual(["agent.speech.decision", "agent.wait.requested"]);
   });
 });
 
@@ -73,29 +135,47 @@ describe("speech reply boundary", () => {
       },
       references: [],
     });
-    const instance = await speechReplyModule.create({
-      instanceId: "speech-reply.default",
-      settings: {},
-      activation: {
+    const instance = await speechReplyModule.create(
+      {
         instanceId: "speech-reply.default",
-        definitionId: speechReplyModule.manifest.definitionId,
+        settings: {},
+        activation: {
+          instanceId: "speech-reply.default",
+          definitionId: speechReplyModule.manifest.definitionId,
+        },
       },
-    }, {
-      signal: new AbortController().signal,
-      now: () => new Date("2026-09-04T00:00:00.000Z"),
-      use: () => { throw new Error("unexpected capability"); },
-    });
+      {
+        signal: new AbortController().signal,
+        now: () => new Date("2026-09-04T00:00:00.000Z"),
+        report: async () => undefined,
+        use: () => {
+          throw new Error("unexpected capability");
+        },
+      },
+    );
     const handlerContext = {
       signal: new AbortController().signal,
       definitionId: speechReplyModule.manifest.definitionId,
       instanceId: "speech-reply.default",
       sourceAtom: speak,
       now: () => new Date("2026-09-04T00:00:00.000Z"),
-      use: () => { throw new Error("unexpected capability"); },
+      report: async () => undefined,
+      use: () => {
+        throw new Error("unexpected capability");
+      },
       select: async () => [],
-      register: async () => { throw new Error("unexpected register"); },
-      commitTerminal: async () => { throw new Error("unexpected terminal"); },
-      registerOnce: async (operation: string, key: string, definition: unknown, input: unknown) => {
+      register: async () => {
+        throw new Error("unexpected register");
+      },
+      commitTerminal: async () => {
+        throw new Error("unexpected terminal");
+      },
+      registerOnce: async (
+        operation: string,
+        key: string,
+        definition: unknown,
+        input: unknown,
+      ) => {
         registrations.push({ operation, key, definition, input });
         return speak as never;
       },
@@ -114,14 +194,18 @@ describe("speech reply boundary", () => {
       );
     }
 
-    expect(registrations).toEqual([{
-      operation: "core.speech.reply.requested",
-      key: speak.informationId,
-      definition: replyRequestedInformationKind,
-      input: {
-        payload: { text: "hello", source: context.source },
-        references: [{ relation: "core:uses-context", informationId: "turn-context-1" }],
+    expect(registrations).toEqual([
+      {
+        operation: "core.speech.reply.requested",
+        key: speak.informationId,
+        definition: replyRequestedInformationKind,
+        input: {
+          payload: { text: "hello", source: context.source },
+          references: [
+            { relation: "core:uses-context", informationId: "turn-context-1" },
+          ],
+        },
       },
-    }]);
+    ]);
   });
 });
