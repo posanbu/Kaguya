@@ -154,3 +154,7 @@ git diff --check
 ```
 
 最后确认没有密钥、数据库 URL、个人配置、日志或 `.data/` 产物进入 diff；没有暂存无关文件；新的公共行为同时有测试和文档；提交信息描述用户或开发者可观察到的结果。
+
+# Cadence 与短心跳测试
+
+涉及 durable schedule 的模块应注入时钟并覆盖重复投递、并发 replacement、lease/retry 及重启恢复。heartbeat 只能通过 one-shot capability 写入事实，不得直接调用 LLM、Runtime turn 或平台 transport；新增 kind 必须补齐 schema、因果引用和幂等 terminal 测试。

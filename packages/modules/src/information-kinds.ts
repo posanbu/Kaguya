@@ -729,6 +729,8 @@ export const waitRequestedInformationKind = defineInformationKind({
       attempt: z.number().int().min(0),
       totalWaitBudget: z.number().int().min(0),
       wakePolicy: z.enum(["recheckAt", "cooldown"]),
+      wakeOnMessage: z.boolean().default(true),
+      source: messageSourceSchema,
     })
     .strict() as any,
   references: {
@@ -755,6 +757,141 @@ export const waitRequestedInformationKind = defineInformationKind({
         reason: input.reason,
       };
     },
+  },
+});
+
+const heartbeatReasonSchema = z.enum(["message", "wait"]);
+const heartbeatPolicyVersionSchema = z.literal("short-heartbeat.v1");
+const heartbeatTerminalReference = {
+  "core:status-of": {
+    required: true,
+    multiple: false,
+    targetKinds: ["agent.heartbeat.scheduled"],
+  },
+} as const;
+
+export const heartbeatScheduledInformationKind = defineInformationKind({
+  kind: "agent.heartbeat.scheduled",
+  payloadSchema: z
+    .object({
+      reason: heartbeatReasonSchema,
+      dueAt: z.iso.datetime({ offset: true }),
+      policyVersion: heartbeatPolicyVersionSchema,
+      platform: nonBlankString,
+      adapterId: nonBlankString,
+      destination: platformDestinationSchema,
+      sourceInformationIds: z.array(nonBlankString).min(1),
+      wakeOnMessage: z.boolean(),
+      attempt: z.number().int().min(0),
+      totalWaitBudget: z.number().int().min(0),
+      scopeKey: nonBlankString,
+    })
+    .strict(),
+  references: {
+    "core:caused-by": { required: true, multiple: false },
+    "core:uses-context": { required: false, multiple: true },
+  },
+  log: {
+    enabled: true,
+    level: "debug",
+    project: ({ payload }) => ({
+      event: "heartbeat.scheduled",
+      reason: payload.reason,
+      dueAt: payload.dueAt,
+      policyVersion: payload.policyVersion,
+      sourceCount: payload.sourceInformationIds.length,
+      wakeOnMessage: payload.wakeOnMessage,
+      attempt: payload.attempt,
+      totalWaitBudget: payload.totalWaitBudget,
+    }),
+  },
+});
+
+export const heartbeatFiredInformationKind = defineInformationKind({
+  kind: "agent.heartbeat.fired",
+  payloadSchema: z
+    .object({ firedAt: z.iso.datetime({ offset: true }) })
+    .strict(),
+  references: heartbeatTerminalReference,
+  log: {
+    enabled: true,
+    level: "info",
+    project: ({ payload }) => ({
+      event: "heartbeat.lifecycle",
+      status: "fired",
+      firedAt: payload.firedAt,
+    }),
+  },
+});
+
+export const heartbeatSupersededInformationKind = defineInformationKind({
+  kind: "agent.heartbeat.superseded",
+  payloadSchema: z
+    .object({ replacementInformationId: nonBlankString })
+    .strict(),
+  references: heartbeatTerminalReference,
+  log: {
+    enabled: true,
+    level: "debug",
+    project: () => ({
+      event: "heartbeat.lifecycle",
+      status: "superseded",
+    }),
+  },
+});
+
+export const heartbeatFailedInformationKind = defineInformationKind({
+  kind: "agent.heartbeat.failed",
+  payloadSchema: z.object({ error: nonBlankString }).strict(),
+  references: heartbeatTerminalReference,
+  log: {
+    enabled: true,
+    level: "warn",
+    project: ({ payload }) => ({
+      event: "heartbeat.lifecycle",
+      status: "failed",
+      error: payload.error,
+    }),
+  },
+});
+
+export const turnCandidateInformationKind = defineInformationKind({
+  kind: "agent.turn.candidate",
+  payloadSchema: z
+    .object({
+      heartbeatInformationId: nonBlankString,
+      reason: heartbeatReasonSchema,
+      dueAt: z.iso.datetime({ offset: true }),
+      firedAt: z.iso.datetime({ offset: true }),
+      platform: nonBlankString,
+      adapterId: nonBlankString,
+      destination: platformDestinationSchema,
+      sourceInformationIds: z.array(nonBlankString).min(1),
+      scopeKey: nonBlankString,
+    })
+    .strict(),
+  references: {
+    "core:caused-by": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.schedule.one-shot.due"],
+    },
+    "agent:heartbeat-fired": {
+      required: true,
+      multiple: false,
+      targetKinds: [heartbeatFiredInformationKind.kind],
+    },
+  },
+  log: {
+    enabled: true,
+    level: "debug",
+    project: ({ payload }) => ({
+      event: "turn.candidate",
+      reason: payload.reason,
+      dueAt: payload.dueAt,
+      firedAt: payload.firedAt,
+      sourceCount: payload.sourceInformationIds.length,
+    }),
   },
 });
 
@@ -1020,4 +1157,9 @@ export const informationModuleKinds = [
   turnContextCompletedInformationKind,
   speechDecisionInformationKind,
   waitRequestedInformationKind,
+  heartbeatScheduledInformationKind,
+  heartbeatFiredInformationKind,
+  heartbeatSupersededInformationKind,
+  heartbeatFailedInformationKind,
+  turnCandidateInformationKind,
 ] as const satisfies readonly InformationKindDefinition<string, any>[];

@@ -8,3 +8,7 @@ Information Atom 保存，并使用 `registerOnce` 防止重复提交。
 调度器只负责产生时间事实，不代表维护任务已经成功，也不会唤醒对话
 Agent。Runtime 只有在显式传入 cadence 配置时才启动日志投影
 reconciliation consumer。
+
+# One-shot 与短心跳
+
+短心跳位于 `@kaguya/modules`，只通过本包的 `OneShotScheduleCapability` 创建、替换和终结 durable schedule。scheduler 负责持久化、due 投递和重启恢复；heartbeat 负责业务因果与 candidate，不在模块内维护内存 timer。
