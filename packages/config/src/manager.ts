@@ -710,6 +710,7 @@ function parseReplacementInput(value: unknown): {
     const replacement = value as {
       readonly acknowledgedWarnings?: unknown;
       readonly ai?: unknown;
+      readonly memory?: unknown;
       readonly name?: unknown;
       readonly platforms?: unknown;
       readonly plugins?: unknown;
@@ -722,6 +723,7 @@ function parseReplacementInput(value: unknown): {
       name: normalizeProfileName(replacement.name),
       settings: parseSettings({
         ai: replacement.ai,
+        memory: replacement.memory,
         platforms: replacement.platforms,
         plugins: replacement.plugins,
         runtime: replacement.runtime,

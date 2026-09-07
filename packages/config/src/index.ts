@@ -42,16 +42,14 @@ export type {
   StartupConfigurationIssue,
   ValidatedStartupConfiguration,
 } from "./startup-validation.js";
-export {
-  readSensitiveJson,
-  writeSensitiveJson,
-} from "./secure-files.js";
+export { readSensitiveJson, writeSensitiveJson } from "./secure-files.js";
 export {
   aiConfigSchema,
   aiProviderConfigSchema,
   emptyUserConfigProfileSettings,
   jsonObjectSchema,
   jsonValueSchema,
+  memoryConfigSchema,
   modelTiersSchema,
   platformConfigSchema,
   pluginConfigSchema,
@@ -66,6 +64,7 @@ export type {
   JsonObject,
   JsonPrimitive,
   JsonValue,
+  MemoryConfig,
   ModelTierTarget,
   ProfileId,
   ReplaceUserConfigProfileInput,
@@ -74,5 +73,6 @@ export type {
   UserConfigProfile,
   UserConfigProfileMetadata,
   UserConfigProfileSettings,
+  UserConfigProfileSettingsInput,
   RuntimeConfig,
 } from "./model.js";

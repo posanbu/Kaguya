@@ -35,6 +35,9 @@ interface MutableProfile {
     };
     providers: MutableProvider[];
   };
+  memory: {
+    enabled: boolean;
+  };
   platforms: MutablePlatform[];
   plugins: MutablePlugin[];
   review?: {
@@ -72,6 +75,7 @@ export interface ProfileEditorFields {
   readonly apiKey: string;
   readonly lightModel: string;
   readonly heavyModel: string;
+  readonly memoryEnabled: boolean;
 }
 
 export function profileToEditorFields(
@@ -89,6 +93,7 @@ export function profileToEditorFields(
       provider?.models[1] ??
       provider?.models[0] ??
       "",
+    memoryEnabled: profile.memory.enabled,
   };
 }
 
@@ -100,6 +105,7 @@ export function mergeProfileEditorFields(
   const provider = ensureEditableProvider(next, fields);
 
   next.name = fields.name;
+  next.memory.enabled = fields.memoryEnabled;
   provider.baseUrl = fields.baseUrl;
   provider.apiKey = fields.apiKey;
   provider.models = [fields.lightModel, fields.heavyModel];
@@ -119,6 +125,7 @@ export function mergeProfileEditorFields(
     name: next.name,
     acknowledgedWarnings: computeAcknowledgedWarnings(next),
     ai: next.ai as ReplaceProfileInput["ai"],
+    memory: next.memory,
     platforms: next.platforms,
     plugins: next.plugins,
   };

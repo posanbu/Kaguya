@@ -41,7 +41,7 @@ Kaguya 采用 pnpm workspace 和 TypeScript project references。应用负责装
 
 **`packages/scheduler`** — 可恢复的 Durable Cadence 与绝对时间 One-Shot 调度原语。
 
-当前 Runtime 使用 PostgreSQL Information Ledger。Memory 文档与 2-gram 倒排项保存在独立表中，不写成 Information atom；召回命中后仍以来源 `informationId` 回到不可变账本。one-shot scheduler 通过同一数据库保存 requested atom 与 arm projection，Runtime 启动时恢复 open arm。消息自动写入、认知提取与向量索引分别属于后续工作，不能把稀疏召回底座描述成已经具备事实演化。
+当前 Runtime 使用 PostgreSQL Information Ledger。Memory 文档与 2-gram 倒排项保存在独立表中，不写成 Information atom；selected Profile 的 `memory.enabled` 默认关闭，关闭时只保留 association/Prompt 形状而不读取或返回实际信息。显式开启后，召回命中仍以来源 `informationId` 回到不可变账本。one-shot scheduler 通过同一数据库保存 requested atom 与 arm projection，Runtime 启动时恢复 open arm。消息自动写入、认知提取与向量索引分别属于后续工作，不能把稀疏召回底座描述成已经具备事实演化。
 
 ## 依赖方向
 

@@ -105,6 +105,9 @@ export interface UserConfigProfile {
     };
     readonly providers: readonly UserConfigProfileProvider[];
   };
+  readonly memory: {
+    readonly enabled: boolean;
+  };
   readonly platforms: readonly UserConfigProfilePlatform[];
   readonly plugins: readonly UserConfigProfilePlugin[];
   readonly review?: {
@@ -178,6 +181,9 @@ export interface ReplaceProfileInput {
       };
     };
     readonly providers: readonly UserConfigProfileProvider[];
+  };
+  readonly memory: {
+    readonly enabled: boolean;
   };
   readonly platforms: readonly UserConfigProfilePlatform[];
   readonly plugins: readonly UserConfigProfilePlugin[];
@@ -729,10 +735,15 @@ function isUserConfigProfile(value: unknown): value is UserConfigProfile {
     typeof value.id === "string" &&
     typeof value.name === "string" &&
     isProfileAi(value.ai) &&
+    isProfileMemory(value.memory) &&
     isProfilePlatformArray(value.platforms) &&
     isProfilePluginArray(value.plugins) &&
     (value.review === undefined || isProfileReview(value.review))
   );
+}
+
+function isProfileMemory(value: unknown): value is UserConfigProfile["memory"] {
+  return isRecord(value) && typeof value.enabled === "boolean";
 }
 
 function isProfileAi(value: unknown): value is UserConfigProfile["ai"] {

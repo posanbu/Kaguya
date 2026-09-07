@@ -139,6 +139,7 @@ describe("configuration management", () => {
         name: created.profile.name,
         acknowledgedWarnings: [],
         ai: { providers: [] },
+        memory: { enabled: false },
         platforms: [],
         plugins: [],
       });
@@ -218,6 +219,7 @@ function readyProfileSettings(lightModelId: string, heavyModelId: string) {
         },
       ],
     },
+    memory: { enabled: false },
     platforms: [],
     plugins: [],
   };

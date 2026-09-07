@@ -928,6 +928,28 @@ function ProfileManagementScreen({
                     />
                   </label>
                 </div>
+                <label className="setup-check">
+                  <input
+                    type="checkbox"
+                    checked={editorFields.memoryEnabled}
+                    onChange={(event) =>
+                      setEditorFields((current) =>
+                        current === undefined
+                          ? current
+                          : {
+                              ...current,
+                              memoryEnabled: event.target.checked,
+                            },
+                      )
+                    }
+                  />
+                  <span>
+                    启用 Memory
+                    <br />
+                    关闭时仅保留联想与 Prompt
+                    协议形状，不读取、写入或召回实际信息。
+                  </span>
+                </label>
                 <button
                   className="setup-button"
                   type="submit"

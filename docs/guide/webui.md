@@ -47,7 +47,7 @@ Server 只允许监听 `127.0.0.1`、`localhost` 或 `::1`；配置其他 `KAGUY
 
 ## 管理 Profile
 
-进入 Profile 管理后，先在列表中选择要编辑的 Profile，再填写名称、Base URL、API Key、light model 与 heavy model。保存 selected Profile 或切换 selected Profile 后，按页面提示重启 Server。
+进入 Profile 管理后，先在列表中选择要编辑的 Profile，再填写名称、Base URL、API Key、light model 与 heavy model，并选择是否启用 Memory。Memory 默认关闭；关闭态不会向回复返回实际 Memory 信息。保存 selected Profile 或切换 selected Profile 后，按页面提示重启 Server。
 
 `default` Profile 不能删除；当前 selected Profile 也不能删除。创建新 Profile 不会自动选中或改变正在运行的 Runtime。字段含义与操作顺序见[配置 Kaguya](./configuration)。
 

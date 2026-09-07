@@ -124,9 +124,11 @@ export async function startKaguyaServer(
     };
     const setupStatus = await setup.inspect();
     let resolveModelSelection: RuntimeModelSelectionResolver | undefined;
+    let memoryEnabled = false;
     if (setupStatus.status === "ready") {
       const profile = await setup.getProfile(setupStatus.selectedProfileId);
       resolveModelSelection = createRuntimeModelSelectionResolver(profile);
+      memoryEnabled = profile.memory.enabled;
     } else {
       serverLogger.warn(
         {
@@ -142,7 +144,7 @@ export async function startKaguyaServer(
       runtime = new KaguyaRuntime({
         database,
         logger: rootLogger,
-        ...createReplyComposition(resolveModelSelection),
+        ...createReplyComposition(resolveModelSelection, { memoryEnabled }),
       });
     }
     const webGateway = runtimeReady

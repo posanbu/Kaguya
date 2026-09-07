@@ -827,6 +827,13 @@ describe("unified server composition", () => {
       },
     ]);
   });
+
+  it("keeps Memory disabled unless composition explicitly enables it", () => {
+    expect(createReplyComposition().memory).toEqual({ enabled: false });
+    expect(
+      createReplyComposition(undefined, { memoryEnabled: true }).memory,
+    ).toEqual({ enabled: true });
+  });
 });
 
 async function selectedProfile(manager: FileUserConfigManager) {

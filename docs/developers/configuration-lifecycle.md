@@ -37,7 +37,7 @@ sequenceDiagram
 
 ## 为什么只使用 selected Profile
 
-Registry 可以保存多个 Profile，但 Server 只用一个显式 selected Profile 装配全局 Runtime。它不会因为模型调用失败而自动切换，也不会根据单条消息隐式选择其他 Profile。
+Registry 可以保存多个 Profile，但 Server 只用一个显式 selected Profile 装配全局 Runtime。模型路由与 `memory.enabled` 都在这一步冻结；Server 不会因为模型调用失败而自动切换，也不会根据单条消息隐式选择其他 Profile。
 
 这种约束避免同一进程中同时出现不可追踪的 Provider、密钥和模型路由。模块若支持显式 `profileId`，仍必须通过受控的 resolver，而不是自行读取配置文件。
 
@@ -58,6 +58,8 @@ Registry 可以保存多个 Profile，但 Server 只用一个显式 selected Pro
 ## Readiness 的含义
 
 Profile 的 Provider、models、默认 Provider、light/heavy targets 和引用关系必须通过 schema 与一致性检查。启用的 Provider 必须声明模型；默认 Provider 必须启用；light/heavy 必须引用已启用 Provider 中已声明的不同模型目标。
+
+`memory.enabled` 缺省为 `false`。关闭时不装配内置 PostgreSQL Memory 召回或 capability，但 association terminal 仍会以 unavailable 结果推进回复；这不是一次返回空命中的真实检索。
 
 缺少 Base URL、API Key，或平台、插件为空，可能形成 warning。用户必须显式确认允许的 warning；完整替换 Profile 时，旧 acknowledgement 不会自动继承，避免把过去的确认误用到新配置。
 

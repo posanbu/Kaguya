@@ -24,6 +24,7 @@ import swagger from "@fastify/swagger";
 import {
   ConfigError,
   aiConfigSchema,
+  memoryConfigSchema,
   platformConfigSchema,
   pluginConfigSchema,
   profileIdSchema,
@@ -92,6 +93,7 @@ const replaceProfileRequestSchema = z
   .object({
     name: z.string().trim().min(1).max(100),
     ai: aiConfigSchema,
+    memory: memoryConfigSchema.default({ enabled: false }),
     platforms: z.array(platformConfigSchema),
     plugins: z.array(pluginConfigSchema),
     runtime: runtimeConfigSchema.optional(),
@@ -231,15 +233,25 @@ const profileReviewJsonSchema = {
   },
 } as const;
 
+const memoryConfigJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["enabled"],
+  properties: {
+    enabled: { type: "boolean" },
+  },
+} as const;
+
 const userConfigProfileJsonSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["version", "id", "name", "ai", "platforms", "plugins"],
+  required: ["version", "id", "name", "ai", "memory", "platforms", "plugins"],
   properties: {
     version: { type: "integer", enum: [1] },
     id: profileIdJsonSchema,
     name: { type: "string", minLength: 1 },
     ai: aiConfigJsonSchema,
+    memory: memoryConfigJsonSchema,
     platforms: {
       type: "array",
       items: platformConfigJsonSchema,
@@ -277,6 +289,7 @@ const replaceProfileRequestJsonSchema = {
   properties: {
     name: { type: "string", minLength: 1, maxLength: 100 },
     ai: aiConfigJsonSchema,
+    memory: memoryConfigJsonSchema,
     platforms: { type: "array", items: platformConfigJsonSchema },
     plugins: { type: "array", items: pluginConfigJsonSchema },
     acknowledgedWarnings: {

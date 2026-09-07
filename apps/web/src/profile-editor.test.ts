@@ -57,6 +57,7 @@ const completeProfile: UserConfigProfile = {
       },
     ],
   },
+  memory: { enabled: true },
   platforms: [
     {
       id: "qq",
@@ -103,6 +104,7 @@ const emptyDefaultProfile: UserConfigProfile = {
   ai: {
     providers: [],
   },
+  memory: { enabled: false },
   platforms: [],
   plugins: [],
 };
@@ -128,6 +130,7 @@ const warningProfile: UserConfigProfile = {
       },
     ],
   },
+  memory: { enabled: false },
   platforms: [],
   plugins: [],
   review: {
@@ -147,6 +150,7 @@ describe("profileToEditorFields", () => {
       apiKey: "provider-secret",
       lightModel: "light-model",
       heavyModel: "heavy-model",
+      memoryEnabled: true,
     });
   });
 
@@ -157,6 +161,7 @@ describe("profileToEditorFields", () => {
       apiKey: "",
       lightModel: "",
       heavyModel: "",
+      memoryEnabled: false,
     });
   });
 });
@@ -171,6 +176,7 @@ describe("mergeProfileEditorFields", () => {
       apiKey: "provider-secret-v2",
       lightModel: "light-model-v2",
       heavyModel: "heavy-model-v2",
+      memoryEnabled: false,
     });
 
     expect(merged).toEqual({
@@ -212,6 +218,7 @@ describe("mergeProfileEditorFields", () => {
           },
         ],
       },
+      memory: { enabled: false },
       platforms: [
         {
           id: "qq",
@@ -276,6 +283,7 @@ describe("mergeProfileEditorFields", () => {
           },
         ],
       },
+      memory: { enabled: false },
       platforms: [],
       plugins: [],
     });
