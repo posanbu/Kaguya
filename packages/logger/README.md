@@ -9,4 +9,4 @@ Kaguya 的统一 Pino 日志包，开发默认 pretty、生产默认 JSON，提�
 - `flushLogger()` / `closeLogger()`：刷新并安全关闭同步或 worker destination；
 - `toSafeError()`：只保留可安全聚合的错误分类字段。
 
-pretty 仅支持同步 stdout/stderr；JSON 支持同步、worker transport 和文件 destination。完整用法、事件表、字段约定和安全边界见 [结构化日志](../../docs/logging.md)。
+pretty 仅支持同步 stdout/stderr；JSON 支持同步、worker transport 和文件 destination。完整用法、DAG/Prompt 展开、字段约定和安全边界见 [Runtime 与 Information 可观测性](../../docs/developers/observability.md)。

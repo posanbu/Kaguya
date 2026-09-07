@@ -61,6 +61,7 @@ describe("information module SDK public entry", () => {
       {
         signal: new AbortController().signal,
         now: () => new Date(),
+        report: async () => undefined,
         use: () => {
           throw new Error("undeclared");
         },

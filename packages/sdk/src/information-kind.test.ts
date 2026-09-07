@@ -53,6 +53,43 @@ describe("defineInformationKind", () => {
     ]);
   });
 
+  it("freezes an explicitly classified debug detail projector", () => {
+    const definition = defineInformationKind({
+      kind: "acme.prompt.requested",
+      payloadSchema: z.object({ text: z.string() }).strict(),
+      references: {},
+      log: {
+        enabled: true,
+        level: "info",
+        project: () => ({ event: "prompt.requested" }),
+        detail: {
+          sensitivity: "content",
+          project: ({ payload }) => ({ promptFull: payload.text }),
+        },
+      },
+    });
+
+    expect(definition.log).toMatchObject({
+      enabled: true,
+      detail: { sensitivity: "content" },
+    });
+    if (definition.log.enabled)
+      expect(Object.isFrozen(definition.log.detail)).toBe(true);
+    expect(() =>
+      defineInformationKind({
+        kind: "acme.prompt.invalid-detail",
+        payloadSchema: z.object({}).strict(),
+        references: {},
+        log: {
+          enabled: true,
+          level: "info",
+          project: () => ({}),
+          detail: { sensitivity: "secret" as never, project: () => ({}) },
+        },
+      }),
+    ).toThrow(/detail sensitivity/);
+  });
+
   it("accepts a shared schema reused by separate fields inside a pipe", () => {
     const sharedSource = z.enum(["template", "history"]);
     const input = z

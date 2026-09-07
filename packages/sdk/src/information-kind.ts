@@ -37,6 +37,12 @@ export interface InformationLogEnabledPolicy<
   readonly project: (
     atom: InformationAtom<string, P>,
   ) => InformationLogProjection;
+  readonly detail?: {
+    readonly sensitivity: "metadata" | "content";
+    readonly project: (
+      atom: InformationAtom<string, P>,
+    ) => InformationLogProjection;
+  };
 }
 
 export type InformationLogPolicy<P extends JsonObject = JsonObject> =
@@ -560,10 +566,34 @@ function cloneAndValidateLogPolicy<P extends JsonObject>(
     throw new Error("log project must be a function");
   }
 
+  if (log.detail !== undefined) {
+    if (
+      typeof log.detail !== "object" ||
+      log.detail === null ||
+      (log.detail.sensitivity !== "metadata" &&
+        log.detail.sensitivity !== "content")
+    ) {
+      throw new Error(
+        "log detail sensitivity must be one of metadata, content",
+      );
+    }
+    if (typeof log.detail.project !== "function") {
+      throw new Error("log detail project must be a function");
+    }
+  }
+
   return Object.freeze({
     enabled: true,
     level: log.level,
     project: log.project,
+    ...(log.detail === undefined
+      ? {}
+      : {
+          detail: Object.freeze({
+            sensitivity: log.detail.sensitivity,
+            project: log.detail.project,
+          }),
+        }),
   });
 }
 

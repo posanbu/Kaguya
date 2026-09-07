@@ -6,7 +6,7 @@
  */
 import { Writable } from "node:stream";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { z, type InformationAtom, type JsonObject } from "@kaguya/schema";
 import { defineInformationKind } from "@kaguya/sdk";
@@ -52,20 +52,19 @@ describe("information atom log projection", () => {
     ["月".repeat(167), 167, false, "月".repeat(167)],
     ["月".repeat(168), 168, false, "月".repeat(168)],
     ["月".repeat(169), 169, true, `${"月".repeat(168)}…`],
-  ])(
-    "truncates by Unicode code point",
-    (input, length, truncated, preview) => {
-      expect(previewInformationContent(input)).toEqual({
-        contentPreview: preview,
-        contentLength: length,
-        contentTruncated: truncated,
-      });
-    },
-  );
+  ])("truncates by Unicode code point", (input, length, truncated, preview) => {
+    expect(previewInformationContent(input)).toEqual({
+      contentPreview: preview,
+      contentLength: length,
+      contentTruncated: truncated,
+    });
+  });
 
   it("preserves newline and escapes C0 controls", () => {
     expect(
-      previewInformationContent(`line 1\nline 2\t${String.fromCharCode(0)}${String.fromCharCode(31)}end`),
+      previewInformationContent(
+        `line 1\nline 2\t${String.fromCharCode(0)}${String.fromCharCode(31)}end`,
+      ),
     ).toEqual({
       contentPreview: `line 1\nline 2\t\\u0000\\u001fend`,
       contentLength: 19,
@@ -80,7 +79,10 @@ describe("information atom log projection", () => {
       level: "trace",
       stream,
     });
-    const definition = defineInformationKind<"core.message.inbound.text", TextPayload>({
+    const definition = defineInformationKind<
+      "core.message.inbound.text",
+      TextPayload
+    >({
       kind: "core.message.inbound.text",
       payloadSchema: textPayloadSchema,
       references: {},
@@ -89,9 +91,12 @@ describe("information atom log projection", () => {
         level: "info",
         project(atom) {
           return {
-            contentPreview: previewInformationContent(atom.payload.content).contentPreview,
-            contentLength: previewInformationContent(atom.payload.content).contentLength,
-            contentTruncated: previewInformationContent(atom.payload.content).contentTruncated,
+            contentPreview: previewInformationContent(atom.payload.content)
+              .contentPreview,
+            contentLength: previewInformationContent(atom.payload.content)
+              .contentLength,
+            contentTruncated: previewInformationContent(atom.payload.content)
+              .contentTruncated,
             informationId: "spoofed",
             kind: "spoofed.kind",
             occurredAt: "1999-01-01T00:00:00.000Z",
@@ -142,46 +147,122 @@ describe("information atom log projection", () => {
     ["info" as const],
     ["warn" as const],
     ["error" as const],
-  ])("routes each log level through the matching pino method: %s", async (level) => {
-    const stream = new MemoryStream();
-    const logger = createLogger({
-      service: "kaguya-test",
-      level: "trace",
-      stream,
-    });
-    const definition = defineInformationKind<`core.system.log.${typeof level}`, ContentPayload>({
-      kind: `core.system.log.${level}`,
-      payloadSchema: z
-        .object({
-          content: z.string(),
-        })
-        .strict(),
+  ])(
+    "routes each log level through the matching pino method: %s",
+    async (level) => {
+      const stream = new MemoryStream();
+      const logger = createLogger({
+        service: "kaguya-test",
+        level: "trace",
+        stream,
+      });
+      const definition = defineInformationKind<
+        `core.system.log.${typeof level}`,
+        ContentPayload
+      >({
+        kind: `core.system.log.${level}`,
+        payloadSchema: z
+          .object({
+            content: z.string(),
+          })
+          .strict(),
+        references: {},
+        log: {
+          enabled: true,
+          level,
+          project(atom) {
+            return {
+              contentPreview: previewInformationContent(atom.payload.content)
+                .contentPreview,
+            };
+          },
+        },
+      });
+      const atom: InformationAtom<
+        `core.system.log.${typeof level}`,
+        ContentPayload
+      > = {
+        informationId: `atom-${level}`,
+        kind: `core.system.log.${level}`,
+        occurredAt: "2026-09-01T12:00:00.000Z",
+        source: "runtime:core",
+        payload: { content: `body-${level}` },
+        references: [],
+      };
+
+      await projectInformationAtomLog(logger, definition, atom);
+
+      expect(stream.logs()[0]).toMatchObject({
+        level,
+        informationId: `atom-${level}`,
+        contentPreview: `body-${level}`,
+      });
+    },
+  );
+
+  it("keeps full references in both records and expands detail only at debug", async () => {
+    const detailProject = vi.fn(
+      (atom: InformationAtom<string, ContentPayload>) => ({
+        event: "model.task.prompt",
+        promptFull: atom.payload.content,
+        promptFragments: [
+          {
+            fragmentId: "fragment-1",
+            informationId: "context-12345678",
+            contentDigest: "sha256:test",
+          },
+        ],
+      }),
+    );
+    const definition = defineInformationKind({
+      kind: "core.system.log.detail",
+      payloadSchema: z.object({ content: z.string() }).strict(),
       references: {},
       log: {
         enabled: true,
-        level,
-        project(atom) {
-          return {
-            contentPreview: previewInformationContent(atom.payload.content).contentPreview,
-          };
+        level: "info",
+        project: () => ({ event: "model.task.lifecycle" }),
+        detail: {
+          sensitivity: "content",
+          project: detailProject,
         },
       },
     });
-    const atom: InformationAtom<`core.system.log.${typeof level}`, ContentPayload> = {
-      informationId: `atom-${level}`,
-      kind: `core.system.log.${level}`,
+    const atom = {
+      informationId: "atom-12345678",
+      kind: definition.kind,
       occurredAt: "2026-09-01T12:00:00.000Z",
       source: "runtime:core",
-      payload: { content: `body-${level}` },
-      references: [],
-    };
+      payload: { content: "full prompt\nsecond line" },
+      references: [
+        { relation: "core:caused-by", informationId: "cause-12345678" },
+        { relation: "core:context", informationId: "context-12345678" },
+      ],
+    } as InformationAtom<"core.system.log.detail", ContentPayload>;
 
-    await projectInformationAtomLog(logger, definition, atom);
+    const infoStream = new MemoryStream();
+    await projectInformationAtomLog(
+      createLogger({ service: "test", level: "info", stream: infoStream }),
+      definition,
+      atom,
+    );
+    expect(detailProject).not.toHaveBeenCalled();
+    expect(infoStream.logs()[0]).toMatchObject({ references: atom.references });
 
-    expect(stream.logs()[0]).toMatchObject({
-      level,
-      informationId: `atom-${level}`,
-      contentPreview: `body-${level}`,
+    const debugStream = new MemoryStream();
+    await projectInformationAtomLog(
+      createLogger({ service: "test", level: "debug", stream: debugStream }),
+      definition,
+      atom,
+    );
+    expect(detailProject).toHaveBeenCalledOnce();
+    expect(debugStream.logs()).toHaveLength(2);
+    expect(debugStream.logs()[1]).toMatchObject({
+      informationId: atom.informationId,
+      references: atom.references,
+      detail: true,
+      sensitivity: "content",
+      promptFull: "full prompt\nsecond line",
     });
   });
 
@@ -192,7 +273,10 @@ describe("information atom log projection", () => {
       level: "trace",
       stream,
     });
-    const definition = defineInformationKind<"core.system.log.disabled", ContentPayload>({
+    const definition = defineInformationKind<
+      "core.system.log.disabled",
+      ContentPayload
+    >({
       kind: "core.system.log.disabled",
       payloadSchema: z
         .object({
@@ -225,7 +309,10 @@ describe("information atom log projection", () => {
       level: "trace",
       stream,
     });
-    const definition = defineInformationKind<"core.system.log.invalid", ContentPayload>({
+    const definition = defineInformationKind<
+      "core.system.log.invalid",
+      ContentPayload
+    >({
       kind: "core.system.log.invalid",
       payloadSchema: z
         .object({
@@ -274,7 +361,10 @@ describe("information atom log projection", () => {
       level: "trace",
       stream,
     });
-    const definition = defineInformationKind<"core.system.log.sink", ContentPayload>({
+    const definition = defineInformationKind<
+      "core.system.log.sink",
+      ContentPayload
+    >({
       kind: "core.system.log.sink",
       payloadSchema: z
         .object({
@@ -287,7 +377,8 @@ describe("information atom log projection", () => {
         level: "info",
         project(atom) {
           return {
-            contentPreview: previewInformationContent(atom.payload.content).contentPreview,
+            contentPreview: previewInformationContent(atom.payload.content)
+              .contentPreview,
           };
         },
       },
@@ -314,12 +405,44 @@ describe("information atom log projection", () => {
   });
 
   it("reports projection exceptions and never throws", async () => {
-    const logger = createLogger({ service: "test", level: "trace", stream: new MemoryStream() });
-    const definition = defineInformationKind({ kind: "core.system.log.throwing", payloadSchema: z.object({ content: z.string() }).strict(), references: {}, log: { enabled: true, level: "info", project() { throw new Error("boom"); } } });
-    const atom = { informationId: "atom-throw", kind: definition.kind, occurredAt: "2026-09-01T00:00:00.000Z", source: "test", payload: { content: "x" }, references: [] } as InformationAtom;
+    const logger = createLogger({
+      service: "test",
+      level: "trace",
+      stream: new MemoryStream(),
+    });
+    const definition = defineInformationKind({
+      kind: "core.system.log.throwing",
+      payloadSchema: z.object({ content: z.string() }).strict(),
+      references: {},
+      log: {
+        enabled: true,
+        level: "info",
+        project() {
+          throw new Error("boom");
+        },
+      },
+    });
+    const atom = {
+      informationId: "atom-throw",
+      kind: definition.kind,
+      occurredAt: "2026-09-01T00:00:00.000Z",
+      source: "test",
+      payload: { content: "x" },
+      references: [],
+    } as InformationAtom;
     const errors: unknown[] = [];
-    await expect(projectInformationAtomLog(logger, definition as any, atom, (e) => { errors.push(e); })).resolves.toBeUndefined();
-    expect(errors).toEqual([{ informationId: "atom-throw", kind: definition.kind, errorType: "projection_failed" }]);
+    await expect(
+      projectInformationAtomLog(logger, definition as any, atom, (e) => {
+        errors.push(e);
+      }),
+    ).resolves.toBeUndefined();
+    expect(errors).toEqual([
+      {
+        informationId: "atom-throw",
+        kind: definition.kind,
+        errorType: "projection_failed",
+      },
+    ]);
   });
 
   it("strips sensitive projection keys before serialization", async () => {
@@ -335,6 +458,9 @@ describe("information atom log projection", () => {
         project() {
           return {
             contentPreview: "safe-preview",
+            promptFull: "hidden-full-prompt",
+            detail: true,
+            sensitivity: "content",
             response: "secret",
             nested: {
               prompt: "hidden",
@@ -370,6 +496,8 @@ describe("information atom log projection", () => {
     const serialized = JSON.stringify(stream.logs());
     expect(serialized).not.toContain("secret");
     expect(serialized).not.toContain("hidden");
+    expect(stream.logs()[0]).not.toHaveProperty("detail");
+    expect(stream.logs()[0]).not.toHaveProperty("sensitivity");
   });
 
   it("reports unknown kinds from a sink", async () => {

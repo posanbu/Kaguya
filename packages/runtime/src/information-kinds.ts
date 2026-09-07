@@ -2,7 +2,8 @@
  * 功能概述：定义 Runtime 自有的 context、通用 Model Task 生命周期和投递结果 kind，并聚合内建 DAG。
  * Model Task：四个 modelTask*InformationKind 保存任务版本、选择策略、模型、激活来源与 Prompt
  * provenance；终态使用同一 requested 的 status-of，输出仅为 JSON，具体 schema 由调用方拥有。
- * modelTaskInformationKinds 提供独立注册集合；日志仅投影固定事件、状态及耗时，不包含业务正文。
+ * modelTaskInformationKinds 提供独立注册集合；日志默认投影摘要与 Prompt 预览，debug detail
+ * 才投影经凭据清理的完整 Prompt 和 provenance，不包含模型输出或 provider 原始响应。
  * 主要职责：Runtime definition 约束严格 payload、直接 caused-by/status-of/context 与
  * requested uses-context 引用及脱敏日志投影；`builtInInformationKinds` 原样复用 Engine
  * 与 modules 的 definitions，保证每个字面 kind 只存在一个对象定义。
@@ -12,6 +13,7 @@
  * fragment metadata 规范为 JSON；projector 不输出 prompt/output/raw 或凭据。
  */
 import { consumerFailedInformationKind } from "@kaguya/engine";
+import { previewInformationContent } from "@kaguya/logger";
 import {
   deliveryRequestedInformationKind,
   informationModuleKinds,
@@ -125,7 +127,11 @@ export const runtimeContextInformationKind = defineInformationKind({
   kind: "core.runtime.context",
   payloadSchema: z.object({}).strict(),
   references: {},
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "info",
+    project: () => ({ event: "runtime.context" }),
+  },
 });
 
 const safeDeliveryBaseShape = {
@@ -297,7 +303,39 @@ export const modelTaskRequestedInformationKind = defineInformationKind({
   log: {
     enabled: true,
     level: "info",
-    project: () => ({ event: "model.task.lifecycle", status: "requested" }),
+    project: ({ payload }) => ({
+      event: "model.task.lifecycle",
+      status: "requested",
+      taskId: payload.taskId,
+      taskVersion: payload.version,
+      activationDefinitionId: payload.activation.definitionId,
+      activationInstanceId: payload.activation.instanceId,
+      tier: payload.selectionPolicy.tier,
+      providerId: payload.resolvedModel.providerId,
+      modelId: payload.resolvedModel.modelId,
+      promptCharacters: Array.from(payload.prompt.text).length,
+      promptFragmentCount: payload.prompt.fragments.length,
+      ...promptPreview(payload.prompt.text),
+    }),
+    detail: {
+      sensitivity: "content",
+      project: ({ payload }) => ({
+        event: "model.task.prompt",
+        status: "requested",
+        taskId: payload.taskId,
+        taskVersion: payload.version,
+        promptFull: sanitizePromptForLogging(payload.prompt.text),
+        promptFragments: payload.prompt.provenance.map((entry) => ({
+          fragmentId: entry.fragmentId,
+          ...(entry.informationId === undefined
+            ? {}
+            : { informationId: entry.informationId }),
+          source: entry.source,
+          priority: entry.priority,
+          contentDigest: entry.contentDigest,
+        })),
+      }),
+    },
   },
 });
 export const modelTaskCompletedInformationKind = defineInformationKind({
@@ -321,6 +359,13 @@ export const modelTaskCompletedInformationKind = defineInformationKind({
     project: ({ payload }) => ({
       event: "model.task.lifecycle",
       status: "completed",
+      taskId: payload.taskId,
+      taskVersion: payload.version,
+      activationDefinitionId: payload.activation.definitionId,
+      activationInstanceId: payload.activation.instanceId,
+      tier: payload.selectionPolicy.tier,
+      providerId: payload.resolvedModel.providerId,
+      modelId: payload.resolvedModel.modelId,
       durationMs: payload.durationMs,
     }),
   },
@@ -343,7 +388,19 @@ export const modelTaskFailedInformationKind = defineInformationKind({
   log: {
     enabled: true,
     level: "error",
-    project: () => ({ event: "model.task.lifecycle", status: "failed" }),
+    project: ({ payload }) => ({
+      event: "model.task.lifecycle",
+      status: "failed",
+      taskId: payload.taskId,
+      taskVersion: payload.version,
+      activationDefinitionId: payload.activation.definitionId,
+      activationInstanceId: payload.activation.instanceId,
+      tier: payload.selectionPolicy.tier,
+      providerId: payload.resolvedModel.providerId,
+      modelId: payload.resolvedModel.modelId,
+      durationMs: payload.durationMs,
+      errorKind: payload.error.kind,
+    }),
   },
 });
 export const modelTaskCancelledInformationKind = defineInformationKind({
@@ -358,9 +415,46 @@ export const modelTaskCancelledInformationKind = defineInformationKind({
   log: {
     enabled: true,
     level: "info",
-    project: () => ({ event: "model.task.lifecycle", status: "cancelled" }),
+    project: ({ payload }) => ({
+      event: "model.task.lifecycle",
+      status: "cancelled",
+      taskId: payload.taskId,
+      taskVersion: payload.version,
+      activationDefinitionId: payload.activation.definitionId,
+      activationInstanceId: payload.activation.instanceId,
+      tier: payload.selectionPolicy.tier,
+      providerId: payload.resolvedModel.providerId,
+      modelId: payload.resolvedModel.modelId,
+      durationMs: payload.durationMs,
+    }),
   },
 });
+
+function promptPreview(text: string) {
+  const preview = previewInformationContent(text);
+  return {
+    promptPreview: sanitizePromptForLogging(preview.contentPreview),
+    promptTruncated: preview.contentTruncated,
+  };
+}
+
+function sanitizePromptForLogging(text: string): string {
+  return text
+    .replace(
+      /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s]+/giu,
+      "[REDACTED]",
+    )
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/gu, "[REDACTED]")
+    .replace(
+      /\b(api[_-]?key|authorization|bearer|token|password|secret|credential)\s*[:=]\s*[^\s]+/giu,
+      "$1=[REDACTED]",
+    )
+    .replace(/\bBearer\s+[^\s]+/giu, "Bearer [REDACTED]")
+    .replace(
+      /-----BEGIN [^-]+-----[\s\S]*?-----END [^-]+-----/gu,
+      "[REDACTED PRIVATE MATERIAL]",
+    );
+}
 export const modelTaskInformationKinds = Object.freeze([
   modelTaskRequestedInformationKind,
   modelTaskCompletedInformationKind,

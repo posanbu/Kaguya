@@ -25,6 +25,7 @@ import {
 } from "@kaguya/schema";
 import {
   defineInformationModule,
+  defineModuleDiagnostic,
   defineInformationSelector,
   type InformationKindDefinition,
   type ModuleCapability,
@@ -93,6 +94,22 @@ export const llmReplySettingsSchema = z
   })
   .strict();
 export type LlmReplySettings = z.infer<typeof llmReplySettingsSchema>;
+
+export const replyModelDispatchingDiagnostic = defineModuleDiagnostic({
+  event: "reply.model.dispatching",
+  message: "Reply model task dispatching",
+  level: "info",
+  payloadSchema: z
+    .object({
+      taskId: z.literal("core.reply.generate"),
+      taskVersion: z.literal("1"),
+      tier: modelTierSchema,
+      promptCharacters: z.number().int().nonnegative(),
+      promptFragmentCount: z.number().int().nonnegative(),
+    })
+    .strict(),
+  project: (payload) => ({ ...payload }),
+});
 
 export const replyTaskOutputSchema = z
   .object({ text: z.string().min(1) })
@@ -214,9 +231,20 @@ export function createLlmReplyModule<
         assistantTextInformationKind,
         deliveryRequestedInformationKind,
       ],
+      diagnostics: [replyModelDispatchingDiagnostic],
     },
     create: ({ settings, activation }) => ({
       provisions: [],
+      describeStartup: () => ({
+        summary: "LLM reply pipeline ready",
+        fields: {
+          modelTier: settings.modelTier,
+          outboundMode: settings.outbound.mode,
+          ...(settings.outbound.mode === "source"
+            ? { messageKind: settings.outbound.messageKind }
+            : {}),
+        },
+      }),
       subscriptions: [
         onInformation(
           associationCompletedInformationKind,
@@ -237,6 +265,13 @@ export function createLlmReplyModule<
             );
             if (contexts.length !== 1)
               throw new Error("Reply must have one context");
+            await context.report(replyModelDispatchingDiagnostic, {
+              taskId: "core.reply.generate",
+              taskVersion: "1",
+              tier: settings.modelTier,
+              promptCharacters: Array.from(prompt.text).length,
+              promptFragmentCount: prompt.fragments.length,
+            });
             await context.use(modelTaskCapability).execute({
               task: {
                 taskId: "core.reply.generate",

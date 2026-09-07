@@ -4,7 +4,10 @@
  */
 import { defineInformationModule, onInformation } from "@kaguya/sdk";
 import { z } from "@kaguya/schema";
-import { inboundTextInformationKind, turnContextCompletedInformationKind } from "./information-kinds.js";
+import {
+  inboundTextInformationKind,
+  turnContextCompletedInformationKind,
+} from "./information-kinds.js";
 
 export const turnContextModule = defineInformationModule({
   manifest: {
@@ -15,35 +18,61 @@ export const turnContextModule = defineInformationModule({
     settingsSchema: z.object({}).strict(),
     consumes: [inboundTextInformationKind],
     produces: [turnContextCompletedInformationKind],
-    selectors: [], promptRenderers: [], requires: [], provides: [],
+    selectors: [],
+    promptRenderers: [],
+    requires: [],
+    provides: [],
   },
   create: () => ({
     provisions: [],
-    subscriptions: [onInformation(inboundTextInformationKind, { subscriptionId: "core.turn.context.inbound", delivery: "durable" }, async (atom, context) => {
-      const input = atom.payload as any;
-      const source = input.source;
-      const directness = (source.mentions?.length ?? 0) > 0 || source.replyTo !== undefined ? 1 : 0.8;
-      const contentNeed = input.text.trim().length > 0 ? 1 : 0;
-      await context.registerOnce("core.turn.context.completed", atom.informationId, turnContextCompletedInformationKind, {
-        payload: Object.freeze({
-          candidateInformationId: atom.informationId,
-          asOf: atom.occurredAt,
-          text: input.text,
-          source,
-          directness,
-          contentNeed,
-          messageCount: 1,
-          recentPresencePenalty: 0,
-          frequencyMultiplier: 1,
-          muted: false,
-          safe: true,
-          destinationAvailable: source.destination !== undefined,
-          stale: false,
-          attempt: 0,
-          totalWaitBudget: 0,
-        }),
-        references: [{ relation: "core:uses-context", informationId: atom.informationId }],
-      });
-    })],
+    describeStartup: () => ({
+      summary: "Turn context builder ready",
+      fields: { strategy: "deterministic-v1" },
+    }),
+    subscriptions: [
+      onInformation(
+        inboundTextInformationKind,
+        { subscriptionId: "core.turn.context.inbound", delivery: "durable" },
+        async (atom, context) => {
+          const input = atom.payload as any;
+          const source = input.source;
+          const directness =
+            (source.mentions?.length ?? 0) > 0 || source.replyTo !== undefined
+              ? 1
+              : 0.8;
+          const contentNeed = input.text.trim().length > 0 ? 1 : 0;
+          await context.registerOnce(
+            "core.turn.context.completed",
+            atom.informationId,
+            turnContextCompletedInformationKind,
+            {
+              payload: Object.freeze({
+                candidateInformationId: atom.informationId,
+                asOf: atom.occurredAt,
+                text: input.text,
+                source,
+                directness,
+                contentNeed,
+                messageCount: 1,
+                recentPresencePenalty: 0,
+                frequencyMultiplier: 1,
+                muted: false,
+                safe: true,
+                destinationAvailable: source.destination !== undefined,
+                stale: false,
+                attempt: 0,
+                totalWaitBudget: 0,
+              }),
+              references: [
+                {
+                  relation: "core:uses-context",
+                  informationId: atom.informationId,
+                },
+              ],
+            },
+          );
+        },
+      ),
+    ],
   }),
 });

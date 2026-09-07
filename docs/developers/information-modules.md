@@ -9,7 +9,7 @@ description: 用显式 Catalog、能力声明与 Information DAG 组合可检查
 
 ## 唯一模块协议
 
-`defineInformationModule()` 的 manifest 必须包含 `protocolVersion: 1`、稳定 `definitionId`、语义版本 `moduleVersion`、`displayName`、`settingsSchema`，以及 `consumes`、`produces`、`selectors`、`promptRenderers`、`requires`、`provides` 六组声明。空声明使用空数组。重复 definition ID、不支持的协议、冲突的同名 kind、Selector 或 renderer 都会拒绝启动。
+`defineInformationModule()` 的 manifest 必须包含 `protocolVersion: 1`、稳定 `definitionId`、语义版本 `moduleVersion`、`displayName`、`settingsSchema`，以及 `consumes`、`produces`、`selectors`、`promptRenderers`、`requires`、`provides` 六组声明。可选的 `diagnostics` 声明模块允许上报的瞬时诊断。空声明使用空数组。重复 definition ID、不支持的协议、冲突的同名 kind、Selector、renderer 或诊断 event 都会拒绝启动。
 
 `consumes` 约束订阅输入，`produces` 约束派生输出。Selector 与 renderer 使用稳定 ID，并列入 manifest；`context.select()` 拒绝未声明的 Selector。订阅与声明必须引用同一份 kind definition，不能用结构相似的对象替代。Catalog 合并顺序不会改变创建顺序。
 
@@ -65,7 +65,9 @@ activation 可设置 `enabled: false`，停用不会删除已持久化的未确�
 
 Host 在任何 `create()` 前完成全部启用实例的 settings parse、深冻结、kind/Selector/renderer 校验与能力图检查；缺失、重复、版本不匹配或依赖环都立即失败。解析后的设置必须是普通 JSON 对象、数组或标量（可选字段允许 undefined）；Date、Map、Set、自定义实例和循环结构会在 create 前拒绝。随后按确定性拓扑顺序调用 `create(options, context)` 和 `instance.start(context)`，并核对 provisions 与清单精确一致。全部启动成功后才开放订阅，Runtime 最后开放 ingress。
 
-`options` 包含只读 settings、instanceId 与 activation 来源身份。create、start、handler 的 context 均有 `AbortSignal`、`now()` 和受限 `use()`。启动失败按逆依赖顺序 stop、dispose，并聚合清理错误。正常停止先拒绝新入口和领取，传播 abort、逆序 stop、有界排空 live handlers，再逆序 dispose。迟到 handler 不能在停用后提交输出。`drainTimeoutMs` 控制 Runtime、Core 和 Host 各关闭阶段的等待上限，默认 5000 毫秒；stop/dispose 钩子超时会记录为清理失败，并继续清理剩余模块。创建失败时同样会取消该实例的 signal。生命周期顺序不表示业务 DAG 顺序。
+`options` 包含只读 settings、instanceId 与 activation 来源身份。create、start、handler 的 context 均有 `AbortSignal`、`now()`、受限 `use()` 和声明式 `report()`。启动失败按逆依赖顺序 stop、dispose，并聚合清理错误。正常停止先拒绝新入口和领取，传播 abort、逆序 stop、有界排空 live handlers，再逆序 dispose。迟到 handler 不能在停用后提交输出。`drainTimeoutMs` 控制 Runtime、Core 和 Host 各关闭阶段的等待上限，默认 5000 毫秒；stop/dispose 钩子超时会记录为清理失败，并继续清理剩余模块。创建失败时同样会取消该实例的 signal。生命周期顺序不表示业务 DAG 顺序。
+
+`defineModuleDiagnostic()` 固定 event、消息、级别、严格 payload schema 和安全投影；definition 必须列入当前 manifest，才能传给 `context.report()`。模块还可用 `describeStartup()` 返回一句启动状态和少量安全字段。Host 的 started/failed 是权威生命周期，模块描述和瞬时诊断都是补充信息；详见 [Runtime 与 Information 可观测性](./observability)。
 
 `host.inspect()` 从 Catalog 与实际绑定生成 definition/module/protocol 版本、settings schema 的 SHA-256 指纹、kind、Selector/renderer ID 和 capability bindings。它不输出 settings 值、URL、凭据、Prompt、人物或记忆正文。
 

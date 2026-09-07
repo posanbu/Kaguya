@@ -6,7 +6,7 @@
  * 代码库关系：`packages/logger/src/index.ts` 通过这里导出正文预览、
  * 投影与 sink 工厂；数据库 outbox runner 会把待投影 atom 交给这里生成的 sink。
  * 输入输出与副作用：投影函数保持纯计算；sink 会写一条结构化日志，policy 或 logger
- * 失败时只向 emergency reporter 发送脱敏错误摘要。
+ * 失败时只向 emergency reporter 发送脱敏错误摘要；debug detail 与摘要共享原子身份。
  */
 import type { InformationAtom, JsonObject, JsonValue } from "@kaguya/schema";
 import type {
@@ -86,7 +86,7 @@ export async function projectInformationAtomLog<P extends JsonObject>(
     });
     return;
   }
-  const projection = normalizeProjection(rawProjection);
+  const projection = normalizeProjection(rawProjection, false);
   if (projection === undefined) {
     await reportProjectionError(emergencyReporter, {
       informationId: atom.informationId,
@@ -103,6 +103,51 @@ export async function projectInformationAtomLog<P extends JsonObject>(
       kind: atom.kind,
       occurredAt: atom.occurredAt,
       source: atom.source,
+      references: atom.references.map((reference) => ({ ...reference })),
+    });
+  } catch {
+    await reportProjectionError(emergencyReporter, {
+      informationId: atom.informationId,
+      kind: atom.kind,
+      errorType: "logger_write_failed",
+    });
+    return;
+  }
+
+  if (definition.log.detail === undefined || !logger.isLevelEnabled("debug")) {
+    return;
+  }
+
+  let rawDetail: unknown;
+  try {
+    rawDetail = definition.log.detail.project(atom);
+  } catch {
+    await reportProjectionError(emergencyReporter, {
+      informationId: atom.informationId,
+      kind: atom.kind,
+      errorType: "detail_projection_failed",
+    });
+    return;
+  }
+  const detail = normalizeProjection(rawDetail, true);
+  if (detail === undefined) {
+    await reportProjectionError(emergencyReporter, {
+      informationId: atom.informationId,
+      kind: atom.kind,
+      errorType: "invalid_detail_projection_result",
+    });
+    return;
+  }
+  try {
+    logger.debug({
+      ...detail,
+      informationId: atom.informationId,
+      kind: atom.kind,
+      occurredAt: atom.occurredAt,
+      source: atom.source,
+      references: atom.references.map((reference) => ({ ...reference })),
+      detail: true,
+      sensitivity: definition.log.detail.sensitivity,
     });
   } catch {
     await reportProjectionError(emergencyReporter, {
@@ -159,12 +204,15 @@ function normalizeDefinitions(
   return normalized;
 }
 
-function normalizeProjection(projection: unknown): JsonObject | undefined {
+function normalizeProjection(
+  projection: unknown,
+  allowDetail: boolean,
+): JsonObject | undefined {
   if (!isPlainObject(projection)) {
     return undefined;
   }
 
-  const cloned = cloneJsonObject(projection);
+  const cloned = cloneJsonObject(projection, allowDetail);
   if (cloned === undefined) {
     return undefined;
   }
@@ -172,13 +220,23 @@ function normalizeProjection(projection: unknown): JsonObject | undefined {
   return cloned;
 }
 
-function cloneJsonObject(value: JsonObject): JsonObject | undefined {
+function cloneJsonObject(
+  value: JsonObject,
+  allowDetail: boolean,
+): JsonObject | undefined {
   const clone: JsonObject = {};
   for (const key of Reflect.ownKeys(value)) {
     if (typeof key !== "string") {
       return undefined;
     }
-    if (FORBIDDEN_PROJECTION_KEYS.has(key)) {
+    if (
+      FORBIDDEN_PROJECTION_KEYS.has(key) ||
+      (!allowDetail &&
+        (key === "detail" ||
+          key === "sensitivity" ||
+          key === "promptFull" ||
+          key === "promptFragments"))
+    ) {
       continue;
     }
 
@@ -191,7 +249,7 @@ function cloneJsonObject(value: JsonObject): JsonObject | undefined {
       return undefined;
     }
 
-    const clonedValue = cloneJsonValue(descriptor.value);
+    const clonedValue = cloneJsonValue(descriptor.value, allowDetail);
     if (clonedValue === undefined) {
       return undefined;
     }
@@ -200,7 +258,10 @@ function cloneJsonObject(value: JsonObject): JsonObject | undefined {
   return clone;
 }
 
-function cloneJsonValue(value: unknown): JsonValue | undefined {
+function cloneJsonValue(
+  value: unknown,
+  allowDetail: boolean,
+): JsonValue | undefined {
   if (
     value === null ||
     typeof value === "string" ||
@@ -216,7 +277,7 @@ function cloneJsonValue(value: unknown): JsonValue | undefined {
   if (Array.isArray(value)) {
     const clone: JsonValue[] = [];
     for (const item of value) {
-      const clonedItem = cloneJsonValue(item);
+      const clonedItem = cloneJsonValue(item, allowDetail);
       if (clonedItem === undefined) {
         return undefined;
       }
@@ -229,7 +290,7 @@ function cloneJsonValue(value: unknown): JsonValue | undefined {
     return undefined;
   }
 
-  return cloneJsonObject(value);
+  return cloneJsonObject(value, allowDetail);
 }
 
 function isPlainObject(value: unknown): value is JsonObject {

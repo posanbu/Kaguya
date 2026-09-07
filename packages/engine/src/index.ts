@@ -53,6 +53,8 @@ export {
   ModuleHost,
   ModuleKindNotDeclaredError,
   type ModuleHostOptions,
+  type ModuleHostObservation,
+  type ModuleHostObserver,
 } from "./module-host.js";
 
 export * from "./reliable-types.js";

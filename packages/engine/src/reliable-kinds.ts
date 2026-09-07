@@ -18,5 +18,13 @@ export const executionExhaustedInformationKind = defineInformationKind({
     "core:caused-by": { required: true, multiple: false },
     "core:status-of": { required: true, multiple: false },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "error",
+    project: ({ payload }) => ({
+      event: "execution.exhausted",
+      subscriptionId: payload.subscriptionId,
+      attempts: payload.attempts,
+    }),
+  },
 });

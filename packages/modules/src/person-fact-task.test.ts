@@ -161,6 +161,7 @@ function handlerContext(
   const winners = new Map<string, DeepReadonly<InformationAtom>>();
   return {
     signal: new AbortController().signal,
+    report: async () => undefined,
     definitionId: "demo.person.fact.extract",
     instanceId: "person-fact-1",
     sourceAtom,
@@ -223,6 +224,7 @@ async function createInstance(executor: ModelTaskCapability) {
       {
         signal: new AbortController().signal,
         now: () => new Date("2026-09-06T00:00:00.000Z"),
+        report: async () => undefined,
         use: () => executor as never,
       },
     ),

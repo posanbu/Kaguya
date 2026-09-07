@@ -59,6 +59,9 @@ const probes = {
   cancellation: "private-free-form-cancel-753",
 };
 const secret = Object.values(probes).join(" ");
+const promptInput = [probes.prompt, probes.credential, probes.database].join(
+  " ",
+);
 const input = {
   occurredAt: "2026-09-06T00:00:00.000Z",
   source: "test:persistence",
@@ -192,7 +195,7 @@ async function fixture(backend: Backend, provider = model()) {
   const source = await core.register(sourceKind, {
     ...input,
     references,
-    payload: { text: secret },
+    payload: { text: promptInput },
   });
   const prompt = new PromptCompiler().compile(
     "memory",
@@ -763,8 +766,15 @@ for (const backend of ["PGlite", "PostgreSQL"] as const) {
           const outbox = await f.db.sql.query(
             "SELECT information_id, projected_at, last_error FROM information_log_outbox",
           );
+          const loggedAtoms = await f.db.information.find({
+            kinds: [
+              runtimeContextInformationKind.kind,
+              ...modelTaskInformationKinds.map(({ kind }) => kind),
+            ],
+            limit: 100,
+          });
           expect(outbox.rows.map((r) => r.information_id).sort()).toEqual(
-            atoms.map((a) => a.informationId).sort(),
+            loggedAtoms.map((atom) => atom.informationId).sort(),
           );
           expect(
             outbox.rows.every(
@@ -799,6 +809,9 @@ for (const backend of ["PGlite", "PostgreSQL"] as const) {
           const lifecycleLogs = logs.filter(
             (line) => line.event === "model.task.lifecycle",
           );
+          expect(logs.every((line) => line.promptFull === undefined)).toBe(
+            true,
+          );
           expect(lifecycleLogs.map((line) => line.status)).toEqual([
             "requested",
             status,
@@ -806,15 +819,21 @@ for (const backend of ["PGlite", "PostgreSQL"] as const) {
           expect(
             lifecycleLogs.map((line) => line.informationId).sort(),
           ).toEqual(atoms.map((a) => a.informationId).sort());
-          for (const projection of [
-            projections,
-            logs,
-            metrics,
-            inspection,
-            outbox.rows,
-          ])
+          for (const projection of [metrics, inspection, outbox.rows])
             for (const probe of Object.values(probes))
               expect(JSON.stringify(projection)).not.toContain(probe);
+          for (const projection of [projections, logs]) {
+            const serialized = JSON.stringify(projection);
+            expect(serialized).toContain(probes.prompt);
+            for (const probe of [
+              probes.output,
+              probes.credential,
+              probes.database,
+              probes.error,
+              probes.cancellation,
+            ])
+              expect(serialized).not.toContain(probe);
+          }
         },
       );
     },

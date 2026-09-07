@@ -58,25 +58,56 @@ export const oneShotRequestedInformationKind = defineInformationKind({
       targetKinds: ["core.schedule.one-shot.requested"],
     },
   },
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "info",
+    project: ({ payload }) => ({
+      event: "schedule.one-shot.requested",
+      dueAt: payload.dueAt,
+      activationDefinitionId: payload.activation.definitionId,
+      activationInstanceId: payload.activation.instanceId,
+    }),
+  },
 });
 export const oneShotDueInformationKind = defineInformationKind({
   kind: "core.schedule.one-shot.due",
   payloadSchema: duePayloadSchema,
   references: terminalReference,
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "info",
+    project: ({ payload }) => ({
+      event: "schedule.one-shot.due",
+      dueAt: payload.dueAt,
+      deliveredAt: payload.deliveredAt,
+    }),
+  },
 });
 export const oneShotFiredInformationKind = defineInformationKind({
   kind: "core.schedule.one-shot.fired",
   payloadSchema: z.object({}).strict(),
   references: terminalReference,
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "info",
+    project: () => ({
+      event: "schedule.one-shot.lifecycle",
+      status: "fired",
+    }),
+  },
 });
 export const oneShotSupersededInformationKind = defineInformationKind({
   kind: "core.schedule.one-shot.superseded",
   payloadSchema: z.object({}).strict(),
   references: terminalReference,
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "info",
+    project: () => ({
+      event: "schedule.one-shot.lifecycle",
+      status: "superseded",
+    }),
+  },
 });
 export const oneShotFailedInformationKind = defineInformationKind({
   kind: "core.schedule.one-shot.failed",
@@ -84,7 +115,15 @@ export const oneShotFailedInformationKind = defineInformationKind({
     .object({ failureKind: z.enum(["consumer-failed", "input-unavailable"]) })
     .strict(),
   references: terminalReference,
-  log: { enabled: false },
+  log: {
+    enabled: true,
+    level: "error",
+    project: ({ payload }) => ({
+      event: "schedule.one-shot.lifecycle",
+      status: "failed",
+      failureKind: payload.failureKind,
+    }),
+  },
 });
 export const oneShotInformationKinds = [
   oneShotRequestedInformationKind,

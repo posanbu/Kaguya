@@ -26,6 +26,7 @@ import {
 import {
   defineInformationKind,
   defineInformationModule,
+  defineModuleDiagnostic,
   defineInformationSelector,
   onInformation,
   type InformationFindQuery,
@@ -34,7 +35,11 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import { InformationCore, InformationKindRegistry } from "./index.js";
-import { ModuleHost, ModuleKindNotDeclaredError } from "./module-host.js";
+import {
+  ModuleHost,
+  ModuleKindNotDeclaredError,
+  type ModuleHostObservation,
+} from "./module-host.js";
 
 class MemoryLedger {
   readonly atoms = new Map<string, DeepReadonly<InformationAtom>>();
@@ -200,6 +205,181 @@ async function startHost(
 }
 
 describe("ModuleHost", () => {
+  it("reports authoritative startup and isolates declared module diagnostics", async () => {
+    const { core } = createCore();
+    await core.start();
+    const diagnostic = defineModuleDiagnostic({
+      event: "acme.lookup.started",
+      message: "Lookup started",
+      level: "info",
+      payloadSchema: z.object({ count: z.number().int() }).strict(),
+      project: ({ count }) => ({ count }),
+    });
+    const observerFailure = defineModuleDiagnostic({
+      event: "acme.observer.failure",
+      message: "Observer failure",
+      level: "debug",
+      payloadSchema: z.object({}).strict(),
+      project: () => ({}),
+    });
+    const undeclared = defineModuleDiagnostic({
+      event: "acme.undeclared",
+      message: "Undeclared",
+      level: "info",
+      payloadSchema: z.object({}).strict(),
+      project: () => ({}),
+    });
+    const module = defineInformationModule({
+      manifest: {
+        protocolVersion: 1,
+        moduleVersion: "1.0.0",
+        selectors: [],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
+        diagnostics: [diagnostic, observerFailure],
+        definitionId: "acme.observed",
+        displayName: "Observed",
+        settingsSchema: z.object({}).strict(),
+        consumes: [inboundKind],
+        produces: [],
+      },
+      create: async (_options, context) => {
+        await context.report(diagnostic, { count: 2 });
+        await context.report(diagnostic, { count: "invalid" } as never);
+        await context.report(undeclared, {});
+        await context.report(observerFailure, {});
+        return {
+          provisions: [],
+          subscriptions: [
+            onInformation(
+              inboundKind,
+              { subscriptionId: "observe-inbound", delivery: "live" },
+              async (_atom, handlerContext) => {
+                await handlerContext.report(diagnostic, { count: 3 });
+              },
+            ),
+          ],
+          describeStartup: () => ({
+            summary: "Observed module ready",
+            fields: { mode: "test" },
+          }),
+        };
+      },
+    });
+    const observations: ModuleHostObservation[] = [];
+    const host = new ModuleHost({
+      core,
+      catalog: defineInformationModuleCatalog(module),
+      observer: (observation) => {
+        observations.push(observation);
+        if (observation.event === observerFailure.event)
+          throw new Error("observer unavailable");
+      },
+    });
+
+    await expect(
+      host.start([
+        {
+          instanceId: "observed.default",
+          definitionId: module.manifest.definitionId,
+          settings: {},
+        },
+      ]),
+    ).resolves.toBeUndefined();
+
+    expect(observations.map(({ event }) => event)).toEqual([
+      "modules.assembled",
+      "module.starting",
+      "acme.lookup.started",
+      "module.diagnostic.rejected",
+      "module.diagnostic.rejected",
+      "acme.observer.failure",
+      "module.diagnostic.rejected",
+      "module.started",
+    ]);
+    expect(observations[0]!.fields?.order).toEqual([
+      { definitionId: "acme.observed", instanceId: "observed.default" },
+    ]);
+    expect(observations.at(-1)).toMatchObject({
+      definitionId: "acme.observed",
+      instanceId: "observed.default",
+      message: "Observed module ready",
+      fields: { mode: "test" },
+    });
+    expect(
+      observations
+        .filter(({ event }) => event === "module.diagnostic.rejected")
+        .map(({ fields }) => fields?.reason),
+    ).toEqual(["invalid_payload", "undeclared_definition", "observer_failed"]);
+    const context = await appendContext(core);
+    const inbound = await core.register(
+      inboundKind,
+      registration({ text: "observed" }, context),
+    );
+    expect(observations.at(-1)).toMatchObject({
+      event: diagnostic.event,
+      sourceInformationId: inbound.informationId,
+      contextInformationId: context.informationId,
+      definitionId: module.manifest.definitionId,
+      instanceId: "observed.default",
+    });
+    await host.stop();
+  });
+
+  it("keeps module.started authoritative when startup description fails", async () => {
+    const { core } = createCore();
+    await core.start();
+    const module = defineInformationModule({
+      manifest: {
+        protocolVersion: 1,
+        moduleVersion: "1.0.0",
+        selectors: [],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
+        definitionId: "acme.status-failure",
+        displayName: "Status failure",
+        settingsSchema: z.object({}).strict(),
+        consumes: [],
+        produces: [],
+      },
+      create: () => ({
+        provisions: [],
+        subscriptions: [],
+        describeStartup: () => {
+          throw new TypeError("private status failure");
+        },
+      }),
+    });
+    const events: ModuleHostObservation[] = [];
+    const host = new ModuleHost({
+      core,
+      catalog: defineInformationModuleCatalog(module),
+      observer: (event) => {
+        events.push(event);
+      },
+    });
+
+    await host.start([
+      {
+        instanceId: "status.default",
+        definitionId: module.manifest.definitionId,
+        settings: {},
+      },
+    ]);
+
+    expect(events.map(({ event }) => event)).toContain("module.started");
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        event: "module.status.failed",
+        fields: { errorType: "TypeError" },
+      }),
+    );
+    expect(JSON.stringify(events)).not.toContain("private status failure");
+    await host.stop();
+  });
+
   it("selects the persisted source through the handler context", async () => {
     const { core, store } = createCore([selectedOutputKind]);
     await core.start();

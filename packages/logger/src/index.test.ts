@@ -19,12 +19,54 @@ import {
   closeLogger,
   createLogger,
   createModuleLogger,
+  formatPrettyMessage,
   getLogContext,
   readLoggerOptions,
   runWithLogContext,
 } from "./index.js";
 
 describe("Kaguya logger", () => {
+  it("renders short DAG ids and multiline prompt detail for pretty output", () => {
+    const rendered = formatPrettyMessage({
+      module: "runtime:information",
+      event: "model.task.prompt",
+      informationId: "019921ab-cdef-7000-8000-000000000001",
+      kind: "core.model.task.requested",
+      references: [
+        {
+          relation: "core:caused-by",
+          informationId: "019921ac-cdef-7000-8000-000000000002",
+        },
+        {
+          relation: "core:caused-by",
+          informationId: "019921ae-cdef-7000-8000-000000000004",
+        },
+        {
+          relation: "core:context",
+          informationId: "019921ad-cdef-7000-8000-000000000003",
+        },
+      ],
+      detail: true,
+      promptFull: "System line\nUser line",
+      promptFragments: [
+        {
+          fragmentId: "history-1",
+          informationId: "019921ad-cdef-7000-8000-000000000003",
+          contentDigest: "sha256:test",
+        },
+      ],
+    });
+
+    expect(rendered).toContain(
+      "[019921ab] core.model.task.requested ← core:caused-by:019921ac,019921ae · core:context:019921ad",
+    );
+    expect(rendered).toContain("\n  Prompt:\n    System line\n    User line");
+    expect(rendered).toContain(
+      "\n  Provenance:\n    history-1 information=019921ad digest=sha256:test",
+    );
+    expect(rendered).not.toContain("019921ab-cdef-7000-8000-000000000001");
+  });
+
   it("writes structured JSON with service and module bindings", () => {
     const stream = new MemoryStream();
     const logger = createLogger({

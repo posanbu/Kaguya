@@ -16,6 +16,7 @@ import {
   type InformationAtom,
   type InformationReference,
   type JsonObject,
+  type JsonValue,
 } from "@kaguya/schema";
 import {
   catalogInformationKinds,
@@ -27,6 +28,8 @@ import {
   type InformationModuleHandlerContext,
   type InformationModuleInstance,
   type InformationModuleCreateContext,
+  type ModuleDiagnosticDefinition,
+  type ModuleStartupDescription,
   type ModuleCapability,
   type ModuleCapabilityImplementation,
   type ModuleRegistrationInput,
@@ -39,7 +42,26 @@ export interface ModuleHostOptions {
   readonly capabilities?: readonly ModuleCapabilityImplementation[];
   readonly now?: () => Date;
   readonly drainTimeoutMs?: number;
+  readonly observer?: ModuleHostObserver;
 }
+export interface ModuleHostObservation {
+  readonly category: "lifecycle" | "diagnostic" | "diagnostic-rejected";
+  readonly event: string;
+  readonly level: "debug" | "info" | "warn" | "error";
+  readonly message: string;
+  readonly definitionId?: string;
+  readonly instanceId?: string;
+  readonly sourceInformationId?: string;
+  readonly contextInformationId?: string;
+  readonly fields?: JsonObject;
+  readonly diagnostic?: {
+    readonly definition: ModuleDiagnosticDefinition<string, JsonObject>;
+    readonly payload: DeepReadonly<JsonObject>;
+  };
+}
+export type ModuleHostObserver = (
+  observation: ModuleHostObservation,
+) => void | Promise<void>;
 export class ModuleDefinitionNotFoundError extends Error {
   constructor(readonly definitionId: string) {
     super(`Information module definition is not registered: ${definitionId}`);
@@ -100,12 +122,38 @@ export class ModuleHost {
   private async startHost(
     activations: readonly InformationModuleActivation[],
   ): Promise<void> {
+    let current: PreparedModule | undefined;
+    let phase = "preflight";
     try {
       const prepared = this.preflight(activations);
+      await this.observe({
+        category: "lifecycle",
+        event: "modules.assembled",
+        level: "info",
+        message: "Information modules assembled",
+        fields: {
+          moduleCount: prepared.length,
+          order: prepared.map(({ definition, instanceId }) => ({
+            definitionId: definition.manifest.definitionId,
+            instanceId,
+          })),
+        },
+      });
       for (const module of prepared) this.#controllers.add(module.controller);
       for (const activation of prepared) {
+        current = activation;
         this.assertStarting();
         const context = this.createLifecycleContext(activation);
+        await this.observe(
+          moduleLifecycleObservation(
+            "module.starting",
+            "info",
+            "Information module starting",
+            activation,
+            { phase: "create" },
+          ),
+        );
+        phase = "create";
         const instance = await activation.definition.create(
           {
             instanceId: activation.instanceId,
@@ -125,13 +173,48 @@ export class ModuleHost {
         };
         this.#active.push(active);
         this.assertStarting();
+        phase = "validate";
         this.validateInstance(active);
         for (const value of active.provisions)
           this.#values.set(value.capability.id, value);
+        phase = "start";
         await instance.start?.(context);
         this.assertStarting();
+        let startup: ModuleStartupDescription | undefined;
+        let statusFailure: string | undefined;
+        if (instance.describeStartup !== undefined) {
+          try {
+            startup = validateStartupDescription(
+              await instance.describeStartup(),
+            );
+          } catch (error) {
+            statusFailure = safeErrorType(error);
+          }
+        }
+        await this.observe(
+          moduleLifecycleObservation(
+            "module.started",
+            "info",
+            startup?.summary ?? "Information module started",
+            activation,
+            { ...(startup?.fields ?? {}) },
+          ),
+        );
+        if (statusFailure !== undefined) {
+          await this.observe(
+            moduleLifecycleObservation(
+              "module.status.failed",
+              "warn",
+              "Information module startup status failed",
+              activation,
+              { errorType: statusFailure },
+            ),
+          );
+        }
+        current = undefined;
       }
       // 所有 create/start 均成功之后，才安装任何业务订阅。
+      phase = "subscriptions";
       for (const module of this.#active)
         for (const subscription of module.subscriptions) {
           if (subscription.delivery === "durable") {
@@ -165,10 +248,38 @@ export class ModuleHost {
             );
           }
         }
+      phase = "reliable-delivery";
       await this.#options.core.startReliableDelivery();
       this.assertStarting();
       this.#state = "started";
     } catch (error) {
+      if (current !== undefined) {
+        await this.observe(
+          moduleLifecycleObservation(
+            "module.start.failed",
+            "error",
+            "Information module failed to start",
+            current,
+            { phase, errorType: safeErrorType(error) },
+          ),
+        );
+      }
+      await this.observe({
+        category: "lifecycle",
+        event: "modules.start.failed",
+        level: "error",
+        message: "Information module startup failed",
+        fields: {
+          phase,
+          errorType: safeErrorType(error),
+          ...(current === undefined
+            ? {}
+            : {
+                definitionId: current.definition.manifest.definitionId,
+                instanceId: current.instanceId,
+              }),
+        },
+      });
       for (const unsubscribe of this.#unsubscribe.splice(0)) unsubscribe();
       await this.#options.core.stopReliableDelivery();
       const failures = await this.cleanup();
@@ -414,9 +525,11 @@ export class ModuleHost {
   }
   private createLifecycleContext(
     module: PreparedModule,
+    signal: AbortSignal = module.controller.signal,
+    sourceAtom?: DeepReadonly<InformationAtom>,
   ): InformationModuleCreateContext {
     return {
-      signal: module.controller.signal,
+      signal,
       now: this.#options.now ?? (() => new Date()),
       use: <T>(capability: ModuleCapability<T>): T => {
         if (module.controller.signal.aborted)
@@ -432,6 +545,8 @@ export class ModuleHost {
           throw new Error(`Capability is unavailable: ${capability.id}`);
         return value.value as T;
       },
+      report: (definition, payload) =>
+        this.reportDiagnostic(module, definition, payload, sourceAtom),
     };
   }
   private createContext(
@@ -439,10 +554,10 @@ export class ModuleHost {
     sourceAtom: DeepReadonly<InformationAtom>,
     deliverySignal?: AbortSignal,
   ): InformationModuleHandlerContext {
-    const lifecycle = this.createLifecycleContext(module);
     const signal = deliverySignal
-      ? AbortSignal.any([lifecycle.signal, deliverySignal])
-      : lifecycle.signal;
+      ? AbortSignal.any([module.controller.signal, deliverySignal])
+      : module.controller.signal;
+    const lifecycle = this.createLifecycleContext(module, signal, sourceAtom);
     const prepare = <K extends string, P extends JsonObject>(
       definition: InformationKindDefinition<K, P>,
       input: ModuleRegistrationInput<P>,
@@ -521,6 +636,9 @@ export class ModuleHost {
         promptRenderers: manifest.promptRenderers
           .map((r) => r.rendererId)
           .sort(),
+        diagnostics: (manifest.diagnostics ?? [])
+          .map((diagnostic) => diagnostic.event)
+          .sort(),
         requires: manifest.requires.map((c) => ({
           id: c.id,
           apiVersion: c.apiVersion,
@@ -541,6 +659,83 @@ export class ModuleHost {
           })),
       }))
       .sort((a, b) => a.definitionId.localeCompare(b.definitionId));
+  }
+  private async reportDiagnostic<E extends string, P extends JsonObject>(
+    module: PreparedModule,
+    definition: ModuleDiagnosticDefinition<E, P>,
+    payload: P,
+    sourceAtom?: DeepReadonly<InformationAtom>,
+  ): Promise<void> {
+    const declared = (module.definition.manifest.diagnostics ?? []).includes(
+      definition as ModuleDiagnosticDefinition<string, any>,
+    );
+    if (!declared) {
+      await this.rejectDiagnostic(module, "undeclared_definition");
+      return;
+    }
+    const parsed = definition.payloadSchema.safeParse(payload);
+    if (!parsed.success) {
+      await this.rejectDiagnostic(module, "invalid_payload");
+      return;
+    }
+    let frozen: DeepReadonly<P>;
+    try {
+      frozen = deepFreeze(parsed.data) as DeepReadonly<P>;
+    } catch {
+      await this.rejectDiagnostic(module, "invalid_payload");
+      return;
+    }
+    const contextInformationId = sourceAtom?.references
+      .filter(({ relation }) => relation === "core:context")
+      .map(({ informationId }) => informationId)[0];
+    try {
+      await this.#options.observer?.({
+        category: "diagnostic",
+        event: definition.event,
+        level: definition.level,
+        message: definition.message,
+        definitionId: module.definition.manifest.definitionId,
+        instanceId: module.instanceId,
+        ...(sourceAtom === undefined
+          ? {}
+          : { sourceInformationId: sourceAtom.informationId }),
+        ...(contextInformationId === undefined ? {} : { contextInformationId }),
+        diagnostic: {
+          definition: definition as unknown as ModuleDiagnosticDefinition<
+            string,
+            JsonObject
+          >,
+          payload: frozen as DeepReadonly<JsonObject>,
+        },
+      });
+    } catch {
+      await this.rejectDiagnostic(module, "observer_failed");
+    }
+  }
+  private async rejectDiagnostic(
+    module: PreparedModule,
+    reason: "undeclared_definition" | "invalid_payload" | "observer_failed",
+  ): Promise<void> {
+    try {
+      await this.#options.observer?.({
+        category: "diagnostic-rejected",
+        event: "module.diagnostic.rejected",
+        level: "warn",
+        message: "Module diagnostic rejected",
+        definitionId: module.definition.manifest.definitionId,
+        instanceId: module.instanceId,
+        fields: { reason },
+      });
+    } catch {
+      // 诊断及其失败汇报都不得改变模块生命周期或业务处理结果。
+    }
+  }
+  private async observe(observation: ModuleHostObservation): Promise<void> {
+    try {
+      await this.#options.observer?.(observation);
+    } catch {
+      // Host 生命周期是权威事实；可观测性故障不改变模块状态。
+    }
   }
   private assertStarting(): void {
     if (this.#state !== "starting")
@@ -667,6 +862,128 @@ function contextReferences(
 
 function isReservedRelation(relation: string): boolean {
   return relation === "core:caused-by" || relation === "core:context";
+}
+
+function moduleLifecycleObservation(
+  event: string,
+  level: "debug" | "info" | "warn" | "error",
+  message: string,
+  module: PreparedModule,
+  fields: JsonObject,
+): ModuleHostObservation {
+  return {
+    category: "lifecycle",
+    event,
+    level,
+    message,
+    definitionId: module.definition.manifest.definitionId,
+    instanceId: module.instanceId,
+    fields,
+  };
+}
+
+function validateStartupDescription(value: unknown): ModuleStartupDescription {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  )
+    throw new Error("Invalid module startup description");
+  const description = value as { summary?: unknown; fields?: unknown };
+  if (
+    typeof description.summary !== "string" ||
+    !description.summary.trim() ||
+    description.summary.includes("\n") ||
+    Array.from(description.summary).length > 512
+  )
+    throw new Error("Invalid module startup summary");
+  if (
+    description.fields !== undefined &&
+    (typeof description.fields !== "object" ||
+      description.fields === null ||
+      Array.isArray(description.fields))
+  )
+    throw new Error("Invalid module startup fields");
+  const fields =
+    description.fields === undefined
+      ? undefined
+      : cloneStartupFields(description.fields);
+  return Object.freeze({
+    summary: description.summary.trim(),
+    ...(fields === undefined ? {} : { fields }),
+  });
+}
+
+function safeErrorType(error: unknown): string {
+  if (!(error instanceof Error)) return "NonError";
+  return /^[A-Za-z][A-Za-z0-9_.-]{0,127}$/u.test(error.name)
+    ? error.name
+    : "Error";
+}
+
+const FORBIDDEN_STARTUP_FIELD_KEYS = new Set([
+  "content",
+  "credentials",
+  "headers",
+  "password",
+  "prompt",
+  "raw",
+  "response",
+  "secret",
+  "settings",
+  "target",
+  "text",
+  "token",
+]);
+
+function cloneStartupFields(value: unknown): JsonObject {
+  const clone = cloneStartupObject(value);
+  if (clone === undefined) throw new Error("Invalid module startup fields");
+  return deepFreeze(clone);
+}
+
+function cloneStartupObject(value: unknown): JsonObject | undefined {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  )
+    return undefined;
+  const clone: JsonObject = {};
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string" || FORBIDDEN_STARTUP_FIELD_KEYS.has(key))
+      return undefined;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (
+      descriptor === undefined ||
+      !descriptor.enumerable ||
+      !("value" in descriptor)
+    )
+      return undefined;
+    const child = cloneStartupValue(descriptor.value);
+    if (child === undefined) return undefined;
+    clone[key] = child;
+  }
+  return clone;
+}
+
+function cloneStartupValue(value: unknown): JsonValue | undefined {
+  if (value === null || typeof value === "string" || typeof value === "boolean")
+    return value;
+  if (typeof value === "number")
+    return Number.isFinite(value) ? value : undefined;
+  if (Array.isArray(value)) {
+    const clone: JsonValue[] = [];
+    for (const item of value) {
+      const child = cloneStartupValue(item);
+      if (child === undefined) return undefined;
+      clone.push(child);
+    }
+    return clone;
+  }
+  return cloneStartupObject(value);
 }
 
 function assertSafeInstanceSource(instanceId: string): void {

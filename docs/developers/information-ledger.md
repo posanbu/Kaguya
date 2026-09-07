@@ -5,11 +5,7 @@ description: InformationAtom、Kind Registry、PostgreSQL Ledger 与日志投影
 
 # 信息账本
 
-信息账本是正在分阶段接入的下一代数据核心。它已经在 schema、SDK、engine、database 与 logger 包中实现并有测试，但 **尚未替换 `apps/server` 当前使用的 SQLite 消息、LLM trace 与 outbound audit 主链**。
-
-::: warning 当前边界
-“代码已实现”不等于“用户启动 Server 后已经使用”。除非后续 composition root 明确装配 InformationCore，否则线上行为仍以现有 Runtime/SQLite 文档为准。
-:::
+信息账本是 Runtime 的追加式数据核心。`apps/server` 的 composition root 显式装配 PostgreSQL/PGlite database、InformationCore、ModuleHost、Model Task 与 transport；消息、Prompt provenance、模型任务和投递结果都通过 Information DAG 表达。
 
 ## 信息原子
 
@@ -39,7 +35,7 @@ InformationLedger 是异步端口，只暴露受控操作：
 
 `packages/database` 提供 PostgreSQL 协议的追加式实现和迁移；测试可以使用 PGlite 验证相同语义。原子、引用、Kind 集合与日志 outbox 在事务中维护，数据库触发器阻止事实表被修改。
 
-这不是“SQLite 账本实现”。项目路线已经从早期的 SQLite 过渡方案调整为 PostgreSQL/PGlite 基础设施；现有 SQLite 仍服务旧 Runtime 数据路径。
+这不是 SQLite 账本实现。生产使用 PostgreSQL，测试可使用兼容的 PGlite 基础设施。
 
 ## 日志投影为什么用 outbox
 
@@ -57,6 +53,4 @@ flowchart LR
 
 投影失败不会回滚已经提交的原子。任务保留为 pending，记录稳定错误类型，并在以后调用或进程重启后再次处理。
 
-## 后续接入点
-
-后续工作需要在 `apps/server` 中装配 InformationCore，把现有消息、Prompt、模型与模块数据逐步映射为 Kind，并在保持兼容与迁移策略清晰的前提下切换事实来源。在此之前，开发者应把它视为可用的底层能力，而不是已完成的用户功能。
+日志投影默认显示主链，debug 展开内部节点与完整 Prompt；具体字段和安全边界见 [Runtime 与 Information 可观测性](./observability)。
