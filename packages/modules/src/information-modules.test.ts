@@ -1,11 +1,8 @@
 /**
- * 功能概述：本文件验证信息模块以显式 kind 串接入站、turn context、speech decision、回复、通用 Model Task 完成、assistant 和投递阶段，
- * 不再以旧事件、target instance 或成功 decision 驱动下一步。
- * 主要职责：过滤器用例验证兼容的拒绝事实；speech DAG 用例验证 speak 才注册回复请求，回复用例
- * 验证三个订阅分别承担回复执行、Model Task 完成到 assistant、assistant 到投递的直接因果阶段；
+ * 功能概述：本文件验证回复、通用 Model Task 完成、assistant 和投递阶段。
+ * 主要职责：回复用例验证三个订阅分别承担回复执行、Model Task 完成到 assistant、assistant 到投递的直接因果阶段；
  * completion 仅能跨同 definition 的 instance 共享，其他 definition 的伪造终态不会派生业务输出。
- * 代码库关系：覆盖最终 `always-reply-filter.ts`、`llm-reply.ts` 和
- * `information-kinds.ts`；engine `ModuleHost` 为每一次 register 自动补齐直接的
+ * 代码库关系：覆盖 `llm-reply.ts` 和 `information-kinds.ts`；engine `ModuleHost` 为每一次 register 自动补齐直接的
  * `core:caused-by` 与继承的 `core:context`，因此模块 handler 不伪造这些保留引用。
  * 输入输出与副作用：单元用例使用冻结 atom 与内存 register；集成用例使用真实 Core、宿主和
  * PGlite 账本，模块侧以结构契约 fixture 提供通用任务能力，断言实际 ID、持久化顺序及 context 继承；
@@ -44,26 +41,12 @@ import {
 } from "@kaguya/engine";
 
 import {
-  alwaysReplyFilterModule,
-  alwaysReplyFilterSettingsSchema,
-} from "./always-reply-filter.js";
-import { associationModule } from "./association.js";
-import {
-  associationCandidateInformationKind,
-  associationCompletedInformationKind,
-  associationQueryInformationKind,
-  associationRequestedInformationKind,
   assistantTextInformationKind,
   coreMemoryTextInformationKind,
   deliveryRequestedInformationKind,
-  filterDecisionInformationKind,
   inboundTextInformationKind,
-  personContextCompletedInformationKind,
   replyRequestedInformationKind,
   replyRequestedInformationPayloadSchema,
-  speechDecisionInformationKind,
-  turnContextCompletedInformationKind,
-  waitRequestedInformationKind,
 } from "./information-kinds.js";
 import {
   createLlmReplyModule as defineReplyModule,
@@ -72,9 +55,6 @@ import {
   type ModelTaskRequest,
 } from "./llm-reply.js";
 import * as informationKinds from "./information-kinds.js";
-import { speechDecisionModule } from "./speech-decision.js";
-import { speechReplyModule } from "./speech-reply.js";
-import { turnContextModule } from "./turn-context.js";
 
 const contextId = informationIdSchema.parse("context-1");
 const inboundPayload = replyRequestedInformationPayloadSchema.parse({
@@ -237,17 +217,6 @@ class MemoryInformationLedger implements InformationLedger {
   }
 }
 
-function inboundAtom() {
-  return freezeInformationAtom({
-    informationId: informationIdSchema.parse("inbound-1"),
-    kind: inboundTextInformationKind.kind,
-    occurredAt: "2026-09-04T00:00:00.000Z",
-    source: "adapter:test",
-    payload: inboundPayload,
-    references: [{ relation: "core:context", informationId: contextId }],
-  });
-}
-
 function replyAtom() {
   return freezeInformationAtom({
     informationId: informationIdSchema.parse("reply-1"),
@@ -289,26 +258,6 @@ function completedAtom() {
       { relation: "core:caused-by", informationId: reply.informationId },
       { relation: "core:context", informationId: contextId },
     ],
-  });
-}
-
-function associationCompletedAtom() {
-  return freezeInformationAtom({
-    informationId: informationIdSchema.parse("association-completed-1"),
-    kind: associationCompletedInformationKind.kind,
-    occurredAt: "2026-09-04T00:00:01.000Z",
-    source: "module:association-1",
-    payload: {
-      requestInformationId: "association-request-1",
-      queryInformationId: "association-query-1",
-      sourceInformationId: "reply-1",
-      route: "reply",
-      method: "sparse-2gram",
-      status: "matched",
-      candidateCount: 1,
-      reasonCodes: ["sparse-match", "coverage-ranked"],
-    },
-    references: [{ relation: "core:context", informationId: contextId }],
   });
 }
 
@@ -424,109 +373,6 @@ function handlerContext(
   };
   return context;
 }
-
-describe("alwaysReplyFilterModule", () => {
-  it("registers the next kind when the filter passes", async () => {
-    const instance = await createInstance(alwaysReplyFilterModule, {
-      instanceId: "filter-1",
-      settings: alwaysReplyFilterSettingsSchema.parse({}),
-    });
-    const atom = inboundAtom();
-    const registrations: Registration[] = [];
-
-    await instance.subscriptions[0]?.handle(
-      atom,
-      handlerContext(atom, registrations),
-    );
-
-    expect([
-      ...alwaysReplyFilterModule.manifest.consumes,
-      ...alwaysReplyFilterModule.manifest.produces,
-    ]).toEqual([inboundTextInformationKind, replyRequestedInformationKind]);
-    expect(registrations).toEqual([
-      {
-        definition: replyRequestedInformationKind,
-        input: { payload: atom.payload },
-      },
-    ]);
-  });
-
-  it("records rejection without producing the next kind", async () => {
-    const rejectingFilter = defineInformationModule({
-      manifest: {
-        protocolVersion: 1,
-        moduleVersion: "1.0.0",
-        selectors: [],
-        promptRenderers: [],
-        requires: [],
-        provides: [],
-        definitionId: "test.filter.rejecting",
-        displayName: "Rejecting filter",
-        settingsSchema: z.object({}).strict(),
-        consumes: [inboundTextInformationKind, filterDecisionInformationKind],
-        produces: [inboundTextInformationKind, filterDecisionInformationKind],
-      },
-      create: () => ({
-        provisions: [],
-        subscriptions: [
-          onInformation(
-            inboundTextInformationKind,
-            {
-              subscriptionId: "handle-inboundtextinformationkind",
-              delivery: "live",
-            },
-            async (_atom, context) => {
-              await context.register(filterDecisionInformationKind, {
-                payload: {
-                  accepted: false,
-                  reason: "blocked",
-                  filterDefinitionId: "test.filter.rejecting",
-                },
-              });
-            },
-          ),
-        ],
-      }),
-    });
-    const atom = inboundAtom();
-    const registrations: Registration[] = [];
-    const instance = await createInstance(rejectingFilter, {
-      instanceId: "reject-1",
-      settings: {},
-    });
-
-    await instance.subscriptions[0]?.handle(
-      atom,
-      handlerContext(atom, registrations),
-    );
-
-    expect(registrations).toEqual([
-      {
-        definition: filterDecisionInformationKind,
-        input: {
-          payload: {
-            accepted: false,
-            reason: "blocked",
-            filterDefinitionId: "test.filter.rejecting",
-          },
-        },
-      },
-    ]);
-  });
-
-  it("strictly rejects removed reply targets", () => {
-    expect(
-      alwaysReplyFilterSettingsSchema.safeParse({
-        replyTargetInstanceId: "reply-1",
-      }).success,
-    ).toBe(false);
-    expect(
-      alwaysReplyFilterSettingsSchema.safeParse({
-        profileId: "profile-1",
-      }).success,
-    ).toBe(false);
-  });
-});
 
 describe("createLlmReplyModule", () => {
   it("declares only the host-approved generic model-call capability", () => {
@@ -666,326 +512,6 @@ describe("createLlmReplyModule", () => {
     }
   });
 
-  it("persists the full DAG with direct causes and one inherited context", async () => {
-    const registry = new InformationKindRegistry();
-    registry.registerBuiltin(runtimeContextInformationKind);
-    registry.registerBuiltin(inboundTextInformationKind);
-    registry.registerBuiltin(replyRequestedInformationKind);
-    registry.register(turnContextCompletedInformationKind);
-    registry.register(speechDecisionInformationKind);
-    registry.register(waitRequestedInformationKind);
-    registry.register(associationRequestedInformationKind);
-    registry.register(associationQueryInformationKind);
-    registry.register(associationCandidateInformationKind);
-    registry.register(associationCompletedInformationKind);
-    for (const kind of modelTaskInformationKinds)
-      registry.registerBuiltin(kind);
-    registry.registerBuiltin(assistantTextInformationKind);
-    registry.registerBuiltin(deliveryRequestedInformationKind);
-    registry.registerBuiltin(coreMemoryTextInformationKind);
-    registry.register(personContextCompletedInformationKind);
-    const database = await createTestingDatabase();
-    await database.migrate();
-    const ledger = database.information;
-    let sequence = 0;
-    const core = new InformationCore({
-      registry,
-      store: ledger,
-      nextInformationId: () => `information-${++sequence}`,
-      now: () => new Date("2026-09-04T00:00:00.000Z"),
-    });
-    const replyModule = createLlmReplyModule({
-      modelTaskCompletedInformationKind,
-      executor: {
-        async execute(input) {
-          const requested = await core.registerOnce(
-            "test.model-task.requested",
-            input.sourceInformationId,
-            modelTaskRequestedInformationKind,
-            {
-              occurredAt: "2026-09-04T00:00:01.000Z",
-              source: "runtime:model-task",
-              payload: {},
-              references: [
-                {
-                  relation: "core:caused-by",
-                  informationId: input.sourceInformationId,
-                },
-                {
-                  relation: "core:context",
-                  informationId: input.contextInformationId,
-                },
-                ...input.contextAtoms.map(({ informationId }) => ({
-                  relation: "core:uses-context" as const,
-                  informationId,
-                })),
-              ],
-            },
-          );
-          const completed = await core.commitTerminal(
-            "test.model-task.terminal",
-            requested.informationId,
-            modelTaskCompletedInformationKind,
-            {
-              occurredAt: "2026-09-04T00:00:02.000Z",
-              source: "runtime:model-task",
-              payload: {
-                taskId: input.task.taskId,
-                version: input.task.version,
-                sourceInformationId: input.sourceInformationId,
-                activation: { ...input.activation },
-                selectionPolicy: { ...input.selectionPolicy },
-                output: { text: "Hello." },
-              },
-              references: [
-                {
-                  relation: "core:caused-by",
-                  informationId: requested.informationId,
-                },
-                {
-                  relation: "core:status-of",
-                  informationId: requested.informationId,
-                },
-                {
-                  relation: "core:context",
-                  informationId: input.contextInformationId,
-                },
-              ],
-            },
-          );
-          return {
-            status: "completed",
-            output: input.task.outputSchema.parse(
-              modelTaskCompletedInformationKind.payloadSchema.parse(
-                completed.payload,
-              ).output,
-            ),
-            requestedInformationId: requested.informationId,
-            terminalInformationId: completed.informationId,
-          };
-        },
-        cancel: async () => {
-          throw new Error("unexpected cancellation");
-        },
-      },
-    });
-    const host = new ModuleHost({
-      core,
-      catalog: defineInformationModuleCatalog(
-        turnContextModule,
-        speechDecisionModule,
-        speechReplyModule,
-        alwaysReplyFilterModule,
-        associationModule,
-        replyModule,
-      ),
-      capabilities: [
-        {
-          capability: modelTaskCapability,
-          value: executors.get(replyModule)!,
-        },
-      ],
-    });
-    await core.start();
-    await host.start([
-      {
-        instanceId: "turn-context-1",
-        definitionId: turnContextModule.manifest.definitionId,
-        settings: {},
-      },
-      {
-        instanceId: "speech-decision-1",
-        definitionId: speechDecisionModule.manifest.definitionId,
-        settings: {},
-      },
-      {
-        instanceId: "speech-reply-1",
-        definitionId: speechReplyModule.manifest.definitionId,
-        settings: {},
-      },
-      {
-        instanceId: "reply-1",
-        definitionId: replyModule.manifest.definitionId,
-        settings: {
-          modelTier: "heavy",
-          outbound: { mode: "source", messageKind: "reply" },
-        },
-      },
-      {
-        instanceId: "association-1",
-        definitionId: associationModule.manifest.definitionId,
-        settings: {},
-      },
-    ]);
-
-    try {
-      const context = await core.register(runtimeContextInformationKind, {
-        occurredAt: "2026-09-04T00:00:00.000Z",
-        source: "core:runtime",
-        payload: { requestId: "request-1" },
-        references: [],
-      });
-      const inbound = await core.register(inboundTextInformationKind, {
-        occurredAt: "2026-09-04T00:00:00.000Z",
-        source: "adapter:test",
-        payload: inboundPayload,
-        references: [
-          { relation: "core:context", informationId: context.informationId },
-        ],
-      });
-      await core.register(personContextCompletedInformationKind, {
-        occurredAt: "2026-09-04T00:00:00.000Z",
-        source: "module:identity",
-        payload: {
-          status: "unresolved",
-          scopeMode: "ephemeral",
-          platform: "qq",
-          adapterId: "adapter",
-          scopeInformationId: "scope-1",
-        },
-        references: [
-          { relation: "core:caused-by", informationId: inbound.informationId },
-          { relation: "core:context", informationId: context.informationId },
-          { relation: "core:status-of", informationId: inbound.informationId },
-        ],
-      });
-      const completedSource = await vi.waitFor(async () => {
-        const completed = (
-          await ledger.query({ informationId: context.informationId })
-        ).find((atom) => atom.kind === modelTaskCompletedInformationKind.kind);
-        expect(completed).toBeDefined();
-        return completed!;
-      });
-      const sourceSelector = replyModule.manifest.selectors.find(
-        (selector) => selector.selectorId === "kaguya.reply.completed-source",
-      )!;
-      expect(
-        (await core.select(sourceSelector, completedSource.informationId)).map(
-          (atom) => atom.informationId,
-        ),
-      ).toEqual([completedSource.payload.sourceInformationId]);
-      await vi.waitFor(async () =>
-        expect(
-          (await ledger.query({ informationId: context.informationId })).map(
-            (a) => a.kind,
-          ),
-        ).toContain(deliveryRequestedInformationKind.kind),
-      );
-      const atoms = [
-        context,
-        ...(await ledger.query({
-          informationId: context.informationId,
-        })),
-      ];
-      const reply = atoms.find(
-        ({ kind }) => kind === replyRequestedInformationKind.kind,
-      );
-      const turnContext = atoms.find(
-        ({ kind }) => kind === turnContextCompletedInformationKind.kind,
-      );
-      const decision = atoms.find(
-        ({ kind }) => kind === speechDecisionInformationKind.kind,
-      );
-      const requested = atoms.find(
-        ({ kind }) => kind === modelTaskRequestedInformationKind.kind,
-      );
-      const completed = atoms.find(
-        ({ kind }) => kind === modelTaskCompletedInformationKind.kind,
-      );
-      const assistant = atoms.find(
-        ({ kind }) => kind === assistantTextInformationKind.kind,
-      );
-      const delivery = atoms.find(
-        ({ kind }) => kind === deliveryRequestedInformationKind.kind,
-      );
-
-      expect(atoms.map(({ kind }) => kind).sort()).toEqual(
-        [
-          runtimeContextInformationKind.kind,
-          inboundTextInformationKind.kind,
-          turnContextCompletedInformationKind.kind,
-          speechDecisionInformationKind.kind,
-          replyRequestedInformationKind.kind,
-          associationRequestedInformationKind.kind,
-          associationQueryInformationKind.kind,
-          associationCompletedInformationKind.kind,
-          personContextCompletedInformationKind.kind,
-          modelTaskRequestedInformationKind.kind,
-          modelTaskCompletedInformationKind.kind,
-          assistantTextInformationKind.kind,
-          deliveryRequestedInformationKind.kind,
-        ].sort(),
-      );
-      expect(reply?.references).toContainEqual({
-        relation: "core:caused-by",
-        informationId: decision?.informationId,
-      });
-      expect(reply?.references).toContainEqual({
-        relation: "core:uses-context",
-        informationId: turnContext?.informationId,
-      });
-      expect(requested?.references).toContainEqual({
-        relation: "core:caused-by",
-        informationId: reply?.informationId,
-      });
-      expect(completed?.references).toContainEqual({
-        relation: "core:caused-by",
-        informationId: requested?.informationId,
-      });
-      expect(assistant?.references).toContainEqual({
-        relation: "core:caused-by",
-        informationId: completed?.informationId,
-      });
-      expect(delivery?.references).toContainEqual({
-        relation: "core:caused-by",
-        informationId: assistant?.informationId,
-      });
-      // A durable replay of the same turn context must return the existing
-      // speech terminal and leave the downstream reply DAG unchanged.
-      const decisionPayload = speechDecisionInformationKind.payloadSchema.parse(
-        decision!.payload,
-      );
-      const candidateInformationId = z
-        .string()
-        .parse(decisionPayload.candidateInformationId);
-      const replayedDecision = await core.commitTerminal(
-        "core.speech.decision",
-        candidateInformationId,
-        speechDecisionInformationKind,
-        {
-          occurredAt: decision!.occurredAt,
-          source: decision!.source,
-          payload: decisionPayload,
-          references: decision!.references,
-        },
-      );
-      expect(replayedDecision.informationId).toBe(decision!.informationId);
-      const replayGraph = await ledger.query({
-        informationId: context.informationId,
-      });
-      expect(
-        replayGraph.filter(
-          ({ kind }) => kind === speechDecisionInformationKind.kind,
-        ),
-      ).toHaveLength(1);
-      expect(
-        replayGraph.filter(
-          ({ kind }) => kind === replyRequestedInformationKind.kind,
-        ),
-      ).toHaveLength(1);
-      for (const atom of [inbound, reply, completed, assistant, delivery]) {
-        expect(atom?.references).toContainEqual({
-          relation: "core:context",
-          informationId: context.informationId,
-        });
-      }
-    } finally {
-      await host.stop();
-      await core.close();
-      await database.close();
-    }
-  });
-
   it("declares each direct causal edge and the shared context requirement", () => {
     expect(replyRequestedInformationKind.references).toMatchObject({
       "core:caused-by": { targetKinds: ["agent.speech.decision"] },
@@ -1040,7 +566,7 @@ describe("createLlmReplyModule", () => {
     const selected = [memoryAtom(), replyAtom()];
     const registrations: Registration[] = [];
     const context = handlerContext(
-      associationCompletedAtom(),
+      replyAtom(),
       registrations,
       replyAtom(),
       "reply-1",
@@ -1048,10 +574,7 @@ describe("createLlmReplyModule", () => {
       executor,
     );
     const use = vi.spyOn(context, "use");
-    await instance.subscriptions[0]!.handle(
-      associationCompletedAtom(),
-      context,
-    );
+    await instance.subscriptions[0]!.handle(replyAtom(), context);
     expect(use).toHaveBeenCalledWith(modelTaskCapability);
     expect(request).toMatchObject({
       task: {
@@ -1082,17 +605,14 @@ describe("createLlmReplyModule", () => {
       expect(request!.task.outputSchema.safeParse(output).success).toBe(false);
     expect(registrations).toEqual([]);
     const unavailable = handlerContext(
-      associationCompletedAtom(),
+      replyAtom(),
       [],
-      associationCompletedAtom(),
+      replyAtom(),
       "test.instance",
       [replyAtom()],
     );
     await expect(
-      instance.subscriptions[0]!.handle(
-        associationCompletedAtom(),
-        unavailable,
-      ),
+      instance.subscriptions[0]!.handle(replyAtom(), unavailable),
     ).rejects.toThrow("undeclared test capability");
   });
 
@@ -1135,9 +655,9 @@ describe("createLlmReplyModule", () => {
       });
       const registrations: Registration[] = [];
       await instance.subscriptions[0]!.handle(
-        associationCompletedAtom(),
+        replyAtom(),
         handlerContext(
-          associationCompletedAtom(),
+          replyAtom(),
           registrations,
           replyAtom(),
           "reply-1",
@@ -1147,7 +667,7 @@ describe("createLlmReplyModule", () => {
       );
       expect(registrations).toEqual([]);
       expect(instance.subscriptions.map((s) => s.kind)).toEqual([
-        "agent.association.completed",
+        "core.reply.requested",
         "core.model.task.completed",
         "core.message.assistant.text",
       ]);
@@ -1197,6 +717,7 @@ describe("createLlmReplyModule", () => {
             text: "Hello.",
             source: inboundPayload.source,
             originatingModuleInstanceId: "reply-1",
+            turn: null,
           },
         },
       },
@@ -1229,7 +750,9 @@ describe("createLlmReplyModule", () => {
               replyToPlatformMessageId: "request-1",
               text: "Hello.",
             },
+            turn: null,
           },
+          references: [],
         },
       },
     ]);

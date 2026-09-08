@@ -94,8 +94,19 @@ export const associationIdentitySelector = defineInformationSelector({
     const terminals = identity.filter(
       ({ kind }) => kind === "agent.person.context.completed",
     );
-    if (terminals.length !== 1) return [];
-    return [terminals[0]!.informationId];
+    const turns = await ledger.related({
+      from: [sourceAtom.informationId],
+      relation: "core:uses-context",
+      direction: "outgoing",
+      limit: 10,
+    });
+    const turn = turns.find(
+      ({ kind }) => kind === turnContextCompletedInformationKind.kind,
+    );
+    return [
+      ...(terminals.length === 1 ? [terminals[0]!.informationId] : []),
+      ...(turn === undefined ? [] : [turn.informationId]),
+    ];
   },
 });
 
@@ -150,16 +161,18 @@ export const associationCandidateSelector = defineInformationSelector({
         from: [turns[0]!.informationId],
         relation: "core:uses-context",
         direction: "outgoing",
-        limit: 2,
+        limit: 1_000,
       })
     ).filter(({ kind }) => kind === inboundTextInformationKind.kind);
-    if (inbound.length !== 1) {
-      throw new Error("Turn context must reference one inbound source");
+    if (inbound.length === 0) {
+      throw new Error("Turn context must reference inbound sources");
     }
     const input = {
       query: query.query,
-      occurredBefore: inbound[0]!.occurredAt,
-      excludeSourceInformationIds: [inbound[0]!.informationId],
+      occurredBefore: query.asOf,
+      excludeSourceInformationIds: inbound.map(
+        ({ informationId }) => informationId,
+      ),
     };
     const memories = await ledger.retrieve({
       strategyId: MEMORY_RETRIEVAL_STRATEGY_ID,
@@ -213,7 +226,12 @@ export const associationModule = defineInformationModule({
           const identityAtoms = await context.select(
             associationIdentitySelector,
           );
-          const identityAtom = identityAtoms[0];
+          const identityAtom = identityAtoms.find(
+            ({ kind }) => kind === "agent.person.context.completed",
+          );
+          const turnContext = identityAtoms.find(
+            ({ kind }) => kind === turnContextCompletedInformationKind.kind,
+          );
           const identity =
             identityAtom === undefined
               ? { status: "unavailable" as const }
@@ -226,7 +244,10 @@ export const associationModule = defineInformationModule({
               payload: {
                 sourceInformationId: reply.informationId,
                 queryText: payload.text,
-                asOf: reply.occurredAt,
+                asOf:
+                  turnContext === undefined
+                    ? reply.occurredAt
+                    : (turnContext.payload as any).asOf,
                 route: "reply",
                 method: "sparse-2gram",
                 identity: {

@@ -171,7 +171,8 @@ export class DurableOneShotScheduler {
       );
     };
     this.#timers.set(id, timer);
-    if (delay !== 0) scheduleNext();
+    if (delay === 0) void this.fire(id, generation);
+    else scheduleNext();
   }
   private cancel(id: InformationId): void {
     const timer = this.#timers.get(id);

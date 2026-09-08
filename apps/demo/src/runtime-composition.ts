@@ -17,13 +17,18 @@ import {
 import { createRepeatingDeterministicModel } from "@kaguya/llm/testing";
 import {
   createFirstPartyModuleCatalog,
-  firstPartyModuleActivations,
+  createFirstPartyModuleActivations,
   llmReplySettingsSchema,
   type ModuleModelSelection,
 } from "@kaguya/modules";
 import {
   modelTaskCapability,
   modelTaskCompletedInformationKind,
+  modelTaskFailedInformationKind,
+  modelTaskCancelledInformationKind,
+  deliveryDeliveredInformationKind,
+  deliveryFailedInformationKind,
+  executionExhaustedInformationKind,
   type RuntimeModelTaskOptions,
   type RuntimeCapabilityContext,
 } from "@kaguya/runtime";
@@ -37,6 +42,7 @@ export type RuntimeModelSelectionResolver = (
 };
 export interface ReplyCompositionOptions {
   readonly memoryEnabled?: boolean;
+  readonly profile?: "production" | "test";
 }
 export function createDeterministicModelSelectionResolver(): RuntimeModelSelectionResolver {
   const model = createRepeatingDeterministicModel({
@@ -55,14 +61,22 @@ export function createReplyComposition(
   const catalog = createFirstPartyModuleCatalog({
     modelTaskCapability,
     modelTaskCompletedInformationKind,
+    modelTaskFailedInformationKind,
+    modelTaskCancelledInformationKind,
+    deliveryDeliveredInformationKind,
+    deliveryFailedInformationKind,
+    executionExhaustedInformationKind,
   });
+  const activations = createFirstPartyModuleActivations(
+    options.profile ?? "production",
+  );
   const models = new Map<string, ReturnType<KaguyaLlmModelResolver>>();
   const activeModel = new AsyncLocalStorage<{
     readonly providerId: string;
     readonly modelId: string;
   }>();
   const modelTask: RuntimeModelTaskOptions = {
-    approvals: firstPartyModuleActivations
+    approvals: activations
       .filter((activation) => activation.definitionId === "demo.reply.llm")
       .map((activation) => ({
         activation: {
@@ -96,7 +110,7 @@ export function createReplyComposition(
   };
   return {
     catalog,
-    activations: firstPartyModuleActivations,
+    activations,
     memory: { enabled: options.memoryEnabled ?? false },
     modelTask,
     capabilities: ({ oneShotSchedule }: RuntimeCapabilityContext) => [

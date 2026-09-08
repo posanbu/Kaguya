@@ -969,7 +969,9 @@ function createRegistry(
 ): InformationKindRegistry {
   const registry = new InformationKindRegistry();
   const registered = new Map<string, InformationKindDefinition<string, any>>(
-    oneShotInformationKinds.map((definition) => [definition.kind, definition]),
+    [...oneShotInformationKinds, executionExhaustedInformationKind].map(
+      (definition) => [definition.kind, definition],
+    ),
   );
   for (const definition of [
     ...builtInInformationKinds,

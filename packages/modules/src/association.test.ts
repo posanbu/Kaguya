@@ -135,7 +135,7 @@ describe("associationModule", () => {
       strategyId: "kaguya.memory.sparse",
       input: {
         query: "hello",
-        occurredBefore: currentInbound.occurredAt,
+        occurredBefore: query.payload.asOf,
         excludeSourceInformationIds: [currentInbound.informationId],
       },
       limit: 8,

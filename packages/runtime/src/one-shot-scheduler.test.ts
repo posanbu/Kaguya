@@ -12,14 +12,25 @@ import {
 } from "@kaguya/modules";
 import { createRepeatingDeterministicModel } from "@kaguya/llm/testing";
 import { modelTaskCapability } from "./model-task.js";
-import { modelTaskCompletedInformationKind } from "./information-kinds.js";
+import {
+  deliveryDeliveredInformationKind,
+  deliveryFailedInformationKind,
+  modelTaskCompletedInformationKind,
+  modelTaskFailedInformationKind,
+  modelTaskCancelledInformationKind,
+} from "./information-kinds.js";
+import { executionExhaustedInformationKind } from "@kaguya/engine";
 import {
   oneShotScheduleCapability,
   type OneShotScheduleCapability,
 } from "@kaguya/scheduler";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { KaguyaRuntime, RuntimeUnavailableError } from "./index.js";
+import {
+  KaguyaRuntime,
+  RuntimeUnavailableError,
+  type RuntimeCapabilityContext,
+} from "./index.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 
@@ -51,6 +62,11 @@ describe("KaguyaRuntime one-shot scheduler lifecycle", () => {
       catalog: createFirstPartyModuleCatalog({
         modelTaskCapability,
         modelTaskCompletedInformationKind,
+        modelTaskFailedInformationKind,
+        modelTaskCancelledInformationKind,
+        deliveryDeliveredInformationKind,
+        deliveryFailedInformationKind,
+        executionExhaustedInformationKind,
       }),
       activations: [],
       informationIdGenerator: () => `runtime-scheduler-${++id}`,
@@ -101,6 +117,11 @@ describe("KaguyaRuntime one-shot scheduler lifecycle", () => {
       catalog: createFirstPartyModuleCatalog({
         modelTaskCapability,
         modelTaskCompletedInformationKind,
+        modelTaskFailedInformationKind,
+        modelTaskCancelledInformationKind,
+        deliveryDeliveredInformationKind,
+        deliveryFailedInformationKind,
+        executionExhaustedInformationKind,
       }),
       activations: firstPartyModuleActivations,
       modelTask: {
@@ -120,6 +141,9 @@ describe("KaguyaRuntime one-shot scheduler lifecycle", () => {
         }),
       },
       oneShotRecoveryGate: recovery.promise,
+      capabilities: ({ oneShotSchedule }: RuntimeCapabilityContext) => [
+        { capability: oneShotScheduleCapability, value: oneShotSchedule },
+      ],
     } as never);
     cleanups.push(() => runtime.close());
     const starting = runtime.start();

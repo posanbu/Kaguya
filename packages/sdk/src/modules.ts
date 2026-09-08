@@ -10,6 +10,7 @@
 import type {
   DeepReadonly,
   InformationAtom,
+  InformationId,
   InformationReference,
   JsonObject,
 } from "@kaguya/schema";
@@ -146,6 +147,7 @@ export type InformationModuleLifecycleContext = InformationModuleCreateContext;
 export interface ModuleRegistrationInput<P> {
   readonly payload: P;
   readonly references?: readonly InformationReference[];
+  readonly contextInformationId?: InformationId;
 }
 export interface InformationModuleHandlerContext extends InformationModuleCreateContext {
   readonly definitionId: string;

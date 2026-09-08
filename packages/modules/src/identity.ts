@@ -130,20 +130,25 @@ export const identityModule = defineInformationModule({
             );
             const sender = s.sender;
             if (sender?.nickname || sender?.card) {
-              await context.register(personObservedInformationKind, {
-                payload: {
-                  accountId: s.senderId,
-                  ...(sender.nickname ? { nickname: sender.nickname } : {}),
-                  ...(sender.card ? { card: sender.card } : {}),
-                  observedAt: atom.occurredAt,
-                },
-                references: [
-                  {
-                    relation: "core:observes",
-                    informationId: account.informationId,
+              await context.registerOnce(
+                "core.identity.person.observed",
+                atom.informationId,
+                personObservedInformationKind,
+                {
+                  payload: {
+                    accountId: s.senderId,
+                    ...(sender.nickname ? { nickname: sender.nickname } : {}),
+                    ...(sender.card ? { card: sender.card } : {}),
+                    observedAt: atom.occurredAt,
                   },
-                ],
-              });
+                  references: [
+                    {
+                      relation: "core:observes",
+                      informationId: account.informationId,
+                    },
+                  ],
+                },
+              );
             }
           }
           const status: "complete" | "unresolved" =

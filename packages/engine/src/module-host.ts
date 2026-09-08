@@ -558,6 +558,7 @@ export class ModuleHost {
       ? AbortSignal.any([module.controller.signal, deliverySignal])
       : module.controller.signal;
     const lifecycle = this.createLifecycleContext(module, signal, sourceAtom);
+    const selectedContexts = new Set<string>();
     const prepare = <K extends string, P extends JsonObject>(
       definition: InformationKindDefinition<K, P>,
       input: ModuleRegistrationInput<P>,
@@ -576,6 +577,23 @@ export class ModuleHost {
         throw new Error(
           "Information module cannot override core causal references",
         );
+      if (
+        input.contextInformationId !== undefined &&
+        !selectedContexts.has(input.contextInformationId)
+      ) {
+        throw new Error(
+          "Module context override must reference a selected core.runtime.context",
+        );
+      }
+      const inheritedContext =
+        input.contextInformationId === undefined
+          ? contextReferences(sourceAtom)
+          : [
+              {
+                relation: "core:context",
+                informationId: input.contextInformationId,
+              },
+            ];
       return {
         occurredAt: lifecycle.now().toISOString(),
         source: `module:${module.instanceId}`,
@@ -585,7 +603,7 @@ export class ModuleHost {
             relation: "core:caused-by",
             informationId: sourceAtom.informationId,
           },
-          ...contextReferences(sourceAtom),
+          ...inheritedContext,
           ...custom,
         ],
       };
@@ -596,11 +614,19 @@ export class ModuleHost {
       definitionId: module.definition.manifest.definitionId,
       instanceId: module.instanceId,
       sourceAtom,
-      select: (selector) => {
+      select: async (selector) => {
         signal.throwIfAborted();
         if (!module.definition.manifest.selectors.includes(selector))
           throw new Error(`Selector is not declared: ${selector.selectorId}`);
-        return this.#options.core.select(selector, sourceAtom.informationId);
+        const selected = await this.#options.core.select(
+          selector,
+          sourceAtom.informationId,
+        );
+        for (const atom of selected) {
+          if (atom.kind === "core.runtime.context")
+            selectedContexts.add(atom.informationId);
+        }
+        return selected;
       },
       register: async (definition, input) =>
         this.#options.core.register(definition, prepare(definition, input)),

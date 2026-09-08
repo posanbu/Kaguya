@@ -19,6 +19,8 @@ export interface InformationFindQuery {
   readonly sources?: readonly string[];
   readonly occurredAfter?: string;
   readonly occurredBefore?: string;
+  readonly payloadContains?: JsonObject;
+  readonly order?: "asc" | "desc";
   readonly limit: number;
 }
 

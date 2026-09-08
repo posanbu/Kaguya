@@ -18,6 +18,7 @@ import {
 } from "@kaguya/llm/client";
 import {
   createFirstPartyModuleCatalog,
+  createFirstPartyModuleActivations,
   firstPartyModuleActivations,
   type ModuleModelSelection,
 } from "@kaguya/modules";
@@ -27,20 +28,25 @@ import {
   type ModelTaskCapability,
 } from "./model-task.js";
 import {
+  deliveryDeliveredInformationKind,
+  deliveryFailedInformationKind,
+  modelTaskFailedInformationKind,
+  modelTaskCancelledInformationKind,
   modelTaskCompletedInformationKind,
   modelTaskRequestedInformationKind,
 } from "./information-kinds.js";
+import { executionExhaustedInformationKind } from "@kaguya/engine";
 import { defineInformationModuleCatalog } from "@kaguya/sdk";
 import { KaguyaDatabase } from "@kaguya/database";
 import { createLogger, type KaguyaLogger } from "@kaguya/logger";
 import { createTestingDatabase } from "@kaguya/database/testing";
 import { memoryCapability } from "@kaguya/memory";
+import { oneShotScheduleCapability } from "@kaguya/scheduler";
 import {
   createDeferredDeterministicModel,
   createRepeatingDeterministicModel,
 } from "@kaguya/llm/testing";
 import {
-  alwaysReplyFilterModule,
   inboundTextInformationKind,
   replyRequestedInformationKind,
   speechDecisionInformationKind,
@@ -63,6 +69,7 @@ import {
   OutboundTransportError,
   OutboundTransportNotFoundError,
   RuntimeUnavailableError,
+  type RuntimeCapabilityContext,
 } from "./runtime.js";
 
 const TEST_TIMEOUT = 15_000;
@@ -269,11 +276,11 @@ describe("KaguyaRuntime", () => {
           .map((entry) => entry.definitionId),
       ).toEqual([
         "core.association.memory",
+        "agent.heartbeat.short",
+        "agent.heartflow.online",
         "core.identity.normalize",
         "demo.reply.llm",
         "core.speech.decision",
-        "core.speech.reply-bridge",
-        "core.turn.context",
       ]);
       expect(logs).toContainEqual(
         expect.objectContaining({
@@ -997,7 +1004,12 @@ describe("KaguyaRuntime", () => {
           "agent.person.resolution",
           "agent.person.context.completed",
           "agent.speech.decision",
+          "agent.heartbeat.scheduled",
+          "agent.turn.candidate",
+          "agent.turn.claimed",
+          "agent.turn.started",
           "agent.turn.context.completed",
+          "agent.turn.completed",
           "core.delivery.delivered",
         ]),
       );
@@ -1075,6 +1087,7 @@ describe("KaguyaRuntime", () => {
         expect.arrayContaining([
           "core.model.task.requested",
           "core.model.task.failed",
+          "agent.turn.failed",
         ]),
       );
       for (const forbiddenKind of [
@@ -1096,7 +1109,7 @@ describe("KaguyaRuntime", () => {
     async () => {
       const { runtime, database } = await createRuntime({
         activations: [
-          ...firstPartyModuleActivations.filter(
+          ...createFirstPartyModuleActivations("test").filter(
             (a) => a.definitionId !== "demo.reply.llm",
           ),
           ...[
@@ -1174,6 +1187,7 @@ describe("KaguyaRuntime", () => {
 
       expect(result.deliveries).toEqual([]);
       expect(graph.map(({ kind }) => kind)).toContain("core.delivery.failed");
+      expect(graph.map(({ kind }) => kind)).toContain("agent.turn.failed");
       expect(graph.map(({ kind }) => kind)).not.toContain("consumer.failed");
       const failed = graph.find(({ kind }) => kind === "core.delivery.failed")!;
       const requested = graph.find(
@@ -1214,6 +1228,7 @@ describe("KaguyaRuntime", () => {
 
       expect(result.deliveries).toEqual([]);
       expect(graph.map(({ kind }) => kind)).toContain("core.delivery.failed");
+      expect(graph.map(({ kind }) => kind)).toContain("agent.turn.failed");
       expect(graph.map(({ kind }) => kind)).not.toContain("consumer.failed");
       expect(JSON.stringify(graph)).not.toContain(
         "provider-token-must-not-enter-ledger",
@@ -1252,6 +1267,7 @@ describe("KaguyaRuntime", () => {
 
       expect(result.deliveries).toEqual([]);
       expect(graph.map(({ kind }) => kind)).toContain("core.delivery.failed");
+      expect(graph.map(({ kind }) => kind)).toContain("agent.turn.failed");
       expect(graph.map(({ kind }) => kind)).not.toContain("consumer.failed");
       expect(JSON.stringify(graph)).not.toMatch(
         /provider-specific failure|failed-receipt-raw/,
@@ -1333,7 +1349,7 @@ describe("KaguyaRuntime", () => {
           observer,
         ),
         activations: [
-          ...firstPartyModuleActivations.filter(
+          ...createFirstPartyModuleActivations("test").filter(
             (a) => a.definitionId !== "demo.reply.llm",
           ),
           {
@@ -1551,16 +1567,24 @@ function createDeterministicModelSelectionResolver(): RuntimeModelSelectionResol
 }
 function createReplyComposition(
   resolveModelSelection: RuntimeModelSelectionResolver = createDeterministicModelSelectionResolver(),
-  activations = firstPartyModuleActivations,
+  activations = createFirstPartyModuleActivations("test"),
 ) {
   const catalog = createFirstPartyModuleCatalog({
     modelTaskCapability,
     modelTaskCompletedInformationKind,
+    modelTaskFailedInformationKind,
+    modelTaskCancelledInformationKind,
+    deliveryDeliveredInformationKind,
+    deliveryFailedInformationKind,
+    executionExhaustedInformationKind,
   });
   const models = new Map<string, ReturnType<KaguyaLlmModelResolver>>();
   return {
     catalog,
     activations,
+    capabilities: ({ oneShotSchedule }: RuntimeCapabilityContext) => [
+      { capability: oneShotScheduleCapability, value: oneShotSchedule },
+    ],
     modelTask: {
       approvals: activations
         .filter((a) => a.definitionId === "demo.reply.llm")

@@ -346,6 +346,42 @@ export function defineInformationLedgerContract(
     );
 
     it(
+      "filters JSON payload containment and supports reverse ordering",
+      async () => {
+        const database = await createMigratedDatabase();
+        await database.information.synchronizeKinds([plainKind.kind]);
+        for (const [informationId, values] of [
+          ["atom-payload-a", ["moon", "night"]],
+          ["atom-payload-b", ["moon"]],
+          ["atom-payload-c", ["sun"]],
+        ] as const) {
+          await database.information.append(
+            createAtom(
+              informationId,
+              plainKind.kind,
+              "2026-09-04T00:00:01.000Z",
+              { nested: { values: [...values] } },
+              [],
+            ),
+            [],
+          );
+        }
+
+        const found = await database.information.find({
+          payloadContains: { nested: { values: ["moon"] } },
+          order: "desc",
+          limit: 10,
+        });
+
+        expect(found.map(({ informationId }) => informationId)).toEqual([
+          "atom-payload-b",
+          "atom-payload-a",
+        ]);
+      },
+      TEST_TIMEOUT,
+    );
+
+    it(
       "rolls back an atom when a target reference is missing",
       async () => {
         const database = await createMigratedDatabase();

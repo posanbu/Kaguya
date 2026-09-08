@@ -59,7 +59,7 @@ export async function runDemo(
   options: RunDemoOptions,
 ): Promise<InboundReceipt> {
   const runtime = new KaguyaRuntime({
-    ...createReplyComposition(),
+    ...createReplyComposition(undefined, { profile: "test" }),
     database: options.database,
     now: () => new Date("2026-09-04T00:00:00.000Z"),
     informationIdGenerator: options.informationIdGenerator ?? randomUUID,
@@ -94,7 +94,23 @@ export async function runDemo(
     }
     const receipt = await runtime.submit(inbound);
     const deadline = Date.now() + 10_000;
-    while ((await options.database.information.reliable.health()).pending > 0) {
+    const terminalKinds = new Set([
+      "agent.turn.completed",
+      "agent.turn.waiting",
+      "agent.turn.silent",
+      "agent.turn.failed",
+      "agent.turn.superseded",
+    ]);
+    while (true) {
+      const health = await options.database.information.reliable.health();
+      const currentGraph = await options.database.information.query({
+        informationId: receipt.rootInformationId,
+      });
+      if (
+        health.pending === 0 &&
+        currentGraph.some(({ kind }) => terminalKinds.has(kind))
+      )
+        break;
       if (Date.now() >= deadline)
         throw new Error("Demo delivery did not settle within ten seconds");
       await new Promise((resolve) => setTimeout(resolve, 25));
