@@ -6,28 +6,28 @@ Kaguya 是一个以持久化信息原子（Information Atom）组织消息处理
 
 ## 快速开始
 
-需要 Node.js 24.18.0、pnpm 11.9.0，以及一个可连接的 PostgreSQL 数据库。`KAGUYA_DATABASE_URL` 必填；Server 不再创建 SQLite 文件，也不会转换旧 SQLite 数据。Runtime 启动时通过 `KaguyaDatabase.connect()` 连接该 URL，并在单个数据库事务中执行可重复的账本迁移。
+需要 Node.js 24.18.0、pnpm 11.9.0，以及已启动的 Docker Desktop、OrbStack 或其他兼容 Docker CLI 的引擎。开发命令会准备固定的 PostgreSQL 17 容器；不使用 Compose、PGlite 或 SQLite 代替本地验收。
 
 ```bash
 corepack enable
 pnpm install
 export KAGUYA_CONFIG_ROOT="/absolute/path/to/kaguya-config"
-export KAGUYA_DATABASE_URL="postgresql://kaguya:password@127.0.0.1:5432/kaguya"
 pnpm dev
 ```
 
 Server 每次启动都会生成新的 Gateway Token，并在成功监听后打印完整的 `Kaguya access URL`。必须通过该链接进入 Web UI；刷新会保留 URL fragment 中的 token，Server 重启后需要使用终端打印的新链接。Server 只允许监听 `127.0.0.1`、`localhost` 或 `::1`。
 
-`KAGUYA_CONFIG_ROOT` 指向权限受保护的 Profile Registry。Registry 有且只有一个显式的 `selectedProfileId`；Server 仅在启动时读取这个选中的 Profile 并构造共享模型解析器，不会按消息、模块或用户选择另一个 Profile。目录尚未初始化或选中的 Profile 未就绪时，HTTP 与 Web UI 仍可用于配置，但 Runtime 和 NapCat ingress 不会启动。修改或切换选中的 Profile 后需要重启 Server 才会应用新配置。配置文件损坏或权限异常仍会拒绝启动，不会自动覆盖。初始化格式与密钥边界见 [`@kaguya/config`](packages/config/README.md)。
+`KAGUYA_CONFIG_ROOT` 指向权限受保护的 Profile Registry。Registry 有且只有一个显式的 `selectedProfileId`；Server 的 host、port、database、Web 路径、CORS、代理、限流、日志、allowlist、AI、Memory、平台与插件都来自这个 Profile。首次 `pnpm dev` 会在缺少整个 `runtime` 时保留其他 Profile 内容并补入安全的本地 runtime；部分损坏的 runtime 会被拒绝而不会覆盖。
 
-WebUI 的 Profile 页面旁提供独立的 NapCat 配置页。NapCat 配置实际保存到 `KAGUYA_CONFIG_ROOT/napcat.json`，保存后重启服务即可生效；若未保存过该文件，仍可使用 `KAGUYA_NAPCAT_*` 环境变量配置。
+数据库连接、PostgreSQL 17、migration 和 Runtime Kind 必须在任何 HTTP、Runtime 或平台 ingress 监听前通过。AI 配置尚未完成时，检查通过后仍会开放 Web setup；Runtime 与 NapCat 保持停止。修改或切换 selected Profile 后需要重启。初始化格式与密钥边界见 [`@kaguya/config`](packages/config/README.md)。
+
+Web UI 的 NapCat 页面读写 selected Profile 的 `platforms` 条目。旧 `napcat.json` 和 `KAGUYA_NAPCAT_*` 环境变量会触发不含凭据的迁移错误，不再作为配置来源。
 
 生产运行：
 
 ```bash
 pnpm build
 export KAGUYA_CONFIG_ROOT="/absolute/path/to/kaguya-config"
-export KAGUYA_DATABASE_URL="postgresql://kaguya:password@127.0.0.1:5432/kaguya"
 pnpm start
 ```
 
@@ -57,31 +57,28 @@ core.llm.requested
 
 ## 常用命令
 
-- `pnpm dev`：以开发模式启动唯一 Kaguya Server 与内嵌 Vite。
+- `pnpm dev`：先完整执行托管 PostgreSQL 17 的 start/check，再启动唯一 Server 与内嵌 Vite。
+- `pnpm postgres:start`：创建或恢复托管容器，等待健康并执行 migration/Kind 同步。
+- `pnpm postgres:status`：只报告 Profile 模式、容器状态、健康、PostgreSQL 大版本和端口。
+- `pnpm postgres:check`：不改变容器生命周期，验证 PostgreSQL 17 并幂等执行 migration/Kind 同步。
 - `pnpm build`：构建 packages、Server 与 Web 产物。
-- `pnpm start`：以生产模式启动构建后的 Server。
-- `pnpm demo`：连接 `KAGUYA_DATABASE_URL`，运行确定性信息 DAG，并输出根 `informationId` 与 Kind 计数。
+- `pnpm start`：以生产模式启动构建后的 Server；只使用 selected Profile 数据库，绝不管理 Docker。
+- `pnpm demo`：使用 selected Profile 数据库运行确定性信息 DAG，并输出根 `informationId` 与 Kind 计数。
 - `pnpm test`：运行单元和集成测试。
-- `pnpm test:postgres`：以 `KAGUYA_TEST_DATABASE_URL` 运行真实 PostgreSQL 账本契约、索引与重连测试；CI 使用专用临时服务，生产 Server 不读取此变量。
+- `pnpm test:postgres`：本地自动复用同一托管实例；CI 提供 `KAGUYA_TEST_DATABASE_URL` 时绕过 Docker 和 Profile。
 - `pnpm typecheck`：检查 TypeScript project references 和 Web。
 - `pnpm lint`：运行 ESLint。
 - `pnpm prompt:test`：在阻断外部出口后验证 Prompt 结构。
 
 ## 统一配置
 
-**`KAGUYA_DATABASE_URL`** — 必填。PostgreSQL information ledger 的连接 URL；不会写入普通日志。
-
 **`KAGUYA_CONFIG_ROOT`** — 默认 `.data/kaguya-config`。保存 Profile Registry、Provider 和模型配置，必须按敏感数据保护。
 
-**`KAGUYA_HOST` / `KAGUYA_PORT`** — 默认 `127.0.0.1` / `3000`。监听地址只允许 `127.0.0.1`、`localhost` 或 `::1`。
+**selected Profile `runtime`** — 保存 `databaseMode`、`databaseUrl` 以及 Server 的 host、port、Web、CORS、代理、限流、日志和 allowlist。外部数据库只通过 Profile JSON 配置；旧 Profile 未声明 `databaseMode` 时按 `external` 处理。
 
-**`KAGUYA_CORS_ORIGINS`、`KAGUYA_TRUST_PROXY`、`KAGUYA_RATE_LIMIT_MAX`、`KAGUYA_RATE_LIMIT_WINDOW_MS`** — 跨域、反向代理与请求限流配置。
+**Gateway Token** — 每次启动安全随机生成，只存在于进程和访问链接中；旧 Profile 中的持久化 token 会被忽略，并在下一次 Profile 写入时清理。
 
-**`KAGUYA_GATEWAY_ALLOWLIST_PLATFORMS`、`KAGUYA_GATEWAY_ALLOWLIST_USER_IDS`、`KAGUYA_GATEWAY_ALLOWLIST_GROUP_IDS`** — 平台入站白名单；命中检查在提交 Runtime 前执行。
-
-**`KAGUYA_NAPCAT_ENABLED`、`KAGUYA_NAPCAT_WS_URL`、`KAGUYA_NAPCAT_ACCESS_TOKEN`、`KAGUYA_NAPCAT_SELF_ID`、`KAGUYA_NAPCAT_RECONNECT_MS`** — 可选 NapCat 连接配置。
-
-`KAGUYA_DATABASE_PATH` 与其他旧 SQLite 路径不是 Runtime 配置；Server 只使用 `KAGUYA_DATABASE_URL` 连接 PostgreSQL，且不会导入旧 SQLite 数据。Provider key、base URL 与模型不从环境变量读取，而是由当前全局选中的 Profile 提供。完整列表见[环境变量参考](docs/reference/environment-variables.md)。
+托管实例固定使用 `postgres:17-alpine`、容器 `kaguya-postgres-17` 和卷 `kaguya-postgres-17-data`，默认只绑定 `127.0.0.1:5432`。首次创建可用 `pnpm postgres:start -- --port 55432` 覆盖；已有实例端口不匹配时会安全失败，不会自动重建。普通停止、Server 退出和测试结束都保留容器、卷及数据。完整列表见[环境变量参考](docs/reference/environment-variables.md)。
 
 ## 仓库结构
 

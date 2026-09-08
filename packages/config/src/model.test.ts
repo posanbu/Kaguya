@@ -11,6 +11,7 @@ import {
   platformConfigSchema,
   pluginConfigSchema,
   profileIdSchema,
+  runtimeConfigSchema,
   userConfigIndexSchema,
   userConfigProfileMetadataSchema,
   userConfigProfileSchema,
@@ -91,6 +92,26 @@ function createThrowingGetterProxy(secret: string): object {
 }
 
 describe("user configuration schemas", () => {
+  it("treats legacy runtime as external and drops its persisted gateway token", () => {
+    const runtime = runtimeConfigSchema.parse({
+      host: "127.0.0.1",
+      port: 3000,
+      gatewayToken: "legacy-gateway-token",
+      databaseUrl: "postgresql://profile:secret@database.example/kaguya",
+      webDistPath: "apps/web/dist",
+      corsOrigins: [],
+      trustProxy: false,
+      rateLimitMax: 30,
+      rateLimitWindowMs: 60_000,
+      logLevel: "info",
+      logFormat: "json",
+      gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
+    });
+
+    expect(runtime.databaseMode).toBe("external");
+    expect(runtime).not.toHaveProperty("gatewayToken");
+  });
+
   it("accepts the reserved default profile ID and rejects non-UUID names", () => {
     expect(profileIdSchema.parse("default")).toBe("default");
     expect(profileIdSchema.safeParse("named-profile").success).toBe(false);

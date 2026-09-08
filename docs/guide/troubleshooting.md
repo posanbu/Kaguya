@@ -23,7 +23,7 @@ curl http://127.0.0.1:3000/healthz
 
 :::
 
-若没有 `{"status":"ok"}`，检查端口占用、`server.start.failed`、Node/pnpm 版本和生产模式下是否已经执行 `pnpm build`。若健康接口正常而页面失败，检查浏览器请求和 Web 静态产物。
+若没有 `{"status":"ok"}`，先运行 `pnpm postgres:status`，再检查 Docker Desktop/OrbStack、端口占用、PostgreSQL 17、`server.start.failed`、Node/pnpm 版本和生产模式下是否已经执行 `pnpm build`。数据库连接、版本、migration 或 Kind 检查失败时 Server 不会监听健康接口。若健康接口正常而页面失败，检查浏览器请求和 Web 静态产物。
 
 ## 一直停在配置页面
 
@@ -57,7 +57,7 @@ Server 每次启动都会生成新 token，旧链接随即失效。回到当前�
 
 ## Web UI 正常但 NapCat 失败
 
-确认 `KAGUYA_NAPCAT_ENABLED=true`，并检查 WebSocket URL、访问凭据和 self ID。NapCat 连接失败不会停止 HTTP 与 Web UI；查看 `module=adapter:napcat` 的结构化日志。
+在 Web UI 的 NapCat 页面检查 enabled、WebSocket URL、访问凭据和 self ID；这些值保存在 selected Profile 的平台条目。旧 `napcat.json` 或 `KAGUYA_NAPCAT_*` 会导致迁移错误。NapCat 连接失败不会停止 HTTP 与 Web UI；查看 `module=adapter:napcat` 的结构化日志。
 
 ## 文档站本地与线上不一致
 

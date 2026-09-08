@@ -1,112 +1,105 @@
 ---
-title: 环境变量
-description: Kaguya Server、PostgreSQL、白名单、NapCat 与日志环境变量参考。
+title: 环境变量与运行配置
+description: selected Profile、开发 PostgreSQL 与仅保留环境变量的参考。
 ---
 
-# 环境变量
+# 环境变量与运行配置
 
-除 `KAGUYA_TEST_DATABASE_URL` 仅由测试命令读取外，下列环境变量由 `apps/server` 在启动时读取。Provider Key、Base URL 和模型 ID 不属于环境变量，统一存放在 `KAGUYA_CONFIG_ROOT` 指向的 Profile Registry；Runtime 只使用启动时全局选中的 `selectedProfileId`。
+Kaguya 的持久运行配置以 selected Profile 为唯一真值。应用环境只用于定位 Profile Registry；数据库、监听、Web、CORS、代理、限流、日志、allowlist、AI、Memory、平台和插件都不再从环境变量读取。
 
-## Server 与 PostgreSQL
+## 应用环境
 
-**`KAGUYA_DATABASE_URL`** — 必填。非空 PostgreSQL 连接 URL，供 information ledger 使用。Server 不在普通日志、启动错误或失败事实中回显该 URL。
+**`KAGUYA_CONFIG_ROOT`** — 可选，默认 `.data/kaguya-config`。它只指定权限受保护的 Profile Registry 根目录，不覆盖 Profile 内的任何值。
 
-**`KAGUYA_HOST`** — 默认 `127.0.0.1`。只接受 `127.0.0.1`、`localhost` 或 `::1`；其他值会拒绝启动。
-
-**`KAGUYA_PORT`** — 默认 `3000`，允许范围 1 至 65535。
-
-## 测试专用 PostgreSQL
-
-**`KAGUYA_TEST_DATABASE_URL`** — 仅供 `pnpm test:postgres` 连接真实 PostgreSQL，运行共享账本契约、索引与重连测试。CI 为它创建临时服务；`apps/server` 不读取此变量，生产环境必须配置 `KAGUYA_DATABASE_URL`。
-
-## Server
-
-**`KAGUYA_CONFIG_ROOT`** — 默认 `.data/kaguya-config`。权限受保护的 Profile Registry 根目录。
-
-**`KAGUYA_WEB_DIST_PATH`** — 默认 `apps/web/dist`。生产静态产物目录，主要供测试和部署覆盖。
-
-**`KAGUYA_CORS_ORIGINS`** — 默认空。逗号分隔的允许来源；空值关闭跨源许可，同源 Web UI 不受影响。
-
-**`KAGUYA_TRUST_PROXY`** — 默认空。逗号分隔的可信代理地址或 CIDR；空值不信任转发地址。
-
-**`KAGUYA_RATE_LIMIT_MAX`** — 默认 `30`，允许范围 1 至 10000。每个窗口的请求数。
-
-**`KAGUYA_RATE_LIMIT_WINDOW_MS`** — 默认 `60000`，允许范围 1000 至 3600000 毫秒。
-
-::: warning 使用终端中的完整访问链接
-Server 每次成功监听后生成并打印带 `#gatewayToken=` fragment 的访问链接。该 token 对 setup、Profile、NapCat 和消息接口均有效，只在当前进程生命周期内有效；重启后需要重新打开新链接。
-:::
-
-## 平台入站白名单
-
-**`KAGUYA_GATEWAY_ALLOWLIST_PLATFORMS`** — 逗号分隔的平台 ID；空值表示不限制平台。
-
-**`KAGUYA_GATEWAY_ALLOWLIST_USER_IDS`** — 逗号分隔的用户 ID；空值表示不限制用户。
-
-**`KAGUYA_GATEWAY_ALLOWLIST_GROUP_IDS`** — 逗号分隔的群组 ID；空值表示不限制群组。
-
-只要某一维度配置了值，入站消息对应字段就必须命中；多个维度同时配置时需要全部满足。检查发生在 adapter 向 Runtime 提交内容之前，因此未命中的内容不会生成信息原子或触发模块。
+**`NODE_ENV`** — 由启动脚本设置为 `development` 或 `production`，只选择 Vite 开发资源或已构建的静态资源，不承载持久运行配置。
 
 ::: code-group
 
-```dotenv [只允许指定群组 ~vscode-icons:file-type-dotenv~]
-KAGUYA_GATEWAY_ALLOWLIST_GROUP_IDS=123,456
+```powershell [PowerShell ~vscode-icons:file-type-powershell~]
+$env:KAGUYA_CONFIG_ROOT = "C:\\kaguya\\config"
+pnpm dev
+```
+
+```bash [POSIX shell ~vscode-icons:file-type-shell~]
+export KAGUYA_CONFIG_ROOT="/srv/kaguya/config"
+pnpm dev
 ```
 
 :::
+
+## selected Profile runtime
+
+`runtime` 是 Profile JSON 中的隐藏管理字段，Web Profile 编辑器不展示、不返回、也不接收它。Web 做完整 Profile 替换时，Server 原样保留现有 runtime；新建 Profile 继承当时 selected Profile 的 runtime。
+
+**`databaseMode`** — `managed` 或 `external`。旧 Profile 未声明时按 `external` 处理。
+
+**`databaseUrl`** — PostgreSQL 连接 URL。外部数据库只通过 Profile 文件配置；Server 与 demo 都从 selected Profile 读取。
+
+**`host` / `port`** — Server 监听地址和端口。host 只允许 `127.0.0.1`、`localhost` 或 `::1`。
+
+**`webDistPath` / `corsOrigins` / `trustProxy`** — Web 静态资源、CORS 和可信代理配置。
+
+**`rateLimitMax` / `rateLimitWindowMs`** — HTTP 限流次数与窗口。
+
+**`logLevel` / `logFormat`** — 日志级别以及 `json` 或 `pretty` 格式。
+
+**`gatewayAllowlist`** — 由 `platforms`、`userIds`、`groupIds` 三个数组组成。配置了某一维度后，入站内容必须命中；检查发生在提交 Runtime 之前。
+
+::: code-group
+
+```json [外部 PostgreSQL runtime ~vscode-icons:file-type-json~]
+{
+  "runtime": {
+    "host": "127.0.0.1",
+    "port": 3000,
+    "databaseMode": "external",
+    "databaseUrl": "postgresql://kaguya:replace-me@127.0.0.1:5432/kaguya",
+    "webDistPath": "apps/web/dist",
+    "corsOrigins": [],
+    "trustProxy": false,
+    "rateLimitMax": 30,
+    "rateLimitWindowMs": 60000,
+    "logLevel": "info",
+    "logFormat": "json",
+    "gatewayAllowlist": {
+      "platforms": [],
+      "userIds": [],
+      "groupIds": []
+    }
+  }
+}
+```
+
+:::
+
+示例只是 Profile 的局部形状，不能直接替换完整 Profile 文件。配置目录和数据库 URL 都按敏感数据保护。
+
+## Gateway Token
+
+Gateway Token 不属于持久配置。Server 每次启动用安全随机数生成新 token，只保存在当前进程和成功监听后打印的 `Kaguya access URL` fragment 中。重启后必须使用新链接。旧 Profile 中的 `gatewayToken` 仍可被解析，但会被忽略，并在下一次 Profile 写入时清理。
 
 ## NapCat
 
-**`KAGUYA_NAPCAT_ENABLED`** — 默认 `false`。设为 `true` 时启动 WebSocket supervisor。
+NapCat 页面直接读写 selected Profile 的 `platforms` 条目。启用项的 `settings` 保存 adapter ID、WebSocket URL、self ID 与重连间隔，`credentials` 保存可选 access token。NapCat 断线重连不等于信息消费者或投递自动重试。
 
-**`KAGUYA_NAPCAT_WS_URL`** — 启用 NapCat 时必填。完整地址不得写入普通日志。
+旧 `KAGUYA_CONFIG_ROOT/napcat.json` 会触发稳定迁移错误；Server 不读取文件内容。删除该文件前，应先把需要保留的设置人工迁移到 selected Profile。
 
-**`KAGUYA_NAPCAT_ACCESS_TOKEN`** — 可选连接凭据。
+## 测试专用 PostgreSQL
 
-**`KAGUYA_NAPCAT_SELF_ID`** — 可选，用于校验事件中的机器人 ID。
+**`KAGUYA_TEST_DATABASE_URL`** — 只供 CI 的 `pnpm test:postgres` 子进程使用。显式提供时，命令绕过 Docker 和 Profile，只检查目标 PostgreSQL 17；普通 Server 和 demo 不读取它。
 
-**`KAGUYA_NAPCAT_RECONNECT_MS`** — 默认 `3000`，允许范围 100 至 3600000 毫秒。它只控制 NapCat 连接 supervisor 的重连间隔，不是信息消费者或投递的自动重试。
+本地不要设置此变量。`pnpm test:postgres` 会自动复用 `kaguya-postgres-17`，并把测试 URL 只注入 Vitest 子进程。各 suite 创建随机 `kaguya_test_*` schema，结束时只清理自己的 schema，不清空应用 schema、容器或数据卷。
 
-NapCat 断线会按连接配置重连，不会停止 Fastify 或改变健康检查。一次已经注册的投递请求仍只产生相应成功或失败事实，Core 不会将其放入工作队列或自动重试。
+## 已退役并拒绝的变量
 
-## 日志
+检测到以下任一变量时，Server 会在监听前失败，只报告变量名，不读取或输出值：
 
-**`NODE_ENV`** — `development` 时默认 pretty 日志；其他环境默认 JSON。
+**旧数据库与 Server 变量** — `KAGUYA_DATABASE_URL`、`KAGUYA_HOST`、`KAGUYA_PORT`、`KAGUYA_GATEWAY_TOKEN`、`KAGUYA_WEB_DIST_PATH`、`KAGUYA_CORS_ORIGINS`、`KAGUYA_TRUST_PROXY`、`KAGUYA_RATE_LIMIT_MAX`、`KAGUYA_RATE_LIMIT_WINDOW_MS`。
 
-**`KAGUYA_LOG_FORMAT`** — `pretty` 或 `json`，显式覆盖环境默认值。
+**旧 allowlist 变量** — `KAGUYA_GATEWAY_ALLOWLIST_PLATFORMS`、`KAGUYA_GATEWAY_ALLOWLIST_USER_IDS`、`KAGUYA_GATEWAY_ALLOWLIST_GROUP_IDS`。
 
-**`KAGUYA_LOG_LEVEL`** — 默认 `info`，可用 `trace`、`debug`、`info`、`warn`、`error`、`fatal` 或 `silent`。
+**旧 NapCat 变量** — `KAGUYA_NAPCAT_ENABLED`、`KAGUYA_NAPCAT_WS_URL`、`KAGUYA_NAPCAT_ACCESS_TOKEN`、`KAGUYA_NAPCAT_SELF_ID`、`KAGUYA_NAPCAT_RECONNECT_MS`。
 
-**`KAGUYA_LOG_LEVELS`** — 逗号分隔的 `namespace=level`，最长命名空间前缀优先。
+**旧日志变量** — `KAGUYA_LOG_LEVEL`、`KAGUYA_LOG_LEVELS`、`KAGUYA_LOG_FORMAT`、`KAGUYA_LOG_ASYNC`、`KAGUYA_LOG_DESTINATION`。
 
-**`KAGUYA_LOG_ASYNC`** — 默认 `false`；仅 JSON 支持异步 worker transport。
-
-**`KAGUYA_LOG_DESTINATION`** — 默认 `stdout`。pretty 只支持 `stdout` 或 `stderr`；JSON 还可使用文件路径。
-
-::: code-group
-
-```dotenv [开发调试 ~vscode-icons:file-type-dotenv~]
-KAGUYA_LOG_LEVEL=info
-KAGUYA_LOG_LEVELS=runtime:information=debug,runtime:module:demo.reply.llm=debug
-```
-
-```dotenv [生产 JSON 文件 ~vscode-icons:file-type-dotenv~]
-NODE_ENV=production
-KAGUYA_LOG_FORMAT=json
-KAGUYA_LOG_ASYNC=true
-KAGUYA_LOG_DESTINATION=.data/logs/kaguya.jsonl
-```
-
-:::
-
-`runtime:information=debug` 会在 info 摘要之后展开完整 Information DAG detail；Model Task requested 的 detail 包含多行 Prompt，并会写入所选 destination。`runtime:module:<definitionId>=debug` 只展开对应模块声明的临时诊断。字段、隐私边界和 Pretty 短 ID 规则见 [Runtime 与 Information 可观测性](../developers/observability)。
-
-## 已废弃并拒绝的变量
-
-检测到以下任一变量时，Server 会在启动前失败，不读取其值，也不自动迁移：
-
-**旧多应用变量** — `KAGUYA_API_HOST`、`KAGUYA_API_PORT`、`KAGUYA_API_DATABASE_PATH`、`KAGUYA_BOT_DATABASE_PATH`。
-
-**旧模型变量** — `KAGUYA_LLM_API_KEY`、`KAGUYA_LLM_BASE_URL`、`KAGUYA_LLM_MODEL`。
-
-模型配置应迁移到 profile store；Server 地址和数据库应使用统一变量。
+**更早的多应用与模型变量** — `KAGUYA_API_HOST`、`KAGUYA_API_PORT`、`KAGUYA_API_DATABASE_PATH`、`KAGUYA_BOT_DATABASE_PATH`、`KAGUYA_LLM_API_KEY`、`KAGUYA_LLM_BASE_URL`、`KAGUYA_LLM_MODEL`。

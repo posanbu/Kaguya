@@ -19,11 +19,11 @@ description: Kaguya 统一 Server 的路由、认证、Profile 与消息协议�
 
 **`GET /api/v1/profiles`** — 需要 Bearer Token，返回 Profile 摘要与全局 selected Profile。
 
-**`POST /api/v1/profiles`** — 需要 Bearer Token，创建一个未选中的空 Profile。
+**`POST /api/v1/profiles`** — 需要 Bearer Token，创建一个未选中、继承隐藏 runtime 的 Profile。
 
-**`GET /api/v1/profiles/:profileId`** — 需要 Bearer Token，返回包含敏感配置的完整 Profile。
+**`GET /api/v1/profiles/:profileId`** — 需要 Bearer Token，返回包含可编辑敏感配置但不含隐藏 runtime 的 Profile。
 
-**`PUT /api/v1/profiles/:profileId`** — 需要 Bearer Token，完整替换一个 Profile。
+**`PUT /api/v1/profiles/:profileId`** — 需要 Bearer Token，完整替换可见 Profile 字段并保留隐藏 runtime。
 
 **`PUT /api/v1/profiles/selection`** — 需要 Bearer Token，修改全局 selected Profile。
 

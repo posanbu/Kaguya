@@ -80,6 +80,8 @@ function config(workspaceRoot: string): ServerConfig {
     configRoot: join(workspaceRoot, "config"),
     development: false,
     webDistPath: join(workspaceRoot, "web"),
+    logLevel: "silent",
+    logFormat: "json",
     gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
     napcat: {
       enabled: false,

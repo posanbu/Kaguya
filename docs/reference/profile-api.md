@@ -5,7 +5,7 @@ description: Kaguya Profile Registry 的读取、创建、完整替换、选择�
 
 # Profile API
 
-所有 Profile 路由都需要当前实例的 Bearer Token。`GET /api/v1/setup` 只返回无 secret 的 readiness 和 Profile 摘要；读取单个 Profile 会返回 API Key 等敏感字段，只能在可信边界内调用。
+所有 Profile 路由都需要当前实例的 Bearer Token。`GET /api/v1/setup` 只返回无 secret 的 readiness 和 Profile 摘要；读取单个 Profile 会返回 API Key 等可编辑敏感字段，只能在可信边界内调用。数据库 URL 等隐藏 `runtime` 字段不会通过 Web API 返回。
 
 ## 列出 Profile
 
@@ -38,7 +38,7 @@ curl http://127.0.0.1:3000/api/v1/profiles \
 
 ## 创建 Profile
 
-`POST /api/v1/profiles` 只接收 `name`，创建未选中的空 Profile并返回 `201`。它不会复制当前 Profile，也不会让 Runtime 自动切换。
+`POST /api/v1/profiles` 只接收 `name`，创建未选中的 Profile 并返回 `201`。AI、Memory、平台和插件采用空默认值；隐藏 runtime 继承当前 selected Profile，避免切换后无法启动。接口不会让 Runtime 自动切换。
 
 ::: code-group
 
@@ -48,11 +48,11 @@ curl http://127.0.0.1:3000/api/v1/profiles \
 
 :::
 
-响应返回完整 `profile` 和 `restartRequired`。空 Profile 的 Provider、平台和插件数组为空，`memory.enabled` 为 `false`，尚未 ready，应继续使用完整替换接口配置。
+响应返回 Web 可编辑的 `profile` 和 `restartRequired`。新 Profile 的 Provider、平台和插件数组为空，`memory.enabled` 为 `false`，尚未 ready，应继续使用完整替换接口配置。
 
 ## 读取与完整替换
 
-`GET /api/v1/profiles/:profileId` 返回完整 Profile。`PUT /api/v1/profiles/:profileId` 接收 `name`、`ai`、`memory`、`platforms`、`plugins` 和 `acknowledgedWarnings`；这是 replace，不是 patch，省略配置不会保留旧值。为兼容缺少新字段的 Profile，省略 `memory` 会确定性解析为 `{ "enabled": false }`。
+`GET /api/v1/profiles/:profileId` 返回 Web 可编辑 Profile，不包含 runtime。`PUT /api/v1/profiles/:profileId` 接收 `name`、`ai`、`memory`、`platforms`、`plugins` 和 `acknowledgedWarnings`；这是可见字段的 replace，不是 patch，省略可见配置不会保留旧值。Server 始终原样保留磁盘中的隐藏 runtime，且请求包含 `runtime` 会因未知字段被拒绝。为兼容缺少新字段的 Profile，省略 `memory` 会确定性解析为 `{ "enabled": false }`。
 
 ::: code-group
 

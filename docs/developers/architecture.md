@@ -18,9 +18,9 @@ flowchart LR
   Server --> WebAdapter[Web 平台适配器]
   WebAdapter --> Runtime[KaguyaRuntime]
   Adapter --> Runtime
-  Runtime --> DB[(SQLite)]
-  Runtime --> Bus[EventBus]
-  Bus --> Host[ModuleHost]
+  Runtime --> DB[(PostgreSQL 17)]
+  Runtime --> Core[InformationCore]
+  Core --> Host[ModuleHost]
   Host --> Modules[Filter / LLM / 自定义模块]
   Modules --> LLM[LLM execution port]
   Modules --> Outbound[message.outbound.requested]
@@ -77,20 +77,20 @@ LLM 失败与投递失败同样是账本中的事实，分别以 `core.llm.faile
 
 ## 消费者失败不会回滚已提交事实
 
-Server 启动时打开 Profile Registry，检查全局 selected Profile，再为 light/heavy target 创建模型客户端。Provider key 只存在于权限保护的 Profile JSON、配置管理器和 provider factory，不进入模块 settings、事件、Prompt 或日志。配置未 ready 时，HTTP 与 Web UI 仍可用，但 Runtime 和 NapCat ingress 不创建；完整流程见[配置生命周期](./configuration-lifecycle)。
+Server 启动时打开 Profile Registry，检查全局 selected Profile，并先验证数据库连接、PostgreSQL 17、migration 与 Runtime Kind。随后才为 light/heavy target 创建模型客户端。Provider key 只存在于权限保护的 Profile JSON、配置管理器和 provider factory，不进入模块 settings、信息原子、Prompt 或日志。AI 配置未 ready 时，数据库预检通过后 HTTP 与 Web UI 仍可用，但 Runtime 和 NapCat ingress 不创建；数据库预检失败时任何 ingress 都不监听。完整流程见[配置生命周期](./configuration-lifecycle)。
 
 `consumer.failed` 的消费者若再次失败，或失败事实无法提交，Core 只交给 bootstrap 诊断边界，不递归生成失败原子。因此系统没有自动重试，也没有内建工作队列。
 
 ## 配置、模型与数据边界
 
-`KAGUYA_DATABASE_URL` 是必填的 PostgreSQL 连接 URL。Server 通过 `KaguyaDatabase.connect()` 建立连接，Runtime 启动时在一个数据库事务中执行可重复的迁移。`information_atoms.payload` 使用 `JSONB`，Kind、原子和显式引用由外键保护；原子、引用与日志投影 outbox 在同一事务写入，随后才由 outbox runner 投影日志。原子与引用由数据库触发器保持 append-only。Runtime 不写 SQLite 消息表、trace 表或出站审计表，旧 SQLite 数据不会自动迁移。
+selected Profile 的 `runtime.databaseUrl` 是 PostgreSQL 连接真值，`databaseMode` 区分开发工具可管理的本地实例与完全外部的实例。旧 Profile 未声明 mode 时按 `external` 处理。Server 通过 `KaguyaDatabase.connect()` 建立连接并拒绝非 PostgreSQL 17；Runtime 启动时在一个数据库事务中执行可重复的迁移。`information_atoms.payload` 使用 `JSONB`，Kind、原子和显式引用由外键保护；原子、引用与日志投影 outbox 在同一事务写入，随后才由 outbox runner 投影日志。原子与引用由数据库触发器保持 append-only。旧 SQLite 数据不会自动迁移。
 
 Profile Registry 维护一个全局 `selectedProfileId`。Server 在启动时只读取该 Profile 并构造共享 light/heavy 模型解析器；模块 settings、入站 payload 和信息原子不携带 `profileId`，也没有回退到其他 Profile、Provider 或模型的路径。
 
-仓库还包含追加式 InformationLedger、PostgreSQL/PGlite 仓储和持久日志 outbox。这是下一阶段数据核心，当前未替换上述 SQLite 消息、LLM trace 与 outbound audit 路径；详见[信息账本](./information-ledger)。
+同一 Profile 还提供 host、port、Web 路径、CORS、可信代理、限流、日志、allowlist、Memory、平台与插件。应用环境只定位 `KAGUYA_CONFIG_ROOT`。Gateway Token 是每次启动生成的临时 capability，不写入 Profile。NapCat UI/API 直接读写 selected Profile 的平台条目；旧 `napcat.json` 和运行环境变量只触发脱敏迁移错误。
 
 ## 启动与关闭顺序
 
-正常启动先解析环境变量并打开配置管理；selected Profile ready 时，再打开并迁移 SQLite、注册 transport、创建 ModuleHost 与 Runtime，最后开放 HTTP 和可选 adapter ingress。若配置未 ready，只开放可用于修正配置的 HTTP 与 Web UI。
+正常启动先读取 `KAGUYA_CONFIG_ROOT` 并打开 selected Profile，再连接 PostgreSQL 17、执行 migration 和 Kind 同步。数据库成功后，AI Profile ready 时注册 transport、创建 ModuleHost 与 Runtime；AI 未 ready 时只创建 setup HTTP/Web。两条路径都在最后才调用 listen。任何数据库版本、连接、migration 或 Kind 错误都会在 HTTP、Runtime 和平台 ingress 监听前终止启动。
 
 正常关闭先停止 ingress，等待 Runtime 在途 dispatch，停止 ModuleHost，再关闭数据库、Web 资源和 Logger。这个顺序避免新消息进入已经开始释放的基础设施。

@@ -51,6 +51,8 @@ const config: ServerConfig = {
   configRoot: "/tmp/kaguya-config-test",
   development: false,
   webDistPath: "/tmp/kaguya-web-test",
+  logLevel: "silent",
+  logFormat: "json",
   gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
   napcat: {
     enabled: false,
@@ -275,6 +277,57 @@ describe("application API gateway", () => {
         },
       });
     });
+  });
+
+  it("keeps runtime hidden from Profile responses and rejects runtime replacement", async () => {
+    const setup = stubManagement();
+    vi.mocked(setup.getProfile).mockResolvedValueOnce({
+      version: 1,
+      id: "default",
+      name: "default",
+      ai: { providers: [] },
+      memory: { enabled: false },
+      platforms: [],
+      plugins: [],
+      runtime: {
+        host: "127.0.0.1",
+        port: 3000,
+        databaseMode: "external",
+        databaseUrl:
+          "postgresql://profile:database-password@database.example/kaguya",
+        webDistPath: "apps/web/dist",
+        corsOrigins: [],
+        trustProxy: false,
+        rateLimitMax: 30,
+        rateLimitWindowMs: 60_000,
+        logLevel: "info",
+        logFormat: "json",
+        gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
+      },
+    });
+    const app = await createHttpApplication({ config, setup });
+
+    const read = await app.inject({
+      method: "GET",
+      url: "/api/v1/profiles/default",
+      headers: authorization(),
+    });
+    expect(read.statusCode).toBe(200);
+    expect(read.body).not.toContain("runtime");
+    expect(read.body).not.toContain("database-password");
+
+    const replace = await app.inject({
+      method: "PUT",
+      url: "/api/v1/profiles/default",
+      headers: authorization(),
+      payload: {
+        ...readyProfileReplacement("default", "light", "heavy"),
+        runtime: { databaseUrl: "postgresql://attacker.invalid/kaguya" },
+      },
+    });
+    expect(replace.statusCode).toBe(400);
+    expect(setup.replaceProfile).not.toHaveBeenCalled();
+    await app.close();
   });
 
   it("replaces profile with the submitted full body", async () => {

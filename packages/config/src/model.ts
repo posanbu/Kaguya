@@ -140,10 +140,16 @@ const runtimeGatewayAllowlistSchema = z.strictObject({
   groupIds: z.array(nonEmptyIdSchema),
 });
 
-export const runtimeConfigSchema = z.strictObject({
+const runtimeConfigInnerSchema = z.strictObject({
   host: z.string().trim().min(1),
   port: z.int().min(1).max(65_535),
-  gatewayToken: z.string().min(16),
+  /**
+   * Legacy Profile files may still contain the former persisted gateway
+   * token. Applications must ignore it and generate an ephemeral token for
+   * each process instead.
+   */
+  gatewayToken: z.string().min(16).optional(),
+  databaseMode: z.enum(["managed", "external"]).default("external"),
   databaseUrl: z.url(),
   webDistPath: z.string().trim().min(1),
   corsOrigins: z.array(z.url()),
@@ -162,6 +168,10 @@ export const runtimeConfigSchema = z.strictObject({
   logFormat: z.enum(["json", "pretty"]),
   gatewayAllowlist: runtimeGatewayAllowlistSchema,
 });
+
+export const runtimeConfigSchema = runtimeConfigInnerSchema.transform(
+  ({ gatewayToken: _legacyGatewayToken, ...runtime }) => runtime,
+);
 
 const userConfigProfileSettingsInnerSchema = z
   .strictObject({
@@ -432,11 +442,13 @@ export type UserConfigProfileSettings = z.infer<
 >;
 export type UserConfigProfileSettingsInput = Omit<
   UserConfigProfileSettings,
-  "memory"
+  "memory" | "runtime"
 > & {
   readonly memory?: MemoryConfig;
+  readonly runtime?: RuntimeConfigInput | undefined;
 };
 export type RuntimeConfig = z.infer<typeof runtimeConfigSchema>;
+export type RuntimeConfigInput = z.input<typeof runtimeConfigSchema>;
 export type MemoryConfig = z.infer<typeof memoryConfigSchema>;
 export type UserConfigProfileMetadata = z.infer<
   typeof userConfigProfileMetadataSchema

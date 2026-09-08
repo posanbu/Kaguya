@@ -1,7 +1,7 @@
 /**
  * 功能概述：验证 demo 以 PostgreSQL information ledger 运行确定性入站 DAG，
  * 输出根 `informationId` 和每个衍生 kind 的计数，不再使用 SQLite path 或 dispatch。
- * 主要职责：覆盖 `KAGUYA_DATABASE_URL` 必填校验，并用真实内存 PGlite
+ * 主要职责：覆盖 selected Profile runtime 读取与旧数据库环境变量拒绝，并用真实内存 PGlite
  * 运行 Web 消息的 context、inbound、reply、Model Task、assistant 与 delivery 链。
  * 代码库关系：直接调用 `index.ts` 导出的 `readDemoDatabaseUrl`/`runDemo`；
  * 测试数据库来自 `@kaguya/database/testing`，实际 CLI 则由同一 URL 连接方式启动。
@@ -9,29 +9,57 @@
  * 单次展示用例注入可预测 ID，重复运行用例验证生产 UUID 在同一持久账本不冲突；
  * 不调用外部平台或模型。
  */
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { FileUserConfigManager } from "@kaguya/config";
 import { createTestingDatabase } from "@kaguya/database/testing";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { readDemoDatabaseUrl, runDemo } from "./index.js";
 
 const databases: Awaited<ReturnType<typeof createTestingDatabase>>[] = [];
+const roots: string[] = [];
 
 afterEach(async () => {
   await Promise.allSettled(
     databases.splice(0).map((database) => database.close()),
   );
+  await Promise.allSettled(
+    roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
+  );
 });
 
 describe("demo entry point", () => {
-  it("requires the shared PostgreSQL database URL", () => {
-    expect(() => readDemoDatabaseUrl({})).toThrow(
-      "KAGUYA_DATABASE_URL is required",
-    );
-    expect(
+  it("reads the selected Profile database and rejects the retired environment variable", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kaguya-demo-config-"));
+    roots.push(root);
+    await expect(
+      readDemoDatabaseUrl({ KAGUYA_CONFIG_ROOT: root }),
+    ).rejects.toThrow("Selected Profile runtime is required");
+
+    const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+    const profile = await manager.getProfile(manager.getSelectedProfileId());
+    await manager.replaceProfile(profile.id, {
+      name: profile.name,
+      acknowledgedWarnings: [],
+      ai: profile.ai,
+      memory: profile.memory,
+      platforms: profile.platforms,
+      plugins: profile.plugins,
+      runtime: demoRuntime,
+    });
+
+    await expect(
+      readDemoDatabaseUrl({ KAGUYA_CONFIG_ROOT: ` ${root} ` }),
+    ).resolves.toBe(demoRuntime.databaseUrl);
+    await expect(
       readDemoDatabaseUrl({
-        KAGUYA_DATABASE_URL: " postgresql://db.example/kaguya ",
+        KAGUYA_CONFIG_ROOT: root,
+        KAGUYA_DATABASE_URL: "postgresql://secret@legacy.example/kaguya",
       }),
-    ).toBe("postgresql://db.example/kaguya");
+    ).rejects.toThrow("KAGUYA_DATABASE_URL is not supported");
   });
 
   it("submits one deterministic message and prints its information kind counts", async () => {
@@ -85,3 +113,18 @@ describe("demo entry point", () => {
     ).toBeDefined();
   }, 20_000);
 });
+
+const demoRuntime = {
+  host: "127.0.0.1",
+  port: 3000,
+  databaseMode: "external" as const,
+  databaseUrl: "postgresql://profile:secret@database.example/kaguya",
+  webDistPath: "apps/web/dist",
+  corsOrigins: [],
+  trustProxy: false as const,
+  rateLimitMax: 30,
+  rateLimitWindowMs: 60_000,
+  logLevel: "info" as const,
+  logFormat: "json" as const,
+  gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
+};

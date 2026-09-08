@@ -15,11 +15,12 @@
  * 用例既验证进程内 `restart_required` 临时状态，也验证重新打开管理门面后只读取磁盘
  * readiness，不保留旧进程的重启标记。
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
+import { FileUserConfigManager } from "@kaguya/config";
 
 import {
   createConfigurationManagement,
@@ -185,7 +186,98 @@ describe("configuration management", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("inherits runtime for new profiles and preserves it across Web replacement", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kaguya-setup-runtime-"));
+    try {
+      const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+      const original = await manager.getProfile(manager.getSelectedProfileId());
+      await manager.replaceProfile(original.id, {
+        name: original.name,
+        acknowledgedWarnings: [],
+        ai: original.ai,
+        memory: original.memory,
+        platforms: original.platforms,
+        plugins: original.plugins,
+        runtime: runtimeFixture,
+      });
+      const profilePath = join(root, "profiles", "profile_default.json");
+      const persisted = JSON.parse(
+        await readFile(profilePath, "utf8"),
+      ) as Record<string, unknown>;
+      persisted.runtime = {
+        ...(persisted.runtime as Record<string, unknown>),
+        gatewayToken: "legacy-persisted-gateway-token",
+      };
+      await writeFile(profilePath, `${JSON.stringify(persisted, null, 2)}\n`);
+      const management = await createConfigurationManagement(root);
+
+      const created = await management.createProfile("inherits-runtime");
+      expect(created.profile.runtime).toEqual(runtimeFixture);
+
+      await management.replaceProfile(original.id, {
+        name: "default-edited",
+        acknowledgedWarnings: [],
+        ai: original.ai,
+        memory: original.memory,
+        platforms: original.platforms,
+        plugins: original.plugins,
+      });
+      await expect(management.getProfile(original.id)).resolves.toMatchObject({
+        runtime: runtimeFixture,
+      });
+      expect(await readFile(profilePath, "utf8")).not.toContain(
+        "legacy-persisted-gateway-token",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reads and writes NapCat through the selected Profile", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kaguya-setup-napcat-"));
+    try {
+      const management = await createConfigurationManagement(root);
+      const settings = {
+        enabled: true,
+        wsUrl: "ws://127.0.0.1:3001",
+        accessToken: "napcat-secret",
+        selfId: "123456",
+        reconnectMs: 5000,
+      };
+
+      await expect(management.saveNapCatSettings?.(settings)).resolves.toEqual(
+        settings,
+      );
+      await expect(management.getNapCatSettings?.()).resolves.toEqual(settings);
+      const selected = await management.getProfile("default");
+      expect(selected.platforms).toContainEqual(
+        expect.objectContaining({
+          id: "napcat.qq.main",
+          type: "napcat",
+          enabled: true,
+        }),
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
+
+const runtimeFixture = {
+  host: "127.0.0.1",
+  port: 3000,
+  databaseMode: "external" as const,
+  databaseUrl: "postgresql://profile:secret@database.example/kaguya",
+  webDistPath: "apps/web/dist",
+  corsOrigins: [],
+  trustProxy: false as const,
+  rateLimitMax: 30,
+  rateLimitWindowMs: 60_000,
+  logLevel: "info" as const,
+  logFormat: "json" as const,
+  gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
+};
 
 function readyProfileReplacement(
   name: string,

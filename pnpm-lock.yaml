@@ -38,6 +38,9 @@ importers:
 
   apps/demo:
     dependencies:
+      '@kaguya/config':
+        specifier: workspace:*
+        version: link:../../packages/config
       '@kaguya/database':
         specifier: workspace:*
         version: link:../../packages/database

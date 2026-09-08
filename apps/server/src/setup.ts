@@ -30,8 +30,9 @@ import {
 } from "@kaguya/config";
 
 import {
-  loadNapCatSettings,
-  saveNapCatSettings,
+  assertNoLegacyNapCatSettings,
+  defaultNapCatSettings,
+  validateNapCatSettings,
   type NapCatSettings,
 } from "./napcat-config.js";
 
@@ -69,6 +70,7 @@ export interface ConfigurationManagement {
 export async function createConfigurationManagement(
   rootDir: string,
 ): Promise<ConfigurationManagement> {
+  await assertNoLegacyNapCatSettings(rootDir);
   const readiness = await FileUserConfigManager.inspect({ rootDir });
   const manager =
     readiness.status === "setup_required"
@@ -105,11 +107,27 @@ export async function createConfigurationManagement(
       return manager.getProfile(profileId);
     },
     async createProfile(name) {
-      const profile = await manager.createProfile(name);
+      const selected = await manager.getProfile(manager.getSelectedProfileId());
+      let profile = await manager.createProfile(name);
+      if (selected.runtime !== undefined) {
+        profile = await manager.replaceProfile(profile.id, {
+          name: profile.name,
+          acknowledgedWarnings: [],
+          ai: profile.ai,
+          memory: profile.memory,
+          platforms: profile.platforms,
+          plugins: profile.plugins,
+          runtime: selected.runtime,
+        });
+      }
       return { profile, restartRequired };
     },
     async replaceProfile(profileId, replacement) {
-      const profile = await manager.replaceProfile(profileId, replacement);
+      const current = await manager.getProfile(profileId);
+      const profile = await manager.replaceProfile(profileId, {
+        ...replacement,
+        ...(current.runtime === undefined ? {} : { runtime: current.runtime }),
+      });
       restartRequired =
         restartRequired || manager.getSelectedProfileId() === profileId;
       return { profile, restartRequired };
@@ -127,12 +145,65 @@ export async function createConfigurationManagement(
       return { profile, restartRequired };
     },
     getNapCatSettings() {
-      return loadNapCatSettings(rootDir);
+      return readSelectedNapCatSettings(manager);
     },
     async saveNapCatSettings(settings) {
-      const saved = await saveNapCatSettings(rootDir, settings);
+      const saved = await writeSelectedNapCatSettings(manager, settings);
       restartRequired = true;
       return saved;
     },
   };
+}
+
+async function readSelectedNapCatSettings(
+  manager: FileUserConfigManager,
+): Promise<NapCatSettings> {
+  const profile = await manager.getProfile(manager.getSelectedProfileId());
+  const platform = profile.platforms.find(({ type }) => type === "napcat");
+  if (platform === undefined) return defaultNapCatSettings;
+  return validateNapCatSettings({
+    enabled: platform.enabled,
+    wsUrl: platform.settings.wsUrl,
+    accessToken: platform.credentials.accessToken,
+    selfId: platform.settings.selfId,
+    reconnectMs: platform.settings.reconnectMs ?? 3000,
+  });
+}
+
+async function writeSelectedNapCatSettings(
+  manager: FileUserConfigManager,
+  input: NapCatSettings,
+): Promise<NapCatSettings> {
+  const settings = validateNapCatSettings(input);
+  const profile = await manager.getProfile(manager.getSelectedProfileId());
+  const current = profile.platforms.find(({ type }) => type === "napcat");
+  const adapterId = current?.id ?? "napcat.qq.main";
+  const platform = {
+    id: adapterId,
+    type: "napcat",
+    enabled: settings.enabled,
+    credentials:
+      settings.accessToken === undefined
+        ? {}
+        : { accessToken: settings.accessToken },
+    settings: {
+      adapterId,
+      ...(settings.wsUrl === undefined ? {} : { wsUrl: settings.wsUrl }),
+      ...(settings.selfId === undefined ? {} : { selfId: settings.selfId }),
+      reconnectMs: settings.reconnectMs,
+    },
+  };
+  await manager.replaceProfile(profile.id, {
+    name: profile.name,
+    acknowledgedWarnings: profile.review?.acknowledgedWarnings ?? [],
+    ai: profile.ai,
+    memory: profile.memory,
+    platforms: [
+      ...profile.platforms.filter(({ type }) => type !== "napcat"),
+      platform,
+    ],
+    plugins: profile.plugins,
+    ...(profile.runtime === undefined ? {} : { runtime: profile.runtime }),
+  });
+  return settings;
 }

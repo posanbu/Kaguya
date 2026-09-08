@@ -8,6 +8,7 @@
     "start": "tsx src/index.ts"
   },
   "dependencies": {
+    "@kaguya/config": "workspace:*",
     "@kaguya/database": "workspace:*",
     "@kaguya/engine": "workspace:*",
     "@kaguya/llm": "workspace:*",

@@ -1,10 +1,13 @@
 /**
- * 功能概述：负责 NapCat WebUI 配置的文件持久化、校验和脱敏投影，补上环境变量配置之外的运行时管理入口。
- * 主要职责：`loadNapCatSettings` 在缺少文件时返回安全默认值；`saveNapCatSettings` 校验 WebSocket 地址与重连间隔后以原子方式写入；`toNapCatStatus` 只返回 UI 所需状态，不泄漏 access token。
- * 代码库关系：配置文件位于 `KAGUYA_CONFIG_ROOT/napcat.json`，由 `setup.ts` 的 HTTP 管理门面调用，并由 `server.ts` 在创建 Runtime/NapCat supervisor 前读取；类型与启动参数对应 `config.ts` 的 NapCatConfig。
- * 输入输出与副作用：读写操作只作用于配置根目录；access token 仅写入受保护文件，公开状态以 `hasAccessToken` 表示；启用配置缺少 URL 或参数越界时抛出无 secret 的校验错误。
+ * 功能概述：负责 selected Profile 内 NapCat 平台条目的校验和脱敏投影。
+ * 主要职责：校验 WebSocket 地址与重连间隔、构造启动配置，并检测已退役的
+ * `napcat.json`，要求用户显式迁移而不是静默采用第二份配置真值。
+ * 代码库关系：`setup.ts` 负责 Profile 读写，`config.ts` 从同一 selected Profile
+ * 生成启动配置；本模块只保留值对象转换和遗留文件门禁。
+ * 输入输出与副作用：除检查遗留文件是否存在外不读写磁盘；公开状态不泄漏 token，
+ * 所有迁移与校验错误均不包含旧文件内容。
  */
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { access } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { NapCatConfig } from "./config.js";
@@ -30,43 +33,18 @@ export const defaultNapCatSettings: NapCatSettings = Object.freeze({
   reconnectMs: 3000,
 });
 
-export async function loadNapCatSettings(
+export async function assertNoLegacyNapCatSettings(
   rootDir: string,
-): Promise<NapCatSettings> {
+): Promise<void> {
   try {
-    return validateNapCatSettings(
-      JSON.parse(await readFile(settingsPath(rootDir), "utf8")) as unknown,
-    );
+    await access(join(rootDir, "napcat.json"));
   } catch (error) {
-    if (isMissingFile(error)) return defaultNapCatSettings;
+    if (isMissingFile(error)) return;
     throw error;
   }
-}
-
-export async function hasNapCatSettings(rootDir: string): Promise<boolean> {
-  try {
-    await readFile(settingsPath(rootDir));
-    return true;
-  } catch (error) {
-    if (isMissingFile(error)) return false;
-    throw error;
-  }
-}
-
-export async function saveNapCatSettings(
-  rootDir: string,
-  input: NapCatSettings,
-): Promise<NapCatSettings> {
-  const settings = validateNapCatSettings(input);
-  await mkdir(rootDir, { recursive: true, mode: 0o700 });
-  const path = settingsPath(rootDir);
-  const temporaryPath = `${path}.${process.pid}.${Date.now()}.tmp`;
-  await writeFile(temporaryPath, `${JSON.stringify(settings, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  await rename(temporaryPath, path);
-  return settings;
+  throw new Error(
+    "Legacy napcat.json is not supported; move NapCat settings into the selected Profile",
+  );
 }
 
 export function toNapCatStatus(settings: NapCatSettings): NapCatStatus {
@@ -95,7 +73,7 @@ export function toNapCatConfig(settings: NapCatSettings): NapCatConfig {
   };
 }
 
-function validateNapCatSettings(value: unknown): NapCatSettings {
+export function validateNapCatSettings(value: unknown): NapCatSettings {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("NapCat configuration must be an object");
   }
@@ -135,10 +113,6 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0
     ? value.trim()
     : undefined;
-}
-
-function settingsPath(rootDir: string): string {
-  return join(rootDir, "napcat.json");
 }
 
 function isMissingFile(error: unknown): boolean {

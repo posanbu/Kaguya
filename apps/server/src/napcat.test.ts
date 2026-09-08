@@ -25,7 +25,6 @@ import {
   NapCatConnectionSupervisor,
   WebSocketJsonTransport,
 } from "./napcat.js";
-import { readServerConfig } from "./config.js";
 
 class FakeWebSocket {
   static latest: FakeWebSocket | undefined;
@@ -133,12 +132,11 @@ it("applies configured NapCat allowlists before submitting through ingress", asy
     service: "napcat-composition-test",
     level: "silent",
   });
-  const serverConfig = readServerConfig({
-    KAGUYA_DATABASE_URL: "postgresql://localhost/kaguya",
-    KAGUYA_GATEWAY_ALLOWLIST_PLATFORMS: "qq",
-    KAGUYA_GATEWAY_ALLOWLIST_USER_IDS: "112233",
+  const allowlist = new GatewayAllowlist({
+    platforms: ["qq"],
+    userIds: ["112233"],
+    groupIds: [],
   });
-  const allowlist = new GatewayAllowlist(serverConfig.gatewayAllowlist);
   const supervisor = createNapCatSupervisor({
     config: {
       enabled: true,

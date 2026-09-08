@@ -75,4 +75,5 @@ export type {
   UserConfigProfileSettings,
   UserConfigProfileSettingsInput,
   RuntimeConfig,
+  RuntimeConfigInput,
 } from "./model.js";

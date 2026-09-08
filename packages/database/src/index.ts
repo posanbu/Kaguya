@@ -13,6 +13,38 @@ import { InformationRepository } from "./information-repository.js";
 import { PostgresMemoryStore } from "./memory-store.js";
 import { migrateDatabase } from "./migrations.js";
 
+export const SUPPORTED_POSTGRES_MAJOR = 17;
+
+export class UnsupportedPostgresVersionError extends Error {
+  constructor(
+    readonly expectedMajor: number,
+    readonly actualMajor: number,
+  ) {
+    super("Unsupported PostgreSQL major version");
+    this.name = "UnsupportedPostgresVersionError";
+  }
+}
+
+export async function assertSupportedPostgresVersion(
+  database: Pick<SqlDatabase, "query">,
+): Promise<void> {
+  const result = await database.query<{ server_version_num: string }>(
+    "SHOW server_version_num",
+  );
+  const rawVersion = result.rows[0]?.server_version_num;
+  const versionNumber = Number.parseInt(rawVersion ?? "", 10);
+  const actualMajor = Math.floor(versionNumber / 10_000);
+  if (
+    !Number.isInteger(actualMajor) ||
+    actualMajor !== SUPPORTED_POSTGRES_MAJOR
+  ) {
+    throw new UnsupportedPostgresVersionError(
+      SUPPORTED_POSTGRES_MAJOR,
+      actualMajor,
+    );
+  }
+}
+
 export {
   InformationIdConflictError,
   InformationKindSetMismatchError,
@@ -51,9 +83,20 @@ export class KaguyaDatabase {
   static async connect(options: {
     readonly connectionString: string;
   }): Promise<KaguyaDatabase> {
-    return new KaguyaDatabase(
-      await PgDatabase.connect({ connectionString: options.connectionString }),
-    );
+    const sql = await PgDatabase.connect({
+      connectionString: options.connectionString,
+    });
+    try {
+      await assertSupportedPostgresVersion(sql);
+      return new KaguyaDatabase(sql);
+    } catch (error) {
+      try {
+        await sql.close();
+      } catch {
+        // Preserve the compatibility or connection error that blocks startup.
+      }
+      throw error;
+    }
   }
 
   async migrate(): Promise<void> {
