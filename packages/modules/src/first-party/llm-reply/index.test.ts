@@ -47,14 +47,14 @@ import {
   inboundTextInformationKind,
   replyRequestedInformationKind,
   replyRequestedInformationPayloadSchema,
-} from "./information-kinds.js";
+} from "../information-kinds.js";
 import {
   createLlmReplyModule as defineReplyModule,
   llmReplySettingsSchema,
   type ModelTaskCapability,
   type ModelTaskRequest,
-} from "./llm-reply.js";
-import * as informationKinds from "./information-kinds.js";
+} from "./index.js";
+import * as informationKinds from "../information-kinds.js";
 
 const contextId = informationIdSchema.parse("context-1");
 const inboundPayload = replyRequestedInformationPayloadSchema.parse({
@@ -70,6 +70,8 @@ const inboundPayload = replyRequestedInformationPayloadSchema.parse({
 
 const runtimeContextInformationKind = defineInformationKind({
   kind: "core.runtime.context",
+  displayName: "Core Runtime Context",
+  description: "Information carried by the core.runtime.context kind.",
   payloadSchema: z.object({ requestId: z.string().min(1) }).strict(),
   references: {},
   log: { enabled: false },
@@ -82,6 +84,8 @@ const modelTaskCapability = defineModuleCapability<ModelTaskCapability>(
 
 const modelTaskRequestedInformationKind = defineInformationKind({
   kind: "core.model.task.requested",
+  displayName: "Core Model Task Requested",
+  description: "Information carried by the core.model.task.requested kind.",
   payloadSchema: z.object({}).strict(),
   references: {
     "core:caused-by": { required: true, multiple: false },
@@ -97,6 +101,8 @@ const modelTaskRequestedInformationKind = defineInformationKind({
 
 const modelTaskCompletedInformationKind = defineInformationKind({
   kind: "core.model.task.completed",
+  displayName: "Core Model Task Completed",
+  description: "Information carried by the core.model.task.completed kind.",
   payloadSchema: z
     .object({
       taskId: z.string().min(1),
@@ -426,6 +432,7 @@ describe("createLlmReplyModule", () => {
         provides: [],
         definitionId: "test.memory-writer",
         displayName: "Memory writer",
+        description: "Defines the Memory writer information module.",
         settingsSchema: z.object({}).strict(),
         consumes: [inboundTextInformationKind, memoryKind],
         produces: [inboundTextInformationKind, memoryKind],

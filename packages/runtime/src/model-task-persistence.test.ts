@@ -69,6 +69,8 @@ const input = {
 };
 const sourceKind = defineInformationKind({
   kind: "test.model.source",
+  displayName: "Test Model Source",
+  description: "Information carried by the test.model.source kind.",
   payloadSchema: z.object({ text: z.string() }).strict(),
   references: {
     "core:context": {
@@ -81,6 +83,8 @@ const sourceKind = defineInformationKind({
 });
 const effectKind = defineInformationKind({
   kind: "test.model.effect",
+  displayName: "Test Model Effect",
+  description: "Information carried by the test.model.effect kind.",
   payloadSchema: z.object({ text: z.string() }).strict(),
   references: {
     "core:caused-by": {
@@ -102,6 +106,7 @@ const catalog = defineInformationModuleCatalog(
       definitionId: activation.definitionId,
       moduleVersion: "1.0.0",
       displayName: "Persistence fixture",
+      description: "Defines the Persistence fixture information module.",
       settingsSchema: z.object({ privateValue: z.string() }).strict(),
       consumes: [sourceKind],
       produces: [effectKind],

@@ -138,6 +138,7 @@ describe("OneShotScheduleClient", () => {
           definitionId: "test.scheduler",
           moduleVersion: "1.0.0",
           displayName: "Scheduler test",
+          description: "Defines the Scheduler test information module.",
           settingsSchema: z.object({}).strict(),
           consumes: [],
           produces: [oneShotRequestedInformationKind],

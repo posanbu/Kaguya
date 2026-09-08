@@ -12,7 +12,7 @@ import {
   scoreTurnContext,
   speechDecisionSettingsSchema,
   speechDecisionModule,
-} from "./speech-decision.js";
+} from "./index.js";
 
 const context = {
   candidateInformationId: "candidate-1",

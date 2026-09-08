@@ -10,19 +10,19 @@ import {
   defineInformationModuleCatalog,
   type InformationModuleActivation,
 } from "@kaguya/sdk";
-import { associationModule } from "./association.js";
-import { identityModule } from "./identity.js";
-import { speechDecisionModule } from "./speech-decision.js";
-import { heartbeatModule } from "./heartbeat.js";
+import { associationModule } from "./association/index.js";
+import { identityModule } from "./identity/index.js";
+import { speechDecisionModule } from "./speech-decision/index.js";
+import { heartbeatModule } from "./heartbeat/index.js";
 import {
   createHeartflowModule,
   type CreateHeartflowModuleOptions,
-} from "./heartflow.js";
+} from "./heartflow/index.js";
 import {
   createLlmReplyModule,
   type CreateLlmReplyModuleOptions,
   type ModelTaskCompletedInformationPayload,
-} from "./llm-reply.js";
+} from "./llm-reply/index.js";
 export function createFirstPartyModuleCatalog<
   P extends ModelTaskCompletedInformationPayload,
 >(options: CreateLlmReplyModuleOptions<P> & CreateHeartflowModuleOptions) {

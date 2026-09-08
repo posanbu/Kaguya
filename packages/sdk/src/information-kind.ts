@@ -53,6 +53,8 @@ export interface InformationKindDefinition<
   P extends JsonObject,
 > {
   readonly kind: K;
+  readonly displayName: string;
+  readonly description: string;
   readonly payloadSchema: z.ZodType<P>;
   readonly references: Readonly<Record<string, InformationReferenceRule>>;
   readonly log: InformationLogPolicy<P>;
@@ -63,6 +65,8 @@ export interface DefineInformationKindInput<
   P extends JsonObject,
 > {
   readonly kind: K;
+  readonly displayName: string;
+  readonly description: string;
   readonly payloadSchema: z.ZodType<P>;
   readonly references: Record<string, InformationReferenceRuleInput>;
   readonly log: InformationLogPolicy<P>;
@@ -100,14 +104,24 @@ export function defineInformationKind<
     throw new Error("information kind definition must be an object");
   }
   assertKindName(input.kind);
+  assertDisplayText(input.displayName, "information kind display name");
+  assertDisplayText(input.description, "information kind description");
   assertPayloadSchema(input.payloadSchema);
 
   return Object.freeze({
     kind: input.kind,
+    displayName: input.displayName,
+    description: input.description,
     payloadSchema: input.payloadSchema,
     references: cloneAndValidateReferenceRules(input.references),
     log: cloneAndValidateLogPolicy(input.log),
   });
+}
+
+function assertDisplayText(value: string, label: string): void {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`${label} must not be empty`);
+  }
 }
 
 function assertKindName(kind: string): void {

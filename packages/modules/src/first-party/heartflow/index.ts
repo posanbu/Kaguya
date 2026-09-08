@@ -36,7 +36,7 @@ import {
   turnWaitingInformationKind,
   waitRequestedInformationKind,
   type SpeechDecisionPayload,
-} from "./information-kinds.js";
+} from "../information-kinds.js";
 
 type AnyKind = InformationKindDefinition<string, any>;
 
@@ -260,6 +260,8 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
       moduleVersion: "1.0.0",
       definitionId: "agent.heartflow.online",
       displayName: "Information DAG heartflow",
+      description:
+        "Coordinates candidate claims, identity barriers, frozen context, speech routing, and turn terminals.",
       settingsSchema: z.object({}).strict(),
       consumes: [
         turnCandidateInformationKind,

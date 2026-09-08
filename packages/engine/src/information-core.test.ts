@@ -44,6 +44,8 @@ import {
 
 const parentDefinition = defineInformationKind({
   kind: "acme.message.parent",
+  displayName: "Acme Message Parent",
+  description: "Information carried by the acme.message.parent kind.",
   payloadSchema: z.object({ text: z.string() }).strict(),
   references: {},
   log: { enabled: false },
@@ -51,6 +53,8 @@ const parentDefinition = defineInformationKind({
 
 const otherParentDefinition = defineInformationKind({
   kind: "acme.message.other-parent",
+  displayName: "Acme Message Other Parent",
+  description: "Information carried by the acme.message.other-parent kind.",
   payloadSchema: z.object({ text: z.string() }).strict(),
   references: {},
   log: { enabled: false },
@@ -58,6 +62,8 @@ const otherParentDefinition = defineInformationKind({
 
 const runtimeContextDefinition = defineInformationKind({
   kind: "core.runtime.context",
+  displayName: "Core Runtime Context",
+  description: "Information carried by the core.runtime.context kind.",
   payloadSchema: z.object({}).strict(),
   references: {},
   log: { enabled: false },
@@ -65,6 +71,9 @@ const runtimeContextDefinition = defineInformationKind({
 
 const contextualParentDefinition = defineInformationKind({
   kind: "acme.message.contextual-parent",
+  displayName: "Acme Message Contextual Parent",
+  description:
+    "Information carried by the acme.message.contextual-parent kind.",
   payloadSchema: z.object({ text: z.string() }).strict(),
   references: {
     "core:context": {
@@ -78,6 +87,8 @@ const contextualParentDefinition = defineInformationKind({
 
 const childDefinition = defineInformationKind({
   kind: "acme.message.child",
+  displayName: "Acme Message Child",
+  description: "Information carried by the acme.message.child kind.",
   payloadSchema: z.object({ text: z.string() }).strict(),
   references: {
     "acme:parent": {
@@ -91,6 +102,8 @@ const childDefinition = defineInformationKind({
 
 const frozenDefinition = defineInformationKind({
   kind: "acme.message.frozen",
+  displayName: "Acme Message Frozen",
+  description: "Information carried by the acme.message.frozen kind.",
   payloadSchema: z
     .object({
       nested: z
@@ -337,6 +350,8 @@ describe("InformationCore", () => {
   it("rejects a same-kind definition that is not the registered object", async () => {
     const fakeDefinition = defineInformationKind({
       kind: parentDefinition.kind,
+      displayName: "Fake parent",
+      description: "A structurally similar but unregistered parent definition.",
       payloadSchema: z.object({ other: z.string() }).strict(),
       references: {},
       log: { enabled: false },
@@ -634,6 +649,8 @@ describe("InformationCore", () => {
   it("queues enabled kind logs after commit and replays pending logs at startup", async () => {
     const loggedDefinition = defineInformationKind({
       kind: "acme.runtime.logged",
+      displayName: "Acme Runtime Logged",
+      description: "Information carried by the acme.runtime.logged kind.",
       payloadSchema: z.object({ text: z.string() }).strict(),
       references: {},
       log: {
@@ -795,12 +812,16 @@ describe("InformationCore", () => {
     ]);
     const spoofedPayloadDefinition = defineInformationKind({
       kind: childDefinition.kind,
+      displayName: "Spoofed child payload",
+      description: "An unregistered child definition with a spoofed payload.",
       payloadSchema: z.object({ spoof: z.string() }).strict(),
       references: {},
       log: { enabled: false },
     });
     const spoofedReferenceDefinition = defineInformationKind({
       kind: childDefinition.kind,
+      displayName: "Spoofed child references",
+      description: "An unregistered child definition with spoofed references.",
       payloadSchema: z.object({ text: z.string() }).strict(),
       references: {},
       log: { enabled: false },

@@ -8,6 +8,8 @@ import { z } from "@kaguya/schema";
 import { defineInformationKind } from "@kaguya/sdk";
 export const executionExhaustedInformationKind = defineInformationKind({
   kind: "execution.exhausted",
+  displayName: "Execution Exhausted",
+  description: "Information carried by the execution.exhausted kind.",
   payloadSchema: z
     .object({
       subscriptionId: z.string(),

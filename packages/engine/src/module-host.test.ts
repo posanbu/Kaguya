@@ -96,6 +96,8 @@ class MemoryLedger {
 
 const contextKind = defineInformationKind({
   kind: "core.runtime.context",
+  displayName: "Core Runtime Context",
+  description: "Information carried by the core.runtime.context kind.",
   payloadSchema: z.object({ requestId: z.string() }).strict(),
   references: {},
   log: { enabled: false },
@@ -103,6 +105,8 @@ const contextKind = defineInformationKind({
 
 const inboundKind = defineInformationKind({
   kind: "acme.message.inbound",
+  displayName: "Acme Message Inbound",
+  description: "Information carried by the acme.message.inbound kind.",
   payloadSchema: z.object({ text: z.string() }).strict(),
   references: {
     "core:context": {
@@ -116,6 +120,8 @@ const inboundKind = defineInformationKind({
 
 const outputKind = defineInformationKind({
   kind: "acme.message.output",
+  displayName: "Acme Message Output",
+  description: "Information carried by the acme.message.output kind.",
   payloadSchema: z.object({ text: z.string() }).strict(),
   references: {
     "core:caused-by": {
@@ -134,6 +140,8 @@ const outputKind = defineInformationKind({
 
 const selectedOutputKind = defineInformationKind({
   kind: "acme.message.selected-output",
+  displayName: "Acme Message Selected Output",
+  description: "Information carried by the acme.message.selected-output kind.",
   payloadSchema: z.object({ selectedId: z.string().min(1) }).strict(),
   references: {
     "core:caused-by": {
@@ -240,6 +248,7 @@ describe("ModuleHost", () => {
         diagnostics: [diagnostic, observerFailure],
         definitionId: "acme.observed",
         displayName: "Observed",
+        description: "Defines the Observed information module.",
         settingsSchema: z.object({}).strict(),
         consumes: [inboundKind],
         produces: [],
@@ -340,6 +349,7 @@ describe("ModuleHost", () => {
         provides: [],
         definitionId: "acme.status-failure",
         displayName: "Status failure",
+        description: "Defines the Status failure information module.",
         settingsSchema: z.object({}).strict(),
         consumes: [],
         produces: [],
@@ -398,6 +408,7 @@ describe("ModuleHost", () => {
         provides: [],
         definitionId: "acme.selector-consumer",
         displayName: "Selector consumer",
+        description: "Defines the Selector consumer information module.",
         settingsSchema: z.object({}).strict(),
         consumes: [inboundKind, selectedOutputKind],
         produces: [inboundKind, selectedOutputKind],
@@ -468,6 +479,7 @@ describe("ModuleHost", () => {
         provides: [],
         definitionId: "acme.context-override",
         displayName: "Context override",
+        description: "Defines the Context override information module.",
         settingsSchema: z.object({}).strict(),
         consumes: [inboundKind],
         produces: [outputKind],
@@ -526,6 +538,8 @@ describe("ModuleHost", () => {
         provides: [],
         definitionId: "acme.context-override-unselected",
         displayName: "Unselected context override",
+        description:
+          "Defines the Unselected context override information module.",
         settingsSchema: z.object({}).strict(),
         consumes: [inboundKind],
         produces: [outputKind],
@@ -595,6 +609,7 @@ describe("ModuleHost", () => {
         provides: [],
         definitionId: "acme.selector-failure",
         displayName: "Selector failure",
+        description: "Defines the Selector failure information module.",
         settingsSchema: z.object({}).strict(),
         consumes: [inboundKind],
         produces: [inboundKind],
@@ -651,6 +666,7 @@ describe("ModuleHost", () => {
         provides: [],
         definitionId: "acme.concurrent-start",
         displayName: "Concurrent start",
+        description: "Defines the Concurrent start information module.",
         settingsSchema: z.object({}).strict(),
         consumes: [inboundKind],
         produces: [inboundKind],
@@ -705,6 +721,7 @@ describe("ModuleHost", () => {
         provides: [],
         definitionId: "acme.stop-during-start",
         displayName: "Stop during start",
+        description: "Defines the Stop during start information module.",
         settingsSchema: z.object({}).strict(),
         consumes: [inboundKind],
         produces: [inboundKind],
@@ -772,6 +789,7 @@ describe("ModuleHost", () => {
         provides: [],
         definitionId: "acme.rollback-failure",
         displayName: "Rollback failure",
+        description: "Defines the Rollback failure information module.",
         settingsSchema: z.object({}).strict(),
         consumes: [inboundKind],
         produces: [inboundKind],
@@ -832,6 +850,7 @@ describe("ModuleHost", () => {
         provides: [],
         definitionId: "acme.dispose-all",
         displayName: "Dispose all",
+        description: "Defines the Dispose all information module.",
         settingsSchema: z.object({}).strict(),
         consumes: [inboundKind],
         produces: [inboundKind],
@@ -889,6 +908,7 @@ describe("ModuleHost", () => {
         provides: [],
         definitionId: "acme.instance-source",
         displayName: "Instance source",
+        description: "Defines the Instance source information module.",
         settingsSchema: z.object({}).strict(),
         consumes: [inboundKind],
         produces: [inboundKind],
@@ -941,6 +961,7 @@ describe("ModuleHost", () => {
         provides: [],
         definitionId: "acme.echo",
         displayName: "Echo",
+        description: "Defines the Echo information module.",
         settingsSchema: z.object({}).strict(),
         consumes: [inboundKind, outputKind],
         produces: [inboundKind, outputKind],
@@ -999,6 +1020,7 @@ describe("ModuleHost", () => {
         provides: [],
         definitionId: "acme.reserved",
         displayName: "Reserved",
+        description: "Defines the Reserved information module.",
         settingsSchema: z.object({}).strict(),
         consumes: [inboundKind, outputKind],
         produces: [inboundKind, outputKind],
@@ -1058,6 +1080,7 @@ describe("ModuleHost", () => {
         provides: [],
         definitionId: "acme.mismatch",
         displayName: "Mismatch",
+        description: "Defines the Mismatch information module.",
         settingsSchema: z.object({}).strict(),
         consumes: [inboundKind, outputKind],
         produces: [inboundKind, outputKind],
@@ -1106,6 +1129,7 @@ describe("ModuleHost", () => {
         provides: [],
         definitionId: "acme.dispose-on-invalid-subscription",
         displayName: "Dispose invalid instance",
+        description: "Defines the Dispose invalid instance information module.",
         settingsSchema: z.object({}).strict(),
         consumes: [inboundKind],
         produces: [inboundKind],
@@ -1147,6 +1171,8 @@ describe("ModuleHost", () => {
   it("rejects outputs absent from the module manifest", async () => {
     const undeclaredKind = defineInformationKind({
       kind: "acme.message.undeclared",
+      displayName: "Acme Message Undeclared",
+      description: "Information carried by the acme.message.undeclared kind.",
       payloadSchema: z.object({ text: z.string() }).strict(),
       references: {},
       log: { enabled: false },
@@ -1165,6 +1191,7 @@ describe("ModuleHost", () => {
         provides: [],
         definitionId: "acme.undeclared",
         displayName: "Undeclared",
+        description: "Defines the Undeclared information module.",
         settingsSchema: z.object({}).strict(),
         consumes: [inboundKind],
         produces: [inboundKind],
@@ -1210,6 +1237,7 @@ describe("ModuleHost", () => {
         provides: [],
         definitionId: "acme.frozen",
         displayName: "Frozen",
+        description: "Defines the Frozen information module.",
         settingsSchema: z.object({}).strict(),
         consumes: [inboundKind],
         produces: [inboundKind],
@@ -1257,6 +1285,7 @@ describe("ModuleHost", () => {
           provides: [],
           definitionId: id,
           displayName: id,
+          description: `${id} information module`,
           settingsSchema: z.object({}).strict(),
           consumes: [inboundKind],
           produces: [inboundKind],
@@ -1318,6 +1347,7 @@ describe("ModuleHost", () => {
         provides: [],
         definitionId: "acme.failure",
         displayName: "Failure",
+        description: "Defines the Failure information module.",
         settingsSchema: z.object({}).strict(),
         consumes: [inboundKind],
         produces: [inboundKind],

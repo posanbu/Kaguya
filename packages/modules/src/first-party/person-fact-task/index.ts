@@ -38,7 +38,7 @@ import {
   personFactExtractedPayloadSchema,
   type PersonFactCandidateInformationPayload,
   type PersonFactExtractedPayload,
-} from "./information-kinds.js";
+} from "../information-kinds.js";
 import {
   modelTierSchema,
   type ModelTaskCapability,
@@ -46,7 +46,7 @@ import {
   type ModelTaskRequest,
   type ModelTaskResult,
   type ModelTier,
-} from "./llm-reply.js";
+} from "../llm-reply/index.js";
 
 export type {
   ModelTaskCapability,
@@ -109,6 +109,8 @@ export const currentPersonFactCandidateSelector = defineInformationSelector({
 export const personFactCandidatePromptRenderer: InformationPromptRendererDefinition =
   Object.freeze({
     rendererId: "kaguya.person-fact.candidate",
+    displayName: "Person fact candidate",
+    description: "Renders a candidate message for person-fact extraction.",
     kinds: [personFactCandidateInformationKind],
     render: (atom: DeepReadonly<InformationAtom>) => {
       const candidate = personFactCandidateInformationPayloadSchema.parse(
@@ -149,6 +151,8 @@ export function createPersonFactTaskModule<
       provides: [],
       definitionId: "demo.person.fact.extract",
       displayName: "Person fact extractor",
+      description:
+        "Extracts validated person facts from candidate information through the shared model-task capability.",
       settingsSchema: personFactTaskSettingsSchema,
       consumes: [personFactCandidateInformationKind, completedInformationKind],
       produces: [personFactExtractedInformationKind],

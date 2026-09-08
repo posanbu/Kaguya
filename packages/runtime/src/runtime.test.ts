@@ -651,6 +651,7 @@ describe("KaguyaRuntime", () => {
         moduleVersion: "1.0.0",
         definitionId: "test.memory.consumer",
         displayName: "Memory consumer",
+        description: "Defines the Memory consumer information module.",
         settingsSchema: z.object({}).strict(),
         consumes: [],
         produces: [],
@@ -840,6 +841,7 @@ describe("KaguyaRuntime", () => {
         moduleVersion: "1.0.0",
         definitionId: "test.abort",
         displayName: "Abort",
+        description: "Defines the Abort information module.",
         settingsSchema: z.object({}),
         consumes: [],
         produces: [],
@@ -911,6 +913,7 @@ describe("KaguyaRuntime", () => {
           provides: [],
           definitionId: "test.lifecycle.gated",
           displayName: "Gated lifecycle module",
+          description: "Defines the Gated lifecycle module information module.",
           settingsSchema: z.object({}).strict(),
           consumes: [],
           produces: [],
@@ -1321,6 +1324,8 @@ describe("KaguyaRuntime", () => {
           provides: [],
           definitionId: "test.reply.observer",
           displayName: "Concurrent reply observer",
+          description:
+            "Defines the Concurrent reply observer information module.",
           settingsSchema: z.object({}).strict(),
           consumes: [speechDecisionInformationKind],
           produces: [speechDecisionInformationKind],
@@ -1425,6 +1430,8 @@ describe("KaguyaRuntime", () => {
     async () => {
       const outcomeKind = defineInformationKind({
         kind: "test.inbound.observed",
+        displayName: "Test Inbound Observed",
+        description: "Information carried by the test.inbound.observed kind.",
         payloadSchema: z.object({ observed: z.literal(true) }).strict(),
         references: {
           "core:caused-by": {
@@ -1450,6 +1457,8 @@ describe("KaguyaRuntime", () => {
           provides: [],
           definitionId: "test.inbound.failing",
           displayName: "Failing inbound consumer",
+          description:
+            "Defines the Failing inbound consumer information module.",
           settingsSchema: z.object({}).strict(),
           consumes: [inboundTextInformationKind],
           produces: [inboundTextInformationKind],
@@ -1480,6 +1489,8 @@ describe("KaguyaRuntime", () => {
           provides: [],
           definitionId: "test.inbound.successful",
           displayName: "Successful inbound consumer",
+          description:
+            "Defines the Successful inbound consumer information module.",
           settingsSchema: z.object({}).strict(),
           consumes: [inboundTextInformationKind, outcomeKind],
           produces: [inboundTextInformationKind, outcomeKind],
@@ -1635,6 +1646,7 @@ it(
         moduleVersion: "1.0.0",
         definitionId: "test.hanging-ingress",
         displayName: "Hanging ingress",
+        description: "Defines the Hanging ingress information module.",
         settingsSchema: z.object({}),
         consumes: [inboundTextInformationKind],
         produces: [],

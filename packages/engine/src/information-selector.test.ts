@@ -41,6 +41,8 @@ import {
 
 const sourceKind = defineInformationKind({
   kind: "acme.reply.requested",
+  displayName: "Acme Reply Requested",
+  description: "Information carried by the acme.reply.requested kind.",
   payloadSchema: z.object({ text: z.string() }).strict(),
   references: {},
   log: { enabled: false },
@@ -48,6 +50,8 @@ const sourceKind = defineInformationKind({
 
 const memoryKind = defineInformationKind({
   kind: "acme.memory.text",
+  displayName: "Acme Memory Text",
+  description: "Information carried by the acme.memory.text kind.",
   payloadSchema: z.object({ text: z.string() }).strict(),
   references: {},
   log: { enabled: false },

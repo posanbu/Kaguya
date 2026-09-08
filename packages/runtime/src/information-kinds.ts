@@ -16,7 +16,7 @@ import { consumerFailedInformationKind } from "@kaguya/engine";
 import { previewInformationContent } from "@kaguya/logger";
 import {
   deliveryRequestedInformationKind,
-  informationModuleKinds,
+  inboundTextInformationKind,
 } from "@kaguya/modules";
 import {
   type CompiledPrompt,
@@ -125,6 +125,8 @@ const contextReference = {
 
 export const runtimeContextInformationKind = defineInformationKind({
   kind: "core.runtime.context",
+  displayName: "Core Runtime Context",
+  description: "Information carried by the core.runtime.context kind.",
   payloadSchema: z.object({}).strict(),
   references: {},
   log: {
@@ -143,6 +145,8 @@ const safeDeliveryBaseShape = {
 
 export const deliveryDeliveredInformationKind = defineInformationKind({
   kind: "core.delivery.delivered",
+  displayName: "Core Delivery Delivered",
+  description: "Information carried by the core.delivery.delivered kind.",
   payloadSchema: z.union([
     z
       .object({
@@ -188,6 +192,8 @@ export const deliveryDeliveredInformationKind = defineInformationKind({
 
 export const deliveryFailedInformationKind = defineInformationKind({
   kind: "core.delivery.failed",
+  displayName: "Core Delivery Failed",
+  description: "Information carried by the core.delivery.failed kind.",
   payloadSchema: z
     .object({
       ...safeDeliveryBaseShape,
@@ -292,6 +298,8 @@ export const modelTaskSafeErrorSchema = z
   .strict();
 export const modelTaskRequestedInformationKind = defineInformationKind({
   kind: "core.model.task.requested",
+  displayName: "Core Model Task Requested",
+  description: "Information carried by the core.model.task.requested kind.",
   payloadSchema: modelTaskMetadataSchema
     .extend({ prompt: informationCompiledPromptSchema })
     .strict(),
@@ -340,6 +348,8 @@ export const modelTaskRequestedInformationKind = defineInformationKind({
 });
 export const modelTaskCompletedInformationKind = defineInformationKind({
   kind: "core.model.task.completed",
+  displayName: "Core Model Task Completed",
+  description: "Information carried by the core.model.task.completed kind.",
   payloadSchema: z.union([
     z
       .object({
@@ -372,6 +382,8 @@ export const modelTaskCompletedInformationKind = defineInformationKind({
 });
 export const modelTaskFailedInformationKind = defineInformationKind({
   kind: "core.model.task.failed",
+  displayName: "Core Model Task Failed",
+  description: "Information carried by the core.model.task.failed kind.",
   payloadSchema: z.union([
     z
       .object({
@@ -405,6 +417,8 @@ export const modelTaskFailedInformationKind = defineInformationKind({
 });
 export const modelTaskCancelledInformationKind = defineInformationKind({
   kind: "core.model.task.cancelled",
+  displayName: "Core Model Task Cancelled",
+  description: "Information carried by the core.model.task.cancelled kind.",
   payloadSchema: z
     .object({
       ...modelTaskTerminalShape,
@@ -465,7 +479,8 @@ export const modelTaskInformationKinds = Object.freeze([
 export const builtInInformationKinds = Object.freeze([
   runtimeContextInformationKind,
   consumerFailedInformationKind,
-  ...informationModuleKinds,
+  inboundTextInformationKind,
+  deliveryRequestedInformationKind,
   deliveryDeliveredInformationKind,
   deliveryFailedInformationKind,
 ] as const satisfies readonly InformationKindDefinition<string, any>[]);

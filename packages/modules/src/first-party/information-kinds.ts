@@ -3,8 +3,8 @@
  * claim/context/terminal、speech decision、回复、Memory、身份、assistant 与平台投递请求。
  * 主要职责：每个 definition 固定 payload 的严格 schema 和直接因果/context 引用规则；
  * `personFactCandidateInformationKind` 表示待提取的非 reply 账本来源，
- * `personFactExtractedInformationKind` 表示模块验证后的业务事实；`informationModuleKinds`
- * 供 Runtime 在启动 Core 前一次注册同一批 definition。
+ * `personFactExtractedInformationKind` 表示模块验证后的业务事实；模块 Kind 由各自 Manifest
+ * 的 consumes / produces 声明，不在此维护独立注册清单。
  * 代码库关系：Heartflow 的 speak 分支是默认回复请求生产路径；LLM 回复模块消费回复请求、外部
  * 注入的 Model Task completed definition 与 assistant，person-fact 模块消费候选与通用 completed，
  * 随后产生各自后续 kind；Runtime 负责通用
@@ -121,6 +121,8 @@ export type ReplyRequestedInformationPayload = z.infer<
 
 export const inboundTextInformationKind = defineInformationKind({
   kind: "core.message.inbound.text",
+  displayName: "Core Message Inbound Text",
+  description: "Information carried by the core.message.inbound.text kind.",
   payloadSchema: replyRequestedInformationPayloadSchema,
   references: {
     "core:context": {
@@ -146,6 +148,8 @@ export const inboundTextInformationKind = defineInformationKind({
 
 export const replyRequestedInformationKind = defineInformationKind({
   kind: "core.reply.requested",
+  displayName: "Core Reply Requested",
+  description: "Information carried by the core.reply.requested kind.",
   payloadSchema: replyRequestedInformationPayloadSchema,
   references: {
     "core:caused-by": {
@@ -191,6 +195,8 @@ export const replyRequestedInformationKind = defineInformationKind({
 
 export const filterDecisionInformationKind = defineInformationKind({
   kind: "filter.decision",
+  displayName: "Filter Decision",
+  description: "Information carried by the filter.decision kind.",
   payloadSchema: z
     .object({
       accepted: z.literal(false),
@@ -224,6 +230,8 @@ export const filterDecisionInformationKind = defineInformationKind({
 
 export const coreMemoryTextInformationKind = defineInformationKind({
   kind: "core.memory.text",
+  displayName: "Core Memory Text",
+  description: "Information carried by the core.memory.text kind.",
   payloadSchema: z.object({ text: z.string().trim().min(1) }).strict(),
   references: {
     "core:caused-by": {
@@ -295,6 +303,8 @@ export type AssociationRequestedInformationPayload = z.infer<
 
 export const associationRequestedInformationKind = defineInformationKind({
   kind: "agent.association.requested",
+  displayName: "Agent Association Requested",
+  description: "Information carried by the agent.association.requested kind.",
   payloadSchema: associationRequestedInformationPayloadSchema,
   references: {
     "core:caused-by": {
@@ -348,6 +358,8 @@ export type AssociationQueryInformationPayload = z.infer<
 
 export const associationQueryInformationKind = defineInformationKind({
   kind: "agent.association.query",
+  displayName: "Agent Association Query",
+  description: "Information carried by the agent.association.query kind.",
   payloadSchema: associationQueryInformationPayloadSchema,
   references: {
     "core:caused-by": {
@@ -391,6 +403,8 @@ export type AssociationCandidateInformationPayload = z.infer<
 
 export const associationCandidateInformationKind = defineInformationKind({
   kind: "agent.association.candidate",
+  displayName: "Agent Association Candidate",
+  description: "Information carried by the agent.association.candidate kind.",
   payloadSchema: associationCandidateInformationPayloadSchema,
   references: {
     "core:caused-by": {
@@ -447,6 +461,8 @@ export type AssociationCompletedInformationPayload = z.infer<
 
 export const associationCompletedInformationKind = defineInformationKind({
   kind: "agent.association.completed",
+  displayName: "Agent Association Completed",
+  description: "Information carried by the agent.association.completed kind.",
   payloadSchema: associationCompletedInformationPayloadSchema,
   references: {
     "core:caused-by": {
@@ -497,6 +513,8 @@ export type PersonFactCandidateInformationPayload = z.infer<
 
 export const personFactCandidateInformationKind = defineInformationKind({
   kind: "core.person.fact.candidate",
+  displayName: "Core Person Fact Candidate",
+  description: "Information carried by the core.person.fact.candidate kind.",
   payloadSchema: personFactCandidateInformationPayloadSchema,
   references: {
     "core:caused-by": {
@@ -529,6 +547,8 @@ export type PersonFactExtractedPayload = z.infer<
 
 export const personFactExtractedInformationKind = defineInformationKind({
   kind: "core.person.fact.extracted",
+  displayName: "Core Person Fact Extracted",
+  description: "Information carried by the core.person.fact.extracted kind.",
   payloadSchema: personFactExtractedPayloadSchema,
   references: {
     "core:caused-by": {
@@ -551,6 +571,8 @@ export const personFactExtractedInformationKind = defineInformationKind({
 
 export const assistantTextInformationKind = defineInformationKind({
   kind: "core.message.assistant.text",
+  displayName: "Core Message Assistant Text",
+  description: "Information carried by the core.message.assistant.text kind.",
   payloadSchema: z
     .object({
       text: z.string(),
@@ -587,6 +609,8 @@ export const assistantTextInformationKind = defineInformationKind({
 
 export const deliveryRequestedInformationKind = defineInformationKind({
   kind: "core.delivery.requested",
+  displayName: "Core Delivery Requested",
+  description: "Information carried by the core.delivery.requested kind.",
   payloadSchema: z
     .object({
       adapterId: nonBlankString,
@@ -662,6 +686,8 @@ const turnInputSchema = z
 
 export const turnClaimedInformationKind = defineInformationKind({
   kind: "agent.turn.claimed",
+  displayName: "Agent Turn Claimed",
+  description: "Information carried by the agent.turn.claimed kind.",
   payloadSchema: z
     .object({
       candidateInformationId: nonBlankString,
@@ -702,6 +728,8 @@ export const turnClaimedInformationKind = defineInformationKind({
 
 export const turnStartedInformationKind = defineInformationKind({
   kind: "agent.turn.started",
+  displayName: "Agent Turn Started",
+  description: "Information carried by the agent.turn.started kind.",
   payloadSchema: z
     .object({
       candidateInformationId: nonBlankString,
@@ -736,6 +764,9 @@ export const turnStartedInformationKind = defineInformationKind({
 
 export const turnDecisionSupersededInformationKind = defineInformationKind({
   kind: "agent.turn.decision.superseded",
+  displayName: "Agent Turn Decision Superseded",
+  description:
+    "Information carried by the agent.turn.decision.superseded kind.",
   payloadSchema: z
     .object({
       candidateInformationId: nonBlankString,
@@ -794,6 +825,8 @@ const turnTerminalBaseShape = {
 
 export const turnCompletedInformationKind = defineInformationKind({
   kind: "agent.turn.completed",
+  displayName: "Agent Turn Completed",
+  description: "Information carried by the agent.turn.completed kind.",
   payloadSchema: z
     .object({
       ...turnTerminalBaseShape,
@@ -810,6 +843,8 @@ export const turnCompletedInformationKind = defineInformationKind({
 
 export const turnWaitingInformationKind = defineInformationKind({
   kind: "agent.turn.waiting",
+  displayName: "Agent Turn Waiting",
+  description: "Information carried by the agent.turn.waiting kind.",
   payloadSchema: z
     .object({
       ...turnTerminalBaseShape,
@@ -830,6 +865,8 @@ export const turnWaitingInformationKind = defineInformationKind({
 
 export const turnSilentInformationKind = defineInformationKind({
   kind: "agent.turn.silent",
+  displayName: "Agent Turn Silent",
+  description: "Information carried by the agent.turn.silent kind.",
   payloadSchema: z
     .object({ ...turnTerminalBaseShape, reasonCodes: z.array(nonBlankString) })
     .strict(),
@@ -843,6 +880,8 @@ export const turnSilentInformationKind = defineInformationKind({
 
 export const turnFailedInformationKind = defineInformationKind({
   kind: "agent.turn.failed",
+  displayName: "Agent Turn Failed",
+  description: "Information carried by the agent.turn.failed kind.",
   payloadSchema: z
     .object({ ...turnTerminalBaseShape, reason: nonBlankString })
     .strict(),
@@ -860,6 +899,8 @@ export const turnFailedInformationKind = defineInformationKind({
 
 export const turnSupersededInformationKind = defineInformationKind({
   kind: "agent.turn.superseded",
+  displayName: "Agent Turn Superseded",
+  description: "Information carried by the agent.turn.superseded kind.",
   payloadSchema: z
     .object({
       ...turnTerminalBaseShape,
@@ -907,6 +948,8 @@ export type TurnContextCompletedPayload = z.infer<
 
 export const turnContextCompletedInformationKind = defineInformationKind({
   kind: "agent.turn.context.completed",
+  displayName: "Agent Turn Context Completed",
+  description: "Information carried by the agent.turn.context.completed kind.",
   payloadSchema: turnContextPayloadSchema,
   references: {
     "core:caused-by": { required: true, multiple: false },
@@ -974,6 +1017,8 @@ export type SpeechDecisionPayload = z.infer<typeof speechDecisionPayloadSchema>;
 
 export const speechDecisionInformationKind = defineInformationKind({
   kind: "agent.speech.decision",
+  displayName: "Agent Speech Decision",
+  description: "Information carried by the agent.speech.decision kind.",
   payloadSchema: speechDecisionPayloadSchema,
   references: {
     "core:caused-by": {
@@ -1017,6 +1062,8 @@ export const speechDecisionInformationKind = defineInformationKind({
 
 export const waitRequestedInformationKind = defineInformationKind({
   kind: "agent.wait.requested",
+  displayName: "Agent Wait Requested",
+  description: "Information carried by the agent.wait.requested kind.",
   payloadSchema: z
     .object({
       dueAt: nonBlankString,
@@ -1080,6 +1127,8 @@ const heartbeatTerminalReference = {
 
 export const heartbeatScheduledInformationKind = defineInformationKind({
   kind: "agent.heartbeat.scheduled",
+  displayName: "Agent Heartbeat Scheduled",
+  description: "Information carried by the agent.heartbeat.scheduled kind.",
   payloadSchema: z
     .object({
       reason: heartbeatReasonSchema,
@@ -1127,6 +1176,8 @@ export const heartbeatScheduledInformationKind = defineInformationKind({
 
 export const heartbeatFiredInformationKind = defineInformationKind({
   kind: "agent.heartbeat.fired",
+  displayName: "Agent Heartbeat Fired",
+  description: "Information carried by the agent.heartbeat.fired kind.",
   payloadSchema: z
     .object({ firedAt: z.iso.datetime({ offset: true }) })
     .strict(),
@@ -1144,6 +1195,8 @@ export const heartbeatFiredInformationKind = defineInformationKind({
 
 export const heartbeatSupersededInformationKind = defineInformationKind({
   kind: "agent.heartbeat.superseded",
+  displayName: "Agent Heartbeat Superseded",
+  description: "Information carried by the agent.heartbeat.superseded kind.",
   payloadSchema: z
     .object({ replacementInformationId: nonBlankString })
     .strict(),
@@ -1160,6 +1213,8 @@ export const heartbeatSupersededInformationKind = defineInformationKind({
 
 export const heartbeatFailedInformationKind = defineInformationKind({
   kind: "agent.heartbeat.failed",
+  displayName: "Agent Heartbeat Failed",
+  description: "Information carried by the agent.heartbeat.failed kind.",
   payloadSchema: z.object({ error: nonBlankString }).strict(),
   references: heartbeatTerminalReference,
   log: {
@@ -1175,6 +1230,8 @@ export const heartbeatFailedInformationKind = defineInformationKind({
 
 export const turnCandidateInformationKind = defineInformationKind({
   kind: "agent.turn.candidate",
+  displayName: "Agent Turn Candidate",
+  description: "Information carried by the agent.turn.candidate kind.",
   payloadSchema: z
     .object({
       heartbeatInformationId: nonBlankString,
@@ -1247,6 +1304,8 @@ const identityTerminalSchema = z
 
 export const chatScopeEntityInformationKind = defineInformationKind({
   kind: "agent.chat.scope.entity",
+  displayName: "Agent Chat Scope Entity",
+  description: "Information carried by the agent.chat.scope.entity kind.",
   payloadSchema: z
     .object({
       platform: nonBlankString,
@@ -1276,6 +1335,8 @@ export const chatScopeEntityInformationKind = defineInformationKind({
 });
 export const chatScopeBindingInformationKind = defineInformationKind({
   kind: "agent.chat.scope.binding",
+  displayName: "Agent Chat Scope Binding",
+  description: "Information carried by the agent.chat.scope.binding kind.",
   payloadSchema: z
     .object({
       platform: nonBlankString,
@@ -1308,6 +1369,8 @@ export const chatScopeBindingInformationKind = defineInformationKind({
 });
 export const platformAccountEntityInformationKind = defineInformationKind({
   kind: "agent.platform.account.entity",
+  displayName: "Agent Platform Account Entity",
+  description: "Information carried by the agent.platform.account.entity kind.",
   payloadSchema: z
     .object({
       platform: nonBlankString,
@@ -1335,6 +1398,9 @@ export const platformAccountEntityInformationKind = defineInformationKind({
 });
 export const platformAccountBindingInformationKind = defineInformationKind({
   kind: "agent.platform.account.binding",
+  displayName: "Agent Platform Account Binding",
+  description:
+    "Information carried by the agent.platform.account.binding kind.",
   payloadSchema: z
     .object({ accountId: nonBlankString, personInformationId: nonBlankString })
     .strict(),
@@ -1359,6 +1425,8 @@ export const platformAccountBindingInformationKind = defineInformationKind({
 });
 export const personEntityInformationKind = defineInformationKind({
   kind: "agent.person.entity",
+  displayName: "Agent Person Entity",
+  description: "Information carried by the agent.person.entity kind.",
   payloadSchema: z.object({ accountId: nonBlankString }).strict(),
   references: {
     "core:caused-by": { required: true, multiple: false },
@@ -1376,6 +1444,8 @@ export const personEntityInformationKind = defineInformationKind({
 });
 export const personObservedInformationKind = defineInformationKind({
   kind: "agent.person.observed",
+  displayName: "Agent Person Observed",
+  description: "Information carried by the agent.person.observed kind.",
   payloadSchema: z
     .object({
       accountId: nonBlankString,
@@ -1409,6 +1479,8 @@ export const personObservedInformationKind = defineInformationKind({
 });
 export const personResolutionInformationKind = defineInformationKind({
   kind: "agent.person.resolution",
+  displayName: "Agent Person Resolution",
+  description: "Information carried by the agent.person.resolution kind.",
   payloadSchema: identityTerminalSchema,
   references: {
     "core:caused-by": { required: true, multiple: false },
@@ -1435,6 +1507,9 @@ export const personResolutionInformationKind = defineInformationKind({
 });
 export const personContextCompletedInformationKind = defineInformationKind({
   kind: "agent.person.context.completed",
+  displayName: "Agent Person Context Completed",
+  description:
+    "Information carried by the agent.person.context.completed kind.",
   payloadSchema: identityTerminalSchema,
   references: {
     "core:caused-by": { required: true, multiple: false },
@@ -1464,42 +1539,3 @@ export const personContextCompletedInformationKind = defineInformationKind({
     },
   },
 });
-
-export const informationModuleKinds = [
-  inboundTextInformationKind,
-  replyRequestedInformationKind,
-  filterDecisionInformationKind,
-  coreMemoryTextInformationKind,
-  associationRequestedInformationKind,
-  associationQueryInformationKind,
-  associationCandidateInformationKind,
-  associationCompletedInformationKind,
-  personFactCandidateInformationKind,
-  personFactExtractedInformationKind,
-  assistantTextInformationKind,
-  deliveryRequestedInformationKind,
-  chatScopeEntityInformationKind,
-  chatScopeBindingInformationKind,
-  platformAccountEntityInformationKind,
-  platformAccountBindingInformationKind,
-  personEntityInformationKind,
-  personObservedInformationKind,
-  personResolutionInformationKind,
-  personContextCompletedInformationKind,
-  turnClaimedInformationKind,
-  turnStartedInformationKind,
-  turnDecisionSupersededInformationKind,
-  turnCompletedInformationKind,
-  turnWaitingInformationKind,
-  turnSilentInformationKind,
-  turnFailedInformationKind,
-  turnSupersededInformationKind,
-  turnContextCompletedInformationKind,
-  speechDecisionInformationKind,
-  waitRequestedInformationKind,
-  heartbeatScheduledInformationKind,
-  heartbeatFiredInformationKind,
-  heartbeatSupersededInformationKind,
-  heartbeatFailedInformationKind,
-  turnCandidateInformationKind,
-] as const satisfies readonly InformationKindDefinition<string, any>[];

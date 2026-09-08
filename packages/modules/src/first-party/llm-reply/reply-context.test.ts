@@ -18,12 +18,12 @@ import type { InformationSelectorDefinition } from "@kaguya/sdk";
 import { PromptCompiler } from "@kaguya/prompt";
 import { describe, expect, it } from "vitest";
 
-import * as modules from "./index.js";
+import * as modules from "../../index.js";
 import {
   coreMemoryTextInformationKind,
   inboundTextInformationKind,
   replyRequestedInformationKind,
-} from "./information-kinds.js";
+} from "../information-kinds.js";
 
 const replyAtom = freezeInformationAtom({
   informationId: informationIdSchema.parse("reply-current"),

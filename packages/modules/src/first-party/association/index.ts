@@ -42,7 +42,7 @@ import {
   type AssociationCompletedInformationPayload,
   type AssociationQueryInformationPayload,
   type AssociationRequestedInformationPayload,
-} from "./information-kinds.js";
+} from "../information-kinds.js";
 
 export const associationRetrievalStartedDiagnostic = defineModuleDiagnostic({
   event: "association.retrieval.started",
@@ -191,6 +191,8 @@ export const associationModule = defineInformationModule({
     moduleVersion: "1.0.0",
     definitionId: "core.association.memory",
     displayName: "Memory association",
+    description:
+      "Builds the auditable request, query, candidate, and completion chain used for memory association.",
     settingsSchema: z.object({}).strict(),
     consumes: [
       replyRequestedInformationKind,

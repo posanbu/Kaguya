@@ -15,7 +15,7 @@ import {
   personObservedInformationKind,
   personResolutionInformationKind,
   personContextCompletedInformationKind,
-} from "./information-kinds.js";
+} from "../information-kinds.js";
 
 const settingsSchema = z.object({}).strict();
 const key = (value: unknown) => JSON.stringify(value);
@@ -26,6 +26,8 @@ export const identityModule = defineInformationModule({
     moduleVersion: "1.0.0",
     definitionId: "core.identity.normalize",
     displayName: "Identity normalization",
+    description:
+      "Normalizes inbound chat scope, platform account, and person identity into auditable terminal facts.",
     settingsSchema,
     consumes: [inboundTextInformationKind],
     produces: [

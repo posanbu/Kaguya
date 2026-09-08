@@ -31,7 +31,7 @@ import {
   inboundTextInformationKind,
   replyRequestedInformationKind,
   replyRequestedInformationPayloadSchema,
-} from "./information-kinds.js";
+} from "../information-kinds.js";
 
 export const currentAcceptedMessageSelector = defineInformationSelector({
   selectorId: "core.reply.current-accepted-message",
@@ -151,6 +151,8 @@ export const associationReplyContextSelector = defineInformationSelector({
 export const replyPromptRenderer: InformationPromptRendererDefinition =
   Object.freeze({
     rendererId: "kaguya.reply.text",
+    displayName: "Reply text",
+    description: "Renders the current reply request as prompt context.",
     kinds: [replyRequestedInformationKind],
     render: (atom: DeepReadonly<InformationAtom>) =>
       replyRequestedInformationPayloadSchema.parse(atom.payload).text,
@@ -158,6 +160,8 @@ export const replyPromptRenderer: InformationPromptRendererDefinition =
 export const memoryPromptRenderer: InformationPromptRendererDefinition =
   Object.freeze({
     rendererId: "kaguya.memory.text",
+    displayName: "Memory text",
+    description: "Renders a selected memory fragment as prompt context.",
     kinds: [coreMemoryTextInformationKind],
     render: (atom: DeepReadonly<InformationAtom>) =>
       coreMemoryTextInformationKind.payloadSchema.parse(atom.payload).text,
@@ -166,6 +170,9 @@ export const memoryPromptRenderer: InformationPromptRendererDefinition =
 export const inboundMemoryPromptRenderer: InformationPromptRendererDefinition =
   Object.freeze({
     rendererId: "kaguya.memory.inbound-text",
+    displayName: "Historical inbound text",
+    description:
+      "Renders a selected historical inbound message as prompt context.",
     kinds: [inboundTextInformationKind],
     render: (atom: DeepReadonly<InformationAtom>) => {
       const payload = replyRequestedInformationPayloadSchema.parse(

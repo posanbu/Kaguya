@@ -28,7 +28,7 @@ import {
   personFactCandidateInformationKind,
   personFactExtractedInformationKind,
   personFactExtractedPayloadSchema,
-} from "./information-kinds.js";
+} from "../information-kinds.js";
 import {
   createPersonFactTaskModule,
   personFactTaskOutputSchema,
@@ -37,11 +37,13 @@ import {
   type ModelTaskCapability,
   type ModelTaskRequest,
   type ModelTaskResult,
-} from "./person-fact-task.js";
-import * as publicApi from "./index.js";
+} from "./index.js";
+import * as publicApi from "../../index.js";
 
 const runtimeContextInformationKind = defineInformationKind({
   kind: "core.runtime.context",
+  displayName: "Core Runtime Context",
+  description: "Information carried by the core.runtime.context kind.",
   payloadSchema: z.object({ requestId: z.string().min(1) }).strict(),
   references: {},
   log: { enabled: false },
@@ -67,6 +69,8 @@ const completionOutputSchema = z.union([
 
 const modelTaskCompletedInformationKind = defineInformationKind({
   kind: "core.model.task.completed",
+  displayName: "Core Model Task Completed",
+  description: "Information carried by the core.model.task.completed kind.",
   payloadSchema: z
     .object({
       taskId: z.string().min(1),

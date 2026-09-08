@@ -12,6 +12,8 @@ import { InformationBus } from "./information-bus.js";
 
 const messageDefinition = defineInformationKind({
   kind: "acme.message.created",
+  displayName: "Acme Message Created",
+  description: "Information carried by the acme.message.created kind.",
   payloadSchema: z.object({ text: z.string() }).strict(),
   references: {},
   log: { enabled: false },

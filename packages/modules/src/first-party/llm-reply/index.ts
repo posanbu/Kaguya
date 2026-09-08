@@ -43,7 +43,7 @@ import {
   replyRequestedInformationKind,
   replyRequestedInformationPayloadSchema,
   type ReplyRequestedInformationPayload,
-} from "./information-kinds.js";
+} from "../information-kinds.js";
 import {
   compileReplyPromptFromInformation,
   inboundMemoryPromptRenderer,
@@ -219,6 +219,8 @@ export function createLlmReplyModule<
       provides: [],
       definitionId: "demo.reply.llm",
       displayName: "LLM reply",
+      description:
+        "Compiles frozen reply context, dispatches the model task, and records assistant and delivery requests.",
       settingsSchema: llmReplySettingsSchema,
       consumes: [
         replyRequestedInformationKind,

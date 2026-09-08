@@ -30,6 +30,7 @@ const definition = (id: string, override: Record<string, unknown> = {}) =>
       moduleVersion: "1.0.0",
       definitionId: id,
       displayName: id,
+      description: `${id} information module`,
       settingsSchema: z.object({ nested: z.object({ secret: z.string() }) }),
       consumes: [],
       produces: [],
@@ -48,6 +49,68 @@ const activation = (id: string) => ({
   settings: { nested: { secret: "SECRET_DO_NOT_INSPECT" } },
 });
 describe("module protocol", () => {
+  it("projects self-describing module, kind, and prompt metadata", () => {
+    const kind = defineInformationKind({
+      kind: "test.prompt.input",
+      displayName: "Prompt input",
+      description: "Input available to the test prompt.",
+      payloadSchema: z.object({}).strict(),
+      references: {},
+      log: { enabled: false },
+    });
+    const module = definition("test.described", {
+      manifest: {
+        displayName: "Described module",
+        description: "Exposes inspection metadata.",
+        consumes: [kind],
+        produces: [kind],
+        promptRenderers: [
+          {
+            rendererId: "test.prompt.renderer",
+            displayName: "Test prompt",
+            description: "Renders the test input.",
+            kinds: [kind],
+            render: () => "test",
+          },
+        ],
+      },
+    });
+    const host = new ModuleHost({
+      core,
+      catalog: defineInformationModuleCatalog(module),
+    });
+
+    expect(host.inspect()).toMatchObject([
+      {
+        definitionId: "test.described",
+        displayName: "Described module",
+        description: "Exposes inspection metadata.",
+        consumes: [
+          {
+            kind: "test.prompt.input",
+            displayName: "Prompt input",
+            description: "Input available to the test prompt.",
+          },
+        ],
+        produces: [
+          {
+            kind: "test.prompt.input",
+            displayName: "Prompt input",
+            description: "Input available to the test prompt.",
+          },
+        ],
+        promptRenderers: [
+          {
+            rendererId: "test.prompt.renderer",
+            displayName: "Test prompt",
+            description: "Renders the test input.",
+            kinds: ["test.prompt.input"],
+          },
+        ],
+      },
+    ]);
+  });
+
   it("validates all settings and capabilities before any create", async () => {
     const create = vi.fn(() => ({ subscriptions: [], provisions: [] }));
     const host = new ModuleHost({
@@ -220,6 +283,8 @@ describe("module protocol", () => {
     const create = vi.fn(() => ({ subscriptions: [], provisions: [] }));
     const kind = defineInformationKind({
       kind: "test.input",
+      displayName: "Test Input",
+      description: "Information carried by the test.input kind.",
       payloadSchema: z.object({}).strict(),
       references: {},
       log: { enabled: false },
@@ -270,6 +335,8 @@ describe("module protocol", () => {
   it("aborts and bounds live drain, then refuses late writes", async () => {
     const kind = defineInformationKind({
       kind: "test.input",
+      displayName: "Test Input",
+      description: "Information carried by the test.input kind.",
       payloadSchema: z.object({}).strict(),
       references: {},
       log: { enabled: false },

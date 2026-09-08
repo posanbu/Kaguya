@@ -12,12 +12,16 @@ import { InformationCore } from "@kaguya/engine";
 import { InformationKindRegistry } from "@kaguya/engine";
 const output = defineInformationKind({
   kind: "test.output",
+  displayName: "Test Output",
+  description: "Information carried by the test.output kind.",
   payloadSchema: z.object({ value: z.number() }).strict(),
   references: {},
   log: { enabled: false },
 });
 const failed = defineInformationKind({
   kind: "test.failed",
+  displayName: "Test Failed",
+  description: "Information carried by the test.failed kind.",
   payloadSchema: z.object({ value: z.number() }).strict(),
   references: {},
   log: { enabled: false },

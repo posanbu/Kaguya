@@ -651,17 +651,36 @@ export class ModuleHost {
     return this.#options.catalog.definitions
       .map(({ manifest }) => ({
         definitionId: manifest.definitionId,
+        displayName: manifest.displayName,
+        description: manifest.description,
         moduleVersion: manifest.moduleVersion,
         protocolVersion: manifest.protocolVersion,
         settingsSchemaFingerprint: schemaFingerprint({
           manifest,
         } as InformationModuleDefinition),
-        consumes: manifest.consumes.map((k) => k.kind).sort(),
-        produces: manifest.produces.map((k) => k.kind).sort(),
+        consumes: manifest.consumes
+          .map(({ kind, displayName, description }) => ({
+            kind,
+            displayName,
+            description,
+          }))
+          .sort((a, b) => a.kind.localeCompare(b.kind)),
+        produces: manifest.produces
+          .map(({ kind, displayName, description }) => ({
+            kind,
+            displayName,
+            description,
+          }))
+          .sort((a, b) => a.kind.localeCompare(b.kind)),
         selectors: manifest.selectors.map((s) => s.selectorId).sort(),
         promptRenderers: manifest.promptRenderers
-          .map((r) => r.rendererId)
-          .sort(),
+          .map(({ rendererId, displayName, description, kinds }) => ({
+            rendererId,
+            displayName,
+            description,
+            kinds: kinds.map(({ kind }) => kind).sort(),
+          }))
+          .sort((a, b) => a.rendererId.localeCompare(b.rendererId)),
         diagnostics: (manifest.diagnostics ?? [])
           .map((diagnostic) => diagnostic.event)
           .sort(),

@@ -17,7 +17,7 @@ import {
 } from "@kaguya/scheduler";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createHeartflowModule } from "./heartflow.js";
+import { createHeartflowModule } from "./index.js";
 import {
   heartbeatFiredInformationKind,
   heartbeatScheduledInformationKind,
@@ -35,10 +35,12 @@ import {
   turnSupersededInformationKind,
   turnWaitingInformationKind,
   waitRequestedInformationKind,
-} from "./information-kinds.js";
+} from "../information-kinds.js";
 
 const runtimeContextInformationKind = defineInformationKind({
   kind: "core.runtime.context",
+  displayName: "Core Runtime Context",
+  description: "Information carried by the core.runtime.context kind.",
   payloadSchema: z.object({ requestId: z.string() }).strict(),
   references: {},
   log: { enabled: false },
@@ -46,6 +48,8 @@ const runtimeContextInformationKind = defineInformationKind({
 
 const deliveryDeliveredInformationKind = defineInformationKind({
   kind: "core.delivery.delivered",
+  displayName: "Core Delivery Delivered",
+  description: "Information carried by the core.delivery.delivered kind.",
   payloadSchema: z.object({ ok: z.literal(true) }).strict(),
   references: {
     "core:caused-by": { required: true, multiple: false },
@@ -56,6 +60,8 @@ const deliveryDeliveredInformationKind = defineInformationKind({
 
 const deliveryFailedInformationKind = defineInformationKind({
   kind: "core.delivery.failed",
+  displayName: "Core Delivery Failed",
+  description: "Information carried by the core.delivery.failed kind.",
   payloadSchema: z.object({ ok: z.literal(false) }).strict(),
   references: {
     "core:caused-by": { required: true, multiple: false },
@@ -66,6 +72,8 @@ const deliveryFailedInformationKind = defineInformationKind({
 
 const modelTaskFailedInformationKind = defineInformationKind({
   kind: "core.model.task.failed",
+  displayName: "Core Model Task Failed",
+  description: "Information carried by the core.model.task.failed kind.",
   payloadSchema: z.object({ failed: z.literal(true) }).strict(),
   references: {
     "core:caused-by": { required: true, multiple: false },
@@ -76,6 +84,8 @@ const modelTaskFailedInformationKind = defineInformationKind({
 
 const modelTaskCancelledInformationKind = defineInformationKind({
   kind: "core.model.task.cancelled",
+  displayName: "Core Model Task Cancelled",
+  description: "Information carried by the core.model.task.cancelled kind.",
   payloadSchema: z.object({ cancelled: z.literal(true) }).strict(),
   references: {
     "core:caused-by": { required: true, multiple: false },
