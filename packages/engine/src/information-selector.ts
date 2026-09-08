@@ -52,15 +52,18 @@ const findSchema = z
     sources: z.array(z.string().trim().min(1)).min(1).optional(),
     occurredAfter: z.iso.datetime({ offset: true }).optional(),
     occurredBefore: z.iso.datetime({ offset: true }).optional(),
+    payloadContains: jsonObjectSchema.optional(),
+    order: z.enum(["asc", "desc"]).optional(),
     limit: limitSchema,
   })
   .strict()
   .refine(
-    ({ kinds, sources, occurredAfter, occurredBefore }) =>
+    ({ kinds, sources, occurredAfter, occurredBefore, payloadContains }) =>
       kinds !== undefined ||
       sources !== undefined ||
       occurredAfter !== undefined ||
-      occurredBefore !== undefined,
+      occurredBefore !== undefined ||
+      payloadContains !== undefined,
     "selector find query must include a filter",
   )
   .refine(
@@ -218,6 +221,10 @@ class SelectorReadScope {
       ...(parsed.data.occurredBefore === undefined
         ? {}
         : { occurredBefore: parsed.data.occurredBefore }),
+      ...(parsed.data.payloadContains === undefined
+        ? {}
+        : { payloadContains: parsed.data.payloadContains }),
+      ...(parsed.data.order === undefined ? {} : { order: parsed.data.order }),
     };
     const atoms = stableUniqueAtoms(await this.ledger.find(normalized)).slice(
       0,

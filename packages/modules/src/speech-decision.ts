@@ -8,7 +8,6 @@ import { defineInformationModule, onInformation } from "@kaguya/sdk";
 import {
   speechDecisionInformationKind,
   turnContextCompletedInformationKind,
-  waitRequestedInformationKind,
   type TurnContextCompletedPayload,
 } from "./information-kinds.js";
 
@@ -101,7 +100,7 @@ export const speechDecisionModule = defineInformationModule({
     displayName: "Deterministic speech timing decision",
     settingsSchema: speechDecisionSettingsSchema,
     consumes: [turnContextCompletedInformationKind],
-    produces: [speechDecisionInformationKind, waitRequestedInformationKind],
+    produces: [speechDecisionInformationKind],
     selectors: [],
     promptRenderers: [],
     requires: [],
@@ -131,6 +130,7 @@ export const speechDecisionModule = defineInformationModule({
             text: input.text,
             source: input.source,
             candidateInformationId: input.candidateInformationId,
+            claimInformationId: input.claimInformationId,
             turnContextInformationId: atom.informationId,
             score: scored.score,
             thresholds: {
@@ -157,8 +157,8 @@ export const speechDecisionModule = defineInformationModule({
             totalWaitBudget: input.totalWaitBudget,
           } as any;
           const decision = await context.commitTerminal(
-            "core.speech.decision",
-            input.candidateInformationId,
+            "agent.turn.decision",
+            input.claimInformationId,
             speechDecisionInformationKind,
             {
               payload,
@@ -167,27 +167,18 @@ export const speechDecisionModule = defineInformationModule({
                   relation: "core:uses-context",
                   informationId: atom.informationId,
                 },
+                {
+                  relation: "agent:turn-claim",
+                  informationId: input.claimInformationId,
+                },
+                {
+                  relation: "core:status-of",
+                  informationId: input.claimInformationId,
+                },
               ],
             },
           );
-          if (action === "wait")
-            await context.registerOnce(
-              "core.speech.wait",
-              decision.informationId,
-              waitRequestedInformationKind,
-              {
-                payload: {
-                  dueAt: input.recheckAt!,
-                  delayMs: payload.delayMs!,
-                  reason: "score-below-speak-threshold",
-                  attempt: input.attempt,
-                  totalWaitBudget: input.totalWaitBudget,
-                  wakePolicy: "recheckAt",
-                  wakeOnMessage: true,
-                  source: input.source,
-                },
-              },
-            );
+          void decision;
         },
       ),
     ],

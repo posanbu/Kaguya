@@ -1,7 +1,7 @@
 /**
  * 功能概述：通过宿主批准的 Model Task 能力将回复请求、通用完成事实、assistant 与投递组成 durable DAG。
- * 主要职责：createLlmReplyModule 声明能力和共享 completed definition；association terminal handler 经
- * context.select 重载 reply 与 canonical Memory，再通过 context.use 调用 core.reply.generate v1，
+ * 主要职责：createLlmReplyModule 声明能力和共享 completed definition；reply handler 经
+ * context.select 重载冻结 turn context 与可选 Memory，再通过 context.use 调用 core.reply.generate v1，
  * replyTaskOutputSchema 严格校验文本。完成 handler 按 task/version/tier
  * 与 definitionId 接受可由同一定义多个 activation 共享的任务赢家，经 completedReplySelector 沿
  * completed→requested→reply 授权读取来源，再以包含当前 instanceId 的 registerOnce key 派生各自输出。
@@ -36,7 +36,6 @@ import {
 import { PromptCompiler } from "@kaguya/prompt";
 
 import {
-  associationCompletedInformationKind,
   assistantTextInformationKind,
   coreMemoryTextInformationKind,
   deliveryRequestedInformationKind,
@@ -46,12 +45,12 @@ import {
   type ReplyRequestedInformationPayload,
 } from "./information-kinds.js";
 import {
-  associationReplyContextSelector,
   compileReplyPromptFromInformation,
   inboundMemoryPromptRenderer,
   replyPromptRenderer,
   memoryPromptRenderer,
   currentAcceptedMessageSelector,
+  turnReplyContextSelector,
 } from "./reply-context.js";
 
 export const modelTierSchema = z.enum(["light", "heavy"]);
@@ -196,7 +195,7 @@ export function createLlmReplyModule<
     modelTaskCapability.apiVersion !== 1
   )
     throw new Error("Invalid model task capability");
-  const selector = dependencies.selector ?? associationReplyContextSelector;
+  const selector = dependencies.selector ?? turnReplyContextSelector;
   const promptCompiler = dependencies.promptCompiler ?? new PromptCompiler();
   const completedInformationKind =
     dependencies.modelTaskCompletedInformationKind;
@@ -206,7 +205,9 @@ export function createLlmReplyModule<
       moduleVersion: "1.0.0",
       selectors: [
         selector,
-        currentAcceptedMessageSelector,
+        ...(selector === currentAcceptedMessageSelector
+          ? []
+          : [currentAcceptedMessageSelector]),
         completedReplySelector,
       ],
       promptRenderers: [
@@ -220,7 +221,6 @@ export function createLlmReplyModule<
       displayName: "LLM reply",
       settingsSchema: llmReplySettingsSchema,
       consumes: [
-        associationCompletedInformationKind,
         replyRequestedInformationKind,
         completedInformationKind,
         assistantTextInformationKind,
@@ -247,13 +247,13 @@ export function createLlmReplyModule<
       }),
       subscriptions: [
         onInformation(
-          associationCompletedInformationKind,
+          replyRequestedInformationKind,
           { subscriptionId: "kaguya.reply.requested", delivery: "durable" },
-          async (association, context) => {
+          async (reply, context) => {
             const contextAtoms = await context.select(selector);
             const persistedReply = requireSelectedReply(
               contextAtoms,
-              association.payload.sourceInformationId,
+              reply.informationId,
             );
             const prompt = compileReplyPromptFromInformation(
               promptCompiler,
@@ -319,6 +319,7 @@ export function createLlmReplyModule<
                   text: output.text,
                   source: reply.payload.source,
                   originatingModuleInstanceId: context.instanceId,
+                  turn: (reply.payload as any).turn ?? null,
                 },
               },
             );
@@ -328,15 +329,19 @@ export function createLlmReplyModule<
           assistantTextInformationKind,
           { subscriptionId: "kaguya.reply.assistant", delivery: "durable" },
           async (assistant, context) => {
+            const assistantPayload =
+              assistantTextInformationKind.payloadSchema.parse(
+                assistant.payload,
+              );
             if (
-              assistant.payload.originatingModuleInstanceId !==
+              assistantPayload.originatingModuleInstanceId !==
               context.instanceId
             )
               return;
             const outbound = selectOutbound(
-              assistant.payload.source,
+              assistantPayload.source,
               settings.outbound,
-              assistant.payload.text,
+              assistantPayload.text,
             );
             if (outbound === undefined) return;
             await context.registerOnce(
@@ -344,7 +349,25 @@ export function createLlmReplyModule<
               `${context.instanceId}:${assistant.informationId}`,
               deliveryRequestedInformationKind,
               {
-                payload: outbound,
+                payload: {
+                  ...outbound,
+                  turn: assistantPayload.turn,
+                },
+                references:
+                  assistantPayload.turn == null
+                    ? []
+                    : [
+                        {
+                          relation: "agent:turn-claim" as const,
+                          informationId:
+                            assistantPayload.turn.claimInformationId,
+                        },
+                        {
+                          relation: "agent:turn-candidate" as const,
+                          informationId:
+                            assistantPayload.turn.candidateInformationId,
+                        },
+                      ],
               },
             );
           },

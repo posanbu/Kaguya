@@ -10,13 +10,14 @@ import {
   defineInformationModuleCatalog,
   type InformationModuleActivation,
 } from "@kaguya/sdk";
-import { alwaysReplyFilterModule } from "./always-reply-filter.js";
 import { associationModule } from "./association.js";
 import { identityModule } from "./identity.js";
 import { speechDecisionModule } from "./speech-decision.js";
-import { turnContextModule } from "./turn-context.js";
-import { speechReplyModule } from "./speech-reply.js";
 import { heartbeatModule } from "./heartbeat.js";
+import {
+  createHeartflowModule,
+  type CreateHeartflowModuleOptions,
+} from "./heartflow.js";
 import {
   createLlmReplyModule,
   type CreateLlmReplyModuleOptions,
@@ -24,20 +25,20 @@ import {
 } from "./llm-reply.js";
 export function createFirstPartyModuleCatalog<
   P extends ModelTaskCompletedInformationPayload,
->(options: CreateLlmReplyModuleOptions<P>) {
+>(options: CreateLlmReplyModuleOptions<P> & CreateHeartflowModuleOptions) {
   return defineInformationModuleCatalog(
-    alwaysReplyFilterModule,
     associationModule,
     identityModule,
     speechDecisionModule,
-    turnContextModule,
-    speechReplyModule,
     createLlmReplyModule(options),
     heartbeatModule,
+    createHeartflowModule(options),
   );
 }
-export const firstPartyModuleActivations: readonly InformationModuleActivation[] =
-  Object.freeze([
+export function createFirstPartyModuleActivations(
+  profile: "production" | "test" = "production",
+): readonly InformationModuleActivation[] {
+  return Object.freeze([
     Object.freeze({
       instanceId: "reply.default",
       definitionId: "demo.reply.llm",
@@ -57,18 +58,25 @@ export const firstPartyModuleActivations: readonly InformationModuleActivation[]
       settings: Object.freeze({}),
     }),
     Object.freeze({
-      instanceId: "turn-context.default",
-      definitionId: "core.turn.context",
-      settings: Object.freeze({}),
-    }),
-    Object.freeze({
       instanceId: "speech-decision.default",
       definitionId: "core.speech.decision",
       settings: Object.freeze({}),
     }),
     Object.freeze({
-      instanceId: "speech-reply.default",
-      definitionId: "core.speech.reply-bridge",
+      instanceId: "heartbeat.default",
+      definitionId: "agent.heartbeat.short",
+      settings: Object.freeze({
+        messageDebounceMs: profile === "test" ? 0 : 1500,
+        maxReplacementAttempts: 3,
+      }),
+    }),
+    Object.freeze({
+      instanceId: "heartflow.default",
+      definitionId: "agent.heartflow.online",
       settings: Object.freeze({}),
     }),
   ]);
+}
+
+export const firstPartyModuleActivations =
+  createFirstPartyModuleActivations("production");

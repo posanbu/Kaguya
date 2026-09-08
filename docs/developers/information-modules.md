@@ -87,10 +87,14 @@ Runtime 的 `submit()` 返回已接受输入的根 ID；可靠回复异步推进
 
 ## 显式上下文与 Prompt
 
-Selector 通过受限只读账本的 `find()`、`related()`、`retrieve()` 取得候选，只返回有序 informationId。Core 校验 ID、拒绝重复或越权结果，并按顺序重新加载冻结原子。模块不能把未落账 payload 拼成上下文。
+Selector 通过受限只读账本的 `find()`、`related()`、`retrieve()` 取得候选，只返回有序 informationId。`find()` 支持 JSON payload containment 和确定性的正序/倒序查询。Core 校验 ID、拒绝重复或越权结果，并按顺序重新加载冻结原子。模块不能把未落账 payload 拼成上下文。派生输出通常继承输入的 `core:context`；需要跨入站合并时，可用 `contextInformationId` 重定位，但目标必须是该 handler 已通过声明式 Selector 选出的 `core.runtime.context`。
 
-`createLlmReplyModule()` 默认消费 `agent.association.completed`。first-party Catalog 激活 association 模块，把 requested、query、candidate 和 completed 记录成可审计 DAG。Memory 默认由 selected Profile 关闭：此时 Runtime 不注册命名检索策略或 capability，association 以 `unavailable`、零 candidate 的终态继续推进，Prompt 只包含当前消息。
+first-party Catalog 默认激活 Identity、durable Heartbeat、Heartflow、Speaking、Association 与 LLM reply。生产 profile 使用 1500 ms 消息去抖；测试 profile 使用 0 ms，但二者启用相同的业务节点。Runtime 拥有的 Model Task 失败/取消、delivery terminal 与 `execution.exhausted` definition 由 composition root 注入 Heartflow，Catalog 不复制这些 kind。
+
+Heartbeat 到期只产生 `agent.turn.candidate`。Heartflow 使用 scope generation 领取 candidate，等待全部 inbound 的 identity terminal，再冻结不可变的多输入 `agent.turn.context.completed`。Speaking 只提交 claim 的唯一 decision；Heartflow 再把它分派为 reply、wait 或 silent，并在 delivery、等待、静默、supersession 或耗尽时写入一个 turn terminal。默认 Catalog 不包含 always-reply、inbound-to-context 或 speech-to-reply 旁路。
+
+`createLlmReplyModule()` 默认直接消费 Heartflow 产生的 `core.reply.requested`，并通过 reply 的 `core:uses-context` 找到冻结 turn context。Memory 默认由 selected Profile 关闭；此时 Heartflow 的可选检索退化为空，Prompt 仍包含当前冻结输入。Association 继续记录 requested、query、candidate 和 completed 审计 DAG，但不再作为 LLM reply 的门禁。
 
 显式开启 `memory.enabled` 后，candidate Selector 才以当前消息为 query 执行全局召回，最多选择 8 条不晚于当前请求、且排除当前消息的结果。身份结果仍写入审计元数据，但不缩小默认召回范围，Web 和 ephemeral 消息同样进入这条链。Runtime 的命名检索策略只返回来源 ID，Core 随后从追加式账本重新加载并授权原始 inbound atom，因此 candidate 和 Prompt provenance 都直接指向不可变消息，而不是临时 Memory atom。
 
-Memory fragment 排在当前消息之前，合计最多 4,000 个 Unicode 字符；召回失败会退化为空历史，不阻塞当前回复。reply、历史 `core.memory.text` 和原始 inbound 的 renderer 都在 manifest 中声明，每个 fragment 保留 informationId，LLM requested 使用同序 `core:uses-context` 引用追溯输入。未知 kind 不会被静默当作文本注入。这里不引入隐式会话桶、回合拼装、事实提取或演化算法。
+Memory fragment 排在当前消息之前，合计最多 4,000 个 Unicode 字符；召回失败会退化为空历史，不阻塞当前回复。reply、历史 `core.memory.text` 和原始 inbound 的 renderer 都在 manifest 中声明，每个 fragment 保留 informationId，LLM requested 使用同序 `core:uses-context` 引用追溯输入。未知 kind 不会被静默当作文本注入。scope、claim、上下文和终态都由 Information DAG 表达，不引入进程内 Session 或可变对话桶。

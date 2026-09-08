@@ -432,6 +432,148 @@ describe("ModuleHost", () => {
     await host.stop();
   });
 
+  it("re-roots derived information to a selected runtime context", async () => {
+    const { core, store } = createCore();
+    await core.start();
+    const originalContext = await appendContext(core);
+    const replacementContext = await core.register(contextKind, {
+      occurredAt: "2026-09-03T00:00:01.000Z",
+      source: "core:test",
+      payload: { requestId: "req-2" },
+      references: [],
+    });
+    const replacementSelector = defineInformationSelector({
+      selectorId: "test.replacement-context",
+      async select({ ledger }) {
+        const contexts = await ledger.find({
+          kinds: [contextKind.kind],
+          order: "desc",
+          limit: 10,
+        });
+        return contexts
+          .filter(
+            ({ informationId }) =>
+              informationId === replacementContext.informationId,
+          )
+          .map(({ informationId }) => informationId);
+      },
+    });
+    const module = defineInformationModule({
+      manifest: {
+        protocolVersion: 1,
+        moduleVersion: "1.0.0",
+        selectors: [replacementSelector],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
+        definitionId: "acme.context-override",
+        displayName: "Context override",
+        settingsSchema: z.object({}).strict(),
+        consumes: [inboundKind],
+        produces: [outputKind],
+      },
+      create: () => ({
+        provisions: [],
+        subscriptions: [
+          onInformation(
+            inboundKind,
+            { subscriptionId: "context-override", delivery: "live" },
+            async (_atom, handlerContext) => {
+              const selected = await handlerContext.select(replacementSelector);
+              await handlerContext.register(outputKind, {
+                payload: { text: "re-rooted" },
+                contextInformationId: selected[0]!.informationId,
+              });
+            },
+          ),
+        ],
+      }),
+    });
+    const host = await startHost(module, core, "context-override.default");
+
+    await core.register(
+      inboundKind,
+      registration({ text: "moon" }, originalContext),
+    );
+
+    const output = [...store.atoms.values()].find(
+      (atom) => atom.kind === outputKind.kind,
+    );
+    expect(
+      output?.references.find(({ relation }) => relation === "core:context")
+        ?.informationId,
+    ).toBe(replacementContext.informationId);
+    await host.stop();
+  });
+
+  it("rejects a context override that was not selected by the handler", async () => {
+    const { core, store } = createCore();
+    await core.start();
+    const originalContext = await appendContext(core);
+    const unselectedContext = await core.register(contextKind, {
+      occurredAt: "2026-09-03T00:00:01.000Z",
+      source: "core:test",
+      payload: { requestId: "req-unselected" },
+      references: [],
+    });
+    const module = defineInformationModule({
+      manifest: {
+        protocolVersion: 1,
+        moduleVersion: "1.0.0",
+        selectors: [],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
+        definitionId: "acme.context-override-unselected",
+        displayName: "Unselected context override",
+        settingsSchema: z.object({}).strict(),
+        consumes: [inboundKind],
+        produces: [outputKind],
+      },
+      create: () => ({
+        provisions: [],
+        subscriptions: [
+          onInformation(
+            inboundKind,
+            { subscriptionId: "context-override-unselected", delivery: "live" },
+            async (_atom, handlerContext) => {
+              await handlerContext.register(outputKind, {
+                payload: { text: "must fail" },
+                contextInformationId: unselectedContext.informationId,
+              });
+            },
+          ),
+        ],
+      }),
+    });
+    const host = await startHost(
+      module,
+      core,
+      "context-override-unselected.default",
+    );
+
+    const inbound = await core.register(
+      inboundKind,
+      registration({ text: "moon" }, originalContext),
+    );
+
+    expect(
+      [...store.atoms.values()].some((atom) => atom.kind === outputKind.kind),
+    ).toBe(false);
+    expect(
+      [...store.atoms.values()].some(
+        (atom) =>
+          atom.kind === "consumer.failed" &&
+          atom.references.some(
+            (reference) =>
+              reference.relation === "core:caused-by" &&
+              reference.informationId === inbound.informationId,
+          ),
+      ),
+    ).toBe(true);
+    await host.stop();
+  });
+
   it("records a selector failure as one consumer failure", async () => {
     const { core, store } = createCore();
     await core.start();

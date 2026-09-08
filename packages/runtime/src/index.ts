@@ -15,3 +15,4 @@ export * from "./memory-retrieval.js";
 export * from "./model-task.js";
 export * from "@kaguya/scheduler";
 export * from "./runtime.js";
+export { executionExhaustedInformationKind } from "@kaguya/engine";

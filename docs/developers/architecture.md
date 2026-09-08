@@ -21,7 +21,7 @@ flowchart LR
   Runtime --> DB[(PostgreSQL 17)]
   Runtime --> Core[InformationCore]
   Core --> Host[ModuleHost]
-  Host --> Modules[Filter / LLM / 自定义模块]
+  Host --> Modules[Heartbeat / Heartflow / LLM / 自定义模块]
   Modules --> LLM[LLM execution port]
   Modules --> Outbound[message.outbound.requested]
   Outbound --> Runtime
@@ -42,10 +42,18 @@ flowchart LR
   Context --> Inbound[core.message.inbound.text]
   Inbound --> Persist[校验并提交 PostgreSQL]
   Persist --> Broadcast[当前消费者并发广播]
-  Broadcast --> Filter[过滤模块]
-  Filter -->|通过| Reply[core.reply.requested]
-  Filter -->|拒绝| Decision[filter.decision]
-  Reply --> LLM[LLM / assistant / 投递]
+  Broadcast --> Identity[Identity terminal]
+  Broadcast --> Heartbeat[Durable heartbeat]
+  Heartbeat --> Candidate[agent.turn.candidate]
+  Candidate --> Heartflow[Generational claim / identity barrier]
+  Identity --> Heartflow
+  Heartflow --> Turn[Immutable turn context]
+  Turn --> Speech[Speak / wait / silent decision]
+  Speech --> Heartflow
+  Heartflow -->|speak| Reply[core.reply.requested]
+  Heartflow -->|wait| Wait[agent.wait.requested]
+  Heartflow -->|silent| Silent[agent.turn.silent]
+  Reply --> LLM[Model Task / assistant / delivery]
   Broadcast -->|消费者失败| Failed[consumer.failed]
 ```
 
@@ -55,25 +63,32 @@ Web HTTP 请求只允许文本和 requestId。Web adapter 会补齐平台、send
 
 HTTP `202 accepted` 在 Web gateway 接收消息后立即返回；Runtime dispatch 在后台继续。该状态不证明事件链、模型调用或投递已经完成。
 
-默认模块链通过注册下一个 Kind 表达阶段关系：
+默认在线链由 Heartflow 以可重放事实推进：
 
 ```text
 core.runtime.context
   -> core.message.inbound.text
-  -> core.reply.requested
-  -> core.llm.requested
-  -> core.llm.completed
-  -> core.message.assistant.text
-  -> core.delivery.requested
-  -> core.delivery.delivered | core.delivery.failed
-
-core.llm.requested
-  -> core.llm.failed（终止该分支）
+  -> agent.person.context.completed
+  -> agent.heartbeat.scheduled
+  -> core.schedule.one-shot.requested
+  -> core.schedule.one-shot.due
+  -> agent.heartbeat.fired
+  -> agent.turn.candidate
+  -> agent.turn.claimed
+  -> agent.turn.started
+  -> agent.turn.context.completed
+  -> agent.speech.decision
+     -> speak: core.reply.requested -> core.model.task.* -> core.message.assistant.text
+               -> core.delivery.requested -> core.delivery.delivered | core.delivery.failed
+               -> agent.turn.completed | agent.turn.failed
+               -> core.model.task.failed | cancelled -> agent.turn.failed
+     -> wait: agent.wait.requested -> agent.turn.waiting -> 下一代 heartbeat
+     -> silent: agent.turn.silent
 ```
 
-每条派生边都带有直接输入的 `core:caused-by` 引用，并继承唯一的 `core:context`。过滤器通过时显式注册 `core.reply.requested`；拒绝时只注册 `filter.decision`，其中记录 `accepted: false`、原因和过滤器定义 ID。Core 不解释“下一过滤器”或成功标记，也不负责模块执行顺序。
+同一 destination scope 的 claim 带单调 generation。新 candidate 若在旧 claim 作出 speech decision 前到达，会先赢得旧 claim 的 decision gate，再写入旧 turn 的 `superseded` 终态；旧分支不能继续产生 reply。Heartflow 等到 candidate 引用的每条 inbound 都具有 identity terminal，才冻结多输入 turn context。`speak`、`wait`、`silent` 只由 Heartflow 分派，默认链中没有 inbound 直达 turn context、always-reply 或 speech-to-reply 桥接旁路。
 
-LLM 失败与投递失败同样是账本中的事实，分别以 `core.llm.failed` 与 `core.delivery.failed` 表达。平台发送成功后注册 `core.delivery.delivered`；外部平台消息 ID 如有需要保存在该结果 payload 内。
+每条派生边都带有直接输入的 `core:caused-by` 引用，并继承唯一的 `core:context`。跨入站合并时，模块只能把 context 重定位到当前 handler 通过声明式 Selector 选出的 `core.runtime.context`。Model Task、消费者重试耗尽和投递失败都是账本事实；平台发送成功后注册 `core.delivery.delivered`，并由 Heartflow 写入唯一 turn terminal。
 
 ## 消费者失败不会回滚已提交事实
 

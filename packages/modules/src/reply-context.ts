@@ -1,8 +1,7 @@
 /**
  * 功能概述：声明 reply 模块的显式上下文选择，并把已选择账本原子编译为 Prompt。
- * 主要职责：`currentAcceptedMessageSelector` 保留仅选择当前消息的基础策略；
- * `associationReplyContextSelector` 从 association terminal 沿受控引用找到当前 reply 和
- * canonical Memory source；replyPromptRenderer 与 memoryPromptRenderer 提供可声明的渲染身份，
+ * 主要职责：`turnReplyContextSelector` 从 reply 沿受控引用找到冻结 turn 与它列出的 Memory；
+ * `associationReplyContextSelector` 保留可选的 association 审计读取策略；replyPromptRenderer 与 memoryPromptRenderer 提供可声明的渲染身份，
  * 原子到 Prompt 保留选择顺序和 provenance，不渲染 candidate receipt。
  * 代码库关系：`llm-reply.ts` 使用这里的 Selector；Engine 负责校验并重新加载结果，
  * PromptCompiler 负责产生可持久化 provenance。
@@ -37,6 +36,38 @@ import {
 export const currentAcceptedMessageSelector = defineInformationSelector({
   selectorId: "core.reply.current-accepted-message",
   select: ({ sourceAtom }) => [sourceAtom.informationId],
+});
+
+export const turnReplyContextSelector = defineInformationSelector({
+  selectorId: "agent.reply.frozen-turn-context",
+  select: async ({ sourceAtom, ledger }) => {
+    const turns = (
+      await ledger.related({
+        from: [sourceAtom.informationId],
+        relation: "core:uses-context",
+        direction: "outgoing",
+        limit: 10,
+      })
+    ).filter(({ kind }) => kind === "agent.turn.context.completed");
+    if (turns.length !== 1) return [sourceAtom.informationId];
+    const payload = turns[0]!.payload as any;
+    const memoryIds = new Set<string>(
+      Array.isArray(payload.memory) ? payload.memory : [],
+    );
+    if (memoryIds.size === 0) return [sourceAtom.informationId];
+    const context = await ledger.related({
+      from: [turns[0]!.informationId],
+      relation: "core:uses-context",
+      direction: "outgoing",
+      limit: 1_000,
+    });
+    return [
+      ...context
+        .filter(({ informationId }) => memoryIds.has(informationId))
+        .map(({ informationId }) => informationId),
+      sourceAtom.informationId,
+    ];
+  },
 });
 
 export const associationReplyContextSelector = defineInformationSelector({

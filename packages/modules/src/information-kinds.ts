@@ -1,12 +1,11 @@
 /**
- * 功能概述：本文件声明 modules 包拥有的消息 DAG kind，明确区分入站、过滤通过后的
- * 回复请求、过滤拒绝、Memory、person-fact 候选/提取结果、assistant 文本和平台投递请求，
- * 替代旧事件与定向回复语义。
+ * 功能概述：本文件声明 modules 包拥有的消息 DAG kind，包括入站、Heartbeat、Heartflow
+ * claim/context/terminal、speech decision、回复、Memory、身份、assistant 与平台投递请求。
  * 主要职责：每个 definition 固定 payload 的严格 schema 和直接因果/context 引用规则；
  * `personFactCandidateInformationKind` 表示待提取的非 reply 账本来源，
  * `personFactExtractedInformationKind` 表示模块验证后的业务事实；`informationModuleKinds`
  * 供 Runtime 在启动 Core 前一次注册同一批 definition。
- * 代码库关系：speech reply bridge 是回复请求的唯一生产路径；LLM 回复模块消费回复请求、外部
+ * 代码库关系：Heartflow 的 speak 分支是默认回复请求生产路径；LLM 回复模块消费回复请求、外部
  * 注入的 Model Task completed definition 与 assistant，person-fact 模块消费候选与通用 completed，
  * 随后产生各自后续 kind；Runtime 负责通用
  * Model Task 生命周期和投递结果 kind，不能重新定义本文件已经拥有的 literal kind；assistant payload
@@ -101,10 +100,19 @@ const messageSourceSchema = z
   })
   .strict() as any;
 
+const turnProvenanceSchema = z
+  .object({
+    candidateInformationId: nonBlankString,
+    claimInformationId: nonBlankString,
+    contextInformationId: nonBlankString,
+  })
+  .strict();
+
 export const replyRequestedInformationPayloadSchema = z
   .object({
     text: z.string(),
     source: messageSourceSchema,
+    turn: turnProvenanceSchema.optional(),
   })
   .strict() as any;
 export type ReplyRequestedInformationPayload = z.infer<
@@ -154,6 +162,16 @@ export const replyRequestedInformationKind = defineInformationKind({
       required: true,
       multiple: true,
       targetKinds: ["agent.turn.context.completed"],
+    },
+    "agent:turn-claim": {
+      required: false,
+      multiple: false,
+      targetKinds: ["agent.turn.claimed"],
+    },
+    "agent:turn-candidate": {
+      required: false,
+      multiple: false,
+      targetKinds: ["agent.turn.candidate"],
     },
   },
   log: {
@@ -538,6 +556,7 @@ export const assistantTextInformationKind = defineInformationKind({
       text: z.string(),
       source: messageSourceSchema,
       originatingModuleInstanceId: nonBlankString,
+      turn: turnProvenanceSchema.nullable().default(null),
     })
     .strict(),
   references: {
@@ -555,11 +574,14 @@ export const assistantTextInformationKind = defineInformationKind({
   log: {
     enabled: true,
     level: "info",
-    project: ({ payload }) => ({
-      event: "message.assistant",
-      originatingModuleInstanceId: payload.originatingModuleInstanceId,
-      ...contentPreview(payload.text),
-    }),
+    project: ({ payload }) => {
+      const input = payload as any;
+      return {
+        event: "message.assistant",
+        originatingModuleInstanceId: input.originatingModuleInstanceId,
+        ...contentPreview(input.text),
+      };
+    },
   },
 });
 
@@ -571,6 +593,7 @@ export const deliveryRequestedInformationKind = defineInformationKind({
       platform: nonBlankString,
       destination: platformDestinationSchema,
       message: outboundMessageContentSchema,
+      turn: turnProvenanceSchema.nullable().default(null),
     })
     .strict(),
   references: {
@@ -584,23 +607,280 @@ export const deliveryRequestedInformationKind = defineInformationKind({
       multiple: false,
       targetKinds: ["core.runtime.context"],
     },
+    "agent:turn-claim": {
+      required: false,
+      multiple: false,
+      targetKinds: ["agent.turn.claimed"],
+    },
+    "agent:turn-candidate": {
+      required: false,
+      multiple: false,
+      targetKinds: ["agent.turn.candidate"],
+    },
+  },
+  log: {
+    enabled: true,
+    level: "info",
+    project: ({ payload }) => {
+      const input = payload as any;
+      return {
+        event: "delivery.requested",
+        adapterId: input.adapterId,
+        platform: input.platform,
+        messageKind: input.message.kind,
+      };
+    },
+  },
+});
+
+const turnIdentitySchema = z
+  .object({
+    terminalInformationId: nonBlankString,
+    status: z.enum([
+      "complete",
+      "unresolved",
+      "ambiguous",
+      "degraded",
+      "failed",
+    ]),
+    scopeMode: z.enum(["canonical", "ephemeral"]),
+    scopeInformationId: nonBlankString.optional(),
+    accountInformationId: nonBlankString.optional(),
+    personInformationId: nonBlankString.optional(),
+  })
+  .strict();
+
+const turnInputSchema = z
+  .object({
+    informationId: nonBlankString,
+    occurredAt: z.iso.datetime({ offset: true }),
+    text: z.string(),
+    source: messageSourceSchema,
+    identity: turnIdentitySchema,
+  })
+  .strict();
+
+export const turnClaimedInformationKind = defineInformationKind({
+  kind: "agent.turn.claimed",
+  payloadSchema: z
+    .object({
+      candidateInformationId: nonBlankString,
+      scopeKey: nonBlankString,
+      generation: z.number().int().nonnegative(),
+      predecessorTerminalInformationId: nonBlankString.nullable(),
+    })
+    .strict(),
+  references: {
+    "core:caused-by": {
+      required: true,
+      multiple: false,
+    },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
+    "agent:turn-candidate": {
+      required: true,
+      multiple: false,
+      targetKinds: ["agent.turn.candidate"],
+    },
+  },
+  log: {
+    enabled: true,
+    level: "info",
+    project: ({ payload }) => {
+      const input = payload as any;
+      return {
+        event: "turn.claimed",
+        scopeKey: input.scopeKey,
+        generation: input.generation,
+      };
+    },
+  },
+});
+
+export const turnStartedInformationKind = defineInformationKind({
+  kind: "agent.turn.started",
+  payloadSchema: z
+    .object({
+      candidateInformationId: nonBlankString,
+      claimInformationId: nonBlankString,
+      scopeKey: nonBlankString,
+      generation: z.number().int().nonnegative(),
+    })
+    .strict(),
+  references: {
+    "core:caused-by": { required: true, multiple: false },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
+    "agent:turn-claim": {
+      required: true,
+      multiple: false,
+      targetKinds: [turnClaimedInformationKind.kind],
+    },
   },
   log: {
     enabled: true,
     level: "info",
     project: ({ payload }) => ({
-      event: "delivery.requested",
-      adapterId: payload.adapterId,
-      platform: payload.platform,
-      messageKind: payload.message.kind,
+      event: "turn.started",
+      scopeKey: payload.scopeKey,
+      generation: payload.generation,
     }),
+  },
+});
+
+export const turnDecisionSupersededInformationKind = defineInformationKind({
+  kind: "agent.turn.decision.superseded",
+  payloadSchema: z
+    .object({
+      candidateInformationId: nonBlankString,
+      claimInformationId: nonBlankString,
+      replacementCandidateInformationId: nonBlankString,
+    })
+    .strict(),
+  references: {
+    "core:caused-by": {
+      required: true,
+      multiple: false,
+      targetKinds: ["agent.turn.candidate"],
+    },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
+    "core:status-of": {
+      required: true,
+      multiple: false,
+      targetKinds: [turnClaimedInformationKind.kind],
+    },
+  },
+  log: {
+    enabled: true,
+    level: "info",
+    project: () => ({ event: "turn.decision.superseded" }),
+  },
+});
+
+const turnTerminalReferences = {
+  "core:caused-by": { required: true, multiple: false },
+  "core:context": {
+    required: true,
+    multiple: false,
+    targetKinds: ["core.runtime.context"],
+  },
+  "core:status-of": {
+    required: true,
+    multiple: false,
+    targetKinds: ["agent.turn.candidate"],
+  },
+  "agent:turn-claim": {
+    required: true,
+    multiple: false,
+    targetKinds: [turnClaimedInformationKind.kind],
+  },
+} as const;
+
+const turnTerminalBaseShape = {
+  candidateInformationId: nonBlankString,
+  claimInformationId: nonBlankString,
+  scopeKey: nonBlankString,
+};
+
+export const turnCompletedInformationKind = defineInformationKind({
+  kind: "agent.turn.completed",
+  payloadSchema: z
+    .object({
+      ...turnTerminalBaseShape,
+      deliveryTerminalInformationId: nonBlankString,
+    })
+    .strict(),
+  references: turnTerminalReferences,
+  log: {
+    enabled: true,
+    level: "info",
+    project: () => ({ event: "turn.lifecycle", status: "completed" }),
+  },
+});
+
+export const turnWaitingInformationKind = defineInformationKind({
+  kind: "agent.turn.waiting",
+  payloadSchema: z
+    .object({
+      ...turnTerminalBaseShape,
+      dueAt: z.iso.datetime({ offset: true }),
+    })
+    .strict(),
+  references: turnTerminalReferences,
+  log: {
+    enabled: true,
+    level: "info",
+    project: ({ payload }) => ({
+      event: "turn.lifecycle",
+      status: "waiting",
+      dueAt: payload.dueAt,
+    }),
+  },
+});
+
+export const turnSilentInformationKind = defineInformationKind({
+  kind: "agent.turn.silent",
+  payloadSchema: z
+    .object({ ...turnTerminalBaseShape, reasonCodes: z.array(nonBlankString) })
+    .strict(),
+  references: turnTerminalReferences,
+  log: {
+    enabled: true,
+    level: "info",
+    project: () => ({ event: "turn.lifecycle", status: "silent" }),
+  },
+});
+
+export const turnFailedInformationKind = defineInformationKind({
+  kind: "agent.turn.failed",
+  payloadSchema: z
+    .object({ ...turnTerminalBaseShape, reason: nonBlankString })
+    .strict(),
+  references: turnTerminalReferences,
+  log: {
+    enabled: true,
+    level: "warn",
+    project: ({ payload }) => ({
+      event: "turn.lifecycle",
+      status: "failed",
+      reason: payload.reason,
+    }),
+  },
+});
+
+export const turnSupersededInformationKind = defineInformationKind({
+  kind: "agent.turn.superseded",
+  payloadSchema: z
+    .object({
+      ...turnTerminalBaseShape,
+      replacementCandidateInformationId: nonBlankString,
+    })
+    .strict(),
+  references: turnTerminalReferences,
+  log: {
+    enabled: true,
+    level: "info",
+    project: () => ({ event: "turn.lifecycle", status: "superseded" }),
   },
 });
 
 const turnContextPayloadSchema = z
   .object({
     candidateInformationId: nonBlankString,
-    asOf: nonBlankString.optional(),
+    claimInformationId: nonBlankString,
+    scopeKey: nonBlankString,
+    asOf: z.iso.datetime({ offset: true }),
+    inputs: z.array(turnInputSchema).min(1),
     text: z.string(),
     source: messageSourceSchema,
     directness: z.number().min(0).max(1),
@@ -636,6 +916,11 @@ export const turnContextCompletedInformationKind = defineInformationKind({
       targetKinds: ["core.runtime.context"],
     },
     "core:uses-context": { required: true, multiple: true },
+    "agent:turn-claim": {
+      required: true,
+      multiple: false,
+      targetKinds: ["agent.turn.claimed"],
+    },
   },
   log: {
     enabled: true,
@@ -659,6 +944,7 @@ const speechDecisionPayloadSchema = z
     text: z.string(),
     source: messageSourceSchema,
     candidateInformationId: nonBlankString,
+    claimInformationId: nonBlankString,
     turnContextInformationId: nonBlankString,
     score: z.number(),
     thresholds: z.object({ speak: z.number(), wait: z.number() }).strict(),
@@ -701,6 +987,16 @@ export const speechDecisionInformationKind = defineInformationKind({
       targetKinds: ["core.runtime.context"],
     },
     "core:uses-context": { required: true, multiple: true },
+    "agent:turn-claim": {
+      required: true,
+      multiple: false,
+      targetKinds: ["agent.turn.claimed"],
+    },
+    "core:status-of": {
+      required: true,
+      multiple: false,
+      targetKinds: ["agent.turn.claimed"],
+    },
   },
   log: {
     enabled: true,
@@ -731,6 +1027,7 @@ export const waitRequestedInformationKind = defineInformationKind({
       wakePolicy: z.enum(["recheckAt", "cooldown"]),
       wakeOnMessage: z.boolean().default(true),
       source: messageSourceSchema,
+      sourceInformationIds: z.array(nonBlankString).min(1),
     })
     .strict() as any,
   references: {
@@ -743,6 +1040,11 @@ export const waitRequestedInformationKind = defineInformationKind({
       required: true,
       multiple: false,
       targetKinds: ["core.runtime.context"],
+    },
+    "core:uses-context": {
+      required: true,
+      multiple: true,
+      targetKinds: [inboundTextInformationKind.kind],
     },
   },
   log: {
@@ -763,6 +1065,12 @@ export const waitRequestedInformationKind = defineInformationKind({
 const heartbeatReasonSchema = z.enum(["message", "wait"]);
 const heartbeatPolicyVersionSchema = z.literal("short-heartbeat.v1");
 const heartbeatTerminalReference = {
+  "core:caused-by": { required: true, multiple: false },
+  "core:context": {
+    required: false,
+    multiple: false,
+    targetKinds: ["core.runtime.context"],
+  },
   "core:status-of": {
     required: true,
     multiple: false,
@@ -785,11 +1093,21 @@ export const heartbeatScheduledInformationKind = defineInformationKind({
       attempt: z.number().int().min(0),
       totalWaitBudget: z.number().int().min(0),
       scopeKey: nonBlankString,
+      asOf: z.iso.datetime({ offset: true }),
     })
     .strict(),
   references: {
     "core:caused-by": { required: true, multiple: false },
-    "core:uses-context": { required: false, multiple: true },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
+    "core:uses-context": {
+      required: true,
+      multiple: true,
+      targetKinds: [inboundTextInformationKind.kind],
+    },
   },
   log: {
     enabled: true,
@@ -868,6 +1186,10 @@ export const turnCandidateInformationKind = defineInformationKind({
       destination: platformDestinationSchema,
       sourceInformationIds: z.array(nonBlankString).min(1),
       scopeKey: nonBlankString,
+      asOf: z.iso.datetime({ offset: true }),
+      policyVersion: heartbeatPolicyVersionSchema,
+      attempt: z.number().int().min(0),
+      totalWaitBudget: z.number().int().min(0),
     })
     .strict(),
   references: {
@@ -880,6 +1202,16 @@ export const turnCandidateInformationKind = defineInformationKind({
       required: true,
       multiple: false,
       targetKinds: [heartbeatFiredInformationKind.kind],
+    },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
+    "core:uses-context": {
+      required: true,
+      multiple: true,
+      targetKinds: [inboundTextInformationKind.kind],
     },
   },
   log: {
@@ -1154,6 +1486,14 @@ export const informationModuleKinds = [
   personObservedInformationKind,
   personResolutionInformationKind,
   personContextCompletedInformationKind,
+  turnClaimedInformationKind,
+  turnStartedInformationKind,
+  turnDecisionSupersededInformationKind,
+  turnCompletedInformationKind,
+  turnWaitingInformationKind,
+  turnSilentInformationKind,
+  turnFailedInformationKind,
+  turnSupersededInformationKind,
   turnContextCompletedInformationKind,
   speechDecisionInformationKind,
   waitRequestedInformationKind,

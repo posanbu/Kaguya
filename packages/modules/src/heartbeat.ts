@@ -41,9 +41,10 @@ export const heartbeatScopeSelector = defineInformationSelector({
       : (sourceAtom.payload as any).scopeKey;
     const schedules = await ledger.find({
       kinds: [oneShotRequestedInformationKind.kind],
-      limit: 5000,
+      payloadContains: { input: { scopeKey } },
+      order: "desc",
+      limit: 1_000,
     });
-    const result: string[] = [];
     for (const schedule of schedules) {
       const input = (schedule.payload as any).input;
       if (!input || input.scopeKey !== scopeKey) continue;
@@ -53,9 +54,20 @@ export const heartbeatScopeSelector = defineInformationSelector({
         direction: "incoming",
         limit: 1,
       });
-      if (!terminal.length) result.push(schedule.informationId);
+      if (terminal.length) continue;
+      const heartbeat = (
+        await ledger.related({
+          from: [schedule.informationId],
+          relation: "core:caused-by",
+          direction: "outgoing",
+          limit: 1,
+        })
+      )[0];
+      return heartbeat === undefined
+        ? [schedule.informationId]
+        : [schedule.informationId, heartbeat.informationId];
     }
-    return result;
+    return [];
   },
 });
 export const heartbeatDueSelector = defineInformationSelector({
@@ -68,14 +80,25 @@ export const heartbeatDueSelector = defineInformationSelector({
       limit: 1,
     });
     if (!requested.length) return [];
-    return (
+    const heartbeat = (
       await ledger.related({
         from: [requested[0]!.informationId],
         relation: "core:caused-by",
         direction: "outgoing",
         limit: 1,
       })
-    ).map((a) => a.informationId);
+    )[0];
+    if (heartbeat === undefined) return [];
+    const runtimeContext = await ledger.related({
+      from: [heartbeat.informationId],
+      relation: "core:context",
+      direction: "outgoing",
+      limit: 1,
+    });
+    return [
+      heartbeat.informationId,
+      ...runtimeContext.map((a) => a.informationId),
+    ];
   },
 });
 
@@ -114,12 +137,17 @@ export const heartbeatModule = defineInformationModule({
       wakeOnMessage: boolean,
       attempt: number,
       totalWaitBudget: number,
-      previous?: string,
+      previousScheduleInformationId?: string,
+      previousHeartbeatInformationId?: string,
     ) => {
       const source = (atom.payload as any).source;
       if (!source) return;
       const scopeKey = scopeOf(source);
-      const heartbeat = await context.register(
+      const orderedSourceIds = [...new Set(sourceIds)];
+      const asOf = reason === "message" ? atom.occurredAt : dueAt;
+      const heartbeat = await context.registerOnce(
+        "agent.heartbeat.scheduled",
+        atom.informationId,
         heartbeatScheduledInformationKind,
         {
           payload: {
@@ -129,19 +157,24 @@ export const heartbeatModule = defineInformationModule({
             platform: source.platform,
             adapterId: source.adapterId,
             destination: source.destination,
-            sourceInformationIds: sourceIds,
+            sourceInformationIds: orderedSourceIds,
             wakeOnMessage,
             attempt,
             totalWaitBudget,
             scopeKey,
+            asOf,
           },
+          references: orderedSourceIds.map((informationId) => ({
+            relation: "core:uses-context",
+            informationId,
+          })),
         },
       );
       const input = {
         heartbeatInformationId: heartbeat.informationId,
         scopeKey,
         reason,
-        sourceInformationIds: sourceIds,
+        sourceInformationIds: orderedSourceIds,
         wakeOnMessage,
         attempt,
         totalWaitBudget,
@@ -151,27 +184,36 @@ export const heartbeatModule = defineInformationModule({
         definitionId: "agent.heartbeat.short",
       };
       try {
-        if (previous) {
+        if (previousScheduleInformationId) {
           const receipt = await oneShot.replace({
-            operationKey: `heartbeat:${scopeKey}`,
+            operationKey: `heartbeat:${heartbeat.informationId}`,
             sourceInformationId: heartbeat.informationId,
-            previousScheduleInformationId: previous,
+            previousScheduleInformationId,
             dueAt,
             input,
             activation,
           });
-          if (receipt.previousOutcome === "superseded")
+          if (
+            receipt.previousOutcome === "superseded" &&
+            previousHeartbeatInformationId !== undefined
+          )
             await context.commitTerminal(
               "agent.heartbeat",
-              previous,
+              previousHeartbeatInformationId,
               heartbeatSupersededInformationKind,
               {
                 payload: { replacementInformationId: heartbeat.informationId },
+                references: [
+                  {
+                    relation: "core:status-of",
+                    informationId: previousHeartbeatInformationId,
+                  },
+                ],
               },
             );
         } else
           await oneShot.schedule({
-            operationKey: `heartbeat:${scopeKey}`,
+            operationKey: `heartbeat:${heartbeat.informationId}`,
             sourceInformationId: heartbeat.informationId,
             dueAt,
             input,
@@ -182,7 +224,15 @@ export const heartbeatModule = defineInformationModule({
           "agent.heartbeat",
           heartbeat.informationId,
           heartbeatFailedInformationKind,
-          { payload: { error: "one-shot scheduling failed" } },
+          {
+            payload: { error: "one-shot scheduling failed" },
+            references: [
+              {
+                relation: "core:status-of",
+                informationId: heartbeat.informationId,
+              },
+            ],
+          },
         );
       }
     };
@@ -203,6 +253,7 @@ export const heartbeatModule = defineInformationModule({
           async (atom, context) => {
             const open = await context.select(heartbeatScopeSelector);
             const previous = open[0] as any;
+            const previousHeartbeat = open[1] as any;
             const previousInput = previous?.payload?.input as any;
             const preserveWait =
               previousInput?.reason === "wait" &&
@@ -229,6 +280,7 @@ export const heartbeatModule = defineInformationModule({
               previousInput?.attempt ?? 0,
               previousInput?.totalWaitBudget ?? 0,
               previous?.informationId,
+              previousHeartbeat?.informationId,
             );
           },
         ),
@@ -242,7 +294,7 @@ export const heartbeatModule = defineInformationModule({
               context,
               "wait",
               p.dueAt,
-              [atom.informationId],
+              p.sourceInformationIds,
               p.wakeOnMessage,
               p.attempt,
               p.totalWaitBudget,
@@ -255,6 +307,9 @@ export const heartbeatModule = defineInformationModule({
           async (atom, context) => {
             const candidates = await context.select(heartbeatDueSelector);
             const hb = candidates[0];
+            const runtimeContext = candidates.find(
+              ({ kind }) => kind === "core.runtime.context",
+            );
             if (!hb) return;
             let result;
             try {
@@ -268,7 +323,15 @@ export const heartbeatModule = defineInformationModule({
                 "agent.heartbeat",
                 hb.informationId,
                 heartbeatFailedInformationKind,
-                { payload: { error: "one-shot firing failed" } },
+                {
+                  payload: { error: "one-shot firing failed" },
+                  references: [
+                    {
+                      relation: "core:status-of",
+                      informationId: hb.informationId,
+                    },
+                  ],
+                },
               );
               return;
             }
@@ -277,7 +340,15 @@ export const heartbeatModule = defineInformationModule({
                 "agent.heartbeat",
                 hb.informationId,
                 heartbeatFiredInformationKind,
-                { payload: { firedAt: context.now().toISOString() } },
+                {
+                  payload: { firedAt: context.now().toISOString() },
+                  references: [
+                    {
+                      relation: "core:status-of",
+                      informationId: hb.informationId,
+                    },
+                  ],
+                },
               );
               const p: any = hb.payload;
               await context.registerOnce(
@@ -295,13 +366,24 @@ export const heartbeatModule = defineInformationModule({
                     destination: p.destination,
                     sourceInformationIds: p.sourceInformationIds,
                     scopeKey: p.scopeKey,
+                    asOf: p.asOf,
+                    policyVersion: p.policyVersion,
+                    attempt: p.attempt,
+                    totalWaitBudget: p.totalWaitBudget,
                   },
                   references: [
                     {
                       relation: "agent:heartbeat-fired",
                       informationId: fired.informationId,
                     },
+                    ...p.sourceInformationIds.map((informationId: string) => ({
+                      relation: "core:uses-context" as const,
+                      informationId,
+                    })),
                   ],
+                  ...(runtimeContext === undefined
+                    ? {}
+                    : { contextInformationId: runtimeContext.informationId }),
                 },
               );
             }

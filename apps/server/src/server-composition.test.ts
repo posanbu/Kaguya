@@ -133,7 +133,7 @@ describe("unified server composition", () => {
     const database = await createTestingDatabase();
     const runtime = new KaguyaRuntime({
       database,
-      ...createReplyComposition(),
+      ...createReplyComposition(undefined, { profile: "test" }),
     });
     runtime.registerTransport({
       adapterId: "web.ui.main",
@@ -217,9 +217,14 @@ describe("unified server composition", () => {
         "agent.association.requested",
         "agent.chat.scope.binding",
         "agent.chat.scope.entity",
+        "agent.heartbeat.scheduled",
         "agent.person.context.completed",
         "agent.speech.decision",
+        "agent.turn.candidate",
+        "agent.turn.claimed",
+        "agent.turn.completed",
         "agent.turn.context.completed",
+        "agent.turn.started",
         "agent.person.resolution",
         "core.message.inbound.text",
         "core.reply.requested",

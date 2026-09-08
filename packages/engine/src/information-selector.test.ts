@@ -57,6 +57,7 @@ class MemorySelectorLedger implements InformationLedger {
   readonly atoms = new Map<InformationId, DeepReadonly<InformationAtom>>();
   getManyCalls = 0;
   omitOnFinalLoad: InformationId | undefined;
+  readonly findQueries: InformationFindQuery[] = [];
 
   async synchronizeKinds(): Promise<void> {}
 
@@ -86,6 +87,7 @@ class MemorySelectorLedger implements InformationLedger {
   }
 
   async find(query: InformationFindQuery) {
+    this.findQueries.push(query);
     return [...this.atoms.values()]
       .filter(
         (atom) =>
@@ -203,6 +205,28 @@ describe("Information Selector", () => {
       memory.informationId,
       source.informationId,
     ]);
+  });
+
+  it("forwards payload containment and deterministic order", async () => {
+    const { core, ledger, source } = await fixture();
+    const selector = defineInformationSelector({
+      selectorId: "test.payload-order",
+      async select({ ledger }) {
+        await ledger.find({
+          payloadContains: { scopeKey: "scope-1" },
+          order: "desc",
+          limit: 10,
+        });
+        return [];
+      },
+    });
+
+    await select(core, selector, source.informationId);
+    expect(ledger.findQueries.at(-1)).toEqual({
+      payloadContains: { scopeKey: "scope-1" },
+      order: "desc",
+      limit: 10,
+    });
   });
 
   it("rejects duplicate selected ids", async () => {

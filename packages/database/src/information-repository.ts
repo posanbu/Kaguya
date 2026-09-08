@@ -194,17 +194,21 @@ export class InformationRepository implements InformationLedger {
           `a.occurred_at::timestamptz < ${bind(query.occurredBefore)}::timestamptz`,
         );
       }
+      if (query.payloadContains !== undefined) {
+        predicates.push(`a.payload @> ${bind(query.payloadContains)}::jsonb`);
+      }
       if (predicates.length === 0) {
         throw new InformationStoreError(
           "information find query requires at least one filter",
         );
       }
       const limit = bind(query.limit);
+      const order = query.order === "desc" ? "DESC" : "ASC";
       const rows = await tx.query<{ information_id: string }>(
         `SELECT a.information_id
          FROM information_atoms a
          WHERE ${predicates.join(" AND ")}
-         ORDER BY a.occurred_at::timestamptz ASC, a.information_id ASC
+         ORDER BY a.occurred_at::timestamptz ${order}, a.information_id ${order}
          LIMIT ${limit}`,
         values,
       );
