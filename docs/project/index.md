@@ -13,7 +13,7 @@ description: Kaguya 当前已实现能力、明确边界和后续演进方向。
 
 - `apps/server` 在同一 Fastify 实例提供 Web UI、HTTP API 与可选 NapCat。
 - 开发模式内嵌 Vite middleware，生产模式提供构建后的静态资源。
-- Server 以必填 `KAGUYA_DATABASE_URL` 使用 PostgreSQL，并在启动时只解析全局 `selectedProfileId`。
+- Server 只从全局 selected Profile 读取 PostgreSQL 17 与全部持久 runtime 配置；开发命令可管理固定的本地实例。
   :::
 
 ::: timeline 持久化信息 DAG
@@ -24,21 +24,19 @@ description: Kaguya 当前已实现能力、明确边界和后续演进方向。
 - 消费者、LLM 和投递失败都会保留为失败事实，已提交输入与其他消费者结果不会回滚。
   :::
 
-::: timeline 配置与审计
-
 ::: timeline 配置、模型与审计
 
 - 多 Profile Registry 支持创建、完整替换、显式全局选择和受限删除。
 - Server 每次启动生成新的 Gateway Token，并在成功监听后打印带 fragment 的完整 Web UI 访问链接。
 - Vercel AI SDK Core 统一模型调用、结构化输出和错误分类。
-- SQLite 与结构化日志记录消息、LLM trace 和出站状态。
+- PostgreSQL 17 信息账本与结构化日志记录持久运行事实。
   :::
 
-::: timeline 信息原子与异步账本基础设施
+::: timeline 信息原子与异步账本
 
 - InformationAtom、显式引用与可封锁 Kind Registry 已实现。
 - InformationLedger 提供异步 append、get、getMany 与反向引用 query。
-- PostgreSQL/PGlite 仓储以追加式事务维护原子、引用和 Kind 集合。
+- PostgreSQL 17 生产仓储以追加式事务维护原子、引用和 Kind 集合；PGlite 仅用于普通测试。
 - 持久 outbox 将日志作为提交后的单向投影，失败任务保留待重试。
   :::
 
@@ -56,8 +54,6 @@ description: Kaguya 当前已实现能力、明确边界和后续演进方向。
 
 **旧数据自动迁移** — 旧 SQLite 与旧配置索引会被拒绝，不会自动删除或转换。
 
-**InformationLedger 接入主 Runtime** — 新账本基础设施尚未替换 `apps/server` 当前的 SQLite 数据路径。
-
 ## 后续实施顺序
 
 ### 已完成：#38 信息原子与 Kind Registry
@@ -66,7 +62,7 @@ description: Kaguya 当前已实现能力、明确边界和后续演进方向。
 
 ### 已完成：#39 异步账本、PostgreSQL 与日志投影
 
-InformationLedger 已改为异步端口；PostgreSQL/PGlite 实现追加式存储、引用约束和持久日志 outbox。日志从已提交原子单向投影，失败不回滚事实。该子系统尚未接入当前 Server 主链。
+InformationLedger 已改为异步端口；PostgreSQL 17 实现追加式存储、引用约束和持久日志 outbox。日志从已提交原子单向投影，失败不回滚事实，Server 主链已经使用该账本。
 
 **旧 SQLite 数据自动迁移** — 旧 SQLite 文件与旧配置索引不会自动读取、转换、合并或删除。
 
@@ -78,9 +74,9 @@ InformationLedger 已改为异步端口；PostgreSQL/PGlite 实现追加式存�
 
 #78 负责可恢复的逐消息写入，不等待 agent reply，也不拼装回合。#90 负责可替换的认知 provider 与许可证决策，Kaguya 不自写事实演化启发式。#91 负责 pgvector、可恢复回填和稀疏/向量混合召回。周期调度与运行维护仍由 #80/#81 负责。
 
-### 主 Runtime 接入与迁移
+### PostgreSQL 运维演进
 
-在信息 Kind、DAG 与模块边界稳定后，把 `apps/server` 从旧 SQLite 消息路径迁移到 PostgreSQL 账本，同时明确兼容与数据迁移策略。
+当前本地开发以固定 Docker-compatible PostgreSQL 17 实例验收，外部数据库由 Profile 文件显式配置。后续运维能力仍需保持不隐式删除容器、数据卷或用户 schema 的边界。
 
 ## 文档状态
 

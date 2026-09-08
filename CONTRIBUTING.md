@@ -33,19 +33,20 @@ pnpm install
 
 `pnpm --version` 应为 `11.9.0`。依赖版本由根 `pnpm-lock.yaml` 管理，不要改用 npm 或 yarn 安装。
 
-服务与 demo 都要求非空的 `KAGUYA_DATABASE_URL`。它是 PostgreSQL 连接 URL，不应放入版本控制、测试夹具或普通日志：
+本地开发需要已启动的 Docker Desktop、OrbStack 或其他兼容 Docker CLI 的引擎。`pnpm dev` 和 `pnpm test:postgres` 会创建或复用固定的 PostgreSQL 17 托管实例；不要求手填数据库 URL：
 
 ```bash
-export KAGUYA_DATABASE_URL="postgresql://kaguya:password@127.0.0.1:5432/kaguya"
+pnpm postgres:start
+pnpm postgres:status
 ```
 
-`KAGUYA_DATABASE_PATH` 和其他旧 SQLite 路径不是 Server 配置；运行期只通过 `KAGUYA_DATABASE_URL` 连接 PostgreSQL。旧 SQLite 文件没有自动导入、转换、合并或删除路径。
+托管实例固定使用 `postgres:17-alpine`、`kaguya-postgres-17` 容器和 `kaguya-postgres-17-data` 卷，并只绑定 loopback。首次创建可通过 `pnpm postgres:start -- --port 55432` 选择其他端口；已有实例不会被自动重建。Server 信号退出和测试结束都不会停止或删除容器、卷及开发数据。
 
 ## 配置与敏感数据
 
 本地示例使用 `.data/kaguya-config`；生产环境应使用仓库外、仅运行账号可访问的绝对路径。配置根、Registry 索引和全部 Profile JSON 都是敏感文件，因为其中可能含有 API key、平台凭据和插件密钥。
 
-Profile Registry 只有一个显式的 `selectedProfileId`。Server 在启动时读取该 Profile 一次，再为 Runtime 构造共享模型解析器。模块 settings、平台消息和信息原子都不能指定或覆盖 Profile；选中的 Profile 不可用时也不会回退到别的 Profile、Provider 或模型。
+Profile Registry 只有一个显式的 `selectedProfileId`。Server 在启动时读取该 Profile 一次；持久 runtime、数据库、AI、Memory、平台、插件与 review 都以它为真值。模块 settings、平台消息和信息原子都不能指定或覆盖 Profile；选中的 Profile 不可用时也不会回退到别的 Profile、Provider 或模型。应用环境只保留用于定位 Registry 的 `KAGUYA_CONFIG_ROOT`；外部数据库 URL 只写在 Profile JSON 中。
 
 在 POSIX 系统中，目录应为 `0700`、文件应为 `0600`。Windows 部署必须由管理员设置只允许运行身份访问的 NTFS ACL。每个配置根目录任意时刻只能有一个活动 `FileUserConfigManager` 或写入进程；当前实现不协调多个 manager 实例或跨进程写入。
 
@@ -71,6 +72,9 @@ Profile Registry 只有一个显式的 `selectedProfileId`。Server 在启动时
 
 ```bash
 pnpm install
+pnpm postgres:start
+pnpm postgres:status
+pnpm postgres:check
 pnpm build
 pnpm typecheck
 pnpm lint
@@ -84,9 +88,11 @@ pnpm demo
 - `typecheck` 检查 TypeScript project references 与 Web；它使用 build mode，可能更新 `dist/` 和增量构建信息。
 - `lint` 检查 TypeScript、JavaScript 和 CommonJS 辅助脚本。
 - `test` 运行跨平台的 Vitest 单元与集成测试，不要求外部数据库。
-- `test:postgres` 使用 `KAGUYA_TEST_DATABASE_URL` 运行真实 PostgreSQL 账本契约、索引和重连测试；它只用于测试，不能替代 Server 必需的 `KAGUYA_DATABASE_URL`。CI 为此提供临时 PostgreSQL 服务。
+- `postgres:start` 创建或恢复托管实例，等待 `pg_isready`，再检查 PostgreSQL 17、migration 和 Runtime Kind。
+- `postgres:status` 只读配置模式、容器状态、健康、版本和端口；`postgres:check` 不启动容器，但会执行数据库检查和幂等同步。
+- `test:postgres` 本地自动复用托管实例；CI 显式提供 `KAGUYA_TEST_DATABASE_URL` 时绕过 Docker 和 Profile。每个 suite 只创建并清理自己的随机 `kaguya_test_*` schema。
 - `prompt:test` 在阻断外部出口的前提下验证 Prompt 结构，不读取 API key。
-- `demo` 使用 `KAGUYA_DATABASE_URL` 运行确定性信息 DAG，并输出根 `informationId` 与 Kind 计数。
+- `demo` 使用 selected Profile 的数据库运行确定性信息 DAG，并输出根 `informationId` 与 Kind 计数。
 
 格式与文档检查：
 
@@ -105,7 +111,7 @@ pnpm --dir docs --ignore-workspace docs:check
 - **Schema 与 SDK**：校验 Information Atom、Kind definition、payload、引用规则与模块 API。
 - **Engine**：验证 Kind Registry、提交先于广播、同 Kind 消费者并发、因果引用，以及 `consumer.failed` 的隔离和递归保护。
 - **Modules 与 Runtime**：验证过滤 DAG、LLM requested/completed/failed、assistant、delivery requested/delivered/failed、关闭 drain 与 ingress 生命周期。
-- **Database**：普通测试使用 PGlite；同一账本契约也在 CI 的真实 PostgreSQL 服务上运行，验证 append-only 原子、JSONB payload、引用和日志投影 outbox；不读取个人数据库。
+- **Database**：普通测试使用 PGlite；`test:postgres` 收集所有读取测试 URL 的真实 PostgreSQL suite，覆盖账本、索引、可靠执行、Memory、one-shot schedule 与 Model Task persistence，并以扫描门禁防止遗漏；不清空应用 schema、容器或数据卷。
 - **Config、Server 与 Web**：验证全局 `selectedProfileId`、Profile management、认证、HTTP 响应、窄 ingress 和 setup mode。
 - **平台适配器与 demo**：验证平台内容正规化、transport receipt 与 PostgreSQL demo。
 

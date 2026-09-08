@@ -9,7 +9,7 @@ description: Kaguya 开发环境、测试、包依赖和提交检查。
 
 ## 固定开发环境
 
-仓库要求 Node.js 24.18.0、pnpm 11.9.0 和根 `pnpm-lock.yaml`。首次安装或切换包含公共导出变化的分支后，先执行完整构建。
+仓库要求 Node.js 24.18.0、pnpm 11.9.0、根 `pnpm-lock.yaml`，以及本地已启动的 Docker Desktop、OrbStack 或其他兼容 Docker CLI 的引擎。首次安装或切换包含公共导出变化的分支后，先执行完整构建。
 
 ::: code-group
 
@@ -17,6 +17,7 @@ description: Kaguya 开发环境、测试、包依赖和提交检查。
 node --version
 pnpm --version
 pnpm install
+pnpm postgres:start
 pnpm build
 ```
 
@@ -55,7 +56,7 @@ pnpm exec vitest run apps/server/src
 
 **模型** — 使用 `ai/test` 的确定性模型，禁止访问真实 Provider。
 
-**数据库** — 普通测试使用 PGlite，不读取个人环境中的数据库或配置目录。`pnpm test:postgres` 使用测试专用的 `KAGUYA_TEST_DATABASE_URL`，在 CI 提供的真实 PostgreSQL 服务上运行与 PGlite 共用的账本契约、索引和重连检查；它不是 Server 的生产配置。
+**数据库** — 普通测试使用 PGlite，不读取个人环境中的数据库或配置目录。本地 `pnpm test:postgres` 自动复用固定的托管 PostgreSQL 17；CI 显式提供测试专用 `KAGUYA_TEST_DATABASE_URL` 时绕过 Docker 和 Profile。专用命令收集账本、索引、可靠执行、Memory、one-shot schedule 和 Model Task persistence，并以扫描门禁防止 URL 驱动 suite 遗漏。suite 只删除自己的随机 `kaguya_test_*` schema。
 
 **信息 DAG** — 测试提交优先于广播、多个消费者的并发与隔离、派生原子的 `core:caused-by`/`core:context`，以及 `consumer.failed`、LLM 失败和投递失败的持久化事实。
 
@@ -85,7 +86,7 @@ pnpm exec vitest run apps/server/src
 
 数据库模式由 `packages/database/src/migrations.ts` 管理，并由 `KaguyaDatabase.migrate()` 在事务中创建或更新。payload 使用 `JSONB`；原子与显式引用由外键保护，原子、引用和日志投影 outbox 在同一事务写入。信息原子与引用只允许追加；状态变化必须注册新原子，而不能更新或删除旧记录。
 
-不要为 SQLite 保留兼容写入路径，也不要实现旧 SQLite 文件的自动导入或转换。迁移或连接失败必须显式报告，且日志不得包含完整数据库 URL、凭据、消息正文、Prompt 或模型输出。
+公共数据库入口必须先检查实际服务器大版本，只接受 PostgreSQL 17，再允许 migration 或 ingress。不要为 SQLite 保留兼容写入路径，也不要实现旧 SQLite 文件的自动导入或转换。迁移或连接失败必须映射为稳定错误，且日志不得包含完整数据库 URL、Docker 环境、原始 stderr、凭据、消息正文、Prompt 或模型输出。
 
 ## 文档同步要求
 

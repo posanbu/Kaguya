@@ -28,7 +28,6 @@ import {
   platformConfigSchema,
   pluginConfigSchema,
   profileIdSchema,
-  runtimeConfigSchema,
 } from "@kaguya/config";
 import { runWithLogContext } from "@kaguya/logger";
 import { z } from "@kaguya/schema";
@@ -96,7 +95,6 @@ const replaceProfileRequestSchema = z
     memory: memoryConfigSchema.default({ enabled: false }),
     platforms: z.array(platformConfigSchema),
     plugins: z.array(pluginConfigSchema),
-    runtime: runtimeConfigSchema.optional(),
     acknowledgedWarnings: z.array(z.string().trim().min(1)),
   })
   .strict();

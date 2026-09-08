@@ -69,6 +69,20 @@ await configs.replaceProfile("default", {
       },
     ],
   },
+  runtime: {
+    host: "127.0.0.1",
+    port: 3000,
+    databaseMode: "external",
+    databaseUrl: "postgresql://kaguya:replace-me@127.0.0.1:5432/kaguya",
+    webDistPath: "apps/web/dist",
+    corsOrigins: [],
+    trustProxy: false,
+    rateLimitMax: 30,
+    rateLimitWindowMs: 60000,
+    logLevel: "info",
+    logFormat: "json",
+    gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
+  },
   platforms: [],
   plugins: [],
   // Add these only after the user explicitly reviews and confirms them.
@@ -135,16 +149,28 @@ rejected with `CONFIG_UNSUPPORTED_VERSION`; callers must back up the store and
 bootstrap a new index. No automatic migration or deletion is performed.
 
 At server startup, `KAGUYA_CONFIG_ROOT` is loaded into a frozen profile
-registry. When the store is missing, the selected profile is incomplete, or its
-optional warnings are unreviewed, HTTP starts in setup mode so the Web UI can
-bootstrap, configure, or repair profiles. Runtime and adapter ingress remain
-stopped until the server is restarted. Corrupt stores and unsafe or
-inaccessible paths still fail startup and are never overwritten by setup. A
-module may request only a `modelTier`; it cannot override the selected profile.
+registry. The selected Profile is the persisted source for runtime, database,
+AI, Memory, platforms, plugins, and review. The development PostgreSQL command
+may add a complete safe local `runtime` only when that field is entirely absent;
+it never replaces a partially invalid runtime. Database connection, PostgreSQL
+17, migrations, and Runtime Kind synchronization must pass before HTTP or any
+other ingress listens. After that preflight, an incomplete AI Profile may use
+HTTP setup mode while Runtime and adapter ingress remain stopped until restart.
+Corrupt stores and unsafe or inaccessible paths fail startup and are never
+overwritten. A module may request only a `modelTier`; it cannot override the selected profile.
 Failure of the selected profile stops runtime startup; there is no fallback to
-another profile, provider, or model. The legacy `KAGUYA_LLM_API_KEY`,
-`KAGUYA_LLM_BASE_URL`, and `KAGUYA_LLM_MODEL` variables are rejected with a
-value-free migration error.
+another profile, provider, or model. Runtime environment variables, including
+the former database, Server, logging, allowlist, NapCat, and model variables,
+are rejected with a value-free migration error. Only `KAGUYA_CONFIG_ROOT`
+locates application configuration; `KAGUYA_TEST_DATABASE_URL` is CI-only.
+
+Legacy runtime objects without `databaseMode` parse as `external`. A persisted
+legacy `gatewayToken` is accepted for compatibility but ignored and removed on
+the next Profile write. The Server generates a cryptographically random token
+for each process and never persists it. Web Profile responses and replacement
+requests omit runtime; the Server preserves the existing hidden runtime, and
+new Profiles created through the Web management facade inherit the selected
+Profile runtime.
 
 Existing incomplete profiles can still be opened and edited for repair. The
 provider execution layer returns provider/network/authentication failures

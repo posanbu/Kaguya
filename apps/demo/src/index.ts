@@ -1,7 +1,7 @@
 /**
  * 功能概述：提供一个可执行、可测试的 PostgreSQL information DAG demo，
  * 用固定展示消息运行 Runtime 默认链，并输出根 `informationId` 与各 kind 计数。
- * 主要职责：`readDemoDatabaseUrl` 要求共享 `KAGUYA_DATABASE_URL`；`runDemo`
+ * 主要职责：`readDemoDatabaseUrl` 从 selected Profile 读取 runtime 数据库；`runDemo`
  * 注册固定 Web transport，通过 `runtime.submit` 提交输入，查询 context 相关的所有
  * 派生原子并输出排序后计数；生产默认使用 UUID，测试可注入确定性 ID；`main` 负责连接/关闭数据库。
  * 代码库关系：数据库连接与 Server 使用同一 `KaguyaDatabase` 入口，
@@ -11,8 +11,9 @@
  */
 import { createReplyComposition } from "./runtime-composition.js";
 import { randomUUID } from "node:crypto";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { FileUserConfigManager } from "@kaguya/config";
 import { KaguyaDatabase } from "@kaguya/database";
 import {
   normalizeWebInboundMessage,
@@ -26,14 +27,32 @@ export interface RunDemoOptions {
   readonly informationIdGenerator?: () => string;
 }
 
-export function readDemoDatabaseUrl(
+const defaultConfigRoot = fileURLToPath(
+  new URL("../../../.data/kaguya-config", import.meta.url),
+);
+
+export async function readDemoDatabaseUrl(
   environment: NodeJS.ProcessEnv = process.env,
-): string {
-  const databaseUrl = environment.KAGUYA_DATABASE_URL?.trim();
-  if (!databaseUrl) {
-    throw new Error("KAGUYA_DATABASE_URL is required");
+): Promise<string> {
+  if (environment.KAGUYA_DATABASE_URL?.trim()) {
+    throw new Error(
+      "KAGUYA_DATABASE_URL is not supported; configure the selected Profile runtime",
+    );
   }
-  return databaseUrl;
+  const configRoot =
+    environment.KAGUYA_CONFIG_ROOT?.trim() || defaultConfigRoot;
+  const readiness = await FileUserConfigManager.inspect({
+    rootDir: configRoot,
+  });
+  if (readiness.status === "setup_required") {
+    throw new Error("Selected Profile runtime is required");
+  }
+  const manager = await FileUserConfigManager.open({ rootDir: configRoot });
+  const profile = await manager.getProfile(manager.getSelectedProfileId());
+  if (profile.runtime === undefined) {
+    throw new Error("Selected Profile runtime is required");
+  }
+  return profile.runtime.databaseUrl;
 }
 
 export async function runDemo(
@@ -108,7 +127,7 @@ export async function runDemo(
 
 async function main(): Promise<void> {
   const database = await KaguyaDatabase.connect({
-    connectionString: readDemoDatabaseUrl(),
+    connectionString: await readDemoDatabaseUrl(),
   });
   try {
     await runDemo({ database });

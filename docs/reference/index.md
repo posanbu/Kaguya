@@ -19,7 +19,7 @@ description: Kaguya HTTP、配置、信息 Kind 与存储边界的查询入口�
 
 ### 环境变量
 
-[环境变量](./environment-variables)记录 PostgreSQL、Server、白名单、NapCat 和日志配置，以及会导致启动失败的旧变量。
+[环境变量与运行配置](./environment-variables)记录仅保留的配置根与 CI 测试变量、selected Profile runtime，以及会导致启动失败的旧变量。
 
 ## 核心信息 Kind
 
@@ -43,7 +43,7 @@ description: Kaguya HTTP、配置、信息 Kind 与存储边界的查询入口�
 
 ## 数据与回放边界
 
-**PostgreSQL information ledger** — 由 `KAGUYA_DATABASE_URL` 连接。迁移在事务中执行，payload 为 `JSONB`，Kind、原子和显式引用由外键保护；原子、引用和日志投影 outbox 原子写入。PGlite 与 CI 的真实 PostgreSQL 服务运行同一份账本契约。没有 SQLite runtime 数据库或平行消息/trace/outbound 表。
+**PostgreSQL 17 information ledger** — 由 selected Profile 的 `runtime.databaseUrl` 连接。迁移在事务中执行，payload 为 `JSONB`，Kind、原子和显式引用由外键保护；原子、引用和日志投影 outbox 原子写入。PGlite 只用于普通测试，开发与 CI 的真实数据库验收要求 PostgreSQL 17。
 
 **moduleDefinitionId / moduleInstanceId** — 标记产生事件的模块定义和实例。
 
@@ -51,12 +51,8 @@ description: Kaguya HTTP、配置、信息 Kind 与存储边界的查询入口�
 
 ## 数据存储
 
-**`.data/kaguya.sqlite`** — 默认 Runtime SQLite，保存规范化消息、LLM trace 和出站审计。
-
-**`.data/kaguya-demo.sqlite`** — `pnpm demo` 的隔离数据库。
-
 **`.data/kaguya-config`** — 默认 profile store，包含明文凭据，必须按敏感数据保护。
 
-**PostgreSQL / PGlite 信息账本** — 追加式 InformationAtom、引用与日志 outbox 已作为分阶段子系统实现，但尚未接入当前 Server 的 SQLite 主 Runtime；参见[信息账本](../developers/information-ledger)。
+**`kaguya-postgres-17-data`** — 本地托管 PostgreSQL 17 的命名卷。普通停止、Server 退出和测试结束都不会删除它。
 
-旧数据库和旧配置格式会被明确拒绝，不会自动迁移、合并或删除。
+旧 SQLite 数据、旧配置格式和同名非 first-party PostgreSQL 容器会被明确拒绝，不会自动迁移、合并、重建或删除。

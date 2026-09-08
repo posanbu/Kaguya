@@ -5,7 +5,7 @@ description: InformationAtom、Kind Registry、PostgreSQL Ledger 与日志投影
 
 # 信息账本
 
-信息账本是 Runtime 的追加式数据核心。`apps/server` 的 composition root 显式装配 PostgreSQL/PGlite database、InformationCore、ModuleHost、Model Task 与 transport；消息、Prompt provenance、模型任务和投递结果都通过 Information DAG 表达。
+信息账本是 Runtime 的追加式数据核心。`apps/server` 的 composition root 显式装配 PostgreSQL 17、InformationCore、ModuleHost、Model Task 与 transport；消息、Prompt provenance、模型任务和投递结果都通过 Information DAG 表达。PGlite 只用于普通测试。
 
 ## 信息原子
 
@@ -33,7 +33,7 @@ InformationLedger 是异步端口，只暴露受控操作：
 
 ## PostgreSQL 与 PGlite
 
-`packages/database` 提供 PostgreSQL 协议的追加式实现和迁移；测试可以使用 PGlite 验证相同语义。原子、引用、Kind 集合与日志 outbox 在事务中维护，数据库触发器阻止事实表被修改。
+`packages/database` 提供 PostgreSQL 协议的追加式实现和迁移；公共连接入口在 migration 前检查实际服务器大版本，只接受 PostgreSQL 17。普通测试可以使用 PGlite 验证相同语义，真实数据库套件则使用隔离的随机 schema。原子、引用、Kind 集合与日志 outbox 在事务中维护，数据库触发器阻止事实表被修改。
 
 这不是 SQLite 账本实现。生产使用 PostgreSQL，测试可使用兼容的 PGlite 基础设施。
 

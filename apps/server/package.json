@@ -6,7 +6,11 @@
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
     "start": "cross-env NODE_ENV=production node dist/server.js",
-    "dev": "pnpm --filter @kaguya/server... build && cross-env NODE_ENV=development tsx src/server.ts"
+    "dev": "pnpm --filter @kaguya/server... build && node dist/postgres-cli.js dev",
+    "postgres:start": "pnpm --filter @kaguya/server... build && node dist/postgres-cli.js start",
+    "postgres:status": "pnpm --filter @kaguya/server... build && node dist/postgres-cli.js status",
+    "postgres:check": "pnpm --filter @kaguya/server... build && node dist/postgres-cli.js check",
+    "postgres:test": "pnpm --filter @kaguya/server... build && node dist/postgres-cli.js test"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "3.0.14",

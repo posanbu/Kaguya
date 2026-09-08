@@ -134,8 +134,9 @@ function barrier() {
   return { promise, release };
 }
 const model = () => createRepeatingDeterministicModel({ text: probes.output });
-const pgUrl =
-  process.env.KAGUYA_TEST_DATABASE_URL ?? process.env.KAGUYA_DATABASE_URL;
+const pgUrl = process.env.KAGUYA_TEST_DATABASE_URL;
+if (process.env.KAGUYA_REQUIRE_POSTGRES_TESTS === "1" && !pgUrl)
+  throw new Error("PostgreSQL test URL required");
 type Backend = "PGlite" | "PostgreSQL";
 
 async function fixture(backend: Backend, provider = model()) {

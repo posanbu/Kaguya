@@ -43,13 +43,13 @@ Kaguya access URL: http://127.0.0.1:3000/#gatewayToken=<本次启动生成的 to
 
 Gateway Token 保护 setup 状态、Profile、NapCat 和消息接口。Server 每次启动生成新的全权限 token，并只通过监听成功后打印的 URL 交给用户。前端保留 fragment 以支持刷新，只在页面内存中使用 token，不写入浏览器存储。fragment 不随 HTTP 请求或 Referer 发送，前端会显式把 token 放入 `Authorization` 请求头。
 
-Server 只允许监听 `127.0.0.1`、`localhost` 或 `::1`；配置其他 `KAGUYA_HOST` 会拒绝启动。完整访问链接等同管理权限，请勿分享。
+Server 只允许监听 selected Profile `runtime.host` 中的 `127.0.0.1`、`localhost` 或 `::1`；其他值会拒绝启动。完整访问链接等同管理权限，请勿分享。
 
 ## 管理 Profile
 
 进入 Profile 管理后，先在列表中选择要编辑的 Profile，再填写名称、Base URL、API Key、light model 与 heavy model，并选择是否启用 Memory。Memory 默认关闭；关闭态不会向回复返回实际 Memory 信息。保存 selected Profile 或切换 selected Profile 后，按页面提示重启 Server。
 
-`default` Profile 不能删除；当前 selected Profile 也不能删除。创建新 Profile 不会自动选中或改变正在运行的 Runtime。字段含义与操作顺序见[配置 Kaguya](./configuration)。
+`default` Profile 不能删除；当前 selected Profile 也不能删除。创建新 Profile 会继承 selected Profile 的隐藏 runtime，但不会自动选中或改变正在运行的 Runtime。Web 不展示、返回或修改数据库 URL 等 runtime 字段。字段含义与操作顺序见[配置 Kaguya](./configuration)。
 
 ## 提交消息
 
@@ -58,7 +58,7 @@ Server 只允许监听 `127.0.0.1`、`localhost` 或 `::1`；配置其他 `KAGUY
 Web gateway 会把输入规范化为 `web` 平台消息，使用 `web:${requestId}` 作为 traceId，然后异步调用 Runtime。当前没有回复查询接口或 SSE，所以页面不会显示真正的模型回复流。
 
 ::: info accepted 不是聊天回答
-`202 accepted` 是接收确认。若要验证后台处理，需结合 Server 日志、SQLite 审计或接入具备 outbound transport 的平台。
+`202 accepted` 是接收确认。若要验证后台处理，需结合 Server 日志、PostgreSQL 信息账本或接入具备 outbound transport 的平台。
 :::
 
 ## 常见操作结果

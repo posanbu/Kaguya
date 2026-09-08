@@ -155,6 +155,22 @@ export type KaguyaRuntimeOptions = KaguyaRuntimeBaseOptions &
       }
   );
 
+/**
+ * Returns the complete kind set a Runtime using this catalog will install.
+ * Development readiness checks use the same pure composition path as the
+ * Runtime so schema validation cannot drift from actual startup.
+ */
+export function runtimeInformationKindNames(
+  catalog: InformationModuleCatalog,
+): readonly string[] {
+  createRegistry(catalog.definitions);
+  return Object.freeze(
+    collectDefinitions(catalog.definitions)
+      .map(({ kind }) => kind)
+      .sort(),
+  );
+}
+
 export class RuntimeUnavailableError extends Error {
   constructor(message = "Kaguya runtime is not accepting information") {
     super(message);

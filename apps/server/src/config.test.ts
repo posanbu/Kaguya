@@ -1,48 +1,62 @@
 import { describe, expect, it } from "vitest";
 
-import { assertLoopbackHost, readServerConfig } from "./config.js";
+import type { UserConfigProfile } from "@kaguya/config";
+
+import {
+  assertLoopbackHost,
+  createServerConfig,
+  readServerBootstrapConfig,
+} from "./config.js";
 
 const databaseUrl = "postgresql://kaguya:secret@db.example:5432/kaguya";
 
-describe("readServerConfig", () => {
-  it("parses server settings and always generates a fresh token", () => {
-    const environment = {
-      NODE_ENV: "development",
-      KAGUYA_DATABASE_URL: databaseUrl,
-      KAGUYA_GATEWAY_TOKEN: "ignored-environment-token",
-      KAGUYA_HOST: "localhost",
-      KAGUYA_PORT: "4100",
-      KAGUYA_CORS_ORIGINS: "https://ui.example, https://ui.example",
-      KAGUYA_TRUST_PROXY: "127.0.0.1, 10.0.0.0/8",
-      KAGUYA_RATE_LIMIT_MAX: "20",
-      KAGUYA_RATE_LIMIT_WINDOW_MS: "10000",
-      KAGUYA_CONFIG_ROOT: "/tmp/kaguya-config-test",
-      KAGUYA_GATEWAY_ALLOWLIST_PLATFORMS: "qq, qq",
-      KAGUYA_GATEWAY_ALLOWLIST_USER_IDS: "user-1, user-2",
-    };
-    const first = readServerConfig(environment);
-    const second = readServerConfig(environment);
+describe("Profile-backed server configuration", () => {
+  it("reads only bootstrap location/mode from the environment", () => {
+    expect(
+      readServerBootstrapConfig({
+        NODE_ENV: "development",
+        KAGUYA_CONFIG_ROOT: "/tmp/kaguya-config-test",
+      }),
+    ).toEqual({
+      configRoot: "/tmp/kaguya-config-test",
+      development: true,
+    });
+  });
+
+  it("uses selected Profile runtime values and always generates a fresh token", () => {
+    const profile = completeProfile();
+    const first = createServerConfig(
+      profile,
+      { configRoot: "/tmp/config", development: true },
+      () => "first-process-token-12345",
+    );
+    const second = createServerConfig(
+      profile,
+      { configRoot: "/tmp/config", development: true },
+      () => "second-process-token-1234",
+    );
 
     expect(first).toMatchObject({
       host: "localhost",
       port: 4100,
-      corsOrigins: ["https://ui.example"],
-      trustProxy: ["127.0.0.1", "10.0.0.0/8"],
-      rateLimitMax: 20,
-      rateLimitWindowMs: 10_000,
       databaseUrl,
+      gatewayToken: "first-process-token-12345",
+      logLevel: "debug",
+      logFormat: "pretty",
       development: true,
-      gatewayAllowlist: { platforms: ["qq"], userIds: ["user-1", "user-2"] },
+      napcat: { enabled: false },
     });
-    expect(first.gatewayToken).toMatch(/^[A-Za-z0-9_-]{32,}$/u);
-    expect(first.gatewayToken).not.toBe(environment.KAGUYA_GATEWAY_TOKEN);
-    expect(second.gatewayToken).not.toBe(first.gatewayToken);
+    expect(second.gatewayToken).toBe("second-process-token-1234");
   });
 
-  it("requires the PostgreSQL URL", () => {
-    expect(() => readServerConfig({})).toThrow(
-      "KAGUYA_DATABASE_URL is required",
-    );
+  it("requires a complete Profile runtime without exposing its values", () => {
+    const profile = { ...completeProfile(), runtime: undefined };
+    expect(() =>
+      createServerConfig(profile, {
+        configRoot: "/tmp/config",
+        development: false,
+      }),
+    ).toThrow("Selected Profile runtime configuration is invalid");
   });
 
   it("accepts only explicit loopback hosts", () => {
@@ -50,32 +64,88 @@ describe("readServerConfig", () => {
       expect(() => assertLoopbackHost(host)).not.toThrow();
     }
     for (const host of ["0.0.0.0", "192.168.1.2", "example.com"]) {
-      expect(() =>
-        readServerConfig({
-          KAGUYA_DATABASE_URL: databaseUrl,
-          KAGUYA_HOST: host,
-        }),
-      ).toThrow("KAGUYA_HOST must be 127.0.0.1, localhost, or ::1");
+      expect(() => assertLoopbackHost(host)).toThrow("must be loopback");
     }
   });
 
-  it("requires a URL when NapCat is enabled", () => {
-    expect(() =>
-      readServerConfig({
-        KAGUYA_DATABASE_URL: databaseUrl,
-        KAGUYA_NAPCAT_ENABLED: "true",
-      }),
-    ).toThrow("KAGUYA_NAPCAT_WS_URL is required");
+  it("maps the selected Profile NapCat platform", () => {
+    const profile = completeProfile({
+      platforms: [
+        {
+          id: "napcat.qq.primary",
+          type: "napcat",
+          enabled: true,
+          credentials: { accessToken: "secret-token" },
+          settings: {
+            adapterId: "napcat.qq.primary",
+            wsUrl: "ws://127.0.0.1:3001",
+            selfId: "10001",
+            reconnectMs: 500,
+          },
+        },
+      ],
+    });
+    expect(
+      createServerConfig(profile, {
+        configRoot: "/tmp/config",
+        development: false,
+      }).napcat,
+    ).toEqual({
+      enabled: true,
+      adapterId: "napcat.qq.primary",
+      wsUrl: "ws://127.0.0.1:3001",
+      accessToken: "secret-token",
+      selfId: "10001",
+      reconnectMs: 500,
+    });
   });
 
-  it("rejects legacy split-service variables without exposing values", () => {
-    for (const name of ["KAGUYA_API_HOST", "KAGUYA_LLM_API_KEY"]) {
-      expect(() =>
-        readServerConfig({
-          KAGUYA_DATABASE_URL: databaseUrl,
-          [name]: "secret",
-        }),
-      ).toThrow("no longer supported");
+  it("rejects retired runtime variables without exposing values", () => {
+    for (const name of [
+      "KAGUYA_DATABASE_URL",
+      "KAGUYA_HOST",
+      "KAGUYA_NAPCAT_ACCESS_TOKEN",
+      "KAGUYA_LOG_DESTINATION",
+      "KAGUYA_LLM_API_KEY",
+    ]) {
+      const error = (() => {
+        try {
+          readServerBootstrapConfig({ [name]: "private-value" });
+        } catch (thrown) {
+          return thrown;
+        }
+      })();
+      expect(String(error)).toContain(name);
+      expect(String(error)).not.toContain("private-value");
     }
   });
 });
+
+function completeProfile(
+  overrides: Partial<UserConfigProfile> = {},
+): UserConfigProfile {
+  return {
+    version: 1,
+    id: "default",
+    name: "default",
+    ai: { providers: [] },
+    memory: { enabled: false },
+    platforms: [],
+    plugins: [],
+    runtime: {
+      host: "localhost",
+      port: 4100,
+      databaseMode: "external",
+      databaseUrl,
+      webDistPath: "apps/web/dist",
+      corsOrigins: [],
+      trustProxy: false,
+      rateLimitMax: 20,
+      rateLimitWindowMs: 10_000,
+      logLevel: "debug",
+      logFormat: "pretty",
+      gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
+    },
+    ...overrides,
+  };
+}

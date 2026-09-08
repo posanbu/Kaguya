@@ -11,7 +11,12 @@ import { describe, expect, it } from "vitest";
 import { freezeInformationAtom, informationIdSchema, z } from "@kaguya/schema";
 import { defineInformationKind } from "@kaguya/sdk";
 
-import { KaguyaDatabase } from "./index.js";
+import type { SqlResult } from "./driver.js";
+import {
+  assertSupportedPostgresVersion,
+  KaguyaDatabase,
+  UnsupportedPostgresVersionError,
+} from "./index.js";
 import {
   createPostgresTestingDatabase,
   createTestingDatabase,
@@ -54,6 +59,15 @@ describe("KaguyaDatabase", () => {
     TEST_TIMEOUT,
   );
 
+  it("accepts PostgreSQL 17 and rejects other server major versions", async () => {
+    await expect(
+      assertSupportedPostgresVersion(versionDatabase("170006")),
+    ).resolves.toBeUndefined();
+    await expect(
+      assertSupportedPostgresVersion(versionDatabase("160012")),
+    ).rejects.toEqual(new UnsupportedPostgresVersionError(17, 16));
+  });
+
   it(
     "rejects direct UPDATE and DELETE statements on stored atoms",
     async () => {
@@ -89,6 +103,19 @@ describe("KaguyaDatabase", () => {
     TEST_TIMEOUT,
   );
 });
+
+function versionDatabase(serverVersion: string) {
+  return {
+    async query<Row extends Record<string, unknown>>(): Promise<
+      SqlResult<Row>
+    > {
+      return {
+        rows: [{ server_version_num: serverVersion }] as unknown as Row[],
+        rowCount: 1,
+      };
+    },
+  };
+}
 
 describePostgres("KaguyaDatabase migrations (PostgreSQL)", () => {
   it(

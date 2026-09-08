@@ -738,6 +738,7 @@ function isUserConfigProfile(value: unknown): value is UserConfigProfile {
     isProfileMemory(value.memory) &&
     isProfilePlatformArray(value.platforms) &&
     isProfilePluginArray(value.plugins) &&
+    !("runtime" in value) &&
     (value.review === undefined || isProfileReview(value.review))
   );
 }
