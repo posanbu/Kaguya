@@ -9,6 +9,8 @@
  * 输入输出与副作用：用内存 FakeWebSocket/transport 触发连接事件和计时器；
  * 测试结束会恢复全局 WebSocket 并停止 supervisor。
  */
+import { Writable } from "node:stream";
+
 import { closeLogger, createLogger } from "@kaguya/logger";
 import { GatewayAllowlist } from "@kaguya/runtime";
 import type {
@@ -59,6 +61,28 @@ class FakeWebSocket {
 }
 
 const originalWebSocket = globalThis.WebSocket;
+
+class LogStream extends Writable {
+  readonly chunks: string[] = [];
+
+  override _write(
+    chunk: Buffer | string,
+    _encoding: BufferEncoding,
+    callback: (error?: Error | null) => void,
+  ): void {
+    this.chunks.push(chunk.toString());
+    callback();
+  }
+
+  logs(): Record<string, unknown>[] {
+    return this.chunks
+      .join("")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+  }
+}
 
 afterEach(() => {
   globalThis.WebSocket = originalWebSocket;
@@ -121,6 +145,7 @@ describe("WebSocketJsonTransport", () => {
 
 it("applies configured NapCat allowlists before submitting through ingress", async () => {
   globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+  const logStream = new LogStream();
   const submitted: PlatformInboundMessage[] = [];
   const ingress: InformationIngress = {
     submit: async (message) => {
@@ -130,7 +155,7 @@ it("applies configured NapCat allowlists before submitting through ingress", asy
   };
   const logger = createLogger({
     service: "napcat-composition-test",
-    level: "silent",
+    stream: logStream,
   });
   const allowlist = new GatewayAllowlist({
     platforms: ["qq"],
@@ -183,6 +208,24 @@ it("applies configured NapCat allowlists before submitting through ingress", asy
     text: "hello",
   });
   expect(submitted[0]).not.toHaveProperty("traceId");
+  expect(logStream.logs()).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        event: "napcat.inbound.filtered",
+        adapterId: "napcat.qq.main",
+        platformMessageId: "12344",
+        targetKind: "private",
+      }),
+      expect.objectContaining({
+        event: "napcat.inbound.accepted",
+        adapterId: "napcat.qq.main",
+        platformMessageId: "12345",
+        targetKind: "private",
+      }),
+    ]),
+  );
+  expect(JSON.stringify(logStream.logs())).not.toContain("denied");
+  expect(JSON.stringify(logStream.logs())).not.toContain("hello");
   await supervisor.stop();
   await closeLogger(logger);
 });

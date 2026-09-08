@@ -1049,8 +1049,8 @@ function NapCatManagementScreen({
             </button>
           </div>
           <p className="setup-intro">
-            填写 NapCat OneBot 反向 WebSocket 参数。保存后需要重启
-            Kaguya，重启时才会建立连接。
+            填写 NapCat OneBot 正向 WebSocket（服务器）参数。保存后需要 重启
+            Kaguya，重启时适配器会作为客户端建立连接。
           </p>
           {error ? (
             <div className="error-banner" role="alert">
@@ -1078,7 +1078,7 @@ function NapCatManagementScreen({
                 <span>启用 NapCat</span>
               </label>
               <label className="field">
-                <span>反向 WebSocket 地址</span>
+                <span>正向 WebSocket 服务器地址</span>
                 <input
                   type="url"
                   value={wsUrl}
