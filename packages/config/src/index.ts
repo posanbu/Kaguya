@@ -12,7 +12,7 @@
  * 包级 typecheck、调用方自动补全与重构安全性。
  */
 export { ConfigError, configErrorCodes } from "./errors.js";
-export type { ConfigErrorCode } from "./errors.js";
+export type { ConfigErrorCode, ConfigValidationIssue } from "./errors.js";
 export {
   configurationSetupGuidance,
   ConfigIncompleteError,

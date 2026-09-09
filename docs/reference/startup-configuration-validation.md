@@ -17,6 +17,15 @@ validated.profile.ai;
 
 校验失败时抛出 `StartupConfigurationError`。错误包含 `code`、`path`、`message` 和可选的 `hint`，可直接用于终端摘要或结构化日志。错误摘要只描述字段和修复方向，不包含 API key、access token 或完整凭据。
 
+读取持久化 Profile 时，如果外层文件结构本身不符合 schema，`ConfigError` 的
+`validationIssues` 会提供同样脱敏的 `code`、`path`、`message` 和可选 `hint`。
+调用方应展示这些诊断项，而不是记录 Profile 正文或原始异常栈。
+
+Server 启动失败日志使用稳定的 `phase` 标记失败位置：`configuration`、
+`database`、`runtime`、`http_application`、`web_ui`、`listen` 或
+`adapter_start`。日志同时包含安全的 `errorType`、可用时的 `errorCode`，以及配置
+`issues`；只有数据库连接、迁移或受管 PostgreSQL/Docker 检查失败才归类为数据库问题。
+
 ## 校验范围
 
 校验按照配置依赖关系分为几个层次：

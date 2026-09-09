@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -71,6 +71,35 @@ describe("startup configuration validation", () => {
 
     expect(error).toBeInstanceOf(StartupConfigurationError);
     expect(JSON.stringify(error)).not.toContain("secret-token-value");
+  });
+
+  it("surfaces safe persisted Profile schema diagnostics", async () => {
+    const root = await createRoot();
+    const path = join(root, "profiles", "profile_default.json");
+    const profile = JSON.parse(await readFile(path, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    profile.runtime = {
+      ...completeReplacement().runtime,
+      databaseUrl: "postgresql://user:persisted-secret@127.0.0.1:5432/kaguya",
+      gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
+    };
+    await writeFile(path, JSON.stringify(profile), "utf8");
+
+    const error = await validateStartupConfiguration({ rootDir: root }).catch(
+      (thrown: unknown) => thrown,
+    );
+
+    expect(error).toMatchObject({
+      issues: [
+        expect.objectContaining({
+          code: "invalid_type",
+          path: "runtime.gatewayAllowlist",
+        }),
+      ],
+    });
+    expect(JSON.stringify(error)).not.toContain("persisted-secret");
   });
 });
 

@@ -214,6 +214,10 @@ describe("configuration management", () => {
       await writeFile(profilePath, `${JSON.stringify(persisted, null, 2)}\n`);
       const management = await createConfigurationManagement(root);
 
+      await expect(
+        management.getRuntimeProfile(original.id),
+      ).resolves.toMatchObject({ runtime: runtimeFixture });
+
       const created = await management.createProfile("inherits-runtime");
       expect(created.profile.gatewayAllowlist).toEqual([]);
       expect(created.profile).not.toHaveProperty("runtime");
