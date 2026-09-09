@@ -318,13 +318,22 @@ async function submitDecision(
   core: InformationCore,
   database: Awaited<ReturnType<typeof createTestingDatabase>>,
   action: "speak" | "wait" | "silent",
+  candidateInformationId?: string,
 ) {
   const state = await atoms(database);
   const claim = state.find(
-    ({ kind }) => kind === turnClaimedInformationKind.kind,
+    (atom) =>
+      atom.kind === turnClaimedInformationKind.kind &&
+      (candidateInformationId === undefined ||
+        (atom.payload as any).candidateInformationId ===
+          candidateInformationId),
   )!;
   const turnContext = state.find(
-    ({ kind }) => kind === turnContextCompletedInformationKind.kind,
+    (atom) =>
+      atom.kind === turnContextCompletedInformationKind.kind &&
+      (candidateInformationId === undefined ||
+        (atom.payload as any).candidateInformationId ===
+          candidateInformationId),
   )!;
   const payload = turnContext.payload as any;
   return core.commitTerminal(
@@ -664,5 +673,20 @@ describe("heartflow", () => {
         (input: any) => input.informationId,
       ),
     ).toEqual([first.inbound.informationId, second.inbound.informationId]);
+
+    await submitDecision(
+      core,
+      database,
+      "speak",
+      second.candidate.informationId,
+    );
+    const reply = await waitForKind(
+      database,
+      replyRequestedInformationKind.kind,
+    );
+    expect(reply.payload).toMatchObject({
+      text: "second",
+      source: { platformMessageId: "second" },
+    });
   });
 });

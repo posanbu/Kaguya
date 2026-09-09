@@ -232,6 +232,7 @@ export const modelTaskSelectionPolicySchema = z
     tier: z.enum(["light", "heavy"]),
   })
   .strict();
+export const modelTaskOutputModeSchema = z.enum(["text", "object"]);
 export const modelTaskResolvedModelSchema = z
   .object({
     providerId: nonBlankString,
@@ -253,6 +254,7 @@ export const modelTaskMetadataSchema = z
   .object({
     taskId: nonBlankString,
     version: nonBlankString,
+    outputMode: modelTaskOutputModeSchema.default("object"),
     sourceInformationId: informationIdSchema,
     contextInformationId: informationIdSchema,
     contextInformationIds: z.array(informationIdSchema).min(1),
@@ -293,6 +295,13 @@ export const modelTaskSafeErrorSchema = z
   .object({
     name: z.literal("ModelTaskError"),
     kind: z.enum(["retryable", "non-retryable"]),
+    stage: z
+      .enum([
+        "provider-request",
+        "structured-output-parse",
+        "task-schema-validation",
+      ])
+      .default("provider-request"),
     message: z.literal("Model task generation failed"),
   })
   .strict();
@@ -321,6 +330,7 @@ export const modelTaskRequestedInformationKind = defineInformationKind({
       tier: payload.selectionPolicy.tier,
       providerId: payload.resolvedModel.providerId,
       modelId: payload.resolvedModel.modelId,
+      outputMode: payload.outputMode,
       promptCharacters: Array.from(payload.prompt.text).length,
       promptFragmentCount: payload.prompt.fragments.length,
       ...promptPreview(payload.prompt.text),
@@ -376,6 +386,7 @@ export const modelTaskCompletedInformationKind = defineInformationKind({
       tier: payload.selectionPolicy.tier,
       providerId: payload.resolvedModel.providerId,
       modelId: payload.resolvedModel.modelId,
+      outputMode: payload.outputMode,
       durationMs: payload.durationMs,
     }),
   },
@@ -410,8 +421,10 @@ export const modelTaskFailedInformationKind = defineInformationKind({
       tier: payload.selectionPolicy.tier,
       providerId: payload.resolvedModel.providerId,
       modelId: payload.resolvedModel.modelId,
+      outputMode: payload.outputMode,
       durationMs: payload.durationMs,
       errorKind: payload.error.kind,
+      failureStage: payload.error.stage,
     }),
   },
 });
@@ -439,6 +452,7 @@ export const modelTaskCancelledInformationKind = defineInformationKind({
       tier: payload.selectionPolicy.tier,
       providerId: payload.resolvedModel.providerId,
       modelId: payload.resolvedModel.modelId,
+      outputMode: payload.outputMode,
       durationMs: payload.durationMs,
     }),
   },

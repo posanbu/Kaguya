@@ -1,17 +1,17 @@
 /**
  * 功能概述：通过宿主批准的 Model Task 能力将回复请求、通用完成事实、assistant 与投递组成 durable DAG。
  * 主要职责：createLlmReplyModule 声明能力和共享 completed definition；reply handler 经
- * context.select 重载冻结 turn context 与可选 Memory，再通过 context.use 调用 core.reply.generate v1，
+ * context.select 重载冻结 turn、同会话历史与可选 Memory，再通过 context.use 调用 core.reply.generate v2，
  * replyTaskOutputSchema 严格校验文本。完成 handler 按 task/version/tier
  * 与 definitionId 接受可由同一定义多个 activation 共享的任务赢家，经 completedReplySelector 沿
  * completed→requested→reply 授权读取来源，再以包含当前 instanceId 的 registerOnce key 派生各自输出。
  * 代码库关系：Runtime 注入 token 和 definition 身份，Host 提供 activation、受限 Selector 与 claim fencing；
- * reply-context 保留原有 Prompt/Memory 顺序与 provenance，selectOutbound 保留 source/fixed 路由。
+ * reply-context 按固定中文层次组装 Prompt 并保留 provenance，selectOutbound 保留 source/fixed 路由。
  * ModelTaskRequest/Result/Capability 是模块侧结构类型；completed definition 的泛型保留宿主 payload
  * 与日志投影契约，不导入 Runtime source/dist、provider、模型、密钥或 Core，也不创建第二份 token。
  * 输入输出与副作用：requested/terminal 生命周期完全归 ModelTaskClient；failed/cancelled 不触发业务写入，
  * completed 广播仅校验获胜 definition、不校验 instance；assistant 按自身 originating instance 过滤，
- * 重投使用唯一操作槽；旧 reply-only completed payload schema 已删除，公共输出契约由 replyTaskOutputSchema 提供。
+ * 重投使用唯一操作槽；回复任务的公共输出契约是经过裁剪且非空的纯文本。
  */
 import {
   type CompiledPrompt,
@@ -47,11 +47,13 @@ import {
 import {
   compileReplyPromptFromInformation,
   inboundMemoryPromptRenderer,
+  assistantHistoryPromptRenderer,
   replyPromptRenderer,
   memoryPromptRenderer,
   currentAcceptedMessageSelector,
   turnReplyContextSelector,
 } from "./reply-context.js";
+import { ZH_CN_REPLY_PROMPT } from "./reply-prompt.js";
 
 export const modelTierSchema = z.enum(["light", "heavy"]);
 export type ModelTier = z.infer<typeof modelTierSchema>;
@@ -101,23 +103,28 @@ export const replyModelDispatchingDiagnostic = defineModuleDiagnostic({
   payloadSchema: z
     .object({
       taskId: z.literal("core.reply.generate"),
-      taskVersion: z.literal("1"),
+      taskVersion: z.literal("2"),
+      outputMode: z.literal("text"),
+      promptVersion: z.literal("zh-CN/v1"),
       tier: modelTierSchema,
       promptCharacters: z.number().int().nonnegative(),
       promptFragmentCount: z.number().int().nonnegative(),
+      historyMessageCount: z.number().int().nonnegative(),
+      historyCharacters: z.number().int().nonnegative(),
+      memoryCharacters: z.number().int().nonnegative(),
+      targetCharacters: z.number().int().nonnegative(),
     })
     .strict(),
   project: (payload) => ({ ...payload }),
 });
 
-export const replyTaskOutputSchema = z
-  .object({ text: z.string().min(1) })
-  .strict();
+export const replyTaskOutputSchema = z.string().trim().min(1);
 
 export interface ModelTaskRequest<TOutput> {
   readonly task: {
     readonly taskId: string;
     readonly version: string;
+    readonly outputMode: "text" | "object";
     readonly outputSchema: z.ZodType<TOutput>;
     readonly allowedTiers: readonly ("light" | "heavy")[];
   };
@@ -142,6 +149,10 @@ export type ModelTaskResult<TOutput> = ModelTaskResultIdentity &
         readonly error: {
           readonly name: "ModelTaskError";
           readonly kind: "retryable" | "non-retryable";
+          readonly stage:
+            | "provider-request"
+            | "structured-output-parse"
+            | "task-schema-validation";
           readonly message: "Model task generation failed";
         };
       }
@@ -214,6 +225,7 @@ export function createLlmReplyModule<
         replyPromptRenderer,
         memoryPromptRenderer,
         inboundMemoryPromptRenderer,
+        assistantHistoryPromptRenderer,
       ],
       requires: [modelTaskCapability],
       provides: [],
@@ -269,15 +281,24 @@ export function createLlmReplyModule<
               throw new Error("Reply must have one context");
             await context.report(replyModelDispatchingDiagnostic, {
               taskId: "core.reply.generate",
-              taskVersion: "1",
+              taskVersion: "2",
+              outputMode: "text",
+              promptVersion: ZH_CN_REPLY_PROMPT.version,
               tier: settings.modelTier,
               promptCharacters: Array.from(prompt.text).length,
               promptFragmentCount: prompt.fragments.length,
+              historyMessageCount: prompt.fragments.filter(
+                ({ source }) => source === "history",
+              ).length,
+              historyCharacters: fragmentCharacters(prompt, "history"),
+              memoryCharacters: fragmentCharacters(prompt, "memory"),
+              targetCharacters: fragmentCharacters(prompt, "state"),
             });
             await context.use(modelTaskCapability).execute({
               task: {
                 taskId: "core.reply.generate",
-                version: "1",
+                version: "2",
+                outputMode: "text",
                 outputSchema: replyTaskOutputSchema,
                 allowedTiers: ["light", "heavy"],
               },
@@ -299,7 +320,7 @@ export function createLlmReplyModule<
           async (completed, context) => {
             if (
               completed.payload.taskId !== "core.reply.generate" ||
-              completed.payload.version !== "1" ||
+              completed.payload.version !== "2" ||
               completed.payload.activation.definitionId !==
                 activation.definitionId ||
               completed.payload.selectionPolicy.tier !== settings.modelTier
@@ -318,7 +339,7 @@ export function createLlmReplyModule<
               assistantTextInformationKind,
               {
                 payload: {
-                  text: output.text,
+                  text: output,
                   source: reply.payload.source,
                   originatingModuleInstanceId: context.instanceId,
                   turn: (reply.payload as any).turn ?? null,
@@ -473,4 +494,16 @@ function selectOutbound(
           }
         : { kind: "text", text },
   };
+}
+
+function fragmentCharacters(
+  prompt: CompiledPrompt,
+  source: "history" | "memory" | "state",
+): number {
+  return prompt.fragments
+    .filter((fragment) => fragment.source === source)
+    .reduce(
+      (total, fragment) => total + Array.from(fragment.content).length,
+      0,
+    );
 }

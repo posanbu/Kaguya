@@ -16,7 +16,10 @@ export function createRepeatingDeterministicModel(
   return new MockLanguageModelV3({
     provider: "kaguya-deterministic",
     modelId: "deterministic-model",
-    doGenerate: deterministicResult(output),
+    doGenerate: async (request) =>
+      deterministicResult(
+        request.responseFormat?.type === "text" ? textOutput(output) : output,
+      ),
   });
 }
 
@@ -37,10 +40,12 @@ export function createDeferredDeterministicModel(output: unknown): {
     model: new MockLanguageModelV3({
       provider: "kaguya-deterministic",
       modelId: "deferred-deterministic-model",
-      async doGenerate() {
+      async doGenerate(request) {
         markStarted?.();
         await gate;
-        return deterministicResult(output);
+        return deterministicResult(
+          request.responseFormat?.type === "text" ? textOutput(output) : output,
+        );
       },
     }),
     started,
@@ -50,12 +55,27 @@ export function createDeferredDeterministicModel(output: unknown): {
   };
 }
 
+function textOutput(output: unknown): unknown {
+  if (
+    typeof output === "object" &&
+    output !== null &&
+    !Array.isArray(output) &&
+    Object.keys(output).length === 1 &&
+    typeof (output as { text?: unknown }).text === "string"
+  )
+    return (output as { text: string }).text;
+  return output;
+}
+
 function deterministicResult(output: unknown) {
   return {
     content: [
       {
         type: "text" as const,
-        text: JSON.stringify(output) ?? "null",
+        text:
+          typeof output === "string"
+            ? output
+            : (JSON.stringify(output) ?? "null"),
       },
     ],
     finishReason: { unified: "stop" as const, raw: undefined },

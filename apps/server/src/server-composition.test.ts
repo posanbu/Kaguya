@@ -1078,6 +1078,7 @@ describe("unified server composition", () => {
       const generation = await composition.modelTask.client.generate({
         modelId: identity.modelId,
         prompt,
+        outputMode: "object",
         outputSchema,
       });
       return { identity, output: generation.output };

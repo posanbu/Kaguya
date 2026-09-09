@@ -12,7 +12,12 @@ import { describe, expect, it } from "vitest";
 
 import { KaguyaLlmClient, KaguyaLlmError } from "./client.js";
 
-const prompt: CompiledPrompt = { kind: "route", text: "hello", fragments: [], provenance: [] };
+const prompt: CompiledPrompt = {
+  kind: "route",
+  text: "hello",
+  fragments: [],
+  provenance: [],
+};
 const outputSchema = z.object({ answer: z.string() }).strict();
 
 describe("generic KaguyaLlmClient boundary", () => {
@@ -22,13 +27,29 @@ describe("generic KaguyaLlmClient boundary", () => {
       doGenerate: {
         content: [{ type: "text", text: '{"answer":"ok"}' }],
         finishReason: { unified: "stop", raw: undefined },
-        usage: { inputTokens: { total: 1, noCache: undefined, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } },
+        usage: {
+          inputTokens: {
+            total: 1,
+            noCache: undefined,
+            cacheRead: undefined,
+            cacheWrite: undefined,
+          },
+          outputTokens: { total: 1, text: 1, reasoning: undefined },
+        },
         warnings: [],
       },
     });
     const client = new KaguyaLlmClient({ model });
 
-    await expect(client.generate({ modelId: "model", prompt, outputSchema, signal })).resolves.toMatchObject({
+    await expect(
+      client.generate({
+        modelId: "model",
+        prompt,
+        outputMode: "object",
+        outputSchema,
+        signal,
+      }),
+    ).resolves.toMatchObject({
       output: { answer: "ok" },
     });
     expect(model.doGenerateCalls[0]?.abortSignal).toBe(signal);
@@ -36,10 +57,28 @@ describe("generic KaguyaLlmClient boundary", () => {
   });
 
   it("does not retry a retryable provider error when retries are disabled", async () => {
-    const providerError = new APICallError({ message: "secret endpoint", url: "https://secret.invalid", requestBodyValues: {}, isRetryable: true });
-    const model = new MockLanguageModelV3({ doGenerate: () => Promise.reject(providerError) });
+    const providerError = new APICallError({
+      message: "secret endpoint",
+      url: "https://secret.invalid",
+      requestBodyValues: {},
+      isRetryable: true,
+    });
+    const model = new MockLanguageModelV3({
+      doGenerate: () => Promise.reject(providerError),
+    });
     const client = new KaguyaLlmClient({ model });
-    await expect(client.generate({ modelId: "model", prompt, outputSchema })).rejects.toMatchObject({ kind: "retryable", message: "Language model request failed and may be retried" });
+    await expect(
+      client.generate({
+        modelId: "model",
+        prompt,
+        outputMode: "object",
+        outputSchema,
+      }),
+    ).rejects.toMatchObject({
+      kind: "retryable",
+      stage: "provider-request",
+      message: "Language model request failed and may be retried",
+    });
     expect(model.doGenerateCalls).toHaveLength(1);
   });
 
@@ -49,14 +88,37 @@ describe("generic KaguyaLlmClient boundary", () => {
         doGenerate: {
           content: [{ type: "text", text: '{"wrong":true}' }],
           finishReason: { unified: "stop", raw: undefined },
-          usage: { inputTokens: { total: undefined, noCache: undefined, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: undefined, text: undefined, reasoning: undefined } },
+          usage: {
+            inputTokens: {
+              total: undefined,
+              noCache: undefined,
+              cacheRead: undefined,
+              cacheWrite: undefined,
+            },
+            outputTokens: {
+              total: undefined,
+              text: undefined,
+              reasoning: undefined,
+            },
+          },
           warnings: [],
         },
       }),
     });
 
-    await expect(client.generate({ modelId: "model", prompt, outputSchema })).rejects.toSatisfy(
-      (error) => error instanceof KaguyaLlmError && error.kind === "non-retryable" && !("cause" in error),
+    await expect(
+      client.generate({
+        modelId: "model",
+        prompt,
+        outputMode: "object",
+        outputSchema,
+      }),
+    ).rejects.toSatisfy(
+      (error) =>
+        error instanceof KaguyaLlmError &&
+        error.kind === "non-retryable" &&
+        error.stage === "structured-output-parse" &&
+        !("cause" in error),
     );
   });
 });

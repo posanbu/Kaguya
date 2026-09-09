@@ -253,9 +253,9 @@ function completedAtom() {
     occurredAt: "2026-09-04T00:00:01.000Z",
     source: "runtime:model-task",
     payload: {
-      output: { text: "Hello." },
+      output: "Hello.",
       taskId: "core.reply.generate",
-      version: "1",
+      version: "2",
       sourceInformationId: reply.informationId,
       activation: { instanceId: "reply-1", definitionId: "demo.reply.llm" },
       selectionPolicy: { tier: "heavy" },
@@ -547,7 +547,7 @@ describe("createLlmReplyModule", () => {
         request = input;
         return {
           status: "completed",
-          output: input.task.outputSchema.parse({ text: "Hello." }),
+          output: input.task.outputSchema.parse("Hello."),
           requestedInformationId: "requested-1",
           terminalInformationId: "completion-1",
         };
@@ -586,7 +586,8 @@ describe("createLlmReplyModule", () => {
     expect(request).toMatchObject({
       task: {
         taskId: "core.reply.generate",
-        version: "1",
+        version: "2",
+        outputMode: "text",
         allowedTiers: ["light", "heavy"],
       },
       sourceInformationId: "reply-1",
@@ -594,21 +595,15 @@ describe("createLlmReplyModule", () => {
       activation: { instanceId: "reply-1", definitionId: "demo.reply.llm" },
       selectionPolicy: { tier: "heavy" },
       prompt: {
-        provenance: [
+        provenance: expect.arrayContaining([
           expect.objectContaining({ informationId: "memory-1" }),
           expect.objectContaining({ informationId: "reply-1" }),
-        ],
+        ]),
       },
     });
     expect(request!.contextAtoms).toBe(selected);
-    expect(request!.task.outputSchema.safeParse({ text: "ok" }).success).toBe(
-      true,
-    );
-    for (const output of [
-      { text: "" },
-      { text: 1 },
-      { text: "ok", extra: true },
-    ])
+    expect(request!.task.outputSchema.safeParse("ok").success).toBe(true);
+    for (const output of ["", 1, { text: "ok" }])
       expect(request!.task.outputSchema.safeParse(output).success).toBe(false);
     expect(registrations).toEqual([]);
     const unavailable = handlerContext(
@@ -636,6 +631,7 @@ describe("createLlmReplyModule", () => {
                 error: {
                   name: "ModelTaskError",
                   kind: "non-retryable",
+                  stage: "provider-request",
                   message: "Model task generation failed",
                 },
               }
@@ -771,7 +767,7 @@ describe("createLlmReplyModule", () => {
     );
     for (const payload of [
       { ...completed.payload, taskId: "other.task" },
-      { ...completed.payload, version: "2" },
+      { ...completed.payload, version: "1" },
       {
         ...completed.payload,
         selectionPolicy: { tier: "light" },
