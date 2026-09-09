@@ -41,8 +41,9 @@ creating the root directory, `profiles/`, `index.json`, or a profile.
 throws `CONFIG_SETUP_REQUIRED` and never creates files implicitly.
 
 After bootstrap, replace the selected profile with explicit user-provided
-settings. This example updates the reserved `default` profile with two
-distinct `providerId:modelId` targets in one enabled provider:
+settings. Light and heavy tiers are independent routing entries and may share
+the same `providerId:modelId` target. This example uses two targets in one
+enabled provider:
 
 ```ts
 const configs = await FileUserConfigManager.open({
