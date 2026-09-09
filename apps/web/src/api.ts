@@ -91,6 +91,7 @@ export interface UserConfigProfile {
   readonly version: 1;
   readonly id: string;
   readonly name: string;
+  readonly gatewayAllowlist: readonly string[];
   readonly ai: {
     readonly defaultProviderId?: string;
     readonly modelTiers?: {
@@ -167,6 +168,7 @@ export interface CreateProfileInput {
 
 export interface ReplaceProfileInput {
   readonly name: string;
+  readonly gatewayAllowlist: readonly string[];
   readonly acknowledgedWarnings: readonly string[];
   readonly ai: {
     readonly defaultProviderId: string;
@@ -734,6 +736,7 @@ function isUserConfigProfile(value: unknown): value is UserConfigProfile {
     value.version === 1 &&
     typeof value.id === "string" &&
     typeof value.name === "string" &&
+    isStringArray(value.gatewayAllowlist) &&
     isProfileAi(value.ai) &&
     isProfileMemory(value.memory) &&
     isProfilePlatformArray(value.platforms) &&

@@ -55,7 +55,7 @@ Registry 可以保存多个 Profile，但 Server 只用一个显式 selected Pro
 
 **编辑未选中 Profile** — 只改变磁盘中的备用配置，通常不要求重启。
 
-**编辑 selected Profile** — 磁盘可见配置变化，但当前进程仍持有旧对象，返回 `restartRequired: true`。Web 完整替换不会覆盖隐藏 runtime。
+**编辑 selected Profile** — 磁盘可见配置变化，但当前进程仍持有旧对象，返回 `restartRequired: true`。Web 完整替换只把顶层 `gatewayAllowlist` 合并回隐藏 runtime，其他 runtime 字段保持不变；目标缺少 runtime 时返回冲突。
 
 **切换 selected Profile** — 全局选择变化，返回 `restartRequired: true`。
 
@@ -70,6 +70,8 @@ Profile 的 Provider、models、默认 Provider、light/heavy targets 和引用�
 `memory.enabled` 缺省为 `false`。关闭时不装配内置 PostgreSQL Memory 召回或 capability，但 association terminal 仍会以 unavailable 结果推进回复；这不是一次返回空命中的真实检索。
 
 缺少 Base URL、API Key，或平台、插件为空，可能形成 warning。用户必须显式确认允许的 warning；完整替换 Profile 时，旧 acknowledgement 不会自动继承，避免把过去的确认误用到新配置。
+
+Gateway allowlist 是 `platform:group|private:target_id` 字符串数组。平台和目标支持 `*`，规则按 OR 匹配，空数组拒绝所有非 Web 消息；非法规则在 Runtime 解析时静默忽略。Web 入口绕过该策略并继续由 Gateway Token 鉴权。
 
 ## 资源创建与关闭
 

@@ -20,6 +20,7 @@
  * 重启标记只存在于当前进程实例内，重新创建门面后会重新按磁盘状态计算 readiness。
  */
 import {
+  ConfigError,
   FileUserConfigManager,
   inspectUserConfigProfile,
   withRegistryReadiness,
@@ -47,19 +48,30 @@ export interface ProfileRegistryMetadata {
   readonly profiles: readonly UserConfigProfileMetadata[];
 }
 
+export type EditableUserConfigProfile = Omit<UserConfigProfile, "runtime"> & {
+  readonly gatewayAllowlist: readonly string[];
+};
+
+export type EditableProfileReplacement = Omit<
+  ReplaceUserConfigProfileInput,
+  "runtime"
+> & {
+  readonly gatewayAllowlist: readonly string[];
+};
+
 export interface ProfileMutationResult {
-  readonly profile: UserConfigProfile;
+  readonly profile: EditableUserConfigProfile;
   readonly restartRequired: boolean;
 }
 
 export interface ConfigurationManagement {
   inspect(): Promise<ConfigurationSetupStatus>;
   listProfiles(): Promise<ProfileRegistryMetadata>;
-  getProfile(profileId: string): Promise<UserConfigProfile>;
+  getProfile(profileId: string): Promise<EditableUserConfigProfile>;
   createProfile(name: string): Promise<ProfileMutationResult>;
   replaceProfile(
     profileId: string,
-    replacement: ReplaceUserConfigProfileInput,
+    replacement: EditableProfileReplacement,
   ): Promise<ProfileMutationResult>;
   selectProfile(profileId: string): Promise<ProfileMutationResult>;
   deleteProfile(profileId: string): Promise<ProfileMutationResult>;
@@ -104,7 +116,7 @@ export async function createConfigurationManagement(
       };
     },
     async getProfile(profileId) {
-      return manager.getProfile(profileId);
+      return toEditableProfile(await manager.getProfile(profileId));
     },
     async createProfile(name) {
       const selected = await manager.getProfile(manager.getSelectedProfileId());
@@ -120,29 +132,39 @@ export async function createConfigurationManagement(
           runtime: selected.runtime,
         });
       }
-      return { profile, restartRequired };
+      return { profile: toEditableProfile(profile), restartRequired };
     },
     async replaceProfile(profileId, replacement) {
       const current = await manager.getProfile(profileId);
+      if (current.runtime === undefined) {
+        throw new ConfigError(
+          "CONFIG_INCOMPLETE",
+          "Profile runtime is required to edit the gateway allowlist",
+        );
+      }
+      const { gatewayAllowlist, ...visibleReplacement } = replacement;
       const profile = await manager.replaceProfile(profileId, {
-        ...replacement,
-        ...(current.runtime === undefined ? {} : { runtime: current.runtime }),
+        ...visibleReplacement,
+        runtime: {
+          ...current.runtime,
+          gatewayAllowlist: [...gatewayAllowlist],
+        },
       });
       restartRequired =
         restartRequired || manager.getSelectedProfileId() === profileId;
-      return { profile, restartRequired };
+      return { profile: toEditableProfile(profile), restartRequired };
     },
     async selectProfile(profileId) {
       const selectionChanged = manager.getSelectedProfileId() !== profileId;
       await manager.selectProfile(profileId);
       const profile = await manager.getProfile(profileId);
       restartRequired = restartRequired || selectionChanged;
-      return { profile, restartRequired };
+      return { profile: toEditableProfile(profile), restartRequired };
     },
     async deleteProfile(profileId) {
       const profile = await manager.getProfile(profileId);
       await manager.deleteProfile(profileId);
-      return { profile, restartRequired };
+      return { profile: toEditableProfile(profile), restartRequired };
     },
     getNapCatSettings() {
       return readSelectedNapCatSettings(manager);
@@ -152,6 +174,16 @@ export async function createConfigurationManagement(
       restartRequired = true;
       return saved;
     },
+  };
+}
+
+function toEditableProfile(
+  profile: UserConfigProfile,
+): EditableUserConfigProfile {
+  const { runtime, ...visible } = structuredClone(profile);
+  return {
+    ...visible,
+    gatewayAllowlist: [...(runtime?.gatewayAllowlist ?? [])],
   };
 }
 

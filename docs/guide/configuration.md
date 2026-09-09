@@ -24,7 +24,7 @@ flowchart TD
 
 ## Runtime 与数据库
 
-Profile 的 `runtime` 保存 host、port、`databaseMode`、`databaseUrl`、Web 路径、CORS、proxy、限流、日志和 gateway allowlist。旧 Profile 没有 `databaseMode` 时按 `external` 处理。外部数据库只通过 Profile JSON 配置，Web API 不返回也不接收 runtime。
+Profile 的 `runtime` 保存 host、port、`databaseMode`、`databaseUrl`、Web 路径、CORS、proxy、限流、日志和 gateway allowlist。旧 Profile 没有 `databaseMode` 时按 `external` 处理。外部数据库只通过 Profile JSON 配置；Web API 不返回或接收完整 runtime，只安全投影并更新其中的 gateway allowlist。
 
 `databaseMode: "managed"` 表示开发命令可以管理固定的本地容器；`databaseMode: "external"` 表示所有命令都只连接 Profile URL，不调用 Docker。两种模式都检查 PostgreSQL 17。数据库检查独立于 AI readiness；失败时 Server 降级启动，Adapter 仍可连接。
 
@@ -56,6 +56,8 @@ Gateway Token 不写入 runtime。它在每次进程启动时安全随机生成�
 
 **Heavy Model** — 面向重量任务的模型 ID；可以与 Light Model 使用同一个 `provider:model` 目标。
 
+**网关白名单规则** — 每行一条 `platform:group|private:target_id`。群聊目标是 group ID，私聊目标是 user ID；`platform` 与目标 ID 支持 `*`。规则按 OR 匹配，空列表拒绝所有平台消息，非法非空行会保存但不生效。Web 消息不经过该白名单。
+
 **启用 Memory** — 默认关闭。关闭时 Runtime 仍保留联想与 Prompt 的处理形状，但不会读取、写入、召回或主动提取实际 Memory；显式开启后才使用内置 PostgreSQL 稀疏召回。
 
 **可选配置确认** — 当前 UI 会要求明确确认平台与插件可以暂时留空；系统不会替用户静默接受警告。
@@ -68,7 +70,7 @@ Gateway Token 不写入 runtime。它在每次进程启动时安全随机生成�
 
 **新建** — 创建未选中的 Profile，并继承当前 selected Profile 的隐藏 runtime，避免切换后失去数据库与 Server 配置。AI、平台和插件仍从空值开始。
 
-**编辑** — 对可见字段做完整替换，而不是局部 patch；Server 强制原样保留隐藏 runtime。保存当前选中的 Profile 会要求重启；编辑未选中的 Profile 通常不会影响正在运行的 Runtime。
+**编辑** — 对可见字段做完整替换，而不是局部 patch；Server 只把顶层 `gatewayAllowlist` 合并回隐藏 runtime，并原样保留其他 runtime 字段。目标 Profile 缺少 runtime 时会明确拒绝保存。保存当前选中的 Profile 会要求重启；编辑未选中的 Profile 通常不会影响正在运行的 Runtime。
 
 **选择** — 把某个 Profile 设为全局 selected。切换后需要重启。
 
@@ -99,3 +101,5 @@ Profile 保存成功和 Runtime 已采用新配置是两个时刻。Provider 客
 :::
 
 完整运行字段与退役变量见[环境变量与运行配置](../reference/environment-variables)，配置接口见[Profile API](../reference/profile-api)。旧版配置索引、`napcat.json` 和旧运行环境变量会被明确拒绝，不会自动迁移或删除。
+
+旧对象形式的 gateway allowlist 也不会迁移或兼容。升级已有 Profile 时，先在文件中把 `{platforms,userIds,groupIds}` 手工改为字符串数组，再通过 Web UI 管理。

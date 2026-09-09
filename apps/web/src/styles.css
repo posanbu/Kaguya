@@ -546,6 +546,7 @@ button:disabled {
 }
 
 .field input,
+.field textarea,
 .composer textarea {
   width: 100%;
   border: 1px solid #d9cabe;
@@ -565,7 +566,26 @@ button:disabled {
   font-weight: 400;
 }
 
+.field textarea {
+  min-height: 132px;
+  padding: 11px;
+  resize: vertical;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.65;
+}
+
+.field-help {
+  max-width: 72ch;
+  color: #735f52;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.6;
+}
+
 .field input:focus,
+.field textarea:focus,
 .composer textarea:focus {
   border-color: #df6f28;
   box-shadow: 0 0 0 3px rgb(223 111 40 / 14%);
@@ -1213,11 +1233,16 @@ button:disabled {
   color: #f0e4dc;
 }
 
+:root[data-theme="dark"] .field-help {
+  color: #c9b8ad;
+}
+
 :root[data-theme="dark"] .readiness-list code {
   color: #9bdfe1;
 }
 
 :root[data-theme="dark"] .field input,
+:root[data-theme="dark"] .field textarea,
 :root[data-theme="dark"] .composer textarea,
 :root[data-theme="dark"] .profile-list-item,
 :root[data-theme="dark"] .health-button,
@@ -1228,11 +1253,13 @@ button:disabled {
 }
 
 :root[data-theme="dark"] .field input::placeholder,
+:root[data-theme="dark"] .field textarea::placeholder,
 :root[data-theme="dark"] .composer textarea::placeholder {
   color: #9b8e8a;
 }
 
 :root[data-theme="dark"] .field input:focus,
+:root[data-theme="dark"] .field textarea:focus,
 :root[data-theme="dark"] .composer textarea:focus {
   border-color: var(--kaguya-cyan);
   box-shadow: 0 0 0 3px rgb(104 224 226 / 18%);

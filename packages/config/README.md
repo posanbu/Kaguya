@@ -82,7 +82,7 @@ await configs.replaceProfile("default", {
     rateLimitWindowMs: 60000,
     logLevel: "info",
     logFormat: "json",
-    gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
+    gatewayAllowlist: ["qq:group:778899", "qq:private:112233"],
   },
   platforms: [],
   plugins: [],
@@ -90,6 +90,13 @@ await configs.replaceProfile("default", {
   acknowledgedWarnings: ["platforms-empty", "plugins-empty"],
 });
 ```
+
+`runtime.gatewayAllowlist` is an array of case-sensitive
+`platform:group|private:target-id` rules. Rules are ORed; `platform` and the
+target ID accept `*`. An empty array denies every non-Web message. Malformed
+rules remain valid configuration strings but are ignored by the runtime.
+Legacy `{ platforms, userIds, groupIds }` objects are rejected and must be
+converted manually before opening the Profile in the Web editor.
 
 Create additional named profiles explicitly, then select one explicitly:
 

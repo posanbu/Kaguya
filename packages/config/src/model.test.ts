@@ -105,11 +105,44 @@ describe("user configuration schemas", () => {
       rateLimitWindowMs: 60_000,
       logLevel: "info",
       logFormat: "json",
-      gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
+      gatewayAllowlist: ["qq:group:778899", "*:private:*", "invalid"],
     });
 
     expect(runtime.databaseMode).toBe("external");
+    expect(runtime.gatewayAllowlist).toEqual([
+      "qq:group:778899",
+      "*:private:*",
+      "invalid",
+    ]);
     expect(runtime).not.toHaveProperty("gatewayToken");
+  });
+
+  it("rejects legacy gateway allowlist objects and non-string rules", () => {
+    const baseRuntime = {
+      host: "127.0.0.1",
+      port: 3000,
+      databaseUrl: "postgresql://profile:secret@database.example/kaguya",
+      webDistPath: "apps/web/dist",
+      corsOrigins: [],
+      trustProxy: false,
+      rateLimitMax: 30,
+      rateLimitWindowMs: 60_000,
+      logLevel: "info",
+      logFormat: "json",
+    };
+
+    expect(
+      runtimeConfigSchema.safeParse({
+        ...baseRuntime,
+        gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
+      }).success,
+    ).toBe(false);
+    expect(
+      runtimeConfigSchema.safeParse({
+        ...baseRuntime,
+        gatewayAllowlist: ["qq:group:778899", 42],
+      }).success,
+    ).toBe(false);
   });
 
   it("accepts the reserved default profile ID and rejects non-UUID names", () => {

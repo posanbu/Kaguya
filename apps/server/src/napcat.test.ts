@@ -157,11 +157,7 @@ it("applies configured NapCat allowlists before submitting through ingress", asy
     service: "napcat-composition-test",
     stream: logStream,
   });
-  const host = new AdapterHost(logger, {
-    platforms: ["qq"],
-    userIds: ["112233"],
-    groupIds: [],
-  });
+  const host = new AdapterHost(logger, ["qq:private:112233"]);
   host.register({
     adapterId: "napcat.qq.main",
     type: "napcat",

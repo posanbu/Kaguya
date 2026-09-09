@@ -82,7 +82,7 @@ function config(workspaceRoot: string): ServerConfig {
     webDistPath: join(workspaceRoot, "web"),
     logLevel: "silent",
     logFormat: "json",
-    gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
+    gatewayAllowlist: [],
     napcat: {
       enabled: false,
       adapterId: "napcat.qq.main",

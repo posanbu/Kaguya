@@ -47,9 +47,9 @@ Server 只允许监听 selected Profile `runtime.host` 中的 `127.0.0.1`、`loc
 
 ## 管理 Profile
 
-进入 Profile 管理后，先在列表中选择要编辑的 Profile，再填写名称、Base URL、API Key、light model 与 heavy model，并选择是否启用 Memory。Memory 默认关闭；关闭态不会向回复返回实际 Memory 信息。保存 selected Profile 或切换 selected Profile 后，按页面提示重启 Server。
+进入 Profile 管理后，先在列表中选择要编辑的 Profile，再填写名称、Base URL、API Key、light model、heavy model 与网关白名单，并选择是否启用 Memory。白名单文本框每行一条 `platform:group|private:target_id` 规则；保存时会修剪每行并移除空行，但保留重复或非法的非空行。Memory 默认关闭；关闭态不会向回复返回实际 Memory 信息。保存 selected Profile 或切换 selected Profile 后，按页面提示重启 Server。
 
-`default` Profile 不能删除；当前 selected Profile 也不能删除。创建新 Profile 会继承 selected Profile 的隐藏 runtime，但不会自动选中或改变正在运行的 Runtime。Web 不展示、返回或修改数据库 URL 等 runtime 字段。字段含义与操作顺序见[配置 Kaguya](./configuration)。
+`default` Profile 不能删除；当前 selected Profile 也不能删除。创建新 Profile 会继承 selected Profile 的隐藏 runtime，但不会自动选中或改变正在运行的 Runtime。Web 不展示、返回或修改数据库 URL 等 runtime 字段，只把 gateway allowlist 作为安全顶层字段编辑。字段含义与操作顺序见[配置 Kaguya](./configuration)。
 
 ## 提交消息
 

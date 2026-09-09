@@ -61,6 +61,7 @@ describe("configuration management", () => {
       ).resolves.toMatchObject({
         id: created.profile.id,
         name: "work",
+        gatewayAllowlist: [],
         ai: { providers: [] },
       });
       await expect(management.inspect()).resolves.toMatchObject({
@@ -75,7 +76,7 @@ describe("configuration management", () => {
   it("only requires restart after a ready profile becomes selected", async () => {
     const root = await mkdtemp(join(tmpdir(), "kaguya-setup-select-"));
     try {
-      const management = await createConfigurationManagement(root);
+      const management = await createRuntimeBackedManagement(root);
       const created = await management.createProfile("work");
 
       const replaced = await management.replaceProfile(
@@ -124,7 +125,7 @@ describe("configuration management", () => {
   it("reports selected invalid readiness even when a restart is pending", async () => {
     const root = await mkdtemp(join(tmpdir(), "kaguya-setup-replace-"));
     try {
-      const management = await createConfigurationManagement(root);
+      const management = await createRuntimeBackedManagement(root);
       const created = await management.createProfile("work");
       await management.replaceProfile(
         created.profile.id,
@@ -138,6 +139,7 @@ describe("configuration management", () => {
 
       const replaced = await management.replaceProfile(created.profile.id, {
         name: created.profile.name,
+        gatewayAllowlist: [],
         acknowledgedWarnings: [],
         ai: { providers: [] },
         memory: { enabled: false },
@@ -213,10 +215,12 @@ describe("configuration management", () => {
       const management = await createConfigurationManagement(root);
 
       const created = await management.createProfile("inherits-runtime");
-      expect(created.profile.runtime).toEqual(runtimeFixture);
+      expect(created.profile.gatewayAllowlist).toEqual([]);
+      expect(created.profile).not.toHaveProperty("runtime");
 
       await management.replaceProfile(original.id, {
         name: "default-edited",
+        gatewayAllowlist: ["qq:group:778899"],
         acknowledgedWarnings: [],
         ai: original.ai,
         memory: original.memory,
@@ -224,11 +228,37 @@ describe("configuration management", () => {
         plugins: original.plugins,
       });
       await expect(management.getProfile(original.id)).resolves.toMatchObject({
-        runtime: runtimeFixture,
+        gatewayAllowlist: ["qq:group:778899"],
+      });
+      const reopened = await FileUserConfigManager.open({ rootDir: root });
+      await expect(reopened.getProfile(original.id)).resolves.toMatchObject({
+        runtime: {
+          ...runtimeFixture,
+          gatewayAllowlist: ["qq:group:778899"],
+        },
       });
       expect(await readFile(profilePath, "utf8")).not.toContain(
         "legacy-persisted-gateway-token",
       );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects allowlist replacement when the target profile has no runtime", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kaguya-setup-no-runtime-"));
+    try {
+      const management = await createConfigurationManagement(root);
+
+      await expect(
+        management.replaceProfile(
+          "default",
+          readyProfileReplacement("default", "light-model", "heavy-model"),
+        ),
+      ).rejects.toMatchObject({
+        code: "CONFIG_INCOMPLETE",
+        message: "Profile runtime is required to edit the gateway allowlist",
+      });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -276,7 +306,7 @@ const runtimeFixture = {
   rateLimitWindowMs: 60_000,
   logLevel: "info" as const,
   logFormat: "json" as const,
-  gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
+  gatewayAllowlist: [],
 };
 
 function readyProfileReplacement(
@@ -286,9 +316,25 @@ function readyProfileReplacement(
 ) {
   return {
     name,
+    gatewayAllowlist: ["*:group:*", "*:private:*"],
     acknowledgedWarnings: ["platforms-empty", "plugins-empty"],
     ...readyProfileSettings(lightModelId, heavyModelId),
   };
+}
+
+async function createRuntimeBackedManagement(root: string) {
+  const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+  const profile = await manager.getProfile(manager.getSelectedProfileId());
+  await manager.replaceProfile(profile.id, {
+    name: profile.name,
+    acknowledgedWarnings: [],
+    ai: profile.ai,
+    memory: profile.memory,
+    platforms: profile.platforms,
+    plugins: profile.plugins,
+    runtime: runtimeFixture,
+  });
+  return createConfigurationManagement(root);
 }
 
 function readyProfileSettings(lightModelId: string, heavyModelId: string) {

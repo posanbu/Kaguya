@@ -29,7 +29,7 @@ pnpm dev
 
 ## selected Profile runtime
 
-`runtime` 是 Profile JSON 中的隐藏管理字段，Web Profile 编辑器不展示、不返回、也不接收它。Web 做完整 Profile 替换时，Server 原样保留现有 runtime；新建 Profile 继承当时 selected Profile 的 runtime。
+`runtime` 是 Profile JSON 中的隐藏管理字段。Web Profile API 不返回或接收完整 runtime；它只把 `gatewayAllowlist` 安全投影为 Profile 顶层字段，保存时仅合并回该 runtime 字段。数据库 URL、CORS、日志等其他 runtime 内容保持隐藏且原样保留。新建 Profile 继承当时 selected Profile 的 runtime。
 
 **`databaseMode`** — `managed` 或 `external`。旧 Profile 未声明时按 `external` 处理。
 
@@ -43,7 +43,7 @@ pnpm dev
 
 **`logLevel` / `logFormat`** — 日志级别以及 `json` 或 `pretty` 格式。
 
-**`gatewayAllowlist`** — 由 `platforms`、`userIds`、`groupIds` 三个数组组成。配置了某一维度后，入站内容必须命中；检查发生在提交 Runtime 之前。
+**`gatewayAllowlist`** — 字符串规则数组，每条格式为 `platform:chat_type:target_id`。`chat_type` 只接受 `group` 或 `private`；群聊用 `groupId`，私聊用 `userId`。规则按 OR 匹配，`platform` 和 `target_id` 支持 `*`，比较保持大小写敏感。空数组拒绝所有非 Web 消息；全部放行需要同时配置 `*:group:*` 和 `*:private:*`。解析会修剪三段，格式错误、空段、未知 chat type 或额外冒号的规则静默忽略。Web 入口仍只由 Gateway Token 控制，群规则不会限制群成员。
 
 ::: code-group
 
@@ -61,11 +61,7 @@ pnpm dev
     "rateLimitWindowMs": 60000,
     "logLevel": "info",
     "logFormat": "json",
-    "gatewayAllowlist": {
-      "platforms": [],
-      "userIds": [],
-      "groupIds": []
-    }
+    "gatewayAllowlist": ["qq:group:778899", "qq:private:112233"]
   }
 }
 ```
@@ -73,6 +69,8 @@ pnpm dev
 :::
 
 示例只是 Profile 的局部形状，不能直接替换完整 Profile 文件。配置目录和数据库 URL 都按敏感数据保护。
+
+旧 `{ "platforms": [], "userIds": [], "groupIds": [] }` 结构不会迁移或兼容，也不会触发 Profile 版本提升。首次升级已有 Profile 时，必须先手工改成字符串数组，之后才能通过 Web UI 管理。
 
 ## Gateway Token
 

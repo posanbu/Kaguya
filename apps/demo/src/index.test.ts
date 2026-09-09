@@ -131,5 +131,5 @@ const demoRuntime = {
   rateLimitWindowMs: 60_000,
   logLevel: "info" as const,
   logFormat: "json" as const,
-  gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
+  gatewayAllowlist: [],
 };

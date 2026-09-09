@@ -930,6 +930,35 @@ function ProfileManagementScreen({
                     />
                   </label>
                 </div>
+                <label className="field">
+                  <span>网关白名单规则</span>
+                  <textarea
+                    className="rule-editor"
+                    value={editorFields.gatewayAllowlistText}
+                    onChange={(event) =>
+                      setEditorFields((current) =>
+                        current === undefined
+                          ? current
+                          : {
+                              ...current,
+                              gatewayAllowlistText: event.target.value,
+                            },
+                      )
+                    }
+                    rows={5}
+                    spellCheck={false}
+                    autoComplete="off"
+                    aria-describedby="gateway-allowlist-help"
+                    placeholder={
+                      "qq:group:778899\nqq:private:112233\n*:private:*"
+                    }
+                  />
+                  <span id="gateway-allowlist-help" className="field-help">
+                    每行一条 platform:group|private:ID。platform 和 ID 支持
+                    *；空列表拒绝所有平台消息，无效行会保存但不生效。Web
+                    入口不受此处控制。
+                  </span>
+                </label>
                 <label className="setup-check">
                   <input
                     type="checkbox"

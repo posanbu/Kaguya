@@ -502,6 +502,6 @@ function runtime(databaseUrl: string, databaseMode: "managed" | "external") {
     rateLimitWindowMs: 60_000,
     logLevel: "info" as const,
     logFormat: "pretty" as const,
-    gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
+    gatewayAllowlist: [],
   };
 }
