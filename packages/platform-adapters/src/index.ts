@@ -39,3 +39,15 @@ export {
   type NormalizeWebInboundOptions,
   type WebInboundInput,
 } from "./web.js";
+export { AdapterIngressUnavailableError } from "./hosted.js";
+export type {
+  HostedAdapter,
+  AdapterLifecycle,
+  AdapterConnectivity,
+  AdapterIngress,
+  AdapterConnectionStatus,
+  AdapterErrorType,
+  AdapterSnapshot,
+  AdapterHostStatus,
+  RuntimeUnavailableReason,
+} from "./hosted.js";

@@ -1,20 +1,9 @@
-/**
- * 功能概述：在 Server 侧组合 NapCat WebSocket JSON transport、OneBot adapter、
- * action client 与可重连 supervisor，入站端只接收窄 `InformationIngress`，出站只实现
- * `PlatformOutboundTransport.sendMessage`。
- * 主要职责：`WebSocketJsonTransport` 处理 token URL、JSON frame 与 close/error；
- * `NapCatConnectionSupervisor` 创建、退役和重建整条连接，同时实现 Runtime 的出站 transport；
- * `createNapCatSupervisor` 在正规化 frame 后先执行 Server 注入的 allowlist 谓词，再交给
- * ingress，并为接收、过滤、连接/提交失败记录安全上下文。
- * 代码库关系：复用 `@kaguya/platform-adapters` 的 NapCat adapter/action client；
- * `server.ts` 传入统一 ingress，并将返回的 supervisor 注册为 Runtime 出站 transport。
- * 输入输出与副作用：会建立 WebSocket、写出 JSON、设置重连/超时计时器并在
- * stop 时排空退役；日志不保留消息正文、access token 或 Core trace identity。
- */
+/** WebSocket transport and reconnect supervisor. AdapterHost owns inbound policy and diagnostics; connected requires socket open. */
 import {
   NapCatActionClient,
   NapCatOneBotAdapter,
   type InformationIngress,
+  type AdapterConnectionStatus,
   type JsonMessageTransport,
   type PlatformDeliveryReceipt,
   type PlatformInboundMessage,
@@ -30,9 +19,14 @@ export class WebSocketJsonTransport implements JsonMessageTransport {
   private messageHandler: ((message: unknown) => void) | undefined;
   private readonly closeHandlers = new Set<(error?: Error) => void>();
   private readonly socket: WebSocket;
+  private readonly openHandlers = new Set<() => void>();
+  private closed = false;
 
   constructor(url: string, accessToken?: string) {
     this.socket = new WebSocket(withAccessToken(url, accessToken));
+    this.socket.addEventListener("open", () => {
+      if (!this.closed) for (const handler of this.openHandlers) handler();
+    });
     this.socket.addEventListener("message", (event) => {
       const data = typeof event.data === "string" ? event.data : "";
       if (!data) {
@@ -60,6 +54,10 @@ export class WebSocketJsonTransport implements JsonMessageTransport {
     this.messageHandler = handler;
   }
 
+  onOpen(handler: () => void): void {
+    this.openHandlers.add(handler);
+  }
+
   onClose(handler: (error?: Error) => void): void {
     this.closeHandlers.add(handler);
   }
@@ -69,6 +67,8 @@ export class WebSocketJsonTransport implements JsonMessageTransport {
   }
 
   private notifyClose(error?: Error): void {
+    if (this.closed) return;
+    this.closed = true;
     for (const handler of this.closeHandlers) {
       handler(error);
     }
@@ -90,6 +90,7 @@ export interface NapCatConnectionSupervisorOptions {
   readonly adapterId: string;
   readonly reconnectMs: number;
   readonly createConnection: () => NapCatConnection;
+  readonly onConnecting?: (attempt: number) => void;
   readonly onConnected?: () => void;
   readonly onDisconnected?: (error?: Error) => void;
   readonly onReconnectScheduled?: (delayMs: number) => void;
@@ -101,6 +102,7 @@ export class NapCatConnectionSupervisor implements PlatformOutboundTransport {
   private reconnectTimer: NodeJS.Timeout | undefined;
   private readonly retirements = new Map<NapCatConnection, Promise<void>>();
   private stopping = true;
+  private attempt = 0;
 
   constructor(private readonly options: NapCatConnectionSupervisorOptions) {}
 
@@ -149,6 +151,7 @@ export class NapCatConnectionSupervisor implements PlatformOutboundTransport {
       return;
     }
     let connection: NapCatConnection | undefined;
+    this.options.onConnecting?.(++this.attempt);
     try {
       const createdConnection = this.options.createConnection();
       connection = createdConnection;
@@ -156,8 +159,11 @@ export class NapCatConnectionSupervisor implements PlatformOutboundTransport {
       createdConnection.transport.onClose((error) => {
         this.handleDisconnect(createdConnection, error);
       });
+      createdConnection.transport.onOpen?.(() => {
+        if (!this.stopping && this.connection === createdConnection)
+          this.options.onConnected?.();
+      });
       await createdConnection.adapter.start();
-      this.options.onConnected?.();
       if (this.stopping || this.connection !== createdConnection) {
         if (this.connection === createdConnection) {
           this.connection = undefined;
@@ -225,9 +231,10 @@ export function createNapCatSupervisor(options: {
   readonly ingress: InformationIngress;
   readonly logger: KaguyaLogger;
   readonly allowsInbound?: (message: PlatformInboundMessage) => boolean;
+  readonly reportStatus?: (status: AdapterConnectionStatus) => void;
 }): NapCatConnectionSupervisor {
-  let supervisor: NapCatConnectionSupervisor;
-  supervisor = new NapCatConnectionSupervisor({
+  let attempt = 0;
+  return new NapCatConnectionSupervisor({
     adapterId: options.config.adapterId,
     reconnectMs: options.config.reconnectMs,
     createConnection: () => {
@@ -235,7 +242,7 @@ export function createNapCatSupervisor(options: {
         options.config.wsUrl ?? "",
         options.config.accessToken,
       );
-      const actionClient = new NapCatActionClient({
+      const sender = new NapCatActionClient({
         adapterId: options.config.adapterId,
         transport,
         nextEcho: createEchoFactory(),
@@ -249,79 +256,33 @@ export function createNapCatSupervisor(options: {
         transport,
         now: () => new Date(),
         ingress: options.ingress,
-        allowsInbound: (message) => {
-          const allowed = options.allowsInbound?.(message) ?? true;
-          options.logger.info(
-            {
-              event: allowed
-                ? "napcat.inbound.accepted"
-                : "napcat.inbound.filtered",
-              adapterId: message.adapterId,
-              platform: message.platform,
-              platformMessageId: message.platformMessageId,
-              targetKind: message.target.kind,
-            },
-            allowed
-              ? "NapCat inbound message accepted"
-              : "NapCat inbound message filtered",
-          );
-          return allowed;
-        },
-        onInboundError: (error, context) => {
-          options.logger.error(
-            {
-              event: "napcat.inbound.failed",
-              platformMessageId: context.platformMessageId,
-              adapterId: context.adapterId,
-              err: error,
-            },
-            "NapCat inbound dispatch failed",
-          );
-        },
+        ...(options.allowsInbound
+          ? { allowsInbound: options.allowsInbound }
+          : {}),
       });
-      return { transport, sender: actionClient, adapter };
+      return { transport, sender, adapter };
     },
-    onConnected: () => {
-      options.logger.info(
-        {
-          event: "napcat.connection.connected",
-          adapterId: options.config.adapterId,
-        },
-        "NapCat connection established",
-      );
+    onConnecting: (value) => {
+      attempt = value;
+      options.reportStatus?.({ connectivity: "connecting", attempt });
     },
-    onDisconnected: (error) => {
-      options.logger.warn(
-        {
-          event: "napcat.connection.disconnected",
-          adapterId: options.config.adapterId,
-          ...(error === undefined ? {} : { err: error }),
-        },
-        "NapCat connection closed",
-      );
-    },
-    onReconnectScheduled: (delayMs) => {
-      options.logger.info(
-        {
-          event: "napcat.reconnect.scheduled",
-          adapterId: options.config.adapterId,
-          delayMs,
-        },
-        "NapCat reconnect scheduled",
-      );
-    },
-    onConnectionError: (error) => {
-      options.logger.warn(
-        {
-          event: "napcat.connection.failed",
-          adapterId: options.config.adapterId,
-          err: error,
-        },
-        "NapCat connection failed",
-      );
-    },
+    onConnected: () =>
+      options.reportStatus?.({ connectivity: "connected", attempt }),
+    onDisconnected: () =>
+      options.reportStatus?.({ connectivity: "disconnected", attempt }),
+    onReconnectScheduled: (delayMs) =>
+      options.reportStatus?.({
+        connectivity: "retrying",
+        attempt,
+        nextRetryAt: new Date(Date.now() + delayMs).toISOString(),
+      }),
+    onConnectionError: () =>
+      options.reportStatus?.({
+        connectivity: "disconnected",
+        attempt,
+        errorType: "connection_failed",
+      }),
   });
-  return supervisor;
 }
 
 function withAccessToken(url: string, accessToken?: string): string {

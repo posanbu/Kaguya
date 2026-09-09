@@ -12,7 +12,7 @@
 import { Writable } from "node:stream";
 
 import { closeLogger, createLogger } from "@kaguya/logger";
-import { GatewayAllowlist } from "@kaguya/runtime";
+import { AdapterHost } from "./adapter-host.js";
 import type {
   InformationIngress,
   JsonMessageTransport,
@@ -157,11 +157,20 @@ it("applies configured NapCat allowlists before submitting through ingress", asy
     service: "napcat-composition-test",
     stream: logStream,
   });
-  const allowlist = new GatewayAllowlist({
+  const host = new AdapterHost(logger, {
     platforms: ["qq"],
     userIds: ["112233"],
     groupIds: [],
   });
+  host.register({
+    adapterId: "napcat.qq.main",
+    type: "napcat",
+    platform: "qq",
+    enabled: true,
+    start: async () => {},
+    stop: async () => {},
+  });
+  host.finalizeRuntime(ingress);
   const supervisor = createNapCatSupervisor({
     config: {
       enabled: true,
@@ -170,10 +179,10 @@ it("applies configured NapCat allowlists before submitting through ingress", asy
       selfId: "998877",
       reconnectMs: 250,
     },
-    ingress,
+    ingress: host.ingress,
     logger,
     allowsInbound: (message: PlatformInboundMessage) =>
-      allowlist.allows(message),
+      host.acceptInbound(message),
   });
 
   await supervisor.start();
@@ -224,8 +233,8 @@ it("applies configured NapCat allowlists before submitting through ingress", asy
       }),
     ]),
   );
-  expect(JSON.stringify(logStream.logs())).not.toContain("denied");
-  expect(JSON.stringify(logStream.logs())).not.toContain("hello");
+  expect(JSON.stringify(logStream.logs())).toContain("denied");
+  expect(JSON.stringify(logStream.logs())).toContain("hello");
   await supervisor.stop();
   await closeLogger(logger);
 });
@@ -323,4 +332,64 @@ describe("NapCatConnectionSupervisor", () => {
       vi.useRealTimers();
     }
   });
+});
+
+it("reports connected only on open, ignores stale sockets and tracks retry attempts", async () => {
+  vi.useFakeTimers();
+  globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+  const logger = createLogger({
+    service: "connection-status",
+    level: "silent",
+  });
+  const statuses: import("@kaguya/platform-adapters").AdapterConnectionStatus[] =
+    [];
+  const supervisor = createNapCatSupervisor({
+    config: {
+      enabled: true,
+      adapterId: "qq",
+      wsUrl: "ws://localhost",
+      reconnectMs: 250,
+    },
+    logger,
+    ingress: {
+      submit: async () => ({ rootInformationId: "unused", deliveries: [] }),
+    },
+    reportStatus: (status) => statuses.push(status),
+  });
+  try {
+    await supervisor.start();
+    const first = FakeWebSocket.latest!;
+    expect(statuses).toEqual([{ connectivity: "connecting", attempt: 1 }]);
+    first.emit("open");
+    expect(statuses.at(-1)).toEqual({ connectivity: "connected", attempt: 1 });
+    first.emit("error");
+    first.emit("close");
+    expect(statuses.filter((s) => s.connectivity === "retrying")).toHaveLength(
+      1,
+    );
+    expect(statuses.at(-1)).toMatchObject({
+      connectivity: "retrying",
+      attempt: 1,
+      nextRetryAt: expect.any(String),
+    });
+    await vi.advanceTimersByTimeAsync(250);
+    const second = FakeWebSocket.latest!;
+    expect(statuses.at(-1)).toEqual({ connectivity: "connecting", attempt: 2 });
+    first.emit("open");
+    expect(statuses.at(-1)?.connectivity).toBe("connecting");
+    second.emit("open");
+    expect(statuses.at(-1)).toEqual({ connectivity: "connected", attempt: 2 });
+    await supervisor.stop();
+    const count = statuses.length;
+    second.emit("open");
+    second.emit("error");
+    second.emit("close");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(statuses).toHaveLength(count);
+    expect(FakeWebSocket.latest).toBe(second);
+  } finally {
+    await supervisor.stop();
+    await closeLogger(logger);
+    vi.useRealTimers();
+  }
 });

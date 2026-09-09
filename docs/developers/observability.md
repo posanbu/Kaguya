@@ -45,3 +45,17 @@ Prompt preview、入站预览和 assistant 预览在 info 可见；完整 Prompt
 未声明 definition、schema 错误、投影错误或 observer 错误只生成脱敏的 `module.diagnostic.rejected`，不得使模块启动或业务 handler 失败。已经形成 Atom 的成功结果应由 kind log policy 投影，避免再发一条临时成功诊断。
 
 模块可实现 `describeStartup()`，在 `start()` 成功后返回一句状态和少量安全 JSON 字段。描述无效或抛错不会否定 Host 的 `module.started`，只会追加 `module.status.failed`。
+
+## Gateway / Adapter
+
+Host 先提交内存快照，再记录状态。`server.started` 包含 `runtimeReady`、`adapterHostState` 和 `degradationReasons`。`GET /api/v1/adapters/status` 使用 management token，按 adapterId 排序返回安全状态；`/healthz` 在降级时仍返回 200。
+
+NapCat 的 starting、真实 WebSocket open 后的 connected、disconnected、stopped、disabled 为 info；connecting、reconnect scheduled、stopping 为 debug；连接失败及安全错误类别为 warn。attempt、nextRetryAt 等失效字段随状态转换清除。
+
+入站顺序为 `napcat.inbound.received → accepted/filtered → submitted/failed`、`web.inbound.received → accepted → submitted/failed`。filtered 不再提交；submitted 在收到 Runtime 回执时携带 `rootInformationId`。received 在 info 输出完整 `messageText` 与来源元数据。raw frame、连接 URL、token 和凭据不作为诊断字段输出；消息不可提交时不缓存或重放。
+
+::: warning 完整正文留存
+info 日志包含完整用户消息，可能含个人资料或用户主动发送的敏感内容。应限制日志访问并设置适当保留期限；删除数据库消息不会自动删除日志、备份或转发副本。debug 还可能展开现有 Runtime Prompt 详情。
+:::
+
+本地 selected `default` Profile 使用 debug / pretty；该修改不改变全局默认日志级别。

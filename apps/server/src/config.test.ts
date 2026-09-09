@@ -100,6 +100,34 @@ describe("Profile-backed server configuration", () => {
     });
   });
 
+  it.each([
+    {},
+    { adapterId: "qq", wsUrl: "https://secret", reconnectMs: 3000 },
+    { adapterId: "web.ui.main", wsUrl: "ws://localhost", reconnectMs: 3000 },
+  ])("isolates invalid NapCat configuration", (settings) => {
+    const profile = completeProfile({
+      platforms: [
+        {
+          id: "qq",
+          type: "napcat",
+          enabled: true,
+          settings,
+          credentials: { accessToken: "secret" },
+        },
+      ],
+    });
+    const result = createServerConfig(profile, {
+      configRoot: "/tmp/config",
+      development: false,
+    });
+    expect(result.napcat).toMatchObject({
+      enabled: true,
+      configurationError: "configuration_invalid",
+    });
+    expect(result.host).toBe("localhost");
+    expect(JSON.stringify(result.napcat)).not.toContain("secret");
+  });
+
   it("rejects retired runtime variables without exposing values", () => {
     for (const name of [
       "KAGUYA_DATABASE_URL",

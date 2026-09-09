@@ -27,6 +27,7 @@ import {
 export interface JsonMessageTransport {
   sendJson(message: unknown): void;
   onJsonMessage(handler: (message: unknown) => void): void;
+  onOpen?(handler: () => void): void;
   onClose(handler: (error?: Error) => void): void;
   close(): void;
 }

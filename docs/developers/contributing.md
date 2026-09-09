@@ -86,7 +86,7 @@ pnpm exec vitest run apps/server/src
 
 数据库模式由 `packages/database/src/migrations.ts` 管理，并由 `KaguyaDatabase.migrate()` 在事务中创建或更新。payload 使用 `JSONB`；原子与显式引用由外键保护，原子、引用和日志投影 outbox 在同一事务写入。信息原子与引用只允许追加；状态变化必须注册新原子，而不能更新或删除旧记录。
 
-公共数据库入口必须先检查实际服务器大版本，只接受 PostgreSQL 17，再允许 migration 或 ingress。不要为 SQLite 保留兼容写入路径，也不要实现旧 SQLite 文件的自动导入或转换。迁移或连接失败必须映射为稳定错误，且日志不得包含完整数据库 URL、Docker 环境、原始 stderr、凭据、消息正文、Prompt 或模型输出。
+公共数据库入口必须先检查实际服务器大版本，只接受 PostgreSQL 17，再允许 migration 或 Runtime ingress。不要为 SQLite 保留兼容写入路径，也不要实现旧 SQLite 文件的自动导入或转换。迁移或连接失败必须映射为稳定错误，且日志不得包含完整数据库 URL、Docker 环境、原始 stderr、凭据或原始错误对象。Adapter received 按已确认策略输出完整消息正文，须遵循可观测性文档的留存边界。
 
 ## 文档同步要求
 

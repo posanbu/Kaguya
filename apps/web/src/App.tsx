@@ -20,6 +20,8 @@
  * token 对应的网关配置对象，避免读取 Profile 的副作用 effect 因对象引用变化
  * 而重复请求并触发服务端限流。
  */
+import { AdapterStatusPanel } from "./AdapterStatusPanel.js";
+
 import {
   AlertCircle,
   CheckCircle2,
@@ -772,7 +774,7 @@ function ProfileManagementScreen({
                   onClick={onOpenNapCat}
                 >
                   <Settings2 size={16} />
-                  <span>NapCat 配置</span>
+                  <span>Gateway / Adapter</span>
                 </button>
                 <button
                   type="button"
@@ -1032,8 +1034,9 @@ function NapCatManagementScreen({
 
   return (
     <div className="setup-shell">
-      <SetupHeader subtitle="NapCat 配置" />
+      <SetupHeader subtitle="Gateway / Adapter" />
       <main className="setup-main">
+        <AdapterStatusPanel token={token} />
         <section className="setup-card" aria-labelledby="napcat-title">
           <div className="panel-heading">
             <div>

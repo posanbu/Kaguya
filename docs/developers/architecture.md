@@ -92,7 +92,7 @@ core.runtime.context
 
 ## 消费者失败不会回滚已提交事实
 
-Server 启动时打开 Profile Registry，检查全局 selected Profile，并先验证数据库连接、PostgreSQL 17、migration 与 Runtime Kind。随后才为 light/heavy target 创建模型客户端。Provider key 只存在于权限保护的 Profile JSON、配置管理器和 provider factory，不进入模块 settings、信息原子、Prompt 或日志。AI 配置未 ready 时，数据库预检通过后 HTTP 与 Web UI 仍可用，但 Runtime 和 NapCat ingress 不创建；数据库预检失败时任何 ingress 都不监听。完整流程见[配置生命周期](./configuration-lifecycle)。
+Server 启动时打开 Profile Registry，检查全局 selected Profile，并先验证数据库连接、PostgreSQL 17、migration 与 Runtime Kind。随后才为 light/heavy target 创建模型客户端。Provider key 只存在于权限保护的 Profile JSON、配置管理器和 provider factory，不进入模块 settings、信息原子、Prompt 或日志。AI 与数据库检查独立执行。下游不可用时，HTTP 和 Adapter 仍启动，Web 返回 503，NapCat 丢弃消息。完整流程见[配置生命周期](./configuration-lifecycle)。
 
 `consumer.failed` 的消费者若再次失败，或失败事实无法提交，Core 只交给 bootstrap 诊断边界，不递归生成失败原子。因此系统没有自动重试，也没有内建工作队列。
 
@@ -106,6 +106,12 @@ Profile Registry 维护一个全局 `selectedProfileId`。Server 在启动时只
 
 ## 启动与关闭顺序
 
-正常启动先读取 `KAGUYA_CONFIG_ROOT` 并打开 selected Profile，再连接 PostgreSQL 17、执行 migration 和 Kind 同步。数据库成功后，AI Profile ready 时注册 transport、创建 ModuleHost 与 Runtime；AI 未 ready 时只创建 setup HTTP/Web。两条路径都在最后才调用 listen。任何数据库版本、连接、migration 或 Kind 错误都会在 HTTP、Runtime 和平台 ingress 监听前终止启动。
+启动先读取基础配置并创建 AdapterHost，再独立检查 AI 与数据库。两者就绪时由 Host 注册 transport 并启动 Runtime；成功后一次性开放 ingress。随后启动 HTTP，再并发启动各 Adapter。下游失败仅使服务降级，Profile 不可读、基础配置无效或 HTTP 无法监听仍终止启动。
 
 正常关闭先停止 ingress，等待 Runtime 在途 dispatch，停止 ModuleHost，再关闭数据库、Web 资源和 Logger。这个顺序避免新消息进入已经开始释放的基础设施。
+
+## AdapterHost
+
+HostedAdapter 定义身份、平台、可选 outbound transport、start/stop 和状态上报回调。Server 的 AdapterHost 统一负责生命周期、allowlist、入站日志、提交和内存快照。单个 Adapter failed 不改变 Host 的 running 状态。状态采用 lifecycle、connectivity、ingress 三个正交维度；connected 不代表可以处理消息，Web connectivity 固定为 not_applicable。
+
+Runtime 绑定在启动时固定，修复后重启，不支持热绑定、缓存或重放。为兼容 Runtime 的既有约束，transport 在 Runtime start 前注册，ingress 在 start 成功后才开放。

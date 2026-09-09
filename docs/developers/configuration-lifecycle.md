@@ -28,17 +28,20 @@ sequenceDiagram
   S->>C: inspect selected readiness
   S->>D: 连接、版本检查、migration、Kind 同步
   alt 数据库失败
-    S--xH: 不监听 HTTP / Runtime / 平台 ingress
+    S->>S: 记录降级原因并继续启动
   end
-  alt ready
+  alt AI 与数据库均 ready
     S->>R: 创建模型、Runtime、模块与 transport
     S->>H: 启动 ready 模式
-  else invalid 或 review_required
-    S->>H: 启动配置模式
+  else 任一下游不可用
+    S->>H: 启动降级模式
   end
+  S->>S: 并发启动 Adapter，逐个隔离故障
 ```
 
-`/healthz` 表示 HTTP 进程存活，不等于 Runtime 一定可接收消息。数据库预检成功但 AI 配置未 ready 时，配置模式仍提供 Web UI、受保护的 setup 状态和 Profile 管理接口；消息接口返回 `configuration_setup_required`。数据库预检失败时连 `/healthz` 也不会监听。每次 Server 启动的随机 Gateway Token 只在进程内保存，并在成功监听后通过终端访问链接交给用户。
+`/healthz` 表示 HTTP 存活，不代表 Runtime 就绪。AI 未配置也独立检查数据库连接、migration 和 Kind 同步；失败不阻止 HTTP 或 Adapter。Web 返回 runtime_unavailable / 503，NapCat 记录拒绝并丢弃。启动期随机 Gateway Token 保存在进程内，通过终端访问链接交给用户。
+
+Runtime 原因限定为 configuration_not_ready、database_unavailable、runtime_start_failed。AI 与数据库同时失败时，启动日志保留全部原因，状态接口优先显示 configuration_not_ready。migration 或 Kind 同步失败归为 database_unavailable。无效 NapCat 设置只让该 Adapter failed。
 
 ## 为什么只使用 selected Profile
 
@@ -70,9 +73,9 @@ Profile 的 Provider、models、默认 Provider、light/heavy targets 和引用�
 
 ## 资源创建与关闭
 
-ready 启动会先检查 PostgreSQL 17 并执行 migration/Kind 同步，再创建模型 resolver、Runtime、模块、Web gateway 和可选 NapCat supervisor。资源按依赖顺序建立，失败时回滚已创建部分。AI 未 ready 的 setup 路径也必须先通过相同数据库预检。
+Server 先创建 AdapterHost，再独立检查 AI 与数据库。满足条件时由 Host 注册 transport 并启动 Runtime；下游失败后清理部分资源，清理异常不阻止降级启动。Runtime ingress 只在启动时绑定，不做热接入。
 
-关闭时先停止 ingress，避免新消息进入；再等待 Runtime 在途 dispatch，停止模块和 transport，最后关闭数据库、Web 资源与 Logger。配置变更要求重启，正是为了重新走完这条受控生命周期。
+关闭先将 ingress 标为 stopping，再停止 HTTP 和全部 Adapter；随后排空 Runtime、关闭数据库与 Web 资源，最后关闭 Logger。单项失败不跳过其他清理。消息不缓存、不排队、不重放，修复后重启。
 
 ## 安全边界
 

@@ -23,7 +23,7 @@ curl http://127.0.0.1:3000/healthz
 
 :::
 
-若没有 `{"status":"ok"}`，先运行 `pnpm postgres:status`，再检查 Docker Desktop/OrbStack、端口占用、PostgreSQL 17、`server.start.failed`、Node/pnpm 版本和生产模式下是否已经执行 `pnpm build`。数据库连接、版本、migration 或 Kind 检查失败时 Server 不会监听健康接口。若健康接口正常而页面失败，检查浏览器请求和 Web 静态产物。
+若没有 `{"status":"ok"}`，先运行 `pnpm postgres:status`，再检查 Docker Desktop/OrbStack、端口占用、PostgreSQL 17、`server.start.failed`、Node/pnpm 版本和生产模式下是否已经执行 `pnpm build`。数据库连接、版本、migration 或 Kind 检查失败时 Server 降级运行，健康接口仍返回 200；在 Gateway / Adapter 页面检查状态。若健康接口正常而页面失败，检查浏览器请求和 Web 静态产物。
 
 ## 一直停在配置页面
 

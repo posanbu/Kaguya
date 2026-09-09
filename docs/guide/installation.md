@@ -93,7 +93,7 @@ curl http://127.0.0.1:3000/healthz
 
 正常响应为 `{"status":"ok"}`。`pnpm dev` 会先创建或恢复 `kaguya-postgres-17`，等待 `pg_isready`，验证实际服务器为 PostgreSQL 17，并完成 migration 与 Runtime Kind 同步；只有整条链成功才启动 Server。
 
-首次开发启动若 selected Profile 完全缺少 `runtime`，命令会保留 AI、Memory、平台、插件与 review 内容，再补入 loopback 默认值和托管数据库地址。部分损坏的 runtime 不会被自动覆盖。AI 配置尚未就绪时，数据库检查通过后 HTTP 与 Web UI 仍可用于 setup，但 Runtime 和 NapCat ingress 不监听。
+首次开发启动若 selected Profile 完全缺少 `runtime`，命令会保留 AI、Memory、平台、插件与 review 内容，再补入 loopback 默认值和托管数据库地址。部分损坏的 runtime 不会被自动覆盖。AI 配置未就绪或数据库失败时，HTTP、Web UI 与 Adapter 仍运行。进入 Gateway / Adapter 查看原因，修复后重启。
 
 ## 管理本地 PostgreSQL
 

@@ -1308,3 +1308,51 @@ button:disabled {
   border-radius: 999px;
   background: #3a6371;
 }
+
+.adapter-status-panel {
+  margin-bottom: 24px;
+}
+.adapter-summary,
+.adapter-status-card dl {
+  margin: 16px 0;
+}
+.adapter-summary > div,
+.adapter-status-card dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 7px 0;
+}
+.adapter-status-panel dt,
+.adapter-identity,
+.adapter-refresh-status {
+  color: var(--kaguya-muted);
+}
+.adapter-status-panel dd {
+  margin: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.adapter-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+  gap: 16px;
+}
+.adapter-status-card {
+  border: 1px solid var(--kaguya-line);
+  border-radius: 12px;
+  padding: 20px;
+  min-width: 0;
+}
+.adapter-status-card h3 {
+  margin: 0 0 8px;
+}
+.adapter-identity {
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+.adapter-refresh-status {
+  margin-bottom: 0;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
