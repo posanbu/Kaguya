@@ -35,6 +35,8 @@ describe("defineInformationKind", () => {
   it("requires a schema, declared references, and explicit logging", () => {
     const definition = defineInformationKind({
       kind: "acme.message.created",
+      displayName: "Acme Message Created",
+      description: "Information carried by the acme.message.created kind.",
       payloadSchema: z.object({ text: z.string() }).strict(),
       references: {
         "acme:parent": {
@@ -53,9 +55,29 @@ describe("defineInformationKind", () => {
     ]);
   });
 
+  it("requires non-empty display metadata", () => {
+    const input = {
+      kind: "acme.message.created",
+      displayName: "Created message",
+      description: "A message accepted by Acme.",
+      payloadSchema: z.object({}).strict(),
+      references: {},
+      log: { enabled: false } as const,
+    };
+
+    expect(() =>
+      defineInformationKind({ ...input, displayName: "  " }),
+    ).toThrow(/display name/iu);
+    expect(() =>
+      defineInformationKind({ ...input, description: "  " }),
+    ).toThrow(/description/iu);
+  });
+
   it("freezes an explicitly classified debug detail projector", () => {
     const definition = defineInformationKind({
       kind: "acme.prompt.requested",
+      displayName: "Acme Prompt Requested",
+      description: "Information carried by the acme.prompt.requested kind.",
       payloadSchema: z.object({ text: z.string() }).strict(),
       references: {},
       log: {
@@ -78,6 +100,9 @@ describe("defineInformationKind", () => {
     expect(() =>
       defineInformationKind({
         kind: "acme.prompt.invalid-detail",
+        displayName: "Acme Prompt Invalid Detail",
+        description:
+          "Information carried by the acme.prompt.invalid-detail kind.",
         payloadSchema: z.object({}).strict(),
         references: {},
         log: {
@@ -105,6 +130,8 @@ describe("defineInformationKind", () => {
     expect(() =>
       defineInformationKind({
         kind: "acme.prompt.created",
+        displayName: "Acme Prompt Created",
+        description: "Information carried by the acme.prompt.created kind.",
         payloadSchema: z.object({ value: input.pipe(output) }).strict(),
         references: {},
         log: { enabled: false },
@@ -116,6 +143,8 @@ describe("defineInformationKind", () => {
     expect(() =>
       defineInformationKind({
         kind: "acme.message.created",
+        displayName: "Acme Message Created",
+        description: "Information carried by the acme.message.created kind.",
         payloadSchema: z.object({}).strict(),
         references: { parent: { required: false, multiple: false } },
         log: { enabled: false },
@@ -127,6 +156,8 @@ describe("defineInformationKind", () => {
     expect(() =>
       defineInformationKind({
         kind: "acme.message.created",
+        displayName: "Acme Message Created",
+        description: "Information carried by the acme.message.created kind.",
         payloadSchema: undefined as never,
         references: {},
         log: { enabled: false },
@@ -136,6 +167,8 @@ describe("defineInformationKind", () => {
     expect(() =>
       defineInformationKind({
         kind: "acme.message.created",
+        displayName: "Acme Message Created",
+        description: "Information carried by the acme.message.created kind.",
         payloadSchema: {
           parse: () => ({}) as never,
         } as never,
@@ -149,6 +182,8 @@ describe("defineInformationKind", () => {
     expect(() =>
       defineInformationKind({
         kind: "acme.message.created",
+        displayName: "Acme Message Created",
+        description: "Information carried by the acme.message.created kind.",
         payloadSchema: z.string() as never,
         references: {},
         log: { enabled: false },
@@ -158,6 +193,8 @@ describe("defineInformationKind", () => {
     expect(() =>
       defineInformationKind({
         kind: "acme.message.created",
+        displayName: "Acme Message Created",
+        description: "Information carried by the acme.message.created kind.",
         payloadSchema: z.array(z.string()) as never,
         references: {},
         log: { enabled: false },
@@ -167,6 +204,8 @@ describe("defineInformationKind", () => {
     expect(() =>
       defineInformationKind({
         kind: "acme.message.created",
+        displayName: "Acme Message Created",
+        description: "Information carried by the acme.message.created kind.",
         payloadSchema: z.object({ text: z.string() }) as never,
         references: {},
         log: { enabled: false },
@@ -176,6 +215,8 @@ describe("defineInformationKind", () => {
     expect(() =>
       defineInformationKind({
         kind: "acme.message.created",
+        displayName: "Acme Message Created",
+        description: "Information carried by the acme.message.created kind.",
         payloadSchema: z.object({ when: z.date() }).strict() as never,
         references: {},
         log: { enabled: false },
@@ -185,6 +226,8 @@ describe("defineInformationKind", () => {
     expect(() =>
       defineInformationKind({
         kind: "acme.message.created",
+        displayName: "Acme Message Created",
+        description: "Information carried by the acme.message.created kind.",
         payloadSchema: z.object({ total: z.bigint() }).strict() as never,
         references: {},
         log: { enabled: false },
@@ -194,6 +237,8 @@ describe("defineInformationKind", () => {
     expect(() =>
       defineInformationKind({
         kind: "acme.message.created",
+        displayName: "Acme Message Created",
+        description: "Information carried by the acme.message.created kind.",
         payloadSchema: z
           .object({
             items: z.array(
@@ -215,6 +260,8 @@ describe("defineInformationKind", () => {
     expect(() =>
       defineInformationKind({
         kind: "acme.message.created",
+        displayName: "Acme Message Created",
+        description: "Information carried by the acme.message.created kind.",
         payloadSchema: z.object({}).strict(),
         references: {
           "acme:parent": {
@@ -230,6 +277,8 @@ describe("defineInformationKind", () => {
     expect(() =>
       defineInformationKind({
         kind: "acme.message.created",
+        displayName: "Acme Message Created",
+        description: "Information carried by the acme.message.created kind.",
         payloadSchema: z.object({}).strict(),
         references: {
           "acme:parent": {

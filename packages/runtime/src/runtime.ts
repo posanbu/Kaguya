@@ -998,7 +998,9 @@ function createRegistry(
         }
         continue;
       }
-      registry.register(definition);
+      if (definition.kind.startsWith("core."))
+        registry.registerBuiltin(definition);
+      else registry.register(definition);
       registered.set(definition.kind, definition);
     }
   }

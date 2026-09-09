@@ -23,6 +23,8 @@ import {
 
 const inputKind = defineInformationKind({
   kind: "acme.sdk.input",
+  displayName: "Acme Sdk Input",
+  description: "Information carried by the acme.sdk.input kind.",
   payloadSchema: z.object({ text: z.string() }).strict(),
   references: {},
   log: { enabled: false },
@@ -30,12 +32,61 @@ const inputKind = defineInformationKind({
 
 const outputKind = defineInformationKind({
   kind: "acme.sdk.output",
+  displayName: "Acme Sdk Output",
+  description: "Information carried by the acme.sdk.output kind.",
   payloadSchema: z.object({ text: z.string() }).strict(),
   references: {},
   log: { enabled: false },
 });
 
 describe("information module SDK", () => {
+  it("requires and freezes module and prompt display metadata", () => {
+    const promptRenderer = {
+      rendererId: "acme.prompt.input",
+      displayName: "Acme input prompt",
+      description: "Renders accepted Acme input for a model prompt.",
+      kinds: [inputKind],
+      render: () => "input",
+    };
+    const module = defineInformationModule({
+      manifest: {
+        protocolVersion: 1,
+        moduleVersion: "1.0.0",
+        definitionId: "acme.prompt",
+        displayName: "Acme prompt",
+        description: "Compiles Acme input into model context.",
+        settingsSchema: z.object({}).strict(),
+        consumes: [inputKind],
+        produces: [],
+        selectors: [],
+        promptRenderers: [promptRenderer],
+        requires: [],
+        provides: [],
+      },
+      create: () => ({ provisions: [], subscriptions: [] }),
+    });
+
+    expect(module.manifest.description).toBe(
+      "Compiles Acme input into model context.",
+    );
+    expect(Object.isFrozen(module.manifest.promptRenderers[0])).toBe(true);
+    expect(() =>
+      defineInformationModule({
+        ...module,
+        manifest: { ...module.manifest, description: " " },
+      }),
+    ).toThrow(/module description/iu);
+    expect(() =>
+      defineInformationModule({
+        ...module,
+        manifest: {
+          ...module.manifest,
+          promptRenderers: [{ ...promptRenderer, description: " " }],
+        },
+      }),
+    ).toThrow(/invalid renderer/iu);
+  });
+
   it("defines frozen, schema-bound module diagnostics", () => {
     const diagnostic = defineModuleDiagnostic({
       event: "acme.lookup.started",
@@ -59,6 +110,7 @@ describe("information module SDK", () => {
         diagnostics: [diagnostic],
         definitionId: "acme.diagnostics",
         displayName: "Diagnostics",
+        description: "Defines the Diagnostics information module.",
         settingsSchema: z.object({}).strict(),
         consumes: [],
         produces: [],
@@ -125,6 +177,7 @@ describe("information module SDK", () => {
           provides: [],
           definitionId: "acme.duplicate",
           displayName: "Duplicate",
+          description: "Defines the Duplicate information module.",
           settingsSchema: z.object({}).strict(),
           consumes: [inputKind, inputKind],
           produces: [inputKind, inputKind],

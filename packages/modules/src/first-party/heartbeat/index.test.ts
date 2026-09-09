@@ -6,12 +6,12 @@ import {
 } from "@kaguya/scheduler";
 import { describe, expect, it, vi } from "vitest";
 
-import { heartbeatModule, heartbeatSettingsSchema } from "./heartbeat.js";
+import { heartbeatModule, heartbeatSettingsSchema } from "./index.js";
 import {
   heartbeatScheduledInformationKind,
   heartbeatSupersededInformationKind,
   inboundTextInformationKind,
-} from "./information-kinds.js";
+} from "../information-kinds.js";
 
 const source = {
   adapterId: "adapter",

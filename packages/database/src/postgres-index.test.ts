@@ -37,6 +37,8 @@ const describePostgres =
 
 const plainKind = defineInformationKind({
   kind: "core.runtime.snapshot",
+  displayName: "Core Runtime Snapshot",
+  description: "Information carried by the core.runtime.snapshot kind.",
   payloadSchema: z
     .object({
       nested: z

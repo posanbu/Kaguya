@@ -11,12 +11,16 @@ import * as engine from "@kaguya/engine";
 import { createTestingDatabase } from "./testing.js";
 const source = defineInformationKind({
   kind: "test.source",
+  displayName: "Test Source",
+  description: "Information carried by the test.source kind.",
   payloadSchema: z.object({}).strict(),
   references: {},
   log: { enabled: false },
 });
 const output = defineInformationKind({
   kind: "test.output",
+  displayName: "Test Output",
+  description: "Information carried by the test.output kind.",
   payloadSchema: z.object({}).strict(),
   references: {},
   log: { enabled: false },

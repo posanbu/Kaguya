@@ -9,7 +9,7 @@ description: 用显式 Catalog、能力声明与 Information DAG 组合可检查
 
 ## 唯一模块协议
 
-`defineInformationModule()` 的 manifest 必须包含 `protocolVersion: 1`、稳定 `definitionId`、语义版本 `moduleVersion`、`displayName`、`settingsSchema`，以及 `consumes`、`produces`、`selectors`、`promptRenderers`、`requires`、`provides` 六组声明。可选的 `diagnostics` 声明模块允许上报的瞬时诊断。空声明使用空数组。重复 definition ID、不支持的协议、冲突的同名 kind、Selector、renderer 或诊断 event 都会拒绝启动。
+`defineInformationModule()` 的 manifest 必须包含 `protocolVersion: 1`、稳定 `definitionId`、语义版本 `moduleVersion`、非空 `displayName` 与 `description`、`settingsSchema`，以及 `consumes`、`produces`、`selectors`、`promptRenderers`、`requires`、`provides` 六组声明。每个 Information Kind 必须声明非空 `displayName` 与 `description`；每个 Prompt renderer 必须声明稳定 `rendererId`、非空 `displayName` 与 `description`，以及适用的 `kinds`。这些展示字段与 definition 一起冻结。可选的 `diagnostics` 声明模块允许上报的瞬时诊断。空声明使用空数组。重复 definition ID、不支持的协议、冲突的同名 kind、Selector、renderer 或诊断 event 都会拒绝启动。
 
 `consumes` 约束订阅输入，`produces` 约束派生输出。Selector 与 renderer 使用稳定 ID，并列入 manifest；`context.select()` 拒绝未声明的 Selector。订阅与声明必须引用同一份 kind definition，不能用结构相似的对象替代。Catalog 合并顺序不会改变创建顺序。
 
@@ -22,6 +22,7 @@ const filter = defineInformationModule({
     definitionId: "example.filter",
     moduleVersion: "1.0.0",
     displayName: "Example filter",
+    description: "Filters inbound text into reply requests.",
     settingsSchema: z.object({}).strict(),
     consumes: [inboundTextKind],
     produces: [replyRequestedKind],
@@ -59,6 +60,10 @@ const activations = [
 
 activation 可设置 `enabled: false`，停用不会删除已持久化的未确认工作。kind 注册必须在 `Core.start()` 封闭 Registry 之前完成；自定义宿主可用 `catalogInformationKinds(catalog)` 收集精确的共享定义。Runtime 已执行这项装配。
 
+仓库内的一方模块使用 `packages/modules/src/first-party/<module>/index.ts`，测试与模块放在同一目录。共用 Kind 放在 `src/first-party/information-kinds.ts`，Catalog 固定放在 `src/first-party/catalog.ts`。Catalog 必须显式 import 并注册每个受信模块；Runtime 禁止扫描目录或根据文件名自动发现模块。新增文件若未进入 Catalog，就不会注册、激活或取得执行权限。包根 `src/index.ts` 继续提供稳定公共导出，调用方不依赖一方模块内部路径。
+
+`consumes` 与 `produces` 是模块 Kind 的唯一接口。Runtime 从 Catalog 中各 Manifest 的这两个字段收集定义，只单独注册 Runtime、Engine 与 Scheduler 自身拥有的基础 Kind。不要维护第二份模块 Kind 总表。
+
 ## 能力与生命周期
 
 `defineModuleCapability<T>("namespace:name", apiVersion)` 定义带类型的稳定 token。manifest 的 `requires` 与 `provides` 声明能力依赖；宿主或 provider 返回 `{ capability, value }` 实现。`context.use(token)` 只允许读取已声明且版本匹配的能力。业务模块之间仍通过原子推进阶段，能力承载受控基础设施服务。
@@ -69,7 +74,7 @@ Host 在任何 `create()` 前完成全部启用实例的 settings parse、深冻
 
 `defineModuleDiagnostic()` 固定 event、消息、级别、严格 payload schema 和安全投影；definition 必须列入当前 manifest，才能传给 `context.report()`。模块还可用 `describeStartup()` 返回一句启动状态和少量安全字段。Host 的 started/failed 是权威生命周期，模块描述和瞬时诊断都是补充信息；详见 [Runtime 与 Information 可观测性](./observability)。
 
-`host.inspect()` 从 Catalog 与实际绑定生成 definition/module/protocol 版本、settings schema 的 SHA-256 指纹、kind、Selector/renderer ID 和 capability bindings。它不输出 settings 值、URL、凭据、Prompt、人物或记忆正文。
+`host.inspect()` 从 Catalog 与实际绑定生成 definition/module/protocol 版本、模块名称与说明、settings schema 的 SHA-256 指纹、输入输出 Kind 的 ID/名称/说明、Selector ID、renderer 的 ID/名称/说明/适用 Kind，以及 capability bindings。它不输出 settings 值、URL、凭据、Prompt、人物或记忆正文。Inspection API 与 WebUI 必须直接使用 Manifest 的展示字段，不能维护模块或 Kind 名称映射。
 
 ## 可靠派生与终态
 

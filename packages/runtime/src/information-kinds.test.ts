@@ -9,12 +9,8 @@
  */
 import { consumerFailedInformationKind } from "@kaguya/engine";
 import {
-  assistantTextInformationKind,
-  coreMemoryTextInformationKind,
   deliveryRequestedInformationKind,
-  filterDecisionInformationKind,
   inboundTextInformationKind,
-  replyRequestedInformationKind,
 } from "@kaguya/modules";
 import { describe, expect, it } from "vitest";
 
@@ -106,41 +102,7 @@ describe("runtime information kinds", () => {
       "core.runtime.context",
       "consumer.failed",
       "core.message.inbound.text",
-      "core.reply.requested",
-      "filter.decision",
-      "core.memory.text",
-      "agent.association.requested",
-      "agent.association.query",
-      "agent.association.candidate",
-      "agent.association.completed",
-      "core.person.fact.candidate",
-      "core.person.fact.extracted",
-      "core.message.assistant.text",
       "core.delivery.requested",
-      "agent.chat.scope.entity",
-      "agent.chat.scope.binding",
-      "agent.platform.account.entity",
-      "agent.platform.account.binding",
-      "agent.person.entity",
-      "agent.person.observed",
-      "agent.person.resolution",
-      "agent.person.context.completed",
-      "agent.turn.claimed",
-      "agent.turn.started",
-      "agent.turn.decision.superseded",
-      "agent.turn.completed",
-      "agent.turn.waiting",
-      "agent.turn.silent",
-      "agent.turn.failed",
-      "agent.turn.superseded",
-      "agent.turn.context.completed",
-      "agent.speech.decision",
-      "agent.wait.requested",
-      "agent.heartbeat.scheduled",
-      "agent.heartbeat.fired",
-      "agent.heartbeat.superseded",
-      "agent.heartbeat.failed",
-      "agent.turn.candidate",
       "core.delivery.delivered",
       "core.delivery.failed",
     ]);
@@ -149,14 +111,10 @@ describe("runtime information kinds", () => {
     );
   });
 
-  it("reuses the Engine and modules definition objects", () => {
+  it("reuses the Engine and Runtime boundary definition objects", () => {
     for (const definition of [
       consumerFailedInformationKind,
       inboundTextInformationKind,
-      replyRequestedInformationKind,
-      filterDecisionInformationKind,
-      coreMemoryTextInformationKind,
-      assistantTextInformationKind,
       deliveryRequestedInformationKind,
     ]) {
       expect(builtInInformationKinds).toContain(definition);

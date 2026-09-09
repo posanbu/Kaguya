@@ -19,6 +19,8 @@ import { consumerFailedInformationKind } from "./information-kinds.js";
 
 const customDefinition = defineInformationKind({
   kind: "acme.message.created",
+  displayName: "Acme Message Created",
+  description: "Information carried by the acme.message.created kind.",
   payloadSchema: z.object({ text: z.string() }).strict(),
   references: {},
   log: { enabled: false },
@@ -26,6 +28,8 @@ const customDefinition = defineInformationKind({
 
 const otherDefinition = defineInformationKind({
   kind: "acme.message.updated",
+  displayName: "Acme Message Updated",
+  description: "Information carried by the acme.message.updated kind.",
   payloadSchema: z.object({ text: z.string() }).strict(),
   references: {},
   log: { enabled: false },
@@ -33,6 +37,8 @@ const otherDefinition = defineInformationKind({
 
 const coreDefinition = defineInformationKind({
   kind: "core.message.created",
+  displayName: "Core Message Created",
+  description: "Information carried by the core.message.created kind.",
   payloadSchema: z.object({ text: z.string() }).strict(),
   references: {},
   log: { enabled: false },

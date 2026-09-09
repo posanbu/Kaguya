@@ -10,10 +10,7 @@
 import { freezeInformationAtom, informationIdSchema } from "@kaguya/schema";
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  associationModule,
-  associationCandidateSelector,
-} from "./association.js";
+import { associationModule, associationCandidateSelector } from "./index.js";
 import {
   associationCandidateInformationKind,
   associationCompletedInformationKind,
@@ -23,7 +20,7 @@ import {
   inboundTextInformationKind,
   replyRequestedInformationKind,
   turnContextCompletedInformationKind,
-} from "./information-kinds.js";
+} from "../information-kinds.js";
 
 describe("associationModule", () => {
   it("declares the auditable request/query/candidate/completed chain", () => {

@@ -13,6 +13,8 @@ import { defineInformationKind } from "@kaguya/sdk";
 
 export const consumerFailedInformationKind = defineInformationKind({
   kind: "consumer.failed",
+  displayName: "Consumer Failed",
+  description: "Information carried by the consumer.failed kind.",
   payloadSchema: z
     .object({
       consumer: z.union([

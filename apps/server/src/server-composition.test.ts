@@ -43,7 +43,7 @@ import {
 } from "./server.js";
 import { createWebMessageGateway } from "./web-gateway.js";
 import { registerWebUi } from "./web.js";
-import { llmReplySettingsSchema } from "../../../packages/modules/src/llm-reply.js";
+import { llmReplySettingsSchema } from "@kaguya/modules";
 
 const chatModel = vi.fn((modelId: string) => ({ modelId }));
 

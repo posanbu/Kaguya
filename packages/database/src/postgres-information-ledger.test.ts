@@ -29,6 +29,8 @@ const describePostgres =
 const createPostgresTestingDatabase = testing.createPostgresTestingDatabase;
 const restartKind = defineInformationKind({
   kind: "core.runtime.restart",
+  displayName: "Core Runtime Restart",
+  description: "Information carried by the core.runtime.restart kind.",
   payloadSchema: z.object({ name: z.string() }).strict(),
   references: {},
   log: {

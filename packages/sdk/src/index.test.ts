@@ -19,6 +19,8 @@ describe("information module SDK public entry", () => {
   it("creates a typed subscription from the final package entry", async () => {
     const input = defineInformationKind({
       kind: "acme.sdk.input",
+      displayName: "Acme Sdk Input",
+      description: "Information carried by the acme.sdk.input kind.",
       payloadSchema: z.object({ text: z.string() }).strict(),
       references: {},
       log: { enabled: false },
@@ -33,6 +35,7 @@ describe("information module SDK public entry", () => {
         provides: [],
         definitionId: "acme.sdk.module",
         displayName: "SDK module",
+        description: "Defines the SDK module information module.",
         settingsSchema: z.object({}).strict(),
         consumes: [input],
         produces: [input],

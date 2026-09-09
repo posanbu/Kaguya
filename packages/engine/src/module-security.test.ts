@@ -32,6 +32,7 @@ const definition = (
     moduleVersion: "1.0.0",
     definitionId: id,
     displayName: id,
+    description: `${id} information module`,
     settingsSchema: z.object({}).strict(),
     consumes: [],
     produces: [],
@@ -151,12 +152,16 @@ it("rejects mutable non-JSON settings before create", async () => {
 it("does not install subscriptions appended after instance validation", async () => {
   const allowed = defineInformationKind({
     kind: "test.allowed",
+    displayName: "Test Allowed",
+    description: "Information carried by the test.allowed kind.",
     payloadSchema: z.object({}).strict(),
     references: {},
     log: { enabled: false },
   });
   const other = defineInformationKind({
     kind: "test.other",
+    displayName: "Test Other",
+    description: "Information carried by the test.other kind.",
     payloadSchema: z.object({}).strict(),
     references: {},
     log: { enabled: false },
@@ -203,7 +208,13 @@ it("rejects a malformed kind schema while building the catalog", () => {
   const raw = definition("test.invalidkind");
   raw.manifest = {
     ...raw.manifest,
-    consumes: [{ kind: "test.broken" } as any],
+    consumes: [
+      {
+        kind: "test.broken",
+        displayName: "Broken kind",
+        description: "A deliberately malformed schema fixture.",
+      } as any,
+    ],
   };
   expect(() => defineInformationModuleCatalog(raw)).toThrow(/schema/i);
 });

@@ -84,6 +84,8 @@ describe("information atom log projection", () => {
       TextPayload
     >({
       kind: "core.message.inbound.text",
+      displayName: "Inbound text",
+      description: "Inbound text used by the information logger test.",
       payloadSchema: textPayloadSchema,
       references: {},
       log: {
@@ -161,6 +163,8 @@ describe("information atom log projection", () => {
         ContentPayload
       >({
         kind: `core.system.log.${level}`,
+        displayName: `System ${level} log`,
+        description: `System log routed at ${level} level.`,
         payloadSchema: z
           .object({
             content: z.string(),
@@ -216,6 +220,8 @@ describe("information atom log projection", () => {
     );
     const definition = defineInformationKind({
       kind: "core.system.log.detail",
+      displayName: "Core System Log Detail",
+      description: "Information carried by the core.system.log.detail kind.",
       payloadSchema: z.object({ content: z.string() }).strict(),
       references: {},
       log: {
@@ -278,6 +284,8 @@ describe("information atom log projection", () => {
       ContentPayload
     >({
       kind: "core.system.log.disabled",
+      displayName: "Disabled system log",
+      description: "Information with logging disabled.",
       payloadSchema: z
         .object({
           content: z.string(),
@@ -314,6 +322,8 @@ describe("information atom log projection", () => {
       ContentPayload
     >({
       kind: "core.system.log.invalid",
+      displayName: "Invalid system log",
+      description: "Information with an invalid log projection.",
       payloadSchema: z
         .object({
           content: z.string(),
@@ -366,6 +376,8 @@ describe("information atom log projection", () => {
       ContentPayload
     >({
       kind: "core.system.log.sink",
+      displayName: "System log sink",
+      description: "Information projected through a configured log sink.",
       payloadSchema: z
         .object({
           content: z.string(),
@@ -412,6 +424,8 @@ describe("information atom log projection", () => {
     });
     const definition = defineInformationKind({
       kind: "core.system.log.throwing",
+      displayName: "Core System Log Throwing",
+      description: "Information carried by the core.system.log.throwing kind.",
       payloadSchema: z.object({ content: z.string() }).strict(),
       references: {},
       log: {
@@ -450,6 +464,8 @@ describe("information atom log projection", () => {
     const logger = createLogger({ service: "test", level: "trace", stream });
     const definition = defineInformationKind({
       kind: "core.system.log.sensitive",
+      displayName: "Core System Log Sensitive",
+      description: "Information carried by the core.system.log.sensitive kind.",
       payloadSchema: z.object({ content: z.string() }).strict(),
       references: {},
       log: {

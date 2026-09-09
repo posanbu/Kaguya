@@ -107,6 +107,8 @@ export function defineModuleCapability<T>(
 }
 export interface InformationPromptRendererDefinition {
   readonly rendererId: string;
+  readonly displayName: string;
+  readonly description: string;
   readonly kinds: readonly InformationKindDefinition<string, any>[];
   render(atom: DeepReadonly<InformationAtom>): string;
 }
@@ -115,6 +117,7 @@ export interface InformationModuleManifest<TSettings = unknown> {
   readonly definitionId: string;
   readonly moduleVersion: string;
   readonly displayName: string;
+  readonly description: string;
   readonly settingsSchema: z.ZodType<TSettings>;
   readonly consumes: readonly InformationKindDefinition<string, any>[];
   readonly produces: readonly InformationKindDefinition<string, any>[];
@@ -218,6 +221,8 @@ export function defineInformationModule<TSettings>(
   assertId(m.definitionId, "module definition id");
   if (typeof m.displayName !== "string" || !m.displayName.trim())
     throw new Error("module display name must not be empty");
+  if (typeof m.description !== "string" || !m.description.trim())
+    throw new Error("module description must not be empty");
   if (m.protocolVersion !== 1)
     throw new Error("unsupported information module protocol version");
   if (
@@ -259,7 +264,12 @@ export function defineInformationModule<TSettings>(
         throw new Error(`invalid Selector: ${id}`);
       if (
         "rendererId" in item &&
-        (typeof item.render !== "function" || !Array.isArray(item.kinds))
+        (typeof item.render !== "function" ||
+          !Array.isArray(item.kinds) ||
+          typeof item.displayName !== "string" ||
+          !item.displayName.trim() ||
+          typeof item.description !== "string" ||
+          !item.description.trim())
       )
         throw new Error(`invalid renderer: ${id}`);
     }

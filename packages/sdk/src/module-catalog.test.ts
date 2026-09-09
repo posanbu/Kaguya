@@ -19,6 +19,7 @@ const module = (definitionId: string) =>
       moduleVersion: "1.0.0",
       definitionId,
       displayName: definitionId,
+      description: `${definitionId} information module`,
       settingsSchema: z.object({}),
       consumes: [],
       produces: [],
@@ -30,6 +31,15 @@ const module = (definitionId: string) =>
     create: () => ({ subscriptions: [], provisions: [] }),
   });
 describe("module catalog", () => {
+  it("contains only definitions explicitly registered by the composition root", () => {
+    const registered = module("test.registered");
+    const unregistered = module("test.unregistered");
+    const catalog = defineInformationModuleCatalog(registered);
+
+    expect(catalog.definitions).toEqual([registered]);
+    expect(catalog.definitions).not.toContain(unregistered);
+  });
+
   it("merges deterministically and rejects duplicate definitions", () => {
     const a = module("test.a"),
       b = module("test.b");

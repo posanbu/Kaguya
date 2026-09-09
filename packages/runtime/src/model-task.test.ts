@@ -29,6 +29,8 @@ import {
 const secret = "credential=secret postgresql://private";
 const sourceKind = defineInformationKind({
   kind: "test.input",
+  displayName: "Test Input",
+  description: "Information carried by the test.input kind.",
   payloadSchema: z.object({ text: z.string() }).strict(),
   references: {
     "core:context": {

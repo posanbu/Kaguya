@@ -9,7 +9,7 @@ import {
   speechDecisionInformationKind,
   turnContextCompletedInformationKind,
   type TurnContextCompletedPayload,
-} from "./information-kinds.js";
+} from "../information-kinds.js";
 
 export const speechDecisionSettingsSchema = z
   .object({
@@ -98,6 +98,8 @@ export const speechDecisionModule = defineInformationModule({
     moduleVersion: "1.0.0",
     definitionId: "core.speech.decision",
     displayName: "Deterministic speech timing decision",
+    description:
+      "Scores immutable turn context and records one deterministic speak, wait, or silent decision.",
     settingsSchema: speechDecisionSettingsSchema,
     consumes: [turnContextCompletedInformationKind],
     produces: [speechDecisionInformationKind],

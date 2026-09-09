@@ -17,7 +17,7 @@ import {
   turnCandidateInformationKind,
   inboundTextInformationKind,
   waitRequestedInformationKind,
-} from "./information-kinds.js";
+} from "../information-kinds.js";
 
 export const heartbeatSettingsSchema = z
   .object({
@@ -108,6 +108,8 @@ export const heartbeatModule = defineInformationModule({
     moduleVersion: "1.0.0",
     definitionId: "agent.heartbeat.short",
     displayName: "Durable short heartbeat",
+    description:
+      "Durably debounces inbound and wait signals into recoverable turn candidates.",
     settingsSchema: heartbeatSettingsSchema,
     consumes: [
       inboundTextInformationKind,

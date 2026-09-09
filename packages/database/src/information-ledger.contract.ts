@@ -31,6 +31,8 @@ const TEST_TIMEOUT = 15_000;
 
 const contextKind = defineInformationKind({
   kind: "core.runtime.context",
+  displayName: "Core Runtime Context",
+  description: "Information carried by the core.runtime.context kind.",
   payloadSchema: z.object({ name: z.string() }).strict(),
   references: {},
   log: { enabled: false },
@@ -38,6 +40,8 @@ const contextKind = defineInformationKind({
 
 const inboundKind = defineInformationKind({
   kind: "core.message.inbound.text",
+  displayName: "Core Message Inbound Text",
+  description: "Information carried by the core.message.inbound.text kind.",
   payloadSchema: z.object({ text: z.string() }).strict(),
   references: {
     "core:context": {
@@ -51,6 +55,8 @@ const inboundKind = defineInformationKind({
 
 const replyKind = defineInformationKind({
   kind: "core.message.assistant.text",
+  displayName: "Core Message Assistant Text",
+  description: "Information carried by the core.message.assistant.text kind.",
   payloadSchema: z.object({ text: z.string() }).strict(),
   references: {
     "core:caused-by": {
@@ -64,6 +70,8 @@ const replyKind = defineInformationKind({
 
 const multiReferenceKind = defineInformationKind({
   kind: "core.runtime.context.bundle",
+  displayName: "Core Runtime Context Bundle",
+  description: "Information carried by the core.runtime.context.bundle kind.",
   payloadSchema: z.object({ name: z.string() }).strict(),
   references: {
     "core:contexts": {
@@ -77,6 +85,8 @@ const multiReferenceKind = defineInformationKind({
 
 const plainKind = defineInformationKind({
   kind: "core.runtime.snapshot",
+  displayName: "Core Runtime Snapshot",
+  description: "Information carried by the core.runtime.snapshot kind.",
   payloadSchema: z
     .object({
       nested: z.object({ values: z.array(z.string()) }).strict(),

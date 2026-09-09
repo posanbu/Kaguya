@@ -97,6 +97,8 @@ export const reconciliationFailedPayloadSchema = z
 
 export const cadenceDefinitionInformationKind = defineInformationKind({
   kind: "scheduler.cadence.definition",
+  displayName: "Scheduler Cadence Definition",
+  description: "Information carried by the scheduler.cadence.definition kind.",
   payloadSchema: cadenceDefinitionPayloadSchema,
   references: {},
   log: {
@@ -111,6 +113,8 @@ export const cadenceDefinitionInformationKind = defineInformationKind({
 });
 export const cadenceDisabledInformationKind = defineInformationKind({
   kind: "scheduler.cadence.disabled",
+  displayName: "Scheduler Cadence Disabled",
+  description: "Information carried by the scheduler.cadence.disabled kind.",
   payloadSchema: cadenceDisabledPayloadSchema,
   references: {
     "core:status-of": {
@@ -131,6 +135,8 @@ export const cadenceDisabledInformationKind = defineInformationKind({
 });
 export const cadenceSupersededInformationKind = defineInformationKind({
   kind: "scheduler.cadence.superseded",
+  displayName: "Scheduler Cadence Superseded",
+  description: "Information carried by the scheduler.cadence.superseded kind.",
   payloadSchema: cadenceSupersededPayloadSchema,
   references: {
     "core:status-of": {
@@ -150,6 +156,8 @@ export const cadenceSupersededInformationKind = defineInformationKind({
 });
 export const cadenceTickInformationKind = defineInformationKind({
   kind: "scheduler.cadence.tick",
+  displayName: "Scheduler Cadence Tick",
+  description: "Information carried by the scheduler.cadence.tick kind.",
   payloadSchema: cadenceTickPayloadSchema,
   references: {
     "core:caused-by": {
@@ -172,6 +180,9 @@ export const cadenceTickInformationKind = defineInformationKind({
 });
 export const reconciliationRequestedInformationKind = defineInformationKind({
   kind: "maintenance.projection.reconciliation.requested",
+  displayName: "Maintenance Projection Reconciliation Requested",
+  description:
+    "Information carried by the maintenance.projection.reconciliation.requested kind.",
   payloadSchema: reconciliationRequestedPayloadSchema,
   references: {
     "core:caused-by": {
@@ -192,6 +203,9 @@ export const reconciliationRequestedInformationKind = defineInformationKind({
 });
 export const reconciliationCompletedInformationKind = defineInformationKind({
   kind: "maintenance.projection.reconciliation.completed",
+  displayName: "Maintenance Projection Reconciliation Completed",
+  description:
+    "Information carried by the maintenance.projection.reconciliation.completed kind.",
   payloadSchema: reconciliationCompletedPayloadSchema,
   references: {
     "core:status-of": {
@@ -214,6 +228,9 @@ export const reconciliationCompletedInformationKind = defineInformationKind({
 });
 export const reconciliationFailedInformationKind = defineInformationKind({
   kind: "maintenance.projection.reconciliation.failed",
+  displayName: "Maintenance Projection Reconciliation Failed",
+  description:
+    "Information carried by the maintenance.projection.reconciliation.failed kind.",
   payloadSchema: reconciliationFailedPayloadSchema,
   references: {
     "core:status-of": {

@@ -49,6 +49,9 @@ const terminalReference = {
 } as const;
 export const oneShotRequestedInformationKind = defineInformationKind({
   kind: "core.schedule.one-shot.requested",
+  displayName: "Core Schedule One Shot Requested",
+  description:
+    "Information carried by the core.schedule.one-shot.requested kind.",
   payloadSchema: requestedPayloadSchema,
   references: {
     "core:caused-by": { required: true, multiple: false },
@@ -71,6 +74,8 @@ export const oneShotRequestedInformationKind = defineInformationKind({
 });
 export const oneShotDueInformationKind = defineInformationKind({
   kind: "core.schedule.one-shot.due",
+  displayName: "Core Schedule One Shot Due",
+  description: "Information carried by the core.schedule.one-shot.due kind.",
   payloadSchema: duePayloadSchema,
   references: terminalReference,
   log: {
@@ -85,6 +90,8 @@ export const oneShotDueInformationKind = defineInformationKind({
 });
 export const oneShotFiredInformationKind = defineInformationKind({
   kind: "core.schedule.one-shot.fired",
+  displayName: "Core Schedule One Shot Fired",
+  description: "Information carried by the core.schedule.one-shot.fired kind.",
   payloadSchema: z.object({}).strict(),
   references: terminalReference,
   log: {
@@ -98,6 +105,9 @@ export const oneShotFiredInformationKind = defineInformationKind({
 });
 export const oneShotSupersededInformationKind = defineInformationKind({
   kind: "core.schedule.one-shot.superseded",
+  displayName: "Core Schedule One Shot Superseded",
+  description:
+    "Information carried by the core.schedule.one-shot.superseded kind.",
   payloadSchema: z.object({}).strict(),
   references: terminalReference,
   log: {
@@ -111,6 +121,8 @@ export const oneShotSupersededInformationKind = defineInformationKind({
 });
 export const oneShotFailedInformationKind = defineInformationKind({
   kind: "core.schedule.one-shot.failed",
+  displayName: "Core Schedule One Shot Failed",
+  description: "Information carried by the core.schedule.one-shot.failed kind.",
   payloadSchema: z
     .object({ failureKind: z.enum(["consumer-failed", "input-unavailable"]) })
     .strict(),
