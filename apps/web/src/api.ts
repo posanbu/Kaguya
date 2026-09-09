@@ -867,3 +867,83 @@ function isErrorResponse(value: unknown): value is {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+export async function getAdapterStatus(
+  config: GatewayConfig,
+  signal: AbortSignal,
+  fetchImplementation: typeof fetch = fetch,
+): Promise<import("./adapter-status.js").AdapterStatus> {
+  const response = await requestAuthenticatedJson(
+    config,
+    "/api/v1/adapters/status",
+    { method: "GET", signal },
+    fetchImplementation,
+  );
+  const payload = await readJson(response);
+  if (!response.ok || !isRecord(payload) || !isAdapterHostStatus(payload.data))
+    throw new GatewayRequestError(
+      "无法读取 Adapter 状态",
+      "adapter_status_failed",
+      response.status,
+    );
+  return payload.data;
+}
+function isAdapterHostStatus(
+  value: unknown,
+): value is import("./adapter-status.js").AdapterStatus {
+  const lifecycles = [
+    "disabled",
+    "starting",
+    "running",
+    "stopping",
+    "stopped",
+    "failed",
+  ];
+  const ingress = ["ready", "runtime_unavailable", "stopping"];
+  return (
+    isRecord(value) &&
+    lifecycles.includes(String(value.adapterHostState)) &&
+    isRecord(value.runtime) &&
+    ingress.includes(String(value.runtime.ingress)) &&
+    (value.runtime.reason === undefined ||
+      [
+        "configuration_not_ready",
+        "database_unavailable",
+        "runtime_start_failed",
+      ].includes(String(value.runtime.reason))) &&
+    Array.isArray(value.adapters) &&
+    value.adapters.every(
+      (a) =>
+        isRecord(a) &&
+        typeof a.adapterId === "string" &&
+        typeof a.type === "string" &&
+        typeof a.platform === "string" &&
+        typeof a.enabled === "boolean" &&
+        lifecycles.includes(String(a.lifecycle)) &&
+        ingress.includes(String(a.ingress)) &&
+        [
+          "not_applicable",
+          "connecting",
+          "connected",
+          "retrying",
+          "disconnected",
+        ].includes(String(a.connectivity)) &&
+        typeof a.updatedAt === "string" &&
+        Number.isFinite(Date.parse(a.updatedAt)) &&
+        (a.attempt === undefined ||
+          (typeof a.attempt === "number" &&
+            Number.isInteger(a.attempt) &&
+            a.attempt > 0)) &&
+        (a.nextRetryAt === undefined ||
+          (typeof a.nextRetryAt === "string" &&
+            Number.isFinite(Date.parse(a.nextRetryAt)))) &&
+        (a.errorType === undefined ||
+          [
+            "configuration_invalid",
+            "connection_failed",
+            "start_failed",
+            "stop_failed",
+          ].includes(String(a.errorType))),
+    )
+  );
+}

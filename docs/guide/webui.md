@@ -65,10 +65,14 @@ Web gateway 会把输入规范化为 `web` 平台消息，使用 `web:${requestI
 
 **401 unauthorized** — Token 与当前 Server 实例不一致。页面会切换到访问受限状态；从当前 Server 终端重新打开完整链接。
 
-**503 configuration_setup_required** — 所选 Profile 未 ready，Runtime ingress 没有启动。返回 Profile 管理补齐配置。
+**503 runtime_unavailable** — Runtime ingress 不可用或 Server 正在停止。进入 Gateway / Adapter 查看原因，修复后重启。
 
 **accepted 但没有回答** — 属于当前 Web 协议的正常边界，不是前端伪造失败。
 
 **Web UI 可用但 NapCat 不响应** — HTTP/Web 与 NapCat 生命周期相互隔离；检查 `module=adapter:napcat` 日志。
 
 更完整的定位步骤见[故障排查](./troubleshooting)。
+
+## Gateway / Adapter
+
+配置页入口展示 Host、Runtime ingress 以及 Web、NapCat 的独立状态，保留 NapCat 配置表单。连接成功不代表能处理消息，修复配置或下游故障后需重启。页面可见时每两秒刷新，离开或隐藏时停止，支持手动刷新。请求失败后保留最后快照，并显示失联提示及最后获取时间。

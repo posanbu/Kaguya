@@ -431,28 +431,30 @@ describe("unified server composition", () => {
       .spyOn(await import("@kaguya/logger"), "createLogger")
       .mockReturnValue(rootLogger);
 
-    const error = await startKaguyaServer({
+    const webDistPath = join(root, "web");
+    mkdirSync(webDistPath, { recursive: true });
+    writeFileSync(join(webDistPath, "index.html"), "<main>Kaguya</main>");
+    const server = await startKaguyaServer({
       ...config(join(root, "database")),
+      webDistPath,
       configRoot: root,
       databaseUrl,
       port: 0,
-    }).catch((thrown: unknown) => thrown);
+    });
 
     expect(connect).toHaveBeenCalledOnce();
     expect(connect).toHaveBeenCalledWith({ connectionString: databaseUrl });
-    expect(error).toMatchObject({
-      name: "InformationDatabaseConnectionError",
-      message: "Information database connection failed",
-      failureType: "Error",
+    expect(server.runtime).toBeUndefined();
+    expect(server.adapterHost.status().runtime).toEqual({
+      ingress: "runtime_unavailable",
+      reason: "database_unavailable",
     });
+    expect((await server.app.inject("/healthz")).statusCode).toBe(200);
+    await server.close();
     const serialized = JSON.stringify(stream.logs());
-    expect(serialized).toContain(
-      '"errorType":"InformationDatabaseConnectionError"',
-    );
-    expect(`${String(error)}\n${serialized}`).not.toContain(databaseUrl);
-    expect(`${String(error)}\n${serialized}`).not.toContain(
-      "database-password",
-    );
+    expect(serialized).toContain('"reason":"database_unavailable"');
+    expect(serialized).not.toContain(databaseUrl);
+    expect(serialized).not.toContain("database-password");
 
     connect.mockRestore();
     createLoggerSpy.mockRestore();
@@ -491,30 +493,26 @@ describe("unified server composition", () => {
       rootLogger,
     );
 
-    const error = await startKaguyaServer({
+    const webDistPath = join(root, "web");
+    mkdirSync(webDistPath, { recursive: true });
+    writeFileSync(join(webDistPath, "index.html"), "<main>Kaguya</main>");
+    const server = await startKaguyaServer({
       ...config(join(root, "database")),
+      webDistPath,
       configRoot: root,
       databaseUrl,
       port: 0,
-    }).catch((thrown: unknown) => thrown);
+    });
 
     expect(migrate).toHaveBeenCalledOnce();
     expect(close).toHaveBeenCalledOnce();
-    expect(error).toMatchObject({
-      name: "InformationDatabaseConnectionError",
-      message: "Information database connection failed",
-      failureType: "Error",
-    });
-    expect(error).not.toHaveProperty("cause");
-    expect(stream.logs()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          event: "server.start.failed",
-          errorType: "InformationDatabaseConnectionError",
-        }),
-      ]),
+    expect(server.runtime).toBeUndefined();
+    expect(server.adapterHost.status().runtime.reason).toBe(
+      "database_unavailable",
     );
-    const serialized = `${String(error)}\n${JSON.stringify(error)}\n${JSON.stringify(stream.logs())}`;
+    expect((await server.app.inject("/healthz")).statusCode).toBe(200);
+    await server.close();
+    const serialized = JSON.stringify(stream.logs());
     expect(serialized).not.toContain(databaseUrl);
     expect(serialized).not.toContain("runtime-start-password");
 
@@ -549,19 +547,23 @@ describe("unified server composition", () => {
       rootLogger,
     );
 
-    const error = await startKaguyaServer({
+    const webDistPath = join(root, "web");
+    mkdirSync(webDistPath, { recursive: true });
+    writeFileSync(join(webDistPath, "index.html"), "<main>Kaguya</main>");
+    const server = await startKaguyaServer({
       ...config(join(root, "database")),
+      webDistPath,
       configRoot: root,
       port: 0,
-    }).catch((thrown: unknown) => thrown);
-
-    expect(error).toMatchObject({
-      name: "InformationRuntimeStartupError",
-      message: "Information runtime startup failed",
-      failureType: "Error",
     });
-    expect(error).not.toHaveProperty("cause");
-    const serialized = `${String(error)}\n${JSON.stringify(error)}\n${JSON.stringify(stream.logs())}`;
+
+    expect(server.runtime).toBeUndefined();
+    expect(server.adapterHost.status().runtime.reason).toBe(
+      "runtime_start_failed",
+    );
+    expect((await server.app.inject("/healthz")).statusCode).toBe(200);
+    await server.close();
+    const serialized = JSON.stringify(stream.logs());
     expect(serialized).not.toContain("module-secret");
     expect(serialized).not.toContain("postgresql://");
     await closeLogger(rootLogger);
@@ -612,6 +614,149 @@ describe("unified server composition", () => {
     expect(selectedProfileReads).toHaveBeenCalledOnce();
     await server.close();
   }, 20_000);
+
+  it.each([false, true])(
+    "checks the database independently when AI is incomplete (database failure: %s)",
+    async (databaseFails) => {
+      const root = tempWorkspaceRoot();
+      await FileUserConfigManager.bootstrap({ rootDir: root });
+      const webDistPath = join(root, "web");
+      mkdirSync(webDistPath, { recursive: true });
+      writeFileSync(join(webDistPath, "index.html"), "<main>Kaguya</main>");
+      const database = await createTestingDatabase();
+      const migrate = vi.spyOn(database, "migrate");
+      if (databaseFails)
+        migrate.mockRejectedValueOnce(new Error("database-secret"));
+      const connect = vi
+        .spyOn(KaguyaDatabase, "connect")
+        .mockResolvedValueOnce(database);
+      const startRuntime = vi.spyOn(KaguyaRuntime.prototype, "start");
+      const { NapCatConnectionSupervisor } = await import("./napcat.js");
+      const startAdapter = vi
+        .spyOn(NapCatConnectionSupervisor.prototype, "start")
+        .mockResolvedValue();
+      const serverConfig = config(root);
+      const server = await startKaguyaServer({
+        ...serverConfig,
+        configRoot: root,
+        webDistPath,
+        port: 0,
+        napcat: {
+          ...serverConfig.napcat,
+          enabled: true,
+          wsUrl: "ws://localhost:3001",
+        },
+      });
+      try {
+        expect(connect).toHaveBeenCalledOnce();
+        expect(migrate).toHaveBeenCalledOnce();
+        expect(startRuntime).not.toHaveBeenCalled();
+        expect(startAdapter).toHaveBeenCalledOnce();
+        expect(server.adapterHost.status()).toMatchObject({
+          adapterHostState: "running",
+          runtime: {
+            ingress: "runtime_unavailable",
+            reason: "configuration_not_ready",
+          },
+        });
+        expect(
+          server.adapterHost
+            .status()
+            .adapters.every((adapter) => adapter.lifecycle === "running"),
+        ).toBe(true);
+        expect((await server.app.inject("/healthz")).statusCode).toBe(200);
+      } finally {
+        await server.close();
+      }
+    },
+  );
+
+  it("keeps Runtime and Web running with invalid NapCat configuration and drains after stopping ingress", async () => {
+    const root = tempWorkspaceRoot();
+    const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+    await manager.replaceProfile(
+      "default",
+      readyProfileReplacement(
+        "default",
+        readyProfileSettings("light", "heavy"),
+      ),
+    );
+    const webDistPath = join(root, "web");
+    mkdirSync(webDistPath, { recursive: true });
+    writeFileSync(join(webDistPath, "index.html"), "<main>Kaguya</main>");
+    const database = await createTestingDatabase();
+    vi.spyOn(KaguyaDatabase, "connect").mockResolvedValueOnce(database);
+    const serverConfig = config(root);
+    const server = await startKaguyaServer({
+      ...serverConfig,
+      configRoot: root,
+      webDistPath,
+      port: 0,
+      napcat: {
+        ...serverConfig.napcat,
+        enabled: true,
+        configurationError: "configuration_invalid",
+      },
+    });
+    expect(server.runtime).toBeDefined();
+    expect(server.adapterHost.status().adapters).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "napcat", lifecycle: "failed" }),
+        expect.objectContaining({
+          type: "web",
+          lifecycle: "running",
+          ingress: "ready",
+        }),
+      ]),
+    );
+    const order: string[] = [];
+    const closeRuntime = server.runtime!.close.bind(server.runtime);
+    vi.spyOn(server.runtime!, "close").mockImplementation(async () => {
+      expect(server.adapterHost.status().runtime.ingress).toBe("stopping");
+      expect(
+        server.adapterHost.status().adapters.find((a) => a.type === "web")
+          ?.lifecycle,
+      ).toBe("stopped");
+      order.push("runtime");
+      await closeRuntime();
+    });
+    const closeDatabase = database.close.bind(database);
+    vi.spyOn(database, "close").mockImplementation(async () => {
+      order.push("database");
+      await closeDatabase();
+    });
+    await server.close();
+    expect(order).toEqual(["runtime", "database"]);
+  });
+
+  it("retains failed cleanup resources for the final shutdown attempt", async () => {
+    const root = tempWorkspaceRoot();
+    const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+    await manager.replaceProfile(
+      "default",
+      readyProfileReplacement(
+        "default",
+        readyProfileSettings("light", "heavy"),
+      ),
+    );
+    const database = await createTestingDatabase();
+    vi.spyOn(KaguyaDatabase, "connect").mockResolvedValueOnce(database);
+    vi.spyOn(KaguyaRuntime.prototype, "start").mockRejectedValueOnce(
+      new Error("runtime failed"),
+    );
+    const runtimeClose = vi
+      .spyOn(KaguyaRuntime.prototype, "close")
+      .mockRejectedValueOnce(new Error("runtime cleanup failed"));
+    const databaseClose = vi
+      .spyOn(database, "close")
+      .mockRejectedValueOnce(new Error("database cleanup failed"));
+    // Missing static assets deliberately fail HTTP preparation before any socket binding.
+    await expect(
+      startKaguyaServer({ ...config(root), configRoot: root, port: 0 }),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(runtimeClose).toHaveBeenCalledTimes(2);
+    expect(databaseClose).toHaveBeenCalledTimes(2);
+  });
 
   it("creates a heavy/light resolver from frozen profile configuration", async () => {
     const root = mkdtempSync(join(tmpdir(), "kaguya-profile-resolver-"));

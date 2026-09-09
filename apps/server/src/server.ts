@@ -1,29 +1,4 @@
-/**
- * 功能概述：本文件是 Kaguya 服务端唯一 composition root，负责读取配置、
- * 连接 PostgreSQL information database、组装 Runtime、HTTP/Web UI 与 NapCat，并把启动时
- * 选中的全局 Profile 冻结为一个共享 tier-only 模型解析器。
- * 主要职责：`startKaguyaServer` 会先在统一的启动保护区内创建异步
- * `ConfigurationManagement`，让缺失仓库先完成 bootstrap/open，再根据 selected
- * Profile readiness 决定当前进程是正常启动 Runtime，还是在数据库预检后进入
- * setup-mode 暂停 Runtime/NapCat 仅提供配置入口；就绪时 Server 自行连接数据库并以
- * 注入形式构造 Runtime，Web/NapCat 只获得该 Runtime 的 `InformationIngress`。即使 bootstrap/open 阶段遇到
- * `CONFIG_UNSUPPORTED_VERSION` 或 `CONFIG_CORRUPT_STORE`，也必须沿用已有的
- * startup failed 日志与 logger 关闭路径。`createRuntimeModelSelectionResolver`
- * 只接收 `setup.inspect()` 已选中的 Profile 快照并校验，返回真实 providerId/modelId 与模型句柄，
- * 不再次读取 Registry；`openAICompatibleProviderSettings`
- * 提取 provider 能力开关；`assertProfileReady` 保持 readiness 错误固定且无 secret；
- * `connectInformationDatabase` 与 `startInformationRuntime` 将 lazy Pool 创建及
- * 首次 migrate/I/O 失败收窄为 database error，其他 Runtime/模块启动失败收窄为
- * 独立 runtime startup error；两类错误都不包含 URL、cause 或凭据；
- * 其余 helper 管理资源关闭与进程信号处理。
- * 代码库关系：本文件消费 `@kaguya/config` 的 Profile Registry、`@kaguya/runtime`
- * 的运行时注入点、Fastify HTTP 组装和 NapCat 适配器；模块层 `packages/modules`
- * 已不再携带模块级 Profile 标识，因此 Profile 选择只能在这里于服务启动时完成一次。
- * 输入输出与副作用：启动时会创建 logger、检查配置 readiness、按需连接数据库并启动 Runtime/HTTP/NapCat；
- * resolver 会缓存已选 Profile 下 provider client，并在 light/heavy tier 缺失时于启动期失败，
- * 防止服务接受请求后再暴露可变 Profile 覆盖路径；关闭时 Runtime 先排空，
- * 再由 Server 关闭它所有的数据库连接。
- */
+/** Server composition root: adapter lifetimes and database checks remain independent of Runtime readiness. */
 import {
   createReplyComposition,
   type RuntimeModelSelectionResolver,
@@ -45,7 +20,6 @@ import {
   type KaguyaLogger,
 } from "@kaguya/logger";
 import {
-  GatewayAllowlist,
   KaguyaRuntime,
   RuntimeDatabaseInitializationError,
   runtimeInformationKindNames,
@@ -65,12 +39,17 @@ import {
   type NapCatConnectionSupervisor,
 } from "./napcat.js";
 import { createConfigurationManagement } from "./setup.js";
-import { createWebMessageGateway } from "./web-gateway.js";
+import { AdapterHost } from "./adapter-host.js";
+import type {
+  AdapterConnectionStatus,
+  RuntimeUnavailableReason,
+} from "@kaguya/platform-adapters";
 import { registerWebUi, type WebUiHandle } from "./web.js";
 
 export interface StartedKaguyaServer {
   readonly app: FastifyInstance;
   readonly runtime?: KaguyaRuntime;
+  readonly adapterHost: AdapterHost;
   close(): Promise<void>;
 }
 
@@ -116,7 +95,7 @@ export async function startKaguyaServer(
     await closeResources({
       app: undefined,
       webUi: undefined,
-      napcat: undefined,
+      adapterHost: undefined,
       runtime: undefined,
       database: undefined,
       rootLogger,
@@ -133,20 +112,23 @@ export async function startKaguyaServer(
   const gatewayAuth = createGatewayAuthenticator(config.gatewayToken);
   const httpLogger = createModuleLogger(rootLogger, "server:http");
   const napcatLogger = createModuleLogger(rootLogger, "adapter:napcat");
-  const webLogger = createModuleLogger(rootLogger, "adapter:web");
+  const adapterHost = new AdapterHost(rootLogger, config.gatewayAllowlist);
   let app: FastifyInstance | undefined;
   let webUi: WebUiHandle | undefined;
   let napcat: NapCatConnectionSupervisor | undefined;
   let closePromise: Promise<void> | undefined;
+  let unregisterShutdown: (() => void) | undefined;
   let runtime: KaguyaRuntime | undefined;
+  let failedRuntime: KaguyaRuntime | undefined;
   let database: KaguyaDatabase | undefined;
 
   const close = (): Promise<void> => {
+    unregisterShutdown?.();
     closePromise ??= closeResources({
       app,
       webUi,
-      napcat,
-      runtime,
+      adapterHost,
+      runtime: runtime ?? failedRuntime,
       database,
       rootLogger,
       serverLogger,
@@ -156,76 +138,124 @@ export async function startKaguyaServer(
 
   try {
     const effectiveConfig = config;
+    adapterHost.register({
+      adapterId: "web.ui.main",
+      type: "web",
+      platform: "web",
+      enabled: true,
+      start: async () => {},
+      stop: async () => {},
+    });
+    let reportNapCatStatus:
+      ((status: AdapterConnectionStatus) => void) | undefined;
+    napcat = createNapCatSupervisor({
+      config: config.napcat,
+      ingress: adapterHost.ingress,
+      logger: napcatLogger,
+      allowsInbound: (message) => adapterHost.acceptInbound(message),
+      reportStatus: (status) => reportNapCatStatus?.(status),
+    });
+    const napcatAdapter = napcat;
+    adapterHost.register({
+      adapterId: config.napcat.adapterId,
+      type: "napcat",
+      platform: "qq",
+      enabled: config.napcat.enabled,
+      ...(config.napcat.configurationError
+        ? { configurationError: config.napcat.configurationError }
+        : {}),
+      outboundTransport: napcatAdapter,
+      start: async (report) => {
+        reportNapCatStatus = report;
+        await napcatAdapter.start();
+      },
+      stop: () => napcatAdapter.stop(),
+    });
+    const degradationReasons: RuntimeUnavailableReason[] = [];
     let resolveModelSelection: RuntimeModelSelectionResolver | undefined;
-    let memoryEnabled = false;
-    if (setupStatus.status === "ready") {
+    try {
       resolveModelSelection =
         createRuntimeModelSelectionResolver(selectedProfile);
-      memoryEnabled = selectedProfile.memory.enabled;
-    } else {
-      serverLogger.warn(
-        {
-          event: "server.configuration.required",
-          reason: setupStatus.status,
-        },
-        "Configuration is not ready; use the access URL after the server starts",
-      );
+    } catch {
+      degradationReasons.push("configuration_not_ready");
     }
-    const runtimeReady = resolveModelSelection !== undefined;
-    if (resolveModelSelection !== undefined) {
-      database = await connectInformationDatabase(effectiveConfig.databaseUrl);
-      runtime = new KaguyaRuntime({
-        database,
-        logger: rootLogger,
-        ...createReplyComposition(resolveModelSelection, { memoryEnabled }),
-      });
-    } else {
+    // Database preflight runs even when AI configuration is incomplete.
+    try {
       database = await connectInformationDatabase(effectiveConfig.databaseUrl);
       await prepareSetupDatabase(database);
-      await database.close();
-      database = undefined;
+    } catch {
+      degradationReasons.push("database_unavailable");
     }
-    const webGateway = runtimeReady
-      ? createWebMessageGateway({
-          adapterId: "web.ui.main",
-          ingress: required(runtime, "runtime ingress"),
-          logger: webLogger,
-        })
-      : undefined;
-
+    if (
+      resolveModelSelection &&
+      database &&
+      !degradationReasons.includes("database_unavailable")
+    ) {
+      try {
+        runtime = new KaguyaRuntime({
+          database,
+          logger: rootLogger,
+          ...createReplyComposition(resolveModelSelection, {
+            memoryEnabled: selectedProfile.memory.enabled,
+          }),
+        });
+        adapterHost.registerTransports(runtime);
+        await startInformationRuntime(runtime);
+      } catch (error) {
+        degradationReasons.push(
+          error instanceof InformationDatabaseConnectionError
+            ? "database_unavailable"
+            : "runtime_start_failed",
+        );
+        try {
+          await runtime?.close();
+        } catch {
+          failedRuntime = runtime;
+          serverLogger.warn(
+            {
+              event: "server.degraded.cleanup.failed",
+              errorType: "runtime_close_failed",
+            },
+            "Partial Runtime cleanup failed",
+          );
+        }
+        runtime = undefined;
+      }
+    }
+    if (!runtime && database) {
+      try {
+        await database.close();
+        database = undefined;
+      } catch {
+        serverLogger.warn(
+          {
+            event: "server.degraded.cleanup.failed",
+            errorType: "database_close_failed",
+          },
+          "Database cleanup failed",
+        );
+      }
+    }
+    adapterHost.finalizeRuntime(runtime, degradationReasons[0]);
+    for (const reason of degradationReasons)
+      serverLogger.warn(
+        { event: "server.degraded", reason },
+        "Server downstream unavailable",
+      );
     serverLogger.info(
       {
         event: "server.starting",
-        host: effectiveConfig.host,
-        port: effectiveConfig.port,
-        development: config.development,
-        napcatEnabled: runtimeReady && effectiveConfig.napcat.enabled,
+        host: config.host,
+        port: config.port,
+        napcatEnabled: config.napcat.enabled,
       },
       "Kaguya server starting",
     );
-    if (runtimeReady && effectiveConfig.napcat.enabled) {
-      const gatewayAllowlist = new GatewayAllowlist(
-        effectiveConfig.gatewayAllowlist,
-      );
-      napcat = createNapCatSupervisor({
-        config: effectiveConfig.napcat,
-        ingress: required(runtime, "runtime ingress"),
-        logger: napcatLogger,
-        allowsInbound: (message) => gatewayAllowlist.allows(message),
-      });
-      required(runtime, "runtime").registerTransport({
-        adapterId: effectiveConfig.napcat.adapterId,
-        platform: "qq",
-        transport: napcat,
-      });
-    }
-    if (runtimeReady) {
-      await startInformationRuntime(required(runtime, "runtime"));
-    }
     app = await createHttpApplication({
       config: effectiveConfig,
       gatewayAuth,
-      ...(webGateway !== undefined ? { webGateway } : {}),
+      webGateway: adapterHost.webGateway,
+      adapterHost,
       setup,
       logger: httpLogger,
     });
@@ -243,23 +273,17 @@ export async function startKaguyaServer(
       `${formatAccessUrl({ ...effectiveConfig, port: listeningPort })}\n`,
     );
 
-    if (runtimeReady && effectiveConfig.napcat.enabled) {
-      napcatLogger.info(
-        {
-          event: "napcat.connection.starting",
-          adapterId: config.napcat.adapterId,
-        },
-        "NapCat connection starting",
-      );
-      await napcat?.start();
-    }
+    await adapterHost.start();
 
     serverLogger.info(
       {
         event: "server.started",
         host: effectiveConfig.host,
         port: effectiveConfig.port,
-        napcatEnabled: runtimeReady && effectiveConfig.napcat.enabled,
+        napcatEnabled: effectiveConfig.napcat.enabled,
+        runtimeReady: runtime !== undefined,
+        adapterHostState: adapterHost.status().adapterHostState,
+        degradationReasons,
       },
       "Kaguya server started",
     );
@@ -274,10 +298,11 @@ export async function startKaguyaServer(
 
   const started: StartedKaguyaServer = {
     app,
+    adapterHost,
     ...(runtime === undefined ? {} : { runtime }),
     close,
   };
-  registerShutdownHandlers(started, serverLogger);
+  unregisterShutdown = registerShutdownHandlers(started, serverLogger);
   return started;
 }
 
@@ -422,7 +447,7 @@ function assertProfileReady(profile: UserConfigProfile): void {
 async function closeResources(options: {
   readonly app: FastifyInstance | undefined;
   readonly webUi: WebUiHandle | undefined;
-  readonly napcat: NapCatConnectionSupervisor | undefined;
+  readonly adapterHost: AdapterHost | undefined;
   readonly runtime: KaguyaRuntime | undefined;
   readonly database: KaguyaDatabase | undefined;
   readonly rootLogger: KaguyaLogger;
@@ -433,9 +458,10 @@ async function closeResources(options: {
     "Kaguya server stopping",
   );
   const failures: unknown[] = [];
+  options.adapterHost?.beginStopping();
   const ingressResults = await Promise.allSettled([
     options.app?.close() ?? Promise.resolve(),
-    options.napcat?.stop() ?? Promise.resolve(),
+    options.adapterHost?.stop() ?? Promise.resolve(),
   ]);
   collectFailures(ingressResults, failures);
 
@@ -503,13 +529,6 @@ function isRuntimeDatabaseInitializationError(
   }
 }
 
-function required<T>(value: T | undefined, label: string): T {
-  if (value === undefined) {
-    throw new Error(`Missing ${label}`);
-  }
-  return value;
-}
-
 function collectFailures(
   results: readonly PromiseSettledResult<unknown>[],
   failures: unknown[],
@@ -524,7 +543,7 @@ function collectFailures(
 function registerShutdownHandlers(
   server: StartedKaguyaServer,
   logger: KaguyaLogger,
-): void {
+): () => void {
   const shutdown = () => {
     void server.close().catch((error: unknown) => {
       process.exitCode = 1;
@@ -535,6 +554,10 @@ function registerShutdownHandlers(
   };
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
+  return () => {
+    process.off("SIGINT", shutdown);
+    process.off("SIGTERM", shutdown);
+  };
 }
 
 if (process.argv[1] !== undefined) {

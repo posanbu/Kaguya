@@ -11,28 +11,22 @@ Kaguya 只有一份持久配置真值：全局 selected Profile。它同时保�
 
 ```mermaid
 flowchart TD
-  A[pnpm dev 检查 KAGUYA_CONFIG_ROOT] --> B{selected Profile 有完整 runtime?}
-  B -- 完全缺少 --> C[保留其他字段并写入本地默认 runtime]
-  B -- 部分损坏 --> X[安全失败且不覆盖]
-  B -- 有 --> D[读取 Profile 数据库模式]
-  C --> D
-  D --> E[检查连接 / PostgreSQL 17 / migration / Kind]
-  E --> F{AI readiness}
-  F -- invalid / review_required --> G[只开放 HTTP 与 Web setup]
-  G --> H[用户补齐或确认配置]
-  H --> I[写入 Profile 并提示重启]
-  F -- ready --> J[创建模型客户端与 Runtime]
-  I --> J
-  J --> K[开放消息与可选 NapCat ingress]
+  A[读取基础配置] --> B[创建 AdapterHost]
+  B --> C[独立检查 AI 与数据库]
+  C --> D{均就绪?}
+  D -- 是 --> E[尝试启动 Runtime]
+  D -- 否 --> F[记录降级原因]
+  E --> G[启动 HTTP 与各 Adapter]
+  F --> G
 ```
 
-开发模式不需要手工创建配置目录。目录缺失时，`pnpm dev` 会建立 Registry、保留的 `default` Profile 和托管数据库 runtime；这个初始 Profile 的 AI 尚不完整，数据库预检通过后 Web UI 会引导你填写。生产 `pnpm start` 不管理 Docker，也不补 runtime。
+开发模式不需要手工创建配置目录。目录缺失时，`pnpm dev` 会建立 Registry、保留的 `default` Profile 和托管数据库 runtime；这个初始 Profile 的 AI 尚不完整，Web UI 会引导你填写，数据库失败不阻止页面启动。生产 `pnpm start` 不管理 Docker，也不补 runtime。
 
 ## Runtime 与数据库
 
 Profile 的 `runtime` 保存 host、port、`databaseMode`、`databaseUrl`、Web 路径、CORS、proxy、限流、日志和 gateway allowlist。旧 Profile 没有 `databaseMode` 时按 `external` 处理。外部数据库只通过 Profile JSON 配置，Web API 不返回也不接收 runtime。
 
-`databaseMode: "managed"` 表示开发命令可以管理固定的本地容器；`databaseMode: "external"` 表示所有命令都只连接 Profile URL，不调用 Docker。两种模式都强制 PostgreSQL 17，并在任何 ingress 监听前完成数据库检查。
+`databaseMode: "managed"` 表示开发命令可以管理固定的本地容器；`databaseMode: "external"` 表示所有命令都只连接 Profile URL，不调用 Docker。两种模式都检查 PostgreSQL 17。数据库检查独立于 AI readiness；失败时 Server 降级启动，Adapter 仍可连接。
 
 Gateway Token 不写入 runtime。它在每次进程启动时安全随机生成，只存在于当前进程和访问链接；遗留持久 token 会被忽略，并在下次 Profile 写入时清理。
 

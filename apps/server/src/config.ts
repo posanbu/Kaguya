@@ -83,6 +83,7 @@ export interface GatewayAllowlistConfig {
 
 export interface NapCatConfig {
   readonly enabled: boolean;
+  readonly configurationError?: "configuration_invalid";
   readonly adapterId: string;
   readonly wsUrl?: string;
   readonly accessToken?: string;
@@ -132,7 +133,7 @@ export function createServerConfig(
     logLevel: runtime.logLevel,
     logFormat: runtime.logFormat,
     gatewayAllowlist: runtime.gatewayAllowlist,
-    napcat: readNapCatConfig(profile),
+    napcat: inspectNapCatConfig(profile),
   };
 }
 
@@ -141,6 +142,19 @@ export function assertLoopbackHost(host: string): void {
     throw new ServerRuntimeConfigurationError(
       "Selected Profile runtime host must be loopback",
     );
+  }
+}
+
+export function inspectNapCatConfig(profile: UserConfigProfile): NapCatConfig {
+  try {
+    return readNapCatConfig(profile);
+  } catch {
+    return {
+      enabled: true,
+      adapterId: "napcat.qq.main",
+      reconnectMs: 3000,
+      configurationError: "configuration_invalid",
+    };
   }
 }
 
@@ -168,6 +182,7 @@ function readNapCatConfig(profile: UserConfigProfile): NapCatConfig {
   const accessToken = stringSetting(platform.credentials.accessToken);
   if (
     adapterId === undefined ||
+    adapterId === "web.ui.main" ||
     wsUrl === undefined ||
     reconnectMs === undefined ||
     !Number.isInteger(reconnectMs) ||

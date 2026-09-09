@@ -49,6 +49,10 @@ import {
 import { defaultNapCatSettings, toNapCatStatus } from "./napcat-config.js";
 import type { WebMessageGateway } from "./web-gateway.js";
 
+import { AdapterIngressUnavailableError } from "@kaguya/platform-adapters";
+import type { AdapterHost } from "./adapter-host.js";
+import { adapterStatusResponseSchema } from "./adapter-status-schema.js";
+
 const MAX_MESSAGE_TEXT_LENGTH = 131_072;
 const MAX_REQUEST_ID_LENGTH = 128;
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
@@ -427,6 +431,7 @@ export interface CreateHttpApplicationOptions {
   config: ServerConfig;
   gatewayAuth?: GatewayAuthenticator;
   webGateway?: WebMessageGateway;
+  adapterHost?: Pick<AdapterHost, "status">;
   setup?: ConfigurationManagement;
   logger?: FastifyBaseLogger;
 }
@@ -527,6 +532,39 @@ export async function createHttpApplication(
       const status = (await options.setup?.inspect()) ?? readySetupStatus();
       return { data: status };
     },
+  );
+
+  app.get(
+    "/api/v1/adapters/status",
+    {
+      config: {
+        rateLimit: {
+          max: 120,
+          timeWindow: 60_000,
+          keyGenerator: (request: FastifyRequest) =>
+            `adapter-status:${request.ip}`,
+        },
+      },
+      onRequest: requireGatewayToken(options, "management"),
+      schema: {
+        tags: ["Adapters"],
+        security: [{ bearerAuth: [] }],
+        response: {
+          200: adapterStatusResponseSchema,
+          401: errorResponseJsonSchema,
+        },
+      },
+    },
+    async () => ({
+      data: options.adapterHost?.status() ?? {
+        adapterHostState: "stopped",
+        runtime: {
+          ingress: "runtime_unavailable",
+          reason: "configuration_not_ready",
+        },
+        adapters: [],
+      },
+    }),
   );
 
   app.get(
@@ -814,6 +852,19 @@ export async function createHttpApplication(
         .code(400)
         .send(
           errorBody("invalid_request", "Request validation failed", request.id),
+        );
+    }
+    if (error instanceof AdapterIngressUnavailableError) {
+      return reply
+        .code(503)
+        .send(
+          errorBody(
+            error.code,
+            error.reason === "stopping"
+              ? "Server ingress is stopping"
+              : "Runtime ingress is unavailable",
+            request.id,
+          ),
         );
     }
     if (error instanceof ApiGatewayError) {

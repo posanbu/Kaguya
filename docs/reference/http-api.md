@@ -116,7 +116,7 @@ curl http://127.0.0.1:3000/api/v1/messages \
 
 **`request_rejected` / 413 或 415** — Fastify 在进入 Runtime 前拒绝请求。
 
-**`configuration_setup_required` / 503** — selected Profile 未 ready，Runtime ingress 未启动。
+**`runtime_unavailable` / 503** — Runtime 未就绪或 Server 正在停止，受保护状态接口给出降级原因。
 
 **`core_unavailable` / 503** — 嵌入或测试场景没有提供 Runtime ingress。
 
@@ -127,3 +127,13 @@ curl http://127.0.0.1:3000/api/v1/messages \
 合法 `X-Request-Id` 长度为 1 至 128 个 ASCII 字符。首字符必须是字母或数字，其余仅允许字母、数字、点、下划线、冒号和连字符；非法值会被 UUID 替换。
 
 HTTP 日志不记录 Authorization、body、query 或消息正文。生产部署仍需在边界层配置 TLS、连接数和超时。
+
+## Adapter 状态
+
+`GET /api/v1/adapters/status` 需要 management Bearer token。响应 `data` 包含 `adapterHostState`、`runtime` 和 `adapters`。
+
+**runtime** — ingress 为 ready、runtime_unavailable 或 stopping；不可用原因仅为 configuration_not_ready、database_unavailable 或 runtime_start_failed。
+
+**adapters** — 按 adapterId 稳定排序，每项包含 adapterId、type、platform、enabled、lifecycle、connectivity、ingress、updatedAt 和可选 attempt、nextRetryAt、errorType。不返回 URL、凭据或原始错误。
+
+状态描述当前进程，保存新配置后须重启。Adapter 或 Runtime 降级时 `/healthz` 仍返回 200。
