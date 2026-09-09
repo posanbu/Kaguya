@@ -88,6 +88,8 @@ export interface NapCatConfig {
 }
 
 export class ServerRuntimeConfigurationError extends Error {
+  readonly code = "SERVER_RUNTIME_CONFIGURATION_INVALID";
+
   constructor(message = "Selected Profile runtime configuration is invalid") {
     super(message);
     this.name = "ServerRuntimeConfigurationError";

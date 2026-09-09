@@ -1191,6 +1191,43 @@ describe("FileUserConfigManager corruption safety", () => {
     expect(JSON.stringify(error)).not.toContain(secret);
   });
 
+  it("reports a safe field diagnostic for a legacy gateway allowlist", async () => {
+    const rootDir = await createBootstrappedRoot();
+    const manager = await FileUserConfigManager.open({ rootDir });
+    const profileId = manager.getSelectedProfileId();
+    const path = join(rootDir, "profiles", `profile_${profileId}.json`);
+    const profile = (await readJson(path)) as Record<string, unknown>;
+    profile.runtime = {
+      host: "127.0.0.1",
+      port: 3000,
+      databaseUrl: "postgresql://user:credential-secret@localhost/kaguya",
+      webDistPath: "apps/web/dist",
+      corsOrigins: [],
+      trustProxy: false,
+      rateLimitMax: 30,
+      rateLimitWindowMs: 60_000,
+      logLevel: "info",
+      logFormat: "json",
+      gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
+    };
+    await writeFile(path, JSON.stringify(profile), "utf8");
+
+    const error = await FileUserConfigManager.open({ rootDir }).catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toMatchObject({
+      code: "CONFIG_CORRUPT_STORE",
+      validationIssues: [
+        expect.objectContaining({
+          code: "invalid_type",
+          path: "runtime.gatewayAllowlist",
+        }),
+      ],
+    });
+    expect(JSON.stringify(error)).not.toContain("credential-secret");
+  });
+
   it("maps a missing referenced profile to a path-free corrupt-store error", async () => {
     const rootDir = await createBootstrappedRoot();
     const manager = await FileUserConfigManager.open({ rootDir });

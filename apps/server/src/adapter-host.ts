@@ -142,7 +142,9 @@ export class AdapterHost {
             lifecycle: "failed",
             errorType: "start_failed",
           });
-          this.logState(adapter.adapterId, "failed", "warn");
+          this.logState(adapter.adapterId, "failed", "warn", {
+            phase: "adapter_start",
+          });
           try {
             await adapter.stop();
           } catch {
@@ -252,10 +254,11 @@ export class AdapterHost {
     id: string,
     event: string,
     level: "info" | "debug" | "warn",
+    extra: Record<string, unknown> = {},
   ): void {
     const snapshot = this.snapshots.get(id)!;
     createModuleLogger(this.logger, `adapter:${snapshot.type}`)[level](
-      { event: `${snapshot.type}.connection.${event}`, ...snapshot },
+      { event: `${snapshot.type}.connection.${event}`, ...snapshot, ...extra },
       "Adapter state updated",
     );
   }

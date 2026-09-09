@@ -24,7 +24,7 @@ import { constants } from "node:fs";
 import { access, lstat, open, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
-import { ConfigError } from "./errors.js";
+import { ConfigError, type ConfigValidationIssue } from "./errors.js";
 import {
   emptyUserConfigProfileSettings,
   profileIdSchema,
@@ -621,9 +621,34 @@ function parsePersistedProfile(
     throw new ConfigError(
       "CONFIG_CORRUPT_STORE",
       `Configuration profile failed validation: ${path}`,
+      { validationIssues: profileValidationIssues(parsed.error.issues) },
     );
   }
   return parsed.data;
+}
+
+function profileValidationIssues(
+  issues: readonly {
+    readonly code: string;
+    readonly path: readonly PropertyKey[];
+    readonly message: string;
+  }[],
+): readonly ConfigValidationIssue[] {
+  return issues.map((issue) => {
+    const path = issue.path.map(String).join(".") || "profile";
+    const legacyGatewayAllowlist =
+      path === "runtime.gatewayAllowlist" && issue.code === "invalid_type";
+    return {
+      code: issue.code,
+      path,
+      message: legacyGatewayAllowlist
+        ? "Expected an array of platform:group|private:target-id strings."
+        : issue.message,
+      hint: legacyGatewayAllowlist
+        ? "Replace the legacy { platforms, userIds, groupIds } object with string rules."
+        : "Correct this field in the selected Profile.",
+    };
+  });
 }
 
 function parseSettings(value: unknown) {

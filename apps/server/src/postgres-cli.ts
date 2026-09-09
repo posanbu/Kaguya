@@ -12,7 +12,12 @@ import { readdir, readFile } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { readServerBootstrapConfig } from "./config.js";
+import { ConfigError } from "@kaguya/config";
+
+import {
+  readServerBootstrapConfig,
+  ServerRuntimeConfigurationError,
+} from "./config.js";
 import {
   checkDevelopmentPostgres,
   checkManagedPostgresDatabase,
@@ -77,9 +82,13 @@ export async function runPostgresCli(
         configRoot: bootstrap.configRoot,
         ...(port === undefined ? {} : { port }),
       });
-    } catch {
+    } catch (error) {
+      if (!(error instanceof PostgresDevelopmentError)) {
+        writePreparationFailure(error);
+        return 1;
+      }
       process.stderr.write(
-        "Database preparation unavailable; Server will inspect configuration and start in degraded mode when possible.\n",
+        `Database preparation unavailable [${error.name}]: ${error.message}; Server will inspect configuration and start in degraded mode when possible.\n`,
       );
     }
     return spawnInteractive(
@@ -213,12 +222,37 @@ if (process.argv[1] !== undefined) {
     try {
       process.exitCode = await runPostgresCli();
     } catch (error) {
-      const message =
-        error instanceof PostgresDevelopmentError
-          ? error.message
-          : "PostgreSQL command failed";
-      process.stderr.write(`${message}\n`);
+      writePreparationFailure(error);
       process.exitCode = 1;
     }
   }
+}
+
+function writePreparationFailure(error: unknown): void {
+  if (error instanceof ConfigError) {
+    process.stderr.write(
+      `Configuration preparation failed [${error.code}]: ${error.message}\n`,
+    );
+    for (const issue of error.validationIssues ?? []) {
+      process.stderr.write(
+        `- ${issue.path} [${issue.code}]: ${issue.message}${issue.hint === undefined ? "" : ` Hint: ${issue.hint}`}\n`,
+      );
+    }
+    return;
+  }
+  if (error instanceof ServerRuntimeConfigurationError) {
+    process.stderr.write(
+      `Configuration preparation failed [${error.code}]: ${error.message}\n`,
+    );
+    return;
+  }
+  if (error instanceof PostgresDevelopmentError) {
+    process.stderr.write(
+      `Database preparation failed [${error.name}]: ${error.message}\n`,
+    );
+    return;
+  }
+  process.stderr.write(
+    "Development preparation failed [UnknownError]. Check configuration files and required local services.\n",
+  );
 }

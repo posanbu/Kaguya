@@ -18,6 +18,7 @@ import {
   type RuntimeModelSelectionResolver,
 } from "./runtime-composition.js";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
@@ -393,6 +394,9 @@ describe("unified server composition", () => {
         expect.objectContaining({
           event: "server.start.failed",
           level: "fatal",
+          phase: "configuration",
+          errorType: "ConfigError",
+          errorCode: "CONFIG_UNSUPPORTED_VERSION",
         }),
         expect.objectContaining({ event: "server.stopping", level: "info" }),
         expect.objectContaining({ event: "server.stopped", level: "info" }),
@@ -453,6 +457,7 @@ describe("unified server composition", () => {
     await server.close();
     const serialized = JSON.stringify(stream.logs());
     expect(serialized).toContain('"reason":"database_unavailable"');
+    expect(serialized).toContain('"phase":"database"');
     expect(serialized).not.toContain(databaseUrl);
     expect(serialized).not.toContain("database-password");
 
@@ -513,6 +518,7 @@ describe("unified server composition", () => {
     expect((await server.app.inject("/healthz")).statusCode).toBe(200);
     await server.close();
     const serialized = JSON.stringify(stream.logs());
+    expect(serialized).toContain('"phase":"database"');
     expect(serialized).not.toContain(databaseUrl);
     expect(serialized).not.toContain("runtime-start-password");
 
@@ -564,6 +570,7 @@ describe("unified server composition", () => {
     expect((await server.app.inject("/healthz")).statusCode).toBe(200);
     await server.close();
     const serialized = JSON.stringify(stream.logs());
+    expect(serialized).toContain('"phase":"runtime"');
     expect(serialized).not.toContain("module-secret");
     expect(serialized).not.toContain("postgresql://");
     await closeLogger(rootLogger);
@@ -750,12 +757,120 @@ describe("unified server composition", () => {
     const databaseClose = vi
       .spyOn(database, "close")
       .mockRejectedValueOnce(new Error("database cleanup failed"));
+    const stream = new LogStream();
+    const rootLogger = createLogger({ service: "kaguya-server-test", stream });
+    vi.spyOn(await import("@kaguya/logger"), "createLogger").mockReturnValue(
+      rootLogger,
+    );
     // Missing static assets deliberately fail HTTP preparation before any socket binding.
     await expect(
       startKaguyaServer({ ...config(root), configRoot: root, port: 0 }),
     ).rejects.toMatchObject({ code: "ENOENT" });
     expect(runtimeClose).toHaveBeenCalledTimes(2);
     expect(databaseClose).toHaveBeenCalledTimes(2);
+    expect(stream.logs()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "server.start.failed",
+          phase: "web_ui",
+          errorCode: "ENOENT",
+        }),
+      ]),
+    );
+  });
+
+  it("classifies an occupied HTTP port as a listen failure", async () => {
+    const root = tempWorkspaceRoot();
+    const webDistPath = join(root, "web");
+    mkdirSync(webDistPath, { recursive: true });
+    writeFileSync(join(webDistPath, "index.html"), "<main>Kaguya</main>");
+    const blocker = createNetServer();
+    await new Promise<void>((resolve, reject) => {
+      blocker.once("error", reject);
+      blocker.listen(0, "127.0.0.1", resolve);
+    });
+    const address = blocker.address();
+    if (typeof address !== "object" || address === null) {
+      throw new Error("Expected a loopback TCP address");
+    }
+    const database = await createTestingDatabase();
+    vi.spyOn(KaguyaDatabase, "connect").mockResolvedValueOnce(database);
+    const stream = new LogStream();
+    const rootLogger = createLogger({ service: "kaguya-server-test", stream });
+    vi.spyOn(await import("@kaguya/logger"), "createLogger").mockReturnValue(
+      rootLogger,
+    );
+
+    try {
+      await expect(
+        startKaguyaServer({
+          ...config(root),
+          webDistPath,
+          port: address.port,
+        }),
+      ).rejects.toMatchObject({ code: "EADDRINUSE" });
+      expect(stream.logs()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            event: "server.start.failed",
+            phase: "listen",
+            errorCode: "EADDRINUSE",
+          }),
+        ]),
+      );
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        blocker.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
+
+  it("classifies a platform adapter startup failure", async () => {
+    const root = tempWorkspaceRoot();
+    const webDistPath = join(root, "web");
+    mkdirSync(webDistPath, { recursive: true });
+    writeFileSync(join(webDistPath, "index.html"), "<main>Kaguya</main>");
+    const database = await createTestingDatabase();
+    vi.spyOn(KaguyaDatabase, "connect").mockResolvedValueOnce(database);
+    const { NapCatConnectionSupervisor } = await import("./napcat.js");
+    vi.spyOn(
+      NapCatConnectionSupervisor.prototype,
+      "start",
+    ).mockRejectedValueOnce(
+      Object.assign(new Error("adapter-token-secret"), {
+        code: "ADAPTER_FAILED",
+      }),
+    );
+    const stream = new LogStream();
+    const rootLogger = createLogger({ service: "kaguya-server-test", stream });
+    vi.spyOn(await import("@kaguya/logger"), "createLogger").mockReturnValue(
+      rootLogger,
+    );
+    const serverConfig = config(root);
+
+    const server = await startKaguyaServer({
+      ...serverConfig,
+      webDistPath,
+      port: 0,
+      napcat: {
+        ...serverConfig.napcat,
+        enabled: true,
+        wsUrl: "ws://127.0.0.1:3001",
+      },
+    });
+    expect(server.adapterHost.status().adapters).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          adapterId: serverConfig.napcat.adapterId,
+          lifecycle: "failed",
+          errorType: "start_failed",
+        }),
+      ]),
+    );
+    await server.close();
+    const serialized = JSON.stringify(stream.logs());
+    expect(serialized).toContain('"phase":"adapter_start"');
+    expect(serialized).not.toContain("adapter-token-secret");
   });
 
   it("creates a heavy/light resolver from frozen profile configuration", async () => {

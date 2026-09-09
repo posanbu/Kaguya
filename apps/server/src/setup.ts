@@ -79,9 +79,13 @@ export interface ConfigurationManagement {
   saveNapCatSettings?: (settings: NapCatSettings) => Promise<NapCatSettings>;
 }
 
+export interface RuntimeConfigurationManagement extends ConfigurationManagement {
+  getRuntimeProfile(profileId: string): Promise<UserConfigProfile>;
+}
+
 export async function createConfigurationManagement(
   rootDir: string,
-): Promise<ConfigurationManagement> {
+): Promise<RuntimeConfigurationManagement> {
   await assertNoLegacyNapCatSettings(rootDir);
   const readiness = await FileUserConfigManager.inspect({ rootDir });
   const manager =
@@ -117,6 +121,9 @@ export async function createConfigurationManagement(
     },
     async getProfile(profileId) {
       return toEditableProfile(await manager.getProfile(profileId));
+    },
+    getRuntimeProfile(profileId) {
+      return manager.getProfile(profileId);
     },
     async createProfile(name) {
       const selected = await manager.getProfile(manager.getSelectedProfileId());

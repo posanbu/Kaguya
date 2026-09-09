@@ -10,6 +10,8 @@
 import { access } from "node:fs/promises";
 import { join } from "node:path";
 
+import { ConfigError } from "@kaguya/config";
+
 import type { NapCatConfig } from "./config.js";
 
 export interface NapCatSettings {
@@ -42,7 +44,8 @@ export async function assertNoLegacyNapCatSettings(
     if (isMissingFile(error)) return;
     throw error;
   }
-  throw new Error(
+  throw new ConfigError(
+    "CONFIG_UNSUPPORTED_VERSION",
     "Legacy napcat.json is not supported; move NapCat settings into the selected Profile",
   );
 }

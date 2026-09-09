@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
+  ConfigError,
   ConfigIncompleteError,
   ConfigReviewRequiredError,
   inspectUserConfigProfile,
@@ -31,6 +32,8 @@ import {
   assertLoopbackHost,
   createServerConfig,
   readServerBootstrapConfig,
+  ServerRuntimeConfigurationError,
+  type ServerBootstrapConfig,
   type ServerConfig,
 } from "./config.js";
 import { createGatewayAuthenticator } from "./gateway-auth.js";
@@ -53,16 +56,37 @@ export interface StartedKaguyaServer {
   close(): Promise<void>;
 }
 
+type ServerStartupPhase =
+  | "configuration"
+  | "database"
+  | "runtime"
+  | "http_application"
+  | "web_ui"
+  | "listen"
+  | "adapter_start";
+
+interface DegradationReport {
+  readonly reason: RuntimeUnavailableReason;
+  readonly phase: ServerStartupPhase;
+  readonly error: unknown;
+}
+
+class ServerStartupPhaseError extends Error {
+  readonly phase: ServerStartupPhase;
+  override readonly cause: unknown;
+
+  constructor(phase: ServerStartupPhase, cause: unknown) {
+    super(`Server startup failed during ${phase}`);
+    this.name = "ServerStartupPhaseError";
+    this.phase = phase;
+    this.cause = cause;
+  }
+}
+
 export async function startKaguyaServer(
   providedConfig?: ServerConfig,
 ): Promise<StartedKaguyaServer> {
-  const bootstrap =
-    providedConfig === undefined
-      ? readServerBootstrapConfig()
-      : {
-          configRoot: providedConfig.configRoot,
-          development: providedConfig.development,
-        };
+  let bootstrap: ServerBootstrapConfig;
   let rootLogger: KaguyaLogger | undefined =
     providedConfig === undefined
       ? undefined
@@ -80,16 +104,28 @@ export async function startKaguyaServer(
   let selectedProfile: UserConfigProfile;
   let config: ServerConfig;
   try {
+    bootstrap =
+      providedConfig === undefined
+        ? readServerBootstrapConfig()
+        : {
+            configRoot: providedConfig.configRoot,
+            development: providedConfig.development,
+          };
     setup = await createConfigurationManagement(bootstrap.configRoot);
     setupStatus = await setup.inspect();
-    selectedProfile = await setup.getProfile(setupStatus.selectedProfileId);
+    selectedProfile = await setup.getRuntimeProfile(
+      setupStatus.selectedProfileId,
+    );
     config = providedConfig ?? createServerConfig(selectedProfile, bootstrap);
     assertLoopbackHost(config.host);
   } catch (error) {
     rootLogger ??= createLogger({ service: "kaguya" });
     serverLogger ??= createModuleLogger(rootLogger, "server");
     serverLogger.fatal(
-      { event: "server.start.failed", errorType: safeErrorType(error) },
+      {
+        event: "server.start.failed",
+        ...startupFailureFields("configuration", error),
+      },
       "Kaguya server startup failed",
     );
     await closeResources({
@@ -171,19 +207,30 @@ export async function startKaguyaServer(
       },
       stop: () => napcatAdapter.stop(),
     });
+    const degradationReports: DegradationReport[] = [];
     const degradationReasons: RuntimeUnavailableReason[] = [];
     let resolveModelSelection: RuntimeModelSelectionResolver | undefined;
     try {
       resolveModelSelection =
         createRuntimeModelSelectionResolver(selectedProfile);
-    } catch {
+    } catch (error) {
+      degradationReports.push({
+        reason: "configuration_not_ready",
+        phase: "configuration",
+        error,
+      });
       degradationReasons.push("configuration_not_ready");
     }
     // Database preflight runs even when AI configuration is incomplete.
     try {
       database = await connectInformationDatabase(effectiveConfig.databaseUrl);
       await prepareSetupDatabase(database);
-    } catch {
+    } catch (error) {
+      degradationReports.push({
+        reason: "database_unavailable",
+        phase: "database",
+        error,
+      });
       degradationReasons.push("database_unavailable");
     }
     if (
@@ -202,10 +249,17 @@ export async function startKaguyaServer(
         adapterHost.registerTransports(runtime);
         await startInformationRuntime(runtime);
       } catch (error) {
-        degradationReasons.push(
-          error instanceof InformationDatabaseConnectionError
+        const databaseFailure =
+          error instanceof InformationDatabaseConnectionError;
+        degradationReports.push({
+          reason: databaseFailure
             ? "database_unavailable"
             : "runtime_start_failed",
+          phase: databaseFailure ? "database" : "runtime",
+          error,
+        });
+        degradationReasons.push(
+          databaseFailure ? "database_unavailable" : "runtime_start_failed",
         );
         try {
           await runtime?.close();
@@ -237,9 +291,13 @@ export async function startKaguyaServer(
       }
     }
     adapterHost.finalizeRuntime(runtime, degradationReasons[0]);
-    for (const reason of degradationReasons)
+    for (const report of degradationReports)
       serverLogger.warn(
-        { event: "server.degraded", reason },
+        {
+          event: "server.degraded",
+          reason: report.reason,
+          ...startupFailureFields(report.phase, report.error),
+        },
         "Server downstream unavailable",
       );
     serverLogger.info(
@@ -251,19 +309,25 @@ export async function startKaguyaServer(
       },
       "Kaguya server starting",
     );
-    app = await createHttpApplication({
-      config: effectiveConfig,
-      gatewayAuth,
-      webGateway: adapterHost.webGateway,
-      adapterHost,
-      setup,
-      logger: httpLogger,
-    });
-    webUi = await registerWebUi(app, effectiveConfig);
-    await app.listen({
-      host: effectiveConfig.host,
-      port: effectiveConfig.port,
-    });
+    app = await inStartupPhase("http_application", () =>
+      createHttpApplication({
+        config: effectiveConfig,
+        gatewayAuth,
+        webGateway: adapterHost.webGateway,
+        adapterHost,
+        setup,
+        logger: httpLogger,
+      }),
+    );
+    webUi = await inStartupPhase("web_ui", () =>
+      registerWebUi(app!, effectiveConfig),
+    );
+    await inStartupPhase("listen", () =>
+      app!.listen({
+        host: effectiveConfig.host,
+        port: effectiveConfig.port,
+      }),
+    );
     const listeningAddress = app.server.address();
     const listeningPort =
       typeof listeningAddress === "object" && listeningAddress !== null
@@ -273,7 +337,7 @@ export async function startKaguyaServer(
       `${formatAccessUrl({ ...effectiveConfig, port: listeningPort })}\n`,
     );
 
-    await adapterHost.start();
+    await inStartupPhase("adapter_start", () => adapterHost.start());
 
     serverLogger.info(
       {
@@ -288,12 +352,16 @@ export async function startKaguyaServer(
       "Kaguya server started",
     );
   } catch (error) {
+    const phase =
+      error instanceof ServerStartupPhaseError ? error.phase : "runtime";
+    const failure =
+      error instanceof ServerStartupPhaseError ? error.cause : error;
     serverLogger.fatal(
-      { event: "server.start.failed", errorType: safeErrorType(error) },
+      { event: "server.start.failed", ...startupFailureFields(phase, failure) },
       "Kaguya server startup failed",
     );
     await close();
-    throw error;
+    throw failure;
   }
 
   const started: StartedKaguyaServer = {
@@ -304,6 +372,17 @@ export async function startKaguyaServer(
   };
   unregisterShutdown = registerShutdownHandlers(started, serverLogger);
   return started;
+}
+
+async function inStartupPhase<Result>(
+  phase: ServerStartupPhase,
+  operation: () => Promise<Result>,
+): Promise<Result> {
+  try {
+    return await operation();
+  } catch (error) {
+    throw new ServerStartupPhaseError(phase, error);
+  }
 }
 
 export function formatAccessUrl(
@@ -507,6 +586,12 @@ async function closeResources(options: {
 function safeErrorType(error: unknown): string {
   try {
     if (error instanceof AggregateError) return "AggregateError";
+    if (error instanceof ConfigIncompleteError) return "ConfigIncompleteError";
+    if (error instanceof ConfigReviewRequiredError)
+      return "ConfigReviewRequiredError";
+    if (error instanceof ConfigError) return "ConfigError";
+    if (error instanceof ServerRuntimeConfigurationError)
+      return "ServerRuntimeConfigurationError";
     if (error instanceof InformationDatabaseConnectionError) {
       return "InformationDatabaseConnectionError";
     }
@@ -517,6 +602,77 @@ function safeErrorType(error: unknown): string {
   } catch {
     return "UnknownError";
   }
+}
+
+function startupFailureFields(
+  phase: ServerStartupPhase,
+  error: unknown,
+): {
+  readonly phase: ServerStartupPhase;
+  readonly errorType: string;
+  readonly errorCode?: string | number;
+  readonly issues?: readonly {
+    readonly code: string;
+    readonly path: string;
+    readonly message: string;
+    readonly hint?: string;
+  }[];
+} {
+  const errorCode = safeErrorCode(error);
+  const issues = safeConfigurationIssues(error);
+  return {
+    phase,
+    errorType: safeErrorType(error),
+    ...(errorCode === undefined ? {} : { errorCode }),
+    ...(issues.length === 0 ? {} : { issues }),
+  };
+}
+
+function safeErrorCode(error: unknown): string | number | undefined {
+  try {
+    if (error instanceof ConfigError) return error.code;
+    if (typeof error !== "object" || error === null) return undefined;
+    const code = Reflect.get(error, "code");
+    if (typeof code === "number" && Number.isFinite(code)) return code;
+    if (typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/u.test(code)) {
+      return code;
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function safeConfigurationIssues(error: unknown): readonly {
+  readonly code: string;
+  readonly path: string;
+  readonly message: string;
+  readonly hint?: string;
+}[] {
+  try {
+    if (error instanceof ConfigIncompleteError) {
+      return error.issues.map((issue) => ({
+        code: issue.id,
+        path: issue.path,
+        message: issue.message,
+        hint: "Correct the selected Profile before restarting.",
+      }));
+    }
+    if (error instanceof ConfigReviewRequiredError) {
+      return error.warnings.map((warning) => ({
+        code: warning.id,
+        path: warning.path,
+        message: warning.message,
+        hint: "Review or acknowledge this selected Profile warning.",
+      }));
+    }
+    if (error instanceof ConfigError) {
+      return (error.validationIssues ?? []).map((issue) => ({ ...issue }));
+    }
+  } catch {
+    // Hostile error properties must not escape the safe diagnostic boundary.
+  }
+  return [];
 }
 
 function isRuntimeDatabaseInitializationError(

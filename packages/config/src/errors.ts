@@ -28,18 +28,34 @@ export const configErrorCodes = [
 
 export type ConfigErrorCode = (typeof configErrorCodes)[number];
 
+export interface ConfigValidationIssue {
+  readonly code: string;
+  readonly path: string;
+  readonly message: string;
+  readonly hint?: string;
+}
+
 export class ConfigError extends Error {
   readonly code: ConfigErrorCode;
+  readonly validationIssues?: readonly ConfigValidationIssue[];
   override readonly cause: unknown;
 
   constructor(
     code: ConfigErrorCode,
     message: string,
-    options: { cause?: unknown } = {},
+    options: {
+      cause?: unknown;
+      validationIssues?: readonly ConfigValidationIssue[];
+    } = {},
   ) {
     super(message, { cause: options.cause });
     this.name = "ConfigError";
     this.code = code;
+    if (options.validationIssues !== undefined) {
+      this.validationIssues = options.validationIssues.map((issue) => ({
+        ...issue,
+      }));
+    }
     this.cause = options.cause;
   }
 }
