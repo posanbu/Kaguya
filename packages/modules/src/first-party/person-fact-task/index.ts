@@ -80,7 +80,7 @@ export const personFactModelDispatchingDiagnostic = defineModuleDiagnostic({
   payloadSchema: z
     .object({
       taskId: z.literal("core.person.fact.extract"),
-      taskVersion: z.literal("1"),
+      taskVersion: z.literal("2"),
       tier: modelTierSchema,
       promptCharacters: z.number().int().nonnegative(),
       promptFragmentCount: z.number().int().nonnegative(),
@@ -118,6 +118,7 @@ export const personFactCandidatePromptRenderer: InformationPromptRendererDefinit
       );
       return [
         "Extract one durable person fact from this candidate.",
+        'Return JSON only with exactly these string fields: {"personId":"...","name":"...","fact":"..."}.',
         `personId: ${candidate.personId}`,
         `name: ${candidate.name}`,
         `candidate: ${candidate.text}`,
@@ -165,7 +166,7 @@ export function createPersonFactTaskModule<
         fields: {
           modelTier: settings.modelTier,
           taskId: "core.person.fact.extract",
-          taskVersion: "1",
+          taskVersion: "2",
         },
       }),
       subscriptions: [
@@ -191,7 +192,7 @@ export function createPersonFactTaskModule<
             );
             await context.report(personFactModelDispatchingDiagnostic, {
               taskId: "core.person.fact.extract",
-              taskVersion: "1",
+              taskVersion: "2",
               tier: settings.modelTier,
               promptCharacters: Array.from(prompt.text).length,
               promptFragmentCount: prompt.fragments.length,
@@ -199,7 +200,8 @@ export function createPersonFactTaskModule<
             await context.use(modelTaskCapability).execute({
               task: {
                 taskId: "core.person.fact.extract",
-                version: "1",
+                version: "2",
+                outputMode: "object",
                 outputSchema: personFactTaskOutputSchema,
                 allowedTiers: ["light", "heavy"],
               },
@@ -351,7 +353,7 @@ function isOwnedCompletion(
 ): boolean {
   return (
     payload.taskId === "core.person.fact.extract" &&
-    payload.version === "1" &&
+    payload.version === "2" &&
     payload.activation.definitionId === definitionId &&
     payload.selectionPolicy.tier === modelTier
   );

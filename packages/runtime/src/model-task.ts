@@ -45,6 +45,7 @@ export interface ModelTaskRequest<TOutput> {
   readonly task: {
     readonly taskId: string;
     readonly version: string;
+    readonly outputMode: "text" | "object";
     readonly outputSchema: z.ZodType<TOutput>;
     readonly allowedTiers: readonly ("light" | "heavy")[];
   };
@@ -144,6 +145,7 @@ export class ModelTaskClient implements ModelTaskCapability {
       .parse({
         taskId: task.taskId,
         version: task.version,
+        outputMode: task.outputMode,
         sourceInformationId: request.sourceInformationId,
         contextInformationId: request.contextInformationId,
         contextInformationIds: request.contextAtoms.map((a) => a.informationId),
@@ -242,6 +244,10 @@ export class ModelTaskClient implements ModelTaskCapability {
     const startedAt = this.#now().getTime();
     let metrics:
       { durationMs: number; usage?: Record<string, number> } | undefined;
+    let failureStage:
+      | "provider-request"
+      | "structured-output-parse"
+      | "task-schema-validation" = "provider-request";
     let completed: z.infer<
       typeof modelTaskCompletedInformationKind.payloadSchema
     >;
@@ -260,6 +266,7 @@ export class ModelTaskClient implements ModelTaskCapability {
       const generation = await this.#client.generate({
         modelId: persisted.resolvedModel.modelId,
         prompt: informationCompiledPromptSchema.parse(requested.payload.prompt),
+        outputMode: persisted.outputMode,
         outputSchema: providerSchema,
         ...(signal ? { signal } : {}),
       });
@@ -275,6 +282,7 @@ export class ModelTaskClient implements ModelTaskCapability {
       };
       informationPayloadSchema.parse(candidateMetrics);
       metrics = candidateMetrics;
+      failureStage = "task-schema-validation";
       const output = jsonValueSchema.parse(
         await task.outputSchema.parseAsync(generation.output),
       );
@@ -310,6 +318,10 @@ export class ModelTaskClient implements ModelTaskCapability {
                 error instanceof KaguyaLlmError && error.kind === "retryable"
                   ? "retryable"
                   : "non-retryable",
+              stage:
+                error instanceof KaguyaLlmError
+                  ? (error.stage ?? failureStage)
+                  : failureStage,
               message: "Model task generation failed",
             },
           },
@@ -462,6 +474,7 @@ function fingerprint(
     z.infer<typeof modelTaskMetadataSchema>,
     | "taskId"
     | "version"
+    | "outputMode"
     | "sourceInformationId"
     | "promptKind"
     | "provenance"
@@ -472,6 +485,7 @@ function fingerprint(
     canonical({
       taskId: metadata.taskId,
       version: metadata.version,
+      outputMode: metadata.outputMode,
       sourceInformationId: metadata.sourceInformationId,
       promptKind: metadata.promptKind,
       provenance: metadata.provenance,

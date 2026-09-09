@@ -308,9 +308,9 @@ describe("KaguyaRuntime", () => {
         tier: "heavy",
         providerId: "test",
         modelId: "deterministic-heavy",
-        promptFragmentCount: 1,
+        promptFragmentCount: 5,
       });
-      expect(requestSummary?.promptPreview).toContain("hello observable moon");
+      expect(requestSummary?.promptPreview).toContain("Kaguya");
       expect(requestSummary?.references).toEqual(expect.any(Array));
       expect(requestDetail).toMatchObject({
         informationId: requestSummary?.informationId,
@@ -434,6 +434,7 @@ describe("KaguyaRuntime", () => {
           task: {
             taskId: "core.reply.generate",
             version: "1",
+            outputMode: "object",
             allowedTiers: ["light", "heavy"],
             outputSchema: z.object({ text: z.string() }).strict(),
           },
@@ -486,7 +487,8 @@ describe("KaguyaRuntime", () => {
         );
       expect(requestedPayload).toMatchObject({
         taskId: "core.reply.generate",
-        version: "1",
+        version: "2",
+        outputMode: "text",
         sourceInformationId: reply.informationId,
         activation: {
           instanceId: "reply.default",
@@ -496,9 +498,14 @@ describe("KaguyaRuntime", () => {
         resolvedModel: { providerId: "test", modelId: "deterministic-heavy" },
       });
       expect(graph.some((a) => a.kind.startsWith("core.llm."))).toBe(false);
-      expect(requestedPayload.prompt.provenance).toMatchObject([
-        { informationId: reply.informationId, source: "history" },
-      ]);
+      expect(requestedPayload.prompt.provenance).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            informationId: reply.informationId,
+            source: "state",
+          }),
+        ]),
+      );
       expect(customRetrieve).not.toHaveBeenCalled();
     },
     TEST_TIMEOUT,
@@ -566,10 +573,14 @@ describe("KaguyaRuntime", () => {
           }),
         ]),
       );
-      expect(payload.prompt.fragments[0]).toMatchObject({
-        informationId: firstInbound.informationId,
-        source: "memory",
-      });
+      expect(payload.prompt.fragments).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            informationId: firstInbound.informationId,
+            source: "memory",
+          }),
+        ]),
+      );
       expect(payload.prompt.text).toContain("remember moonlight");
     },
     TEST_TIMEOUT,
@@ -632,13 +643,17 @@ describe("KaguyaRuntime", () => {
       expect(
         secondGraph.some(({ kind }) => kind === "agent.association.candidate"),
       ).toBe(false);
-      expect(payload.prompt.provenance).toEqual([
-        expect.objectContaining({
-          informationId: payload.sourceInformationId,
-          source: "history",
-        }),
-      ]);
-      expect(payload.prompt.text).not.toContain("remember moonlight");
+      expect(payload.prompt.provenance).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            informationId: payload.sourceInformationId,
+            source: "state",
+          }),
+        ]),
+      );
+      expect(
+        payload.prompt.provenance.some(({ source }) => source === "memory"),
+      ).toBe(false);
     },
     TEST_TIMEOUT,
   );

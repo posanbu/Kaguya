@@ -697,19 +697,27 @@ async function dispatchDecision(
     scopeKey: candidatePayload.scopeKey,
   };
   if (payload.action === "speak") {
+    const targetInput = (turnContext.payload as any).inputs.at(-1);
+    if (targetInput === undefined)
+      throw new Error("Speak decision requires a target turn input");
     await context.registerOnce(
       "agent.heartflow.reply",
       claim.informationId,
       replyRequestedInformationKind,
       {
         payload: {
-          text: payload.text,
-          source: payload.source,
+          text: targetInput.text,
+          source: targetInput.source,
           turn: {
             candidateInformationId: candidate.informationId,
             claimInformationId: claim.informationId,
             contextInformationId: turnContext.informationId,
           },
+          memoryInformationIds: Array.isArray(
+            (turnContext.payload as any).memory,
+          )
+            ? (turnContext.payload as any).memory
+            : [],
         },
         references: [
           {

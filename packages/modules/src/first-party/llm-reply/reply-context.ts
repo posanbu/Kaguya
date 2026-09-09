@@ -1,19 +1,17 @@
 /**
  * 功能概述：声明 reply 模块的显式上下文选择，并把已选择账本原子编译为 Prompt。
  * 主要职责：`turnReplyContextSelector` 从 reply 沿受控引用找到冻结 turn 与它列出的 Memory；
- * `associationReplyContextSelector` 保留可选的 association 审计读取策略；replyPromptRenderer 与 memoryPromptRenderer 提供可声明的渲染身份，
- * 原子到 Prompt 保留选择顺序和 provenance，不渲染 candidate receipt。
+ * `associationReplyContextSelector` 保留可选的 association 审计读取策略；渲染器提供 manifest 身份，
+ * Prompt 组装器区分同会话历史、已投递 assistant、Memory、引用与目标消息并保留 provenance。
  * 代码库关系：`llm-reply.ts` 使用这里的 Selector；Engine 负责校验并重新加载结果，
  * PromptCompiler 负责产生可持久化 provenance。
- * 输入输出与副作用：默认选择是纯函数且不调用 reader；不保存会话键或跨请求状态。
+ * 输入输出与副作用：选择器只读账本，不保存会话键或跨请求状态；编译本身是纯函数。
  */
 import type {
   CompiledPrompt,
   DeepReadonly,
   InformationAtom,
   InformationId,
-  PromptFragment,
-  PromptFragmentSource,
 } from "@kaguya/schema";
 import {
   defineInformationSelector,
@@ -24,6 +22,7 @@ import { PromptCompiler } from "@kaguya/prompt";
 
 import {
   coreMemoryTextInformationKind,
+  assistantTextInformationKind,
   associationCandidateInformationKind,
   associationCompletedInformationKind,
   associationQueryInformationKind,
@@ -32,6 +31,12 @@ import {
   replyRequestedInformationKind,
   replyRequestedInformationPayloadSchema,
 } from "../information-kinds.js";
+import {
+  compileReplyPrompt,
+  fitHistoryBudget,
+  fitMemoryBudget,
+  renderHistoryAtom,
+} from "./reply-prompt.js";
 
 export const currentAcceptedMessageSelector = defineInformationSelector({
   selectorId: "core.reply.current-accepted-message",
@@ -50,21 +55,113 @@ export const turnReplyContextSelector = defineInformationSelector({
       })
     ).filter(({ kind }) => kind === "agent.turn.context.completed");
     if (turns.length !== 1) return [sourceAtom.informationId];
-    const payload = turns[0]!.payload as any;
+    const turn = turns[0]!;
+    const payload = turn.payload as any;
     const memoryIds = new Set<string>(
       Array.isArray(payload.memory) ? payload.memory : [],
     );
-    if (memoryIds.size === 0) return [sourceAtom.informationId];
     const context = await ledger.related({
-      from: [turns[0]!.informationId],
+      from: [turn.informationId],
       relation: "core:uses-context",
       direction: "outgoing",
       limit: 1_000,
     });
+    const contextById = new Map(
+      context.map((atom) => [atom.informationId, atom] as const),
+    );
+    const inputIds = Array.isArray(payload.inputs)
+      ? payload.inputs.map((input: any) => input.informationId as string)
+      : [];
+    const targetInputId = inputIds.at(-1);
+    const immediate = inputIds
+      .slice(0, -1)
+      .map((id: string) => contextById.get(id))
+      .filter(
+        (
+          atom: DeepReadonly<InformationAtom> | undefined,
+        ): atom is DeepReadonly<InformationAtom> =>
+          atom?.kind === inboundTextInformationKind.kind,
+      );
+    const replyPayload = replyRequestedInformationPayloadSchema.parse(
+      sourceAtom.payload,
+    );
+    const recent = await ledger.find({
+      kinds: [
+        inboundTextInformationKind.kind,
+        assistantTextInformationKind.kind,
+      ],
+      occurredBefore: sourceAtom.occurredAt,
+      payloadContains: {
+        source: {
+          platform: replyPayload.source.platform,
+          adapterId: replyPayload.source.adapterId,
+          destination: replyPayload.source.destination,
+        },
+      },
+      order: "desc",
+      limit: 120,
+    });
+    const visibleRecent = (
+      await Promise.all(
+        recent.map(async (atom) =>
+          atom.kind !== assistantTextInformationKind.kind ||
+          (await assistantWasDelivered(atom, ledger))
+            ? atom
+            : undefined,
+        ),
+      )
+    ).filter(
+      (atom): atom is DeepReadonly<InformationAtom> => atom !== undefined,
+    );
+    const quotedId = replyPayload.source.replyTo?.platformMessageId;
+    let quoted =
+      quotedId === undefined
+        ? undefined
+        : visibleRecent.find(
+            (atom) => platformMessageIdentifier(atom) === quotedId,
+          );
+    if (quotedId !== undefined && quoted === undefined) {
+      const candidates = await ledger.find({
+        kinds: [
+          inboundTextInformationKind.kind,
+          assistantTextInformationKind.kind,
+        ],
+        payloadContains: {
+          source: {
+            platform: replyPayload.source.platform,
+            adapterId: replyPayload.source.adapterId,
+            destination: replyPayload.source.destination,
+            platformMessageId: quotedId,
+          },
+        },
+        order: "desc",
+        limit: 10,
+      });
+      const candidate = candidates.find(
+        (atom) => platformMessageIdentifier(atom) === quotedId,
+      );
+      if (
+        candidate !== undefined &&
+        (candidate.kind !== assistantTextInformationKind.kind ||
+          (await assistantWasDelivered(candidate, ledger)))
+      )
+        quoted = candidate;
+    }
+    const history = fitHistoryBudget(
+      uniqueAtoms([...visibleRecent, ...immediate]).filter(
+        ({ informationId }) =>
+          informationId !== targetInputId &&
+          informationId !== quoted?.informationId &&
+          !memoryIds.has(informationId),
+      ),
+    );
+    const memories = fitMemoryBudget(
+      context.filter(({ informationId }) => memoryIds.has(informationId)),
+    );
     return [
-      ...context
-        .filter(({ informationId }) => memoryIds.has(informationId))
-        .map(({ informationId }) => informationId),
+      ...history.map(({ informationId }) => informationId),
+      ...memories.map(({ informationId }) => informationId),
+      ...(quoted === undefined ? [] : [quoted.informationId]),
       sourceAtom.informationId,
     ];
   },
@@ -189,60 +286,21 @@ export const inboundMemoryPromptRenderer: InformationPromptRendererDefinition =
     },
   });
 
+export const assistantHistoryPromptRenderer: InformationPromptRendererDefinition =
+  Object.freeze({
+    rendererId: "kaguya.history.assistant-text",
+    displayName: "Historical assistant text",
+    description: "Renders a successfully delivered assistant message.",
+    kinds: [assistantTextInformationKind],
+    render: (atom: DeepReadonly<InformationAtom>) => renderHistoryAtom(atom),
+  });
+
 export function compileReplyPromptFromInformation(
   compiler: PromptCompiler,
   atoms: readonly DeepReadonly<InformationAtom>[],
   sourceInformationId: InformationId,
 ): CompiledPrompt {
-  if (
-    !atoms.some(({ informationId }) => informationId === sourceInformationId)
-  ) {
-    throw new Error("Reply selection must include the current input");
-  }
-  let remainingMemoryCharacters = 4_000;
-  const fragments = atoms.flatMap((atom): PromptFragment[] => {
-    if (atom.kind === replyRequestedInformationKind.kind) {
-      return [
-        fragment(
-          atom.informationId,
-          "history",
-          replyPromptRenderer.render(atom),
-          20,
-        ),
-      ];
-    }
-    if (
-      atom.kind === coreMemoryTextInformationKind.kind ||
-      atom.kind === inboundTextInformationKind.kind
-    ) {
-      if (remainingMemoryCharacters === 0) return [];
-      const rendered =
-        atom.kind === coreMemoryTextInformationKind.kind
-          ? memoryPromptRenderer.render(atom)
-          : inboundMemoryPromptRenderer.render(atom);
-      const content = takeCodePoints(rendered, remainingMemoryCharacters);
-      remainingMemoryCharacters -= Array.from(content).length;
-      return [fragment(atom.informationId, "memory", content, 10)];
-    }
-    throw new Error(`Unsupported reply context information kind: ${atom.kind}`);
-  });
-  return compiler.compile("reply", fragments);
-}
-
-function fragment(
-  informationId: InformationId,
-  source: PromptFragmentSource,
-  content: string,
-  priority: number,
-): PromptFragment {
-  return {
-    id: informationId,
-    informationId,
-    source,
-    priority,
-    content,
-    metadata: {},
-  };
+  return compileReplyPrompt(compiler, atoms, sourceInformationId);
 }
 
 async function related(
@@ -269,9 +327,37 @@ function candidateRank(atom: DeepReadonly<InformationAtom>): number {
   return payload.rank;
 }
 
-function takeCodePoints(value: string, maximum: number): string {
-  const codePoints = Array.from(value);
-  if (codePoints.length <= maximum) return value;
-  if (maximum <= 1) return codePoints.slice(0, maximum).join("");
-  return `${codePoints.slice(0, maximum - 1).join("")}…`;
+function uniqueAtoms(
+  atoms: readonly DeepReadonly<InformationAtom>[],
+): readonly DeepReadonly<InformationAtom>[] {
+  return [...new Map(atoms.map((atom) => [atom.informationId, atom])).values()];
+}
+
+async function assistantWasDelivered(
+  atom: DeepReadonly<InformationAtom>,
+  ledger: InformationSelectorContext["ledger"],
+): Promise<boolean> {
+  const requests = (
+    await ledger.related({
+      from: [atom.informationId],
+      relation: "core:caused-by",
+      direction: "incoming",
+      limit: 20,
+    })
+  ).filter(({ kind }) => kind === "core.delivery.requested");
+  if (requests.length === 0) return false;
+  const terminals = await ledger.related({
+    from: requests.map(({ informationId }) => informationId),
+    relation: "core:status-of",
+    direction: "incoming",
+    limit: 20,
+  });
+  return terminals.some(({ kind }) => kind === "core.delivery.delivered");
+}
+
+function platformMessageIdentifier(
+  atom: DeepReadonly<InformationAtom>,
+): string | undefined {
+  return (atom.payload as { source?: { platformMessageId?: string } }).source
+    ?.platformMessageId;
 }

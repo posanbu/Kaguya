@@ -113,6 +113,7 @@ export const replyRequestedInformationPayloadSchema = z
     text: z.string(),
     source: messageSourceSchema,
     turn: turnProvenanceSchema.optional(),
+    memoryInformationIds: z.array(nonBlankString).optional(),
   })
   .strict() as any;
 export type ReplyRequestedInformationPayload = z.infer<

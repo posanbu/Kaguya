@@ -113,6 +113,7 @@ async function fixture(durable = false) {
     task: {
       taskId: "test.reply",
       version: "1",
+      outputMode: "object" as const,
       outputSchema: z.object({ text: z.string() }).strict(),
       allowedTiers: ["heavy"] as const,
     },
@@ -180,6 +181,31 @@ it("reuses requested identity across instances and canonical key order, with onl
 it("exposes the agreed capability identity", () => {
   expect(modelTaskCapability.id).toBe("kaguya:model-task");
   expect(modelTaskCapability.apiVersion).toBe(1);
+});
+
+it("persists output mode in the fingerprint and validates plain text through the task schema", async () => {
+  const f = await fixture();
+  await f.client.execute(f.request);
+  f.generate.mockResolvedValueOnce({ output: "  hello  ", durationMs: 2 });
+
+  const result = await f.client.execute({
+    ...f.request,
+    task: {
+      ...f.request.task,
+      outputMode: "text",
+      outputSchema: z.string().trim().min(1),
+    },
+  });
+
+  expect(result).toMatchObject({ status: "completed", output: "hello" });
+  expect(f.generate).toHaveBeenLastCalledWith(
+    expect.objectContaining({ outputMode: "text" }),
+  );
+  expect(
+    (await f.atoms()).filter(
+      ({ kind }) => kind === "core.model.task.requested",
+    ),
+  ).toHaveLength(2);
 });
 
 it.each(["completed", "failed", "cancelled"])(
@@ -400,6 +426,9 @@ it.each(["schema", "provider"])(
     const failed = (await f.atoms()).find(
       (a) => a.kind === "core.model.task.failed",
     )!;
+    expect((failed.payload as any).error.stage).toBe(
+      mode === "schema" ? "task-schema-validation" : "provider-request",
+    );
     expect(failed.payload).not.toHaveProperty("output");
     expect(JSON.stringify(failed.payload.error)).not.toContain(secret);
     expect(JSON.stringify(result)).not.toContain(secret);

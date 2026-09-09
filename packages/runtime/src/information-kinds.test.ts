@@ -39,6 +39,14 @@ const metadata = {
 };
 
 describe("runtime information kinds", () => {
+  it("defaults historical Model Task metadata to object output", () => {
+    const parsed = modelTaskRequestedInformationKind.payloadSchema.parse({
+      ...metadata,
+      prompt: { kind: "memory", text: "", fragments: [], provenance: [] },
+    });
+    expect(parsed.outputMode).toBe("object");
+  });
+
   it("accepts canonical prompt fragment metadata", () => {
     const parsed = modelTaskRequestedInformationKind.payloadSchema.parse({
       ...metadata,

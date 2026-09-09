@@ -75,24 +75,28 @@ function request(kind: CompiledPrompt["kind"] = "route"): TestRequest {
       return {
         modelId: "deterministic-model",
         prompt: { ...prompt, kind },
+        outputMode: "object",
         outputSchema: routeOutputSchema,
       };
     case "reply":
       return {
         modelId: "deterministic-model",
         prompt: { ...prompt, kind },
+        outputMode: "object",
         outputSchema: replyOutputSchema,
       };
     case "state":
       return {
         modelId: "deterministic-model",
         prompt: { ...prompt, kind },
+        outputMode: "object",
         outputSchema: stateOutputSchema,
       };
     case "memory":
       return {
         modelId: "deterministic-model",
         prompt: { ...prompt, kind },
+        outputMode: "object",
         outputSchema: memoryOutputSchema,
       };
   }
@@ -277,6 +281,30 @@ describe("KaguyaLlmClient", () => {
       type: "json",
       schema: { type: "object", required: ["text"] },
     });
+  });
+
+  it("generates plain text without requesting a structured response", async () => {
+    const model = new MockLanguageModelV3({
+      modelId: "deterministic-model",
+      doGenerate: modelResult("  你好  "),
+    });
+    const client = new KaguyaLlmClient({
+      model,
+      now: deterministicClock(
+        "2026-09-04T00:00:00.000Z",
+        "2026-09-04T00:00:00.001Z",
+      ),
+    });
+
+    await expect(
+      client.generate({
+        modelId: "deterministic-model",
+        prompt: { ...prompt, kind: "reply" },
+        outputMode: "text",
+        outputSchema: replyOutputSchema.shape.text,
+      }),
+    ).resolves.toMatchObject({ output: "你好" });
+    expect(model.doGenerateCalls[0]?.responseFormat).toEqual({ type: "text" });
   });
 
   it("exports the single per-kind output schemas consumed by applications", () => {

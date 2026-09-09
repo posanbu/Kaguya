@@ -218,6 +218,7 @@ async function fixture(backend: Backend, provider = model()) {
     task: {
       taskId: "test.extract",
       version: "1",
+      outputMode: "object",
       outputSchema: z.object({ text: z.string() }).strict(),
       allowedTiers: ["heavy"],
     },
