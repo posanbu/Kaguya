@@ -109,30 +109,22 @@ describe("inspectUserConfigProfile", () => {
     expect(readiness.profiles[0]).toEqual(defaultMetadata);
   });
 
-  it("rejects tiers that point to the same model target", () => {
-    const readiness = inspectUserConfigProfile(
-      profileWith([
-        {
-          id: "provider-1",
-          type: "test",
-          enabled: true,
-          baseUrl: "https://models.example/v1",
-          apiKey: "placeholder-api-key",
-          models: ["model-1"],
-          settings: {},
-        },
-      ]),
-    );
-
-    expect(readiness).toMatchObject({
-      status: "invalid",
-      issues: [
-        {
-          id: "model-tier-targets-not-distinct",
-          path: "ai.modelTiers",
-        },
-      ],
-    });
+  it("accepts duplicate model ids and shared tier targets", () => {
+    expect(
+      inspectUserConfigProfile(
+        profileWith([
+          {
+            id: "provider-1",
+            type: "test",
+            enabled: true,
+            baseUrl: "https://models.example/v1",
+            apiKey: "placeholder-api-key",
+            models: ["model-1", "model-1"],
+            settings: {},
+          },
+        ]),
+      ),
+    ).toEqual({ status: "ready" });
   });
 
   it("accepts two distinct models in one enabled provider", () => {

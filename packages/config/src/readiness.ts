@@ -72,7 +72,7 @@ export const configurationSetupGuidance: ConfigurationGuidance = Object.freeze({
     }),
     Object.freeze({
       id: "configure-model-tiers" as const,
-      message: "Assign distinct light and heavy model targets.",
+      message: "Assign light and heavy model targets.",
     }),
     Object.freeze({
       id: "select-default-provider" as const,
@@ -200,18 +200,6 @@ function deriveConfigurationIssues(
         message: "An enabled provider must include a model.",
       });
     }
-
-    const seenModels = new Set<string>();
-    for (const [modelIndex, modelId] of provider.models.entries()) {
-      if (seenModels.has(modelId)) {
-        issues.push({
-          id: `duplicate-model:${provider.id}:${modelId}`,
-          path: `ai.providers.${providerIndex}.models.${modelIndex}`,
-          message: "Model IDs must be unique within an enabled provider.",
-        });
-      }
-      seenModels.add(modelId);
-    }
   }
 
   const tiers = profile.ai.modelTiers;
@@ -224,7 +212,6 @@ function deriveConfigurationIssues(
     return issues;
   }
 
-  const targetIds = new Set<string>();
   for (const tier of ["light", "heavy"] as const) {
     const target = tiers[tier];
     const provider = profile.ai.providers.find(
@@ -245,14 +232,6 @@ function deriveConfigurationIssues(
         message: `${tier} must reference a model declared by its provider.`,
       });
     }
-    targetIds.add(`${target.providerId}:${target.modelId}`);
-  }
-  if (targetIds.size < 2) {
-    issues.push({
-      id: "model-tier-targets-not-distinct",
-      path: "ai.modelTiers",
-      message: "Light and heavy tiers must use distinct model targets.",
-    });
   }
 
   return issues;

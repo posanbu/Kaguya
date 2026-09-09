@@ -54,7 +54,7 @@ Gateway Token 不写入 runtime。它在每次进程启动时安全随机生成�
 
 **Light Model** — 面向轻量任务的模型 ID。
 
-**Heavy Model** — 面向重量任务的模型 ID，必须与 Light Model 形成不同的 `provider:model` 目标。
+**Heavy Model** — 面向重量任务的模型 ID；可以与 Light Model 使用同一个 `provider:model` 目标。
 
 **启用 Memory** — 默认关闭。关闭时 Runtime 仍保留联想与 Prompt 的处理形状，但不会读取、写入、召回或主动提取实际 Memory；显式开启后才使用内置 PostgreSQL 稀疏召回。
 

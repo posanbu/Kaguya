@@ -29,7 +29,7 @@ flowchart TD
 
 **创建** — 只创建一个未选中的空 Profile，不会立刻切换 Runtime。创建后应引导用户继续编辑，而不是暗示配置已生效。
 
-**编辑** — 当前表单提供名称、OpenAI-compatible Base URL、API Key、light model、heavy model，以及对“平台和插件暂为空”的明确确认。light 与 heavy 必须是不同的模型目标。
+**编辑** — 当前表单提供名称、OpenAI-compatible Base URL、API Key、light model、heavy model，以及对“平台和插件暂为空”的明确确认。light 与 heavy 可以使用同一个模型目标。
 
 **选择** — 改变全局 selected Profile。选择变化后，当前进程需要重启才能让 Runtime 使用新配置。
 

@@ -90,7 +90,7 @@ HTTP 输入只包含文本和由网关生成的 `requestId`。默认 reply 模�
 
 ## 配置、LLM 与数据
 
-Server 从 `KAGUYA_CONFIG_ROOT` 加载 profile registry，并在启动时解析唯一的 `selectedProfileId`。每个模块 LLM request 只声明 `{modelTier}`；模块、消息和请求都不能覆盖 Profile。`light` 与 `heavy` 必须指向两个不同、有效、enabled 的 provider/model target，可跨 provider。选中 Profile 缺失、未知或未就绪时，Runtime 不启动，也不 fallback 到其他 Profile、provider 或模型。
+Server 从 `KAGUYA_CONFIG_ROOT` 加载 profile registry，并在启动时解析唯一的 `selectedProfileId`。每个模块 LLM request 只声明 `{modelTier}`；模块、消息和请求都不能覆盖 Profile。`light` 与 `heavy` 必须指向有效、enabled 的 provider/model target，也可以共享同一个目标。选中 Profile 缺失、未知或未就绪时，Runtime 不启动，也不 fallback 到其他 Profile、provider 或模型。
 
 Provider key 只存在于权限保护的 profile JSON、配置管理器与 provider factory。模块 settings、事件、Prompt、trace 和日志都不接收 key。完整存储约束见 [`@kaguya/config`](../packages/config/README.md)。
 
