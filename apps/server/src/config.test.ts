@@ -172,7 +172,7 @@ function completeProfile(
       rateLimitWindowMs: 10_000,
       logLevel: "debug",
       logFormat: "pretty",
-      gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
+      gatewayAllowlist: [],
     },
     ...overrides,
   };

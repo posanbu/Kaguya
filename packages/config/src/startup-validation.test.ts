@@ -97,7 +97,7 @@ function completeReplacement() {
       rateLimitWindowMs: 60_000,
       logLevel: "info" as const,
       logFormat: "json" as const,
-      gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
+      gatewayAllowlist: [],
     },
     ai: {
       defaultProviderId: "provider-1",

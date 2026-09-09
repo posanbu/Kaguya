@@ -24,6 +24,7 @@ const profile = {
   version: 1 as const,
   id: "default",
   name: "default",
+  gatewayAllowlist: [],
   ai: { providers: [] },
   memory: { enabled: false },
   platforms: [],
@@ -31,6 +32,7 @@ const profile = {
 };
 const replacement = {
   name: "default",
+  gatewayAllowlist: ["qq:private:112233"],
   acknowledgedWarnings: [],
   ai: {
     defaultProviderId: "provider",
@@ -171,6 +173,7 @@ describe("gateway API client", () => {
       );
     }
     expect(JSON.parse(String(request.mock.calls[3]?.[1]?.body))).toMatchObject({
+      gatewayAllowlist: ["qq:private:112233"],
       memory: { enabled: false },
     });
   });

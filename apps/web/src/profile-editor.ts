@@ -1,7 +1,7 @@
 /**
  * 架构说明：本模块是 Web 端 Profile 表单与完整 Profile 文档之间的
- * 客户端保全边界。它把可见的名称、URL、API Key、轻重模型与“暂不配置
- * 平台和插件”的确认态，转换成完整替换 Profile 时所需的 wire payload，
+ * 客户端保全边界。它把可见的名称、URL、API Key、轻重模型、网关白名单与
+ * “暂不配置平台和插件”的确认态，转换成完整替换 Profile 时所需的 wire payload，
  * 并在这个过程中原样保留所有未在表单里出现的 provider、platform、
  * plugin、credentials 和嵌套 settings。
  * 主要职责：`profileToEditorFields` 从现有 Profile 提取表单字段；
@@ -21,6 +21,7 @@ const OPENAI_COMPATIBLE_PROVIDER_TYPE = "openai-compatible";
 
 interface MutableProfile {
   name: string;
+  gatewayAllowlist: string[];
   ai: {
     defaultProviderId?: string;
     modelTiers?: {
@@ -75,6 +76,7 @@ export interface ProfileEditorFields {
   readonly apiKey: string;
   readonly lightModel: string;
   readonly heavyModel: string;
+  readonly gatewayAllowlistText: string;
   readonly memoryEnabled: boolean;
 }
 
@@ -93,6 +95,7 @@ export function profileToEditorFields(
       provider?.models[1] ??
       provider?.models[0] ??
       "",
+    gatewayAllowlistText: profile.gatewayAllowlist.join("\n"),
     memoryEnabled: profile.memory.enabled,
   };
 }
@@ -106,6 +109,10 @@ export function mergeProfileEditorFields(
 
   next.name = fields.name;
   next.memory.enabled = fields.memoryEnabled;
+  next.gatewayAllowlist = fields.gatewayAllowlistText
+    .split(/\r?\n/u)
+    .map((rule) => rule.trim())
+    .filter(Boolean);
   provider.baseUrl = fields.baseUrl;
   provider.apiKey = fields.apiKey;
   provider.models = [fields.lightModel, fields.heavyModel];
@@ -123,6 +130,7 @@ export function mergeProfileEditorFields(
 
   return {
     name: next.name,
+    gatewayAllowlist: next.gatewayAllowlist,
     acknowledgedWarnings: computeAcknowledgedWarnings(next),
     ai: next.ai as ReplaceProfileInput["ai"],
     memory: next.memory,

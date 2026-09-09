@@ -12,7 +12,7 @@
  * 会把唯一管理实例传入这里，WebUI 与外部管理客户端都通过这些路由驱动 selected
  * Profile，而不是直接访问底层 config manager。
  * 输入输出与副作用：运行时会创建 Fastify 实例并注册中间件；Profile 路由在管理认证
- * 通过后可能写入配置目录并返回无脱敏的 Profile 正文；消息路由仅在 `webGateway`
+ * 通过后可能写入配置目录并返回显式安全投影的 Profile 正文；消息路由仅在 `webGateway`
  * 就绪时非阻塞转发正规化内容，日志不制造 trace ID，否则返回明确的
  * 503 setup-required/core-unavailable 错误。
  */
@@ -95,6 +95,7 @@ const selectionRequestSchema = z
 const replaceProfileRequestSchema = z
   .object({
     name: z.string().trim().min(1).max(100),
+    gatewayAllowlist: z.array(z.string()),
     ai: aiConfigSchema,
     memory: memoryConfigSchema.default({ enabled: false }),
     platforms: z.array(platformConfigSchema),
@@ -247,11 +248,24 @@ const memoryConfigJsonSchema = {
 const userConfigProfileJsonSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["version", "id", "name", "ai", "memory", "platforms", "plugins"],
+  required: [
+    "version",
+    "id",
+    "name",
+    "gatewayAllowlist",
+    "ai",
+    "memory",
+    "platforms",
+    "plugins",
+  ],
   properties: {
     version: { type: "integer", enum: [1] },
     id: profileIdJsonSchema,
     name: { type: "string", minLength: 1 },
+    gatewayAllowlist: {
+      type: "array",
+      items: { type: "string" },
+    },
     ai: aiConfigJsonSchema,
     memory: memoryConfigJsonSchema,
     platforms: {
@@ -287,9 +301,20 @@ const profilePathParamsJsonSchema = {
 const replaceProfileRequestJsonSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["name", "ai", "platforms", "plugins", "acknowledgedWarnings"],
+  required: [
+    "name",
+    "gatewayAllowlist",
+    "ai",
+    "platforms",
+    "plugins",
+    "acknowledgedWarnings",
+  ],
   properties: {
     name: { type: "string", minLength: 1, maxLength: 100 },
+    gatewayAllowlist: {
+      type: "array",
+      items: { type: "string" },
+    },
     ai: aiConfigJsonSchema,
     memory: memoryConfigJsonSchema,
     platforms: { type: "array", items: platformConfigJsonSchema },
@@ -1045,6 +1070,12 @@ function mapConfigError(error: ConfigError) {
         statusCode: 409,
         code: "profile_in_use",
         message: "The selected profile cannot be deleted",
+      } as const;
+    case "CONFIG_INCOMPLETE":
+      return {
+        statusCode: 409,
+        code: "profile_runtime_missing",
+        message: "Profile runtime is required for this operation",
       } as const;
     default:
       return undefined;

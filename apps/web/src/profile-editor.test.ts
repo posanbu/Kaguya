@@ -27,6 +27,7 @@ const completeProfile: UserConfigProfile = {
   version: 1,
   id: "b3f1d59f-f1e2-4b63-b9de-d1aa8d0d1c44",
   name: "Production",
+  gatewayAllowlist: ["qq:group:778899", "invalid-rule"],
   ai: {
     defaultProviderId: "default-provider",
     modelTiers: {
@@ -101,6 +102,7 @@ const emptyDefaultProfile: UserConfigProfile = {
   version: 1,
   id: "default",
   name: "default",
+  gatewayAllowlist: [],
   ai: {
     providers: [],
   },
@@ -113,6 +115,7 @@ const warningProfile: UserConfigProfile = {
   version: 1,
   id: "warning-profile",
   name: "Warning",
+  gatewayAllowlist: ["*:private:*"],
   ai: {
     defaultProviderId: "default-provider",
     modelTiers: {
@@ -150,6 +153,7 @@ describe("profileToEditorFields", () => {
       apiKey: "provider-secret",
       lightModel: "light-model",
       heavyModel: "heavy-model",
+      gatewayAllowlistText: "qq:group:778899\ninvalid-rule",
       memoryEnabled: true,
     });
   });
@@ -161,6 +165,7 @@ describe("profileToEditorFields", () => {
       apiKey: "",
       lightModel: "",
       heavyModel: "",
+      gatewayAllowlistText: "",
       memoryEnabled: false,
     });
   });
@@ -176,11 +181,14 @@ describe("mergeProfileEditorFields", () => {
       apiKey: "provider-secret-v2",
       lightModel: "light-model-v2",
       heavyModel: "heavy-model-v2",
+      gatewayAllowlistText:
+        " qq:group:778899 \n\ninvalid-rule\nqq:group:778899",
       memoryEnabled: false,
     });
 
     expect(merged).toEqual({
       name: "Production v2",
+      gatewayAllowlist: ["qq:group:778899", "invalid-rule", "qq:group:778899"],
       acknowledgedWarnings: [],
       ai: {
         defaultProviderId: "default-provider",
@@ -264,6 +272,7 @@ describe("mergeProfileEditorFields", () => {
 
     expect(merged).toEqual({
       name: "default",
+      gatewayAllowlist: [],
       acknowledgedWarnings: [],
       ai: {
         defaultProviderId: "default-provider",

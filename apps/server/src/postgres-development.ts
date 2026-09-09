@@ -313,7 +313,7 @@ export function defaultDevelopmentRuntime(databaseUrl: string): RuntimeConfig {
     rateLimitWindowMs: 60_000,
     logLevel: "info",
     logFormat: "pretty",
-    gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
+    gatewayAllowlist: [],
   });
 }
 

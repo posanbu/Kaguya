@@ -21,6 +21,7 @@ import { Writable } from "node:stream";
 
 import { describe, expect, it, vi } from "vitest";
 
+import { FileUserConfigManager } from "@kaguya/config";
 import {
   closeLogger,
   createLogger,
@@ -53,7 +54,7 @@ const config: ServerConfig = {
   webDistPath: "/tmp/kaguya-web-test",
   logLevel: "silent",
   logFormat: "json",
-  gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
+  gatewayAllowlist: [],
   napcat: {
     enabled: false,
     adapterId: "napcat.qq.main",
@@ -98,6 +99,7 @@ describe("application API gateway", () => {
         version: 1 as const,
         id: "default",
         name: "default",
+        gatewayAllowlist: [],
         ai: { providers: [] },
         memory: { enabled: false },
         platforms: [],
@@ -109,6 +111,7 @@ describe("application API gateway", () => {
           version: 1 as const,
           id: "default",
           name: "default",
+          gatewayAllowlist: [],
           ai: { providers: [] },
           memory: { enabled: false },
           platforms: [],
@@ -279,31 +282,17 @@ describe("application API gateway", () => {
     });
   });
 
-  it("keeps runtime hidden from Profile responses and rejects runtime replacement", async () => {
+  it("exposes only the safe allowlist field and rejects runtime replacement", async () => {
     const setup = stubManagement();
     vi.mocked(setup.getProfile).mockResolvedValueOnce({
       version: 1,
       id: "default",
       name: "default",
+      gatewayAllowlist: ["qq:private:112233"],
       ai: { providers: [] },
       memory: { enabled: false },
       platforms: [],
       plugins: [],
-      runtime: {
-        host: "127.0.0.1",
-        port: 3000,
-        databaseMode: "external",
-        databaseUrl:
-          "postgresql://profile:database-password@database.example/kaguya",
-        webDistPath: "apps/web/dist",
-        corsOrigins: [],
-        trustProxy: false,
-        rateLimitMax: 30,
-        rateLimitWindowMs: 60_000,
-        logLevel: "info",
-        logFormat: "json",
-        gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
-      },
     });
     const app = await createHttpApplication({ config, setup });
 
@@ -313,8 +302,10 @@ describe("application API gateway", () => {
       headers: authorization(),
     });
     expect(read.statusCode).toBe(200);
+    expect(read.json().data.profile.gatewayAllowlist).toEqual([
+      "qq:private:112233",
+    ]);
     expect(read.body).not.toContain("runtime");
-    expect(read.body).not.toContain("database-password");
 
     const replace = await app.inject({
       method: "PUT",
@@ -352,6 +343,7 @@ describe("application API gateway", () => {
           profile: {
             id: created.profile.id,
             name: "work",
+            gatewayAllowlist: payload.gatewayAllowlist,
             ai: payload.ai,
             memory: { enabled: true },
             platforms: [],
@@ -360,6 +352,32 @@ describe("application API gateway", () => {
         },
       });
     });
+  });
+
+  it("reports a conflict instead of dropping an allowlist without runtime", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kaguya-app-no-runtime-"));
+    const management = await createConfigurationManagement(root);
+    const app = await createApiGateway({ config, setup: management });
+    try {
+      const response = await app.inject({
+        method: "PUT",
+        url: "/api/v1/profiles/default",
+        headers: authorization(),
+        payload: readyProfileReplacement(
+          "default",
+          "light-model",
+          "heavy-model",
+        ),
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({
+        error: { code: "profile_runtime_missing" },
+      });
+    } finally {
+      await app.close();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("selects profile explicitly and reports restart requirement", async () => {
@@ -692,6 +710,7 @@ describe("application API gateway", () => {
     const serialized = JSON.stringify(document);
     expect(serialized).toContain("/api/v1/setup");
     expect(serialized).toContain('"selectedProfileId"');
+    expect(serialized).toContain('"gatewayAllowlist"');
     expect(serialized).toContain('"apiKey"');
     expect(serialized).toContain('"baseUrl"');
     expect(serialized).not.toContain('"workflowId"');
@@ -1196,6 +1215,30 @@ async function withManagementApp(
   ) => Promise<void>,
 ) {
   const root = await mkdtemp(join(tmpdir(), "kaguya-app-test-"));
+  const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+  const profile = await manager.getProfile(manager.getSelectedProfileId());
+  await manager.replaceProfile(profile.id, {
+    name: profile.name,
+    acknowledgedWarnings: [],
+    ai: profile.ai,
+    memory: profile.memory,
+    platforms: profile.platforms,
+    plugins: profile.plugins,
+    runtime: {
+      host: "127.0.0.1",
+      port: 3000,
+      databaseMode: "external",
+      databaseUrl: "postgresql://profile:secret@database.example/kaguya",
+      webDistPath: "apps/web/dist",
+      corsOrigins: [],
+      trustProxy: false,
+      rateLimitMax: 30,
+      rateLimitWindowMs: 60_000,
+      logLevel: "info",
+      logFormat: "json",
+      gatewayAllowlist: [],
+    },
+  });
   const management = await createConfigurationManagement(root);
   const app = await createApiGateway({ config, setup: management });
   try {
@@ -1226,6 +1269,7 @@ function stubManagement(): ConfigurationManagement {
       version: 1 as const,
       id: "default",
       name: "default",
+      gatewayAllowlist: [],
       ai: { providers: [] },
       memory: { enabled: false },
       platforms: [],
@@ -1245,6 +1289,7 @@ function readyProfileReplacement(
 ) {
   return {
     name,
+    gatewayAllowlist: ["*:group:*", "*:private:*"],
     acknowledgedWarnings: ["platforms-empty", "plugins-empty"],
     ai: {
       defaultProviderId: "provider-1",

@@ -75,11 +75,7 @@ export interface ServerConfig {
   readonly napcat: NapCatConfig;
 }
 
-export interface GatewayAllowlistConfig {
-  readonly platforms: readonly string[];
-  readonly userIds: readonly string[];
-  readonly groupIds: readonly string[];
-}
+export type GatewayAllowlistConfig = readonly string[];
 
 export interface NapCatConfig {
   readonly enabled: boolean;

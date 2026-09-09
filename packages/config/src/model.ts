@@ -134,11 +134,7 @@ const memoryConfigInnerSchema = z.strictObject({
 
 export const memoryConfigSchema = guardSchemaInput(memoryConfigInnerSchema);
 
-const runtimeGatewayAllowlistSchema = z.strictObject({
-  platforms: z.array(nonEmptyIdSchema),
-  userIds: z.array(nonEmptyIdSchema),
-  groupIds: z.array(nonEmptyIdSchema),
-});
+const runtimeGatewayAllowlistSchema = z.array(z.string());
 
 const runtimeConfigInnerSchema = z.strictObject({
   host: z.string().trim().min(1),

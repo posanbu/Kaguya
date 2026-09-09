@@ -26,11 +26,7 @@ function fixture() {
       },
     }),
   });
-  const host = new AdapterHost(logger, {
-    platforms: ["qq"],
-    userIds: ["allowed"],
-    groupIds: [],
-  });
+  const host = new AdapterHost(logger, ["qq:private:allowed"]);
   cleanup.push(() => closeLogger(logger));
   return { host, logs };
 }
@@ -126,7 +122,10 @@ it("logs full normalized inbound text, filters before submission and records the
     deliveries: [],
   }));
   host.finalizeRuntime({ submit });
-  const filtered = { ...message, sender: { userId: "denied" } };
+  const filtered = {
+    ...message,
+    target: { kind: "private" as const, userId: "denied" },
+  };
   expect(host.acceptInbound(filtered)).toBe(false);
   expect(submit).not.toHaveBeenCalled();
   expect(host.acceptInbound(message)).toBe(true);
@@ -241,7 +240,7 @@ it("protects the status endpoint with management scope and keeps health live whi
     webDistPath: "/tmp/unused",
     logLevel: "silent",
     logFormat: "json",
-    gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
+    gatewayAllowlist: [],
     napcat: { enabled: false, adapterId: "qq", reconnectMs: 3000 },
   };
   const app = await createHttpApplication({
@@ -250,12 +249,10 @@ it("protects the status endpoint with management scope and keeps health live whi
       status: () => ({
         ...host.status(),
         connectionUrl: "ws://hidden",
-        adapters: host
-          .status()
-          .adapters.map((snapshot) => ({
-            ...snapshot,
-            accessToken: "private-secret",
-          })),
+        adapters: host.status().adapters.map((snapshot) => ({
+          ...snapshot,
+          accessToken: "private-secret",
+        })),
       }),
     },
     webGateway: host.webGateway,
