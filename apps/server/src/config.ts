@@ -2,7 +2,7 @@
  * 功能概述：把 selected Profile 的 runtime/platform 配置转换为 Server 唯一启动配置。
  * 主要职责：环境只定位 Profile Registry 并选择开发模式；host、port、PostgreSQL、
  * Web、限流、日志、allowlist 与 NapCat 全部来自 selected Profile。Gateway Token 每次
- * 进程启动随机生成，不持久化。旧运行环境变量会被按名称拒绝且从不回显值。
+ * 进程启动随机生成，不持久化。环境变量只负责定位 Registry 与选择开发模式。
  * 代码库关系：server.ts 在创建 HTTP、Runtime 或 adapter 前调用本模块；开发 PostgreSQL
  * CLI 也复用相同 runtime schema，但容器生命周期不进入生产 Server。
  * 输入输出与副作用：除安全随机数外无 I/O；错误只包含稳定字段名，不包含 URL 或凭据。
@@ -19,38 +19,6 @@ import {
 const defaultConfigRoot = fileURLToPath(
   new URL("../../../.data/kaguya-config", import.meta.url),
 );
-
-const retiredRuntimeEnvironmentVariables = [
-  "KAGUYA_DATABASE_URL",
-  "KAGUYA_HOST",
-  "KAGUYA_PORT",
-  "KAGUYA_GATEWAY_TOKEN",
-  "KAGUYA_CORS_ORIGINS",
-  "KAGUYA_TRUST_PROXY",
-  "KAGUYA_RATE_LIMIT_MAX",
-  "KAGUYA_RATE_LIMIT_WINDOW_MS",
-  "KAGUYA_WEB_DIST_PATH",
-  "KAGUYA_GATEWAY_ALLOWLIST_PLATFORMS",
-  "KAGUYA_GATEWAY_ALLOWLIST_USER_IDS",
-  "KAGUYA_GATEWAY_ALLOWLIST_GROUP_IDS",
-  "KAGUYA_NAPCAT_ENABLED",
-  "KAGUYA_NAPCAT_WS_URL",
-  "KAGUYA_NAPCAT_ACCESS_TOKEN",
-  "KAGUYA_NAPCAT_SELF_ID",
-  "KAGUYA_NAPCAT_RECONNECT_MS",
-  "KAGUYA_LOG_LEVEL",
-  "KAGUYA_LOG_LEVELS",
-  "KAGUYA_LOG_FORMAT",
-  "KAGUYA_LOG_ASYNC",
-  "KAGUYA_LOG_DESTINATION",
-  "KAGUYA_API_HOST",
-  "KAGUYA_API_PORT",
-  "KAGUYA_API_DATABASE_PATH",
-  "KAGUYA_BOT_DATABASE_PATH",
-  "KAGUYA_LLM_API_KEY",
-  "KAGUYA_LLM_BASE_URL",
-  "KAGUYA_LLM_MODEL",
-] as const;
 
 export interface ServerBootstrapConfig {
   readonly configRoot: string;
@@ -99,7 +67,6 @@ export class ServerRuntimeConfigurationError extends Error {
 export function readServerBootstrapConfig(
   environment: NodeJS.ProcessEnv = process.env,
 ): ServerBootstrapConfig {
-  rejectRetiredRuntimeEnvironment(environment);
   return {
     configRoot:
       optionalText(environment.KAGUYA_CONFIG_ROOT) ?? defaultConfigRoot,
@@ -207,17 +174,6 @@ function readNapCatConfig(profile: UserConfigProfile): NapCatConfig {
     ...(accessToken === undefined ? {} : { accessToken }),
     ...(selfId === undefined ? {} : { selfId }),
   };
-}
-
-function rejectRetiredRuntimeEnvironment(environment: NodeJS.ProcessEnv): void {
-  const configured = retiredRuntimeEnvironmentVariables.filter(
-    (name) => environment[name] !== undefined,
-  );
-  if (configured.length > 0) {
-    throw new ServerRuntimeConfigurationError(
-      `${configured.join(", ")} are no longer supported; configure the selected Profile runtime`,
-    );
-  }
 }
 
 function optionalText(value: string | undefined): string | undefined {

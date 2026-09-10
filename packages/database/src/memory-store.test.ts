@@ -1,7 +1,7 @@
 /**
  * 功能概述：用 PGlite 验证生产 MemoryStore 的幂等、冲突、范围过滤与稀疏排序。
  * 主要职责：覆盖全局检索、namespace/account/scope 组合、中英文和单字符路径。
- * 代码库关系：复用正式 migration 与 PostgresMemoryStore，不用内存替身掩盖 SQL 行为。
+ * 代码库关系：复用正式 v1 schema 与 PostgresMemoryStore，不用内存替身掩盖 SQL 行为。
  * 输入输出与副作用：每例创建并关闭隔离 PGlite 数据库。
  */
 import { afterEach, describe, expect, it } from "vitest";
@@ -21,7 +21,7 @@ afterEach(async () => {
 async function setup() {
   const database = await createTestingDatabase();
   databases.push(database);
-  await database.migrate();
+  await database.prepareSchema();
   await database.information.synchronizeKinds(["core.message.inbound.text"]);
   let sequence = 0;
   const memory = new PostgresMemoryStore(database.sql, {
@@ -84,7 +84,7 @@ function input(
 describe("PostgresMemoryStore", () => {
   it("returns the existing document for an identical source and rejects drift", async () => {
     const { database, memory } = await setup();
-    await expect(database.migrate()).resolves.toBeUndefined();
+    await expect(database.prepareSchema()).resolves.toBeUndefined();
     await appendSource(database, "source-1", "2026-09-06T10:00:00.000Z");
 
     const first = await memory.put(input("source-1", "moonlight"));

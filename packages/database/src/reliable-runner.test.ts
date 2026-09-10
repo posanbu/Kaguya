@@ -32,7 +32,7 @@ afterEach(async () => {
 async function setup() {
   const db = await createTestingDatabase();
   clean.push(() => db.close());
-  await db.migrate();
+  await db.prepareSchema();
   const registry = new engine.InformationKindRegistry();
   registry.register(source);
   registry.register(output);

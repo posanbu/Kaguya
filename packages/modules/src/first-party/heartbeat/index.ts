@@ -21,9 +21,9 @@ import {
 
 export const heartbeatSettingsSchema = z
   .object({
-    messageDebounceMs: z.number().int().min(0).default(1500),
-    maxReplacementAttempts: z.number().int().min(1).max(20).default(3),
-    totalWaitBudget: z.number().int().min(0).max(20).default(3),
+    messageDebounceMs: z.number().int().min(0),
+    maxReplacementAttempts: z.number().int().min(1).max(20),
+    totalWaitBudget: z.number().int().min(0).max(20),
   })
   .strict();
 export type HeartbeatSettings = z.infer<typeof heartbeatSettingsSchema>;
@@ -105,7 +105,7 @@ export const heartbeatDueSelector = defineInformationSelector({
 
 export const heartbeatModule = defineInformationModule({
   manifest: {
-    protocolVersion: 2,
+    protocolVersion: 1,
     moduleVersion: "1.0.0",
     definitionId: "agent.heartbeat.short",
     displayName: "Durable short heartbeat",

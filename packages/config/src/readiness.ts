@@ -10,6 +10,7 @@ import type {
   UserConfigProfile,
   UserConfigProfileMetadata,
 } from "./model.js";
+import { configurationWarningIds } from "./model.js";
 
 export interface ConfigurationGuidanceStep {
   readonly id:
@@ -93,9 +94,7 @@ export function inspectUserConfigProfile(
     profile.review?.acknowledgedWarnings ?? [],
   );
   const warnings = deriveConfigurationWarnings(profile).filter(
-    (warning) =>
-      !isOptionalConfigurationWarning(warning.id) &&
-      !acknowledgedWarnings.has(warning.id),
+    (warning) => !acknowledgedWarnings.has(warning.id),
   );
   if (warnings.length > 0) {
     return { status: "review_required", warnings };
@@ -121,19 +120,20 @@ export function deriveConfigurationWarnings(
   profile: UserConfigProfile,
 ): readonly ConfigurationWarning[] {
   const warnings: ConfigurationWarning[] = [];
+  const warningIds = configurationWarningIds(profile);
 
   for (const [providerIndex, provider] of profile.ai.providers.entries()) {
     if (!provider.enabled) {
       continue;
     }
-    if (provider.baseUrl === undefined) {
+    if (warningIds.has(`provider-base-url-missing:${provider.id}`)) {
       warnings.push({
         id: `provider-base-url-missing:${provider.id}`,
         path: `ai.providers.${providerIndex}.baseUrl`,
         message: "An enabled provider is missing its base URL.",
       });
     }
-    if (provider.apiKey === undefined) {
+    if (warningIds.has(`provider-api-key-missing:${provider.id}`)) {
       warnings.push({
         id: `provider-api-key-missing:${provider.id}`,
         path: `ai.providers.${providerIndex}.apiKey`,
@@ -142,28 +142,7 @@ export function deriveConfigurationWarnings(
     }
   }
 
-  // Keep these legacy warning IDs valid for old profile files, but do not
-  // surface them as blockers for new configurations.
-  if (profile.platforms.length === 0) {
-    warnings.push({
-      id: "platforms-empty",
-      path: "platforms",
-      message: "No platforms are configured.",
-    });
-  }
-  if (profile.plugins.length === 0) {
-    warnings.push({
-      id: "plugins-empty",
-      path: "plugins",
-      message: "No plugins are configured.",
-    });
-  }
-
   return warnings;
-}
-
-function isOptionalConfigurationWarning(id: string): boolean {
-  return id === "platforms-empty" || id === "plugins-empty";
 }
 
 function deriveConfigurationIssues(

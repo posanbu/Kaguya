@@ -579,7 +579,7 @@ export const assistantTextInformationKind = defineInformationKind({
       text: z.string(),
       source: messageSourceSchema,
       originatingModuleInstanceId: nonBlankString,
-      turn: turnProvenanceSchema.nullable().default(null),
+      turn: turnProvenanceSchema.nullable(),
     })
     .strict(),
   references: {
@@ -618,7 +618,7 @@ export const deliveryRequestedInformationKind = defineInformationKind({
       platform: nonBlankString,
       destination: platformDestinationSchema,
       message: outboundMessageContentSchema,
-      turn: turnProvenanceSchema.nullable().default(null),
+      turn: turnProvenanceSchema.nullable(),
     })
     .strict(),
   references: {
@@ -1079,7 +1079,7 @@ export const waitRequestedInformationKind = defineInformationKind({
       attempt: z.number().int().min(0),
       totalWaitBudget: z.number().int().min(0),
       wakePolicy: z.enum(["recheckAt", "cooldown"]),
-      wakeOnMessage: z.boolean().default(true),
+      wakeOnMessage: z.boolean(),
       source: messageSourceSchema,
       sourceInformationIds: z.array(nonBlankString).min(1),
     })

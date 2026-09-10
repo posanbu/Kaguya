@@ -50,7 +50,7 @@ describe("information module SDK", () => {
     };
     const module = defineInformationModule({
       manifest: {
-        protocolVersion: 2,
+        protocolVersion: 1,
         summary: "Test information module.",
         moduleVersion: "1.0.0",
         definitionId: "acme.prompt",
@@ -109,7 +109,7 @@ describe("information module SDK", () => {
     });
     const module = defineInformationModule({
       manifest: {
-        protocolVersion: 2,
+        protocolVersion: 1,
         summary: "Test information module.",
         moduleVersion: "1.0.0",
         selectors: [],
@@ -178,7 +178,7 @@ describe("information module SDK", () => {
     expect(() =>
       defineInformationModule({
         manifest: {
-          protocolVersion: 2,
+          protocolVersion: 1,
           summary: "Test information module.",
           moduleVersion: "1.0.0",
           selectors: [],

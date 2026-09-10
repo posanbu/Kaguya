@@ -1,6 +1,6 @@
 /**
  * 架构说明：本模块拥有配置 Profile 与 Registry 的持久化 schema，
- * 负责 JSON 克隆、引用完整性与 v3 注册表不变量。它被配置管理器、
+ * 负责 JSON 克隆、引用完整性与 v1 注册表不变量。它被配置管理器、
  * 运行时启动链和 WebUI/API 层共同消费，必须保持可安全反序列化且
  * 不能泄漏未克隆的外部对象引用。
  */
@@ -120,14 +120,6 @@ const platformConfigInnerSchema = z.strictObject({
 
 export const platformConfigSchema = guardSchemaInput(platformConfigInnerSchema);
 
-const pluginConfigInnerSchema = z.strictObject({
-  id: nonEmptyIdSchema,
-  enabled: z.boolean(),
-  settings: jsonObjectSchema,
-});
-
-export const pluginConfigSchema = guardSchemaInput(pluginConfigInnerSchema);
-
 const memoryConfigInnerSchema = z.strictObject({
   enabled: z.boolean(),
 });
@@ -139,13 +131,7 @@ const runtimeGatewayAllowlistSchema = z.array(z.string());
 const runtimeConfigInnerSchema = z.strictObject({
   host: z.string().trim().min(1),
   port: z.int().min(1).max(65_535),
-  /**
-   * Legacy Profile files may still contain the former persisted gateway
-   * token. Applications must ignore it and generate an ephemeral token for
-   * each process instead.
-   */
-  gatewayToken: z.string().min(16).optional(),
-  databaseMode: z.enum(["managed", "external"]).default("external"),
+  databaseMode: z.enum(["managed", "external"]),
   databaseUrl: z.url(),
   webDistPath: z.string().trim().min(1),
   corsOrigins: z.array(z.url()),
@@ -165,16 +151,13 @@ const runtimeConfigInnerSchema = z.strictObject({
   gatewayAllowlist: runtimeGatewayAllowlistSchema,
 });
 
-export const runtimeConfigSchema = runtimeConfigInnerSchema.transform(
-  ({ gatewayToken: _legacyGatewayToken, ...runtime }) => runtime,
-);
+export const runtimeConfigSchema = runtimeConfigInnerSchema;
 
 const userConfigProfileSettingsInnerSchema = z
   .strictObject({
     ai: aiConfigSchema,
-    memory: memoryConfigSchema.default({ enabled: false }),
+    memory: memoryConfigSchema,
     platforms: z.array(platformConfigSchema),
-    plugins: z.array(pluginConfigSchema),
     runtime: runtimeConfigSchema.optional(),
   })
   .superRefine((settings, context) => {
@@ -184,7 +167,6 @@ const userConfigProfileSettingsInnerSchema = z
       ["platforms"],
       context,
     );
-    addDuplicateIdIssues(settings.plugins, "plugin", ["plugins"], context);
   });
 
 export const userConfigProfileSettingsSchema = guardSchemaInput(
@@ -211,6 +193,18 @@ const userConfigProfileInnerSchema = userConfigProfileSettingsInnerSchema
       });
     }
     rejectOwnUndefined(profile, "review", context);
+    const currentWarningIds = configurationWarningIds(profile);
+    for (const [position, warningId] of (
+      profile.review?.acknowledgedWarnings ?? []
+    ).entries()) {
+      if (!currentWarningIds.has(warningId)) {
+        context.addIssue({
+          code: "custom",
+          path: ["review", "acknowledgedWarnings", position],
+          message: "Acknowledged warning must reference a current warning",
+        });
+      }
+    }
   });
 
 export const userConfigProfileSchema = guardSchemaInput(
@@ -230,7 +224,7 @@ export const userConfigProfileMetadataSchema = guardSchemaInput(
 
 const userConfigIndexInnerSchema = z
   .strictObject({
-    version: z.literal(3),
+    version: z.literal(1),
     selectedProfileId: profileIdSchema,
     profiles: z.array(userConfigProfileMetadataSchema),
   })
@@ -438,9 +432,8 @@ export type UserConfigProfileSettings = z.infer<
 >;
 export type UserConfigProfileSettingsInput = Omit<
   UserConfigProfileSettings,
-  "memory" | "runtime"
+  "runtime"
 > & {
-  readonly memory?: MemoryConfig;
   readonly runtime?: RuntimeConfigInput | undefined;
 };
 export type RuntimeConfig = z.infer<typeof runtimeConfigSchema>;
@@ -450,6 +443,22 @@ export type UserConfigProfileMetadata = z.infer<
   typeof userConfigProfileMetadataSchema
 >;
 export type UserConfigIndex = z.infer<typeof userConfigIndexSchema>;
+
+export function configurationWarningIds(
+  profile: Pick<UserConfigProfile, "ai">,
+): ReadonlySet<string> {
+  const warningIds = new Set<string>();
+  for (const provider of profile.ai.providers) {
+    if (!provider.enabled) continue;
+    if (provider.baseUrl === undefined) {
+      warningIds.add(`provider-base-url-missing:${provider.id}`);
+    }
+    if (provider.apiKey === undefined) {
+      warningIds.add(`provider-api-key-missing:${provider.id}`);
+    }
+  }
+  return warningIds;
+}
 
 export type ReplaceUserConfigProfileInput = UserConfigProfileSettingsInput & {
   readonly name: string;
@@ -465,6 +474,5 @@ export function emptyUserConfigProfileSettings(): UserConfigProfileSettings {
     ai: { providers: [] },
     memory: { enabled: false },
     platforms: [],
-    plugins: [],
   };
 }

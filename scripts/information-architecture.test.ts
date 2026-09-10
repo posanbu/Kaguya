@@ -26,7 +26,7 @@ const productionRoots = ["packages", "apps"] as const;
 const profileIdAllowedPaths = [
   "packages/config/",
   "apps/server/src/app.ts",
-  "apps/server/src/setup.ts",
+  "apps/server/src/configuration-management.ts",
   "apps/web/src/App.tsx",
   "apps/web/src/api.ts",
   "apps/web/src/profile-editor.ts",

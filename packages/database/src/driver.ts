@@ -3,7 +3,7 @@
  * 让仓储层只依赖统一的 query / transaction / exec 语义。
  * 主要职责：`PgDatabase.connect` 管理真实连接池（可传入 PostgreSQL startup options）；
  * `PgTransaction` 适配事务 client，并确保业务失败优先于尽力回滚的失败。
- * 代码库关系：`information-repository.ts` 与 `migrations.ts` 只面向这里的
+ * 代码库关系：`information-repository.ts` 与 `schema.ts` 只面向这里的
  * `SqlDatabase`/`SqlTransaction` 端口；`index.ts` 用它建立生产连接；PGlite 测试驱动
  * 位于只由 `testing.ts` 加载的 `pglite-driver.ts`，因此生产入口不解析 dev-only 依赖。
  * 输入输出与副作用：方法接收 SQL 与参数并异步返回 rows/rowCount；连接、事务与关闭

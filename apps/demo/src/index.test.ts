@@ -1,7 +1,7 @@
 /**
  * 功能概述：验证 demo 以 PostgreSQL information ledger 运行确定性入站 DAG，
  * 输出根 `informationId` 和每个衍生 kind 的计数，不再使用 SQLite path 或 dispatch。
- * 主要职责：覆盖 selected Profile runtime 读取与旧数据库环境变量拒绝，并用真实内存 PGlite
+ * 主要职责：覆盖 selected Profile runtime 读取与旧数据库环境变量忽略，并用真实内存 PGlite
  * 运行 Web 消息的 context、inbound、reply、Model Task、assistant 与 delivery 链。
  * 代码库关系：直接调用 `index.ts` 导出的 `readDemoDatabaseUrl`/`runDemo`；
  * 测试数据库来自 `@kaguya/database/testing`，实际 CLI 则由同一 URL 连接方式启动。
@@ -15,6 +15,7 @@ import { join } from "node:path";
 
 import { FileUserConfigManager } from "@kaguya/config";
 import { createTestingDatabase } from "@kaguya/database/testing";
+import { createFirstPartyModuleConfigDefaults } from "@kaguya/modules";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { readDemoDatabaseUrl, runDemo } from "./index.js";
@@ -32,7 +33,7 @@ afterEach(async () => {
 });
 
 describe("demo entry point", () => {
-  it("reads the selected Profile database and rejects the retired environment variable", async () => {
+  it("reads the selected Profile database and ignores retired environment variables", async () => {
     const root = await mkdtemp(join(tmpdir(), "kaguya-demo-config-"));
     roots.push(root);
     await expect(
@@ -47,7 +48,6 @@ describe("demo entry point", () => {
       ai: profile.ai,
       memory: profile.memory,
       platforms: profile.platforms,
-      plugins: profile.plugins,
       runtime: demoRuntime,
     });
 
@@ -59,7 +59,7 @@ describe("demo entry point", () => {
         KAGUYA_CONFIG_ROOT: root,
         KAGUYA_DATABASE_URL: "postgresql://secret@legacy.example/kaguya",
       }),
-    ).rejects.toThrow("KAGUYA_DATABASE_URL is not supported");
+    ).resolves.toBe(demoRuntime.databaseUrl);
   });
 
   it("submits one deterministic message and prints its information kind counts", async () => {
@@ -70,6 +70,7 @@ describe("demo entry point", () => {
 
     const receipt = await runDemo({
       database,
+      moduleConfigs: createFirstPartyModuleConfigDefaults("test"),
       writeLine: (line) => output.push(line),
       informationIdGenerator: () => `demo-information-${++sequence}`,
     });
@@ -106,8 +107,17 @@ describe("demo entry point", () => {
     const database = await createTestingDatabase();
     databases.push(database);
 
-    const first = await runDemo({ database, writeLine: () => undefined });
-    const second = await runDemo({ database, writeLine: () => undefined });
+    const moduleConfigs = createFirstPartyModuleConfigDefaults("test");
+    const first = await runDemo({
+      database,
+      moduleConfigs,
+      writeLine: () => undefined,
+    });
+    const second = await runDemo({
+      database,
+      moduleConfigs,
+      writeLine: () => undefined,
+    });
 
     expect(first.rootInformationId).not.toBe(second.rootInformationId);
     expect(

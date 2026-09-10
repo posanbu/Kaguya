@@ -122,7 +122,7 @@ export function defineInformationLedgerContract(
 
     async function createMigratedDatabase(): Promise<KaguyaDatabase> {
       database = await options.createDatabase();
-      await database.migrate();
+      await database.prepareSchema();
       return database;
     }
 

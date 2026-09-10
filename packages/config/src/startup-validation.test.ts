@@ -117,7 +117,7 @@ function completeReplacement() {
     runtime: {
       host: "127.0.0.1",
       port: 7897,
-      gatewayToken: "startup-validation-token",
+      databaseMode: "external" as const,
       databaseUrl: "postgresql://kaguya:password@127.0.0.1:5432/kaguya",
       webDistPath: "apps/web/dist",
       corsOrigins: [],
@@ -146,6 +146,7 @@ function completeReplacement() {
         },
       ],
     },
+    memory: { enabled: false },
     platforms: [
       {
         id: "napcat.qq.main",
@@ -159,6 +160,5 @@ function completeReplacement() {
         },
       },
     ],
-    plugins: [],
   };
 }

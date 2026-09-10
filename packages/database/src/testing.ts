@@ -4,10 +4,10 @@
  * 主要职责：`createTestingDatabase` 创建 PGlite；`createPostgresTestingDatabase` 与
  * `createPostgresTestingDatabaseScope` 生成安全的 schema 名，用管理连接创建/销毁 schema，
  * 并以 PostgreSQL startup options 固定测试连接的 search_path。scope 允许在最终清理前关闭和
- * 重连 pool；两者都不自动迁移。
+ * 重连 pool；两者都不自动准备 schema。
  * 代码库关系：PGlite 适配器位于 `pglite-driver.ts`；生产 `driver.ts` 提供 `PgDatabase`；
  * PostgreSQL ledger contract 仅通过本模块获得真实服务 factory，调用方仍只使用 `KaguyaDatabase`。
- * 输入输出与副作用：每次 factory 都分配独立数据库空间，调用方负责 migrate 和 close；
+ * 输入输出与副作用：每次 factory 都分配独立数据库空间，调用方负责 prepareSchema 和 close；
  * schema scope 的最终 close 先关闭测试 pool，再 DROP SCHEMA CASCADE 并关闭管理连接，创建
  * 失败亦清理；单次连接 close 不会重建或清空 schema。
  */

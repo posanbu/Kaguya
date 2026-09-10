@@ -8,15 +8,15 @@ import {
 describe("gateway authentication", () => {
   it("grants the startup token every gateway scope", async () => {
     const auth = createGatewayAuthenticator("startup-token");
-    const scopes: GatewayScope[] = ["setup", "management", "messages"];
+    const scopes: GatewayScope[] = ["management", "messages"];
 
     await expect(
       Promise.all(
         scopes.map((scope) => auth.authorize("startup-token", scope)),
       ),
-    ).resolves.toEqual([true, true, true]);
-    await expect(auth.authorize("previous-start-token", "setup")).resolves.toBe(
-      false,
-    );
+    ).resolves.toEqual([true, true]);
+    await expect(
+      auth.authorize("previous-start-token", "management"),
+    ).resolves.toBe(false);
   });
 });

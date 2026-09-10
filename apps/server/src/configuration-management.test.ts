@@ -1,14 +1,14 @@
 /**
  * 功能概述：本文件验证服务层配置管理门面 `createConfigurationManagement`
- * 如何在 `apps/server` 内把底层 Profile Registry 包装成进程级 setup 状态源，
+ * 如何在 `apps/server` 内把底层 Profile Registry 包装成进程级 readiness 状态源，
  * 并把“磁盘上的 selected Profile readiness”与“当前进程是否需要重启”这两个概念分离。
  * 主要职责：覆盖首次打开缺失仓库时的显式 bootstrap、`inspect` 对 selected Profile
  * readiness 的公开投影、`createProfile`/`replaceProfile`/`selectProfile`/`deleteProfile`
  * 四个独立操作的返回值，以及仅在当前进程修改到 selected Profile 时才置位的
  * `restartRequired` 行为；辅助函数 `readyProfileReplacement`/`readyProfileSettings`
  * 生成可执行 Profile 夹具，避免测试重复拼装 provider tier 数据。
- * 代码库关系：该文件直接驱动 `apps/server/src/setup.ts`，并通过真实
- * `@kaguya/config` FileUserConfigManager 观察 Registry v3 的持久化结果；
+ * 代码库关系：该文件直接驱动 `apps/server/src/configuration-management.ts`，并通过真实
+ * `@kaguya/config` FileUserConfigManager 观察 Registry v1 的持久化结果；
  * 它为后续 HTTP Profile 路由和 `server.ts` 启动流程提供门面契约，确保服务层不会退回
  * 旧的一次性 `initialize()` 聚合写入模型。
  * 输入输出与副作用：每个用例都在临时目录上创建或打开配置根目录，测试结束后删除；
@@ -24,8 +24,8 @@ import { FileUserConfigManager } from "@kaguya/config";
 
 import {
   createConfigurationManagement,
-  type ConfigurationSetupStatus,
-} from "./setup.js";
+  type ConfigurationRegistryStatus,
+} from "./configuration-management.js";
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -36,18 +36,18 @@ describe("configuration management", () => {
     try {
       const management = await createConfigurationManagement(root);
 
-      await expect(management.inspect()).resolves.toMatchObject({
+      await expect(management.getRegistryStatus()).resolves.toMatchObject({
         status: "invalid",
         selectedProfileId: "default",
         profiles: [expect.objectContaining({ id: "default", name: "default" })],
-      } satisfies Partial<ConfigurationSetupStatus>);
+      } satisfies Partial<ConfigurationRegistryStatus>);
 
       const created = await management.createProfile("work");
 
       expect(created.profile.id).toMatch(UUID_PATTERN);
       expect(created.profile.name).toBe("work");
       expect(created.restartRequired).toBe(false);
-      await expect(management.listProfiles()).resolves.toEqual(
+      await expect(management.getRegistryStatus()).resolves.toEqual(
         expect.objectContaining({
           selectedProfileId: "default",
           profiles: expect.arrayContaining([
@@ -64,10 +64,10 @@ describe("configuration management", () => {
         gatewayAllowlist: [],
         ai: { providers: [] },
       });
-      await expect(management.inspect()).resolves.toMatchObject({
+      await expect(management.getRegistryStatus()).resolves.toMatchObject({
         status: "invalid",
         selectedProfileId: "default",
-      } satisfies Partial<ConfigurationSetupStatus>);
+      } satisfies Partial<ConfigurationRegistryStatus>);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -90,25 +90,25 @@ describe("configuration management", () => {
 
       expect(replaced.profile.id).toBe(created.profile.id);
       expect(replaced.restartRequired).toBe(false);
-      await expect(management.inspect()).resolves.toMatchObject({
+      await expect(management.getRegistryStatus()).resolves.toMatchObject({
         status: "invalid",
         selectedProfileId: "default",
-      } satisfies Partial<ConfigurationSetupStatus>);
+      } satisfies Partial<ConfigurationRegistryStatus>);
 
       const selected = await management.selectProfile(created.profile.id);
 
       expect(selected.profile.id).toBe(created.profile.id);
       expect(selected.restartRequired).toBe(true);
-      await expect(management.inspect()).resolves.toMatchObject({
+      await expect(management.getRegistryStatus()).resolves.toMatchObject({
         status: "restart_required",
         selectedProfileId: created.profile.id,
         profiles: expect.arrayContaining([
           expect.objectContaining({ id: "default", name: "default" }),
           expect.objectContaining({ id: created.profile.id, name: "work" }),
         ]),
-      } satisfies Partial<ConfigurationSetupStatus>);
+      } satisfies Partial<ConfigurationRegistryStatus>);
       await expect(
-        (await createConfigurationManagement(root)).inspect(),
+        (await createConfigurationManagement(root)).getRegistryStatus(),
       ).resolves.toEqual({
         status: "ready",
         selectedProfileId: created.profile.id,
@@ -144,23 +144,22 @@ describe("configuration management", () => {
         ai: { providers: [] },
         memory: { enabled: false },
         platforms: [],
-        plugins: [],
       });
 
       expect(replaced.restartRequired).toBe(true);
-      await expect(management.inspect()).resolves.toMatchObject({
+      await expect(management.getRegistryStatus()).resolves.toMatchObject({
         status: "invalid",
         selectedProfileId: created.profile.id,
         profiles: expect.arrayContaining([
           expect.objectContaining({ id: created.profile.id, name: "work" }),
         ]),
-      } satisfies Partial<ConfigurationSetupStatus>);
+      } satisfies Partial<ConfigurationRegistryStatus>);
       await expect(
-        (await createConfigurationManagement(root)).inspect(),
+        (await createConfigurationManagement(root)).getRegistryStatus(),
       ).resolves.toMatchObject({
         status: "invalid",
         selectedProfileId: created.profile.id,
-      } satisfies Partial<ConfigurationSetupStatus>);
+      } satisfies Partial<ConfigurationRegistryStatus>);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -176,14 +175,14 @@ describe("configuration management", () => {
 
       expect(deleted.profile.id).toBe(created.profile.id);
       expect(deleted.restartRequired).toBe(false);
-      await expect(management.listProfiles()).resolves.toEqual({
+      await expect(management.getRegistryStatus()).resolves.toMatchObject({
         selectedProfileId: "default",
         profiles: [expect.objectContaining({ id: "default", name: "default" })],
       });
-      await expect(management.inspect()).resolves.toMatchObject({
+      await expect(management.getRegistryStatus()).resolves.toMatchObject({
         status: "invalid",
         selectedProfileId: "default",
-      } satisfies Partial<ConfigurationSetupStatus>);
+      } satisfies Partial<ConfigurationRegistryStatus>);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -200,18 +199,8 @@ describe("configuration management", () => {
         ai: original.ai,
         memory: original.memory,
         platforms: original.platforms,
-        plugins: original.plugins,
         runtime: runtimeFixture,
       });
-      const profilePath = join(root, "profiles", "profile_default.json");
-      const persisted = JSON.parse(
-        await readFile(profilePath, "utf8"),
-      ) as Record<string, unknown>;
-      persisted.runtime = {
-        ...(persisted.runtime as Record<string, unknown>),
-        gatewayToken: "legacy-persisted-gateway-token",
-      };
-      await writeFile(profilePath, `${JSON.stringify(persisted, null, 2)}\n`);
       const management = await createConfigurationManagement(root);
 
       await expect(
@@ -229,7 +218,6 @@ describe("configuration management", () => {
         ai: original.ai,
         memory: original.memory,
         platforms: original.platforms,
-        plugins: original.plugins,
       });
       await expect(management.getProfile(original.id)).resolves.toMatchObject({
         gatewayAllowlist: ["qq:group:778899"],
@@ -241,9 +229,39 @@ describe("configuration management", () => {
           gatewayAllowlist: ["qq:group:778899"],
         },
       });
-      expect(await readFile(profilePath, "utf8")).not.toContain(
-        "legacy-persisted-gateway-token",
-      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a persisted gateway token without modifying the profile", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kaguya-configuration-strict-"));
+    try {
+      const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+      const original = await manager.getProfile(manager.getSelectedProfileId());
+      await manager.replaceProfile(original.id, {
+        name: original.name,
+        acknowledgedWarnings: [],
+        ai: original.ai,
+        memory: original.memory,
+        platforms: original.platforms,
+        runtime: runtimeFixture,
+      });
+      const profilePath = join(root, "profiles", "profile_default.json");
+      const persisted = JSON.parse(
+        await readFile(profilePath, "utf8"),
+      ) as Record<string, unknown>;
+      persisted.runtime = {
+        ...(persisted.runtime as Record<string, unknown>),
+        gatewayToken: "legacy-persisted-gateway-token",
+      };
+      const beforeOpen = `${JSON.stringify(persisted, null, 2)}\n`;
+      await writeFile(profilePath, beforeOpen);
+
+      await expect(createConfigurationManagement(root)).rejects.toMatchObject({
+        code: "CONFIG_CORRUPT_STORE",
+      });
+      await expect(readFile(profilePath, "utf8")).resolves.toBe(beforeOpen);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -296,6 +314,27 @@ describe("configuration management", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("ignores napcat.json and reads only the selected Profile", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kaguya-configuration-napcat-"));
+    try {
+      await writeFile(
+        join(root, "napcat.json"),
+        JSON.stringify({ enabled: true, accessToken: "legacy-secret" }),
+      );
+
+      const management = await createConfigurationManagement(root);
+      await expect(management.getNapCatSettings?.()).resolves.toEqual({
+        enabled: false,
+        reconnectMs: 3000,
+      });
+      await expect(
+        readFile(join(root, "napcat.json"), "utf8"),
+      ).resolves.toContain("legacy-secret");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 const runtimeFixture = {
@@ -321,7 +360,7 @@ function readyProfileReplacement(
   return {
     name,
     gatewayAllowlist: ["*:group:*", "*:private:*"],
-    acknowledgedWarnings: ["platforms-empty", "plugins-empty"],
+    acknowledgedWarnings: [],
     ...readyProfileSettings(lightModelId, heavyModelId),
   };
 }
@@ -335,7 +374,6 @@ async function createRuntimeBackedManagement(root: string) {
     ai: profile.ai,
     memory: profile.memory,
     platforms: profile.platforms,
-    plugins: profile.plugins,
     runtime: runtimeFixture,
   });
   return createConfigurationManagement(root);
@@ -363,6 +401,5 @@ function readyProfileSettings(lightModelId: string, heavyModelId: string) {
     },
     memory: { enabled: false },
     platforms: [],
-    plugins: [],
   };
 }

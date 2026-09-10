@@ -42,7 +42,7 @@ flowchart TD
 
 ## 当前页面状态
 
-Web UI 当前以有限状态机组织首屏：`checking`、`profiles`、`restart`、`chat` 和 `error`。页面加载时先读取 setup 状态和本实例 token，再决定进入 Profile 管理、重启提示或消息界面。
+Web UI 当前以有限状态机组织首屏：`checking`、`profiles`、`restart`、`chat` 和 `error`。页面加载时携带本实例 token 读取 Profile readiness，再决定进入 Profile 管理、重启提示或消息界面。
 
 设计与实现的对应关系详见[配置流程设计](./configuration-flow)。用户如何实际操作见[配置 Kaguya](../guide/configuration)和[使用 Web UI](../guide/webui)。
 

@@ -49,7 +49,7 @@ afterEach(async () => {
 async function fixture(durable = false) {
   const db = await createTestingDatabase();
   cleanups.push(() => db.close());
-  await db.migrate();
+  await db.prepareSchema();
   const registry = new InformationKindRegistry();
   registry.registerBuiltin(runtimeContextInformationKind);
   for (const kind of modelTaskInformationKinds) registry.registerBuiltin(kind);

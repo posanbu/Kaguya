@@ -43,7 +43,11 @@ describe("heartbeatModule", () => {
     const instance = await heartbeatModule.create(
       {
         instanceId: "heartbeat.test",
-        settings: heartbeatSettingsSchema.parse({ messageDebounceMs: 1_500 }),
+        settings: heartbeatSettingsSchema.parse({
+          messageDebounceMs: 1_500,
+          maxReplacementAttempts: 3,
+          totalWaitBudget: 3,
+        }),
         activation: {
           instanceId: "heartbeat.test",
           definitionId: heartbeatModule.manifest.definitionId,

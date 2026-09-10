@@ -21,12 +21,12 @@ sequenceDiagram
   S->>C: createConfigurationManagement(root)
   C->>P: inspect
   alt Registry 不存在
-    C->>P: bootstrap v3 + default
+    C->>P: bootstrap v1 + default
   else Registry 已存在
     C->>P: open
   end
-  S->>C: inspect selected readiness
-  S->>D: 连接、版本检查、migration、Kind 同步
+  S->>C: get selected registry readiness
+  S->>D: 连接、PostgreSQL 版本、schema v1、Kind 检查
   alt 数据库失败
     S->>S: 记录降级原因并继续启动
   end
@@ -39,13 +39,13 @@ sequenceDiagram
   S->>S: 并发启动 Adapter，逐个隔离故障
 ```
 
-`/healthz` 表示 HTTP 存活，不代表 Runtime 就绪。AI 未配置也独立检查数据库连接、migration 和 Kind 同步；失败不阻止 HTTP 或 Adapter。Web 返回 runtime_unavailable / 503，NapCat 记录拒绝并丢弃。启动期随机 Gateway Token 保存在进程内，通过终端访问链接交给用户。
+`/healthz` 表示 HTTP 存活，不代表 Runtime 就绪。AI 未配置也独立检查数据库连接和 Kind；暂时连接失败可进入不可用状态。数据库 schema 不兼容是启动致命错误，在 HTTP 或 Adapter 监听前退出。启动期随机 Gateway Token 保存在进程内，通过终端访问链接交给用户。
 
-Runtime 原因限定为 configuration_not_ready、database_unavailable、runtime_start_failed。AI 与数据库同时失败时，启动日志保留全部原因，状态接口优先显示 configuration_not_ready。migration 或 Kind 同步失败归为 database_unavailable。无效 NapCat 设置只让该 Adapter failed。
+Runtime 原因限定为 configuration_not_ready、database_unavailable、runtime_start_failed。AI 与数据库同时失败时，启动日志保留全部原因，状态接口优先显示 configuration_not_ready。连接或 Kind 同步失败归为 database_unavailable；schema 不兼容不进入该降级分支。无效 NapCat 设置只让该 Adapter failed。
 
 ## 为什么只使用 selected Profile
 
-Registry 可以保存多个 Profile，但 Server 只用一个显式 selected Profile 装配全局 Runtime。数据库、Server runtime、模型路由、`memory.enabled`、平台和插件都在这一步冻结；Server 不会因为模型调用失败而自动切换，也不会根据单条消息隐式选择其他 Profile。
+Registry 可以保存多个 Profile，但 Server 只用一个显式 selected Profile 装配全局 Runtime。数据库、Server runtime、模型路由、`memory.enabled` 和平台都在这一步冻结；模块实例则从配置根的 `modules/` 独立加载。Server 不会因为模型调用失败而自动切换，也不会根据单条消息隐式选择其他 Profile。
 
 这种约束避免同一进程中同时出现不可追踪的 Provider、密钥和模型路由。模块若支持显式 `profileId`，仍必须通过受控的 resolver，而不是自行读取配置文件。
 
@@ -69,7 +69,7 @@ Profile 的 Provider、models、默认 Provider、light/heavy targets 和引用�
 
 `memory.enabled` 缺省为 `false`。关闭时不装配内置 PostgreSQL Memory 召回或 capability，但 association terminal 仍会以 unavailable 结果推进回复；这不是一次返回空命中的真实检索。
 
-缺少 Base URL、API Key，或平台、插件为空，可能形成 warning。用户必须显式确认允许的 warning；完整替换 Profile 时，旧 acknowledgement 不会自动继承，避免把过去的确认误用到新配置。
+缺少 Base URL 或 API Key 可能形成 warning。用户必须显式确认当前实际存在的 warning；完整替换 Profile 时，旧 acknowledgement 不会自动继承，避免把过去的确认误用到新配置。
 
 Gateway allowlist 是 `platform:group|private:target_id` 字符串数组。平台和目标支持 `*`，规则按 OR 匹配，空数组拒绝所有非 Web 消息；非法规则在 Runtime 解析时静默忽略。Web 入口绕过该策略并继续由 Gateway Token 鉴权。
 

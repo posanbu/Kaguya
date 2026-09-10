@@ -9,7 +9,7 @@ description: 用显式 Catalog、能力声明与 Information DAG 组合可检查
 
 ## 唯一模块协议
 
-`defineInformationModule()` 的 manifest 必须包含 `protocolVersion: 2`、稳定 `definitionId`、语义版本 `moduleVersion`、非空 `displayName`、单行 `summary`、完整 `description`、`settingsSchema`，以及 `consumes`、`produces`、`selectors`、`promptRenderers`、`requires`、`provides` 六组声明。每个模块目录还必须携带相邻 `README.md`，作为目的、边界、接口、设置、可靠性、可观测性和场景的详细事实来源。Runtime 不读取 Markdown。每个 Information Kind 和 Prompt renderer 继续声明 `displayName` 与 `description`。这些展示字段与 definition 一起冻结；旧 protocol v1 不兼容。
+`defineInformationModule()` 的 manifest 必须包含 `protocolVersion: 1`、稳定 `definitionId`、语义版本 `moduleVersion`、非空 `displayName`、单行 `summary`、完整 `description`、`settingsSchema`，以及 `consumes`、`produces`、`selectors`、`promptRenderers`、`requires`、`provides` 六组声明。每个模块目录还必须携带相邻 `README.md`。Runtime 不读取 Markdown。协议只接受当前 v1，其他版本直接失败。
 
 `consumes` 约束订阅输入，`produces` 约束派生输出。Selector 与 renderer 使用稳定 ID，并列入 manifest；`context.select()` 拒绝未声明的 Selector。订阅与声明必须引用同一份 kind definition，不能用结构相似的对象替代。Catalog 合并顺序不会改变创建顺序。
 
@@ -18,7 +18,7 @@ description: 用显式 Catalog、能力声明与 Information DAG 组合可检查
 ```ts [显式模块与 Catalog ~vscode-icons:file-type-typescript~]
 const filter = defineInformationModule({
   manifest: {
-    protocolVersion: 2,
+    protocolVersion: 1,
     definitionId: "example.filter",
     moduleVersion: "1.0.0",
     displayName: "Example filter",
@@ -59,7 +59,7 @@ const activations = [
 
 :::
 
-activation 可设置 `enabled: false`，停用不会删除已持久化的未确认工作。kind 注册必须在 `Core.start()` 封闭 Registry 之前完成；自定义宿主可用 `catalogInformationKinds(catalog)` 收集精确的共享定义。Runtime 已执行这项装配。
+每个实例配置位于 `<KAGUYA_CONFIG_ROOT>/modules/<instanceId>/config.json`，严格包含 `version: 1`、`instanceId`、`definitionId`、`enabled` 和完整 `settings`。仅当整个 `modules/` 不存在时，Server 才写入六个一方实例模板；目录一旦存在，缺文件、未知实例、身份不符、版本错误或缺少 settings 字段都会阻止启动且不会被修复。修改文件后必须重启。`enabled: false` 的有效实例不激活，但 settings 仍需通过完整 schema 校验。
 
 仓库内的一方模块使用 `packages/modules/src/first-party/<module>/index.ts`，测试与模块放在同一目录。共用 Kind 放在 `src/first-party/information-kinds.ts`，Catalog 固定放在 `src/first-party/catalog.ts`。Catalog 必须显式 import 并注册每个受信模块；Runtime 禁止扫描目录或根据文件名自动发现模块。新增文件若未进入 Catalog，就不会注册、激活或取得执行权限。包根 `src/index.ts` 继续提供稳定公共导出，调用方不依赖一方模块内部路径。
 
@@ -95,7 +95,7 @@ Runtime 的 `submit()` 返回已接受输入的根 ID；可靠回复异步推进
 
 Selector 通过受限只读账本的 `find()`、`related()`、`retrieve()` 取得候选，只返回有序 informationId。`find()` 支持 JSON payload containment 和确定性的正序/倒序查询。Core 校验 ID、拒绝重复或越权结果，并按顺序重新加载冻结原子。模块不能把未落账 payload 拼成上下文。派生输出通常继承输入的 `core:context`；需要跨入站合并时，可用 `contextInformationId` 重定位，但目标必须是该 handler 已通过声明式 Selector 选出的 `core.runtime.context`。
 
-first-party Catalog 默认激活 Identity、durable Heartbeat、Heartflow、Attention Arousal、Association 与 LLM reply。生产 profile 使用 1500 ms 消息去抖；测试 profile 使用 0 ms，但二者启用相同的业务节点。Runtime 拥有的 Model Task 失败/取消、delivery terminal 与 `execution.exhausted` definition 由 composition root 注入 Heartflow，Catalog 不复制这些 kind。
+首次生成的模块配置显式启用 Identity、durable Heartbeat、Heartflow、Attention Arousal、Association 与 LLM reply，并把 Heartbeat、Heartflow 和注意力参数完整写入文件。Runtime 拥有的 Model Task 失败/取消、delivery terminal 与 `execution.exhausted` definition 由 composition root 注入 Heartflow，Catalog 不复制这些 kind。
 
 Heartbeat 到期只产生 `agent.turn.candidate`。Heartflow 使用 scope generation 领取 candidate，等待全部 inbound 的 identity terminal，再按 `asOf` 冻结不可变的多输入 `agent.turn.context.completed`。Attention Arousal 只提交 claim 的唯一 `attend | defer | ignore` 决策；Heartflow 再把它分派为 reply、wait 或 silent，并在 delivery、等待、静默、supersession 或耗尽时写入一个 turn terminal。默认 Catalog 不包含 always-reply 或 inbound-to-context 旁路。
 

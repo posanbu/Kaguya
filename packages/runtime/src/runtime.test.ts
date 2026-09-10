@@ -19,7 +19,7 @@ import {
 import {
   createFirstPartyModuleCatalog,
   createFirstPartyModuleActivations,
-  firstPartyModuleActivations,
+  createFirstPartyModuleConfigDefaults,
   type ModuleModelSelection,
 } from "@kaguya/modules";
 import {
@@ -61,6 +61,7 @@ import {
   defineInformationKind,
   defineInformationModule,
   onInformation,
+  type InformationModuleActivation,
 } from "@kaguya/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -78,36 +79,36 @@ const resources: Array<{
   database: Awaited<ReturnType<typeof createTestingDatabase>>;
 }> = [];
 
-class GatedMigrationDatabase extends KaguyaDatabase {
-  readonly migrationStarted: Promise<void>;
-  migrateCalls = 0;
-  readonly #markMigrationStarted: () => void;
-  readonly #migrationGate: Promise<void>;
-  readonly #releaseMigration: () => void;
+class GatedSchemaDatabase extends KaguyaDatabase {
+  readonly schemaPreparationStarted: Promise<void>;
+  prepareSchemaCalls = 0;
+  readonly #markSchemaPreparationStarted: () => void;
+  readonly #schemaPreparationGate: Promise<void>;
+  readonly #releaseSchemaPreparation: () => void;
 
   constructor(sql: ConstructorParameters<typeof KaguyaDatabase>[0]) {
     super(sql);
-    let markMigrationStarted!: () => void;
-    let releaseMigration!: () => void;
-    this.migrationStarted = new Promise<void>((resolve) => {
-      markMigrationStarted = resolve;
+    let markSchemaPreparationStarted!: () => void;
+    let releaseSchemaPreparation!: () => void;
+    this.schemaPreparationStarted = new Promise<void>((resolve) => {
+      markSchemaPreparationStarted = resolve;
     });
-    this.#migrationGate = new Promise<void>((resolve) => {
-      releaseMigration = resolve;
+    this.#schemaPreparationGate = new Promise<void>((resolve) => {
+      releaseSchemaPreparation = resolve;
     });
-    this.#markMigrationStarted = markMigrationStarted;
-    this.#releaseMigration = releaseMigration;
+    this.#markSchemaPreparationStarted = markSchemaPreparationStarted;
+    this.#releaseSchemaPreparation = releaseSchemaPreparation;
   }
 
-  override async migrate(): Promise<void> {
-    this.migrateCalls += 1;
-    this.#markMigrationStarted();
-    await this.#migrationGate;
-    await super.migrate();
+  override async prepareSchema(): Promise<void> {
+    this.prepareSchemaCalls += 1;
+    this.#markSchemaPreparationStarted();
+    await this.#schemaPreparationGate;
+    await super.prepareSchema();
   }
 
-  releaseMigration(): void {
-    this.#releaseMigration();
+  releaseSchemaPreparation(): void {
+    this.#releaseSchemaPreparation();
   }
 }
 
@@ -203,7 +204,7 @@ async function settleDeliveries(database: KaguyaDatabase): Promise<void> {
 
 async function createGatedRuntime() {
   const base = await createTestingDatabase();
-  const database = new GatedMigrationDatabase(base.sql);
+  const database = new GatedSchemaDatabase(base.sql);
   const runtime = new KaguyaRuntime({
     ...createReplyComposition(),
     database,
@@ -330,9 +331,9 @@ describe("KaguyaRuntime", () => {
     TEST_TIMEOUT,
   );
 
-  it("starts with the migrated generic completion subscription already persisted", async () => {
+  it("starts with the prepared generic completion subscription already persisted", async () => {
     const { runtime, database } = await createRuntime();
-    await database.migrate();
+    await database.prepareSchema();
     await database.information.synchronizeKinds(["core.model.task.completed"]);
     await database.information.reliable.configureSubscriptions([
       {
@@ -354,7 +355,7 @@ describe("KaguyaRuntime", () => {
       const runtime = new KaguyaRuntime({
         database,
         catalog: defineInformationModuleCatalog(definition),
-        activations: [firstPartyModuleActivations[0]!],
+        activations: [createReplyComposition().activations[0]!],
         capabilities:
           mode === "missing"
             ? []
@@ -396,7 +397,7 @@ describe("KaguyaRuntime", () => {
     });
     const { runtime } = await createRuntime({
       catalog: defineInformationModuleCatalog(definition),
-      activations: [firstPartyModuleActivations[0]!],
+      activations: [createReplyComposition().activations[0]!],
     });
     await runtime.start();
     expect(value).toBeInstanceOf(ModelTaskClient);
@@ -487,7 +488,7 @@ describe("KaguyaRuntime", () => {
         );
       expect(requestedPayload).toMatchObject({
         taskId: "core.reply.generate",
-        version: "2",
+        version: "1",
         outputMode: "text",
         sourceInformationId: reply.informationId,
         activation: {
@@ -662,7 +663,7 @@ describe("KaguyaRuntime", () => {
     const create = vi.fn(() => ({ provisions: [], subscriptions: [] }));
     const consumer = defineInformationModule({
       manifest: {
-        protocolVersion: 2,
+        protocolVersion: 1,
         summary: "Test information module.",
         moduleVersion: "1.0.0",
         definitionId: "test.memory.consumer",
@@ -703,11 +704,11 @@ describe("KaguyaRuntime", () => {
   });
 
   it(
-    "classifies migration failures without retaining database details",
+    "classifies schema preparation failures without retaining database details",
     async () => {
       const database = await createTestingDatabase();
       const secret = "postgresql://ledger:runtime-secret@db.internal/kaguya";
-      vi.spyOn(database, "migrate").mockRejectedValueOnce(
+      vi.spyOn(database, "prepareSchema").mockRejectedValueOnce(
         new Error(`authentication failed: ${secret}`),
       );
       const runtime = new KaguyaRuntime({
@@ -732,11 +733,11 @@ describe("KaguyaRuntime", () => {
   );
 
   it(
-    "does not preserve an unknown alphanumeric migration error class",
+    "does not preserve an unknown alphanumeric schema error class",
     async () => {
       class DatabasePassword123 extends Error {}
       const database = await createTestingDatabase();
-      vi.spyOn(database, "migrate").mockRejectedValueOnce(
+      vi.spyOn(database, "prepareSchema").mockRejectedValueOnce(
         new DatabasePassword123("database-secret"),
       );
       const runtime = new KaguyaRuntime({
@@ -758,7 +759,7 @@ describe("KaguyaRuntime", () => {
   );
 
   it(
-    "classifies migration errors whose reflective properties throw",
+    "classifies schema errors whose reflective properties throw",
     async () => {
       const database = await createTestingDatabase();
       const malicious = new Error("database-message-secret");
@@ -774,7 +775,7 @@ describe("KaguyaRuntime", () => {
           },
         },
       });
-      vi.spyOn(database, "migrate").mockRejectedValueOnce(malicious);
+      vi.spyOn(database, "prepareSchema").mockRejectedValueOnce(malicious);
       const runtime = new KaguyaRuntime({
         ...createReplyComposition(),
         database,
@@ -801,14 +802,14 @@ describe("KaguyaRuntime", () => {
       const { runtime, database } = await createGatedRuntime();
 
       const firstStart = runtime.start();
-      await database.migrationStarted;
+      await database.schemaPreparationStarted;
       const secondStart = runtime.start();
 
       expect(secondStart).toBe(firstStart);
-      expect(database.migrateCalls).toBe(1);
-      database.releaseMigration();
+      expect(database.prepareSchemaCalls).toBe(1);
+      database.releaseSchemaPreparation();
       await Promise.all([firstStart, secondStart]);
-      expect(database.migrateCalls).toBe(1);
+      expect(database.prepareSchemaCalls).toBe(1);
     },
     TEST_TIMEOUT,
   );
@@ -818,7 +819,7 @@ describe("KaguyaRuntime", () => {
     async () => {
       const { runtime, database } = await createGatedRuntime();
       const starting = runtime.start();
-      await database.migrationStarted;
+      await database.schemaPreparationStarted;
 
       expect(() =>
         runtime.registerTransport({
@@ -835,7 +836,7 @@ describe("KaguyaRuntime", () => {
         }),
       ).toThrow(RuntimeUnavailableError);
 
-      database.releaseMigration();
+      database.releaseSchemaPreparation();
       await starting;
     },
     TEST_TIMEOUT,
@@ -853,7 +854,7 @@ describe("KaguyaRuntime", () => {
     });
     const module = defineInformationModule({
       manifest: {
-        protocolVersion: 2,
+        protocolVersion: 1,
         summary: "Test information module.",
         moduleVersion: "1.0.0",
         definitionId: "test.abort",
@@ -922,7 +923,7 @@ describe("KaguyaRuntime", () => {
       let disposeCalls = 0;
       const gatedModule = defineInformationModule({
         manifest: {
-          protocolVersion: 2,
+          protocolVersion: 1,
           summary: "Test information module.",
           moduleVersion: "1.0.0",
           selectors: [],
@@ -1008,7 +1009,6 @@ describe("KaguyaRuntime", () => {
       const graph = await database.information.query({
         informationId: result.rootInformationId,
       });
-
       expect(new Set(graph.map(({ kind }) => kind))).toEqual(
         new Set([
           "core.message.inbound.text",
@@ -1163,7 +1163,7 @@ describe("KaguyaRuntime", () => {
     async () => {
       const { runtime, database } = await createRuntime({
         activations: [
-          ...createFirstPartyModuleActivations("test").filter(
+          ...createReplyComposition().activations.filter(
             (a) => a.definitionId !== "demo.reply.llm",
           ),
           ...[
@@ -1367,7 +1367,7 @@ describe("KaguyaRuntime", () => {
       });
       const observer = defineInformationModule({
         manifest: {
-          protocolVersion: 2,
+          protocolVersion: 1,
           summary: "Test information module.",
           moduleVersion: "1.0.0",
           selectors: [],
@@ -1406,7 +1406,7 @@ describe("KaguyaRuntime", () => {
           observer,
         ),
         activations: [
-          ...createFirstPartyModuleActivations("test").filter(
+          ...createReplyComposition().activations.filter(
             (a) => a.definitionId !== "demo.reply.llm",
           ),
           {
@@ -1501,7 +1501,7 @@ describe("KaguyaRuntime", () => {
       });
       const failing = defineInformationModule({
         manifest: {
-          protocolVersion: 2,
+          protocolVersion: 1,
           summary: "Test information module.",
           moduleVersion: "1.0.0",
           selectors: [],
@@ -1534,7 +1534,7 @@ describe("KaguyaRuntime", () => {
       });
       const successful = defineInformationModule({
         manifest: {
-          protocolVersion: 2,
+          protocolVersion: 1,
           summary: "Test information module.",
           moduleVersion: "1.0.0",
           selectors: [],
@@ -1632,7 +1632,7 @@ function createDeterministicModelSelectionResolver(): RuntimeModelSelectionResol
 }
 function createReplyComposition(
   resolveModelSelection: RuntimeModelSelectionResolver = createDeterministicModelSelectionResolver(),
-  activations = createFirstPartyModuleActivations("test"),
+  providedActivations?: readonly InformationModuleActivation[],
 ) {
   const catalog = createFirstPartyModuleCatalog({
     modelTaskCapability,
@@ -1643,6 +1643,12 @@ function createReplyComposition(
     deliveryFailedInformationKind,
     executionExhaustedInformationKind,
   });
+  const activations =
+    providedActivations ??
+    createFirstPartyModuleActivations(
+      catalog,
+      createFirstPartyModuleConfigDefaults("test"),
+    );
   const models = new Map<string, ReturnType<KaguyaLlmModelResolver>>();
   return {
     catalog,
@@ -1696,7 +1702,7 @@ it(
     });
     const observer = defineInformationModule({
       manifest: {
-        protocolVersion: 2,
+        protocolVersion: 1,
         summary: "Test information module.",
         moduleVersion: "1.0.0",
         definitionId: "test.hanging-ingress",

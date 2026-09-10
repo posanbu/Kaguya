@@ -1,12 +1,12 @@
 /**
  * 功能概述：为本地开发和真实 PostgreSQL 测试提供 PostgreSQL 17 生命周期编排。
  * 主要职责：通过 Docker CLI 创建/恢复固定容器和数据卷、等待 pg_isready、校验
- * 容器身份与端口，并用生产 Database/Runtime kind 路径执行连接、迁移和 kind 检查；
+ * 容器身份与端口，并用生产 Database/Runtime kind 路径执行连接、schema 准备和 kind 检查；
  * selected Profile 标记 external 时完全不调用 Docker。
  * 代码库关系：postgres-cli.ts 提供命令行入口；Server 自身不导入本模块，因此生产启动
  * 永远不会取得 Docker 权限。配置写入通过 @kaguya/config 的原子 Profile replacement。
  * 输入输出与副作用：start 会创建/启动容器并可能补齐缺失的 selected Profile runtime；
- * status 只读；check 可能执行幂等 migration/kind sync。所有公开错误均不保留原始输出。
+ * status 只读；start/check 初始化空 schema 或验证严格 v1，并同步 Kind。所有公开错误均不保留原始输出。
  */
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -20,8 +20,7 @@ import {
 import { KaguyaDatabase, SUPPORTED_POSTGRES_MAJOR } from "@kaguya/database";
 import { runtimeInformationKindNames } from "@kaguya/runtime";
 
-import { assertNoLegacyNapCatSettings } from "./napcat-config.js";
-import { createReplyComposition } from "./runtime-composition.js";
+import { createReplyCatalog } from "./runtime-composition.js";
 
 export const MANAGED_POSTGRES_IMAGE = "postgres:17-alpine";
 export const MANAGED_POSTGRES_CONTAINER = "kaguya-postgres-17";
@@ -60,7 +59,7 @@ export interface PostgresDevelopmentDependencies {
   readonly wait?: (milliseconds: number) => Promise<void>;
   readonly checkDatabase?: (
     databaseUrl: string,
-    options: { readonly migrate: boolean },
+    options: { readonly prepareSchema: boolean },
   ) => Promise<void>;
 }
 
@@ -84,7 +83,7 @@ export async function ensureDevelopmentPostgres(options: {
   if (runtime?.databaseMode === "external") {
     await checkDatabase(
       runtime.databaseUrl,
-      { migrate: true },
+      { prepareSchema: true },
       options.dependencies,
     );
     return { databaseUrl: runtime.databaseUrl, mode: "external" };
@@ -102,7 +101,7 @@ export async function ensureDevelopmentPostgres(options: {
   });
   await checkManagedPostgresDatabase(
     managed.databaseUrl,
-    { migrate: true },
+    { prepareSchema: true },
     options.dependencies,
   );
 
@@ -166,7 +165,7 @@ export async function readDevelopmentPostgresStatus(options: {
     try {
       await checkDatabase(
         profileState.profile.runtime.databaseUrl,
-        { migrate: false },
+        { prepareSchema: false },
         options.dependencies,
       );
     } catch {
@@ -205,7 +204,7 @@ export async function readDevelopmentPostgresStatus(options: {
       try {
         await checkDatabase(
           managedConnectionUrl(inspection.port),
-          { migrate: false },
+          { prepareSchema: false },
           options.dependencies,
         );
       } catch {
@@ -243,7 +242,7 @@ export async function checkDevelopmentPostgres(options: {
   if (runtime.databaseMode === "external") {
     await checkDatabase(
       runtime.databaseUrl,
-      { migrate: true },
+      { prepareSchema: true },
       options.dependencies,
     );
     return { mode: "external", databaseUrl: runtime.databaseUrl };
@@ -264,7 +263,7 @@ export async function checkDevelopmentPostgres(options: {
   }
   await checkDatabase(
     runtime.databaseUrl,
-    { migrate: true },
+    { prepareSchema: true },
     options.dependencies,
   );
   return { mode: "managed", databaseUrl: runtime.databaseUrl };
@@ -274,12 +273,12 @@ export async function checkPostgresTestDatabase(
   databaseUrl: string,
   dependencies?: PostgresDevelopmentDependencies,
 ): Promise<void> {
-  await checkDatabase(databaseUrl, { migrate: false }, dependencies);
+  await checkDatabase(databaseUrl, { prepareSchema: false }, dependencies);
 }
 
 export async function checkManagedPostgresDatabase(
   databaseUrl: string,
-  options: { readonly migrate: boolean },
+  options: { readonly prepareSchema: boolean },
   supplied?: PostgresDevelopmentDependencies,
 ): Promise<void> {
   const dependencies = dependenciesWithDefaults(supplied);
@@ -353,7 +352,6 @@ async function openSelectedProfile(configRoot: string): Promise<
     }
   | undefined
 > {
-  await assertNoLegacyNapCatSettings(configRoot);
   const readiness = await FileUserConfigManager.inspect({
     rootDir: configRoot,
   });
@@ -382,7 +380,6 @@ async function replaceProfileRuntime(
     ai: profile.ai,
     memory: profile.memory,
     platforms: profile.platforms,
-    plugins: profile.plugins,
     runtime,
   });
 }
@@ -578,7 +575,7 @@ function pgIsReadyArguments(): readonly string[] {
 
 async function checkDatabase(
   databaseUrl: string,
-  options: { readonly migrate: boolean },
+  options: { readonly prepareSchema: boolean },
   supplied?: PostgresDevelopmentDependencies,
 ): Promise<void> {
   const custom = supplied?.checkDatabase;
@@ -586,10 +583,10 @@ async function checkDatabase(
   let database: KaguyaDatabase | undefined;
   try {
     database = await KaguyaDatabase.connect({ connectionString: databaseUrl });
-    if (options.migrate) {
-      await database.migrate();
+    if (options.prepareSchema) {
+      await database.prepareSchema();
       await database.information.synchronizeKinds(
-        runtimeInformationKindNames(createReplyComposition().catalog),
+        runtimeInformationKindNames(createReplyCatalog()),
       );
     }
   } catch {

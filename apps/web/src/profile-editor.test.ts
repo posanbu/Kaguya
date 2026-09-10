@@ -73,28 +73,8 @@ const completeProfile: UserConfigProfile = {
       },
     },
   ],
-  plugins: [
-    {
-      id: "plugin-1",
-      enabled: true,
-      settings: {
-        nested: { keep: true },
-      },
-    },
-    {
-      id: "plugin-2",
-      enabled: false,
-      settings: {
-        threshold: 7,
-      },
-    },
-  ],
   review: {
-    acknowledgedWarnings: [
-      "platforms-empty",
-      "plugins-empty",
-      "provider-base-url-missing:default-provider",
-    ],
+    acknowledgedWarnings: ["provider-base-url-missing:default-provider"],
   },
 };
 
@@ -108,7 +88,6 @@ const emptyDefaultProfile: UserConfigProfile = {
   },
   memory: { enabled: false },
   platforms: [],
-  plugins: [],
 };
 
 const warningProfile: UserConfigProfile = {
@@ -135,13 +114,8 @@ const warningProfile: UserConfigProfile = {
   },
   memory: { enabled: false },
   platforms: [],
-  plugins: [],
   review: {
-    acknowledgedWarnings: [
-      "provider-base-url-missing:default-provider",
-      "platforms-empty",
-      "plugins-empty",
-    ],
+    acknowledgedWarnings: ["provider-base-url-missing:default-provider"],
   },
 };
 
@@ -241,22 +215,6 @@ describe("mergeProfileEditorFields", () => {
           },
         },
       ],
-      plugins: [
-        {
-          id: "plugin-1",
-          enabled: true,
-          settings: {
-            nested: { keep: true },
-          },
-        },
-        {
-          id: "plugin-2",
-          enabled: false,
-          settings: {
-            threshold: 7,
-          },
-        },
-      ],
     });
   });
 
@@ -294,7 +252,6 @@ describe("mergeProfileEditorFields", () => {
       },
       memory: { enabled: false },
       platforms: [],
-      plugins: [],
     });
   });
 

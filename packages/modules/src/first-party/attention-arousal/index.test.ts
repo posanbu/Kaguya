@@ -131,7 +131,7 @@ describe("attention arousal", () => {
   });
 
   it("publishes only the attention completion kind", () => {
-    expect(attentionArousalModule.manifest.protocolVersion).toBe(2);
+    expect(attentionArousalModule.manifest.protocolVersion).toBe(1);
     expect(
       attentionArousalModule.manifest.produces.map(({ kind }) => kind),
     ).toEqual(["agent.attention.arousal.completed"]);

@@ -3,7 +3,7 @@
  * 主要职责：校验文档/查询、原子写入文档和 Unicode 2-gram、按可选原生 key 过滤，
  * 并以查询 gram 覆盖率和时间产生稳定结果。
  * 代码库关系：KaguyaDatabase 暴露本仓储；Runtime 将 recall 适配为 Information
- * retrieval strategy；表结构由 migrations.ts 建立，Memory 行不属于 append-only ledger。
+ * retrieval strategy；表结构由 schema.ts 建立，Memory 行不属于 append-only ledger。
  * 输入输出与副作用：put/recall 执行数据库 I/O；正文和 query 从不进入错误消息。
  */
 import { randomUUID } from "node:crypto";

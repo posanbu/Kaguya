@@ -14,6 +14,7 @@ export {
 export { identityModule } from "./first-party/identity/index.js";
 export {
   createHeartflowModule,
+  heartflowSettingsSchema,
   heartflowMemorySelector,
   heartflowStateSelector,
   type CreateHeartflowModuleOptions,
@@ -118,5 +119,6 @@ export {
 export {
   createFirstPartyModuleCatalog,
   createFirstPartyModuleActivations,
-  firstPartyModuleActivations,
+  createFirstPartyModuleConfigDefaults,
+  type FirstPartyModuleInstanceConfig,
 } from "./first-party/catalog.js";

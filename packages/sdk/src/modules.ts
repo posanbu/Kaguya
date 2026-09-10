@@ -113,7 +113,7 @@ export interface InformationPromptRendererDefinition {
   render(atom: DeepReadonly<InformationAtom>): string;
 }
 export interface InformationModuleManifest<TSettings = unknown> {
-  readonly protocolVersion: 2;
+  readonly protocolVersion: 1;
   readonly definitionId: string;
   readonly moduleVersion: string;
   readonly displayName: string;
@@ -230,7 +230,7 @@ export function defineInformationModule<TSettings>(
     throw new Error("module summary must be a non-empty single line");
   if (typeof m.description !== "string" || !m.description.trim())
     throw new Error("module description must not be empty");
-  if (m.protocolVersion !== 2)
+  if (m.protocolVersion !== 1)
     throw new Error("unsupported information module protocol version");
   if (
     !/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?(?:\+[a-zA-Z0-9.-]+)?$/u.test(

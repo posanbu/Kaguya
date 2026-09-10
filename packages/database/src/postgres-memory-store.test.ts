@@ -21,7 +21,7 @@ describePostgres("PostgresMemoryStore", () => {
   it("writes idempotently and recalls through the production indexes", async () => {
     const database = await createPostgresTestingDatabase(connectionString!);
     try {
-      await database.migrate();
+      await database.prepareSchema();
       await database.information.synchronizeKinds([
         "core.message.inbound.text",
       ]);

@@ -60,7 +60,7 @@ describePostgres("information repository (PostgreSQL)", () => {
     let firstConnection: Awaited<ReturnType<typeof scope.connect>> | undefined;
     try {
       firstConnection = await scope.connect();
-      await firstConnection.migrate();
+      await firstConnection.prepareSchema();
       await firstConnection.information.synchronizeKinds([restartKind.kind]);
       const atom = freezeInformationAtom({
         informationId: informationIdSchema.parse("atom-restart-recovery"),

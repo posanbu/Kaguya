@@ -128,7 +128,7 @@ function completedAtom(
     source: "runtime:model-task",
     payload: {
       taskId: "core.person.fact.extract",
-      version: "2",
+      version: "1",
       sourceInformationId: "candidate-1",
       activation: {
         instanceId: "person-fact-1",
@@ -307,7 +307,7 @@ describe("createPersonFactTaskModule", () => {
     expect(request).toMatchObject({
       task: {
         taskId: "core.person.fact.extract",
-        version: "2",
+        version: "1",
         outputMode: "object",
         allowedTiers: ["light", "heavy"],
       },
@@ -419,7 +419,7 @@ describe("createPersonFactTaskModule", () => {
 
   it.each([
     [{ taskId: "other.task" }, "task"],
-    [{ version: "1" }, "version"],
+    [{ version: "2" }, "version"],
     [
       {
         activation: {

@@ -103,7 +103,7 @@ export const replyModelDispatchingDiagnostic = defineModuleDiagnostic({
   payloadSchema: z
     .object({
       taskId: z.literal("core.reply.generate"),
-      taskVersion: z.literal("2"),
+      taskVersion: z.literal("1"),
       outputMode: z.literal("text"),
       promptVersion: z.literal("zh-CN/v1"),
       tier: modelTierSchema,
@@ -212,7 +212,7 @@ export function createLlmReplyModule<
     dependencies.modelTaskCompletedInformationKind;
   return defineInformationModule({
     manifest: {
-      protocolVersion: 2,
+      protocolVersion: 1,
       moduleVersion: "1.0.0",
       selectors: [
         selector,
@@ -282,7 +282,7 @@ export function createLlmReplyModule<
               throw new Error("Reply must have one context");
             await context.report(replyModelDispatchingDiagnostic, {
               taskId: "core.reply.generate",
-              taskVersion: "2",
+              taskVersion: "1",
               outputMode: "text",
               promptVersion: ZH_CN_REPLY_PROMPT.version,
               tier: settings.modelTier,
@@ -298,7 +298,7 @@ export function createLlmReplyModule<
             await context.use(modelTaskCapability).execute({
               task: {
                 taskId: "core.reply.generate",
-                version: "2",
+                version: "1",
                 outputMode: "text",
                 outputSchema: replyTaskOutputSchema,
                 allowedTiers: ["light", "heavy"],
@@ -321,7 +321,7 @@ export function createLlmReplyModule<
           async (completed, context) => {
             if (
               completed.payload.taskId !== "core.reply.generate" ||
-              completed.payload.version !== "2" ||
+              completed.payload.version !== "1" ||
               completed.payload.activation.definitionId !==
                 activation.definitionId ||
               completed.payload.selectionPolicy.tier !== settings.modelTier

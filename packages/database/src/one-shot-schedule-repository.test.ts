@@ -1,7 +1,7 @@
 /**
  * 功能概述：验证 one-shot arm projection 在 PGlite 与真实 PostgreSQL 中的原子性、幂等性、竞态和 fencing。
  * 主要职责：覆盖 create/replace/emitDue/finish、分页恢复、旧 terminal 赢家及失效 claim 拒绝写入。
- * 代码库关系：直接通过 `InformationRepository.oneShotSchedules` 测试生产仓储与 migrations，不引入内存替身。
+ * 代码库关系：直接通过 `InformationRepository.oneShotSchedules` 测试生产仓储与 v1 schema，不引入内存替身。
  * 输入输出与副作用：每个测试创建隔离数据库；真实 PostgreSQL 用 testing scope，不修改用户 schema。
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -107,7 +107,7 @@ function terminal(
 async function setup() {
   const db = await createTestingDatabase();
   databases.push(db);
-  await db.migrate();
+  await db.prepareSchema();
   await db.information.synchronizeKinds([
     "test.source",
     ...oneShotInformationKinds.map((definition) => definition.kind),
@@ -421,7 +421,7 @@ describe.skipIf(!url)("one-shot schedule projection (PostgreSQL)", () => {
     const scope = await createPostgresTestingDatabaseScope(url!);
     try {
       const first = await scope.connect();
-      await first.migrate();
+      await first.prepareSchema();
       await first.information.synchronizeKinds([
         "test.source",
         ...oneShotInformationKinds.map((definition) => definition.kind),

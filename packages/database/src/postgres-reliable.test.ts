@@ -24,7 +24,7 @@ describe.skipIf(!url)("PostgreSQL reliable execution", () => {
     const scope = await createPostgresTestingDatabaseScope(url!);
     try {
       const db = await scope.connect();
-      await db.migrate();
+      await db.prepareSchema();
       await db.information.synchronizeKinds([
         "test.source",
         "test.output",
@@ -74,7 +74,7 @@ describe.skipIf(!url)("PostgreSQL reliable execution", () => {
     const scope = await createPostgresTestingDatabaseScope(url!);
     try {
       const first = await scope.connect();
-      await first.migrate();
+      await first.prepareSchema();
       await first.information.synchronizeKinds(["test.source", "test.output"]);
       const subscriptions = [
         { subscriptionId: "test.restart", kind: "test.source" },

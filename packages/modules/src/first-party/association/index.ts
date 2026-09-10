@@ -187,7 +187,7 @@ export const associationCandidateSelector = defineInformationSelector({
 
 export const associationModule = defineInformationModule({
   manifest: {
-    protocolVersion: 2,
+    protocolVersion: 1,
     moduleVersion: "1.0.0",
     definitionId: "core.association.memory",
     displayName: "Memory association",

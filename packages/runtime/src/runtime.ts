@@ -17,6 +17,7 @@ import { randomUUID } from "node:crypto";
 import {
   InformationLogProjectionRunner,
   KaguyaDatabase,
+  UnsupportedDatabaseSchemaError,
 } from "@kaguya/database";
 import {
   InformationCore,
@@ -323,8 +324,9 @@ export class KaguyaRuntime implements InformationIngress {
       this.#ownsDatabase = this.options.database === undefined;
       this.#assertStarting();
       try {
-        await database.migrate();
+        await database.prepareSchema();
       } catch (error) {
+        if (error instanceof UnsupportedDatabaseSchemaError) throw error;
         throw new RuntimeDatabaseInitializationError(error);
       }
       this.#assertStarting();

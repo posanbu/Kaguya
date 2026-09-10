@@ -211,7 +211,7 @@ describe("Profile-backed PostgreSQL selection", () => {
     const initialProfile = await initialManager.getProfile("default");
     await initialManager.replaceProfile("default", {
       name: initialProfile.name,
-      acknowledgedWarnings: ["platforms-empty", "plugins-empty"],
+      acknowledgedWarnings: [],
       ai: {
         defaultProviderId: "provider-1",
         modelTiers: {
@@ -232,17 +232,16 @@ describe("Profile-backed PostgreSQL selection", () => {
       },
       memory: { enabled: true },
       platforms: [],
-      plugins: [],
     });
     const runner = runningManagedRunner(5432);
-    const databaseChecks: Array<{ url: string; migrate: boolean }> = [];
+    const databaseChecks: Array<{ url: string; prepareSchema: boolean }> = [];
 
     await ensureDevelopmentPostgres({
       configRoot: root,
       dependencies: {
         runCommand: runner,
-        checkDatabase: async (url, { migrate }) => {
-          databaseChecks.push({ url, migrate });
+        checkDatabase: async (url, { prepareSchema }) => {
+          databaseChecks.push({ url, prepareSchema });
         },
       },
     });
@@ -260,13 +259,9 @@ describe("Profile-backed PostgreSQL selection", () => {
     );
     expect(profile.memory).toEqual({ enabled: true });
     expect(profile.platforms).toEqual([]);
-    expect(profile.plugins).toEqual([]);
-    expect(profile.review?.acknowledgedWarnings).toEqual([
-      "platforms-empty",
-      "plugins-empty",
-    ]);
+    expect(profile.review).toBeUndefined();
     expect(databaseChecks).toEqual([
-      { url: managedConnectionUrl(5432), migrate: true },
+      { url: managedConnectionUrl(5432), prepareSchema: true },
     ]);
   });
 
@@ -281,7 +276,6 @@ describe("Profile-backed PostgreSQL selection", () => {
       ai: profile.ai,
       memory: profile.memory,
       platforms: profile.platforms,
-      plugins: profile.plugins,
       runtime: runtime(externalUrl, "external"),
     });
     let dockerCalls = 0;
@@ -407,7 +401,7 @@ it("retries the managed host connection after container readiness", async () => 
 
   await checkManagedPostgresDatabase(
     managedConnectionUrl(55432),
-    { migrate: false },
+    { prepareSchema: false },
     {
       checkDatabase: async () => {
         checks += 1;
@@ -483,7 +477,6 @@ async function configuredManagedRoot(): Promise<string> {
     ai: profile.ai,
     memory: profile.memory,
     platforms: profile.platforms,
-    plugins: profile.plugins,
     runtime: runtime(managedConnectionUrl(5432), "managed"),
   });
   return root;

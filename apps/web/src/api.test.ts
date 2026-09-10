@@ -5,7 +5,6 @@ import {
   createProfile,
   deleteProfile,
   GatewayRequestError,
-  getConfigurationStatus,
   getProfile,
   listProfiles,
   replaceProfile,
@@ -28,7 +27,6 @@ const profile = {
   ai: { providers: [] },
   memory: { enabled: false },
   platforms: [],
-  plugins: [],
 };
 const replacement = {
   name: "default",
@@ -54,11 +52,10 @@ const replacement = {
   },
   memory: { enabled: false },
   platforms: [],
-  plugins: [],
 };
 
 describe("gateway API client", () => {
-  it("authenticates setup readiness with the fragment token", async () => {
+  it("authenticates registry readiness with the fragment token", async () => {
     const request = vi.fn<typeof fetch>().mockResolvedValue(
       Response.json({
         data: {
@@ -71,13 +68,11 @@ describe("gateway API client", () => {
       }),
     );
 
-    await expect(
-      getConfigurationStatus(config, request),
-    ).resolves.toMatchObject({
+    await expect(listProfiles(config, request)).resolves.toMatchObject({
       status: "invalid",
       selectedProfileId: "default",
     });
-    expect(request).toHaveBeenCalledWith("/api/v1/setup", {
+    expect(request).toHaveBeenCalledWith("/api/v1/profiles", {
       method: "GET",
       headers: { authorization: "Bearer test-gateway-token" },
     });
@@ -85,9 +80,7 @@ describe("gateway API client", () => {
 
   it("rejects a missing token before making a protected request", async () => {
     const request = vi.fn<typeof fetch>();
-    await expect(
-      getConfigurationStatus({ token: "" }, request),
-    ).rejects.toEqual(
+    await expect(listProfiles({ token: "" }, request)).rejects.toEqual(
       expect.objectContaining<Partial<GatewayRequestError>>({
         code: "missing_token",
       }),
@@ -134,7 +127,12 @@ describe("gateway API client", () => {
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
         Response.json({
-          data: { selectedProfileId: "default", profiles: [metadata] },
+          data: {
+            status: "invalid",
+            selectedProfileId: "default",
+            profiles: [metadata],
+            issues: [],
+          },
         }),
       )
       .mockResolvedValueOnce(

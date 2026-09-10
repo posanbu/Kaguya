@@ -1,20 +1,20 @@
 /**
  * 功能概述：本文件组装 Kaguya 服务端的 Fastify HTTP 应用，承载匿名健康检查、
- * OpenAPI 文档、首屏配置状态查询、带鉴权的全局 Profile Registry 管理接口，以及
+ * OpenAPI 文档、带 readiness 的全局 Profile Registry 管理接口，以及
  * 窄 Web/Core 消息入口；它是“selected Profile 唯一生效”服务端约束的 HTTP 落点。
  * 主要职责：`createHttpApplication` 统一注册 CORS、限流、OpenAPI 与错误处理，
- * 再根据 `webGateway` 与 `setup` 是否存在决定消息入口和 setup 管理路由的可用状态；
- * `/api/v1/setup` 只返回无 secret 的 readiness 元数据；Profile 的创建、读取、
+ * 再根据 `webGateway` 与配置管理门面是否存在决定消息入口和管理路由的可用状态；
+ * Profile 列表返回无 secret 的 readiness 元数据；Profile 的创建、读取、
  * 完整替换、显式选择与删除分别由 `/api/v1/profiles*` 路由承载，并统一通过
  * `requireManagementToken` 在任何路径/正文校验前拒绝未授权请求。
- * 代码库关系：本模块消费 `setup.ts` 的 `ConfigurationManagement` 门面与
+ * 代码库关系：本模块消费配置管理层的 `ConfigurationManagement` 门面与
  * `@kaguya/config` 暴露的 schema 边界、错误码和 Profile 类型；`server.ts`
  * 会把唯一管理实例传入这里，WebUI 与外部管理客户端都通过这些路由驱动 selected
  * Profile，而不是直接访问底层 config manager。
  * 输入输出与副作用：运行时会创建 Fastify 实例并注册中间件；Profile 路由在管理认证
  * 通过后可能写入配置目录并返回显式安全投影的 Profile 正文；消息路由仅在 `webGateway`
  * 就绪时非阻塞转发正规化内容，日志不制造 trace ID，否则返回明确的
- * 503 setup-required/core-unavailable 错误。
+ * 503 runtime/core-unavailable 错误。
  */
 import { randomUUID, timingSafeEqual } from "node:crypto";
 
@@ -26,7 +26,6 @@ import {
   aiConfigSchema,
   memoryConfigSchema,
   platformConfigSchema,
-  pluginConfigSchema,
   profileIdSchema,
 } from "@kaguya/config";
 import { runWithLogContext } from "@kaguya/logger";
@@ -40,7 +39,7 @@ import Fastify, {
 } from "fastify";
 
 import type { ServerConfig } from "./config.js";
-import type { ConfigurationManagement } from "./setup.js";
+import type { ConfigurationManagement } from "./configuration-management.js";
 import {
   createGatewayAuthenticator,
   type GatewayAuthenticator,
@@ -97,9 +96,8 @@ const replaceProfileRequestSchema = z
     name: z.string().trim().min(1).max(100),
     gatewayAllowlist: z.array(z.string()),
     ai: aiConfigSchema,
-    memory: memoryConfigSchema.default({ enabled: false }),
+    memory: memoryConfigSchema,
     platforms: z.array(platformConfigSchema),
-    plugins: z.array(pluginConfigSchema),
     acknowledgedWarnings: z.array(z.string().trim().min(1)),
   })
   .strict();
@@ -213,17 +211,6 @@ const platformConfigJsonSchema = {
   },
 } as const;
 
-const pluginConfigJsonSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["id", "enabled", "settings"],
-  properties: {
-    id: { type: "string", minLength: 1 },
-    enabled: { type: "boolean" },
-    settings: { type: "object", additionalProperties: true },
-  },
-} as const;
-
 const profileReviewJsonSchema = {
   type: "object",
   additionalProperties: false,
@@ -256,7 +243,6 @@ const userConfigProfileJsonSchema = {
     "ai",
     "memory",
     "platforms",
-    "plugins",
   ],
   properties: {
     version: { type: "integer", enum: [1] },
@@ -271,10 +257,6 @@ const userConfigProfileJsonSchema = {
     platforms: {
       type: "array",
       items: platformConfigJsonSchema,
-    },
-    plugins: {
-      type: "array",
-      items: pluginConfigJsonSchema,
     },
     review: profileReviewJsonSchema,
   },
@@ -305,8 +287,8 @@ const replaceProfileRequestJsonSchema = {
     "name",
     "gatewayAllowlist",
     "ai",
+    "memory",
     "platforms",
-    "plugins",
     "acknowledgedWarnings",
   ],
   properties: {
@@ -318,7 +300,6 @@ const replaceProfileRequestJsonSchema = {
     ai: aiConfigJsonSchema,
     memory: memoryConfigJsonSchema,
     platforms: { type: "array", items: platformConfigJsonSchema },
-    plugins: { type: "array", items: pluginConfigJsonSchema },
     acknowledgedWarnings: {
       type: "array",
       items: { type: "string", minLength: 1 },
@@ -326,7 +307,7 @@ const replaceProfileRequestJsonSchema = {
   },
 } as const;
 
-const setupStatusResponseJsonSchema = {
+const profileRegistryResponseJsonSchema = {
   type: "object",
   additionalProperties: false,
   required: ["data"],
@@ -338,13 +319,7 @@ const setupStatusResponseJsonSchema = {
       properties: {
         status: {
           type: "string",
-          enum: [
-            "setup_required",
-            "invalid",
-            "review_required",
-            "restart_required",
-            "ready",
-          ],
+          enum: ["invalid", "review_required", "restart_required", "ready"],
         },
         selectedProfileId: profileIdJsonSchema,
         profiles: {
@@ -358,26 +333,6 @@ const setupStatusResponseJsonSchema = {
         warnings: {
           type: "array",
           items: configurationIssueJsonSchema,
-        },
-      },
-    },
-  },
-} as const;
-
-const profileRegistryResponseJsonSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["data"],
-  properties: {
-    data: {
-      type: "object",
-      additionalProperties: false,
-      required: ["selectedProfileId", "profiles"],
-      properties: {
-        selectedProfileId: profileIdJsonSchema,
-        profiles: {
-          type: "array",
-          items: profileMetadataJsonSchema,
         },
       },
     },
@@ -457,7 +412,7 @@ export interface CreateHttpApplicationOptions {
   gatewayAuth?: GatewayAuthenticator;
   webGateway?: WebMessageGateway;
   adapterHost?: Pick<AdapterHost, "status">;
-  setup?: ConfigurationManagement;
+  configuration?: ConfigurationManagement;
   logger?: FastifyBaseLogger;
 }
 
@@ -542,24 +497,6 @@ export async function createHttpApplication(
   );
 
   app.get(
-    "/api/v1/setup",
-    {
-      onRequest: requireGatewayToken(options, "setup"),
-      schema: {
-        tags: ["System"],
-        summary: "Inspect first-run configuration readiness",
-        response: {
-          200: setupStatusResponseJsonSchema,
-        },
-      },
-    },
-    async () => {
-      const status = (await options.setup?.inspect()) ?? readySetupStatus();
-      return { data: status };
-    },
-  );
-
-  app.get(
     "/api/v1/adapters/status",
     {
       config: {
@@ -600,8 +537,9 @@ export async function createHttpApplication(
     },
     async () => {
       const settings =
-        (await requireManagement(options.setup).getNapCatSettings?.()) ??
-        defaultNapCatSettings;
+        (await requireManagement(
+          options.configuration,
+        ).getNapCatSettings?.()) ?? defaultNapCatSettings;
       return { data: toNapCatStatus(settings) };
     },
   );
@@ -614,7 +552,7 @@ export async function createHttpApplication(
     },
     async (request) => {
       const body = napCatSettingsRequestSchema.parse(request.body);
-      const management = requireManagement(options.setup);
+      const management = requireManagement(options.configuration);
       if (
         management.getNapCatSettings === undefined ||
         management.saveNapCatSettings === undefined
@@ -645,7 +583,7 @@ export async function createHttpApplication(
       onRequest: requireGatewayToken(options, "management"),
       schema: {
         tags: ["Profiles"],
-        summary: "List profile metadata and the selected global profile",
+        summary: "Read profile metadata and selected profile readiness",
         security: [{ bearerAuth: [] }],
         response: {
           200: profileRegistryResponseJsonSchema,
@@ -656,7 +594,7 @@ export async function createHttpApplication(
       },
     },
     async () => ({
-      data: await requireManagement(options.setup).listProfiles(),
+      data: await requireManagement(options.configuration).getRegistryStatus(),
     }),
   );
 
@@ -681,9 +619,9 @@ export async function createHttpApplication(
     },
     async (request, reply) => {
       const body = createProfileRequestSchema.parse(request.body);
-      const result = await requireManagement(options.setup).createProfile(
-        body.name,
-      );
+      const result = await requireManagement(
+        options.configuration,
+      ).createProfile(body.name);
       return reply.code(201).send({ data: result });
     },
   );
@@ -710,7 +648,7 @@ export async function createHttpApplication(
     async (request) => {
       const body = selectionRequestSchema.parse(request.body);
       return {
-        data: await requireManagement(options.setup).selectProfile(
+        data: await requireManagement(options.configuration).selectProfile(
           parseProfileId(body.selectedProfileId),
         ),
       };
@@ -741,7 +679,7 @@ export async function createHttpApplication(
       const params = profilePathParamsSchema.parse(request.params);
       return {
         data: {
-          profile: await requireManagement(options.setup).getProfile(
+          profile: await requireManagement(options.configuration).getProfile(
             parseProfileId(params.profileId),
           ),
         },
@@ -774,7 +712,7 @@ export async function createHttpApplication(
       const params = profilePathParamsSchema.parse(request.params);
       const body = replaceProfileRequestSchema.parse(request.body);
       return {
-        data: await requireManagement(options.setup).replaceProfile(
+        data: await requireManagement(options.configuration).replaceProfile(
           parseProfileId(params.profileId),
           body,
         ),
@@ -804,7 +742,7 @@ export async function createHttpApplication(
     },
     async (request, reply) => {
       const params = profilePathParamsSchema.parse(request.params);
-      await requireManagement(options.setup).deleteProfile(
+      await requireManagement(options.configuration).deleteProfile(
         parseProfileId(params.profileId),
       );
       return reply.code(204).send();
@@ -836,7 +774,7 @@ export async function createHttpApplication(
       const parsed = messageRequestSchema.parse(request.body);
       const webGateway = options.webGateway;
       if (webGateway === undefined) {
-        throw coreUnavailableError(options.setup);
+        throw coreUnavailableError();
       }
       webGateway.ingest({
         text: parsed.text,
@@ -966,14 +904,10 @@ class ApiGatewayError extends Error {
   }
 }
 
-function coreUnavailableError(
-  setup: ConfigurationManagement | undefined,
-): ApiGatewayError {
+function coreUnavailableError(): ApiGatewayError {
   return new ApiGatewayError(
-    setup === undefined ? "core_unavailable" : "configuration_setup_required",
-    setup === undefined
-      ? "Core message ingress is not configured"
-      : "Configuration must be completed before messages can be processed",
+    "core_unavailable",
+    "Core message ingress is not configured",
     503,
   );
 }
@@ -1004,16 +938,16 @@ function requireGatewayToken(
 }
 
 function requireManagement(
-  setup: ConfigurationManagement | undefined,
+  configuration: ConfigurationManagement | undefined,
 ): ConfigurationManagement {
-  if (setup === undefined) {
+  if (configuration === undefined) {
     throw new ApiGatewayError(
       "configuration_unavailable",
       "Configuration store is unavailable",
       409,
     );
   }
-  return setup;
+  return configuration;
 }
 
 function parseProfileId(profileId: string) {
@@ -1022,21 +956,6 @@ function parseProfileId(profileId: string) {
     throw new ConfigError("CONFIG_INVALID_INPUT", "Profile ID is invalid");
   }
   return parsed.data;
-}
-
-function readySetupStatus() {
-  return {
-    status: "ready" as const,
-    selectedProfileId: "default",
-    profiles: [
-      {
-        id: "default",
-        name: "default",
-        createdAt: "",
-        updatedAt: "",
-      },
-    ],
-  };
 }
 
 function mapConfigError(error: ConfigError) {

@@ -8,7 +8,8 @@ import { createTestingDatabase } from "@kaguya/database/testing";
 import { KaguyaLlmClient } from "@kaguya/llm/client";
 import {
   createFirstPartyModuleCatalog,
-  firstPartyModuleActivations,
+  createFirstPartyModuleActivations,
+  createFirstPartyModuleConfigDefaults,
 } from "@kaguya/modules";
 import { createRepeatingDeterministicModel } from "@kaguya/llm/testing";
 import { modelTaskCapability } from "./model-task.js";
@@ -112,18 +113,22 @@ describe("KaguyaRuntime one-shot scheduler lifecycle", () => {
   it("does not accept ingress until overdue schedule recovery completes", async () => {
     const recovery = deferred<void>();
     const model = createRepeatingDeterministicModel({ text: "done" });
+    const catalog = createFirstPartyModuleCatalog({
+      modelTaskCapability,
+      modelTaskCompletedInformationKind,
+      modelTaskFailedInformationKind,
+      modelTaskCancelledInformationKind,
+      deliveryDeliveredInformationKind,
+      deliveryFailedInformationKind,
+      executionExhaustedInformationKind,
+    });
     const runtime = new KaguyaRuntime({
       database: await createTestingDatabase(),
-      catalog: createFirstPartyModuleCatalog({
-        modelTaskCapability,
-        modelTaskCompletedInformationKind,
-        modelTaskFailedInformationKind,
-        modelTaskCancelledInformationKind,
-        deliveryDeliveredInformationKind,
-        deliveryFailedInformationKind,
-        executionExhaustedInformationKind,
-      }),
-      activations: firstPartyModuleActivations,
+      catalog,
+      activations: createFirstPartyModuleActivations(
+        catalog,
+        createFirstPartyModuleConfigDefaults("production"),
+      ),
       modelTask: {
         approvals: [
           {

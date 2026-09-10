@@ -11,17 +11,16 @@ description: 从首次启动到 Profile 管理、重启和异常恢复的界面�
 
 ```mermaid
 flowchart TD
-  A[打开 Web UI] --> B[读取 /api/v1/setup]
+  A[打开 Web UI] --> B[读取 /api/v1/profiles]
   B --> C{请求成功?}
   C -- 否 --> D[error：说明服务或网络问题并允许重试]
   C -- 是 --> E{status}
   E -- invalid / review_required --> F[profiles：打开所选 Profile 编辑]
   E -- restart_required --> G[restart：提示重启服务]
   E -- ready --> H[chat：进入消息界面]
-  E -- setup_required --> F
 ```
 
-配置目录不存在时，Server 会先创建 v3 registry 和保留的 `default` Profile；因此当前正常服务流程通常直接看到 `invalid` 或 `review_required`，而不是要求用户手工建立目录。客户端仍保留 `setup_required` 兼容分支。
+配置目录不存在时，Server 会先创建 v1 registry 和保留的 `default` Profile；因此页面直接看到 `invalid` 或 `review_required`，并自动打开 selected Profile 编辑页。
 
 ## Profile 管理页
 
@@ -43,7 +42,7 @@ flowchart TD
 
 ## 必须覆盖的异常状态
 
-**加载中** — 保留稳定页面骨架，避免用户在 setup 请求完成前操作错误表单。
+**加载中** — 保留稳定页面骨架，避免用户在 Profile readiness 请求完成前操作错误表单。
 
 **字段错误** — 在相关字段附近说明原因，同时保留其他输入；不要只显示一个笼统 toast。
 

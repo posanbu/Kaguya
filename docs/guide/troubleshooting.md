@@ -23,11 +23,11 @@ curl http://127.0.0.1:3000/healthz
 
 :::
 
-若没有 `{"status":"ok"}`，先运行 `pnpm postgres:status`，再检查 Docker Desktop/OrbStack、端口占用、PostgreSQL 17、`server.start.failed`、Node/pnpm 版本和生产模式下是否已经执行 `pnpm build`。数据库连接、版本、migration 或 Kind 检查失败时 Server 降级运行，健康接口仍返回 200；在 Gateway / Adapter 页面检查状态。若健康接口正常而页面失败，检查浏览器请求和 Web 静态产物。
+若没有 `{"status":"ok"}`，先运行 `pnpm postgres:status`，再检查 Docker Desktop/OrbStack、端口占用、PostgreSQL 17、`server.start.failed`、Node/pnpm 版本和生产模式下是否已经执行 `pnpm build`。schema metadata 缺失、版本不是 1、存在旧 `kaguya_schema_migrations` 或所需对象不完整都会在 HTTP、Runtime 和 Adapter 监听前终止 Server；系统不会自动修复。连接暂时不可用仍按运行时不可用处理。若健康接口正常而页面失败，检查浏览器请求和 Web 静态产物。
 
 ## 一直停在配置页面
 
-查看 `/api/v1/setup` 返回的 status。`invalid` 表示必填内容有问题；`review_required` 表示仍有警告未确认；`restart_required` 表示配置已保存但进程尚未重启。
+查看 `/api/v1/profiles` 返回的 status。`invalid` 表示必填内容有问题；`review_required` 表示仍有警告未确认；`restart_required` 表示配置已保存但进程尚未重启。
 
 不要通过手工修改 Registry 来绕过页面。先在 Web UI 修正字段，保存后停止并重新启动 Server。
 
@@ -37,7 +37,7 @@ Server 每次启动都会生成新 token，旧链接随即失效。回到当前�
 
 ## 配置目录无法打开
 
-权限不安全、符号链接、路径越界、损坏 JSON 或旧版 v1/v2 Registry 都会被拒绝。先备份目录，再根据错误码修复权限或重新建立 v3 配置；当前没有自动迁移。
+权限不安全、符号链接、路径越界、损坏 JSON 或不符合严格 v1 schema 的 Registry 都会被拒绝。先备份目录，再根据错误码修复权限或重新建立 v1 配置；当前没有自动迁移。
 
 同一 `KAGUYA_CONFIG_ROOT` 不要同时交给两个 Server 或配置写入进程。Windows 生产环境需确认 NTFS ACL，POSIX 目录和文件分别使用 `0700` 与 `0600`。
 
@@ -57,7 +57,7 @@ Server 每次启动都会生成新 token，旧链接随即失效。回到当前�
 
 ## Web UI 正常但 NapCat 失败
 
-在 Web UI 的 NapCat 页面检查 enabled、WebSocket URL、访问凭据和 self ID；这些值保存在 selected Profile 的平台条目。旧 `napcat.json` 或 `KAGUYA_NAPCAT_*` 会导致迁移错误。NapCat 连接失败不会停止 HTTP 与 Web UI；查看 `module=adapter:napcat` 的结构化日志。
+在 Web UI 的 NapCat 页面检查 enabled、WebSocket URL、访问凭据和 self ID；这些值只从 selected Profile 的平台条目读取。NapCat 连接失败不会停止 HTTP 与 Web UI；查看 `module=adapter:napcat` 的结构化日志。
 
 ## 文档站本地与线上不一致
 

@@ -1,6 +1,6 @@
 # @kaguya/config
 
-`@kaguya/config` stores multiple user configuration profiles as JSON under a v3
+`@kaguya/config` stores multiple user configuration profiles as JSON under a v1
 registry with one explicit global selection. Runtime modules do not choose a
 profile; the server resolves the selected profile once at startup and every
 module shares that frozen runtime configuration.
@@ -35,7 +35,8 @@ const configs = await FileUserConfigManager.open({
 `inspect()` is the first-run, machine-readable check. When the store is
 missing, it returns `setup_required` and fixed `guidance.steps` without
 creating the root directory, `profiles/`, `index.json`, or a profile.
-`bootstrap()` is the only operation that creates the empty v3 registry:
+`bootstrap()` is the only operation that creates the empty v1 registry when
+`index.json` and `profiles/` do not already exist:
 `index.json` with `selectedProfileId: "default"` plus one empty reserved
 `default` profile. `open()` only opens an existing store; a missing store
 throws `CONFIG_SETUP_REQUIRED` and never creates files implicitly.
@@ -70,6 +71,7 @@ await configs.replaceProfile("default", {
       },
     ],
   },
+  memory: { enabled: false },
   runtime: {
     host: "127.0.0.1",
     port: 3000,
@@ -85,9 +87,7 @@ await configs.replaceProfile("default", {
     gatewayAllowlist: ["qq:group:778899", "qq:private:112233"],
   },
   platforms: [],
-  plugins: [],
-  // Add these only after the user explicitly reviews and confirms them.
-  acknowledgedWarnings: ["platforms-empty", "plugins-empty"],
+  acknowledgedWarnings: [],
 });
 ```
 
@@ -95,8 +95,8 @@ await configs.replaceProfile("default", {
 `platform:group|private:target-id` rules. Rules are ORed; `platform` and the
 target ID accept `*`. An empty array denies every non-Web message. Malformed
 rules remain valid configuration strings but are ignored by the runtime.
-Legacy `{ platforms, userIds, groupIds }` objects are rejected and must be
-converted manually before opening the Profile in the Web editor.
+Any object-shaped or otherwise invalid allowlist is rejected as an ordinary
+schema error.
 
 Create additional named profiles explicitly, then select one explicitly:
 
@@ -123,9 +123,9 @@ await configs.replaceProfile(created.id, {
       },
     ],
   },
+  memory: { enabled: false },
   platforms: [],
-  plugins: [],
-  acknowledgedWarnings: ["platforms-empty", "plugins-empty"],
+  acknowledgedWarnings: [],
 });
 
 await configs.selectProfile(created.id);
@@ -133,7 +133,7 @@ await configs.selectProfile(created.id);
 
 `replaceProfile()` validates model readiness and optional-configuration
 review before persisting the complete replacement body. Invalid models produce
-`CONFIG_INCOMPLETE`. Unacknowledged optional settings produce
+`CONFIG_INCOMPLETE`. Unacknowledged current warnings produce
 `CONFIG_REVIEW_REQUIRED`; callers must show its secret-free warnings, obtain
 explicit confirmation, and retry `replaceProfile()` with the current warning
 IDs. For an existing profile, call
@@ -149,32 +149,31 @@ now requires an explicit ID and never falls back. Existing profiles without
 `ai.modelTiers` remain editable, but their readiness is `invalid`; target
 selection is never inferred from provider model-array order.
 
-`replaceProfile()` replaces the complete `ai`, `platforms`, and `plugins`
+`replaceProfile()` replaces the complete `ai`, `memory`, and `platforms`
 settings set; it is not a partial merge. The reserved `default` profile may be
-configured, but it cannot be renamed or deleted. The registry index format is
-version 3 and contains metadata plus `selectedProfileId`. Versions 1 and 2 are
-rejected with `CONFIG_UNSUPPORTED_VERSION`; callers must back up the store and
-bootstrap a new index. No automatic migration or deletion is performed.
+configured, but it cannot be renamed or deleted. The registry index and Profile
+formats both require `version: 1`; the index contains metadata plus
+`selectedProfileId`. Other versions and legacy shapes fail ordinary schema
+validation. Existing documents are never converted, repaired, or deleted.
 
 At server startup, `KAGUYA_CONFIG_ROOT` is loaded into a frozen profile
 registry. The selected Profile is the persisted source for runtime, database,
-AI, Memory, platforms, plugins, and review. The development PostgreSQL command
+AI, Memory, platforms, and review. Module activation is configured separately
+under `modules/<instanceId>/config.json`. The development PostgreSQL command
 may add a complete safe local `runtime` only when that field is entirely absent;
 it never replaces a partially invalid runtime. Database connection, PostgreSQL
-17, migrations, and Runtime Kind synchronization must pass before HTTP or any
+17, strict schema v1 preparation, and Runtime Kind synchronization must pass before HTTP or any
 other ingress listens. After that preflight, an incomplete AI Profile may use
-HTTP setup mode while Runtime and adapter ingress remain stopped until restart.
+the Web configuration UI while Runtime and adapter ingress remain stopped until restart.
 Corrupt stores and unsafe or inaccessible paths fail startup and are never
 overwritten. A module may request only a `modelTier`; it cannot override the selected profile.
 Failure of the selected profile stops runtime startup; there is no fallback to
-another profile, provider, or model. Runtime environment variables, including
-the former database, Server, logging, allowlist, NapCat, and model variables,
-are rejected with a value-free migration error. Only `KAGUYA_CONFIG_ROOT`
-locates application configuration; `KAGUYA_TEST_DATABASE_URL` is CI-only.
+another profile, provider, or model. Only `KAGUYA_CONFIG_ROOT`
+locates application configuration; `NODE_ENV` selects development or production
+resources, and `KAGUYA_TEST_DATABASE_URL` is CI-only.
 
-Legacy runtime objects without `databaseMode` parse as `external`. A persisted
-legacy `gatewayToken` is accepted for compatibility but ignored and removed on
-the next Profile write. The Server generates a cryptographically random token
+`runtime.databaseMode` is required, and persisted runtime objects cannot contain
+`gatewayToken`. The Server generates a cryptographically random token
 for each process and never persists it. Web Profile responses and replacement
 requests omit runtime; the Server preserves the existing hidden runtime, and
 new Profiles created through the Web management facade inherit the selected
