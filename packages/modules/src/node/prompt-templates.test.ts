@@ -58,6 +58,12 @@ describe("loadFirstPartyPromptTemplates", () => {
       "packages/modules/templates/*.local.hbs",
     );
   });
+
+  it("keeps tracked default templates on LF across Git checkouts", () => {
+    expect(
+      readFileSync(join(process.cwd(), ".gitattributes"), "utf8"),
+    ).toContain("packages/modules/templates/*.default.hbs text eol=lf");
+  });
 });
 
 const templateNames = [
