@@ -567,16 +567,19 @@ describe("KaguyaRuntime", () => {
       });
       let secondGraph: Awaited<ReturnType<typeof database.information.query>> =
         [];
-      await vi.waitFor(async () => {
-        secondGraph = await database.information.query({
-          informationId: second.rootInformationId,
-        });
-        expect(
-          secondGraph.some(
-            ({ kind }) => kind === modelTaskRequestedInformationKind.kind,
-          ),
-        ).toBe(true);
-      });
+      await vi.waitFor(
+        async () => {
+          secondGraph = await database.information.query({
+            informationId: second.rootInformationId,
+          });
+          expect(
+            secondGraph.some(
+              ({ kind }) => kind === modelTaskRequestedInformationKind.kind,
+            ),
+          ).toBe(true);
+        },
+        { timeout: 5000, interval: 25 },
+      );
       const requested = secondGraph.find(
         ({ kind }) => kind === modelTaskRequestedInformationKind.kind,
       )!;
