@@ -1,7 +1,7 @@
 /**
  * 功能概述：以真实 PGlite 事务检验 Reliable DAG 的投递、幂等、终态与 lease fencing。
  * 主要职责：证明落账不会漏投、历史不会自动 backfill、重复产出只返回赢家，旧 claim 无写权限。
- * 代码库关系：直接使用生产 InformationRepository 与相同 migrations，避免内存替身隐藏事务错误。
+ * 代码库关系：直接使用生产 InformationRepository 与相同 v1 schema，避免内存替身隐藏事务错误。
  * 输入输出与副作用：每例创建独立数据库并清理；主动过期执行表 lease 模拟进程崩溃。
  */
 import { afterEach, expect, it, vi } from "vitest";
@@ -15,7 +15,7 @@ afterEach(async () => {
 async function setup() {
   const db = await createTestingDatabase();
   databases.push(db);
-  await db.migrate();
+  await db.prepareSchema();
   await db.information.synchronizeKinds([
     "test.source",
     "test.output",

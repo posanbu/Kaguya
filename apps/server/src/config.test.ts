@@ -128,24 +128,16 @@ describe("Profile-backed server configuration", () => {
     expect(JSON.stringify(result.napcat)).not.toContain("secret");
   });
 
-  it("rejects retired runtime variables without exposing values", () => {
-    for (const name of [
-      "KAGUYA_DATABASE_URL",
-      "KAGUYA_HOST",
-      "KAGUYA_NAPCAT_ACCESS_TOKEN",
-      "KAGUYA_LOG_DESTINATION",
-      "KAGUYA_LLM_API_KEY",
-    ]) {
-      const error = (() => {
-        try {
-          readServerBootstrapConfig({ [name]: "private-value" });
-        } catch (thrown) {
-          return thrown;
-        }
-      })();
-      expect(String(error)).toContain(name);
-      expect(String(error)).not.toContain("private-value");
-    }
+  it("ignores retired runtime variables", () => {
+    expect(
+      readServerBootstrapConfig({
+        KAGUYA_CONFIG_ROOT: "/current/config",
+        NODE_ENV: "development",
+        KAGUYA_DATABASE_URL: "private-value",
+        KAGUYA_HOST: "legacy-host",
+        KAGUYA_NAPCAT_ACCESS_TOKEN: "legacy-token",
+      }),
+    ).toEqual({ configRoot: "/current/config", development: true });
   });
 });
 
@@ -159,7 +151,6 @@ function completeProfile(
     ai: { providers: [] },
     memory: { enabled: false },
     platforms: [],
-    plugins: [],
     runtime: {
       host: "localhost",
       port: 4100,

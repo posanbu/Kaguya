@@ -4,7 +4,7 @@
  * 主要职责：create/replace/emitDue/finish 复用 Reliable 的 operation、terminal 与 claim fencing，
  * listOpen 为 timer runner 提供稳定 keyset 分页；arm 表只保存 dueAt、状态和事实引用，不保存回调或计时器句柄。
  * 代码库关系：`InformationRepository` 注入 append/read 与 Reliable 实现；scheduler 契约提供 commit 类型和回执，
- * migrations.ts 建立 projection 表；Core/runner 只通过本文件导出的 projection store 端口访问数据库。
+ * schema.ts 建立 projection 表；Core/runner 只通过本文件导出的 projection store 端口访问数据库。
  * 输入输出与副作用：所有写操作在一个数据库事务内完成，失败自动回滚；information atoms 仍 append-only，
  * arm projection 是可变的执行索引，可在进程重启后由 listOpen 重建。
  */

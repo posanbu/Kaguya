@@ -1,17 +1,10 @@
 /**
  * 功能概述：负责 selected Profile 内 NapCat 平台条目的校验和脱敏投影。
- * 主要职责：校验 WebSocket 地址与重连间隔、构造启动配置，并检测已退役的
- * `napcat.json`，要求用户显式迁移而不是静默采用第二份配置真值。
- * 代码库关系：`setup.ts` 负责 Profile 读写，`config.ts` 从同一 selected Profile
- * 生成启动配置；本模块只保留值对象转换和遗留文件门禁。
- * 输入输出与副作用：除检查遗留文件是否存在外不读写磁盘；公开状态不泄漏 token，
- * 所有迁移与校验错误均不包含旧文件内容。
+ * 主要职责：校验 WebSocket 地址与重连间隔，并构造启动配置。
+ * 代码库关系：配置管理层负责 Profile 读写，`config.ts` 从同一 selected Profile
+ * 生成启动配置；本模块只保留值对象转换。
+ * 输入输出与副作用：本模块只转换内存值；公开状态不泄漏 token。
  */
-import { access } from "node:fs/promises";
-import { join } from "node:path";
-
-import { ConfigError } from "@kaguya/config";
-
 import type { NapCatConfig } from "./config.js";
 
 export interface NapCatSettings {
@@ -35,21 +28,6 @@ export const defaultNapCatSettings: NapCatSettings = Object.freeze({
   reconnectMs: 3000,
 });
 
-export async function assertNoLegacyNapCatSettings(
-  rootDir: string,
-): Promise<void> {
-  try {
-    await access(join(rootDir, "napcat.json"));
-  } catch (error) {
-    if (isMissingFile(error)) return;
-    throw error;
-  }
-  throw new ConfigError(
-    "CONFIG_UNSUPPORTED_VERSION",
-    "Legacy napcat.json is not supported; move NapCat settings into the selected Profile",
-  );
-}
-
 export function toNapCatStatus(settings: NapCatSettings): NapCatStatus {
   return {
     enabled: settings.enabled,
@@ -62,7 +40,7 @@ export function toNapCatStatus(settings: NapCatSettings): NapCatStatus {
 
 export function toNapCatConfig(settings: NapCatSettings): NapCatConfig {
   if (settings.enabled && settings.wsUrl === undefined) {
-    throw new Error("KAGUYA_NAPCAT_WS_URL is required when NapCat is enabled");
+    throw new Error("WebSocket URL is required when NapCat is enabled");
   }
   return {
     enabled: settings.enabled,
@@ -116,13 +94,4 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0
     ? value.trim()
     : undefined;
-}
-
-function isMissingFile(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    error.code === "ENOENT"
-  );
 }

@@ -6,7 +6,7 @@
  * Registry；它还校验引用 expectations、事务写入 atom/reference/outbox、提供 `get/getMany/find/query`，
  * 并通过 reliable 端口提供原子去重与执行表；append 同事务写入 durable 投递意图，管理待投影日志的读取、成功确认与失败计数。
  * 代码库关系：`InformationCore` 只会看到这里实现的 ledger 端口；`driver.ts`
- * 提供事务与 query 抽象，`migrations.ts` 则先建立表结构、索引和 mutation 触发器。
+ * 提供事务与 query 抽象，`schema.ts` 则初始化或验证表结构、索引和 mutation 触发器。
  * 输入输出与副作用：写入全部在数据库事务中完成，冲突和引用错误映射为稳定错误类型；
  * 读取返回经过 schema 校验并深冻结的 atom，不允许通过返回值修改持久化事实。
  */

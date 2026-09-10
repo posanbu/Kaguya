@@ -1,14 +1,14 @@
 /**
- * 功能概述：本文件验证 HTTP 应用在受保护 setup 状态、Profile 管理接口、
+ * 功能概述：本文件验证 HTTP 应用的受保护 Profile readiness、Profile 管理接口、
  * 消息入口与统一错误映射上的外部契约，确保服务端只暴露显式的全局 Profile Registry
- * 行为，不再保留临时 setup 写桥接或隐式 default 回退。
- * 主要职责：前几组用例覆盖 `/api/v1/setup` 仅返回无密钥元数据、`/api/v1/profiles`
+ * 行为，不再保留临时配置写桥接或隐式 default 回退。
+ * 主要职责：前几组用例覆盖 `/api/v1/profiles` 的无密钥 readiness 与
  * 六个能力的鉴权优先级、CRUD/选择/删除语义，以及 `ConfigError` 到 HTTP 状态码和
  * 业务错误码的映射；其余用例继续保护 `/api/v1/messages`、OpenAPI、限流、请求 ID
  * 与日志上下文契约不回退。
  * 代码库关系：该文件直接驱动 `app.ts`，既会用 stub `ConfigurationManagement`
  * 验证路由层顺序，也会用真实 `createConfigurationManagement` 在临时目录上验证
- * Profile API 与 `packages/config`/`setup.ts` 的集成行为；它与 `setup.test.ts`、
+ * Profile API 与 `packages/config`/`configuration-management.ts` 的集成行为；它与配置管理测试、
  * `server-composition.test.ts` 一起覆盖 Task 5 的服务层收口。
  * 输入输出与副作用：测试通过 `app.inject()` 发起内存内 HTTP 请求；Profile CRUD
  * 集成用例会在临时配置目录中落盘 Registry 文件并在结束后删除。若路由泄漏 secret、
@@ -34,7 +34,8 @@ import type { ServerConfig } from "./config.js";
 import {
   createConfigurationManagement,
   type ConfigurationManagement,
-} from "./setup.js";
+  type ConfigurationRegistryStatus,
+} from "./configuration-management.js";
 import type { WebMessageGateway } from "./web-gateway.js";
 
 const gatewayToken = "test-gateway-token-12345";
@@ -68,9 +69,43 @@ function authorization(scheme = "Bearer") {
 }
 
 describe("application API gateway", () => {
-  it("serves authenticated setup status without secrets", async () => {
-    const setup: ConfigurationManagement = {
-      inspect: vi.fn(async () => ({
+  it.each<ConfigurationRegistryStatus>([
+    {
+      status: "invalid",
+      selectedProfileId: "default",
+      profiles: [],
+      issues: [{ id: "missing", path: "ai", message: "missing" }],
+    },
+    {
+      status: "review_required",
+      selectedProfileId: "default",
+      profiles: [],
+      warnings: [{ id: "review", path: "ai", message: "review" }],
+    },
+    { status: "restart_required", selectedProfileId: "default", profiles: [] },
+    { status: "ready", selectedProfileId: "default", profiles: [] },
+  ])(
+    "returns $status readiness from GET /api/v1/profiles",
+    async (readiness) => {
+      const configuration = stubManagement();
+      vi.mocked(configuration.getRegistryStatus).mockResolvedValue(readiness);
+      const app = await createHttpApplication({ config, configuration });
+
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/v1/profiles",
+        headers: authorization(),
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ data: readiness });
+      await app.close();
+    },
+  );
+
+  it("serves authenticated registry readiness without secrets", async () => {
+    const configuration: ConfigurationManagement = {
+      getRegistryStatus: vi.fn(async () => ({
         status: "invalid" as const,
         selectedProfileId: "default",
         profiles: [
@@ -83,17 +118,7 @@ describe("application API gateway", () => {
             message: "missing provider",
           },
         ],
-        warnings: [
-          {
-            id: "platforms-empty",
-            path: "platforms",
-            message: "platforms empty",
-          },
-        ],
-      })),
-      listProfiles: vi.fn(async () => ({
-        selectedProfileId: "default",
-        profiles: [],
+        warnings: [],
       })),
       getProfile: vi.fn(async () => ({
         version: 1 as const,
@@ -103,7 +128,6 @@ describe("application API gateway", () => {
         ai: { providers: [] },
         memory: { enabled: false },
         platforms: [],
-        plugins: [],
       })),
       createProfile: vi.fn(),
       replaceProfile: vi.fn(async () => ({
@@ -115,18 +139,17 @@ describe("application API gateway", () => {
           ai: { providers: [] },
           memory: { enabled: false },
           platforms: [],
-          plugins: [],
         },
         restartRequired: true,
       })),
       selectProfile: vi.fn(),
       deleteProfile: vi.fn(),
     };
-    const app = await createHttpApplication({ config, setup });
+    const app = await createHttpApplication({ config, configuration });
 
     const status = await app.inject({
       method: "GET",
-      url: "/api/v1/setup",
+      url: "/api/v1/profiles",
       headers: authorization(),
     });
     expect(status.statusCode).toBe(200);
@@ -136,7 +159,7 @@ describe("application API gateway", () => {
         selectedProfileId: "default",
         profiles: [expect.objectContaining({ id: "default", name: "default" })],
         issues: [expect.objectContaining({ id: "default-provider-missing" })],
-        warnings: [expect.objectContaining({ id: "platforms-empty" })],
+        warnings: [],
       },
     });
     expect(status.body).not.toContain("provider-secret");
@@ -151,22 +174,18 @@ describe("application API gateway", () => {
     });
     expect(message.statusCode).toBe(503);
     expect(message.json()).toMatchObject({
-      error: { code: "configuration_setup_required" },
+      error: { code: "core_unavailable" },
     });
     await app.close();
   });
 
   it("authenticates profile management before path or body validation", async () => {
-    const setup: ConfigurationManagement = {
-      inspect: vi.fn(async () => ({
+    const configuration: ConfigurationManagement = {
+      getRegistryStatus: vi.fn(async () => ({
         status: "invalid" as const,
         selectedProfileId: "default",
         profiles: [],
         issues: [],
-      })),
-      listProfiles: vi.fn(async () => ({
-        selectedProfileId: "default",
-        profiles: [],
       })),
       getProfile: vi.fn(),
       createProfile: vi.fn(),
@@ -174,7 +193,7 @@ describe("application API gateway", () => {
       selectProfile: vi.fn(),
       deleteProfile: vi.fn(),
     };
-    const app = await createHttpApplication({ config, setup });
+    const app = await createHttpApplication({ config, configuration });
 
     for (const request of [
       { method: "GET" as const, url: "/api/v1/profiles" },
@@ -227,11 +246,10 @@ describe("application API gateway", () => {
             ai: { providers: [] },
             memory: { enabled: false },
             platforms: [],
-            plugins: [],
           },
         },
       });
-      await expect(management.listProfiles()).resolves.toMatchObject({
+      await expect(management.getRegistryStatus()).resolves.toMatchObject({
         selectedProfileId: "default",
         profiles: expect.arrayContaining([
           expect.objectContaining({ id: "default", name: "default" }),
@@ -275,7 +293,6 @@ describe("application API gateway", () => {
             ai: { providers: [] },
             memory: { enabled: false },
             platforms: [],
-            plugins: [],
           },
         },
       });
@@ -283,8 +300,8 @@ describe("application API gateway", () => {
   });
 
   it("exposes only the safe allowlist field and rejects runtime replacement", async () => {
-    const setup = stubManagement();
-    vi.mocked(setup.getProfile).mockResolvedValueOnce({
+    const configuration = stubManagement();
+    vi.mocked(configuration.getProfile).mockResolvedValueOnce({
       version: 1,
       id: "default",
       name: "default",
@@ -292,9 +309,8 @@ describe("application API gateway", () => {
       ai: { providers: [] },
       memory: { enabled: false },
       platforms: [],
-      plugins: [],
     });
-    const app = await createHttpApplication({ config, setup });
+    const app = await createHttpApplication({ config, configuration });
 
     const read = await app.inject({
       method: "GET",
@@ -317,7 +333,7 @@ describe("application API gateway", () => {
       },
     });
     expect(replace.statusCode).toBe(400);
-    expect(setup.replaceProfile).not.toHaveBeenCalled();
+    expect(configuration.replaceProfile).not.toHaveBeenCalled();
     await app.close();
   });
 
@@ -347,7 +363,6 @@ describe("application API gateway", () => {
             ai: payload.ai,
             memory: { enabled: true },
             platforms: [],
-            plugins: [],
           },
         },
       });
@@ -357,7 +372,7 @@ describe("application API gateway", () => {
   it("reports a conflict instead of dropping an allowlist without runtime", async () => {
     const root = await mkdtemp(join(tmpdir(), "kaguya-app-no-runtime-"));
     const management = await createConfigurationManagement(root);
-    const app = await createApiGateway({ config, setup: management });
+    const app = await createApiGateway({ config, configuration: management });
     try {
       const response = await app.inject({
         method: "PUT",
@@ -402,7 +417,7 @@ describe("application API gateway", () => {
           profile: { id: created.profile.id, name: "work" },
         },
       });
-      await expect(management.inspect()).resolves.toMatchObject({
+      await expect(management.getRegistryStatus()).resolves.toMatchObject({
         status: "restart_required",
         selectedProfileId: created.profile.id,
         profiles: expect.arrayContaining([
@@ -413,29 +428,18 @@ describe("application API gateway", () => {
     });
   });
 
-  it("serves metadata-complete ready setup status when management is absent", async () => {
+  it("requires configuration management for registry status", async () => {
     const app = await createApiGateway({ config });
 
     const response = await app.inject({
       method: "GET",
-      url: "/api/v1/setup",
+      url: "/api/v1/profiles",
       headers: authorization(),
     });
 
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({
-      data: {
-        status: "ready",
-        selectedProfileId: "default",
-        profiles: [
-          {
-            id: "default",
-            name: "default",
-            createdAt: "",
-            updatedAt: "",
-          },
-        ],
-      },
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      error: { code: "configuration_unavailable" },
     });
     await app.close();
   });
@@ -452,7 +456,7 @@ describe("application API gateway", () => {
 
       expect(response.statusCode).toBe(204);
       expect(response.body).toBe("");
-      await expect(management.listProfiles()).resolves.toEqual({
+      await expect(management.getRegistryStatus()).resolves.toMatchObject({
         selectedProfileId: "default",
         profiles: [expect.objectContaining({ id: "default", name: "default" })],
       });
@@ -515,19 +519,19 @@ describe("application API gateway", () => {
     });
   });
 
-  it("requires the setup authorization contract", async () => {
+  it("removes the setup route", async () => {
     const app = await createApiGateway({
       config,
-      setup: stubManagement(),
+      configuration: stubManagement(),
     });
 
     const response = await app.inject({
       method: "GET",
       url: "/api/v1/setup",
-      headers: { authorization: "Bearer wrong-token" },
+      headers: authorization(),
     });
 
-    expect(response.statusCode).toBe(401);
+    expect(response.statusCode).toBe(404);
     const removed = await app.inject({
       method: "POST",
       url: "/api/v1/setup",
@@ -541,7 +545,7 @@ describe("application API gateway", () => {
     const app = await createApiGateway({
       config,
       webGateway: fakeGateway(),
-      setup: stubManagement(),
+      configuration: stubManagement(),
     });
 
     const health = await app.inject({ method: "GET", url: "/healthz" });
@@ -592,37 +596,6 @@ describe("application API gateway", () => {
                           { enum: ["default"] },
                           { type: "string", format: "uuid" },
                         ],
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-        "/api/v1/setup": {
-          get: {
-            responses: {
-              200: {
-                content: {
-                  "application/json": {
-                    schema: {
-                      properties: {
-                        data: {
-                          required: ["status", "selectedProfileId", "profiles"],
-                          properties: {
-                            profiles: {
-                              items: {
-                                required: [
-                                  "id",
-                                  "name",
-                                  "createdAt",
-                                  "updatedAt",
-                                ],
-                              },
-                            },
-                          },
-                        },
                       },
                     },
                   },
@@ -708,7 +681,7 @@ describe("application API gateway", () => {
       },
     });
     const serialized = JSON.stringify(document);
-    expect(serialized).toContain("/api/v1/setup");
+    expect(serialized).not.toContain("/api/v1/setup");
     expect(serialized).toContain('"selectedProfileId"');
     expect(serialized).toContain('"gatewayAllowlist"');
     expect(serialized).toContain('"apiKey"');
@@ -794,10 +767,10 @@ describe("application API gateway", () => {
     await app.close();
   });
 
-  it("maps a missing web gateway to the setup-required status", async () => {
+  it("maps a missing web gateway to core unavailable", async () => {
     const app = await createApiGateway({
       config,
-      setup: stubManagement(),
+      configuration: stubManagement(),
     });
 
     const response = await app.inject({
@@ -809,7 +782,7 @@ describe("application API gateway", () => {
 
     expect(response.statusCode).toBe(503);
     expect(response.json()).toMatchObject({
-      error: { code: "configuration_setup_required" },
+      error: { code: "core_unavailable" },
     });
     await app.close();
   });
@@ -1156,7 +1129,7 @@ function fakeGateway(): WebMessageGateway {
 function createApiGateway(options: {
   config: ServerConfig;
   webGateway?: WebMessageGateway;
-  setup?: ConfigurationManagement;
+  configuration?: ConfigurationManagement;
   logger?: Parameters<typeof createHttpApplication>[0]["logger"];
 }) {
   return createHttpApplication({
@@ -1164,7 +1137,9 @@ function createApiGateway(options: {
     ...(options.webGateway === undefined
       ? {}
       : { webGateway: options.webGateway }),
-    ...(options.setup === undefined ? {} : { setup: options.setup }),
+    ...(options.configuration === undefined
+      ? {}
+      : { configuration: options.configuration }),
     ...(options.logger === undefined ? {} : { logger: options.logger }),
   });
 }
@@ -1223,7 +1198,6 @@ async function withManagementApp(
     ai: profile.ai,
     memory: profile.memory,
     platforms: profile.platforms,
-    plugins: profile.plugins,
     runtime: {
       host: "127.0.0.1",
       port: 3000,
@@ -1240,7 +1214,7 @@ async function withManagementApp(
     },
   });
   const management = await createConfigurationManagement(root);
-  const app = await createApiGateway({ config, setup: management });
+  const app = await createApiGateway({ config, configuration: management });
   try {
     await assertion(app, management);
   } finally {
@@ -1251,19 +1225,13 @@ async function withManagementApp(
 
 function stubManagement(): ConfigurationManagement {
   return {
-    inspect: vi.fn(async () => ({
+    getRegistryStatus: vi.fn(async () => ({
       status: "invalid" as const,
       selectedProfileId: "default",
       profiles: [
         { id: "default", name: "default", createdAt: NOW, updatedAt: NOW },
       ],
       issues: [],
-    })),
-    listProfiles: vi.fn(async () => ({
-      selectedProfileId: "default",
-      profiles: [
-        { id: "default", name: "default", createdAt: NOW, updatedAt: NOW },
-      ],
     })),
     getProfile: vi.fn(async () => ({
       version: 1 as const,
@@ -1273,7 +1241,6 @@ function stubManagement(): ConfigurationManagement {
       ai: { providers: [] },
       memory: { enabled: false },
       platforms: [],
-      plugins: [],
     })),
     createProfile: vi.fn(),
     replaceProfile: vi.fn(),
@@ -1290,7 +1257,7 @@ function readyProfileReplacement(
   return {
     name,
     gatewayAllowlist: ["*:group:*", "*:private:*"],
-    acknowledgedWarnings: ["platforms-empty", "plugins-empty"],
+    acknowledgedWarnings: [],
     ai: {
       defaultProviderId: "provider-1",
       modelTiers: {
@@ -1311,6 +1278,5 @@ function readyProfileReplacement(
     },
     memory: { enabled: false },
     platforms: [],
-    plugins: [],
   };
 }

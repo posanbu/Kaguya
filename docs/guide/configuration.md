@@ -5,7 +5,7 @@ description: 完成首次配置，管理多个 Profile，并理解配置何时�
 
 # 配置 Kaguya
 
-Kaguya 只有一份持久配置真值：全局 selected Profile。它同时保存 runtime、数据库、AI、Memory、平台、插件与 review；环境只用 `KAGUYA_CONFIG_ROOT` 定位 Registry。Web UI 管理可安全呈现的字段，隐藏的 runtime 只通过 Profile 文件或开发初始化写入。
+Profile Registry 保存 runtime、数据库、AI、Memory、平台与 review；全局 selected Profile 是这些字段的运行真值。模块实例配置独立位于同一配置根的 `modules/`。环境只用 `KAGUYA_CONFIG_ROOT` 定位配置根。
 
 ## 首次启动会发生什么
 
@@ -13,10 +13,12 @@ Kaguya 只有一份持久配置真值：全局 selected Profile。它同时保�
 flowchart TD
   A[读取基础配置] --> B[创建 AdapterHost]
   B --> C[独立检查 AI 与数据库]
-  C --> D{均就绪?}
-  D -- 是 --> E[尝试启动 Runtime]
-  D -- 否 --> F[记录降级原因]
-  E --> G[启动 HTTP 与各 Adapter]
+  C --> D{schema v1 完整?}
+  D -- 否 --> X[监听前退出]
+  D -- 是 --> E{AI 与数据库均就绪?}
+  E -- 是 --> R[尝试启动 Runtime]
+  E -- 否 --> F[记录降级原因]
+  R --> G[启动 HTTP 与各 Adapter]
   F --> G
 ```
 
@@ -24,23 +26,21 @@ flowchart TD
 
 ## Runtime 与数据库
 
-Profile 的 `runtime` 保存 host、port、`databaseMode`、`databaseUrl`、Web 路径、CORS、proxy、限流、日志和 gateway allowlist。旧 Profile 没有 `databaseMode` 时按 `external` 处理。外部数据库只通过 Profile JSON 配置；Web API 不返回或接收完整 runtime，只安全投影并更新其中的 gateway allowlist。
+Profile 的 `runtime` 保存 host、port、必填的 `databaseMode`、`databaseUrl`、Web 路径、CORS、proxy、限流、日志和 gateway allowlist。外部数据库只通过 Profile JSON 配置；Web API 不返回或接收完整 runtime，只安全投影并更新其中的 gateway allowlist。
 
-`databaseMode: "managed"` 表示开发命令可以管理固定的本地容器；`databaseMode: "external"` 表示所有命令都只连接 Profile URL，不调用 Docker。两种模式都检查 PostgreSQL 17。数据库检查独立于 AI readiness；失败时 Server 降级启动，Adapter 仍可连接。
+`databaseMode: "managed"` 表示开发命令可以管理固定的本地容器；`databaseMode: "external"` 表示所有命令都只连接 Profile URL，不调用 Docker。两种模式都检查 PostgreSQL 17。连接暂时不可用可进入降级状态；旧 schema、缺失 metadata、版本不符或结构不完整会在任何监听前终止启动。
 
-Gateway Token 不写入 runtime。它在每次进程启动时安全随机生成，只存在于当前进程和访问链接；遗留持久 token 会被忽略，并在下次 Profile 写入时清理。
+Gateway Token 不写入 runtime，也不是 runtime 的合法字段。它在每次进程启动时安全随机生成，只存在于当前进程和访问链接。
 
 ## 看懂配置状态
 
 **`invalid`** — 所选 Profile 缺少必填项或引用不一致。按页面列出的 issue 修正字段。
 
-**`review_required`** — 必填项有效，但平台、插件等可选部分仍需明确确认。阅读警告后决定补充或确认暂时留空。
+**`review_required`** — 必填项有效，但当前配置仍有需要明确确认的警告。阅读警告后决定补充或确认。
 
 **`restart_required`** — 磁盘上的所选配置已经更新，但当前进程仍使用启动时的旧对象。重启 Server 后生效。
 
 **`ready`** — 所选 Profile 可以用于创建 Runtime。
-
-**`setup_required`** — 配置库底层仍定义该状态，当前 Server 通常会在返回页面前自动 bootstrap；客户端保留它用于兼容。
 
 配置文件损坏、权限不安全、路径越界或符号链接不会被自动“修好”。Server 会拒绝危险读取或写入，避免覆盖原数据。
 
@@ -58,17 +58,23 @@ Gateway Token 不写入 runtime。它在每次进程启动时安全随机生成�
 
 **网关白名单规则** — 每行一条 `platform:group|private:target_id`。群聊目标是 group ID，私聊目标是 user ID；`platform` 与目标 ID 支持 `*`。规则按 OR 匹配，空列表拒绝所有平台消息，非法非空行会保存但不生效。Web 消息不经过该白名单。
 
-**启用 Memory** — 默认关闭。关闭时 Runtime 仍保留联想与 Prompt 的处理形状，但不会读取、写入、召回或主动提取实际 Memory；显式开启后才使用内置 PostgreSQL 稀疏召回。
+**启用 Memory** — 初始化 Profile 显式写为关闭；请求与文件都必须包含该字段。关闭时 Runtime 仍保留联想与 Prompt 的处理形状，但不会读取、写入、召回或主动提取实际 Memory；显式开启后才使用内置 PostgreSQL 稀疏召回。
 
-**可选配置确认** — 当前 UI 会要求明确确认平台与插件可以暂时留空；系统不会替用户静默接受警告。
+**配置警告确认** — 当前 UI 只允许确认 selected Profile 实际存在的警告；过期或未知 warning ID 会校验失败。
 
-当前表单用一个 ID 为 `default-provider` 的 OpenAI-compatible Provider 建立初始配置。底层 Profile 支持更完整的 Provider、平台和插件结构，但页面只呈现已经实现并验证的操作。
+当前表单用一个 ID 为 `default-provider` 的 OpenAI-compatible Provider 建立初始配置。底层 Profile 支持更完整的 Provider和平台结构，但页面只呈现已经实现并验证的操作。
+
+## 配置模块实例
+
+首次启动时，如果整个 `modules/` 不存在，Kaguya 会生成六个一方实例的完整 v1 文件。此后只读取文件，不补缺失内容：目录已存在时，缺少实例、出现未知实例、版本错误、身份不匹配或 settings 缺字段都会阻止启动。
+
+每个 `<KAGUYA_CONFIG_ROOT>/modules/<instanceId>/config.json` 必须显式包含 `version`、`instanceId`、`definitionId`、`enabled` 和完整 `settings`。修改后重启；当前不提供 HTTP 或 Web 管理接口。
 
 ## 管理多个 Profile
 
 一个 Registry 可以保存多个 Profile，但任意时刻只有一个全局 selected Profile 用于 Runtime。
 
-**新建** — 创建未选中的 Profile，并继承当前 selected Profile 的隐藏 runtime，避免切换后失去数据库与 Server 配置。AI、平台和插件仍从空值开始。
+**新建** — 创建未选中的 Profile，并继承当前 selected Profile 的隐藏 runtime，避免切换后失去数据库与 Server 配置。AI 和平台从空值开始，Memory 显式写为关闭。
 
 **编辑** — 对可见字段做完整替换，而不是局部 patch；Server 只把顶层 `gatewayAllowlist` 合并回隐藏 runtime，并原样保留其他 runtime 字段。目标 Profile 缺少 runtime 时会明确拒绝保存。保存当前选中的 Profile 会要求重启；编辑未选中的 Profile 通常不会影响正在运行的 Runtime。
 
@@ -100,6 +106,4 @@ Profile 保存成功和 Runtime 已采用新配置是两个时刻。Provider 客
 如果真实密钥进入 Git，应立即撤销或轮换，再检查访问记录。删除最新文件或补 `.gitignore` 不能清除历史泄漏。
 :::
 
-完整运行字段与退役变量见[环境变量与运行配置](../reference/environment-variables)，配置接口见[Profile API](../reference/profile-api)。旧版配置索引、`napcat.json` 和旧运行环境变量会被明确拒绝，不会自动迁移或删除。
-
-旧对象形式的 gateway allowlist 也不会迁移或兼容。升级已有 Profile 时，先在文件中把 `{platforms,userIds,groupIds}` 手工改为字符串数组，再通过 Web UI 管理。
+完整运行字段见[环境变量与运行配置](../reference/environment-variables)，配置接口见[Profile API](../reference/profile-api)。Registry 与 Profile 都使用严格的 `version: 1`，旧结构不迁移、不双读。

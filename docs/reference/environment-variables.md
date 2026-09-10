@@ -31,7 +31,7 @@ pnpm dev
 
 `runtime` 是 Profile JSON 中的隐藏管理字段。Web Profile API 不返回或接收完整 runtime；它只把 `gatewayAllowlist` 安全投影为 Profile 顶层字段，保存时仅合并回该 runtime 字段。数据库 URL、CORS、日志等其他 runtime 内容保持隐藏且原样保留。新建 Profile 继承当时 selected Profile 的 runtime。
 
-**`databaseMode`** — `managed` 或 `external`。旧 Profile 未声明时按 `external` 处理。
+**`databaseMode`** — 必填，值为 `managed` 或 `external`。
 
 **`databaseUrl`** — PostgreSQL 连接 URL。外部数据库只通过 Profile 文件配置；Server 与 demo 都从 selected Profile 读取。
 
@@ -70,34 +70,16 @@ pnpm dev
 
 示例只是 Profile 的局部形状，不能直接替换完整 Profile 文件。配置目录和数据库 URL 都按敏感数据保护。
 
-旧 `{ "platforms": [], "userIds": [], "groupIds": [] }` 结构不会迁移或兼容，也不会触发 Profile 版本提升。首次升级已有 Profile 时，必须先手工改成字符串数组，之后才能通过 Web UI 管理。
-
 ## Gateway Token
 
-Gateway Token 不属于持久配置。Server 每次启动用安全随机数生成新 token，只保存在当前进程和成功监听后打印的 `Kaguya access URL` fragment 中。重启后必须使用新链接。旧 Profile 中的 `gatewayToken` 仍可被解析，但会被忽略，并在下一次 Profile 写入时清理。
+Gateway Token 不属于持久配置，也不是 Profile runtime 的合法字段。Server 每次启动用安全随机数生成新 token，只保存在当前进程和成功监听后打印的 `Kaguya access URL` fragment 中。重启后必须使用新链接。
 
 ## NapCat
 
 NapCat 页面直接读写 selected Profile 的 `platforms` 条目。启用项的 `settings` 保存 adapter ID、WebSocket URL、self ID 与重连间隔，`credentials` 保存可选 access token。NapCat 断线重连不等于信息消费者或投递自动重试。
-
-旧 `KAGUYA_CONFIG_ROOT/napcat.json` 会触发稳定迁移错误；Server 不读取文件内容。删除该文件前，应先把需要保留的设置人工迁移到 selected Profile。
 
 ## 测试专用 PostgreSQL
 
 **`KAGUYA_TEST_DATABASE_URL`** — 只供 CI 的 `pnpm test:postgres` 子进程使用。显式提供时，命令绕过 Docker 和 Profile，只检查目标 PostgreSQL 17；普通 Server 和 demo 不读取它。
 
 本地不要设置此变量。`pnpm test:postgres` 会自动复用 `kaguya-postgres-17`，并把测试 URL 只注入 Vitest 子进程。各 suite 创建随机 `kaguya_test_*` schema，结束时只清理自己的 schema，不清空应用 schema、容器或数据卷。
-
-## 已退役并拒绝的变量
-
-检测到以下任一变量时，Server 会在监听前失败，只报告变量名，不读取或输出值：
-
-**旧数据库与 Server 变量** — `KAGUYA_DATABASE_URL`、`KAGUYA_HOST`、`KAGUYA_PORT`、`KAGUYA_GATEWAY_TOKEN`、`KAGUYA_WEB_DIST_PATH`、`KAGUYA_CORS_ORIGINS`、`KAGUYA_TRUST_PROXY`、`KAGUYA_RATE_LIMIT_MAX`、`KAGUYA_RATE_LIMIT_WINDOW_MS`。
-
-**旧 allowlist 变量** — `KAGUYA_GATEWAY_ALLOWLIST_PLATFORMS`、`KAGUYA_GATEWAY_ALLOWLIST_USER_IDS`、`KAGUYA_GATEWAY_ALLOWLIST_GROUP_IDS`。
-
-**旧 NapCat 变量** — `KAGUYA_NAPCAT_ENABLED`、`KAGUYA_NAPCAT_WS_URL`、`KAGUYA_NAPCAT_ACCESS_TOKEN`、`KAGUYA_NAPCAT_SELF_ID`、`KAGUYA_NAPCAT_RECONNECT_MS`。
-
-**旧日志变量** — `KAGUYA_LOG_LEVEL`、`KAGUYA_LOG_LEVELS`、`KAGUYA_LOG_FORMAT`、`KAGUYA_LOG_ASYNC`、`KAGUYA_LOG_DESTINATION`。
-
-**更早的多应用与模型变量** — `KAGUYA_API_HOST`、`KAGUYA_API_PORT`、`KAGUYA_API_DATABASE_PATH`、`KAGUYA_BOT_DATABASE_PATH`、`KAGUYA_LLM_API_KEY`、`KAGUYA_LLM_BASE_URL`、`KAGUYA_LLM_MODEL`。

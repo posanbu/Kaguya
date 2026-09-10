@@ -33,6 +33,7 @@ function profileWith(
       modelTiers: { light, heavy },
       providers,
     },
+    memory: { enabled: false },
     platforms: [
       {
         id: "platform-1",
@@ -42,7 +43,6 @@ function profileWith(
         settings: {},
       },
     ],
-    plugins: [{ id: "plugin-1", enabled: true, settings: {} }],
     ...overrides,
   });
 }
@@ -191,7 +191,7 @@ describe("inspectUserConfigProfile", () => {
             settings: {},
           },
         ],
-        { platforms: [], plugins: [] },
+        { platforms: [] },
       ),
     );
 

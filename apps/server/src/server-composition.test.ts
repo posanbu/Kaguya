@@ -23,11 +23,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
 
-import { KaguyaDatabase } from "@kaguya/database";
+import {
+  KaguyaDatabase,
+  UnsupportedDatabaseSchemaError,
+} from "@kaguya/database";
 import { createTestingDatabase } from "@kaguya/database/testing";
 import { FileUserConfigManager } from "@kaguya/config";
 import { closeLogger, createLogger, createModuleLogger } from "@kaguya/logger";
 import { createRepeatingDeterministicModel } from "@kaguya/llm/testing";
+import { createFirstPartyModuleConfigDefaults } from "@kaguya/modules";
 import { KaguyaRuntime } from "@kaguya/runtime";
 import { type CompiledPrompt, z } from "@kaguya/schema";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -134,7 +138,9 @@ describe("unified server composition", () => {
     const database = await createTestingDatabase();
     const runtime = new KaguyaRuntime({
       database,
-      ...createReplyComposition(undefined, { profile: "test" }),
+      ...createReplyComposition(undefined, {
+        moduleConfigs: createFirstPartyModuleConfigDefaults("test"),
+      }),
     });
     runtime.registerTransport({
       adapterId: "web.ui.main",
@@ -283,29 +289,7 @@ describe("unified server composition", () => {
     expect(spa.body).toContain("Kaguya UI");
     expect(health.json()).toEqual({ status: "ok" });
     expect(openapi.statusCode).toBe(200);
-    expect(openapi.json()).toMatchObject({
-      paths: {
-        "/api/v1/setup": {
-          get: {
-            responses: {
-              "200": {
-                content: {
-                  "application/json": {
-                    schema: {
-                      properties: {
-                        data: {
-                          required: ["status", "selectedProfileId", "profiles"],
-                        },
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    });
+    expect(openapi.json().paths).not.toHaveProperty("/api/v1/setup");
     expect(
       (
         await app.inject({
@@ -313,21 +297,8 @@ describe("unified server composition", () => {
           url: "/api/v1/setup",
           headers: { authorization: `Bearer ${gatewayToken}` },
         })
-      ).json(),
-    ).toEqual({
-      data: {
-        status: "ready",
-        selectedProfileId: "default",
-        profiles: [
-          {
-            id: "default",
-            name: "default",
-            createdAt: "",
-            updatedAt: "",
-          },
-        ],
-      },
-    });
+      ).statusCode,
+    ).toBe(404);
     expect(missingApi.statusCode).toBe(404);
     expect(missingApi.json()).toMatchObject({ error: { code: "not_found" } });
 
@@ -386,7 +357,7 @@ describe("unified server composition", () => {
       webDistPath: join(workspaceRoot, "web"),
     }).catch((thrown: unknown) => thrown);
 
-    expect(error).toMatchObject({ code: "CONFIG_UNSUPPORTED_VERSION" });
+    expect(error).toMatchObject({ code: "CONFIG_CORRUPT_STORE" });
     expect(createLoggerSpy).toHaveBeenCalledTimes(1);
     expect(closeLoggerSpy).toHaveBeenCalledWith(rootLogger);
     expect(stream.logs()).toEqual(
@@ -396,7 +367,7 @@ describe("unified server composition", () => {
           level: "fatal",
           phase: "configuration",
           errorType: "ConfigError",
-          errorCode: "CONFIG_UNSUPPORTED_VERSION",
+          errorCode: "CONFIG_CORRUPT_STORE",
         }),
         expect.objectContaining({ event: "server.stopping", level: "info" }),
         expect.objectContaining({ event: "server.stopped", level: "info" }),
@@ -420,10 +391,7 @@ describe("unified server composition", () => {
         readyProfileSettings("default-light", "default-heavy"),
       ),
     );
-    await manager.acknowledgeConfigurationWarnings(selectedProfileId, [
-      "platforms-empty",
-      "plugins-empty",
-    ]);
+    await manager.acknowledgeConfigurationWarnings(selectedProfileId, []);
     const databaseUrl =
       "postgresql://ledger:database-password@127.0.0.1:5432/kaguya";
     const connect = vi
@@ -467,7 +435,7 @@ describe("unified server composition", () => {
   });
 
   it("redacts credentials when the first database I/O fails during Runtime startup", async () => {
-    const root = mkdtempSync(join(tmpdir(), "kaguya-database-migrate-"));
+    const root = mkdtempSync(join(tmpdir(), "kaguya-database-prepare-"));
     roots.push(root);
     const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
     const selectedProfileId = manager.getSelectedProfileId();
@@ -478,15 +446,12 @@ describe("unified server composition", () => {
         readyProfileSettings("default-light", "default-heavy"),
       ),
     );
-    await manager.acknowledgeConfigurationWarnings(selectedProfileId, [
-      "platforms-empty",
-      "plugins-empty",
-    ]);
+    await manager.acknowledgeConfigurationWarnings(selectedProfileId, []);
     const databaseUrl =
       "postgresql://ledger:runtime-start-password@127.0.0.1:5432/kaguya";
     const database = await createTestingDatabase();
-    const migrate = vi
-      .spyOn(database, "migrate")
+    const prepareSchema = vi
+      .spyOn(database, "prepareSchema")
       .mockRejectedValueOnce(
         new Error(`authentication failed: ${databaseUrl}`),
       );
@@ -509,7 +474,7 @@ describe("unified server composition", () => {
       port: 0,
     });
 
-    expect(migrate).toHaveBeenCalledOnce();
+    expect(prepareSchema).toHaveBeenCalledOnce();
     expect(close).toHaveBeenCalledOnce();
     expect(server.runtime).toBeUndefined();
     expect(server.adapterHost.status().runtime.reason).toBe(
@@ -525,6 +490,33 @@ describe("unified server composition", () => {
     await closeLogger(rootLogger);
   });
 
+  it("treats an incompatible database schema as fatal before listening", async () => {
+    const root = tempWorkspaceRoot();
+    const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+    await manager.replaceProfile(
+      manager.getSelectedProfileId(),
+      readyProfileReplacement(
+        "default",
+        readyProfileSettings("default-light", "default-heavy"),
+      ),
+    );
+    const database = await createTestingDatabase();
+    vi.spyOn(database, "prepareSchema").mockRejectedValueOnce(
+      new UnsupportedDatabaseSchemaError(),
+    );
+    const close = vi.spyOn(database, "close");
+    vi.spyOn(KaguyaDatabase, "connect").mockResolvedValueOnce(database);
+
+    await expect(
+      startKaguyaServer({
+        ...config(root),
+        configRoot: root,
+        port: 0,
+      }),
+    ).rejects.toBeInstanceOf(UnsupportedDatabaseSchemaError);
+    expect(close).toHaveBeenCalledOnce();
+  });
+
   it("classifies non-database Runtime startup failures without leaking their details", async () => {
     const root = mkdtempSync(join(tmpdir(), "kaguya-runtime-startup-"));
     roots.push(root);
@@ -537,10 +529,7 @@ describe("unified server composition", () => {
         readyProfileSettings("default-light", "default-heavy"),
       ),
     );
-    await manager.acknowledgeConfigurationWarnings(selectedProfileId, [
-      "platforms-empty",
-      "plugins-empty",
-    ]);
+    await manager.acknowledgeConfigurationWarnings(selectedProfileId, []);
     const database = await createTestingDatabase();
     vi.spyOn(KaguyaDatabase, "connect").mockResolvedValueOnce(database);
     const secret = "postgresql://module:module-secret@db.internal/kaguya";
@@ -590,10 +579,7 @@ describe("unified server composition", () => {
         readyProfileSettings("default-light", "default-heavy"),
       ),
     );
-    await manager.acknowledgeConfigurationWarnings(selectedProfileId, [
-      "platforms-empty",
-      "plugins-empty",
-    ]);
+    await manager.acknowledgeConfigurationWarnings(selectedProfileId, []);
     const webDistPath = join(root, "web");
     mkdirSync(webDistPath, { recursive: true });
     writeFileSync(join(webDistPath, "index.html"), "<main>Kaguya UI</main>");
@@ -631,9 +617,9 @@ describe("unified server composition", () => {
       mkdirSync(webDistPath, { recursive: true });
       writeFileSync(join(webDistPath, "index.html"), "<main>Kaguya</main>");
       const database = await createTestingDatabase();
-      const migrate = vi.spyOn(database, "migrate");
+      const prepareSchema = vi.spyOn(database, "prepareSchema");
       if (databaseFails)
-        migrate.mockRejectedValueOnce(new Error("database-secret"));
+        prepareSchema.mockRejectedValueOnce(new Error("database-secret"));
       const connect = vi
         .spyOn(KaguyaDatabase, "connect")
         .mockResolvedValueOnce(database);
@@ -656,7 +642,7 @@ describe("unified server composition", () => {
       });
       try {
         expect(connect).toHaveBeenCalledOnce();
-        expect(migrate).toHaveBeenCalledOnce();
+        expect(prepareSchema).toHaveBeenCalledOnce();
         expect(startRuntime).not.toHaveBeenCalled();
         expect(startAdapter).toHaveBeenCalledOnce();
         expect(server.adapterHost.status()).toMatchObject({
@@ -886,7 +872,7 @@ describe("unified server composition", () => {
     );
     await manager.acknowledgeConfigurationWarnings(
       manager.getSelectedProfileId(),
-      ["platforms-empty", "plugins-empty"],
+      [],
     );
     await manager.createProfile("incomplete");
 
@@ -921,7 +907,7 @@ describe("unified server composition", () => {
     );
     await manager.acknowledgeConfigurationWarnings(
       manager.getSelectedProfileId(),
-      ["platforms-empty", "plugins-empty"],
+      [],
     );
     const selected = await manager.createProfile("selected");
     await manager.replaceProfile(
@@ -931,10 +917,7 @@ describe("unified server composition", () => {
         readyProfileSettings("selected-light", "selected-heavy"),
       ),
     );
-    await manager.acknowledgeConfigurationWarnings(selected.id, [
-      "platforms-empty",
-      "plugins-empty",
-    ]);
+    await manager.acknowledgeConfigurationWarnings(selected.id, []);
     await manager.selectProfile(selected.id);
 
     const resolver = createRuntimeModelSelectionResolver(
@@ -962,7 +945,7 @@ describe("unified server composition", () => {
     const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
     await manager.replaceProfile(manager.getSelectedProfileId(), {
       name: "default",
-      acknowledgedWarnings: ["platforms-empty", "plugins-empty"],
+      acknowledgedWarnings: [],
       ai: {
         defaultProviderId: "provider-1",
         modelTiers: {
@@ -981,12 +964,12 @@ describe("unified server composition", () => {
           },
         ],
       },
+      memory: { enabled: false },
       platforms: [],
-      plugins: [],
     });
     await manager.acknowledgeConfigurationWarnings(
       manager.getSelectedProfileId(),
-      ["platforms-empty", "plugins-empty"],
+      [],
     );
 
     createRuntimeModelSelectionResolver(await selectedProfile(manager));
@@ -1022,7 +1005,7 @@ describe("unified server composition", () => {
     );
     await manager.acknowledgeConfigurationWarnings(
       manager.getSelectedProfileId(),
-      ["platforms-empty", "plugins-empty"],
+      [],
     );
     const resolver: RuntimeModelSelectionResolver =
       createRuntimeModelSelectionResolver(await selectedProfile(manager));
@@ -1053,11 +1036,14 @@ describe("unified server composition", () => {
       light: createRepeatingDeterministicModel({ text: "from-provider-one" }),
       heavy: createRepeatingDeterministicModel({ text: "from-provider-two" }),
     };
-    const composition = createReplyComposition(({ modelTier }) => ({
-      providerId: modelTier === "light" ? "provider-one" : "provider-two",
-      modelId: "shared-model",
-      model: models[modelTier],
-    }));
+    const composition = createReplyComposition(
+      ({ modelTier }) => ({
+        providerId: modelTier === "light" ? "provider-one" : "provider-two",
+        modelId: "shared-model",
+        model: models[modelTier],
+      }),
+      { moduleConfigs: createFirstPartyModuleConfigDefaults("test") },
+    );
     const prompt: CompiledPrompt = {
       kind: "reply",
       text: "hello",
@@ -1097,9 +1083,17 @@ describe("unified server composition", () => {
   });
 
   it("keeps Memory disabled unless composition explicitly enables it", () => {
-    expect(createReplyComposition().memory).toEqual({ enabled: false });
     expect(
-      createReplyComposition(undefined, { memoryEnabled: true }).memory,
+      createReplyComposition(undefined, {
+        memoryEnabled: false,
+        moduleConfigs: createFirstPartyModuleConfigDefaults("test"),
+      }).memory,
+    ).toEqual({ enabled: false });
+    expect(
+      createReplyComposition(undefined, {
+        memoryEnabled: true,
+        moduleConfigs: createFirstPartyModuleConfigDefaults("test"),
+      }).memory,
     ).toEqual({ enabled: true });
   });
 });
@@ -1128,8 +1122,8 @@ function readyProfileSettings(lightModelId: string, heavyModelId: string) {
         },
       ],
     },
+    memory: { enabled: false },
     platforms: [],
-    plugins: [],
   };
 }
 
@@ -1139,7 +1133,7 @@ function readyProfileReplacement(
 ) {
   return {
     name,
-    acknowledgedWarnings: ["platforms-empty", "plugins-empty"],
+    acknowledgedWarnings: [],
     ...settings,
   };
 }

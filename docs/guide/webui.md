@@ -23,7 +23,7 @@ Kaguya access URL: http://127.0.0.1:3000/#gatewayToken=<本次启动生成的 to
 
 ## 页面如何决定显示内容
 
-页面只从 `#gatewayToken=` fragment 读取 token，再携带 Bearer 认证请求 `/api/v1/setup`，取得 readiness 和 Profile 摘要。随后进入以下状态之一：
+页面只从 `#gatewayToken=` fragment 读取 token，再携带 Bearer 认证请求 `/api/v1/profiles`，取得 selected Profile 的 readiness 和 Profile 摘要。随后进入以下状态之一：
 
 **访问受限** — 根地址没有 token，或链接来自上一次 Server 启动；页面要求重新打开当前终端中的完整链接。
 
@@ -41,7 +41,7 @@ Kaguya access URL: http://127.0.0.1:3000/#gatewayToken=<本次启动生成的 to
 
 ## Gateway Token 与访问边界
 
-Gateway Token 保护 setup 状态、Profile、NapCat 和消息接口。Server 每次启动生成新的全权限 token，并只通过监听成功后打印的 URL 交给用户。前端保留 fragment 以支持刷新，只在页面内存中使用 token，不写入浏览器存储。fragment 不随 HTTP 请求或 Referer 发送，前端会显式把 token 放入 `Authorization` 请求头。
+Gateway Token 保护 Profile readiness、Profile 管理、NapCat 和消息接口。Server 每次启动生成新的全权限 token，并只通过监听成功后打印的 URL 交给用户。前端保留 fragment 以支持刷新，只在页面内存中使用 token，不写入浏览器存储。fragment 不随 HTTP 请求或 Referer 发送，前端会显式把 token 放入 `Authorization` 请求头。
 
 Server 只允许监听 selected Profile `runtime.host` 中的 `127.0.0.1`、`localhost` 或 `::1`；其他值会拒绝启动。完整访问链接等同管理权限，请勿分享。
 

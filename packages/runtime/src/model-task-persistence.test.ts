@@ -102,7 +102,7 @@ const activation = {
 const catalog = defineInformationModuleCatalog(
   defineInformationModule({
     manifest: {
-      protocolVersion: 2,
+      protocolVersion: 1,
       summary: "Test information module.",
       definitionId: activation.definitionId,
       moduleVersion: "1.0.0",

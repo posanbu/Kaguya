@@ -1,16 +1,15 @@
 /**
  * 架构说明：本模块是 Web 端唯一的 Kaguya HTTP 客户端门面，
- * 负责把界面动作翻译成显式的 `/api/v1/setup` 与 Profile Registry 请求。
- * 它必须只暴露最小必需的 wire contract：读取受保护的 setup 状态、发送消息、
+ * 负责把界面动作翻译成显式的 Profile Registry 请求。
+ * 它必须只暴露最小必需的 wire contract：读取受保护的 Profile readiness、发送消息、
  * 检查健康，以及对 Profile 集合执行列出、创建、读取、完整替换、
  * 显式选择和删除；所有请求都要在本地先校验 token，再拼出精确的
  * method / URL / Bearer 头 / JSON body，避免把鉴权或隐藏字段交给浏览器猜测。
  * 主要职责：为 App 及后续 Profile 管理页面提供稳定的 typed API，
  * 同时保留旧的消息与健康检查路径；Profile 请求必须编码 path 参数，
- * setup 状态要能返回安全的 Registry 元数据，但不能包含任何 secret。
+ * Profile 状态要能返回安全的 Registry 元数据，但不能包含任何 secret。
  * 代码库关系：该文件依赖 `@kaguya/config` 的 Profile JSON 结构作为返回值
- * 类型参考，但不会持有任何持久化密钥；Task 6 的 editor helper 会把
- * 表单字段转成完整的替换体，Task 7 再消费这里的客户端函数。
+ * 类型参考，但不会持有任何持久化密钥；editor helper 会把表单字段转成完整的替换体。
  * 输入输出与副作用：所有函数都通过可注入 `fetch` 实现发起请求，
  * 默认使用全局 `fetch`；若 token 为空、网络断开、响应格式不匹配或
  * 服务端返回错误 JSON，这里会抛出 `GatewayRequestError`。
@@ -81,12 +80,6 @@ export interface UserConfigProfilePlatform {
   readonly settings: JsonObject;
 }
 
-export interface UserConfigProfilePlugin {
-  readonly id: string;
-  readonly enabled: boolean;
-  readonly settings: JsonObject;
-}
-
 export interface UserConfigProfile {
   readonly version: 1;
   readonly id: string;
@@ -110,7 +103,6 @@ export interface UserConfigProfile {
     readonly enabled: boolean;
   };
   readonly platforms: readonly UserConfigProfilePlatform[];
-  readonly plugins: readonly UserConfigProfilePlugin[];
   readonly review?: {
     readonly acknowledgedWarnings: readonly string[];
   };
@@ -128,20 +120,8 @@ export interface ConfigurationWarning {
   readonly message: string;
 }
 
-/**
- * 说明：Web 客户端保留 `setup_required` 这个状态，是为了对齐底层配置库在
- * Profile Registry 初始化之前的只读 inspect 契约。正常的 Kaguya Server 启动流程会先创建
- * 空 registry，因此 `/api/v1/setup` 通常返回 `invalid`、`review_required`、
- * `restart_required` 或 `ready`，但客户端仍接受 `setup_required`，以兼容
- * 更底层的管理调用。
- */
 export interface ConfigurationStatus {
-  readonly status:
-    | "setup_required"
-    | "restart_required"
-    | "ready"
-    | "invalid"
-    | "review_required";
+  readonly status: "restart_required" | "ready" | "invalid" | "review_required";
   readonly selectedProfileId: string;
   readonly profiles: readonly ProfileMetadata[];
   readonly issues?: readonly ConfigurationIssue[];
@@ -188,7 +168,6 @@ export interface ReplaceProfileInput {
     readonly enabled: boolean;
   };
   readonly platforms: readonly UserConfigProfilePlatform[];
-  readonly plugins: readonly UserConfigProfilePlugin[];
 }
 
 export type ProfileReplacementInput = ReplaceProfileInput;
@@ -252,31 +231,10 @@ export async function saveNapCatSettings(
   return payload.data;
 }
 
-export async function getConfigurationStatus(
-  config: GatewayConfig,
-  fetchImplementation: typeof fetch = fetch,
-): Promise<ConfigurationStatus> {
-  const response = await requestAuthenticatedJson(
-    config,
-    "/api/v1/setup",
-    { method: "GET" },
-    fetchImplementation,
-  );
-  const payload = await readJson(response);
-  if (!response.ok || !isConfigurationStatusResponse(payload)) {
-    throw new GatewayRequestError(
-      `无法读取配置状态（HTTP ${response.status}）`,
-      "configuration_status_failed",
-      response.status,
-    );
-  }
-  return payload.data;
-}
-
 export async function listProfiles(
   config: GatewayConfig,
   fetchImplementation: typeof fetch = fetch,
-): Promise<ProfileRegistryMetadata> {
+): Promise<ConfigurationStatus> {
   const response = await requestAuthenticatedJson(
     config,
     "/api/v1/profiles",
@@ -284,10 +242,10 @@ export async function listProfiles(
     fetchImplementation,
   );
   const payload = await readJson(response);
-  if (!response.ok || !isProfileRegistryMetadataResponse(payload)) {
+  if (!response.ok || !isConfigurationStatusResponse(payload)) {
     throw new GatewayRequestError(
       `无法读取 Profile 集合（HTTP ${response.status}）`,
-      "profiles_failed",
+      "profile_registry_status_failed",
       response.status,
     );
   }
@@ -617,13 +575,9 @@ function isConfigurationStatusResponse(
   }
   const status = value.data.status;
   if (
-    ![
-      "setup_required",
-      "restart_required",
-      "ready",
-      "invalid",
-      "review_required",
-    ].includes(String(status))
+    !["restart_required", "ready", "invalid", "review_required"].includes(
+      String(status),
+    )
   ) {
     return false;
   }
@@ -632,18 +586,6 @@ function isConfigurationStatusResponse(
     isProfileMetadataArray(value.data.profiles) &&
     isOptionalConfigurationIssueArray(value.data.issues) &&
     isOptionalConfigurationWarningArray(value.data.warnings)
-  );
-}
-
-function isProfileRegistryMetadataResponse(
-  value: unknown,
-): value is { data: ProfileRegistryMetadata } {
-  if (!isRecord(value) || !isRecord(value.data)) {
-    return false;
-  }
-  return (
-    typeof value.data.selectedProfileId === "string" &&
-    isProfileMetadataArray(value.data.profiles)
   );
 }
 
@@ -740,7 +682,7 @@ function isUserConfigProfile(value: unknown): value is UserConfigProfile {
     isProfileAi(value.ai) &&
     isProfileMemory(value.memory) &&
     isProfilePlatformArray(value.platforms) &&
-    isProfilePluginArray(value.plugins) &&
+    !("plugins" in value) &&
     !("runtime" in value) &&
     (value.review === undefined || isProfileReview(value.review))
   );
@@ -813,21 +755,6 @@ function isProfilePlatform(value: unknown): value is UserConfigProfilePlatform {
     typeof value.type === "string" &&
     typeof value.enabled === "boolean" &&
     isJsonObject(value.credentials) &&
-    isJsonObject(value.settings)
-  );
-}
-
-function isProfilePluginArray(
-  value: unknown,
-): value is readonly UserConfigProfilePlugin[] {
-  return Array.isArray(value) && value.every(isProfilePlugin);
-}
-
-function isProfilePlugin(value: unknown): value is UserConfigProfilePlugin {
-  return (
-    isRecord(value) &&
-    typeof value.id === "string" &&
-    typeof value.enabled === "boolean" &&
     isJsonObject(value.settings)
   );
 }

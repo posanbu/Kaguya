@@ -22,7 +22,7 @@ const key = (value: unknown) => JSON.stringify(value);
 
 export const identityModule = defineInformationModule({
   manifest: {
-    protocolVersion: 2,
+    protocolVersion: 1,
     moduleVersion: "1.0.0",
     definitionId: "core.identity.normalize",
     displayName: "Identity normalization",

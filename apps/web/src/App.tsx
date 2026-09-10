@@ -2,7 +2,7 @@
  * 功能概述：本文件承载 WebUI 的顶层状态机，在访问链接认证、Profile 管理、
  * 待重启提示与消息聊天之间做显式切换，落实“全局 selected Profile 唯一生效、
  * 切换后必须重启 Runtime”的产品契约。
- * 主要职责：`App` 负责从当前 URL fragment 获取网关 token，再读取 `/api/v1/setup`，
+ * 主要职责：`App` 负责从当前 URL fragment 获取网关 token，再读取 `/api/v1/profiles`，
  * 根据 selected Profile 的 readiness 决定当前视图，并在 ready 状态下
  * 提供聊天入口与 Settings
  * 按钮；`ProfileManagementScreen` 负责展示 Profile 元数据列表、按 ID 加载完整
@@ -11,7 +11,7 @@
  * readiness 呈现与消息投递反馈。
  * 代码库关系：本文件消费 `api.ts` 的受保护状态、消息接口与 Profile Registry 管理
  * API，以及 `profile-editor.ts` 的纯函数合并逻辑；样式由同目录 `styles.css`
- * 提供，服务端实现位于 `apps/server/src/app.ts` 与 `setup.ts`。
+ * 提供，服务端实现位于 `apps/server/src/app.ts` 与 `configuration-management.ts`。
  * 输入输出与副作用：gateway token 仅从 fragment 读取并保留在页面内存中；所有
  * Profile 修改都通过 HTTP 请求落到服务端，不在浏览器端
  * 推断默认 Profile；当 selected
@@ -54,7 +54,6 @@ import {
   GatewayConfig,
   GatewayRequestError,
   GATEWAY_UNAUTHORIZED_EVENT,
-  getConfigurationStatus,
   getNapCatStatus,
   getProfile,
   listProfiles,
@@ -121,7 +120,7 @@ export function App() {
   const loadConfigurationStatus = async (options?: {
     readonly keepProfilesOpen?: boolean;
   }) => {
-    const status = await getConfigurationStatus({ token });
+    const status = await listProfiles({ token });
     setConfigurationStatus(status);
     setConfigurationView((current) =>
       deriveConfigurationView(
@@ -138,7 +137,7 @@ export function App() {
       return;
     }
     let active = true;
-    void getConfigurationStatus({ token }).then(
+    void listProfiles({ token }).then(
       (status) => {
         if (!active) {
           return;
@@ -748,7 +747,7 @@ function ProfileManagementScreen({
 
             <ReadinessPanel
               selectedProfileId={selectedProfileId}
-              status={statusSnapshot?.status ?? "setup_required"}
+              status={statusSnapshot?.status ?? "invalid"}
               issues={readinessIssues}
               warnings={readinessWarnings}
             />
@@ -1410,11 +1409,7 @@ export function deriveConfigurationView(
   current: ConfigurationView,
   keepProfilesOpen: boolean,
 ): ConfigurationView {
-  if (
-    status.status === "setup_required" ||
-    status.status === "invalid" ||
-    status.status === "review_required"
-  ) {
+  if (status.status === "invalid" || status.status === "review_required") {
     return "profiles";
   }
   if (status.status === "restart_required") {
@@ -1462,8 +1457,6 @@ export function readRegistryMetadata(
 
 function statusLabel(status: ConfigurationStatus["status"]): string {
   switch (status) {
-    case "setup_required":
-      return "Setup required";
     case "invalid":
       return "Invalid";
     case "review_required":
@@ -1485,9 +1478,6 @@ function errorMessage(error: unknown): string {
     }
     if (error.code === "rate_limited") {
       return "请求过于频繁，请稍后再试";
-    }
-    if (error.code === "configuration_setup_required") {
-      return "请先完成运行配置";
     }
     if (error.code === "configuration_unavailable") {
       return "配置仓库当前不可用";

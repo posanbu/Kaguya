@@ -28,6 +28,7 @@ import {
 const metadata = {
   taskId: "test.task",
   version: "1",
+  outputMode: "object" as const,
   sourceInformationId: "source",
   contextInformationId: "context",
   contextInformationIds: ["source"],
@@ -39,12 +40,33 @@ const metadata = {
 };
 
 describe("runtime information kinds", () => {
-  it("defaults historical Model Task metadata to object output", () => {
+  it("requires explicit Model Task output mode", () => {
     const parsed = modelTaskRequestedInformationKind.payloadSchema.parse({
       ...metadata,
       prompt: { kind: "memory", text: "", fragments: [], provenance: [] },
     });
     expect(parsed.outputMode).toBe("object");
+  });
+
+  it("rejects missing output mode and safe-error stage", () => {
+    const { outputMode: _outputMode, ...withoutOutputMode } = metadata;
+    expect(
+      modelTaskRequestedInformationKind.payloadSchema.safeParse({
+        ...withoutOutputMode,
+        prompt: { kind: "memory", text: "", fragments: [], provenance: [] },
+      }).success,
+    ).toBe(false);
+    expect(
+      modelTaskFailedInformationKind.payloadSchema.safeParse({
+        ...metadata,
+        durationMs: 1,
+        error: {
+          name: "ModelTaskError",
+          kind: "retryable",
+          message: "Model task generation failed",
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it("accepts canonical prompt fragment metadata", () => {

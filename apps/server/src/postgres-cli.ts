@@ -111,7 +111,7 @@ export async function runPostgresCli(
     if (explicitTestUrl) {
       await checkPostgresTestDatabase(databaseUrl);
     } else {
-      await checkManagedPostgresDatabase(databaseUrl, { migrate: false });
+      await checkManagedPostgresDatabase(databaseUrl, { prepareSchema: false });
     }
     await assertPostgresTestManifestComplete(repositoryRoot);
     return spawnInteractive(

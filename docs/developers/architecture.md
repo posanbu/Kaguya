@@ -92,17 +92,17 @@ core.runtime.context
 
 ## 消费者失败不会回滚已提交事实
 
-Server 启动时打开 Profile Registry，检查全局 selected Profile，并先验证数据库连接、PostgreSQL 17、migration 与 Runtime Kind。随后才为 light/heavy target 创建模型客户端。Provider key 只存在于权限保护的 Profile JSON、配置管理器和 provider factory，不进入模块 settings、信息原子、Prompt 或日志。AI 与数据库检查独立执行。下游不可用时，HTTP 和 Adapter 仍启动，Web 返回 503，NapCat 丢弃消息。完整流程见[配置生命周期](./configuration-lifecycle)。
+Server 启动时打开 Profile Registry 与六个显式模块实例文件，检查全局 selected Profile，并先验证数据库连接、PostgreSQL 17、严格 schema v1 与 Runtime Kind。随后才为 light/heavy target 创建模型客户端。Provider key 只存在于权限保护的 Profile JSON、配置管理器和 provider factory，不进入模块 settings、信息原子、Prompt 或日志。AI 与数据库连接检查独立执行；schema 不兼容则在任何监听前退出。完整流程见[配置生命周期](./configuration-lifecycle)。
 
 `consumer.failed` 的消费者若再次失败，或失败事实无法提交，Core 只交给 bootstrap 诊断边界，不递归生成失败原子。因此系统没有自动重试，也没有内建工作队列。
 
 ## 配置、模型与数据边界
 
-selected Profile 的 `runtime.databaseUrl` 是 PostgreSQL 连接真值，`databaseMode` 区分开发工具可管理的本地实例与完全外部的实例。旧 Profile 未声明 mode 时按 `external` 处理。Server 通过 `KaguyaDatabase.connect()` 建立连接并拒绝非 PostgreSQL 17；Runtime 启动时在一个数据库事务中执行可重复的迁移。`information_atoms.payload` 使用 `JSONB`，Kind、原子和显式引用由外键保护；原子、引用与日志投影 outbox 在同一事务写入，随后才由 outbox runner 投影日志。原子与引用由数据库触发器保持 append-only。旧 SQLite 数据不会自动迁移。
+selected Profile 的 `runtime.databaseUrl` 是 PostgreSQL 连接真值，必填的 `databaseMode` 区分开发工具可管理的本地实例与完全外部的实例。Server 通过 `KaguyaDatabase.connect()` 建立连接并拒绝非 PostgreSQL 17；Runtime 启动时在一个数据库事务中执行可重复的迁移。`information_atoms.payload` 使用 `JSONB`，Kind、原子和显式引用由外键保护；原子、引用与日志投影 outbox 在同一事务写入，随后才由 outbox runner 投影日志。原子与引用由数据库触发器保持 append-only。
 
 Profile Registry 维护一个全局 `selectedProfileId`。Server 在启动时只读取该 Profile 并构造共享 light/heavy 模型解析器；模块 settings、入站 payload 和信息原子不携带 `profileId`，也没有回退到其他 Profile、Provider 或模型的路径。
 
-同一 Profile 还提供 host、port、Web 路径、CORS、可信代理、限流、日志、allowlist、Memory、平台与插件。应用环境只定位 `KAGUYA_CONFIG_ROOT`。Gateway Token 是每次启动生成的临时 capability，不写入 Profile。NapCat UI/API 直接读写 selected Profile 的平台条目；旧 `napcat.json` 和运行环境变量只触发脱敏迁移错误。
+同一 Profile 还提供 host、port、Web 路径、CORS、可信代理、限流、日志、allowlist、Memory、平台与插件。应用环境只定位 `KAGUYA_CONFIG_ROOT`。Gateway Token 是每次启动生成的临时 capability，不写入 Profile。NapCat UI/API 只读写 selected Profile 的平台条目。
 
 ## 启动与关闭顺序
 

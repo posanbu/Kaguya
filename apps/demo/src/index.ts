@@ -6,15 +6,22 @@
  * 派生原子并输出排序后计数；生产默认使用 UUID，测试可注入确定性 ID；`main` 负责连接/关闭数据库。
  * 代码库关系：数据库连接与 Server 使用同一 `KaguyaDatabase` 入口，
  * Web 正规化器来自 platform-adapters，Runtime 是唯一 Core ingress 实现与 DAG 组合者。
- * 输入输出与副作用：CLI 会建立一个 PostgreSQL 连接、执行迁移/账本写入并输出统计；
+ * 输入输出与副作用：CLI 会建立一个 PostgreSQL 连接、准备 schema、写入账本并输出统计；
  * 连接或运行失败只输出安全错误类型，不回显数据库 URL 或原始异常。
  */
 import { createReplyComposition } from "./runtime-composition.js";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { FileUserConfigManager } from "@kaguya/config";
+import {
+  FileUserConfigManager,
+  loadModuleInstanceConfigs,
+} from "@kaguya/config";
 import { KaguyaDatabase } from "@kaguya/database";
+import {
+  createFirstPartyModuleConfigDefaults,
+  type FirstPartyModuleInstanceConfig,
+} from "@kaguya/modules";
 import {
   normalizeWebInboundMessage,
   type InboundReceipt,
@@ -23,6 +30,7 @@ import { KaguyaRuntime } from "@kaguya/runtime";
 
 export interface RunDemoOptions {
   readonly database: KaguyaDatabase;
+  readonly moduleConfigs: readonly FirstPartyModuleInstanceConfig[];
   readonly writeLine?: (line: string) => void;
   readonly informationIdGenerator?: () => string;
 }
@@ -34,11 +42,6 @@ const defaultConfigRoot = fileURLToPath(
 export async function readDemoDatabaseUrl(
   environment: NodeJS.ProcessEnv = process.env,
 ): Promise<string> {
-  if (environment.KAGUYA_DATABASE_URL?.trim()) {
-    throw new Error(
-      "KAGUYA_DATABASE_URL is not supported; configure the selected Profile runtime",
-    );
-  }
   const configRoot =
     environment.KAGUYA_CONFIG_ROOT?.trim() || defaultConfigRoot;
   const readiness = await FileUserConfigManager.inspect({
@@ -59,7 +62,9 @@ export async function runDemo(
   options: RunDemoOptions,
 ): Promise<InboundReceipt> {
   const runtime = new KaguyaRuntime({
-    ...createReplyComposition(undefined, { profile: "test" }),
+    ...createReplyComposition(undefined, {
+      moduleConfigs: options.moduleConfigs,
+    }),
     database: options.database,
     now: () => new Date("2026-09-04T00:00:00.000Z"),
     informationIdGenerator: options.informationIdGenerator ?? randomUUID,
@@ -142,14 +147,25 @@ export async function runDemo(
 }
 
 async function main(): Promise<void> {
+  const configRoot = readDemoConfigRoot();
+  const moduleConfigs = await loadModuleInstanceConfigs({
+    rootDir: configRoot,
+    defaults: createFirstPartyModuleConfigDefaults("production"),
+  });
   const database = await KaguyaDatabase.connect({
     connectionString: await readDemoDatabaseUrl(),
   });
   try {
-    await runDemo({ database });
+    await runDemo({ database, moduleConfigs });
   } finally {
     await database.close();
   }
+}
+
+function readDemoConfigRoot(
+  environment: NodeJS.ProcessEnv = process.env,
+): string {
+  return environment.KAGUYA_CONFIG_ROOT?.trim() || defaultConfigRoot;
 }
 
 if (process.argv[1] !== undefined) {

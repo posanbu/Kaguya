@@ -2,7 +2,7 @@
  * 功能概述：本测试文件钉住 WebUI 顶层状态机里的两个关键回归点，
  * 避免 Profile 管理视图被错误地跳过，或在 token/profile 切换时因为
  * 过期请求而让编辑器永久停留在 loading 状态。
- * 主要职责：验证匿名 readiness 为 `setup_required` 时仍然进入
+ * 主要职责：验证 invalid readiness 仍然进入
  * Profile 管理页；验证清空已加载 Profile 的辅助逻辑会同时关闭
  * `loadingProfile`，从而为后续重新加载或留在未鉴权占位态留下正确状态。
  * 代码库关系：该文件直接保护 `apps/web/src/App.tsx` 中的纯状态辅助函数，
@@ -30,11 +30,12 @@ describe("readGatewayToken", () => {
 });
 
 describe("deriveConfigurationView", () => {
-  it("routes setup_required into profile management instead of chat", () => {
+  it("routes invalid readiness into profile management instead of chat", () => {
     expect(
       deriveConfigurationView(
         {
-          status: "setup_required",
+          status: "invalid",
+          issues: [],
           selectedProfileId: "default",
           profiles: [],
         },

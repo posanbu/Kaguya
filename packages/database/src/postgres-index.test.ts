@@ -1,10 +1,10 @@
 /**
- * 功能概述：本测试覆盖 PostgreSQL 数据库入口、append-only migration 触发器与真实服务器索引。
+ * 功能概述：本测试覆盖 PostgreSQL 数据库入口、append-only schema 触发器与真实服务器索引。
  * 主要职责：确认最终 `KaguyaDatabase.connect` 入口，以及直接 UPDATE/DELETE atom
  * 被数据库层拒绝；跨后端 ledger 行为已迁移至 `information-ledger.contract.ts`。
  * 代码库关系：PGlite 用例消费 `createTestingDatabase()`；真实 PostgreSQL 用例消费
  * `createPostgresTestingDatabase()`，并由根 `test:postgres` 命令执行。共享 contract 验证账本行为。
- * 输入输出与副作用：每个用例创建、迁移并关闭独立测试库；真实服务器 schema 会由 factory 清理。
+ * 输入输出与副作用：每个用例创建、准备并关闭独立测试库；真实服务器 schema 会由 factory 清理。
  */
 import { describe, expect, it } from "vitest";
 
@@ -28,7 +28,7 @@ const requirePostgres = process.env.KAGUYA_REQUIRE_POSTGRES_TESTS === "1";
 
 if (requirePostgres && connectionString === undefined) {
   throw new Error(
-    "KAGUYA_TEST_DATABASE_URL is required when PostgreSQL migration tests are required",
+    "KAGUYA_TEST_DATABASE_URL is required when PostgreSQL schema tests are required",
   );
 }
 
@@ -74,7 +74,7 @@ describe("KaguyaDatabase", () => {
     "rejects direct UPDATE and DELETE statements on stored atoms",
     async () => {
       const database = await createTestingDatabase();
-      await database.migrate();
+      await database.prepareSchema();
       await database.information.synchronizeKinds([plainKind.kind]);
 
       const atom = freezeInformationAtom({
@@ -119,13 +119,13 @@ function versionDatabase(serverVersion: string) {
   };
 }
 
-describePostgres("KaguyaDatabase migrations (PostgreSQL)", () => {
+describePostgres("KaguyaDatabase schema (PostgreSQL)", () => {
   it(
     "creates the required kind, time, and reference indexes on PostgreSQL",
     async () => {
       const database = await createPostgresTestingDatabase(connectionString!);
       try {
-        await database.migrate();
+        await database.prepareSchema();
         const indexes = await database.sql.query<{
           indexname: string;
           indexdef: string;

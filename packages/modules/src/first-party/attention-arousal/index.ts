@@ -33,10 +33,10 @@ const SHORT_REACTIONS = new Set([
 
 export const attentionArousalSettingsSchema = z
   .object({
-    threshold: z.number().int().min(0).max(100).default(80),
-    deferMs: z.number().int().min(0).default(15_000),
-    policyDigest: z.string().min(1).default("attention-arousal:maibot-v1"),
-    settingsDigest: z.string().min(1).default("attention-arousal:default-v1"),
+    threshold: z.number().int().min(0).max(100),
+    deferMs: z.number().int().min(0),
+    policyDigest: z.string().min(1),
+    settingsDigest: z.string().min(1),
   })
   .strict();
 
@@ -139,7 +139,7 @@ export function decideAttentionArousal(
 
 export const attentionArousalModule = defineInformationModule({
   manifest: {
-    protocolVersion: 2,
+    protocolVersion: 1,
     moduleVersion: "1.0.0",
     definitionId: "agent.attention.arousal",
     displayName: "Attention Arousal",

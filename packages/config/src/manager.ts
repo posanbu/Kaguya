@@ -5,16 +5,16 @@
  * 主要职责：`open`/`inspect` 负责在不回退到旧版默认语义的前提下读取现有仓库；
  * 其中 `inspect` 必须保持严格只读，只能通过 `lstat` 与 `O_NOFOLLOW` 打开的
  * 文件句柄检查现存 root/index/profile，而不能执行 mkdir/chmod 等目录准备写操作；
- * `bootstrap` 仅在根目录缺失或为空时创建保留 `default` Profile 与 v3 index，
+ * `bootstrap` 仅在 Registry 路径尚不存在时创建保留 `default` Profile 与 v1 index，
  * 且按“先写 Profile、后发布 index”的顺序落盘；`createProfile` 只创建空 Profile；
  * `replaceProfile` 以完整替换方式写入 Profile 并在 index 写失败时回滚旧内容；
  * `selectProfile` 只更新选中元数据；`deleteProfile` 保护保留 `default` 与当前选中项；
  * `resolveProfileById` 强制调用方显式提供 ID 并在返回前执行 readiness 校验。
- * 代码库关系：本文件消费 `model.ts` 中的 v3 schema、`readiness.ts` 的 readiness
+ * 代码库关系：本文件消费 `model.ts` 中的 v1 schema、`readiness.ts` 的 readiness
  * 判定与 registry 组合帮助器，以及 `secure-files.ts` 的敏感目录/原子写工具；
  * 它被 `packages/config/src/index.ts` 稳定导出，并由服务启动、WebUI 与测试用例直接依赖。
  * 输入输出与副作用：所有公开写操作都会串行进入 mutation queue，实际修改磁盘中的
- * `index.json` 和对应 Profile 文件；路径必须始终位于受管根目录内，legacy v1/v2 index
+ * `index.json` 和对应 Profile 文件；路径必须始终位于受管根目录内，不符合严格 v1 schema 的 index
  * 会在任何目录准备或写入前被拒绝，bootstrap/index 更新失败时只回滚本次尝试创建或替换的
  * Profile 文件，不删除调用方已拥有的根目录；若 bootstrap 的清理删除本身失败，会显式抛出
  * `CONFIG_IO_ERROR` 并保留清理失败 cause，而不是静默吞掉该错误。
@@ -151,7 +151,7 @@ export class FileUserConfigManager {
     const indexPath = join(rootDir, "index.json");
 
     assertPathInside(rootDir, rootDir);
-    await assertBootstrapableRoot(rootDir, indexPath);
+    await assertBootstrapableRoot(rootDir);
     assertPathInside(rootDir, profilesDir);
     assertPathInside(rootDir, indexPath);
 
@@ -166,7 +166,7 @@ export class FileUserConfigManager {
       ...emptyUserConfigProfileSettings(),
     };
     const index: UserConfigIndex = {
-      version: 3,
+      version: 1,
       selectedProfileId: "default",
       profiles: [
         {
@@ -584,13 +584,6 @@ function isMissingPath(error: unknown): boolean {
 }
 
 function parsePersistedIndex(value: unknown, path: string): UserConfigIndex {
-  const version = persistedVersion(value);
-  if (version === 1 || version === 2) {
-    throw new ConfigError(
-      "CONFIG_UNSUPPORTED_VERSION",
-      "Configuration index version 1 or 2 is unsupported; back up the configuration and reinitialize it.",
-    );
-  }
   const parsed = userConfigIndexSchema.safeParse(value);
   if (!parsed.success) {
     throw new ConfigError(
@@ -599,17 +592,6 @@ function parsePersistedIndex(value: unknown, path: string): UserConfigIndex {
     );
   }
   return parsed.data;
-}
-
-function persistedVersion(value: unknown): unknown {
-  try {
-    if (value === null || typeof value !== "object") {
-      return undefined;
-    }
-    return Reflect.get(value, "version");
-  } catch {
-    return undefined;
-  }
 }
 
 function parsePersistedProfile(
@@ -636,17 +618,11 @@ function profileValidationIssues(
 ): readonly ConfigValidationIssue[] {
   return issues.map((issue) => {
     const path = issue.path.map(String).join(".") || "profile";
-    const legacyGatewayAllowlist =
-      path === "runtime.gatewayAllowlist" && issue.code === "invalid_type";
     return {
       code: issue.code,
       path,
-      message: legacyGatewayAllowlist
-        ? "Expected an array of platform:group|private:target-id strings."
-        : issue.message,
-      hint: legacyGatewayAllowlist
-        ? "Replace the legacy { platforms, userIds, groupIds } object with string rules."
-        : "Correct this field in the selected Profile.",
+      message: issue.message,
+      hint: "Correct this field in the selected Profile.",
     };
   });
 }
@@ -732,13 +708,30 @@ function parseReplacementInput(value: unknown): {
         "Configuration profile input failed validation",
       );
     }
+    const allowedKeys = new Set([
+      "acknowledgedWarnings",
+      "ai",
+      "memory",
+      "name",
+      "platforms",
+      "runtime",
+    ]);
+    if (
+      Reflect.ownKeys(value).some(
+        (key) => typeof key !== "string" || !allowedKeys.has(key),
+      )
+    ) {
+      throw new ConfigError(
+        "CONFIG_INVALID_INPUT",
+        "Configuration profile input failed validation",
+      );
+    }
     const replacement = value as {
       readonly acknowledgedWarnings?: unknown;
       readonly ai?: unknown;
       readonly memory?: unknown;
       readonly name?: unknown;
       readonly platforms?: unknown;
-      readonly plugins?: unknown;
       readonly runtime?: unknown;
     };
     return {
@@ -750,7 +743,6 @@ function parseReplacementInput(value: unknown): {
         ai: replacement.ai,
         memory: replacement.memory,
         platforms: replacement.platforms,
-        plugins: replacement.plugins,
         runtime: replacement.runtime,
       }),
     };
@@ -931,10 +923,7 @@ async function validateReferencedProfilesReadOnly(
   }
 }
 
-async function assertBootstrapableRoot(
-  rootDir: string,
-  indexPath: string,
-): Promise<void> {
+async function assertBootstrapableRoot(rootDir: string): Promise<void> {
   try {
     const rootStats = await lstat(rootDir);
     if (!rootStats.isDirectory()) {
@@ -945,15 +934,12 @@ async function assertBootstrapableRoot(
     }
 
     const entries = await readdir(rootDir);
-    if (entries.length === 0) {
+    if (!entries.includes("index.json") && !entries.includes("profiles")) {
       return;
-    }
-    if (entries.includes("index.json")) {
-      await throwAlreadyBootstrapped(indexPath);
     }
     throw new ConfigError(
       "CONFIG_INVALID_INPUT",
-      "Configuration root must be absent or an empty directory before bootstrap",
+      "Configuration root must not contain an index or profiles directory before bootstrap",
     );
   } catch (error) {
     if (isMissingPath(error)) {
@@ -961,21 +947,6 @@ async function assertBootstrapableRoot(
     }
     throw error;
   }
-}
-
-async function throwAlreadyBootstrapped(indexPath: string): Promise<never> {
-  const index = await readSensitiveJson(indexPath);
-  const version = persistedVersion(index);
-  if (version === 1 || version === 2) {
-    throw new ConfigError(
-      "CONFIG_UNSUPPORTED_VERSION",
-      "Configuration index version 1 or 2 is unsupported; back up the configuration and reinitialize it.",
-    );
-  }
-  throw new ConfigError(
-    "CONFIG_INVALID_INPUT",
-    "Configuration store is already initialized",
-  );
 }
 
 function normalizeReadOnlyError(

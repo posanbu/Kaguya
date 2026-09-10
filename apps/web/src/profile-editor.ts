@@ -40,7 +40,6 @@ interface MutableProfile {
     enabled: boolean;
   };
   platforms: MutablePlatform[];
-  plugins: MutablePlugin[];
   review?: {
     acknowledgedWarnings: string[];
   };
@@ -61,12 +60,6 @@ interface MutablePlatform {
   type: string;
   enabled: boolean;
   credentials: Record<string, unknown>;
-  settings: Record<string, unknown>;
-}
-
-interface MutablePlugin {
-  id: string;
-  enabled: boolean;
   settings: Record<string, unknown>;
 }
 
@@ -135,7 +128,6 @@ export function mergeProfileEditorFields(
     ai: next.ai as ReplaceProfileInput["ai"],
     memory: next.memory,
     platforms: next.platforms,
-    plugins: next.plugins,
   };
 }
 

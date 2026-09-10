@@ -110,7 +110,7 @@ afterEach(async () => {
 
 async function fixture() {
   const database = await createTestingDatabase();
-  await database.migrate();
+  await database.prepareSchema();
   const module = createHeartflowModule({
     deliveryDeliveredInformationKind,
     deliveryFailedInformationKind,
@@ -147,7 +147,13 @@ async function fixture() {
     {
       instanceId: "heartflow.test",
       definitionId: module.manifest.definitionId,
-      settings: {},
+      settings: {
+        botNames: ["Kaguya", "辉夜"],
+        groupFrequency: 1,
+        privateFrequency: 1,
+        muted: false,
+        staleAfterMs: 120_000,
+      },
     },
   ]);
   resources.push({ host, core, database });

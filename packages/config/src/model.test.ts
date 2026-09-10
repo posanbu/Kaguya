@@ -1,5 +1,5 @@
 /**
- * 架构说明：本测试守护配置模型的注册表契约，覆盖 Profile ID、v3 索引
+ * 架构说明：本测试守护配置模型的注册表契约，覆盖 Profile ID、v1 索引
  * 以及唯一性和引用完整性约束，确保管理器与 API 只能依赖这里定义的持久化
  * 结构，而不会回退到旧版 defaultProfileId 语义。
  */
@@ -9,7 +9,6 @@ import {
   aiConfigSchema,
   aiProviderConfigSchema,
   platformConfigSchema,
-  pluginConfigSchema,
   profileIdSchema,
   runtimeConfigSchema,
   userConfigIndexSchema,
@@ -46,11 +45,6 @@ const publicSchemaParsers = [
     "platform",
     (value: unknown): TestSafeParseResult =>
       platformConfigSchema.safeParse(value),
-  ],
-  [
-    "plugin",
-    (value: unknown): TestSafeParseResult =>
-      pluginConfigSchema.safeParse(value),
   ],
   [
     "profile settings",
@@ -92,11 +86,11 @@ function createThrowingGetterProxy(secret: string): object {
 }
 
 describe("user configuration schemas", () => {
-  it("treats legacy runtime as external and drops its persisted gateway token", () => {
-    const runtime = runtimeConfigSchema.parse({
+  it("requires databaseMode and rejects a persisted gateway token", () => {
+    const runtimeInput = {
       host: "127.0.0.1",
       port: 3000,
-      gatewayToken: "legacy-gateway-token",
+      databaseMode: "external" as const,
       databaseUrl: "postgresql://profile:secret@database.example/kaguya",
       webDistPath: "apps/web/dist",
       corsOrigins: [],
@@ -106,7 +100,8 @@ describe("user configuration schemas", () => {
       logLevel: "info",
       logFormat: "json",
       gatewayAllowlist: ["qq:group:778899", "*:private:*", "invalid"],
-    });
+    };
+    const runtime = runtimeConfigSchema.parse(runtimeInput);
 
     expect(runtime.databaseMode).toBe("external");
     expect(runtime.gatewayAllowlist).toEqual([
@@ -114,7 +109,17 @@ describe("user configuration schemas", () => {
       "*:private:*",
       "invalid",
     ]);
-    expect(runtime).not.toHaveProperty("gatewayToken");
+    const { databaseMode: _databaseMode, ...withoutDatabaseMode } =
+      runtimeInput;
+    expect(runtimeConfigSchema.safeParse(withoutDatabaseMode).success).toBe(
+      false,
+    );
+    expect(
+      runtimeConfigSchema.safeParse({
+        ...runtimeInput,
+        gatewayToken: "legacy-gateway-token",
+      }).success,
+    ).toBe(false);
   });
 
   it("rejects legacy gateway allowlist objects and non-string rules", () => {
@@ -150,20 +155,20 @@ describe("user configuration schemas", () => {
     expect(profileIdSchema.safeParse("named-profile").success).toBe(false);
   });
 
-  it("accepts a v3 registry index with a selected default profile", () => {
+  it("accepts a v1 registry index with a selected default profile", () => {
     expect(
       userConfigIndexSchema.parse({
-        version: 3,
+        version: 1,
         selectedProfileId: "default",
         profiles: [defaultMetadata],
       }),
-    ).toMatchObject({ version: 3, selectedProfileId: "default" });
+    ).toMatchObject({ version: 1, selectedProfileId: "default" });
   });
 
-  it("rejects a v3 registry index whose selected profile is missing", () => {
+  it("rejects a v1 registry index whose selected profile is missing", () => {
     expect(
       userConfigIndexSchema.safeParse({
-        version: 3,
+        version: 1,
         selectedProfileId: userProfileId,
         profiles: [defaultMetadata],
       }).success,
@@ -173,7 +178,7 @@ describe("user configuration schemas", () => {
   it("rejects a registry index without the default profile", () => {
     expect(
       userConfigIndexSchema.safeParse({
-        version: 3,
+        version: 1,
         selectedProfileId: "default",
         profiles: [
           {
@@ -188,7 +193,7 @@ describe("user configuration schemas", () => {
   it("rejects a registry index when the default profile name is not default", () => {
     expect(
       userConfigIndexSchema.safeParse({
-        version: 3,
+        version: 1,
         selectedProfileId: "default",
         profiles: [
           {
@@ -203,7 +208,7 @@ describe("user configuration schemas", () => {
   it("rejects duplicate profile IDs", () => {
     expect(
       userConfigIndexSchema.safeParse({
-        version: 3,
+        version: 1,
         selectedProfileId: "default",
         profiles: [
           defaultMetadata,
@@ -220,7 +225,7 @@ describe("user configuration schemas", () => {
   it("rejects duplicate profile names", () => {
     expect(
       userConfigIndexSchema.safeParse({
-        version: 3,
+        version: 1,
         selectedProfileId: "default",
         profiles: [
           defaultMetadata,
@@ -238,18 +243,18 @@ describe("user configuration schemas", () => {
   it("rejects a legacy index that still uses defaultProfileId", () => {
     expect(
       userConfigIndexSchema.safeParse({
-        version: 3,
+        version: 1,
         defaultProfileId: "default",
         profiles: [defaultMetadata],
       }).success,
     ).toBe(false);
   });
 
-  it.each([1, 2])("rejects registry index version %s", (version) => {
+  it.each([2, 3])("rejects registry index version %s", (version) => {
     expect(
       userConfigIndexSchema.safeParse({
         version,
-        defaultProfileId: "default",
+        selectedProfileId: "default",
         profiles: [defaultMetadata],
       }).success,
     ).toBe(false);
@@ -274,6 +279,7 @@ describe("user configuration schemas", () => {
           },
         ],
       },
+      memory: { enabled: false },
       platforms: [
         {
           id: "platform-1",
@@ -281,13 +287,6 @@ describe("user configuration schemas", () => {
           enabled: true,
           credentials: { token: "test-platform-token" },
           settings: { guild: "test-guild" },
-        },
-      ],
-      plugins: [
-        {
-          id: "plugin-1",
-          enabled: true,
-          settings: { accessToken: "test-plugin-token" },
         },
       ],
     });
@@ -298,16 +297,13 @@ describe("user configuration schemas", () => {
     });
   });
 
-  it("defaults missing Memory settings to disabled and preserves explicit enablement", () => {
+  it("requires Memory settings and preserves explicit enablement", () => {
     const base = {
       ai: { providers: [] },
       platforms: [],
-      plugins: [],
     };
 
-    expect(userConfigProfileSettingsSchema.parse(base).memory).toEqual({
-      enabled: false,
-    });
+    expect(userConfigProfileSettingsSchema.safeParse(base).success).toBe(false);
     expect(
       userConfigProfileSettingsSchema.parse({
         ...base,
@@ -339,8 +335,8 @@ describe("user configuration schemas", () => {
           { ...duplicateProvider, enabled: false },
         ],
       },
+      memory: { enabled: false },
       platforms: [],
-      plugins: [],
     });
 
     expect(result.success).toBe(false);
@@ -369,26 +365,24 @@ describe("user configuration schemas", () => {
             },
           ],
         },
+        memory: { enabled: false },
         platforms: [],
-        plugins: [],
       }).ai.defaultProviderId,
     ).toBe("provider-1");
   });
 
-  it("accepts persisted warning acknowledgements on a profile", () => {
-    const profile = userConfigProfileSchema.parse({
-      version: 1,
-      id: profileId,
-      name: "personal",
-      ai: { providers: [] },
-      platforms: [],
-      plugins: [],
-      review: { acknowledgedWarnings: ["platforms-empty"] },
-    });
-
-    expect(profile.review).toEqual({
-      acknowledgedWarnings: ["platforms-empty"],
-    });
+  it("rejects retired persisted warning acknowledgements", () => {
+    expect(
+      userConfigProfileSchema.safeParse({
+        version: 1,
+        id: profileId,
+        name: "personal",
+        ai: { providers: [] },
+        memory: { enabled: false },
+        platforms: [],
+        review: { acknowledgedWarnings: ["platforms-empty"] },
+      }).success,
+    ).toBe(false);
   });
 
   it("rejects an index whose default references a missing profile", () => {
@@ -444,8 +438,8 @@ describe("user configuration schemas", () => {
             },
           ],
         },
+        memory: { enabled: false },
         platforms: [],
-        plugins: [],
       }).success,
     ).toBe(false);
   });
@@ -456,10 +450,20 @@ describe("user configuration schemas", () => {
     ) as unknown;
 
     const parsed = userConfigProfileSettingsSchema.parse({
-      ai: { providers: [] },
+      ai: {
+        providers: [
+          {
+            id: "provider-1",
+            type: "test",
+            enabled: true,
+            models: [],
+            settings: input,
+          },
+        ],
+      },
+      memory: { enabled: false },
       platforms: [],
-      plugins: [{ id: "plugin-1", enabled: true, settings: input }],
-    }).plugins[0]!.settings;
+    }).ai.providers[0]!.settings;
 
     expect(Object.getPrototypeOf(parsed)).toBeNull();
     expect(Object.hasOwn(parsed, "__proto__")).toBe(true);
@@ -480,16 +484,20 @@ describe("user configuration schemas", () => {
     };
 
     const parsed = userConfigProfileSettingsSchema.parse({
-      ai: { providers: [] },
+      ai: {
+        providers: [
+          {
+            id: "provider-1",
+            type: "test",
+            enabled: true,
+            models: [],
+            settings: nullPrototypeValue,
+          },
+        ],
+      },
+      memory: { enabled: false },
       platforms: [],
-      plugins: [
-        {
-          id: "plugin-1",
-          enabled: true,
-          settings: nullPrototypeValue,
-        },
-      ],
-    }).plugins[0]!.settings;
+    }).ai.providers[0]!.settings;
 
     expect(JSON.stringify(parsed)).toBe(JSON.stringify(nullPrototypeValue));
     expect(Object.getPrototypeOf(parsed)).toBeNull();
@@ -552,21 +560,12 @@ describe("user configuration schemas", () => {
         }).success,
     ],
     [
-      "plugin",
-      () =>
-        pluginConfigSchema.safeParse({
-          id: "plugin-1",
-          enabled: true,
-          settings: {},
-        }).success,
-    ],
-    [
       "profile settings",
       () =>
         userConfigProfileSettingsSchema.safeParse({
           ai: { providers: [] },
+          memory: { enabled: false },
           platforms: [],
-          plugins: [],
         }).success,
     ],
     [
@@ -577,8 +576,8 @@ describe("user configuration schemas", () => {
           id: profileId,
           name: "default",
           ai: { providers: [] },
+          memory: { enabled: false },
           platforms: [],
-          plugins: [],
         }).success,
     ],
     [
@@ -595,7 +594,7 @@ describe("user configuration schemas", () => {
       "configuration index",
       () =>
         userConfigIndexSchema.safeParse({
-          version: 3,
+          version: 1,
           selectedProfileId: "default",
           profiles: [
             {
@@ -652,8 +651,8 @@ describe("user configuration schemas", () => {
           id: profileId,
           name: "default",
           ai: { providers: [] },
+          memory: { enabled: false },
           platforms: [],
-          plugins: [],
           review: undefined,
         }).success,
     ],

@@ -50,11 +50,11 @@ export interface CreateHeartflowModuleOptions {
 
 export const heartflowSettingsSchema = z
   .object({
-    botNames: z.array(z.string().trim().min(1)).default(["Kaguya", "辉夜"]),
-    groupFrequency: z.number().min(0).max(1).default(1),
-    privateFrequency: z.number().min(0).max(1).default(1),
-    muted: z.boolean().default(false),
-    staleAfterMs: z.number().int().min(0).default(120_000),
+    botNames: z.array(z.string().trim().min(1)),
+    groupFrequency: z.number().min(0).max(1),
+    privateFrequency: z.number().min(0).max(1),
+    muted: z.boolean(),
+    staleAfterMs: z.number().int().min(0),
   })
   .strict();
 export type HeartflowSettings = z.infer<typeof heartflowSettingsSchema>;
@@ -269,7 +269,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
   ] as const;
   const module = defineInformationModule({
     manifest: {
-      protocolVersion: 2,
+      protocolVersion: 1,
       moduleVersion: "1.0.0",
       definitionId: "agent.heartflow.online",
       displayName: "Information DAG heartflow",

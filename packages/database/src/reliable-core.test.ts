@@ -33,7 +33,7 @@ afterEach(async () => {
 it("returns operation and terminal winners without duplicate live notifications", async () => {
   const db = await createTestingDatabase();
   resources.push(() => db.close());
-  await db.migrate();
+  await db.prepareSchema();
   const registry = new InformationKindRegistry();
   registry.register(output);
   registry.register(failed);
@@ -86,7 +86,7 @@ it("returns operation and terminal winners without duplicate live notifications"
 it("bounds close even when a committed durable output is stuck in a live observer", async () => {
   const db = await createTestingDatabase();
   resources.push(() => db.close());
-  await db.migrate();
+  await db.prepareSchema();
   const registry = new InformationKindRegistry();
   registry.register(output);
   let id = 0;

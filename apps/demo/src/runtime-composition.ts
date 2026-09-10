@@ -19,6 +19,7 @@ import {
   createFirstPartyModuleCatalog,
   createFirstPartyModuleActivations,
   llmReplySettingsSchema,
+  type FirstPartyModuleInstanceConfig,
   type ModuleModelSelection,
 } from "@kaguya/modules";
 import {
@@ -42,7 +43,7 @@ export type RuntimeModelSelectionResolver = (
 };
 export interface ReplyCompositionOptions {
   readonly memoryEnabled?: boolean;
-  readonly profile?: "production" | "test";
+  readonly moduleConfigs: readonly FirstPartyModuleInstanceConfig[];
 }
 export function createDeterministicModelSelectionResolver(): RuntimeModelSelectionResolver {
   const model = createRepeatingDeterministicModel({
@@ -56,7 +57,7 @@ export function createDeterministicModelSelectionResolver(): RuntimeModelSelecti
 }
 export function createReplyComposition(
   resolveModelSelection: RuntimeModelSelectionResolver = createDeterministicModelSelectionResolver(),
-  options: ReplyCompositionOptions = {},
+  options: ReplyCompositionOptions,
 ) {
   const catalog = createFirstPartyModuleCatalog({
     modelTaskCapability,
@@ -68,7 +69,8 @@ export function createReplyComposition(
     executionExhaustedInformationKind,
   });
   const activations = createFirstPartyModuleActivations(
-    options.profile ?? "production",
+    catalog,
+    options.moduleConfigs,
   );
   const models = new Map<string, ReturnType<KaguyaLlmModelResolver>>();
   const activeModel = new AsyncLocalStorage<{

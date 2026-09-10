@@ -78,17 +78,12 @@ export async function validateStartupConfiguration(options: {
     issues.push(...readiness.issues.map(readinessIssue));
   } else if (readiness.status === "review_required") {
     issues.push(
-      ...readiness.warnings
-        .filter(
-          (warning) =>
-            warning.id !== "platforms-empty" && warning.id !== "plugins-empty",
-        )
-        .map((warning) => ({
-          code: "PROFILE_INVALID",
-          path: warning.path,
-          message: warning.message,
-          hint: "请修正 selected Profile 后重新启动服务。",
-        })),
+      ...readiness.warnings.map((warning) => ({
+        code: "PROFILE_INVALID",
+        path: warning.path,
+        message: warning.message,
+        hint: "请修正 selected Profile 后重新启动服务。",
+      })),
     );
   }
 

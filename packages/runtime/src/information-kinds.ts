@@ -254,7 +254,7 @@ export const modelTaskMetadataSchema = z
   .object({
     taskId: nonBlankString,
     version: nonBlankString,
-    outputMode: modelTaskOutputModeSchema.default("object"),
+    outputMode: modelTaskOutputModeSchema,
     sourceInformationId: informationIdSchema,
     contextInformationId: informationIdSchema,
     contextInformationIds: z.array(informationIdSchema).min(1),
@@ -295,13 +295,11 @@ export const modelTaskSafeErrorSchema = z
   .object({
     name: z.literal("ModelTaskError"),
     kind: z.enum(["retryable", "non-retryable"]),
-    stage: z
-      .enum([
-        "provider-request",
-        "structured-output-parse",
-        "task-schema-validation",
-      ])
-      .default("provider-request"),
+    stage: z.enum([
+      "provider-request",
+      "structured-output-parse",
+      "task-schema-validation",
+    ]),
     message: z.literal("Model task generation failed"),
   })
   .strict();

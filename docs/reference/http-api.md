@@ -15,9 +15,7 @@ description: Kaguya 统一 Server 的路由、认证、Profile 与消息协议�
 
 **`GET /api/v1/openapi.json`** — 无需认证、不限流，返回 OpenAPI 3 描述。
 
-**`GET /api/v1/setup`** — 需要 Bearer Token，返回配置 readiness 状态，不含 Provider 密钥或完整 profile。
-
-**`GET /api/v1/profiles`** — 需要 Bearer Token，返回 Profile 摘要与全局 selected Profile。
+**`GET /api/v1/profiles`** — 需要 Bearer Token，返回 Profile 摘要、全局 selected Profile 及其 readiness，不含 Provider 密钥或完整 profile。
 
 **`POST /api/v1/profiles`** — 需要 Bearer Token，创建一个未选中、继承隐藏 runtime 的 Profile。
 
@@ -47,11 +45,11 @@ Authorization: Bearer replace-with-at-least-16-characters
 
 认证发生在业务 schema 校验之前。认证和未认证请求使用不同限流 key，避免未认证流量消耗已认证配额。
 
-Server 每次启动生成一个新的全权限 token，成功监听后通过 `Kaguya access URL` 的 `#gatewayToken=` fragment 输出。该 token 同时授权 setup、management 和 messages 范围；重启后旧 token 返回 `401 unauthorized`。
+Server 每次启动生成一个新的全权限 token，成功监听后通过 `Kaguya access URL` 的 `#gatewayToken=` fragment 输出。该 token 同时授权 management 和 messages 范围；重启后旧 token 返回 `401 unauthorized`。
 
 ## 管理配置
 
-当前代码不提供 `POST /api/v1/setup`。首次配置与后续修改统一通过细粒度 Profile API 完成；请求示例、完整替换语义与删除限制见[Profile API](./profile-api)。
+首次配置、readiness 查询与后续修改统一通过 Profile API 完成；请求示例、完整替换语义与删除限制见[Profile API](./profile-api)。未知 `/api/v1/setup` 与其他未知 API 一样返回 `404 not_found`。
 
 ## 提交消息
 

@@ -1,5 +1,6 @@
 /** Server composition root: adapter lifetimes and database checks remain independent of Runtime readiness. */
 import {
+  createReplyCatalog,
   createReplyComposition,
   type RuntimeModelSelectionResolver,
 } from "./runtime-composition.js";
@@ -11,9 +12,17 @@ import {
   ConfigIncompleteError,
   ConfigReviewRequiredError,
   inspectUserConfigProfile,
+  loadModuleInstanceConfigs,
   type UserConfigProfile,
 } from "@kaguya/config";
-import { KaguyaDatabase } from "@kaguya/database";
+import {
+  KaguyaDatabase,
+  UnsupportedDatabaseSchemaError,
+} from "@kaguya/database";
+import {
+  createFirstPartyModuleConfigDefaults,
+  type FirstPartyModuleInstanceConfig,
+} from "@kaguya/modules";
 import {
   closeLogger,
   createLogger,
@@ -41,7 +50,7 @@ import {
   createNapCatSupervisor,
   type NapCatConnectionSupervisor,
 } from "./napcat.js";
-import { createConfigurationManagement } from "./setup.js";
+import { createConfigurationManagement } from "./configuration-management.js";
 import { AdapterHost } from "./adapter-host.js";
 import type {
   AdapterConnectionStatus,
@@ -99,9 +108,12 @@ export async function startKaguyaServer(
     rootLogger === undefined
       ? undefined
       : createModuleLogger(rootLogger, "server");
-  let setup: Awaited<ReturnType<typeof createConfigurationManagement>>;
-  let setupStatus: Awaited<ReturnType<typeof setup.inspect>>;
+  let configuration: Awaited<ReturnType<typeof createConfigurationManagement>>;
+  let configurationStatus: Awaited<
+    ReturnType<typeof configuration.getRegistryStatus>
+  >;
   let selectedProfile: UserConfigProfile;
+  let moduleConfigs: readonly FirstPartyModuleInstanceConfig[];
   let config: ServerConfig;
   try {
     bootstrap =
@@ -111,11 +123,16 @@ export async function startKaguyaServer(
             configRoot: providedConfig.configRoot,
             development: providedConfig.development,
           };
-    setup = await createConfigurationManagement(bootstrap.configRoot);
-    setupStatus = await setup.inspect();
-    selectedProfile = await setup.getRuntimeProfile(
-      setupStatus.selectedProfileId,
+    configuration = await createConfigurationManagement(bootstrap.configRoot);
+    configurationStatus = await configuration.getRegistryStatus();
+    selectedProfile = await configuration.getRuntimeProfile(
+      configurationStatus.selectedProfileId,
     );
+    moduleConfigs = await loadModuleInstanceConfigs({
+      rootDir: bootstrap.configRoot,
+      defaults: createFirstPartyModuleConfigDefaults("production"),
+    });
+    createReplyComposition(undefined, { moduleConfigs });
     config = providedConfig ?? createServerConfig(selectedProfile, bootstrap);
     assertLoopbackHost(config.host);
   } catch (error) {
@@ -224,8 +241,9 @@ export async function startKaguyaServer(
     // Database preflight runs even when AI configuration is incomplete.
     try {
       database = await connectInformationDatabase(effectiveConfig.databaseUrl);
-      await prepareSetupDatabase(database);
+      await prepareConfigurationDatabase(database);
     } catch (error) {
+      if (error instanceof UnsupportedDatabaseSchemaError) throw error;
       degradationReports.push({
         reason: "database_unavailable",
         phase: "database",
@@ -244,6 +262,7 @@ export async function startKaguyaServer(
           logger: rootLogger,
           ...createReplyComposition(resolveModelSelection, {
             memoryEnabled: selectedProfile.memory.enabled,
+            moduleConfigs,
           }),
         });
         adapterHost.registerTransports(runtime);
@@ -315,7 +334,7 @@ export async function startKaguyaServer(
         gatewayAuth,
         webGateway: adapterHost.webGateway,
         adapterHost,
-        setup,
+        configuration,
         logger: httpLogger,
       }),
     );
@@ -483,13 +502,16 @@ async function connectInformationDatabase(
   }
 }
 
-async function prepareSetupDatabase(database: KaguyaDatabase): Promise<void> {
+async function prepareConfigurationDatabase(
+  database: KaguyaDatabase,
+): Promise<void> {
   try {
-    await database.migrate();
+    await database.prepareSchema();
     await database.information.synchronizeKinds(
-      runtimeInformationKindNames(createReplyComposition().catalog),
+      runtimeInformationKindNames(createReplyCatalog()),
     );
   } catch (error) {
+    if (error instanceof UnsupportedDatabaseSchemaError) throw error;
     throw new InformationDatabaseConnectionError(error);
   }
 }
@@ -498,6 +520,7 @@ async function startInformationRuntime(runtime: KaguyaRuntime): Promise<void> {
   try {
     await runtime.start();
   } catch (error) {
+    if (error instanceof UnsupportedDatabaseSchemaError) throw error;
     if (isRuntimeDatabaseInitializationError(error)) {
       throw new InformationDatabaseConnectionError(error);
     }

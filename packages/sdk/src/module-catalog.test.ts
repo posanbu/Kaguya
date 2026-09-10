@@ -15,7 +15,7 @@ import {
 const module = (definitionId: string) =>
   defineInformationModule({
     manifest: {
-      protocolVersion: 2,
+      protocolVersion: 1,
       summary: "Test information module.",
       moduleVersion: "1.0.0",
       definitionId,
@@ -57,7 +57,7 @@ describe("module catalog", () => {
     expect(() =>
       defineInformationModule({
         ...a,
-        manifest: { ...a.manifest, protocolVersion: 1 as 2 },
+        manifest: { ...a.manifest, protocolVersion: 2 as 1 },
       }),
     ).toThrow(/protocol/);
     expect(() =>

@@ -19,9 +19,9 @@ Server 每次启动都会生成新的 Gateway Token，并在成功监听后打�
 
 `KAGUYA_CONFIG_ROOT` 指向权限受保护的 Profile Registry。Registry 有且只有一个显式的 `selectedProfileId`；Server 的 host、port、database、Web 路径、CORS、代理、限流、日志、allowlist、AI、Memory、平台与插件都来自这个 Profile。首次 `pnpm dev` 会在缺少整个 `runtime` 时保留其他 Profile 内容并补入安全的本地 runtime；部分损坏的 runtime 会被拒绝而不会覆盖。
 
-数据库连接、PostgreSQL 17、migration 和 Runtime Kind 必须在任何 HTTP、Runtime 或平台 ingress 监听前通过。AI 配置尚未完成时，检查通过后仍会开放 Web setup；Runtime 与 NapCat 保持停止。修改或切换 selected Profile 后需要重启。初始化格式与密钥边界见 [`@kaguya/config`](packages/config/README.md)。
+数据库连接、PostgreSQL 17、严格 schema v1 和 Runtime Kind 必须在任何监听启动前通过。数据库 schema 不兼容会直接终止 Server；AI 配置尚未完成时仍会开放 Web 配置界面，Runtime 与 NapCat 保持停止。修改或切换 selected Profile 后需要重启。初始化格式与密钥边界见 [`@kaguya/config`](packages/config/README.md)。
 
-Web UI 的 NapCat 页面读写 selected Profile 的 `platforms` 条目。旧 `napcat.json` 和 `KAGUYA_NAPCAT_*` 环境变量会触发不含凭据的迁移错误，不再作为配置来源。
+Web UI 的 NapCat 页面只读写 selected Profile 的 `platforms` 条目。
 
 生产运行：
 
@@ -58,9 +58,9 @@ core.llm.requested
 ## 常用命令
 
 - `pnpm dev`：先完整执行托管 PostgreSQL 17 的 start/check，再启动唯一 Server 与内嵌 Vite。
-- `pnpm postgres:start`：创建或恢复托管容器，等待健康并执行 migration/Kind 同步。
+- `pnpm postgres:start`：创建或恢复托管容器，等待健康，初始化空 schema 或验证当前 v1，并同步 Kind。
 - `pnpm postgres:status`：只报告 Profile 模式、容器状态、健康、PostgreSQL 大版本和端口。
-- `pnpm postgres:check`：不改变容器生命周期，验证 PostgreSQL 17 并幂等执行 migration/Kind 同步。
+- `pnpm postgres:check`：不改变容器生命周期，验证 PostgreSQL 17、当前 schema v1 与 Kind。
 - `pnpm build`：构建 packages、Server 与 Web 产物。
 - `pnpm start`：以生产模式启动构建后的 Server；只使用 selected Profile 数据库，绝不管理 Docker。
 - `pnpm demo`：使用 selected Profile 数据库运行确定性信息 DAG，并输出根 `informationId` 与 Kind 计数。
@@ -74,7 +74,7 @@ core.llm.requested
 
 **`KAGUYA_CONFIG_ROOT`** — 默认 `.data/kaguya-config`。保存 Profile Registry、Provider 和模型配置，必须按敏感数据保护。
 
-**selected Profile `runtime`** — 保存 `databaseMode`、`databaseUrl` 以及 Server 的 host、port、Web、CORS、代理、限流、日志和 allowlist。外部数据库只通过 Profile JSON 配置；旧 Profile 未声明 `databaseMode` 时按 `external` 处理。
+**selected Profile `runtime`** — 保存必填的 `databaseMode`、`databaseUrl` 以及 Server 的 host、port、Web、CORS、代理、限流、日志和 allowlist。外部数据库只通过 Profile JSON 配置。
 
 **Gateway Token** — 每次启动安全随机生成，只存在于进程和访问链接中；旧 Profile 中的持久化 token 会被忽略，并在下一次 Profile 写入时清理。
 

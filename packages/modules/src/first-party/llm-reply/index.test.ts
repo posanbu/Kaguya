@@ -255,7 +255,7 @@ function completedAtom() {
     payload: {
       output: "Hello.",
       taskId: "core.reply.generate",
-      version: "2",
+      version: "1",
       sourceInformationId: reply.informationId,
       activation: { instanceId: "reply-1", definitionId: "demo.reply.llm" },
       selectionPolicy: { tier: "heavy" },
@@ -278,6 +278,7 @@ function assistantAtom() {
       text: "Hello.",
       source: inboundPayload.source,
       originatingModuleInstanceId: "reply-1",
+      turn: null,
     },
     references: [
       { relation: "core:caused-by", informationId: completed.informationId },
@@ -424,7 +425,7 @@ describe("createLlmReplyModule", () => {
     });
     const memoryModule = defineInformationModule({
       manifest: {
-        protocolVersion: 2,
+        protocolVersion: 1,
         summary: "Test information module.",
         moduleVersion: "1.0.0",
         selectors: [],
@@ -589,7 +590,7 @@ describe("createLlmReplyModule", () => {
     expect(request).toMatchObject({
       task: {
         taskId: "core.reply.generate",
-        version: "2",
+        version: "1",
         outputMode: "text",
         allowedTiers: ["light", "heavy"],
       },
@@ -770,7 +771,7 @@ describe("createLlmReplyModule", () => {
     );
     for (const payload of [
       { ...completed.payload, taskId: "other.task" },
-      { ...completed.payload, version: "1" },
+      { ...completed.payload, version: "2" },
       {
         ...completed.payload,
         selectionPolicy: { tier: "light" },

@@ -28,7 +28,7 @@ const definition = (
   create: InformationModuleDefinition["create"];
 } => ({
   manifest: {
-    protocolVersion: 2,
+    protocolVersion: 1,
     summary: "Test information module.",
     moduleVersion: "1.0.0",
     definitionId: id,

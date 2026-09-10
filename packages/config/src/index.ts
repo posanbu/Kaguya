@@ -4,7 +4,7 @@
  * 和 schema/type 定义，避免上层直接耦合到内部文件组织。
  * 主要职责：统一转发 `errors.ts`、`readiness.ts`、`manager.ts` 与 `model.ts`
  * 的稳定符号；随着 Task 2 的显式 bootstrap 改造，入口不再暴露旧的
- * `initialize` 选项类型，而是仅保留新的 manager 能力与 v3 registry 类型。
+ * `initialize` 选项类型，而是仅保留新的 manager 能力与 v1 registry 类型。
  * 代码库关系：`apps/server`、`apps/web` 与其他包通过该文件消费配置模块，
  * 因此这里的导出集合同时充当跨包契约边界；任何遗留的 default/initialize
  * 语义都必须在这里被移除，避免 TypeScript 继续传播旧接口。
@@ -44,15 +44,20 @@ export type {
 } from "./startup-validation.js";
 export { readSensitiveJson, writeSensitiveJson } from "./secure-files.js";
 export {
+  loadModuleInstanceConfigs,
+  moduleInstanceConfigSchema,
+} from "./module-config.js";
+export type { ModuleInstanceConfig } from "./module-config.js";
+export {
   aiConfigSchema,
   aiProviderConfigSchema,
+  configurationWarningIds,
   emptyUserConfigProfileSettings,
   jsonObjectSchema,
   jsonValueSchema,
   memoryConfigSchema,
   modelTiersSchema,
   platformConfigSchema,
-  pluginConfigSchema,
   profileIdSchema,
   runtimeConfigSchema,
   userConfigIndexSchema,

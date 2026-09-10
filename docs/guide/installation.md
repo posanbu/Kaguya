@@ -91,7 +91,7 @@ curl http://127.0.0.1:3000/healthz
 
 :::
 
-正常响应为 `{"status":"ok"}`。`pnpm dev` 会先创建或恢复 `kaguya-postgres-17`，等待 `pg_isready`，验证实际服务器为 PostgreSQL 17，并完成 migration 与 Runtime Kind 同步；只有整条链成功才启动 Server。
+正常响应为 `{"status":"ok"}`。`pnpm dev` 会先创建或恢复 `kaguya-postgres-17`，等待 `pg_isready`，验证实际服务器为 PostgreSQL 17，初始化空 schema 或验证完整 v1，并同步 Runtime Kind；只有整条链成功才启动 Server。
 
 首次开发启动若 selected Profile 完全缺少 `runtime`，命令会保留 AI、Memory、平台、插件与 review 内容，再补入 loopback 默认值和托管数据库地址。部分损坏的 runtime 不会被自动覆盖。AI 配置未就绪或数据库失败时，HTTP、Web UI 与 Adapter 仍运行。进入 Gateway / Adapter 查看原因，修复后重启。
 
@@ -111,7 +111,7 @@ pnpm postgres:start -- --port 55432
 
 :::
 
-`start` 创建或恢复实例、等待健康并执行数据库检查。`status` 只报告配置模式、容器状态、健康、版本和端口，不启动容器也不迁移。`check` 不改变容器生命周期，但会验证连接和 PostgreSQL 17，并幂等执行 migration 与 Kind 同步。
+`start` 创建或恢复实例、等待健康并准备严格 v1 schema。`status` 只报告配置模式、容器状态、健康、版本和端口，不启动容器也不修改 schema。`check` 不改变容器生命周期，但会验证连接、PostgreSQL 17、完整 v1 schema 与 Kind。
 
 容器固定为 `kaguya-postgres-17`，镜像固定为 `postgres:17-alpine`，数据卷固定为 `kaguya-postgres-17-data`，端口只绑定 `127.0.0.1`。同名外部容器、错误镜像、label、挂载、端口或实际大版本会安全失败。已有容器端口不匹配时不会自动重建。停止 Server、发送退出信号或结束测试都不会停止或删除容器、卷及开发数据。
 
