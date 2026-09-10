@@ -9,7 +9,7 @@ description: 用显式 Catalog、能力声明与 Information DAG 组合可检查
 
 ## 唯一模块协议
 
-`defineInformationModule()` 的 manifest 必须包含 `protocolVersion: 1`、稳定 `definitionId`、语义版本 `moduleVersion`、非空 `displayName` 与 `description`、`settingsSchema`，以及 `consumes`、`produces`、`selectors`、`promptRenderers`、`requires`、`provides` 六组声明。每个 Information Kind 必须声明非空 `displayName` 与 `description`；每个 Prompt renderer 必须声明稳定 `rendererId`、非空 `displayName` 与 `description`，以及适用的 `kinds`。这些展示字段与 definition 一起冻结。可选的 `diagnostics` 声明模块允许上报的瞬时诊断。空声明使用空数组。重复 definition ID、不支持的协议、冲突的同名 kind、Selector、renderer 或诊断 event 都会拒绝启动。
+`defineInformationModule()` 的 manifest 必须包含 `protocolVersion: 2`、稳定 `definitionId`、语义版本 `moduleVersion`、非空 `displayName`、单行 `summary`、完整 `description`、`settingsSchema`，以及 `consumes`、`produces`、`selectors`、`promptRenderers`、`requires`、`provides` 六组声明。每个模块目录还必须携带相邻 `README.md`，作为目的、边界、接口、设置、可靠性、可观测性和场景的详细事实来源。Runtime 不读取 Markdown。每个 Information Kind 和 Prompt renderer 继续声明 `displayName` 与 `description`。这些展示字段与 definition 一起冻结；旧 protocol v1 不兼容。
 
 `consumes` 约束订阅输入，`produces` 约束派生输出。Selector 与 renderer 使用稳定 ID，并列入 manifest；`context.select()` 拒绝未声明的 Selector。订阅与声明必须引用同一份 kind definition，不能用结构相似的对象替代。Catalog 合并顺序不会改变创建顺序。
 
@@ -18,10 +18,11 @@ description: 用显式 Catalog、能力声明与 Information DAG 组合可检查
 ```ts [显式模块与 Catalog ~vscode-icons:file-type-typescript~]
 const filter = defineInformationModule({
   manifest: {
-    protocolVersion: 1,
+    protocolVersion: 2,
     definitionId: "example.filter",
     moduleVersion: "1.0.0",
     displayName: "Example filter",
+    summary: "Filters inbound text before downstream processing.",
     description: "Filters inbound text into reply requests.",
     settingsSchema: z.object({}).strict(),
     consumes: [inboundTextKind],
@@ -88,15 +89,15 @@ Runtime 的 `submit()` 返回已接受输入的根 ID；可靠回复异步推进
 
 ## Durable One-Shot 能力
 
-需要等待、去抖或延迟一次处理的模块可以声明 `kaguya:schedule.one-shot@1`，并把输入身份放在 opaque JSON `input` 中。模块负责决定何时调用 `replace()` 合并输入、如何读取 requested atom，以及在 due consumer 中调用 `finish()`。调度器只负责绝对时间、恢复和唯一终态；它不会启动 Heartbeat、Heartflow、Speaking 或 Model Task，也不会解释模块输入。
+需要等待、去抖或延迟一次处理的模块可以声明 `kaguya:schedule.one-shot@1`，并把输入身份放在 opaque JSON `input` 中。模块负责决定何时调用 `replace()` 合并输入、如何读取 requested atom，以及在 due consumer 中调用 `finish()`。调度器只负责绝对时间、恢复和唯一终态；它不会启动 Heartbeat、Heartflow、Attention Arousal 或 Model Task，也不会解释模块输入。
 
 ## 显式上下文与 Prompt
 
 Selector 通过受限只读账本的 `find()`、`related()`、`retrieve()` 取得候选，只返回有序 informationId。`find()` 支持 JSON payload containment 和确定性的正序/倒序查询。Core 校验 ID、拒绝重复或越权结果，并按顺序重新加载冻结原子。模块不能把未落账 payload 拼成上下文。派生输出通常继承输入的 `core:context`；需要跨入站合并时，可用 `contextInformationId` 重定位，但目标必须是该 handler 已通过声明式 Selector 选出的 `core.runtime.context`。
 
-first-party Catalog 默认激活 Identity、durable Heartbeat、Heartflow、Speaking、Association 与 LLM reply。生产 profile 使用 1500 ms 消息去抖；测试 profile 使用 0 ms，但二者启用相同的业务节点。Runtime 拥有的 Model Task 失败/取消、delivery terminal 与 `execution.exhausted` definition 由 composition root 注入 Heartflow，Catalog 不复制这些 kind。
+first-party Catalog 默认激活 Identity、durable Heartbeat、Heartflow、Attention Arousal、Association 与 LLM reply。生产 profile 使用 1500 ms 消息去抖；测试 profile 使用 0 ms，但二者启用相同的业务节点。Runtime 拥有的 Model Task 失败/取消、delivery terminal 与 `execution.exhausted` definition 由 composition root 注入 Heartflow，Catalog 不复制这些 kind。
 
-Heartbeat 到期只产生 `agent.turn.candidate`。Heartflow 使用 scope generation 领取 candidate，等待全部 inbound 的 identity terminal，再冻结不可变的多输入 `agent.turn.context.completed`。Speaking 只提交 claim 的唯一 decision；Heartflow 再把它分派为 reply、wait 或 silent，并在 delivery、等待、静默、supersession 或耗尽时写入一个 turn terminal。默认 Catalog 不包含 always-reply、inbound-to-context 或 speech-to-reply 旁路。
+Heartbeat 到期只产生 `agent.turn.candidate`。Heartflow 使用 scope generation 领取 candidate，等待全部 inbound 的 identity terminal，再按 `asOf` 冻结不可变的多输入 `agent.turn.context.completed`。Attention Arousal 只提交 claim 的唯一 `attend | defer | ignore` 决策；Heartflow 再把它分派为 reply、wait 或 silent，并在 delivery、等待、静默、supersession 或耗尽时写入一个 turn terminal。默认 Catalog 不包含 always-reply 或 inbound-to-context 旁路。
 
 `createLlmReplyModule()` 默认直接消费 Heartflow 产生的 `core.reply.requested`，并通过 reply 的 `core:uses-context` 找到冻结 turn context。Memory 默认由 selected Profile 关闭；此时 Heartflow 的可选检索退化为空，Prompt 仍包含当前冻结输入。Association 继续记录 requested、query、candidate 和 completed 审计 DAG，但不再作为 LLM reply 的门禁。
 

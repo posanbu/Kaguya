@@ -23,6 +23,7 @@ export const heartbeatSettingsSchema = z
   .object({
     messageDebounceMs: z.number().int().min(0).default(1500),
     maxReplacementAttempts: z.number().int().min(1).max(20).default(3),
+    totalWaitBudget: z.number().int().min(0).max(20).default(3),
   })
   .strict();
 export type HeartbeatSettings = z.infer<typeof heartbeatSettingsSchema>;
@@ -104,12 +105,13 @@ export const heartbeatDueSelector = defineInformationSelector({
 
 export const heartbeatModule = defineInformationModule({
   manifest: {
-    protocolVersion: 1,
+    protocolVersion: 2,
     moduleVersion: "1.0.0",
     definitionId: "agent.heartbeat.short",
     displayName: "Durable short heartbeat",
+    summary: "Debounces and durably reawakens pending agent turns.",
     description:
-      "Durably debounces inbound and wait signals into recoverable turn candidates.",
+      "Durably debounces inbound and wait signals into recoverable turn candidates. Scheduling remains a capability boundary: this module owns aggregation semantics while the Scheduler owns persistence and firing.",
     settingsSchema: heartbeatSettingsSchema,
     consumes: [
       inboundTextInformationKind,
@@ -245,6 +247,7 @@ export const heartbeatModule = defineInformationModule({
         fields: {
           messageDebounceMs: settings.messageDebounceMs,
           maxReplacementAttempts: settings.maxReplacementAttempts,
+          totalWaitBudget: settings.totalWaitBudget,
           policyVersion: "short-heartbeat.v1",
         },
       }),
@@ -280,7 +283,7 @@ export const heartbeatModule = defineInformationModule({
               sourceIds,
               preserveWait ? false : true,
               previousInput?.attempt ?? 0,
-              previousInput?.totalWaitBudget ?? 0,
+              previousInput?.totalWaitBudget ?? settings.totalWaitBudget,
               previous?.informationId,
               previousHeartbeat?.informationId,
             );

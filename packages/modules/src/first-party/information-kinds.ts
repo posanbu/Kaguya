@@ -156,7 +156,7 @@ export const replyRequestedInformationKind = defineInformationKind({
     "core:caused-by": {
       required: true,
       multiple: false,
-      targetKinds: ["agent.speech.decision"],
+      targetKinds: ["agent.attention.arousal.completed"],
     },
     "core:context": {
       required: true,
@@ -925,11 +925,16 @@ const turnContextPayloadSchema = z
     inputs: z.array(turnInputSchema).min(1),
     text: z.string(),
     source: messageSourceSchema,
-    directness: z.number().min(0).max(1),
-    contentNeed: z.number().min(0).max(1),
     messageCount: z.number().int().min(0),
-    recentPresencePenalty: z.number().min(0).max(1),
-    frequencyMultiplier: z.number().min(0).max(1),
+    isPrivate: z.boolean(),
+    isGroup: z.boolean(),
+    mentionedSelf: z.boolean(),
+    repliedToSelf: z.boolean(),
+    namedSelf: z.boolean(),
+    recentSelfReplies: z.number().int().min(0),
+    recentWindowMessages: z.number().int().min(0),
+    idleReachedAverage: z.boolean(),
+    frequency: z.number().min(0).max(1),
     muted: z.boolean(),
     safe: z.boolean(),
     destinationAvailable: z.boolean(),
@@ -973,54 +978,56 @@ export const turnContextCompletedInformationKind = defineInformationKind({
       const input = payload as any;
       return {
         event: "turn.context.completed",
-        directness: input.directness,
-        contentNeed: input.contentNeed,
         messageCount: input.messageCount,
+        direct: input.mentionedSelf || input.repliedToSelf || input.namedSelf,
+        frequency: input.frequency,
       };
     },
   },
 });
 
-const speechDecisionPayloadSchema = z
+const attentionArousalPayloadSchema = z
   .object({
-    action: z.enum(["speak", "wait", "silent"]),
-    status: z.enum(["decision", "failed", "superseded"]),
+    outcome: z.enum(["attend", "defer", "ignore"]),
     text: z.string(),
     source: messageSourceSchema,
     candidateInformationId: nonBlankString,
     claimInformationId: nonBlankString,
     turnContextInformationId: nonBlankString,
     score: z.number(),
-    thresholds: z.object({ speak: z.number(), wait: z.number() }).strict(),
+    threshold: z.number().int().min(0).max(100),
     components: z
       .object({
-        directness: z.number(),
-        contentNeed: z.number(),
-        messageCount: z.number(),
+        relevance: z.number(),
+        content: z.number(),
+        pressure: z.number(),
         recentPresencePenalty: z.number(),
-        frequencyMultiplier: z.number(),
+        frequencyFactor: z.number(),
+        preFrequencyScore: z.number(),
       })
       .strict(),
     reasonCodes: z.array(nonBlankString),
     missingInputs: z.array(nonBlankString),
     policyDigest: nonBlankString,
     settingsDigest: nonBlankString,
-    recheckAt: nonBlankString.optional(),
     dueAt: nonBlankString.optional(),
     delayMs: z.number().int().min(0).optional(),
     attempt: z.number().int().min(0),
     totalWaitBudget: z.number().int().min(0),
-    wakePolicy: z.enum(["none", "recheckAt", "cooldown"]).optional(),
+    wakePolicy: z.literal("recheckAt").optional(),
   })
   .strict() as any;
 
-export type SpeechDecisionPayload = z.infer<typeof speechDecisionPayloadSchema>;
+export type AttentionArousalPayload = z.infer<
+  typeof attentionArousalPayloadSchema
+>;
 
-export const speechDecisionInformationKind = defineInformationKind({
-  kind: "agent.speech.decision",
-  displayName: "Agent Speech Decision",
-  description: "Information carried by the agent.speech.decision kind.",
-  payloadSchema: speechDecisionPayloadSchema,
+export const attentionArousalCompletedInformationKind = defineInformationKind({
+  kind: "agent.attention.arousal.completed",
+  displayName: "Agent Attention Arousal Completed",
+  description:
+    "A deterministic decision about whether an event deserves agent attention.",
+  payloadSchema: attentionArousalPayloadSchema,
   references: {
     "core:caused-by": {
       required: true,
@@ -1050,9 +1057,8 @@ export const speechDecisionInformationKind = defineInformationKind({
     project: ({ payload }) => {
       const input = payload as any;
       return {
-        event: "speech.decision",
-        action: input.action,
-        status: input.status,
+        event: "attention.arousal.completed",
+        outcome: input.outcome,
         score: input.score,
         reasonCodes: input.reasonCodes,
         missingInputs: input.missingInputs,
@@ -1082,7 +1088,7 @@ export const waitRequestedInformationKind = defineInformationKind({
     "core:caused-by": {
       required: true,
       multiple: false,
-      targetKinds: [speechDecisionInformationKind.kind],
+      targetKinds: [attentionArousalCompletedInformationKind.kind],
     },
     "core:context": {
       required: true,

@@ -23,7 +23,7 @@ import {
   inboundTextInformationKind,
   personContextCompletedInformationKind,
   replyRequestedInformationKind,
-  speechDecisionInformationKind,
+  attentionArousalCompletedInformationKind,
   turnCandidateInformationKind,
   turnClaimedInformationKind,
   turnCompletedInformationKind,
@@ -35,7 +35,7 @@ import {
   turnSupersededInformationKind,
   turnWaitingInformationKind,
   waitRequestedInformationKind,
-  type SpeechDecisionPayload,
+  type AttentionArousalPayload,
 } from "../information-kinds.js";
 
 type AnyKind = InformationKindDefinition<string, any>;
@@ -47,6 +47,17 @@ export interface CreateHeartflowModuleOptions {
   readonly modelTaskCancelledInformationKind: AnyKind;
   readonly executionExhaustedInformationKind: AnyKind;
 }
+
+export const heartflowSettingsSchema = z
+  .object({
+    botNames: z.array(z.string().trim().min(1)).default(["Kaguya", "辉夜"]),
+    groupFrequency: z.number().min(0).max(1).default(1),
+    privateFrequency: z.number().min(0).max(1).default(1),
+    muted: z.boolean().default(false),
+    staleAfterMs: z.number().int().min(0).default(120_000),
+  })
+  .strict();
+export type HeartflowSettings = z.infer<typeof heartflowSettingsSchema>;
 
 const TURN_TERMINAL_KINDS = new Set<string>([
   turnCompletedInformationKind.kind,
@@ -108,7 +119,9 @@ export const heartflowStateSelector = defineInformationSelector({
           "outgoing",
         ),
       ).filter(({ kind }) => kind === turnCandidateInformationKind.kind);
-    } else if (sourceAtom.kind === speechDecisionInformationKind.kind) {
+    } else if (
+      sourceAtom.kind === attentionArousalCompletedInformationKind.kind
+    ) {
       remember(
         await related(
           ledger,
@@ -256,18 +269,19 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
   ] as const;
   const module = defineInformationModule({
     manifest: {
-      protocolVersion: 1,
+      protocolVersion: 2,
       moduleVersion: "1.0.0",
       definitionId: "agent.heartflow.online",
       displayName: "Information DAG heartflow",
+      summary: "Coordinates reliable online agent-turn progression.",
       description:
-        "Coordinates candidate claims, identity barriers, frozen context, speech routing, and turn terminals.",
-      settingsSchema: z.object({}).strict(),
+        "Coordinates candidate claims, identity barriers, as-of frozen context, attention routing, and turn terminals. It owns reliable online progression without implementing attention scoring, model generation, or transport.",
+      settingsSchema: heartflowSettingsSchema,
       consumes: [
         turnCandidateInformationKind,
         personContextCompletedInformationKind,
         turnClaimedInformationKind,
-        speechDecisionInformationKind,
+        attentionArousalCompletedInformationKind,
         turnCompletedInformationKind,
         turnWaitingInformationKind,
         turnSilentInformationKind,
@@ -295,7 +309,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
       requires: [],
       provides: [],
     },
-    create: () => ({
+    create: ({ settings }) => ({
       provisions: [],
       describeStartup: () => ({
         summary: "Information DAG heartflow ready",
@@ -321,12 +335,12 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
             async (_atom, context) => {
               const state = await context.select(heartflowStateSelector);
               const memories = await context.select(heartflowMemorySelector);
-              await progressCandidates(state, memories, context);
+              await progressCandidates(state, memories, settings, context);
             },
           ),
         ),
         onInformation(
-          speechDecisionInformationKind,
+          attentionArousalCompletedInformationKind,
           {
             subscriptionId: "agent.heartflow.dispatch.decision",
             delivery: "durable",
@@ -352,7 +366,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
                 context,
               );
               const memories = await context.select(heartflowMemorySelector);
-              await progressCandidates(state, memories, context);
+              await progressCandidates(state, memories, settings, context);
             },
           ),
         ),
@@ -401,13 +415,14 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
 async function progressCandidates(
   atoms: readonly DeepReadonly<InformationAtom>[],
   memories: readonly DeepReadonly<InformationAtom>[],
+  settings: DeepReadonly<HeartflowSettings>,
   context: InformationModuleHandlerContext,
 ) {
   const candidates = atoms
     .filter(({ kind }) => kind === turnCandidateInformationKind.kind)
     .sort(compareCandidates);
   for (const candidate of uniqueAtoms(candidates)) {
-    await progressCandidate(candidate, atoms, memories, context);
+    await progressCandidate(candidate, atoms, memories, settings, context);
   }
 }
 
@@ -415,6 +430,7 @@ async function progressCandidate(
   candidate: DeepReadonly<InformationAtom>,
   atoms: readonly DeepReadonly<InformationAtom>[],
   memories: readonly DeepReadonly<InformationAtom>[],
+  settings: DeepReadonly<HeartflowSettings>,
   context: InformationModuleHandlerContext,
 ) {
   const map = new Map(atoms.map((atom) => [atom.informationId, atom]));
@@ -599,10 +615,77 @@ async function progressCandidate(
   const text = completeInputs
     .map(({ inbound }) => (inbound.payload as any).text as string)
     .join("\n");
-  const directness =
-    (source.mentions?.length ?? 0) > 0 || source.replyTo !== undefined
-      ? 1
-      : 0.8;
+  const selfId = source.selfId as string | undefined;
+  const mentionedSelf =
+    selfId !== undefined &&
+    (source.mentions ?? []).some(
+      (mention: any) => mention.kind === "user" && mention.id === selfId,
+    );
+  const deliveredMessageIds = new Set(
+    atoms
+      .filter(({ kind }) => kind === "core.delivery.delivered")
+      .flatMap((atom) => {
+        const id = (atom.payload as any).platformMessageId;
+        return typeof id === "string" ? [id] : [];
+      }),
+  );
+  const repliedToSelf =
+    source.replyTo !== undefined &&
+    ((selfId !== undefined && source.replyTo.senderId === selfId) ||
+      deliveredMessageIds.has(source.replyTo.platformMessageId));
+  const normalizedText = text.toLocaleLowerCase();
+  const namedSelf = settings.botNames.some((name) =>
+    normalizedText.includes(name.toLocaleLowerCase()),
+  );
+  const asOfMs = Date.parse(payload.asOf);
+  const recentStartMs = asOfMs - 5 * 60_000;
+  const recentInbound = atoms.filter(
+    (atom) =>
+      atom.kind === inboundTextInformationKind.kind &&
+      Date.parse(atom.occurredAt) >= recentStartMs &&
+      Date.parse(atom.occurredAt) <= asOfMs &&
+      sameScope((atom.payload as any).source, source),
+  );
+  const recentDelivered = atoms.filter(
+    (atom) =>
+      atom.kind === "core.delivery.delivered" &&
+      Date.parse(atom.occurredAt) >= recentStartMs &&
+      Date.parse(atom.occurredAt) <= asOfMs &&
+      sameDeliveryScope(atom.payload as any, source),
+  );
+  const intervalInbounds = atoms
+    .filter(
+      (atom) =>
+        atom.kind === inboundTextInformationKind.kind &&
+        Date.parse(atom.occurredAt) >= asOfMs - 30 * 60_000 &&
+        Date.parse(atom.occurredAt) <= asOfMs &&
+        sameScope((atom.payload as any).source, source),
+    )
+    .sort(
+      (left, right) =>
+        Date.parse(left.occurredAt) - Date.parse(right.occurredAt),
+    );
+  const intervals = intervalInbounds.slice(1).flatMap((atom, index) => {
+    const interval =
+      Date.parse(atom.occurredAt) -
+      Date.parse(intervalInbounds[index]!.occurredAt);
+    return interval >= 2_000 ? [interval] : [];
+  });
+  const averageIntervalMs =
+    intervals.length === 0
+      ? 30_000
+      : Math.max(
+          30_000,
+          intervals.reduce((sum, value) => sum + value, 0) / intervals.length,
+        );
+  const lastInboundAt = intervalInbounds.at(-1)?.occurredAt;
+  const idleReachedAverage =
+    lastInboundAt !== undefined &&
+    asOfMs - Date.parse(lastInboundAt) >= averageIntervalMs;
+  const isGroup = source.destination?.kind === "group";
+  // Web and other point-to-agent transports are direct conversations just
+  // like platform private messages; only an explicit group uses group policy.
+  const isPrivate = !isGroup;
   const safe = completeInputs.every(
     ({ identity }) => (identity.payload as any).status !== "failed",
   );
@@ -630,15 +713,24 @@ async function progressCandidate(
         })),
         text,
         source,
-        directness,
-        contentNeed: text.trim().length > 0 ? 1 : 0,
         messageCount: completeInputs.length,
-        recentPresencePenalty: 0,
-        frequencyMultiplier: 1,
-        muted: false,
+        isPrivate,
+        isGroup,
+        mentionedSelf,
+        repliedToSelf,
+        namedSelf,
+        recentSelfReplies: recentDelivered.length,
+        recentWindowMessages: recentInbound.length + recentDelivered.length,
+        idleReachedAverage,
+        frequency: isPrivate
+          ? settings.privateFrequency
+          : settings.groupFrequency,
+        muted: settings.muted,
         safe,
         destinationAvailable: source.destination !== undefined,
-        stale: false,
+        stale:
+          Number.isFinite(asOfMs) &&
+          Date.parse(payload.firedAt) - asOfMs > settings.staleAfterMs,
         ...(memories.length === 0
           ? {}
           : { memory: memories.map(({ informationId }) => informationId) }),
@@ -672,7 +764,7 @@ async function dispatchDecision(
   atoms: readonly DeepReadonly<InformationAtom>[],
   context: InformationModuleHandlerContext,
 ) {
-  const payload = decision.payload as SpeechDecisionPayload;
+  const payload = decision.payload as AttentionArousalPayload;
   const candidate = atoms.find(
     (atom) => atom.informationId === payload.candidateInformationId,
   );
@@ -696,7 +788,7 @@ async function dispatchDecision(
     claimInformationId: claim.informationId,
     scopeKey: candidatePayload.scopeKey,
   };
-  if (payload.action === "speak") {
+  if (payload.outcome === "attend") {
     const targetInput = (turnContext.payload as any).inputs.at(-1);
     if (targetInput === undefined)
       throw new Error("Speak decision requires a target turn input");
@@ -734,7 +826,7 @@ async function dispatchDecision(
     );
     return;
   }
-  if (payload.action === "wait") {
+  if (payload.outcome === "defer") {
     if (payload.dueAt === undefined || payload.delayMs === undefined)
       throw new Error("Wait decision requires dueAt and delayMs");
     const sourceInformationIds = (turnContext.payload as any).inputs.map(
@@ -1021,6 +1113,60 @@ async function hydrateCandidate(
       1_000,
     ),
   ).filter(({ kind }) => kind === inboundTextInformationKind.kind);
+  const source = (inbounds.at(-1)?.payload as any)?.source;
+  if (source !== undefined) {
+    const asOfMs = Date.parse((candidate.payload as any).asOf);
+    const occurredBefore = new Date(asOfMs + 1).toISOString();
+    remember(
+      await ledger.find({
+        kinds: [inboundTextInformationKind.kind],
+        occurredAfter: new Date(asOfMs - 30 * 60_000).toISOString(),
+        occurredBefore,
+        payloadContains: {
+          source: {
+            platform: source.platform,
+            adapterId: source.adapterId,
+            destination: source.destination,
+          },
+        },
+        order: "asc",
+        limit: 1_000,
+      }),
+    );
+    remember(
+      await ledger.find({
+        kinds: ["core.delivery.delivered"],
+        occurredAfter: new Date(asOfMs - 30 * 60_000).toISOString(),
+        occurredBefore,
+        payloadContains: {
+          ok: true,
+          platform: source.platform,
+          adapterId: source.adapterId,
+          target: source.destination,
+        },
+        order: "asc",
+        limit: 1_000,
+      }),
+    );
+    const repliedMessageId = source.replyTo?.platformMessageId;
+    if (typeof repliedMessageId === "string") {
+      remember(
+        await ledger.find({
+          kinds: ["core.delivery.delivered"],
+          occurredBefore,
+          payloadContains: {
+            ok: true,
+            platform: source.platform,
+            adapterId: source.adapterId,
+            target: source.destination,
+            platformMessageId: repliedMessageId,
+          },
+          order: "desc",
+          limit: 1,
+        }),
+      );
+    }
+  }
   for (const inbound of inbounds) {
     remember(
       await related(
@@ -1129,6 +1275,23 @@ function referenced(
     const atom = atoms.get(reference.informationId);
     return atom === undefined ? [] : [atom];
   });
+}
+
+function sameScope(left: any, right: any): boolean {
+  return (
+    left?.platform === right?.platform &&
+    left?.adapterId === right?.adapterId &&
+    JSON.stringify(left?.destination) === JSON.stringify(right?.destination)
+  );
+}
+
+function sameDeliveryScope(delivery: any, source: any): boolean {
+  return (
+    delivery?.ok === true &&
+    delivery?.platform === source?.platform &&
+    delivery?.adapterId === source?.adapterId &&
+    JSON.stringify(delivery?.target) === JSON.stringify(source?.destination)
+  );
 }
 
 function identityTerminalFor(

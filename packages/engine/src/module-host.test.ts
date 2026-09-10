@@ -239,7 +239,8 @@ describe("ModuleHost", () => {
     });
     const module = defineInformationModule({
       manifest: {
-        protocolVersion: 1,
+        protocolVersion: 2,
+        summary: "Test information module.",
         moduleVersion: "1.0.0",
         selectors: [],
         promptRenderers: [],
@@ -341,7 +342,8 @@ describe("ModuleHost", () => {
     await core.start();
     const module = defineInformationModule({
       manifest: {
-        protocolVersion: 1,
+        protocolVersion: 2,
+        summary: "Test information module.",
         moduleVersion: "1.0.0",
         selectors: [],
         promptRenderers: [],
@@ -400,7 +402,8 @@ describe("ModuleHost", () => {
     });
     const module = defineInformationModule({
       manifest: {
-        protocolVersion: 1,
+        protocolVersion: 2,
+        summary: "Test information module.",
         moduleVersion: "1.0.0",
         selectors: [currentSelector],
         promptRenderers: [],
@@ -471,7 +474,8 @@ describe("ModuleHost", () => {
     });
     const module = defineInformationModule({
       manifest: {
-        protocolVersion: 1,
+        protocolVersion: 2,
+        summary: "Test information module.",
         moduleVersion: "1.0.0",
         selectors: [replacementSelector],
         promptRenderers: [],
@@ -530,7 +534,8 @@ describe("ModuleHost", () => {
     });
     const module = defineInformationModule({
       manifest: {
-        protocolVersion: 1,
+        protocolVersion: 2,
+        summary: "Test information module.",
         moduleVersion: "1.0.0",
         selectors: [],
         promptRenderers: [],
@@ -601,7 +606,8 @@ describe("ModuleHost", () => {
     });
     const module = defineInformationModule({
       manifest: {
-        protocolVersion: 1,
+        protocolVersion: 2,
+        summary: "Test information module.",
         moduleVersion: "1.0.0",
         selectors: [failingSelector],
         promptRenderers: [],
@@ -658,7 +664,8 @@ describe("ModuleHost", () => {
     let creates = 0;
     const module = defineInformationModule({
       manifest: {
-        protocolVersion: 1,
+        protocolVersion: 2,
+        summary: "Test information module.",
         moduleVersion: "1.0.0",
         selectors: [],
         promptRenderers: [],
@@ -713,7 +720,8 @@ describe("ModuleHost", () => {
     let disposed = 0;
     const module = defineInformationModule({
       manifest: {
-        protocolVersion: 1,
+        protocolVersion: 2,
+        summary: "Test information module.",
         moduleVersion: "1.0.0",
         selectors: [],
         promptRenderers: [],
@@ -781,7 +789,8 @@ describe("ModuleHost", () => {
     const rollbackFailure = new Error("async rollback failed");
     const module = defineInformationModule({
       manifest: {
-        protocolVersion: 1,
+        protocolVersion: 2,
+        summary: "Test information module.",
         moduleVersion: "1.0.0",
         selectors: [],
         promptRenderers: [],
@@ -842,7 +851,8 @@ describe("ModuleHost", () => {
     const asynchronousFailure = new Error("async dispose failed");
     const module = defineInformationModule({
       manifest: {
-        protocolVersion: 1,
+        protocolVersion: 2,
+        summary: "Test information module.",
         moduleVersion: "1.0.0",
         selectors: [],
         promptRenderers: [],
@@ -900,7 +910,8 @@ describe("ModuleHost", () => {
     let disposed = 0;
     const module = defineInformationModule({
       manifest: {
-        protocolVersion: 1,
+        protocolVersion: 2,
+        summary: "Test information module.",
         moduleVersion: "1.0.0",
         selectors: [],
         promptRenderers: [],
@@ -953,7 +964,8 @@ describe("ModuleHost", () => {
     const derived: DeepReadonly<InformationAtom>[] = [];
     const module = defineInformationModule({
       manifest: {
-        protocolVersion: 1,
+        protocolVersion: 2,
+        summary: "Test information module.",
         moduleVersion: "1.0.0",
         selectors: [],
         promptRenderers: [],
@@ -1012,7 +1024,8 @@ describe("ModuleHost", () => {
     const rejections: unknown[] = [];
     const module = defineInformationModule({
       manifest: {
-        protocolVersion: 1,
+        protocolVersion: 2,
+        summary: "Test information module.",
         moduleVersion: "1.0.0",
         selectors: [],
         promptRenderers: [],
@@ -1072,7 +1085,8 @@ describe("ModuleHost", () => {
     await core.start();
     const module = defineInformationModule({
       manifest: {
-        protocolVersion: 1,
+        protocolVersion: 2,
+        summary: "Test information module.",
         moduleVersion: "1.0.0",
         selectors: [],
         promptRenderers: [],
@@ -1121,7 +1135,8 @@ describe("ModuleHost", () => {
     let disposed = 0;
     const module = defineInformationModule({
       manifest: {
-        protocolVersion: 1,
+        protocolVersion: 2,
+        summary: "Test information module.",
         moduleVersion: "1.0.0",
         selectors: [],
         promptRenderers: [],
@@ -1183,7 +1198,8 @@ describe("ModuleHost", () => {
     let rejection: unknown;
     const module = defineInformationModule({
       manifest: {
-        protocolVersion: 1,
+        protocolVersion: 2,
+        summary: "Test information module.",
         moduleVersion: "1.0.0",
         selectors: [],
         promptRenderers: [],
@@ -1229,7 +1245,8 @@ describe("ModuleHost", () => {
     let atom: DeepReadonly<InformationAtom> | undefined;
     const module = defineInformationModule({
       manifest: {
-        protocolVersion: 1,
+        protocolVersion: 2,
+        summary: "Test information module.",
         moduleVersion: "1.0.0",
         selectors: [],
         promptRenderers: [],
@@ -1277,7 +1294,8 @@ describe("ModuleHost", () => {
     const make = (id: string) =>
       defineInformationModule({
         manifest: {
-          protocolVersion: 1,
+          protocolVersion: 2,
+          summary: "Test information module.",
           moduleVersion: "1.0.0",
           selectors: [],
           promptRenderers: [],
@@ -1339,7 +1357,8 @@ describe("ModuleHost", () => {
     const context = await appendContext(core);
     const module = defineInformationModule({
       manifest: {
-        protocolVersion: 1,
+        protocolVersion: 2,
+        summary: "Test information module.",
         moduleVersion: "1.0.0",
         selectors: [],
         promptRenderers: [],

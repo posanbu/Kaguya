@@ -6,12 +6,24 @@
 
 `src/first-party/catalog.ts` 必须显式导入并注册每一个受信模块。Runtime 不扫描目录，也不会因为新增一方文件而自动发现或激活模块。Manifest 的 `consumes` 与 `produces` 是 Runtime 收集模块 Kind 的唯一接口；Runtime、Engine 与 Scheduler 只单独注册自身拥有的基础 Kind。
 
-模块 Manifest 必须提供非空的 `displayName` 与 `description`。每个 Information Kind 和 Prompt renderer 也必须提供非空的 `displayName` 与 `description`；renderer 还要声明稳定 `rendererId` 及适用的 `kinds`。Inspection 和后续 WebUI 直接使用这些字段，不能另行硬编码模块或 Kind 名称。
+protocol v2 模块 Manifest 必须提供非空的 `displayName`、单行 `summary` 与完整 `description`。每个 Information Kind 和 Prompt renderer 继续提供非空的 `displayName` 与 `description`；renderer 还要声明稳定 `rendererId` 及适用的 `kinds`。Inspection 和后续 WebUI 直接使用这些字段，不能另行硬编码模块名称。
+
+## 模块文档索引
+
+每个一方模块的相邻 README 是完整说明的唯一事实来源：
+
+- [Attention Arousal](./src/first-party/attention-arousal/README.md)
+- [Heartbeat](./src/first-party/heartbeat/README.md)
+- [Heartflow](./src/first-party/heartflow/README.md)
+- [Identity](./src/first-party/identity/README.md)
+- [Association](./src/first-party/association/README.md)
+- [LLM Reply](./src/first-party/llm-reply/README.md)
+- [Person Fact Task](./src/first-party/person-fact-task/README.md)
 
 ## Heartbeat 与 Heartflow
 
-`heartbeatModule`（定义 ID：`agent.heartbeat.short`）依赖 `oneShotScheduleCapability`，消费 inbound text、`agent.wait.requested` 和 one-shot due，产生 heartbeat schedule/terminal 以及 `agent.turn.candidate`。`createHeartflowModule()` 使用 scope generation、identity barrier 和不可变多输入 context，把 candidate 推进为 speak、wait 或 silent，并为每个 turn 提交唯一终态。
+`heartbeatModule`（定义 ID：`agent.heartbeat.short`）依赖 `oneShotScheduleCapability`，消费 inbound text、`agent.wait.requested` 和 one-shot due，产生 heartbeat schedule/terminal 以及 `agent.turn.candidate`。`createHeartflowModule()` 使用 scope generation、identity barrier 和不可变多输入 context，把 Attention Arousal 的 `attend | defer | ignore` 推进为 reply、wait 或 silent，并为每个 turn 提交唯一终态。
 
 `createFirstPartyModuleActivations("production")` 使用 1500 ms 去抖，`"test"` 使用 0 ms；两种 profile 都启用 Heartbeat 与 Heartflow。Heartbeat payload 使用绝对时间和稳定 destination scope。消息延期通过 one-shot replacement 合并，进程重启由 durable scheduler 恢复。
 
-默认 Catalog 不含 always-reply、inbound-to-context 或 speech-to-reply 桥接。LLM reply 只接收 Heartflow 的 speak 分支，并沿 turn provenance 把 delivery terminal 交回 Heartflow 完成回合。
+默认 Catalog 不含 always-reply 或 inbound-to-context 旁路。LLM reply 当前只接收 Heartflow 的 `attend` 临时桥接，并沿 turn provenance 把 delivery terminal 交回 Heartflow 完成回合。

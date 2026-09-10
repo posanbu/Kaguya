@@ -652,6 +652,7 @@ export class ModuleHost {
       .map(({ manifest }) => ({
         definitionId: manifest.definitionId,
         displayName: manifest.displayName,
+        summary: manifest.summary,
         description: manifest.description,
         moduleVersion: manifest.moduleVersion,
         protocolVersion: manifest.protocolVersion,

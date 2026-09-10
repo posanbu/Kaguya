@@ -220,7 +220,7 @@ describe("unified server composition", () => {
         "agent.chat.scope.entity",
         "agent.heartbeat.scheduled",
         "agent.person.context.completed",
-        "agent.speech.decision",
+        "agent.attention.arousal.completed",
         "agent.turn.candidate",
         "agent.turn.claimed",
         "agent.turn.completed",

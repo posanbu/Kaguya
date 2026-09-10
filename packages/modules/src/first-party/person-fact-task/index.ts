@@ -141,7 +141,7 @@ export function createPersonFactTaskModule<
 
   return defineInformationModule({
     manifest: {
-      protocolVersion: 1,
+      protocolVersion: 2,
       moduleVersion: "1.0.0",
       selectors: [
         currentPersonFactCandidateSelector,
@@ -152,8 +152,9 @@ export function createPersonFactTaskModule<
       provides: [],
       definitionId: "demo.person.fact.extract",
       displayName: "Person fact extractor",
+      summary: "Extracts evidence-backed person facts through a Model Task.",
       description:
-        "Extracts validated person facts from candidate information through the shared model-task capability.",
+        "Extracts validated, evidence-backed person facts from candidate information through the shared Model Task capability. Invalid or ungrounded output never becomes a domain fact, and this module does not own identity or memory evolution.",
       settingsSchema: personFactTaskSettingsSchema,
       consumes: [personFactCandidateInformationKind, completedInformationKind],
       produces: [personFactExtractedInformationKind],

@@ -424,7 +424,8 @@ describe("createLlmReplyModule", () => {
     });
     const memoryModule = defineInformationModule({
       manifest: {
-        protocolVersion: 1,
+        protocolVersion: 2,
+        summary: "Test information module.",
         moduleVersion: "1.0.0",
         selectors: [],
         promptRenderers: [],
@@ -521,7 +522,9 @@ describe("createLlmReplyModule", () => {
 
   it("declares each direct causal edge and the shared context requirement", () => {
     expect(replyRequestedInformationKind.references).toMatchObject({
-      "core:caused-by": { targetKinds: ["agent.speech.decision"] },
+      "core:caused-by": {
+        targetKinds: ["agent.attention.arousal.completed"],
+      },
       "core:context": { targetKinds: ["core.runtime.context"] },
       "core:uses-context": {
         required: true,
