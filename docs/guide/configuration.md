@@ -5,7 +5,7 @@ description: 完成首次配置，管理多个 Profile，并理解配置何时�
 
 # 配置 Kaguya
 
-Profile Registry 保存 runtime、数据库、AI、Memory、平台与 review；全局 selected Profile 是这些字段的运行真值。模块实例配置独立位于同一配置根的 `modules/`。环境只用 `KAGUYA_CONFIG_ROOT` 定位配置根。
+Profile Registry 保存 Agent identity、runtime、数据库、AI、Memory、平台与 review；全局 selected Profile 是这些字段的运行真值。模块实例配置独立位于同一配置根的 `modules/`。环境只用 `KAGUYA_CONFIG_ROOT` 定位配置根。
 
 ## 首次启动会发生什么
 
@@ -48,6 +48,16 @@ Gateway Token 不写入 runtime，也不是 runtime 的合法字段。它在每�
 
 **Profile 名称** — 1 至 100 个字符，用于人类识别；Profile ID 是系统生成的稳定标识。
 
+**Agent 身份** — `identity.name`、至少一个 `identity.aliases` 和 `identity.persona` 都是必填项。别名会 trim、去重，且不能与主名字相同。Reply Prompt 和 Heartflow 提及识别统一使用这里的名字与别名；平台自己的账号仍取当前消息的 `selfId`。旧 Profile 缺少 `identity` 时会明确报告配置不完整，不会自动迁移。可手工补充：
+
+```json
+"identity": {
+  "name": "Kaguya",
+  "aliases": ["辉夜"],
+  "persona": "是人类，正在上网和群友聊天。回复自然、简短。"
+}
+```
+
 **Base URL** — OpenAI-compatible Provider 的服务地址，例如供应商提供的 `/v1` 入口。
 
 **API Key** — 只提交给当前 Kaguya Server，并以明文写入受保护的 Profile JSON。不要粘贴到 Issue、PR 或截图。
@@ -69,6 +79,16 @@ Gateway Token 不写入 runtime，也不是 runtime 的合法字段。它在每�
 首次启动时，如果整个 `modules/` 不存在，Kaguya 会生成六个一方实例的完整 v1 文件。此后只读取文件，不补缺失内容：目录已存在时，缺少实例、出现未知实例、版本错误、身份不匹配或 settings 缺字段都会阻止启动。
 
 每个 `<KAGUYA_CONFIG_ROOT>/modules/<instanceId>/config.json` 必须显式包含 `version`、`instanceId`、`definitionId`、`enabled` 和完整 `settings`。修改后重启；当前不提供 HTTP 或 Web 管理接口。
+
+## 本地覆盖 Prompt
+
+一方 Prompt 模板位于 `packages/modules/templates/`。把任意 `*.default.hbs` 复制为对应的 `*.local.hbs`，即可修改当前源码工作区的 Prompt；本地文件优先于默认文件，被 Git 忽略，且只在 Server 重启时重新读取。
+
+::: warning Handlebars 边界
+声明的变量可以不出现，也可以重复出现；未知变量、未知或动态 partial、自定义 helper、递归 partial、空文件和读取失败会使 Server 拒绝启动。只开放 `each`、`if`、`unless` 与固定静态 partial，不允许任意磁盘 include。动态内容按原文写入，不会自动添加 XML 包裹或进行逃逸，模板作者必须维护清晰的数据边界与安全提示。
+:::
+
+Reply 的层级固定为消息 partial → history/memory/quoted/target → 外层 `llm-reply`。历史最多 30 条；历史 12,000 字符和 Memory 4,000 字符预算按 Unicode code point 在消息层渲染后、集合层渲染前执行。可用变量和全部模板名记录在 `packages/modules/src/first-party/llm-reply/README.md`。
 
 ## 管理多个 Profile
 

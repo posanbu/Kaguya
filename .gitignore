@@ -12,5 +12,6 @@ coverage/
 .DS_Store
 .worktrees/
 .impeccable/
+packages/modules/templates/*.local.hbs
 init.sh
 docs/.vitepress/cache/

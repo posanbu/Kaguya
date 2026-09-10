@@ -126,6 +126,34 @@ const memoryConfigInnerSchema = z.strictObject({
 
 export const memoryConfigSchema = guardSchemaInput(memoryConfigInnerSchema);
 
+export const agentIdentitySchema = z
+  .strictObject({
+    name: nonEmptyIdSchema,
+    aliases: z
+      .array(nonEmptyIdSchema)
+      .min(1)
+      .transform((aliases) => [...new Set(aliases)]),
+    persona: z.string().trim().min(1),
+  })
+  .superRefine((identity, context) => {
+    for (const [position, alias] of identity.aliases.entries()) {
+      if (alias === identity.name) {
+        context.addIssue({
+          code: "custom",
+          path: ["aliases", position],
+          message: "Agent aliases must differ from the name",
+        });
+      }
+    }
+  });
+
+export const DEFAULT_AGENT_IDENTITY: z.infer<typeof agentIdentitySchema> = {
+  name: "Kaguya",
+  aliases: ["辉夜"],
+  persona:
+    "是人类，正在上网和群友聊天。你的风格平淡简短，使用自然、日常、口语化的中文。可以参考贴吧、知乎和微博的回复风格；不浮夸，不长篇大论，不堆砌修辞和复杂句。优先用少量文字回应当前最重要的话题，不复述对方的问题。",
+};
+
 const runtimeGatewayAllowlistSchema = z.array(z.string());
 
 const runtimeConfigInnerSchema = z.strictObject({
@@ -155,6 +183,7 @@ export const runtimeConfigSchema = runtimeConfigInnerSchema;
 
 const userConfigProfileSettingsInnerSchema = z
   .strictObject({
+    identity: agentIdentitySchema,
     ai: aiConfigSchema,
     memory: memoryConfigSchema,
     platforms: z.array(platformConfigSchema),
@@ -438,6 +467,7 @@ export type UserConfigProfileSettingsInput = Omit<
 };
 export type RuntimeConfig = z.infer<typeof runtimeConfigSchema>;
 export type RuntimeConfigInput = z.input<typeof runtimeConfigSchema>;
+export type AgentIdentity = z.infer<typeof agentIdentitySchema>;
 export type MemoryConfig = z.infer<typeof memoryConfigSchema>;
 export type UserConfigProfileMetadata = z.infer<
   typeof userConfigProfileMetadataSchema
@@ -471,6 +501,7 @@ export type UpdateUserConfigProfileInput = UserConfigProfileSettingsInput & {
 
 export function emptyUserConfigProfileSettings(): UserConfigProfileSettings {
   return {
+    identity: structuredClone(DEFAULT_AGENT_IDENTITY),
     ai: { providers: [] },
     memory: { enabled: false },
     platforms: [],

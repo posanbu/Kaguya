@@ -213,6 +213,7 @@ async function createInstance(executor: ModelTaskCapability) {
   const definition = createPersonFactTaskModule({
     modelTaskCapability,
     modelTaskCompletedInformationKind,
+    promptTemplate: "{{person_id}}\n{{name}}\n{{candidate}}",
   });
   return {
     definition,
@@ -320,18 +321,12 @@ describe("createPersonFactTaskModule", () => {
       selectionPolicy: { tier: "light" },
       prompt: {
         kind: "memory",
-        fragments: [
+        variables: expect.arrayContaining([
           expect.objectContaining({
-            id: "candidate-1",
-            informationId: "candidate-1",
+            name: "candidate",
+            informationIds: ["candidate-1"],
           }),
-        ],
-        provenance: [
-          expect.objectContaining({
-            fragmentId: "candidate-1",
-            informationId: "candidate-1",
-          }),
-        ],
+        ]),
       },
     });
     expect(request!.contextAtoms).toEqual([candidate]);

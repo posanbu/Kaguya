@@ -141,6 +141,7 @@ describe("configuration management", () => {
         name: created.profile.name,
         gatewayAllowlist: [],
         acknowledgedWarnings: [],
+        identity: created.profile.identity,
         ai: { providers: [] },
         memory: { enabled: false },
         platforms: [],
@@ -196,6 +197,7 @@ describe("configuration management", () => {
       await manager.replaceProfile(original.id, {
         name: original.name,
         acknowledgedWarnings: [],
+        identity: original.identity,
         ai: original.ai,
         memory: original.memory,
         platforms: original.platforms,
@@ -215,6 +217,7 @@ describe("configuration management", () => {
         name: "default-edited",
         gatewayAllowlist: ["qq:group:778899"],
         acknowledgedWarnings: [],
+        identity: original.identity,
         ai: original.ai,
         memory: original.memory,
         platforms: original.platforms,
@@ -242,6 +245,7 @@ describe("configuration management", () => {
       await manager.replaceProfile(original.id, {
         name: original.name,
         acknowledgedWarnings: [],
+        identity: original.identity,
         ai: original.ai,
         memory: original.memory,
         platforms: original.platforms,
@@ -371,6 +375,7 @@ async function createRuntimeBackedManagement(root: string) {
   await manager.replaceProfile(profile.id, {
     name: profile.name,
     acknowledgedWarnings: [],
+    identity: profile.identity,
     ai: profile.ai,
     memory: profile.memory,
     platforms: profile.platforms,
@@ -381,6 +386,7 @@ async function createRuntimeBackedManagement(root: string) {
 
 function readyProfileSettings(lightModelId: string, heavyModelId: string) {
   return {
+    identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
     ai: {
       defaultProviderId: "provider-1",
       modelTiers: {

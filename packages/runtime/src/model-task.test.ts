@@ -9,7 +9,6 @@ import { createTestingDatabase } from "@kaguya/database/testing";
 import { InformationCore, InformationKindRegistry } from "@kaguya/engine";
 import { KaguyaLlmClient } from "@kaguya/llm/client";
 import { createRepeatingDeterministicModel } from "@kaguya/llm/testing";
-import { PromptCompiler } from "@kaguya/prompt";
 import { z } from "@kaguya/schema";
 import {
   defineInformationKind,
@@ -87,17 +86,18 @@ async function fixture(durable = false) {
     payload: { text: "second" },
     references: source.references,
   });
-  const prompt = new PromptCompiler().compile(
-    "reply",
-    [source, second].map((atom, i) => ({
-      id: `fragment-${i}`,
-      informationId: atom.informationId,
-      source: "history" as const,
-      priority: i,
-      content: atom.payload.text,
-      metadata: {},
-    })),
-  );
+  const variables = [source, second].map((atom, i) => ({
+    name: `context_${i}`,
+    informationIds: [atom.informationId],
+    content: atom.payload.text,
+  }));
+  const prompt = {
+    kind: "reply" as const,
+    templateId: "test.reply.v1",
+    templates: [{ name: "main", content: "{{context_0}}\n{{context_1}}" }],
+    text: variables.map(({ content }) => content).join("\n"),
+    variables,
+  };
   const generate = vi.fn().mockResolvedValue({
     output: { text: "hello" },
     usage: { totalTokens: 7 },
@@ -138,17 +138,7 @@ it("reuses requested identity across instances and canonical key order, with onl
   const second = await new ModelTaskClient(f.options).execute({
     ...f.request,
     activation: { definitionId: "test.module", instanceId: "test.two" },
-    prompt: {
-      ...f.request.prompt,
-      text: "excluded from fingerprint",
-      provenance: f.request.prompt.provenance.map((p) => ({
-        contentDigest: p.contentDigest,
-        priority: p.priority,
-        source: p.source,
-        informationId: p.informationId!,
-        fragmentId: p.fragmentId,
-      })),
-    },
+    prompt: structuredClone(f.request.prompt),
   });
   expect(first).toEqual(second);
   expect(first.status).toBe("completed");
@@ -166,7 +156,7 @@ it("reuses requested identity across instances and canonical key order, with onl
     activation: f.request.activation,
     selectionPolicy: { tier: "heavy" },
     resolvedModel: { providerId: "test", modelId: "test-heavy" },
-    prompt: { provenance: f.request.prompt.provenance },
+    prompt: { variables: f.request.prompt.variables },
   });
   expect(
     requested.references
@@ -372,9 +362,7 @@ it("supports a non-reply task-owned schema without a central business union", as
 });
 
 it.each([
-  "order",
-  "digest",
-  "fragment",
+  "unknown-provenance",
   "forged-atom",
   "missing-atom",
   "tier",
@@ -387,9 +375,8 @@ it.each([
     task: { ...f.request.task, outputSchema: undefined },
   });
   const changed = { ...request, task: { ...f.request.task } };
-  if (mode === "order") changed.contextAtoms.reverse();
-  if (mode === "digest") changed.prompt.provenance[0]!.contentDigest = "forged";
-  if (mode === "fragment") changed.prompt.provenance[0]!.fragmentId = "forged";
+  if (mode === "unknown-provenance")
+    changed.prompt.variables[0]!.informationIds = ["unknown"];
   if (mode === "forged-atom")
     changed.contextAtoms[0] = {
       ...changed.contextAtoms[0]!,
@@ -408,6 +395,24 @@ it.each([
   expect(
     (await f.atoms()).filter((a) => a.kind.startsWith("core.model.task.")),
   ).toEqual([]);
+});
+
+it("allows selected context to be omitted from Prompt provenance", async () => {
+  const f = await fixture();
+  const changed = {
+    ...f.request,
+    prompt: {
+      ...f.request.prompt,
+      variables: f.request.prompt.variables.map((variable) => ({
+        ...variable,
+        informationIds: [...variable.informationIds],
+      })),
+    },
+  };
+  changed.prompt.variables[0]!.informationIds = [];
+  await expect(f.client.execute(changed)).resolves.toMatchObject({
+    status: "completed",
+  });
 });
 
 it.each(["schema", "provider"])(
@@ -579,47 +584,63 @@ it("returns the persisted winner output without applying a transform again", asy
   expect(await f.client.execute(request)).toEqual(first);
 });
 
-it.each(["task", "version", "source", "kind", "digest", "order", "policy"])(
-  "includes %s in the fingerprint",
-  async (mode) => {
-    const f = await fixture();
-    const first = await f.client.execute(f.request);
-    const changed = {
-      ...f.request,
-      selectionPolicy: {
-        tier: f.request.selectionPolicy.tier as "light" | "heavy",
-      },
-      task: { ...f.request.task, allowedTiers: ["light", "heavy"] as const },
-    };
-    if (mode === "task") changed.task.taskId = "test.another";
-    if (mode === "version") changed.task.version = "2";
-    if (mode === "source")
-      changed.sourceInformationId = f.request.contextAtoms[1]!.informationId;
-    if (mode === "kind") changed.prompt = { ...changed.prompt, kind: "memory" };
-    if (mode === "policy") changed.selectionPolicy = { tier: "light" };
-    if (mode === "digest")
-      changed.prompt = new PromptCompiler().compile(
-        "reply",
-        changed.prompt.fragments.map((f) => ({
-          ...f,
-          content: f.content + "changed renderer",
-        })),
-      );
-    if (mode === "order") {
-      changed.contextAtoms = [...changed.contextAtoms].reverse();
-      changed.prompt = new PromptCompiler().compile(
-        "reply",
-        [...changed.prompt.fragments]
-          .reverse()
-          .map((f, priority) => ({ ...f, priority })),
-      );
-    }
-    const second = await f.client.execute(changed);
-    expect(first.requestedInformationId).not.toBe(
-      second.requestedInformationId,
+it.each([
+  "task",
+  "version",
+  "source",
+  "kind",
+  "content",
+  "template",
+  "partial",
+  "order",
+  "policy",
+])("includes %s in the fingerprint", async (mode) => {
+  const f = await fixture();
+  const first = await f.client.execute(f.request);
+  const changed = {
+    ...f.request,
+    selectionPolicy: {
+      tier: f.request.selectionPolicy.tier as "light" | "heavy",
+    },
+    task: { ...f.request.task, allowedTiers: ["light", "heavy"] as const },
+  };
+  if (mode === "task") changed.task.taskId = "test.another";
+  if (mode === "version") changed.task.version = "2";
+  if (mode === "source")
+    changed.sourceInformationId = f.request.contextAtoms[1]!.informationId;
+  if (mode === "kind")
+    changed.prompt = { ...changed.prompt, kind: "memory" as never };
+  if (mode === "policy") changed.selectionPolicy = { tier: "light" };
+  if (mode === "content") {
+    changed.prompt.variables = changed.prompt.variables.map((variable, i) =>
+      i === 0
+        ? { ...variable, content: variable.content + "changed renderer" }
+        : variable,
     );
-    expect(
-      (await f.atoms()).filter((a) => a.kind === "core.model.task.requested"),
-    ).toHaveLength(2);
-  },
-);
+    changed.prompt.text += "changed renderer";
+  }
+  if (mode === "template") {
+    changed.prompt.templates = [
+      { name: "main", content: "{{context_1}}\n{{context_0}}" },
+    ];
+    changed.prompt.text = [...changed.prompt.variables]
+      .reverse()
+      .map(({ content }) => content)
+      .join("\n");
+  }
+  if (mode === "partial") {
+    changed.prompt.templates = [
+      ...changed.prompt.templates,
+      { name: "nested", content: "changed partial" },
+    ];
+  }
+  if (mode === "order") {
+    changed.contextAtoms = [...changed.contextAtoms].reverse();
+    changed.prompt.variables = [...changed.prompt.variables].reverse();
+  }
+  const second = await f.client.execute(changed);
+  expect(first.requestedInformationId).not.toBe(second.requestedInformationId);
+  expect(
+    (await f.atoms()).filter((a) => a.kind === "core.model.task.requested"),
+  ).toHaveLength(2);
+});

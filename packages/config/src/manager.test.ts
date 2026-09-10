@@ -145,6 +145,7 @@ vi.mock("./secure-files.js", async (importOriginal) => {
 });
 
 const roots: string[] = [];
+const identity = { name: "Kaguya", aliases: ["辉夜"], persona: "test persona" };
 
 async function createEmptyRoot(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "kaguya-config-manager-"));
@@ -163,6 +164,7 @@ function readySettings(
   options: { readonly baseUrl?: boolean } = {},
 ): UserConfigProfileSettings {
   return {
+    identity,
     ai: {
       defaultProviderId: "provider-1",
       modelTiers: {
@@ -198,6 +200,7 @@ function readySettings(
 
 function reviewSettings(): UserConfigProfileSettings {
   return {
+    identity,
     ai: {
       defaultProviderId: "provider-1",
       modelTiers: {
@@ -269,6 +272,10 @@ describe("FileUserConfigManager profile lifecycle", () => {
         version: 1,
         id: "default",
         name: "default",
+        identity: expect.objectContaining({
+          name: "Kaguya",
+          aliases: ["辉夜"],
+        }),
         ai: { providers: [] },
         memory: { enabled: false },
         platforms: [],
@@ -343,6 +350,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
     const created = await manager.createProfile("work");
     await manager.replaceProfile(created.id, {
       acknowledgedWarnings: [],
+      identity,
       name: created.name,
       ai: {
         defaultProviderId: "provider-1",
@@ -407,6 +415,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
       const error = await manager
         .replaceProfile(created.id, {
           acknowledgedWarnings: [],
+          identity,
           name: created.name,
           ...initial,
         } as never)
@@ -432,6 +441,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
     const created = await manager.createProfile("omitted-optionals");
     const replaced = await manager.replaceProfile(created.id, {
       acknowledgedWarnings: [],
+      identity,
       name: created.name,
       ai: {
         providers: [
@@ -466,6 +476,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
       ...settings,
       name: created.name,
       acknowledgedWarnings: [],
+      identity,
       memory: { enabled: true },
     });
     const reopened = await FileUserConfigManager.open({ rootDir });
@@ -483,6 +494,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
     const created = await manager.createProfile("work");
     const replaced = await manager.replaceProfile(created.id, {
       acknowledgedWarnings: [],
+      identity,
       name: created.name,
       ai: {
         providers: [
@@ -525,6 +537,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
     await expect(
       manager.replaceProfile(work.id, {
         acknowledgedWarnings: [],
+        identity,
         name: " renamed ",
         ai: { providers: [] },
         memory: { enabled: false },
@@ -545,6 +558,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
     await expect(
       manager.replaceProfile(work.id, {
         acknowledgedWarnings: [],
+        identity,
         name: " personal ",
         ai: { providers: [] },
         memory: { enabled: false },
@@ -690,6 +704,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
 
       const updated = await manager.replaceProfile(created.id, {
         acknowledgedWarnings: [],
+        identity,
         name: "after-update",
         ai: { providers: [] },
         memory: { enabled: false },
@@ -735,6 +750,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
     await expect(
       manager.replaceProfile(manager.getSelectedProfileId(), {
         acknowledgedWarnings: [],
+        identity,
         name: "default",
         ai: {
           providers: [
@@ -768,6 +784,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
     const error = await manager
       .replaceProfile(manager.getSelectedProfileId(), {
         acknowledgedWarnings: [],
+        identity,
         name: "default",
         ai: { providers: [] },
         platforms: [],
@@ -809,6 +826,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
     const created = await manager.createProfile("prototype-keys");
     const replaced = await manager.replaceProfile(created.id, {
       acknowledgedWarnings: [],
+      identity,
       name: created.name,
       ai: { providers: [] },
       memory: { enabled: false },
@@ -885,6 +903,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
     const work = await manager.createProfile("work");
     await manager.replaceProfile(work.id, {
       acknowledgedWarnings: [],
+      identity,
       name: work.name,
       ai: { providers: [] },
       memory: { enabled: false },
@@ -898,6 +917,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
     await expect(
       manager.replaceProfile(work.id, {
         acknowledgedWarnings: [],
+        identity,
         name: work.name,
         ai: { providers: [] },
         memory: { enabled: true },
@@ -924,6 +944,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
     const work = await manager.createProfile("work");
     await manager.replaceProfile(work.id, {
       acknowledgedWarnings: [],
+      identity,
       name: work.name,
       ai: { providers: [] },
       memory: { enabled: false },
@@ -944,6 +965,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
     await expect(
       manager.replaceProfile(work.id, {
         acknowledgedWarnings: [],
+        identity,
         name: work.name,
         ai: { providers: [] },
         memory: { enabled: true },
@@ -1060,6 +1082,7 @@ describe("FileUserConfigManager profile resolution", () => {
     const incomplete = await manager.createProfile("incomplete");
     await manager.replaceProfile(incomplete.id, {
       acknowledgedWarnings: [],
+      identity,
       name: incomplete.name,
       ai: {
         defaultProviderId: "provider-1",
@@ -1249,6 +1272,7 @@ describe("FileUserConfigManager corruption safety", () => {
     const error = await manager
       .replaceProfile(manager.getSelectedProfileId(), {
         acknowledgedWarnings: [],
+        identity,
         name: "default",
         ai: {
           defaultProviderId: "missing",

@@ -114,6 +114,7 @@ function completeReplacement() {
   return {
     name: "default",
     acknowledgedWarnings: [],
+    identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
     runtime: {
       host: "127.0.0.1",
       port: 7897,

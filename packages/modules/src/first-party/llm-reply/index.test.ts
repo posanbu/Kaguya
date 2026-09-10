@@ -57,6 +57,22 @@ import {
 import * as informationKinds from "../information-kinds.js";
 
 const contextId = informationIdSchema.parse("context-1");
+const testReplyTemplates = {
+  main: "{{scene}}\n{{history}}\n{{memory}}\n{{quoted}}\n{{target}}",
+  history:
+    "{{#each messages}}{{#if is_assistant}}{{> history-assistant}}{{else}}{{> history-inbound}}{{/if}}{{/each}}",
+  historyInbound: "{{content}}",
+  historyAssistant: "{{content}}",
+  memory: "{{#each items}}{{> memory-item}}{{/each}}",
+  memoryItem: "{{content}}",
+  quoted: "{{message}}",
+  target: "{{content}}",
+};
+const testIdentity = {
+  name: "Kaguya",
+  aliases: ["辉夜"],
+  persona: "test persona",
+};
 const inboundPayload = replyRequestedInformationPayloadSchema.parse({
   text: "hello",
   source: {
@@ -267,12 +283,12 @@ function completedAtom() {
   });
 }
 
-function assistantAtom() {
+function assistantAtom(occurredAt = "2026-09-04T00:00:02.000Z") {
   const completed = completedAtom();
   return freezeInformationAtom({
     informationId: informationIdSchema.parse("assistant-1"),
     kind: assistantTextInformationKind.kind,
-    occurredAt: "2026-09-04T00:00:02.000Z",
+    occurredAt,
     source: "module:reply-1",
     payload: {
       text: "Hello.",
@@ -295,7 +311,7 @@ function createLlmReplyModule(
         z.infer<typeof modelTaskCompletedInformationKind.payloadSchema>
       >
     >[0],
-    "modelTaskCapability"
+    "modelTaskCapability" | "promptTemplates" | "agentIdentity"
   > & {
     executor: ModelTaskCapability;
   },
@@ -304,6 +320,8 @@ function createLlmReplyModule(
   const definition = defineReplyModule({
     ...definitionOptions,
     modelTaskCapability,
+    promptTemplates: testReplyTemplates,
+    agentIdentity: testIdentity,
   });
   executors.set(definition, executor);
   return definition;
@@ -386,6 +404,8 @@ describe("createLlmReplyModule", () => {
     const definition = defineReplyModule({
       modelTaskCapability,
       modelTaskCompletedInformationKind,
+      promptTemplates: testReplyTemplates,
+      agentIdentity: testIdentity,
     });
     expect(definition.manifest.requires).toEqual([
       { id: "kaguya:model-task", apiVersion: 1 },
@@ -599,9 +619,9 @@ describe("createLlmReplyModule", () => {
       activation: { instanceId: "reply-1", definitionId: "demo.reply.llm" },
       selectionPolicy: { tier: "heavy" },
       prompt: {
-        provenance: expect.arrayContaining([
-          expect.objectContaining({ informationId: "memory-1" }),
-          expect.objectContaining({ informationId: "reply-1" }),
+        variables: expect.arrayContaining([
+          expect.objectContaining({ informationIds: ["memory-1"] }),
+          expect.objectContaining({ informationIds: ["reply-1"] }),
         ]),
       },
     });
@@ -685,6 +705,8 @@ describe("createLlmReplyModule", () => {
     const definition = defineReplyModule({
       modelTaskCapability,
       modelTaskCompletedInformationKind,
+      promptTemplates: testReplyTemplates,
+      agentIdentity: testIdentity,
     });
     const instance = await createInstance(definition, {
       instanceId: "reply-1",
@@ -753,8 +775,7 @@ describe("createLlmReplyModule", () => {
             platform: "qq",
             destination: { kind: "group", groupId: "group-1" },
             message: {
-              kind: "reply",
-              replyToPlatformMessageId: "request-1",
+              kind: "text",
               text: "Hello.",
             },
             turn: null,
@@ -769,6 +790,50 @@ describe("createLlmReplyModule", () => {
       deliveryRequestedInformationKind,
       expect.any(Object),
     );
+
+    const delayedRegistrations: Registration[] = [];
+    const delayedAssistant = assistantAtom("2026-09-04T00:02:00.000Z");
+    const delayedContext = handlerContext(
+      delayedAssistant,
+      delayedRegistrations,
+      delayedAssistant,
+      "reply-1",
+      [
+        delayedAssistant,
+        freezeInformationAtom({
+          informationId: informationIdSchema.parse("inbound-source-1"),
+          kind: inboundTextInformationKind.kind,
+          occurredAt: "2026-09-04T00:00:00.000Z",
+          source: "test:inbound",
+          payload: inboundPayload,
+          references: [],
+        }),
+        ...Array.from({ length: 5 }, (_, index) =>
+          freezeInformationAtom({
+            informationId: informationIdSchema.parse(
+              `inbound-intervening-${index + 1}`,
+            ),
+            kind: inboundTextInformationKind.kind,
+            occurredAt: `2026-09-04T00:00:0${index + 1}.000Z`,
+            source: "test:inbound",
+            payload: {
+              ...inboundPayload,
+              source: {
+                ...inboundPayload.source,
+                platformMessageId: `intervening-${index + 1}`,
+              },
+            },
+            references: [],
+          }),
+        ),
+      ],
+    );
+    await instance.subscriptions[2]!.handle(delayedAssistant, delayedContext);
+    expect(delayedRegistrations[0]?.input.payload.message).toEqual({
+      kind: "reply",
+      replyToPlatformMessageId: "request-1",
+      text: "Hello.",
+    });
     for (const payload of [
       { ...completed.payload, taskId: "other.task" },
       { ...completed.payload, version: "2" },
@@ -792,6 +857,8 @@ describe("createLlmReplyModule", () => {
     const definition = defineReplyModule({
       modelTaskCapability,
       modelTaskCompletedInformationKind,
+      promptTemplates: testReplyTemplates,
+      agentIdentity: testIdentity,
     });
     const instance = await createInstance(definition, {
       instanceId: "reply-1",

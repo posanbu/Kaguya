@@ -21,6 +21,11 @@ const OPENAI_COMPATIBLE_PROVIDER_TYPE = "openai-compatible";
 
 interface MutableProfile {
   name: string;
+  identity: {
+    name: string;
+    aliases: string[];
+    persona: string;
+  };
   gatewayAllowlist: string[];
   ai: {
     defaultProviderId?: string;
@@ -65,6 +70,9 @@ interface MutablePlatform {
 
 export interface ProfileEditorFields {
   readonly name: string;
+  readonly agentName: string;
+  readonly agentAliasesText: string;
+  readonly agentPersona: string;
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly lightModel: string;
@@ -79,6 +87,9 @@ export function profileToEditorFields(
   const provider = findEditableProvider(profile);
   return {
     name: profile.name,
+    agentName: profile.identity.name,
+    agentAliasesText: profile.identity.aliases.join("\n"),
+    agentPersona: profile.identity.persona,
     baseUrl: provider?.baseUrl ?? "",
     apiKey: provider?.apiKey ?? "",
     lightModel:
@@ -101,6 +112,18 @@ export function mergeProfileEditorFields(
   const provider = ensureEditableProvider(next, fields);
 
   next.name = fields.name;
+  next.identity = {
+    name: fields.agentName.trim(),
+    aliases: [
+      ...new Set(
+        fields.agentAliasesText
+          .split(/\r?\n/u)
+          .map((alias) => alias.trim())
+          .filter(Boolean),
+      ),
+    ],
+    persona: fields.agentPersona.trim(),
+  };
   next.memory.enabled = fields.memoryEnabled;
   next.gatewayAllowlist = fields.gatewayAllowlistText
     .split(/\r?\n/u)
@@ -124,6 +147,7 @@ export function mergeProfileEditorFields(
   return {
     name: next.name,
     gatewayAllowlist: next.gatewayAllowlist,
+    identity: next.identity,
     acknowledgedWarnings: computeAcknowledgedWarnings(next),
     ai: next.ai as ReplaceProfileInput["ai"],
     memory: next.memory,

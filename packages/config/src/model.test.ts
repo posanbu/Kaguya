@@ -5,6 +5,8 @@
  */
 import { describe, expect, it } from "vitest";
 
+const identity = { name: "Kaguya", aliases: ["辉夜"], persona: "test" };
+
 import {
   aiConfigSchema,
   aiProviderConfigSchema,
@@ -86,6 +88,57 @@ function createThrowingGetterProxy(secret: string): object {
 }
 
 describe("user configuration schemas", () => {
+  it("requires an explicit Agent identity on existing Profiles", () => {
+    expect(
+      userConfigProfileSchema.safeParse({
+        version: 1,
+        id: profileId,
+        name: "legacy",
+        ai: { providers: [] },
+        memory: { enabled: false },
+        platforms: [],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("normalizes identity text and rejects duplicate or primary-name aliases", () => {
+    expect(
+      userConfigProfileSettingsSchema.parse({
+        identity: {
+          name: " Kaguya ",
+          aliases: [" 辉夜 ", "Moon"],
+          persona: " concise ",
+        },
+        ai: { providers: [] },
+        memory: { enabled: false },
+        platforms: [],
+      }).identity,
+    ).toEqual({
+      name: "Kaguya",
+      aliases: ["辉夜", "Moon"],
+      persona: "concise",
+    });
+    expect(
+      userConfigProfileSettingsSchema.parse({
+        identity: {
+          name: "Kaguya",
+          aliases: ["辉夜", " 辉夜 "],
+          persona: "test",
+        },
+        ai: { providers: [] },
+        memory: { enabled: false },
+        platforms: [],
+      }).identity.aliases,
+    ).toEqual(["辉夜"]);
+    expect(
+      userConfigProfileSettingsSchema.safeParse({
+        identity: { name: "Kaguya", aliases: ["Kaguya"], persona: "test" },
+        ai: { providers: [] },
+        memory: { enabled: false },
+        platforms: [],
+      }).success,
+    ).toBe(false);
+  });
   it("requires databaseMode and rejects a persisted gateway token", () => {
     const runtimeInput = {
       host: "127.0.0.1",
@@ -265,6 +318,7 @@ describe("user configuration schemas", () => {
       version: 1,
       id: profileId,
       name: "personal",
+      identity,
       ai: {
         defaultProviderId: "provider-1",
         providers: [
@@ -299,6 +353,7 @@ describe("user configuration schemas", () => {
 
   it("requires Memory settings and preserves explicit enablement", () => {
     const base = {
+      identity,
       ai: { providers: [] },
       platforms: [],
     };
@@ -353,6 +408,7 @@ describe("user configuration schemas", () => {
   it("allows a disabled default provider so the draft can be repaired", () => {
     expect(
       userConfigProfileSettingsSchema.parse({
+        identity,
         ai: {
           defaultProviderId: "provider-1",
           providers: [
@@ -450,6 +506,7 @@ describe("user configuration schemas", () => {
     ) as unknown;
 
     const parsed = userConfigProfileSettingsSchema.parse({
+      identity,
       ai: {
         providers: [
           {
@@ -484,6 +541,7 @@ describe("user configuration schemas", () => {
     };
 
     const parsed = userConfigProfileSettingsSchema.parse({
+      identity,
       ai: {
         providers: [
           {
@@ -563,6 +621,7 @@ describe("user configuration schemas", () => {
       "profile settings",
       () =>
         userConfigProfileSettingsSchema.safeParse({
+          identity,
           ai: { providers: [] },
           memory: { enabled: false },
           platforms: [],
@@ -575,6 +634,7 @@ describe("user configuration schemas", () => {
           version: 1,
           id: profileId,
           name: "default",
+          identity,
           ai: { providers: [] },
           memory: { enabled: false },
           platforms: [],

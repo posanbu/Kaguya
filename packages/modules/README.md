@@ -27,3 +27,7 @@ protocol v2 模块 Manifest 必须提供非空的 `displayName`、单行 `summar
 `createFirstPartyModuleActivations("production")` 使用 1500 ms 去抖，`"test"` 使用 0 ms；两种 profile 都启用 Heartbeat 与 Heartflow。Heartbeat payload 使用绝对时间和稳定 destination scope。消息延期通过 one-shot replacement 合并，进程重启由 durable scheduler 恢复。
 
 默认 Catalog 不含 always-reply 或 inbound-to-context 旁路。LLM reply 当前只接收 Heartflow 的 `attend` 临时桥接，并沿 turn provenance 把 delivery terminal 交回 Heartflow 完成回合。
+
+## Prompt 模板
+
+`templates/*.default.hbs` 是受版本控制的一方 Handlebars 模板。Node composition root 通过 `@kaguya/modules/prompt-templates/node` 读取；同名 `*.local.hbs` 存在时优先使用，且该文件不进入 Git。模板在模块构造时编译，运行时复用；主入口不导出 Node loader，保持模块渲染边界为纯函数。

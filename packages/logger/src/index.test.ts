@@ -48,10 +48,10 @@ describe("Kaguya logger", () => {
       ],
       detail: true,
       promptFull: "System line\nUser line",
-      promptFragments: [
+      promptVariables: [
         {
-          fragmentId: "history-1",
-          informationId: "019921ad-cdef-7000-8000-000000000003",
+          variableName: "history",
+          informationIds: ["019921ad-cdef-7000-8000-000000000003"],
           contentDigest: "sha256:test",
         },
       ],
@@ -62,7 +62,7 @@ describe("Kaguya logger", () => {
     );
     expect(rendered).toContain("\n  Prompt:\n    System line\n    User line");
     expect(rendered).toContain(
-      "\n  Provenance:\n    history-1 information=019921ad digest=sha256:test",
+      "\n  Provenance:\n    history information=019921ad digest=sha256:test",
     );
     expect(rendered).not.toContain("019921ab-cdef-7000-8000-000000000001");
   });

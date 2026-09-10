@@ -10,6 +10,18 @@ import {
   createFirstPartyModuleConfigDefaults,
 } from "./catalog.js";
 
+const testIdentity = { name: "Kaguya", aliases: ["辉夜"], persona: "test" };
+const testReplyTemplates = {
+  main: "{{scene}}{{history}}{{memory}}{{quoted}}{{target}}",
+  history: "{{#each messages}}{{> history-inbound}}{{/each}}",
+  historyInbound: "{{content}}",
+  historyAssistant: "{{content}}",
+  memory: "{{#each items}}{{> memory-item}}{{/each}}",
+  memoryItem: "{{content}}",
+  quoted: "{{message}}",
+  target: "{{content}}",
+};
+
 function catalog() {
   const kind = (name: string) =>
     defineInformationKind({
@@ -35,6 +47,8 @@ function catalog() {
     deliveryDeliveredInformationKind: kind("core.delivery.delivered") as never,
     deliveryFailedInformationKind: kind("core.delivery.failed") as never,
     executionExhaustedInformationKind,
+    promptTemplates: testReplyTemplates,
+    agentIdentity: testIdentity,
   });
 }
 
@@ -74,5 +88,28 @@ describe("first-party module configuration", () => {
         ({ instanceId }) => instanceId === "heartbeat.default",
       ),
     ).toBe(false);
+  });
+
+  it("uses Profile identity as the only effective Heartflow bot-name source", () => {
+    const customIdentity = {
+      name: "Luna",
+      aliases: ["月"],
+      persona: "test",
+    };
+    const defaults = createFirstPartyModuleConfigDefaults(
+      "production",
+      customIdentity,
+    );
+    const legacy = defaults.map((item) =>
+      item.definitionId === "agent.heartflow.online"
+        ? { ...item, settings: { ...item.settings, botNames: ["Legacy"] } }
+        : item,
+    );
+    const heartflow = createFirstPartyModuleActivations(
+      catalog(),
+      legacy,
+      customIdentity,
+    ).find(({ definitionId }) => definitionId === "agent.heartflow.online");
+    expect(heartflow?.settings).toMatchObject({ botNames: ["Luna", "月"] });
   });
 });

@@ -24,6 +24,7 @@ const profile = {
   id: "default",
   name: "default",
   gatewayAllowlist: [],
+  identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
   ai: { providers: [] },
   memory: { enabled: false },
   platforms: [],
@@ -31,6 +32,7 @@ const profile = {
 const replacement = {
   name: "default",
   gatewayAllowlist: ["qq:private:112233"],
+  identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
   acknowledgedWarnings: [],
   ai: {
     defaultProviderId: "provider",

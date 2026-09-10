@@ -27,7 +27,6 @@ import {
 } from "@kaguya/llm/testing";
 import { createLogger, closeLogger } from "@kaguya/logger";
 import * as modules from "@kaguya/modules";
-import { PromptCompiler } from "@kaguya/prompt";
 import { z } from "@kaguya/schema";
 import {
   defineInformationKind,
@@ -204,17 +203,18 @@ async function fixture(backend: Backend, provider = model()) {
     references,
     payload: { text: promptInput },
   });
-  const prompt = new PromptCompiler().compile(
-    "memory",
-    [history, source].map((atom, index) => ({
-      id: `fragment-${index}`,
-      informationId: atom.informationId,
-      source: "history" as const,
-      priority: index,
-      content: atom.payload.text,
-      metadata: {},
-    })),
-  );
+  const variables = [history, source].map((atom, index) => ({
+    name: `context_${index}`,
+    informationIds: [atom.informationId],
+    content: atom.payload.text,
+  }));
+  const prompt = {
+    kind: "memory" as const,
+    templateId: "test.persistence.v1",
+    templates: [{ name: "main", content: "{{context_0}}\n{{context_1}}" }],
+    text: variables.map(({ content }) => content).join("\n"),
+    variables,
+  };
   let request: ModelTaskRequest<{ text: string }> = {
     task: {
       taskId: "test.extract",

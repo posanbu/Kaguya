@@ -46,6 +46,8 @@ export {
   type ModelTaskCompletedInformationPayload,
   type ModelTier,
   type ModuleModelSelection,
+  type AgentIdentity,
+  type ReplyPromptTemplates,
 } from "./first-party/llm-reply/index.js";
 export {
   createPersonFactTaskModule,

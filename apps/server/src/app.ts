@@ -24,6 +24,7 @@ import swagger from "@fastify/swagger";
 import {
   ConfigError,
   aiConfigSchema,
+  agentIdentitySchema,
   memoryConfigSchema,
   platformConfigSchema,
   profileIdSchema,
@@ -95,6 +96,7 @@ const replaceProfileRequestSchema = z
   .object({
     name: z.string().trim().min(1).max(100),
     gatewayAllowlist: z.array(z.string()),
+    identity: agentIdentitySchema,
     ai: aiConfigSchema,
     memory: memoryConfigSchema,
     platforms: z.array(platformConfigSchema),
@@ -232,6 +234,21 @@ const memoryConfigJsonSchema = {
   },
 } as const;
 
+const agentIdentityJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["name", "aliases", "persona"],
+  properties: {
+    name: { type: "string", minLength: 1 },
+    aliases: {
+      type: "array",
+      minItems: 1,
+      items: { type: "string", minLength: 1 },
+    },
+    persona: { type: "string", minLength: 1 },
+  },
+} as const;
+
 const userConfigProfileJsonSchema = {
   type: "object",
   additionalProperties: false,
@@ -240,6 +257,7 @@ const userConfigProfileJsonSchema = {
     "id",
     "name",
     "gatewayAllowlist",
+    "identity",
     "ai",
     "memory",
     "platforms",
@@ -252,6 +270,7 @@ const userConfigProfileJsonSchema = {
       type: "array",
       items: { type: "string" },
     },
+    identity: agentIdentityJsonSchema,
     ai: aiConfigJsonSchema,
     memory: memoryConfigJsonSchema,
     platforms: {
@@ -286,6 +305,7 @@ const replaceProfileRequestJsonSchema = {
   required: [
     "name",
     "gatewayAllowlist",
+    "identity",
     "ai",
     "memory",
     "platforms",
@@ -297,6 +317,7 @@ const replaceProfileRequestJsonSchema = {
       type: "array",
       items: { type: "string" },
     },
+    identity: agentIdentityJsonSchema,
     ai: aiConfigJsonSchema,
     memory: memoryConfigJsonSchema,
     platforms: { type: "array", items: platformConfigJsonSchema },

@@ -24,7 +24,7 @@ KAGUYA_LOG_LEVELS=runtime:information=debug
 
 ## Prompt 显示
 
-`core.model.task.requested` 的 info 摘要包含 task/version、activation、tier、实际 provider/model、Prompt 字符数、fragment 数和最多 168 个 Unicode 字符的 `promptPreview`。debug detail 额外包含完整编译 Prompt 以及按原顺序排列的 fragment provenance、informationId 与 digest。Pretty 使用缩进多行展示；JSON 把相同数据保存在 `promptFull` 和 `promptFragments` 字段。
+`core.model.task.requested` 的 info 摘要包含 task/version、activation、tier、实际 provider/model、Prompt 字符数、variable 数和最多 168 个 Unicode 字符的 `promptPreview`。debug detail 额外包含完整 Prompt 以及按模块声明顺序排列的 variable provenance、informationIds 与 digest。Pretty 使用缩进多行展示；JSON 把相同数据保存在 `promptFull` 和 `promptVariables` 字段。
 
 ```dotenv
 # 只展开 Information DAG 和完整 Prompt

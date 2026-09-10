@@ -116,6 +116,7 @@ export async function createConfigurationManagement(
         profile = await manager.replaceProfile(profile.id, {
           name: profile.name,
           acknowledgedWarnings: [],
+          identity: profile.identity,
           ai: profile.ai,
           memory: profile.memory,
           platforms: profile.platforms,
@@ -218,6 +219,7 @@ async function writeSelectedNapCatSettings(
   await manager.replaceProfile(profile.id, {
     name: profile.name,
     acknowledgedWarnings: profile.review?.acknowledgedWarnings ?? [],
+    identity: profile.identity,
     ai: profile.ai,
     memory: profile.memory,
     platforms: [

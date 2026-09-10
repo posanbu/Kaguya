@@ -212,6 +212,7 @@ describe("Profile-backed PostgreSQL selection", () => {
     await initialManager.replaceProfile("default", {
       name: initialProfile.name,
       acknowledgedWarnings: [],
+      identity: initialProfile.identity,
       ai: {
         defaultProviderId: "provider-1",
         modelTiers: {
@@ -273,6 +274,7 @@ describe("Profile-backed PostgreSQL selection", () => {
     await manager.replaceProfile(profile.id, {
       name: profile.name,
       acknowledgedWarnings: [],
+      identity: profile.identity,
       ai: profile.ai,
       memory: profile.memory,
       platforms: profile.platforms,
@@ -474,6 +476,7 @@ async function configuredManagedRoot(): Promise<string> {
   await manager.replaceProfile(profile.id, {
     name: profile.name,
     acknowledgedWarnings: [],
+    identity: profile.identity,
     ai: profile.ai,
     memory: profile.memory,
     platforms: profile.platforms,

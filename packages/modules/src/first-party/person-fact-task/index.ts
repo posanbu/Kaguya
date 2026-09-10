@@ -5,7 +5,7 @@
  * `createPersonFactTaskModule` 校验并声明宿主注入的 capability/completed definition，候选订阅通过
  * `context.use` 执行 `core.person.fact.extract` v1，完成订阅核对 task/version/definition/tier/source，
  * 再验证输出与候选人物身份一致并使用稳定 terminal ID 调用 registerOnce。
- * 代码库关系：仅依赖 modules 侧 `llm-reply.ts` 的结构化 Model Task contract、SDK、PromptCompiler
+ * 代码库关系：仅依赖 modules 侧 `llm-reply.ts` 的结构化 Model Task contract、SDK
  * 和本包 information kinds；不导入 Runtime、provider、Core、数据库或凭据。Host 负责 selector 授权、
  * completed→requested→candidate 因果遍历，以及为业务注册补齐 caused-by/context 引用。
  * 输入输出与副作用：候选 handler 只提交通用任务请求，不直接写业务结果；failed/cancelled 没有对应
@@ -17,7 +17,6 @@ import {
   type DeepReadonly,
   type InformationAtom,
   type InformationId,
-  type PromptFragment,
   z,
 } from "@kaguya/schema";
 import {
@@ -29,7 +28,8 @@ import {
   type ModuleCapability,
   onInformation,
 } from "@kaguya/sdk";
-import { PromptCompiler } from "@kaguya/prompt";
+
+import { createPromptTemplateRenderer } from "../../prompt-template.js";
 
 import {
   personFactCandidateInformationKind,
@@ -83,7 +83,7 @@ export const personFactModelDispatchingDiagnostic = defineModuleDiagnostic({
       taskVersion: z.literal("1"),
       tier: modelTierSchema,
       promptCharacters: z.number().int().nonnegative(),
-      promptFragmentCount: z.number().int().nonnegative(),
+      promptVariableCount: z.number().int().nonnegative(),
     })
     .strict(),
   project: (payload) => ({ ...payload }),
@@ -98,7 +98,7 @@ export interface CreatePersonFactTaskModuleOptions<
     "core.model.task.completed",
     P
   >;
-  readonly promptCompiler?: PromptCompiler;
+  readonly promptTemplate: string;
 }
 
 export const currentPersonFactCandidateSelector = defineInformationSelector({
@@ -137,7 +137,15 @@ export function createPersonFactTaskModule<
     throw new Error("Invalid model task capability");
   const completedInformationKind =
     dependencies.modelTaskCompletedInformationKind;
-  const promptCompiler = dependencies.promptCompiler ?? new PromptCompiler();
+  const compilePrompt = createPromptTemplateRenderer({
+    kind: "memory",
+    templateId: "kaguya.person-fact.v1",
+    main: {
+      name: "person-fact",
+      content: dependencies.promptTemplate,
+      allowedVariables: ["person_id", "name", "candidate"],
+    },
+  });
 
   return defineInformationModule({
     manifest: {
@@ -187,7 +195,7 @@ export function createPersonFactTaskModule<
             );
             const contextInformationId = requireContextId(persistedCandidate);
             const prompt = compilePersonFactPrompt(
-              promptCompiler,
+              compilePrompt,
               contextAtoms,
               persistedCandidate.informationId,
             );
@@ -196,7 +204,7 @@ export function createPersonFactTaskModule<
               taskVersion: "1",
               tier: settings.modelTier,
               promptCharacters: Array.from(prompt.text).length,
-              promptFragmentCount: prompt.fragments.length,
+              promptVariableCount: prompt.variables.length,
             });
             await context.use(modelTaskCapability).execute({
               task: {
@@ -295,20 +303,26 @@ const completedPersonFactCandidateSelector = defineInformationSelector({
 });
 
 function compilePersonFactPrompt(
-  compiler: PromptCompiler,
+  render: (
+    variables: readonly {
+      readonly name: string;
+      readonly content: string;
+      readonly informationIds: InformationId[];
+    }[],
+  ) => CompiledPrompt,
   atoms: readonly DeepReadonly<InformationAtom>[],
   sourceInformationId: InformationId,
 ): CompiledPrompt {
   const candidate = requireSelectedCandidate(atoms, sourceInformationId);
-  const fragment: PromptFragment = {
-    id: candidate.informationId,
-    informationId: candidate.informationId,
-    source: "memory",
-    priority: 20,
-    content: personFactCandidatePromptRenderer.render(candidate),
-    metadata: { scope: "memory" },
-  };
-  return compiler.compile("memory", [fragment]);
+  const payload = personFactCandidateInformationPayloadSchema.parse(
+    candidate.payload,
+  );
+  const traced = [candidate.informationId];
+  return render([
+    { name: "person_id", content: payload.personId, informationIds: traced },
+    { name: "name", content: payload.name, informationIds: traced },
+    { name: "candidate", content: payload.text, informationIds: traced },
+  ]);
 }
 
 function requireSelectedCandidate(

@@ -130,9 +130,15 @@ export async function startKaguyaServer(
     );
     moduleConfigs = await loadModuleInstanceConfigs({
       rootDir: bootstrap.configRoot,
-      defaults: createFirstPartyModuleConfigDefaults("production"),
+      defaults: createFirstPartyModuleConfigDefaults(
+        "production",
+        selectedProfile.identity,
+      ),
     });
-    createReplyComposition(undefined, { moduleConfigs });
+    createReplyComposition(undefined, {
+      moduleConfigs,
+      agentIdentity: selectedProfile.identity,
+    });
     config = providedConfig ?? createServerConfig(selectedProfile, bootstrap);
     assertLoopbackHost(config.host);
   } catch (error) {
@@ -263,6 +269,7 @@ export async function startKaguyaServer(
           ...createReplyComposition(resolveModelSelection, {
             memoryEnabled: selectedProfile.memory.enabled,
             moduleConfigs,
+            agentIdentity: selectedProfile.identity,
           }),
         });
         adapterHost.registerTransports(runtime);

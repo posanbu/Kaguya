@@ -6,11 +6,11 @@ const PROMPT_SOURCE_PATH = path.resolve(
   __dirname,
   "..",
   "packages",
-  "prompt",
+  "modules",
   "src",
-  "index.ts",
+  "prompt-template.ts",
 );
-const PROMPT_SOURCE_LABEL = "packages/prompt/src/index.ts";
+const PROMPT_SOURCE_LABEL = "packages/modules/src/prompt-template.ts";
 
 class KaguyaPromptProvider {
   constructor(options) {
@@ -28,105 +28,85 @@ class KaguyaPromptProvider {
       throw new Error(`unsupported prompt kind: ${kind}`);
     }
 
-    const PromptCompiler = await loadPromptCompiler();
-    const compiled = new PromptCompiler().compile(
+    const createPromptTemplateRenderer = await loadPromptRenderer();
+    const values = buildValues(kind, vars);
+    const variables = values.map((value, index) => ({
+      name: `value_${index}`,
+      content: value.content,
+      informationIds: [],
+    }));
+    const render = createPromptTemplateRenderer({
       kind,
-      buildFragments(kind, vars),
-    );
+      templateId: `promptfoo.${kind}.v1`,
+      main: {
+        name: "promptfoo",
+        content: values
+          .map((value, index) => `[${value.id}]\n{{value_${index}}}`)
+          .join("\n\n"),
+        allowedVariables: variables.map(({ name }) => name),
+      },
+    });
+    const compiled = render(variables);
 
     return {
       output: compiled.text,
       metadata: {
-        compilerSource: PROMPT_SOURCE_LABEL,
+        rendererSource: PROMPT_SOURCE_LABEL,
         kind: compiled.kind,
-        provenance: compiled.provenance,
+        variables: compiled.variables,
       },
     };
   }
 }
 
-async function loadPromptCompiler() {
+async function loadPromptRenderer() {
   const { tsImport } = require("tsx/esm/api");
   const promptModule = await tsImport(
     pathToFileURL(PROMPT_SOURCE_PATH).href,
     pathToFileURL(__filename).href,
   );
 
-  if (typeof promptModule.PromptCompiler !== "function") {
-    throw new Error("@kaguya/prompt does not export PromptCompiler");
+  if (typeof promptModule.createPromptTemplateRenderer !== "function") {
+    throw new Error(
+      "@kaguya/modules does not export createPromptTemplateRenderer",
+    );
   }
-  return promptModule.PromptCompiler;
+  return promptModule.createPromptTemplateRenderer;
 }
 
-function buildFragments(kind, vars) {
+function buildValues(kind, vars) {
   switch (kind) {
     case "route":
       return [
-        fragment(
-          "route-persona",
-          "persona",
-          10,
-          requireString(vars.persona, "persona"),
-        ),
-        historyFragment("route-history", requireArray(vars.history, "history")),
-        memoriesFragment(
-          "route-memory",
-          requireArray(vars.memories, "memories"),
-        ),
-        fragment(
-          "route-policy",
-          "policy",
-          40,
-          requireString(vars.routePolicy, "routePolicy"),
-          { scope: "route" },
-        ),
+        value("route-persona", requireString(vars.persona, "persona")),
+        historyValue("route-history", requireArray(vars.history, "history")),
+        memoriesValue("route-memory", requireArray(vars.memories, "memories")),
+        value("route-policy", requireString(vars.routePolicy, "routePolicy")),
       ];
     case "reply":
       return [
-        fragment(
-          "reply-persona",
-          "persona",
-          10,
-          requireString(vars.persona, "persona"),
-        ),
-        historyFragment("reply-history", requireArray(vars.history, "history")),
-        memoriesFragment(
-          "reply-memory",
-          requireArray(vars.memories, "memories"),
-        ),
-        fragment(
-          "reply-policy",
-          "policy",
-          40,
-          requireString(vars.replyPolicy, "replyPolicy"),
-          { scope: "reply" },
-        ),
+        value("reply-persona", requireString(vars.persona, "persona")),
+        historyValue("reply-history", requireArray(vars.history, "history")),
+        memoriesValue("reply-memory", requireArray(vars.memories, "memories")),
+        value("reply-policy", requireString(vars.replyPolicy, "replyPolicy")),
       ];
     case "state":
       return [
-        historyFragment("state-history", requireArray(vars.history, "history")),
-        fragment(
+        historyValue("state-history", requireArray(vars.history, "history")),
+        value(
           "state-current",
-          "state",
-          30,
           requireString(vars.currentState, "currentState"),
         ),
-        fragment(
-          "state-policy",
-          "policy",
-          40,
-          requireString(vars.statePolicy, "statePolicy"),
-          { scope: "state" },
-        ),
+        value("state-policy", requireString(vars.statePolicy, "statePolicy")),
       ];
     case "memory":
-      return memoryFragments(vars);
+      return memoryValues(vars);
     default:
       throw new Error(`unsupported prompt kind: ${kind}`);
   }
 }
 
-function memoryFragments(vars) {
+function memoryValues(vars) {
   const window = requireRecord(vars.window, "window");
   const from = parseTimestamp(
     requireString(window.from, "window.from"),
@@ -157,31 +137,17 @@ function memoryFragments(vars) {
     );
 
   return [
-    fragment(
+    value(
       "memory-history",
-      "history",
-      20,
       records.map((record) => `${record.role}: ${record.content}`).join("\n"),
-      {
-        from: requireString(window.from, "window.from"),
-        to: requireString(window.to, "window.to"),
-      },
     ),
-    fragment(
-      "memory-policy",
-      "policy",
-      40,
-      requireString(vars.memoryPolicy, "memoryPolicy"),
-      { scope: "memory" },
-    ),
+    value("memory-policy", requireString(vars.memoryPolicy, "memoryPolicy")),
   ];
 }
 
-function historyFragment(id, records) {
-  return fragment(
+function historyValue(id, records) {
+  return value(
     id,
-    "history",
-    20,
     records
       .map((value, position) => {
         const record = requireRecord(value, `history[${position}]`);
@@ -194,11 +160,9 @@ function historyFragment(id, records) {
   );
 }
 
-function memoriesFragment(id, records) {
-  return fragment(
+function memoriesValue(id, records) {
+  return value(
     id,
-    "memory",
-    30,
     records
       .map((value, position) => {
         const record = requireRecord(value, `memories[${position}]`);
@@ -208,8 +172,8 @@ function memoriesFragment(id, records) {
   );
 }
 
-function fragment(id, source, priority, content, metadata = {}) {
-  return { id, source, priority, content, metadata };
+function value(id, content) {
+  return { id, content };
 }
 
 function requireArray(value, label) {

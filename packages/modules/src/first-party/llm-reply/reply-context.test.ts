@@ -3,7 +3,7 @@
  * 主要职责：覆盖当前消息选择、冻结 turn 的同会话历史、已投递 assistant、Memory，
  * 以及 Prompt provenance、预算和不支持 kind 的拒绝。
  * 代码库关系：测试 modules 公共入口导出的 reply-context 能力，Engine 负责真正执行
- * Selector 与加载原子，PromptCompiler 负责生成最终 provenance。
+ * Selector 与加载原子，模块模板负责生成最终 variable provenance。
  * 输入输出与副作用：只构造冻结原子和会在误调用时拒绝的 reader，不访问数据库或 LLM。
  */
 import {
@@ -15,10 +15,10 @@ import {
   type InformationId,
 } from "@kaguya/schema";
 import type { InformationSelectorDefinition } from "@kaguya/sdk";
-import { PromptCompiler } from "@kaguya/prompt";
 import { describe, expect, it } from "vitest";
 
 import * as modules from "../../index.js";
+import { loadFirstPartyPromptTemplates } from "../../node/prompt-templates.js";
 import {
   coreMemoryTextInformationKind,
   inboundTextInformationKind,
@@ -69,13 +69,16 @@ const historicalInboundAtom = freezeInformationAtom({
   },
   references: [],
 });
+const replyTemplate = loadFirstPartyPromptTemplates().llmReply;
+const identity = { name: "Kaguya", aliases: ["辉夜"], persona: "test" };
 
 function compileReplyPrompt() {
   expect(modules).toHaveProperty("compileReplyPromptFromInformation");
   return (
     modules as typeof modules & {
       compileReplyPromptFromInformation(
-        compiler: PromptCompiler,
+        template: typeof replyTemplate,
+        agentIdentity: typeof identity,
         atoms: readonly DeepReadonly<InformationAtom>[],
         sourceInformationId: InformationId,
       ): CompiledPrompt;
@@ -106,28 +109,39 @@ describe("reply context", () => {
 
   it("renders selected reply and Memory atoms in selector order", () => {
     const prompt = compileReplyPrompt()(
-      new PromptCompiler(),
+      replyTemplate,
+      identity,
       [memoryAtom, replyAtom],
       replyAtom.informationId,
     );
 
     expect(
-      prompt.fragments
-        .filter(({ informationId }) => informationId !== undefined)
-        .map(({ informationId, source, content }) => ({
-          informationId,
-          source,
+      prompt.variables
+        .filter(({ informationIds }) => informationIds.length > 0)
+        .map(({ name, informationIds, content }) => ({
+          name,
+          informationIds,
           content,
         })),
     ).toEqual([
       {
-        informationId: memoryAtom.informationId,
-        source: "memory",
-        content: "【回复信息参考】\nlikes tea",
+        name: "self_account",
+        informationIds: [replyAtom.informationId],
+        content: "",
       },
       {
-        informationId: replyAtom.informationId,
-        source: "state",
+        name: "scene",
+        informationIds: [replyAtom.informationId],
+        content: expect.any(String),
+      },
+      {
+        name: "memory",
+        informationIds: [memoryAtom.informationId],
+        content: expect.stringContaining("likes tea"),
+      },
+      {
+        name: "target",
+        informationIds: [replyAtom.informationId],
         content: expect.stringContaining("内容：hello"),
       },
     ]);
@@ -135,27 +149,27 @@ describe("reply context", () => {
 
   it("renders recalled inbound provenance as Memory before the current message", () => {
     const prompt = compileReplyPrompt()(
-      new PromptCompiler(),
+      replyTemplate,
+      identity,
       [replyAtom, historicalInboundAtom],
       replyAtom.informationId,
     );
 
     expect(
-      prompt.fragments
-        .filter(({ informationId }) => informationId !== undefined)
-        .map(({ informationId, source }) => ({
-          informationId,
-          source,
-        })),
+      prompt.variables
+        .filter(({ informationIds }) => informationIds.length > 0)
+        .map(({ name, informationIds }) => ({ name, informationIds })),
     ).toEqual([
-      { informationId: historicalInboundAtom.informationId, source: "history" },
-      { informationId: replyAtom.informationId, source: "state" },
+      { name: "self_account", informationIds: [replyAtom.informationId] },
+      { name: "scene", informationIds: [replyAtom.informationId] },
+      {
+        name: "history",
+        informationIds: [historicalInboundAtom.informationId],
+      },
+      { name: "target", informationIds: [replyAtom.informationId] },
     ]);
     expect(
-      prompt.fragments.find(
-        ({ informationId }) =>
-          informationId === historicalInboundAtom.informationId,
-      )!.content,
+      prompt.variables.find(({ name }) => name === "history")!.content,
     ).toContain("previous hello");
   });
 
@@ -169,32 +183,32 @@ describe("reply context", () => {
       references: [],
     });
     const prompt = compileReplyPrompt()(
-      new PromptCompiler(),
+      replyTemplate,
+      identity,
       [oversizedMemory, replyAtom],
       replyAtom.informationId,
     );
 
-    const memory = prompt.fragments.find(({ source }) => source === "memory")!;
+    const memory = prompt.variables.find(({ name }) => name === "memory")!;
+    expect(Array.from(memory.content).length).toBeLessThanOrEqual(4_002);
+    expect(memory.content).toContain("…");
     expect(
-      Array.from(memory.content.replace("【回复信息参考】\n", "")),
-    ).toHaveLength(4_000);
-    expect(memory.content.endsWith("…")).toBe(true);
-    expect(
-      prompt.fragments.find(({ source }) => source === "state")!.content,
+      prompt.variables.find(({ name }) => name === "target")!.content,
     ).toContain("内容：hello");
   });
 
   it("rejects a selection that omits the current reply", () => {
     expect(() =>
       compileReplyPrompt()(
-        new PromptCompiler(),
+        replyTemplate,
+        identity,
         [memoryAtom],
         replyAtom.informationId,
       ),
     ).toThrow("Reply selection must include the current input");
   });
 
-  it("rejects an atom kind without an explicit reply renderer", () => {
+  it("ignores an unreferenced atom kind without leaking it into the Prompt", () => {
     const unsupported = freezeInformationAtom({
       informationId: informationIdSchema.parse("unsupported-1"),
       kind: "acme.unsupported",
@@ -204,13 +218,16 @@ describe("reply context", () => {
       references: [],
     });
 
-    expect(() =>
-      compileReplyPrompt()(
-        new PromptCompiler(),
-        [replyAtom, unsupported],
-        replyAtom.informationId,
-      ),
-    ).toThrow("Unsupported reply context information kind: acme.unsupported");
+    const prompt = compileReplyPrompt()(
+      replyTemplate,
+      identity,
+      [replyAtom, unsupported],
+      replyAtom.informationId,
+    );
+    expect(prompt.text).not.toContain("must not leak");
+    expect(
+      prompt.variables.flatMap(({ informationIds }) => informationIds),
+    ).not.toContain(unsupported.informationId);
   });
 
   it("selects same-scope history, excludes the target input, and keeps only delivered assistant messages", async () => {

@@ -946,6 +946,7 @@ describe("unified server composition", () => {
     await manager.replaceProfile(manager.getSelectedProfileId(), {
       name: "default",
       acknowledgedWarnings: [],
+      identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
       ai: {
         defaultProviderId: "provider-1",
         modelTiers: {
@@ -1047,8 +1048,9 @@ describe("unified server composition", () => {
     const prompt: CompiledPrompt = {
       kind: "reply",
       text: "hello",
-      fragments: [],
-      provenance: [],
+      templateId: "test.reply.v1",
+      templates: [{ name: "main", content: "hello" }],
+      variables: [],
     };
     const outputSchema = z.object({ text: z.string() }).strict();
     let ready = 0;
@@ -1104,6 +1106,7 @@ async function selectedProfile(manager: FileUserConfigManager) {
 
 function readyProfileSettings(lightModelId: string, heavyModelId: string) {
   return {
+    identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
     ai: {
       defaultProviderId: "provider-1",
       modelTiers: {

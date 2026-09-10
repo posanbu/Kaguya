@@ -854,6 +854,69 @@ function ProfileManagementScreen({
                     placeholder="default"
                   />
                 </label>
+                <fieldset className="identity-fields">
+                  <legend>Agent 身份</legend>
+                  <p className="field-help">
+                    名字、别名和人设会用于回复 Prompt；修改后需重启生效。
+                  </p>
+                  <label className="field">
+                    <span>Agent 名字</span>
+                    <input
+                      value={editorFields.agentName}
+                      onChange={(event) =>
+                        setEditorFields((current) =>
+                          current === undefined
+                            ? current
+                            : { ...current, agentName: event.target.value },
+                        )
+                      }
+                      autoComplete="off"
+                      placeholder="Kaguya"
+                      required
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Agent 别名</span>
+                    <textarea
+                      value={editorFields.agentAliasesText}
+                      onChange={(event) =>
+                        setEditorFields((current) =>
+                          current === undefined
+                            ? current
+                            : {
+                                ...current,
+                                agentAliasesText: event.target.value,
+                              },
+                        )
+                      }
+                      rows={3}
+                      spellCheck={false}
+                      aria-describedby="agent-aliases-help"
+                      placeholder="辉夜"
+                      required
+                    />
+                    <span id="agent-aliases-help" className="field-help">
+                      每行一个别名；保存时会去除首尾空白并去重。
+                    </span>
+                  </label>
+                  <label className="field">
+                    <span>Agent 人设</span>
+                    <textarea
+                      className="persona-editor"
+                      value={editorFields.agentPersona}
+                      onChange={(event) =>
+                        setEditorFields((current) =>
+                          current === undefined
+                            ? current
+                            : { ...current, agentPersona: event.target.value },
+                        )
+                      }
+                      rows={6}
+                      placeholder="描述 Agent 的身份、语气和回复边界"
+                      required
+                    />
+                  </label>
+                </fieldset>
                 <label className="field">
                   <span>模型服务地址</span>
                   <input

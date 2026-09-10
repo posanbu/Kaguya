@@ -36,14 +36,24 @@ const metadata = {
   selectionPolicy: { tier: "heavy" },
   resolvedModel: { providerId: "test", modelId: "model-heavy" },
   promptKind: "memory",
+  promptTemplateId: "test.memory.v1",
+  promptTemplateDigest: "template-digest",
+  promptDigest: "prompt-digest",
   provenance: [],
+};
+const emptyPrompt = {
+  kind: "memory" as const,
+  text: "prompt",
+  templateId: "test.memory.v1",
+  templates: [{ name: "main", content: "prompt" }],
+  variables: [],
 };
 
 describe("runtime information kinds", () => {
   it("requires explicit Model Task output mode", () => {
     const parsed = modelTaskRequestedInformationKind.payloadSchema.parse({
       ...metadata,
-      prompt: { kind: "memory", text: "", fragments: [], provenance: [] },
+      prompt: emptyPrompt,
     });
     expect(parsed.outputMode).toBe("object");
   });
@@ -53,7 +63,7 @@ describe("runtime information kinds", () => {
     expect(
       modelTaskRequestedInformationKind.payloadSchema.safeParse({
         ...withoutOutputMode,
-        prompt: { kind: "memory", text: "", fragments: [], provenance: [] },
+        prompt: emptyPrompt,
       }).success,
     ).toBe(false);
     expect(
@@ -69,62 +79,51 @@ describe("runtime information kinds", () => {
     ).toBe(false);
   });
 
-  it("accepts canonical prompt fragment metadata", () => {
+  it("derives canonical prompt variable provenance and digests", () => {
     const parsed = modelTaskRequestedInformationKind.payloadSchema.parse({
       ...metadata,
       prompt: {
         kind: "reply",
         text: "hello",
-        fragments: [
+        templateId: "test.reply.v1",
+        templates: [{ name: "main", content: "{{message}}" }],
+        variables: [
           {
-            id: "template-1",
-            source: "template",
-            priority: 10,
+            name: "message",
             content: "hello",
-            metadata: { version: 2 },
-          },
-        ],
-        provenance: [
-          {
-            fragmentId: "template-1",
-            source: "template",
-            priority: 10,
-            contentDigest: "sha256:template-1",
+            informationIds: ["source"],
           },
         ],
       },
     });
 
-    expect(parsed.prompt.fragments[0]?.metadata).toEqual({ version: 2 });
+    expect(parsed.prompt.provenance[0]).toMatchObject({
+      variableName: "message",
+      informationIds: ["source"],
+      contentDigest: expect.any(String),
+    });
+    expect(parsed.prompt.promptDigest).toEqual(expect.any(String));
   });
 
-  it("rejects profile identity from Model Task information metadata", () => {
+  it("rejects an invalid prompt variable name", () => {
     expect(() =>
       modelTaskRequestedInformationKind.payloadSchema.parse({
         ...metadata,
         prompt: {
           kind: "reply",
           text: "hello",
-          fragments: [
+          templateId: "test.reply.v1",
+          templates: [{ name: "main", content: "hello" }],
+          variables: [
             {
-              id: "template-1",
-              source: "template",
-              priority: 10,
+              name: "Invalid Name",
               content: "hello",
-              metadata: { profileId: "must-not-be-an-atom-field" },
-            },
-          ],
-          provenance: [
-            {
-              fragmentId: "template-1",
-              source: "template",
-              priority: 10,
-              contentDigest: "sha256:template-1",
+              informationIds: [],
             },
           ],
         },
       }),
-    ).toThrow(/profileId/);
+    ).toThrow();
   });
 
   it("aggregates every owned definition exactly once", () => {

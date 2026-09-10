@@ -377,6 +377,7 @@ async function replaceProfileRuntime(
   await manager.replaceProfile(profile.id, {
     name: profile.name,
     acknowledgedWarnings: profile.review?.acknowledgedWarnings ?? [],
+    identity: profile.identity,
     ai: profile.ai,
     memory: profile.memory,
     platforms: profile.platforms,

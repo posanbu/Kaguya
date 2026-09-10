@@ -23,6 +23,7 @@ import {
 } from "./heartflow/index.js";
 import {
   createLlmReplyModule,
+  type AgentIdentity,
   type CreateLlmReplyModuleOptions,
   type ModelTaskCompletedInformationPayload,
 } from "./llm-reply/index.js";
@@ -48,6 +49,7 @@ export interface FirstPartyModuleInstanceConfig {
 
 export function createFirstPartyModuleConfigDefaults(
   profile: "production" | "test" = "production",
+  identity: AgentIdentity = DEFAULT_AGENT_IDENTITY,
 ): readonly FirstPartyModuleInstanceConfig[] {
   return Object.freeze([
     Object.freeze({
@@ -103,7 +105,7 @@ export function createFirstPartyModuleConfigDefaults(
       definitionId: "agent.heartflow.online",
       enabled: true,
       settings: Object.freeze({
-        botNames: ["Kaguya", "辉夜"],
+        botNames: [identity.name, ...identity.aliases],
         groupFrequency: 1,
         privateFrequency: 1,
         muted: false,
@@ -116,6 +118,7 @@ export function createFirstPartyModuleConfigDefaults(
 export function createFirstPartyModuleActivations(
   catalog: InformationModuleCatalog,
   configs: readonly FirstPartyModuleInstanceConfig[],
+  identity: AgentIdentity = DEFAULT_AGENT_IDENTITY,
 ): readonly InformationModuleActivation[] {
   return Object.freeze(
     configs
@@ -130,9 +133,22 @@ export function createFirstPartyModuleActivations(
           instanceId: config.instanceId,
           definitionId: config.definitionId,
           enabled: config.enabled,
-          settings: definition.manifest.settingsSchema.parse(config.settings),
+          settings: definition.manifest.settingsSchema.parse(
+            config.definitionId === "agent.heartflow.online"
+              ? {
+                  ...config.settings,
+                  botNames: [identity.name, ...identity.aliases],
+                }
+              : config.settings,
+          ),
         });
       })
       .filter((activation) => activation.enabled),
   );
 }
+
+const DEFAULT_AGENT_IDENTITY: AgentIdentity = {
+  name: "Kaguya",
+  aliases: ["辉夜"],
+  persona: "Default Kaguya persona",
+};

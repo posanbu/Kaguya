@@ -17,9 +17,6 @@
       "path": "../../packages/engine"
     },
     {
-      "path": "../../packages/prompt"
-    },
-    {
       "path": "../../packages/llm"
     },
     {
