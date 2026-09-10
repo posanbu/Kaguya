@@ -187,12 +187,13 @@ export const associationCandidateSelector = defineInformationSelector({
 
 export const associationModule = defineInformationModule({
   manifest: {
-    protocolVersion: 1,
+    protocolVersion: 2,
     moduleVersion: "1.0.0",
     definitionId: "core.association.memory",
     displayName: "Memory association",
+    summary: "Recalls auditable memory candidates for an active turn.",
     description:
-      "Builds the auditable request, query, candidate, and completion chain used for memory association.",
+      "Builds the auditable request, query, candidate, and completion chain used for memory association. It only recalls explicitly referenced information and never decides attention, reply wording, or memory writes.",
     settingsSchema: z.object({}).strict(),
     consumes: [
       replyRequestedInformationKind,

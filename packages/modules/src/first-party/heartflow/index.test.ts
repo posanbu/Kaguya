@@ -23,7 +23,7 @@ import {
   heartbeatScheduledInformationKind,
   inboundTextInformationKind,
   personContextCompletedInformationKind,
-  speechDecisionInformationKind,
+  attentionArousalCompletedInformationKind,
   replyRequestedInformationKind,
   turnCandidateInformationKind,
   turnClaimedInformationKind,
@@ -317,7 +317,7 @@ async function waitForKind(
 async function submitDecision(
   core: InformationCore,
   database: Awaited<ReturnType<typeof createTestingDatabase>>,
-  action: "speak" | "wait" | "silent",
+  outcome: "attend" | "defer" | "ignore",
   candidateInformationId?: string,
 ) {
   const state = await atoms(database);
@@ -339,34 +339,33 @@ async function submitDecision(
   return core.commitTerminal(
     "agent.turn.decision",
     claim.informationId,
-    speechDecisionInformationKind,
+    attentionArousalCompletedInformationKind,
     {
       occurredAt: "2026-09-08T00:00:10.000Z",
       source: "module:speech",
       payload: {
-        action,
-        status: "decision",
+        outcome,
         text: payload.text,
         source: payload.source,
         candidateInformationId: payload.candidateInformationId,
         claimInformationId: claim.informationId,
         turnContextInformationId: turnContext.informationId,
-        score: action === "speak" ? 0.8 : action === "wait" ? 0.5 : 0,
-        thresholds: { speak: 0.6, wait: 0.35 },
+        score: outcome === "attend" ? 80 : outcome === "defer" ? 50 : 0,
+        threshold: 80,
         components: {
-          directness: 0,
-          contentNeed: 0,
-          messageCount: 0,
+          relevance: 0,
+          content: 0,
+          pressure: 0,
           recentPresencePenalty: 0,
-          frequencyMultiplier: 1,
+          frequencyFactor: 1,
+          preFrequencyScore: 0,
         },
-        reasonCodes: action === "silent" ? ["muted"] : [],
+        reasonCodes: outcome === "ignore" ? ["muted"] : [],
         missingInputs: ["memory", "association"],
         policyDigest: "test-policy",
         settingsDigest: "test-settings",
-        ...(action === "wait"
+        ...(outcome === "defer"
           ? {
-              recheckAt: "2026-09-08T00:01:00.000Z",
               dueAt: "2026-09-08T00:01:00.000Z",
               delayMs: 50_000,
               wakePolicy: "recheckAt" as const,
@@ -416,11 +415,11 @@ describe("heartflow", () => {
 
   it.each([
     [
-      "wait",
+      "defer",
       waitRequestedInformationKind.kind,
       turnWaitingInformationKind.kind,
     ],
-    ["silent", undefined, turnSilentInformationKind.kind],
+    ["ignore", undefined, turnSilentInformationKind.kind],
   ] as const)(
     "dispatches %s as a first-class terminal",
     async (action, effect, terminal) => {
@@ -449,14 +448,14 @@ describe("heartflow", () => {
   it("dispatches a replayed speak decision to exactly one reply request", async () => {
     const { core, database } = await fixture();
     const { candidate } = await appendCandidate(core, {
-      requestId: "speak",
-      text: "speak",
+      requestId: "attend",
+      text: "attend",
       occurredAt: "2026-09-08T00:00:01.000Z",
     });
     await waitForKind(database, turnContextCompletedInformationKind.kind);
 
-    const first = await submitDecision(core, database, "speak");
-    const replay = await submitDecision(core, database, "speak");
+    const first = await submitDecision(core, database, "attend");
+    const replay = await submitDecision(core, database, "attend");
     expect(replay.informationId).toBe(first.informationId);
 
     const reply = await waitForKind(
@@ -558,7 +557,7 @@ describe("heartflow", () => {
       occurredAt: "2026-09-08T00:00:01.000Z",
     });
     await waitForKind(database, turnContextCompletedInformationKind.kind);
-    const decision = await submitDecision(core, database, "speak");
+    const decision = await submitDecision(core, database, "attend");
     await waitForKind(database, replyRequestedInformationKind.kind);
     const second = await appendCandidate(core, {
       requestId: "queued-second",
@@ -677,7 +676,7 @@ describe("heartflow", () => {
     await submitDecision(
       core,
       database,
-      "speak",
+      "attend",
       second.candidate.informationId,
     );
     const reply = await waitForKind(

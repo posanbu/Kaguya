@@ -25,11 +25,13 @@ export {
   heartbeatDueSelector,
 } from "./first-party/heartbeat/index.js";
 export {
-  scoreTurnContext,
-  speechDecisionModule,
-  speechDecisionSettingsSchema,
-  type SpeechDecisionSettings,
-} from "./first-party/speech-decision/index.js";
+  attentionArousalModule,
+  attentionArousalSettingsSchema,
+  decideAttentionArousal,
+  scoreAttentionArousal,
+  type AttentionArousalOutcome,
+  type AttentionArousalSettings,
+} from "./first-party/attention-arousal/index.js";
 export {
   createLlmReplyModule,
   replyTaskOutputSchema,
@@ -90,7 +92,7 @@ export {
   personResolutionInformationKind,
   personContextCompletedInformationKind,
   turnContextCompletedInformationKind,
-  speechDecisionInformationKind,
+  attentionArousalCompletedInformationKind,
   waitRequestedInformationKind,
   heartbeatScheduledInformationKind,
   heartbeatFiredInformationKind,

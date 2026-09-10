@@ -77,7 +77,7 @@ core.runtime.context
   -> agent.turn.claimed
   -> agent.turn.started
   -> agent.turn.context.completed
-  -> agent.speech.decision
+  -> agent.attention.arousal.completed
      -> speak: core.reply.requested -> core.model.task.* -> core.message.assistant.text
                -> core.delivery.requested -> core.delivery.delivered | core.delivery.failed
                -> agent.turn.completed | agent.turn.failed

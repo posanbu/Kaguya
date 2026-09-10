@@ -49,7 +49,7 @@ import {
 import {
   inboundTextInformationKind,
   replyRequestedInformationKind,
-  speechDecisionInformationKind,
+  attentionArousalCompletedInformationKind,
 } from "@kaguya/modules";
 import type {
   PlatformDeliveryReceipt,
@@ -140,7 +140,7 @@ function platformMessage(adapterId = "napcat.qq.main"): PlatformInboundMessage {
     platformMessageId: "message-1",
     occurredAt: "2026-09-04T00:00:00.000Z",
     text: "hello from qq",
-    mentions: [],
+    mentions: [{ kind: "user", id: "998877" }],
     target: { kind: "group", groupId: "778899" },
     sender: { userId: "112233", nickname: "Ada" },
     raw: { credential: "raw-must-not-enter-ledger" },
@@ -276,11 +276,11 @@ describe("KaguyaRuntime", () => {
           .map((entry) => entry.definitionId),
       ).toEqual([
         "core.association.memory",
+        "agent.attention.arousal",
         "agent.heartbeat.short",
         "agent.heartflow.online",
         "core.identity.normalize",
         "demo.reply.llm",
-        "core.speech.decision",
       ]);
       expect(logs).toContainEqual(
         expect.objectContaining({
@@ -662,7 +662,8 @@ describe("KaguyaRuntime", () => {
     const create = vi.fn(() => ({ provisions: [], subscriptions: [] }));
     const consumer = defineInformationModule({
       manifest: {
-        protocolVersion: 1,
+        protocolVersion: 2,
+        summary: "Test information module.",
         moduleVersion: "1.0.0",
         definitionId: "test.memory.consumer",
         displayName: "Memory consumer",
@@ -852,7 +853,8 @@ describe("KaguyaRuntime", () => {
     });
     const module = defineInformationModule({
       manifest: {
-        protocolVersion: 1,
+        protocolVersion: 2,
+        summary: "Test information module.",
         moduleVersion: "1.0.0",
         definitionId: "test.abort",
         displayName: "Abort",
@@ -920,7 +922,8 @@ describe("KaguyaRuntime", () => {
       let disposeCalls = 0;
       const gatedModule = defineInformationModule({
         manifest: {
-          protocolVersion: 1,
+          protocolVersion: 2,
+          summary: "Test information module.",
           moduleVersion: "1.0.0",
           selectors: [],
           promptRenderers: [],
@@ -1021,7 +1024,7 @@ describe("KaguyaRuntime", () => {
           "agent.chat.scope.binding",
           "agent.person.resolution",
           "agent.person.context.completed",
-          "agent.speech.decision",
+          "agent.attention.arousal.completed",
           "agent.heartbeat.scheduled",
           "agent.turn.candidate",
           "agent.turn.claimed",
@@ -1041,8 +1044,8 @@ describe("KaguyaRuntime", () => {
 
       const byKind = new Map(graph.map((atom) => [atom.kind, atom]));
       const chain = [
-        ["agent.speech.decision", "agent.turn.context.completed"],
-        ["core.reply.requested", "agent.speech.decision"],
+        ["agent.attention.arousal.completed", "agent.turn.context.completed"],
+        ["core.reply.requested", "agent.attention.arousal.completed"],
         ["core.model.task.requested", "core.reply.requested"],
         ["core.model.task.completed", "core.model.task.requested"],
         ["core.message.assistant.text", "core.model.task.completed"],
@@ -1063,6 +1066,39 @@ describe("KaguyaRuntime", () => {
       }
       expect(JSON.stringify(graph)).not.toMatch(
         /raw-must-not-enter-ledger|receipt-raw-must-not-enter-ledger/,
+      );
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "defers an ordinary group event and does not treat mentioning another user as attention",
+    async () => {
+      const { runtime, database } = await createRuntime();
+      await runtime.start();
+
+      const result = await runtime.submit({
+        ...platformMessage(),
+        text: "@445566 你好",
+        mentions: [{ kind: "user", id: "445566" }],
+      });
+      await settleDeliveries(database);
+      const graph = await database.information.query({
+        informationId: result.rootInformationId,
+      });
+      const arousal = graph.find(
+        ({ kind }) => kind === "agent.attention.arousal.completed",
+      );
+
+      expect(arousal?.payload).toMatchObject({
+        outcome: "defer",
+        score: 50,
+        attempt: 0,
+        totalWaitBudget: 3,
+      });
+      expect(graph.map(({ kind }) => kind)).toContain("agent.wait.requested");
+      expect(graph.map(({ kind }) => kind)).not.toContain(
+        "core.reply.requested",
       );
     },
     TEST_TIMEOUT,
@@ -1331,7 +1367,8 @@ describe("KaguyaRuntime", () => {
       });
       const observer = defineInformationModule({
         manifest: {
-          protocolVersion: 1,
+          protocolVersion: 2,
+          summary: "Test information module.",
           moduleVersion: "1.0.0",
           selectors: [],
           promptRenderers: [],
@@ -1342,14 +1379,14 @@ describe("KaguyaRuntime", () => {
           description:
             "Defines the Concurrent reply observer information module.",
           settingsSchema: z.object({}).strict(),
-          consumes: [speechDecisionInformationKind],
-          produces: [speechDecisionInformationKind],
+          consumes: [attentionArousalCompletedInformationKind],
+          produces: [attentionArousalCompletedInformationKind],
         },
         create: () => ({
           provisions: [],
           subscriptions: [
             onInformation(
-              speechDecisionInformationKind,
+              attentionArousalCompletedInformationKind,
               {
                 subscriptionId: "handle-replyrequestedinformationkind",
                 delivery: "live",
@@ -1464,7 +1501,8 @@ describe("KaguyaRuntime", () => {
       });
       const failing = defineInformationModule({
         manifest: {
-          protocolVersion: 1,
+          protocolVersion: 2,
+          summary: "Test information module.",
           moduleVersion: "1.0.0",
           selectors: [],
           promptRenderers: [],
@@ -1496,7 +1534,8 @@ describe("KaguyaRuntime", () => {
       });
       const successful = defineInformationModule({
         manifest: {
-          protocolVersion: 1,
+          protocolVersion: 2,
+          summary: "Test information module.",
           moduleVersion: "1.0.0",
           selectors: [],
           promptRenderers: [],
@@ -1657,7 +1696,8 @@ it(
     });
     const observer = defineInformationModule({
       manifest: {
-        protocolVersion: 1,
+        protocolVersion: 2,
+        summary: "Test information module.",
         moduleVersion: "1.0.0",
         definitionId: "test.hanging-ingress",
         displayName: "Hanging ingress",

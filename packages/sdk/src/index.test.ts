@@ -27,7 +27,8 @@ describe("information module SDK public entry", () => {
     });
     const definition = defineInformationModule({
       manifest: {
-        protocolVersion: 1,
+        protocolVersion: 2,
+        summary: "Test information module.",
         moduleVersion: "1.0.0",
         selectors: [],
         promptRenderers: [],

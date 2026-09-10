@@ -212,7 +212,7 @@ export function createLlmReplyModule<
     dependencies.modelTaskCompletedInformationKind;
   return defineInformationModule({
     manifest: {
-      protocolVersion: 1,
+      protocolVersion: 2,
       moduleVersion: "1.0.0",
       selectors: [
         selector,
@@ -231,8 +231,9 @@ export function createLlmReplyModule<
       provides: [],
       definitionId: "demo.reply.llm",
       displayName: "LLM reply",
+      summary: "Generates a reply from an explicitly selected turn context.",
       description:
-        "Compiles frozen reply context, dispatches the model task, and records assistant and delivery requests.",
+        "Compiles explicitly selected frozen context, dispatches one structured Model Task, and records assistant and delivery requests. It generates reply text but does not decide whether an event deserves attention or perform general planning.",
       settingsSchema: llmReplySettingsSchema,
       consumes: [
         replyRequestedInformationKind,

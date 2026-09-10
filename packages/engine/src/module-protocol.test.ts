@@ -26,7 +26,8 @@ const core = {
 const definition = (id: string, override: Record<string, unknown> = {}) =>
   defineInformationModule({
     manifest: {
-      protocolVersion: 1,
+      protocolVersion: 2,
+      summary: "Test information module.",
       moduleVersion: "1.0.0",
       definitionId: id,
       displayName: id,
@@ -84,6 +85,7 @@ describe("module protocol", () => {
       {
         definitionId: "test.described",
         displayName: "Described module",
+        summary: "Test information module.",
         description: "Exposes inspection metadata.",
         consumes: [
           {

@@ -134,7 +134,8 @@ describe("OneShotScheduleClient", () => {
     expect(() =>
       defineInformationModule({
         manifest: {
-          protocolVersion: 1,
+          protocolVersion: 2,
+          summary: "Test information module.",
           definitionId: "test.scheduler",
           moduleVersion: "1.0.0",
           displayName: "Scheduler test",

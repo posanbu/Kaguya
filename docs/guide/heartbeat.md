@@ -24,7 +24,7 @@ inbound / agent.wait.requested
   -> agent.turn.claimed
   -> agent.turn.started
   -> agent.turn.context.completed
-  -> agent.speech.decision
+  -> agent.attention.arousal.completed
   -> reply | wait | silent
   -> agent.turn.completed | waiting | silent | failed | superseded
 ```

@@ -50,7 +50,8 @@ describe("information module SDK", () => {
     };
     const module = defineInformationModule({
       manifest: {
-        protocolVersion: 1,
+        protocolVersion: 2,
+        summary: "Test information module.",
         moduleVersion: "1.0.0",
         definitionId: "acme.prompt",
         displayName: "Acme prompt",
@@ -66,9 +67,16 @@ describe("information module SDK", () => {
       create: () => ({ provisions: [], subscriptions: [] }),
     });
 
+    expect(module.manifest.summary).toBe("Test information module.");
     expect(module.manifest.description).toBe(
       "Compiles Acme input into model context.",
     );
+    expect(() =>
+      defineInformationModule({
+        ...module,
+        manifest: { ...module.manifest, summary: "two\nlines" },
+      }),
+    ).toThrow(/module summary/iu);
     expect(Object.isFrozen(module.manifest.promptRenderers[0])).toBe(true);
     expect(() =>
       defineInformationModule({
@@ -101,7 +109,8 @@ describe("information module SDK", () => {
     });
     const module = defineInformationModule({
       manifest: {
-        protocolVersion: 1,
+        protocolVersion: 2,
+        summary: "Test information module.",
         moduleVersion: "1.0.0",
         selectors: [],
         promptRenderers: [],
@@ -169,7 +178,8 @@ describe("information module SDK", () => {
     expect(() =>
       defineInformationModule({
         manifest: {
-          protocolVersion: 1,
+          protocolVersion: 2,
+          summary: "Test information module.",
           moduleVersion: "1.0.0",
           selectors: [],
           promptRenderers: [],

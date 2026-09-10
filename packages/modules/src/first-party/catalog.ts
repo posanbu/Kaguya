@@ -12,7 +12,7 @@ import {
 } from "@kaguya/sdk";
 import { associationModule } from "./association/index.js";
 import { identityModule } from "./identity/index.js";
-import { speechDecisionModule } from "./speech-decision/index.js";
+import { attentionArousalModule } from "./attention-arousal/index.js";
 import { heartbeatModule } from "./heartbeat/index.js";
 import {
   createHeartflowModule,
@@ -29,7 +29,7 @@ export function createFirstPartyModuleCatalog<
   return defineInformationModuleCatalog(
     associationModule,
     identityModule,
-    speechDecisionModule,
+    attentionArousalModule,
     createLlmReplyModule(options),
     heartbeatModule,
     createHeartflowModule(options),
@@ -58,8 +58,8 @@ export function createFirstPartyModuleActivations(
       settings: Object.freeze({}),
     }),
     Object.freeze({
-      instanceId: "speech-decision.default",
-      definitionId: "core.speech.decision",
+      instanceId: "attention-arousal.default",
+      definitionId: "agent.attention.arousal",
       settings: Object.freeze({}),
     }),
     Object.freeze({
@@ -68,6 +68,7 @@ export function createFirstPartyModuleActivations(
       settings: Object.freeze({
         messageDebounceMs: profile === "test" ? 0 : 1500,
         maxReplacementAttempts: 3,
+        totalWaitBudget: 3,
       }),
     }),
     Object.freeze({

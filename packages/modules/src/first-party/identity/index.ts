@@ -22,12 +22,13 @@ const key = (value: unknown) => JSON.stringify(value);
 
 export const identityModule = defineInformationModule({
   manifest: {
-    protocolVersion: 1,
+    protocolVersion: 2,
     moduleVersion: "1.0.0",
     definitionId: "core.identity.normalize",
     displayName: "Identity normalization",
+    summary: "Normalizes platform identities into stable agent identities.",
     description:
-      "Normalizes inbound chat scope, platform account, and person identity into auditable terminal facts.",
+      "Normalizes inbound chat scope, platform account, and person identity into auditable terminal facts. It preserves platform facts while keeping authentication, attention policy, and response behavior outside the identity boundary.",
     settingsSchema,
     consumes: [inboundTextInformationKind],
     produces: [
