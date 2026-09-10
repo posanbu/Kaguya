@@ -103,4 +103,6 @@ Heartbeat 到期只产生 `agent.turn.candidate`。Heartflow 使用 scope genera
 
 显式开启 `memory.enabled` 后，candidate Selector 才以当前消息为 query 执行全局召回，最多选择 8 条不晚于当前请求、且排除当前消息的结果。身份结果仍写入审计元数据，但不缩小默认召回范围，Web 和 ephemeral 消息同样进入这条链。Runtime 的命名检索策略只返回来源 ID，Core 随后从追加式账本重新加载并授权原始 inbound atom，因此 candidate 和 Prompt provenance 都直接指向不可变消息，而不是临时 Memory atom。
 
-Memory fragment 排在当前消息之前，合计最多 4,000 个 Unicode 字符；召回失败会退化为空历史，不阻塞当前回复。reply、历史 `core.memory.text` 和原始 inbound 的 renderer 都在 manifest 中声明，每个 fragment 保留 informationId，LLM requested 使用同序 `core:uses-context` 引用追溯输入。未知 kind 不会被静默当作文本注入。scope、claim、上下文和终态都由 Information DAG 表达，不引入进程内 Session 或可变对话桶。
+Memory 变量在当前消息之前，合计最多 4,000 个 Unicode 字符；召回失败会退化为空内容，不阻塞当前回复。reply、历史 `core.memory.text` 和原始 inbound 的 renderer 都在 manifest 中声明，每个模板变量保留其 informationIds，LLM requested 使用 `core:uses-context` 引用追溯实际输入。一个原子可同时支持多个变量，一个变量也可聚合多个原子。未知 kind 不会被静默当作文本注入。scope、claim、上下文和终态都由 Information DAG 表达，不引入进程内 Session 或可变对话桶。
+
+一方 Prompt 最终文本由 `packages/modules/templates/*.default.hbs` 的受限 Handlebars 层级排版。开发者可复制为同名 `*.local.hbs` 做本地覆盖；local 文件被 Git 忽略，重启后生效。声明变量可出现零次或多次，只有外层实际使用的逻辑变量进入 provenance；未知变量、动态或递归 partial 和非内建 helper 会在启动时失败。替换不做 XML/HTML 逃逸或额外包裹，数据边界由模板作者负责。

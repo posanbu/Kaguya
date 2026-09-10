@@ -711,6 +711,7 @@ function parseReplacementInput(value: unknown): {
     const allowedKeys = new Set([
       "acknowledgedWarnings",
       "ai",
+      "identity",
       "memory",
       "name",
       "platforms",
@@ -729,6 +730,7 @@ function parseReplacementInput(value: unknown): {
     const replacement = value as {
       readonly acknowledgedWarnings?: unknown;
       readonly ai?: unknown;
+      readonly identity?: unknown;
       readonly memory?: unknown;
       readonly name?: unknown;
       readonly platforms?: unknown;
@@ -740,6 +742,7 @@ function parseReplacementInput(value: unknown): {
       ),
       name: normalizeProfileName(replacement.name),
       settings: parseSettings({
+        identity: replacement.identity,
         ai: replacement.ai,
         memory: replacement.memory,
         platforms: replacement.platforms,

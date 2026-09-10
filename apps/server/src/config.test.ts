@@ -148,6 +148,7 @@ function completeProfile(
     version: 1,
     id: "default",
     name: "default",
+    identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
     ai: { providers: [] },
     memory: { enabled: false },
     platforms: [],

@@ -202,6 +202,28 @@ button:disabled {
   margin-top: 18px;
 }
 
+.identity-fields {
+  padding: 20px 0 4px;
+  margin: 24px 0 4px;
+  border: 0;
+  border-top: 1px solid #f0e5dc;
+}
+
+.identity-fields legend {
+  padding: 0 12px 0 0;
+  color: #3a2a21;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.identity-fields > .field-help {
+  margin-top: 4px;
+}
+
+.field textarea.persona-editor {
+  font-family: inherit;
+}
+
 .setup-model-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1228,9 +1250,14 @@ button:disabled {
 }
 
 :root[data-theme="dark"] .field,
+:root[data-theme="dark"] .identity-fields legend,
 :root[data-theme="dark"] .readiness-group strong,
 :root[data-theme="dark"] .readiness-status {
   color: #f0e4dc;
+}
+
+:root[data-theme="dark"] .identity-fields {
+  border-color: rgb(104 224 226 / 20%);
 }
 
 :root[data-theme="dark"] .field-help {

@@ -28,9 +28,9 @@ flowchart LR
 | ---------- | ------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
 | 应用装配   | `apps/server`                                                             | 配置、Logger、Runtime、Fastify、NapCat 和关闭顺序                          |
 | 运行时     | `packages/runtime`                                                        | 入站持久化、事件发布、ModuleHost 装配、LLM port、transport registry 与审计 |
-| 模块协议   | `packages/modules`                                                        | `message.*` 标准事件以及最小 filter/LLM demo 模块                          |
+| 模块协议   | `packages/modules`                                                        | 一方信息模块、受限 Handlebars Prompt 模板与变量 provenance                 |
 | 执行基础   | `packages/engine`、`packages/sdk`                                         | EventBus、ModuleHost、强类型模块/事件 API；保留显式 workflow API           |
-| 数据与模型 | `packages/database`、`packages/prompt`、`packages/llm`、`packages/config` | SQLite、Prompt、模型调用/trace、profile/tier 配置                          |
+| 数据与模型 | `packages/database`、`packages/llm`、`packages/config`                    | 信息持久化、模型调用/trace、Profile/identity/tier 配置                     |
 | 平台契约   | `packages/schema`、`packages/platform-adapters`                           | 公共 schema、OneBot 规范化和稳定 outbound transport                        |
 
 依赖方向是 `apps/server → runtime → 基础 packages`。Runtime 不读取 Server 环境变量；Server 不重建 Runtime 内部组件。

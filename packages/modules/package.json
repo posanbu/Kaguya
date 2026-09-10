@@ -6,6 +6,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./prompt-templates/node": {
+      "types": "./dist/node/prompt-templates.d.ts",
+      "default": "./dist/node/prompt-templates.js"
     }
   },
   "scripts": {
@@ -15,13 +19,13 @@
   "dependencies": {
     "@kaguya/llm": "workspace:*",
     "@kaguya/memory": "workspace:*",
-    "@kaguya/prompt": "workspace:*",
+    "@kaguya/scheduler": "workspace:*",
     "@kaguya/schema": "workspace:*",
     "@kaguya/sdk": "workspace:*",
-    "@kaguya/scheduler": "workspace:*"
+    "handlebars": "4.7.9"
   },
   "devDependencies": {
-    "@kaguya/engine": "workspace:*",
-    "@kaguya/database": "workspace:*"
+    "@kaguya/database": "workspace:*",
+    "@kaguya/engine": "workspace:*"
   }
 }

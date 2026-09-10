@@ -235,7 +235,7 @@ function cloneJsonObject(
         (key === "detail" ||
           key === "sensitivity" ||
           key === "promptFull" ||
-          key === "promptFragments"))
+          key === "promptVariables"))
     ) {
       continue;
     }

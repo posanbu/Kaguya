@@ -29,7 +29,7 @@ Kaguya 采用 pnpm workspace 和 TypeScript project references。应用负责装
 
 **`packages/llm`** — Vercel AI SDK Core 边界、结构化输出和错误归一化。
 
-**`packages/prompt`** — Prompt 编译和 provenance。
+**`packages/modules/templates`** — 一方模块的 Prompt 文本模板；模块代码负责变量渲染和 provenance。
 
 **`packages/logger`** — 结构化日志、上下文传播和脱敏。
 

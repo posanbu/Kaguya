@@ -495,7 +495,7 @@ function createOutput(options: CreateLoggerOptions): {
         singleLine: true,
         messageFormat: formatPrettyMessage,
         ignore:
-          "service,module,event,pid,hostname,informationId,kind,occurredAt,source,references,detail,sensitivity,promptFull,promptFragments",
+          "service,module,event,pid,hostname,informationId,kind,occurredAt,source,references,detail,sensitivity,promptFull,promptVariables",
       }),
       closeStream: false,
     };
@@ -542,27 +542,29 @@ export function formatPrettyMessage(log: Record<string, unknown>): string {
     .split("\n")
     .map((line) => `    ${line}`)
     .join("\n");
-  const fragments = Array.isArray(log.promptFragments)
-    ? log.promptFragments
+  const variables = Array.isArray(log.promptVariables)
+    ? log.promptVariables
         .filter(isRecord)
-        .map((fragment) => {
-          const id =
-            typeof fragment.informationId === "string"
-              ? shortInformationId(fragment.informationId)
-              : "-";
-          const fragmentId =
-            typeof fragment.fragmentId === "string"
-              ? fragment.fragmentId
+        .map((variable) => {
+          const ids = Array.isArray(variable.informationIds)
+            ? variable.informationIds
+                .filter((id): id is string => typeof id === "string")
+                .map(shortInformationId)
+                .join(",") || "-"
+            : "-";
+          const variableName =
+            typeof variable.variableName === "string"
+              ? variable.variableName
               : "unknown";
           const digest =
-            typeof fragment.contentDigest === "string"
-              ? fragment.contentDigest
+            typeof variable.contentDigest === "string"
+              ? variable.contentDigest
               : "unknown";
-          return `    ${fragmentId} information=${id} digest=${digest}`;
+          return `    ${variableName} information=${ids} digest=${digest}`;
         })
         .join("\n")
     : "";
-  return `${header}\n  Prompt:\n${prompt}${fragments ? `\n  Provenance:\n${fragments}` : ""}`;
+  return `${header}\n  Prompt:\n${prompt}${variables ? `\n  Provenance:\n${variables}` : ""}`;
 }
 
 function formatPrettyReferences(value: unknown): string {

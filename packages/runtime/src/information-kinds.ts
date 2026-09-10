@@ -10,8 +10,10 @@
  * 代码库关系：`runtime.ts` 用聚合集合初始化 Registry；`model-task.ts` 写通用模型任务原子；系统
  * delivery consumer 写 delivered/failed 原子；业务模块接收同一 completed definition 实例。
  * 输入输出与副作用：所有导出都是无 I/O 的 schema/definition/tuple。requested prompt 会把
- * fragment metadata 规范为 JSON；projector 不输出 prompt/output/raw 或凭据。
+ * variable provenance 规范为 JSON；projector 不输出 prompt/output/raw 或凭据。
  */
+import { createHash } from "node:crypto";
+
 import { consumerFailedInformationKind } from "@kaguya/engine";
 import { previewInformationContent } from "@kaguya/logger";
 import {
@@ -22,11 +24,9 @@ import {
   type CompiledPrompt,
   type InformationId,
   type JsonObject,
-  type PromptFragmentSource,
   compiledPromptSchema,
   jsonValueSchema,
   informationIdSchema,
-  informationPayloadSchema,
   platformDestinationSchema,
   promptKindSchema,
   z,
@@ -37,82 +37,53 @@ import {
 } from "@kaguya/sdk";
 
 const nonBlankString = z.string().trim().min(1);
-type InformationPromptFragment = JsonObject & {
-  id: string;
-  informationId?: InformationId;
-  source: PromptFragmentSource;
-  priority: number;
+type InformationPromptVariable = JsonObject & {
+  name: string;
   content: string;
-  metadata: JsonObject;
+  informationIds: InformationId[];
 };
 type InformationPromptProvenance = JsonObject & {
-  fragmentId: string;
-  informationId?: InformationId;
-  source: PromptFragmentSource;
-  priority: number;
+  variableName: string;
+  informationIds: InformationId[];
   contentDigest: string;
 };
 export type InformationCompiledPrompt = JsonObject & {
   kind: CompiledPrompt["kind"];
   text: string;
-  fragments: InformationPromptFragment[];
+  templateId: string;
+  templates: Array<JsonObject & { name: string; content: string }>;
+  templateDigest: string;
+  promptDigest: string;
+  variables: InformationPromptVariable[];
   provenance: InformationPromptProvenance[];
 };
 
 export const informationCompiledPromptSchema =
   compiledPromptSchema.transform<InformationCompiledPrompt>(
     (prompt, context) => {
-      const fragments: InformationPromptFragment[] = prompt.fragments.map(
-        (fragment, index) => {
-          const metadata = informationPayloadSchema.safeParse(
-            fragment.metadata,
-          );
-          if (!metadata.success) {
-            for (const issue of metadata.error.issues) {
-              context.addIssue({
-                ...issue,
-                path: ["fragments", index, "metadata", ...issue.path],
-              });
-            }
-            return {
-              id: fragment.id,
-              ...(fragment.informationId === undefined
-                ? {}
-                : { informationId: fragment.informationId }),
-              source: fragment.source,
-              priority: fragment.priority,
-              content: fragment.content,
-              metadata: {},
-            } as InformationPromptFragment;
-          }
-          return {
-            id: fragment.id,
-            ...(fragment.informationId === undefined
-              ? {}
-              : { informationId: fragment.informationId }),
-            source: fragment.source,
-            priority: fragment.priority,
-            content: fragment.content,
-            metadata: metadata.data,
-          } as InformationPromptFragment;
-        },
+      void context;
+      const variables: InformationPromptVariable[] = prompt.variables.map(
+        (variable) => ({
+          name: variable.name,
+          content: variable.content,
+          informationIds: [...variable.informationIds],
+        }),
       );
-      const provenance: InformationPromptProvenance[] = prompt.provenance.map(
-        (entry) =>
-          ({
-            fragmentId: entry.fragmentId,
-            ...(entry.informationId === undefined
-              ? {}
-              : { informationId: entry.informationId }),
-            source: entry.source,
-            priority: entry.priority,
-            contentDigest: entry.contentDigest,
-          }) as InformationPromptProvenance,
+      const provenance: InformationPromptProvenance[] = variables.map(
+        (variable) => ({
+          variableName: variable.name,
+          informationIds: [...variable.informationIds],
+          contentDigest: digest(variable.content),
+        }),
       );
       return {
         kind: prompt.kind,
         text: prompt.text,
-        fragments,
+        templateId: prompt.templateId,
+        templates: prompt.templates.map((template) => ({ ...template })),
+        templateDigest: digest(JSON.stringify(prompt.templates)),
+        promptDigest: digest(prompt.text),
+        variables,
         provenance,
       } as InformationCompiledPrompt;
     },
@@ -239,16 +210,14 @@ export const modelTaskResolvedModelSchema = z
     modelId: nonBlankString,
   })
   .strict();
-const modelTaskProvenanceBase = compiledPromptSchema.shape.provenance.element
-  .omit({ informationId: true })
-  .strict();
 const modelTaskProvenanceSchema = z.array(
-  z.union([
-    modelTaskProvenanceBase
-      .extend({ informationId: informationIdSchema })
-      .strict(),
-    modelTaskProvenanceBase,
-  ]),
+  z
+    .object({
+      variableName: nonBlankString,
+      informationIds: z.array(informationIdSchema),
+      contentDigest: nonBlankString,
+    })
+    .strict(),
 );
 export const modelTaskMetadataSchema = z
   .object({
@@ -259,6 +228,9 @@ export const modelTaskMetadataSchema = z
     contextInformationId: informationIdSchema,
     contextInformationIds: z.array(informationIdSchema).min(1),
     promptKind: promptKindSchema,
+    promptTemplateId: nonBlankString,
+    promptTemplateDigest: nonBlankString,
+    promptDigest: nonBlankString,
     provenance: modelTaskProvenanceSchema,
     activation: z
       .object({ instanceId: nonBlankString, definitionId: nonBlankString })
@@ -330,7 +302,7 @@ export const modelTaskRequestedInformationKind = defineInformationKind({
       modelId: payload.resolvedModel.modelId,
       outputMode: payload.outputMode,
       promptCharacters: Array.from(payload.prompt.text).length,
-      promptFragmentCount: payload.prompt.fragments.length,
+      promptVariableCount: payload.prompt.variables.length,
       ...promptPreview(payload.prompt.text),
     }),
     detail: {
@@ -341,19 +313,19 @@ export const modelTaskRequestedInformationKind = defineInformationKind({
         taskId: payload.taskId,
         taskVersion: payload.version,
         promptFull: sanitizePromptForLogging(payload.prompt.text),
-        promptFragments: payload.prompt.provenance.map((entry) => ({
-          fragmentId: entry.fragmentId,
-          ...(entry.informationId === undefined
-            ? {}
-            : { informationId: entry.informationId }),
-          source: entry.source,
-          priority: entry.priority,
+        promptVariables: payload.prompt.provenance.map((entry) => ({
+          variableName: entry.variableName,
+          informationIds: entry.informationIds,
           contentDigest: entry.contentDigest,
         })),
       }),
     },
   },
 });
+
+function digest(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
 export const modelTaskCompletedInformationKind = defineInformationKind({
   kind: "core.model.task.completed",
   displayName: "Core Model Task Completed",

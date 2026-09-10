@@ -91,7 +91,7 @@ packages/engine/    InformationCore、Kind Registry、并发广播与 ModuleHost
 packages/modules/   消息 Kind 与 filter/LLM 回复模块
 packages/database/  PostgreSQL 信息账本、迁移与日志投影 outbox
 packages/llm/       LLM 调用、输出校验与错误归一化
-packages/prompt/    Prompt 编译与 provenance
+packages/modules/templates/  一方 Prompt 文本模板
 packages/logger/    结构化日志、上下文与脱敏
 packages/schema/    跨包数据契约
 packages/sdk/       Information Kind 与模块定义 API

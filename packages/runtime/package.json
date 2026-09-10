@@ -20,7 +20,6 @@
     "@kaguya/memory": "workspace:*",
     "@kaguya/modules": "workspace:*",
     "@kaguya/platform-adapters": "workspace:*",
-    "@kaguya/prompt": "workspace:*",
     "@kaguya/schema": "workspace:*",
     "@kaguya/scheduler": "workspace:*",
     "@kaguya/sdk": "workspace:*"

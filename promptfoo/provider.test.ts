@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 interface ProviderResponse {
   output: string;
   metadata: {
-    compilerSource: string;
+    rendererSource: string;
     kind: string;
   };
 }
@@ -25,15 +25,15 @@ const require = createRequire(import.meta.url);
 const KaguyaPromptProvider = require("./provider.cjs") as ProviderConstructor;
 
 describe("KaguyaPromptProvider", () => {
-  it("loads the prompt compiler through the repository source bridge", async () => {
+  it("loads the pure prompt renderer through the repository source bridge", async () => {
     const promptfooDirectory = path.dirname(fileURLToPath(import.meta.url));
     const expectedSourcePath = path.resolve(
       promptfooDirectory,
       "..",
       "packages",
-      "prompt",
+      "modules",
       "src",
-      "index.ts",
+      "prompt-template.ts",
     );
     const provider = new KaguyaPromptProvider({ id: "kaguya-source-test" });
 
@@ -47,11 +47,10 @@ describe("KaguyaPromptProvider", () => {
     });
 
     expect(KaguyaPromptProvider.PROMPT_SOURCE_PATH).toBe(expectedSourcePath);
-    expect(response.metadata.compilerSource).toBe(
-      "packages/prompt/src/index.ts",
+    expect(response.metadata.rendererSource).toBe(
+      "packages/modules/src/prompt-template.ts",
     );
-    expect(response.output).toContain(
-      '<state source="state-current">\nawake\n</state>',
-    );
+    expect(response.output).toContain("[state-current]\nawake");
+    expect(response.output).not.toContain("<state");
   });
 });

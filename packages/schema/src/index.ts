@@ -1,8 +1,8 @@
 /**
  * 功能概述：聚合 Kaguya 跨包共享的稳定 wire schema，包括信息原子、平台投递内容、
- * Prompt 结构与 LLM 错误分类；旧事件信封和持久化记录身份不再属于公共契约。
+ * Prompt 模板变量与 LLM 错误分类；旧事件信封和持久化记录身份不再属于公共契约。
  * 主要职责：重新导出 `information.ts` 的不可变原子类型；本文件声明平台目标与消息
- * 内容 schema、可追溯 informationId 的 Prompt fragment/compiled prompt schema、拒绝
+ * 内容 schema、可追溯 informationId 的 Prompt variable/compiled prompt schema、拒绝
  * Profile 身份字段的 information payload schema，以及低层 LLM 错误种类。
  * 代码库关系：platform adapters、modules、prompt、llm 与 runtime 都从本入口消费数据
  * 边界；持久化事实统一使用 `InformationAtom`，数据库不再依赖事件或消息记录 schema。
@@ -58,44 +58,29 @@ export type OutboundMessageContent = z.infer<
   typeof outboundMessageContentSchema
 >;
 
-export type PromptFragmentSource =
-  "template" | "history" | "memory" | "persona" | "policy" | "state";
-
-export const promptFragmentSourceSchema = z.enum([
-  "template",
-  "history",
-  "memory",
-  "persona",
-  "policy",
-  "state",
-]);
-
-export const promptFragmentSchema = z.object({
-  id: z.string().min(1),
-  informationId: informationIdSchema.optional(),
-  source: promptFragmentSourceSchema,
-  priority: z.number(),
+export const promptVariableSchema = z.object({
+  name: z.string().regex(/^[a-z][a-z0-9_]*$/u),
   content: z.string(),
-  metadata: z.record(z.string(), z.unknown()),
+  informationIds: z.array(informationIdSchema),
 });
 
-export type PromptFragment = z.infer<typeof promptFragmentSchema>;
+export type PromptVariable = z.infer<typeof promptVariableSchema>;
+
+export const promptTemplateSchema = z.object({
+  name: z.string().regex(/^[a-z][a-z0-9_-]*$/u),
+  content: z.string().min(1),
+});
+
+export type PromptTemplate = z.infer<typeof promptTemplateSchema>;
 
 export const promptKindSchema = z.enum(["route", "reply", "state", "memory"]);
 
 export const compiledPromptSchema = z.object({
   kind: promptKindSchema,
   text: z.string(),
-  fragments: z.array(promptFragmentSchema),
-  provenance: z.array(
-    z.object({
-      fragmentId: z.string().min(1),
-      informationId: informationIdSchema.optional(),
-      source: promptFragmentSourceSchema,
-      priority: z.number(),
-      contentDigest: z.string().min(1),
-    }),
-  ),
+  templateId: z.string().min(1),
+  templates: z.array(promptTemplateSchema).min(1),
+  variables: z.array(promptVariableSchema),
 });
 
 export type CompiledPrompt = z.infer<typeof compiledPromptSchema>;

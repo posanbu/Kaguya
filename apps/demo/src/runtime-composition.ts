@@ -22,6 +22,7 @@ import {
   type FirstPartyModuleInstanceConfig,
   type ModuleModelSelection,
 } from "@kaguya/modules";
+import { loadFirstPartyPromptTemplates } from "@kaguya/modules/prompt-templates/node";
 import {
   modelTaskCapability,
   modelTaskCompletedInformationKind,
@@ -34,6 +35,7 @@ import {
   type RuntimeCapabilityContext,
 } from "@kaguya/runtime";
 import { oneShotScheduleCapability } from "@kaguya/scheduler";
+import { DEFAULT_AGENT_IDENTITY } from "@kaguya/config";
 export type RuntimeModelSelectionResolver = (
   selection: ModuleModelSelection,
 ) => {
@@ -44,6 +46,7 @@ export type RuntimeModelSelectionResolver = (
 export interface ReplyCompositionOptions {
   readonly memoryEnabled?: boolean;
   readonly moduleConfigs: readonly FirstPartyModuleInstanceConfig[];
+  readonly agentIdentity?: import("@kaguya/modules").AgentIdentity;
 }
 export function createDeterministicModelSelectionResolver(): RuntimeModelSelectionResolver {
   const model = createRepeatingDeterministicModel({
@@ -59,6 +62,7 @@ export function createReplyComposition(
   resolveModelSelection: RuntimeModelSelectionResolver = createDeterministicModelSelectionResolver(),
   options: ReplyCompositionOptions,
 ) {
+  const promptTemplates = loadFirstPartyPromptTemplates();
   const catalog = createFirstPartyModuleCatalog({
     modelTaskCapability,
     modelTaskCompletedInformationKind,
@@ -67,10 +71,13 @@ export function createReplyComposition(
     deliveryDeliveredInformationKind,
     deliveryFailedInformationKind,
     executionExhaustedInformationKind,
+    promptTemplates: promptTemplates.llmReply,
+    agentIdentity: options.agentIdentity ?? DEFAULT_AGENT_IDENTITY,
   });
   const activations = createFirstPartyModuleActivations(
     catalog,
     options.moduleConfigs,
+    options.agentIdentity ?? DEFAULT_AGENT_IDENTITY,
   );
   const models = new Map<string, ReturnType<KaguyaLlmModelResolver>>();
   const activeModel = new AsyncLocalStorage<{

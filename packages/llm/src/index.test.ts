@@ -30,8 +30,11 @@ import { createDeterministicModel } from "./testing.js";
 const prompt: CompiledPrompt = {
   kind: "route",
   text: "<policy>decide whether to reply</policy>",
-  fragments: [],
-  provenance: [],
+  templateId: "test.route",
+  templates: [
+    { name: "main", content: "<policy>decide whether to reply</policy>" },
+  ],
+  variables: [],
 };
 
 function modelResult(text: string) {

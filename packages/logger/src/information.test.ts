@@ -209,10 +209,10 @@ describe("information atom log projection", () => {
       (atom: InformationAtom<string, ContentPayload>) => ({
         event: "model.task.prompt",
         promptFull: atom.payload.content,
-        promptFragments: [
+        promptVariables: [
           {
-            fragmentId: "fragment-1",
-            informationId: "context-12345678",
+            variableName: "history",
+            informationIds: ["context-12345678"],
             contentDigest: "sha256:test",
           },
         ],

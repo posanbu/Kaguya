@@ -8,7 +8,6 @@
     { "path": "./packages/logger" },
     { "path": "./packages/engine" },
     { "path": "./packages/modules" },
-    { "path": "./packages/prompt" },
     { "path": "./packages/llm" },
     { "path": "./packages/database" },
     { "path": "./packages/scheduler" },

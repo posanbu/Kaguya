@@ -17,9 +17,6 @@
       "path": "../sdk"
     },
     {
-      "path": "../prompt"
-    },
-    {
       "path": "../llm"
     },
     {

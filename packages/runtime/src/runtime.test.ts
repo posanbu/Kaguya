@@ -65,6 +65,18 @@ import {
 } from "@kaguya/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+const testIdentity = { name: "Kaguya", aliases: ["辉夜"], persona: "test" };
+const testReplyTemplates = {
+  main: "{{scene}}{{history}}{{memory}}{{quoted}}{{target}}",
+  history: "{{#each messages}}{{> history-inbound}}{{/each}}",
+  historyInbound: "{{content}}",
+  historyAssistant: "{{content}}",
+  memory: "{{#each items}}{{> memory-item}}{{/each}}",
+  memoryItem: "{{content}}",
+  quoted: "{{message}}",
+  target: "{{content}}",
+};
+
 import {
   KaguyaRuntime,
   OutboundTransportError,
@@ -309,9 +321,9 @@ describe("KaguyaRuntime", () => {
         tier: "heavy",
         providerId: "test",
         modelId: "deterministic-heavy",
-        promptFragmentCount: 5,
+        promptVariableCount: 5,
       });
-      expect(requestSummary?.promptPreview).toContain("Kaguya");
+      expect(requestSummary?.promptPreview).toContain("你正在私聊中");
       expect(requestSummary?.references).toEqual(expect.any(Array));
       expect(requestDetail).toMatchObject({
         informationId: requestSummary?.informationId,
@@ -319,10 +331,10 @@ describe("KaguyaRuntime", () => {
         sensitivity: "content",
       });
       expect(requestDetail?.promptFull).toContain("hello observable moon");
-      expect(requestDetail?.promptFragments).toEqual(
+      expect(requestDetail?.promptVariables).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            informationId: expect.any(String),
+            informationIds: expect.any(Array),
             contentDigest: expect.any(String),
           }),
         ]),
@@ -442,7 +454,13 @@ describe("KaguyaRuntime", () => {
           sourceInformationId: "source",
           contextInformationId: "context",
           contextAtoms: [],
-          prompt: { kind: "reply", text: "", fragments: [], provenance: [] },
+          prompt: {
+            kind: "reply",
+            text: "prompt",
+            templateId: "test.reply.v1",
+            templates: [{ name: "main", content: "prompt" }],
+            variables: [],
+          },
         }),
       ).rejects.toThrow(/not approved/);
     }
@@ -502,8 +520,8 @@ describe("KaguyaRuntime", () => {
       expect(requestedPayload.prompt.provenance).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            informationId: reply.informationId,
-            source: "state",
+            variableName: "target",
+            informationIds: [reply.informationId],
           }),
         ]),
       );
@@ -569,16 +587,16 @@ describe("KaguyaRuntime", () => {
       expect(payload.prompt.provenance).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            informationId: firstInbound.informationId,
-            source: "memory",
+            variableName: "memory",
+            informationIds: [firstInbound.informationId],
           }),
         ]),
       );
-      expect(payload.prompt.fragments).toEqual(
+      expect(payload.prompt.variables).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            informationId: firstInbound.informationId,
-            source: "memory",
+            name: "memory",
+            informationIds: [firstInbound.informationId],
           }),
         ]),
       );
@@ -647,14 +665,17 @@ describe("KaguyaRuntime", () => {
       expect(payload.prompt.provenance).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            informationId: payload.sourceInformationId,
-            source: "state",
+            variableName: "target",
+            informationIds: [payload.sourceInformationId],
           }),
         ]),
       );
-      expect(
-        payload.prompt.provenance.some(({ source }) => source === "memory"),
-      ).toBe(false);
+      expect(payload.prompt.provenance).toContainEqual(
+        expect.objectContaining({
+          variableName: "memory",
+          informationIds: [],
+        }),
+      );
     },
     TEST_TIMEOUT,
   );
@@ -1642,6 +1663,8 @@ function createReplyComposition(
     deliveryDeliveredInformationKind,
     deliveryFailedInformationKind,
     executionExhaustedInformationKind,
+    promptTemplates: testReplyTemplates,
+    agentIdentity: testIdentity,
   });
   const activations =
     providedActivations ??

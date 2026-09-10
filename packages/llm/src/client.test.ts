@@ -15,8 +15,9 @@ import { KaguyaLlmClient, KaguyaLlmError } from "./client.js";
 const prompt: CompiledPrompt = {
   kind: "route",
   text: "hello",
-  fragments: [],
-  provenance: [],
+  templateId: "test.route",
+  templates: [{ name: "main", content: "hello" }],
+  variables: [],
 };
 const outputSchema = z.object({ answer: z.string() }).strict();
 

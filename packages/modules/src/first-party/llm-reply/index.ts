@@ -33,7 +33,6 @@ import {
   onInformation,
   type InformationSelectorDefinition,
 } from "@kaguya/sdk";
-import { PromptCompiler } from "@kaguya/prompt";
 
 import {
   assistantTextInformationKind,
@@ -45,7 +44,6 @@ import {
   type ReplyRequestedInformationPayload,
 } from "../information-kinds.js";
 import {
-  compileReplyPromptFromInformation,
   inboundMemoryPromptRenderer,
   assistantHistoryPromptRenderer,
   replyPromptRenderer,
@@ -53,7 +51,12 @@ import {
   currentAcceptedMessageSelector,
   turnReplyContextSelector,
 } from "./reply-context.js";
-import { ZH_CN_REPLY_PROMPT } from "./reply-prompt.js";
+import {
+  createReplyPromptCompiler,
+  ZH_CN_REPLY_PROMPT,
+  type AgentIdentity,
+  type ReplyPromptTemplates,
+} from "./reply-prompt.js";
 
 export const modelTierSchema = z.enum(["light", "heavy"]);
 export type ModelTier = z.infer<typeof modelTierSchema>;
@@ -61,6 +64,8 @@ export type ModelTier = z.infer<typeof modelTierSchema>;
 export interface ModuleModelSelection {
   readonly modelTier: ModelTier;
 }
+
+export type { AgentIdentity, ReplyPromptTemplates } from "./reply-prompt.js";
 
 const sourceOutboundSchema = z
   .object({
@@ -105,10 +110,10 @@ export const replyModelDispatchingDiagnostic = defineModuleDiagnostic({
       taskId: z.literal("core.reply.generate"),
       taskVersion: z.literal("1"),
       outputMode: z.literal("text"),
-      promptVersion: z.literal("zh-CN/v1"),
+      promptVersion: z.literal("zh-CN/v2"),
       tier: modelTierSchema,
       promptCharacters: z.number().int().nonnegative(),
-      promptFragmentCount: z.number().int().nonnegative(),
+      promptVariableCount: z.number().int().nonnegative(),
       historyMessageCount: z.number().int().nonnegative(),
       historyCharacters: z.number().int().nonnegative(),
       memoryCharacters: z.number().int().nonnegative(),
@@ -194,7 +199,8 @@ export interface CreateLlmReplyModuleOptions<
     P
   >;
   readonly selector?: InformationSelectorDefinition;
-  readonly promptCompiler?: PromptCompiler;
+  readonly promptTemplates: ReplyPromptTemplates;
+  readonly agentIdentity: AgentIdentity;
 }
 
 export function createLlmReplyModule<
@@ -207,7 +213,10 @@ export function createLlmReplyModule<
   )
     throw new Error("Invalid model task capability");
   const selector = dependencies.selector ?? turnReplyContextSelector;
-  const promptCompiler = dependencies.promptCompiler ?? new PromptCompiler();
+  const compilePrompt = createReplyPromptCompiler(
+    dependencies.promptTemplates,
+    dependencies.agentIdentity,
+  );
   const completedInformationKind =
     dependencies.modelTaskCompletedInformationKind;
   return defineInformationModule({
@@ -220,6 +229,7 @@ export function createLlmReplyModule<
           ? []
           : [currentAcceptedMessageSelector]),
         completedReplySelector,
+        replySourceMessageSelector,
       ],
       promptRenderers: [
         replyPromptRenderer,
@@ -270,8 +280,7 @@ export function createLlmReplyModule<
               contextAtoms,
               reply.informationId,
             );
-            const prompt = compileReplyPromptFromInformation(
-              promptCompiler,
+            const prompt = compilePrompt(
               contextAtoms,
               persistedReply.informationId,
             );
@@ -287,13 +296,13 @@ export function createLlmReplyModule<
               promptVersion: ZH_CN_REPLY_PROMPT.version,
               tier: settings.modelTier,
               promptCharacters: Array.from(prompt.text).length,
-              promptFragmentCount: prompt.fragments.length,
-              historyMessageCount: prompt.fragments.filter(
-                ({ source }) => source === "history",
-              ).length,
-              historyCharacters: fragmentCharacters(prompt, "history"),
-              memoryCharacters: fragmentCharacters(prompt, "memory"),
-              targetCharacters: fragmentCharacters(prompt, "state"),
+              promptVariableCount: prompt.variables.length,
+              historyMessageCount:
+                prompt.variables.find(({ name }) => name === "history")
+                  ?.informationIds.length ?? 0,
+              historyCharacters: variableCharacters(prompt, "history"),
+              memoryCharacters: variableCharacters(prompt, "memory"),
+              targetCharacters: variableCharacters(prompt, "target"),
             });
             await context.use(modelTaskCapability).execute({
               task: {
@@ -362,10 +371,26 @@ export function createLlmReplyModule<
               context.instanceId
             )
               return;
+            const sourceContext = await context.select(
+              replySourceMessageSelector,
+            );
+            const sourceMessage = sourceContext.find(
+              ({ kind }) => kind === inboundTextInformationKind.kind,
+            );
+            const messagesSinceSource =
+              sourceMessage === undefined
+                ? undefined
+                : sourceContext.filter(
+                    (atom) =>
+                      atom.informationId !== sourceMessage.informationId &&
+                      Date.parse(atom.occurredAt) >=
+                        Date.parse(sourceMessage.occurredAt),
+                  ).length;
             const outbound = selectOutbound(
               assistantPayload.source,
               settings.outbound,
               assistantPayload.text,
+              messagesSinceSource,
             );
             if (outbound === undefined) return;
             await context.registerOnce(
@@ -433,6 +458,69 @@ const completedReplySelector = defineInformationSelector({
   },
 });
 
+const replySourceMessageSelector = defineInformationSelector({
+  selectorId: "kaguya.reply.source-message",
+  select: async ({ sourceAtom, ledger }) => {
+    const source = assistantTextInformationKind.payloadSchema.parse(
+      sourceAtom.payload,
+    ).source as ReturnType<typeof messageSourceOf>;
+    const candidates = await ledger.find({
+      kinds: [
+        inboundTextInformationKind.kind,
+        assistantTextInformationKind.kind,
+      ],
+      order: "desc",
+      limit: 100,
+    });
+    const scopedCandidates = candidates.filter((candidate) =>
+      sameMessageScope(messageSourceOf(candidate), source),
+    );
+    const matchIndex = scopedCandidates.findIndex(
+      (candidate) =>
+        messageSourceOf(candidate).platformMessageId ===
+        source.platformMessageId,
+    );
+    if (matchIndex < 0) return [];
+    const sourceOccurredAt = scopedCandidates[matchIndex]!.occurredAt;
+    return scopedCandidates
+      .filter(
+        (candidate) =>
+          Date.parse(candidate.occurredAt) >= Date.parse(sourceOccurredAt) &&
+          Date.parse(candidate.occurredAt) < Date.parse(sourceAtom.occurredAt),
+      )
+      .map(({ informationId }) => informationId);
+  },
+});
+
+function messageSourceOf(atom: DeepReadonly<InformationAtom>): {
+  readonly adapterId: string;
+  readonly platform: string;
+  readonly platformMessageId: string;
+  readonly destination: unknown;
+} {
+  const payload =
+    atom.kind === inboundTextInformationKind.kind
+      ? inboundTextInformationKind.payloadSchema.parse(atom.payload)
+      : assistantTextInformationKind.payloadSchema.parse(atom.payload);
+  return payload.source as {
+    readonly adapterId: string;
+    readonly platform: string;
+    readonly platformMessageId: string;
+    readonly destination: unknown;
+  };
+}
+
+function sameMessageScope(
+  left: ReturnType<typeof messageSourceOf>,
+  right: ReturnType<typeof messageSourceOf>,
+): boolean {
+  return (
+    left.adapterId === right.adapterId &&
+    left.platform === right.platform &&
+    JSON.stringify(left.destination) === JSON.stringify(right.destination)
+  );
+}
+
 function requireSelectedReply(
   atoms: readonly DeepReadonly<InformationAtom>[],
   informationId: string,
@@ -458,6 +546,7 @@ function selectOutbound(
   source: ReplyRequestedInformationPayload["source"],
   setting: LlmReplySettings["outbound"],
   text: string,
+  messagesSinceSource: number | undefined,
 ):
   | {
       readonly adapterId: string;
@@ -487,7 +576,8 @@ function selectOutbound(
     platform: source.platform,
     destination: source.destination,
     message:
-      setting.messageKind === "reply"
+      setting.messageKind === "reply" &&
+      shouldUseReplyMarker(messagesSinceSource)
         ? {
             kind: "reply",
             replyToPlatformMessageId: source.platformMessageId,
@@ -497,14 +587,19 @@ function selectOutbound(
   };
 }
 
-function fragmentCharacters(
-  prompt: CompiledPrompt,
-  source: "history" | "memory" | "state",
-): number {
-  return prompt.fragments
-    .filter((fragment) => fragment.source === source)
-    .reduce(
-      (total, fragment) => total + Array.from(fragment.content).length,
-      0,
-    );
+const REPLY_MARKER_MESSAGE_DISTANCE = 5;
+
+function shouldUseReplyMarker(
+  messagesSinceSource: number | undefined,
+): boolean {
+  return (
+    messagesSinceSource !== undefined &&
+    messagesSinceSource >= REPLY_MARKER_MESSAGE_DISTANCE
+  );
+}
+
+function variableCharacters(prompt: CompiledPrompt, name: string): number {
+  return Array.from(
+    prompt.variables.find((variable) => variable.name === name)?.content ?? "",
+  ).length;
 }

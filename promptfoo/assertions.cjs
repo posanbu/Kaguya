@@ -1,14 +1,11 @@
-const FRAGMENT_PATTERN =
-  /<(template|history|memory|persona|policy|state) source="([^"]+)">\n([\s\S]*?)\n<\/\1>/g;
-
 function assertRoutePrompt(output) {
   return assertExactPrompt(
     output,
     [
-      fragment("persona", "route-persona", "ROUTE_PERSONA"),
-      fragment("history", "route-history", "user: ROUTE_HISTORY"),
-      fragment("memory", "route-memory", "ROUTE_MEMORY"),
-      fragment("policy", "route-policy", "ROUTE_POLICY"),
+      value("route-persona", "ROUTE_PERSONA"),
+      value("route-history", "user: ROUTE_HISTORY"),
+      value("route-memory", "ROUTE_MEMORY"),
+      value("route-policy", "ROUTE_POLICY"),
     ],
     "route Prompt",
   );
@@ -18,10 +15,10 @@ function assertReplyPrompt(output) {
   const exact = assertExactPrompt(
     output,
     [
-      fragment("persona", "reply-persona", "REPLY_PERSONA"),
-      fragment("history", "reply-history", "user: REPLY_HISTORY"),
-      fragment("memory", "reply-memory", "REPLY_MEMORY"),
-      fragment("policy", "reply-policy", "REPLY_POLICY"),
+      value("reply-persona", "REPLY_PERSONA"),
+      value("reply-history", "user: REPLY_HISTORY"),
+      value("reply-memory", "REPLY_MEMORY"),
+      value("reply-policy", "REPLY_POLICY"),
     ],
     "reply Prompt",
   );
@@ -30,8 +27,7 @@ function assertReplyPrompt(output) {
   }
 
   const excludesRoutePolicy =
-    !output.includes("ROUTE_ONLY_POLICY") &&
-    !output.includes('source="route-policy"');
+    !output.includes("ROUTE_ONLY_POLICY") && !output.includes("[route-policy]");
   return grade(
     excludesRoutePolicy,
     "reply Prompt 仅包含 reply 策略",
@@ -43,9 +39,9 @@ function assertStatePrompt(output) {
   return assertExactPrompt(
     output,
     [
-      fragment("history", "state-history", "user: STATE_HISTORY"),
-      fragment("state", "state-current", "STATE_CURRENT"),
-      fragment("policy", "state-policy", "SHORT_TERM_STATE_POLICY"),
+      value("state-history", "user: STATE_HISTORY"),
+      value("state-current", "STATE_CURRENT"),
+      value("state-policy", "SHORT_TERM_STATE_POLICY"),
     ],
     "state Prompt",
   );
@@ -55,12 +51,11 @@ function assertMemoryPrompt(output) {
   const exact = assertExactPrompt(
     output,
     [
-      fragment(
-        "history",
+      value(
         "memory-history",
         "user: WINDOW_START\nassistant: WINDOW_MIDDLE\nuser: WINDOW_END",
       ),
-      fragment("policy", "memory-policy", "MEMORY_POLICY"),
+      value("memory-policy", "MEMORY_POLICY"),
     ],
     "memory Prompt",
   );
@@ -82,28 +77,21 @@ function assertExactPrompt(output, expected, label) {
     return grade(false, "", `${label} 输出不是字符串`);
   }
 
-  const actual = [...output.matchAll(FRAGMENT_PATTERN)].map((match) =>
-    fragment(match[1], match[2], match[3]),
-  );
-  const reconstructed = actual.map(renderFragment).join("\n\n");
-  if (reconstructed !== output) {
-    return grade(false, "", `${label} 含有无法识别的片段或分隔符`);
-  }
-
-  const pass = JSON.stringify(actual) === JSON.stringify(expected);
+  const rendered = expected.map(renderFragment).join("\n\n");
+  const pass = output === rendered;
   return grade(
     pass,
-    `${label} 的来源、顺序、标识与内容均符合预期`,
-    `${label} 结构不符：expected=${JSON.stringify(expected)} actual=${JSON.stringify(actual)}`,
+    `${label} 的顺序、标识与内容均符合预期`,
+    `${label} 结构不符：expected=${JSON.stringify(rendered)} actual=${JSON.stringify(output)}`,
   );
 }
 
-function fragment(source, id, content) {
-  return { source, id, content };
+function value(id, content) {
+  return { id, content };
 }
 
 function renderFragment(value) {
-  return `<${value.source} source="${value.id}">\n${value.content}\n</${value.source}>`;
+  return `[${value.id}]\n${value.content}`;
 }
 
 function grade(pass, successReason, failureReason) {

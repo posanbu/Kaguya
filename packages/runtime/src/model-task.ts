@@ -152,6 +152,9 @@ export class ModelTaskClient implements ModelTaskCapability {
         activation: request.activation,
         selectionPolicy,
         promptKind: prompt.kind,
+        promptTemplateId: prompt.templateId,
+        promptTemplateDigest: prompt.templateDigest,
+        promptDigest: prompt.promptDigest,
         provenance: prompt.provenance,
       });
     const selected = await this.#core.getMany(metadata.contextInformationIds);
@@ -162,28 +165,20 @@ export class ModelTaskClient implements ModelTaskCapability {
       )
     )
       throw new Error("Selected atoms must match the ledger in order");
-    const provenanceIds = prompt.provenance.flatMap((p) =>
-      p.informationId === undefined ? [] : [p.informationId],
+    const selectedIds = new Set(metadata.contextInformationIds);
+    const provenanceIds = prompt.provenance.flatMap(
+      ({ informationIds }) => informationIds,
     );
+    if (provenanceIds.some((informationId) => !selectedIds.has(informationId)))
+      throw new Error("Prompt provenance must reference selected information");
     if (
-      canonical(provenanceIds) !== canonical(metadata.contextInformationIds) ||
-      !provenanceIds.includes(metadata.sourceInformationId)
-    )
-      throw new Error(
-        "Prompt provenance must match selected information order",
-      );
-    if (new Set(provenanceIds).size !== provenanceIds.length)
-      throw new Error("Duplicate selected information");
-    if (
-      prompt.fragments.length !== prompt.provenance.length ||
-      prompt.fragments.some((f, i) => {
+      prompt.variables.length !== prompt.provenance.length ||
+      prompt.variables.some((variable, i) => {
         const p = prompt.provenance[i]!;
         return (
-          f.id !== p.fragmentId ||
-          f.informationId !== p.informationId ||
-          f.source !== p.source ||
-          f.priority !== p.priority ||
-          digest(f.content) !== p.contentDigest
+          variable.name !== p.variableName ||
+          canonical(variable.informationIds) !== canonical(p.informationIds) ||
+          digest(variable.content) !== p.contentDigest
         );
       })
     )
@@ -477,6 +472,9 @@ function fingerprint(
     | "outputMode"
     | "sourceInformationId"
     | "promptKind"
+    | "promptTemplateId"
+    | "promptTemplateDigest"
+    | "promptDigest"
     | "provenance"
     | "selectionPolicy"
   >,
@@ -488,6 +486,9 @@ function fingerprint(
       outputMode: metadata.outputMode,
       sourceInformationId: metadata.sourceInformationId,
       promptKind: metadata.promptKind,
+      promptTemplateId: metadata.promptTemplateId,
+      promptTemplateDigest: metadata.promptTemplateDigest,
+      promptDigest: metadata.promptDigest,
       provenance: metadata.provenance,
       selectionPolicy: metadata.selectionPolicy,
     }),

@@ -50,8 +50,10 @@ export {
 export type { ModuleInstanceConfig } from "./module-config.js";
 export {
   aiConfigSchema,
+  agentIdentitySchema,
   aiProviderConfigSchema,
   configurationWarningIds,
+  DEFAULT_AGENT_IDENTITY,
   emptyUserConfigProfileSettings,
   jsonObjectSchema,
   jsonValueSchema,
@@ -66,6 +68,7 @@ export {
   userConfigProfileSettingsSchema,
 } from "./model.js";
 export type {
+  AgentIdentity,
   JsonObject,
   JsonPrimitive,
   JsonValue,

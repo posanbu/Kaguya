@@ -20,9 +20,6 @@
       "path": "../engine"
     },
     {
-      "path": "../prompt"
-    },
-    {
       "path": "../llm"
     },
     {

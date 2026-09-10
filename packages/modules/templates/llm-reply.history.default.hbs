@@ -1,0 +1,6 @@
+{{#if messages}}
+【聊天记录】
+{{#each messages}}
+{{#if is_assistant}}{{> history-assistant}}{{else}}{{> history-inbound}}{{/if}}
+{{/each}}
+{{/if}}

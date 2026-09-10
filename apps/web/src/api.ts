@@ -85,6 +85,11 @@ export interface UserConfigProfile {
   readonly id: string;
   readonly name: string;
   readonly gatewayAllowlist: readonly string[];
+  readonly identity: {
+    readonly name: string;
+    readonly aliases: readonly string[];
+    readonly persona: string;
+  };
   readonly ai: {
     readonly defaultProviderId?: string;
     readonly modelTiers?: {
@@ -149,6 +154,7 @@ export interface CreateProfileInput {
 export interface ReplaceProfileInput {
   readonly name: string;
   readonly gatewayAllowlist: readonly string[];
+  readonly identity: UserConfigProfile["identity"];
   readonly acknowledgedWarnings: readonly string[];
   readonly ai: {
     readonly defaultProviderId: string;
@@ -626,6 +632,17 @@ function isProfileMetadata(value: unknown): value is ProfileMetadata {
   );
 }
 
+function isProfileIdentity(
+  value: unknown,
+): value is UserConfigProfile["identity"] {
+  return (
+    isRecord(value) &&
+    typeof value.name === "string" &&
+    isStringArray(value.aliases) &&
+    typeof value.persona === "string"
+  );
+}
+
 function isOptionalConfigurationIssueArray(
   value: unknown,
 ): value is readonly ConfigurationIssue[] | undefined {
@@ -678,6 +695,7 @@ function isUserConfigProfile(value: unknown): value is UserConfigProfile {
     value.version === 1 &&
     typeof value.id === "string" &&
     typeof value.name === "string" &&
+    isProfileIdentity(value.identity) &&
     isStringArray(value.gatewayAllowlist) &&
     isProfileAi(value.ai) &&
     isProfileMemory(value.memory) &&

@@ -125,6 +125,7 @@ describe("application API gateway", () => {
         id: "default",
         name: "default",
         gatewayAllowlist: [],
+        identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
         ai: { providers: [] },
         memory: { enabled: false },
         platforms: [],
@@ -136,6 +137,7 @@ describe("application API gateway", () => {
           id: "default",
           name: "default",
           gatewayAllowlist: [],
+          identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
           ai: { providers: [] },
           memory: { enabled: false },
           platforms: [],
@@ -306,6 +308,7 @@ describe("application API gateway", () => {
       id: "default",
       name: "default",
       gatewayAllowlist: ["qq:private:112233"],
+      identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
       ai: { providers: [] },
       memory: { enabled: false },
       platforms: [],
@@ -1195,6 +1198,7 @@ async function withManagementApp(
   await manager.replaceProfile(profile.id, {
     name: profile.name,
     acknowledgedWarnings: [],
+    identity: profile.identity,
     ai: profile.ai,
     memory: profile.memory,
     platforms: profile.platforms,
@@ -1238,6 +1242,7 @@ function stubManagement(): ConfigurationManagement {
       id: "default",
       name: "default",
       gatewayAllowlist: [],
+      identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
       ai: { providers: [] },
       memory: { enabled: false },
       platforms: [],
@@ -1255,6 +1260,7 @@ function readyProfileReplacement(
   heavyModelId: string,
 ) {
   return {
+    identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
     name,
     gatewayAllowlist: ["*:group:*", "*:private:*"],
     acknowledgedWarnings: [],

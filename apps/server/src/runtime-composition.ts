@@ -21,7 +21,9 @@ import {
   llmReplySettingsSchema,
   type FirstPartyModuleInstanceConfig,
   type ModuleModelSelection,
+  type AgentIdentity,
 } from "@kaguya/modules";
+import { loadFirstPartyPromptTemplates } from "@kaguya/modules/prompt-templates/node";
 import {
   modelTaskCapability,
   modelTaskCompletedInformationKind,
@@ -34,6 +36,7 @@ import {
   type RuntimeCapabilityContext,
 } from "@kaguya/runtime";
 import { oneShotScheduleCapability } from "@kaguya/scheduler";
+import { DEFAULT_AGENT_IDENTITY } from "@kaguya/config";
 export type RuntimeModelSelectionResolver = (
   selection: ModuleModelSelection,
 ) => {
@@ -44,6 +47,7 @@ export type RuntimeModelSelectionResolver = (
 export interface ReplyCompositionOptions {
   readonly memoryEnabled?: boolean;
   readonly moduleConfigs: readonly FirstPartyModuleInstanceConfig[];
+  readonly agentIdentity?: AgentIdentity;
 }
 export function createDeterministicModelSelectionResolver(): RuntimeModelSelectionResolver {
   const model = createRepeatingDeterministicModel({
@@ -55,7 +59,10 @@ export function createDeterministicModelSelectionResolver(): RuntimeModelSelecti
     model,
   });
 }
-export function createReplyCatalog() {
+export function createReplyCatalog(
+  agentIdentity: AgentIdentity = DEFAULT_AGENT_IDENTITY,
+) {
+  const promptTemplates = loadFirstPartyPromptTemplates();
   return createFirstPartyModuleCatalog({
     modelTaskCapability,
     modelTaskCompletedInformationKind,
@@ -64,16 +71,20 @@ export function createReplyCatalog() {
     deliveryDeliveredInformationKind,
     deliveryFailedInformationKind,
     executionExhaustedInformationKind,
+    promptTemplates: promptTemplates.llmReply,
+    agentIdentity,
   });
 }
 export function createReplyComposition(
   resolveModelSelection: RuntimeModelSelectionResolver = createDeterministicModelSelectionResolver(),
   options: ReplyCompositionOptions,
 ) {
-  const catalog = createReplyCatalog();
+  const identity = options.agentIdentity ?? DEFAULT_AGENT_IDENTITY;
+  const catalog = createReplyCatalog(identity);
   const activations = createFirstPartyModuleActivations(
     catalog,
     options.moduleConfigs,
+    identity,
   );
   const models = new Map<string, ReturnType<KaguyaLlmModelResolver>>();
   const activeModel = new AsyncLocalStorage<{

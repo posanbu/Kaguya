@@ -28,6 +28,11 @@ const completeProfile: UserConfigProfile = {
   id: "b3f1d59f-f1e2-4b63-b9de-d1aa8d0d1c44",
   name: "Production",
   gatewayAllowlist: ["qq:group:778899", "invalid-rule"],
+  identity: {
+    name: "Kaguya",
+    aliases: ["辉夜", "Moon"],
+    persona: "test persona",
+  },
   ai: {
     defaultProviderId: "default-provider",
     modelTiers: {
@@ -83,6 +88,7 @@ const emptyDefaultProfile: UserConfigProfile = {
   id: "default",
   name: "default",
   gatewayAllowlist: [],
+  identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
   ai: {
     providers: [],
   },
@@ -95,6 +101,7 @@ const warningProfile: UserConfigProfile = {
   id: "warning-profile",
   name: "Warning",
   gatewayAllowlist: ["*:private:*"],
+  identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
   ai: {
     defaultProviderId: "default-provider",
     modelTiers: {
@@ -123,6 +130,9 @@ describe("profileToEditorFields", () => {
   it("extracts the visible fields from a populated profile", () => {
     expect(profileToEditorFields(completeProfile)).toEqual({
       name: "Production",
+      agentName: "Kaguya",
+      agentAliasesText: "辉夜\nMoon",
+      agentPersona: "test persona",
       baseUrl: "https://api.example/v1",
       apiKey: "provider-secret",
       lightModel: "light-model",
@@ -135,6 +145,9 @@ describe("profileToEditorFields", () => {
   it("returns empty editor fields for the reserved default profile", () => {
     expect(profileToEditorFields(emptyDefaultProfile)).toEqual({
       name: "default",
+      agentName: "Kaguya",
+      agentAliasesText: "辉夜",
+      agentPersona: "test",
       baseUrl: "",
       apiKey: "",
       lightModel: "",
@@ -151,6 +164,9 @@ describe("mergeProfileEditorFields", () => {
     const merged = mergeProfileEditorFields(completeProfile, {
       ...fields,
       name: "Production v2",
+      agentName: " Luna ",
+      agentAliasesText: "月\n 月 \nMoon",
+      agentPersona: " custom persona ",
       baseUrl: "https://api.example/v2",
       apiKey: "provider-secret-v2",
       lightModel: "light-model-v2",
@@ -163,6 +179,11 @@ describe("mergeProfileEditorFields", () => {
     expect(merged).toEqual({
       name: "Production v2",
       gatewayAllowlist: ["qq:group:778899", "invalid-rule", "qq:group:778899"],
+      identity: {
+        name: "Luna",
+        aliases: ["月", "Moon"],
+        persona: "custom persona",
+      },
       acknowledgedWarnings: [],
       ai: {
         defaultProviderId: "default-provider",
@@ -231,6 +252,7 @@ describe("mergeProfileEditorFields", () => {
     expect(merged).toEqual({
       name: "default",
       gatewayAllowlist: [],
+      identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
       acknowledgedWarnings: [],
       ai: {
         defaultProviderId: "default-provider",

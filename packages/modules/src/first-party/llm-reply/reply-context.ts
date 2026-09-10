@@ -4,7 +4,7 @@
  * `associationReplyContextSelector` 保留可选的 association 审计读取策略；渲染器提供 manifest 身份，
  * Prompt 组装器区分同会话历史、已投递 assistant、Memory、引用与目标消息并保留 provenance。
  * 代码库关系：`llm-reply.ts` 使用这里的 Selector；Engine 负责校验并重新加载结果，
- * PromptCompiler 负责产生可持久化 provenance。
+ * 模块模板负责产生可持久化的 variable provenance。
  * 输入输出与副作用：选择器只读账本，不保存会话键或跨请求状态；编译本身是纯函数。
  */
 import type {
@@ -18,7 +18,6 @@ import {
   type InformationSelectorContext,
   type InformationPromptRendererDefinition,
 } from "@kaguya/sdk";
-import { PromptCompiler } from "@kaguya/prompt";
 
 import {
   coreMemoryTextInformationKind,
@@ -36,6 +35,8 @@ import {
   fitHistoryBudget,
   fitMemoryBudget,
   renderHistoryAtom,
+  type AgentIdentity,
+  type ReplyPromptTemplates,
 } from "./reply-prompt.js";
 
 export const currentAcceptedMessageSelector = defineInformationSelector({
@@ -258,7 +259,7 @@ export const memoryPromptRenderer: InformationPromptRendererDefinition =
   Object.freeze({
     rendererId: "kaguya.memory.text",
     displayName: "Memory text",
-    description: "Renders a selected memory fragment as prompt context.",
+    description: "Renders selected memory text as Prompt context.",
     kinds: [coreMemoryTextInformationKind],
     render: (atom: DeepReadonly<InformationAtom>) =>
       coreMemoryTextInformationKind.payloadSchema.parse(atom.payload).text,
@@ -292,15 +293,21 @@ export const assistantHistoryPromptRenderer: InformationPromptRendererDefinition
     displayName: "Historical assistant text",
     description: "Renders a successfully delivered assistant message.",
     kinds: [assistantTextInformationKind],
-    render: (atom: DeepReadonly<InformationAtom>) => renderHistoryAtom(atom),
+    render: (atom: DeepReadonly<InformationAtom>) =>
+      renderHistoryAtom(atom, {
+        name: "Assistant",
+        aliases: [],
+        persona: "Prompt renderer preview",
+      }),
   });
 
 export function compileReplyPromptFromInformation(
-  compiler: PromptCompiler,
+  templates: ReplyPromptTemplates,
+  identity: AgentIdentity,
   atoms: readonly DeepReadonly<InformationAtom>[],
   sourceInformationId: InformationId,
 ): CompiledPrompt {
-  return compileReplyPrompt(compiler, atoms, sourceInformationId);
+  return compileReplyPrompt(templates, identity, atoms, sourceInformationId);
 }
 
 async function related(

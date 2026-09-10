@@ -44,6 +44,7 @@ describe("demo entry point", () => {
     const profile = await manager.getProfile(manager.getSelectedProfileId());
     await manager.replaceProfile(profile.id, {
       name: profile.name,
+      identity: profile.identity,
       acknowledgedWarnings: [],
       ai: profile.ai,
       memory: profile.memory,
