@@ -74,6 +74,9 @@ export async function projectInformationAtomLog<P extends JsonObject>(
   if (!definition.log.enabled) {
     return;
   }
+  if (!logger.isLevelEnabled(definition.log.level)) {
+    return;
+  }
 
   let rawProjection: unknown;
   try {
