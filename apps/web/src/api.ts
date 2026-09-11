@@ -5,6 +5,7 @@
  * 检查健康，以及对 Profile 集合执行列出、创建、读取、完整替换、
  * 显式选择和删除；所有请求都要在本地先校验 token，再拼出精确的
  * method / URL / Bearer 头 / JSON body，避免把鉴权或隐藏字段交给浏览器猜测。
+ * getInspection 使用共享 DTO schema 校验只读响应，并复用认证、取消与 401 锁屏处理。
  * 主要职责：为 App 及后续 Profile 管理页面提供稳定的 typed API，
  * 同时保留旧的消息与健康检查路径；Profile 请求必须编码 path 参数，
  * Profile 状态要能返回安全的 Registry 元数据，但不能包含任何 secret。
@@ -976,4 +977,46 @@ function isAdapterHostStatus(
           ].includes(String(a.errorType))),
     )
   );
+}
+
+/** 开发者只读请求；调用方必须提供 wire schema，禁止未校验 JSON 进入视图。 */
+export async function getInspection<T>(
+  config: GatewayConfig,
+  path: string,
+  schema: { parse(value: unknown): T },
+  signal: AbortSignal,
+  fetchImplementation: typeof fetch = fetch,
+): Promise<T> {
+  const response = await requestAuthenticatedJson(
+    config,
+    `/api/v1/inspection/${path}`,
+    { method: "GET", signal, cache: "no-store" },
+    fetchImplementation,
+  );
+  const payload = await readJson(response);
+  if (!response.ok) {
+    const error = isErrorResponse(payload) ? payload.error : undefined;
+    throw new GatewayRequestError(
+      error?.code === "inspection_unavailable"
+        ? "Runtime 尚未就绪，暂时无法查看开发者数据"
+        : `读取开发者数据失败（HTTP ${response.status}）`,
+      error?.code ?? "inspection_failed",
+      response.status,
+    );
+  }
+  if (!isRecord(payload))
+    throw new GatewayRequestError(
+      "开发者数据格式无效",
+      "invalid_inspection",
+      response.status,
+    );
+  try {
+    return schema.parse(payload.data);
+  } catch {
+    throw new GatewayRequestError(
+      "开发者数据格式无效",
+      "invalid_inspection",
+      response.status,
+    );
+  }
 }
