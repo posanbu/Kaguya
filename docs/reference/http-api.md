@@ -27,6 +27,8 @@ description: Kaguya 统一 Server 的路由、认证、Profile 与消息协议�
 
 **`DELETE /api/v1/profiles/:profileId`** — 需要 Bearer Token，删除非 `default`、非 selected Profile。
 
+**`POST /api/v1/models/discover`** — 需要 Bearer Token，使用请求中的 OpenAI-compatible `baseUrl` 与 `apiKey` 临时读取模型列表；不保存凭据或模型列表。
+
 **`POST /api/v1/messages`** — 需要 Bearer Token，校验并把一条 Web 文本消息交给 gateway 后台分发。
 
 生产 SPA fallback 只处理接受 `text/html` 的 GET 页面请求，显式排除 `/api/*` 与 `/healthz`。未知 API 返回结构化 `404 not_found`。

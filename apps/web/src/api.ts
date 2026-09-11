@@ -46,6 +46,11 @@ export interface SendMessageInput {
   readonly text: string;
 }
 
+export interface DiscoverModelsInput {
+  readonly baseUrl: string;
+  readonly apiKey: string;
+}
+
 export interface AcceptedMessage {
   readonly status: "accepted";
   readonly requestId: string;
@@ -96,10 +101,14 @@ export interface UserConfigProfile {
       readonly light: {
         readonly providerId: string;
         readonly modelId: string;
+        readonly generation?: ModelGenerationOptions;
+        readonly recommendedDurationMs?: number;
       };
       readonly heavy: {
         readonly providerId: string;
         readonly modelId: string;
+        readonly generation?: ModelGenerationOptions;
+        readonly recommendedDurationMs?: number;
       };
     };
     readonly providers: readonly UserConfigProfileProvider[];
@@ -111,6 +120,17 @@ export interface UserConfigProfile {
   readonly review?: {
     readonly acknowledgedWarnings: readonly string[];
   };
+}
+
+export interface ModelGenerationOptions {
+  readonly reasoning?:
+    | "provider-default"
+    | "none"
+    | "minimal"
+    | "low"
+    | "medium"
+    | "high"
+    | "xhigh";
 }
 
 export interface ConfigurationIssue {
@@ -162,10 +182,14 @@ export interface ReplaceProfileInput {
       readonly light: {
         readonly providerId: string;
         readonly modelId: string;
+        readonly generation?: ModelGenerationOptions;
+        readonly recommendedDurationMs?: number;
       };
       readonly heavy: {
         readonly providerId: string;
         readonly modelId: string;
+        readonly generation?: ModelGenerationOptions;
+        readonly recommendedDurationMs?: number;
       };
     };
     readonly providers: readonly UserConfigProfileProvider[];
@@ -235,6 +259,34 @@ export async function saveNapCatSettings(
     );
   }
   return payload.data;
+}
+
+export async function discoverModels(
+  config: GatewayConfig,
+  input: DiscoverModelsInput,
+  fetchImplementation: typeof fetch = fetch,
+): Promise<readonly string[]> {
+  const response = await requestAuthenticatedJson(
+    config,
+    "/api/v1/models/discover",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    },
+    fetchImplementation,
+  );
+  const payload = await readJson(response);
+  if (!response.ok || !isModelDiscoveryResponse(payload)) {
+    const gatewayError = isErrorResponse(payload) ? payload.error : undefined;
+    throw new GatewayRequestError(
+      gatewayError?.message ?? `获取模型列表失败（HTTP ${response.status}）`,
+      gatewayError?.code ?? "model_discovery_failed",
+      response.status,
+      gatewayError?.requestId,
+    );
+  }
+  return payload.data.models;
 }
 
 export async function listProfiles(
@@ -737,7 +789,29 @@ function isModelTierTarget(value: unknown): boolean {
   return (
     isRecord(value) &&
     typeof value.providerId === "string" &&
-    typeof value.modelId === "string"
+    typeof value.modelId === "string" &&
+    (value.generation === undefined ||
+      isModelGenerationOptions(value.generation)) &&
+    (value.recommendedDurationMs === undefined ||
+      (typeof value.recommendedDurationMs === "number" &&
+        Number.isInteger(value.recommendedDurationMs) &&
+        value.recommendedDurationMs > 0))
+  );
+}
+
+function isModelGenerationOptions(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    (value.reasoning === undefined ||
+      [
+        "provider-default",
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+      ].includes(String(value.reasoning)))
   );
 }
 
@@ -809,6 +883,14 @@ function isErrorResponse(value: unknown): value is {
     typeof value.error.code === "string" &&
     typeof value.error.message === "string" &&
     typeof value.error.requestId === "string"
+  );
+}
+
+function isModelDiscoveryResponse(value: unknown): value is {
+  data: { models: readonly string[] };
+} {
+  return (
+    isRecord(value) && isRecord(value.data) && isStringArray(value.data.models)
   );
 }
 

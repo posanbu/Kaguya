@@ -12,6 +12,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 import {
   KaguyaLlmClient,
+  type KaguyaLlmGenerationOptions,
   type KaguyaLlmModelResolver,
 } from "@kaguya/llm/client";
 import { createRepeatingDeterministicModel } from "@kaguya/llm/testing";
@@ -43,6 +44,7 @@ export type RuntimeModelSelectionResolver = (
   readonly providerId: string;
   readonly modelId: string;
   readonly model: ReturnType<KaguyaLlmModelResolver>;
+  readonly generationOptions?: KaguyaLlmGenerationOptions;
 };
 export interface ReplyCompositionOptions {
   readonly memoryEnabled?: boolean;
@@ -88,8 +90,11 @@ export function createReplyComposition(
   );
   const models = new Map<string, ReturnType<KaguyaLlmModelResolver>>();
   const activeModel = new AsyncLocalStorage<{
-    readonly providerId: string;
-    readonly modelId: string;
+    readonly identity: {
+      readonly providerId: string;
+      readonly modelId: string;
+    };
+    readonly generationOptions: KaguyaLlmGenerationOptions;
   }>();
   const modelTask: RuntimeModelTaskOptions = {
     approvals: activations
@@ -105,13 +110,15 @@ export function createReplyComposition(
       })),
     client: new KaguyaLlmClient({
       resolveModel: ({ modelId }) => {
-        const identity = activeModel.getStore();
-        if (identity === undefined || identity.modelId !== modelId)
+        const active = activeModel.getStore();
+        if (active === undefined || active.identity.modelId !== modelId)
           throw new Error("Unapproved model");
-        const model = models.get(modelIdentityKey(identity));
+        const model = models.get(modelIdentityKey(active.identity));
         if (model === undefined) throw new Error("Unapproved model");
         return model;
       },
+      resolveGenerationOptions: () =>
+        activeModel.getStore()?.generationOptions ?? {},
     }),
     resolveModel: ({ tier }) => {
       const resolved = resolveModelSelection({ modelTier: tier });
@@ -120,7 +127,10 @@ export function createReplyComposition(
         modelId: resolved.modelId,
       };
       models.set(modelIdentityKey(identity), resolved.model);
-      activeModel.enterWith(identity);
+      activeModel.enterWith({
+        identity,
+        generationOptions: resolved.generationOptions ?? {},
+      });
       return identity;
     },
   };

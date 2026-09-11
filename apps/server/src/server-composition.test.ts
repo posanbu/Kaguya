@@ -950,8 +950,20 @@ describe("unified server composition", () => {
       ai: {
         defaultProviderId: "provider-1",
         modelTiers: {
-          light: { providerId: "provider-1", modelId: "light-model" },
-          heavy: { providerId: "provider-1", modelId: "heavy-model" },
+          light: {
+            providerId: "provider-1",
+            modelId: "light-model",
+            generation: {
+              reasoning: "minimal",
+            },
+            recommendedDurationMs: 2_000,
+          },
+          heavy: {
+            providerId: "provider-1",
+            modelId: "heavy-model",
+            generation: { reasoning: "high" },
+            recommendedDurationMs: 8_000,
+          },
         },
         providers: [
           {
@@ -973,11 +985,25 @@ describe("unified server composition", () => {
       [],
     );
 
-    createRuntimeModelSelectionResolver(await selectedProfile(manager));
+    const resolver = createRuntimeModelSelectionResolver(
+      await selectedProfile(manager),
+    );
 
     expect(createOpenAICompatible).toHaveBeenCalledWith(
       expect.objectContaining({ supportsStructuredOutputs: true }),
     );
+    expect(resolver({ modelTier: "light" })).toMatchObject({
+      generationOptions: {
+        reasoning: "minimal",
+        recommendedDurationMs: 2_000,
+      },
+    });
+    expect(resolver({ modelTier: "heavy" })).toMatchObject({
+      generationOptions: {
+        reasoning: "high",
+        recommendedDurationMs: 8_000,
+      },
+    });
   });
 
   it("rejects an incomplete selected profile before creating provider clients", async () => {

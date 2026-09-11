@@ -137,6 +137,12 @@ describe("profileToEditorFields", () => {
       apiKey: "provider-secret",
       lightModel: "light-model",
       heavyModel: "heavy-model",
+      lightThinkingEnabled: true,
+      lightReasoningEffort: "provider-default",
+      lightRecommendedDurationMs: "2000",
+      heavyThinkingEnabled: true,
+      heavyReasoningEffort: "provider-default",
+      heavyRecommendedDurationMs: "5000",
       gatewayAllowlistText: "qq:group:778899\ninvalid-rule",
       memoryEnabled: true,
     });
@@ -152,9 +158,48 @@ describe("profileToEditorFields", () => {
       apiKey: "",
       lightModel: "",
       heavyModel: "",
+      lightThinkingEnabled: true,
+      lightReasoningEffort: "provider-default",
+      lightRecommendedDurationMs: "2000",
+      heavyThinkingEnabled: true,
+      heavyReasoningEffort: "provider-default",
+      heavyRecommendedDurationMs: "5000",
       gatewayAllowlistText: "",
       memoryEnabled: false,
     });
+  });
+
+  it("round-trips AI SDK reasoning effort and the thinking-mode switch", () => {
+    const profile: UserConfigProfile = {
+      ...completeProfile,
+      ai: {
+        ...completeProfile.ai,
+        modelTiers: {
+          light: {
+            providerId: "default-provider",
+            modelId: "light-model",
+            generation: { reasoning: "none" },
+          },
+          heavy: {
+            providerId: "default-provider",
+            modelId: "heavy-model",
+            generation: { reasoning: "high" },
+          },
+        },
+      },
+    };
+    const fields = profileToEditorFields(profile);
+    expect(fields).toMatchObject({
+      lightThinkingEnabled: false,
+      lightReasoningEffort: "provider-default",
+      heavyThinkingEnabled: true,
+      heavyReasoningEffort: "high",
+    });
+    const tiers = profile.ai.modelTiers;
+    if (tiers === undefined) throw new Error("Expected model tiers");
+    expect(
+      mergeProfileEditorFields(profile, fields).ai.modelTiers,
+    ).toMatchObject(tiers);
   });
 });
 
@@ -191,10 +236,12 @@ describe("mergeProfileEditorFields", () => {
           light: {
             providerId: "default-provider",
             modelId: "light-model-v2",
+            recommendedDurationMs: 2000,
           },
           heavy: {
             providerId: "default-provider",
             modelId: "heavy-model-v2",
+            recommendedDurationMs: 5000,
           },
         },
         providers: [
@@ -257,8 +304,16 @@ describe("mergeProfileEditorFields", () => {
       ai: {
         defaultProviderId: "default-provider",
         modelTiers: {
-          light: { providerId: "default-provider", modelId: "light-model" },
-          heavy: { providerId: "default-provider", modelId: "heavy-model" },
+          light: {
+            providerId: "default-provider",
+            modelId: "light-model",
+            recommendedDurationMs: 2000,
+          },
+          heavy: {
+            providerId: "default-provider",
+            modelId: "heavy-model",
+            recommendedDurationMs: 5000,
+          },
         },
         providers: [
           {

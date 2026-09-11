@@ -51,6 +51,7 @@ import {
   checkGatewayHealth,
   createProfile,
   deleteProfile,
+  discoverModels,
   GatewayConfig,
   GatewayRequestError,
   GATEWAY_UNAUTHORIZED_EVENT,
@@ -440,6 +441,15 @@ function ProfileManagementScreen({
   const [panelError, setPanelError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const requestSequence = useRef(0);
+  const modelDiscoverySequence = useRef(0);
+  const [discoveredModels, setDiscoveredModels] = useState<readonly string[]>(
+    [],
+  );
+  const [discoveringModels, setDiscoveringModels] = useState(false);
+  const [modelDiscoveryStatus, setModelDiscoveryStatus] = useState<{
+    readonly kind: "success" | "error";
+    readonly message: string;
+  }>();
 
   const config: GatewayConfig = useMemo(() => ({ token }), [token]);
 
@@ -521,6 +531,14 @@ function ProfileManagementScreen({
     setLoadedProfile(snapshot.loadedProfile);
     setEditorFields(snapshot.editorFields);
     setShowApiKey(snapshot.showApiKey);
+    clearModelDiscoveryState();
+  }
+
+  function clearModelDiscoveryState() {
+    modelDiscoverySequence.current += 1;
+    setDiscoveredModels([]);
+    setDiscoveringModels(false);
+    setModelDiscoveryStatus(undefined);
   }
 
   async function refreshRegistry() {
@@ -648,6 +666,47 @@ function ProfileManagementScreen({
       setPanelError(errorMessage(error));
     } finally {
       setMutating(false);
+    }
+  };
+
+  const handleDiscoverModels = async () => {
+    if (editorFields === undefined) return;
+    if (
+      editorFields.baseUrl.trim().length === 0 ||
+      editorFields.apiKey.trim().length === 0
+    ) {
+      setModelDiscoveryStatus({
+        kind: "error",
+        message: "请先填写模型服务地址和 API Key。",
+      });
+      return;
+    }
+    const sequence = modelDiscoverySequence.current + 1;
+    modelDiscoverySequence.current = sequence;
+    setDiscoveringModels(true);
+    setModelDiscoveryStatus(undefined);
+    try {
+      const models = await discoverModels(config, {
+        baseUrl: editorFields.baseUrl,
+        apiKey: editorFields.apiKey,
+      });
+      if (modelDiscoverySequence.current !== sequence) return;
+      setDiscoveredModels(models);
+      setModelDiscoveryStatus({
+        kind: "success",
+        message:
+          models.length === 0
+            ? "Provider 返回了空模型列表，仍可手动填写模型 ID。"
+            : `已获取 ${models.length} 个模型，可搜索选择或继续手动填写。`,
+      });
+    } catch (error) {
+      if (modelDiscoverySequence.current !== sequence) return;
+      setDiscoveredModels([]);
+      setModelDiscoveryStatus({ kind: "error", message: errorMessage(error) });
+    } finally {
+      if (modelDiscoverySequence.current === sequence) {
+        setDiscoveringModels(false);
+      }
     }
   };
 
@@ -922,13 +981,14 @@ function ProfileManagementScreen({
                   <input
                     type="url"
                     value={editorFields.baseUrl}
-                    onChange={(event) =>
+                    onChange={(event) => {
+                      clearModelDiscoveryState();
                       setEditorFields((current) =>
                         current === undefined
                           ? current
                           : { ...current, baseUrl: event.target.value },
-                      )
-                    }
+                      );
+                    }}
                     autoComplete="url"
                     placeholder="https://api.openai.com/v1"
                   />
@@ -939,13 +999,14 @@ function ProfileManagementScreen({
                     <input
                       type={showApiKey ? "text" : "password"}
                       value={editorFields.apiKey}
-                      onChange={(event) =>
+                      onChange={(event) => {
+                        clearModelDiscoveryState();
                         setEditorFields((current) =>
                           current === undefined
                             ? current
                             : { ...current, apiKey: event.target.value },
-                        )
-                      }
+                        );
+                      }}
                       autoComplete="new-password"
                       placeholder="Enter provider API key"
                     />
@@ -960,37 +1021,75 @@ function ProfileManagementScreen({
                     </button>
                   </div>
                 </label>
+                <div className="model-discovery-actions">
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    disabled={discoveringModels}
+                    onClick={() => void handleDiscoverModels()}
+                  >
+                    <RefreshCw
+                      className={discoveringModels ? "spin" : undefined}
+                      size={16}
+                    />
+                    <span>
+                      {discoveringModels ? "正在获取" : "获取模型列表"}
+                    </span>
+                  </button>
+                  {modelDiscoveryStatus ? (
+                    <span
+                      className={`model-discovery-status ${modelDiscoveryStatus.kind}`}
+                      role={
+                        modelDiscoveryStatus.kind === "error"
+                          ? "alert"
+                          : "status"
+                      }
+                      aria-live="polite"
+                    >
+                      {modelDiscoveryStatus.message}
+                    </span>
+                  ) : null}
+                </div>
+                {discoveredModels.length > 0 ? (
+                  <datalist id="discovered-models">
+                    {discoveredModels.map((modelId) => (
+                      <option key={modelId} value={modelId} />
+                    ))}
+                  </datalist>
+                ) : null}
                 <div className="setup-model-grid">
-                  <label className="field">
-                    <span>轻量模型</span>
-                    <input
-                      value={editorFields.lightModel}
-                      onChange={(event) =>
-                        setEditorFields((current) =>
-                          current === undefined
-                            ? current
-                            : { ...current, lightModel: event.target.value },
-                        )
-                      }
-                      autoComplete="off"
-                      placeholder="gpt-4o-mini"
-                    />
-                  </label>
-                  <label className="field">
-                    <span>重量模型</span>
-                    <input
-                      value={editorFields.heavyModel}
-                      onChange={(event) =>
-                        setEditorFields((current) =>
-                          current === undefined
-                            ? current
-                            : { ...current, heavyModel: event.target.value },
-                        )
-                      }
-                      autoComplete="off"
-                      placeholder="gpt-4o"
-                    />
-                  </label>
+                  <ModelTierEditor
+                    tier="light"
+                    fields={editorFields}
+                    modelListId={
+                      discoveredModels.length > 0
+                        ? "discovered-models"
+                        : undefined
+                    }
+                    onChange={(patch) =>
+                      setEditorFields((current) =>
+                        current === undefined
+                          ? current
+                          : { ...current, ...patch },
+                      )
+                    }
+                  />
+                  <ModelTierEditor
+                    tier="heavy"
+                    fields={editorFields}
+                    modelListId={
+                      discoveredModels.length > 0
+                        ? "discovered-models"
+                        : undefined
+                    }
+                    onChange={(patch) =>
+                      setEditorFields((current) =>
+                        current === undefined
+                          ? current
+                          : { ...current, ...patch },
+                      )
+                    }
+                  />
                 </div>
                 <label className="field">
                   <span>网关白名单规则</span>
@@ -1061,6 +1160,111 @@ function ProfileManagementScreen({
         </div>
       </main>
     </div>
+  );
+}
+
+function ModelTierEditor({
+  tier,
+  fields,
+  modelListId,
+  onChange,
+}: {
+  readonly tier: "light" | "heavy";
+  readonly fields: ProfileEditorFields;
+  readonly modelListId?: string | undefined;
+  readonly onChange: (patch: Partial<ProfileEditorFields>) => void;
+}) {
+  const light = tier === "light";
+  const label = light ? "轻量模型" : "重量模型";
+  const model = light ? fields.lightModel : fields.heavyModel;
+  const thinkingEnabled = light
+    ? fields.lightThinkingEnabled
+    : fields.heavyThinkingEnabled;
+  const reasoningEffort = light
+    ? fields.lightReasoningEffort
+    : fields.heavyReasoningEffort;
+  const recommendedDurationMs = light
+    ? fields.lightRecommendedDurationMs
+    : fields.heavyRecommendedDurationMs;
+  return (
+    <fieldset className="identity-fields model-tier-fields">
+      <legend>{label}</legend>
+      <label className="field">
+        <span>模型 ID</span>
+        <input
+          value={model}
+          list={modelListId}
+          onChange={(event) =>
+            onChange(
+              light
+                ? { lightModel: event.target.value }
+                : { heavyModel: event.target.value },
+            )
+          }
+          autoComplete="off"
+          placeholder={light ? "gpt-4o-mini" : "gpt-4o"}
+        />
+      </label>
+      <label className="setup-check thinking-toggle">
+        <input
+          type="checkbox"
+          checked={thinkingEnabled}
+          onChange={(event) =>
+            onChange(
+              light
+                ? { lightThinkingEnabled: event.target.checked }
+                : { heavyThinkingEnabled: event.target.checked },
+            )
+          }
+        />
+        <span>
+          启用思考模式
+          <br />
+          关闭时向 AI SDK 传递 reasoning: none。
+        </span>
+      </label>
+      <label className="field">
+        <span>Reasoning effort</span>
+        <select
+          value={reasoningEffort}
+          disabled={!thinkingEnabled}
+          onChange={(event) =>
+            onChange(
+              light
+                ? { lightReasoningEffort: event.target.value }
+                : { heavyReasoningEffort: event.target.value },
+            )
+          }
+        >
+          <option value="provider-default">Provider 默认</option>
+          <option value="minimal">Minimal</option>
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+          <option value="xhigh">XHigh</option>
+        </select>
+      </label>
+      <label className="field">
+        <span>推荐响应时间（毫秒）</span>
+        <input
+          type="number"
+          min="1"
+          max="300000"
+          step="100"
+          value={recommendedDurationMs}
+          onChange={(event) =>
+            onChange(
+              light
+                ? { lightRecommendedDurationMs: event.target.value }
+                : { heavyRecommendedDurationMs: event.target.value },
+            )
+          }
+        />
+        <span className="field-help">
+          软预算：仅供调度与观测参考，不会中断较慢但有效的调用。
+        </span>
+      </label>
+    </fieldset>
   );
 }
 
