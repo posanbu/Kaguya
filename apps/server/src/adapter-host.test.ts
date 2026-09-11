@@ -131,14 +131,16 @@ it("logs full normalized inbound text, filters before submission and records the
   expect(host.acceptInbound(message)).toBe(true);
   await host.ingress.submit(message);
   expect(logs.map((l) => l.event)).toEqual([
-    "napcat.inbound.received",
     "napcat.inbound.filtered",
-    "napcat.inbound.received",
-    "napcat.inbound.accepted",
     "napcat.inbound.submitted",
   ]);
   expect(logs[0]?.messageText).toBe(message.text);
-  expect(logs.at(-1)?.rootInformationId).toBe("root-1");
+  expect(logs.at(-1)).toMatchObject({
+    rootInformationId: "root-1",
+    messageText: message.text,
+    target: "[REDACTED]",
+    occurredAt: message.occurredAt,
+  });
   expect(JSON.stringify(logs)).not.toMatch(/raw-secret|ws:\/\/private/);
 });
 it("rejects unavailable ingress without queueing, keeps Web synchronous and freezes binding", async () => {
@@ -154,11 +156,7 @@ it("rejects unavailable ingress without queueing, keeps Web synchronous and free
     host.webGateway.ingest({ text: message.text, requestId: "web" }),
   ).toThrow(AdapterIngressUnavailableError);
   expect(logs.map((l) => l.event)).toEqual([
-    "napcat.inbound.received",
-    "napcat.inbound.accepted",
     "napcat.inbound.failed",
-    "web.inbound.received",
-    "web.inbound.accepted",
     "web.inbound.failed",
   ]);
   expect(() =>
@@ -180,10 +178,7 @@ it("returns immediately for Web while observing async receipt/failure", async ()
       }),
   });
   host.webGateway.ingest({ text: message.text, requestId: "web" });
-  expect(logs.map((l) => l.event)).toEqual([
-    "web.inbound.received",
-    "web.inbound.accepted",
-  ]);
+  expect(logs).toEqual([]);
   finish({ rootInformationId: "web-root", deliveries: [] });
   await vi.waitFor(() =>
     expect(logs.at(-1)?.event).toBe("web.inbound.submitted"),
@@ -323,7 +318,7 @@ it("registers only usable outbound transports without coupling adapter start to 
   expect(start).toHaveBeenCalledOnce();
   await host.stop();
 });
-it("reports safe asynchronous submission failure once after accepted", async () => {
+it("reports asynchronous submission failure as one safe terminal log", async () => {
   const { host, logs } = fixture();
   host.register(adapter("qq"));
   host.finalizeRuntime({
@@ -335,11 +330,7 @@ it("reports safe asynchronous submission failure once after accepted", async () 
   await expect(host.ingress.submit(message)).rejects.toThrow(
     "Adapter submission failed",
   );
-  expect(logs.map((log) => log.event)).toEqual([
-    "napcat.inbound.received",
-    "napcat.inbound.accepted",
-    "napcat.inbound.failed",
-  ]);
+  expect(logs.map((log) => log.event)).toEqual(["napcat.inbound.failed"]);
   expect(logs.at(-1)?.errorType).toBe("submission_failed");
   expect(JSON.stringify(logs)).not.toMatch(/ws:\/\/secret|credential/);
 });

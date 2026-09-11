@@ -278,6 +278,9 @@ export class AdapterHost {
         selfId: message.selfId,
         senderId: message.sender.userId,
         targetKind: message.target.kind,
+        messageText: message.text,
+        target: message.target,
+        occurredAt: message.occurredAt,
         ...extra,
       },
       "Adapter inbound message",
@@ -285,14 +288,9 @@ export class AdapterHost {
   }
   /** Called once after normalization. Web bypasses the platform allowlist. */
   acceptInbound(message: PlatformInboundMessage): boolean {
-    this.logInbound(message, "received", {
-      messageText: message.text,
-      target: message.target,
-      occurredAt: message.occurredAt,
-    });
     const allowed =
       message.platform === "web" || this.allowlist.allows(message);
-    this.logInbound(message, allowed ? "accepted" : "filtered");
+    if (!allowed) this.logInbound(message, "filtered");
     return allowed;
   }
   private assertReady(message: PlatformInboundMessage): InformationIngress {

@@ -147,7 +147,7 @@ export class ModuleHost {
         await this.observe(
           moduleLifecycleObservation(
             "module.starting",
-            "info",
+            "debug",
             "Information module starting",
             activation,
             { phase: "create" },

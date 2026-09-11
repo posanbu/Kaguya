@@ -72,27 +72,27 @@ AsyncLocalStorage 传播下列字段，并隔离并发请求：
 
 `info` 只用于服务/Runtime 生命周期、HTTP 消息接受、dispatch 完成以及 NapCat 连接/投递状态。详细执行步骤使用 `debug`，失败使用 `warn`、`error` 或 `fatal`。
 
-| event                                                 | 级别  | module             | 含义                                     |
-| ----------------------------------------------------- | ----- | ------------------ | ---------------------------------------- |
-| `server.starting` / `server.started`                  | info  | `server`           | 唯一 Server 启动                         |
-| `server.stopping` / `server.stopped`                  | info  | `server`           | 有序关闭                                 |
-| `server.start.failed` / `server.shutdown.failed`      | fatal | `server`           | 启动或关闭失败                           |
-| `runtime.started` / `runtime.stopped`                 | info  | `runtime`          | SQLite 与共享组件生命周期                |
-| `message.dispatch.started`                            | debug | `runtime`          | 一条消息开始进入模块链                   |
-| `message.dispatch.completed`                          | info  | `runtime`          | 模块 dispatch 结果与 outbound 状态       |
-| `message.dispatch.failed`                             | error | `runtime`          | dispatch 失败                            |
-| `http.message.accepted`                               | info  | `server:http`      | HTTP 消息已由 Runtime 完成处理并返回 202 |
-| `http.request.failed`                                 | error | `server:http`      | 未处理 HTTP 错误                         |
-| `event.emitted`                                       | debug | `runtime:event`    | EventBus observer 看见已发布事件         |
-| `event.observer.failed`                               | error | `runtime:event`    | observer 自身失败，不改变业务结果        |
-| `workflow.node.started/completed/failed/cancelled`    | debug | `runtime:workflow` | recorder 已持久化节点状态                |
-| `napcat.connection.starting/connected`                | info  | `adapter:napcat`   | 平台连接状态                             |
-| `napcat.connection.disconnected/failed`               | warn  | `adapter:napcat`   | 断线或连接失败                           |
-| `napcat.reconnect.scheduled`                          | info  | `adapter:napcat`   | 已安排重连                               |
-| `napcat.inbound.accepted` / `napcat.inbound.filtered` | info  | `adapter:napcat`   | 入站消息已通过或被策略过滤               |
-| `napcat.inbound.failed`                               | error | `adapter:napcat`   | 标准化消息 dispatch 失败                 |
-| `platform.delivery.completed`                         | info  | `runtime`          | 通用 outbound transport 成功             |
-| `platform.delivery.failed`                            | warn  | `runtime`          | 通用 outbound transport 失败             |
+| event                                                  | 级别  | module             | 含义                                     |
+| ------------------------------------------------------ | ----- | ------------------ | ---------------------------------------- |
+| `server.starting` / `server.started`                   | info  | `server`           | 唯一 Server 启动                         |
+| `server.stopping` / `server.stopped`                   | info  | `server`           | 有序关闭                                 |
+| `server.start.failed` / `server.shutdown.failed`       | fatal | `server`           | 启动或关闭失败                           |
+| `runtime.started` / `runtime.stopped`                  | info  | `runtime`          | SQLite 与共享组件生命周期                |
+| `message.dispatch.started`                             | debug | `runtime`          | 一条消息开始进入模块链                   |
+| `message.dispatch.completed`                           | info  | `runtime`          | 模块 dispatch 结果与 outbound 状态       |
+| `message.dispatch.failed`                              | error | `runtime`          | dispatch 失败                            |
+| `http.message.accepted`                                | info  | `server:http`      | HTTP 消息已由 Runtime 完成处理并返回 202 |
+| `http.request.failed`                                  | error | `server:http`      | 未处理 HTTP 错误                         |
+| `event.emitted`                                        | debug | `runtime:event`    | EventBus observer 看见已发布事件         |
+| `event.observer.failed`                                | error | `runtime:event`    | observer 自身失败，不改变业务结果        |
+| `workflow.node.started/completed/failed/cancelled`     | debug | `runtime:workflow` | recorder 已持久化节点状态                |
+| `napcat.connection.starting/connected`                 | info  | `adapter:napcat`   | 平台连接状态                             |
+| `napcat.connection.disconnected/failed`                | warn  | `adapter:napcat`   | 断线或连接失败                           |
+| `napcat.reconnect.scheduled`                           | info  | `adapter:napcat`   | 已安排重连                               |
+| `napcat.inbound.submitted` / `napcat.inbound.filtered` | info  | `adapter:napcat`   | 入站消息已提交或被策略过滤               |
+| `napcat.inbound.failed`                                | error | `adapter:napcat`   | 标准化消息 dispatch 失败                 |
+| `platform.delivery.completed`                          | info  | `runtime`          | 通用 outbound transport 成功             |
+| `platform.delivery.failed`                             | warn  | `runtime`          | 通用 outbound transport 失败             |
 
 Fastify 的通用每请求 info 日志已关闭，避免健康检查和静态资源淹没业务日志。
 
