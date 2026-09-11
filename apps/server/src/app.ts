@@ -14,8 +14,14 @@
  * 输入输出与副作用：运行时会创建 Fastify 实例并注册中间件；Profile 路由在管理认证
  * 通过后可能写入配置目录并返回显式安全投影的 Profile 正文；消息路由仅在 `webGateway`
  * 就绪时非阻塞转发正规化内容，日志不制造 trace ID，否则返回明确的
- * 503 runtime/core-unavailable 错误。
+ * 503 runtime/core-unavailable 错误。Inspection GET 路由复用 management Token，
+ * 由 inspection.ts 提供有界查询、统一秘密脱敏及 Runtime 未就绪时的 503。
  */
+import {
+  registerInspectionRoutes,
+  type InspectionService,
+} from "./inspection.js";
+
 import { randomUUID, timingSafeEqual } from "node:crypto";
 
 import cors from "@fastify/cors";
@@ -496,6 +502,7 @@ export interface CreateHttpApplicationOptions {
   config: ServerConfig;
   gatewayAuth?: GatewayAuthenticator;
   webGateway?: WebMessageGateway;
+  inspection?: InspectionService;
   adapterHost?: Pick<AdapterHost, "status">;
   configuration?: ConfigurationManagement;
   logger?: FastifyBaseLogger;
@@ -558,6 +565,12 @@ export async function createHttpApplication(
       },
     },
   });
+
+  registerInspectionRoutes(
+    app,
+    options.inspection,
+    requireGatewayToken(options, "management"),
+  );
 
   app.get(
     "/healthz",

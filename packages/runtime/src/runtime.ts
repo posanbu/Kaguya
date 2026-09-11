@@ -10,6 +10,7 @@
  * 模块只通过 #76 的 context.use 获得通用能力。缺少批准或无效 capability 在任何 create 前拒绝。
  * Memory 默认关闭；显式启用时 association 使用独立 Memory 仓储的 sparse Selector
  * strategy。关闭态仍保留 association terminal 形状，但不注册检索策略或 capability。
+ * inspectModules 仅在 started 状态返回模块声明、版本、Kind、Prompt 和能力绑定的只读投影。
  * ModuleHost observation 在这里映射到 lifecycle/module 命名空间，持久 Atom 单独进入 information logger。
  */
 import { randomUUID } from "node:crypto";
@@ -282,6 +283,13 @@ export class KaguyaRuntime implements InformationIngress {
       options.logger === undefined
         ? undefined
         : createModuleLogger(options.logger, "runtime:information");
+  }
+
+  /** 返回 ModuleHost 的安全 Manifest/activation 投影，不开放模块实例和 settings。 */
+  inspectModules() {
+    if (this.#state !== "started" || this.#moduleHost === undefined)
+      throw new RuntimeUnavailableError("Runtime inspection is unavailable");
+    return this.#moduleHost.inspect();
   }
 
   registerTransport(registration: RuntimeTransportRegistration): void {

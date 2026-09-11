@@ -1,4 +1,13 @@
-/** Server composition root: adapter lifetimes and database checks remain independent of Runtime readiness. */
+/**
+ * 功能概述：服务端组合根，独立管理 Adapter、数据库、Runtime、HTTP 与 WebUI 生命周期。
+ * 主要职责：startKaguyaServer 加载配置、检查数据库、启动模块并注册入口；close 逆序释放资源；
+ * 模型解析器依据选中 Profile 选择 provider，初始化失败按阶段降级并记录安全错误。
+ * 代码库关系：调用 app.ts、runtime-composition.ts 与 adapter-host.ts；将 Runtime 的
+ * inspectModules 和账本只读端口交给 inspection.ts，配置仅用于秘密脱敏闭包。
+ * 输入输出与副作用：创建网络连接、启动监听并管理关闭；Inspection 仅在 Runtime 可用时注入，
+ * 不改变消息处理流程，不把 settings、凭据或数据库对象放入 HTTP 响应。
+ */
+import { createInspectionService } from "./inspection.js";
 import {
   createReplyCatalog,
   createReplyComposition,
@@ -339,6 +348,19 @@ export async function startKaguyaServer(
     app = await inStartupPhase("http_application", () =>
       createHttpApplication({
         config: effectiveConfig,
+        ...(runtime && database
+          ? {
+              inspection: createInspectionService({
+                ledger: database.information,
+                modules: () => runtime!.inspectModules(),
+                secrets: {
+                  config: effectiveConfig,
+                  profile: selectedProfile,
+                  moduleConfigs,
+                },
+              }),
+            }
+          : {}),
         gatewayAuth,
         webGateway: adapterHost.webGateway,
         adapterHost,

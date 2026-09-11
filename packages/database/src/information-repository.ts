@@ -8,6 +8,7 @@
  * 代码库关系：`InformationCore` 只会看到这里实现的 ledger 端口；`driver.ts`
  * 提供事务与 query 抽象，`schema.ts` 则初始化或验证表结构、索引和 mutation 触发器。
  * 输入输出与副作用：写入全部在数据库事务中完成，冲突和引用错误映射为稳定错误类型；
+ * inspectPage 为控制台提供时间/ID 复合游标和有界反向引用查询，不修改业务 find/query。
  * 读取返回经过 schema 校验并深冻结的 atom，不允许通过返回值修改持久化事实。
  */
 import {
@@ -164,6 +165,64 @@ export class InformationRepository implements InformationLedger {
         }
       }
       return atoms;
+    });
+  }
+
+  /** 只读控制台分页：按真实时间和 ID 降序，引用查询同样在 SQL 内限制规模。 */
+  async inspectPage(query: {
+    readonly limit: number;
+    readonly kind?: string;
+    readonly source?: string;
+    readonly after?: string;
+    readonly before?: string;
+    readonly cursor?: {
+      readonly occurredAt: string;
+      readonly informationId: string;
+    };
+    readonly referencedId?: string;
+    readonly relation?: string;
+  }): Promise<readonly DeepReadonly<InformationAtom>[]> {
+    if (!Number.isInteger(query.limit) || query.limit < 1 || query.limit > 501)
+      throw new InformationStoreError("Invalid inspection page limit");
+    return this.database.transaction(async (tx) => {
+      const values: unknown[] = [];
+      const bind = (value: unknown) => {
+        values.push(value);
+        return `$${values.length}`;
+      };
+      const predicates: string[] = [];
+      if (query.kind !== undefined)
+        predicates.push(`a.kind = ${bind(query.kind)}`);
+      if (query.source !== undefined)
+        predicates.push(`a.source = ${bind(query.source)}`);
+      if (query.after !== undefined)
+        predicates.push(
+          `a.occurred_at::timestamptz >= ${bind(query.after)}::timestamptz`,
+        );
+      if (query.before !== undefined)
+        predicates.push(
+          `a.occurred_at::timestamptz < ${bind(query.before)}::timestamptz`,
+        );
+      if (query.cursor !== undefined)
+        predicates.push(
+          `(a.occurred_at::timestamptz, a.information_id) < (${bind(query.cursor.occurredAt)}::timestamptz, ${bind(query.cursor.informationId)})`,
+        );
+      if (query.referencedId !== undefined) {
+        const target = bind(query.referencedId);
+        const relation =
+          query.relation === undefined
+            ? ""
+            : ` AND r.relation = ${bind(query.relation)}`;
+        predicates.push(
+          `EXISTS (SELECT 1 FROM information_references r WHERE r.information_id = a.information_id AND r.target_information_id = ${target}${relation})`,
+        );
+      }
+      const rows = await tx.query<{ information_id: string }>(
+        `SELECT a.information_id FROM information_atoms a ${predicates.length ? `WHERE ${predicates.join(" AND ")}` : ""}
+         ORDER BY a.occurred_at::timestamptz DESC, a.information_id DESC LIMIT ${bind(query.limit)}`,
+        values,
+      );
+      return readAtomsByRows(tx, rows.rows);
     });
   }
 

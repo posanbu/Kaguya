@@ -18,8 +18,11 @@
  * Profile 已 ready 且本次 replace/select 改变冻结运行配置时，本文件只切到
  * restart 视图提示用户重启，不做热切换。Profile 管理子组件会记忆同一
  * token 对应的网关配置对象，避免读取 Profile 的副作用 effect 因对象引用变化
- * 而重复请求并触发服务端限流。
+ * 而重复请求并触发服务端限流。开发者入口使用 history 路径，复用内存 Token；
+ * DeveloperConsole 负责只读查询与取消，401 继续由本文件统一锁屏。
  */
+import { DeveloperConsole, developerPage } from "./DeveloperConsole.js";
+
 import { AdapterStatusPanel } from "./AdapterStatusPanel.js";
 
 import {
@@ -100,6 +103,16 @@ interface ClearedLoadedProfileStateSnapshot {
 
 export function App() {
   const [token] = useState(() => readGatewayToken());
+  const [path, setPath] = useState(() => window.location.pathname);
+  const navigate = (next: string) => {
+    window.history.pushState(null, "", `${next}${window.location.hash}`);
+    setPath(next);
+  };
+  useEffect(() => {
+    const onPopState = () => setPath(window.location.pathname);
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
   const [configurationView, setConfigurationView] = useState<ConfigurationView>(
     () => (token === "" ? "locked" : "checking"),
   );
@@ -246,6 +259,17 @@ export function App() {
     return <AccessLinkRequired invalid={invalidAccessLink} />;
   }
 
+  const inspectionPage = developerPage(path);
+  if (inspectionPage !== undefined) {
+    return (
+      <DeveloperConsole
+        token={token}
+        page={inspectionPage}
+        navigate={navigate}
+      />
+    );
+  }
+
   if (configurationView === "checking") {
     return <ConfigurationLoading />;
   }
@@ -293,6 +317,12 @@ export function App() {
       <header className="topbar">
         <BrandIdentity subtitle="统一消息服务" />
         <div className="topbar-spacer" />
+        <button
+          className="secondary-button"
+          onClick={() => navigate("/developer/modules")}
+        >
+          开发者
+        </button>
         <ThemeToggle />
       </header>
 
