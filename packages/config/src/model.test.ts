@@ -10,6 +10,7 @@ const identity = { name: "Kaguya", aliases: ["辉夜"], persona: "test" };
 import {
   aiConfigSchema,
   aiProviderConfigSchema,
+  modelTiersSchema,
   platformConfigSchema,
   profileIdSchema,
   runtimeConfigSchema,
@@ -88,6 +89,50 @@ function createThrowingGetterProxy(secret: string): object {
 }
 
 describe("user configuration schemas", () => {
+  it("accepts strict per-tier generation controls and soft duration budgets", () => {
+    const tiers = modelTiersSchema.parse({
+      light: {
+        providerId: "provider",
+        modelId: "fast-model",
+        generation: {
+          reasoning: "minimal",
+        },
+        recommendedDurationMs: 2_000,
+      },
+      heavy: {
+        providerId: "provider",
+        modelId: "deep-model",
+        generation: { reasoning: "high" },
+        recommendedDurationMs: 8_000,
+      },
+    });
+    expect(tiers.light.generation?.reasoning).toBe("minimal");
+    expect(
+      modelTiersSchema.safeParse({
+        ...tiers,
+        light: { ...tiers.light, unknown: true },
+      }).success,
+    ).toBe(false);
+    expect(
+      modelTiersSchema.safeParse({
+        ...tiers,
+        light: { ...tiers.light, generation: { maxOutputTokens: 256 } },
+      }).success,
+    ).toBe(false);
+    expect(
+      modelTiersSchema.safeParse({
+        ...tiers,
+        heavy: { ...tiers.heavy, generation: { tokenBudget: 1000 } },
+      }).success,
+    ).toBe(false);
+    expect(
+      modelTiersSchema.safeParse({
+        ...tiers,
+        heavy: { ...tiers.heavy, generation: { thinkingBudget: "high" } },
+      }).success,
+    ).toBe(false);
+  });
+
   it("requires an explicit Agent identity on existing Profiles", () => {
     expect(
       userConfigProfileSchema.safeParse({

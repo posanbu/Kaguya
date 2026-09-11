@@ -72,9 +72,18 @@ export const aiProviderConfigSchema = guardSchemaInput(
   aiProviderConfigInnerSchema,
 );
 
+export const modelGenerationOptionsSchema = z.strictObject({
+  reasoning: z
+    .enum(["none", "minimal", "low", "medium", "high", "xhigh"])
+    .or(z.literal("provider-default"))
+    .optional(),
+});
+
 const modelTierTargetSchema = z.strictObject({
   providerId: nonEmptyIdSchema,
   modelId: nonEmptyIdSchema,
+  generation: modelGenerationOptionsSchema.optional(),
+  recommendedDurationMs: z.int().positive().max(300_000).optional(),
 });
 
 export const modelTiersSchema = z.strictObject({
@@ -456,6 +465,9 @@ function addDuplicateIdIssues(
 export type UserConfigProfile = z.infer<typeof userConfigProfileSchema>;
 export type ProfileId = z.infer<typeof profileIdSchema>;
 export type ModelTierTarget = z.infer<typeof modelTierTargetSchema>;
+export type ModelGenerationOptions = z.infer<
+  typeof modelGenerationOptionsSchema
+>;
 export type UserConfigProfileSettings = z.infer<
   typeof userConfigProfileSettingsSchema
 >;

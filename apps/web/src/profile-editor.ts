@@ -33,10 +33,14 @@ interface MutableProfile {
       light: {
         providerId: string;
         modelId: string;
+        generation?: MutableGenerationOptions;
+        recommendedDurationMs?: number;
       };
       heavy: {
         providerId: string;
         modelId: string;
+        generation?: MutableGenerationOptions;
+        recommendedDurationMs?: number;
       };
     };
     providers: MutableProvider[];
@@ -48,6 +52,17 @@ interface MutableProfile {
   review?: {
     acknowledgedWarnings: string[];
   };
+}
+
+interface MutableGenerationOptions {
+  reasoning?:
+    | "provider-default"
+    | "none"
+    | "minimal"
+    | "low"
+    | "medium"
+    | "high"
+    | "xhigh";
 }
 
 interface MutableProvider {
@@ -77,6 +92,12 @@ export interface ProfileEditorFields {
   readonly apiKey: string;
   readonly lightModel: string;
   readonly heavyModel: string;
+  readonly lightThinkingEnabled: boolean;
+  readonly lightReasoningEffort: string;
+  readonly lightRecommendedDurationMs: string;
+  readonly heavyThinkingEnabled: boolean;
+  readonly heavyReasoningEffort: string;
+  readonly heavyRecommendedDurationMs: string;
   readonly gatewayAllowlistText: string;
   readonly memoryEnabled: boolean;
 }
@@ -99,6 +120,22 @@ export function profileToEditorFields(
       provider?.models[1] ??
       provider?.models[0] ??
       "",
+    lightThinkingEnabled:
+      profile.ai.modelTiers?.light.generation?.reasoning !== "none",
+    lightReasoningEffort: reasoningEffort(
+      profile.ai.modelTiers?.light.generation?.reasoning,
+    ),
+    lightRecommendedDurationMs: optionalNumberText(
+      profile.ai.modelTiers?.light.recommendedDurationMs ?? 2_000,
+    ),
+    heavyThinkingEnabled:
+      profile.ai.modelTiers?.heavy.generation?.reasoning !== "none",
+    heavyReasoningEffort: reasoningEffort(
+      profile.ai.modelTiers?.heavy.generation?.reasoning,
+    ),
+    heavyRecommendedDurationMs: optionalNumberText(
+      profile.ai.modelTiers?.heavy.recommendedDurationMs ?? 5_000,
+    ),
     gatewayAllowlistText: profile.gatewayAllowlist.join("\n"),
     memoryEnabled: profile.memory.enabled,
   };
@@ -137,10 +174,12 @@ export function mergeProfileEditorFields(
     light: {
       providerId: provider.id,
       modelId: fields.lightModel,
+      ...tierOptions(fields, "light"),
     },
     heavy: {
       providerId: provider.id,
       modelId: fields.heavyModel,
+      ...tierOptions(fields, "heavy"),
     },
   };
 
@@ -153,6 +192,63 @@ export function mergeProfileEditorFields(
     memory: next.memory,
     platforms: next.platforms,
   };
+}
+
+function optionalNumberText(value: number | undefined): string {
+  return value === undefined ? "" : String(value);
+}
+
+function optionalPositiveInteger(value: string): number | undefined {
+  const normalized = value.trim();
+  if (normalized.length === 0) return undefined;
+  const parsed = Number(normalized);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function reasoningEffort(value: string | undefined): string {
+  return value === undefined || value === "none" ? "provider-default" : value;
+}
+
+function tierOptions(
+  fields: ProfileEditorFields,
+  tier: "light" | "heavy",
+): Partial<
+  Pick<
+    NonNullable<MutableProfile["ai"]["modelTiers"]>["light"],
+    "generation" | "recommendedDurationMs"
+  >
+> {
+  const prefix = tier === "light" ? "light" : "heavy";
+  const thinkingEnabled = fields[`${prefix}ThinkingEnabled`];
+  const reasoningEffort = fields[`${prefix}ReasoningEffort`];
+  const recommendedDurationMs = optionalPositiveInteger(
+    fields[`${prefix}RecommendedDurationMs`],
+  );
+  const generation: MutableGenerationOptions = {
+    ...(!thinkingEnabled
+      ? { reasoning: "none" as const }
+      : reasoningEffort !== "provider-default" && isReasoning(reasoningEffort)
+        ? { reasoning: reasoningEffort }
+        : {}),
+  };
+  return {
+    ...(Object.keys(generation).length === 0 ? {} : { generation }),
+    ...(recommendedDurationMs === undefined ? {} : { recommendedDurationMs }),
+  };
+}
+
+function isReasoning(
+  value: string,
+): value is NonNullable<MutableGenerationOptions["reasoning"]> {
+  return [
+    "provider-default",
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+  ].includes(value);
 }
 
 function findEditableProvider(profile: UserConfigProfile) {

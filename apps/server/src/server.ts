@@ -7,6 +7,7 @@ import {
 import { pathToFileURL } from "node:url";
 
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import type { KaguyaLlmGenerationOptions } from "@kaguya/llm/client";
 import {
   ConfigError,
   ConfigIncompleteError,
@@ -468,6 +469,10 @@ export function createRuntimeModelSelectionResolver(
       providerId: provider.id,
       modelId: target.modelId,
       model: client.chatModel(target.modelId),
+      ...(target.generation === undefined &&
+      target.recommendedDurationMs === undefined
+        ? {}
+        : { generationOptions: generationOptionsForTier(target) }),
     };
   };
 
@@ -475,6 +480,19 @@ export function createRuntimeModelSelectionResolver(
   resolver({ modelTier: "light" });
   resolver({ modelTier: "heavy" });
   return resolver;
+}
+
+function generationOptionsForTier(
+  target: NonNullable<UserConfigProfile["ai"]["modelTiers"]>["light"],
+): KaguyaLlmGenerationOptions {
+  return {
+    ...(target.generation?.reasoning === undefined
+      ? {}
+      : { reasoning: target.generation.reasoning }),
+    ...(target.recommendedDurationMs === undefined
+      ? {}
+      : { recommendedDurationMs: target.recommendedDurationMs }),
+  };
 }
 
 export class InformationDatabaseConnectionError extends Error {

@@ -22,6 +22,7 @@ import { Writable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 
 import { FileUserConfigManager } from "@kaguya/config";
+import { OpenAiCompatibleModelDiscoveryError } from "@kaguya/llm/openai-compatible";
 import {
   closeLogger,
   createLogger,
@@ -69,6 +70,68 @@ function authorization(scheme = "Bearer") {
 }
 
 describe("application API gateway", () => {
+  it("authenticates model discovery before validation and returns provider models", async () => {
+    const discoverModels = vi.fn(async () => ["model-a", "model-b"]);
+    const app = await createHttpApplication({ config, discoverModels });
+
+    const unauthorized = await app.inject({
+      method: "POST",
+      url: "/api/v1/models/discover",
+      payload: { baseUrl: "invalid", apiKey: "" },
+    });
+    expect(unauthorized.statusCode).toBe(401);
+    expect(discoverModels).not.toHaveBeenCalled();
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/models/discover",
+      headers: authorization(),
+      payload: {
+        baseUrl: "https://provider.example/v1",
+        apiKey: "provider-secret",
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      data: { models: ["model-a", "model-b"] },
+    });
+    expect(discoverModels).toHaveBeenCalledWith({
+      baseUrl: "https://provider.example/v1",
+      apiKey: "provider-secret",
+    });
+    await app.close();
+  });
+
+  it.each([
+    ["configuration", 400, "model_discovery_invalid"],
+    ["timeout", 504, "model_discovery_timeout"],
+    ["provider", 502, "model_provider_failed"],
+    ["invalid-response", 502, "model_response_invalid"],
+  ] as const)(
+    "maps %s model discovery failures without exposing provider details",
+    async (kind, statusCode, code) => {
+      const app = await createHttpApplication({
+        config,
+        discoverModels: vi.fn(async () => {
+          throw new OpenAiCompatibleModelDiscoveryError(kind);
+        }),
+      });
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/models/discover",
+        headers: authorization(),
+        payload: {
+          baseUrl: "https://private.example/v1",
+          apiKey: "provider-secret",
+        },
+      });
+      expect(response.statusCode).toBe(statusCode);
+      expect(response.json()).toMatchObject({ error: { code } });
+      expect(response.body).not.toMatch(/provider-secret|private\.example/u);
+      await app.close();
+    },
+  );
+
   it.each<ConfigurationRegistryStatus>([
     {
       status: "invalid",

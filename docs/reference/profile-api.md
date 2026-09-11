@@ -76,8 +76,20 @@ curl http://127.0.0.1:3000/api/v1/profiles \
   "ai": {
     "defaultProviderId": "default-provider",
     "modelTiers": {
-      "light": { "providerId": "default-provider", "modelId": "model-light" },
-      "heavy": { "providerId": "default-provider", "modelId": "model-heavy" }
+      "light": {
+        "providerId": "default-provider",
+        "modelId": "model-light",
+        "generation": {
+          "reasoning": "minimal"
+        },
+        "recommendedDurationMs": 2000
+      },
+      "heavy": {
+        "providerId": "default-provider",
+        "modelId": "model-heavy",
+        "generation": { "reasoning": "high" },
+        "recommendedDurationMs": 8000
+      }
     },
     "providers": [
       {
@@ -98,6 +110,38 @@ curl http://127.0.0.1:3000/api/v1/profiles \
 ```
 
 :::
+
+每个 tier 可选的 `generation` 使用与 provider 无关的稳定字段：
+`reasoning` 使用 AI SDK 的统一取值：
+`provider-default|none|minimal|low|medium|high|xhigh`。WebUI 的思考模式开关关闭时
+保存 `none`；开启时使用选定的 effort。LLM 边界负责把该字段转换为 provider 调用参数；
+模块不得直接写 provider 专用字段。若 provider 或模型不支持，具体告警或拒绝行为由
+provider SDK/API 决定。tier 配置不设置 temperature 或 token 上限。
+
+这里的 `reasoning` 是 Vercel AI SDK 7 的顶层统一调用参数。SDK 会由具体 Provider
+adapter 转换为对应协议字段；例如 OpenAI-compatible adapter 会映射为
+`reasoning_effort`。Anthropic 的 `providerOptions.anthropic.thinking` 属于 Provider
+专属配置，并不是跨 Provider 的统一参数。生成请求始终由 Vercel AI SDK 发出。
+
+`recommendedDurationMs` 是软延迟预算，只用于调度和观测参考，不会创建硬超时或
+中断仍在生成的回复。建议 light 使用约 `2000ms`；heavy 通常使用
+`3000..10000ms`（WebUI 新配置默认显示 `5000ms`）。真正需要硬超时时应由调用方的
+取消信号或独立超时策略控制。
+
+## 获取 Provider 模型列表
+
+`POST /api/v1/models/discover` 使用当前表单中的 OpenAI-compatible 地址和 API Key
+请求 Provider 的 `GET /models`。该操作不会保存凭据，也不会自动修改 light/heavy。
+
+```json
+{
+  "baseUrl": "https://model.example/v1",
+  "apiKey": "test-only-placeholder"
+}
+```
+
+成功响应为 `{ "data": { "models": ["model-a", "model-b"] } }`。请求最多等待
+10 秒，拒绝重定向及超过 1 MiB 的响应；Provider 错误正文和凭据不会返回给客户端。
 
 替换 selected Profile 会返回 `restartRequired: true`。完整替换会以请求中的 acknowledgement 为准，不继承先前确认。
 
