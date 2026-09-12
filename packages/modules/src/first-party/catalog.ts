@@ -1,6 +1,6 @@
 /**
  * 功能概述：集中显式导入 first-party 模块，提供可被 composition root 选择和合并的 Catalog。
- * 主要职责：createFirstPartyModuleCatalog 接收宿主 Model Task token 和共享 completed kind，构造身份、时机、light tier 发言 Planner 与消息合成定义；
+ * 主要职责：createFirstPartyModuleCatalog 接收宿主 Model Task token 和共享 completed kind，构造身份、时机与消息合成定义；
  * createFirstPartyModuleConfigDefaults 提供首次落盘模板，createFirstPartyModuleActivations
  * 同时提供独立 Memory writeback 定义，由 composition 在 Memory 启用时选择；
  * 严格校验已加载的实例文件，拒绝旧回复配置并提示重新初始化，与“可发现”的 Catalog 分开。
@@ -20,7 +20,6 @@ import { memoryWritebackModule } from "./memory-writeback/index.js";
 import { associationModule } from "./association/index.js";
 import { identityModule } from "./identity/index.js";
 import { attentionArousalModule } from "./attention-arousal/index.js";
-import { createSpeechModule } from "./speech/index.js";
 import { heartbeatModule } from "./heartbeat/index.js";
 import {
   createHeartflowModule,
@@ -44,7 +43,6 @@ export function createFirstPartyModuleCatalog<
     memoryCognitionModule,
     identityModule,
     attentionArousalModule,
-    createSpeechModule(options),
     createMessageComposerModule(options),
     heartbeatModule,
     createHeartflowModule(options),
@@ -70,17 +68,6 @@ export function createFirstPartyModuleConfigDefaults(
       enabled: true,
       settings: Object.freeze({
         modelTier: "heavy",
-      }),
-    }),
-    Object.freeze({
-      version: 1 as const,
-      instanceId: "speech.default",
-      definitionId: "agent.speech.planner",
-      enabled: true,
-      settings: Object.freeze({
-        modelTier: "light",
-        policyDigest: "speech:planner-v1",
-        settingsDigest: "speech:light-v1",
       }),
     }),
     Object.freeze({

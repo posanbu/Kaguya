@@ -101,9 +101,9 @@ Runtime 的 `submit()` 返回已接受输入的根 ID；可靠回复异步推进
 
 Selector 通过受限只读账本的 `find()`、`related()`、`retrieve()` 取得候选，只返回有序 informationId。`find()` 支持 JSON payload containment 和确定性的正序/倒序查询。Core 校验 ID、拒绝重复或越权结果，并按顺序重新加载冻结原子。模块不能把未落账 payload 拼成上下文。派生输出通常继承输入的 `core:context`；需要跨入站合并时，可用 `contextInformationId` 重定位，但目标必须是该 handler 已通过声明式 Selector 选出的 `core.runtime.context`。
 
-首次生成的模块配置显式启用 Identity、durable Heartbeat、Heartflow、Attention Arousal、Speech Planner、Association 与 Message Composer，并把 Heartbeat、Heartflow 和注意力参数完整写入文件。Runtime 拥有的 Model Task 失败/取消、delivery terminal 与 `execution.exhausted` definition 由 composition root 注入 Heartflow，Catalog 不复制这些 kind。
+首次生成的模块配置显式启用 Identity、durable Heartbeat、Heartflow、Attention Arousal、Association 与 Message Composer，并把 Heartbeat、Heartflow 和注意力参数完整写入文件。Runtime 拥有的 Model Task 失败/取消、delivery terminal 与 `execution.exhausted` definition 由 composition root 注入 Heartflow，Catalog 不复制这些 kind。
 
-Heartbeat 到期只产生 `agent.turn.candidate`。Heartflow 使用 scope generation 领取 candidate，等待全部 inbound 的 identity terminal，再按 `asOf` 冻结不可变的多输入 `agent.turn.context.completed`。Attention Arousal 提交独立的 `attend | defer | ignore` 门控结果；Speech Planner 仅在 `attend` 后执行 `core.speech.plan` v1，提交 claim 唯一的 `agent.speech.decision`（`speak | wait | silent`）。Heartflow 再把最终决定分派为 message intent、wait 或 silent，并在 delivery、等待、静默、supersession 或耗尽时写入一个 turn terminal。默认 Catalog 不包含 always-reply 或 inbound-to-context 旁路。
+Heartbeat 到期只产生 `agent.turn.candidate`。Heartflow 使用 scope generation 领取 candidate，等待全部 inbound 的 identity terminal，再按 `asOf` 冻结不可变的多输入 `agent.turn.context.completed`。Attention Arousal 只提交 claim 的唯一 `attend | defer | ignore` 决策；Heartflow 仅在 attend 后执行独立的 `agent.turn.plan` v1，并按 `agent.turn.plan.completed` 的 `message | wait | silent` 分派为 message intent、wait 或 silent，并在 delivery、等待、静默、supersession 或耗尽时写入一个 turn terminal。默认 Catalog 不包含 always-reply 或 inbound-to-context 旁路。
 
 `createMessageComposerModule()` 默认直接消费 Heartflow 产生的 `agent.message.intent.requested`，并通过 message intent 的 `core:uses-context` 找到冻结 turn context。Memory 默认由 selected Profile 关闭；此时 Heartflow 的可选检索退化为空，Prompt 仍包含当前冻结输入。Association 继续记录 requested、query、candidate 和 completed 审计 DAG，但不再作为 Message Composer 的门禁。
 
@@ -115,26 +115,10 @@ Memory 变量在完整当前 turn 之前，合计最多 4,000 个 Unicode 字符
 
 ## Message Intent 与 Composer
 
-门控通过且 Planner 判定 speak 后，Heartflow 为一个冻结 turn 确定性创建一次 `agent.message.intent.requested`。其严格 payload 包含 `target: { adapterId, platform, destination }`、`turn: { candidateInformationId, claimInformationId, contextInformationId }` 与 `memoryInformationIds`。`target` 取自冻结 turn 的最新入站来源；意图本身不复制源正文、源平台消息 ID、发送者信息或引用标记。
+必要性门控通过且 Planner 判定 message 后，Heartflow 为一个冻结 turn 确定性创建一次 `agent.message.intent.requested`。其严格 payload 包含 `target: { adapterId, platform, destination }`、`turn: { candidateInformationId, claimInformationId, contextInformationId }` 与 `memoryInformationIds`。`target` 取自冻结 turn 的最新入站来源；意图本身不复制源正文、源平台消息 ID、发送者信息或引用标记。
 
 默认 `agent.message-composer` 模块由 `message-composer.default` 实例激活，执行 `agent.message.compose` Model Task，使用 `message` Prompt kind。Composer 通过引用重载完整冻结 turn，把其中所有输入作为当前回合共同呈现；最后一条输入没有必须回答的特殊地位。历史与 Memory 分别受预算限制，当前冻结输入不因历史预算被剔除。入站引用只帮助理解上下文，默认出站内容始终为 `kind: "text"`。
 
 旧 reply 信息原子不会迁移或由新模块处理，旧 Prompt kind 和 Model Task ID 不再属于当前协议。旧模块配置须备份后重新初始化，不能仅重命名旧文件来保留旧 outbound 设置。公共 `OutboundMessageContent.kind: "reply"` 与 OneBot 显式引用能力继续保留，供专用模块主动构造。
 
-跨会话目标检索仍属于后续工作；本链只在已明确的当前会话发送消息。
-
-## 两层发言判断与故障策略
-
-`createSpeechModule()` 注入 Model Task capability，默认 activation 为 `speech.default`，definition 为 `agent.speech.planner`。首版参数只在 first-party activation 源码设置中配置：`modelTier: light`、`policyDigest: speech:planner-v1`、`settingsDigest: speech:light-v1`；不扩展 Profile、API 或 WebUI。共享 Runtime Composition 为启用的 Planner 独立授予 light tier 审批。已有文件配置需要补齐 `modules/speech.default/config.json` 实例信封，或备份后重新初始化模块配置；当前严格加载器会拒绝缺少默认实例的目录。直接嵌入 Runtime 的自定义模块列表同样需要显式加入 Planner。
-
-Planner 使用 `route` Prompt 与 `outputMode: object`，明确要求只输出 JSON。身份、判断规则、同范围已经成功投递的历史、可选冻结记忆和完整消息批次共同构成判断依据。私聊、@机器人或回复机器人确保通过非硬门禁后的门控，但 Planner 仍可 silent。硬门禁包括 mute、不安全、缺少目标、过期和频率为零。
-
-**speak** — reasonCode 只能是 `direct-response`、`answerable-question`、`useful-contribution` 或 `social-response`。只有此动作进入现有 Message Composer 正文生成链。
-
-**wait** — reasonCode 只能是 `conversation-incomplete` 或 `awaiting-context`，并包含 5–120 秒的整数 `waitSeconds`（从持久化模型完成时间起算，重放不延长 deadline）。等待使用 durable heartbeat、`wakeOnMessage=true`，新消息或到期都会重新门控与规划；门控和 Planner 共用三次总等待预算，重启不会清零。预算耗尽后以 `wait-budget-exhausted` 正常静默结束。
-
-**silent** — reasonCode 只能是 `not-addressed`、`no-value`、`conversation-between-others` 或 `duplicate-or-reaction`。不调用正文模型，也不产生 assistant 或 delivery。
-
-任务 failed/cancelled、非法 JSON 和 schema 校验失败统一产生安全原因 `planner-unavailable` 的 silent 决定，不产生 `turn.failed`，不回退 speak。执行中断和数据库故障由 durable runner 恢复。首次 requested 固定 Prompt 与上下文选择，防止迟到历史改变重放任务；claim 的唯一决定和 Heartflow terminal 检查避免重复及迟到回复。
-
-普通日志仅投影动作、任务元数据、固定 reason code、预算及 digest，Planner 请求不输出 Prompt 预览或原始模型输出。完整 Prompt 仅保留在受控账本和显式 content detail 诊断中。
+Planner 已支持 `message | wait | silent`；跨会话目标检索仍属于后续工作。Planner 由现有 Heartflow 实例装配，默认 light tier，无需新增 speech 实例或 Profile/API/WebUI 配置。首次请求冻结 Prompt 与上下文选择，重放复用已持久化任务；wait 为 5–120 秒并复用三次总预算与 durable heartbeat，失败和取消统一以 `planner-unavailable` 静默结束。普通日志不记录 Planner Prompt 预览或原始模型输出。

@@ -1,6 +1,6 @@
 /**
  * 功能概述：验证 first-party Catalog 默认配置及激活边界。
- * 主要职责：catalog fixture 注入宿主能力与共享 kind，测试七个默认模块、严格 modelTier 设置、
+ * 主要职责：catalog fixture 注入宿主能力与共享 kind，测试六个默认模块、严格 modelTier 设置、
  * disabled 配置校验与旧 reply/outbound 配置拒绝；Profile 身份决定 Heartflow botNames。
  * 代码库关系：直接约束 catalog 工厂以及 message-composer 模块的公开 settings schema。
  * 输入输出与副作用：纯内存组装，不连接模型或数据库；错误包含重新初始化说明。
@@ -60,14 +60,14 @@ function catalog() {
 }
 
 describe("first-party module configuration", () => {
-  it("materializes seven complete v1 defaults and activates enabled instances", () => {
+  it("materializes six complete v1 defaults and activates enabled instances", () => {
     const defaults = createFirstPartyModuleConfigDefaults("production");
-    expect(defaults).toHaveLength(7);
+    expect(defaults).toHaveLength(6);
     expect(
       defaults.every(({ version, enabled }) => version === 1 && enabled),
     ).toBe(true);
     expect(createFirstPartyModuleActivations(catalog(), defaults)).toHaveLength(
-      7,
+      6,
     );
   });
 

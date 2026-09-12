@@ -72,3 +72,29 @@ tests:
     assert:
       - type: javascript
         value: file://promptfoo/assertions.cjs:assertMemoryPrompt
+
+  - description: Planner 读取完整冻结 turn 并严格限制动作字段
+    vars:
+      kind: planner
+      persona: PLANNER_PERSONA
+      turn:
+        inputs:
+          - PLANNER_FIRST_INPUT
+          - PLANNER_LAST_INPUT
+    assert:
+      - type: contains
+        value: PLANNER_PERSONA
+      - type: contains
+        value: PLANNER_FIRST_INPUT
+      - type: contains
+        value: PLANNER_LAST_INPUT
+      - type: contains
+        value: '"action":"message"'
+      - type: contains
+        value: '"action":"wait"'
+      - type: contains
+        value: '"action":"silent"'
+      - type: contains
+        value: "5到120的整数"
+      - type: contains
+        value: "禁止 Markdown、解释、消息正文、adapter、群号、用户 ID 或 destination"

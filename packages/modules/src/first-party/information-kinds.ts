@@ -1,6 +1,6 @@
 /**
  * 功能概述：本文件声明 modules 包拥有的消息 DAG kind，包括入站、Heartbeat、Heartflow
- * claim/context/terminal、两层 speech planner decision、消息意图、Memory、身份、assistant 与平台投递请求。
+ * claim/context/terminal、speech decision、消息意图、Memory、身份、assistant 与平台投递请求。
  * 主要职责：每个 definition 固定 payload 的严格 schema 和直接因果/context 引用规则；
  * `personFactCandidateInformationKind` 表示待提取的账本来源，
  * `personFactExtractedInformationKind` 表示模块验证后的业务事实；模块 Kind 由各自 Manifest
@@ -174,7 +174,7 @@ export const messageIntentRequestedInformationKind = defineInformationKind({
     "core:caused-by": {
       required: true,
       multiple: false,
-      targetKinds: ["agent.speech.decision"],
+      targetKinds: ["agent.attention.arousal.completed"],
     },
     "core:context": {
       required: true,
@@ -1091,35 +1091,11 @@ export const attentionArousalCompletedInformationKind = defineInformationKind({
         missingInputs: input.missingInputs,
         attempt: input.attempt,
         totalWaitBudget: input.totalWaitBudget,
-        policyDigest: input.policyDigest,
-        settingsDigest: input.settingsDigest,
         ...(input.dueAt === undefined ? {} : { dueAt: input.dueAt }),
         ...(input.delayMs === undefined ? {} : { delayMs: input.delayMs }),
       };
     },
   },
-});
-
-/** Planner 的最终业务决定；门控结果保留在独立的 attention 原子中。 */
-const speechDecisionPayloadSchema = attentionArousalPayloadSchema.extend({
-  outcome: z.enum(["speak", "wait", "silent"]),
-});
-export type SpeechDecisionPayload = z.infer<typeof speechDecisionPayloadSchema>;
-export const speechDecisionInformationKind = defineInformationKind({
-  kind: "agent.speech.decision",
-  displayName: "Speech Decision",
-  description:
-    "Final speech action after attention gating and optional LLM planning.",
-  payloadSchema: speechDecisionPayloadSchema,
-  references: {
-    ...attentionArousalCompletedInformationKind.references,
-    "core:caused-by": {
-      required: true,
-      multiple: false,
-      targetKinds: [attentionArousalCompletedInformationKind.kind],
-    },
-  },
-  log: attentionArousalCompletedInformationKind.log,
 });
 
 export const waitRequestedInformationKind = defineInformationKind({
@@ -1143,7 +1119,7 @@ export const waitRequestedInformationKind = defineInformationKind({
     "core:caused-by": {
       required: true,
       multiple: false,
-      targetKinds: [speechDecisionInformationKind.kind],
+      targetKinds: [attentionArousalCompletedInformationKind.kind],
     },
     "core:context": {
       required: true,

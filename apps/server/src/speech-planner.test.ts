@@ -1,4 +1,5 @@
 /**
+ * 兼容 #136 的 agent.turn.plan 与 message/wait/silent 契约，仅增强已合并的单一 Planner 链。
  * 功能概述：通过真实 Runtime/PGlite 与 DeepSeek-compatible HTTP mock 验证两层发言决策。
  * fixture 装配正式 Catalog、light Planner 和 heavy Composer；settle 等待 durable 订阅闭合，
  * restart 保留数据库并重建宿主，advance 推进持久 heartbeat 时钟。仅 mock provider HTTP，
@@ -21,9 +22,9 @@ const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
   for (const close of cleanups.splice(0).reverse()) await close();
 });
-const speak = { action: "speak", reasonCode: "direct-response" };
-const silent = { action: "silent", reasonCode: "no-value" };
-const wait = { action: "wait", reasonCode: "awaiting-context", waitSeconds: 5 };
+const speak = { action: "message", reason: "respond" };
+const silent = { action: "silent", reason: "no-response-needed" };
+const wait = { action: "wait", reason: "await-more-context", waitSeconds: 5 };
 
 async function fixture(outputs: unknown[]) {
   const database = await createTestingDatabase();
@@ -172,14 +173,16 @@ function kinds(
   return atoms.map((a) => a.kind);
 }
 
-describe("speech Planner via DeepSeek-compatible provider", () => {
+describe("Heartflow Planner via DeepSeek-compatible provider", () => {
   it.each([speak, silent, wait])("closes the $action DAG", async (output) => {
     const f = await fixture([output]);
     await f.submit(f.message());
     await f.settle();
     const graph = await f.atoms();
-    const decision = graph.find((a) => a.kind === "agent.speech.decision")!;
-    expect(decision.payload.outcome).toBe(output.action);
+    const decision = graph.find((a) => a.kind === "agent.turn.plan.completed")!;
+    expect((decision.payload.action as { action: string }).action).toBe(
+      output.action,
+    );
     expect(f.requests.filter((r) => r.model === "deepseek-light")).toHaveLength(
       1,
     );
@@ -191,7 +194,7 @@ describe("speech Planner via DeepSeek-compatible provider", () => {
     );
     expect(JSON.stringify(f.requests[0]?.messages)).toContain("waitSeconds");
     expect(kinds(graph)).toContain(
-      output.action === "speak"
+      output.action === "message"
         ? "agent.turn.completed"
         : output.action === "wait"
           ? "agent.turn.waiting"
@@ -199,19 +202,19 @@ describe("speech Planner via DeepSeek-compatible provider", () => {
     );
     expect(kinds(graph)).not.toContain("agent.turn.failed");
     expect(f.requests.filter((r) => r.model === "deepseek-heavy")).toHaveLength(
-      output.action === "speak" ? 1 : 0,
+      output.action === "message" ? 1 : 0,
     );
     expect(f.delivered).toHaveBeenCalledTimes(
-      output.action === "speak" ? 1 : 0,
+      output.action === "message" ? 1 : 0,
     );
-    if (output.action !== "speak")
+    if (output.action !== "message")
       expect(kinds(graph)).not.toContain("core.message.assistant.text");
   });
 
   it.each([
     "HTTP_FAILURE",
     "not JSON",
-    { action: "speak", reasonCode: "invented" },
+    { action: "message", reason: "invented" },
     { ...wait, waitSeconds: 4 },
     { ...wait, waitSeconds: 121 },
     { ...wait, waitSeconds: 5.5 },
@@ -222,10 +225,9 @@ describe("speech Planner via DeepSeek-compatible provider", () => {
     await f.settle();
     const graph = await f.atoms();
     expect(
-      graph.find((a) => a.kind === "agent.speech.decision")?.payload,
+      graph.find((a) => a.kind === "agent.turn.plan.completed")?.payload,
     ).toMatchObject({
-      outcome: "silent",
-      reasonCodes: ["planner-unavailable"],
+      action: { action: "silent", reason: "planner-unavailable" },
     });
     expect(kinds(graph)).toContain("agent.turn.silent");
     expect(kinds(graph)).not.toContain("agent.turn.failed");
@@ -314,7 +316,7 @@ describe("speech Planner via DeepSeek-compatible provider", () => {
       await f.settle();
       const graph = await f.atoms();
       expect(
-        graph.filter((a) => a.kind === "agent.speech.decision"),
+        graph.filter((a) => a.kind === "agent.turn.plan.completed"),
       ).toHaveLength(1);
       expect(
         graph.filter((a) => a.kind === "core.message.assistant.text"),
@@ -328,7 +330,7 @@ describe("speech Planner via DeepSeek-compatible provider", () => {
     }
   });
 
-  it("cancels an in-flight Planner and ignores its late speak output", async () => {
+  it("cancels an in-flight Planner and ignores its late message output", async () => {
     let release!: (value: unknown) => void;
     const blocked = new Promise((resolve) => {
       release = resolve;
@@ -349,9 +351,9 @@ describe("speech Planner via DeepSeek-compatible provider", () => {
       expect(kinds(graph)).not.toContain("agent.turn.failed");
       expect(kinds(graph)).not.toContain("core.message.assistant.text");
       expect(
-        graph.find((a) => a.kind === "agent.speech.decision")?.payload
-          .reasonCodes,
-      ).toEqual(["planner-unavailable"]);
+        graph.find((a) => a.kind === "agent.turn.plan.completed")?.payload
+          .action,
+      ).toEqual({ action: "silent", reason: "planner-unavailable" });
       expect(f.requests).toHaveLength(1);
     } finally {
       release(speak);
@@ -401,11 +403,10 @@ describe("speech Planner via DeepSeek-compatible provider", () => {
       3,
     );
     expect(
-      graph.filter((a) => a.kind === "agent.speech.decision").at(-1)?.payload,
+      graph.filter((a) => a.kind === "agent.turn.plan.completed").at(-1)
+        ?.payload,
     ).toMatchObject({
-      outcome: "silent",
-      attempt: 3,
-      reasonCodes: ["wait-budget-exhausted"],
+      action: { action: "silent", reason: "wait-budget-exhausted" },
     });
   });
 
@@ -438,7 +439,7 @@ describe("speech Planner via DeepSeek-compatible provider", () => {
     const hook = vi
       .spyOn(f.core(), "commitTerminal")
       .mockImplementation((...args) => {
-        if (args[2].kind === "agent.speech.decision" && !interrupted) {
+        if (args[2].kind === "agent.turn.plan.completed" && !interrupted) {
           interrupted = true;
           return Promise.reject(
             new Error("synthetic decision write interruption"),
@@ -449,6 +450,12 @@ describe("speech Planner via DeepSeek-compatible provider", () => {
     try {
       await f.submit(f.message());
       await vi.waitFor(() => expect(interrupted).toBe(true));
+      await f.submit(
+        f.message("late-history", {
+          occurredAt: "2026-09-12T11:59:00.000Z",
+          text: "BACKDATED_HISTORY",
+        }),
+      );
       f.setTime(10000);
       await f.restart();
       await f.settle();
@@ -458,7 +465,7 @@ describe("speech Planner via DeepSeek-compatible provider", () => {
         "deepseek-heavy",
       ]);
       expect(
-        graph.filter((a) => a.kind === "agent.speech.decision"),
+        graph.filter((a) => a.kind === "agent.turn.plan.completed"),
       ).toHaveLength(1);
       expect(f.delivered).toHaveBeenCalledTimes(1);
     } finally {
@@ -484,11 +491,10 @@ describe("speech Planner via DeepSeek-compatible provider", () => {
       3,
     );
     expect(
-      graph.filter((a) => a.kind === "agent.speech.decision").at(-1)?.payload,
+      graph.filter((a) => a.kind === "agent.turn.plan.completed").at(-1)
+        ?.payload,
     ).toMatchObject({
-      outcome: "silent",
-      attempt: 3,
-      reasonCodes: ["wait-budget-exhausted"],
+      action: { action: "silent", reason: "wait-budget-exhausted" },
     });
     expect(kinds(graph)).not.toContain("agent.turn.failed");
     expect(f.delivered).not.toHaveBeenCalled();

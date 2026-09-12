@@ -7,8 +7,8 @@
  * 作为复合身份写入审计数据并通过异步调用上下文选择模型，避免同名 model 跨 provider 串线；
  * createDeterministicModelSelectionResolver 为离线演示提供确定性模型。
  * 代码库关系：apps/server 与 apps/demo 直接导入 @kaguya/composition；本包位于 Runtime 之上，
- * 不负责数据库连接、HTTP、transport 注册或进程启停。从 loadFirstPartyPromptTemplates().messageComposer 读取模板，组合 light tier agent.speech.planner、agent.message-composer、
- * Runtime 通用生命周期与 LLM client；Composer settings 只含 modelTier，Planner 另记录策略摘要；投递目标由消息 intent 决定。
+ * 不负责数据库连接、HTTP、transport 注册或进程启停。从 loadFirstPartyPromptTemplates().messageComposer 读取模板，组合 agent.message-composer、
+ * Heartflow Planner（light）与 Runtime 通用生命周期、LLM client；settings 只含 modelTier，投递目标由消息 intent 决定。
  * 输入输出与副作用：构造阶段无网络或连接；模型句柄按复合 key 存于宿主闭包，
  * Runtime 校验 activation/policy、重载因果 context 并写通用任务生命周期，模块经 context.use 调用。
  */
@@ -33,7 +33,7 @@ import {
   type KaguyaLlmGenerationOptions,
   type KaguyaLlmModelResolver,
 } from "@kaguya/llm/client";
-import { createRepeatingDeterministicModel } from "@kaguya/llm/testing";
+import { createPlanningDeterministicModel } from "@kaguya/llm/testing";
 import {
   createFirstPartyModuleCatalog,
   createFirstPartyModuleActivations,
@@ -72,18 +72,9 @@ export interface MessageCompositionOptions {
   readonly agentIdentity?: AgentIdentity;
 }
 export function createDeterministicModelSelectionResolver(): RuntimeModelSelectionResolver {
-  const model = createRepeatingDeterministicModel({
-    text: "It is a lovely night for watching the moon.",
-  });
-  const planner = createRepeatingDeterministicModel({
-    action: "speak",
-    reasonCode: "direct-response",
-  });
-  const generateReply = model.doGenerate.bind(model);
-  model.doGenerate = (request) =>
-    request.responseFormat?.type === "text"
-      ? generateReply(request)
-      : planner.doGenerate(request);
+  const model = createPlanningDeterministicModel(
+    "It is a lovely night for watching the moon.",
+  );
   return ({ modelTier }) => ({
     providerId: "kaguya-deterministic",
     modelId: `deterministic-${modelTier}`,
@@ -189,7 +180,7 @@ export function createMessageComposition(
   const modelTask: RuntimeModelTaskOptions = {
     approvals: activations
       .filter((activation) =>
-        ["agent.message-composer", "agent.speech.planner"].includes(
+        ["agent.message-composer", "agent.heartflow.online"].includes(
           activation.definitionId,
         ),
       )
@@ -200,8 +191,8 @@ export function createMessageComposition(
         },
         selectionPolicy: {
           tier:
-            activation.definitionId === "agent.speech.planner"
-              ? ("light" as const)
+            activation.definitionId === "agent.heartflow.online"
+              ? "light"
               : messageComposerSettingsSchema.parse(activation.settings)
                   .modelTier,
         },

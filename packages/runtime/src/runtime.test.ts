@@ -1,6 +1,7 @@
 /**
- * 默认 fixture 将 light Planner 与回复模型分开，避免回复故障测试提前终止在规划阶段。
+ * Planner 普通日志仅保留元数据，不能泄漏 Prompt 预览或模型输出。
  * 功能概述：用真实 PGlite、Core 和 ModuleHost 验证 `KaguyaRuntime` 的完整信息 DAG。
+ * Planner 使用独立 object Model Task，测试分别定位 plan 与 compose，确保故障静默与唯一分派。
  * 主要职责：覆盖 Web 入站到投递成功的直接因果链、生成失败不会继续 assistant/outbound/delivery、
  * 三类 transport 失败、无订阅持久化、同 kind 消费并发与多 message composer activation 共享模型任务后
  * 各自按 intent target 投递纯文本，默认 OneBot action 仅含 text 段、start/close 确定性交错、
@@ -46,6 +47,7 @@ import { oneShotScheduleCapability } from "@kaguya/scheduler";
 import {
   createDeferredDeterministicModel,
   createRepeatingDeterministicModel,
+  createPlanningDeterministicModel,
 } from "@kaguya/llm/testing";
 import {
   inboundTextInformationKind,
@@ -296,7 +298,6 @@ describe("KaguyaRuntime", () => {
         "agent.heartflow.online",
         "core.identity.normalize",
         "agent.message-composer",
-        "agent.speech.planner",
       ]);
       expect(logs).toContainEqual(
         expect.objectContaining({
@@ -309,7 +310,7 @@ describe("KaguyaRuntime", () => {
       const plannerSummary = logs.find(
         (entry) =>
           entry.kind === "core.model.task.requested" &&
-          entry.taskId === "core.speech.plan" &&
+          entry.taskId === "agent.turn.plan" &&
           entry.detail !== true,
       );
       expect(plannerSummary).toMatchObject({
@@ -513,9 +514,9 @@ describe("KaguyaRuntime", () => {
         ({ kind }) => kind === "agent.message.intent.requested",
       )!;
       const requested = graph.find(
-        (atom) =>
-          atom.kind === "core.model.task.requested" &&
-          atom.payload.taskId === "agent.message.compose",
+        ({ kind, payload }) =>
+          kind === "core.model.task.requested" &&
+          payload.taskId === "agent.message.compose",
       )!;
 
       const context = graph.find(
@@ -609,18 +610,18 @@ describe("KaguyaRuntime", () => {
           });
           expect(
             secondGraph.some(
-              (atom) =>
-                atom.kind === modelTaskRequestedInformationKind.kind &&
-                atom.payload.taskId === "agent.message.compose",
+              ({ kind, payload }) =>
+                kind === modelTaskRequestedInformationKind.kind &&
+                payload.taskId === "agent.message.compose",
             ),
           ).toBe(true);
         },
         { timeout: 5000, interval: 25 },
       );
       const requested = secondGraph.find(
-        (atom) =>
-          atom.kind === modelTaskRequestedInformationKind.kind &&
-          atom.payload.taskId === "agent.message.compose",
+        ({ kind, payload }) =>
+          kind === modelTaskRequestedInformationKind.kind &&
+          payload.taskId === "agent.message.compose",
       )!;
       const payload = modelTaskRequestedInformationKind.payloadSchema.parse(
         requested.payload,
@@ -689,9 +690,9 @@ describe("KaguyaRuntime", () => {
         ({ kind }) => kind === "agent.association.completed",
       );
       const requested = secondGraph.find(
-        (atom) =>
-          atom.kind === modelTaskRequestedInformationKind.kind &&
-          atom.payload.taskId === "agent.message.compose",
+        ({ kind, payload }) =>
+          kind === modelTaskRequestedInformationKind.kind &&
+          payload.taskId === "agent.message.compose",
       )!;
       const payload = modelTaskRequestedInformationKind.payloadSchema.parse(
         requested.payload,
@@ -1094,12 +1095,12 @@ describe("KaguyaRuntime", () => {
           "agent.person.resolution",
           "agent.person.context.completed",
           "agent.attention.arousal.completed",
-          "agent.speech.decision",
           "agent.heartbeat.scheduled",
           "agent.turn.candidate",
           "agent.turn.claimed",
           "agent.turn.started",
           "agent.turn.context.completed",
+          "agent.turn.plan.completed",
           "agent.turn.completed",
           "core.delivery.delivered",
         ]),
@@ -1115,8 +1116,7 @@ describe("KaguyaRuntime", () => {
       const byKind = new Map(graph.map((atom) => [atom.kind, atom]));
       const chain = [
         ["agent.attention.arousal.completed", "agent.turn.context.completed"],
-        ["agent.speech.decision", "agent.attention.arousal.completed"],
-        ["agent.message.intent.requested", "agent.speech.decision"],
+        ["agent.message.intent.requested", "agent.attention.arousal.completed"],
         ["core.model.task.requested", "agent.message.intent.requested"],
         ["core.model.task.completed", "core.model.task.requested"],
         ["core.message.assistant.text", "core.model.task.completed"],
@@ -1212,7 +1212,7 @@ describe("KaguyaRuntime", () => {
         expect.arrayContaining([
           "core.model.task.requested",
           "core.model.task.failed",
-          "agent.turn.failed",
+          "agent.turn.silent",
         ]),
       );
       for (const forbiddenKind of [
@@ -1270,6 +1270,12 @@ describe("KaguyaRuntime", () => {
         graph.filter((atom) => atom.kind === kind).length;
 
       expect(count("core.model.task.completed")).toBe(2);
+      expect(
+        graph
+          .filter((atom) => atom.kind === "core.model.task.completed")
+          .map((atom) => atom.payload.taskId)
+          .sort(),
+      ).toEqual(["agent.message.compose", "agent.turn.plan"]);
       expect(count("core.message.assistant.text")).toBe(2);
       expect(count("core.delivery.requested")).toBe(2);
       expect(sendMessage).toHaveBeenCalledTimes(2);
@@ -1567,9 +1573,7 @@ describe("KaguyaRuntime", () => {
           await database.information.query({
             informationId: result.rootInformationId,
           })
-        )
-          .filter((atom) => atom.payload.taskId === "agent.message.compose")
-          .map(({ kind }) => kind),
+        ).map(({ kind }) => kind),
       ).not.toContain("core.model.task.completed");
       expect(
         (await database.information.reliable.health()).pending,
@@ -1725,9 +1729,9 @@ type RuntimeModelSelectionResolver = (selection: ModuleModelSelection) => {
   readonly model: ReturnType<KaguyaLlmModelResolver>;
 };
 function createDeterministicModelSelectionResolver(): RuntimeModelSelectionResolver {
-  const model = createRepeatingDeterministicModel({
-    text: "It is a lovely night for watching the moon.",
-  });
+  const model = createPlanningDeterministicModel(
+    "It is a lovely night for watching the moon.",
+  );
   return ({ modelTier }) => ({
     providerId: "test",
     modelId: `deterministic-${modelTier}`,
@@ -1765,7 +1769,7 @@ function createMessageComposition(
     modelTask: {
       approvals: activations
         .filter((a) =>
-          ["agent.message-composer", "agent.speech.planner"].includes(
+          ["agent.message-composer", "agent.heartflow.online"].includes(
             a.definitionId,
           ),
         )
@@ -1775,9 +1779,12 @@ function createMessageComposition(
             definitionId: a.definitionId,
           },
           selectionPolicy: {
-            tier: z
-              .object({ modelTier: z.enum(["light", "heavy"]) })
-              .parse(a.settings).modelTier,
+            tier:
+              a.definitionId === "agent.heartflow.online"
+                ? "light"
+                : z
+                    .object({ modelTier: z.enum(["light", "heavy"]) })
+                    .parse(a.settings).modelTier,
           },
         })),
       client: new KaguyaLlmClient({
@@ -1788,17 +1795,7 @@ function createMessageComposition(
         },
       }),
       resolveModel: ({ tier }: { tier: "light" | "heavy" }) => {
-        const resolved =
-          tier === "light"
-            ? {
-                providerId: "test",
-                modelId: "planner-light",
-                model: createRepeatingDeterministicModel({
-                  action: "speak",
-                  reasonCode: "direct-response",
-                }),
-              }
-            : resolveModelSelection({ modelTier: tier });
+        const resolved = resolveModelSelection({ modelTier: tier });
         models.set(resolved.modelId, resolved.model);
         return {
           providerId: resolved.providerId,
@@ -1883,3 +1880,167 @@ it(
   },
   TEST_TIMEOUT,
 );
+
+it.each([
+  [
+    "private",
+    {
+      ...platformMessage(),
+      target: { kind: "private" as const, userId: "112233" },
+      mentions: [],
+    },
+  ],
+  ["mention", platformMessage()],
+  [
+    "reply",
+    {
+      ...platformMessage(),
+      mentions: [],
+      replyTo: { platformMessageId: "bot-message", senderId: "998877" },
+    },
+  ],
+])(
+  "allows Planner silence for QQ %s without Composer or delivery",
+  async (_name, input) => {
+    const model = createPlanningDeterministicModel("must not be composed", {
+      action: "silent",
+      reason: "no-response-needed",
+    });
+    const { runtime, database } = await createRuntime({
+      resolveModelSelection: () => ({
+        providerId: "test",
+        modelId: "silent-planner",
+        model,
+      }),
+    });
+    await runtime.start();
+    const result = await runtime.submit(input);
+    await settleDeliveries(database);
+    const graph = await database.information.query({
+      informationId: result.rootInformationId,
+    });
+    expect(
+      graph.find((atom) => atom.kind === "agent.attention.arousal.completed")
+        ?.payload.outcome,
+    ).toBe("attend");
+    expect(
+      graph.find((atom) => atom.kind === "agent.turn.silent")?.payload
+        .reasonCodes,
+    ).toEqual(["no-response-needed"]);
+    expect(
+      graph
+        .filter((atom) => atom.kind === "core.model.task.requested")
+        .map((atom) => atom.payload.taskId),
+    ).toEqual(["agent.turn.plan"]);
+    expect(
+      graph.some((atom) =>
+        [
+          "core.message.assistant.text",
+          "core.delivery.requested",
+          "agent.turn.failed",
+        ].includes(atom.kind),
+      ),
+    ).toBe(false);
+    expect(model.doGenerateCalls).toHaveLength(1);
+  },
+  TEST_TIMEOUT,
+);
+
+it("recovers Planner waits after restart, merges new input and exhausts the shared budget", async () => {
+  const model = createPlanningDeterministicModel("must not be composed", {
+    action: "wait",
+    reason: "await-more-context",
+    waitSeconds: 5,
+  });
+  const resolver: RuntimeModelSelectionResolver = () => ({
+    providerId: "test",
+    modelId: "wait-planner",
+    model,
+  });
+  let currentTime = new Date("2026-09-04T00:00:01.000Z");
+  const { runtime: firstRuntime, database } = await createRuntime({
+    resolveModelSelection: resolver,
+    now: () => currentTime,
+  });
+  let runtime = firstRuntime;
+  await runtime.start();
+  await runtime.submit(webMessage("FIRST_WAIT_INPUT"));
+  await settleDeliveries(database);
+  const all = () =>
+    database.information.find({
+      occurredAfter: "2026-09-03T00:00:00.000Z",
+      order: "asc",
+      limit: 1000,
+    });
+  expect(
+    (await all()).find((atom) => atom.kind === "agent.wait.requested")?.payload,
+  ).toMatchObject({ attempt: 1, wakeOnMessage: true });
+  await runtime.close();
+  currentTime = new Date("2026-09-04T00:00:02.000Z");
+  let sequence = 0;
+  runtime = new KaguyaRuntime({
+    ...createMessageComposition(resolver),
+    database,
+    now: () => currentTime,
+    informationIdGenerator: () => `restarted-planner-${++sequence}`,
+  });
+  resources.find((resource) => resource.runtime === firstRuntime)!.runtime =
+    runtime;
+  await runtime.start();
+  await runtime.submit({
+    ...webMessage("MERGED_WAIT_INPUT"),
+    platformMessageId: "merged",
+    occurredAt: currentTime.toISOString(),
+  });
+  await settleDeliveries(database);
+  expect(
+    (await all())
+      .filter((atom) => atom.kind === "agent.wait.requested")
+      .map((atom) => atom.payload.attempt),
+  ).toEqual([1, 2]);
+  const latestTurn = (await all())
+    .filter((atom) => atom.kind === "agent.turn.context.completed")
+    .at(-1)!;
+  expect(
+    (latestTurn.payload.inputs as any[]).map((input) => input.text),
+  ).toEqual(["FIRST_WAIT_INPUT", "MERGED_WAIT_INPUT"]);
+  // 跨越持久化 dueAt 后重建 Runtime，验证恢复器推进而非测试手工发布 candidate。
+  for (const timestamp of [
+    "2026-09-04T00:00:08.000Z",
+    "2026-09-04T00:00:14.000Z",
+  ]) {
+    await runtime.close();
+    currentTime = new Date(timestamp);
+    const previous = runtime;
+    runtime = new KaguyaRuntime({
+      ...createMessageComposition(resolver),
+      database,
+      now: () => currentTime,
+      informationIdGenerator: () => `restarted-planner-${++sequence}`,
+    });
+    resources.find((resource) => resource.runtime === previous)!.runtime =
+      runtime;
+    await runtime.start();
+    await settleDeliveries(database);
+  }
+  const graph = await all();
+  expect(
+    graph
+      .filter((atom) => atom.kind === "agent.wait.requested")
+      .map((atom) => atom.payload.attempt),
+  ).toEqual([1, 2, 3]);
+  expect(
+    graph.find((atom) => atom.kind === "agent.turn.silent")?.payload
+      .reasonCodes,
+  ).toEqual(["wait-budget-exhausted"]);
+  expect(
+    graph.some((atom) =>
+      [
+        "core.message.assistant.text",
+        "core.delivery.requested",
+        "agent.turn.failed",
+      ].includes(atom.kind),
+    ),
+  ).toBe(false);
+  expect(model.doGenerateCalls).toHaveLength(4);
+}, 30000);
