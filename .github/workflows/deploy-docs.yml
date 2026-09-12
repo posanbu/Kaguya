@@ -37,9 +37,9 @@ jobs:
       - name: Install documentation dependencies
         working-directory: docs
         run: pnpm install --frozen-lockfile
-      - name: Build documentation
+      - name: Build and check documentation
         working-directory: docs
-        run: pnpm docs:build
+        run: pnpm docs:check
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5
         with:

@@ -1,3 +1,12 @@
+/**
+ * 功能概述：配置 Kaguya 中文文档站的路由、导航、搜索、Markdown 扩展与主题。
+ * 主要职责：默认导出经 withMermaid 包装的 VitePress 配置；markdown.config 安装
+ * 代码组图标和时间线插件，groupIconVitePlugin 为构建提供图标资源。
+ * 代码库关系：导航复用 sidebar.ts，品牌图片来自 public/kaguya-logo.png；
+ * docs:dev、docs:build 和 docs:check 均读取本配置，GitHub Pages 使用 /Kaguya/。
+ * 输入输出与副作用：从当前 Markdown 生成页面及本地搜索索引；仅排除仓库说明文件，
+ * 历史资料已移出站点源码，不通过排除规则、重定向或忽略死链保留旧内容。
+ */
 import { defineConfig } from "vitepress";
 import timeline from "vitepress-markdown-timeline";
 import {
@@ -14,12 +23,15 @@ export default withMermaid(
     base: "/Kaguya/",
     cleanUrls: true,
     lastUpdated: true,
-    srcExclude: ["AGENTS.md", "README.md", "ours/**", "zh/**"],
+    srcExclude: ["AGENTS.md", "README.md"],
     title: "Kaguya 文档",
     description: "事件驱动、模块可插拔的 TypeScript AI Bot Runtime 文档",
     head: [
       ["meta", { name: "theme-color", content: "#df6f28" }],
-      ["link", { rel: "icon", type: "image/png", href: "/Kaguya/kaguya-logo.png" }],
+      [
+        "link",
+        { rel: "icon", type: "image/png", href: "/Kaguya/kaguya-logo.png" },
+      ],
     ],
     themeConfig: {
       logo: "/kaguya-logo.png",

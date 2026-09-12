@@ -7,7 +7,7 @@
     "docs:dev": "vitepress dev",
     "docs:build": "vitepress build",
     "docs:preview": "vitepress preview",
-    "docs:check": "vitepress build"
+    "docs:check": "node --test scripts/check-links-tests.mjs && vitepress build && node scripts/check-links.mjs"
   },
   "devDependencies": {
     "@braintree/sanitize-url": "7.1.2",
