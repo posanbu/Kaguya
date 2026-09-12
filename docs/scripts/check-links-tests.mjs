@@ -2,7 +2,8 @@
  * 功能概述：验证文档发布门禁能够识别真实坏链接，同时接受合法的部署路径和资源。
  * 主要职责：fixture 在临时目录创建最小静态站，测试覆盖目录首页、clean URL、中文
  * 锚点、查询参数、相对 CSS 资源，以及缺页、缺锚点、缺资源和历史内容残留的失败。
- * 代码库关系：直接调用 check-links.mjs 的 checkLinks，由 Node 内置测试运行器执行。
+ * 代码库关系：直接调用 check-links.mjs 的 checkLinks，由 docs:check 显式交给 Node
+ * 内置测试运行器执行；文件名避开根 Vitest 的 test/spec 收集规则，防止跨 runner 收集。
  * 输入输出与副作用：只创建并自动清理临时文件，不访问网络或改动实际文档产物。
  */
 import assert from "node:assert/strict";
