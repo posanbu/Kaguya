@@ -1,0 +1,26 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    {
+      "path": "../config"
+    },
+    {
+      "path": "../llm"
+    },
+    {
+      "path": "../modules"
+    },
+    {
+      "path": "../runtime"
+    },
+    {
+      "path": "../scheduler"
+    }
+  ]
+}

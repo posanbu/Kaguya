@@ -1,10 +1,12 @@
 /**
- * 功能概述：在显式 composition root 选择业务 Catalog 与宿主批准的 Model Task 能力。
- * 主要职责：createMessageComposition 注入共享 token/definition，按 activation 设置批准 tier，
+ * 功能概述：作为 Server 与 Demo 共用的唯一 Runtime Composition 边界，组装业务 Catalog 与宿主批准的 Model Task 能力。
+ * 主要职责：createMessageCatalog 加载模板并注入 Runtime kind/token，供运行时及数据库 kind 检查共用；
+ * createMessageComposition 注入共享 token/definition，按 activation 设置批准 tier，
  * 并将 provider client 与模型解析器交给 Runtime 构造受控 ModelTaskClient；providerId/modelId
  * 作为复合身份写入审计数据并通过异步调用上下文选择模型，避免同名 model 跨 provider 串线；
  * createDeterministicModelSelectionResolver 为离线演示提供确定性模型。
- * 代码库关系：从 loadFirstPartyPromptTemplates().messageComposer 读取模板，组合 agent.message-composer、
+ * 代码库关系：apps/server 与 apps/demo 直接导入 @kaguya/composition；本包位于 Runtime 之上，
+ * 不负责数据库连接、HTTP、transport 注册或进程启停。从 loadFirstPartyPromptTemplates().messageComposer 读取模板，组合 agent.message-composer、
  * Runtime 通用生命周期与 LLM client；settings 只含 modelTier，投递目标由消息 intent 决定。
  * 输入输出与副作用：构造阶段无网络或连接；模型句柄按复合 key 存于宿主闭包，
  * Runtime 校验 activation/policy、重载因果 context 并写通用任务生命周期，模块经 context.use 调用。

@@ -136,7 +136,7 @@ pnpm exec vitest run apps/web/src
 
 PostgreSQL 模式迁移位于 `packages/database/src/migrations.ts`，由 `KaguyaDatabase.migrate()` 在数据库事务中执行。迁移必须保持可重复执行，SQL 值使用参数化查询；payload 是 `JSONB`，原子和显式引用由外键保护，且原子、引用和待投影日志 outbox 在同一事务写入。信息原子与引用只能追加；状态变化应注册新原子，不能更新或删除旧记录。不要在应用或其他包中执行临时 DDL，也不要保留 SQLite 兼容写入路径。
 
-包依赖必须保持单向：`schema` 不依赖其他 Kaguya 包；`sdk` 可依赖 `schema`；`engine` 可依赖 `sdk` 和 `schema`；Runtime 负责组合 Engine、Database、LLM、Modules 与 transport；`apps/*` 是 composition root，基础包不得反向导入应用。新增 workspace 包时，同步更新 `package.json`、TypeScript references、根 `tsconfig.json` 和 lockfile。
+包依赖必须保持单向：`schema` 不依赖其他 Kaguya 包；`sdk` 可依赖 `schema`；`engine` 可依赖 `sdk` 和 `schema`；Runtime 负责组合 Engine、Database、LLM、Modules 与 transport；`@kaguya/composition` 集中一方 Catalog、激活与宿主能力装配；`apps/*` 通过这个边界构造 Runtime 并管理各自的外部资源，基础包不得反向导入应用。新增 workspace 包时，同步更新 `package.json`、TypeScript references、根 `tsconfig.json` 和 lockfile。
 
 ## 文档与提交前检查
 

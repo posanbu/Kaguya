@@ -4,12 +4,12 @@
  * 主要职责：`readDemoDatabaseUrl` 从 selected Profile 读取 runtime 数据库；`runDemo`
  * 注册固定 Web transport，通过 `runtime.submit` 提交输入，查询 context 相关的所有
  * 派生原子并输出排序后计数；生产默认使用 UUID，测试可注入确定性 ID；`main` 负责连接/关闭数据库。
- * 代码库关系：数据库连接与 Server 使用同一 `KaguyaDatabase` 入口，
+ * 代码库关系：Runtime 业务装配统一来自 @kaguya/composition；数据库连接与 Server 使用同一 `KaguyaDatabase` 入口，
  * Web 正规化器来自 platform-adapters，Runtime 是唯一 Core ingress 实现与 DAG 组合者。
  * 输入输出与副作用：CLI 会建立一个 PostgreSQL 连接、准备 schema、写入账本并输出统计；
  * 连接或运行失败只输出安全错误类型，不回显数据库 URL 或原始异常。
  */
-import { createMessageComposition } from "./runtime-composition.js";
+import { createMessageComposition } from "@kaguya/composition";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 

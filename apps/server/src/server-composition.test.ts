@@ -8,7 +8,7 @@
  * `createRuntimeModelSelectionResolver` 用例保证 selected Profile
  * 在启动时冻结、保留 provider/model 复合身份、light/heavy 共用一个 tier-only resolver，
  * 且模块不能传 `profileId`；同名 model 的跨 provider 并发调用不得串线。
- * 代码库关系：直接驱动 `server.ts`、`app.ts`、`web-gateway.ts` 与 `web.ts`；
+ * 代码库关系：Runtime 业务装配统一来自 @kaguya/composition；直接驱动 `server.ts`、`app.ts`、`web-gateway.ts` 与 `web.ts`；
  * 真实配置 Registry 来自 `@kaguya/config`，信息账本来自 `@kaguya/database/testing`，
  * provider client 创建由 `@ai-sdk/openai-compatible` mock 观察。
  * 输入输出与副作用：每个用例使用独立临时配置目录或内存 PGlite；
@@ -17,7 +17,7 @@
 import {
   createMessageComposition,
   type RuntimeModelSelectionResolver,
-} from "./runtime-composition.js";
+} from "@kaguya/composition";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";

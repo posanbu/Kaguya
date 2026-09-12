@@ -13,6 +13,7 @@
     { "path": "./packages/scheduler" },
     { "path": "./packages/platform-adapters" },
     { "path": "./packages/runtime" },
+    { "path": "./packages/composition" },
     { "path": "./apps/server" },
     { "path": "./apps/demo" },
     { "path": "./apps/web" }

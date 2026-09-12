@@ -33,6 +33,9 @@
     },
     {
       "path": "../../packages/llm"
+    },
+    {
+      "path": "../../packages/composition"
     }
   ]
 }
