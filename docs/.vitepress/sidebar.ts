@@ -1,3 +1,4 @@
+/** 功能概述：维护中文文档站侧栏；sidebar 按使用、开发与参考分组，新增 Memory 认知层 ADR 入口供开发者查阅。由 VitePress 配置读取，无运行期 I/O。 */
 import type { DefaultTheme } from "vitepress";
 
 export const sidebar: DefaultTheme.SidebarItem[] = [
@@ -24,6 +25,7 @@ export const sidebar: DefaultTheme.SidebarItem[] = [
     items: [
       { text: "开发概览", link: "/developers/" },
       { text: "运行时架构", link: "/developers/architecture" },
+      { text: "Memory 认知层", link: "/developers/memory" },
       { text: "配置生命周期", link: "/developers/configuration-lifecycle" },
       { text: "信息账本", link: "/developers/information-ledger" },
       { text: "Runtime 可观测性", link: "/developers/observability" },
