@@ -141,11 +141,12 @@ describe("developer inspection", () => {
     expect(response.statusCode).toBe(200);
     const modules = response.json().data.modules;
     expect(modules.length).toBeGreaterThan(0);
-    const reply = modules.find(
-      (m: { definitionId: string }) => m.definitionId === "agent.message-composer",
+    const composer = modules.find(
+      (m: { definitionId: string }) =>
+        m.definitionId === "agent.message-composer",
     );
-    expect(reply.bindings[0].instanceId).toBe("message-composer.default");
-    expect(reply.promptRenderers.length).toBeGreaterThan(0);
+    expect(composer.bindings[0].instanceId).toBe("message-composer.default");
+    expect(composer.promptRenderers.length).toBeGreaterThan(0);
     expect(response.body).not.toContain('"settings":');
     expect(response.body).not.toContain(token);
   });

@@ -3,7 +3,7 @@
  * 主要职责：createMessagePromptCompiler 预编译模板并返回纯函数；compileMessagePrompt 提供一次性入口；
  * frozenTurnInputs 核对 turn 身份与目标范围，重建冻结消息；历史与记忆预算函数只限制辅助上下文。
  * 代码库关系：message-context 选择账本事实，Node 模板加载器提供 MessagePromptTemplates；编译结果携带变量溯源。
- * 输入输出与副作用：意图没有正文，正文从 turn.inputs 读取；每条输入保留引用上下文且不裁剪，不特殊处理末条。
+ * 输入输出与副作用：意图没有正文，正文从 turn.inputs 读取；每条输入保留引用上下文及成功回执、请求、assistant 的原始溯源且不裁剪，不特殊处理末条。
  * 缺少冻结 turn 或身份不一致即抛错；不写账本、不调用模型、不创建出站引用标记。
  */
 import type {
@@ -28,6 +28,12 @@ import {
   messageIntentRequestedInformationPayloadSchema,
   turnContextCompletedInformationKind,
 } from "../information-kinds.js";
+
+import {
+  beforeQuoteCutoff,
+  resolveMessageQuote,
+  sameMessageTarget,
+} from "./message-quote.js";
 
 export interface AgentIdentity {
   readonly name: string;
@@ -126,10 +132,17 @@ export function createMessagePromptCompiler(
     ];
     if (selfIds.length > 1)
       throw new Error("Frozen turn self accounts are inconsistent");
+    const asOf = String(
+      atoms.find(
+        (atom) => atom.informationId === payload.turn.contextInformationId,
+      )!.payload.asOf,
+    );
     const inputIds = new Set(inputs.map(({ informationId }) => informationId));
     const memoryInformationIds = new Set(payload.memoryInformationIds);
     const historyAtoms = atoms.filter(
       (atom) =>
+        sameMessageTarget(atom.payload.source, payload.target) &&
+        beforeQuoteCutoff(atom, asOf) &&
         !inputIds.has(atom.informationId) &&
         !memoryInformationIds.has(atom.informationId) &&
         (atom.kind === inboundTextInformationKind.kind ||
@@ -148,13 +161,21 @@ export function createMessagePromptCompiler(
     const quoteIds: InformationId[] = [];
     const messages = inputs.map((input) => {
       const quotedId = platformMessageIdOfQuote(input);
-      const quotedAtom =
+      const quote =
         quotedId === undefined
           ? undefined
-          : [...inputs, ...historyAtoms].find(
-              (atom) => platformMessageId(atom) === quotedId,
+          : resolveMessageQuote(
+              [
+                ...atoms.filter((atom) => !inputIds.has(atom.informationId)),
+                ...inputs,
+              ],
+              quotedId,
+              payload.target,
+              asOf,
             );
-      if (quotedAtom) quoteIds.push(quotedAtom.informationId);
+      const quotedAtom = quote?.message;
+      if (quote)
+        quoteIds.push(...quote.provenance.map((atom) => atom.informationId));
       return {
         ...messageContext(input, identity),
         quoted_message: quotedAtom
@@ -451,17 +472,6 @@ function destinationLabel(destination: MessageSource["destination"]): string {
 
 function displayName(source: MessageSource): string {
   return source.sender?.card ?? source.sender?.nickname ?? source.senderId;
-}
-
-function platformMessageId(
-  atom: DeepReadonly<InformationAtom>,
-): string | undefined {
-  if (
-    atom.kind !== inboundTextInformationKind.kind &&
-    atom.kind !== assistantTextInformationKind.kind
-  )
-    return undefined;
-  return (messagePayload(atom).source as MessageSource).platformMessageId;
 }
 
 function compareAtoms(

@@ -1,7 +1,7 @@
 /**
  * 功能概述：验证消息编写 Prompt 的整轮语义、冻结快照权威性和辅助上下文预算。
  * 超长历史和 Memory 用例同时检查 Unicode 完整性、预算上限及实际保留内容的 provenance。
- * 主要职责：保护全部输入同等渲染、逐条引用、模板溯源、缺失 turn 拒绝以及 target-only assistant 历史。
+ * 主要职责：保护全部输入同等渲染、逐条引用、模板溯源、缺失 turn 拒绝以及 target-only assistant 历史，防止 Memory 跨作用域引用泄漏。
  * 代码库关系：使用真实默认模板、information-kinds 与 message-prompt，不模拟编译结果。
  * 输入输出与副作用：仅冻结内存原子，无网络或模型调用。
  */
@@ -217,4 +217,32 @@ it("bounds Memory by Unicode code points and records only rendered memory proven
     ZH_CN_MESSAGE_PROMPT.memoryCharacterLimit + 32,
   );
   expect(memory.content).not.toContain("LATER_MEMORY_MUST_NOT_APPEAR");
+});
+
+it("does not quote a memory-authorized inbound message from another target with a colliding platform ID", () => {
+  const f = fixture();
+  const memory = atom("foreign-memory", inboundTextInformationKind.kind, {
+    text: "FOREIGN_MEMORY",
+    source: {
+      ...target,
+      adapterId: "foreign-adapter",
+      senderId: "foreign-user",
+      platformMessageId: "platform-0",
+    },
+  });
+  const intent = atom(f.intent.informationId, f.intent.kind, {
+    ...messageIntentRequestedInformationPayloadSchema.parse(f.intent.payload),
+    memoryInformationIds: [memory.informationId],
+  });
+  const result = compileMessagePrompt(
+    templates,
+    identity,
+    [intent, f.turn, ...f.messages, memory],
+    intent.informationId,
+  );
+  const turn = result.variables.find((entry) => entry.name === "turn")!;
+  expect(turn.content).not.toContain("FOREIGN_MEMORY");
+  expect(turn.content).toContain("FIRST_INPUT");
+  expect(turn.content).toContain("【入站引用参考】");
+  expect(turn.informationIds).not.toContain(memory.informationId);
 });

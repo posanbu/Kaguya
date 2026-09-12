@@ -324,7 +324,9 @@ describe("KaguyaRuntime", () => {
         modelId: "deterministic-heavy",
         promptVariableCount: 4,
       });
-      expect(requestSummary?.promptPreview).toContain("已决定在当前私聊中发送一条自然消息");
+      expect(requestSummary?.promptPreview).toContain(
+        "已决定在当前私聊中发送一条自然消息",
+      );
       expect(requestSummary?.references).toEqual(expect.any(Array));
       expect(requestDetail).toMatchObject({
         informationId: requestSummary?.informationId,

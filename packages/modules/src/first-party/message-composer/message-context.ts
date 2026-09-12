@@ -1,7 +1,7 @@
 /**
  * 功能概述：消息编写模块的受控账本选择器及 Prompt 预览入口，不参与 Heartflow 的发言决策。
  * 主要职责：turnMessageContextSelector 核对 intent→turn 引用并保留全部冻结输入；仅辅助历史受预算限制，
- * 已投递 assistant 才可进入历史，每条输入独立查询引用上下文。associationMessageContextSelector 校验关联终态因果。
+ * 已投递 assistant 才可进入历史，每条输入通过同目标成功回执链或入站 ID 查询引用上下文。associationMessageContextSelector 校验关联终态因果。
  * 代码库关系：index.ts 声明选择器与渲染器，message-prompt 使用冻结快照编译；Engine 按返回 ID 重载事实。
  * 输入输出与副作用：只读 ledger、返回去重 ID；缺少 turn、输入或记忆授权时抛错，不回退到复制的末条正文。
  */
@@ -36,6 +36,12 @@ import {
   type AgentIdentity,
   type MessagePromptTemplates,
 } from "./message-prompt.js";
+
+import {
+  beforeQuoteCutoff,
+  resolveMessageQuote,
+  sameMessageTarget,
+} from "./message-quote.js";
 
 export const currentAcceptedMessageSelector = defineInformationSelector({
   selectorId: "agent.message.current-intent",
@@ -99,7 +105,7 @@ export const turnMessageContextSelector = defineInformationSelector({
       await Promise.all(
         recent.map(async (atom) =>
           atom.kind !== assistantTextInformationKind.kind ||
-          (await assistantWasDelivered(atom, ledger))
+          (await assistantWasDelivered(atom, ledger, String(turn.payload.asOf)))
             ? atom
             : undefined,
         ),
@@ -112,27 +118,105 @@ export const turnMessageContextSelector = defineInformationSelector({
       const quoteId = inboundTextInformationKind.payloadSchema.parse(
         input.payload,
       ).source.replyTo?.platformMessageId;
-      if (
-        quoteId === undefined ||
-        inputs.some((atom) => platformMessageIdentifier(atom) === quoteId)
-      )
-        continue;
-      let quoted = visible.find(
-        (atom) => platformMessageIdentifier(atom) === quoteId,
-      );
-      if (!quoted) {
-        const found = await ledger.find({
+      if (quoteId === undefined) continue;
+      const [inbound, receipts] = await Promise.all([
+        ledger.find({
           kinds: [inboundTextInformationKind.kind],
-          occurredBefore: String(turn.payload.asOf),
+          occurredBefore: new Date(
+            Date.parse(String(turn.payload.asOf)) + 1,
+          ).toISOString(),
           payloadContains: {
             source: { ...intent.target, platformMessageId: quoteId },
           },
           order: "desc",
-          limit: 1,
-        });
-        quoted = found[0];
+          limit: 2,
+        }),
+        ledger.find({
+          kinds: ["core.delivery.delivered"],
+          occurredBefore: new Date(
+            Date.parse(String(turn.payload.asOf)) + 1,
+          ).toISOString(),
+          payloadContains: {
+            platform: intent.target.platform,
+            adapterId: intent.target.adapterId,
+            target: intent.target.destination,
+            ok: true,
+            platformMessageId: quoteId,
+          },
+          order: "desc",
+          limit: 2,
+        }),
+      ]);
+      // 保留有界冲突证据，避免 compiler 仅看到历史预算留下的一条候选而重新猜测。
+      const conflictEvidence = [
+        ...new Map(
+          [...inputs, ...inbound, ...receipts]
+            .filter(
+              (atom) =>
+                beforeQuoteCutoff(atom, String(turn.payload.asOf)) &&
+                (atom.kind === inboundTextInformationKind.kind
+                  ? sameMessageTarget(atom.payload.source, intent.target) &&
+                    inboundTextInformationKind.payloadSchema.safeParse(
+                      atom.payload,
+                    ).data?.source.platformMessageId === quoteId
+                  : atom.kind === "core.delivery.delivered" &&
+                    atom.payload.ok === true &&
+                    atom.payload.platformMessageId === quoteId &&
+                    sameMessageTarget(
+                      { ...atom.payload, destination: atom.payload.target },
+                      intent.target,
+                    )),
+            )
+            .map((atom) => [atom.informationId, atom]),
+        ).values(),
+      ];
+      if (conflictEvidence.length > 1) {
+        quotes.push(...conflictEvidence);
+        continue;
       }
-      if (quoted) quotes.push(quoted);
+      if (inbound.length >= 2 || receipts.length >= 2) continue;
+      const candidates = [...inputs, ...inbound, ...receipts];
+      for (const receipt of receipts) {
+        if (
+          receipt.kind !== "core.delivery.delivered" ||
+          receipt.payload.ok !== true ||
+          !sameMessageTarget(
+            { ...receipt.payload, destination: receipt.payload.target },
+            intent.target,
+          ) ||
+          !beforeQuoteCutoff(receipt, String(turn.payload.asOf))
+        )
+          continue;
+        const requests = await ledger.related({
+          from: [receipt.informationId],
+          relation: "core:status-of",
+          direction: "outgoing",
+          limit: 2,
+        });
+        if (requests.length !== 1) continue;
+        const request = requests[0]!;
+        candidates.push(request);
+        if (
+          request.kind !== "core.delivery.requested" ||
+          !sameMessageTarget(request.payload, intent.target) ||
+          !beforeQuoteCutoff(request, String(turn.payload.asOf))
+        )
+          continue;
+        const assistants = await ledger.related({
+          from: [request.informationId],
+          relation: "core:caused-by",
+          direction: "outgoing",
+          limit: 2,
+        });
+        if (assistants.length === 1) candidates.push(assistants[0]!);
+      }
+      const quote = resolveMessageQuote(
+        candidates,
+        quoteId,
+        intent.target,
+        String(turn.payload.asOf),
+      );
+      if (quote) quotes.push(...quote.provenance);
     }
     const history = fitHistoryBudget(
       visible.filter(
@@ -339,6 +423,7 @@ function candidateRank(atom: DeepReadonly<InformationAtom>): number {
 async function assistantWasDelivered(
   atom: DeepReadonly<InformationAtom>,
   ledger: InformationSelectorContext["ledger"],
+  asOf: string,
 ): Promise<boolean> {
   const requests = (
     await ledger.related({
@@ -347,7 +432,15 @@ async function assistantWasDelivered(
       direction: "incoming",
       limit: 20,
     })
-  ).filter(({ kind }) => kind === "core.delivery.requested");
+  ).filter(
+    (request) =>
+      request.kind === "core.delivery.requested" &&
+      beforeQuoteCutoff(request, asOf) &&
+      sameMessageTarget(
+        request.payload,
+        assistantTextInformationKind.payloadSchema.parse(atom.payload).source,
+      ),
+  );
   if (requests.length === 0) return false;
   const terminals = await ledger.related({
     from: requests.map(({ informationId }) => informationId),
@@ -355,12 +448,14 @@ async function assistantWasDelivered(
     direction: "incoming",
     limit: 20,
   });
-  return terminals.some(({ kind }) => kind === "core.delivery.delivered");
-}
-
-function platformMessageIdentifier(
-  atom: DeepReadonly<InformationAtom>,
-): string | undefined {
-  return (atom.payload as { source?: { platformMessageId?: string } }).source
-    ?.platformMessageId;
+  return terminals.some(
+    (receipt) =>
+      receipt.kind === "core.delivery.delivered" &&
+      receipt.payload.ok === true &&
+      beforeQuoteCutoff(receipt, asOf) &&
+      sameMessageTarget(
+        { ...receipt.payload, destination: receipt.payload.target },
+        assistantTextInformationKind.payloadSchema.parse(atom.payload).source,
+      ),
+  );
 }

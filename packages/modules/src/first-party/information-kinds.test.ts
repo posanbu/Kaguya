@@ -20,12 +20,23 @@ import {
 
 describe("persistent first-party information payloads", () => {
   it("requires explicit turn provenance on assistant and delivery facts", () => {
+    const assistant = {
+      text: "hello",
+      source: {
+        adapterId: "web.ui.main",
+        platform: "web",
+        destination: { kind: "web" },
+      },
+      originatingModuleInstanceId: "message-composer.default",
+    };
     expect(
       assistantTextInformationKind.payloadSchema.safeParse({
-        text: "hello",
-        source: source(),
-        originatingModuleInstanceId: "reply.default",
+        ...assistant,
+        turn: null,
       }).success,
+    ).toBe(true);
+    expect(
+      assistantTextInformationKind.payloadSchema.safeParse(assistant).success,
     ).toBe(false);
     expect(
       deliveryRequestedInformationKind.payloadSchema.safeParse({
