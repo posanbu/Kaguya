@@ -22,6 +22,47 @@ const prompt: CompiledPrompt = {
 const outputSchema = z.object({ answer: z.string() }).strict();
 
 describe("generic KaguyaLlmClient boundary", () => {
+  it("normalizes Profile generation controls into the provider call", async () => {
+    const model = new MockLanguageModelV3({
+      doGenerate: {
+        content: [{ type: "text", text: "ok" }],
+        finishReason: { unified: "stop", raw: undefined },
+        usage: {
+          inputTokens: {
+            total: 1,
+            noCache: undefined,
+            cacheRead: undefined,
+            cacheWrite: undefined,
+          },
+          outputTokens: { total: 1, text: 1, reasoning: undefined },
+        },
+        warnings: [],
+      },
+    });
+    const client = new KaguyaLlmClient({
+      model,
+      resolveGenerationOptions: () => ({
+        reasoning: "low",
+        recommendedDurationMs: 2_000,
+      }),
+    });
+
+    const generation = await client.generate({
+      modelId: "model",
+      prompt,
+      outputMode: "text",
+      outputSchema: z.string(),
+    });
+
+    expect(model.doGenerateCalls[0]).toMatchObject({
+      reasoning: "low",
+    });
+    expect(generation).toMatchObject({
+      recommendedDurationMs: 2_000,
+      exceededRecommendedDuration: false,
+    });
+  });
+
   it("passes the request signal", async () => {
     const signal = new AbortController().signal;
     const model = new MockLanguageModelV3({

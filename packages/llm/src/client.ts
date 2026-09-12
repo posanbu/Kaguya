@@ -30,10 +30,26 @@ export interface KaguyaLlmRequest<TOutput = unknown> {
   readonly signal?: AbortSignal;
 }
 
+/** Provider-neutral generation controls supplied by the selected Profile tier. */
+export interface KaguyaLlmGenerationOptions {
+  readonly reasoning?:
+    | "provider-default"
+    | "none"
+    | "minimal"
+    | "low"
+    | "medium"
+    | "high"
+    | "xhigh";
+  /** Soft latency target for scheduling and observability; never aborts a call. */
+  readonly recommendedDurationMs?: number;
+}
+
 export interface KaguyaLlmGeneration<T> {
   readonly output: T;
   readonly usage?: Record<string, number>;
   readonly durationMs: number;
+  readonly recommendedDurationMs?: number;
+  readonly exceededRecommendedDuration?: boolean;
 }
 
 export type KaguyaLlmErrorKind = LlmErrorKind;
@@ -67,6 +83,9 @@ export type KaguyaLlmModelResolver = (
 
 export type KaguyaLlmClientOptions = {
   readonly now?: () => Date;
+  readonly resolveGenerationOptions?: (
+    request: KaguyaLlmRequest<unknown>,
+  ) => KaguyaLlmGenerationOptions;
 } & (
   | {
       readonly model: LanguageModel;
@@ -81,11 +100,16 @@ export type KaguyaLlmClientOptions = {
 export class KaguyaLlmClient {
   readonly #resolveModel: KaguyaLlmModelResolver;
   readonly #now: () => Date;
+  readonly #resolveGenerationOptions: (
+    request: KaguyaLlmRequest<unknown>,
+  ) => KaguyaLlmGenerationOptions;
 
   constructor(options: KaguyaLlmClientOptions) {
     this.#resolveModel =
       options.resolveModel ?? (() => options.model as LanguageModel);
     this.#now = options.now ?? (() => new Date());
+    this.#resolveGenerationOptions =
+      options.resolveGenerationOptions ?? (() => ({}));
   }
 
   async generate<TOutput>(
@@ -93,6 +117,7 @@ export class KaguyaLlmClient {
   ): Promise<KaguyaLlmGeneration<TOutput>> {
     const startedAt = this.#now();
     try {
+      const generationOptions = this.#resolveGenerationOptions(request);
       const common = {
         model: this.#resolveModel(request),
         prompt: request.prompt.text,
@@ -100,6 +125,9 @@ export class KaguyaLlmClient {
           ? {}
           : { abortSignal: request.signal }),
         maxRetries: 0,
+        ...(generationOptions.reasoning === undefined
+          ? {}
+          : { reasoning: generationOptions.reasoning }),
       } as const;
       const result =
         request.outputMode === "text"
@@ -110,12 +138,23 @@ export class KaguyaLlmClient {
             });
       const completedAt = this.#now();
       const usage = normalizeUsage(result.usage);
+      const durationMs = Math.max(
+        0,
+        completedAt.getTime() - startedAt.getTime(),
+      );
       return {
         output: (request.outputMode === "text"
           ? (result.output as string).trim()
           : result.output) as TOutput,
         ...(usage === undefined ? {} : { usage }),
-        durationMs: Math.max(0, completedAt.getTime() - startedAt.getTime()),
+        durationMs,
+        ...(generationOptions.recommendedDurationMs === undefined
+          ? {}
+          : {
+              recommendedDurationMs: generationOptions.recommendedDurationMs,
+              exceededRecommendedDuration:
+                durationMs > generationOptions.recommendedDurationMs,
+            }),
       };
     } catch (error) {
       throw normalizeError(error);

@@ -145,6 +145,7 @@ describe("information atom log projection", () => {
   });
 
   it.each([
+    ["trace" as const],
     ["debug" as const],
     ["info" as const],
     ["warn" as const],

@@ -49,7 +49,6 @@ const result = await service.call({
   ...providerConfig,
   systemPrompt: "Answer concisely.",
   userPrompt: "Hello",
-  temperature: 0,
   maxRetries: 2,
   timeoutMs: 30_000,
 });
@@ -70,7 +69,6 @@ await closeLogger(rootLogger);
 | `model`             | 是   | 无                          | 本次调用使用的模型 ID                                                                     |
 | `systemPrompt`      | 是   | 无                          | system 消息；只用 trim 结果校验非空，发送时保留原始空白                                   |
 | `userPrompt`        | 是   | 无                          | user 消息；只用 trim 结果校验非空，发送时保留原始空白                                     |
-| `temperature`       | 否   | `0`                         | 取值范围 `0..2`                                                                           |
 | `maxRetries`        | 否   | `2`                         | 直接交给 `generateText` 的最大重试次数，取值范围 `0..10`                                  |
 | `timeoutMs`         | 否   | `30000`                     | 整次 SDK 调用的总超时，取值范围 `1..300000`                                               |
 | `apiKeyHeader`      | 否   | `Authorization`             | 非 Bearer 服务可设置为 `api-key` 等 header 名称；不能使用 `Content-Type` 或保留 header    |

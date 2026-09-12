@@ -14,8 +14,14 @@
  * 输入输出与副作用：运行时会创建 Fastify 实例并注册中间件；Profile 路由在管理认证
  * 通过后可能写入配置目录并返回显式安全投影的 Profile 正文；消息路由仅在 `webGateway`
  * 就绪时非阻塞转发正规化内容，日志不制造 trace ID，否则返回明确的
- * 503 runtime/core-unavailable 错误。
+ * 503 runtime/core-unavailable 错误。Inspection GET 路由复用 management Token，
+ * 由 inspection.ts 提供有界查询、统一秘密脱敏及 Runtime 未就绪时的 503。
  */
+import {
+  registerInspectionRoutes,
+  type InspectionService,
+} from "./inspection.js";
+
 import { randomUUID, timingSafeEqual } from "node:crypto";
 
 import cors from "@fastify/cors";
@@ -50,6 +56,10 @@ import { defaultNapCatSettings, toNapCatStatus } from "./napcat-config.js";
 import type { WebMessageGateway } from "./web-gateway.js";
 
 import { AdapterIngressUnavailableError } from "@kaguya/platform-adapters";
+import {
+  discoverOpenAiCompatibleModels,
+  OpenAiCompatibleModelDiscoveryError,
+} from "@kaguya/llm/openai-compatible";
 import type { AdapterHost } from "./adapter-host.js";
 import { adapterStatusResponseSchema } from "./adapter-status-schema.js";
 
@@ -114,12 +124,49 @@ const napCatSettingsRequestSchema = z
   })
   .strict();
 
+const modelDiscoveryRequestSchema = z
+  .object({
+    baseUrl: z.url(),
+    apiKey: z.string().trim().min(1),
+  })
+  .strict();
+
 const createProfileRequestJsonSchema = {
   type: "object",
   additionalProperties: false,
   required: ["name"],
   properties: {
     name: { type: "string", minLength: 1, maxLength: 100 },
+  },
+} as const;
+
+const modelDiscoveryRequestJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["baseUrl", "apiKey"],
+  properties: {
+    baseUrl: { type: "string", format: "uri" },
+    apiKey: { type: "string", minLength: 1 },
+  },
+} as const;
+
+const modelDiscoveryResponseJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["data"],
+  properties: {
+    data: {
+      type: "object",
+      additionalProperties: false,
+      required: ["models"],
+      properties: {
+        models: {
+          type: "array",
+          items: { type: "string", minLength: 1 },
+          maxItems: 10_000,
+        },
+      },
+    },
   },
 } as const;
 
@@ -157,6 +204,29 @@ const modelTierTargetJsonSchema = {
   properties: {
     providerId: { type: "string", minLength: 1 },
     modelId: { type: "string", minLength: 1 },
+    generation: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        reasoning: {
+          type: "string",
+          enum: [
+            "provider-default",
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+          ],
+        },
+      },
+    },
+    recommendedDurationMs: {
+      type: "integer",
+      minimum: 1,
+      maximum: 300_000,
+    },
   },
 } as const;
 
@@ -432,9 +502,11 @@ export interface CreateHttpApplicationOptions {
   config: ServerConfig;
   gatewayAuth?: GatewayAuthenticator;
   webGateway?: WebMessageGateway;
+  inspection?: InspectionService;
   adapterHost?: Pick<AdapterHost, "status">;
   configuration?: ConfigurationManagement;
   logger?: FastifyBaseLogger;
+  discoverModels?: typeof discoverOpenAiCompatibleModels;
 }
 
 export async function createHttpApplication(
@@ -493,6 +565,12 @@ export async function createHttpApplication(
       },
     },
   });
+
+  registerInspectionRoutes(
+    app,
+    options.inspection,
+    requireGatewayToken(options, "management"),
+  );
 
   app.get(
     "/healthz",
@@ -595,6 +673,38 @@ export async function createHttpApplication(
       return {
         data: { status: toNapCatStatus(settings), restartRequired: true },
       };
+    },
+  );
+
+  app.post(
+    "/api/v1/models/discover",
+    {
+      onRequest: requireGatewayToken(options, "management"),
+      schema: {
+        tags: ["Models"],
+        summary: "Discover models from an OpenAI-compatible provider",
+        security: [{ bearerAuth: [] }],
+        body: modelDiscoveryRequestJsonSchema,
+        response: {
+          200: modelDiscoveryResponseJsonSchema,
+          400: errorResponseJsonSchema,
+          401: errorResponseJsonSchema,
+          429: errorResponseJsonSchema,
+          502: errorResponseJsonSchema,
+          504: errorResponseJsonSchema,
+        },
+      },
+    },
+    async (request) => {
+      const body = modelDiscoveryRequestSchema.parse(request.body);
+      try {
+        const models = await (
+          options.discoverModels ?? discoverOpenAiCompatibleModels
+        )({ baseUrl: body.baseUrl, apiKey: body.apiKey });
+        return { data: { models } };
+      } catch (error) {
+        throw mapModelDiscoveryError(error);
+      }
     },
   );
 
@@ -931,6 +1041,42 @@ function coreUnavailableError(): ApiGatewayError {
     "Core message ingress is not configured",
     503,
   );
+}
+
+function mapModelDiscoveryError(error: unknown): ApiGatewayError {
+  if (!(error instanceof OpenAiCompatibleModelDiscoveryError)) {
+    return new ApiGatewayError(
+      "model_provider_failed",
+      "Unable to fetch models from provider",
+      502,
+    );
+  }
+  switch (error.kind) {
+    case "configuration":
+      return new ApiGatewayError(
+        "model_discovery_invalid",
+        "Model provider configuration is invalid",
+        400,
+      );
+    case "timeout":
+      return new ApiGatewayError(
+        "model_discovery_timeout",
+        "Model provider request timed out",
+        504,
+      );
+    case "provider":
+      return new ApiGatewayError(
+        "model_provider_failed",
+        "Unable to fetch models from provider",
+        502,
+      );
+    case "invalid-response":
+      return new ApiGatewayError(
+        "model_response_invalid",
+        "Model provider returned an invalid model list",
+        502,
+      );
+  }
 }
 
 function requireGatewayToken(

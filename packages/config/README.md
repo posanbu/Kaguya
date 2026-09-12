@@ -56,8 +56,18 @@ await configs.replaceProfile("default", {
   ai: {
     defaultProviderId: "local-provider",
     modelTiers: {
-      light: { providerId: "local-provider", modelId: "model-a" },
-      heavy: { providerId: "local-provider", modelId: "model-b" },
+      light: {
+        providerId: "local-provider",
+        modelId: "model-a",
+        generation: { reasoning: "minimal" },
+        recommendedDurationMs: 2_000,
+      },
+      heavy: {
+        providerId: "local-provider",
+        modelId: "model-b",
+        generation: { reasoning: "high" },
+        recommendedDurationMs: 5_000,
+      },
     },
     providers: [
       {

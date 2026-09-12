@@ -5,6 +5,7 @@
  * 检查健康，以及对 Profile 集合执行列出、创建、读取、完整替换、
  * 显式选择和删除；所有请求都要在本地先校验 token，再拼出精确的
  * method / URL / Bearer 头 / JSON body，避免把鉴权或隐藏字段交给浏览器猜测。
+ * getInspection 使用共享 DTO schema 校验只读响应，并复用认证、取消与 401 锁屏处理。
  * 主要职责：为 App 及后续 Profile 管理页面提供稳定的 typed API，
  * 同时保留旧的消息与健康检查路径；Profile 请求必须编码 path 参数，
  * Profile 状态要能返回安全的 Registry 元数据，但不能包含任何 secret。
@@ -44,6 +45,11 @@ export interface NapCatMutationResult {
 
 export interface SendMessageInput {
   readonly text: string;
+}
+
+export interface DiscoverModelsInput {
+  readonly baseUrl: string;
+  readonly apiKey: string;
 }
 
 export interface AcceptedMessage {
@@ -96,10 +102,14 @@ export interface UserConfigProfile {
       readonly light: {
         readonly providerId: string;
         readonly modelId: string;
+        readonly generation?: ModelGenerationOptions;
+        readonly recommendedDurationMs?: number;
       };
       readonly heavy: {
         readonly providerId: string;
         readonly modelId: string;
+        readonly generation?: ModelGenerationOptions;
+        readonly recommendedDurationMs?: number;
       };
     };
     readonly providers: readonly UserConfigProfileProvider[];
@@ -111,6 +121,17 @@ export interface UserConfigProfile {
   readonly review?: {
     readonly acknowledgedWarnings: readonly string[];
   };
+}
+
+export interface ModelGenerationOptions {
+  readonly reasoning?:
+    | "provider-default"
+    | "none"
+    | "minimal"
+    | "low"
+    | "medium"
+    | "high"
+    | "xhigh";
 }
 
 export interface ConfigurationIssue {
@@ -162,10 +183,14 @@ export interface ReplaceProfileInput {
       readonly light: {
         readonly providerId: string;
         readonly modelId: string;
+        readonly generation?: ModelGenerationOptions;
+        readonly recommendedDurationMs?: number;
       };
       readonly heavy: {
         readonly providerId: string;
         readonly modelId: string;
+        readonly generation?: ModelGenerationOptions;
+        readonly recommendedDurationMs?: number;
       };
     };
     readonly providers: readonly UserConfigProfileProvider[];
@@ -235,6 +260,34 @@ export async function saveNapCatSettings(
     );
   }
   return payload.data;
+}
+
+export async function discoverModels(
+  config: GatewayConfig,
+  input: DiscoverModelsInput,
+  fetchImplementation: typeof fetch = fetch,
+): Promise<readonly string[]> {
+  const response = await requestAuthenticatedJson(
+    config,
+    "/api/v1/models/discover",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    },
+    fetchImplementation,
+  );
+  const payload = await readJson(response);
+  if (!response.ok || !isModelDiscoveryResponse(payload)) {
+    const gatewayError = isErrorResponse(payload) ? payload.error : undefined;
+    throw new GatewayRequestError(
+      gatewayError?.message ?? `获取模型列表失败（HTTP ${response.status}）`,
+      gatewayError?.code ?? "model_discovery_failed",
+      response.status,
+      gatewayError?.requestId,
+    );
+  }
+  return payload.data.models;
 }
 
 export async function listProfiles(
@@ -737,7 +790,29 @@ function isModelTierTarget(value: unknown): boolean {
   return (
     isRecord(value) &&
     typeof value.providerId === "string" &&
-    typeof value.modelId === "string"
+    typeof value.modelId === "string" &&
+    (value.generation === undefined ||
+      isModelGenerationOptions(value.generation)) &&
+    (value.recommendedDurationMs === undefined ||
+      (typeof value.recommendedDurationMs === "number" &&
+        Number.isInteger(value.recommendedDurationMs) &&
+        value.recommendedDurationMs > 0))
+  );
+}
+
+function isModelGenerationOptions(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    (value.reasoning === undefined ||
+      [
+        "provider-default",
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+      ].includes(String(value.reasoning)))
   );
 }
 
@@ -809,6 +884,14 @@ function isErrorResponse(value: unknown): value is {
     typeof value.error.code === "string" &&
     typeof value.error.message === "string" &&
     typeof value.error.requestId === "string"
+  );
+}
+
+function isModelDiscoveryResponse(value: unknown): value is {
+  data: { models: readonly string[] };
+} {
+  return (
+    isRecord(value) && isRecord(value.data) && isStringArray(value.data.models)
   );
 }
 
@@ -894,4 +977,46 @@ function isAdapterHostStatus(
           ].includes(String(a.errorType))),
     )
   );
+}
+
+/** 开发者只读请求；调用方必须提供 wire schema，禁止未校验 JSON 进入视图。 */
+export async function getInspection<T>(
+  config: GatewayConfig,
+  path: string,
+  schema: { parse(value: unknown): T },
+  signal: AbortSignal,
+  fetchImplementation: typeof fetch = fetch,
+): Promise<T> {
+  const response = await requestAuthenticatedJson(
+    config,
+    `/api/v1/inspection/${path}`,
+    { method: "GET", signal, cache: "no-store" },
+    fetchImplementation,
+  );
+  const payload = await readJson(response);
+  if (!response.ok) {
+    const error = isErrorResponse(payload) ? payload.error : undefined;
+    throw new GatewayRequestError(
+      error?.code === "inspection_unavailable"
+        ? "Runtime 尚未就绪，暂时无法查看开发者数据"
+        : `读取开发者数据失败（HTTP ${response.status}）`,
+      error?.code ?? "inspection_failed",
+      response.status,
+    );
+  }
+  if (!isRecord(payload))
+    throw new GatewayRequestError(
+      "开发者数据格式无效",
+      "invalid_inspection",
+      response.status,
+    );
+  try {
+    return schema.parse(payload.data);
+  } catch {
+    throw new GatewayRequestError(
+      "开发者数据格式无效",
+      "invalid_inspection",
+      response.status,
+    );
+  }
 }

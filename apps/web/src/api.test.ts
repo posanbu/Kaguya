@@ -4,6 +4,7 @@ import {
   checkGatewayHealth,
   createProfile,
   deleteProfile,
+  discoverModels,
   GatewayRequestError,
   getProfile,
   listProfiles,
@@ -57,6 +58,39 @@ const replacement = {
 };
 
 describe("gateway API client", () => {
+  it("discovers models with current unsaved provider fields", async () => {
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        Response.json({ data: { models: ["model-a", "model-b"] } }),
+      );
+
+    await expect(
+      discoverModels(
+        config,
+        {
+          baseUrl: "https://provider.example/v1",
+          apiKey: "provider-secret",
+        },
+        request,
+      ),
+    ).resolves.toEqual(["model-a", "model-b"]);
+    expect(request).toHaveBeenCalledWith(
+      "/api/v1/models/discover",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          authorization: "Bearer test-gateway-token",
+          "content-type": "application/json",
+        }),
+      }),
+    );
+    expect(JSON.parse(String(request.mock.calls[0]?.[1]?.body))).toEqual({
+      baseUrl: "https://provider.example/v1",
+      apiKey: "provider-secret",
+    });
+  });
+
   it("authenticates registry readiness with the fragment token", async () => {
     const request = vi.fn<typeof fetch>().mockResolvedValue(
       Response.json({

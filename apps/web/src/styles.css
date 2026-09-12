@@ -230,6 +230,29 @@ button:disabled {
   gap: 14px;
 }
 
+.model-discovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.model-discovery-actions .secondary-button {
+  min-height: 44px;
+  flex: 0 0 auto;
+}
+
+.model-discovery-status {
+  color: #466153;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.model-discovery-status.error {
+  color: #ad2e2e;
+}
+
 .setup-check {
   display: flex;
   align-items: flex-start;
@@ -568,6 +591,7 @@ button:disabled {
 }
 
 .field input,
+.field select,
 .field textarea,
 .composer textarea {
   width: 100%;
@@ -581,11 +605,29 @@ button:disabled {
     box-shadow 120ms ease;
 }
 
-.field input {
+.field input,
+.field select {
   min-height: 44px;
   padding: 9px 11px;
   font-size: 14px;
   font-weight: 400;
+}
+
+.field select:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.field select {
+  appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, currentcolor 50%),
+    linear-gradient(135deg, currentcolor 50%, transparent 50%);
+  background-position:
+    calc(100% - 16px) 19px,
+    calc(100% - 11px) 19px;
+  background-repeat: no-repeat;
+  background-size: 5px 5px;
 }
 
 .field textarea {
@@ -607,6 +649,7 @@ button:disabled {
 }
 
 .field input:focus,
+.field select:focus,
 .field textarea:focus,
 .composer textarea:focus {
   border-color: #df6f28;
@@ -1264,11 +1307,20 @@ button:disabled {
   color: #c9b8ad;
 }
 
+:root[data-theme="dark"] .model-discovery-status {
+  color: #91e7d0;
+}
+
+:root[data-theme="dark"] .model-discovery-status.error {
+  color: #ffb4b4;
+}
+
 :root[data-theme="dark"] .readiness-list code {
   color: #9bdfe1;
 }
 
 :root[data-theme="dark"] .field input,
+:root[data-theme="dark"] .field select,
 :root[data-theme="dark"] .field textarea,
 :root[data-theme="dark"] .composer textarea,
 :root[data-theme="dark"] .profile-list-item,
@@ -1286,6 +1338,7 @@ button:disabled {
 }
 
 :root[data-theme="dark"] .field input:focus,
+:root[data-theme="dark"] .field select:focus,
 :root[data-theme="dark"] .field textarea:focus,
 :root[data-theme="dark"] .composer textarea:focus {
   border-color: var(--kaguya-cyan);

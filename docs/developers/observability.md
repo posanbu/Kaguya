@@ -13,11 +13,11 @@ Kaguya 将可观测性分成三个命名空间，避免把生命周期、临时�
 
 ## 按级别展开 DAG
 
-默认 `info` 显示 context、inbound、身份/turn/speech 终态、reply、association 终态、Model Task、assistant、delivery 与 one-shot 主链。实体、候选、query 和其他内部节点使用 `debug`。Pretty 输出把完整 ID 缩成 8 个字符，并把引用显示成 `relation:短ID`；JSON 始终保留完整 `informationId` 与完整 `references`。
+默认 `info` 显示业务终态和每轮 `turn.decision` 摘要；`debug` 显示排障所需的主要内部节点；完整 DAG 的机械节点使用 `trace`。Pretty 输出把完整 ID 缩成 8 个字符，并把引用显示成 `relation:短ID`；JSON 始终保留完整 `informationId` 与完整 `references`。
 
 ```dotenv
 KAGUYA_LOG_LEVEL=info
-KAGUYA_LOG_LEVELS=runtime:information=debug
+KAGUYA_LOG_LEVELS=runtime:information=trace
 ```
 
 这不是交互式折叠。开启 debug 后，每个带 detail policy 的 Atom 先输出原有摘要，再紧邻输出同一 `informationId` 的 `detail: true` 记录。
@@ -52,10 +52,10 @@ Host 先提交内存快照，再记录状态。`server.started` 包含 `runtimeR
 
 NapCat 的 starting、真实 WebSocket open 后的 connected、disconnected、stopped、disabled 为 info；connecting、reconnect scheduled、stopping 为 debug；连接失败及安全错误类别为 warn。attempt、nextRetryAt 等失效字段随状态转换清除。
 
-入站顺序为 `napcat.inbound.received → accepted/filtered → submitted/failed`、`web.inbound.received → accepted → submitted/failed`。filtered 不再提交；submitted 在收到 Runtime 回执时携带 `rootInformationId`。received 在 info 输出完整 `messageText` 与来源元数据。raw frame、连接 URL、token 和凭据不作为诊断字段输出；消息不可提交时不缓存或重放。
+每条入站消息只记录一个 Adapter 终态：`napcat.inbound.submitted`、`napcat.inbound.filtered` 或 `napcat.inbound.failed`，Web 同理。终态在 info 输出完整 `messageText` 与来源元数据；submitted 在收到 Runtime 回执时携带 `rootInformationId`。对应的 `core.message.inbound.text` Atom 仅在 `trace` 输出。raw frame、连接 URL、token 和凭据不作为诊断字段输出；消息不可提交时不缓存或重放。
 
 ::: warning 完整正文留存
 info 日志包含完整用户消息，可能含个人资料或用户主动发送的敏感内容。应限制日志访问并设置适当保留期限；删除数据库消息不会自动删除日志、备份或转发副本。debug 还可能展开现有 Runtime Prompt 详情。
 :::
 
-本地 selected `default` Profile 使用 debug / pretty；该修改不改变全局默认日志级别。
+本地 selected `default` Profile 使用 debug / pretty；完整 Information DAG 需要显式启用 `runtime:information=trace`。该修改不改变全局默认日志级别。

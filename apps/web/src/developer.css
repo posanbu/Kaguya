@@ -1,0 +1,223 @@
+/*
+ * 功能概述：开发者控制台的响应式布局与 Information DAG 样式，沿用 styles.css 主题变量。
+ * 主要职责：模块卡片、过滤器、列表/详情双栏、可滚动 SVG 图和可访问选中态。
+ * 代码库关系：仅由 DeveloperConsole.tsx 引入，类名前缀避免影响 Profile 与聊天页面。
+ * 输入输出与副作用：纯 CSS；窄屏折叠详情栏，长 ID/Prompt 换行并限制详情滚动高度。
+ */
+.developer-main {
+  max-width: 1500px;
+  margin: auto;
+  padding: 30px;
+}
+.developer-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+}
+.developer-heading h1 {
+  margin: 6px 0;
+}
+.developer-heading p {
+  color: var(--kaguya-muted);
+}
+.developer-tabs {
+  display: flex;
+  gap: 12px;
+  margin: 24px 0;
+  border-bottom: 1px solid var(--kaguya-line);
+}
+.developer-tabs a {
+  padding: 14px 10px;
+  color: var(--kaguya-muted);
+  text-decoration: none;
+}
+.developer-tabs a[aria-current="page"] {
+  color: var(--kaguya-coral-strong);
+  border-bottom: 3px solid var(--kaguya-coral);
+}
+.developer-search,
+.developer-filters label {
+  display: grid;
+  gap: 8px;
+}
+.developer-main input,
+.developer-main select {
+  padding: 10px;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 8px;
+  background: var(--kaguya-paper);
+  color: var(--kaguya-ink);
+  min-width: 0;
+  width: 100%;
+}
+.developer-search {
+  max-width: 800px;
+}
+.developer-filters {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.developer-filters label {
+  flex: 1 1 170px;
+}
+.module-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+  gap: 20px;
+}
+.developer-card {
+  border: 1px solid var(--kaguya-line);
+  border-radius: 12px;
+  padding: 22px;
+  background: var(--kaguya-paper);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.developer-card h2 {
+  margin-top: 0;
+}
+.developer-card h3 {
+  font-size: 14px;
+  margin-top: 24px;
+}
+.developer-card code {
+  font-size: 12px;
+  color: var(--kaguya-muted);
+}
+.developer-card dd {
+  margin: 5px 0 12px;
+}
+.developer-card dt {
+  font-weight: 600;
+}
+.developer-card pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.7;
+  background: var(--kaguya-paper-soft);
+  padding: 14px;
+  border-radius: 8px;
+  max-height: 600px;
+  overflow: auto;
+}
+.developer-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(300px, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+.atom-detail {
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+}
+.atom-detail > .secondary-button {
+  margin: 14px 0;
+}
+.atom-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 10px;
+}
+.atom-list button {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  text-align: left;
+  padding: 15px;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 9px;
+  background: var(--kaguya-paper);
+  color: var(--kaguya-ink);
+  overflow-wrap: anywhere;
+}
+.atom-list button[aria-pressed="true"] {
+  border-color: var(--kaguya-coral);
+  box-shadow: 0 0 0 1px var(--kaguya-coral);
+}
+.atom-list code,
+.atom-list time,
+.atom-list span {
+  font-size: 12px;
+  color: var(--kaguya-muted);
+}
+.reference-link {
+  display: block;
+  background: none;
+  border: 0;
+  color: var(--kaguya-coral-strong);
+  text-align: left;
+  overflow-wrap: anywhere;
+  padding: 8px 0;
+}
+.developer-pager {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  margin: 20px 0;
+}
+.flow-viewport {
+  overflow: auto;
+  max-height: 800px;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 12px;
+  background: var(--kaguya-paper-soft);
+}
+.flow-viewport svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.flow-edge {
+  stroke: var(--kaguya-muted);
+  stroke-width: 1;
+  fill: none;
+  opacity: 0.5;
+  color: var(--kaguya-muted);
+}
+.flow-node {
+  cursor: pointer;
+}
+.flow-node rect {
+  fill: var(--kaguya-paper);
+  stroke: var(--kaguya-line);
+}
+.flow-node[aria-pressed="true"] rect,
+.flow-node:hover rect {
+  stroke: var(--kaguya-coral);
+  stroke-width: 2;
+}
+.flow-node text {
+  fill: var(--kaguya-ink);
+  font-size: 13px;
+}
+.flow-node .flow-id {
+  fill: var(--kaguya-muted);
+  font-size: 11px;
+}
+@media (max-width: 900px) {
+  .developer-split {
+    grid-template-columns: 1fr;
+  }
+  .atom-detail {
+    position: static;
+    max-height: none;
+  }
+  .developer-main {
+    padding: 16px;
+  }
+  .developer-heading {
+    align-items: start;
+  }
+  .developer-tabs {
+    gap: 0;
+  }
+}

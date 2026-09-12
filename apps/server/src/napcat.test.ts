@@ -222,7 +222,7 @@ it("applies configured NapCat allowlists before submitting through ingress", asy
         targetKind: "private",
       }),
       expect.objectContaining({
-        event: "napcat.inbound.accepted",
+        event: "napcat.inbound.submitted",
         adapterId: "napcat.qq.main",
         platformMessageId: "12345",
         targetKind: "private",

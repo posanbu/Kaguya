@@ -250,7 +250,8 @@ describe("KaguyaRuntime", () => {
         service: "runtime-observability-test",
         level: "info",
         namespaceLevels: {
-          "runtime:information": "debug",
+          "runtime:information": "trace",
+          "runtime:modules": "debug",
           "runtime:module:agent.message-composer": "debug",
         },
         stream: {

@@ -1,6 +1,6 @@
 /**
  * 功能概述：聚合 Kaguya 跨包共享的稳定 wire schema，包括信息原子、平台投递内容、
- * Prompt 模板变量与 LLM 错误分类；旧事件信封和持久化记录身份不再属于公共契约。
+ * inspection.ts 导出开发者只读 DTO，供 Server 和 WebUI 共同校验；Prompt 模板变量与 LLM 错误分类；旧事件信封和持久化记录身份不再属于公共契约。
  * 主要职责：重新导出 `information.ts` 的不可变原子类型；本文件声明平台目标与消息
  * 内容 schema、可追溯 informationId 的 Prompt variable/compiled prompt schema、拒绝
  * Profile 身份字段的 information payload schema，以及低层 LLM 错误种类。
@@ -9,6 +9,8 @@
  * 输入输出与副作用：所有 schema 只做同步解析与校验，不产生 I/O；严格对象 schema
  * 会拒绝未声明字段，平台返回的 `platformMessageId` 仍作为合法外部身份保留。
  */
+export * from "./inspection.js";
+
 import { z } from "zod";
 
 import { informationIdSchema } from "./information.js";

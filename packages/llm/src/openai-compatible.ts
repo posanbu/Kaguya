@@ -8,6 +8,8 @@ import { APICallError, RetryError, generateText } from "ai";
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_RETRIES = 2;
+const DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS = 10_000;
+const MAX_MODEL_DISCOVERY_RESPONSE_BYTES = 1024 * 1024;
 const INPUT_PREVIEW_CHAR_LIMIT = 160;
 
 // These headers can change the HTTP connection or request framing. They are
@@ -39,12 +41,95 @@ export interface OpenAiCompatibleRequest {
   model: string;
   systemPrompt: string;
   userPrompt: string;
-  temperature?: number;
   maxRetries?: number;
   timeoutMs?: number;
   apiKeyHeader?: string;
   additionalHeaders?: Record<string, string>;
   signal?: AbortSignal;
+}
+
+export interface OpenAiCompatibleModelDiscoveryOptions {
+  readonly baseUrl: string;
+  readonly apiKey: string;
+  readonly fetch?: typeof fetch;
+  readonly timeoutMs?: number;
+}
+
+export type OpenAiCompatibleModelDiscoveryErrorKind =
+  "configuration" | "timeout" | "provider" | "invalid-response";
+
+export class OpenAiCompatibleModelDiscoveryError extends Error {
+  constructor(readonly kind: OpenAiCompatibleModelDiscoveryErrorKind) {
+    super(modelDiscoveryErrorMessage(kind));
+    this.name = "OpenAiCompatibleModelDiscoveryError";
+  }
+}
+
+export async function discoverOpenAiCompatibleModels(
+  options: OpenAiCompatibleModelDiscoveryOptions,
+): Promise<readonly string[]> {
+  let apiKey: string;
+  let endpoint: ReturnType<typeof resolveProviderEndpoint>;
+  let timeoutMs: number;
+  try {
+    apiKey = requireTrimmedText(options.apiKey, "apiKey");
+    if (hasHeaderControlCharacters(apiKey)) {
+      throw configurationError("apiKey contains invalid header characters");
+    }
+    endpoint = resolveProviderEndpoint(options.baseUrl);
+    timeoutMs = integerInRange(
+      options.timeoutMs ?? DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS,
+      "timeoutMs",
+      1,
+      300_000,
+    );
+  } catch {
+    throw new OpenAiCompatibleModelDiscoveryError("configuration");
+  }
+
+  const signal = AbortSignal.timeout(timeoutMs);
+  let response: Response;
+  try {
+    response = await (options.fetch ?? globalThis.fetch)(
+      appendRawQuery(`${endpoint.baseUrl}/models`, endpoint.rawQuery),
+      {
+        method: "GET",
+        redirect: "error",
+        headers: { authorization: `Bearer ${apiKey}` },
+        signal,
+      },
+    );
+  } catch {
+    throw new OpenAiCompatibleModelDiscoveryError(
+      signal.aborted ? "timeout" : "provider",
+    );
+  }
+  if (!response.ok) {
+    throw new OpenAiCompatibleModelDiscoveryError("provider");
+  }
+
+  try {
+    const payload = JSON.parse(await readLimitedResponseText(response));
+    if (!isRecord(payload) || !Array.isArray(payload.data)) {
+      throw new Error("invalid payload");
+    }
+    const models = payload.data.map((entry) => {
+      if (!isRecord(entry) || typeof entry.id !== "string") {
+        throw new Error("invalid model");
+      }
+      const id = entry.id.trim();
+      if (id.length === 0) throw new Error("invalid model id");
+      return id;
+    });
+    if (models.length > 10_000) throw new Error("too many models");
+    return [...new Set(models)].sort((left, right) =>
+      left.localeCompare(right),
+    );
+  } catch {
+    throw new OpenAiCompatibleModelDiscoveryError(
+      signal.aborted ? "timeout" : "invalid-response",
+    );
+  }
 }
 
 export interface OpenAiCompatibleUsage {
@@ -108,7 +193,6 @@ export interface OpenAiCompatibleInputLog {
   format: "openai-compatible.chat";
   modality: "text" | "multimodal";
   messages: readonly OpenAiCompatibleInputMessageLog[];
-  temperature: number;
   maxRetries: number;
   timeoutMs: number;
 }
@@ -208,7 +292,6 @@ export class OpenAiCompatibleLlmService {
         model: provider.chatModel(configuration.model),
         system: configuration.systemPrompt,
         prompt: configuration.userPrompt,
-        temperature: configuration.temperature,
         maxRetries: configuration.maxRetries,
         timeout: configuration.timeoutMs,
         ...(request.signal === undefined
@@ -273,7 +356,6 @@ interface NormalizedRequest {
   model: string;
   systemPrompt: string;
   userPrompt: string;
-  temperature: number;
   maxRetries: number;
   timeoutMs: number;
 }
@@ -288,7 +370,6 @@ function normalizeRequest(request: OpenAiCompatibleRequest): NormalizedRequest {
   const systemPrompt = requirePromptText(input.systemPrompt, "systemPrompt");
   const userPrompt = requirePromptText(input.userPrompt, "userPrompt");
   const endpoint = resolveProviderEndpoint(input.baseUrl);
-  const temperature = input.temperature ?? 0;
   const maxRetries = integerInRange(
     input.maxRetries ?? DEFAULT_MAX_RETRIES,
     "maxRetries",
@@ -302,9 +383,6 @@ function normalizeRequest(request: OpenAiCompatibleRequest): NormalizedRequest {
     300_000,
   );
 
-  if (!Number.isFinite(temperature) || temperature < 0 || temperature > 2) {
-    throw configurationError("temperature must be between 0 and 2");
-  }
   if (hasHeaderControlCharacters(apiKey)) {
     throw configurationError("apiKey contains invalid header characters");
   }
@@ -334,7 +412,6 @@ function normalizeRequest(request: OpenAiCompatibleRequest): NormalizedRequest {
     model,
     systemPrompt,
     userPrompt,
-    temperature,
     maxRetries,
     timeoutMs,
     ...(authentication.providerApiKey === undefined
@@ -355,7 +432,6 @@ function inputLog(configuration: NormalizedRequest): OpenAiCompatibleInputLog {
       ? "multimodal"
       : "text",
     messages,
-    temperature: configuration.temperature,
     maxRetries: configuration.maxRetries,
     timeoutMs: configuration.timeoutMs,
   };
@@ -677,6 +753,53 @@ function isDisallowedCustomHeaderName(value: string): boolean {
 
 function hasHeaderControlCharacters(value: string): boolean {
   return /[\u0000-\u001f\u007f]/u.test(value);
+}
+
+async function readLimitedResponseText(response: Response): Promise<string> {
+  const contentLength = response.headers.get("content-length");
+  if (
+    contentLength !== null &&
+    Number(contentLength) > MAX_MODEL_DISCOVERY_RESPONSE_BYTES
+  ) {
+    throw new Error("response too large");
+  }
+  if (response.body === null) throw new Error("response body missing");
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  while (true) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    totalBytes += chunk.value.byteLength;
+    if (totalBytes > MAX_MODEL_DISCOVERY_RESPONSE_BYTES) {
+      await reader.cancel();
+      throw new Error("response too large");
+    }
+    chunks.push(chunk.value);
+  }
+  const joined = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    joined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder("utf-8", { fatal: true }).decode(joined);
+}
+
+function modelDiscoveryErrorMessage(
+  kind: OpenAiCompatibleModelDiscoveryErrorKind,
+): string {
+  switch (kind) {
+    case "configuration":
+      return "Model discovery configuration is invalid";
+    case "timeout":
+      return "Model discovery timed out";
+    case "provider":
+      return "Model provider request failed";
+    case "invalid-response":
+      return "Model provider returned an invalid model list";
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

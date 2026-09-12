@@ -4,7 +4,9 @@ import type { KaguyaLogger } from "@kaguya/logger";
 
 import {
   createPinoLlmLogger,
+  discoverOpenAiCompatibleModels,
   OpenAiCompatibleError,
+  OpenAiCompatibleModelDiscoveryError,
   OpenAiCompatibleLlmService,
   type OpenAiCompatibleRequest,
   type OpenAiCompatibleLogEvent,
@@ -83,7 +85,6 @@ describe("OpenAiCompatibleLlmService", () => {
         { role: "system", content: "You are helpful." },
         { role: "user", content: "Hello" },
       ],
-      temperature: 0,
     });
   });
 
@@ -401,7 +402,6 @@ describe("OpenAiCompatibleLlmService", () => {
       input: {
         format: "openai-compatible.chat",
         modality: "text",
-        temperature: 0,
         maxRetries: 2,
         timeoutMs: 30_000,
         messages: [
@@ -582,5 +582,92 @@ describe("OpenAiCompatibleLlmService", () => {
       ).rejects.toMatchObject({ kind: "configuration", attempts: 0 });
     }
     expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("discoverOpenAiCompatibleModels", () => {
+  it("uses the normalized models endpoint and returns sorted unique ids", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(() =>
+      Promise.resolve(
+        jsonResponse({
+          object: "list",
+          data: [{ id: "model-z" }, { id: "model-a" }, { id: "model-z" }],
+        }),
+      ),
+    );
+
+    await expect(
+      discoverOpenAiCompatibleModels({
+        baseUrl: "https://gateway.example/v1/chat/completions?tenant=test",
+        apiKey: "secret-key",
+        fetch,
+      }),
+    ).resolves.toEqual(["model-a", "model-z"]);
+    expect(fetch).toHaveBeenCalledWith(
+      "https://gateway.example/v1/models?tenant=test",
+      expect.objectContaining({ method: "GET", redirect: "error" }),
+    );
+    expect(requestHeaders(fetch).get("authorization")).toBe(
+      "Bearer secret-key",
+    );
+  });
+
+  it("accepts an empty standard model list", async () => {
+    await expect(
+      discoverOpenAiCompatibleModels({
+        baseUrl: "https://gateway.example/v1",
+        apiKey: "secret-key",
+        fetch: vi.fn(() => Promise.resolve(jsonResponse({ data: [] }))),
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it.each([
+    ["malformed JSON", new Response("not-json")],
+    ["malformed payload", jsonResponse({ models: [{ id: "model" }] })],
+    [
+      "oversized payload",
+      new Response("{}", { headers: { "content-length": "1048577" } }),
+    ],
+  ])("rejects an invalid %s response", async (_name, response) => {
+    await expect(
+      discoverOpenAiCompatibleModels({
+        baseUrl: "https://gateway.example/v1",
+        apiKey: "secret-key",
+        fetch: vi.fn(() => Promise.resolve(response)),
+      }),
+    ).rejects.toMatchObject({ kind: "invalid-response" });
+  });
+
+  it("classifies timeout and provider failures without retaining secrets", async () => {
+    const timedOutFetch = vi.fn<typeof globalThis.fetch>(
+      (_input, init) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(init.signal?.reason),
+          );
+        }),
+    );
+    await expect(
+      discoverOpenAiCompatibleModels({
+        baseUrl: "https://private.example/v1",
+        apiKey: "private-key",
+        timeoutMs: 1,
+        fetch: timedOutFetch,
+      }),
+    ).rejects.toMatchObject({ kind: "timeout" });
+
+    const error = await discoverOpenAiCompatibleModels({
+      baseUrl: "https://private.example/v1",
+      apiKey: "private-key",
+      fetch: vi.fn(() =>
+        Promise.resolve(jsonResponse({ error: "secret" }, { status: 401 })),
+      ),
+    }).catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(OpenAiCompatibleModelDiscoveryError);
+    expect(error).toMatchObject({ kind: "provider" });
+    expect(JSON.stringify(error)).not.toMatch(
+      /private-key|private\.example|secret/u,
+    );
   });
 });

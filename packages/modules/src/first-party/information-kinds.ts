@@ -151,7 +151,7 @@ export const inboundTextInformationKind = defineInformationKind({
   },
   log: {
     enabled: true,
-    level: "info",
+    level: "trace",
     project: ({ payload }) => {
       const input = payload as any;
       return {
@@ -742,7 +742,7 @@ export const turnClaimedInformationKind = defineInformationKind({
   },
   log: {
     enabled: true,
-    level: "info",
+    level: "trace",
     project: ({ payload }) => {
       const input = payload as any;
       return {
@@ -781,7 +781,7 @@ export const turnStartedInformationKind = defineInformationKind({
   },
   log: {
     enabled: true,
-    level: "info",
+    level: "trace",
     project: ({ payload }) => ({
       event: "turn.started",
       scopeKey: payload.scopeKey,
@@ -882,7 +882,7 @@ export const turnWaitingInformationKind = defineInformationKind({
   references: turnTerminalReferences,
   log: {
     enabled: true,
-    level: "info",
+    level: "trace",
     project: ({ payload }) => ({
       event: "turn.lifecycle",
       status: "waiting",
@@ -1000,7 +1000,7 @@ export const turnContextCompletedInformationKind = defineInformationKind({
   },
   log: {
     enabled: true,
-    level: "info",
+    level: "trace",
     project: ({ payload }) => {
       const input = payload as any;
       return {
@@ -1084,11 +1084,15 @@ export const attentionArousalCompletedInformationKind = defineInformationKind({
     project: ({ payload }) => {
       const input = payload as any;
       return {
-        event: "attention.arousal.completed",
+        event: "turn.decision",
         outcome: input.outcome,
         score: input.score,
         reasonCodes: input.reasonCodes,
         missingInputs: input.missingInputs,
+        attempt: input.attempt,
+        totalWaitBudget: input.totalWaitBudget,
+        ...(input.dueAt === undefined ? {} : { dueAt: input.dueAt }),
+        ...(input.delayMs === undefined ? {} : { delayMs: input.delayMs }),
       };
     },
   },
@@ -1130,7 +1134,7 @@ export const waitRequestedInformationKind = defineInformationKind({
   },
   log: {
     enabled: true,
-    level: "info",
+    level: "trace",
     project: ({ payload }) => {
       const input = payload as any;
       return {

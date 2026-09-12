@@ -1,13 +1,13 @@
 /**
  * 功能概述：Server composition root，组合配置、数据库、Runtime、HTTP/Web 与 NapCat 生命周期。
- * 主要职责：startKaguyaServer 先验证选定 Profile 和模块配置，再连接数据库并启动宿主；
- * StartedKaguyaServer 提供资源句柄与关闭入口，formatAccessUrl 构造访问地址，
- * createRuntimeModelSelectionResolver 根据 Profile 批准的 tier 解析 provider/model 复合身份。
- * 代码库关系：createMessageCatalog/createMessageComposition 装配消息合成模块；AdapterHost
- * 独立管理入站与出站适配器，数据库 kind 检查复用 Catalog 的公开定义。
- * 输入输出与副作用：启动连接数据库、监听 HTTP 并打开适配器；失败时关闭已创建资源。
- * InformationDatabaseConnectionError 和 InformationRuntimeStartupError 固定错误分类，避免泄露底层凭据。
+ * 主要职责：startKaguyaServer 验证 Profile 和模块配置后启动宿主；close 逆序释放资源；
+ * createRuntimeModelSelectionResolver 根据 Profile 批准的 tier 解析 provider/model 及生成参数。
+ * 代码库关系：createMessageCatalog/createMessageComposition 装配消息编写模块；AdapterHost
+ * 管理适配器；inspectModules 和账本只读端口交给 inspection.ts，配置仅用于秘密脱敏闭包。
+ * 输入输出与副作用：连接数据库、监听 HTTP 并启动适配器，失败时释放已创建资源并固定错误分类。
+ * Inspection 仅在 Runtime 可用时注入，不把 settings、凭据或数据库对象放入 HTTP 响应。
  */
+import { createInspectionService } from "./inspection.js";
 import {
   createMessageCatalog,
   createMessageComposition,
@@ -16,6 +16,7 @@ import {
 import { pathToFileURL } from "node:url";
 
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import type { KaguyaLlmGenerationOptions } from "@kaguya/llm/client";
 import {
   ConfigError,
   ConfigIncompleteError,
@@ -347,6 +348,19 @@ export async function startKaguyaServer(
     app = await inStartupPhase("http_application", () =>
       createHttpApplication({
         config: effectiveConfig,
+        ...(runtime && database
+          ? {
+              inspection: createInspectionService({
+                ledger: database.information,
+                modules: () => runtime!.inspectModules(),
+                secrets: {
+                  config: effectiveConfig,
+                  profile: selectedProfile,
+                  moduleConfigs,
+                },
+              }),
+            }
+          : {}),
         gatewayAuth,
         webGateway: adapterHost.webGateway,
         adapterHost,
@@ -477,6 +491,10 @@ export function createRuntimeModelSelectionResolver(
       providerId: provider.id,
       modelId: target.modelId,
       model: client.chatModel(target.modelId),
+      ...(target.generation === undefined &&
+      target.recommendedDurationMs === undefined
+        ? {}
+        : { generationOptions: generationOptionsForTier(target) }),
     };
   };
 
@@ -484,6 +502,19 @@ export function createRuntimeModelSelectionResolver(
   resolver({ modelTier: "light" });
   resolver({ modelTier: "heavy" });
   return resolver;
+}
+
+function generationOptionsForTier(
+  target: NonNullable<UserConfigProfile["ai"]["modelTiers"]>["light"],
+): KaguyaLlmGenerationOptions {
+  return {
+    ...(target.generation?.reasoning === undefined
+      ? {}
+      : { reasoning: target.generation.reasoning }),
+    ...(target.recommendedDurationMs === undefined
+      ? {}
+      : { recommendedDurationMs: target.recommendedDurationMs }),
+  };
 }
 
 export class InformationDatabaseConnectionError extends Error {

@@ -15,7 +15,7 @@ import {
   z,
 } from "@kaguya/schema";
 
-export type InformationLogLevel = "debug" | "info" | "warn" | "error";
+export type InformationLogLevel = "trace" | "debug" | "info" | "warn" | "error";
 
 export type InformationLogProjection = JsonObject;
 
@@ -569,12 +569,13 @@ function cloneAndValidateLogPolicy<P extends JsonObject>(
   }
 
   if (
+    log.level !== "trace" &&
     log.level !== "debug" &&
     log.level !== "info" &&
     log.level !== "warn" &&
     log.level !== "error"
   ) {
-    throw new Error("log level must be one of debug, info, warn, error");
+    throw new Error("log level must be one of trace, debug, info, warn, error");
   }
   if (typeof log.project !== "function") {
     throw new Error("log project must be a function");

@@ -308,6 +308,9 @@ describe("ModuleHost", () => {
       "module.diagnostic.rejected",
       "module.started",
     ]);
+    expect(
+      observations.find(({ event }) => event === "module.starting"),
+    ).toMatchObject({ level: "debug" });
     expect(observations[0]!.fields?.order).toEqual([
       { definitionId: "acme.observed", instanceId: "observed.default" },
     ]);
