@@ -179,7 +179,7 @@ export const attentionArousalModule = defineInformationModule({
             Date.parse(input.asOf) + settings.deferMs,
           ).toISOString();
           await context.commitTerminal(
-            "agent.turn.decision",
+            "agent.turn.attention",
             input.claimInformationId,
             attentionArousalCompletedInformationKind,
             {

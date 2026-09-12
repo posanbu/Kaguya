@@ -1,4 +1,5 @@
 /**
+ * Message Intent 必须由最终 speech decision 派生，门控不能直接触发回复。
  * 功能概述：校验第一方持久化消息协议的严格边界，防止旧 reply 数据混入消息意图。
  * 主要职责：覆盖 intent 必填字段及嵌套对象、独立 inbound 来源、assistant 目标元数据、
  * association 路由与因果引用，以及 turn/wake 策略必填约束。
@@ -212,7 +213,7 @@ describe("message intent protocol", () => {
     expect(messageIntentRequestedInformationKind.references).toMatchObject({
       "core:caused-by": {
         required: true,
-        targetKinds: ["agent.attention.arousal.completed"],
+        targetKinds: ["agent.speech.decision"],
       },
       "core:uses-context": {
         required: true,

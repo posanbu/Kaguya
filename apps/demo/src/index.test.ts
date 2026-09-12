@@ -1,4 +1,5 @@
 /**
+ * 验证离线 Demo 的完整 DAG 统计；独立 Planner 与 Composer 各执行一个模型任务。
  * 功能概述：验证 demo 以 PostgreSQL information ledger 运行确定性入站 DAG，
  * 输出根 `informationId` 和每个衍生 kind 的计数，不再使用 SQLite path 或 dispatch。
  * 主要职责：覆盖 selected Profile runtime 读取与旧数据库环境变量忽略，并用真实内存 PGlite
@@ -89,6 +90,7 @@ describe("demo entry point", () => {
       "agent.message.intent.requested: 1",
       "agent.person.context.completed: 1",
       "agent.person.resolution: 1",
+      "agent.speech.decision: 1",
       "agent.turn.candidate: 1",
       "agent.turn.claimed: 1",
       "agent.turn.completed: 1",
@@ -98,8 +100,8 @@ describe("demo entry point", () => {
       "core.delivery.requested: 1",
       "core.message.assistant.text: 1",
       "core.message.inbound.text: 1",
-      "core.model.task.completed: 1",
-      "core.model.task.requested: 1",
+      "core.model.task.completed: 2",
+      "core.model.task.requested: 2",
       "core.runtime.context: 1",
     ]);
   }, 20_000);

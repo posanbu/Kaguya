@@ -62,7 +62,10 @@ core.runtime.context
   -> agent.heartbeat.scheduled -> agent.turn.candidate
   -> agent.turn.claimed -> agent.turn.context.completed
   -> agent.attention.arousal.completed (attend)
-  -> agent.message.intent.requested
+  -> core.model.task.requested (core.speech.plan, light, object)
+  -> core.model.task.completed | failed | cancelled
+  -> agent.speech.decision (speak | wait | silent)
+  -> agent.message.intent.requested (仅 speak)
   -> core.model.task.requested
   -> core.model.task.completed
   -> core.message.assistant.text
@@ -73,7 +76,7 @@ core.model.task.requested
   -> core.model.task.failed（终止该分支）
 ```
 
-Heartflow 将 eligible turn 确定性分派为当前会话 Message Intent；Composer 使用完整冻结 turn 生成普通 text。入站引用仅用于理解上下文，不会成为默认出站 reply。消费者抛出或 reject 时，输入原子不会回滚，其他消费者仍会独立完成，Core 会追加 `consumer.failed` 作为失败事实。消费者不会因此自动重试。
+必要性门控通过后，light tier Planner 独立判断 speak/wait/silent；Heartflow 仅将 speak turn 分派为当前会话 Message Intent；Composer 使用完整冻结 turn 生成普通 text。入站引用仅用于理解上下文，不会成为默认出站 reply。消费者抛出或 reject 时，输入原子不会回滚，其他消费者仍会独立完成，Core 会追加 `consumer.failed` 作为失败事实。消费者不会因此自动重试。
 
 账本把 payload 保存为 PostgreSQL `JSONB`，并用外键保护原子与引用关系。原子、引用及其日志投影 outbox 会在同一事务中写入；outbox 在提交后再交给日志 sink 投影，因此日志失败不会改变已经提交的运行事实。
 

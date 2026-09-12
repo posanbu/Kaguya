@@ -3,8 +3,8 @@
  * per-chat 状态，也不依赖订阅安装顺序。
  * createHeartflowModule 注入投递/模型失败 kind，返回声明订阅的模块；settings schema
  * 校验频率与安全策略。state/memory selector 从账本读取因果链及记忆，冻结完整输入。
- * dispatchDecision 将 attend 按 claim 注册一次消息意图，最后一个冻结输入仅决定目标地址；
- * turn 标识及引用保留完整冻结上下文，正文生成交给 composer。defer/ignore 与失败路径
+ * dispatchDecision 仅消费 Planner 最终决定，将 speak 按 claim 注册一次消息意图，最后一个冻结输入仅决定目标地址；
+ * turn 标识及引用保留完整冻结上下文，正文生成交给 composer。wait/silent 与失败路径
  * 写入等待或终态；registerOnce/commitTerminal 保证重放幂等，不执行模型或平台 I/O。
  */
 import { createCognitionMemorySelector } from "../memory-cognition/index.js";
@@ -31,7 +31,7 @@ import {
   inboundTextInformationKind,
   personContextCompletedInformationKind,
   messageIntentRequestedInformationKind,
-  attentionArousalCompletedInformationKind,
+  speechDecisionInformationKind,
   turnCandidateInformationKind,
   turnClaimedInformationKind,
   turnCompletedInformationKind,
@@ -43,7 +43,7 @@ import {
   turnSupersededInformationKind,
   turnWaitingInformationKind,
   waitRequestedInformationKind,
-  type AttentionArousalPayload,
+  type SpeechDecisionPayload,
 } from "../information-kinds.js";
 
 type AnyKind = InformationKindDefinition<string, any>;
@@ -128,9 +128,7 @@ export const heartflowStateSelector = defineInformationSelector({
           "outgoing",
         ),
       ).filter(({ kind }) => kind === turnCandidateInformationKind.kind);
-    } else if (
-      sourceAtom.kind === attentionArousalCompletedInformationKind.kind
-    ) {
+    } else if (sourceAtom.kind === speechDecisionInformationKind.kind) {
       remember(
         await related(
           ledger,
@@ -314,7 +312,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
         turnCandidateInformationKind,
         personContextCompletedInformationKind,
         turnClaimedInformationKind,
-        attentionArousalCompletedInformationKind,
+        speechDecisionInformationKind,
         turnCompletedInformationKind,
         turnWaitingInformationKind,
         turnSilentInformationKind,
@@ -373,7 +371,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
           ),
         ),
         onInformation(
-          attentionArousalCompletedInformationKind,
+          speechDecisionInformationKind,
           {
             subscriptionId: "agent.heartflow.dispatch.decision",
             delivery: "durable",
@@ -411,6 +409,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
               delivery: "durable",
             },
             async (terminal, context) => {
+              if (terminal.payload.taskId === "core.speech.plan") return;
               const state = await context.select(heartflowStateSelector);
               await failOpenTurns(
                 terminal,
@@ -797,7 +796,7 @@ async function dispatchDecision(
   atoms: readonly DeepReadonly<InformationAtom>[],
   context: InformationModuleHandlerContext,
 ) {
-  const payload = decision.payload as AttentionArousalPayload;
+  const payload = decision.payload as SpeechDecisionPayload;
   const candidate = atoms.find(
     (atom) => atom.informationId === payload.candidateInformationId,
   );
@@ -821,10 +820,10 @@ async function dispatchDecision(
     claimInformationId: claim.informationId,
     scopeKey: candidatePayload.scopeKey,
   };
-  if (payload.outcome === "attend") {
+  if (payload.outcome === "speak") {
     const targetInput = (turnContext.payload as any).inputs.at(-1);
     if (targetInput === undefined)
-      throw new Error("Attend decision requires a target turn input");
+      throw new Error("Speak decision requires a target turn input");
     await context.registerOnce(
       "agent.heartflow.message-intent",
       claim.informationId,
@@ -862,7 +861,7 @@ async function dispatchDecision(
     );
     return;
   }
-  if (payload.outcome === "defer") {
+  if (payload.outcome === "wait") {
     if (payload.dueAt === undefined || payload.delayMs === undefined)
       throw new Error("Wait decision requires dueAt and delayMs");
     const sourceInformationIds = (turnContext.payload as any).inputs.map(
@@ -876,7 +875,7 @@ async function dispatchDecision(
         payload: {
           dueAt: payload.dueAt,
           delayMs: payload.delayMs,
-          reason: "score-below-speak-threshold",
+          reason: payload.reasonCodes[0] ?? "planner-wait",
           attempt: payload.attempt + 1,
           totalWaitBudget: payload.totalWaitBudget,
           wakePolicy: payload.wakePolicy ?? "recheckAt",

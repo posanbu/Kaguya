@@ -10,7 +10,7 @@
 
 ## 数据流与边界
 
-Heartflow 冻结直接性、内容、消息压力、空窗和近期存在感；本模块只对该快照执行硬门禁与确定性评分。`attend` 当前由 Heartflow 临时桥接到回复链。
+Heartflow 冻结直接性、内容、消息压力、空窗和近期存在感；本模块只对该快照执行硬门禁与确定性评分。`attend` 交给独立 Speech Planner 判断；`defer/ignore` 不调用模型，转换为最终 wait/silent。
 
 ## Settings
 

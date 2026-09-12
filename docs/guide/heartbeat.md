@@ -25,8 +25,11 @@ inbound / agent.wait.requested
   -> agent.turn.started
   -> agent.turn.context.completed
   -> agent.attention.arousal.completed
-  -> reply | wait | silent
+  -> Speech Planner（仅 attend 调用模型）
+  -> agent.speech.decision（speak | wait | silent）
   -> agent.turn.completed | waiting | silent | failed | superseded
 ```
 
 所有终态均通过幂等 terminal API 写入；重复投递只会得到已有终态，不会产生第二个 candidate。新消息在旧 claim 决策前到达时，Heartflow 会终结旧 decision gate 与旧 turn，并把旧 turn 已冻结的输入带入下一代 context。
+
+Planner 的 wait 为 5–120 秒，从持久化模型完成时间起算；慢模型调用不会提前耗尽等待时间，重放也不会延长 deadline。门控和 Planner 共用三次总等待预算，新消息与到期均重新门控和规划。Planner 失败或取消按 silent 正常闭合，不触发回复模型。

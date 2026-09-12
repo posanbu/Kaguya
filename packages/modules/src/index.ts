@@ -1,4 +1,5 @@
 /**
+ * 额外导出独立 speech Planner 工厂、输出 schema 与最终 decision kind，供宿主和集成测试装配。
  * 功能概述：汇总 modules 包的信息原子 kind、Heartflow、Message Composer与 person-fact Model Task 公共契约。
  * 额外导出后台原始消息写回模块与 request/terminal kind，供 composition 显式装配。
  * 主要职责：导出 `createHeartflowModule`、`createMessageComposerModule`、
@@ -150,3 +151,10 @@ export {
   memoryCognitionRequestedInformationKind,
   memoryCognitionCompletedInformationKind,
 } from "./first-party/memory-cognition/index.js";
+
+export {
+  createSpeechModule,
+  speechPlannerOutputSchema,
+  speechSettingsSchema,
+} from "./first-party/speech/index.js";
+export { speechDecisionInformationKind } from "./first-party/information-kinds.js";

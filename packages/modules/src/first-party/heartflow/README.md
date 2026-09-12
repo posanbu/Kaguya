@@ -6,11 +6,11 @@
 
 ## 消费和产生
 
-消费 candidate、身份终态、注意决策及宿主终态，产生 claim、冻结 context、分派请求和 turn terminal。
+消费 candidate、身份终态、Planner 最终决定及宿主终态，产生 claim、冻结 context、分派请求和 turn terminal。
 
 ## 数据流与边界
 
-使用 scope generation、identity barrier 和 `asOf` Selector 冻结回合。Attention Arousal 的结果只能由本模块分派。
+使用 scope generation、identity barrier 和 `asOf` Selector 冻结回合。Attention Arousal 的门控结果先经过 Speech Planner，再由本模块分派最终决定。
 
 ## Settings
 
@@ -26,4 +26,4 @@
 
 ## 典型场景
 
-`attend` 临时创建当前会话消息意图，`defer` 请求 Heartbeat，`ignore` 正常静默结束。
+`speak` 创建当前会话消息意图，`wait` 请求 Heartbeat，`silent` 正常静默结束。Planner 模型失败或取消由发言模块静默闭合，不触发 turn.failed。

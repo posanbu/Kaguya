@@ -1,6 +1,6 @@
 /**
  * 功能概述：通过真实 InformationCore、ModuleHost 与测试数据库验证 Heartflow 持久化编排。
- * fixture/appendCandidate 构造身份屏障及候选链，submitDecision 注入注意力终态；
+ * fixture/appendCandidate 构造身份屏障及候选链，submitDecision 注入独立门控和 Planner 终态；
  * atoms/waitForKind 等待异步订阅输出。覆盖意图去重、冻结上下文、路由、等待和失败终态，
  * 保证 composer 只收到目标与完整 turn 来源；afterEach 关闭宿主、Core 和数据库。
  */
@@ -35,6 +35,7 @@ import {
   inboundTextInformationKind,
   personContextCompletedInformationKind,
   attentionArousalCompletedInformationKind,
+  speechDecisionInformationKind,
   messageIntentRequestedInformationKind,
   turnCandidateInformationKind,
   turnClaimedInformationKind,
@@ -142,6 +143,7 @@ async function fixture() {
   for (const definition of [
     heartbeatScheduledInformationKind,
     heartbeatFiredInformationKind,
+    attentionArousalCompletedInformationKind,
   ]) {
     registry.register(definition);
   }
@@ -354,8 +356,8 @@ async function submitDecision(
           candidateInformationId),
   )!;
   const payload = turnContext.payload as any;
-  return core.commitTerminal(
-    "agent.turn.decision",
+  const gate = await core.commitTerminal(
+    "agent.turn.attention",
     claim.informationId,
     attentionArousalCompletedInformationKind,
     {
@@ -410,6 +412,29 @@ async function submitDecision(
         { relation: "agent:turn-claim", informationId: claim.informationId },
         { relation: "core:status-of", informationId: claim.informationId },
       ],
+    },
+  );
+  return core.commitTerminal(
+    "agent.turn.decision",
+    claim.informationId,
+    speechDecisionInformationKind,
+    {
+      occurredAt: gate.occurredAt,
+      source: "module:speech",
+      payload: {
+        ...gate.payload,
+        outcome:
+          outcome === "attend"
+            ? "speak"
+            : outcome === "defer"
+              ? "wait"
+              : "silent",
+      },
+      references: gate.references.map((r) =>
+        r.relation === "core:caused-by"
+          ? { ...r, informationId: gate.informationId }
+          : r,
+      ),
     },
   );
 }
@@ -632,17 +657,13 @@ describe("heartflow", () => {
         ],
       },
     );
-    const decision = atom(
-      "decision",
-      attentionArousalCompletedInformationKind.kind,
-      {
-        outcome: "attend",
-        candidateInformationId: "candidate",
-        claimInformationId: "claim",
-        turnContextInformationId: "context",
-        source: oldSource,
-      },
-    );
+    const decision = atom("decision", speechDecisionInformationKind.kind, {
+      outcome: "speak",
+      candidateInformationId: "candidate",
+      claimInformationId: "claim",
+      turnContextInformationId: "context",
+      source: oldSource,
+    });
     const laterInbound = atom("later", inboundTextInformationKind.kind, {
       text: "not frozen",
       source: oldSource,

@@ -1,4 +1,5 @@
 /**
+ * 默认 fixture 将 light Planner 与回复模型分开，避免回复故障测试提前终止在规划阶段。
  * 功能概述：用真实 PGlite、Core 和 ModuleHost 验证 `KaguyaRuntime` 的完整信息 DAG。
  * 主要职责：覆盖 Web 入站到投递成功的直接因果链、生成失败不会继续 assistant/outbound/delivery、
  * 三类 transport 失败、无订阅持久化、同 kind 消费并发与多 message composer activation 共享模型任务后
@@ -295,6 +296,7 @@ describe("KaguyaRuntime", () => {
         "agent.heartflow.online",
         "core.identity.normalize",
         "agent.message-composer",
+        "agent.speech.planner",
       ]);
       expect(logs).toContainEqual(
         expect.objectContaining({
@@ -304,16 +306,31 @@ describe("KaguyaRuntime", () => {
           tier: "heavy",
         }),
       );
+      const plannerSummary = logs.find(
+        (entry) =>
+          entry.kind === "core.model.task.requested" &&
+          entry.taskId === "core.speech.plan" &&
+          entry.detail !== true,
+      );
+      expect(plannerSummary).toMatchObject({
+        tier: "light",
+        outputMode: "object",
+      });
+      expect(plannerSummary).not.toHaveProperty("promptPreview");
+      expect(plannerSummary).not.toHaveProperty("promptFull");
+      expect(plannerSummary).not.toHaveProperty("output");
       const requestSummary = logs.find(
         (entry) =>
           entry.module === "runtime:information" &&
           entry.kind === "core.model.task.requested" &&
+          entry.taskId === "agent.message.compose" &&
           entry.detail !== true,
       );
       const requestDetail = logs.find(
         (entry) =>
           entry.module === "runtime:information" &&
           entry.kind === "core.model.task.requested" &&
+          entry.taskId === "agent.message.compose" &&
           entry.detail === true,
       );
       expect(requestSummary).toMatchObject({
@@ -496,7 +513,9 @@ describe("KaguyaRuntime", () => {
         ({ kind }) => kind === "agent.message.intent.requested",
       )!;
       const requested = graph.find(
-        ({ kind }) => kind === "core.model.task.requested",
+        (atom) =>
+          atom.kind === "core.model.task.requested" &&
+          atom.payload.taskId === "agent.message.compose",
       )!;
 
       const context = graph.find(
@@ -590,14 +609,18 @@ describe("KaguyaRuntime", () => {
           });
           expect(
             secondGraph.some(
-              ({ kind }) => kind === modelTaskRequestedInformationKind.kind,
+              (atom) =>
+                atom.kind === modelTaskRequestedInformationKind.kind &&
+                atom.payload.taskId === "agent.message.compose",
             ),
           ).toBe(true);
         },
         { timeout: 5000, interval: 25 },
       );
       const requested = secondGraph.find(
-        ({ kind }) => kind === modelTaskRequestedInformationKind.kind,
+        (atom) =>
+          atom.kind === modelTaskRequestedInformationKind.kind &&
+          atom.payload.taskId === "agent.message.compose",
       )!;
       const payload = modelTaskRequestedInformationKind.payloadSchema.parse(
         requested.payload,
@@ -666,7 +689,9 @@ describe("KaguyaRuntime", () => {
         ({ kind }) => kind === "agent.association.completed",
       );
       const requested = secondGraph.find(
-        ({ kind }) => kind === modelTaskRequestedInformationKind.kind,
+        (atom) =>
+          atom.kind === modelTaskRequestedInformationKind.kind &&
+          atom.payload.taskId === "agent.message.compose",
       )!;
       const payload = modelTaskRequestedInformationKind.payloadSchema.parse(
         requested.payload,
@@ -1069,6 +1094,7 @@ describe("KaguyaRuntime", () => {
           "agent.person.resolution",
           "agent.person.context.completed",
           "agent.attention.arousal.completed",
+          "agent.speech.decision",
           "agent.heartbeat.scheduled",
           "agent.turn.candidate",
           "agent.turn.claimed",
@@ -1089,7 +1115,8 @@ describe("KaguyaRuntime", () => {
       const byKind = new Map(graph.map((atom) => [atom.kind, atom]));
       const chain = [
         ["agent.attention.arousal.completed", "agent.turn.context.completed"],
-        ["agent.message.intent.requested", "agent.attention.arousal.completed"],
+        ["agent.speech.decision", "agent.attention.arousal.completed"],
+        ["agent.message.intent.requested", "agent.speech.decision"],
         ["core.model.task.requested", "agent.message.intent.requested"],
         ["core.model.task.completed", "core.model.task.requested"],
         ["core.message.assistant.text", "core.model.task.completed"],
@@ -1242,7 +1269,7 @@ describe("KaguyaRuntime", () => {
       const count = (kind: string) =>
         graph.filter((atom) => atom.kind === kind).length;
 
-      expect(count("core.model.task.completed")).toBe(1);
+      expect(count("core.model.task.completed")).toBe(2);
       expect(count("core.message.assistant.text")).toBe(2);
       expect(count("core.delivery.requested")).toBe(2);
       expect(sendMessage).toHaveBeenCalledTimes(2);
@@ -1540,7 +1567,9 @@ describe("KaguyaRuntime", () => {
           await database.information.query({
             informationId: result.rootInformationId,
           })
-        ).map(({ kind }) => kind),
+        )
+          .filter((atom) => atom.payload.taskId === "agent.message.compose")
+          .map(({ kind }) => kind),
       ).not.toContain("core.model.task.completed");
       expect(
         (await database.information.reliable.health()).pending,
@@ -1735,7 +1764,11 @@ function createMessageComposition(
     ],
     modelTask: {
       approvals: activations
-        .filter((a) => a.definitionId === "agent.message-composer")
+        .filter((a) =>
+          ["agent.message-composer", "agent.speech.planner"].includes(
+            a.definitionId,
+          ),
+        )
         .map((a) => ({
           activation: {
             instanceId: a.instanceId,
@@ -1755,7 +1788,17 @@ function createMessageComposition(
         },
       }),
       resolveModel: ({ tier }: { tier: "light" | "heavy" }) => {
-        const resolved = resolveModelSelection({ modelTier: tier });
+        const resolved =
+          tier === "light"
+            ? {
+                providerId: "test",
+                modelId: "planner-light",
+                model: createRepeatingDeterministicModel({
+                  action: "speak",
+                  reasonCode: "direct-response",
+                }),
+              }
+            : resolveModelSelection({ modelTier: tier });
         models.set(resolved.modelId, resolved.model);
         return {
           providerId: resolved.providerId,
