@@ -1,4 +1,5 @@
 /**
+ * stopReliableDelivery 可选 drain：停止领取后有界等待活跃 claim，再执行 shutdown fencing，支持 Runtime 热切换。
  * 架构说明：本模块把 registry、store 与 bus 组合成信息 Core，
  * 负责启动前注册同步、注册时的 ID 生成、引用 expectations 传递、并发广播与故障事实。
  * 主要职责：`registerOnce`/`commitTerminal` 在数据库原子竞争且只广播新赢家；durable handler 由 claim 与 signal 保护；
@@ -277,8 +278,8 @@ export class InformationCore implements OneShotScheduleCorePort {
     });
     await this.#reliableRunner.start();
   }
-  async stopReliableDelivery(): Promise<void> {
-    await this.#reliableRunner?.stop();
+  async stopReliableDelivery(options: { drain?: boolean } = {}): Promise<void> {
+    await this.#reliableRunner?.stop(options);
   }
   async executionHealth() {
     if (!this.store.reliable)

@@ -5,7 +5,7 @@
  * 代码库关系：根 package scripts 调用构建后的本文件；生命周期实现在
  * postgres-development.ts，生产 pnpm start 不经过这里。
  * 输入输出与副作用：可能启动 Docker 容器、补齐 selected Profile runtime 或创建子进程；
- * 不停止/删除容器和数据卷。
+ * 不停止/删除容器和数据卷；开发准备失败提示启动 Docker Desktop 并运行 docker info 确认。
  */
 import { spawn } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
@@ -88,7 +88,7 @@ export async function runPostgresCli(
         return 1;
       }
       process.stderr.write(
-        `Database preparation unavailable [${error.name}]: ${error.message}; Server will inspect configuration and start in degraded mode when possible.\n`,
+        `Database preparation unavailable [${error.name}]: ${error.message}; Server will inspect configuration and start in degraded mode when possible.\n请先启动 Docker Desktop（macOS: open -a Docker），等待 docker info 成功后，在仓库根目录重新运行 pnpm dev。\n`,
       );
     }
     return spawnInteractive(

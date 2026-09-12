@@ -2,7 +2,8 @@
  * 架构说明：本模块拥有配置 Profile 与 Registry 的持久化 schema，
  * 负责 JSON 克隆、引用完整性与 v1 注册表不变量。它被配置管理器、
  * 运行时启动链和 WebUI/API 层共同消费，必须保持可安全反序列化且
- * 不能泄漏未克隆的外部对象引用。
+ * 不能泄漏未克隆的外部对象引用。modelGenerationOptionsSchema 的 timeoutMs 是 1–300000 ms 硬超时，
+ * 与 recommendedDurationMs 的软预算分开；Server 把它传给 LLM client，durable lease 留出提交余量。
  */
 import { z } from "zod";
 
@@ -73,6 +74,7 @@ export const aiProviderConfigSchema = guardSchemaInput(
 );
 
 export const modelGenerationOptionsSchema = z.strictObject({
+  timeoutMs: z.int().min(1).max(300_000).optional(),
   reasoning: z
     .enum(["none", "minimal", "low", "medium", "high", "xhigh"])
     .or(z.literal("provider-default"))

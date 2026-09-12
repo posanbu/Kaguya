@@ -5,7 +5,7 @@
  * 主要职责：前几组用例覆盖 `/api/v1/profiles` 的无密钥 readiness 与
  * 六个能力的鉴权优先级、CRUD/选择/删除语义，以及 `ConfigError` 到 HTTP 状态码和
  * 业务错误码的映射；其余用例继续保护 `/api/v1/messages`、OpenAPI、限流、请求 ID
- * 与日志上下文契约不回退。
+ * 与日志上下文契约不回退；硬超时测试验证 HTTP 保存/读取和非法边界拒绝。
  * 代码库关系：该文件直接驱动 `app.ts`，既会用 stub `ConfigurationManagement`
  * 验证路由层顺序，也会用真实 `createConfigurationManagement` 在临时目录上验证
  * Profile API 与 `packages/config`/`configuration-management.ts` 的集成行为；它与配置管理测试、
@@ -1349,3 +1349,61 @@ function readyProfileReplacement(
     platforms: [],
   };
 }
+
+it("round trips per-tier hard timeouts through HTTP validation and serialization", async () => {
+  await withManagementApp(async (app) => {
+    const payload = readyProfileReplacement("default", "light", "heavy");
+    const ai = {
+      ...payload.ai,
+      modelTiers: {
+        light: {
+          ...payload.ai.modelTiers.light,
+          generation: { timeoutMs: 1_001 },
+        },
+        heavy: {
+          ...payload.ai.modelTiers.heavy,
+          generation: { reasoning: "high", timeoutMs: 300_000 },
+        },
+      },
+    };
+    const saved = await app.inject({
+      method: "PUT",
+      url: "/api/v1/profiles/default",
+      headers: authorization(),
+      payload: { ...payload, ai },
+    });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json().data.profile.ai.modelTiers).toEqual(ai.modelTiers);
+    const loaded = await app.inject({
+      method: "GET",
+      url: "/api/v1/profiles/default",
+      headers: authorization(),
+    });
+    expect(loaded.statusCode).toBe(200);
+    expect(loaded.json().data.profile.ai.modelTiers).toEqual(ai.modelTiers);
+    for (const timeoutMs of [0, -1, 300_001, 1.5]) {
+      const invalid = await app.inject({
+        method: "PUT",
+        url: "/api/v1/profiles/default",
+        headers: authorization(),
+        payload: {
+          ...payload,
+          ai: {
+            ...ai,
+            modelTiers: {
+              ...ai.modelTiers,
+              light: { ...ai.modelTiers.light, generation: { timeoutMs } },
+            },
+          },
+        },
+      });
+      expect(invalid.statusCode).toBe(400);
+    }
+    const after = await app.inject({
+      method: "GET",
+      url: "/api/v1/profiles/default",
+      headers: authorization(),
+    });
+    expect(after.json().data.profile.ai.modelTiers).toEqual(ai.modelTiers);
+  });
+});

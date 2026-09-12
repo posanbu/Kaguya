@@ -3,6 +3,7 @@
  * 主要职责：moduleInstanceConfigSchema 验证文件信封；loadModuleInstanceConfigs 仅在目录缺失时
  * 写入完整默认配置；configPath 和 assertUniqueDefaults 拒绝越界路径及重复实例。
  * 代码库关系：Server 传入 first-party Catalog 默认实例，模块 settings 由 Catalog 二次严格校验。
+ * initialize=false 用于热应用状态检查，目录缺失时仅报错而不写默认值。
  * 输入输出与副作用：读写敏感 JSON；已有目录不自动迁移或修复，旧实例及损坏配置报错并提示重新初始化。
  */
 import { lstat, readdir } from "node:fs/promises";
@@ -33,6 +34,7 @@ export type ModuleInstanceConfig = z.infer<typeof moduleInstanceConfigSchema>;
 
 export async function loadModuleInstanceConfigs(options: {
   readonly rootDir: string;
+  readonly initialize?: boolean;
   readonly defaults: readonly ModuleInstanceConfig[];
 }): Promise<readonly ModuleInstanceConfig[]> {
   const modulesRoot = join(options.rootDir, "modules");
@@ -40,6 +42,8 @@ export async function loadModuleInstanceConfigs(options: {
   assertUniqueDefaults(options.defaults);
 
   if (!(await pathExists(modulesRoot))) {
+    if (options.initialize === false)
+      throw corrupt("Module configuration is missing");
     await ensureSensitiveDirectory(modulesRoot);
     for (const config of options.defaults) {
       const path = configPath(modulesRoot, config.instanceId);

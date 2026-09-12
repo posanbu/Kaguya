@@ -1,6 +1,6 @@
 /**
  * 功能概述：验证模块配置首次落盘与已有配置的拒绝策略。
- * 主要职责：覆盖 message-composer 默认实例、版本/身份校验、旧 reply 配置重新初始化提示及原文件保留。
+ * 主要职责：覆盖只读状态查询不初始化配置、message-composer 默认实例、版本/身份校验、旧 reply 配置重新初始化提示及原文件保留。
  * 代码库关系：直接调用 module-config 的加载器与信封 schema，使用临时目录模拟 Server 配置根。
  * 输入输出与副作用：仅写测试临时目录，afterEach 清理；错误不得悄悄重写用户配置。
  */
@@ -152,3 +152,11 @@ async function createRoot(): Promise<string> {
   roots.push(root);
   return root;
 }
+
+it("does not initialize absent modules when reading a hot-application snapshot", async () => {
+  const rootDir = await createRoot();
+  await expect(
+    loadModuleInstanceConfigs({ rootDir, defaults, initialize: false }),
+  ).rejects.toMatchObject({ code: "CONFIG_CORRUPT_STORE" });
+  expect(await readdir(rootDir)).toEqual([]);
+});

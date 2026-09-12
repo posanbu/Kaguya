@@ -1,6 +1,6 @@
 /**
  * 功能概述：验证通用 LLM 客户端请求边界接收调用方提供的结构化 schema 与取消信号。
- * 主要职责：确认 schema 校验、信号透传、关闭 SDK 重试、usage/duration 规范化及错误分类。
+ * 主要职责：确认 schema 校验、外部取消与 SDK 总超时、关闭 SDK 重试、usage/duration 规范化及错误分类。
  * 代码库关系：使用 AI SDK 的内存模型隔离 provider；客户端实现位于同目录的 client.ts。
  * 输入输出与副作用：仅在内存中调用模型，不产生持久化；无效输出应转为分类后的客户端错误。
  */
@@ -94,7 +94,7 @@ describe("generic KaguyaLlmClient boundary", () => {
     ).resolves.toMatchObject({
       output: { answer: "ok" },
     });
-    expect(model.doGenerateCalls[0]?.abortSignal).toBe(signal);
+    expect(model.doGenerateCalls[0]?.abortSignal?.aborted).toBe(false);
     expect(model.doGenerateCalls).toHaveLength(1);
   });
 
@@ -164,3 +164,80 @@ describe("generic KaguyaLlmClient boundary", () => {
     );
   });
 });
+
+it("aborts a pending provider call at the configured hard timeout", async () => {
+  let providerSignal: AbortSignal | undefined;
+  const model = new MockLanguageModelV3({
+    doGenerate: ({ abortSignal }) =>
+      new Promise((_resolve, reject) => {
+        providerSignal = abortSignal;
+        abortSignal!.addEventListener(
+          "abort",
+          () => reject(abortSignal!.reason),
+          { once: true },
+        );
+      }),
+  });
+  const client = new KaguyaLlmClient({
+    model,
+    resolveGenerationOptions: () => ({ timeoutMs: 20 }),
+  });
+  await expect(
+    client.generate({
+      modelId: "model",
+      prompt,
+      outputMode: "text",
+      outputSchema: z.string(),
+    }),
+  ).rejects.toBeInstanceOf(KaguyaLlmError);
+  expect(providerSignal?.aborted).toBe(true);
+  expect(model.doGenerateCalls).toHaveLength(1);
+});
+
+it("propagates caller cancellation before a long model timeout", async () => {
+  const controller = new AbortController();
+  const model = new MockLanguageModelV3({
+    doGenerate: ({ abortSignal }) =>
+      new Promise((_resolve, reject) => {
+        abortSignal!.addEventListener(
+          "abort",
+          () => reject(abortSignal!.reason),
+          { once: true },
+        );
+        controller.abort(new DOMException("cancel", "AbortError"));
+      }),
+  });
+  const client = new KaguyaLlmClient({
+    model,
+    resolveGenerationOptions: () => ({ timeoutMs: 300_000 }),
+  });
+  await expect(
+    client.generate({
+      modelId: "model",
+      prompt,
+      outputMode: "text",
+      outputSchema: z.string(),
+      signal: controller.signal,
+    }),
+  ).rejects.toMatchObject({ kind: "cancelled" });
+  expect(model.doGenerateCalls[0]?.abortSignal?.aborted).toBe(true);
+});
+it.each([0, -1, 300_001, 1.5, NaN, Infinity])(
+  "rejects invalid timeout %s without invoking the provider",
+  async (timeoutMs) => {
+    const model = new MockLanguageModelV3();
+    const client = new KaguyaLlmClient({
+      model,
+      resolveGenerationOptions: () => ({ timeoutMs }),
+    });
+    await expect(
+      client.generate({
+        modelId: "model",
+        prompt,
+        outputMode: "text",
+        outputSchema: z.string(),
+      }),
+    ).rejects.toBeInstanceOf(KaguyaLlmError);
+    expect(model.doGenerateCalls).toHaveLength(0);
+  },
+);

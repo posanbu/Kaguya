@@ -1,4 +1,9 @@
-/** Development startup must reach Server even if optional database preparation fails. */
+/**
+ * 功能概述：验证开发 CLI 的数据库失败降级、Docker 启动指引与配置错误阻断。
+ * 主要职责：runPostgresCli 测试模拟子进程和准备结果，断言命令、退出码及安全诊断。
+ * 代码库关系：覆盖 postgres-cli 与 postgres-development 契约；不启动真实 Docker 或 Server。
+ * 输入输出与副作用：捕获 stderr 和 spawn 调用，每例恢复 spy，不输出虚构凭据。
+ */
 import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
 import { afterEach, expect, it, vi } from "vitest";
@@ -36,9 +41,11 @@ it("continues development startup after a classified database failure", async ()
       env: expect.objectContaining({ NODE_ENV: "development" }),
     }),
   );
-  expect(output.mock.calls.map(([text]) => text).join("")).toContain(
-    "Database preparation unavailable",
-  );
+  const diagnostic = output.mock.calls.map(([text]) => text).join("");
+  expect(diagnostic).toContain("Database preparation unavailable");
+  expect(diagnostic).toContain("open -a Docker");
+  expect(diagnostic).toContain("docker info");
+  expect(diagnostic).toContain("pnpm dev");
 });
 it("reports configuration diagnostics and does not spawn the Server", async () => {
   vi.mocked(ensureDevelopmentPostgres).mockRejectedValueOnce(

@@ -1,4 +1,10 @@
-/** Owns adapter lifetimes, safe status snapshots and the single inbound policy boundary. */
+/**
+ * 功能概述：管理平台适配器生命周期、状态快照和统一入站白名单边界。
+ * 主要职责：register/registerTransports 装配启动前出口；finalizeRuntime 单次绑定 Runtime；
+ * pauseIngress/resumeIngress 在热应用发布新宿主前阻止入站，beginStopping 永久关闭旧宿主入口。
+ * 代码库关系：Server 通过动态门面转发 HTTP/Web 请求，NapCat 回调始终绑定所属宿主。
+ * 输入输出与副作用：启动/停止连接，拒绝切换中的消息；暂停不关闭出口，允许旧任务完成投递。
+ */
 import { createModuleLogger, type KaguyaLogger } from "@kaguya/logger";
 import {
   AdapterIngressUnavailableError,
@@ -31,6 +37,7 @@ export class AdapterHost {
   private reason: RuntimeUnavailableReason = "configuration_not_ready";
   private finalized = false;
   private stopping = false;
+  private paused = false;
   private startPromise: Promise<void> | undefined;
   private stopPromise: Promise<void> | undefined;
   constructor(
@@ -155,6 +162,15 @@ export class AdapterHost {
     );
     if (!this.stopping) this.state = "running";
   }
+  pauseIngress(): void {
+    this.paused = true;
+    this.updateIngress();
+  }
+  resumeIngress(): void {
+    if (this.stopping) throw new Error("Stopped adapter ingress cannot resume");
+    this.paused = false;
+    this.updateIngress();
+  }
   beginStopping(): void {
     this.stopping = true;
     this.state = "stopping";
@@ -195,7 +211,7 @@ export class AdapterHost {
       throw new Error("Adapter shutdown failed");
   }
   private ingressState(): AdapterSnapshot["ingress"] {
-    return this.stopping
+    return this.stopping || this.paused
       ? "stopping"
       : this.runtime
         ? "ready"
@@ -294,8 +310,8 @@ export class AdapterHost {
     return allowed;
   }
   private assertReady(message: PlatformInboundMessage): InformationIngress {
-    if (!this.stopping && this.runtime) return this.runtime;
-    const reason = this.stopping ? "stopping" : this.reason;
+    if (!this.stopping && !this.paused && this.runtime) return this.runtime;
+    const reason = this.stopping || this.paused ? "stopping" : this.reason;
     this.logInbound(message, "failed", {
       errorType: "runtime_unavailable",
       reason,

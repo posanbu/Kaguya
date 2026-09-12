@@ -1,3 +1,9 @@
+/**
+ * 功能概述：验证 Web API 客户端认证、请求编码及服务端响应校验。
+ * 主要职责：模拟 fetch 覆盖 Profile 管理、消息、模型发现及配置版本应用；冲突不自动重试。
+ * 代码库关系：调用 api.ts 的公开方法，与 Server DTO 契约保持一致。
+ * 输入输出与副作用：仅使用虚构凭据和本地 Response，不发网络请求；错误提示不显示底层秘密。
+ */
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -5,6 +11,8 @@ import {
   createProfile,
   deleteProfile,
   discoverModels,
+  applyConfiguration,
+  getConfigurationApplication,
   GatewayRequestError,
   getProfile,
   listProfiles,
@@ -210,5 +218,63 @@ describe("gateway API client", () => {
       gatewayAllowlist: ["qq:private:112233"],
       memory: { enabled: false },
     });
+  });
+});
+
+describe("configuration application client", () => {
+  const snapshot = {
+    state: "pending" as const,
+    selectedProfileId: "default",
+    selectedRevision: "a".repeat(64),
+    appliedProfileId: "default",
+    appliedRevision: "b".repeat(64),
+  };
+  it("applies exactly the version displayed to the user", async () => {
+    const request = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({
+        data: {
+          status: "applied",
+          application: {
+            ...snapshot,
+            state: "ready",
+            appliedRevision: snapshot.selectedRevision,
+          },
+        },
+      }),
+    );
+    expect((await applyConfiguration(config, snapshot, request)).status).toBe(
+      "applied",
+    );
+    expect(JSON.parse(String(request.mock.calls[0]?.[1]?.body))).toEqual({
+      selectedProfileId: "default",
+      revision: snapshot.selectedRevision,
+    });
+    expect(request.mock.calls[0]?.[1]?.headers).toMatchObject({
+      authorization: "Bearer test-gateway-token",
+    });
+  });
+  it("does not retry a conflict with a newer revision or expose server error details", async () => {
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        Response.json(
+          { error: { message: "private-server-details" } },
+          { status: 409 },
+        ),
+      );
+    await expect(applyConfiguration(config, snapshot, request)).rejects.toThrow(
+      "配置已被其他操作修改或正在应用",
+    );
+    expect(request).toHaveBeenCalledOnce();
+  });
+  it("rejects invalid status snapshots before displaying readiness", async () => {
+    const request = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({
+        data: { ...snapshot, selectedRevision: "raw-secret" },
+      }),
+    );
+    await expect(getConfigurationApplication(config, request)).rejects.toThrow(
+      "无法读取配置生效状态",
+    );
   });
 });

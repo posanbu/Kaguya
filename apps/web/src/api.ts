@@ -1,4 +1,7 @@
 /**
+ * getConfigurationApplication/applyConfiguration 读取并提交配置 revision；保存响应携带同一写锁内的
+ * application 快照，避免保存后再 GET 时误应用他人修改。热切换不会更换当前 Gateway Token。
+ * ModelGenerationOptions.timeoutMs 随 Profile API 往返，限定为 1–300000 ms 硬超时。
  * 架构说明：本模块是 Web 端唯一的 Kaguya HTTP 客户端门面，
  * 负责把界面动作翻译成显式的 Profile Registry 请求。
  * 它必须只暴露最小必需的 wire contract：读取受保护的 Profile readiness、发送消息、
@@ -41,6 +44,7 @@ export interface NapCatSettingsInput {
 export interface NapCatMutationResult {
   readonly status: NapCatStatus;
   readonly restartRequired: true;
+  readonly application?: ConfigurationApplicationStatus;
 }
 
 export interface SendMessageInput {
@@ -124,6 +128,7 @@ export interface UserConfigProfile {
 }
 
 export interface ModelGenerationOptions {
+  readonly timeoutMs?: number;
   readonly reasoning?:
     | "provider-default"
     | "none"
@@ -166,6 +171,7 @@ export interface ProfileReadResult {
 export interface ProfileMutationResult {
   readonly profile: UserConfigProfile;
   readonly restartRequired: boolean;
+  readonly application?: ConfigurationApplicationStatus;
 }
 
 export interface CreateProfileInput {
@@ -610,6 +616,8 @@ function isNapCatMutationResponse(
   return (
     isRecord(value) &&
     isRecord(value.data) &&
+    (value.data.application === undefined ||
+      isApplicationStatus(value.data.application)) &&
     value.data.restartRequired === true &&
     isNapCatStatus(value.data.status)
   );
@@ -665,6 +673,8 @@ function isProfileMutationResultResponse(
     isRecord(value) &&
     isRecord(value.data) &&
     isUserConfigProfile(value.data.profile) &&
+    (value.data.application === undefined ||
+      isApplicationStatus(value.data.application)) &&
     typeof value.data.restartRequired === "boolean"
   );
 }
@@ -803,6 +813,11 @@ function isModelTierTarget(value: unknown): boolean {
 function isModelGenerationOptions(value: unknown): boolean {
   return (
     isRecord(value) &&
+    (value.timeoutMs === undefined ||
+      (typeof value.timeoutMs === "number" &&
+        Number.isSafeInteger(value.timeoutMs) &&
+        value.timeoutMs >= 1 &&
+        value.timeoutMs <= 300_000)) &&
     (value.reasoning === undefined ||
       [
         "provider-default",
@@ -1019,4 +1034,121 @@ export async function getInspection<T>(
       response.status,
     );
   }
+}
+
+export interface ConfigurationApplicationStatus {
+  readonly state: "ready" | "pending" | "applying" | "degraded";
+  readonly selectedProfileId: string;
+  readonly selectedRevision: string;
+  readonly appliedProfileId: string | null;
+  readonly appliedRevision: string | null;
+}
+export interface ConfigurationApplyResult {
+  readonly status: "applied" | "restart_required" | "failed";
+  readonly application: ConfigurationApplicationStatus;
+  readonly restartFields?: readonly string[];
+  readonly errorCode?: string;
+}
+function isApplicationStatus(
+  value: unknown,
+): value is ConfigurationApplicationStatus {
+  return (
+    isRecord(value) &&
+    ["ready", "pending", "applying", "degraded"].includes(
+      String(value.state),
+    ) &&
+    typeof value.selectedProfileId === "string" &&
+    typeof value.selectedRevision === "string" &&
+    /^[a-f0-9]{64}$/u.test(value.selectedRevision) &&
+    (value.appliedProfileId === null ||
+      typeof value.appliedProfileId === "string") &&
+    (value.appliedRevision === null ||
+      (typeof value.appliedRevision === "string" &&
+        /^[a-f0-9]{64}$/u.test(value.appliedRevision)))
+  );
+}
+export async function getConfigurationApplication(
+  config: GatewayConfig,
+  fetchImplementation: typeof fetch = fetch,
+): Promise<ConfigurationApplicationStatus> {
+  const response = await requestAuthenticatedJson(
+    config,
+    "/api/v1/configuration/status",
+    { method: "GET" },
+    fetchImplementation,
+  );
+  const payload = await readJson(response);
+  if (
+    !response.ok ||
+    !isRecord(payload) ||
+    !isApplicationStatus(payload.data)
+  ) {
+    throw new GatewayRequestError(
+      "无法读取配置生效状态，请检查配置文件后重试。",
+      "configuration_status_failed",
+      response.status,
+    );
+  }
+  return payload.data;
+}
+export async function applyConfiguration(
+  config: GatewayConfig,
+  snapshot: ConfigurationApplicationStatus,
+  fetchImplementation: typeof fetch = fetch,
+): Promise<ConfigurationApplyResult> {
+  const response = await requestAuthenticatedJson(
+    config,
+    "/api/v1/configuration/apply",
+    {
+      method: "POST",
+      headers: jsonHeaders(requireToken(config)),
+      body: JSON.stringify({
+        selectedProfileId: snapshot.selectedProfileId,
+        revision: snapshot.selectedRevision,
+      }),
+    },
+    fetchImplementation,
+  );
+  const payload = await readJson(response);
+  if (!response.ok)
+    throw new GatewayRequestError(
+      response.status === 409
+        ? "配置已被其他操作修改或正在应用。请检查当前配置后重试。"
+        : "无法应用配置，请检查服务状态后重试。",
+      "configuration_apply_failed",
+      response.status,
+    );
+  if (
+    !isRecord(payload) ||
+    !isRecord(payload.data) ||
+    !["applied", "restart_required", "failed"].includes(
+      String(payload.data.status),
+    ) ||
+    !isApplicationStatus(payload.data.application) ||
+    (payload.data.restartFields !== undefined &&
+      !isStringArray(payload.data.restartFields)) ||
+    (payload.data.errorCode !== undefined &&
+      typeof payload.data.errorCode !== "string")
+  ) {
+    throw new GatewayRequestError(
+      "配置应用响应无效，请重新检查生效状态。",
+      "configuration_apply_invalid",
+      response.status,
+    );
+  }
+  return payload.data as unknown as ConfigurationApplyResult;
+}
+export function configurationApplyMessage(
+  result: ConfigurationApplyResult,
+): string {
+  if (result.status === "applied") return "当前配置已生效，无需重启。";
+  if (result.status === "restart_required")
+    return "进程级配置发生变化，需要重启 Kaguya。";
+  if (result.errorCode === "invalid_configuration")
+    return "配置已保存但未应用，请检查模型、平台与模块配置；原有运行实例保持不变。";
+  if (result.errorCode === "shutdown_failed")
+    return "旧实例未能安全关闭，已暂停消息入口。请重启 Kaguya。";
+  if (result.application.appliedRevision !== null)
+    return "新配置应用失败，已恢复原配置运行。请检查后重试。";
+  return "配置已保存，但 Runtime 暂不可用。请检查数据库或服务日志后重试应用。";
 }

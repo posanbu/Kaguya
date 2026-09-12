@@ -1,13 +1,16 @@
 /**
  * 功能概述：本文件承载 WebUI 的顶层状态机，在访问链接认证、Profile 管理、
- * 待重启提示与消息聊天之间做显式切换，落实“全局 selected Profile 唯一生效、
- * 切换后必须重启 Runtime”的产品契约。
+ * 配置生效管理与消息聊天之间做显式切换，落实“全局 selected Profile 唯一生效、
+ * 配置修改需要手动应用”的产品契约。保存与选择只落盘，用户在生效管理页主动提交 revision，
+ * 保存成功刷新待应用状态，失败保留设置页；进程级变更进入应用管理页展示重启说明。模型编辑区区分硬超时与推荐时间，
+ * 重启页给出开发/生产命令和新 Gateway Token 链接指引；空 allowlist 显示 QQ 排查提示。
+ * 推荐时间使用整数毫秒步长，避免 min=1/step=100 导致默认 2000/5000 无法提交。
  * 主要职责：`App` 负责从当前 URL fragment 获取网关 token，再读取 `/api/v1/profiles`，
  * 根据 selected Profile 的 readiness 决定当前视图，并在 ready 状态下
  * 提供聊天入口与 Settings
  * 按钮；`ProfileManagementScreen` 负责展示 Profile 元数据列表、按 ID 加载完整
  * Profile、独立执行 create/replace/select/delete 动作，并在切换 Profile 或离开
- * 管理页时清空包含 secret 的已加载正文与编辑字段；其余小组件负责重启提示、
+ * 管理页时清空包含 secret 的已加载正文与编辑字段；其余小组件负责应用状态、
  * readiness 呈现与消息投递反馈。
  * 代码库关系：本文件消费 `api.ts` 的受保护状态、消息接口与 Profile Registry 管理
  * API，以及 `profile-editor.ts` 的纯函数合并逻辑；样式由同目录 `styles.css`
@@ -15,8 +18,8 @@
  * 输入输出与副作用：gateway token 仅从 fragment 读取并保留在页面内存中；所有
  * Profile 修改都通过 HTTP 请求落到服务端，不在浏览器端
  * 推断默认 Profile；当 selected
- * Profile 已 ready 且本次 replace/select 改变冻结运行配置时，本文件只切到
- * restart 视图提示用户重启，不做热切换。Profile 管理子组件会记忆同一
+ * Profile 已 ready 且本次 replace/select 改变运行配置时，进入生效管理页等待手动应用；
+ * 仅进程级字段变更需要重启。Profile 管理子组件会记忆同一
  * token 对应的网关配置对象，避免读取 Profile 的副作用 effect 因对象引用变化
  * 而重复请求并触发服务端限流。开发者入口使用 history 路径，复用内存 Token；
  * DeveloperConsole 负责只读查询与取消，401 继续由本文件统一锁屏。
@@ -50,6 +53,7 @@ import {
   useState,
 } from "react";
 
+import { ConfigurationApplicationScreen } from "./ConfigurationApplicationScreen.js";
 import {
   checkGatewayHealth,
   createProfile,
@@ -309,7 +313,13 @@ export function App() {
   }
 
   if (configurationView === "restart") {
-    return <RestartRequired />;
+    return (
+      <ConfigurationApplicationScreen
+        token={token}
+        onApplied={() => loadConfigurationStatus()}
+        onEdit={() => setConfigurationView("profiles")}
+      />
+    );
   }
 
   return (
@@ -633,12 +643,12 @@ function ProfileManagementScreen({
       setLoadedProfile(result.profile);
       setEditorFields(profileToEditorFields(result.profile));
       await refreshRegistry();
-      const status = await refreshStatusAfterMutation();
-      if (result.restartRequired && status.status === "ready") {
-        onRestartRequired();
-        return;
-      }
-      setNotice("Profile saved.");
+      await refreshStatusAfterMutation();
+      setNotice(
+        result.restartRequired
+          ? "配置已保存，点击“应用当前配置”后生效。"
+          : "Profile 已保存，选为当前配置并手动应用后生效。",
+      );
     } catch (error) {
       setPanelError(errorMessage(error));
     } finally {
@@ -660,14 +670,10 @@ function ProfileManagementScreen({
       const nextRegistry = await refreshRegistry();
       const status = await refreshStatusAfterMutation();
       setRegistry(nextRegistry);
-      if (result.restartRequired && status.status === "ready") {
-        onRestartRequired();
-        return;
-      }
       setNotice(
         status.status === "ready"
-          ? "Selected profile updated."
-          : "Selected profile changed. Fix its readiness issues before restart.",
+          ? "当前选择已保存。"
+          : "当前选择已保存，请检查配置后手动应用。",
       );
     } catch (error) {
       setPanelError(errorMessage(error));
@@ -874,6 +880,14 @@ function ProfileManagementScreen({
                 </button>
                 <button
                   type="button"
+                  className="secondary-button"
+                  disabled={mutating}
+                  onClick={onRestartRequired}
+                >
+                  配置生效管理
+                </button>
+                <button
+                  type="button"
                   className="danger-button"
                   disabled={deleteDisabled || mutating}
                   onClick={() => void handleDeleteProfile()}
@@ -885,9 +899,8 @@ function ProfileManagementScreen({
             </div>
 
             <p className="setup-intro profile-intro">
-              填写模型服务地址和两个模型层级，保存后 Kaguya
-              会在重启时加载当前配置。
-              如果暂时不接入平台或插件，也可以在下方明确确认。
+              保存仅写入配置；请进入“配置生效管理”手动应用。 其他 Profile
+              仅保存，选为当前配置时再应用。
             </p>
 
             {panelError ? (
@@ -946,7 +959,7 @@ function ProfileManagementScreen({
                 <fieldset className="identity-fields">
                   <legend>Agent 身份</legend>
                   <p className="field-help">
-                    名字、别名和人设会用于回复 Prompt；修改后需重启生效。
+                    名字、别名和人设会用于回复 Prompt；保存后手动应用才生效。
                   </p>
                   <label className="field">
                     <span>Agent 名字</span>
@@ -1145,11 +1158,21 @@ function ProfileManagementScreen({
                     }
                   />
                   <span id="gateway-allowlist-help" className="field-help">
-                    每行一条 platform:group|private:ID。platform 和 ID 支持
+                    使用 QQ 前必须设置 Gateway Allowlist：例如 qq:group:778899
+                    允许指定群，qq:private:112233 允许指定用户；qq:group:* 或
+                    qq:private:* 允许所有群或私聊。每行一条
+                    platform:group|private:ID。platform 和 ID 支持
                     *；空列表拒绝所有平台消息，无效行会保存但不生效。Web
                     入口不受此处控制。
                   </span>
                 </label>
+                {editorFields.gatewayAllowlistText.trim() === "" ? (
+                  <p role="status" className="field-help">
+                    Gateway Allowlist 为空：即使 NapCat 已连接，QQ
+                    消息也不会进入 Runtime。 请先填写允许的群号或用户 QQ
+                    号，保存后手动应用，再发送消息验证。
+                  </p>
+                ) : null}
                 <label className="setup-check">
                   <input
                     type="checkbox"
@@ -1182,7 +1205,7 @@ function ProfileManagementScreen({
                   ) : (
                     <Save size={18} />
                   )}
-                  <span>{mutating ? "保存中" : "保存配置"}</span>
+                  <span>{mutating ? "正在保存" : "保存配置"}</span>
                 </button>
               </form>
             ) : null}
@@ -1275,12 +1298,35 @@ function ModelTierEditor({
         </select>
       </label>
       <label className="field">
+        <span>模型调用超时（秒）</span>
+        <input
+          type="number"
+          min="0.001"
+          max="300"
+          step="0.001"
+          value={
+            light ? fields.lightTimeoutSeconds : fields.heavyTimeoutSeconds
+          }
+          onChange={(event) =>
+            onChange(
+              light
+                ? { lightTimeoutSeconds: event.target.value }
+                : { heavyTimeoutSeconds: event.target.value },
+            )
+          }
+          placeholder="300"
+        />
+        <span className="field-help">
+          超过该时间会终止模型调用；留空使用 300 秒。
+        </span>
+      </label>
+      <label className="field">
         <span>推荐响应时间（毫秒）</span>
         <input
           type="number"
           min="1"
           max="300000"
-          step="100"
+          step="1"
           value={recommendedDurationMs}
           onChange={(event) =>
             onChange(
@@ -1377,8 +1423,8 @@ function NapCatManagementScreen({
             </button>
           </div>
           <p className="setup-intro">
-            填写 NapCat OneBot 正向 WebSocket（服务器）参数。保存后需要 重启
-            Kaguya，重启时适配器会作为客户端建立连接。
+            填写 NapCat OneBot 正向 WebSocket（服务器）参数。保存后手动应用，
+            适配器会用新配置重新连接，无需重启 Kaguya。
           </p>
           {error ? (
             <div className="error-banner" role="alert">
@@ -1465,7 +1511,7 @@ function NapCatManagementScreen({
                 />
               </label>
               <button className="setup-button" type="submit" disabled={saving}>
-                {saving ? "保存中" : "保存并重启"}
+                {saving ? "正在保存" : "保存配置"}
               </button>
             </form>
           ) : null}
@@ -1577,28 +1623,6 @@ function AccessLinkRequired({ invalid }: { readonly invalid: boolean }) {
         <code className="access-link-example">
           Kaguya access URL: …/#gatewayToken=…
         </code>
-      </section>
-    </div>
-  );
-}
-
-function RestartRequired() {
-  return (
-    <div className="setup-shell">
-      <SetupHeader subtitle="配置引导" />
-      <section className="setup-card setup-status-card" role="status">
-        <CheckCircle2 size={22} />
-        <h1>配置已保存</h1>
-        <p>
-          请重启 Kaguya 服务，使 Runtime 加载新的选中 Profile，然后刷新页面。
-        </p>
-        <button
-          type="button"
-          className="setup-button"
-          onClick={() => window.location.reload()}
-        >
-          已重启，重新检查
-        </button>
       </section>
     </div>
   );
