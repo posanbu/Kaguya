@@ -1,4 +1,5 @@
 /**
+ * Planner 的普通请求日志仅投影任务元数据，不包含 Prompt 预览；显式 content detail 保留受控诊断。
  * 功能概述：定义 Runtime 自有的 context、通用 Model Task 生命周期和投递结果 kind，并聚合内建 DAG。
  * Model Task：四个 modelTask*InformationKind 保存任务版本、选择策略、模型、激活来源与 Prompt
  * provenance；终态使用同一 requested 的 status-of，输出仅为 JSON，具体 schema 由调用方拥有。
@@ -303,7 +304,9 @@ export const modelTaskRequestedInformationKind = defineInformationKind({
       outputMode: payload.outputMode,
       promptCharacters: Array.from(payload.prompt.text).length,
       promptVariableCount: payload.prompt.variables.length,
-      ...promptPreview(payload.prompt.text),
+      ...(payload.taskId === "agent.turn.plan"
+        ? {}
+        : promptPreview(payload.prompt.text)),
     }),
     detail: {
       sensitivity: "content",

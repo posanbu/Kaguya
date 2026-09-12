@@ -103,7 +103,7 @@ Selector 通过受限只读账本的 `find()`、`related()`、`retrieve()` 取�
 
 首次生成的模块配置显式启用 Identity、durable Heartbeat、Heartflow、Attention Arousal、Association 与 Message Composer，并把 Heartbeat、Heartflow 和注意力参数完整写入文件。Runtime 拥有的 Model Task 失败/取消、delivery terminal 与 `execution.exhausted` definition 由 composition root 注入 Heartflow，Catalog 不复制这些 kind。
 
-Heartbeat 到期只产生 `agent.turn.candidate`。Heartflow 使用 scope generation 领取 candidate，等待全部 inbound 的 identity terminal，再按 `asOf` 冻结不可变的多输入 `agent.turn.context.completed`。Attention Arousal 只提交 claim 的唯一 `attend | defer | ignore` 决策；Heartflow 再把它分派为 message intent、wait 或 silent，并在 delivery、等待、静默、supersession 或耗尽时写入一个 turn terminal。默认 Catalog 不包含 always-reply 或 inbound-to-context 旁路。
+Heartbeat 到期只产生 `agent.turn.candidate`。Heartflow 使用 scope generation 领取 candidate，等待全部 inbound 的 identity terminal，再按 `asOf` 冻结不可变的多输入 `agent.turn.context.completed`。Attention Arousal 只提交 claim 的唯一 `attend | defer | ignore` 决策；Heartflow 仅在 attend 后执行独立的 `agent.turn.plan` v1，并按 `agent.turn.plan.completed` 的 `message | wait | silent` 分派为 message intent、wait 或 silent，并在 delivery、等待、静默、supersession 或耗尽时写入一个 turn terminal。默认 Catalog 不包含 always-reply 或 inbound-to-context 旁路。
 
 `createMessageComposerModule()` 默认直接消费 Heartflow 产生的 `agent.message.intent.requested`，并通过 message intent 的 `core:uses-context` 找到冻结 turn context。Memory 默认由 selected Profile 关闭；此时 Heartflow 的可选检索退化为空，Prompt 仍包含当前冻结输入。Association 继续记录 requested、query、candidate 和 completed 审计 DAG，但不再作为 Message Composer 的门禁。
 
@@ -115,10 +115,10 @@ Memory 变量在完整当前 turn 之前，合计最多 4,000 个 Unicode 字符
 
 ## Message Intent 与 Composer
 
-必要性门控判定 eligible 后，Heartflow 为一个冻结 turn 确定性创建一次 `agent.message.intent.requested`。其严格 payload 包含 `target: { adapterId, platform, destination }`、`turn: { candidateInformationId, claimInformationId, contextInformationId }` 与 `memoryInformationIds`。`target` 取自冻结 turn 的最新入站来源；意图本身不复制源正文、源平台消息 ID、发送者信息或引用标记。
+必要性门控通过且 Planner 判定 message 后，Heartflow 为一个冻结 turn 确定性创建一次 `agent.message.intent.requested`。其严格 payload 包含 `target: { adapterId, platform, destination }`、`turn: { candidateInformationId, claimInformationId, contextInformationId }` 与 `memoryInformationIds`。`target` 取自冻结 turn 的最新入站来源；意图本身不复制源正文、源平台消息 ID、发送者信息或引用标记。
 
 默认 `agent.message-composer` 模块由 `message-composer.default` 实例激活，执行 `agent.message.compose` Model Task，使用 `message` Prompt kind。Composer 通过引用重载完整冻结 turn，把其中所有输入作为当前回合共同呈现；最后一条输入没有必须回答的特殊地位。历史与 Memory 分别受预算限制，当前冻结输入不因历史预算被剔除。入站引用只帮助理解上下文，默认出站内容始终为 `kind: "text"`。
 
 旧 reply 信息原子不会迁移或由新模块处理，旧 Prompt kind 和 Model Task ID 不再属于当前协议。旧模块配置须备份后重新初始化，不能仅重命名旧文件来保留旧 outbound 设置。公共 `OutboundMessageContent.kind: "reply"` 与 OneBot 显式引用能力继续保留，供专用模块主动构造。
 
-Planner 的 `message | wait | silent` 选择以及跨会话目标检索属于后续工作；本链只在已明确的当前会话发送消息。
+Planner 已支持 `message | wait | silent`；跨会话目标检索仍属于后续工作。Planner 由现有 Heartflow 实例装配，默认 light tier，无需新增 speech 实例或 Profile/API/WebUI 配置。首次请求冻结 Prompt 与上下文选择，重放复用已持久化任务；wait 为 5–120 秒并复用三次总预算与 durable heartbeat，失败和取消统一以 `planner-unavailable` 静默结束。普通日志不记录 Planner Prompt 预览或原始模型输出。

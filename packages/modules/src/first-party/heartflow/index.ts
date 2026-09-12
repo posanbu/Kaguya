@@ -3,6 +3,7 @@
  * per-chat 状态，也不依赖订阅安装顺序。
  * createHeartflowModule 注入投递/模型失败 kind，返回声明订阅的模块；settings schema
  * 校验频率与安全策略。state/memory selector 从账本读取因果链及记忆，冻结完整输入。
+ * Planner 重放沿已持久化请求复用 Prompt 和上下文选择，防止迟到历史触发第二次模型任务。
  * dispatchDecision 仅将独立 Planner 的获胜 message 结果按 claim 注册一次意图，末条输入决定目标；
  * turn 标识及引用保留完整冻结上下文，正文生成交给 composer。defer/ignore 与失败路径
  * 写入等待或终态；registerOnce/commitTerminal 保证重放幂等，模型 I/O 经宿主 capability 执行，平台 I/O 由 delivery 层负责。
@@ -23,6 +24,7 @@ import { createCognitionMemorySelector } from "../memory-cognition/index.js";
 import type { CognitionIdentity } from "@kaguya/memory";
 
 import {
+  type CompiledPrompt,
   type DeepReadonly,
   type InformationAtom,
   type InformationId,
@@ -419,6 +421,35 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
             const runtimeContextId = decision.references.find(
               (reference) => reference.relation === "core:context",
             )!.informationId;
+            const persisted = selected.find(
+              (atom) =>
+                atom.kind === "core.model.task.requested" &&
+                atom.payload.taskId === PLANNER_TASK_ID &&
+                atom.payload.version === "1" &&
+                (
+                  atom.payload.activation as {
+                    instanceId?: string;
+                    definitionId?: string;
+                  }
+                )?.instanceId === activation.instanceId &&
+                (atom.payload.activation as { definitionId?: string })
+                  ?.definitionId === activation.definitionId,
+            );
+            const byId = new Map(
+              selected.map((atom) => [atom.informationId, atom]),
+            );
+            const taskAtoms = persisted
+              ? (persisted.payload.contextInformationIds as string[]).map(
+                  (id) => {
+                    const atom = byId.get(id);
+                    if (!atom)
+                      throw new Error("Missing persisted Planner context");
+                    return atom;
+                  },
+                )
+              : selected.filter(
+                  (atom) => atom.kind !== "core.model.task.requested",
+                );
             const result = await context
               .use(options.modelTaskCapability)
               .execute({
@@ -433,12 +464,14 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
                 contextInformationId: runtimeContextId,
                 activation,
                 selectionPolicy: { tier: "light" },
-                prompt: compilePlannerPrompt(
-                  options.agentIdentity,
-                  selected,
-                  turn,
-                ),
-                contextAtoms: selected,
+                prompt: persisted
+                  ? (persisted.payload.prompt as unknown as CompiledPrompt)
+                  : compilePlannerPrompt(
+                      options.agentIdentity,
+                      taskAtoms,
+                      turn,
+                    ),
+                contextAtoms: taskAtoms,
               });
             const parsed =
               result.status === "completed"

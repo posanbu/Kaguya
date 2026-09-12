@@ -1,4 +1,5 @@
 /**
+ * Planner 普通日志仅保留元数据，不能泄漏 Prompt 预览或模型输出。
  * 功能概述：用真实 PGlite、Core 和 ModuleHost 验证 `KaguyaRuntime` 的完整信息 DAG。
  * Planner 使用独立 object Model Task，测试分别定位 plan 与 compose，确保故障静默与唯一分派。
  * 主要职责：覆盖 Web 入站到投递成功的直接因果链、生成失败不会继续 assistant/outbound/delivery、
@@ -306,6 +307,19 @@ describe("KaguyaRuntime", () => {
           tier: "heavy",
         }),
       );
+      const plannerSummary = logs.find(
+        (entry) =>
+          entry.kind === "core.model.task.requested" &&
+          entry.taskId === "agent.turn.plan" &&
+          entry.detail !== true,
+      );
+      expect(plannerSummary).toMatchObject({
+        tier: "light",
+        outputMode: "object",
+      });
+      expect(plannerSummary).not.toHaveProperty("promptPreview");
+      expect(plannerSummary).not.toHaveProperty("promptFull");
+      expect(plannerSummary).not.toHaveProperty("output");
       const requestSummary = logs.find(
         (entry) =>
           entry.module === "runtime:information" &&

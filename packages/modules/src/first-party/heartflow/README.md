@@ -37,3 +37,5 @@ Planner 只允许以下严格 JSON，不允许额外字段、消息正文或平�
 - `silent`：`reason` 为 `no-response-needed`、`already-addressed` 或 `avoid-interruption`；不调用 Composer 或投递。
 
 不 eligible 的门控 `defer` 保留廉价 Heartbeat 重判；`ignore` 正常结束。离线 `pnpm prompt:test` 使用真实 Planner 编译器验证结构与字段限制，不调用外部模型。
+
+Planner 首次请求持久化后，重放会恢复相同 Prompt、上下文原子及顺序，不因迟到历史改变任务指纹；已经完成的模型任务不会重复调用。普通请求日志不记录 Planner Prompt 预览，完整 Prompt 仅限显式 content detail 诊断。

@@ -2,6 +2,7 @@
  * 功能概述：Heartflow 的独立结构化 Planner 契约、只读上下文选择器和纯 Prompt 编译器。
  * 主要职责：plannerActionSchema 严格限制动作及原因；plannerDecisionInformationKind 持久化唯一分派结果；
  * plannerContextSelector 复用 Composer 的同范围成功投递历史过滤与冻结记忆授权；compilePlannerPrompt
+ * 选择器同时授权已持久化的任务上下文，恢复时复用首次请求，迟到消息不改变重放 Prompt。
  * 读取身份、规则、历史、记忆和全部冻结输入，输出带变量溯源的 route Prompt，不生成消息或目标。
  * 代码库关系：Heartflow 调用通用 Model Task 并以 claim 竞争决策锁；Composer 仅处理获胜 message 意图。
  * 输入输出与副作用：模型只有 message/wait/silent 三个分支，故障原因由宿主写入；选择器只读账本，
@@ -109,7 +110,7 @@ export const plannerContextSelector = defineInformationSelector({
       turnContextCompletedInformationKind.payloadSchema.parse(turn.payload);
     const source = payload.inputs.at(-1).source;
     // 仅构造选择器参数，不在账本提前发布 message intent。
-    return turnMessageContextSelector.select({
+    const selected = await turnMessageContextSelector.select({
       ledger,
       sourceAtom: {
         ...sourceAtom,
@@ -128,6 +129,38 @@ export const plannerContextSelector = defineInformationSelector({
         },
       },
     });
+    // 重放必须复用首次 requested 的 Prompt 和原子顺序，避免迟到历史改变任务指纹。
+    const requests = (
+      await ledger.related({
+        from: [sourceAtom.informationId],
+        relation: "core:caused-by",
+        direction: "incoming",
+        limit: 1000,
+      })
+    ).filter(
+      (atom) =>
+        atom.kind === "core.model.task.requested" &&
+        atom.payload.taskId === PLANNER_TASK_ID,
+    );
+    const persisted = (
+      await Promise.all(
+        requests.map((atom) =>
+          ledger.related({
+            from: [atom.informationId],
+            relation: "core:uses-context",
+            direction: "outgoing",
+            limit: 1000,
+          }),
+        ),
+      )
+    ).flat();
+    return [
+      ...new Set([
+        ...selected,
+        ...requests.map((atom) => atom.informationId),
+        ...persisted.map((atom) => atom.informationId),
+      ]),
+    ];
   },
 });
 
