@@ -100,6 +100,8 @@ packages/platform-adapters/ OneBot/NapCat/Web 正规化与 transport 契约
 
 ## 文档
 
+当前文档只维护 `docs/guide/`、`docs/design/`、`docs/developers/`、`docs/reference/` 和 `docs/project/`，并与本分支代码、测试及各 package README 核对事实。历史材料仅供审计，已移至[冻结归档](https://github.com/posanbu/Kaguya/tree/3622c77bc3d3b9a947bb76082164095284cf6edb)；归档不描述当前行为，不再更新或参与站点发布。
+
 - [文档站首页](docs/index.md)
 - [安装与启动](docs/guide/installation.md)
 - [配置 Kaguya](docs/guide/configuration.md)

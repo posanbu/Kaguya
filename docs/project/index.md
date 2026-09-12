@@ -80,7 +80,7 @@ InformationLedger 已改为异步端口；PostgreSQL 17 实现追加式存储、
 
 ## 文档状态
 
-当前静态站按 UI 设计、用户文档和开发者架构三层组织，并用根 README、`CONTRIBUTING.md`、Server/Runtime 代码、schema 与 package README 核对事实。旧 `zh/` 和 `ours/` 资料仍留在仓库中用于核对，但不参与公开构建。
+当前静态站按 UI 设计、用户文档和开发者架构三层组织，并用根 README、`CONTRIBUTING.md`、Server/Runtime 代码、schema 与 package README 核对事实。历史文档、日期化方案、实施记录和旧站资源已整体移至[冻结归档](https://github.com/posanbu/Kaguya/tree/3622c77bc3d3b9a947bb76082164095284cf6edb)，仅供审计，不描述当前行为。主分支与文档站只维护当前内容，旧 URL 不提供兼容跳转。
 
 后续代码 PR 如果改变公开行为，应在同一 PR 更新对应页面，避免静态站再次与实现脱节。
 

@@ -77,11 +77,13 @@ pnpm docs:preview
 ::: code-group
 
 ```bash [文档检查 ~vscode-icons:file-type-shell~]
-pnpm docs:build
+pnpm docs:check
 git diff --check
 git status --short
 ```
 
 :::
+
+`docs:check` 同时校验构建产物中的站内链接、锚点及静态资源。历史方案与实施记录放在主分支之外的归档中，不得重新加入源码、导航或 `public/`。
 
 构建通过后，还要在桌面与移动宽度检查顶部导航、左侧章节导航、右侧页内目录、代码块和 Mermaid 图表。

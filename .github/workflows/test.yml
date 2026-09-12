@@ -41,8 +41,8 @@ jobs:
       - name: Install documentation dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build documentation
-        run: pnpm docs:build
+      - name: Build and check documentation
+        run: pnpm docs:check
 
   test:
     name: test (${{ matrix.os }})
