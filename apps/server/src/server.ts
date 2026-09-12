@@ -1,9 +1,10 @@
 /**
  * 功能概述：Server composition root，组合配置、数据库、Runtime、HTTP/Web 与 NapCat 生命周期。
  * 主要职责：startKaguyaServer 验证 Profile 和模块配置后启动宿主；close 逆序释放资源；
- * createRuntimeModelSelectionResolver 根据 Profile 批准的 tier 解析 provider/model 及生成参数。
+ * createRuntimeModelSelectionResolver 根据 Profile 批准的 tier 解析 provider/model、思考参数及硬超时。
  * 代码库关系：createMessageCatalog/createMessageComposition 装配消息编写模块；AdapterHost
  * 管理适配器；inspectModules 和账本只读端口交给 inspection.ts，配置仅用于秘密脱敏闭包。
+ * 启动配置阶段先备份并迁移已知 v3 Registry，再进入严格 v1 管理路径。
  * 输入输出与副作用：连接数据库、监听 HTTP 并启动适配器，失败时释放已创建资源并固定错误分类。
  * Inspection 仅在 Runtime 可用时注入，不把 settings、凭据或数据库对象放入 HTTP 响应。
  */
@@ -18,6 +19,7 @@ import { pathToFileURL } from "node:url";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import type { KaguyaLlmGenerationOptions } from "@kaguya/llm/client";
 import {
+  migrateLegacyUserConfigRegistry,
   ConfigError,
   ConfigIncompleteError,
   ConfigReviewRequiredError,
@@ -133,6 +135,7 @@ export async function startKaguyaServer(
             configRoot: providedConfig.configRoot,
             development: providedConfig.development,
           };
+    await migrateLegacyUserConfigRegistry({ rootDir: bootstrap.configRoot });
     configuration = await createConfigurationManagement(bootstrap.configRoot);
     configurationStatus = await configuration.getRegistryStatus();
     selectedProfile = await configuration.getRuntimeProfile(
@@ -508,6 +511,9 @@ function generationOptionsForTier(
   target: NonNullable<UserConfigProfile["ai"]["modelTiers"]>["light"],
 ): KaguyaLlmGenerationOptions {
   return {
+    ...(target.generation?.timeoutMs === undefined
+      ? {}
+      : { timeoutMs: target.generation.timeoutMs }),
     ...(target.generation?.reasoning === undefined
       ? {}
       : { reasoning: target.generation.reasoning }),

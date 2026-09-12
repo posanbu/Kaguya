@@ -10,7 +10,8 @@
  * 代码库关系：本模块消费配置管理层的 `ConfigurationManagement` 门面与
  * `@kaguya/config` 暴露的 schema 边界、错误码和 Profile 类型；`server.ts`
  * 会把唯一管理实例传入这里，WebUI 与外部管理客户端都通过这些路由驱动 selected
- * Profile，而不是直接访问底层 config manager。
+ * Profile，而不是直接访问底层 config manager；模型 generation 的 JSON Schema 与 Zod
+ * 同步接受 1–300000 ms 的 timeoutMs，防止请求校验拒绝或响应序列化丢失超时。
  * 输入输出与副作用：运行时会创建 Fastify 实例并注册中间件；Profile 路由在管理认证
  * 通过后可能写入配置目录并返回显式安全投影的 Profile 正文；消息路由仅在 `webGateway`
  * 就绪时非阻塞转发正规化内容，日志不制造 trace ID，否则返回明确的
@@ -208,6 +209,7 @@ const modelTierTargetJsonSchema = {
       type: "object",
       additionalProperties: false,
       properties: {
+        timeoutMs: { type: "integer", minimum: 1, maximum: 300_000 },
         reasoning: {
           type: "string",
           enum: [

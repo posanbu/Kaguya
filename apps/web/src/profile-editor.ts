@@ -11,6 +11,7 @@
  * 直接消费，而不需要把保存逻辑塞回组件树里。
  * 代码库关系：它依赖 `@kaguya/config` 的 Profile 类型作为输入约束，
  * 输出则与服务器 `/api/v1/profiles/:profileId` 的 replace body 对齐。
+ * 每个 tier 的硬超时以秒展示、毫秒持久化；空值使用 LLM 默认 300 秒，非法输入阻止保存。
  * 输入输出与副作用：函数只处理内存对象；实现必须克隆数组和对象，
  * 不能修改传入的 profile 引用，也不能偷偷删减未展示字段。
  */
@@ -55,6 +56,7 @@ interface MutableProfile {
 }
 
 interface MutableGenerationOptions {
+  timeoutMs?: number;
   reasoning?:
     | "provider-default"
     | "none"
@@ -91,6 +93,8 @@ export interface ProfileEditorFields {
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly lightModel: string;
+  readonly lightTimeoutSeconds: string;
+  readonly heavyTimeoutSeconds: string;
   readonly heavyModel: string;
   readonly lightThinkingEnabled: boolean;
   readonly lightReasoningEffort: string;
@@ -120,6 +124,12 @@ export function profileToEditorFields(
       provider?.models[1] ??
       provider?.models[0] ??
       "",
+    lightTimeoutSeconds: String(
+      (profile.ai.modelTiers?.light.generation?.timeoutMs ?? 300_000) / 1000,
+    ),
+    heavyTimeoutSeconds: String(
+      (profile.ai.modelTiers?.heavy.generation?.timeoutMs ?? 300_000) / 1000,
+    ),
     lightThinkingEnabled:
       profile.ai.modelTiers?.light.generation?.reasoning !== "none",
     lightReasoningEffort: reasoningEffort(
@@ -224,7 +234,20 @@ function tierOptions(
   const recommendedDurationMs = optionalPositiveInteger(
     fields[`${prefix}RecommendedDurationMs`],
   );
+  const timeoutText = fields[`${prefix}TimeoutSeconds`].trim();
+  const timeoutMs =
+    timeoutText === "" ? undefined : Math.round(Number(timeoutText) * 1000);
+  if (
+    timeoutMs !== undefined &&
+    (!/^(?:\d+(?:\.\d{1,3})?|\.\d{1,3})$/u.test(timeoutText) ||
+      !Number.isSafeInteger(timeoutMs) ||
+      timeoutMs < 1 ||
+      timeoutMs > 300_000)
+  ) {
+    throw new Error("模型超时必须在 0.001–300 秒之间，最多保留三位小数。");
+  }
   const generation: MutableGenerationOptions = {
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
     ...(!thinkingEnabled
       ? { reasoning: "none" as const }
       : reasoningEffort !== "provider-default" && isReasoning(reasoningEffort)

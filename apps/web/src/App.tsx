@@ -1,7 +1,9 @@
 /**
  * 功能概述：本文件承载 WebUI 的顶层状态机，在访问链接认证、Profile 管理、
  * 待重启提示与消息聊天之间做显式切换，落实“全局 selected Profile 唯一生效、
- * 切换后必须重启 Runtime”的产品契约。
+ * 切换后必须重启 Runtime”的产品契约。模型编辑区区分硬超时与推荐时间，
+ * 重启页给出开发/生产命令和新 Gateway Token 链接指引；空 allowlist 显示 QQ 排查提示。
+ * 推荐时间使用整数毫秒步长，避免 min=1/step=100 导致默认 2000/5000 无法提交。
  * 主要职责：`App` 负责从当前 URL fragment 获取网关 token，再读取 `/api/v1/profiles`，
  * 根据 selected Profile 的 readiness 决定当前视图，并在 ready 状态下
  * 提供聊天入口与 Settings
@@ -1145,11 +1147,21 @@ function ProfileManagementScreen({
                     }
                   />
                   <span id="gateway-allowlist-help" className="field-help">
-                    每行一条 platform:group|private:ID。platform 和 ID 支持
+                    使用 QQ 前必须设置 Gateway Allowlist：例如 qq:group:778899
+                    允许指定群，qq:private:112233 允许指定用户；qq:group:* 或
+                    qq:private:* 允许所有群或私聊。每行一条
+                    platform:group|private:ID。platform 和 ID 支持
                     *；空列表拒绝所有平台消息，无效行会保存但不生效。Web
                     入口不受此处控制。
                   </span>
                 </label>
+                {editorFields.gatewayAllowlistText.trim() === "" ? (
+                  <p role="status" className="field-help">
+                    Gateway Allowlist 为空：即使 NapCat 已连接，QQ
+                    消息也不会进入 Runtime。 请先填写允许的群号或用户 QQ
+                    号，保存并重启后再发送消息验证。
+                  </p>
+                ) : null}
                 <label className="setup-check">
                   <input
                     type="checkbox"
@@ -1275,12 +1287,35 @@ function ModelTierEditor({
         </select>
       </label>
       <label className="field">
+        <span>模型调用超时（秒）</span>
+        <input
+          type="number"
+          min="0.001"
+          max="300"
+          step="0.001"
+          value={
+            light ? fields.lightTimeoutSeconds : fields.heavyTimeoutSeconds
+          }
+          onChange={(event) =>
+            onChange(
+              light
+                ? { lightTimeoutSeconds: event.target.value }
+                : { heavyTimeoutSeconds: event.target.value },
+            )
+          }
+          placeholder="300"
+        />
+        <span className="field-help">
+          超过该时间会终止模型调用；留空使用 300 秒。
+        </span>
+      </label>
+      <label className="field">
         <span>推荐响应时间（毫秒）</span>
         <input
           type="number"
           min="1"
           max="300000"
-          step="100"
+          step="1"
           value={recommendedDurationMs}
           onChange={(event) =>
             onChange(
@@ -1590,7 +1625,10 @@ function RestartRequired() {
         <CheckCircle2 size={22} />
         <h1>配置已保存</h1>
         <p>
-          请重启 Kaguya 服务，使 Runtime 加载新的选中 Profile，然后刷新页面。
+          配置已保存。请在运行 Kaguya 的终端按 Ctrl+C，回到仓库根目录执行 pnpm
+          dev；生产模式执行 pnpm start。启动完成后，打开终端新输出的完整 Kaguya
+          access URL（包含 #gatewayToken=），使 Runtime 加载新的选中 Profile。
+          旧链接的 Gateway Token 在重启后会失效。
         </p>
         <button
           type="button"

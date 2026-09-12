@@ -7,7 +7,8 @@
  * 代码库关系：Runtime 的 `LlmLifecycleClient` 在此边界外注册 requested/completed/failed 原子；
  * provider 组合层可注入单一 model 或按请求解析 model，本文件不依赖数据库或 trace repository。
  * 输入输出与副作用：输入包含 modelId、已编译 prompt、outputSchema 和可选 AbortSignal；调用
- * AI SDK 后返回 JSON-compatible output、可选数字 usage 与非负 durationMs。失败仅暴露分类信息。
+ * generationOptions.timeoutMs（默认 300 秒）作为 AI SDK 总超时覆盖请求与响应读取；
+ * 外部 abort 仍保留取消语义。AI SDK 后返回 JSON-compatible output、可选数字 usage 与非负 durationMs。失败仅暴露分类信息。
  */
 import type { CompiledPrompt, LlmErrorKind } from "@kaguya/schema";
 import {
@@ -32,6 +33,7 @@ export interface KaguyaLlmRequest<TOutput = unknown> {
 
 /** Provider-neutral generation controls supplied by the selected Profile tier. */
 export interface KaguyaLlmGenerationOptions {
+  readonly timeoutMs?: number;
   readonly reasoning?:
     | "provider-default"
     | "none"
@@ -118,7 +120,16 @@ export class KaguyaLlmClient {
     const startedAt = this.#now();
     try {
       const generationOptions = this.#resolveGenerationOptions(request);
+      const timeoutMs = generationOptions.timeoutMs ?? 300_000;
+      if (
+        !Number.isSafeInteger(timeoutMs) ||
+        timeoutMs < 1 ||
+        timeoutMs > 300_000
+      ) {
+        throw new Error("Invalid model timeout");
+      }
       const common = {
+        timeout: timeoutMs,
         model: this.#resolveModel(request),
         prompt: request.prompt.text,
         ...(request.signal === undefined

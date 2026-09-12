@@ -1,4 +1,5 @@
 /**
+ * tier 配置回归同时覆盖 generation.timeoutMs 到 LLM client 的硬超时参数传递。
  * 功能概述：验证 Server 作为唯一 composition root 组合 PostgreSQL information
  * database、Runtime、Web/NapCat ingress、HTTP 与启动期选定的全局 Profile。
  * 主要职责：用真实 PGlite 覆盖 Web 到 information DAG，验证 HTTP/Web UI/Vite
@@ -955,6 +956,7 @@ describe("unified server composition", () => {
             modelId: "light-model",
             generation: {
               reasoning: "minimal",
+              timeoutMs: 120_000,
             },
             recommendedDurationMs: 2_000,
           },
@@ -995,6 +997,7 @@ describe("unified server composition", () => {
     expect(resolver({ modelTier: "light" })).toMatchObject({
       generationOptions: {
         reasoning: "minimal",
+        timeoutMs: 120_000,
         recommendedDurationMs: 2_000,
       },
     });

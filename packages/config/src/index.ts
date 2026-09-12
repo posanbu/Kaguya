@@ -8,6 +8,7 @@
  * 代码库关系：`apps/server`、`apps/web` 与其他包通过该文件消费配置模块，
  * 因此这里的导出集合同时充当跨包契约边界；任何遗留的 default/initialize
  * 语义都必须在这里被移除，避免 TypeScript 继续传播旧接口。
+ * migrateLegacyUserConfigRegistry 提供启动前的显式旧格式迁移，manager 的 open/inspect 仍严格校验 v1。
  * 输入输出与副作用：本文件本身无运行时副作用，只定义导出面；它的准确性直接影响
  * 包级 typecheck、调用方自动补全与重构安全性。
  */
@@ -87,3 +88,5 @@ export type {
   RuntimeConfig,
   RuntimeConfigInput,
 } from "./model.js";
+
+export { migrateLegacyUserConfigRegistry } from "./migration.js";

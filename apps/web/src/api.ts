@@ -1,4 +1,5 @@
 /**
+ * ModelGenerationOptions.timeoutMs 随 Profile API 往返，限定为 1–300000 ms 硬超时。
  * 架构说明：本模块是 Web 端唯一的 Kaguya HTTP 客户端门面，
  * 负责把界面动作翻译成显式的 Profile Registry 请求。
  * 它必须只暴露最小必需的 wire contract：读取受保护的 Profile readiness、发送消息、
@@ -124,6 +125,7 @@ export interface UserConfigProfile {
 }
 
 export interface ModelGenerationOptions {
+  readonly timeoutMs?: number;
   readonly reasoning?:
     | "provider-default"
     | "none"
@@ -803,6 +805,11 @@ function isModelTierTarget(value: unknown): boolean {
 function isModelGenerationOptions(value: unknown): boolean {
   return (
     isRecord(value) &&
+    (value.timeoutMs === undefined ||
+      (typeof value.timeoutMs === "number" &&
+        Number.isSafeInteger(value.timeoutMs) &&
+        value.timeoutMs >= 1 &&
+        value.timeoutMs <= 300_000)) &&
     (value.reasoning === undefined ||
       [
         "provider-default",

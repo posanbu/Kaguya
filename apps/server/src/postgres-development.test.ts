@@ -1,3 +1,9 @@
+/**
+ * 功能概述：验证开发 PostgreSQL 准备、容器身份与 Profile 配置衔接。
+ * 主要职责：模拟 Docker 命令与数据库预检；v3 回归验证迁移先于严格配置读取，且保留外部数据库语义。
+ * 代码库关系：覆盖 postgres-development 与 CLI 的测试清单，真实配置文件只写入临时目录。
+ * 输入输出与副作用：记录命令和状态变化；afterEach 恢复 mock 并清理文件，不操作用户 Docker 数据。
+ */
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -501,3 +507,34 @@ function runtime(databaseUrl: string, databaseMode: "managed" | "external") {
     gatewayAllowlist: [],
   };
 }
+
+it("migrates a v3 registry before development database preparation", async () => {
+  const root = await configuredManagedRoot();
+  const indexPath = join(root, "index.json");
+  const profilePath = join(root, "profiles", "profile_default.json");
+  const index = JSON.parse(await readFile(indexPath, "utf8"));
+  const profile = JSON.parse(await readFile(profilePath, "utf8"));
+  index.version = 3;
+  profile.plugins = [];
+  delete profile.identity;
+  delete profile.memory;
+  delete profile.runtime.databaseMode;
+  await writeFile(indexPath, JSON.stringify(index));
+  await writeFile(profilePath, JSON.stringify(profile));
+  const checkDatabase = vi.fn(async () => undefined);
+  const runCommand = vi.fn(async () => failed());
+  await expect(
+    ensureDevelopmentPostgres({
+      configRoot: root,
+      dependencies: { checkDatabase, runCommand },
+    }),
+  ).resolves.toMatchObject({ mode: "external" });
+  expect(runCommand).not.toHaveBeenCalled();
+  expect(checkDatabase).toHaveBeenCalledWith(profile.runtime.databaseUrl, {
+    prepareSchema: true,
+  });
+  expect(JSON.parse(await readFile(indexPath, "utf8")).version).toBe(1);
+  await expect(
+    FileUserConfigManager.open({ rootDir: root }),
+  ).resolves.toBeInstanceOf(FileUserConfigManager);
+});

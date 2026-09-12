@@ -3,6 +3,8 @@
  * 主要职责：start 登记完整订阅集合；每轮公平尝试各订阅一个 claim；失败有界 retry/exhaust，
  * stop 停止领取、传播 abort 并有界 drain。lease 到期的迟到任务由 Core/数据库 fencing 拒绝。
  * 代码库关系：仅依赖 Core 与可靠 ledger 端口；Host/Runtime 安装订阅，不把业务策略写入执行器。
+ * DEFAULT_LEASE_MS 采用 330 秒，覆盖配置允许的 300 秒模型调用并为持久化提交留出 30 秒；
+ * 显式 leaseMs 仍用于其他执行场景与测试。
  * 输入输出与副作用：后台轮询执行持久化 I/O，所有 rejection 均被消费；不记录正文或原始错误。
  */
 import type { DeepReadonly, InformationAtom } from "@kaguya/schema";
@@ -11,6 +13,8 @@ import type {
   InformationClaim,
   ReliableInformationLedger,
 } from "./reliable-types.js";
+const DEFAULT_LEASE_MS = 330_000;
+
 export interface ReliableInformationSubscription {
   readonly subscriptionId: string;
   readonly kind: string;
@@ -44,7 +48,7 @@ export class ReliableInformationRunner {
       throw new Error("Reliable information ledger is required");
     this.#ledger = options.core.store.reliable;
     for (const [value, min, max] of [
-      [options.leaseMs ?? 30000, 1, 86400000],
+      [options.leaseMs ?? DEFAULT_LEASE_MS, 1, 86400000],
       [options.maxAttempts ?? 3, 1, 100],
       [options.retryDelayMs ?? 100, 0, 86400000],
       [options.pollIntervalMs ?? 25, 1, 60000],
@@ -102,7 +106,7 @@ export class ReliableInformationRunner {
     if (!this.#running) return;
     const claim = await this.#ledger.claim(
       subscription.subscriptionId,
-      this.#options.leaseMs ?? 30000,
+      this.#options.leaseMs ?? DEFAULT_LEASE_MS,
     );
     if (!claim) return;
     if (!this.#running) {

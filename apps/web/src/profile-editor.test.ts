@@ -1,4 +1,5 @@
 /**
+ * 超时回归覆盖秒/毫秒往返、空值默认和非法值拒绝，并验证保存不丢失其他 Provider 数据。
  * 架构说明：本测试文件定义 Web 端 Profile 编辑器的纯函数边界，
  * 用来保证展示层字段与完整 Profile 之间的映射不会丢失任何未展示的
  * 平台、插件、提供方设置或敏感值。它是 `profile-editor.ts` 的守门测试，
@@ -137,6 +138,8 @@ describe("profileToEditorFields", () => {
       apiKey: "provider-secret",
       lightModel: "light-model",
       heavyModel: "heavy-model",
+      lightTimeoutSeconds: "300",
+      heavyTimeoutSeconds: "300",
       lightThinkingEnabled: true,
       lightReasoningEffort: "provider-default",
       lightRecommendedDurationMs: "2000",
@@ -158,6 +161,8 @@ describe("profileToEditorFields", () => {
       apiKey: "",
       lightModel: "",
       heavyModel: "",
+      lightTimeoutSeconds: "300",
+      heavyTimeoutSeconds: "300",
       lightThinkingEnabled: true,
       lightReasoningEffort: "provider-default",
       lightRecommendedDurationMs: "2000",
@@ -236,11 +241,13 @@ describe("mergeProfileEditorFields", () => {
           light: {
             providerId: "default-provider",
             modelId: "light-model-v2",
+            generation: { timeoutMs: 300_000 },
             recommendedDurationMs: 2000,
           },
           heavy: {
             providerId: "default-provider",
             modelId: "heavy-model-v2",
+            generation: { timeoutMs: 300_000 },
             recommendedDurationMs: 5000,
           },
         },
@@ -307,11 +314,13 @@ describe("mergeProfileEditorFields", () => {
           light: {
             providerId: "default-provider",
             modelId: "light-model",
+            generation: { timeoutMs: 300_000 },
             recommendedDurationMs: 2000,
           },
           heavy: {
             providerId: "default-provider",
             modelId: "heavy-model",
+            generation: { timeoutMs: 300_000 },
             recommendedDurationMs: 5000,
           },
         },
@@ -351,3 +360,37 @@ describe("mergeProfileEditorFields", () => {
     ]);
   });
 });
+
+it("round trips independent tier timeouts in seconds without changing the input", () => {
+  const before = structuredClone(completeProfile);
+  const fields = profileToEditorFields(completeProfile);
+  const saved = mergeProfileEditorFields(completeProfile, {
+    ...fields,
+    lightTimeoutSeconds: "1.001",
+    heavyTimeoutSeconds: "300",
+  });
+  expect(saved.ai.modelTiers?.light.generation?.timeoutMs).toBe(1_001);
+  expect(saved.ai.modelTiers?.heavy.generation?.timeoutMs).toBe(300_000);
+  expect(
+    profileToEditorFields({ ...completeProfile, ai: saved.ai })
+      .lightTimeoutSeconds,
+  ).toBe("1.001");
+  expect(completeProfile).toEqual(before);
+  expect(
+    mergeProfileEditorFields(completeProfile, {
+      ...fields,
+      lightTimeoutSeconds: "",
+    }).ai.modelTiers?.light.generation?.timeoutMs,
+  ).toBeUndefined();
+});
+it.each(["0", "-1", "301", "NaN", "0.0001", "Infinity"])(
+  "rejects invalid timeout %s before saving",
+  (value) => {
+    expect(() =>
+      mergeProfileEditorFields(completeProfile, {
+        ...profileToEditorFields(completeProfile),
+        lightTimeoutSeconds: value,
+      }),
+    ).toThrow("模型超时");
+  },
+);

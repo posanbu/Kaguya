@@ -241,3 +241,11 @@ try {
 
 Issue messages are intentionally secret-free. Applications should log the
 issue list rather than the Profile object or the original configuration error.
+
+## v3 Registry 启动迁移
+
+`migrateLegacyUserConfigRegistry({ rootDir })` 是显式的启动准备 API。它仅处理已知 v3 索引及其旧 Profile，先完整校验、备份，再逐一原子写入 Profile，最后发布 v1 索引。迁移可返回 `{ backupPath }`；当前格式或其他版本返回 `undefined`，后续仍由 manager 严格校验。`open` 和只读 `inspect` 不会隐式迁移，schema 仍只接受 v1。
+
+Server 启动与开发数据库准备入口调用该 API。缺失 identity/memory 会补默认值，退役 plugins 和持久化 Gateway Token 只保留于私有备份；模型和平台凭据、选中项及已有 runtime 规则保持不变。迁移失败和锁恢复步骤见根 README。不要运行多个进程同时修改同一个 Registry。
+
+`ai.modelTiers.light.generation.timeoutMs` 与 `heavy.generation.timeoutMs` 可配置 1–300000 ms 的模型硬超时。省略时使用 300000 ms；`recommendedDurationMs` 仍是独立的软预算。
