@@ -1,6 +1,7 @@
 /**
  * 架构说明：本模块为 database 包及其消费者的集成测试提供两种隔离的 `KaguyaDatabase`：
  * 内存 PGlite，以及真实 PostgreSQL 的临时 schema。
+ * createTestingDatabase 的可选 vector 标记只为离线 pgvector 集成测试加载 WASM 扩展。
  * 主要职责：`createTestingDatabase` 创建 PGlite；`createPostgresTestingDatabase` 与
  * `createPostgresTestingDatabaseScope` 生成安全的 schema 名，用管理连接创建/销毁 schema，
  * 并以 PostgreSQL startup options 固定测试连接的 search_path。scope 允许在最终清理前关闭和
@@ -24,8 +25,10 @@ import {
 import { KaguyaDatabase } from "./index.js";
 import { PGliteDatabase } from "./pglite-driver.js";
 
-export async function createTestingDatabase(): Promise<KaguyaDatabase> {
-  const sql = await PGliteDatabase.create();
+export async function createTestingDatabase(
+  options: { vector?: boolean } = {},
+): Promise<KaguyaDatabase> {
+  const sql = await PGliteDatabase.create(options);
   return new KaguyaDatabase(sql);
 }
 

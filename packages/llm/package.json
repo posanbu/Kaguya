@@ -22,6 +22,10 @@
     "./testing": {
       "types": "./dist/testing.d.ts",
       "default": "./dist/testing.js"
+    },
+    "./embedding": {
+      "types": "./dist/embedding.d.ts",
+      "default": "./dist/embedding.js"
     }
   },
   "scripts": {

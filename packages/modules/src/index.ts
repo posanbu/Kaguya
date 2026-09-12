@@ -1,5 +1,6 @@
 /**
  * 功能概述：汇总 modules 包的信息原子 kind、Heartflow、Message Composer与 person-fact Model Task 公共契约。
+ * 额外导出后台原始消息写回模块与 request/terminal kind，供 composition 显式装配。
  * 主要职责：导出 `createHeartflowModule`、`createMessageComposerModule`、
  * `createPersonFactTaskModule`、默认 Selector 名称以及各阶段 kind/schema；旧事件定义、reply-only completed schema 和定向事件模块不再公开。
  * 代码库关系：apps composition root 通过 first-party/catalog.ts 工厂选择模块，注入 shared completed definition，
@@ -127,3 +128,25 @@ export {
   createFirstPartyModuleConfigDefaults,
   type FirstPartyModuleInstanceConfig,
 } from "./first-party/catalog.js";
+
+export {
+  memoryWritebackModule,
+  memoryWritebackRequestedInformationKind,
+  memoryWritebackCompletedInformationKind,
+  memoryWritebackEmptyInformationKind,
+  memoryWritebackFailedInformationKind,
+} from "./first-party/memory-writeback/index.js";
+
+export {
+  memoryIndexModule,
+  memoryIndexRequestedInformationKind,
+  memoryBackfillRequestedInformationKind,
+  memoryIndexCompletedInformationKind,
+  memoryIndexBootstrapCapability,
+} from "./first-party/memory-index/index.js";
+
+export {
+  memoryCognitionModule,
+  memoryCognitionRequestedInformationKind,
+  memoryCognitionCompletedInformationKind,
+} from "./first-party/memory-cognition/index.js";

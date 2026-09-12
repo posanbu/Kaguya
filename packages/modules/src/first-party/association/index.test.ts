@@ -1,4 +1,5 @@
 /**
+ * 检索断言包含冻结 scope，避免向量和稀疏路径跨聊天范围召回。
  * 功能概述：验证 #72 的可追溯联想链只通过 Information DAG 暴露召回结果。
  * 主要职责：锁定 association request/query/candidate/completed 四类 kind、确定性
  * sparse-2gram 路线，以及 candidate 只保存 canonical source informationId 的契约。
@@ -175,7 +176,7 @@ describe("associationModule", () => {
     expect(parsed.success && parsed.data).not.toHaveProperty("text");
   });
 
-  it("recalls globally before the current inbound and excludes the inbound itself", async () => {
+  it("recalls within the frozen target scope and excludes the inbound itself", async () => {
     const query = freezeInformationAtom({
       informationId: informationIdSchema.parse("association-query-1"),
       kind: associationQueryInformationKind.kind,
@@ -251,6 +252,7 @@ describe("associationModule", () => {
       strategyId: "kaguya.memory.sparse",
       input: {
         query: "hello",
+        scopes: [query.payload.scope],
         occurredBefore: query.payload.asOf,
         excludeSourceInformationIds: [currentInbound.informationId],
       },

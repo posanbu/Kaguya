@@ -22,6 +22,8 @@ Server 每次启动都会生成新的 Gateway Token，并在成功监听后打�
 
 `KAGUYA_CONFIG_ROOT` 指向权限受保护的 Profile Registry。Registry 有且只有一个显式的 `selectedProfileId`；Server 的 host、port、database、Web 路径、CORS、代理、限流、日志、allowlist、AI、Memory 与平台都来自这个 Profile。首次 `pnpm dev` 会在缺少整个 `runtime` 时保留其他 Profile 内容并补入安全的本地 runtime；部分损坏的 runtime 会被拒绝而不会覆盖。
 
+Memory 默认关闭。开启后，每条入站消息通过独立 durable 写回保存；可选接入 pgvector 混合召回与独立 Mem0 认知服务，后台失败不阻塞在线回合。配置、许可证 ADR 与恢复边界见 [Memory 认知层](docs/developers/memory.md)。
+
 数据库连接、PostgreSQL 17、严格 schema v1 和 Runtime Kind 必须在任何监听启动前通过。数据库 schema 不兼容会直接终止 Server；AI 配置尚未完成时仍会开放 Web 配置界面，Runtime 与 NapCat 保持停止。Web UI 保存或切换 selected Profile 只写入配置；进入“配置生效管理”点击“应用当前配置”，才会热重载模型、人设、Memory、NapCat 和白名单，无需重新打开访问链接。端口、数据库地址等进程级字段变更仍需在原终端按 `Ctrl+C`，重新执行 `pnpm dev`（生产模式使用 `pnpm start`），然后打开新打印的完整访问链接。初始化格式与密钥边界见 [`@kaguya/config`](packages/config/README.md)。
 
 Web UI 的 NapCat 页面只读写 selected Profile 的 `platforms` 条目。

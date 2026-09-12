@@ -17,6 +17,7 @@
     "@kaguya/llm": "workspace:*",
     "@kaguya/modules": "workspace:*",
     "@kaguya/runtime": "workspace:*",
-    "@kaguya/scheduler": "workspace:*"
+    "@kaguya/scheduler": "workspace:*",
+    "@kaguya/memory": "workspace:*"
   }
 }
