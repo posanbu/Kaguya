@@ -1,10 +1,10 @@
 /**
  * 功能概述：用真实 PGlite、Core 和 ModuleHost 验证 `KaguyaRuntime` 的完整信息 DAG。
  * 主要职责：覆盖 Web 入站到投递成功的直接因果链、生成失败不会继续 assistant/outbound/delivery、
- * 三类 transport 失败、无订阅持久化、同 kind 消费并发与多 reply activation 共享模型任务后
- * 各自产生正确 outbound、start/close 确定性交错、
+ * 三类 transport 失败、无订阅持久化、同 kind 消费并发与多 message composer activation 共享模型任务后
+ * 各自按 intent target 投递纯文本，默认 OneBot action 仅含 text 段、start/close 确定性交错、
  * in-flight 关闭、关闭后 ingress 拒绝、数据库初始化错误固定分类及抛出型反射属性，
- * 以及消费者失败与其他结果并存；默认 reply Prompt 必须带原子 provenance 和有序
+ * 以及消费者失败与其他结果并存；默认 message Prompt 必须带原子 provenance 和有序
  * uses-context 引用。
  * 代码库关系：测试直接消费 Runtime 的 `InformationIngress.submit` 和注入数据库选项；默认业务
  * 模块来自 `@kaguya/modules`，自定义 fixture 只用于隔离并发和消费者故障语义。
@@ -48,9 +48,9 @@ import {
 } from "@kaguya/llm/testing";
 import {
   inboundTextInformationKind,
-  replyRequestedInformationKind,
   attentionArousalCompletedInformationKind,
 } from "@kaguya/modules";
+import { buildOneBotSendAction } from "@kaguya/platform-adapters";
 import type {
   PlatformDeliveryReceipt,
   PlatformInboundMessage,
@@ -66,15 +66,15 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const testIdentity = { name: "Kaguya", aliases: ["辉夜"], persona: "test" };
-const testReplyTemplates = {
-  main: "{{scene}}{{history}}{{memory}}{{quoted}}{{target}}",
+const testMessageTemplates = {
+  main: "{{scene}}{{history}}{{memory}}{{turn}}",
   history: "{{#each messages}}{{> history-inbound}}{{/each}}",
   historyInbound: "{{content}}",
   historyAssistant: "{{content}}",
   memory: "{{#each items}}{{> memory-item}}{{/each}}",
   memoryItem: "{{content}}",
   quoted: "{{message}}",
-  target: "{{content}}",
+  turn: "{{#each messages}}{{> history-inbound}}{{/each}}",
 };
 
 import {
@@ -192,11 +192,11 @@ async function createRuntime(
   const database = await createTestingDatabase();
   let id = 0;
   const runtime = new KaguyaRuntime({
-    ...createReplyComposition(),
+    ...createMessageComposition(),
     database,
     now: () => new Date("2026-09-04T00:00:01.000Z"),
     informationIdGenerator: () => `runtime-atom-${++id}`,
-    ...createReplyComposition(
+    ...createMessageComposition(
       overrides.resolveModelSelection,
       overrides.activations,
     ),
@@ -218,7 +218,7 @@ async function createGatedRuntime() {
   const base = await createTestingDatabase();
   const database = new GatedSchemaDatabase(base.sql);
   const runtime = new KaguyaRuntime({
-    ...createReplyComposition(),
+    ...createMessageComposition(),
     database,
     catalog: defineInformationModuleCatalog(...[]),
     activations: [],
@@ -250,8 +250,9 @@ describe("KaguyaRuntime", () => {
         service: "runtime-observability-test",
         level: "info",
         namespaceLevels: {
-          "runtime:information": "debug",
-          "runtime:module:demo.reply.llm": "debug",
+          "runtime:information": "trace",
+          "runtime:modules": "debug",
+          "runtime:module:agent.message-composer": "debug",
         },
         stream: {
           write: (line) => {
@@ -293,13 +294,13 @@ describe("KaguyaRuntime", () => {
         "agent.heartbeat.short",
         "agent.heartflow.online",
         "core.identity.normalize",
-        "demo.reply.llm",
+        "agent.message-composer",
       ]);
       expect(logs).toContainEqual(
         expect.objectContaining({
-          module: "runtime:module:demo.reply.llm",
-          event: "reply.model.dispatching",
-          taskId: "core.reply.generate",
+          module: "runtime:module:agent.message-composer",
+          event: "message.model.dispatching",
+          taskId: "agent.message.compose",
           tier: "heavy",
         }),
       );
@@ -317,13 +318,15 @@ describe("KaguyaRuntime", () => {
       );
       expect(requestSummary).toMatchObject({
         event: "model.task.lifecycle",
-        taskId: "core.reply.generate",
+        taskId: "agent.message.compose",
         tier: "heavy",
         providerId: "test",
         modelId: "deterministic-heavy",
-        promptVariableCount: 5,
+        promptVariableCount: 4,
       });
-      expect(requestSummary?.promptPreview).toContain("你正在私聊中");
+      expect(requestSummary?.promptPreview).toContain(
+        "已决定在当前私聊中发送一条自然消息",
+      );
       expect(requestSummary?.references).toEqual(expect.any(Array));
       expect(requestDetail).toMatchObject({
         informationId: requestSummary?.informationId,
@@ -349,7 +352,8 @@ describe("KaguyaRuntime", () => {
     await database.information.synchronizeKinds(["core.model.task.completed"]);
     await database.information.reliable.configureSubscriptions([
       {
-        subscriptionId: "reply.default:kaguya.reply.model-task-completed",
+        subscriptionId:
+          "message-composer.default:kaguya.message.model-task-completed",
         kind: "core.model.task.completed",
       },
     ]);
@@ -358,8 +362,8 @@ describe("KaguyaRuntime", () => {
   it.each(["missing", "invalid-value", "invalid-version"] as const)(
     "rejects %s model capability before module create",
     async (mode) => {
-      const base = createReplyComposition().catalog.definitions.find(
-        (d) => d.manifest.definitionId === "demo.reply.llm",
+      const base = createMessageComposition().catalog.definitions.find(
+        (d) => d.manifest.definitionId === "agent.message-composer",
       )!;
       const create = vi.fn(base.create);
       const definition = defineInformationModule({ ...base, create });
@@ -367,7 +371,7 @@ describe("KaguyaRuntime", () => {
       const runtime = new KaguyaRuntime({
         database,
         catalog: defineInformationModuleCatalog(definition),
-        activations: [createReplyComposition().activations[0]!],
+        activations: [createMessageComposition().activations[0]!],
         capabilities:
           mode === "missing"
             ? []
@@ -391,8 +395,8 @@ describe("KaguyaRuntime", () => {
     let value: ModelTaskCapability | undefined;
     let activation: unknown;
     let exposed: string[] = [];
-    const base = createReplyComposition().catalog.definitions.find(
-      (d) => d.manifest.definitionId === "demo.reply.llm",
+    const base = createMessageComposition().catalog.definitions.find(
+      (d) => d.manifest.definitionId === "agent.message-composer",
     )!;
     const definition = defineInformationModule({
       ...base,
@@ -409,13 +413,13 @@ describe("KaguyaRuntime", () => {
     });
     const { runtime } = await createRuntime({
       catalog: defineInformationModuleCatalog(definition),
-      activations: [createReplyComposition().activations[0]!],
+      activations: [createMessageComposition().activations[0]!],
     });
     await runtime.start();
     expect(value).toBeInstanceOf(ModelTaskClient);
     expect(activation).toEqual({
-      instanceId: "reply.default",
-      definitionId: "demo.reply.llm",
+      instanceId: "message-composer.default",
+      definitionId: "agent.message-composer",
     });
     expect(exposed).not.toEqual(expect.arrayContaining(["core"]));
     for (const forbidden of [
@@ -430,13 +434,16 @@ describe("KaguyaRuntime", () => {
     expect(Object.keys(value!)).toEqual([]);
     for (const request of [
       {
-        activation: { instanceId: "forged", definitionId: "demo.reply.llm" },
+        activation: {
+          instanceId: "forged",
+          definitionId: "agent.message-composer",
+        },
         selectionPolicy: { tier: "heavy" as const },
       },
       {
         activation: {
-          instanceId: "reply.default",
-          definitionId: "demo.reply.llm",
+          instanceId: "message-composer.default",
+          definitionId: "agent.message-composer",
         },
         selectionPolicy: { tier: "light" as const },
       },
@@ -445,7 +452,7 @@ describe("KaguyaRuntime", () => {
         value!.execute({
           ...request,
           task: {
-            taskId: "core.reply.generate",
+            taskId: "agent.message.compose",
             version: "1",
             outputMode: "object",
             allowedTiers: ["light", "heavy"],
@@ -455,9 +462,9 @@ describe("KaguyaRuntime", () => {
           contextInformationId: "context",
           contextAtoms: [],
           prompt: {
-            kind: "reply",
+            kind: "message",
             text: "prompt",
-            templateId: "test.reply.v1",
+            templateId: "test.message.v1",
             templates: [{ name: "main", content: "prompt" }],
             variables: [],
           },
@@ -467,7 +474,7 @@ describe("KaguyaRuntime", () => {
   });
 
   it(
-    "traces default reply Prompt to the selected current input",
+    "traces the default message prompt to frozen turn inputs",
     async () => {
       const customRetrieve = vi.fn(async () => []);
       const { runtime, database } = await createRuntime({
@@ -485,33 +492,42 @@ describe("KaguyaRuntime", () => {
       const graph = await database.information.query({
         informationId: result.rootInformationId,
       });
-      const reply = graph.find(({ kind }) => kind === "core.reply.requested")!;
+      const reply = graph.find(
+        ({ kind }) => kind === "agent.message.intent.requested",
+      )!;
       const requested = graph.find(
         ({ kind }) => kind === "core.model.task.requested",
       )!;
 
+      const context = graph.find(
+        ({ kind }) => kind === "agent.turn.context.completed",
+      )!;
+      const inbound = graph.find(
+        ({ kind }) => kind === "core.message.inbound.text",
+      )!;
       expect(
-        requested.references.filter(
-          ({ relation }) => relation === "core:uses-context",
-        ),
-      ).toEqual([
-        {
-          relation: "core:uses-context",
-          informationId: reply.informationId,
-        },
-      ]);
+        requested.references
+          .filter(({ relation }) => relation === "core:uses-context")
+          .map(({ informationId }) => informationId),
+      ).toEqual(
+        expect.arrayContaining([
+          reply.informationId,
+          context.informationId,
+          inbound.informationId,
+        ]),
+      );
       const requestedPayload =
         modelTaskRequestedInformationKind.payloadSchema.parse(
           requested.payload,
         );
       expect(requestedPayload).toMatchObject({
-        taskId: "core.reply.generate",
+        taskId: "agent.message.compose",
         version: "1",
         outputMode: "text",
         sourceInformationId: reply.informationId,
         activation: {
-          instanceId: "reply.default",
-          definitionId: "demo.reply.llm",
+          instanceId: "message-composer.default",
+          definitionId: "agent.message-composer",
         },
         selectionPolicy: { tier: "heavy" },
         resolvedModel: { providerId: "test", modelId: "deterministic-heavy" },
@@ -520,8 +536,8 @@ describe("KaguyaRuntime", () => {
       expect(requestedPayload.prompt.provenance).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            variableName: "target",
-            informationIds: [reply.informationId],
+            variableName: "turn",
+            informationIds: [inbound.informationId],
           }),
         ]),
       );
@@ -668,8 +684,12 @@ describe("KaguyaRuntime", () => {
       expect(payload.prompt.provenance).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            variableName: "target",
-            informationIds: [payload.sourceInformationId],
+            variableName: "turn",
+            informationIds: [
+              secondGraph.find(
+                ({ kind }) => kind === inboundTextInformationKind.kind,
+              )!.informationId,
+            ],
           }),
         ]),
       );
@@ -736,7 +756,7 @@ describe("KaguyaRuntime", () => {
         new Error(`authentication failed: ${secret}`),
       );
       const runtime = new KaguyaRuntime({
-        ...createReplyComposition(),
+        ...createMessageComposition(),
         database,
       });
       resources.push({ runtime, database });
@@ -765,7 +785,7 @@ describe("KaguyaRuntime", () => {
         new DatabasePassword123("database-secret"),
       );
       const runtime = new KaguyaRuntime({
-        ...createReplyComposition(),
+        ...createMessageComposition(),
         database,
       });
       resources.push({ runtime, database });
@@ -801,7 +821,7 @@ describe("KaguyaRuntime", () => {
       });
       vi.spyOn(database, "prepareSchema").mockRejectedValueOnce(malicious);
       const runtime = new KaguyaRuntime({
-        ...createReplyComposition(),
+        ...createMessageComposition(),
         database,
       });
       resources.push({ runtime, database });
@@ -1008,7 +1028,7 @@ describe("KaguyaRuntime", () => {
   );
 
   it(
-    "persists the complete default source-mode Web delivery DAG",
+    "persists the complete default intent-target Web delivery DAG",
     async () => {
       const { runtime, database } = await createRuntime();
       const sendMessage = vi.fn<PlatformOutboundTransport["sendMessage"]>(
@@ -1036,7 +1056,7 @@ describe("KaguyaRuntime", () => {
       expect(new Set(graph.map(({ kind }) => kind))).toEqual(
         new Set([
           "core.message.inbound.text",
-          "core.reply.requested",
+          "agent.message.intent.requested",
           "agent.association.requested",
           "agent.association.query",
           "agent.association.completed",
@@ -1069,8 +1089,8 @@ describe("KaguyaRuntime", () => {
       const byKind = new Map(graph.map((atom) => [atom.kind, atom]));
       const chain = [
         ["agent.attention.arousal.completed", "agent.turn.context.completed"],
-        ["core.reply.requested", "agent.attention.arousal.completed"],
-        ["core.model.task.requested", "core.reply.requested"],
+        ["agent.message.intent.requested", "agent.attention.arousal.completed"],
+        ["core.model.task.requested", "agent.message.intent.requested"],
         ["core.model.task.completed", "core.model.task.requested"],
         ["core.message.assistant.text", "core.model.task.completed"],
         ["core.delivery.requested", "core.message.assistant.text"],
@@ -1122,7 +1142,7 @@ describe("KaguyaRuntime", () => {
       });
       expect(graph.map(({ kind }) => kind)).toContain("agent.wait.requested");
       expect(graph.map(({ kind }) => kind)).not.toContain(
-        "core.reply.requested",
+        "agent.message.intent.requested",
       );
     },
     TEST_TIMEOUT,
@@ -1183,29 +1203,20 @@ describe("KaguyaRuntime", () => {
   );
 
   it(
-    "shares one model task while each reply activation delivers through its own outbound",
+    "shares one model task while each composer delivers to the intent target",
     async () => {
       const { runtime, database } = await createRuntime({
         activations: [
-          ...createReplyComposition().activations.filter(
-            (a) => a.definitionId !== "demo.reply.llm",
+          ...createMessageComposition().activations.filter(
+            (a) => a.definitionId !== "agent.message-composer",
           ),
-          ...[
-            ["reply.one", "room-one"],
-            ["reply.two", "room-two"],
-          ].map(([instanceId, groupId]) => ({
-            instanceId: instanceId!,
-            definitionId: "demo.reply.llm",
-            settings: {
-              modelTier: "heavy" as const,
-              outbound: {
-                mode: "fixed" as const,
-                adapterId: "web.ui.main",
-                platform: "web",
-                destination: { kind: "group" as const, groupId: groupId! },
-              },
-            },
-          })),
+          ...["message-composer.one", "message-composer.two"].map(
+            (instanceId) => ({
+              instanceId,
+              definitionId: "agent.message-composer",
+              settings: { modelTier: "heavy" as const },
+            }),
+          ),
         ],
       });
       const sendMessage = vi.fn<PlatformOutboundTransport["sendMessage"]>(
@@ -1235,18 +1246,58 @@ describe("KaguyaRuntime", () => {
       expect(count("core.message.assistant.text")).toBe(2);
       expect(count("core.delivery.requested")).toBe(2);
       expect(sendMessage).toHaveBeenCalledTimes(2);
-      expect(sendMessage.mock.calls.map(([target]) => target)).toEqual(
-        expect.arrayContaining([
-          { kind: "group", groupId: "room-one" },
-          { kind: "group", groupId: "room-two" },
-        ]),
-      );
+      expect(sendMessage.mock.calls.map(([target]) => target)).toEqual([
+        { kind: "web" },
+        { kind: "web" },
+      ]);
       expect(
         graph
           .filter((atom) => atom.kind === "core.message.assistant.text")
           .map(({ payload }) => payload.originatingModuleInstanceId)
           .sort(),
-      ).toEqual(["reply.one", "reply.two"]);
+      ).toEqual(["message-composer.one", "message-composer.two"]);
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "encodes the default QQ composer delivery as a text-only OneBot action",
+    async () => {
+      const { runtime, database } = await createRuntime();
+      const actions: ReturnType<typeof buildOneBotSendAction>[] = [];
+      runtime.registerTransport({
+        adapterId: "napcat.qq.main",
+        platform: "qq",
+        transport: {
+          sendMessage: async (target, content) => {
+            actions.push(buildOneBotSendAction(target, content, "test-echo"));
+            return {
+              ok: true,
+              adapterId: "napcat.qq.main",
+              platform: "qq",
+              target,
+            };
+          },
+        },
+      });
+      await runtime.start();
+      await runtime.submit(platformMessage());
+      await settleDeliveries(database);
+      expect(actions).toEqual([
+        {
+          action: "send_group_msg",
+          echo: "test-echo",
+          params: {
+            group_id: 778899,
+            message: [
+              {
+                type: "text",
+                data: { text: "It is a lovely night for watching the moon." },
+              },
+            ],
+          },
+        },
+      ]);
     },
     TEST_TIMEOUT,
   );
@@ -1426,12 +1477,12 @@ describe("KaguyaRuntime", () => {
       });
       const { runtime } = await createRuntime({
         catalog: defineInformationModuleCatalog(
-          ...createReplyComposition().catalog.definitions,
+          ...createMessageComposition().catalog.definitions,
           observer,
         ),
         activations: [
-          ...createReplyComposition().activations.filter(
-            (a) => a.definitionId !== "demo.reply.llm",
+          ...createMessageComposition().activations.filter(
+            (a) => a.definitionId !== "agent.message-composer",
           ),
           {
             instanceId: "observer.one",
@@ -1654,7 +1705,7 @@ function createDeterministicModelSelectionResolver(): RuntimeModelSelectionResol
     model,
   });
 }
-function createReplyComposition(
+function createMessageComposition(
   resolveModelSelection: RuntimeModelSelectionResolver = createDeterministicModelSelectionResolver(),
   providedActivations?: readonly InformationModuleActivation[],
 ) {
@@ -1666,7 +1717,7 @@ function createReplyComposition(
     deliveryDeliveredInformationKind,
     deliveryFailedInformationKind,
     executionExhaustedInformationKind,
-    promptTemplates: testReplyTemplates,
+    promptTemplates: testMessageTemplates,
     agentIdentity: testIdentity,
   });
   const activations =
@@ -1684,7 +1735,7 @@ function createReplyComposition(
     ],
     modelTask: {
       approvals: activations
-        .filter((a) => a.definitionId === "demo.reply.llm")
+        .filter((a) => a.definitionId === "agent.message-composer")
         .map((a) => ({
           activation: {
             instanceId: a.instanceId,

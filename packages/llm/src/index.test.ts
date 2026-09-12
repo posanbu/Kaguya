@@ -20,7 +20,7 @@ import {
 } from "./client.js";
 import {
   memoryOutputSchema,
-  replyOutputSchema,
+  messageOutputSchema,
   routeOutputSchema,
   stateOutputSchema,
 } from "./schemas.js";
@@ -56,7 +56,7 @@ function modelResult(text: string) {
 
 type TestRequest =
   | KaguyaLlmRequest<ReturnType<typeof routeOutputSchema.parse>>
-  | KaguyaLlmRequest<ReturnType<typeof replyOutputSchema.parse>>
+  | KaguyaLlmRequest<ReturnType<typeof messageOutputSchema.parse>>
   | KaguyaLlmRequest<ReturnType<typeof stateOutputSchema.parse>>
   | KaguyaLlmRequest<ReturnType<typeof memoryOutputSchema.parse>>;
 
@@ -64,8 +64,8 @@ function request(
   kind?: "route",
 ): KaguyaLlmRequest<ReturnType<typeof routeOutputSchema.parse>>;
 function request(
-  kind: "reply",
-): KaguyaLlmRequest<ReturnType<typeof replyOutputSchema.parse>>;
+  kind: "message",
+): KaguyaLlmRequest<ReturnType<typeof messageOutputSchema.parse>>;
 function request(
   kind: "state",
 ): KaguyaLlmRequest<ReturnType<typeof stateOutputSchema.parse>>;
@@ -81,12 +81,12 @@ function request(kind: CompiledPrompt["kind"] = "route"): TestRequest {
         outputMode: "object",
         outputSchema: routeOutputSchema,
       };
-    case "reply":
+    case "message":
       return {
         modelId: "deterministic-model",
         prompt: { ...prompt, kind },
         outputMode: "object",
-        outputSchema: replyOutputSchema,
+        outputSchema: messageOutputSchema,
       };
     case "state":
       return {
@@ -138,7 +138,7 @@ describe("KaguyaLlmClient", () => {
       ),
     });
 
-    await expect(client.generate(request("reply"))).resolves.toEqual({
+    await expect(client.generate(request("message"))).resolves.toEqual({
       output: { text: "Moonlight." },
       usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
       durationMs: 25,
@@ -241,7 +241,7 @@ describe("KaguyaLlmClient", () => {
   });
 
   it.each([
-    ["reply", { text: "hello" }],
+    ["message", { text: "hello" }],
     [
       "state",
       {
@@ -253,8 +253,8 @@ describe("KaguyaLlmClient", () => {
     ["memory", { memories: ["The user likes tea."] }],
   ] as const)("strictly parses %s outputs", async (kind, output) => {
     const result =
-      kind === "reply"
-        ? await clientFor(output).generate(request("reply"))
+      kind === "message"
+        ? await clientFor(output).generate(request("message"))
         : kind === "state"
           ? await clientFor(output).generate(request("state"))
           : await clientFor(output).generate(request("memory"));
@@ -277,7 +277,7 @@ describe("KaguyaLlmClient", () => {
       ),
     });
 
-    await expect(client.generate(request("reply"))).resolves.toMatchObject({
+    await expect(client.generate(request("message"))).resolves.toMatchObject({
       output: { text: "hello" },
     });
     expect(model.doGenerateCalls[0]?.responseFormat).toMatchObject({
@@ -302,9 +302,9 @@ describe("KaguyaLlmClient", () => {
     await expect(
       client.generate({
         modelId: "deterministic-model",
-        prompt: { ...prompt, kind: "reply" },
+        prompt: { ...prompt, kind: "message" },
         outputMode: "text",
-        outputSchema: replyOutputSchema.shape.text,
+        outputSchema: messageOutputSchema.shape.text,
       }),
     ).resolves.toMatchObject({ output: "你好" });
     expect(model.doGenerateCalls[0]?.responseFormat).toEqual({ type: "text" });
@@ -313,14 +313,14 @@ describe("KaguyaLlmClient", () => {
   it("exports the single per-kind output schemas consumed by applications", () => {
     const exports = llm as unknown as Record<string, unknown>;
     expect(exports.routeOutputSchema).toBeDefined();
-    expect(exports.replyOutputSchema).toBeDefined();
+    expect(exports.messageOutputSchema).toBeDefined();
     expect(exports.stateOutputSchema).toBeDefined();
     expect(exports.memoryOutputSchema).toBeDefined();
   });
 
   it.each([
     ["route", { shouldReply: true, reason: "   " }],
-    ["reply", { text: "" }],
+    ["message", { text: "" }],
     ["state", { mood: " ", relationship: "trusted", shortTermMemories: [] }],
     ["memory", { memories: ["\n"] }],
   ] as const)("rejects blank generated %s content", async (kind, output) => {
@@ -328,8 +328,8 @@ describe("KaguyaLlmClient", () => {
     const generation =
       kind === "route"
         ? client.generate(request("route"))
-        : kind === "reply"
-          ? client.generate(request("reply"))
+        : kind === "message"
+          ? client.generate(request("message"))
           : kind === "state"
             ? client.generate(request("state"))
             : client.generate(request("memory"));
@@ -350,15 +350,15 @@ describe("KaguyaLlmClient", () => {
 
     for (const [kind, output] of [
       ["route", outputs[0]],
-      ["reply", outputs[1]],
+      ["message", outputs[1]],
       ["state", outputs[2]],
       ["memory", outputs[3]],
     ] as const) {
       const result =
         kind === "route"
           ? await clientFor(output).generate(request("route"))
-          : kind === "reply"
-            ? await clientFor(output).generate(request("reply"))
+          : kind === "message"
+            ? await clientFor(output).generate(request("message"))
             : kind === "state"
               ? await clientFor(output).generate(request("state"))
               : await clientFor(output).generate(request("memory"));

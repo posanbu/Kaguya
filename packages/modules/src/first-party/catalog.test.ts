@@ -1,3 +1,10 @@
+/**
+ * 功能概述：验证 first-party Catalog 默认配置及激活边界。
+ * 主要职责：catalog fixture 注入宿主能力与共享 kind，测试六个默认模块、严格 modelTier 设置、
+ * disabled 配置校验与旧 reply/outbound 配置拒绝；Profile 身份决定 Heartflow botNames。
+ * 代码库关系：直接约束 catalog 工厂以及 message-composer 模块的公开 settings schema。
+ * 输入输出与副作用：纯内存组装，不连接模型或数据库；错误包含重新初始化说明。
+ */
 import { describe, expect, it } from "vitest";
 
 import { executionExhaustedInformationKind } from "@kaguya/engine";
@@ -11,15 +18,15 @@ import {
 } from "./catalog.js";
 
 const testIdentity = { name: "Kaguya", aliases: ["辉夜"], persona: "test" };
-const testReplyTemplates = {
-  main: "{{scene}}{{history}}{{memory}}{{quoted}}{{target}}",
+const testMessageTemplates = {
+  main: "{{scene}}{{history}}{{memory}}{{turn}}",
   history: "{{#each messages}}{{> history-inbound}}{{/each}}",
   historyInbound: "{{content}}",
   historyAssistant: "{{content}}",
   memory: "{{#each items}}{{> memory-item}}{{/each}}",
   memoryItem: "{{content}}",
   quoted: "{{message}}",
-  target: "{{content}}",
+  turn: "{{#each messages}}{{> history-inbound}}{{/each}}",
 };
 
 function catalog() {
@@ -47,7 +54,7 @@ function catalog() {
     deliveryDeliveredInformationKind: kind("core.delivery.delivered") as never,
     deliveryFailedInformationKind: kind("core.delivery.failed") as never,
     executionExhaustedInformationKind,
-    promptTemplates: testReplyTemplates,
+    promptTemplates: testMessageTemplates,
     agentIdentity: testIdentity,
   });
 }
@@ -62,6 +69,63 @@ describe("first-party module configuration", () => {
     expect(createFirstPartyModuleActivations(catalog(), defaults)).toHaveLength(
       6,
     );
+  });
+
+  it("uses only modelTier for the default message composer", () => {
+    expect(createFirstPartyModuleConfigDefaults()[0]).toEqual({
+      version: 1,
+      instanceId: "message-composer.default",
+      definitionId: "agent.message-composer",
+      enabled: true,
+      settings: { modelTier: "heavy" },
+    });
+  });
+
+  it.each([
+    { instanceId: "reply.default", definitionId: "demo.reply.llm" },
+    {
+      settings: {
+        modelTier: "heavy",
+        outbound: { mode: "source", messageKind: "reply" },
+      },
+    },
+    {
+      settings: {
+        modelTier: "heavy",
+        outbound: {
+          mode: "fixed",
+          adapterId: "qq",
+          platform: "qq",
+          destination: { kind: "group", groupId: "1" },
+        },
+      },
+    },
+  ])(
+    "rejects legacy configuration with reinitialization guidance",
+    (legacy) => {
+      const defaults = createFirstPartyModuleConfigDefaults();
+      expect(() =>
+        createFirstPartyModuleActivations(catalog(), [
+          { ...defaults[0]!, ...legacy, enabled: false },
+          ...defaults.slice(1),
+        ]),
+      ).toThrow(/Reinitialize module configuration/);
+    },
+  );
+
+  it("exposes only the message intent protocol across catalog definitions", () => {
+    const definitions = catalog().definitions;
+    expect(definitions.map(({ manifest }) => manifest.definitionId)).toContain(
+      "agent.message-composer",
+    );
+    expect(
+      definitions.map(({ manifest }) => manifest.definitionId),
+    ).not.toContain("demo.reply.llm");
+    const kinds = definitions
+      .flatMap(({ manifest }) => [...manifest.consumes, ...manifest.produces])
+      .map(({ kind }) => kind);
+    expect(kinds).toContain("agent.message.intent.requested");
+    expect(kinds).not.toContain("core.reply.requested");
   });
 
   it("validates complete settings even for disabled instances", () => {

@@ -1,3 +1,9 @@
+/**
+ * 功能概述：通过真实 InformationCore、ModuleHost 与测试数据库验证 Heartflow 持久化编排。
+ * fixture/appendCandidate 构造身份屏障及候选链，submitDecision 注入注意力终态；
+ * atoms/waitForKind 等待异步订阅输出。覆盖意图去重、冻结上下文、路由、等待和失败终态，
+ * 保证 composer 只收到目标与完整 turn 来源；afterEach 关闭宿主、Core 和数据库。
+ */
 import { createTestingDatabase } from "@kaguya/database/testing";
 import {
   executionExhaustedInformationKind,
@@ -5,7 +11,12 @@ import {
   InformationKindRegistry,
   ModuleHost,
 } from "@kaguya/engine";
-import { z } from "@kaguya/schema";
+import {
+  freezeInformationAtom,
+  informationIdSchema,
+  type PlatformDestination,
+  z,
+} from "@kaguya/schema";
 import {
   catalogInformationKinds,
   defineInformationKind,
@@ -17,14 +28,14 @@ import {
 } from "@kaguya/scheduler";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createHeartflowModule } from "./index.js";
+import { createHeartflowModule, heartflowSettingsSchema } from "./index.js";
 import {
   heartbeatFiredInformationKind,
   heartbeatScheduledInformationKind,
   inboundTextInformationKind,
   personContextCompletedInformationKind,
   attentionArousalCompletedInformationKind,
-  replyRequestedInformationKind,
+  messageIntentRequestedInformationKind,
   turnCandidateInformationKind,
   turnClaimedInformationKind,
   turnCompletedInformationKind,
@@ -157,7 +168,7 @@ async function fixture() {
     },
   ]);
   resources.push({ host, core, database });
-  return { core, database };
+  return { core, database, module };
 }
 
 async function appendCandidate(
@@ -169,6 +180,7 @@ async function appendCandidate(
     scopeKey?: string;
     identityBeforeCandidate?: boolean;
     appendIdentity?: boolean;
+    destination?: PlatformDestination;
   },
 ) {
   const context = await core.register(runtimeContextInformationKind, {
@@ -181,7 +193,7 @@ async function appendCandidate(
     adapterId: "adapter",
     platform: "web",
     platformMessageId: input.requestId,
-    destination: { kind: "web" as const },
+    destination: input.destination ?? { kind: "web" as const },
     senderId: "web",
   };
   const inbound = await core.register(inboundTextInformationKind, {
@@ -214,12 +226,12 @@ async function appendCandidate(
     occurredAt: input.occurredAt,
     source: "module:heartbeat",
     payload: {
-      reason: "message",
+      reason: "message" as const,
       dueAt: input.occurredAt,
-      policyVersion: "short-heartbeat.v1",
+      policyVersion: "short-heartbeat.v1" as const,
       platform: "web",
       adapterId: "adapter",
-      destination: { kind: "web" },
+      destination: source.destination,
       sourceInformationIds: [inbound.informationId],
       wakeOnMessage: true,
       attempt: 0,
@@ -275,16 +287,16 @@ async function appendCandidate(
     source: "module:heartbeat",
     payload: {
       heartbeatInformationId: heartbeat.informationId,
-      reason: "message",
+      reason: "message" as const,
       dueAt: input.occurredAt,
       firedAt: input.occurredAt,
       platform: "web",
       adapterId: "adapter",
-      destination: { kind: "web" },
+      destination: source.destination,
       sourceInformationIds: [inbound.informationId],
       scopeKey: input.scopeKey ?? "web:adapter:web:",
       asOf: input.occurredAt,
-      policyVersion: "short-heartbeat.v1",
+      policyVersion: "short-heartbeat.v1" as const,
       attempt: 0,
       totalWaitBudget: 1,
     },
@@ -402,6 +414,32 @@ async function submitDecision(
   );
 }
 
+async function dispatchSubscription(
+  module: ReturnType<typeof createHeartflowModule>,
+) {
+  const instance = await module.create(
+    {
+      instanceId: "heartflow.test",
+      settings: heartflowSettingsSchema.parse({
+        botNames: [],
+        groupFrequency: 1,
+        privateFrequency: 1,
+        muted: false,
+        staleAfterMs: 120_000,
+      }),
+      activation: {
+        instanceId: "heartflow.test",
+        definitionId: module.manifest.definitionId,
+      },
+    },
+    {} as never,
+  );
+  return instance.subscriptions.find(
+    ({ subscriptionId }) =>
+      subscriptionId === "agent.heartflow.dispatch.decision",
+  )!;
+}
+
 describe("heartflow", () => {
   it("joins identity whether it arrives before or after the candidate", async () => {
     const { core, database } = await fixture();
@@ -440,6 +478,11 @@ describe("heartflow", () => {
 
       await waitForKind(database, terminal);
       const all = await atoms(database);
+      expect(
+        all.some(
+          ({ kind }) => kind === messageIntentRequestedInformationKind.kind,
+        ),
+      ).toBe(false);
       if (effect === undefined) {
         expect(
           all.some(({ kind }) => kind === waitRequestedInformationKind.kind),
@@ -451,31 +494,189 @@ describe("heartflow", () => {
     },
   );
 
-  it("dispatches a replayed speak decision to exactly one reply request", async () => {
-    const { core, database } = await fixture();
-    const { candidate } = await appendCandidate(core, {
-      requestId: "attend",
-      text: "attend",
-      occurredAt: "2026-09-08T00:00:01.000Z",
+  it.each([
+    { kind: "private", userId: "recipient" },
+    { kind: "group", groupId: "room" },
+  ] satisfies PlatformDestination[])(
+    "dispatches a replayed attend decision to one intent for %j",
+    async (destination) => {
+      const { core, database, module } = await fixture();
+      const { candidate } = await appendCandidate(core, {
+        destination,
+        requestId: "attend",
+        text: "attend",
+        occurredAt: "2026-09-08T00:00:01.000Z",
+      });
+      await waitForKind(database, turnContextCompletedInformationKind.kind);
+
+      const first = await submitDecision(core, database, "attend");
+      const replay = await submitDecision(core, database, "attend");
+      expect(replay.informationId).toBe(first.informationId);
+
+      const intent = await waitForKind(
+        database,
+        messageIntentRequestedInformationKind.kind,
+      );
+      const frozenContext = (await atoms(database)).find(
+        ({ kind }) => kind === turnContextCompletedInformationKind.kind,
+      )!;
+      const claimId = (frozenContext.payload as any).claimInformationId;
+      expect(intent.payload).toEqual({
+        target: { adapterId: "adapter", platform: "web", destination },
+        turn: {
+          candidateInformationId: candidate.informationId,
+          claimInformationId: claimId,
+          contextInformationId: frozenContext.informationId,
+        },
+        memoryInformationIds: [],
+      });
+      expect(intent.references).toEqual(
+        expect.arrayContaining([
+          { relation: "core:caused-by", informationId: first.informationId },
+          {
+            relation: "core:uses-context",
+            informationId: frozenContext.informationId,
+          },
+          { relation: "agent:turn-claim", informationId: claimId },
+          {
+            relation: "agent:turn-candidate",
+            informationId: candidate.informationId,
+          },
+        ]),
+      );
+      const dispatch = await dispatchSubscription(module);
+      const registerOnce = vi.fn(async (operation, key, definition, input) =>
+        core.registerOnce(operation, key, definition, {
+          ...input,
+          source: "module:heartflow.test",
+          occurredAt: first.occurredAt,
+          references: [
+            ...input.references,
+            { relation: "core:caused-by", informationId: first.informationId },
+            ...first.references.filter(
+              ({ relation }) => relation === "core:context",
+            ),
+          ],
+        }),
+      );
+      const replayContext = {
+        select: async () => atoms(database),
+        registerOnce,
+      };
+      await dispatch.handle(first, replayContext as never);
+      await dispatch.handle(first, replayContext as never);
+      expect(registerOnce).toHaveBeenCalledTimes(2);
+      expect(await registerOnce.mock.results[0]!.value).toMatchObject({
+        informationId: intent.informationId,
+      });
+      expect(await registerOnce.mock.results[1]!.value).toMatchObject({
+        informationId: intent.informationId,
+      });
+      expect(
+        (await atoms(database)).filter(
+          ({ kind }) => kind === messageIntentRequestedInformationKind.kind,
+        ),
+      ).toHaveLength(1);
+    },
+  );
+
+  it("routes only from the latest frozen input and carries memory IDs without copying content", async () => {
+    const module = createHeartflowModule({
+      deliveryDeliveredInformationKind,
+      deliveryFailedInformationKind,
+      modelTaskFailedInformationKind,
+      modelTaskCancelledInformationKind,
+      executionExhaustedInformationKind,
     });
-    await waitForKind(database, turnContextCompletedInformationKind.kind);
-
-    const first = await submitDecision(core, database, "attend");
-    const replay = await submitDecision(core, database, "attend");
-    expect(replay.informationId).toBe(first.informationId);
-
-    const reply = await waitForKind(
-      database,
-      replyRequestedInformationKind.kind,
+    const dispatch = await dispatchSubscription(module);
+    const atom = (id: string, kind: string, payload: any) =>
+      freezeInformationAtom({
+        informationId: informationIdSchema.parse(id),
+        kind,
+        payload,
+        source: "module:test",
+        occurredAt: "2026-09-08T00:00:01.000Z",
+        references: [],
+      });
+    const oldSource = {
+      adapterId: "old",
+      platform: "qq",
+      destination: { kind: "private", userId: "old-user" },
+    };
+    const latestSource = {
+      adapterId: "latest",
+      platform: "qq",
+      destination: { kind: "group", groupId: "room" },
+      platformMessageId: "incoming-id",
+      senderId: "sender",
+      replyTo: { platformMessageId: "quoted" },
+    };
+    const candidate = atom("candidate", turnCandidateInformationKind.kind, {
+      scopeKey: "scope",
+    });
+    const claim = atom("claim", turnClaimedInformationKind.kind, {
+      candidateInformationId: "candidate",
+    });
+    const frozenContext = atom(
+      "context",
+      turnContextCompletedInformationKind.kind,
+      {
+        candidateInformationId: "candidate",
+        claimInformationId: "claim",
+        source: oldSource,
+        text: "full frozen body",
+        memory: ["memory-1", "memory-2"],
+        inputs: [
+          { informationId: "old", text: "first body", source: oldSource },
+          { informationId: "latest", text: "last body", source: latestSource },
+        ],
+      },
     );
-    expect((reply.payload as any).turn).toMatchObject({
-      candidateInformationId: candidate.informationId,
+    const decision = atom(
+      "decision",
+      attentionArousalCompletedInformationKind.kind,
+      {
+        outcome: "attend",
+        candidateInformationId: "candidate",
+        claimInformationId: "claim",
+        turnContextInformationId: "context",
+        source: oldSource,
+      },
+    );
+    const laterInbound = atom("later", inboundTextInformationKind.kind, {
+      text: "not frozen",
+      source: oldSource,
     });
-    expect(
-      (await atoms(database)).filter(
-        ({ kind }) => kind === replyRequestedInformationKind.kind,
-      ),
-    ).toHaveLength(1);
+    const registerOnce = vi.fn(async () => decision);
+    await dispatch.handle(decision, {
+      select: async () => [candidate, claim, frozenContext, laterInbound],
+      registerOnce,
+    } as never);
+    expect(registerOnce).toHaveBeenCalledExactlyOnceWith(
+      "agent.heartflow.message-intent",
+      "claim",
+      messageIntentRequestedInformationKind,
+      {
+        payload: {
+          target: {
+            adapterId: "latest",
+            platform: "qq",
+            destination: { kind: "group", groupId: "room" },
+          },
+          turn: {
+            candidateInformationId: "candidate",
+            claimInformationId: "claim",
+            contextInformationId: "context",
+          },
+          memoryInformationIds: ["memory-1", "memory-2"],
+        },
+        references: [
+          { relation: "core:uses-context", informationId: "context" },
+          { relation: "agent:turn-claim", informationId: "claim" },
+          { relation: "agent:turn-candidate", informationId: "candidate" },
+        ],
+      },
+    );
   });
 
   it("turns an exhausted online stage into one failed terminal", async () => {
@@ -564,7 +765,7 @@ describe("heartflow", () => {
     });
     await waitForKind(database, turnContextCompletedInformationKind.kind);
     const decision = await submitDecision(core, database, "attend");
-    await waitForKind(database, replyRequestedInformationKind.kind);
+    await waitForKind(database, messageIntentRequestedInformationKind.kind);
     const second = await appendCandidate(core, {
       requestId: "queued-second",
       text: "second",
@@ -685,13 +886,22 @@ describe("heartflow", () => {
       "attend",
       second.candidate.informationId,
     );
-    const reply = await waitForKind(
+    const intent = await waitForKind(
       database,
-      replyRequestedInformationKind.kind,
+      messageIntentRequestedInformationKind.kind,
     );
-    expect(reply.payload).toMatchObject({
-      text: "second",
-      source: { platformMessageId: "second" },
+    expect(intent.payload).toEqual({
+      target: {
+        adapterId: "adapter",
+        platform: "web",
+        destination: { kind: "web" },
+      },
+      turn: {
+        candidateInformationId: second.candidate.informationId,
+        contextInformationId: latestContext.informationId,
+        claimInformationId: (latestContext.payload as any).claimInformationId,
+      },
+      memoryInformationIds: [],
     });
   });
 });

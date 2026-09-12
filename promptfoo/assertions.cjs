@@ -1,3 +1,9 @@
+/**
+ * 功能概述：promptfoo 离线结构回归的评分入口，返回 pass、score 和可定位的失败原因。
+ * 主要职责：assertMessagePrompt 检查真实消息编译器的整轮输入与无特权目标；其余入口检查对应通用模板。
+ * 代码库关系：promptfooconfig.yaml 引用这些导出，provider.cjs 负责实际生成文本。
+ * 输入输出与副作用：只检查输出字符串，不读取文件、不访问网络或修改运行状态。
+ */
 function assertRoutePrompt(output) {
   return assertExactPrompt(
     output,
@@ -11,27 +17,20 @@ function assertRoutePrompt(output) {
   );
 }
 
-function assertReplyPrompt(output) {
-  const exact = assertExactPrompt(
-    output,
-    [
-      value("reply-persona", "REPLY_PERSONA"),
-      value("reply-history", "user: REPLY_HISTORY"),
-      value("reply-memory", "REPLY_MEMORY"),
-      value("reply-policy", "REPLY_POLICY"),
-    ],
-    "reply Prompt",
-  );
-  if (!exact.pass) {
-    return exact;
-  }
-
-  const excludesRoutePolicy =
-    !output.includes("ROUTE_ONLY_POLICY") && !output.includes("[route-policy]");
+function assertMessagePrompt(output) {
+  const pass =
+    typeof output === "string" &&
+    output.includes("MESSAGE_PERSONA") &&
+    output.includes("FIRST_TURN_INPUT") &&
+    output.includes("LAST_TURN_INPUT") &&
+    output.includes("【本轮输入】") &&
+    !output.includes("【目标消息】") &&
+    !output.includes("LEGACY_COPIED_BODY") &&
+    !output.includes("ROUTE_ONLY_POLICY");
   return grade(
-    excludesRoutePolicy,
-    "reply Prompt 仅包含 reply 策略",
-    "reply Prompt 泄漏了仅供 route 使用的策略",
+    pass,
+    "message Prompt 包含全部冻结输入且无特殊末条目标",
+    "message Prompt 丢失整轮输入或泄漏旧版目标正文",
   );
 }
 
@@ -104,7 +103,7 @@ function grade(pass, successReason, failureReason) {
 
 module.exports = {
   assertMemoryPrompt,
-  assertReplyPrompt,
+  assertMessagePrompt,
   assertRoutePrompt,
   assertStatePrompt,
 };

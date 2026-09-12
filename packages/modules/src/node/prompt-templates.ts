@@ -1,13 +1,19 @@
-/** Node-only loader for tracked first-party Prompt templates and ignored local overrides. */
+/**
+ * 功能概述：负责第一方消息编写和人物事实模板的 Node 文件加载与验证（或其回归测试）。
+ * 主要职责：loadFirstPartyPromptTemplates 返回 messageComposer/personFact；优先 local 覆盖并保留空白，
+ * 缺失 local 才回退 default，空模板、读取错误和模板编译错误直接失败。
+ * 代码库关系：message-prompt 提供编译校验，templates/message-composer.* 提供各层布局；Runtime 消费结果。
+ * 输入输出与副作用：只读模板文件；测试使用临时目录验证覆盖策略并在结束后清理。
+ */
 import { readFileSync } from "node:fs";
-import type { ReplyPromptTemplates } from "../first-party/llm-reply/reply-prompt.js";
-import { createReplyPromptCompiler } from "../first-party/llm-reply/reply-prompt.js";
+import type { MessagePromptTemplates } from "../first-party/message-composer/message-prompt.js";
+import { createMessagePromptCompiler } from "../first-party/message-composer/message-prompt.js";
 import { createPromptTemplateRenderer } from "../prompt-template.js";
 
-export type { ReplyPromptTemplates } from "../first-party/llm-reply/reply-prompt.js";
+export type { MessagePromptTemplates } from "../first-party/message-composer/message-prompt.js";
 
 export interface FirstPartyPromptTemplates {
-  readonly llmReply: ReplyPromptTemplates;
+  readonly messageComposer: MessagePromptTemplates;
   readonly personFact: string;
 }
 
@@ -18,15 +24,15 @@ export function loadFirstPartyPromptTemplates(
 ): FirstPartyPromptTemplates {
   const root = options.root ?? new URL("../../templates/", import.meta.url);
   const templates = {
-    llmReply: {
-      main: load(root, "llm-reply"),
-      history: load(root, "llm-reply.history"),
-      historyInbound: load(root, "llm-reply.history-inbound"),
-      historyAssistant: load(root, "llm-reply.history-assistant"),
-      memory: load(root, "llm-reply.memory"),
-      memoryItem: load(root, "llm-reply.memory-item"),
-      quoted: load(root, "llm-reply.quoted"),
-      target: load(root, "llm-reply.target"),
+    messageComposer: {
+      main: load(root, "message-composer"),
+      history: load(root, "message-composer.history"),
+      historyInbound: load(root, "message-composer.history-inbound"),
+      historyAssistant: load(root, "message-composer.history-assistant"),
+      memory: load(root, "message-composer.memory"),
+      memoryItem: load(root, "message-composer.memory-item"),
+      quoted: load(root, "message-composer.quoted"),
+      turn: load(root, "message-composer.turn"),
     },
     personFact: load(root, "person-fact"),
   };
@@ -35,7 +41,7 @@ export function loadFirstPartyPromptTemplates(
 }
 
 function validate(templates: FirstPartyPromptTemplates): void {
-  createReplyPromptCompiler(templates.llmReply, {
+  createMessagePromptCompiler(templates.messageComposer, {
     name: "Template validation",
     aliases: ["template-validation"],
     persona: "Template validation",

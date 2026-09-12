@@ -1,6 +1,11 @@
 /**
  * 在线 Heartflow 编排器。所有推进都由可重放 Information 事实驱动；模块不保存
  * per-chat 状态，也不依赖订阅安装顺序。
+ * createHeartflowModule 注入投递/模型失败 kind，返回声明订阅的模块；settings schema
+ * 校验频率与安全策略。state/memory selector 从账本读取因果链及记忆，冻结完整输入。
+ * dispatchDecision 将 attend 按 claim 注册一次消息意图，最后一个冻结输入仅决定目标地址；
+ * turn 标识及引用保留完整冻结上下文，正文生成交给 composer。defer/ignore 与失败路径
+ * 写入等待或终态；registerOnce/commitTerminal 保证重放幂等，不执行模型或平台 I/O。
  */
 import {
   type DeepReadonly,
@@ -22,7 +27,7 @@ import { MEMORY_RETRIEVAL_STRATEGY_ID } from "@kaguya/memory";
 import {
   inboundTextInformationKind,
   personContextCompletedInformationKind,
-  replyRequestedInformationKind,
+  messageIntentRequestedInformationKind,
   attentionArousalCompletedInformationKind,
   turnCandidateInformationKind,
   turnClaimedInformationKind,
@@ -296,7 +301,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
         turnStartedInformationKind,
         turnDecisionSupersededInformationKind,
         turnContextCompletedInformationKind,
-        replyRequestedInformationKind,
+        messageIntentRequestedInformationKind,
         waitRequestedInformationKind,
         turnCompletedInformationKind,
         turnWaitingInformationKind,
@@ -791,15 +796,18 @@ async function dispatchDecision(
   if (payload.outcome === "attend") {
     const targetInput = (turnContext.payload as any).inputs.at(-1);
     if (targetInput === undefined)
-      throw new Error("Speak decision requires a target turn input");
+      throw new Error("Attend decision requires a target turn input");
     await context.registerOnce(
-      "agent.heartflow.reply",
+      "agent.heartflow.message-intent",
       claim.informationId,
-      replyRequestedInformationKind,
+      messageIntentRequestedInformationKind,
       {
         payload: {
-          text: targetInput.text,
-          source: targetInput.source,
+          target: {
+            adapterId: targetInput.source.adapterId,
+            platform: targetInput.source.platform,
+            destination: targetInput.source.destination,
+          },
           turn: {
             candidateInformationId: candidate.informationId,
             claimInformationId: claim.informationId,

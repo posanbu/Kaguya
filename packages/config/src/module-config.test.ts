@@ -1,3 +1,9 @@
+/**
+ * 功能概述：验证模块配置首次落盘与已有配置的拒绝策略。
+ * 主要职责：覆盖 message-composer 默认实例、版本/身份校验、旧 reply 配置重新初始化提示及原文件保留。
+ * 代码库关系：直接调用 module-config 的加载器与信封 schema，使用临时目录模拟 Server 配置根。
+ * 输入输出与副作用：仅写测试临时目录，afterEach 清理；错误不得悄悄重写用户配置。
+ */
 import {
   mkdtemp,
   mkdir,
@@ -21,8 +27,8 @@ const roots: string[] = [];
 const defaults: readonly ModuleInstanceConfig[] = [
   {
     version: 1,
-    instanceId: "reply.default",
-    definitionId: "demo.reply.llm",
+    instanceId: "message-composer.default",
+    definitionId: "agent.message-composer",
     enabled: true,
     settings: { modelTier: "heavy" },
   },
@@ -49,12 +55,12 @@ describe("module instance configuration", () => {
     ).resolves.toEqual(defaults);
     expect(await readdir(join(rootDir, "modules"))).toEqual([
       "heartbeat.default",
-      "reply.default",
+      "message-composer.default",
     ]);
     expect(
       JSON.parse(
         await readFile(
-          join(rootDir, "modules/reply.default/config.json"),
+          join(rootDir, "modules/message-composer.default/config.json"),
           "utf8",
         ),
       ),
@@ -66,6 +72,11 @@ describe("module instance configuration", () => {
 
   it.each([
     ["missing instance", async (root: string) => mkdir(join(root, "modules"))],
+    [
+      "legacy reply instance",
+      async (root: string) =>
+        mkdir(join(root, "modules/reply.default"), { recursive: true }),
+    ],
     [
       "unknown instance",
       async (root: string) =>
@@ -80,21 +91,23 @@ describe("module instance configuration", () => {
         loadModuleInstanceConfigs({ rootDir, defaults }),
       ).rejects.toMatchObject({
         code: "CONFIG_CORRUPT_STORE",
+        message: expect.stringContaining("Reinitialize module configuration"),
       });
       expect(await readdir(join(rootDir, "modules"))).not.toContain(
-        "reply.default",
+        "message-composer.default",
       );
     },
   );
 
   it.each([
+    ["legacy definition", { ...defaults[0], definitionId: "demo.reply.llm" }],
     ["wrong version", { ...defaults[0], version: 2 }],
     [
       "missing settings",
       {
         version: 1,
-        instanceId: "reply.default",
-        definitionId: "demo.reply.llm",
+        instanceId: "message-composer.default",
+        definitionId: "agent.message-composer",
         enabled: true,
       },
     ],
@@ -105,13 +118,14 @@ describe("module instance configuration", () => {
   ])("rejects %s without repairing the file", async (_label, invalid) => {
     const rootDir = await createRoot();
     await loadModuleInstanceConfigs({ rootDir, defaults });
-    const path = join(rootDir, "modules/reply.default/config.json");
+    const path = join(rootDir, "modules/message-composer.default/config.json");
     const serialized = `${JSON.stringify(invalid)}\n`;
     await writeFile(path, serialized, "utf8");
     await expect(
       loadModuleInstanceConfigs({ rootDir, defaults }),
     ).rejects.toMatchObject({
       code: "CONFIG_CORRUPT_STORE",
+      message: expect.stringContaining("Reinitialize module configuration"),
     });
     expect(await readFile(path, "utf8")).toBe(serialized);
   });

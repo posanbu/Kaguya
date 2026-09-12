@@ -1,3 +1,8 @@
+/**
+ * 功能概述：验证显式一方模块目录及其随附 README 的完整性。
+ * 主要职责：MODULES 固定受信模块清单，REQUIRED_SECTIONS 约束说明章节；Vitest 读取模块目录与文档进行核对。
+ * 输入输出与副作用：仅执行本地只读文件检查，确保 message-composer 更名后没有遗漏实现或文档。
+ */
 import { access, readFile, readdir } from "node:fs/promises";
 
 import { describe, expect, it } from "vitest";
@@ -8,7 +13,7 @@ const MODULES = [
   "heartbeat",
   "heartflow",
   "identity",
-  "llm-reply",
+  "message-composer",
   "person-fact-task",
 ] as const;
 const REQUIRED_SECTIONS = [

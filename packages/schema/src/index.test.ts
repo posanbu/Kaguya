@@ -9,7 +9,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { outboundMessageContentSchema, promptVariableSchema } from "./index.js";
+import {
+  outboundMessageContentSchema,
+  promptVariableSchema,
+  promptKindSchema,
+} from "./index.js";
 
 describe("promptVariableSchema", () => {
   it("preserves information ids on a dynamic prompt variable", () => {
@@ -56,5 +60,12 @@ describe("outboundMessageContentSchema", () => {
         internalIdentity: "legacy",
       }),
     ).toThrow();
+  });
+});
+
+describe("promptKindSchema", () => {
+  it("accepts message composition and rejects the removed reply prompt protocol", () => {
+    expect(promptKindSchema.parse("message")).toBe("message");
+    expect(promptKindSchema.safeParse("reply").success).toBe(false);
   });
 });

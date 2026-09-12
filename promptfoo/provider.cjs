@@ -1,7 +1,14 @@
+/**
+ * 功能概述：为离线 promptfoo 结构回归连接真实仓库 Prompt 编译器。
+ * 主要职责：KaguyaPromptProvider 按 kind 分派；message 通过 compileMessagePrompt 与默认模板编译完整冻结 turn，
+ * route/state/memory 继续使用通用模板渲染器校验结构。参数格式或编译失败直接抛错。
+ * 代码库关系：tsx 加载 modules 源码，message-fixture 构造与生产 schema 一致的意图与冻结输入。
+ * 输入输出与副作用：输入评测 vars，输出文本及模板变量溯源；只读本地源码和模板，不调用模型或网络。
+ */
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 
-const PROMPT_KINDS = new Set(["route", "reply", "state", "memory"]);
+const PROMPT_KINDS = new Set(["route", "message", "state", "memory"]);
 const PROMPT_SOURCE_PATH = path.resolve(
   __dirname,
   "..",
@@ -27,6 +34,8 @@ class KaguyaPromptProvider {
     if (!PROMPT_KINDS.has(kind)) {
       throw new Error(`unsupported prompt kind: ${kind}`);
     }
+
+    if (kind === "message") return compileMessageEvaluation(vars);
 
     const createPromptTemplateRenderer = await loadPromptRenderer();
     const values = buildValues(kind, vars);
@@ -82,13 +91,6 @@ function buildValues(kind, vars) {
         historyValue("route-history", requireArray(vars.history, "history")),
         memoriesValue("route-memory", requireArray(vars.memories, "memories")),
         value("route-policy", requireString(vars.routePolicy, "routePolicy")),
-      ];
-    case "reply":
-      return [
-        value("reply-persona", requireString(vars.persona, "persona")),
-        historyValue("reply-history", requireArray(vars.history, "history")),
-        memoriesValue("reply-memory", requireArray(vars.memories, "memories")),
-        value("reply-policy", requireString(vars.replyPolicy, "replyPolicy")),
       ];
     case "state":
       return [
@@ -207,3 +209,44 @@ function parseTimestamp(value, label) {
 
 module.exports = KaguyaPromptProvider;
 module.exports.PROMPT_SOURCE_PATH = PROMPT_SOURCE_PATH;
+
+async function compileMessageEvaluation(vars) {
+  const { tsImport } = require("tsx/esm/api");
+  const source =
+    "packages/modules/src/first-party/message-composer/message-prompt.ts";
+  const compiler = await tsImport(
+    pathToFileURL(path.resolve(__dirname, "..", source)).href,
+    pathToFileURL(__filename).href,
+  );
+  const loader = await tsImport(
+    pathToFileURL(
+      path.resolve(
+        __dirname,
+        "../packages/modules/src/node/prompt-templates.ts",
+      ),
+    ).href,
+    pathToFileURL(__filename).href,
+  );
+  const { messageFixture } = require("./message-fixture.cjs");
+  const { atoms, intentId } = messageFixture(
+    requireArray(requireRecord(vars.turn, "turn").inputs, "turn.inputs"),
+  );
+  const prompt = compiler.compileMessagePrompt(
+    loader.loadFirstPartyPromptTemplates().messageComposer,
+    {
+      name: "Kaguya",
+      aliases: ["辉夜"],
+      persona: requireString(vars.persona, "persona"),
+    },
+    atoms,
+    intentId,
+  );
+  return {
+    output: prompt.text,
+    metadata: {
+      rendererSource: source,
+      kind: prompt.kind,
+      variables: prompt.variables,
+    },
+  };
+}

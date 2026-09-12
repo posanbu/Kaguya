@@ -15,7 +15,7 @@ Kaguya 是一个以持久化信息 DAG 组织运行事实、模块可插拔的 T
 
 **接收消息** — Web UI 通过 HTTP 提交文本；NapCat 可以把 OneBot 消息标准化后交给同一个 Runtime。
 
-**运行模块链** — 默认链以 Kind 显式连接入站、过滤、回复请求、LLM、assistant 和投递。模块也可以选择不回复，或注册自己的信息原子。
+**运行模块链** — 默认链以 Kind 显式连接入站、过滤、消息意图、LLM、assistant 和投递。模块也可以选择不回复，或注册自己的信息原子。
 
 **管理模型配置** — Web UI 可以创建、编辑、选择和删除 Profile。Provider、API Key 和 light/heavy 模型目标保存在权限受保护的 profile store。
 

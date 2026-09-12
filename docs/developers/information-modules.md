@@ -23,10 +23,10 @@ const filter = defineInformationModule({
     moduleVersion: "1.0.0",
     displayName: "Example filter",
     summary: "Filters inbound text before downstream processing.",
-    description: "Filters inbound text into reply requests.",
+    description: "Records an explicit filter decision for inbound text.",
     settingsSchema: z.object({}).strict(),
     consumes: [inboundTextKind],
-    produces: [replyRequestedKind],
+    produces: [filterDecisionKind],
     selectors: [],
     promptRenderers: [],
     requires: [],
@@ -40,10 +40,16 @@ const filter = defineInformationModule({
         { subscriptionId: "example.filter.inbound", delivery: "durable" },
         async (atom, context) => {
           await context.registerOnce(
-            "example.filter.reply.v1",
+            "example.filter.decision.v1",
             atom.informationId,
-            replyRequestedKind,
-            { payload: atom.payload },
+            filterDecisionKind,
+            {
+              payload: {
+                accepted: false,
+                reason: "example",
+                filterDefinitionId: "example.filter",
+              },
+            },
           );
         },
       ),
@@ -95,14 +101,24 @@ Runtime 的 `submit()` 返回已接受输入的根 ID；可靠回复异步推进
 
 Selector 通过受限只读账本的 `find()`、`related()`、`retrieve()` 取得候选，只返回有序 informationId。`find()` 支持 JSON payload containment 和确定性的正序/倒序查询。Core 校验 ID、拒绝重复或越权结果，并按顺序重新加载冻结原子。模块不能把未落账 payload 拼成上下文。派生输出通常继承输入的 `core:context`；需要跨入站合并时，可用 `contextInformationId` 重定位，但目标必须是该 handler 已通过声明式 Selector 选出的 `core.runtime.context`。
 
-首次生成的模块配置显式启用 Identity、durable Heartbeat、Heartflow、Attention Arousal、Association 与 LLM reply，并把 Heartbeat、Heartflow 和注意力参数完整写入文件。Runtime 拥有的 Model Task 失败/取消、delivery terminal 与 `execution.exhausted` definition 由 composition root 注入 Heartflow，Catalog 不复制这些 kind。
+首次生成的模块配置显式启用 Identity、durable Heartbeat、Heartflow、Attention Arousal、Association 与 Message Composer，并把 Heartbeat、Heartflow 和注意力参数完整写入文件。Runtime 拥有的 Model Task 失败/取消、delivery terminal 与 `execution.exhausted` definition 由 composition root 注入 Heartflow，Catalog 不复制这些 kind。
 
-Heartbeat 到期只产生 `agent.turn.candidate`。Heartflow 使用 scope generation 领取 candidate，等待全部 inbound 的 identity terminal，再按 `asOf` 冻结不可变的多输入 `agent.turn.context.completed`。Attention Arousal 只提交 claim 的唯一 `attend | defer | ignore` 决策；Heartflow 再把它分派为 reply、wait 或 silent，并在 delivery、等待、静默、supersession 或耗尽时写入一个 turn terminal。默认 Catalog 不包含 always-reply 或 inbound-to-context 旁路。
+Heartbeat 到期只产生 `agent.turn.candidate`。Heartflow 使用 scope generation 领取 candidate，等待全部 inbound 的 identity terminal，再按 `asOf` 冻结不可变的多输入 `agent.turn.context.completed`。Attention Arousal 只提交 claim 的唯一 `attend | defer | ignore` 决策；Heartflow 再把它分派为 message intent、wait 或 silent，并在 delivery、等待、静默、supersession 或耗尽时写入一个 turn terminal。默认 Catalog 不包含 always-reply 或 inbound-to-context 旁路。
 
-`createLlmReplyModule()` 默认直接消费 Heartflow 产生的 `core.reply.requested`，并通过 reply 的 `core:uses-context` 找到冻结 turn context。Memory 默认由 selected Profile 关闭；此时 Heartflow 的可选检索退化为空，Prompt 仍包含当前冻结输入。Association 继续记录 requested、query、candidate 和 completed 审计 DAG，但不再作为 LLM reply 的门禁。
+`createMessageComposerModule()` 默认直接消费 Heartflow 产生的 `agent.message.intent.requested`，并通过 message intent 的 `core:uses-context` 找到冻结 turn context。Memory 默认由 selected Profile 关闭；此时 Heartflow 的可选检索退化为空，Prompt 仍包含当前冻结输入。Association 继续记录 requested、query、candidate 和 completed 审计 DAG，但不再作为 Message Composer 的门禁。
 
-显式开启 `memory.enabled` 后，candidate Selector 才以当前消息为 query 执行全局召回，最多选择 8 条不晚于当前请求、且排除当前消息的结果。身份结果仍写入审计元数据，但不缩小默认召回范围，Web 和 ephemeral 消息同样进入这条链。Runtime 的命名检索策略只返回来源 ID，Core 随后从追加式账本重新加载并授权原始 inbound atom，因此 candidate 和 Prompt provenance 都直接指向不可变消息，而不是临时 Memory atom。
+显式开启 `memory.enabled` 后，关联检索才以冻结 turn 的全部输入按顺序组成 query 执行全局召回，最多选择 8 条不晚于当前请求、且排除当前 turn 全部输入的结果。身份结果仍写入审计元数据，但不缩小默认召回范围，Web 和 ephemeral 消息同样进入这条链。Runtime 的命名检索策略只返回来源 ID，Core 随后从追加式账本重新加载并授权原始 inbound atom，因此 candidate 和 Prompt provenance 都直接指向不可变消息，而不是临时 Memory atom。
 
-Memory 变量在当前消息之前，合计最多 4,000 个 Unicode 字符；召回失败会退化为空内容，不阻塞当前回复。reply、历史 `core.memory.text` 和原始 inbound 的 renderer 都在 manifest 中声明，每个模板变量保留其 informationIds，LLM requested 使用 `core:uses-context` 引用追溯实际输入。一个原子可同时支持多个变量，一个变量也可聚合多个原子。未知 kind 不会被静默当作文本注入。scope、claim、上下文和终态都由 Information DAG 表达，不引入进程内 Session 或可变对话桶。
+Memory 变量在完整当前 turn 之前，合计最多 4,000 个 Unicode 字符；召回失败会退化为空内容，不阻塞当前回复。message intent、历史 `core.memory.text` 和原始 inbound 的 renderer 都在 manifest 中声明，每个模板变量保留其 informationIds，LLM requested 使用 `core:uses-context` 引用追溯实际输入。一个原子可同时支持多个变量，一个变量也可聚合多个原子。未知 kind 不会被静默当作文本注入。scope、claim、上下文和终态都由 Information DAG 表达，不引入进程内 Session 或可变对话桶。
 
 一方 Prompt 最终文本由 `packages/modules/templates/*.default.hbs` 的受限 Handlebars 层级排版。开发者可复制为同名 `*.local.hbs` 做本地覆盖；local 文件被 Git 忽略，重启后生效。声明变量可出现零次或多次，只有外层实际使用的逻辑变量进入 provenance；未知变量、动态或递归 partial 和非内建 helper 会在启动时失败。替换不做 XML/HTML 逃逸或额外包裹，数据边界由模板作者负责。
+
+## Message Intent 与 Composer
+
+必要性门控判定 eligible 后，Heartflow 为一个冻结 turn 确定性创建一次 `agent.message.intent.requested`。其严格 payload 包含 `target: { adapterId, platform, destination }`、`turn: { candidateInformationId, claimInformationId, contextInformationId }` 与 `memoryInformationIds`。`target` 取自冻结 turn 的最新入站来源；意图本身不复制源正文、源平台消息 ID、发送者信息或引用标记。
+
+默认 `agent.message-composer` 模块由 `message-composer.default` 实例激活，执行 `agent.message.compose` Model Task，使用 `message` Prompt kind。Composer 通过引用重载完整冻结 turn，把其中所有输入作为当前回合共同呈现；最后一条输入没有必须回答的特殊地位。历史与 Memory 分别受预算限制，当前冻结输入不因历史预算被剔除。入站引用只帮助理解上下文，默认出站内容始终为 `kind: "text"`。
+
+旧 reply 信息原子不会迁移或由新模块处理，旧 Prompt kind 和 Model Task ID 不再属于当前协议。旧模块配置须备份后重新初始化，不能仅重命名旧文件来保留旧 outbound 设置。公共 `OutboundMessageContent.kind: "reply"` 与 OneBot 显式引用能力继续保留，供专用模块主动构造。
+
+Planner 的 `message | wait | silent` 选择以及跨会话目标检索属于后续工作；本链只在已明确的当前会话发送消息。

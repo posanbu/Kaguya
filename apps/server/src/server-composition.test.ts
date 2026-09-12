@@ -14,7 +14,7 @@
  * 启动错误用人工包含密码的连接异常验证返回值与日志均已脱敏。
  */
 import {
-  createReplyComposition,
+  createMessageComposition,
   type RuntimeModelSelectionResolver,
 } from "./runtime-composition.js";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -48,7 +48,7 @@ import {
 } from "./server.js";
 import { createWebMessageGateway } from "./web-gateway.js";
 import { registerWebUi } from "./web.js";
-import { llmReplySettingsSchema } from "@kaguya/modules";
+import { messageComposerSettingsSchema } from "@kaguya/modules";
 
 const chatModel = vi.fn((modelId: string) => ({ modelId }));
 
@@ -138,7 +138,7 @@ describe("unified server composition", () => {
     const database = await createTestingDatabase();
     const runtime = new KaguyaRuntime({
       database,
-      ...createReplyComposition(undefined, {
+      ...createMessageComposition(undefined, {
         moduleConfigs: createFirstPartyModuleConfigDefaults("test"),
       }),
     });
@@ -234,7 +234,7 @@ describe("unified server composition", () => {
         "agent.turn.started",
         "agent.person.resolution",
         "core.message.inbound.text",
-        "core.reply.requested",
+        "agent.message.intent.requested",
         "core.model.task.requested",
         "core.model.task.completed",
         "core.message.assistant.text",
@@ -1038,10 +1038,9 @@ describe("unified server composition", () => {
       createRuntimeModelSelectionResolver(await selectedProfile(manager));
 
     expect(
-      llmReplySettingsSchema.safeParse({
+      messageComposerSettingsSchema.safeParse({
         profileId: "profile-override",
         modelTier: "light",
-        outbound: { mode: "source", messageKind: "text" },
       }).success,
     ).toBe(false);
     const invalidSelection: Parameters<RuntimeModelSelectionResolver>[0] = {
@@ -1063,7 +1062,7 @@ describe("unified server composition", () => {
       light: createRepeatingDeterministicModel({ text: "from-provider-one" }),
       heavy: createRepeatingDeterministicModel({ text: "from-provider-two" }),
     };
-    const composition = createReplyComposition(
+    const composition = createMessageComposition(
       ({ modelTier }) => ({
         providerId: modelTier === "light" ? "provider-one" : "provider-two",
         modelId: "shared-model",
@@ -1072,9 +1071,9 @@ describe("unified server composition", () => {
       { moduleConfigs: createFirstPartyModuleConfigDefaults("test") },
     );
     const prompt: CompiledPrompt = {
-      kind: "reply",
+      kind: "message",
       text: "hello",
-      templateId: "test.reply.v1",
+      templateId: "test.message.v1",
       templates: [{ name: "main", content: "hello" }],
       variables: [],
     };
@@ -1112,13 +1111,13 @@ describe("unified server composition", () => {
 
   it("keeps Memory disabled unless composition explicitly enables it", () => {
     expect(
-      createReplyComposition(undefined, {
+      createMessageComposition(undefined, {
         memoryEnabled: false,
         moduleConfigs: createFirstPartyModuleConfigDefaults("test"),
       }).memory,
     ).toEqual({ enabled: false });
     expect(
-      createReplyComposition(undefined, {
+      createMessageComposition(undefined, {
         memoryEnabled: true,
         moduleConfigs: createFirstPartyModuleConfigDefaults("test"),
       }).memory,

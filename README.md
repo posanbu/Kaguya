@@ -40,18 +40,21 @@ Runtime 为入站内容创建 context 根原子，再注册 `core.message.inboun
 ```text
 core.runtime.context
   -> core.message.inbound.text
-  -> core.reply.requested
-  -> core.llm.requested
-  -> core.llm.completed
+  -> agent.heartbeat.scheduled -> agent.turn.candidate
+  -> agent.turn.claimed -> agent.turn.context.completed
+  -> agent.attention.arousal.completed (attend)
+  -> agent.message.intent.requested
+  -> core.model.task.requested
+  -> core.model.task.completed
   -> core.message.assistant.text
   -> core.delivery.requested
   -> core.delivery.delivered | core.delivery.failed
 
-core.llm.requested
-  -> core.llm.failed（终止该分支）
+core.model.task.requested
+  -> core.model.task.failed（终止该分支）
 ```
 
-过滤器通过注册下一个 Kind 来推进链路；拒绝时只注册 `filter.decision`。消费者抛出或 reject 时，输入原子不会回滚，其他消费者仍会独立完成，Core 会追加 `consumer.failed` 作为失败事实。消费者不会因此自动重试。
+Heartflow 将 eligible turn 确定性分派为当前会话 Message Intent；Composer 使用完整冻结 turn 生成普通 text。入站引用仅用于理解上下文，不会成为默认出站 reply。消费者抛出或 reject 时，输入原子不会回滚，其他消费者仍会独立完成，Core 会追加 `consumer.failed` 作为失败事实。消费者不会因此自动重试。
 
 账本把 payload 保存为 PostgreSQL `JSONB`，并用外键保护原子与引用关系。原子、引用及其日志投影 outbox 会在同一事务中写入；outbox 在提交后再交给日志 sink 投影，因此日志失败不会改变已经提交的运行事实。
 
@@ -88,7 +91,7 @@ apps/web/           React/Vite 同源浏览器客户端
 apps/demo/          PostgreSQL 信息 DAG 的确定性演示 runner
 packages/runtime/   信息 ingress、DAG 组合、LLM 生命周期与投递结果
 packages/engine/    InformationCore、Kind Registry、并发广播与 ModuleHost
-packages/modules/   消息 Kind 与 filter/LLM 回复模块
+packages/modules/   消息 Kind、Heartflow 与 Message Composer 模块
 packages/database/  PostgreSQL 信息账本、迁移与日志投影 outbox
 packages/llm/       LLM 调用、输出校验与错误归一化
 packages/modules/templates/  一方 Prompt 文本模板

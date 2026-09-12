@@ -26,4 +26,4 @@
 
 ## 典型场景
 
-`attend` 临时进入回复链，`defer` 请求 Heartbeat，`ignore` 正常静默结束。
+`attend` 临时创建当前会话消息意图，`defer` 请求 Heartbeat，`ignore` 正常静默结束。

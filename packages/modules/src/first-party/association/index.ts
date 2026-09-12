@@ -3,14 +3,14 @@
  * 检索文本直接拼接进 Prompt。request、query、candidate 和 completed 分别记录输入、
  * 确定性查询、canonical source receipt 与唯一终态。
  * 主要职责：`associationModule` 串接四个 durable handler；`associationIdentitySelector`
- * 从当前回复的 runtime context 找到 identity terminal；`associationCandidateSelector`
- * 从 reply DAG 重载当前 inbound，并调用宿主注入的受控 Memory retrieval strategy；失败时按
- * unavailable/failed 终态 fail closed，不生成游离文本或触发新的 reply。
- * 代码库关系：消费 `replyRequestedInformationKind` 和 `agent.person.context.completed`，
+ * 从当前意图的 runtime context 找到 identity terminal，并按冻结 inputs 授权重载全部入站原子；`associationCandidateSelector`
+ * 从 Message Intent DAG 重载当前 inbound，并调用宿主注入的受控 Memory retrieval strategy；失败时按
+ * unavailable/failed 终态 fail closed，不生成游离文本或触发新的消息生成。
+ * 代码库关系：消费 `messageIntentRequestedInformationKind` 和 `agent.person.context.completed`，
  * 产生 `information-kinds.ts` 中的四类 association kind；Runtime 注入
- * `kaguya.memory.sparse`，LLM reply 模块消费 completed terminal 并再次由 Core
+ * `kaguya.memory.sparse`，Message Composer 消费 completed terminal 并再次由 Core
  * 重载原始 inbound。selector 只能访问 Engine 授权的账本读取端口。
- * 输入输出与副作用：输入为回复 source、identity terminal 和 scope；输出为带因果、context、
+ * 输入输出与副作用：输入为意图 target、冻结 turn、identity terminal 和 scope；输出为带因果、context、
  * identity、request/candidate/source 引用的持久原子。重复投递使用 registerOnce/commitTerminal
  * 幂等；检索异常只记录脱敏 reason code，candidate payload 不复制 source 正文。
  */
@@ -36,8 +36,8 @@ import {
   associationRequestedInformationKind,
   associationRequestedInformationPayloadSchema,
   inboundTextInformationKind,
-  replyRequestedInformationKind,
-  replyRequestedInformationPayloadSchema,
+  messageIntentRequestedInformationKind,
+  messageIntentRequestedInformationPayloadSchema,
   turnContextCompletedInformationKind,
   type AssociationCompletedInformationPayload,
   type AssociationQueryInformationPayload,
@@ -103,7 +103,28 @@ export const associationIdentitySelector = defineInformationSelector({
     const turn = turns.find(
       ({ kind }) => kind === turnContextCompletedInformationKind.kind,
     );
+    const inputs =
+      turn === undefined
+        ? []
+        : await ledger.related({
+            from: [turn.informationId],
+            relation: "core:uses-context",
+            direction: "outgoing",
+            limit: 1_000,
+          });
+    const frozenInputIds = new Set(
+      turn === undefined
+        ? []
+        : (turn.payload as any).inputs.map((input: any) => input.informationId),
+    );
     return [
+      ...inputs
+        .filter(
+          (atom) =>
+            atom.kind === inboundTextInformationKind.kind &&
+            frozenInputIds.has(atom.informationId),
+        )
+        .map((atom) => atom.informationId),
       ...(terminals.length === 1 ? [terminals[0]!.informationId] : []),
       ...(turn === undefined ? [] : [turn.informationId]),
     ];
@@ -131,30 +152,30 @@ export const associationCandidateSelector = defineInformationSelector({
     ) {
       throw new Error("Association query must reference one request");
     }
-    const replies = (
+    const intents = (
       await ledger.related({
         from: [requests[0]!.informationId],
         relation: "core:caused-by",
         direction: "outgoing",
         limit: 2,
       })
-    ).filter(({ kind }) => kind === replyRequestedInformationKind.kind);
+    ).filter(({ kind }) => kind === messageIntentRequestedInformationKind.kind);
     if (
-      replies.length !== 1 ||
-      replies[0]!.informationId !== query.sourceInformationId
+      intents.length !== 1 ||
+      intents[0]!.informationId !== query.sourceInformationId
     ) {
-      throw new Error("Association request must reference one reply");
+      throw new Error("Association request must reference one message intent");
     }
     const turns = (
       await ledger.related({
-        from: [replies[0]!.informationId],
+        from: [intents[0]!.informationId],
         relation: "core:uses-context",
         direction: "outgoing",
         limit: 2,
       })
     ).filter(({ kind }) => kind === turnContextCompletedInformationKind.kind);
     if (turns.length !== 1) {
-      throw new Error("Reply must reference one turn context");
+      throw new Error("Message intent must reference one turn context");
     }
     const inbound = (
       await ledger.related({
@@ -193,10 +214,10 @@ export const associationModule = defineInformationModule({
     displayName: "Memory association",
     summary: "Recalls auditable memory candidates for an active turn.",
     description:
-      "Builds the auditable request, query, candidate, and completion chain used for memory association. It only recalls explicitly referenced information and never decides attention, reply wording, or memory writes.",
+      "Builds the auditable request, query, candidate, and completion chain used for memory association. It only recalls explicitly referenced information and never decides attention, message wording, or memory writes.",
     settingsSchema: z.object({}).strict(),
     consumes: [
-      replyRequestedInformationKind,
+      messageIntentRequestedInformationKind,
       associationRequestedInformationKind,
       associationQueryInformationKind,
     ],
@@ -220,11 +241,11 @@ export const associationModule = defineInformationModule({
     }),
     subscriptions: [
       onInformation(
-        replyRequestedInformationKind,
+        messageIntentRequestedInformationKind,
         { subscriptionId: "kaguya.association.request", delivery: "durable" },
-        async (reply, context) => {
-          const payload = replyRequestedInformationPayloadSchema.parse(
-            reply.payload,
+        async (intent, context) => {
+          const payload = messageIntentRequestedInformationPayloadSchema.parse(
+            intent.payload,
           );
           const identityAtoms = await context.select(
             associationIdentitySelector,
@@ -235,23 +256,39 @@ export const associationModule = defineInformationModule({
           const turnContext = identityAtoms.find(
             ({ kind }) => kind === turnContextCompletedInformationKind.kind,
           );
+          if (
+            turnContext === undefined ||
+            turnContext.informationId !== payload.turn.contextInformationId
+          ) {
+            throw new Error("Message intent must reference its frozen turn");
+          }
+          const selectedById = new Map(
+            identityAtoms.map((atom) => [atom.informationId, atom]),
+          );
+          const queryText = (turnContext.payload as any).inputs
+            .map((input: any) => {
+              const inbound = selectedById.get(input.informationId);
+              if (inbound?.kind !== inboundTextInformationKind.kind)
+                throw new Error("Frozen turn input is unavailable");
+              return inboundTextInformationKind.payloadSchema.parse(
+                inbound.payload,
+              ).text;
+            })
+            .join("\n");
           const identity =
             identityAtom === undefined
               ? { status: "unavailable" as const }
               : identityTerminalPayloadSchema.parse(identityAtom.payload);
           await context.registerOnce(
             "kaguya.association.requested.v1",
-            reply.informationId,
+            intent.informationId,
             associationRequestedInformationKind,
             {
               payload: {
-                sourceInformationId: reply.informationId,
-                queryText: payload.text,
-                asOf:
-                  turnContext === undefined
-                    ? reply.occurredAt
-                    : (turnContext.payload as any).asOf,
-                route: "reply",
+                sourceInformationId: intent.informationId,
+                queryText,
+                asOf: (turnContext.payload as any).asOf,
+                route: "message",
                 method: "sparse-2gram",
                 identity: {
                   status: identity.status,
@@ -263,9 +300,9 @@ export const associationModule = defineInformationModule({
                     : { scopeInformationId: identity.scopeInformationId }),
                 },
                 scope: {
-                  platform: payload.source.platform,
-                  adapterId: payload.source.adapterId,
-                  destination: payload.source.destination,
+                  platform: payload.target.platform,
+                  adapterId: payload.target.adapterId,
+                  destination: payload.target.destination,
                 },
               },
               references:

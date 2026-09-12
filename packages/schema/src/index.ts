@@ -75,7 +75,7 @@ export const promptTemplateSchema = z.object({
 
 export type PromptTemplate = z.infer<typeof promptTemplateSchema>;
 
-export const promptKindSchema = z.enum(["route", "reply", "state", "memory"]);
+export const promptKindSchema = z.enum(["route", "message", "state", "memory"]);
 
 export const compiledPromptSchema = z.object({
   kind: promptKindSchema,

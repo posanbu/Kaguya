@@ -1,6 +1,6 @@
 /**
- * 功能概述：汇总 modules 包的信息原子 kind、Heartflow、LLM 回复与 person-fact Model Task 公共契约。
- * 主要职责：导出 `createHeartflowModule`、`createLlmReplyModule`、
+ * 功能概述：汇总 modules 包的信息原子 kind、Heartflow、Message Composer与 person-fact Model Task 公共契约。
+ * 主要职责：导出 `createHeartflowModule`、`createMessageComposerModule`、
  * `createPersonFactTaskModule`、默认 Selector 名称以及各阶段 kind/schema；旧事件定义、reply-only completed schema 和定向事件模块不再公开。
  * 代码库关系：apps composition root 通过 first-party/catalog.ts 工厂选择模块，注入 shared completed definition，
  * 并传入 modelTaskCapability token；Host 只消费显式 Catalog 中的 Manifest。
@@ -34,12 +34,12 @@ export {
   type AttentionArousalSettings,
 } from "./first-party/attention-arousal/index.js";
 export {
-  createLlmReplyModule,
-  replyTaskOutputSchema,
-  llmReplySettingsSchema,
+  createMessageComposerModule,
+  messageTaskOutputSchema,
+  messageComposerSettingsSchema,
   modelTierSchema,
-  type CreateLlmReplyModuleOptions,
-  type LlmReplySettings,
+  type CreateMessageComposerModuleOptions,
+  type MessageComposerSettings,
   type ModelTaskCapability,
   type ModelTaskRequest,
   type ModelTaskResult,
@@ -47,8 +47,8 @@ export {
   type ModelTier,
   type ModuleModelSelection,
   type AgentIdentity,
-  type ReplyPromptTemplates,
-} from "./first-party/llm-reply/index.js";
+  type MessagePromptTemplates,
+} from "./first-party/message-composer/index.js";
 export {
   createPersonFactTaskModule,
   currentPersonFactCandidateSelector,
@@ -60,12 +60,12 @@ export {
   type PersonFactTaskSettings,
 } from "./first-party/person-fact-task/index.js";
 export {
-  compileReplyPromptFromInformation,
-  associationReplyContextSelector,
+  compileMessagePromptFromInformation,
+  associationMessageContextSelector,
   currentAcceptedMessageSelector,
-  turnReplyContextSelector,
+  turnMessageContextSelector,
   inboundMemoryPromptRenderer,
-} from "./first-party/llm-reply/reply-context.js";
+} from "./first-party/message-composer/message-context.js";
 export {
   associationCandidateInformationKind,
   associationCandidateInformationPayloadSchema,
@@ -80,12 +80,15 @@ export {
   deliveryRequestedInformationKind,
   filterDecisionInformationKind,
   inboundTextInformationKind,
+  inboundTextInformationPayloadSchema,
+  messageTargetSchema,
+  type MessageTarget,
   personFactCandidateInformationKind,
   personFactCandidateInformationPayloadSchema,
   personFactExtractedInformationKind,
   personFactExtractedPayloadSchema,
-  replyRequestedInformationKind,
-  replyRequestedInformationPayloadSchema,
+  messageIntentRequestedInformationKind,
+  messageIntentRequestedInformationPayloadSchema,
   chatScopeEntityInformationKind,
   chatScopeBindingInformationKind,
   platformAccountEntityInformationKind,
@@ -116,7 +119,7 @@ export {
   type AssociationCompletedInformationPayload,
   type AssociationQueryInformationPayload,
   type AssociationRequestedInformationPayload,
-  type ReplyRequestedInformationPayload,
+  type MessageIntentRequestedInformationPayload,
 } from "./first-party/information-kinds.js";
 export {
   createFirstPartyModuleCatalog,

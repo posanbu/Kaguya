@@ -34,7 +34,7 @@ const profileIdAllowedPaths = [
 ] as const;
 const noImplicitContextPaths = [
   "packages/modules/src/prompt-template.ts",
-  "packages/modules/src/first-party/llm-reply/",
+  "packages/modules/src/first-party/message-composer/",
   "packages/modules/src/first-party/information-kinds.ts",
 ] as const;
 const forbidden: readonly ForbiddenRule[] = [
@@ -261,12 +261,12 @@ if (process.env.VITEST) {
     it("rejects implicit context keys only in Prompt, Memory, and reply paths", () => {
       expect(
         findSourceViolations(
-          "packages/modules/src/first-party/llm-reply/reply-context.ts",
+          "packages/modules/src/first-party/message-composer/message-context.ts",
           "const sessionId = input.sessionId;\nconst contextKey = input.contextKey;",
         ),
       ).toEqual([
-        "packages/modules/src/first-party/llm-reply/reply-context.ts:1: sessionId",
-        "packages/modules/src/first-party/llm-reply/reply-context.ts:2: contextKey",
+        "packages/modules/src/first-party/message-composer/message-context.ts:1: sessionId",
+        "packages/modules/src/first-party/message-composer/message-context.ts:2: contextKey",
       ]);
       expect(
         findSourceViolations(

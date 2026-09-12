@@ -1,10 +1,11 @@
 /**
  * 功能概述：在显式 composition root 选择业务 Catalog 与宿主批准的 Model Task 能力。
- * 主要职责：createReplyComposition 注入共享 token/definition，按 activation 设置批准 tier，
+ * 主要职责：createMessageComposition 注入共享 token/definition，按 activation 设置批准 tier，
  * 并将 provider client 与模型解析器交给 Runtime 构造受控 ModelTaskClient；providerId/modelId
  * 作为复合身份写入审计数据并通过异步调用上下文选择模型，避免同名 model 跨 provider 串线；
  * createDeterministicModelSelectionResolver 为离线演示提供确定性模型。
- * 代码库关系：组合 modules、Runtime 通用生命周期与 LLM client，Runtime 本身不认识回复策略。
+ * 代码库关系：从 loadFirstPartyPromptTemplates().messageComposer 读取模板，组合 agent.message-composer、
+ * Runtime 通用生命周期与 LLM client；settings 只含 modelTier，投递目标由消息 intent 决定。
  * 输入输出与副作用：构造阶段无网络或连接；模型句柄按复合 key 存于宿主闭包，
  * Runtime 校验 activation/policy、重载因果 context 并写通用任务生命周期，模块经 context.use 调用。
  */
@@ -19,7 +20,7 @@ import { createRepeatingDeterministicModel } from "@kaguya/llm/testing";
 import {
   createFirstPartyModuleCatalog,
   createFirstPartyModuleActivations,
-  llmReplySettingsSchema,
+  messageComposerSettingsSchema,
   type FirstPartyModuleInstanceConfig,
   type ModuleModelSelection,
 } from "@kaguya/modules";
@@ -45,7 +46,7 @@ export type RuntimeModelSelectionResolver = (
   readonly model: ReturnType<KaguyaLlmModelResolver>;
   readonly generationOptions?: KaguyaLlmGenerationOptions;
 };
-export interface ReplyCompositionOptions {
+export interface MessageCompositionOptions {
   readonly memoryEnabled?: boolean;
   readonly moduleConfigs: readonly FirstPartyModuleInstanceConfig[];
   readonly agentIdentity?: import("@kaguya/modules").AgentIdentity;
@@ -60,9 +61,9 @@ export function createDeterministicModelSelectionResolver(): RuntimeModelSelecti
     model,
   });
 }
-export function createReplyComposition(
+export function createMessageComposition(
   resolveModelSelection: RuntimeModelSelectionResolver = createDeterministicModelSelectionResolver(),
-  options: ReplyCompositionOptions,
+  options: MessageCompositionOptions,
 ) {
   const promptTemplates = loadFirstPartyPromptTemplates();
   const catalog = createFirstPartyModuleCatalog({
@@ -73,7 +74,7 @@ export function createReplyComposition(
     deliveryDeliveredInformationKind,
     deliveryFailedInformationKind,
     executionExhaustedInformationKind,
-    promptTemplates: promptTemplates.llmReply,
+    promptTemplates: promptTemplates.messageComposer,
     agentIdentity: options.agentIdentity ?? DEFAULT_AGENT_IDENTITY,
   });
   const activations = createFirstPartyModuleActivations(
@@ -91,14 +92,17 @@ export function createReplyComposition(
   }>();
   const modelTask: RuntimeModelTaskOptions = {
     approvals: activations
-      .filter((activation) => activation.definitionId === "demo.reply.llm")
+      .filter(
+        (activation) => activation.definitionId === "agent.message-composer",
+      )
       .map((activation) => ({
         activation: {
           instanceId: activation.instanceId,
           definitionId: activation.definitionId,
         },
         selectionPolicy: {
-          tier: llmReplySettingsSchema.parse(activation.settings).modelTier,
+          tier: messageComposerSettingsSchema.parse(activation.settings)
+            .modelTier,
         },
       })),
     client: new KaguyaLlmClient({

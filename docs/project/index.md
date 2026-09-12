@@ -19,7 +19,7 @@ description: Kaguya 当前已实现能力、明确边界和后续演进方向。
 ::: timeline 持久化信息 DAG
 
 - Core 以 `informationId` 作为运行事实的唯一身份，先提交信息账本，再向当前消费者并发广播。
-- 入站、过滤、回复请求、LLM、assistant、投递与结果均以显式 Information Kind 和因果引用组成 DAG。
+- 入站、过滤、消息意图、LLM、assistant、投递与结果均以显式 Information Kind 和因果引用组成 DAG。
 - 过滤通过注册下一 Kind；过滤拒绝只记录 `filter.decision`。
 - 消费者、LLM 和投递失败都会保留为失败事实，已提交输入与其他消费者结果不会回滚。
   :::

@@ -21,20 +21,18 @@ tests:
       - type: javascript
         value: file://promptfoo/assertions.cjs:assertRoutePrompt
 
-  - description: reply 排除仅供路由使用的策略
+  - description: message 使用真实编译器保留完整冻结 turn
     vars:
-      kind: reply
-      persona: REPLY_PERSONA
-      history:
-        - role: user
-          content: REPLY_HISTORY
-      memories:
-        - content: REPLY_MEMORY
+      kind: message
+      persona: MESSAGE_PERSONA
+      turn:
+        inputs:
+          - FIRST_TURN_INPUT
+          - LAST_TURN_INPUT
       routePolicy: ROUTE_ONLY_POLICY
-      replyPolicy: REPLY_POLICY
     assert:
       - type: javascript
-        value: file://promptfoo/assertions.cjs:assertReplyPrompt
+        value: file://promptfoo/assertions.cjs:assertMessagePrompt
 
   - description: state 包含短时状态更新策略
     vars:

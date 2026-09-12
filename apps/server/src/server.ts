@@ -1,16 +1,16 @@
 /**
- * 功能概述：服务端组合根，独立管理 Adapter、数据库、Runtime、HTTP 与 WebUI 生命周期。
- * 主要职责：startKaguyaServer 加载配置、检查数据库、启动模块并注册入口；close 逆序释放资源；
- * 模型解析器依据选中 Profile 选择 provider，初始化失败按阶段降级并记录安全错误。
- * 代码库关系：调用 app.ts、runtime-composition.ts 与 adapter-host.ts；将 Runtime 的
- * inspectModules 和账本只读端口交给 inspection.ts，配置仅用于秘密脱敏闭包。
- * 输入输出与副作用：创建网络连接、启动监听并管理关闭；Inspection 仅在 Runtime 可用时注入，
- * 不改变消息处理流程，不把 settings、凭据或数据库对象放入 HTTP 响应。
+ * 功能概述：Server composition root，组合配置、数据库、Runtime、HTTP/Web 与 NapCat 生命周期。
+ * 主要职责：startKaguyaServer 验证 Profile 和模块配置后启动宿主；close 逆序释放资源；
+ * createRuntimeModelSelectionResolver 根据 Profile 批准的 tier 解析 provider/model 及生成参数。
+ * 代码库关系：createMessageCatalog/createMessageComposition 装配消息编写模块；AdapterHost
+ * 管理适配器；inspectModules 和账本只读端口交给 inspection.ts，配置仅用于秘密脱敏闭包。
+ * 输入输出与副作用：连接数据库、监听 HTTP 并启动适配器，失败时释放已创建资源并固定错误分类。
+ * Inspection 仅在 Runtime 可用时注入，不把 settings、凭据或数据库对象放入 HTTP 响应。
  */
 import { createInspectionService } from "./inspection.js";
 import {
-  createReplyCatalog,
-  createReplyComposition,
+  createMessageCatalog,
+  createMessageComposition,
   type RuntimeModelSelectionResolver,
 } from "./runtime-composition.js";
 import { pathToFileURL } from "node:url";
@@ -145,7 +145,7 @@ export async function startKaguyaServer(
         selectedProfile.identity,
       ),
     });
-    createReplyComposition(undefined, {
+    createMessageComposition(undefined, {
       moduleConfigs,
       agentIdentity: selectedProfile.identity,
     });
@@ -276,7 +276,7 @@ export async function startKaguyaServer(
         runtime = new KaguyaRuntime({
           database,
           logger: rootLogger,
-          ...createReplyComposition(resolveModelSelection, {
+          ...createMessageComposition(resolveModelSelection, {
             memoryEnabled: selectedProfile.memory.enabled,
             moduleConfigs,
             agentIdentity: selectedProfile.identity,
@@ -555,7 +555,7 @@ async function prepareConfigurationDatabase(
   try {
     await database.prepareSchema();
     await database.information.synchronizeKinds(
-      runtimeInformationKindNames(createReplyCatalog()),
+      runtimeInformationKindNames(createMessageCatalog()),
     );
   } catch (error) {
     if (error instanceof UnsupportedDatabaseSchemaError) throw error;
