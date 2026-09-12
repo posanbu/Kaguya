@@ -1,4 +1,6 @@
 /**
+ * close({ drain: true }) 用于热应用：停止调度与 claim 领取，允许已领取任务有界完成，
+ * 然后 abort/清理旧宿主；外部注入的数据库保持打开，可供下一 Runtime 复用。
  * 功能概述：以 PostgreSQL information ledger 装配通用 Runtime，接受显式 Catalog、activations 和宿主 capabilities。
  * 主要职责：start 注册完整 kind 并预检模块，最后开放 ingress；submit 持久化 context/inbound 后返回接受凭据；
  * 平台投递使用 durable subscription，终态唯一槽避免重放再次落账，已有终态时不重复调用 transport。
@@ -547,7 +549,7 @@ export class KaguyaRuntime implements InformationIngress {
     return operation;
   }
 
-  close(): Promise<void> {
+  close(options: { drain?: boolean } = {}): Promise<void> {
     if (this.#closePromise !== undefined) return this.#closePromise;
     if (this.#state === "closed") return Promise.resolve();
 
@@ -557,6 +559,10 @@ export class KaguyaRuntime implements InformationIngress {
     this.#closePromise = (async () => {
       // scheduler 必须先停止，随后再让 ModuleHost abort 正在等待的启动或 handler。
       await this.#oneShotScheduler?.stop().catch(() => undefined);
+      if (options.drain) {
+        await this.#cadence?.stop().catch(() => undefined);
+        await this.#core?.stopReliableDelivery({ drain: true });
+      }
       await this.#moduleHost?.stop().catch(() => undefined);
       await starting?.catch(() => undefined);
       await drainRuntimeOperations(

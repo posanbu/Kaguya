@@ -1,3 +1,9 @@
+/**
+ * 功能概述：轮询并展示当前 AdapterHost/Runtime 的真实连接与入站状态。
+ * 主要职责：挂载时启动可取消轮询、卸载时停止；通过状态标签区分热应用暂停与平台断线。
+ * 代码库关系：复用 api 与 adapter-status；Server 动态状态门面确保切换后不显示旧实例。
+ * 输入输出与副作用：仅 GET 安全状态 DTO，修复配置后引导重新应用，不要求普通配置重启。
+ */
 import { useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { getAdapterStatus } from "./api.js";
@@ -88,8 +94,7 @@ export function AdapterStatusPanel({ token }: { token: string }) {
             </div>
           </dl>
           <p className="setup-intro">
-            连接状态与消息处理能力分别显示。修复配置或下游故障后需要重启
-            Kaguya。
+            连接状态与消息处理能力分别显示。修复配置或下游故障后，可在配置生效管理中重新应用。
           </p>
           <div className="adapter-status-grid">
             {state.snapshot.adapters.map((adapter) => (

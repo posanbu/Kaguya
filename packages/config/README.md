@@ -166,7 +166,7 @@ formats both require `version: 1`; the index contains metadata plus
 `selectedProfileId`. Other versions and legacy shapes fail ordinary schema
 validation. Existing documents are never converted, repaired, or deleted.
 
-At server startup, `KAGUYA_CONFIG_ROOT` is loaded into a frozen profile
+At server startup, `KAGUYA_CONFIG_ROOT` is loaded into a profile
 registry. The selected Profile is the persisted source for runtime, database,
 AI, Memory, platforms, and review. Module activation is configured separately
 under `modules/<instanceId>/config.json`. The development PostgreSQL command
@@ -174,7 +174,7 @@ may add a complete safe local `runtime` only when that field is entirely absent;
 it never replaces a partially invalid runtime. Database connection, PostgreSQL
 17, strict schema v1 preparation, and Runtime Kind synchronization must pass before HTTP or any
 other ingress listens. After that preflight, an incomplete AI Profile may use
-the Web configuration UI while Runtime and adapter ingress remain stopped until restart.
+the Web configuration UI while Runtime and adapter ingress remain stopped until a complete Profile is saved and explicitly applied.
 Corrupt stores and unsafe or inaccessible paths fail startup and are never
 overwritten. A module may request only a `modelTier`; it cannot override the selected profile.
 Failure of the selected profile stops runtime startup; there is no fallback to
@@ -249,3 +249,5 @@ issue list rather than the Profile object or the original configuration error.
 Server 启动与开发数据库准备入口调用该 API。缺失 identity/memory 会补默认值，退役 plugins 和持久化 Gateway Token 只保留于私有备份；模型和平台凭据、选中项及已有 runtime 规则保持不变。迁移失败和锁恢复步骤见根 README。不要运行多个进程同时修改同一个 Registry。
 
 `ai.modelTiers.light.generation.timeoutMs` 与 `heavy.generation.timeoutMs` 可配置 1–300000 ms 的模型硬超时。省略时使用 300000 ms；`recommendedDurationMs` 仍是独立的软预算。
+
+Server 支持显式热应用：Web UI 保存或切换选中 Profile 后调用受认证的 apply 接口，整体替换 Runtime 和平台连接。独立模块配置的手工修改需要从“配置生效管理”手动应用；不会监听文件或加载修改后的模块代码。数据库连接和 HTTP 等进程资源变更仍需重启。接口、版本冲突和回滚契约见 [配置生效说明](configuration-apply-design.md)。

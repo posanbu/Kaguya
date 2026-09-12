@@ -5,6 +5,7 @@
  * 代码库关系：由 app.ts 注册，server.ts 注入已启动 Runtime 的 inspectModules 和数据库只读端口；
  * schema 包约束 DTO，inspection-redaction.ts 统一清理所有响应，WebUI 不接触配置或原始数据库对象。
  * 输入输出与副作用：只执行有界读取；游标绑定过滤条件并校验时间/ID；Flow 不递归扩展其他 context，
+ * registerInspectionRoutes 可接收动态 service getter，热切换期间返回 503，新实例生效后使用新的脱敏快照。
  * 节点最多 500，边最多 2000，详情引用最多 100，明确报告截断和图外引用；无编辑、重放或订阅。
  */
 import { createHash } from "node:crypto";
@@ -206,7 +207,8 @@ class InspectionError extends Error {
 }
 export function registerInspectionRoutes(
   app: FastifyInstance,
-  service: InspectionService | undefined,
+  service:
+    InspectionService | (() => InspectionService | undefined) | undefined,
   authenticate: (
     request: FastifyRequest,
     reply: FastifyReply,
@@ -251,9 +253,9 @@ export function registerInspectionRoutes(
       },
       async (request, reply) => {
         try {
-          if (!service)
-            throw new InspectionError(503, "inspection_unavailable");
-          return { data: await handler(request, service) };
+          const active = typeof service === "function" ? service() : service;
+          if (!active) throw new InspectionError(503, "inspection_unavailable");
+          return { data: await handler(request, active) };
         } catch (error) {
           const status = error instanceof InspectionError ? error.status : 500;
           const code =

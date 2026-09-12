@@ -22,7 +22,7 @@ Server 每次启动都会生成新的 Gateway Token，并在成功监听后打�
 
 `KAGUYA_CONFIG_ROOT` 指向权限受保护的 Profile Registry。Registry 有且只有一个显式的 `selectedProfileId`；Server 的 host、port、database、Web 路径、CORS、代理、限流、日志、allowlist、AI、Memory 与平台都来自这个 Profile。首次 `pnpm dev` 会在缺少整个 `runtime` 时保留其他 Profile 内容并补入安全的本地 runtime；部分损坏的 runtime 会被拒绝而不会覆盖。
 
-数据库连接、PostgreSQL 17、严格 schema v1 和 Runtime Kind 必须在任何监听启动前通过。数据库 schema 不兼容会直接终止 Server；AI 配置尚未完成时仍会开放 Web 配置界面，Runtime 与 NapCat 保持停止。修改或切换 selected Profile 后，在原终端按 `Ctrl+C`，从仓库根目录重新执行 `pnpm dev`（生产模式使用 `pnpm start`），然后打开新打印的完整访问链接。初始化格式与密钥边界见 [`@kaguya/config`](packages/config/README.md)。
+数据库连接、PostgreSQL 17、严格 schema v1 和 Runtime Kind 必须在任何监听启动前通过。数据库 schema 不兼容会直接终止 Server；AI 配置尚未完成时仍会开放 Web 配置界面，Runtime 与 NapCat 保持停止。Web UI 保存或切换 selected Profile 后会自动应用模型、人设、Memory、NapCat 和白名单配置，无需重新打开访问链接；设置菜单的“配置生效管理”也可手动应用或重试。端口、数据库地址等进程级字段变更仍需在原终端按 `Ctrl+C`，重新执行 `pnpm dev`（生产模式使用 `pnpm start`），然后打开新打印的完整访问链接。初始化格式与密钥边界见 [`@kaguya/config`](packages/config/README.md)。
 
 Web UI 的 NapCat 页面只读写 selected Profile 的 `platforms` 条目。
 
@@ -44,9 +44,9 @@ pnpm start
 
 Web 配置页可分别设置轻量、重量模型的**模型调用超时**（0.001–300 秒，默认 300 秒）；该值覆盖模型请求及响应读取。推荐响应时间仍只是软预算。默认 durable lease 为 330 秒，为最长模型调用预留 30 秒提交余量；进程崩溃后的无主任务也可能要等租约到期才能恢复。
 
-使用 QQ 前必须配置 **Gateway Allowlist**：`qq:group:778899` 允许指定群，`qq:private:112233` 允许指定用户；`qq:group:*` 和 `qq:private:*` 分别允许所有群和私聊。空列表会拒绝所有非 Web 入站消息，因此 NapCat 显示已连接仍可能没有回复。保存并重启后，从实际 QQ 群或私聊发送消息，检查入站平台与最终 `core.delivery.delivered` 事实。
+使用 QQ 前必须配置 **Gateway Allowlist**：`qq:group:778899` 允许指定群，`qq:private:112233` 允许指定用户；`qq:group:*` 和 `qq:private:*` 分别允许所有群和私聊。空列表会拒绝所有非 Web 入站消息，因此 NapCat 显示已连接仍可能没有回复。保存并应用后，从实际 QQ 群或私聊发送消息，检查入站平台与最终 `core.delivery.delivered` 事实。
 
-关于配置免进程重启的后续方案，见 [配置生效设计](packages/config/configuration-apply-design.md)。当前版本仍要求按上述步骤重启。
+热应用期间消息入口会短暂暂停，当前任务有界收尾；新配置启动失败时尝试恢复旧配置。文件手工修改不会自动触发应用，需在设置菜单中显式应用；不支持模块代码热更新。接口、失败恢复及仍需重启的字段见 [配置生效说明](packages/config/configuration-apply-design.md)。
 
 ## 信息 DAG
 
@@ -133,4 +133,4 @@ packages/platform-adapters/ OneBot/NapCat/Web 正规化与 transport 契约
 
 ## 当前边界
 
-模块是受信任的同进程代码。Core 按当前订阅者快照实时广播：没有持久订阅、离线补投、工作队列、消费者优先级或自动重试。系统同样没有去重、热更新、模块沙箱、隐式会话分组或 Web 回复读取/SSE 通道。旧 SQLite 数据不会自动导入、转换或删除。已知 v3 配置索引会在启动前备份并迁移到 v1；其他旧格式继续拒绝，详见上方迁移说明。
+模块是受信任的同进程代码。Core 按当前订阅者快照实时广播：没有持久订阅、离线补投、工作队列、消费者优先级或自动重试。系统同样没有去重、模块代码热更新、模块沙箱、隐式会话分组或 Web 回复读取/SSE 通道。旧 SQLite 数据不会自动导入、转换或删除。已知 v3 配置索引会在启动前备份并迁移到 v1；其他旧格式继续拒绝，详见上方迁移说明。

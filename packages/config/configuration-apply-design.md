@@ -1,27 +1,27 @@
-# 配置生效：免进程重启方案
+# 配置热应用
 
-issue #125 提出希望保存配置后不再手动重启。当前 Server 在启动时把 selected Profile 分别传给 HTTP、AdapterHost、Runtime、模型解析器和模块配置；单独重新读取 JSON 不能使这些组件一致切换。特别是模型任务可能正在等待外部响应，旧任务的执行租约、输出目标和凭据不应被中途替换。
+Web UI 的“保存并应用”会先保存 selected Profile，再使用该次保存返回的版本应用配置。切换 Profile 也会应用所选配置；编辑未选中的 Profile 仅保存。设置菜单的“配置生效管理”显示当前选中、当前生效及待应用状态，供手工修改配置后应用或失败后重试。
 
-本次实现保留显式重启行为，并补齐终端操作和新访问链接指引。下面是后续实现的具体契约，尚未提供 HTTP apply 路由或热加载功能。
+模型及凭据、生成参数、人设、Memory、NapCat 连接、Gateway Allowlist 和模块实例配置可整体热应用。HTTP 服务、Gateway Token 和数据库连接保持不变。此功能不监听文件变化，也不热更新模块源码；手工修改 Profile 或模块 JSON 后需显式应用。运行中不要手工修改 Registry 索引；Profile 的创建、删除和选择应通过管理接口完成。
 
-## 保存与应用分开
+## 接口与并发
 
-保留现有 Profile 保存接口，增加受 Gateway Bearer 认证保护的 `POST /api/v1/configuration/apply`。客户端提交预期 selected Profile ID 和配置 revision；服务端在一个串行应用锁下再次读取，revision 不一致返回 409，避免覆盖另一页面刚保存的选择。revision 应覆盖 Profile 内容和模块配置，不能只依赖 index 的更新时间；API 只返回不透明的版本标识，不返回凭据或原始配置摘要。
+`GET /api/v1/configuration/status` 和 `POST /api/v1/configuration/apply` 均要求 Gateway Bearer 认证，并返回 `Cache-Control: no-store`。状态包含 `state`（ready、pending、applying、degraded）、`selectedProfileId`、`selectedRevision`、`appliedProfileId` 和 `appliedRevision`；没有可用 Runtime 时最后两项为 null。保存和选择接口也返回同一写锁内捕获的 `application` 快照。
 
-接口返回 applied、restart_required 或 failed。状态接口同时返回 selected Profile 和当前生效的 Profile/revision，Web UI 据此显示“已保存，待应用”或“已生效”，不会把落盘成功当作 Runtime 已加载。数据库连接、监听地址、端口、CORS、代理、限流、日志目标或 Web 资源路径变更先返回 restart_required，并列出安全字段名；这些进程资源暂时维持显式重启。
+POST 提交 `{ "selectedProfileId": "default", "revision": "<selectedRevision>" }`。revision 是完整 Profile 与模块实例配置经进程私有密钥计算的 HMAC，不暴露凭据摘要；重启后需要重新读取。应用与 HTTP 配置写入共用串行锁。版本过期或另一次应用正在执行时返回 409，客户端刷新状态后由用户确认重试，不自动重新提交。应用期间配置读取和健康检查可用，保存请求排队。
 
-## 应用过程
+响应中的 `data.status` 为 applied、restart_required 或 failed，并附带实际生效快照。failed 使用固定 `errorCode`，不返回底层错误正文或配置值。配置结构及模型选择预检失败时保持原实例；预检不会发出真实模型请求，也不能保证凭据有效或平台连通。
 
-先读取并校验完整配置、readiness、模型 tier 和模块配置；存在错误时保持现有实例运行。预检只验证结构与可解析性，不能为测试配置发出真实模型请求。模型凭据、人设、Memory、平台连接和白名单变更进入有界切换流程。
+## 切换与恢复
 
-切换时暂停所有入站入口，拒绝新消息并给出短暂不可用状态；停止定时任务领取和 durable claim 领取，允许正在执行的任务有界 drain。到期后通过既有 shutdown abort 和 fencing 释放任务，不写业务 cancelled。旧模型任务与已提交投递保持其持久事实，恢复执行继续遵循当前恢复协议；不能重新注册新的业务输入来伪装切换完成。
+通过预检后，暂停全部入站，停止调度和 durable claim 领取。Runner 默认允许已领取任务收尾 5 秒，超时再传播 shutdown abort，并有界等待退出；未完成 claim 按既有释放、租约与 fencing 协议恢复，不记录业务取消。忽略 abort 的迟到处理不能越过持久化 fencing 写入输出；这不为第三方已经收到的外部请求提供 exactly-once 保证。
 
-完全停止旧 AdapterHost 和 Runtime 后，在同一数据库连接之上创建新组合，重新绑定 Web ingress、消息出口及 Inspection 闭包。新 Runtime、适配器和所有绑定都成功后才发布 applied revision 并开放入站。新的 Snapshot 必须整体生效，不能只更换模型解析器而保留旧人设、白名单或 NapCat 凭据。
+旧 Runtime 与 AdapterHost 关闭后，在同一数据库上创建新实例，绑定消息出口、Web ingress 和 Inspection 服务，再发布生效版本并恢复入口。切换中 Web 消息和 Inspection 返回 503；旧适配器回调保持关闭状态，不能进入新 Runtime。NapCat 使用自己的连接重试机制，“已生效”表示新配置已加载，不表示 QQ 已连接或模型凭据验证成功。
 
-应用失败时关闭部分创建的新资源，用内存保留的旧 Snapshot 重新创建旧实例；成功恢复后报告 failed，并继续展示旧 applied revision。恢复也失败则进入可诊断的 degraded 状态，保留配置管理入口。不能重用已经 close 的 Runtime/Runner；它们目前是单次生命周期对象。
+新实例启动失败时清理新资源，并用内存中的旧快照重建旧实例。恢复成功返回 failed，继续显示旧 applied revision，已保存的新配置仍可修改或重试。回滚也失败时进入 degraded，配置管理入口仍可用。若任一实例未能安全关闭，则阻止再次启动，返回 shutdown_failed，需要重启进程，避免存在两个资源所有者。
 
-## 验收边界
+## 仍需重启的字段
 
-验收应覆盖两个并发 apply、保存与 apply 竞争、持续入站期间切换、长模型调用被 drain、未完成 durable task 的恢复、新适配器启动失败、回滚失败以及 HTTP 资源变更要求重启。验证每个消息最多拥有一个业务输入身份，配置管理始终可访问，旧 adapter 不再接受新入站，应用期间凭据不进入日志或 API 响应。
+以下 runtime 字段变更返回 restart_required，并仅列出字段名：`host`、`port`、`databaseMode`、`databaseUrl`、`webDistPath`、`corsOrigins`、`trustProxy`、`rateLimitMax`、`rateLimitWindowMs`、`logLevel`、`logFormat`。不做部分应用，原实例继续运行。
 
-这套契约可以支持“保存并应用”按钮，并保留进程级变更的重启路径。实现之前仍使用 README 的 `Ctrl+C` → `pnpm dev` / `pnpm start` 流程。
+在原终端按 Ctrl+C，从仓库根目录执行 `pnpm dev`；生产模式执行 `pnpm start`。重启后打开终端打印的新访问链接。Gateway Allowlist 不在此限制内，可以直接应用。

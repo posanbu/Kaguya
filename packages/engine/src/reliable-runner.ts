@@ -4,7 +4,8 @@
  * stop 停止领取、传播 abort 并有界 drain。lease 到期的迟到任务由 Core/数据库 fencing 拒绝。
  * 代码库关系：仅依赖 Core 与可靠 ledger 端口；Host/Runtime 安装订阅，不把业务策略写入执行器。
  * DEFAULT_LEASE_MS 采用 330 秒，覆盖配置允许的 300 秒模型调用并为持久化提交留出 30 秒；
- * 显式 leaseMs 仍用于其他执行场景与测试。
+ * 显式 leaseMs 仍用于其他执行场景与测试。stop({ drain: true }) 先停止领取并有界等待
+ * 当前批次，再发送 shutdown abort 释放未完成 claim，供配置热应用保留任务唯一性。
  * 输入输出与副作用：后台轮询执行持久化 I/O，所有 rejection 均被消费；不记录正文或原始错误。
  */
 import type { DeepReadonly, InformationAtom } from "@kaguya/schema";
@@ -65,18 +66,25 @@ export class ReliableInformationRunner {
     this.#started = true;
     this.#start = (async () => {
       await this.#ledger.configureSubscriptions(this.#options.subscriptions);
-      if (this.#shutdown.signal.aborted) return;
+      if (this.#stop || this.#shutdown.signal.aborted) return;
       this.#running = true;
       this.schedule(0);
     })();
     return this.#start;
   }
-  stop(): Promise<void> {
+  stop(options: { drain?: boolean } = {}): Promise<void> {
     if (this.#stop) return this.#stop;
     this.#running = false;
     clearTimeout(this.#timer);
-    this.#shutdown.abort(new Error("Runtime shutdown"));
+    if (!options.drain) this.#shutdown.abort(new Error("Runtime shutdown"));
     this.#stop = (async () => {
+      if (options.drain) {
+        await boundedWait(
+          Promise.allSettled([this.#start, this.#cycle]),
+          this.#options.drainTimeoutMs ?? 5000,
+        );
+        this.#shutdown.abort(new Error("Runtime shutdown"));
+      }
       // shutdown 不改 activation 配置：与崩溃相同，保留离线期间的持久投递。
       // 下次 start 的完整 Catalog 才负责显式禁用订阅。
       await boundedWait(

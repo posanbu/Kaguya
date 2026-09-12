@@ -5,10 +5,20 @@
  * 代码库关系：createMessageCatalog/createMessageComposition 装配消息编写模块；AdapterHost
  * 管理适配器；inspectModules 和账本只读端口交给 inspection.ts，配置仅用于秘密脱敏闭包。
  * 启动配置阶段先备份并迁移已知 v3 Registry，再进入严格 v1 管理路径。
+ * ConfigurationApplication 保留 HTTP/Token/数据库，串行替换完整 Runtime/AdapterHost；
+ * Web、状态与 Inspection 通过动态门面读取当前实例，关闭失败禁止创建第二个活跃宿主。
  * 输入输出与副作用：连接数据库、监听 HTTP 并启动适配器，失败时释放已创建资源并固定错误分类。
  * Inspection 仅在 Runtime 可用时注入，不把 settings、凭据或数据库对象放入 HTTP 响应。
  */
-import { createInspectionService } from "./inspection.js";
+import {
+  createInspectionService,
+  type InspectionService,
+} from "./inspection.js";
+import {
+  ConfigurationApplication,
+  ConfigurationCleanupError,
+  type ConfigurationSnapshot,
+} from "./configuration-application.js";
 import {
   createMessageCatalog,
   createMessageComposition,
@@ -52,16 +62,14 @@ import { createHttpApplication } from "./app.js";
 import {
   assertLoopbackHost,
   createServerConfig,
+  inspectNapCatConfig,
   readServerBootstrapConfig,
   ServerRuntimeConfigurationError,
   type ServerBootstrapConfig,
   type ServerConfig,
 } from "./config.js";
 import { createGatewayAuthenticator } from "./gateway-auth.js";
-import {
-  createNapCatSupervisor,
-  type NapCatConnectionSupervisor,
-} from "./napcat.js";
+import { createNapCatSupervisor } from "./napcat.js";
 import { createConfigurationManagement } from "./configuration-management.js";
 import { AdapterHost } from "./adapter-host.js";
 import type {
@@ -72,7 +80,7 @@ import { registerWebUi, type WebUiHandle } from "./web.js";
 
 export interface StartedKaguyaServer {
   readonly app: FastifyInstance;
-  readonly runtime?: KaguyaRuntime;
+  readonly runtime?: KaguyaRuntime | undefined;
   readonly adapterHost: AdapterHost;
   close(): Promise<void>;
 }
@@ -183,11 +191,15 @@ export async function startKaguyaServer(
   serverLogger ??= createModuleLogger(rootLogger, "server");
   const gatewayAuth = createGatewayAuthenticator(config.gatewayToken);
   const httpLogger = createModuleLogger(rootLogger, "server:http");
-  const napcatLogger = createModuleLogger(rootLogger, "adapter:napcat");
-  const adapterHost = new AdapterHost(rootLogger, config.gatewayAllowlist);
+  let adapterHost = new AdapterHost(rootLogger, config.gatewayAllowlist);
   let app: FastifyInstance | undefined;
   let webUi: WebUiHandle | undefined;
-  let napcat: NapCatConnectionSupervisor | undefined;
+  let application: ConfigurationApplication | undefined;
+  let inspection: InspectionService | undefined;
+  let shuttingDown = false;
+  const secretHistory: unknown[] = [
+    { config, profile: selectedProfile, moduleConfigs },
+  ];
   let closePromise: Promise<void> | undefined;
   let unregisterShutdown: (() => void) | undefined;
   let runtime: KaguyaRuntime | undefined;
@@ -196,53 +208,26 @@ export async function startKaguyaServer(
 
   const close = (): Promise<void> => {
     unregisterShutdown?.();
-    closePromise ??= closeResources({
-      app,
-      webUi,
-      adapterHost,
-      runtime: runtime ?? failedRuntime,
-      database,
-      rootLogger,
-      serverLogger,
-    });
+    shuttingDown = true;
+    adapterHost.beginStopping();
+    closePromise ??= (async () => {
+      await application?.beginShutdown();
+      await closeResources({
+        app,
+        webUi,
+        adapterHost,
+        runtime: runtime ?? failedRuntime,
+        database,
+        rootLogger,
+        serverLogger,
+      });
+    })();
     return closePromise;
   };
 
   try {
     const effectiveConfig = config;
-    adapterHost.register({
-      adapterId: "web.ui.main",
-      type: "web",
-      platform: "web",
-      enabled: true,
-      start: async () => {},
-      stop: async () => {},
-    });
-    let reportNapCatStatus:
-      ((status: AdapterConnectionStatus) => void) | undefined;
-    napcat = createNapCatSupervisor({
-      config: config.napcat,
-      ingress: adapterHost.ingress,
-      logger: napcatLogger,
-      allowsInbound: (message) => adapterHost.acceptInbound(message),
-      reportStatus: (status) => reportNapCatStatus?.(status),
-    });
-    const napcatAdapter = napcat;
-    adapterHost.register({
-      adapterId: config.napcat.adapterId,
-      type: "napcat",
-      platform: "qq",
-      enabled: config.napcat.enabled,
-      ...(config.napcat.configurationError
-        ? { configurationError: config.napcat.configurationError }
-        : {}),
-      outboundTransport: napcatAdapter,
-      start: async (report) => {
-        reportNapCatStatus = report;
-        await napcatAdapter.start();
-      },
-      stop: () => napcatAdapter.stop(),
-    });
+    adapterHost = createServerAdapterHost(config, rootLogger);
     const degradationReports: DegradationReport[] = [];
     const degradationReasons: RuntimeUnavailableReason[] = [];
     let resolveModelSelection: RuntimeModelSelectionResolver | undefined;
@@ -348,25 +333,163 @@ export async function startKaguyaServer(
       },
       "Kaguya server starting",
     );
+    const initialSnapshot: ConfigurationSnapshot = {
+      profile: selectedProfile,
+      moduleConfigs,
+    };
+    const refreshInspection = () => {
+      const activeRuntime = runtime;
+      inspection =
+        activeRuntime && database
+          ? createInspectionService({
+              ledger: database.information,
+              modules: () => activeRuntime.inspectModules(),
+              secrets: secretHistory,
+            })
+          : undefined;
+    };
+    refreshInspection();
+    application = new ConfigurationApplication({
+      initial: initialSnapshot,
+      initiallyReady: runtime !== undefined,
+      exclusive: (operation) => configuration.exclusive(operation),
+      read: async () => {
+        const status = await configuration.getRegistryStatus();
+        const profile = await configuration.getRuntimeProfile(
+          status.selectedProfileId,
+        );
+        const configs = await loadModuleInstanceConfigs({
+          rootDir: bootstrap.configRoot,
+          defaults: createFirstPartyModuleConfigDefaults(
+            "production",
+            profile.identity,
+          ),
+          initialize: false,
+        });
+        return { profile, moduleConfigs: configs };
+      },
+      validate: (snapshot) => {
+        createServerConfig(
+          snapshot.profile,
+          bootstrap,
+          () => config.gatewayToken,
+        );
+        if (inspectNapCatConfig(snapshot.profile).configurationError)
+          throw new Error("Invalid adapter configuration");
+        createMessageComposition(
+          createRuntimeModelSelectionResolver(snapshot.profile),
+          {
+            memoryEnabled: snapshot.profile.memory.enabled,
+            moduleConfigs: snapshot.moduleConfigs,
+            agentIdentity: snapshot.profile.identity,
+          },
+        );
+      },
+      stop: async () => {
+        adapterHost.beginStopping();
+        inspection = undefined;
+        const failures: unknown[] = [];
+        try {
+          await (runtime ?? failedRuntime)?.close({ drain: true });
+        } catch (error) {
+          failures.push(error);
+        }
+        try {
+          await adapterHost.stop();
+        } catch (error) {
+          failures.push(error);
+        }
+        if (failures.length) {
+          failedRuntime = runtime ?? failedRuntime;
+          runtime = undefined;
+          throw new ConfigurationCleanupError();
+        }
+        runtime = undefined;
+        failedRuntime = undefined;
+      },
+      start: async (snapshot) => {
+        const nextConfig = {
+          ...config,
+          gatewayAllowlist: snapshot.profile.runtime!.gatewayAllowlist,
+          napcat: inspectNapCatConfig(snapshot.profile),
+        };
+        const nextHost = createServerAdapterHost(nextConfig, rootLogger);
+        nextHost.pauseIngress();
+        let nextRuntime: KaguyaRuntime | undefined;
+        try {
+          if (!database) {
+            database = await connectInformationDatabase(config.databaseUrl);
+            await prepareConfigurationDatabase(database);
+          }
+          nextRuntime = new KaguyaRuntime({
+            database,
+            logger: rootLogger,
+            ...createMessageComposition(
+              createRuntimeModelSelectionResolver(snapshot.profile),
+              {
+                memoryEnabled: snapshot.profile.memory.enabled,
+                moduleConfigs: snapshot.moduleConfigs,
+                agentIdentity: snapshot.profile.identity,
+              },
+            ),
+          });
+          nextHost.registerTransports(nextRuntime);
+          await nextHost.start();
+          if (
+            nextHost
+              .status()
+              .adapters.some(
+                (adapter) => adapter.enabled && adapter.lifecycle === "failed",
+              )
+          ) {
+            throw new Error("Adapter startup failed");
+          }
+          await startInformationRuntime(nextRuntime);
+          nextHost.finalizeRuntime(nextRuntime);
+          if (shuttingDown) throw new Error("Server is stopping");
+          // Publish all pointers together; no request can observe a mixed Runtime/adapter snapshot.
+          secretHistory.push({
+            config: nextConfig,
+            profile: snapshot.profile,
+            moduleConfigs: snapshot.moduleConfigs,
+          });
+          runtime = nextRuntime;
+          adapterHost = nextHost;
+          selectedProfile = snapshot.profile;
+          moduleConfigs = snapshot.moduleConfigs;
+          refreshInspection();
+          nextHost.resumeIngress();
+        } catch {
+          nextHost.beginStopping();
+          if (runtime === nextRuntime) {
+            runtime = undefined;
+            inspection = undefined;
+          }
+          const results = await Promise.allSettled([
+            nextRuntime?.close(),
+            nextHost.stop(),
+          ]);
+          if (results.some((result) => result.status === "rejected")) {
+            failedRuntime = nextRuntime;
+            adapterHost = nextHost;
+            throw new ConfigurationCleanupError();
+          }
+          throw new Error("Configuration activation failed");
+        }
+      },
+      applied: () => configuration.markApplied(),
+    });
+    configuration.setApplicationStatusProvider(() =>
+      application!.captureStatus(),
+    );
     app = await inStartupPhase("http_application", () =>
       createHttpApplication({
         config: effectiveConfig,
-        ...(runtime && database
-          ? {
-              inspection: createInspectionService({
-                ledger: database.information,
-                modules: () => runtime!.inspectModules(),
-                secrets: {
-                  config: effectiveConfig,
-                  profile: selectedProfile,
-                  moduleConfigs,
-                },
-              }),
-            }
-          : {}),
+        inspection: () => inspection,
+        configurationApplication: application,
         gatewayAuth,
-        webGateway: adapterHost.webGateway,
-        adapterHost,
+        webGateway: { ingest: (input) => adapterHost.webGateway.ingest(input) },
+        adapterHost: { status: () => adapterHost.status() },
         configuration,
         logger: httpLogger,
       }),
@@ -418,12 +541,56 @@ export async function startKaguyaServer(
 
   const started: StartedKaguyaServer = {
     app,
-    adapterHost,
-    ...(runtime === undefined ? {} : { runtime }),
+    get adapterHost() {
+      return adapterHost;
+    },
+    get runtime() {
+      return runtime;
+    },
     close,
   };
   unregisterShutdown = registerShutdownHandlers(started, serverLogger);
   return started;
+}
+
+/** 每次切换创建独立适配器宿主；旧 NapCat 回调不引用新宿主，暂停入站不影响旧出口。 */
+function createServerAdapterHost(
+  config: ServerConfig,
+  logger: KaguyaLogger,
+): AdapterHost {
+  const host = new AdapterHost(logger, config.gatewayAllowlist);
+  host.register({
+    adapterId: "web.ui.main",
+    type: "web",
+    platform: "web",
+    enabled: true,
+    start: async () => {},
+    stop: async () => {},
+  });
+  let reportStatus: ((status: AdapterConnectionStatus) => void) | undefined;
+  const napcat = createNapCatSupervisor({
+    config: config.napcat,
+    ingress: host.ingress,
+    logger: createModuleLogger(logger, "adapter:napcat"),
+    allowsInbound: (message) => host.acceptInbound(message),
+    reportStatus: (status) => reportStatus?.(status),
+  });
+  host.register({
+    adapterId: config.napcat.adapterId,
+    type: "napcat",
+    platform: "qq",
+    enabled: config.napcat.enabled,
+    ...(config.napcat.configurationError
+      ? { configurationError: config.napcat.configurationError }
+      : {}),
+    outboundTransport: napcat,
+    start: async (report) => {
+      reportStatus = report;
+      await napcat.start();
+    },
+    stop: () => napcat.stop(),
+  });
+  return host;
 }
 
 async function inStartupPhase<Result>(

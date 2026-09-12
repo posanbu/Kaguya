@@ -17,11 +17,17 @@
  * 就绪时非阻塞转发正规化内容，日志不制造 trace ID，否则返回明确的
  * 503 runtime/core-unavailable 错误。Inspection GET 路由复用 management Token，
  * 由 inspection.ts 提供有界查询、统一秘密脱敏及 Runtime 未就绪时的 503。
+ * configuration/status 与 apply 复用管理认证，返回不含秘密的版本及应用结果；冲突返回 409。
  */
 import {
   registerInspectionRoutes,
   type InspectionService,
 } from "./inspection.js";
+
+import {
+  ConfigurationApplyConflict,
+  type ConfigurationApplicationService,
+} from "./configuration-application.js";
 
 import { randomUUID, timingSafeEqual } from "node:crypto";
 
@@ -448,6 +454,28 @@ const profileResponseJsonSchema = {
   },
 } as const;
 
+const applicationStatusJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "state",
+    "selectedProfileId",
+    "selectedRevision",
+    "appliedProfileId",
+    "appliedRevision",
+  ],
+  properties: {
+    state: {
+      type: "string",
+      enum: ["ready", "pending", "applying", "degraded"],
+    },
+    selectedProfileId: { type: "string" },
+    selectedRevision: { type: "string" },
+    appliedProfileId: { type: ["string", "null"] },
+    appliedRevision: { type: ["string", "null"] },
+  },
+} as const;
+
 const profileMutationResponseJsonSchema = {
   type: "object",
   additionalProperties: false,
@@ -460,6 +488,7 @@ const profileMutationResponseJsonSchema = {
       properties: {
         profile: userConfigProfileJsonSchema,
         restartRequired: { type: "boolean" },
+        application: applicationStatusJsonSchema,
       },
     },
   },
@@ -504,7 +533,8 @@ export interface CreateHttpApplicationOptions {
   config: ServerConfig;
   gatewayAuth?: GatewayAuthenticator;
   webGateway?: WebMessageGateway;
-  inspection?: InspectionService;
+  inspection?: InspectionService | (() => InspectionService | undefined);
+  configurationApplication?: ConfigurationApplicationService | undefined;
   adapterHost?: Pick<AdapterHost, "status">;
   configuration?: ConfigurationManagement;
   logger?: FastifyBaseLogger;
@@ -598,6 +628,81 @@ export async function createHttpApplication(
   );
 
   app.get(
+    "/api/v1/configuration/status",
+    {
+      onRequest: requireGatewayToken(options, "management"),
+      schema: { tags: ["Configuration"], security: [{ bearerAuth: [] }] },
+    },
+    async (_request, reply) => {
+      reply.header("Cache-Control", "no-store");
+      if (!options.configurationApplication)
+        throw new ApiGatewayError(
+          "configuration_application_unavailable",
+          "Configuration application unavailable",
+          503,
+        );
+      try {
+        return { data: await options.configurationApplication.status() };
+      } catch {
+        throw new ApiGatewayError(
+          "configuration_invalid",
+          "Configuration snapshot could not be read",
+          503,
+        );
+      }
+    },
+  );
+  app.post(
+    "/api/v1/configuration/apply",
+    {
+      onRequest: requireGatewayToken(options, "management"),
+      schema: {
+        tags: ["Configuration"],
+        security: [{ bearerAuth: [] }],
+        body: {
+          type: "object",
+          additionalProperties: false,
+          required: ["selectedProfileId", "revision"],
+          properties: {
+            selectedProfileId: { type: "string", minLength: 1, maxLength: 100 },
+            revision: { type: "string", pattern: "^[a-f0-9]{64}$" },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      reply.header("Cache-Control", "no-store");
+      if (!options.configurationApplication)
+        throw new ApiGatewayError(
+          "configuration_application_unavailable",
+          "Configuration application unavailable",
+          503,
+        );
+      const input = z
+        .strictObject({
+          selectedProfileId: z.string().min(1).max(100),
+          revision: z.string().regex(/^[a-f0-9]{64}$/u),
+        })
+        .parse(request.body);
+      try {
+        return { data: await options.configurationApplication.apply(input) };
+      } catch (error) {
+        if (error instanceof ConfigurationApplyConflict)
+          throw new ApiGatewayError(
+            error.code,
+            error.code,
+            error.code === "server_stopping" ? 503 : 409,
+          );
+        throw new ApiGatewayError(
+          "configuration_apply_failed",
+          "Configuration application failed",
+          500,
+        );
+      }
+    },
+  );
+
+  app.get(
     "/api/v1/adapters/status",
     {
       config: {
@@ -673,7 +778,13 @@ export async function createHttpApplication(
         reconnectMs: body.reconnectMs,
       });
       return {
-        data: { status: toNapCatStatus(settings), restartRequired: true },
+        data: {
+          status: toNapCatStatus(settings),
+          restartRequired: true,
+          ...(settings.application
+            ? { application: settings.application }
+            : {}),
+        },
       };
     },
   );

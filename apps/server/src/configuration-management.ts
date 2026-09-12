@@ -1,12 +1,11 @@
 /**
  * 功能概述：本文件为 `apps/server` 提供异步 `ConfigurationManagement` 门面，
  * 负责在服务层把 `@kaguya/config` 的显式 Profile Registry 生命周期包装成
- * HTTP 与启动流程可复用的管理接口，并单独维护“当前进程是否需要重启才能应用
- * selected Profile 变更”的本地状态。
+ * HTTP 与启动流程可复用的管理接口，并单独维护 selected Profile 的待应用状态。
  * 主要职责：`createConfigurationManagement` 在启动时先只读 `inspect` 仓库，
  * 缺失时执行一次 `bootstrap`，其余情况打开现有 Registry；返回对象的 `getRegistryStatus`
  * 暴露 selected Profile 的持久化 readiness，并在 selected Profile 已 ready 且
- * 当前进程存在待重启变更时投影为 `restart_required`；`getProfile`
+ * 当前进程存在待应用变更时兼容投影为 `restart_required`；`getProfile`
  * 公开 Profile 读取；`createProfile`/`replaceProfile`/`selectProfile`/`deleteProfile`
  * 分别映射到底层 manager 方法，并返回包含 `profile` 与 `restartRequired` 的
  * `ProfileMutationResult`，避免再次退回一次性聚合写入。
@@ -16,8 +15,10 @@
  * 另一层配置编排逻辑。Profile 列表接口直接消费这里的 Registry 状态快照。
  * 输入输出与副作用：创建门面时可能在缺失仓库的根目录写入 v1 `default` Profile；
  * 后续公开 mutation 都会落盘到配置目录，但不会启动、重载或停止 Runtime/NapCat。
- * 重启标记只存在于当前进程实例内，重新创建门面后会重新按磁盘状态计算 readiness。
+ * exclusive 与所有写接口共享串行锁，热应用期间不会交错保存；markApplied 仅在
+ * Server 完整切换成功后清除待应用标记，读取接口仍可服务于切换期间的状态查询。
  */
+import type { ConfigurationApplicationStatus } from "./configuration-application.js";
 import {
   ConfigError,
   FileUserConfigManager,
@@ -54,6 +55,7 @@ export type EditableProfileReplacement = Omit<
 export interface ProfileMutationResult {
   readonly profile: EditableUserConfigProfile;
   readonly restartRequired: boolean;
+  readonly application?: ConfigurationApplicationStatus;
 }
 
 export interface ConfigurationManagement {
@@ -67,11 +69,20 @@ export interface ConfigurationManagement {
   selectProfile(profileId: string): Promise<ProfileMutationResult>;
   deleteProfile(profileId: string): Promise<ProfileMutationResult>;
   getNapCatSettings?: () => Promise<NapCatSettings>;
-  saveNapCatSettings?: (settings: NapCatSettings) => Promise<NapCatSettings>;
+  saveNapCatSettings?: (
+    settings: NapCatSettings,
+  ) => Promise<
+    NapCatSettings & { application?: ConfigurationApplicationStatus }
+  >;
 }
 
 export interface RuntimeConfigurationManagement extends ConfigurationManagement {
   getRuntimeProfile(profileId: string): Promise<UserConfigProfile>;
+  exclusive<T>(operation: () => Promise<T>): Promise<T>;
+  markApplied(): void;
+  setApplicationStatusProvider(
+    provider: () => Promise<ConfigurationApplicationStatus>,
+  ): void;
 }
 
 export async function createConfigurationManagement(
@@ -83,8 +94,35 @@ export async function createConfigurationManagement(
       ? await FileUserConfigManager.bootstrap({ rootDir })
       : await FileUserConfigManager.open({ rootDir });
   let restartRequired = false;
+  let applicationStatus:
+    (() => Promise<ConfigurationApplicationStatus>) | undefined;
+  const withStatus = async <T extends object>(
+    result: T,
+  ): Promise<T & { application?: ConfigurationApplicationStatus }> => {
+    if (!applicationStatus) return result;
+    try {
+      return { ...result, application: await applicationStatus() };
+    } catch {
+      // Profile 已落盘；独立模块文件损坏不应把保存成功误报为失败。
+      // 缺少快照时 WebUI 转到生效管理，待修复后重新读取。
+      return result;
+    }
+  };
+  let tail: Promise<unknown> = Promise.resolve();
+  const exclusive = <T>(operation: () => Promise<T>): Promise<T> => {
+    const result = tail.then(operation, operation);
+    tail = result.catch(() => undefined);
+    return result;
+  };
 
-  return {
+  const management: RuntimeConfigurationManagement = {
+    exclusive,
+    setApplicationStatusProvider(provider) {
+      applicationStatus = provider;
+    },
+    markApplied() {
+      restartRequired = false;
+    },
     async getRegistryStatus() {
       const selectedProfileId = manager.getSelectedProfileId();
       const selectedReadiness = inspectUserConfigProfile(
@@ -165,6 +203,29 @@ export async function createConfigurationManagement(
       restartRequired = true;
       return saved;
     },
+  };
+  return {
+    ...management,
+    createProfile: (...args) =>
+      exclusive(async () =>
+        withStatus(await management.createProfile(...args)),
+      ),
+    replaceProfile: (...args) =>
+      exclusive(async () =>
+        withStatus(await management.replaceProfile(...args)),
+      ),
+    selectProfile: (...args) =>
+      exclusive(async () =>
+        withStatus(await management.selectProfile(...args)),
+      ),
+    deleteProfile: (...args) =>
+      exclusive(async () =>
+        withStatus(await management.deleteProfile(...args)),
+      ),
+    saveNapCatSettings: (...args) =>
+      exclusive(async () =>
+        withStatus(await management.saveNapCatSettings!(...args)),
+      ),
   };
 }
 
