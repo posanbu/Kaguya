@@ -2,7 +2,7 @@
  * 功能概述：验证 demo 以 PostgreSQL information ledger 运行确定性入站 DAG，
  * 输出根 `informationId` 和每个衍生 kind 的计数，不再使用 SQLite path 或 dispatch。
  * 主要职责：覆盖 selected Profile runtime 读取与旧数据库环境变量忽略，并用真实内存 PGlite
- * 运行 Web 消息的 context、inbound、message intent、Model Task、assistant 与 delivery 链。
+ * 运行 Web 消息的 context、inbound、Planner、message intent、Composer Model Task、assistant 与 delivery 链。
  * 代码库关系：直接调用 `index.ts` 导出的 `readDemoDatabaseUrl`/`runDemo`；
  * 测试数据库来自 `@kaguya/database/testing`，实际 CLI 则由同一 URL 连接方式启动。
  * 输入输出与副作用：用例收集内存输出行并显式关闭 PGlite；
@@ -93,13 +93,14 @@ describe("demo entry point", () => {
       "agent.turn.claimed: 1",
       "agent.turn.completed: 1",
       "agent.turn.context.completed: 1",
+      "agent.turn.plan.completed: 1",
       "agent.turn.started: 1",
       "core.delivery.delivered: 1",
       "core.delivery.requested: 1",
       "core.message.assistant.text: 1",
       "core.message.inbound.text: 1",
-      "core.model.task.completed: 1",
-      "core.model.task.requested: 1",
+      "core.model.task.completed: 2",
+      "core.model.task.requested: 2",
       "core.runtime.context: 1",
     ]);
   }, 20_000);

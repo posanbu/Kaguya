@@ -1,4 +1,5 @@
 /**
+ * 模型审批覆盖 Heartflow Planner 的 light 与 Composer 的 heavy，恢复屏障仍由 Runtime 统一管理。
  * 功能概述：验证 Runtime 生命周期与 durable one-shot scheduler 的装配边界。
  * 主要职责：覆盖启动恢复阻塞、关闭顺序和 synthetic debounce/wait 恢复的回归场景。
  * 代码库关系：直接消费 runtime 公共入口和 scheduler 公共能力；不依赖 apps composition。
@@ -147,6 +148,13 @@ describe("KaguyaRuntime one-shot scheduler lifecycle", () => {
       ),
       modelTask: {
         approvals: [
+          {
+            activation: {
+              instanceId: "heartflow.default",
+              definitionId: "agent.heartflow.online",
+            },
+            selectionPolicy: { tier: "light" },
+          },
           {
             activation: {
               instanceId: "message-composer.default",
