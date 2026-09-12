@@ -9,7 +9,9 @@ Kaguya 采用 pnpm workspace 和 TypeScript project references。应用负责装
 
 ## 仓库结构
 
-**`apps/server`** — 唯一 composition root，装配配置、Logger、PostgreSQL、Runtime、Fastify、Web UI、NapCat 和关闭顺序。
+**`packages/composition`** — Server 与 Demo 共用的 Runtime 业务装配，统一接入 Catalog、activations、模型审批与宿主能力。
+
+**`apps/server`** — 正式服务宿主，装配配置、Logger、PostgreSQL、Runtime、Fastify、Web UI、NapCat 和关闭顺序。
 
 **`apps/web`** — React/Vite 同源浏览器客户端。
 

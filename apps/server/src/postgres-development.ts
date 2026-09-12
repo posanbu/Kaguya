@@ -4,7 +4,7 @@
  * 主要职责：通过 Docker CLI 创建/恢复固定容器和数据卷、等待 pg_isready、校验
  * 容器身份与端口，并用生产 Database/Runtime kind 路径执行连接、schema 准备和 kind 检查；
  * selected Profile 标记 external 时完全不调用 Docker。
- * 代码库关系：postgres-cli.ts 提供命令行入口；Server 自身不导入本模块，因此生产启动
+ * 代码库关系：Runtime 业务装配统一来自 @kaguya/composition；postgres-cli.ts 提供命令行入口；Server 自身不导入本模块，因此生产启动
  * 永远不会取得 Docker 权限。配置写入通过 @kaguya/config 的原子 Profile replacement。
  * 输入输出与副作用：start 会创建/启动容器并可能补齐缺失的 selected Profile runtime；
  * status 只读；start/check 初始化空 schema 或验证严格 v1，并同步 Kind。所有公开错误均不保留原始输出。
@@ -21,7 +21,7 @@ import {
 import { KaguyaDatabase, SUPPORTED_POSTGRES_MAJOR } from "@kaguya/database";
 import { runtimeInformationKindNames } from "@kaguya/runtime";
 
-import { createMessageCatalog } from "./runtime-composition.js";
+import { createMessageCatalog } from "@kaguya/composition";
 
 export const MANAGED_POSTGRES_IMAGE = "postgres:17-alpine";
 export const MANAGED_POSTGRES_CONTAINER = "kaguya-postgres-17";

@@ -1,0 +1,22 @@
+{
+  "name": "@kaguya/composition",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "@kaguya/config": "workspace:*",
+    "@kaguya/llm": "workspace:*",
+    "@kaguya/modules": "workspace:*",
+    "@kaguya/runtime": "workspace:*",
+    "@kaguya/scheduler": "workspace:*"
+  }
+}

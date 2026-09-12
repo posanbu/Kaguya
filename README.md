@@ -103,9 +103,10 @@ Heartflow 将 eligible turn 确定性分派为当前会话 Message Intent；Comp
 ## 仓库结构
 
 ```text
-apps/server/        唯一 composition root：HTTP、Web、NapCat、Runtime 与关闭流程
+apps/server/        Server 宿主：HTTP、Web、NapCat、Runtime 与关闭流程
 apps/web/           React/Vite 同源浏览器客户端
 apps/demo/          PostgreSQL 信息 DAG 的确定性演示 runner
+packages/composition/ Server 与 Demo 共用的 Runtime 业务装配
 packages/runtime/   信息 ingress、DAG 组合、LLM 生命周期与投递结果
 packages/engine/    InformationCore、Kind Registry、并发广播与 ModuleHost
 packages/modules/   消息 Kind、Heartflow 与 Message Composer 模块

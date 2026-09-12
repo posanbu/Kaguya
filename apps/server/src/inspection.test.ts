@@ -2,7 +2,7 @@
  * 功能概述：验证开发者 API 在真实 PGlite 账本上的认证、脱敏、游标分页、详情和有界 Flow。
  * 主要职责：fixture 创建两个独立 context 与跨 context 引用；通过 Fastify inject 检查
  * 无认证先拒绝、同时间分页不丢消息、过滤绑定、完整 Prompt 保留及秘密移除、只读与错误隔离。
- * 代码库关系：组合 app.ts、inspection.ts、真实 Runtime Manifest 和 database/testing；
+ * 代码库关系：Runtime 业务装配统一来自 @kaguya/composition；组合 app.ts、inspection.ts、真实 Runtime Manifest 和 database/testing；
  * 不调用外部模型或真实网络，每次测试关闭 Fastify、Runtime 与内存数据库。
  * 输入输出与副作用：仅隔离测试数据库 I/O；对比请求前后原子数量确保检查接口不追加事实。
  */
@@ -13,7 +13,7 @@ import { createFirstPartyModuleConfigDefaults } from "@kaguya/modules";
 import { freezeInformationAtom, type InformationAtom } from "@kaguya/schema";
 import { createHttpApplication } from "./app.js";
 import { createInspectionService } from "./inspection.js";
-import { createMessageComposition } from "./runtime-composition.js";
+import { createMessageComposition } from "@kaguya/composition";
 import type { ServerConfig } from "./config.js";
 
 const token = "inspection-gateway-secret";
