@@ -1,5 +1,6 @@
 /**
  * 功能概述：执行持久 outbox 到结构化日志 sink 的提交后投影，不参与原子事务。
+ * projectPendingBatch 接受维护 request 冻结的批预算，避免配置上限被默认批次覆盖。
  * 主要职责：`projectPending` 串行化并合并同进程并发批次；`drainPending` 循环处理全部
  * 成功批次，供 Core 关闭时最终排空；单个 job 负责读取 atom、调用 sink 并更新 outbox。
  * 代码库关系：依赖 `InformationRepository` 的 pending/read/mark/failure API，由 Runtime
@@ -60,8 +61,13 @@ export class InformationLogProjectionRunner {
     await this.runSharedBatch();
   }
 
-  async projectPendingBatch(): Promise<InformationLogProjectionBatchResult> {
-    const result = await this.runSharedBatch();
+  async projectPendingBatch(
+    batchSize = this.#batchSize,
+  ): Promise<InformationLogProjectionBatchResult> {
+    if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > 1000)
+      throw new Error("Invalid projection batch size");
+    // 维护 request 的冻结预算独立执行，不能复用另一个预算的进程内批次。
+    const result = await this.runBatch(batchSize);
     return {
       pending: result.pendingCount,
       processed: result.processedCount,
@@ -92,10 +98,10 @@ export class InformationLogProjectionRunner {
     return this.#batchPromise;
   }
 
-  private async runBatch(): Promise<ProjectionBatchResult> {
-    const pending = await this.#repository.listPendingLogProjections(
-      this.#batchSize,
-    );
+  private async runBatch(
+    batchSize = this.#batchSize,
+  ): Promise<ProjectionBatchResult> {
+    const pending = await this.#repository.listPendingLogProjections(batchSize);
     let failedCount = 0;
     let processedCount = 0;
     for (const job of pending) {

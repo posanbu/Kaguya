@@ -11,7 +11,7 @@
  * 校验宿主 activation/tier 白名单，provider、resolver、Core 与 approval 数据均保存在私有字段，
  * 模块只通过 #76 的 context.use 获得通用能力。缺少批准或无效 capability 在任何 create 前拒绝。
  * Memory 默认关闭；显式启用时 association 使用独立 Memory 仓储的 sparse Selector
- * strategy。关闭态仍保留 association terminal 形状，但不注册检索策略或 capability。
+ * strategy；宿主提供 embedding 时装配独立向量仓储和混合召回，扩展不可用时退化 sparse。关闭态仍保留 association terminal 形状，但不注册检索策略或 capability。
  * inspectModules 仅在 started 状态返回模块声明、版本、Kind、Prompt 和能力绑定的只读投影。
  * ModuleHost observation 在这里映射到 lifecycle/module 命名空间，持久 Atom 单独进入 information logger。
  */
@@ -36,7 +36,16 @@ import {
   createModuleLogger,
   type KaguyaLogger,
 } from "@kaguya/logger";
-import { MEMORY_RETRIEVAL_STRATEGY_ID, memoryCapability } from "@kaguya/memory";
+import {
+  MEMORY_RETRIEVAL_STRATEGY_ID,
+  memoryCapability,
+  memoryDocumentReaderCapability,
+  embeddingCapability,
+  memoryVectorCapability,
+  HybridMemoryRecall,
+  type EmbeddingProvider,
+} from "@kaguya/memory";
+import { PostgresMemoryVectorIndex } from "@kaguya/database";
 import {
   deliveryRequestedInformationKind,
   inboundTextInformationKind,
@@ -125,6 +134,7 @@ export type InformationIdGenerator = () => string;
 
 export interface RuntimeMemoryOptions {
   readonly enabled: boolean;
+  readonly embedding?: EmbeddingProvider;
 }
 
 type KaguyaRuntimeBaseOptions = {
@@ -373,11 +383,33 @@ export class KaguyaRuntime implements InformationIngress {
         },
       });
       const memoryEnabled = this.options.memory?.enabled ?? false;
+      const vectorIndex =
+        memoryEnabled && this.options.memory?.embedding
+          ? new PostgresMemoryVectorIndex(database.sql)
+          : undefined;
+      if (vectorIndex) {
+        try {
+          await vectorIndex.prepare();
+        } catch {
+          this.#runtimeLogger?.warn(
+            { event: "memory.vector.unavailable" },
+            "Memory vector index unavailable; sparse recall remains enabled",
+          );
+        }
+      }
+      const memoryRecall =
+        vectorIndex && this.options.memory?.embedding
+          ? new HybridMemoryRecall(
+              database.memory,
+              vectorIndex,
+              this.options.memory.embedding,
+            )
+          : database.memory;
       const configuredRetrievalStrategies =
         this.options.retrievalStrategies ??
         (memoryEnabled
           ? [
-              new MemoryInformationRetrievalStrategy(database.memory, {
+              new MemoryInformationRetrievalStrategy(memoryRecall, {
                 reportFailure: ({ errorType }) => {
                   this.#runtimeLogger?.error(
                     { event: "memory.recall.failed", errorType },
@@ -460,11 +492,26 @@ export class KaguyaRuntime implements InformationIngress {
       const enabledSuppliedCapabilities = memoryEnabled
         ? (suppliedCapabilities ?? [])
         : (suppliedCapabilities ?? []).filter(
-            ({ capability }) => capability.id !== memoryCapability.id,
+            ({ capability }) => !capability.id.startsWith("kaguya:memory"),
           );
       const capabilities = [
         ...(memoryEnabled
-          ? [{ capability: memoryCapability, value: database.memory }]
+          ? [
+              { capability: memoryCapability, value: database.memory },
+              {
+                capability: memoryDocumentReaderCapability,
+                value: database.memory,
+              },
+            ]
+          : []),
+        ...(vectorIndex && this.options.memory?.embedding
+          ? [
+              {
+                capability: embeddingCapability,
+                value: this.options.memory.embedding,
+              },
+              { capability: memoryVectorCapability, value: vectorIndex },
+            ]
           : []),
         ...composeModelTaskCapabilities(
           this.options,

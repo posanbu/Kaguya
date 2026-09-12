@@ -1,11 +1,11 @@
 /**
  * 功能概述：把已提交的 durable delivery 变成有界、可重放的 handler 执行。
- * 主要职责：start 登记完整订阅集合；每轮公平尝试各订阅一个 claim；失败有界 retry/exhaust，
+ * 主要职责：start 登记完整订阅集合；每轮公平尝试各空闲订阅一个 claim，慢订阅不会阻塞其他订阅的下一步；失败有界 retry/exhaust，
  * stop 停止领取、传播 abort 并有界 drain。lease 到期的迟到任务由 Core/数据库 fencing 拒绝。
  * 代码库关系：仅依赖 Core 与可靠 ledger 端口；Host/Runtime 安装订阅，不把业务策略写入执行器。
  * DEFAULT_LEASE_MS 采用 330 秒，覆盖配置允许的 300 秒模型调用并为持久化提交留出 30 秒；
  * 显式 leaseMs 仍用于其他执行场景与测试。stop({ drain: true }) 先停止领取并有界等待
- * 当前批次，再发送 shutdown abort 释放未完成 claim，供配置热应用保留任务唯一性。
+ * 所有在途订阅，再发送 shutdown abort 释放未完成 claim，供配置热应用保留任务唯一性。
  * 输入输出与副作用：后台轮询执行持久化 I/O，所有 rejection 均被消费；不记录正文或原始错误。
  */
 import type { DeepReadonly, InformationAtom } from "@kaguya/schema";
@@ -40,7 +40,7 @@ export class ReliableInformationRunner {
   #running = false;
   #started = false;
   #timer: ReturnType<typeof setTimeout> | undefined;
-  #cycle: Promise<void> | undefined;
+  readonly #inFlight = new Map<string, Promise<void>>();
   #start: Promise<void> | undefined;
   #stop: Promise<void> | undefined;
   constructor(options: ReliableInformationRunnerOptions) {
@@ -80,7 +80,7 @@ export class ReliableInformationRunner {
     this.#stop = (async () => {
       if (options.drain) {
         await boundedWait(
-          Promise.allSettled([this.#start, this.#cycle]),
+          Promise.allSettled([this.#start, ...this.#inFlight.values()]),
           this.#options.drainTimeoutMs ?? 5000,
         );
         this.#shutdown.abort(new Error("Runtime shutdown"));
@@ -88,7 +88,7 @@ export class ReliableInformationRunner {
       // shutdown 不改 activation 配置：与崩溃相同，保留离线期间的持久投递。
       // 下次 start 的完整 Catalog 才负责显式禁用订阅。
       await boundedWait(
-        Promise.allSettled([this.#start, this.#cycle]),
+        Promise.allSettled([this.#start, ...this.#inFlight.values()]),
         this.#options.drainTimeoutMs ?? 5000,
       );
     })();
@@ -97,14 +97,16 @@ export class ReliableInformationRunner {
   private schedule(delay: number): void {
     if (!this.#running) return;
     this.#timer = setTimeout(() => {
-      this.#cycle = Promise.allSettled(
-        this.#options.subscriptions.map((subscription) =>
-          this.consume(subscription),
-        ),
-      ).then(() => undefined);
-      void this.#cycle.finally(() =>
-        this.schedule(this.#options.pollIntervalMs ?? 25),
-      );
+      for (const subscription of this.#options.subscriptions) {
+        if (this.#inFlight.has(subscription.subscriptionId)) continue;
+        const work = this.consume(subscription)
+          .catch(() => undefined)
+          .finally(() => {
+            this.#inFlight.delete(subscription.subscriptionId);
+          });
+        this.#inFlight.set(subscription.subscriptionId, work);
+      }
+      this.schedule(this.#options.pollIntervalMs ?? 25);
     }, delay);
     this.#timer.unref?.();
   }

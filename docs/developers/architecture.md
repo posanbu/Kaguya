@@ -34,7 +34,7 @@ flowchart LR
 
 `packages/composition/src/index.ts` 是 Server 与 Demo 共用的正式组装入口，不依赖任一应用。`createMessageCatalog(identity?)` 加载一方 Prompt 模板，将 Runtime 的 Model Task capability 和生命周期 Kind 注入 `@kaguya/modules` 的 Catalog 工厂；Server 的数据库 Kind 检查也使用该入口。
 
-`createMessageComposition(resolveModelSelection, options)` 根据 `moduleConfigs` 校验并生成激活集合，注入身份、Memory 开关、Model Task 审批及 LLM client，并绑定 Runtime 提供的 one-shot scheduler。返回值直接展开到 `new KaguyaRuntime(...)` 的参数中。模块定义与默认实例仍集中在 `packages/modules/src/first-party/catalog.ts`：新增或移除普通一方模块时，在这里调整目录和默认配置，并更新已有实例配置，无须分别修改 Server 和 Demo。若模块需要新的宿主能力，则只在共享 composition 中接线。
+`createMessageComposition(resolveModelSelection, options)` 根据 `moduleConfigs` 校验并生成激活集合，注入身份、Memory 开关与可选 embedding/cognition provider、Model Task 审批及 LLM client，并绑定 Runtime 提供的 one-shot scheduler。返回值直接展开到 `new KaguyaRuntime(...)` 的参数中。模块定义与默认实例仍集中在 `packages/modules/src/first-party/catalog.ts`：新增或移除普通一方模块时，在这里调整目录和默认配置，并更新已有实例配置，无须分别修改 Server 和 Demo。若模块需要新的宿主能力，则只在共享 composition 中接线。
 
 Server 传入 selected Profile 的模型解析器、身份、Memory 开关和已加载的模块配置；启动与配置热应用都走同一工厂。Demo 传入演示使用的模块配置，省略解析器时使用 `createDeterministicModelSelectionResolver()` 的固定模型回答，Memory 默认关闭。Demo 自己保留固定消息、时间、演示 transport 和账本统计输出，不维护模块目录或模型能力接线。
 
@@ -125,3 +125,9 @@ Profile Registry 维护一个全局 `selectedProfileId`。Server 在启动时只
 HostedAdapter 定义身份、平台、可选 outbound transport、start/stop 和状态上报回调。Server 的 AdapterHost 统一负责生命周期、allowlist、入站日志、提交和内存快照。单个 Adapter failed 不改变 Host 的 running 状态。状态采用 lifecycle、connectivity、ingress 三个正交维度；connected 不代表可以处理消息，Web connectivity 固定为 not_applicable。
 
 Runtime 绑定在启动时固定，修复后重启，不支持热绑定、缓存或重放。为兼容 Runtime 的既有约束，transport 在 Runtime start 前注册，ingress 在 start 成功后才开放。
+
+## 独立 Memory 后台链
+
+Memory 开启时，composition 自动加入原始写回模块；配置相应 provider 后才加入索引与认知模块。三者均属于 `@kaguya/modules`，使用 Reliable Runner、版本化 Memory capability 和唯一终态。Runtime 只创建仓储、检索策略、宿主 capability 与生命周期，不编写提取或演化规则。Reliable Runner 按订阅保持至多一个在途任务，空闲订阅独立领取下一条，慢后台 provider 不阻塞在线链后续步骤。
+
+原始消息、可重建 pgvector 投影和外部认知结果分层。回填使用有界 keyset page 与显式 continuation；认知只接收同范围的已持久化文档快照。在线 Heartflow 仅消费此前已完成且带直接证据的快照。详细配置与限制见 [Memory 认知层](./memory.md)。

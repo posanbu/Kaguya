@@ -1,5 +1,6 @@
 /**
  * 功能概述：验证可靠执行器的持久恢复、输出后重投、耗尽和停止 fencing。
+ * 覆盖慢后台订阅尚未结束时在线多步消费仍独立推进，并约束每订阅单一在途 claim。
  * 主要职责：使用生产数据库，控制 handler 的失败/阻塞来覆盖真实执行窗口；
  * 校验默认 claim 的有效期覆盖 300 秒模型预算，避免延长模型超时后提前 fencing。
  * 代码库关系：Core 注入 Runner 所需原子与事务端口，测试不绕过幂等注册。
@@ -329,4 +330,52 @@ it("lets an active handler commit during graceful drain without claiming another
     await db.information.find({ kinds: [output.kind], limit: 10 }),
   ).toHaveLength(1);
   expect((await db.information.reliable.health()).pending).toBe(1);
+});
+
+it("advances other subscriptions while a background provider is still running", async () => {
+  const { core } = await setup();
+  let slowCalls = 0,
+    finished = 0;
+  const runner = new engine.ReliableInformationRunner({
+    core,
+    pollIntervalMs: 5,
+    subscriptions: [
+      {
+        subscriptionId: "test.background",
+        kind: source.kind,
+        handle: async (_atom, signal) => {
+          slowCalls++;
+          await new Promise<void>((resolve) =>
+            signal.addEventListener("abort", () => resolve(), { once: true }),
+          );
+        },
+      },
+      {
+        subscriptionId: "test.online.first",
+        kind: source.kind,
+        handle: async (atom) => {
+          await core.registerOnce(
+            "test.online.first",
+            atom.informationId,
+            output,
+            input(),
+          );
+        },
+      },
+      {
+        subscriptionId: "test.online.second",
+        kind: output.kind,
+        handle: async () => {
+          finished++;
+        },
+      },
+    ],
+  });
+  clean.push(() => runner.stop());
+  await runner.start();
+  await core.register(source, input());
+  await vi.waitFor(() => expect(finished).toBe(1));
+  await core.register(source, input());
+  await vi.waitFor(() => expect(finished).toBe(2));
+  expect(slowCalls).toBe(1);
 });

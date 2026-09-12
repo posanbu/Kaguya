@@ -7,6 +7,9 @@
  * turn 标识及引用保留完整冻结上下文，正文生成交给 composer。defer/ignore 与失败路径
  * 写入等待或终态；registerOnce/commitTerminal 保证重放幂等，不执行模型或平台 I/O。
  */
+import { createCognitionMemorySelector } from "../memory-cognition/index.js";
+import type { CognitionIdentity } from "@kaguya/memory";
+
 import {
   type DeepReadonly,
   type InformationAtom,
@@ -46,6 +49,7 @@ import {
 type AnyKind = InformationKindDefinition<string, any>;
 
 export interface CreateHeartflowModuleOptions {
+  readonly cognitionIdentity?: CognitionIdentity;
   readonly deliveryDeliveredInformationKind: AnyKind;
   readonly deliveryFailedInformationKind: AnyKind;
   readonly modelTaskFailedInformationKind: AnyKind;
@@ -247,6 +251,16 @@ export const heartflowMemorySelector = defineInformationSelector({
           strategyId: MEMORY_RETRIEVAL_STRATEGY_ID,
           input: {
             query,
+            scopes: inbounds.map((atom) => {
+              const source = inboundTextInformationKind.payloadSchema.parse(
+                atom.payload,
+              ).source;
+              return {
+                platform: source.platform,
+                adapterId: source.adapterId,
+                destination: source.destination,
+              };
+            }),
             occurredBefore: (candidate.payload as any).asOf,
             excludeSourceInformationIds: inbounds.map(
               ({ informationId }) => informationId,
@@ -264,6 +278,20 @@ export const heartflowMemorySelector = defineInformationSelector({
 });
 
 export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
+  const cognitive = options.cognitionIdentity
+    ? createCognitionMemorySelector(options.cognitionIdentity)
+    : undefined;
+  const memorySelector = cognitive
+    ? defineInformationSelector({
+        selectorId: heartflowMemorySelector.selectorId,
+        select: async (context) => [
+          ...new Set([
+            ...(await heartflowMemorySelector.select(context)),
+            ...(await cognitive.select(context)),
+          ]),
+        ],
+      })
+    : heartflowMemorySelector;
   const deliveryKinds = [
     options.deliveryDeliveredInformationKind,
     options.deliveryFailedInformationKind,
@@ -309,7 +337,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
         turnFailedInformationKind,
         turnSupersededInformationKind,
       ],
-      selectors: [heartflowStateSelector, heartflowMemorySelector],
+      selectors: [heartflowStateSelector, memorySelector],
       promptRenderers: [],
       requires: [],
       provides: [],
@@ -339,7 +367,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
             },
             async (_atom, context) => {
               const state = await context.select(heartflowStateSelector);
-              const memories = await context.select(heartflowMemorySelector);
+              const memories = await context.select(memorySelector);
               await progressCandidates(state, memories, settings, context);
             },
           ),
@@ -370,7 +398,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
                 state,
                 context,
               );
-              const memories = await context.select(heartflowMemorySelector);
+              const memories = await context.select(memorySelector);
               await progressCandidates(state, memories, settings, context);
             },
           ),

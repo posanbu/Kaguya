@@ -15,19 +15,15 @@ Runtime 通过 `cadence.definitions` 显式启用维护 cadence。每项配置�
 
 首版 policy 为 `coalesce.v1`。例如六小时周期在停机期间错过三个边界，
 恢复时只产生一个 tick；其 payload 同时记录最早边界、最新边界和
-`missedCount`。tick 的唯一键是：
+`missedCount`。每个 definition 或上一 tick 只有一个持久后继槽位；下一 tick、disable 和 supersede 竞争同一槽位。因此多个 Runtime 实例可以并发轮询，同一窗口最多提交一个 tick，停用提交后旧定义不能继续产生 tick。
 
-```text
-definitionInformationId:windowIndex
-```
-
-因此多个 Runtime 实例可以并发轮询，但同一窗口最多提交一个 tick。
+修改 anchor 或 interval 必须创建新的 activationRevision，并通过 coordinator.supersede 将旧 definition 指向新 definition；同一 revision 下悄悄修改时间配置会被拒绝。
 
 ## 日志投影维护链
 
 日志投影 reconciliation 是首个真实维护消费者。tick 先产生
 `maintenance.projection.reconciliation.requested`，再由可靠消费者按
-固定批次调用日志投影 runner，最后写入 `completed` 或 `failed` 终态。
+request 冻结的 batchSize 调用日志投影 runner，最后写入 `completed` 或 `failed` 终态。
 这些终态描述本次维护执行，不改变原始 Information Atom，也不会触发
 LLM、平台适配器或聊天 Agent。
 

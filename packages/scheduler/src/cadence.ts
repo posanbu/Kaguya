@@ -1,3 +1,11 @@
+/**
+ * 功能概述：以不可变 definition 与唯一后继链记录固定 anchor 的 cadence 时间事实。
+ * CadenceCoordinator.start 恢复已提交窗口；runOnce 合并错过窗口；disable/supersede
+ * 与下一 tick 竞争同一个 terminal 槽位，保证停用提交后旧定义不能继续产生 tick。
+ * computeCadenceWindow 只计算固定边界；installProjectionReconciliationConsumers 将 tick
+ * 转为独立、有界的日志投影 request/terminal，既不维护 Memory 也不触发在线 Agent。
+ * 依赖 Core 的持久唯一槽位与范围查询；stop 仅停止本地唤醒，保留账本中的未来意图。
+ */
 import type {
   DeepReadonly,
   InformationAtom,
@@ -68,10 +76,16 @@ export const cadenceTickPayloadSchema = z
 export type CadenceTickPayload = z.infer<typeof cadenceTickPayloadSchema>;
 
 export const cadenceDisabledPayloadSchema = z
-  .object({ reason: z.string().min(1) })
+  .object({
+    reason: z.string().min(1),
+    definitionInformationId: z.string().min(1),
+  })
   .strict();
 export const cadenceSupersededPayloadSchema = z
-  .object({ replacementInformationId: z.string().min(1) })
+  .object({
+    replacementInformationId: z.string().min(1),
+    definitionInformationId: z.string().min(1),
+  })
   .strict();
 export const reconciliationRequestedPayloadSchema = z
   .object({
@@ -120,7 +134,10 @@ export const cadenceDisabledInformationKind = defineInformationKind({
     "core:status-of": {
       required: true,
       multiple: false,
-      targetKinds: [cadenceDefinitionInformationKind.kind],
+      targetKinds: [
+        cadenceDefinitionInformationKind.kind,
+        "scheduler.cadence.tick",
+      ],
     },
   },
   log: {
@@ -142,7 +159,10 @@ export const cadenceSupersededInformationKind = defineInformationKind({
     "core:status-of": {
       required: true,
       multiple: false,
-      targetKinds: [cadenceDefinitionInformationKind.kind],
+      targetKinds: [
+        cadenceDefinitionInformationKind.kind,
+        "scheduler.cadence.tick",
+      ],
     },
   },
   log: {
@@ -160,10 +180,21 @@ export const cadenceTickInformationKind = defineInformationKind({
   description: "Information carried by the scheduler.cadence.tick kind.",
   payloadSchema: cadenceTickPayloadSchema,
   references: {
+    "core:status-of": {
+      required: true,
+      multiple: false,
+      targetKinds: [
+        cadenceDefinitionInformationKind.kind,
+        "scheduler.cadence.tick",
+      ],
+    },
     "core:caused-by": {
       required: true,
       multiple: false,
-      targetKinds: [cadenceDefinitionInformationKind.kind],
+      targetKinds: [
+        cadenceDefinitionInformationKind.kind,
+        "scheduler.cadence.tick",
+      ],
     },
   },
   log: {
@@ -313,7 +344,7 @@ export interface CadenceCoordinatorOptions {
 }
 
 export interface ProjectionReconciliationRunner {
-  projectPendingBatch(): Promise<{
+  projectPendingBatch(batchSize?: number): Promise<{
     readonly processed: number;
     readonly failed: number;
     readonly pending: number;
@@ -340,7 +371,7 @@ export function installProjectionReconciliationConsumers(
         reconciliationRequestedInformationKind,
         {
           occurredAt: new Date().toISOString(),
-          source: "maintenance.projection.reconciliation",
+          source: "maintenance:projection-reconciliation",
           payload: {
             tickInformationId: tick.informationId,
             scopeKey: payload.scopeKey,
@@ -367,7 +398,7 @@ export function installProjectionReconciliationConsumers(
         readonly pending: number;
       };
       try {
-        result = await runner.projectPendingBatch();
+        result = await runner.projectPendingBatch(payload.batchSize);
       } catch {
         await core.commitTerminal(
           "maintenance.projection.reconciliation",
@@ -375,7 +406,7 @@ export function installProjectionReconciliationConsumers(
           reconciliationFailedInformationKind,
           {
             occurredAt: new Date().toISOString(),
-            source: "maintenance.projection.reconciliation",
+            source: "maintenance:projection-reconciliation",
             payload: {
               processed: 0,
               failed: 1,
@@ -398,7 +429,7 @@ export function installProjectionReconciliationConsumers(
           reconciliationFailedInformationKind,
           {
             occurredAt: new Date().toISOString(),
-            source: "maintenance.projection.reconciliation",
+            source: "maintenance:projection-reconciliation",
             payload: {
               processed: result.processed,
               failed: result.failed,
@@ -420,7 +451,7 @@ export function installProjectionReconciliationConsumers(
         reconciliationCompletedInformationKind,
         {
           occurredAt: new Date().toISOString(),
-          source: "maintenance.projection.reconciliation",
+          source: "maintenance:projection-reconciliation",
           payload: {
             processed: result.processed,
             failed: 0,
@@ -434,7 +465,6 @@ export function installProjectionReconciliationConsumers(
           ],
         },
       );
-      void payload;
     },
   );
   return [removeTick, removeRequest];
@@ -482,15 +512,23 @@ export class CadenceCoordinator {
           CadenceDefinitionPayload
         >(
           "scheduler.cadence.definition",
-          `${input.activationRevision}:${input.scopeKey}`,
+          JSON.stringify([input.activationRevision, input.scopeKey]),
           cadenceDefinitionInformationKind,
           {
             occurredAt: this.#now().toISOString(),
-            source: this.#options.source ?? "scheduler.cadence",
+            source: this.#options.source ?? "scheduler:cadence",
             payload: { ...input, policyVersion: "coalesce.v1" },
             references: [],
           },
         );
+        const frozen = cadenceDefinitionPayloadSchema.parse(atom.payload);
+        if (
+          frozen.anchor !== input.anchor ||
+          frozen.intervalMs !== input.intervalMs
+        )
+          throw new Error(
+            "Cadence configuration change requires a new activation revision",
+          );
         this.#definitions.push({ input, atom });
       }
       await this.runOnce();
@@ -511,44 +549,78 @@ export class CadenceCoordinator {
     definitionInformationId: InformationId,
     reason = "disabled",
   ): Promise<void> {
-    await this.#options.core.registerOnce(
-      "scheduler.cadence.disabled",
-      definitionInformationId,
-      cadenceDisabledInformationKind,
-      {
-        occurredAt: this.#now().toISOString(),
-        source: this.#options.source ?? "scheduler.cadence",
-        payload: { reason },
-        references: [
-          {
-            relation: "core:status-of",
-            informationId: definitionInformationId,
-          },
-        ],
-      },
-    );
+    await this.finishDefinition(definitionInformationId, { reason });
   }
 
   async supersede(
     definitionInformationId: InformationId,
     replacementInformationId: InformationId,
   ): Promise<void> {
-    await this.#options.core.registerOnce(
-      "scheduler.cadence.superseded",
-      definitionInformationId,
-      cadenceSupersededInformationKind,
-      {
+    await this.finishDefinition(definitionInformationId, {
+      replacementInformationId,
+    });
+  }
+
+  private async latest(definitionInformationId: InformationId) {
+    const statuses = await this.#options.core.find({
+      kinds: [
+        cadenceDisabledInformationKind.kind,
+        cadenceSupersededInformationKind.kind,
+      ],
+      payloadContains: { definitionInformationId },
+      limit: 1,
+    });
+    if (statuses[0]) return statuses[0];
+    const ticks = await this.#options.core.find({
+      kinds: [cadenceTickInformationKind.kind],
+      payloadContains: { definitionInformationId },
+      order: "desc",
+      limit: 1,
+    });
+    return ticks[0];
+  }
+
+  private async finishDefinition(
+    definitionInformationId: InformationId,
+    outcome: { reason: string } | { replacementInformationId: string },
+  ): Promise<void> {
+    // 每次冲突都沿实际赢家前进；停止事实与 tick 在同一槽位中线性化。
+    for (;;) {
+      const latest = await this.latest(definitionInformationId);
+      if (latest && latest.kind !== cadenceTickInformationKind.kind) return;
+      const subject = latest?.informationId ?? definitionInformationId;
+      const common = {
         occurredAt: this.#now().toISOString(),
-        source: this.#options.source ?? "scheduler.cadence",
-        payload: { replacementInformationId },
+        source: this.#options.source ?? "scheduler:cadence",
         references: [
-          {
-            relation: "core:status-of",
-            informationId: definitionInformationId,
-          },
+          { relation: "core:status-of" as const, informationId: subject },
         ],
-      },
-    );
+      };
+      const winner =
+        "reason" in outcome
+          ? await this.#options.core.commitTerminal(
+              "scheduler.cadence.next",
+              subject,
+              cadenceDisabledInformationKind,
+              {
+                ...common,
+                payload: { definitionInformationId, reason: outcome.reason },
+              },
+            )
+          : await this.#options.core.commitTerminal(
+              "scheduler.cadence.next",
+              subject,
+              cadenceSupersededInformationKind,
+              {
+                ...common,
+                payload: {
+                  definitionInformationId,
+                  replacementInformationId: outcome.replacementInformationId,
+                },
+              },
+            );
+      if (winner.kind !== cadenceTickInformationKind.kind) return;
+    }
   }
 
   async runOnce(): Promise<void> {
@@ -566,40 +638,12 @@ export class CadenceCoordinator {
         definition.atom.payload,
       );
       const anchor = new Date(payload.anchor);
-      const ticks = await this.#options.core.find({
-        kinds: [cadenceTickInformationKind.kind],
-        limit: 10000,
-      });
-      const statuses = await this.#options.core.find({
-        kinds: [
-          cadenceDisabledInformationKind.kind,
-          cadenceSupersededInformationKind.kind,
-        ],
-        limit: 10000,
-      });
-      if (
-        statuses.some((status) =>
-          status.references.some(
-            (reference) =>
-              reference.relation === "core:status-of" &&
-              reference.informationId === definition.atom.informationId,
-          ),
-        )
-      )
-        continue;
-      const latestEmitted = ticks
-        .map((tick) =>
-          cadenceTickInformationKind.payloadSchema.safeParse(tick.payload)
-            .success
-            ? cadenceTickInformationKind.payloadSchema.parse(tick.payload)
-            : undefined,
-        )
-        .filter(
-          (tick): tick is CadenceTickPayload =>
-            tick !== undefined &&
-            tick.definitionInformationId === definition.atom.informationId,
-        )
-        .reduce((max, tick) => Math.max(max, tick.windowIndex), -1);
+      const latest = await this.latest(definition.atom.informationId);
+      if (latest && latest.kind !== cadenceTickInformationKind.kind) continue;
+      const latestEmitted = latest
+        ? cadenceTickInformationKind.payloadSchema.parse(latest.payload)
+            .windowIndex
+        : -1;
       const window = computeCadenceWindow(
         anchor,
         payload.intervalMs,
@@ -607,13 +651,13 @@ export class CadenceCoordinator {
         latestEmitted,
       );
       if (window === undefined) continue;
-      await this.#options.core.registerOnce(
-        "scheduler.cadence.tick",
-        `${definition.atom.informationId}:${window.windowIndex}`,
+      await this.#options.core.commitTerminal(
+        "scheduler.cadence.next",
+        latest?.informationId ?? definition.atom.informationId,
         cadenceTickInformationKind,
         {
-          occurredAt: now.toISOString(),
-          source: this.#options.source ?? "scheduler.cadence",
+          occurredAt: window.scheduledAt.toISOString(),
+          source: this.#options.source ?? "scheduler:cadence",
           payload: {
             definitionInformationId: definition.atom.informationId,
             windowIndex: window.windowIndex,
@@ -626,6 +670,11 @@ export class CadenceCoordinator {
             policyVersion: payload.policyVersion,
           },
           references: [
+            {
+              relation: "core:status-of",
+              informationId:
+                latest?.informationId ?? definition.atom.informationId,
+            },
             {
               relation: "core:caused-by",
               informationId: definition.atom.informationId,

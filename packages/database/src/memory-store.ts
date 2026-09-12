@@ -1,5 +1,6 @@
 /**
  * 功能概述：以 PostgreSQL 实现独立消息 Memory 的幂等写入与范围化字符倒排召回。
+ * getBySource 重载已持久化来源，listDocuments 以 memoryId 游标提供有界历史回填。
  * 主要职责：校验文档/查询、原子写入文档和 Unicode 2-gram、按可选原生 key 过滤，
  * 并以查询 gram 覆盖率和时间产生稳定结果。
  * 代码库关系：KaguyaDatabase 暴露本仓储；Runtime 将 recall 适配为 Information
@@ -27,7 +28,7 @@ import type { PlatformDestination } from "@kaguya/schema";
 
 import type { SqlDatabase, SqlTransaction } from "./driver.js";
 
-type MemoryDocumentRow = {
+export type MemoryDocumentRow = {
   memory_id: string;
   source_information_id: string;
   source_kind: string;
@@ -122,6 +123,29 @@ export class PostgresMemoryStore implements MemoryAccess {
     });
   }
 
+  async getBySource(
+    sourceInformationId: string,
+  ): Promise<MemoryDocument | undefined> {
+    return readBySource(this.database, sourceInformationId);
+  }
+
+  async listDocuments(input: {
+    readonly afterMemoryId?: string;
+    readonly limit: number;
+  }): Promise<readonly MemoryDocument[]> {
+    if (
+      !Number.isSafeInteger(input.limit) ||
+      input.limit < 1 ||
+      input.limit > 100
+    )
+      throw new Error("Invalid Memory page limit");
+    const result = await this.database.query<MemoryDocumentRow>(
+      "SELECT * FROM memory_documents WHERE ($1::text IS NULL OR memory_id > $1) ORDER BY memory_id ASC LIMIT $2",
+      [input.afterMemoryId ?? null, input.limit],
+    );
+    return result.rows.map(rowToDocument);
+  }
+
   async recall(query: MemoryRecallQuery): Promise<readonly MemoryRecallHit[]> {
     const parsed = parseMemoryRecallQuery(query);
     const grams = memorySparseGrams(parsed.query);
@@ -134,41 +158,7 @@ export class PostgresMemoryStore implements MemoryAccess {
       return `$${values.length}`;
     };
 
-    if (parsed.namespaces?.length) {
-      predicates.push(
-        `(${parsed.namespaces
-          .map(
-            (key) =>
-              `(d.platform = ${bind(key.platform)} AND d.adapter_id = ${bind(key.adapterId)})`,
-          )
-          .join(" OR ")})`,
-      );
-    }
-    if (parsed.accounts?.length) {
-      predicates.push(
-        `(${parsed.accounts
-          .map(
-            (key) =>
-              `(d.platform = ${bind(key.platform)} AND d.adapter_id = ${bind(key.adapterId)} AND d.account_id = ${bind(key.accountId)})`,
-          )
-          .join(" OR ")})`,
-      );
-    }
-    if (parsed.scopes?.length) {
-      predicates.push(
-        `(${parsed.scopes.map((key) => scopePredicate(key, bind)).join(" OR ")})`,
-      );
-    }
-    if (parsed.occurredBefore !== undefined) {
-      predicates.push(
-        `d.occurred_at::timestamptz <= ${bind(parsed.occurredBefore)}::timestamptz`,
-      );
-    }
-    if (parsed.excludeSourceInformationIds?.length) {
-      predicates.push(
-        `NOT (d.source_information_id = ANY(${bind([...parsed.excludeSourceInformationIds])}::text[]))`,
-      );
-    }
+    predicates.push(...memoryRecallPredicates(parsed, bind));
     const limit = bind(parsed.limit);
     const where = predicates.length ? `WHERE ${predicates.join(" AND ")}` : "";
     const result = await this.database.query<MemoryRecallRow>(
@@ -224,7 +214,7 @@ function scopePredicate(
   )})`;
 }
 
-function rowToDocument(row: MemoryDocumentRow): MemoryDocument {
+export function rowToDocument(row: MemoryDocumentRow): MemoryDocument {
   return freezeMemoryDocument({
     memoryId: row.memory_id,
     sourceInformationId: row.source_information_id,
@@ -286,4 +276,48 @@ function freezeMemoryDocument(document: MemoryDocument): MemoryDocument {
       destination: Object.freeze({ ...document.address.destination }),
     }),
   });
+}
+
+export function memoryRecallPredicates(
+  parsed: MemoryRecallQuery,
+  bind: (value: unknown) => string,
+): string[] {
+  const predicates: string[] = [];
+  if (parsed.namespaces?.length) {
+    predicates.push(
+      `(${parsed.namespaces
+        .map(
+          (key) =>
+            `(d.platform = ${bind(key.platform)} AND d.adapter_id = ${bind(key.adapterId)})`,
+        )
+        .join(" OR ")})`,
+    );
+  }
+  if (parsed.accounts?.length) {
+    predicates.push(
+      `(${parsed.accounts
+        .map(
+          (key) =>
+            `(d.platform = ${bind(key.platform)} AND d.adapter_id = ${bind(key.adapterId)} AND d.account_id = ${bind(key.accountId)})`,
+        )
+        .join(" OR ")})`,
+    );
+  }
+  if (parsed.scopes?.length) {
+    predicates.push(
+      `(${parsed.scopes.map((key) => scopePredicate(key, bind)).join(" OR ")})`,
+    );
+  }
+  if (parsed.occurredBefore !== undefined) {
+    predicates.push(
+      `d.occurred_at::timestamptz <= ${bind(parsed.occurredBefore)}::timestamptz`,
+    );
+  }
+  if (parsed.excludeSourceInformationIds?.length) {
+    predicates.push(
+      `NOT (d.source_information_id = ANY(${bind([...parsed.excludeSourceInformationIds])}::text[]))`,
+    );
+  }
+
+  return predicates;
 }
