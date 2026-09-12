@@ -1,7 +1,7 @@
 /**
  * 功能概述：通过真实 InformationCore、ModuleHost 与测试数据库验证 Heartflow 持久化编排。
  * fixture/appendCandidate 构造身份屏障及候选链，submitDecision 注入注意力终态；
- * atoms/waitForKind 等待异步订阅输出。覆盖意图去重、冻结上下文、路由、等待和失败终态，
+ * atoms/waitForKind 等待异步订阅输出。Planner 测试验证严格输出、故障静默与 supersession fencing。覆盖意图去重、冻结上下文、路由、等待和失败终态，
  * 保证 composer 只收到目标与完整 turn 来源；afterEach 关闭宿主、Core 和数据库。
  */
 import { createTestingDatabase } from "@kaguya/database/testing";
@@ -20,6 +20,7 @@ import {
 import {
   catalogInformationKinds,
   defineInformationKind,
+  defineModuleCapability,
   defineInformationModuleCatalog,
 } from "@kaguya/sdk";
 import {
@@ -28,6 +29,7 @@ import {
 } from "@kaguya/scheduler";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { fixture as messageFixture } from "../message-composer/test-fixtures.js";
 import { createHeartflowModule, heartflowSettingsSchema } from "./index.js";
 import {
   heartbeatFiredInformationKind,
@@ -48,6 +50,20 @@ import {
   waitRequestedInformationKind,
 } from "../information-kinds.js";
 
+const modelTaskCapability = defineModuleCapability<
+  import("../message-composer/index.js").ModelTaskCapability
+>("kaguya:model-task", 1);
+const agentIdentity = {
+  name: "Kaguya",
+  aliases: ["辉夜"],
+  persona: "测试身份",
+};
+const execute = vi.fn(async () => ({
+  status: "completed",
+  output: { action: "message", reason: "respond" },
+  requestedInformationId: "request",
+  terminalInformationId: "terminal",
+}));
 const runtimeContextInformationKind = defineInformationKind({
   kind: "core.runtime.context",
   displayName: "Core Runtime Context",
@@ -112,6 +128,13 @@ const resources: Array<{
 }> = [];
 
 afterEach(async () => {
+  execute.mockReset();
+  execute.mockResolvedValue({
+    status: "completed",
+    output: { action: "message", reason: "respond" },
+    requestedInformationId: "request",
+    terminalInformationId: "terminal",
+  });
   for (const { host, core, database } of resources.splice(0).reverse()) {
     await host.stop();
     await core.close();
@@ -120,9 +143,12 @@ afterEach(async () => {
 });
 
 async function fixture() {
+  execute.mockClear();
   const database = await createTestingDatabase();
   await database.prepareSchema();
   const module = createHeartflowModule({
+    modelTaskCapability,
+    agentIdentity,
     deliveryDeliveredInformationKind,
     deliveryFailedInformationKind,
     modelTaskFailedInformationKind,
@@ -152,7 +178,21 @@ async function fixture() {
     nextInformationId: () => `heartflow-${++sequence}`,
     now: () => new Date("2026-09-08T00:00:10.000Z"),
   });
-  const host = new ModuleHost({ core, catalog });
+  const host = new ModuleHost({
+    core,
+    catalog,
+    capabilities: [
+      {
+        capability: modelTaskCapability,
+        value: {
+          execute: async (request: any) => ({
+            ...(await execute()),
+            terminalInformationId: request.sourceInformationId,
+          }),
+        },
+      },
+    ],
+  });
   await core.start();
   await host.start([
     {
@@ -355,7 +395,7 @@ async function submitDecision(
   )!;
   const payload = turnContext.payload as any;
   return core.commitTerminal(
-    "agent.turn.decision",
+    outcome === "attend" ? "agent.turn.attention" : "agent.turn.decision",
     claim.informationId,
     attentionArousalCompletedInformationKind,
     {
@@ -475,6 +515,7 @@ describe("heartflow", () => {
       });
       await waitForKind(database, turnContextCompletedInformationKind.kind);
       await submitDecision(core, database, action);
+      expect(execute).not.toHaveBeenCalled();
 
       await waitForKind(database, terminal);
       const all = await atoms(database);
@@ -562,6 +603,11 @@ describe("heartflow", () => {
       const replayContext = {
         select: async () => atoms(database),
         registerOnce,
+        use: () => ({ execute }),
+        commitTerminal: async () =>
+          (await atoms(database)).find(
+            (atom) => atom.kind === "agent.turn.plan.completed",
+          ),
       };
       await dispatch.handle(first, replayContext as never);
       await dispatch.handle(first, replayContext as never);
@@ -582,6 +628,8 @@ describe("heartflow", () => {
 
   it("routes only from the latest frozen input and carries memory IDs without copying content", async () => {
     const module = createHeartflowModule({
+      modelTaskCapability,
+      agentIdentity,
       deliveryDeliveredInformationKind,
       deliveryFailedInformationKind,
       modelTaskFailedInformationKind,
@@ -596,9 +644,16 @@ describe("heartflow", () => {
         payload,
         source: "module:test",
         occurredAt: "2026-09-08T00:00:01.000Z",
-        references: [],
+        references: [
+          {
+            relation: "core:context",
+            informationId: informationIdSchema.parse("runtime-context"),
+          },
+        ],
       });
     const oldSource = {
+      senderId: "old-sender",
+      platformMessageId: "old-message",
       adapterId: "old",
       platform: "qq",
       destination: { kind: "private", userId: "old-user" },
@@ -621,14 +676,40 @@ describe("heartflow", () => {
       "context",
       turnContextCompletedInformationKind.kind,
       {
+        ...messageFixture().atoms.find(
+          (atom) => atom.kind === turnContextCompletedInformationKind.kind,
+        )!.payload,
         candidateInformationId: "candidate",
         claimInformationId: "claim",
         source: oldSource,
+        asOf: "2026-09-08T00:00:01.000Z",
+        attempt: 0,
+        totalWaitBudget: 3,
         text: "full frozen body",
         memory: ["memory-1", "memory-2"],
         inputs: [
-          { informationId: "old", text: "first body", source: oldSource },
-          { informationId: "latest", text: "last body", source: latestSource },
+          {
+            ...(
+              messageFixture().atoms.find(
+                (atom) =>
+                  atom.kind === turnContextCompletedInformationKind.kind,
+              )!.payload as any
+            ).inputs[0],
+            informationId: "old",
+            text: "first body",
+            source: { ...latestSource, ...oldSource },
+          },
+          {
+            ...(
+              messageFixture().atoms.find(
+                (atom) =>
+                  atom.kind === turnContextCompletedInformationKind.kind,
+              )!.payload as any
+            ).inputs[1],
+            informationId: "latest",
+            text: "last body",
+            source: latestSource,
+          },
         ],
       },
     );
@@ -641,6 +722,8 @@ describe("heartflow", () => {
         claimInformationId: "claim",
         turnContextInformationId: "context",
         source: oldSource,
+        attempt: 0,
+        totalWaitBudget: 3,
       },
     );
     const laterInbound = atom("later", inboundTextInformationKind.kind, {
@@ -651,6 +734,13 @@ describe("heartflow", () => {
     await dispatch.handle(decision, {
       select: async () => [candidate, claim, frozenContext, laterInbound],
       registerOnce,
+      use: () => ({ execute }),
+      commitTerminal: async (
+        _operation: string,
+        _key: string,
+        definition: any,
+        input: any,
+      ) => atom("plan", definition.kind, input.payload),
     } as never);
     expect(registerOnce).toHaveBeenCalledExactlyOnceWith(
       "agent.heartflow.message-intent",
@@ -903,5 +993,139 @@ describe("heartflow", () => {
       },
       memoryInformationIds: [],
     });
+  });
+});
+
+describe("Planner durable dispatch", () => {
+  it.each([
+    [
+      "message",
+      { action: "message", reason: "respond" },
+      "agent.message.intent.requested",
+    ],
+    [
+      "wait",
+      { action: "wait", reason: "await-more-context", waitSeconds: 7 },
+      "agent.turn.waiting",
+    ],
+    [
+      "silent",
+      { action: "silent", reason: "no-response-needed" },
+      "agent.turn.silent",
+    ],
+    [
+      "extra destination",
+      { action: "message", reason: "respond", destination: "forbidden" },
+      "agent.turn.silent",
+    ],
+    ["invalid JSON", "not JSON", "agent.turn.silent"],
+    [
+      "invalid wait",
+      { action: "wait", reason: "await-more-context", waitSeconds: 121 },
+      "agent.turn.silent",
+    ],
+  ])("dispatches %s with one fenced action", async (_name, output, kind) => {
+    execute.mockResolvedValue({
+      status: "completed",
+      output,
+      requestedInformationId: "request",
+      terminalInformationId: "terminal",
+    } as never);
+    const { core, database } = await fixture();
+    await appendCandidate(core, {
+      requestId: "planner",
+      text: "hello",
+      occurredAt: "2026-09-08T00:00:01.000Z",
+    });
+    await waitForKind(database, turnContextCompletedInformationKind.kind);
+    await submitDecision(core, database, "attend");
+    await waitForKind(database, String(kind));
+    const all = await atoms(database);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(
+      all.filter((atom) => atom.kind === "agent.turn.plan.completed"),
+    ).toHaveLength(1);
+    expect(all.some((atom) => atom.kind === "agent.turn.failed")).toBe(false);
+    if (kind !== "agent.message.intent.requested")
+      expect(
+        all.some((atom) => atom.kind === "agent.message.intent.requested"),
+      ).toBe(false);
+    if (kind === "agent.turn.waiting")
+      expect(
+        all.find((atom) => atom.kind === "agent.wait.requested")?.payload,
+      ).toMatchObject({ attempt: 1, delayMs: 7000, wakeOnMessage: true });
+    if (
+      ["extra destination", "invalid JSON", "invalid wait"].includes(
+        String(_name),
+      )
+    )
+      expect(
+        all.find((atom) => atom.kind === "agent.turn.silent")?.payload
+          .reasonCodes,
+      ).toEqual(["planner-unavailable"]);
+  });
+  it.each(["failed", "cancelled"])(
+    "closes %s Planner normally",
+    async (status) => {
+      execute.mockResolvedValue({
+        status,
+        requestedInformationId: "request",
+        terminalInformationId: "terminal",
+      } as never);
+      const { core, database } = await fixture();
+      await appendCandidate(core, {
+        requestId: status,
+        text: "hello",
+        occurredAt: "2026-09-08T00:00:01.000Z",
+      });
+      await waitForKind(database, turnContextCompletedInformationKind.kind);
+      await submitDecision(core, database, "attend");
+      expect(
+        (await waitForKind(database, "agent.turn.silent")).payload.reasonCodes,
+      ).toEqual(["planner-unavailable"]);
+      expect(
+        (await atoms(database)).some((atom) =>
+          ["agent.turn.failed", "agent.message.intent.requested"].includes(
+            atom.kind,
+          ),
+        ),
+      ).toBe(false);
+    },
+  );
+  it("discards a late Planner completion after supersession", async () => {
+    let release!: (value: any) => void;
+    execute.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const { core, database } = await fixture();
+    await appendCandidate(core, {
+      requestId: "old-plan",
+      text: "first",
+      occurredAt: "2026-09-08T00:00:01.000Z",
+    });
+    await waitForKind(database, turnContextCompletedInformationKind.kind);
+    await submitDecision(core, database, "attend");
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
+    await appendCandidate(core, {
+      requestId: "new-plan",
+      text: "second",
+      occurredAt: "2026-09-08T00:00:02.000Z",
+    });
+    await waitForKind(database, turnSupersededInformationKind.kind);
+    release({
+      status: "completed",
+      output: { action: "message", reason: "respond" },
+      requestedInformationId: "request",
+      terminalInformationId: "terminal",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(
+      (await atoms(database)).some(
+        (atom) => atom.kind === messageIntentRequestedInformationKind.kind,
+      ),
+    ).toBe(false);
   });
 });

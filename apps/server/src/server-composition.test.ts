@@ -1,4 +1,5 @@
 /**
+ * 默认 DAG 验证 eligible turn 先调用 Planner，再由 Composer 生成消息。
  * tier 配置回归同时覆盖 generation.timeoutMs 到 LLM client 的硬超时参数传递。
  * 功能概述：验证 Server 作为唯一 composition root 组合 PostgreSQL information
  * database、Runtime、Web/NapCat ingress、HTTP 与启动期选定的全局 Profile。
@@ -232,6 +233,7 @@ describe("unified server composition", () => {
         "agent.turn.claimed",
         "agent.turn.completed",
         "agent.turn.context.completed",
+        "agent.turn.plan.completed",
         "agent.turn.started",
         "agent.person.resolution",
         "core.message.inbound.text",
@@ -244,7 +246,11 @@ describe("unified server composition", () => {
       ]),
     );
     expect(
-      graph.find(({ kind }) => kind === "core.model.task.requested")?.payload,
+      graph.find(
+        ({ kind, payload }) =>
+          kind === "core.model.task.requested" &&
+          payload.taskId === "agent.message.compose",
+      )?.payload,
     ).toMatchObject({
       resolvedModel: {
         providerId: "kaguya-deterministic",

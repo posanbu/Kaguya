@@ -1,14 +1,20 @@
 /**
  * 功能概述：为离线 promptfoo 结构回归连接真实仓库 Prompt 编译器。
  * 主要职责：KaguyaPromptProvider 按 kind 分派；message 通过 compileMessagePrompt 与默认模板编译完整冻结 turn，
- * route/state/memory 继续使用通用模板渲染器校验结构。参数格式或编译失败直接抛错。
+ * planner 通过 Heartflow 的真实编译器验证动作边界；route/state/memory 继续使用通用模板渲染器校验结构。参数格式或编译失败直接抛错。
  * 代码库关系：tsx 加载 modules 源码，message-fixture 构造与生产 schema 一致的意图与冻结输入。
  * 输入输出与副作用：输入评测 vars，输出文本及模板变量溯源；只读本地源码和模板，不调用模型或网络。
  */
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 
-const PROMPT_KINDS = new Set(["route", "message", "state", "memory"]);
+const PROMPT_KINDS = new Set([
+  "route",
+  "message",
+  "state",
+  "memory",
+  "planner",
+]);
 const PROMPT_SOURCE_PATH = path.resolve(
   __dirname,
   "..",
@@ -35,6 +41,7 @@ class KaguyaPromptProvider {
       throw new Error(`unsupported prompt kind: ${kind}`);
     }
 
+    if (kind === "planner") return compilePlannerEvaluation(vars);
     if (kind === "message") return compileMessageEvaluation(vars);
 
     const createPromptTemplateRenderer = await loadPromptRenderer();
@@ -240,6 +247,41 @@ async function compileMessageEvaluation(vars) {
     },
     atoms,
     intentId,
+  );
+  return {
+    output: prompt.text,
+    metadata: {
+      rendererSource: source,
+      kind: prompt.kind,
+      variables: prompt.variables,
+    },
+  };
+}
+
+async function compilePlannerEvaluation(vars) {
+  const { tsImport } = require("tsx/esm/api");
+  const source = "packages/modules/src/first-party/heartflow/planner.ts";
+  const compiler = await tsImport(
+    pathToFileURL(path.resolve(__dirname, "..", source)).href,
+    pathToFileURL(__filename).href,
+  );
+  const fixtureModule = await tsImport(
+    pathToFileURL(
+      path.resolve(
+        __dirname,
+        "../packages/modules/src/first-party/message-composer/test-fixtures.ts",
+      ),
+    ).href,
+    pathToFileURL(__filename).href,
+  );
+  const { atoms } = fixtureModule.fixture(vars.turn.inputs);
+  const turn = atoms.find(
+    (atom) => atom.kind === "agent.turn.context.completed",
+  );
+  const prompt = compiler.compilePlannerPrompt(
+    { name: "Kaguya", aliases: ["辉夜"], persona: vars.persona },
+    atoms,
+    turn,
   );
   return {
     output: prompt.text,

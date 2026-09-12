@@ -3,10 +3,22 @@
  * per-chat 状态，也不依赖订阅安装顺序。
  * createHeartflowModule 注入投递/模型失败 kind，返回声明订阅的模块；settings schema
  * 校验频率与安全策略。state/memory selector 从账本读取因果链及记忆，冻结完整输入。
- * dispatchDecision 将 attend 按 claim 注册一次消息意图，最后一个冻结输入仅决定目标地址；
+ * dispatchDecision 仅将独立 Planner 的获胜 message 结果按 claim 注册一次意图，末条输入决定目标；
  * turn 标识及引用保留完整冻结上下文，正文生成交给 composer。defer/ignore 与失败路径
- * 写入等待或终态；registerOnce/commitTerminal 保证重放幂等，不执行模型或平台 I/O。
+ * 写入等待或终态；registerOnce/commitTerminal 保证重放幂等，模型 I/O 经宿主 capability 执行，平台 I/O 由 delivery 层负责。
  */
+import {
+  compilePlannerPrompt,
+  plannerActionSchema,
+  plannerContextSelector,
+  plannerDecisionInformationKind,
+  PLANNER_TASK_ID,
+} from "./planner.js";
+import type {
+  AgentIdentity,
+  ModelTaskCapability,
+} from "../message-composer/index.js";
+import type { ModuleCapability } from "@kaguya/sdk";
 import { createCognitionMemorySelector } from "../memory-cognition/index.js";
 import type { CognitionIdentity } from "@kaguya/memory";
 
@@ -49,6 +61,8 @@ import {
 type AnyKind = InformationKindDefinition<string, any>;
 
 export interface CreateHeartflowModuleOptions {
+  readonly modelTaskCapability: ModuleCapability<ModelTaskCapability>;
+  readonly agentIdentity: AgentIdentity;
   readonly cognitionIdentity?: CognitionIdentity;
   readonly deliveryDeliveredInformationKind: AnyKind;
   readonly deliveryFailedInformationKind: AnyKind;
@@ -325,6 +339,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
         options.executionExhaustedInformationKind,
       ],
       produces: [
+        plannerDecisionInformationKind,
         turnClaimedInformationKind,
         turnStartedInformationKind,
         turnDecisionSupersededInformationKind,
@@ -337,12 +352,16 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
         turnFailedInformationKind,
         turnSupersededInformationKind,
       ],
-      selectors: [heartflowStateSelector, memorySelector],
+      selectors: [
+        heartflowStateSelector,
+        memorySelector,
+        plannerContextSelector,
+      ],
       promptRenderers: [],
-      requires: [],
+      requires: [options.modelTaskCapability],
       provides: [],
     },
-    create: ({ settings }) => ({
+    create: ({ settings, activation }) => ({
       provisions: [],
       describeStartup: () => ({
         summary: "Information DAG heartflow ready",
@@ -379,8 +398,108 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
             delivery: "durable",
           },
           async (decision, context) => {
+            const gate = decision.payload as AttentionArousalPayload;
             const state = await context.select(heartflowStateSelector);
-            await dispatchDecision(decision, state, context);
+            if (
+              state.some(
+                (atom) =>
+                  atom.kind === turnDecisionSupersededInformationKind.kind &&
+                  atom.payload.claimInformationId === gate.claimInformationId,
+              )
+            )
+              return;
+            if (gate.outcome !== "attend") {
+              await dispatchDecision(decision, state, context);
+              return;
+            }
+            const selected = await context.select(plannerContextSelector);
+            const turn = selected.find(
+              (atom) => atom.informationId === gate.turnContextInformationId,
+            )!;
+            const runtimeContextId = decision.references.find(
+              (reference) => reference.relation === "core:context",
+            )!.informationId;
+            const result = await context
+              .use(options.modelTaskCapability)
+              .execute({
+                task: {
+                  taskId: PLANNER_TASK_ID,
+                  version: "1",
+                  outputMode: "object",
+                  outputSchema: plannerActionSchema,
+                  allowedTiers: ["light", "heavy"],
+                },
+                sourceInformationId: decision.informationId,
+                contextInformationId: runtimeContextId,
+                activation,
+                selectionPolicy: { tier: "light" },
+                prompt: compilePlannerPrompt(
+                  options.agentIdentity,
+                  selected,
+                  turn,
+                ),
+                contextAtoms: selected,
+              });
+            const parsed =
+              result.status === "completed"
+                ? plannerActionSchema.safeParse(result.output)
+                : undefined;
+            let action: z.infer<
+              typeof plannerDecisionInformationKind.payloadSchema
+            >["action"] = parsed?.success
+              ? parsed.data
+              : { action: "silent", reason: "planner-unavailable" };
+            if (
+              action.action === "wait" &&
+              gate.attempt >= Math.min(3, gate.totalWaitBudget)
+            )
+              action = { action: "silent", reason: "wait-budget-exhausted" };
+            const winner = await context.commitTerminal(
+              "agent.turn.decision",
+              gate.claimInformationId,
+              plannerDecisionInformationKind,
+              {
+                payload: { gateInformationId: decision.informationId, action },
+                references: [
+                  {
+                    relation: "core:uses-context",
+                    informationId: result.terminalInformationId,
+                  },
+                  {
+                    relation: "core:status-of",
+                    informationId: gate.claimInformationId,
+                  },
+                ],
+              },
+            );
+            if (
+              winner.kind !== plannerDecisionInformationKind.kind ||
+              winner.payload.gateInformationId !== decision.informationId
+            )
+              return;
+            action = plannerDecisionInformationKind.payloadSchema.parse(
+              winner.payload,
+            ).action;
+            const payload = {
+              ...decision.payload,
+              outcome:
+                action.action === "message"
+                  ? "attend"
+                  : action.action === "wait"
+                    ? "defer"
+                    : "ignore",
+              reasonCodes: [action.reason],
+              totalWaitBudget: Math.min(3, gate.totalWaitBudget),
+              ...(action.action === "wait"
+                ? {
+                    delayMs: action.waitSeconds * 1000,
+                    dueAt: new Date(
+                      Date.parse(winner.occurredAt) + action.waitSeconds * 1000,
+                    ).toISOString(),
+                  }
+                : {}),
+            };
+            await dispatchDecision({ ...decision, payload }, state, context);
           },
         ),
         ...deliveryKinds.map((definition) =>
@@ -412,6 +531,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
             },
             async (terminal, context) => {
               const state = await context.select(heartflowStateSelector);
+              if (terminal.payload.taskId === PLANNER_TASK_ID) return;
               await failOpenTurns(
                 terminal,
                 definition === options.modelTaskFailedInformationKind
@@ -768,7 +888,7 @@ async function progressCandidate(
           ? {}
           : { memory: memories.map(({ informationId }) => informationId) }),
         attempt: payload.attempt,
-        totalWaitBudget: payload.totalWaitBudget,
+        totalWaitBudget: Math.min(3, payload.totalWaitBudget),
       },
       references: [
         { relation: "agent:turn-claim", informationId: claim.informationId },
@@ -876,7 +996,7 @@ async function dispatchDecision(
         payload: {
           dueAt: payload.dueAt,
           delayMs: payload.delayMs,
-          reason: "score-below-speak-threshold",
+          reason: payload.reasonCodes[0] ?? "score-below-speak-threshold",
           attempt: payload.attempt + 1,
           totalWaitBudget: payload.totalWaitBudget,
           wakePolicy: payload.wakePolicy ?? "recheckAt",

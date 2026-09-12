@@ -1,3 +1,9 @@
+/**
+ * 功能概述：为 LLM、Runtime 和组合入口提供离线确定性模型及可控延迟模型。
+ * createDeterministicModel 顺序返回样本；createRepeatingDeterministicModel 重复输出；
+ * createDeferredDeterministicModel 等待测试释放。createPlanningDeterministicModel 根据输出格式
+ * 区分 Planner JSON 与 Composer 文本，支持真实双阶段集成测试；均不访问网络。
+ */
 import { MockLanguageModelV3 } from "ai/test";
 
 export function createDeterministicModel(
@@ -94,4 +100,18 @@ function deterministicResult(output: unknown) {
     },
     warnings: [],
   };
+}
+
+export function createPlanningDeterministicModel(
+  text: string,
+  plan: unknown = { action: "message", reason: "respond" },
+): MockLanguageModelV3 {
+  return new MockLanguageModelV3({
+    provider: "kaguya-deterministic",
+    modelId: "deterministic-model",
+    doGenerate: async (request) =>
+      deterministicResult(
+        request.responseFormat?.type === "text" ? text : plan,
+      ),
+  });
 }

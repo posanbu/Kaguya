@@ -2,7 +2,7 @@
  * 功能概述：验证唯一 Runtime Composition 的目录演化、激活选择和宿主依赖边界。
  * Memory 开启时共享工厂自动补入独立写回实例，并在关闭态移除后台实例。
  * 主要职责：模拟一方 Catalog 新增与移除定义，确认共享工厂直接采用变更；检查禁用实例
- * 不获得 Model Task 审批、身份和 Memory 选项保持原有语义，并约束两个应用直接使用正式入口。
+ * 不获得 Model Task 审批，Heartflow 独立获得 light Planner 审批、身份和 Memory 选项保持原有语义，并约束两个应用直接使用正式入口。
  * 代码库关系：mock 仅替换 @kaguya/modules 的 Catalog 工厂，其他定义、配置校验及模板均为真实实现；
  * 应用的实际启动和投递行为另由 server-composition.test.ts 与 demo/index.test.ts 覆盖。
  * 输入输出与副作用：纯内存装配与源码读取，不启动 Runtime 或连接外部服务；每例恢复 mock。
@@ -86,7 +86,15 @@ describe("shared Runtime Composition", () => {
       agentIdentity: identity,
       memoryEnabled: true,
     });
-    expect(composition.modelTask.approvals).toEqual([]);
+    expect(composition.modelTask.approvals).toEqual([
+      {
+        activation: {
+          instanceId: "heartflow.default",
+          definitionId: "agent.heartflow.online",
+        },
+        selectionPolicy: { tier: "light" },
+      },
+    ]);
     expect(composition.activations).toHaveLength(moduleConfigs.length);
     expect(
       composition.activations.some(
