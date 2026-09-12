@@ -4,7 +4,7 @@
  * createRuntimeModelSelectionResolver 根据 Profile 批准的 tier 解析 provider/model、思考参数及硬超时。
  * 代码库关系：createMessageCatalog/createMessageComposition 装配消息编写模块；AdapterHost
  * 管理适配器；inspectModules 和账本只读端口交给 inspection.ts，配置仅用于秘密脱敏闭包。
- * 启动配置阶段先备份并迁移已知 v3 Registry，再进入严格 v1 管理路径。
+ * 启动只接受严格 v1 Registry，不自动迁移旧配置；用户须先手动更新配置。
  * ConfigurationApplication 保留 HTTP/Token/数据库，串行替换完整 Runtime/AdapterHost；
  * Web、状态与 Inspection 通过动态门面读取当前实例，关闭失败禁止创建第二个活跃宿主。
  * 输入输出与副作用：连接数据库、监听 HTTP 并启动适配器，失败时释放已创建资源并固定错误分类。
@@ -29,7 +29,6 @@ import { pathToFileURL } from "node:url";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import type { KaguyaLlmGenerationOptions } from "@kaguya/llm/client";
 import {
-  migrateLegacyUserConfigRegistry,
   ConfigError,
   ConfigIncompleteError,
   ConfigReviewRequiredError,
@@ -143,7 +142,6 @@ export async function startKaguyaServer(
             configRoot: providedConfig.configRoot,
             development: providedConfig.development,
           };
-    await migrateLegacyUserConfigRegistry({ rootDir: bootstrap.configRoot });
     configuration = await createConfigurationManagement(bootstrap.configRoot);
     configurationStatus = await configuration.getRegistryStatus();
     selectedProfile = await configuration.getRuntimeProfile(

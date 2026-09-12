@@ -22,7 +22,7 @@ Server 每次启动都会生成新的 Gateway Token，并在成功监听后打�
 
 `KAGUYA_CONFIG_ROOT` 指向权限受保护的 Profile Registry。Registry 有且只有一个显式的 `selectedProfileId`；Server 的 host、port、database、Web 路径、CORS、代理、限流、日志、allowlist、AI、Memory 与平台都来自这个 Profile。首次 `pnpm dev` 会在缺少整个 `runtime` 时保留其他 Profile 内容并补入安全的本地 runtime；部分损坏的 runtime 会被拒绝而不会覆盖。
 
-数据库连接、PostgreSQL 17、严格 schema v1 和 Runtime Kind 必须在任何监听启动前通过。数据库 schema 不兼容会直接终止 Server；AI 配置尚未完成时仍会开放 Web 配置界面，Runtime 与 NapCat 保持停止。Web UI 保存或切换 selected Profile 后会自动应用模型、人设、Memory、NapCat 和白名单配置，无需重新打开访问链接；设置菜单的“配置生效管理”也可手动应用或重试。端口、数据库地址等进程级字段变更仍需在原终端按 `Ctrl+C`，重新执行 `pnpm dev`（生产模式使用 `pnpm start`），然后打开新打印的完整访问链接。初始化格式与密钥边界见 [`@kaguya/config`](packages/config/README.md)。
+数据库连接、PostgreSQL 17、严格 schema v1 和 Runtime Kind 必须在任何监听启动前通过。数据库 schema 不兼容会直接终止 Server；AI 配置尚未完成时仍会开放 Web 配置界面，Runtime 与 NapCat 保持停止。Web UI 保存或切换 selected Profile 只写入配置；进入“配置生效管理”点击“应用当前配置”，才会热重载模型、人设、Memory、NapCat 和白名单，无需重新打开访问链接。端口、数据库地址等进程级字段变更仍需在原终端按 `Ctrl+C`，重新执行 `pnpm dev`（生产模式使用 `pnpm start`），然后打开新打印的完整访问链接。初始化格式与密钥边界见 [`@kaguya/config`](packages/config/README.md)。
 
 Web UI 的 NapCat 页面只读写 selected Profile 的 `platforms` 条目。
 
@@ -36,11 +36,11 @@ pnpm start
 
 ## 升级后的配置迁移与消息排查
 
-`pnpm dev`、`pnpm postgres:start` 和 `pnpm start` 会在读取配置前自动迁移已知的 v3 Registry。迁移先校验所有 Profile，再在配置根目录创建 `migration-backup-v3-<UUID>/`，保存原索引和全部被索引引用的 Profile；备份含凭据，目录权限为 0700、文件权限为 0600。迁移保留 Profile 名称、选中项、模型及平台凭据，补入缺失的默认 identity、关闭状态的 memory，并移除已退役的 `plugins` 和旧 `runtime.gatewayToken`。旧插件设置仅保留在备份中，不会自动启用为新版模块；请检查默认人设、Memory 与平台规则后使用。
+启动不会自动迁移旧 Registry。升级后遇到 `CONFIG_CORRUPT_STORE` 时，先停止服务并手动备份整个 `KAGUYA_CONFIG_ROOT` 目录（包含 `index.json`、`profiles/` 和 `modules/`）；备份含凭据，请限制访问权限。
 
-已有的数据库模式和 Gateway Allowlist 会保留。旧配置缺少 `databaseMode` 时按旧版语义设为 `external`，缺少白名单时设为空列表；不会猜测数据库属于托管容器，也不会自动开放 QQ 消息。迁移不处理数据库 schema，不修改独立模块配置。未知版本、未知字段及损坏配置继续报错；不要手工把 `version: 3` 改为 `1`，否则无法识别完整的旧格式。
+对已知 v3 Registry，按新版格式手动更新所有被索引引用的 Profile：保留 ID、名称、模型及平台凭据，移除已退役的 `plugins` 和 `runtime.gatewayToken`，补齐缺失的 `identity`（name、至少一个不同于 name 的 aliases、非空 persona）与 `memory: { "enabled": false }`。runtime 需包含 `databaseMode`（按实际数据库选 managed 或 external）及 `gatewayAllowlist`（空数组拒绝平台消息）。完整字段定义见 [`@kaguya/config`](packages/config/README.md)。旧插件配置只保留在备份中，不自动启用为新版模块。
 
-正式配置写入中断时，旧 v3 索引与完整备份仍保留，重新启动会继续转换。若进程崩溃留下 `.migration-lock`，先确认所有 Kaguya 进程均已停止，再删除配置根目录内这个空锁目录并重试。需要回退时，停止服务，将备份中的 `index.json` 和 `profiles/` 一起恢复，并使用相应旧版程序。完整备份最后才生成自身的 `index.json`；没有该文件的目录属于未完成备份，不能用于恢复。备份中的 JSON 字段和值保持原样，排版可能变化。
+全部 Profile 符合 v1 后，再手动将索引版本改为 `1`，保留原来的 Profile 元数据和 `selectedProfileId`；不要只修改索引版本而跳过 Profile 更新。随后运行 `pnpm dev` 或 `pnpm start` 校验。若仍报错，按校验结果检查文件或停止服务后恢复整份备份。此过程不迁移数据库，也不修改独立模块配置；未知格式不应套用 v3 步骤。
 
 Web 配置页可分别设置轻量、重量模型的**模型调用超时**（0.001–300 秒，默认 300 秒）；该值覆盖模型请求及响应读取。推荐响应时间仍只是软预算。默认 durable lease 为 330 秒，为最长模型调用预留 30 秒提交余量；进程崩溃后的无主任务也可能要等租约到期才能恢复。
 
@@ -133,4 +133,4 @@ packages/platform-adapters/ OneBot/NapCat/Web 正规化与 transport 契约
 
 ## 当前边界
 
-模块是受信任的同进程代码。Core 按当前订阅者快照实时广播：没有持久订阅、离线补投、工作队列、消费者优先级或自动重试。系统同样没有去重、模块代码热更新、模块沙箱、隐式会话分组或 Web 回复读取/SSE 通道。旧 SQLite 数据不会自动导入、转换或删除。已知 v3 配置索引会在启动前备份并迁移到 v1；其他旧格式继续拒绝，详见上方迁移说明。
+模块是受信任的同进程代码。Core 按当前订阅者快照实时广播：没有持久订阅、离线补投、工作队列、消费者优先级或自动重试。系统同样没有去重、模块代码热更新、模块沙箱、隐式会话分组或 Web 回复读取/SSE 通道。旧 SQLite 数据不会自动导入、转换或删除。旧配置由用户手动备份并更新，启动只接受 v1，详见上方更新说明。

@@ -1,6 +1,6 @@
 /**
  * 功能概述：通过真实 HTTP、配置文件、Runtime 与 PGlite 验证无进程重启的配置热应用。
- * 主要职责：覆盖凭据/人设/白名单/模块快照切换、旧入口 fencing、持久化写锁、回滚与恢复。
+ * 主要职责：覆盖凭据/人设/白名单/模块快照切换、旧入口 fencing、持久化写锁、回滚与恢复；启动拒绝旧索引且不改写。
  * 代码库关系：只替换外部数据库连接与模型 provider；server.ts 的应用编排和 HTTP 鉴权使用实际实现。
  * 输入输出与副作用：每例独立临时目录及数据库，使用虚构凭据，关闭 Server 后清理全部测试资源。
  */
@@ -472,4 +472,28 @@ it("reports successful persistence even when a separate module snapshot is unrea
     ).statusCode,
   ).toBe(503);
   expect(f.server.runtime).toBe(old);
+});
+
+it("rejects old configuration at server startup without migrating files", async () => {
+  const f = await fixture();
+  await f.server.close();
+  const config = createServerConfig(
+    await f.manager.getProfile("default"),
+    { configRoot: f.root, development: false },
+    () => "test-reload-gateway-token",
+  );
+  const indexPath = join(f.root, "index.json");
+  const index = JSON.parse(await readFile(indexPath, "utf8"));
+  index.version = 3;
+  const oldIndex = JSON.stringify(index);
+  await writeFile(indexPath, oldIndex);
+  const profilePath = join(f.root, "profiles", "profile_default.json");
+  const originalProfile = await readFile(profilePath, "utf8");
+  await expect(startKaguyaServer({ ...config, port: 0 })).rejects.toThrow();
+  expect(f.connect).toHaveBeenCalledOnce();
+  expect(await readFile(indexPath, "utf8")).toBe(oldIndex);
+  expect(await readFile(profilePath, "utf8")).toBe(originalProfile);
+  expect(
+    (await readdir(f.root)).some((name) => name.startsWith("migration-backup")),
+  ).toBe(false);
 });

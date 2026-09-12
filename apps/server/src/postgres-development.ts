@@ -1,5 +1,5 @@
 /**
- * ensureDevelopmentPostgres 在读取 selected Profile 前备份迁移 v3 Registry；status/check 不触发迁移。
+ * 启动只接受严格 v1 Registry，不自动迁移旧配置；用户须先手动更新配置。
  * 功能概述：为本地开发和真实 PostgreSQL 测试提供 PostgreSQL 17 生命周期编排。
  * 主要职责：通过 Docker CLI 创建/恢复固定容器和数据卷、等待 pg_isready、校验
  * 容器身份与端口，并用生产 Database/Runtime kind 路径执行连接、schema 准备和 kind 检查；
@@ -13,7 +13,6 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import {
-  migrateLegacyUserConfigRegistry,
   FileUserConfigManager,
   runtimeConfigSchema,
   type RuntimeConfig,
@@ -80,7 +79,6 @@ export async function ensureDevelopmentPostgres(options: {
   readonly databaseUrl: string;
   readonly mode: "managed" | "external";
 }> {
-  await migrateLegacyUserConfigRegistry({ rootDir: options.configRoot });
   const profileState = await openSelectedProfile(options.configRoot);
   const runtime = profileState?.profile.runtime;
   if (runtime?.databaseMode === "external") {
