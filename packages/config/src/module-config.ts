@@ -1,3 +1,10 @@
+/**
+ * 功能概述：管理 modules/<instanceId>/config.json 的严格加载与首次初始化。
+ * 主要职责：moduleInstanceConfigSchema 验证文件信封；loadModuleInstanceConfigs 仅在目录缺失时
+ * 写入完整默认配置；configPath 和 assertUniqueDefaults 拒绝越界路径及重复实例。
+ * 代码库关系：Server 传入 first-party Catalog 默认实例，模块 settings 由 Catalog 二次严格校验。
+ * 输入输出与副作用：读写敏感 JSON；已有目录不自动迁移或修复，旧实例及损坏配置报错并提示重新初始化。
+ */
 import { lstat, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -122,5 +129,9 @@ async function pathExists(path: string): Promise<boolean> {
 }
 
 function corrupt(message: string, cause?: unknown): ConfigError {
-  return new ConfigError("CONFIG_CORRUPT_STORE", message, { cause });
+  return new ConfigError(
+    "CONFIG_CORRUPT_STORE",
+    `${message}. Reinitialize module configuration.`,
+    { cause },
+  );
 }

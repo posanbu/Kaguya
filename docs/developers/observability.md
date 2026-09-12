@@ -31,7 +31,7 @@ KAGUYA_LOG_LEVELS=runtime:information=debug
 KAGUYA_LOG_LEVELS=runtime:information=debug
 
 # 只展开一个模块的临时诊断
-KAGUYA_LOG_LEVELS=runtime:module:demo.reply.llm=debug
+KAGUYA_LOG_LEVELS=runtime:module:agent.message-composer=debug
 ```
 
 ::: warning 内容留存

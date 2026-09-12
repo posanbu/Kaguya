@@ -1,7 +1,16 @@
-/** Server composition root: adapter lifetimes and database checks remain independent of Runtime readiness. */
+/**
+ * 功能概述：Server composition root，组合配置、数据库、Runtime、HTTP/Web 与 NapCat 生命周期。
+ * 主要职责：startKaguyaServer 先验证选定 Profile 和模块配置，再连接数据库并启动宿主；
+ * StartedKaguyaServer 提供资源句柄与关闭入口，formatAccessUrl 构造访问地址，
+ * createRuntimeModelSelectionResolver 根据 Profile 批准的 tier 解析 provider/model 复合身份。
+ * 代码库关系：createMessageCatalog/createMessageComposition 装配消息合成模块；AdapterHost
+ * 独立管理入站与出站适配器，数据库 kind 检查复用 Catalog 的公开定义。
+ * 输入输出与副作用：启动连接数据库、监听 HTTP 并打开适配器；失败时关闭已创建资源。
+ * InformationDatabaseConnectionError 和 InformationRuntimeStartupError 固定错误分类，避免泄露底层凭据。
+ */
 import {
-  createReplyCatalog,
-  createReplyComposition,
+  createMessageCatalog,
+  createMessageComposition,
   type RuntimeModelSelectionResolver,
 } from "./runtime-composition.js";
 import { pathToFileURL } from "node:url";
@@ -135,7 +144,7 @@ export async function startKaguyaServer(
         selectedProfile.identity,
       ),
     });
-    createReplyComposition(undefined, {
+    createMessageComposition(undefined, {
       moduleConfigs,
       agentIdentity: selectedProfile.identity,
     });
@@ -266,7 +275,7 @@ export async function startKaguyaServer(
         runtime = new KaguyaRuntime({
           database,
           logger: rootLogger,
-          ...createReplyComposition(resolveModelSelection, {
+          ...createMessageComposition(resolveModelSelection, {
             memoryEnabled: selectedProfile.memory.enabled,
             moduleConfigs,
             agentIdentity: selectedProfile.identity,
@@ -515,7 +524,7 @@ async function prepareConfigurationDatabase(
   try {
     await database.prepareSchema();
     await database.information.synchronizeKinds(
-      runtimeInformationKindNames(createReplyCatalog()),
+      runtimeInformationKindNames(createMessageCatalog()),
     );
   } catch (error) {
     if (error instanceof UnsupportedDatabaseSchemaError) throw error;

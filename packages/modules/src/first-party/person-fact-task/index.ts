@@ -5,7 +5,7 @@
  * `createPersonFactTaskModule` 校验并声明宿主注入的 capability/completed definition，候选订阅通过
  * `context.use` 执行 `core.person.fact.extract` v1，完成订阅核对 task/version/definition/tier/source，
  * 再验证输出与候选人物身份一致并使用稳定 terminal ID 调用 registerOnce。
- * 代码库关系：仅依赖 modules 侧 `llm-reply.ts` 的结构化 Model Task contract、SDK
+ * 代码库关系：仅依赖 modules 侧 `message-composer.ts` 的结构化 Model Task contract、SDK
  * 和本包 information kinds；不导入 Runtime、provider、Core、数据库或凭据。Host 负责 selector 授权、
  * completed→requested→candidate 因果遍历，以及为业务注册补齐 caused-by/context 引用。
  * 输入输出与副作用：候选 handler 只提交通用任务请求，不直接写业务结果；failed/cancelled 没有对应
@@ -46,7 +46,7 @@ import {
   type ModelTaskRequest,
   type ModelTaskResult,
   type ModelTier,
-} from "../llm-reply/index.js";
+} from "../message-composer/index.js";
 
 export type {
   ModelTaskCapability,

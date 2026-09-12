@@ -1,8 +1,8 @@
 /**
  * 功能概述：集中显式导入 first-party 模块，提供可被 composition root 选择和合并的 Catalog。
- * 主要职责：createFirstPartyModuleCatalog 接收宿主 Model Task token 和共享 completed kind，构造身份、时机与回复定义；
+ * 主要职责：createFirstPartyModuleCatalog 接收宿主 Model Task token 和共享 completed kind，构造身份、时机与消息合成定义；
  * createFirstPartyModuleConfigDefaults 提供首次落盘模板，createFirstPartyModuleActivations
- * 严格校验已加载的实例文件，与“可发现”的 Catalog 分开。
+ * 严格校验已加载的实例文件，拒绝旧回复配置并提示重新初始化，与“可发现”的 Catalog 分开。
  * 代码库关系：Server、Demo 和测试组合入口传入 Runtime 的实际 token/definition；工厂仅依赖模块侧
  * 结构类型，保留 completed payload 泛型与对象身份，避免 modules 反向依赖 Runtime。
  * 输入输出与副作用：纯内存定义，没有 timer、环境读取、连接、全局注册或动态目录扫描。
@@ -22,19 +22,21 @@ import {
   type CreateHeartflowModuleOptions,
 } from "./heartflow/index.js";
 import {
-  createLlmReplyModule,
+  createMessageComposerModule,
   type AgentIdentity,
-  type CreateLlmReplyModuleOptions,
+  type CreateMessageComposerModuleOptions,
   type ModelTaskCompletedInformationPayload,
-} from "./llm-reply/index.js";
+} from "./message-composer/index.js";
 export function createFirstPartyModuleCatalog<
   P extends ModelTaskCompletedInformationPayload,
->(options: CreateLlmReplyModuleOptions<P> & CreateHeartflowModuleOptions) {
+>(
+  options: CreateMessageComposerModuleOptions<P> & CreateHeartflowModuleOptions,
+) {
   return defineInformationModuleCatalog(
     associationModule,
     identityModule,
     attentionArousalModule,
-    createLlmReplyModule(options),
+    createMessageComposerModule(options),
     heartbeatModule,
     createHeartflowModule(options),
   );
@@ -54,12 +56,11 @@ export function createFirstPartyModuleConfigDefaults(
   return Object.freeze([
     Object.freeze({
       version: 1 as const,
-      instanceId: "reply.default",
-      definitionId: "demo.reply.llm",
+      instanceId: "message-composer.default",
+      definitionId: "agent.message-composer",
       enabled: true,
       settings: Object.freeze({
         modelTier: "heavy",
-        outbound: Object.freeze({ mode: "source", messageKind: "reply" }),
       }),
     }),
     Object.freeze({
@@ -123,24 +124,38 @@ export function createFirstPartyModuleActivations(
   return Object.freeze(
     configs
       .map((config) => {
+        if (
+          config.definitionId === "demo.reply.llm" ||
+          config.instanceId === "reply.default"
+        ) {
+          throw new Error(
+            "Legacy reply configuration is unsupported. Reinitialize module configuration.",
+          );
+        }
         const definition = catalog.definitions.find(
           ({ manifest }) => manifest.definitionId === config.definitionId,
         );
         if (definition === undefined) {
           throw new Error(`Unknown module definition: ${config.definitionId}`);
         }
+        const settings = definition.manifest.settingsSchema.safeParse(
+          config.definitionId === "agent.heartflow.online"
+            ? {
+                ...config.settings,
+                botNames: [identity.name, ...identity.aliases],
+              }
+            : config.settings,
+        );
+        if (!settings.success) {
+          throw new Error(
+            "Module settings failed validation. Reinitialize module configuration.",
+          );
+        }
         return Object.freeze({
           instanceId: config.instanceId,
           definitionId: config.definitionId,
           enabled: config.enabled,
-          settings: definition.manifest.settingsSchema.parse(
-            config.definitionId === "agent.heartflow.online"
-              ? {
-                  ...config.settings,
-                  botNames: [identity.name, ...identity.aliases],
-                }
-              : config.settings,
-          ),
+          settings: settings.data,
         });
       })
       .filter((activation) => activation.enabled),

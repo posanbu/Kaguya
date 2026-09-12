@@ -1,15 +1,19 @@
 /**
  * 功能概述：本文件声明 modules 包拥有的消息 DAG kind，包括入站、Heartbeat、Heartflow
- * claim/context/terminal、speech decision、回复、Memory、身份、assistant 与平台投递请求。
+ * claim/context/terminal、speech decision、消息意图、Memory、身份、assistant 与平台投递请求。
  * 主要职责：每个 definition 固定 payload 的严格 schema 和直接因果/context 引用规则；
- * `personFactCandidateInformationKind` 表示待提取的非 reply 账本来源，
+ * `personFactCandidateInformationKind` 表示待提取的账本来源，
  * `personFactExtractedInformationKind` 表示模块验证后的业务事实；模块 Kind 由各自 Manifest
  * 的 consumes / produces 声明，不在此维护独立注册清单。
- * 代码库关系：Heartflow 的 speak 分支是默认回复请求生产路径；LLM 回复模块消费回复请求、外部
+ * 代码库关系：Heartflow 的 attend 分支只产生消息意图；composer 消费意图、外部
  * 注入的 Model Task completed definition 与 assistant，person-fact 模块消费候选与通用 completed，
  * 随后产生各自后续 kind；Runtime 负责通用
  * Model Task 生命周期和投递结果 kind，不能重新定义本文件已经拥有的 literal kind；assistant payload
  * 记录 originating module instance，使全量广播后的下一阶段只由原实例派生。
+ * 协议边界：intent 严格要求 target、turn、memoryInformationIds，不携带入站正文或回复标记；
+ * inbound schema 独立保留入站来源，assistant source 只记录目标及可选 selfId/已投递消息 ID。
+ * messageTargetSchema/MessageTarget 暴露可复用的显式目标契约；
+ * association route 固定为 message，其请求直接引用消息意图。
  * 输入输出与副作用：由 `defineInformationKind` 返回的 definition 为冻结的纯定义，无 I/O；
  * Zod schema 与数组仍按各自库的常规语义使用。payload 和引用在 Core 注册前受校验，模块宿主
  * 会自动补齐 `core:caused-by` 与继承的 `core:context`。
@@ -108,23 +112,36 @@ const turnProvenanceSchema = z
   })
   .strict();
 
-export const replyRequestedInformationPayloadSchema = z
+export const messageTargetSchema = z
   .object({
-    text: z.string(),
-    source: messageSourceSchema,
-    turn: turnProvenanceSchema.optional(),
-    memoryInformationIds: z.array(nonBlankString).optional(),
+    adapterId: nonBlankString,
+    platform: nonBlankString,
+    destination: platformDestinationSchema,
   })
-  .strict() as any;
-export type ReplyRequestedInformationPayload = z.infer<
-  typeof replyRequestedInformationPayloadSchema
+  .strict();
+
+export type MessageTarget = z.infer<typeof messageTargetSchema>;
+
+export const inboundTextInformationPayloadSchema = z
+  .object({ text: z.string(), source: messageSourceSchema })
+  .strict();
+
+export const messageIntentRequestedInformationPayloadSchema = z
+  .object({
+    target: messageTargetSchema,
+    turn: turnProvenanceSchema,
+    memoryInformationIds: z.array(nonBlankString),
+  })
+  .strict();
+export type MessageIntentRequestedInformationPayload = z.infer<
+  typeof messageIntentRequestedInformationPayloadSchema
 >;
 
 export const inboundTextInformationKind = defineInformationKind({
   kind: "core.message.inbound.text",
   displayName: "Core Message Inbound Text",
   description: "Information carried by the core.message.inbound.text kind.",
-  payloadSchema: replyRequestedInformationPayloadSchema,
+  payloadSchema: inboundTextInformationPayloadSchema,
   references: {
     "core:context": {
       required: true,
@@ -147,11 +164,12 @@ export const inboundTextInformationKind = defineInformationKind({
   },
 });
 
-export const replyRequestedInformationKind = defineInformationKind({
-  kind: "core.reply.requested",
-  displayName: "Core Reply Requested",
-  description: "Information carried by the core.reply.requested kind.",
-  payloadSchema: replyRequestedInformationPayloadSchema,
+export const messageIntentRequestedInformationKind = defineInformationKind({
+  kind: "agent.message.intent.requested",
+  displayName: "Agent Message Intent Requested",
+  description:
+    "Information carried by the agent.message.intent.requested kind.",
+  payloadSchema: messageIntentRequestedInformationPayloadSchema,
   references: {
     "core:caused-by": {
       required: true,
@@ -169,12 +187,12 @@ export const replyRequestedInformationKind = defineInformationKind({
       targetKinds: ["agent.turn.context.completed"],
     },
     "agent:turn-claim": {
-      required: false,
+      required: true,
       multiple: false,
       targetKinds: ["agent.turn.claimed"],
     },
     "agent:turn-candidate": {
-      required: false,
+      required: true,
       multiple: false,
       targetKinds: ["agent.turn.candidate"],
     },
@@ -183,12 +201,11 @@ export const replyRequestedInformationKind = defineInformationKind({
     enabled: true,
     level: "info",
     project: ({ payload }) => {
-      const input = payload as any;
+      const input = payload;
       return {
-        event: "reply.requested",
-        adapterId: input.source.adapterId,
-        platform: input.source.platform,
-        ...contentPreview(input.text),
+        event: "message.intent.requested",
+        adapterId: input.target.adapterId,
+        platform: input.target.platform,
       };
     },
   },
@@ -256,7 +273,7 @@ export const coreMemoryTextInformationKind = defineInformationKind({
   },
 });
 
-const associationRouteSchema = z.literal("reply");
+const associationRouteSchema = z.literal("message");
 const associationMethodSchema = z.literal("sparse-2gram");
 const associationStatusSchema = z.enum([
   "matched",
@@ -311,7 +328,7 @@ export const associationRequestedInformationKind = defineInformationKind({
     "core:caused-by": {
       required: true,
       multiple: false,
-      targetKinds: [replyRequestedInformationKind.kind],
+      targetKinds: [messageIntentRequestedInformationKind.kind],
     },
     "core:context": {
       required: true,
@@ -577,7 +594,17 @@ export const assistantTextInformationKind = defineInformationKind({
   payloadSchema: z
     .object({
       text: z.string(),
-      source: messageSourceSchema,
+      source: messageTargetSchema
+        .extend({
+          selfId: nonBlankString.optional(),
+          platformMessageId: nonBlankString.optional(),
+        })
+        .strict() as z.ZodType<
+        MessageTarget & {
+          selfId?: string;
+          platformMessageId?: string;
+        }
+      >,
       originatingModuleInstanceId: nonBlankString,
       turn: turnProvenanceSchema.nullable(),
     })

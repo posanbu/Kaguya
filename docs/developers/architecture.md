@@ -50,10 +50,10 @@ flowchart LR
   Heartflow --> Turn[Immutable turn context]
   Turn --> Speech[Speak / wait / silent decision]
   Speech --> Heartflow
-  Heartflow -->|speak| Reply[core.reply.requested]
+  Heartflow -->|speak| Intent[agent.message.intent.requested]
   Heartflow -->|wait| Wait[agent.wait.requested]
   Heartflow -->|silent| Silent[agent.turn.silent]
-  Reply --> LLM[Model Task / assistant / delivery]
+  Intent --> LLM[Model Task / assistant / delivery]
   Broadcast -->|消费者失败| Failed[consumer.failed]
 ```
 
@@ -78,7 +78,7 @@ core.runtime.context
   -> agent.turn.started
   -> agent.turn.context.completed
   -> agent.attention.arousal.completed
-     -> speak: core.reply.requested -> core.model.task.* -> core.message.assistant.text
+     -> speak: agent.message.intent.requested -> core.model.task.* -> core.message.assistant.text
                -> core.delivery.requested -> core.delivery.delivered | core.delivery.failed
                -> agent.turn.completed | agent.turn.failed
                -> core.model.task.failed | cancelled -> agent.turn.failed
@@ -86,7 +86,7 @@ core.runtime.context
      -> silent: agent.turn.silent
 ```
 
-同一 destination scope 的 claim 带单调 generation。新 candidate 若在旧 claim 作出 speech decision 前到达，会先赢得旧 claim 的 decision gate，再写入旧 turn 的 `superseded` 终态；旧分支不能继续产生 reply。Heartflow 等到 candidate 引用的每条 inbound 都具有 identity terminal，才冻结多输入 turn context。`speak`、`wait`、`silent` 只由 Heartflow 分派，默认链中没有 inbound 直达 turn context、always-reply 或 speech-to-reply 桥接旁路。
+同一 destination scope 的 claim 带单调 generation。新 candidate 若在旧 claim 作出 speech decision 前到达，会先赢得旧 claim 的 decision gate，再写入旧 turn 的 `superseded` 终态；旧分支不能继续产生 message intent。Heartflow 等到 candidate 引用的每条 inbound 都具有 identity terminal，才冻结多输入 turn context。`speak`、`wait`、`silent` 只由 Heartflow 分派，默认链中没有 inbound 直达 turn context、always-reply 或 speech-to-reply 桥接旁路。
 
 每条派生边都带有直接输入的 `core:caused-by` 引用，并继承唯一的 `core:context`。跨入站合并时，模块只能把 context 重定位到当前 handler 通过声明式 Selector 选出的 `core.runtime.context`。Model Task、消费者重试耗尽和投递失败都是账本事实；平台发送成功后注册 `core.delivery.delivered`，并由 Heartflow 写入唯一 turn terminal。
 

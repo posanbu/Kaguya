@@ -48,7 +48,7 @@ Gateway Token 不写入 runtime，也不是 runtime 的合法字段。它在每�
 
 **Profile 名称** — 1 至 100 个字符，用于人类识别；Profile ID 是系统生成的稳定标识。
 
-**Agent 身份** — `identity.name`、至少一个 `identity.aliases` 和 `identity.persona` 都是必填项。别名会 trim、去重，且不能与主名字相同。Reply Prompt 和 Heartflow 提及识别统一使用这里的名字与别名；平台自己的账号仍取当前消息的 `selfId`。旧 Profile 缺少 `identity` 时会明确报告配置不完整，不会自动迁移。可手工补充：
+**Agent 身份** — `identity.name`、至少一个 `identity.aliases` 和 `identity.persona` 都是必填项。别名会 trim、去重，且不能与主名字相同。Message Prompt 和 Heartflow 提及识别统一使用这里的名字与别名；平台自己的账号仍取当前消息的 `selfId`。旧 Profile 缺少 `identity` 时会明确报告配置不完整，不会自动迁移。可手工补充：
 
 ```json
 "identity": {
@@ -80,6 +80,10 @@ Gateway Token 不写入 runtime，也不是 runtime 的合法字段。它在每�
 
 每个 `<KAGUYA_CONFIG_ROOT>/modules/<instanceId>/config.json` 必须显式包含 `version`、`instanceId`、`definitionId`、`enabled` 和完整 `settings`。修改后重启；当前不提供 HTTP 或 Web 管理接口。
 
+默认消息生成实例为 `message-composer.default`，模块定义为 `agent.message-composer`，settings 只包含 `modelTier`。投递目标来自 Message Intent，不再配置 source/fixed outbound 或默认 reply 引用模式。
+
+升级前请备份 `<KAGUYA_CONFIG_ROOT>/modules/`，然后移走旧模块目录，让下一次启动重新生成当前配置，再按当前 schema 恢复自定义参数。旧 reply 模块配置会明确拒绝启动；不会自动迁移。旧 `llm-reply.*.local.hbs` 也不再加载，请按新的 `message-composer.*.default.hbs` 模板重建本地覆盖。
+
 ## 本地覆盖 Prompt
 
 一方 Prompt 模板位于 `packages/modules/templates/`。把任意 `*.default.hbs` 复制为对应的 `*.local.hbs`，即可修改当前源码工作区的 Prompt；本地文件优先于默认文件，被 Git 忽略，且只在 Server 重启时重新读取。
@@ -88,7 +92,7 @@ Gateway Token 不写入 runtime，也不是 runtime 的合法字段。它在每�
 声明的变量可以不出现，也可以重复出现；未知变量、未知或动态 partial、自定义 helper、递归 partial、空文件和读取失败会使 Server 拒绝启动。只开放 `each`、`if`、`unless` 与固定静态 partial，不允许任意磁盘 include。动态内容按原文写入，不会自动添加 XML 包裹或进行逃逸，模板作者必须维护清晰的数据边界与安全提示。
 :::
 
-Reply 的层级固定为消息 partial → history/memory/quoted/target → 外层 `llm-reply`。历史最多 30 条；历史 12,000 字符和 Memory 4,000 字符预算按 Unicode code point 在消息层渲染后、集合层渲染前执行。可用变量和全部模板名记录在 `packages/modules/src/first-party/llm-reply/README.md`。
+Message Composer 的层级为消息 partial → 历史、Memory、引用上下文与完整当前 turn → 外层 `message-composer`。当前 turn 不指定一条必须回答的目标消息。历史最多 30 条；历史 12,000 字符和 Memory 4,000 字符预算按 Unicode code point 在消息层渲染后、集合层渲染前执行。可用变量和全部模板名记录在 `packages/modules/src/first-party/message-composer/README.md`。
 
 ## 管理多个 Profile
 

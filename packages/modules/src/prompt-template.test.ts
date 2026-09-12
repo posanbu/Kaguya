@@ -1,3 +1,8 @@
+/**
+ * 功能概述：验证受限 Handlebars 编译器的模板语法、变量使用和 provenance。
+ * 主要职责：通过 compilePromptTemplateSet 与 createPromptTemplateRenderer 检查重复变量、静态 partial 及非法语法。
+ * 输入输出与副作用：在内存中编译 message Prompt，不访问模型或账本；未知变量和越界模板应抛错。
+ */
 import { describe, expect, it } from "vitest";
 
 import {
@@ -13,7 +18,7 @@ const variables = [
 describe("restricted Handlebars Prompt templates", () => {
   it("allows zero and repeated references, renders raw content, and tracks used variables once", () => {
     const render = createPromptTemplateRenderer({
-      kind: "reply",
+      kind: "message",
       templateId: "test.reply",
       main: {
         name: "main",
@@ -57,7 +62,7 @@ describe("restricted Handlebars Prompt templates", () => {
 
   it("does not escape dynamic content", () => {
     const render = createPromptTemplateRenderer({
-      kind: "reply",
+      kind: "message",
       templateId: "test.raw",
       main: {
         name: "main",

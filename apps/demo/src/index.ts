@@ -9,7 +9,7 @@
  * 输入输出与副作用：CLI 会建立一个 PostgreSQL 连接、准备 schema、写入账本并输出统计；
  * 连接或运行失败只输出安全错误类型，不回显数据库 URL 或原始异常。
  */
-import { createReplyComposition } from "./runtime-composition.js";
+import { createMessageComposition } from "./runtime-composition.js";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -62,7 +62,7 @@ export async function runDemo(
   options: RunDemoOptions,
 ): Promise<InboundReceipt> {
   const runtime = new KaguyaRuntime({
-    ...createReplyComposition(undefined, {
+    ...createMessageComposition(undefined, {
       moduleConfigs: options.moduleConfigs,
     }),
     database: options.database,

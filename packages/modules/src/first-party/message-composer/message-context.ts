@@ -1,11 +1,9 @@
 /**
- * 功能概述：声明 reply 模块的显式上下文选择，并把已选择账本原子编译为 Prompt。
- * 主要职责：`turnReplyContextSelector` 从 reply 沿受控引用找到冻结 turn 与它列出的 Memory；
- * `associationReplyContextSelector` 保留可选的 association 审计读取策略；渲染器提供 manifest 身份，
- * Prompt 组装器区分同会话历史、已投递 assistant、Memory、引用与目标消息并保留 provenance。
- * 代码库关系：`llm-reply.ts` 使用这里的 Selector；Engine 负责校验并重新加载结果，
- * 模块模板负责产生可持久化的 variable provenance。
- * 输入输出与副作用：选择器只读账本，不保存会话键或跨请求状态；编译本身是纯函数。
+ * 功能概述：消息编写模块的受控账本选择器及 Prompt 预览入口，不参与 Heartflow 的发言决策。
+ * 主要职责：turnMessageContextSelector 核对 intent→turn 引用并保留全部冻结输入；仅辅助历史受预算限制，
+ * 已投递 assistant 才可进入历史，每条输入独立查询引用上下文。associationMessageContextSelector 校验关联终态因果。
+ * 代码库关系：index.ts 声明选择器与渲染器，message-prompt 使用冻结快照编译；Engine 按返回 ID 重载事实。
+ * 输入输出与副作用：只读 ledger、返回去重 ID；缺少 turn、输入或记忆授权时抛错，不回退到复制的末条正文。
  */
 import type {
   CompiledPrompt,
@@ -27,82 +25,77 @@ import {
   associationQueryInformationKind,
   associationRequestedInformationKind,
   inboundTextInformationKind,
-  replyRequestedInformationKind,
-  replyRequestedInformationPayloadSchema,
+  messageIntentRequestedInformationKind,
+  messageIntentRequestedInformationPayloadSchema,
 } from "../information-kinds.js";
 import {
-  compileReplyPrompt,
+  compileMessagePrompt,
   fitHistoryBudget,
-  fitMemoryBudget,
+  frozenTurnInputs,
   renderHistoryAtom,
   type AgentIdentity,
-  type ReplyPromptTemplates,
-} from "./reply-prompt.js";
+  type MessagePromptTemplates,
+} from "./message-prompt.js";
 
 export const currentAcceptedMessageSelector = defineInformationSelector({
-  selectorId: "core.reply.current-accepted-message",
+  selectorId: "agent.message.current-intent",
   select: ({ sourceAtom }) => [sourceAtom.informationId],
 });
 
-export const turnReplyContextSelector = defineInformationSelector({
-  selectorId: "agent.reply.frozen-turn-context",
+export const turnMessageContextSelector = defineInformationSelector({
+  selectorId: "agent.message.frozen-turn-context",
   select: async ({ sourceAtom, ledger }) => {
+    const intent = messageIntentRequestedInformationPayloadSchema.parse(
+      sourceAtom.payload,
+    );
     const turns = (
       await ledger.related({
         from: [sourceAtom.informationId],
         relation: "core:uses-context",
         direction: "outgoing",
-        limit: 10,
+        limit: 1000,
       })
-    ).filter(({ kind }) => kind === "agent.turn.context.completed");
-    if (turns.length !== 1) return [sourceAtom.informationId];
+    ).filter((atom) => atom.kind === "agent.turn.context.completed");
+    if (
+      turns.length !== 1 ||
+      turns[0]!.informationId !== intent.turn.contextInformationId
+    )
+      throw new Error("Message intent must reference its frozen turn context");
     const turn = turns[0]!;
-    const payload = turn.payload as any;
-    const memoryIds = new Set<string>(
-      Array.isArray(payload.memory) ? payload.memory : [],
-    );
+    const inputs = frozenTurnInputs([turn], intent);
     const context = await ledger.related({
       from: [turn.informationId],
       relation: "core:uses-context",
       direction: "outgoing",
-      limit: 1_000,
+      limit: 1000,
     });
-    const contextById = new Map(
-      context.map((atom) => [atom.informationId, atom] as const),
-    );
-    const inputIds = Array.isArray(payload.inputs)
-      ? payload.inputs.map((input: any) => input.informationId as string)
-      : [];
-    const targetInputId = inputIds.at(-1);
-    const immediate = inputIds
-      .slice(0, -1)
-      .map((id: string) => contextById.get(id))
-      .filter(
-        (
-          atom: DeepReadonly<InformationAtom> | undefined,
-        ): atom is DeepReadonly<InformationAtom> =>
-          atom?.kind === inboundTextInformationKind.kind,
-      );
-    const replyPayload = replyRequestedInformationPayloadSchema.parse(
-      sourceAtom.payload,
-    );
+    const byId = new Map(context.map((atom) => [atom.informationId, atom]));
+    for (const input of inputs) {
+      if (
+        byId.get(input.informationId)?.kind !== inboundTextInformationKind.kind
+      )
+        throw new Error(
+          `Missing frozen turn input reference: ${input.informationId}`,
+        );
+    }
+    // 意图列出的记忆必须由冻结上下文授权，不从当前会话临时推测。
+    for (const id of intent.memoryInformationIds) {
+      if (!byId.has(id))
+        throw new Error(`Missing frozen memory reference: ${id}`);
+    }
+    const inputIds = new Set(inputs.map((atom) => atom.informationId));
+    const memoryIds = new Set(intent.memoryInformationIds);
     const recent = await ledger.find({
       kinds: [
         inboundTextInformationKind.kind,
         assistantTextInformationKind.kind,
       ],
-      occurredBefore: sourceAtom.occurredAt,
-      payloadContains: {
-        source: {
-          platform: replyPayload.source.platform,
-          adapterId: replyPayload.source.adapterId,
-          destination: replyPayload.source.destination,
-        },
-      },
+      occurredBefore: String(turn.payload.asOf),
+      payloadContains: { source: intent.target },
       order: "desc",
       limit: 120,
     });
-    const visibleRecent = (
+    const visible = (
       await Promise.all(
         recent.map(async (atom) =>
           atom.kind !== assistantTextInformationKind.kind ||
@@ -114,62 +107,55 @@ export const turnReplyContextSelector = defineInformationSelector({
     ).filter(
       (atom): atom is DeepReadonly<InformationAtom> => atom !== undefined,
     );
-    const quotedId = replyPayload.source.replyTo?.platformMessageId;
-    let quoted =
-      quotedId === undefined
-        ? undefined
-        : visibleRecent.find(
-            (atom) => platformMessageIdentifier(atom) === quotedId,
-          );
-    if (quotedId !== undefined && quoted === undefined) {
-      const candidates = await ledger.find({
-        kinds: [
-          inboundTextInformationKind.kind,
-          assistantTextInformationKind.kind,
-        ],
-        payloadContains: {
-          source: {
-            platform: replyPayload.source.platform,
-            adapterId: replyPayload.source.adapterId,
-            destination: replyPayload.source.destination,
-            platformMessageId: quotedId,
-          },
-        },
-        order: "desc",
-        limit: 10,
-      });
-      const candidate = candidates.find(
-        (atom) => platformMessageIdentifier(atom) === quotedId,
-      );
+    const quotes: DeepReadonly<InformationAtom>[] = [];
+    for (const input of inputs) {
+      const quoteId = inboundTextInformationKind.payloadSchema.parse(
+        input.payload,
+      ).source.replyTo?.platformMessageId;
       if (
-        candidate !== undefined &&
-        (candidate.kind !== assistantTextInformationKind.kind ||
-          (await assistantWasDelivered(candidate, ledger)))
+        quoteId === undefined ||
+        inputs.some((atom) => platformMessageIdentifier(atom) === quoteId)
       )
-        quoted = candidate;
+        continue;
+      let quoted = visible.find(
+        (atom) => platformMessageIdentifier(atom) === quoteId,
+      );
+      if (!quoted) {
+        const found = await ledger.find({
+          kinds: [inboundTextInformationKind.kind],
+          occurredBefore: String(turn.payload.asOf),
+          payloadContains: {
+            source: { ...intent.target, platformMessageId: quoteId },
+          },
+          order: "desc",
+          limit: 1,
+        });
+        quoted = found[0];
+      }
+      if (quoted) quotes.push(quoted);
     }
     const history = fitHistoryBudget(
-      uniqueAtoms([...visibleRecent, ...immediate]).filter(
-        ({ informationId }) =>
-          informationId !== targetInputId &&
-          informationId !== quoted?.informationId &&
-          !memoryIds.has(informationId),
+      visible.filter(
+        (atom) =>
+          !inputIds.has(atom.informationId) &&
+          !memoryIds.has(atom.informationId),
       ),
     );
-    const memories = fitMemoryBudget(
-      context.filter(({ informationId }) => memoryIds.has(informationId)),
-    );
     return [
-      ...history.map(({ informationId }) => informationId),
-      ...memories.map(({ informationId }) => informationId),
-      ...(quoted === undefined ? [] : [quoted.informationId]),
-      sourceAtom.informationId,
+      ...new Set([
+        sourceAtom.informationId,
+        turn.informationId,
+        ...inputs.map((atom) => atom.informationId),
+        ...intent.memoryInformationIds,
+        ...history.map((atom) => atom.informationId),
+        ...quotes.map((atom) => atom.informationId),
+      ]),
     ];
   },
 });
 
-export const associationReplyContextSelector = defineInformationSelector({
-  selectorId: "kaguya.reply.association-context",
+export const associationMessageContextSelector = defineInformationSelector({
+  selectorId: "kaguya.message.association-context",
   select: async ({ sourceAtom, ledger }) => {
     const completed = associationCompletedInformationKind.payloadSchema.parse(
       sourceAtom.payload,
@@ -196,21 +182,26 @@ export const associationReplyContextSelector = defineInformationSelector({
     ) {
       throw new Error("Association terminal references are inconsistent");
     }
-    const replies = await related(
+    const intents = await related(
       ledger,
       request[0]!.informationId,
       "core:caused-by",
       "outgoing",
-      replyRequestedInformationKind.kind,
+      messageIntentRequestedInformationKind.kind,
     );
     if (
-      replies.length !== 1 ||
-      replies[0]!.informationId !== completed.sourceInformationId
+      intents.length !== 1 ||
+      intents[0]!.informationId !== completed.sourceInformationId
     ) {
-      throw new Error("Association terminal source reply is inconsistent");
+      throw new Error(
+        "Association terminal source message intent is inconsistent",
+      );
     }
     if (completed.status !== "matched") {
-      return [replies[0]!.informationId];
+      return turnMessageContextSelector.select({
+        sourceAtom: intents[0]!,
+        ledger,
+      });
     }
 
     const candidates = (
@@ -242,18 +233,29 @@ export const associationReplyContextSelector = defineInformationSelector({
       }
       memories.push(sources[0]!.informationId);
     }
-    return [...memories, replies[0]!.informationId];
+    return [
+      ...new Set([
+        ...memories,
+        ...(await turnMessageContextSelector.select({
+          sourceAtom: intents[0]!,
+          ledger,
+        })),
+      ]),
+    ];
   },
 });
 
-export const replyPromptRenderer: InformationPromptRendererDefinition =
+export const messagePromptRenderer: InformationPromptRendererDefinition =
   Object.freeze({
-    rendererId: "kaguya.reply.text",
-    displayName: "Reply text",
-    description: "Renders the current reply request as prompt context.",
-    kinds: [replyRequestedInformationKind],
+    rendererId: "kaguya.message.text",
+    displayName: "Message intent",
+    description:
+      "Renders the current message intent metadata as prompt context.",
+    kinds: [messageIntentRequestedInformationKind],
     render: (atom: DeepReadonly<InformationAtom>) =>
-      replyRequestedInformationPayloadSchema.parse(atom.payload).text,
+      JSON.stringify(
+        messageIntentRequestedInformationPayloadSchema.parse(atom.payload),
+      ),
   });
 export const memoryPromptRenderer: InformationPromptRendererDefinition =
   Object.freeze({
@@ -273,7 +275,7 @@ export const inboundMemoryPromptRenderer: InformationPromptRendererDefinition =
       "Renders a selected historical inbound message as prompt context.",
     kinds: [inboundTextInformationKind],
     render: (atom: DeepReadonly<InformationAtom>) => {
-      const payload = replyRequestedInformationPayloadSchema.parse(
+      const payload = inboundTextInformationKind.payloadSchema.parse(
         atom.payload,
       );
       const destination = payload.source.destination;
@@ -301,13 +303,13 @@ export const assistantHistoryPromptRenderer: InformationPromptRendererDefinition
       }),
   });
 
-export function compileReplyPromptFromInformation(
-  templates: ReplyPromptTemplates,
+export function compileMessagePromptFromInformation(
+  templates: MessagePromptTemplates,
   identity: AgentIdentity,
   atoms: readonly DeepReadonly<InformationAtom>[],
   sourceInformationId: InformationId,
 ): CompiledPrompt {
-  return compileReplyPrompt(templates, identity, atoms, sourceInformationId);
+  return compileMessagePrompt(templates, identity, atoms, sourceInformationId);
 }
 
 async function related(
@@ -332,12 +334,6 @@ function candidateRank(atom: DeepReadonly<InformationAtom>): number {
     atom.payload,
   );
   return payload.rank;
-}
-
-function uniqueAtoms(
-  atoms: readonly DeepReadonly<InformationAtom>[],
-): readonly DeepReadonly<InformationAtom>[] {
-  return [...new Map(atoms.map((atom) => [atom.informationId, atom])).values()];
 }
 
 async function assistantWasDelivered(

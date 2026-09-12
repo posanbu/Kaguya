@@ -92,8 +92,8 @@ async function fixture(durable = false) {
     content: atom.payload.text,
   }));
   const prompt = {
-    kind: "reply" as const,
-    templateId: "test.reply.v1",
+    kind: "message" as const,
+    templateId: "test.message.v1",
     templates: [{ name: "main", content: "{{context_0}}\n{{context_1}}" }],
     text: variables.map(({ content }) => content).join("\n"),
     variables,

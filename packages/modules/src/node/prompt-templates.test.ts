@@ -1,3 +1,10 @@
+/**
+ * 功能概述：负责第一方消息编写和人物事实模板的 Node 文件加载与验证（或其回归测试）。
+ * 主要职责：loadFirstPartyPromptTemplates 返回 messageComposer/personFact；优先 local 覆盖并保留空白，
+ * 缺失 local 才回退 default，空模板、读取错误和模板编译错误直接失败。
+ * 代码库关系：message-prompt 提供编译校验，templates/message-composer.* 提供各层布局；Runtime 消费结果。
+ * 输入输出与副作用：只读模板文件；测试使用临时目录验证覆盖策略并在结束后清理。
+ */
 import {
   mkdirSync,
   mkdtempSync,
@@ -27,27 +34,30 @@ describe("loadFirstPartyPromptTemplates", () => {
   it("prefers local files and preserves whitespace", () => {
     const directory = root();
     writeDefaults(directory.path);
-    writeFileSync(join(directory.path, "llm-reply.local.hbs"), "  local\n");
+    writeFileSync(
+      join(directory.path, "message-composer.local.hbs"),
+      "  local\n",
+    );
 
     const loaded = loadFirstPartyPromptTemplates({ root: directory.url });
-    expect(loaded.llmReply.main).toBe("  local\n");
-    expect(loaded.llmReply.history).toBe("llm-reply.history");
+    expect(loaded.messageComposer.main).toBe("  local\n");
+    expect(loaded.messageComposer.history).toBe("message-composer.history");
     expect(loaded.personFact).toBe("person-fact");
   });
 
   it("rejects an empty selected template", () => {
     const directory = root();
     writeDefaults(directory.path);
-    writeFileSync(join(directory.path, "llm-reply.local.hbs"), "");
+    writeFileSync(join(directory.path, "message-composer.local.hbs"), "");
     expect(() =>
       loadFirstPartyPromptTemplates({ root: directory.url }),
-    ).toThrow("Prompt template is empty: llm-reply");
+    ).toThrow("Prompt template is empty: message-composer");
   });
 
   it("does not hide a local-template read failure behind the default", () => {
     const directory = root();
     writeDefaults(directory.path);
-    mkdirSync(join(directory.path, "llm-reply.local.hbs"));
+    mkdirSync(join(directory.path, "message-composer.local.hbs"));
     expect(() =>
       loadFirstPartyPromptTemplates({ root: directory.url }),
     ).toThrow();
@@ -67,14 +77,14 @@ describe("loadFirstPartyPromptTemplates", () => {
 });
 
 const templateNames = [
-  "llm-reply",
-  "llm-reply.history",
-  "llm-reply.history-inbound",
-  "llm-reply.history-assistant",
-  "llm-reply.memory",
-  "llm-reply.memory-item",
-  "llm-reply.quoted",
-  "llm-reply.target",
+  "message-composer",
+  "message-composer.history",
+  "message-composer.history-inbound",
+  "message-composer.history-assistant",
+  "message-composer.memory",
+  "message-composer.memory-item",
+  "message-composer.quoted",
+  "message-composer.turn",
   "person-fact",
 ] as const;
 

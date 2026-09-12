@@ -20,7 +20,7 @@ import {
 import { KaguyaDatabase, SUPPORTED_POSTGRES_MAJOR } from "@kaguya/database";
 import { runtimeInformationKindNames } from "@kaguya/runtime";
 
-import { createReplyCatalog } from "./runtime-composition.js";
+import { createMessageCatalog } from "./runtime-composition.js";
 
 export const MANAGED_POSTGRES_IMAGE = "postgres:17-alpine";
 export const MANAGED_POSTGRES_CONTAINER = "kaguya-postgres-17";
@@ -587,7 +587,7 @@ async function checkDatabase(
     if (options.prepareSchema) {
       await database.prepareSchema();
       await database.information.synchronizeKinds(
-        runtimeInformationKindNames(createReplyCatalog()),
+        runtimeInformationKindNames(createMessageCatalog()),
       );
     }
   } catch {

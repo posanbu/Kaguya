@@ -28,15 +28,15 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 
 const testIdentity = { name: "Kaguya", aliases: ["辉夜"], persona: "test" };
-const testReplyTemplates = {
-  main: "{{scene}}{{history}}{{memory}}{{quoted}}{{target}}",
+const testMessageTemplates = {
+  main: "{{scene}}{{history}}{{memory}}{{turn}}",
   history: "{{#each messages}}{{> history-inbound}}{{/each}}",
   historyInbound: "{{content}}",
   historyAssistant: "{{content}}",
   memory: "{{#each items}}{{> memory-item}}{{/each}}",
   memoryItem: "{{content}}",
   quoted: "{{message}}",
-  target: "{{content}}",
+  turn: "{{#each messages}}{{> history-inbound}}{{/each}}",
 };
 
 import {
@@ -80,7 +80,7 @@ describe("KaguyaRuntime one-shot scheduler lifecycle", () => {
         deliveryDeliveredInformationKind,
         deliveryFailedInformationKind,
         executionExhaustedInformationKind,
-        promptTemplates: testReplyTemplates,
+        promptTemplates: testMessageTemplates,
         agentIdentity: testIdentity,
       }),
       activations: [],
@@ -135,7 +135,7 @@ describe("KaguyaRuntime one-shot scheduler lifecycle", () => {
       deliveryDeliveredInformationKind,
       deliveryFailedInformationKind,
       executionExhaustedInformationKind,
-      promptTemplates: testReplyTemplates,
+      promptTemplates: testMessageTemplates,
       agentIdentity: testIdentity,
     });
     const runtime = new KaguyaRuntime({
@@ -149,8 +149,8 @@ describe("KaguyaRuntime one-shot scheduler lifecycle", () => {
         approvals: [
           {
             activation: {
-              instanceId: "reply.default",
-              definitionId: "demo.reply.llm",
+              instanceId: "message-composer.default",
+              definitionId: "agent.message-composer",
             },
             selectionPolicy: { tier: "heavy" },
           },
