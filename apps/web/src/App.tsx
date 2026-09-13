@@ -1,4 +1,5 @@
 /**
+ * ProfileWorkspace 提供全局编辑 ID 与操作锁，配置页保持单栏，保存/选择/应用独立。
  * Profile 表单用两个独立文本框编辑入站与出站规则，保存后仍须显式应用。
  * 功能概述：本文件承载 WebUI 的顶层状态机，在访问链接认证、Profile 管理、
  * 配置生效管理与消息聊天之间做显式切换，落实“全局 selected Profile 唯一生效、
@@ -29,6 +30,11 @@
  * DeveloperConsole 负责只读查询与取消，401 继续由本文件统一锁屏。
  */
 import { AppShell, useWorkbenchRouter } from "./components/AppShell.js";
+import {
+  ProfileWorkspace,
+  ProfileSwitcher,
+  useProfileWorkspace,
+} from "./ProfileWorkspace.js";
 import { PageHeader } from "./components/ui.js";
 import { DeveloperConsole, developerPage } from "./DeveloperConsole.js";
 
@@ -42,7 +48,6 @@ import {
   LoaderCircle,
   LockKeyhole,
   Moon,
-  Plus,
   RefreshCw,
   Save,
   SendHorizontal,
@@ -62,7 +67,6 @@ import {
 import { ConfigurationApplicationScreen } from "./ConfigurationApplicationScreen.js";
 import {
   checkGatewayHealth,
-  createProfile,
   deleteProfile,
   discoverModels,
   GatewayConfig,
@@ -455,14 +459,21 @@ export function App() {
     );
   };
   return (
-    <AppShell
-      currentPath={path}
-      onNavigate={navigate}
-      registerNavigationGuard={register}
-      actions={<ThemeToggle />}
+    <ProfileWorkspace
+      token={token}
+      status={configurationStatus!}
+      reload={() => loadConfigurationStatus({ keepProfilesOpen: true })}
     >
-      {renderPage()}
-    </AppShell>
+      <AppShell
+        currentPath={path}
+        onNavigate={navigate}
+        registerNavigationGuard={register}
+        profileSlot={<ProfileSwitcher />}
+        actions={<ThemeToggle />}
+      >
+        {renderPage()}
+      </AppShell>
+    </ProfileWorkspace>
   );
 }
 
@@ -489,16 +500,17 @@ function ProfileManagementScreen({
     () => readRegistryMetadata(initialStatus),
   );
   const [statusSnapshot, setStatusSnapshot] = useState(initialStatus);
-  const [openedProfileId, setOpenedProfileId] = useState<string | undefined>(
-    initialStatus?.selectedProfileId,
-  );
+  const workspace = useProfileWorkspace();
+  const {
+    editingId: openedProfileId,
+    setEditingId: setOpenedProfileId,
+    mutating,
+    setMutating,
+  } = workspace;
   const [loadedProfile, setLoadedProfile] = useState<UserConfigProfile>();
   const [editorFields, setEditorFields] = useState<ProfileEditorFields>();
   const [showApiKey, setShowApiKey] = useState(false);
   const [loadingProfile, setLoadingProfile] = useState(false);
-  const [mutating, setMutating] = useState(false);
-  const [createExpanded, setCreateExpanded] = useState(false);
-  const [createName, setCreateName] = useState("");
   const [panelError, setPanelError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const requestSequence = useRef(0);
@@ -518,9 +530,6 @@ function ProfileManagementScreen({
     const nextRegistry = readRegistryMetadata(initialStatus);
     setRegistry(nextRegistry);
     setStatusSnapshot(initialStatus);
-    setOpenedProfileId(
-      (current) => current ?? initialStatus?.selectedProfileId,
-    );
   }, [initialStatus]);
 
   useEffect(() => {
@@ -567,7 +576,6 @@ function ProfileManagementScreen({
     return <ConfigurationLoading />;
   }
 
-  const canClose = statusSnapshot?.status === "ready";
   const readinessIssues = statusSnapshot?.issues ?? [];
   const readinessWarnings = statusSnapshot?.warnings ?? [];
   const selectedProfileId = registry.selectedProfileId;
@@ -577,6 +585,7 @@ function ProfileManagementScreen({
     openedProfileId === selectedProfileId;
   const saveDisabled =
     mutating ||
+    workspace.applying ||
     loadingProfile ||
     loadedProfile === undefined ||
     editorFields === undefined;
@@ -614,38 +623,6 @@ function ProfileManagementScreen({
     onStatusChange(status);
     return status;
   }
-
-  const handleOpenProfile = (profileId: string) => {
-    setOpenedProfileId(profileId);
-    clearLoadedProfileState();
-    setPanelError(undefined);
-    setNotice(undefined);
-  };
-
-  const handleCreateProfile = async () => {
-    if (createName.trim().length === 0) {
-      setPanelError("Profile name is required.");
-      return;
-    }
-    setMutating(true);
-    setPanelError(undefined);
-    setNotice(undefined);
-    try {
-      const result = await createProfile(config, { name: createName });
-      const nextRegistry = await refreshRegistry();
-      setOpenedProfileId(result.profile.id);
-      setLoadedProfile(result.profile);
-      setEditorFields(profileToEditorFields(result.profile));
-      setCreateExpanded(false);
-      setCreateName("");
-      setRegistry(nextRegistry);
-      setNotice("Profile created. Select it separately to make it active.");
-    } catch (error) {
-      setPanelError(errorMessage(error));
-    } finally {
-      setMutating(false);
-    }
-  };
 
   const handleSaveProfile = async () => {
     if (loadedProfile === undefined || editorFields === undefined) {
@@ -769,106 +746,17 @@ function ProfileManagementScreen({
 
   return (
     <div className="setup-shell">
-      <header className="topbar">
-        <BrandIdentity subtitle="配置引导" />
-        <div className="topbar-spacer" />
-        <ThemeToggle />
-      </header>
-
+      <PageHeader
+        title="配置"
+        description="在全局顶栏选择编辑对象；保存、设为当前与应用分别操作。"
+        actions={
+          <button type="button" className="secondary-button" onClick={onClose}>
+            返回消息
+          </button>
+        }
+      />
       <main className="setup-main profile-main">
-        <div className="profile-workspace">
-          <aside
-            className="setup-card profile-sidebar"
-            aria-labelledby="profiles-title"
-          >
-            <div className="panel-heading profile-sidebar-heading">
-              <div>
-                <p className="eyebrow">第一步</p>
-                <h2 id="profiles-title">选择配置</h2>
-              </div>
-              {canClose ? (
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={() => {
-                    clearLoadedProfileState();
-                    onClose();
-                  }}
-                >
-                  返回消息
-                </button>
-              ) : null}
-            </div>
-
-            <div className="profile-create">
-              <button
-                type="button"
-                className="secondary-button"
-                disabled={mutating}
-                onClick={() => {
-                  setCreateExpanded((current) => !current);
-                  setPanelError(undefined);
-                }}
-              >
-                <Plus size={16} />
-                <span>新建 Profile</span>
-              </button>
-              {createExpanded ? (
-                <div className="profile-create-form">
-                  <label className="field compact-field">
-                    <span>Profile 名称</span>
-                    <input
-                      value={createName}
-                      onChange={(event) => setCreateName(event.target.value)}
-                      placeholder="例如：生产环境"
-                      autoComplete="off"
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    className="setup-button inline-button"
-                    disabled={mutating}
-                    onClick={() => void handleCreateProfile()}
-                  >
-                    {mutating ? (
-                      <LoaderCircle className="spin" size={16} />
-                    ) : (
-                      <Plus size={16} />
-                    )}
-                    <span>{mutating ? "创建中" : "创建"}</span>
-                  </button>
-                </div>
-              ) : null}
-            </div>
-
-            <div className="profile-list" role="list">
-              {registry.profiles.map((profile) => {
-                const active = profile.id === openedProfileId;
-                const selected = profile.id === selectedProfileId;
-                return (
-                  <button
-                    key={profile.id}
-                    type="button"
-                    className={`profile-list-item${active ? " active" : ""}`}
-                    onClick={() => handleOpenProfile(profile.id)}
-                  >
-                    <span className="profile-list-name">{profile.name}</span>
-                    <span className="profile-list-meta">
-                      {selected ? "当前选中" : "可用配置"}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-
-            <ReadinessPanel
-              selectedProfileId={selectedProfileId}
-              status={statusSnapshot?.status ?? "invalid"}
-              issues={readinessIssues}
-              warnings={readinessWarnings}
-            />
-          </aside>
-
+        <div className="profile-workspace profile-single-column">
           <section
             className="setup-card profile-editor-card"
             aria-labelledby="profile-editor-title"
@@ -894,7 +782,11 @@ function ProfileManagementScreen({
                 <button
                   type="button"
                   className="secondary-button"
-                  disabled={openedProfileId === undefined || mutating}
+                  disabled={
+                    openedProfileId === undefined ||
+                    mutating ||
+                    workspace.applying
+                  }
                   onClick={() => void handleSelectProfile()}
                 >
                   选为当前配置
@@ -910,7 +802,7 @@ function ProfileManagementScreen({
                 <button
                   type="button"
                   className="danger-button"
-                  disabled={deleteDisabled || mutating}
+                  disabled={deleteDisabled || mutating || workspace.applying}
                   onClick={() => void handleDeleteProfile()}
                 >
                   <Trash2 size={16} />
@@ -924,6 +816,12 @@ function ProfileManagementScreen({
               仅保存，选为当前配置时再应用。
             </p>
 
+            <ReadinessPanel
+              selectedProfileId={selectedProfileId}
+              status={statusSnapshot?.status ?? "invalid"}
+              issues={readinessIssues}
+              warnings={readinessWarnings}
+            />
             {panelError ? (
               <div className="error-banner" role="alert">
                 <AlertCircle size={17} />
