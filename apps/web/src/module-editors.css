@@ -1,0 +1,65 @@
+/* 功能概述：模块通用表单和模板源码编辑区的响应式布局。
+ * 主要职责：输入独立成行、源码占满容器宽度，复用工作台按钮与主题颜色。
+ * 代码库关系：SettingsSection/TemplatesSection 引入；只限定 module-editor，避免影响其他页面。
+ * 输入输出与副作用：纯展示规则，无配置、存储或运行时行为。 */
+.module-editor {
+  margin-block: 24px;
+  min-width: 0;
+}
+.module-editor + .module-editor {
+  border-top: 1px solid var(--kaguya-line);
+  padding-top: 20px;
+}
+.module-editor fieldset {
+  border: 0;
+  padding: 0;
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+}
+.module-editor label {
+  display: grid;
+  gap: 8px;
+  font-weight: 600;
+}
+.module-editor label:has(input[type="checkbox"]) {
+  display: flex;
+  align-items: center;
+}
+.module-editor input:not([type="checkbox"]),
+.module-editor select,
+.module-editor textarea {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--kaguya-ink);
+  background: var(--kaguya-paper);
+  font: inherit;
+  font-weight: 400;
+}
+.module-editor textarea {
+  resize: vertical;
+  font-family: ui-monospace, monospace;
+  line-height: 1.6;
+  min-height: 90px;
+}
+.module-editor textarea[rows="12"] {
+  min-height: 280px;
+}
+.module-editor [readonly] {
+  background: var(--kaguya-paper-soft);
+}
+.module-editor .wb-button {
+  margin: 12px 8px 0 0;
+  justify-self: start;
+}
+.module-editor [role="alert"] {
+  color: var(--kaguya-coral-strong);
+}
+.module-editor [role="status"] {
+  padding: 12px;
+  border-left: 3px solid var(--kaguya-coral);
+  background: var(--kaguya-paper-soft);
+}

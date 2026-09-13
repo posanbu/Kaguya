@@ -1,4 +1,5 @@
 /**
+ * compilePromptTemplateSet 可用 cache:false 校验编辑候选而不保留缓存；纯空白源码被拒绝。
  * 受限 Handlebars Prompt 模板运行时。模板在 composition 阶段编译一次，运行时仅渲染；
  * 只开放静态 partial 与 each/if/unless，动态数据不做 HTML 转义。
  */
@@ -26,6 +27,7 @@ export interface CompiledPromptTemplateSet {
 
 export function compilePromptTemplateSet(
   definitions: readonly RestrictedPromptTemplate[],
+  options: { readonly cache?: boolean } = {},
 ): CompiledPromptTemplateSet {
   if (definitions.length === 0) throw new Error("Prompt template set is empty");
   const cacheKey = JSON.stringify(
@@ -36,7 +38,8 @@ export function compilePromptTemplateSet(
       allowedPartials: [...(definition.allowedPartials ?? [])],
     })),
   );
-  const cached = compiledTemplateCache.get(cacheKey);
+  const cached =
+    options.cache === false ? undefined : compiledTemplateCache.get(cacheKey);
   if (cached) return cached;
   const engine = Handlebars.create();
   const templates = new Map<string, HandlebarsTemplateDelegate>();
@@ -52,7 +55,7 @@ export function compilePromptTemplateSet(
       throw new Error(
         `Invalid or duplicate Prompt template: ${definition.name}`,
       );
-    if (definition.content.length === 0)
+    if (definition.content.trim().length === 0)
       throw new Error(`Prompt template is empty: ${definition.name}`);
     const analysis = analyzeTemplate(
       engine.parse(definition.content),
@@ -111,7 +114,7 @@ export function compilePromptTemplateSet(
       });
     },
   });
-  compiledTemplateCache.set(cacheKey, compiled);
+  if (options.cache !== false) compiledTemplateCache.set(cacheKey, compiled);
   return compiled;
 }
 

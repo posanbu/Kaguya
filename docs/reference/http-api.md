@@ -153,3 +153,19 @@ HTTP 日志不记录 Authorization、body、query 或消息正文。生产部署
 **`/api/v1/message-targets/confirm`** — 提交 `requestId`、`assistantInformationId` 和完整 `text`。正文必须与生成结果完全一致。成功返回 `confirmed`，重复或不匹配返回 `conflict`，失效返回 `expired`。此响应不代表平台已投递。
 
 参见[跨会话消息指南](../guide/message-targets.md)。
+
+## 模块编辑管理接口
+
+以下接口使用 `management` Bearer 认证，响应设置 `Cache-Control: no-store`。实例设置与模板均为全局资源，不带 Profile ID；保存不会调用配置应用或重启。
+
+**读取配置** — `GET /api/v1/modules/:definitionId/settings` 返回公开字段元数据、真实持久化实例的 `enabled`、安全 `settings` 和不透明 `revision`，以及 `scope: global`、`effect: explicit_apply`。读取与替换均以模块 settings schema 为最终校验依据。
+
+**替换实例** — `PUT /api/v1/modules/:definitionId/instances/:instanceId/settings` 接受完整 `{ revision, enabled, settings }`。`settings` 应包含读取结果中的全部公开字段；隐藏字段由服务端保留，未知字段与只读字段变更被拒绝。字段错误返回 `error.fields`，每项具有 `path` 和固定安全 `message`；数组元素路径如 `names.0` 对应顶级控件。实例版本过期返回 `409 module_configuration_changed`。
+
+**读取模板** — `GET /api/v1/modules/:definitionId/templates` 返回静态模板声明、源码、默认源码、`source: default | local`、组级 `revision` 和 `effect: restart_required`。接口不返回运行时渲染结果。
+
+**保存覆盖** — `PUT /api/v1/modules/:definitionId/templates/:templateId` 接受 `{ revision, content }`，先验证候选所在整组模板，再原子写入该模板的本地覆盖。单模板上限为 128 KiB UTF-8。
+
+**恢复默认** — 同一路径的 `DELETE` 接受 `{ revision }`，先验证恢复后的整组，再删除对应覆盖。模板组版本过期返回 `409 templates_changed`。校验错误为 `400`，代码包括 `empty_template`、`unknown_variable`、`invalid_partial`、`unsupported_helper`、`invalid_syntax` 和 `recursive_partial`，不回传解析器源码片段。
+
+并发替换与配置应用共享当前 Server 进程的串行锁，锁内重读并比较 HMAC revision。文件替换使用临时文件与原子 rename，并拒绝管理路径上的符号链接。该锁不协调其他进程绕过管理接口直接修改文件。管理接口不可用或文件不安全时返回安全的 `503`；未知模块、实例或模板返回 `404`。

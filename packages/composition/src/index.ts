@@ -1,4 +1,5 @@
 /**
+ * 模板加载器提供 Planner 本地覆盖，Catalog 显式传入 Heartflow，保存本身不重建运行时。
  * 功能概述：作为 Server 与 Demo 共用的唯一 Runtime Composition 边界，组装业务 Catalog 与宿主批准的 Model Task 能力。
  * Memory 开启时加入缺省 writeback activation，关闭时移除写回实例；尊重已配置实例的禁用状态。
  * Composer 同时注入宿主目标授权能力，跨会话需要隔离上下文及正文确认。
@@ -98,6 +99,7 @@ export function createMessageCatalog(
     deliveryFailedInformationKind,
     executionExhaustedInformationKind,
     promptTemplates: promptTemplates.messageComposer,
+    plannerTemplate: promptTemplates.planner,
     agentIdentity,
     ...(cognitionIdentity ? { cognitionIdentity } : {}),
   });

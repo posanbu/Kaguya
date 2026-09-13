@@ -4,6 +4,8 @@
  * 代码库关系：通过 #152 的 section 插槽接收 definitionId/token；独立客户端复用共享响应 schema。
  * 输入输出与副作用：保存只写磁盘并提示显式应用；切换模块取消读取，不自动应用配置。
  */
+import "./module-editors.css";
+import { Button } from "./components/ui.js";
 import { useEffect, useState } from "react";
 import type {
   ModuleSettingsField,
@@ -152,6 +154,7 @@ function InstanceEditor({
   };
   return (
     <form
+      className="module-editor"
       onSubmit={(event) => {
         event.preventDefault();
         void save();
@@ -203,12 +206,12 @@ function InstanceEditor({
               ))}
           </div>
         ))}
-        <button type="submit" disabled={!dirty}>
+        <Button type="submit" disabled={!dirty}>
           保存全局配置
-        </button>
-        <button type="button" onClick={() => void reload()}>
+        </Button>
+        <Button type="button" onClick={() => void reload()}>
           重新读取
-        </button>
+        </Button>
       </fieldset>
       {notice && <p role="status">{notice}</p>}
       {errors

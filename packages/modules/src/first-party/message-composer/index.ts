@@ -1,4 +1,5 @@
 /**
+ * manifest.promptTemplates 显式声明消息模板组，供管理端按归属读取。
  * modelTier 的公开中文 schema 元数据由全局配置表单消费，保存仍使用同一校验。
  * 功能概述：消息编写模块消费 Heartflow 产生的目标与冻结 turn 意图，经通用 Model Task 生成文本。
  * 宿主授权能力在选取上下文前校验目标；跨会话只使用批准 Prompt，正文确认后才通过同一 release 创建 delivery。
@@ -10,6 +11,7 @@
  * 不复制入站正文或消息 ID，不提供固定路由或自动引用回复。失败或取消的模型任务不产生 assistant。
  * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
  */
+import { messageModulePromptTemplates } from "../../prompt-declarations.js";
 import {
   messageConfirmedInformationKind,
   type MessageAuthorization,
@@ -278,6 +280,7 @@ export function createMessageComposerModule<
       description:
         "消费消息意图与模型结果，选择历史、记忆及当前输入并编译 Prompt，通过 Model Task 生成正文；输出助手消息与投递请求，跨会话正文需经宿主确认后释放。",
       settingsSchema: messageComposerSettingsSchema,
+      promptTemplates: messageModulePromptTemplates,
       consumes: [
         messageConfirmedInformationKind,
         messageIntentRequestedInformationKind,

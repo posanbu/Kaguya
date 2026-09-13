@@ -1,4 +1,5 @@
 /**
+ * 人物事实模板显式归属此模块，其允许变量复用静态声明；未装入 Catalog 不展示。
  * 功能概述：实现最小 person-fact Model Task 垂直切片，把非 reply 候选编译为可追溯 Prompt，
  * 并仅从属于本模块的 completed 终态派生 `core.person.fact.extracted` 业务原子。
  * 主要职责：`personFactTaskOutputSchema` 定义模型任务的严格 person/name/fact 结构；
@@ -13,6 +14,7 @@
  * 伪造终态不会注册，重复 completed 投递由 registerOnce 去重。
  * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
  */
+import { personFactTemplateDeclaration } from "../../prompt-declarations.js";
 import {
   type CompiledPrompt,
   type DeepReadonly,
@@ -142,9 +144,8 @@ export function createPersonFactTaskModule<
     kind: "memory",
     templateId: "kaguya.person-fact.v1",
     main: {
-      name: "person-fact",
+      ...personFactTemplateDeclaration,
       content: dependencies.promptTemplate,
-      allowedVariables: ["person_id", "name", "candidate"],
     },
   });
 
@@ -165,6 +166,7 @@ export function createPersonFactTaskModule<
       description:
         "消费人物事实候选，选择来源并编译 Prompt，通过共享 Model Task 能力执行提取；输出经结构和证据验证的事实，拒绝无依据结果，不负责身份合并或记忆演化。",
       settingsSchema: personFactTaskSettingsSchema,
+      promptTemplates: [personFactTemplateDeclaration],
       consumes: [personFactCandidateInformationKind, completedInformationKind],
       produces: [personFactExtractedInformationKind],
       diagnostics: [personFactModelDispatchingDiagnostic],
