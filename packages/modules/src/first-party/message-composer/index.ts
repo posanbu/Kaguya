@@ -1,4 +1,5 @@
 /**
+ * modelTier 的公开中文 schema 元数据由全局配置表单消费，保存仍使用同一校验。
  * 功能概述：消息编写模块消费 Heartflow 产生的目标与冻结 turn 意图，经通用 Model Task 生成文本。
  * 宿主授权能力在选取上下文前校验目标；跨会话只使用批准 Prompt，正文确认后才通过同一 release 创建 delivery。
  * 主要职责：createMessageComposerModule 装配三个 durable 订阅；messageTaskOutputSchema 校验非空文本；
@@ -70,7 +71,14 @@ export type {
 } from "./message-prompt.js";
 
 export const messageComposerSettingsSchema = z
-  .object({ modelTier: modelTierSchema })
+  .object({
+    modelTier: modelTierSchema.meta({
+      title: "模型层级",
+      description: "消息编写使用的模型层级，由 Profile 映射到提供商与模型。",
+      public: true,
+      default: "heavy",
+    }),
+  })
   .strict();
 export type MessageComposerSettings = z.infer<
   typeof messageComposerSettingsSchema

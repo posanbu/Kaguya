@@ -1,4 +1,5 @@
 /**
+ * settings schema 的公开中文元数据供管理表单使用，运行时与保存共用约束。
  * 管理端批准的跨会话 candidate 由宿主直接认领，不再触发 Planner；其 delivery 仍使用本模块统一 turn 终态。
  * 在线 Heartflow 编排器。所有推进都由可重放 Information 事实驱动；模块不保存
  * per-chat 状态，也不依赖订阅安装顺序。
@@ -77,11 +78,52 @@ export interface CreateHeartflowModuleOptions {
 
 export const heartflowSettingsSchema = z
   .object({
-    botNames: z.array(z.string().trim().min(1)),
-    groupFrequency: z.number().min(0).max(1),
-    privateFrequency: z.number().min(0).max(1),
-    muted: z.boolean(),
-    staleAfterMs: z.number().int().min(0),
+    botNames: z
+      .array(z.string().trim().min(1))
+      .meta({
+        title: "机器人名称",
+        description: "由当前 Profile 身份提供，此处仅保留全局文件中的值。",
+        public: true,
+        readOnly: true,
+      }),
+    groupFrequency: z
+      .number()
+      .min(0)
+      .max(1)
+      .meta({
+        title: "群聊回复频率",
+        description: "群聊参与频率，范围为 0 到 1。",
+        public: true,
+        default: 1,
+      }),
+    privateFrequency: z
+      .number()
+      .min(0)
+      .max(1)
+      .meta({
+        title: "私聊回复频率",
+        description: "私聊参与频率，范围为 0 到 1。",
+        public: true,
+        default: 1,
+      }),
+    muted: z
+      .boolean()
+      .meta({
+        title: "静默模式",
+        description: "开启后抑制主动回复。",
+        public: true,
+        default: false,
+      }),
+    staleAfterMs: z
+      .number()
+      .int()
+      .min(0)
+      .meta({
+        title: "候选过期时间",
+        description: "超过此时间的候选失效，单位毫秒。",
+        public: true,
+        default: 120000,
+      }),
   })
   .strict();
 export type HeartflowSettings = z.infer<typeof heartflowSettingsSchema>;

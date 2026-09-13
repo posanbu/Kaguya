@@ -1,4 +1,5 @@
 /**
+ * 模块配置管理复用 configuration.exclusive，与显式应用共锁；保存不会切换运行实例。
  * 启动和显式热应用分别把 inboundAllowlist 交给 AdapterHost、outboundAllowlist 交给 Runtime 及目标授权服务。
  * 功能概述：Server composition root，组合配置、数据库、Runtime、HTTP/Web 与 NapCat 生命周期。
  * 主要职责：startKaguyaServer 验证 Profile 和模块配置后启动宿主；close 逆序释放资源；
@@ -13,6 +14,7 @@
  * 输入输出与副作用：连接数据库、监听 HTTP 并启动适配器，失败时释放已创建资源并固定错误分类。
  * Inspection 仅在 Runtime 可用时注入，不把 settings、凭据或数据库对象放入 HTTP 响应。
  */
+import { ModuleSettingsManagement } from "./module-settings-management.js";
 import { GatewayAllowlist } from "@kaguya/runtime";
 import {
   createInspectionService,
@@ -502,6 +504,12 @@ export async function startKaguyaServer(
         webGateway: { ingest: (input) => adapterHost.webGateway.ingest(input) },
         adapterHost: { status: () => adapterHost.status() },
         configuration,
+        moduleSettings: new ModuleSettingsManagement({
+          rootDir: bootstrap.configRoot,
+          catalog: createMessageCatalog(),
+          defaults: createFirstPartyModuleConfigDefaults(),
+          exclusive: (operation) => configuration.exclusive(operation),
+        }),
         logger: httpLogger,
       }),
     );
