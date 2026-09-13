@@ -27,9 +27,15 @@
  * /messages、/profiles、/configuration/application、/adapters 分别提供任务入口。
  * 人工跨会话管理界面已移除；所有状态仅驻留当前页面。
  * DeveloperConsole 负责只读查询与取消，401 继续由本文件统一锁屏。
+ * 消息与接入页面复用 PageHeader/Button/FieldMessage，DeliveryStatus 以 StatusBadge 展示投递状态。
  */
 import { AppShell, useWorkbenchRouter } from "./components/AppShell.js";
-import { PageHeader } from "./components/ui.js";
+import {
+  Button,
+  FieldMessage,
+  PageHeader,
+  StatusBadge,
+} from "./components/ui.js";
 import { DeveloperConsole, developerPage } from "./DeveloperConsole.js";
 
 import { AdapterStatusPanel } from "./AdapterStatusPanel.js";
@@ -307,7 +313,6 @@ export function App() {
       return (
         <NapCatManagementScreen
           token={token}
-          onClose={() => void navigate("/messages")}
           onRestartRequired={() => void navigate("/configuration/application")}
         />
       );
@@ -325,19 +330,11 @@ export function App() {
 
     return (
       <div className="app-shell">
-        <header className="topbar">
-          <BrandIdentity subtitle="统一消息服务" />
-          <div className="topbar-spacer" />
-          <button
-            className="secondary-button"
-            onClick={() => navigate("/developer/modules")}
-          >
-            开发者
-          </button>
-          <ThemeToggle />
-        </header>
-
-        <main className="workspace">
+        <PageHeader
+          title="消息"
+          description="向当前 Web 会话提交消息并查看接收状态。"
+        />
+        <main className="workspace wb-message-workspace">
           <aside
             className="connection-panel"
             aria-labelledby="connection-title"
@@ -347,7 +344,7 @@ export function App() {
                 <p className="eyebrow">连接配置</p>
                 <h2 id="connection-title">Kaguya 服务</h2>
               </div>
-              <button
+              <Button
                 type="button"
                 className={`health-button ${healthState}`}
                 onClick={() => void checkConnection()}
@@ -359,7 +356,7 @@ export function App() {
                   size={15}
                 />
                 <span>{healthLabel(healthState)}</span>
-              </button>
+              </Button>
             </div>
 
             <div className="boundary-note">
@@ -372,16 +369,16 @@ export function App() {
             <header className="chat-heading">
               <div>
                 <p className="eyebrow">消息入口</p>
-                <h2 id="chat-title">消息</h2>
+                <h2 id="chat-title">发送消息</h2>
               </div>
-              <button
+              <Button
                 type="button"
                 className="secondary-button"
                 onClick={() => void navigate("/profiles")}
               >
                 <Settings2 size={16} />
-                <span>Settings</span>
-              </button>
+                <span>配置</span>
+              </Button>
             </header>
 
             <div className="message-list" aria-live="polite">
@@ -410,10 +407,7 @@ export function App() {
               onSubmit={(event) => void submitMessage(event)}
             >
               {formError ? (
-                <div className="error-banner" role="alert">
-                  <AlertCircle size={17} />
-                  <span>{formError}</span>
-                </div>
+                <FieldMessage tone="error">{formError}</FieldMessage>
               ) : null}
               <textarea
                 ref={textareaRef}
@@ -435,7 +429,7 @@ export function App() {
                   {draftLength.toLocaleString()} /{" "}
                   {MAX_MESSAGE_LENGTH.toLocaleString()}
                 </span>
-                <button
+                <Button
                   className="send-button"
                   type="submit"
                   disabled={!canSend}
@@ -446,7 +440,7 @@ export function App() {
                     <SendHorizontal size={18} />
                   )}
                   <span>{isSending ? "发送中" : "发送"}</span>
-                </button>
+                </Button>
               </div>
             </form>
           </section>
@@ -1389,11 +1383,9 @@ function ModelTierEditor({
 
 function NapCatManagementScreen({
   token,
-  onClose,
   onRestartRequired,
 }: {
   readonly token: string;
-  readonly onClose: () => void;
   readonly onRestartRequired: () => void;
 }) {
   const config = useMemo(() => ({ token }), [token]);
@@ -1448,8 +1440,11 @@ function NapCatManagementScreen({
 
   return (
     <div className="setup-shell">
-      <SetupHeader subtitle="Gateway / Adapter" />
-      <main className="setup-main">
+      <PageHeader
+        title="接入"
+        description="查看 Gateway / Adapter 状态并管理平台连接。"
+      />
+      <main className="setup-main wb-adapter-main">
         <AdapterStatusPanel token={token} />
         <section className="setup-card" aria-labelledby="napcat-title">
           <div className="panel-heading">
@@ -1457,24 +1452,12 @@ function NapCatManagementScreen({
               <p className="eyebrow">平台连接</p>
               <h2 id="napcat-title">配置 NapCat</h2>
             </div>
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={onClose}
-            >
-              返回
-            </button>
           </div>
           <p className="setup-intro">
             填写 NapCat OneBot 正向 WebSocket（服务器）参数。保存后手动应用，
             适配器会用新配置重新连接，无需重启 Kaguya。
           </p>
-          {error ? (
-            <div className="error-banner" role="alert">
-              <AlertCircle size={17} />
-              <span>{error}</span>
-            </div>
-          ) : null}
+          {error ? <FieldMessage tone="error">{error}</FieldMessage> : null}
           {loading ? (
             <div className="profile-loading" role="status">
               <LoaderCircle className="spin" size={18} />
@@ -1520,7 +1503,7 @@ function NapCatManagementScreen({
                         : "NapCat access token"
                     }
                   />
-                  <button
+                  <Button
                     type="button"
                     className="icon-button"
                     onClick={() => setShowAccessToken((current) => !current)}
@@ -1531,7 +1514,7 @@ function NapCatManagementScreen({
                     }
                   >
                     {showAccessToken ? <EyeOff size={18} /> : <Eye size={18} />}
-                  </button>
+                  </Button>
                 </div>
               </label>
               <label className="field">
@@ -1553,9 +1536,9 @@ function NapCatManagementScreen({
                   onChange={(event) => setReconnectMs(event.target.value)}
                 />
               </label>
-              <button className="setup-button" type="submit" disabled={saving}>
+              <Button className="setup-button" type="submit" disabled={saving}>
                 {saving ? "正在保存" : "保存配置"}
-              </button>
+              </Button>
             </form>
           ) : null}
         </section>
@@ -1732,24 +1715,30 @@ function DeliveryStatus({ message }: { readonly message: ChatMessage }) {
   if (message.state === "sending") {
     return (
       <p className="delivery-status sending">
-        <LoaderCircle className="spin" size={15} />
-        正在提交
+        <StatusBadge>
+          <LoaderCircle className="spin" size={15} />
+          正在提交
+        </StatusBadge>
       </p>
     );
   }
   if (message.state === "accepted") {
     return (
       <p className="delivery-status accepted" title={message.requestId}>
-        <CheckCircle2 size={15} />
-        服务已接收
-        <code>{shortRequestId(message.requestId)}</code>
+        <StatusBadge tone="success">
+          <CheckCircle2 size={15} />
+          服务已接收
+          <code>{shortRequestId(message.requestId)}</code>
+        </StatusBadge>
       </p>
     );
   }
   return (
     <p className="delivery-status failed">
-      <AlertCircle size={15} />
-      {message.error ?? "提交失败"}
+      <StatusBadge tone="error">
+        <AlertCircle size={15} />
+        {message.error ?? "提交失败"}
+      </StatusBadge>
     </p>
   );
 }

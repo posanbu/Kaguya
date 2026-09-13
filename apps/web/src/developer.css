@@ -1,5 +1,6 @@
 /*
  * 功能概述：开发者控制台的响应式布局与 Information DAG 样式，沿用 styles.css 主题变量。
+ * 页面外壳由 AppShell 提供，二级导航允许折行，分页操作在窄屏保留完整控件。
  * 主要职责：模块卡片、过滤器、列表/详情双栏、可滚动 SVG 图和可访问选中态。
  * 代码库关系：仅由 DeveloperConsole.tsx 引入，类名前缀避免影响 Profile 与聊天页面。
  * 输入输出与副作用：纯 CSS；窄屏折叠详情栏，长 ID/Prompt 换行并限制详情滚动高度。
@@ -7,22 +8,11 @@
 .developer-main {
   max-width: 1500px;
   margin: auto;
-  padding: 30px;
-}
-.developer-heading {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 20px;
-}
-.developer-heading h1 {
-  margin: 6px 0;
-}
-.developer-heading p {
-  color: var(--kaguya-muted);
+  padding: 0;
 }
 .developer-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   margin: 24px 0;
   border-bottom: 1px solid var(--kaguya-line);
@@ -160,6 +150,7 @@
 }
 .developer-pager {
   display: flex;
+  flex-wrap: wrap;
   gap: 14px;
   align-items: center;
   margin: 20px 0;
@@ -212,10 +203,7 @@
     max-height: none;
   }
   .developer-main {
-    padding: 16px;
-  }
-  .developer-heading {
-    align-items: start;
+    padding: 0;
   }
   .developer-tabs {
     gap: 0;

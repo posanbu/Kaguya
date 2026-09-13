@@ -1,10 +1,12 @@
 /**
  * 功能概述：轮询并展示当前 AdapterHost/Runtime 的真实连接与入站状态。
+ * 展示层复用工作台 Button/FieldMessage/StatusBadge，不改变轮询、取消或状态映射。
  * 主要职责：挂载时启动可取消轮询、卸载时停止；通过状态标签区分热应用暂停与平台断线。
  * 代码库关系：复用 api 与 adapter-status；Server 动态状态门面确保切换后不显示旧实例。
  * 输入输出与副作用：仅 GET 安全状态 DTO，修复配置后引导重新应用，不要求普通配置重启。
  */
 import { useEffect, useRef, useState } from "react";
+import { Button, FieldMessage, StatusBadge } from "./components/ui.js";
 import { RefreshCw } from "lucide-react";
 import { getAdapterStatus } from "./api.js";
 import { pollAdapterStatus, type StatusPollState } from "./adapter-status.js";
@@ -57,7 +59,7 @@ export function AdapterStatusPanel({ token }: { token: string }) {
     >
       <div className="panel-heading">
         <h2 id="adapter-status-title">Gateway / Adapter 状态</h2>
-        <button
+        <Button
           type="button"
           className="secondary-button"
           onClick={() => void poller.current?.refresh()}
@@ -65,17 +67,17 @@ export function AdapterStatusPanel({ token }: { token: string }) {
         >
           <RefreshCw size={16} />
           刷新
-        </button>
+        </Button>
       </div>
       {state.failed && (
-        <p className="error-banner" role="alert">
+        <FieldMessage tone="error">
           状态服务失联。
           {state.snapshot ? "当前显示最后一次快照。" : "尚未取得状态快照。"}
           请尝试刷新。
-        </p>
+        </FieldMessage>
       )}
       {!state.snapshot && !state.failed && (
-        <p role="status">正在读取接入状态…</p>
+        <FieldMessage>正在读取接入状态…</FieldMessage>
       )}
       {state.snapshot && (
         <>
@@ -120,15 +122,21 @@ export function AdapterStatusPanel({ token }: { token: string }) {
                   </div>
                   <div>
                     <dt>生命周期</dt>
-                    <dd>{label(adapter.lifecycle)}</dd>
+                    <dd>
+                      <StatusBadge>{label(adapter.lifecycle)}</StatusBadge>
+                    </dd>
                   </div>
                   <div>
                     <dt>连接</dt>
-                    <dd>{label(adapter.connectivity)}</dd>
+                    <dd>
+                      <StatusBadge>{label(adapter.connectivity)}</StatusBadge>
+                    </dd>
                   </div>
                   <div>
                     <dt>消息提交</dt>
-                    <dd>{label(adapter.ingress)}</dd>
+                    <dd>
+                      <StatusBadge>{label(adapter.ingress)}</StatusBadge>
+                    </dd>
                   </div>
                   {adapter.attempt !== undefined && (
                     <div>
