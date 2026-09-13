@@ -23,9 +23,13 @@
  * 仅进程级字段变更需要重启。Profile 管理子组件会记忆同一
  * token 对应的网关配置对象，避免读取 Profile 的副作用 effect 因对象引用变化
  * 而重复请求并触发服务端限流。开发者入口使用 history 路径，复用内存 Token；
+ * 工作台由 AppShell 统一承载，useWorkbenchRouter 保护 history 导航；根路径预留概览，
+ * /messages、/profiles、/configuration/application、/adapters 分别提供任务入口。
  * MessageTargets 提供管理端跨会话两阶段确认；所有状态仅驻留当前页面。
  * DeveloperConsole 负责只读查询与取消，401 继续由本文件统一锁屏。
  */
+import { AppShell, useWorkbenchRouter } from "./components/AppShell.js";
+import { PageHeader } from "./components/ui.js";
 import { MessageTargets } from "./MessageTargets.js";
 import { DeveloperConsole, developerPage } from "./DeveloperConsole.js";
 
@@ -110,16 +114,7 @@ interface ClearedLoadedProfileStateSnapshot {
 
 export function App() {
   const [token] = useState(() => readGatewayToken());
-  const [path, setPath] = useState(() => window.location.pathname);
-  const navigate = (next: string) => {
-    window.history.pushState(null, "", `${next}${window.location.hash}`);
-    setPath(next);
-  };
-  useEffect(() => {
-    const onPopState = () => setPath(window.location.pathname);
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
-  }, []);
+  const { path, navigate, register } = useWorkbenchRouter();
   const [configurationView, setConfigurationView] = useState<ConfigurationView>(
     () => (token === "" ? "locked" : "checking"),
   );
@@ -266,194 +261,224 @@ export function App() {
     return <AccessLinkRequired invalid={invalidAccessLink} />;
   }
 
-  if (path === "/message-targets")
-    return <MessageTargets token={token} onBack={() => navigate("/")} />;
-
-  const inspectionPage = developerPage(path);
-  if (inspectionPage !== undefined) {
-    return (
-      <DeveloperConsole
-        token={token}
-        page={inspectionPage}
-        navigate={navigate}
-      />
-    );
-  }
-
-  if (configurationView === "checking") {
-    return <ConfigurationLoading />;
-  }
-
-  if (configurationView === "error") {
+  if (configurationView === "checking") return <ConfigurationLoading />;
+  if (configurationView === "error")
     return <ConfigurationStatusError message={configurationError} />;
-  }
 
-  if (configurationView === "profiles") {
+  const renderPage = () => {
+    if (path === "/" || path === "/overview")
+      return (
+        <PageHeader
+          title="概览"
+          description="从侧栏进入消息、配置、接入与运行时检查。"
+        />
+      );
+    if (path === "/message-targets")
+      return (
+        <MessageTargets
+          token={token}
+          onBack={() => {
+            void navigate("/messages");
+          }}
+        />
+      );
+    const inspectionPage = developerPage(path);
+    if (inspectionPage !== undefined)
+      return (
+        <DeveloperConsole
+          token={token}
+          page={inspectionPage}
+          navigate={(next) => {
+            void navigate(next);
+          }}
+        />
+      );
+    if (path === "/profiles") {
+      return (
+        <ProfileManagementScreen
+          token={token}
+          initialStatus={configurationStatus}
+          onStatusChange={(status) => {
+            setConfigurationStatus(status);
+          }}
+          onReloadStatus={(options) => loadConfigurationStatus(options)}
+          onClose={() => {
+            void navigate("/messages");
+          }}
+          onRestartRequired={() => {
+            void navigate("/configuration/application");
+          }}
+          onOpenNapCat={() => void navigate("/adapters")}
+        />
+      );
+    }
+
+    if (path === "/adapters") {
+      return (
+        <NapCatManagementScreen
+          token={token}
+          onClose={() => void navigate("/messages")}
+          onRestartRequired={() => void navigate("/configuration/application")}
+        />
+      );
+    }
+
+    if (path === "/configuration/application") {
+      return (
+        <ConfigurationApplicationScreen
+          token={token}
+          onApplied={() => loadConfigurationStatus()}
+          onEdit={() => void navigate("/profiles")}
+        />
+      );
+    }
+
     return (
-      <ProfileManagementScreen
-        token={token}
-        initialStatus={configurationStatus}
-        onStatusChange={(status) => {
-          setConfigurationStatus(status);
-        }}
-        onReloadStatus={(options) => loadConfigurationStatus(options)}
-        onClose={() => {
-          setConfigurationView("chat");
-        }}
-        onRestartRequired={() => {
-          setConfigurationView("restart");
-        }}
-        onOpenNapCat={() => setConfigurationView("napcat")}
-      />
-    );
-  }
-
-  if (configurationView === "napcat") {
-    return (
-      <NapCatManagementScreen
-        token={token}
-        onClose={() => setConfigurationView("chat")}
-        onRestartRequired={() => setConfigurationView("restart")}
-      />
-    );
-  }
-
-  if (configurationView === "restart") {
-    return (
-      <ConfigurationApplicationScreen
-        token={token}
-        onApplied={() => loadConfigurationStatus()}
-        onEdit={() => setConfigurationView("profiles")}
-      />
-    );
-  }
-
-  return (
-    <div className="app-shell">
-      <header className="topbar">
-        <BrandIdentity subtitle="统一消息服务" />
-        <div className="topbar-spacer" />
-        <button
-          className="secondary-button"
-          onClick={() => navigate("/developer/modules")}
-        >
-          开发者
-        </button>
-        <button
-          className="secondary-button"
-          onClick={() => navigate("/message-targets")}
-        >
-          跨会话消息
-        </button>
-        <ThemeToggle />
-      </header>
-
-      <main className="workspace">
-        <aside className="connection-panel" aria-labelledby="connection-title">
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">连接配置</p>
-              <h2 id="connection-title">Kaguya 服务</h2>
-            </div>
-            <button
-              type="button"
-              className={`health-button ${healthState}`}
-              onClick={() => void checkConnection()}
-              disabled={healthState === "checking"}
-              title="检测 Kaguya 服务连接"
-            >
-              <RefreshCw
-                className={healthState === "checking" ? "spin" : undefined}
-                size={15}
-              />
-              <span>{healthLabel(healthState)}</span>
-            </button>
-          </div>
-
-          <div className="boundary-note">
-            <p>当前服务仅接受消息。</p>
-            <span>模型配置和回复由核心层管理。</span>
-          </div>
-        </aside>
-
-        <section className="chat-panel" aria-labelledby="chat-title">
-          <header className="chat-heading">
-            <div>
-              <p className="eyebrow">消息入口</p>
-              <h2 id="chat-title">消息</h2>
-            </div>
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={() => setConfigurationView("profiles")}
-            >
-              <Settings2 size={16} />
-              <span>Settings</span>
-            </button>
-          </header>
-
-          <div className="message-list" aria-live="polite">
-            {messages.length === 0 ? (
-              <div className="empty-state">
-                <p>暂无消息</p>
-              </div>
-            ) : (
-              messages.map((message) => (
-                <article className="message-row" key={message.id}>
-                  <div className="message-meta">
-                    <strong>你</strong>
-                    <time dateTime={message.createdAt.toISOString()}>
-                      {formatTime(message.createdAt)}
-                    </time>
-                  </div>
-                  <p className="message-body">{message.text}</p>
-                  <DeliveryStatus message={message} />
-                </article>
-              ))
-            )}
-          </div>
-
-          <form
-            className="composer"
-            onSubmit={(event) => void submitMessage(event)}
+      <div className="app-shell">
+        <header className="topbar">
+          <BrandIdentity subtitle="统一消息服务" />
+          <div className="topbar-spacer" />
+          <button
+            className="secondary-button"
+            onClick={() => navigate("/developer/modules")}
           >
-            {formError ? (
-              <div className="error-banner" role="alert">
-                <AlertCircle size={17} />
-                <span>{formError}</span>
+            开发者
+          </button>
+          <button
+            className="secondary-button"
+            onClick={() => navigate("/message-targets")}
+          >
+            跨会话消息
+          </button>
+          <ThemeToggle />
+        </header>
+
+        <main className="workspace">
+          <aside
+            className="connection-panel"
+            aria-labelledby="connection-title"
+          >
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">连接配置</p>
+                <h2 id="connection-title">Kaguya 服务</h2>
               </div>
-            ) : null}
-            <textarea
-              ref={textareaRef}
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={onComposerKeyDown}
-              rows={3}
-              placeholder="输入消息"
-              aria-label="消息内容"
-            />
-            <div className="composer-footer">
-              <span
-                className={
-                  draftLength > MAX_MESSAGE_LENGTH ? "limit exceeded" : "limit"
-                }
+              <button
+                type="button"
+                className={`health-button ${healthState}`}
+                onClick={() => void checkConnection()}
+                disabled={healthState === "checking"}
+                title="检测 Kaguya 服务连接"
               >
-                {draftLength.toLocaleString()} /{" "}
-                {MAX_MESSAGE_LENGTH.toLocaleString()}
-              </span>
-              <button className="send-button" type="submit" disabled={!canSend}>
-                {isSending ? (
-                  <LoaderCircle className="spin" size={18} />
-                ) : (
-                  <SendHorizontal size={18} />
-                )}
-                <span>{isSending ? "发送中" : "发送"}</span>
+                <RefreshCw
+                  className={healthState === "checking" ? "spin" : undefined}
+                  size={15}
+                />
+                <span>{healthLabel(healthState)}</span>
               </button>
             </div>
-          </form>
-        </section>
-      </main>
-    </div>
+
+            <div className="boundary-note">
+              <p>当前服务仅接受消息。</p>
+              <span>模型配置和回复由核心层管理。</span>
+            </div>
+          </aside>
+
+          <section className="chat-panel" aria-labelledby="chat-title">
+            <header className="chat-heading">
+              <div>
+                <p className="eyebrow">消息入口</p>
+                <h2 id="chat-title">消息</h2>
+              </div>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => void navigate("/profiles")}
+              >
+                <Settings2 size={16} />
+                <span>Settings</span>
+              </button>
+            </header>
+
+            <div className="message-list" aria-live="polite">
+              {messages.length === 0 ? (
+                <div className="empty-state">
+                  <p>暂无消息</p>
+                </div>
+              ) : (
+                messages.map((message) => (
+                  <article className="message-row" key={message.id}>
+                    <div className="message-meta">
+                      <strong>你</strong>
+                      <time dateTime={message.createdAt.toISOString()}>
+                        {formatTime(message.createdAt)}
+                      </time>
+                    </div>
+                    <p className="message-body">{message.text}</p>
+                    <DeliveryStatus message={message} />
+                  </article>
+                ))
+              )}
+            </div>
+
+            <form
+              className="composer"
+              onSubmit={(event) => void submitMessage(event)}
+            >
+              {formError ? (
+                <div className="error-banner" role="alert">
+                  <AlertCircle size={17} />
+                  <span>{formError}</span>
+                </div>
+              ) : null}
+              <textarea
+                ref={textareaRef}
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={onComposerKeyDown}
+                rows={3}
+                placeholder="输入消息"
+                aria-label="消息内容"
+              />
+              <div className="composer-footer">
+                <span
+                  className={
+                    draftLength > MAX_MESSAGE_LENGTH
+                      ? "limit exceeded"
+                      : "limit"
+                  }
+                >
+                  {draftLength.toLocaleString()} /{" "}
+                  {MAX_MESSAGE_LENGTH.toLocaleString()}
+                </span>
+                <button
+                  className="send-button"
+                  type="submit"
+                  disabled={!canSend}
+                >
+                  {isSending ? (
+                    <LoaderCircle className="spin" size={18} />
+                  ) : (
+                    <SendHorizontal size={18} />
+                  )}
+                  <span>{isSending ? "发送中" : "发送"}</span>
+                </button>
+              </div>
+            </form>
+          </section>
+        </main>
+      </div>
+    );
+  };
+  return (
+    <AppShell
+      currentPath={path}
+      onNavigate={navigate}
+      registerNavigationGuard={register}
+      actions={<ThemeToggle />}
+    >
+      {renderPage()}
+    </AppShell>
   );
 }
 
