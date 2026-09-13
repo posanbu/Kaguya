@@ -25,12 +25,11 @@
  * 而重复请求并触发服务端限流。开发者入口使用 history 路径，复用内存 Token；
  * 工作台由 AppShell 统一承载，useWorkbenchRouter 保护 history 导航；根路径预留概览，
  * /messages、/profiles、/configuration/application、/adapters 分别提供任务入口。
- * MessageTargets 提供管理端跨会话两阶段确认；所有状态仅驻留当前页面。
+ * 人工跨会话管理界面已移除；所有状态仅驻留当前页面。
  * DeveloperConsole 负责只读查询与取消，401 继续由本文件统一锁屏。
  */
 import { AppShell, useWorkbenchRouter } from "./components/AppShell.js";
 import { PageHeader } from "./components/ui.js";
-import { MessageTargets } from "./MessageTargets.js";
 import { DeveloperConsole, developerPage } from "./DeveloperConsole.js";
 
 import { AdapterStatusPanel } from "./AdapterStatusPanel.js";
@@ -273,15 +272,6 @@ export function App() {
           description="从侧栏进入消息、配置、接入与运行时检查。"
         />
       );
-    if (path === "/message-targets")
-      return (
-        <MessageTargets
-          token={token}
-          onBack={() => {
-            void navigate("/messages");
-          }}
-        />
-      );
     const inspectionPage = developerPage(path);
     if (inspectionPage !== undefined)
       return (
@@ -343,12 +333,6 @@ export function App() {
             onClick={() => navigate("/developer/modules")}
           >
             开发者
-          </button>
-          <button
-            className="secondary-button"
-            onClick={() => navigate("/message-targets")}
-          >
-            跨会话消息
           </button>
           <ThemeToggle />
         </header>

@@ -9,6 +9,7 @@
  * 检查健康，以及对 Profile 集合执行列出、创建、读取、完整替换、
  * 显式选择和删除；所有请求都要在本地先校验 token，再拼出精确的
  * method / URL / Bearer 头 / JSON body，避免把鉴权或隐藏字段交给浏览器猜测。
+ * 人工跨会话目标查询与确认请求门面已移除，服务端对应能力不在本文件管理。
  * getInspection 使用共享 DTO schema 校验只读响应，并复用认证、取消与 401 锁屏处理。
  * 主要职责：为 App 及后续 Profile 管理页面提供稳定的 typed API，
  * 同时保留旧的消息与健康检查路径；Profile 请求必须编码 path 参数，
@@ -1155,30 +1156,4 @@ export function configurationApplyMessage(
   if (result.application.appliedRevision !== null)
     return "新配置应用失败，已恢复原配置运行。请检查后重试。";
   return "配置已保存，但 Runtime 暂不可用。请检查数据库或服务日志后重试应用。";
-}
-
-/** 管理端目标操作复用内存 Token；响应仅在当前页面内保存。 */
-export async function messageTargetRequest(
-  config: GatewayConfig,
-  action: "sources" | "resolve" | "authorize" | "status" | "confirm",
-  body: unknown,
-): Promise<unknown> {
-  const response = await requestAuthenticatedJson(
-    config,
-    `/api/v1/message-targets/${action}`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-      cache: "no-store",
-    },
-    fetch,
-  );
-  if (!response.ok)
-    throw new GatewayRequestError(
-      "跨会话请求未完成，请检查权限或重新选择目标",
-      "target-request-rejected",
-      response.status,
-    );
-  return response.json();
 }

@@ -39,9 +39,7 @@ export function navigationDomain(path: string): string {
   if (path.startsWith("/profiles") || path.startsWith("/configuration"))
     return "/profiles";
   if (path.startsWith("/adapters")) return "/adapters";
-  return path === "/messages" || path === "/message-targets"
-    ? "/messages"
-    : "/";
+  return path === "/messages" ? "/messages" : "/";
 }
 type Guard = () => boolean | Promise<boolean>;
 const NavigationContext = createContext<{
