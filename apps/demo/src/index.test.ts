@@ -1,4 +1,5 @@
 /**
+ * Demo 与 Server 共用 Composition；确定性图计数包含每轮一次的结构化会话背景。
  * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * 功能概述：验证 demo 以 PostgreSQL information ledger 运行确定性入站 DAG，
  * 输出根 `informationId` 和每个衍生 kind 的计数，不再使用 SQLite path 或 dispatch。
@@ -86,6 +87,7 @@ describe("demo entry point", () => {
       "agent.attention.arousal.completed: 1",
       "agent.chat.scope.binding: 1",
       "agent.chat.scope.entity: 1",
+      "agent.conversation.context.frozen: 1",
       "agent.heartbeat.scheduled: 1",
       "agent.message.intent.requested: 1",
       "agent.person.context.completed: 1",

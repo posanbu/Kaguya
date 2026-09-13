@@ -1,5 +1,6 @@
 /**
  * Runtime 只接收 outboundAllowlist；目标授权与最终 transport 前终检使用它，入站权限属于 AdapterHost。
+ * 为 Heartflow 注入 conversation/route 窄能力，结构化候选由宿主冻结，自动跨会话投递继续经过最终授权检查。
  * close({ drain: true }) 用于热应用：停止调度与 claim 领取，允许已领取任务有界完成，
  * 然后 abort/清理旧宿主；外部注入的数据库保持打开，可供下一 Runtime 复用。
  * 功能概述：以 PostgreSQL information ledger 装配通用 Runtime，接受显式 Catalog、activations 和宿主 capabilities。
@@ -523,6 +524,12 @@ export class KaguyaRuntime implements InformationIngress {
         {
           capability: messageAuthorizationCapability,
           value: Object.freeze({
+            conversation: (turn: DeepReadonly<InformationAtom>) =>
+              this.#messageTargets!.conversation(turn),
+            route: (
+              turn: DeepReadonly<InformationAtom>,
+              decision: DeepReadonly<InformationAtom>,
+            ) => this.#messageTargets!.route(turn, decision),
             prepare: (intent: DeepReadonly<InformationAtom>) =>
               this.#messageTargets!.prepare(intent),
             stage: (assistant: DeepReadonly<InformationAtom>) =>
