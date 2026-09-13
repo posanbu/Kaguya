@@ -1,0 +1,48 @@
+/* Profile 顶栏及单栏配置布局；复用工作台颜色与 Radix 弹层。 */
+.profile-switcher {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  min-width: 0;
+}
+.profile-switcher > button {
+  max-width: 100%;
+}
+.profile-switcher > button span {
+  overflow-wrap: anywhere;
+}
+.profile-status-line,
+.profile-runtime-line {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.profile-runtime-line {
+  flex-basis: 100%;
+  color: var(--kaguya-ink-muted);
+}
+.profile-menu {
+  max-height: min(70vh, 560px);
+  overflow-y: auto;
+  max-width: min(480px, calc(100vw - 24px));
+}
+.profile-menu [role="menuitem"] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.profile-menu strong,
+.profile-menu small {
+  overflow-wrap: anywhere;
+}
+.profile-menu small {
+  flex-basis: 100%;
+}
+.profile-workspace.profile-single-column {
+  grid-template-columns: minmax(0, 1fr);
+}
+@media (max-width: 600px) {
+  .profile-switcher {
+    font-size: 12px;
+  }
+}
