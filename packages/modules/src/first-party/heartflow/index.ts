@@ -1,4 +1,5 @@
 /**
+ * manifest 声明 Planner 模板；调用 compilePlannerPrompt 时传入装配阶段加载的覆盖。
  * settings schema 的公开中文元数据供管理表单使用，运行时与保存共用约束。
  * 管理端批准的跨会话 candidate 由宿主直接认领，不再触发 Planner；其 delivery 仍使用本模块统一 turn 终态。
  * 在线 Heartflow 编排器。所有推进都由可重放 Information 事实驱动；模块不保存
@@ -12,6 +13,7 @@
  * 写入等待或终态；registerOnce/commitTerminal 保证重放幂等，模型 I/O 经宿主 capability 执行，平台 I/O 由 delivery 层负责。
  * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
  */
+import { plannerTemplateDeclaration } from "../../prompt-declarations.js";
 import {
   type MessageAuthorization,
   conversationContextInformationKind,
@@ -74,6 +76,7 @@ export interface CreateHeartflowModuleOptions {
   readonly modelTaskCapability: ModuleCapability<ModelTaskCapability>;
   readonly messageAuthorizationCapability?: ModuleCapability<MessageAuthorization>;
   readonly agentIdentity: AgentIdentity;
+  readonly plannerTemplate?: string;
   readonly cognitionIdentity?: CognitionIdentity;
   readonly deliveryDeliveredInformationKind: AnyKind;
   readonly deliveryFailedInformationKind: AnyKind;
@@ -84,52 +87,36 @@ export interface CreateHeartflowModuleOptions {
 
 export const heartflowSettingsSchema = z
   .object({
-    botNames: z
-      .array(z.string().trim().min(1))
-      .meta({
-        title: "机器人名称",
-        description: "由当前 Profile 身份提供，此处仅保留全局文件中的值。",
-        public: true,
-        readOnly: true,
-      }),
-    groupFrequency: z
-      .number()
-      .min(0)
-      .max(1)
-      .meta({
-        title: "群聊回复频率",
-        description: "群聊参与频率，范围为 0 到 1。",
-        public: true,
-        default: 1,
-      }),
-    privateFrequency: z
-      .number()
-      .min(0)
-      .max(1)
-      .meta({
-        title: "私聊回复频率",
-        description: "私聊参与频率，范围为 0 到 1。",
-        public: true,
-        default: 1,
-      }),
-    muted: z
-      .boolean()
-      .meta({
-        title: "静默模式",
-        description: "开启后抑制主动回复。",
-        public: true,
-        default: false,
-      }),
-    staleAfterMs: z
-      .number()
-      .int()
-      .min(0)
-      .meta({
-        title: "候选过期时间",
-        description: "超过此时间的候选失效，单位毫秒。",
-        public: true,
-        default: 120000,
-      }),
+    botNames: z.array(z.string().trim().min(1)).meta({
+      title: "机器人名称",
+      description: "由当前 Profile 身份提供，此处仅保留全局文件中的值。",
+      public: true,
+      readOnly: true,
+    }),
+    groupFrequency: z.number().min(0).max(1).meta({
+      title: "群聊回复频率",
+      description: "群聊参与频率，范围为 0 到 1。",
+      public: true,
+      default: 1,
+    }),
+    privateFrequency: z.number().min(0).max(1).meta({
+      title: "私聊回复频率",
+      description: "私聊参与频率，范围为 0 到 1。",
+      public: true,
+      default: 1,
+    }),
+    muted: z.boolean().meta({
+      title: "静默模式",
+      description: "开启后抑制主动回复。",
+      public: true,
+      default: false,
+    }),
+    staleAfterMs: z.number().int().min(0).meta({
+      title: "候选过期时间",
+      description: "超过此时间的候选失效，单位毫秒。",
+      public: true,
+      default: 120000,
+    }),
   })
   .strict();
 export type HeartflowSettings = z.infer<typeof heartflowSettingsSchema>;
@@ -376,6 +363,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
       description:
         "消费回合候选及身份、注意力、模型和投递结果，经身份屏障冻结上下文，再请求 Planner 选择发言、等待或静默；输出消息意图、等待请求和回合终态，不执行平台传输。",
       settingsSchema: heartflowSettingsSchema,
+      promptTemplates: [plannerTemplateDeclaration],
       consumes: [
         turnCandidateInformationKind,
         personContextCompletedInformationKind,
@@ -537,6 +525,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
                       options.agentIdentity,
                       taskAtoms,
                       turn,
+                      options.plannerTemplate,
                     ),
                 contextAtoms: taskAtoms,
               });

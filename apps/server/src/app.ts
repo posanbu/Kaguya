@@ -1,5 +1,6 @@
 /**
  * Profile GET 返回该编辑对象的 readiness；校验错误通过白名单路径投影为安全 fieldErrors。
+ * 模块模板管理路由共用 management 认证，仅返回未渲染源码与安全校验代码。
  * 模块 settings 路由由独立注册器接入，共用 management 认证并只返回安全字段。
  * Profile GET/PUT 的严格 DTO 必须包含 inboundAllowlist 与 outboundAllowlist；旧字段不接受。
  * 功能概述：本文件组装 Kaguya 服务端的 Fastify HTTP 应用，承载匿名健康检查、
@@ -24,6 +25,8 @@
  * configuration/status 与 apply 复用管理认证，返回不含秘密的版本及应用结果；冲突返回 409。
  */
 import { profileFieldErrors } from "./profile-field-errors.js";
+import { registerModuleTemplateRoutes } from "./module-template-routes.js";
+import type { ModuleTemplateManagement } from "./module-template-management.js";
 import { registerModuleSettingsRoutes } from "./module-settings-routes.js";
 import type { ModuleSettingsManagement } from "./module-settings-management.js";
 import { registerMessageTargetRoutes } from "./message-targets.js";
@@ -585,6 +588,7 @@ export interface CreateHttpApplicationOptions {
   adapterHost?: Pick<AdapterHost, "status">;
   configuration?: ConfigurationManagement;
   moduleSettings?: ModuleSettingsManagement;
+  moduleTemplates?: ModuleTemplateManagement;
   logger?: FastifyBaseLogger;
   discoverModels?: typeof discoverOpenAiCompatibleModels;
 }
@@ -610,6 +614,11 @@ export async function createHttpApplication(
     },
   });
 
+  registerModuleTemplateRoutes(
+    app,
+    requireGatewayToken(options, "management"),
+    options.moduleTemplates,
+  );
   registerModuleSettingsRoutes(
     app,
     requireGatewayToken(options, "management"),

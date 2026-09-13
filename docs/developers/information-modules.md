@@ -122,3 +122,11 @@ Memory 变量在完整当前 turn 之前，合计最多 4,000 个 Unicode 字符
 旧 reply 信息原子不会迁移或由新模块处理，旧 Prompt kind 和 Model Task ID 不再属于当前协议。旧模块配置须备份后重新初始化，不能仅重命名旧文件来保留旧 outbound 设置。公共 `OutboundMessageContent.kind: "reply"` 与 OneBot 显式引用能力继续保留，供专用模块主动构造。
 
 Planner 支持 `message | wait | silent`。宿主按本轮冻结人物/会话背景和目标解析投影；`message.target` 可选择当前会话、可验证的群/私聊引用，或明确的无法解析状态。自然语言跨会话由宿主复核后自动创建统一消息意图，不再依赖管理端确认，仍独立检查出站白名单与最终目标。Planner 由现有 Heartflow 实例装配，默认 light tier，无需新增 speech 实例或 Profile/API/WebUI 配置。首次请求冻结 Prompt 与上下文选择，重放复用已持久化任务；wait 为 5–120 秒并复用三次总预算与 durable heartbeat，失败和取消统一以 `planner-unavailable` 静默结束。普通日志不记录 Planner Prompt 预览或原始模型输出。
+
+## 声明可编辑资源
+
+模块的 `settingsSchema` 是运行时、配置读取和保存共同使用的 Zod schema。可公开字段在 schema 上使用 `.meta({ public: true, title: "中文名", description: "字段用途", default: 默认值 })`，只读字段额外声明 `readOnly: true`。未明确公开的字段不会进入管理响应；当前表单支持字符串、数字、整数、布尔值与字符串数组。无法投影的公开复杂结构会拒绝展示，不能退回原始 settings JSON。
+
+`manifest.promptTemplates` 显式声明模板稳定 ID、内部名称、中文名称、用途、允许变量、允许 partial 和组成关系。第一方声明集中在 `packages/modules/src/prompt-declarations.ts`，运行编译器和 Node 资源加载器复用这份声明。Node 存储只解析注册资源，不扫描文件名推断模块归属；新增模板必须同时接入真实运行时消费链。人物事实模板由对应模块声明，但未加入当前 Catalog 时不会误归属给 Memory 模块。
+
+管理端只写本地覆盖并检查完整模板组，不渲染用户数据。校验使用非缓存编译路径，避免每次编辑都永久保留编译结果。默认 Planner 源码保持代码常量，覆盖文件为 `heartflow.planner.local.hbs`；其他已注册第一方模板保留现有默认文件与 local 回退机制。

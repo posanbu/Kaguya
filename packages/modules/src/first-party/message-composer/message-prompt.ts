@@ -1,4 +1,5 @@
 /**
+ * 嵌套模板的变量与 partial 直接复用模块静态声明，管理保存与运行编译保持同一约束。
  * 功能概述：将消息意图和冻结 turn 编译为分层 Handlebars Prompt，所有本轮输入拥有相同模板地位。
  * 主要职责：createMessagePromptCompiler 预编译模板并返回纯函数；compileMessagePrompt 提供一次性入口；
  * frozenTurnInputs 核对 turn 身份与目标范围，重建冻结消息；历史与记忆预算函数只限制辅助上下文。
@@ -6,6 +7,10 @@
  * 输入输出与副作用：意图没有正文，正文从 turn.inputs 读取；每条输入保留引用上下文及成功回执、请求、assistant 的原始溯源且不裁剪，不特殊处理末条。
  * 缺少冻结 turn 或身份不一致即抛错；不写账本、不调用模型、不创建出站引用标记。
  */
+import {
+  messageTemplateDeclarations,
+  outerVariables,
+} from "../../prompt-declarations.js";
 import type {
   CompiledPrompt,
   DeepReadonly,
@@ -62,33 +67,6 @@ export const ZH_CN_MESSAGE_PROMPT = Object.freeze({
   historyCharacterLimit: 12_000,
   memoryCharacterLimit: 4_000,
 } as const);
-
-const messageVariables = [
-  "is_assistant",
-  "occurred_at",
-  "sender_name",
-  "sender_id",
-  "platform",
-  "adapter_id",
-  "destination",
-  "message_id",
-  "mentions",
-  "reply_to",
-  "content",
-  "quoted_message",
-  "self_account",
-  "name",
-] as const;
-const outerVariables = [
-  "persona",
-  "name",
-  "aliases",
-  "self_account",
-  "scene",
-  "history",
-  "memory",
-  "turn",
-] as const;
 
 export function createMessagePromptCompiler(
   templates: MessagePromptTemplates,
@@ -288,25 +266,11 @@ export function fitMemoryBudget(
 }
 
 function compileNested(templates: MessagePromptTemplates) {
-  return compilePromptTemplateSet([
-    template(
-      "history",
-      templates.history,
-      ["messages", ...messageVariables],
-      ["history-inbound", "history-assistant"],
-    ),
-    template("history-inbound", templates.historyInbound, messageVariables),
-    template("history-assistant", templates.historyAssistant, messageVariables),
-    template("memory", templates.memory, ["items", "content"], ["memory-item"]),
-    template("memory-item", templates.memoryItem, ["content"]),
-    template("quoted", templates.quoted, ["message", "message_id"]),
-    template(
-      "turn",
-      templates.turn,
-      ["messages", ...messageVariables],
-      ["history-inbound"],
-    ),
-  ]);
+  return compilePromptTemplateSet(
+    messageTemplateDeclarations
+      .filter((d) => d.key !== "main")
+      .map((d) => ({ ...d, content: templates[d.key] })),
+  );
 }
 
 function renderHistory(
