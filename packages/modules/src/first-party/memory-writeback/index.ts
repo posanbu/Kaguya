@@ -5,6 +5,7 @@
  * 代码库关系：消费 identity 模块的 person.context.completed，由 composition 在 Memory 开启时激活；
  * 数据库瞬时故障留给 Reliable Runner 重试/耗尽，关闭时不取消 pending request。
  * 输入输出与副作用：只持久化 inbound 文本；request/terminal 不复制正文，身份只作关联而非主键。
+ * 展示契约：中文名称与职责说明由定义直接提供给 Inspection 和 WebUI，稳定 kind 与协议字段保持不变。
  */
 import {
   InvalidMemoryInputError,
@@ -25,8 +26,9 @@ import {
 
 export const memoryWritebackRequestedInformationKind = defineInformationKind({
   kind: "agent.memory.writeback.requested",
-  displayName: "Memory writeback request",
-  description: "Reliable raw inbound writeback intent without message content.",
+  displayName: "原始记忆写回请求",
+  description:
+    "入站消息身份处理结束后登记仅引用来源的写回意图；可靠消费者重载正文并幂等写入独立记忆。",
   payloadSchema: z.object({ version: z.literal(1) }).strict(),
   references: {
     "core:context": {
@@ -54,8 +56,19 @@ export const memoryWritebackRequestedInformationKind = defineInformationKind({
 function terminalKind<S extends "completed" | "empty" | "failed">(status: S) {
   return defineInformationKind({
     kind: `agent.memory.writeback.${status}` as const,
-    displayName: `Memory writeback ${status}`,
-    description: "Unique raw Memory writeback outcome.",
+    displayName: {
+      completed: "原始记忆写回完成",
+      empty: "原始记忆内容为空",
+      failed: "原始记忆写回失败",
+    }[status],
+    description: {
+      completed:
+        "原始入站正文幂等保存成功后登记的唯一结果；向量索引等派生处理据此读取已持久化记忆。",
+      empty:
+        "写回发现来源正文为空时登记的唯一结果；用于说明该请求已处理但没有可保存的记忆。",
+      failed:
+        "写回发现输入不合法或来源冲突时登记的唯一失败结果；用于审计无法保存原文的原因，瞬时存储故障由可靠执行重试。",
+    }[status],
     payloadSchema: z
       .object({
         status: z.literal(status),
@@ -108,10 +121,10 @@ export const memoryWritebackModule = defineInformationModule({
     protocolVersion: 1,
     moduleVersion: "1.0.0",
     definitionId: "agent.memory.writeback",
-    displayName: "Raw Memory writeback",
-    summary: "Reliably saves inbound messages in independent Memory.",
+    displayName: "原始记忆写回",
+    summary: "将入站原文可靠保存到独立记忆存储。",
     description:
-      "Writes raw messages after identity normalization, independently of attention, replies, cognition and vector indexing.",
+      "消费消息身份终态并沿引用重载原始入站文本，提交幂等写回请求及完成、空内容或失败结果；即使回合不发言也保存原文，向量与认知处理独立进行。",
     settingsSchema: z.object({}).strict(),
     consumes: [
       personContextCompletedInformationKind,

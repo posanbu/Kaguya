@@ -11,6 +11,7 @@
  * 输入输出与副作用：候选 handler 只提交通用任务请求，不直接写业务结果；failed/cancelled 没有对应
  * 业务订阅。completed 输出先经任务 schema 做结构校验，再按候选 personId/name 做业务校验；非法或
  * 伪造终态不会注册，重复 completed 投递由 registerOnce 去重。
+ * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
  */
 import {
   type CompiledPrompt,
@@ -159,10 +160,10 @@ export function createPersonFactTaskModule<
       requires: [modelTaskCapability],
       provides: [],
       definitionId: "demo.person.fact.extract",
-      displayName: "Person fact extractor",
-      summary: "Extracts evidence-backed person facts through a Model Task.",
+      displayName: "人物事实提取",
+      summary: "通过模型任务提取并验证有原文证据的人物事实。",
       description:
-        "Extracts validated, evidence-backed person facts from candidate information through the shared Model Task capability. Invalid or ungrounded output never becomes a domain fact, and this module does not own identity or memory evolution.",
+        "消费人物事实候选，选择来源并编译 Prompt，通过共享 Model Task 能力执行提取；输出经结构和证据验证的事实，拒绝无依据结果，不负责身份合并或记忆演化。",
       settingsSchema: personFactTaskSettingsSchema,
       consumes: [personFactCandidateInformationKind, completedInformationKind],
       produces: [personFactExtractedInformationKind],

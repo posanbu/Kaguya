@@ -4,6 +4,7 @@
  * 并声明 caused-by、replaces、status-of 引用约束，保证调度事实可追溯且可验证。
  * 代码库关系：Runtime/InformationCore 将这些 definition 注册进 Registry；scheduler client 仅提交数据。
  * 输入输出与副作用：定义创建时同步校验并冻结 metadata；无数据库、timer 或其他 I/O。
+ * 展示契约：中文名称与职责说明由定义直接提供给 Inspection 和 WebUI，稳定 kind 与协议字段保持不变。
  */
 import { informationIdSchema, z } from "@kaguya/schema";
 import { defineInformationKind } from "@kaguya/sdk";
@@ -49,9 +50,9 @@ const terminalReference = {
 } as const;
 export const oneShotRequestedInformationKind = defineInformationKind({
   kind: "core.schedule.one-shot.requested",
-  displayName: "Core Schedule One Shot Requested",
+  displayName: "单次调度请求",
   description:
-    "Information carried by the core.schedule.one-shot.requested kind.",
+    "模块提交定时任务时冻结到期时间、输入和激活实例；调度器持久化后负责到期唤醒，并可由后续请求替代。",
   payloadSchema: requestedPayloadSchema,
   references: {
     "core:caused-by": { required: true, multiple: false },
@@ -74,8 +75,9 @@ export const oneShotRequestedInformationKind = defineInformationKind({
 });
 export const oneShotDueInformationKind = defineInformationKind({
   kind: "core.schedule.one-shot.due",
-  displayName: "Core Schedule One Shot Due",
-  description: "Information carried by the core.schedule.one-shot.due kind.",
+  displayName: "单次调度到期",
+  description:
+    "调度器发现任务到期时记录计划时间和实际交付时间；对应消费者据此处理已持久化输入。",
   payloadSchema: duePayloadSchema,
   references: terminalReference,
   log: {
@@ -90,8 +92,9 @@ export const oneShotDueInformationKind = defineInformationKind({
 });
 export const oneShotFiredInformationKind = defineInformationKind({
   kind: "core.schedule.one-shot.fired",
-  displayName: "Core Schedule One Shot Fired",
-  description: "Information carried by the core.schedule.one-shot.fired kind.",
+  displayName: "单次调度已执行",
+  description:
+    "到期消费者成功处理后登记调度终态；用于确认请求已执行并防止重复处理。",
   payloadSchema: z.object({}).strict(),
   references: terminalReference,
   log: {
@@ -105,9 +108,9 @@ export const oneShotFiredInformationKind = defineInformationKind({
 });
 export const oneShotSupersededInformationKind = defineInformationKind({
   kind: "core.schedule.one-shot.superseded",
-  displayName: "Core Schedule One Shot Superseded",
+  displayName: "单次调度被替代",
   description:
-    "Information carried by the core.schedule.one-shot.superseded kind.",
+    "旧调度被更新请求替换时登记终态；调度器和诊断据此区分取消旧唤醒与处理失败。",
   payloadSchema: z.object({}).strict(),
   references: terminalReference,
   log: {
@@ -121,8 +124,9 @@ export const oneShotSupersededInformationKind = defineInformationKind({
 });
 export const oneShotFailedInformationKind = defineInformationKind({
   kind: "core.schedule.one-shot.failed",
-  displayName: "Core Schedule One Shot Failed",
-  description: "Information carried by the core.schedule.one-shot.failed kind.",
+  displayName: "单次调度失败",
+  description:
+    "调度输入不可用或消费者处理失败时登记终态及失败类别；下游据此解释定时任务未完成的原因。",
   payloadSchema: z
     .object({ failureKind: z.enum(["consumer-failed", "input-unavailable"]) })
     .strict(),

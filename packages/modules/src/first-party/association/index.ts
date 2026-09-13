@@ -15,6 +15,7 @@
  * 输入输出与副作用：输入为意图 target、冻结 turn、identity terminal 和 scope；输出为带因果、context、
  * identity、request/candidate/source 引用的持久原子。重复投递使用 registerOnce/commitTerminal
  * 幂等；检索异常只记录脱敏 reason code，candidate payload 不复制 source 正文。
+ * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
  */
 import {
   type DeepReadonly,
@@ -220,10 +221,10 @@ export const associationModule = defineInformationModule({
     protocolVersion: 1,
     moduleVersion: "1.0.0",
     definitionId: "core.association.memory",
-    displayName: "Memory association",
-    summary: "Recalls auditable memory candidates for an active turn.",
+    displayName: "记忆联想",
+    summary: "为当前消息意图召回范围内可追溯的记忆候选。",
     description:
-      "Builds the auditable request, query, candidate, and completion chain used for memory association. It only recalls explicitly referenced information and never decides attention, message wording, or memory writes.",
+      "消费消息意图，冻结查询范围和时间，记录请求、查询、候选及完成结果；消息合成模块沿显式引用选取记忆，不由本模块决定是否发言或写回记忆。",
     settingsSchema: z.object({}).strict(),
     consumes: [
       messageIntentRequestedInformationKind,
