@@ -16,6 +16,7 @@ describe("检查页工作台迁移", () => {
         createElement(DeveloperConsole, {
           token: "test",
           page,
+          path: `/developer/${page}`,
           navigate: () => {},
         }),
       );
