@@ -4,6 +4,7 @@
  * 功能概述：通过真实 Runtime/PGlite 与 DeepSeek-compatible HTTP mock 验证两层发言决策。
  * fixture 装配正式 Catalog、light Planner 和 heavy Composer；settle 等待 durable 订阅闭合，
  * restart 保留数据库并重建宿主，advance 推进持久 heartbeat 时钟。仅 mock provider HTTP，
+ * 决策写入故障的等待沿用 settle 的 8 秒预算，允许 CI 下持久订阅完成前置步骤。
  * 覆盖动作分支、严格对象输出、失败关闭、直接信号、共享等待预算和并发入站去重。
  * 所有消息和密钥均为合成测试数据；清理按 Runtime、数据库顺序关闭，不访问外部服务。
  */
@@ -452,7 +453,10 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
       });
     try {
       await f.submit(f.message());
-      await vi.waitFor(() => expect(interrupted).toBe(true));
+      await vi.waitFor(() => expect(interrupted).toBe(true), {
+        timeout: 8000,
+        interval: 20,
+      });
       await f.submit(
         f.message("late-history", {
           occurredAt: "2026-09-12T11:59:00.000Z",
