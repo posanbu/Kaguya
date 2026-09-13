@@ -1,4 +1,5 @@
 /**
+ * 根路径挂载只读 Overview，配置读取失败由概览独立反馈；401 仍通过全局锁屏处理。
  * Profile 表单用两个独立文本框编辑入站与出站规则，保存后仍须显式应用。
  * 功能概述：本文件承载 WebUI 的顶层状态机，在访问链接认证、Profile 管理、
  * 配置生效管理与消息聊天之间做显式切换，落实“全局 selected Profile 唯一生效、
@@ -29,7 +30,7 @@
  * DeveloperConsole 负责只读查询与取消，401 继续由本文件统一锁屏。
  */
 import { AppShell, useWorkbenchRouter } from "./components/AppShell.js";
-import { PageHeader } from "./components/ui.js";
+import { Overview } from "./Overview.js";
 import { MessageTargets } from "./MessageTargets.js";
 import { DeveloperConsole, developerPage } from "./DeveloperConsole.js";
 
@@ -261,18 +262,15 @@ export function App() {
     return <AccessLinkRequired invalid={invalidAccessLink} />;
   }
 
-  if (configurationView === "checking") return <ConfigurationLoading />;
-  if (configurationView === "error")
+  const isOverview = path === "/" || path === "/overview";
+  if (!isOverview && configurationView === "checking")
+    return <ConfigurationLoading />;
+  if (path === "/messages" && configurationView === "error")
     return <ConfigurationStatusError message={configurationError} />;
 
   const renderPage = () => {
     if (path === "/" || path === "/overview")
-      return (
-        <PageHeader
-          title="概览"
-          description="从侧栏进入消息、配置、接入与运行时检查。"
-        />
-      );
+      return <Overview token={token} navigate={navigate} />;
     if (path === "/message-targets")
       return (
         <MessageTargets
