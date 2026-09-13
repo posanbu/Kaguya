@@ -41,9 +41,9 @@ export const plannerTargetSchema = z.discriminatedUnion("kind", [
 export type PlannerTarget = z.infer<typeof plannerTargetSchema>;
 export const conversationContextInformationKind = defineInformationKind({
   kind: "agent.conversation.context.frozen",
-  displayName: "Frozen conversation projections",
+  displayName: "冻结会话上下文",
   description:
-    "Minimized current-turn background and opaque routing references; never grants authority.",
+    "保存当前回合最小化的会话与人物背景及不透明目标路由引用；该事实本身不能授予发送权限。",
   payloadSchema: z
     .object({
       background: z
