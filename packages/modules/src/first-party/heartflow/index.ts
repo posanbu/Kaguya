@@ -5,10 +5,15 @@
  * createHeartflowModule 注入投递/模型失败 kind，返回声明订阅的模块；settings schema
  * 校验频率与安全策略。state/memory selector 从账本读取因果链及记忆，冻结完整输入。
  * Planner 重放沿已持久化请求复用 Prompt 和上下文选择，防止迟到历史触发第二次模型任务。
+ * 宿主 conversation 能力冻结背景和候选；跨会话获胜决策交给 route 复核，失败关闭当前 turn，不回退发送。
  * dispatchDecision 仅将独立 Planner 的获胜 message 结果按 claim 注册一次意图，末条输入决定目标；
  * turn 标识及引用保留完整冻结上下文，正文生成交给 composer。defer/ignore 与失败路径
  * 写入等待或终态；registerOnce/commitTerminal 保证重放幂等，模型 I/O 经宿主 capability 执行，平台 I/O 由 delivery 层负责。
  */
+import {
+  type MessageAuthorization,
+  conversationContextInformationKind,
+} from "../message-authorization.js";
 import {
   compilePlannerPrompt,
   plannerActionSchema,
@@ -65,6 +70,7 @@ type AnyKind = InformationKindDefinition<string, any>;
 
 export interface CreateHeartflowModuleOptions {
   readonly modelTaskCapability: ModuleCapability<ModelTaskCapability>;
+  readonly messageAuthorizationCapability?: ModuleCapability<MessageAuthorization>;
   readonly agentIdentity: AgentIdentity;
   readonly cognitionIdentity?: CognitionIdentity;
   readonly deliveryDeliveredInformationKind: AnyKind;
@@ -361,7 +367,12 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
         plannerContextSelector,
       ],
       promptRenderers: [],
-      requires: [options.modelTaskCapability],
+      requires: [
+        options.modelTaskCapability,
+        ...(options.messageAuthorizationCapability
+          ? [options.messageAuthorizationCapability]
+          : []),
+      ],
       provides: [],
     },
     create: ({ settings, activation }) => ({
@@ -415,10 +426,22 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
               await dispatchDecision(decision, state, context);
               return;
             }
-            const selected = await context.select(plannerContextSelector);
+            let selected = [...(await context.select(plannerContextSelector))];
             const turn = selected.find(
               (atom) => atom.informationId === gate.turnContextInformationId,
             )!;
+            const authorization = options.messageAuthorizationCapability
+              ? context.use(options.messageAuthorizationCapability)
+              : undefined;
+            if (authorization?.conversation) {
+              const conversation = await authorization.conversation(turn);
+              selected = [
+                ...selected.filter(
+                  (a) => a.kind !== conversationContextInformationKind.kind,
+                ),
+                conversation,
+              ];
+            }
             const runtimeContextId = decision.references.find(
               (reference) => reference.relation === "core:context",
             )!.informationId;
@@ -514,6 +537,35 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
             action = plannerDecisionInformationKind.payloadSchema.parse(
               winner.payload,
             ).action;
+            if (
+              action.action === "message" &&
+              action.target &&
+              action.target.kind !== "current"
+            ) {
+              const routed = authorization?.route
+                ? await authorization.route(turn, winner)
+                : { status: "failed", reason: "target-unavailable" };
+              if (routed.status === "failed") {
+                await context.commitTerminal(
+                  "agent.turn.terminal",
+                  gate.candidateInformationId,
+                  turnFailedInformationKind,
+                  {
+                    payload: {
+                      candidateInformationId: gate.candidateInformationId,
+                      claimInformationId: gate.claimInformationId,
+                      scopeKey: String(turn.payload.scopeKey),
+                      reason: routed.reason ?? "target-unavailable",
+                    },
+                    references: terminalReferences(
+                      gate.candidateInformationId,
+                      gate.claimInformationId,
+                    ),
+                  },
+                );
+              }
+              return;
+            }
             const payload = {
               ...decision.payload,
               outcome:
