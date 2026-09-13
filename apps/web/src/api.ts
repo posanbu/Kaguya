@@ -1,4 +1,5 @@
 /**
+ * ProfileReadResult 含所属 Profile 的 readiness；GatewayRequestError 保留安全字段路径用于表单反馈。
  * Profile 与替换请求必须同时包含两个方向的字符串数组，响应校验分别验证它们。
  * getConfigurationApplication/applyConfiguration 读取并提交配置 revision；保存响应携带同一写锁内的
  * application 快照，避免保存后再 GET 时误应用他人修改。热切换不会更换当前 Gateway Token。
@@ -167,7 +168,13 @@ export interface ProfileRegistryMetadata {
   readonly profiles: readonly ProfileMetadata[];
 }
 
+export interface ProfileReadiness {
+  readonly status: string;
+  readonly issues?: readonly ConfigurationIssue[];
+  readonly warnings?: readonly ConfigurationWarning[];
+}
 export interface ProfileReadResult {
+  readonly readiness?: ProfileReadiness;
   readonly profile: UserConfigProfile;
 }
 
@@ -219,6 +226,7 @@ export class GatewayRequestError extends Error {
     readonly code: string,
     readonly status: number,
     readonly requestId?: string,
+    readonly fieldErrors: readonly { path: string; message: string }[] = [],
   ) {
     super(message);
     this.name = "GatewayRequestError";
@@ -517,6 +525,7 @@ async function readProfileMutationResult(
       gatewayError?.code ?? failureCode,
       response.status,
       gatewayError?.requestId,
+      readFieldErrors(payload),
     );
   }
   return payload.data;
@@ -666,7 +675,12 @@ function isProfileReadResultResponse(
   return (
     isRecord(value) &&
     isRecord(value.data) &&
-    isUserConfigProfile(value.data.profile)
+    isUserConfigProfile(value.data.profile) &&
+    (value.data.readiness === undefined ||
+      (isRecord(value.data.readiness) &&
+        typeof value.data.readiness.status === "string" &&
+        isOptionalConfigurationIssueArray(value.data.readiness.issues) &&
+        isOptionalConfigurationWarningArray(value.data.readiness.warnings)))
   );
 }
 
@@ -890,6 +904,24 @@ function isStringArray(value: unknown): value is readonly string[] {
   );
 }
 
+function readFieldErrors(
+  payload: unknown,
+): { path: string; message: string }[] {
+  if (
+    !isRecord(payload) ||
+    !isRecord(payload.error) ||
+    !Array.isArray(payload.error.fieldErrors)
+  )
+    return [];
+  return payload.error.fieldErrors
+    .slice(0, 40)
+    .filter(
+      (item): item is { path: string; message: string } =>
+        isRecord(item) &&
+        typeof item.path === "string" &&
+        typeof item.message === "string",
+    );
+}
 function isErrorResponse(value: unknown): value is {
   error: {
     code: string;

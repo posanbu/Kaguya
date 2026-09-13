@@ -1,4 +1,5 @@
 /**
+ * Profile GET 返回该编辑对象的 readiness；校验错误通过白名单路径投影为安全 fieldErrors。
  * Profile GET/PUT 的严格 DTO 必须包含 inboundAllowlist 与 outboundAllowlist；旧字段不接受。
  * 功能概述：本文件组装 Kaguya 服务端的 Fastify HTTP 应用，承载匿名健康检查、
  * OpenAPI 文档、带 readiness 的全局 Profile Registry 管理接口，以及
@@ -21,6 +22,7 @@
  * message-targets 路由复用 management 认证并通过动态 Runtime 门面执行目标/正文确认。
  * configuration/status 与 apply 复用管理认证，返回不含秘密的版本及应用结果；冲突返回 409。
  */
+import { profileFieldErrors } from "./profile-field-errors.js";
 import { registerMessageTargetRoutes } from "./message-targets.js";
 import type { MessageTargetService } from "@kaguya/runtime";
 import {
@@ -40,6 +42,7 @@ import rateLimit from "@fastify/rate-limit";
 import swagger from "@fastify/swagger";
 import {
   ConfigError,
+  inspectUserConfigProfile,
   aiConfigSchema,
   agentIdentitySchema,
   memoryConfigSchema,
@@ -464,6 +467,18 @@ const profileResponseJsonSchema = {
       required: ["profile"],
       properties: {
         profile: userConfigProfileJsonSchema,
+        readiness: {
+          type: "object",
+          properties: {
+            status: { type: "string" },
+            issues:
+              profileRegistryResponseJsonSchema.properties.data.properties
+                .issues,
+            warnings:
+              profileRegistryResponseJsonSchema.properties.data.properties
+                .warnings,
+          },
+        },
       },
     },
   },
@@ -539,6 +554,19 @@ const errorResponseJsonSchema = {
         code: { type: "string" },
         message: { type: "string" },
         requestId: { type: "string" },
+        fieldErrors: {
+          type: "array",
+          maxItems: 40,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["path", "message"],
+            properties: {
+              path: { type: "string" },
+              message: { type: "string" },
+            },
+          },
+        },
       },
     },
   },
@@ -943,12 +971,11 @@ export async function createHttpApplication(
     },
     async (request) => {
       const params = profilePathParamsSchema.parse(request.params);
+      const profile = await requireManagement(options.configuration).getProfile(
+        parseProfileId(params.profileId),
+      );
       return {
-        data: {
-          profile: await requireManagement(options.configuration).getProfile(
-            parseProfileId(params.profileId),
-          ),
-        },
+        data: { profile, readiness: inspectUserConfigProfile(profile) },
       };
     },
   );
@@ -1077,11 +1104,16 @@ export async function createHttpApplication(
       error instanceof z.ZodError ||
       isMalformedJsonError(error)
     ) {
-      return reply
-        .code(400)
-        .send(
-          errorBody("invalid_request", "Request validation failed", request.id),
-        );
+      return reply.code(400).send({
+        error: {
+          code: "invalid_request",
+          message: "Request validation failed",
+          requestId: request.id,
+          ...(request.routeOptions.url?.startsWith("/api/v1/profiles")
+            ? { fieldErrors: profileFieldErrors(error) }
+            : {}),
+        },
+      });
     }
     if (error instanceof AdapterIngressUnavailableError) {
       return reply

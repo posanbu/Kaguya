@@ -282,3 +282,28 @@ describe("configuration application client", () => {
     );
   });
 });
+
+it("Profile 保存失败保留服务端字段路径", async () => {
+  const request = vi
+    .fn<typeof fetch>()
+    .mockResolvedValue(
+      Response.json(
+        {
+          error: {
+            code: "invalid_request",
+            message: "invalid",
+            requestId: "fixture",
+            fieldErrors: [
+              { path: "identity.aliases.0", message: "字段约束错误" },
+            ],
+          },
+        },
+        { status: 400 },
+      ),
+    );
+  await expect(
+    replaceProfile(config, "default", replacement, request),
+  ).rejects.toMatchObject({
+    fieldErrors: [{ path: "identity.aliases.0", message: "字段约束错误" }],
+  });
+});
