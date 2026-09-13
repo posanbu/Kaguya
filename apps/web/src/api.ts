@@ -1,4 +1,5 @@
 /**
+ * ProfileReadResult 含所属 Profile 的 readiness；GatewayRequestError 保留安全字段路径用于表单反馈。
  * Profile 与替换请求必须同时包含两个方向的字符串数组，响应校验分别验证它们。
  * getConfigurationApplication/applyConfiguration 读取并提交配置 revision；保存响应携带同一写锁内的
  * application 快照，避免保存后再 GET 时误应用他人修改。热切换不会更换当前 Gateway Token。
@@ -9,6 +10,7 @@
  * 检查健康，以及对 Profile 集合执行列出、创建、读取、完整替换、
  * 显式选择和删除；所有请求都要在本地先校验 token，再拼出精确的
  * method / URL / Bearer 头 / JSON body，避免把鉴权或隐藏字段交给浏览器猜测。
+ * 人工跨会话目标查询与确认请求门面已移除，服务端对应能力不在本文件管理。
  * getInspection 使用共享 DTO schema 校验只读响应，并复用认证、取消与 401 锁屏处理。
  * 主要职责：为 App 及后续 Profile 管理页面提供稳定的 typed API，
  * 同时保留旧的消息与健康检查路径；Profile 请求必须编码 path 参数，
@@ -166,7 +168,13 @@ export interface ProfileRegistryMetadata {
   readonly profiles: readonly ProfileMetadata[];
 }
 
+export interface ProfileReadiness {
+  readonly status: string;
+  readonly issues?: readonly ConfigurationIssue[];
+  readonly warnings?: readonly ConfigurationWarning[];
+}
 export interface ProfileReadResult {
+  readonly readiness?: ProfileReadiness;
   readonly profile: UserConfigProfile;
 }
 
@@ -218,6 +226,7 @@ export class GatewayRequestError extends Error {
     readonly code: string,
     readonly status: number,
     readonly requestId?: string,
+    readonly fieldErrors: readonly { path: string; message: string }[] = [],
   ) {
     super(message);
     this.name = "GatewayRequestError";
@@ -516,6 +525,7 @@ async function readProfileMutationResult(
       gatewayError?.code ?? failureCode,
       response.status,
       gatewayError?.requestId,
+      readFieldErrors(payload),
     );
   }
   return payload.data;
@@ -665,7 +675,12 @@ function isProfileReadResultResponse(
   return (
     isRecord(value) &&
     isRecord(value.data) &&
-    isUserConfigProfile(value.data.profile)
+    isUserConfigProfile(value.data.profile) &&
+    (value.data.readiness === undefined ||
+      (isRecord(value.data.readiness) &&
+        typeof value.data.readiness.status === "string" &&
+        isOptionalConfigurationIssueArray(value.data.readiness.issues) &&
+        isOptionalConfigurationWarningArray(value.data.readiness.warnings)))
   );
 }
 
@@ -889,6 +904,24 @@ function isStringArray(value: unknown): value is readonly string[] {
   );
 }
 
+function readFieldErrors(
+  payload: unknown,
+): { path: string; message: string }[] {
+  if (
+    !isRecord(payload) ||
+    !isRecord(payload.error) ||
+    !Array.isArray(payload.error.fieldErrors)
+  )
+    return [];
+  return payload.error.fieldErrors
+    .slice(0, 40)
+    .filter(
+      (item): item is { path: string; message: string } =>
+        isRecord(item) &&
+        typeof item.path === "string" &&
+        typeof item.message === "string",
+    );
+}
 function isErrorResponse(value: unknown): value is {
   error: {
     code: string;
@@ -1155,30 +1188,4 @@ export function configurationApplyMessage(
   if (result.application.appliedRevision !== null)
     return "新配置应用失败，已恢复原配置运行。请检查后重试。";
   return "配置已保存，但 Runtime 暂不可用。请检查数据库或服务日志后重试应用。";
-}
-
-/** 管理端目标操作复用内存 Token；响应仅在当前页面内保存。 */
-export async function messageTargetRequest(
-  config: GatewayConfig,
-  action: "sources" | "resolve" | "authorize" | "status" | "confirm",
-  body: unknown,
-): Promise<unknown> {
-  const response = await requestAuthenticatedJson(
-    config,
-    `/api/v1/message-targets/${action}`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-      cache: "no-store",
-    },
-    fetch,
-  );
-  if (!response.ok)
-    throw new GatewayRequestError(
-      "跨会话请求未完成，请检查权限或重新选择目标",
-      "target-request-rejected",
-      response.status,
-    );
-  return response.json();
 }

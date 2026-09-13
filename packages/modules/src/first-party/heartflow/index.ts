@@ -1,14 +1,23 @@
 /**
+ * manifest 声明 Planner 模板；调用 compilePlannerPrompt 时传入装配阶段加载的覆盖。
+ * settings schema 的公开中文元数据供管理表单使用，运行时与保存共用约束。
  * 管理端批准的跨会话 candidate 由宿主直接认领，不再触发 Planner；其 delivery 仍使用本模块统一 turn 终态。
  * 在线 Heartflow 编排器。所有推进都由可重放 Information 事实驱动；模块不保存
  * per-chat 状态，也不依赖订阅安装顺序。
  * createHeartflowModule 注入投递/模型失败 kind，返回声明订阅的模块；settings schema
  * 校验频率与安全策略。state/memory selector 从账本读取因果链及记忆，冻结完整输入。
  * Planner 重放沿已持久化请求复用 Prompt 和上下文选择，防止迟到历史触发第二次模型任务。
+ * 宿主 conversation 能力冻结背景和候选；跨会话获胜决策交给 route 复核，失败关闭当前 turn，不回退发送。
  * dispatchDecision 仅将独立 Planner 的获胜 message 结果按 claim 注册一次意图，末条输入决定目标；
  * turn 标识及引用保留完整冻结上下文，正文生成交给 composer。defer/ignore 与失败路径
  * 写入等待或终态；registerOnce/commitTerminal 保证重放幂等，模型 I/O 经宿主 capability 执行，平台 I/O 由 delivery 层负责。
+ * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
  */
+import { plannerTemplateDeclaration } from "../../prompt-declarations.js";
+import {
+  type MessageAuthorization,
+  conversationContextInformationKind,
+} from "../message-authorization.js";
 import {
   compilePlannerPrompt,
   plannerActionSchema,
@@ -65,7 +74,9 @@ type AnyKind = InformationKindDefinition<string, any>;
 
 export interface CreateHeartflowModuleOptions {
   readonly modelTaskCapability: ModuleCapability<ModelTaskCapability>;
+  readonly messageAuthorizationCapability?: ModuleCapability<MessageAuthorization>;
   readonly agentIdentity: AgentIdentity;
+  readonly plannerTemplate?: string;
   readonly cognitionIdentity?: CognitionIdentity;
   readonly deliveryDeliveredInformationKind: AnyKind;
   readonly deliveryFailedInformationKind: AnyKind;
@@ -76,11 +87,36 @@ export interface CreateHeartflowModuleOptions {
 
 export const heartflowSettingsSchema = z
   .object({
-    botNames: z.array(z.string().trim().min(1)),
-    groupFrequency: z.number().min(0).max(1),
-    privateFrequency: z.number().min(0).max(1),
-    muted: z.boolean(),
-    staleAfterMs: z.number().int().min(0),
+    botNames: z.array(z.string().trim().min(1)).meta({
+      title: "机器人名称",
+      description: "由当前 Profile 身份提供，此处仅保留全局文件中的值。",
+      public: true,
+      readOnly: true,
+    }),
+    groupFrequency: z.number().min(0).max(1).meta({
+      title: "群聊回复频率",
+      description: "群聊参与频率，范围为 0 到 1。",
+      public: true,
+      default: 1,
+    }),
+    privateFrequency: z.number().min(0).max(1).meta({
+      title: "私聊回复频率",
+      description: "私聊参与频率，范围为 0 到 1。",
+      public: true,
+      default: 1,
+    }),
+    muted: z.boolean().meta({
+      title: "静默模式",
+      description: "开启后抑制主动回复。",
+      public: true,
+      default: false,
+    }),
+    staleAfterMs: z.number().int().min(0).meta({
+      title: "候选过期时间",
+      description: "超过此时间的候选失效，单位毫秒。",
+      public: true,
+      default: 120000,
+    }),
   })
   .strict();
 export type HeartflowSettings = z.infer<typeof heartflowSettingsSchema>;
@@ -322,11 +358,12 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
       protocolVersion: 1,
       moduleVersion: "1.0.0",
       definitionId: "agent.heartflow.online",
-      displayName: "Information DAG heartflow",
-      summary: "Coordinates reliable online agent-turn progression.",
+      displayName: "在线回合编排",
+      summary: "协调候选认领、上下文冻结、规划和回合终态。",
       description:
-        "Coordinates candidate claims, identity barriers, as-of frozen context, attention routing, and turn terminals. It owns reliable online progression without implementing attention scoring, model generation, or transport.",
+        "消费回合候选及身份、注意力、模型和投递结果，经身份屏障冻结上下文，再请求 Planner 选择发言、等待或静默；输出消息意图、等待请求和回合终态，不执行平台传输。",
       settingsSchema: heartflowSettingsSchema,
+      promptTemplates: [plannerTemplateDeclaration],
       consumes: [
         turnCandidateInformationKind,
         personContextCompletedInformationKind,
@@ -361,7 +398,12 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
         plannerContextSelector,
       ],
       promptRenderers: [],
-      requires: [options.modelTaskCapability],
+      requires: [
+        options.modelTaskCapability,
+        ...(options.messageAuthorizationCapability
+          ? [options.messageAuthorizationCapability]
+          : []),
+      ],
       provides: [],
     },
     create: ({ settings, activation }) => ({
@@ -415,10 +457,22 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
               await dispatchDecision(decision, state, context);
               return;
             }
-            const selected = await context.select(plannerContextSelector);
+            let selected = [...(await context.select(plannerContextSelector))];
             const turn = selected.find(
               (atom) => atom.informationId === gate.turnContextInformationId,
             )!;
+            const authorization = options.messageAuthorizationCapability
+              ? context.use(options.messageAuthorizationCapability)
+              : undefined;
+            if (authorization?.conversation) {
+              const conversation = await authorization.conversation(turn);
+              selected = [
+                ...selected.filter(
+                  (a) => a.kind !== conversationContextInformationKind.kind,
+                ),
+                conversation,
+              ];
+            }
             const runtimeContextId = decision.references.find(
               (reference) => reference.relation === "core:context",
             )!.informationId;
@@ -471,6 +525,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
                       options.agentIdentity,
                       taskAtoms,
                       turn,
+                      options.plannerTemplate,
                     ),
                 contextAtoms: taskAtoms,
               });
@@ -514,6 +569,35 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
             action = plannerDecisionInformationKind.payloadSchema.parse(
               winner.payload,
             ).action;
+            if (
+              action.action === "message" &&
+              action.target &&
+              action.target.kind !== "current"
+            ) {
+              const routed = authorization?.route
+                ? await authorization.route(turn, winner)
+                : { status: "failed", reason: "target-unavailable" };
+              if (routed.status === "failed") {
+                await context.commitTerminal(
+                  "agent.turn.terminal",
+                  gate.candidateInformationId,
+                  turnFailedInformationKind,
+                  {
+                    payload: {
+                      candidateInformationId: gate.candidateInformationId,
+                      claimInformationId: gate.claimInformationId,
+                      scopeKey: String(turn.payload.scopeKey),
+                      reason: routed.reason ?? "target-unavailable",
+                    },
+                    references: terminalReferences(
+                      gate.candidateInformationId,
+                      gate.claimInformationId,
+                    ),
+                  },
+                );
+              }
+              return;
+            }
             const payload = {
               ...decision.payload,
               outcome:

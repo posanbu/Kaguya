@@ -1,3 +1,9 @@
+/**
+ * 功能概述：定义心跳模块的设置、订阅和调度行为。
+ * 主要职责：heartbeatSettingsSchema 提供校验及中文公开字段元数据；模块通过调度能力管理等待。
+ * 代码库关系：Catalog 与管理表单共用 schema，Host 负责创建实例。
+ * 输入输出与副作用：字段声明无副作用；订阅处理写入调度原子，不直接发送消息。
+ */
 import { z } from "@kaguya/schema";
 import {
   defineInformationModule,
@@ -21,9 +27,38 @@ import {
 
 export const heartbeatSettingsSchema = z
   .object({
-    messageDebounceMs: z.number().int().min(0),
-    maxReplacementAttempts: z.number().int().min(1).max(20),
-    totalWaitBudget: z.number().int().min(0).max(20),
+    messageDebounceMs: z
+      .number()
+      .int()
+      .min(0)
+      .meta({
+        title: "消息防抖时间",
+        description: "收集同一会话连续输入的等待时间，单位毫秒。",
+        public: true,
+        default: 1500,
+      }),
+    maxReplacementAttempts: z
+      .number()
+      .int()
+      .min(1)
+      .max(20)
+      .meta({
+        title: "最大替换次数",
+        description: "当前轮次允许替换候选的最大次数。",
+        public: true,
+        default: 3,
+      }),
+    totalWaitBudget: z
+      .number()
+      .int()
+      .min(0)
+      .max(20)
+      .meta({
+        title: "等待次数预算",
+        description: "每轮允许等待的总次数。",
+        public: true,
+        default: 3,
+      }),
   })
   .strict();
 export type HeartbeatSettings = z.infer<typeof heartbeatSettingsSchema>;
@@ -108,10 +143,10 @@ export const heartbeatModule = defineInformationModule({
     protocolVersion: 1,
     moduleVersion: "1.0.0",
     definitionId: "agent.heartbeat.short",
-    displayName: "Durable short heartbeat",
-    summary: "Debounces and durably reawakens pending agent turns.",
+    displayName: "持久化短心跳",
+    summary: "合并入站与等待信号，可靠唤醒待处理回合。",
     description:
-      "Durably debounces inbound and wait signals into recoverable turn candidates. Scheduling remains a capability boundary: this module owns aggregation semantics while the Scheduler owns persistence and firing.",
+      "消费入站消息和等待请求，按防抖、替换及预算策略提交单次调度；到期后输出回合候选与心跳终态，持久化和触发由 Scheduler 能力负责。",
     settingsSchema: heartbeatSettingsSchema,
     consumes: [
       inboundTextInformationKind,

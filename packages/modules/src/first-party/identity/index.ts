@@ -2,6 +2,7 @@
  * 功能概述：把正规化入站消息解析为聊天范围、平台账号与人物实体，并为每条入站提交唯一身份终态。
  * 主要职责：使用 Core registerOnce/commitTerminal 的原子槽位保证并发、重放和重启幂等；Web 匿名请求只产生
  * ephemeral 范围，不创建长期人物。代码库关系：消费 inbound kind，不读取 raw，也不依赖数据库查询投影。
+ * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
  */
 import { defineInformationModule, onInformation } from "@kaguya/sdk";
 import { z } from "@kaguya/schema";
@@ -25,10 +26,10 @@ export const identityModule = defineInformationModule({
     protocolVersion: 1,
     moduleVersion: "1.0.0",
     definitionId: "core.identity.normalize",
-    displayName: "Identity normalization",
-    summary: "Normalizes platform identities into stable agent identities.",
+    displayName: "身份归一",
+    summary: "将入站平台账号与会话解析为可追溯的稳定身份。",
     description:
-      "Normalizes inbound chat scope, platform account, and person identity into auditable terminal facts. It preserves platform facts while keeping authentication, attention policy, and response behavior outside the identity boundary.",
+      "消费入站消息，建立会话、账号和人物实体及绑定，输出身份上下文终态供回合屏障和记忆写回使用；保留未解析与降级状态，不负责鉴权或回复决策。",
     settingsSchema,
     consumes: [inboundTextInformationKind],
     produces: [

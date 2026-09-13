@@ -1,4 +1,5 @@
 /**
+ * promptTemplates 显式声明模块模板归属，Catalog 冻结其变量、partial 与组成关系。
  * 功能概述：定义唯一版本化模块协议、显式 Catalog 与受控能力边界，供模块作者和 Host 共用。
  * 主要职责：defineInformationModule 校验静态清单；Catalog 确定性合并并拒绝身份冲突；
  * capability token 保持命名空间和版本身份；onInformation 声明稳定订阅及投递语义。
@@ -112,6 +113,16 @@ export interface InformationPromptRendererDefinition {
   readonly kinds: readonly InformationKindDefinition<string, any>[];
   render(atom: DeepReadonly<InformationAtom>): string;
 }
+/** 模块静态声明拥有的模板；只含契约，不包含运行时 Prompt 或变量值。 */
+export interface ModulePromptTemplateDefinition {
+  readonly templateId: string;
+  readonly name: string;
+  readonly displayName: string;
+  readonly description: string;
+  readonly allowedVariables: readonly string[];
+  readonly allowedPartials: readonly string[];
+  readonly composes: readonly string[];
+}
 export interface InformationModuleManifest<TSettings = unknown> {
   readonly protocolVersion: 1;
   readonly definitionId: string;
@@ -120,6 +131,7 @@ export interface InformationModuleManifest<TSettings = unknown> {
   readonly summary: string;
   readonly description: string;
   readonly settingsSchema: z.ZodType<TSettings>;
+  readonly promptTemplates?: readonly ModulePromptTemplateDefinition[];
   readonly consumes: readonly InformationKindDefinition<string, any>[];
   readonly produces: readonly InformationKindDefinition<string, any>[];
   readonly selectors: readonly InformationSelectorDefinition[];
@@ -281,6 +293,27 @@ export function defineInformationModule<TSettings>(
         throw new Error(`invalid renderer: ${id}`);
     }
   }
+  const promptTemplates = m.promptTemplates ?? [];
+  const templateIds = new Set<string>();
+  for (const template of promptTemplates) {
+    assertId(template.templateId, "prompt template id");
+    if (
+      templateIds.has(template.templateId) ||
+      !/^[a-z][a-z0-9_-]*$/u.test(template.name) ||
+      !template.displayName.trim() ||
+      !template.description.trim() ||
+      ![
+        template.allowedVariables,
+        template.allowedPartials,
+        template.composes,
+      ].every(Array.isArray)
+    )
+      throw new Error("Invalid module prompt template declaration");
+    templateIds.add(template.templateId);
+  }
+  for (const template of promptTemplates)
+    if (template.composes.some((id) => !templateIds.has(id)))
+      throw new Error("Unknown module prompt composition");
   const diagnostics = m.diagnostics ?? [];
   if (!Array.isArray(diagnostics))
     throw new Error("module diagnostics must be an array");
@@ -315,6 +348,16 @@ export function defineInformationModule<TSettings>(
         m.provides.map((capability) => Object.freeze({ ...capability })),
       ),
       diagnostics: Object.freeze([...diagnostics]),
+      promptTemplates: Object.freeze(
+        promptTemplates.map((template) =>
+          Object.freeze({
+            ...template,
+            allowedVariables: Object.freeze([...template.allowedVariables]),
+            allowedPartials: Object.freeze([...template.allowedPartials]),
+            composes: Object.freeze([...template.composes]),
+          }),
+        ),
+      ),
     }),
   });
 }

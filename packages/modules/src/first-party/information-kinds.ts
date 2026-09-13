@@ -1,4 +1,5 @@
 /**
+ * 自然语言跨会话 intent 允许由获胜 agent.turn.plan.completed 直接引起，仍需宿主目标授权引用。
  * 功能概述：本文件声明 modules 包拥有的消息 DAG kind，包括入站、Heartbeat、Heartflow
  * claim/context/terminal、speech decision、消息意图、Memory、身份、assistant 与平台投递请求。
  * 主要职责：每个 definition 固定 payload 的严格 schema 和直接因果/context 引用规则；
@@ -18,6 +19,7 @@
  * 输入输出与副作用：由 `defineInformationKind` 返回的 definition 为冻结的纯定义，无 I/O；
  * Zod schema 与数组仍按各自库的常规语义使用。payload 和引用在 Core 注册前受校验，模块宿主
  * 会自动补齐 `core:caused-by` 与继承的 `core:context`。
+ * 展示契约：中文名称与职责说明由定义直接提供给 Inspection 和 WebUI，稳定 kind 与协议字段保持不变。
  */
 import {
   outboundMessageContentSchema,
@@ -140,8 +142,9 @@ export type MessageIntentRequestedInformationPayload = z.infer<
 
 export const inboundTextInformationKind = defineInformationKind({
   kind: "core.message.inbound.text",
-  displayName: "Core Message Inbound Text",
-  description: "Information carried by the core.message.inbound.text kind.",
+  displayName: "入站文本消息",
+  description:
+    "平台适配器接收消息后保存的原始正文和来源；身份归一、心跳聚合与记忆写回据此处理同一条入站信息。",
   payloadSchema: inboundTextInformationPayloadSchema,
   references: {
     "core:context": {
@@ -167,9 +170,9 @@ export const inboundTextInformationKind = defineInformationKind({
 
 export const messageIntentRequestedInformationKind = defineInformationKind({
   kind: "agent.message.intent.requested",
-  displayName: "Agent Message Intent Requested",
+  displayName: "消息生成意图",
   description:
-    "Information carried by the agent.message.intent.requested kind.",
+    "回合规划选择发言后提出的生成请求，固定目标、回合来源和获准记忆；联想模块据此召回记忆，消息合成模块据此选择上下文并生成正文。",
   payloadSchema: messageIntentRequestedInformationPayloadSchema,
   references: {
     "agent:target-authorization": {
@@ -182,6 +185,7 @@ export const messageIntentRequestedInformationKind = defineInformationKind({
       multiple: false,
       targetKinds: [
         "agent.attention.arousal.completed",
+        "agent.turn.plan.completed",
         "agent.message.target.authorized",
       ],
     },
@@ -225,8 +229,9 @@ export const messageIntentRequestedInformationKind = defineInformationKind({
 
 export const filterDecisionInformationKind = defineInformationKind({
   kind: "filter.decision",
-  displayName: "Filter Decision",
-  description: "Information carried by the filter.decision kind.",
+  displayName: "入站过滤拒绝",
+  description:
+    "入站消息被过滤器拒绝时记录过滤器标识和原因；用于审计消息为何未进入后续处理。",
   payloadSchema: z
     .object({
       accepted: z.literal(false),
@@ -260,8 +265,9 @@ export const filterDecisionInformationKind = defineInformationKind({
 
 export const coreMemoryTextInformationKind = defineInformationKind({
   kind: "core.memory.text",
-  displayName: "Core Memory Text",
-  description: "Information carried by the core.memory.text kind.",
+  displayName: "记忆文本",
+  description:
+    "带显式来源引用的记忆正文，登记后供联想检索及 Prompt 上下文选择使用，来源可沿引用追溯。",
   payloadSchema: z.object({ text: z.string().trim().min(1) }).strict(),
   references: {
     "core:caused-by": {
@@ -333,8 +339,9 @@ export type AssociationRequestedInformationPayload = z.infer<
 
 export const associationRequestedInformationKind = defineInformationKind({
   kind: "agent.association.requested",
-  displayName: "Agent Association Requested",
-  description: "Information carried by the agent.association.requested kind.",
+  displayName: "记忆联想请求",
+  description:
+    "收到消息意图后冻结检索范围、身份和时间边界；联想处理据此构造查询，避免使用范围外或迟到信息。",
   payloadSchema: associationRequestedInformationPayloadSchema,
   references: {
     "core:caused-by": {
@@ -388,8 +395,9 @@ export type AssociationQueryInformationPayload = z.infer<
 
 export const associationQueryInformationKind = defineInformationKind({
   kind: "agent.association.query",
-  displayName: "Agent Association Query",
-  description: "Information carried by the agent.association.query kind.",
+  displayName: "记忆联想查询",
+  description:
+    "联想请求被处理时记录实际查询文本、方法、范围和数量上限；检索结果以此作为候选的直接来源。",
   payloadSchema: associationQueryInformationPayloadSchema,
   references: {
     "core:caused-by": {
@@ -433,8 +441,9 @@ export type AssociationCandidateInformationPayload = z.infer<
 
 export const associationCandidateInformationKind = defineInformationKind({
   kind: "agent.association.candidate",
-  displayName: "Agent Association Candidate",
-  description: "Information carried by the agent.association.candidate kind.",
+  displayName: "记忆联想候选",
+  description:
+    "检索命中后记录候选排名与入选原因，并引用原始记忆；消息上下文选择器沿引用读取获准材料。",
   payloadSchema: associationCandidateInformationPayloadSchema,
   references: {
     "core:caused-by": {
@@ -491,8 +500,9 @@ export type AssociationCompletedInformationPayload = z.infer<
 
 export const associationCompletedInformationKind = defineInformationKind({
   kind: "agent.association.completed",
-  displayName: "Agent Association Completed",
-  description: "Information carried by the agent.association.completed kind.",
+  displayName: "记忆联想结果",
+  description:
+    "一次联想结束时汇总命中、空结果、策略过滤或故障及候选数量；消息合成模块据此继续生成，不将空结果误判为尚未完成。",
   payloadSchema: associationCompletedInformationPayloadSchema,
   references: {
     "core:caused-by": {
@@ -543,8 +553,9 @@ export type PersonFactCandidateInformationPayload = z.infer<
 
 export const personFactCandidateInformationKind = defineInformationKind({
   kind: "core.person.fact.candidate",
-  displayName: "Core Person Fact Candidate",
-  description: "Information carried by the core.person.fact.candidate kind.",
+  displayName: "人物事实候选",
+  description:
+    "待提取人物事实的文本及其来源，在提交提取任务前登记；人物事实模块将其渲染为模型输入并校验输出证据。",
   payloadSchema: personFactCandidateInformationPayloadSchema,
   references: {
     "core:caused-by": {
@@ -577,8 +588,9 @@ export type PersonFactExtractedPayload = z.infer<
 
 export const personFactExtractedInformationKind = defineInformationKind({
   kind: "core.person.fact.extracted",
-  displayName: "Core Person Fact Extracted",
-  description: "Information carried by the core.person.fact.extracted kind.",
+  displayName: "人物事实提取结果",
+  description:
+    "人物提取模型的输出通过结构和证据校验后登记的事实；下游可沿来源引用核查，不将未验证的模型文本作为事实。",
   payloadSchema: personFactExtractedPayloadSchema,
   references: {
     "core:caused-by": {
@@ -601,8 +613,9 @@ export const personFactExtractedInformationKind = defineInformationKind({
 
 export const assistantTextInformationKind = defineInformationKind({
   kind: "core.message.assistant.text",
-  displayName: "Core Message Assistant Text",
-  description: "Information carried by the core.message.assistant.text kind.",
+  displayName: "生成的助手消息",
+  description:
+    "消息合成完成后保存的正文、目标和生成实例；下游将其转成投递请求，登记本身不表示平台已发送成功。",
   payloadSchema: z
     .object({
       text: z.string(),
@@ -649,8 +662,9 @@ export const assistantTextInformationKind = defineInformationKind({
 
 export const deliveryRequestedInformationKind = defineInformationKind({
   kind: "core.delivery.requested",
-  displayName: "Core Delivery Requested",
-  description: "Information carried by the core.delivery.requested kind.",
+  displayName: "平台投递请求",
+  description:
+    "助手正文进入发送阶段时记录明确目标、消息内容和回合来源；Runtime 调用对应适配器并产生成功或失败结果。",
   payloadSchema: z
     .object({
       adapterId: nonBlankString,
@@ -729,8 +743,9 @@ const turnInputSchema = z
 
 export const turnClaimedInformationKind = defineInformationKind({
   kind: "agent.turn.claimed",
-  displayName: "Agent Turn Claimed",
-  description: "Information carried by the agent.turn.claimed kind.",
+  displayName: "回合认领",
+  description:
+    "Heartflow 成功认领候选时记录范围、代次和前一终态；后续上下文及终态引用它以隔离并发回合。",
   payloadSchema: z
     .object({
       candidateInformationId: nonBlankString,
@@ -771,8 +786,9 @@ export const turnClaimedInformationKind = defineInformationKind({
 
 export const turnStartedInformationKind = defineInformationKind({
   kind: "agent.turn.started",
-  displayName: "Agent Turn Started",
-  description: "Information carried by the agent.turn.started kind.",
+  displayName: "回合开始",
+  description:
+    "候选认领后登记正式推进的回合及代次；供回合生命周期诊断关联候选、认领与后续处理。",
   payloadSchema: z
     .object({
       candidateInformationId: nonBlankString,
@@ -807,9 +823,9 @@ export const turnStartedInformationKind = defineInformationKind({
 
 export const turnDecisionSupersededInformationKind = defineInformationKind({
   kind: "agent.turn.decision.superseded",
-  displayName: "Agent Turn Decision Superseded",
+  displayName: "回合决策被替代",
   description:
-    "Information carried by the agent.turn.decision.superseded kind.",
+    "较新候选替代当前认领的决策时记录替代来源；后续可据此识别过期决策并追溯候选竞争。",
   payloadSchema: z
     .object({
       candidateInformationId: nonBlankString,
@@ -868,8 +884,9 @@ const turnTerminalBaseShape = {
 
 export const turnCompletedInformationKind = defineInformationKind({
   kind: "agent.turn.completed",
-  displayName: "Agent Turn Completed",
-  description: "Information carried by the agent.turn.completed kind.",
+  displayName: "回合完成",
+  description:
+    "回合在投递终态后结束时登记，并保存对应投递终态标识；用于闭合回合生命周期和后续候选衔接。",
   payloadSchema: z
     .object({
       ...turnTerminalBaseShape,
@@ -886,8 +903,9 @@ export const turnCompletedInformationKind = defineInformationKind({
 
 export const turnWaitingInformationKind = defineInformationKind({
   kind: "agent.turn.waiting",
-  displayName: "Agent Turn Waiting",
-  description: "Information carried by the agent.turn.waiting kind.",
+  displayName: "回合等待",
+  description:
+    "回合选择暂缓时记录下次检查时间并形成当前回合终态；心跳调度负责后续唤醒，诊断可区分等待与卡住。",
   payloadSchema: z
     .object({
       ...turnTerminalBaseShape,
@@ -908,8 +926,9 @@ export const turnWaitingInformationKind = defineInformationKind({
 
 export const turnSilentInformationKind = defineInformationKind({
   kind: "agent.turn.silent",
-  displayName: "Agent Turn Silent",
-  description: "Information carried by the agent.turn.silent kind.",
+  displayName: "回合静默",
+  description:
+    "回合决定不发言时记录原因并闭合当前候选；供生命周期审计解释本次没有消息输出。",
   payloadSchema: z
     .object({ ...turnTerminalBaseShape, reasonCodes: z.array(nonBlankString) })
     .strict(),
@@ -923,8 +942,9 @@ export const turnSilentInformationKind = defineInformationKind({
 
 export const turnFailedInformationKind = defineInformationKind({
   kind: "agent.turn.failed",
-  displayName: "Agent Turn Failed",
-  description: "Information carried by the agent.turn.failed kind.",
+  displayName: "回合失败",
+  description:
+    "回合无法继续推进时记录失败原因及所属认领；可靠执行和诊断可据此识别已结束的失败候选。",
   payloadSchema: z
     .object({ ...turnTerminalBaseShape, reason: nonBlankString })
     .strict(),
@@ -942,8 +962,9 @@ export const turnFailedInformationKind = defineInformationKind({
 
 export const turnSupersededInformationKind = defineInformationKind({
   kind: "agent.turn.superseded",
-  displayName: "Agent Turn Superseded",
-  description: "Information carried by the agent.turn.superseded kind.",
+  displayName: "回合被替代",
+  description:
+    "回合被更新候选取代时记录替代候选并结束旧回合；下游按新的候选继续推进，避免把旧回合当作待处理。",
   payloadSchema: z
     .object({
       ...turnTerminalBaseShape,
@@ -996,8 +1017,9 @@ export type TurnContextCompletedPayload = z.infer<
 
 export const turnContextCompletedInformationKind = defineInformationKind({
   kind: "agent.turn.context.completed",
-  displayName: "Agent Turn Context Completed",
-  description: "Information carried by the agent.turn.context.completed kind.",
+  displayName: "回合上下文就绪",
+  description:
+    "身份屏障结束后冻结截至指定时刻的输入、来源和时机特征；注意力评估与规划只消费这份可重放上下文。",
   payloadSchema: turnContextPayloadSchema,
   references: {
     "core:caused-by": { required: true, multiple: false },
@@ -1066,9 +1088,9 @@ export type AttentionArousalPayload = z.infer<
 
 export const attentionArousalCompletedInformationKind = defineInformationKind({
   kind: "agent.attention.arousal.completed",
-  displayName: "Agent Attention Arousal Completed",
+  displayName: "注意力评估结果",
   description:
-    "A deterministic decision about whether an event deserves agent attention.",
+    "对冻结回合完成安全门控及显著性评分后记录关注、延后或忽略、分项得分和原因；Heartflow 据此进入规划或结束回合。",
   payloadSchema: attentionArousalPayloadSchema,
   references: {
     "core:caused-by": {
@@ -1115,8 +1137,9 @@ export const attentionArousalCompletedInformationKind = defineInformationKind({
 
 export const waitRequestedInformationKind = defineInformationKind({
   kind: "agent.wait.requested",
-  displayName: "Agent Wait Requested",
-  description: "Information carried by the agent.wait.requested kind.",
+  displayName: "等待唤醒请求",
+  description:
+    "回合需要稍后复查时记录到期时间、等待预算和消息唤醒策略；心跳模块据此创建可恢复调度。",
   payloadSchema: z
     .object({
       dueAt: nonBlankString,
@@ -1180,8 +1203,9 @@ const heartbeatTerminalReference = {
 
 export const heartbeatScheduledInformationKind = defineInformationKind({
   kind: "agent.heartbeat.scheduled",
-  displayName: "Agent Heartbeat Scheduled",
-  description: "Information carried by the agent.heartbeat.scheduled kind.",
+  displayName: "短心跳已调度",
+  description:
+    "入站聚合或等待请求成功安排调度后记录时间和聚合来源；后续触发或替代终态据此关联同一次心跳。",
   payloadSchema: z
     .object({
       reason: heartbeatReasonSchema,
@@ -1229,8 +1253,9 @@ export const heartbeatScheduledInformationKind = defineInformationKind({
 
 export const heartbeatFiredInformationKind = defineInformationKind({
   kind: "agent.heartbeat.fired",
-  displayName: "Agent Heartbeat Fired",
-  description: "Information carried by the agent.heartbeat.fired kind.",
+  displayName: "短心跳已触发",
+  description:
+    "调度到期且心跳被处理时登记触发结果；心跳模块由此形成可供 Heartflow 认领的回合候选。",
   payloadSchema: z
     .object({ firedAt: z.iso.datetime({ offset: true }) })
     .strict(),
@@ -1248,8 +1273,9 @@ export const heartbeatFiredInformationKind = defineInformationKind({
 
 export const heartbeatSupersededInformationKind = defineInformationKind({
   kind: "agent.heartbeat.superseded",
-  displayName: "Agent Heartbeat Superseded",
-  description: "Information carried by the agent.heartbeat.superseded kind.",
+  displayName: "短心跳被替代",
+  description:
+    "新的聚合请求替代已有心跳时登记旧心跳终态；用于追踪防抖替换并避免旧调度重复唤醒。",
   payloadSchema: z
     .object({ replacementInformationId: nonBlankString })
     .strict(),
@@ -1266,8 +1292,9 @@ export const heartbeatSupersededInformationKind = defineInformationKind({
 
 export const heartbeatFailedInformationKind = defineInformationKind({
   kind: "agent.heartbeat.failed",
-  displayName: "Agent Heartbeat Failed",
-  description: "Information carried by the agent.heartbeat.failed kind.",
+  displayName: "短心跳失败",
+  description:
+    "心跳调度或处理失败时保存原因；供维护者关联原调度及可靠执行结果，解释未产生回合候选的原因。",
   payloadSchema: z.object({ error: nonBlankString }).strict(),
   references: heartbeatTerminalReference,
   log: {
@@ -1301,8 +1328,9 @@ const turnCandidatePayloadSchema = z
 
 export const turnCandidateInformationKind = defineInformationKind({
   kind: "agent.turn.candidate",
-  displayName: "Agent Turn Candidate",
-  description: "Information carried by the agent.turn.candidate kind.",
+  displayName: "待处理回合候选",
+  description:
+    "心跳将聚合输入整理为候选时登记来源、范围和等待策略；Heartflow 认领后构造冻结上下文并决定后续动作。",
   payloadSchema: z.union([
     turnCandidatePayloadSchema,
     turnCandidatePayloadSchema.extend({
@@ -1367,8 +1395,9 @@ const identityTerminalSchema = z
 
 export const chatScopeEntityInformationKind = defineInformationKind({
   kind: "agent.chat.scope.entity",
-  displayName: "Agent Chat Scope Entity",
-  description: "Information carried by the agent.chat.scope.entity kind.",
+  displayName: "会话范围实体",
+  description:
+    "身份归一时建立的平台会话范围，区分规范范围和临时范围；回合隔离与记忆范围选择通过引用复用它。",
   payloadSchema: z
     .object({
       platform: nonBlankString,
@@ -1398,8 +1427,9 @@ export const chatScopeEntityInformationKind = defineInformationKind({
 });
 export const chatScopeBindingInformationKind = defineInformationKind({
   kind: "agent.chat.scope.binding",
-  displayName: "Agent Chat Scope Binding",
-  description: "Information carried by the agent.chat.scope.binding kind.",
+  displayName: "会话范围绑定",
+  description:
+    "身份归一时将平台目标绑定到会话实体；后续消息据此解析相同范围并追溯绑定依据。",
   payloadSchema: z
     .object({
       platform: nonBlankString,
@@ -1432,8 +1462,9 @@ export const chatScopeBindingInformationKind = defineInformationKind({
 });
 export const platformAccountEntityInformationKind = defineInformationKind({
   kind: "agent.platform.account.entity",
-  displayName: "Agent Platform Account Entity",
-  description: "Information carried by the agent.platform.account.entity kind.",
+  displayName: "平台账号实体",
+  description:
+    "身份归一时为平台、适配器与账号建立实体；人物观察和绑定通过引用关联同一平台账号。",
   payloadSchema: z
     .object({
       platform: nonBlankString,
@@ -1461,9 +1492,9 @@ export const platformAccountEntityInformationKind = defineInformationKind({
 });
 export const platformAccountBindingInformationKind = defineInformationKind({
   kind: "agent.platform.account.binding",
-  displayName: "Agent Platform Account Binding",
+  displayName: "账号人物绑定",
   description:
-    "Information carried by the agent.platform.account.binding kind.",
+    "账号被关联到人物实体时记录绑定事实；后续人物解析据此复用人物身份并保留账号来源。",
   payloadSchema: z
     .object({ accountId: nonBlankString, personInformationId: nonBlankString })
     .strict(),
@@ -1488,8 +1519,9 @@ export const platformAccountBindingInformationKind = defineInformationKind({
 });
 export const personEntityInformationKind = defineInformationKind({
   kind: "agent.person.entity",
-  displayName: "Agent Person Entity",
-  description: "Information carried by the agent.person.entity kind.",
+  displayName: "人物实体",
+  description:
+    "身份归一需要建立人物身份时登记关联账号；人物解析和后续上下文以该实体引用表示人物。",
   payloadSchema: z.object({ accountId: nonBlankString }).strict(),
   references: {
     "core:caused-by": { required: true, multiple: false },
@@ -1507,8 +1539,9 @@ export const personEntityInformationKind = defineInformationKind({
 });
 export const personObservedInformationKind = defineInformationKind({
   kind: "agent.person.observed",
-  displayName: "Agent Person Observed",
-  description: "Information carried by the agent.person.observed kind.",
+  displayName: "人物资料观察",
+  description:
+    "处理入站消息时记录账号昵称、群名片和观察时间；下游可追溯当时看到的资料，不将展示名称直接作为稳定身份。",
   payloadSchema: z
     .object({
       accountId: nonBlankString,
@@ -1542,8 +1575,9 @@ export const personObservedInformationKind = defineInformationKind({
 });
 export const personResolutionInformationKind = defineInformationKind({
   kind: "agent.person.resolution",
-  displayName: "Agent Person Resolution",
-  description: "Information carried by the agent.person.resolution kind.",
+  displayName: "人物身份解析结果",
+  description:
+    "人物解析完成时记录成功、未解析、歧义、降级或失败及实体引用；下游据此区分身份可用性与平台原始事实。",
   payloadSchema: identityTerminalSchema,
   references: {
     "core:caused-by": { required: true, multiple: false },
@@ -1570,9 +1604,9 @@ export const personResolutionInformationKind = defineInformationKind({
 });
 export const personContextCompletedInformationKind = defineInformationKind({
   kind: "agent.person.context.completed",
-  displayName: "Agent Person Context Completed",
+  displayName: "消息身份上下文就绪",
   description:
-    "Information carried by the agent.person.context.completed kind.",
+    "单条入站消息的身份处理结束后登记状态和实体引用；释放 Heartflow 身份屏障并触发独立原始记忆写回。",
   payloadSchema: identityTerminalSchema,
   references: {
     "core:caused-by": { required: true, multiple: false },

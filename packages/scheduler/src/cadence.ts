@@ -5,6 +5,7 @@
  * computeCadenceWindow 只计算固定边界；installProjectionReconciliationConsumers 将 tick
  * 转为独立、有界的日志投影 request/terminal，既不维护 Memory 也不触发在线 Agent。
  * 依赖 Core 的持久唯一槽位与范围查询；stop 仅停止本地唤醒，保留账本中的未来意图。
+ * 展示契约：中文名称与职责说明由定义直接提供给 Inspection 和 WebUI，稳定 kind 与协议字段保持不变。
  */
 import type {
   DeepReadonly,
@@ -111,8 +112,9 @@ export const reconciliationFailedPayloadSchema = z
 
 export const cadenceDefinitionInformationKind = defineInformationKind({
   kind: "scheduler.cadence.definition",
-  displayName: "Scheduler Cadence Definition",
-  description: "Information carried by the scheduler.cadence.definition kind.",
+  displayName: "周期节奏定义",
+  description:
+    "维护任务启用周期节奏时冻结间隔、起点和策略版本；调度器按该定义计算后续时间窗口。",
   payloadSchema: cadenceDefinitionPayloadSchema,
   references: {},
   log: {
@@ -127,8 +129,9 @@ export const cadenceDefinitionInformationKind = defineInformationKind({
 });
 export const cadenceDisabledInformationKind = defineInformationKind({
   kind: "scheduler.cadence.disabled",
-  displayName: "Scheduler Cadence Disabled",
-  description: "Information carried by the scheduler.cadence.disabled kind.",
+  displayName: "周期节奏停用",
+  description:
+    "周期定义或待触发节拍停用时记录原因；调度器据此停止旧节奏，诊断保留停用依据。",
   payloadSchema: cadenceDisabledPayloadSchema,
   references: {
     "core:status-of": {
@@ -152,8 +155,9 @@ export const cadenceDisabledInformationKind = defineInformationKind({
 });
 export const cadenceSupersededInformationKind = defineInformationKind({
   kind: "scheduler.cadence.superseded",
-  displayName: "Scheduler Cadence Superseded",
-  description: "Information carried by the scheduler.cadence.superseded kind.",
+  displayName: "周期节奏被替代",
+  description:
+    "周期定义或节拍被新版本取代时登记终态；用于隔离旧策略并追溯节奏变更。",
   payloadSchema: cadenceSupersededPayloadSchema,
   references: {
     "core:status-of": {
@@ -176,8 +180,9 @@ export const cadenceSupersededInformationKind = defineInformationKind({
 });
 export const cadenceTickInformationKind = defineInformationKind({
   kind: "scheduler.cadence.tick",
-  displayName: "Scheduler Cadence Tick",
-  description: "Information carried by the scheduler.cadence.tick kind.",
+  displayName: "周期节拍",
+  description:
+    "周期窗口到达时记录窗口索引、计划时间和错过次数；维护模块据此提交有界任务，避免逐个补跑所有错过窗口。",
   payloadSchema: cadenceTickPayloadSchema,
   references: {
     "core:status-of": {
@@ -211,9 +216,9 @@ export const cadenceTickInformationKind = defineInformationKind({
 });
 export const reconciliationRequestedInformationKind = defineInformationKind({
   kind: "maintenance.projection.reconciliation.requested",
-  displayName: "Maintenance Projection Reconciliation Requested",
+  displayName: "投影对账请求",
   description:
-    "Information carried by the maintenance.projection.reconciliation.requested kind.",
+    "周期节拍触发时记录待维护范围和批量上限；投影维护处理器据此修复派生数据。",
   payloadSchema: reconciliationRequestedPayloadSchema,
   references: {
     "core:caused-by": {
@@ -234,9 +239,9 @@ export const reconciliationRequestedInformationKind = defineInformationKind({
 });
 export const reconciliationCompletedInformationKind = defineInformationKind({
   kind: "maintenance.projection.reconciliation.completed",
-  displayName: "Maintenance Projection Reconciliation Completed",
+  displayName: "投影对账完成",
   description:
-    "Information carried by the maintenance.projection.reconciliation.completed kind.",
+    "一次有界对账结束后汇总已处理、失败和待处理数量；维护诊断据此判断积压及局部失败。",
   payloadSchema: reconciliationCompletedPayloadSchema,
   references: {
     "core:status-of": {
@@ -259,9 +264,9 @@ export const reconciliationCompletedInformationKind = defineInformationKind({
 });
 export const reconciliationFailedInformationKind = defineInformationKind({
   kind: "maintenance.projection.reconciliation.failed",
-  displayName: "Maintenance Projection Reconciliation Failed",
+  displayName: "投影对账失败",
   description:
-    "Information carried by the maintenance.projection.reconciliation.failed kind.",
+    "对账批次失败时记录处理数量和安全错误；维护诊断据此定位失败批次并保留后续恢复依据。",
   payloadSchema: reconciliationFailedPayloadSchema,
   references: {
     "core:status-of": {

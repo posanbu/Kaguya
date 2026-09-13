@@ -1,6 +1,9 @@
 /**
+ * ModuleTemplatesSection 注入详情插槽，仅编辑模块声明的本地模板覆盖。
+ * 模块详情注入 ModuleSettingsSection，以独立管理接口读取全局配置。
  * 功能概述：开发者控制台的只读 Module、Atom 与 Ingress/Turn Flow 页面，沿用顶层内存 Token。
- * 主要职责：DeveloperConsole 维护页面导航及手动刷新；Modules 展示 Manifest/activation；
+ * 页面复用共同 PageHeader/Button/FieldMessage；保留模块、Atom、Flow 二级导航。
+ * 主要职责：DeveloperConsole 维护页面导航及手动刷新；ModulePage 按路径展示紧凑总览或独立详情；
  * Atoms 提供过滤、游标页和详情；Flows 按 runtime context 展示可点击 DAG 或时间列表；
  * Detail 支持完整脱敏 payload/Prompt、正反引用导航及复制 ID；useInspection 取消过期请求。
  * 代码库关系：App.tsx 处理 history 与锁屏，api.ts 复用 Gateway 认证并用 schema 包验证 DTO；
@@ -8,6 +11,8 @@
  * 输入输出与副作用：仅 GET 请求、history 导航和用户触发的剪贴板写入；无轮询、编辑或重放；
  * 卸载清理异步任务，加载/失败时隐藏旧数据，明确显示空结果、分页和图截断。
  */
+import { ModuleTemplatesSection } from "./ModuleTemplatesSection.js";
+import { ModuleSettingsSection } from "./ModuleSettingsSection.js";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   inspectionModulesSchema,
@@ -16,14 +21,20 @@ import {
   inspectionFlowSchema,
   type InspectionAtom,
   type InspectionFlow,
-  type InspectionModule,
 } from "@kaguya/schema";
+import {
+  ModulePage,
+  moduleDefinitionId,
+  navigateModuleLink,
+} from "./ModulePages.js";
 import { getInspection } from "./api.js";
 import "./developer.css";
+import { Button, FieldMessage, PageHeader } from "./components/ui.js";
 
 type Page = "modules" | "atoms" | "flows";
 export function developerPage(path: string): Page | undefined {
-  return /^\/developer(?:\/modules)?\/?$/.test(path)
+  return moduleDefinitionId(path) !== undefined ||
+    /^\/developer(?:\/modules)?\/?$/.test(path)
     ? "modules"
     : /^\/developer\/atoms\/?$/.test(path)
       ? "atoms"
@@ -62,20 +73,20 @@ function useInspection<T>(
 }
 function Status({ state }: { state: { data?: unknown; error?: string } }) {
   return state.error ? (
-    <p role="alert" className="error-banner">
-      {state.error}
-    </p>
+    <FieldMessage tone="error">{state.error}</FieldMessage>
   ) : state.data === undefined ? (
-    <p role="status">正在加载…</p>
+    <FieldMessage>正在加载…</FieldMessage>
   ) : null;
 }
 export function DeveloperConsole({
   token,
   page,
+  path,
   navigate,
 }: {
   token: string;
   page: Page;
+  path: string;
   navigate: (path: string) => void;
 }) {
   const [revision, setRevision] = useState(0);
@@ -96,27 +107,14 @@ export function DeveloperConsole({
   );
   return (
     <div className="app-shell developer-shell">
-      <header className="topbar">
-        <strong>Kaguya · 开发者</strong>
-        <span className="topbar-spacer" />
-        <button className="secondary-button" onClick={() => navigate("/")}>
-          返回消息
-        </button>
-      </header>
       <main className="developer-main">
-        <div className="developer-heading">
-          <div>
-            <p className="eyebrow">运行时检查</p>
-            <h1>开发者控制台</h1>
-            <p>查看模块契约与消息流。消息和 Prompt 已执行秘密脱敏。</p>
-          </div>
-          <button
-            className="secondary-button"
-            onClick={() => setRevision((r) => r + 1)}
-          >
-            刷新
-          </button>
-        </div>
+        <PageHeader
+          title="检查"
+          description="查看模块契约与消息流。消息和 Prompt 已执行秘密脱敏。"
+          actions={
+            <Button onClick={() => setRevision((r) => r + 1)}>刷新</Button>
+          }
+        />
         <nav className="developer-tabs" aria-label="开发者导航">
           {(["modules", "atoms", "flows"] as const).map((p, i) => (
             <a
@@ -124,8 +122,7 @@ export function DeveloperConsole({
               href={`/developer/${p}`}
               aria-current={page === p ? "page" : undefined}
               onClick={(e) => {
-                e.preventDefault();
-                navigate(`/developer/${p}`);
+                navigateModuleLink(e, `/developer/${p}`, navigate);
               }}
             >
               {["Module 模块", "Atom 消息", "Ingress / Turn 流"][i]}
@@ -133,10 +130,13 @@ export function DeveloperConsole({
           ))}
         </nav>
         {page === "modules" ? (
-          <>
-            <Status state={modules} />
-            {modules.data && <Modules modules={modules.data.modules} />}
-          </>
+          <ModulePage
+            path={path}
+            token={token}
+            state={modules}
+            SettingsSection={ModuleSettingsSection}
+            TemplatesSection={ModuleTemplatesSection}
+          />
         ) : page === "atoms" ? (
           <Atoms key="atoms" token={token} revision={revision} names={names} />
         ) : (
@@ -144,96 +144,6 @@ export function DeveloperConsole({
         )}
       </main>
     </div>
-  );
-}
-function Modules({ modules }: { modules: InspectionModule[] }) {
-  const [search, setSearch] = useState("");
-  const visible = modules.filter((m) =>
-    `${m.definitionId} ${m.displayName} ${m.summary}`
-      .toLowerCase()
-      .includes(search.toLowerCase()),
-  );
-  return (
-    <>
-      <label className="developer-search">
-        查找模块
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="名称或 definition ID"
-        />
-      </label>
-      <p>{visible.length} 个模块定义</p>
-      {!visible.length && <p>没有匹配的模块。</p>}
-      <div className="module-grid">
-        {visible.map((m) => (
-          <article className="developer-card" key={m.definitionId}>
-            <h2>{m.displayName}</h2>
-            <code>{m.definitionId}</code>
-            <p>{m.summary}</p>
-            <p>{m.description}</p>
-            <dl>
-              <dt>版本 / 协议</dt>
-              <dd>
-                {m.moduleVersion} / {m.protocolVersion}
-              </dd>
-              <dt>Activation</dt>
-              <dd>
-                {m.bindings.length
-                  ? m.bindings.map((b) => b.instanceId).join("、")
-                  : "未激活"}
-              </dd>
-            </dl>
-            {(["consumes", "produces"] as const).map((field, i) => (
-              <section key={field}>
-                <h3>{i ? "输出 Kind" : "输入 Kind"}</h3>
-                {m[field].length ? (
-                  m[field].map((k) => (
-                    <p key={k.kind} title={k.description}>
-                      {k.displayName}
-                      <br />
-                      <code>{k.kind}</code>
-                    </p>
-                  ))
-                ) : (
-                  <p>无</p>
-                )}
-              </section>
-            ))}
-            <h3>Prompt renderer</h3>
-            {m.promptRenderers.length ? (
-              m.promptRenderers.map((p) => (
-                <section key={p.rendererId}>
-                  <strong>{p.displayName}</strong>
-                  <p>{p.description}</p>
-                  <code>{p.rendererId}</code>
-                  <p>{p.kinds.join("、")}</p>
-                </section>
-              ))
-            ) : (
-              <p>无</p>
-            )}
-            <details>
-              <summary>Selector、Capability 与绑定</summary>
-              <pre>
-                {JSON.stringify(
-                  {
-                    selectors: m.selectors,
-                    requires: m.requires,
-                    provides: m.provides,
-                    bindings: m.bindings,
-                    diagnostics: m.diagnostics,
-                    settingsSchemaFingerprint: m.settingsSchemaFingerprint,
-                  },
-                  null,
-                  2,
-                )}
-              </pre>
-            </details>
-          </article>
-        ))}
-      </div>
-    </>
   );
 }
 function Filters({
@@ -279,7 +189,9 @@ function Filters({
         结束时间
         <input name="before" type="datetime-local" />
       </label>
-      <button className="secondary-button">筛选</button>
+      <Button className="secondary-button" type="submit">
+        筛选
+      </Button>
     </form>
   );
 }
@@ -298,7 +210,7 @@ function AtomList({
     <ol className="atom-list">
       {atoms.map((a) => (
         <li key={a.informationId}>
-          <button
+          <Button
             aria-pressed={selected === a.informationId}
             onClick={() => select(a.informationId)}
           >
@@ -307,7 +219,7 @@ function AtomList({
             <time>{new Date(a.occurredAt).toLocaleString()}</time>
             <span>{a.source}</span>
             <code>{a.informationId}</code>
-          </button>
+          </Button>
         </li>
       ))}
     </ol>
@@ -324,21 +236,21 @@ function Pager({
 }) {
   return (
     <div className="developer-pager">
-      <button
+      <Button
         className="secondary-button"
         disabled={!cursors.length}
         onClick={() => setCursors(cursors.slice(0, -1))}
       >
         上一页
-      </button>
+      </Button>
       <span>第 {cursors.length + 1} 页</span>
-      <button
+      <Button
         className="secondary-button"
         disabled={!next}
         onClick={() => next && setCursors([...cursors, next])}
       >
         下一页
-      </button>
+      </Button>
     </div>
   );
 }
@@ -449,7 +361,7 @@ function Detail({
       {detail && (
         <>
           <code>{detail.atom.informationId}</code>
-          <button
+          <Button
             className="secondary-button"
             onClick={() => {
               void navigator.clipboard
@@ -461,7 +373,7 @@ function Detail({
             }}
           >
             复制 information ID
-          </button>
+          </Button>
           <span role="status">{copied}</span>
           <p>
             {detail.atom.kind} · {detail.atom.source}
@@ -478,13 +390,13 @@ function Detail({
           <h3>引用的消息</h3>
           {!detail.atom.references.length && <p>无</p>}
           {detail.atom.references.map((r, i) => (
-            <button
+            <Button
               className="reference-link"
               key={i}
               onClick={() => select(r.informationId)}
             >
               {r.relation} → {r.informationId}
-            </button>
+            </Button>
           ))}
           {detail.referencesTruncated && (
             <p role="status">正向引用超过 100 条，已截断。</p>
@@ -492,13 +404,13 @@ function Detail({
           <h3>引用此消息</h3>
           {!detail.referencedBy.length && <p>无</p>}
           {detail.referencedBy.map((a) => (
-            <button
+            <Button
               className="reference-link"
               key={a.informationId}
               onClick={() => select(a.informationId)}
             >
               {a.kind} · {a.informationId}
-            </button>
+            </Button>
           ))}
           {detail.reverseReferencesTruncated && (
             <p role="status">反向引用超过 100 条，已截断。</p>
@@ -589,12 +501,12 @@ function Flows({
                   {flow.data.nodes.length} 个节点 · {flow.data.edges.length}{" "}
                   条引用
                 </p>
-                <button
+                <Button
                   className="secondary-button"
                   onClick={() => setGraph((g) => !g)}
                 >
                   {graph ? "切换时间列表" : "切换图形视图"}
-                </button>
+                </Button>
               </div>
               {flow.data.truncated && (
                 <p role="status">消息流超过节点或引用上限，当前视图已截断。</p>

@@ -1,4 +1,7 @@
 /**
+ * ProfileFeedback 将所属配置问题映射到字段/区块，useProfileDraft 统一保存、放弃、取消保护。
+ * ProfileWorkspace 提供全局编辑 ID 与操作锁，配置页保持单栏，保存/选择/应用独立。
+ * 根路径挂载只读 Overview，配置读取失败由概览独立反馈；401 仍通过全局锁屏处理。
  * Profile 表单用两个独立文本框编辑入站与出站规则，保存后仍须显式应用。
  * 功能概述：本文件承载 WebUI 的顶层状态机，在访问链接认证、Profile 管理、
  * 配置生效管理与消息聊天之间做显式切换，落实“全局 selected Profile 唯一生效、
@@ -23,10 +26,37 @@
  * 仅进程级字段变更需要重启。Profile 管理子组件会记忆同一
  * token 对应的网关配置对象，避免读取 Profile 的副作用 effect 因对象引用变化
  * 而重复请求并触发服务端限流。开发者入口使用 history 路径，复用内存 Token；
- * MessageTargets 提供管理端跨会话两阶段确认；所有状态仅驻留当前页面。
- * DeveloperConsole 负责只读查询与取消，401 继续由本文件统一锁屏。
+ * 工作台由 AppShell 统一承载，useWorkbenchRouter 保护 history 导航；根路径预留概览，
+ * /messages、/profiles、/configuration/application、/adapters 分别提供任务入口。
+ * 人工跨会话管理界面已移除；所有状态仅驻留当前页面。
+ * DeveloperConsole 接收完整 pathname 以恢复模块详情，负责只读查询与取消，401 继续由本文件统一锁屏。
+ * 消息与接入页面复用 PageHeader/Button/FieldMessage，DeliveryStatus 以 StatusBadge 展示投递状态。
  */
-import { MessageTargets } from "./MessageTargets.js";
+import { AppShell, useWorkbenchRouter } from "./components/AppShell.js";
+import {
+  ProfileWorkspace,
+  ProfileSwitcher,
+  useProfileWorkspace,
+} from "./ProfileWorkspace.js";
+import { Overview } from "./Overview.js";
+import {
+  Button,
+  FieldMessage,
+  PageHeader,
+  StatusBadge,
+} from "./components/ui.js";
+import { useProfileDraft } from "./use-profile-draft.js";
+import {
+  ProfileFeedback,
+  ProfileField,
+  ProfileProblemSummary,
+  ProfileSectionIssues,
+  validateProfileFields,
+  mapProfileProblem,
+  type ProfileProblem,
+  type Field,
+} from "./profile-feedback.js";
+
 import { DeveloperConsole, developerPage } from "./DeveloperConsole.js";
 
 import { AdapterStatusPanel } from "./AdapterStatusPanel.js";
@@ -39,7 +69,6 @@ import {
   LoaderCircle,
   LockKeyhole,
   Moon,
-  Plus,
   RefreshCw,
   Save,
   SendHorizontal,
@@ -59,7 +88,6 @@ import {
 import { ConfigurationApplicationScreen } from "./ConfigurationApplicationScreen.js";
 import {
   checkGatewayHealth,
-  createProfile,
   deleteProfile,
   discoverModels,
   GatewayConfig,
@@ -78,6 +106,7 @@ import {
   type ConfigurationStatus,
   type ConfigurationWarning,
   type ProfileRegistryMetadata,
+  type ProfileReadiness,
   type UserConfigProfile,
 } from "./api.js";
 import {
@@ -110,16 +139,7 @@ interface ClearedLoadedProfileStateSnapshot {
 
 export function App() {
   const [token] = useState(() => readGatewayToken());
-  const [path, setPath] = useState(() => window.location.pathname);
-  const navigate = (next: string) => {
-    window.history.pushState(null, "", `${next}${window.location.hash}`);
-    setPath(next);
-  };
-  useEffect(() => {
-    const onPopState = () => setPath(window.location.pathname);
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
-  }, []);
+  const { path, navigate, register } = useWorkbenchRouter();
   const [configurationView, setConfigurationView] = useState<ConfigurationView>(
     () => (token === "" ? "locked" : "checking"),
   );
@@ -266,194 +286,202 @@ export function App() {
     return <AccessLinkRequired invalid={invalidAccessLink} />;
   }
 
-  if (path === "/message-targets")
-    return <MessageTargets token={token} onBack={() => navigate("/")} />;
-
-  const inspectionPage = developerPage(path);
-  if (inspectionPage !== undefined) {
-    return (
-      <DeveloperConsole
-        token={token}
-        page={inspectionPage}
-        navigate={navigate}
-      />
-    );
-  }
-
-  if (configurationView === "checking") {
+  const isOverview = path === "/" || path === "/overview";
+  if (!isOverview && configurationView === "checking")
     return <ConfigurationLoading />;
-  }
-
-  if (configurationView === "error") {
+  if (path === "/messages" && configurationView === "error")
     return <ConfigurationStatusError message={configurationError} />;
-  }
 
-  if (configurationView === "profiles") {
+  const renderPage = () => {
+    if (path === "/" || path === "/overview")
+      return <Overview token={token} navigate={navigate} />;
+    const inspectionPage = developerPage(path);
+    if (inspectionPage !== undefined)
+      return (
+        <DeveloperConsole
+          token={token}
+          page={inspectionPage}
+          path={path}
+          navigate={(next) => {
+            void navigate(next);
+          }}
+        />
+      );
+    if (path === "/profiles") {
+      return (
+        <ProfileManagementScreen
+          token={token}
+          initialStatus={configurationStatus}
+          onStatusChange={(status) => {
+            setConfigurationStatus(status);
+          }}
+          onReloadStatus={(options) => loadConfigurationStatus(options)}
+          onClose={() => {
+            void navigate("/messages");
+          }}
+          onRestartRequired={() => {
+            void navigate("/configuration/application");
+          }}
+          onOpenNapCat={() => void navigate("/adapters")}
+        />
+      );
+    }
+
+    if (path === "/adapters") {
+      return (
+        <NapCatManagementScreen
+          token={token}
+          onRestartRequired={() => void navigate("/configuration/application")}
+        />
+      );
+    }
+
+    if (path === "/configuration/application") {
+      return (
+        <ConfigurationApplicationScreen
+          token={token}
+          onApplied={() => loadConfigurationStatus()}
+          onEdit={() => void navigate("/profiles")}
+        />
+      );
+    }
+
     return (
-      <ProfileManagementScreen
-        token={token}
-        initialStatus={configurationStatus}
-        onStatusChange={(status) => {
-          setConfigurationStatus(status);
-        }}
-        onReloadStatus={(options) => loadConfigurationStatus(options)}
-        onClose={() => {
-          setConfigurationView("chat");
-        }}
-        onRestartRequired={() => {
-          setConfigurationView("restart");
-        }}
-        onOpenNapCat={() => setConfigurationView("napcat")}
-      />
-    );
-  }
-
-  if (configurationView === "napcat") {
-    return (
-      <NapCatManagementScreen
-        token={token}
-        onClose={() => setConfigurationView("chat")}
-        onRestartRequired={() => setConfigurationView("restart")}
-      />
-    );
-  }
-
-  if (configurationView === "restart") {
-    return (
-      <ConfigurationApplicationScreen
-        token={token}
-        onApplied={() => loadConfigurationStatus()}
-        onEdit={() => setConfigurationView("profiles")}
-      />
-    );
-  }
-
-  return (
-    <div className="app-shell">
-      <header className="topbar">
-        <BrandIdentity subtitle="统一消息服务" />
-        <div className="topbar-spacer" />
-        <button
-          className="secondary-button"
-          onClick={() => navigate("/developer/modules")}
-        >
-          开发者
-        </button>
-        <button
-          className="secondary-button"
-          onClick={() => navigate("/message-targets")}
-        >
-          跨会话消息
-        </button>
-        <ThemeToggle />
-      </header>
-
-      <main className="workspace">
-        <aside className="connection-panel" aria-labelledby="connection-title">
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">连接配置</p>
-              <h2 id="connection-title">Kaguya 服务</h2>
-            </div>
-            <button
-              type="button"
-              className={`health-button ${healthState}`}
-              onClick={() => void checkConnection()}
-              disabled={healthState === "checking"}
-              title="检测 Kaguya 服务连接"
-            >
-              <RefreshCw
-                className={healthState === "checking" ? "spin" : undefined}
-                size={15}
-              />
-              <span>{healthLabel(healthState)}</span>
-            </button>
-          </div>
-
-          <div className="boundary-note">
-            <p>当前服务仅接受消息。</p>
-            <span>模型配置和回复由核心层管理。</span>
-          </div>
-        </aside>
-
-        <section className="chat-panel" aria-labelledby="chat-title">
-          <header className="chat-heading">
-            <div>
-              <p className="eyebrow">消息入口</p>
-              <h2 id="chat-title">消息</h2>
-            </div>
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={() => setConfigurationView("profiles")}
-            >
-              <Settings2 size={16} />
-              <span>Settings</span>
-            </button>
-          </header>
-
-          <div className="message-list" aria-live="polite">
-            {messages.length === 0 ? (
-              <div className="empty-state">
-                <p>暂无消息</p>
-              </div>
-            ) : (
-              messages.map((message) => (
-                <article className="message-row" key={message.id}>
-                  <div className="message-meta">
-                    <strong>你</strong>
-                    <time dateTime={message.createdAt.toISOString()}>
-                      {formatTime(message.createdAt)}
-                    </time>
-                  </div>
-                  <p className="message-body">{message.text}</p>
-                  <DeliveryStatus message={message} />
-                </article>
-              ))
-            )}
-          </div>
-
-          <form
-            className="composer"
-            onSubmit={(event) => void submitMessage(event)}
+      <div className="app-shell">
+        <PageHeader
+          title="消息"
+          description="向当前 Web 会话提交消息并查看接收状态。"
+        />
+        <main className="workspace wb-message-workspace">
+          <aside
+            className="connection-panel"
+            aria-labelledby="connection-title"
           >
-            {formError ? (
-              <div className="error-banner" role="alert">
-                <AlertCircle size={17} />
-                <span>{formError}</span>
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">连接配置</p>
+                <h2 id="connection-title">Kaguya 服务</h2>
               </div>
-            ) : null}
-            <textarea
-              ref={textareaRef}
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={onComposerKeyDown}
-              rows={3}
-              placeholder="输入消息"
-              aria-label="消息内容"
-            />
-            <div className="composer-footer">
-              <span
-                className={
-                  draftLength > MAX_MESSAGE_LENGTH ? "limit exceeded" : "limit"
-                }
+              <Button
+                type="button"
+                className={`health-button ${healthState}`}
+                onClick={() => void checkConnection()}
+                disabled={healthState === "checking"}
+                title="检测 Kaguya 服务连接"
               >
-                {draftLength.toLocaleString()} /{" "}
-                {MAX_MESSAGE_LENGTH.toLocaleString()}
-              </span>
-              <button className="send-button" type="submit" disabled={!canSend}>
-                {isSending ? (
-                  <LoaderCircle className="spin" size={18} />
-                ) : (
-                  <SendHorizontal size={18} />
-                )}
-                <span>{isSending ? "发送中" : "发送"}</span>
-              </button>
+                <RefreshCw
+                  className={healthState === "checking" ? "spin" : undefined}
+                  size={15}
+                />
+                <span>{healthLabel(healthState)}</span>
+              </Button>
             </div>
-          </form>
-        </section>
-      </main>
-    </div>
+
+            <div className="boundary-note">
+              <p>当前服务仅接受消息。</p>
+              <span>模型配置和回复由核心层管理。</span>
+            </div>
+          </aside>
+
+          <section className="chat-panel" aria-labelledby="chat-title">
+            <header className="chat-heading">
+              <div>
+                <p className="eyebrow">消息入口</p>
+                <h2 id="chat-title">发送消息</h2>
+              </div>
+              <Button
+                type="button"
+                className="secondary-button"
+                onClick={() => void navigate("/profiles")}
+              >
+                <Settings2 size={16} />
+                <span>配置</span>
+              </Button>
+            </header>
+
+            <div className="message-list" aria-live="polite">
+              {messages.length === 0 ? (
+                <div className="empty-state">
+                  <p>暂无消息</p>
+                </div>
+              ) : (
+                messages.map((message) => (
+                  <article className="message-row" key={message.id}>
+                    <div className="message-meta">
+                      <strong>你</strong>
+                      <time dateTime={message.createdAt.toISOString()}>
+                        {formatTime(message.createdAt)}
+                      </time>
+                    </div>
+                    <p className="message-body">{message.text}</p>
+                    <DeliveryStatus message={message} />
+                  </article>
+                ))
+              )}
+            </div>
+
+            <form
+              className="composer"
+              onSubmit={(event) => void submitMessage(event)}
+            >
+              {formError ? (
+                <FieldMessage tone="error">{formError}</FieldMessage>
+              ) : null}
+              <textarea
+                ref={textareaRef}
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={onComposerKeyDown}
+                rows={3}
+                placeholder="输入消息"
+                aria-label="消息内容"
+              />
+              <div className="composer-footer">
+                <span
+                  className={
+                    draftLength > MAX_MESSAGE_LENGTH
+                      ? "limit exceeded"
+                      : "limit"
+                  }
+                >
+                  {draftLength.toLocaleString()} /{" "}
+                  {MAX_MESSAGE_LENGTH.toLocaleString()}
+                </span>
+                <Button
+                  className="send-button"
+                  type="submit"
+                  disabled={!canSend}
+                >
+                  {isSending ? (
+                    <LoaderCircle className="spin" size={18} />
+                  ) : (
+                    <SendHorizontal size={18} />
+                  )}
+                  <span>{isSending ? "发送中" : "发送"}</span>
+                </Button>
+              </div>
+            </form>
+          </section>
+        </main>
+      </div>
+    );
+  };
+  return (
+    <ProfileWorkspace
+      token={token}
+      status={configurationStatus!}
+      reload={() => loadConfigurationStatus({ keepProfilesOpen: true })}
+    >
+      <AppShell
+        currentPath={path}
+        onNavigate={navigate}
+        registerNavigationGuard={register}
+        profileSlot={<ProfileSwitcher />}
+        actions={<ThemeToggle />}
+      >
+        {renderPage()}
+      </AppShell>
+    </ProfileWorkspace>
   );
 }
 
@@ -479,19 +507,58 @@ function ProfileManagementScreen({
   const [registry, setRegistry] = useState<ProfileRegistryMetadata | undefined>(
     () => readRegistryMetadata(initialStatus),
   );
-  const [statusSnapshot, setStatusSnapshot] = useState(initialStatus);
-  const [openedProfileId, setOpenedProfileId] = useState<string | undefined>(
-    initialStatus?.selectedProfileId,
-  );
+  const workspace = useProfileWorkspace();
+  const {
+    editingId: openedProfileId,
+    setEditingId: setOpenedProfileId,
+    mutating,
+    setMutating,
+  } = workspace;
   const [loadedProfile, setLoadedProfile] = useState<UserConfigProfile>();
   const [editorFields, setEditorFields] = useState<ProfileEditorFields>();
   const [showApiKey, setShowApiKey] = useState(false);
   const [loadingProfile, setLoadingProfile] = useState(false);
-  const [mutating, setMutating] = useState(false);
-  const [createExpanded, setCreateExpanded] = useState(false);
-  const [createName, setCreateName] = useState("");
   const [panelError, setPanelError] = useState<string>();
   const [notice, setNotice] = useState<string>();
+  const [readiness, setReadiness] = useState<ProfileReadiness>();
+  const [serverIssues, setServerIssues] = useState<ProfileProblem[]>([]);
+  const [touched, setTouched] = useState<ReadonlySet<Field>>(new Set());
+  const [submitted, setSubmitted] = useState(false);
+  const savedFields = loadedProfile
+    ? profileToEditorFields(loadedProfile)
+    : undefined;
+  const dirty =
+    editorFields !== undefined &&
+    savedFields !== undefined &&
+    JSON.stringify(editorFields) !== JSON.stringify(savedFields);
+  const localIssues = editorFields ? validateProfileFields(editorFields) : [];
+  const savedIssues = loadedProfile
+    ? [
+        ...(readiness?.issues ?? []).map((issue) =>
+          mapProfileProblem(issue, loadedProfile),
+        ),
+        ...(readiness?.warnings ?? []).map((issue) =>
+          mapProfileProblem(issue, loadedProfile, true),
+        ),
+      ].filter(
+        (issue) =>
+          !issue.field ||
+          savedFields?.[issue.field] === editorFields?.[issue.field],
+      )
+    : [];
+  const issues = [
+    ...localIssues.filter(
+      (issue) => submitted || (issue.field && touched.has(issue.field)),
+    ),
+    ...savedIssues,
+    ...serverIssues,
+  ];
+  const draftProtection = useProfileDraft({
+    dirty,
+    busy: mutating || workspace.applying,
+    save: handleSaveProfile,
+    register: workspace.registerEditGuard,
+  });
   const requestSequence = useRef(0);
   const modelDiscoverySequence = useRef(0);
   const [discoveredModels, setDiscoveredModels] = useState<readonly string[]>(
@@ -508,10 +575,6 @@ function ProfileManagementScreen({
   useEffect(() => {
     const nextRegistry = readRegistryMetadata(initialStatus);
     setRegistry(nextRegistry);
-    setStatusSnapshot(initialStatus);
-    setOpenedProfileId(
-      (current) => current ?? initialStatus?.selectedProfileId,
-    );
   }, [initialStatus]);
 
   useEffect(() => {
@@ -522,17 +585,22 @@ function ProfileManagementScreen({
     if (!openedProfileId || token.trim().length === 0) {
       return;
     }
+    clearLoadedProfileState();
     const currentSequence = requestSequence.current + 1;
     requestSequence.current = currentSequence;
     setLoadingProfile(true);
     setPanelError(undefined);
     setNotice(undefined);
     void getProfile(config, openedProfileId).then(
-      ({ profile }) => {
+      ({ profile, readiness }) => {
         if (requestSequence.current !== currentSequence) {
           return;
         }
         setLoadedProfile(profile);
+        setReadiness(readiness);
+        setServerIssues([]);
+        setTouched(new Set());
+        setSubmitted(false);
         setEditorFields(profileToEditorFields(profile));
         setLoadingProfile(false);
       },
@@ -558,9 +626,6 @@ function ProfileManagementScreen({
     return <ConfigurationLoading />;
   }
 
-  const canClose = statusSnapshot?.status === "ready";
-  const readinessIssues = statusSnapshot?.issues ?? [];
-  const readinessWarnings = statusSnapshot?.warnings ?? [];
   const selectedProfileId = registry.selectedProfileId;
   const deleteDisabled =
     openedProfileId === undefined ||
@@ -568,6 +633,7 @@ function ProfileManagementScreen({
     openedProfileId === selectedProfileId;
   const saveDisabled =
     mutating ||
+    workspace.applying ||
     loadingProfile ||
     loadedProfile === undefined ||
     editorFields === undefined;
@@ -601,47 +667,22 @@ function ProfileManagementScreen({
 
   async function refreshStatusAfterMutation() {
     const status = await onReloadStatus({ keepProfilesOpen: true });
-    setStatusSnapshot(status);
     onStatusChange(status);
     return status;
   }
 
-  const handleOpenProfile = (profileId: string) => {
-    setOpenedProfileId(profileId);
-    clearLoadedProfileState();
-    setPanelError(undefined);
-    setNotice(undefined);
-  };
-
-  const handleCreateProfile = async () => {
-    if (createName.trim().length === 0) {
-      setPanelError("Profile name is required.");
-      return;
-    }
-    setMutating(true);
-    setPanelError(undefined);
-    setNotice(undefined);
-    try {
-      const result = await createProfile(config, { name: createName });
-      const nextRegistry = await refreshRegistry();
-      setOpenedProfileId(result.profile.id);
-      setLoadedProfile(result.profile);
-      setEditorFields(profileToEditorFields(result.profile));
-      setCreateExpanded(false);
-      setCreateName("");
-      setRegistry(nextRegistry);
-      setNotice("Profile created. Select it separately to make it active.");
-    } catch (error) {
-      setPanelError(errorMessage(error));
-    } finally {
-      setMutating(false);
-    }
-  };
-
-  const handleSaveProfile = async () => {
-    if (loadedProfile === undefined || editorFields === undefined) {
-      return;
-    }
+  async function handleSaveProfile(): Promise<boolean> {
+    if (
+      loadedProfile === undefined ||
+      editorFields === undefined ||
+      mutating ||
+      workspace.applying
+    )
+      return false;
+    setSubmitted(true);
+    if (validateProfileFields(editorFields).some((issue) => !issue.warning))
+      return false;
+    setServerIssues([]);
     setMutating(true);
     setPanelError(undefined);
     setNotice(undefined);
@@ -654,24 +695,51 @@ function ProfileManagementScreen({
       );
       setLoadedProfile(result.profile);
       setEditorFields(profileToEditorFields(result.profile));
-      await refreshRegistry();
-      await refreshStatusAfterMutation();
+      setReadiness(undefined);
+      try {
+        await refreshRegistry();
+        await refreshStatusAfterMutation();
+        const refreshed = await getProfile(config, result.profile.id);
+        setReadiness(refreshed.readiness);
+      } catch {
+        setPanelError("配置已保存，但检查状态刷新失败，请重新进入配置页读取。");
+      }
+      setSubmitted(false);
+      setTouched(new Set());
       setNotice(
         result.restartRequired
           ? "配置已保存，点击“应用当前配置”后生效。"
           : "Profile 已保存，选为当前配置并手动应用后生效。",
       );
+      return true;
     } catch (error) {
-      setPanelError(errorMessage(error));
+      const fields =
+        error instanceof GatewayRequestError ? error.fieldErrors : [];
+      setServerIssues(
+        error instanceof GatewayRequestError &&
+          error.code === "profile_name_conflict"
+          ? [
+              {
+                field: "name",
+                section: "profile",
+                message: "Profile 名称已存在，请换一个名称。",
+              },
+            ]
+          : fields.map((issue) => mapProfileProblem(issue, loadedProfile)),
+      );
+      setPanelError(
+        "保存失败，草稿已保留。" +
+          (fields.length ? "请检查标记字段。" : errorMessage(error)),
+      );
+      return false;
     } finally {
       setMutating(false);
     }
-  };
+  }
 
   const handleSelectProfile = async () => {
-    if (openedProfileId === undefined) {
+    if (openedProfileId === undefined || !(await draftProtection.request()))
       return;
-    }
     setMutating(true);
     setPanelError(undefined);
     setNotice(undefined);
@@ -695,9 +763,12 @@ function ProfileManagementScreen({
   };
 
   const handleDeleteProfile = async () => {
-    if (openedProfileId === undefined || deleteDisabled) {
+    if (
+      openedProfileId === undefined ||
+      deleteDisabled ||
+      !(await draftProtection.request())
+    )
       return;
-    }
     setMutating(true);
     setPanelError(undefined);
     setNotice(undefined);
@@ -707,7 +778,6 @@ function ProfileManagementScreen({
       const nextRegistry = await refreshRegistry();
       const status = await refreshStatusAfterMutation();
       setRegistry(nextRegistry);
-      setStatusSnapshot(status);
       setOpenedProfileId(nextRegistry.selectedProfileId);
       setNotice("Profile deleted.");
     } catch (error) {
@@ -759,494 +829,486 @@ function ProfileManagementScreen({
   };
 
   return (
-    <div className="setup-shell">
-      <header className="topbar">
-        <BrandIdentity subtitle="配置引导" />
-        <div className="topbar-spacer" />
-        <ThemeToggle />
-      </header>
-
-      <main className="setup-main profile-main">
-        <div className="profile-workspace">
-          <aside
-            className="setup-card profile-sidebar"
-            aria-labelledby="profiles-title"
-          >
-            <div className="panel-heading profile-sidebar-heading">
-              <div>
-                <p className="eyebrow">第一步</p>
-                <h2 id="profiles-title">选择配置</h2>
-              </div>
-              {canClose ? (
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={() => {
-                    clearLoadedProfileState();
-                    onClose();
-                  }}
-                >
-                  返回消息
-                </button>
-              ) : null}
-            </div>
-
-            <div className="profile-create">
-              <button
-                type="button"
-                className="secondary-button"
-                disabled={mutating}
-                onClick={() => {
-                  setCreateExpanded((current) => !current);
-                  setPanelError(undefined);
-                }}
-              >
-                <Plus size={16} />
-                <span>新建 Profile</span>
-              </button>
-              {createExpanded ? (
-                <div className="profile-create-form">
-                  <label className="field compact-field">
-                    <span>Profile 名称</span>
-                    <input
-                      value={createName}
-                      onChange={(event) => setCreateName(event.target.value)}
-                      placeholder="例如：生产环境"
-                      autoComplete="off"
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    className="setup-button inline-button"
-                    disabled={mutating}
-                    onClick={() => void handleCreateProfile()}
-                  >
-                    {mutating ? (
-                      <LoaderCircle className="spin" size={16} />
-                    ) : (
-                      <Plus size={16} />
-                    )}
-                    <span>{mutating ? "创建中" : "创建"}</span>
-                  </button>
+    <ProfileFeedback
+      value={{
+        issues,
+        touch: (field) => setTouched((current) => new Set([...current, field])),
+      }}
+    >
+      {draftProtection.dialog}
+      <div className="setup-shell">
+        <PageHeader
+          title="配置"
+          description="在全局顶栏选择编辑对象；保存、设为当前与应用分别操作。"
+          actions={
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={onClose}
+            >
+              返回消息
+            </button>
+          }
+        />
+        <main className="setup-main profile-main">
+          <div className="profile-workspace profile-single-column">
+            <section
+              className="setup-card profile-editor-card"
+              aria-labelledby="profile-editor-title"
+            >
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">第二步</p>
+                  <h2 id="profile-editor-title">
+                    {openedProfileId === undefined
+                      ? "请选择配置"
+                      : "填写模型信息"}
+                  </h2>
                 </div>
-              ) : null}
-            </div>
-
-            <div className="profile-list" role="list">
-              {registry.profiles.map((profile) => {
-                const active = profile.id === openedProfileId;
-                const selected = profile.id === selectedProfileId;
-                return (
-                  <button
-                    key={profile.id}
-                    type="button"
-                    className={`profile-list-item${active ? " active" : ""}`}
-                    onClick={() => handleOpenProfile(profile.id)}
-                  >
-                    <span className="profile-list-name">{profile.name}</span>
-                    <span className="profile-list-meta">
-                      {selected ? "当前选中" : "可用配置"}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-
-            <ReadinessPanel
-              selectedProfileId={selectedProfileId}
-              status={statusSnapshot?.status ?? "invalid"}
-              issues={readinessIssues}
-              warnings={readinessWarnings}
-            />
-          </aside>
-
-          <section
-            className="setup-card profile-editor-card"
-            aria-labelledby="profile-editor-title"
-          >
-            <div className="panel-heading">
-              <div>
-                <p className="eyebrow">第二步</p>
-                <h2 id="profile-editor-title">
-                  {openedProfileId === undefined
-                    ? "请选择配置"
-                    : "填写模型信息"}
-                </h2>
-              </div>
-              <div className="editor-actions">
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={onOpenNapCat}
-                >
-                  <Settings2 size={16} />
-                  <span>Gateway / Adapter</span>
-                </button>
-                <button
-                  type="button"
-                  className="secondary-button"
-                  disabled={openedProfileId === undefined || mutating}
-                  onClick={() => void handleSelectProfile()}
-                >
-                  选为当前配置
-                </button>
-                <button
-                  type="button"
-                  className="secondary-button"
-                  disabled={mutating}
-                  onClick={onRestartRequired}
-                >
-                  配置生效管理
-                </button>
-                <button
-                  type="button"
-                  className="danger-button"
-                  disabled={deleteDisabled || mutating}
-                  onClick={() => void handleDeleteProfile()}
-                >
-                  <Trash2 size={16} />
-                  <span>删除</span>
-                </button>
-              </div>
-            </div>
-
-            <p className="setup-intro profile-intro">
-              保存仅写入配置；请进入“配置生效管理”手动应用。 其他 Profile
-              仅保存，选为当前配置时再应用。
-            </p>
-
-            {panelError ? (
-              <div className="error-banner" role="alert">
-                <AlertCircle size={17} />
-                <span>{panelError}</span>
-              </div>
-            ) : null}
-            {notice ? (
-              <div className="setup-success" role="status">
-                <CheckCircle2 size={17} />
-                <span>{notice}</span>
-              </div>
-            ) : null}
-
-            {loadingProfile ? (
-              <div className="profile-loading" role="status">
-                <LoaderCircle className="spin" size={18} />
-                <span>Loading profile</span>
-              </div>
-            ) : null}
-
-            {openedProfileId !== undefined &&
-            loadedProfile === undefined &&
-            !loadingProfile ? (
-              <div className="profile-placeholder">
-                <p>Select a profile again if loading failed.</p>
-              </div>
-            ) : null}
-
-            {loadedProfile !== undefined && editorFields !== undefined ? (
-              <form
-                className="setup-form profile-editor-form"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void handleSaveProfile();
-                }}
-              >
-                <label className="field">
-                  <span>Profile 名称</span>
-                  <input
-                    value={editorFields.name}
-                    disabled={loadedProfile.id === "default"}
-                    onChange={(event) =>
-                      setEditorFields((current) =>
-                        current === undefined
-                          ? current
-                          : { ...current, name: event.target.value },
-                      )
-                    }
-                    maxLength={100}
-                    autoComplete="off"
-                    placeholder="default"
-                  />
-                </label>
-                <fieldset className="identity-fields">
-                  <legend>Agent 身份</legend>
-                  <p className="field-help">
-                    名字、别名和人设会用于回复 Prompt；保存后手动应用才生效。
-                  </p>
-                  <label className="field">
-                    <span>Agent 名字</span>
-                    <input
-                      value={editorFields.agentName}
-                      onChange={(event) =>
-                        setEditorFields((current) =>
-                          current === undefined
-                            ? current
-                            : { ...current, agentName: event.target.value },
-                        )
-                      }
-                      autoComplete="off"
-                      placeholder="Kaguya"
-                      required
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Agent 别名</span>
-                    <textarea
-                      value={editorFields.agentAliasesText}
-                      onChange={(event) =>
-                        setEditorFields((current) =>
-                          current === undefined
-                            ? current
-                            : {
-                                ...current,
-                                agentAliasesText: event.target.value,
-                              },
-                        )
-                      }
-                      rows={3}
-                      spellCheck={false}
-                      aria-describedby="agent-aliases-help"
-                      placeholder="辉夜"
-                      required
-                    />
-                    <span id="agent-aliases-help" className="field-help">
-                      每行一个别名；保存时会去除首尾空白并去重。
-                    </span>
-                  </label>
-                  <label className="field">
-                    <span>Agent 人设</span>
-                    <textarea
-                      className="persona-editor"
-                      value={editorFields.agentPersona}
-                      onChange={(event) =>
-                        setEditorFields((current) =>
-                          current === undefined
-                            ? current
-                            : { ...current, agentPersona: event.target.value },
-                        )
-                      }
-                      rows={6}
-                      placeholder="描述 Agent 的身份、语气和回复边界"
-                      required
-                    />
-                  </label>
-                </fieldset>
-                <label className="field">
-                  <span>模型服务地址</span>
-                  <input
-                    type="url"
-                    value={editorFields.baseUrl}
-                    onChange={(event) => {
-                      clearModelDiscoveryState();
-                      setEditorFields((current) =>
-                        current === undefined
-                          ? current
-                          : { ...current, baseUrl: event.target.value },
-                      );
-                    }}
-                    autoComplete="url"
-                    placeholder="https://api.openai.com/v1"
-                  />
-                </label>
-                <label className="field">
-                  <span>模型服务 API Key</span>
-                  <div className="password-field">
-                    <input
-                      type={showApiKey ? "text" : "password"}
-                      value={editorFields.apiKey}
-                      onChange={(event) => {
-                        clearModelDiscoveryState();
-                        setEditorFields((current) =>
-                          current === undefined
-                            ? current
-                            : { ...current, apiKey: event.target.value },
-                        );
-                      }}
-                      autoComplete="new-password"
-                      placeholder="Enter provider API key"
-                    />
-                    <button
-                      type="button"
-                      className="icon-button"
-                      onClick={() => setShowApiKey((current) => !current)}
-                      aria-label={showApiKey ? "Hide API key" : "Show API key"}
-                      title={showApiKey ? "Hide API key" : "Show API key"}
-                    >
-                      {showApiKey ? <EyeOff size={18} /> : <Eye size={18} />}
-                    </button>
-                  </div>
-                </label>
-                <div className="model-discovery-actions">
+                <div className="editor-actions">
                   <button
                     type="button"
                     className="secondary-button"
-                    disabled={discoveringModels}
-                    onClick={() => void handleDiscoverModels()}
+                    onClick={onOpenNapCat}
                   >
-                    <RefreshCw
-                      className={discoveringModels ? "spin" : undefined}
-                      size={16}
-                    />
-                    <span>
-                      {discoveringModels ? "正在获取" : "获取模型列表"}
-                    </span>
+                    <Settings2 size={16} />
+                    <span>Gateway / Adapter</span>
                   </button>
-                  {modelDiscoveryStatus ? (
-                    <span
-                      className={`model-discovery-status ${modelDiscoveryStatus.kind}`}
-                      role={
-                        modelDiscoveryStatus.kind === "error"
-                          ? "alert"
-                          : "status"
-                      }
-                      aria-live="polite"
-                    >
-                      {modelDiscoveryStatus.message}
-                    </span>
-                  ) : null}
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    disabled={
+                      openedProfileId === undefined ||
+                      mutating ||
+                      workspace.applying
+                    }
+                    onClick={() => void handleSelectProfile()}
+                  >
+                    选为当前配置
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    disabled={mutating}
+                    onClick={onRestartRequired}
+                  >
+                    配置生效管理
+                  </button>
+                  <button
+                    type="button"
+                    className="danger-button"
+                    disabled={deleteDisabled || mutating || workspace.applying}
+                    onClick={() => void handleDeleteProfile()}
+                  >
+                    <Trash2 size={16} />
+                    <span>删除</span>
+                  </button>
                 </div>
-                {discoveredModels.length > 0 ? (
-                  <datalist id="discovered-models">
-                    {discoveredModels.map((modelId) => (
-                      <option key={modelId} value={modelId} />
-                    ))}
-                  </datalist>
-                ) : null}
-                <div className="setup-model-grid">
-                  <ModelTierEditor
-                    tier="light"
-                    fields={editorFields}
-                    modelListId={
-                      discoveredModels.length > 0
-                        ? "discovered-models"
-                        : undefined
-                    }
-                    onChange={(patch) =>
-                      setEditorFields((current) =>
-                        current === undefined
-                          ? current
-                          : { ...current, ...patch },
-                      )
-                    }
-                  />
-                  <ModelTierEditor
-                    tier="heavy"
-                    fields={editorFields}
-                    modelListId={
-                      discoveredModels.length > 0
-                        ? "discovered-models"
-                        : undefined
-                    }
-                    onChange={(patch) =>
-                      setEditorFields((current) =>
-                        current === undefined
-                          ? current
-                          : { ...current, ...patch },
-                      )
-                    }
-                  />
+              </div>
+
+              <p className="setup-intro profile-intro">
+                保存仅写入配置；请进入“配置生效管理”手动应用。 其他 Profile
+                仅保存，选为当前配置时再应用。
+              </p>
+
+              <ProfileProblemSummary
+                name={loadedProfile?.name ?? openedProfileId ?? "Profile"}
+              />
+              <ProfileSectionIssues section="profile" />
+              {panelError ? (
+                <div className="error-banner" role="alert">
+                  <AlertCircle size={17} />
+                  <span>{panelError}</span>
                 </div>
-                <label className="field">
-                  <span>入站白名单</span>
-                  <textarea
-                    className="rule-editor"
-                    value={editorFields.inboundAllowlistText}
-                    onChange={(event) =>
-                      setEditorFields((current) =>
-                        current === undefined
-                          ? current
-                          : {
-                              ...current,
-                              inboundAllowlistText: event.target.value,
-                            },
-                      )
-                    }
-                    rows={5}
-                    spellCheck={false}
-                    autoComplete="off"
-                    aria-describedby="inbound-allowlist-help"
-                    placeholder={
-                      "qq:group:REPLACE_GROUP_ID\nqq:private:REPLACE_USER_ID"
-                    }
-                  />
-                  <span id="inbound-allowlist-help" className="field-help">
-                    决定哪些平台消息可以进入 Runtime；被拒绝的消息不会创建
-                    turn。 每行一条 platform:group|private:ID，platform 和 ID
-                    支持 *。 空列表拒绝所有非 Web
-                    平台入站消息；无效行会保存但不生效。 Web
-                    保持原有认证边界。保存后需点击“应用当前配置”。
-                  </span>
-                </label>
-                <label className="field">
-                  <span>出站白名单</span>
-                  <textarea
-                    className="rule-editor"
-                    value={editorFields.outboundAllowlistText}
-                    onChange={(event) =>
-                      setEditorFields((current) =>
-                        current === undefined
-                          ? current
-                          : {
-                              ...current,
-                              outboundAllowlistText: event.target.value,
-                            },
-                      )
-                    }
-                    rows={5}
-                    spellCheck={false}
-                    autoComplete="off"
-                    aria-describedby="outbound-allowlist-help"
-                    placeholder={
-                      "qq:group:REPLACE_GROUP_ID\nqq:private:REPLACE_USER_ID"
-                    }
-                  />
-                  <span id="outbound-allowlist-help" className="field-help">
-                    决定机器人可以向哪些群或用户投递；被拒绝时不会调用平台发送接口。跨会话发送仍需管理端确认。
-                    每行一条 platform:group|private:ID，platform 和 ID 支持 *。
-                    空列表拒绝所有非 Web 平台出站消息；无效行会保存但不生效。
-                    Web 保持原有认证边界。保存后需点击“应用当前配置”。
-                  </span>
-                </label>
-                <label className="setup-check">
-                  <input
-                    type="checkbox"
-                    checked={editorFields.memoryEnabled}
-                    onChange={(event) =>
-                      setEditorFields((current) =>
-                        current === undefined
-                          ? current
-                          : {
-                              ...current,
-                              memoryEnabled: event.target.checked,
-                            },
-                      )
-                    }
-                  />
-                  <span>
-                    启用 Memory
-                    <br />
-                    关闭时仅保留联想与 Prompt
-                    协议形状，不读取、写入或召回实际信息。
-                  </span>
-                </label>
-                <button
-                  className="setup-button"
-                  type="submit"
-                  disabled={saveDisabled}
+              ) : null}
+              {notice ? (
+                <div className="setup-success" role="status">
+                  <CheckCircle2 size={17} />
+                  <span>{notice}</span>
+                </div>
+              ) : null}
+
+              {loadingProfile ? (
+                <div className="profile-loading" role="status">
+                  <LoaderCircle className="spin" size={18} />
+                  <span>Loading profile</span>
+                </div>
+              ) : null}
+
+              {openedProfileId !== undefined &&
+              loadedProfile === undefined &&
+              !loadingProfile ? (
+                <div className="profile-placeholder">
+                  <p>Select a profile again if loading failed.</p>
+                </div>
+              ) : null}
+
+              {loadedProfile !== undefined && editorFields !== undefined ? (
+                <form
+                  className="setup-form profile-editor-form"
+                  noValidate
+                  onChange={() => setServerIssues([])}
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void handleSaveProfile();
+                  }}
                 >
-                  {mutating ? (
-                    <LoaderCircle className="spin" size={18} />
-                  ) : (
-                    <Save size={18} />
-                  )}
-                  <span>{mutating ? "正在保存" : "保存配置"}</span>
-                </button>
-              </form>
-            ) : null}
-          </section>
-        </div>
-      </main>
-    </div>
+                  <fieldset
+                    className="profile-form-lock"
+                    disabled={mutating || workspace.applying}
+                  >
+                    <label className="field">
+                      <span>Profile 名称</span>
+                      <ProfileField name="name">
+                        <input
+                          value={editorFields.name}
+                          disabled={loadedProfile.id === "default"}
+                          onChange={(event) =>
+                            setEditorFields((current) =>
+                              current === undefined
+                                ? current
+                                : { ...current, name: event.target.value },
+                            )
+                          }
+                          maxLength={100}
+                          autoComplete="off"
+                          placeholder="default"
+                        />
+                      </ProfileField>
+                    </label>
+                    <fieldset className="identity-fields">
+                      <legend>Agent 身份</legend>
+                      <ProfileSectionIssues section="identity" />
+                      <p className="field-help">
+                        名字、别名和人设会用于回复
+                        Prompt；保存后手动应用才生效。
+                      </p>
+                      <label className="field">
+                        <span>Agent 名字</span>
+                        <ProfileField name="agentName">
+                          <input
+                            value={editorFields.agentName}
+                            onChange={(event) =>
+                              setEditorFields((current) =>
+                                current === undefined
+                                  ? current
+                                  : {
+                                      ...current,
+                                      agentName: event.target.value,
+                                    },
+                              )
+                            }
+                            autoComplete="off"
+                            placeholder="Kaguya"
+                            required
+                          />
+                        </ProfileField>
+                      </label>
+                      <label className="field">
+                        <span>Agent 别名</span>
+                        <ProfileField name="agentAliasesText">
+                          <textarea
+                            value={editorFields.agentAliasesText}
+                            onChange={(event) =>
+                              setEditorFields((current) =>
+                                current === undefined
+                                  ? current
+                                  : {
+                                      ...current,
+                                      agentAliasesText: event.target.value,
+                                    },
+                              )
+                            }
+                            rows={3}
+                            spellCheck={false}
+                            aria-describedby="agent-aliases-help"
+                            placeholder="辉夜"
+                            required
+                          />
+                        </ProfileField>
+                        <span id="agent-aliases-help" className="field-help">
+                          每行一个别名；保存时会去除首尾空白并去重。
+                        </span>
+                      </label>
+                      <label className="field">
+                        <span>Agent 人设</span>
+                        <ProfileField name="agentPersona">
+                          <textarea
+                            className="persona-editor"
+                            value={editorFields.agentPersona}
+                            onChange={(event) =>
+                              setEditorFields((current) =>
+                                current === undefined
+                                  ? current
+                                  : {
+                                      ...current,
+                                      agentPersona: event.target.value,
+                                    },
+                              )
+                            }
+                            rows={6}
+                            placeholder="描述 Agent 的身份、语气和回复边界"
+                            required
+                          />
+                        </ProfileField>
+                      </label>
+                    </fieldset>
+                    <fieldset className="identity-fields">
+                      <legend>模型服务</legend>
+                      <ProfileSectionIssues section="models" />
+                      <label className="field">
+                        <span>模型服务地址</span>
+                        <ProfileField name="baseUrl">
+                          <input
+                            type="url"
+                            value={editorFields.baseUrl}
+                            onChange={(event) => {
+                              clearModelDiscoveryState();
+                              setEditorFields((current) =>
+                                current === undefined
+                                  ? current
+                                  : { ...current, baseUrl: event.target.value },
+                              );
+                            }}
+                            autoComplete="url"
+                            placeholder="https://api.openai.com/v1"
+                          />
+                        </ProfileField>
+                      </label>
+                      <label className="field">
+                        <span>模型服务 API Key</span>
+                        <div className="password-field">
+                          <ProfileField name="apiKey">
+                            <input
+                              type={showApiKey ? "text" : "password"}
+                              value={editorFields.apiKey}
+                              onChange={(event) => {
+                                clearModelDiscoveryState();
+                                setEditorFields((current) =>
+                                  current === undefined
+                                    ? current
+                                    : {
+                                        ...current,
+                                        apiKey: event.target.value,
+                                      },
+                                );
+                              }}
+                              autoComplete="new-password"
+                              placeholder="Enter provider API key"
+                            />
+                          </ProfileField>
+                          <button
+                            type="button"
+                            className="icon-button"
+                            onClick={() => setShowApiKey((current) => !current)}
+                            aria-label={
+                              showApiKey ? "Hide API key" : "Show API key"
+                            }
+                            title={showApiKey ? "Hide API key" : "Show API key"}
+                          >
+                            {showApiKey ? (
+                              <EyeOff size={18} />
+                            ) : (
+                              <Eye size={18} />
+                            )}
+                          </button>
+                        </div>
+                      </label>
+                      <div className="model-discovery-actions">
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          disabled={discoveringModels}
+                          onClick={() => void handleDiscoverModels()}
+                        >
+                          <RefreshCw
+                            className={discoveringModels ? "spin" : undefined}
+                            size={16}
+                          />
+                          <span>
+                            {discoveringModels ? "正在获取" : "获取模型列表"}
+                          </span>
+                        </button>
+                        {modelDiscoveryStatus ? (
+                          <span
+                            className={`model-discovery-status ${modelDiscoveryStatus.kind}`}
+                            role={
+                              modelDiscoveryStatus.kind === "error"
+                                ? "alert"
+                                : "status"
+                            }
+                            aria-live="polite"
+                          >
+                            {modelDiscoveryStatus.message}
+                          </span>
+                        ) : null}
+                      </div>
+                      {discoveredModels.length > 0 ? (
+                        <datalist id="discovered-models">
+                          {discoveredModels.map((modelId) => (
+                            <option key={modelId} value={modelId} />
+                          ))}
+                        </datalist>
+                      ) : null}
+                      <div className="setup-model-grid">
+                        <ModelTierEditor
+                          tier="light"
+                          fields={editorFields}
+                          modelListId={
+                            discoveredModels.length > 0
+                              ? "discovered-models"
+                              : undefined
+                          }
+                          onChange={(patch) =>
+                            setEditorFields((current) =>
+                              current === undefined
+                                ? current
+                                : { ...current, ...patch },
+                            )
+                          }
+                        />
+                        <ModelTierEditor
+                          tier="heavy"
+                          fields={editorFields}
+                          modelListId={
+                            discoveredModels.length > 0
+                              ? "discovered-models"
+                              : undefined
+                          }
+                          onChange={(patch) =>
+                            setEditorFields((current) =>
+                              current === undefined
+                                ? current
+                                : { ...current, ...patch },
+                            )
+                          }
+                        />
+                      </div>
+                    </fieldset>
+                    <fieldset className="identity-fields">
+                      <legend>消息白名单</legend>
+                      <ProfileSectionIssues section="allowlist" />
+                      <label className="field">
+                        <span>入站白名单</span>
+                        <ProfileField name="inboundAllowlistText">
+                          <textarea
+                            className="rule-editor"
+                            value={editorFields.inboundAllowlistText}
+                            onChange={(event) =>
+                              setEditorFields((current) =>
+                                current === undefined
+                                  ? current
+                                  : {
+                                      ...current,
+                                      inboundAllowlistText: event.target.value,
+                                    },
+                              )
+                            }
+                            rows={5}
+                            spellCheck={false}
+                            autoComplete="off"
+                            aria-describedby="inbound-allowlist-help"
+                            placeholder={
+                              "qq:group:REPLACE_GROUP_ID\nqq:private:REPLACE_USER_ID"
+                            }
+                          />
+                        </ProfileField>
+                        <span
+                          id="inbound-allowlist-help"
+                          className="field-help"
+                        >
+                          决定哪些平台消息可以进入 Runtime；被拒绝的消息不会创建
+                          turn。 每行一条 platform:group|private:ID，platform 和
+                          ID 支持 *。 空列表拒绝所有非 Web
+                          平台入站消息；无效行会保存但不生效。 Web
+                          保持原有认证边界。保存后需点击“应用当前配置”。
+                        </span>
+                      </label>
+                      <label className="field">
+                        <span>出站白名单</span>
+                        <ProfileField name="outboundAllowlistText">
+                          <textarea
+                            className="rule-editor"
+                            value={editorFields.outboundAllowlistText}
+                            onChange={(event) =>
+                              setEditorFields((current) =>
+                                current === undefined
+                                  ? current
+                                  : {
+                                      ...current,
+                                      outboundAllowlistText: event.target.value,
+                                    },
+                              )
+                            }
+                            rows={5}
+                            spellCheck={false}
+                            autoComplete="off"
+                            aria-describedby="outbound-allowlist-help"
+                            placeholder={
+                              "qq:group:REPLACE_GROUP_ID\nqq:private:REPLACE_USER_ID"
+                            }
+                          />
+                        </ProfileField>
+                        <span
+                          id="outbound-allowlist-help"
+                          className="field-help"
+                        >
+                          决定机器人可以向哪些群或用户投递；被拒绝时不会调用平台发送接口。跨会话发送仍需管理端确认。
+                          每行一条 platform:group|private:ID，platform 和 ID
+                          支持 *。 空列表拒绝所有非 Web
+                          平台出站消息；无效行会保存但不生效。 Web
+                          保持原有认证边界。保存后需点击“应用当前配置”。
+                        </span>
+                      </label>
+                    </fieldset>
+                    <fieldset className="identity-fields">
+                      <legend>Memory</legend>
+                      <ProfileSectionIssues section="memory" />
+                      <label className="setup-check">
+                        <ProfileField name="memoryEnabled">
+                          <input
+                            type="checkbox"
+                            checked={editorFields.memoryEnabled}
+                            onChange={(event) =>
+                              setEditorFields((current) =>
+                                current === undefined
+                                  ? current
+                                  : {
+                                      ...current,
+                                      memoryEnabled: event.target.checked,
+                                    },
+                              )
+                            }
+                          />
+                        </ProfileField>
+                        <span>
+                          启用 Memory
+                          <br />
+                          关闭时仅保留联想与 Prompt
+                          协议形状，不读取、写入或召回实际信息。
+                        </span>
+                      </label>
+                    </fieldset>
+                    <button
+                      className="setup-button"
+                      type="submit"
+                      disabled={saveDisabled}
+                    >
+                      {mutating ? (
+                        <LoaderCircle className="spin" size={18} />
+                      ) : (
+                        <Save size={18} />
+                      )}
+                      <span>{mutating ? "正在保存" : "保存配置"}</span>
+                    </button>
+                  </fieldset>
+                </form>
+              ) : null}
+            </section>
+          </div>
+        </main>
+      </div>
+    </ProfileFeedback>
   );
 }
 
@@ -1278,32 +1340,36 @@ function ModelTierEditor({
       <legend>{label}</legend>
       <label className="field">
         <span>模型 ID</span>
-        <input
-          value={model}
-          list={modelListId}
-          onChange={(event) =>
-            onChange(
-              light
-                ? { lightModel: event.target.value }
-                : { heavyModel: event.target.value },
-            )
-          }
-          autoComplete="off"
-          placeholder={light ? "gpt-4o-mini" : "gpt-4o"}
-        />
+        <ProfileField name={`${tier}Model`}>
+          <input
+            value={model}
+            list={modelListId}
+            onChange={(event) =>
+              onChange(
+                light
+                  ? { lightModel: event.target.value }
+                  : { heavyModel: event.target.value },
+              )
+            }
+            autoComplete="off"
+            placeholder={light ? "gpt-4o-mini" : "gpt-4o"}
+          />
+        </ProfileField>
       </label>
       <label className="setup-check thinking-toggle">
-        <input
-          type="checkbox"
-          checked={thinkingEnabled}
-          onChange={(event) =>
-            onChange(
-              light
-                ? { lightThinkingEnabled: event.target.checked }
-                : { heavyThinkingEnabled: event.target.checked },
-            )
-          }
-        />
+        <ProfileField name={`${tier}ThinkingEnabled`}>
+          <input
+            type="checkbox"
+            checked={thinkingEnabled}
+            onChange={(event) =>
+              onChange(
+                light
+                  ? { lightThinkingEnabled: event.target.checked }
+                  : { heavyThinkingEnabled: event.target.checked },
+              )
+            }
+          />
+        </ProfileField>
         <span>
           启用思考模式
           <br />
@@ -1312,64 +1378,70 @@ function ModelTierEditor({
       </label>
       <label className="field">
         <span>Reasoning effort</span>
-        <select
-          value={reasoningEffort}
-          disabled={!thinkingEnabled}
-          onChange={(event) =>
-            onChange(
-              light
-                ? { lightReasoningEffort: event.target.value }
-                : { heavyReasoningEffort: event.target.value },
-            )
-          }
-        >
-          <option value="provider-default">Provider 默认</option>
-          <option value="minimal">Minimal</option>
-          <option value="low">Low</option>
-          <option value="medium">Medium</option>
-          <option value="high">High</option>
-          <option value="xhigh">XHigh</option>
-        </select>
+        <ProfileField name={`${tier}ReasoningEffort`}>
+          <select
+            value={reasoningEffort}
+            disabled={!thinkingEnabled}
+            onChange={(event) =>
+              onChange(
+                light
+                  ? { lightReasoningEffort: event.target.value }
+                  : { heavyReasoningEffort: event.target.value },
+              )
+            }
+          >
+            <option value="provider-default">Provider 默认</option>
+            <option value="minimal">Minimal</option>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+            <option value="xhigh">XHigh</option>
+          </select>
+        </ProfileField>
       </label>
       <label className="field">
         <span>模型调用超时（秒）</span>
-        <input
-          type="number"
-          min="0.001"
-          max="300"
-          step="0.001"
-          value={
-            light ? fields.lightTimeoutSeconds : fields.heavyTimeoutSeconds
-          }
-          onChange={(event) =>
-            onChange(
-              light
-                ? { lightTimeoutSeconds: event.target.value }
-                : { heavyTimeoutSeconds: event.target.value },
-            )
-          }
-          placeholder="300"
-        />
+        <ProfileField name={`${tier}TimeoutSeconds`}>
+          <input
+            type="number"
+            min="0.001"
+            max="300"
+            step="0.001"
+            value={
+              light ? fields.lightTimeoutSeconds : fields.heavyTimeoutSeconds
+            }
+            onChange={(event) =>
+              onChange(
+                light
+                  ? { lightTimeoutSeconds: event.target.value }
+                  : { heavyTimeoutSeconds: event.target.value },
+              )
+            }
+            placeholder="300"
+          />
+        </ProfileField>
         <span className="field-help">
           超过该时间会终止模型调用；留空使用 300 秒。
         </span>
       </label>
       <label className="field">
         <span>推荐响应时间（毫秒）</span>
-        <input
-          type="number"
-          min="1"
-          max="300000"
-          step="1"
-          value={recommendedDurationMs}
-          onChange={(event) =>
-            onChange(
-              light
-                ? { lightRecommendedDurationMs: event.target.value }
-                : { heavyRecommendedDurationMs: event.target.value },
-            )
-          }
-        />
+        <ProfileField name={`${tier}RecommendedDurationMs`}>
+          <input
+            type="number"
+            min="1"
+            max="300000"
+            step="1"
+            value={recommendedDurationMs}
+            onChange={(event) =>
+              onChange(
+                light
+                  ? { lightRecommendedDurationMs: event.target.value }
+                  : { heavyRecommendedDurationMs: event.target.value },
+              )
+            }
+          />
+        </ProfileField>
         <span className="field-help">
           软预算：仅供调度与观测参考，不会中断较慢但有效的调用。
         </span>
@@ -1380,11 +1452,9 @@ function ModelTierEditor({
 
 function NapCatManagementScreen({
   token,
-  onClose,
   onRestartRequired,
 }: {
   readonly token: string;
-  readonly onClose: () => void;
   readonly onRestartRequired: () => void;
 }) {
   const config = useMemo(() => ({ token }), [token]);
@@ -1439,8 +1509,11 @@ function NapCatManagementScreen({
 
   return (
     <div className="setup-shell">
-      <SetupHeader subtitle="Gateway / Adapter" />
-      <main className="setup-main">
+      <PageHeader
+        title="接入"
+        description="查看 Gateway / Adapter 状态并管理平台连接。"
+      />
+      <main className="setup-main wb-adapter-main">
         <AdapterStatusPanel token={token} />
         <section className="setup-card" aria-labelledby="napcat-title">
           <div className="panel-heading">
@@ -1448,24 +1521,12 @@ function NapCatManagementScreen({
               <p className="eyebrow">平台连接</p>
               <h2 id="napcat-title">配置 NapCat</h2>
             </div>
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={onClose}
-            >
-              返回
-            </button>
           </div>
           <p className="setup-intro">
             填写 NapCat OneBot 正向 WebSocket（服务器）参数。保存后手动应用，
             适配器会用新配置重新连接，无需重启 Kaguya。
           </p>
-          {error ? (
-            <div className="error-banner" role="alert">
-              <AlertCircle size={17} />
-              <span>{error}</span>
-            </div>
-          ) : null}
+          {error ? <FieldMessage tone="error">{error}</FieldMessage> : null}
           {loading ? (
             <div className="profile-loading" role="status">
               <LoaderCircle className="spin" size={18} />
@@ -1511,7 +1572,7 @@ function NapCatManagementScreen({
                         : "NapCat access token"
                     }
                   />
-                  <button
+                  <Button
                     type="button"
                     className="icon-button"
                     onClick={() => setShowAccessToken((current) => !current)}
@@ -1522,7 +1583,7 @@ function NapCatManagementScreen({
                     }
                   >
                     {showAccessToken ? <EyeOff size={18} /> : <Eye size={18} />}
-                  </button>
+                  </Button>
                 </div>
               </label>
               <label className="field">
@@ -1544,9 +1605,9 @@ function NapCatManagementScreen({
                   onChange={(event) => setReconnectMs(event.target.value)}
                 />
               </label>
-              <button className="setup-button" type="submit" disabled={saving}>
+              <Button className="setup-button" type="submit" disabled={saving}>
                 {saving ? "正在保存" : "保存配置"}
-              </button>
+              </Button>
             </form>
           ) : null}
         </section>
@@ -1723,24 +1784,30 @@ function DeliveryStatus({ message }: { readonly message: ChatMessage }) {
   if (message.state === "sending") {
     return (
       <p className="delivery-status sending">
-        <LoaderCircle className="spin" size={15} />
-        正在提交
+        <StatusBadge>
+          <LoaderCircle className="spin" size={15} />
+          正在提交
+        </StatusBadge>
       </p>
     );
   }
   if (message.state === "accepted") {
     return (
       <p className="delivery-status accepted" title={message.requestId}>
-        <CheckCircle2 size={15} />
-        服务已接收
-        <code>{shortRequestId(message.requestId)}</code>
+        <StatusBadge tone="success">
+          <CheckCircle2 size={15} />
+          服务已接收
+          <code>{shortRequestId(message.requestId)}</code>
+        </StatusBadge>
       </p>
     );
   }
   return (
     <p className="delivery-status failed">
-      <AlertCircle size={15} />
-      {message.error ?? "提交失败"}
+      <StatusBadge tone="error">
+        <AlertCircle size={15} />
+        {message.error ?? "提交失败"}
+      </StatusBadge>
     </p>
   );
 }

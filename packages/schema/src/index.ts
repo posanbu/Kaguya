@@ -1,4 +1,6 @@
 /**
+ * module-templates.ts 提供未渲染模板管理 DTO，避免与 CompiledPrompt 混用。
+ * module-settings.ts 导出全局模块配置安全 DTO，供管理端与通用表单共同校验。
  * 功能概述：聚合 Kaguya 跨包共享的稳定 wire schema，包括信息原子、平台投递内容、
  * inspection.ts 导出开发者只读 DTO，供 Server 和 WebUI 共同校验；Prompt 模板变量与 LLM 错误分类；旧事件信封和持久化记录身份不再属于公共契约。
  * 主要职责：重新导出 `information.ts` 的不可变原子类型；本文件声明平台目标与消息
@@ -94,3 +96,7 @@ export const llmErrorKindSchema = z.enum([
 ]);
 
 export type LlmErrorKind = z.infer<typeof llmErrorKindSchema>;
+
+export * from "./module-settings.js";
+
+export * from "./module-templates.js";

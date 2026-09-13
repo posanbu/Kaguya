@@ -1,4 +1,5 @@
 /**
+ * conversationContextInformationKind 注册宿主冻结的背景与目标解析投影，内容日志仅输出目录状态。
  * 出站策略拒绝使用不含 target ID 的失败分支；消费者通过请求引用关联 turn，日志只投影安全字段。
  * Planner 的普通请求日志仅投影任务元数据，不包含 Prompt 预览；显式 content detail 保留受控诊断。
  * 功能概述：定义 Runtime 自有的 context、通用 Model Task 生命周期和投递结果 kind，并聚合内建 DAG。
@@ -13,6 +14,7 @@
  * delivery consumer 写 delivered/failed 原子；业务模块接收同一 completed definition 实例。
  * 输入输出与副作用：所有导出都是无 I/O 的 schema/definition/tuple。requested prompt 会把
  * variable provenance 规范为 JSON；projector 不输出 prompt/output/raw 或凭据。
+ * 展示契约：中文名称与职责说明由定义直接提供给 Inspection 和 WebUI，稳定 kind 与协议字段保持不变。
  */
 import { createHash } from "node:crypto";
 
@@ -20,6 +22,7 @@ import { consumerFailedInformationKind } from "@kaguya/engine";
 import { previewInformationContent } from "@kaguya/logger";
 import {
   deliveryRequestedInformationKind,
+  conversationContextInformationKind,
   targetAuthorizedInformationKind,
   messageConfirmedInformationKind,
   inboundTextInformationKind,
@@ -100,8 +103,9 @@ const contextReference = {
 
 export const runtimeContextInformationKind = defineInformationKind({
   kind: "core.runtime.context",
-  displayName: "Core Runtime Context",
-  description: "Information carried by the core.runtime.context kind.",
+  displayName: "运行时上下文",
+  description:
+    "Runtime 建立信息处理上下文时登记的根锚点；后续原子通过上下文引用归属该运行环境，载荷不存业务正文。",
   payloadSchema: z.object({}).strict(),
   references: {},
   log: {
@@ -120,8 +124,9 @@ const safeDeliveryBaseShape = {
 
 export const deliveryDeliveredInformationKind = defineInformationKind({
   kind: "core.delivery.delivered",
-  displayName: "Core Delivery Delivered",
-  description: "Information carried by the core.delivery.delivered kind.",
+  displayName: "平台投递成功",
+  description:
+    "适配器确认投递完成后记录发送结果；Heartflow 据此闭合回合，历史选择器只将成功投递的助手消息纳入历史。",
   payloadSchema: z.union([
     z
       .object({
@@ -167,8 +172,9 @@ export const deliveryDeliveredInformationKind = defineInformationKind({
 
 export const deliveryFailedInformationKind = defineInformationKind({
   kind: "core.delivery.failed",
-  displayName: "Core Delivery Failed",
-  description: "Information carried by the core.delivery.failed kind.",
+  displayName: "平台投递失败",
+  description:
+    "平台发送未完成时记录安全错误和目标信息；Heartflow 与诊断据此结束失败路径，不把已生成正文当作已送达。",
   payloadSchema: z.union([
     z
       .object({
@@ -297,8 +303,9 @@ export const modelTaskSafeErrorSchema = z
   .strict();
 export const modelTaskRequestedInformationKind = defineInformationKind({
   kind: "core.model.task.requested",
-  displayName: "Core Model Task Requested",
-  description: "Information carried by the core.model.task.requested kind.",
+  displayName: "模型任务请求",
+  description:
+    "模块通过受控能力提交任务后冻结 Prompt、模型选择和调用归属；Runtime 据此执行或恢复同一任务并保留输入溯源。",
   payloadSchema: modelTaskMetadataSchema
     .extend({ prompt: informationCompiledPromptSchema })
     .strict(),
@@ -350,8 +357,9 @@ function digest(content: string): string {
 }
 export const modelTaskCompletedInformationKind = defineInformationKind({
   kind: "core.model.task.completed",
-  displayName: "Core Model Task Completed",
-  description: "Information carried by the core.model.task.completed kind.",
+  displayName: "模型任务完成",
+  description:
+    "模型调用成功后记录输出、实际模型及可用的耗时和用量；原请求模块校验业务语义后再派生领域事实。",
   payloadSchema: z.union([
     z
       .object({
@@ -385,8 +393,9 @@ export const modelTaskCompletedInformationKind = defineInformationKind({
 });
 export const modelTaskFailedInformationKind = defineInformationKind({
   kind: "core.model.task.failed",
-  displayName: "Core Model Task Failed",
-  description: "Information carried by the core.model.task.failed kind.",
+  displayName: "模型任务失败",
+  description:
+    "模型调用在请求、生成或输出校验阶段失败时登记安全错误；调用模块按任务归属处理故障并闭合业务流程。",
   payloadSchema: z.union([
     z
       .object({
@@ -422,8 +431,9 @@ export const modelTaskFailedInformationKind = defineInformationKind({
 });
 export const modelTaskCancelledInformationKind = defineInformationKind({
   kind: "core.model.task.cancelled",
-  displayName: "Core Model Task Cancelled",
-  description: "Information carried by the core.model.task.cancelled kind.",
+  displayName: "模型任务取消",
+  description:
+    "收到显式取消请求后记录模型任务的取消终态；调用模块据此停止等待，避免将取消视作成功输出。",
   payloadSchema: z
     .object({
       ...modelTaskTerminalShape,
@@ -483,6 +493,7 @@ export const modelTaskInformationKinds = Object.freeze([
 ] as const);
 
 export const builtInInformationKinds = Object.freeze([
+  conversationContextInformationKind,
   targetAuthorizedInformationKind,
   messageConfirmedInformationKind,
   runtimeContextInformationKind,

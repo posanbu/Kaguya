@@ -1,9 +1,12 @@
 /**
+ * ProfileWorkspace 同步 snapshot/busy/result，让所有页面顶栏反馈应用进度及失败。
  * 功能概述：展示选中/生效配置并提供显式应用、冲突后重试与进程级重启指引。
  * 主要职责：读取安全状态快照，应用用户当前看到的 revision；过期时刷新快照但不自动重试写操作。
  * 代码库关系：App 的待应用视图挂载此组件，api.ts 负责认证与 DTO 校验；不读取 Profile 凭据。
  * 输入输出与副作用：发起受认证的 GET/POST；组件卸载后忽略读取结果，应用成功通知 App 刷新状态。
  */
+import { useNavigationGuard } from "./components/AppShell.js";
+import { useProfileWorkspace } from "./ProfileWorkspace.js";
 import { useEffect, useState } from "react";
 import {
   applyConfiguration,
@@ -22,6 +25,7 @@ export function ConfigurationApplicationScreen({
   readonly onApplied: () => Promise<unknown>;
   readonly onEdit: () => void;
 }) {
+  const { reportApplication } = useProfileWorkspace();
   const [snapshot, setSnapshot] = useState<ConfigurationApplicationStatus>();
   const [result, setResult] = useState<ConfigurationApplyResult>();
   const [error, setError] = useState<string>();
@@ -40,6 +44,17 @@ export function ConfigurationApplicationScreen({
       live = false;
     };
   }, [token]);
+  useEffect(() => {
+    reportApplication(
+      snapshot,
+      busy,
+      error ??
+        (result?.status === "failed"
+          ? configurationApplyMessage(result)
+          : undefined),
+    );
+  }, [snapshot, busy, error, result, reportApplication]);
+  useNavigationGuard(() => !busy);
   const apply = async () => {
     if (!snapshot || busy) return;
     setBusy(true);
