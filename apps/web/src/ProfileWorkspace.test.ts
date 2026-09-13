@@ -38,3 +38,20 @@ describe("Profile 状态标签", () => {
     ).toContain("应用失败");
   });
 });
+
+it("概览首屏尚无 Profile 状态时仍可渲染占位，不伪造 selected", async () => {
+  const { createElement } = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { ProfileWorkspace, ProfileSwitcher } =
+    await import("./ProfileWorkspace.js");
+  const html = renderToStaticMarkup(
+    createElement(ProfileWorkspace, {
+      token: "fixture",
+      status: undefined,
+      reload: async () => undefined,
+      children: createElement(ProfileSwitcher),
+    }),
+  );
+  expect(html).toContain("Profile 状态尚未就绪");
+  expect(html).not.toContain("default");
+});
