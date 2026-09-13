@@ -1,4 +1,5 @@
 /**
+ * 状态未加载或读取失败时允许概览继续渲染，菜单只显示占位，不推断 selected Profile。
  * 功能概述：认证工作台共享 Profile 编辑上下文和安全的配置应用状态，不读取配置正文。
  * 主要职责：ProfileWorkspace 保存编辑 ID、操作锁及应用快照；ProfileSwitcher 用 Radix
  * 菜单切换查看对象、用 Dialog 新建配置。profileLabels 独立描述 selected 与已生效 revision。
@@ -33,7 +34,7 @@ interface Workspace {
   requestEdit: (id: string) => Promise<boolean>;
   registerEditGuard: (guard: Guard) => () => void;
   beforeEdit: () => Promise<boolean>;
-  status: ConfigurationStatus;
+  status: ConfigurationStatus | undefined;
   application: ConfigurationApplicationStatus | undefined;
   applicationError: string | undefined;
   statusError: string | undefined;
@@ -80,11 +81,16 @@ export function ProfileWorkspace({
   children,
 }: {
   token: string;
-  status: ConfigurationStatus;
+  status: ConfigurationStatus | undefined;
   reload: () => Promise<unknown>;
   children: ReactNode;
 }) {
-  const [editingId, setEditingId] = useState<string>(status.selectedProfileId);
+  const [editingId, setEditingId] = useState<string | undefined>(
+    status?.selectedProfileId,
+  );
+  useEffect(() => {
+    if (status) setEditingId((current) => current ?? status.selectedProfileId);
+  }, [status]);
   const [application, setApplication] =
     useState<ConfigurationApplicationStatus>();
   const [applicationError, setApplicationError] = useState<string>();
@@ -183,6 +189,10 @@ export function ProfileSwitcher() {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [error, setError] = useState<string>();
+  if (!status)
+    return (
+      <span role="status">Profile 状态尚未就绪，请等待加载或重试概览。</span>
+    );
   const editing = status.profiles.find((profile) => profile.id === editingId);
   const labels = (id: string) =>
     profileLabels(
