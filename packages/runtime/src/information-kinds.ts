@@ -1,4 +1,5 @@
 /**
+ * 出站策略拒绝使用不含 target ID 的失败分支；消费者通过请求引用关联 turn，日志只投影安全字段。
  * Planner 的普通请求日志仅投影任务元数据，不包含 Prompt 预览；显式 content detail 保留受控诊断。
  * 功能概述：定义 Runtime 自有的 context、通用 Model Task 生命周期和投递结果 kind，并聚合内建 DAG。
  * Model Task：四个 modelTask*InformationKind 保存任务版本、选择策略、模型、激活来源与 Prompt
@@ -19,6 +20,8 @@ import { consumerFailedInformationKind } from "@kaguya/engine";
 import { previewInformationContent } from "@kaguya/logger";
 import {
   deliveryRequestedInformationKind,
+  targetAuthorizedInformationKind,
+  messageConfirmedInformationKind,
   inboundTextInformationKind,
 } from "@kaguya/modules";
 import {
@@ -166,13 +169,27 @@ export const deliveryFailedInformationKind = defineInformationKind({
   kind: "core.delivery.failed",
   displayName: "Core Delivery Failed",
   description: "Information carried by the core.delivery.failed kind.",
-  payloadSchema: z
-    .object({
-      ...safeDeliveryBaseShape,
-      ok: z.literal(false),
-      error: nonBlankString,
-    })
-    .strict(),
+  payloadSchema: z.union([
+    z
+      .object({
+        ...safeDeliveryBaseShape,
+        ok: z.literal(false),
+        error: nonBlankString,
+      })
+      .strict(),
+    z
+      .object({
+        ok: z.literal(false),
+        adapterId: nonBlankString,
+        platform: nonBlankString,
+        targetKind: z.enum(["group", "private", "web"]),
+        error: z.enum([
+          "destination-not-allowed",
+          "target-authorization-required",
+        ]),
+      })
+      .strict(),
+  ]),
   references: {
     "core:caused-by": {
       required: true,
@@ -195,6 +212,8 @@ export const deliveryFailedInformationKind = defineInformationKind({
       adapterId: payload.adapterId,
       platform: payload.platform,
       errorType: payload.error,
+      targetKind:
+        "targetKind" in payload ? payload.targetKind : payload.target.kind,
     }),
   },
 });
@@ -464,6 +483,8 @@ export const modelTaskInformationKinds = Object.freeze([
 ] as const);
 
 export const builtInInformationKinds = Object.freeze([
+  targetAuthorizedInformationKind,
+  messageConfirmedInformationKind,
   runtimeContextInformationKind,
   consumerFailedInformationKind,
   inboundTextInformationKind,

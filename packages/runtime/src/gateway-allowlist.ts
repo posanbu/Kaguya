@@ -1,5 +1,5 @@
 /**
- * 功能概述：实现 Server 配置的平台入站 allowlist 判定，作为调用 Core ingress 前的纯策略。
+ * 功能概述：实现 Server 配置的平台入站与最终出站 allowlist 判定，作为调用 Core ingress 前的纯策略。
  * 主要职责：`GatewayAllowlist` 解析 `platform:chat-type:target-id` 字符串规则，并按
  * 平台、群 ID 或私聊用户 ID 匹配；Web 消息始终放行，继续只由 HTTP Bearer Token 边界控制。
  * 代码库关系：Server composition 从 Profile runtime 配置构造本类并把 `allows` 以谓词注入 NapCat
@@ -7,6 +7,7 @@
  * 输入输出与副作用：`allows` 返回同步布尔值且无 I/O；空规则拒绝平台消息，
  * 格式错误的规则被忽略，platform 与 target ID 的 `*` 表示通配。
  */
+import type { PlatformDestination } from "@kaguya/schema";
 import type { PlatformInboundMessage } from "@kaguya/platform-adapters";
 
 interface GatewayAllowlistRule {
@@ -35,19 +36,23 @@ export class GatewayAllowlist {
   }
 
   allows(message: PlatformInboundMessage): boolean {
-    if (message.platform === "web") {
-      return true;
-    }
-    if (message.target.kind === "web") {
-      return false;
-    }
-    const chatType = message.target.kind;
+    return this.allowsDestination(message.platform, message.target);
+  }
+
+  /** 入站与最终出站共享策略；Web 仍由管理/网关认证控制。 */
+  allowsDestination(
+    platform: string,
+    destination: PlatformDestination,
+  ): boolean {
+    if (platform === "web") return true;
+    if (destination.kind === "web") return false;
+    const chatType = destination.kind;
     const targetId =
-      chatType === "group" ? message.target.groupId : message.target.userId;
+      destination.kind === "group" ? destination.groupId : destination.userId;
     return this.#rules.some(
       (rule) =>
         rule.chatType === chatType &&
-        (rule.platform === "*" || rule.platform === message.platform) &&
+        (rule.platform === "*" || rule.platform === platform) &&
         (rule.targetId === "*" || rule.targetId === targetId),
     );
   }

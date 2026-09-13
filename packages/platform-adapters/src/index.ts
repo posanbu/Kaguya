@@ -1,6 +1,6 @@
 /**
  * 功能概述：聚合 platform-adapters 的公共契约、OneBot 编解码、NapCat 组件
- * 与 Web 正规化器，作为 Runtime 和应用层之间的单一导入面。
+ * 与只读 TargetDirectory/targetKey 及 Web 正规化器，作为 Runtime 和应用层之间的单一导入面。
  * 主要职责：导出窄 `InformationIngress`/`InboundReceipt`、平台消息与 transport
  * 类型，以及 OneBot、NapCat、Web 实现；本文件不创建任何 Runtime 兼容包装。
  * 代码库关系：`@kaguya/runtime` 结构性实现 ingress，`apps/server` 和 `apps/demo`
@@ -51,3 +51,5 @@ export type {
   AdapterHostStatus,
   RuntimeUnavailableReason,
 } from "./hosted.js";
+
+export * from "./targets.js";

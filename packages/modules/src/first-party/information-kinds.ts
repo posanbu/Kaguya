@@ -12,6 +12,7 @@
  * 记录 originating module instance，使全量广播后的下一阶段只由原实例派生。
  * 协议边界：intent 严格要求 target、turn、memoryInformationIds，不携带入站正文或回复标记；
  * inbound schema 独立保留入站来源，assistant source 只记录目标及可选 selfId/已投递消息 ID。
+ * 跨会话意图引用宿主批准事实，事实本身不授予权限；原有目标/turn/Memory payload 保持一致。
  * messageTargetSchema/MessageTarget 暴露可复用的显式目标契约；
  * association route 固定为 message，其请求直接引用消息意图。
  * 输入输出与副作用：由 `defineInformationKind` 返回的 definition 为冻结的纯定义，无 I/O；
@@ -104,7 +105,7 @@ const messageSourceSchema = z
   })
   .strict() as any;
 
-const turnProvenanceSchema = z
+export const turnProvenanceSchema = z
   .object({
     candidateInformationId: nonBlankString,
     claimInformationId: nonBlankString,
@@ -171,10 +172,18 @@ export const messageIntentRequestedInformationKind = defineInformationKind({
     "Information carried by the agent.message.intent.requested kind.",
   payloadSchema: messageIntentRequestedInformationPayloadSchema,
   references: {
+    "agent:target-authorization": {
+      required: false,
+      multiple: false,
+      targetKinds: ["agent.message.target.authorized"],
+    },
     "core:caused-by": {
       required: true,
       multiple: false,
-      targetKinds: ["agent.attention.arousal.completed"],
+      targetKinds: [
+        "agent.attention.arousal.completed",
+        "agent.message.target.authorized",
+      ],
     },
     "core:context": {
       required: true,
@@ -184,7 +193,10 @@ export const messageIntentRequestedInformationKind = defineInformationKind({
     "core:uses-context": {
       required: true,
       multiple: true,
-      targetKinds: ["agent.turn.context.completed"],
+      targetKinds: [
+        "agent.turn.context.completed",
+        "agent.message.target.authorized",
+      ],
     },
     "agent:turn-claim": {
       required: true,
@@ -652,7 +664,10 @@ export const deliveryRequestedInformationKind = defineInformationKind({
     "core:caused-by": {
       required: true,
       multiple: false,
-      targetKinds: [assistantTextInformationKind.kind],
+      targetKinds: [
+        assistantTextInformationKind.kind,
+        "agent.message.content.confirmed",
+      ],
     },
     "core:context": {
       required: true,
@@ -1266,32 +1281,42 @@ export const heartbeatFailedInformationKind = defineInformationKind({
   },
 });
 
+const turnCandidatePayloadSchema = z
+  .object({
+    heartbeatInformationId: nonBlankString,
+    reason: heartbeatReasonSchema,
+    dueAt: z.iso.datetime({ offset: true }),
+    firedAt: z.iso.datetime({ offset: true }),
+    platform: nonBlankString,
+    adapterId: nonBlankString,
+    destination: platformDestinationSchema,
+    sourceInformationIds: z.array(nonBlankString).min(1),
+    scopeKey: nonBlankString,
+    asOf: z.iso.datetime({ offset: true }),
+    policyVersion: heartbeatPolicyVersionSchema,
+    attempt: z.number().int().min(0),
+    totalWaitBudget: z.number().int().min(0),
+  })
+  .strict();
+
 export const turnCandidateInformationKind = defineInformationKind({
   kind: "agent.turn.candidate",
   displayName: "Agent Turn Candidate",
   description: "Information carried by the agent.turn.candidate kind.",
-  payloadSchema: z
-    .object({
-      heartbeatInformationId: nonBlankString,
-      reason: heartbeatReasonSchema,
-      dueAt: z.iso.datetime({ offset: true }),
-      firedAt: z.iso.datetime({ offset: true }),
-      platform: nonBlankString,
-      adapterId: nonBlankString,
-      destination: platformDestinationSchema,
-      sourceInformationIds: z.array(nonBlankString).min(1),
-      scopeKey: nonBlankString,
-      asOf: z.iso.datetime({ offset: true }),
-      policyVersion: heartbeatPolicyVersionSchema,
-      attempt: z.number().int().min(0),
-      totalWaitBudget: z.number().int().min(0),
-    })
-    .strict(),
+  payloadSchema: z.union([
+    turnCandidatePayloadSchema,
+    turnCandidatePayloadSchema.extend({
+      managementAuthorizationId: nonBlankString,
+    }),
+  ]),
   references: {
     "core:caused-by": {
       required: true,
       multiple: false,
-      targetKinds: ["core.schedule.one-shot.due"],
+      targetKinds: [
+        "core.schedule.one-shot.due",
+        "agent.message.target.authorized",
+      ],
     },
     "agent:heartbeat-fired": {
       required: true,

@@ -1,4 +1,5 @@
 /**
+ * 导出跨会话批准/确认事实和窄 MessageAuthorization token，供 composition 与 Runtime 共享对象身份。
  * 功能概述：汇总 modules 包的信息原子 kind、Heartflow、Message Composer与 person-fact Model Task 公共契约。
  * 额外导出后台原始消息写回模块与 request/terminal kind，供 composition 显式装配。
  * 主要职责：导出 `createHeartflowModule`、`createMessageComposerModule`、
@@ -150,3 +151,5 @@ export {
   memoryCognitionRequestedInformationKind,
   memoryCognitionCompletedInformationKind,
 } from "./first-party/memory-cognition/index.js";
+
+export * from "./first-party/message-authorization.js";

@@ -1,4 +1,4 @@
-/** 功能概述：维护中文文档站侧栏；sidebar 按使用、开发与参考分组，新增 Memory 认知层 ADR 入口供开发者查阅。由 VitePress 配置读取，无运行期 I/O。 */
+/** 功能概述：维护中文文档站侧栏；sidebar 按使用、开发与参考分组，维护跨会话消息指南及 Memory 认知层入口供读者查阅。由 VitePress 配置读取，无运行期 I/O。 */
 import type { DefaultTheme } from "vitepress";
 
 export const sidebar: DefaultTheme.SidebarItem[] = [
@@ -16,6 +16,7 @@ export const sidebar: DefaultTheme.SidebarItem[] = [
       { text: "安装与启动", link: "/guide/installation" },
       { text: "配置 Kaguya", link: "/guide/configuration" },
       { text: "使用 Web UI", link: "/guide/webui" },
+      { text: "跨会话消息", link: "/guide/message-targets" },
       { text: "Durable Cadence", link: "/guide/cadence" },
       { text: "故障排查", link: "/guide/troubleshooting" },
     ],

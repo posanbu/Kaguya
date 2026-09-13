@@ -1,6 +1,7 @@
 /**
  * 功能概述：验证 NapCat 的 action client 、OneBot 入站 adapter 与共享 JSON
  * transport 的边界，特别保证 adapter 只依赖窄 `InformationIngress`。
+ * 目录用例覆盖完整查询、字符串大 ID、非法数值、超时和断线，确保不把部分结果当作可达全集。
  * 主要职责：覆盖 action 回执/超时/断线、共享 transport、入站提交、
  * self ID 过滤、错误上下文与 stop 排空 in-flight 提交。
  * 代码库关系：直接测试 `napcat.ts`，其入站消息由 `onebot.ts`正规化，
@@ -380,3 +381,63 @@ const receipt: InboundReceipt = {
 function ingressWith(submit: InformationIngress["submit"]): InformationIngress {
   return { submit };
 }
+
+describe("NapCat reachable directory", () => {
+  function directoryClient() {
+    const transport = new FakeTransport();
+    let echo = 0;
+    const client = new NapCatActionClient({
+      adapterId: "test",
+      transport,
+      nextEcho: () => String(++echo),
+      timeoutMs: 30,
+    });
+    return {
+      client,
+      transport,
+      respond: (data: unknown[]) =>
+        transport.sent.forEach((request, index) => {
+          transport.receive({
+            echo: (request as { echo: string }).echo,
+            status: "ok",
+            retcode: 0,
+            data: data[index],
+          });
+        }),
+    };
+  }
+  it("normalizes complete account/group/friend results and preserves large string IDs", async () => {
+    const f = directoryClient();
+    const pending = f.client.listTargets();
+    f.respond([
+      { user_id: "1" },
+      [{ group_id: "9007199254740993", group_name: "Group" }],
+      [{ user_id: 2, nickname: "Friend" }],
+    ]);
+    const snapshot = await pending;
+    expect(snapshot.candidates.map((c) => c.destination)).toEqual([
+      { kind: "group", groupId: "9007199254740993" },
+      { kind: "private", userId: "2" },
+    ]);
+    expect(snapshot.generation).toMatch(/:1$/u);
+  });
+  it("rejects incomplete and unsafe numeric responses", async () => {
+    const f = directoryClient();
+    const pending = f.client.listTargets();
+    f.respond([
+      { user_id: 1 },
+      [{ group_id: 9007199254740992, group_name: "bad" }],
+      [],
+    ]);
+    await expect(pending).rejects.toThrow("directory-unavailable");
+  });
+  it("fails closed on timeout or disconnect", async () => {
+    const f = directoryClient();
+    await expect(f.client.listTargets()).rejects.toThrow(
+      "directory-unavailable",
+    );
+    const pending = f.client.listTargets();
+    f.transport.disconnect();
+    await expect(pending).rejects.toThrow("directory-unavailable");
+  });
+});

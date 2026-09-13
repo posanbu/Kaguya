@@ -1152,3 +1152,29 @@ export function configurationApplyMessage(
     return "新配置应用失败，已恢复原配置运行。请检查后重试。";
   return "配置已保存，但 Runtime 暂不可用。请检查数据库或服务日志后重试应用。";
 }
+
+/** 管理端目标操作复用内存 Token；响应仅在当前页面内保存。 */
+export async function messageTargetRequest(
+  config: GatewayConfig,
+  action: "sources" | "resolve" | "authorize" | "status" | "confirm",
+  body: unknown,
+): Promise<unknown> {
+  const response = await requestAuthenticatedJson(
+    config,
+    `/api/v1/message-targets/${action}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      cache: "no-store",
+    },
+    fetch,
+  );
+  if (!response.ok)
+    throw new GatewayRequestError(
+      "跨会话请求未完成，请检查权限或重新选择目标",
+      "target-request-rejected",
+      response.status,
+    );
+  return response.json();
+}

@@ -4,6 +4,7 @@
  * createRuntimeModelSelectionResolver 根据 Profile 批准的 tier 解析 provider/model、思考参数及硬超时。
  * Memory provider 由共享 composition 从 selected Profile 显式创建，重启/热应用使用相同配置边界。
  * 代码库关系：Runtime 业务装配统一来自 @kaguya/composition；createMessageCatalog/createMessageComposition 装配消息编写模块；AdapterHost
+ * 启动及显式应用将生效 GatewayAllowlist 注入 Runtime，出站恢复领取使用所属配置策略。
  * 管理适配器；inspectModules 和账本只读端口交给 inspection.ts，配置仅用于秘密脱敏闭包。
  * 启动只接受严格 v1 Registry，不自动迁移旧配置；用户须先手动更新配置。
  * ConfigurationApplication 保留 HTTP/Token/数据库，串行替换完整 Runtime/AdapterHost；
@@ -11,6 +12,7 @@
  * 输入输出与副作用：连接数据库、监听 HTTP 并启动适配器，失败时释放已创建资源并固定错误分类。
  * Inspection 仅在 Runtime 可用时注入，不把 settings、凭据或数据库对象放入 HTTP 响应。
  */
+import { GatewayAllowlist } from "@kaguya/runtime";
 import {
   createInspectionService,
   type InspectionService,
@@ -262,6 +264,8 @@ export async function startKaguyaServer(
     ) {
       try {
         runtime = new KaguyaRuntime({
+          gatewayAllowlist: new GatewayAllowlist(config.gatewayAllowlist),
+          targetDirectory: adapterHost,
           database,
           logger: rootLogger,
           ...createMessageComposition(resolveModelSelection, {
@@ -422,6 +426,8 @@ export async function startKaguyaServer(
             await prepareConfigurationDatabase(database);
           }
           nextRuntime = new KaguyaRuntime({
+            gatewayAllowlist: new GatewayAllowlist(nextConfig.gatewayAllowlist),
+            targetDirectory: nextHost,
             database,
             logger: rootLogger,
             ...createMessageComposition(
@@ -486,6 +492,7 @@ export async function startKaguyaServer(
       createHttpApplication({
         config: effectiveConfig,
         inspection: () => inspection,
+        messageTargets: () => runtime?.messageTargets,
         configurationApplication: application,
         gatewayAuth,
         webGateway: { ingest: (input) => adapterHost.webGateway.ingest(input) },
@@ -584,6 +591,7 @@ function createServerAdapterHost(
       ? { configurationError: config.napcat.configurationError }
       : {}),
     outboundTransport: napcat,
+    targetDirectory: napcat,
     start: async (report) => {
       reportStatus = report;
       await napcat.start();

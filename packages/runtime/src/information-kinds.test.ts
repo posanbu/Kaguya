@@ -1,4 +1,5 @@
 /**
+ * 聚合列表包含管理端目标批准和正文确认事实；失败出站可使用不含原始目标的安全分支。
  * 功能概述：锁定 Runtime 信息 DAG 的完整内建 kind 集合、唯一对象所有权和关键引用契约。
  * 主要职责：验证 context、Engine 消费失败、modules 消息/过滤/投递请求、Runtime 通用模型任务与投递
  * 结果 definition 各出现一次，并检查 Runtime 聚合复用上游导出的原始对象；通用模型任务单独注册，requested prompt
@@ -174,6 +175,8 @@ describe("runtime information kinds", () => {
 
   it("aggregates every owned definition exactly once", () => {
     expect(builtInInformationKinds.map(({ kind }) => kind)).toEqual([
+      "agent.message.target.authorized",
+      "agent.message.content.confirmed",
       "core.runtime.context",
       "consumer.failed",
       "core.message.inbound.text",

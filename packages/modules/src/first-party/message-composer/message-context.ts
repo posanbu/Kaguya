@@ -1,5 +1,6 @@
 /**
  * 功能概述：消息编写模块的受控账本选择器及 Prompt 预览入口，不参与 Heartflow 的发言决策。
+ * 已确认的跨会话消息通过 confirmation→assistant 因果链验证成功投递，才能进入同目标历史或引用。
  * 主要职责：turnMessageContextSelector 核对 intent→turn 引用并保留全部冻结输入；仅辅助历史受预算限制，
  * 已投递 assistant 才可进入历史，每条输入通过同目标成功回执链或入站 ID 查询引用上下文。associationMessageContextSelector 校验关联终态因果。
  * 代码库关系：index.ts 声明选择器与渲染器，message-prompt 使用冻结快照编译；Engine 按返回 ID 重载事实。
@@ -208,7 +209,19 @@ export const turnMessageContextSelector = defineInformationSelector({
           direction: "outgoing",
           limit: 2,
         });
-        if (assistants.length === 1) candidates.push(assistants[0]!);
+        if (assistants.length === 1) {
+          candidates.push(assistants[0]!);
+          if (assistants[0]!.kind === "agent.message.content.confirmed") {
+            candidates.push(
+              ...(await ledger.related({
+                from: [assistants[0]!.informationId],
+                relation: "core:caused-by",
+                direction: "outgoing",
+                limit: 2,
+              })),
+            );
+          }
+        }
       }
       const quote = resolveMessageQuote(
         candidates,
@@ -425,14 +438,27 @@ async function assistantWasDelivered(
   ledger: InformationSelectorContext["ledger"],
   asOf: string,
 ): Promise<boolean> {
-  const requests = (
-    await ledger.related({
-      from: [atom.informationId],
-      relation: "core:caused-by",
-      direction: "incoming",
-      limit: 20,
-    })
-  ).filter(
+  const direct = await ledger.related({
+    from: [atom.informationId],
+    relation: "core:caused-by",
+    direction: "incoming",
+    limit: 20,
+  });
+  const confirmations = direct.filter(
+    (a) =>
+      a.kind === "agent.message.content.confirmed" &&
+      a.payload.assistantInformationId === atom.informationId &&
+      beforeQuoteCutoff(a, asOf),
+  );
+  const confirmedRequests = confirmations.length
+    ? await ledger.related({
+        from: confirmations.map((a) => a.informationId),
+        relation: "core:caused-by",
+        direction: "incoming",
+        limit: 20,
+      })
+    : [];
+  const requests = [...direct, ...confirmedRequests].filter(
     (request) =>
       request.kind === "core.delivery.requested" &&
       beforeQuoteCutoff(request, asOf) &&

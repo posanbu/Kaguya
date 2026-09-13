@@ -1,5 +1,6 @@
 /**
  * 兼容 #136 的 agent.turn.plan 与 message/wait/silent 契约，仅增强已合并的单一 Planner 链。
+ * 测试显式批准合成 QQ 目标，Runtime 未注入策略时默认拒绝非 Web 出站。
  * 功能概述：通过真实 Runtime/PGlite 与 DeepSeek-compatible HTTP mock 验证两层发言决策。
  * fixture 装配正式 Catalog、light Planner 和 heavy Composer；settle 等待 durable 订阅闭合，
  * restart 保留数据库并重建宿主，advance 推进持久 heartbeat 时钟。仅 mock provider HTTP，
@@ -12,6 +13,7 @@ import { createTestingDatabase } from "@kaguya/database/testing";
 import { createFirstPartyModuleConfigDefaults } from "@kaguya/modules";
 import {
   KaguyaRuntime,
+  GatewayAllowlist,
   ModelTaskClient,
   type RuntimeCapabilityContext,
 } from "@kaguya/runtime";
@@ -89,6 +91,7 @@ async function fixture(outputs: unknown[]) {
   const start = async () => {
     const runtime = new KaguyaRuntime({
       ...composition,
+      gatewayAllowlist: new GatewayAllowlist(["qq:private:*", "qq:group:*"]),
       database,
       now: () => new Date(now),
       capabilities: (context) => {

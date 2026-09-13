@@ -1,6 +1,7 @@
 /**
  * 功能概述：实现 NapCat/OneBot 的出站 action client 与入站 adapter，两者可安全
  * 共享一个 JSON transport；入站端只持有 `InformationIngress`，不接触 Runtime 其他能力。
+ * listTargets 通过独立 echo 查询账号、群和好友列表，超时/断线/不完整响应失败关闭，不记录原始响应。
  * 主要职责：`NapCatActionClient.sendMessage` 编号 echo、匹配成功/失败回执、处理超时与断线；
  * `NapCatOneBotAdapter` 正规化 frame、过滤 self ID/action response、执行注入的入站谓词后
  * 调用 `ingress.submit`，
@@ -10,6 +11,12 @@
  * 输入输出与副作用：出站会写 JSON transport 并创建 timeout；入站提交
  * 异常通过可选 callback 报告，context 仅含 adapter ID 和外部 platform message ID。
  */
+import { randomUUID } from "node:crypto";
+import type {
+  TargetDirectory,
+  TargetDirectorySnapshot,
+  ReachableTarget,
+} from "./targets.js";
 import type { OutboundMessageContent } from "@kaguya/schema";
 
 import type {
@@ -69,7 +76,18 @@ interface PendingAction {
   readonly timer: NodeJS.Timeout;
 }
 
-export class NapCatActionClient implements PlatformOutboundTransport {
+export class NapCatActionClient
+  implements PlatformOutboundTransport, TargetDirectory
+{
+  private readonly directoryGeneration = randomUUID();
+  private readonly queries = new Map<
+    string,
+    {
+      resolve: (value: unknown) => void;
+      reject: (error: Error) => void;
+      timer: NodeJS.Timeout;
+    }
+  >();
   private readonly pending = new Map<string, PendingAction>();
 
   constructor(private readonly options: NapCatActionClientOptions) {
@@ -77,7 +95,73 @@ export class NapCatActionClient implements PlatformOutboundTransport {
       this.handleJsonMessage(message);
     });
     options.transport.onClose((error) => {
+      for (const query of this.queries.values()) {
+        clearTimeout(query.timer);
+        query.reject(new Error("directory-unavailable"));
+      }
+      this.queries.clear();
       this.rejectAll(error?.message ?? "NapCat connection closed");
+    });
+  }
+
+  /** 查询成功的完整群/好友目录；登录身份和连接 UUID 一起构成代次。 */
+  async listTargets(): Promise<TargetDirectorySnapshot> {
+    const [login, groups, friends] = await Promise.all([
+      this.query("get_login_info"),
+      this.query("get_group_list"),
+      this.query("get_friend_list"),
+    ]);
+    const account = directoryId(record(login).user_id);
+    if (
+      !Array.isArray(groups) ||
+      !Array.isArray(friends) ||
+      groups.length + friends.length > 10000
+    )
+      throw new Error("directory-unavailable");
+    const candidates: ReachableTarget[] = [
+      ...groups.map((value) => {
+        const row = record(value);
+        return {
+          adapterId: this.options.adapterId,
+          platform: "qq",
+          destination: {
+            kind: "group" as const,
+            groupId: directoryId(row.group_id),
+          },
+          name: directoryName(row.group_name),
+        };
+      }),
+      ...friends.map((value) => {
+        const row = record(value);
+        return {
+          adapterId: this.options.adapterId,
+          platform: "qq",
+          destination: {
+            kind: "private" as const,
+            userId: directoryId(row.user_id),
+          },
+          name: directoryName(row.remark || row.nickname),
+        };
+      }),
+    ];
+    return { generation: `${this.directoryGeneration}:${account}`, candidates };
+  }
+
+  private query(action: string): Promise<unknown> {
+    const echo = `directory:${this.options.nextEcho()}`;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.queries.delete(echo);
+        reject(new Error("directory-unavailable"));
+      }, this.options.timeoutMs);
+      this.queries.set(echo, { resolve, reject, timer });
+      try {
+        this.options.transport.sendJson({ action, params: {}, echo });
+      } catch {
+        clearTimeout(timer);
+        this.queries.delete(echo);
+        reject(new Error("directory-unavailable"));
+      }
     });
   }
 
@@ -113,6 +197,19 @@ export class NapCatActionClient implements PlatformOutboundTransport {
       return;
     }
     const echo = String((message as { echo: unknown }).echo);
+    const query = this.queries.get(echo);
+    if (query) {
+      this.queries.delete(echo);
+      clearTimeout(query.timer);
+      const response = record(message);
+      if (
+        response.status === "ok" &&
+        (response.retcode === undefined || response.retcode === 0)
+      )
+        query.resolve(response.data);
+      else query.reject(new Error("directory-unavailable"));
+      return;
+    }
     const pending = this.pending.get(echo);
     if (pending === undefined) {
       return;
@@ -267,4 +364,21 @@ function extractError(body: { wording?: unknown; message?: unknown }): string {
   }
   const message = typeof body.message === "string" ? body.message.trim() : "";
   return message || "NapCat action failed";
+}
+
+function record(value: unknown): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    throw new Error("directory-unavailable");
+  return value as Record<string, unknown>;
+}
+function directoryId(value: unknown): string {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0)
+    return String(value);
+  if (typeof value === "string" && /^[1-9][0-9]*$/u.test(value)) return value;
+  throw new Error("directory-unavailable");
+}
+function directoryName(value: unknown): string {
+  if (typeof value !== "string" || value.length > 1000)
+    throw new Error("directory-unavailable");
+  return value;
 }

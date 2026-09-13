@@ -1,0 +1,82 @@
+/* 功能概述：跨会话管理页的限定布局与表单样式。
+ * 主要职责：把来源、查询、消歧和两次确认纵向排列，长正文换行，小屏避免横向溢出。
+ * 代码库关系：仅由 MessageTargets.tsx 引入，复用站点颜色变量，不改变其他管理页。
+ * 输入输出与副作用：纯样式，无状态、网络或权限行为。 */
+.message-targets .target-form {
+  display: grid;
+  gap: 18px;
+  width: min(860px, calc(100% - 32px));
+  margin: 28px auto;
+  padding: 28px;
+  box-sizing: border-box;
+}
+.message-targets .target-form > p {
+  margin: 0;
+  line-height: 1.7;
+}
+.message-targets .target-form label {
+  display: grid;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 500;
+}
+.message-targets .target-form input:not([type="radio"]),
+.message-targets .target-form select,
+.message-targets .target-form textarea {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  font: inherit;
+  color: inherit;
+  background: var(--kaguya-paper);
+  border: 1px solid var(--kaguya-line);
+  border-radius: 8px;
+}
+.message-targets .target-form textarea {
+  resize: vertical;
+  line-height: 1.6;
+}
+.message-targets .target-form label:has(input[type="radio"]) {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+.message-targets .target-form button {
+  justify-self: start;
+  padding: 10px 16px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  color: inherit;
+  background: var(--kaguya-paper);
+  border: 1px solid var(--kaguya-line);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.message-targets .target-form button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.message-targets .target-form pre {
+  margin: 0;
+  padding: 20px;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 8px;
+  font: inherit;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 600px) {
+  .message-targets .target-form {
+    padding: 18px;
+    margin: 16px auto;
+  }
+  .message-targets .target-form button {
+    justify-self: stretch;
+  }
+}

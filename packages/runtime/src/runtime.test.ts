@@ -1,5 +1,6 @@
 /**
  * Planner 普通日志仅保留元数据，不能泄漏 Prompt 预览或模型输出。
+ * fixture 显式批准合成 QQ 目标，生产 Runtime 默认为空出站白名单。
  * 功能概述：用真实 PGlite、Core 和 ModuleHost 验证 `KaguyaRuntime` 的完整信息 DAG。
  * Planner 使用独立 object Model Task，测试分别定位 plan 与 compose，确保故障静默与唯一分派。
  * 主要职责：覆盖 Web 入站到投递成功的直接因果链、生成失败不会继续 assistant/outbound/delivery、
@@ -80,6 +81,7 @@ const testMessageTemplates = {
   turn: "{{#each messages}}{{> history-inbound}}{{/each}}",
 };
 
+import { GatewayAllowlist } from "./gateway-allowlist.js";
 import {
   KaguyaRuntime,
   OutboundTransportError,
@@ -196,6 +198,7 @@ async function createRuntime(
   let id = 0;
   const runtime = new KaguyaRuntime({
     ...createMessageComposition(),
+    gatewayAllowlist: new GatewayAllowlist(["qq:group:*", "qq:private:*"]),
     database,
     now: () => new Date("2026-09-04T00:00:01.000Z"),
     informationIdGenerator: () => `runtime-atom-${++id}`,
