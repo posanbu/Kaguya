@@ -1,4 +1,5 @@
 /**
+ * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * 默认 DAG 验证 eligible turn 先调用 Planner，再由 Composer 生成消息。
  * tier 配置回归同时覆盖 generation.timeoutMs 到 LLM client 的硬超时参数传递。
  * 功能概述：验证 Server 作为唯一 composition root 组合 PostgreSQL information
@@ -89,7 +90,8 @@ function config(workspaceRoot: string): ServerConfig {
     webDistPath: join(workspaceRoot, "web"),
     logLevel: "silent",
     logFormat: "json",
-    gatewayAllowlist: [],
+    inboundAllowlist: [],
+    outboundAllowlist: [],
     napcat: {
       enabled: false,
       adapterId: "napcat.qq.main",

@@ -1,4 +1,5 @@
 /**
+ * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * 管理端跨会话路由必须在任何解析前鉴权；Runtime 缺失返回 503 且禁止缓存。
  * 功能概述：本文件验证 HTTP 应用的受保护 Profile readiness、Profile 管理接口、
  * 消息入口与统一错误映射上的外部契约，确保服务端只暴露显式的全局 Profile Registry
@@ -57,7 +58,8 @@ const config: ServerConfig = {
   webDistPath: "/tmp/kaguya-web-test",
   logLevel: "silent",
   logFormat: "json",
-  gatewayAllowlist: [],
+  inboundAllowlist: [],
+  outboundAllowlist: [],
   napcat: {
     enabled: false,
     adapterId: "napcat.qq.main",
@@ -188,7 +190,8 @@ describe("application API gateway", () => {
         version: 1 as const,
         id: "default",
         name: "default",
-        gatewayAllowlist: [],
+        inboundAllowlist: [],
+        outboundAllowlist: [],
         identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
         ai: { providers: [] },
         memory: { enabled: false },
@@ -200,7 +203,8 @@ describe("application API gateway", () => {
           version: 1 as const,
           id: "default",
           name: "default",
-          gatewayAllowlist: [],
+          inboundAllowlist: [],
+          outboundAllowlist: [],
           identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
           ai: { providers: [] },
           memory: { enabled: false },
@@ -365,13 +369,14 @@ describe("application API gateway", () => {
     });
   });
 
-  it("exposes only the safe allowlist field and rejects runtime replacement", async () => {
+  it("exposes both safe allowlist fields and rejects runtime replacement", async () => {
     const configuration = stubManagement();
     vi.mocked(configuration.getProfile).mockResolvedValueOnce({
       version: 1,
       id: "default",
       name: "default",
-      gatewayAllowlist: ["qq:private:112233"],
+      inboundAllowlist: ["qq:private:112233"],
+      outboundAllowlist: ["qq:private:112233"],
       identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
       ai: { providers: [] },
       memory: { enabled: false },
@@ -385,7 +390,7 @@ describe("application API gateway", () => {
       headers: authorization(),
     });
     expect(read.statusCode).toBe(200);
-    expect(read.json().data.profile.gatewayAllowlist).toEqual([
+    expect(read.json().data.profile.inboundAllowlist).toEqual([
       "qq:private:112233",
     ]);
     expect(read.body).not.toContain("runtime");
@@ -400,6 +405,30 @@ describe("application API gateway", () => {
       },
     });
     expect(replace.statusCode).toBe(400);
+    const current = readyProfileReplacement("default", "light", "heavy");
+    for (const field of ["inboundAllowlist", "outboundAllowlist"] as const) {
+      const { [field]: _omitted, ...missingDirection } = current;
+      expect(
+        (
+          await app.inject({
+            method: "PUT",
+            url: "/api/v1/profiles/default",
+            headers: authorization(),
+            payload: missingDirection,
+          })
+        ).statusCode,
+      ).toBe(400);
+    }
+    expect(
+      (
+        await app.inject({
+          method: "PUT",
+          url: "/api/v1/profiles/default",
+          headers: authorization(),
+          payload: { ...current, gatewayAllowlist: [] },
+        })
+      ).statusCode,
+    ).toBe(400);
     expect(configuration.replaceProfile).not.toHaveBeenCalled();
     await app.close();
   });
@@ -426,7 +455,8 @@ describe("application API gateway", () => {
           profile: {
             id: created.profile.id,
             name: "work",
-            gatewayAllowlist: payload.gatewayAllowlist,
+            inboundAllowlist: payload.inboundAllowlist,
+            outboundAllowlist: payload.outboundAllowlist,
             ai: payload.ai,
             memory: { enabled: true },
             platforms: [],
@@ -750,7 +780,7 @@ describe("application API gateway", () => {
     const serialized = JSON.stringify(document);
     expect(serialized).not.toContain("/api/v1/setup");
     expect(serialized).toContain('"selectedProfileId"');
-    expect(serialized).toContain('"gatewayAllowlist"');
+    expect(serialized).toContain('"inboundAllowlist"');
     expect(serialized).toContain('"apiKey"');
     expect(serialized).toContain('"baseUrl"');
     expect(serialized).not.toContain('"workflowId"');
@@ -1278,7 +1308,8 @@ async function withManagementApp(
       rateLimitWindowMs: 60_000,
       logLevel: "info",
       logFormat: "json",
-      gatewayAllowlist: [],
+      inboundAllowlist: [],
+      outboundAllowlist: [],
     },
   });
   const management = await createConfigurationManagement(root);
@@ -1305,7 +1336,8 @@ function stubManagement(): ConfigurationManagement {
       version: 1 as const,
       id: "default",
       name: "default",
-      gatewayAllowlist: [],
+      inboundAllowlist: [],
+      outboundAllowlist: [],
       identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
       ai: { providers: [] },
       memory: { enabled: false },
@@ -1326,7 +1358,8 @@ function readyProfileReplacement(
   return {
     identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
     name,
-    gatewayAllowlist: ["*:group:*", "*:private:*"],
+    inboundAllowlist: ["*:group:*", "*:private:*"],
+    outboundAllowlist: ["*:group:*", "*:private:*"],
     acknowledgedWarnings: [],
     ai: {
       defaultProviderId: "provider-1",

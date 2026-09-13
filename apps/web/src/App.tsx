@@ -1,4 +1,5 @@
 /**
+ * Profile 表单用两个独立文本框编辑入站与出站规则，保存后仍须显式应用。
  * 功能概述：本文件承载 WebUI 的顶层状态机，在访问链接认证、Profile 管理、
  * 配置生效管理与消息聊天之间做显式切换，落实“全局 selected Profile 唯一生效、
  * 配置修改需要手动应用”的产品契约。保存与选择只落盘，用户在生效管理页主动提交 revision，
@@ -1146,44 +1147,66 @@ function ProfileManagementScreen({
                   />
                 </div>
                 <label className="field">
-                  <span>网关白名单规则</span>
+                  <span>入站白名单</span>
                   <textarea
                     className="rule-editor"
-                    value={editorFields.gatewayAllowlistText}
+                    value={editorFields.inboundAllowlistText}
                     onChange={(event) =>
                       setEditorFields((current) =>
                         current === undefined
                           ? current
                           : {
                               ...current,
-                              gatewayAllowlistText: event.target.value,
+                              inboundAllowlistText: event.target.value,
                             },
                       )
                     }
                     rows={5}
                     spellCheck={false}
                     autoComplete="off"
-                    aria-describedby="gateway-allowlist-help"
+                    aria-describedby="inbound-allowlist-help"
                     placeholder={
-                      "qq:group:778899\nqq:private:112233\n*:private:*"
+                      "qq:group:REPLACE_GROUP_ID\nqq:private:REPLACE_USER_ID"
                     }
                   />
-                  <span id="gateway-allowlist-help" className="field-help">
-                    使用 QQ 前必须设置 Gateway Allowlist：例如 qq:group:778899
-                    允许指定群，qq:private:112233 允许指定用户；qq:group:* 或
-                    qq:private:* 允许所有群或私聊。每行一条
-                    platform:group|private:ID。platform 和 ID 支持
-                    *；空列表拒绝所有平台消息，无效行会保存但不生效。Web
-                    入口不受此处控制。
+                  <span id="inbound-allowlist-help" className="field-help">
+                    决定哪些平台消息可以进入 Runtime；被拒绝的消息不会创建
+                    turn。 每行一条 platform:group|private:ID，platform 和 ID
+                    支持 *。 空列表拒绝所有非 Web
+                    平台入站消息；无效行会保存但不生效。 Web
+                    保持原有认证边界。保存后需点击“应用当前配置”。
                   </span>
                 </label>
-                {editorFields.gatewayAllowlistText.trim() === "" ? (
-                  <p role="status" className="field-help">
-                    Gateway Allowlist 为空：即使 NapCat 已连接，QQ
-                    消息也不会进入 Runtime。 请先填写允许的群号或用户 QQ
-                    号，保存后手动应用，再发送消息验证。
-                  </p>
-                ) : null}
+                <label className="field">
+                  <span>出站白名单</span>
+                  <textarea
+                    className="rule-editor"
+                    value={editorFields.outboundAllowlistText}
+                    onChange={(event) =>
+                      setEditorFields((current) =>
+                        current === undefined
+                          ? current
+                          : {
+                              ...current,
+                              outboundAllowlistText: event.target.value,
+                            },
+                      )
+                    }
+                    rows={5}
+                    spellCheck={false}
+                    autoComplete="off"
+                    aria-describedby="outbound-allowlist-help"
+                    placeholder={
+                      "qq:group:REPLACE_GROUP_ID\nqq:private:REPLACE_USER_ID"
+                    }
+                  />
+                  <span id="outbound-allowlist-help" className="field-help">
+                    决定机器人可以向哪些群或用户投递；被拒绝时不会调用平台发送接口。跨会话发送仍需管理端确认。
+                    每行一条 platform:group|private:ID，platform 和 ID 支持 *。
+                    空列表拒绝所有非 Web 平台出站消息；无效行会保存但不生效。
+                    Web 保持原有认证边界。保存后需点击“应用当前配置”。
+                  </span>
+                </label>
                 <label className="setup-check">
                   <input
                     type="checkbox"

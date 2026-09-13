@@ -1,4 +1,5 @@
 /**
+ * acceptInbound 与 ingress.submit 都检查所属入站策略；拒绝提交抛出 source-not-allowed，不创建 Runtime turn。
  * 功能概述：管理平台适配器生命周期、状态快照和统一入站白名单边界。
  * listTargets 只汇总当前在线 adapter 的完整目录，跨连接/暂停变化拒绝结果；不授予发送权限。
  * 主要职责：register/registerTransports 装配启动前出口；finalizeRuntime 单次绑定 Runtime；
@@ -382,6 +383,7 @@ export class AdapterHost {
   readonly ingress: InformationIngress = {
     submit: async (message) => {
       const runtime = this.assertReady(message);
+      if (!this.acceptInbound(message)) throw new Error("source-not-allowed");
       try {
         const receipt = await runtime.submit(message);
         this.logInbound(message, "submitted", {

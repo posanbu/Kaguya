@@ -1,4 +1,5 @@
 /**
+ * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * Planner 普通日志仅保留元数据，不能泄漏 Prompt 预览或模型输出。
  * fixture 显式批准合成 QQ 目标，生产 Runtime 默认为空出站白名单。
  * 功能概述：用真实 PGlite、Core 和 ModuleHost 验证 `KaguyaRuntime` 的完整信息 DAG。
@@ -198,7 +199,7 @@ async function createRuntime(
   let id = 0;
   const runtime = new KaguyaRuntime({
     ...createMessageComposition(),
-    gatewayAllowlist: new GatewayAllowlist(["qq:group:*", "qq:private:*"]),
+    outboundAllowlist: new GatewayAllowlist(["qq:group:*", "qq:private:*"]),
     database,
     now: () => new Date("2026-09-04T00:00:01.000Z"),
     informationIdGenerator: () => `runtime-atom-${++id}`,

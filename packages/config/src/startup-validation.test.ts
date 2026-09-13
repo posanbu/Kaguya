@@ -1,3 +1,9 @@
+/**
+ * 功能概述：验证启动前 Profile 校验和安全诊断，防止无效配置进入 Server。
+ * 主要职责：createRoot/completeReplacement 提供临时 Registry 与完整配置，覆盖平台和持久化字段错误。
+ * 代码库关系：真实调用 FileUserConfigManager 与 validateStartupConfiguration，检查错误不含凭据。
+ * 输入输出与副作用：只读写临时目录并在测试后清理；分别提供必填的入站、出站规则数组。
+ */
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -83,7 +89,8 @@ describe("startup configuration validation", () => {
     profile.runtime = {
       ...completeReplacement().runtime,
       databaseUrl: "postgresql://user:persisted-secret@127.0.0.1:5432/kaguya",
-      gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
+      inboundAllowlist: { platforms: [], userIds: [], groupIds: [] },
+      outboundAllowlist: [],
     };
     await writeFile(path, JSON.stringify(profile), "utf8");
 
@@ -95,7 +102,7 @@ describe("startup configuration validation", () => {
       issues: [
         expect.objectContaining({
           code: "invalid_type",
-          path: "runtime.gatewayAllowlist",
+          path: "runtime.inboundAllowlist",
         }),
       ],
     });
@@ -127,7 +134,8 @@ function completeReplacement() {
       rateLimitWindowMs: 60_000,
       logLevel: "info" as const,
       logFormat: "json" as const,
-      gatewayAllowlist: [],
+      inboundAllowlist: [],
+      outboundAllowlist: [],
     },
     ai: {
       defaultProviderId: "provider-1",

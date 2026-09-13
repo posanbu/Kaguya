@@ -1,4 +1,5 @@
 /**
+ * Profile GET/PUT 的严格 DTO 必须包含 inboundAllowlist 与 outboundAllowlist；旧字段不接受。
  * 功能概述：本文件组装 Kaguya 服务端的 Fastify HTTP 应用，承载匿名健康检查、
  * OpenAPI 文档、带 readiness 的全局 Profile Registry 管理接口，以及
  * 窄 Web/Core 消息入口；它是“selected Profile 唯一生效”服务端约束的 HTTP 落点。
@@ -115,7 +116,8 @@ const selectionRequestSchema = z
 const replaceProfileRequestSchema = z
   .object({
     name: z.string().trim().min(1).max(100),
-    gatewayAllowlist: z.array(z.string()),
+    inboundAllowlist: z.array(z.string()),
+    outboundAllowlist: z.array(z.string()),
     identity: agentIdentitySchema,
     ai: aiConfigSchema,
     memory: memoryConfigSchema,
@@ -337,7 +339,8 @@ const userConfigProfileJsonSchema = {
     "version",
     "id",
     "name",
-    "gatewayAllowlist",
+    "inboundAllowlist",
+    "outboundAllowlist",
     "identity",
     "ai",
     "memory",
@@ -347,7 +350,11 @@ const userConfigProfileJsonSchema = {
     version: { type: "integer", enum: [1] },
     id: profileIdJsonSchema,
     name: { type: "string", minLength: 1 },
-    gatewayAllowlist: {
+    inboundAllowlist: {
+      type: "array",
+      items: { type: "string" },
+    },
+    outboundAllowlist: {
       type: "array",
       items: { type: "string" },
     },
@@ -385,7 +392,8 @@ const replaceProfileRequestJsonSchema = {
   additionalProperties: false,
   required: [
     "name",
-    "gatewayAllowlist",
+    "inboundAllowlist",
+    "outboundAllowlist",
     "identity",
     "ai",
     "memory",
@@ -394,7 +402,11 @@ const replaceProfileRequestJsonSchema = {
   ],
   properties: {
     name: { type: "string", minLength: 1, maxLength: 100 },
-    gatewayAllowlist: {
+    inboundAllowlist: {
+      type: "array",
+      items: { type: "string" },
+    },
+    outboundAllowlist: {
       type: "array",
       items: { type: "string" },
     },

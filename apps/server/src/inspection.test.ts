@@ -1,4 +1,5 @@
 /**
+ * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * 功能概述：验证开发者 API 在真实 PGlite 账本上的认证、脱敏、游标分页、详情和有界 Flow。
  * 主要职责：fixture 创建两个独立 context 与跨 context 引用；通过 Fastify inject 检查
  * 无认证先拒绝、同时间分页不丢消息、过滤绑定、完整 Prompt 保留及秘密移除、只读与错误隔离。
@@ -31,7 +32,8 @@ const config: ServerConfig = {
   webDistPath: "/tmp/web",
   logLevel: "silent",
   logFormat: "json",
-  gatewayAllowlist: [],
+  inboundAllowlist: [],
+  outboundAllowlist: [],
   napcat: { enabled: false, adapterId: "test", reconnectMs: 3000 },
 };
 const headers = { authorization: `Bearer ${token}` };

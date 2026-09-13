@@ -1,3 +1,9 @@
+/**
+ * 功能概述：验证 AdapterHost 生命周期、日志、入站过滤与 HTTP 状态接口。
+ * 主要职责：fixture/adapter 创建隔离宿主和假连接；校验拒绝消息不调用 Runtime.submit。
+ * 代码库关系：使用真实 AdapterHost、Logger 和 app，外部 transport 与 Runtime 用 spy 替代。
+ * 输入输出与副作用：仅写测试日志并关闭宿主，不连接 QQ；配置样例明确分开入站和出站权限。
+ */
 import { Writable } from "node:stream";
 import { createLogger, closeLogger } from "@kaguya/logger";
 import {
@@ -235,7 +241,8 @@ it("protects the status endpoint with management scope and keeps health live whi
     webDistPath: "/tmp/unused",
     logLevel: "silent",
     logFormat: "json",
-    gatewayAllowlist: [],
+    inboundAllowlist: [],
+    outboundAllowlist: [],
     napcat: { enabled: false, adapterId: "qq", reconnectMs: 3000 },
   };
   const app = await createHttpApplication({
@@ -333,4 +340,20 @@ it("reports asynchronous submission failure as one safe terminal log", async () 
   expect(logs.map((log) => log.event)).toEqual(["napcat.inbound.failed"]);
   expect(logs.at(-1)?.errorType).toBe("submission_failed");
   expect(JSON.stringify(logs)).not.toMatch(/ws:\/\/secret|credential/);
+});
+
+it("enforces inbound policy at submission even when the adapter skips its filter", async () => {
+  const { host } = fixture();
+  const submit = vi.fn(async () => ({
+    rootInformationId: "root",
+    deliveries: [],
+  }));
+  host.finalizeRuntime({ submit });
+  await expect(
+    host.ingress.submit({
+      ...message,
+      target: { kind: "private", userId: "denied" },
+    }),
+  ).rejects.toThrow("source-not-allowed");
+  expect(submit).not.toHaveBeenCalled();
 });

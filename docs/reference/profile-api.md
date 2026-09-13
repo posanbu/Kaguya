@@ -5,7 +5,7 @@ description: Kaguya Profile Registry 的读取、创建、完整替换、选择�
 
 # Profile API
 
-所有 Profile 路由都需要当前实例的 Bearer Token。`GET /api/v1/profiles` 是唯一的配置 readiness 入口，只返回无 secret 的状态和 Profile 摘要；读取单个 Profile 会返回 API Key 等可编辑敏感字段，只能在可信边界内调用。数据库 URL 等隐藏 `runtime` 字段不会通过 Web API 返回，只有其中的网关白名单被安全投影为顶层 `gatewayAllowlist`。
+所有 Profile 路由都需要当前实例的 Bearer Token。`GET /api/v1/profiles` 是唯一的配置 readiness 入口，只返回无 secret 的状态和 Profile 摘要；读取单个 Profile 会返回 API Key 等可编辑敏感字段，只能在可信边界内调用。数据库 URL 等隐藏 `runtime` 字段不会通过 Web API 返回，只有其中的入站与出站白名单被安全投影为顶层 `inboundAllowlist` 和 `outboundAllowlist`。
 
 ## 列出 Profile
 
@@ -60,7 +60,7 @@ curl http://127.0.0.1:3000/api/v1/profiles \
 
 ## 读取与完整替换
 
-`GET /api/v1/profiles/:profileId` 返回 Web 可编辑 Profile，不包含完整 runtime，但包含顶层 `gatewayAllowlist: string[]`。`PUT /api/v1/profiles/:profileId` 接收 `name`、`identity`、`gatewayAllowlist`、`ai`、`memory`、`platforms` 和 `acknowledgedWarnings`；这是可见字段的 replace，不是 patch。`identity` 与 `memory` 必须显式提供，未知字段会被拒绝。Server 只把 `gatewayAllowlist` 合并回隐藏的 `runtime.gatewayAllowlist`，其余 runtime 原样保留；若目标 Profile 没有 runtime，替换返回 `409 profile_runtime_missing`。
+`GET /api/v1/profiles/:profileId` 返回 Web 可编辑 Profile，不包含完整 runtime，但包含顶层 `inboundAllowlist: string[]` 和 `outboundAllowlist: string[]`。`PUT /api/v1/profiles/:profileId` 接收 `name`、`identity`、`inboundAllowlist` 和 `outboundAllowlist`、`ai`、`memory`、`platforms` 和 `acknowledgedWarnings`；这是可见字段的 replace，不是 patch。`identity` 与 `memory` 必须显式提供，未知字段会被拒绝。Server 只把 `inboundAllowlist` 和 `outboundAllowlist` 合并回隐藏的 `runtime.inboundAllowlist` 和 `runtime.outboundAllowlist`，其余 runtime 原样保留；若目标 Profile 没有 runtime，替换返回 `409 profile_runtime_missing`。
 
 ::: code-group
 
@@ -72,7 +72,8 @@ curl http://127.0.0.1:3000/api/v1/profiles \
     "aliases": ["辉夜"],
     "persona": "是人类，正在上网和群友聊天。回复自然、简短。"
   },
-  "gatewayAllowlist": ["qq:group:778899", "qq:private:112233"],
+  "inboundAllowlist": ["qq:group:REPLACE_GROUP_ID"],
+  "outboundAllowlist": ["qq:private:REPLACE_USER_ID"],
   "ai": {
     "defaultProviderId": "default-provider",
     "modelTiers": {

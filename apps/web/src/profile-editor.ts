@@ -1,4 +1,5 @@
 /**
+ * profileToEditorFields/mergeProfileEditorFields 分别转换两个方向的规则文本，修改一侧不改另一侧。
  * 架构说明：本模块是 Web 端 Profile 表单与完整 Profile 文档之间的
  * 客户端保全边界。它把可见的名称、URL、API Key、轻重模型、网关白名单与
  * “暂不配置平台和插件”的确认态，转换成完整替换 Profile 时所需的 wire payload，
@@ -27,7 +28,8 @@ interface MutableProfile {
     aliases: string[];
     persona: string;
   };
-  gatewayAllowlist: string[];
+  inboundAllowlist: string[];
+  outboundAllowlist: string[];
   ai: {
     defaultProviderId?: string;
     modelTiers?: {
@@ -102,7 +104,8 @@ export interface ProfileEditorFields {
   readonly heavyThinkingEnabled: boolean;
   readonly heavyReasoningEffort: string;
   readonly heavyRecommendedDurationMs: string;
-  readonly gatewayAllowlistText: string;
+  readonly inboundAllowlistText: string;
+  readonly outboundAllowlistText: string;
   readonly memoryEnabled: boolean;
 }
 
@@ -146,7 +149,8 @@ export function profileToEditorFields(
     heavyRecommendedDurationMs: optionalNumberText(
       profile.ai.modelTiers?.heavy.recommendedDurationMs ?? 5_000,
     ),
-    gatewayAllowlistText: profile.gatewayAllowlist.join("\n"),
+    inboundAllowlistText: profile.inboundAllowlist.join("\n"),
+    outboundAllowlistText: profile.outboundAllowlist.join("\n"),
     memoryEnabled: profile.memory.enabled,
   };
 }
@@ -172,7 +176,11 @@ export function mergeProfileEditorFields(
     persona: fields.agentPersona.trim(),
   };
   next.memory.enabled = fields.memoryEnabled;
-  next.gatewayAllowlist = fields.gatewayAllowlistText
+  next.inboundAllowlist = fields.inboundAllowlistText
+    .split(/\r?\n/u)
+    .map((rule) => rule.trim())
+    .filter(Boolean);
+  next.outboundAllowlist = fields.outboundAllowlistText
     .split(/\r?\n/u)
     .map((rule) => rule.trim())
     .filter(Boolean);
@@ -195,7 +203,8 @@ export function mergeProfileEditorFields(
 
   return {
     name: next.name,
-    gatewayAllowlist: next.gatewayAllowlist,
+    inboundAllowlist: next.inboundAllowlist,
+    outboundAllowlist: next.outboundAllowlist,
     identity: next.identity,
     acknowledgedWarnings: computeAcknowledgedWarnings(next),
     ai: next.ai as ReplaceProfileInput["ai"],

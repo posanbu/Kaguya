@@ -1,4 +1,5 @@
 /**
+ * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * 功能概述：验证 Web API 客户端认证、请求编码及服务端响应校验。
  * 主要职责：模拟 fetch 覆盖 Profile 管理、消息、模型发现及配置版本应用；冲突不自动重试。
  * 代码库关系：调用 api.ts 的公开方法，与 Server DTO 契约保持一致。
@@ -32,7 +33,8 @@ const profile = {
   version: 1 as const,
   id: "default",
   name: "default",
-  gatewayAllowlist: [],
+  inboundAllowlist: [],
+  outboundAllowlist: [],
   identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
   ai: { providers: [] },
   memory: { enabled: false },
@@ -40,7 +42,8 @@ const profile = {
 };
 const replacement = {
   name: "default",
-  gatewayAllowlist: ["qq:private:112233"],
+  inboundAllowlist: ["qq:private:112233"],
+  outboundAllowlist: ["qq:private:112233"],
   identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
   acknowledgedWarnings: [],
   ai: {
@@ -215,7 +218,8 @@ describe("gateway API client", () => {
       );
     }
     expect(JSON.parse(String(request.mock.calls[3]?.[1]?.body))).toMatchObject({
-      gatewayAllowlist: ["qq:private:112233"],
+      inboundAllowlist: ["qq:private:112233"],
+      outboundAllowlist: ["qq:private:112233"],
       memory: { enabled: false },
     });
   });
