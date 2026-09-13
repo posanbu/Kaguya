@@ -1,5 +1,6 @@
 /**
  * 功能概述：开发者控制台的只读 Module、Atom 与 Ingress/Turn Flow 页面，沿用顶层内存 Token。
+ * 页面复用共同 PageHeader/Button/StatusBadge/FieldMessage；保留模块、Atom、Flow 二级导航。
  * 主要职责：DeveloperConsole 维护页面导航及手动刷新；Modules 展示 Manifest/activation；
  * Atoms 提供过滤、游标页和详情；Flows 按 runtime context 展示可点击 DAG 或时间列表；
  * Detail 支持完整脱敏 payload/Prompt、正反引用导航及复制 ID；useInspection 取消过期请求。
@@ -20,6 +21,12 @@ import {
 } from "@kaguya/schema";
 import { getInspection } from "./api.js";
 import "./developer.css";
+import {
+  Button,
+  FieldMessage,
+  PageHeader,
+  StatusBadge,
+} from "./components/ui.js";
 
 type Page = "modules" | "atoms" | "flows";
 export function developerPage(path: string): Page | undefined {
@@ -62,11 +69,9 @@ function useInspection<T>(
 }
 function Status({ state }: { state: { data?: unknown; error?: string } }) {
   return state.error ? (
-    <p role="alert" className="error-banner">
-      {state.error}
-    </p>
+    <FieldMessage tone="error">{state.error}</FieldMessage>
   ) : state.data === undefined ? (
-    <p role="status">正在加载…</p>
+    <FieldMessage>正在加载…</FieldMessage>
   ) : null;
 }
 export function DeveloperConsole({
@@ -96,27 +101,14 @@ export function DeveloperConsole({
   );
   return (
     <div className="app-shell developer-shell">
-      <header className="topbar">
-        <strong>Kaguya · 开发者</strong>
-        <span className="topbar-spacer" />
-        <button className="secondary-button" onClick={() => navigate("/")}>
-          返回消息
-        </button>
-      </header>
       <main className="developer-main">
-        <div className="developer-heading">
-          <div>
-            <p className="eyebrow">运行时检查</p>
-            <h1>开发者控制台</h1>
-            <p>查看模块契约与消息流。消息和 Prompt 已执行秘密脱敏。</p>
-          </div>
-          <button
-            className="secondary-button"
-            onClick={() => setRevision((r) => r + 1)}
-          >
-            刷新
-          </button>
-        </div>
+        <PageHeader
+          title="检查"
+          description="查看模块契约与消息流。消息和 Prompt 已执行秘密脱敏。"
+          actions={
+            <Button onClick={() => setRevision((r) => r + 1)}>刷新</Button>
+          }
+        />
         <nav className="developer-tabs" aria-label="开发者导航">
           {(["modules", "atoms", "flows"] as const).map((p, i) => (
             <a
@@ -179,9 +171,11 @@ function Modules({ modules }: { modules: InspectionModule[] }) {
               </dd>
               <dt>Activation</dt>
               <dd>
-                {m.bindings.length
-                  ? m.bindings.map((b) => b.instanceId).join("、")
-                  : "未激活"}
+                <StatusBadge tone={m.bindings.length ? "success" : "neutral"}>
+                  {m.bindings.length
+                    ? m.bindings.map((b) => b.instanceId).join("、")
+                    : "未激活"}
+                </StatusBadge>
               </dd>
             </dl>
             {(["consumes", "produces"] as const).map((field, i) => (
@@ -279,7 +273,9 @@ function Filters({
         结束时间
         <input name="before" type="datetime-local" />
       </label>
-      <button className="secondary-button">筛选</button>
+      <Button className="secondary-button" type="submit">
+        筛选
+      </Button>
     </form>
   );
 }
@@ -298,7 +294,7 @@ function AtomList({
     <ol className="atom-list">
       {atoms.map((a) => (
         <li key={a.informationId}>
-          <button
+          <Button
             aria-pressed={selected === a.informationId}
             onClick={() => select(a.informationId)}
           >
@@ -307,7 +303,7 @@ function AtomList({
             <time>{new Date(a.occurredAt).toLocaleString()}</time>
             <span>{a.source}</span>
             <code>{a.informationId}</code>
-          </button>
+          </Button>
         </li>
       ))}
     </ol>
@@ -324,21 +320,21 @@ function Pager({
 }) {
   return (
     <div className="developer-pager">
-      <button
+      <Button
         className="secondary-button"
         disabled={!cursors.length}
         onClick={() => setCursors(cursors.slice(0, -1))}
       >
         上一页
-      </button>
+      </Button>
       <span>第 {cursors.length + 1} 页</span>
-      <button
+      <Button
         className="secondary-button"
         disabled={!next}
         onClick={() => next && setCursors([...cursors, next])}
       >
         下一页
-      </button>
+      </Button>
     </div>
   );
 }
@@ -449,7 +445,7 @@ function Detail({
       {detail && (
         <>
           <code>{detail.atom.informationId}</code>
-          <button
+          <Button
             className="secondary-button"
             onClick={() => {
               void navigator.clipboard
@@ -461,7 +457,7 @@ function Detail({
             }}
           >
             复制 information ID
-          </button>
+          </Button>
           <span role="status">{copied}</span>
           <p>
             {detail.atom.kind} · {detail.atom.source}
@@ -478,13 +474,13 @@ function Detail({
           <h3>引用的消息</h3>
           {!detail.atom.references.length && <p>无</p>}
           {detail.atom.references.map((r, i) => (
-            <button
+            <Button
               className="reference-link"
               key={i}
               onClick={() => select(r.informationId)}
             >
               {r.relation} → {r.informationId}
-            </button>
+            </Button>
           ))}
           {detail.referencesTruncated && (
             <p role="status">正向引用超过 100 条，已截断。</p>
@@ -492,13 +488,13 @@ function Detail({
           <h3>引用此消息</h3>
           {!detail.referencedBy.length && <p>无</p>}
           {detail.referencedBy.map((a) => (
-            <button
+            <Button
               className="reference-link"
               key={a.informationId}
               onClick={() => select(a.informationId)}
             >
               {a.kind} · {a.informationId}
-            </button>
+            </Button>
           ))}
           {detail.reverseReferencesTruncated && (
             <p role="status">反向引用超过 100 条，已截断。</p>
@@ -589,12 +585,12 @@ function Flows({
                   {flow.data.nodes.length} 个节点 · {flow.data.edges.length}{" "}
                   条引用
                 </p>
-                <button
+                <Button
                   className="secondary-button"
                   onClick={() => setGraph((g) => !g)}
                 >
                   {graph ? "切换时间列表" : "切换图形视图"}
-                </button>
+                </Button>
               </div>
               {flow.data.truncated && (
                 <p role="status">消息流超过节点或引用上限，当前视图已截断。</p>

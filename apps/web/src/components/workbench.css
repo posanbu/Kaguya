@@ -252,3 +252,60 @@
     scroll-behavior: auto !important;
   }
 }
+
+/* 消息与接入页在公共内容区域内排版，避免叠加旧页面的视口高度和边距。 */
+.wb-content .wb-message-workspace {
+  padding: 0;
+  min-height: 0;
+  width: 100%;
+  grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
+}
+.wb-content .wb-adapter-main {
+  padding: 0;
+  width: 100%;
+  min-height: 0;
+}
+.wb-content .wb-message-workspace .chat-panel {
+  min-height: 480px;
+}
+.wb-content .panel-heading {
+  flex-wrap: wrap;
+}
+.wb-content .panel-heading > *,
+.wb-content .adapter-status-card,
+.wb-content .adapter-summary > *,
+.wb-content .message-meta {
+  min-width: 0;
+}
+.wb-content .adapter-status-card dd,
+.wb-content .adapter-identity,
+.wb-content .delivery-status,
+.wb-content .delivery-status code {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.wb-content .wb-status {
+  max-width: 100%;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.wb-content .delivery-status {
+  flex-wrap: wrap;
+}
+@media (max-width: 1100px) {
+  .wb-content .wb-message-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+:root[data-theme] .wb-content > .app-shell,
+:root[data-theme] .wb-content > .setup-shell {
+  background: transparent;
+  min-height: 0;
+}
+:root[data-theme] .wb-content > .app-shell::before,
+:root[data-theme] .wb-content > .setup-shell::before,
+:root[data-theme] .wb-content > .app-shell::after,
+:root[data-theme] .wb-content > .setup-shell::after {
+  display: none;
+}
