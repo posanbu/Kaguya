@@ -137,3 +137,19 @@ HTTP 日志不记录 Authorization、body、query 或消息正文。生产部署
 **adapters** — 按 adapterId 稳定排序，每项包含 adapterId、type、platform、enabled、lifecycle、connectivity、ingress、updatedAt 和可选 attempt、nextRetryAt、errorType。不返回 URL、凭据或原始错误。
 
 状态描述当前进程，保存新配置后须重启。Adapter 或 Runtime 降级时 `/healthz` 仍返回 200。
+
+## 跨会话消息管理
+
+以下 POST 接口都要求 management 凭据，先认证再校验请求，响应使用 `Cache-Control: no-store`。Runtime 未就绪返回 503，非法请求返回 400，无法批准的请求返回 409 安全错误；不会反射原始异常。
+
+**`/api/v1/message-targets/sources`** — 正文 `{}`，返回最近 50 个冻结来源 turn 的 `informationId`、时间和规范目标，不返回消息文本。
+
+**`/api/v1/message-targets/resolve`** — 正文包含 `mode: id | name | description`、`value`，可选 `adapterId` 和 `kind: group | private`。结果为 `resolved`、`ambiguous`、`not-found`、`unavailable` 或 `unauthorized`；可选候选包含短期 `reference`、名称和规范 target。`resolved` 仍需目标批准，不意味着已创建 intent。
+
+**`/api/v1/message-targets/authorize`** — 提交 `reference`、`sourceTurnContextInformationId` 和 `instruction`。选择的 reference 单次消费；通过后创建统一 intent，返回 `confirmation-required`、`requestId`、`intentInformationId`。失效返回 `expired`，容量不足返回 `unavailable`。
+
+**`/api/v1/message-targets/status`** — 提交 `requestId`。返回 `composing`、`confirmation-required`、`confirmed` 或 `expired`；正文就绪时附带 `assistantInformationId`、`text` 和目标。
+
+**`/api/v1/message-targets/confirm`** — 提交 `requestId`、`assistantInformationId` 和完整 `text`。正文必须与生成结果完全一致。成功返回 `confirmed`，重复或不匹配返回 `conflict`，失效返回 `expired`。此响应不代表平台已投递。
+
+参见[跨会话消息指南](../guide/message-targets.md)。

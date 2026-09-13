@@ -1,4 +1,13 @@
-/** WebSocket transport and reconnect supervisor. AdapterHost owns inbound policy and diagnostics; connected requires socket open. */
+/**
+ * 功能概述：管理 NapCat WebSocket 连接、重连及只读目标目录。
+ * 主要职责：Supervisor 转发发送和目录查询；查询期间更换连接时拒绝旧结果。
+ * 代码库关系：AdapterHost 拥有入站策略，NapCatActionClient 关联 action 回执；connected 要求 socket open。
+ * 输入输出与副作用：打开/关闭连接和重连定时器，目录只接受当前连接的完整快照。
+ */
+import type {
+  TargetDirectory,
+  TargetDirectorySnapshot,
+} from "@kaguya/platform-adapters";
 import {
   NapCatActionClient,
   NapCatOneBotAdapter,
@@ -99,6 +108,8 @@ export interface NapCatConnectionSupervisorOptions {
 
 export class NapCatConnectionSupervisor implements PlatformOutboundTransport {
   private connection: NapCatConnection | undefined;
+  private directorySnapshot:
+    { connection: NapCatConnection; generation: string } | undefined;
   private reconnectTimer: NodeJS.Timeout | undefined;
   private readonly retirements = new Map<NapCatConnection, Promise<void>>();
   private stopping = true;
@@ -126,6 +137,30 @@ export class NapCatConnectionSupervisor implements PlatformOutboundTransport {
       void this.retire(connection);
     }
     await Promise.allSettled([...this.retirements.values()]);
+  }
+
+  async listTargets(): Promise<TargetDirectorySnapshot> {
+    const connection = this.connection;
+    const directory = connection?.sender as
+      (PlatformOutboundTransport & Partial<TargetDirectory>) | undefined;
+    if (this.stopping || !directory?.listTargets)
+      throw new Error("directory-unavailable");
+    const result = await directory.listTargets();
+    if (this.stopping || this.connection !== connection)
+      throw new Error("directory-unavailable");
+    this.directorySnapshot = {
+      connection: connection!,
+      generation: result.generation,
+    };
+    return result;
+  }
+
+  isCurrentGeneration(generation: string): boolean {
+    return (
+      !this.stopping &&
+      this.directorySnapshot?.connection === this.connection &&
+      this.directorySnapshot?.generation === generation
+    );
   }
 
   async sendMessage(

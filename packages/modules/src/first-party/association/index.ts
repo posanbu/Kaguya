@@ -1,4 +1,5 @@
 /**
+ * 跨会话批准意图跳过关联检索，确保管理端批准的上下文范围不会被 Memory 扩张。
  * 功能概述：把回复触发的联想召回建模为可审计的 Information DAG，避免把未经授权的
  * 检索文本直接拼接进 Prompt。request、query、candidate 和 completed 分别记录输入、
  * 确定性查询、canonical source receipt 与唯一终态。
@@ -252,6 +253,13 @@ export const associationModule = defineInformationModule({
         messageIntentRequestedInformationKind,
         { subscriptionId: "kaguya.association.request", delivery: "durable" },
         async (intent, context) => {
+          // 管理端批准的隔离上下文不扩展任何源会话或目标会话 Memory。
+          if (
+            intent.references.some(
+              (r) => r.relation === "agent:target-authorization",
+            )
+          )
+            return;
           const payload = messageIntentRequestedInformationPayloadSchema.parse(
             intent.payload,
           );

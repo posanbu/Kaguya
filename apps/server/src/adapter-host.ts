@@ -1,5 +1,6 @@
 /**
  * 功能概述：管理平台适配器生命周期、状态快照和统一入站白名单边界。
+ * listTargets 只汇总当前在线 adapter 的完整目录，跨连接/暂停变化拒绝结果；不授予发送权限。
  * 主要职责：register/registerTransports 装配启动前出口；finalizeRuntime 单次绑定 Runtime；
  * pauseIngress/resumeIngress 在热应用发布新宿主前阻止入站，beginStopping 永久关闭旧宿主入口。
  * 代码库关系：Server 通过动态门面转发 HTTP/Web 请求，NapCat 回调始终绑定所属宿主。
@@ -10,6 +11,7 @@ import {
   AdapterIngressUnavailableError,
   normalizeWebInboundMessage,
   type HostedAdapter,
+  type TargetDirectorySnapshot,
   type AdapterSnapshot,
   type AdapterHostStatus,
   type AdapterConnectionStatus,
@@ -100,6 +102,65 @@ export class AdapterHost {
     this.reason = reason;
     this.updateIngress();
   }
+  /** 完整汇总在线目录；任一启用平台无法查询时整体失败，避免伪唯一匹配。 */
+  async listTargets(): Promise<TargetDirectorySnapshot> {
+    if (this.stopping || this.paused || !this.runtime)
+      throw new Error("directory-unavailable");
+    const adapters = [...this.adapters.values()].filter(
+      (a) => a.enabled && a.platform !== "web",
+    );
+    if (!adapters.length) throw new Error("directory-unavailable");
+    const snapshots = await Promise.all(
+      adapters.map(async (adapter) => {
+        const before = this.snapshots.get(adapter.adapterId);
+        if (
+          before?.lifecycle !== "running" ||
+          before.connectivity !== "connected" ||
+          !adapter.targetDirectory
+        )
+          throw new Error("directory-unavailable");
+        const result = await adapter.targetDirectory.listTargets();
+        if (
+          this.stopping ||
+          this.paused ||
+          this.snapshots.get(adapter.adapterId) !== before ||
+          result.candidates.some(
+            (c) =>
+              c.adapterId !== adapter.adapterId ||
+              c.platform !== adapter.platform,
+          )
+        )
+          throw new Error("directory-unavailable");
+        return { adapterId: adapter.adapterId, ...result };
+      }),
+    );
+    return {
+      generation: JSON.stringify(
+        snapshots.map((s) => [s.adapterId, s.generation]),
+      ),
+      candidates: snapshots.flatMap((s) => s.candidates),
+    };
+  }
+
+  isCurrentGeneration(generation: string): boolean {
+    if (this.stopping || this.paused || !this.runtime) return false;
+    let entries: [string, string][];
+    try {
+      entries = JSON.parse(generation) as [string, string][];
+    } catch {
+      return false;
+    }
+    return entries.every(([id, version]) => {
+      const adapter = this.adapters.get(id);
+      const status = this.snapshots.get(id);
+      return (
+        status?.lifecycle === "running" &&
+        status.connectivity === "connected" &&
+        adapter?.targetDirectory?.isCurrentGeneration?.(version) === true
+      );
+    });
+  }
+
   status(): AdapterHostStatus {
     return {
       adapterHostState: this.state,

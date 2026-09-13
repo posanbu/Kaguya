@@ -22,8 +22,10 @@
  * 仅进程级字段变更需要重启。Profile 管理子组件会记忆同一
  * token 对应的网关配置对象，避免读取 Profile 的副作用 effect 因对象引用变化
  * 而重复请求并触发服务端限流。开发者入口使用 history 路径，复用内存 Token；
+ * MessageTargets 提供管理端跨会话两阶段确认；所有状态仅驻留当前页面。
  * DeveloperConsole 负责只读查询与取消，401 继续由本文件统一锁屏。
  */
+import { MessageTargets } from "./MessageTargets.js";
 import { DeveloperConsole, developerPage } from "./DeveloperConsole.js";
 
 import { AdapterStatusPanel } from "./AdapterStatusPanel.js";
@@ -263,6 +265,9 @@ export function App() {
     return <AccessLinkRequired invalid={invalidAccessLink} />;
   }
 
+  if (path === "/message-targets")
+    return <MessageTargets token={token} onBack={() => navigate("/")} />;
+
   const inspectionPage = developerPage(path);
   if (inspectionPage !== undefined) {
     return (
@@ -332,6 +337,12 @@ export function App() {
           onClick={() => navigate("/developer/modules")}
         >
           开发者
+        </button>
+        <button
+          className="secondary-button"
+          onClick={() => navigate("/message-targets")}
+        >
+          跨会话消息
         </button>
         <ThemeToggle />
       </header>

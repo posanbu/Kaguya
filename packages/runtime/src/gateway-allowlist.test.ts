@@ -1,5 +1,6 @@
 /**
  * 功能概述：验证 GatewayAllowlist 对平台、用户与群目标的组合匹配，
+ * 同时验证最终 destination 的出站判定与 Web 特殊策略。
  * 使用不含 Core identity 的 `PlatformInboundMessage` fixture。
  * 主要职责：覆盖精确群聊/私聊、OR、platform/target 通配、空规则拒绝、
  * 非法规则忽略、修剪/去重，以及 Web 消息始终交由 bearer token 边界。
@@ -114,4 +115,27 @@ describe("GatewayAllowlist", () => {
 
     expect(new GatewayAllowlist([]).allows(webMessage)).toBe(true);
   });
+});
+
+it("checks final outbound destinations with the same rules and Web policy", () => {
+  const policy = new GatewayAllowlist(["qq:group:100", "qq:private:200"]);
+  expect(
+    policy.allowsDestination("qq", { kind: "group", groupId: "100" }),
+  ).toBe(true);
+  expect(
+    policy.allowsDestination("qq", { kind: "private", userId: "200" }),
+  ).toBe(true);
+  expect(
+    policy.allowsDestination("qq", { kind: "group", groupId: "200" }),
+  ).toBe(false);
+  expect(
+    new GatewayAllowlist().allowsDestination("qq", {
+      kind: "private",
+      userId: "200",
+    }),
+  ).toBe(false);
+  expect(new GatewayAllowlist().allowsDestination("web", { kind: "web" })).toBe(
+    true,
+  );
+  expect(policy.allowsDestination("qq", { kind: "web" })).toBe(false);
 });

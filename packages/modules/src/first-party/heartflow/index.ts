@@ -1,4 +1,5 @@
 /**
+ * 管理端批准的跨会话 candidate 由宿主直接认领，不再触发 Planner；其 delivery 仍使用本模块统一 turn 终态。
  * 在线 Heartflow 编排器。所有推进都由可重放 Information 事实驱动；模块不保存
  * per-chat 状态，也不依赖订阅安装顺序。
  * createHeartflowModule 注入投递/模型失败 kind，返回声明订阅的模块；settings schema
@@ -622,6 +623,7 @@ async function progressCandidate(
   const map = new Map(atoms.map((atom) => [atom.informationId, atom]));
   if (turnTerminalFor(candidate.informationId, atoms) !== undefined) return;
   const payload = candidate.payload as any;
+  if (payload.managementAuthorizationId !== undefined) return;
   const runtimeContext = referenced(candidate, "core:context", map)[0];
   if (runtimeContext === undefined) return;
   let effectiveSourceInformationIds = [

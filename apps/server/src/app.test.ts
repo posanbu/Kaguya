@@ -1,4 +1,5 @@
 /**
+ * 管理端跨会话路由必须在任何解析前鉴权；Runtime 缺失返回 503 且禁止缓存。
  * 功能概述：本文件验证 HTTP 应用的受保护 Profile readiness、Profile 管理接口、
  * 消息入口与统一错误映射上的外部契约，确保服务端只暴露显式的全局 Profile Registry
  * 行为，不再保留临时配置写桥接或隐式 default 回退。
@@ -1406,4 +1407,34 @@ it("round trips per-tier hard timeouts through HTTP validation and serialization
     });
     expect(after.json().data.profile.ai.modelTiers).toEqual(ai.modelTiers);
   });
+});
+
+it("authenticates target management before validating bodies and fails closed without Runtime", async () => {
+  const app = await createHttpApplication({ config });
+  try {
+    for (const action of [
+      "sources",
+      "resolve",
+      "authorize",
+      "status",
+      "confirm",
+    ]) {
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/v1/message-targets/${action}`,
+        payload: { unexpected: true },
+      });
+      expect(response.statusCode).toBe(401);
+      const authenticated = await app.inject({
+        method: "POST",
+        url: `/api/v1/message-targets/${action}`,
+        headers: { authorization: `Bearer ${gatewayToken}` },
+        payload: {},
+      });
+      expect(authenticated.statusCode).toBe(503);
+      expect(authenticated.headers["cache-control"]).toBe("no-store");
+    }
+  } finally {
+    await app.close();
+  }
 });

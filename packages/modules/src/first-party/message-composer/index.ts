@@ -1,5 +1,6 @@
 /**
  * 功能概述：消息编写模块消费 Heartflow 产生的目标与冻结 turn 意图，经通用 Model Task 生成文本。
+ * 宿主授权能力在选取上下文前校验目标；跨会话只使用批准 Prompt，正文确认后才通过同一 release 创建 delivery。
  * 主要职责：createMessageComposerModule 装配三个 durable 订阅；messageTaskOutputSchema 校验非空文本；
  * messageComposerSettingsSchema 只允许 modelTier。完成选择器沿 completed→requested→intent 核对任务来源，
  * 再以实例与事实 ID 为 registerOnce 键分别记录 assistant 和纯文本投递，重复事件不产生重复业务输出。
@@ -7,6 +8,10 @@
  * 输入输出与副作用：意图只携带 target、turn 与 memoryInformationIds；assistant.source 保留 target，
  * 不复制入站正文或消息 ID，不提供固定路由或自动引用回复。失败或取消的模型任务不产生 assistant。
  */
+import {
+  messageConfirmedInformationKind,
+  type MessageAuthorization,
+} from "../message-authorization.js";
 import {
   type CompiledPrompt,
   type DeepReadonly,
@@ -20,6 +25,7 @@ import {
   defineModuleDiagnostic,
   defineInformationSelector,
   type InformationKindDefinition,
+  type InformationModuleHandlerContext,
   type ModuleCapability,
   type ModuleActivationProvenance,
   onInformation,
@@ -162,6 +168,7 @@ export interface CreateMessageComposerModuleOptions<
     ModelTaskCompletedInformationPayload,
 > {
   readonly modelTaskCapability: ModuleCapability<ModelTaskCapability>;
+  readonly messageAuthorizationCapability?: ModuleCapability<MessageAuthorization>;
   readonly modelTaskCompletedInformationKind: InformationKindDefinition<
     "core.model.task.completed",
     P
@@ -187,6 +194,50 @@ export function createMessageComposerModule<
   );
   const completedInformationKind =
     dependencies.modelTaskCompletedInformationKind;
+  async function release(
+    assistant: DeepReadonly<InformationAtom>,
+    context: InformationModuleHandlerContext,
+  ) {
+    const assistantPayload = assistantTextInformationKind.payloadSchema.parse(
+      assistant.payload,
+    );
+    if (assistantPayload.originatingModuleInstanceId !== context.instanceId)
+      return;
+    if (
+      dependencies.messageAuthorizationCapability &&
+      !(await context
+        .use(dependencies.messageAuthorizationCapability)
+        .stage(assistant))
+    )
+      return;
+    await context.registerOnce(
+      "kaguya.message.delivery.v1",
+      `${context.instanceId}:${assistant.informationId}`,
+      deliveryRequestedInformationKind,
+      {
+        payload: {
+          adapterId: assistantPayload.source.adapterId,
+          platform: assistantPayload.source.platform,
+          destination: assistantPayload.source.destination,
+          message: { kind: "text", text: assistantPayload.text },
+          turn: assistantPayload.turn,
+        },
+        references:
+          assistantPayload.turn == null
+            ? []
+            : [
+                {
+                  relation: "agent:turn-claim" as const,
+                  informationId: assistantPayload.turn.claimInformationId,
+                },
+                {
+                  relation: "agent:turn-candidate" as const,
+                  informationId: assistantPayload.turn.candidateInformationId,
+                },
+              ],
+      },
+    );
+  }
   return defineInformationModule({
     manifest: {
       protocolVersion: 1,
@@ -197,6 +248,7 @@ export function createMessageComposerModule<
           ? []
           : [currentAcceptedMessageSelector]),
         completedMessageSelector,
+        confirmedAssistantSelector,
       ],
       promptRenderers: [
         messagePromptRenderer,
@@ -204,7 +256,12 @@ export function createMessageComposerModule<
         inboundMemoryPromptRenderer,
         assistantHistoryPromptRenderer,
       ],
-      requires: [modelTaskCapability],
+      requires: [
+        modelTaskCapability,
+        ...(dependencies.messageAuthorizationCapability
+          ? [dependencies.messageAuthorizationCapability]
+          : []),
+      ],
       provides: [],
       definitionId: "agent.message-composer",
       displayName: "Message composer",
@@ -213,6 +270,7 @@ export function createMessageComposerModule<
         "Compiles explicitly selected frozen context, dispatches one text Model Task, and records assistant and delivery requests. It generates message text but does not decide whether an event deserves attention or perform general planning.",
       settingsSchema: messageComposerSettingsSchema,
       consumes: [
+        messageConfirmedInformationKind,
         messageIntentRequestedInformationKind,
         completedInformationKind,
         assistantTextInformationKind,
@@ -238,15 +296,20 @@ export function createMessageComposerModule<
           messageIntentRequestedInformationKind,
           { subscriptionId: "kaguya.message.requested", delivery: "durable" },
           async (message, context) => {
-            const contextAtoms = await context.select(selector);
+            const authorized = dependencies.messageAuthorizationCapability
+              ? await context
+                  .use(dependencies.messageAuthorizationCapability)
+                  .prepare(message)
+              : undefined;
+            const contextAtoms =
+              authorized?.contextAtoms ?? (await context.select(selector));
             const persistedIntent = requireSelectedMessageIntent(
               contextAtoms,
               message.informationId,
             );
-            const prompt = compilePrompt(
-              contextAtoms,
-              persistedIntent.informationId,
-            );
+            const prompt =
+              authorized?.prompt ??
+              compilePrompt(contextAtoms, persistedIntent.informationId);
             const contexts = persistedIntent.references.filter(
               (r) => r.relation === "core:context",
             );
@@ -325,44 +388,18 @@ export function createMessageComposerModule<
           assistantTextInformationKind,
           { subscriptionId: "kaguya.message.assistant", delivery: "durable" },
           async (assistant, context) => {
-            const assistantPayload =
-              assistantTextInformationKind.payloadSchema.parse(
-                assistant.payload,
-              );
-            if (
-              assistantPayload.originatingModuleInstanceId !==
-              context.instanceId
-            )
-              return;
-            await context.registerOnce(
-              "kaguya.message.delivery.v1",
-              `${context.instanceId}:${assistant.informationId}`,
-              deliveryRequestedInformationKind,
-              {
-                payload: {
-                  adapterId: assistantPayload.source.adapterId,
-                  platform: assistantPayload.source.platform,
-                  destination: assistantPayload.source.destination,
-                  message: { kind: "text", text: assistantPayload.text },
-                  turn: assistantPayload.turn,
-                },
-                references:
-                  assistantPayload.turn == null
-                    ? []
-                    : [
-                        {
-                          relation: "agent:turn-claim" as const,
-                          informationId:
-                            assistantPayload.turn.claimInformationId,
-                        },
-                        {
-                          relation: "agent:turn-candidate" as const,
-                          informationId:
-                            assistantPayload.turn.candidateInformationId,
-                        },
-                      ],
-              },
-            );
+            await release(assistant, context);
+          },
+        ),
+        onInformation(
+          messageConfirmedInformationKind,
+          { subscriptionId: "kaguya.message.confirmed", delivery: "durable" },
+          async (_confirmed, context) => {
+            const assistant = (
+              await context.select(confirmedAssistantSelector)
+            )[0];
+            if (!assistant) throw new Error("target-authorization-required");
+            await release(assistant, context);
           },
         ),
       ],
@@ -434,3 +471,25 @@ function variableCharacters(prompt: CompiledPrompt, name: string): number {
     prompt.variables.find((variable) => variable.name === name)?.content ?? "",
   ).length;
 }
+
+const confirmedAssistantSelector = defineInformationSelector({
+  selectorId: "kaguya.message.confirmed-assistant",
+  select: async ({ sourceAtom, ledger }) => {
+    const payload = messageConfirmedInformationKind.payloadSchema.parse(
+      sourceAtom.payload,
+    );
+    const atoms = await ledger.related({
+      from: [sourceAtom.informationId],
+      relation: "core:caused-by",
+      direction: "outgoing",
+      limit: 2,
+    });
+    if (
+      atoms.length !== 1 ||
+      atoms[0]!.kind !== assistantTextInformationKind.kind ||
+      atoms[0]!.informationId !== payload.assistantInformationId
+    )
+      throw new Error("target-authorization-required");
+    return [atoms[0]!.informationId];
+  },
+});

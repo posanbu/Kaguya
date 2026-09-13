@@ -66,7 +66,7 @@ Gateway Token 不写入 runtime，也不是 runtime 的合法字段。它在每�
 
 **Heavy Model** — 面向重量任务的模型 ID；可以与 Light Model 使用同一个 `provider:model` 目标。
 
-**网关白名单规则** — 每行一条 `platform:group|private:target_id`。群聊目标是 group ID，私聊目标是 user ID；`platform` 与目标 ID 支持 `*`。规则按 OR 匹配，空列表拒绝所有平台消息，非法非空行会保存但不生效。Web 消息不经过该白名单。
+**网关白名单规则** — 每行一条 `platform:group|private:target_id`。群聊目标是 group ID，私聊目标是 user ID；`platform` 与目标 ID 支持 `*`。规则按 OR 匹配，同时用于入站和 Runtime 最终出站检查；空列表拒绝所有非 Web 平台消息，非法非空行会保存但不生效。Web 保持原有特殊策略。获准入站不授予跨会话发信权限，跨会话还需要管理端确认目标及正文，详见[跨会话消息](./message-targets.md)。
 
 **启用 Memory** — 初始化 Profile 显式写为关闭；请求与文件都必须包含该字段。关闭时 Runtime 仍保留联想与 Prompt 的处理形状，但不会读取、写入、召回或主动提取实际 Memory；显式开启后才启动可靠原始消息写回与内置 PostgreSQL 稀疏召回。可选的 embedding 与 Mem0 cognition 配置通过 Profile JSON 管理，见 [Memory 认知层](../developers/memory.md)。
 

@@ -1,4 +1,10 @@
-/** Runtime-independent contracts for adapters owned by a process-local host. */
+/**
+ * 功能概述：定义进程宿主拥有的 adapter 生命周期、连接状态与可选只读目录。
+ * 主要职责：HostedAdapter 将 start/stop、transport 和 targetDirectory 交给 AdapterHost；状态类型描述可用性。
+ * 代码库关系：Server 管理连接，Runtime 仅消费正规化出口；目录不代表授权。
+ * 输入输出与副作用：纯类型契约；不可用目录由实现拒绝查询。
+ */
+import type { TargetDirectory } from "./targets.js";
 import type { PlatformName, PlatformOutboundTransport } from "./types.js";
 
 export type AdapterLifecycle =
@@ -25,6 +31,7 @@ export interface HostedAdapter {
   readonly platform: PlatformName;
   readonly enabled: boolean;
   readonly configurationError?: "configuration_invalid";
+  readonly targetDirectory?: TargetDirectory;
   readonly outboundTransport?: PlatformOutboundTransport;
   start(reportStatus: (status: AdapterConnectionStatus) => void): Promise<void>;
   stop(): Promise<void>;

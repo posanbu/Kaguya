@@ -3,6 +3,7 @@
  * 然后 abort/清理旧宿主；外部注入的数据库保持打开，可供下一 Runtime 复用。
  * 功能概述：以 PostgreSQL information ledger 装配通用 Runtime，接受显式 Catalog、activations 和宿主 capabilities。
  * 主要职责：start 注册完整 kind 并预检模块，最后开放 ingress；submit 持久化 context/inbound 后返回接受凭据；
+ * 最终发送前使用当前 GatewayAllowlist 校验目的地，拒绝时只记录安全失败码和目标类型。
  * 平台投递使用 durable subscription，终态唯一槽避免重放再次落账，已有终态时不重复调用 transport。
  * 代码库关系：依赖 Database、Core、ModuleHost 和平台适配契约；具体 Agent 列表与 LLM 模型绑定位于 apps composition root。
  * 输入输出与副作用：连接、迁移、账本写入和 transport I/O 均在生命周期内执行；close 拒绝新入口并停止可靠领取。
@@ -15,6 +16,9 @@
  * inspectModules 仅在 started 状态返回模块声明、版本、Kind、Prompt 和能力绑定的只读投影。
  * ModuleHost observation 在这里映射到 lifecycle/module 命名空间，持久 Atom 单独进入 information logger。
  */
+import { MessageTargetService } from "./message-targets.js";
+import type { TargetDirectory } from "@kaguya/platform-adapters";
+import { GatewayAllowlist } from "./gateway-allowlist.js";
 import { randomUUID } from "node:crypto";
 
 import {
@@ -48,6 +52,7 @@ import {
 import { PostgresMemoryVectorIndex } from "@kaguya/database";
 import {
   deliveryRequestedInformationKind,
+  messageAuthorizationCapability,
   inboundTextInformationKind,
 } from "@kaguya/modules";
 import {
@@ -138,6 +143,9 @@ export interface RuntimeMemoryOptions {
 }
 
 type KaguyaRuntimeBaseOptions = {
+  /** 当前生效的出站策略；未注入时非 Web 默认拒绝。 */
+  readonly gatewayAllowlist?: GatewayAllowlist;
+  readonly targetDirectory?: TargetDirectory;
   /** 每个关闭阶段等待未完成工作的上限，默认 5000 毫秒。 */
   readonly drainTimeoutMs?: number;
   readonly logger?: KaguyaLogger;
@@ -254,6 +262,11 @@ export class KaguyaRuntime implements InformationIngress {
   readonly #informationLogger: KaguyaLogger | undefined;
   readonly #moduleLoggers = new Map<string, KaguyaLogger>();
   readonly #oneShotRecoveryGate: Promise<void> | undefined;
+
+  #messageTargets: MessageTargetService | undefined;
+  get messageTargets(): MessageTargetService | undefined {
+    return this.#state === "started" ? this.#messageTargets : undefined;
+  }
 
   #state: RuntimeState = "new";
   #startPromise: Promise<void> | undefined;
@@ -442,6 +455,17 @@ export class KaguyaRuntime implements InformationIngress {
         logProjectionRunner,
       });
       this.#core = core;
+      this.#messageTargets = new MessageTargetService(
+        core,
+        this.options.targetDirectory,
+        this.options.gatewayAllowlist ?? new GatewayAllowlist(),
+        this.#now,
+        (event) =>
+          this.#runtimeLogger?.info(
+            { event: "message.target.resolved", ...event },
+            "Target resolution completed",
+          ),
+      );
       await core.start();
       this.#assertStarting();
       if (this.options.cadence !== undefined) {
@@ -495,6 +519,15 @@ export class KaguyaRuntime implements InformationIngress {
             ({ capability }) => !capability.id.startsWith("kaguya:memory"),
           );
       const capabilities = [
+        {
+          capability: messageAuthorizationCapability,
+          value: Object.freeze({
+            prepare: (intent: DeepReadonly<InformationAtom>) =>
+              this.#messageTargets!.prepare(intent),
+            stage: (assistant: DeepReadonly<InformationAtom>) =>
+              this.#messageTargets!.stage(assistant),
+          }),
+        },
         ...(memoryEnabled
           ? [
               { capability: memoryCapability, value: database.memory },
@@ -664,6 +697,8 @@ export class KaguyaRuntime implements InformationIngress {
         }
       }
       this.#database = undefined;
+      this.#messageTargets?.close();
+      this.#messageTargets = undefined;
       this.#core = undefined;
       this.#moduleHost = undefined;
       this.#oneShotSchedule = undefined;
@@ -813,6 +848,49 @@ export class KaguyaRuntime implements InformationIngress {
     )
       return;
     const context = uniqueContextReference(request);
+    const targetAuthorized =
+      request.payload.platform === "web" ||
+      (await this.#messageTargets!.validateDelivery(request));
+    if (
+      !(
+        this.options.gatewayAllowlist ?? new GatewayAllowlist()
+      ).allowsDestination(
+        request.payload.platform,
+        request.payload.destination,
+      ) ||
+      !targetAuthorized ||
+      !this.#messageTargets!.deliveryStillCurrent(request.informationId)
+    ) {
+      await core.commitTerminal(
+        "kaguya.delivery.result.v1",
+        request.informationId,
+        deliveryFailedInformationKind,
+        {
+          occurredAt: this.#now().toISOString(),
+          source: "runtime:delivery",
+          payload: {
+            ok: false,
+            adapterId: request.payload.adapterId,
+            platform: request.payload.platform,
+            targetKind: request.payload.destination.kind,
+            error: !(
+              this.options.gatewayAllowlist ?? new GatewayAllowlist()
+            ).allowsDestination(
+              request.payload.platform,
+              request.payload.destination,
+            )
+              ? "destination-not-allowed"
+              : "target-authorization-required",
+          },
+          references: deliveryResultReferences(
+            request.informationId,
+            context.informationId,
+          ),
+        },
+      );
+      return;
+    }
+
     const registration = this.#transports.get(
       transportKey(request.payload.adapterId, request.payload.platform),
     );

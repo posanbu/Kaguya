@@ -17,8 +17,11 @@
  * 就绪时非阻塞转发正规化内容，日志不制造 trace ID，否则返回明确的
  * 503 runtime/core-unavailable 错误。Inspection GET 路由复用 management Token，
  * 由 inspection.ts 提供有界查询、统一秘密脱敏及 Runtime 未就绪时的 503。
+ * message-targets 路由复用 management 认证并通过动态 Runtime 门面执行目标/正文确认。
  * configuration/status 与 apply 复用管理认证，返回不含秘密的版本及应用结果；冲突返回 409。
  */
+import { registerMessageTargetRoutes } from "./message-targets.js";
+import type { MessageTargetService } from "@kaguya/runtime";
 import {
   registerInspectionRoutes,
   type InspectionService,
@@ -533,6 +536,7 @@ export interface CreateHttpApplicationOptions {
   config: ServerConfig;
   gatewayAuth?: GatewayAuthenticator;
   webGateway?: WebMessageGateway;
+  messageTargets?: () => MessageTargetService | undefined;
   inspection?: InspectionService | (() => InspectionService | undefined);
   configurationApplication?: ConfigurationApplicationService | undefined;
   adapterHost?: Pick<AdapterHost, "status">;
@@ -597,6 +601,12 @@ export async function createHttpApplication(
       },
     },
   });
+
+  registerMessageTargetRoutes(
+    app,
+    options.messageTargets ?? (() => undefined),
+    requireGatewayToken(options, "management"),
+  );
 
   registerInspectionRoutes(
     app,
