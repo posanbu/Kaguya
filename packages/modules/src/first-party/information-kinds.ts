@@ -1,5 +1,4 @@
 /**
- * 自然语言跨会话 intent 允许由获胜 agent.turn.plan.completed 直接引起，仍需宿主目标授权引用。
  * 功能概述：本文件声明 modules 包拥有的消息 DAG kind，包括入站、Heartbeat、Heartflow
  * claim/context/terminal、speech decision、消息意图、Memory、身份、assistant 与平台投递请求。
  * 主要职责：每个 definition 固定 payload 的严格 schema 和直接因果/context 引用规则；
@@ -183,7 +182,6 @@ export const messageIntentRequestedInformationKind = defineInformationKind({
       multiple: false,
       targetKinds: [
         "agent.attention.arousal.completed",
-        "agent.turn.plan.completed",
         "agent.message.target.authorized",
       ],
     },
