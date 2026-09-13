@@ -1,0 +1,28 @@
+/* 概览布局复用工作台主题变量；卡片独立伸展，小屏按阅读顺序堆叠。 */
+.overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+.overview-card {
+  min-width: 0;
+  padding: 1.25rem;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 14px;
+  background: var(--kaguya-paper-soft);
+  overflow-wrap: anywhere;
+}
+.overview-card h2 {
+  margin-top: 0;
+}
+.overview-card p {
+  line-height: 1.6;
+}
+.overview-adapter {
+  padding-block: 0.5rem;
+  border-top: 1px solid var(--kaguya-line);
+}
+.overview-adapter h3 {
+  font-size: 1rem;
+}
