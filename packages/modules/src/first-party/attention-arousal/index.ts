@@ -2,6 +2,7 @@
  * 功能概述：判断冻结事件是否足以唤起 Agent 注意，不决定话题、回复或具体行动。
  * 主要职责：执行不可绕过的硬门禁和 MaiBot 风格的确定性 0–100 显著性评分。
  * 代码库关系：只消费 Heartflow 冻结的 turn context，并提交 claim 的唯一注意唤起终态；eligible 使用独立 attention 命名空间；非 eligible 直接提交廉价等待或静默决策。
+ * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
  */
 import { z } from "@kaguya/schema";
 import { defineInformationModule, onInformation } from "@kaguya/sdk";
@@ -142,10 +143,10 @@ export const attentionArousalModule = defineInformationModule({
     protocolVersion: 1,
     moduleVersion: "1.0.0",
     definitionId: "agent.attention.arousal",
-    displayName: "Attention Arousal",
-    summary: "Filters events by whether they deserve agent attention.",
+    displayName: "注意力唤醒",
+    summary: "评估冻结回合是否值得关注、延后或忽略。",
     description:
-      "Applies hard safety and availability gates, then scores an immutable turn context for event salience. It never chooses a topic, writes a reply, calls a model, or performs an action.",
+      "消费已就绪的回合上下文，先检查安全与可用性，再计算显著性得分并输出原因；Heartflow 依据结果推进规划，本模块不调用模型或生成正文。",
     settingsSchema: attentionArousalSettingsSchema,
     consumes: [turnContextCompletedInformationKind],
     produces: [attentionArousalCompletedInformationKind],

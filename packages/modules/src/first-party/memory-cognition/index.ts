@@ -6,6 +6,7 @@
  * cognitionEvidenceSelector 重载直接来源；createCognitionMemorySelector 按 provider/revision/asOf
  * 选择最新完整快照并核对直接证据，返回可由 Core 再次加载的 Memory atom ID。
  * provider 超时/暂时错误交给 Reliable Runner，source/schema 失败关闭；后台链不触发在线回合。
+ * 展示契约：中文名称与职责说明由定义直接提供给 Inspection 和 WebUI，稳定 kind 与协议字段保持不变。
  */
 import {
   awaitWithSignal,
@@ -45,9 +46,9 @@ const commonReferences = {
 } as const;
 export const memoryCognitionRequestedInformationKind = defineInformationKind({
   kind: "agent.memory.cognition.requested",
-  displayName: "Memory cognition request",
+  displayName: "记忆认知请求",
   description:
-    "Frozen bounded source window for an external cognition provider.",
+    "认知处理前冻结有限来源窗口和提供方身份；外部认知能力据此生成可核对证据的快照。",
   payloadSchema: z
     .object({
       identity: cognitionIdentitySchema,
@@ -61,8 +62,9 @@ export const memoryCognitionRequestedInformationKind = defineInformationKind({
 });
 export const memoryCognitionCompletedInformationKind = defineInformationKind({
   kind: "agent.memory.cognition.completed",
-  displayName: "Memory cognition terminal",
-  description: "Completed, empty or superseded evidence-backed snapshot.",
+  displayName: "记忆认知结果",
+  description:
+    "认知结果通过证据检查后登记完成、空结果或被替代状态；后续可沿来源引用审计快照，不将无证据输出写为原始记忆。",
   payloadSchema: z
     .object({
       identity: cognitionIdentitySchema,
@@ -175,11 +177,10 @@ export const memoryCognitionModule = defineInformationModule({
     protocolVersion: 1,
     moduleVersion: "1.0.0",
     definitionId: "agent.memory.cognition",
-    displayName: "External Memory cognition",
-    summary:
-      "Produces evidence-backed snapshots through a replaceable provider.",
+    displayName: "记忆认知快照",
+    summary: "通过可替换的认知提供方生成有来源证据的快照。",
     description:
-      "Freezes persisted raw sources, validates provider results and publishes a completed snapshot independently of online replies.",
+      "原始记忆写回后冻结已持久化原文的有限窗口，提交认知请求并验证提供方结果，输出完成、空结果或被替代的快照；与在线回复独立，不改写原始记忆。",
     settingsSchema: z.object({}).strict(),
     consumes: [
       memoryWritebackCompletedInformationKind,

@@ -7,14 +7,16 @@
  * Registry 内建 kind 注册；Runtime 后续只能复用此同一导出，不能重新定义该 kind。
  * 输入输出与副作用：仅创建冻结的 kind 定义，无 I/O；payload 只包含 consumer 与
  * error.errorType/error.message，避免保留原始异常对象或 stack。
+ * 展示契约：中文名称与职责说明由定义直接提供给 Inspection 和 WebUI，稳定 kind 与协议字段保持不变。
  */
 import { z } from "@kaguya/schema";
 import { defineInformationKind } from "@kaguya/sdk";
 
 export const consumerFailedInformationKind = defineInformationKind({
   kind: "consumer.failed",
-  displayName: "Consumer Failed",
-  description: "Information carried by the consumer.failed kind.",
+  displayName: "信息消费者失败",
+  description:
+    "信息订阅处理抛出异常时由 Core 记录消费者身份和安全错误；诊断沿因果引用定位来源，不保留原始异常堆栈。",
   payloadSchema: z
     .object({
       consumer: z.union([

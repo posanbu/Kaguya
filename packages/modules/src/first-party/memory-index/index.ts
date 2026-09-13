@@ -4,6 +4,7 @@
  * 先登记逐文档 request 与下一页 continuation，再提交本页终态，崩溃后用唯一槽位恢复。
  * worker 仅从 MemoryDocumentReader 读取持久化正文，验证冻结模型身份后调用 embedding/vector capability；
  * 模型切换保留旧任务为 superseded，新的 revision 独立回填；不产生任何在线回合信号。
+ * 展示契约：中文名称与职责说明由定义直接提供给 Inspection 和 WebUI，稳定 kind 与协议字段保持不变。
  */
 import {
   awaitWithSignal,
@@ -38,9 +39,9 @@ const inherited = {
 } as const;
 export const memoryIndexRequestedInformationKind = defineInformationKind({
   kind: "agent.memory.index.requested",
-  displayName: "Memory vector request",
+  displayName: "记忆向量索引请求",
   description:
-    "Idempotent vector projection for one persisted document and model revision.",
+    "原始记忆写回后按来源和模型版本登记索引请求；向量处理器据此生成可恢复的派生向量，不修改原文。",
   payloadSchema: z
     .object({
       sourceInformationId: z.string().min(1),
@@ -52,8 +53,9 @@ export const memoryIndexRequestedInformationKind = defineInformationKind({
 });
 export const memoryBackfillRequestedInformationKind = defineInformationKind({
   kind: "agent.memory.index.backfill.requested",
-  displayName: "Memory backfill page",
-  description: "Bounded resumable keyset page for a frozen embedding identity.",
+  displayName: "记忆向量回填请求",
+  description:
+    "启动向量回填时冻结模型身份、游标和批量大小；处理器按有界分页恢复历史记忆索引。",
   payloadSchema: z
     .object({
       identity: embeddingIdentitySchema,
@@ -66,8 +68,9 @@ export const memoryBackfillRequestedInformationKind = defineInformationKind({
 });
 export const memoryIndexCompletedInformationKind = defineInformationKind({
   kind: "agent.memory.index.completed",
-  displayName: "Memory vector terminal",
-  description: "Unique indexing or backfill page result.",
+  displayName: "记忆向量处理结果",
+  description:
+    "单条索引或回填页处理结束后登记完成、来源缺失或版本过期；维护流程据此追踪进度而不唤醒在线回合。",
   payloadSchema: z
     .object({ status: z.enum(["completed", "missing", "superseded"]) })
     .strict(),
@@ -117,10 +120,10 @@ export const memoryIndexModule = defineInformationModule({
     protocolVersion: 1,
     moduleVersion: "1.0.0",
     definitionId: "agent.memory.index",
-    displayName: "Memory vector projection",
-    summary: "Builds recoverable vectors without modifying raw Memory.",
+    displayName: "记忆向量索引",
+    summary: "为原始记忆建立按模型版本隔离的可恢复向量。",
     description:
-      "Consumes raw writeback and bounded backfill pages; isolates model revisions and never wakes the online agent.",
+      "消费写回完成事实和有界回填请求，通过嵌入能力建立派生向量并记录处理结果；保留原始记忆，支持分页恢复，不触发在线回合。",
     settingsSchema: z.object({}).strict(),
     consumes: [
       memoryWritebackCompletedInformationKind,
