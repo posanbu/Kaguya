@@ -4,6 +4,7 @@
  * 标识任务域。useNavigationGuard 注册离开保护，useWorkbenchNavigate 复用受保护导航。
  * 代码库关系：App.tsx 管理认证及 history，页面作为 children 注入；复杂交互采用
  * ui.tsx 导出的 Radix Dialog/DropdownMenu，视觉沿用 workbench.css 和品牌素材。
+ * 每次导航冻结守卫快照；注册 effect 只依赖稳定的 register，保存重渲染不会重复执行守卫。
  * history 使用 entry index/go 恢复取消的后退/前进，不 push 截断历史；并发导航只保留首个请求。
  * 输入输出与副作用：导航守卫返回 false 时保留当前页和抽屉；成功导航关闭抽屉。
  * 抽屉由 Radix 管理焦点圈定、Escape 和触发器焦点恢复；不读取或持久化 Token。
@@ -26,6 +27,7 @@ import {
   Settings2,
   X,
 } from "lucide-react";
+import { checkNavigationGuards } from "./navigation-guards.js";
 import { Button, Dialog } from "./ui.js";
 import "./workbench.css";
 export const workbenchRoutes = [
@@ -70,14 +72,7 @@ export function useWorkbenchRouter() {
       guards.current.delete(guard);
     };
   }, []);
-  const allow = useCallback(async () => {
-    try {
-      for (const guard of guards.current) if (!(await guard())) return false;
-    } catch {
-      return false;
-    }
-    return true;
-  }, []);
+  const allow = useCallback(() => checkNavigationGuards(guards.current), []);
   const navigate = useCallback(
     async (next: string) => {
       if (busy.current) return false;
@@ -164,7 +159,8 @@ export function useWorkbenchRouter() {
 }
 export function useNavigationGuard(guard: Guard) {
   const context = useContext(NavigationContext);
-  useEffect(() => context?.register(guard), [context, guard]);
+  const register = context?.register;
+  useEffect(() => register?.(guard), [register, guard]);
 }
 export function useWorkbenchNavigate() {
   const context = useContext(NavigationContext);

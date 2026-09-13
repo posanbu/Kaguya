@@ -1,5 +1,6 @@
 /**
  * 状态未加载或读取失败时允许概览继续渲染，菜单只显示占位，不推断 selected Profile。
+ * 编辑切换冻结守卫集合，异步保存期间重新注册的守卫只影响下一次切换。
  * 功能概述：认证工作台共享 Profile 编辑上下文和安全的配置应用状态，不读取配置正文。
  * 主要职责：ProfileWorkspace 保存编辑 ID、操作锁及应用快照；ProfileSwitcher 用 Radix
  * 菜单切换查看对象、用 Dialog 新建配置。profileLabels 独立描述 selected 与已生效 revision。
@@ -17,6 +18,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { checkNavigationGuards } from "./components/navigation-guards.js";
 import { ChevronDown, Plus } from "lucide-react";
 import { Button, Dialog, DropdownMenu, FieldMessage } from "./components/ui.js";
 import {
@@ -142,8 +144,7 @@ export function ProfileWorkspace({
   const applying = localApplying || application?.state === "applying";
   const beforeEdit = async () => {
     if (applying || mutating) return false;
-    for (const guard of guards.current) if (!(await guard())) return false;
-    return true;
+    return checkNavigationGuards(guards.current);
   };
   const requestEdit = async (id: string) => {
     if (id === editingId) return true;
