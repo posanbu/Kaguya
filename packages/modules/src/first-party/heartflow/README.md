@@ -30,14 +30,12 @@ wait 复用 `agent.wait.requested`，始终 `wakeOnMessage=true`。新消息合�
 
 ## 典型场景
 
-Planner 只允许以下严格 JSON，不允许额外字段或原始平台目标：
+Planner 只允许以下严格 JSON，不允许额外字段、消息正文或平台目标：
 
-- `message`：`reason` 为 `respond` 或 `contribute`。省略 `target` 或使用 `{kind: "current"}` 时创建当前会话意图；跨会话只能选择 `{kind: "group" | "private", reference, instruction}` 中宿主提供的本轮引用，`instruction` 仅说明本次明确要求发送的内容。`{kind: "unresolved", reason}` 会关闭 turn 并记录安全失败，不能回退当前群。
+- `message`：`reason` 为 `respond` 或 `contribute`；创建一次当前会话 Message Intent，再调用一次 Composer。
 - `wait`：`reason` 为 `await-more-context` 或 `avoid-interruption`；`waitSeconds` 为 5–120 的整数。
 - `silent`：`reason` 为 `no-response-needed`、`already-addressed` 或 `avoid-interruption`；不调用 Composer 或投递。
 
 不 eligible 的门控 `defer` 保留廉价 Heartbeat 重判；`ignore` 正常结束。离线 `pnpm prompt:test` 使用真实 Planner 编译器验证结构与字段限制，不调用外部模型。
 
 Planner 首次请求持久化后，重放会恢复相同 Prompt、上下文原子及顺序，不因迟到历史改变任务指纹；已经完成的模型任务不会重复调用。普通请求日志不记录 Planner Prompt 预览，完整 Prompt 仅限显式 content detail 诊断。
-
-宿主 `conversation` 能力在规划前冻结 `agent.conversation.context.frozen`，提供不含原始目标 ID 的解析投影及当前会话/人物背景。背景也用于普通消息编写，不以跨会话意图为前提。跨会话获胜决策调用 `route`，宿主验证引用、目录、有效期与出站策略后创建统一意图；模型本身不能授予出站权限。重启后已冻结 Prompt 可重放，但临时引用失效，待发跨会话请求安全关闭。

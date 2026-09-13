@@ -45,7 +45,7 @@ pnpm dev
 
 **`inboundAllowlist` 与 `outboundAllowlist`** — 字符串规则数组，每条格式为 `platform:chat_type:target_id`。`chat_type` 只接受 `group` 或 `private`；群聊用 `groupId`，私聊用 `userId`。规则按 OR 匹配，`platform` 和 `target_id` 支持 `*`，比较保持大小写敏感。每个空数组只拒绝对应方向的非 Web 消息；全部放行需要同时配置 `*:group:*` 和 `*:private:*`。解析会修剪三段，格式错误、空段、未知 chat type 或额外冒号的规则静默忽略。Web 入口仍只由 Gateway Token 控制，群规则不会限制群成员。
 
-入站列表只决定外部消息是否进入 Runtime；拒绝时不会创建 turn。出站列表用于目标授权和最终投递检查，拒绝时不调用 transport，记录 `destination-not-allowed` 安全错误码。两套权限互不继承，可配置只接收或只发送；自然语言跨会话由宿主验证本轮 Planner 目标，管理端发起的跨会话请求仍需确认。
+入站列表只决定外部消息是否进入 Runtime；拒绝时不会创建 turn。出站列表用于目标授权和最终投递检查，拒绝时不调用 transport，记录 `destination-not-allowed` 安全错误码。两套权限互不继承，可配置只接收或只发送；跨会话发送仍需管理端确认。
 
 旧版 `runtime.gatewayAllowlist` 不再接受，读取、启动及 API 保存均不会自动转换或覆盖配置文件。升级前备份配置目录，手动删除旧字段，并显式填写 `runtime.inboundAllowlist` 与 `runtime.outboundAllowlist` 两个数组。若要保持旧版双向使用同一规则的行为，可将旧数组复制到两个新字段；如需单向权限，分别编辑。缺少任一方向或同时保留旧字段都会校验失败。首次升级需重启以读取有效配置；之后保存或选择 Profile 仍只写盘，两套策略都在点击“应用当前配置”后切换。
 

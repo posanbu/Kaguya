@@ -1,5 +1,4 @@
 /**
- * conversationContextInformationKind 注册宿主冻结的背景与目标解析投影，内容日志仅输出目录状态。
  * 出站策略拒绝使用不含 target ID 的失败分支；消费者通过请求引用关联 turn，日志只投影安全字段。
  * Planner 的普通请求日志仅投影任务元数据，不包含 Prompt 预览；显式 content detail 保留受控诊断。
  * 功能概述：定义 Runtime 自有的 context、通用 Model Task 生命周期和投递结果 kind，并聚合内建 DAG。
@@ -21,7 +20,6 @@ import { consumerFailedInformationKind } from "@kaguya/engine";
 import { previewInformationContent } from "@kaguya/logger";
 import {
   deliveryRequestedInformationKind,
-  conversationContextInformationKind,
   targetAuthorizedInformationKind,
   messageConfirmedInformationKind,
   inboundTextInformationKind,
@@ -485,7 +483,6 @@ export const modelTaskInformationKinds = Object.freeze([
 ] as const);
 
 export const builtInInformationKinds = Object.freeze([
-  conversationContextInformationKind,
   targetAuthorizedInformationKind,
   messageConfirmedInformationKind,
   runtimeContextInformationKind,

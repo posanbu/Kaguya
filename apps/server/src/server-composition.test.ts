@@ -1,5 +1,4 @@
 /**
- * Web 入站 DAG 同样产生当前会话背景投影，保持 Composition 与 Runtime 的事实集合断言同步。
  * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * 默认 DAG 验证 eligible turn 先调用 Planner，再由 Composer 生成消息。
  * tier 配置回归同时覆盖 generation.timeoutMs 到 LLM client 的硬超时参数传递。
@@ -236,7 +235,6 @@ describe("unified server composition", () => {
         "agent.turn.claimed",
         "agent.turn.completed",
         "agent.turn.context.completed",
-        "agent.conversation.context.frozen",
         "agent.turn.plan.completed",
         "agent.turn.started",
         "agent.person.resolution",

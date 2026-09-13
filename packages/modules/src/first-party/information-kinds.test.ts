@@ -1,5 +1,4 @@
 /**
- * 自动跨会话 intent 的因果来源包含获胜 Planner，目标授权与 claim/candidate 引用仍必需校验。
  * 跨会话授权事实是 intent 的合法原因和隔离上下文；payload 不扩展原始字符串目的地址入口。
  * 功能概述：校验第一方持久化消息协议的严格边界，防止旧 reply 数据混入消息意图。
  * 主要职责：覆盖 intent 必填字段及嵌套对象、独立 inbound 来源、assistant 目标元数据、
@@ -216,7 +215,6 @@ describe("message intent protocol", () => {
         required: true,
         targetKinds: [
           "agent.attention.arousal.completed",
-          "agent.turn.plan.completed",
           "agent.message.target.authorized",
         ],
       },

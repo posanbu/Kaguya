@@ -97,10 +97,4 @@ tests:
       - type: contains
         value: "5到120的整数"
       - type: contains
-        value: "禁止 Markdown、解释、adapter、群号、用户 ID 或 destination"
-      - type: contains
-        value: "结构化人物/会话上下文"
-      - type: contains
-        value: "禁止猜测 reference"
-      - type: contains
-        value: "不得退回当前群发送"
+        value: "禁止 Markdown、解释、消息正文、adapter、群号、用户 ID 或 destination"
