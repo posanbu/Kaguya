@@ -28,7 +28,7 @@
  * 工作台由 AppShell 统一承载，useWorkbenchRouter 保护 history 导航；根路径预留概览，
  * /messages、/profiles、/configuration/application、/adapters 分别提供任务入口。
  * 人工跨会话管理界面已移除；所有状态仅驻留当前页面。
- * DeveloperConsole 负责只读查询与取消，401 继续由本文件统一锁屏。
+ * DeveloperConsole 接收完整 pathname 以恢复模块详情，负责只读查询与取消，401 继续由本文件统一锁屏。
  * 消息与接入页面复用 PageHeader/Button/FieldMessage，DeliveryStatus 以 StatusBadge 展示投递状态。
  */
 import { AppShell, useWorkbenchRouter } from "./components/AppShell.js";
@@ -287,6 +287,7 @@ export function App() {
         <DeveloperConsole
           token={token}
           page={inspectionPage}
+          path={path}
           navigate={(next) => {
             void navigate(next);
           }}

@@ -1,7 +1,7 @@
 /**
  * 功能概述：开发者控制台的只读 Module、Atom 与 Ingress/Turn Flow 页面，沿用顶层内存 Token。
- * 页面复用共同 PageHeader/Button/StatusBadge/FieldMessage；保留模块、Atom、Flow 二级导航。
- * 主要职责：DeveloperConsole 维护页面导航及手动刷新；Modules 展示 Manifest/activation；
+ * 页面复用共同 PageHeader/Button/FieldMessage；保留模块、Atom、Flow 二级导航。
+ * 主要职责：DeveloperConsole 维护页面导航及手动刷新；ModulePage 按路径展示紧凑总览或独立详情；
  * Atoms 提供过滤、游标页和详情；Flows 按 runtime context 展示可点击 DAG 或时间列表；
  * Detail 支持完整脱敏 payload/Prompt、正反引用导航及复制 ID；useInspection 取消过期请求。
  * 代码库关系：App.tsx 处理 history 与锁屏，api.ts 复用 Gateway 认证并用 schema 包验证 DTO；
@@ -17,20 +17,20 @@ import {
   inspectionFlowSchema,
   type InspectionAtom,
   type InspectionFlow,
-  type InspectionModule,
 } from "@kaguya/schema";
+import {
+  ModulePage,
+  moduleDefinitionId,
+  navigateModuleLink,
+} from "./ModulePages.js";
 import { getInspection } from "./api.js";
 import "./developer.css";
-import {
-  Button,
-  FieldMessage,
-  PageHeader,
-  StatusBadge,
-} from "./components/ui.js";
+import { Button, FieldMessage, PageHeader } from "./components/ui.js";
 
 type Page = "modules" | "atoms" | "flows";
 export function developerPage(path: string): Page | undefined {
-  return /^\/developer(?:\/modules)?\/?$/.test(path)
+  return moduleDefinitionId(path) !== undefined ||
+    /^\/developer(?:\/modules)?\/?$/.test(path)
     ? "modules"
     : /^\/developer\/atoms\/?$/.test(path)
       ? "atoms"
@@ -77,10 +77,12 @@ function Status({ state }: { state: { data?: unknown; error?: string } }) {
 export function DeveloperConsole({
   token,
   page,
+  path,
   navigate,
 }: {
   token: string;
   page: Page;
+  path: string;
   navigate: (path: string) => void;
 }) {
   const [revision, setRevision] = useState(0);
@@ -116,8 +118,7 @@ export function DeveloperConsole({
               href={`/developer/${p}`}
               aria-current={page === p ? "page" : undefined}
               onClick={(e) => {
-                e.preventDefault();
-                navigate(`/developer/${p}`);
+                navigateModuleLink(e, `/developer/${p}`, navigate);
               }}
             >
               {["Module 模块", "Atom 消息", "Ingress / Turn 流"][i]}
@@ -125,10 +126,7 @@ export function DeveloperConsole({
           ))}
         </nav>
         {page === "modules" ? (
-          <>
-            <Status state={modules} />
-            {modules.data && <Modules modules={modules.data.modules} />}
-          </>
+          <ModulePage path={path} token={token} state={modules} />
         ) : page === "atoms" ? (
           <Atoms key="atoms" token={token} revision={revision} names={names} />
         ) : (
@@ -136,98 +134,6 @@ export function DeveloperConsole({
         )}
       </main>
     </div>
-  );
-}
-function Modules({ modules }: { modules: InspectionModule[] }) {
-  const [search, setSearch] = useState("");
-  const visible = modules.filter((m) =>
-    `${m.definitionId} ${m.displayName} ${m.summary}`
-      .toLowerCase()
-      .includes(search.toLowerCase()),
-  );
-  return (
-    <>
-      <label className="developer-search">
-        查找模块
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="名称或 definition ID"
-        />
-      </label>
-      <p>{visible.length} 个模块定义</p>
-      {!visible.length && <p>没有匹配的模块。</p>}
-      <div className="module-grid">
-        {visible.map((m) => (
-          <article className="developer-card" key={m.definitionId}>
-            <h2>{m.displayName}</h2>
-            <code>{m.definitionId}</code>
-            <p>{m.summary}</p>
-            <p>{m.description}</p>
-            <dl>
-              <dt>版本 / 协议</dt>
-              <dd>
-                {m.moduleVersion} / {m.protocolVersion}
-              </dd>
-              <dt>Activation</dt>
-              <dd>
-                <StatusBadge tone={m.bindings.length ? "success" : "neutral"}>
-                  {m.bindings.length
-                    ? m.bindings.map((b) => b.instanceId).join("、")
-                    : "未激活"}
-                </StatusBadge>
-              </dd>
-            </dl>
-            {(["consumes", "produces"] as const).map((field, i) => (
-              <section key={field}>
-                <h3>{i ? "输出 Kind" : "输入 Kind"}</h3>
-                {m[field].length ? (
-                  m[field].map((k) => (
-                    <p key={k.kind} title={k.description}>
-                      {k.displayName}
-                      <br />
-                      <code>{k.kind}</code>
-                    </p>
-                  ))
-                ) : (
-                  <p>无</p>
-                )}
-              </section>
-            ))}
-            <h3>Prompt renderer</h3>
-            {m.promptRenderers.length ? (
-              m.promptRenderers.map((p) => (
-                <section key={p.rendererId}>
-                  <strong>{p.displayName}</strong>
-                  <p>{p.description}</p>
-                  <code>{p.rendererId}</code>
-                  <p>{p.kinds.join("、")}</p>
-                </section>
-              ))
-            ) : (
-              <p>无</p>
-            )}
-            <details>
-              <summary>Selector、Capability 与绑定</summary>
-              <pre>
-                {JSON.stringify(
-                  {
-                    selectors: m.selectors,
-                    requires: m.requires,
-                    provides: m.provides,
-                    bindings: m.bindings,
-                    diagnostics: m.diagnostics,
-                    settingsSchemaFingerprint: m.settingsSchemaFingerprint,
-                  },
-                  null,
-                  2,
-                )}
-              </pre>
-            </details>
-          </article>
-        ))}
-      </div>
-    </>
   );
 }
 function Filters({
