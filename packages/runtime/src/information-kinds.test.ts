@@ -1,4 +1,5 @@
 /**
+ * 内建 kind 集合包含宿主冻结的双投影事实，验证其与其他定义同样只注册一次。
  * 聚合列表包含管理端目标批准和正文确认事实；失败出站可使用不含原始目标的安全分支。
  * 功能概述：锁定 Runtime 信息 DAG 的完整内建 kind 集合、唯一对象所有权和关键引用契约。
  * 主要职责：验证 context、Engine 消费失败、modules 消息/过滤/投递请求、Runtime 通用模型任务与投递
@@ -175,6 +176,7 @@ describe("runtime information kinds", () => {
 
   it("aggregates every owned definition exactly once", () => {
     expect(builtInInformationKinds.map(({ kind }) => kind)).toEqual([
+      "agent.conversation.context.frozen",
       "agent.message.target.authorized",
       "agent.message.content.confirmed",
       "core.runtime.context",
