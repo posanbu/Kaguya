@@ -139,3 +139,19 @@ Server 将当前生效 GatewayAllowlist 和 AdapterHost 目录注入 Runtime。M
 管理端批准的说明保存在 `agent.message.target.authorized`，作为独立冻结上下文。跨会话 intent 沿用 target/turn/memoryInformationIds 契约，引用该上下文及独立 candidate/claim；candidate 保留原 heartbeat 溯源并标记 managementAuthorizationId，Heartflow 不为它重复规划。Association 不扩展其 Memory。正文确认产生 `agent.message.content.confirmed`，唤醒 Composer 共用的 release 函数创建原有 delivery 请求。
 
 最终目的地检查覆盖错误模块输出、重放及配置显式应用后的恢复领取；拒绝使用不含目标 ID 的失败 payload。成功投递的跨会话 assistant 可通过确认因果链进入目标会话历史。接口见 [HTTP API](../reference/http-api.md)，操作见[跨会话消息](../guide/message-targets.md)。
+
+## 观察式调度与创建阶段防积压
+
+系统持续观察信息流，不把每条消息或每批消息定义为必须处理的回合。信息经过廉价过滤后，快模型选择 `message`、`wait` 或 `silent`；慢模型仅为获准行动生成正文。`turn`、`candidate`、`claim` 是持久化调度、幂等与并发控制事实，不决定信息处理模型，也不保证逐条回复。
+
+Heartbeat 对普通群消息保留首个稀疏观察时刻，连续到达不会无限推迟观察，也不会逐条替换 schedule。私聊、Web 输入、@机器人、回复机器人及全体提及可立即提升调度；回复归属优先使用平台 senderId，缺失时核对同目标的已投递消息标识。模型返回的等待时长决定后续观察节奏。
+
+候选注册携带 `openScope`，数据库在同 scope 的 head 行锁内竞争。不同到期信号只得到一个开放 candidate；每个信号的操作别名仍指向原赢家，所以旧信号重放不会开启新一轮。等待 schedule 记录前驱 candidate，避免旧等待到期信号在后续观察完成后重新启动模型。指定 `agent.turn.terminal` 终态释放槽，平台投递和授权边界保持原有职责。
+
+开放期间入站账本保存待观察集合，普通和即时唤醒分别按 candidate 去重。冻结前的唤醒把新增来源纳入当前观察，身份屏障仍完整保留；已冻结的观察继续使用原输入；终态订阅读取水位之后的最新输入，最多提交一次必要后续观察。水位按持久化位置而非消息时间戳推进，因此相同或迟到时间戳不会把消息误判为已观察。Heartbeat 每次水位读取保留最近至多 1000 条新增入站，冻结前可与已持久化的恢复或唤醒来源合并；不补建逐条历史回合。
+
+## 恢复阶段一次爬楼
+
+重启、旧数据或竞争遗留多个开放 candidate 时，Heartflow 在 scope 内合并来源，只推进最新的一次观察。合并来源作为 claim 的 `core:uses-context` 引用先持久化；即使身份屏障尚未就绪、旧 candidate 已终结或身份结果迟到，恢复仍读取同一组来源。其他 candidate 被终结，不按历史顺序重放模型。Planner 决策提交和最终发送仍由既有操作槽、终态槽与执行租约保护；迟到结果在派发前重新检查当前终态。
+
+在线 Selector 从 `information_lifecycle` 的开放集合读取 candidate，并按 scope 的注册位置索引读取最近 claim。该投影和 `information_scope_heads` 可变，业务原子和引用保持只追加。数据库启动时首次建立并回填投影，后续启动不重复扫描历史；写入原子、关闭投影和可靠执行意图同事务提交。历史规模与恢复测试分别验证开放索引查询和合并动作唯一性。

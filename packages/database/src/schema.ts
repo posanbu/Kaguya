@@ -1,4 +1,9 @@
-/** PostgreSQL schema v1 initializer and strict validator. */
+/**
+ * 功能概述：初始化并校验 PostgreSQL v1 账本；prepareLifecycleProjection 建立可重建的开放集合及 scope 槽。
+ * 主要职责：prepareDatabaseSchema 在启动事务中校验既有结构并首次回填投影；后续启动不扫描历史。
+ * 代码库关系：InformationRepository 同事务维护投影，ReliableInformationRepository 锁定 scope head；原子仍只追加。
+ * 输入输出与副作用：执行 DDL 与首次历史回填；不支持的账本结构报错，失败回滚全部 schema 变更。
+ */
 import type { SqlDatabase } from "./driver.js";
 
 export const POSTGRES_SCHEMA_VERSION = 1;
@@ -110,6 +115,7 @@ export async function prepareDatabaseSchema(
     }
     if (tableNames.has("kaguya_schema_metadata")) {
       await validateCurrentSchema(tx, tableNames);
+      await prepareLifecycleProjection(tx);
       return;
     }
     if (tableNames.size > 0) {
@@ -269,6 +275,7 @@ export async function prepareDatabaseSchema(
       `INSERT INTO kaguya_schema_metadata (singleton, version) VALUES (true, $1)`,
       [POSTGRES_SCHEMA_VERSION],
     );
+    await prepareLifecycleProjection(tx);
   });
 }
 
@@ -329,4 +336,51 @@ async function validateCurrentSchema(
   ) {
     throw new UnsupportedDatabaseSchemaError();
   }
+}
+
+/** 可重建的开放集合与 scope head；旧账本仅首次建表回填，不改写业务事实。 */
+async function prepareLifecycleProjection(
+  tx: import("./driver.js").SqlTransaction,
+) {
+  // schema 启动事务串行化，避免两个进程同时回填。
+  await tx.query("SELECT pg_advisory_xact_lock(168168)");
+  const exists = await tx.query<{ name: string | null }>(
+    "SELECT to_regclass('information_lifecycle')::text AS name",
+  );
+  if (exists.rows[0]?.name) return;
+  await tx.exec(`
+    CREATE TABLE information_lifecycle (
+      information_id text PRIMARY KEY REFERENCES information_atoms(information_id),
+      kind text NOT NULL,
+      scope_key text,
+      occurred_at timestamptz NOT NULL,
+      position bigint GENERATED ALWAYS AS IDENTITY,
+      is_open boolean NOT NULL DEFAULT true
+    );
+    CREATE INDEX information_lifecycle_scope_idx
+      ON information_lifecycle(kind, scope_key, position DESC) WHERE is_open;
+    CREATE INDEX information_lifecycle_scope_position_idx ON information_lifecycle(kind, scope_key, position DESC);
+    CREATE UNIQUE INDEX information_lifecycle_position_idx ON information_lifecycle(position);
+    CREATE TABLE information_scope_heads (
+      namespace text NOT NULL,
+      scope_key text NOT NULL,
+      information_id text REFERENCES information_atoms(information_id) DEFERRABLE INITIALLY DEFERRED,
+      terminal_group text NOT NULL,
+      PRIMARY KEY(namespace, scope_key)
+    );
+    INSERT INTO information_lifecycle(information_id,kind,scope_key,occurred_at,is_open)
+      SELECT a.information_id, a.kind, COALESCE(a.payload->>'scopeKey', a.payload->'input'->>'scopeKey',
+        CASE WHEN a.payload->'source'->>'platform' IS NOT NULL THEN
+          (a.payload->'source'->>'platform') || ':' || (a.payload->'source'->>'adapterId') || ':' ||
+          COALESCE(a.payload->'source'->'destination'->>'kind','unknown') || ':' ||
+          COALESCE(a.payload->'source'->'destination'->>'groupId', a.payload->'source'->'destination'->>'userId',
+            a.payload->'source'->'destination'->>'channelId', a.payload->'source'->'destination'->>'id', '') END), a.occurred_at::timestamptz,
+        NOT EXISTS (SELECT 1 FROM information_references r
+          WHERE r.target_information_id=a.information_id AND r.relation='core:status-of')
+        AND NOT EXISTS (SELECT 1 FROM information_commit_slots s
+          WHERE s.slot_type='terminal' AND s.key=a.information_id)
+      FROM information_atoms a ORDER BY a.occurred_at::timestamptz, a.information_id;
+    CREATE INDEX information_atoms_scope_time_idx
+      ON information_atoms(kind, (payload->>'scopeKey'), occurred_at DESC, information_id DESC);
+  `);
 }

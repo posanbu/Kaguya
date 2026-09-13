@@ -1,4 +1,5 @@
 /**
+ * find 支持经校验的 openOnly、scopeKey、registrationOrder 与排他 afterInformationId，不在模块内扫描历史。
  * 功能概述：在 Core 内执行 Information Selector，并为每次调用建立独立的只读授权作用域。
  * 主要职责：校验 Selector 输出、阻止重复/未知/越权 ID、按选择顺序重新加载原子，
  * 并提供受约束的 find、单跳引用遍历与命名检索读取。
@@ -48,6 +49,11 @@ export interface InformationRetrievalStrategy {
 const limitSchema = z.number().int().min(1).max(1_000);
 const findSchema = z
   .object({
+    openOnly: z.boolean().optional(),
+    registrationOrder: z.boolean().optional(),
+    afterInformationId: informationIdSchema.optional(),
+    scopeKey: z.string().min(1).optional(),
+    informationIds: z.array(informationIdSchema).min(1).optional(),
     kinds: z.array(z.string().trim().min(1)).min(1).optional(),
     sources: z.array(z.string().trim().min(1)).min(1).optional(),
     occurredAfter: z.iso.datetime({ offset: true }).optional(),
@@ -58,7 +64,17 @@ const findSchema = z
   })
   .strict()
   .refine(
-    ({ kinds, sources, occurredAfter, occurredBefore, payloadContains }) =>
+    ({
+      kinds,
+      sources,
+      occurredAfter,
+      occurredBefore,
+      payloadContains,
+      informationIds,
+      scopeKey,
+    }) =>
+      informationIds !== undefined ||
+      scopeKey !== undefined ||
       kinds !== undefined ||
       sources !== undefined ||
       occurredAfter !== undefined ||
@@ -76,6 +92,7 @@ const findSchema = z
 
 const relatedSchema = z
   .object({
+    offset: z.number().int().min(0).optional(),
     from: z.array(informationIdSchema).min(1),
     relation: z.string().trim().min(1).optional(),
     direction: z.enum(["outgoing", "incoming"]),
@@ -211,6 +228,21 @@ class SelectorReadScope {
     }
     const normalized: InformationFindQuery = {
       limit: parsed.data.limit,
+      ...(parsed.data.informationIds === undefined
+        ? {}
+        : { informationIds: parsed.data.informationIds }),
+      ...(parsed.data.registrationOrder === undefined
+        ? {}
+        : { registrationOrder: parsed.data.registrationOrder }),
+      ...(parsed.data.afterInformationId === undefined
+        ? {}
+        : { afterInformationId: parsed.data.afterInformationId }),
+      ...(parsed.data.openOnly === undefined
+        ? {}
+        : { openOnly: parsed.data.openOnly }),
+      ...(parsed.data.scopeKey === undefined
+        ? {}
+        : { scopeKey: parsed.data.scopeKey }),
       ...(parsed.data.kinds === undefined ? {} : { kinds: parsed.data.kinds }),
       ...(parsed.data.sources === undefined
         ? {}
@@ -262,6 +294,7 @@ class SelectorReadScope {
     }
 
     const normalized = {
+      offset: parsed.data.offset ?? 0,
       from: parsed.data.from,
       relation: parsed.data.relation,
       limit: parsed.data.limit,
@@ -315,6 +348,7 @@ class SelectorReadScope {
   }
 
   private async loadOutgoing(query: {
+    readonly offset: number;
     readonly from: readonly InformationId[];
     readonly relation: string | undefined;
     readonly limit: number;
@@ -330,7 +364,7 @@ class SelectorReadScope {
           )
           .map((reference) => reference.informationId);
       }),
-    ).slice(0, query.limit);
+    ).slice(query.offset, query.offset + query.limit);
     const byId = indexById(await this.ledger.getMany(targetIds));
     return targetIds.map((informationId) => {
       const atom = byId.get(informationId);
@@ -345,6 +379,7 @@ class SelectorReadScope {
   }
 
   private async loadIncoming(query: {
+    readonly offset: number;
     readonly from: readonly InformationId[];
     readonly relation: string | undefined;
     readonly limit: number;
@@ -358,7 +393,10 @@ class SelectorReadScope {
         })),
       );
     }
-    return stableUniqueAtoms(atoms).slice(0, query.limit);
+    return stableUniqueAtoms(atoms).slice(
+      query.offset,
+      query.offset + query.limit,
+    );
   }
 
   private authorize(atoms: readonly DeepReadonly<InformationAtom>[]): void {

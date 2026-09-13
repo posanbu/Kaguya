@@ -15,6 +15,13 @@ import type {
 } from "@kaguya/schema";
 
 export interface InformationFindQuery {
+  /** 只读无 status-of / terminal 的开放原子投影；scopeKey 在投影索引内过滤。 */
+  readonly openOnly?: boolean;
+  /** 按持久化位置排序；afterInformationId 为排他的已注册水位，不受消息时间戳影响。 */
+  readonly registrationOrder?: boolean;
+  readonly afterInformationId?: InformationId;
+  readonly scopeKey?: string;
+  readonly informationIds?: readonly InformationId[];
   readonly kinds?: readonly string[];
   readonly sources?: readonly string[];
   readonly occurredAfter?: string;
@@ -25,6 +32,8 @@ export interface InformationFindQuery {
 }
 
 export interface InformationRelatedQuery {
+  /** 仅用于恢复超大引用集合的分页；每页仍受 limit 限制。 */
+  readonly offset?: number;
   readonly from: readonly InformationId[];
   readonly relation?: string;
   readonly direction: "outgoing" | "incoming";

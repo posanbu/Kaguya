@@ -58,7 +58,7 @@ Profile Registry 只有一个显式的 `selectedProfileId`。Server 在启动时
 
 模块用 `onInformation` 订阅某个 Information Kind，并通过 handler 的 `context.register()` 注册下一原子。ModuleHost 会补齐模块 source、直接 `core:caused-by` 与继承的 `core:context`。模块 manifest 必须列出订阅和输出的 Kind；额外 relation 必须为非保留 relation，且在目标 Kind definition 的 `references` 中预先声明。
 
-过滤通过时显式注册下一个 Kind，拒绝时只注册 `filter.decision`。消费者抛出或 reject 时，Core 记录 `consumer.failed`；输入不会回滚，其他消费者继续独立执行。LLM 与投递也分别记录完成或失败的原子。当前没有持久订阅、离线补投、工作队列、优先级、定向派发或自动重试。
+过滤通过时显式注册下一个 Kind，拒绝时只注册 `filter.decision`。消费者抛出或 reject 时，Core 记录 `consumer.failed`；输入不会回滚，其他消费者继续独立执行。LLM 与投递也分别记录完成或失败的原子。live 订阅只接收当前广播；durable 订阅通过持久投递、租约、重试和终态槽恢复未完成工作，新启用的订阅不回填历史。
 
 ## 日志与 API 边界
 
@@ -164,3 +164,11 @@ git diff --check
 # Cadence 与短心跳测试
 
 涉及 durable schedule 的模块应注入时钟并覆盖重复投递、并发 replacement、lease/retry 及重启恢复。heartbeat 只能通过 one-shot capability 写入事实，不得直接调用 LLM、Runtime turn 或平台 transport；新增 kind 必须补齐 schema、因果引用和幂等 terminal 测试。
+
+## 持续观察与积压恢复
+
+Kaguya 是观察式系统。入站信息先经过廉价过滤，再由快模型稀疏观察并选择 `message`、`wait` 或 `silent`；只有决定行动才进入慢模型正文生成。`turn`、`candidate` 和 `claim` 仅表示持久化调度、幂等和并发控制事实，不定义逐条消息或逐批回合。
+
+Heartbeat 在创建阶段防积压：每 scope 通过事务开放槽共享一个 candidate，开放期间的新消息推进账本水位。普通群消息保持稀疏节奏；私聊、@、回复机器人和高显著信号提升当前观察。已经冻结或执行中的模型任务不因新消息重复启动，终态后按最新水位最多安排一次必要的后续观察。
+
+恢复阶段执行一次爬楼：旧积压先合并尚未消费的来源，再冻结一个认领的输入并终结其他 candidate；身份信息迟到时仍复用冻结来源。不得按历史顺序逐个调用模型或发送。修改 Heartbeat、Heartflow、Planner 或 Message Composer 时，必须覆盖开放期间来消息、即时唤醒、旧积压与身份屏障恢复、操作重放、迟到结果、快慢模型及最终动作唯一性，并验证在线查询成本不随历史 candidate/claim 数量线性增长。历史规模测试应同时检查结果与查询范围或索引计划，不能仅以少量样本的耗时作为证明。

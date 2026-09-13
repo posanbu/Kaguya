@@ -1,6 +1,7 @@
 /**
  * 功能概述：验证 Core 执行 Information Selector 时的顺序、授权与加载边界。
  * 主要职责：使用真实 `InformationCore` 和内存账本覆盖有序返回、重复 ID、未知 ID、
+ * 恢复引用集合支持 offset 分页，超过每页 1000 条仍保持完整来源与授权。
  * 越权 ID、缺失 source 以及校验后原子消失等稳定失败语义。
  * 代码库关系：测试消费 SDK 的 `defineInformationSelector`，并面向 Engine 公共入口；
  * 账本替身实现与生产 `InformationLedger` 相同的结构化 find 和引用查询端口。
@@ -613,4 +614,41 @@ describe("Information Selector", () => {
       }
     }
   });
+});
+
+it("pages a recovery claim's references beyond the 1000-atom selector limit", async () => {
+  const { core, ledger, source } = await fixture();
+  const references = Array.from({ length: 1005 }, (_, i) => {
+    const id = `recovery-${i}`;
+    ledger.atoms.set(
+      id,
+      directAtom({
+        informationId: id,
+        kind: memoryKind.kind,
+        occurredAt: source.occurredAt,
+      }),
+    );
+    return { relation: "core:uses-context", informationId: id };
+  });
+  ledger.atoms.set(source.informationId, directAtom({ ...source, references }));
+  const selector = defineInformationSelector({
+    selectorId: "test.recovery-pages",
+    async select({ sourceAtom, ledger }) {
+      const first = await ledger.related({
+        from: [sourceAtom.informationId],
+        relation: "core:uses-context",
+        direction: "outgoing",
+        limit: 1000,
+      });
+      const second = await ledger.related({
+        from: [sourceAtom.informationId],
+        relation: "core:uses-context",
+        direction: "outgoing",
+        offset: 1000,
+        limit: 1000,
+      });
+      return [...first, ...second].map((a) => a.informationId);
+    },
+  });
+  expect(await select(core, selector, source.informationId)).toHaveLength(1005);
 });

@@ -32,6 +32,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { fixture as messageFixture } from "../message-composer/test-fixtures.js";
 import { createHeartflowModule, heartflowSettingsSchema } from "./index.js";
 import {
+  observationWakeInformationKind,
   heartbeatFiredInformationKind,
   heartbeatScheduledInformationKind,
   inboundTextInformationKind,
@@ -142,7 +143,7 @@ afterEach(async () => {
   }
 });
 
-async function fixture() {
+async function fixture(startImmediately = true) {
   execute.mockClear();
   const database = await createTestingDatabase();
   await database.prepareSchema();
@@ -194,21 +195,23 @@ async function fixture() {
     ],
   });
   await core.start();
-  await host.start([
-    {
-      instanceId: "heartflow.test",
-      definitionId: module.manifest.definitionId,
-      settings: {
-        botNames: ["Kaguya", "辉夜"],
-        groupFrequency: 1,
-        privateFrequency: 1,
-        muted: false,
-        staleAfterMs: 120_000,
+  const start = () =>
+    host.start([
+      {
+        instanceId: "heartflow.test",
+        definitionId: module.manifest.definitionId,
+        settings: {
+          botNames: ["Kaguya", "辉夜"],
+          groupFrequency: 1,
+          privateFrequency: 1,
+          muted: false,
+          staleAfterMs: 120_000,
+        },
       },
-    },
-  ]);
+    ]);
+  if (startImmediately) await start();
   resources.push({ host, core, database });
-  return { core, database, module };
+  return { core, database, module, start };
 }
 
 async function appendCandidate(
@@ -349,7 +352,7 @@ async function appendCandidate(
   });
   if (input.appendIdentity !== false && input.identityBeforeCandidate === false)
     await appendIdentity();
-  return { context, inbound, candidate };
+  return { context, inbound, candidate, appendIdentity };
 }
 
 async function atoms(
@@ -1128,4 +1131,171 @@ describe("Planner durable dispatch", () => {
       ),
     ).toBe(false);
   });
+});
+
+it("recovers legacy unclaimed backlog with one frozen context and one model/action decision", async () => {
+  const f = await fixture(false);
+  const backlog = [];
+  for (let i = 0; i < 12; i++)
+    backlog.push(
+      await appendCandidate(f.core, {
+        requestId: `legacy-${i}`,
+        text: `legacy ${i}`,
+        occurredAt: `2026-09-08T00:00:${String(i).padStart(2, "0")}.000Z`,
+        identityBeforeCandidate: true,
+      }),
+    );
+  await f.start();
+  await appendCandidate(f.core, {
+    requestId: "newest",
+    text: "newest",
+    occurredAt: "2026-09-08T00:00:20.000Z",
+    identityBeforeCandidate: true,
+  });
+  await waitForKind(f.database, turnContextCompletedInformationKind.kind);
+  const contexts = await (
+    await atoms(f.database)
+  ).filter((a) => a.kind === turnContextCompletedInformationKind.kind);
+  expect(contexts).toHaveLength(1);
+  expect((contexts[0]!.payload as any).inputs).toHaveLength(13);
+  expect(
+    await (
+      await atoms(f.database)
+    ).filter((a) => a.kind === turnSupersededInformationKind.kind),
+  ).toHaveLength(12);
+  const claims = await (
+    await atoms(f.database)
+  ).filter((a) => a.kind === turnClaimedInformationKind.kind);
+  expect(claims).toHaveLength(1);
+  await submitDecision(f.core, f.database, "attend");
+  await waitForKind(f.database, messageIntentRequestedInformationKind.kind);
+  expect(execute).toHaveBeenCalledTimes(1);
+  expect(
+    await (
+      await atoms(f.database)
+    ).filter((a) => a.kind === messageIntentRequestedInformationKind.kind),
+  ).toHaveLength(1);
+});
+
+it("preserves merged inputs across an unfinished identity barrier and delayed identity replay", async () => {
+  const f = await fixture(false);
+  const old = await appendCandidate(f.core, {
+    requestId: "missing-identity",
+    text: "old",
+    occurredAt: "2026-09-08T00:00:01.000Z",
+    appendIdentity: false,
+  });
+  await f.start();
+  await appendCandidate(f.core, {
+    requestId: "ready",
+    text: "new",
+    occurredAt: "2026-09-08T00:00:02.000Z",
+  });
+  await waitForKind(f.database, turnClaimedInformationKind.kind);
+  expect(
+    (await atoms(f.database)).filter(
+      (a) => a.kind === turnContextCompletedInformationKind.kind,
+    ),
+  ).toHaveLength(0);
+  await old.appendIdentity();
+  const context = await waitForKind(
+    f.database,
+    turnContextCompletedInformationKind.kind,
+  );
+  expect(
+    (context.payload as any).inputs.map((i: any) => i.informationId),
+  ).toContain(old.inbound.informationId);
+  expect((context.payload as any).inputs).toHaveLength(2);
+});
+
+it("refreshes the unique observation with an urgent input before context freezing", async () => {
+  const f = await fixture(false);
+  const original = await appendCandidate(f.core, {
+    requestId: "waiting-identity",
+    text: "ordinary",
+    occurredAt: "2026-09-08T00:00:01.000Z",
+    appendIdentity: false,
+  });
+  const urgent = await f.core.register(inboundTextInformationKind, {
+    occurredAt: "2026-09-08T00:00:02.000Z",
+    source: "adapter:test",
+    payload: {
+      text: "urgent",
+      source: {
+        ...(original.inbound.payload as any).source,
+        platformMessageId: "urgent",
+        selfId: "bot",
+        mentions: [{ kind: "user", id: "bot" }],
+      },
+    },
+    references: [
+      {
+        relation: "core:context",
+        informationId: original.context.informationId,
+      },
+    ],
+  });
+  await f.start();
+  await f.core.registerOnce(
+    "test.wake",
+    "urgent",
+    observationWakeInformationKind,
+    {
+      occurredAt: urgent.occurredAt,
+      source: "module:heartbeat",
+      payload: {
+        scopeKey: String(original.candidate.payload.scopeKey),
+        immediate: true,
+      },
+      references: [
+        { relation: "core:caused-by", informationId: urgent.informationId },
+        {
+          relation: "core:context",
+          informationId: original.context.informationId,
+        },
+        {
+          relation: "agent:turn-candidate",
+          informationId: original.candidate.informationId,
+        },
+        { relation: "core:uses-context", informationId: urgent.informationId },
+      ],
+    },
+  );
+  await waitForKind(f.database, turnClaimedInformationKind.kind);
+  await original.appendIdentity();
+  await f.core.register(personContextCompletedInformationKind, {
+    occurredAt: urgent.occurredAt,
+    source: "module:identity",
+    payload: {
+      status: "unresolved",
+      scopeMode: "ephemeral",
+      platform: "web",
+      adapterId: "adapter",
+    },
+    references: [
+      { relation: "core:caused-by", informationId: urgent.informationId },
+      {
+        relation: "core:context",
+        informationId: original.context.informationId,
+      },
+      { relation: "core:status-of", informationId: urgent.informationId },
+    ],
+  });
+  const frozen = await waitForKind(
+    f.database,
+    turnContextCompletedInformationKind.kind,
+  );
+  expect(frozen.payload.candidateInformationId).toBe(
+    original.candidate.informationId,
+  );
+  expect((frozen.payload.inputs as any[]).map((i) => i.text)).toEqual([
+    "ordinary",
+    "urgent",
+  ]);
+  expect(frozen.payload.mentionedSelf).toBe(true);
+  expect(
+    (await atoms(f.database)).filter(
+      (a) => a.kind === turnCandidateInformationKind.kind,
+    ),
+  ).toHaveLength(1);
 });

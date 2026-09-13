@@ -379,3 +379,89 @@ it("advances other subscriptions while a background provider is still running", 
   await vi.waitFor(() => expect(finished).toBe(2));
   expect(slowCalls).toBe(1);
 });
+
+it("coalesces concurrent scoped registrations and never reopens an old operation", async () => {
+  const { core, db } = await setup();
+  const scoped = () => ({
+    ...input(),
+    openScope: { key: "chat", terminalGroup: "test.done" },
+  });
+  const winners = await Promise.all(
+    Array.from({ length: 20 }, (_, n) =>
+      core.registerOnce("test.observation", `wake-${n}`, output, scoped()),
+    ),
+  );
+  expect(new Set(winners.map((a) => a.informationId)).size).toBe(1);
+  await core.commitTerminal(
+    "test.done",
+    winners[0]!.informationId,
+    source,
+    input(),
+  );
+  const next = await core.registerOnce(
+    "test.observation",
+    "next",
+    output,
+    scoped(),
+  );
+  expect(next.informationId).not.toBe(winners[0]!.informationId);
+  const replay = await core.registerOnce(
+    "test.observation",
+    "wake-1",
+    output,
+    scoped(),
+  );
+  expect(replay.informationId).toBe(winners[0]!.informationId);
+  expect(
+    await db.information.find({
+      kinds: [output.kind],
+      openOnly: true,
+      limit: 10,
+    } as any),
+  ).toEqual([next]);
+});
+
+it("reads one open result beyond 2000 historical candidates using the partial scope index", async () => {
+  const { core, db } = await setup();
+  // 直接批量构造历史投影，避免把 2000 次网络往返误当成在线 Selector 开销。
+  await db.sql.exec(`
+    INSERT INTO information_atoms(information_id,kind,occurred_at,source,payload)
+      SELECT 'history-' || n, 'test.output', '2026-09-01T00:00:00Z', 'module:test', '{"scopeKey":"chat"}'::jsonb
+      FROM generate_series(1,2000) n;
+    INSERT INTO information_lifecycle(information_id,kind,scope_key,occurred_at,is_open)
+      SELECT information_id,kind,'chat',occurred_at::timestamptz,false FROM information_atoms;
+  `);
+  const current = await core.registerOnce(
+    "test.open",
+    "current",
+    output,
+    input(),
+  );
+  await db.sql.query(
+    "UPDATE information_lifecycle SET scope_key='chat' WHERE information_id=$1",
+    [current.informationId],
+  );
+  const found = await db.information.find({
+    kinds: [output.kind],
+    scopeKey: "chat",
+    openOnly: true,
+    registrationOrder: true,
+    limit: 1,
+  });
+  expect(found.map((a) => a.informationId)).toEqual([current.informationId]);
+  await db.sql.exec("ANALYZE information_lifecycle");
+  const plan = await db.sql.query(
+    `EXPLAIN (FORMAT JSON) SELECT information_id FROM information_lifecycle WHERE kind='test.output' AND scope_key='chat' AND is_open ORDER BY position DESC LIMIT 1`,
+  );
+  expect(JSON.stringify(plan.rows)).toContain(
+    "information_lifecycle_scope_idx",
+  );
+  await db.prepareSchema();
+  expect(
+    await db.information.find({
+      kinds: [output.kind],
+      openOnly: true,
+      limit: 10,
+    }),
+  ).toHaveLength(1);
+});

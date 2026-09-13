@@ -1,4 +1,5 @@
 /**
+ * ModuleRegistrationInput.openScope 为 registerOnce 声明开放范围及释放终态组，仍由 Core 验证并提交。
  * promptTemplates 显式声明模块模板归属，Catalog 冻结其变量、partial 与组成关系。
  * 功能概述：定义唯一版本化模块协议、显式 Catalog 与受控能力边界，供模块作者和 Host 共用。
  * 主要职责：defineInformationModule 校验静态清单；Catalog 确定性合并并拒绝身份冲突；
@@ -163,6 +164,8 @@ export type InformationModuleLifecycleContext = InformationModuleCreateContext;
 export interface ModuleRegistrationInput<P> {
   readonly payload: P;
   readonly references?: readonly InformationReference[];
+  /** registerOnce 的同 scope 开放槽；仅 terminalGroup 的终态释放该槽，操作重放仍复用原赢家。 */
+  readonly openScope?: { readonly key: string; readonly terminalGroup: string };
   readonly contextInformationId?: InformationId;
 }
 export interface InformationModuleHandlerContext extends InformationModuleCreateContext {
