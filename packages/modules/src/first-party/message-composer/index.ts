@@ -8,6 +8,7 @@
  * 代码库关系：message-context 选择冻结上下文，message-prompt 编译全部本轮输入；Runtime 注入模型能力及完成定义。
  * 输入输出与副作用：意图只携带 target、turn 与 memoryInformationIds；assistant.source 保留 target，
  * 不复制入站正文或消息 ID，不提供固定路由或自动引用回复。失败或取消的模型任务不产生 assistant。
+ * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
  */
 import {
   messageConfirmedInformationKind,
@@ -265,10 +266,10 @@ export function createMessageComposerModule<
       ],
       provides: [],
       definitionId: "agent.message-composer",
-      displayName: "Message composer",
-      summary: "Generates a message from an explicitly selected turn context.",
+      displayName: "消息合成",
+      summary: "根据显式选定的冻结上下文生成待投递正文。",
       description:
-        "Compiles explicitly selected frozen context, dispatches one text Model Task, and records assistant and delivery requests. It generates message text but does not decide whether an event deserves attention or perform general planning.",
+        "消费消息意图与模型结果，选择历史、记忆及当前输入并编译 Prompt，通过 Model Task 生成正文；输出助手消息与投递请求，跨会话正文需经宿主确认后释放。",
       settingsSchema: messageComposerSettingsSchema,
       consumes: [
         messageConfirmedInformationKind,

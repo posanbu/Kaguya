@@ -108,10 +108,10 @@ export const heartbeatModule = defineInformationModule({
     protocolVersion: 1,
     moduleVersion: "1.0.0",
     definitionId: "agent.heartbeat.short",
-    displayName: "Durable short heartbeat",
-    summary: "Debounces and durably reawakens pending agent turns.",
+    displayName: "持久化短心跳",
+    summary: "合并入站与等待信号，可靠唤醒待处理回合。",
     description:
-      "Durably debounces inbound and wait signals into recoverable turn candidates. Scheduling remains a capability boundary: this module owns aggregation semantics while the Scheduler owns persistence and firing.",
+      "消费入站消息和等待请求，按防抖、替换及预算策略提交单次调度；到期后输出回合候选与心跳终态，持久化和触发由 Scheduler 能力负责。",
     settingsSchema: heartbeatSettingsSchema,
     consumes: [
       inboundTextInformationKind,

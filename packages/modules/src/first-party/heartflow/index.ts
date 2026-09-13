@@ -9,6 +9,7 @@
  * dispatchDecision 仅将独立 Planner 的获胜 message 结果按 claim 注册一次意图，末条输入决定目标；
  * turn 标识及引用保留完整冻结上下文，正文生成交给 composer。defer/ignore 与失败路径
  * 写入等待或终态；registerOnce/commitTerminal 保证重放幂等，模型 I/O 经宿主 capability 执行，平台 I/O 由 delivery 层负责。
+ * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
  */
 import {
   type MessageAuthorization,
@@ -328,10 +329,10 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
       protocolVersion: 1,
       moduleVersion: "1.0.0",
       definitionId: "agent.heartflow.online",
-      displayName: "Information DAG heartflow",
-      summary: "Coordinates reliable online agent-turn progression.",
+      displayName: "在线回合编排",
+      summary: "协调候选认领、上下文冻结、规划和回合终态。",
       description:
-        "Coordinates candidate claims, identity barriers, as-of frozen context, attention routing, and turn terminals. It owns reliable online progression without implementing attention scoring, model generation, or transport.",
+        "消费回合候选及身份、注意力、模型和投递结果，经身份屏障冻结上下文，再请求 Planner 选择发言、等待或静默；输出消息意图、等待请求和回合终态，不执行平台传输。",
       settingsSchema: heartflowSettingsSchema,
       consumes: [
         turnCandidateInformationKind,

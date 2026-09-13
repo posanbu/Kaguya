@@ -7,6 +7,7 @@
  * 代码库关系：Heartflow 调用通用 Model Task 并以 claim 竞争决策锁；Composer 仅处理获胜 message 意图。
  * 输入输出与副作用：模型只有 message/wait/silent 三个分支，故障原因由宿主写入；选择器只读账本，
  * Prompt 中的用户文本属于数据，不具有指令权限。原始 Prompt 与模型结果不写普通日志。
+ * 展示契约：中文名称与职责说明由定义直接提供给 Inspection 和 WebUI，稳定 kind 与协议字段保持不变。
  */
 import {
   z,
@@ -55,9 +56,9 @@ export const plannerActionSchema = z.discriminatedUnion("action", [
 export type PlannerAction = z.infer<typeof plannerActionSchema>;
 export const plannerDecisionInformationKind = defineInformationKind({
   kind: "agent.turn.plan.completed",
-  displayName: "Agent Turn Plan Completed",
+  displayName: "回合规划结果",
   description:
-    "Validated, fenced Heartflow action; unavailable planning closes silently.",
+    "Planner 输出通过严格校验并获得决策锁后登记发言、等待或静默；Heartflow 只分派获胜结果，规划不可用时以静默闭合。",
   payloadSchema: z
     .object({
       gateInformationId: z.string().min(1),
