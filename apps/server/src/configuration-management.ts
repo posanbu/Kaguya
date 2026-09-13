@@ -1,4 +1,5 @@
 /**
+ * Profile 投影和 replace 分别克隆两个方向的白名单，只合并这两个字段回隐藏 runtime。
  * 功能概述：本文件为 `apps/server` 提供异步 `ConfigurationManagement` 门面，
  * 负责在服务层把 `@kaguya/config` 的显式 Profile Registry 生命周期包装成
  * HTTP 与启动流程可复用的管理接口，并单独维护 selected Profile 的待应用状态。
@@ -42,14 +43,16 @@ export type ConfigurationRegistryStatus =
     });
 
 export type EditableUserConfigProfile = Omit<UserConfigProfile, "runtime"> & {
-  readonly gatewayAllowlist: readonly string[];
+  readonly inboundAllowlist: readonly string[];
+  readonly outboundAllowlist: readonly string[];
 };
 
 export type EditableProfileReplacement = Omit<
   ReplaceUserConfigProfileInput,
   "runtime"
 > & {
-  readonly gatewayAllowlist: readonly string[];
+  readonly inboundAllowlist: readonly string[];
+  readonly outboundAllowlist: readonly string[];
 };
 
 export interface ProfileMutationResult {
@@ -171,12 +174,14 @@ export async function createConfigurationManagement(
           "Profile runtime is required to edit the gateway allowlist",
         );
       }
-      const { gatewayAllowlist, ...visibleReplacement } = replacement;
+      const { inboundAllowlist, outboundAllowlist, ...visibleReplacement } =
+        replacement;
       const profile = await manager.replaceProfile(profileId, {
         ...visibleReplacement,
         runtime: {
           ...current.runtime,
-          gatewayAllowlist: [...gatewayAllowlist],
+          inboundAllowlist: [...inboundAllowlist],
+          outboundAllowlist: [...outboundAllowlist],
         },
       });
       restartRequired =
@@ -235,7 +240,8 @@ function toEditableProfile(
   const { runtime, ...visible } = structuredClone(profile);
   return {
     ...visible,
-    gatewayAllowlist: [...(runtime?.gatewayAllowlist ?? [])],
+    inboundAllowlist: [...(runtime?.inboundAllowlist ?? [])],
+    outboundAllowlist: [...(runtime?.outboundAllowlist ?? [])],
   };
 }
 

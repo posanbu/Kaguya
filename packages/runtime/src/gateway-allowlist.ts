@@ -1,5 +1,6 @@
 /**
- * 功能概述：实现 Server 配置的平台入站与最终出站 allowlist 判定，作为调用 Core ingress 前的纯策略。
+ * GatewayAllowlist 只复用规则算法，不共享方向配置；宿主分别实例化入站和出站策略。
+ * 功能概述：实现 Server 配置的平台入站与最终出站 allowlist 判定，两个方向由宿主分别创建实例的纯策略。
  * 主要职责：`GatewayAllowlist` 解析 `platform:chat-type:target-id` 字符串规则，并按
  * 平台、群 ID 或私聊用户 ID 匹配；Web 消息始终放行，继续只由 HTTP Bearer Token 边界控制。
  * 代码库关系：Server composition 从 Profile runtime 配置构造本类并把 `allows` 以谓词注入 NapCat
@@ -17,7 +18,7 @@ interface GatewayAllowlistRule {
 }
 
 /**
- * Inbound gateway policy for platform messages.
+ * Directional gateway policy for platform messages.
  *
  * Rules are ORed. An empty rule list denies all non-Web platform messages.
  */
@@ -39,7 +40,7 @@ export class GatewayAllowlist {
     return this.allowsDestination(message.platform, message.target);
   }
 
-  /** 入站与最终出站共享策略；Web 仍由管理/网关认证控制。 */
+  /** 入站与最终出站复用匹配算法，规则实例独立；Web 仍由管理/网关认证控制。 */
   allowsDestination(
     platform: string,
     destination: PlatformDestination,

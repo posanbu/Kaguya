@@ -1,4 +1,5 @@
 /**
+ * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * 超时回归覆盖秒/毫秒往返、空值默认和非法值拒绝，并验证保存不丢失其他 Provider 数据。
  * 架构说明：本测试文件定义 Web 端 Profile 编辑器的纯函数边界，
  * 用来保证展示层字段与完整 Profile 之间的映射不会丢失任何未展示的
@@ -28,7 +29,8 @@ const completeProfile: UserConfigProfile = {
   version: 1,
   id: "b3f1d59f-f1e2-4b63-b9de-d1aa8d0d1c44",
   name: "Production",
-  gatewayAllowlist: ["qq:group:778899", "invalid-rule"],
+  inboundAllowlist: ["qq:group:778899", "invalid-rule"],
+  outboundAllowlist: ["qq:group:778899", "invalid-rule"],
   identity: {
     name: "Kaguya",
     aliases: ["辉夜", "Moon"],
@@ -88,7 +90,8 @@ const emptyDefaultProfile: UserConfigProfile = {
   version: 1,
   id: "default",
   name: "default",
-  gatewayAllowlist: [],
+  inboundAllowlist: [],
+  outboundAllowlist: [],
   identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
   ai: {
     providers: [],
@@ -101,7 +104,8 @@ const warningProfile: UserConfigProfile = {
   version: 1,
   id: "warning-profile",
   name: "Warning",
-  gatewayAllowlist: ["*:private:*"],
+  inboundAllowlist: ["*:private:*"],
+  outboundAllowlist: ["*:private:*"],
   identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
   ai: {
     defaultProviderId: "default-provider",
@@ -146,7 +150,8 @@ describe("profileToEditorFields", () => {
       heavyThinkingEnabled: true,
       heavyReasoningEffort: "provider-default",
       heavyRecommendedDurationMs: "5000",
-      gatewayAllowlistText: "qq:group:778899\ninvalid-rule",
+      inboundAllowlistText: "qq:group:778899\ninvalid-rule",
+      outboundAllowlistText: "qq:group:778899\ninvalid-rule",
       memoryEnabled: true,
     });
   });
@@ -169,7 +174,8 @@ describe("profileToEditorFields", () => {
       heavyThinkingEnabled: true,
       heavyReasoningEffort: "provider-default",
       heavyRecommendedDurationMs: "5000",
-      gatewayAllowlistText: "",
+      inboundAllowlistText: "",
+      outboundAllowlistText: "",
       memoryEnabled: false,
     });
   });
@@ -221,14 +227,15 @@ describe("mergeProfileEditorFields", () => {
       apiKey: "provider-secret-v2",
       lightModel: "light-model-v2",
       heavyModel: "heavy-model-v2",
-      gatewayAllowlistText:
+      inboundAllowlistText:
         " qq:group:778899 \n\ninvalid-rule\nqq:group:778899",
       memoryEnabled: false,
     });
 
     expect(merged).toEqual({
       name: "Production v2",
-      gatewayAllowlist: ["qq:group:778899", "invalid-rule", "qq:group:778899"],
+      inboundAllowlist: ["qq:group:778899", "invalid-rule", "qq:group:778899"],
+      outboundAllowlist: ["qq:group:778899", "invalid-rule"],
       identity: {
         name: "Luna",
         aliases: ["月", "Moon"],
@@ -305,7 +312,8 @@ describe("mergeProfileEditorFields", () => {
 
     expect(merged).toEqual({
       name: "default",
-      gatewayAllowlist: [],
+      inboundAllowlist: [],
+      outboundAllowlist: [],
       identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
       acknowledgedWarnings: [],
       ai: {
@@ -394,3 +402,23 @@ it.each(["0", "-1", "301", "NaN", "0.0001", "Infinity"])(
     ).toThrow("模型超时");
   },
 );
+
+it("edits outbound rules without changing inbound rules and preserves separate empty lists", () => {
+  const fields = profileToEditorFields(completeProfile);
+  const merged = mergeProfileEditorFields(completeProfile, {
+    ...fields,
+    outboundAllowlistText: " *:private:* \n qq:group:REPLACE_GROUP_ID ",
+  });
+  expect(merged.inboundAllowlist).toEqual(completeProfile.inboundAllowlist);
+  expect(merged.outboundAllowlist).toEqual([
+    "*:private:*",
+    "qq:group:REPLACE_GROUP_ID",
+  ]);
+  expect(
+    mergeProfileEditorFields(completeProfile, {
+      ...fields,
+      inboundAllowlistText: "",
+      outboundAllowlistText: "",
+    }),
+  ).toMatchObject({ inboundAllowlist: [], outboundAllowlist: [] });
+});

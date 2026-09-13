@@ -1,4 +1,5 @@
 /**
+ * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * 功能概述：验证热应用协调器的快照一致性、并发隔离、回滚与停机边界。
  * 主要职责：通过可控资源栅栏模拟并发保存、启动/关闭失败；确认公开结果不包含配置秘密。
  * 代码库关系：直接驱动 ConfigurationApplication，生命周期回调可控，实际 Server 集成另测。
@@ -37,7 +38,8 @@ function fixture(ready = true) {
         rateLimitWindowMs: 60000,
         logLevel: "silent",
         logFormat: "json",
-        gatewayAllowlist: [],
+        inboundAllowlist: [],
+        outboundAllowlist: [],
       },
     },
     moduleConfigs: [

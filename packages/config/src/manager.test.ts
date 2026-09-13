@@ -1,4 +1,5 @@
 /**
+ * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * 功能概述：本测试文件覆盖 `packages/config/src/manager.ts` 的文件制配置注册表实现，
  * 重点验证 v1 `index.json` 与各 Profile 文件之间的持久化契约、显式 bootstrap 流程、
  * Profile 生命周期、回滚/原子写入语义，以及运行时输入边界的失败关闭行为。
@@ -1222,7 +1223,8 @@ describe("FileUserConfigManager corruption safety", () => {
       rateLimitWindowMs: 60_000,
       logLevel: "info",
       logFormat: "json",
-      gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
+      inboundAllowlist: { platforms: [], userIds: [], groupIds: [] },
+      outboundAllowlist: [],
     };
     await writeFile(path, JSON.stringify(profile), "utf8");
 
@@ -1235,7 +1237,7 @@ describe("FileUserConfigManager corruption safety", () => {
       validationIssues: [
         expect.objectContaining({
           code: "invalid_type",
-          path: "runtime.gatewayAllowlist",
+          path: "runtime.inboundAllowlist",
         }),
       ],
     });

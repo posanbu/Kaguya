@@ -1,10 +1,11 @@
 /**
+ * 启动和显式热应用分别把 inboundAllowlist 交给 AdapterHost、outboundAllowlist 交给 Runtime 及目标授权服务。
  * 功能概述：Server composition root，组合配置、数据库、Runtime、HTTP/Web 与 NapCat 生命周期。
  * 主要职责：startKaguyaServer 验证 Profile 和模块配置后启动宿主；close 逆序释放资源；
  * createRuntimeModelSelectionResolver 根据 Profile 批准的 tier 解析 provider/model、思考参数及硬超时。
  * Memory provider 由共享 composition 从 selected Profile 显式创建，重启/热应用使用相同配置边界。
  * 代码库关系：Runtime 业务装配统一来自 @kaguya/composition；createMessageCatalog/createMessageComposition 装配消息编写模块；AdapterHost
- * 启动及显式应用将生效 GatewayAllowlist 注入 Runtime，出站恢复领取使用所属配置策略。
+ * 启动及显式应用将生效出站 GatewayAllowlist 注入 Runtime，出站恢复领取使用所属配置策略。
  * 管理适配器；inspectModules 和账本只读端口交给 inspection.ts，配置仅用于秘密脱敏闭包。
  * 启动只接受严格 v1 Registry，不自动迁移旧配置；用户须先手动更新配置。
  * ConfigurationApplication 保留 HTTP/Token/数据库，串行替换完整 Runtime/AdapterHost；
@@ -193,7 +194,7 @@ export async function startKaguyaServer(
   serverLogger ??= createModuleLogger(rootLogger, "server");
   const gatewayAuth = createGatewayAuthenticator(config.gatewayToken);
   const httpLogger = createModuleLogger(rootLogger, "server:http");
-  let adapterHost = new AdapterHost(rootLogger, config.gatewayAllowlist);
+  let adapterHost = new AdapterHost(rootLogger, config.inboundAllowlist);
   let app: FastifyInstance | undefined;
   let webUi: WebUiHandle | undefined;
   let application: ConfigurationApplication | undefined;
@@ -264,7 +265,7 @@ export async function startKaguyaServer(
     ) {
       try {
         runtime = new KaguyaRuntime({
-          gatewayAllowlist: new GatewayAllowlist(config.gatewayAllowlist),
+          outboundAllowlist: new GatewayAllowlist(config.outboundAllowlist),
           targetDirectory: adapterHost,
           database,
           logger: rootLogger,
@@ -414,7 +415,8 @@ export async function startKaguyaServer(
       start: async (snapshot) => {
         const nextConfig = {
           ...config,
-          gatewayAllowlist: snapshot.profile.runtime!.gatewayAllowlist,
+          inboundAllowlist: snapshot.profile.runtime!.inboundAllowlist,
+          outboundAllowlist: snapshot.profile.runtime!.outboundAllowlist,
           napcat: inspectNapCatConfig(snapshot.profile),
         };
         const nextHost = createServerAdapterHost(nextConfig, rootLogger);
@@ -426,7 +428,9 @@ export async function startKaguyaServer(
             await prepareConfigurationDatabase(database);
           }
           nextRuntime = new KaguyaRuntime({
-            gatewayAllowlist: new GatewayAllowlist(nextConfig.gatewayAllowlist),
+            outboundAllowlist: new GatewayAllowlist(
+              nextConfig.outboundAllowlist,
+            ),
             targetDirectory: nextHost,
             database,
             logger: rootLogger,
@@ -565,7 +569,7 @@ function createServerAdapterHost(
   config: ServerConfig,
   logger: KaguyaLogger,
 ): AdapterHost {
-  const host = new AdapterHost(logger, config.gatewayAllowlist);
+  const host = new AdapterHost(logger, config.inboundAllowlist);
   host.register({
     adapterId: "web.ui.main",
     type: "web",

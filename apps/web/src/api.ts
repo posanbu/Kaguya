@@ -1,4 +1,5 @@
 /**
+ * Profile 与替换请求必须同时包含两个方向的字符串数组，响应校验分别验证它们。
  * getConfigurationApplication/applyConfiguration 读取并提交配置 revision；保存响应携带同一写锁内的
  * application 快照，避免保存后再 GET 时误应用他人修改。热切换不会更换当前 Gateway Token。
  * ModelGenerationOptions.timeoutMs 随 Profile API 往返，限定为 1–300000 ms 硬超时。
@@ -94,7 +95,8 @@ export interface UserConfigProfile {
   readonly version: 1;
   readonly id: string;
   readonly name: string;
-  readonly gatewayAllowlist: readonly string[];
+  readonly inboundAllowlist: readonly string[];
+  readonly outboundAllowlist: readonly string[];
   readonly identity: {
     readonly name: string;
     readonly aliases: readonly string[];
@@ -180,7 +182,8 @@ export interface CreateProfileInput {
 
 export interface ReplaceProfileInput {
   readonly name: string;
-  readonly gatewayAllowlist: readonly string[];
+  readonly inboundAllowlist: readonly string[];
+  readonly outboundAllowlist: readonly string[];
   readonly identity: UserConfigProfile["identity"];
   readonly acknowledgedWarnings: readonly string[];
   readonly ai: {
@@ -759,7 +762,8 @@ function isUserConfigProfile(value: unknown): value is UserConfigProfile {
     typeof value.id === "string" &&
     typeof value.name === "string" &&
     isProfileIdentity(value.identity) &&
-    isStringArray(value.gatewayAllowlist) &&
+    isStringArray(value.inboundAllowlist) &&
+    isStringArray(value.outboundAllowlist) &&
     isProfileAi(value.ai) &&
     isProfileMemory(value.memory) &&
     isProfilePlatformArray(value.platforms) &&

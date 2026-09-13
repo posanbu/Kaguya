@@ -94,19 +94,22 @@ await configs.replaceProfile("default", {
     rateLimitWindowMs: 60000,
     logLevel: "info",
     logFormat: "json",
-    gatewayAllowlist: ["qq:group:778899", "qq:private:112233"],
+    inboundAllowlist: ["qq:group:REPLACE_GROUP_ID"],
+    outboundAllowlist: ["qq:private:REPLACE_USER_ID"],
   },
   platforms: [],
   acknowledgedWarnings: [],
 });
 ```
 
-`runtime.gatewayAllowlist` is an array of case-sensitive
+`runtime.inboundAllowlist` and `runtime.outboundAllowlist` are independent arrays of case-sensitive
 `platform:group|private:target-id` rules. Rules are ORed; `platform` and the
-target ID accept `*`. An empty array denies every non-Web message. Malformed
+target ID accept `*`. An empty array denies non-Web messages only in its own direction. Inbound rules gate entry into Runtime; outbound rules gate target authorization and final delivery before transport is called. Malformed
 rules remain valid configuration strings but are ignored by the runtime.
 Any object-shaped or otherwise invalid allowlist is rejected as an ordinary
 schema error.
+
+旧版 `runtime.gatewayAllowlist` 不再接受，读取、启动及 API 保存均不会自动转换或覆盖配置文件。升级前备份配置目录，手动删除旧字段，并显式填写 `runtime.inboundAllowlist` 与 `runtime.outboundAllowlist` 两个数组。若要保持旧版双向使用同一规则的行为，可将旧数组复制到两个新字段；如需单向权限，分别编辑。缺少任一方向或同时保留旧字段都会校验失败。首次升级需重启以读取有效配置；之后保存或选择 Profile 仍只写盘，两套策略都在点击“应用当前配置”后切换。
 
 Create additional named profiles explicitly, then select one explicitly:
 

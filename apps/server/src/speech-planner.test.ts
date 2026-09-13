@@ -1,4 +1,5 @@
 /**
+ * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * 兼容 #136 的 agent.turn.plan 与 message/wait/silent 契约，仅增强已合并的单一 Planner 链。
  * 测试显式批准合成 QQ 目标，Runtime 未注入策略时默认拒绝非 Web 出站。
  * 功能概述：通过真实 Runtime/PGlite 与 DeepSeek-compatible HTTP mock 验证两层发言决策。
@@ -92,7 +93,7 @@ async function fixture(outputs: unknown[]) {
   const start = async () => {
     const runtime = new KaguyaRuntime({
       ...composition,
-      gatewayAllowlist: new GatewayAllowlist(["qq:private:*", "qq:group:*"]),
+      outboundAllowlist: new GatewayAllowlist(["qq:private:*", "qq:group:*"]),
       database,
       now: () => new Date(now),
       capabilities: (context) => {

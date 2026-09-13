@@ -1,4 +1,5 @@
 /**
+ * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * 功能概述：本文件验证服务层配置管理门面 `createConfigurationManagement`
  * 如何在 `apps/server` 内把底层 Profile Registry 包装成进程级 readiness 状态源，
  * 并把“磁盘上的 selected Profile readiness”与“当前进程是否需要重启”这两个概念分离。
@@ -61,7 +62,8 @@ describe("configuration management", () => {
       ).resolves.toMatchObject({
         id: created.profile.id,
         name: "work",
-        gatewayAllowlist: [],
+        inboundAllowlist: [],
+        outboundAllowlist: [],
         ai: { providers: [] },
       });
       await expect(management.getRegistryStatus()).resolves.toMatchObject({
@@ -139,7 +141,8 @@ describe("configuration management", () => {
 
       const replaced = await management.replaceProfile(created.profile.id, {
         name: created.profile.name,
-        gatewayAllowlist: [],
+        inboundAllowlist: [],
+        outboundAllowlist: [],
         acknowledgedWarnings: [],
         identity: created.profile.identity,
         ai: { providers: [] },
@@ -210,12 +213,13 @@ describe("configuration management", () => {
       ).resolves.toMatchObject({ runtime: runtimeFixture });
 
       const created = await management.createProfile("inherits-runtime");
-      expect(created.profile.gatewayAllowlist).toEqual([]);
+      expect(created.profile.inboundAllowlist).toEqual([]);
       expect(created.profile).not.toHaveProperty("runtime");
 
       await management.replaceProfile(original.id, {
         name: "default-edited",
-        gatewayAllowlist: ["qq:group:778899"],
+        inboundAllowlist: ["qq:group:778899"],
+        outboundAllowlist: ["*:private:*"],
         acknowledgedWarnings: [],
         identity: original.identity,
         ai: original.ai,
@@ -223,13 +227,15 @@ describe("configuration management", () => {
         platforms: original.platforms,
       });
       await expect(management.getProfile(original.id)).resolves.toMatchObject({
-        gatewayAllowlist: ["qq:group:778899"],
+        inboundAllowlist: ["qq:group:778899"],
+        outboundAllowlist: ["*:private:*"],
       });
       const reopened = await FileUserConfigManager.open({ rootDir: root });
       await expect(reopened.getProfile(original.id)).resolves.toMatchObject({
         runtime: {
           ...runtimeFixture,
-          gatewayAllowlist: ["qq:group:778899"],
+          inboundAllowlist: ["qq:group:778899"],
+          outboundAllowlist: ["*:private:*"],
         },
       });
     } finally {
@@ -237,39 +243,53 @@ describe("configuration management", () => {
     }
   });
 
-  it("rejects a persisted gateway token without modifying the profile", async () => {
-    const root = await mkdtemp(join(tmpdir(), "kaguya-configuration-strict-"));
-    try {
-      const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
-      const original = await manager.getProfile(manager.getSelectedProfileId());
-      await manager.replaceProfile(original.id, {
-        name: original.name,
-        acknowledgedWarnings: [],
-        identity: original.identity,
-        ai: original.ai,
-        memory: original.memory,
-        platforms: original.platforms,
-        runtime: runtimeFixture,
-      });
-      const profilePath = join(root, "profiles", "profile_default.json");
-      const persisted = JSON.parse(
-        await readFile(profilePath, "utf8"),
-      ) as Record<string, unknown>;
-      persisted.runtime = {
-        ...(persisted.runtime as Record<string, unknown>),
-        gatewayToken: "legacy-persisted-gateway-token",
-      };
-      const beforeOpen = `${JSON.stringify(persisted, null, 2)}\n`;
-      await writeFile(profilePath, beforeOpen);
+  it.each(["gatewayToken", "gatewayAllowlist"])(
+    "rejects persisted %s without modifying the profile",
+    async (legacyField) => {
+      const root = await mkdtemp(
+        join(tmpdir(), "kaguya-configuration-strict-"),
+      );
+      try {
+        const manager = await FileUserConfigManager.bootstrap({
+          rootDir: root,
+        });
+        const original = await manager.getProfile(
+          manager.getSelectedProfileId(),
+        );
+        await manager.replaceProfile(original.id, {
+          name: original.name,
+          acknowledgedWarnings: [],
+          identity: original.identity,
+          ai: original.ai,
+          memory: original.memory,
+          platforms: original.platforms,
+          runtime: runtimeFixture,
+        });
+        const profilePath = join(root, "profiles", "profile_default.json");
+        const persisted = JSON.parse(
+          await readFile(profilePath, "utf8"),
+        ) as Record<string, unknown>;
+        persisted.runtime = {
+          ...(persisted.runtime as Record<string, unknown>),
+          [legacyField]:
+            legacyField === "gatewayToken"
+              ? "legacy-persisted-gateway-token"
+              : ["*:group:*"],
+        };
+        const beforeOpen = `${JSON.stringify(persisted, null, 2)}\n`;
+        await writeFile(profilePath, beforeOpen);
 
-      await expect(createConfigurationManagement(root)).rejects.toMatchObject({
-        code: "CONFIG_CORRUPT_STORE",
-      });
-      await expect(readFile(profilePath, "utf8")).resolves.toBe(beforeOpen);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
+        await expect(createConfigurationManagement(root)).rejects.toMatchObject(
+          {
+            code: "CONFIG_CORRUPT_STORE",
+          },
+        );
+        await expect(readFile(profilePath, "utf8")).resolves.toBe(beforeOpen);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("rejects allowlist replacement when the target profile has no runtime", async () => {
     const root = await mkdtemp(join(tmpdir(), "kaguya-setup-no-runtime-"));
@@ -353,7 +373,8 @@ const runtimeFixture = {
   rateLimitWindowMs: 60_000,
   logLevel: "info" as const,
   logFormat: "json" as const,
-  gatewayAllowlist: [],
+  inboundAllowlist: [],
+  outboundAllowlist: [],
 };
 
 function readyProfileReplacement(
@@ -363,7 +384,8 @@ function readyProfileReplacement(
 ) {
   return {
     name,
-    gatewayAllowlist: ["*:group:*", "*:private:*"],
+    inboundAllowlist: ["*:group:*", "*:private:*"],
+    outboundAllowlist: ["*:group:*", "*:private:*"],
     acknowledgedWarnings: [],
     ...readyProfileSettings(lightModelId, heavyModelId),
   };

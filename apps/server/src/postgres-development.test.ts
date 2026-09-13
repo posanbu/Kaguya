@@ -1,4 +1,5 @@
 /**
+ * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * 功能概述：验证开发 PostgreSQL 准备、容器身份与 Profile 配置衔接。
  * 主要职责：模拟 Docker 命令与数据库预检；v3 回归验证启动拒绝旧配置且不改写文件、不触发数据库操作。
  * 代码库关系：覆盖 postgres-development 与 CLI 的测试清单，真实配置文件只写入临时目录。
@@ -504,7 +505,8 @@ function runtime(databaseUrl: string, databaseMode: "managed" | "external") {
     rateLimitWindowMs: 60_000,
     logLevel: "info" as const,
     logFormat: "pretty" as const,
-    gatewayAllowlist: [],
+    inboundAllowlist: [],
+    outboundAllowlist: [],
   };
 }
 

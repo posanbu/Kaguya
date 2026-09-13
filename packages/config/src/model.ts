@@ -1,4 +1,5 @@
 /**
+ * runtimeConfigSchema 要求独立的 inboundAllowlist/outboundAllowlist，拒绝旧 gatewayAllowlist；持久化文件需手动升级。
  * Memory 可选 embedding/cognition 配置只定义宿主端点与版本身份；enabled=false 时不装配任何 provider。
  * 架构说明：本模块拥有配置 Profile 与 Registry 的持久化 schema，
  * 负责 JSON 克隆、引用完整性与 v1 注册表不变量。它被配置管理器、
@@ -216,7 +217,8 @@ const runtimeConfigInnerSchema = z.strictObject({
     "silent",
   ]),
   logFormat: z.enum(["json", "pretty"]),
-  gatewayAllowlist: runtimeGatewayAllowlistSchema,
+  inboundAllowlist: runtimeGatewayAllowlistSchema,
+  outboundAllowlist: runtimeGatewayAllowlistSchema,
 });
 
 export const runtimeConfigSchema = runtimeConfigInnerSchema;

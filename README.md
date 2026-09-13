@@ -40,13 +40,15 @@ pnpm start
 
 启动不会自动迁移旧 Registry。升级后遇到 `CONFIG_CORRUPT_STORE` 时，先停止服务并手动备份整个 `KAGUYA_CONFIG_ROOT` 目录（包含 `index.json`、`profiles/` 和 `modules/`）；备份含凭据，请限制访问权限。
 
-对已知 v3 Registry，按新版格式手动更新所有被索引引用的 Profile：保留 ID、名称、模型及平台凭据，移除已退役的 `plugins` 和 `runtime.gatewayToken`，补齐缺失的 `identity`（name、至少一个不同于 name 的 aliases、非空 persona）与 `memory: { "enabled": false }`。runtime 需包含 `databaseMode`（按实际数据库选 managed 或 external）及 `gatewayAllowlist`（空数组拒绝平台消息）。完整字段定义见 [`@kaguya/config`](packages/config/README.md)。旧插件配置只保留在备份中，不自动启用为新版模块。
+旧版 `runtime.gatewayAllowlist` 不再接受，读取、启动及 API 保存均不会自动转换或覆盖配置文件。升级前备份配置目录，手动删除旧字段，并显式填写 `runtime.inboundAllowlist` 与 `runtime.outboundAllowlist` 两个数组。若要保持旧版双向使用同一规则的行为，可将旧数组复制到两个新字段；如需单向权限，分别编辑。缺少任一方向或同时保留旧字段都会校验失败。首次升级需重启以读取有效配置；之后保存或选择 Profile 仍只写盘，两套策略都在点击“应用当前配置”后切换。
+
+对已知 v3 Registry，按新版格式手动更新所有被索引引用的 Profile：保留 ID、名称、模型及平台凭据，移除已退役的 `plugins` 和 `runtime.gatewayToken`，补齐缺失的 `identity`（name、至少一个不同于 name 的 aliases、非空 persona）与 `memory: { "enabled": false }`。runtime 需包含 `databaseMode`（按实际数据库选 managed 或 external）及 `inboundAllowlist` 和 `outboundAllowlist`（空数组拒绝平台消息）。完整字段定义见 [`@kaguya/config`](packages/config/README.md)。旧插件配置只保留在备份中，不自动启用为新版模块。
 
 全部 Profile 符合 v1 后，再手动将索引版本改为 `1`，保留原来的 Profile 元数据和 `selectedProfileId`；不要只修改索引版本而跳过 Profile 更新。随后运行 `pnpm dev` 或 `pnpm start` 校验。若仍报错，按校验结果检查文件或停止服务后恢复整份备份。此过程不迁移数据库，也不修改独立模块配置；未知格式不应套用 v3 步骤。
 
 Web 配置页可分别设置轻量、重量模型的**模型调用超时**（0.001–300 秒，默认 300 秒）；该值覆盖模型请求及响应读取。推荐响应时间仍只是软预算。默认 durable lease 为 330 秒，为最长模型调用预留 30 秒提交余量；进程崩溃后的无主任务也可能要等租约到期才能恢复。
 
-使用 QQ 前必须配置 **Gateway Allowlist**：`qq:group:778899` 允许指定群，`qq:private:112233` 允许指定用户；`qq:group:*` 和 `qq:private:*` 分别允许所有群和私聊。空列表会拒绝所有非 Web 入站消息，因此 NapCat 显示已连接仍可能没有回复。保存并应用后，从实际 QQ 群或私聊发送消息，检查入站平台与最终 `core.delivery.delivered` 事实。
+使用 QQ 前分别配置**入站白名单**和**出站白名单**。规则如 `qq:group:REPLACE_GROUP_ID`、`qq:private:REPLACE_USER_ID`，占位 ID 必须换成实际目标；`qq:group:*` 和 `qq:private:*` 分别匹配所有群和私聊。入站空列表拒绝消息进入 Runtime，出站空列表拒绝机器人投递。因此 NapCat 已连接不代表能够接收或回复。保存并应用后，从实际 QQ 群或私聊发送消息，检查入站平台与最终 `core.delivery.delivered` 事实。
 
 热应用期间消息入口会短暂暂停，当前任务有界收尾；新配置启动失败时尝试恢复旧配置。文件手工修改不会自动触发应用，需在设置菜单中显式应用；不支持模块代码热更新。接口、失败恢复及仍需重启的字段见 [配置生效说明](packages/config/configuration-apply-design.md)。
 

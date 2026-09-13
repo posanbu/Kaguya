@@ -1,4 +1,5 @@
 /**
+ * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * 功能概述：通过真实 HTTP、配置文件、Runtime 与 PGlite 验证无进程重启的配置热应用。
  * 主要职责：覆盖凭据/人设/白名单/模块快照切换、旧入口 fencing、持久化写锁、回滚与恢复；启动拒绝旧索引且不改写。
  * 代码库关系：只替换外部数据库连接与模型 provider；server.ts 的应用编排和 HTTP 鉴权使用实际实现。
@@ -91,7 +92,8 @@ async function fixture(incomplete = false) {
       rateLimitWindowMs: 60000,
       logLevel: "silent" as const,
       logFormat: "json" as const,
-      gatewayAllowlist: [],
+      inboundAllowlist: [],
+      outboundAllowlist: [],
     },
   };
   const configured = await manager.replaceProfile("default", {
@@ -158,7 +160,8 @@ async function save(server: StartedKaguyaServer) {
       },
       memory: { enabled: true },
       platforms: loaded.platforms,
-      gatewayAllowlist: ["qq:group:123"],
+      inboundAllowlist: ["qq:group:123"],
+      outboundAllowlist: ["qq:group:123"],
     },
   });
   expect(response.statusCode).toBe(200);
@@ -329,7 +332,7 @@ it("recovers from startup configuration degradation after saving a complete prof
     method: "PUT",
     url: "/api/v1/profiles/default",
     headers,
-    payload: { ...settings, gatewayAllowlist: [] },
+    payload: { ...settings, inboundAllowlist: [], outboundAllowlist: [] },
   });
   expect(saved.statusCode).toBe(200);
   expect(
@@ -428,7 +431,12 @@ it("switches the selected Profile with matching applied identity", async () => {
     method: "PUT",
     url: `/api/v1/profiles/${id}`,
     headers,
-    payload: { ...settings, name: "alternate", gatewayAllowlist: [] },
+    payload: {
+      ...settings,
+      name: "alternate",
+      inboundAllowlist: [],
+      outboundAllowlist: [],
+    },
   });
   expect(saved.statusCode).toBe(200);
   expect(f.server.runtime).toBe(old);
@@ -497,3 +505,86 @@ it("rejects old configuration at server startup without migrating files", async 
     (await readdir(f.root)).some((name) => name.startsWith("migration-backup")),
   ).toBe(false);
 });
+
+it("keeps independent directional policies pending until explicit application", async () => {
+  vi.spyOn(AdapterHost.prototype, "listTargets").mockResolvedValue({
+    generation: "test-generation",
+    candidates: [
+      {
+        adapterId: "test",
+        platform: "qq",
+        destination: { kind: "group", groupId: "100" },
+        name: "group",
+      },
+      {
+        adapterId: "test",
+        platform: "qq",
+        destination: { kind: "private", userId: "200" },
+        name: "user",
+      },
+    ],
+  });
+  const f = await fixture();
+  const outboundStatus = async (value: string) =>
+    (await f.server.runtime!.messageTargets!.resolve({ mode: "id", value }))
+      .status;
+  const message = {
+    adapterId: "test",
+    platform: "qq" as const,
+    platformMessageId: "blocked",
+    text: "test",
+    occurredAt: new Date().toISOString(),
+    mentions: [],
+    sender: { userId: "200" },
+    target: { kind: "group" as const, groupId: "100" },
+    raw: {},
+  };
+  const loaded = (
+    await f.server.app.inject({ url: "/api/v1/profiles/default", headers })
+  ).json().data.profile;
+  const { version: _version, id: _id, review: _review, ...visible } = loaded;
+  const persist = async (
+    inboundAllowlist: string[],
+    outboundAllowlist: string[],
+  ) => {
+    const response = await f.server.app.inject({
+      method: "PUT",
+      url: "/api/v1/profiles/default",
+      headers,
+      payload: {
+        ...visible,
+        acknowledgedWarnings: [],
+        inboundAllowlist,
+        outboundAllowlist,
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    return response.json().data.application;
+  };
+  const saved = await persist(["*:group:*"], ["qq:private:200"]);
+  expect(f.server.adapterHost.acceptInbound(message)).toBe(false);
+  expect(await outboundStatus("200")).toBe("unauthorized");
+  expect((await apply(f.server, saved)).json().data.status).toBe("applied");
+  expect(f.server.adapterHost.acceptInbound(message)).toBe(true);
+  expect(
+    f.server.adapterHost.acceptInbound({
+      ...message,
+      target: { kind: "private", userId: "200" },
+    }),
+  ).toBe(false);
+  expect(await outboundStatus("100")).toBe("unauthorized");
+  expect(await outboundStatus("200")).toBe("resolved");
+  const next = await persist([], ["*:group:*"]);
+  expect(f.server.adapterHost.acceptInbound(message)).toBe(true);
+  expect((await apply(f.server, next)).json().data.status).toBe("applied");
+  await expect(f.server.adapterHost.ingress.submit(message)).rejects.toThrow(
+    "source-not-allowed",
+  );
+  expect(await outboundStatus("100")).toBe("resolved");
+  expect(
+    await f.databases[0]!.information.find({
+      kinds: ["core.message.inbound.text", "agent.turn.context.completed"],
+      limit: 10,
+    }),
+  ).toEqual([]);
+}, 20000);

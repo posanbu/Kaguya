@@ -1,9 +1,11 @@
 /**
+ * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * 功能概述：使用真实 PGlite/Runtime/Composer 验证管理端跨会话授权及投递终检。
  * 主要职责：覆盖目录解析、两次确认、上下文隔离、伪造目的地、断线代次和失败 turn；所有平台 I/O 使用 spy。
  * 代码库关系：正式 composition 提供确定性模型，MessageTargetService 使用假目录，账本保持真实持久化与 durable 消费。
  * 输入输出与副作用：每例独立内存数据库，测试后关闭 Runtime；不调用真实模型或 QQ。
  */
+import { AdapterHost } from "./adapter-host.js";
 import { Writable } from "node:stream";
 import { createLogger, closeLogger } from "@kaguya/logger";
 import { createMessageComposition } from "@kaguya/composition";
@@ -26,7 +28,10 @@ const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
   for (const fn of cleanups.splice(0).reverse()) await fn();
 });
-async function fixture() {
+async function fixture(
+  outboundRules = ["qq:group:100", "qq:group:300", "qq:private:200"],
+  inboundRules: string[] = [],
+) {
   const database = await createTestingDatabase();
   const logs: string[] = [];
   const stream = new Writable({
@@ -72,16 +77,12 @@ async function fixture() {
     moduleConfigs: createFirstPartyModuleConfigDefaults("test"),
   });
   let core!: RuntimeCapabilityContext["core"];
-  const policy = new GatewayAllowlist([
-    "qq:group:100",
-    "qq:group:300",
-    "qq:private:200",
-  ]);
+  const policy = new GatewayAllowlist(outboundRules);
   const runtime = new KaguyaRuntime({
     ...composition,
     database,
     logger,
-    gatewayAllowlist: policy,
+    outboundAllowlist: policy,
     targetDirectory: {
       listTargets: async () => {
         if (unavailable) throw new Error("secret-directory-response");
@@ -93,6 +94,8 @@ async function fixture() {
       return composition.capabilities(c);
     },
   });
+  const host = new AdapterHost(logger, inboundRules);
+  host.finalizeRuntime(runtime);
   const send = vi.fn(async (target: PlatformMessageTarget) => ({
     ok: true as const,
     adapterId: "test",
@@ -155,7 +158,7 @@ async function fixture() {
     const next = new KaguyaRuntime({
       ...composition,
       database,
-      gatewayAllowlist: new GatewayAllowlist([]),
+      outboundAllowlist: new GatewayAllowlist([]),
       targetDirectory: {
         listTargets: async () => ({ generation, candidates }),
       },
@@ -175,6 +178,7 @@ async function fixture() {
   };
   return {
     logs,
+    host,
     restart,
     getCore: () => core,
     runtime,
@@ -197,6 +201,22 @@ it.each(["100", "200"])(
   "resolves and sends %s only after target and content confirmation",
   async (id) => {
     const f = await fixture();
+    expect(
+      f.host.acceptInbound({
+        adapterId: "test",
+        platform: "qq",
+        platformMessageId: "denied",
+        occurredAt: new Date().toISOString(),
+        text: "test",
+        mentions: [],
+        sender: { userId: id },
+        raw: {},
+        target:
+          id === "100"
+            ? { kind: "group", groupId: id }
+            : { kind: "private", userId: id },
+      }),
+    ).toBe(false);
     expect(await f.service.resolve({ mode: "name", value: "missing" })).toEqual(
       { status: "not-found" },
     );
@@ -464,3 +484,44 @@ it("blocks an allowlisted forged delivery before content confirmation", async ()
     )?.payload.error,
   ).toBe("target-authorization-required");
 }, 20000);
+
+it.each(["group", "private"] as const)(
+  "accepts %s ingress while empty outbound policy prevents replies",
+  async (kind) => {
+    const f = await fixture([], ["*:group:*", "*:private:*"]);
+    await f.host.ingress.submit({
+      adapterId: "test",
+      platform: "qq",
+      platformMessageId: "accepted",
+      occurredAt: new Date().toISOString(),
+      text: "请回复测试消息",
+      selfId: "998877",
+      mentions: [{ kind: "user", id: "998877" }],
+      sender: { userId: "200" },
+      raw: {},
+      target:
+        kind === "group"
+          ? { kind: "group", groupId: "100" }
+          : { kind: "private", userId: "200" },
+    });
+    await f.settle();
+    const graph = await f.atoms();
+    expect(
+      graph.some(
+        (a) =>
+          a.kind === "core.message.inbound.text" &&
+          a.payload.text === "请回复测试消息",
+      ),
+    ).toBe(true);
+    expect(
+      graph.some(
+        (a) =>
+          a.kind === "core.delivery.failed" &&
+          a.payload.error === "destination-not-allowed" &&
+          a.payload.targetKind === kind,
+      ),
+    ).toBe(true);
+    expect(f.send).not.toHaveBeenCalled();
+  },
+  20000,
+);

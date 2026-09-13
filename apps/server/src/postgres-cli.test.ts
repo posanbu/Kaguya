@@ -1,4 +1,5 @@
 /**
+ * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * 功能概述：验证开发 CLI 的数据库失败降级、Docker 启动指引与配置错误阻断。
  * 主要职责：runPostgresCli 测试模拟子进程和准备结果，断言命令、退出码及安全诊断。
  * 代码库关系：覆盖 postgres-cli 与 postgres-development 契约；不启动真实 Docker 或 Server。
@@ -56,7 +57,7 @@ it("reports configuration diagnostics and does not spawn the Server", async () =
         validationIssues: [
           {
             code: "invalid_type",
-            path: "runtime.gatewayAllowlist",
+            path: "runtime.inboundAllowlist",
             message: "Expected an array of strings.",
             hint: "Use platform:group|private:target-id rules.",
           },
@@ -71,7 +72,7 @@ it("reports configuration diagnostics and does not spawn the Server", async () =
   const diagnostic = output.mock.calls.map(([text]) => text).join("");
   expect(diagnostic).toContain("Configuration preparation failed");
   expect(diagnostic).toContain("CONFIG_CORRUPT_STORE");
-  expect(diagnostic).toContain("runtime.gatewayAllowlist");
+  expect(diagnostic).toContain("runtime.inboundAllowlist");
   expect(spawn).not.toHaveBeenCalled();
 });
 it("stops on an unknown non-database preparation failure without leaking it", async () => {

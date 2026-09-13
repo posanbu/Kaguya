@@ -1,4 +1,5 @@
 /**
+ * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * 功能概述：验证 demo 以 PostgreSQL information ledger 运行确定性入站 DAG，
  * 输出根 `informationId` 和每个衍生 kind 的计数，不再使用 SQLite path 或 dispatch。
  * 主要职责：覆盖 selected Profile runtime 读取与旧数据库环境变量忽略，并用真实内存 PGlite
@@ -143,5 +144,6 @@ const demoRuntime = {
   rateLimitWindowMs: 60_000,
   logLevel: "info" as const,
   logFormat: "json" as const,
-  gatewayAllowlist: [],
+  inboundAllowlist: [],
+  outboundAllowlist: [],
 };

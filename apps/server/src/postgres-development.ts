@@ -1,4 +1,5 @@
 /**
+ * 初始化 runtime 把 inboundAllowlist/outboundAllowlist 都设为空，默认拒绝非 Web 的双向消息。
  * 启动只接受严格 v1 Registry，不自动迁移旧配置；用户须先手动更新配置。
  * 功能概述：为本地开发和真实 PostgreSQL 测试提供 PostgreSQL 17 生命周期编排。
  * 主要职责：通过 Docker CLI 创建/恢复固定容器和数据卷、等待 pg_isready、校验
@@ -313,7 +314,8 @@ export function defaultDevelopmentRuntime(databaseUrl: string): RuntimeConfig {
     rateLimitWindowMs: 60_000,
     logLevel: "info",
     logFormat: "pretty",
-    gatewayAllowlist: [],
+    inboundAllowlist: [],
+    outboundAllowlist: [],
   });
 }
 

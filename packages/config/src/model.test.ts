@@ -1,4 +1,5 @@
 /**
+ * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * 架构说明：本测试守护配置模型的注册表契约，覆盖 Profile ID、v1 索引
  * 以及唯一性和引用完整性约束，确保管理器与 API 只能依赖这里定义的持久化
  * 结构，而不会回退到旧版 defaultProfileId 语义。
@@ -197,12 +198,48 @@ describe("user configuration schemas", () => {
       rateLimitWindowMs: 60_000,
       logLevel: "info",
       logFormat: "json",
-      gatewayAllowlist: ["qq:group:778899", "*:private:*", "invalid"],
+      inboundAllowlist: ["qq:group:778899", "*:private:*", "invalid"],
+      outboundAllowlist: ["qq:group:778899", "*:private:*", "invalid"],
     };
     const runtime = runtimeConfigSchema.parse(runtimeInput);
+    const { inboundAllowlist, outboundAllowlist, ...legacyBase } = runtimeInput;
+    expect(
+      runtimeConfigSchema.safeParse({
+        ...legacyBase,
+        gatewayAllowlist: inboundAllowlist,
+      }).success,
+    ).toBe(false);
+    expect(
+      runtimeConfigSchema.safeParse({ ...runtimeInput, gatewayAllowlist: [] })
+        .success,
+    ).toBe(false);
+    expect(
+      runtimeConfigSchema.safeParse({ ...legacyBase, inboundAllowlist })
+        .success,
+    ).toBe(false);
+    expect(
+      runtimeConfigSchema.safeParse({ ...legacyBase, outboundAllowlist })
+        .success,
+    ).toBe(false);
+    expect(
+      runtimeConfigSchema.safeParse({
+        ...runtimeInput,
+        outboundAllowlist: [42],
+      }).success,
+    ).toBe(false);
+    expect(
+      runtimeConfigSchema.parse({
+        ...runtimeInput,
+        inboundAllowlist: [],
+        outboundAllowlist: ["*:private:*"],
+      }),
+    ).toMatchObject({
+      inboundAllowlist: [],
+      outboundAllowlist: ["*:private:*"],
+    });
 
     expect(runtime.databaseMode).toBe("external");
-    expect(runtime.gatewayAllowlist).toEqual([
+    expect(runtime.inboundAllowlist).toEqual([
       "qq:group:778899",
       "*:private:*",
       "invalid",
@@ -237,13 +274,15 @@ describe("user configuration schemas", () => {
     expect(
       runtimeConfigSchema.safeParse({
         ...baseRuntime,
-        gatewayAllowlist: { platforms: [], userIds: [], groupIds: [] },
+        inboundAllowlist: { platforms: [], userIds: [], groupIds: [] },
+        outboundAllowlist: { platforms: [], userIds: [], groupIds: [] },
       }).success,
     ).toBe(false);
     expect(
       runtimeConfigSchema.safeParse({
         ...baseRuntime,
-        gatewayAllowlist: ["qq:group:778899", 42],
+        inboundAllowlist: ["qq:group:778899", 42],
+        outboundAllowlist: ["qq:group:778899", 42],
       }).success,
     ).toBe(false);
   });

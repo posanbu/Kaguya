@@ -1,4 +1,5 @@
 /**
+ * createServerConfig 分别读取 inboundAllowlist/outboundAllowlist；不回退旧 gatewayAllowlist 或互相继承。
  * 功能概述：把 selected Profile 的 runtime/platform 配置转换为 Server 唯一启动配置。
  * 主要职责：环境只定位 Profile Registry 并选择开发模式；host、port、PostgreSQL、
  * Web、限流、日志、allowlist 与 NapCat 全部来自 selected Profile。Gateway Token 每次
@@ -39,7 +40,8 @@ export interface ServerConfig {
   readonly webDistPath: string;
   readonly logLevel: RuntimeConfig["logLevel"];
   readonly logFormat: RuntimeConfig["logFormat"];
-  readonly gatewayAllowlist: GatewayAllowlistConfig;
+  readonly inboundAllowlist: GatewayAllowlistConfig;
+  readonly outboundAllowlist: GatewayAllowlistConfig;
   readonly napcat: NapCatConfig;
 }
 
@@ -97,7 +99,8 @@ export function createServerConfig(
     webDistPath: runtime.webDistPath,
     logLevel: runtime.logLevel,
     logFormat: runtime.logFormat,
-    gatewayAllowlist: runtime.gatewayAllowlist,
+    inboundAllowlist: runtime.inboundAllowlist,
+    outboundAllowlist: runtime.outboundAllowlist,
     napcat: inspectNapCatConfig(profile),
   };
 }

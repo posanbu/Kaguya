@@ -1,3 +1,9 @@
+/**
+ * 功能概述：验证 Profile 到 ServerConfig 的读取、校验和随机网关 Token 边界。
+ * 主要职责：completeProfile 提供完整配置；覆盖 bootstrap 环境、loopback 限制和 NapCat 设置。
+ * 代码库关系：调用 config.ts 的 createServerConfig/readServerBootstrapConfig/assertLoopbackHost。
+ * 输入输出与副作用：使用虚构连接数据，不发起外部连接；入站和出站数组分别传入宿主配置。
+ */
 import { describe, expect, it } from "vitest";
 
 import type { UserConfigProfile } from "@kaguya/config";
@@ -164,7 +170,8 @@ function completeProfile(
       rateLimitWindowMs: 10_000,
       logLevel: "debug",
       logFormat: "pretty",
-      gatewayAllowlist: [],
+      inboundAllowlist: [],
+      outboundAllowlist: [],
     },
     ...overrides,
   };
