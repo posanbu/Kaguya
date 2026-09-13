@@ -46,3 +46,53 @@
     font-size: 12px;
   }
 }
+.profile-form-lock {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+  display: grid;
+  gap: 20px;
+}
+.profile-problem-summary {
+  border: 1px solid var(--kaguya-line);
+  border-radius: 10px;
+  padding: 16px;
+  margin: 16px 0;
+}
+.profile-problem-summary ul {
+  padding-left: 20px;
+}
+.profile-field-errors {
+  display: block;
+}
+.profile-field-errors p {
+  margin: 4px 0;
+}
+.profile-editor-form [aria-invalid="true"] {
+  border-color: var(--kaguya-coral);
+}
+@media (max-width: 600px) {
+  .wb-topbar {
+    display: grid;
+    grid-template-columns: 40px minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 8px;
+  }
+  .wb-profile-slot {
+    margin-left: 0;
+  }
+  .profile-switcher {
+    gap: 4px;
+  }
+  .profile-status-line {
+    display: none;
+  }
+  .profile-switcher > button {
+    padding: 8px;
+  }
+  .profile-runtime-line {
+    font-size: 11px;
+    line-height: 1.5;
+  }
+}

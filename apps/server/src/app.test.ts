@@ -1471,3 +1471,48 @@ it("authenticates target management before validating bodies and fails closed wi
     await app.close();
   }
 });
+
+it("Profile 校验通过真实 HTTP 返回安全字段路径，GET 检查属于读取对象", async () => {
+  const app = await createHttpApplication({
+    config,
+    configuration: stubManagement(),
+  });
+  try {
+    const read = await app.inject({
+      method: "GET",
+      url: "/api/v1/profiles/default",
+      headers: authorization(),
+    });
+    expect(read.json().data.readiness.status).toBe("invalid");
+    const payload = {
+      name: "default",
+      inboundAllowlist: [],
+      outboundAllowlist: [],
+      identity: { name: "Kaguya", aliases: ["Kaguya"], persona: "test" },
+      ai: { providers: [] },
+      memory: { enabled: false },
+      platforms: [],
+      acknowledgedWarnings: [],
+    };
+    const invalid = await app.inject({
+      method: "PUT",
+      url: "/api/v1/profiles/default",
+      headers: authorization(),
+      payload,
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json().error.fieldErrors).toContainEqual(
+      expect.objectContaining({ path: "identity.aliases.0" }),
+    );
+    const unknown = await app.inject({
+      method: "PUT",
+      url: "/api/v1/profiles/default",
+      headers: authorization(),
+      payload: { ...payload, SECRET_FIELD: "SECRET_VALUE" },
+    });
+    expect(unknown.statusCode).toBe(400);
+    expect(unknown.body).not.toContain("SECRET");
+  } finally {
+    await app.close();
+  }
+});

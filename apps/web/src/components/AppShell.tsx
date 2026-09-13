@@ -4,6 +4,7 @@
  * 标识任务域。useNavigationGuard 注册离开保护，useWorkbenchNavigate 复用受保护导航。
  * 代码库关系：App.tsx 管理认证及 history，页面作为 children 注入；复杂交互采用
  * ui.tsx 导出的 Radix Dialog/DropdownMenu，视觉沿用 workbench.css 和品牌素材。
+ * history 使用 entry index/go 恢复取消的后退/前进，不 push 截断历史；并发导航只保留首个请求。
  * 输入输出与副作用：导航守卫返回 false 时保留当前页和抽屉；成功导航关闭抽屉。
  * 抽屉由 Radix 管理焦点圈定、Escape 和触发器焦点恢复；不读取或持久化 Token。
  */
@@ -48,50 +49,117 @@ const NavigationContext = createContext<{
   navigate: (path: string) => void;
   register: (guard: Guard) => () => void;
 } | null>(null);
-/** App 使用的路由控制器：守卫通过后才变更 URL，popstate 被拒绝时恢复当前 URL。 */
+/** App 的路由控制器：先用 history.go 恢复原位置再确认，取消不会截断 forward 历史。 */
 export function useWorkbenchRouter() {
   const [path, setPath] = useState(() => window.location.pathname);
   const guards = useRef(new Set<Guard>());
   const current = useRef(path);
-  const sequence = useRef(0);
+  const index = useRef(0);
+  const busy = useRef(false);
+  const popIntent = useRef<
+    | {
+        index: number;
+        path: string;
+        phase: "restoring" | "confirming" | "committing";
+      }
+    | undefined
+  >(undefined);
   const register = useCallback((guard: Guard) => {
     guards.current.add(guard);
     return () => {
       guards.current.delete(guard);
     };
   }, []);
-  const transition = useCallback(async (next: string, pop: boolean) => {
-    const request = ++sequence.current;
-    if (next !== current.current)
-      for (const guard of guards.current) {
-        if (!(await guard())) {
-          if (pop && request === sequence.current)
-            window.history.pushState(
-              null,
-              "",
-              `${current.current}${window.location.hash}`,
-            );
-          return false;
-        }
-      }
-    if (request !== sequence.current) return false;
-    if (!pop && next !== current.current)
-      window.history.pushState(null, "", `${next}${window.location.hash}`);
-    current.current = next;
-    setPath(next);
+  const allow = useCallback(async () => {
+    try {
+      for (const guard of guards.current) if (!(await guard())) return false;
+    } catch {
+      return false;
+    }
     return true;
   }, []);
   const navigate = useCallback(
-    (next: string) => transition(next, false),
-    [transition],
+    async (next: string) => {
+      if (busy.current) return false;
+      if (next === current.current) return true;
+      busy.current = true;
+      try {
+        if (!(await allow())) return false;
+        index.current += 1;
+        window.history.pushState(
+          { kaguyaWorkbenchIndex: index.current },
+          "",
+          `${next}${window.location.hash}`,
+        );
+        current.current = next;
+        setPath(next);
+        return true;
+      } finally {
+        busy.current = false;
+      }
+    },
+    [allow],
   );
   useEffect(() => {
+    index.current =
+      typeof window.history.state?.kaguyaWorkbenchIndex === "number"
+        ? window.history.state.kaguyaWorkbenchIndex
+        : 0;
+    window.history.replaceState(
+      { ...window.history.state, kaguyaWorkbenchIndex: index.current },
+      "",
+    );
     const pop = () => {
-      void transition(window.location.pathname, true);
+      const destination = window.history.state?.kaguyaWorkbenchIndex;
+      if (typeof destination !== "number") return; // 离开本工作台由 beforeunload 保护。
+      const intent = popIntent.current;
+      if (intent?.phase === "committing") {
+        if (destination !== intent.index) {
+          window.history.go(intent.index - destination);
+          return;
+        }
+        index.current = intent.index;
+        current.current = intent.path;
+        setPath(intent.path);
+        popIntent.current = undefined;
+        busy.current = false;
+        return;
+      }
+      if (intent) {
+        if (destination !== index.current) {
+          window.history.go(index.current - destination);
+          return;
+        }
+        if (intent.phase === "restoring") {
+          intent.phase = "confirming";
+          void allow().then((allowed) => {
+            if (!allowed) {
+              popIntent.current = undefined;
+              busy.current = false;
+              return;
+            }
+            intent.phase = "committing";
+            window.history.go(intent.index - index.current);
+          });
+        }
+        return;
+      }
+      if (destination === index.current) return;
+      if (busy.current) {
+        window.history.go(index.current - destination);
+        return;
+      }
+      busy.current = true;
+      popIntent.current = {
+        index: destination,
+        path: window.location.pathname,
+        phase: "restoring",
+      };
+      window.history.go(index.current - destination);
     };
     window.addEventListener("popstate", pop);
     return () => window.removeEventListener("popstate", pop);
-  }, [transition]);
+  }, [allow]);
   return { path, navigate, register };
 }
 export function useNavigationGuard(guard: Guard) {
