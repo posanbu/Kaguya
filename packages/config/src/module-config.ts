@@ -1,4 +1,5 @@
 /**
+ * writeModuleInstanceConfig 仅替换已存在且身份匹配的实例，调用方负责共享锁和版本校验。
  * 功能概述：管理 modules/<instanceId>/config.json 的严格加载与首次初始化。
  * 主要职责：moduleInstanceConfigSchema 验证文件信封；loadModuleInstanceConfigs 仅在目录缺失时
  * 写入完整默认配置；configPath 和 assertUniqueDefaults 拒绝越界路径及重复实例。
@@ -96,6 +97,29 @@ export async function loadModuleInstanceConfigs(options: {
     result.push(parsed.data);
   }
   return result;
+}
+
+/** 替换已存在且身份固定的实例；调用方必须持有配置写锁并完成 schema 与 revision 校验。 */
+export async function writeModuleInstanceConfig(
+  rootDir: string,
+  config: ModuleInstanceConfig,
+): Promise<void> {
+  const parsed = moduleInstanceConfigSchema.parse(config);
+  const root = join(rootDir, "modules");
+  assertPathInside(rootDir, root);
+  const path = configPath(root, parsed.instanceId);
+  const current = moduleInstanceConfigSchema.parse(
+    await readSensitiveJson(path),
+  );
+  if (
+    current.instanceId !== parsed.instanceId ||
+    current.definitionId !== parsed.definitionId
+  )
+    throw new ConfigError(
+      "CONFIG_INVALID_INPUT",
+      "Module identity cannot change",
+    );
+  await writeSensitiveJson(path, parsed);
 }
 
 function configPath(modulesRoot: string, instanceId: string): string {

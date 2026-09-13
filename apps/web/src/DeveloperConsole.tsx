@@ -1,4 +1,5 @@
 /**
+ * 模块详情注入 ModuleSettingsSection，以独立管理接口读取全局配置。
  * 功能概述：开发者控制台的只读 Module、Atom 与 Ingress/Turn Flow 页面，沿用顶层内存 Token。
  * 页面复用共同 PageHeader/Button/FieldMessage；保留模块、Atom、Flow 二级导航。
  * 主要职责：DeveloperConsole 维护页面导航及手动刷新；ModulePage 按路径展示紧凑总览或独立详情；
@@ -9,6 +10,7 @@
  * 输入输出与副作用：仅 GET 请求、history 导航和用户触发的剪贴板写入；无轮询、编辑或重放；
  * 卸载清理异步任务，加载/失败时隐藏旧数据，明确显示空结果、分页和图截断。
  */
+import { ModuleSettingsSection } from "./ModuleSettingsSection.js";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   inspectionModulesSchema,
@@ -126,7 +128,12 @@ export function DeveloperConsole({
           ))}
         </nav>
         {page === "modules" ? (
-          <ModulePage path={path} token={token} state={modules} />
+          <ModulePage
+            path={path}
+            token={token}
+            state={modules}
+            SettingsSection={ModuleSettingsSection}
+          />
         ) : page === "atoms" ? (
           <Atoms key="atoms" token={token} revision={revision} names={names} />
         ) : (

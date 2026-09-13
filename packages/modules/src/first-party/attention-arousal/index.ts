@@ -1,4 +1,5 @@
 /**
+ * settings schema 的公开中文元数据供管理表单使用，运行时与保存共用约束。
  * 功能概述：判断冻结事件是否足以唤起 Agent 注意，不决定话题、回复或具体行动。
  * 主要职责：执行不可绕过的硬门禁和 MaiBot 风格的确定性 0–100 显著性评分。
  * 代码库关系：只消费 Heartflow 冻结的 turn context，并提交 claim 的唯一注意唤起终态；eligible 使用独立 attention 命名空间；非 eligible 直接提交廉价等待或静默决策。
@@ -34,10 +35,45 @@ const SHORT_REACTIONS = new Set([
 
 export const attentionArousalSettingsSchema = z
   .object({
-    threshold: z.number().int().min(0).max(100),
-    deferMs: z.number().int().min(0),
-    policyDigest: z.string().min(1),
-    settingsDigest: z.string().min(1),
+    threshold: z
+      .number()
+      .int()
+      .min(0)
+      .max(100)
+      .meta({
+        title: "注意力阈值",
+        description: "达到此分数后关注输入，范围为 0 到 100。",
+        public: true,
+        default: 80,
+      }),
+    deferMs: z
+      .number()
+      .int()
+      .min(0)
+      .meta({
+        title: "延迟关注时间",
+        description: "延迟处理输入的时间，单位毫秒。",
+        public: true,
+        default: 15000,
+      }),
+    policyDigest: z
+      .string()
+      .min(1)
+      .meta({
+        title: "策略标识",
+        description: "记录注意力策略版本的标识。",
+        public: true,
+        default: "attention-arousal:maibot-v1",
+      }),
+    settingsDigest: z
+      .string()
+      .min(1)
+      .meta({
+        title: "配置标识",
+        description: "记录注意力设置版本的标识。",
+        public: true,
+        default: "attention-arousal:default-v1",
+      }),
   })
   .strict();
 

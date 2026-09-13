@@ -1,4 +1,5 @@
 /**
+ * writeModuleInstanceConfig 导出固定身份的现有实例原子替换接口。
  * 功能概述：本入口聚合 `packages/config` 的稳定公开 API，向服务启动链、
  * WebUI/API 与测试导出错误类型、就绪态工具、Profile Registry manager
  * 和 schema/type 定义，避免上层直接耦合到内部文件组织。
@@ -46,6 +47,7 @@ export type {
 export { readSensitiveJson, writeSensitiveJson } from "./secure-files.js";
 export {
   loadModuleInstanceConfigs,
+  writeModuleInstanceConfig,
   moduleInstanceConfigSchema,
 } from "./module-config.js";
 export type { ModuleInstanceConfig } from "./module-config.js";

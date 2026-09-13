@@ -1,5 +1,6 @@
 /**
  * Profile GET 返回该编辑对象的 readiness；校验错误通过白名单路径投影为安全 fieldErrors。
+ * 模块 settings 路由由独立注册器接入，共用 management 认证并只返回安全字段。
  * Profile GET/PUT 的严格 DTO 必须包含 inboundAllowlist 与 outboundAllowlist；旧字段不接受。
  * 功能概述：本文件组装 Kaguya 服务端的 Fastify HTTP 应用，承载匿名健康检查、
  * OpenAPI 文档、带 readiness 的全局 Profile Registry 管理接口，以及
@@ -23,6 +24,8 @@
  * configuration/status 与 apply 复用管理认证，返回不含秘密的版本及应用结果；冲突返回 409。
  */
 import { profileFieldErrors } from "./profile-field-errors.js";
+import { registerModuleSettingsRoutes } from "./module-settings-routes.js";
+import type { ModuleSettingsManagement } from "./module-settings-management.js";
 import { registerMessageTargetRoutes } from "./message-targets.js";
 import type { MessageTargetService } from "@kaguya/runtime";
 import {
@@ -581,6 +584,7 @@ export interface CreateHttpApplicationOptions {
   configurationApplication?: ConfigurationApplicationService | undefined;
   adapterHost?: Pick<AdapterHost, "status">;
   configuration?: ConfigurationManagement;
+  moduleSettings?: ModuleSettingsManagement;
   logger?: FastifyBaseLogger;
   discoverModels?: typeof discoverOpenAiCompatibleModels;
 }
@@ -605,6 +609,12 @@ export async function createHttpApplication(
       },
     },
   });
+
+  registerModuleSettingsRoutes(
+    app,
+    requireGatewayToken(options, "management"),
+    options.moduleSettings,
+  );
 
   app.addHook("onRequest", (request, _reply, done) => {
     runWithLogContext({ requestId: request.id }, done);
