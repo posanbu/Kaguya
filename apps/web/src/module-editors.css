@@ -1,5 +1,5 @@
 /* 功能概述：模块通用表单和模板源码编辑区的响应式布局。
- * 主要职责：输入独立成行、源码占满容器宽度，复用工作台按钮与主题颜色。
+ * 主要职责：输入独立成行、源码占满容器宽度；复选框固定尺寸以覆盖检查页通用输入宽度。
  * 代码库关系：SettingsSection/TemplatesSection 引入；只限定 module-editor，避免影响其他页面。
  * 输入输出与副作用：纯展示规则，无配置、存储或运行时行为。 */
 .module-editor {
@@ -25,6 +25,16 @@
 .module-editor label:has(input[type="checkbox"]) {
   display: flex;
   align-items: center;
+}
+.module-editor input[type="checkbox"] {
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  min-height: 16px;
+  flex: 0 0 16px;
+  padding: 0;
+  margin: 0;
 }
 .module-editor input:not([type="checkbox"]),
 .module-editor select,
