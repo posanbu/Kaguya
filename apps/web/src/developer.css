@@ -328,3 +328,235 @@
   width: fit-content;
   color: var(--kaguya-coral-strong);
 }
+
+/* Manifest 拓扑与阶段摘要复用现有 DTO，窄屏按因果顺序堆叠，技术说明按需展开。 */
+.module-summary-strip {
+  display: flex;
+  gap: 24px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+  padding: 16px 20px;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 12px;
+  background: var(--kaguya-paper);
+}
+.module-summary-strip > div:not(.module-view-switch) {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+.module-summary-strip strong {
+  font-size: 26px;
+  font-weight: 600;
+}
+.module-summary-strip span {
+  font-size: 13px;
+  color: var(--kaguya-muted);
+}
+.module-view-switch {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--kaguya-paper-soft);
+  border-radius: 9px;
+  margin-left: auto;
+}
+.module-view-switch button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  padding: 8px 12px;
+  color: var(--kaguya-muted);
+  cursor: pointer;
+}
+.module-view-switch [aria-pressed="true"] {
+  background: var(--kaguya-paper);
+  color: var(--kaguya-ink);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 8%);
+}
+.module-entry {
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+.module-entry:hover {
+  border-color: var(--kaguya-coral);
+  box-shadow: 0 3px 12px rgb(0 0 0 / 4%);
+}
+.module-entry-copy > code {
+  font-size: 11px;
+  opacity: 0.7;
+}
+.module-kind-list details summary {
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  padding-block: 6px;
+}
+.module-kind-list details p {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--kaguya-muted);
+}
+.module-topology {
+  border: 1px solid var(--kaguya-line);
+  border-radius: 14px;
+  background: var(--kaguya-paper);
+  padding: 20px;
+}
+.topology-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.topology-toolbar h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 17px;
+  margin: 0;
+}
+.topology-toolbar label {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 13px;
+}
+.topology-toolbar select {
+  max-width: 100%;
+}
+.topology-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 0.7fr) minmax(0, 1fr);
+  gap: 16px;
+  margin-top: 24px;
+}
+.topology-grid h3 {
+  font-size: 12px;
+  color: var(--kaguya-muted);
+  margin-top: 0;
+}
+.topology-node {
+  border: 1px solid var(--kaguya-line);
+  padding: 12px;
+  border-radius: 10px;
+  margin-block: 8px;
+  background: var(--kaguya-paper-soft);
+}
+.topology-node > button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 0 10px;
+  background: none;
+  border: 0;
+  color: var(--kaguya-ink);
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+.topology-node details {
+  font-size: 12px;
+  margin-top: 10px;
+  color: var(--kaguya-muted);
+}
+.topology-node code {
+  display: block;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
+.topology-focus {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 20px 10px;
+  border-inline: 1px dashed var(--kaguya-line);
+  text-align: center;
+}
+.topology-focus > span:last-of-type,
+.topology-empty,
+.topology-note {
+  color: var(--kaguya-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.topology-note {
+  margin: 20px 0 0;
+}
+.flow-summary {
+  padding: 16px;
+  margin: 12px 0;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 12px;
+  background: var(--kaguya-paper);
+}
+.flow-summary ol {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 8px;
+  list-style: none;
+  padding: 0;
+  margin: 0 0 14px;
+}
+.flow-summary li {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 2px;
+  border-radius: 8px;
+  color: var(--kaguya-muted);
+  background: var(--kaguya-paper-soft);
+  font-size: 12px;
+}
+.flow-summary li[data-observed="true"] {
+  color: var(--kaguya-cyan);
+  background: color-mix(in srgb, var(--kaguya-cyan) 8%, var(--kaguya-paper));
+}
+.flow-summary li strong {
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+}
+.flow-summary > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.flow-summary small {
+  color: var(--kaguya-muted);
+}
+@media (max-width: 700px) {
+  .topology-grid {
+    grid-template-columns: 1fr;
+  }
+  .topology-focus {
+    border-inline: 0;
+    border-block: 1px dashed var(--kaguya-line);
+  }
+  .topology-focus > svg {
+    transform: rotate(90deg);
+  }
+  .flow-summary ol {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .module-summary-strip {
+    gap: 14px;
+    padding: 12px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .module-entry {
+    transition: none;
+  }
+}

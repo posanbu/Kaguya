@@ -19,14 +19,14 @@ describe("Profile 状态标签", () => {
     expect(profileLabels("draft", "next", snapshot)).toEqual([]);
     expect(profileLabels("old", "next", snapshot)).toEqual(["已生效"]);
     expect(profileLabels("next", "next", snapshot)).toEqual([
-      "selected（当前选择）",
+      "当前选择",
       "待应用",
     ]);
   });
   it("同一 ID 的新 revision 同时表达旧版生效和待应用", () => {
     expect(
       profileLabels("next", "next", { ...snapshot, appliedProfileId: "next" }),
-    ).toEqual(["selected（当前选择）", "已生效", "待应用"]);
+    ).toEqual(["当前选择", "已生效", "待应用"]);
   });
   it("应用期间及失败回滚后均显示明确反馈", () => {
     expect(profileLabels("next", "next", snapshot, true)).toContain("应用中");

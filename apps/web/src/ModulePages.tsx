@@ -6,6 +6,8 @@
  * ModuleEditorProps 仅将 definitionId/token 交给可选 SettingsSection/TemplatesSection，不预定义编辑 DTO。
  * 输入输出与副作用：只读展示，普通点击走工作台导航，修饰键和新标签保持浏览器行为；不保存 Token 或应用配置。
  */
+import { ModuleTopology } from "./ModuleTopology.js";
+import { LayoutGrid, GitBranch } from "lucide-react";
 import {
   useEffect,
   useRef,
@@ -93,6 +95,7 @@ export function ModuleOverview({
   modules: readonly InspectionModule[];
 }) {
   const [search, setSearch] = useState("");
+  const [view, setView] = useState<"list" | "topology">("list");
   const visible = modules.filter((module) =>
     `${module.definitionId} ${module.displayName} ${module.summary}`
       .toLowerCase()
@@ -100,47 +103,82 @@ export function ModuleOverview({
   );
   return (
     <section aria-label="模块总览">
-      <label className="developer-search">
-        查找模块
-        <input
-          type="search"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder="名称或 definition ID"
-        />
-      </label>
-      <p role="status">{visible.length} 个模块定义</p>
-      {!modules.length ? (
-        <FieldMessage>当前运行时没有可用的模块定义。</FieldMessage>
-      ) : !visible.length ? (
-        <FieldMessage>没有匹配的模块，请调整搜索条件。</FieldMessage>
-      ) : null}
-      <ul className="module-overview">
-        {visible.map((module) => (
-          <li key={module.definitionId}>
-            <ModuleLink
-              path={moduleDetailPath(module.definitionId)}
-              className="module-entry"
-            >
-              <div className="module-entry-copy">
-                <h2>{module.displayName}</h2>
-                <p title={module.summary}>{module.summary}</p>
-                <code>{module.definitionId}</code>
-              </div>
-              <div className="module-entry-meta">
-                <StatusBadge
-                  tone={module.bindings.length ? "success" : "neutral"}
+      <div className="module-summary-strip">
+        <div>
+          <strong>{modules.length}</strong>
+          <span>可用定义</span>
+        </div>
+        <div>
+          <strong>{modules.filter((m) => m.bindings.length > 0).length}</strong>
+          <span>已激活模块</span>
+        </div>
+        <div className="module-view-switch" aria-label="模块视图">
+          <button
+            type="button"
+            aria-pressed={view === "list"}
+            onClick={() => setView("list")}
+          >
+            <LayoutGrid size={16} aria-hidden="true" />
+            列表
+          </button>
+          <button
+            type="button"
+            aria-pressed={view === "topology"}
+            onClick={() => setView("topology")}
+          >
+            <GitBranch size={16} aria-hidden="true" />
+            信息流
+          </button>
+        </div>
+      </div>
+      {view === "topology" ? (
+        <ModuleTopology modules={modules} />
+      ) : (
+        <>
+          <label className="developer-search">
+            查找模块
+            <input
+              type="search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="名称或 definition ID"
+            />
+          </label>
+          <p role="status">{visible.length} 个模块定义</p>
+          {!modules.length ? (
+            <FieldMessage>当前运行时没有可用的模块定义。</FieldMessage>
+          ) : !visible.length ? (
+            <FieldMessage>没有匹配的模块，请调整搜索条件。</FieldMessage>
+          ) : null}
+          <ul className="module-overview">
+            {visible.map((module) => (
+              <li key={module.definitionId}>
+                <ModuleLink
+                  path={moduleDetailPath(module.definitionId)}
+                  className="module-entry"
                 >
-                  {module.bindings.length ? "已激活" : "未激活"}
-                </StatusBadge>
-                <span>
-                  输入 {module.consumes.length} · 输出 {module.produces.length}
-                </span>
-              </div>
-            </ModuleLink>
-          </li>
-        ))}
-      </ul>
+                  <div className="module-entry-copy">
+                    <h2>{module.displayName}</h2>
+                    <p title={module.summary}>{module.summary}</p>
+                    <code>{module.definitionId}</code>
+                  </div>
+                  <div className="module-entry-meta">
+                    <StatusBadge
+                      tone={module.bindings.length ? "success" : "neutral"}
+                    >
+                      {module.bindings.length ? "已激活" : "未激活"}
+                    </StatusBadge>
+                    <span>
+                      输入 {module.consumes.length} · 输出{" "}
+                      {module.produces.length}
+                    </span>
+                  </div>
+                </ModuleLink>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </section>
   );
 }
@@ -187,9 +225,11 @@ export function ModuleDetails({
               <ul className="module-kind-list">
                 {module[field].map((kind) => (
                   <li key={kind.kind}>
-                    <h4>{kind.displayName}</h4>
-                    <p>{kind.description}</p>
-                    <code>{kind.kind}</code>
+                    <details>
+                      <summary>{kind.displayName}</summary>
+                      <p>{kind.description}</p>
+                      <code>{kind.kind}</code>
+                    </details>
                   </li>
                 ))}
               </ul>

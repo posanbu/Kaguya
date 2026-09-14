@@ -12,6 +12,12 @@
  * 不复制入站正文或消息 ID，不提供固定路由或自动引用回复。失败或取消的模型任务不产生 assistant。
  * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
  */
+import { expressionSelected, expressionReady } from "../expression/facts.js";
+import {
+  expressionDispatchSelector,
+  withExpressionContext,
+  expressionPrompt,
+} from "../expression/composer-context.js";
 import { messageModulePromptTemplates } from "../../prompt-declarations.js";
 import {
   messageConfirmedInformationKind,
@@ -185,6 +191,7 @@ export interface CreateMessageComposerModuleOptions<
     "core.model.task.completed",
     P
   >;
+  readonly expressionEnabled?: boolean;
   readonly selector?: InformationSelectorDefinition;
   readonly promptTemplates: MessagePromptTemplates;
   readonly agentIdentity: AgentIdentity;
@@ -199,7 +206,10 @@ export function createMessageComposerModule<
     modelTaskCapability.apiVersion !== 1
   )
     throw new Error("Invalid model task capability");
-  const selector = dependencies.selector ?? turnMessageContextSelector;
+  const baseSelector = dependencies.selector ?? turnMessageContextSelector;
+  const selector = dependencies.expressionEnabled
+    ? withExpressionContext(baseSelector)
+    : baseSelector;
   const compilePrompt = createMessagePromptCompiler(
     dependencies.promptTemplates,
     dependencies.agentIdentity,
@@ -255,6 +265,7 @@ export function createMessageComposerModule<
       protocolVersion: 1,
       moduleVersion: "1.0.0",
       selectors: [
+        ...(dependencies.expressionEnabled ? [expressionDispatchSelector] : []),
         selector,
         ...(selector === currentAcceptedMessageSelector
           ? []
@@ -269,6 +280,7 @@ export function createMessageComposerModule<
         assistantHistoryPromptRenderer,
       ],
       requires: [
+        ...(dependencies.expressionEnabled ? [expressionReady] : []),
         modelTaskCapability,
         ...(dependencies.messageAuthorizationCapability
           ? [dependencies.messageAuthorizationCapability]
@@ -283,6 +295,7 @@ export function createMessageComposerModule<
       settingsSchema: messageComposerSettingsSchema,
       promptTemplates: messageModulePromptTemplates,
       consumes: [
+        ...(dependencies.expressionEnabled ? [expressionSelected] : []),
         messageConfirmedInformationKind,
         messageIntentRequestedInformationKind,
         completedInformationKind,
@@ -306,9 +319,33 @@ export function createMessageComposerModule<
       }),
       subscriptions: [
         onInformation(
-          messageIntentRequestedInformationKind,
-          { subscriptionId: "kaguya.message.requested", delivery: "durable" },
-          async (message, context) => {
+          (dependencies.expressionEnabled
+            ? expressionSelected
+            : messageIntentRequestedInformationKind) as unknown as InformationKindDefinition<
+            string,
+            JsonObject
+          >,
+          {
+            subscriptionId: dependencies.expressionEnabled
+              ? "kaguya.message.expression-selected"
+              : "kaguya.message.requested",
+            delivery: "durable",
+          },
+          async (input, context) => {
+            const selected = dependencies.expressionEnabled
+              ? await context.select(expressionDispatchSelector)
+              : [];
+            const original = dependencies.expressionEnabled
+              ? selected.find(
+                  (a) => a.informationId === input.payload.intentInformationId,
+                )!
+              : input;
+            const message = {
+              ...original,
+              payload: messageIntentRequestedInformationPayloadSchema.parse(
+                original.payload,
+              ),
+            };
             const authorized = dependencies.messageAuthorizationCapability
               ? await context
                   .use(dependencies.messageAuthorizationCapability)
@@ -362,6 +399,16 @@ export function createMessageComposerModule<
                 };
               }
             }
+            contextAtoms = [
+              ...new Map(
+                [...contextAtoms, ...selected].map((a) => [a.informationId, a]),
+              ).values(),
+            ];
+            prompt = expressionPrompt(
+              prompt,
+              contextAtoms,
+              message.informationId,
+            );
             const contexts = persistedIntent.references.filter(
               (r) => r.relation === "core:context",
             );

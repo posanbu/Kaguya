@@ -131,3 +131,11 @@ Profile 保存成功和 Runtime 已采用新配置是两个时刻。Provider 客
 :::
 
 完整运行字段见[环境变量与运行配置](../reference/environment-variables)，配置接口见[Profile API](../reference/profile-api)。Registry 与 Profile 都使用严格的 `version: 1`，旧结构不迁移、不双读。
+
+## 关注租约与表达学习配置
+
+新初始化的 modules 目录包含 attention-focus.default 与 expression.default。已有目录需要显式添加这两个 v1 实例文件，不自动改写用户配置：关注实例使用 definitionId `agent.attention.focus`、空 settings；表达实例使用 definitionId `agent.expression`、settings `{ "batchSize": 8 }`，两者 enabled 为 true。
+
+Heartflow 增加 focusIdleMs（默认 120000 毫秒），Attention Arousal 增加 focusRelevance（默认 80）。旧实例省略这两个字段时采用默认值。关注相关性不能绕过硬门禁，也不保证必回复。
+
+表达流水线启用后，Composer 依赖表达模块就绪；缺失或关闭表达实例会在装配阶段报告能力依赖不满足。保存配置后仍需显式应用，并按应用结果处理需要重启的变更。

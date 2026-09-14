@@ -309,3 +309,81 @@
 :root[data-theme] .wb-content > .setup-shell::after {
   display: none;
 }
+
+/* 页面说明默认按需展开；主操作、只读状态与辅助信息使用不同层级。 */
+.wb-content {
+  max-width: 1500px;
+  margin-inline: auto;
+  width: 100%;
+  box-sizing: border-box;
+}
+.wb-page-header h1 {
+  font-size: clamp(24px, 2.4vw, 32px);
+  letter-spacing: -0.03em;
+}
+.wb-page-help {
+  max-width: 64ch;
+  font-size: 13px;
+  color: var(--kaguya-muted);
+}
+.wb-page-help summary {
+  cursor: pointer;
+  width: fit-content;
+  padding-block: 4px;
+}
+.wb-page-help p {
+  padding: 10px 12px;
+  border-left: 2px solid var(--kaguya-line);
+  line-height: 1.7;
+}
+.wb-button {
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  transition:
+    background-color 0.15s,
+    box-shadow 0.15s;
+}
+.wb-button:hover:not(:disabled) {
+  box-shadow: 0 2px 8px rgb(0 0 0 / 8%);
+}
+.wb-button-primary {
+  border-color: transparent;
+  box-shadow: 0 3px 9px color-mix(in srgb, var(--kaguya-coral) 22%, transparent);
+}
+.wb-button-danger {
+  border-color: color-mix(in srgb, var(--kaguya-coral-strong) 40%, transparent);
+  background: color-mix(in srgb, var(--kaguya-coral) 7%, var(--kaguya-paper));
+}
+.wb-button:disabled {
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.wb-status {
+  align-items: center;
+  gap: 5px;
+  line-height: 1.5;
+  background: var(--kaguya-paper);
+}
+.wb-status svg {
+  flex-shrink: 0;
+}
+.wb-status-success {
+  background: color-mix(in srgb, var(--kaguya-cyan) 8%, var(--kaguya-paper));
+  border-color: color-mix(in srgb, var(--kaguya-cyan) 20%, transparent);
+}
+.wb-status-warning,
+.wb-status-error {
+  background: color-mix(in srgb, var(--kaguya-coral) 8%, var(--kaguya-paper));
+}
+.wb-field-message {
+  border-radius: 0 8px 8px 0;
+  font-size: 14px;
+  line-height: 1.6;
+  background: var(--kaguya-paper-soft);
+}
+@media (prefers-reduced-motion: reduce) {
+  .wb-button {
+    transition: none;
+  }
+}

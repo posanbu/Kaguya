@@ -14,6 +14,8 @@ import {
   type InformationModuleActivation,
 } from "@kaguya/sdk";
 import type { JsonObject } from "@kaguya/schema";
+import { createExpressionModule } from "./expression/index.js";
+import { attentionFocusModule } from "./attention-focus/index.js";
 import { memoryCognitionModule } from "./memory-cognition/index.js";
 import { memoryIndexModule } from "./memory-index/index.js";
 import { memoryWritebackModule } from "./memory-writeback/index.js";
@@ -43,7 +45,9 @@ export function createFirstPartyModuleCatalog<
     memoryCognitionModule,
     identityModule,
     attentionArousalModule,
-    createMessageComposerModule(options),
+    attentionFocusModule,
+    createExpressionModule(options),
+    createMessageComposerModule({ ...options, expressionEnabled: true }),
     heartbeatModule,
     createHeartflowModule(options),
   );
@@ -120,6 +124,20 @@ export function createFirstPartyModuleConfigDefaults(
         staleAfterMs: 120_000,
       }),
     }),
+    Object.freeze({
+      version: 1 as const,
+      instanceId: "attention-focus.default",
+      definitionId: "agent.attention.focus",
+      enabled: true,
+      settings: Object.freeze({}),
+    }),
+    Object.freeze({
+      version: 1 as const,
+      instanceId: "expression.default",
+      definitionId: "agent.expression",
+      enabled: true,
+      settings: Object.freeze({ batchSize: 8 }),
+    }),
   ]);
 }
 
@@ -154,8 +172,12 @@ export function createFirstPartyModuleActivations(
             : config.settings,
         );
         if (!settings.success) {
-          throw new Error(
-            "Module settings failed validation. Reinitialize module configuration.",
+          throw new ModuleConfigurationError(
+            config.instanceId,
+            config.definitionId,
+            settings.error.issues.map(
+              (issue) => issue.path.map(String).join(".") || "settings",
+            ),
           );
         }
         return Object.freeze({
@@ -174,3 +196,19 @@ const DEFAULT_AGENT_IDENTITY: AgentIdentity = {
   aliases: ["辉夜"],
   persona: "Default Kaguya persona",
 };
+
+/** 配置诊断只包含实例、字段路径和阶段，不回显配置值或凭据。 */
+export class ModuleConfigurationError extends Error {
+  readonly code = "MODULE_SETTINGS_INVALID";
+  readonly stage = "module-settings";
+  constructor(
+    readonly instanceId: string,
+    readonly definitionId: string,
+    readonly paths: readonly string[],
+  ) {
+    super(
+      `Module settings failed validation: ${instanceId} (${definitionId}), fields: ${paths.join(", ")}. Reinitialize module configuration.`,
+    );
+    this.name = "ModuleConfigurationError";
+  }
+}

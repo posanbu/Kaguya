@@ -29,3 +29,5 @@
 Attention Arousal 返回 `defer` 后，15 秒重新生成携带累计输入的 candidate。
 
 创建阶段防积压：同 scope 由事务 `openScope` 保持一个开放 candidate。普通群消息共用首个 schedule；私聊、@ 和回复机器人提升即时唤醒。开放期间新输入保留在账本，终态后按持久化位置水位最多安排一次后续观察。`agent.observation.wake` 对普通和即时唤醒分别去重，也负责触发旧积压恢复；不要求每条消息得到回复。
+
+observation.ts 集中维护 typed 来源判定、开放观察投影和有界 Selector；index.ts 保留设置、订阅与调度提交。原导出通过入口重导出，外部调用不需要迁移。

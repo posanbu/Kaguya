@@ -88,6 +88,8 @@ describe("demo entry point", () => {
       "agent.chat.scope.binding: 1",
       "agent.chat.scope.entity: 1",
       "agent.conversation.context.frozen: 1",
+      "agent.expression.selection.completed: 1",
+      "agent.expression.selection.requested: 1",
       "agent.heartbeat.scheduled: 1",
       "agent.message.intent.requested: 1",
       "agent.person.context.completed: 1",

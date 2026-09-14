@@ -298,6 +298,8 @@ describe("KaguyaRuntime", () => {
       ).toEqual([
         "core.association.memory",
         "agent.attention.arousal",
+        "agent.attention.focus",
+        "agent.expression",
         "agent.heartbeat.short",
         "agent.heartflow.online",
         "core.identity.normalize",
@@ -344,7 +346,7 @@ describe("KaguyaRuntime", () => {
         tier: "heavy",
         providerId: "test",
         modelId: "deterministic-heavy",
-        promptVariableCount: 4,
+        promptVariableCount: 5,
       });
       expect(requestSummary?.promptPreview).toContain(
         "已决定在当前私聊中发送一条自然消息",
@@ -422,6 +424,7 @@ describe("KaguyaRuntime", () => {
     )!;
     const definition = defineInformationModule({
       ...base,
+      manifest: { ...base.manifest, requires: [modelTaskCapability] },
       create: (options, context) => {
         value = context.use(modelTaskCapability);
         activation = options.activation;
@@ -1087,6 +1090,8 @@ describe("KaguyaRuntime", () => {
         new Set([
           "core.message.inbound.text",
           "agent.message.intent.requested",
+          "agent.expression.selection.requested",
+          "agent.expression.selection.completed",
           "agent.association.requested",
           "agent.association.query",
           "agent.association.completed",
@@ -1773,9 +1778,11 @@ function createMessageComposition(
     modelTask: {
       approvals: activations
         .filter((a) =>
-          ["agent.message-composer", "agent.heartflow.online"].includes(
-            a.definitionId,
-          ),
+          [
+            "agent.message-composer",
+            "agent.heartflow.online",
+            "agent.expression",
+          ].includes(a.definitionId),
         )
         .map((a) => ({
           activation: {
@@ -1784,7 +1791,7 @@ function createMessageComposition(
           },
           selectionPolicy: {
             tier:
-              a.definitionId === "agent.heartflow.online"
+              a.definitionId !== "agent.message-composer"
                 ? "light"
                 : z
                     .object({ modelTier: z.enum(["light", "heavy"]) })

@@ -242,6 +242,8 @@ describe("unified server composition", () => {
         "agent.person.resolution",
         "core.message.inbound.text",
         "agent.message.intent.requested",
+        "agent.expression.selection.requested",
+        "agent.expression.selection.completed",
         "core.model.task.requested",
         "core.model.task.completed",
         "core.message.assistant.text",

@@ -8,15 +8,10 @@
  * isImmediateObservation 识别私聊、@ 与回复机器人；普通群消息保留首个稀疏观察时刻，避免连续输入饿死。
  */
 import { z } from "@kaguya/schema";
-import {
-  defineInformationModule,
-  defineInformationSelector,
-  onInformation,
-} from "@kaguya/sdk";
+import { defineInformationModule, onInformation } from "@kaguya/sdk";
 import {
   oneShotDueInformationKind,
   oneShotScheduleCapability,
-  oneShotRequestedInformationKind,
 } from "@kaguya/scheduler";
 import {
   heartbeatScheduledInformationKind,
@@ -27,11 +22,7 @@ import {
   inboundTextInformationKind,
   waitRequestedInformationKind,
   observationWakeInformationKind,
-  turnCompletedInformationKind,
   turnWaitingInformationKind,
-  turnSilentInformationKind,
-  turnFailedInformationKind,
-  turnSupersededInformationKind,
 } from "../information-kinds.js";
 
 export const heartbeatSettingsSchema = z
@@ -57,303 +48,6 @@ export const heartbeatSettingsSchema = z
   })
   .strict();
 export type HeartbeatSettings = z.infer<typeof heartbeatSettingsSchema>;
-export function scopeOf(source: any): string {
-  const d = source.destination ?? {};
-  const id = d.groupId ?? d.userId ?? d.channelId ?? d.id ?? "";
-  return `${source.platform}:${source.adapterId}:${d.kind ?? "unknown"}:${id}`;
-}
-
-export const heartbeatScopeSelector = defineInformationSelector({
-  selectorId: "agent.heartbeat.scope-schedules",
-  select: async ({ sourceAtom, ledger }) => {
-    const source = (sourceAtom.payload as any).source;
-    const scopeKey = source
-      ? scopeOf(source)
-      : (sourceAtom.payload as any).scopeKey;
-    const schedules = await ledger.find({
-      kinds: [oneShotRequestedInformationKind.kind],
-      openOnly: true,
-      scopeKey,
-      order: "desc",
-      limit: 1,
-    });
-    for (const schedule of schedules) {
-      const input = (schedule.payload as any).input;
-      if (!input || input.scopeKey !== scopeKey) continue;
-      const terminal = await ledger.related({
-        from: [schedule.informationId],
-        relation: "core:status-of",
-        direction: "incoming",
-        limit: 1,
-      });
-      if (terminal.length) continue;
-      const heartbeat = (
-        await ledger.related({
-          from: [schedule.informationId],
-          relation: "core:caused-by",
-          direction: "outgoing",
-          limit: 1,
-        })
-      )[0];
-      return heartbeat === undefined
-        ? [schedule.informationId]
-        : [schedule.informationId, heartbeat.informationId];
-    }
-    return [];
-  },
-});
-export const heartbeatDueSelector = defineInformationSelector({
-  selectorId: "agent.heartbeat.due-source",
-  select: async ({ sourceAtom, ledger }) => {
-    const requested = await ledger.related({
-      from: [sourceAtom.informationId],
-      relation: "core:status-of",
-      direction: "outgoing",
-      limit: 1,
-    });
-    if (!requested.length) return [];
-    const heartbeat = (
-      await ledger.related({
-        from: [requested[0]!.informationId],
-        relation: "core:caused-by",
-        direction: "outgoing",
-        limit: 1,
-      })
-    )[0];
-    if (heartbeat === undefined) return [];
-    const runtimeContext = await ledger.related({
-      from: [heartbeat.informationId],
-      relation: "core:context",
-      direction: "outgoing",
-      limit: 1,
-    });
-    return [
-      heartbeat.informationId,
-      ...runtimeContext.map((a) => a.informationId),
-    ];
-  },
-});
-
-const observationTerminals = [
-  turnCompletedInformationKind,
-  turnWaitingInformationKind,
-  turnSilentInformationKind,
-  turnFailedInformationKind,
-  turnSupersededInformationKind,
-];
-
-/** 高显著信息绕过稀疏节奏；只有平台可验证的私聊、mention、reply 和显式 mention-all 可提升。 */
-export function isImmediateObservation(source: any): boolean {
-  return (
-    source.destination?.kind === "private" ||
-    source.destination?.kind === "web" ||
-    (source.mentions ?? []).some(
-      (mention: any) =>
-        mention.kind === "all" ||
-        (source.selfId &&
-          mention.kind === "user" &&
-          mention.id === source.selfId),
-    ) ||
-    Boolean(source.selfId && source.replyTo?.senderId === source.selfId)
-  );
-}
-
-/** 查询开放观察与最近候选的水位；普通路径不枚举历史 claims/candidates。 */
-export const heartbeatObservationSelector = defineInformationSelector({
-  selectorId: "agent.heartbeat.observation",
-  select: async ({ sourceAtom, ledger }) => {
-    let anchor = sourceAtom;
-    if (sourceAtom.kind === oneShotDueInformationKind.kind) {
-      const request = (
-        await ledger.related({
-          from: [sourceAtom.informationId],
-          relation: "core:status-of",
-          direction: "outgoing",
-          limit: 1,
-        })
-      )[0];
-      if (!request) return [];
-      anchor = (
-        await ledger.related({
-          from: [request.informationId],
-          relation: "core:caused-by",
-          direction: "outgoing",
-          limit: 1,
-        })
-      )[0]!;
-      if (!anchor) return [];
-    }
-    const p = anchor.payload as any;
-    const source =
-      p.source ??
-      (p.platform
-        ? {
-            platform: p.platform,
-            adapterId: p.adapterId,
-            destination: p.destination,
-          }
-        : undefined);
-    const scopeKey = p.scopeKey ?? (source ? scopeOf(source) : undefined);
-    if (!scopeKey) return [];
-    const open = await ledger.find({
-      kinds: [turnCandidateInformationKind.kind],
-      scopeKey,
-      registrationOrder: true,
-      openOnly: true,
-      order: "desc",
-      limit: 1000,
-    });
-    const latest = await ledger.find({
-      kinds: [turnCandidateInformationKind.kind],
-      scopeKey,
-      registrationOrder: true,
-      order: "desc",
-      limit: 1,
-    });
-    const candidate = latest[0];
-    const selected = new Map(
-      [...open, ...latest].map((a) => [a.informationId, a]),
-    );
-    if (sourceAtom.kind === waitRequestedInformationKind.kind) {
-      for (const a of await ledger.related({
-        from: [sourceAtom.informationId],
-        relation: "core:caused-by",
-        direction: "outgoing",
-        limit: 1,
-      }))
-        selected.set(a.informationId, a);
-    }
-    // 返回终态以区分唯一开放观察；同 scope 的历史只读取最近一条。
-    for (const c of latest)
-      for (const a of await ledger.related({
-        from: [c.informationId],
-        relation: "core:status-of",
-        direction: "incoming",
-        limit: 10,
-      }))
-        selected.set(a.informationId, a);
-    const target =
-      source ??
-      (candidate
-        ? {
-            platform: candidate.payload.platform,
-            adapterId: candidate.payload.adapterId,
-            destination: candidate.payload.destination,
-          }
-        : undefined);
-    if (target) {
-      let watermark = (
-        candidate?.payload.sourceInformationIds as string[] | undefined
-      )?.at(-1);
-      // 恢复合并的来源被冻结在 claim 中；按注册位置取上界，避免回放已爬楼的迟到时间戳输入。
-      const terminal = [...selected.values()].find(
-        (a) =>
-          a.payload.candidateInformationId === candidate?.informationId &&
-          observationTerminals.some((k) => k.kind === a.kind),
-      );
-      if (terminal) {
-        const claim = (
-          await ledger.related({
-            from: [terminal.informationId],
-            relation: "agent:turn-claim",
-            direction: "outgoing",
-            limit: 1,
-          })
-        )[0];
-        const frozen = claim
-          ? (
-              await ledger.related({
-                from: [claim.informationId],
-                relation: "agent:turn-claim",
-                direction: "incoming",
-                limit: 100,
-              })
-            ).find((a) => a.kind === "agent.turn.context.completed")
-          : undefined;
-        const ids = frozen
-          ? (frozen.payload.inputs as any[]).map((i) => i.informationId)
-          : (claim?.references
-              .filter((r) => r.relation === "core:uses-context")
-              .map((r) => r.informationId) ?? []);
-        if (ids.length)
-          watermark =
-            (
-              await ledger.find({
-                kinds: [inboundTextInformationKind.kind],
-                informationIds: ids,
-                registrationOrder: true,
-                order: "desc",
-                limit: 1,
-              })
-            )[0]?.informationId ?? watermark;
-      }
-      const inbounds = await ledger.find({
-        kinds: [inboundTextInformationKind.kind],
-        ...(watermark ? { afterInformationId: watermark } : {}),
-        registrationOrder: true,
-        scopeKey,
-        payloadContains: {
-          source: {
-            platform: target.platform,
-            adapterId: target.adapterId,
-            destination: target.destination,
-          },
-        },
-        order: "desc",
-        limit: 1000,
-      });
-      for (const a of [...inbounds].reverse()) selected.set(a.informationId, a);
-    }
-    for (const inbound of [...selected.values()].filter(
-      (a) => a.kind === inboundTextInformationKind.kind,
-    )) {
-      const input = (inbound.payload as any).source;
-      if (!input?.replyTo?.platformMessageId || isImmediateObservation(input))
-        continue;
-      const deliveries = await ledger.find({
-        kinds: ["core.delivery.delivered"],
-        payloadContains: {
-          ok: true,
-          platform: input.platform,
-          adapterId: input.adapterId,
-          target: input.destination,
-          platformMessageId: input.replyTo.platformMessageId,
-        },
-        order: "desc",
-        limit: 1,
-      });
-      for (const a of deliveries) selected.set(a.informationId, a);
-    }
-    return [...selected.keys()];
-  },
-});
-
-function immediateInState(source: any, state: readonly any[]): boolean {
-  return (
-    isImmediateObservation(source) ||
-    Boolean(
-      source.replyTo?.platformMessageId &&
-      state.some(
-        (a) =>
-          a.kind === "core.delivery.delivered" &&
-          a.payload.platformMessageId === source.replyTo.platformMessageId,
-      ),
-    )
-  );
-}
-
-function openObservations(atoms: readonly any[]) {
-  return atoms.filter(
-    (a) =>
-      a.kind === turnCandidateInformationKind.kind &&
-      !atoms.some(
-        (t) =>
-          observationTerminals.some((k) => k.kind === t.kind) &&
-          t.payload.candidateInformationId === a.informationId,
-      ),
-  );
-}
-
 export const heartbeatModule = defineInformationModule({
   manifest: {
     protocolVersion: 1,
@@ -842,3 +536,20 @@ export const heartbeatModule = defineInformationModule({
     };
   },
 });
+
+import {
+  scopeOf,
+  heartbeatScopeSelector,
+  heartbeatDueSelector,
+  observationTerminals,
+  heartbeatObservationSelector,
+  immediateInState,
+  openObservations,
+} from "./observation.js";
+export {
+  scopeOf,
+  heartbeatScopeSelector,
+  heartbeatDueSelector,
+  isImmediateObservation,
+  heartbeatObservationSelector,
+} from "./observation.js";

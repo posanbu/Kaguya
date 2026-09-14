@@ -21,7 +21,10 @@
     "postgres:status": "pnpm --filter @kaguya/server postgres:status",
     "postgres:check": "pnpm --filter @kaguya/server postgres:check",
     "prompt:test": "cross-env PROMPTFOO_DISABLE_TELEMETRY=1 PROMPTFOO_DISABLE_UPDATE=1 HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9 ALL_PROXY=http://127.0.0.1:9 NO_PROXY= https_proxy=http://127.0.0.1:9 http_proxy=http://127.0.0.1:9 all_proxy=http://127.0.0.1:9 no_proxy= promptfoo eval --no-cache",
-    "demo": "pnpm --filter @kaguya/demo start"
+    "demo": "pnpm --filter @kaguya/demo start",
+    "test:modules": "tsc -b && vitest run packages/modules/src",
+    "test:flow": "tsc -b && vitest run apps/server/src/speech-planner.test.ts packages/runtime/src/runtime.test.ts",
+    "test:persistence": "tsc -b && vitest run packages/database/src"
   },
   "devDependencies": {
     "@types/node": "24.13.3",

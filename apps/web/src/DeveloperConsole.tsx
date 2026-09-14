@@ -11,6 +11,7 @@
  * 输入输出与副作用：仅 GET 请求、history 导航和用户触发的剪贴板写入；无轮询、编辑或重放；
  * 卸载清理异步任务，加载/失败时隐藏旧数据，明确显示空结果、分页和图截断。
  */
+import { FlowSummary } from "./FlowSummary.js";
 import { ModuleTemplatesSection } from "./ModuleTemplatesSection.js";
 import { ModuleSettingsSection } from "./ModuleSettingsSection.js";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
@@ -496,6 +497,7 @@ function Flows({
           <Status state={flow} />
           {flow.data && (
             <>
+              <FlowSummary flow={flow.data} />
               <div className="developer-heading">
                 <p>
                   {flow.data.nodes.length} 个节点 · {flow.data.edges.length}{" "}

@@ -14,6 +14,7 @@
  * 写入等待或终态；registerOnce/commitTerminal 保证重放幂等，模型 I/O 经宿主 capability 执行，平台 I/O 由 delivery 层负责。
  * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
  */
+import { activeFocus, focusOpened } from "../attention-focus/facts.js";
 import { plannerTemplateDeclaration } from "../../prompt-declarations.js";
 import {
   type MessageAuthorization,
@@ -38,8 +39,6 @@ import {
   type CompiledPrompt,
   type DeepReadonly,
   type InformationAtom,
-  type InformationId,
-  type JsonObject,
   z,
 } from "@kaguya/schema";
 import {
@@ -113,6 +112,12 @@ export const heartflowSettingsSchema = z
       public: true,
       default: false,
     }),
+    focusIdleMs: z.number().int().min(1000).max(3600000).default(120000).meta({
+      title: "关注空闲期限",
+      description: "群聊直接唤醒或成功参与后的租约时长，单位毫秒。",
+      public: true,
+      default: 120000,
+    }),
     staleAfterMs: z.number().int().min(0).meta({
       title: "候选过期时间",
       description: "超过此时间的候选失效，单位毫秒。",
@@ -122,14 +127,6 @@ export const heartflowSettingsSchema = z
   })
   .strict();
 export type HeartflowSettings = z.infer<typeof heartflowSettingsSchema>;
-
-const TURN_TERMINAL_KINDS = new Set<string>([
-  turnCompletedInformationKind.kind,
-  turnWaitingInformationKind.kind,
-  turnSilentInformationKind.kind,
-  turnFailedInformationKind.kind,
-  turnSupersededInformationKind.kind,
-]);
 
 export const heartflowStateSelector = defineInformationSelector({
   selectorId: "agent.heartflow.state",
@@ -417,6 +414,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
         options.executionExhaustedInformationKind,
       ],
       produces: [
+        focusOpened,
         plannerDecisionInformationKind,
         turnClaimedInformationKind,
         turnStartedInformationKind,
@@ -1087,6 +1085,64 @@ async function progressCandidate(
   const safe = completeInputs.every(
     ({ identity }) => (identity.payload as any).status !== "failed",
   );
+  let focus = isGroup
+    ? activeFocus(atoms, payload.scopeKey, payload.asOf)
+    : undefined;
+  const directInput = completeInputs.findLast(({ inbound }) => {
+    const p = inboundTextInformationKind.payloadSchema.parse(inbound.payload);
+    return (
+      settings.botNames.some((name) =>
+        p.text.toLocaleLowerCase().includes(name.toLocaleLowerCase()),
+      ) ||
+      (p.source.selfId !== undefined &&
+        (p.source.mentions?.some(
+          (m: { kind: string; id?: string }) =>
+            m.kind === "user" && m.id === p.source.selfId,
+        ) ||
+          p.source.replyTo?.senderId === p.source.selfId)) ||
+      (p.source.replyTo !== undefined &&
+        deliveredMessageIds.has(p.source.replyTo.platformMessageId))
+    );
+  });
+  if (isGroup && directInput) {
+    const direct = directInput.inbound;
+    const opened = await context.registerOnce(
+      "agent.attention.focus.open",
+      direct.informationId,
+      focusOpened,
+      {
+        payload: {
+          scopeKey: payload.scopeKey,
+          generation: direct.informationId,
+          startedAt: direct.occurredAt,
+          expiresAt: new Date(
+            Date.parse(direct.occurredAt) + settings.focusIdleMs,
+          ).toISOString(),
+          reason: mentionedSelf
+            ? "mentioned-self"
+            : repliedToSelf
+              ? "replied-to-self"
+              : "named-self",
+          sourceInformationId: direct.informationId,
+        },
+        references: [
+          {
+            relation: "core:uses-context",
+            informationId: direct.informationId,
+          },
+        ],
+        contextInformationId: runtimeContext.informationId,
+      },
+    );
+    focus = activeFocus(
+      [
+        ...atoms.filter((a) => a.informationId !== opened.informationId),
+        opened,
+      ],
+      payload.scopeKey,
+      payload.asOf,
+    );
+  }
   await context.registerOnce(
     "agent.turn.context.completed",
     claim.informationId,
@@ -1114,6 +1170,13 @@ async function progressCandidate(
         messageCount: completeInputs.length,
         isPrivate,
         isGroup,
+        focusActive: focus !== undefined,
+        ...(focus
+          ? {
+              focusInformationId: focus.informationId,
+              focusExpiresAt: String(focus.payload.expiresAt),
+            }
+          : {}),
         mentionedSelf,
         repliedToSelf,
         namedSelf,
@@ -1147,6 +1210,14 @@ async function progressCandidate(
             informationId: identity.informationId,
           },
         ]),
+        ...(focus
+          ? [
+              {
+                relation: "core:uses-context",
+                informationId: focus.informationId,
+              },
+            ]
+          : []),
         ...memories.map(({ informationId }) => ({
           relation: "core:uses-context" as const,
           informationId,
@@ -1495,422 +1566,26 @@ async function supersedeCandidate(
   );
 }
 
-async function hydrateCandidate(
-  ledger: InformationSelectorLedger,
-  candidate: DeepReadonly<InformationAtom>,
-  remember: (
-    atoms: readonly DeepReadonly<InformationAtom>[],
-  ) => readonly DeepReadonly<InformationAtom>[],
-) {
-  remember(
-    await related(ledger, candidate.informationId, "core:context", "outgoing"),
-  );
-  const inbounds = remember(
-    await related(
-      ledger,
-      candidate.informationId,
-      "core:uses-context",
-      "outgoing",
-      1_000,
-    ),
-  ).filter(({ kind }) => kind === inboundTextInformationKind.kind);
-  const source = (inbounds.at(-1)?.payload as any)?.source;
-  if (source !== undefined) {
-    const asOfMs = Date.parse((candidate.payload as any).asOf);
-    const occurredBefore = new Date(asOfMs + 1).toISOString();
-    remember(
-      await ledger.find({
-        kinds: [inboundTextInformationKind.kind],
-        occurredAfter: new Date(asOfMs - 30 * 60_000).toISOString(),
-        occurredBefore,
-        payloadContains: {
-          source: {
-            platform: source.platform,
-            adapterId: source.adapterId,
-            destination: source.destination,
-          },
-        },
-        order: "asc",
-        limit: 1_000,
-      }),
-    );
-    remember(
-      await ledger.find({
-        kinds: ["core.delivery.delivered"],
-        occurredAfter: new Date(asOfMs - 30 * 60_000).toISOString(),
-        occurredBefore,
-        payloadContains: {
-          ok: true,
-          platform: source.platform,
-          adapterId: source.adapterId,
-          target: source.destination,
-        },
-        order: "asc",
-        limit: 1_000,
-      }),
-    );
-    const repliedMessageId = source.replyTo?.platformMessageId;
-    if (typeof repliedMessageId === "string") {
-      remember(
-        await ledger.find({
-          kinds: ["core.delivery.delivered"],
-          occurredBefore,
-          payloadContains: {
-            ok: true,
-            platform: source.platform,
-            adapterId: source.adapterId,
-            target: source.destination,
-            platformMessageId: repliedMessageId,
-          },
-          order: "desc",
-          limit: 1,
-        }),
-      );
-    }
-  }
-  for (const inbound of inbounds) {
-    remember(
-      await related(
-        ledger,
-        inbound.informationId,
-        "core:status-of",
-        "incoming",
-        100,
-      ),
-    );
-  }
-  remember(
-    await related(
-      ledger,
-      candidate.informationId,
-      "core:status-of",
-      "incoming",
-      10,
-    ),
-  );
-  const candidateLinks = remember(
-    await related(
-      ledger,
-      candidate.informationId,
-      "agent:turn-candidate",
-      "incoming",
-      10,
-    ),
-  );
-  const ownClaims = candidateLinks.filter(
-    (a) => a.kind === turnClaimedInformationKind.kind,
-  );
-  for (const wake of candidateLinks.filter(
-    (a) => a.kind === observationWakeInformationKind.kind,
-  )) {
-    const inputs = remember(
-      await related(
-        ledger,
-        wake.informationId,
-        "core:uses-context",
-        "outgoing",
-        1000,
-      ),
-    );
-    for (const input of inputs)
-      remember(
-        await related(
-          ledger,
-          input.informationId,
-          "core:status-of",
-          "incoming",
-          100,
-        ),
-      );
-  }
-  const scopeKey = (candidate.payload as any).scopeKey;
-  const claims = remember(
-    await ledger.find({
-      kinds: [turnClaimedInformationKind.kind],
-      scopeKey,
-      registrationOrder: true,
-      order: "desc",
-      limit: 1,
-    }),
-  );
-  for (const claim of uniqueAtoms([...claims, ...ownClaims])) {
-    remember(
-      await related(
-        ledger,
-        claim.informationId,
-        "agent:turn-claim",
-        "incoming",
-        100,
-      ),
-    );
-    const recoveryInputs = remember(
-      await related(
-        ledger,
-        claim.informationId,
-        "core:uses-context",
-        "outgoing",
-        1000,
-      ),
-    );
-    for (const inbound of recoveryInputs)
-      remember(
-        await related(
-          ledger,
-          inbound.informationId,
-          "core:status-of",
-          "incoming",
-          100,
-        ),
-      );
+import {
+  hydrateCandidate,
+  candidatesForClaims,
+  related,
+} from "./state-query.js";
 
-    const claimCandidates = remember(
-      await related(
-        ledger,
-        claim.informationId,
-        "agent:turn-candidate",
-        "outgoing",
-      ),
-    );
-    remember(
-      await related(
-        ledger,
-        claim.informationId,
-        "core:status-of",
-        "incoming",
-        10,
-      ),
-    );
-    for (const claimedCandidate of claimCandidates) {
-      remember(
-        await related(
-          ledger,
-          claimedCandidate.informationId,
-          "core:context",
-          "outgoing",
-        ),
-      );
-      remember(
-        await related(
-          ledger,
-          claimedCandidate.informationId,
-          "core:status-of",
-          "incoming",
-          10,
-        ),
-      );
-    }
-  }
-}
-
-async function candidatesForClaims(
-  ledger: InformationSelectorLedger,
-  claims: readonly DeepReadonly<InformationAtom>[],
-  remember: (
-    atoms: readonly DeepReadonly<InformationAtom>[],
-  ) => readonly DeepReadonly<InformationAtom>[],
-) {
-  return remember(
-    (
-      await Promise.all(
-        claims.map((claim) =>
-          related(
-            ledger,
-            claim.informationId,
-            "agent:turn-candidate",
-            "outgoing",
-          ),
-        ),
-      )
-    ).flat(),
-  );
-}
-
-async function related(
-  ledger: InformationSelectorLedger,
-  from: string,
-  relation: string,
-  direction: "outgoing" | "incoming",
-  limit = 10,
-) {
-  const atoms: DeepReadonly<InformationAtom>[] = [];
-  let offset = 0;
-  for (;;) {
-    const page = await ledger.related({
-      from: [from as InformationId],
-      relation,
-      direction,
-      limit,
-      offset,
-    });
-    atoms.push(...page);
-    if (
-      relation !== "core:uses-context" ||
-      limit !== 1000 ||
-      page.length < limit
-    )
-      return atoms;
-    offset += page.length;
-  }
-}
-
-function referenced(
-  source: DeepReadonly<InformationAtom>,
-  relation: string,
-  atoms: ReadonlyMap<string, DeepReadonly<InformationAtom>>,
-) {
-  return source.references.flatMap((reference) => {
-    if (reference.relation !== relation) return [];
-    const atom = atoms.get(reference.informationId);
-    return atom === undefined ? [] : [atom];
-  });
-}
-
-function sameScope(left: any, right: any): boolean {
-  return (
-    left?.platform === right?.platform &&
-    left?.adapterId === right?.adapterId &&
-    JSON.stringify(left?.destination) === JSON.stringify(right?.destination)
-  );
-}
-
-function sameDeliveryScope(delivery: any, source: any): boolean {
-  return (
-    delivery?.ok === true &&
-    delivery?.platform === source?.platform &&
-    delivery?.adapterId === source?.adapterId &&
-    JSON.stringify(delivery?.target) === JSON.stringify(source?.destination)
-  );
-}
-
-function identityTerminalFor(
-  inboundInformationId: string,
-  atoms: readonly DeepReadonly<InformationAtom>[],
-) {
-  return atoms.find(
-    (atom) =>
-      atom.kind === personContextCompletedInformationKind.kind &&
-      atom.references.some(
-        (reference) =>
-          reference.relation === "core:status-of" &&
-          reference.informationId === inboundInformationId,
-      ),
-  );
-}
-
-function hasExhaustedStatus(
-  informationId: string,
-  atoms: readonly DeepReadonly<InformationAtom>[],
-) {
-  return atoms.some(
-    (atom) =>
-      atom.kind === "execution.exhausted" &&
-      atom.references.some(
-        (reference) =>
-          reference.relation === "core:status-of" &&
-          reference.informationId === informationId,
-      ),
-  );
-}
-
-function turnTerminalFor(
-  candidateInformationId: string,
-  atoms: readonly DeepReadonly<InformationAtom>[],
-) {
-  return atoms.find(
-    (atom) =>
-      TURN_TERMINAL_KINDS.has(atom.kind) &&
-      atom.references.some(
-        (reference) =>
-          reference.relation === "core:status-of" &&
-          reference.informationId === candidateInformationId,
-      ),
-  );
-}
-
-function claimForCandidate(
-  candidateInformationId: string,
-  atoms: readonly DeepReadonly<InformationAtom>[],
-) {
-  return atoms.find(
-    (atom) =>
-      atom.kind === turnClaimedInformationKind.kind &&
-      (atom.payload as any).candidateInformationId === candidateInformationId,
-  );
-}
-
-function outgoingStatusTarget(
-  source: DeepReadonly<InformationAtom>,
-  atoms: readonly DeepReadonly<InformationAtom>[],
-) {
-  const targetId = source.references.find(
-    ({ relation }) => relation === "core:status-of",
-  )?.informationId;
-  return atoms.find(({ informationId }) => informationId === targetId);
-}
-
-function terminalReferences(
-  candidateInformationId: string,
-  claimInformationId: string,
-) {
-  return [
-    { relation: "core:status-of", informationId: candidateInformationId },
-    { relation: "agent:turn-claim", informationId: claimInformationId },
-  ];
-}
-
-function assertTurnLink(
-  candidate: DeepReadonly<InformationAtom>,
-  claim: DeepReadonly<InformationAtom>,
-  turnContext: DeepReadonly<InformationAtom>,
-) {
-  const claimPayload = claim.payload as any;
-  const contextPayload = turnContext.payload as any;
-  if (
-    claimPayload.candidateInformationId !== candidate.informationId ||
-    contextPayload.candidateInformationId !== candidate.informationId ||
-    contextPayload.claimInformationId !== claim.informationId
-  )
-    throw new Error("Speech decision references an inconsistent turn");
-}
-
-function compareCandidates(
-  left: DeepReadonly<InformationAtom>,
-  right: DeepReadonly<InformationAtom>,
-) {
-  const byTime =
-    Date.parse((left.payload as any).asOf) -
-    Date.parse((right.payload as any).asOf);
-  return byTime || left.informationId.localeCompare(right.informationId);
-}
-
-function compareClaims(
-  left: DeepReadonly<InformationAtom>,
-  right: DeepReadonly<InformationAtom>,
-) {
-  const byGeneration =
-    ((left.payload as any).generation ?? 0) -
-    ((right.payload as any).generation ?? 0);
-  if (byGeneration !== 0) return byGeneration;
-  const byTime = Date.parse(left.occurredAt) - Date.parse(right.occurredAt);
-  return byTime || left.informationId.localeCompare(right.informationId);
-}
-
-function uniqueAtoms<T extends DeepReadonly<InformationAtom>>(
-  atoms: readonly T[],
-) {
-  return [...new Map(atoms.map((atom) => [atom.informationId, atom])).values()];
-}
-
-function copyOptionalIdentity(payload: any): JsonObject {
-  return {
-    ...(payload.scopeInformationId === undefined
-      ? {}
-      : { scopeInformationId: payload.scopeInformationId }),
-    ...(payload.accountInformationId === undefined
-      ? {}
-      : { accountInformationId: payload.accountInformationId }),
-    ...(payload.personInformationId === undefined
-      ? {}
-      : { personInformationId: payload.personInformationId }),
-  };
-}
+import {
+  TURN_TERMINAL_KINDS,
+  referenced,
+  sameScope,
+  sameDeliveryScope,
+  identityTerminalFor,
+  hasExhaustedStatus,
+  turnTerminalFor,
+  claimForCandidate,
+  outgoingStatusTarget,
+  terminalReferences,
+  assertTurnLink,
+  compareCandidates,
+  compareClaims,
+  uniqueAtoms,
+  copyOptionalIdentity,
+} from "./turn-state.js";

@@ -4,6 +4,7 @@
  * 主要职责：覆盖凭据/人设/白名单/模块快照切换、旧入口 fencing、持久化写锁、回滚与恢复；启动拒绝旧索引且不改写。
  * 代码库关系：只替换外部数据库连接与模型 provider；server.ts 的应用编排和 HTTP 鉴权使用实际实现。
  * 输入输出与副作用：每例独立临时目录及数据库，使用虚构凭据，关闭 Server 后清理全部测试资源。
+ * 执行预算：本文件每例最多 30 秒，覆盖 Windows CI 上真实配置文件读写、PGlite 初始化与多次 Runtime 启停。
  */
 import {
   mkdtemp,
@@ -35,6 +36,9 @@ vi.mock("@ai-sdk/openai-compatible", async () => {
     })),
   };
 });
+// 仅为热应用集成测试保留完整启停预算；其他文件仍使用全局 15 秒上限。
+vi.setConfig({ testTimeout: 30_000 });
+
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
   for (const action of cleanup.splice(0).reverse()) await action();
@@ -587,4 +591,4 @@ it("keeps independent directional policies pending until explicit application", 
       limit: 10,
     }),
   ).toEqual([]);
-}, 20000);
+});

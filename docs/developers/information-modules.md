@@ -138,3 +138,39 @@ Planner 支持 `message | wait | silent`。宿主按本轮冻结人物/会话背
 Selector 的 `find` 支持 `openOnly`、`scopeKey`、`registrationOrder` 和排他的 `afterInformationId`。`openOnly` 读取尚无 `core:status-of` 或 terminal 提交的生命周期投影；`registrationOrder` 按持久化位置排序，`afterInformationId` 限定水位后的原子。普通 kind、payload、时间与数量约束仍然有效，查询结果仍经过 Selector 的授权与重新加载验证。scope 来自 payload 的 `scopeKey`、schedule input 的 `scopeKey` 或规范化消息 source；禁止模块直接读取投影表。
 
 恢复超大引用集合时，`related.offset` 按引用顺序分页，每页仍受 `limit` 限制；`find.informationIds` 可在一组已知原子中选取注册水位。Heartflow 恢复会分页遍历开放集合，避免 1000 条查询上限截断遗留 candidate 或已冻结来源。
+
+## 关注与表达的独立生命周期
+
+`agent.attention.focus` 保存群聊的 opened、renewed、closed、expired。Heartflow 在冻结前以真实直接入站 ID 幂等开启，并将同 scope 的有效租约投影写入 turn context。Attention Arousal 使用可配置的 focusRelevance，但仍先检查静默、安全、目标可用性、输入时效和频率。成功投递的回合可续租，Planner 的 wait 不等于成功参与。
+
+`agent.expression` 的后台学习消费真实 Identity scope，冻结一批真人入站，再经可重放 Model Task 归纳受限场景与风格。输出整体核验来源后落账，不保存人名、账号或原文。在线选择发生在获胜 message intent 之后，冻结最多 24 个候选，选择至多三条；Composer 消费独立的 expression_habits 变量，空选择保持当前生成行为。
+
+这两条链均通过 Information 引用可追溯，不复用事实 Memory，不改变 Planner 的 message、wait、silent 协议。
+
+## 实现与诊断入口
+
+一方 Kind 的稳定入口仍为 information-kinds.ts，具体 schema 与定义位于 kinds/ 的 message、turn、heartbeat、identity、association 和 person-fact 文件；重导出保持对象身份。Heartflow 的 state-query.ts 负责账本水合，turn-state.ts 负责纯状态投影，index.ts 负责推进与提交。
+
+检查页的模块信息流直接连接 Manifest 中的 produces 与 consumes，支持聚焦一个模块观察上下游，并区分可用定义与已激活实例。消息流显示已观察阶段计数，并可导出不含 payload 或 Prompt 的紧凑诊断 JSON。零计数不代表失败，截断标记与图外引用必须共同判断。
+
+本阶段保留现有持久化基线；schema 迁移链、retention、容量治理、全量投影修复仍属于后续独立工作。
+
+常用反馈入口先执行增量 TypeScript 构建，避免 workspace dist 过期：
+
+::: code-group
+
+```bash [模块契约 ~vscode-icons:file-type-shell~]
+pnpm test:modules
+```
+
+```bash [在线回合 ~vscode-icons:file-type-shell~]
+pnpm test:flow
+```
+
+```bash [持久化 ~vscode-icons:file-type-shell~]
+pnpm test:persistence
+```
+
+:::
+
+配置装配中的字段验证失败使用 `ModuleConfigurationError`，提供稳定的 `MODULE_SETTINGS_INVALID`、阶段、实例与字段路径，不回显字段值。
