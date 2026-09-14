@@ -107,6 +107,7 @@ export class ModelTaskClient implements ModelTaskCapability {
   readonly #client: Pick<KaguyaLlmClient, "generate">;
   readonly #resolveModel: ModelTaskClientOptions["resolveModel"];
   readonly #now: () => Date;
+  readonly #inflight = new Map<string, Set<AbortController>>();
   constructor(options: ModelTaskClientOptions) {
     this.#core = options.core;
     this.#client = options.client;
@@ -235,6 +236,11 @@ export class ModelTaskClient implements ModelTaskCapability {
     const existing = await this.readTerminal(requested.informationId);
     if (existing)
       return resultFromWinner<TOutput>(existing, requested.informationId);
+    const controller = new AbortController();
+    const controllers =
+      this.#inflight.get(requested.informationId) ?? new Set<AbortController>();
+    controllers.add(controller);
+    this.#inflight.set(requested.informationId, controllers);
     const persisted = persistedMetadata(requested);
     const startedAt = this.#now().getTime();
     let metrics:
@@ -247,6 +253,9 @@ export class ModelTaskClient implements ModelTaskCapability {
       typeof modelTaskCompletedInformationKind.payloadSchema
     >;
     try {
+      const lateTerminal = await this.readTerminal(requested.informationId);
+      if (lateTerminal)
+        return resultFromWinner<TOutput>(lateTerminal, requested.informationId);
       if (
         canonical(persisted.resolvedModel) !==
         canonical(
@@ -257,7 +266,10 @@ export class ModelTaskClient implements ModelTaskCapability {
         )
       )
         throw new Error("Recorded model unavailable");
-      const signal = this.#core.executionSignal;
+      const executionSignal = this.#core.executionSignal;
+      const signal = executionSignal
+        ? AbortSignal.any([executionSignal, controller.signal])
+        : controller.signal;
       const generation = await this.#client.generate({
         modelId: persisted.resolvedModel.modelId,
         prompt: informationCompiledPromptSchema.parse(requested.payload.prompt),
@@ -290,7 +302,7 @@ export class ModelTaskClient implements ModelTaskCapability {
       // 真正 commit 留在此 try 外，数据库故障、关闭及 claim fencing 不生成 failed。
       informationPayloadSchema.parse(completed);
     } catch (error) {
-      if (this.#core.executionSignal?.aborted) {
+      if (this.#core.executionSignal?.aborted || controller.signal.aborted) {
         const winner = await this.readTerminal(requested.informationId);
         if (winner)
           return resultFromWinner<TOutput>(winner, requested.informationId);
@@ -323,6 +335,10 @@ export class ModelTaskClient implements ModelTaskCapability {
         },
       );
       return resultFromWinner<TOutput>(winner, requested.informationId);
+    } finally {
+      controllers.delete(controller);
+      if (controllers.size === 0)
+        this.#inflight.delete(requested.informationId);
     }
     const winner = await this.#core.commitTerminal(
       terminalGroup,
@@ -367,6 +383,11 @@ export class ModelTaskClient implements ModelTaskCapability {
           },
         },
       );
+      if (winner.kind === modelTaskCancelledInformationKind.kind) {
+        for (const controller of this.#inflight.get(requested.informationId) ??
+          [])
+          controller.abort();
+      }
       return resultFromWinner(winner, requested.informationId);
     } catch {
       throw new Error("Model task cancellation could not be committed");

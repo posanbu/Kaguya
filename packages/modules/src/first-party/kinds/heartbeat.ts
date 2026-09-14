@@ -8,7 +8,7 @@ import { defineInformationKind } from "@kaguya/sdk";
 import { nonBlankString } from "./shared.js";
 import { inboundTextInformationKind } from "./message.js";
 
-const heartbeatReasonSchema = z.enum(["message", "wait"]);
+const heartbeatReasonSchema = z.enum(["message", "wait", "interrupt"]);
 
 const heartbeatPolicyVersionSchema = z.literal("short-heartbeat.v1");
 
@@ -37,6 +37,7 @@ const heartbeatScheduledPayloadSchema = z
     sourceInformationIds: z.array(nonBlankString).min(1),
     wakeOnMessage: z.boolean(),
     attempt: z.number().int().min(0),
+    rebuildAttempt: z.number().int().min(0).default(0),
     totalWaitBudget: z.number().int().min(0),
     scopeKey: nonBlankString,
     asOf: z.iso.datetime({ offset: true }),
@@ -153,6 +154,7 @@ const turnCandidatePayloadSchema = z
     scopeKey: nonBlankString,
     asOf: z.iso.datetime({ offset: true }),
     policyVersion: heartbeatPolicyVersionSchema,
+    rebuildAttempt: z.number().int().min(0).default(0),
     attempt: z.number().int().min(0),
     totalWaitBudget: z.number().int().min(0),
   })

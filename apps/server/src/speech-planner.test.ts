@@ -6,7 +6,7 @@
  * fixture 装配正式 Catalog、light Planner 和 heavy Composer；settle 等待 durable 订阅闭合，
  * restart 保留数据库并重建宿主，advance 推进持久 heartbeat 时钟。仅 mock provider HTTP，
  * 决策写入故障的等待沿用 settle 的 8 秒预算，允许 CI 下持久订阅完成前置步骤。
- * 开放观察期间合并新输入为一次后续观察；迟到时间戳单独观察，不重新执行已完成的 Planner。
+ * 尚未提交决策的 Planner 可由新输入打断；静默窗后合并旧、新输入重构，已提交决策仍保持唯一终态。
  * 覆盖动作分支、严格对象输出、失败关闭、直接信号、共享等待预算和并发入站去重。
  * 所有消息和密钥均为合成测试数据；清理按 Runtime、数据库顺序关闭，不访问外部服务。
  */
@@ -312,7 +312,7 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
     expect(f.delivered).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps one open observation while Planner runs and coalesces incoming messages into one successor", async () => {
+  it("interrupts Planner and coalesces incoming messages after the quiet window", async () => {
     let release!: (value: unknown) => void;
     const blocked = new Promise((resolve) => {
       release = resolve;
@@ -333,14 +333,17 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
       expect(f.requests).toHaveLength(1);
       release(silent);
       await f.settle();
+      f.setTime(1001);
+      await f.restart();
+      await f.settle();
       const graph = await f.atoms();
       expect(
-        graph.filter((a) => a.kind === "agent.turn.plan.completed"),
-      ).toHaveLength(2);
+        graph.filter((a) => a.kind === "agent.turn.decision.interrupted"),
+      ).toHaveLength(1);
       expect(
         graph.filter((a) => a.kind === "agent.turn.context.completed").at(-1)
           ?.payload.inputs,
-      ).toHaveLength(8);
+      ).toHaveLength(9);
       expect(f.requests.map((r) => r.model)).toEqual([
         "deepseek-light",
         "deepseek-light",
@@ -358,7 +361,85 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
     }
   });
 
-  it("preserves the wait budget when input arrives during Planner and retires the old wait timer", async () => {
+  it("refreshes the interruption quiet window from the latest message", async () => {
+    let release!: (value: unknown) => void;
+    const blocked = new Promise((resolve) => {
+      release = resolve;
+    });
+    const f = await fixture([() => blocked, silent]);
+    try {
+      await f.submit(f.message());
+      await vi.waitFor(() => expect(f.requests).toHaveLength(1));
+      f.setTime(1000);
+      await f.submit(f.message("m2"));
+      await vi.waitFor(async () =>
+        expect(kinds(await f.atoms())).toContain("agent.turn.interrupted"),
+      );
+      release(silent);
+      await f.settle();
+      f.setTime(500);
+      await f.submit(f.message("m3"));
+      await f.settle();
+      f.setTime(900);
+      await f.restart();
+      await f.settle();
+      expect(f.requests).toHaveLength(1);
+      f.setTime(101);
+      await f.restart();
+      await f.settle();
+      expect(f.requests).toHaveLength(2);
+      expect(
+        (await f.atoms())
+          .filter((a) => a.kind === "agent.turn.context.completed")
+          .at(-1)?.payload.inputs,
+      ).toHaveLength(3);
+    } finally {
+      release(silent);
+    }
+  });
+
+  it("stops interrupting after two Planner rebuilds", async () => {
+    const releases: ((value: unknown) => void)[] = [];
+    const blocked = () =>
+      new Promise((resolve) => {
+        releases.push(resolve);
+      });
+    const f = await fixture([blocked, blocked, blocked, silent]);
+    try {
+      await f.submit(f.message());
+      await vi.waitFor(() => expect(releases).toHaveLength(1));
+      for (let round = 1; round <= 2; round++) {
+        f.setTime(1000);
+        await f.submit(f.message(`m${round + 1}`));
+        await vi.waitFor(async () =>
+          expect(
+            (await f.atoms()).filter(
+              (a) => a.kind === "agent.turn.interrupted",
+            ),
+          ).toHaveLength(round),
+        );
+        releases[round - 1]!(silent);
+        await f.settle();
+        f.setTime(1001);
+        await f.restart();
+        await vi.waitFor(() => expect(releases).toHaveLength(round + 1));
+      }
+      f.setTime(1000);
+      await f.submit(f.message("m4"));
+      await vi.waitFor(async () =>
+        expect(kinds(await f.atoms())).toContain("agent.observation.wake"),
+      );
+      expect(
+        (await f.atoms()).filter((a) => a.kind === "agent.turn.interrupted"),
+      ).toHaveLength(2);
+      releases[2]!(silent);
+      await f.settle();
+    } finally {
+      for (const release of releases) release(silent);
+    }
+  });
+
+  it("rebuilds on new input without consuming the wait budget", async () => {
     let release!: (value: unknown) => void;
     const blocked = new Promise((resolve) => {
       release = resolve;
@@ -374,11 +455,19 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
       );
       release(wait);
       await f.settle();
+      f.setTime(1001);
+      await f.restart();
+      await f.settle();
       const turns = (await f.atoms()).filter(
         (a) => a.kind === "agent.turn.context.completed",
       );
       expect(turns).toHaveLength(2);
-      expect(turns[1]!.payload.attempt).toBe(1);
+      expect(turns[1]!.payload.attempt).toBe(0);
+      expect(
+        (await f.atoms())
+          .filter((a) => a.kind === "agent.turn.candidate")
+          .at(-1)?.payload.rebuildAttempt,
+      ).toBe(1);
       expect(turns[1]!.payload.inputs).toHaveLength(2);
       expect(f.delivered).toHaveBeenCalledTimes(1);
       f.setTime(10000);
@@ -493,8 +582,8 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
     }
   });
 
-  it("replays after a decision write failure without repeating the completed Planner", async () => {
-    const f = await fixture([speak]);
+  it("rebuilds after a decision write failure when new input arrives before decision commit", async () => {
+    const f = await fixture([speak, speak]);
     const commit = f.core().commitTerminal.bind(f.core());
     let interrupted = false;
     const hook = vi
@@ -523,17 +612,23 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
       f.setTime(10000);
       await f.restart();
       await f.settle();
+      f.setTime(1001);
+      await f.restart();
+      await f.settle();
       const graph = await f.atoms();
       expect(f.requests.map((r) => r.model)).toEqual([
         "deepseek-light",
-        "deepseek-heavy",
         "deepseek-light",
+        "deepseek-heavy",
       ]);
       expect(JSON.stringify(f.requests[0])).not.toContain("BACKDATED_HISTORY");
-      expect(JSON.stringify(f.requests.at(-1))).toContain("BACKDATED_HISTORY");
+      expect(JSON.stringify(f.requests[1])).toContain("BACKDATED_HISTORY");
       expect(
         graph.filter((a) => a.kind === "agent.turn.plan.completed"),
-      ).toHaveLength(2);
+      ).toHaveLength(1);
+      expect(
+        graph.filter((a) => a.kind === "agent.turn.decision.interrupted"),
+      ).toHaveLength(1);
       expect(f.delivered).toHaveBeenCalledTimes(1);
     } finally {
       hook.mockRestore();

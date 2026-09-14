@@ -156,6 +156,46 @@ export const turnDecisionSupersededInformationKind = defineInformationKind({
   },
 });
 
+export const turnDecisionInterruptedInformationKind = defineInformationKind({
+  kind: "agent.turn.decision.interrupted",
+  displayName: "规划被新消息打断",
+  description: "新输入在规划结果提交前赢得决策锁，旧规划结果不得再分派。",
+  payloadSchema: z
+    .object({
+      candidateInformationId: nonBlankString,
+      claimInformationId: nonBlankString,
+      triggerInformationId: nonBlankString,
+      rebuildAttempt: z.number().int().min(1),
+    })
+    .strict(),
+  references: {
+    "core:caused-by": { required: true, multiple: false },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
+    "core:status-of": {
+      required: true,
+      multiple: false,
+      targetKinds: [turnClaimedInformationKind.kind],
+    },
+    "core:uses-context": {
+      required: true,
+      multiple: false,
+      targetKinds: [inboundTextInformationKind.kind],
+    },
+  },
+  log: {
+    enabled: true,
+    level: "info",
+    project: ({ payload }) => ({
+      event: "turn.decision.interrupted",
+      rebuildAttempt: payload.rebuildAttempt,
+    }),
+  },
+});
+
 const turnTerminalReferences = {
   "core:caused-by": { required: true, multiple: false },
   "core:context": {
@@ -278,6 +318,29 @@ export const turnSupersededInformationKind = defineInformationKind({
   },
 });
 
+export const turnInterruptedInformationKind = defineInformationKind({
+  kind: "agent.turn.interrupted",
+  displayName: "回合被新消息中断",
+  description: "关闭已冻结但尚未完成规划的旧回合；后继候选按新消息重新构造。",
+  payloadSchema: z
+    .object({
+      ...turnTerminalBaseShape,
+      triggerInformationId: nonBlankString,
+      rebuildAttempt: z.number().int().min(1),
+    })
+    .strict(),
+  references: turnTerminalReferences,
+  log: {
+    enabled: true,
+    level: "info",
+    project: ({ payload }) => ({
+      event: "turn.lifecycle",
+      status: "interrupted",
+      rebuildAttempt: payload.rebuildAttempt,
+    }),
+  },
+});
+
 const turnContextPayloadSchema = z
   .object({
     candidateInformationId: nonBlankString,
@@ -300,6 +363,7 @@ const turnContextPayloadSchema = z
     recentWindowMessages: z.number().int().min(0),
     idleReachedAverage: z.boolean(),
     frequency: z.number().min(0).max(1),
+    frequencyRuleIndex: z.number().int().min(0).nullable().optional(),
     muted: z.boolean(),
     safe: z.boolean(),
     destinationAvailable: z.boolean(),

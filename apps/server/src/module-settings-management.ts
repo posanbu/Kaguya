@@ -59,7 +59,10 @@ export class ModuleSettingsManagement {
         )
       )
         throw new ModuleSettingsError(503, "module_schema_unavailable");
-      if (field.type === "array" && field.items?.type !== "string")
+      if (
+        field.type === "array" &&
+        !["string", "object"].includes(field.items?.type)
+      )
         throw new ModuleSettingsError(503, "module_schema_unavailable");
       return [
         {
@@ -67,6 +70,7 @@ export class ModuleSettingsManagement {
           title: field.title,
           description: field.description,
           type: field.type,
+          ...(field.type === "array" ? { itemType: field.items.type } : {}),
           readOnly: field.readOnly === true,
           required: (json.required ?? []).includes(key),
           ...Object.fromEntries(

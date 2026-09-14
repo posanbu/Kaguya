@@ -49,6 +49,7 @@ import { loadFirstPartyPromptTemplates } from "@kaguya/modules/prompt-templates/
 import {
   modelTaskCapability,
   modelTaskCompletedInformationKind,
+  modelTaskRequestedInformationKind,
   modelTaskFailedInformationKind,
   modelTaskCancelledInformationKind,
   deliveryDeliveredInformationKind,
@@ -93,6 +94,7 @@ export function createMessageCatalog(
     messageAuthorizationCapability,
     modelTaskCapability,
     modelTaskCompletedInformationKind,
+    modelTaskRequestedInformationKind,
     modelTaskFailedInformationKind,
     modelTaskCancelledInformationKind,
     deliveryDeliveredInformationKind,

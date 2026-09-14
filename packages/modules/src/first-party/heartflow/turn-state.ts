@@ -15,6 +15,7 @@ import {
   turnFailedInformationKind,
   turnSilentInformationKind,
   turnSupersededInformationKind,
+  turnInterruptedInformationKind,
   turnWaitingInformationKind,
 } from "../information-kinds.js";
 
@@ -24,6 +25,7 @@ export const TURN_TERMINAL_KINDS = new Set<string>([
   turnSilentInformationKind.kind,
   turnFailedInformationKind.kind,
   turnSupersededInformationKind.kind,
+  turnInterruptedInformationKind.kind,
 ]);
 
 export function referenced(
