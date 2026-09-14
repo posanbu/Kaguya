@@ -6,6 +6,7 @@
  * 代码库关系：AppShell 与业务页共用 workbench.css 和现有 CSS variables；不处理请求。
  * 输入输出与副作用：透传原生按钮属性和 ref；错误反馈使用 alert，其余反馈为 status。
  */
+import { CheckCircle2, AlertTriangle, CircleAlert, Info } from "lucide-react";
 import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 export * as Dialog from "@radix-ui/react-dialog";
 export * as AlertDialog from "@radix-ui/react-alert-dialog";
@@ -41,7 +42,12 @@ export function PageHeader({
     <header className="wb-page-header">
       <div>
         <h1>{title}</h1>
-        {description && <p>{description}</p>}
+        {description && (
+          <details className="wb-page-help">
+            <summary>页面说明</summary>
+            <p>{description}</p>
+          </details>
+        )}
       </div>
       {actions && <div className="wb-page-actions">{actions}</div>}
     </header>
@@ -54,7 +60,20 @@ export function StatusBadge({
   children: ReactNode;
   tone?: "neutral" | "success" | "warning" | "error";
 }) {
-  return <span className={`wb-status wb-status-${tone}`}>{children}</span>;
+  const Icon =
+    tone === "success"
+      ? CheckCircle2
+      : tone === "warning"
+        ? AlertTriangle
+        : tone === "error"
+          ? CircleAlert
+          : Info;
+  return (
+    <span className={`wb-status wb-status-${tone}`}>
+      <Icon size={13} aria-hidden="true" />
+      {children}
+    </span>
+  );
 }
 export function FieldMessage({
   children,

@@ -26,3 +26,25 @@
 .overview-adapter h3 {
   font-size: 1rem;
 }
+
+/* 概览卡片将状态与操作分层，留白优先于长说明。 */
+.overview-card {
+  background: var(--kaguya-paper);
+  padding: 24px;
+  box-shadow: 0 3px 14px rgb(0 0 0 / 3%);
+}
+.overview-card h2 {
+  font-size: 16px;
+  margin-bottom: 18px;
+}
+.overview-card p {
+  font-size: 13px;
+  color: var(--kaguya-muted);
+}
+.overview-card > .wb-button {
+  margin-top: 12px;
+}
+.overview-adapter {
+  margin-top: 16px;
+  padding-top: 16px;
+}

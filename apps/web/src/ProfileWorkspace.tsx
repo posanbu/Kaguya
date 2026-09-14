@@ -66,7 +66,7 @@ export function profileLabels(
   failed = false,
 ): string[] {
   const labels: string[] = [];
-  if (id === selectedId) labels.push("selected（当前选择）");
+  if (id === selectedId) labels.push("当前选择");
   if (id === application?.appliedProfileId) labels.push("已生效");
   if (id === application?.selectedProfileId) {
     if (applying || application.state === "applying") labels.push("应用中");

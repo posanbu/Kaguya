@@ -154,7 +154,7 @@ describe("模块独立页面", () => {
     expect(html).toContain(module.description);
     expect(html).toContain(module.consumes[0]!.description);
     expect(html).toContain(module.produces[0]!.description);
-    expect(html.match(/<details/g)).toHaveLength(2);
+    expect(html.match(/<details/g)).toHaveLength(4);
     expect(html).not.toMatch(/<details[^>]*open/);
     expect(html).toContain("返回模块总览");
     expect(html).toContain('tabindex="-1"');
