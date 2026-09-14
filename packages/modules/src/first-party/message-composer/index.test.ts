@@ -4,6 +4,7 @@
  * 代码库关系：真实模块订阅与 schema 配合受限内存 handler context；不绕过编译器或输出校验。
  * 输入输出与副作用：记录模型执行与 registerOnce 调用，无真实模型、数据库或网络。
  */
+import { expressionSelected } from "../expression/facts.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   defineInformationKind,
@@ -52,7 +53,7 @@ const activation = {
   instanceId: "message-composer.default",
   definitionId: "agent.message-composer",
 };
-async function setup() {
+async function setup(expressionEnabled = false) {
   const f = fixture();
   const execute = vi.fn(
     async (
@@ -66,6 +67,7 @@ async function setup() {
   );
   const registerOnce = vi.fn(async () => f.intent);
   const definition = createMessageComposerModule({
+    expressionEnabled,
     modelTaskCapability: token,
     modelTaskCompletedInformationKind: completedKind,
     promptTemplates: loadFirstPartyPromptTemplates().messageComposer,
@@ -318,4 +320,48 @@ it("does not deliver assistant text originating from another module instance", a
   await s.instance.subscriptions[2]!.handle(assistant as never, s.context);
   expect(s.context.select).not.toHaveBeenCalled();
   expect(s.registerOnce).not.toHaveBeenCalled();
+});
+
+describe("frozen expression dispatch", () => {
+  it("composes from an empty selection with separate provenance and unchanged target", async () => {
+    const { f, execute, context, instance } = await setup(true);
+    const selected = atom(
+      "expression-selected",
+      expressionSelected.kind,
+      {
+        intentInformationId: f.intent.informationId,
+        scopeInformationId: null,
+        habitIds: [],
+        habits: [],
+        reason: "no-candidates",
+        version: 1,
+      },
+      [
+        {
+          relation: "core:uses-context",
+          informationId: f.intent.informationId,
+        },
+      ],
+    );
+    const selectedContext = {
+      ...context,
+      sourceAtom: selected,
+      select: async () => [...f.atoms, selected],
+    };
+    await instance.subscriptions[0]!.handle(selected, selectedContext);
+    expect(execute).toHaveBeenCalledOnce();
+    const request = execute.mock.calls[0]![0];
+    expect(request.sourceInformationId).toBe(f.intent.informationId);
+    expect(
+      request.prompt.variables.find((v) => v.name === "expression_habits"),
+    ).toMatchObject({
+      content: "[]",
+      informationIds: [selected.informationId, f.intent.informationId],
+    });
+    expect(
+      request.contextAtoms.find(
+        (a) => a.informationId === f.intent.informationId,
+      )?.payload.target,
+    ).toEqual(target);
+  });
 });

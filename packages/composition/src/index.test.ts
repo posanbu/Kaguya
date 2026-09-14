@@ -94,6 +94,13 @@ describe("shared Runtime Composition", () => {
         },
         selectionPolicy: { tier: "light" },
       },
+      {
+        activation: {
+          instanceId: "expression.default",
+          definitionId: "agent.expression",
+        },
+        selectionPolicy: { tier: "light" },
+      },
     ]);
     expect(composition.activations).toHaveLength(moduleConfigs.length);
     expect(

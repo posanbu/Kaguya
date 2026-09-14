@@ -35,45 +35,36 @@ const SHORT_REACTIONS = new Set([
 
 export const attentionArousalSettingsSchema = z
   .object({
-    threshold: z
-      .number()
-      .int()
-      .min(0)
-      .max(100)
-      .meta({
-        title: "注意力阈值",
-        description: "达到此分数后关注输入，范围为 0 到 100。",
-        public: true,
-        default: 80,
-      }),
-    deferMs: z
-      .number()
-      .int()
-      .min(0)
-      .meta({
-        title: "延迟关注时间",
-        description: "延迟处理输入的时间，单位毫秒。",
-        public: true,
-        default: 15000,
-      }),
-    policyDigest: z
-      .string()
-      .min(1)
-      .meta({
-        title: "策略标识",
-        description: "记录注意力策略版本的标识。",
-        public: true,
-        default: "attention-arousal:maibot-v1",
-      }),
-    settingsDigest: z
-      .string()
-      .min(1)
-      .meta({
-        title: "配置标识",
-        description: "记录注意力设置版本的标识。",
-        public: true,
-        default: "attention-arousal:default-v1",
-      }),
+    focusRelevance: z.number().min(0).max(100).default(80).meta({
+      title: "持续关注相关性",
+      description: "有效群聊关注租约的相关性分数，不绕过硬门禁。",
+      public: true,
+      default: 80,
+    }),
+    threshold: z.number().int().min(0).max(100).meta({
+      title: "注意力阈值",
+      description: "达到此分数后关注输入，范围为 0 到 100。",
+      public: true,
+      default: 80,
+    }),
+    deferMs: z.number().int().min(0).meta({
+      title: "延迟关注时间",
+      description: "延迟处理输入的时间，单位毫秒。",
+      public: true,
+      default: 15000,
+    }),
+    policyDigest: z.string().min(1).meta({
+      title: "策略标识",
+      description: "记录注意力策略版本的标识。",
+      public: true,
+      default: "attention-arousal:maibot-v1",
+    }),
+    settingsDigest: z.string().min(1).meta({
+      title: "配置标识",
+      description: "记录注意力设置版本的标识。",
+      public: true,
+      default: "attention-arousal:default-v1",
+    }),
   })
   .strict();
 
@@ -97,6 +88,7 @@ export interface AttentionArousalScore {
 
 export function scoreAttentionArousal(
   input: TurnContextCompletedPayload,
+  focusRelevance = 80,
 ): AttentionArousalScore {
   const frequency = Math.min(1, Math.max(0, input.frequency));
   const triggerThreshold =
@@ -108,7 +100,9 @@ export function scoreAttentionArousal(
       ? 80
       : input.isPrivate
         ? 40
-        : 0;
+        : input.focusActive
+          ? focusRelevance
+          : 0;
   const texts = input.inputs.map((item: { text: string }) =>
     stripNoise(item.text),
   );
@@ -145,6 +139,7 @@ export function scoreAttentionArousal(
 export function decideAttentionArousal(
   input: TurnContextCompletedPayload,
   threshold = 80,
+  focusRelevance = 80,
 ): { outcome: AttentionArousalOutcome; reasonCodes: string[] } {
   const hardGates = [
     ...(input.muted ? ["muted"] : []),
@@ -167,7 +162,7 @@ export function decideAttentionArousal(
       ],
     };
   }
-  if (scoreAttentionArousal(input).score >= threshold)
+  if (scoreAttentionArousal(input, focusRelevance).score >= threshold)
     return { outcome: "attend", reasonCodes: ["score-threshold-met"] };
   if (input.attempt < input.totalWaitBudget)
     return { outcome: "defer", reasonCodes: ["score-below-threshold"] };
@@ -210,8 +205,12 @@ export const attentionArousalModule = defineInformationModule({
         },
         async (atom, context) => {
           const input = atom.payload as TurnContextCompletedPayload;
-          const scored = scoreAttentionArousal(input);
-          const decision = decideAttentionArousal(input, settings.threshold);
+          const scored = scoreAttentionArousal(input, settings.focusRelevance);
+          const decision = decideAttentionArousal(
+            input,
+            settings.threshold,
+            settings.focusRelevance,
+          );
           const dueAt = new Date(
             Date.parse(input.asOf) + settings.deferMs,
           ).toISOString();

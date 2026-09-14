@@ -185,9 +185,11 @@ export function createMessageComposition(
   const modelTask: RuntimeModelTaskOptions = {
     approvals: activations
       .filter((activation) =>
-        ["agent.message-composer", "agent.heartflow.online"].includes(
-          activation.definitionId,
-        ),
+        [
+          "agent.message-composer",
+          "agent.heartflow.online",
+          "agent.expression",
+        ].includes(activation.definitionId),
       )
       .map((activation) => ({
         activation: {
@@ -196,7 +198,7 @@ export function createMessageComposition(
         },
         selectionPolicy: {
           tier:
-            activation.definitionId === "agent.heartflow.online"
+            activation.definitionId !== "agent.message-composer"
               ? "light"
               : messageComposerSettingsSchema.parse(activation.settings)
                   .modelTier,

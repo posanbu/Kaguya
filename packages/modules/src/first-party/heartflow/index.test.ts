@@ -29,6 +29,7 @@ import {
 } from "@kaguya/scheduler";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { focusOpened } from "../attention-focus/facts.js";
 import { fixture as messageFixture } from "../message-composer/test-fixtures.js";
 import { createHeartflowModule, heartflowSettingsSchema } from "./index.js";
 import {
@@ -1298,4 +1299,63 @@ it("refreshes the unique observation with an urgent input before context freezin
       (a) => a.kind === turnCandidateInformationKind.kind,
     ),
   ).toHaveLength(1);
+});
+
+describe("persistent scope focus", () => {
+  it("opens before context freeze, boosts only the same group, and expires by frozen time", async () => {
+    const { core, database } = await fixture();
+    const first = await appendCandidate(core, {
+      requestId: "focus-first",
+      text: "辉夜，帮我看看",
+      occurredAt: "2026-09-08T00:00:00.000Z",
+      scopeKey: "group:one",
+      destination: { kind: "group", groupId: "one" },
+    });
+    await waitForKind(database, turnContextCompletedInformationKind.kind);
+    const opened = (await atoms(database)).find(
+      (a) => a.kind === focusOpened.kind,
+    )!;
+    expect(opened.payload.sourceInformationId).toBe(
+      first.inbound.informationId,
+    );
+    const initial = (await atoms(database)).find(
+      (a) => a.kind === turnContextCompletedInformationKind.kind,
+    )!;
+    expect(initial.payload.focusInformationId).toBe(opened.informationId);
+    for (const [id, scope, time, expected] of [
+      ["followup", "group:one", "2026-09-08T00:00:20.000Z", true],
+      ["other", "group:two", "2026-09-08T00:00:30.000Z", false],
+      ["expired", "group:one", "2026-09-08T00:03:00.000Z", false],
+    ] as const) {
+      const next = await appendCandidate(core, {
+        requestId: id,
+        text: "然后继续这个话题",
+        occurredAt: time,
+        scopeKey: scope,
+        destination: { kind: "group", groupId: scope },
+      });
+      await vi.waitFor(
+        async () =>
+          expect(
+            (await atoms(database)).some(
+              (a) =>
+                a.kind === turnContextCompletedInformationKind.kind &&
+                a.payload.candidateInformationId ===
+                  next.candidate.informationId,
+            ),
+          ).toBe(true),
+        { timeout: 5000 },
+      );
+      expect(
+        (await atoms(database)).find(
+          (a) =>
+            a.kind === turnContextCompletedInformationKind.kind &&
+            a.payload.candidateInformationId === next.candidate.informationId,
+        )!.payload.focusActive,
+      ).toBe(expected);
+    }
+    expect(
+      (await atoms(database)).filter((a) => a.kind === focusOpened.kind),
+    ).toHaveLength(1);
+  });
 });

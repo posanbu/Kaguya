@@ -1,3 +1,7 @@
+/**
+ * 功能概述：验证注意力纯评分和硬门禁，覆盖 Focus 相关性配置且不改变直接会话规则。
+ * 固定冻结输入用于比较启用/关闭租约；不涉及模型、平台或持久化副作用。
+ */
 import { describe, expect, it } from "vitest";
 
 import {
@@ -135,5 +139,30 @@ describe("attention arousal", () => {
     expect(
       attentionArousalModule.manifest.produces.map(({ kind }) => kind),
     ).toEqual(["agent.attention.arousal.completed"]);
+  });
+});
+
+describe("focus relevance", () => {
+  it("boosts ordinary followups and permits disabling the boost", () => {
+    expect(decideAttentionArousal({ ...base, focusActive: true }).outcome).toBe(
+      "attend",
+    );
+    expect(
+      decideAttentionArousal({ ...base, focusActive: true }, 80, 0).outcome,
+    ).toBe("defer");
+    expect(
+      decideAttentionArousal({ ...base, focusActive: false }).outcome,
+    ).toBe("defer");
+  });
+  it.each([
+    { muted: true },
+    { safe: false },
+    { destinationAvailable: false },
+    { stale: true },
+    { frequency: 0 },
+  ])("preserves hard gate %j", (gate) => {
+    expect(
+      decideAttentionArousal({ ...base, focusActive: true, ...gate }).outcome,
+    ).toBe("ignore");
   });
 });

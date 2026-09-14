@@ -35,13 +35,20 @@ async function fixture(outputs: unknown[]) {
   const database = await createTestingDatabase();
   let now = Date.parse("2026-09-12T12:00:00.000Z");
   const requests: Record<string, any>[] = [];
+  const backgroundRequests: Record<string, any>[] = [];
   const fetch = vi.fn<typeof globalThis.fetch>(async (_url, init) => {
     const request = JSON.parse(String(init?.body));
-    requests.push(request);
-    const pending =
-      request.model === "deepseek-light"
-        ? (outputs.shift() ?? silent)
-        : "reply-body";
+    const promptText = JSON.stringify(request.messages);
+    const learning = promptText.includes("归纳这批真人消息");
+    const selecting = promptText.includes("依据冻结回合和已获胜的消息意图");
+    (learning || selecting ? backgroundRequests : requests).push(request);
+    const pending = learning
+      ? { patterns: [] }
+      : selecting
+        ? { habitIds: [] }
+        : request.model === "deepseek-light"
+          ? (outputs.shift() ?? silent)
+          : "reply-body";
     const output = typeof pending === "function" ? await pending() : pending;
     if (output === "HTTP_FAILURE")
       return new Response("synthetic-provider-error", { status: 400 });
@@ -156,6 +163,7 @@ async function fixture(outputs: unknown[]) {
   return {
     database,
     requests,
+    backgroundRequests,
     delivered,
     atoms,
     settle,
