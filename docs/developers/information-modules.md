@@ -130,3 +130,11 @@ Planner 支持 `message | wait | silent`。宿主按本轮冻结人物/会话背
 `manifest.promptTemplates` 显式声明模板稳定 ID、内部名称、中文名称、用途、允许变量、允许 partial 和组成关系。第一方声明集中在 `packages/modules/src/prompt-declarations.ts`，运行编译器和 Node 资源加载器复用这份声明。Node 存储只解析注册资源，不扫描文件名推断模块归属；新增模板必须同时接入真实运行时消费链。人物事实模板由对应模块声明，但未加入当前 Catalog 时不会误归属给 Memory 模块。
 
 管理端只写本地覆盖并检查完整模板组，不渲染用户数据。校验使用非缓存编译路径，避免每次编辑都永久保留编译结果。默认 Planner 源码保持代码常量，覆盖文件为 `heartflow.planner.local.hbs`；其他已注册第一方模板保留现有默认文件与 local 回退机制。
+
+### 开放范围与持久化水位
+
+`context.registerOnce(operation, key, kind, input)` 可在 `input.openScope` 指定 `{ key, terminalGroup }`。同 operation 和 scope key 的并发调用共享一个开放原子，只有指定终态组的 `commitTerminal` 释放范围；各 operation key 的重放永久复用原结果。普通 `register` 和 `commitTerminal` 不接受这一创建约束。该能力用于稀疏观察等需要阻止创建阶段积压的场景，不代替动作幂等键或平台授权。
+
+Selector 的 `find` 支持 `openOnly`、`scopeKey`、`registrationOrder` 和排他的 `afterInformationId`。`openOnly` 读取尚无 `core:status-of` 或 terminal 提交的生命周期投影；`registrationOrder` 按持久化位置排序，`afterInformationId` 限定水位后的原子。普通 kind、payload、时间与数量约束仍然有效，查询结果仍经过 Selector 的授权与重新加载验证。scope 来自 payload 的 `scopeKey`、schedule input 的 `scopeKey` 或规范化消息 source；禁止模块直接读取投影表。
+
+恢复超大引用集合时，`related.offset` 按引用顺序分页，每页仍受 `limit` 限制；`find.informationIds` 可在一组已知原子中选取注册水位。Heartflow 恢复会分页遍历开放集合，避免 1000 条查询上限截断遗留 candidate 或已冻结来源。

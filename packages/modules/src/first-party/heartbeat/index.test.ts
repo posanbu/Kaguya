@@ -1,3 +1,9 @@
+/**
+ * 功能概述：验证 Heartbeat 即时提升已有 schedule 时仍携带已聚合输入。
+ * 主要职责：注入 one-shot 替身，断言替换 deadline、来源顺序与旧 heartbeat 终态。
+ * 代码库关系：真实数据库和开放槽行为由 observation.test.ts 覆盖；本文件隔离 capability 协议。
+ * 输入输出与副作用：只使用固定时钟和模拟回执，不访问模型或平台。
+ */
 import { freezeInformationAtom, informationIdSchema } from "@kaguya/schema";
 import {
   oneShotRequestedInformationKind,
@@ -147,7 +153,7 @@ describe("heartbeatModule", () => {
       expect.objectContaining({
         payload: expect.objectContaining({
           sourceInformationIds: ["inbound-1", "inbound-2"],
-          dueAt: "2026-09-08T00:00:11.500Z",
+          dueAt: "2026-09-08T00:00:10.000Z",
           scopeKey: "web:adapter:web:",
         }),
         references: [

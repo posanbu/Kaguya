@@ -1,4 +1,5 @@
 /**
+ * registerOnce 可附带 openScope，由数据库原子复用唯一开放赢家；普通 register/terminal 拒绝此参数。
  * stopReliableDelivery 可选 drain：停止领取后有界等待活跃 claim，再执行 shutdown fencing，支持 Runtime 热切换。
  * 架构说明：本模块把 registry、store 与 bus 组合成信息 Core，
  * 负责启动前注册同步、注册时的 ID 生成、引用 expectations 传递、并发广播与故障事实。
@@ -123,6 +124,9 @@ export interface InformationLedger {
 }
 
 export interface InformationAppendOptions {
+  /** registerOnce 的同 scope 开放槽；仅 terminalGroup 的终态释放该槽，操作重放仍复用原赢家。 */
+  readonly openScope?: { readonly key: string; readonly terminalGroup: string };
+
   /** Queue a durable, post-commit log projection for this atom. */
   readonly enqueueLogProjection?: boolean;
 }
@@ -417,7 +421,12 @@ export class InformationCore implements OneShotScheduleCorePort {
     ) as DeepReadonly<InformationAtom<K, P>>;
 
     const expectations = buildReferenceExpectations(registered.references);
-    const appendOptions = { enqueueLogProjection: registered.log.enabled };
+    if (input.openScope && unique?.type !== "operation")
+      throw new Error("openScope requires registerOnce");
+    const appendOptions = {
+      enqueueLogProjection: registered.log.enabled,
+      ...(input.openScope ? { openScope: input.openScope } : {}),
+    };
     if (unique) {
       const reliable = this.store.reliable;
       if (!reliable) throw new Error("Reliable information ledger is required");

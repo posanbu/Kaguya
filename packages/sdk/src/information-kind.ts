@@ -1,4 +1,5 @@
 /**
+ * openScope 是 registerOnce 的可选并发约束，宿主透传给 Core，不写入业务 payload。
  * 架构说明：本模块定义信息 kind 的声明契约、引用规则、日志策略与注册输入，并以
  * 当前递归路径校验 JSON schema，使 pipe 可安全复用同一个非递归子 schema。
  * 主要职责：`defineInformationKind` 校验 dotted kind、严格 JSON payload schema、引用
@@ -86,6 +87,8 @@ export type InformationRegistrationInput<
   K extends string,
   P extends JsonObject,
 > = {
+  /** registerOnce 的同 scope 开放槽；仅 terminalGroup 的终态释放该槽，操作重放仍复用原赢家。 */
+  readonly openScope?: { readonly key: string; readonly terminalGroup: string };
   readonly occurredAt: string;
   readonly source: string;
   readonly payload: P;

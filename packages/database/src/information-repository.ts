@@ -9,6 +9,7 @@
  * 提供事务与 query 抽象，`schema.ts` 则初始化或验证表结构、索引和 mutation 触发器。
  * 输入输出与副作用：写入全部在数据库事务中完成，冲突和引用错误映射为稳定错误类型；
  * inspectPage 为控制台提供时间/ID 复合游标和有界反向引用查询，不修改业务 find/query。
+ * lifecycle 投影支持开放集合、scope 索引和注册位置水位；原子追加及 status-of 关闭在同一事务提交。
  * 读取返回经过 schema 校验并深冻结的 atom，不允许通过返回值修改持久化事实。
  */
 import {
@@ -231,6 +232,10 @@ export class InformationRepository implements InformationLedger {
   ): Promise<readonly DeepReadonly<InformationAtom>[]> {
     return this.database.transaction(async (tx) => {
       const values: unknown[] = [];
+      const projected =
+        query.openOnly ||
+        query.registrationOrder ||
+        query.afterInformationId !== undefined;
       const predicates: string[] = [];
       const bind = (value: unknown): string => {
         values.push(value);
@@ -238,8 +243,25 @@ export class InformationRepository implements InformationLedger {
       };
 
       if (query.kinds !== undefined) {
-        predicates.push(`a.kind = ANY(${bind([...query.kinds])}::text[])`);
+        predicates.push(
+          `${projected ? "o" : "a"}.kind = ANY(${bind([...query.kinds])}::text[])`,
+        );
       }
+      if (query.informationIds !== undefined)
+        predicates.push(
+          `a.information_id = ANY(${bind([...query.informationIds])}::text[])`,
+        );
+      if (query.scopeKey !== undefined) {
+        predicates.push(
+          projected
+            ? `o.scope_key = ${bind(query.scopeKey)}`
+            : `a.payload->>'scopeKey' = ${bind(query.scopeKey)}`,
+        );
+      }
+      if (query.openOnly) predicates.push("o.is_open");
+      if (query.afterInformationId !== undefined)
+        predicates.push(`o.position >
+        (SELECT position FROM information_lifecycle WHERE information_id=${bind(query.afterInformationId)})`);
       if (query.sources !== undefined) {
         predicates.push(`a.source = ANY(${bind([...query.sources])}::text[])`);
       }
@@ -265,9 +287,9 @@ export class InformationRepository implements InformationLedger {
       const order = query.order === "desc" ? "DESC" : "ASC";
       const rows = await tx.query<{ information_id: string }>(
         `SELECT a.information_id
-         FROM information_atoms a
+         FROM ${projected ? "information_lifecycle o JOIN information_atoms a USING (information_id)" : "information_atoms a"}
          WHERE ${predicates.join(" AND ")}
-         ORDER BY a.occurred_at::timestamptz ${order}, a.information_id ${order}
+         ORDER BY ${query.registrationOrder ? "o.position" : "a.occurred_at::timestamptz"} ${order}, a.information_id ${order}
          LIMIT ${limit}`,
         values,
       );
@@ -383,7 +405,24 @@ async function appendInformationAtom(
   expectations: readonly InformationReferenceExpectation[],
   options: InformationAppendOptions = {},
 ): Promise<void> {
+  const source = atom.payload.source as any;
+  const destination = source?.destination;
+  const sourceScope =
+    source?.platform && source?.adapterId && destination
+      ? `${source.platform}:${source.adapterId}:${destination.kind ?? "unknown"}:${destination.groupId ?? destination.userId ?? destination.channelId ?? destination.id ?? ""}`
+      : undefined;
+  const scopeKey =
+    atom.payload.scopeKey ??
+    (atom.payload.input as any)?.scopeKey ??
+    sourceScope ??
+    null;
   try {
+    // 同 scope 入站在分配位置之前串行提交，水位不会越过尚未提交的更早消息。
+    if (sourceScope)
+      await tx.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 168))",
+        [sourceScope],
+      );
     await tx.query(
       `INSERT INTO information_atoms (
              information_id, kind, occurred_at, source, payload
@@ -396,6 +435,18 @@ async function appendInformationAtom(
         JSON.stringify(atom.payload),
       ],
     );
+
+    await tx.query(
+      `INSERT INTO information_lifecycle(information_id,kind,scope_key,occurred_at) VALUES ($1,$2,$3,$4::timestamptz)`,
+      [atom.informationId, atom.kind, scopeKey, atom.occurredAt],
+    );
+    for (const reference of atom.references) {
+      if (reference.relation === "core:status-of")
+        await tx.query(
+          "UPDATE information_lifecycle SET is_open=false WHERE information_id=$1",
+          [reference.informationId],
+        );
+    }
 
     const expectationsByRelation = new Map(
       expectations.map(

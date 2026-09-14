@@ -1,4 +1,5 @@
 /**
+ * openScope 在事务内锁定 scope head；操作别名保留原赢家，只有指定终态组释放 head，生命周期投影同步关闭。
  * 功能概述：实现 Reliable DAG 的 PostgreSQL 执行基础，独立于不可变业务 ledger。
  * 主要职责：configureSubscriptions 启停稳定订阅且不 backfill；claim 使用 SKIP LOCKED 与期限 token；
  * ack/retry/release 使用 fencing；appendOnce/appendTerminal 将唯一槽和 atom 原子提交；exhaust 原子封口。
@@ -280,6 +281,60 @@ export class ReliableInformationRepository implements ReliableInformationLedger 
     expectations: readonly InformationReferenceExpectation[],
     options: InformationAppendOptions,
   ): Promise<InformationCommitResult> {
+    const scope = type === "operation" ? options.openScope : undefined;
+    if (scope) {
+      identity(scope.terminalGroup);
+      if (!scope.key || scope.key.length > 4096)
+        throw new Error("Invalid open scope key");
+      await tx.query(
+        `INSERT INTO information_scope_heads(namespace,scope_key,terminal_group)
+        VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
+        [namespace, scope.key, scope.terminalGroup],
+      );
+      const heads = await tx.query<{
+        information_id: string | null;
+        terminal_group: string;
+      }>(
+        `SELECT information_id,terminal_group FROM information_scope_heads
+         WHERE namespace=$1 AND scope_key=$2 FOR UPDATE`,
+        [namespace, scope.key],
+      );
+      const head = heads.rows[0]!;
+      if (head.terminal_group !== scope.terminalGroup)
+        throw new Error("Open scope terminal group mismatch");
+      const replay = await tx.query<{ information_id: string }>(
+        `SELECT information_id FROM information_commit_slots WHERE slot_type='operation' AND namespace=$1 AND key=$2`,
+        [namespace, key],
+      );
+      if (replay.rows[0])
+        return {
+          atom: (await this.read(
+            tx,
+            replay.rows[0].information_id as InformationId,
+          ))!,
+          created: false,
+        };
+      if (head.information_id) {
+        const closed = await tx.query(
+          `SELECT 1 FROM information_commit_slots
+          WHERE slot_type='terminal' AND namespace=$1 AND key=$2`,
+          [scope.terminalGroup, head.information_id],
+        );
+        if (!closed.rowCount) {
+          const winner = (await this.read(
+            tx,
+            head.information_id as InformationId,
+          ))!;
+          if (winner.kind !== atom.kind)
+            throw new Error("Open scope kind mismatch");
+          await tx.query(
+            `INSERT INTO information_commit_slots VALUES ('operation',$1,$2,$3)`,
+            [namespace, key, winner.informationId],
+          );
+          return { atom: winner, created: false };
+        }
+      }
+    }
     // DEFERRABLE FK 允许先竞争唯一槽，再在同一事务写 atom；失败不会占住槽。
     const inserted = await tx.query(
       `INSERT INTO information_commit_slots(slot_type,namespace,key,information_id)
@@ -288,6 +343,17 @@ export class ReliableInformationRepository implements ReliableInformationLedger 
     );
     if (inserted.rowCount === 1) {
       await this.append(tx, atom, expectations, options);
+      if (scope)
+        await tx.query(
+          `UPDATE information_scope_heads SET information_id=$3
+        WHERE namespace=$1 AND scope_key=$2`,
+          [namespace, scope.key, atom.informationId],
+        );
+      if (type === "terminal")
+        await tx.query(
+          "UPDATE information_lifecycle SET is_open=false WHERE information_id=$1",
+          [key],
+        );
       return { atom, created: true };
     }
     const slot = await tx.query<{ information_id: string }>(

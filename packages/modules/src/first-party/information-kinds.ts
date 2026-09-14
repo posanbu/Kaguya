@@ -1,5 +1,6 @@
 /**
  * 自然语言跨会话 intent 允许由获胜 agent.turn.plan.completed 直接引起，仍需宿主目标授权引用。
+ * observationWakeInformationKind 将新输入的稀疏唤醒交给开放观察，不增加 candidate。
  * 功能概述：本文件声明 modules 包拥有的消息 DAG kind，包括入站、Heartbeat、Heartflow
  * claim/context/terminal、speech decision、消息意图、Memory、身份、assistant 与平台投递请求。
  * 主要职责：每个 definition 固定 payload 的严格 schema 和直接因果/context 引用规则；
@@ -755,6 +756,11 @@ export const turnClaimedInformationKind = defineInformationKind({
     })
     .strict(),
   references: {
+    "core:uses-context": {
+      required: false,
+      multiple: true,
+      targetKinds: [inboundTextInformationKind.kind],
+    },
     "core:caused-by": {
       required: true,
       multiple: false,
@@ -1201,27 +1207,34 @@ const heartbeatTerminalReference = {
   },
 } as const;
 
+const heartbeatScheduledPayloadSchema = z
+  .object({
+    reason: heartbeatReasonSchema,
+    dueAt: z.iso.datetime({ offset: true }),
+    policyVersion: heartbeatPolicyVersionSchema,
+    platform: nonBlankString,
+    adapterId: nonBlankString,
+    destination: platformDestinationSchema,
+    sourceInformationIds: z.array(nonBlankString).min(1),
+    wakeOnMessage: z.boolean(),
+    attempt: z.number().int().min(0),
+    totalWaitBudget: z.number().int().min(0),
+    scopeKey: nonBlankString,
+    asOf: z.iso.datetime({ offset: true }),
+  })
+  .strict();
+
 export const heartbeatScheduledInformationKind = defineInformationKind({
   kind: "agent.heartbeat.scheduled",
   displayName: "短心跳已调度",
   description:
     "入站聚合或等待请求成功安排调度后记录时间和聚合来源；后续触发或替代终态据此关联同一次心跳。",
-  payloadSchema: z
-    .object({
-      reason: heartbeatReasonSchema,
-      dueAt: z.iso.datetime({ offset: true }),
-      policyVersion: heartbeatPolicyVersionSchema,
-      platform: nonBlankString,
-      adapterId: nonBlankString,
-      destination: platformDestinationSchema,
-      sourceInformationIds: z.array(nonBlankString).min(1),
-      wakeOnMessage: z.boolean(),
-      attempt: z.number().int().min(0),
-      totalWaitBudget: z.number().int().min(0),
-      scopeKey: nonBlankString,
-      asOf: z.iso.datetime({ offset: true }),
-    })
-    .strict(),
+  payloadSchema: z.union([
+    heartbeatScheduledPayloadSchema,
+    heartbeatScheduledPayloadSchema.extend({
+      predecessorCandidateInformationId: nonBlankString,
+    }),
+  ]),
   references: {
     "core:caused-by": { required: true, multiple: false },
     "core:context": {
@@ -1634,5 +1647,41 @@ export const personContextCompletedInformationKind = defineInformationKind({
         adapterId: input.adapterId,
       };
     },
+  },
+});
+
+/** 唤醒开放观察或遗留积压；同候选普通/紧急各注册一次，入站账本持有最新水位。 */
+export const observationWakeInformationKind = defineInformationKind({
+  kind: "agent.observation.wake",
+  displayName: "开放观察唤醒",
+  description: "提升同 scope 的唯一观察或恢复遗留积压，不创建消息回合队列。",
+  payloadSchema: z
+    .object({ scopeKey: nonBlankString, immediate: z.boolean() })
+    .strict(),
+  references: {
+    "core:uses-context": {
+      required: true,
+      multiple: true,
+      targetKinds: [inboundTextInformationKind.kind],
+    },
+    "core:caused-by": { required: true, multiple: false },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
+    "agent:turn-candidate": {
+      required: true,
+      multiple: false,
+      targetKinds: ["agent.turn.candidate"],
+    },
+  },
+  log: {
+    enabled: true,
+    level: "debug",
+    project: ({ payload }) => ({
+      event: "observation.wake",
+      immediate: payload.immediate,
+    }),
   },
 });

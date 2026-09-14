@@ -1,4 +1,5 @@
 /**
+ * prepare 将 registerOnce 的 openScope 约束透传给 Core，保持来源和 context 的校验。
  * 功能概述：按唯一 SDK Catalog 协议预检并托管模块，严格隔离声明能力与业务原子。
  * 主要职责：preflight 在任何 create 前验证配置、kind、Selector、renderer 和能力图；
  * start 按确定性拓扑顺序创建/启动，全部成功后开放订阅；失败逆序 stop/dispose。
@@ -597,6 +598,7 @@ export class ModuleHost {
       return {
         occurredAt: lifecycle.now().toISOString(),
         source: `module:${module.instanceId}`,
+        ...(input.openScope ? { openScope: input.openScope } : {}),
         payload: input.payload,
         references: [
           {

@@ -41,3 +41,5 @@ Planner 只允许以下严格 JSON，不允许额外字段或原始平台目标�
 Planner 首次请求持久化后，重放会恢复相同 Prompt、上下文原子及顺序，不因迟到历史改变任务指纹；已经完成的模型任务不会重复调用。普通请求日志不记录 Planner Prompt 预览，完整 Prompt 仅限显式 content detail 诊断。
 
 宿主 `conversation` 能力在规划前冻结 `agent.conversation.context.frozen`，提供不含原始目标 ID 的解析投影及当前会话/人物背景。背景也用于普通消息编写，不以跨会话意图为前提。跨会话获胜决策调用 `route`，宿主验证引用、目录、有效期与出站策略后创建统一意图；模型本身不能授予出站权限。重启后已冻结 Prompt 可重放，但临时引用失效，待发跨会话请求安全关闭。
+
+系统以持续观察为模型，turn/candidate/claim 仅是调度事实。正常积压由 Heartbeat 在创建阶段阻止；恢复路径把同 scope 遗留 candidate 合并为一次观察。合并来源持久化在 claim 引用中，身份屏障迟到不会丢失来源；Planner 的迟到结果在派发前复核当前终态。Selector 只查询开放 candidate 与最近 claim，避免反复扫描历史。

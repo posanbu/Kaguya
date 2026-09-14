@@ -2,6 +2,7 @@
  * manifest 声明 Planner 模板；调用 compilePlannerPrompt 时传入装配阶段加载的覆盖。
  * settings schema 的公开中文元数据供管理表单使用，运行时与保存共用约束。
  * 管理端批准的跨会话 candidate 由宿主直接认领，不再触发 Planner；其 delivery 仍使用本模块统一 turn 终态。
+ * Selector 只遍历开放 candidate 及最近 claim；恢复旧积压时每 scope 只推进一次合并观察。
  * 在线 Heartflow 编排器。所有推进都由可重放 Information 事实驱动；模块不保存
  * per-chat 状态，也不依赖订阅安装顺序。
  * createHeartflowModule 注入投递/模型失败 kind，返回声明订阅的模块；settings schema
@@ -52,6 +53,7 @@ import {
 import { MEMORY_RETRIEVAL_STRATEGY_ID } from "@kaguya/memory";
 
 import {
+  observationWakeInformationKind,
   inboundTextInformationKind,
   personContextCompletedInformationKind,
   messageIntentRequestedInformationKind,
@@ -142,6 +144,16 @@ export const heartflowStateSelector = defineInformationSelector({
     let anchors: readonly DeepReadonly<InformationAtom>[] = [];
     if (sourceAtom.kind === turnCandidateInformationKind.kind) {
       anchors = [sourceAtom];
+    } else if (sourceAtom.kind === observationWakeInformationKind.kind) {
+      anchors = remember(
+        await related(
+          ledger,
+          sourceAtom.informationId,
+          "agent:turn-candidate",
+          "outgoing",
+          1,
+        ),
+      );
     } else if (sourceAtom.kind === personContextCompletedInformationKind.kind) {
       const inbound = remember(
         await ledger.related({
@@ -158,10 +170,28 @@ export const heartflowStateSelector = defineInformationSelector({
             payloadContains: {
               sourceInformationIds: [inbound.informationId],
             },
+            openOnly: true,
             order: "asc",
             limit: 1_000,
           }),
         );
+        const recoveryClaims = remember(
+          await related(
+            ledger,
+            inbound.informationId,
+            "core:uses-context",
+            "incoming",
+            1000,
+          ),
+        ).filter(
+          (a) =>
+            a.kind === turnClaimedInformationKind.kind ||
+            a.kind === observationWakeInformationKind.kind,
+        );
+        anchors = [
+          ...anchors,
+          ...(await candidatesForClaims(ledger, recoveryClaims, remember)),
+        ];
       }
     } else if (sourceAtom.kind === turnClaimedInformationKind.kind) {
       anchors = remember(
@@ -241,16 +271,23 @@ export const heartflowStateSelector = defineInformationSelector({
     );
     const candidates = [...anchors];
     for (const scopeKey of scopes) {
-      candidates.push(
-        ...remember(
+      let afterInformationId: string | undefined;
+      for (;;) {
+        const page = remember(
           await ledger.find({
             kinds: [turnCandidateInformationKind.kind],
-            payloadContains: { scopeKey },
+            scopeKey,
+            openOnly: true,
+            registrationOrder: true,
             order: "asc",
-            limit: 1_000,
+            limit: 1000,
+            ...(afterInformationId ? { afterInformationId } : {}),
           }),
-        ),
-      );
+        );
+        candidates.push(...page);
+        if (page.length < 1000) break;
+        afterInformationId = page.at(-1)!.informationId;
+      }
     }
     for (const candidate of uniqueAtoms(candidates)) {
       if (candidate.kind !== turnCandidateInformationKind.kind) continue;
@@ -365,6 +402,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
       settingsSchema: heartflowSettingsSchema,
       promptTemplates: [plannerTemplateDeclaration],
       consumes: [
+        observationWakeInformationKind,
         turnCandidateInformationKind,
         personContextCompletedInformationKind,
         turnClaimedInformationKind,
@@ -414,6 +452,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
       }),
       subscriptions: [
         ...[
+          observationWakeInformationKind,
           turnCandidateInformationKind,
           personContextCompletedInformationKind,
           turnClaimedInformationKind,
@@ -445,6 +484,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
           async (decision, context) => {
             const gate = decision.payload as AttentionArousalPayload;
             const state = await context.select(heartflowStateSelector);
+            if (turnTerminalFor(gate.candidateInformationId, state)) return;
             if (
               state.some(
                 (atom) =>
@@ -617,7 +657,8 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
                   }
                 : {}),
             };
-            await dispatchDecision({ ...decision, payload }, state, context);
+            const current = await context.select(heartflowStateSelector);
+            await dispatchDecision({ ...decision, payload }, current, context);
           },
         ),
         ...deliveryKinds.map((definition) =>
@@ -689,11 +730,50 @@ async function progressCandidates(
   settings: DeepReadonly<HeartflowSettings>,
   context: InformationModuleHandlerContext,
 ) {
-  const candidates = atoms
-    .filter(({ kind }) => kind === turnCandidateInformationKind.kind)
-    .sort(compareCandidates);
-  for (const candidate of uniqueAtoms(candidates)) {
-    await progressCandidate(candidate, atoms, memories, settings, context);
+  const candidates = atoms.filter(
+    (a) =>
+      a.kind === turnCandidateInformationKind.kind &&
+      !turnTerminalFor(a.informationId, atoms) &&
+      a.payload.managementAuthorizationId === undefined,
+  );
+  const scopes = new Set(candidates.map((a) => String(a.payload.scopeKey)));
+  for (const scope of scopes) {
+    const open = candidates
+      .filter((a) => a.payload.scopeKey === scope)
+      .sort(compareCandidates);
+    const winner = open.at(-1)!;
+    // 仅恢复路径合并旧积压。新输入正常由 Heartbeat 的开放槽保留到下一观察。
+    const sourceInformationIds = [
+      ...new Set(
+        open.flatMap(
+          (a) => (a.payload as any).sourceInformationIds as string[],
+        ),
+      ),
+    ];
+    const merged = {
+      ...winner,
+      payload: { ...winner.payload, sourceInformationIds },
+    };
+    await progressCandidate(merged, atoms, memories, settings, context);
+    if (open.length < 2) continue;
+    const refreshed = await context.select(heartflowStateSelector);
+    const claim = claimForCandidate(winner.informationId, refreshed);
+    const runtime = referenced(
+      winner,
+      "core:context",
+      new Map(atoms.map((a) => [a.informationId, a])),
+    )[0];
+    if (!claim || !runtime) continue;
+    for (const candidate of open.slice(0, -1)) {
+      if (turnTerminalFor(candidate.informationId, refreshed)) continue;
+      await supersedeCandidate(
+        candidate,
+        claim,
+        winner.informationId,
+        runtime.informationId,
+        context,
+      );
+    }
   }
 }
 
@@ -706,7 +786,7 @@ async function progressCandidate(
 ) {
   const map = new Map(atoms.map((atom) => [atom.informationId, atom]));
   if (turnTerminalFor(candidate.informationId, atoms) !== undefined) return;
-  const payload = candidate.payload as any;
+  const payload = { ...candidate.payload } as any;
   if (payload.managementAuthorizationId !== undefined) return;
   const runtimeContext = referenced(candidate, "core:context", map)[0];
   if (runtimeContext === undefined) return;
@@ -799,7 +879,10 @@ async function progressCandidate(
     }
   }
 
-  const predecessorId = predecessor?.informationId;
+  const ownClaim = claimForCandidate(candidate.informationId, atoms);
+  const predecessorId = ownClaim
+    ? ((ownClaim.payload as any).predecessorTerminalInformationId ?? undefined)
+    : predecessor?.informationId;
   const generation =
     latestClaim === undefined
       ? 0
@@ -816,6 +899,10 @@ async function progressCandidate(
         predecessorTerminalInformationId: predecessorId ?? null,
       },
       references: [
+        ...effectiveSourceInformationIds.map((informationId) => ({
+          relation: "core:uses-context",
+          informationId,
+        })),
         {
           relation: "agent:turn-candidate",
           informationId: candidate.informationId,
@@ -826,6 +913,45 @@ async function progressCandidate(
   );
   if ((claim.payload as any).candidateInformationId !== candidate.informationId)
     return;
+
+  const frozenSources = claim.references
+    .filter((r) => r.relation === "core:uses-context")
+    .map((r) => r.informationId);
+  if (frozenSources.length) effectiveSourceInformationIds = frozenSources;
+  const frozenContext = atoms.find(
+    (a) =>
+      a.kind === turnContextCompletedInformationKind.kind &&
+      a.payload.claimInformationId === claim.informationId,
+  );
+  if (frozenContext) {
+    effectiveSourceInformationIds = (frozenContext.payload.inputs as any[]).map(
+      (i) => i.informationId,
+    );
+    payload.asOf = frozenContext.payload.asOf;
+  } else {
+    const wakeSources = atoms
+      .filter(
+        (a) =>
+          a.kind === observationWakeInformationKind.kind &&
+          a.references.some(
+            (r) =>
+              r.relation === "agent:turn-candidate" &&
+              r.informationId === candidate.informationId,
+          ),
+      )
+      .flatMap((a) =>
+        a.references
+          .filter((r) => r.relation === "core:uses-context")
+          .map((r) => r.informationId),
+      );
+    effectiveSourceInformationIds = [
+      ...new Set([...effectiveSourceInformationIds, ...wakeSources]),
+    ];
+    for (const id of wakeSources) {
+      const occurredAt = map.get(id)?.occurredAt;
+      if (occurredAt && occurredAt > payload.asOf) payload.asOf = occurredAt;
+    }
+  }
 
   await context.registerOnce(
     "agent.turn.started",
@@ -1453,16 +1579,90 @@ async function hydrateCandidate(
       ),
     );
   }
+  remember(
+    await related(
+      ledger,
+      candidate.informationId,
+      "core:status-of",
+      "incoming",
+      10,
+    ),
+  );
+  const candidateLinks = remember(
+    await related(
+      ledger,
+      candidate.informationId,
+      "agent:turn-candidate",
+      "incoming",
+      10,
+    ),
+  );
+  const ownClaims = candidateLinks.filter(
+    (a) => a.kind === turnClaimedInformationKind.kind,
+  );
+  for (const wake of candidateLinks.filter(
+    (a) => a.kind === observationWakeInformationKind.kind,
+  )) {
+    const inputs = remember(
+      await related(
+        ledger,
+        wake.informationId,
+        "core:uses-context",
+        "outgoing",
+        1000,
+      ),
+    );
+    for (const input of inputs)
+      remember(
+        await related(
+          ledger,
+          input.informationId,
+          "core:status-of",
+          "incoming",
+          100,
+        ),
+      );
+  }
   const scopeKey = (candidate.payload as any).scopeKey;
   const claims = remember(
     await ledger.find({
       kinds: [turnClaimedInformationKind.kind],
-      payloadContains: { scopeKey },
-      order: "asc",
-      limit: 1_000,
+      scopeKey,
+      registrationOrder: true,
+      order: "desc",
+      limit: 1,
     }),
   );
-  for (const claim of claims) {
+  for (const claim of uniqueAtoms([...claims, ...ownClaims])) {
+    remember(
+      await related(
+        ledger,
+        claim.informationId,
+        "agent:turn-claim",
+        "incoming",
+        100,
+      ),
+    );
+    const recoveryInputs = remember(
+      await related(
+        ledger,
+        claim.informationId,
+        "core:uses-context",
+        "outgoing",
+        1000,
+      ),
+    );
+    for (const inbound of recoveryInputs)
+      remember(
+        await related(
+          ledger,
+          inbound.informationId,
+          "core:status-of",
+          "incoming",
+          100,
+        ),
+      );
+
     const claimCandidates = remember(
       await related(
         ledger,
@@ -1532,12 +1732,25 @@ async function related(
   direction: "outgoing" | "incoming",
   limit = 10,
 ) {
-  return ledger.related({
-    from: [from as InformationId],
-    relation,
-    direction,
-    limit,
-  });
+  const atoms: DeepReadonly<InformationAtom>[] = [];
+  let offset = 0;
+  for (;;) {
+    const page = await ledger.related({
+      from: [from as InformationId],
+      relation,
+      direction,
+      limit,
+      offset,
+    });
+    atoms.push(...page);
+    if (
+      relation !== "core:uses-context" ||
+      limit !== 1000 ||
+      page.length < limit
+    )
+      return atoms;
+    offset += page.length;
+  }
 }
 
 function referenced(

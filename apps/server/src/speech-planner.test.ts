@@ -6,6 +6,7 @@
  * fixture 装配正式 Catalog、light Planner 和 heavy Composer；settle 等待 durable 订阅闭合，
  * restart 保留数据库并重建宿主，advance 推进持久 heartbeat 时钟。仅 mock provider HTTP，
  * 决策写入故障的等待沿用 settle 的 8 秒预算，允许 CI 下持久订阅完成前置步骤。
+ * 开放观察期间合并新输入为一次后续观察；迟到时间戳单独观察，不重新执行已完成的 Planner。
  * 覆盖动作分支、严格对象输出、失败关闭、直接信号、共享等待预算和并发入站去重。
  * 所有消息和密钥均为合成测试数据；清理按 Runtime、数据库顺序关闭，不访问外部服务。
  */
@@ -303,7 +304,7 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
     expect(f.delivered).toHaveBeenCalledTimes(1);
   });
 
-  it("fences a superseded Planner whose model completes after a newer candidate", async () => {
+  it("keeps one open observation while Planner runs and coalesces incoming messages into one successor", async () => {
     let release!: (value: unknown) => void;
     const blocked = new Promise((resolve) => {
       release = resolve;
@@ -313,16 +314,30 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
       await f.submit(f.message());
       await vi.waitFor(() => expect(f.requests).toHaveLength(1));
       f.setTime(1000);
-      await f.submit(f.message("m2", { text: "更新的消息" }));
+      for (let i = 0; i < 8; i++)
+        await f.submit(f.message(`m${i + 2}`, { text: `更新的消息 ${i}` }));
       await vi.waitFor(async () =>
-        expect(kinds(await f.atoms())).toContain("agent.turn.superseded"),
+        expect(kinds(await f.atoms())).toContain("agent.observation.wake"),
       );
-      release(speak);
+      expect(
+        (await f.atoms()).filter((a) => a.kind === "agent.turn.candidate"),
+      ).toHaveLength(1);
+      expect(f.requests).toHaveLength(1);
+      release(silent);
       await f.settle();
       const graph = await f.atoms();
       expect(
         graph.filter((a) => a.kind === "agent.turn.plan.completed"),
-      ).toHaveLength(1);
+      ).toHaveLength(2);
+      expect(
+        graph.filter((a) => a.kind === "agent.turn.context.completed").at(-1)
+          ?.payload.inputs,
+      ).toHaveLength(8);
+      expect(f.requests.map((r) => r.model)).toEqual([
+        "deepseek-light",
+        "deepseek-light",
+        "deepseek-heavy",
+      ]);
       expect(
         graph.filter((a) => a.kind === "core.message.assistant.text"),
       ).toHaveLength(1);
@@ -331,7 +346,40 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
       await f.settle();
       expect(f.delivered).toHaveBeenCalledTimes(1);
     } finally {
-      release(speak);
+      release(silent);
+    }
+  });
+
+  it("preserves the wait budget when input arrives during Planner and retires the old wait timer", async () => {
+    let release!: (value: unknown) => void;
+    const blocked = new Promise((resolve) => {
+      release = resolve;
+    });
+    const f = await fixture([() => blocked, speak]);
+    try {
+      await f.submit(f.message());
+      await vi.waitFor(() => expect(f.requests).toHaveLength(1));
+      f.setTime(1000);
+      await f.submit(f.message("during-wait"));
+      await vi.waitFor(async () =>
+        expect(kinds(await f.atoms())).toContain("agent.observation.wake"),
+      );
+      release(wait);
+      await f.settle();
+      const turns = (await f.atoms()).filter(
+        (a) => a.kind === "agent.turn.context.completed",
+      );
+      expect(turns).toHaveLength(2);
+      expect(turns[1]!.payload.attempt).toBe(1);
+      expect(turns[1]!.payload.inputs).toHaveLength(2);
+      expect(f.delivered).toHaveBeenCalledTimes(1);
+      f.setTime(10000);
+      await f.restart();
+      await f.settle();
+      expect(f.requests).toHaveLength(3);
+      expect(f.delivered).toHaveBeenCalledTimes(1);
+    } finally {
+      release(wait);
     }
   });
 
@@ -471,10 +519,13 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
       expect(f.requests.map((r) => r.model)).toEqual([
         "deepseek-light",
         "deepseek-heavy",
+        "deepseek-light",
       ]);
+      expect(JSON.stringify(f.requests[0])).not.toContain("BACKDATED_HISTORY");
+      expect(JSON.stringify(f.requests.at(-1))).toContain("BACKDATED_HISTORY");
       expect(
         graph.filter((a) => a.kind === "agent.turn.plan.completed"),
-      ).toHaveLength(1);
+      ).toHaveLength(2);
       expect(f.delivered).toHaveBeenCalledTimes(1);
     } finally {
       hook.mockRestore();
