@@ -500,6 +500,31 @@ it.each(["completed", "failed", "cancelled"])(
   },
 );
 
+it("aborts the active provider request after durable cancellation wins", async () => {
+  const f = await fixture();
+  let activeSignal: AbortSignal | undefined;
+  f.generate.mockImplementation(({ signal }) => {
+    activeSignal = signal;
+    return new Promise((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(new Error("aborted")), {
+        once: true,
+      });
+    });
+  });
+  const pending = f.client.execute(f.request);
+  await vi.waitFor(() => expect(activeSignal).toBeDefined());
+  const requested = (await f.atoms()).find(
+    (atom) => atom.kind === "core.model.task.requested",
+  )!;
+  const cancelled = await f.client.cancel({
+    requestedInformationId: requested.informationId,
+    reason: "new message",
+  });
+  expect(cancelled.status).toBe("cancelled");
+  expect(activeSignal?.aborted).toBe(true);
+  expect((await pending).status).toBe("cancelled");
+});
+
 it.each(["abort", "lease"])(
   "does not commit business cancelled or late completion after %s loss",
   async (mode) => {
@@ -520,9 +545,11 @@ it.each(["abort", "lease"])(
     );
     const rejection = pending.catch((error) => error as Error);
     await vi.waitFor(() => expect(f.generate).toHaveBeenCalledTimes(1));
-    expect(f.generate.mock.calls[0]![0].signal).toBe(controller.signal);
+    expect(f.generate.mock.calls[0]![0].signal.aborted).toBe(false);
     if (mode === "abort") controller.abort(new Error(secret));
     else await reliable.release(claim);
+    if (mode === "abort")
+      expect(f.generate.mock.calls[0]![0].signal.aborted).toBe(true);
     finish({ output: { text: "late" }, durationMs: 1 });
     expect(await rejection).toBeInstanceOf(Error);
     expect(String(await rejection)).not.toContain(secret);

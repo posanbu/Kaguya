@@ -45,9 +45,11 @@ import {
   turnCompletedInformationKind,
   turnContextCompletedInformationKind,
   turnDecisionSupersededInformationKind,
+  turnDecisionInterruptedInformationKind,
   turnFailedInformationKind,
   turnSilentInformationKind,
   turnSupersededInformationKind,
+  turnInterruptedInformationKind,
   turnWaitingInformationKind,
   waitRequestedInformationKind,
 } from "../information-kinds.js";
@@ -160,7 +162,6 @@ async function fixture(startImmediately = true) {
   const catalog = defineInformationModuleCatalog(module);
   const registry = new InformationKindRegistry();
   registry.registerBuiltin(runtimeContextInformationKind);
-  registry.registerBuiltin(inboundTextInformationKind);
   for (const definition of catalogInformationKinds(catalog)) {
     if (definition === executionExhaustedInformationKind) continue;
     if (definition.kind.startsWith("core."))
@@ -279,6 +280,7 @@ async function appendCandidate(
       sourceInformationIds: [inbound.informationId],
       wakeOnMessage: true,
       attempt: 0,
+      rebuildAttempt: 0,
       totalWaitBudget: 1,
       scopeKey: input.scopeKey ?? "web:adapter:web:",
       asOf: input.occurredAt,
@@ -342,6 +344,7 @@ async function appendCandidate(
       asOf: input.occurredAt,
       policyVersion: "short-heartbeat.v1" as const,
       attempt: 0,
+      rebuildAttempt: 0,
       totalWaitBudget: 1,
     },
     references: [
@@ -485,6 +488,62 @@ async function dispatchSubscription(
 }
 
 describe("heartflow", () => {
+  it("interrupts a pending Planner when a new same-scope message arrives", async () => {
+    const { core, database } = await fixture();
+    let release!: () => void;
+    execute.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return {
+        status: "completed",
+        output: { action: "message", reason: "respond" },
+        requestedInformationId: "request",
+        terminalInformationId: "terminal",
+      };
+    });
+    const { context, inbound, candidate } = await appendCandidate(core, {
+      requestId: "interrupt-first",
+      text: "先说一句",
+      occurredAt: "2026-09-08T00:00:01.000Z",
+    });
+    await waitForKind(database, turnContextCompletedInformationKind.kind);
+    await submitDecision(core, database, "attend", candidate.informationId);
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
+    await core.register(inboundTextInformationKind, {
+      occurredAt: "2026-09-08T00:00:02.000Z",
+      source: "adapter:test",
+      payload: {
+        text: "补充一句",
+        source: {
+          ...inbound.payload.source,
+          platformMessageId: "interrupt-second",
+        },
+      },
+      references: [
+        { relation: "core:context", informationId: context.informationId },
+      ],
+    });
+    const terminal = await waitForKind(
+      database,
+      turnInterruptedInformationKind.kind,
+    );
+    expect(terminal.payload.rebuildAttempt).toBe(1);
+    expect(
+      (await atoms(database)).some(
+        (atom) => atom.kind === turnDecisionInterruptedInformationKind.kind,
+      ),
+    ).toBe(true);
+    release();
+    await vi.waitFor(async () => {
+      expect(
+        (await atoms(database)).some(
+          (atom) => atom.kind === messageIntentRequestedInformationKind.kind,
+        ),
+      ).toBe(false);
+    });
+  });
+
   it("joins identity whether it arrives before or after the candidate", async () => {
     const { core, database } = await fixture();
     await appendCandidate(core, {

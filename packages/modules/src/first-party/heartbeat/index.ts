@@ -23,6 +23,8 @@ import {
   waitRequestedInformationKind,
   observationWakeInformationKind,
   turnWaitingInformationKind,
+  turnDecisionInterruptedInformationKind,
+  turnInterruptedInformationKind,
 } from "../information-kinds.js";
 
 export const heartbeatSettingsSchema = z
@@ -33,6 +35,18 @@ export const heartbeatSettingsSchema = z
       public: true,
       default: 1500,
     }),
+    plannerInterruptQuietMs: z
+      .number()
+      .int()
+      .min(0)
+      .max(60_000)
+      .default(1000)
+      .meta({
+        title: "规划打断后静默窗",
+        description: "最后一条新消息后等待多久再重构规划，单位毫秒。",
+        public: true,
+        default: 1000,
+      }),
     maxReplacementAttempts: z.number().int().min(1).max(20).meta({
       title: "最大替换次数",
       description: "当前轮次允许替换候选的最大次数。",
@@ -40,10 +54,34 @@ export const heartbeatSettingsSchema = z
       default: 3,
     }),
     totalWaitBudget: z.number().int().min(0).max(20).meta({
-      title: "等待次数预算",
-      description: "每轮允许等待的总次数。",
+      title: "连续等待上限",
+      description: "连续 wait 或注意力延后最多允许多少次。",
       public: true,
       default: 3,
+    }),
+    noActionBackoffBaseMs: z.number().int().min(0).default(15_000).meta({
+      title: "无动作退避基准",
+      description: "非 Focus 群聊连续静默后首次退避的毫秒数。",
+      public: true,
+      default: 15_000,
+    }),
+    noActionBackoffCapMs: z.number().int().min(0).default(300_000).meta({
+      title: "无动作退避上限",
+      description: "非 Focus 群聊无动作退避的最长毫秒数。",
+      public: true,
+      default: 300_000,
+    }),
+    noActionBackoffStartCount: z.number().int().min(1).default(2).meta({
+      title: "无动作退避起点",
+      description: "连续多少次静默后开始退避。",
+      public: true,
+      default: 2,
+    }),
+    noActionBackoffBypassPendingCount: z.number().int().min(0).default(6).meta({
+      title: "退避绕过消息数",
+      description: "积累至少多少条新消息时绕过退避；0 表示不按数量绕过。",
+      public: true,
+      default: 6,
     }),
   })
   .strict();
@@ -76,6 +114,7 @@ export const heartbeatModule = defineInformationModule({
       heartbeatScopeSelector,
       heartbeatDueSelector,
       heartbeatObservationSelector,
+      heartbeatIdleBackoffSelector,
     ],
     promptRenderers: [],
     requires: [oneShotScheduleCapability],
@@ -83,10 +122,58 @@ export const heartbeatModule = defineInformationModule({
   },
   create: ({ settings }, lifecycle) => {
     const oneShot = lifecycle.use(oneShotScheduleCapability);
+    const idleBackoffDueAt = async (
+      context: any,
+      pendingCount: number,
+      immediate: boolean,
+      source: any,
+    ): Promise<number> => {
+      if (source.destination?.kind !== "group" || immediate) return 0;
+      if (
+        settings.noActionBackoffBaseMs <= 0 ||
+        settings.noActionBackoffCapMs <= 0
+      )
+        return 0;
+      if (
+        settings.noActionBackoffBypassPendingCount > 0 &&
+        pendingCount >= settings.noActionBackoffBypassPendingCount
+      )
+        return 0;
+      const terminals = (await context.select(
+        heartbeatIdleBackoffSelector,
+      )) as any[];
+      const frozen = terminals.find(
+        (atom) => atom.kind === "agent.turn.context.completed",
+      );
+      if (
+        frozen?.payload.focusActive &&
+        Date.parse(frozen.payload.focusExpiresAt ?? "") >
+          context.now().getTime()
+      )
+        return 0;
+      const consecutive = terminals.findIndex(
+        (atom) => atom.kind !== "agent.turn.silent",
+      );
+      const count =
+        consecutive < 0
+          ? terminals.filter((atom) => atom.kind === "agent.turn.silent").length
+          : consecutive;
+      if (count < settings.noActionBackoffStartCount) return 0;
+      const latest = terminals.find(
+        (atom) => atom.kind === "agent.turn.silent",
+      );
+      if (!latest) return 0;
+      const delay = Math.min(
+        settings.noActionBackoffCapMs,
+        settings.noActionBackoffBaseMs *
+          2 ** Math.min(20, count - settings.noActionBackoffStartCount),
+      );
+      return Date.parse(latest.occurredAt) + delay;
+    };
     const schedule = async (
       atom: any,
       context: any,
-      reason: "message" | "wait",
+      reason: "message" | "wait" | "interrupt",
       dueAt: string,
       sourceIds: string[],
       wakeOnMessage: boolean,
@@ -95,12 +182,13 @@ export const heartbeatModule = defineInformationModule({
       previousScheduleInformationId?: string,
       previousHeartbeatInformationId?: string,
       predecessorCandidateInformationId?: string,
+      rebuildAttempt = 0,
     ) => {
       const source = (atom.payload as any).source;
       if (!source) return;
       const scopeKey = scopeOf(source);
       const orderedSourceIds = [...new Set(sourceIds)];
-      const asOf = reason === "message" ? atom.occurredAt : dueAt;
+      const asOf = reason === "wait" ? dueAt : atom.occurredAt;
       const heartbeat = await context.registerOnce(
         "agent.heartbeat.scheduled",
         atom.informationId,
@@ -119,6 +207,7 @@ export const heartbeatModule = defineInformationModule({
             sourceInformationIds: orderedSourceIds,
             wakeOnMessage,
             attempt,
+            rebuildAttempt,
             totalWaitBudget,
             scopeKey,
             asOf,
@@ -136,6 +225,7 @@ export const heartbeatModule = defineInformationModule({
         sourceInformationIds: orderedSourceIds,
         wakeOnMessage,
         attempt,
+        rebuildAttempt,
         totalWaitBudget,
       };
       const activation = {
@@ -201,6 +291,8 @@ export const heartbeatModule = defineInformationModule({
         summary: "Durable short heartbeat ready",
         fields: {
           messageDebounceMs: settings.messageDebounceMs,
+          plannerInterruptQuietMs: settings.plannerInterruptQuietMs,
+          noActionBackoffBaseMs: settings.noActionBackoffBaseMs,
           maxReplacementAttempts: settings.maxReplacementAttempts,
           totalWaitBudget: settings.totalWaitBudget,
           policyVersion: "short-heartbeat.v1",
@@ -260,7 +352,8 @@ export const heartbeatModule = defineInformationModule({
               atom.payload.source,
               observations,
             );
-            if (previous && !immediate) return;
+            if (previous && !immediate && previousInput?.reason !== "interrupt")
+              return;
             const preserveWait =
               !immediate &&
               previousInput?.reason === "wait" &&
@@ -268,10 +361,28 @@ export const heartbeatModule = defineInformationModule({
             const dueAt = preserveWait
               ? previous.payload.dueAt
               : new Date(
-                  context.now().getTime() +
-                    (immediate ? 0 : settings.messageDebounceMs),
+                  Math.max(
+                    context.now().getTime() +
+                      (previousInput?.reason === "interrupt"
+                        ? settings.plannerInterruptQuietMs
+                        : immediate
+                          ? 0
+                          : settings.messageDebounceMs),
+                    await idleBackoffDueAt(
+                      context,
+                      observations.filter(
+                        (a) => a.kind === inboundTextInformationKind.kind,
+                      ).length,
+                      immediate,
+                      (atom.payload as any).source,
+                    ),
+                  ),
                 ).toISOString();
-            const reason = preserveWait ? "wait" : "message";
+            const reason = preserveWait
+              ? "wait"
+              : previousInput?.reason === "interrupt"
+                ? "interrupt"
+                : "message";
             const sourceIds = [
               ...(Array.isArray(previousInput?.sourceInformationIds)
                 ? previousInput.sourceInformationIds
@@ -290,6 +401,7 @@ export const heartbeatModule = defineInformationModule({
               previous?.informationId,
               previousHeartbeat?.informationId,
               previousHeartbeat?.payload?.predecessorCandidateInformationId,
+              previousInput?.rebuildAttempt ?? 0,
             );
           },
         ),
@@ -374,6 +486,21 @@ export const heartbeatModule = defineInformationModule({
               const state = await context.select(heartbeatObservationSelector);
               if (openObservations(state).length) return;
               const p: any = hb.payload;
+              const latestCandidate = state.find(
+                (a) => a.kind === turnCandidateInformationKind.kind,
+              );
+              if (
+                p.reason !== "interrupt" &&
+                latestCandidate &&
+                state.some(
+                  (a) =>
+                    (a.kind === turnInterruptedInformationKind.kind ||
+                      a.kind === turnDecisionInterruptedInformationKind.kind) &&
+                    a.payload.candidateInformationId ===
+                      latestCandidate.informationId,
+                )
+              )
+                return;
               if (
                 p.predecessorCandidateInformationId &&
                 !state.some(
@@ -396,7 +523,9 @@ export const heartbeatModule = defineInformationModule({
               const sourceIds = pending.length
                 ? [
                     ...new Set([
-                      ...(p.reason === "wait" || p.attempt > 0
+                      ...(p.reason === "wait" ||
+                      p.reason === "interrupt" ||
+                      p.attempt > 0
                         ? p.sourceInformationIds
                         : []),
                       ...pending.map((a) => a.informationId),
@@ -406,6 +535,7 @@ export const heartbeatModule = defineInformationModule({
               if (
                 !pending.length &&
                 p.reason !== "wait" &&
+                p.reason !== "interrupt" &&
                 state.some((a) => a.kind === turnCandidateInformationKind.kind)
               )
                 return;
@@ -437,6 +567,7 @@ export const heartbeatModule = defineInformationModule({
                     scopeKey: p.scopeKey,
                     asOf,
                     policyVersion: p.policyVersion,
+                    rebuildAttempt: p.rebuildAttempt ?? 0,
                     attempt: p.attempt,
                     totalWaitBudget: p.totalWaitBudget,
                   },
@@ -488,7 +619,8 @@ export const heartbeatModule = defineInformationModule({
               const urgent = pending.some((a) =>
                 immediateInState((a.payload as any).source, state),
               );
-              if (previous && !urgent) return;
+              const interrupted = atom.kind === "agent.turn.interrupted";
+              if (previous && !urgent && !interrupted) return;
               const previousObservation = state.find(
                 (a) => a.kind === turnCandidateInformationKind.kind,
               )!;
@@ -503,7 +635,7 @@ export const heartbeatModule = defineInformationModule({
                 (waiting ? Number(previousObservation.payload.attempt) + 1 : 0);
               const sources = [
                 ...new Set([
-                  ...(waiting
+                  ...(waiting || interrupted
                     ? (previousObservation.payload
                         .sourceInformationIds as string[])
                     : []),
@@ -516,10 +648,22 @@ export const heartbeatModule = defineInformationModule({
                   payload: { source: (latest.payload as any).source },
                 },
                 context,
-                "message",
+                interrupted ? "interrupt" : "message",
                 new Date(
-                  context.now().getTime() +
-                    (urgent ? 0 : settings.messageDebounceMs),
+                  Math.max(
+                    context.now().getTime() +
+                      (interrupted
+                        ? settings.plannerInterruptQuietMs
+                        : urgent
+                          ? 0
+                          : settings.messageDebounceMs),
+                    await idleBackoffDueAt(
+                      context,
+                      pending.length,
+                      urgent,
+                      (latest.payload as any).source,
+                    ),
+                  ),
                 ).toISOString(),
                 sources,
                 true,
@@ -528,6 +672,11 @@ export const heartbeatModule = defineInformationModule({
                 previous?.informationId,
                 existing[1]?.informationId,
                 previousObservation.informationId,
+                interrupted
+                  ? Number((atom.payload as any).rebuildAttempt)
+                  : Number(
+                      (previousObservation.payload as any).rebuildAttempt ?? 0,
+                    ),
               );
             },
           ),
@@ -543,6 +692,7 @@ import {
   heartbeatDueSelector,
   observationTerminals,
   heartbeatObservationSelector,
+  heartbeatIdleBackoffSelector,
   immediateInState,
   openObservations,
 } from "./observation.js";

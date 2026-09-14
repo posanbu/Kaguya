@@ -105,9 +105,27 @@ function InstanceEditor({
     setNotice("");
     setErrors([]);
     try {
+      const submittedValues = { ...values };
+      for (const field of fields) {
+        if (field.itemType !== "object") continue;
+        const draft = submittedValues[field.key];
+        if (typeof draft !== "string") continue;
+        try {
+          submittedValues[field.key] = JSON.parse(draft);
+        } catch {
+          setErrors([
+            { path: field.key, message: "请输入有效的 JSON 规则数组。" },
+          ]);
+          return;
+        }
+      }
       const result = await requestModuleSettings(token, definitionId, {
         instanceId: saved.instanceId,
-        replacement: { revision: saved.revision, enabled, settings: values },
+        replacement: {
+          revision: saved.revision,
+          enabled,
+          settings: submittedValues,
+        },
       });
       const next = result.instances.find(
         (i) => i.instanceId === saved.instanceId,
@@ -258,8 +276,22 @@ function FieldControl({
     return (
       <textarea
         readOnly={field.readOnly}
-        value={Array.isArray(value) ? value.join("\n") : ""}
-        onChange={(event) => onChange(event.target.value.split("\n"))}
+        value={
+          field.itemType === "object"
+            ? typeof value === "string"
+              ? value
+              : JSON.stringify(value ?? [], null, 2)
+            : Array.isArray(value)
+              ? value.join("\n")
+              : ""
+        }
+        onChange={(event) => {
+          if (field.itemType !== "object") {
+            onChange(event.target.value.split("\n"));
+            return;
+          }
+          onChange(event.target.value);
+        }}
       />
     );
   const number = field.type === "number" || field.type === "integer";

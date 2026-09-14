@@ -19,6 +19,9 @@ import {
   turnSilentInformationKind,
   turnFailedInformationKind,
   turnSupersededInformationKind,
+  turnInterruptedInformationKind,
+  turnDecisionInterruptedInformationKind,
+  turnContextCompletedInformationKind,
 } from "../information-kinds.js";
 interface ObservationSource {
   platform?: string;
@@ -119,7 +122,54 @@ export const observationTerminals = [
   turnSilentInformationKind,
   turnFailedInformationKind,
   turnSupersededInformationKind,
+  turnInterruptedInformationKind,
 ];
+
+export const heartbeatIdleBackoffSelector = defineInformationSelector({
+  selectorId: "agent.heartbeat.idle-backoff",
+  select: async ({ sourceAtom, ledger }) => {
+    const source = (sourceAtom.payload as any).source;
+    const scopeKey = source
+      ? scopeOf(source)
+      : (sourceAtom.payload as any).scopeKey;
+    if (!scopeKey) return [];
+    const terminals = await ledger.find({
+      kinds: observationTerminals.map((kind) => kind.kind),
+      scopeKey,
+      registrationOrder: true,
+      order: "desc",
+      limit: 100,
+    });
+    const selected = [...terminals];
+    const latest = terminals[0];
+    if (latest) {
+      const claim = (
+        await ledger.related({
+          from: [latest.informationId],
+          relation: "agent:turn-claim",
+          direction: "outgoing",
+          limit: 1,
+        })
+      )[0];
+      if (claim) {
+        selected.push(claim);
+        selected.push(
+          ...(
+            await ledger.related({
+              from: [claim.informationId],
+              relation: "agent:turn-claim",
+              direction: "incoming",
+              limit: 100,
+            })
+          ).filter(
+            (atom) => atom.kind === turnContextCompletedInformationKind.kind,
+          ),
+        );
+      }
+    }
+    return selected.map((atom) => atom.informationId);
+  },
+});
 
 export function isImmediateObservation(source: ObservationSource): boolean {
   return (
@@ -191,6 +241,18 @@ export const heartbeatObservationSelector = defineInformationSelector({
     const selected = new Map(
       [...open, ...latest].map((a) => [a.informationId, a]),
     );
+    if (candidate) {
+      const interruptedDecisions = await ledger.find({
+        kinds: [turnDecisionInterruptedInformationKind.kind],
+        scopeKey,
+        registrationOrder: true,
+        order: "desc",
+        limit: 10,
+      });
+      for (const decision of interruptedDecisions)
+        if (decision.payload.candidateInformationId === candidate.informationId)
+          selected.set(decision.informationId, decision);
+    }
     if (sourceAtom.kind === waitRequestedInformationKind.kind) {
       for (const a of await ledger.related({
         from: [sourceAtom.informationId],

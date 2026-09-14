@@ -232,13 +232,28 @@ export function compilePlannerPrompt(
       name: "turn",
       content: JSON.stringify({
         inputs: payload.inputs.map(
-          (input: { text: string; occurredAt: string }) => ({
+          (input: {
+            text: string;
+            occurredAt: string;
+            source: {
+              senderId: string;
+              sender?: { nickname?: string; card?: string };
+              mentions?: { kind: string; id?: string }[];
+              replyTo?: { platformMessageId: string };
+            };
+          }) => ({
             text: input.text,
             occurredAt: input.occurredAt,
+            speaker:
+              input.source.sender?.card ??
+              input.source.sender?.nickname ??
+              input.source.senderId,
+            mentions: input.source.mentions ?? [],
+            replyTo: input.source.replyTo?.platformMessageId ?? null,
           }),
         ),
         attempt: payload.attempt,
-        totalWaitBudget: Math.min(3, payload.totalWaitBudget),
+        totalWaitBudget: payload.totalWaitBudget,
       }),
       informationIds: [turn.informationId],
     },

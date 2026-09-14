@@ -10,6 +10,7 @@ export const moduleSettingsFieldSchema = z.strictObject({
   title: z.string(),
   description: z.string(),
   type: z.enum(["string", "number", "integer", "boolean", "array"]),
+  itemType: z.enum(["string", "object"]).optional(),
   readOnly: z.boolean(),
   required: z.boolean(),
   minimum: z.number().optional(),

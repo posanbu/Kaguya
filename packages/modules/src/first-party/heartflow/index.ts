@@ -16,6 +16,7 @@
  */
 import { activeFocus, focusOpened } from "../attention-focus/facts.js";
 import { plannerTemplateDeclaration } from "../../prompt-declarations.js";
+import { scopeOf } from "../heartbeat/observation.js";
 import {
   type MessageAuthorization,
   conversationContextInformationKind,
@@ -62,10 +63,12 @@ import {
   turnCompletedInformationKind,
   turnContextCompletedInformationKind,
   turnDecisionSupersededInformationKind,
+  turnDecisionInterruptedInformationKind,
   turnFailedInformationKind,
   turnSilentInformationKind,
   turnStartedInformationKind,
   turnSupersededInformationKind,
+  turnInterruptedInformationKind,
   turnWaitingInformationKind,
   waitRequestedInformationKind,
   type AttentionArousalPayload,
@@ -83,6 +86,7 @@ export interface CreateHeartflowModuleOptions {
   readonly deliveryFailedInformationKind: AnyKind;
   readonly modelTaskFailedInformationKind: AnyKind;
   readonly modelTaskCancelledInformationKind: AnyKind;
+  readonly modelTaskRequestedInformationKind?: AnyKind;
   readonly executionExhaustedInformationKind: AnyKind;
 }
 
@@ -106,6 +110,51 @@ export const heartflowSettingsSchema = z
       public: true,
       default: 1,
     }),
+    focusFrequencyMultiplier: z.number().min(0).max(4).default(1).meta({
+      title: "Focus 发言频率倍率",
+      description: "输入具体数值；在基础或动态频率之后应用，最终不超过 1。",
+      public: true,
+      default: 1,
+    }),
+    dynamicFrequencyEnabled: z.boolean().default(false).meta({
+      title: "启用动态发言频率",
+      description: "按平台、会话和本地时间段覆盖基础频率。",
+      public: true,
+      default: false,
+    }),
+    dynamicFrequencyRules: z
+      .array(
+        z
+          .object({
+            platform: z.string().default(""),
+            itemId: z.string().default(""),
+            chatType: z.enum(["group", "private"]),
+            time: z.string().default(""),
+            value: z.number().min(0).max(1),
+          })
+          .strict(),
+      )
+      .default([
+        {
+          platform: "",
+          itemId: "",
+          chatType: "group",
+          time: "00:00-08:59",
+          value: 0.8,
+        },
+        {
+          platform: "",
+          itemId: "",
+          chatType: "group",
+          time: "09:00-18:59",
+          value: 1,
+        },
+      ])
+      .meta({
+        title: "动态频率规则",
+        description: "具体会话优先；支持跨午夜时间段，未命中则回退基础频率。",
+        public: true,
+      }),
     muted: z.boolean().meta({
       title: "静默模式",
       description: "开启后抑制主动回复。",
@@ -124,9 +173,224 @@ export const heartflowSettingsSchema = z
       public: true,
       default: 120000,
     }),
+    plannerInterruptMaxConsecutiveCount: z
+      .number()
+      .int()
+      .min(0)
+      .max(20)
+      .default(2)
+      .meta({
+        title: "规划器连续打断上限",
+        description: "同一轮新消息最多使规划器重新思考几次；0 表示关闭。",
+        public: true,
+        default: 2,
+      }),
   })
   .strict();
 export type HeartflowSettings = z.infer<typeof heartflowSettingsSchema>;
+
+export function resolveEffectiveFrequency(
+  settings: DeepReadonly<HeartflowSettings>,
+  source: {
+    platform: string;
+    destination: { kind: string; groupId?: string; userId?: string };
+  },
+  asOf: string,
+  focusActive: boolean,
+): { frequency: number; ruleIndex: number | null } {
+  const chatType = source.destination.kind === "group" ? "group" : "private";
+  const targetId =
+    chatType === "group"
+      ? source.destination.groupId
+      : source.destination.userId;
+  let frequency =
+    chatType === "group" ? settings.groupFrequency : settings.privateFrequency;
+  let ruleIndex: number | null = null;
+  let best: readonly [number, number] = [-1, -1];
+  if (settings.dynamicFrequencyEnabled) {
+    const date = new Date(asOf);
+    const minute = date.getHours() * 60 + date.getMinutes();
+    settings.dynamicFrequencyRules.forEach((rule, index) => {
+      if (rule.chatType !== chatType) return;
+      if (
+        rule.platform &&
+        rule.platform !== "*" &&
+        rule.platform !== source.platform
+      )
+        return;
+      if (rule.itemId && rule.itemId !== "*" && rule.itemId !== targetId)
+        return;
+      if (rule.itemId && !targetId) return;
+      const targetPriority =
+        (rule.itemId && rule.itemId !== "*" ? 2 : 0) +
+        (rule.platform && rule.platform !== "*" ? 1 : 0);
+      let timePriority = 0;
+      if (rule.time && rule.time !== "*") {
+        const match = /^(\d{2}):(\d{2})-(\d{2}):(\d{2})$/u.exec(rule.time);
+        if (!match) return;
+        const start = Number(match[1]) * 60 + Number(match[2]);
+        const end = Number(match[3]) * 60 + Number(match[4]);
+        if (
+          start > 1439 ||
+          end > 1439 ||
+          Number(match[2]) > 59 ||
+          Number(match[4]) > 59
+        )
+          return;
+        if (
+          start <= end
+            ? minute < start || minute > end
+            : minute < start && minute > end
+        )
+          return;
+        timePriority = 1;
+      }
+      if (
+        targetPriority > best[0] ||
+        (targetPriority === best[0] && timePriority > best[1])
+      ) {
+        best = [targetPriority, timePriority];
+        frequency = rule.value;
+        ruleIndex = index;
+      }
+    });
+  }
+  return {
+    frequency: Math.min(
+      1,
+      Math.max(
+        0,
+        frequency * (focusActive ? settings.focusFrequencyMultiplier : 1),
+      ),
+    ),
+    ruleIndex,
+  };
+}
+
+const plannerInterruptSelector = defineInformationSelector({
+  selectorId: "agent.heartflow.planner-interrupt",
+  select: async ({ sourceAtom, ledger }) => {
+    const selected = new Map<string, DeepReadonly<InformationAtom>>();
+    const add = (atoms: readonly DeepReadonly<InformationAtom>[]) => {
+      for (const atom of atoms) selected.set(atom.informationId, atom);
+      return atoms;
+    };
+    add([sourceAtom]);
+    const anchor =
+      sourceAtom.kind === "core.model.task.requested"
+        ? add(
+            await ledger.find({
+              informationIds: [
+                String((sourceAtom.payload as any).sourceInformationId),
+              ],
+              limit: 1,
+            }),
+          )[0]
+        : sourceAtom;
+    const source = (anchor?.payload as any)?.source;
+    if (!source) return [...selected.keys()];
+    const scopeKey = scopeOf(source);
+    const candidate = add(
+      await ledger.find({
+        kinds: [turnCandidateInformationKind.kind],
+        ...(sourceAtom.kind === "core.model.task.requested" &&
+        (anchor?.payload as any)?.candidateInformationId
+          ? {
+              informationIds: [
+                String((anchor!.payload as any).candidateInformationId),
+              ],
+            }
+          : {
+              scopeKey,
+              openOnly: true,
+              registrationOrder: true,
+              order: "desc" as const,
+            }),
+        limit: 1,
+      }),
+    )[0];
+    if (!candidate) return [...selected.keys()];
+    const claims = add(
+      await ledger.related({
+        from: [candidate.informationId],
+        relation: "agent:turn-candidate",
+        direction: "incoming",
+        limit: 20,
+      }),
+    );
+    const claim = claims.find(
+      (atom) => atom.kind === turnClaimedInformationKind.kind,
+    );
+    if (!claim) return [...selected.keys()];
+    add(
+      await ledger.related({
+        from: [candidate.informationId],
+        relation: "core:context",
+        direction: "outgoing",
+        limit: 1,
+      }),
+    );
+    const claimStatuses = add(
+      await ledger.related({
+        from: [claim.informationId],
+        relation: "core:status-of",
+        direction: "incoming",
+        limit: 30,
+      }),
+    );
+    const frozen = add(
+      await ledger.related({
+        from: [claim.informationId],
+        relation: "agent:turn-claim",
+        direction: "incoming",
+        limit: 100,
+      }),
+    ).find((atom) => atom.kind === turnContextCompletedInformationKind.kind);
+    for (const attention of claimStatuses.filter(
+      (atom) => atom.kind === attentionArousalCompletedInformationKind.kind,
+    )) {
+      add(
+        await ledger.related({
+          from: [attention.informationId],
+          relation: "core:caused-by",
+          direction: "incoming",
+          limit: 30,
+        }),
+      );
+    }
+    if (!frozen) return [...selected.keys()];
+    const frozenIds = (frozen.payload.inputs as any[]).map((input) =>
+      String(input.informationId),
+    );
+    const watermark = add(
+      await ledger.find({
+        kinds: [inboundTextInformationKind.kind],
+        informationIds: frozenIds,
+        registrationOrder: true,
+        order: "desc",
+        limit: 1,
+      }),
+    )[0];
+    add(
+      await ledger.find({
+        kinds: [inboundTextInformationKind.kind],
+        scopeKey,
+        ...(watermark ? { afterInformationId: watermark.informationId } : {}),
+        registrationOrder: true,
+        order: "asc",
+        limit: 1000,
+        payloadContains: {
+          source: {
+            platform: source.platform,
+            adapterId: source.adapterId,
+            destination: source.destination,
+          },
+        },
+      }),
+    );
+    return [...selected.keys()];
+  },
+});
 
 export const heartflowStateSelector = defineInformationSelector({
   selectorId: "agent.heartflow.state",
@@ -387,6 +651,125 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
     options.modelTaskFailedInformationKind,
     options.modelTaskCancelledInformationKind,
   ] as const;
+  const maybeInterruptPlanner = async (
+    context: InformationModuleHandlerContext,
+    settings: DeepReadonly<HeartflowSettings>,
+  ): Promise<boolean> => {
+    const atoms = await context.select(plannerInterruptSelector);
+    const source =
+      context.sourceAtom ??
+      atoms.find(
+        (atom) =>
+          atom.kind === inboundTextInformationKind.kind ||
+          atom.kind === attentionArousalCompletedInformationKind.kind,
+      );
+    const candidate = atoms.find(
+      (atom) => atom.kind === turnCandidateInformationKind.kind,
+    );
+    if (!candidate) return false;
+    const claim = atoms.find(
+      (atom) =>
+        atom.kind === turnClaimedInformationKind.kind &&
+        (atom.payload as any).candidateInformationId ===
+          candidate.informationId,
+    );
+    if (!claim) return false;
+    const interrupted = atoms.find(
+      (atom) =>
+        atom.kind === turnDecisionInterruptedInformationKind.kind &&
+        (atom.payload as any).claimInformationId === claim.informationId,
+    );
+    const requests = atoms.filter(
+      (atom) =>
+        atom.kind === "core.model.task.requested" &&
+        (atom.payload as any).taskId === PLANNER_TASK_ID,
+    );
+    if (interrupted) {
+      for (const requested of requests) {
+        await context.use(options.modelTaskCapability).cancel({
+          requestedInformationId: requested.informationId,
+          reason: "New message interrupted Planner",
+        });
+      }
+      return true;
+    }
+    if (source?.kind === "core.model.task.requested") return false;
+    const frozen = atoms.find(
+      (atom) =>
+        atom.kind === turnContextCompletedInformationKind.kind &&
+        (atom.payload as any).claimInformationId === claim.informationId,
+    );
+    const attention = atoms.find(
+      (atom) =>
+        atom.kind === attentionArousalCompletedInformationKind.kind &&
+        (atom.payload as any).claimInformationId === claim.informationId &&
+        (atom.payload as any).outcome === "attend",
+    );
+    if (!frozen || !attention) return false;
+    const attempt = Number((candidate.payload as any).rebuildAttempt ?? 0);
+    if (attempt >= settings.plannerInterruptMaxConsecutiveCount) return false;
+    const consumed = new Set(
+      (frozen.payload.inputs as any[]).map((input) => input.informationId),
+    );
+    const incoming = atoms.filter(
+      (atom) =>
+        atom.kind === inboundTextInformationKind.kind &&
+        !consumed.has(atom.informationId),
+    );
+    const trigger = incoming.at(-1);
+    if (!trigger) return false;
+    const runtime = atoms.find((atom) => atom.kind === "core.runtime.context");
+    if (!runtime) return false;
+    const winner = await context.commitTerminal(
+      "agent.turn.decision",
+      claim.informationId,
+      turnDecisionInterruptedInformationKind,
+      {
+        payload: {
+          candidateInformationId: candidate.informationId,
+          claimInformationId: claim.informationId,
+          triggerInformationId: trigger.informationId,
+          rebuildAttempt: attempt + 1,
+        },
+        references: [
+          {
+            relation: "core:uses-context",
+            informationId: trigger.informationId,
+          },
+          { relation: "core:status-of", informationId: claim.informationId },
+        ],
+        contextInformationId: runtime.informationId,
+      },
+    );
+    if (winner.kind !== turnDecisionInterruptedInformationKind.kind)
+      return false;
+    await context.commitTerminal(
+      "agent.turn.terminal",
+      candidate.informationId,
+      turnInterruptedInformationKind,
+      {
+        payload: {
+          candidateInformationId: candidate.informationId,
+          claimInformationId: claim.informationId,
+          scopeKey: String((candidate.payload as any).scopeKey),
+          triggerInformationId: trigger.informationId,
+          rebuildAttempt: attempt + 1,
+        },
+        references: terminalReferences(
+          candidate.informationId,
+          claim.informationId,
+        ),
+        contextInformationId: runtime.informationId,
+      },
+    );
+    for (const requested of requests) {
+      await context.use(options.modelTaskCapability).cancel({
+        requestedInformationId: requested.informationId,
+        reason: "New message interrupted Planner",
+      });
+    }
+    return true;
+  };
   const module = defineInformationModule({
     manifest: {
       protocolVersion: 1,
@@ -399,6 +782,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
       settingsSchema: heartflowSettingsSchema,
       promptTemplates: [plannerTemplateDeclaration],
       consumes: [
+        inboundTextInformationKind,
         observationWakeInformationKind,
         turnCandidateInformationKind,
         personContextCompletedInformationKind,
@@ -409,6 +793,10 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
         turnSilentInformationKind,
         turnFailedInformationKind,
         turnSupersededInformationKind,
+        turnInterruptedInformationKind,
+        ...(options.modelTaskRequestedInformationKind
+          ? [options.modelTaskRequestedInformationKind]
+          : []),
         ...deliveryKinds,
         ...modelTaskFailureKinds,
         options.executionExhaustedInformationKind,
@@ -419,6 +807,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
         turnClaimedInformationKind,
         turnStartedInformationKind,
         turnDecisionSupersededInformationKind,
+        turnDecisionInterruptedInformationKind,
         turnContextCompletedInformationKind,
         messageIntentRequestedInformationKind,
         waitRequestedInformationKind,
@@ -427,9 +816,11 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
         turnSilentInformationKind,
         turnFailedInformationKind,
         turnSupersededInformationKind,
+        turnInterruptedInformationKind,
       ],
       selectors: [
         heartflowStateSelector,
+        plannerInterruptSelector,
         memorySelector,
         plannerContextSelector,
       ],
@@ -449,6 +840,30 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
         fields: { identityBarrier: "required", plannerRounds: 1 },
       }),
       subscriptions: [
+        onInformation(
+          inboundTextInformationKind,
+          {
+            subscriptionId: "agent.heartflow.interrupt.inbound",
+            delivery: "durable",
+          },
+          async (_atom, context) => {
+            await maybeInterruptPlanner(context, settings);
+          },
+        ),
+        ...(options.modelTaskRequestedInformationKind
+          ? [
+              onInformation(
+                options.modelTaskRequestedInformationKind,
+                {
+                  subscriptionId: "agent.heartflow.interrupt.requested",
+                  delivery: "durable",
+                },
+                async (_atom, context) => {
+                  await maybeInterruptPlanner(context, settings);
+                },
+              ),
+            ]
+          : []),
         ...[
           observationWakeInformationKind,
           turnCandidateInformationKind,
@@ -459,6 +874,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
           turnSilentInformationKind,
           turnFailedInformationKind,
           turnSupersededInformationKind,
+          turnInterruptedInformationKind,
         ].map((definition) =>
           onInformation(
             definition as AnyKind,
@@ -480,6 +896,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
             delivery: "durable",
           },
           async (decision, context) => {
+            if (await maybeInterruptPlanner(context, settings)) return;
             const gate = decision.payload as AttentionArousalPayload;
             const state = await context.select(heartflowStateSelector);
             if (turnTerminalFor(gate.candidateInformationId, state)) return;
@@ -578,7 +995,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
               : { action: "silent", reason: "planner-unavailable" };
             if (
               action.action === "wait" &&
-              gate.attempt >= Math.min(3, gate.totalWaitBudget)
+              gate.attempt >= gate.totalWaitBudget
             )
               action = { action: "silent", reason: "wait-budget-exhausted" };
             const winner = await context.commitTerminal(
@@ -645,7 +1062,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
                     ? "defer"
                     : "ignore",
               reasonCodes: [action.reason],
-              totalWaitBudget: Math.min(3, gate.totalWaitBudget),
+              totalWaitBudget: gate.totalWaitBudget,
               ...(action.action === "wait"
                 ? {
                     delayMs: action.waitSeconds * 1000,
@@ -1143,6 +1560,12 @@ async function progressCandidate(
       payload.asOf,
     );
   }
+  const effectiveFrequency = resolveEffectiveFrequency(
+    settings,
+    source,
+    payload.asOf,
+    focus !== undefined,
+  );
   await context.registerOnce(
     "agent.turn.context.completed",
     claim.informationId,
@@ -1183,9 +1606,8 @@ async function progressCandidate(
         recentSelfReplies: recentDelivered.length,
         recentWindowMessages: recentInbound.length + recentDelivered.length,
         idleReachedAverage,
-        frequency: isPrivate
-          ? settings.privateFrequency
-          : settings.groupFrequency,
+        frequency: effectiveFrequency.frequency,
+        frequencyRuleIndex: effectiveFrequency.ruleIndex,
         muted: settings.muted,
         safe,
         destinationAvailable: source.destination !== undefined,
@@ -1196,7 +1618,7 @@ async function progressCandidate(
           ? {}
           : { memory: memories.map(({ informationId }) => informationId) }),
         attempt: payload.attempt,
-        totalWaitBudget: Math.min(3, payload.totalWaitBudget),
+        totalWaitBudget: payload.totalWaitBudget,
       },
       references: [
         { relation: "agent:turn-claim", informationId: claim.informationId },

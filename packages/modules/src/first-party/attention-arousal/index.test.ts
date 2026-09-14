@@ -143,6 +143,22 @@ describe("attention arousal", () => {
 });
 
 describe("focus relevance", () => {
+  it("uses MaiBot's 40-point focus relevance for short reactions", () => {
+    const input = {
+      ...base,
+      focusActive: true,
+      inputs: [{ ...base.inputs[0], text: "哈哈" }],
+    };
+    expect(scoreAttentionArousal(input).score).toBe(65);
+    expect(decideAttentionArousal(input).outcome).toBe("defer");
+  });
+  it("can force a name mention without changing the default score path", () => {
+    const input = { ...base, namedSelf: true, frequency: 0.2 };
+    expect(decideAttentionArousal(input).outcome).toBe("defer");
+    expect(decideAttentionArousal(input, 80, 40, true, true).outcome).toBe(
+      "attend",
+    );
+  });
   it("boosts ordinary followups and permits disabling the boost", () => {
     expect(decideAttentionArousal({ ...base, focusActive: true }).outcome).toBe(
       "attend",

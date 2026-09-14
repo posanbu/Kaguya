@@ -35,11 +35,24 @@ const SHORT_REACTIONS = new Set([
 
 export const attentionArousalSettingsSchema = z
   .object({
-    focusRelevance: z.number().min(0).max(100).default(80).meta({
+    focusRelevance: z.number().min(0).max(100).default(40).meta({
       title: "持续关注相关性",
       description: "有效群聊关注租约的相关性分数，不绕过硬门禁。",
       public: true,
-      default: 80,
+      default: 40,
+    }),
+    forceDirectReply: z.boolean().default(true).meta({
+      title: "@及回复强制关注",
+      description: "被 @ 或回复机器人时直接进入规划器，但规划器仍可选择静默。",
+      public: true,
+      default: true,
+    }),
+    forceNameReply: z.boolean().default(false).meta({
+      title: "叫名强制关注",
+      description:
+        "普通文字提到机器人名字时直接进入规划器；关闭后仅增加相关性评分。",
+      public: true,
+      default: false,
     }),
     threshold: z.number().int().min(0).max(100).meta({
       title: "注意力阈值",
@@ -88,7 +101,7 @@ export interface AttentionArousalScore {
 
 export function scoreAttentionArousal(
   input: TurnContextCompletedPayload,
-  focusRelevance = 80,
+  focusRelevance = 40,
 ): AttentionArousalScore {
   const frequency = Math.min(1, Math.max(0, input.frequency));
   const triggerThreshold =
@@ -139,7 +152,9 @@ export function scoreAttentionArousal(
 export function decideAttentionArousal(
   input: TurnContextCompletedPayload,
   threshold = 80,
-  focusRelevance = 80,
+  focusRelevance = 40,
+  forceDirectReply = true,
+  forceNameReply = false,
 ): { outcome: AttentionArousalOutcome; reasonCodes: string[] } {
   const hardGates = [
     ...(input.muted ? ["muted"] : []),
@@ -152,7 +167,10 @@ export function decideAttentionArousal(
     return { outcome: "ignore", reasonCodes: hardGates };
   if (input.isPrivate)
     return { outcome: "attend", reasonCodes: ["private-conversation"] };
-  if (input.mentionedSelf || input.repliedToSelf || input.namedSelf) {
+  if (
+    (forceDirectReply && (input.mentionedSelf || input.repliedToSelf)) ||
+    (forceNameReply && input.namedSelf)
+  ) {
     return {
       outcome: "attend",
       reasonCodes: [
@@ -210,6 +228,8 @@ export const attentionArousalModule = defineInformationModule({
             input,
             settings.threshold,
             settings.focusRelevance,
+            settings.forceDirectReply,
+            settings.forceNameReply,
           );
           const dueAt = new Date(
             Date.parse(input.asOf) + settings.deferMs,
