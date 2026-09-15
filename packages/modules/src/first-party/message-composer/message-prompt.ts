@@ -1,6 +1,6 @@
 /**
  * 嵌套模板的变量与 partial 直接复用模块静态声明，管理保存与运行编译保持同一约束。
- * 功能概述：将消息意图和冻结 turn 编译为分层 Handlebars Prompt，所有本轮输入拥有相同模板地位。
+ * 功能概述：将消息意图和冻结 turn 编译为分层 Handlebars Prompt，所有本轮输入拥有相同模板地位；积压时向 Composer 提供年龄供自然衔接。
  * 主要职责：createMessagePromptCompiler 预编译模板并返回纯函数；compileMessagePrompt 提供一次性入口；
  * frozenTurnInputs 核对 turn 身份与目标范围，重建冻结消息；历史与记忆预算函数只限制辅助上下文。
  * 代码库关系：message-context 选择账本事实，Node 模板加载器提供 MessagePromptTemplates；编译结果携带变量溯源。
@@ -110,6 +110,16 @@ export function createMessagePromptCompiler(
     ];
     if (selfIds.length > 1)
       throw new Error("Frozen turn self accounts are inconsistent");
+    const turnContext = atoms.find(
+      (atom) => atom.informationId === payload.turn.contextInformationId,
+    );
+    const backlog = (turnContext?.payload as any)?.backlog as
+      | {
+          isBacklog: boolean;
+          oldestInputAgeMs: number;
+          newestInputAgeMs: number;
+        }
+      | undefined;
     const asOf = String(
       atoms.find(
         (atom) => atom.informationId === payload.turn.contextInformationId,
@@ -176,9 +186,12 @@ export function createMessagePromptCompiler(
       ),
       variable(
         "scene",
-        payload.target.destination.kind === "group"
+        (payload.target.destination.kind === "group"
           ? ZH_CN_MESSAGE_PROMPT.groupRule
-          : ZH_CN_MESSAGE_PROMPT.privateRule,
+          : ZH_CN_MESSAGE_PROMPT.privateRule) +
+          (backlog?.isBacklog
+            ? `\n本轮输入积压：最早约 ${formatBacklogAge(backlog.oldestInputAgeMs)}，最新约 ${formatBacklogAge(backlog.newestInputAgeMs)}前。请根据语境自然承接；只有确有帮助时才提及迟到，不要固定道歉或说明系统恢复。`
+            : ""),
         [message.informationId],
       ),
       variable("history", history.content, history.informationIds),
@@ -192,6 +205,13 @@ export function createMessagePromptCompiler(
     ]);
     return { ...prompt, templates: allTemplates };
   };
+}
+
+function formatBacklogAge(ageMs: number): string {
+  if (ageMs < 60_000) return `${Math.ceil(ageMs / 1_000)} 秒`;
+  if (ageMs < 3_600_000) return `${Math.ceil(ageMs / 60_000)} 分钟`;
+  if (ageMs < 86_400_000) return `${Math.ceil(ageMs / 3_600_000)} 小时`;
+  return `${Math.ceil(ageMs / 86_400_000)} 天`;
 }
 
 function assertAgentIdentity(identity: AgentIdentity): void {

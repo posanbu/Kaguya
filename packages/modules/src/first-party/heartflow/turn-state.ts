@@ -1,7 +1,7 @@
 /**
  * 功能概述：Heartflow 的纯状态投影与引用核验边界，从在线编排入口提取。
- * 主要职责：TURN_TERMINAL_KINDS、referenced、sameScope、sameDeliveryScope、identityTerminalFor、hasExhaustedStatus、turnTerminalFor、claimForCandidate、outgoingStatusTarget、terminalReferences、assertTurnLink、compareCandidates、compareClaims、uniqueAtoms、copyOptionalIdentity 各自维护候选、claim、身份和终态之间的关系。
- * 代码库关系：index.ts 负责推进与提交，本文件仅计算给定事实的状态，不执行 I/O；外部 Information 协议保持不变。
+ * 主要职责：计算候选、claim、身份和终态关系；assessInputBacklog 按评估时间计算冻结输入年龄与积压标记。
+ * 代码库关系：index.ts 负责推进与提交，本文件仅计算给定事实的状态，不执行 I/O；积压投影由 turn kind 持久化并供 Planner/Composer 消费。
  */
 import {
   type DeepReadonly,
@@ -27,6 +27,38 @@ export const TURN_TERMINAL_KINDS = new Set<string>([
   turnSupersededInformationKind.kind,
   turnInterruptedInformationKind.kind,
 ]);
+
+export interface InputBacklogAssessment {
+  readonly isBacklog: boolean;
+  readonly evaluatedAt: string;
+  readonly oldestInputAgeMs: number;
+  readonly newestInputAgeMs: number;
+  readonly thresholdMs: number;
+}
+
+/** 以最晚输入是否越过阈值判断整批是否已积压，未来时间戳的年龄按零计。 */
+export function assessInputBacklog(
+  occurredAt: readonly string[],
+  evaluatedAt: string,
+  thresholdMs: number,
+): InputBacklogAssessment {
+  if (occurredAt.length === 0) throw new Error("Backlog requires an input");
+  const evaluationTime = Date.parse(evaluatedAt);
+  let oldestInputAgeMs = 0;
+  let newestInputAgeMs = Number.POSITIVE_INFINITY;
+  for (const time of occurredAt) {
+    const age = Math.max(0, evaluationTime - Date.parse(time));
+    oldestInputAgeMs = Math.max(oldestInputAgeMs, age);
+    newestInputAgeMs = Math.min(newestInputAgeMs, age);
+  }
+  return {
+    isBacklog: newestInputAgeMs > thresholdMs,
+    evaluatedAt,
+    oldestInputAgeMs,
+    newestInputAgeMs,
+    thresholdMs,
+  };
+}
 
 export function referenced(
   source: DeepReadonly<InformationAtom>,

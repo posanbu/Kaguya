@@ -168,8 +168,9 @@ export const heartflowSettingsSchema = z
       default: 120000,
     }),
     staleAfterMs: z.number().int().min(0).meta({
-      title: "候选过期时间",
-      description: "超过此时间的候选失效，单位毫秒。",
+      title: "积压分类阈值",
+      description:
+        "最近一条输入超过此年龄时标记为积压并交由 Planner 判断，单位毫秒。",
       public: true,
       default: 120000,
     }),
@@ -1566,6 +1567,11 @@ async function progressCandidate(
     payload.asOf,
     focus !== undefined,
   );
+  const backlog = assessInputBacklog(
+    completeInputs.map(({ inbound }) => inbound.occurredAt),
+    context.now().toISOString(),
+    settings.staleAfterMs,
+  );
   await context.registerOnce(
     "agent.turn.context.completed",
     claim.informationId,
@@ -1576,6 +1582,13 @@ async function progressCandidate(
         claimInformationId: claim.informationId,
         scopeKey: payload.scopeKey,
         asOf: payload.asOf,
+        backlog: {
+          isBacklog: backlog.isBacklog,
+          evaluatedAt: backlog.evaluatedAt,
+          oldestInputAgeMs: backlog.oldestInputAgeMs,
+          newestInputAgeMs: backlog.newestInputAgeMs,
+          thresholdMs: backlog.thresholdMs,
+        },
         inputs: completeInputs.map(({ inbound, identity }) => ({
           informationId: inbound.informationId,
           occurredAt: inbound.occurredAt,
@@ -2010,4 +2023,5 @@ import {
   compareClaims,
   uniqueAtoms,
   copyOptionalIdentity,
+  assessInputBacklog,
 } from "./turn-state.js";

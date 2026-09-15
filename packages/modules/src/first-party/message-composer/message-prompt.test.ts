@@ -47,6 +47,35 @@ describe("message prompt", () => {
     );
     expect(result.templates.some((t) => t.name === "turn")).toBe(true);
   });
+  it("adds age context only for classified backlog and leaves wording optional", () => {
+    const f = fixture();
+    const backlogTurn = atom(
+      f.turn.informationId,
+      f.turn.kind,
+      {
+        ...f.turn.payload,
+        backlog: {
+          isBacklog: true,
+          evaluatedAt: "2026-09-15T00:00:00.000Z",
+          oldestInputAgeMs: 3_600_000,
+          newestInputAgeMs: 120_000,
+          thresholdMs: 120_000,
+        },
+      },
+      [...f.turn.references],
+    );
+    const result = compileMessagePrompt(
+      templates,
+      identity,
+      [f.intent, backlogTurn, ...f.messages],
+      f.intent.informationId,
+    );
+    expect(result.text).toContain(
+      "本轮输入积压：最早约 1 小时，最新约 2 分钟前",
+    );
+    expect(result.text).toContain("只有确有帮助时才提及迟到");
+    expect(result.text).not.toContain("刚看到");
+  });
   it("does not drop or truncate frozen inputs beyond the historical budgets", () => {
     const texts = Array.from(
       { length: 35 },

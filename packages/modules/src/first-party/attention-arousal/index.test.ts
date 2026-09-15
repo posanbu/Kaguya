@@ -174,11 +174,22 @@ describe("focus relevance", () => {
     { muted: true },
     { safe: false },
     { destinationAvailable: false },
-    { stale: true },
     { frequency: 0 },
   ])("preserves hard gate %j", (gate) => {
     expect(
       decideAttentionArousal({ ...base, focusActive: true, ...gate }).outcome,
     ).toBe("ignore");
+  });
+
+  it("lets semantic attention evaluate stale input without weakening other hard gates", () => {
+    expect(decideAttentionArousal({ ...base, stale: true }).outcome).toBe(
+      "defer",
+    );
+    expect(
+      decideAttentionArousal({ ...base, stale: true, isPrivate: true }).outcome,
+    ).toBe("attend");
+    expect(
+      decideAttentionArousal({ ...base, stale: true, muted: true }),
+    ).toEqual({ outcome: "ignore", reasonCodes: ["muted"] });
   });
 });

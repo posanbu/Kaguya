@@ -54,6 +54,7 @@ export const plannerActionSchema = z.discriminatedUnion("action", [
         "no-response-needed",
         "already-addressed",
         "avoid-interruption",
+        "topic-expired",
       ]),
     })
     .strict(),
@@ -252,6 +253,7 @@ export function compilePlannerPrompt(
             replyTo: input.source.replyTo?.platformMessageId ?? null,
           }),
         ),
+        backlog: payload.backlog ?? null,
         attempt: payload.attempt,
         totalWaitBudget: payload.totalWaitBudget,
       }),
