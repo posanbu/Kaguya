@@ -22,6 +22,8 @@
 
 外层变量为 `persona`、`name`、`aliases`、`self_account`、`scene`、`history`、`memory`、`turn`。消息层提供 `occurred_at`、`sender_name`、`sender_id`、`platform`、`adapter_id`、`destination`、`message_id`、`mentions`、`reply_to`、`content`、`quoted_message`、`self_account`、`name` 和 `is_assistant`。引用内容属于对应入站的 `quoted_message`，不是全局必须回答的消息。
 
+只有冻结 turn 被标记为积压时，`scene` 才补充首末输入年龄，并提示 Composer 按语境决定是否自然承接迟到；不会强制道歉或说明系统恢复。实时回合的 `scene` 不变，旧 turn 缺少积压投影时按实时回合兼容处理。
+
 历史最多 30 条、12,000 个 Unicode code point；Memory 最多 4,000 个 code point。预算在消息渲染后、集合层渲染前执行，完整当前 turn 不受历史预算裁剪。变量可省略或重复使用，provenance 只记录外层实际使用的变量。动态数据不做 XML/HTML 逃逸，模板应明确区分内容与指令。
 
 ## Settings

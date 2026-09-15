@@ -146,7 +146,10 @@ afterEach(async () => {
   }
 });
 
-async function fixture(startImmediately = true) {
+async function fixture(
+  startImmediately = true,
+  options: { now?: string; staleAfterMs?: number } = {},
+) {
   execute.mockClear();
   const database = await createTestingDatabase();
   await database.prepareSchema();
@@ -179,7 +182,7 @@ async function fixture(startImmediately = true) {
     registry,
     store: database.information,
     nextInformationId: () => `heartflow-${++sequence}`,
-    now: () => new Date("2026-09-08T00:00:10.000Z"),
+    now: () => new Date(options.now ?? "2026-09-08T00:00:10.000Z"),
   });
   const host = new ModuleHost({
     core,
@@ -207,7 +210,7 @@ async function fixture(startImmediately = true) {
           groupFrequency: 1,
           privateFrequency: 1,
           muted: false,
-          staleAfterMs: 120_000,
+          staleAfterMs: options.staleAfterMs ?? 120_000,
         },
       },
     ]);
@@ -1194,7 +1197,7 @@ describe("Planner durable dispatch", () => {
 });
 
 it("recovers legacy unclaimed backlog with one frozen context and one model/action decision", async () => {
-  const f = await fixture(false);
+  const f = await fixture(false, { now: "2026-09-08T01:00:00.000Z" });
   const backlog = [];
   for (let i = 0; i < 12; i++)
     backlog.push(
@@ -1218,6 +1221,17 @@ it("recovers legacy unclaimed backlog with one frozen context and one model/acti
   ).filter((a) => a.kind === turnContextCompletedInformationKind.kind);
   expect(contexts).toHaveLength(1);
   expect((contexts[0]!.payload as any).inputs).toHaveLength(13);
+  const backlogProjection = (contexts[0]!.payload as any).backlog;
+  expect(backlogProjection.isBacklog).toBe(true);
+  expect(backlogProjection.thresholdMs).toBe(120_000);
+  expect(backlogProjection.oldestInputAgeMs).toBe(
+    Date.parse(backlogProjection.evaluatedAt) -
+      Date.parse("2026-09-08T00:00:00.000Z"),
+  );
+  expect(backlogProjection.newestInputAgeMs).toBe(
+    Date.parse(backlogProjection.evaluatedAt) -
+      Date.parse("2026-09-08T00:00:20.000Z"),
+  );
   expect(
     await (
       await atoms(f.database)
@@ -1235,6 +1249,50 @@ it("recovers legacy unclaimed backlog with one frozen context and one model/acti
       await atoms(f.database)
     ).filter((a) => a.kind === messageIntentRequestedInformationKind.kind),
   ).toHaveLength(1);
+});
+
+it("lets Planner close an expired recovered topic without creating a message intent", async () => {
+  const f = await fixture(false, { now: "2026-09-08T01:00:00.000Z" });
+  await appendCandidate(f.core, {
+    requestId: "expired-topic",
+    text: "刚才外面下雨了",
+    occurredAt: "2026-09-08T00:00:00.000Z",
+    identityBeforeCandidate: true,
+  });
+  await f.start();
+  await appendCandidate(f.core, {
+    requestId: "expired-topic-followup",
+    text: "现在已经晴了",
+    occurredAt: "2026-09-08T00:00:20.000Z",
+    identityBeforeCandidate: true,
+  });
+  await waitForKind(f.database, turnContextCompletedInformationKind.kind);
+  execute.mockImplementationOnce(
+    async () =>
+      ({
+        status: "completed",
+        output: { action: "silent", reason: "topic-expired" },
+        requestedInformationId: "request-expired",
+        terminalInformationId: "terminal-expired",
+      }) as any,
+  );
+  await submitDecision(f.core, f.database, "attend");
+  await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
+  const plannerDecision = (await atoms(f.database)).find(
+    (atom) => atom.kind === "agent.turn.plan.completed",
+  );
+  expect((plannerDecision?.payload as any)?.action).toEqual({
+    action: "silent",
+    reason: "topic-expired",
+  });
+  const silent = await waitForKind(f.database, turnSilentInformationKind.kind);
+  expect((silent.payload as any).reasonCodes).toContain("topic-expired");
+  expect(execute).toHaveBeenCalledTimes(1);
+  expect(
+    (await atoms(f.database)).some(
+      (atom) => atom.kind === messageIntentRequestedInformationKind.kind,
+    ),
+  ).toBe(false);
 });
 
 it("preserves merged inputs across an unfinished identity barrier and delayed identity replay", async () => {

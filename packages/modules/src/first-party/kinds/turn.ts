@@ -347,6 +347,16 @@ const turnContextPayloadSchema = z
     claimInformationId: nonBlankString,
     scopeKey: nonBlankString,
     asOf: z.iso.datetime({ offset: true }),
+    backlog: z
+      .object({
+        isBacklog: z.boolean(),
+        evaluatedAt: z.iso.datetime({ offset: true }),
+        oldestInputAgeMs: z.number().int().min(0),
+        newestInputAgeMs: z.number().int().min(0),
+        thresholdMs: z.number().int().min(0),
+      })
+      .strict()
+      .optional(),
     inputs: z.array(turnInputSchema).min(1),
     text: z.string(),
     source: messageSourceSchema,
@@ -385,7 +395,7 @@ export const turnContextCompletedInformationKind = defineInformationKind({
   kind: "agent.turn.context.completed",
   displayName: "回合上下文就绪",
   description:
-    "身份屏障结束后冻结截至指定时刻的输入、来源和时机特征；注意力评估与规划只消费这份可重放上下文。",
+    "身份屏障结束后冻结输入、来源、时机及积压年龄；注意力评估与规划只消费这份可重放上下文，语义时效由 Planner 判断。",
   payloadSchema: turnContextPayloadSchema,
   references: {
     "core:caused-by": { required: true, multiple: false },

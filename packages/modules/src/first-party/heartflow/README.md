@@ -14,7 +14,7 @@
 
 ## Settings
 
-配置机器人名称、群聊/直接会话频率、mute 和 stale 界限。Planner 使用共享 Agent 身份和宿主授权的 light 模型，无需新增实例配置。
+配置机器人名称、群聊/直接会话频率、mute 和积压分类阈值。`staleAfterMs` 仅标记整批输入是否积压；超过阈值不再自动丢弃，而由 Planner 根据话题是否仍待处理、是否已被后续消息解决或依赖即时场景决定 message、wait 或 silent。Planner 使用共享 Agent 身份和宿主授权的 light 模型，无需新增实例配置。
 
 ## 可靠性、幂等和失败行为
 
@@ -42,7 +42,7 @@ Planner 首次请求持久化后，重放会恢复相同 Prompt、上下文原�
 
 宿主 `conversation` 能力在规划前冻结 `agent.conversation.context.frozen`，提供不含原始目标 ID 的解析投影及当前会话/人物背景。背景也用于普通消息编写，不以跨会话意图为前提。跨会话获胜决策调用 `route`，宿主验证引用、目录、有效期与出站策略后创建统一意图；模型本身不能授予出站权限。重启后已冻结 Prompt 可重放，但临时引用失效，待发跨会话请求安全关闭。
 
-系统以持续观察为模型，turn/candidate/claim 仅是调度事实。正常积压由 Heartbeat 在创建阶段阻止；恢复路径把同 scope 遗留 candidate 合并为一次观察。合并来源持久化在 claim 引用中，身份屏障迟到不会丢失来源；Planner 的迟到结果在派发前复核当前终态。Selector 只查询开放 candidate 与最近 claim，避免反复扫描历史。
+系统以持续观察为模型，turn/candidate/claim 仅是调度事实。正常积压由 Heartbeat 在创建阶段阻止；恢复路径把同 scope 遗留 candidate 合并为一次观察。合并来源持久化在 claim 引用中，身份屏障迟到不会丢失来源。冻结上下文记录评估时刻、首末输入年龄和分类阈值；Attention 保留安全、静默、目标与频率硬门禁，话题时效交给 Planner。Planner 的迟到结果在派发前复核当前终态。Selector 只查询开放 candidate 与最近 claim，避免反复扫描历史。
 
 内部实现分为在线编排入口、state-query.ts 的账本水合与分页、turn-state.ts 的纯引用与状态投影。外部 Kind 和提交槽保持稳定。
 

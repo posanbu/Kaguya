@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { heartflowSettingsSchema, resolveEffectiveFrequency } from "./index.js";
+import { assessInputBacklog } from "./turn-state.js";
 
 const base = {
   botNames: ["Kaguya"],
@@ -82,6 +83,49 @@ describe("effective reply frequency", () => {
     ).toEqual({
       frequency: 0.7,
       ruleIndex: 1,
+    });
+  });
+});
+
+describe("input backlog assessment", () => {
+  const evaluatedAt = "2026-09-15T00:00:00.000Z";
+
+  it("reports oldest and newest ages and classifies only beyond the threshold", () => {
+    expect(
+      assessInputBacklog(
+        ["2026-09-14T23:57:00.000Z", "2026-09-14T23:58:00.000Z"],
+        evaluatedAt,
+        120_000,
+      ),
+    ).toEqual({
+      isBacklog: false,
+      evaluatedAt,
+      oldestInputAgeMs: 180_000,
+      newestInputAgeMs: 120_000,
+      thresholdMs: 120_000,
+    });
+    expect(
+      assessInputBacklog(
+        ["2026-09-14T23:56:59.999Z", "2026-09-14T23:57:59.999Z"],
+        evaluatedAt,
+        120_000,
+      ).isBacklog,
+    ).toBe(true);
+  });
+
+  it("clamps future timestamps to zero age", () => {
+    expect(
+      assessInputBacklog(
+        ["2026-09-15T00:00:01.000Z", "2026-09-15T00:00:02.000Z"],
+        evaluatedAt,
+        0,
+      ),
+    ).toEqual({
+      isBacklog: false,
+      evaluatedAt,
+      oldestInputAgeMs: 0,
+      newestInputAgeMs: 0,
+      thresholdMs: 0,
     });
   });
 });

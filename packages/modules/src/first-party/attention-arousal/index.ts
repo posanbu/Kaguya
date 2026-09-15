@@ -1,6 +1,6 @@
 /**
  * settings schema 的公开中文元数据供管理表单使用，运行时与保存共用约束。
- * 功能概述：判断冻结事件是否足以唤起 Agent 注意，不决定话题、回复或具体行动。
+ * 功能概述：判断冻结事件是否足以唤起 Agent 注意，不决定话题、回复或具体行动；积压时效由 Planner 语义判断。
  * 主要职责：执行不可绕过的硬门禁和 MaiBot 风格的确定性 0–100 显著性评分。
  * 代码库关系：只消费 Heartflow 冻结的 turn context，并提交 claim 的唯一注意唤起终态；eligible 使用独立 attention 命名空间；非 eligible 直接提交廉价等待或静默决策。
  * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
@@ -160,7 +160,6 @@ export function decideAttentionArousal(
     ...(input.muted ? ["muted"] : []),
     ...(!input.safe ? ["unsafe"] : []),
     ...(!input.destinationAvailable ? ["no-destination"] : []),
-    ...(input.stale ? ["stale-candidate"] : []),
     ...(input.frequency <= 0 ? ["frequency-zero"] : []),
   ];
   if (hardGates.length > 0)

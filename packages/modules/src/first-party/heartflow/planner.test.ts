@@ -33,17 +33,54 @@ describe("Planner contract", () => {
   });
   it("compiles identity, policy and every frozen input with provenance", () => {
     const { atoms } = fixture(["FIRST_SENTINEL", "LAST_SENTINEL"]);
-    const turn = atoms.find(
+    const oldTurn = atoms.find(
       (atom) => atom.kind === "agent.turn.context.completed",
     )!;
-    const prompt = compilePlannerPrompt(identity, atoms, turn);
+    const turn = {
+      ...oldTurn,
+      payload: {
+        ...oldTurn.payload,
+        backlog: {
+          isBacklog: true,
+          evaluatedAt: "2026-09-15T00:00:00.000Z",
+          oldestInputAgeMs: 300_000,
+          newestInputAgeMs: 180_000,
+          thresholdMs: 120_000,
+        },
+      },
+    } as any;
+    const testAtoms = atoms.map((atom) =>
+      atom.informationId === oldTurn.informationId ? turn : atom,
+    );
+    const prompt = compilePlannerPrompt(identity, testAtoms, turn);
     expect(prompt.text).toContain(identity.persona);
     expect(prompt.text).toContain("FIRST_SENTINEL");
     expect(prompt.text).toContain("LAST_SENTINEL");
     expect(prompt.text).toContain("不可信数据");
+    expect(prompt.text).toContain('"isBacklog":true');
+    expect(prompt.text).toContain('"newestInputAgeMs":180000');
     expect(
       prompt.variables.find((v) => v.name === "turn")?.informationIds,
     ).toEqual([turn.informationId]);
     expect(prompt.text).not.toContain("group-1");
+  });
+
+  it("accepts the explicit expired-topic audit reason", () => {
+    expect(
+      plannerActionSchema.safeParse({
+        action: "silent",
+        reason: "topic-expired",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("replays historical frozen turns that predate the backlog projection", () => {
+    const { atoms } = fixture(["LEGACY_INPUT"]);
+    const turn = atoms.find(
+      (atom) => atom.kind === "agent.turn.context.completed",
+    )!;
+    const prompt = compilePlannerPrompt(identity, atoms, turn);
+    expect(prompt.text).toContain('"backlog":null');
+    expect(prompt.text).toContain("LEGACY_INPUT");
   });
 });

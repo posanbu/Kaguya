@@ -10,7 +10,7 @@
 
 ## 数据流与边界
 
-Heartflow 冻结直接性、内容、消息压力、空窗和近期存在感；本模块只对该快照执行硬门禁与确定性评分。`attend` 只允许 Heartflow 调用独立 Planner；Planner 可选择 message、wait 或 silent，不直接决定必然回复。
+Heartflow 冻结直接性、内容、消息压力、空窗和近期存在感；本模块只对该快照执行硬门禁与确定性评分。静默、安全、目标可用性和零频率仍是硬门禁；输入年龄仅供后续 Planner 判断话题是否过期，不会单独阻止评估。`attend` 只允许 Heartflow 调用独立 Planner；Planner 可选择 message、wait 或 silent，不直接决定必然回复。
 
 ## Settings
 
