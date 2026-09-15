@@ -134,6 +134,7 @@ describe("message intent protocol", () => {
     { source: source() },
     { replyTo: { platformMessageId: "inbound" } },
     { platformMessageId: "inbound" },
+    { replyToInformationId: " " },
     { memoryInformationIds: [""] },
     { memoryInformationIds: null },
     { target: { ...intentPayload().target, platformMessageId: "inbound" } },
@@ -192,6 +193,12 @@ describe("message intent protocol", () => {
     expect(
       assistantTextInformationKind.payloadSchema.safeParse({
         ...payload,
+        replyToPlatformMessageId: "inbound",
+      }).success,
+    ).toBe(true);
+    expect(
+      assistantTextInformationKind.payloadSchema.safeParse({
+        ...payload,
         source: {
           ...payload.source,
           selfId: "bot",
@@ -208,6 +215,22 @@ describe("message intent protocol", () => {
         },
       }).success,
     ).toBe(false);
+  });
+
+  it("accepts an optional Information reply target with an explicit relation", () => {
+    expect(
+      messageIntentRequestedInformationPayloadSchema.safeParse({
+        ...intentPayload(),
+        replyToInformationId: "inbound-information",
+      }).success,
+    ).toBe(true);
+    expect(messageIntentRequestedInformationKind.references).toMatchObject({
+      "agent:reply-to": {
+        required: false,
+        multiple: false,
+        targetKinds: [inboundTextInformationKind.kind],
+      },
+    });
   });
 
   it("requires claim and candidate references and moves association to the message route", () => {

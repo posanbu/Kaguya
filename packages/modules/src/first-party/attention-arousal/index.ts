@@ -160,7 +160,6 @@ export function decideAttentionArousal(
     ...(input.muted ? ["muted"] : []),
     ...(!input.safe ? ["unsafe"] : []),
     ...(!input.destinationAvailable ? ["no-destination"] : []),
-    ...(input.stale ? ["stale-candidate"] : []),
     ...(input.frequency <= 0 ? ["frequency-zero"] : []),
   ];
   if (hardGates.length > 0)

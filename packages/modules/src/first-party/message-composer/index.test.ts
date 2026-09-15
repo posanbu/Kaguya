@@ -218,6 +218,75 @@ describe("message composer", () => {
       },
     );
   });
+  it("resolves a frozen input reference into a platform reply only at delivery", async () => {
+    const s = await setup();
+    const replyIntent = atom(
+      "reply-intent",
+      "agent.message.intent.requested",
+      {
+        ...s.f.intent.payload,
+        replyToInformationId: s.f.messages[0]!.informationId,
+      },
+      [
+        ...s.f.intent.references,
+        {
+          relation: "agent:reply-to",
+          informationId: s.f.messages[0]!.informationId,
+        },
+      ],
+    );
+    const selected = [replyIntent, s.f.turn, ...s.f.messages];
+    s.context.select = vi.fn(async () => selected) as never;
+    const completed = atom("completed-reply", completedKind.kind, {
+      taskId: "agent.message.compose",
+      version: "1",
+      sourceInformationId: replyIntent.informationId,
+      activation,
+      selectionPolicy: { tier: "heavy" },
+      output: "REPLY",
+    });
+    await s.instance.subscriptions[1]!.handle(completed as never, s.context);
+    expect(s.registerOnce).toHaveBeenLastCalledWith(
+      "kaguya.message.assistant.v1",
+      `${activation.instanceId}:completed-reply`,
+      assistantTextInformationKind,
+      {
+        payload: expect.objectContaining({
+          text: "REPLY",
+          replyToPlatformMessageId: "platform-0",
+        }),
+      },
+    );
+
+    const assistant = atom(
+      "assistant-reply",
+      assistantTextInformationKind.kind,
+      {
+        text: "REPLY",
+        source: target,
+        originatingModuleInstanceId: activation.instanceId,
+        turn: messageIntentRequestedInformationPayloadSchema.parse(
+          replyIntent.payload,
+        ).turn,
+        replyToPlatformMessageId: "platform-0",
+      },
+    );
+    await s.instance.subscriptions[2]!.handle(assistant as never, s.context);
+    expect(s.registerOnce).toHaveBeenLastCalledWith(
+      "kaguya.message.delivery.v1",
+      `${activation.instanceId}:assistant-reply`,
+      expect.anything(),
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          message: {
+            kind: "reply",
+            text: "REPLY",
+            replyToPlatformMessageId: "platform-0",
+          },
+        }),
+      }),
+    );
+  });
   it("ignores foreign task definitions and model tiers before selecting context", async () => {
     const s = await setup();
     for (const override of [

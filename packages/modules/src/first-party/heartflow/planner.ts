@@ -32,14 +32,19 @@ import {
 } from "../message-authorization.js";
 
 export const PLANNER_TASK_ID = "agent.turn.plan";
-export const plannerActionSchema = z.discriminatedUnion("action", [
+const plannerMessageBaseShape = {
+  action: z.literal("message"),
+  reason: z.enum(["respond", "contribute"]),
+  target: plannerTargetSchema.default({ kind: "current" }),
+};
+export const plannerActionSchema = z.union([
   z
     .object({
-      action: z.literal("message"),
-      reason: z.enum(["respond", "contribute"]),
-      target: plannerTargetSchema.default({ kind: "current" }),
+      ...plannerMessageBaseShape,
+      replyTo: z.string().regex(/^turn-input-[1-9]\d*$/),
     })
     .strict(),
+  z.object(plannerMessageBaseShape).strict(),
   z
     .object({
       action: z.literal("wait"),
@@ -72,7 +77,11 @@ export const plannerDecisionInformationKind = defineInformationKind({
         z
           .object({
             action: z.literal("silent"),
-            reason: z.enum(["planner-unavailable", "wait-budget-exhausted"]),
+            reason: z.enum([
+              "planner-unavailable",
+              "wait-budget-exhausted",
+              "invalid-reply-reference",
+            ]),
           })
           .strict(),
       ]),
@@ -200,6 +209,24 @@ export function compilePlannerPrompt(
       ),
   );
   const memories = atoms.filter((atom) => memoryIds.has(atom.informationId));
+  const occurredTimes = payload.inputs.map((input: { occurredAt: string }) =>
+    Date.parse(input.occurredAt),
+  );
+  const oldestOccurredAt = Math.min(...occurredTimes);
+  const newestOccurredAt = Math.max(...occurredTimes);
+  const legacyDetectedAt = Date.parse(payload.asOf);
+  const backlog = payload.backlog ?? {
+    isBacklog: payload.stale,
+    detectedAt: payload.asOf,
+    thresholdMs: 0,
+    totalCount: payload.inputs.length,
+    selectedCount: payload.inputs.length,
+    omittedCount: 0,
+    oldestOccurredAt: new Date(oldestOccurredAt).toISOString(),
+    newestOccurredAt: new Date(newestOccurredAt).toISOString(),
+    newestAgeMs: Math.max(0, legacyDetectedAt - newestOccurredAt),
+    spanMs: Math.max(0, newestOccurredAt - oldestOccurredAt),
+  };
   const conversation = atoms.find(
     (a) =>
       a.kind === conversationContextInformationKind.kind &&
@@ -231,17 +258,24 @@ export function compilePlannerPrompt(
     {
       name: "turn",
       content: JSON.stringify({
+        processedAt: backlog.detectedAt,
+        backlog,
         inputs: payload.inputs.map(
-          (input: {
-            text: string;
-            occurredAt: string;
-            source: {
-              senderId: string;
-              sender?: { nickname?: string; card?: string };
-              mentions?: { kind: string; id?: string }[];
-              replyTo?: { platformMessageId: string };
-            };
-          }) => ({
+          (
+            input: {
+              inputRef?: string;
+              text: string;
+              occurredAt: string;
+              source: {
+                senderId: string;
+                sender?: { nickname?: string; card?: string };
+                mentions?: { kind: string; id?: string }[];
+                replyTo?: { platformMessageId: string };
+              };
+            },
+            index: number,
+          ) => ({
+            inputRef: input.inputRef ?? `turn-input-${index + 1}`,
             text: input.text,
             occurredAt: input.occurredAt,
             speaker:
@@ -249,7 +283,7 @@ export function compilePlannerPrompt(
               input.source.sender?.nickname ??
               input.source.senderId,
             mentions: input.source.mentions ?? [],
-            replyTo: input.source.replyTo?.platformMessageId ?? null,
+            quotesPreviousMessage: input.source.replyTo !== undefined,
           }),
         ),
         attempt: payload.attempt,

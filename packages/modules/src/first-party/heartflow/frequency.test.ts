@@ -18,6 +18,7 @@ const at = (hour: number, minute: number) =>
 describe("effective reply frequency", () => {
   it("keeps the base value while dynamic rules are disabled", () => {
     const settings = heartflowSettingsSchema.parse(base);
+    expect(settings.backlogMaxMessages).toBe(120);
     expect(
       resolveEffectiveFrequency(settings, source, at(23, 30), false),
     ).toEqual({ frequency: 0.6, ruleIndex: null });

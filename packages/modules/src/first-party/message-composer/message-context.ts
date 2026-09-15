@@ -85,6 +85,23 @@ export const turnMessageContextSelector = defineInformationSelector({
           `Missing frozen turn input reference: ${input.informationId}`,
         );
     }
+    if ("replyToInformationId" in intent) {
+      const replyToInformationId = intent.replyToInformationId;
+      const replyReferences = sourceAtom.references.filter(
+        (reference) => reference.relation === "agent:reply-to",
+      );
+      const replyInput = byId.get(replyToInformationId);
+      if (
+        replyReferences.length !== 1 ||
+        replyReferences[0]!.informationId !== replyToInformationId ||
+        !inputs.some((input) => input.informationId === replyToInformationId) ||
+        replyInput?.kind !== inboundTextInformationKind.kind ||
+        !sameMessageTarget(replyInput.payload.source, intent.target)
+      )
+        throw new Error(
+          "Reply target must be an input from the current frozen turn",
+        );
+    }
     // 意图列出的记忆必须由冻结上下文授权，不从当前会话临时推测。
     for (const id of intent.memoryInformationIds) {
       if (!byId.has(id))

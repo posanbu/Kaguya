@@ -168,10 +168,18 @@ export const heartflowSettingsSchema = z
       default: 120000,
     }),
     staleAfterMs: z.number().int().min(0).meta({
-      title: "候选过期时间",
-      description: "超过此时间的候选失效，单位毫秒。",
+      title: "积压识别阈值",
+      description:
+        "最新平台事件落后实际处理时间超过此值时按积压处理，单位毫秒。",
       public: true,
       default: 120000,
+    }),
+    backlogMaxMessages: z.number().int().min(1).max(1000).default(120).meta({
+      title: "积压输入上限",
+      description:
+        "一次积压观察最多向 Planner 提供的最近消息数；完整消息仍保留在账本中。",
+      public: true,
+      default: 120,
     }),
     plannerInterruptMaxConsecutiveCount: z
       .number()
@@ -993,6 +1001,20 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
             >["action"] = parsed?.success
               ? parsed.data
               : { action: "silent", reason: "planner-unavailable" };
+            if (action.action === "message" && "replyTo" in action) {
+              const replyTo = action.replyTo;
+              const matchingInputs = (
+                (turn.payload as any).inputs as any[]
+              ).filter((input) => input.inputRef === replyTo);
+              if (
+                action.target.kind !== "current" ||
+                matchingInputs.length !== 1
+              )
+                action = {
+                  action: "silent",
+                  reason: "invalid-reply-reference",
+                };
+            }
             if (
               action.action === "wait" &&
               gate.attempt >= gate.totalWaitBudget
@@ -1024,6 +1046,13 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
             action = plannerDecisionInformationKind.payloadSchema.parse(
               winner.payload,
             ).action;
+            let replyToInformationId: string | undefined;
+            if (action.action === "message" && "replyTo" in action) {
+              const replyTo = action.replyTo;
+              replyToInformationId = (
+                (turn.payload as any).inputs as any[]
+              ).find((input) => input.inputRef === replyTo)?.informationId;
+            }
             if (
               action.action === "message" &&
               action.target &&
@@ -1073,7 +1102,12 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
                 : {}),
             };
             const current = await context.select(heartflowStateSelector);
-            await dispatchDecision({ ...decision, payload }, current, context);
+            await dispatchDecision(
+              { ...decision, payload },
+              current,
+              context,
+              replyToInformationId,
+            );
           },
         ),
         ...deliveryKinds.map((definition) =>
@@ -1333,6 +1367,7 @@ async function progressCandidate(
     .filter((r) => r.relation === "core:uses-context")
     .map((r) => r.informationId);
   if (frozenSources.length) effectiveSourceInformationIds = frozenSources;
+  let allSourceInformationIds = [...effectiveSourceInformationIds];
   const frozenContext = atoms.find(
     (a) =>
       a.kind === turnContextCompletedInformationKind.kind &&
@@ -1343,6 +1378,7 @@ async function progressCandidate(
       (i) => i.informationId,
     );
     payload.asOf = frozenContext.payload.asOf;
+    allSourceInformationIds = [...effectiveSourceInformationIds];
   } else {
     const wakeSources = atoms
       .filter(
@@ -1362,10 +1398,18 @@ async function progressCandidate(
     effectiveSourceInformationIds = [
       ...new Set([...effectiveSourceInformationIds, ...wakeSources]),
     ];
+    allSourceInformationIds = [...effectiveSourceInformationIds];
     for (const id of wakeSources) {
       const occurredAt = map.get(id)?.occurredAt;
       if (occurredAt && occurredAt > payload.asOf) payload.asOf = occurredAt;
     }
+    effectiveSourceInformationIds = [...effectiveSourceInformationIds]
+      .sort((left, right) => {
+        const leftAt = Date.parse(map.get(left)?.occurredAt ?? "");
+        const rightAt = Date.parse(map.get(right)?.occurredAt ?? "");
+        return leftAt - rightAt || left.localeCompare(right);
+      })
+      .slice(-settings.backlogMaxMessages);
   }
 
   await context.registerOnce(
@@ -1423,6 +1467,43 @@ async function progressCandidate(
     inbound: DeepReadonly<InformationAtom>;
     identity: DeepReadonly<InformationAtom>;
   }[];
+  const backlogSourceAtoms = allSourceInformationIds
+    .map((id) => map.get(id))
+    .filter(
+      (atom): atom is DeepReadonly<InformationAtom> => atom !== undefined,
+    );
+  const backlogOccurredTimes = backlogSourceAtoms.map((atom) =>
+    Date.parse(atom.occurredAt),
+  );
+  const oldestOccurredAtMs = Math.min(...backlogOccurredTimes);
+  const newestOccurredAtMs = Math.max(...backlogOccurredTimes);
+  const detectedAtMs = context.now().getTime();
+  const newestAgeMs = Math.max(0, detectedAtMs - newestOccurredAtMs);
+  const backlog = frozenContext
+    ? ((frozenContext.payload as any).backlog ?? {
+        isBacklog: Boolean((frozenContext.payload as any).stale),
+        detectedAt: String((frozenContext.payload as any).asOf),
+        thresholdMs: settings.staleAfterMs,
+        totalCount: completeInputs.length,
+        selectedCount: completeInputs.length,
+        omittedCount: 0,
+        oldestOccurredAt: new Date(oldestOccurredAtMs).toISOString(),
+        newestOccurredAt: new Date(newestOccurredAtMs).toISOString(),
+        newestAgeMs,
+        spanMs: Math.max(0, newestOccurredAtMs - oldestOccurredAtMs),
+      })
+    : {
+        isBacklog: newestAgeMs > settings.staleAfterMs,
+        detectedAt: new Date(detectedAtMs).toISOString(),
+        thresholdMs: settings.staleAfterMs,
+        totalCount: allSourceInformationIds.length,
+        selectedCount: completeInputs.length,
+        omittedCount: allSourceInformationIds.length - completeInputs.length,
+        oldestOccurredAt: new Date(oldestOccurredAtMs).toISOString(),
+        newestOccurredAt: new Date(newestOccurredAtMs).toISOString(),
+        newestAgeMs,
+        spanMs: Math.max(0, newestOccurredAtMs - oldestOccurredAtMs),
+      };
   const last = completeInputs.at(-1)!;
   const source = (last.inbound.payload as any).source;
   const text = completeInputs
@@ -1576,7 +1657,8 @@ async function progressCandidate(
         claimInformationId: claim.informationId,
         scopeKey: payload.scopeKey,
         asOf: payload.asOf,
-        inputs: completeInputs.map(({ inbound, identity }) => ({
+        inputs: completeInputs.map(({ inbound, identity }, index) => ({
+          inputRef: `turn-input-${index + 1}`,
           informationId: inbound.informationId,
           occurredAt: inbound.occurredAt,
           text: (inbound.payload as any).text,
@@ -1611,9 +1693,8 @@ async function progressCandidate(
         muted: settings.muted,
         safe,
         destinationAvailable: source.destination !== undefined,
-        stale:
-          Number.isFinite(asOfMs) &&
-          Date.parse(payload.firedAt) - asOfMs > settings.staleAfterMs,
+        stale: backlog.isBacklog,
+        backlog,
         ...(memories.length === 0
           ? {}
           : { memory: memories.map(({ informationId }) => informationId) }),
@@ -1654,6 +1735,7 @@ async function dispatchDecision(
   decision: DeepReadonly<InformationAtom>,
   atoms: readonly DeepReadonly<InformationAtom>[],
   context: InformationModuleHandlerContext,
+  replyToInformationId?: string,
 ) {
   const payload = decision.payload as AttentionArousalPayload;
   const candidate = atoms.find(
@@ -1704,6 +1786,9 @@ async function dispatchDecision(
           )
             ? (turnContext.payload as any).memory
             : [],
+          ...(replyToInformationId === undefined
+            ? {}
+            : { replyToInformationId }),
         },
         references: [
           {
@@ -1715,6 +1800,14 @@ async function dispatchDecision(
             relation: "agent:turn-candidate",
             informationId: candidate.informationId,
           },
+          ...(replyToInformationId === undefined
+            ? []
+            : [
+                {
+                  relation: "agent:reply-to" as const,
+                  informationId: replyToInformationId,
+                },
+              ]),
         ],
       },
     );

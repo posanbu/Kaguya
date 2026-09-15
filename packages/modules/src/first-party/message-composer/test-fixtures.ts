@@ -63,7 +63,8 @@ export function fixture(texts = ["FIRST_INPUT", "LAST_INPUT"]) {
       claimInformationId: "claim-1",
       scopeKey: "test-scope",
       asOf: "2026-09-09T00:00:02.000Z",
-      inputs: messages.map((message) => ({
+      inputs: messages.map((message, index) => ({
+        inputRef: `turn-input-${index + 1}`,
         informationId: message.informationId,
         occurredAt: message.occurredAt,
         ...message.payload,
@@ -91,6 +92,18 @@ export function fixture(texts = ["FIRST_INPUT", "LAST_INPUT"]) {
       safe: true,
       destinationAvailable: true,
       stale: false,
+      backlog: {
+        isBacklog: false,
+        detectedAt: "2026-09-09T00:00:02.000Z",
+        thresholdMs: 120_000,
+        totalCount: messages.length,
+        selectedCount: messages.length,
+        omittedCount: 0,
+        oldestOccurredAt: messages[0]!.occurredAt,
+        newestOccurredAt: messages.at(-1)!.occurredAt,
+        newestAgeMs: 1_000,
+        spanMs: 0,
+      },
       attempt: 0,
       totalWaitBudget: 0,
     },

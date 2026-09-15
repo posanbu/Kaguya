@@ -149,6 +149,7 @@ export function createFirstPartyModuleConfigDefaults(
         plannerInterruptMaxConsecutiveCount: 2,
         muted: false,
         staleAfterMs: 120_000,
+        backlogMaxMessages: 120,
       }),
     }),
     Object.freeze({

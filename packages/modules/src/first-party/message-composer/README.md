@@ -10,9 +10,9 @@
 
 ## 数据流与边界
 
-意图严格包含 `target: { adapterId, platform, destination }`、必填 turn provenance 和 `memoryInformationIds`。意图不复制源消息正文、源平台消息 ID 或引用标记。Selector 沿引用重载冻结 context 及其全部输入，并验证目标范围与 provenance。Composer 使用整个 `turn.inputs`，不会把最后一条输入标成必须回答的目标消息。
+意图严格包含 `target: { adapterId, platform, destination }`、必填 turn provenance 和 `memoryInformationIds`，并可包含 `replyToInformationId`。回复目标只能由 Heartflow 从本轮 `turn-input-N` 映射为 Information ID，意图通过 `agent:reply-to` 显式引用对应入站事实；模型与普通日志看不到平台消息 ID。Selector 沿引用重载冻结 context 及其全部输入，并验证回复事实属于当前冻结回合且目标会话一致。Composer 使用整个 `turn.inputs`，不会把最后一条输入标成必须回答的目标消息。
 
-历史只纳入同范围入站及已成功投递的 assistant；Memory 必须来自意图明确列出的冻结引用。引用机器人消息时，Selector 通过同目标的成功投递回执追溯 assistant 原子，并把回执与因果链保留为引用溯源；晚于冻结时点的回执、失败投递和歧义结果不会用于解析。每条入站的引用可作为理解上下文，出站始终是普通 `kind: "text"`，投递地址只来自意图 target。公共 OneBot `kind: "reply"` 能力保留给专用模块。
+历史只纳入同范围入站及已成功投递的 assistant；Memory 必须来自意图明确列出的冻结引用。引用机器人消息时，Selector 通过同目标的成功投递回执追溯 assistant 原子，并把回执与因果链保留为引用溯源；晚于冻结时点的回执、失败投递和歧义结果不会用于解析。普通插话产生 `kind: "text"`；合法的显式回复目标在投递前才解析为 `kind: "reply"` 与 `replyToPlatformMessageId`。缺失、越界或跨会话引用会被拒绝，投递地址始终来自意图 target。
 
 ## Prompt 模板
 
@@ -38,7 +38,7 @@ settings 只包含必填的 `modelTier: "light" | "heavy"`。模板和 Agent 身
 
 ## 典型场景
 
-群聊中多条输入在同一 turn 冻结后，Heartflow 创建一个当前群聊消息意图。Composer 结合全部发言生成一条自然消息，默认 OneBot action 只包含 text segment，即使某条入站消息带有引用标记。
+群聊中多条输入在同一 turn 冻结后，Heartflow 创建一个当前群聊消息意图。Composer 结合全部发言生成一条自然消息；Planner 普通插话时 OneBot action 只包含 text segment，选择某个 `turn-input-N` 时才生成对应 reply segment。入站消息自身带有引用标记只作为理解上下文，不会自动改变回复形态。
 
 ## 自然语言跨会话与背景
 

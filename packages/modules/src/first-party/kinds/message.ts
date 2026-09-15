@@ -37,13 +37,21 @@ export const inboundTextInformationPayloadSchema = z
   .object({ text: z.string(), source: messageSourceSchema })
   .strict();
 
-export const messageIntentRequestedInformationPayloadSchema = z
-  .object({
-    target: messageTargetSchema,
-    turn: turnProvenanceSchema,
-    memoryInformationIds: z.array(nonBlankString),
-  })
-  .strict();
+const messageIntentBaseShape = {
+  target: messageTargetSchema,
+  turn: turnProvenanceSchema,
+  memoryInformationIds: z.array(nonBlankString),
+};
+
+export const messageIntentRequestedInformationPayloadSchema = z.union([
+  z
+    .object({
+      ...messageIntentBaseShape,
+      replyToInformationId: nonBlankString,
+    })
+    .strict(),
+  z.object(messageIntentBaseShape).strict(),
+]);
 
 export type MessageIntentRequestedInformationPayload = z.infer<
   typeof messageIntentRequestedInformationPayloadSchema
@@ -120,6 +128,11 @@ export const messageIntentRequestedInformationKind = defineInformationKind({
       required: true,
       multiple: false,
       targetKinds: ["agent.turn.candidate"],
+    },
+    "agent:reply-to": {
+      required: false,
+      multiple: false,
+      targetKinds: [inboundTextInformationKind.kind],
     },
   },
   log: {
@@ -200,29 +213,38 @@ export const coreMemoryTextInformationKind = defineInformationKind({
   },
 });
 
+const assistantSourceSchema = messageTargetSchema
+  .extend({
+    selfId: nonBlankString.optional(),
+    platformMessageId: nonBlankString.optional(),
+  })
+  .strict() as z.ZodType<
+  MessageTarget & {
+    selfId?: string;
+    platformMessageId?: string;
+  }
+>;
+const assistantTextBaseShape = {
+  text: z.string(),
+  source: assistantSourceSchema,
+  originatingModuleInstanceId: nonBlankString,
+  turn: turnProvenanceSchema.nullable(),
+};
+
 export const assistantTextInformationKind = defineInformationKind({
   kind: "core.message.assistant.text",
   displayName: "生成的助手消息",
   description:
     "消息合成完成后保存的正文、目标和生成实例；下游将其转成投递请求，登记本身不表示平台已发送成功。",
-  payloadSchema: z
-    .object({
-      text: z.string(),
-      source: messageTargetSchema
-        .extend({
-          selfId: nonBlankString.optional(),
-          platformMessageId: nonBlankString.optional(),
-        })
-        .strict() as z.ZodType<
-        MessageTarget & {
-          selfId?: string;
-          platformMessageId?: string;
-        }
-      >,
-      originatingModuleInstanceId: nonBlankString,
-      turn: turnProvenanceSchema.nullable(),
-    })
-    .strict(),
+  payloadSchema: z.union([
+    z
+      .object({
+        ...assistantTextBaseShape,
+        replyToPlatformMessageId: nonBlankString,
+      })
+      .strict(),
+    z.object(assistantTextBaseShape).strict(),
+  ]),
   references: {
     "core:caused-by": {
       required: true,

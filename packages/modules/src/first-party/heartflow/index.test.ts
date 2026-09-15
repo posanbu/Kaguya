@@ -62,7 +62,7 @@ const agentIdentity = {
   aliases: ["辉夜"],
   persona: "测试身份",
 };
-const execute = vi.fn(async () => ({
+const execute = vi.fn(async (): Promise<any> => ({
   status: "completed",
   output: { action: "message", reason: "respond" },
   requestedInformationId: "request",
@@ -146,7 +146,10 @@ afterEach(async () => {
   }
 });
 
-async function fixture(startImmediately = true) {
+async function fixture(
+  startImmediately = true,
+  settingsOverride: Record<string, unknown> = {},
+) {
   execute.mockClear();
   const database = await createTestingDatabase();
   await database.prepareSchema();
@@ -208,6 +211,7 @@ async function fixture(startImmediately = true) {
           privateFrequency: 1,
           muted: false,
           staleAfterMs: 120_000,
+          ...settingsOverride,
         },
       },
     ]);
@@ -689,7 +693,7 @@ describe("heartflow", () => {
     },
   );
 
-  it("routes only from the latest frozen input and carries memory IDs without copying content", async () => {
+  it("routes only from the latest frozen input and carries an explicit reply reference", async () => {
     const module = createHeartflowModule({
       modelTaskCapability,
       agentIdentity,
@@ -794,6 +798,16 @@ describe("heartflow", () => {
       source: oldSource,
     });
     const registerOnce = vi.fn(async () => decision);
+    execute.mockResolvedValueOnce({
+      status: "completed",
+      output: {
+        action: "message",
+        reason: "respond",
+        replyTo: "turn-input-2",
+      },
+      requestedInformationId: "request",
+      terminalInformationId: "terminal",
+    });
     await dispatch.handle(decision, {
       select: async () => [candidate, claim, frozenContext, laterInbound],
       registerOnce,
@@ -822,15 +836,63 @@ describe("heartflow", () => {
             contextInformationId: "context",
           },
           memoryInformationIds: ["memory-1", "memory-2"],
+          replyToInformationId: "latest",
         },
         references: [
           { relation: "core:uses-context", informationId: "context" },
           { relation: "agent:turn-claim", informationId: "claim" },
           { relation: "agent:turn-candidate", informationId: "candidate" },
+          { relation: "agent:reply-to", informationId: "latest" },
         ],
       },
     );
   });
+
+  it.each([
+    {
+      action: "message",
+      reason: "respond",
+      replyTo: "turn-input-999",
+    },
+    {
+      action: "message",
+      reason: "respond",
+      replyTo: "turn-input-1",
+      target: {
+        kind: "private",
+        reference: "opaque-target",
+        instruction: "发送问候",
+      },
+    },
+  ])(
+    "turns invalid or cross-conversation reply references silent",
+    async (output) => {
+      execute.mockResolvedValueOnce({
+        status: "completed",
+        output,
+        requestedInformationId: "request",
+        terminalInformationId: "terminal",
+      });
+      const { core, database } = await fixture();
+      await appendCandidate(core, {
+        requestId: "invalid-reply",
+        text: "hello",
+        occurredAt: "2026-09-08T00:00:01.000Z",
+      });
+      await waitForKind(database, turnContextCompletedInformationKind.kind);
+      await submitDecision(core, database, "attend");
+      const silent = await waitForKind(
+        database,
+        turnSilentInformationKind.kind,
+      );
+      expect(silent.payload.reasonCodes).toEqual(["invalid-reply-reference"]);
+      expect(
+        (await atoms(database)).some(
+          (atom) => atom.kind === messageIntentRequestedInformationKind.kind,
+        ),
+      ).toBe(false);
+    },
+  );
 
   it("turns an exhausted online stage into one failed terminal", async () => {
     const { core, database } = await fixture();
@@ -1193,15 +1255,17 @@ describe("Planner durable dispatch", () => {
   });
 });
 
-it("recovers legacy unclaimed backlog with one frozen context and one model/action decision", async () => {
-  const f = await fixture(false);
+it("recovers a same-scope backlog as one bounded frozen context and one decision", async () => {
+  const f = await fixture(false, { backlogMaxMessages: 5 });
   const backlog = [];
   for (let i = 0; i < 12; i++)
     backlog.push(
       await appendCandidate(f.core, {
         requestId: `legacy-${i}`,
         text: `legacy ${i}`,
-        occurredAt: `2026-09-08T00:00:${String(i).padStart(2, "0")}.000Z`,
+        occurredAt: new Date(
+          Date.parse("2026-09-07T00:01:00.000Z") + i * 1000,
+        ).toISOString(),
         identityBeforeCandidate: true,
       }),
     );
@@ -1209,7 +1273,7 @@ it("recovers legacy unclaimed backlog with one frozen context and one model/acti
   await appendCandidate(f.core, {
     requestId: "newest",
     text: "newest",
-    occurredAt: "2026-09-08T00:00:20.000Z",
+    occurredAt: "2026-09-07T00:03:00.000Z",
     identityBeforeCandidate: true,
   });
   await waitForKind(f.database, turnContextCompletedInformationKind.kind);
@@ -1217,7 +1281,22 @@ it("recovers legacy unclaimed backlog with one frozen context and one model/acti
     await atoms(f.database)
   ).filter((a) => a.kind === turnContextCompletedInformationKind.kind);
   expect(contexts).toHaveLength(1);
-  expect((contexts[0]!.payload as any).inputs).toHaveLength(13);
+  expect((contexts[0]!.payload as any).inputs).toHaveLength(5);
+  expect((contexts[0]!.payload as any).inputs[0]).toMatchObject({
+    inputRef: "turn-input-1",
+    text: "legacy 8",
+  });
+  expect((contexts[0]!.payload as any).inputs.at(-1)).toMatchObject({
+    inputRef: "turn-input-5",
+    text: "newest",
+  });
+  expect((contexts[0]!.payload as any).backlog).toMatchObject({
+    isBacklog: true,
+    thresholdMs: 120_000,
+    totalCount: 13,
+    selectedCount: 5,
+    omittedCount: 8,
+  });
   expect(
     await (
       await atoms(f.database)

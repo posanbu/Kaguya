@@ -174,11 +174,20 @@ describe("focus relevance", () => {
     { muted: true },
     { safe: false },
     { destinationAvailable: false },
-    { stale: true },
     { frequency: 0 },
   ])("preserves hard gate %j", (gate) => {
     expect(
       decideAttentionArousal({ ...base, focusActive: true, ...gate }).outcome,
     ).toBe("ignore");
+  });
+  it("lets backlog pass the necessity gate so Planner can judge timeliness", () => {
+    expect(
+      decideAttentionArousal({
+        ...base,
+        isPrivate: true,
+        isGroup: false,
+        stale: true,
+      }),
+    ).toEqual({ outcome: "attend", reasonCodes: ["private-conversation"] });
   });
 });

@@ -14,7 +14,7 @@
 
 ## Settings
 
-配置机器人名称、群聊/直接会话频率、mute 和 stale 界限。Planner 使用共享 Agent 身份和宿主授权的 light 模型，无需新增实例配置。
+配置机器人名称、群聊/直接会话频率、mute、积压阈值和积压输入上限。`staleAfterMs` 默认为 120 秒，表示最新平台事件落后实际处理时间多久后进入积压模式；它不再令候选直接失效。`backlogMaxMessages` 默认保留最近 120 条作为 Planner 的冻结输入，较早消息仍完整保存在 Information Ledger。
 
 ## 可靠性、幂等和失败行为
 
@@ -32,7 +32,7 @@ wait 复用 `agent.wait.requested`，始终 `wakeOnMessage=true`。新消息合�
 
 Planner 只允许以下严格 JSON，不允许额外字段或原始平台目标：
 
-- `message`：`reason` 为 `respond` 或 `contribute`。省略 `target` 或使用 `{kind: "current"}` 时创建当前会话意图；跨会话只能选择 `{kind: "group" | "private", reference, instruction}` 中宿主提供的本轮引用，`instruction` 仅说明本次明确要求发送的内容。`{kind: "unresolved", reason}` 会关闭 turn 并记录安全失败，不能回退当前群。
+- `message`：`reason` 为 `respond` 或 `contribute`。省略 `target` 或使用 `{kind: "current"}` 时创建当前会话意图；可用 `replyTo: "turn-input-N"` 引用本轮实际冻结的一条输入。跨会话动作不能携带 `replyTo`，越界或伪造引用会转成 `silent: invalid-reply-reference`。跨会话只能选择 `{kind: "group" | "private", reference, instruction}` 中宿主提供的本轮引用，`instruction` 仅说明本次明确要求发送的内容。`{kind: "unresolved", reason}` 会关闭 turn 并记录安全失败，不能回退当前群。
 - `wait`：`reason` 为 `await-more-context` 或 `avoid-interruption`；`waitSeconds` 为 5–120 的整数。
 - `silent`：`reason` 为 `no-response-needed`、`already-addressed` 或 `avoid-interruption`；不调用 Composer 或投递。
 
@@ -42,7 +42,9 @@ Planner 首次请求持久化后，重放会恢复相同 Prompt、上下文原�
 
 宿主 `conversation` 能力在规划前冻结 `agent.conversation.context.frozen`，提供不含原始目标 ID 的解析投影及当前会话/人物背景。背景也用于普通消息编写，不以跨会话意图为前提。跨会话获胜决策调用 `route`，宿主验证引用、目录、有效期与出站策略后创建统一意图；模型本身不能授予出站权限。重启后已冻结 Prompt 可重放，但临时引用失效，待发跨会话请求安全关闭。
 
-系统以持续观察为模型，turn/candidate/claim 仅是调度事实。正常积压由 Heartbeat 在创建阶段阻止；恢复路径把同 scope 遗留 candidate 合并为一次观察。合并来源持久化在 claim 引用中，身份屏障迟到不会丢失来源；Planner 的迟到结果在派发前复核当前终态。Selector 只查询开放 candidate 与最近 claim，避免反复扫描历史。
+系统以持续观察为模型，turn/candidate/claim 仅是调度事实。正常积压由 Heartbeat 在创建阶段阻止；恢复路径把同 scope 遗留 candidate 合并为一次观察。冻结事实的 `backlog` 投影记录检测时间、阈值、总数、选中数、省略数、首尾事件时间、最新消息年龄和时间跨度；每条选中输入获得稳定的 `turn-input-N`。旧 v1 事实没有 `backlog` 时仍可由 `stale` 推导并重放。合并来源持久化在 claim 引用中，身份屏障迟到不会丢失来源；Planner 的迟到结果在派发前复核当前终态。Selector 只查询开放 candidate 与最近 claim，避免反复扫描历史。
+
+积压通过安全、静音、目标可用性、频率等硬门禁后进入 Planner。Prompt 同时给出实际处理时间、积压统计和带引用的完整冻结输入，要求结合后续消息判断旧问题是否已经解决、话题是否结束以及此刻回复是否仍有价值；整批积压只产生一个动作。
 
 内部实现分为在线编排入口、state-query.ts 的账本水合与分页、turn-state.ts 的纯引用与状态投影。外部 Kind 和提交槽保持稳定。
 

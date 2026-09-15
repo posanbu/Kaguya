@@ -27,11 +27,30 @@ const turnIdentitySchema = z
 
 const turnInputSchema = z
   .object({
+    inputRef: z
+      .string()
+      .regex(/^turn-input-[1-9]\d*$/)
+      .optional(),
     informationId: nonBlankString,
     occurredAt: z.iso.datetime({ offset: true }),
     text: z.string(),
     source: messageSourceSchema,
     identity: turnIdentitySchema,
+  })
+  .strict();
+
+const turnBacklogSchema = z
+  .object({
+    isBacklog: z.boolean(),
+    detectedAt: z.iso.datetime({ offset: true }),
+    thresholdMs: z.number().int().nonnegative(),
+    totalCount: z.number().int().nonnegative(),
+    selectedCount: z.number().int().nonnegative(),
+    omittedCount: z.number().int().nonnegative(),
+    oldestOccurredAt: z.iso.datetime({ offset: true }),
+    newestOccurredAt: z.iso.datetime({ offset: true }),
+    newestAgeMs: z.number().int().nonnegative(),
+    spanMs: z.number().int().nonnegative(),
   })
   .strict();
 
@@ -368,6 +387,8 @@ const turnContextPayloadSchema = z
     safe: z.boolean(),
     destinationAvailable: z.boolean(),
     stale: z.boolean(),
+    /** 仅为重放旧版 v1 事实保留可选性；新写入的上下文始终包含该投影。 */
+    backlog: turnBacklogSchema.optional(),
     /** Optional enrichments are intentionally advisory and do not affect timing. */
     memory: z.array(nonBlankString).optional(),
     association: z.array(nonBlankString).optional(),
@@ -409,6 +430,9 @@ export const turnContextCompletedInformationKind = defineInformationKind({
       return {
         event: "turn.context.completed",
         messageCount: input.messageCount,
+        backlog: input.backlog?.isBacklog ?? input.stale,
+        backlogTotalCount: input.backlog?.totalCount ?? input.messageCount,
+        backlogOmittedCount: input.backlog?.omittedCount ?? 0,
         direct: input.mentionedSelf || input.repliedToSelf || input.namedSelf,
         frequency: input.frequency,
       };

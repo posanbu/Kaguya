@@ -66,6 +66,7 @@ import {
   type AgentIdentity,
   type MessagePromptTemplates,
 } from "./message-prompt.js";
+import { sameMessageTarget } from "./message-quote.js";
 
 export const modelTierSchema = z.enum(["light", "heavy"]);
 export type ModelTier = z.infer<typeof modelTierSchema>;
@@ -223,6 +224,10 @@ export function createMessageComposerModule<
     const assistantPayload = assistantTextInformationKind.payloadSchema.parse(
       assistant.payload,
     );
+    const replyToPlatformMessageId =
+      "replyToPlatformMessageId" in assistantPayload
+        ? assistantPayload.replyToPlatformMessageId
+        : undefined;
     if (assistantPayload.originatingModuleInstanceId !== context.instanceId)
       return;
     if (
@@ -241,7 +246,14 @@ export function createMessageComposerModule<
           adapterId: assistantPayload.source.adapterId,
           platform: assistantPayload.source.platform,
           destination: assistantPayload.source.destination,
-          message: { kind: "text", text: assistantPayload.text },
+          message:
+            replyToPlatformMessageId === undefined
+              ? { kind: "text" as const, text: assistantPayload.text }
+              : {
+                  kind: "reply" as const,
+                  text: assistantPayload.text,
+                  replyToPlatformMessageId,
+                },
           turn: assistantPayload.turn,
         },
         references:
@@ -464,9 +476,14 @@ export function createMessageComposerModule<
             const output = messageTaskOutputSchema.parse(
               completed.payload.output,
             );
+            const selected = await context.select(completedMessageSelector);
             const message = requireSelectedMessageIntent(
-              await context.select(completedMessageSelector),
+              selected,
               completed.payload.sourceInformationId,
+            );
+            const replyToPlatformMessageId = resolveReplyTarget(
+              message,
+              selected,
             );
             await context.registerOnce(
               "kaguya.message.assistant.v1",
@@ -478,6 +495,9 @@ export function createMessageComposerModule<
                   source: message.payload.target,
                   originatingModuleInstanceId: context.instanceId,
                   turn: message.payload.turn,
+                  ...(replyToPlatformMessageId === undefined
+                    ? {}
+                    : { replyToPlatformMessageId }),
                 },
               },
             );
@@ -534,9 +554,76 @@ const completedMessageSelector = defineInformationSelector({
       throw new Error(
         "Model task completion source must match its message intent cause",
       );
-    return [message.informationId];
+    const intent = messageIntentRequestedInformationPayloadSchema.parse(
+      message.payload,
+    );
+    if (!("replyToInformationId" in intent)) return [message.informationId];
+    const replyToInformationId = intent.replyToInformationId;
+    const turns = (
+      await ledger.related({
+        from: [message.informationId],
+        relation: "core:uses-context",
+        direction: "outgoing",
+        limit: 1000,
+      })
+    ).filter((atom) => atom.kind === "agent.turn.context.completed");
+    const replies = await ledger.related({
+      from: [message.informationId],
+      relation: "agent:reply-to",
+      direction: "outgoing",
+      limit: 2,
+    });
+    if (
+      turns.length !== 1 ||
+      turns[0]!.informationId !== intent.turn.contextInformationId ||
+      replies.length !== 1 ||
+      replies[0]!.informationId !== replyToInformationId
+    )
+      throw new Error("Reply intent must reference its frozen turn input");
+    return [
+      message.informationId,
+      turns[0]!.informationId,
+      replies[0]!.informationId,
+    ];
   },
 });
+
+function resolveReplyTarget(
+  message: DeepReadonly<
+    InformationAtom<
+      "agent.message.intent.requested",
+      MessageIntentRequestedInformationPayload
+    >
+  >,
+  atoms: readonly DeepReadonly<InformationAtom>[],
+): string | undefined {
+  if (!("replyToInformationId" in message.payload)) return undefined;
+  const replyId = message.payload.replyToInformationId;
+  const turn = atoms.find(
+    (atom) => atom.informationId === message.payload.turn.contextInformationId,
+  );
+  const reply = atoms.find((atom) => atom.informationId === replyId);
+  const replyReference = message.references.filter(
+    (reference) => reference.relation === "agent:reply-to",
+  );
+  if (
+    turn?.kind !== "agent.turn.context.completed" ||
+    !Array.isArray(turn.payload.inputs) ||
+    !turn.payload.inputs.some(
+      (input: { informationId?: string }) => input.informationId === replyId,
+    ) ||
+    reply?.kind !== inboundTextInformationKind.kind ||
+    replyReference.length !== 1 ||
+    replyReference[0]!.informationId !== replyId
+  )
+    throw new Error("Reply target must belong to the current frozen turn");
+  const source = inboundTextInformationKind.payloadSchema.parse(
+    reply.payload,
+  ).source;
+  if (!sameMessageTarget(source, message.payload.target))
+    throw new Error("Reply target must belong to the current conversation");
+  return source.platformMessageId;
+}
 
 function requireSelectedMessageIntent(
   atoms: readonly DeepReadonly<InformationAtom>[],
