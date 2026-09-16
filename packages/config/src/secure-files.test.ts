@@ -1,3 +1,4 @@
+import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import {
   chmod,
   lstat,
@@ -139,6 +140,21 @@ async function temporaryRoot(): Promise<string> {
   return root;
 }
 
+// Windows 普通进程可能没有创建符号链接的权限（未开启 Developer Mode），
+// 此时依赖 symlink 夹具的用例无法构造前置条件，在收集期探测并跳过。
+function canCreateSymlinks(): boolean {
+  let root: string | undefined;
+  try {
+    root = mkdtempSync(join(tmpdir(), "kaguya-symlink-probe-"));
+    symlinkSync(join(root, "target"), join(root, "link"));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (root) rmSync(root, { recursive: true, force: true });
+  }
+}
+
 afterEach(async () => {
   fileSystemFaults.failNextTemporaryWrite = false;
   fileSystemFaults.failNextTemporaryChmod = false;
@@ -269,7 +285,7 @@ describe("sensitive file primitives", () => {
     }
   });
 
-  it("rejects symlinked managed files", async () => {
+  it.runIf(canCreateSymlinks())("rejects symlinked managed files", async () => {
     const root = await temporaryRoot();
     const target = join(root, "target.json");
     const link = join(root, "index.json");
@@ -293,17 +309,20 @@ describe("sensitive file primitives", () => {
     });
   });
 
-  it("rejects intermediate symlinks that escape the configured root", async () => {
-    const root = await temporaryRoot();
-    const outside = await temporaryRoot();
-    const file = join(root, "profiles", "secret.json");
-    await writeFile(join(outside, "secret.json"), '{"secret":"outside"}');
-    await symlink(outside, join(root, "profiles"));
+  it.runIf(canCreateSymlinks())(
+    "rejects intermediate symlinks that escape the configured root",
+    async () => {
+      const root = await temporaryRoot();
+      const outside = await temporaryRoot();
+      const file = join(root, "profiles", "secret.json");
+      await writeFile(join(outside, "secret.json"), '{"secret":"outside"}');
+      await symlink(outside, join(root, "profiles"));
 
-    expect(() => assertPathInside(root, file)).toThrow(
-      expect.objectContaining({ code: "CONFIG_UNSAFE_PATH" }),
-    );
-  });
+      expect(() => assertPathInside(root, file)).toThrow(
+        expect.objectContaining({ code: "CONFIG_UNSAFE_PATH" }),
+      );
+    },
+  );
 
   it("allows missing managed paths inside a missing configured root", async () => {
     const parent = await temporaryRoot();
