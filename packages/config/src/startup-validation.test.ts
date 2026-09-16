@@ -121,7 +121,12 @@ function completeReplacement() {
   return {
     name: "default",
     acknowledgedWarnings: [],
-    identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
+    identity: {
+      name: "Kaguya",
+      aliases: ["辉夜"],
+      persona: "test",
+      timeZone: "Asia/Shanghai",
+    },
     runtime: {
       host: "127.0.0.1",
       port: 7897,

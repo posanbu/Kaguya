@@ -102,7 +102,7 @@ export const messageModelDispatchingDiagnostic = defineModuleDiagnostic({
       taskId: z.literal("agent.message.compose"),
       taskVersion: z.literal("1"),
       outputMode: z.literal("text"),
-      promptVersion: z.literal("zh-CN/v3"),
+      promptVersion: z.literal("zh-CN/v1"),
       tier: modelTierSchema,
       promptCharacters: z.number().int().nonnegative(),
       promptVariableCount: z.number().int().nonnegative(),

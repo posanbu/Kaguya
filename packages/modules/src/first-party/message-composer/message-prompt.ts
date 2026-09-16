@@ -39,15 +39,18 @@ import {
   resolveMessageQuote,
   sameMessageTarget,
 } from "./message-quote.js";
+import { formatZonedInstant } from "../temporal-context.js";
 
 export interface AgentIdentity {
   readonly name: string;
   readonly aliases: readonly string[];
   readonly persona: string;
+  readonly timeZone: string;
 }
 
 export interface MessagePromptTemplates {
   readonly main: string;
+  readonly plan: string;
   readonly history: string;
   readonly historyInbound: string;
   readonly historyAssistant: string;
@@ -58,7 +61,7 @@ export interface MessagePromptTemplates {
 }
 
 export const ZH_CN_MESSAGE_PROMPT = Object.freeze({
-  version: "zh-CN/v3",
+  version: "zh-CN/v1",
   groupRule:
     "已决定在当前群聊中发送一条自然消息。结合本轮全部输入、不同群友之间的互动和聊天记录，围绕一个清晰话题简短表达。不要替其他群友发言，不要刻意找话题或反复介绍自己；表情包只需理解其含义，不必逐个解释。",
   privateRule:
@@ -113,13 +116,17 @@ export function createMessagePromptCompiler(
     const turnContext = atoms.find(
       (atom) => atom.informationId === payload.turn.contextInformationId,
     );
-    const backlog = (turnContext?.payload as any)?.backlog as
-      | {
-          isBacklog: boolean;
-          oldestInputAgeMs: number;
-          newestInputAgeMs: number;
-        }
-      | undefined;
+    const backlog = (turnContext?.payload as any)?.backlog as {
+      isBacklog: boolean;
+      evaluatedAt: string;
+      oldestInputAgeMs: number;
+      newestInputAgeMs: number;
+    };
+    if (!backlog) throw new Error("Frozen turn requires backlog timing");
+    const currentTime = formatZonedInstant(
+      backlog.evaluatedAt,
+      identity.timeZone,
+    );
     const asOf = String(
       atoms.find(
         (atom) => atom.informationId === payload.turn.contextInformationId,
@@ -174,6 +181,20 @@ export function createMessagePromptCompiler(
           : "",
       };
     });
+    const composition = payload.composition;
+    const focusedInputs = composition.focusInformationIds.map((id) => {
+      const input = inputs.find((candidate) => candidate.informationId === id);
+      if (!input)
+        throw new Error(`Composition focus is outside frozen turn: ${id}`);
+      return input;
+    });
+    const plan = nested.render("plan", {
+      current_time: `${currentTime.local} (${currentTime.timeZone}; ${currentTime.iso})`,
+      topic: composition.topic,
+      reply_act: composition.replyAct,
+      guidance: "guidance" in composition ? composition.guidance : "",
+      messages: focusedInputs.map((input) => messageContext(input, identity)),
+    });
     const turn = nested.render("turn", { messages });
     const prompt = renderOuter([
       variable("persona", identity.persona),
@@ -189,11 +210,20 @@ export function createMessagePromptCompiler(
         (payload.target.destination.kind === "group"
           ? ZH_CN_MESSAGE_PROMPT.groupRule
           : ZH_CN_MESSAGE_PROMPT.privateRule) +
-          (backlog?.isBacklog
+          (backlog.isBacklog
             ? `\n本轮输入积压：最早约 ${formatBacklogAge(backlog.oldestInputAgeMs)}，最新约 ${formatBacklogAge(backlog.newestInputAgeMs)}前。请根据语境自然承接；只有确有帮助时才提及迟到，不要固定道歉或说明系统恢复。`
             : ""),
         [message.informationId],
       ),
+      variable(
+        "current_time",
+        `${currentTime.local} (${currentTime.timeZone}; ${currentTime.iso})`,
+        [turnContext!.informationId],
+      ),
+      variable("plan", plan, [
+        message.informationId,
+        ...focusedInputs.map((input) => input.informationId),
+      ]),
       variable("history", history.content, history.informationIds),
       variable("memory", memories.content, memories.informationIds),
       variable("turn", turn, [
@@ -219,7 +249,8 @@ function assertAgentIdentity(identity: AgentIdentity): void {
   if (
     name.length === 0 ||
     identity.persona.trim().length === 0 ||
-    identity.aliases.length === 0
+    identity.aliases.length === 0 ||
+    identity.timeZone.trim().length === 0
   )
     throw new Error("Agent identity is incomplete");
   const aliases = identity.aliases.map((alias) => alias.trim());
@@ -400,9 +431,11 @@ function messageContext(
 ): Record<string, unknown> {
   const payload = messagePayload(atom);
   const source = payload.source as MessageSource;
+  const occurredAt = formatZonedInstant(atom.occurredAt, identity.timeZone);
   return {
     is_assistant: atom.kind === assistantTextInformationKind.kind,
-    occurred_at: atom.occurredAt,
+    occurred_at: occurredAt.local,
+    occurred_at_iso: occurredAt.iso,
     sender_name:
       atom.kind === assistantTextInformationKind.kind
         ? identity.name

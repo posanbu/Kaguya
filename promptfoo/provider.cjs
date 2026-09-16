@@ -244,6 +244,7 @@ async function compileMessageEvaluation(vars) {
       name: "Kaguya",
       aliases: ["辉夜"],
       persona: requireString(vars.persona, "persona"),
+      timeZone: "Asia/Shanghai",
     },
     atoms,
     intentId,
@@ -279,7 +280,12 @@ async function compilePlannerEvaluation(vars) {
     (atom) => atom.kind === "agent.turn.context.completed",
   );
   const prompt = compiler.compilePlannerPrompt(
-    { name: "Kaguya", aliases: ["辉夜"], persona: vars.persona },
+    {
+      name: "Kaguya",
+      aliases: ["辉夜"],
+      persona: vars.persona,
+      timeZone: "Asia/Shanghai",
+    },
     atoms,
     turn,
   );

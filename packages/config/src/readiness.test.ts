@@ -26,7 +26,12 @@ function profileWith(
     version: 1,
     id: "4f649709-50d9-4fc4-8df4-95f96163f7c9",
     name: "test",
-    identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
+    identity: {
+      name: "Kaguya",
+      aliases: ["辉夜"],
+      persona: "test",
+      timeZone: "Asia/Shanghai",
+    },
     ai: {
       ...(providers[0] === undefined
         ? {}

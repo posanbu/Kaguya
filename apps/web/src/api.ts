@@ -103,6 +103,7 @@ export interface UserConfigProfile {
     readonly name: string;
     readonly aliases: readonly string[];
     readonly persona: string;
+    readonly timeZone: string;
   };
   readonly ai: {
     readonly defaultProviderId?: string;

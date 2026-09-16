@@ -49,6 +49,8 @@ export function validateProfileFields(
   else if (aliases.includes(fields.agentName.trim()))
     add("agentAliasesText", "别名不能与 Agent 名字相同。");
   if (!fields.agentPersona.trim()) add("agentPersona", "请输入 Agent 人设。");
+  if (!isIanaTimeZone(fields.agentTimeZone.trim()))
+    add("agentTimeZone", "请输入有效的 IANA 时区，例如 Asia/Shanghai。");
   try {
     new URL(fields.baseUrl);
   } catch {
@@ -90,6 +92,7 @@ export function mapProfileProblem(
     "identity.name": "agentName",
     "identity.aliases": "agentAliasesText",
     "identity.persona": "agentPersona",
+    "identity.timeZone": "agentTimeZone",
     inboundAllowlist: "inboundAllowlistText",
     outboundAllowlist: "outboundAllowlistText",
     "memory.enabled": "memoryEnabled",
@@ -142,6 +145,16 @@ export function mapProfileProblem(
     message: problem.message,
     warning,
   };
+}
+
+function isIanaTimeZone(value: string): boolean {
+  if (!value) return false;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value }).format(0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 const Feedback = createContext<{
   issues: readonly ProfileProblem[];

@@ -15,7 +15,12 @@ const profile: UserConfigProfile = {
   version: 1,
   id: "default",
   name: "default",
-  identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
+  identity: {
+    name: "Kaguya",
+    aliases: ["辉夜"],
+    persona: "test",
+    timeZone: "Asia/Shanghai",
+  },
   inboundAllowlist: [],
   outboundAllowlist: [],
   ai: {
@@ -100,5 +105,21 @@ describe("配置错误定位", () => {
     expect(
       validateProfileFields({ ...profileToEditorFields(profile), apiKey: "" }),
     ).toEqual([expect.objectContaining({ field: "apiKey", warning: true })]);
+  });
+  it("拒绝非法 IANA 时区并定位到时区字段", () => {
+    expect(
+      validateProfileFields({
+        ...profileToEditorFields(profile),
+        agentTimeZone: "Mars/Olympus",
+      }),
+    ).toEqual([
+      expect.objectContaining({ field: "agentTimeZone", warning: false }),
+    ]);
+    expect(
+      mapProfileProblem(
+        { path: "identity.timeZone", message: "invalid" },
+        profile,
+      ).field,
+    ).toBe("agentTimeZone");
   });
 });

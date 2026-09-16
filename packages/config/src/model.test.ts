@@ -6,7 +6,12 @@
  */
 import { describe, expect, it } from "vitest";
 
-const identity = { name: "Kaguya", aliases: ["辉夜"], persona: "test" };
+const identity = {
+  name: "Kaguya",
+  aliases: ["辉夜"],
+  persona: "test",
+  timeZone: "Asia/Shanghai",
+};
 
 import {
   aiConfigSchema,
@@ -154,6 +159,7 @@ describe("user configuration schemas", () => {
           name: " Kaguya ",
           aliases: [" 辉夜 ", "Moon"],
           persona: " concise ",
+          timeZone: "Asia/Shanghai",
         },
         ai: { providers: [] },
         memory: { enabled: false },
@@ -163,6 +169,7 @@ describe("user configuration schemas", () => {
       name: "Kaguya",
       aliases: ["辉夜", "Moon"],
       persona: "concise",
+      timeZone: "Asia/Shanghai",
     });
     expect(
       userConfigProfileSettingsSchema.parse({
@@ -170,6 +177,7 @@ describe("user configuration schemas", () => {
           name: "Kaguya",
           aliases: ["辉夜", " 辉夜 "],
           persona: "test",
+          timeZone: "Asia/Shanghai",
         },
         ai: { providers: [] },
         memory: { enabled: false },
@@ -178,10 +186,37 @@ describe("user configuration schemas", () => {
     ).toEqual(["辉夜"]);
     expect(
       userConfigProfileSettingsSchema.safeParse({
-        identity: { name: "Kaguya", aliases: ["Kaguya"], persona: "test" },
+        identity: {
+          name: "Kaguya",
+          aliases: ["Kaguya"],
+          persona: "test",
+          timeZone: "Asia/Shanghai",
+        },
         ai: { providers: [] },
         memory: { enabled: false },
         platforms: [],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires a valid IANA identity time zone", () => {
+    const settings = {
+      identity: {
+        name: "Kaguya",
+        aliases: ["辉夜"],
+        persona: "test",
+      },
+      ai: { providers: [] },
+      memory: { enabled: false },
+      platforms: [],
+    };
+    expect(userConfigProfileSettingsSchema.safeParse(settings).success).toBe(
+      false,
+    );
+    expect(
+      userConfigProfileSettingsSchema.safeParse({
+        ...settings,
+        identity: { ...settings.identity, timeZone: "Mars/Olympus" },
       }).success,
     ).toBe(false);
   });

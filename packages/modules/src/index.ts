@@ -19,6 +19,7 @@ export {
   heartflowSettingsSchema,
   heartflowMemorySelector,
   heartflowStateSelector,
+  plannerActionSchema,
   type CreateHeartflowModuleOptions,
 } from "./first-party/heartflow/index.js";
 export {

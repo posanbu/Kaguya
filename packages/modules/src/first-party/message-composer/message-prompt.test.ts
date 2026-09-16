@@ -22,7 +22,7 @@ import {
 import { atom, fixture, identity, target } from "./test-fixtures.js";
 const templates = loadFirstPartyPromptTemplates().messageComposer;
 describe("message prompt", () => {
-  it("compiles every frozen input equally with per-input quotes and provenance", () => {
+  it("marks Planner anchors as primary while preserving every frozen input", () => {
     const f = fixture();
     const result = compileMessagePrompt(
       templates,
@@ -41,10 +41,17 @@ describe("message prompt", () => {
     expect(
       result.variables.find((v) => v.name === "turn")?.informationIds,
     ).toEqual(f.messages.map((m) => m.informationId));
+    expect(
+      result.variables.find((v) => v.name === "plan")?.informationIds,
+    ).toEqual([f.intent.informationId, f.messages.at(-1)!.informationId]);
+    expect(result.text).toContain("话题：当前话题");
+    expect(result.text).toContain("回复动作：自然回应");
+    expect(result.text).toContain("话题锚点是主要回复对象");
+    expect(result.text).toContain("2026-09-09 周三 08:00:03");
+    expect(result.text).toContain("2026-09-09 周三 08:00:01");
     expect(result.variables.some((v) => v.name === "target")).toBe(false);
-    expect(result.text.indexOf("sender-0")).toBeLessThan(
-      result.text.indexOf("sender-1"),
-    );
+    const turn = result.variables.find((v) => v.name === "turn")!.content;
+    expect(turn.indexOf("sender-0")).toBeLessThan(turn.indexOf("sender-1"));
     expect(result.templates.some((t) => t.name === "turn")).toBe(true);
   });
   it("adds age context only for classified backlog and leaves wording optional", () => {
@@ -132,6 +139,27 @@ describe("message prompt", () => {
         scoped.informationId,
       ),
     ).toThrow("target");
+  });
+  it("rejects a composition anchor outside the referenced frozen turn", () => {
+    const f = fixture();
+    const payload = messageIntentRequestedInformationPayloadSchema.parse(
+      f.intent.payload,
+    );
+    const intent = atom(f.intent.informationId, f.intent.kind, {
+      ...payload,
+      composition: {
+        ...payload.composition,
+        focusInformationIds: ["foreign-input"],
+      },
+    });
+    expect(() =>
+      compileMessagePrompt(
+        templates,
+        identity,
+        [intent, f.turn, ...f.messages],
+        intent.informationId,
+      ),
+    ).toThrow("Composition focus is outside frozen turn");
   });
   it("renders assistant history with target-only source metadata", () => {
     const f = fixture();

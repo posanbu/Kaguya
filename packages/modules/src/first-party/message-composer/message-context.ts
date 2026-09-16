@@ -92,6 +92,10 @@ export const turnMessageContextSelector = defineInformationSelector({
     }
     const inputIds = new Set(inputs.map((atom) => atom.informationId));
     const memoryIds = new Set(intent.memoryInformationIds);
+    for (const id of intent.composition.focusInformationIds) {
+      if (!inputIds.has(id))
+        throw new Error(`Composition focus is outside frozen turn: ${id}`);
+    }
     const recent = await ledger.find({
       kinds: [
         inboundTextInformationKind.kind,
@@ -397,6 +401,7 @@ export const assistantHistoryPromptRenderer: InformationPromptRendererDefinition
         name: "Assistant",
         aliases: [],
         persona: "Prompt renderer preview",
+        timeZone: "Asia/Shanghai",
       }),
   });
 

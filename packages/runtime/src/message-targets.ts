@@ -19,7 +19,7 @@ import {
 import {
   conversationContextInformationKind,
   turnContextCompletedInformationKind,
-  plannerTargetSchema,
+  plannerActionSchema,
   messageIntentRequestedInformationKind,
   messageIntentRequestedInformationPayloadSchema,
   targetAuthorizedInformationKind,
@@ -55,6 +55,7 @@ interface FrozenRoutingTurn {
   candidateInformationId: string;
   claimInformationId: string;
   inputs: {
+    informationId: string;
     text: string;
     source: MessageTarget & {
       senderId: string;
@@ -380,9 +381,7 @@ export class MessageTargetService implements MessageAuthorization {
       )
     )
       return fail("target-invalid-decision");
-    const action = z
-      .object({ action: z.literal("message"), target: plannerTargetSchema })
-      .parse(decision.payload.action);
+    const action = plannerActionSchema.parse(decision.payload.action);
     if (
       action.action !== "message" ||
       !action.target ||
@@ -446,7 +445,12 @@ export class MessageTargetService implements MessageAuthorization {
       {
         source: "runtime:message-target",
         occurredAt: this.now().toISOString(),
-        payload: { target, turn: provenance, memoryInformationIds: [] },
+        payload: {
+          target,
+          turn: provenance,
+          memoryInformationIds: [],
+          composition: resolveComposition(payload, action.composition),
+        },
         references: [
           { relation: "core:context", informationId: contextId(turn) },
           { relation: "core:caused-by", informationId: decision.informationId },
@@ -631,6 +635,9 @@ export class MessageTargetService implements MessageAuthorization {
     const turn = await this.read(parsed.sourceTurnContextInformationId);
     if (turn.kind !== "agent.turn.context.completed")
       throw new Error("invalid-source-turn");
+    const sourceTurn = turnContextCompletedInformationKind.payloadSchema.parse(
+      turn.payload,
+    ) as unknown as FrozenRoutingTurn;
     const provenance = {
       candidateInformationId: String(turn.payload.candidateInformationId),
       claimInformationId: String(turn.payload.claimInformationId),
@@ -723,7 +730,18 @@ export class MessageTargetService implements MessageAuthorization {
       {
         occurredAt: this.now().toISOString(),
         source: "runtime:message-target",
-        payload: { target, turn: approvedTurn, memoryInformationIds: [] },
+        payload: {
+          target,
+          turn: approvedTurn,
+          memoryInformationIds: [],
+          composition: {
+            focusInformationIds: [
+              String(sourceTurn.inputs.at(-1)!.informationId),
+            ],
+            topic: Array.from(parsed.instruction).slice(0, 200).join(""),
+            replyAct: "按批准要求发送消息",
+          },
+        },
         references: [
           { relation: "core:context", informationId: root },
           {
@@ -1000,4 +1018,29 @@ export class MessageTargetService implements MessageAuthorization {
       return false;
     }
   }
+}
+
+function resolveComposition(
+  turn: FrozenRoutingTurn,
+  composition: Extract<
+    z.infer<typeof plannerActionSchema>,
+    { action: "message" }
+  >["composition"],
+) {
+  const indexes = composition.focusInputIndexes;
+  if (
+    indexes.length < 1 ||
+    indexes.length > 3 ||
+    new Set(indexes).size !== indexes.length ||
+    indexes.some((index) => index < 0 || index >= turn.inputs.length)
+  )
+    throw new Error("target-invalid-composition");
+  return {
+    focusInformationIds: indexes.map(
+      (index) => turn.inputs[index]!.informationId,
+    ),
+    topic: composition.topic,
+    replyAct: composition.replyAct,
+    ...("guidance" in composition ? { guidance: composition.guidance } : {}),
+  };
 }

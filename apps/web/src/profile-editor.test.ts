@@ -35,6 +35,7 @@ const completeProfile: UserConfigProfile = {
     name: "Kaguya",
     aliases: ["辉夜", "Moon"],
     persona: "test persona",
+    timeZone: "Asia/Shanghai",
   },
   ai: {
     defaultProviderId: "default-provider",
@@ -92,7 +93,12 @@ const emptyDefaultProfile: UserConfigProfile = {
   name: "default",
   inboundAllowlist: [],
   outboundAllowlist: [],
-  identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
+  identity: {
+    name: "Kaguya",
+    aliases: ["辉夜"],
+    persona: "test",
+    timeZone: "Asia/Shanghai",
+  },
   ai: {
     providers: [],
   },
@@ -106,7 +112,12 @@ const warningProfile: UserConfigProfile = {
   name: "Warning",
   inboundAllowlist: ["*:private:*"],
   outboundAllowlist: ["*:private:*"],
-  identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
+  identity: {
+    name: "Kaguya",
+    aliases: ["辉夜"],
+    persona: "test",
+    timeZone: "Asia/Shanghai",
+  },
   ai: {
     defaultProviderId: "default-provider",
     modelTiers: {
@@ -138,6 +149,7 @@ describe("profileToEditorFields", () => {
       agentName: "Kaguya",
       agentAliasesText: "辉夜\nMoon",
       agentPersona: "test persona",
+      agentTimeZone: "Asia/Shanghai",
       baseUrl: "https://api.example/v1",
       apiKey: "provider-secret",
       lightModel: "light-model",
@@ -162,6 +174,7 @@ describe("profileToEditorFields", () => {
       agentName: "Kaguya",
       agentAliasesText: "辉夜",
       agentPersona: "test",
+      agentTimeZone: "Asia/Shanghai",
       baseUrl: "",
       apiKey: "",
       lightModel: "",
@@ -223,6 +236,7 @@ describe("mergeProfileEditorFields", () => {
       agentName: " Luna ",
       agentAliasesText: "月\n 月 \nMoon",
       agentPersona: " custom persona ",
+      agentTimeZone: " Asia/Tokyo ",
       baseUrl: "https://api.example/v2",
       apiKey: "provider-secret-v2",
       lightModel: "light-model-v2",
@@ -240,6 +254,7 @@ describe("mergeProfileEditorFields", () => {
         name: "Luna",
         aliases: ["月", "Moon"],
         persona: "custom persona",
+        timeZone: "Asia/Tokyo",
       },
       acknowledgedWarnings: [],
       ai: {
@@ -314,7 +329,12 @@ describe("mergeProfileEditorFields", () => {
       name: "default",
       inboundAllowlist: [],
       outboundAllowlist: [],
-      identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
+      identity: {
+        name: "Kaguya",
+        aliases: ["辉夜"],
+        persona: "test",
+        timeZone: "Asia/Shanghai",
+      },
       acknowledgedWarnings: [],
       ai: {
         defaultProviderId: "default-provider",

@@ -1052,6 +1052,30 @@ function ProfileManagementScreen({
                           />
                         </ProfileField>
                       </label>
+                      <label className="field">
+                        <span>Agent 时区</span>
+                        <ProfileField name="agentTimeZone">
+                          <input
+                            value={editorFields.agentTimeZone}
+                            onChange={(event) =>
+                              setEditorFields((current) =>
+                                current === undefined
+                                  ? current
+                                  : {
+                                      ...current,
+                                      agentTimeZone: event.target.value,
+                                    },
+                              )
+                            }
+                            autoComplete="off"
+                            placeholder="Asia/Shanghai"
+                            required
+                          />
+                        </ProfileField>
+                        <span className="field-help">
+                          用于理解当前时间、早晚和跨天语义。
+                        </span>
+                      </label>
                     </fieldset>
                     <fieldset className="identity-fields">
                       <legend>模型服务</legend>

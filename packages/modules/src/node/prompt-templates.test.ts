@@ -78,6 +78,7 @@ describe("loadFirstPartyPromptTemplates", () => {
 
 const templateNames = [
   "message-composer",
+  "message-composer.plan",
   "message-composer.history",
   "message-composer.history-inbound",
   "message-composer.history-assistant",

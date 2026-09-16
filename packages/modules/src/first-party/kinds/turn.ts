@@ -355,8 +355,7 @@ const turnContextPayloadSchema = z
         newestInputAgeMs: z.number().int().min(0),
         thresholdMs: z.number().int().min(0),
       })
-      .strict()
-      .optional(),
+      .strict(),
     inputs: z.array(turnInputSchema).min(1),
     text: z.string(),
     source: messageSourceSchema,

@@ -146,7 +146,12 @@ vi.mock("./secure-files.js", async (importOriginal) => {
 });
 
 const roots: string[] = [];
-const identity = { name: "Kaguya", aliases: ["辉夜"], persona: "test persona" };
+const identity = {
+  name: "Kaguya",
+  aliases: ["辉夜"],
+  persona: "test persona",
+  timeZone: "Asia/Shanghai",
+};
 
 async function createEmptyRoot(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "kaguya-config-manager-"));
@@ -276,6 +281,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
         identity: expect.objectContaining({
           name: "Kaguya",
           aliases: ["辉夜"],
+          timeZone: "Asia/Shanghai",
         }),
         ai: { providers: [] },
         memory: { enabled: false },
@@ -609,6 +615,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
     const replacement = await manager.createProfile("replacement");
 
     expect(replacement.id).toMatch(UUID_PATTERN);
+    expect(replacement.identity.timeZone).toBe("Asia/Shanghai");
     expect(replacement.ai.providers).toEqual([]);
     expect(manager.getSelectedProfileId()).toBe("default");
 

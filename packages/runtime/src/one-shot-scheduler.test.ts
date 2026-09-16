@@ -28,7 +28,12 @@ import {
 } from "@kaguya/scheduler";
 import { afterEach, describe, expect, it } from "vitest";
 
-const testIdentity = { name: "Kaguya", aliases: ["辉夜"], persona: "test" };
+const testIdentity = {
+  name: "Kaguya",
+  aliases: ["辉夜"],
+  persona: "test",
+  timeZone: "Asia/Shanghai",
+};
 const testMessageTemplates = {
   main: "{{scene}}{{history}}{{memory}}{{turn}}",
   history: "{{#each messages}}{{> history-inbound}}{{/each}}",
@@ -38,6 +43,7 @@ const testMessageTemplates = {
   memoryItem: "{{content}}",
   quoted: "{{message}}",
   turn: "{{#each messages}}{{> history-inbound}}{{/each}}",
+  plan: "{{topic}} {{reply_act}}",
 };
 
 import {

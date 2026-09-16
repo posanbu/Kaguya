@@ -89,6 +89,11 @@ function intentPayload() {
       contextInformationId: "context",
     },
     memoryInformationIds: [],
+    composition: {
+      focusInformationIds: ["input"],
+      topic: "测试话题",
+      replyAct: "回应",
+    },
   };
 }
 

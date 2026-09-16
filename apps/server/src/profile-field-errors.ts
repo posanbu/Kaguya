@@ -6,7 +6,7 @@
  * 输入输出与副作用：只读未知错误对象，返回 path/message；不记录或持久化请求正文。
  */
 const safePath =
-  /^(?:name|identity(?:\.(?:name|aliases(?:\.\d+)?|persona))?|(?:inbound|outbound)Allowlist(?:\.\d+)?|ai(?:\.(?:defaultProviderId|providers(?:\.\d+(?:\.(?:id|type|enabled|baseUrl|apiKey|models(?:\.\d+)?))?)?|modelTiers(?:\.(?:light|heavy)(?:\.(?:providerId|modelId|recommendedDurationMs|generation(?:\.(?:timeoutMs|reasoning))?))?)?))?|memory(?:\.(?:enabled|embedding|cognition))?|platforms(?:\.\d+)?|acknowledgedWarnings(?:\.\d+)?)$/u;
+  /^(?:name|identity(?:\.(?:name|aliases(?:\.\d+)?|persona|timeZone))?|(?:inbound|outbound)Allowlist(?:\.\d+)?|ai(?:\.(?:defaultProviderId|providers(?:\.\d+(?:\.(?:id|type|enabled|baseUrl|apiKey|models(?:\.\d+)?))?)?|modelTiers(?:\.(?:light|heavy)(?:\.(?:providerId|modelId|recommendedDurationMs|generation(?:\.(?:timeoutMs|reasoning))?))?)?))?|memory(?:\.(?:enabled|embedding|cognition))?|platforms(?:\.\d+)?|acknowledgedWarnings(?:\.\d+)?)$/u;
 export function profileFieldErrors(
   error: unknown,
 ): { path: string; message: string }[] {

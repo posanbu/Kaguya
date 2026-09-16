@@ -222,6 +222,7 @@ const DEFAULT_AGENT_IDENTITY: AgentIdentity = {
   name: "Kaguya",
   aliases: ["辉夜"],
   persona: "Default Kaguya persona",
+  timeZone: "Asia/Shanghai",
 };
 
 /** 配置诊断只包含实例、字段路径和阶段，不回显配置值或凭据。 */

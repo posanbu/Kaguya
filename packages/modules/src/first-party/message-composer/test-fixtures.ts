@@ -24,6 +24,7 @@ export const identity = {
   name: "Kaguya",
   aliases: ["辉夜"],
   persona: "温和自然",
+  timeZone: "Asia/Shanghai",
 };
 export function atom(
   id: string,
@@ -63,6 +64,13 @@ export function fixture(texts = ["FIRST_INPUT", "LAST_INPUT"]) {
       claimInformationId: "claim-1",
       scopeKey: "test-scope",
       asOf: "2026-09-09T00:00:02.000Z",
+      backlog: {
+        isBacklog: false,
+        evaluatedAt: "2026-09-09T00:00:03.000Z",
+        oldestInputAgeMs: 2_000,
+        newestInputAgeMs: 2_000,
+        thresholdMs: 120_000,
+      },
       inputs: messages.map((message) => ({
         informationId: message.informationId,
         occurredAt: message.occurredAt,
@@ -110,6 +118,11 @@ export function fixture(texts = ["FIRST_INPUT", "LAST_INPUT"]) {
         contextInformationId: turn.informationId,
       },
       memoryInformationIds: [],
+      composition: {
+        focusInformationIds: [messages.at(-1)!.informationId],
+        topic: "当前话题",
+        replyAct: "自然回应",
+      },
     },
     [
       { relation: "core:uses-context", informationId: turn.informationId },

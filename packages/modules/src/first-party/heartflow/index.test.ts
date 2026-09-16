@@ -61,10 +61,19 @@ const agentIdentity = {
   name: "Kaguya",
   aliases: ["辉夜"],
   persona: "测试身份",
+  timeZone: "Asia/Shanghai",
 };
 const execute = vi.fn(async () => ({
   status: "completed",
-  output: { action: "message", reason: "respond" },
+  output: {
+    action: "message",
+    reason: "respond",
+    composition: {
+      focusInputIndexes: [0],
+      topic: "测试话题",
+      replyAct: "回应",
+    },
+  },
   requestedInformationId: "request",
   terminalInformationId: "terminal",
 }));
@@ -135,7 +144,15 @@ afterEach(async () => {
   execute.mockReset();
   execute.mockResolvedValue({
     status: "completed",
-    output: { action: "message", reason: "respond" },
+    output: {
+      action: "message",
+      reason: "respond",
+      composition: {
+        focusInputIndexes: [0],
+        topic: "测试话题",
+        replyAct: "回应",
+      },
+    },
     requestedInformationId: "request",
     terminalInformationId: "terminal",
   });
@@ -500,7 +517,15 @@ describe("heartflow", () => {
       });
       return {
         status: "completed",
-        output: { action: "message", reason: "respond" },
+        output: {
+          action: "message",
+          reason: "respond",
+          composition: {
+            focusInputIndexes: [0],
+            topic: "测试话题",
+            replyAct: "回应",
+          },
+        },
         requestedInformationId: "request",
         terminalInformationId: "terminal",
       };
@@ -636,6 +661,13 @@ describe("heartflow", () => {
           contextInformationId: frozenContext.informationId,
         },
         memoryInformationIds: [],
+        composition: {
+          focusInformationIds: [
+            (frozenContext.payload as any).inputs[0].informationId,
+          ],
+          topic: "测试话题",
+          replyAct: "回应",
+        },
       });
       expect(intent.references).toEqual(
         expect.arrayContaining([
@@ -825,6 +857,11 @@ describe("heartflow", () => {
             contextInformationId: "context",
           },
           memoryInformationIds: ["memory-1", "memory-2"],
+          composition: {
+            focusInformationIds: ["old"],
+            topic: "测试话题",
+            replyAct: "回应",
+          },
         },
         references: [
           { relation: "core:uses-context", informationId: "context" },
@@ -1058,6 +1095,13 @@ describe("heartflow", () => {
         claimInformationId: (latestContext.payload as any).claimInformationId,
       },
       memoryInformationIds: [],
+      composition: {
+        focusInformationIds: [
+          (latestContext.payload as any).inputs[0].informationId,
+        ],
+        topic: "测试话题",
+        replyAct: "回应",
+      },
     });
   });
 });
@@ -1066,7 +1110,15 @@ describe("Planner durable dispatch", () => {
   it.each([
     [
       "message",
-      { action: "message", reason: "respond" },
+      {
+        action: "message",
+        reason: "respond",
+        composition: {
+          focusInputIndexes: [0],
+          topic: "测试话题",
+          replyAct: "回应",
+        },
+      },
       "agent.message.intent.requested",
     ],
     [
@@ -1088,6 +1140,19 @@ describe("Planner durable dispatch", () => {
     [
       "invalid wait",
       { action: "wait", reason: "await-more-context", waitSeconds: 121 },
+      "agent.turn.silent",
+    ],
+    [
+      "out-of-range anchor",
+      {
+        action: "message",
+        reason: "respond",
+        composition: {
+          focusInputIndexes: [1],
+          topic: "测试话题",
+          replyAct: "回应",
+        },
+      },
       "agent.turn.silent",
     ],
   ])("dispatches %s with one fenced action", async (_name, output, kind) => {
@@ -1121,9 +1186,12 @@ describe("Planner durable dispatch", () => {
         all.find((atom) => atom.kind === "agent.wait.requested")?.payload,
       ).toMatchObject({ attempt: 1, delayMs: 7000, wakeOnMessage: true });
     if (
-      ["extra destination", "invalid JSON", "invalid wait"].includes(
-        String(_name),
-      )
+      [
+        "extra destination",
+        "invalid JSON",
+        "invalid wait",
+        "out-of-range anchor",
+      ].includes(String(_name))
     )
       expect(
         all.find((atom) => atom.kind === "agent.turn.silent")?.payload
@@ -1183,7 +1251,15 @@ describe("Planner durable dispatch", () => {
     await waitForKind(database, turnSupersededInformationKind.kind);
     release({
       status: "completed",
-      output: { action: "message", reason: "respond" },
+      output: {
+        action: "message",
+        reason: "respond",
+        composition: {
+          focusInputIndexes: [0],
+          topic: "测试话题",
+          replyAct: "回应",
+        },
+      },
       requestedInformationId: "request",
       terminalInformationId: "terminal",
     });
