@@ -3,6 +3,7 @@
  * 功能概述：将消息意图和冻结 turn 编译为分层 Handlebars Prompt，所有本轮输入拥有相同模板地位；积压时向 Composer 提供年龄供自然衔接。
  * 主要职责：createMessagePromptCompiler 预编译模板并返回纯函数；compileMessagePrompt 提供一次性入口；
  * frozenTurnInputs 核对 turn 身份与目标范围，重建冻结消息；历史与记忆预算函数只限制辅助上下文。
+ * 冷启动（历史与记忆均为空）且配置了 startupPersona 时，persona 变量改用开机人设，否则沿用默认人设。
  * 代码库关系：message-context 选择账本事实，Node 模板加载器提供 MessagePromptTemplates；编译结果携带变量溯源。
  * 输入输出与副作用：意图没有正文，正文从 turn.inputs 读取；每条输入保留引用上下文及成功回执、请求、assistant 的原始溯源且不裁剪，不特殊处理末条。
  * 缺少冻结 turn 或身份不一致即抛错；不写账本、不调用模型、不创建出站引用标记。
@@ -45,6 +46,7 @@ export interface AgentIdentity {
   readonly name: string;
   readonly aliases: readonly string[];
   readonly persona: string;
+  readonly startupPersona?: string | undefined;
   readonly timeZone: string;
 }
 
@@ -153,6 +155,14 @@ export function createMessagePromptCompiler(
       }),
       identity,
     );
+    const coldStart =
+      history.informationIds.length === 0 &&
+      memories.informationIds.length === 0;
+    const startupPersona = (identity.startupPersona ?? "").trim();
+    const persona =
+      coldStart && startupPersona.length > 0
+        ? startupPersona
+        : identity.persona;
     const quoteIds: InformationId[] = [];
     const messages = inputs.map((input) => {
       const quotedId = platformMessageIdOfQuote(input);
@@ -197,7 +207,7 @@ export function createMessagePromptCompiler(
     });
     const turn = nested.render("turn", { messages });
     const prompt = renderOuter([
-      variable("persona", identity.persona),
+      variable("persona", persona),
       variable("name", identity.name),
       variable("aliases", identity.aliases.join("、")),
       variable(

@@ -27,6 +27,7 @@ interface MutableProfile {
     name: string;
     aliases: string[];
     persona: string;
+    startupPersona?: string;
     timeZone: string;
   };
   inboundAllowlist: string[];
@@ -93,6 +94,7 @@ export interface ProfileEditorFields {
   readonly agentName: string;
   readonly agentAliasesText: string;
   readonly agentPersona: string;
+  readonly agentStartupPersona: string;
   readonly agentTimeZone: string;
   readonly baseUrl: string;
   readonly apiKey: string;
@@ -120,6 +122,7 @@ export function profileToEditorFields(
     agentName: profile.identity.name,
     agentAliasesText: profile.identity.aliases.join("\n"),
     agentPersona: profile.identity.persona,
+    agentStartupPersona: profile.identity.startupPersona ?? "",
     agentTimeZone: profile.identity.timeZone,
     baseUrl: provider?.baseUrl ?? "",
     apiKey: provider?.apiKey ?? "",
@@ -166,6 +169,7 @@ export function mergeProfileEditorFields(
   const provider = ensureEditableProvider(next, fields);
 
   next.name = fields.name;
+  const startupPersona = fields.agentStartupPersona.trim();
   next.identity = {
     name: fields.agentName.trim(),
     aliases: [
@@ -177,6 +181,7 @@ export function mergeProfileEditorFields(
       ),
     ],
     persona: fields.agentPersona.trim(),
+    ...(startupPersona ? { startupPersona } : {}),
     timeZone: fields.agentTimeZone.trim(),
   };
   next.memory.enabled = fields.memoryEnabled;

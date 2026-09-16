@@ -1,7 +1,8 @@
 /**
  * 功能概述：验证消息编写 Prompt 的整轮语义、冻结快照权威性和辅助上下文预算。
  * 超长历史和 Memory 用例同时检查 Unicode 完整性、预算上限及实际保留内容的 provenance。
- * 主要职责：保护全部输入同等渲染、逐条引用、模板溯源、缺失 turn 拒绝以及 target-only assistant 历史，防止 Memory 跨作用域引用泄漏。
+ * 主要职责：保护全部输入同等渲染、逐条引用、模板溯源、缺失 turn 拒绝以及 target-only assistant 历史，防止 Memory 跨作用域引用泄漏；
+ * 验证冷启动（无历史与记忆）优先使用开机人设、缺失或空白时回退默认人设。
  * 代码库关系：使用真实默认模板、information-kinds 与 message-prompt，不模拟编译结果。
  * 输入输出与副作用：仅冻结内存原子，无网络或模型调用。
  */
@@ -302,4 +303,82 @@ it("does not quote a memory-authorized inbound message from another target with 
   expect(turn.content).toContain("FIRST_INPUT");
   expect(turn.content).toContain("【入站引用参考】");
   expect(turn.informationIds).not.toContain(memory.informationId);
+});
+
+it("uses the startup persona only while history and memory are both empty", () => {
+  const f = fixture();
+  const startupIdentity = { ...identity, startupPersona: "开机人设：安静观察" };
+  const result = compileMessagePrompt(
+    templates,
+    startupIdentity,
+    f.atoms,
+    f.intent.informationId,
+  );
+  expect(
+    result.variables.find((entry) => entry.name === "persona")?.content,
+  ).toBe("开机人设：安静观察");
+  expect(result.text.startsWith("开机人设：安静观察")).toBe(true);
+  expect(result.text).not.toContain("温和自然");
+});
+
+it("keeps the regular persona once history or memory is present", () => {
+  const f = fixture();
+  const startupIdentity = { ...identity, startupPersona: "开机人设：安静观察" };
+  const historyAtom = atom("history-0", inboundTextInformationKind.kind, {
+    text: "HISTORY_TEXT",
+    source: {
+      ...target,
+      senderId: "sender-history",
+      selfId: "bot-1",
+      platformMessageId: "platform-history",
+    },
+  });
+  const withHistory = compileMessagePrompt(
+    templates,
+    startupIdentity,
+    [f.intent, f.turn, ...f.messages, historyAtom],
+    f.intent.informationId,
+  );
+  expect(
+    withHistory.variables.find((entry) => entry.name === "persona")?.content,
+  ).toBe("温和自然");
+  expect(withHistory.text).toContain("HISTORY_TEXT");
+  const memoryAtom = atom("memory-0", coreMemoryTextInformationKind.kind, {
+    text: "MEMORY_TEXT",
+  });
+  const intent = atom(f.intent.informationId, f.intent.kind, {
+    ...messageIntentRequestedInformationPayloadSchema.parse(f.intent.payload),
+    memoryInformationIds: [memoryAtom.informationId],
+  });
+  const withMemory = compileMessagePrompt(
+    templates,
+    startupIdentity,
+    [intent, f.turn, ...f.messages, memoryAtom],
+    intent.informationId,
+  );
+  expect(
+    withMemory.variables.find((entry) => entry.name === "persona")?.content,
+  ).toBe("温和自然");
+});
+
+it("falls back to the regular persona when the startup persona is absent or blank", () => {
+  const f = fixture();
+  const plain = compileMessagePrompt(
+    templates,
+    identity,
+    f.atoms,
+    f.intent.informationId,
+  );
+  expect(
+    plain.variables.find((entry) => entry.name === "persona")?.content,
+  ).toBe("温和自然");
+  const blank = compileMessagePrompt(
+    templates,
+    { ...identity, startupPersona: "   " },
+    f.atoms,
+    f.intent.informationId,
+  );
+  expect(
+    blank.variables.find((entry) => entry.name === "persona")?.content,
+  ).toBe("温和自然");
 });

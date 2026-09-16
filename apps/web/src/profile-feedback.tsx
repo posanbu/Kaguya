@@ -92,6 +92,7 @@ export function mapProfileProblem(
     "identity.name": "agentName",
     "identity.aliases": "agentAliasesText",
     "identity.persona": "agentPersona",
+    "identity.startupPersona": "agentStartupPersona",
     "identity.timeZone": "agentTimeZone",
     inboundAllowlist: "inboundAllowlistText",
     outboundAllowlist: "outboundAllowlistText",

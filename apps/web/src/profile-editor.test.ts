@@ -149,6 +149,7 @@ describe("profileToEditorFields", () => {
       agentName: "Kaguya",
       agentAliasesText: "辉夜\nMoon",
       agentPersona: "test persona",
+      agentStartupPersona: "",
       agentTimeZone: "Asia/Shanghai",
       baseUrl: "https://api.example/v1",
       apiKey: "provider-secret",
@@ -174,6 +175,7 @@ describe("profileToEditorFields", () => {
       agentName: "Kaguya",
       agentAliasesText: "辉夜",
       agentPersona: "test",
+      agentStartupPersona: "",
       agentTimeZone: "Asia/Shanghai",
       baseUrl: "",
       apiKey: "",
@@ -313,6 +315,31 @@ describe("mergeProfileEditorFields", () => {
         },
       ],
     });
+  });
+
+  it("round-trips the optional startup persona and drops it when cleared", () => {
+    const profile: UserConfigProfile = {
+      ...completeProfile,
+      identity: {
+        ...completeProfile.identity,
+        startupPersona: " startup persona ",
+      },
+    };
+    const fields = profileToEditorFields(profile);
+    expect(fields.agentStartupPersona).toBe(" startup persona ");
+    const merged = mergeProfileEditorFields(profile, fields);
+    expect(merged.identity).toEqual({
+      name: "Kaguya",
+      aliases: ["辉夜", "Moon"],
+      persona: "test persona",
+      startupPersona: "startup persona",
+      timeZone: "Asia/Shanghai",
+    });
+    const cleared = mergeProfileEditorFields(profile, {
+      ...fields,
+      agentStartupPersona: "   ",
+    });
+    expect(cleared.identity).not.toHaveProperty("startupPersona");
   });
 
   it("fills an empty default profile without fabricating hidden collections", () => {

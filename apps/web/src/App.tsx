@@ -1053,6 +1053,30 @@ function ProfileManagementScreen({
                         </ProfileField>
                       </label>
                       <label className="field">
+                        <span>Agent 开机人设</span>
+                        <ProfileField name="agentStartupPersona">
+                          <textarea
+                            className="persona-editor"
+                            value={editorFields.agentStartupPersona}
+                            onChange={(event) =>
+                              setEditorFields((current) =>
+                                current === undefined
+                                  ? current
+                                  : {
+                                      ...current,
+                                      agentStartupPersona: event.target.value,
+                                    },
+                              )
+                            }
+                            rows={4}
+                            placeholder="留空则冷启动时沿用上方人设"
+                          />
+                        </ProfileField>
+                        <span className="field-help">
+                          尚无对话历史与记忆时替代上方人设；留空则沿用上方人设。
+                        </span>
+                      </label>
+                      <label className="field">
                         <span>Agent 时区</span>
                         <ProfileField name="agentTimeZone">
                           <input

@@ -199,6 +199,56 @@ describe("user configuration schemas", () => {
     ).toBe(false);
   });
 
+  it("normalizes the optional startup persona and accepts profiles without it", () => {
+    expect(
+      userConfigProfileSettingsSchema.parse({
+        identity: {
+          name: "Kaguya",
+          aliases: ["辉夜"],
+          persona: "test",
+          startupPersona: "  startup  ",
+          timeZone: "Asia/Shanghai",
+        },
+        ai: { providers: [] },
+        memory: { enabled: false },
+        platforms: [],
+      }).identity,
+    ).toEqual({
+      name: "Kaguya",
+      aliases: ["辉夜"],
+      persona: "test",
+      startupPersona: "startup",
+      timeZone: "Asia/Shanghai",
+    });
+    expect(
+      userConfigProfileSettingsSchema.parse({
+        identity: {
+          name: "Kaguya",
+          aliases: ["辉夜"],
+          persona: "test",
+          timeZone: "Asia/Shanghai",
+        },
+        ai: { providers: [] },
+        memory: { enabled: false },
+        platforms: [],
+      }).identity,
+    ).not.toHaveProperty("startupPersona");
+    expect(
+      userConfigProfileSettingsSchema.safeParse({
+        identity: {
+          name: "Kaguya",
+          aliases: ["辉夜"],
+          persona: "test",
+          startupPersona: "   ",
+          timeZone: "Asia/Shanghai",
+        },
+        ai: { providers: [] },
+        memory: { enabled: false },
+        platforms: [],
+      }).success,
+    ).toBe(false);
+  });
+
   it("requires a valid IANA identity time zone", () => {
     const settings = {
       identity: {

@@ -338,6 +338,7 @@ const agentIdentityJsonSchema = {
       items: { type: "string", minLength: 1 },
     },
     persona: { type: "string", minLength: 1 },
+    startupPersona: { type: "string", minLength: 1 },
     timeZone: { type: "string", minLength: 1 },
   },
 } as const;
