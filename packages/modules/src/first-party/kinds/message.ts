@@ -33,6 +33,33 @@ export const messageTargetSchema = z
 
 export type MessageTarget = z.infer<typeof messageTargetSchema>;
 
+const focusInformationIdsSchema = z
+  .array(nonBlankString)
+  .min(1)
+  .max(3)
+  .superRefine((ids, context) => {
+    if (new Set(ids).size !== ids.length)
+      context.addIssue({
+        code: "custom",
+        message: "Composition focusInformationIds must be unique",
+      });
+  });
+
+const messageCompositionShape = {
+  focusInformationIds: focusInformationIdsSchema,
+  topic: z.string().trim().min(1).max(200),
+  replyAct: z.string().trim().min(1).max(120),
+};
+export const messageCompositionSchema = z.union([
+  z.object(messageCompositionShape).strict(),
+  z
+    .object({
+      ...messageCompositionShape,
+      guidance: z.string().trim().min(1).max(500),
+    })
+    .strict(),
+]);
+
 export const inboundTextInformationPayloadSchema = z
   .object({ text: z.string(), source: messageSourceSchema })
   .strict();
@@ -42,6 +69,7 @@ export const messageIntentRequestedInformationPayloadSchema = z
     target: messageTargetSchema,
     turn: turnProvenanceSchema,
     memoryInformationIds: z.array(nonBlankString),
+    composition: messageCompositionSchema,
   })
   .strict();
 

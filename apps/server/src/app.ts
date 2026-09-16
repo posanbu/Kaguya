@@ -329,7 +329,7 @@ const memoryConfigJsonSchema = {
 const agentIdentityJsonSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["name", "aliases", "persona"],
+  required: ["name", "aliases", "persona", "timeZone"],
   properties: {
     name: { type: "string", minLength: 1 },
     aliases: {
@@ -338,6 +338,7 @@ const agentIdentityJsonSchema = {
       items: { type: "string", minLength: 1 },
     },
     persona: { type: "string", minLength: 1 },
+    timeZone: { type: "string", minLength: 1 },
   },
 } as const;
 

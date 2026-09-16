@@ -104,7 +104,15 @@ function deterministicResult(output: unknown) {
 
 export function createPlanningDeterministicModel(
   text: string,
-  plan: unknown = { action: "message", reason: "respond" },
+  plan: unknown = {
+    action: "message",
+    reason: "respond",
+    composition: {
+      focusInputIndexes: [0],
+      topic: "当前消息",
+      replyAct: "回应用户",
+    },
+  },
 ): MockLanguageModelV3 {
   return new MockLanguageModelV3({
     provider: "kaguya-deterministic",

@@ -17,7 +17,12 @@ import {
   createFirstPartyModuleConfigDefaults,
 } from "./catalog.js";
 
-const testIdentity = { name: "Kaguya", aliases: ["辉夜"], persona: "test" };
+const testIdentity = {
+  name: "Kaguya",
+  aliases: ["辉夜"],
+  persona: "test",
+  timeZone: "Asia/Shanghai",
+};
 const testMessageTemplates = {
   main: "{{scene}}{{history}}{{memory}}{{turn}}",
   history: "{{#each messages}}{{> history-inbound}}{{/each}}",
@@ -27,6 +32,7 @@ const testMessageTemplates = {
   memoryItem: "{{content}}",
   quoted: "{{message}}",
   turn: "{{#each messages}}{{> history-inbound}}{{/each}}",
+  plan: "{{topic}} {{reply_act}}",
 };
 
 function catalog() {
@@ -159,6 +165,7 @@ describe("first-party module configuration", () => {
       name: "Luna",
       aliases: ["月"],
       persona: "test",
+      timeZone: "Asia/Shanghai",
     };
     const defaults = createFirstPartyModuleConfigDefaults(
       "production",

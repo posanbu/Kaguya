@@ -24,7 +24,12 @@ import { defineInformationKind, defineInformationSelector } from "@kaguya/sdk";
 import { createPromptTemplateRenderer } from "../../prompt-template.js";
 import { turnMessageContextSelector } from "../message-composer/message-context.js";
 import type { AgentIdentity } from "../message-composer/message-prompt.js";
-import { turnContextCompletedInformationKind } from "../information-kinds.js";
+import {
+  assistantTextInformationKind,
+  inboundTextInformationKind,
+  turnContextCompletedInformationKind,
+} from "../information-kinds.js";
+import { formatZonedInstant } from "../temporal-context.js";
 
 import {
   plannerTargetSchema,
@@ -32,12 +37,38 @@ import {
 } from "../message-authorization.js";
 
 export const PLANNER_TASK_ID = "agent.turn.plan";
+const focusInputIndexesSchema = z
+  .array(z.number().int().nonnegative())
+  .min(1)
+  .max(3)
+  .superRefine((indexes, context) => {
+    if (new Set(indexes).size !== indexes.length)
+      context.addIssue({
+        code: "custom",
+        message: "Composition focusInputIndexes must be unique",
+      });
+  });
+const plannerCompositionShape = {
+  focusInputIndexes: focusInputIndexesSchema,
+  topic: z.string().trim().min(1).max(200),
+  replyAct: z.string().trim().min(1).max(120),
+};
+export const plannerCompositionSchema = z.union([
+  z.object(plannerCompositionShape).strict(),
+  z
+    .object({
+      ...plannerCompositionShape,
+      guidance: z.string().trim().min(1).max(500),
+    })
+    .strict(),
+]);
 export const plannerActionSchema = z.discriminatedUnion("action", [
   z
     .object({
       action: z.literal("message"),
       reason: z.enum(["respond", "contribute"]),
       target: plannerTargetSchema.default({ kind: "current" }),
+      composition: plannerCompositionSchema,
     })
     .strict(),
   z
@@ -139,6 +170,11 @@ export const plannerContextSelector = defineInformationSelector({
             contextInformationId: turn.informationId,
           },
           memoryInformationIds: payload.memory ?? [],
+          composition: {
+            focusInformationIds: [payload.inputs.at(-1).informationId],
+            topic: "Planner context selection",
+            replyAct: "select context",
+          },
         },
       },
     });
@@ -186,6 +222,10 @@ export function compilePlannerPrompt(
   const payload: any = turnContextCompletedInformationKind.payloadSchema.parse(
     turn.payload,
   );
+  const currentTime = formatZonedInstant(
+    payload.backlog.evaluatedAt,
+    identity.timeZone,
+  );
   const inputIds = new Set(
     payload.inputs.map(
       (input: { informationId: string }) => input.informationId,
@@ -196,9 +236,8 @@ export function compilePlannerPrompt(
     (atom) =>
       !inputIds.has(atom.informationId) &&
       !memoryIds.has(atom.informationId) &&
-      ["core.message.inbound.text", "core.message.assistant.text"].includes(
-        atom.kind,
-      ),
+      (atom.kind === inboundTextInformationKind.kind ||
+        atom.kind === assistantTextInformationKind.kind),
   );
   const memories = atoms.filter((atom) => memoryIds.has(atom.informationId));
   const conversation = atoms.find(
@@ -212,6 +251,11 @@ export function compilePlannerPrompt(
   );
   const values = [
     {
+      name: "current_time",
+      content: JSON.stringify(currentTime),
+      informationIds: [turn.informationId],
+    },
+    {
       name: "conversation",
       content: JSON.stringify(conversation?.payload ?? {}),
       informationIds: conversation ? [conversation.informationId] : [],
@@ -220,7 +264,27 @@ export function compilePlannerPrompt(
     {
       name: "history",
       content: JSON.stringify(
-        histories.map((atom) => ({ role: atom.kind, text: atom.payload.text })),
+        histories.map((atom) => {
+          const source = (atom.payload as any).source ?? {};
+          const occurredAt = formatZonedInstant(
+            atom.occurredAt,
+            identity.timeZone,
+          );
+          return {
+            role: atom.kind,
+            text: atom.payload.text,
+            occurredAt: occurredAt.iso,
+            localTime: occurredAt.local,
+            speaker:
+              atom.kind === assistantTextInformationKind.kind
+                ? identity.name
+                : (source.sender?.card ??
+                  source.sender?.nickname ??
+                  source.senderId),
+            platformMessageId: source.platformMessageId ?? null,
+            replyTo: source.replyTo?.platformMessageId ?? null,
+          };
+        }),
       ),
       informationIds: histories.map((atom) => atom.informationId),
     },
@@ -233,18 +297,24 @@ export function compilePlannerPrompt(
       name: "turn",
       content: JSON.stringify({
         inputs: payload.inputs.map(
-          (input: {
-            text: string;
-            occurredAt: string;
-            source: {
-              senderId: string;
-              sender?: { nickname?: string; card?: string };
-              mentions?: { kind: string; id?: string }[];
-              replyTo?: { platformMessageId: string };
-            };
-          }) => ({
+          (
+            input: {
+              text: string;
+              occurredAt: string;
+              source: {
+                senderId: string;
+                sender?: { nickname?: string; card?: string };
+                mentions?: { kind: string; id?: string }[];
+                replyTo?: { platformMessageId: string };
+              };
+            },
+            inputIndex: number,
+          ) => ({
+            inputIndex,
             text: input.text,
             occurredAt: input.occurredAt,
+            localTime: formatZonedInstant(input.occurredAt, identity.timeZone)
+              .local,
             speaker:
               input.source.sender?.card ??
               input.source.sender?.nickname ??
@@ -253,7 +323,7 @@ export function compilePlannerPrompt(
             replyTo: input.source.replyTo?.platformMessageId ?? null,
           }),
         ),
-        backlog: payload.backlog ?? null,
+        backlog: payload.backlog,
         attempt: payload.attempt,
         totalWaitBudget: payload.totalWaitBudget,
       }),

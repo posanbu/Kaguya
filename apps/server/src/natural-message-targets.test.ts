@@ -19,7 +19,15 @@ const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
   for (const close of cleanups.splice(0).reverse()) await close();
 });
-const speak = { action: "message", reason: "respond" };
+const speak = {
+  action: "message",
+  reason: "respond",
+  composition: {
+    focusInputIndexes: [0],
+    topic: "当前消息",
+    replyAct: "回应用户",
+  },
+};
 const silent = { action: "silent", reason: "no-response-needed" };
 
 async function fixture(

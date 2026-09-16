@@ -995,6 +995,14 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
               ? parsed.data
               : { action: "silent", reason: "planner-unavailable" };
             if (
+              action.action === "message" &&
+              !validFocusInputIndexes(
+                action.composition.focusInputIndexes,
+                (turn.payload as any).inputs.length,
+              )
+            )
+              action = { action: "silent", reason: "planner-unavailable" };
+            if (
               action.action === "wait" &&
               gate.attempt >= gate.totalWaitBudget
             )
@@ -1074,7 +1082,12 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
                 : {}),
             };
             const current = await context.select(heartflowStateSelector);
-            await dispatchDecision({ ...decision, payload }, current, context);
+            await dispatchDecision(
+              { ...decision, payload },
+              current,
+              context,
+              action.action === "message" ? action.composition : undefined,
+            );
           },
         ),
         ...deliveryKinds.map((definition) =>
@@ -1667,6 +1680,10 @@ async function dispatchDecision(
   decision: DeepReadonly<InformationAtom>,
   atoms: readonly DeepReadonly<InformationAtom>[],
   context: InformationModuleHandlerContext,
+  composition?: Extract<
+    z.infer<typeof plannerActionSchema>,
+    { action: "message" }
+  >["composition"],
 ) {
   const payload = decision.payload as AttentionArousalPayload;
   const candidate = atoms.find(
@@ -1693,6 +1710,8 @@ async function dispatchDecision(
     scopeKey: candidatePayload.scopeKey,
   };
   if (payload.outcome === "attend") {
+    if (!composition)
+      throw new Error("Attend decision requires composition intent");
     const targetInput = (turnContext.payload as any).inputs.at(-1);
     if (targetInput === undefined)
       throw new Error("Attend decision requires a target turn input");
@@ -1717,6 +1736,7 @@ async function dispatchDecision(
           )
             ? (turnContext.payload as any).memory
             : [],
+          composition: resolveMessageComposition(turnContext, composition),
         },
         references: [
           {
@@ -1787,6 +1807,42 @@ async function dispatchDecision(
       ),
     },
   );
+}
+
+function validFocusInputIndexes(
+  indexes: readonly number[],
+  inputCount: number,
+): boolean {
+  return (
+    indexes.length >= 1 &&
+    indexes.length <= 3 &&
+    new Set(indexes).size === indexes.length &&
+    indexes.every(
+      (index) => Number.isInteger(index) && index >= 0 && index < inputCount,
+    )
+  );
+}
+
+function resolveMessageComposition(
+  turn: DeepReadonly<InformationAtom>,
+  composition: Extract<
+    z.infer<typeof plannerActionSchema>,
+    { action: "message" }
+  >["composition"],
+) {
+  const inputs = (turn.payload as any).inputs as {
+    informationId: string;
+  }[];
+  if (!validFocusInputIndexes(composition.focusInputIndexes, inputs.length))
+    throw new Error("Composition focus indexes are outside frozen turn");
+  return {
+    focusInformationIds: composition.focusInputIndexes.map(
+      (index) => inputs[index]!.informationId,
+    ),
+    topic: composition.topic,
+    replyAct: composition.replyAct,
+    ...("guidance" in composition ? { guidance: composition.guidance } : {}),
+  };
 }
 
 async function finishDelivery(
@@ -2025,3 +2081,5 @@ import {
   copyOptionalIdentity,
   assessInputBacklog,
 } from "./turn-state.js";
+
+export { plannerActionSchema } from "./planner.js";

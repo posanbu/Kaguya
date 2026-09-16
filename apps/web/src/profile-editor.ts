@@ -27,6 +27,7 @@ interface MutableProfile {
     name: string;
     aliases: string[];
     persona: string;
+    timeZone: string;
   };
   inboundAllowlist: string[];
   outboundAllowlist: string[];
@@ -92,6 +93,7 @@ export interface ProfileEditorFields {
   readonly agentName: string;
   readonly agentAliasesText: string;
   readonly agentPersona: string;
+  readonly agentTimeZone: string;
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly lightModel: string;
@@ -118,6 +120,7 @@ export function profileToEditorFields(
     agentName: profile.identity.name,
     agentAliasesText: profile.identity.aliases.join("\n"),
     agentPersona: profile.identity.persona,
+    agentTimeZone: profile.identity.timeZone,
     baseUrl: provider?.baseUrl ?? "",
     apiKey: provider?.apiKey ?? "",
     lightModel:
@@ -174,6 +177,7 @@ export function mergeProfileEditorFields(
       ),
     ],
     persona: fields.agentPersona.trim(),
+    timeZone: fields.agentTimeZone.trim(),
   };
   next.memory.enabled = fields.memoryEnabled;
   next.inboundAllowlist = fields.inboundAllowlistText

@@ -24,5 +24,12 @@ it("AJV required 指向所属字段，未知错误安全返回空列表", () => 
       ],
     })[0]?.path,
   ).toBe("identity.persona");
+  expect(
+    profileFieldErrors({
+      validation: [
+        { instancePath: "/identity", params: { missingProperty: "timeZone" } },
+      ],
+    })[0]?.path,
+  ).toBe("identity.timeZone");
   expect(profileFieldErrors(new Error("SECRET"))).toEqual([]);
 });

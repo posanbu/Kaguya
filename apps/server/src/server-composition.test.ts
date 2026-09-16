@@ -959,7 +959,12 @@ describe("unified server composition", () => {
     await manager.replaceProfile(manager.getSelectedProfileId(), {
       name: "default",
       acknowledgedWarnings: [],
-      identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
+      identity: {
+        name: "Kaguya",
+        aliases: ["辉夜"],
+        persona: "test",
+        timeZone: "Asia/Shanghai",
+      },
       ai: {
         defaultProviderId: "provider-1",
         modelTiers: {
@@ -1146,7 +1151,12 @@ async function selectedProfile(manager: FileUserConfigManager) {
 
 function readyProfileSettings(lightModelId: string, heavyModelId: string) {
   return {
-    identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
+    identity: {
+      name: "Kaguya",
+      aliases: ["辉夜"],
+      persona: "test",
+      timeZone: "Asia/Shanghai",
+    },
     ai: {
       defaultProviderId: "provider-1",
       modelTiers: {

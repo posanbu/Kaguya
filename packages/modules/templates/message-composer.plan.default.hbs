@@ -1,0 +1,9 @@
+【本次表达意图】
+当前时间：{{current_time}}
+话题：{{topic}}
+回复动作：{{reply_act}}
+{{#if guidance}}补充指引：{{guidance}}
+{{/if}}【话题锚点】
+{{#each messages}}
+{{> history-inbound}}
+{{/each}}

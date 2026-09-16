@@ -100,7 +100,12 @@ describe("message composer", () => {
     expect(
       messageIntentRequestedInformationPayloadSchema.parse(payload),
     ).toEqual(payload);
-    for (const field of ["target", "turn", "memoryInformationIds"]) {
+    for (const field of [
+      "target",
+      "turn",
+      "memoryInformationIds",
+      "composition",
+    ]) {
       const missing = { ...payload };
       delete missing[field];
       expect(
@@ -154,6 +159,7 @@ describe("message composer", () => {
     };
     expect(request.task).toMatchObject({
       taskId: "agent.message.compose",
+      version: "1",
       outputMode: "text",
     });
     expect(request.prompt.text).toContain("FIRST_INPUT");

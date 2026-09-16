@@ -67,6 +67,11 @@ describe("runtime information kinds", () => {
         contextInformationId: "context",
       },
       memoryInformationIds: [],
+      composition: {
+        focusInformationIds: ["input"],
+        topic: "测试话题",
+        replyAct: "回应",
+      },
     };
     expect(messageIntentRequestedInformationKind.kind).toBe(
       "agent.message.intent.requested",
@@ -77,7 +82,12 @@ describe("runtime information kinds", () => {
     expect(
       messageIntentRequestedInformationPayloadSchema.parse(payload),
     ).toEqual(payload);
-    for (const key of ["target", "turn", "memoryInformationIds"] as const) {
+    for (const key of [
+      "target",
+      "turn",
+      "memoryInformationIds",
+      "composition",
+    ] as const) {
       const { [key]: _missing, ...incomplete } = payload;
       expect(
         messageIntentRequestedInformationPayloadSchema.safeParse(incomplete)

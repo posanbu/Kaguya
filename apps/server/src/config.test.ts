@@ -154,7 +154,12 @@ function completeProfile(
     version: 1,
     id: "default",
     name: "default",
-    identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
+    identity: {
+      name: "Kaguya",
+      aliases: ["辉夜"],
+      persona: "test",
+      timeZone: "Asia/Shanghai",
+    },
     ai: { providers: [] },
     memory: { enabled: false },
     platforms: [],

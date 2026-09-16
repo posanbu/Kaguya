@@ -51,6 +51,7 @@ async function fixture(cyclic = false) {
   };
   for (const id of [
     "message-composer",
+    "message-composer.plan",
     "message-composer.history",
     "message-composer.history-inbound",
     "message-composer.history-assistant",

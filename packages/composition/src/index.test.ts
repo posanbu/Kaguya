@@ -73,7 +73,12 @@ describe("shared Runtime Composition", () => {
   });
 
   it("derives approvals from enabled activations and preserves host options", () => {
-    const identity = { name: "Moon", aliases: ["月"], persona: "test persona" };
+    const identity = {
+      name: "Moon",
+      aliases: ["月"],
+      persona: "test persona",
+      timeZone: "Asia/Shanghai",
+    };
     const moduleConfigs = modules
       .createFirstPartyModuleConfigDefaults("test")
       .map((config) =>

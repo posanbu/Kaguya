@@ -62,6 +62,13 @@ function messageFixture(texts) {
     stale: false,
     attempt: 0,
     totalWaitBudget: 0,
+    backlog: {
+      isBacklog: false,
+      evaluatedAt: "2026-09-09T00:00:02.000Z",
+      oldestInputAgeMs: 1000,
+      newestInputAgeMs: 1000,
+      thresholdMs: 120000,
+    },
   });
   const intent = make("intent-1", "agent.message.intent.requested", {
     target,
@@ -71,6 +78,11 @@ function messageFixture(texts) {
       contextInformationId: "turn-1",
     },
     memoryInformationIds: [],
+    composition: {
+      focusInformationIds: [messages[0].informationId],
+      topic: "评测输入",
+      replyAct: "回应输入",
+    },
   });
   return { atoms: [intent, turn, ...messages], intentId: intent.informationId };
 }

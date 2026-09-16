@@ -5,7 +5,8 @@
  */
 import { describe, expect, it } from "vitest";
 import { compilePlannerPrompt, plannerActionSchema } from "./planner.js";
-import { fixture, identity } from "../message-composer/test-fixtures.js";
+import { inboundTextInformationKind } from "../information-kinds.js";
+import { atom, fixture, identity } from "../message-composer/test-fixtures.js";
 
 describe("Planner contract", () => {
   it.each([
@@ -30,6 +31,20 @@ describe("Planner contract", () => {
         waitSeconds,
       }).success,
     ).toBe(true);
+  });
+  it.each([
+    undefined,
+    { focusInputIndexes: [], topic: "话题", replyAct: "回应" },
+    { focusInputIndexes: [0, 0], topic: "话题", replyAct: "回应" },
+    { focusInputIndexes: [0, 1, 2, 3], topic: "话题", replyAct: "回应" },
+  ])("rejects invalid message composition %j", (composition) => {
+    expect(
+      plannerActionSchema.safeParse({
+        action: "message",
+        reason: "respond",
+        composition,
+      }).success,
+    ).toBe(false);
   });
   it("compiles identity, policy and every frozen input with provenance", () => {
     const { atoms } = fixture(["FIRST_SENTINEL", "LAST_SENTINEL"]);
@@ -59,6 +74,11 @@ describe("Planner contract", () => {
     expect(prompt.text).toContain("不可信数据");
     expect(prompt.text).toContain('"isBacklog":true');
     expect(prompt.text).toContain('"newestInputAgeMs":180000');
+    expect(prompt.text).toContain(
+      '当前时间：{"iso":"2026-09-15T00:00:00.000Z","timeZone":"Asia/Shanghai","local":"2026-09-15 周二 08:00:00"}',
+    );
+    expect(prompt.text).toContain('"inputIndex":0');
+    expect(prompt.text).toContain('"localTime":"2026-09-09 周三 08:00:01"');
     expect(
       prompt.variables.find((v) => v.name === "turn")?.informationIds,
     ).toEqual([turn.informationId]);
@@ -74,13 +94,37 @@ describe("Planner contract", () => {
     ).toBe(true);
   });
 
-  it("replays historical frozen turns that predate the backlog projection", () => {
+  it("renders historical speaker, message identity, reply relation and local time", () => {
+    const { atoms } = fixture(["CURRENT_INPUT"]);
+    const turn = atoms.find(
+      (entry) => entry.kind === "agent.turn.context.completed",
+    )!;
+    const history = atom("history-1", inboundTextInformationKind.kind, {
+      text: "HISTORICAL_INPUT",
+      source: {
+        adapterId: "adapter",
+        platform: "qq",
+        destination: { kind: "group", groupId: "group-1" },
+        senderId: "history-user",
+        selfId: "bot-1",
+        platformMessageId: "historical-message",
+        replyTo: { platformMessageId: "earlier-message" },
+      },
+    });
+    const prompt = compilePlannerPrompt(identity, [...atoms, history], turn);
+    expect(prompt.text).toContain('"speaker":"history-user"');
+    expect(prompt.text).toContain('"platformMessageId":"historical-message"');
+    expect(prompt.text).toContain('"replyTo":"earlier-message"');
+    expect(prompt.text).toContain('"localTime":"2026-09-09 周三 08:00:01"');
+  });
+
+  it("requires and renders the frozen backlog projection", () => {
     const { atoms } = fixture(["LEGACY_INPUT"]);
     const turn = atoms.find(
       (atom) => atom.kind === "agent.turn.context.completed",
     )!;
     const prompt = compilePlannerPrompt(identity, atoms, turn);
-    expect(prompt.text).toContain('"backlog":null');
+    expect(prompt.text).toContain('"backlog":{"isBacklog":false');
     expect(prompt.text).toContain("LEGACY_INPUT");
   });
 });

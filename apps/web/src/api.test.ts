@@ -35,7 +35,12 @@ const profile = {
   name: "default",
   inboundAllowlist: [],
   outboundAllowlist: [],
-  identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
+  identity: {
+    name: "Kaguya",
+    aliases: ["辉夜"],
+    persona: "test",
+    timeZone: "Asia/Shanghai",
+  },
   ai: { providers: [] },
   memory: { enabled: false },
   platforms: [],
@@ -44,7 +49,12 @@ const replacement = {
   name: "default",
   inboundAllowlist: ["qq:private:112233"],
   outboundAllowlist: ["qq:private:112233"],
-  identity: { name: "Kaguya", aliases: ["辉夜"], persona: "test" },
+  identity: {
+    name: "Kaguya",
+    aliases: ["辉夜"],
+    persona: "test",
+    timeZone: "Asia/Shanghai",
+  },
   acknowledgedWarnings: [],
   ai: {
     defaultProviderId: "provider",
@@ -284,23 +294,21 @@ describe("configuration application client", () => {
 });
 
 it("Profile 保存失败保留服务端字段路径", async () => {
-  const request = vi
-    .fn<typeof fetch>()
-    .mockResolvedValue(
-      Response.json(
-        {
-          error: {
-            code: "invalid_request",
-            message: "invalid",
-            requestId: "fixture",
-            fieldErrors: [
-              { path: "identity.aliases.0", message: "字段约束错误" },
-            ],
-          },
+  const request = vi.fn<typeof fetch>().mockResolvedValue(
+    Response.json(
+      {
+        error: {
+          code: "invalid_request",
+          message: "invalid",
+          requestId: "fixture",
+          fieldErrors: [
+            { path: "identity.aliases.0", message: "字段约束错误" },
+          ],
         },
-        { status: 400 },
-      ),
-    );
+      },
+      { status: 400 },
+    ),
+  );
   await expect(
     replaceProfile(config, "default", replacement, request),
   ).rejects.toMatchObject({

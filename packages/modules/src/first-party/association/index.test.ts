@@ -73,6 +73,13 @@ describe("associationModule", () => {
     );
     const turn = atom("turn-1", turnContextCompletedInformationKind.kind, {
       asOf: first.occurredAt,
+      backlog: {
+        isBacklog: false,
+        evaluatedAt: first.occurredAt,
+        oldestInputAgeMs: 0,
+        newestInputAgeMs: 0,
+        thresholdMs: 120_000,
+      },
       inputs: [
         { informationId: first.informationId },
         { informationId: last.informationId },
@@ -89,6 +96,11 @@ describe("associationModule", () => {
           contextInformationId: turn.informationId,
         },
         memoryInformationIds: [],
+        composition: {
+          focusInformationIds: [first.informationId],
+          topic: "问题与补充",
+          replyAct: "回答",
+        },
       },
     );
     const related = vi

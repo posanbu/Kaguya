@@ -175,6 +175,11 @@ export const agentIdentitySchema = z
       .min(1)
       .transform((aliases) => [...new Set(aliases)]),
     persona: z.string().trim().min(1),
+    timeZone: z
+      .string()
+      .trim()
+      .min(1)
+      .refine(isIanaTimeZone, "Agent timeZone must be a valid IANA time zone"),
   })
   .superRefine((identity, context) => {
     for (const [position, alias] of identity.aliases.entries()) {
@@ -191,9 +196,19 @@ export const agentIdentitySchema = z
 export const DEFAULT_AGENT_IDENTITY: z.infer<typeof agentIdentitySchema> = {
   name: "Kaguya",
   aliases: ["辉夜"],
+  timeZone: "Asia/Shanghai",
   persona:
     "是人类，正在上网和群友聊天。你的风格平淡简短，使用自然、日常、口语化的中文。可以参考贴吧、知乎和微博的回复风格；不浮夸，不长篇大论，不堆砌修辞和复杂句。优先用少量文字回应当前最重要的话题，不复述对方的问题。",
 };
+
+function isIanaTimeZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value }).format(0);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 const runtimeGatewayAllowlistSchema = z.array(z.string());
 
