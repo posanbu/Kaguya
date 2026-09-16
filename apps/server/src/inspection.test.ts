@@ -57,6 +57,7 @@ describe("developer inspection", () => {
     await runtime.close();
     const service = createInspectionService({
       ledger: database.information,
+      database,
       modules: () => modules,
       secrets: { gatewayToken: token, apiKey: "provider-secret-value" },
     });
@@ -213,6 +214,125 @@ describe("developer inspection", () => {
     ).toContain("b");
     expect(JSON.stringify(await database.information.get("b"))).toBe(original);
     expect((await get("atoms/missing")).statusCode).toBe(404);
+  });
+  it("shows frozen gate evidence, filters by registered view and binds pagination to it", async () => {
+    for (const [id, source, score] of [
+      ["gate-a", "module:attention-arousal.default", 52],
+      ["gate-b", "module:historical-gate", 85],
+    ] as const) {
+      await database.information.append(
+        freezeInformationAtom({
+          informationId: id,
+          kind: "agent.attention.arousal.completed",
+          occurredAt: time,
+          source,
+          payload: {
+            outcome: score < 80 ? "defer" : "attend",
+            score,
+            threshold: 80,
+            reasonCodes: ["score-below-threshold"],
+            components: { relevance: 25, content: 20 },
+            text: "x".repeat(795) + token + " trailing text",
+            settingsDigest: "historical-v1",
+          },
+          references: [],
+        }),
+        [],
+      );
+    }
+    const query =
+      "atoms?definitionId=agent.attention.arousal&view=gates&limit=1";
+    const response = await get(query);
+    expect(response.statusCode).toBe(200);
+    const first = response.json().data;
+    expect(first.items[0].informationId).toBe("gate-b");
+    expect(first.items[0].presentation.fields).toContainEqual({
+      label: "当时阈值",
+      value: 80,
+    });
+    expect(first.items[0].presentation.fields).toContainEqual({
+      label: "设置版本",
+      value: "historical-v1",
+    });
+    // 必须先脱敏再截断；摘要边界处也不能泄露已知秘密的前半段。
+    expect(response.body).not.toContain("inspection-gateway");
+    const second = (
+      await get(query + "&cursor=" + encodeURIComponent(first.nextCursor))
+    ).json().data;
+    expect(second.items[0].informationId).toBe("gate-a");
+    expect(second.nextCursor).toBeNull();
+    expect(
+      (await get(query + "&source=module:attention-arousal.default")).json()
+        .data.items[0].informationId,
+    ).toBe("gate-a");
+    expect((await get(query + "&source=module:other")).statusCode).toBe(400);
+    expect((await get(query + "&kind=core.memory.text")).statusCode).toBe(400);
+    expect(
+      (
+        await get(
+          "atoms?definitionId=agent.expression&view=library&cursor=" +
+            encodeURIComponent(first.nextCursor),
+        )
+      ).statusCode,
+    ).toBe(400);
+    expect(
+      (await get("atoms?definitionId=agent.expression&view=missing"))
+        .statusCode,
+    ).toBe(404);
+    expect(
+      (await get("flows?definitionId=agent.expression&view=library"))
+        .statusCode,
+    ).toBe(400);
+    expect(
+      (await get(query + "&after=2026-09-12T00:00:00Z")).json().data.items,
+    ).toEqual([]);
+    const stored = await database.information.get("gate-a");
+    expect(stored!.payload.text).toContain(token);
+  });
+  it("reads real shared Memory documents while inactive and distinguishes missing vector storage", async () => {
+    const address = {
+      platform: "web",
+      adapterId: "web",
+      platformMessageId: "test",
+      accountId: "user",
+      destination: { kind: "web" as const },
+    };
+    for (const source of ["a", "b"])
+      await database.memory.put({
+        sourceInformationId: source,
+        sourceKind: "core.message.inbound.text",
+        content: "已存储原文 " + token,
+        occurredAt: time,
+        address: { ...address, platformMessageId: source },
+      });
+    const path = "modules/agent.memory.writeback/storage?limit=1";
+    expect((await get(path, false)).statusCode).toBe(401);
+    const response = await get(path);
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.body).not.toContain(token);
+    const first = response.json().data;
+    expect(first.items).toHaveLength(1);
+    expect(first.items[0].fields[0].value).toContain("已存储原文");
+    const second = (
+      await get(path + "&cursor=" + encodeURIComponent(first.nextCursor))
+    ).json().data;
+    expect(second.items[0].id).not.toBe(first.items[0].id);
+    expect(second.nextCursor).toBeNull();
+    expect(
+      (await get("modules/agent.memory.index/storage")).json().data.available,
+    ).toBe(false);
+    expect(
+      (await get("modules/agent.memory.index/storage?cursor=invalid"))
+        .statusCode,
+    ).toBe(400);
+    expect((await get(path.replace("limit=1", "limit=999"))).statusCode).toBe(
+      400,
+    );
+    expect((await get("modules/agent.expression/storage")).statusCode).toBe(
+      404,
+    );
+    expect((await database.memory.getBySource("a"))!.content).toContain(token);
   });
   it("keeps flows within one context, preserves reference edges and reports truncation", async () => {
     const response = await get("flows/ctx-a");

@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { KaguyaDatabase } from "./index.js";
 import { PGliteDatabase } from "./pglite-driver.js";
 import { PostgresMemoryVectorIndex } from "./memory-vector.js";
+import { inspectMemoryVectors } from "./memory-inspection.js";
 const databases: KaguyaDatabase[] = [];
 afterEach(async () => {
   for (const db of databases.splice(0)) await db.close();
@@ -50,6 +51,41 @@ async function create() {
   return { database, index, put };
 }
 describe("Memory pgvector projection", () => {
+  it("inspects actual index metadata with stable composite pagination and no vector contents", async () => {
+    const f = await create();
+    const doc = await f.put("inspection-source");
+    await f.index.putVector(doc.memoryId, identity, [1, 0]);
+    await f.index.putVector(
+      doc.memoryId,
+      { ...identity, revision: "v2" },
+      [0, 1],
+    );
+    const first = await inspectMemoryVectors(f.database.sql, { limit: 1 });
+    expect(first.available).toBe(true);
+    expect(first.items).toEqual([
+      {
+        memoryId: doc.memoryId,
+        sourceInformationId: "inspection-source",
+        ...identity,
+      },
+    ]);
+    const second = await inspectMemoryVectors(f.database.sql, {
+      limit: 1,
+      cursor: first.items[0]!,
+    });
+    expect(second.items[0]?.revision).toBe("v2");
+    expect(
+      await inspectMemoryVectors(f.database.sql, {
+        limit: 1,
+        cursor: second.items[0]!,
+      }),
+    ).toEqual({ available: true, items: [] });
+    expect(JSON.stringify(first)).not.toContain("embedding");
+    expect(
+      (await f.database.sql.query("SELECT * FROM memory_document_vectors"))
+        .rows,
+    ).toHaveLength(2);
+  });
   it("isolates model, revision and dimensions and replays idempotently", async () => {
     const f = await create();
     const doc = await f.put("coffee");

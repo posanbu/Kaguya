@@ -3,7 +3,9 @@
  * 主要职责：使用 Core registerOnce/commitTerminal 的原子槽位保证并发、重放和重启幂等；Web 匿名请求只产生
  * ephemeral 范围，不创建长期人物。代码库关系：消费 inbound kind，不读取 raw，也不依赖数据库查询投影。
  * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
+ * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
  */
+import { firstPartyInspection } from "../inspection.js";
 import { defineInformationModule, onInformation } from "@kaguya/sdk";
 import { z } from "@kaguya/schema";
 import {
@@ -26,6 +28,7 @@ export const identityModule = defineInformationModule({
     protocolVersion: 1,
     moduleVersion: "1.0.0",
     definitionId: "core.identity.normalize",
+    inspection: firstPartyInspection["core.identity.normalize"],
     displayName: "身份归一",
     summary: "将入站平台账号与会话解析为可追溯的稳定身份。",
     description:

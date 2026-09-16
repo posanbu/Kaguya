@@ -7,7 +7,9 @@
  * 选择最新完整快照并核对直接证据，返回可由 Core 再次加载的 Memory atom ID。
  * provider 超时/暂时错误交给 Reliable Runner，source/schema 失败关闭；后台链不触发在线回合。
  * 展示契约：中文名称与职责说明由定义直接提供给 Inspection 和 WebUI，稳定 kind 与协议字段保持不变。
+ * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
  */
+import { firstPartyInspection } from "../inspection.js";
 import {
   awaitWithSignal,
   cognitionIdentitySchema,
@@ -177,6 +179,7 @@ export const memoryCognitionModule = defineInformationModule({
     protocolVersion: 1,
     moduleVersion: "1.0.0",
     definitionId: "agent.memory.cognition",
+    inspection: firstPartyInspection["agent.memory.cognition"],
     displayName: "记忆认知快照",
     summary: "通过可替换的认知提供方生成有来源证据的快照。",
     description:

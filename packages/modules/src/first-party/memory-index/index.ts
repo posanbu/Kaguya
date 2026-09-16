@@ -5,7 +5,9 @@
  * worker 仅从 MemoryDocumentReader 读取持久化正文，验证冻结模型身份后调用 embedding/vector capability；
  * 模型切换保留旧任务为 superseded，新的 revision 独立回填；不产生任何在线回合信号。
  * 展示契约：中文名称与职责说明由定义直接提供给 Inspection 和 WebUI，稳定 kind 与协议字段保持不变。
+ * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
  */
+import { firstPartyInspection } from "../inspection.js";
 import {
   awaitWithSignal,
   embeddingCapability,
@@ -120,6 +122,7 @@ export const memoryIndexModule = defineInformationModule({
     protocolVersion: 1,
     moduleVersion: "1.0.0",
     definitionId: "agent.memory.index",
+    inspection: firstPartyInspection["agent.memory.index"],
     displayName: "记忆向量索引",
     summary: "为原始记忆建立按模型版本隔离的可恢复向量。",
     description:

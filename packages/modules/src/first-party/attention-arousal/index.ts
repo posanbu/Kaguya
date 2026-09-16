@@ -4,7 +4,9 @@
  * 主要职责：执行不可绕过的硬门禁和 MaiBot 风格的确定性 0–100 显著性评分。
  * 代码库关系：只消费 Heartflow 冻结的 turn context，并提交 claim 的唯一注意唤起终态；eligible 使用独立 attention 命名空间；非 eligible 直接提交廉价等待或静默决策。
  * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
+ * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
  */
+import { firstPartyInspection } from "../inspection.js";
 import { z } from "@kaguya/schema";
 import { defineInformationModule, onInformation } from "@kaguya/sdk";
 
@@ -191,6 +193,7 @@ export const attentionArousalModule = defineInformationModule({
     protocolVersion: 1,
     moduleVersion: "1.0.0",
     definitionId: "agent.attention.arousal",
+    inspection: firstPartyInspection["agent.attention.arousal"],
     displayName: "注意力唤醒",
     summary: "评估冻结回合是否值得关注、延后或忽略。",
     description:

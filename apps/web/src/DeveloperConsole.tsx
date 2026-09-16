@@ -6,6 +6,7 @@
  * 主要职责：DeveloperConsole 维护页面导航及手动刷新；ModulePage 按路径展示紧凑总览或独立详情；
  * Atoms 提供过滤、游标页和详情；Flows 按 runtime context 展示可点击 DAG 或时间列表；
  * Detail 支持完整脱敏 payload/Prompt、正反引用导航及复制 ID；useInspection 取消过期请求。
+ * 模块页注入复用的 Detail；列表展示语义摘要，详情默认可读字段，原始 JSON/Prompt 按需展开。
  * 代码库关系：App.tsx 处理 history 与锁屏，api.ts 复用 Gateway 认证并用 schema 包验证 DTO；
  * developer.css 定义响应式布局，模块和 Kind 名称完全由 Manifest 提供。
  * 输入输出与副作用：仅 GET 请求、history 导航和用户触发的剪贴板写入；无轮询、编辑或重放；
@@ -14,7 +15,13 @@
 import { FlowSummary } from "./FlowSummary.js";
 import { ModuleTemplatesSection } from "./ModuleTemplatesSection.js";
 import { ModuleSettingsSection } from "./ModuleSettingsSection.js";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useRef, useMemo, useState, type FormEvent } from "react";
+import { useInspection } from "./use-inspection.js";
+import {
+  InspectionFields,
+  InspectionStatus,
+  ReadableValue,
+} from "./InspectionFields.js";
 import {
   inspectionModulesSchema,
   inspectionPageSchema,
@@ -28,7 +35,6 @@ import {
   moduleDefinitionId,
   navigateModuleLink,
 } from "./ModulePages.js";
-import { getInspection } from "./api.js";
 import "./developer.css";
 import { Button, FieldMessage, PageHeader } from "./components/ui.js";
 
@@ -42,35 +48,6 @@ export function developerPage(path: string): Page | undefined {
       : /^\/developer\/flows\/?$/.test(path)
         ? "flows"
         : undefined;
-}
-function useInspection<T>(
-  token: string,
-  path: string | undefined,
-  schema: { parse(value: unknown): T },
-  revision: number,
-) {
-  const [state, setState] = useState<{ key: string; data?: T; error?: string }>(
-    { key: "" },
-  );
-  const key = `${path}:${revision}:${token}`;
-  useEffect(() => {
-    if (path === undefined) return;
-    const controller = new AbortController();
-    void getInspection({ token }, path, schema, controller.signal).then(
-      (data) => {
-        if (!controller.signal.aborted) setState({ key, data });
-      },
-      (error) => {
-        if (!controller.signal.aborted)
-          setState({
-            key,
-            error: error instanceof Error ? error.message : "读取失败",
-          });
-      },
-    );
-    return () => controller.abort();
-  }, [token, path, schema, revision, key]);
-  return state.key === key ? state : { key };
 }
 function Status({ state }: { state: { data?: unknown; error?: string } }) {
   return state.error ? (
@@ -135,6 +112,8 @@ export function DeveloperConsole({
             path={path}
             token={token}
             state={modules}
+            revision={revision}
+            DetailComponent={Detail}
             SettingsSection={ModuleSettingsSection}
             TemplatesSection={ModuleTemplatesSection}
           />
@@ -215,11 +194,23 @@ function AtomList({
             aria-pressed={selected === a.informationId}
             onClick={() => select(a.informationId)}
           >
-            <strong>{names.get(a.kind) ?? a.kind}</strong>
-            <code>{a.kind}</code>
+            <strong>
+              {a.presentation?.title ?? names.get(a.kind) ?? a.kind}
+            </strong>
+            {a.presentation?.status && (
+              <InspectionStatus value={a.presentation.status} />
+            )}
+            {a.presentation?.fields[0] && (
+              <span>
+                {a.presentation.fields[0].label}：
+                {typeof a.presentation.fields[0].value === "string"
+                  ? a.presentation.fields[0].value.slice(0, 120)
+                  : "查看详情"}
+              </span>
+            )}
             <time>{new Date(a.occurredAt).toLocaleString()}</time>
             <span>{a.source}</span>
-            <code>{a.informationId}</code>
+            <code title={a.informationId}>{a.informationId.slice(0, 8)}</code>
           </Button>
         </li>
       ))}
@@ -340,6 +331,13 @@ function Detail({
     revision,
   );
   const [copied, setCopied] = useState("");
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (state.data && window.matchMedia("(max-width: 900px)").matches) {
+      heading.current?.focus();
+      heading.current?.scrollIntoView({ block: "start" });
+    }
+  }, [state.data]);
   if (selected === undefined)
     return <aside className="developer-card">选择消息或图节点查看详情。</aside>;
   const detail = state.data;
@@ -357,7 +355,9 @@ function Detail({
       : undefined;
   return (
     <aside className="developer-card atom-detail">
-      <h2>消息详情</h2>
+      <h2 ref={heading} tabIndex={-1}>
+        消息详情
+      </h2>
       <Status state={state} />
       {detail && (
         <>
@@ -380,14 +380,25 @@ function Detail({
             {detail.atom.kind} · {detail.atom.source}
           </p>
           <time>{new Date(detail.atom.occurredAt).toLocaleString()}</time>
-          {promptText !== undefined && (
-            <section>
-              <h3>编译 Prompt</h3>
-              <pre>{promptText}</pre>
-            </section>
+          {detail.atom.presentation?.status && (
+            <InspectionStatus value={detail.atom.presentation.status} />
           )}
-          <h3>完整消息</h3>
-          <pre>{JSON.stringify(detail.atom.payload, null, 2)}</pre>
+          <h3>{detail.atom.presentation?.title ?? "记录内容"}</h3>
+          <InspectionFields fields={detail.atom.presentation?.fields ?? []} />
+          {promptText !== undefined && (
+            <details>
+              <summary>编译 Prompt</summary>
+              <pre>{promptText}</pre>
+            </details>
+          )}
+          <details>
+            <summary>全部字段</summary>
+            <ReadableValue value={detail.atom.payload} />
+          </details>
+          <details>
+            <summary>原始 JSON（已脱敏）</summary>
+            <pre>{JSON.stringify(detail.atom.payload, null, 2)}</pre>
+          </details>
           <h3>引用的消息</h3>
           {!detail.atom.references.length && <p>无</p>}
           {detail.atom.references.map((r, i) => (
@@ -410,7 +421,7 @@ function Detail({
               key={a.informationId}
               onClick={() => select(a.informationId)}
             >
-              {a.kind} · {a.informationId}
+              {a.presentation?.title ?? a.kind} · {a.informationId.slice(0, 8)}
             </Button>
           ))}
           {detail.reverseReferencesTruncated && (
@@ -434,7 +445,7 @@ function Flows({
   const [cursors, setCursors] = useState<string[]>([]);
   const [context, setContext] = useState<string>();
   const [selected, select] = useState<string>();
-  const [graph, setGraph] = useState(true);
+  const [graph, setGraph] = useState(false);
   const contexts = useInspection(
     token,
     `flows?${query}${cursors.length ? `&cursor=${encodeURIComponent(cursors.at(-1)!)}` : ""}`,

@@ -9,6 +9,7 @@
  * 提供事务与 query 抽象，`schema.ts` 则初始化或验证表结构、索引和 mutation 触发器。
  * 输入输出与副作用：写入全部在数据库事务中完成，冲突和引用错误映射为稳定错误类型；
  * inspectPage 为控制台提供时间/ID 复合游标和有界反向引用查询，不修改业务 find/query。
+ * kinds 支持模块视图的多 Kind 过滤，与单 Kind/source/时间条件取交集，先过滤再分页。
  * lifecycle 投影支持开放集合、scope 索引和注册位置水位；原子追加及 status-of 关闭在同一事务提交。
  * 读取返回经过 schema 校验并深冻结的 atom，不允许通过返回值修改持久化事实。
  */
@@ -173,6 +174,7 @@ export class InformationRepository implements InformationLedger {
   async inspectPage(query: {
     readonly limit: number;
     readonly kind?: string;
+    readonly kinds?: readonly string[];
     readonly source?: string;
     readonly after?: string;
     readonly before?: string;
@@ -194,6 +196,8 @@ export class InformationRepository implements InformationLedger {
       const predicates: string[] = [];
       if (query.kind !== undefined)
         predicates.push(`a.kind = ${bind(query.kind)}`);
+      if (query.kinds !== undefined)
+        predicates.push(`a.kind = ANY(${bind([...query.kinds])}::text[])`);
       if (query.source !== undefined)
         predicates.push(`a.source = ${bind(query.source)}`);
       if (query.after !== undefined)

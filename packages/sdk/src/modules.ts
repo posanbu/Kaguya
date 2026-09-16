@@ -1,6 +1,7 @@
 /**
  * ModuleRegistrationInput.openScope 为 registerOnce 声明开放范围及释放终态组，仍由 Core 验证并提交。
  * promptTemplates 显式声明模块模板归属，Catalog 冻结其变量、partial 与组成关系。
+ * inspection 显式声明领域视图、字段和机制；校验后冻结，供 Host 只读投影，不提供任意查询执行。
  * 功能概述：定义唯一版本化模块协议、显式 Catalog 与受控能力边界，供模块作者和 Host 共用。
  * 主要职责：defineInformationModule 校验静态清单；Catalog 确定性合并并拒绝身份冲突；
  * capability token 保持命名空间和版本身份；onInformation 声明稳定订阅及投递语义。
@@ -15,8 +16,9 @@ import type {
   InformationId,
   InformationReference,
   JsonObject,
+  ModuleInspection,
 } from "@kaguya/schema";
-import { z } from "@kaguya/schema";
+import { z, moduleInspectionSchema } from "@kaguya/schema";
 import {
   defineInformationKind,
   type InformationKindDefinition,
@@ -125,6 +127,8 @@ export interface ModulePromptTemplateDefinition {
   readonly composes: readonly string[];
 }
 export interface InformationModuleManifest<TSettings = unknown> {
+  /** 只读领域检查声明；不含 settings 值、动态查询代码或凭据。 */
+  readonly inspection?: DeepReadonly<ModuleInspection>;
   readonly protocolVersion: 1;
   readonly definitionId: string;
   readonly moduleVersion: string;
@@ -234,6 +238,12 @@ export function defineInformationModule<TSettings>(
   definition: InformationModuleDefinition<TSettings>,
 ): InformationModuleDefinition<TSettings> {
   const m = definition.manifest;
+  if (m.inspection) {
+    moduleInspectionSchema.parse(m.inspection);
+    const ids = m.inspection.views.map((view) => view.id);
+    if (new Set(ids).size !== ids.length)
+      throw new Error("Duplicate inspection view id");
+  }
   assertId(m.definitionId, "module definition id");
   if (typeof m.displayName !== "string" || !m.displayName.trim())
     throw new Error("module display name must not be empty");
@@ -333,6 +343,25 @@ export function defineInformationModule<TSettings>(
     ...definition,
     manifest: Object.freeze({
       ...m,
+      ...(m.inspection
+        ? {
+            inspection: Object.freeze({
+              ...m.inspection,
+              mechanism: Object.freeze([...m.inspection.mechanism]),
+              views: Object.freeze(
+                m.inspection.views.map((v) =>
+                  Object.freeze({
+                    ...v,
+                    kinds: Object.freeze([...v.kinds]),
+                    fields: Object.freeze(
+                      v.fields.map((f) => Object.freeze({ ...f })),
+                    ),
+                  }),
+                ),
+              ),
+            }),
+          }
+        : {}),
       consumes: Object.freeze([...m.consumes]),
       produces: Object.freeze([...m.produces]),
       selectors: Object.freeze(

@@ -6,7 +6,9 @@
  * 数据库瞬时故障留给 Reliable Runner 重试/耗尽，关闭时不取消 pending request。
  * 输入输出与副作用：只持久化 inbound 文本；request/terminal 不复制正文，身份只作关联而非主键。
  * 展示契约：中文名称与职责说明由定义直接提供给 Inspection 和 WebUI，稳定 kind 与协议字段保持不变。
+ * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
  */
+import { firstPartyInspection } from "../inspection.js";
 import {
   InvalidMemoryInputError,
   MemorySourceConflictError,
@@ -121,6 +123,7 @@ export const memoryWritebackModule = defineInformationModule({
     protocolVersion: 1,
     moduleVersion: "1.0.0",
     definitionId: "agent.memory.writeback",
+    inspection: firstPartyInspection["agent.memory.writeback"],
     displayName: "原始记忆写回",
     summary: "将入站原文可靠保存到独立记忆存储。",
     description:

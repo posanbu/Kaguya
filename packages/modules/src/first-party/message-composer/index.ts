@@ -11,7 +11,9 @@
  * 输入输出与副作用：意图只携带 target、turn 与 memoryInformationIds；assistant.source 保留 target，
  * 不复制入站正文或消息 ID，不提供固定路由或自动引用回复。失败或取消的模型任务不产生 assistant。
  * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
+ * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
  */
+import { firstPartyInspection } from "../inspection.js";
 import { expressionSelected, expressionReady } from "../expression/facts.js";
 import {
   expressionDispatchSelector,
@@ -288,6 +290,7 @@ export function createMessageComposerModule<
       ],
       provides: [],
       definitionId: "agent.message-composer",
+      inspection: firstPartyInspection["agent.message-composer"],
       displayName: "消息合成",
       summary: "根据显式选定的冻结上下文生成待投递正文。",
       description:

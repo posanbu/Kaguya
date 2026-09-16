@@ -1,12 +1,16 @@
 /**
  * 功能概述：检查区模块紧凑总览与独立详情页，展示内容直接取自 Inspection 的定义元数据。
  * 主要职责：moduleDetailPath/moduleDefinitionId 编解码稳定 ID；ModuleOverview 提供搜索和原生链接；
- * ModuleDetails 展示职责与输入输出并折叠技术信息，ModulePage 统一处理加载、不可用、空列表和未找到。
+ * ModuleDetails 优先挂载运行检查，职责、输入输出与配置按需展开；ModulePage 处理不可用和未找到。
  * 代码库关系：DeveloperConsole 传入已校验的模块数据和当前路径；ModuleLink 使用 AppShell 导航守卫；
  * ModuleEditorProps 仅将 definitionId/token 交给可选 SettingsSection/TemplatesSection，不预定义编辑 DTO。
  * 输入输出与副作用：只读展示，普通点击走工作台导航，修饰键和新标签保持浏览器行为；不保存 Token 或应用配置。
  */
 import { ModuleTopology } from "./ModuleTopology.js";
+import {
+  ModuleRuntimeSection,
+  type InspectionDetailProps,
+} from "./ModuleRuntimeSection.js";
 import { LayoutGrid, GitBranch } from "lucide-react";
 import {
   useEffect,
@@ -86,6 +90,8 @@ export interface ModuleEditorProps {
   readonly token: string;
 }
 export interface ModuleDetailSections {
+  readonly DetailComponent?: ComponentType<InspectionDetailProps>;
+  readonly revision?: number;
   readonly SettingsSection?: ComponentType<ModuleEditorProps>;
   readonly TemplatesSection?: ComponentType<ModuleEditorProps>;
 }
@@ -187,6 +193,8 @@ export function ModuleDetails({
   token,
   SettingsSection,
   TemplatesSection,
+  DetailComponent,
+  revision = 0,
 }: { module: InspectionModule; token: string } & ModuleDetailSections) {
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
@@ -207,49 +215,60 @@ export function ModuleDetails({
           <code>{module.definitionId}</code>
         </p>
       </header>
-      <section aria-label="模块职责" className="developer-card">
-        <h3>模块职责</h3>
-        <p>{module.description}</p>
-      </section>
-      <div className="module-kind-columns">
-        {(["consumes", "produces"] as const).map((field, index) => (
-          <section
-            className="developer-card"
-            key={field}
-            aria-label={index ? "输出信息" : "输入信息"}
-          >
-            <h3>
-              {index ? "输出信息" : "输入信息"} · {module[field].length}
-            </h3>
-            {module[field].length ? (
-              <ul className="module-kind-list">
-                {module[field].map((kind) => (
-                  <li key={kind.kind}>
-                    <details>
-                      <summary>{kind.displayName}</summary>
-                      <p>{kind.description}</p>
-                      <code>{kind.kind}</code>
-                    </details>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p>没有声明{index ? "输出" : "输入"}信息。</p>
-            )}
-          </section>
-        ))}
-      </div>
-      {SettingsSection && (
-        <section className="developer-card" aria-label="模块配置">
-          <h3>模块配置</h3>
-          <SettingsSection definitionId={module.definitionId} token={token} />
+      {module.inspection && DetailComponent && (
+        <ModuleRuntimeSection
+          module={module}
+          token={token}
+          revision={revision}
+          DetailComponent={DetailComponent}
+        />
+      )}
+      <details className="developer-card">
+        <summary>模块职责与输入输出</summary>
+        <section aria-label="模块职责">
+          <h3>模块职责</h3>
+          <p>{module.description}</p>
         </section>
+        <div className="module-kind-columns">
+          {(["consumes", "produces"] as const).map((field, index) => (
+            <section
+              className="developer-card"
+              key={field}
+              aria-label={index ? "输出信息" : "输入信息"}
+            >
+              <h3>
+                {index ? "输出信息" : "输入信息"} · {module[field].length}
+              </h3>
+              {module[field].length ? (
+                <ul className="module-kind-list">
+                  {module[field].map((kind) => (
+                    <li key={kind.kind}>
+                      <details>
+                        <summary>{kind.displayName}</summary>
+                        <p>{kind.description}</p>
+                        <code>{kind.kind}</code>
+                      </details>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p>没有声明{index ? "输出" : "输入"}信息。</p>
+              )}
+            </section>
+          ))}
+        </div>
+      </details>
+      {SettingsSection && (
+        <details className="developer-card" aria-label="模块配置">
+          <summary>模块配置</summary>
+          <SettingsSection definitionId={module.definitionId} token={token} />
+        </details>
       )}
       {TemplatesSection && (
-        <section className="developer-card" aria-label="提示词模板">
-          <h3>提示词模板</h3>
+        <details className="developer-card" aria-label="提示词模板">
+          <summary>提示词模板</summary>
           <TemplatesSection definitionId={module.definitionId} token={token} />
-        </section>
+        </details>
       )}
       <details className="developer-card">
         <summary>Prompt renderer · {module.promptRenderers.length}</summary>
@@ -268,22 +287,61 @@ export function ModuleDetails({
       </details>
       <details className="developer-card">
         <summary>Selector、Capability、绑定与诊断</summary>
-        <pre>
-          {JSON.stringify(
-            {
-              moduleVersion: module.moduleVersion,
-              protocolVersion: module.protocolVersion,
-              selectors: module.selectors,
-              requires: module.requires,
-              provides: module.provides,
-              bindings: module.bindings,
-              diagnostics: module.diagnostics,
-              settingsSchemaFingerprint: module.settingsSchemaFingerprint,
-            },
-            null,
-            2,
-          )}
-        </pre>
+        <dl className="inspection-fields">
+          <div>
+            <dt>模块 / 协议版本</dt>
+            <dd>
+              {module.moduleVersion} / {module.protocolVersion}
+            </dd>
+          </div>
+          <div>
+            <dt>上下文选择器</dt>
+            <dd>{module.selectors.join("、") || "无"}</dd>
+          </div>
+          <div>
+            <dt>所需能力</dt>
+            <dd>
+              {module.requires
+                .map((c) => `${c.id} · v${c.apiVersion}`)
+                .join("、") || "无"}
+            </dd>
+          </div>
+          <div>
+            <dt>提供能力</dt>
+            <dd>
+              {module.provides
+                .map((c) => `${c.id} · v${c.apiVersion}`)
+                .join("、") || "无"}
+            </dd>
+          </div>
+          <div>
+            <dt>实例绑定</dt>
+            <dd>
+              {module.bindings.map((b) => (
+                <section key={b.instanceId}>
+                  <code>{b.instanceId}</code>
+                  <ul>
+                    {b.capabilities.map((c) => (
+                      <li key={c.capabilityId}>
+                        {c.capabilityId} → {c.provider}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ))}
+            </dd>
+          </div>
+          <div>
+            <dt>诊断事件声明</dt>
+            <dd>{module.diagnostics.join("、") || "无"}</dd>
+          </div>
+          <div>
+            <dt>设置 schema 指纹</dt>
+            <dd>
+              <code>{module.settingsSchemaFingerprint}</code>
+            </dd>
+          </div>
+        </dl>
       </details>
     </article>
   );

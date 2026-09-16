@@ -9,6 +9,7 @@
  * 代码库关系：Runtime 业务装配统一来自 @kaguya/composition；createMessageCatalog/createMessageComposition 装配消息编写模块；AdapterHost
  * 启动及显式应用将生效出站 GatewayAllowlist 注入 Runtime，出站恢复领取使用所属配置策略。
  * 管理适配器；inspectModules 和账本只读端口交给 inspection.ts，配置仅用于秘密脱敏闭包。
+ * 检查服务持有当前数据库的只读文档/向量入口，随运行时应用刷新，未就绪期间不提供检查。
  * 启动只接受严格 v1 Registry，不自动迁移旧配置；用户须先手动更新配置。
  * ConfigurationApplication 保留 HTTP/Token/数据库，串行替换完整 Runtime/AdapterHost；
  * Web、状态与 Inspection 通过动态门面读取当前实例，关闭失败禁止创建第二个活跃宿主。
@@ -352,6 +353,7 @@ export async function startKaguyaServer(
         activeRuntime && database
           ? createInspectionService({
               ledger: database.information,
+              database,
               modules: () => activeRuntime.inspectModules(),
               secrets: secretHistory,
             })

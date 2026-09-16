@@ -9,6 +9,7 @@
  * 输入输出与副作用：设置 parse 后深冻结；回滚取消全部 prepared activation，关闭有界排空 live handler；
  * 每个 stop/dispose hook 都受 drainTimeoutMs 限制，超时记录实例与钩子名称并继续逆序清理，
  * 拒绝迟到写入并聚合清理错误；inspect 仅包含哈希、身份、声明与绑定，不暴露配置值。
+ * inspect 同时投影模块拥有的静态检查视图，历史和存储查询由 Server 的只读端口执行。
  */
 import { createHash } from "node:crypto";
 import {
@@ -654,6 +655,7 @@ export class ModuleHost {
       .map(({ manifest }) => ({
         definitionId: manifest.definitionId,
         displayName: manifest.displayName,
+        ...(manifest.inspection ? { inspection: manifest.inspection } : {}),
         summary: manifest.summary,
         description: manifest.description,
         moduleVersion: manifest.moduleVersion,
