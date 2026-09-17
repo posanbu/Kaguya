@@ -69,6 +69,9 @@ describe("Planner contract", () => {
     );
     const prompt = compilePlannerPrompt(identity, testAtoms, turn);
     expect(prompt.text).toContain(identity.persona);
+    expect(prompt.variables.find((v) => v.name === "identity")?.content).toBe(
+      `名字：${identity.name}\n别名：${identity.aliases.join("、")}\n时区：${identity.timeZone}\n人设：\n${identity.persona}`,
+    );
     expect(prompt.text).toContain("FIRST_SENTINEL");
     expect(prompt.text).toContain("LAST_SENTINEL");
     expect(prompt.text).toContain("不可信数据");

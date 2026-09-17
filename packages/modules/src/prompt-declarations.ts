@@ -49,7 +49,8 @@ export const DEFAULT_PLANNER_TEMPLATE = `你是 Agent 的规划器。必要性�
 {"action":"silent","reason":"no-response-needed"或"already-addressed"或"avoid-interruption"或"topic-expired"}
 等待次数不得超过 turn.totalWaitBudget，预算耗尽时选择 silent。
 当前时间：{{current_time}}
-身份：{{identity}}
+身份：
+{{identity}}
 同范围历史（assistant 仅含成功投递）：{{history}}
 可选记忆：{{memory}}
 当前冻结 turn：{{turn}}

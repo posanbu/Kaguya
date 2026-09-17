@@ -4,6 +4,7 @@
  * 主要职责：plannerActionSchema 严格限制动作及原因；plannerDecisionInformationKind 持久化唯一分派结果；
  * plannerContextSelector 复用 Composer 的同范围成功投递历史过滤与冻结记忆授权；compilePlannerPrompt
  * 选择器同时授权已持久化的任务上下文，恢复时复用首次请求，迟到消息不改变重放 Prompt。
+ * 身份以可读段落（名字/别名/时区/人设）渲染注入，不做 JSON 转储。
  * 读取身份、规则、历史、记忆和全部冻结输入，输出带变量溯源的 route Prompt，只能引用宿主冻结候选，不允许生成原始目标 ID。
  * 代码库关系：Heartflow 调用通用 Model Task 并以 claim 竞争决策锁；Composer 仅处理获胜 message 意图。
  * 输入输出与副作用：模型只有 message/wait/silent 三个分支，故障原因由宿主写入；选择器只读账本，
@@ -260,7 +261,7 @@ export function compilePlannerPrompt(
       content: JSON.stringify(conversation?.payload ?? {}),
       informationIds: conversation ? [conversation.informationId] : [],
     },
-    { name: "identity", content: JSON.stringify(identity), informationIds: [] },
+    { name: "identity", content: renderIdentity(identity), informationIds: [] },
     {
       name: "history",
       content: JSON.stringify(
@@ -338,4 +339,13 @@ export function compilePlannerPrompt(
       content: promptTemplate,
     },
   })(values);
+}
+function renderIdentity(identity: AgentIdentity): string {
+  return [
+    `名字：${identity.name}`,
+    `别名：${identity.aliases.join("、")}`,
+    `时区：${identity.timeZone}`,
+    "人设：",
+    identity.persona,
+  ].join("\n");
 }
