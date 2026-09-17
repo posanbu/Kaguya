@@ -6,7 +6,9 @@
  * heartbeatObservationSelector 只读取开放集合与最近水位；开放期间入站账本即待观察集合。
  * due 用事务 openScope 注册唯一候选；终态 resume 合并期间新输入，只安排一次后续观察。
  * isImmediateObservation 识别私聊、@ 与回复机器人；普通群消息保留首个稀疏观察时刻，避免连续输入饿死。
+ * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
  */
+import { firstPartyInspection } from "../inspection.js";
 import { z } from "@kaguya/schema";
 import { defineInformationModule, onInformation } from "@kaguya/sdk";
 import {
@@ -91,6 +93,7 @@ export const heartbeatModule = defineInformationModule({
     protocolVersion: 1,
     moduleVersion: "1.0.0",
     definitionId: "agent.heartbeat.short",
+    inspection: firstPartyInspection["agent.heartbeat.short"],
     displayName: "持久化短心跳",
     summary: "合并入站水位与等待信号，可靠唤醒稀疏观察。",
     description:

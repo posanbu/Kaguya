@@ -4,6 +4,7 @@
  * 主要职责：模块紧凑条目、独立详情与折叠技术信息、过滤器、列表/详情双栏、可滚动 SVG 图和可访问选中态。
  * 代码库关系：仅由 DeveloperConsole.tsx 引入，类名前缀避免影响 Profile 与聊天页面。
  * 输入输出与副作用：纯 CSS；窄屏折叠详情栏，长 ID/Prompt 换行并限制详情滚动高度。
+ * 领域记录按可读字段分组，移动端单栏，原始技术内容按需展开。
  */
 .developer-main {
   max-width: 1500px;
@@ -558,5 +559,168 @@
 @media (prefers-reduced-motion: reduce) {
   .module-entry {
     transition: none;
+  }
+}
+
+.module-runtime {
+  min-width: 0;
+}
+.module-details > header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 16px;
+}
+.module-details > header h2,
+.module-details > header p {
+  margin: 0;
+}
+.module-details > header p {
+  grid-column: 1 / -1;
+}
+.module-details > header > .wb-status {
+  grid-column: 2;
+  grid-row: 1;
+}
+.module-runtime .inspection-mechanism {
+  padding: 12px 16px;
+  margin: 0 0 18px;
+}
+.module-runtime .developer-split > .inspection-records {
+  max-height: 68vh;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+.inspection-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+.inspection-tabs [aria-pressed="true"] {
+  border-color: var(--kaguya-coral);
+  color: var(--kaguya-coral-strong);
+  background: var(--kaguya-paper-soft);
+}
+.inspection-muted,
+.inspection-records time,
+.inspection-records small {
+  color: var(--kaguya-muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.inspection-records {
+  list-style: none;
+  display: grid;
+  gap: 14px;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.inspection-records > li {
+  min-width: 0;
+}
+.inspection-records [data-selected="true"] {
+  border-color: var(--kaguya-coral);
+}
+.inspection-records header {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.inspection-records h4 {
+  margin: 0;
+  font-size: 15px;
+}
+.inspection-records small {
+  display: block;
+  margin-top: 12px;
+  overflow-wrap: anywhere;
+}
+.inspection-records .wb-button {
+  margin-top: 10px;
+}
+.inspection-fields {
+  display: grid;
+  gap: 12px;
+  margin: 16px 0;
+  min-width: 0;
+}
+.inspection-fields > div {
+  display: grid;
+  grid-template-columns: minmax(75px, 0.3fr) minmax(0, 1fr);
+  gap: 14px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--kaguya-line);
+}
+.inspection-fields dt {
+  font-size: 12px;
+  color: var(--kaguya-muted);
+  font-weight: 500;
+  line-height: 1.7;
+}
+.inspection-fields dd {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.inspection-fields .inspection-fields {
+  margin: 0;
+}
+.inspection-fields .inspection-fields > div {
+  display: block;
+}
+.inspection-value {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.inspection-values {
+  margin: 0;
+  padding-left: 16px;
+}
+.inspection-values li + li {
+  margin-top: 10px;
+}
+.inspection-mechanism {
+  margin-top: 20px;
+  font-size: 13px;
+  line-height: 1.9;
+}
+.atom-detail > details {
+  margin: 16px 0;
+}
+.atom-detail summary {
+  cursor: pointer;
+  font-size: 13px;
+}
+.flow-summary .flow-outcomes {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+.flow-summary .flow-outcomes li {
+  align-items: start;
+  text-align: left;
+  padding: 12px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 600px) {
+  .inspection-fields > div {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .inspection-records .developer-card {
+    padding: 16px;
+  }
+}
+@media (max-width: 900px) {
+  .module-runtime .developer-split > .inspection-records {
+    max-height: 55vh;
   }
 }

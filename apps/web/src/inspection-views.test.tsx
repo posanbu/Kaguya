@@ -1,13 +1,13 @@
 /**
  * 功能概述：验证诊断视图由真实 Manifest/Flow DTO 推导，不混淆定义、激活和已观察事实。
- * 拓扑测试覆盖方向与去重；阶段摘要测试保护截断视图不把缺失节点判定为运行失败。
+ * 拓扑测试覆盖方向与去重；阶段摘要不把缺失节点判定为失败，诊断导出不得夹带正文摘要。
  * 使用静态渲染检查语义和字段，浏览器视口布局由单独截图验证，无网络或平台副作用。
  */
 import { describe, it, expect } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { InspectionModule, InspectionFlow } from "@kaguya/schema";
 import { moduleConnections, ModuleTopology } from "./ModuleTopology.js";
-import { summarizeFlow, FlowSummary } from "./FlowSummary.js";
+import { summarizeFlow, FlowSummary, diagnosticTrace } from "./FlowSummary.js";
 const kind = {
   kind: "test.input",
   displayName: "输入事实",
@@ -59,6 +59,10 @@ it("summarizes observed stages without interpreting missing or truncated data as
         kind: "core.message.inbound.text",
         occurredAt: "2026-09-14T00:00:00Z",
         source: "test",
+        presentation: {
+          title: "入站",
+          fields: [{ label: "正文", value: "private-message" }],
+        },
       },
     ],
     edges: [],
@@ -70,4 +74,12 @@ it("summarizes observed stages without interpreting missing or truncated data as
   const html = renderToStaticMarkup(<FlowSummary flow={flow} />);
   expect(html).toContain("部分视图");
   expect(html).toContain("零计数仅表示未观察到该阶段");
+  const trace = diagnosticTrace(flow);
+  expect(trace.nodes[0]).toEqual({
+    informationId: "in",
+    kind: "core.message.inbound.text",
+    occurredAt: "2026-09-14T00:00:00Z",
+    source: "test",
+  });
+  expect(JSON.stringify(trace)).not.toContain("private-message");
 });

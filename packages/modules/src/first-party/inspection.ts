@@ -1,0 +1,354 @@
+/**
+ * 功能概述：第一方模块拥有的检查视图，定义门控机制、历史/数据分组和可读字段。
+ * 主要职责：firstPartyInspection 由各模块 Manifest 显式引用；view 将稳定字段路径与中文标题绑定。
+ * 代码库关系：SDK 校验声明，Host 投影给 Server；Server 按声明查询账本，Web 使用通用视图。
+ * 输入输出与副作用：纯静态元数据，无 I/O、配置值或 UI 组件；历史记录只说明当时事实，不推断当前状态。
+ */
+import type { ModuleInspection } from "@kaguya/schema";
+const fields = (entries: Record<string, string>) =>
+  Object.entries(entries).map(([path, label]) => ({ path, label }));
+const view = (
+  id: string,
+  title: string,
+  description: string,
+  kinds: string[],
+  entries: Record<string, string>,
+) => ({ id, title, description, kinds, fields: fields(entries) });
+export const firstPartyInspection = {
+  "core.identity.normalize": {
+    mechanism: [
+      "按平台、适配器和目标解析会话范围。",
+      "关联账号与人物实体；无法确认时明确记录 unresolved 或 ambiguous。",
+    ],
+    views: [
+      view(
+        "identities",
+        "身份与会话库",
+        "持久化实体与绑定；每条记录可追溯来源。",
+        [
+          "agent.chat.scope.entity",
+          "agent.chat.scope.binding",
+          "agent.platform.account.entity",
+          "agent.platform.account.binding",
+          "agent.person.entity",
+        ],
+        {
+          platform: "平台",
+          adapterId: "适配器",
+          destination: "会话",
+          accountId: "账号",
+          personInformationId: "人物",
+          displayName: "名称",
+          scopeMode: "范围类型",
+        },
+      ),
+      view(
+        "history",
+        "归一历史",
+        "身份处理的明确结果。",
+        ["agent.person.context.completed"],
+        {
+          status: "结果",
+          platform: "平台",
+          scopeMode: "范围类型",
+          scopeInformationId: "会话范围",
+          personInformationId: "人物",
+        },
+      ),
+    ],
+  },
+  "agent.attention.arousal": {
+    mechanism: [
+      "先检查静音、频率为零等硬门禁。",
+      "私聊或满足直接唤醒规则时进入规划；否则计算相关性、内容、压力、在场惩罚与频率因子。",
+      "分数达到阈值则关注；未达到时按等待预算延后或忽略。历史中的阈值与策略版本是当时的实际值。",
+    ],
+    views: [
+      view(
+        "gates",
+        "门控历史",
+        "为什么关注、延后或忽略这批输入。",
+        ["agent.attention.arousal.completed"],
+        {
+          outcome: "结果",
+          score: "分数",
+          threshold: "当时阈值",
+          reasonCodes: "原因",
+          text: "输入",
+          components: "评分组成",
+          dueAt: "再次检查",
+          attempt: "等待次数",
+          totalWaitBudget: "等待预算",
+          policyDigest: "策略版本",
+          settingsDigest: "设置版本",
+        },
+      ),
+    ],
+  },
+  "agent.heartbeat.short": {
+    mechanism: [
+      "按会话合并连续输入，以持久化调度唤醒观察。",
+      "wait、规划中断、安静窗口和无动作退避共同决定再次观察时间。",
+    ],
+    views: [
+      view(
+        "wakes",
+        "唤醒与候选历史",
+        "记录调度、替换和观察水位；历史预约不代表当前仍待执行。",
+        [
+          "agent.heartbeat.scheduled",
+          "agent.heartbeat.fired",
+          "agent.heartbeat.superseded",
+          "agent.heartbeat.failed",
+          "agent.observation.wake",
+          "agent.turn.candidate",
+        ],
+        {
+          reason: "触发原因",
+          dueAt: "预约时间",
+          scopeKey: "会话范围",
+          attempt: "尝试次数",
+          firedAt: "实际唤醒",
+          sourceInformationIds: "来源",
+          destination: "会话",
+          replacementInformationId: "替换记录",
+          error: "失败原因",
+          asOf: "截止时间",
+        },
+      ),
+    ],
+  },
+  "agent.heartflow.online": {
+    mechanism: [
+      "认领候选并冻结上下文；同一会话的开放回合由持久化约束协调。",
+      "注意力通过后由 Planner 选择 message、wait 或 silent；记录中断与替换。",
+      "只有投递事实确认后才能判定发送完成。",
+    ],
+    views: [
+      view(
+        "turns",
+        "回合与规划",
+        "冻结输入、话题时效、模型动作与终态。",
+        [
+          "agent.turn.context.completed",
+          "agent.turn.plan.completed",
+          "agent.turn.completed",
+          "agent.turn.waiting",
+          "agent.turn.silent",
+          "agent.turn.failed",
+          "agent.turn.superseded",
+          "agent.turn.interrupted",
+          "agent.turn.decision.interrupted",
+        ],
+        {
+          action: "规划动作",
+          reason: "原因",
+          reasonCodes: "原因",
+          inputs: "冻结输入",
+          asOf: "决策时刻",
+          frequency: "有效频率",
+          frequencyRuleIndex: "命中频率规则",
+          dueAt: "再次唤醒",
+          candidateInformationId: "候选",
+          claimInformationId: "认领",
+        },
+      ),
+    ],
+  },
+  "agent.attention.focus": {
+    mechanism: [
+      "直接唤醒或成功参与可开启、续租群聊关注。",
+      "到期和关闭只影响指定代际，旧租约到期不会关闭新租约；关注不绕过硬门禁。",
+    ],
+    views: [
+      view(
+        "leases",
+        "关注租约历史",
+        "按记录时间展示开启、续租、关闭和到期；不能把一页历史当作全局有效租约表。",
+        [
+          "agent.attention.focus.opened",
+          "agent.attention.focus.renewed",
+          "agent.attention.focus.closed",
+          "agent.attention.focus.expired",
+        ],
+        {
+          scopeKey: "会话范围",
+          reason: "原因",
+          startedAt: "开始",
+          expiresAt: "到期",
+          generation: "代际",
+          sourceInformationId: "触发来源",
+        },
+      ),
+    ],
+  },
+  "agent.expression": {
+    mechanism: [
+      "从真人消息批次中学习受限的情境与表达方式，验证后整体落库。",
+      "按会话聚合习惯，当前语境最多选择三项；空结果不影响正文生成。",
+    ],
+    views: [
+      view(
+        "library",
+        "表达习惯库",
+        "已持久化学习批次，保留验证状态和来源；重复习惯可能出现在多个批次中。",
+        ["agent.expression.learning.completed"],
+        {
+          status: "验证结果",
+          habits: "情境与表达方式",
+          reason: "原因",
+          scopeInformationId: "会话范围",
+        },
+      ),
+      view(
+        "selection",
+        "学习与选用历史",
+        "查看冻结样本、候选与最终选用。",
+        [
+          "agent.expression.learning.requested",
+          "agent.expression.selection.requested",
+          "agent.expression.selection.completed",
+        ],
+        {
+          habits: "选用习惯",
+          candidates: "候选习惯",
+          reason: "原因",
+          sourceInformationIds: "样本",
+          watermark: "学习水位",
+          scopeInformationId: "会话范围",
+        },
+      ),
+    ],
+  },
+  "core.association.memory": {
+    mechanism: [
+      "冻结查询范围与截止时间，仅召回同范围且早于截止时间的记忆。",
+      "保留查询、候选和完成事实；召回不等于最终进入 Prompt。",
+    ],
+    views: [
+      view(
+        "retrieval",
+        "检索历史",
+        "按查询与候选回溯来源，不把未采用候选解释为已使用。",
+        [
+          "agent.association.query",
+          "agent.association.candidate",
+          "agent.association.completed",
+        ],
+        {
+          query: "查询",
+          scope: "范围",
+          asOf: "截止时间",
+          reasonCodes: "原因",
+          sourceInformationId: "来源",
+          rank: "排名",
+          score: "相关度",
+          candidateCount: "候选数量",
+          route: "检索路线",
+          method: "检索方法",
+          status: "结果",
+        },
+      ),
+    ],
+  },
+  "agent.message-composer": {
+    mechanism: [
+      "沿显式引用选择冻结输入、历史、记忆和表达参考，再编译 Prompt。",
+      "模型生成正文后提交助手消息与投递请求；请求不等于投递成功。",
+    ],
+    views: [
+      view(
+        "messages",
+        "正文与投递请求",
+        "查看生成正文和目标，沿引用继续检查模型任务与实际投递。",
+        ["core.message.assistant.text", "core.delivery.requested"],
+        {
+          text: "正文",
+          target: "目标",
+          destination: "会话",
+          turn: "回合",
+          source: "来源",
+        },
+      ),
+    ],
+  },
+  "agent.memory.writeback": {
+    storage: "memory",
+    mechanism: [
+      "身份处理结束后按来源幂等保存入站原文，在线回合静默也会写回。",
+      "完成、空内容或失败形成唯一终态；暂时故障交给可靠消费者重试。",
+    ],
+    views: [
+      view(
+        "writeback",
+        "写回历史",
+        "写回事实与原始文档库分开查询；无终态不能直接认定失败。",
+        [
+          "agent.memory.writeback.requested",
+          "agent.memory.writeback.completed",
+          "agent.memory.writeback.empty",
+          "agent.memory.writeback.failed",
+        ],
+        { status: "结果" },
+      ),
+    ],
+  },
+  "agent.memory.index": {
+    storage: "vectors",
+    mechanism: [
+      "原始文档与向量分开存储，向量按模型、revision 和维度隔离。",
+      "后台有界分页回填；模型切换后旧任务可能标为 superseded。",
+    ],
+    views: [
+      view(
+        "index",
+        "索引与回填历史",
+        "回填游标与结果来自持久化事实。",
+        [
+          "agent.memory.index.requested",
+          "agent.memory.index.backfill.requested",
+          "agent.memory.index.completed",
+        ],
+        {
+          identity: "模型版本",
+          status: "结果",
+          sourceInformationId: "文档来源",
+          afterMemoryId: "回填游标",
+          batchSize: "批次大小",
+        },
+      ),
+    ],
+  },
+  "agent.memory.cognition": {
+    mechanism: [
+      "从已写入文档中冻结有界证据窗口，交由指定 provider/revision 处理。",
+      "仅验证完成的快照可被选用；空结果、失效版本和非法输出分别记录。",
+    ],
+    views: [
+      view(
+        "snapshots",
+        "认知快照库",
+        "持久化正文与证据引用；当前查询不代表已被某次回复使用。",
+        ["core.memory.text"],
+        { text: "记忆内容", provenance: "来源" },
+      ),
+      view(
+        "cognition",
+        "认知处理历史",
+        "provider 版本、证据窗口与验证结果。",
+        [
+          "agent.memory.cognition.requested",
+          "agent.memory.cognition.completed",
+        ],
+        {
+          identity: "提供方版本",
+          status: "结果",
+          scopeKey: "会话范围",
+          asOf: "截止时间",
+          sourceInformationIds: "证据来源",
+          memoryInformationId: "快照",
+        },
+      ),
+    ],
+  },
+} satisfies Record<string, ModuleInspection>;

@@ -4,7 +4,9 @@
  * selectionSelector 绑定获胜 intent 的冻结 turn，严格按真实 scope 召回已验证批次，杜绝 fallback scope。
  * 两阶段请求先落账，再调用可重放 Model Task；全部输出验证后提交唯一终态，模型失败/取消生成空结果。
  * 批次来源水位与任务来源稳定，重启复用请求及模型结果；日志仅记录状态和条数。
+ * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
  */
+import { firstPartyInspection } from "../inspection.js";
 import {
   type CompiledPrompt,
   type DeepReadonly,
@@ -211,6 +213,7 @@ export function createExpressionModule(
       protocolVersion: 1,
       moduleVersion: "1.0.0",
       definitionId: "agent.expression",
+      inspection: firstPartyInspection["agent.expression"],
       displayName: "聊天表达习惯",
       summary: "从真人聊天学习抽象风格，按当前语境选择少量参考。",
       description:

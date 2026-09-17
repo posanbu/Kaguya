@@ -3,7 +3,9 @@
  * focusStateSelector 从账本限定 scope 读取最新租约和终态；调度以 grant ID 幂等，重启由 durable delivery 恢复。
  * 成功投递对应的 turn.completed 才续租；silent/failed 关闭本轮所用代际；wait 保留到自然到期。
  * 到期事实先持久化再确认 Scheduler，任一步重试均不重复续租或关闭更新的 grant；日志只记录元数据。
+ * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
  */
+import { firstPartyInspection } from "../inspection.js";
 import { z, type JsonObject } from "@kaguya/schema";
 import {
   type InformationKindDefinition,
@@ -90,6 +92,7 @@ export const attentionFocusModule = defineInformationModule({
     protocolVersion: 1,
     moduleVersion: "1.0.0",
     definitionId: "agent.attention.focus",
+    inspection: firstPartyInspection["agent.attention.focus"],
     displayName: "持续关注",
     summary: "持久化群聊关注租约，成功参与续租，空闲自动到期。",
     description: "关注只提供相关性，不改变 Planner 决策或绕过硬门禁。",

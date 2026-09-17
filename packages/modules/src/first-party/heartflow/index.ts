@@ -13,7 +13,9 @@
  * turn 标识及引用保留完整冻结上下文，正文生成交给 composer。defer/ignore 与失败路径
  * 写入等待或终态；registerOnce/commitTerminal 保证重放幂等，模型 I/O 经宿主 capability 执行，平台 I/O 由 delivery 层负责。
  * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
+ * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
  */
+import { firstPartyInspection } from "../inspection.js";
 import { activeFocus, focusOpened } from "../attention-focus/facts.js";
 import { plannerTemplateDeclaration } from "../../prompt-declarations.js";
 import { scopeOf } from "../heartbeat/observation.js";
@@ -776,6 +778,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
       protocolVersion: 1,
       moduleVersion: "1.0.0",
       definitionId: "agent.heartflow.online",
+      inspection: firstPartyInspection["agent.heartflow.online"],
       displayName: "在线回合编排",
       summary: "协调候选认领、上下文冻结、规划和回合终态。",
       description:

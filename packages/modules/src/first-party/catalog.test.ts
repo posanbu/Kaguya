@@ -66,6 +66,26 @@ function catalog() {
 }
 
 describe("first-party module configuration", () => {
+  it("declares useful domain inspection for every first-party definition and only registered kinds", () => {
+    const definitions = catalog().definitions;
+    const kinds = new Set(
+      definitions
+        .flatMap((d) => [...d.manifest.produces, ...d.manifest.consumes])
+        .map((k) => k.kind),
+    );
+    expect(definitions).toHaveLength(11);
+    for (const { manifest } of definitions) {
+      expect(manifest.inspection?.mechanism.length).toBeGreaterThan(0);
+      expect(manifest.inspection?.views.length).toBeGreaterThan(0);
+      expect(Object.isFrozen(manifest.inspection)).toBe(true);
+      for (const view of manifest.inspection!.views) {
+        expect(Object.isFrozen(view.fields)).toBe(true);
+        expect(Object.isFrozen(view.fields[0])).toBe(true);
+        expect(view.fields.length).toBeGreaterThan(0);
+        for (const kind of view.kinds) expect(kinds.has(kind), kind).toBe(true);
+      }
+    }
+  });
   it("materializes eight complete v1 defaults and activates enabled instances", () => {
     const defaults = createFirstPartyModuleConfigDefaults("production");
     expect(defaults).toHaveLength(8);

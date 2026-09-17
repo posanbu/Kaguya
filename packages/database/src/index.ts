@@ -2,6 +2,7 @@
  * 功能概述：提供 Kaguya 唯一的 PostgreSQL 信息账本入口，组合驱动、schema 准备与
  * append-only `InformationRepository`。
  * 额外导出可选 PostgresMemoryVectorIndex，启用流程由宿主显式执行而不影响 sparse-only schema。
+ * inspectMemoryVectors 只读可选索引的分页元数据，不安装扩展或暴露向量正文。
  * 主要职责：`KaguyaDatabase.connect` 创建真实 PostgreSQL 连接；构造函数支持测试注入
  * `SqlDatabase`；`prepareSchema` 初始化空 schema 或验证完整 v1；`close` 释放底层连接。
  * 代码库关系：Runtime 通过本入口连接或注入数据库；`testing.ts` 使用 PGlite 构造同一
@@ -114,3 +115,4 @@ export class KaguyaDatabase {
 }
 
 export { PostgresMemoryVectorIndex } from "./memory-vector.js";
+export { inspectMemoryVectors } from "./memory-inspection.js";
