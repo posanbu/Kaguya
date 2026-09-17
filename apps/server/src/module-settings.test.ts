@@ -4,6 +4,7 @@
  * 代码库关系：直接使用 Catalog/Zod、配置文件和 createHttpApplication，不启动运行时。
  * 输入输出与副作用：只写临时目录，无真实消息或配置应用，结束清理所有文件。
  */
+import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import {
   mkdtemp,
   readFile,
@@ -27,6 +28,21 @@ afterEach(async () => {
     roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
   );
 });
+
+// Windows 普通进程可能没有创建符号链接的权限（未开启 Developer Mode），
+// 此时依赖 symlink 夹具的用例无法构造前置条件，在收集期探测并跳过。
+function canCreateSymlinks(): boolean {
+  let root: string | undefined;
+  try {
+    root = mkdtempSync(join(tmpdir(), "kaguya-symlink-probe-"));
+    symlinkSync(join(root, "target"), join(root, "link"));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (root) rmSync(root, { recursive: true, force: true });
+  }
+}
 async function fixture() {
   const rootDir = await mkdtemp(join(tmpdir(), "module-settings-"));
   roots.push(rootDir);
@@ -127,22 +143,25 @@ it("rejects invalid, missing, hidden and read-only fields without changing bytes
     service.replace("test.settings", "../test.default", input),
   ).rejects.toMatchObject({ status: 404 });
 });
-it("fails closed for invalid disk settings and refuses a symlink destination", async () => {
-  const { service, input, path, rootDir } = await fixture();
-  const before = await readFile(path, "utf8");
-  await writeFile(path, before.replace('"count": 2', '"count": 99'));
-  await expect(service.get("test.settings")).rejects.toMatchObject({
-    status: 503,
-  });
-  const target = join(rootDir, "target.json");
-  await writeFile(target, before);
-  await unlink(path);
-  await symlink(target, path);
-  await expect(
-    service.replace("test.settings", "test.default", input),
-  ).rejects.toThrow();
-  expect(await readFile(target, "utf8")).toBe(before);
-});
+it.runIf(canCreateSymlinks())(
+  "fails closed for invalid disk settings and refuses a symlink destination",
+  async () => {
+    const { service, input, path, rootDir } = await fixture();
+    const before = await readFile(path, "utf8");
+    await writeFile(path, before.replace('"count": 2', '"count": 99'));
+    await expect(service.get("test.settings")).rejects.toMatchObject({
+      status: 503,
+    });
+    const target = join(rootDir, "target.json");
+    await writeFile(target, before);
+    await unlink(path);
+    await symlink(target, path);
+    await expect(
+      service.replace("test.settings", "test.default", input),
+    ).rejects.toThrow();
+    expect(await readFile(target, "utf8")).toBe(before);
+  },
+);
 it("first-party editable schemas expose names, constraints and no invented instances", async () => {
   const rootDir = await mkdtemp(join(tmpdir(), "module-public-"));
   roots.push(rootDir);
