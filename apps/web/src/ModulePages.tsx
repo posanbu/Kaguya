@@ -11,6 +11,7 @@ import {
   ModuleRuntimeSection,
   type InspectionDetailProps,
 } from "./ModuleRuntimeSection.js";
+import { ModuleSurface } from "./ModuleSurface.js";
 import { LayoutGrid, GitBranch } from "lucide-react";
 import {
   useEffect,
@@ -215,14 +216,23 @@ export function ModuleDetails({
           <code>{module.definitionId}</code>
         </p>
       </header>
-      {module.inspection && DetailComponent && (
-        <ModuleRuntimeSection
-          module={module}
-          token={token}
-          revision={revision}
-          DetailComponent={DetailComponent}
-        />
-      )}
+      {module.inspection &&
+        DetailComponent &&
+        (module.inspection.surface ? (
+          <ModuleSurface
+            module={module}
+            token={token}
+            revision={revision}
+            DetailComponent={DetailComponent}
+          />
+        ) : (
+          <ModuleRuntimeSection
+            module={module}
+            token={token}
+            revision={revision}
+            DetailComponent={DetailComponent}
+          />
+        ))}
       <details className="developer-card">
         <summary>模块职责与输入输出</summary>
         <section aria-label="模块职责">

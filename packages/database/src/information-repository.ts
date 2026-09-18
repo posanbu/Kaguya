@@ -184,6 +184,15 @@ export class InformationRepository implements InformationLedger {
     };
     readonly referencedId?: string;
     readonly relation?: string;
+    readonly informationIds?: readonly string[];
+    readonly payloadIn?: {
+      readonly path: readonly string[];
+      readonly values: readonly string[];
+    };
+    readonly payloadSearch?: {
+      readonly paths: readonly (readonly string[])[];
+      readonly text: string;
+    };
   }): Promise<readonly DeepReadonly<InformationAtom>[]> {
     if (!Number.isInteger(query.limit) || query.limit < 1 || query.limit > 501)
       throw new InformationStoreError("Invalid inspection page limit");
@@ -208,6 +217,28 @@ export class InformationRepository implements InformationLedger {
         predicates.push(
           `a.occurred_at::timestamptz < ${bind(query.before)}::timestamptz`,
         );
+      if (query.informationIds !== undefined) {
+        if (!query.informationIds.length) return [];
+        predicates.push(
+          `a.information_id = ANY(${bind([...query.informationIds])}::text[])`,
+        );
+      }
+      if (query.payloadIn !== undefined) {
+        if (!query.payloadIn.values.length) return [];
+        predicates.push(
+          `(a.payload #>> ${bind([...query.payloadIn.path])}::text[]) = ANY(${bind([...query.payloadIn.values])}::text[])`,
+        );
+      }
+      if (query.payloadSearch !== undefined) {
+        predicates.push(
+          `(${query.payloadSearch.paths
+            .map(
+              (path) =>
+                `POSITION(LOWER(${bind(query.payloadSearch!.text)}) IN LOWER(COALESCE(a.payload #>> ${bind([...path])}::text[], ''))) > 0`,
+            )
+            .join(" OR ")})`,
+        );
+      }
       if (query.cursor !== undefined)
         predicates.push(
           `(a.occurred_at::timestamptz, a.information_id) < (${bind(query.cursor.occurredAt)}::timestamptz, ${bind(query.cursor.informationId)})`,
@@ -225,6 +256,92 @@ export class InformationRepository implements InformationLedger {
       const rows = await tx.query<{ information_id: string }>(
         `SELECT a.information_id FROM information_atoms a ${predicates.length ? `WHERE ${predicates.join(" AND ")}` : ""}
          ORDER BY a.occurred_at::timestamptz DESC, a.information_id DESC LIMIT ${bind(query.limit)}`,
+        values,
+      );
+      return readAtomsByRows(tx, rows.rows);
+    });
+  }
+
+  async inspectPayloadCounts(query: {
+    readonly kinds: readonly string[];
+    readonly path: readonly string[];
+    readonly after: string;
+  }): Promise<readonly { value: string; count: number }[]> {
+    if (!query.kinds.length || !query.path.length)
+      throw new InformationStoreError("Invalid inspection count query");
+    return this.database.transaction(async (tx) => {
+      const result = await tx.query<{ value: string | null; count: string }>(
+        `SELECT payload #>> $1::text[] AS value, COUNT(*)::text AS count
+         FROM information_atoms
+         WHERE kind = ANY($2::text[])
+           AND occurred_at::timestamptz >= $3::timestamptz
+         GROUP BY payload #>> $1::text[]
+         ORDER BY value ASC`,
+        [[...query.path], [...query.kinds], query.after],
+      );
+      return result.rows.flatMap(({ value, count }) =>
+        value === null ? [] : [{ value, count: Number(count) }],
+      );
+    });
+  }
+
+  async inspectEntityPage(query: {
+    readonly rootKind: string;
+    readonly rootKeyPath: readonly string[];
+    readonly activityKinds: readonly string[];
+    readonly activityKeyPath: readonly string[];
+    readonly limit: number;
+    readonly informationIds?: readonly string[];
+    readonly cursor?: {
+      readonly occurredAt: string;
+      readonly informationId: string;
+    };
+  }): Promise<readonly DeepReadonly<InformationAtom>[]> {
+    if (
+      !query.rootKeyPath.length ||
+      !query.activityKeyPath.length ||
+      !query.activityKinds.length ||
+      !Number.isInteger(query.limit) ||
+      query.limit < 1 ||
+      query.limit > 51
+    )
+      throw new InformationStoreError("Invalid inspection entity query");
+    if (query.informationIds !== undefined && !query.informationIds.length)
+      return [];
+    return this.database.transaction(async (tx) => {
+      const values: unknown[] = [];
+      const bind = (value: unknown) => {
+        values.push(value);
+        return `$${values.length}`;
+      };
+      const rootKind = bind(query.rootKind);
+      const rootPath = bind([...query.rootKeyPath]);
+      const activityKinds = bind([...query.activityKinds]);
+      const activityPath = bind([...query.activityKeyPath]);
+      const predicates = [`root.kind = ${rootKind}`];
+      if (query.informationIds)
+        predicates.push(
+          `root.information_id = ANY(${bind([...query.informationIds])}::text[])`,
+        );
+      if (query.cursor)
+        predicates.push(
+          `(COALESCE(activity.latest_at, root.occurred_at::timestamptz), root.information_id) < (${bind(query.cursor.occurredAt)}::timestamptz, ${bind(query.cursor.informationId)})`,
+        );
+      const rows = await tx.query<{ information_id: string }>(
+        `SELECT root.information_id
+         FROM information_atoms root
+         LEFT JOIN (
+           SELECT payload #>> ${activityPath}::text[] AS entity_key,
+                  MAX(occurred_at::timestamptz) AS latest_at
+           FROM information_atoms
+           WHERE kind = ANY(${activityKinds}::text[])
+           GROUP BY payload #>> ${activityPath}::text[]
+         ) activity
+           ON activity.entity_key = root.payload #>> ${rootPath}::text[]
+         WHERE ${predicates.join(" AND ")}
+         ORDER BY COALESCE(activity.latest_at, root.occurred_at::timestamptz) DESC,
+                  root.information_id DESC
+         LIMIT ${bind(query.limit)}`,
         values,
       );
       return readAtomsByRows(tx, rows.rows);

@@ -243,6 +243,7 @@ export function defineInformationModule<TSettings>(
     const ids = m.inspection.views.map((view) => view.id);
     if (new Set(ids).size !== ids.length)
       throw new Error("Duplicate inspection view id");
+    validateInspectionSurface(m.inspection, m);
   }
   assertId(m.definitionId, "module definition id");
   if (typeof m.displayName !== "string" || !m.displayName.trim())
@@ -359,6 +360,9 @@ export function defineInformationModule<TSettings>(
                   }),
                 ),
               ),
+              ...(m.inspection.surface
+                ? { surface: deepFreezeJson(m.inspection.surface) }
+                : {}),
             }),
           }
         : {}),
@@ -392,6 +396,117 @@ export function defineInformationModule<TSettings>(
       ),
     }),
   });
+}
+
+function validateInspectionSurface(
+  inspection: DeepReadonly<ModuleInspection>,
+  manifest: InformationModuleManifest,
+) {
+  const surface = inspection.surface;
+  if (!surface) return;
+  const views = new Map(inspection.views.map((view) => [view.id, view]));
+  const producedKinds = new Set(manifest.produces.map(({ kind }) => kind));
+  const componentIds = surface.components.map(({ id }) => id);
+  if (new Set(componentIds).size !== componentIds.length)
+    throw new Error("Duplicate inspection surface component id");
+  if (new Set(surface.layout.areas).size !== surface.layout.areas.length)
+    throw new Error("Duplicate inspection surface area");
+  for (const component of surface.components) {
+    if (!surface.layout.areas.includes(component.area))
+      throw new Error(`Unknown inspection surface area: ${component.area}`);
+    if (component.type === "mechanism-steps") continue;
+    const view = views.get(component.viewId);
+    if (!view)
+      throw new Error(`Unknown inspection surface view: ${component.viewId}`);
+    if (component.type === "status-summary") {
+      if (
+        component.kinds.some((kind) => !view.kinds.includes(kind)) ||
+        !view.fields.some(({ path }) => path === component.statusField)
+      )
+        throw new Error("Unknown inspection surface status field");
+      continue;
+    }
+    if (
+      !producedKinds.has(component.entityKind) ||
+      !view.kinds.includes(component.entityKind)
+    )
+      throw new Error("Unknown inspection surface entity kind");
+    const requireViewField = (viewId: string, kind: string, path: string) => {
+      const target = views.get(viewId);
+      if (
+        !target ||
+        !target.kinds.includes(kind) ||
+        (!["informationId", "occurredAt", "source"].includes(path) &&
+          !target.fields.some((field) => field.path === path))
+      )
+        throw new Error(`Unknown inspection surface field: ${viewId}.${path}`);
+    };
+    for (const kind of component.activity.kinds)
+      requireViewField(
+        component.activity.viewId,
+        kind,
+        component.activity.entityKeyField,
+      );
+    for (const field of component.titleFields)
+      if (
+        ![...inspection.views].some((candidate) =>
+          candidate.fields.some(({ path }) => path === field.path),
+        )
+      )
+        throw new Error(
+          `Unknown inspection surface title field: ${field.path}`,
+        );
+    for (const field of component.searchFields)
+      requireViewField(field.viewId, field.kind, field.path);
+    requireViewField(
+      component.platform.viewId,
+      component.platform.kind,
+      component.platform.field,
+    );
+    requireViewField(
+      component.platform.viewId,
+      component.platform.kind,
+      component.platform.entityKeyField,
+    );
+    for (const kind of component.status.kinds)
+      requireViewField(
+        component.status.viewId,
+        kind,
+        component.status.entityField,
+      );
+    const statusView = views.get(component.status.viewId)!;
+    if (
+      !statusView.fields.some(
+        ({ path }) => path === component.status.statusField,
+      )
+    )
+      throw new Error("Unknown inspection surface entity status field");
+    const relationIds = component.relations.map(({ id }) => id);
+    if (new Set(relationIds).size !== relationIds.length)
+      throw new Error("Duplicate inspection surface relation id");
+    for (const relation of component.relations) {
+      for (const kind of relation.kinds) {
+        requireViewField(relation.viewId, kind, relation.match.field);
+        for (const field of relation.fields)
+          requireViewField(relation.viewId, kind, field.path);
+      }
+      if (relation.via) {
+        for (const kind of relation.via.kinds) {
+          requireViewField(relation.via.viewId, kind, relation.via.matchField);
+          requireViewField(relation.via.viewId, kind, relation.via.selectField);
+        }
+      }
+    }
+  }
+}
+
+function deepFreezeJson<T>(value: T): T {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const nested of Object.values(value as Record<string, unknown>))
+      deepFreezeJson(nested);
+  }
+  return value;
 }
 export function defineInformationModuleCatalog(
   ...definitions: readonly InformationModuleDefinition[]
