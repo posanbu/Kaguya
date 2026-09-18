@@ -4,7 +4,9 @@
  * 启动和显式热应用分别把 inboundAllowlist 交给 AdapterHost、outboundAllowlist 交给 Runtime 及目标授权服务。
  * 功能概述：Server composition root，组合配置、数据库、Runtime、HTTP/Web 与 NapCat 生命周期。
  * 主要职责：startKaguyaServer 验证 Profile 和模块配置后启动宿主；close 逆序释放资源；
- * createRuntimeModelSelectionResolver 根据 Profile 批准的 tier 解析 provider/model、思考参数及硬超时。
+ * createRuntimeModelSelectionResolver 根据 Profile 批准的 tier 解析 provider/model、思考参数及硬超时；
+ * generationOptionsForTier 仅在该 Provider 明确声明 supportsStructuredOutputs 时启用 schema，
+ * 其他 Provider 使用 json 与 LLM client 的本地业务 schema 校验，不扩大其能力声明。
  * Memory provider 由共享 composition 从 selected Profile 显式创建，重启/热应用使用相同配置边界。
  * 代码库关系：Runtime 业务装配统一来自 @kaguya/composition；createMessageCatalog/createMessageComposition 装配消息编写模块；AdapterHost
  * 启动及显式应用将生效出站 GatewayAllowlist 注入 Runtime，出站恢复领取使用所属配置策略。
@@ -689,10 +691,7 @@ export function createRuntimeModelSelectionResolver(
       providerId: provider.id,
       modelId: target.modelId,
       model: client.chatModel(target.modelId),
-      ...(target.generation === undefined &&
-      target.recommendedDurationMs === undefined
-        ? {}
-        : { generationOptions: generationOptionsForTier(target) }),
+      generationOptions: generationOptionsForTier(target, provider.settings),
     };
   };
 
@@ -704,8 +703,11 @@ export function createRuntimeModelSelectionResolver(
 
 function generationOptionsForTier(
   target: NonNullable<UserConfigProfile["ai"]["modelTiers"]>["light"],
+  settings: UserConfigProfile["ai"]["providers"][number]["settings"],
 ): KaguyaLlmGenerationOptions {
   return {
+    structuredOutputMode:
+      settings.supportsStructuredOutputs === true ? "schema" : "json",
     ...(target.generation?.timeoutMs === undefined
       ? {}
       : { timeoutMs: target.generation.timeoutMs }),

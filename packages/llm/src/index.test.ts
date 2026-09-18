@@ -2,7 +2,7 @@
  * 功能概述：验证底层 `KaguyaLlmClient` 只负责模型调用、结构化输出校验、错误分类与耗时统计，
  * 不再承担 trace 或其他持久化副作用。
  * 主要职责：覆盖成功结果的 output/usage/duration、四类结构化输出、字符串规范化、SDK JSON
- * 输出请求，以及 provider、AbortError、无效 JSON/结构的 `KaguyaLlmError` 分类。
+ * 输出请求，以及 provider、AbortError、JSON 格式恢复耗尽后的 `KaguyaLlmError` 分类。
  * 代码库关系：测试使用 `ai/test` 的确定性模型驱动 `client.ts`；Runtime 的 LLM lifecycle
  * 会消费这里返回的 `KaguyaLlmGeneration` 并把 requested/completed/failed 事实写入信息账本。
  * 输入输出与副作用：测试仅执行内存模型，不连接数据库；断言构造 client 和调用 generate
@@ -116,7 +116,7 @@ function deterministicClock(...timestamps: string[]) {
 
 function clientFor(output: unknown): KaguyaLlmClient {
   return new KaguyaLlmClient({
-    model: createDeterministicModel([output]),
+    model: createDeterministicModel([output, output]),
     now: deterministicClock(
       "2026-09-04T00:00:00.000Z",
       "2026-09-04T00:00:00.025Z",
@@ -264,7 +264,7 @@ describe("KaguyaLlmClient", () => {
     });
   });
 
-  it("requests structured output from the SDK for reply generation", async () => {
+  it("requests JSON without assuming native schema support for reply generation", async () => {
     const model = new MockLanguageModelV3({
       modelId: "deterministic-model",
       doGenerate: modelResult('{"text":"hello"}'),
@@ -280,9 +280,8 @@ describe("KaguyaLlmClient", () => {
     await expect(client.generate(request("message"))).resolves.toMatchObject({
       output: { text: "hello" },
     });
-    expect(model.doGenerateCalls[0]?.responseFormat).toMatchObject({
+    expect(model.doGenerateCalls[0]?.responseFormat).toEqual({
       type: "json",
-      schema: { type: "object", required: ["text"] },
     });
   });
 

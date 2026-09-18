@@ -2,7 +2,8 @@
  * Web 入站 DAG 同样产生当前会话背景投影，保持 Composition 与 Runtime 的事实集合断言同步。
  * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * 默认 DAG 验证 eligible turn 先调用 Planner，再由 Composer 生成消息。
- * tier 配置回归同时覆盖 generation.timeoutMs 到 LLM client 的硬超时参数传递。
+ * tier 配置回归同时覆盖 generation.timeoutMs、思考与推荐时长参数传递；
+ * 结构化输出仅在对应 Provider 明确声明支持时选择 schema，缺省或 false 均选择 json。
  * 功能概述：验证 Server 作为唯一 composition root 组合 PostgreSQL information
  * database、Runtime、Web/NapCat ingress、HTTP 与启动期选定的全局 Profile。
  * 主要职责：用真实 PGlite 覆盖 Web 到 information DAG，验证 HTTP/Web UI/Vite
@@ -897,11 +898,13 @@ describe("unified server composition", () => {
       providerId: "provider-1",
       modelId: "default-light",
       model: { modelId: "default-light" },
+      generationOptions: { structuredOutputMode: "json" },
     });
     expect(resolver({ modelTier: "heavy" })).toEqual({
       providerId: "provider-1",
       modelId: "default-heavy",
       model: { modelId: "default-heavy" },
+      generationOptions: { structuredOutputMode: "json" },
     });
     expect(chatModel).toHaveBeenCalledWith("default-light");
     expect(chatModel).toHaveBeenCalledWith("default-heavy");
@@ -942,87 +945,150 @@ describe("unified server composition", () => {
       providerId: "provider-1",
       modelId: "selected-light",
       model: { modelId: "selected-light" },
+      generationOptions: { structuredOutputMode: "json" },
     });
     expect(resolver({ modelTier: "heavy" })).toEqual({
       providerId: "provider-1",
       modelId: "selected-heavy",
       model: { modelId: "selected-heavy" },
+      generationOptions: { structuredOutputMode: "json" },
     });
     expect(chatModel).toHaveBeenCalledWith("selected-light");
     expect(chatModel).toHaveBeenCalledWith("selected-heavy");
   });
 
-  it("passes structured-output support from profile provider settings", async () => {
-    const root = mkdtempSync(join(tmpdir(), "kaguya-profile-resolver-"));
-    roots.push(root);
-    const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
-    await manager.replaceProfile(manager.getSelectedProfileId(), {
-      name: "default",
-      acknowledgedWarnings: [],
-      identity: {
-        name: "Kaguya",
-        aliases: ["辉夜"],
-        persona: "test",
-        timeZone: "Asia/Shanghai",
-      },
-      ai: {
-        defaultProviderId: "provider-1",
-        modelTiers: {
-          light: {
-            providerId: "provider-1",
-            modelId: "light-model",
-            generation: {
-              reasoning: "minimal",
-              timeoutMs: 120_000,
+  it.each([
+    { supportsStructuredOutputs: undefined, structuredOutputMode: "json" },
+    { supportsStructuredOutputs: false, structuredOutputMode: "json" },
+    { supportsStructuredOutputs: true, structuredOutputMode: "schema" },
+  ] as const)(
+    "routes structured output with declared support $supportsStructuredOutputs",
+    async ({ supportsStructuredOutputs, structuredOutputMode }) => {
+      const root = mkdtempSync(join(tmpdir(), "kaguya-profile-resolver-"));
+      roots.push(root);
+      const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+      await manager.replaceProfile(manager.getSelectedProfileId(), {
+        name: "default",
+        acknowledgedWarnings: [],
+        identity: {
+          name: "Kaguya",
+          aliases: ["辉夜"],
+          persona: "test",
+          timeZone: "Asia/Shanghai",
+        },
+        ai: {
+          defaultProviderId: "provider-1",
+          modelTiers: {
+            light: {
+              providerId: "provider-1",
+              modelId: "light-model",
+              generation: {
+                reasoning: "minimal",
+                timeoutMs: 120_000,
+              },
+              recommendedDurationMs: 2_000,
             },
-            recommendedDurationMs: 2_000,
+            heavy: {
+              providerId: "provider-1",
+              modelId: "heavy-model",
+              generation: { reasoning: "high" },
+              recommendedDurationMs: 8_000,
+            },
           },
-          heavy: {
-            providerId: "provider-1",
-            modelId: "heavy-model",
-            generation: { reasoning: "high" },
-            recommendedDurationMs: 8_000,
-          },
+          providers: [
+            {
+              id: "provider-1",
+              type: "openai-compatible",
+              enabled: true,
+              apiKey: "provider-key",
+              baseUrl: "https://llm.example/v1",
+              models: ["light-model", "heavy-model"],
+              settings:
+                supportsStructuredOutputs === undefined
+                  ? {}
+                  : { supportsStructuredOutputs },
+            },
+          ],
+        },
+        memory: { enabled: false },
+        platforms: [],
+      });
+      await manager.acknowledgeConfigurationWarnings(
+        manager.getSelectedProfileId(),
+        [],
+      );
+
+      vi.mocked(createOpenAICompatible).mockClear();
+      const resolver = createRuntimeModelSelectionResolver(
+        await selectedProfile(manager),
+      );
+
+      const providerOptions = vi.mocked(createOpenAICompatible).mock
+        .calls[0]?.[0];
+      expect(providerOptions?.supportsStructuredOutputs).toBe(
+        supportsStructuredOutputs,
+      );
+      if (supportsStructuredOutputs === undefined) {
+        expect(providerOptions).not.toHaveProperty("supportsStructuredOutputs");
+      }
+      expect(resolver({ modelTier: "light" })).toMatchObject({
+        generationOptions: {
+          structuredOutputMode,
+          reasoning: "minimal",
+          timeoutMs: 120_000,
+          recommendedDurationMs: 2_000,
+        },
+      });
+      expect(resolver({ modelTier: "heavy" })).toMatchObject({
+        generationOptions: {
+          structuredOutputMode,
+          reasoning: "high",
+          recommendedDurationMs: 8_000,
+        },
+      });
+    },
+  );
+
+  it("uses the selected tier provider capability without inheriting the default provider capability", async () => {
+    const root = tempWorkspaceRoot();
+    const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+    const settings = readyProfileSettings("light-model", "heavy-model");
+    await manager.replaceProfile(manager.getSelectedProfileId(), {
+      ...readyProfileReplacement("default", settings),
+      ai: {
+        ...settings.ai,
+        modelTiers: {
+          light: settings.ai.modelTiers.light,
+          heavy: { providerId: "provider-2", modelId: "heavy-model" },
         },
         providers: [
           {
-            id: "provider-1",
-            type: "openai-compatible",
-            enabled: true,
-            apiKey: "provider-key",
-            baseUrl: "https://llm.example/v1",
-            models: ["light-model", "heavy-model"],
+            ...settings.ai.providers[0]!,
             settings: { supportsStructuredOutputs: true },
+          },
+          {
+            ...settings.ai.providers[0]!,
+            id: "provider-2",
+            settings: { supportsStructuredOutputs: false },
           },
         ],
       },
-      memory: { enabled: false },
-      platforms: [],
     });
     await manager.acknowledgeConfigurationWarnings(
       manager.getSelectedProfileId(),
       [],
     );
-
     const resolver = createRuntimeModelSelectionResolver(
       await selectedProfile(manager),
     );
 
-    expect(createOpenAICompatible).toHaveBeenCalledWith(
-      expect.objectContaining({ supportsStructuredOutputs: true }),
-    );
     expect(resolver({ modelTier: "light" })).toMatchObject({
-      generationOptions: {
-        reasoning: "minimal",
-        timeoutMs: 120_000,
-        recommendedDurationMs: 2_000,
-      },
+      providerId: "provider-1",
+      generationOptions: { structuredOutputMode: "schema" },
     });
     expect(resolver({ modelTier: "heavy" })).toMatchObject({
-      generationOptions: {
-        reasoning: "high",
-        recommendedDurationMs: 8_000,
-      },
+      providerId: "provider-2",
+      generationOptions: { structuredOutputMode: "json" },
     });
   });
 
@@ -1073,6 +1139,7 @@ describe("unified server composition", () => {
       providerId: "provider-1",
       modelId: "default-light",
       model: { modelId: "default-light" },
+      generationOptions: { structuredOutputMode: "json" },
     });
     expect(chatModel).toHaveBeenCalledWith("default-light");
   });

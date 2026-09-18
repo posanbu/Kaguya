@@ -7,6 +7,7 @@
  * provenance；终态使用同一 requested 的 status-of，输出仅为 JSON，具体 schema 由调用方拥有。
  * modelTaskInformationKinds 提供独立注册集合；日志默认投影摘要与 Prompt 预览，debug detail
  * 才投影经凭据清理的完整 Prompt 和 provenance，不包含模型输出或 provider 原始响应。
+ * 结构化失败仅增加空响应、JSON/schema/截断分类与尝试次数；usage/duration 沿用终态指标。
  * 主要职责：Runtime definition 约束严格 payload、直接 caused-by/status-of/context 与
  * requested uses-context 引用及脱敏日志投影；`builtInInformationKinds` 原样复用 Engine
  * 与 modules 的 definitions，保证每个字面 kind 只存在一个对象定义。
@@ -289,7 +290,7 @@ const modelTaskUsageShape = {
 const modelTaskOutputSchema = z
   .union([z.null(), z.unknown()])
   .pipe(jsonValueSchema);
-export const modelTaskSafeErrorSchema = z
+const modelTaskSafeErrorBaseSchema = z
   .object({
     name: z.literal("ModelTaskError"),
     kind: z.enum(["retryable", "non-retryable"]),
@@ -301,6 +302,25 @@ export const modelTaskSafeErrorSchema = z
     message: z.literal("Model task generation failed"),
   })
   .strict();
+const structuredOutputFailureSchema = z.enum([
+  "empty",
+  "invalid-json",
+  "schema-mismatch",
+  "truncated",
+]);
+const attemptCountSchema = z.number().int().positive();
+// 严格联合表达可省略字段，保证每个分支都只产生 JSON，避免 optional 输出包含 undefined。
+export const modelTaskSafeErrorSchema = z.union([
+  modelTaskSafeErrorBaseSchema.extend({
+    structuredOutputFailure: structuredOutputFailureSchema,
+    attemptCount: attemptCountSchema,
+  }),
+  modelTaskSafeErrorBaseSchema.extend({ attemptCount: attemptCountSchema }),
+  modelTaskSafeErrorBaseSchema.extend({
+    structuredOutputFailure: structuredOutputFailureSchema,
+  }),
+  modelTaskSafeErrorBaseSchema,
+]);
 export const modelTaskRequestedInformationKind = defineInformationKind({
   kind: "core.model.task.requested",
   displayName: "模型任务请求",
@@ -426,6 +446,12 @@ export const modelTaskFailedInformationKind = defineInformationKind({
       durationMs: payload.durationMs,
       errorKind: payload.error.kind,
       failureStage: payload.error.stage,
+      ...(!("structuredOutputFailure" in payload.error)
+        ? {}
+        : { structuredOutputFailure: payload.error.structuredOutputFailure }),
+      ...(!("attemptCount" in payload.error)
+        ? {}
+        : { attemptCount: payload.error.attemptCount }),
     }),
   },
 });
