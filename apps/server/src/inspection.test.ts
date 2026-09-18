@@ -55,13 +55,14 @@ describe("developer inspection", () => {
     await runtime.start();
     const modules = runtime.inspectModules();
     await runtime.close();
-    const service = createInspectionService({
+    const inspection = createInspectionService({
       ledger: database.information,
       database,
       modules: () => modules,
       secrets: { gatewayToken: token, apiKey: "provider-secret-value" },
+      now: () => new Date(time),
     });
-    app = await createHttpApplication({ config, inspection: service });
+    app = await createHttpApplication({ config, inspection });
     const append = async (
       informationId: string,
       kind: string,
@@ -103,6 +104,65 @@ describe("developer inspection", () => {
       { relation: "core:uses-context", informationId: "outside" },
     ]);
     await append("c", "core.message.inbound.text", "ctx-a");
+    const identityTime = time;
+    const appendIdentity = async (
+      informationId: string,
+      kind: string,
+      payload: InformationAtom["payload"],
+    ) =>
+      database.information.append(
+        freezeInformationAtom({
+          informationId,
+          kind,
+          occurredAt: identityTime,
+          source: "module:identity.default",
+          payload,
+          references: [],
+        }),
+        [],
+      );
+    await appendIdentity("person-ada", "agent.person.entity", {
+      accountId: "10001",
+    });
+    await appendIdentity("account-ada", "agent.platform.account.entity", {
+      platform: "qq",
+      adapterId: "napcat",
+      accountId: "10001",
+    });
+    await appendIdentity("observed-ada", "agent.person.observed", {
+      accountId: "10001",
+      nickname: "Ada",
+      card: "Ada · 研究组",
+      observedAt: identityTime,
+    });
+    await appendIdentity("scope-ada", "agent.chat.scope.entity", {
+      platform: "qq",
+      adapterId: "napcat",
+      destination: { kind: "group", id: "20002" },
+      scopeMode: "canonical",
+    });
+    await appendIdentity("resolution-ada", "agent.person.resolution", {
+      status: "complete",
+      scopeMode: "canonical",
+      platform: "qq",
+      adapterId: "napcat",
+      scopeInformationId: "scope-ada",
+      accountInformationId: "account-ada",
+      personInformationId: "person-ada",
+    });
+    await appendIdentity(
+      "identity-completed-ada",
+      "agent.person.context.completed",
+      {
+        status: "complete",
+        scopeMode: "canonical",
+        platform: "qq",
+        adapterId: "napcat",
+        scopeInformationId: "scope-ada",
+        accountInformationId: "account-ada",
+        personInformationId: "person-ada",
+      },
+    );
     original = JSON.stringify(await database.information.get("b"));
   });
   afterAll(async () => {
@@ -333,6 +393,46 @@ describe("developer inspection", () => {
       404,
     );
     expect((await database.memory.getBySource("a"))!.content).toContain(token);
+  });
+  it("projects the identity surface with bounded search, filters, summary and related detail", async () => {
+    const path = "modules/core.identity.normalize/surfaces/people";
+    expect((await get(path, false)).statusCode).toBe(401);
+    const response = await get(path + "?q=研究组&platform=qq&status=complete");
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    const page = response.json().data;
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0]).toMatchObject({
+      entityId: "person-ada",
+      entityKey: "10001",
+      title: "Ada · 研究组",
+      platform: "qq",
+      status: "complete",
+    });
+    expect(page.summary.counts).toContainEqual({
+      status: "complete",
+      count: 1,
+    });
+    expect(page.platforms).toContain("qq");
+    const detail = (await get(path + "/entities/person-ada")).json().data;
+    expect(
+      detail.sections.find(
+        (section: { id: string }) => section.id === "observations",
+      ).items[0].fields,
+    ).toContainEqual({
+      label: "群名片",
+      value: "Ada · 研究组",
+    });
+    expect(
+      detail.sections.find((section: { id: string }) => section.id === "scopes")
+        .items[0].id,
+    ).toBe("scope-ada");
+    expect((await get(path + "?q=nobody")).json().data.items).toEqual([]);
+    expect((await get(path + "/entities/missing")).statusCode).toBe(404);
+    expect((await get(path + "?limit=51")).statusCode).toBe(400);
+    expect(
+      JSON.stringify(await database.information.get("person-ada")),
+    ).toContain("10001");
   });
   it("keeps flows within one context, preserves reference edges and reports truncation", async () => {
     const response = await get("flows/ctx-a");

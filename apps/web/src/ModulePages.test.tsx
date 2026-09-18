@@ -159,6 +159,58 @@ describe("模块独立页面", () => {
     expect(html).toContain("返回模块总览");
     expect(html).toContain('tabindex="-1"');
   });
+  it("uses a declared surface while keeping legacy inspection views on the generic renderer", () => {
+    const inspection = {
+      mechanism: ["检查步骤"],
+      views: [
+        {
+          id: "history",
+          title: "历史",
+          description: "历史记录",
+          kinds: [module.produces[0]!.kind],
+          fields: [{ path: "status", label: "结果" }],
+        },
+      ],
+    };
+    const legacy = render(
+      <ModuleDetails
+        module={{ ...module, inspection }}
+        token="test"
+        DetailComponent={() => null}
+      />,
+    );
+    expect(legacy).toContain("历史");
+    const surfaced = render(
+      <ModuleDetails
+        module={
+          {
+            ...module,
+            inspection: {
+              ...inspection,
+              surface: {
+                version: 1,
+                id: "people",
+                title: "人物",
+                layout: { type: "master-detail", areas: ["main"] },
+                components: [
+                  {
+                    id: "browser",
+                    type: "entity-browser",
+                    area: "main",
+                    viewId: "history",
+                  },
+                ],
+              },
+            },
+          } as InspectionModule
+        }
+        token="test"
+        DetailComponent={() => null}
+      />,
+    );
+    expect(surfaced).toContain("正在整理人物与身份资料");
+    expect(surfaced).not.toContain("模块数据视图");
+  });
   it.each([
     [{}, "正在加载模块"],
     [{ error: "Runtime 尚未就绪" }, "模块检查暂不可用"],

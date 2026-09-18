@@ -9,6 +9,106 @@
 import { z } from "zod";
 import { jsonValueSchema } from "./information.js";
 
+const inspectionFieldPathSchema = z
+  .string()
+  .regex(/^[a-zA-Z][a-zA-Z0-9]*(?:\.[a-zA-Z][a-zA-Z0-9]*)*$/u);
+const surfaceFieldSchema = z.object({
+  path: inspectionFieldPathSchema,
+  label: z.string().trim().min(1),
+});
+const surfaceRelationSchema = z.object({
+  id: z.string().trim().min(1),
+  title: z.string().trim().min(1),
+  viewId: z.string().trim().min(1),
+  kinds: z.array(z.string().trim().min(1)).min(1),
+  match: z.object({
+    source: z.enum(["entity-id", "entity-key"]),
+    field: inspectionFieldPathSchema,
+  }),
+  via: z
+    .object({
+      viewId: z.string().trim().min(1),
+      kinds: z.array(z.string().trim().min(1)).min(1),
+      matchField: inspectionFieldPathSchema,
+      selectField: inspectionFieldPathSchema,
+    })
+    .optional(),
+  presentation: z.enum([
+    "field-grid",
+    "relation-list",
+    "timeline",
+    "record-table",
+    "relationship-graph",
+  ]),
+  fields: z.array(surfaceFieldSchema).min(1),
+  limit: z.number().int().min(1).max(50).default(20),
+});
+const surfaceComponentSchema = z.discriminatedUnion("type", [
+  z.object({
+    id: z.string().trim().min(1),
+    type: z.literal("status-summary"),
+    area: z.string().trim().min(1),
+    viewId: z.string().trim().min(1),
+    kinds: z.array(z.string().trim().min(1)).min(1),
+    statusField: inspectionFieldPathSchema,
+    windowHours: z.number().int().min(1).max(168),
+  }),
+  z.object({
+    id: z.string().trim().min(1),
+    type: z.literal("entity-browser"),
+    area: z.string().trim().min(1),
+    viewId: z.string().trim().min(1),
+    entityKind: z.string().trim().min(1),
+    entityKeyField: inspectionFieldPathSchema,
+    activity: z.object({
+      viewId: z.string().trim().min(1),
+      kinds: z.array(z.string().trim().min(1)).min(1),
+      entityKeyField: inspectionFieldPathSchema,
+    }),
+    titleFields: z.array(surfaceFieldSchema).min(1),
+    searchFields: z
+      .array(
+        z.object({
+          viewId: z.string().trim().min(1),
+          kind: z.string().trim().min(1),
+          path: inspectionFieldPathSchema,
+        }),
+      )
+      .min(1),
+    platform: z.object({
+      viewId: z.string().trim().min(1),
+      kind: z.string().trim().min(1),
+      field: inspectionFieldPathSchema,
+      entityKeyField: inspectionFieldPathSchema,
+    }),
+    status: z.object({
+      viewId: z.string().trim().min(1),
+      kinds: z.array(z.string().trim().min(1)).min(1),
+      entityField: inspectionFieldPathSchema,
+      statusField: inspectionFieldPathSchema,
+    }),
+    relations: z.array(surfaceRelationSchema).min(1),
+  }),
+  z.object({
+    id: z.string().trim().min(1),
+    type: z.literal("mechanism-steps"),
+    area: z.string().trim().min(1),
+  }),
+]);
+export const moduleInspectionSurfaceSchema = z.object({
+  version: z.literal(1),
+  id: z.string().trim().min(1),
+  title: z.string().trim().min(1),
+  layout: z.object({
+    type: z.enum(["stack", "sections", "master-detail", "responsive-grid"]),
+    areas: z.array(z.string().trim().min(1)).min(1),
+  }),
+  components: z.array(surfaceComponentSchema).min(1),
+});
+export type ModuleInspectionSurfaceV1 = z.infer<
+  typeof moduleInspectionSurfaceSchema
+>;
+
 /** 模块自行声明领域视图；服务端只接受注册的视图和字段路径，不执行客户端表达式。 */
 export const moduleInspectionSchema = z.object({
   mechanism: z.array(z.string()),
@@ -22,6 +122,7 @@ export const moduleInspectionSchema = z.object({
     }),
   ),
   storage: z.enum(["memory", "vectors"]).optional(),
+  surface: moduleInspectionSurfaceSchema.optional(),
 });
 export type ModuleInspection = z.infer<typeof moduleInspectionSchema>;
 export const inspectionPresentationSchema = z.object({
@@ -111,6 +212,65 @@ export type InspectionAtom = z.infer<typeof inspectionAtomSchema>;
 export type InspectionPage = z.infer<typeof inspectionPageSchema>;
 export type InspectionDetail = z.infer<typeof inspectionDetailSchema>;
 export type InspectionFlow = z.infer<typeof inspectionFlowSchema>;
+
+const surfaceStatusCountSchema = z.object({
+  status: z.string(),
+  count: z.number().int().nonnegative(),
+});
+const surfaceListItemSchema = z.object({
+  entityId: z.string(),
+  entityKey: z.string(),
+  title: z.string(),
+  subtitle: z.string(),
+  platform: z.string().optional(),
+  status: z.string().optional(),
+  occurredAt: z.string(),
+  fields: inspectionPresentationSchema.shape.fields,
+});
+export const inspectionSurfacePageSchema = z.object({
+  version: z.literal(1),
+  surfaceId: z.string(),
+  summary: z.object({
+    windowStartedAt: z.string(),
+    windowHours: z.number().int().positive(),
+    counts: z.array(surfaceStatusCountSchema),
+  }),
+  items: z.array(surfaceListItemSchema),
+  platforms: z.array(z.string()),
+  statuses: z.array(z.string()),
+  nextCursor: z.string().nullable(),
+});
+export const inspectionSurfaceEntitySchema = z.object({
+  version: z.literal(1),
+  surfaceId: z.string(),
+  entity: surfaceListItemSchema,
+  sections: z.array(
+    z.object({
+      id: z.string(),
+      title: z.string(),
+      presentation: z.enum([
+        "field-grid",
+        "relation-list",
+        "timeline",
+        "record-table",
+        "relationship-graph",
+      ]),
+      items: z.array(
+        z.object({
+          id: z.string(),
+          occurredAt: z.string(),
+          status: z.string().optional(),
+          fields: inspectionPresentationSchema.shape.fields,
+          sourceInformationId: z.string().optional(),
+        }),
+      ),
+    }),
+  ),
+});
+export type InspectionSurfacePage = z.infer<typeof inspectionSurfacePageSchema>;
+export type InspectionSurfaceEntity = z.infer<
+  typeof inspectionSurfaceEntitySchema
+>;
 
 export const inspectionStorageSchema = z.object({
   version: z.literal(1),

@@ -95,6 +95,143 @@ describe("information module SDK", () => {
     ).toThrow(/invalid renderer/iu);
   });
 
+  it("validates and deeply freezes declarative inspection surfaces", () => {
+    const inspection = {
+      mechanism: ["Inspect the entity."],
+      views: [
+        {
+          id: "entities",
+          title: "Entities",
+          description: "Entity records.",
+          kinds: [outputKind.kind],
+          fields: [
+            { path: "text", label: "Text" },
+            { path: "status", label: "Status" },
+          ],
+        },
+      ],
+      surface: {
+        version: 1 as const,
+        id: "entity-surface",
+        title: "Entities",
+        layout: { type: "master-detail" as const, areas: ["main"] },
+        components: [
+          {
+            id: "summary",
+            type: "status-summary" as const,
+            area: "main",
+            viewId: "entities",
+            kinds: [outputKind.kind],
+            statusField: "status",
+            windowHours: 24,
+          },
+          {
+            id: "browser",
+            type: "entity-browser" as const,
+            area: "main",
+            viewId: "entities",
+            entityKind: outputKind.kind,
+            entityKeyField: "text",
+            activity: {
+              viewId: "entities",
+              kinds: [outputKind.kind],
+              entityKeyField: "text",
+            },
+            titleFields: [{ path: "text", label: "Text" }],
+            searchFields: [
+              { viewId: "entities", kind: outputKind.kind, path: "text" },
+            ],
+            platform: {
+              viewId: "entities",
+              kind: outputKind.kind,
+              field: "text",
+              entityKeyField: "text",
+            },
+            status: {
+              viewId: "entities",
+              kinds: [outputKind.kind],
+              entityField: "text",
+              statusField: "status",
+            },
+            relations: [
+              {
+                id: "related",
+                title: "Related",
+                viewId: "entities",
+                kinds: [outputKind.kind],
+                match: { source: "entity-key" as const, field: "text" },
+                presentation: "relation-list" as const,
+                fields: [{ path: "text", label: "Text" }],
+                limit: 20,
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const definition = {
+      manifest: {
+        protocolVersion: 1 as const,
+        summary: "Surface module.",
+        moduleVersion: "1.0.0",
+        definitionId: "acme.surface",
+        displayName: "Surface",
+        description: "Defines a declarative surface.",
+        settingsSchema: z.object({}).strict(),
+        consumes: [],
+        produces: [outputKind],
+        selectors: [],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
+        inspection,
+      },
+      create: () => ({ provisions: [], subscriptions: [] }),
+    };
+    const module = defineInformationModule(definition);
+    expect(Object.isFrozen(module.manifest.inspection?.surface)).toBe(true);
+    expect(
+      Object.isFrozen(module.manifest.inspection?.surface?.components[1]),
+    ).toBe(true);
+    expect(() =>
+      defineInformationModule({
+        ...definition,
+        manifest: {
+          ...definition.manifest,
+          inspection: {
+            ...inspection,
+            surface: {
+              ...inspection.surface,
+              components: [
+                inspection.surface.components[0]!,
+                { ...inspection.surface.components[0]! },
+              ],
+            },
+          },
+        },
+      }),
+    ).toThrow(/Duplicate inspection surface component/);
+    expect(() =>
+      defineInformationModule({
+        ...definition,
+        manifest: {
+          ...definition.manifest,
+          inspection: {
+            ...inspection,
+            surface: {
+              ...inspection.surface,
+              components: inspection.surface.components.map((component) =>
+                component.type === "status-summary"
+                  ? { ...component, viewId: "missing" }
+                  : component,
+              ),
+            },
+          },
+        },
+      }),
+    ).toThrow(/Unknown inspection surface view/);
+  });
+
   it("defines frozen, schema-bound module diagnostics", () => {
     const diagnostic = defineModuleDiagnostic({
       event: "acme.lookup.started",

@@ -19,10 +19,13 @@ import {
   inspectionDetailSchema,
   inspectionFlowSchema,
   inspectionStorageSchema,
+  inspectionSurfacePageSchema,
+  inspectionSurfaceEntitySchema,
   type InspectionModule,
   type JsonValue,
   type DeepReadonly,
   type InformationAtom,
+  type ModuleInspectionSurfaceV1,
 } from "@kaguya/schema";
 import { createInspectionRedactor } from "./inspection-redaction.js";
 import {
@@ -50,6 +53,7 @@ const pageQuery = z
 const cursorSchema = z
   .object({ occurredAt: date, informationId: id, filter: z.string() })
   .strict();
+const surfaceCursorSchema = cursorSchema;
 function parseRequest<T>(
   schema: { parse(value: unknown): T },
   value: unknown,
@@ -135,10 +139,284 @@ function preview(value: JsonValue, depth = 0): JsonValue {
   return value;
 }
 export interface InspectionSource {
-  readonly ledger: Pick<InformationRepository, "get" | "inspectPage">;
+  readonly ledger: Pick<InformationRepository, "get" | "inspectPage"> &
+    Partial<
+      Pick<
+        InformationRepository,
+        "getMany" | "inspectPayloadCounts" | "inspectEntityPage"
+      >
+    >;
   readonly modules: () => unknown;
   readonly secrets: unknown;
   readonly database?: KaguyaDatabase;
+  readonly now?: () => Date;
+}
+type SurfaceBrowser = Extract<
+  ModuleInspectionSurfaceV1["components"][number],
+  { type: "entity-browser" }
+>;
+type SurfaceStatus = Extract<
+  ModuleInspectionSurfaceV1["components"][number],
+  { type: "status-summary" }
+>;
+type InspectionLedger = Pick<
+  InformationRepository,
+  | "get"
+  | "getMany"
+  | "inspectPage"
+  | "inspectPayloadCounts"
+  | "inspectEntityPage"
+>;
+
+function requireSurfaceLedger(
+  ledger: InspectionSource["ledger"],
+): InspectionLedger {
+  if (
+    !ledger.getMany ||
+    !ledger.inspectPayloadCounts ||
+    !ledger.inspectEntityPage
+  )
+    throw new InspectionError(503, "inspection_surface_unavailable");
+  return ledger as InspectionLedger;
+}
+
+function findSurface(
+  catalog: readonly InspectionModule[],
+  definitionId: string,
+  surfaceId: string,
+) {
+  const module = catalog.find((item) => item.definitionId === definitionId);
+  const surface = module?.inspection?.surface;
+  if (!module || !surface || surface.id !== surfaceId)
+    throw new InspectionError(404, "module_surface_not_found");
+  const browser = surface.components.find(
+    (component): component is SurfaceBrowser =>
+      component.type === "entity-browser",
+  );
+  const status = surface.components.find(
+    (component): component is SurfaceStatus =>
+      component.type === "status-summary",
+  );
+  if (!browser || !status)
+    throw new InspectionError(500, "invalid_module_surface");
+  return { module, surface, browser, status };
+}
+
+function readAtomField(
+  atom: DeepReadonly<InformationAtom>,
+  path: string,
+): JsonValue | undefined {
+  if (path === "informationId" || path === "occurredAt" || path === "source")
+    return atom[path];
+  return readField(atom.payload, path);
+}
+
+function uniqueStrings(values: readonly unknown[]): string[] {
+  return [
+    ...new Set(
+      values.filter((value): value is string =>
+        Boolean(typeof value === "string" && value.trim()),
+      ),
+    ),
+  ].sort((a, b) => a.localeCompare(b));
+}
+
+function decodeSurfaceCursor(encoded: string | undefined, filter: string) {
+  if (!encoded) return undefined;
+  try {
+    const cursor = surfaceCursorSchema.parse(
+      JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")),
+    );
+    if (cursor.filter !== filter) throw new Error("filter mismatch");
+    return {
+      occurredAt: cursor.occurredAt,
+      informationId: cursor.informationId,
+    };
+  } catch {
+    throw new InspectionError(400, "invalid_cursor");
+  }
+}
+
+function encodeSurfaceCursor(
+  item: { occurredAt: string; entityId: string },
+  filter: string,
+) {
+  return Buffer.from(
+    JSON.stringify({
+      occurredAt: item.occurredAt,
+      informationId: item.entityId,
+      filter,
+    }),
+  ).toString("base64url");
+}
+
+async function eligibleSurfaceEntityIds(
+  ledger: InspectionLedger,
+  browser: SurfaceBrowser,
+  query: {
+    q?: string | undefined;
+    platform?: string | undefined;
+    status?: string | undefined;
+  },
+): Promise<Set<string> | undefined> {
+  const restrictions: Set<string>[] = [];
+  if (query.q) {
+    const keys = new Set<string>();
+    for (const field of browser.searchFields) {
+      const rows = await ledger.inspectPage({
+        kind: field.kind,
+        payloadSearch: { paths: [field.path.split(".")], text: query.q },
+        limit: 501,
+      });
+      for (const atom of rows) {
+        const key = readAtomField(atom, browser.entityKeyField);
+        if (typeof key === "string") keys.add(key);
+      }
+    }
+    restrictions.push(
+      new Set(
+        (
+          await ledger.inspectPage({
+            kind: browser.entityKind,
+            payloadIn: {
+              path: browser.entityKeyField.split("."),
+              values: [...keys],
+            },
+            limit: 501,
+          })
+        ).map(({ informationId }) => informationId),
+      ),
+    );
+  }
+  if (query.platform) {
+    const accounts = await ledger.inspectPage({
+      kind: browser.platform.kind,
+      payloadIn: {
+        path: browser.platform.field.split("."),
+        values: [query.platform],
+      },
+      limit: 501,
+    });
+    const keys = uniqueStrings(
+      accounts.map((atom) =>
+        readAtomField(atom, browser.platform.entityKeyField),
+      ),
+    );
+    restrictions.push(
+      new Set(
+        (
+          await ledger.inspectPage({
+            kind: browser.entityKind,
+            payloadIn: {
+              path: browser.entityKeyField.split("."),
+              values: keys,
+            },
+            limit: 501,
+          })
+        ).map(({ informationId }) => informationId),
+      ),
+    );
+  }
+  if (query.status) {
+    restrictions.push(
+      new Set(
+        (
+          await ledger.inspectPage({
+            kinds: browser.status.kinds,
+            payloadIn: {
+              path: browser.status.statusField.split("."),
+              values: [query.status],
+            },
+            limit: 501,
+          })
+        ).flatMap((atom) => {
+          const entityId = readAtomField(atom, browser.status.entityField);
+          return typeof entityId === "string" ? [entityId] : [];
+        }),
+      ),
+    );
+  }
+  if (!restrictions.length) return undefined;
+  return restrictions
+    .slice(1)
+    .reduce(
+      (result, set) => new Set([...result].filter((value) => set.has(value))),
+      restrictions[0]!,
+    );
+}
+
+async function buildSurfaceItems(
+  ledger: InspectionLedger,
+  browser: SurfaceBrowser,
+  roots: readonly DeepReadonly<InformationAtom>[],
+) {
+  if (!roots.length) return [];
+  const keys = uniqueStrings(
+    roots.map((atom) => readAtomField(atom, browser.entityKeyField)),
+  );
+  const relatedKinds = uniqueStrings([
+    browser.platform.kind,
+    ...browser.searchFields.map(({ kind }) => kind),
+  ]);
+  const related = await ledger.inspectPage({
+    kinds: relatedKinds,
+    payloadIn: { path: browser.entityKeyField.split("."), values: keys },
+    limit: 501,
+  });
+  const statuses = await ledger.inspectPage({
+    kinds: browser.status.kinds,
+    payloadIn: {
+      path: browser.status.entityField.split("."),
+      values: roots.map(({ informationId }) => informationId),
+    },
+    limit: 501,
+  });
+  return roots.map((root) => {
+    const entityKey = String(
+      readAtomField(root, browser.entityKeyField) ?? root.informationId,
+    );
+    const rows = related.filter(
+      (atom) => readAtomField(atom, browser.entityKeyField) === entityKey,
+    );
+    const platformRow = rows.find(
+      (atom) => atom.kind === browser.platform.kind,
+    );
+    const statusRow = statuses.find(
+      (atom) =>
+        readAtomField(atom, browser.status.entityField) === root.informationId,
+    );
+    const title =
+      browser.titleFields
+        .map(({ path }) =>
+          [root, ...rows]
+            .map((atom) => readAtomField(atom, path))
+            .find((value) => typeof value === "string" && value.trim()),
+        )
+        .find((value) => typeof value === "string") ?? entityKey;
+    const platform = platformRow
+      ? readAtomField(platformRow, browser.platform.field)
+      : undefined;
+    const status = statusRow
+      ? readAtomField(statusRow, browser.status.statusField)
+      : undefined;
+    const latest = rows[0]?.occurredAt ?? root.occurredAt;
+    return {
+      entityId: root.informationId,
+      entityKey,
+      title,
+      subtitle: `${typeof platform === "string" ? platform : "未知平台"} · ${entityKey}`,
+      ...(typeof platform === "string" ? { platform } : {}),
+      ...(typeof status === "string" ? { status } : {}),
+      occurredAt: latest,
+      fields: [
+        { label: "账号", value: entityKey },
+        ...(typeof platform === "string"
+          ? [{ label: "平台", value: platform }]
+          : []),
+        { label: "最近观察", value: latest },
+      ],
+    };
+  });
 }
 export function createInspectionService(source: InspectionSource) {
   const redact = createInspectionRedactor(source.secrets);
@@ -330,6 +608,180 @@ export function createInspectionService(source: InspectionSource) {
         ),
       );
     },
+    async surface(definitionId: string, surfaceId: string, input: unknown) {
+      const ledger = requireSurfaceLedger(source.ledger);
+      const { module, surface, browser, status } = findSurface(
+        modules(),
+        definitionId,
+        surfaceId,
+      );
+      const query = parseRequest(
+        z
+          .object({
+            cursor: z.string().min(1).max(4096).optional(),
+            limit: z.coerce.number().int().min(1).max(50).default(20),
+            q: z.string().trim().max(100).optional(),
+            platform: z.string().trim().min(1).max(100).optional(),
+            status: z.string().trim().min(1).max(100).optional(),
+          })
+          .strict(),
+        input,
+      );
+      const filter = createHash("sha256")
+        .update(
+          JSON.stringify({
+            definitionId,
+            surfaceId,
+            q: query.q ?? "",
+            platform: query.platform ?? "",
+            status: query.status ?? "",
+          }),
+        )
+        .digest("hex");
+      const cursor = decodeSurfaceCursor(query.cursor, filter);
+      const entityIds = await eligibleSurfaceEntityIds(ledger, browser, query);
+      const roots = await ledger.inspectEntityPage({
+        rootKind: browser.entityKind,
+        rootKeyPath: browser.entityKeyField.split("."),
+        activityKinds: browser.activity.kinds,
+        activityKeyPath: browser.activity.entityKeyField.split("."),
+        limit: query.limit + 1,
+        ...(cursor ? { cursor } : {}),
+        ...(entityIds ? { informationIds: [...entityIds] } : {}),
+      });
+      const page = roots.slice(0, query.limit);
+      const items = await buildSurfaceItems(ledger, browser, page);
+      const summaryAfter = new Date(
+        (source.now?.() ?? new Date()).getTime() -
+          status.windowHours * 60 * 60 * 1000,
+      ).toISOString();
+      const counts = await ledger.inspectPayloadCounts({
+        kinds: status.kinds,
+        path: status.statusField.split("."),
+        after: summaryAfter,
+      });
+      const platformRows = await ledger.inspectPage({
+        kind: browser.platform.kind,
+        limit: 501,
+      });
+      const platforms = uniqueStrings(
+        platformRows.map((atom) => readAtomField(atom, browser.platform.field)),
+      );
+      const statuses = [
+        "complete",
+        "unresolved",
+        "ambiguous",
+        "degraded",
+        "failed",
+        ...uniqueStrings(counts.map(({ value }) => value)).filter(
+          (value) =>
+            ![
+              "complete",
+              "unresolved",
+              "ambiguous",
+              "degraded",
+              "failed",
+            ].includes(value),
+        ),
+      ];
+      const last = items.at(-1);
+      return inspectionSurfacePageSchema.parse(
+        redact({
+          version: 1,
+          surfaceId: surface.id,
+          summary: {
+            windowStartedAt: summaryAfter,
+            windowHours: status.windowHours,
+            counts: statuses.map((value) => ({
+              status: value,
+              count: counts.find((item) => item.value === value)?.count ?? 0,
+            })),
+          },
+          items,
+          platforms,
+          statuses,
+          nextCursor:
+            roots.length > query.limit && last
+              ? encodeSurfaceCursor(last, filter)
+              : null,
+        }),
+      );
+    },
+    async surfaceEntity(
+      definitionId: string,
+      surfaceId: string,
+      entityId: string,
+    ) {
+      const ledger = requireSurfaceLedger(source.ledger);
+      const { surface, browser } = findSurface(
+        modules(),
+        definitionId,
+        surfaceId,
+      );
+      const root = await ledger.get(parseRequest(id, entityId));
+      if (!root || root.kind !== browser.entityKind)
+        throw new InspectionError(404, "surface_entity_not_found");
+      const [entity] = await buildSurfaceItems(ledger, browser, [root]);
+      if (!entity) throw new InspectionError(404, "surface_entity_not_found");
+      const entityKey = String(
+        readAtomField(root, browser.entityKeyField) ?? "",
+      );
+      const sections = [];
+      for (const relation of browser.relations) {
+        const matchValue =
+          relation.match.source === "entity-id" ? entityId : entityKey;
+        let matchValues = [matchValue];
+        if (relation.via) {
+          const viaRows = await ledger.inspectPage({
+            kinds: relation.via.kinds,
+            payloadIn: {
+              path: relation.via.matchField.split("."),
+              values: [matchValue],
+            },
+            limit: 501,
+          });
+          matchValues = uniqueStrings(
+            viaRows.map((atom) =>
+              readAtomField(atom, relation.via!.selectField),
+            ),
+          );
+        }
+        const rows = matchValues.length
+          ? await ledger.inspectPage({
+              kinds: relation.kinds,
+              ...(relation.match.field === "informationId"
+                ? { informationIds: matchValues }
+                : {
+                    payloadIn: {
+                      path: relation.match.field.split("."),
+                      values: matchValues,
+                    },
+                  }),
+              limit: Math.min(501, relation.limit + 1),
+            })
+          : [];
+        sections.push({
+          id: relation.id,
+          title: relation.title,
+          presentation: relation.presentation,
+          items: rows.slice(0, relation.limit).map((atom) => ({
+            id: atom.informationId,
+            occurredAt: atom.occurredAt,
+            ...(typeof readAtomField(atom, "status") === "string"
+              ? { status: readAtomField(atom, "status") }
+              : {}),
+            fields: relation.fields.flatMap(({ path, label }) => {
+              const value = readAtomField(atom, path);
+              return value === undefined ? [] : [{ label, value }];
+            }),
+            sourceInformationId: atom.informationId,
+          })),
+        });
+      }
+      return inspectionSurfaceEntitySchema.parse(
+        redact({ version: 1, surfaceId: surface.id, entity, sections }),
+      );
+    },
   };
 }
 export type InspectionService = ReturnType<typeof createInspectionService>;
@@ -355,6 +807,30 @@ export function registerInspectionRoutes(
     (request: FastifyRequest, service: InspectionService) => unknown,
   ][] = [
     ["modules", (_, s) => s.modules()],
+    [
+      "modules/:definitionId/surfaces/:surfaceId",
+      (r, s) => {
+        const params = parseRequest(
+          z.object({ definitionId: id, surfaceId: id }),
+          r.params,
+        );
+        return s.surface(params.definitionId, params.surfaceId, r.query);
+      },
+    ],
+    [
+      "modules/:definitionId/surfaces/:surfaceId/entities/:entityId",
+      (r, s) => {
+        const params = parseRequest(
+          z.object({ definitionId: id, surfaceId: id, entityId: id }),
+          r.params,
+        );
+        return s.surfaceEntity(
+          params.definitionId,
+          params.surfaceId,
+          params.entityId,
+        );
+      },
+    ],
     [
       "modules/:definitionId/storage",
       (r, s) =>

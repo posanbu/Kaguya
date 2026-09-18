@@ -273,6 +273,7 @@
 }
 .module-details h2 {
   margin: 0 0 8px;
+  width: fit-content;
 }
 .module-details h3 {
   margin: 0 0 12px;
@@ -722,5 +723,398 @@
 @media (max-width: 900px) {
   .module-runtime .developer-split > .inspection-records {
     max-height: 55vh;
+  }
+}
+
+/* Manifest 驱动的模块 Surface：人物目录承担主导航，详情在同一阅读面连续展开。 */
+.module-surface {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+.surface-status-summary {
+  border: 1px solid var(--kaguya-line);
+  border-radius: 12px;
+  background: var(--kaguya-paper);
+  overflow: hidden;
+}
+.surface-status-summary > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 20px;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--kaguya-line);
+}
+.surface-status-summary h3,
+.surface-status-summary p {
+  margin: 0;
+}
+.surface-status-summary p {
+  margin-top: 5px;
+  color: var(--kaguya-muted);
+  font-size: 12px;
+}
+.surface-status-summary > div {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+.surface-status-summary button {
+  min-height: 72px;
+  display: grid;
+  place-content: center;
+  gap: 3px;
+  border: 0;
+  border-right: 1px solid var(--kaguya-line);
+  background: transparent;
+  color: var(--kaguya-ink);
+  cursor: pointer;
+}
+.surface-status-summary button:last-child {
+  border-right: 0;
+}
+.surface-status-summary button:hover,
+.surface-status-summary button[aria-pressed="true"] {
+  background: var(--kaguya-paper-soft);
+  color: var(--kaguya-coral-strong);
+}
+.surface-status-summary button[aria-pressed="true"] {
+  box-shadow: inset 0 -3px var(--kaguya-coral);
+}
+.surface-status-summary button:focus-visible,
+.surface-directory button:focus-visible,
+.surface-relationship-map button:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 3px solid var(--kaguya-focus);
+  outline-offset: -3px;
+}
+.surface-status-summary strong {
+  font-size: 24px;
+  font-variant-numeric: tabular-nums;
+}
+.surface-status-summary span {
+  color: inherit;
+  font-size: 12px;
+}
+.surface-toolbar {
+  display: grid;
+  grid-template-columns:
+    minmax(260px, 2fr) minmax(140px, 0.8fr) minmax(140px, 0.8fr)
+    auto;
+  align-items: end;
+  gap: 12px;
+}
+.surface-toolbar label {
+  display: grid;
+  gap: 7px;
+  color: var(--kaguya-muted);
+  font-size: 12px;
+}
+.surface-input-wrap {
+  position: relative;
+  display: block;
+}
+.surface-input-wrap svg {
+  position: absolute;
+  top: 50%;
+  left: 12px;
+  color: var(--kaguya-muted);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.surface-input-wrap input {
+  padding-left: 38px;
+}
+.surface-toolbar .wb-button {
+  min-height: 44px;
+}
+.surface-result-note {
+  margin: -4px 0 0;
+  color: var(--kaguya-muted);
+  font-size: 12px;
+}
+.surface-browser {
+  display: grid;
+  grid-template-columns: minmax(310px, 0.72fr) minmax(0, 1.28fr);
+  min-height: 520px;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 12px;
+  background: var(--kaguya-paper);
+  overflow: hidden;
+}
+.surface-directory {
+  min-width: 0;
+  border-right: 1px solid var(--kaguya-line);
+  background: var(--kaguya-paper-soft);
+}
+.surface-directory > header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 52px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--kaguya-line);
+}
+.surface-directory h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.surface-directory ol {
+  max-height: 70vh;
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  scrollbar-color: var(--kaguya-line) transparent;
+}
+.surface-directory li + li {
+  border-top: 1px solid var(--kaguya-line);
+}
+.surface-directory button {
+  width: 100%;
+  min-height: 88px;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 0;
+  background: transparent;
+  color: var(--kaguya-ink);
+  text-align: left;
+  cursor: pointer;
+}
+.surface-directory button:hover,
+.surface-directory button[aria-pressed="true"] {
+  background: var(--kaguya-paper);
+}
+.surface-directory button[aria-pressed="true"] {
+  box-shadow: inset 3px 0 var(--kaguya-coral);
+}
+.surface-avatar,
+.surface-detail-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--kaguya-coral) 12%, var(--kaguya-paper));
+  color: var(--kaguya-coral-strong);
+  font-weight: 700;
+}
+.surface-person-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.surface-person-copy strong,
+.surface-person-copy small,
+.surface-person-copy time {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.surface-person-copy small,
+.surface-person-copy time {
+  color: var(--kaguya-muted);
+  font-size: 11px;
+}
+.surface-detail {
+  min-width: 0;
+  padding: 24px 28px 36px;
+}
+.surface-detail > header {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--kaguya-line);
+}
+.surface-detail h3,
+.surface-detail > header p {
+  margin: 0;
+}
+.surface-detail h3 {
+  font-size: 20px;
+}
+.surface-detail > header p {
+  margin-top: 4px;
+  color: var(--kaguya-muted);
+  font-size: 12px;
+}
+.surface-section {
+  padding-top: 24px;
+  margin-top: 24px;
+  border-top: 1px solid var(--kaguya-line);
+}
+.surface-section > header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.surface-section h4 {
+  margin: 0;
+  font-size: 14px;
+}
+.surface-section > header span {
+  min-width: 24px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--kaguya-paper-soft);
+  color: var(--kaguya-muted);
+  font-size: 11px;
+  text-align: center;
+}
+.surface-section-list {
+  display: grid;
+  gap: 0;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.surface-section-list > li {
+  padding: 15px 0;
+  border-bottom: 1px solid var(--kaguya-line);
+}
+.surface-section-list > li:last-child {
+  border-bottom: 0;
+}
+.surface-section-list > li > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+.surface-section-list time {
+  color: var(--kaguya-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.surface-section-list .wb-button {
+  min-height: 40px;
+}
+.surface-section-timeline .surface-section-list {
+  padding-left: 18px;
+  border-left: 1px solid var(--kaguya-line);
+}
+.surface-relationship-map {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.35fr) minmax(0, 1fr);
+  gap: 24px;
+  align-items: center;
+  padding: 18px;
+  border: 1px dashed var(--kaguya-line);
+  border-radius: 12px;
+  background: var(--kaguya-paper-soft);
+}
+.surface-relationship-map > span {
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--kaguya-coral);
+  color: var(--kaguya-paper);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+}
+.surface-relationship-map > div {
+  display: grid;
+  gap: 8px;
+}
+.surface-relationship-map button {
+  position: relative;
+  padding: 10px 14px;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 9px;
+  background: var(--kaguya-paper);
+  color: var(--kaguya-ink);
+  text-align: left;
+  cursor: pointer;
+}
+.surface-relationship-map button::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 100%;
+  width: 24px;
+  border-top: 1px solid var(--kaguya-line);
+}
+.surface-relationship-map .inspection-fields {
+  margin: 0;
+}
+.surface-mechanism {
+  padding: 16px 18px;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 12px;
+  background: var(--kaguya-paper);
+  font-size: 13px;
+  line-height: 1.8;
+}
+.surface-mechanism summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.surface-trace {
+  padding-top: 24px;
+  border-top: 1px solid var(--kaguya-line);
+}
+@media (max-width: 980px) {
+  .surface-toolbar {
+    grid-template-columns: minmax(220px, 1fr) repeat(2, minmax(130px, 0.7fr));
+  }
+  .surface-toolbar .wb-button {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+  .surface-browser {
+    grid-template-columns: 1fr;
+  }
+  .surface-directory {
+    border-right: 0;
+    border-bottom: 1px solid var(--kaguya-line);
+  }
+  .surface-directory ol {
+    max-height: 44vh;
+  }
+}
+@media (max-width: 620px) {
+  .surface-status-summary > div {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .surface-status-summary button,
+  .surface-status-summary button:last-child {
+    border-right: 1px solid var(--kaguya-line);
+    border-bottom: 1px solid var(--kaguya-line);
+  }
+  .surface-toolbar {
+    grid-template-columns: 1fr;
+  }
+  .surface-toolbar .wb-button {
+    width: 100%;
+  }
+  .surface-directory button {
+    grid-template-columns: 42px minmax(0, 1fr);
+  }
+  .surface-directory .wb-status {
+    grid-column: 2;
+    justify-self: start;
+  }
+  .surface-detail {
+    padding: 20px 16px 28px;
+  }
+  .surface-detail > header {
+    grid-template-columns: 42px minmax(0, 1fr);
+  }
+  .surface-detail > header > .wb-status {
+    grid-column: 2;
+    justify-self: start;
+  }
+  .surface-relationship-map {
+    grid-template-columns: 1fr;
+  }
+  .surface-relationship-map button::before {
+    display: none;
   }
 }
