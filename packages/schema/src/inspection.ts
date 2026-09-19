@@ -4,6 +4,7 @@
  * 对应类型供服务端投影与 WebUI 共享，领域视图/机制由 Manifest 声明；presentation 展示安全字段。
  * inspectionStorageSchema 区分真实存储不可用与空页，游标不包含内容。
  * record-browser 声明按事实时间浏览的记录、反向引用分组与受限来源投影；不要求人物实体或账号。
+ * model-request-browser 按模块与任务隔离每次请求，独立详情保留冻结输入、完整脱敏 Prompt 和投递证据。
  * 代码库关系：由 schema/index.ts 导出，server/inspection.ts 产出，Web API 校验后展示。
  * 输入输出与副作用：仅声明 JSON wire contract，无 I/O；详情 payload 必须由服务端先脱敏。
  */
@@ -45,6 +46,14 @@ const surfaceRelationSchema = z.object({
   limit: z.number().int().min(1).max(50).default(20),
 });
 const surfaceComponentSchema = z.discriminatedUnion("type", [
+  z.object({
+    id: z.string().trim().min(1),
+    type: z.literal("model-request-browser"),
+    area: z.string().trim().min(1),
+    viewId: z.string().trim().min(1),
+    taskId: z.string().trim().min(1),
+    mode: z.enum(["planner", "composer"]),
+  }),
   z.object({
     id: z.string().trim().min(1),
     type: z.literal("record-browser"),
@@ -329,6 +338,66 @@ export const inspectionSurfaceEntitySchema = z.object({
 export type InspectionSurfacePage = z.infer<typeof inspectionSurfacePageSchema>;
 export type InspectionSurfaceEntity = z.infer<
   typeof inspectionSurfaceEntitySchema
+>;
+
+/** 一行对应一次持久化模型请求；status 描述模型调用，outcomeText 描述实际业务结果。 */
+export const inspectionRequestSummarySchema = z.object({
+  requestId: z.string(),
+  occurredAt: z.string(),
+  status: z.string(),
+  triggerText: z.string(),
+  outcomeText: z.string(),
+  inputCount: z.number().int().nonnegative(),
+  triggerKind: z.enum(["inbound", "authorization"]).optional(),
+});
+export const inspectionRequestPageSchema = z.object({
+  version: z.literal(1),
+  surfaceId: z.string(),
+  items: z.array(inspectionRequestSummarySchema),
+  nextCursor: z.string().nullable(),
+});
+export const inspectionRequestDetailSchema = z.object({
+  version: z.literal(1),
+  surfaceId: z.string(),
+  request: inspectionRequestSummarySchema,
+  inputs: z.array(
+    z.object({
+      informationId: z.string(),
+      occurredAt: z.string().optional(),
+      sender: z.string().optional(),
+      text: z.string(),
+    }),
+  ),
+  prompt: z
+    .object({ available: z.boolean(), text: z.string().optional() })
+    .refine(
+      (prompt) => prompt.available === (prompt.text !== undefined),
+      "Prompt availability must match its text",
+    ),
+  result: z.object({
+    action: z.string().optional(),
+    reason: z.string().optional(),
+    text: z.string().optional(),
+  }),
+  model: inspectionPresentationSchema.shape.fields.optional(),
+  trace: z.array(
+    z.object({
+      informationId: z.string(),
+      kind: z.string(),
+      occurredAt: z.string(),
+      label: z.string(),
+      status: z.string().optional(),
+    }),
+  ),
+  truncated: z.boolean(),
+  contextAvailable: z.boolean(),
+});
+export type InspectionRequestSummary = z.infer<
+  typeof inspectionRequestSummarySchema
+>;
+export type InspectionRequestPage = z.infer<typeof inspectionRequestPageSchema>;
+export type InspectionRequestDetail = z.infer<
+  typeof inspectionRequestDetailSchema
 >;
 
 export const inspectionStorageSchema = z.object({

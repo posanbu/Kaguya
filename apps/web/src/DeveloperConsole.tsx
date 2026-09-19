@@ -6,7 +6,7 @@
  * 主要职责：DeveloperConsole 维护页面导航及手动刷新；ModulePage 按路径展示紧凑总览或独立详情；
  * Atoms 提供过滤、游标页和详情；Flows 按 runtime context 展示可点击 DAG 或时间列表；
  * Detail 支持完整脱敏 payload/Prompt、正反引用导航及复制 ID；useInspection 取消过期请求。
- * 模块页注入复用的 Detail；列表展示语义摘要，详情默认可读字段，原始 JSON/Prompt 按需展开。
+ * 模块页注入复用的 Detail；逐请求详情隐藏通用页头导航，由专属页面提供返回、刷新与互斥内容子路由。
  * 代码库关系：App.tsx 处理 history 与锁屏，api.ts 复用 Gateway 认证并用 schema 包验证 DTO；
  * developer.css 定义响应式布局，模块和 Kind 名称完全由 Manifest 提供。
  * 输入输出与副作用：仅 GET 请求、history 导航和用户触发的剪贴板写入；无轮询、编辑或重放；
@@ -17,6 +17,7 @@ import { ModuleTemplatesSection } from "./ModuleTemplatesSection.js";
 import { ModuleSettingsSection } from "./ModuleSettingsSection.js";
 import { useEffect, useRef, useMemo, useState, type FormEvent } from "react";
 import { useInspection } from "./use-inspection.js";
+import { requestRoute } from "./request-routes.js";
 import {
   InspectionFields,
   InspectionStatus,
@@ -86,27 +87,31 @@ export function DeveloperConsole({
   return (
     <div className="app-shell developer-shell">
       <main className="developer-main">
-        <PageHeader
-          title="检查"
-          description="查看模块契约与消息流。消息和 Prompt 已执行秘密脱敏。"
-          actions={
-            <Button onClick={() => setRevision((r) => r + 1)}>刷新</Button>
-          }
-        />
-        <nav className="developer-tabs" aria-label="开发者导航">
-          {(["modules", "atoms", "flows"] as const).map((p, i) => (
-            <a
-              key={p}
-              href={`/developer/${p}`}
-              aria-current={page === p ? "page" : undefined}
-              onClick={(e) => {
-                navigateModuleLink(e, `/developer/${p}`, navigate);
-              }}
-            >
-              {["Module 模块", "Atom 消息", "Ingress / Turn 流"][i]}
-            </a>
-          ))}
-        </nav>
+        {!requestRoute(path) && (
+          <>
+            <PageHeader
+              title="检查"
+              description="查看模块契约与消息流。消息和 Prompt 已执行秘密脱敏。"
+              actions={
+                <Button onClick={() => setRevision((r) => r + 1)}>刷新</Button>
+              }
+            />
+            <nav className="developer-tabs" aria-label="开发者导航">
+              {(["modules", "atoms", "flows"] as const).map((p, i) => (
+                <a
+                  key={p}
+                  href={`/developer/${p}`}
+                  aria-current={page === p ? "page" : undefined}
+                  onClick={(e) => {
+                    navigateModuleLink(e, `/developer/${p}`, navigate);
+                  }}
+                >
+                  {["Module 模块", "Atom 消息", "Ingress / Turn 流"][i]}
+                </a>
+              ))}
+            </nav>
+          </>
+        )}
         {page === "modules" ? (
           <ModulePage
             path={path}
