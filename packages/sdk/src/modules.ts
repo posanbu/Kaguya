@@ -1,6 +1,7 @@
 /**
  * ModuleRegistrationInput.openScope 为 registerOnce 声明开放范围及释放终态组，仍由 Core 验证并提交。
  * promptTemplates 显式声明模块模板归属，Catalog 冻结其变量、partial 与组成关系。
+ * record-browser 校验根 Kind、关系分组和来源投影的 view/字段白名单，随后与其他 Surface 一起深冻结。
  * inspection 显式声明领域视图、字段和机制；校验后冻结，供 Host 只读投影，不提供任意查询执行。
  * 功能概述：定义唯一版本化模块协议、显式 Catalog 与受控能力边界，供模块作者和 Host 共用。
  * 主要职责：defineInformationModule 校验静态清单；Catalog 确定性合并并拒绝身份冲突；
@@ -426,6 +427,54 @@ function validateInspectionSurface(
         !view.fields.some(({ path }) => path === component.statusField)
       )
         throw new Error("Unknown inspection surface status field");
+      continue;
+    }
+    if (component.type === "record-browser") {
+      const requireFields = (
+        viewId: string,
+        kinds: readonly string[],
+        paths: readonly string[],
+      ) => {
+        const target = views.get(viewId);
+        if (
+          !target ||
+          kinds.some((kind) => !target.kinds.includes(kind)) ||
+          paths.some(
+            (path) =>
+              !["informationId", "occurredAt", "source"].includes(path) &&
+              !target.fields.some((field) => field.path === path),
+          )
+        )
+          throw new Error("Unknown inspection surface record field");
+      };
+      if (!producedKinds.has(component.recordKind))
+        throw new Error("Unknown inspection surface record kind");
+      requireFields(
+        component.viewId,
+        [component.recordKind],
+        [
+          component.titleField,
+          ...component.searchFields,
+          ...component.fields.map((field) => field.path),
+        ],
+      );
+      if (
+        new Set(component.relations.map(({ id }) => id)).size !==
+        component.relations.length
+      )
+        throw new Error("Duplicate inspection surface relation id");
+      for (const relation of component.relations) {
+        requireFields(relation.viewId, relation.kinds, [
+          ...relation.fields.map((field) => field.path),
+          ...(relation.rankField ? [relation.rankField] : []),
+        ]);
+        if (relation.source)
+          requireFields(
+            relation.source.viewId,
+            relation.source.kinds,
+            relation.source.fields.map((field) => field.path),
+          );
+      }
       continue;
     }
     if (
