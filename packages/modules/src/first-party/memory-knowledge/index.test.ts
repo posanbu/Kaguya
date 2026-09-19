@@ -2,7 +2,8 @@
  * 功能概述：用真实 Core、ModuleHost 和 PGlite 验证事件 Wiki 原型的后台集成。
  * fixture 可先仅启用身份模块再启用知识模块，覆盖无订阅历史回填、多人归属、昵称变化和关闭重开。
  * 使用数据库实际修订与账本终态断言，不把虚拟 provider 或页面文字视为语义质量证据。
- * 测试仅写临时数据库，结束时关闭可靠消费者和连接，不连接用户服务。
+ * 单次持久化等待为 8 秒；三次身份/页面串行收敛最多六段等待，普通用例预留 60 秒总预算。
+ * 历史分页单独给 30 秒处理 51 条来源；测试仅写临时数据库，结束时关闭可靠消费者和连接，不连接用户服务。
  */
 import { randomUUID } from "node:crypto";
 import { createTestingDatabase } from "@kaguya/database/testing";
@@ -42,12 +43,23 @@ const contextKind = defineInformationKind({
   references: {},
   log: { enabled: false },
 });
+// 同一可靠投递路径统一使用 Planner/PGlite 的 8 秒有界条件等待，不改变业务重试或截止点。
+const DURABLE_WAIT = { timeout: 8000, interval: 20 } as const;
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
-  for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+  const errors: unknown[] = [];
+  for (const cleanup of cleanups.splice(0).reverse()) {
+    try {
+      await cleanup();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length) throw new AggregateError(errors, "Fixture cleanup failed");
 });
 async function fixture(knowledgeEnabled = true) {
   const database = await createTestingDatabase();
+  cleanups.push(() => database.close());
   await database.prepareSchema();
   await database.prepareMemoryKnowledgeSchema();
   const catalog = defineInformationModuleCatalog(
@@ -69,6 +81,7 @@ async function fixture(knowledgeEnabled = true) {
     store: database.information,
     nextInformationId: randomUUID,
   });
+  cleanups.push(() => core.close());
   await core.start();
   const bootstrap = async () => {
     await core.register(memoryKnowledgeBackfillInformationKind, {
@@ -86,7 +99,10 @@ async function fixture(knowledgeEnabled = true) {
       references: [],
     });
   };
-  let host: ModuleHost;
+  let host: ModuleHost | undefined;
+  cleanups.push(async () => {
+    await host?.stop();
+  });
   async function start(enabled = true) {
     host = new ModuleHost({
       core,
@@ -123,11 +139,6 @@ async function fixture(knowledgeEnabled = true) {
     ]);
   }
   await start(knowledgeEnabled);
-  cleanups.push(async () => {
-    await host.stop();
-    await core.close();
-    await database.close();
-  });
   async function submit(
     senderId: string,
     text: string,
@@ -158,24 +169,21 @@ async function fixture(knowledgeEnabled = true) {
         { relation: "core:context", informationId: context.informationId },
       ],
     });
-    const identity = await vi.waitFor(
-      async () => {
-        const rows = await database.information.find({
-          kinds: [personContextCompletedInformationKind.kind],
-          limit: 100,
-        });
-        const found = rows.find((a) =>
-          a.references.some(
-            (r) =>
-              r.relation === "core:status-of" &&
-              r.informationId === atom.informationId,
-          ),
-        );
-        expect(found).toBeDefined();
-        return found!;
-      },
-      { timeout: 10000 },
-    );
+    const identity = await vi.waitFor(async () => {
+      const rows = await database.information.find({
+        kinds: [personContextCompletedInformationKind.kind],
+        limit: 100,
+      });
+      const found = rows.find((a) =>
+        a.references.some(
+          (r) =>
+            r.relation === "core:status-of" &&
+            r.informationId === atom.informationId,
+        ),
+      );
+      expect(found).toBeDefined();
+      return found!;
+    }, DURABLE_WAIT);
     return {
       atom,
       scopeInformationId: identity.payload.scopeInformationId as string,
@@ -187,40 +195,37 @@ async function fixture(knowledgeEnabled = true) {
     entityInformationId: string,
     text: string,
   ) {
-    return vi.waitFor(
-      async () => {
-        const page = await database.knowledge.readWikiPage({
-          scopeInformationId,
-          entityInformationId,
-        });
-        expect(
-          page?.dirty,
-          !page
-            ? JSON.stringify(
-                await database.information.find({
-                  kinds: [
-                    "agent.memory.knowledge.backfill.requested",
-                    "agent.memory.event.submitted",
-                    "core.execution.exhausted",
-                  ],
-                  limit: 20,
-                }),
-              )
-            : undefined,
-        ).toBe(false);
-        expect(JSON.stringify(page?.latestRevision)).toContain(text);
-        const revisions = await database.information.find({
-          kinds: [memoryWikiUpdatedInformationKind.kind],
-          payloadContains: { scopeInformationId, entityInformationId },
-          limit: 100,
-        });
-        expect(
-          revisions.some((r) => (r.payload.text as string).includes(text)),
-        ).toBe(true);
-        return page!;
-      },
-      { timeout: 15000 },
-    );
+    return vi.waitFor(async () => {
+      const page = await database.knowledge.readWikiPage({
+        scopeInformationId,
+        entityInformationId,
+      });
+      expect(
+        page?.dirty,
+        !page
+          ? JSON.stringify(
+              await database.information.find({
+                kinds: [
+                  "agent.memory.knowledge.backfill.requested",
+                  "agent.memory.event.submitted",
+                  "core.execution.exhausted",
+                ],
+                limit: 20,
+              }),
+            )
+          : undefined,
+      ).toBe(false);
+      expect(JSON.stringify(page?.latestRevision)).toContain(text);
+      const revisions = await database.information.find({
+        kinds: [memoryWikiUpdatedInformationKind.kind],
+        payloadContains: { scopeInformationId, entityInformationId },
+        limit: 100,
+      });
+      expect(
+        revisions.some((r) => (r.payload.text as string).includes(text)),
+      ).toBe(true);
+      return page!;
+    }, DURABLE_WAIT);
   }
   return {
     database,
@@ -230,7 +235,7 @@ async function fixture(knowledgeEnabled = true) {
     submit,
     settled,
     restart: async (enabled = true) => {
-      await host.stop();
+      await host?.stop();
       await core.close();
       core = new InformationCore({
         registry: createRegistry(),
@@ -295,7 +300,7 @@ describe("durable event and Wiki projection", () => {
         });
         expect(skipped.length).toBeGreaterThan(0);
       },
-      { timeout: 30000 },
+      { timeout: 30000, interval: DURABLE_WAIT.interval },
     );
     const result = await f.database.knowledge.recall({
       scopeInformationId: first.scopeInformationId,
@@ -342,7 +347,7 @@ describe("durable event and Wiki projection", () => {
     expect(scope.version).toBe(1);
     expect(write.mock.calls.length).toBeGreaterThanOrEqual(3);
     write.mockRestore();
-  }, 30000);
+  }, 60000);
 
   it("rebuilds all dependent pages after a durable source revocation", async () => {
     const f = await fixture();
@@ -368,29 +373,26 @@ describe("durable event and Wiki projection", () => {
         { relation: "agent:source", informationId: message.atom.informationId },
       ],
     });
-    await vi.waitFor(
-      async () => {
-        for (const entityInformationId of [
-          message.entityInformationId,
-          message.scopeInformationId,
-        ]) {
-          const page = await f.database.knowledge.readWikiPage({
-            scopeInformationId: message.scopeInformationId,
-            entityInformationId,
-          });
-          expect(page?.dirty).toBe(false);
-          expect(page?.version).toBeGreaterThan(1);
-          expect(page?.latestRevision?.sections).toEqual([]);
-        }
-      },
-      { timeout: 15000 },
-    );
+    await vi.waitFor(async () => {
+      for (const entityInformationId of [
+        message.entityInformationId,
+        message.scopeInformationId,
+      ]) {
+        const page = await f.database.knowledge.readWikiPage({
+          scopeInformationId: message.scopeInformationId,
+          entityInformationId,
+        });
+        expect(page?.dirty).toBe(false);
+        expect(page?.version).toBeGreaterThan(1);
+        expect(page?.latestRevision?.sections).toEqual([]);
+      }
+    }, DURABLE_WAIT);
     expect(
       await f.database.knowledge.filterAvailableSourceIds({
         sourceInformationIds: [message.atom.informationId],
       }),
     ).toEqual([]);
-  }, 30000);
+  }, 60000);
   it("keeps speaker identity across nickname changes and separates third-party speech", async () => {
     const f = await fixture();
     const first = await f.submit("alice", "我以前喜欢咖啡", "小月");
@@ -444,7 +446,7 @@ describe("durable event and Wiki projection", () => {
         (s) => s.evidenceSourceInformationIds.length > 0,
       ),
     ).toBe(true);
-  }, 30000);
+  }, 60000);
 
   it("backfills pre-enable history and resumes after closing and reopening", async () => {
     const f = await fixture(false);
@@ -484,5 +486,5 @@ describe("durable event and Wiki projection", () => {
       limit: 100,
     });
     expect(revisions.some((r) => r.version === first.version)).toBe(true);
-  }, 30000);
+  }, 60000);
 });

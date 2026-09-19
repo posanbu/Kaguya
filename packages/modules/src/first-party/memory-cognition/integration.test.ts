@@ -2,6 +2,7 @@
  * 功能概述：使用真实 InformationCore、ModuleHost 和 PGlite 验证群聊认知的可靠后台闭环。
  * fixture 安装 identity、raw writeback 与 cognition 模块，submit 沿正规入站路径登记消息；
  * 测试证明多人转述和纠正保留各自账号，跨群原文不进入窗口，迟到消息按事件时间冻结证据。
+ * 五次串行投递各有 8 秒状态等待，测试总预算 60 秒覆盖初始化和关闭；
  * provider 是只记录严格输入的本地替身，不评价模型的提取质量；所有数据库与订阅在用例后关闭。
  */
 import { randomUUID } from "node:crypto";
@@ -37,12 +38,23 @@ const contextKind = defineInformationKind({
   references: {},
   log: { enabled: false },
 });
+// 同一可靠投递路径统一使用 Planner/PGlite 的 8 秒有界条件等待，不改变业务重试或截止点。
+const DURABLE_WAIT = { timeout: 8000, interval: 20 } as const;
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
-  for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+  const errors: unknown[] = [];
+  for (const cleanup of cleanups.splice(0).reverse()) {
+    try {
+      await cleanup();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length) throw new AggregateError(errors, "Fixture cleanup failed");
 });
 async function fixture() {
   const database = await createTestingDatabase();
+  cleanups.push(() => database.close());
   await database.prepareSchema();
   const catalog = defineInformationModuleCatalog(
     identityModule,
@@ -61,6 +73,7 @@ async function fixture() {
     store: database.information,
     nextInformationId: randomUUID,
   });
+  cleanups.push(() => core.close());
   const evolve = vi.fn(async (input: MemoryCognitionInput) => ({
     facts: [
       {
@@ -81,11 +94,7 @@ async function fixture() {
       },
     ],
   });
-  cleanups.push(async () => {
-    await host.stop();
-    await core.close();
-    await database.close();
-  });
+  cleanups.push(() => host.stop());
   await core.start();
   await host.start(
     catalog.definitions.map(({ manifest }) => ({
@@ -127,19 +136,16 @@ async function fixture() {
       ],
     });
     expectedCompleted += 1;
-    await vi.waitFor(
-      async () => {
-        const completed = await database.information.find({
-          kinds: ["agent.memory.cognition.completed"],
-          limit: 100,
-        });
-        expect(completed).toHaveLength(expectedCompleted);
-        expect(
-          completed.every((atom) => atom.payload.status === "completed"),
-        ).toBe(true);
-      },
-      { timeout: 5000 },
-    );
+    await vi.waitFor(async () => {
+      const completed = await database.information.find({
+        kinds: ["agent.memory.cognition.completed"],
+        limit: 100,
+      });
+      expect(completed).toHaveLength(expectedCompleted);
+      expect(
+        completed.every((atom) => atom.payload.status === "completed"),
+      ).toBe(true);
+    }, DURABLE_WAIT);
     return source;
   }
   return { database, evolve, submit };
@@ -186,5 +192,5 @@ describe("durable multi-participant cognition", () => {
         .filter((ref) => ref.relation === "agent:evidence")
         .map((ref) => ref.informationId),
     ).toEqual(input.sourceInformationIds);
-  });
+  }, 60000);
 });
