@@ -85,6 +85,8 @@ Host 在任何 `create()` 前完成全部启用实例的 settings parse、深冻
 
 `host.inspect()` 从 Catalog 与实际绑定生成 definition/module/protocol 版本、模块名称与说明、settings schema 的 SHA-256 指纹、输入输出 Kind 的 ID/名称/说明、Selector ID、renderer 的 ID/名称/说明/适用 Kind，以及 capability bindings。它不输出 settings 值、URL、凭据、Prompt、人物或记忆正文。Inspection API 与 WebUI 必须直接使用 Manifest 的展示字段，不能维护模块或 Kind 名称映射。
 
+在线心流与消息组织通过 `inspection.surface` 的 `model-request-browser` 声明逐次模型请求页面，使用 `viewId`、`taskId` 与 `mode` 绑定数据范围。SDK 要求模块声明 `kaguya:model-task@1` 能力，并在视图中声明请求 Kind 及任务、模块归属、触发记录和上下文字段；Planner 与 Composer 的 mode 必须匹配各自任务 ID。模型请求由 Runtime 落账，因此不要求业务模块把该 Kind 列入 `produces`。WebUI 从声明生成列表与独立详情路由，完整 Prompt 仅通过受认证的单次请求检查接口读取，不进入 Manifest 摘要。
+
 ## 可靠派生与终态
 
 `delivery: "durable"` 的业务订阅使用持久化 delivery、租约 claim、有限重试和 token fencing。订阅只接收登记后的新事实；输入原子与匹配 delivery intent 同事务提交。相同 activation 与 subscription 身份重启后可恢复未确认工作。普通 `live` 订阅用于即时观察，不提供离线恢复。
