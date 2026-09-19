@@ -5,7 +5,7 @@
  * 功能概述：通过真实 Runtime/PGlite 与 DeepSeek-compatible HTTP mock 验证两层发言决策。
  * fixture 装配正式 Catalog、light Planner 和 heavy Composer；settle 等待 durable 订阅闭合，
  * restart 保留数据库并重建宿主，advance 推进持久 heartbeat 时钟。仅 mock provider HTTP，
- * 决策写入故障的等待沿用 settle 的 8 秒预算，允许 CI 下持久订阅完成前置步骤。
+ * 决策写入故障及取消前等待 Planner 启动均沿用 settle 的 8 秒预算，允许 CI 下持久订阅完成前置步骤。
  * 尚未提交决策的 Planner 可由新输入打断；静默窗后合并旧、新输入重构，已提交决策仍保持唯一终态。
  * 覆盖 message/wait/silent 与 target union 的 JSON mode 本地校验、一次结构修复、耗尽后失败关闭、
  * 累计 usage 和单 requested/terminal/decision；重试复用冻结 Prompt，重放与新输入取消均不重复落地。
@@ -673,7 +673,10 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
     const f = await fixture([() => blocked]);
     try {
       await f.submit(f.message());
-      await vi.waitFor(() => expect(f.requests).toHaveLength(1));
+      await vi.waitFor(() => expect(f.requests).toHaveLength(1), {
+        timeout: 8000,
+        interval: 20,
+      });
       const requested = (await f.atoms()).find(
         (a) => a.kind === "core.model.task.requested",
       )!;
