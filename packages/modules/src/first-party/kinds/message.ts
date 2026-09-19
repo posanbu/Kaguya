@@ -2,6 +2,8 @@
  * 功能概述：message 领域的 Information schema 与不可变定义，独立维护本领域引用和日志投影。
  * 主要职责：下列 schema 校验入账载荷，各 kind 声明因果关系、上下文和诊断元数据；无 I/O。
  * 代码库关系：information-kinds.ts 稳定重导出公共对象；跨领域只复用相邻文件定义，保持 Registry 对象身份。
+ * 输入输出与副作用：消息和记忆正文仅经 shared.contentPreview 生成脱敏、限长的日志字段；
+ * coreMemoryTextInformationKind 的正文仍只在原有 debug 等级投影，不改变记忆载荷或写回流程。
  */
 import {
   outboundMessageContentSchema,
@@ -224,7 +226,10 @@ export const coreMemoryTextInformationKind = defineInformationKind({
   log: {
     enabled: true,
     level: "debug",
-    project: () => ({ event: "memory.text.registered" }),
+    project: ({ payload }) => ({
+      event: "memory.text.registered",
+      ...contentPreview(payload.text),
+    }),
   },
 });
 

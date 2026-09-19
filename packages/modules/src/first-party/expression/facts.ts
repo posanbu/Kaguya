@@ -2,7 +2,9 @@
  * 功能概述：表达习惯的受限知识契约，独立于 Persona 与事实 Memory。
  * learningOutputSchema 只允许抽象场景/措辞类别及来源 ID，禁止模型存储人名、账号、私密事实或原文。
  * 学习批次原子落账；habitId 按 scope 与规范模式稳定去重，选择请求冻结候选及计数，选择结果最多三项。
- * 所有定义只描述数据和引用；实际学习、聚合及 Model Task 由 index.ts 负责，日志不投影内容。
+ * 所有定义只描述数据和引用；实际学习、聚合及 Model Task 由 index.ts 负责。
+ * expressionLearned / expressionSelected 在 debug 日志中投影已校验的情境、措辞枚举摘要，
+ * 不输出原文、来源 ID 或整个 habit 对象；日志投影不改变学习批次和选择结果。
  */
 import { createHash } from "node:crypto";
 import { z } from "@kaguya/schema";
@@ -102,6 +104,9 @@ export const expressionLearned = defineInformationKind({
       event: "expression.learned",
       status: payload.status,
       count: payload.habits.length,
+      habitSummaries: payload.habits.map(
+        ({ situation, style }) => `${situation} → ${style}`,
+      ),
     }),
   },
 });
@@ -148,6 +153,9 @@ export const expressionSelected = defineInformationKind({
       event: "expression.selected",
       count: payload.habits.length,
       reason: payload.reason,
+      habitSummaries: payload.habits.map(
+        ({ situation, style }) => `${situation} → ${style}`,
+      ),
     }),
   },
 });

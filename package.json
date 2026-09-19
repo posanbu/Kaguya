@@ -13,6 +13,7 @@
     "start": "pnpm --filter @kaguya/server start",
     "typecheck": "tsc -b --pretty false && pnpm --filter @kaguya/web typecheck",
     "lint": "eslint .",
+    "logs:preview": "tsc -b packages/logger && node scripts/logger-preview.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
