@@ -1,7 +1,7 @@
 /**
  * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * 功能概述：使用真实 PGlite/Runtime/Composer 验证管理端跨会话授权及投递终检。
- * 主要职责：覆盖目录解析、两次确认、上下文隔离、伪造目的地、断线代次和失败 turn；所有平台 I/O 使用 spy。
+ * 主要职责：覆盖目录解析、两次确认、注入的授权模板及变量来源、上下文隔离、伪造目的地、断线代次和失败 turn；所有平台 I/O 使用 spy。
  * 代码库关系：正式 composition 提供确定性模型，MessageTargetService 使用假目录，账本保持真实持久化与 durable 消费。
  * 输入输出与副作用：每例独立内存数据库，测试后关闭 Runtime；不调用真实模型或 QQ。
  */
@@ -17,20 +17,24 @@ import {
 import {
   KaguyaRuntime,
   GatewayAllowlist,
+  type AuthorizedMessagePromptRenderer,
   type RuntimeCapabilityContext,
 } from "@kaguya/runtime";
+import type { CompiledPrompt } from "@kaguya/schema";
 import type {
   ReachableTarget,
   PlatformMessageTarget,
 } from "@kaguya/platform-adapters";
 import { afterEach, expect, it, vi } from "vitest";
 const cleanups: (() => Promise<void>)[] = [];
+const persistedWaitOptions = { timeout: 8000, interval: 20 };
 afterEach(async () => {
   for (const fn of cleanups.splice(0).reverse()) await fn();
 });
 async function fixture(
   outboundRules = ["qq:group:100", "qq:group:300", "qq:private:200"],
   inboundRules: string[] = [],
+  authorizedMessagePromptRenderer?: AuthorizedMessagePromptRenderer,
 ) {
   const database = await createTestingDatabase();
   const logs: string[] = [];
@@ -80,6 +84,9 @@ async function fixture(
   const policy = new GatewayAllowlist(outboundRules);
   const runtime = new KaguyaRuntime({
     ...composition,
+    ...(authorizedMessagePromptRenderer
+      ? { authorizedMessagePromptRenderer }
+      : {}),
     database,
     logger,
     outboundAllowlist: policy,
@@ -135,7 +142,7 @@ async function fixture(
     vi.waitFor(
       async () =>
         expect((await database.information.reliable.health()).pending).toBe(0),
-      { timeout: 8000, interval: 20 },
+      persistedWaitOptions,
     );
   await runtime.submit({
     adapterId: "web.ui.main",
@@ -260,6 +267,22 @@ it.each(["100", "200"])(
     expect(JSON.stringify(requests[0]!.payload.prompt)).not.toContain(
       "private-source-do-not-disclose",
     );
+    const prompt = requests[0]!.payload.prompt as unknown as CompiledPrompt;
+    expect(prompt.templateId).toBe("authorized-message-v1");
+    expect(prompt.variables.map((variable) => variable.name)).toEqual([
+      "instruction",
+      "expression_habits",
+    ]);
+    expect(prompt.variables.slice(0, 1)).toEqual([
+      {
+        name: "instruction",
+        content: "请告知会议改到下午三点。",
+        informationIds: [
+          graph.find((atom) => atom.kind === "agent.message.target.authorized")!
+            .informationId,
+        ],
+      },
+    ]);
     if (
       !("assistantInformationId" in status) ||
       !status.assistantInformationId ||
@@ -306,6 +329,70 @@ it.each(["100", "200"])(
   },
   20000,
 );
+it("uses the injected authorized prompt without changing frozen instructions or their provenance", async () => {
+  const render = vi.fn<AuthorizedMessagePromptRenderer>((input) => ({
+    kind: "message",
+    templateId: "custom-authorized-message",
+    text: `LOCAL AUTHORIZED: ${input.instruction.content}`,
+    templates: [
+      {
+        name: "local-authorized",
+        content: "LOCAL AUTHORIZED: {{instruction}}",
+      },
+    ],
+    variables: [input.instruction],
+  }));
+  const f = await fixture(undefined, undefined, render);
+  const resolved = await f.service.resolve({ mode: "id", value: "200" });
+  if (!("candidates" in resolved)) throw new Error("expected candidates");
+  const instruction = "会议三点开始，保留原样：{{background}}";
+  const approved = await f.service.authorize({
+    reference: resolved.candidates[0]!.reference,
+    sourceTurnContextInformationId: f.turn.informationId,
+    instruction,
+  });
+  if (!("requestId" in approved)) throw new Error("expected request");
+  await f.settle();
+  expect(render).toHaveBeenCalledTimes(1);
+  const graph = await f.atoms();
+  const authorization = graph.find(
+    (atom) => atom.kind === "agent.message.target.authorized",
+  )!;
+  expect(render.mock.calls[0]![0]).toEqual({
+    automatic: false,
+    instruction: {
+      name: "instruction",
+      content: instruction,
+      informationIds: [authorization.informationId],
+    },
+  });
+  const request = graph.find(
+    (atom) =>
+      atom.kind === "core.model.task.requested" &&
+      atom.payload.sourceInformationId === approved.intentInformationId,
+  )!;
+  const prompt = request.payload.prompt as unknown as CompiledPrompt;
+  const rendered = render.mock.results[0]!.value as CompiledPrompt;
+  expect(prompt.kind).toBe(rendered.kind);
+  expect(prompt.templateId).toBe(rendered.templateId);
+  expect(prompt.text.startsWith(`${rendered.text}\n`)).toBe(true);
+  expect(prompt.templates.map((template) => template.name)).toEqual([
+    "local-authorized",
+    "expression-habits",
+  ]);
+  expect(prompt.templates.slice(0, 1)).toEqual(rendered.templates);
+  expect(prompt.variables.map((variable) => variable.name)).toEqual([
+    "instruction",
+    "expression_habits",
+  ]);
+  expect(prompt.variables.slice(0, 1)).toEqual(rendered.variables);
+  expect(prompt.variables[1]!.content).toBe("[]");
+  expect(prompt.text).not.toContain("private-source-do-not-disclose");
+  expect((await f.service.status(approved.requestId)).status).toBe(
+    "confirmation-required",
+  );
+  expect(f.send).not.toHaveBeenCalled();
+}, 20000);
 it("invalidates candidates on reconnect and returns unavailable on directory failure", async () => {
   const f = await fixture();
   const result = await f.service.resolve({ mode: "id", value: "200" });
@@ -371,8 +458,9 @@ it("blocks forged final destinations with a redacted failure and closes the isol
   });
   expect(JSON.stringify(failure.payload)).not.toContain("999");
   expect(JSON.stringify(failure)).not.toContain("secret-message");
-  await vi.waitFor(() =>
-    expect(f.logs.join("")).toContain("destination-not-allowed"),
+  await vi.waitFor(
+    () => expect(f.logs.join("")).toContain("destination-not-allowed"),
+    persistedWaitOptions,
   );
   const rejectionLogs = f.logs
     .map((line) => JSON.parse(line) as Record<string, unknown>)

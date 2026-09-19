@@ -3,7 +3,8 @@
  * 功能概述：将消息意图和冻结 turn 编译为分层 Handlebars Prompt，所有本轮输入拥有相同模板地位；积压时向 Composer 提供年龄供自然衔接。
  * 主要职责：createMessagePromptCompiler 预编译模板并返回纯函数；compileMessagePrompt 提供一次性入口；
  * frozenTurnInputs 核对 turn 身份与目标范围，重建冻结消息；历史与记忆预算函数只限制辅助上下文。
- * 代码库关系：message-context 选择账本事实，Node 模板加载器提供 MessagePromptTemplates；编译结果携带变量溯源。
+ * 代码库关系：message-context 选择账本事实，Node 模板加载器提供 MessagePromptTemplates；场景与积压规则由 scene 模板决定，背景和表达后缀由模块入口独立编译。
+ * 编译结果携带模板源码与变量溯源；scene 只引用模板实际使用的目标或冻结时间事实，不包含尚未追加的上下文后缀。
  * 输入输出与副作用：意图没有正文，正文从 turn.inputs 读取；每条输入保留引用上下文及成功回执、请求、assistant 的原始溯源且不裁剪，不特殊处理末条。
  * 缺少冻结 turn 或身份不一致即抛错；不写账本、不调用模型、不创建出站引用标记。
  */
@@ -50,6 +51,9 @@ export interface AgentIdentity {
 
 export interface MessagePromptTemplates {
   readonly main: string;
+  readonly scene: string;
+  readonly conversationBackground: string;
+  readonly expressionHabits: string;
   readonly plan: string;
   readonly history: string;
   readonly historyInbound: string;
@@ -62,10 +66,6 @@ export interface MessagePromptTemplates {
 
 export const ZH_CN_MESSAGE_PROMPT = Object.freeze({
   version: "zh-CN/v1",
-  groupRule:
-    "已决定在当前群聊中发送一条自然消息。结合本轮全部输入、不同群友之间的互动和聊天记录，围绕一个清晰话题简短表达。不要替其他群友发言，不要刻意找话题或反复介绍自己；表情包只需理解其含义，不必逐个解释。",
-  privateRule:
-    "已决定在当前私聊中发送一条自然消息。结合本轮全部输入、对方的表达和聊天记录，围绕一个清晰话题简短表达，保持自然的对话语气。",
   historyMessageLimit: 30,
   historyCharacterLimit: 12_000,
   memoryCharacterLimit: 4_000,
@@ -80,6 +80,12 @@ export function createMessagePromptCompiler(
 ) => CompiledPrompt {
   assertAgentIdentity(identity);
   const nested = compileNested(templates);
+  const sceneVariables = nested.usedVariables("scene");
+  const sceneUsesTurn = [
+    "is_backlog",
+    "oldest_input_age",
+    "newest_input_age",
+  ].some((name) => sceneVariables.has(name));
   const renderOuter = createPromptTemplateRenderer({
     kind: "message",
     templateId: `kaguya.message.${ZH_CN_MESSAGE_PROMPT.version}`,
@@ -207,13 +213,16 @@ export function createMessagePromptCompiler(
       ),
       variable(
         "scene",
-        (payload.target.destination.kind === "group"
-          ? ZH_CN_MESSAGE_PROMPT.groupRule
-          : ZH_CN_MESSAGE_PROMPT.privateRule) +
-          (backlog.isBacklog
-            ? `\n本轮输入积压：最早约 ${formatBacklogAge(backlog.oldestInputAgeMs)}，最新约 ${formatBacklogAge(backlog.newestInputAgeMs)}前。请根据语境自然承接；只有确有帮助时才提及迟到，不要固定道歉或说明系统恢复。`
-            : ""),
-        [message.informationId],
+        nested.render("scene", {
+          is_group: payload.target.destination.kind === "group",
+          is_backlog: backlog.isBacklog,
+          oldest_input_age: formatBacklogAge(backlog.oldestInputAgeMs),
+          newest_input_age: formatBacklogAge(backlog.newestInputAgeMs),
+        }),
+        [
+          ...(sceneVariables.has("is_group") ? [message.informationId] : []),
+          ...(sceneUsesTurn ? [turnContext!.informationId] : []),
+        ],
       ),
       variable(
         "current_time",
@@ -319,7 +328,12 @@ export function fitMemoryBudget(
 function compileNested(templates: MessagePromptTemplates) {
   return compilePromptTemplateSet(
     messageTemplateDeclarations
-      .filter((d) => d.key !== "main")
+      .filter(
+        (d) =>
+          d.key !== "main" &&
+          d.key !== "conversationBackground" &&
+          d.key !== "expressionHabits",
+      )
       .map((d) => ({ ...d, content: templates[d.key] })),
   );
 }

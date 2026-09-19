@@ -1,5 +1,5 @@
 /**
- * manifest 声明 Planner 模板；调用 compilePlannerPrompt 时传入装配阶段加载的覆盖。
+ * manifest 声明 Planner 模板；调用 compilePlannerPrompt 时传入装配阶段加载的 default/local 文本，不再使用代码内默认值。
  * settings schema 的公开中文元数据供管理表单使用，运行时与保存共用约束。
  * 管理端批准的跨会话 candidate 由宿主直接认领，不再触发 Planner；其 delivery 仍使用本模块统一 turn 终态。
  * Selector 只遍历开放 candidate 及最近 claim；恢复旧积压时每 scope 只推进一次合并观察。
@@ -88,7 +88,7 @@ export interface CreateHeartflowModuleOptions {
   readonly modelTaskCapability: ModuleCapability<ModelTaskCapability>;
   readonly messageAuthorizationCapability?: ModuleCapability<MessageAuthorization>;
   readonly agentIdentity: AgentIdentity;
-  readonly plannerTemplate?: string;
+  readonly plannerTemplate: string;
   readonly cognitionIdentity?: CognitionIdentity;
   /** Knowledge 开启时，旧认知快照也必须通过完整来源撤回检查。 */
   readonly memoryKnowledgeEnabled?: boolean;
