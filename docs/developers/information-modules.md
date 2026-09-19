@@ -113,7 +113,9 @@ Heartbeat 到期只产生 `agent.turn.candidate`。Heartflow 使用 scope genera
 
 Memory 变量在完整当前 turn 之前，合计最多 4,000 个 Unicode 字符；召回失败会退化为空内容，不阻塞当前回复。message intent、历史 `core.memory.text` 和原始 inbound 的 renderer 都在 manifest 中声明，每个模板变量保留其 informationIds，LLM requested 使用 `core:uses-context` 引用追溯实际输入。一个原子可同时支持多个变量，一个变量也可聚合多个原子。未知 kind 不会被静默当作文本注入。scope、claim、上下文和终态都由 Information DAG 表达，不引入进程内 Session 或可变对话桶。
 
-一方 Prompt 最终文本由 `packages/modules/templates/*.default.hbs` 的受限 Handlebars 层级排版。开发者可复制为同名 `*.local.hbs` 做本地覆盖；local 文件被 Git 忽略，重启后生效。声明变量可出现零次或多次，只有外层实际使用的逻辑变量进入 provenance；未知变量、动态或递归 partial 和非内建 helper 会在启动时失败。替换不做 XML/HTML 逃逸或额外包裹，数据边界由模板作者负责。
+一方模块的可编辑 Prompt 由 `packages/modules/templates/*.default.hbs` 的受限 Handlebars 模板生成，包括 Planner、消息编写及其场景和上下文补充、授权正文、表达学习与选择、人物事实提取。default 文件进入 Git；同名 `*.local.hbs` 被 Git 忽略，存在时优先使用。`pnpm prompt:init` 为已声明模板创建缺失的 local 副本，保留已有内容；正常加载只读文件。覆盖在重启后生效，具体操作见[本地覆盖 Prompt](../guide/configuration.md#本地覆盖-prompt)。
+
+声明变量可出现零次或多次，实际使用的逻辑变量进入 provenance；未知变量、动态或递归 partial 和非内建 helper 会在启动时失败。替换不做 XML/HTML 逃逸或额外包裹，数据边界由模板作者负责。跨会话授权的渲染器由 composition 装配后注入 Runtime，宿主只提供已授权说明、冻结背景及其来源引用；模板修改不改变目标复核、正文确认或投递权限。
 
 ## Message Intent 与 Composer
 
@@ -131,7 +133,9 @@ Planner 支持 `message | wait | silent`。宿主按本轮冻结人物/会话背
 
 `manifest.promptTemplates` 显式声明模板稳定 ID、内部名称、中文名称、用途、允许变量、允许 partial 和组成关系。第一方声明集中在 `packages/modules/src/prompt-declarations.ts`，运行编译器和 Node 资源加载器复用这份声明。Node 存储只解析注册资源，不扫描文件名推断模块归属；新增模板必须同时接入真实运行时消费链。人物事实模板由对应模块声明，但未加入当前 Catalog 时不会误归属给 Memory 模块。
 
-管理端只写本地覆盖并检查完整模板组，不渲染用户数据。校验使用非缓存编译路径，避免每次编辑都永久保留编译结果。默认 Planner 源码保持代码常量，覆盖文件为 `heartflow.planner.local.hbs`；其他已注册第一方模板保留现有默认文件与 local 回退机制。
+管理端只写本地覆盖并检查完整模板组，不渲染用户数据。校验使用非缓存编译路径，避免每次编辑都永久保留编译结果。所有已声明模板都必须有对应的 default 文件；Planner 同样使用 `heartflow.planner.default.hbs` 与 `heartflow.planner.local.hbs`，不再另存代码默认值。
+
+恢复默认会删除对应 local；后续读取直接使用 default，不会自动重建副本。升级默认文件只影响没有 local 覆盖的模板，已有 local 由使用者自行合并或恢复。模块清单、模板存储与运行编译必须保持同一套声明，不能通过目录扫描推断归属，也不能新增只有管理界面可编辑、实际任务却不使用的模板。
 
 ### 开放范围与持久化水位
 

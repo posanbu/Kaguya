@@ -1,4 +1,5 @@
 /**
+ * 授权消息正文由 composition 注入的渲染器提供；Runtime 只传冻结变量并维持权限检查。
  * Runtime 只接收 outboundAllowlist；目标授权与最终 transport 前终检使用它，入站权限属于 AdapterHost。
  * Memory knowledge 仅在双开关启用时准备附加投影表、注册检索及 bootstrap；停用保留历史修订和原始账本。
  * 为 Heartflow 注入 conversation/route 窄能力，结构化候选由宿主冻结，自动跨会话投递继续经过最终授权检查。
@@ -19,7 +20,10 @@
  * inspectModules 仅在 started 状态返回模块声明、版本、Kind、Prompt 和能力绑定的只读投影。
  * ModuleHost observation 在这里映射到 lifecycle/module 命名空间，持久 Atom 单独进入 information logger。
  */
-import { MessageTargetService } from "./message-targets.js";
+import {
+  MessageTargetService,
+  type AuthorizedMessagePromptRenderer,
+} from "./message-targets.js";
 import type { TargetDirectory } from "@kaguya/platform-adapters";
 import { GatewayAllowlist } from "./gateway-allowlist.js";
 import { randomUUID } from "node:crypto";
@@ -154,6 +158,8 @@ export interface RuntimeMemoryOptions {
 }
 
 type KaguyaRuntimeBaseOptions = {
+  /** 由 composition 注入已选择 default/local 的授权消息渲染器。 */
+  readonly authorizedMessagePromptRenderer?: AuthorizedMessagePromptRenderer;
   /** 当前生效的出站策略；未注入时非 Web 默认拒绝。 */
   readonly outboundAllowlist?: GatewayAllowlist;
   readonly targetDirectory?: TargetDirectory;
@@ -518,6 +524,7 @@ export class KaguyaRuntime implements InformationIngress {
             { event: "message.target.resolved", ...event },
             "Target resolution completed",
           ),
+        this.options.authorizedMessagePromptRenderer,
       );
       await core.start();
       this.#assertStarting();

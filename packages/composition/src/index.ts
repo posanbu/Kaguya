@@ -1,5 +1,5 @@
 /**
- * 模板加载器提供 Planner 本地覆盖，Catalog 显式传入 Heartflow，保存本身不重建运行时。
+ * 模板加载器统一选择所有模块的 default/local 正文；Catalog 注入 Planner、Composer 和 Expression，授权正文渲染器注入 Runtime。
  * 功能概述：作为 Server 与 Demo 共用的唯一 Runtime Composition 边界，组装业务 Catalog 与宿主批准的 Model Task 能力。
  * Memory 开启时加入缺省 writeback activation，关闭时移除写回实例；尊重已配置实例的禁用状态。
  * knowledgeEnabled 显式控制事件与 Wiki 原型，未设置时不改变原文及 provider 的激活行为。
@@ -39,6 +39,7 @@ import {
 } from "@kaguya/llm/client";
 import { createPlanningDeterministicModel } from "@kaguya/llm/testing";
 import {
+  createAuthorizedMessagePromptRenderer,
   createFirstPartyModuleCatalog,
   createFirstPartyModuleActivations,
   messageComposerSettingsSchema,
@@ -91,8 +92,8 @@ export function createMessageCatalog(
   agentIdentity: AgentIdentity = DEFAULT_AGENT_IDENTITY,
   cognitionIdentity?: CognitionIdentity,
   memoryKnowledgeEnabled = false,
+  promptTemplates = loadFirstPartyPromptTemplates(),
 ) {
-  const promptTemplates = loadFirstPartyPromptTemplates();
   return createFirstPartyModuleCatalog({
     messageAuthorizationCapability,
     modelTaskCapability,
@@ -105,6 +106,7 @@ export function createMessageCatalog(
     executionExhaustedInformationKind,
     promptTemplates: promptTemplates.messageComposer,
     plannerTemplate: promptTemplates.planner,
+    expressionTemplates: promptTemplates.expression,
     agentIdentity,
     memoryKnowledgeEnabled,
     ...(cognitionIdentity ? { cognitionIdentity } : {}),
@@ -115,10 +117,12 @@ export function createMessageComposition(
   options: MessageCompositionOptions,
 ) {
   const identity = options.agentIdentity ?? DEFAULT_AGENT_IDENTITY;
+  const promptTemplates = loadFirstPartyPromptTemplates();
   const catalog = createMessageCatalog(
     identity,
     options.memoryEnabled ? options.cognition?.identity : undefined,
     !!options.memoryEnabled && !!options.memoryKnowledgeEnabled,
+    promptTemplates,
   );
   const memoryEnabled = options.memoryEnabled ?? false;
   const knowledgeEnabled =
@@ -255,6 +259,9 @@ export function createMessageComposition(
     },
   };
   return {
+    authorizedMessagePromptRenderer: createAuthorizedMessagePromptRenderer(
+      promptTemplates.authorizedMessage,
+    ),
     catalog,
     activations,
     memory: {

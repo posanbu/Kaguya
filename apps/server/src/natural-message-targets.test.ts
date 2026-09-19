@@ -2,7 +2,7 @@
  * 功能概述：以正式 Composition、Runtime、PGlite 和受控 HTTP provider 验证自然语言跨会话链路。
  * fixture 仅替换模型响应、在线目录与 transport，仍执行身份识别、Planner、Composer、授权和 durable 去重。
  * projection 只提取模板中人物/会话上下文的单行 JSON，避免把 Provider 追加的 Schema 提示当成业务数据；
- * choose 从该投影读取已解析的不透明目标引用，仍由正式授权服务执行范围和投递校验。
+ * choose 从该投影读取已解析的不透明目标引用，仍由正式授权服务执行范围和投递校验；授权正文模板保留背景和发送说明的原始账本来源。
  * 覆盖双投影的范围隔离、群/私聊选择、歧义与撤销后的失败关闭；所有账号、正文和凭据均为合成数据。
  */
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
@@ -15,9 +15,13 @@ import {
   type RuntimeCapabilityContext,
 } from "@kaguya/runtime";
 import type { PlatformInboundMessage } from "@kaguya/platform-adapters";
+import type { CompiledPrompt } from "@kaguya/schema";
 import { afterEach, expect, it, vi } from "vitest";
 
 const cleanups: (() => Promise<void>)[] = [];
+// 两次顺序持久化等待各保留 8 秒；外层还需容纳 PGlite/Runtime 初始化与提交。
+// 仅供包含重复 route 或故障重放阶段的用例使用，不改变全局超时或业务 deadline。
+const sequentialWaitTestTimeoutMs = 25_000;
 afterEach(async () => {
   for (const close of cleanups.splice(0).reverse()) await close();
 });
@@ -278,55 +282,88 @@ it.each([
     "colleague-account",
     "告诉小红：会议三点开始",
   ],
-])("%s 自动形成唯一意图与投递", async (_label, output, destination, text) => {
-  const f = await fixture([output]);
-  const message = f.message("once", { text: String(text) });
-  await Promise.all([f.submit(message), f.submit(message)]);
-  await f.settle();
-  expect(f.delivered).toHaveBeenCalledTimes(1);
-  expect(JSON.stringify(f.delivered.mock.calls[0])).toContain(destination);
-  const graph = await f.atoms();
-  expect(
-    graph.filter((a) => a.kind === "agent.message.intent.requested"),
-  ).toHaveLength(1);
-  expect(graph.filter((a) => a.kind === "agent.turn.completed")).toHaveLength(
-    1,
-  );
-  const plan = f.requests.find((r) => r.model === "deepseek-light")!;
-  const p = projection(plan);
-  expect(p.background.name).toBe("当前研究群");
-  expect(p.background.participants).toContainEqual(
-    expect.objectContaining({
-      name: "小明",
-      identityStatus: "complete",
-      relation: "speaker",
-    }),
-  );
-  expect(JSON.stringify(p)).not.toContain("source-group");
-  expect(JSON.stringify(p)).not.toContain("unrelated-private-id");
-  expect(JSON.stringify(p)).not.toContain("无关会话");
-  const composed = graph.find(
-    (a) =>
-      a.kind === "core.model.task.requested" &&
-      a.payload.taskId === "agent.message.compose",
-  )!;
-  expect(JSON.stringify(composed.payload.prompt)).toContain("当前研究群");
-  expect(JSON.stringify(composed.payload.prompt)).toContain("小明");
-  expect(JSON.stringify(composed.payload.prompt)).not.toContain("other-group");
-  if (destination !== "source-group") {
-    expect(JSON.stringify(composed.payload.prompt)).not.toContain(
-      "speaker-account",
-    );
-    const turn = graph.find((a) => a.kind === "agent.turn.context.completed")!;
-    const decision = graph.find((a) => a.kind === "agent.turn.plan.completed")!;
-    await Promise.all([
-      f.service().route(turn, decision),
-      f.service().route(turn, decision),
-    ]);
+])(
+  "%s 自动形成唯一意图与投递",
+  async (_label, output, destination, text) => {
+    const f = await fixture([output]);
+    const message = f.message("once", { text: String(text) });
+    await Promise.all([f.submit(message), f.submit(message)]);
     await f.settle();
     expect(f.delivered).toHaveBeenCalledTimes(1);
-  }
-});
+    expect(JSON.stringify(f.delivered.mock.calls[0])).toContain(destination);
+    const graph = await f.atoms();
+    expect(
+      graph.filter((a) => a.kind === "agent.message.intent.requested"),
+    ).toHaveLength(1);
+    expect(graph.filter((a) => a.kind === "agent.turn.completed")).toHaveLength(
+      1,
+    );
+    const plan = f.requests.find((r) => r.model === "deepseek-light")!;
+    const p = projection(plan);
+    expect(p.background.name).toBe("当前研究群");
+    expect(p.background.participants).toContainEqual(
+      expect.objectContaining({
+        name: "小明",
+        identityStatus: "complete",
+        relation: "speaker",
+      }),
+    );
+    expect(JSON.stringify(p)).not.toContain("source-group");
+    expect(JSON.stringify(p)).not.toContain("unrelated-private-id");
+    expect(JSON.stringify(p)).not.toContain("无关会话");
+    const composed = graph.find(
+      (a) =>
+        a.kind === "core.model.task.requested" &&
+        a.payload.taskId === "agent.message.compose",
+    )!;
+    expect(JSON.stringify(composed.payload.prompt)).toContain("当前研究群");
+    expect(JSON.stringify(composed.payload.prompt)).toContain("小明");
+    expect(JSON.stringify(composed.payload.prompt)).not.toContain(
+      "other-group",
+    );
+    if (destination !== "source-group") {
+      expect(JSON.stringify(composed.payload.prompt)).not.toContain(
+        "speaker-account",
+      );
+      const prompt = composed.payload.prompt as unknown as CompiledPrompt;
+      expect(prompt.templateId).toBe("authorized-message-v1");
+      expect(prompt.variables.map((variable) => variable.name)).toEqual([
+        "background",
+        "instruction",
+        "expression_habits",
+      ]);
+      const background = prompt.variables[0]!;
+      expect(background.informationIds).toHaveLength(1);
+      const conversation = graph.find(
+        (atom) => atom.informationId === background.informationIds[0],
+      )!;
+      expect(background.content).toBe(
+        JSON.stringify(conversation.payload.background),
+      );
+      expect(prompt.variables[1]).toEqual({
+        name: "instruction",
+        content: "会议三点开始",
+        informationIds: [
+          graph.find((atom) => atom.kind === "agent.message.target.authorized")!
+            .informationId,
+        ],
+      });
+      const turn = graph.find(
+        (a) => a.kind === "agent.turn.context.completed",
+      )!;
+      const decision = graph.find(
+        (a) => a.kind === "agent.turn.plan.completed",
+      )!;
+      await Promise.all([
+        f.service().route(turn, decision),
+        f.service().route(turn, decision),
+      ]);
+      await f.settle();
+      expect(f.delivered).toHaveBeenCalledTimes(1);
+    }
+  },
+  sequentialWaitTestTimeoutMs,
+);
 it.each([
   "ambiguous",
   "unrecognized",
@@ -428,38 +465,47 @@ it("伪造目标引用被拒绝", async () => {
   ).toBe("target-not-found");
 });
 
-it("意图写入失败后重放原 Planner 决策，不重复模型或投递", async () => {
-  const f = await fixture([choose("group", "mentioned")]);
-  const register = f.core().registerOnce.bind(f.core());
-  let interrupted = false;
-  const hook = vi
-    .spyOn(f.core(), "registerOnce")
-    .mockImplementation((...args) => {
-      if (args[2].kind === "agent.message.intent.requested" && !interrupted) {
-        interrupted = true;
-        return Promise.reject(new Error("synthetic intent write interruption"));
-      }
-      return register(...args);
-    });
-  try {
-    await f.submit(f.message());
-    await vi.waitFor(() => expect(interrupted).toBe(true), { timeout: 8000 });
-    f.setTime(10000);
-    await f.settle();
-    expect(f.requests.map((r) => r.model)).toEqual([
-      "deepseek-light",
-      "deepseek-heavy",
-    ]);
-    expect(f.delivered).toHaveBeenCalledTimes(1);
-    expect(
-      (await f.atoms()).filter(
-        (a) => a.kind === "agent.message.intent.requested",
-      ),
-    ).toHaveLength(1);
-  } finally {
-    hook.mockRestore();
-  }
-});
+it(
+  "意图写入失败后重放原 Planner 决策，不重复模型或投递",
+  async () => {
+    const f = await fixture([choose("group", "mentioned")]);
+    const register = f.core().registerOnce.bind(f.core());
+    let interrupted = false;
+    const hook = vi
+      .spyOn(f.core(), "registerOnce")
+      .mockImplementation((...args) => {
+        if (args[2].kind === "agent.message.intent.requested" && !interrupted) {
+          interrupted = true;
+          return Promise.reject(
+            new Error("synthetic intent write interruption"),
+          );
+        }
+        return register(...args);
+      });
+    try {
+      await f.submit(f.message());
+      await vi.waitFor(() => expect(interrupted).toBe(true), {
+        timeout: 8000,
+        interval: 20,
+      });
+      f.setTime(10000);
+      await f.settle();
+      expect(f.requests.map((r) => r.model)).toEqual([
+        "deepseek-light",
+        "deepseek-heavy",
+      ]);
+      expect(f.delivered).toHaveBeenCalledTimes(1);
+      expect(
+        (await f.atoms()).filter(
+          (a) => a.kind === "agent.message.intent.requested",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      hook.mockRestore();
+    }
+  },
+  sequentialWaitTestTimeoutMs,
+);
 it("跨会话不能复用重启前的冻结引用", async () => {
   const f = await fixture([choose("group", "mentioned")]);
   await f.submit(f.message());

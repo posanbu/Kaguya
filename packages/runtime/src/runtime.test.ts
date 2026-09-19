@@ -2,6 +2,7 @@
  * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * Planner 普通日志仅保留元数据，不能泄漏 Prompt 预览或模型输出。
  * fixture 显式批准合成 QQ 目标，生产 Runtime 默认为空出站白名单。
+ * 测试显式注入统一文件模板，避免 Planner 或 Expression 绕过 default/local 选择。
  * 功能概述：用真实 PGlite、Core 和 ModuleHost 验证 `KaguyaRuntime` 的完整信息 DAG。
  * Planner 使用独立 object Model Task，测试分别定位 plan 与 compose，确保故障静默与唯一分派。
  * 主要职责：覆盖 Web 入站到投递成功的直接因果链、生成失败不会继续 assistant/outbound/delivery、
@@ -17,6 +18,8 @@
  * ledger；所有创建 PGlite 的用例共享 15 秒跨平台超时，测试结束显式关闭注入数据库，
  * 并检查持久化 payload 不包含 raw/provider secret。
  */
+import { loadFirstPartyPromptTemplates } from "@kaguya/modules/prompt-templates/node";
+const testPrompts = loadFirstPartyPromptTemplates();
 import {
   KaguyaLlmClient,
   type KaguyaLlmModelResolver,
@@ -78,6 +81,7 @@ const testIdentity = {
   timeZone: "Asia/Shanghai",
 };
 const testMessageTemplates = {
+  ...testPrompts.messageComposer,
   main: "{{scene}}{{history}}{{memory}}{{turn}}",
   history: "{{#each messages}}{{> history-inbound}}{{/each}}",
   historyInbound: "{{content}}",
@@ -1785,6 +1789,8 @@ function createMessageComposition(
     deliveryFailedInformationKind,
     executionExhaustedInformationKind,
     promptTemplates: testMessageTemplates,
+    plannerTemplate: testPrompts.planner,
+    expressionTemplates: testPrompts.expression,
     agentIdentity: testIdentity,
   });
   const activations =

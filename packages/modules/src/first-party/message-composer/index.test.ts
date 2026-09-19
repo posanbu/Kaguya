@@ -1,6 +1,7 @@
 /**
  * 功能概述：验证消息编写的严格意图契约及 intent→Model Task→assistant→纯文本投递三个阶段。
  * 主要职责：保护 modelTier 唯一配置、完整 turn Prompt、失败与取消无业务写入、完成任务 task/version/definition/tier 过滤及外部实例隔离与目标元数据最小化。
+ * 后缀模板用例验证构造时拒绝非法变量、背景覆盖的重复插值与实际溯源，以及表达习惯使用注入模板。
  * 代码库关系：真实模块订阅与 schema 配合受限内存 handler context；不绕过编译器或输出校验。
  * 输入输出与副作用：记录模型执行与 registerOnce 调用，无真实模型、数据库或网络。
  */
@@ -18,12 +19,17 @@ import {
 } from "../information-kinds.js";
 import { loadFirstPartyPromptTemplates } from "../../node/prompt-templates.js";
 import {
+  messageAuthorizationCapability,
+  type MessageAuthorization,
+} from "../message-authorization.js";
+import {
   createMessageComposerModule,
   messageComposerSettingsSchema,
   messageTaskOutputSchema,
   type ModelTaskRequest,
   type ModelTaskResult,
   type ModelTaskCapability,
+  type MessagePromptTemplates,
 } from "./index.js";
 import { atom, fixture, identity, target } from "./test-fixtures.js";
 const token = defineModuleCapability<ModelTaskCapability>(
@@ -53,7 +59,11 @@ const activation = {
   instanceId: "message-composer.default",
   definitionId: "agent.message-composer",
 };
-async function setup(expressionEnabled = false) {
+async function setup(
+  expressionEnabled = false,
+  promptOverrides: Partial<MessagePromptTemplates> = {},
+  authorization?: MessageAuthorization,
+) {
   const f = fixture();
   const execute = vi.fn(
     async (
@@ -70,7 +80,11 @@ async function setup(expressionEnabled = false) {
     expressionEnabled,
     modelTaskCapability: token,
     modelTaskCompletedInformationKind: completedKind,
-    promptTemplates: loadFirstPartyPromptTemplates().messageComposer,
+    ...(authorization ? { messageAuthorizationCapability } : {}),
+    promptTemplates: {
+      ...loadFirstPartyPromptTemplates().messageComposer,
+      ...promptOverrides,
+    },
     agentIdentity: identity,
   });
   const context = {
@@ -82,7 +96,10 @@ async function setup(expressionEnabled = false) {
     report: vi.fn(),
     select: vi.fn(async () => f.atoms),
     registerOnce,
-    use: () => ({ execute, cancel: vi.fn() }),
+    use: (capability: { id: string }) =>
+      capability.id === messageAuthorizationCapability.id
+        ? authorization
+        : { execute, cancel: vi.fn() },
   } as unknown as InformationModuleHandlerContext;
   const instance = await definition.create(
     {
@@ -95,6 +112,69 @@ async function setup(expressionEnabled = false) {
   return { f, execute, registerOnce, definition, context, instance };
 }
 describe("message composer", () => {
+  it.each(["scene", "conversationBackground", "expressionHabits"] as const)(
+    "rejects invalid %s variables during module construction",
+    (key) => {
+      expect(() =>
+        createMessageComposerModule({
+          modelTaskCapability: token,
+          modelTaskCompletedInformationKind: completedKind,
+          promptTemplates: {
+            ...loadFirstPartyPromptTemplates().messageComposer,
+            [key]: "{{undeclared}}",
+          },
+          agentIdentity: identity,
+        }),
+      ).toThrow("Unknown Prompt variable");
+    },
+  );
+  it("renders every background interpolation from the configured suffix and retains its source", async () => {
+    const background = { name: "A&B <群聊>", participants: [] };
+    const conversation = atom(
+      "conversation-1",
+      "agent.conversation.context.frozen",
+      {
+        background,
+        resolution: { reference: "MUST_NOT_REACH_COMPOSER" },
+      },
+    );
+    const conversationBackground =
+      "\n背景={{conversation_background}}\n复核={{conversation_background}}";
+    const conversationLookup = vi.fn(async () => conversation);
+    const s = await setup(
+      false,
+      { conversationBackground },
+      {
+        prepare: async () => undefined,
+        conversation: conversationLookup,
+        stage: async () => true,
+      },
+    );
+    await s.instance.subscriptions[0]!.handle(s.f.intent as never, s.context);
+    expect(conversationLookup).toHaveBeenCalledWith(s.f.turn);
+    const request = s.execute.mock.calls[0]![0];
+    expect(request.prompt.text).toContain(
+      `背景=${JSON.stringify(background)}\n复核=${JSON.stringify(background)}`,
+    );
+    expect(request.prompt.text).not.toContain("MUST_NOT_REACH_COMPOSER");
+    expect(
+      request.prompt.templates.filter(
+        (entry) => entry.name === "conversation-background",
+      ),
+    ).toEqual([
+      { name: "conversation-background", content: conversationBackground },
+    ]);
+    expect(
+      request.prompt.variables.find(
+        (entry) => entry.name === "conversation_background",
+      ),
+    ).toEqual({
+      name: "conversation_background",
+      content: JSON.stringify(background),
+      informationIds: [conversation.informationId],
+    });
+    expect(request.contextAtoms).toContain(conversation);
+  });
   it("requires every intent field and rejects copied inbound bodies/source and outbound settings", () => {
     const payload = fixture().intent.payload;
     expect(
@@ -330,7 +410,10 @@ it("does not deliver assistant text originating from another module instance", a
 
 describe("frozen expression dispatch", () => {
   it("composes from an empty selection with separate provenance and unchanged target", async () => {
-    const { f, execute, context, instance } = await setup(true);
+    const expressionHabits = "\n可选风格={{expression_habits}}";
+    const { f, execute, context, instance } = await setup(true, {
+      expressionHabits,
+    });
     const selected = atom(
       "expression-selected",
       expressionSelected.kind,
@@ -358,6 +441,12 @@ describe("frozen expression dispatch", () => {
     expect(execute).toHaveBeenCalledOnce();
     const request = execute.mock.calls[0]![0];
     expect(request.sourceInformationId).toBe(f.intent.informationId);
+    expect(request.prompt.text).toContain("可选风格=[]");
+    expect(
+      request.prompt.templates.filter(
+        (entry) => entry.name === "expression-habits",
+      ),
+    ).toEqual([{ name: "expression-habits", content: expressionHabits }]);
     expect(
       request.prompt.variables.find((v) => v.name === "expression_habits"),
     ).toMatchObject({

@@ -1,12 +1,14 @@
 /**
  * 功能概述：把已冻结的表达选择接到 Composer，不在 Composer 内训练或选择表达。
  * dispatchSelector 只追溯原获胜意图；withExpressionContext 复用原消息 Selector，并追加选择事实及其直接来源。
- * expressionPrompt 在独立变量中注入最多三条软性风格参考，provenance 指向选择结果和验证批次，不改变目标、事实或动作。
+ * expressionPrompt 通过 Composer 构造时注入的受限 renderer 渲染独立的 expression_habits 变量，并追加模板实际使用的变量与源码。
+ * provenance 指向选择结果和验证批次，不改变目标、事实或动作；没有表达选择时返回原 Prompt，不执行 I/O。
  */
 import {
   type CompiledPrompt,
   type DeepReadonly,
   type InformationAtom,
+  type PromptVariable,
 } from "@kaguya/schema";
 import {
   defineInformationSelector,
@@ -60,6 +62,7 @@ export function expressionPrompt(
   prompt: CompiledPrompt,
   atoms: readonly DeepReadonly<InformationAtom>[],
   intentId: string,
+  renderHabits: (variables: readonly PromptVariable[]) => CompiledPrompt,
 ): CompiledPrompt {
   const selection = atoms.find(
     (a) =>
@@ -71,30 +74,22 @@ export function expressionPrompt(
   const content = JSON.stringify(
     payload.habits.map(({ situation, style }) => ({ situation, style })),
   );
-  const instruction =
-    "\n表达习惯仅在自然匹配时作为措辞和句式参考，不必逐字套用。不得引入事实、改变冻结回合、获胜意图、动作、权限或目标：\n";
+  const suffix = renderHabits([
+    {
+      name: "expression_habits",
+      content,
+      informationIds: [
+        selection.informationId,
+        ...selection.references
+          .filter((r) => r.relation === "core:uses-context")
+          .map((r) => r.informationId),
+      ],
+    },
+  ]);
   return {
     ...prompt,
-    text: prompt.text + instruction + content,
-    templates: [
-      ...prompt.templates,
-      {
-        name: "expression-habits",
-        content: instruction + "{{expression_habits}}",
-      },
-    ],
-    variables: [
-      ...prompt.variables,
-      {
-        name: "expression_habits",
-        content,
-        informationIds: [
-          selection.informationId,
-          ...selection.references
-            .filter((r) => r.relation === "core:uses-context")
-            .map((r) => r.informationId),
-        ],
-      },
-    ],
+    text: prompt.text + suffix.text,
+    templates: [...prompt.templates, ...suffix.templates],
+    variables: [...prompt.variables, ...suffix.variables],
   };
 }
