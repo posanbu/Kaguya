@@ -1,5 +1,6 @@
 /**
  * 功能概述：验证 benchmark 导出器的时间、结果泄漏和私有文件边界。
+ * .node-test.mjs 命名标明本文件由 node --test 显式执行，避免被根 Vitest 的 .test 模式误收集。
  * 主要职责：使用虚构账本行测试 freezeRequests，不连接数据库；文件测试只在随机
  * 临时目录内检查 0600 和拒绝覆盖。import 不应触发配置读取或生产导出。
  * 代码库关系：直接测试 export_workload.mjs 暴露的纯转换与 I/O 函数；由 node --test

@@ -74,7 +74,7 @@ exporter 使用 PostgreSQL `REPEATABLE READ READ ONLY` 事务，仅选择 `core.
 
 ```bash
 python3 -m unittest discover -s benchmarks/fast-policy -p 'test_*.py' -v
-node --test benchmarks/fast-policy/export_workload.test.mjs
+node --test benchmarks/fast-policy/export_workload.node-test.mjs
 python3 benchmarks/fast-policy/runner.py \
   --dataset .data/fast-policy/dataset/cases.jsonl \
   --output .data/fast-policy/dry-run \

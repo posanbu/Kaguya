@@ -18,7 +18,7 @@ jobs:
       - name: Test Python runner without credentials or provider access
         run: python3 -m unittest discover -s benchmarks/fast-policy -p 'test_*.py' -v
       - name: Test read-only export boundaries without a database
-        run: node --test benchmarks/fast-policy/export_workload.test.mjs
+        run: node --test benchmarks/fast-policy/export_workload.node-test.mjs
       - name: Validate the complete dry-run matrix
         run: >-
           python3 benchmarks/fast-policy/runner.py
