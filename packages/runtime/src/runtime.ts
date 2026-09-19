@@ -1,5 +1,6 @@
 /**
  * Runtime 只接收 outboundAllowlist；目标授权与最终 transport 前终检使用它，入站权限属于 AdapterHost。
+ * Memory knowledge 仅在双开关启用时准备附加投影表、注册检索及 bootstrap；停用保留历史修订和原始账本。
  * 为 Heartflow 注入 conversation/route 窄能力，结构化候选由宿主冻结，自动跨会话投递继续经过最终授权检查。
  * close({ drain: true }) 用于热应用：停止调度与 claim 领取，允许已领取任务有界完成，
  * 然后 abort/清理旧宿主；外部注入的数据库保持打开，可供下一 Runtime 复用。
@@ -44,6 +45,9 @@ import {
 } from "@kaguya/logger";
 import {
   MEMORY_RETRIEVAL_STRATEGY_ID,
+  MEMORY_KNOWLEDGE_RETRIEVAL_STRATEGY_ID,
+  MEMORY_COGNITION_EVIDENCE_GUARD_STRATEGY_ID,
+  memoryKnowledgeCapability,
   memoryCapability,
   memoryDocumentReaderCapability,
   embeddingCapability,
@@ -56,7 +60,11 @@ import {
   deliveryRequestedInformationKind,
   messageAuthorizationCapability,
   inboundTextInformationKind,
+  memoryKnowledgeBootstrapCapability,
 } from "@kaguya/modules";
+import { MemoryKnowledgeInformationRetrievalStrategy } from "./memory-knowledge-retrieval.js";
+import { createMemoryKnowledgeBootstrap } from "./memory-knowledge-maintenance.js";
+import { MemoryCognitionEvidenceGuardStrategy } from "./memory-cognition-evidence-guard.js";
 import {
   CadenceCoordinator,
   cadenceInformationKinds,
@@ -141,6 +149,7 @@ export type InformationIdGenerator = () => string;
 
 export interface RuntimeMemoryOptions {
   readonly enabled: boolean;
+  readonly knowledgeEnabled?: boolean;
   readonly embedding?: EmbeddingProvider;
 }
 
@@ -398,6 +407,9 @@ export class KaguyaRuntime implements InformationIngress {
         },
       });
       const memoryEnabled = this.options.memory?.enabled ?? false;
+      const knowledgeEnabled =
+        memoryEnabled && (this.options.memory?.knowledgeEnabled ?? false);
+      if (knowledgeEnabled) await database.prepareMemoryKnowledgeSchema();
       const vectorIndex =
         memoryEnabled && this.options.memory?.embedding
           ? new PostgresMemoryVectorIndex(database.sql)
@@ -420,7 +432,7 @@ export class KaguyaRuntime implements InformationIngress {
               this.options.memory.embedding,
             )
           : database.memory;
-      const configuredRetrievalStrategies =
+      const baseRetrievalStrategies =
         this.options.retrievalStrategies ??
         (memoryEnabled
           ? [
@@ -434,6 +446,45 @@ export class KaguyaRuntime implements InformationIngress {
               }),
             ]
           : []);
+      const knowledgeStrategyIds = new Set([
+        MEMORY_KNOWLEDGE_RETRIEVAL_STRATEGY_ID,
+        MEMORY_COGNITION_EVIDENCE_GUARD_STRATEGY_ID,
+      ]);
+      const configuredRetrievalStrategies = baseRetrievalStrategies
+        .filter(({ strategyId }) => !knowledgeStrategyIds.has(strategyId))
+        .map((strategy) =>
+          knowledgeEnabled &&
+          strategy.strategyId === MEMORY_RETRIEVAL_STRATEGY_ID
+            ? {
+                strategyId: strategy.strategyId,
+                retrieve: async (
+                  query: Parameters<
+                    InformationRetrievalStrategy["retrieve"]
+                  >[0],
+                ) => {
+                  try {
+                    const ids = [...(await strategy.retrieve(query))].slice(
+                      0,
+                      query.limit,
+                    );
+                    const available = new Set(
+                      await database.knowledge.filterAvailableSourceIds({
+                        sourceInformationIds: ids,
+                      }),
+                    );
+                    return ids.filter((id) => available.has(id));
+                  } catch {
+                    return [];
+                  }
+                },
+              }
+            : strategy,
+        );
+      if (knowledgeEnabled)
+        configuredRetrievalStrategies.push(
+          new MemoryKnowledgeInformationRetrievalStrategy(database.knowledge),
+          new MemoryCognitionEvidenceGuardStrategy(database.knowledge),
+        );
       const core = new InformationCore({
         drainTimeoutMs: this.options.drainTimeoutMs ?? 5000,
         registry,
@@ -552,6 +603,21 @@ export class KaguyaRuntime implements InformationIngress {
                 value: this.options.memory.embedding,
               },
               { capability: memoryVectorCapability, value: vectorIndex },
+            ]
+          : []),
+        ...(knowledgeEnabled
+          ? [
+              {
+                capability: memoryKnowledgeCapability,
+                value: database.knowledge,
+              },
+              {
+                capability: memoryKnowledgeBootstrapCapability,
+                value: createMemoryKnowledgeBootstrap({
+                  core,
+                  now: this.#now,
+                }),
+              },
             ]
           : []),
         ...composeModelTaskCapabilities(

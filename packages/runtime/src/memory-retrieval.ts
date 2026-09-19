@@ -4,6 +4,7 @@
  * 并在仓储故障时安全降级为空结果。
  * 代码库关系：Runtime 启动 Core 时注册本策略；modules 的 association Selector 只引用稳定 strategy ID；
  * Core 随后从 append-only ledger 重载并授权结果。
+ * knowledge 开启时注入撤回过滤器；未投影原文可继续召回，已撤回来源不能由 sparse/hybrid 旁路重新引入。
  * 输入输出与副作用：执行 Memory 只读 I/O；失败报告仅含错误类型，不含 query 或正文。
  */
 import type { InformationRetrievalStrategy } from "@kaguya/engine";
@@ -19,6 +20,9 @@ export interface MemoryRetrievalFailure {
 
 export interface MemoryInformationRetrievalStrategyOptions {
   readonly reportFailure?: (failure: MemoryRetrievalFailure) => void;
+  readonly filterAvailableSourceIds?: (input: {
+    readonly sourceInformationIds: readonly string[];
+  }) => Promise<readonly string[]>;
 }
 
 export class MemoryInformationRetrievalStrategy implements InformationRetrievalStrategy {
@@ -36,9 +40,16 @@ export class MemoryInformationRetrievalStrategy implements InformationRetrievalS
     try {
       const query = parseMemoryRecallQuery({ ...input, limit });
       const hits = await this.memory.recall(query);
-      return Object.freeze([
+      const ids = [
         ...new Set(hits.map((hit) => hit.document.sourceInformationId)),
-      ]);
+      ].slice(0, query.limit);
+      if (!this.options.filterAvailableSourceIds) return Object.freeze(ids);
+      const available = new Set(
+        await this.options.filterAvailableSourceIds({
+          sourceInformationIds: ids,
+        }),
+      );
+      return Object.freeze(ids.filter((id) => available.has(id)));
     } catch (error) {
       this.options.reportFailure?.({ errorType: safeErrorType(error) });
       return Object.freeze([]);

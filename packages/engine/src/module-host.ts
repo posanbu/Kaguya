@@ -2,7 +2,7 @@
  * prepare 将 registerOnce 的 openScope 约束透传给 Core，保持来源和 context 的校验。
  * 功能概述：按唯一 SDK Catalog 协议预检并托管模块，严格隔离声明能力与业务原子。
  * 主要职责：preflight 在任何 create 前验证配置、kind、Selector、renderer 和能力图；
- * start 按确定性拓扑顺序创建/启动，全部成功后开放订阅；失败逆序 stop/dispose。
+ * start 按确定性拓扑顺序创建/启动，全部成功后开放订阅和可靠投递，再调用 ready 登记可被消费的启动任务；失败逆序 stop/dispose。
  * 代码库关系：Runtime 先把 catalogInformationKinds 注册到 Core，再调用本宿主；
  * durable 订阅由 Core 的 ReliableInformationRunner 执行并受 claim fencing 保护；
  * SDK 的 use/select/registerOnce/commitTerminal 始终受清单约束，Core 负责最终原子验证与故障事实。
@@ -253,6 +253,14 @@ export class ModuleHost {
       phase = "reliable-delivery";
       await this.#options.core.startReliableDelivery();
       this.assertStarting();
+      phase = "ready";
+      for (const module of this.#active) {
+        current = module;
+        this.assertStarting();
+        await module.instance.ready?.(this.createLifecycleContext(module));
+        this.assertStarting();
+        current = undefined;
+      }
       this.#state = "started";
     } catch (error) {
       if (current !== undefined) {

@@ -1,8 +1,11 @@
 /**
  * 功能概述：定义外部认知 provider 的严格文档输入、来源输出与受控 Mem0 REST 适配器。
- * MemoryCognitionProvider 仅接收已持久化文档快照；validateCognitionResult 拒绝缺失、乱序或越权来源。
+ * MemoryCognitionProvider 仅接收已持久化文档快照；validateCognitionInput 允许同群多参与者，
+ * 保留私聊账号边界；validateCognitionResult 拒绝缺失、乱序或越权来源。
  * Mem0CognitionProvider 将每个 operation 映射为独立命名空间，委托外部服务提取/消解冲突，
- * 再把最终可见事实与完整输入证据关联；本包不实现事实提取、合并或演化启发式。
+ * 再把最终可见事实与完整输入证据关联；消息保留账号、场景、时间和 Information 来源，
+ * 账号只代表陈述者，不把第一人称或转述自动绑定为被谈论者。本包不实现事实提取、合并或演化启发式。
+ * evidence guard 的稳定策略 ID 供 Runtime 和快照 selector 共享，Knowledge 开启时检查持久撤回状态。
  * 所有 HTTP 受 abort、超时与响应大小限制，错误只返回固定分类；API key 为私有字段，不提供给模块。
  */
 import { defineModuleCapability } from "@kaguya/sdk";
@@ -56,9 +59,13 @@ export interface MemoryCognitionProvider {
 }
 export const memoryCognitionCapability =
   defineModuleCapability<MemoryCognitionProvider>("kaguya:memory.cognition", 1);
+/** Knowledge 启用时，Core 通过此只读策略检查快照的全部来源是否仍可使用。 */
+export const MEMORY_COGNITION_EVIDENCE_GUARD_STRATEGY_ID =
+  "kaguya.memory.cognition.evidence-guard";
 export function validateCognitionInput(input: MemoryCognitionInput): void {
   cognitionInputSchema.parse(input);
   if (
+    input.sourceInformationIds.length !== input.documents.length ||
     new Set(input.sourceInformationIds).size !== input.documents.length ||
     input.documents.some(
       (doc, index) =>
@@ -72,7 +79,8 @@ export function validateCognitionInput(input: MemoryCognitionInput): void {
     if (
       doc.address.platform !== first.platform ||
       doc.address.adapterId !== first.adapterId ||
-      doc.address.accountId !== first.accountId ||
+      (first.destination.kind !== "group" &&
+        doc.address.accountId !== first.accountId) ||
       JSON.stringify(doc.address.destination) !==
         JSON.stringify(first.destination)
     )
@@ -188,7 +196,17 @@ export class Mem0CognitionProvider implements MemoryCognitionProvider {
           infer: true,
           messages: input.documents.map((doc) => ({
             role: "user",
-            content: doc.content,
+            content: JSON.stringify({
+              sourceInformationId: doc.sourceInformationId,
+              occurredAt: doc.occurredAt,
+              speaker: {
+                platform: doc.address.platform,
+                adapterId: doc.address.adapterId,
+                accountId: doc.address.accountId,
+              },
+              destination: doc.address.destination,
+              text: doc.content,
+            }),
           })),
           metadata: { sourceInformationIds: input.sourceInformationIds },
         }),

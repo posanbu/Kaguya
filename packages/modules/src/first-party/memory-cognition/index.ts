@@ -1,10 +1,12 @@
 /**
  * 功能概述：将 raw writeback 转为受控外部认知任务，维护证据快照而不实现演化算法。
- * 身份未解析或 ephemeral 范围只保留 raw Memory，不进入长期认知；
- * memoryCognitionModule 冻结同账号/聊天范围内最多 32 条已入库来源，worker 只从 Memory 重载，
+ * 身份未解析或 ephemeral 范围只保留 raw Memory，不触发长期认知；
+ * memoryCognitionModule 冻结同聊天范围内最多 32 条已入库来源，群聊保留多参与者，私聊维持账号隔离；
+ * worker 从 Memory 重载并比对来源正文、地址、事件截止点和请求时刻，
  * 经版本化 provider 产生事实，再登记 core.memory.text 和唯一 terminal；未完成文本不进入 Prompt。
  * cognitionEvidenceSelector 重载直接来源；createCognitionMemorySelector 按 provider/revision/asOf
  * 选择最新完整快照并核对直接证据，返回可由 Core 再次加载的 Memory atom ID。
+ * knowledge 开启时通过命名 guard 核验整个证据闭包，任一来源撤回或 guard 不可用都拒绝该快照。
  * provider 超时/暂时错误交给 Reliable Runner，source/schema 失败关闭；后台链不触发在线回合。
  * 展示契约：中文名称与职责说明由定义直接提供给 Inspection 和 WebUI，稳定 kind 与协议字段保持不变。
  * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
@@ -12,14 +14,21 @@
 import { firstPartyInspection } from "../inspection.js";
 import {
   awaitWithSignal,
+  MEMORY_COGNITION_EVIDENCE_GUARD_STRATEGY_ID,
   cognitionIdentitySchema,
   memoryCognitionCapability,
   memoryDocumentReaderCapability,
   validateCognitionResult,
   freezeCognitionInput,
   type CognitionIdentity,
+  type MemoryDocument,
 } from "@kaguya/memory";
-import { z, type DeepReadonly, type InformationAtom } from "@kaguya/schema";
+import {
+  z,
+  type DeepReadonly,
+  type InformationAtom,
+  type PlatformDestination,
+} from "@kaguya/schema";
 import {
   defineInformationKind,
   defineInformationModule,
@@ -95,12 +104,13 @@ export function cognitionScopeKey(source: {
   platform: string;
   adapterId: string;
   senderId: string;
-  destination: unknown;
+  destination: PlatformDestination;
 }): string {
   return JSON.stringify([
+    "scene.v2",
     source.platform,
     source.adapterId,
-    source.senderId,
+    source.destination.kind === "group" ? null : source.senderId,
     source.destination,
   ]);
 }
@@ -145,7 +155,9 @@ const windowSelector = defineInformationSelector({
         source: {
           platform: address.platform,
           adapterId: address.adapterId,
-          senderId: address.senderId,
+          ...(address.destination.kind === "group"
+            ? {}
+            : { senderId: address.senderId }),
           destination: address.destination,
         },
       },
@@ -153,10 +165,27 @@ const windowSelector = defineInformationSelector({
       order: "desc",
       limit: 32,
     });
-    return [
-      source,
-      ...history.filter((atom) => atom.informationId !== source.informationId),
-    ]
+    const scopeKey = cognitionScopeKey(address);
+    const seen = new Set<string>();
+    return [source, ...history]
+      .filter((atom) => {
+        if (
+          seen.has(atom.informationId) ||
+          atom.kind !== inboundTextInformationKind.kind ||
+          Date.parse(atom.occurredAt) > Date.parse(source.occurredAt)
+        )
+          return false;
+        const parsed = inboundTextInformationKind.payloadSchema.safeParse(
+          atom.payload,
+        );
+        if (
+          !parsed.success ||
+          cognitionScopeKey(parsed.data.source) !== scopeKey
+        )
+          return false;
+        seen.add(atom.informationId);
+        return true;
+      })
       .slice(0, 32)
       .sort(compareEvidence)
       .map((atom) => atom.informationId);
@@ -217,7 +246,11 @@ export const memoryCognitionModule = defineInformationModule({
             const documents = [];
             for (const atom of atoms) {
               const doc = await reader.getBySource(atom.informationId);
-              if (doc) documents.push(doc);
+              if (doc) {
+                if (!matchesDocumentEvidence(doc, atom))
+                  throw new Error("Invalid persisted cognition source");
+                documents.push(doc);
+              }
             }
             if (!documents.length)
               throw new Error("Missing persisted cognition source");
@@ -263,8 +296,8 @@ export const memoryCognitionModule = defineInformationModule({
                 request.payload,
               );
             const evidence = await context.select(cognitionEvidenceSelector);
-            const evidenceIds = new Set(
-              evidence.map((atom) => atom.informationId),
+            const evidenceById = new Map(
+              evidence.map((atom) => [atom.informationId, atom]),
             );
             let status: "completed" | "empty" | "superseded" | "invalid" =
               "superseded";
@@ -273,27 +306,36 @@ export const memoryCognitionModule = defineInformationModule({
               payload.identity.providerId === provider.identity.providerId &&
               payload.identity.revision === provider.identity.revision
             ) {
-              const documents = [];
-              for (const id of payload.sourceInformationIds) {
-                const doc = await reader.getBySource(id);
-                if (!doc || !evidenceIds.has(id))
-                  throw new Error("Missing cognition evidence");
-                documents.push(doc);
-              }
-              const input = freezeCognitionInput({
-                operationKey: request.informationId,
-                documents,
-                sourceInformationIds: payload.sourceInformationIds,
-              });
-              const signal = AbortSignal.any([
-                context.signal,
-                AbortSignal.timeout(30_000),
-              ]);
-              const result = await awaitWithSignal(
-                provider.evolve(input, signal),
-                signal,
-              );
               try {
+                const documents = [];
+                for (const id of payload.sourceInformationIds) {
+                  const doc = await reader.getBySource(id);
+                  const atom = evidenceById.get(id);
+                  if (
+                    !doc ||
+                    !atom ||
+                    !matchesDocumentEvidence(doc, atom) ||
+                    Date.parse(doc.occurredAt) > Date.parse(payload.asOf) ||
+                    Date.parse(doc.createdAt) >
+                      Date.parse(request.occurredAt) ||
+                    !matchesRequestedScope(doc, payload.scopeKey)
+                  )
+                    throw new Error("Invalid cognition evidence");
+                  documents.push(doc);
+                }
+                const input = freezeCognitionInput({
+                  operationKey: request.informationId,
+                  documents,
+                  sourceInformationIds: payload.sourceInformationIds,
+                });
+                const signal = AbortSignal.any([
+                  context.signal,
+                  AbortSignal.timeout(30_000),
+                ]);
+                const result = await awaitWithSignal(
+                  provider.evolve(input, signal),
+                  signal,
+                );
                 const parsed = validateCognitionResult(result, input);
                 status = parsed.facts.length ? "completed" : "empty";
                 if (parsed.facts.length) {
@@ -372,7 +414,10 @@ export const memoryCognitionModule = defineInformationModule({
     };
   },
 });
-export function createCognitionMemorySelector(identity: CognitionIdentity) {
+export function createCognitionMemorySelector(
+  identity: CognitionIdentity,
+  options: { readonly requireEvidenceGuard?: boolean } = {},
+) {
   return defineInformationSelector({
     selectorId: "kaguya.memory.cognition.completed-snapshot",
     select: async ({ sourceAtom, ledger }) => {
@@ -455,6 +500,8 @@ export function createCognitionMemorySelector(identity: CognitionIdentity) {
             evidence.some(
               (atom) =>
                 atom.kind !== inboundTextInformationKind.kind ||
+                Date.parse(atom.occurredAt) >
+                  Date.parse(snapshot.payload.asOf) ||
                 cognitionScopeKey(
                   inboundTextInformationKind.payloadSchema.parse(atom.payload)
                     .source,
@@ -462,6 +509,29 @@ export function createCognitionMemorySelector(identity: CognitionIdentity) {
             )
           )
             continue;
+          const evidenceIds = new Set(
+            evidence.map((atom) => atom.informationId),
+          );
+          if (options.requireEvidenceGuard) {
+            try {
+              const available = await ledger.retrieve({
+                strategyId: MEMORY_COGNITION_EVIDENCE_GUARD_STRATEGY_ID,
+                input: { sourceInformationIds: [...evidenceIds] },
+                limit: evidenceIds.size,
+              });
+              const availableIds = new Set(
+                available.map((atom) => atom.informationId),
+              );
+              if (
+                availableIds.size !== evidenceIds.size ||
+                [...evidenceIds].some((id) => !availableIds.has(id))
+              )
+                continue;
+            } catch {
+              // 开启态不可因策略缺失、账本或仓储故障退回未检查的旧快照。
+              continue;
+            }
+          }
           const memories = await ledger.related({
             from: [snapshot.atom.informationId],
             relation: "agent:memory",
@@ -469,9 +539,6 @@ export function createCognitionMemorySelector(identity: CognitionIdentity) {
             limit: 1,
           });
           const memory = memories[0];
-          const evidenceIds = new Set(
-            evidence.map((atom) => atom.informationId),
-          );
           const direct =
             memory?.references.filter(
               (ref) => ref.relation === "core:uses-context",
@@ -488,6 +555,46 @@ export function createCognitionMemorySelector(identity: CognitionIdentity) {
       return [...new Set(selected)];
     },
   });
+}
+/** 将持久化正文与不可变账本原文逐字段核对，避免 reader 返回被替换或错配的来源。 */
+function matchesDocumentEvidence(
+  document: MemoryDocument,
+  atom: DeepReadonly<InformationAtom>,
+): boolean {
+  if (atom.kind !== inboundTextInformationKind.kind) return false;
+  const parsed = inboundTextInformationKind.payloadSchema.safeParse(
+    atom.payload,
+  );
+  if (!parsed.success) return false;
+  const { source, text } = parsed.data;
+  return (
+    document.sourceInformationId === atom.informationId &&
+    document.sourceKind === atom.kind &&
+    document.content === text &&
+    Date.parse(document.occurredAt) === Date.parse(atom.occurredAt) &&
+    document.address.platform === source.platform &&
+    document.address.adapterId === source.adapterId &&
+    document.address.accountId === source.senderId &&
+    document.address.platformMessageId === source.platformMessageId &&
+    JSON.stringify(document.address.destination) ===
+      JSON.stringify(source.destination)
+  );
+}
+/** 新请求使用场景键；旧的单发送者 pending 请求仍按原账号键恢复，不扩大其证据范围。 */
+function matchesRequestedScope(
+  document: MemoryDocument,
+  scopeKey: string,
+): boolean {
+  const source = { ...document.address, senderId: document.address.accountId };
+  return (
+    cognitionScopeKey(source) === scopeKey ||
+    JSON.stringify([
+      source.platform,
+      source.adapterId,
+      source.senderId,
+      source.destination,
+    ]) === scopeKey
+  );
 }
 function compareEvidence(
   a: DeepReadonly<InformationAtom>,

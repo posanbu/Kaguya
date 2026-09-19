@@ -2,6 +2,7 @@
  * 功能概述：用真实 pgvector WASM 扩展验证 SQL 向量投影、身份隔离与 scoped hybrid recall。
  * create 在独立 PGlite 中安装扩展，put 构造 canonical 文档；测试覆盖幂等、维度/revision 切换、
  * dense-only 命中、跨群/账号过滤和 provider 故障降级。afterEach 只关闭本测试数据库。
+ * 双时间测试使用真实 hybrid 路径，确保 dense-only 候选同样不能绕过原文入库截止点。
  */
 import { PGlite } from "@electric-sql/pglite";
 import { vector } from "@electric-sql/pglite-pgvector";
@@ -166,5 +167,37 @@ describe("Memory pgvector projection", () => {
     expect(await f.database.memory.getBySource("one")).toMatchObject({
       sourceInformationId: "one",
     });
+  });
+  it("applies the same recording cutoff to dense-only and sparse candidates", async () => {
+    const f = await create();
+    const doc = await f.put("coffee");
+    await f.index.putVector(doc.memoryId, identity, [1, 0]);
+    const hybrid = new HybridMemoryRecall(f.database.memory, f.index, {
+      identity,
+      embed: async () => [1, 0],
+    });
+    const beforeRecording = new Date(
+      Date.parse(doc.createdAt) - 1,
+    ).toISOString();
+    for (const query of ["tea", "coffee"]) {
+      await expect(
+        hybrid.recall({
+          query,
+          occurredBefore: "2026-09-02T00:00:00.000Z",
+          recordedBefore: beforeRecording,
+          limit: 8,
+        }),
+      ).resolves.toEqual([]);
+      expect(
+        (
+          await hybrid.recall({
+            query,
+            occurredBefore: "2026-09-02T00:00:00.000Z",
+            recordedBefore: doc.createdAt,
+            limit: 8,
+          })
+        ).map((hit) => hit.document.memoryId),
+      ).toEqual([doc.memoryId]);
+    }
   });
 });

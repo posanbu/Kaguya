@@ -3,6 +3,7 @@
  * 同时导出独立 embedding/vector capability 与 HybridMemoryRecall；向量只作为派生索引。
  * 主要职责：定义消息文档、平台原生检索 key、写入/召回端口、模块 capability，
  * 并提供 NFKC Unicode 2-gram 生成与严格输入校验。
+ * 召回同时支持发生时间 occurredBefore 与入库时间 recordedBefore，迟到历史不能越过已冻结读取时点。
  * 代码库关系：database 实现这些端口，Runtime 将 recall 暴露为命名检索策略，
  * modules 只通过 capability 写入；本包不依赖 Information Ledger 或具体数据库。
  * 输入输出与副作用：校验与 gram 生成是纯函数；接口本身不执行 I/O。
@@ -100,6 +101,7 @@ export const memoryRecallQuerySchema = z
       .max(MEMORY_MAX_FILTER_KEYS)
       .optional(),
     occurredBefore: z.iso.datetime({ offset: true }).optional(),
+    recordedBefore: z.iso.datetime({ offset: true }).optional(),
     excludeSourceInformationIds: z
       .array(informationIdSchema)
       .max(MEMORY_MAX_FILTER_KEYS)
@@ -113,6 +115,7 @@ export interface MemoryRecallQuery {
   readonly accounts?: readonly MemoryAccountKey[];
   readonly scopes?: readonly MemoryScopeKey[];
   readonly occurredBefore?: string;
+  readonly recordedBefore?: string;
   readonly excludeSourceInformationIds?: readonly string[];
   readonly limit: number;
 }
@@ -172,6 +175,9 @@ export function parseMemoryRecallQuery(input: unknown): MemoryRecallQuery {
     ...(parsed.data.occurredBefore === undefined
       ? {}
       : { occurredBefore: parsed.data.occurredBefore }),
+    ...(parsed.data.recordedBefore === undefined
+      ? {}
+      : { recordedBefore: parsed.data.recordedBefore }),
     ...(parsed.data.namespaces === undefined
       ? {}
       : { namespaces: freezeObjects(parsed.data.namespaces) }),

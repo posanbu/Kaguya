@@ -2,6 +2,7 @@
  * 导出跨会话批准/确认事实和窄 MessageAuthorization token，供 composition 与 Runtime 共享对象身份。
  * 功能概述：汇总 modules 包的信息原子 kind、Heartflow、Message Composer与 person-fact Model Task 公共契约。
  * 额外导出后台原始消息写回模块与 request/terminal kind，供 composition 显式装配。
+ * memory-knowledge 导出显式事件提交、Wiki 修订与历史回填协议，供宿主选择启用。
  * 主要职责：导出 `createHeartflowModule`、`createMessageComposerModule`、
  * `createPersonFactTaskModule`、默认 Selector 名称以及各阶段 kind/schema；旧事件定义、reply-only completed schema 和定向事件模块不再公开。
  * 代码库关系：apps composition root 通过 first-party/catalog.ts 工厂选择模块，注入 shared completed definition，
@@ -14,6 +15,7 @@ export {
   associationModule,
 } from "./first-party/association/index.js";
 export { identityModule } from "./first-party/identity/index.js";
+export * from "./first-party/memory-knowledge/index.js";
 export {
   createHeartflowModule,
   heartflowSettingsSchema,

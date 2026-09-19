@@ -4,6 +4,7 @@
  * 主要职责：验证 `onInformation` 保存传入 definition，并让 handler 通过
  * `InformationModuleHandlerContext.register` 注册派生 atom；同时验证模块清单拒绝
  * 重复 kind，并断言 `onTargetedInformation` 不再导出。
+ * ready 使用公开 LifecycleContext，在订阅已就绪的阶段复用取消信号与受限能力；顺序由 Host 测试覆盖。
  * 代码库关系：测试最终 `modules.ts` 及其经由 `index.ts` 的 SDK 出口；
  * engine `ModuleHost` 依赖同一 subscription definition 把消费者注册到 Core。
  * 输入输出与副作用：只构造内存中的 kind 和模块定义，不访问持久化或 Runtime；
@@ -19,6 +20,7 @@ import {
   defineInformationModule,
   defineModuleDiagnostic,
   onInformation,
+  type InformationModuleLifecycleContext,
 } from "./index.js";
 
 const inputKind = defineInformationKind({
@@ -40,6 +42,57 @@ const outputKind = defineInformationKind({
 });
 
 describe("information module SDK", () => {
+  it("exposes ready with the same lifecycle capabilities as start", async () => {
+    const signal = new AbortController().signal;
+    const context: InformationModuleLifecycleContext = {
+      signal,
+      now: () => new Date("2026-09-19T00:00:00.000Z"),
+      use: () => {
+        throw new Error("No capability declared");
+      },
+      report: async () => undefined,
+    };
+    let readyContext: InformationModuleLifecycleContext | undefined;
+    const module = defineInformationModule({
+      manifest: {
+        protocolVersion: 1,
+        moduleVersion: "1.0.0",
+        definitionId: "acme.ready",
+        displayName: "Readiness",
+        summary: "Declares readiness.",
+        description: "Initializes after subscriptions are ready.",
+        settingsSchema: z.object({}).strict(),
+        consumes: [],
+        produces: [],
+        selectors: [],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
+      },
+      create: () => ({
+        provisions: [],
+        subscriptions: [],
+        ready: (lifecycle) => {
+          readyContext = lifecycle;
+        },
+      }),
+    });
+    const instance = await module.create(
+      {
+        instanceId: "ready.test",
+        settings: {},
+        activation: {
+          instanceId: "ready.test",
+          definitionId: module.manifest.definitionId,
+        },
+      },
+      context,
+    );
+    await instance.ready?.(context);
+    expect(readyContext).toBe(context);
+    expect(readyContext?.signal).toBe(signal);
+    expect(readyContext?.now().toISOString()).toBe("2026-09-19T00:00:00.000Z");
+  });
   it("requires and freezes module and prompt display metadata", () => {
     const promptRenderer = {
       rendererId: "acme.prompt.input",

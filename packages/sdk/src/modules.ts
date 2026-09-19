@@ -8,7 +8,7 @@
  * 代码库关系：Engine 在 create 前预检这些声明，Runtime 只装配 Catalog 与 activations；
  * handler 通过受限 context 派生原子和选择上下文，无法取得裸存储或全局配置。
  * 输入输出与副作用：定义只构造冻结内存元数据，无 I/O；settings 由 Host parse 后深冻结。
- * start/stop/dispose 与 AbortSignal 表达资源生命周期；业务顺序由 information DAG 表达。
+ * start/ready/stop/dispose 与 AbortSignal 表达资源生命周期；ready 在订阅与可靠投递就绪后登记启动任务，业务顺序仍由 information DAG 表达。
  */
 import type {
   DeepReadonly,
@@ -210,6 +210,8 @@ export interface InformationModuleInstance {
   readonly subscriptions: readonly InformationModuleSubscription[];
   readonly provisions: readonly ModuleCapabilityImplementation[];
   start?(context: InformationModuleLifecycleContext): Promise<void> | void;
+  /** 所有模块启动、订阅安装及可靠投递启用后调用；可登记需要当前订阅接收的启动事实，失败回滚整个宿主。 */
+  ready?(context: InformationModuleLifecycleContext): Promise<void> | void;
   describeStartup?():
     ModuleStartupDescription | Promise<ModuleStartupDescription>;
   stop?(): Promise<void> | void;

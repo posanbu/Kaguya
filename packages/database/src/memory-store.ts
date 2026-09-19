@@ -3,6 +3,7 @@
  * getBySource 重载已持久化来源，listDocuments 以 memoryId 游标提供有界历史回填。
  * 主要职责：校验文档/查询、原子写入文档和 Unicode 2-gram、按可选原生 key 过滤，
  * 并以查询 gram 覆盖率和时间产生稳定结果。
+ * memoryRecallPredicates 为 sparse 与 pgvector 共用，分别约束事件时间和 created_at 入库截止点。
  * 代码库关系：KaguyaDatabase 暴露本仓储；Runtime 将 recall 适配为 Information
  * retrieval strategy；表结构由 schema.ts 建立，Memory 行不属于 append-only ledger。
  * 输入输出与副作用：put/recall 执行数据库 I/O；正文和 query 从不进入错误消息。
@@ -311,6 +312,11 @@ export function memoryRecallPredicates(
   if (parsed.occurredBefore !== undefined) {
     predicates.push(
       `d.occurred_at::timestamptz <= ${bind(parsed.occurredBefore)}::timestamptz`,
+    );
+  }
+  if (parsed.recordedBefore !== undefined) {
+    predicates.push(
+      `d.created_at::timestamptz <= ${bind(parsed.recordedBefore)}::timestamptz`,
     );
   }
   if (parsed.excludeSourceInformationIds?.length) {
