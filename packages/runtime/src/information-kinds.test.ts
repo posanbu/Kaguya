@@ -8,6 +8,7 @@
  * 代码库关系：直接约束 `information-kinds.ts` composition 输出；`KaguyaRuntime.start()` 会按
  * 此集合注册 Registry，ModuleHost 和 lifecycle/delivery consumer 必须使用同一 definition 身份。
  * 输入输出与副作用：纯内存检查 schema、引用规则和日志投影；不会启动 Core 或连接数据库。
+ * Model Task 失败诊断只接受固定分类与正整数次数，拒绝原始响应及 provider 错误字段。
  */
 import { consumerFailedInformationKind } from "@kaguya/engine";
 import {
@@ -135,6 +136,36 @@ describe("runtime information kinds", () => {
         },
       }).success,
     ).toBe(false);
+  });
+
+  it("accepts only bounded safe structured failure diagnostics", () => {
+    const error = {
+      name: "ModelTaskError",
+      kind: "non-retryable",
+      stage: "structured-output-parse",
+      message: "Model task generation failed",
+      structuredOutputFailure: "invalid-json",
+      attemptCount: 2,
+    };
+    const payload = { ...metadata, durationMs: 5, error };
+    expect(
+      modelTaskFailedInformationKind.payloadSchema.parse(payload).error,
+    ).toEqual(error);
+    for (const invalid of [
+      { structuredOutputFailure: "raw provider response" },
+      { attemptCount: 0 },
+      { attemptCount: -1 },
+      { attemptCount: 1.5 },
+      { text: "private model response" },
+      { cause: "private provider failure" },
+    ]) {
+      expect(
+        modelTaskFailedInformationKind.payloadSchema.safeParse({
+          ...payload,
+          error: { ...error, ...invalid },
+        }).success,
+      ).toBe(false);
+    }
   });
 
   it("derives canonical prompt variable provenance and digests", () => {

@@ -12,6 +12,8 @@
  * 重放先按指纹读取 requested/terminal，不依赖模型 resolver；新请求仍只经 registerOnce 写入。
  * provider 仅校验由任务输入导出的无 transform schema；本层唯一执行任务 parse/transform，
  * 再检查 JSON 与 informationPayloadSchema。重放不执行任务 transform，存储/fencing 异常不转业务失败。
+ * LLM 边界内重试仍只提交一个终态；失败仅保存受控结构化分类与尝试次数，并保留已知用量和耗时。
+ * readFailureMetrics 对错误携带的指标再次执行数值及账本校验；不合法时丢弃指标并使用宿主耗时。
  */
 import { createHash } from "node:crypto";
 import { InformationCore } from "@kaguya/engine";
@@ -308,6 +310,7 @@ export class ModelTaskClient implements ModelTaskCapability {
           return resultFromWinner<TOutput>(winner, requested.informationId);
         throw new Error("Model task execution interrupted");
       }
+      const llmError = error instanceof KaguyaLlmError ? error : undefined;
       const winner = await this.#core.commitTerminal(
         terminalGroup,
         requested.informationId,
@@ -316,9 +319,11 @@ export class ModelTaskClient implements ModelTaskCapability {
           ...this.terminalInput(requested),
           payload: {
             ...persisted,
-            ...(metrics ?? {
-              durationMs: Math.max(0, this.#now().getTime() - startedAt),
-            }),
+            ...(metrics ??
+              readFailureMetrics(
+                llmError,
+                Math.max(0, this.#now().getTime() - startedAt),
+              )),
             error: {
               name: "ModelTaskError",
               kind:
@@ -330,6 +335,16 @@ export class ModelTaskClient implements ModelTaskCapability {
                   ? (error.stage ?? failureStage)
                   : failureStage,
               message: "Model task generation failed",
+              ...(llmError?.structuredOutputFailure === undefined
+                ? {}
+                : {
+                    structuredOutputFailure: llmError.structuredOutputFailure,
+                  }),
+              ...(llmError?.attemptCount === undefined ||
+              !Number.isSafeInteger(llmError.attemptCount) ||
+              llmError.attemptCount < 1
+                ? {}
+                : { attemptCount: llmError.attemptCount }),
             },
           },
         },
@@ -440,6 +455,34 @@ export class ModelTaskClient implements ModelTaskCapability {
     }
     return undefined;
   }
+}
+
+function readFailureMetrics(
+  error: KaguyaLlmError | undefined,
+  fallbackDurationMs: number,
+): { durationMs: number; usage?: Record<string, number> } {
+  const candidate = {
+    durationMs: error?.durationMs ?? fallbackDurationMs,
+    ...(error?.usage === undefined ? {} : { usage: error.usage }),
+  };
+  const validNumbers = z
+    .object({
+      durationMs: z.number().nonnegative(),
+      usage: z.record(z.string(), z.number().nonnegative()).optional(),
+    })
+    .strict()
+    .safeParse(candidate);
+  if (
+    !validNumbers.success ||
+    !informationPayloadSchema.safeParse(validNumbers.data).success
+  )
+    return { durationMs: fallbackDurationMs };
+  return {
+    durationMs: validNumbers.data.durationMs,
+    ...(validNumbers.data.usage === undefined
+      ? {}
+      : { usage: validNumbers.data.usage }),
+  };
 }
 
 function persistedMetadata(requested: Requested) {

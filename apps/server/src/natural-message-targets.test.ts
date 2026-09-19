@@ -1,6 +1,8 @@
 /**
  * 功能概述：以正式 Composition、Runtime、PGlite 和受控 HTTP provider 验证自然语言跨会话链路。
  * fixture 仅替换模型响应、在线目录与 transport，仍执行身份识别、Planner、Composer、授权和 durable 去重。
+ * projection 只提取模板中人物/会话上下文的单行 JSON，避免把 Provider 追加的 Schema 提示当成业务数据；
+ * choose 从该投影读取已解析的不透明目标引用，仍由正式授权服务执行范围和投递校验。
  * 覆盖双投影的范围隔离、群/私聊选择、歧义与撤销后的失败关闭；所有账号、正文和凭据均为合成数据。
  */
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
@@ -226,7 +228,13 @@ async function fixture(
 
 function projection(request: Record<string, any>) {
   const text = request.messages.map((m: any) => m.content).join("\n");
-  return JSON.parse(text.split("结构化人物/会话上下文：").at(-1)!);
+  const prefix = "结构化人物/会话上下文：";
+  const line = text.split("\n").find((line: string) => line.startsWith(prefix));
+  expect(
+    line,
+    "Planner Prompt must include the frozen conversation projection",
+  ).toBeDefined();
+  return JSON.parse(line!.slice(prefix.length));
 }
 function choose(kind: "group" | "private", relation: string) {
   return (request: Record<string, any>) => {

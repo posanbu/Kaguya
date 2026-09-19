@@ -5,9 +5,11 @@
  * 功能概述：通过真实 Runtime/PGlite 与 DeepSeek-compatible HTTP mock 验证两层发言决策。
  * fixture 装配正式 Catalog、light Planner 和 heavy Composer；settle 等待 durable 订阅闭合，
  * restart 保留数据库并重建宿主，advance 推进持久 heartbeat 时钟。仅 mock provider HTTP，
- * 决策写入故障的等待沿用 settle 的 8 秒预算，允许 CI 下持久订阅完成前置步骤。
+ * 决策写入故障及取消前等待 Planner 启动均沿用 settle 的 8 秒预算，允许 CI 下持久订阅完成前置步骤。
  * 尚未提交决策的 Planner 可由新输入打断；静默窗后合并旧、新输入重构，已提交决策仍保持唯一终态。
- * 覆盖动作分支、严格对象输出、失败关闭、直接信号、共享等待预算和并发入站去重。
+ * 覆盖 message/wait/silent 与 target union 的 JSON mode 本地校验、一次结构修复、耗尽后失败关闭、
+ * 累计 usage 和单 requested/terminal/decision；重试复用冻结 Prompt，重放与新输入取消均不重复落地。
+ * 同时保留直接信号、共享等待预算和并发入站去重回归。
  * 所有消息和密钥均为合成测试数据；清理按 Runtime、数据库顺序关闭，不访问外部服务。
  */
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
@@ -234,25 +236,172 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
   });
 
   it.each([
-    "HTTP_FAILURE",
+    { invalid: "", recovered: speak },
+    { invalid: "INVALID_PRIVATE_PROVIDER_RESPONSE", recovered: wait },
+    { invalid: { action: "message", reason: "respond" }, recovered: silent },
+  ])(
+    "repairs one invalid response before $recovered.action",
+    async ({ invalid, recovered }) => {
+      const f = await fixture([invalid, recovered]);
+      await f.submit(f.message());
+      await f.settle();
+      const graph = await f.atoms();
+      const plannerRequests = f.requests.filter(
+        (r) => r.model === "deepseek-light",
+      );
+      expect(plannerRequests).toHaveLength(2);
+      expect(plannerRequests[1]?.messages).toEqual(
+        plannerRequests[0]?.messages,
+      );
+      for (const request of plannerRequests)
+        expect(request.response_format).toEqual({ type: "json_object" });
+      expect(JSON.stringify(plannerRequests[1]?.messages)).not.toContain(
+        "INVALID_PRIVATE_PROVIDER_RESPONSE",
+      );
+      const tasks = graph.filter((a) => a.payload.taskId === "agent.turn.plan");
+      expect(
+        tasks.filter((a) => a.kind === "core.model.task.requested"),
+      ).toHaveLength(1);
+      const terminals = tasks.filter(
+        (a) => a.kind !== "core.model.task.requested",
+      );
+      expect(terminals).toHaveLength(1);
+      expect(terminals[0]?.kind).toBe("core.model.task.completed");
+      expect(terminals[0]?.payload).toMatchObject({
+        output: recovered,
+        usage: { inputTokens: 2, outputTokens: 2, totalTokens: 4 },
+      });
+      const decisions = graph.filter(
+        (a) => a.kind === "agent.turn.plan.completed",
+      );
+      expect(decisions).toHaveLength(1);
+      expect(decisions[0]?.payload.action).toMatchObject(recovered);
+      expect(kinds(graph)).not.toContain("agent.turn.failed");
+      expect(f.delivered).toHaveBeenCalledTimes(
+        recovered.action === "message" ? 1 : 0,
+      );
+      const requestCount = f.requests.length;
+      await f.restart();
+      await f.settle();
+      expect(f.requests).toHaveLength(requestCount);
+      const replayed = await f.atoms();
+      expect(
+        replayed.filter((a) => a.payload.taskId === "agent.turn.plan"),
+      ).toHaveLength(tasks.length);
+      expect(
+        replayed.filter((a) => a.kind === "agent.turn.plan.completed"),
+      ).toHaveLength(1);
+      expect(f.delivered).toHaveBeenCalledTimes(
+        recovered.action === "message" ? 1 : 0,
+      );
+    },
+  );
+
+  it.each([
+    { kind: "current" },
+    {
+      kind: "group",
+      reference: "synthetic-group-reference",
+      instruction: "转告合成测试消息",
+    },
+    {
+      kind: "private",
+      reference: "synthetic-private-reference",
+      instruction: "转告合成测试消息",
+    },
+    { kind: "unresolved", reason: "not-found" },
+  ])(
+    "accepts the nested $kind target union before routing authorization",
+    async (target) => {
+      const output = { ...speak, target };
+      const f = await fixture([output]);
+      await f.submit(f.message());
+      await f.settle();
+      const graph = await f.atoms();
+      const terminal = graph.find(
+        (a) =>
+          a.kind === "core.model.task.completed" &&
+          a.payload.taskId === "agent.turn.plan",
+      );
+      expect(terminal?.payload.output).toEqual(output);
+      expect(
+        graph.find((a) => a.kind === "agent.turn.plan.completed")?.payload
+          .action,
+      ).toEqual(output);
+      expect(
+        f.requests.filter((r) => r.model === "deepseek-light"),
+      ).toHaveLength(1);
+      expect(f.requests[0]?.response_format).toEqual({ type: "json_object" });
+      expect(f.delivered).toHaveBeenCalledTimes(
+        target.kind === "current" ? 1 : 0,
+      );
+    },
+  );
+
+  it.each([
+    "",
     "not JSON",
     { action: "message", reason: "invented" },
     { ...wait, waitSeconds: 4 },
     { ...wait, waitSeconds: 121 },
     { ...wait, waitSeconds: 5.5 },
     { ...silent, text: "forbidden reply" },
-  ])("fails closed for %j", async (output) => {
-    const f = await fixture([output]);
+  ])(
+    "fails closed after exhausting one structural repair for %j",
+    async (output) => {
+      const f = await fixture([output, output]);
+      await f.submit(f.message());
+      await f.settle();
+      const graph = await f.atoms();
+      expect(
+        graph.find((a) => a.kind === "agent.turn.plan.completed")?.payload,
+      ).toMatchObject({
+        action: { action: "silent", reason: "planner-unavailable" },
+      });
+      expect(kinds(graph)).toContain("agent.turn.silent");
+      expect(kinds(graph)).not.toContain("agent.turn.failed");
+      expect(kinds(graph)).not.toContain("core.message.assistant.text");
+      expect(f.requests).toHaveLength(2);
+      expect(f.requests[1]?.messages).toEqual(f.requests[0]?.messages);
+      expect(f.delivered).not.toHaveBeenCalled();
+      const tasks = graph.filter((a) => a.payload.taskId === "agent.turn.plan");
+      expect(
+        tasks.filter((a) => a.kind === "core.model.task.requested"),
+      ).toHaveLength(1);
+      expect(
+        tasks
+          .filter((a) => a.kind !== "core.model.task.requested")
+          .map((a) => a.kind),
+      ).toEqual(["core.model.task.failed"]);
+      expect(
+        graph.filter((a) => a.kind === "agent.turn.plan.completed"),
+      ).toHaveLength(1);
+      await f.restart();
+      await f.settle();
+      expect(f.requests).toHaveLength(2);
+      const replayed = await f.atoms();
+      expect(
+        replayed.filter((a) => a.payload.taskId === "agent.turn.plan"),
+      ).toHaveLength(tasks.length);
+      expect(
+        replayed.filter((a) => a.kind === "agent.turn.plan.completed"),
+      ).toHaveLength(1);
+    },
+  );
+
+  it("fails closed without structural repair for an HTTP failure", async () => {
+    const f = await fixture(["HTTP_FAILURE", speak]);
     await f.submit(f.message());
     await f.settle();
     const graph = await f.atoms();
     expect(
-      graph.find((a) => a.kind === "agent.turn.plan.completed")?.payload,
-    ).toMatchObject({
-      action: { action: "silent", reason: "planner-unavailable" },
+      graph.find((a) => a.kind === "agent.turn.plan.completed")?.payload.action,
+    ).toEqual({
+      action: "silent",
+      reason: "planner-unavailable",
     });
+    expect(kinds(graph)).toContain("core.model.task.failed");
     expect(kinds(graph)).toContain("agent.turn.silent");
-    expect(kinds(graph)).not.toContain("agent.turn.failed");
     expect(kinds(graph)).not.toContain("core.message.assistant.text");
     expect(f.requests).toHaveLength(1);
     expect(f.delivered).not.toHaveBeenCalled();
@@ -320,54 +469,82 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
     expect(f.delivered).toHaveBeenCalledTimes(1);
   });
 
-  it("interrupts Planner and coalesces incoming messages after the quiet window", async () => {
-    let release!: (value: unknown) => void;
-    const blocked = new Promise((resolve) => {
-      release = resolve;
-    });
-    const f = await fixture([() => blocked, speak]);
-    try {
-      await f.submit(f.message());
-      await vi.waitFor(() => expect(f.requests).toHaveLength(1));
-      f.setTime(1000);
-      for (let i = 0; i < 8; i++)
-        await f.submit(f.message(`m${i + 2}`, { text: `更新的消息 ${i}` }));
-      await vi.waitFor(async () =>
-        expect(kinds(await f.atoms())).toContain("agent.observation.wake"),
-      );
-      expect(
-        (await f.atoms()).filter((a) => a.kind === "agent.turn.candidate"),
-      ).toHaveLength(1);
-      expect(f.requests).toHaveLength(1);
-      release(silent);
-      await f.settle();
-      f.setTime(1001);
-      await f.restart();
-      await f.settle();
-      const graph = await f.atoms();
-      expect(
-        graph.filter((a) => a.kind === "agent.turn.decision.interrupted"),
-      ).toHaveLength(1);
-      expect(
-        graph.filter((a) => a.kind === "agent.turn.context.completed").at(-1)
-          ?.payload.inputs,
-      ).toHaveLength(9);
-      expect(f.requests.map((r) => r.model)).toEqual([
-        "deepseek-light",
-        "deepseek-light",
-        "deepseek-heavy",
+  it.each([false, true])(
+    "interrupts Planner during repair=%s and coalesces incoming messages after the quiet window",
+    async (duringRepair) => {
+      let release!: (value: unknown) => void;
+      const blocked = new Promise((resolve) => {
+        release = resolve;
+      });
+      const f = await fixture([
+        ...(duringRepair ? ["not JSON"] : []),
+        () => blocked,
+        speak,
       ]);
-      expect(
-        graph.filter((a) => a.kind === "core.message.assistant.text"),
-      ).toHaveLength(1);
-      expect(f.delivered).toHaveBeenCalledTimes(1);
-      await f.restart();
-      await f.settle();
-      expect(f.delivered).toHaveBeenCalledTimes(1);
-    } finally {
-      release(silent);
-    }
-  });
+      const blockedRequestCount = duringRepair ? 2 : 1;
+      try {
+        await f.submit(f.message());
+        await vi.waitFor(() =>
+          expect(f.requests).toHaveLength(blockedRequestCount),
+        );
+        f.setTime(1000);
+        for (let i = 0; i < 8; i++)
+          await f.submit(f.message(`m${i + 2}`, { text: `更新的消息 ${i}` }));
+        await vi.waitFor(async () =>
+          expect(kinds(await f.atoms())).toContain("agent.observation.wake"),
+        );
+        expect(
+          (await f.atoms()).filter((a) => a.kind === "agent.turn.candidate"),
+        ).toHaveLength(1);
+        expect(f.requests).toHaveLength(blockedRequestCount);
+        release(speak);
+        await f.settle();
+        f.setTime(1001);
+        await f.restart();
+        await f.settle();
+        const graph = await f.atoms();
+        expect(
+          graph.filter((a) => a.kind === "agent.turn.decision.interrupted"),
+        ).toHaveLength(1);
+        expect(
+          graph.filter((a) => a.kind === "agent.turn.context.completed").at(-1)
+            ?.payload.inputs,
+        ).toHaveLength(9);
+        expect(f.requests.map((r) => r.model)).toEqual([
+          ...(duringRepair ? ["deepseek-light"] : []),
+          "deepseek-light",
+          "deepseek-light",
+          "deepseek-heavy",
+        ]);
+        expect(
+          graph.filter((a) => a.kind === "core.message.assistant.text"),
+        ).toHaveLength(1);
+        const plannerTasks = graph.filter(
+          (a) => a.payload.taskId === "agent.turn.plan",
+        );
+        expect(
+          plannerTasks.filter((a) => a.kind === "core.model.task.requested"),
+        ).toHaveLength(2);
+        expect(
+          plannerTasks.filter((a) => a.kind === "core.model.task.cancelled"),
+        ).toHaveLength(1);
+        expect(
+          plannerTasks.filter((a) => a.kind === "core.model.task.completed"),
+        ).toHaveLength(1);
+        expect(
+          graph.filter((a) => a.kind === "agent.turn.plan.completed"),
+        ).toHaveLength(1);
+        expect(f.delivered).toHaveBeenCalledTimes(1);
+        const requestCount = f.requests.length;
+        await f.restart();
+        await f.settle();
+        expect(f.requests).toHaveLength(requestCount);
+        expect(f.delivered).toHaveBeenCalledTimes(1);
+      } finally {
+        release(speak);
+      }
+    },
+  );
 
   it("refreshes the interruption quiet window from the latest message", async () => {
     let release!: (value: unknown) => void;
@@ -496,7 +673,10 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
     const f = await fixture([() => blocked]);
     try {
       await f.submit(f.message());
-      await vi.waitFor(() => expect(f.requests).toHaveLength(1));
+      await vi.waitFor(() => expect(f.requests).toHaveLength(1), {
+        timeout: 8000,
+        interval: 20,
+      });
       const requested = (await f.atoms()).find(
         (a) => a.kind === "core.model.task.requested",
       )!;

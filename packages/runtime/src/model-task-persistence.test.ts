@@ -8,6 +8,7 @@
  * 会关闭并重连 pool，但不杀死 PostgreSQL 服务。无外部 URL 时 PostgreSQL 用例明确 skipped。
  * 日志使用 Runtime 的持久 outbox 与注入 logger，metrics/inspection 分别来自 executionHealth/ModuleHost；
  * 所有敏感字串均为合成探针，清理按 runner、Runtime、数据库顺序执行，不输出真实连接串。
+ * JSON mode 连续结构化失败仍只产生一个 requested/failed，日志仅记录安全分类、次数和耗时。
  */
 import { existsSync } from "node:fs";
 import {
@@ -580,6 +581,51 @@ for (const backend of ["PGlite", "PostgreSQL"] as const) {
         ).toHaveLength(1);
         expect(await f.client.execute(f.request)).toEqual(results[0]);
         expect(deferred.model.doGenerateCalls).toHaveLength(4);
+      });
+
+      it("persists and logs one safe failure after internal JSON retries are exhausted", async () => {
+        const provider = createRepeatingDeterministicModel({
+          invalid: probes.output,
+        });
+        const f = await fixture(backend, provider);
+        const result = await f.client.execute(f.request);
+        expect(result).toMatchObject({
+          status: "failed",
+          error: {
+            structuredOutputFailure: "schema-mismatch",
+            attemptCount: 2,
+          },
+        });
+        expect(provider.doGenerateCalls).toHaveLength(2);
+        await assertLedger(f, result);
+        expect(await f.client.execute(f.request)).toEqual(result);
+        expect(provider.doGenerateCalls).toHaveLength(2);
+        const lifecycleLogs = f.lines
+          .map((line) => JSON.parse(line) as Record<string, unknown>)
+          .filter((line) => line.event === "model.task.lifecycle");
+        expect(lifecycleLogs.map((line) => line.status)).toEqual([
+          "requested",
+          "failed",
+        ]);
+        expect(lifecycleLogs[1]).toMatchObject({
+          structuredOutputFailure: "schema-mismatch",
+          attemptCount: 2,
+          durationMs: expect.any(Number),
+        });
+        const failed = (await f.atoms()).find(
+          (atom) => atom.kind === "core.model.task.failed",
+        )!;
+        expect(failed.payload).toMatchObject({ usage: { totalTokens: 0 } });
+        for (const value of [result, failed.payload, lifecycleLogs]) {
+          const serialized = JSON.stringify(value);
+          for (const probe of [
+            probes.output,
+            probes.credential,
+            probes.database,
+            probes.error,
+          ])
+            expect(serialized).not.toContain(probe);
+        }
       });
 
       it.each(["completed", "failed", "cancelled"] as const)(
