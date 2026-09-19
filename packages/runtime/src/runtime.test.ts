@@ -10,6 +10,7 @@
  * in-flight 关闭、关闭后 ingress 拒绝、数据库初始化错误固定分类及抛出型反射属性，
  * 以及消费者失败与其他结果并存；默认 message Prompt 必须带原子 provenance 和有序
  * uses-context 引用。
+ * Memory 集成用例推进宿主时钟越过数据库实际入库时刻，分别验证未来入库证据被排除与后续正常召回。
  * 代码库关系：测试直接消费 Runtime 的 `InformationIngress.submit` 和注入数据库选项；默认业务
  * 模块来自 `@kaguya/modules`，自定义 fixture 只用于隔离并发和消费者故障语义。
  * 输入输出与副作用：每个用例创建隔离的内存 PGlite 数据库，Runtime 只写 information
@@ -582,12 +583,18 @@ describe("KaguyaRuntime", () => {
   it(
     "recalls a Web Memory globally through its original inbound provenance",
     async () => {
+      // MemoryStore 使用真实入库时钟；不能让测试的固定 Runtime 时钟停留在写入之前。
+      let nowMs = Date.now();
       const { runtime, database } = await createRuntime({
         memory: { enabled: true },
+        now: () => new Date(nowMs),
       });
       await runtime.start();
 
-      const first = await runtime.submit(webMessage("remember moonlight"));
+      const first = await runtime.submit({
+        ...webMessage("remember moonlight"),
+        occurredAt: new Date(nowMs - 1000).toISOString(),
+      });
       await settleDeliveries(database);
       const firstGraph = await database.information.query({
         informationId: first.rootInformationId,
@@ -595,7 +602,7 @@ describe("KaguyaRuntime", () => {
       const firstInbound = firstGraph.find(
         ({ kind }) => kind === inboundTextInformationKind.kind,
       )!;
-      await database.memory.put({
+      const saved = await database.memory.put({
         sourceInformationId: firstInbound.informationId,
         sourceKind: firstInbound.kind,
         content: "remember moonlight",
@@ -609,10 +616,22 @@ describe("KaguyaRuntime", () => {
         },
       });
 
+      await expect(
+        database.memory.recall({
+          query: "moonlight",
+          limit: 8,
+          occurredBefore: firstInbound.occurredAt,
+          recordedBefore: new Date(
+            Date.parse(saved.document.createdAt) - 1,
+          ).toISOString(),
+        }),
+      ).resolves.toEqual([]);
+      nowMs = Math.max(Date.now(), Date.parse(saved.document.createdAt));
+
       const second = await runtime.submit({
         ...webMessage("moonlight again"),
         platformMessageId: "request-2",
-        occurredAt: "2026-09-04T00:00:02.000Z",
+        occurredAt: new Date(nowMs).toISOString(),
       });
       let secondGraph: Awaited<ReturnType<typeof database.information.query>> =
         [];

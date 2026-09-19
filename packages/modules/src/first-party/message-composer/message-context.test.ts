@@ -1,6 +1,7 @@
 /**
  * 功能概述：验证编写选择器完整保留冻结 turn，不将最后一条消息替换为 intent 的复制正文。
  * 主要职责：测试完整输入授权、历史 cutoff、已投递 assistant 过滤、引用链溯源及跨作用域/失败/未来/歧义拒绝。
+ * 知识导航产生的原始记忆即使已在冻结引用内，仍必须通过目标范围和截止时间检查。
  * 代码库关系：调用真实 turnMessageContextSelector，ledger fixture 仅提供授权事实与查询结果。
  * 输入输出与副作用：只读内存样本并记录查询，无数据库或网络。
  */
@@ -63,6 +64,49 @@ describe("turnMessageContextSelector", () => {
       }),
     ).rejects.toThrow("input reference");
   });
+  it.each(["foreign-scope", "future"])(
+    "rejects frozen raw memory outside %s boundaries",
+    async (invalid) => {
+      const f = fixture();
+      const memory = {
+        ...f.messages[0]!,
+        informationId: "memory-source",
+        occurredAt:
+          invalid === "future"
+            ? "2026-09-10T00:00:00.000Z"
+            : f.messages[0]!.occurredAt,
+        payload: {
+          ...f.messages[0]!.payload,
+          source: {
+            ...target,
+            destination:
+              invalid === "foreign-scope"
+                ? { kind: "group", groupId: "other" }
+                : target.destination,
+            senderId: "historical-person",
+            platformMessageId: "historical-message",
+          },
+        },
+      };
+      const intent = atom(
+        f.intent.informationId,
+        f.intent.kind,
+        { ...f.intent.payload, memoryInformationIds: [memory.informationId] },
+        [...f.intent.references],
+      );
+      const reader = ledger(f);
+      reader.related = async (q) =>
+        q.from.includes(intent.informationId)
+          ? [f.turn]
+          : [...f.messages, memory];
+      await expect(
+        turnMessageContextSelector.select({
+          sourceAtom: intent,
+          ledger: reader,
+        }),
+      ).rejects.toThrow("outside the turn scope or cutoff");
+    },
+  );
   it("excludes undelivered assistant history", async () => {
     const f = fixture();
     const reader = ledger(f);

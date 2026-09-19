@@ -1,5 +1,5 @@
 /**
- * 检索断言包含冻结 scope，避免向量和稀疏路径跨聊天范围召回。
+ * 检索断言包含冻结 scope、事件时间及入库截止点，避免向量和稀疏路径越过聊天与时间边界。
  * 功能概述：验证 #72 的可追溯联想链只通过 Information DAG 暴露召回结果。
  * 主要职责：锁定 association request/query/candidate/completed 四类 kind、确定性
  * sparse-2gram 路线，以及 candidate 只保存 canonical source informationId 的契约。
@@ -266,6 +266,7 @@ describe("associationModule", () => {
         query: "hello",
         scopes: [query.payload.scope],
         occurredBefore: query.payload.asOf,
+        recordedBefore: turn.occurredAt,
         excludeSourceInformationIds: [currentInbound.informationId],
       },
       limit: 8,

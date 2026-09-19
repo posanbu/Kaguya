@@ -1,6 +1,7 @@
 /**
  * 功能概述：验证唯一 Runtime Composition 的目录演化、激活选择和宿主依赖边界。
  * Memory 开启时共享工厂自动补入独立写回实例，并在关闭态移除后台实例。
+ * knowledge 双开关的启用、禁用和显式实例开关保持独立，避免旧 Profile 自动进入实验路径。
  * 主要职责：模拟一方 Catalog 新增与移除定义，确认共享工厂直接采用变更；检查禁用实例
  * 不获得 Model Task 审批，Heartflow 独立获得 light Planner 审批、身份和 Memory 选项保持原有语义，并约束两个应用直接使用正式入口。
  * 代码库关系：mock 仅替换 @kaguya/modules 的 Catalog 工厂，其他定义、配置校验及模板均为真实实现；
@@ -23,6 +24,53 @@ vi.mock("@kaguya/modules", async (importOriginal) => {
 afterEach(() => vi.mocked(modules.createFirstPartyModuleCatalog).mockReset());
 
 describe("shared Runtime Composition", () => {
+  it("enables knowledge only with both switches and respects an explicitly disabled instance", () => {
+    const moduleConfigs = modules.createFirstPartyModuleConfigDefaults("test");
+    const enabled = createMessageComposition(undefined, {
+      moduleConfigs,
+      memoryEnabled: true,
+      memoryKnowledgeEnabled: true,
+    });
+    expect(enabled.memory).toMatchObject({
+      enabled: true,
+      knowledgeEnabled: true,
+    });
+    expect(
+      enabled.activations.some(
+        (a) => a.definitionId === "agent.memory.knowledge",
+      ),
+    ).toBe(true);
+    for (const options of [
+      { memoryEnabled: true },
+      { memoryEnabled: false, memoryKnowledgeEnabled: true },
+    ]) {
+      expect(
+        createMessageComposition(undefined, {
+          moduleConfigs,
+          ...options,
+        }).activations.some((a) => a.definitionId === "agent.memory.knowledge"),
+      ).toBe(false);
+    }
+    const disabled = createMessageComposition(undefined, {
+      memoryEnabled: true,
+      memoryKnowledgeEnabled: true,
+      moduleConfigs: [
+        ...moduleConfigs,
+        {
+          version: 1,
+          instanceId: "knowledge.custom",
+          definitionId: "agent.memory.knowledge",
+          enabled: false,
+          settings: {},
+        },
+      ],
+    });
+    expect(
+      disabled.activations.some(
+        (a) => a.definitionId === "agent.memory.knowledge",
+      ),
+    ).toBe(false);
+  });
   it("adopts an added and then removed catalog definition without an app registry", () => {
     const original = createMessageCatalog();
     const base = original.definitions.find(
