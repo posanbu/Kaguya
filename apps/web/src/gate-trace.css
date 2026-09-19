@@ -1,0 +1,78 @@
+/*
+ * 功能概述：仅收紧注意力门控来源追溯中的字段排版，便于核对冻结输入与来源而不逐层挤入右列。
+ * 主要职责：primitive 标签和值保持同行；复杂对象和数组占用完整可用宽度，以组标题及少量间距表达层级。
+ * 代码库关系：GateSurface 在 gate-surface.css 后引入，覆盖 InspectionFields / ReadableValue 的递归 dl、ul 结构；
+ * 所有规则均限定在 .gate-trace，公共组件与人物、联想页面保持原有样式。
+ * 输入输出与副作用：只改变布局，不改写字段、隐藏数据或移动焦点；长正文保留换行，深层对象不叠加缩进或行边框。
+ */
+.gate-trace .inspection-fields {
+  gap: 0.375rem;
+  margin: 0.75rem 0;
+  min-width: 0;
+}
+.gate-trace .inspection-fields > div,
+.gate-trace .inspection-fields .inspection-fields > div {
+  display: grid;
+  grid-template-columns: minmax(5.5rem, 8rem) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+}
+.gate-trace .inspection-fields dt,
+.gate-trace .inspection-fields dd {
+  min-width: 0;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.gate-trace .inspection-fields dt {
+  font-weight: 400;
+}
+.gate-trace .inspection-fields dd {
+  color: var(--kaguya-ink);
+}
+.gate-trace .inspection-fields .inspection-fields {
+  margin: 0;
+}
+.gate-trace .inspection-fields > div:has(> dd > .inspection-fields),
+.gate-trace .inspection-fields > div:has(> dd > .inspection-values) {
+  display: block;
+  margin-top: 0.5rem;
+}
+.gate-trace .inspection-fields > div:has(> dd > .inspection-fields) > dt,
+.gate-trace .inspection-fields > div:has(> dd > .inspection-values) > dt {
+  margin-bottom: 0.375rem;
+  color: var(--kaguya-ink);
+  font-weight: 600;
+}
+.gate-trace .inspection-values {
+  margin: 0;
+  padding-left: 1.125rem;
+  min-width: 0;
+}
+.gate-trace .inspection-values li + li {
+  margin-top: 0.375rem;
+}
+.gate-trace .inspection-values:has(.inspection-fields) {
+  padding-left: 0;
+  list-style: none;
+}
+.gate-trace .inspection-values:has(.inspection-fields) > li + li {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--kaguya-line);
+}
+.gate-trace .inspection-value {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@container gate (max-width: 420px) {
+  .gate-trace .inspection-fields > div,
+  .gate-trace .inspection-fields .inspection-fields > div {
+    grid-template-columns: minmax(4.5rem, 6rem) minmax(0, 1fr);
+    column-gap: 0.5rem;
+  }
+}

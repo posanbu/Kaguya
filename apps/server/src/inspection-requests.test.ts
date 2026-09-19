@@ -1,6 +1,6 @@
 /**
  * 功能概述：在隔离 PGlite 上验证逐次模型请求的真实只读路由、因果投影、历史归属与完整脱敏 Prompt。
- * 主要职责：seedRequest 构造精确引用链；用 Fastify inject 覆盖分页、非赢家输出、取消/打断、缺失来源和直接/授权投递。
+ * 主要职责：seedRequest 构造精确引用链；用 Fastify inject 覆盖分页、非赢家输出、取消/打断、缺失来源和直接/授权投递，并拒绝不支持的筛选。
  * 代码库关系：消费正式 inspection 服务与 Schema，纯内存游标测试单独核实 501 条扫描边界；不启动模型、Runtime 或后台队列。
  * 输入输出与副作用：初始化和写入均显式 await；beforeAll 为 PGlite 留 15 秒预算，afterAll 关闭数据库，无固定 sleep 或短轮询。
  */
@@ -469,7 +469,14 @@ it("authenticates both routes, preserves historical bindings and isolates task/m
   expect(
     (await get(`?cursor=${first.nextCursor}`, "composer")).statusCode,
   ).toBe(400);
-  expect((await get("?q=not-supported")).statusCode).toBe(400);
+  for (const query of [
+    "q=not-supported",
+    "platform=qq",
+    "status=attend",
+    "after=2026-09-19T00:00:00.000Z",
+    "before=2026-09-20T00:00:00.000Z",
+  ])
+    expect((await get(`?${query}`)).statusCode).toBe(400);
   expect((await get("?limit=51")).statusCode).toBe(400);
   for (const id of [
     "foreign-request",

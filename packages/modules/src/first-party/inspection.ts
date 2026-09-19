@@ -1,8 +1,11 @@
 /**
  * 功能概述：第一方模块拥有的检查视图，定义门控机制、历史/数据分组和可读字段。
  * 记忆联想用 record-browser 按查询串起完成事实、排名候选和 canonical source；字段与文案均由本模块声明。
+ * 注意力用 attention-gate 展示完成事实，状态来自 outcome，通过 core:uses-context 正向引用冻结上下文；不补写历史条件。
  * 在线心流与消息组织用 model-request-browser 按持久化模型请求浏览，完整 Prompt 与来源由独立详情承载。
  * 主要职责：firstPartyInspection 由各模块 Manifest 显式引用；view 将稳定字段路径与中文标题绑定。
+ * arousalFields/arousalContextFields 复用门控根事实与冻结条件白名单，列表、详情和 SDK 校验使用相同字段契约；
+ * scoreEvidence 暴露当时保存的分项计算依据，缺省的旧记录不借当前实现补算。
  * 代码库关系：SDK 校验声明，Host 投影给 Server；Server 按声明查询账本，Web 使用通用视图。
  * 输入输出与副作用：纯静态元数据，无 I/O、配置值或 UI 组件；历史记录只说明当时事实，不推断当前状态。
  */
@@ -16,6 +19,45 @@ const view = (
   kinds: string[],
   entries: Record<string, string>,
 ) => ({ id, title, description, kinds, fields: fields(entries) });
+const arousalFields = {
+  outcome: "结果",
+  text: "输入",
+  source: "来源会话",
+  score: "分数",
+  threshold: "当时阈值",
+  components: "评分组成",
+  scoreEvidence: "评分计算依据",
+  reasonCodes: "原因",
+  attempt: "等待次数",
+  totalWaitBudget: "等待预算",
+  dueAt: "再次检查",
+  policyDigest: "策略标识",
+  settingsDigest: "配置标识",
+  turnContextInformationId: "冻结上下文",
+  missingInputs: "缺失输入",
+};
+const arousalContextFields = {
+  scopeKey: "会话范围",
+  asOf: "冻结时刻",
+  inputs: "冻结输入",
+  isPrivate: "私聊",
+  isGroup: "群聊",
+  mentionedSelf: "提及自己",
+  repliedToSelf: "回复自己",
+  namedSelf: "称呼自己",
+  muted: "已静音",
+  safe: "安全检查通过",
+  destinationAvailable: "目标可用",
+  frequency: "有效频率",
+  frequencyRuleIndex: "命中频率规则",
+  focusActive: "关注生效",
+  focusInformationId: "关注记录",
+  focusExpiresAt: "关注到期",
+  messageCount: "消息数量",
+  recentSelfReplies: "近期自身回复数",
+  recentWindowMessages: "近期窗口消息数",
+  idleReachedAverage: "达到平均空闲时间",
+};
 const modelRequestsView = () =>
   view(
     "model-requests",
@@ -233,9 +275,9 @@ export const firstPartyInspection = {
   },
   "agent.attention.arousal": {
     mechanism: [
-      "先检查静音、频率为零等硬门禁。",
-      "私聊或满足直接唤醒规则时进入规划；否则计算相关性、内容、压力、在场惩罚与频率因子。",
-      "分数达到阈值则关注；未达到时按等待预算延后或忽略。历史中的阈值与策略版本是当时的实际值。",
+      "各条路径均记录相关性、内容、压力、在场惩罚与频率因子的评分；决策先检查静音、安全、目标可用性与频率为零等硬门禁。",
+      "硬门禁通过后，私聊或满足直接唤醒规则时放行至规划；否则按评分决定。放行不代表已经回复。",
+      "分数达到阈值则放行；未达到时按等待预算延后或忽略。历史中的阈值、策略标识与配置标识是当时记录的值。",
     ],
     views: [
       view(
@@ -244,20 +286,74 @@ export const firstPartyInspection = {
         "为什么关注、延后或忽略这批输入。",
         ["agent.attention.arousal.completed"],
         {
-          outcome: "结果",
-          score: "分数",
-          threshold: "当时阈值",
-          reasonCodes: "原因",
-          text: "输入",
-          components: "评分组成",
-          dueAt: "再次检查",
-          attempt: "等待次数",
-          totalWaitBudget: "等待预算",
-          policyDigest: "策略版本",
-          settingsDigest: "设置版本",
+          ...arousalFields,
+          "source.destination.groupId": "群聊标识",
+          "source.destination.userId": "私聊标识",
         },
       ),
+      view(
+        "context",
+        "冻结上下文",
+        "门控当时引用的冻结输入与条件；缺失字段不推断为否。",
+        ["agent.turn.context.completed"],
+        arousalContextFields,
+      ),
     ],
+    surface: {
+      version: 1,
+      id: "arousal",
+      title: "注意力门控",
+      layout: { type: "master-detail", areas: ["main", "context"] },
+      components: [
+        {
+          id: "gates",
+          type: "record-browser",
+          presentation: "attention-gate",
+          area: "main",
+          viewId: "gates",
+          recordKind: "agent.attention.arousal.completed",
+          titleField: "text",
+          searchFields: [
+            "text",
+            "source.destination.groupId",
+            "source.destination.userId",
+          ],
+          fields: fields(arousalFields),
+          status: {
+            field: "outcome",
+            options: [
+              { value: "attend", label: "放行至规划" },
+              { value: "defer", label: "延后观察" },
+              { value: "ignore", label: "本次忽略" },
+            ],
+          },
+          labels: {
+            directory: "门控历史",
+            search: "搜索输入或会话",
+            placeholder: "输入关键词、群号或用户标识",
+            empty: "暂无符合条件的门控记录",
+            mechanism: "门控机制",
+          },
+          notice:
+            "按当时记录解释门控结果；放行至规划不代表已经回复，缺失的历史条件不作推断。",
+          relations: [
+            {
+              id: "context",
+              title: "冻结上下文",
+              viewId: "context",
+              kinds: ["agent.turn.context.completed"],
+              reference: "core:uses-context",
+              direction: "forward",
+              presentation: "field-grid",
+              fields: fields(arousalContextFields),
+              empty: "未找到引用的冻结上下文；历史条件无法确认。",
+              limit: 1,
+            },
+          ],
+        },
+        { id: "arousal-mechanism", type: "mechanism-steps", area: "context" },
+      ],
+    },
   },
   "agent.heartbeat.short": {
     mechanism: [

@@ -7,7 +7,7 @@
  * schema 包约束 DTO，inspection-redaction.ts 统一清理所有响应，WebUI 不接触配置或原始数据库对象。
  * 输入输出与副作用：只执行有界读取；游标绑定过滤条件并校验时间/ID；Flow 不递归扩展其他 context，
  * registerInspectionRoutes 可接收动态 service getter，热切换期间返回 503，新实例生效后使用新的脱敏快照。
- * record-browser 的目录按根记录时间分页，引用分组由 inspection-records.ts 投影并在此统一脱敏。
+ * record-browser 的目录按根记录时间分页，可组合已声明状态与起止时间，游标绑定这些筛选；引用分组统一脱敏。
  * model-request-browser 通过 inspection-requests.ts 读取模块归属的模型请求，独立详情与完整 Prompt 使用同一认证和脱敏边界。
  * 节点最多 500，边最多 2000，详情引用最多 100，明确报告截断和图外引用；无编辑、重放或订阅。
  */
@@ -653,8 +653,16 @@ export function createInspectionService(source: InspectionSource) {
             q: z.string().trim().max(100).optional(),
             platform: z.string().trim().min(1).max(100).optional(),
             status: z.string().trim().min(1).max(100).optional(),
+            after: date.optional(),
+            before: date.optional(),
           })
-          .strict(),
+          .strict()
+          .refine(
+            (query) =>
+              !query.after ||
+              !query.before ||
+              Date.parse(query.after) < Date.parse(query.before),
+          ),
         input,
       );
       const filter = createHash("sha256")
@@ -665,6 +673,8 @@ export function createInspectionService(source: InspectionSource) {
             q: query.q ?? "",
             platform: query.platform ?? "",
             status: query.status ?? "",
+            after: query.after ?? "",
+            before: query.before ?? "",
             ...(browser.type === "model-request-browser"
               ? { taskId: browser.taskId, mode: browser.mode }
               : {}),
@@ -673,7 +683,13 @@ export function createInspectionService(source: InspectionSource) {
         .digest("hex");
       const cursor = decodeSurfaceCursor(query.cursor, filter);
       if (browser.type === "model-request-browser") {
-        if (query.q || query.platform || query.status)
+        if (
+          query.q ||
+          query.platform ||
+          query.status ||
+          query.after ||
+          query.before
+        )
           throw new InspectionError(400, "invalid_inspection_request");
         const page = await requestPage(
           source.ledger,
@@ -699,12 +715,28 @@ export function createInspectionService(source: InspectionSource) {
       }
       const ledger = requireSurfaceLedger(source.ledger);
       if (browser.type === "record-browser") {
-        if (query.platform || query.status)
+        if (
+          query.platform ||
+          (query.status &&
+            !browser.status?.options.some(
+              ({ value }) => value === query.status,
+            ))
+        )
           throw new InspectionError(400, "invalid_inspection_request");
         const rows = await ledger.inspectPage({
           kind: browser.recordKind,
           limit: query.limit + 1,
           ...(cursor ? { cursor } : {}),
+          ...(query.after ? { after: query.after } : {}),
+          ...(query.before ? { before: query.before } : {}),
+          ...(query.status && browser.status
+            ? {
+                payloadIn: {
+                  path: browser.status.field.split("."),
+                  values: [query.status],
+                },
+              }
+            : {}),
           ...(query.q
             ? {
                 payloadSearch: {
@@ -732,6 +764,8 @@ export function createInspectionService(source: InspectionSource) {
           }),
         );
       }
+      if (query.after || query.before)
+        throw new InspectionError(400, "invalid_inspection_request");
       if (!status) throw new InspectionError(500, "invalid_module_surface");
       const entityIds = await eligibleSurfaceEntityIds(ledger, browser, query);
       const roots = await ledger.inspectEntityPage({

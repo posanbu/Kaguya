@@ -1,6 +1,7 @@
 /**
  * 功能概述：把 Manifest 的 record-browser 投影为通用 Surface DTO，按记录时间浏览查询及其因果结果。
- * 主要职责：recordItems 生成目录与根字段；recordEntity 沿声明的反向引用读取分组，按 rank 排序并投影 canonical source。
+ * 主要职责：recordItems 按声明状态字段生成目录并保留字段 path；recordEntity 沿声明的正向或反向引用读取分组。
+ * related 对正向引用去重、最多读取 100 个候选并校验 Kind；各分组有独立 limit/截断信息，旧声明仍使用反向引用。
  * 代码库关系：inspection.ts 负责认证、参数/游标校验及最终脱敏；本文件只使用数据库有界只读端口和 Schema 声明。
  * 输入输出与副作用：不启动模块、不执行检索、不写账本；每组明确截断，缺失或 Kind 不匹配的来源不输出正文。
  */
@@ -18,8 +19,9 @@ export type RecordBrowser = Extract<
 type Ledger = Pick<InformationRepository, "get" | "getMany" | "inspectPage">;
 type Atom = DeepReadonly<InformationAtom>;
 function field(atom: Atom, path: string): JsonValue | undefined {
-  if (path === "occurredAt" || path === "informationId" || path === "source")
-    return atom[path];
+  if (path === "occurredAt" || path === "informationId") return atom[path];
+  if (path === "source")
+    return (atom.payload.source ?? atom.source) as JsonValue;
   let value: unknown = atom.payload;
   for (const key of path.split(".")) {
     if (!value || typeof value !== "object" || !Object.hasOwn(value, key))
@@ -31,7 +33,7 @@ function field(atom: Atom, path: string): JsonValue | undefined {
 function fields(atom: Atom, declaration: { path: string; label: string }[]) {
   return declaration.flatMap(({ path, label }) => {
     const value = field(atom, path);
-    return value === undefined ? [] : [{ label, value }];
+    return value === undefined ? [] : [{ path, label, value }];
   });
 }
 async function related(
@@ -39,27 +41,56 @@ async function related(
   root: Atom,
   relation: RecordBrowser["relations"][number],
 ) {
-  return ledger.inspectPage({
+  if (relation.direction === "forward") {
+    const ids = [
+      ...new Set(
+        root.references
+          .filter((ref) => ref.relation === relation.reference)
+          .map((ref) => ref.informationId),
+      ),
+    ];
+    const candidates = ids.length
+      ? await ledger.getMany(ids.slice(0, 100))
+      : [];
+    const byId = new Map(candidates.map((atom) => [atom.informationId, atom]));
+    const rows = ids.slice(0, 100).flatMap((id) => {
+      const atom = byId.get(id);
+      return atom && relation.kinds.includes(atom.kind) ? [atom] : [];
+    });
+    return {
+      rows: rows.slice(0, relation.limit),
+      truncated: ids.length > 100 || rows.length > relation.limit,
+    };
+  }
+  const rows = await ledger.inspectPage({
     kinds: relation.kinds,
     referencedId: root.informationId,
     relation: relation.reference,
     limit: relation.limit + 1,
   });
+  return {
+    rows: rows.slice(0, relation.limit),
+    truncated: rows.length > relation.limit,
+  };
 }
 export async function recordItems(
   ledger: Ledger,
   browser: RecordBrowser,
   roots: readonly Atom[],
 ) {
-  const result = browser.relations.find(
-    (item) => item.presentation === "field-grid",
-  );
+  const result =
+    !browser.status &&
+    browser.relations.find((item) => item.presentation === "field-grid");
   return Promise.all(
     roots.map(async (root) => {
       const terminal = result
-        ? (await related(ledger, root, result))[0]
+        ? (await related(ledger, root, result)).rows[0]
         : undefined;
-      const status = terminal ? field(terminal, "status") : undefined;
+      const status = browser.status
+        ? field(root, browser.status.field)
+        : terminal
+          ? field(terminal, "status")
+          : undefined;
       return {
         entityId: root.informationId,
         entityKey: root.informationId,
@@ -80,8 +111,8 @@ export async function recordEntity(
   const [entity] = await recordItems(ledger, browser, [root]);
   const sections = await Promise.all(
     browser.relations.map(async (relation) => {
-      const rows = await related(ledger, root, relation);
-      const ordered = rows.slice(0, relation.limit);
+      const { rows, truncated } = await related(ledger, root, relation);
+      const ordered = [...rows];
       if (relation.rankField)
         ordered.sort(
           (a, b) =>
@@ -102,7 +133,7 @@ export async function recordEntity(
         id: relation.id,
         title: relation.title,
         presentation: relation.presentation,
-        truncated: rows.length > relation.limit,
+        truncated,
         items: ordered.map((atom) => {
           const status = field(atom, "status");
           const rank = relation.rankField
