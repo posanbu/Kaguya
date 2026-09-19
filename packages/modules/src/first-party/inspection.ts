@@ -1,5 +1,6 @@
 /**
  * 功能概述：第一方模块拥有的检查视图，定义门控机制、历史/数据分组和可读字段。
+ * 记忆联想用 record-browser 按查询串起完成事实、排名候选和 canonical source；字段与文案均由本模块声明。
  * 主要职责：firstPartyInspection 由各模块 Manifest 显式引用；view 将稳定字段路径与中文标题绑定。
  * 代码库关系：SDK 校验声明，Host 投影给 Server；Server 按声明查询账本，Web 使用通用视图。
  * 输入输出与副作用：纯静态元数据，无 I/O、配置值或 UI 组件；历史记录只说明当时事实，不推断当前状态。
@@ -374,34 +375,129 @@ export const firstPartyInspection = {
   },
   "core.association.memory": {
     mechanism: [
-      "冻结查询范围与截止时间，仅召回同范围且早于截止时间的记忆。",
-      "保留查询、候选和完成事实；召回不等于最终进入 Prompt。",
+      "从冻结回合的输入构造查询；检索仅限同一平台、适配器和会话，且早于截止时间。",
+      "用 sparse-2gram 检索，按覆盖程度排序，最多召回 8 条；排除本轮输入。",
+      "候选只记录排名与来源引用。消息合成沿引用重新读取材料，召回不代表最终进入 Prompt。",
     ],
     views: [
       view(
-        "retrieval",
-        "检索历史",
-        "按查询与候选回溯来源，不把未采用候选解释为已使用。",
-        [
-          "agent.association.query",
-          "agent.association.candidate",
-          "agent.association.completed",
-        ],
+        "queries",
+        "联想查询",
+        "实际查询及冻结的检索范围。",
+        ["agent.association.query"],
         {
           query: "查询",
-          scope: "范围",
+          queryText: "原始输入",
+          "scope.platform": "平台",
+          "scope.adapterId": "适配器",
+          "scope.destination": "会话",
+          "scope.destination.groupId": "群号",
+          "scope.destination.userId": "用户",
           asOf: "截止时间",
-          reasonCodes: "原因",
-          sourceInformationId: "来源",
-          rank: "排名",
-          score: "相关度",
-          candidateCount: "候选数量",
-          route: "检索路线",
           method: "检索方法",
+          limit: "候选上限",
+          "identity.status": "身份状态",
+        },
+      ),
+      view(
+        "retrieval",
+        "召回结果与候选",
+        "记录结果、排名与原因；不推断是否采用。",
+        ["agent.association.candidate", "agent.association.completed"],
+        {
+          rank: "排名",
+          strategy: "检索策略",
+          reasonCodes: "原因",
+          candidateCount: "候选数量",
           status: "结果",
         },
       ),
+      view(
+        "sources",
+        "记忆来源",
+        "沿候选的 canonical source 引用读取原始记录。",
+        ["core.message.inbound.text", "core.memory.text"],
+        {
+          text: "原文",
+          source: "来源会话",
+        },
+      ),
     ],
+    surface: {
+      version: 1,
+      id: "associations",
+      title: "记忆联想",
+      layout: { type: "master-detail", areas: ["main", "context"] },
+      components: [
+        {
+          id: "queries",
+          type: "record-browser",
+          area: "main",
+          viewId: "queries",
+          recordKind: "agent.association.query",
+          titleField: "query",
+          searchFields: [
+            "query",
+            "scope.platform",
+            "scope.adapterId",
+            "scope.destination.groupId",
+            "scope.destination.userId",
+          ],
+          fields: fields({
+            "scope.platform": "平台",
+            "scope.adapterId": "适配器",
+            "scope.destination": "会话",
+            asOf: "截止时间",
+            method: "检索方法",
+            limit: "候选上限",
+          }),
+          labels: {
+            directory: "联想记录",
+            search: "查找联想",
+            placeholder: "查询内容、平台、适配器或会话 ID",
+            empty: "尚无联想查询。处理消息意图后，记录会出现在这里。",
+            mechanism: "记忆联想如何工作",
+          },
+          notice:
+            "候选表示已召回的材料；是否进入 Prompt，需沿原始记录继续追溯。",
+          relations: [
+            {
+              id: "result",
+              title: "召回结果",
+              viewId: "retrieval",
+              kinds: ["agent.association.completed"],
+              reference: "core:caused-by",
+              presentation: "field-grid",
+              fields: fields({
+                candidateCount: "候选数量",
+                reasonCodes: "原因",
+              }),
+              empty: "尚未记录完成结果；当前无法判断召回是否完成。",
+              limit: 1,
+            },
+            {
+              id: "candidates",
+              title: "记忆候选",
+              viewId: "retrieval",
+              kinds: ["agent.association.candidate"],
+              reference: "core:caused-by",
+              presentation: "ranked-list",
+              rankField: "rank",
+              fields: fields({ reasonCodes: "原因" }),
+              empty: "这次查询尚无候选记录。",
+              limit: 10,
+              source: {
+                reference: "agent:canonical-source",
+                viewId: "sources",
+                kinds: ["core.message.inbound.text", "core.memory.text"],
+                fields: fields({ text: "原文", occurredAt: "来源时间" }),
+              },
+            },
+          ],
+        },
+        { id: "mechanism", type: "mechanism-steps", area: "context" },
+      ],
+    },
   },
   "agent.message-composer": {
     mechanism: [

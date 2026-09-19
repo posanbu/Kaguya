@@ -3,6 +3,7 @@
  * 主要职责：各 inspection*Schema 校验 Module、Atom 摘要/详情、游标页和有界 Flow；
  * 对应类型供服务端投影与 WebUI 共享，领域视图/机制由 Manifest 声明；presentation 展示安全字段。
  * inspectionStorageSchema 区分真实存储不可用与空页，游标不包含内容。
+ * record-browser 声明按事实时间浏览的记录、反向引用分组与受限来源投影；不要求人物实体或账号。
  * 代码库关系：由 schema/index.ts 导出，server/inspection.ts 产出，Web API 校验后展示。
  * 输入输出与副作用：仅声明 JSON wire contract，无 I/O；详情 payload 必须由服务端先脱敏。
  */
@@ -44,6 +45,48 @@ const surfaceRelationSchema = z.object({
   limit: z.number().int().min(1).max(50).default(20),
 });
 const surfaceComponentSchema = z.discriminatedUnion("type", [
+  z.object({
+    id: z.string().trim().min(1),
+    type: z.literal("record-browser"),
+    area: z.string().trim().min(1),
+    viewId: z.string().trim().min(1),
+    recordKind: z.string().trim().min(1),
+    titleField: inspectionFieldPathSchema,
+    searchFields: z.array(inspectionFieldPathSchema).min(1),
+    fields: z.array(surfaceFieldSchema).min(1),
+    labels: z.object({
+      directory: z.string().min(1),
+      search: z.string().min(1),
+      placeholder: z.string().min(1),
+      empty: z.string().min(1),
+      mechanism: z.string().min(1),
+    }),
+    notice: z.string().optional(),
+    relations: z
+      .array(
+        z.object({
+          id: z.string().min(1),
+          title: z.string().min(1),
+          viewId: z.string().min(1),
+          kinds: z.array(z.string().min(1)).min(1),
+          reference: z.string().min(1),
+          presentation: z.enum(["field-grid", "ranked-list"]),
+          fields: z.array(surfaceFieldSchema).min(1),
+          rankField: inspectionFieldPathSchema.optional(),
+          empty: z.string().min(1),
+          limit: z.number().int().min(1).max(50),
+          source: z
+            .object({
+              reference: z.string().min(1),
+              viewId: z.string().min(1),
+              kinds: z.array(z.string().min(1)).min(1),
+              fields: z.array(surfaceFieldSchema).min(1),
+            })
+            .optional(),
+        }),
+      )
+      .min(1),
+  }),
   z.object({
     id: z.string().trim().min(1),
     type: z.literal("status-summary"),
@@ -240,6 +283,12 @@ export const inspectionSurfacePageSchema = z.object({
   statuses: z.array(z.string()),
   nextCursor: z.string().nullable(),
 });
+/** 记录目录不伪造人物平台列表或窗口统计，仍复用同一目录条目与游标协议。 */
+export const inspectionRecordPageSchema = inspectionSurfacePageSchema.omit({
+  summary: true,
+  platforms: true,
+  statuses: true,
+});
 export const inspectionSurfaceEntitySchema = z.object({
   version: z.literal(1),
   surfaceId: z.string(),
@@ -249,12 +298,14 @@ export const inspectionSurfaceEntitySchema = z.object({
       id: z.string(),
       title: z.string(),
       presentation: z.enum([
+        "ranked-list",
         "field-grid",
         "relation-list",
         "timeline",
         "record-table",
         "relationship-graph",
       ]),
+      truncated: z.boolean().optional(),
       items: z.array(
         z.object({
           id: z.string(),
@@ -262,6 +313,14 @@ export const inspectionSurfaceEntitySchema = z.object({
           status: z.string().optional(),
           fields: inspectionPresentationSchema.shape.fields,
           sourceInformationId: z.string().optional(),
+          rank: z.number().int().nonnegative().optional(),
+          relatedSource: z
+            .object({
+              informationId: z.string().optional(),
+              available: z.boolean(),
+              fields: inspectionPresentationSchema.shape.fields,
+            })
+            .optional(),
         }),
       ),
     }),

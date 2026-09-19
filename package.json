@@ -25,7 +25,8 @@
     "demo": "pnpm --filter @kaguya/demo start",
     "test:modules": "tsc -b && vitest run packages/modules/src",
     "test:flow": "tsc -b && vitest run apps/server/src/speech-planner.test.ts packages/runtime/src/runtime.test.ts",
-    "test:persistence": "tsc -b && vitest run packages/database/src"
+    "test:persistence": "tsc -b && vitest run packages/database/src",
+    "preview:association": "tsc -b && tsx apps/server/src/preview/association.ts"
   },
   "devDependencies": {
     "@types/node": "24.13.3",

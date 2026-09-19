@@ -7,8 +7,14 @@
  * schema 包约束 DTO，inspection-redaction.ts 统一清理所有响应，WebUI 不接触配置或原始数据库对象。
  * 输入输出与副作用：只执行有界读取；游标绑定过滤条件并校验时间/ID；Flow 不递归扩展其他 context，
  * registerInspectionRoutes 可接收动态 service getter，热切换期间返回 503，新实例生效后使用新的脱敏快照。
+ * record-browser 的目录按根记录时间分页，引用分组由 inspection-records.ts 投影并在此统一脱敏。
  * 节点最多 500，边最多 2000，详情引用最多 100，明确报告截断和图外引用；无编辑、重放或订阅。
  */
+import {
+  recordItems,
+  recordEntity,
+  type RecordBrowser,
+} from "./inspection-records.js";
 import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { InformationRepository, KaguyaDatabase } from "@kaguya/database";
@@ -20,6 +26,7 @@ import {
   inspectionFlowSchema,
   inspectionStorageSchema,
   inspectionSurfacePageSchema,
+  inspectionRecordPageSchema,
   inspectionSurfaceEntitySchema,
   type InspectionModule,
   type JsonValue,
@@ -190,14 +197,15 @@ function findSurface(
   if (!module || !surface || surface.id !== surfaceId)
     throw new InspectionError(404, "module_surface_not_found");
   const browser = surface.components.find(
-    (component): component is SurfaceBrowser =>
-      component.type === "entity-browser",
+    (component): component is SurfaceBrowser | RecordBrowser =>
+      component.type === "entity-browser" ||
+      component.type === "record-browser",
   );
   const status = surface.components.find(
     (component): component is SurfaceStatus =>
       component.type === "status-summary",
   );
-  if (!browser || !status)
+  if (!browser || (browser.type === "entity-browser" && !status))
     throw new InspectionError(500, "invalid_module_surface");
   return { module, surface, browser, status };
 }
@@ -639,6 +647,41 @@ export function createInspectionService(source: InspectionSource) {
         )
         .digest("hex");
       const cursor = decodeSurfaceCursor(query.cursor, filter);
+      if (browser.type === "record-browser") {
+        if (query.platform || query.status)
+          throw new InspectionError(400, "invalid_inspection_request");
+        const rows = await ledger.inspectPage({
+          kind: browser.recordKind,
+          limit: query.limit + 1,
+          ...(cursor ? { cursor } : {}),
+          ...(query.q
+            ? {
+                payloadSearch: {
+                  paths: browser.searchFields.map((path) => path.split(".")),
+                  text: query.q,
+                },
+              }
+            : {}),
+        });
+        const items = await recordItems(
+          ledger,
+          browser,
+          rows.slice(0, query.limit),
+        );
+        const last = items.at(-1);
+        return inspectionRecordPageSchema.parse(
+          redact({
+            version: 1,
+            surfaceId: surface.id,
+            items,
+            nextCursor:
+              rows.length > query.limit && last
+                ? encodeSurfaceCursor(last, filter)
+                : null,
+          }),
+        );
+      }
+      if (!status) throw new InspectionError(500, "invalid_module_surface");
       const entityIds = await eligibleSurfaceEntityIds(ledger, browser, query);
       const roots = await ledger.inspectEntityPage({
         rootKind: browser.entityKind,
@@ -719,6 +762,17 @@ export function createInspectionService(source: InspectionSource) {
         surfaceId,
       );
       const root = await ledger.get(parseRequest(id, entityId));
+      if (browser.type === "record-browser") {
+        if (!root || root.kind !== browser.recordKind)
+          throw new InspectionError(404, "surface_entity_not_found");
+        return inspectionSurfaceEntitySchema.parse(
+          redact({
+            version: 1,
+            surfaceId: surface.id,
+            ...(await recordEntity(ledger, browser, root)),
+          }),
+        );
+      }
       if (!root || root.kind !== browser.entityKind)
         throw new InspectionError(404, "surface_entity_not_found");
       const [entity] = await buildSurfaceItems(ledger, browser, [root]);

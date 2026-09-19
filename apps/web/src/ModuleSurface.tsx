@@ -1,9 +1,11 @@
 /**
  * 功能概述：渲染模块 Manifest 声明的受控检查 Surface；首版提供状态摘要、实体主从浏览、关系列表、时间线与关系图。
+ * record-browser 分派给 RecordSurface，实体浏览保持现有身份页面行为。
  * 主要职责：将搜索和筛选转换为只读 Inspection 查询，保持稳定游标；实体选择加载独立详情并允许追溯原始 Atom。
  * 代码库关系：ModulePages 在模块声明 surface 时挂载本组件；布局来自 Manifest，数据由版本化 surface DTO 提供。
  * 输入输出与副作用：只执行认证 GET、history 内页面状态与可访问焦点移动；不执行模块提供的代码，不修改人物事实。
  */
+import { RecordSurface } from "./RecordSurface.js";
 import {
   inspectionSurfaceEntitySchema,
   inspectionSurfacePageSchema,
@@ -28,17 +30,40 @@ import {
 } from "./ModuleRuntimeSection.js";
 import { useInspection } from "./use-inspection.js";
 
-export function ModuleSurface({
-  module,
-  token,
-  revision,
-  DetailComponent,
-}: {
+interface ModuleSurfaceProps {
   module: InspectionModule;
   token: string;
   revision: number;
   DetailComponent: ComponentType<InspectionDetailProps>;
-}) {
+}
+/** 分派组件不持有 Hook，跨模块导航时按 definitionId 隔离搜索、选择和异步详情状态。 */
+export function ModuleSurface(props: ModuleSurfaceProps) {
+  const surface = props.module.inspection?.surface;
+  const records = surface?.components.find(
+    (component) => component.type === "record-browser",
+  );
+  if (records)
+    return (
+      <RecordSurface
+        key={props.module.definitionId}
+        {...props}
+        browser={records}
+      />
+    );
+  if (
+    !surface?.components.some(
+      (component) => component.type === "entity-browser",
+    )
+  )
+    return null;
+  return <EntitySurface key={props.module.definitionId} {...props} />;
+}
+function EntitySurface({
+  module,
+  token,
+  revision,
+  DetailComponent,
+}: ModuleSurfaceProps) {
   const surface = module.inspection?.surface;
   const browser = surface?.components.find(
     (component) => component.type === "entity-browser",
