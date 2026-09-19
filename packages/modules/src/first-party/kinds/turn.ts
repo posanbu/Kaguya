@@ -1,6 +1,8 @@
 /**
  * 功能概述：turn 领域的 Information schema 与不可变定义，独立维护本领域引用和日志投影。
  * 主要职责：下列 schema 校验入账载荷，各 kind 声明因果关系、上下文和诊断元数据；无 I/O。
+ * attentionScoreEvidenceSchema 保存四个评分分项的实际输入、命中步骤和有符号贡献；完成记录中可缺省以兼容历史事实。
+ * evidence 只接受有限 JSON 数字与有界说明文字，禁止把频率为零时的 Infinity 写入账本；不从旧字段补造证据。
  * 代码库关系：information-kinds.ts 稳定重导出公共对象；跨领域只复用相邻文件定义，保持 Registry 对象身份。
  */
 import { z } from "@kaguya/schema";
@@ -425,6 +427,68 @@ export const turnContextCompletedInformationKind = defineInformationKind({
   },
 });
 
+const attentionScoreEvidenceSchema = z
+  .object({
+    version: z.literal(1),
+    parts: z
+      .array(
+        z
+          .object({
+            id: z.enum([
+              "relevance",
+              "content",
+              "pressure",
+              "recentPresencePenalty",
+            ]),
+            value: z.number(),
+            facts: z
+              .array(
+                z
+                  .object({
+                    label: z.string().min(1).max(120),
+                    value: z.union([
+                      z.string().max(2000),
+                      z.number(),
+                      z.boolean(),
+                    ]),
+                  })
+                  .strict(),
+              )
+              .max(40),
+            steps: z
+              .array(
+                z
+                  .object({
+                    label: z.string().min(1).max(120),
+                    delta: z.number(),
+                  })
+                  .strict(),
+              )
+              .min(1)
+              .max(10),
+            formula: z.string().max(1000).optional(),
+          })
+          .strict(),
+      )
+      .length(4)
+      .refine(
+        (parts) => new Set(parts.map(({ id }) => id)).size === parts.length,
+        "Score evidence parts must be unique",
+      ),
+  })
+  .strict();
+
+type ParsedScoreEvidence = z.infer<typeof attentionScoreEvidenceSchema>;
+/** 生成的 JSON 省略 formula 时不写 undefined，满足 ModuleRegistrationInput 的严格 JSON 契约。 */
+export type AttentionArousalScoreEvidence = Omit<
+  ParsedScoreEvidence,
+  "parts"
+> & {
+  parts: Array<
+    Omit<ParsedScoreEvidence["parts"][number], "formula"> & { formula?: string }
+  >;
+};
+
 const attentionArousalPayloadSchema = z
   .object({
     outcome: z.enum(["attend", "defer", "ignore"]),
@@ -445,6 +509,7 @@ const attentionArousalPayloadSchema = z
         preFrequencyScore: z.number(),
       })
       .strict(),
+    scoreEvidence: attentionScoreEvidenceSchema.optional(),
     reasonCodes: z.array(nonBlankString),
     missingInputs: z.array(nonBlankString),
     policyDigest: nonBlankString,

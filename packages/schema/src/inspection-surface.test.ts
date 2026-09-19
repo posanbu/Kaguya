@@ -1,5 +1,6 @@
 /**
  * 功能概述：验证 record-browser 的 wire 边界，拒绝表达式式字段路径、无界分组和不合法来源状态。
+ * 主要职责：覆盖门控展示、状态选项、正向引用与带 path 的字段；旧声明继续解析，非法 direction 和重复状态拒绝。
  * 代码库关系：直接消费 inspection.ts；仅纯 Schema 解析，不做网络或数据库操作。
  */
 import { expect, it } from "vitest";
@@ -7,6 +8,7 @@ import {
   moduleInspectionSurfaceSchema,
   inspectionRecordPageSchema,
   inspectionSurfaceEntitySchema,
+  inspectionPresentationSchema,
 } from "./inspection.js";
 const component = {
   id: "queries",
@@ -81,4 +83,45 @@ it("rejects executable paths and unbounded relation reads", () => {
       sections: [],
     }),
   ).toThrow();
+});
+it("preserves gate declarations and stable field paths while rejecting invalid state contracts", () => {
+  const gate = {
+    ...component,
+    presentation: "attention-gate",
+    status: {
+      field: "outcome",
+      options: [{ value: "attend", label: "放行至规划" }],
+    },
+    relations: [{ ...component.relations[0], direction: "forward" }],
+  };
+  expect(
+    moduleInspectionSurfaceSchema.parse(surface(gate)).components[0],
+  ).toMatchObject(gate);
+  expect(
+    inspectionPresentationSchema.parse({
+      title: "门控",
+      fields: [
+        { path: "score", label: "分数", value: 42 },
+        { label: "旧字段", value: false },
+      ],
+    }).fields,
+  ).toEqual([
+    { path: "score", label: "分数", value: 42 },
+    { label: "旧字段", value: false },
+  ]);
+  for (const invalid of [
+    { ...gate, status: { ...gate.status, field: "outcome[0]" } },
+    { ...gate, status: { ...gate.status, options: [] } },
+    {
+      ...gate,
+      status: {
+        ...gate.status,
+        options: [...gate.status.options, ...gate.status.options],
+      },
+    },
+    { ...gate, relations: [{ ...gate.relations[0], direction: "both" }] },
+  ])
+    expect(() =>
+      moduleInspectionSurfaceSchema.parse(surface(invalid)),
+    ).toThrow();
 });

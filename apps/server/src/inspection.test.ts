@@ -3,6 +3,7 @@
  * 功能概述：验证开发者 API 在真实 PGlite 账本上的认证、脱敏、游标分页、详情和有界 Flow。
  * 主要职责：fixture 创建两个独立 context 与跨 context 引用；通过 Fastify inject 检查
  * 无认证先拒绝、同时间分页不丢消息、过滤绑定、完整 Prompt 保留及秘密移除、只读与错误隔离。
+ * 门控证据保留历史阈值及配置标识，标识不被描述为可比较的版本或当前运行配置。
  * 代码库关系：Runtime 业务装配统一来自 @kaguya/composition；组合 app.ts、inspection.ts、真实 Runtime Manifest 和 database/testing；
  * 不调用外部模型或真实网络，每次测试关闭 Fastify、Runtime 与内存数据库。
  * 输入输出与副作用：仅隔离测试数据库 I/O；对比请求前后原子数量确保检查接口不追加事实。
@@ -311,7 +312,7 @@ describe("developer inspection", () => {
       value: 80,
     });
     expect(first.items[0].presentation.fields).toContainEqual({
-      label: "设置版本",
+      label: "配置标识",
       value: "historical-v1",
     });
     // 必须先脱敏再截断；摘要边界处也不能泄露已知秘密的前半段。

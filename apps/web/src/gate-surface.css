@@ -1,0 +1,965 @@
+/*
+ * 功能概述：注意力评估的内容层级与响应式主从布局，沿用暖纸/夜色主题和珊瑚强调色。
+ * 主要职责：gate-browser 让紧凑目录与判断解释并排；gate-path 只突出实际决定结果的阶段；
+ * gate-score 呈现加减分与频率关系，参考评分按需展开。窄容器在目录和详情间切换并保留 DOM 状态。
+ * 代码库关系：仅作用于 GateSurface，复用工作台按钮与字段；不覆盖人物或联想 Surface。
+ * 输入输出与副作用：主题状态色具备独立前景，控件至少 44px；长文本、缩放和键盘焦点不依赖动画。
+ */
+.gate-surface {
+  overflow-wrap: anywhere;
+  --gate-success: #237645;
+  --gate-warning: #855500;
+  --gate-danger: #a3392c;
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+  container: gate / inline-size;
+  color: var(--kaguya-ink);
+  font-size: 14px;
+}
+:root[data-theme="dark"] .gate-surface {
+  --gate-success: #8bd9ab;
+  --gate-warning: #efc66c;
+  --gate-danger: #ffb2a3;
+}
+.gate-surface ::selection {
+  background: color-mix(in srgb, var(--kaguya-coral) 22%, var(--kaguya-paper));
+  color: var(--kaguya-ink);
+}
+.gate-surface :is(button, input, select, summary):focus-visible,
+.gate-heading h3:focus-visible {
+  outline: 2px solid var(--kaguya-coral-strong);
+  outline-offset: 3px;
+}
+.gate-surface .wb-button {
+  min-height: 44px;
+}
+.gate-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: end;
+}
+.gate-toolbar label {
+  display: grid;
+  gap: 0.4rem;
+  font-size: 12px;
+  color: var(--kaguya-muted);
+}
+.gate-toolbar .gate-search {
+  flex: 1;
+  min-width: 12rem;
+}
+.gate-search > span:last-child {
+  position: relative;
+}
+.gate-search svg {
+  position: absolute;
+  left: 0.75rem;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.gate-toolbar :is(input, select) {
+  min-height: 44px;
+  max-width: 100%;
+  width: 100%;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 8px;
+  background: var(--kaguya-paper);
+  color: var(--kaguya-ink);
+  padding: 0.625rem 0.75rem;
+  font: inherit;
+  font-size: 14px;
+  caret-color: var(--kaguya-coral-strong);
+}
+.gate-toolbar .gate-search input {
+  padding-left: 2.3rem;
+}
+.gate-toolbar input::placeholder {
+  color: var(--kaguya-muted);
+  opacity: 1;
+}
+.gate-toolbar .gate-apply {
+  background: var(--kaguya-coral-strong);
+  color: var(--kaguya-paper);
+  border-color: var(--kaguya-coral-strong);
+}
+:root[data-theme="dark"] .gate-toolbar .gate-apply {
+  color: var(--kaguya-paper);
+}
+.gate-time-filter {
+  flex-basis: 100%;
+}
+.gate-time-filter > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: fit-content;
+  min-height: 44px;
+  cursor: pointer;
+  color: var(--kaguya-muted);
+  font-size: 13px;
+}
+.gate-time-filter > summary::after {
+  content: "+";
+}
+.gate-time-filter[open] > summary::after {
+  content: "−";
+}
+.gate-time-filter > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: end;
+  padding-bottom: 0.5rem;
+}
+.gate-time-filter > div > span {
+  padding: 0.75rem 0;
+  color: var(--kaguya-muted);
+  font-size: 12px;
+}
+.gate-applied {
+  margin: 0;
+  color: var(--kaguya-muted);
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+.gate-browser {
+  display: grid;
+  grid-template-columns: minmax(21rem, 42%) minmax(0, 1fr);
+  height: clamp(34rem, 72dvh, 56rem);
+  min-width: 0;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 12px;
+  overflow: clip;
+  background: var(--kaguya-paper);
+}
+.gate-directory {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--kaguya-line);
+  background: var(--kaguya-paper-soft);
+}
+.gate-directory > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 1rem 1rem 0;
+}
+.gate-directory h3 {
+  font-size: 14px;
+  margin: 0;
+}
+.gate-directory > header > span,
+.gate-directory > p {
+  color: var(--kaguya-muted);
+  font-size: 12px;
+}
+.gate-directory > p {
+  margin: 0.375rem 1rem 0.875rem;
+}
+.gate-directory > ol {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-gutter: stable;
+  scrollbar-color: var(--kaguya-line) transparent;
+}
+.gate-directory > ol > li {
+  border-top: 1px solid var(--kaguya-line);
+}
+.gate-directory > ol > li > button {
+  display: grid;
+  width: 100%;
+  gap: 0.4rem;
+  padding: 0.8rem 1rem;
+  color: var(--kaguya-ink);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.gate-directory > ol > li > button:hover {
+  background: var(--kaguya-paper);
+}
+.gate-directory > ol > li > button[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--kaguya-coral) 9%, var(--kaguya-paper));
+}
+.gate-directory > ol > li > button:focus-visible {
+  outline-offset: -3px;
+}
+.gate-row-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+.gate-row-meta time {
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--kaguya-muted);
+  font-variant-numeric: tabular-nums;
+}
+.gate-row-reason {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  flex-shrink: 0;
+  max-width: 45%;
+}
+.gate-row-reason strong {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.gate-status {
+  min-width: 0;
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--kaguya-muted);
+}
+.gate-status-success {
+  color: var(--gate-success);
+}
+.gate-status-warning {
+  color: var(--gate-warning);
+}
+.gate-status svg {
+  flex-shrink: 0;
+}
+.gate-directory strong {
+  font-weight: 600;
+  font-size: 14px;
+}
+.gate-row-input {
+  min-width: 0;
+  flex: 1;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.gate-row-scope {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--kaguya-muted);
+  font-size: 11px;
+}
+.gate-row-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.gate-row-content svg {
+  color: var(--kaguya-muted);
+  flex-shrink: 0;
+}
+.gate-directory .developer-pager {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.625rem;
+  border-top: 1px solid var(--kaguya-line);
+  margin: 0;
+  font-size: 12px;
+}
+.gate-directory .developer-pager .wb-button {
+  padding-inline: 0.5rem;
+  font-size: 12px;
+}
+.gate-detail {
+  min-width: 0;
+  min-height: 0;
+  padding: 1.75rem;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-gutter: stable;
+  scrollbar-color: var(--kaguya-line) transparent;
+}
+.gate-detail .gate-back {
+  display: none;
+}
+.gate-heading > div {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+.gate-heading time {
+  color: var(--kaguya-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.gate-heading h3 {
+  margin: 0.875rem 0 0.5rem;
+  font-size: 1.35rem;
+  font-weight: 600;
+  line-height: 1.5;
+  text-wrap: pretty;
+  scroll-margin-top: 1rem;
+}
+.gate-heading p {
+  margin: 0;
+  color: var(--kaguya-muted);
+  font-size: 13px;
+}
+.gate-heading .gate-explanation {
+  margin-top: 0.75rem;
+  line-height: 1.75;
+}
+.gate-path {
+  display: flex;
+  flex-wrap: wrap;
+  list-style: none;
+  padding: 0;
+  margin: 1.5rem 0;
+  gap: 1.25rem;
+}
+.gate-path > li {
+  display: grid;
+  gap: 0.375rem;
+  min-width: 0;
+}
+.gate-path > li > span {
+  display: flex;
+  gap: 0.375rem;
+  align-items: center;
+  color: var(--kaguya-muted);
+  font-size: 12px;
+}
+.gate-path > li[data-final="true"] > span {
+  color: var(--kaguya-coral-strong);
+  font-weight: 600;
+}
+.gate-path small {
+  font-size: 11px;
+  color: var(--kaguya-muted);
+  padding-left: 1.25rem;
+}
+.gate-path-dot {
+  width: 7px;
+  height: 7px;
+  margin-inline: 3.5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.gate-detail h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+.gate-reasons > ul {
+  margin: 0.5rem 0 0;
+  padding-left: 1.2rem;
+  line-height: 1.8;
+  font-size: 13px;
+}
+.gate-note {
+  color: var(--kaguya-muted);
+  font-size: 12px;
+  line-height: 1.7;
+  margin: 0.625rem 0 0;
+}
+.gate-score {
+  border-top: 1px solid var(--kaguya-line);
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+}
+.gate-score > header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.gate-score > header > span {
+  color: var(--kaguya-muted);
+  font-size: 12px;
+}
+.gate-score-total {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  margin: 1rem 0;
+  font-variant-numeric: tabular-nums;
+}
+.gate-score-total > strong {
+  font-size: 1.75rem;
+  font-weight: 600;
+}
+.gate-score-total > strong > small {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--kaguya-muted);
+}
+.gate-score-total > span {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 0.2rem 0.5rem;
+  color: var(--kaguya-muted);
+  font-size: 13px;
+}
+.gate-score-total > span > b {
+  color: var(--kaguya-ink);
+  font-weight: 500;
+}
+.gate-score-total > span > small {
+  grid-column: 1 / -1;
+  font-size: 12px;
+}
+.gate-score-parts {
+  display: grid;
+  gap: 0;
+  margin: 0;
+}
+.gate-score-parts > div,
+.gate-contribution-axis {
+  display: grid;
+  grid-template-columns: 7.5rem minmax(0, 1fr) 3.25rem;
+  align-items: center;
+  gap: 0.75rem;
+}
+.gate-contribution-axis {
+  margin-bottom: 0.625rem;
+  font-size: 10px;
+  color: var(--kaguya-muted);
+  font-variant-numeric: tabular-nums;
+}
+.gate-contribution-axis > span:nth-child(2) {
+  display: flex;
+  justify-content: space-between;
+}
+.gate-contribution-axis > span:last-child {
+  text-align: right;
+}
+.gate-score-parts dt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--kaguya-muted);
+  margin: 0;
+}
+.gate-rule-trigger,
+.gate-rule-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  border-radius: 6px;
+  padding: 0;
+  background: transparent;
+  color: var(--kaguya-muted);
+  cursor: pointer;
+}
+.gate-rule-trigger:hover,
+.gate-rule-close:hover {
+  background: var(--kaguya-paper-soft);
+  color: var(--kaguya-coral-strong);
+}
+.gate-rule-close:focus-visible {
+  outline: 2px solid var(--kaguya-coral-strong);
+  outline-offset: 2px;
+}
+.gate-rule-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgb(10 18 28 / 38%);
+}
+.gate-rule-dialog {
+  position: fixed;
+  z-index: 101;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(36rem, calc(100vw - 2rem));
+  max-height: min(46rem, calc(100dvh - 3rem));
+  overflow: auto;
+  padding: 1.5rem;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 12px;
+  background: var(--kaguya-paper);
+  color: var(--kaguya-ink);
+  font-size: 14px;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+}
+.gate-rule-dialog > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.gate-rule-dialog h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+.gate-rule-dialog > p {
+  margin: 0.75rem 0;
+}
+.gate-rule-dialog .gate-rule-recorded {
+  color: var(--kaguya-muted);
+  font-size: 12px;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--kaguya-line);
+}
+.gate-rule-recorded strong {
+  color: var(--kaguya-ink);
+  font-size: 16px;
+  margin-left: 0.5rem;
+  font-variant-numeric: tabular-nums;
+}
+.gate-rule-dialog table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+  font-size: 13px;
+  text-align: left;
+}
+.gate-rule-dialog th,
+.gate-rule-dialog td {
+  border-bottom: 1px solid var(--kaguya-line);
+  padding: 0.625rem 0.5rem;
+  vertical-align: top;
+}
+.gate-rule-dialog tbody th {
+  font-weight: 400;
+}
+.gate-rule-dialog td {
+  width: 40%;
+  font-variant-numeric: tabular-nums;
+}
+.gate-rule-dialog thead {
+  background: var(--kaguya-paper-soft);
+}
+.gate-rule-dialog ul {
+  padding-left: 1.25rem;
+  margin: 1rem 0;
+  color: var(--kaguya-muted);
+  font-size: 12px;
+}
+.gate-rule-dialog li + li {
+  margin-top: 0.5rem;
+}
+.gate-rule-dialog footer {
+  border-top: 1px solid var(--kaguya-line);
+  padding-top: 1rem;
+  color: var(--kaguya-muted);
+  font-size: 12px;
+}
+.gate-rule-evidence h3 {
+  margin: 0.75rem 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+.gate-rule-evidence blockquote {
+  margin: 0.25rem 0;
+  padding: 0.5rem 0.75rem;
+  border-left: 2px solid var(--kaguya-line);
+  background: var(--kaguya-paper-soft);
+}
+.gate-rule-evidence blockquote > span {
+  color: var(--kaguya-muted);
+  font-size: 12px;
+}
+.gate-rule-evidence blockquote > p {
+  margin: 0.25rem 0 0;
+  white-space: pre-wrap;
+  font-size: 14px;
+}
+.gate-rule-facts > summary {
+  min-height: 44px;
+  padding-block: 0.75rem;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--kaguya-muted);
+}
+.gate-rule-evidence dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  margin: 0.75rem 0;
+  font-size: 12px;
+}
+.gate-rule-evidence dl > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.5rem;
+  min-width: 0;
+}
+.gate-rule-evidence dt {
+  color: var(--kaguya-muted);
+}
+.gate-rule-evidence dd {
+  margin: 0;
+}
+.gate-rule-evidence ol {
+  padding: 0;
+  margin: 1rem 0;
+  list-style: none;
+  font-size: 13px;
+}
+.gate-rule-evidence li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--kaguya-line);
+}
+.gate-rule-evidence li > strong {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.gate-rule-formula {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.gate-rule-missing {
+  font-size: 13px;
+  color: var(--kaguya-muted);
+}
+.gate-rule-reference {
+  border-top: 1px solid var(--kaguya-line);
+  margin-top: 1.25rem;
+}
+.gate-rule-reference > summary {
+  min-height: 44px;
+  padding-block: 0.75rem;
+  cursor: pointer;
+  font-size: 13px;
+}
+.gate-rule-reference > summary:focus-visible {
+  outline: 2px solid var(--kaguya-coral-strong);
+  outline-offset: 2px;
+}
+.gate-score-parts dd {
+  display: contents;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.gate-score-parts dd > span:last-child {
+  text-align: right;
+}
+.gate-contribution-track {
+  display: block;
+  position: relative;
+  height: 0.5rem;
+  background: var(--kaguya-paper-soft);
+  border-radius: 2px;
+}
+.gate-contribution-track::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -3px;
+  bottom: -3px;
+  width: 1px;
+  background: var(--kaguya-line);
+}
+.gate-contribution-track[data-missing="true"] {
+  background: transparent;
+}
+.gate-contribution-bar {
+  display: block;
+  position: absolute;
+  height: 100%;
+  background: var(--kaguya-coral-strong);
+  border-radius: 2px;
+}
+.gate-contribution-bar[data-negative="true"] {
+  background: var(--gate-warning);
+}
+.gate-score-calculation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  align-items: center;
+  color: var(--kaguya-muted);
+  font-size: 12px;
+  margin: 1rem 0 0;
+  font-variant-numeric: tabular-nums;
+}
+.gate-reference-score,
+.gate-context,
+.gate-technical {
+  border-top: 1px solid var(--kaguya-line);
+  margin-top: 1.5rem;
+}
+.gate-detail summary,
+.gate-mechanism summary {
+  min-height: 44px;
+  padding-block: 0.75rem;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.gate-reference-score summary > span {
+  display: inline-block;
+  margin-left: 0.75rem;
+  color: var(--kaguya-muted);
+  font-size: 12px;
+}
+.gate-reference-score .gate-score {
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 0.5rem;
+}
+.gate-context > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 1rem;
+}
+.gate-context > summary::before {
+  content: "+";
+  width: 0.5rem;
+}
+.gate-context[open] > summary::before {
+  content: "−";
+}
+.gate-signal {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 600;
+}
+.gate-signal > span {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+.gate-signal-success {
+  color: var(--gate-success);
+}
+.gate-signal-warning {
+  color: var(--gate-warning);
+}
+.gate-signal-danger {
+  color: var(--gate-danger);
+}
+.gate-condition-value {
+  color: var(--kaguya-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.gate-condition-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  margin: 0;
+  padding-left: 1.25rem;
+  font-size: 12px;
+  color: var(--kaguya-muted);
+}
+.gate-wait {
+  border-top: 1px solid var(--kaguya-line);
+  padding-top: 1.25rem;
+  margin-top: 1.5rem;
+}
+.gate-wait dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 2rem;
+  margin: 0.75rem 0 0;
+}
+.gate-wait dt {
+  color: var(--kaguya-muted);
+  font-size: 12px;
+}
+.gate-wait dd {
+  margin: 0.4rem 0 0;
+  font-variant-numeric: tabular-nums;
+}
+.gate-input {
+  border-top: 1px solid var(--kaguya-line);
+  padding-top: 1.25rem;
+  margin-top: 1.5rem;
+}
+.gate-input > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+.gate-input > p:not(.gate-note) {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.9;
+  font-size: 14px;
+  margin: 0.75rem 0 0;
+  max-width: 72ch;
+}
+.gate-detail .gate-text-action {
+  padding: 0.5rem 0;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+  color: var(--kaguya-coral-strong);
+  font-size: 12px;
+}
+.gate-detail .gate-text-action:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.25em;
+}
+.gate-context .inspection-fields {
+  margin-top: 0.25rem;
+}
+.gate-context .inspection-fields > div {
+  grid-template-columns: minmax(7rem, 0.6fr) minmax(0, 1fr);
+}
+.gate-technical code {
+  overflow-wrap: anywhere;
+}
+.gate-trace > header {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.gate-trace > nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+}
+.gate-trace > nav button {
+  min-height: 44px;
+  padding: 0.5rem;
+  border: 0;
+  border-radius: 6px;
+  background: var(--kaguya-paper-soft);
+  color: var(--kaguya-muted);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.gate-trace > nav button[aria-current="page"] {
+  color: var(--kaguya-coral-strong);
+}
+.gate-trace .atom-detail {
+  position: static;
+  max-height: none;
+  overflow: visible;
+  border: 0;
+  padding: 0;
+}
+.gate-empty {
+  padding: 3rem 1.5rem;
+  text-align: center;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 12px;
+  background: var(--kaguya-paper);
+}
+.gate-empty > svg {
+  color: var(--kaguya-muted);
+}
+.gate-empty > h3 {
+  font-size: 1rem;
+  margin: 1rem 0 0.5rem;
+}
+.gate-empty > p {
+  color: var(--kaguya-muted);
+  line-height: 1.8;
+  font-size: 14px;
+}
+.gate-mechanism {
+  color: var(--kaguya-muted);
+}
+.gate-mechanism ol {
+  margin-top: 0.25rem;
+  padding-left: 1.5rem;
+  line-height: 1.8;
+  font-size: 13px;
+}
+@container gate (max-width: 760px) {
+  .gate-browser {
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+  }
+  .gate-directory {
+    border-right: 0;
+  }
+  .gate-directory > ol {
+    max-height: 65dvh;
+  }
+  .gate-detail {
+    display: none;
+    padding: 1.25rem;
+    overflow: visible;
+  }
+  .gate-browser[data-detail="true"] .gate-directory {
+    display: none;
+  }
+  .gate-browser[data-detail="true"] .gate-detail {
+    display: block;
+  }
+  .gate-detail .gate-back {
+    display: inline-flex;
+    margin-bottom: 1.25rem;
+  }
+  .gate-toolbar .gate-search {
+    flex-basis: calc(100% - 10rem);
+  }
+  .gate-toolbar > label:not(.gate-search) {
+    flex: 1;
+    min-width: 8rem;
+  }
+  .gate-heading h3 {
+    font-size: 1.15rem;
+  }
+  .gate-path {
+    gap: 0.875rem 1.25rem;
+  }
+}
+@container gate (max-width: 420px) {
+  .gate-toolbar .gate-search {
+    flex-basis: 100%;
+  }
+  .gate-time-filter {
+    flex-basis: auto;
+    margin-left: auto;
+  }
+  .gate-time-filter[open] {
+    flex-basis: 100%;
+  }
+  .gate-time-filter > div {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .gate-heading > div {
+    align-items: start;
+  }
+  .gate-context .inspection-fields > div {
+    grid-template-columns: 1fr;
+    gap: 0.25rem;
+  }
+  .gate-reference-score summary > span {
+    display: block;
+    margin-left: 1rem;
+  }
+}
