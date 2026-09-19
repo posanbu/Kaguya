@@ -5,7 +5,8 @@
  * 功能概述：通过真实 Runtime/PGlite 与 DeepSeek-compatible HTTP mock 验证两层发言决策。
  * fixture 装配正式 Catalog、light Planner 和 heavy Composer；settle 等待 durable 订阅闭合，
  * restart 保留数据库并重建宿主，advance 推进持久 heartbeat 时钟。仅 mock provider HTTP，
- * 决策写入故障及取消前等待 Planner 启动均沿用 settle 的 8 秒预算，允许 CI 下持久订阅完成前置步骤。
+ * waitForPersistence 将本 fixture 的启动、打断、重建、重放及 settle 等待统一到已有的 8 秒
+ * 持久化预算，条件满足即继续；不改变注入时钟、业务静默窗、等待次数或精确行为断言。
  * 尚未提交决策的 Planner 可由新输入打断；静默窗后合并旧、新输入重构，已提交决策仍保持唯一终态。
  * 覆盖 message/wait/silent 与 target union 的 JSON mode 本地校验、一次结构修复、耗尽后失败关闭、
  * 累计 usage 和单 requested/terminal/decision；重试复用冻结 Prompt，重放与新输入取消均不重复落地。
@@ -24,6 +25,11 @@ import {
 } from "@kaguya/runtime";
 import type { PlatformInboundMessage } from "@kaguya/platform-adapters";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const PERSISTENCE_WAIT = { timeout: 8000, interval: 20 } as const;
+function waitForPersistence(assertion: () => void | Promise<void>) {
+  return vi.waitFor(assertion, PERSISTENCE_WAIT);
+}
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -148,10 +154,8 @@ async function fixture(outputs: unknown[]) {
       limit: 1000,
     });
   const settle = async () => {
-    await vi.waitFor(
-      async () =>
-        expect((await database.information.reliable.health()).pending).toBe(0),
-      { timeout: 8000, interval: 20 },
+    await waitForPersistence(async () =>
+      expect((await database.information.reliable.health()).pending).toBe(0),
     );
   };
   const message = (
@@ -484,13 +488,13 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
       const blockedRequestCount = duringRepair ? 2 : 1;
       try {
         await f.submit(f.message());
-        await vi.waitFor(() =>
+        await waitForPersistence(() =>
           expect(f.requests).toHaveLength(blockedRequestCount),
         );
         f.setTime(1000);
         for (let i = 0; i < 8; i++)
           await f.submit(f.message(`m${i + 2}`, { text: `更新的消息 ${i}` }));
-        await vi.waitFor(async () =>
+        await waitForPersistence(async () =>
           expect(kinds(await f.atoms())).toContain("agent.observation.wake"),
         );
         expect(
@@ -554,10 +558,10 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
     const f = await fixture([() => blocked, silent]);
     try {
       await f.submit(f.message());
-      await vi.waitFor(() => expect(f.requests).toHaveLength(1));
+      await waitForPersistence(() => expect(f.requests).toHaveLength(1));
       f.setTime(1000);
       await f.submit(f.message("m2"));
-      await vi.waitFor(async () =>
+      await waitForPersistence(async () =>
         expect(kinds(await f.atoms())).toContain("agent.turn.interrupted"),
       );
       release(silent);
@@ -592,11 +596,11 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
     const f = await fixture([blocked, blocked, blocked, silent]);
     try {
       await f.submit(f.message());
-      await vi.waitFor(() => expect(releases).toHaveLength(1));
+      await waitForPersistence(() => expect(releases).toHaveLength(1));
       for (let round = 1; round <= 2; round++) {
         f.setTime(1000);
         await f.submit(f.message(`m${round + 1}`));
-        await vi.waitFor(async () =>
+        await waitForPersistence(async () =>
           expect(
             (await f.atoms()).filter(
               (a) => a.kind === "agent.turn.interrupted",
@@ -607,11 +611,13 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
         await f.settle();
         f.setTime(1001);
         await f.restart();
-        await vi.waitFor(() => expect(releases).toHaveLength(round + 1));
+        await waitForPersistence(() =>
+          expect(releases).toHaveLength(round + 1),
+        );
       }
       f.setTime(1000);
       await f.submit(f.message("m4"));
-      await vi.waitFor(async () =>
+      await waitForPersistence(async () =>
         expect(kinds(await f.atoms())).toContain("agent.observation.wake"),
       );
       expect(
@@ -632,10 +638,10 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
     const f = await fixture([() => blocked, speak]);
     try {
       await f.submit(f.message());
-      await vi.waitFor(() => expect(f.requests).toHaveLength(1));
+      await waitForPersistence(() => expect(f.requests).toHaveLength(1));
       f.setTime(1000);
       await f.submit(f.message("during-wait"));
-      await vi.waitFor(async () =>
+      await waitForPersistence(async () =>
         expect(kinds(await f.atoms())).toContain("agent.observation.wake"),
       );
       release(wait);
@@ -673,10 +679,7 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
     const f = await fixture([() => blocked]);
     try {
       await f.submit(f.message());
-      await vi.waitFor(() => expect(f.requests).toHaveLength(1), {
-        timeout: 8000,
-        interval: 20,
-      });
+      await waitForPersistence(() => expect(f.requests).toHaveLength(1));
       const requested = (await f.atoms()).find(
         (a) => a.kind === "core.model.task.requested",
       )!;
@@ -733,7 +736,9 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
     for (let round = 0; round < 2; round++) {
       f.setTime(6000);
       await f.restart();
-      await vi.waitFor(() => expect(f.requests).toHaveLength(round + 2));
+      await waitForPersistence(() =>
+        expect(f.requests).toHaveLength(round + 2),
+      );
       await f.settle();
     }
     const graph = await f.atoms();
@@ -756,7 +761,7 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
     const f = await fixture([() => blocked]);
     try {
       await f.submit(f.message());
-      await vi.waitFor(() => expect(f.requests).toHaveLength(1));
+      await waitForPersistence(() => expect(f.requests).toHaveLength(1));
       f.setTime(60000);
       release(wait);
       await f.settle();
@@ -787,10 +792,7 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
       });
     try {
       await f.submit(f.message());
-      await vi.waitFor(() => expect(interrupted).toBe(true), {
-        timeout: 8000,
-        interval: 20,
-      });
+      await waitForPersistence(() => expect(interrupted).toBe(true));
       await f.submit(
         f.message("late-history", {
           occurredAt: "2026-09-12T11:59:00.000Z",
@@ -830,10 +832,9 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
     for (let round = 1; round <= 3; round++) {
       f.setTime(6000);
       await f.restart();
-      await vi.waitFor(() => expect(f.requests).toHaveLength(round + 1), {
-        timeout: 8000,
-        interval: 20,
-      });
+      await waitForPersistence(() =>
+        expect(f.requests).toHaveLength(round + 1),
+      );
       await f.settle();
     }
     const graph = await f.atoms();
