@@ -2,10 +2,12 @@
  * 功能概述：association 领域的 Information schema 与不可变定义，独立维护本领域引用和日志投影。
  * 主要职责：下列 schema 校验入账载荷，各 kind 声明因果关系、上下文和诊断元数据；无 I/O。
  * 代码库关系：information-kinds.ts 稳定重导出公共对象；跨领域只复用相邻文件定义，保持 Registry 对象身份。
+ * 输入输出与副作用：associationQueryInformationKind 在原有 debug 投影中展示实际 query 的
+ * 脱敏限长预览；候选只展示排名和原因，不沿引用加载或复制命中正文，不改变检索行为。
  */
 import { platformDestinationSchema, z } from "@kaguya/schema";
 import { defineInformationKind } from "@kaguya/sdk";
-import { nonBlankString } from "./shared.js";
+import { contentPreview, nonBlankString } from "./shared.js";
 import {
   messageIntentRequestedInformationKind,
   coreMemoryTextInformationKind,
@@ -149,6 +151,7 @@ export const associationQueryInformationKind = defineInformationKind({
         method: input.method,
         queryLength: Array.from(input.query as string).length,
         limit: input.limit,
+        ...contentPreview(input.query),
       };
     },
   },

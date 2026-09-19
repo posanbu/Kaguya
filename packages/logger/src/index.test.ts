@@ -60,9 +60,11 @@ describe("Kaguya logger", () => {
     expect(rendered).toContain(
       "[019921ab] core.model.task.requested ← core:caused-by:019921ac,019921ae · core:context:019921ad",
     );
-    expect(rendered).toContain("\n  Prompt:\n    System line\n    User line");
+    expect(rendered).toContain("模型任务 · 输入 Prompt");
+    expect(rendered).toMatch(/│\s+System line[^\n]*\n\s+│\s+User line/u);
+    expect(rendered).toContain("Provenance");
     expect(rendered).toContain(
-      "\n  Provenance:\n    history information=019921ad digest=sha256:test",
+      "history information=019921ad digest=sha256:test",
     );
     expect(rendered).not.toContain("019921ab-cdef-7000-8000-000000000001");
   });
