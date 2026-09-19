@@ -1,6 +1,7 @@
 /**
  * 功能概述：验证消息编写 Prompt 的整轮语义、冻结快照权威性和辅助上下文预算。
  * 超长历史和 Memory 用例同时检查 Unicode 完整性、预算上限及实际保留内容的 provenance。
+ * 场景用例验证外部 scene 模板的群聊和积压上下文、定制源码，以及只追溯实际使用变量的事实。
  * 主要职责：保护全部输入同等渲染、逐条引用、模板溯源、缺失 turn 拒绝以及 target-only assistant 历史，防止 Memory 跨作用域引用泄漏。
  * 代码库关系：使用真实默认模板、information-kinds 与 message-prompt，不模拟编译结果。
  * 输入输出与副作用：仅冻结内存原子，无网络或模型调用。
@@ -53,6 +54,14 @@ describe("message prompt", () => {
     const turn = result.variables.find((v) => v.name === "turn")!.content;
     expect(turn.indexOf("sender-0")).toBeLessThan(turn.indexOf("sender-1"));
     expect(result.templates.some((t) => t.name === "turn")).toBe(true);
+    expect(result.templates.find((t) => t.name === "scene")?.content).toBe(
+      templates.scene,
+    );
+    expect(
+      result.templates.some((t) =>
+        ["conversation-background", "expression-habits"].includes(t.name),
+      ),
+    ).toBe(false);
   });
   it("adds age context only for classified backlog and leaves wording optional", () => {
     const f = fixture();
@@ -82,6 +91,30 @@ describe("message prompt", () => {
     );
     expect(result.text).toContain("只有确有帮助时才提及迟到");
     expect(result.text).not.toContain("刚看到");
+    expect(
+      result.variables.find((variable) => variable.name === "scene")
+        ?.informationIds,
+    ).toEqual([f.intent.informationId, backlogTurn.informationId]);
+  });
+  it("renders the configured scene and only records the facts its variables use", () => {
+    const f = fixture();
+    const scene = "输入时间：{{oldest_input_age}}；{{newest_input_age}}";
+    const result = compileMessagePrompt(
+      { ...templates, scene },
+      identity,
+      f.atoms,
+      f.intent.informationId,
+    );
+    expect(result.text).toContain("输入时间：2 秒；2 秒");
+    expect(result.text).not.toContain("已决定在当前群聊");
+    expect(result.templates.find((entry) => entry.name === "scene")).toEqual({
+      name: "scene",
+      content: scene,
+    });
+    expect(
+      result.variables.find((variable) => variable.name === "scene")
+        ?.informationIds,
+    ).toEqual([f.turn.informationId]);
   });
   it("does not drop or truncate frozen inputs beyond the historical budgets", () => {
     const texts = Array.from(

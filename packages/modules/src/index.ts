@@ -1,5 +1,6 @@
 /**
  * 导出跨会话批准/确认事实和窄 MessageAuthorization token，供 composition 与 Runtime 共享对象身份。
+ * 授权消息渲染工厂供 composition 注入 Runtime，模板正文不再由宿主内嵌。
  * 功能概述：汇总 modules 包的信息原子 kind、Heartflow、Message Composer与 person-fact Model Task 公共契约。
  * 额外导出后台原始消息写回模块与 request/terminal kind，供 composition 显式装配。
  * memory-knowledge 导出显式事件提交、Wiki 修订与历史回填协议，供宿主选择启用。
@@ -156,3 +157,5 @@ export {
 } from "./first-party/memory-cognition/index.js";
 
 export * from "./first-party/message-authorization.js";
+
+export { createAuthorizedMessagePromptRenderer } from "./first-party/message-composer/authorized-prompt.js";

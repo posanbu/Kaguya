@@ -2,6 +2,7 @@
  * 功能概述：第一方模块拥有的检查视图，定义门控机制、历史/数据分组和可读字段。
  * 记忆联想用 record-browser 按查询串起完成事实、排名候选和 canonical source；字段与文案均由本模块声明。
  * 注意力用 attention-gate 展示完成事实，状态来自 outcome，通过 core:uses-context 正向引用冻结上下文；不补写历史条件。
+ * 在线心流与消息组织用 model-request-browser 按持久化模型请求浏览，完整 Prompt 与来源由独立详情承载。
  * 主要职责：firstPartyInspection 由各模块 Manifest 显式引用；view 将稳定字段路径与中文标题绑定。
  * arousalFields/arousalContextFields 复用门控根事实与冻结条件白名单，列表、详情和 SDK 校验使用相同字段契约；
  * scoreEvidence 暴露当时保存的分项计算依据，缺省的旧记录不借当前实现补算。
@@ -57,6 +58,26 @@ const arousalContextFields = {
   recentWindowMessages: "近期窗口消息数",
   idleReachedAverage: "达到平均空闲时间",
 };
+const modelRequestsView = () =>
+  view(
+    "model-requests",
+    "模型请求",
+    "记录每次真实请求的冻结输入、模型终态与关联结果；完整 Prompt 在请求详情查看。",
+    [
+      "core.model.task.requested",
+      "core.model.task.completed",
+      "core.model.task.failed",
+      "core.model.task.cancelled",
+    ],
+    {
+      taskId: "任务",
+      "activation.definitionId": "所属模块",
+      "activation.instanceId": "来源实例",
+      sourceInformationId: "触发记录",
+      contextInformationId: "上下文",
+      resolvedModel: "模型",
+    },
+  );
 export const firstPartyInspection = {
   "core.identity.normalize": {
     mechanism: [
@@ -374,6 +395,7 @@ export const firstPartyInspection = {
       "只有投递事实确认后才能判定发送完成。",
     ],
     views: [
+      modelRequestsView(),
       view(
         "turns",
         "回合与规划",
@@ -403,6 +425,22 @@ export const firstPartyInspection = {
         },
       ),
     ],
+    surface: {
+      version: 1,
+      id: "planner-requests",
+      title: "Planner 决策",
+      layout: { type: "sections", areas: ["requests"] },
+      components: [
+        {
+          id: "requests",
+          type: "model-request-browser",
+          area: "requests",
+          viewId: "model-requests",
+          taskId: "agent.turn.plan",
+          mode: "planner",
+        },
+      ],
+    },
   },
   "agent.attention.focus": {
     mechanism: [
@@ -601,6 +639,7 @@ export const firstPartyInspection = {
       "模型生成正文后提交助手消息与投递请求；请求不等于投递成功。",
     ],
     views: [
+      modelRequestsView(),
       view(
         "messages",
         "正文与投递请求",
@@ -615,6 +654,22 @@ export const firstPartyInspection = {
         },
       ),
     ],
+    surface: {
+      version: 1,
+      id: "composer-requests",
+      title: "消息生成",
+      layout: { type: "sections", areas: ["requests"] },
+      components: [
+        {
+          id: "requests",
+          type: "model-request-browser",
+          area: "requests",
+          viewId: "model-requests",
+          taskId: "agent.message.compose",
+          mode: "composer",
+        },
+      ],
+    },
   },
   "agent.memory.writeback": {
     storage: "memory",

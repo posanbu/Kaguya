@@ -86,10 +86,26 @@ Gateway Token 不写入 runtime，也不是 runtime 的合法字段。它在每�
 
 ## 本地覆盖 Prompt
 
-一方 Prompt 模板位于 `packages/modules/templates/`。把任意 `*.default.hbs` 复制为对应的 `*.local.hbs`，即可修改当前源码工作区的 Prompt；本地文件优先于默认文件，被 Git 忽略，且只在 Server 重启时重新读取。
+一方模块的 Prompt 模板统一位于 `packages/modules/templates/`。每个模板都有提交到 GitHub 的 `*.default.hbs`，以及可选的同名 `*.local.hbs` 本地副本。local 被 Git 忽略，存在时优先使用；缺失时使用 default。本地覆盖对当前工作区使用该模板的模块实例和 Profile 共同生效。
+
+在仓库根目录执行以下命令，可为全部已声明模板创建缺失的 local 副本，已有 local 保持原样：
+
+::: code-group
+
+```bash [初始化本地 Prompt ~vscode-icons:file-type-shell~]
+pnpm prompt:init
+```
+
+:::
+
+也可以只把需要修改的 `*.default.hbs` 复制为对应的 `*.local.hbs`。可编辑范围包括消息编写、群聊与私聊场景及积压提示、人物背景与表达参考、跨会话授权正文、Heartflow Planner、表达学习与选择，以及人物事实提取。没有模型指令的模块不会额外提供空模板。
+
+模块管理页保存模板时只写 local；“恢复默认”会删除对应的 local，重新使用 default。正常启动和读取不会重新生成 local。保存、手工编辑或恢复后都需要重启 Server 才会生效。
+
+升级代码时，新的 default 只会影响没有 local 覆盖的模板。已有 local 不会被覆盖或自动合并；需要采用新版默认内容时，可先备份自己的修改，再恢复默认或手动合并差异。
 
 ::: warning Handlebars 边界
-声明的变量可以不出现，也可以重复出现；未知变量、未知或动态 partial、自定义 helper、递归 partial、空文件和读取失败会使 Server 拒绝启动。只开放 `each`、`if`、`unless` 与固定静态 partial，不允许任意磁盘 include。动态内容按原文写入，不会自动添加 XML 包裹或进行逃逸，模板作者必须维护清晰的数据边界与安全提示。
+声明的变量可以不出现，也可以重复出现；未知变量、未知或动态 partial、自定义 helper、递归 partial、空文件和读取失败会使 Server 拒绝启动。默认文件也必须存在，不会以代码内置文本代替。只开放 `each`、`if`、`unless` 与固定静态 partial，不允许任意磁盘 include。动态内容按原文写入，不会自动添加 XML 包裹或进行逃逸，模板作者必须维护清晰的数据边界与安全提示。
 :::
 
 Message Composer 的层级为消息 partial → 历史、Memory、引用上下文与完整当前 turn → 外层 `message-composer`。当前 turn 不指定一条必须回答的目标消息。历史最多 30 条；历史 12,000 字符和 Memory 4,000 字符预算按 Unicode code point 在消息层渲染后、集合层渲染前执行。可用变量和全部模板名记录在 `packages/modules/src/first-party/message-composer/README.md`。

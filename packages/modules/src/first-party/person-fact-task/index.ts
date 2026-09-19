@@ -1,4 +1,5 @@
 /**
+ * candidate renderer 只展示结构化候选数据；提取规则仅来自注入的 person-fact.default/local 模板。
  * 人物事实模板显式归属此模块，其允许变量复用静态声明；未装入 Catalog 不展示。
  * 功能概述：实现最小 person-fact Model Task 垂直切片，把非 reply 候选编译为可追溯 Prompt，
  * 并仅从属于本模块的 completed 终态派生 `core.person.fact.extracted` 业务原子。
@@ -120,8 +121,6 @@ export const personFactCandidatePromptRenderer: InformationPromptRendererDefinit
         atom.payload,
       );
       return [
-        "Extract one durable person fact from this candidate.",
-        'Return JSON only with exactly these string fields: {"personId":"...","name":"...","fact":"..."}.',
         `personId: ${candidate.personId}`,
         `name: ${candidate.name}`,
         `candidate: ${candidate.text}`,

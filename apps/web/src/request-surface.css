@@ -1,0 +1,458 @@
+/*
+ * 功能概述：逐请求列表与独立详情页的正式样式，使用页面导航和互斥视图替代展开堆叠。
+ * 主要职责：桌面列表对齐三列；概览按输入/结果并列，Prompt 单独占据阅读区域；移动端恢复自然阅读顺序。
+ * 代码库关系：仅作用于 RequestSurface 的 request-* 类，复用 Kaguya 暖纸、墨色与珊瑚主题。
+ * 输入输出与副作用：纯样式；链接保留键盘焦点，长正文和请求 ID 自动换行，Prompt 不截断且仅使用页面滚动。
+ */
+.request-history {
+  color: var(--kaguya-ink);
+}
+.request-history a {
+  text-underline-offset: 4px;
+}
+.request-history a:focus-visible,
+.request-prompt pre:focus-visible {
+  outline: 2px solid var(--kaguya-coral-strong);
+  outline-offset: 3px;
+}
+.request-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  font-size: 13px;
+  color: var(--kaguya-coral-strong);
+}
+.request-list-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.request-history .request-list-heading h3 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 650;
+}
+.request-list-heading p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--kaguya-muted);
+}
+.request-list {
+  --request-columns: 170px minmax(0, 1fr) 144px 20px;
+}
+.request-list-composer {
+  --request-columns: 170px minmax(0, 1fr) minmax(0, 1.1fr) 20px;
+}
+.request-columns,
+.request-summary {
+  display: grid;
+  grid-template-columns: var(--request-columns);
+  gap: 24px;
+  align-items: center;
+}
+.request-columns {
+  padding: 12px 16px;
+  border-block: 1px solid var(--kaguya-line);
+  color: var(--kaguya-muted);
+  font-size: 12px;
+}
+.request-history .request-summary {
+  min-height: 76px;
+  padding: 18px 16px;
+  border-bottom: 1px solid var(--kaguya-line);
+  color: var(--kaguya-ink);
+  text-decoration: none;
+  font-size: 14px;
+  line-height: 1.7;
+}
+.request-summary:hover {
+  background: var(--kaguya-paper);
+}
+.request-time {
+  color: var(--kaguya-muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+}
+.request-trigger {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  gap: 10px;
+}
+.request-message {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.request-input-count {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--kaguya-muted);
+}
+.request-outcome {
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.request-outcome-failed {
+  color: var(--kaguya-coral-strong);
+}
+.request-chevron {
+  color: var(--kaguya-muted);
+}
+.request-list-help {
+  margin: 16px 0 0;
+  font-size: 12px;
+  color: var(--kaguya-muted);
+}
+.request-detail-navigation {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  margin-bottom: 24px;
+}
+.request-siblings {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  font-size: 13px;
+}
+.request-siblings a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  color: var(--kaguya-coral-strong);
+  text-decoration: none;
+}
+.request-siblings a:hover {
+  text-decoration: underline;
+}
+.request-siblings > span {
+  color: var(--kaguya-muted);
+  font-variant-numeric: tabular-nums;
+}
+.request-detail-heading {
+  margin-bottom: 28px;
+}
+.request-detail-heading h1 {
+  margin: 0 0 12px;
+  font-size: 28px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+.request-detail-heading h1:focus {
+  outline: none;
+}
+.request-detail-heading > p {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  margin: 0;
+  font-size: 14px;
+  color: var(--kaguya-muted);
+  font-variant-numeric: tabular-nums;
+}
+.request-detail-heading > p > span {
+  color: var(--kaguya-ink);
+}
+.request-detail-tabs {
+  display: flex;
+  gap: 28px;
+  margin-bottom: 32px;
+  border-bottom: 1px solid var(--kaguya-line);
+}
+.request-detail-tabs a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 48px;
+  padding: 12px 0;
+  color: var(--kaguya-muted);
+  text-decoration: none;
+  font-size: 14px;
+}
+.request-detail-tabs a[aria-current="page"] {
+  color: var(--kaguya-coral-strong);
+  border-bottom: 2px solid var(--kaguya-coral-strong);
+  font-weight: 600;
+}
+.request-overview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 64px;
+  padding: 0 0 40px;
+}
+.request-overview section {
+  min-width: 0;
+  max-width: 72ch;
+}
+.request-history .request-overview h2 {
+  margin: 0 0 24px;
+  font-size: 16px;
+  font-weight: 650;
+}
+.request-overview h2 > span {
+  color: var(--kaguya-muted);
+  font-weight: 400;
+}
+.request-input {
+  margin: 0 0 24px;
+  font-size: 15px;
+  line-height: 1.9;
+  overflow-wrap: anywhere;
+}
+.request-input > p {
+  margin: 0;
+}
+.request-input > p:first-child {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.request-input time {
+  color: var(--kaguya-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.request-input strong {
+  font-weight: 550;
+}
+.request-trigger-note,
+.request-reason {
+  color: var(--kaguya-muted);
+  margin: 16px 0 0;
+  font-size: 13px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+.request-result {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 16px;
+  line-height: 1.9;
+}
+.request-prompt {
+  min-width: 0;
+}
+.request-prompt-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+  margin-bottom: 20px;
+}
+.request-prompt-heading > p {
+  margin: 0;
+  color: var(--kaguya-muted);
+  font-size: 13px;
+}
+.request-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.request-copy button {
+  min-height: 44px;
+}
+.request-copy [role="status"] {
+  font-size: 12px;
+  color: var(--kaguya-coral-strong);
+}
+.request-copy [role="status"]:empty {
+  display: none;
+}
+.request-prompt pre {
+  margin: 0;
+  padding: 28px 32px;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 8px;
+  background: var(--kaguya-paper);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font:
+    14px/1.9 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+  max-height: none;
+  overflow: visible;
+  tab-size: 2;
+}
+.request-prompt pre::selection {
+  background: var(--kaguya-line);
+  color: var(--kaguya-ink);
+}
+.request-id {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 24px 0 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--kaguya-line);
+  font-size: 12px;
+  color: var(--kaguya-muted);
+  overflow-wrap: anywhere;
+}
+.request-id code {
+  font-size: inherit;
+}
+.request-state {
+  padding: 40px 0;
+  border-block: 1px solid var(--kaguya-line);
+}
+.request-state h2,
+.request-state h3 {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+.request-state p {
+  margin: 0;
+  color: var(--kaguya-muted);
+  line-height: 1.7;
+  font-size: 14px;
+}
+@media (max-width: 800px) {
+  .request-list-heading {
+    flex-direction: column;
+    gap: 8px;
+  }
+  .request-columns {
+    display: none;
+  }
+  .request-list {
+    border-top: 1px solid var(--kaguya-line);
+  }
+  .request-history .request-summary {
+    grid-template-columns: minmax(0, 1fr) 20px;
+    gap: 8px 12px;
+    padding: 20px 8px;
+  }
+  .request-time {
+    grid-row: 1;
+    grid-column: 1;
+  }
+  .request-trigger {
+    grid-row: 2;
+    grid-column: 1 / -1;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+  }
+  .request-message {
+    white-space: normal;
+    overflow: visible;
+    overflow-wrap: anywhere;
+  }
+  .request-outcome {
+    grid-row: 3;
+    grid-column: 1 / -1;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .request-chevron {
+    grid-row: 1;
+    grid-column: 2;
+  }
+  .request-list-composer .request-outcome::before {
+    content: "生成：";
+    color: var(--kaguya-muted);
+  }
+  .request-detail-navigation {
+    margin-bottom: 20px;
+  }
+  .request-detail-heading h1 {
+    font-size: 24px;
+  }
+  .request-overview {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 32px;
+    padding-bottom: 16px;
+  }
+  .request-history .request-overview h2 {
+    margin-bottom: 16px;
+  }
+  .request-prompt-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .request-prompt pre {
+    padding: 16px;
+    font-size: 13px;
+  }
+}
+
+.request-detail {
+  min-width: 0;
+}
+.request-detail-tabs {
+  flex-wrap: wrap;
+  gap: 8px 28px;
+}
+.request-trace {
+  list-style: none;
+  margin: 24px 0;
+  padding: 0;
+}
+.request-trace li {
+  padding: 20px 0;
+  border-bottom: 1px solid var(--kaguya-line);
+  min-width: 0;
+}
+.request-trace li > a > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 20px;
+  margin-bottom: 8px;
+}
+.request-trace time,
+.request-trace li > a > div > span {
+  color: var(--kaguya-muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.request-trace code {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--kaguya-muted);
+  font-size: 12px;
+  line-height: 1.8;
+}
+.request-sources .inspection-fields {
+  max-width: 75ch;
+}
+.request-state > button {
+  margin-top: 16px;
+}
+.request-input > p + p {
+  white-space: pre-wrap;
+}
+
+.request-trace li > a {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+  min-height: 44px;
+}
+.request-trace li > a:hover strong {
+  color: var(--kaguya-coral-strong);
+  text-decoration: underline;
+}
+.request-source-record .atom-detail {
+  margin-top: 16px;
+  min-width: 0;
+}
+.request-source-record .atom-detail pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: none;
+}

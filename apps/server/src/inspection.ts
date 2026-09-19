@@ -8,6 +8,7 @@
  * 输入输出与副作用：只执行有界读取；游标绑定过滤条件并校验时间/ID；Flow 不递归扩展其他 context，
  * registerInspectionRoutes 可接收动态 service getter，热切换期间返回 503，新实例生效后使用新的脱敏快照。
  * record-browser 的目录按根记录时间分页，可组合已声明状态与起止时间，游标绑定这些筛选；引用分组统一脱敏。
+ * model-request-browser 通过 inspection-requests.ts 读取模块归属的模型请求，独立详情与完整 Prompt 使用同一认证和脱敏边界。
  * 节点最多 500，边最多 2000，详情引用最多 100，明确报告截断和图外引用；无编辑、重放或订阅。
  */
 import {
@@ -15,6 +16,12 @@ import {
   recordEntity,
   type RecordBrowser,
 } from "./inspection-records.js";
+import {
+  requestPage,
+  requestDetail,
+  matchesRequest,
+  type RequestBrowser,
+} from "./inspection-requests.js";
 import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { InformationRepository, KaguyaDatabase } from "@kaguya/database";
@@ -28,7 +35,10 @@ import {
   inspectionSurfacePageSchema,
   inspectionRecordPageSchema,
   inspectionSurfaceEntitySchema,
+  inspectionRequestPageSchema,
+  inspectionRequestDetailSchema,
   type InspectionModule,
+  type InspectionRequestSummary,
   type JsonValue,
   type DeepReadonly,
   type InformationAtom,
@@ -145,6 +155,18 @@ function preview(value: JsonValue, depth = 0): JsonValue {
     );
   return value;
 }
+/** 必须在统一脱敏后截短，避免跨摘要边界的秘密只暴露前半段。 */
+function requestSummaryPreview(
+  item: InspectionRequestSummary,
+): InspectionRequestSummary {
+  const truncate = (text: string) =>
+    text.length > 280 ? text.slice(0, 280) + "…" : text;
+  return {
+    ...item,
+    triggerText: truncate(item.triggerText),
+    outcomeText: truncate(item.outcomeText),
+  };
+}
 export interface InspectionSource {
   readonly ledger: Pick<InformationRepository, "get" | "inspectPage"> &
     Partial<
@@ -197,9 +219,10 @@ function findSurface(
   if (!module || !surface || surface.id !== surfaceId)
     throw new InspectionError(404, "module_surface_not_found");
   const browser = surface.components.find(
-    (component): component is SurfaceBrowser | RecordBrowser =>
+    (component): component is SurfaceBrowser | RecordBrowser | RequestBrowser =>
       component.type === "entity-browser" ||
-      component.type === "record-browser",
+      component.type === "record-browser" ||
+      component.type === "model-request-browser",
   );
   const status = surface.components.find(
     (component): component is SurfaceStatus =>
@@ -617,7 +640,6 @@ export function createInspectionService(source: InspectionSource) {
       );
     },
     async surface(definitionId: string, surfaceId: string, input: unknown) {
-      const ledger = requireSurfaceLedger(source.ledger);
       const { module, surface, browser, status } = findSurface(
         modules(),
         definitionId,
@@ -653,10 +675,45 @@ export function createInspectionService(source: InspectionSource) {
             status: query.status ?? "",
             after: query.after ?? "",
             before: query.before ?? "",
+            ...(browser.type === "model-request-browser"
+              ? { taskId: browser.taskId, mode: browser.mode }
+              : {}),
           }),
         )
         .digest("hex");
       const cursor = decodeSurfaceCursor(query.cursor, filter);
+      if (browser.type === "model-request-browser") {
+        if (
+          query.q ||
+          query.platform ||
+          query.status ||
+          query.after ||
+          query.before
+        )
+          throw new InspectionError(400, "invalid_inspection_request");
+        const page = await requestPage(
+          source.ledger,
+          definitionId,
+          browser,
+          query.limit,
+          cursor,
+        );
+        const response = inspectionRequestPageSchema.parse({
+          version: 1,
+          surfaceId: surface.id,
+          items: redact(page.items),
+          nextCursor: page.cursor
+            ? Buffer.from(JSON.stringify({ ...page.cursor, filter })).toString(
+                "base64url",
+              )
+            : null,
+        });
+        return {
+          ...response,
+          items: response.items.map(requestSummaryPreview),
+        };
+      }
+      const ledger = requireSurfaceLedger(source.ledger);
       if (browser.type === "record-browser") {
         if (
           query.platform ||
@@ -789,6 +846,8 @@ export function createInspectionService(source: InspectionSource) {
         definitionId,
         surfaceId,
       );
+      if (browser.type === "model-request-browser")
+        throw new InspectionError(404, "surface_entity_not_found");
       const root = await ledger.get(parseRequest(id, entityId));
       if (browser.type === "record-browser") {
         if (!root || root.kind !== browser.recordKind)
@@ -864,6 +923,30 @@ export function createInspectionService(source: InspectionSource) {
         redact({ version: 1, surfaceId: surface.id, entity, sections }),
       );
     },
+    async surfaceRequest(
+      definitionId: string,
+      surfaceId: string,
+      requestId: string,
+    ) {
+      const { surface, browser } = findSurface(
+        modules(),
+        definitionId,
+        surfaceId,
+      );
+      if (browser.type !== "model-request-browser")
+        throw new InspectionError(404, "request_not_found");
+      const request = await source.ledger.get(parseRequest(id, requestId));
+      if (!request || !matchesRequest(request, definitionId, browser))
+        throw new InspectionError(404, "request_not_found");
+      const response = inspectionRequestDetailSchema.parse(
+        redact({
+          version: 1,
+          surfaceId: surface.id,
+          ...(await requestDetail(source.ledger, browser, request)),
+        }),
+      );
+      return { ...response, request: requestSummaryPreview(response.request) };
+    },
   };
 }
 export type InspectionService = ReturnType<typeof createInspectionService>;
@@ -897,6 +980,20 @@ export function registerInspectionRoutes(
           r.params,
         );
         return s.surface(params.definitionId, params.surfaceId, r.query);
+      },
+    ],
+    [
+      "modules/:definitionId/surfaces/:surfaceId/requests/:requestId",
+      (r, s) => {
+        const params = parseRequest(
+          z.object({ definitionId: id, surfaceId: id, requestId: id }),
+          r.params,
+        );
+        return s.surfaceRequest(
+          params.definitionId,
+          params.surfaceId,
+          params.requestId,
+        );
       },
     ],
     [

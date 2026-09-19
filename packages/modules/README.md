@@ -30,4 +30,10 @@ protocol v2 模块 Manifest 必须提供非空的 `displayName`、单行 `summar
 
 ## Prompt 模板
 
-`templates/*.default.hbs` 是受版本控制的一方 Handlebars 模板。Node composition root 通过 `@kaguya/modules/prompt-templates/node` 读取；同名 `*.local.hbs` 存在时优先使用，且该文件不进入 Git。模板在模块构造时编译，运行时复用；主入口不导出 Node loader，保持模块渲染边界为纯函数。
+所有一方模块的可编辑 Prompt 都保存在 `templates/`：`*.default.hbs` 是提交到 GitHub 的默认模板，同名 `*.local.hbs` 是 Git 忽略的本地覆盖。范围包括 Message Composer 的主模板、消息与记忆排版、会话场景、积压提示、人物背景、表达参考和授权正文，Heartflow Planner、Expression 的学习与选择，以及人物事实提取；没有模型指令的模块不需要占位模板。
+
+在仓库根目录运行 `pnpm prompt:init`，可为所有已声明模板创建缺失的 local 副本；已有 local 保持原样。也可以只复制需要修改的 default 文件。加载时优先使用 local，仅在 local 不存在时读取 default；因此升级默认模板不会覆盖本地定制，已有 local 也不会自动合并上游变化。本地覆盖属于当前工作区，供使用该模板的实例和 Profile 共享。
+
+管理端保存只写 local；恢复默认会删除对应 local，随后使用 default。正常读取和启动不会重新创建 local，保存或恢复均需重启服务后生效。默认文件缺失、选中的模板为空或非法时会明确失败，不回退到代码内置文本。
+
+`src/prompt-declarations.ts` 集中声明模板归属、变量和组成关系，Node composition root 通过 `@kaguya/modules/prompt-templates/node` 读取并校验。模板在模块构造时编译，运行时复用；主入口不导出 Node loader，保持模块渲染边界为纯函数。跨会话授权正文由 composition 注入 Runtime 的渲染器生成，Runtime 只提供冻结说明与背景及其来源引用，不读取模板文件。

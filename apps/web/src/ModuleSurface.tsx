@@ -1,12 +1,14 @@
 /**
  * 功能概述：渲染模块 Manifest 声明的受控检查 Surface；首版提供状态摘要、实体主从浏览、关系列表、时间线与关系图。
  * record-browser 按 presentation 分派到注意力门控 GateSurface 或通用 RecordSurface；实体浏览保持现有身份页面行为。
+ * model-request-browser 分派给独立 RequestSurface，按持久化模型请求提供目录与详情。
  * 主要职责：将搜索和筛选转换为只读 Inspection 查询，保持稳定游标；实体选择加载独立详情并允许追溯原始 Atom。
  * 代码库关系：ModulePages 在模块声明 surface 时挂载本组件；布局来自 Manifest，数据由版本化 surface DTO 提供。
  * 输入输出与副作用：只执行认证 GET、history 内页面状态与可访问焦点移动；不执行模块提供的代码，不修改人物事实。
  */
 import { RecordSurface } from "./RecordSurface.js";
 import { GateSurface } from "./GateSurface.js";
+import { RequestSurface } from "./RequestSurface.js";
 import {
   inspectionSurfaceEntitySchema,
   inspectionSurfacePageSchema,
@@ -36,10 +38,26 @@ interface ModuleSurfaceProps {
   token: string;
   revision: number;
   DetailComponent: ComponentType<InspectionDetailProps>;
+  path?: string;
 }
 /** 分派组件不持有 Hook，跨模块导航时按 definitionId 隔离搜索、选择和异步详情状态。 */
 export function ModuleSurface(props: ModuleSurfaceProps) {
   const surface = props.module.inspection?.surface;
+  const requests = surface?.components.find(
+    (component) => component.type === "model-request-browser",
+  );
+  if (requests)
+    return (
+      <RequestSurface
+        key={props.module.definitionId}
+        {...props}
+        browser={requests}
+        path={
+          props.path ??
+          `/developer/modules/${encodeURIComponent(props.module.definitionId)}`
+        }
+      />
+    );
   const records = surface?.components.find(
     (component) => component.type === "record-browser",
   );

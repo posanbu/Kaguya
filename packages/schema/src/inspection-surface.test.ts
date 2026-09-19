@@ -1,6 +1,7 @@
 /**
- * 功能概述：验证 record-browser 的 wire 边界，拒绝表达式式字段路径、无界分组和不合法来源状态。
+ * 功能概述：验证 record-browser 与 model-request-browser 的 wire 边界，拒绝表达式式字段路径、无界分组和不合法来源状态。
  * 主要职责：覆盖门控展示、状态选项、正向引用与带 path 的字段；旧声明继续解析，非法 direction 和重复状态拒绝。
+ * 同时校验逐次请求目录和 Prompt 可用性；空目录可携带后续扫描游标，完整 Prompt 不限摘要长度。
  * 代码库关系：直接消费 inspection.ts；仅纯 Schema 解析，不做网络或数据库操作。
  */
 import { expect, it } from "vitest";
@@ -9,6 +10,8 @@ import {
   inspectionRecordPageSchema,
   inspectionSurfaceEntitySchema,
   inspectionPresentationSchema,
+  inspectionRequestPageSchema,
+  inspectionRequestDetailSchema,
 } from "./inspection.js";
 const component = {
   id: "queries",
@@ -47,6 +50,72 @@ const surface = (value: unknown) => ({
   title: "记录",
   layout: { type: "master-detail", areas: ["main"] },
   components: [value],
+});
+
+it("accepts model requests with bounded-scan continuation and an independent complete prompt", () => {
+  const browser = {
+    id: "requests",
+    type: "model-request-browser",
+    area: "main",
+    viewId: "model-requests",
+    taskId: "agent.turn.plan",
+    mode: "planner",
+  };
+  expect(
+    moduleInspectionSurfaceSchema.parse(surface(browser)).components[0]!.type,
+  ).toBe("model-request-browser");
+  expect(
+    inspectionRequestPageSchema.parse({
+      version: 1,
+      surfaceId: "requests",
+      items: [],
+      nextCursor: "next-scan-boundary",
+    }).nextCursor,
+  ).toBe("next-scan-boundary");
+  const detail = {
+    version: 1,
+    surfaceId: "requests",
+    request: {
+      requestId: "request",
+      occurredAt: "2026-09-19T10:00:00.000Z",
+      status: "completed",
+      triggerText: "入站",
+      outcomeText: "静默",
+      inputCount: 1,
+    },
+    inputs: [],
+    prompt: { available: true, text: "完整 Prompt".repeat(2000) },
+    result: { action: "silent" },
+    trace: [],
+    truncated: false,
+    contextAvailable: false,
+  };
+  expect(inspectionRequestDetailSchema.parse(detail).prompt.text).toBe(
+    detail.prompt.text,
+  );
+  expect(
+    inspectionRequestDetailSchema.parse({
+      ...detail,
+      prompt: { available: false },
+    }).prompt.available,
+  ).toBe(false);
+  expect(() =>
+    inspectionRequestDetailSchema.parse({
+      ...detail,
+      prompt: { available: true },
+    }),
+  ).toThrow();
+  expect(() =>
+    inspectionRequestDetailSchema.parse({
+      ...detail,
+      prompt: { available: false, text: "hidden" },
+    }),
+  ).toThrow();
+  expect(() =>
+    moduleInspectionSurfaceSchema.parse(
+      surface({ ...browser, mode: "unknown" }),
+    ),
+  ).toThrow();
 });
 it("accepts bounded declarative records without identity-only metadata", () => {
   expect(

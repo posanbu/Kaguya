@@ -1,8 +1,11 @@
 /**
+ * 默认文本直接读取受版本控制的模板文件，与生产加载路径一致。
  * 功能概述：验证 Planner 的严格结构边界与真实 Prompt 编译，不调用外部模型。
  * 测试覆盖动作原因配对、等待整数范围、额外正文/目标拒绝，以及全部冻结输入和身份溯源。
  * 与 index.test.ts 的持久化分派测试及 Runtime 双阶段集成互补，防止模型越权构造投递参数。
  */
+import { loadFirstPartyPromptTemplates } from "../../node/prompt-templates.js";
+const plannerTemplate = loadFirstPartyPromptTemplates().planner;
 import { describe, expect, it } from "vitest";
 import { compilePlannerPrompt, plannerActionSchema } from "./planner.js";
 import { inboundTextInformationKind } from "../information-kinds.js";
@@ -67,7 +70,12 @@ describe("Planner contract", () => {
     const testAtoms = atoms.map((atom) =>
       atom.informationId === oldTurn.informationId ? turn : atom,
     );
-    const prompt = compilePlannerPrompt(identity, testAtoms, turn);
+    const prompt = compilePlannerPrompt(
+      identity,
+      testAtoms,
+      turn,
+      plannerTemplate,
+    );
     expect(prompt.text).toContain(identity.persona);
     expect(prompt.text).toContain("FIRST_SENTINEL");
     expect(prompt.text).toContain("LAST_SENTINEL");
@@ -111,7 +119,12 @@ describe("Planner contract", () => {
         replyTo: { platformMessageId: "earlier-message" },
       },
     });
-    const prompt = compilePlannerPrompt(identity, [...atoms, history], turn);
+    const prompt = compilePlannerPrompt(
+      identity,
+      [...atoms, history],
+      turn,
+      plannerTemplate,
+    );
     expect(prompt.text).toContain('"speaker":"history-user"');
     expect(prompt.text).toContain('"platformMessageId":"historical-message"');
     expect(prompt.text).toContain('"replyTo":"earlier-message"');
@@ -123,7 +136,7 @@ describe("Planner contract", () => {
     const turn = atoms.find(
       (atom) => atom.kind === "agent.turn.context.completed",
     )!;
-    const prompt = compilePlannerPrompt(identity, atoms, turn);
+    const prompt = compilePlannerPrompt(identity, atoms, turn, plannerTemplate);
     expect(prompt.text).toContain('"backlog":{"isBacklog":false');
     expect(prompt.text).toContain("LEGACY_INPUT");
   });

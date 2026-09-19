@@ -2,6 +2,7 @@
  * ModuleRegistrationInput.openScope 为 registerOnce 声明开放范围及释放终态组，仍由 Core 验证并提交。
  * promptTemplates 显式声明模块模板归属，Catalog 冻结其变量、partial 与组成关系。
  * record-browser 校验根 Kind、状态字段、双向关系分组和来源投影的 view/字段白名单，随后与状态选项一起深冻结。
+ * model-request-browser 校验模型能力、请求归属字段和受支持的任务模式；Runtime 产生的请求无需由模块重复声明产出。
  * inspection 显式声明领域视图、字段和机制；校验后冻结，供 Host 只读投影，不提供任意查询执行。
  * 功能概述：定义唯一版本化模块协议、显式 Catalog 与受控能力边界，供模块作者和 Host 共用。
  * 主要职责：defineInformationModule 校验静态清单；Catalog 确定性合并并拒绝身份冲突；
@@ -421,6 +422,30 @@ function validateInspectionSurface(
     const view = views.get(component.viewId);
     if (!view)
       throw new Error(`Unknown inspection surface view: ${component.viewId}`);
+    if (component.type === "model-request-browser") {
+      if (
+        !manifest.requires.some(
+          (capability) =>
+            capability.id === "kaguya:model-task" &&
+            capability.apiVersion === 1,
+        ) ||
+        !view.kinds.includes("core.model.task.requested") ||
+        [
+          "taskId",
+          "activation.definitionId",
+          "sourceInformationId",
+          "contextInformationId",
+        ].some((path) => !view.fields.some((field) => field.path === path))
+      )
+        throw new Error("Invalid inspection model request contract");
+      const expectedTask =
+        component.mode === "planner"
+          ? "agent.turn.plan"
+          : "agent.message.compose";
+      if (component.taskId !== expectedTask)
+        throw new Error("Invalid inspection model request task mode");
+      continue;
+    }
     if (component.type === "status-summary") {
       if (
         component.kinds.some((kind) => !view.kinds.includes(kind)) ||
