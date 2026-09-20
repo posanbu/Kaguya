@@ -42,6 +42,16 @@ import {
 import type { WebMessageGateway } from "./web-gateway.js";
 
 const gatewayToken = "test-gateway-token-12345";
+const memoryInfrastructure = {
+  enabled: false,
+  databaseMode: "managed" as const,
+  engine: "PostgreSQL 17" as const,
+  host: "127.0.0.1",
+  port: 5432,
+  database: "kaguya",
+  storageKind: "docker-volume" as const,
+  storageLocation: "kaguya-postgres-17-data",
+};
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const config: ServerConfig = {
@@ -139,17 +149,29 @@ describe("application API gateway", () => {
     {
       status: "invalid",
       selectedProfileId: "default",
+      memoryInfrastructure,
       profiles: [],
       issues: [{ id: "missing", path: "ai", message: "missing" }],
     },
     {
       status: "review_required",
       selectedProfileId: "default",
+      memoryInfrastructure,
       profiles: [],
       warnings: [{ id: "review", path: "ai", message: "review" }],
     },
-    { status: "restart_required", selectedProfileId: "default", profiles: [] },
-    { status: "ready", selectedProfileId: "default", profiles: [] },
+    {
+      status: "restart_required",
+      selectedProfileId: "default",
+      memoryInfrastructure,
+      profiles: [],
+    },
+    {
+      status: "ready",
+      selectedProfileId: "default",
+      memoryInfrastructure,
+      profiles: [],
+    },
   ])(
     "returns $status readiness from GET /api/v1/profiles",
     async (readiness) => {
@@ -174,6 +196,7 @@ describe("application API gateway", () => {
       getRegistryStatus: vi.fn(async () => ({
         status: "invalid" as const,
         selectedProfileId: "default",
+        memoryInfrastructure,
         profiles: [
           { id: "default", name: "default", createdAt: NOW, updatedAt: NOW },
         ],
@@ -231,6 +254,7 @@ describe("application API gateway", () => {
       data: {
         status: "invalid",
         selectedProfileId: "default",
+        memoryInfrastructure,
         profiles: [expect.objectContaining({ id: "default", name: "default" })],
         issues: [expect.objectContaining({ id: "default-provider-missing" })],
         warnings: [],
@@ -1333,6 +1357,7 @@ function stubManagement(): ConfigurationManagement {
     getRegistryStatus: vi.fn(async () => ({
       status: "invalid" as const,
       selectedProfileId: "default",
+      memoryInfrastructure,
       profiles: [
         { id: "default", name: "default", createdAt: NOW, updatedAt: NOW },
       ],

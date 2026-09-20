@@ -246,6 +246,8 @@ export function App() {
           {(openNapCatConfiguration, napCatWsUrl, napCatEndpointState) => (
             <Overview
               token={token}
+              memoryInfrastructure={configurationStatus?.memoryInfrastructure}
+              onRefreshConfiguration={() => void loadConfigurationStatus()}
               navigate={navigate}
               focusAdapters={path === "/adapters"}
               onConfigureNapCat={openNapCatConfiguration}

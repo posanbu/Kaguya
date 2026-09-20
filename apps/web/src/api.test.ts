@@ -23,6 +23,16 @@ import {
 } from "./api.js";
 
 const config = { token: "test-gateway-token" };
+const memoryInfrastructure = {
+  enabled: true,
+  databaseMode: "managed",
+  engine: "PostgreSQL 17",
+  host: "127.0.0.1",
+  port: 5432,
+  database: "kaguya",
+  storageKind: "docker-volume",
+  storageLocation: "kaguya-postgres-17-data",
+};
 const metadata = {
   id: "default",
   name: "default",
@@ -112,6 +122,7 @@ describe("gateway API client", () => {
         data: {
           status: "invalid",
           selectedProfileId: "default",
+          memoryInfrastructure,
           profiles: [metadata],
           issues: [],
           warnings: [],
@@ -122,6 +133,7 @@ describe("gateway API client", () => {
     await expect(listProfiles(config, request)).resolves.toMatchObject({
       status: "invalid",
       selectedProfileId: "default",
+      memoryInfrastructure,
     });
     expect(request).toHaveBeenCalledWith("/api/v1/profiles", {
       method: "GET",
