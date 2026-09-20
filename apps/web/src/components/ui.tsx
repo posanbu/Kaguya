@@ -31,15 +31,18 @@ export const Button = forwardRef<
 });
 export function PageHeader({
   title,
+  titleAside,
   actions,
 }: {
   title: string;
+  titleAside?: ReactNode;
   actions?: ReactNode;
 }) {
   return (
     <header className="wb-page-header">
-      <div>
+      <div className="wb-page-title-group">
         <h1>{title}</h1>
+        {titleAside}
       </div>
       {actions && <div className="wb-page-actions">{actions}</div>}
     </header>

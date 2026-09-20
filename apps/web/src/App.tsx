@@ -31,7 +31,7 @@
  * /adapters 仅作为兼容入口聚焦该区块。
  * 人工跨会话管理界面已移除；会话 UUID 由 WebChat 保存，凭据与编辑状态仅驻留当前页面。
  * DeveloperConsole 接收完整 pathname 以恢复模块详情，负责只读查询与取消，401 继续由本文件统一锁屏。
- * 消息页由 WebChat 管理独立浏览器会话、历史恢复与完整回复轮询，连接检测保留在标题栏；
+ * 消息页由 WebChat 管理独立浏览器会话、历史恢复与完整回复轮询；
  * 离开消息页会取消在途请求，未发送草稿保留在 App，返回消息页可继续编辑；
  * 401 继续通过全局事件锁屏，其他 Profile 管理状态互不影响。
  */
@@ -64,24 +64,60 @@ import {
 
 import { DeveloperConsole, developerPage } from "./DeveloperConsole.js";
 
-import { AdapterStatusPanel } from "./AdapterStatusPanel.js";
 import { IdentityPersonaEditor } from "./IdentityPersonaEditor.js";
 
 import {
   AlertCircle,
+  Check,
   CheckCircle2,
   Eye,
   EyeOff,
   LoaderCircle,
   LockKeyhole,
   Moon,
+  PencilLine,
   RefreshCw,
   Save,
   Settings2,
   Sun,
   Trash2,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  FormEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+
+const COMMON_TIME_ZONES = [
+  "UTC",
+  "Asia/Shanghai",
+  "Asia/Tokyo",
+  "Asia/Singapore",
+  "Europe/London",
+  "America/New_York",
+  "America/Los_Angeles",
+] as const;
+const COMMON_TIME_ZONE_SET = new Set<string>(COMMON_TIME_ZONES);
+
+const TIME_ZONE_OPTIONS = (() => {
+  let supported: readonly string[] = [];
+  try {
+    supported = Intl.supportedValuesOf("timeZone");
+  } catch {
+    supported = [
+      "Asia/Shanghai",
+      "Asia/Tokyo",
+      "Europe/London",
+      "America/New_York",
+    ];
+  }
+  return [...new Set(supported)]
+    .filter((timeZone) => !COMMON_TIME_ZONE_SET.has(timeZone))
+    .sort((left, right) => left.localeCompare(right));
+})();
 
 import { ConfigurationApplicationScreen } from "./ConfigurationApplicationScreen.js";
 import {
@@ -203,19 +239,21 @@ export function App() {
   const renderPage = () => {
     if (isOverview)
       return (
-        <Overview
+        <AdapterManagementSection
           token={token}
-          navigate={navigate}
-          focusAdapters={path === "/adapters"}
-          adapterSection={
-            <AdapterManagementSection
+          onRestartRequired={() => void navigate("/configuration/application")}
+        >
+          {(openNapCatConfiguration, napCatWsUrl, napCatEndpointState) => (
+            <Overview
               token={token}
-              onRestartRequired={() =>
-                void navigate("/configuration/application")
-              }
+              navigate={navigate}
+              focusAdapters={path === "/adapters"}
+              onConfigureNapCat={openNapCatConfiguration}
+              napCatWsUrl={napCatWsUrl}
+              napCatEndpointState={napCatEndpointState}
             />
-          }
-        />
+          )}
+        </AdapterManagementSection>
       );
     const inspectionPage = developerPage(path);
     if (inspectionPage !== undefined)
@@ -244,7 +282,6 @@ export function App() {
           onRestartRequired={() => {
             void navigate("/configuration/application");
           }}
-          onOpenNapCat={() => void navigate("/adapters")}
         />
       );
     }
@@ -289,7 +326,6 @@ function ProfileManagementScreen({
   onReloadStatus,
   onClose,
   onRestartRequired,
-  onOpenNapCat,
 }: {
   readonly token: string;
   readonly initialStatus: ConfigurationStatus | undefined;
@@ -299,7 +335,6 @@ function ProfileManagementScreen({
   }) => Promise<ConfigurationStatus>;
   readonly onClose: () => void;
   readonly onRestartRequired: () => void;
-  readonly onOpenNapCat: () => void;
 }) {
   const [registry, setRegistry] = useState<ProfileRegistryMetadata | undefined>(
     () => readRegistryMetadata(initialStatus),
@@ -321,6 +356,8 @@ function ProfileManagementScreen({
   const [serverIssues, setServerIssues] = useState<ProfileProblem[]>([]);
   const [touched, setTouched] = useState<ReadonlySet<Field>>(new Set());
   const [submitted, setSubmitted] = useState(false);
+  const [editingProfileName, setEditingProfileName] = useState(false);
+  const profileNameInputRef = useRef<HTMLInputElement>(null);
   const savedFields = loadedProfile
     ? profileToEditorFields(loadedProfile)
     : undefined;
@@ -377,6 +414,16 @@ function ProfileManagementScreen({
   useEffect(() => {
     clearLoadedProfileState();
   }, [token]);
+
+  useEffect(() => {
+    setEditingProfileName(false);
+  }, [openedProfileId]);
+
+  useEffect(() => {
+    if (!editingProfileName) return;
+    profileNameInputRef.current?.focus();
+    profileNameInputRef.current?.select();
+  }, [editingProfileName]);
 
   useEffect(() => {
     if (!openedProfileId || token.trim().length === 0) {
@@ -636,6 +683,83 @@ function ProfileManagementScreen({
       <div className="setup-shell">
         <PageHeader
           title="配置"
+          titleAside={
+            loadedProfile !== undefined && editorFields !== undefined ? (
+              <div className="profile-title-editor">
+                {editingProfileName ? (
+                  <ProfileField name="name">
+                    <input
+                      ref={profileNameInputRef}
+                      className="profile-title-input"
+                      value={editorFields.name}
+                      maxLength={100}
+                      autoComplete="off"
+                      aria-label="Profile 名称"
+                      placeholder="输入 Profile 名称"
+                      onChange={(event) => {
+                        setServerIssues([]);
+                        setEditorFields((current) =>
+                          current === undefined
+                            ? current
+                            : { ...current, name: event.target.value },
+                        );
+                      }}
+                      onBlur={() => setEditingProfileName(false)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          setEditingProfileName(false);
+                        }
+                        if (event.key === "Escape") {
+                          setEditorFields((current) =>
+                            current === undefined
+                              ? current
+                              : { ...current, name: loadedProfile.name },
+                          );
+                          setEditingProfileName(false);
+                        }
+                      }}
+                    />
+                  </ProfileField>
+                ) : (
+                  <strong className="profile-title-name">
+                    {editorFields.name || "未命名 Profile"}
+                  </strong>
+                )}
+                <button
+                  type="button"
+                  className="profile-title-edit"
+                  disabled={
+                    loadedProfile.id === "default" ||
+                    mutating ||
+                    workspace.applying
+                  }
+                  aria-label={
+                    loadedProfile.id === "default"
+                      ? "默认 Profile 名称不可修改"
+                      : editingProfileName
+                        ? "完成编辑 Profile 名称"
+                        : "编辑 Profile 名称"
+                  }
+                  title={
+                    loadedProfile.id === "default"
+                      ? "默认 Profile 名称固定为 default"
+                      : editingProfileName
+                        ? "完成编辑"
+                        : "编辑 Profile 名称"
+                  }
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => setEditingProfileName((current) => !current)}
+                >
+                  {editingProfileName ? (
+                    <Check size={17} aria-hidden="true" />
+                  ) : (
+                    <PencilLine size={17} aria-hidden="true" />
+                  )}
+                </button>
+              </div>
+            ) : undefined
+          }
           actions={
             <button
               type="button"
@@ -649,7 +773,7 @@ function ProfileManagementScreen({
         <main className="setup-main profile-main">
           <div className="profile-workspace profile-single-column">
             <section
-              className="setup-card profile-editor-card"
+              className="profile-editor-card"
               aria-labelledby="profile-editor-title"
             >
               <div className="panel-heading">
@@ -662,14 +786,6 @@ function ProfileManagementScreen({
                   </h2>
                 </div>
                 <div className="editor-actions">
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    onClick={onOpenNapCat}
-                  >
-                    <Settings2 size={16} />
-                    <span>Gateway / Adapter</span>
-                  </button>
                   <button
                     type="button"
                     className="secondary-button"
@@ -701,11 +817,6 @@ function ProfileManagementScreen({
                   </button>
                 </div>
               </div>
-
-              <p className="setup-intro profile-intro">
-                保存仅写入配置；请进入“配置生效管理”手动应用。 其他 Profile
-                仅保存，选为当前配置时再应用。
-              </p>
 
               <ProfileProblemSummary
                 name={loadedProfile?.name ?? openedProfileId ?? "Profile"}
@@ -753,87 +864,69 @@ function ProfileManagementScreen({
                     className="profile-form-lock"
                     disabled={mutating || workspace.applying}
                   >
-                    <label className="field">
-                      <span>Profile 名称</span>
-                      <ProfileField name="name">
-                        <input
-                          value={editorFields.name}
-                          disabled={loadedProfile.id === "default"}
-                          onChange={(event) =>
-                            setEditorFields((current) =>
-                              current === undefined
-                                ? current
-                                : { ...current, name: event.target.value },
-                            )
-                          }
-                          maxLength={100}
-                          autoComplete="off"
-                          placeholder="default"
-                        />
-                      </ProfileField>
-                    </label>
                     <fieldset className="identity-fields">
                       <legend>Agent 身份</legend>
                       <ProfileSectionIssues section="identity" />
-                      <p className="field-help">
-                        名字、别名和身份正文是工作区级 Prompt 资源；Profile
-                        只保存时区。
-                      </p>
-                      <label className="field">
-                        <span>Agent 时区</span>
-                        <ProfileField name="agentTimeZone">
-                          <input
-                            value={editorFields.agentTimeZone}
-                            onChange={(event) =>
-                              setEditorFields((current) =>
-                                current === undefined
-                                  ? current
-                                  : {
-                                      ...current,
-                                      agentTimeZone: event.target.value,
-                                    },
-                              )
-                            }
-                            autoComplete="off"
-                            placeholder="Asia/Shanghai"
-                            required
-                          />
-                        </ProfileField>
-                        <span className="field-help">
-                          用于理解当前时间、早晚和跨天语义。
-                        </span>
-                      </label>
-                      <IdentityPersonaEditor token={config.token} />
+                      <IdentityPersonaEditor
+                        token={config.token}
+                        timeZoneEditor={
+                          <label className="field compact-field identity-resource identity-resource-timezone">
+                            <span>Agent 时区</span>
+                            <ProfileField name="agentTimeZone">
+                              <select
+                                value={editorFields.agentTimeZone}
+                                onChange={(event) =>
+                                  setEditorFields((current) =>
+                                    current === undefined
+                                      ? current
+                                      : {
+                                          ...current,
+                                          agentTimeZone: event.target.value,
+                                        },
+                                  )
+                                }
+                                required
+                              >
+                                {!TIME_ZONE_OPTIONS.includes(
+                                  editorFields.agentTimeZone,
+                                ) &&
+                                !COMMON_TIME_ZONE_SET.has(
+                                  editorFields.agentTimeZone,
+                                ) ? (
+                                  <option value={editorFields.agentTimeZone}>
+                                    {editorFields.agentTimeZone}
+                                  </option>
+                                ) : null}
+                                <optgroup label="常用时区">
+                                  {COMMON_TIME_ZONES.map((timeZone) => (
+                                    <option key={timeZone} value={timeZone}>
+                                      {timeZone}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                                <optgroup label="全部时区">
+                                  {TIME_ZONE_OPTIONS.map((timeZone) => (
+                                    <option key={timeZone} value={timeZone}>
+                                      {timeZone}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                              </select>
+                            </ProfileField>
+                          </label>
+                        }
+                      />
                     </fieldset>
                     <fieldset className="identity-fields">
                       <legend>模型服务</legend>
                       <ProfileSectionIssues section="models" />
-                      <label className="field">
-                        <span>模型服务地址</span>
-                        <ProfileField name="baseUrl">
-                          <input
-                            type="url"
-                            value={editorFields.baseUrl}
-                            onChange={(event) => {
-                              clearModelDiscoveryState();
-                              setEditorFields((current) =>
-                                current === undefined
-                                  ? current
-                                  : { ...current, baseUrl: event.target.value },
-                              );
-                            }}
-                            autoComplete="url"
-                            placeholder="https://api.openai.com/v1"
-                          />
-                        </ProfileField>
-                      </label>
-                      <label className="field">
-                        <span>模型服务 API Key</span>
-                        <div className="password-field">
-                          <ProfileField name="apiKey">
+                      <div className="profile-field-grid">
+                        <label className="field compact-field">
+                          <span>模型服务地址</span>
+                          <ProfileField name="baseUrl">
                             <input
-                              type={showApiKey ? "text" : "password"}
-                              value={editorFields.apiKey}
+                              type="url"
+                              value={editorFields.baseUrl}
                               onChange={(event) => {
                                 clearModelDiscoveryState();
                                 setEditorFields((current) =>
@@ -841,31 +934,59 @@ function ProfileManagementScreen({
                                     ? current
                                     : {
                                         ...current,
-                                        apiKey: event.target.value,
+                                        baseUrl: event.target.value,
                                       },
                                 );
                               }}
-                              autoComplete="new-password"
-                              placeholder="Enter provider API key"
+                              autoComplete="url"
+                              placeholder="例如 https://api.openai.com/v1"
                             />
                           </ProfileField>
-                          <button
-                            type="button"
-                            className="icon-button"
-                            onClick={() => setShowApiKey((current) => !current)}
-                            aria-label={
-                              showApiKey ? "Hide API key" : "Show API key"
-                            }
-                            title={showApiKey ? "Hide API key" : "Show API key"}
-                          >
-                            {showApiKey ? (
-                              <EyeOff size={18} />
-                            ) : (
-                              <Eye size={18} />
-                            )}
-                          </button>
-                        </div>
-                      </label>
+                        </label>
+                        <label className="field compact-field">
+                          <span>模型服务 API Key</span>
+                          <div className="password-field">
+                            <ProfileField name="apiKey">
+                              <input
+                                type={showApiKey ? "text" : "password"}
+                                value={editorFields.apiKey}
+                                onChange={(event) => {
+                                  clearModelDiscoveryState();
+                                  setEditorFields((current) =>
+                                    current === undefined
+                                      ? current
+                                      : {
+                                          ...current,
+                                          apiKey: event.target.value,
+                                        },
+                                  );
+                                }}
+                                autoComplete="new-password"
+                                placeholder="输入服务商 API Key"
+                              />
+                            </ProfileField>
+                            <button
+                              type="button"
+                              className="icon-button"
+                              onClick={() =>
+                                setShowApiKey((current) => !current)
+                              }
+                              aria-label={
+                                showApiKey ? "Hide API key" : "Show API key"
+                              }
+                              title={
+                                showApiKey ? "Hide API key" : "Show API key"
+                              }
+                            >
+                              {showApiKey ? (
+                                <EyeOff size={18} />
+                              ) : (
+                                <Eye size={18} />
+                              )}
+                            </button>
+                          </div>
+                        </label>
+                      </div>
                       <div className="model-discovery-actions">
                         <button
                           type="button"
@@ -940,83 +1061,70 @@ function ProfileManagementScreen({
                     <fieldset className="identity-fields">
                       <legend>消息白名单</legend>
                       <ProfileSectionIssues section="allowlist" />
-                      <label className="field">
-                        <span>入站白名单</span>
-                        <ProfileField name="inboundAllowlistText">
-                          <textarea
-                            className="rule-editor"
-                            value={editorFields.inboundAllowlistText}
-                            onChange={(event) =>
-                              setEditorFields((current) =>
-                                current === undefined
-                                  ? current
-                                  : {
-                                      ...current,
-                                      inboundAllowlistText: event.target.value,
-                                    },
-                              )
-                            }
-                            rows={5}
-                            spellCheck={false}
-                            autoComplete="off"
-                            aria-describedby="inbound-allowlist-help"
-                            placeholder={
-                              "qq:group:REPLACE_GROUP_ID\nqq:private:REPLACE_USER_ID"
-                            }
-                          />
-                        </ProfileField>
-                        <span
-                          id="inbound-allowlist-help"
-                          className="field-help"
-                        >
-                          决定哪些平台消息可以进入 Runtime；被拒绝的消息不会创建
-                          turn。 每行一条 platform:group|private:ID，platform 和
-                          ID 支持 *。 空列表拒绝所有非 Web
-                          平台入站消息；无效行会保存但不生效。 Web
-                          保持原有认证边界。保存后需点击“应用当前配置”。
-                        </span>
-                      </label>
-                      <label className="field">
-                        <span>出站白名单</span>
-                        <ProfileField name="outboundAllowlistText">
-                          <textarea
-                            className="rule-editor"
-                            value={editorFields.outboundAllowlistText}
-                            onChange={(event) =>
-                              setEditorFields((current) =>
-                                current === undefined
-                                  ? current
-                                  : {
-                                      ...current,
-                                      outboundAllowlistText: event.target.value,
-                                    },
-                              )
-                            }
-                            rows={5}
-                            spellCheck={false}
-                            autoComplete="off"
-                            aria-describedby="outbound-allowlist-help"
-                            placeholder={
-                              "qq:group:REPLACE_GROUP_ID\nqq:private:REPLACE_USER_ID"
-                            }
-                          />
-                        </ProfileField>
-                        <span
-                          id="outbound-allowlist-help"
-                          className="field-help"
-                        >
-                          决定机器人可以向哪些群或用户投递；被拒绝时不会调用平台发送接口。跨会话发送仍需管理端确认。
-                          每行一条 platform:group|private:ID，platform 和 ID
-                          支持 *。 空列表拒绝所有非 Web
-                          平台出站消息；无效行会保存但不生效。 Web
-                          保持原有认证边界。保存后需点击“应用当前配置”。
-                        </span>
-                      </label>
+                      <div className="profile-allowlist-grid">
+                        <label className="field compact-field">
+                          <span>入站白名单</span>
+                          <ProfileField name="inboundAllowlistText">
+                            <textarea
+                              className="rule-editor"
+                              value={editorFields.inboundAllowlistText}
+                              onChange={(event) =>
+                                setEditorFields((current) =>
+                                  current === undefined
+                                    ? current
+                                    : {
+                                        ...current,
+                                        inboundAllowlistText:
+                                          event.target.value,
+                                      },
+                                )
+                              }
+                              rows={4}
+                              spellCheck={false}
+                              autoComplete="off"
+                              title="决定哪些平台消息可以进入 Runtime；每行一条 platform:group|private:ID，支持 *。"
+                              placeholder={
+                                "每行一条 platform:group|private:ID，支持 *\n例如 qq:group:123456"
+                              }
+                            />
+                          </ProfileField>
+                        </label>
+                        <label className="field compact-field">
+                          <span>出站白名单</span>
+                          <ProfileField name="outboundAllowlistText">
+                            <textarea
+                              className="rule-editor"
+                              value={editorFields.outboundAllowlistText}
+                              onChange={(event) =>
+                                setEditorFields((current) =>
+                                  current === undefined
+                                    ? current
+                                    : {
+                                        ...current,
+                                        outboundAllowlistText:
+                                          event.target.value,
+                                      },
+                                )
+                              }
+                              rows={4}
+                              spellCheck={false}
+                              autoComplete="off"
+                              title="决定机器人可以向哪些群或用户投递；每行一条 platform:group|private:ID，支持 *。"
+                              placeholder={
+                                "每行一条 platform:group|private:ID，支持 *\n例如 qq:private:123456"
+                              }
+                            />
+                          </ProfileField>
+                        </label>
+                      </div>
                     </fieldset>
                     <fieldset className="identity-fields">
                       <legend>Memory</legend>
                       <ProfileSectionIssues section="memory" />
-                      <label className="setup-check">
+                      <label
+                        className="setup-check"
+                        title="关闭时仅保留联想与 Prompt 协议形状，不读取、写入或召回实际信息。"
+                      >
                         <ProfileField name="memoryEnabled">
                           <input
                             type="checkbox"
@@ -1033,9 +1141,8 @@ function ProfileManagementScreen({
                             }
                           />
                         </ProfileField>
-                        <span>
-                          启用 Memory
-                          <br />
+                        <span>启用 Memory</span>
+                        <span className="wb-sr-only">
                           关闭时仅保留联想与 Prompt
                           协议形状，不读取、写入或召回实际信息。
                         </span>
@@ -1108,7 +1215,10 @@ function ModelTierEditor({
           />
         </ProfileField>
       </label>
-      <label className="setup-check thinking-toggle">
+      <label
+        className="setup-check thinking-toggle"
+        title="关闭时向 AI SDK 传递 reasoning: none。"
+      >
         <ProfileField name={`${tier}ThinkingEnabled`}>
           <input
             type="checkbox"
@@ -1122,82 +1232,78 @@ function ModelTierEditor({
             }
           />
         </ProfileField>
-        <span>
-          启用思考模式
-          <br />
+        <span>启用思考模式</span>
+        <span className="wb-sr-only">
           关闭时向 AI SDK 传递 reasoning: none。
         </span>
       </label>
-      <label className="field">
-        <span>Reasoning effort</span>
-        <ProfileField name={`${tier}ReasoningEffort`}>
-          <select
-            value={reasoningEffort}
-            disabled={!thinkingEnabled}
-            onChange={(event) =>
-              onChange(
-                light
-                  ? { lightReasoningEffort: event.target.value }
-                  : { heavyReasoningEffort: event.target.value },
-              )
-            }
-          >
-            <option value="provider-default">Provider 默认</option>
-            <option value="minimal">Minimal</option>
-            <option value="low">Low</option>
-            <option value="medium">Medium</option>
-            <option value="high">High</option>
-            <option value="xhigh">XHigh</option>
-          </select>
-        </ProfileField>
-      </label>
-      <label className="field">
-        <span>模型调用超时（秒）</span>
-        <ProfileField name={`${tier}TimeoutSeconds`}>
-          <input
-            type="number"
-            min="0.001"
-            max="300"
-            step="0.001"
-            value={
-              light ? fields.lightTimeoutSeconds : fields.heavyTimeoutSeconds
-            }
-            onChange={(event) =>
-              onChange(
-                light
-                  ? { lightTimeoutSeconds: event.target.value }
-                  : { heavyTimeoutSeconds: event.target.value },
-              )
-            }
-            placeholder="300"
-          />
-        </ProfileField>
-        <span className="field-help">
-          超过该时间会终止模型调用；留空使用 300 秒。
-        </span>
-      </label>
-      <label className="field">
-        <span>推荐响应时间（毫秒）</span>
-        <ProfileField name={`${tier}RecommendedDurationMs`}>
-          <input
-            type="number"
-            min="1"
-            max="300000"
-            step="1"
-            value={recommendedDurationMs}
-            onChange={(event) =>
-              onChange(
-                light
-                  ? { lightRecommendedDurationMs: event.target.value }
-                  : { heavyRecommendedDurationMs: event.target.value },
-              )
-            }
-          />
-        </ProfileField>
-        <span className="field-help">
-          软预算：仅供调度与观测参考，不会中断较慢但有效的调用。
-        </span>
-      </label>
+      <div className="model-tier-compact-grid">
+        <label className="field">
+          <span>Reasoning effort</span>
+          <ProfileField name={`${tier}ReasoningEffort`}>
+            <select
+              value={reasoningEffort}
+              disabled={!thinkingEnabled}
+              onChange={(event) =>
+                onChange(
+                  light
+                    ? { lightReasoningEffort: event.target.value }
+                    : { heavyReasoningEffort: event.target.value },
+                )
+              }
+            >
+              <option value="provider-default">Provider 默认</option>
+              <option value="minimal">Minimal</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="xhigh">XHigh</option>
+            </select>
+          </ProfileField>
+        </label>
+        <label className="field">
+          <span>模型调用超时（秒）</span>
+          <ProfileField name={`${tier}TimeoutSeconds`}>
+            <input
+              type="number"
+              min="0.001"
+              max="300"
+              step="0.001"
+              value={
+                light ? fields.lightTimeoutSeconds : fields.heavyTimeoutSeconds
+              }
+              onChange={(event) =>
+                onChange(
+                  light
+                    ? { lightTimeoutSeconds: event.target.value }
+                    : { heavyTimeoutSeconds: event.target.value },
+                )
+              }
+              placeholder="留空使用 300 秒"
+            />
+          </ProfileField>
+        </label>
+        <label className="field">
+          <span>推荐响应时间（毫秒）</span>
+          <ProfileField name={`${tier}RecommendedDurationMs`}>
+            <input
+              type="number"
+              min="1"
+              max="300000"
+              step="1"
+              value={recommendedDurationMs}
+              onChange={(event) =>
+                onChange(
+                  light
+                    ? { lightRecommendedDurationMs: event.target.value }
+                    : { heavyRecommendedDurationMs: event.target.value },
+                )
+              }
+              placeholder="例如 2000，仅供调度与观测参考"
+            />
+          </ProfileField>
+        </label>
+      </div>
     </fieldset>
   );
 }
@@ -1205,9 +1311,15 @@ function ModelTierEditor({
 function AdapterManagementSection({
   token,
   onRestartRequired,
+  children,
 }: {
   readonly token: string;
   readonly onRestartRequired: () => void;
+  readonly children: (
+    openNapCatConfiguration: () => void,
+    napCatWsUrl: string | undefined,
+    napCatEndpointState: "loading" | "ready" | "error",
+  ) => ReactNode;
 }) {
   const config = useMemo(() => ({ token }), [token]);
   const [enabled, setEnabled] = useState(false);
@@ -1220,6 +1332,9 @@ function AdapterManagementSection({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
+  const [endpointState, setEndpointState] = useState<
+    "loading" | "ready" | "error"
+  >("loading");
   const [configurationOpen, setConfigurationOpen] = useState(false);
 
   useEffect(() => {
@@ -1230,10 +1345,12 @@ function AdapterManagementSection({
         setSelfId(status.selfId ?? "");
         setReconnectMs(String(status.reconnectMs));
         setHasAccessToken(status.hasAccessToken);
+        setEndpointState("ready");
         setLoading(false);
       },
       (reason) => {
         setError(errorMessage(reason));
+        setEndpointState("error");
         setLoading(false);
       },
     );
@@ -1252,6 +1369,7 @@ function AdapterManagementSection({
         reconnectMs: Number(reconnectMs),
       });
       setHasAccessToken(result.status.hasAccessToken);
+      setEndpointState("ready");
       setConfigurationOpen(false);
       onRestartRequired();
     } catch (reason) {
@@ -1262,11 +1380,12 @@ function AdapterManagementSection({
   };
 
   return (
-    <div className="wb-adapter-main">
-      <AdapterStatusPanel
-        token={token}
-        onConfigureNapCat={() => setConfigurationOpen(true)}
-      />
+    <>
+      {children(
+        () => setConfigurationOpen(true),
+        wsUrl || undefined,
+        endpointState,
+      )}
       <Dialog.Root
         open={configurationOpen}
         onOpenChange={(open) => {
@@ -1381,7 +1500,7 @@ function AdapterManagementSection({
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
-    </div>
+    </>
   );
 }
 

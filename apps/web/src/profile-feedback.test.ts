@@ -115,3 +115,19 @@ describe("配置错误定位", () => {
     ).toBe("agentTimeZone");
   });
 });
+
+it("配置无问题时不渲染空摘要", async () => {
+  const { createElement } = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { ProfileFeedback, ProfileProblemSummary } =
+    await import("./profile-feedback.js");
+  const html = renderToStaticMarkup(
+    createElement(
+      ProfileFeedback,
+      { value: { issues: [], touch: () => {} } },
+      createElement(ProfileProblemSummary, { name: "default" }),
+    ),
+  );
+  expect(html).not.toContain("当前 Profile 问题摘要");
+  expect(html).not.toContain("0 个错误");
+});

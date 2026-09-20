@@ -4,15 +4,42 @@
  * 代码库关系：AppShell 引入；ui.tsx 与业务页可复用 wb-* 类，颜色只取现有 CSS variables。
  * 输入输出与副作用：仅布局与样式；适配主题、键盘焦点和 reduced-motion，无业务状态。 */
 .wb-shell {
+  position: relative;
+  isolation: isolate;
   min-height: 100dvh;
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);
   color: var(--kaguya-ink);
-  background: var(--kaguya-paper-soft);
+  background-color: #efece9;
+  background-image: url("/theme/bg-light.png");
+  background-size: 77px 133px;
+  background-attachment: fixed;
+}
+.wb-shell::before {
+  position: fixed;
+  z-index: 0;
+  inset: 0;
+  background-image: url("/theme/cloud.webp"), url("/theme/cloud.webp");
+  background-repeat: no-repeat;
+  background-position:
+    8% 14%,
+    90% 72%;
+  background-size:
+    202px 72px,
+    152px auto;
+  content: "";
+  opacity: 0.16;
+  pointer-events: none;
+}
+.wb-sidebar,
+.wb-body {
+  position: relative;
+  z-index: 1;
 }
 .wb-sidebar {
   border-right: 1px solid var(--kaguya-line);
-  background: var(--kaguya-paper);
+  background: color-mix(in srgb, var(--kaguya-paper) 88%, transparent);
+  backdrop-filter: blur(12px);
   padding: 24px 16px;
 }
 .wb-brand {
@@ -61,7 +88,8 @@
   gap: 12px;
   padding: 16px 24px;
   border-bottom: 1px solid var(--kaguya-line);
-  background: var(--kaguya-paper);
+  background: color-mix(in srgb, var(--kaguya-paper) 86%, transparent);
+  backdrop-filter: blur(12px);
 }
 .wb-profile-slot {
   margin-left: auto;
@@ -80,7 +108,14 @@
 }
 .wb-page-header h1 {
   font-size: 26px;
-  margin: 0 0 8px;
+  margin: 0;
+}
+.wb-page-title-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  min-width: 0;
 }
 .wb-page-header p {
   margin: 0;
@@ -261,11 +296,6 @@
   padding: 0;
   min-height: 0;
   width: 100%;
-}
-.wb-content .wb-adapter-main {
-  padding: 0;
-  width: 100%;
-  min-height: 0;
 }
 .wb-content .wb-message-workspace .chat-panel {
   height: 100%;

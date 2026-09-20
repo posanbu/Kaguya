@@ -13,7 +13,7 @@ import {
   ServerCog,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getAdapterStatus } from "./api.js";
 import { Button, PageHeader } from "./components/ui.js";
 import "./overview.css";
@@ -76,6 +76,7 @@ function OverviewTile({
   icon: Icon,
   onClick,
   detail,
+  meta,
 }: {
   title: string;
   status: string;
@@ -83,6 +84,7 @@ function OverviewTile({
   icon: LucideIcon;
   onClick?: (() => unknown) | undefined;
   detail?: string | undefined;
+  meta?: string | undefined;
 }) {
   return (
     <button
@@ -90,13 +92,14 @@ function OverviewTile({
       className={`overview-tile overview-tile-${tone}`}
       onClick={onClick}
       disabled={!onClick}
-      aria-label={`${title}：${status}${onClick ? "，打开" : ""}`}
+      aria-label={`${title}：${status}${meta ? `，${meta}` : ""}${onClick ? "，打开" : ""}`}
     >
       <span className="overview-tile-icon" aria-hidden="true">
         <Icon />
       </span>
       <span className="overview-tile-title">{title}</span>
       <strong className="overview-tile-status">{status}</strong>
+      {meta ? <span className="overview-tile-meta">{meta}</span> : null}
       {detail && <span className="wb-sr-only">{detail}</span>}
     </button>
   );
@@ -142,15 +145,41 @@ function adapterTitle(type: string) {
   if (type.toLowerCase() === "web") return "Web";
   return type;
 }
+
+export function napCatEndpointLabel(wsUrl: string | undefined) {
+  if (!wsUrl) return undefined;
+  try {
+    const endpoint = new URL(wsUrl);
+    if (endpoint.protocol !== "ws:" && endpoint.protocol !== "wss:")
+      return undefined;
+    const protocol = endpoint.protocol.slice(0, -1).toUpperCase();
+    const port = endpoint.port || (endpoint.protocol === "wss:" ? "443" : "80");
+    return `${protocol} · ${port}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function adapterOrder(type: string) {
+  const normalized = type.toLowerCase();
+  if (normalized === "web") return 0;
+  if (normalized === "napcat") return 1;
+  return 2;
+}
+
 export function Overview({
   token,
   navigate,
-  adapterSection,
+  onConfigureNapCat,
+  napCatWsUrl,
+  napCatEndpointState,
   focusAdapters = false,
 }: {
   token: string;
   navigate: (path: string) => unknown;
-  adapterSection: ReactNode;
+  onConfigureNapCat: () => unknown;
+  napCatWsUrl?: string | undefined;
+  napCatEndpointState: "loading" | "ready" | "error";
   focusAdapters?: boolean;
 }) {
   const adapters = useRead(token, readAdapters);
@@ -202,18 +231,7 @@ export function Overview({
               ? "Runtime 状态读取失败，可刷新概览重试。"
               : undefined
           }
-          onClick={
-            runtime
-              ? () =>
-                  navigate(
-                    runtime.ingress === "ready"
-                      ? "/messages"
-                      : runtime.reason === "configuration_not_ready"
-                        ? "/profiles"
-                        : "/configuration/application",
-                  )
-              : undefined
-          }
+          onClick={() => navigate("/profiles")}
         />
         <OverviewTile
           title="Adapter"
@@ -239,20 +257,6 @@ export function Overview({
           }
           onClick={adapters.data ? () => navigate("/adapters") : undefined}
         />
-        {adapters.data?.adapters.map((adapter) => {
-          const status = adapterStatus(adapter);
-          return (
-            <OverviewTile
-              key={adapter.adapterId}
-              title={adapterTitle(adapter.type)}
-              status={status.label}
-              tone={status.tone}
-              icon={adapter.type.toLowerCase() === "web" ? Globe2 : Cable}
-              detail={`Adapter ${adapter.adapterId}`}
-              onClick={() => navigate("/adapters")}
-            />
-          );
-        })}
       </div>
       <section
         className="overview-adapter-section"
@@ -261,7 +265,40 @@ export function Overview({
         <h2 id="overview-adapter-title" ref={adapterHeading} tabIndex={-1}>
           接入
         </h2>
-        {adapterSection}
+        <div className="overview-grid overview-adapter-grid" aria-live="polite">
+          {adapters.data?.adapters
+            .toSorted(
+              (left, right) =>
+                adapterOrder(left.type) - adapterOrder(right.type),
+            )
+            .map((adapter) => {
+              const status = adapterStatus(adapter);
+              const type = adapter.type.toLowerCase();
+              return (
+                <OverviewTile
+                  key={adapter.adapterId}
+                  title={adapterTitle(adapter.type)}
+                  status={status.label}
+                  tone={status.tone}
+                  icon={type === "web" ? Globe2 : Cable}
+                  detail={`Adapter ${adapter.adapterId}`}
+                  meta={
+                    type === "napcat"
+                      ? napCatEndpointState === "loading"
+                        ? "端点读取中"
+                        : napCatEndpointState === "error"
+                          ? "端点读取失败"
+                          : (napCatEndpointLabel(napCatWsUrl) ??
+                            "协议/端口未配置")
+                      : type === "web"
+                        ? "默认组件 · 无需配置"
+                        : undefined
+                  }
+                  onClick={type === "napcat" ? onConfigureNapCat : undefined}
+                />
+              );
+            })}
+        </div>
       </section>
     </>
   );

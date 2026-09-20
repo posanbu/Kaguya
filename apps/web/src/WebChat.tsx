@@ -1,32 +1,17 @@
 /**
- * 功能概述：承载 WebUI 的双向私聊界面，沿用工作台主题、顶部连接检测和固定输入区。
+ * 功能概述：承载 WebUI 的双向私聊界面，沿用工作台主题和固定输入区。
  * 主要职责：WebChat 展示历史恢复、用户/助手消息与未确认消息的重新发送；新对话创建独立会话，
  * 输入保留 Enter 发送、Shift+Enter 换行、中文输入法保护与 Unicode 字数上限。
  * 代码库关系：App.tsx 仅在消息路由挂载本组件并持有 draft，onDraftChange 同步编辑以保留导航前草稿；
- * useWebChat 管理会话和网络状态；
- * api.ts 提供公共健康检查，components/ui.tsx 提供标题、按钮与单一错误反馈。
+ * useWebChat 管理会话和网络状态；components/ui.tsx 提供标题、按钮与单一错误反馈。
  * 输入输出与副作用：回复以完整消息同步，不模拟逐字生成；仅位于底部或主动发送时跟随
- * 新消息，避免阅读历史被打断。卸载取消健康检查，hook 负责取消聊天读写。
+ * 新消息，避免阅读历史被打断；hook 负责取消聊天读写。
  */
-import { LoaderCircle, Plus, RefreshCw, SendHorizontal } from "lucide-react";
-import {
-  useEffect,
-  useRef,
-  useState,
-  type FormEvent,
-  type KeyboardEvent,
-} from "react";
-import { checkGatewayHealth, MAX_MESSAGE_LENGTH } from "./api.js";
+import { LoaderCircle, Plus, SendHorizontal } from "lucide-react";
+import { useEffect, useRef, type FormEvent, type KeyboardEvent } from "react";
+import { MAX_MESSAGE_LENGTH } from "./api.js";
 import { Button, FieldMessage, PageHeader } from "./components/ui.js";
 import { useWebChat } from "./useWebChat.js";
-
-type HealthState = "idle" | "checking" | "online" | "offline";
-const HEALTH_LABEL: Record<HealthState, string> = {
-  idle: "检测连接",
-  checking: "检测中",
-  online: "服务可用",
-  offline: "连接失败",
-};
 
 export function WebChat({
   token,
@@ -38,11 +23,9 @@ export function WebChat({
   readonly onDraftChange: (draft: string) => void;
 }) {
   const chat = useWebChat(token);
-  const [healthState, setHealthState] = useState<HealthState>("idle");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messageListRef = useRef<HTMLDivElement>(null);
   const followLatestRef = useRef(true);
-  const healthControllerRef = useRef<AbortController | undefined>(undefined);
   const draftLength = [...draft].length;
   const canSend =
     !chat.isSending &&
@@ -53,26 +36,6 @@ export function WebChat({
     const list = messageListRef.current;
     if (list && followLatestRef.current) list.scrollTop = list.scrollHeight;
   }, [chat.messages]);
-
-  useEffect(() => () => healthControllerRef.current?.abort(), []);
-
-  const checkConnection = async () => {
-    healthControllerRef.current?.abort();
-    const controller = new AbortController();
-    healthControllerRef.current = controller;
-    setHealthState("checking");
-    try {
-      await checkGatewayHealth((input, init) =>
-        fetch(input, { ...init, signal: controller.signal }),
-      );
-      if (!controller.signal.aborted) {
-        setHealthState("online");
-        chat.refresh();
-      }
-    } catch {
-      if (!controller.signal.aborted) setHealthState("offline");
-    }
-  };
 
   const submitMessage = async (event?: FormEvent) => {
     event?.preventDefault();
@@ -100,34 +63,19 @@ export function WebChat({
       <PageHeader
         title="消息"
         actions={
-          <>
-            <Button
-              onClick={() => {
-                chat.newConversation();
-                setDraft("");
-                followLatestRef.current = true;
-                textareaRef.current?.focus();
-              }}
-              disabled={chat.isSending}
-              title="开始独立的新对话"
-            >
-              <Plus size={15} aria-hidden="true" />
-              新对话
-            </Button>
-            <Button
-              className={`health-button ${healthState}`}
-              onClick={() => void checkConnection()}
-              disabled={healthState === "checking"}
-              title="检测 Kaguya 服务连接"
-            >
-              <RefreshCw
-                className={healthState === "checking" ? "spin" : undefined}
-                size={15}
-                aria-hidden="true"
-              />
-              <span aria-live="polite">{HEALTH_LABEL[healthState]}</span>
-            </Button>
-          </>
+          <Button
+            onClick={() => {
+              chat.newConversation();
+              setDraft("");
+              followLatestRef.current = true;
+              textareaRef.current?.focus();
+            }}
+            disabled={chat.isSending}
+            title="开始独立的新对话"
+          >
+            <Plus size={15} aria-hidden="true" />
+            新对话
+          </Button>
         }
       />
       <main className="workspace wb-message-workspace" aria-label="消息会话">

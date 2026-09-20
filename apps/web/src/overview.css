@@ -77,6 +77,13 @@
   font-size: 15px;
   line-height: 1.25;
 }
+.overview-tile-meta {
+  margin-top: 4px;
+  color: var(--kaguya-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+}
 .overview-adapter-section {
   margin-top: 40px;
   scroll-margin-top: 24px;
@@ -88,9 +95,6 @@
 }
 .overview-adapter-section > h2:focus {
   outline: none;
-}
-.overview-adapter-section .adapter-status-panel {
-  margin-bottom: 0;
 }
 @media (max-width: 520px) {
   .overview-grid {
