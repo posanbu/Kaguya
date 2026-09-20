@@ -1,6 +1,8 @@
 /**
  * 功能概述：初始化并校验 PostgreSQL v1 账本；prepareLifecycleProjection 建立可重建的开放集合及 scope 槽。
  * 主要职责：prepareDatabaseSchema 在启动事务中校验既有结构并首次回填投影；后续启动不扫描历史。
+ * prepareWebMemoryDestination 兼容旧 Web 目标约束，允许 conversationId 索引；旧 NULL 行不改写。
+ * lifecycle 回填与在线追加使用同一 Web conversationId scope，保持历史查询和观察范围一致。
  * 代码库关系：InformationRepository 同事务维护投影，ReliableInformationRepository 锁定 scope head；原子仍只追加。
  * 输入输出与副作用：执行 DDL 与首次历史回填；不支持的账本结构报错，失败回滚全部 schema 变更。
  */
@@ -115,6 +117,7 @@ export async function prepareDatabaseSchema(
     }
     if (tableNames.has("kaguya_schema_metadata")) {
       await validateCurrentSchema(tx, tableNames);
+      await prepareWebMemoryDestination(tx);
       await prepareLifecycleProjection(tx);
       return;
     }
@@ -197,8 +200,8 @@ export async function prepareDatabaseSchema(
         destination_kind text NOT NULL
           CHECK (destination_kind IN ('private', 'group', 'web')),
         destination_id text,
-        CHECK (
-          (destination_kind = 'web' AND destination_id IS NULL)
+        CONSTRAINT memory_documents_destination_check CHECK (
+          destination_kind = 'web'
           OR (destination_kind IN ('private', 'group') AND destination_id IS NOT NULL)
         )
       );
@@ -338,6 +341,27 @@ async function validateCurrentSchema(
   }
 }
 
+/** 旧 v1 匿名 Web 约束只阻止新增会话 ID；替换后保留原行及 QQ 目标非空要求。 */
+async function prepareWebMemoryDestination(
+  tx: import("./driver.js").SqlTransaction,
+): Promise<void> {
+  await tx.query("SELECT pg_advisory_xact_lock(168168)");
+  const current = await tx.query<{ name: string }>(
+    `SELECT conname AS name FROM pg_constraint
+     WHERE conrelid = 'memory_documents'::regclass
+       AND conname = 'memory_documents_destination_check'`,
+  );
+  if (current.rows.length > 0) return;
+  await tx.exec(`
+    ALTER TABLE memory_documents
+      DROP CONSTRAINT IF EXISTS memory_documents_check,
+      ADD CONSTRAINT memory_documents_destination_check CHECK (
+        destination_kind = 'web'
+        OR (destination_kind IN ('private', 'group') AND destination_id IS NOT NULL)
+      );
+  `);
+}
+
 /** 可重建的开放集合与 scope head；旧账本仅首次建表回填，不改写业务事实。 */
 async function prepareLifecycleProjection(
   tx: import("./driver.js").SqlTransaction,
@@ -374,7 +398,11 @@ async function prepareLifecycleProjection(
           (a.payload->'source'->>'platform') || ':' || (a.payload->'source'->>'adapterId') || ':' ||
           COALESCE(a.payload->'source'->'destination'->>'kind','unknown') || ':' ||
           COALESCE(a.payload->'source'->'destination'->>'groupId', a.payload->'source'->'destination'->>'userId',
-            a.payload->'source'->'destination'->>'channelId', a.payload->'source'->'destination'->>'id', '') END), a.occurred_at::timestamptz,
+            a.payload->'source'->'destination'->>'channelId', a.payload->'source'->'destination'->>'id',
+            a.payload->'source'->'destination'->>'conversationId', '')
+        WHEN a.payload->>'platform' = 'web' AND a.payload->'target'->>'kind' = 'web' THEN
+          'web:' || (a.payload->>'adapterId') || ':web:' ||
+          COALESCE(a.payload->'target'->>'conversationId', '') END), a.occurred_at::timestamptz,
         NOT EXISTS (SELECT 1 FROM information_references r
           WHERE r.target_information_id=a.information_id AND r.relation='core:status-of')
         AND NOT EXISTS (SELECT 1 FROM information_commit_slots s

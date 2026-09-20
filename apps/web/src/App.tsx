@@ -28,9 +28,11 @@
  * 而重复请求并触发服务端限流。开发者入口使用 history 路径，复用内存 Token；
  * 工作台由 AppShell 统一承载，useWorkbenchRouter 保护 history 导航；根路径预留概览，
  * /messages、/profiles、/configuration/application、/adapters 分别提供任务入口。
- * 人工跨会话管理界面已移除；所有状态仅驻留当前页面。
+ * 人工跨会话管理界面已移除；会话 UUID 由 WebChat 保存，凭据与编辑状态仅驻留当前页面。
  * DeveloperConsole 接收完整 pathname 以恢复模块详情，负责只读查询与取消，401 继续由本文件统一锁屏。
- * 消息与接入页面复用 PageHeader/Button/FieldMessage，DeliveryStatus 以 StatusBadge 展示投递状态。
+ * 消息页由 WebChat 管理独立浏览器会话、历史恢复与完整回复轮询，连接检测保留在标题栏；
+ * 离开消息页会取消在途请求，未发送草稿保留在 App，返回消息页可继续编辑；
+ * 401 继续通过全局事件锁屏，其他 Profile 管理状态互不影响。
  */
 import { AppShell, useWorkbenchRouter } from "./components/AppShell.js";
 import {
@@ -39,6 +41,7 @@ import {
   useProfileWorkspace,
 } from "./ProfileWorkspace.js";
 import { Overview } from "./Overview.js";
+import { WebChat } from "./WebChat.js";
 import {
   Button,
   FieldMessage,
@@ -72,23 +75,14 @@ import {
   Moon,
   RefreshCw,
   Save,
-  SendHorizontal,
   Settings2,
   Sun,
   Trash2,
 } from "lucide-react";
-import {
-  FormEvent,
-  KeyboardEvent,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { ConfigurationApplicationScreen } from "./ConfigurationApplicationScreen.js";
 import {
-  checkGatewayHealth,
   deleteProfile,
   discoverModels,
   GatewayConfig,
@@ -97,12 +91,10 @@ import {
   getNapCatStatus,
   getProfile,
   listProfiles,
-  MAX_MESSAGE_LENGTH,
   ProfileMetadata,
   replaceProfile,
   saveNapCatSettings,
   selectProfile,
-  sendMessage,
   type ConfigurationIssue,
   type ConfigurationStatus,
   type ConfigurationWarning,
@@ -116,19 +108,8 @@ import {
   type ProfileEditorFields,
 } from "./profile-editor.js";
 
-type DeliveryState = "sending" | "accepted" | "failed";
-type HealthState = "idle" | "checking" | "online" | "offline";
 type ConfigurationView =
   "locked" | "checking" | "profiles" | "napcat" | "restart" | "chat" | "error";
-
-interface ChatMessage {
-  readonly id: string;
-  readonly text: string;
-  readonly createdAt: Date;
-  readonly state: DeliveryState;
-  readonly requestId?: string;
-  readonly error?: string;
-}
 
 interface ClearedLoadedProfileStateSnapshot {
   readonly requestSequence: number;
@@ -148,17 +129,7 @@ export function App() {
   const [configurationStatus, setConfigurationStatus] =
     useState<ConfigurationStatus>();
   const [configurationError, setConfigurationError] = useState<string>();
-  const [healthState, setHealthState] = useState<HealthState>("idle");
-  const [draft, setDraft] = useState("");
-  const [messages, setMessages] = useState<readonly ChatMessage[]>([]);
-  const [formError, setFormError] = useState<string>();
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-  const isSending = messages.some((message) => message.state === "sending");
-  const draftLength = [...draft].length;
-  const canSend =
-    !isSending && draft.trim().length > 0 && draftLength <= MAX_MESSAGE_LENGTH;
-
+  const [chatDraft, setChatDraft] = useState("");
   const loadConfigurationStatus = async (options?: {
     readonly keepProfilesOpen?: boolean;
   }) => {
@@ -215,73 +186,6 @@ export function App() {
     window.addEventListener(GATEWAY_UNAUTHORIZED_EVENT, lock);
     return () => window.removeEventListener(GATEWAY_UNAUTHORIZED_EVENT, lock);
   }, []);
-
-  const checkConnection = async () => {
-    setHealthState("checking");
-    setFormError(undefined);
-    try {
-      await checkGatewayHealth();
-      setHealthState("online");
-    } catch (error) {
-      setHealthState("offline");
-      setFormError(errorMessage(error));
-    }
-  };
-
-  const submitMessage = async (event?: FormEvent) => {
-    event?.preventDefault();
-    if (!canSend) {
-      return;
-    }
-
-    setFormError(undefined);
-    const text = draft;
-    const id = crypto.randomUUID();
-    const pendingMessage: ChatMessage = {
-      id,
-      text,
-      createdAt: new Date(),
-      state: "sending",
-    };
-    setMessages((current) => [...current, pendingMessage]);
-    setDraft("");
-
-    try {
-      const response = await sendMessage({ token }, { text });
-      setMessages((current) =>
-        current.map((message) =>
-          message.id === id
-            ? {
-                ...message,
-                state: "accepted",
-                requestId: response.requestId,
-              }
-            : message,
-        ),
-      );
-    } catch (error) {
-      const message = errorMessage(error);
-      setMessages((current) =>
-        current.map((item) =>
-          item.id === id ? { ...item, state: "failed", error: message } : item,
-        ),
-      );
-      setFormError(message);
-    } finally {
-      textareaRef.current?.focus();
-    }
-  };
-
-  const onComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (
-      event.key === "Enter" &&
-      !event.shiftKey &&
-      !event.nativeEvent.isComposing
-    ) {
-      event.preventDefault();
-      void submitMessage();
-    }
-  };
 
   if (configurationView === "locked") {
     return <AccessLinkRequired invalid={invalidAccessLink} />;
@@ -348,123 +252,7 @@ export function App() {
     }
 
     return (
-      <div className="app-shell">
-        <PageHeader
-          title="消息"
-          description="向当前 Web 会话提交消息并查看接收状态。"
-        />
-        <main className="workspace wb-message-workspace">
-          <aside
-            className="connection-panel"
-            aria-labelledby="connection-title"
-          >
-            <div className="panel-heading">
-              <div>
-                <p className="eyebrow">连接配置</p>
-                <h2 id="connection-title">Kaguya 服务</h2>
-              </div>
-              <Button
-                type="button"
-                className={`health-button ${healthState}`}
-                onClick={() => void checkConnection()}
-                disabled={healthState === "checking"}
-                title="检测 Kaguya 服务连接"
-              >
-                <RefreshCw
-                  className={healthState === "checking" ? "spin" : undefined}
-                  size={15}
-                />
-                <span>{healthLabel(healthState)}</span>
-              </Button>
-            </div>
-
-            <div className="boundary-note">
-              <p>当前服务仅接受消息。</p>
-              <span>模型配置和回复由核心层管理。</span>
-            </div>
-          </aside>
-
-          <section className="chat-panel" aria-labelledby="chat-title">
-            <header className="chat-heading">
-              <div>
-                <p className="eyebrow">消息入口</p>
-                <h2 id="chat-title">发送消息</h2>
-              </div>
-              <Button
-                type="button"
-                className="secondary-button"
-                onClick={() => void navigate("/profiles")}
-              >
-                <Settings2 size={16} />
-                <span>配置</span>
-              </Button>
-            </header>
-
-            <div className="message-list" aria-live="polite">
-              {messages.length === 0 ? (
-                <div className="empty-state">
-                  <p>暂无消息</p>
-                </div>
-              ) : (
-                messages.map((message) => (
-                  <article className="message-row" key={message.id}>
-                    <div className="message-meta">
-                      <strong>你</strong>
-                      <time dateTime={message.createdAt.toISOString()}>
-                        {formatTime(message.createdAt)}
-                      </time>
-                    </div>
-                    <p className="message-body">{message.text}</p>
-                    <DeliveryStatus message={message} />
-                  </article>
-                ))
-              )}
-            </div>
-
-            <form
-              className="composer"
-              onSubmit={(event) => void submitMessage(event)}
-            >
-              {formError ? (
-                <FieldMessage tone="error">{formError}</FieldMessage>
-              ) : null}
-              <textarea
-                ref={textareaRef}
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                onKeyDown={onComposerKeyDown}
-                rows={3}
-                placeholder="输入消息"
-                aria-label="消息内容"
-              />
-              <div className="composer-footer">
-                <span
-                  className={
-                    draftLength > MAX_MESSAGE_LENGTH
-                      ? "limit exceeded"
-                      : "limit"
-                  }
-                >
-                  {draftLength.toLocaleString()} /{" "}
-                  {MAX_MESSAGE_LENGTH.toLocaleString()}
-                </span>
-                <Button
-                  className="send-button"
-                  type="submit"
-                  disabled={!canSend}
-                >
-                  {isSending ? (
-                    <LoaderCircle className="spin" size={18} />
-                  ) : (
-                    <SendHorizontal size={18} />
-                  )}
-                  <span>{isSending ? "发送中" : "发送"}</span>
-                </Button>
-              </div>
-            </form>
-          </section>
-        </main>
-      </div>
+      <WebChat token={token} draft={chatDraft} onDraftChange={setChatDraft} />
     );
   };
   return (
@@ -1737,38 +1525,6 @@ function readTheme(): Theme {
   return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
 }
 
-function DeliveryStatus({ message }: { readonly message: ChatMessage }) {
-  if (message.state === "sending") {
-    return (
-      <p className="delivery-status sending">
-        <StatusBadge>
-          <LoaderCircle className="spin" size={15} />
-          正在提交
-        </StatusBadge>
-      </p>
-    );
-  }
-  if (message.state === "accepted") {
-    return (
-      <p className="delivery-status accepted" title={message.requestId}>
-        <StatusBadge tone="success">
-          <CheckCircle2 size={15} />
-          服务已接收
-          <code>{shortRequestId(message.requestId)}</code>
-        </StatusBadge>
-      </p>
-    );
-  }
-  return (
-    <p className="delivery-status failed">
-      <StatusBadge tone="error">
-        <AlertCircle size={15} />
-        {message.error ?? "提交失败"}
-      </StatusBadge>
-    </p>
-  );
-}
-
 export function readGatewayToken(
   hash = typeof location === "undefined" ? "" : location.hash,
 ): string {
@@ -1883,32 +1639,4 @@ function errorMessage(error: unknown): string {
 
 function isUnauthorized(error: unknown): boolean {
   return error instanceof GatewayRequestError && error.status === 401;
-}
-
-function healthLabel(state: HealthState): string {
-  if (state === "checking") {
-    return "检测中";
-  }
-  if (state === "online") {
-    return "服务可用";
-  }
-  if (state === "offline") {
-    return "连接失败";
-  }
-  return "检测连接";
-}
-
-function formatTime(value: Date): string {
-  return new Intl.DateTimeFormat("zh-CN", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).format(value);
-}
-
-function shortRequestId(requestId: string | undefined): string {
-  if (!requestId) {
-    return "";
-  }
-  return requestId.length > 12 ? `${requestId.slice(0, 12)}...` : requestId;
 }

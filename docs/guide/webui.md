@@ -51,15 +51,13 @@ Server 只允许监听 selected Profile `runtime.host` 中的 `127.0.0.1`、`loc
 
 `default` Profile 不能删除；当前 selected Profile 也不能删除。创建新 Profile 会继承 selected Profile 的隐藏 runtime，但不会自动选中或改变正在运行的 Runtime。Web 不展示、返回或修改数据库 URL 等 runtime 字段，只把 gateway allowlist 作为安全顶层字段编辑。字段含义与操作顺序见[配置 Kaguya](./configuration)。
 
-## 提交消息
+## 与机器人对话
 
-消息界面目前只接受文本。提交后页面可能显示 accepted，并附带 requestId；这表示 Web gateway 已接收请求并开始后台分发，不表示 Runtime 已完成、模型已生成回复或平台已经投递。
+在“消息”页输入文字即可与 Kaguya 私聊，Enter 发送，Shift + Enter 换行。用户消息和机器人回复分别显示在右侧和左侧。连接检测位于页面顶部，输入区固定在底部。
 
-Web gateway 会把输入规范化为 `web` 平台消息，使用 `web:${requestId}` 作为 traceId，然后异步调用 Runtime。当前没有回复查询接口或 SSE，所以页面不会显示真正的模型回复流。
+浏览器保存当前会话标识，刷新页面后从服务端恢复记录。“新对话”创建独立会话，其上下文与先前会话分开；旧记录仍保存在服务端，但当前界面尚未提供会话列表。会话标识不含访问令牌，也不代替 Gateway 认证。
 
-::: info accepted 不是聊天回答
-`202 accepted` 是接收确认。若要验证后台处理，需结合 Server 日志、PostgreSQL 信息账本或接入具备 outbound transport 的平台。
-:::
+回复沿用 Runtime 的私聊处理与投递流程，完成后以完整消息显示；当前不逐字流式输出。页面每两秒增量同步，断线时退避重连，离开消息页后停止同步。切换页面会保留未发送草稿，刷新页面会清空草稿。
 
 ## 常见操作结果
 
@@ -67,7 +65,9 @@ Web gateway 会把输入规范化为 `web` 平台消息，使用 `web:${requestI
 
 **503 runtime_unavailable** — Runtime ingress 不可用或 Server 正在停止。进入 Gateway / Adapter 查看原因，修复后重启。
 
-**accepted 但没有回答** — 属于当前 Web 协议的正常边界，不是前端伪造失败。
+**消息已发送但没有回答** — 接收确认早于模型回复；若持续没有回答，检查已运行 Profile 的模型连接及 Server 日志，确认核心是否选择回复、模型请求是否成功。
+
+**发送未确认** — 请求失败时文字仍保留在消息区。页面会继续检查服务端是否已收到；选择“重新发送”会提交一条新消息，因此在网络恢复前不宜反复点击。
 
 **Web UI 可用但 NapCat 不响应** — HTTP/Web 与 NapCat 生命周期相互隔离；检查 `module=adapter:napcat` 日志。
 

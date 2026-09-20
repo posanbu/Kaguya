@@ -8,6 +8,7 @@
  * history 使用 entry index/go 恢复取消的后退/前进，不 push 截断历史；并发导航只保留首个请求。
  * 输入输出与副作用：导航守卫返回 false 时保留当前页和抽屉；成功导航关闭抽屉。
  * 抽屉由 Radix 管理焦点圈定、Escape 和触发器焦点恢复；不读取或持久化 Token。
+ * 消息路由使用独立布局标记，使消息记录在视口内滚动、输入区保持可见，不影响长表单页面。
  */
 import {
   createContext,
@@ -221,7 +222,9 @@ export function AppShell({
     <NavigationContext.Provider
       value={{ navigate, register: registerNavigationGuard }}
     >
-      <div className="wb-shell">
+      <div
+        className={`wb-shell${currentPath === "/messages" ? " wb-shell-messages" : ""}`}
+      >
         <a className="wb-skip" href="#workbench-content">
           跳转到页面内容
         </a>

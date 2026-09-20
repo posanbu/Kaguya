@@ -1,4 +1,7 @@
-/* Profile 顶栏及单栏配置布局；复用工作台颜色与 Radix 弹层。 */
+/* 功能概述：管理 Profile 顶栏、编辑菜单和单栏配置表单的响应式布局。
+ * 主要职责：编辑按钮与运行摘要按可用宽度自然换行，长名称可折行；菜单限制高度并独立滚动。
+ * 代码库关系：由 ProfileWorkspace.tsx 引入，复用工作台主题变量、AppShell 顶栏和 Radix 弹层。
+ * 输入输出与副作用：仅呈现编辑/运行状态与字段反馈；窄屏保留运行摘要，不改变选择及应用行为。 */
 .profile-switcher {
   display: flex;
   flex-wrap: wrap;
@@ -12,14 +15,11 @@
 .profile-switcher > button span {
   overflow-wrap: anywhere;
 }
-.profile-status-line,
 .profile-runtime-line {
+  min-width: 0;
   font-size: 12px;
   overflow-wrap: anywhere;
-}
-.profile-runtime-line {
-  flex-basis: 100%;
-  color: var(--kaguya-ink-muted);
+  color: var(--kaguya-muted);
 }
 .profile-menu {
   max-height: min(70vh, 560px);
@@ -84,9 +84,6 @@
   }
   .profile-switcher {
     gap: 4px;
-  }
-  .profile-status-line {
-    display: none;
   }
   .profile-switcher > button {
     padding: 8px;

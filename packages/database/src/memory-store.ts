@@ -3,6 +3,7 @@
  * getBySource 重载已持久化来源，listDocuments 以 memoryId 游标提供有界历史回填。
  * 主要职责：校验文档/查询、原子写入文档和 Unicode 2-gram、按可选原生 key 过滤，
  * 并以查询 gram 覆盖率和时间产生稳定结果。
+ * Web 行以 destination_id 保存 conversationId，读取恢复会话目标；NULL 继续表示旧匿名 Web。
  * memoryRecallPredicates 为 sparse 与 pgvector 共用，分别约束事件时间和 created_at 入库截止点。
  * 代码库关系：KaguyaDatabase 暴露本仓储；Runtime 将 recall 适配为 Information
  * retrieval strategy；表结构由 schema.ts 建立，Memory 行不属于 append-only ledger。
@@ -25,7 +26,10 @@ import {
   type MemoryRecallQuery,
   type MemoryScopeKey,
 } from "@kaguya/memory";
-import type { PlatformDestination } from "@kaguya/schema";
+import {
+  webConversationIdSchema,
+  type PlatformDestination,
+} from "@kaguya/schema";
 
 import type { SqlDatabase, SqlTransaction } from "./driver.js";
 
@@ -244,8 +248,12 @@ function rowToDestination(row: MemoryDocumentRow): PlatformDestination {
       throw new Error("Invalid group memory row");
     return { kind: "group", groupId: row.destination_id };
   }
-  if (row.destination_id !== null) throw new Error("Invalid web memory row");
-  return { kind: "web" };
+  return row.destination_id === null
+    ? { kind: "web" }
+    : {
+        kind: "web",
+        conversationId: webConversationIdSchema.parse(row.destination_id),
+      };
 }
 
 function sameDocumentInput(

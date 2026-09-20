@@ -1,5 +1,6 @@
 /* 功能概述：工作台壳层、公共反馈和 Radix 弹层的响应式视觉契约。
  * 主要职责：五域导航在桌面常驻、窄屏改为全高抽屉；页面内容允许缩窄和长文本折行。
+ * 消息路由单独分配视口高度，标题与输入区不随记录滚动；其他页面保持文档滚动。
  * 代码库关系：AppShell 引入；ui.tsx 与业务页可复用 wb-* 类，颜色只取现有 CSS variables。
  * 输入输出与副作用：仅布局与样式；适配主题、键盘焦点和 reduced-motion，无业务状态。 */
 .wb-shell {
@@ -255,10 +256,11 @@
 
 /* 消息与接入页在公共内容区域内排版，避免叠加旧页面的视口高度和边距。 */
 .wb-content .wb-message-workspace {
+  display: block;
+  flex: 1;
   padding: 0;
   min-height: 0;
   width: 100%;
-  grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
 }
 .wb-content .wb-adapter-main {
   padding: 0;
@@ -266,7 +268,8 @@
   min-height: 0;
 }
 .wb-content .wb-message-workspace .chat-panel {
-  min-height: 480px;
+  height: 100%;
+  min-height: 0;
 }
 .wb-content .panel-heading {
   flex-wrap: wrap;
@@ -292,12 +295,6 @@
 .wb-content .delivery-status {
   flex-wrap: wrap;
 }
-@media (max-width: 1100px) {
-  .wb-content .wb-message-workspace {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
 :root[data-theme] .wb-content > .app-shell,
 :root[data-theme] .wb-content > .setup-shell {
   background: transparent;
@@ -308,6 +305,61 @@
 :root[data-theme] .wb-content > .app-shell::after,
 :root[data-theme] .wb-content > .setup-shell::after {
   display: none;
+}
+
+.wb-shell-messages {
+  height: 100dvh;
+  min-height: 480px;
+}
+.wb-shell-messages .wb-body,
+.wb-shell-messages .wb-content,
+.wb-content > .message-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.wb-shell-messages .wb-content,
+.wb-content > .message-page {
+  flex: 1;
+}
+.wb-shell-messages .wb-topbar {
+  flex-shrink: 0;
+}
+.wb-shell-messages .wb-topbar-label {
+  display: none;
+}
+.wb-shell-messages .wb-profile-slot {
+  flex: 1;
+  margin-left: 0;
+}
+.message-page .wb-page-header {
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px 16px;
+  margin-bottom: 16px;
+}
+.message-page .wb-page-header h1 {
+  margin: 0;
+  font-size: 24px;
+}
+.message-page .wb-page-actions {
+  align-items: center;
+  gap: 12px;
+}
+.message-scope {
+  color: var(--kaguya-muted);
+  font-size: 12px;
+}
+@media (max-width: 520px) {
+  .message-page .wb-page-header {
+    margin-bottom: 12px;
+  }
+  .message-page .wb-page-header h1 {
+    font-size: 22px;
+  }
+  .message-page .wb-page-actions {
+    gap: 8px;
+  }
 }
 
 /* 页面说明默认按需展开；主操作、只读状态与辅助信息使用不同层级。 */

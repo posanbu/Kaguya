@@ -11,6 +11,7 @@
  * inspectPage 为控制台提供时间/ID 复合游标和有界反向引用查询，不修改业务 find/query。
  * kinds 支持模块视图的多 Kind 过滤，与单 Kind/source/时间条件取交集，先过滤再分页。
  * lifecycle 投影支持开放集合、scope 索引和注册位置水位；原子追加及 status-of 关闭在同一事务提交。
+ * Web conversationId 纳入来源/投递回执 scope 与同 scope 写锁，位置分配不越过同会话未提交记录。
  * 读取返回经过 schema 校验并深冻结的 atom，不允许通过返回值修改持久化事实。
  */
 import {
@@ -526,11 +527,20 @@ async function appendInformationAtom(
   expectations: readonly InformationReferenceExpectation[],
   options: InformationAppendOptions = {},
 ): Promise<void> {
-  const source = atom.payload.source as any;
+  const source =
+    (atom.payload.source as any) ??
+    (atom.payload.platform === "web" &&
+    (atom.payload.target as any)?.kind === "web"
+      ? {
+          platform: atom.payload.platform,
+          adapterId: atom.payload.adapterId,
+          destination: atom.payload.target,
+        }
+      : undefined);
   const destination = source?.destination;
   const sourceScope =
     source?.platform && source?.adapterId && destination
-      ? `${source.platform}:${source.adapterId}:${destination.kind ?? "unknown"}:${destination.groupId ?? destination.userId ?? destination.channelId ?? destination.id ?? ""}`
+      ? `${source.platform}:${source.adapterId}:${destination.kind ?? "unknown"}:${destination.groupId ?? destination.userId ?? destination.channelId ?? destination.id ?? destination.conversationId ?? ""}`
       : undefined;
   const scopeKey =
     atom.payload.scopeKey ??
@@ -538,7 +548,7 @@ async function appendInformationAtom(
     sourceScope ??
     null;
   try {
-    // 同 scope 入站在分配位置之前串行提交，水位不会越过尚未提交的更早消息。
+    // 同 scope 入站与 Web 投递回执在分配位置前串行提交，分页水位不会越过尚未提交的消息。
     if (sourceScope)
       await tx.query(
         "SELECT pg_advisory_xact_lock(hashtextextended($1, 168))",

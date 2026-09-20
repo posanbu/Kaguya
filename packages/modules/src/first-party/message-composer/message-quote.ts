@@ -3,7 +3,8 @@
  * 主要职责：resolveMessageQuote 同时检查普通入站消息与成功 receipt→request→assistant 链，
  * 对目标、冻结 asOf 和引用唯一性逐项校验；多条候选或不完整链均不猜测。
  * 跨会话的确认节点必须精确引用 assistant，不能凭确认正文推测已投递消息。
- * sameMessageTarget 比较平台、适配器和会话目标；beforeQuoteCutoff 统一冻结时间的包含端点语义。
+ * sameMessageTarget 比较平台、适配器和会话目标（包含 Web conversationId），阻止历史和引用跨浏览器会话；
+ * beforeQuoteCutoff 统一冻结时间的包含端点语义。
  * 代码库关系：message-context 负责加载原始账本事实，message-prompt 复用同一规则编译引用。
  * 输入输出与副作用：返回被引用消息及完整 provenance 原子；无写入、缓存或网络副作用。
  */
@@ -21,6 +22,7 @@ type Target = {
     readonly kind: string;
     readonly groupId?: string;
     readonly userId?: string;
+    readonly conversationId?: string;
   };
 };
 
@@ -33,7 +35,8 @@ export function sameMessageTarget(value: unknown, target: Target): boolean {
     source.adapterId === target.adapterId &&
     destination?.kind === target.destination.kind &&
     destination?.groupId === target.destination.groupId &&
-    destination?.userId === target.destination.userId
+    destination?.userId === target.destination.userId &&
+    destination?.conversationId === target.destination.conversationId
   );
 }
 

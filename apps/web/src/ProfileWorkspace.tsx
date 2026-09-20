@@ -4,6 +4,7 @@
  * 功能概述：认证工作台共享 Profile 编辑上下文和安全的配置应用状态，不读取配置正文。
  * 主要职责：ProfileWorkspace 保存编辑 ID、操作锁及应用快照；ProfileSwitcher 用 Radix
  * 菜单切换查看对象、用 Dialog 新建配置。profileLabels 独立描述 selected 与已生效 revision。
+ * 顶栏仅汇总运行对象、与其不同的选择对象及一个应用状态；菜单保留完整标签，避免把编辑当成运行。
  * 代码库关系：App 在 AppShell 外挂载本 Provider；配置编辑器显式保存/选择/删除，
  * ConfigurationApplicationScreen 回传应用进度。顶栏只调用 create 和只读状态接口。
  * 输入输出与副作用：编辑切换可注册异步草稿守卫；应用期间禁止切换及新建；轮询只读
@@ -195,6 +196,24 @@ export function ProfileSwitcher() {
       <span role="status">Profile 状态尚未就绪，请等待加载或重试概览。</span>
     );
   const editing = status.profiles.find((profile) => profile.id === editingId);
+  const selectedName =
+    status.profiles.find((profile) => profile.id === status.selectedProfileId)
+      ?.name ?? status.selectedProfileId;
+  const runtimeName =
+    status.profiles.find(
+      (profile) => profile.id === application?.appliedProfileId,
+    )?.name ??
+    application?.appliedProfileId ??
+    "未确认";
+  const applicationLabel = applying
+    ? "应用中"
+    : applicationError || application?.state === "degraded"
+      ? "应用失败"
+      : application &&
+          (application.state === "pending" ||
+            application.selectedRevision !== application.appliedRevision)
+        ? "待应用"
+        : undefined;
   const labels = (id: string) =>
     profileLabels(
       id,
@@ -276,25 +295,12 @@ export function ProfileSwitcher() {
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
-      <span className="profile-status-line" role="status">
-        {labels(editingId ?? "").join(" · ") || "仅编辑，未设为当前"}
-      </span>
-      <span className="profile-runtime-line">
-        当前选择：
-        {status.profiles.find((p) => p.id === status.selectedProfileId)?.name ??
-          status.selectedProfileId}{" "}
-        · 已生效：
-        {status.profiles.find((p) => p.id === application?.appliedProfileId)
-          ?.name ??
-          application?.appliedProfileId ??
-          "尚未确认"}
-        {applying
-          ? " · 应用中"
-          : application?.state === "pending"
-            ? " · 待应用"
-            : application?.state === "degraded"
-              ? " · 应用失败"
-              : ""}
+      <span className="profile-runtime-line" role="status">
+        运行：{runtimeName}
+        {status.selectedProfileId !== application?.appliedProfileId
+          ? ` · 选择：${selectedName}`
+          : ""}
+        {applicationLabel ? ` · ${applicationLabel}` : ""}
       </span>
       {applicationError && <span role="alert">{applicationError}</span>}
       {workspace.statusError && (

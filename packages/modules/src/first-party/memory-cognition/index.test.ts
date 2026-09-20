@@ -1,7 +1,8 @@
 /**
  * 功能概述：验证在线认知快照选择只消费已完成、同范围、同 provider 版本的证据。
- * ledger 测试替身记录明确来源链，覆盖多人群聊、空快照替代旧事实、跨范围与未来证据拒绝；
- * 模块 worker 使用持久化文档替身验证冻结截止点、来源一致性、版本迁移和请求隔离，
+ * ledger 测试替身记录明确来源链，覆盖多人群聊、空快照替代旧事实、跨范围、未来证据
+ * 和 Web conversationId 范围隔离；模块 worker 使用持久化文档替身验证冻结截止点、
+ * 来源一致性、版本迁移和请求隔离；Web 隔离不改变 Identity 对长期认知的准入限制，
  * 不调用外部模型，不模拟或实现任何事实演化算法。
  */
 import { describe, expect, it, vi } from "vitest";
@@ -67,6 +68,7 @@ async function select(
   options: {
     requireEvidenceGuard?: boolean;
     retrieve?: () => Promise<any[]>;
+    current?: any;
   } = {},
 ) {
   const find = vi.fn(async () => snapshots);
@@ -80,7 +82,7 @@ async function select(
       retrieve,
       related: async (query) =>
         query.from[0] === "candidate"
-          ? [inbound]
+          ? [options.current ?? inbound]
           : query.relation === "agent:evidence"
             ? evidence
             : [selectedMemory],
@@ -507,5 +509,75 @@ describe("frozen cognition evidence execution", () => {
       ]),
     });
     expect(f.evolve).toHaveBeenCalledOnce();
+  });
+});
+
+describe("Web cognition scope", () => {
+  it("preserves Web conversation boundaries in scope queries and evidence validation", async () => {
+    const conversationId = "11111111-1111-4111-8111-111111111111";
+    const webSource = {
+      ...source,
+      platform: "web",
+      adapterId: "web.ui.main",
+      destination: { kind: "web" as const, conversationId },
+    };
+    const webInbound = {
+      ...inbound,
+      payload: { ...inbound.payload, source: webSource },
+    };
+    const scopeKey = JSON.stringify([
+      "scene.v2",
+      "web",
+      "web.ui.main",
+      "user",
+      { kind: "web", conversationId },
+    ]);
+    const webSnapshot = {
+      ...snapshot,
+      payload: { ...snapshot.payload, scopeKey },
+    };
+    const nextSource = { ...webSource, platformMessageId: "next" };
+    expect(cognitionScopeKey(nextSource)).toBe(scopeKey);
+    expect(
+      cognitionScopeKey({ ...webSource, destination: { kind: "web" } }),
+    ).toBe(
+      JSON.stringify([
+        "scene.v2",
+        "web",
+        "web.ui.main",
+        "user",
+        { kind: "web" },
+      ]),
+    );
+    const selected = await select([webSnapshot], [webInbound], memory, {
+      current: webInbound,
+    });
+    expect(selected.ids).toEqual(["memory"]);
+    expect(selected.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloadContains: { identity, scopeKey },
+      }),
+    );
+    const rejected = await select(
+      [webSnapshot],
+      [
+        {
+          ...webInbound,
+          payload: {
+            ...webInbound.payload,
+            source: {
+              ...webSource,
+              destination: {
+                kind: "web",
+                conversationId: "22222222-2222-4222-8222-222222222222",
+              },
+            },
+          },
+        },
+      ],
+      memory,
+      { current: webInbound },
+    );
+    expect(rejected.ids).toEqual([]);
   });
 });

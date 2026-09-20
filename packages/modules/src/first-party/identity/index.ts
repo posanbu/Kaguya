@@ -1,7 +1,8 @@
 /**
  * 功能概述：把正规化入站消息解析为聊天范围、平台账号与人物实体，并为每条入站提交唯一身份终态。
  * 主要职责：使用 Core registerOnce/commitTerminal 的原子槽位保证并发、重放和重启幂等；Web 匿名请求只产生
- * ephemeral 范围，不创建长期人物。代码库关系：消费 inbound kind，不读取 raw，也不依赖数据库查询投影。
+ * ephemeral 范围，不创建长期人物；有 conversationId 时同一 Web 会话复用范围，无 ID 的旧请求逐条隔离。
+ * 代码库关系：消费 inbound kind，不读取 raw，也不依赖数据库查询投影。
  * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
  * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
  */
@@ -66,7 +67,8 @@ export const identityModule = defineInformationModule({
           const scopeMode = s.platform === "web" ? "ephemeral" : "canonical";
           const scope = await context.registerOnce(
             "core.identity.scope",
-            scopeMode === "ephemeral"
+            scopeMode === "ephemeral" &&
+              (s.destination.kind !== "web" || !s.destination.conversationId)
               ? atom.informationId
               : key([s.platform, s.adapterId, s.destination]),
             chatScopeEntityInformationKind as any,
