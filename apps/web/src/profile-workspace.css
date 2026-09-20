@@ -15,12 +15,6 @@
 .profile-switcher > button span {
   overflow-wrap: anywhere;
 }
-.profile-runtime-line {
-  min-width: 0;
-  font-size: 12px;
-  overflow-wrap: anywhere;
-  color: var(--kaguya-muted);
-}
 .profile-menu {
   max-height: min(70vh, 560px);
   overflow-y: auto;
@@ -35,8 +29,17 @@
 .profile-menu small {
   overflow-wrap: anywhere;
 }
-.profile-menu small {
+.profile-menu-state {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   flex-basis: 100%;
+}
+.profile-menu-state.is-applied {
+  color: #24724b;
+}
+:root[data-theme="dark"] .profile-menu-state.is-applied {
+  color: #91e7b2;
 }
 .profile-workspace.profile-single-column {
   grid-template-columns: minmax(0, 1fr);
@@ -87,9 +90,5 @@
   }
   .profile-switcher > button {
     padding: 8px;
-  }
-  .profile-runtime-line {
-    font-size: 11px;
-    line-height: 1.5;
   }
 }

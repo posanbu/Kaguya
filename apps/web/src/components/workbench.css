@@ -373,21 +373,6 @@
   font-size: clamp(24px, 2.4vw, 32px);
   letter-spacing: -0.03em;
 }
-.wb-page-help {
-  max-width: 64ch;
-  font-size: 13px;
-  color: var(--kaguya-muted);
-}
-.wb-page-help summary {
-  cursor: pointer;
-  width: fit-content;
-  padding-block: 4px;
-}
-.wb-page-help p {
-  padding: 10px 12px;
-  border-left: 2px solid var(--kaguya-line);
-  line-height: 1.7;
-}
 .wb-button {
   cursor: pointer;
   font-size: 14px;

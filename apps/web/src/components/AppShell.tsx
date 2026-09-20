@@ -1,5 +1,5 @@
 /**
- * 功能概述：所有认证后页面共享的工作台、五域侧栏和移动导航抽屉。
+ * 功能概述：所有认证后页面共享的工作台、四域侧栏和移动导航抽屉。
  * 主要职责：AppShell 提供顶栏 profileSlot/actions 插槽；SideNav 通过 currentPath
  * 标识任务域。useNavigationGuard 注册离开保护，useWorkbenchNavigate 复用受保护导航。
  * 代码库关系：App.tsx 管理认证及 history，页面作为 children 注入；复杂交互采用
@@ -23,7 +23,6 @@ import {
   House,
   Menu,
   MessagesSquare,
-  Plug,
   ScanSearch,
   Settings2,
   X,
@@ -35,14 +34,13 @@ export const workbenchRoutes = [
   { path: "/", label: "概览", icon: House },
   { path: "/messages", label: "消息", icon: MessagesSquare },
   { path: "/profiles", label: "配置", icon: Settings2 },
-  { path: "/adapters", label: "接入", icon: Plug },
   { path: "/developer/modules", label: "检查", icon: ScanSearch },
 ] as const;
 export function navigationDomain(path: string): string {
   if (path.startsWith("/developer")) return "/developer/modules";
   if (path.startsWith("/profiles") || path.startsWith("/configuration"))
     return "/profiles";
-  if (path.startsWith("/adapters")) return "/adapters";
+  if (path.startsWith("/adapters")) return "/";
   return path === "/messages" ? "/messages" : "/";
 }
 type Guard = () => boolean | Promise<boolean>;

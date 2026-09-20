@@ -27,7 +27,8 @@
  * token 对应的网关配置对象，避免读取 Profile 的副作用 effect 因对象引用变化
  * 而重复请求并触发服务端限流。开发者入口使用 history 路径，复用内存 Token；
  * 工作台由 AppShell 统一承载，useWorkbenchRouter 保护 history 导航；根路径预留概览，
- * /messages、/profiles、/configuration/application、/adapters 分别提供任务入口。
+ * /messages、/profiles、/configuration/application 分别提供任务入口；接入管理嵌入概览，
+ * /adapters 仅作为兼容入口聚焦该区块。
  * 人工跨会话管理界面已移除；会话 UUID 由 WebChat 保存，凭据与编辑状态仅驻留当前页面。
  * DeveloperConsole 接收完整 pathname 以恢复模块详情，负责只读查询与取消，401 继续由本文件统一锁屏。
  * 消息页由 WebChat 管理独立浏览器会话、历史恢复与完整回复轮询，连接检测保留在标题栏；
@@ -44,6 +45,7 @@ import { Overview } from "./Overview.js";
 import { WebChat } from "./WebChat.js";
 import {
   Button,
+  Dialog,
   FieldMessage,
   PageHeader,
   StatusBadge,
@@ -191,15 +193,30 @@ export function App() {
     return <AccessLinkRequired invalid={invalidAccessLink} />;
   }
 
-  const isOverview = path === "/" || path === "/overview";
+  const isOverview =
+    path === "/" || path === "/overview" || path === "/adapters";
   if (!isOverview && configurationView === "checking")
     return <ConfigurationLoading />;
   if (path === "/messages" && configurationView === "error")
     return <ConfigurationStatusError message={configurationError} />;
 
   const renderPage = () => {
-    if (path === "/" || path === "/overview")
-      return <Overview token={token} navigate={navigate} />;
+    if (isOverview)
+      return (
+        <Overview
+          token={token}
+          navigate={navigate}
+          focusAdapters={path === "/adapters"}
+          adapterSection={
+            <AdapterManagementSection
+              token={token}
+              onRestartRequired={() =>
+                void navigate("/configuration/application")
+              }
+            />
+          }
+        />
+      );
     const inspectionPage = developerPage(path);
     if (inspectionPage !== undefined)
       return (
@@ -228,15 +245,6 @@ export function App() {
             void navigate("/configuration/application");
           }}
           onOpenNapCat={() => void navigate("/adapters")}
-        />
-      );
-    }
-
-    if (path === "/adapters") {
-      return (
-        <NapCatManagementScreen
-          token={token}
-          onRestartRequired={() => void navigate("/configuration/application")}
         />
       );
     }
@@ -628,7 +636,6 @@ function ProfileManagementScreen({
       <div className="setup-shell">
         <PageHeader
           title="配置"
-          description="在全局顶栏选择编辑对象；保存、设为当前与应用分别操作。"
           actions={
             <button
               type="button"
@@ -1195,7 +1202,7 @@ function ModelTierEditor({
   );
 }
 
-function NapCatManagementScreen({
+function AdapterManagementSection({
   token,
   onRestartRequired,
 }: {
@@ -1213,6 +1220,7 @@ function NapCatManagementScreen({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
+  const [configurationOpen, setConfigurationOpen] = useState(false);
 
   useEffect(() => {
     void getNapCatStatus(config).then(
@@ -1244,6 +1252,7 @@ function NapCatManagementScreen({
         reconnectMs: Number(reconnectMs),
       });
       setHasAccessToken(result.status.hasAccessToken);
+      setConfigurationOpen(false);
       onRestartRequired();
     } catch (reason) {
       setError(errorMessage(reason));
@@ -1253,110 +1262,125 @@ function NapCatManagementScreen({
   };
 
   return (
-    <div className="setup-shell">
-      <PageHeader
-        title="接入"
-        description="查看 Gateway / Adapter 状态并管理平台连接。"
+    <div className="wb-adapter-main">
+      <AdapterStatusPanel
+        token={token}
+        onConfigureNapCat={() => setConfigurationOpen(true)}
       />
-      <main className="setup-main wb-adapter-main">
-        <AdapterStatusPanel token={token} />
-        <section className="setup-card" aria-labelledby="napcat-title">
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">平台连接</p>
-              <h2 id="napcat-title">配置 NapCat</h2>
-            </div>
-          </div>
-          <p className="setup-intro">
-            填写 NapCat OneBot 正向 WebSocket（服务器）参数。保存后手动应用，
-            适配器会用新配置重新连接，无需重启 Kaguya。
-          </p>
-          {error ? <FieldMessage tone="error">{error}</FieldMessage> : null}
-          {loading ? (
-            <div className="profile-loading" role="status">
-              <LoaderCircle className="spin" size={18} />
-              <span>正在读取 NapCat 配置</span>
-            </div>
-          ) : null}
-          {!loading ? (
-            <form
-              className="setup-form"
-              onSubmit={(event) => void handleSave(event)}
-            >
-              <label className="setup-check">
-                <input
-                  type="checkbox"
-                  checked={enabled}
-                  onChange={(event) => setEnabled(event.target.checked)}
-                />
-                <span>启用 NapCat</span>
-              </label>
-              <label className="field">
-                <span>正向 WebSocket 服务器地址</span>
-                <input
-                  type="url"
-                  value={wsUrl}
-                  onChange={(event) => setWsUrl(event.target.value)}
-                  placeholder="ws://127.0.0.1:3001"
-                />
-              </label>
-              <label className="field">
-                <span>
-                  Access Token{" "}
-                  {hasAccessToken ? "（已保存，留空则保留）" : "（可选）"}
-                </span>
-                <div className="password-field">
+      <Dialog.Root
+        open={configurationOpen}
+        onOpenChange={(open) => {
+          if (!saving) setConfigurationOpen(open);
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="wb-overlay" />
+          <Dialog.Content className="wb-dialog napcat-dialog">
+            <Dialog.Title>配置 NapCat</Dialog.Title>
+            <Dialog.Description>
+              填写 NapCat OneBot 正向 WebSocket（服务器）参数。保存后手动应用，
+              适配器会用新配置重新连接，无需重启 Kaguya。
+            </Dialog.Description>
+            {error ? <FieldMessage tone="error">{error}</FieldMessage> : null}
+            {loading ? (
+              <div className="profile-loading" role="status">
+                <LoaderCircle className="spin" size={18} />
+                <span>正在读取 NapCat 配置</span>
+              </div>
+            ) : null}
+            {!loading ? (
+              <form
+                className="setup-form"
+                onSubmit={(event) => void handleSave(event)}
+              >
+                <label className="setup-check">
                   <input
-                    type={showAccessToken ? "text" : "password"}
-                    value={accessToken}
-                    onChange={(event) => setAccessToken(event.target.value)}
-                    autoComplete="new-password"
-                    placeholder={
-                      hasAccessToken
-                        ? "留空以保留当前 token"
-                        : "NapCat access token"
-                    }
+                    type="checkbox"
+                    checked={enabled}
+                    onChange={(event) => setEnabled(event.target.checked)}
                   />
+                  <span>启用 NapCat</span>
+                </label>
+                <label className="field">
+                  <span>正向 WebSocket 服务器地址</span>
+                  <input
+                    type="url"
+                    value={wsUrl}
+                    onChange={(event) => setWsUrl(event.target.value)}
+                    placeholder="ws://127.0.0.1:3001"
+                  />
+                </label>
+                <label className="field">
+                  <span>
+                    Access Token{" "}
+                    {hasAccessToken ? "（已保存，留空则保留）" : "（可选）"}
+                  </span>
+                  <div className="password-field">
+                    <input
+                      type={showAccessToken ? "text" : "password"}
+                      value={accessToken}
+                      onChange={(event) => setAccessToken(event.target.value)}
+                      autoComplete="new-password"
+                      placeholder={
+                        hasAccessToken
+                          ? "留空以保留当前 token"
+                          : "NapCat access token"
+                      }
+                    />
+                    <Button
+                      type="button"
+                      className="icon-button"
+                      onClick={() => setShowAccessToken((current) => !current)}
+                      aria-label={
+                        showAccessToken
+                          ? "隐藏 Access Token"
+                          : "显示 Access Token"
+                      }
+                    >
+                      {showAccessToken ? (
+                        <EyeOff size={18} />
+                      ) : (
+                        <Eye size={18} />
+                      )}
+                    </Button>
+                  </div>
+                </label>
+                <label className="field">
+                  <span>机器人 QQ 号（可选）</span>
+                  <input
+                    value={selfId}
+                    onChange={(event) => setSelfId(event.target.value)}
+                    placeholder="例如 123456789"
+                  />
+                </label>
+                <label className="field">
+                  <span>断线重连间隔（毫秒）</span>
+                  <input
+                    type="number"
+                    min={100}
+                    max={3600000}
+                    step={100}
+                    value={reconnectMs}
+                    onChange={(event) => setReconnectMs(event.target.value)}
+                  />
+                </label>
+                <div className="editor-actions napcat-dialog-actions">
                   <Button
-                    type="button"
-                    className="icon-button"
-                    onClick={() => setShowAccessToken((current) => !current)}
-                    aria-label={
-                      showAccessToken
-                        ? "隐藏 Access Token"
-                        : "显示 Access Token"
-                    }
+                    className="setup-button"
+                    type="submit"
+                    disabled={saving}
                   >
-                    {showAccessToken ? <EyeOff size={18} /> : <Eye size={18} />}
+                    {saving ? "正在保存" : "保存配置"}
                   </Button>
+                  <Dialog.Close asChild>
+                    <Button disabled={saving}>取消</Button>
+                  </Dialog.Close>
                 </div>
-              </label>
-              <label className="field">
-                <span>机器人 QQ 号（可选）</span>
-                <input
-                  value={selfId}
-                  onChange={(event) => setSelfId(event.target.value)}
-                  placeholder="例如 123456789"
-                />
-              </label>
-              <label className="field">
-                <span>断线重连间隔（毫秒）</span>
-                <input
-                  type="number"
-                  min={100}
-                  max={3600000}
-                  step={100}
-                  value={reconnectMs}
-                  onChange={(event) => setReconnectMs(event.target.value)}
-                />
-              </label>
-              <Button className="setup-button" type="submit" disabled={saving}>
-                {saving ? "正在保存" : "保存配置"}
-              </Button>
-            </form>
-          ) : null}
-        </section>
-      </main>
+              </form>
+            ) : null}
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </div>
   );
 }

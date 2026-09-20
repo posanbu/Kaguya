@@ -111,34 +111,91 @@
 .atom-detail > .secondary-button {
   margin: 14px 0;
 }
+.atom-table {
+  overflow: hidden;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 10px;
+  background: var(--kaguya-paper);
+}
+.atom-table-header,
+.atom-list button {
+  display: grid;
+  grid-template-columns:
+    minmax(170px, 1.65fr) minmax(110px, 0.9fr) minmax(100px, 0.85fr)
+    70px;
+  align-items: center;
+  column-gap: 14px;
+}
+.atom-table-header {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--kaguya-line);
+  background: var(--kaguya-paper-soft);
+  color: var(--kaguya-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
 .atom-list {
   list-style: none;
   padding: 0;
   margin: 0;
-  display: grid;
-  gap: 10px;
 }
 .atom-list button {
-  display: grid;
-  gap: 5px;
   width: 100%;
+  min-height: 52px;
   text-align: left;
-  padding: 15px;
-  border: 1px solid var(--kaguya-line);
-  border-radius: 9px;
+  padding: 9px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--kaguya-line);
+  border-radius: 0;
   background: var(--kaguya-paper);
   color: var(--kaguya-ink);
   overflow-wrap: anywhere;
+  box-shadow: none;
+}
+.atom-list li:last-child button {
+  border-bottom: 0;
+}
+.atom-list button:hover {
+  background: var(--kaguya-paper-soft);
 }
 .atom-list button[aria-pressed="true"] {
-  border-color: var(--kaguya-coral);
-  box-shadow: 0 0 0 1px var(--kaguya-coral);
+  position: relative;
+  z-index: 1;
+  background: color-mix(in srgb, var(--kaguya-coral) 8%, var(--kaguya-paper));
+  outline: 2px solid var(--kaguya-coral);
+  outline-offset: -2px;
+}
+.atom-list-event {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.atom-list-event-heading {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.atom-list-event-heading strong,
+.atom-list-field,
+.atom-list-source,
+.atom-list time,
+.atom-list code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.atom-list-event-heading strong {
+  min-width: 0;
 }
 .atom-list code,
 .atom-list time,
 .atom-list span {
   font-size: 12px;
   color: var(--kaguya-muted);
+}
+.atom-list code {
+  font-variant-numeric: tabular-nums;
 }
 .reference-link {
   display: block;
@@ -210,20 +267,50 @@
     gap: 0;
   }
 }
+@media (max-width: 650px) {
+  .atom-table-header {
+    display: none;
+  }
+  .atom-list button {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "event event"
+      "time id"
+      "source source";
+    gap: 5px 12px;
+    padding: 12px;
+  }
+  .atom-list-event {
+    grid-area: event;
+  }
+  .atom-list time {
+    grid-area: time;
+  }
+  .atom-list-source {
+    grid-area: source;
+  }
+  .atom-list code {
+    grid-area: id;
+    text-align: right;
+  }
+}
 
-/* 模块总览保持单行摘要；详情按信息职责展开，长 ID 与窄屏均限制在容器内。 */
+/* 模块总览以多列紧凑卡片提升扫描效率；详情按信息职责展开。 */
 .module-overview {
   list-style: none;
   padding: 0;
+  margin: 16px 0 0;
   display: grid;
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+  gap: 12px;
 }
 .module-entry {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  padding: 16px 20px;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 12px;
+  min-height: 132px;
+  height: 100%;
+  padding: 14px 16px;
   border: 1px solid var(--kaguya-line);
   border-radius: 12px;
   color: var(--kaguya-ink);
@@ -247,10 +334,12 @@
   overflow-wrap: anywhere;
 }
 .module-entry p {
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
-  margin: 6px 0;
+  margin: 5px 0 7px;
+  line-height: 1.45;
   color: var(--kaguya-muted);
 }
 .module-entry code,
@@ -260,9 +349,10 @@
   overflow-wrap: anywhere;
 }
 .module-entry-meta {
-  display: grid;
-  justify-items: end;
-  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
   gap: 8px;
   font-size: 13px;
 }
@@ -308,20 +398,12 @@
     grid-template-columns: minmax(0, 1fr);
   }
   .module-entry {
-    align-items: stretch;
-    flex-direction: column;
-    gap: 12px;
-    padding: 16px;
+    min-height: 126px;
+    padding: 14px;
   }
-  .module-entry-meta {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
+  .module-overview {
+    grid-template-columns: minmax(0, 1fr);
   }
-}
-.module-overview {
-  grid-template-columns: minmax(0, 1fr);
 }
 .module-overview > li {
   min-width: 0;
@@ -334,14 +416,10 @@
 /* Manifest 拓扑与阶段摘要复用现有 DTO，窄屏按因果顺序堆叠，技术说明按需展开。 */
 .module-summary-strip {
   display: flex;
-  gap: 24px;
+  gap: 20px;
   align-items: center;
   flex-wrap: wrap;
-  margin-bottom: 20px;
-  padding: 16px 20px;
-  border: 1px solid var(--kaguya-line);
-  border-radius: 12px;
-  background: var(--kaguya-paper);
+  margin-bottom: 14px;
 }
 .module-summary-strip > div:not(.module-view-switch) {
   display: flex;
@@ -349,7 +427,7 @@
   align-items: baseline;
 }
 .module-summary-strip strong {
-  font-size: 26px;
+  font-size: 20px;
   font-weight: 600;
 }
 .module-summary-strip span {
@@ -554,7 +632,6 @@
   }
   .module-summary-strip {
     gap: 14px;
-    padding: 12px;
   }
 }
 @media (prefers-reduced-motion: reduce) {

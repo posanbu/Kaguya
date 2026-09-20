@@ -156,7 +156,6 @@ export function ModuleOverview({
               placeholder="名称或 definition ID"
             />
           </label>
-          <p role="status">{visible.length} 个模块定义</p>
           {!modules.length ? (
             <FieldMessage>当前运行时没有可用的模块定义。</FieldMessage>
           ) : !visible.length ? (
