@@ -5,7 +5,7 @@
  * 输入输出与副作用：使用虚构 revision 断言用户可见标签，防止布局变更改变应用语义。
  */
 import { describe, expect, it } from "vitest";
-import { profileLabels } from "./ProfileWorkspace.js";
+import { profileMenuState } from "./ProfileWorkspace.js";
 import type { ConfigurationApplicationStatus } from "./api.js";
 const snapshot: ConfigurationApplicationStatus = {
   state: "pending",
@@ -14,27 +14,33 @@ const snapshot: ConfigurationApplicationStatus = {
   appliedProfileId: "old",
   appliedRevision: "a".repeat(64),
 };
-describe("Profile 状态标签", () => {
-  it("编辑其他 Profile 不会将其标记为 selected 或已生效", () => {
-    expect(profileLabels("draft", "next", snapshot)).toEqual([]);
-    expect(profileLabels("old", "next", snapshot)).toEqual(["已生效"]);
-    expect(profileLabels("next", "next", snapshot)).toEqual([
-      "当前选择",
-      "待应用",
-    ]);
+describe("Profile 菜单状态", () => {
+  it("绿勾跟随已生效 Profile，不跟随当前选择", () => {
+    expect(profileMenuState("draft", snapshot)).toEqual({
+      applied: false,
+      labels: [],
+    });
+    expect(profileMenuState("old", snapshot)).toEqual({
+      applied: true,
+      labels: [],
+    });
+    expect(profileMenuState("next", snapshot)).toEqual({
+      applied: false,
+      labels: ["待应用"],
+    });
   });
   it("同一 ID 的新 revision 同时表达旧版生效和待应用", () => {
     expect(
-      profileLabels("next", "next", { ...snapshot, appliedProfileId: "next" }),
-    ).toEqual(["当前选择", "已生效", "待应用"]);
+      profileMenuState("next", { ...snapshot, appliedProfileId: "next" }),
+    ).toEqual({ applied: true, labels: ["待应用"] });
   });
   it("应用期间及失败回滚后均显示明确反馈", () => {
-    expect(profileLabels("next", "next", snapshot, true)).toContain("应用中");
-    expect(profileLabels("next", "next", snapshot, false, true)).toContain(
+    expect(profileMenuState("next", snapshot, true).labels).toContain("应用中");
+    expect(profileMenuState("next", snapshot, false, true).labels).toContain(
       "应用失败",
     );
     expect(
-      profileLabels("next", "next", { ...snapshot, state: "degraded" }),
+      profileMenuState("next", { ...snapshot, state: "degraded" }).labels,
     ).toContain("应用失败");
   });
 });

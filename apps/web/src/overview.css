@@ -1,50 +1,107 @@
-/* 概览布局复用工作台主题变量；卡片独立伸展，小屏按阅读顺序堆叠。 */
+/* 概览以等尺寸状态方块快速呈现系统健康度，小屏维持双列扫描。 */
 .overview-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
-  gap: 1rem;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 168px));
+  gap: 14px;
   align-items: start;
 }
-.overview-card {
+.overview-tile {
+  --overview-tone: var(--kaguya-muted);
+  appearance: none;
+  aspect-ratio: 1;
   min-width: 0;
-  padding: 1.25rem;
+  padding: 18px;
   border: 1px solid var(--kaguya-line);
   border-radius: 14px;
-  background: var(--kaguya-paper-soft);
-  overflow-wrap: anywhere;
-}
-.overview-card h2 {
-  margin-top: 0;
-}
-.overview-card p {
-  line-height: 1.6;
-}
-.overview-adapter {
-  padding-block: 0.5rem;
-  border-top: 1px solid var(--kaguya-line);
-}
-.overview-adapter h3 {
-  font-size: 1rem;
-}
-
-/* 概览卡片将状态与操作分层，留白优先于长说明。 */
-.overview-card {
   background: var(--kaguya-paper);
-  padding: 24px;
-  box-shadow: 0 3px 14px rgb(0 0 0 / 3%);
+  color: var(--kaguya-ink);
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  justify-items: start;
+  text-align: left;
+  font: inherit;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 4%);
+  transition:
+    transform 160ms ease-out,
+    border-color 160ms ease-out,
+    box-shadow 160ms ease-out;
 }
-.overview-card h2 {
-  font-size: 16px;
-  margin-bottom: 18px;
+.overview-tile:not(:disabled) {
+  cursor: pointer;
 }
-.overview-card p {
-  font-size: 13px;
+.overview-tile:not(:disabled):hover {
+  transform: translateY(-2px);
+  border-color: color-mix(
+    in srgb,
+    var(--overview-tone) 48%,
+    var(--kaguya-line)
+  );
+  box-shadow: 0 8px 24px rgb(0 0 0 / 8%);
+}
+.overview-tile:focus-visible {
+  outline: 2px solid var(--kaguya-coral);
+  outline-offset: 3px;
+}
+.overview-tile-success {
+  --overview-tone: var(--kaguya-cyan);
+}
+.overview-tile-warning {
+  --overview-tone: var(--kaguya-coral);
+}
+.overview-tile-error {
+  --overview-tone: var(--kaguya-coral-strong);
+}
+.overview-tile-icon {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  color: var(--overview-tone);
+  background: color-mix(in srgb, var(--overview-tone) 11%, var(--kaguya-paper));
+}
+.overview-tile-icon svg {
+  width: 25px;
+  height: 25px;
+  stroke-width: 1.8;
+}
+.overview-tile-title {
+  align-self: end;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.overview-tile-status {
+  margin-top: 5px;
+  color: var(--overview-tone);
+  font-size: 15px;
+  line-height: 1.25;
+}
+.overview-tile-meta {
+  margin-top: 4px;
   color: var(--kaguya-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
 }
-.overview-card > .wb-button {
-  margin-top: 12px;
+.overview-adapter-section {
+  margin-top: 40px;
+  scroll-margin-top: 24px;
 }
-.overview-adapter {
-  margin-top: 16px;
-  padding-top: 16px;
+.overview-adapter-section > h2 {
+  margin: 0 0 16px;
+  font-size: 22px;
+  letter-spacing: -0.025em;
+}
+.overview-adapter-section > h2:focus {
+  outline: none;
+}
+@media (max-width: 520px) {
+  .overview-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .overview-tile {
+    width: 100%;
+    padding: 16px;
+  }
 }

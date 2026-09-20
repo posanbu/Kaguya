@@ -1,23 +1,21 @@
 /**
- * 功能概述：工作台根路径的只读系统概览，分别回答配置、Runtime 与 Adapter 是否就绪。
- * 主要职责：Overview 独立读取配置 readiness、生效版本及安全接入快照；StatusCard
- * 统一呈现原因与唯一修复入口。useRead 在重试、Token 变化及卸载时丢弃过期结果。
+ * 功能概述：工作台根路径的只读系统概览，分别回答 Runtime 与 Adapter 是否就绪。
+ * 主要职责：Overview 读取安全接入快照；OverviewTile 用图标与核心状态快速表达就绪度。
+ * useRead 在重试、Token 变化及卸载时丢弃过期结果。
  * 代码库关系：App 挂载本页，复用 api.ts 安全 DTO 和 #144 基础组件与导航回调。
  * 输入输出与副作用：只发 GET，不读取凭据、不应用配置、不发送消息；共享接入请求的
- * Runtime 与 Adapter 分开显示，配置的两个读取结果也分别保留，失败不会推断为停机。
+ * Runtime 与 Adapter 分开显示，读取失败不会推断为停机。
  */
-import { useEffect, useState, type ReactNode } from "react";
 import {
-  getAdapterStatus,
-  getConfigurationApplication,
-  listProfiles,
-} from "./api.js";
-import {
-  Button,
-  FieldMessage,
-  PageHeader,
-  StatusBadge,
-} from "./components/ui.js";
+  Activity,
+  Cable,
+  Globe2,
+  ServerCog,
+  type LucideIcon,
+} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { getAdapterStatus } from "./api.js";
+import { Button, PageHeader } from "./components/ui.js";
 import "./overview.css";
 
 type ReadState<T> = { data?: T; error: boolean; loading: boolean };
@@ -44,9 +42,6 @@ function useRead<T>(token: string, load: (token: string) => Promise<T>) {
   }, [token, load, revision]);
   return { ...state, retry: () => setRevision((value) => value + 1) };
 }
-const readProfiles = (token: string) => listProfiles({ token });
-const readApplication = (token: string) =>
-  getConfigurationApplication({ token });
 const readAdapters = (token: string) =>
   getAdapterStatus({ token }, new AbortController().signal);
 const labels: Record<string, string> = {
@@ -72,63 +67,136 @@ const labels: Record<string, string> = {
   stop_failed: "停止失败",
 };
 const label = (value: string) => labels[value] ?? value;
-function StatusCard({
+type TileTone = "neutral" | "success" | "warning" | "error";
+
+function OverviewTile({
   title,
-  children,
+  status,
+  tone,
+  icon: Icon,
+  onClick,
+  detail,
+  meta,
 }: {
   title: string;
-  children: ReactNode;
+  status: string;
+  tone: TileTone;
+  icon: LucideIcon;
+  onClick?: (() => unknown) | undefined;
+  detail?: string | undefined;
+  meta?: string | undefined;
 }) {
   return (
-    <section className="overview-card" aria-label={title}>
-      <h2>{title}</h2>
-      {children}
-    </section>
+    <button
+      type="button"
+      className={`overview-tile overview-tile-${tone}`}
+      onClick={onClick}
+      disabled={!onClick}
+      aria-label={`${title}：${status}${meta ? `，${meta}` : ""}${onClick ? "，打开" : ""}`}
+    >
+      <span className="overview-tile-icon" aria-hidden="true">
+        <Icon />
+      </span>
+      <span className="overview-tile-title">{title}</span>
+      <strong className="overview-tile-status">{status}</strong>
+      {meta ? <span className="overview-tile-meta">{meta}</span> : null}
+      {detail && <span className="wb-sr-only">{detail}</span>}
+    </button>
   );
 }
-function ReadFeedback({
-  name,
-  state,
-}: {
-  name: string;
-  state: { loading: boolean; error: boolean; retry: () => void };
-}) {
-  if (state.error)
-    return (
-      <>
-        <FieldMessage tone="error">{name}读取失败，当前状态未知。</FieldMessage>
-        <Button onClick={state.retry}>重试{name}</Button>
-      </>
-    );
-  if (state.loading) return <FieldMessage>正在读取{name}…</FieldMessage>;
-  return null;
+
+function lifecycleTone(value: string): TileTone {
+  if (value === "running") return "success";
+  if (value === "starting" || value === "stopping") return "warning";
+  if (value === "failed" || value === "stopped") return "error";
+  return "neutral";
 }
+
+function adapterStatus(adapter: {
+  enabled: boolean;
+  lifecycle: string;
+  connectivity: string;
+  errorType?: string;
+}) {
+  if (!adapter.enabled) return { label: "已禁用", tone: "neutral" as const };
+  if (adapter.errorType)
+    return { label: label(adapter.errorType), tone: "error" as const };
+  if (adapter.lifecycle !== "running")
+    return {
+      label: label(adapter.lifecycle),
+      tone: lifecycleTone(adapter.lifecycle),
+    };
+  if (adapter.connectivity === "connected")
+    return { label: "已连接", tone: "success" as const };
+  if (adapter.connectivity === "not_applicable")
+    return { label: "运行中", tone: "success" as const };
+  return {
+    label: label(adapter.connectivity),
+    tone:
+      adapter.connectivity === "connecting" ||
+      adapter.connectivity === "retrying"
+        ? ("warning" as const)
+        : ("error" as const),
+  };
+}
+
+function adapterTitle(type: string) {
+  if (type.toLowerCase() === "napcat") return "NapCat";
+  if (type.toLowerCase() === "web") return "Web";
+  return type;
+}
+
+export function napCatEndpointLabel(wsUrl: string | undefined) {
+  if (!wsUrl) return undefined;
+  try {
+    const endpoint = new URL(wsUrl);
+    if (endpoint.protocol !== "ws:" && endpoint.protocol !== "wss:")
+      return undefined;
+    const protocol = endpoint.protocol.slice(0, -1).toUpperCase();
+    const port = endpoint.port || (endpoint.protocol === "wss:" ? "443" : "80");
+    return `${protocol} · ${port}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function adapterOrder(type: string) {
+  const normalized = type.toLowerCase();
+  if (normalized === "web") return 0;
+  if (normalized === "napcat") return 1;
+  return 2;
+}
+
 export function Overview({
   token,
   navigate,
+  onConfigureNapCat,
+  napCatWsUrl,
+  napCatEndpointState,
+  focusAdapters = false,
 }: {
   token: string;
   navigate: (path: string) => unknown;
+  onConfigureNapCat: () => unknown;
+  napCatWsUrl?: string | undefined;
+  napCatEndpointState: "loading" | "ready" | "error";
+  focusAdapters?: boolean;
 }) {
-  const profiles = useRead(token, readProfiles);
-  const application = useRead(token, readApplication);
   const adapters = useRead(token, readAdapters);
-  const config = profiles.data;
-  const applied = application.data;
-  const invalid =
-    config?.status === "invalid" || config?.status === "review_required";
-  const configAction = invalid ? "/profiles" : "/configuration/application";
   const runtime = adapters.data?.runtime;
+  const adapterHeading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (!focusAdapters) return;
+    adapterHeading.current?.scrollIntoView({ block: "start" });
+    adapterHeading.current?.focus({ preventScroll: true });
+  }, [focusAdapters]);
   return (
     <>
       <PageHeader
         title="概览"
-        description="查看当前配置、消息入口与平台接入状态。"
         actions={
           <Button
             onClick={() => {
-              profiles.retry();
-              application.retry();
               adapters.retry();
             }}
           >
@@ -136,141 +204,102 @@ export function Overview({
           </Button>
         }
       />
-      <div className="overview-grid">
-        <StatusCard title="配置">
-          <ReadFeedback name="配置" state={profiles} />
-          {config && (
-            <>
-              <p>
-                当前选中：
-                {config.profiles.find(
-                  (profile) => profile.id === config.selectedProfileId,
-                )?.name ?? config.selectedProfileId}
-              </p>
-              <StatusBadge
-                tone={
-                  invalid
-                    ? "error"
-                    : config.status === "restart_required"
-                      ? "warning"
-                      : "success"
-                }
-              >
-                {invalid
-                  ? config.status === "invalid"
-                    ? "配置无效"
-                    : "配置待确认"
-                  : config.status === "restart_required"
-                    ? "配置待应用"
-                    : "配置校验通过"}
-              </StatusBadge>
-              {(config.issues ?? []).map((issue) => (
-                <p key={issue.id}>{issue.message}</p>
-              ))}
-              {(config.warnings ?? []).map((warning) => (
-                <p key={warning.id}>{warning.message}</p>
-              ))}
-              {invalid &&
-                !config.issues?.length &&
-                !config.warnings?.length && (
-                  <p>当前 Profile 未通过校验或仍有待确认项，请进入配置检查。</p>
-                )}
-            </>
-          )}
-          <ReadFeedback name="生效状态" state={application} />
-          {applied && (
-            <>
-              <p>当前生效：{applied.appliedProfileId ?? "尚未生效"}</p>
-              <p>
-                {
-                  {
-                    ready: "当前配置已生效。",
-                    pending: "选中配置存在待应用修改。",
-                    applying: "正在应用配置，消息入口可能短暂暂停。",
-                    degraded: "运行实例不可用，请检查服务后重新应用。",
-                  }[applied.state]
-                }
-              </p>
-            </>
-          )}
-          {(config || applied) && (
-            <Button onClick={() => navigate(configAction)}>
-              {invalid ? "检查配置" : "管理配置生效"}
-            </Button>
-          )}
-        </StatusCard>
-        <StatusCard title="Runtime">
-          <ReadFeedback name="Runtime 状态" state={adapters} />
-          {runtime && (
-            <>
-              <StatusBadge
-                tone={runtime.ingress === "ready" ? "success" : "warning"}
-              >
-                {label(runtime.ingress)}
-              </StatusBadge>
-              <p>
-                {runtime.reason
-                  ? label(runtime.reason)
-                  : runtime.ingress === "ready"
-                    ? "Runtime 消息入口已就绪；平台连接状态见接入区域。"
-                    : "Runtime 正在停止、切换或尚未启动。"}
-              </p>
-              {runtime.reason === "database_unavailable" && (
-                <p>请先恢复服务使用的数据库连接，再进入配置生效管理重试。</p>
-              )}
-              {runtime.ingress !== "ready" && (
-                <Button
-                  onClick={() =>
-                    navigate(
-                      runtime.reason === "configuration_not_ready"
-                        ? "/profiles"
-                        : "/configuration/application",
-                    )
-                  }
-                >
-                  {runtime.reason === "configuration_not_ready"
-                    ? "检查配置"
-                    : "管理配置生效"}
-                </Button>
-              )}
-            </>
-          )}
-        </StatusCard>
-        <StatusCard title="Adapter">
-          <ReadFeedback name="Adapter 状态" state={adapters} />
-          {adapters.data && (
-            <>
-              <p>Adapter Host：{label(adapters.data.adapterHostState)}</p>
-              {!adapters.data.adapters.length && (
-                <p>当前没有已启动的 Adapter，请检查接入配置与配置生效状态。</p>
-              )}
-              {adapters.data.adapters.map((adapter) => (
-                <article className="overview-adapter" key={adapter.adapterId}>
-                  <h3>
-                    {adapter.type} · {adapter.adapterId}
-                  </h3>
-                  <StatusBadge
-                    tone={
-                      !adapter.enabled
-                        ? "neutral"
-                        : adapter.lifecycle === "failed" ||
-                            adapter.connectivity === "disconnected" ||
-                            adapter.connectivity === "retrying"
-                          ? "warning"
-                          : "neutral"
-                    }
-                  >
-                    {!adapter.enabled ? "已禁用" : label(adapter.lifecycle)}
-                  </StatusBadge>
-                  <p>连接：{label(adapter.connectivity)}</p>
-                  {adapter.errorType && <p>原因：{label(adapter.errorType)}</p>}
-                </article>
-              ))}
-              <Button onClick={() => navigate("/adapters")}>检查接入</Button>
-            </>
-          )}
-        </StatusCard>
+      <div className="overview-grid" aria-live="polite">
+        <OverviewTile
+          title="Runtime"
+          status={
+            adapters.loading
+              ? "读取中"
+              : adapters.error || !runtime
+                ? "状态未知"
+                : label(runtime.reason ?? runtime.ingress)
+          }
+          tone={
+            adapters.loading
+              ? "neutral"
+              : adapters.error || !runtime
+                ? "error"
+                : runtime.ingress === "ready"
+                  ? "success"
+                  : runtime.ingress === "stopping"
+                    ? "warning"
+                    : "error"
+          }
+          icon={Activity}
+          detail={
+            adapters.error
+              ? "Runtime 状态读取失败，可刷新概览重试。"
+              : undefined
+          }
+          onClick={() => navigate("/profiles")}
+        />
+        <OverviewTile
+          title="Adapter"
+          status={
+            adapters.loading
+              ? "读取中"
+              : adapters.error || !adapters.data
+                ? "状态未知"
+                : label(adapters.data.adapterHostState)
+          }
+          tone={
+            adapters.loading
+              ? "neutral"
+              : adapters.error || !adapters.data
+                ? "error"
+                : lifecycleTone(adapters.data.adapterHostState)
+          }
+          icon={ServerCog}
+          detail={
+            adapters.error
+              ? "Adapter 状态读取失败，可刷新概览重试。"
+              : undefined
+          }
+          onClick={adapters.data ? () => navigate("/adapters") : undefined}
+        />
       </div>
+      <section
+        className="overview-adapter-section"
+        aria-labelledby="overview-adapter-title"
+      >
+        <h2 id="overview-adapter-title" ref={adapterHeading} tabIndex={-1}>
+          接入
+        </h2>
+        <div className="overview-grid overview-adapter-grid" aria-live="polite">
+          {adapters.data?.adapters
+            .toSorted(
+              (left, right) =>
+                adapterOrder(left.type) - adapterOrder(right.type),
+            )
+            .map((adapter) => {
+              const status = adapterStatus(adapter);
+              const type = adapter.type.toLowerCase();
+              return (
+                <OverviewTile
+                  key={adapter.adapterId}
+                  title={adapterTitle(adapter.type)}
+                  status={status.label}
+                  tone={status.tone}
+                  icon={type === "web" ? Globe2 : Cable}
+                  detail={`Adapter ${adapter.adapterId}`}
+                  meta={
+                    type === "napcat"
+                      ? napCatEndpointState === "loading"
+                        ? "端点读取中"
+                        : napCatEndpointState === "error"
+                          ? "端点读取失败"
+                          : (napCatEndpointLabel(napCatWsUrl) ??
+                            "协议/端口未配置")
+                      : type === "web"
+                        ? "默认组件 · 无需配置"
+                        : undefined
+                  }
+                  onClick={type === "napcat" ? onConfigureNapCat : undefined}
+                />
+              );
+            })}
+        </div>
+      </section>
     </>
   );
 }

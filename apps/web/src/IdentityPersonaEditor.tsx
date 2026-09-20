@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "./components/ui.js";
 import {
   requestIdentityPersonaTemplate,
@@ -22,23 +22,35 @@ const resources: readonly {
   {
     kind: "persona",
     label: "身份、经历、性格与关系",
-    rows: 8,
+    rows: 5,
     help: "不放平台表达风格；平台风格由对应模块资源决定。",
   },
 ];
 
-export function IdentityPersonaEditor({ token }: { readonly token: string }) {
+export function IdentityPersonaEditor({
+  token,
+  timeZoneEditor,
+}: {
+  readonly token: string;
+  readonly timeZoneEditor: ReactNode;
+}) {
   return (
-    <div className="module-editor">
+    <div className="module-editor identity-persona-editor">
       <h4>工作区辉夜身份资源</h4>
-      <p>工作区级，影响全部 Profile；保存或恢复后重启服务生效。</p>
-      {resources.map((resource) => (
-        <IdentityResourceEditor
-          key={resource.kind}
-          token={token}
-          {...resource}
-        />
-      ))}
+      <span className="wb-sr-only">
+        工作区级，影响全部 Profile；保存或恢复后重启服务生效。
+      </span>
+      <div className="identity-resource-grid">
+        {resources.slice(0, 2).map((resource) => (
+          <IdentityResourceEditor
+            key={resource.kind}
+            token={token}
+            {...resource}
+          />
+        ))}
+        {timeZoneEditor}
+        <IdentityResourceEditor token={token} {...resources[2]!} />
+      </div>
     </div>
   );
 }
@@ -95,14 +107,10 @@ function IdentityResourceEditor({
     }
   };
   return (
-    <label className="field">
+    <label className={`field identity-resource identity-resource-${kind}`}>
       <span>{label}</span>
-      <span className="field-help">{help}</span>
       {view && (
         <>
-          <span className="field-help">
-            当前来源：{view.source === "local" ? "本地覆盖" : "内置默认值"}
-          </span>
           <textarea
             className="persona-editor"
             rows={rows}
@@ -110,8 +118,10 @@ function IdentityResourceEditor({
             disabled={busy}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
+            placeholder={help}
+            title={`${help} 当前来源：${view.source === "local" ? "本地覆盖" : "内置默认值"}`}
           />
-          <span>
+          <span className="identity-resource-actions">
             <Button
               type="button"
               disabled={busy || draft === view.content}

@@ -3,8 +3,7 @@
  * 编辑切换冻结守卫集合，异步保存期间重新注册的守卫只影响下一次切换。
  * 功能概述：认证工作台共享 Profile 编辑上下文和安全的配置应用状态，不读取配置正文。
  * 主要职责：ProfileWorkspace 保存编辑 ID、操作锁及应用快照；ProfileSwitcher 用 Radix
- * 菜单切换查看对象、用 Dialog 新建配置。profileLabels 独立描述 selected 与已生效 revision。
- * 顶栏仅汇总运行对象、与其不同的选择对象及一个应用状态；菜单保留完整标签，避免把编辑当成运行。
+ * 菜单切换查看对象、用 Dialog 新建配置。profileMenuState 独立投影已生效标记与动态应用状态。
  * 代码库关系：App 在 AppShell 外挂载本 Provider；配置编辑器显式保存/选择/删除，
  * ConfigurationApplicationScreen 回传应用进度。顶栏只调用 create 和只读状态接口。
  * 输入输出与副作用：编辑切换可注册异步草稿守卫；应用期间禁止切换及新建；轮询只读
@@ -20,7 +19,7 @@ import {
   type ReactNode,
 } from "react";
 import { checkNavigationGuards } from "./components/navigation-guards.js";
-import { ChevronDown, Plus } from "lucide-react";
+import { Check, ChevronDown, Plus } from "lucide-react";
 import { Button, Dialog, DropdownMenu, FieldMessage } from "./components/ui.js";
 import {
   createProfile,
@@ -59,23 +58,20 @@ export function useProfileWorkspace() {
   if (!value) throw new Error("Profile 编辑需要工作台上下文");
   return value;
 }
-export function profileLabels(
+export function profileMenuState(
   id: string,
-  selectedId: string,
   application?: ConfigurationApplicationStatus,
   applying = false,
   failed = false,
-): string[] {
+): { applied: boolean; labels: string[] } {
   const labels: string[] = [];
-  if (id === selectedId) labels.push("当前选择");
-  if (id === application?.appliedProfileId) labels.push("已生效");
   if (id === application?.selectedProfileId) {
     if (applying || application.state === "applying") labels.push("应用中");
     else if (application.selectedRevision !== application.appliedRevision)
       labels.push("待应用");
     if (failed || application.state === "degraded") labels.push("应用失败");
   }
-  return labels;
+  return { applied: id === application?.appliedProfileId, labels };
 }
 export function ProfileWorkspace({
   token,
@@ -196,32 +192,8 @@ export function ProfileSwitcher() {
       <span role="status">Profile 状态尚未就绪，请等待加载或重试概览。</span>
     );
   const editing = status.profiles.find((profile) => profile.id === editingId);
-  const selectedName =
-    status.profiles.find((profile) => profile.id === status.selectedProfileId)
-      ?.name ?? status.selectedProfileId;
-  const runtimeName =
-    status.profiles.find(
-      (profile) => profile.id === application?.appliedProfileId,
-    )?.name ??
-    application?.appliedProfileId ??
-    "未确认";
-  const applicationLabel = applying
-    ? "应用中"
-    : applicationError || application?.state === "degraded"
-      ? "应用失败"
-      : application &&
-          (application.state === "pending" ||
-            application.selectedRevision !== application.appliedRevision)
-        ? "待应用"
-        : undefined;
-  const labels = (id: string) =>
-    profileLabels(
-      id,
-      status.selectedProfileId,
-      application,
-      applying,
-      Boolean(applicationError),
-    );
+  const menuState = (id: string) =>
+    profileMenuState(id, application, applying, Boolean(applicationError));
   const create = async () => {
     if (!name.trim()) {
       setError("请输入 Profile 名称。");
@@ -262,22 +234,36 @@ export function ProfileSwitcher() {
             align="end"
             sideOffset={8}
           >
-            <DropdownMenu.Label>
-              切换查看与编辑（不会设为当前或应用）
-            </DropdownMenu.Label>
-            {status.profiles.map((profile) => (
-              <DropdownMenu.Item
-                key={profile.id}
-                disabled={applying || mutating}
-                onSelect={() => void workspace.requestEdit(profile.id)}
-              >
-                <strong>
-                  {profile.name}
-                  {profile.id === editingId ? " · 正在编辑" : ""}
-                </strong>
-                <small>{labels(profile.id).join(" · ") || "仅保存"}</small>
-              </DropdownMenu.Item>
-            ))}
+            {status.profiles.map((profile) => {
+              const state = menuState(profile.id);
+              return (
+                <DropdownMenu.Item
+                  key={profile.id}
+                  disabled={applying || mutating}
+                  onSelect={() => void workspace.requestEdit(profile.id)}
+                >
+                  <strong>
+                    {profile.name}
+                    {profile.id === editingId ? " · 正在编辑" : ""}
+                  </strong>
+                  <small
+                    className={`profile-menu-state${state.applied ? " is-applied" : ""}`}
+                  >
+                    {state.applied && (
+                      <>
+                        <Check size={16} aria-hidden="true" />
+                        <span className="wb-sr-only">已生效</span>
+                      </>
+                    )}
+                    {state.labels.length > 0
+                      ? state.labels.join(" · ")
+                      : !state.applied
+                        ? "仅保存"
+                        : null}
+                  </small>
+                </DropdownMenu.Item>
+              );
+            })}
             <DropdownMenu.Separator />
             <DropdownMenu.Item
               disabled={applying || mutating}
@@ -295,13 +281,6 @@ export function ProfileSwitcher() {
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
-      <span className="profile-runtime-line" role="status">
-        运行：{runtimeName}
-        {status.selectedProfileId !== application?.appliedProfileId
-          ? ` · 选择：${selectedName}`
-          : ""}
-        {applicationLabel ? ` · ${applicationLabel}` : ""}
-      </span>
       {applicationError && <span role="alert">{applicationError}</span>}
       {workspace.statusError && (
         <span role="alert">{workspace.statusError}</span>

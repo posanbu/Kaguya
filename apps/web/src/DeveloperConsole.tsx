@@ -91,7 +91,6 @@ export function DeveloperConsole({
           <>
             <PageHeader
               title="检查"
-              description="查看模块契约与消息流。消息和 Prompt 已执行秘密脱敏。"
               actions={
                 <Button onClick={() => setRevision((r) => r + 1)}>刷新</Button>
               }
@@ -192,34 +191,46 @@ function AtomList({
   selected: string | undefined;
 }) {
   return (
-    <ol className="atom-list">
-      {atoms.map((a) => (
-        <li key={a.informationId}>
-          <Button
-            aria-pressed={selected === a.informationId}
-            onClick={() => select(a.informationId)}
-          >
-            <strong>
-              {a.presentation?.title ?? names.get(a.kind) ?? a.kind}
-            </strong>
-            {a.presentation?.status && (
-              <InspectionStatus value={a.presentation.status} />
-            )}
-            {a.presentation?.fields[0] && (
-              <span>
-                {a.presentation.fields[0].label}：
-                {typeof a.presentation.fields[0].value === "string"
-                  ? a.presentation.fields[0].value.slice(0, 120)
-                  : "查看详情"}
+    <div className="atom-table">
+      <div className="atom-table-header" aria-hidden="true">
+        <span>事件</span>
+        <span>时间</span>
+        <span>来源</span>
+        <span>ID</span>
+      </div>
+      <ol className="atom-list" aria-label="消息列表">
+        {atoms.map((a) => (
+          <li key={a.informationId}>
+            <Button
+              aria-pressed={selected === a.informationId}
+              onClick={() => select(a.informationId)}
+            >
+              <span className="atom-list-event">
+                <span className="atom-list-event-heading">
+                  <strong>
+                    {a.presentation?.title ?? names.get(a.kind) ?? a.kind}
+                  </strong>
+                  {a.presentation?.status && (
+                    <InspectionStatus value={a.presentation.status} />
+                  )}
+                </span>
+                {a.presentation?.fields[0] && (
+                  <span className="atom-list-field">
+                    {a.presentation.fields[0].label}：
+                    {typeof a.presentation.fields[0].value === "string"
+                      ? a.presentation.fields[0].value.slice(0, 120)
+                      : "查看详情"}
+                  </span>
+                )}
               </span>
-            )}
-            <time>{new Date(a.occurredAt).toLocaleString()}</time>
-            <span>{a.source}</span>
-            <code title={a.informationId}>{a.informationId.slice(0, 8)}</code>
-          </Button>
-        </li>
-      ))}
-    </ol>
+              <time>{new Date(a.occurredAt).toLocaleString()}</time>
+              <span className="atom-list-source">{a.source}</span>
+              <code title={a.informationId}>{a.informationId.slice(0, 8)}</code>
+            </Button>
+          </li>
+        ))}
+      </ol>
+    </div>
   );
 }
 function Pager({

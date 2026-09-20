@@ -1,6 +1,6 @@
 /**
  * 功能概述：工作台的按钮、标题、状态、字段反馈及无障碍弹层公共边界。
- * 主要职责：Button 默认不提交表单；PageHeader 接受标题/说明/动作；StatusBadge 与
+ * 主要职责：Button 默认不提交表单；PageHeader 接受标题/动作；StatusBadge 与
  * FieldMessage 显示文字语义。Dialog、AlertDialog、DropdownMenu 导出 Radix 原语，
  * 由调用页声明标题、描述及操作，保留原语的焦点管理、键盘交互和受控状态能力。
  * 代码库关系：AppShell 与业务页共用 workbench.css 和现有 CSS variables；不处理请求。
@@ -31,23 +31,18 @@ export const Button = forwardRef<
 });
 export function PageHeader({
   title,
-  description,
+  titleAside,
   actions,
 }: {
   title: string;
-  description?: ReactNode;
+  titleAside?: ReactNode;
   actions?: ReactNode;
 }) {
   return (
     <header className="wb-page-header">
-      <div>
+      <div className="wb-page-title-group">
         <h1>{title}</h1>
-        {description && (
-          <details className="wb-page-help">
-            <summary>页面说明</summary>
-            <p>{description}</p>
-          </details>
-        )}
+        {titleAside}
       </div>
       {actions && <div className="wb-page-actions">{actions}</div>}
     </header>

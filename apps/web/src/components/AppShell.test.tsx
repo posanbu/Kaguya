@@ -12,18 +12,20 @@ describe("工作台导航契约", () => {
   it("深层页面归属于稳定的任务域", () => {
     expect(navigationDomain("/developer/flows")).toBe("/developer/modules");
     expect(navigationDomain("/configuration/application")).toBe("/profiles");
+    expect(navigationDomain("/adapters")).toBe("/");
     expect(navigationDomain("/messages")).toBe("/messages");
     expect(navigationDomain("/")).toBe("/");
   });
-  it("五个键盘可达链接只标记一个当前域", () => {
+  it("四个键盘可达链接只标记一个当前域", () => {
     const html = renderToStaticMarkup(
       <SideNav currentPath="/developer/atoms" onNavigate={() => {}} />,
     );
-    expect(html.match(/<a /g)).toHaveLength(5);
+    expect(html.match(/<a /g)).toHaveLength(4);
     expect(html.match(/aria-current="page"/g)).toHaveLength(1);
     expect(html).toContain('href="/developer/modules" aria-current="page"');
-    for (const label of ["概览", "消息", "配置", "接入", "检查"])
+    for (const label of ["概览", "消息", "配置", "检查"])
       expect(html).toContain(label);
+    expect(html).not.toContain('href="/adapters"');
   });
   it("按钮不隐式提交，页面标题和字段错误有可访问语义", () => {
     expect(renderToStaticMarkup(<Button>取消</Button>)).toContain(
@@ -32,9 +34,9 @@ describe("工作台导航契约", () => {
     expect(renderToStaticMarkup(<Button type="submit">保存</Button>)).toContain(
       'type="submit"',
     );
-    expect(renderToStaticMarkup(<PageHeader title="配置" />)).toContain(
-      "<h1>配置</h1>",
-    );
+    const pageHeader = renderToStaticMarkup(<PageHeader title="配置" />);
+    expect(pageHeader).toContain("<h1>配置</h1>");
+    expect(pageHeader).not.toContain("页面说明");
     expect(
       renderToStaticMarkup(
         <FieldMessage id="name-error" tone="error">

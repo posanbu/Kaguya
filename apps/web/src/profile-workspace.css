@@ -15,12 +15,6 @@
 .profile-switcher > button span {
   overflow-wrap: anywhere;
 }
-.profile-runtime-line {
-  min-width: 0;
-  font-size: 12px;
-  overflow-wrap: anywhere;
-  color: var(--kaguya-muted);
-}
 .profile-menu {
   max-height: min(70vh, 560px);
   overflow-y: auto;
@@ -35,8 +29,17 @@
 .profile-menu small {
   overflow-wrap: anywhere;
 }
-.profile-menu small {
+.profile-menu-state {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   flex-basis: 100%;
+}
+.profile-menu-state.is-applied {
+  color: #24724b;
+}
+:root[data-theme="dark"] .profile-menu-state.is-applied {
+  color: #91e7b2;
 }
 .profile-workspace.profile-single-column {
   grid-template-columns: minmax(0, 1fr);
@@ -52,7 +55,66 @@
   margin: 0;
   min-width: 0;
   display: grid;
-  gap: 20px;
+  gap: 10px;
+}
+.profile-title-editor {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--kaguya-muted);
+}
+.profile-title-name {
+  max-width: min(38vw, 420px);
+  overflow: hidden;
+  font-size: clamp(16px, 1.8vw, 21px);
+  font-weight: 650;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.profile-title-input {
+  box-sizing: border-box;
+  width: min(38vw, 420px);
+  min-width: 180px;
+  min-height: 38px;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 8px;
+  outline: none;
+  padding: 7px 10px;
+  background: var(--kaguya-paper);
+  color: var(--kaguya-ink);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 650;
+}
+.profile-title-input:focus {
+  border-color: var(--kaguya-coral);
+  box-shadow: 0 0 0 3px var(--kaguya-focus);
+}
+.profile-title-edit {
+  display: inline-grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: currentcolor;
+  cursor: pointer;
+}
+.profile-title-edit:hover:not(:disabled) {
+  background: var(--kaguya-paper-soft);
+  color: var(--kaguya-ink);
+}
+.profile-title-edit:focus-visible {
+  outline: 3px solid var(--kaguya-focus);
+  outline-offset: 1px;
+}
+.profile-title-edit:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
 }
 .profile-problem-summary {
   border: 1px solid var(--kaguya-line);
@@ -88,8 +150,12 @@
   .profile-switcher > button {
     padding: 8px;
   }
-  .profile-runtime-line {
-    font-size: 11px;
-    line-height: 1.5;
+  .profile-title-editor {
+    flex: 1 1 100%;
+  }
+  .profile-title-name,
+  .profile-title-input {
+    width: min(100%, 320px);
+    max-width: calc(100vw - 130px);
   }
 }

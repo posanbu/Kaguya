@@ -214,6 +214,7 @@ export function ProfileProblemSummary({
   children?: ReactNode;
 }) {
   const { issues } = useContext(Feedback);
+  if (issues.length === 0) return null;
   const focusable = issues.find((issue) => issue.field);
   return (
     <section

@@ -139,6 +139,7 @@ describe("模块独立页面", () => {
     expect(html).toContain("输入 1 · 输出 1");
     expect(html).toContain("未激活");
     expect(html).toContain(module.summary);
+    expect(html).not.toContain("1 个模块定义");
     expect(html).not.toContain(module.description);
     expect(html).not.toContain(module.consumes[0]!.description);
     expect(html).not.toContain("secret-token");
