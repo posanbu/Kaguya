@@ -1,4 +1,6 @@
 /**
+ * Web 会话通过 getConversationMessages 增量读取已持久化的双向消息；sendMessage 可携带
+ * conversationId、调用方 requestId 与取消信号，requestId 仅写入请求头用于乐观消息去重。
  * ProfileReadResult 含所属 Profile 的 readiness；GatewayRequestError 保留安全字段路径用于表单反馈。
  * Profile 与替换请求必须同时包含两个方向的字符串数组，响应校验分别验证它们。
  * getConfigurationApplication/applyConfiguration 读取并提交配置 revision；保存响应携带同一写锁内的
@@ -52,6 +54,27 @@ export interface NapCatMutationResult {
 
 export interface SendMessageInput {
   readonly text: string;
+  readonly conversationId?: string;
+}
+
+export interface ConversationMessage {
+  readonly id: string;
+  readonly role: "user" | "assistant";
+  readonly text: string;
+  readonly createdAt: string;
+  readonly requestId?: string;
+}
+
+export interface ConversationCursor {
+  readonly inbound?: string;
+  readonly outbound?: string;
+}
+
+export interface ConversationMessages {
+  readonly conversationId: string;
+  readonly messages: readonly ConversationMessage[];
+  readonly cursor: ConversationCursor;
+  readonly hasMore: boolean;
 }
 
 export interface DiscoverModelsInput {
@@ -466,6 +489,7 @@ export async function sendMessage(
   config: GatewayConfig,
   input: SendMessageInput,
   fetchImplementation: typeof fetch = fetch,
+  options: { readonly signal?: AbortSignal; readonly requestId?: string } = {},
 ): Promise<AcceptedMessage> {
   const token = requireToken(config);
 
@@ -486,9 +510,15 @@ export async function sendMessage(
       method: "POST",
       headers: {
         ...jsonHeaders(token),
-        "x-request-id": crypto.randomUUID(),
+        "x-request-id": options.requestId ?? crypto.randomUUID(),
       },
-      body: JSON.stringify({ text: input.text }),
+      ...(options.signal ? { signal: options.signal } : {}),
+      body: JSON.stringify({
+        text: input.text,
+        ...(input.conversationId
+          ? { conversationId: input.conversationId }
+          : {}),
+      }),
     },
     fetchImplementation,
   );
@@ -511,6 +541,69 @@ export async function sendMessage(
     );
   }
   return payload.data;
+}
+
+export async function getConversationMessages(
+  config: GatewayConfig,
+  input: {
+    readonly conversationId: string;
+    readonly cursor?: ConversationCursor;
+  },
+  signal: AbortSignal,
+  fetchImplementation: typeof fetch = fetch,
+): Promise<ConversationMessages> {
+  const query = new URLSearchParams({ conversationId: input.conversationId });
+  if (input.cursor?.inbound) query.set("afterInbound", input.cursor.inbound);
+  if (input.cursor?.outbound) query.set("afterOutbound", input.cursor.outbound);
+  const response = await requestAuthenticatedJson(
+    config,
+    `/api/v1/messages?${query}`,
+    { method: "GET", signal, cache: "no-store" },
+    fetchImplementation,
+  );
+  const payload = await readJson(response);
+  if (!response.ok) {
+    const gatewayError = isErrorResponse(payload) ? payload.error : undefined;
+    throw new GatewayRequestError(
+      gatewayError?.message ?? `无法读取对话（HTTP ${response.status}）`,
+      gatewayError?.code ?? "chat_history_failed",
+      response.status,
+      gatewayError?.requestId,
+    );
+  }
+  if (
+    !isRecord(payload) ||
+    !isRecord(payload.data) ||
+    payload.data.conversationId !== input.conversationId ||
+    !Array.isArray(payload.data.messages) ||
+    !payload.data.messages.every(isConversationMessage) ||
+    !isRecord(payload.data.cursor) ||
+    ![payload.data.cursor.inbound, payload.data.cursor.outbound].every(
+      (value) =>
+        value === undefined || (typeof value === "string" && value.length > 0),
+    ) ||
+    typeof payload.data.hasMore !== "boolean"
+  ) {
+    throw new GatewayRequestError(
+      "服务返回了无法识别的对话",
+      "invalid_response",
+      response.status,
+    );
+  }
+  return payload.data as unknown as ConversationMessages;
+}
+
+function isConversationMessage(value: unknown): value is ConversationMessage {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    value.id.length > 0 &&
+    (value.role === "user" || value.role === "assistant") &&
+    typeof value.text === "string" &&
+    typeof value.createdAt === "string" &&
+    Number.isFinite(Date.parse(value.createdAt)) &&
+    (value.requestId === undefined || typeof value.requestId === "string")
+  );
 }
 
 async function readProfileMutationResult(

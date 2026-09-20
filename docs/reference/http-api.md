@@ -43,6 +43,8 @@ description: Kaguya 统一 Server 的路由、认证、Profile 与消息协议�
 
 **`POST /api/v1/messages`** — 需要 Bearer Token，校验并把一条 Web 文本消息交给 gateway 后台分发。
 
+**`GET /api/v1/messages`** — 需要 Bearer Token，按 `conversationId` 读取持久化的 Web 私聊消息与成功投递的回复。
+
 生产 SPA fallback 只处理接受 `text/html` 的 GET 页面请求，显式排除 `/api/*` 与 `/healthz`。未知 API 返回结构化 `404 not_found`。
 
 ## Bearer 认证
@@ -67,7 +69,7 @@ Server 每次启动生成一个新的全权限 token，成功监听后通过 `Ka
 
 ## 提交消息
 
-`POST /api/v1/messages` 需要 Bearer Token。请求体只允许 `text` 字段：文本必须非空，trim 后不能只剩空白，最多 131072 个 Unicode code point；整个请求体最多 256 KiB。
+`POST /api/v1/messages` 需要 Bearer Token。请求体允许 `text` 和可选的 UUID `conversationId`：文本必须非空，trim 后不能只剩空白，最多 131072 个 Unicode code point；整个请求体最多 256 KiB。WebUI 为同一对话复用 `conversationId`，开始新对话时生成新的标识。
 
 ::: code-group
 
@@ -76,7 +78,7 @@ curl http://127.0.0.1:3000/api/v1/messages \
   -H "Authorization: Bearer replace-with-at-least-16-characters" \
   -H "Content-Type: application/json" \
   -H "X-Request-Id: example-1" \
-  -d '{"text":"Hello"}'
+  -d '{"text":"Hello","conversationId":"74f05f76-e867-48a3-9937-07aa3fe64eb1"}'
 ```
 
 ```json [202 响应 ~vscode-icons:file-type-json~]
@@ -90,7 +92,15 @@ curl http://127.0.0.1:3000/api/v1/messages \
 
 :::
 
-`202 accepted` 只表示 Web gateway 已接受消息。gateway 随后以 `web:${requestId}` 作为 traceId，在后台异步调用 Runtime；响应不等待 dispatch、模型调用或出站投递完成。当前接口没有回复查询或 SSE。
+带 `conversationId` 的请求等待入站持久化后返回 `202 accepted`，模型生成和出站投递仍在后台继续；不带会话标识的旧请求保持异步接收兼容。`requestId` 用于关联客户端消息与服务端回显，Runtime 自行生成信息身份。接收确认不等同于机器人已回复。
+
+## 读取对话
+
+`GET /api/v1/messages?conversationId=<UUID>` 返回 `{data: {conversationId, messages, cursor, hasMore}}`。每条消息包含 `id`、`role`（`user` 或 `assistant`）、`text` 与 ISO `createdAt`；用户消息还带有对应的 `requestId`。仅成功投递的助手消息进入历史，模型内部任务、提示词与未送达正文不会返回。
+
+后续请求将 `cursor.inbound`、`cursor.outbound` 分别作为 `afterInbound`、`afterOutbound` 传回。每页最多读取 100 条入站消息和 100 条出站回执；`hasMore` 为 true 时继续翻页。两类游标按登记顺序独立推进，可读取生成较晚或时间戳较早的补写消息。游标必须属于同一会话和对应消息种类，否则返回 `400 invalid_chat_cursor`。
+
+历史读取响应禁止缓存，使用独立的每分钟 120 次请求额度。Runtime 或账本尚未就绪时返回 `503 core_unavailable`，不以空历史掩盖故障。会话标识仅隔离上下文，访问权限仍由 Gateway Bearer Token 决定。
 
 ## 错误格式
 

@@ -15,6 +15,7 @@
  * Web、状态与 Inspection 通过动态门面读取当前实例，关闭失败禁止创建第二个活跃宿主。
  * 输入输出与副作用：连接数据库、监听 HTTP 并启动适配器，失败时释放已创建资源并固定错误分类。
  * Inspection 仅在 Runtime 可用时注入，不把 settings、凭据或数据库对象放入 HTTP 响应。
+ * Web adapter 将回复交付给持久账本；WebChatHistory 只投影已送达消息，热应用后读取当前数据库。
  */
 import { ModuleTemplateManagement } from "./module-template-management.js";
 import { ModuleSettingsManagement } from "./module-settings-management.js";
@@ -86,6 +87,8 @@ import type {
   RuntimeUnavailableReason,
 } from "@kaguya/platform-adapters";
 import { registerWebUi, type WebUiHandle } from "./web.js";
+import { createWebOutboundTransport } from "@kaguya/platform-adapters";
+import { createWebChatHistory } from "./web-chat.js";
 
 export interface StartedKaguyaServer {
   readonly app: FastifyInstance;
@@ -506,6 +509,10 @@ export async function startKaguyaServer(
         configurationApplication: application,
         gatewayAuth,
         webGateway: { ingest: (input) => adapterHost.webGateway.ingest(input) },
+        webChatHistory: () =>
+          database && runtime
+            ? createWebChatHistory(database.information)
+            : undefined,
         adapterHost: { status: () => adapterHost.status() },
         configuration,
         moduleTemplates: new ModuleTemplateManagement({
@@ -591,6 +598,7 @@ function createServerAdapterHost(
     type: "web",
     platform: "web",
     enabled: true,
+    outboundTransport: createWebOutboundTransport(),
     start: async () => {},
     stop: async () => {},
   });

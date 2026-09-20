@@ -6,6 +6,7 @@
  * pauseIngress/resumeIngress 在热应用发布新宿主前阻止入站，beginStopping 永久关闭旧宿主入口。
  * 代码库关系：Server 通过动态门面转发 HTTP/Web 请求，NapCat 回调始终绑定所属宿主。
  * 输入输出与副作用：启动/停止连接，拒绝切换中的消息；暂停不关闭出口，允许旧任务完成投递。
+ * Web 私聊带 conversationId 时等待入站持久化再返回，防止 HTTP 确认掩盖异步提交失败。
  */
 import { createModuleLogger, type KaguyaLogger } from "@kaguya/logger";
 import {
@@ -404,7 +405,9 @@ export class AdapterHost {
       if (!message) throw new Error("Web inbound message is invalid");
       this.acceptInbound(message);
       this.assertReady(message);
-      void this.ingress.submit(message).catch(() => {});
+      const submission = this.ingress.submit(message).then(() => undefined);
+      if (input.conversationId !== undefined) return submission;
+      void submission.catch(() => {});
     },
   };
 }

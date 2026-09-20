@@ -1,6 +1,7 @@
 /**
  * 功能概述：Heartbeat 的开放观察投影与只读 Selector，调度提交仍由 index.ts 负责。
- * scopeOf 和 isImmediateObservation 使用 typed 来源判断范围与即时信号；openObservations 按终态过滤开放候选。
+ * scopeOf 和 isImmediateObservation 使用 typed 来源判断范围与即时信号；Web conversationId 隔离浏览器会话，
+ * 未携带会话 ID 的旧 Web 消息保持原范围键；openObservations 按终态过滤开放候选。
  * 三个 Selector 分别恢复 scope schedule、due 来源和观察水位；immediateInState 仅认可成功投递的引用目标。
  * 查询有界且不写账本，保持原有导出对象身份与 Scheduler/Heartflow 外部契约。
  */
@@ -32,6 +33,7 @@ interface ObservationSource {
     userId?: string;
     channelId?: string;
     id?: string;
+    conversationId?: string;
   };
   selfId?: string;
   mentions?: readonly { kind: string; id?: string }[];
@@ -40,7 +42,8 @@ interface ObservationSource {
 
 export function scopeOf(source: ObservationSource): string {
   const d = source.destination ?? {};
-  const id = d.groupId ?? d.userId ?? d.channelId ?? d.id ?? "";
+  const id =
+    d.groupId ?? d.userId ?? d.channelId ?? d.id ?? d.conversationId ?? "";
   return `${source.platform}:${source.adapterId}:${d.kind ?? "unknown"}:${id}`;
 }
 

@@ -15,6 +15,8 @@
  * 真实配置 Registry 来自 `@kaguya/config`，信息账本来自 `@kaguya/database/testing`，
  * provider client 创建由 `@ai-sdk/openai-compatible` mock 观察。
  * 输入输出与副作用：每个用例使用独立临时配置目录或内存 PGlite；
+ * Web DAG fixture 对入站提交及持久订阅收敛统一使用 8 秒/20 毫秒预算；
+ * afterEach 在断言或启动失败后也按 HTTP、Runtime、数据库和 logger 顺序释放资源，避免污染后续用例。
  * 启动错误用人工包含密码的连接异常验证返回值与日志均已脱敏。
  */
 import {
@@ -62,13 +64,38 @@ vi.mock("@ai-sdk/openai-compatible", () => ({
 
 const gatewayToken = "test-gateway-token-12345";
 const roots: string[] = [];
+const durableWait = { timeout: 8_000, interval: 20 };
+const runtimeResources: {
+  database: Awaited<ReturnType<typeof createTestingDatabase>>;
+  runtime?: KaguyaRuntime;
+  app?: Awaited<ReturnType<typeof createHttpApplication>>;
+  logger?: ReturnType<typeof createLogger>;
+}[] = [];
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  for (const root of roots.splice(0)) {
-    rmSync(root, { recursive: true, force: true });
+afterEach(async () => {
+  try {
+    for (const resource of runtimeResources.splice(0).reverse()) {
+      try {
+        await resource.app?.close();
+      } finally {
+        try {
+          await resource.runtime?.close();
+        } finally {
+          try {
+            await resource.database.close();
+          } finally {
+            if (resource.logger) await closeLogger(resource.logger);
+          }
+        }
+      }
+    }
+  } finally {
+    vi.restoreAllMocks();
+    for (const root of roots.splice(0)) {
+      rmSync(root, { recursive: true, force: true });
+    }
   }
-});
+}, 15_000);
 
 function tempWorkspaceRoot(): string {
   const root = mkdtempSync(join(tmpdir(), "kaguya-server-composition-"));
@@ -141,12 +168,15 @@ describe("unified server composition", () => {
   it("ingests Web messages through the shared Runtime as a platform adapter", async () => {
     const workspaceRoot = tempWorkspaceRoot();
     const database = await createTestingDatabase();
+    const resources: (typeof runtimeResources)[number] = { database };
+    runtimeResources.push(resources);
     const runtime = new KaguyaRuntime({
       database,
       ...createMessageComposition(undefined, {
         moduleConfigs: createFirstPartyModuleConfigDefaults("test"),
       }),
     });
+    resources.runtime = runtime;
     runtime.registerTransport({
       adapterId: "web.ui.main",
       platform: "web",
@@ -165,6 +195,7 @@ describe("unified server composition", () => {
       service: "kaguya-server-composition-test",
       level: "silent",
     });
+    resources.logger = rootLogger;
     const receipts: Awaited<ReturnType<KaguyaRuntime["submit"]>>[] = [];
     const webGateway = createWebMessageGateway({
       adapterId: "web.ui.main",
@@ -181,6 +212,7 @@ describe("unified server composition", () => {
       config: config(workspaceRoot),
       webGateway,
     });
+    resources.app = app;
 
     const response = await app.inject({
       method: "POST",
@@ -198,11 +230,11 @@ describe("unified server composition", () => {
     expect(response.json()).toMatchObject({
       data: { status: "accepted", requestId: "request-server-1" },
     });
-    await vi.waitFor(() => expect(receipts).toHaveLength(1));
+    await vi.waitFor(() => expect(receipts).toHaveLength(1), durableWait);
     await vi.waitFor(
       async () =>
         expect((await database.information.reliable.health()).pending).toBe(0),
-      { timeout: 5000 },
+      durableWait,
     );
     const graph = await database.information.query({
       informationId: receipts[0]!.rootInformationId,
@@ -264,11 +296,8 @@ describe("unified server composition", () => {
       },
     });
     expect(JSON.stringify(graph)).not.toMatch(/traceId|raw/u);
-    await app.close();
-    await runtime.close();
-    await database.close();
-    await closeLogger(rootLogger);
-  }, 20_000);
+    // 数据库初始化和两次持久化等待有独立预算；资源清理由 afterEach 覆盖所有失败路径。
+  }, 30_000);
 
   it("serves the Web UI, health, OpenAPI, and SPA fallback on one app", async () => {
     const workspaceRoot = tempWorkspaceRoot();

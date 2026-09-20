@@ -1,6 +1,7 @@
 /**
  * module-templates.ts 提供未渲染模板管理 DTO，避免与 CompiledPrompt 混用。
  * module-settings.ts 导出全局模块配置安全 DTO，供管理端与通用表单共同校验。
+ * web-chat.ts 提供 UUID Web 会话、消息与历史游标 DTO，平台目标保留无会话 ID 的旧匿名格式。
  * 功能概述：聚合 Kaguya 跨包共享的稳定 wire schema，包括信息原子、平台投递内容、
  * inspection.ts 导出开发者只读 DTO，供 Server 和 WebUI 共同校验；Prompt 模板变量与 LLM 错误分类；旧事件信封和持久化记录身份不再属于公共契约。
  * 主要职责：重新导出 `information.ts` 的不可变原子类型；本文件声明平台目标与消息
@@ -16,6 +17,9 @@ export * from "./inspection.js";
 import { z } from "zod";
 
 import { informationIdSchema } from "./information.js";
+import { webConversationIdSchema } from "./web-chat.js";
+
+export * from "./web-chat.js";
 
 export { z };
 
@@ -39,13 +43,30 @@ export type {
   JsonValue,
 } from "./information.js";
 
-export const platformDestinationSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("private"), userId: z.string().min(1) }).strict(),
-  z.object({ kind: z.literal("group"), groupId: z.string().min(1) }).strict(),
-  z.object({ kind: z.literal("web") }).strict(),
-]);
+export type PlatformDestination =
+  | { kind: "private"; userId: string }
+  | { kind: "group"; groupId: string }
+  | { kind: "web"; conversationId?: string };
 
-export type PlatformDestination = z.infer<typeof platformDestinationSchema>;
+export const platformDestinationSchema = z
+  .discriminatedUnion("kind", [
+    z
+      .object({ kind: z.literal("private"), userId: z.string().min(1) })
+      .strict(),
+    z.object({ kind: z.literal("group"), groupId: z.string().min(1) }).strict(),
+    z
+      .object({
+        kind: z.literal("web"),
+        conversationId: webConversationIdSchema.optional(),
+      })
+      .strict(),
+  ])
+  .transform((destination): PlatformDestination => {
+    if (destination.kind !== "web") return destination;
+    return destination.conversationId === undefined
+      ? { kind: "web" }
+      : { kind: "web", conversationId: destination.conversationId };
+  });
 
 export const outboundMessageContentSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("text"), text: z.string().min(1) }).strict(),

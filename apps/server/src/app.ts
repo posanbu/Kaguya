@@ -23,6 +23,7 @@
  * 由 inspection.ts 提供有界查询、统一秘密脱敏及 Runtime 未就绪时的 503。
  * message-targets 路由复用 management 认证并通过动态 Runtime 门面执行目标/正文确认。
  * configuration/status 与 apply 复用管理认证，返回不含秘密的版本及应用结果；冲突返回 409。
+ * Web 私聊 POST 携带会话标识，GET 通过双登记水位恢复已入站/已送达历史；两者均先鉴权。
  */
 import { profileFieldErrors } from "./profile-field-errors.js";
 import { registerModuleTemplateRoutes } from "./module-template-routes.js";
@@ -56,7 +57,11 @@ import {
   profileIdSchema,
 } from "@kaguya/config";
 import { runWithLogContext } from "@kaguya/logger";
-import { z } from "@kaguya/schema";
+import { webConversationIdSchema, z } from "@kaguya/schema";
+import {
+  InvalidWebChatCursorError,
+  type WebChatHistoryReader,
+} from "./web-chat.js";
 import Fastify, {
   LogController,
   type FastifyBaseLogger,
@@ -89,6 +94,7 @@ const REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
 
 const messageRequestSchema = z
   .object({
+    conversationId: webConversationIdSchema.optional(),
     text: z
       .string()
       .min(1)
@@ -102,6 +108,7 @@ const messageBodyJsonSchema = {
   additionalProperties: false,
   required: ["text"],
   properties: {
+    conversationId: { type: "string", format: "uuid" },
     text: {
       type: "string",
       minLength: 1,
@@ -583,6 +590,7 @@ export interface CreateHttpApplicationOptions {
   config: ServerConfig;
   gatewayAuth?: GatewayAuthenticator;
   webGateway?: WebMessageGateway;
+  webChatHistory?: () => WebChatHistoryReader | undefined;
   messageTargets?: () => MessageTargetService | undefined;
   inspection?: InspectionService | (() => InspectionService | undefined);
   configurationApplication?: ConfigurationApplicationService | undefined;
@@ -1062,6 +1070,59 @@ export async function createHttpApplication(
     },
   );
 
+  app.get(
+    "/api/v1/messages",
+    {
+      onRequest: [
+        (_request, reply, done) => {
+          reply.header("Cache-Control", "no-store");
+          done();
+        },
+        requireGatewayToken(options, "messages"),
+      ],
+      // 私聊增量同步使用独立预算，避免正常轮询耗尽普通发送/管理请求额度。
+      config: { rateLimit: { max: 120, timeWindow: 60_000 } },
+      schema: {
+        tags: ["Messages"],
+        summary: "Read persisted messages from one Web conversation",
+        security: [{ bearerAuth: [] }],
+        querystring: {
+          type: "object",
+          additionalProperties: false,
+          required: ["conversationId"],
+          properties: {
+            conversationId: { type: "string", format: "uuid" },
+            afterInbound: { type: "string", minLength: 1, maxLength: 128 },
+            afterOutbound: { type: "string", minLength: 1, maxLength: 128 },
+          },
+        },
+      },
+    },
+    async (request) => {
+      const query = z
+        .object({
+          conversationId: webConversationIdSchema,
+          afterInbound: z.string().min(1).max(128).optional(),
+          afterOutbound: z.string().min(1).max(128).optional(),
+        })
+        .strict()
+        .parse(request.query);
+      const history = options.webChatHistory?.();
+      if (history === undefined) throw coreUnavailableError();
+      return {
+        data: await history.read({
+          conversationId: query.conversationId,
+          ...(query.afterInbound === undefined
+            ? {}
+            : { afterInbound: query.afterInbound }),
+          ...(query.afterOutbound === undefined
+            ? {}
+            : { afterOutbound: query.afterOutbound }),
+        }),
+      };
+    },
+  );
+
   app.post(
     "/api/v1/messages",
     {
@@ -1089,9 +1150,13 @@ export async function createHttpApplication(
       if (webGateway === undefined) {
         throw coreUnavailableError();
       }
-      webGateway.ingest({
+      reply.header("Cache-Control", "no-store");
+      await webGateway.ingest({
         text: parsed.text,
         requestId: request.id,
+        ...(parsed.conversationId === undefined
+          ? {}
+          : { conversationId: parsed.conversationId }),
       });
       request.log.info(
         {
@@ -1119,6 +1184,17 @@ export async function createHttpApplication(
   });
 
   app.setErrorHandler(async (error, request, reply) => {
+    if (error instanceof InvalidWebChatCursorError) {
+      return reply
+        .code(400)
+        .send(
+          errorBody(
+            "invalid_chat_cursor",
+            "Chat history cursor is invalid",
+            request.id,
+          ),
+        );
+    }
     if (
       isValidationError(error) ||
       error instanceof z.ZodError ||

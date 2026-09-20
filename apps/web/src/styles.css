@@ -1,11 +1,12 @@
 /*
  * 功能概述：本样式文件定义 Kaguya WebUI 的全局视觉基础，以及 Profile
- * 管理页的列表/编辑器双栏布局、聊天页连接面板与重启提示等页面骨架。
+ * 管理页的列表/编辑器双栏布局、消息列表与输入区、重启提示等页面骨架。
  * 主要职责：提供顶栏、卡片、表单、按钮、消息列表与 readiness 区块的统一样式；
  * 为 Task 7 新增 `.profile-workspace`、`.profile-sidebar`、`.profile-editor-card`
  * 等类，保证 Profile 元数据列表与完整编辑表单在桌面端并排、在窄屏下折叠；
  * 配置引导页采用文档站的暖白背景、橙色品牌色、柔和渐变和轻量卡片，
- * 同时保留聊天页原有的信息密度、焦点态与 reduced-motion 约束。
+ * 消息页复用主题颜色，用户气泡靠右、助手靠左，记录独立滚动；失败消息支持重试，
+ * 保留焦点态与 reduced-motion 约束，窄屏仍通过对齐和署名区分双方。
  * 代码库关系：由 `apps/web/src/main.tsx` 全局引入，供 `App.tsx` 的聊天页、
  * Profile 管理页和重启页共享；不直接参与任何业务逻辑，但其类名契约需与
  * React 组件保持一致。
@@ -166,10 +167,6 @@ button:disabled {
 .topbar p,
 .panel-heading h2,
 .panel-heading p,
-.chat-heading h2,
-.chat-heading p,
-.boundary-note p,
-.boundary-note span,
 .empty-state p,
 .message-row p,
 .readiness-heading h3,
@@ -504,21 +501,13 @@ button:disabled {
   gap: 24px;
 }
 
-.connection-panel,
 .chat-panel {
   border: 1px solid var(--kaguya-line);
   border-radius: 12px;
-  background: rgb(255 253 249 / 97%);
-  box-shadow: 0 18px 46px rgb(111 54 27 / 9%);
-}
-
-.connection-panel {
-  align-self: start;
-  padding: 20px;
+  background: var(--kaguya-paper);
 }
 
 .panel-heading,
-.chat-heading,
 .profile-sidebar-heading,
 .editor-actions {
   display: flex;
@@ -539,8 +528,7 @@ button:disabled {
   text-transform: uppercase;
 }
 
-.panel-heading h2,
-.chat-heading h2 {
+.panel-heading h2 {
   margin-top: 3px;
   font-size: 18px;
   line-height: 1.35;
@@ -550,13 +538,13 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 30px;
-  padding: 5px 8px;
+  min-height: 44px;
+  padding: 8px 12px;
   border: 1px solid #d6dbe1;
   border-radius: 5px;
   background: #ffffff;
   color: #59626e;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
 }
 
@@ -683,49 +671,18 @@ button:disabled {
   color: #20242a;
 }
 
-.boundary-note {
-  margin-top: 24px;
-  padding-top: 16px;
-  border-top: 1px solid #eceff2;
-  color: #59626e;
-  font-size: 12px;
-  line-height: 1.6;
-}
-
-.boundary-note p {
-  font-weight: 600;
-}
-
-.boundary-note span {
-  display: block;
-}
-
 .chat-panel {
   display: grid;
-  grid-template-rows: auto minmax(320px, 1fr) auto;
-  min-height: min(720px, calc(100vh - 120px));
+  grid-template-rows: minmax(0, 1fr) auto;
   overflow: hidden;
 }
 
-.chat-heading {
-  padding: 20px 22px;
-  border-bottom: 1px solid #e3e7eb;
-}
-
 .message-list {
+  min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 22px;
-  background:
-    linear-gradient(rgb(255 253 249 / 88%), rgb(255 250 243 / 88%)),
-    conic-gradient(
-      from 45deg,
-      rgb(229 168 76 / 10%),
-      transparent 25% 75%,
-      rgb(207 95 47 / 8%)
-    );
-  background-size:
-    cover,
-    72px 72px;
+  background: var(--kaguya-paper);
 }
 
 .empty-state {
@@ -734,7 +691,7 @@ button:disabled {
   align-content: center;
   place-items: center;
   gap: 12px;
-  color: #858e99;
+  color: var(--kaguya-muted);
   font-size: 14px;
 }
 
@@ -743,8 +700,26 @@ button:disabled {
   margin-left: auto;
   padding: 14px 16px;
   border: 1px solid #e8b994;
-  border-radius: 8px 8px 2px 8px;
+  border-radius: 14px 14px 4px 14px;
   background: #fff0df;
+}
+
+.message-row-assistant {
+  margin-left: 0;
+  margin-right: auto;
+  border-color: var(--kaguya-line);
+  border-radius: 14px 14px 14px 4px;
+  background: var(--kaguya-paper-soft);
+}
+
+.message-row-assistant .message-meta strong {
+  color: var(--kaguya-ink);
+}
+
+.message-retry.wb-button {
+  min-height: 32px;
+  padding: 4px 10px;
+  font-size: 12px;
 }
 
 .message-row + .message-row {
@@ -801,15 +776,15 @@ button:disabled {
 }
 
 .composer {
-  padding: 16px 18px 18px;
-  border-top: 1px solid #e3e7eb;
-  background: #fffdf9;
+  padding: 12px 16px 14px;
+  border-top: 1px solid var(--kaguya-line);
+  background: var(--kaguya-paper);
 }
 
 .composer textarea {
   display: block;
-  min-height: 86px;
-  max-height: 220px;
+  min-height: 76px;
+  max-height: min(180px, 30dvh);
   resize: vertical;
   padding: 12px 13px;
   font-size: 14px;
@@ -820,8 +795,22 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  margin-top: 10px;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 8px;
+}
+
+.composer-hint {
+  margin-right: auto;
+  color: var(--kaguya-muted);
+  font-size: 12px;
+}
+.composer .send-button {
+  min-height: 44px;
+  margin-left: auto;
+}
+.composer textarea::placeholder {
+  color: var(--kaguya-muted);
 }
 
 .limit {
@@ -1011,10 +1000,6 @@ button:disabled {
     padding: 24px 16px;
   }
 
-  .chat-panel {
-    min-height: 650px;
-  }
-
   .setup-model-grid {
     grid-template-columns: 1fr;
   }
@@ -1057,23 +1042,32 @@ button:disabled {
   }
 
   .setup-card,
-  .connection-panel,
-  .chat-heading,
   .composer {
     padding-left: 16px;
     padding-right: 16px;
   }
 
-  .composer-footer,
   .panel-heading,
-  .chat-heading,
   .profile-sidebar-heading {
     flex-direction: column;
     align-items: stretch;
   }
 
   .message-row {
-    width: 100%;
+    width: 92%;
+  }
+
+  .message-list {
+    padding: 16px;
+  }
+
+  .composer-hint {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 
   .setup-subtitle,
@@ -1192,7 +1186,6 @@ button:disabled {
 :root[data-theme="dark"] .topbar h1,
 :root[data-theme="dark"] .setup-shell .topbar h1,
 :root[data-theme="dark"] .panel-heading h2,
-:root[data-theme="dark"] .chat-heading h2,
 :root[data-theme="dark"] .setup-heading h1,
 :root[data-theme="dark"] .setup-status-card h1,
 :root[data-theme="dark"] .profile-list-name,
@@ -1204,7 +1197,6 @@ button:disabled {
 :root[data-theme="dark"] .setup-shell .topbar p,
 :root[data-theme="dark"] .setup-intro,
 :root[data-theme="dark"] .setup-check,
-:root[data-theme="dark"] .boundary-note,
 :root[data-theme="dark"] .profile-list-meta,
 :root[data-theme="dark"] .readiness-list,
 :root[data-theme="dark"] .readiness-empty,
@@ -1233,9 +1225,7 @@ button:disabled {
   color: var(--kaguya-cyan);
 }
 
-:root[data-theme="dark"] .setup-card,
-:root[data-theme="dark"] .connection-panel,
-:root[data-theme="dark"] .chat-panel {
+:root[data-theme="dark"] .setup-card {
   border-color: rgb(104 224 226 / 42%);
   background: rgb(13 25 44 / 96%);
   box-shadow:
@@ -1243,13 +1233,7 @@ button:disabled {
     inset 0 0 0 1px rgb(104 224 226 / 8%);
 }
 
-:root[data-theme="dark"] .chat-panel {
-  position: relative;
-}
-
-:root[data-theme="dark"] .chat-panel::before,
-:root[data-theme="dark"] .setup-card::before,
-:root[data-theme="dark"] .connection-panel::before {
+:root[data-theme="dark"] .setup-card::before {
   position: absolute;
   top: 8px;
   right: 8px;
@@ -1261,22 +1245,10 @@ button:disabled {
   pointer-events: none;
 }
 
-:root[data-theme="dark"] .setup-card,
-:root[data-theme="dark"] .connection-panel {
+:root[data-theme="dark"] .setup-card {
   position: relative;
 }
 
-:root[data-theme="dark"] .message-list {
-  background:
-    linear-gradient(rgb(8 19 35 / 84%), rgb(11 23 40 / 88%)),
-    repeating-linear-gradient(
-      180deg,
-      transparent 0 5px,
-      rgb(104 224 226 / 7%) 5px 6px
-    );
-}
-
-:root[data-theme="dark"] .chat-heading,
 :root[data-theme="dark"] .composer {
   border-color: rgb(104 224 226 / 20%);
   background: #0f1d31;
@@ -1285,6 +1257,11 @@ button:disabled {
 :root[data-theme="dark"] .message-row {
   border-color: rgb(240 138 112 / 46%);
   background: #2a2331;
+}
+
+:root[data-theme="dark"] .message-row-assistant {
+  border-color: var(--kaguya-line);
+  background: #142638;
 }
 
 :root[data-theme="dark"] .message-meta strong,
@@ -1359,7 +1336,6 @@ button:disabled {
   background: #352334;
 }
 
-:root[data-theme="dark"] .boundary-note,
 :root[data-theme="dark"] .readiness-card {
   border-color: rgb(104 224 226 / 18%);
 }

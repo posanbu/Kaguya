@@ -8,6 +8,7 @@
  * `app.ts` 只持有这个网关，`server.ts` 仅把 Runtime 当作结构性 ingress 注入。
  * 输入输出与副作用：ingest 同步校验并启动一次 submit，不等待 LLM/DAG 完成；
  * submit 拒绝被捕获并记录脱敏结构化上下文，不把 raw 或正文写入日志。
+ * 带 conversationId 的私聊提交返回持久化 Promise，HTTP 等入站成功后再确认；不等待模型生成。
  */
 import type { KaguyaLogger } from "@kaguya/logger";
 import {
@@ -17,7 +18,7 @@ import {
 } from "@kaguya/platform-adapters";
 
 export interface WebMessageGateway {
-  ingest(input: WebInboundInput): void;
+  ingest(input: WebInboundInput): void | Promise<void>;
 }
 
 export interface CreateWebMessageGatewayOptions {
@@ -37,7 +38,8 @@ export function createWebMessageGateway(
       if (message === undefined) {
         throw new Error("Web inbound message is invalid");
       }
-      void options.ingress.submit(message).catch((error: unknown) => {
+      const submission = options.ingress.submit(message).then(() => undefined);
+      const reportFailure = (error: unknown) => {
         options.logger.error(
           {
             event: "web.inbound.failed",
@@ -47,7 +49,14 @@ export function createWebMessageGateway(
           },
           "Web inbound dispatch failed",
         );
-      });
+      };
+      if (input.conversationId !== undefined) {
+        return submission.catch((error: unknown) => {
+          reportFailure(error);
+          throw new Error("Web message persistence failed");
+        });
+      }
+      void submission.catch(reportFailure);
     },
   };
 }
