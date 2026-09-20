@@ -179,9 +179,21 @@ export interface ConfigurationWarning {
 export interface ConfigurationStatus {
   readonly status: "restart_required" | "ready" | "invalid" | "review_required";
   readonly selectedProfileId: string;
+  readonly memoryInfrastructure?: MemoryInfrastructureSummary;
   readonly profiles: readonly ProfileMetadata[];
   readonly issues?: readonly ConfigurationIssue[];
   readonly warnings?: readonly ConfigurationWarning[];
+}
+
+export interface MemoryInfrastructureSummary {
+  readonly enabled: boolean;
+  readonly databaseMode: "managed" | "external" | "unconfigured";
+  readonly engine: "PostgreSQL 17";
+  readonly host?: string;
+  readonly port?: number;
+  readonly database?: string;
+  readonly storageKind: "docker-volume" | "external" | "unconfigured";
+  readonly storageLocation?: string;
 }
 
 export interface ProfileRegistryMetadata {
@@ -754,9 +766,33 @@ function isConfigurationStatusResponse(
   }
   return (
     typeof value.data.selectedProfileId === "string" &&
+    (value.data.memoryInfrastructure === undefined ||
+      isMemoryInfrastructureSummary(value.data.memoryInfrastructure)) &&
     isProfileMetadataArray(value.data.profiles) &&
     isOptionalConfigurationIssueArray(value.data.issues) &&
     isOptionalConfigurationWarningArray(value.data.warnings)
+  );
+}
+
+function isMemoryInfrastructureSummary(
+  value: unknown,
+): value is MemoryInfrastructureSummary {
+  return (
+    isRecord(value) &&
+    typeof value.enabled === "boolean" &&
+    ["managed", "external", "unconfigured"].includes(
+      String(value.databaseMode),
+    ) &&
+    value.engine === "PostgreSQL 17" &&
+    ["docker-volume", "external", "unconfigured"].includes(
+      String(value.storageKind),
+    ) &&
+    (value.host === undefined || typeof value.host === "string") &&
+    (value.port === undefined ||
+      (typeof value.port === "number" && Number.isInteger(value.port))) &&
+    (value.database === undefined || typeof value.database === "string") &&
+    (value.storageLocation === undefined ||
+      typeof value.storageLocation === "string")
   );
 }
 

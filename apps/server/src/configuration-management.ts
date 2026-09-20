@@ -37,10 +37,24 @@ import {
 } from "./napcat-config.js";
 
 export type ConfigurationRegistryStatus =
-  | ExistingConfigurationReadiness
+  | (ExistingConfigurationReadiness & {
+      readonly memoryInfrastructure?: MemoryInfrastructureSummary;
+    })
   | (Omit<ExistingConfigurationReadiness, "status"> & {
       readonly status: "restart_required";
+      readonly memoryInfrastructure?: MemoryInfrastructureSummary;
     });
+
+export interface MemoryInfrastructureSummary {
+  readonly enabled: boolean;
+  readonly databaseMode: "managed" | "external" | "unconfigured";
+  readonly engine: "PostgreSQL 17";
+  readonly host?: string;
+  readonly port?: number;
+  readonly database?: string;
+  readonly storageKind: "docker-volume" | "external" | "unconfigured";
+  readonly storageLocation?: string;
+}
 
 export type EditableUserConfigProfile = Omit<UserConfigProfile, "runtime"> & {
   readonly inboundAllowlist: readonly string[];
@@ -128,9 +142,8 @@ export async function createConfigurationManagement(
     },
     async getRegistryStatus() {
       const selectedProfileId = manager.getSelectedProfileId();
-      const selectedReadiness = inspectUserConfigProfile(
-        await manager.getProfile(selectedProfileId),
-      );
+      const selectedProfile = await manager.getProfile(selectedProfileId);
+      const selectedReadiness = inspectUserConfigProfile(selectedProfile);
       const readiness = withRegistryReadiness(
         manager.listProfiles(),
         selectedProfileId,
@@ -140,9 +153,13 @@ export async function createConfigurationManagement(
         return {
           ...readiness,
           status: "restart_required" as const,
+          memoryInfrastructure: projectMemoryInfrastructure(selectedProfile),
         };
       }
-      return readiness;
+      return {
+        ...readiness,
+        memoryInfrastructure: projectMemoryInfrastructure(selectedProfile),
+      };
     },
     async getProfile(profileId) {
       return toEditableProfile(await manager.getProfile(profileId));
@@ -231,6 +248,35 @@ export async function createConfigurationManagement(
       exclusive(async () =>
         withStatus(await management.saveNapCatSettings!(...args)),
       ),
+  };
+}
+
+export function projectMemoryInfrastructure(
+  profile: UserConfigProfile,
+): MemoryInfrastructureSummary {
+  const runtime = profile.runtime;
+  if (runtime === undefined)
+    return {
+      enabled: profile.memory.enabled,
+      databaseMode: "unconfigured",
+      engine: "PostgreSQL 17",
+      storageKind: "unconfigured",
+    };
+  const databaseUrl = new URL(runtime.databaseUrl);
+  const database = decodeURIComponent(databaseUrl.pathname.replace(/^\//u, ""));
+  return {
+    enabled: profile.memory.enabled,
+    databaseMode: runtime.databaseMode,
+    engine: "PostgreSQL 17",
+    host: databaseUrl.hostname,
+    port: Number(databaseUrl.port || "5432"),
+    ...(database ? { database } : {}),
+    storageKind:
+      runtime.databaseMode === "managed" ? "docker-volume" : "external",
+    storageLocation:
+      runtime.databaseMode === "managed"
+        ? "kaguya-postgres-17-data"
+        : "由外部 PostgreSQL 管理",
   };
 }
 

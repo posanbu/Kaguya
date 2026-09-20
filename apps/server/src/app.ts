@@ -441,13 +441,39 @@ const profileRegistryResponseJsonSchema = {
     data: {
       type: "object",
       additionalProperties: false,
-      required: ["status", "selectedProfileId", "profiles"],
+      required: [
+        "status",
+        "selectedProfileId",
+        "memoryInfrastructure",
+        "profiles",
+      ],
       properties: {
         status: {
           type: "string",
           enum: ["invalid", "review_required", "restart_required", "ready"],
         },
         selectedProfileId: profileIdJsonSchema,
+        memoryInfrastructure: {
+          type: "object",
+          additionalProperties: false,
+          required: ["enabled", "databaseMode", "engine", "storageKind"],
+          properties: {
+            enabled: { type: "boolean" },
+            databaseMode: {
+              type: "string",
+              enum: ["managed", "external", "unconfigured"],
+            },
+            engine: { type: "string", enum: ["PostgreSQL 17"] },
+            host: { type: "string" },
+            port: { type: "integer", minimum: 1, maximum: 65535 },
+            database: { type: "string" },
+            storageKind: {
+              type: "string",
+              enum: ["docker-volume", "external", "unconfigured"],
+            },
+            storageLocation: { type: "string" },
+          },
+        },
         profiles: {
           type: "array",
           items: profileMetadataJsonSchema,

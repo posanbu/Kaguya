@@ -9,7 +9,7 @@ description: Kaguya Profile Registry 的读取、创建、完整替换、选择�
 
 ## 列出 Profile
 
-`GET /api/v1/profiles` 返回全局 `selectedProfileId`、metadata 列表，以及 selected Profile 的 `invalid`、`review_required`、`restart_required` 或 `ready` 状态。`invalid` 可带 `issues`，`review_required` 可带 `warnings`；metadata 和诊断都不包含完整 Provider 凭据。
+`GET /api/v1/profiles` 返回全局 `selectedProfileId`、安全的 `memoryInfrastructure` 物理存储摘要、metadata 列表，以及 selected Profile 的 `invalid`、`review_required`、`restart_required` 或 `ready` 状态。存储摘要只投影模式、引擎、主机、端口、数据库名和存储位置，不返回用户名、密码或完整 URL。`invalid` 可带 `issues`，`review_required` 可带 `warnings`；metadata 和诊断都不包含完整 Provider 凭据。
 
 ::: code-group
 
@@ -23,6 +23,16 @@ curl http://127.0.0.1:3000/api/v1/profiles \
   "data": {
     "status": "invalid",
     "selectedProfileId": "default",
+    "memoryInfrastructure": {
+      "enabled": false,
+      "databaseMode": "managed",
+      "engine": "PostgreSQL 17",
+      "host": "127.0.0.1",
+      "port": 5432,
+      "database": "kaguya",
+      "storageKind": "docker-volume",
+      "storageLocation": "kaguya-postgres-17-data"
+    },
     "profiles": [
       {
         "id": "default",

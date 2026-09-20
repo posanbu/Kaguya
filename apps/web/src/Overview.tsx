@@ -1,6 +1,7 @@
 /**
- * 功能概述：工作台根路径的只读系统概览，分别回答 Runtime 与 Adapter 是否就绪。
- * 主要职责：Overview 读取安全接入快照；OverviewTile 用图标与核心状态快速表达就绪度。
+ * 功能概述：工作台根路径的只读系统概览，回答 Runtime、Adapter 和 Memory 物理基础设施是否就绪。
+ * 主要职责：Overview 读取安全接入快照和当前 Profile 的脱敏 Memory 存储摘要；
+ * OverviewTile 用等尺寸图标、核心状态和紧凑元数据表达就绪度。
  * useRead 在重试、Token 变化及卸载时丢弃过期结果。
  * 代码库关系：App 挂载本页，复用 api.ts 安全 DTO 和 #144 基础组件与导航回调。
  * 输入输出与副作用：只发 GET，不读取凭据、不应用配置、不发送消息；共享接入请求的
@@ -9,13 +10,14 @@
 import {
   Activity,
   Cable,
+  Database,
   Globe2,
   ServerCog,
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { getAdapterStatus } from "./api.js";
-import { Button, PageHeader } from "./components/ui.js";
+import { getAdapterStatus, type MemoryInfrastructureSummary } from "./api.js";
+import { Button, Dialog, PageHeader, StatusBadge } from "./components/ui.js";
 import "./overview.css";
 
 type ReadState<T> = { data?: T; error: boolean; loading: boolean };
@@ -75,6 +77,7 @@ function OverviewTile({
   tone,
   icon: Icon,
   onClick,
+  opensDialog = false,
   detail,
   meta,
 }: {
@@ -83,6 +86,7 @@ function OverviewTile({
   tone: TileTone;
   icon: LucideIcon;
   onClick?: (() => unknown) | undefined;
+  opensDialog?: boolean;
   detail?: string | undefined;
   meta?: string | undefined;
 }) {
@@ -92,6 +96,7 @@ function OverviewTile({
       className={`overview-tile overview-tile-${tone}`}
       onClick={onClick}
       disabled={!onClick}
+      aria-haspopup={opensDialog ? "dialog" : undefined}
       aria-label={`${title}：${status}${meta ? `，${meta}` : ""}${onClick ? "，打开" : ""}`}
     >
       <span className="overview-tile-icon" aria-hidden="true">
@@ -167,8 +172,26 @@ function adapterOrder(type: string) {
   return 2;
 }
 
+export function memoryDatabaseModeLabel(
+  mode: MemoryInfrastructureSummary["databaseMode"],
+) {
+  if (mode === "managed") return "本机托管";
+  if (mode === "external") return "外部 PostgreSQL";
+  return "未配置";
+}
+
+export function memoryStorageKindLabel(
+  kind: MemoryInfrastructureSummary["storageKind"],
+) {
+  if (kind === "docker-volume") return "Docker 命名卷";
+  if (kind === "external") return "外部存储";
+  return "未配置";
+}
+
 export function Overview({
   token,
+  memoryInfrastructure,
+  onRefreshConfiguration,
   navigate,
   onConfigureNapCat,
   napCatWsUrl,
@@ -176,6 +199,8 @@ export function Overview({
   focusAdapters = false,
 }: {
   token: string;
+  memoryInfrastructure?: MemoryInfrastructureSummary | undefined;
+  onRefreshConfiguration: () => unknown;
   navigate: (path: string) => unknown;
   onConfigureNapCat: () => unknown;
   napCatWsUrl?: string | undefined;
@@ -185,6 +210,7 @@ export function Overview({
   const adapters = useRead(token, readAdapters);
   const runtime = adapters.data?.runtime;
   const adapterHeading = useRef<HTMLHeadingElement>(null);
+  const [memoryDialogOpen, setMemoryDialogOpen] = useState(false);
   useEffect(() => {
     if (!focusAdapters) return;
     adapterHeading.current?.scrollIntoView({ block: "start" });
@@ -198,6 +224,7 @@ export function Overview({
           <Button
             onClick={() => {
               adapters.retry();
+              onRefreshConfiguration();
             }}
           >
             刷新概览
@@ -257,6 +284,31 @@ export function Overview({
           }
           onClick={adapters.data ? () => navigate("/adapters") : undefined}
         />
+        <OverviewTile
+          title="Memory"
+          status={
+            memoryInfrastructure === undefined
+              ? "读取中"
+              : memoryInfrastructure.enabled
+                ? "已启用"
+                : "已关闭"
+          }
+          tone={memoryInfrastructure?.enabled ? "success" : "neutral"}
+          icon={Database}
+          meta={
+            memoryInfrastructure
+              ? `${memoryInfrastructure.engine} · ${
+                  memoryInfrastructure.databaseMode === "managed"
+                    ? "托管"
+                    : memoryInfrastructure.databaseMode === "external"
+                      ? "外部"
+                      : "未配置"
+                }`
+              : undefined
+          }
+          onClick={() => setMemoryDialogOpen(true)}
+          opensDialog
+        />
       </div>
       <section
         className="overview-adapter-section"
@@ -295,11 +347,77 @@ export function Overview({
                         : undefined
                   }
                   onClick={type === "napcat" ? onConfigureNapCat : undefined}
+                  opensDialog={type === "napcat"}
                 />
               );
             })}
         </div>
       </section>
+      <Dialog.Root open={memoryDialogOpen} onOpenChange={setMemoryDialogOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="wb-overlay" />
+          <Dialog.Content className="wb-dialog memory-infrastructure-dialog">
+            <Dialog.Title>Memory 基础设施</Dialog.Title>
+            <Dialog.Description>
+              当前选中 Profile 的脱敏物理配置。凭据和完整连接串不会显示。
+            </Dialog.Description>
+            {memoryInfrastructure ? (
+              <>
+                <StatusBadge
+                  tone={memoryInfrastructure.enabled ? "success" : "neutral"}
+                >
+                  {memoryInfrastructure.enabled ? "Memory 已启用" : "Memory 已关闭"}
+                </StatusBadge>
+                <dl className="memory-infrastructure-details">
+                  <div>
+                    <dt>数据库引擎</dt>
+                    <dd>{memoryInfrastructure.engine}</dd>
+                  </div>
+                  <div>
+                    <dt>运行模式</dt>
+                    <dd>
+                      {memoryDatabaseModeLabel(
+                        memoryInfrastructure.databaseMode,
+                      )}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>存储类型</dt>
+                    <dd>
+                      {memoryStorageKindLabel(memoryInfrastructure.storageKind)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>存储位置</dt>
+                    <dd>{memoryInfrastructure.storageLocation ?? "未配置"}</dd>
+                  </div>
+                  <div>
+                    <dt>主机</dt>
+                    <dd>{memoryInfrastructure.host ?? "未配置"}</dd>
+                  </div>
+                  <div>
+                    <dt>端口</dt>
+                    <dd>{memoryInfrastructure.port ?? "未配置"}</dd>
+                  </div>
+                  <div>
+                    <dt>数据库</dt>
+                    <dd>{memoryInfrastructure.database ?? "未配置"}</dd>
+                  </div>
+                </dl>
+              </>
+            ) : (
+              <div className="profile-loading" role="status">
+                正在读取 Memory 基础设施配置
+              </div>
+            )}
+            <div className="editor-actions memory-infrastructure-dialog-actions">
+              <Dialog.Close asChild>
+                <Button>关闭</Button>
+              </Dialog.Close>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </>
   );
 }

@@ -1592,6 +1592,59 @@ button:disabled {
 .napcat-dialog-actions {
   margin-top: 20px;
 }
+.memory-infrastructure-dialog {
+  width: min(620px, calc(100vw - 32px));
+}
+.memory-infrastructure-dialog > [data-radix-dialog-description] {
+  margin-bottom: 18px;
+  color: var(--kaguya-muted);
+  line-height: 1.6;
+}
+.memory-infrastructure-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  margin: 18px 0 0;
+  border-block-start: 1px solid var(--kaguya-line);
+}
+.memory-infrastructure-details > div {
+  min-width: 0;
+  padding: 14px 0;
+  border-block-end: 1px solid var(--kaguya-line);
+}
+.memory-infrastructure-details > div:nth-child(odd) {
+  padding-inline-end: 20px;
+}
+.memory-infrastructure-details > div:nth-child(even) {
+  padding-inline-start: 20px;
+  border-inline-start: 1px solid var(--kaguya-line);
+}
+.memory-infrastructure-details dt {
+  margin-bottom: 5px;
+  color: var(--kaguya-muted);
+  font-size: 0.78rem;
+}
+.memory-infrastructure-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.92rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+.memory-infrastructure-dialog-actions {
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+@media (max-width: 520px) {
+  .memory-infrastructure-details {
+    grid-template-columns: 1fr;
+  }
+  .memory-infrastructure-details > div:nth-child(odd),
+  .memory-infrastructure-details > div:nth-child(even) {
+    padding-inline: 0;
+    border-inline-start: 0;
+  }
+}
 .adapter-refresh-status {
   margin: 10px 0 0;
   font-size: 0.85rem;

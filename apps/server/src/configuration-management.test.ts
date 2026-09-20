@@ -40,6 +40,10 @@ describe("configuration management", () => {
       await expect(management.getRegistryStatus()).resolves.toMatchObject({
         status: "invalid",
         selectedProfileId: "default",
+        memoryInfrastructure: expect.objectContaining({
+          enabled: false,
+          databaseMode: "unconfigured",
+        }),
         profiles: [expect.objectContaining({ id: "default", name: "default" })],
       } satisfies Partial<ConfigurationRegistryStatus>);
 
@@ -114,11 +118,20 @@ describe("configuration management", () => {
       ).resolves.toEqual({
         status: "ready",
         selectedProfileId: created.profile.id,
+        memoryInfrastructure: expect.objectContaining({
+          enabled: false,
+          databaseMode: "external",
+          host: "database.example",
+          port: 5432,
+        }),
         profiles: expect.arrayContaining([
           expect.objectContaining({ id: "default", name: "default" }),
           expect.objectContaining({ id: created.profile.id, name: "work" }),
         ]),
       });
+      expect(
+        JSON.stringify(await management.getRegistryStatus()),
+      ).not.toContain("profile:secret");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
