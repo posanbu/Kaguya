@@ -22,6 +22,7 @@ import {
   ReliableInformationRunner,
 } from "@kaguya/engine";
 import { KaguyaLlmClient } from "@kaguya/llm/client";
+import { createStructuredOutputPromptRenderer } from "@kaguya/llm";
 import {
   createDeferredDeterministicModel,
   createRepeatingDeterministicModel,
@@ -49,6 +50,10 @@ import {
   type ModelTaskResult,
 } from "./model-task.js";
 import { KaguyaRuntime } from "./runtime.js";
+
+const renderStructuredOutputPrompt = createStructuredOutputPromptRenderer(
+  "JSON schema: {{json_schema}}",
+);
 
 const probes = {
   prompt: "private-prompt-marker-917",
@@ -174,6 +179,7 @@ async function fixture(backend: Backend, provider = model()) {
         core = context.core;
         client = new ModelTaskClient({
           core,
+          renderStructuredOutputPrompt,
           client: new KaguyaLlmClient({ model: providerModel }),
           resolveModel: () => ({
             providerId: "test-provider",
@@ -328,6 +334,10 @@ async function assertLedger(f: Fixture, result?: ModelTaskResult<unknown>) {
       slot_type: "terminal",
       information_id: result.terminalInformationId,
     });
+  const expectedPrompt = renderStructuredOutputPrompt(
+    f.request.prompt,
+    z.toJSONSchema(f.request.task.outputSchema, { io: "input" }),
+  );
   expect(requested[0]!.payload).toMatchObject({
     taskId: "test.extract",
     version: "1",
@@ -335,7 +345,7 @@ async function assertLedger(f: Fixture, result?: ModelTaskResult<unknown>) {
     sourceInformationId: f.request.sourceInformationId,
     resolvedModel: { providerId: "test-provider", modelId: "test-heavy" },
     selectionPolicy: { tier: "heavy" },
-    prompt: f.request.prompt,
+    prompt: expectedPrompt,
   });
   expect(
     requested[0]!.references
@@ -542,6 +552,7 @@ for (const backend of ["PGlite", "PostgreSQL"] as const) {
           { length: 4 },
           () =>
             new ModelTaskClient({
+              renderStructuredOutputPrompt,
               core: f.core,
               client: new KaguyaLlmClient({ model: deferred.model }),
               resolveModel: () => ({
@@ -644,6 +655,7 @@ for (const backend of ["PGlite", "PostgreSQL"] as const) {
               new Error(secret),
             );
           const competitor: ModelTaskCapability = new ModelTaskClient({
+            renderStructuredOutputPrompt,
             core: f.core,
             client: new KaguyaLlmClient({ model: otherProvider }),
             resolveModel: () => ({

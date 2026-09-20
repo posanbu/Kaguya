@@ -26,6 +26,10 @@
     "./embedding": {
       "types": "./dist/embedding.d.ts",
       "default": "./dist/embedding.js"
+    },
+    "./prompt-templates/node": {
+      "types": "./dist/node.d.ts",
+      "default": "./dist/node.js"
     }
   },
   "scripts": {
@@ -35,6 +39,7 @@
   "dependencies": {
     "@ai-sdk/openai-compatible": "3.0.14",
     "@kaguya/logger": "workspace:*",
+    "@kaguya/prompt": "workspace:*",
     "@kaguya/schema": "workspace:*",
     "ai": "7.0.35"
   }

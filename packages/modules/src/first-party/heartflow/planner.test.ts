@@ -6,6 +6,8 @@
  */
 import { loadFirstPartyPromptTemplates } from "../../node/prompt-templates.js";
 const plannerTemplate = loadFirstPartyPromptTemplates().planner;
+const plannerPlatformPolicies =
+  loadFirstPartyPromptTemplates().plannerPlatformPolicies;
 import { describe, expect, it } from "vitest";
 import { compilePlannerPrompt, plannerActionSchema } from "./planner.js";
 import { inboundTextInformationKind } from "../information-kinds.js";
@@ -75,11 +77,13 @@ describe("Planner contract", () => {
       testAtoms,
       turn,
       plannerTemplate,
+      plannerPlatformPolicies,
     );
     expect(prompt.text).toContain(identity.persona);
     expect(prompt.text).toContain("FIRST_SENTINEL");
     expect(prompt.text).toContain("LAST_SENTINEL");
     expect(prompt.text).toContain("不可信数据");
+    expect(prompt.text).toContain("QQ 中参与要克制");
     expect(prompt.text).toContain('"isBacklog":true');
     expect(prompt.text).toContain('"newestInputAgeMs":180000');
     expect(prompt.text).toContain(

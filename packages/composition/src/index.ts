@@ -48,6 +48,7 @@ import {
   type AgentIdentity,
 } from "@kaguya/modules";
 import { loadFirstPartyPromptTemplates } from "@kaguya/modules/prompt-templates/node";
+import { loadStructuredOutputPromptRenderer } from "@kaguya/llm/prompt-templates/node";
 import {
   modelTaskCapability,
   modelTaskCompletedInformationKind,
@@ -76,7 +77,7 @@ export interface MessageCompositionOptions {
   readonly embedding?: EmbeddingProvider;
   readonly cognition?: MemoryCognitionProvider;
   readonly moduleConfigs: readonly FirstPartyModuleInstanceConfig[];
-  readonly agentIdentity?: AgentIdentity;
+  readonly agentIdentity?: Pick<AgentIdentity, "timeZone">;
 }
 export function createDeterministicModelSelectionResolver(): RuntimeModelSelectionResolver {
   const model = createPlanningDeterministicModel(
@@ -89,11 +90,17 @@ export function createDeterministicModelSelectionResolver(): RuntimeModelSelecti
   });
 }
 export function createMessageCatalog(
-  agentIdentity: AgentIdentity = DEFAULT_AGENT_IDENTITY,
+  configuredIdentity: Pick<AgentIdentity, "timeZone"> = DEFAULT_AGENT_IDENTITY,
   cognitionIdentity?: CognitionIdentity,
   memoryKnowledgeEnabled = false,
   promptTemplates = loadFirstPartyPromptTemplates(),
 ) {
+  const agentIdentity: AgentIdentity = {
+    name: promptTemplates.identityName,
+    aliases: promptTemplates.identityAliases,
+    persona: promptTemplates.identityPersona,
+    timeZone: configuredIdentity.timeZone,
+  };
   return createFirstPartyModuleCatalog({
     messageAuthorizationCapability,
     modelTaskCapability,
@@ -106,6 +113,7 @@ export function createMessageCatalog(
     executionExhaustedInformationKind,
     promptTemplates: promptTemplates.messageComposer,
     plannerTemplate: promptTemplates.planner,
+    plannerPlatformPolicies: promptTemplates.plannerPlatformPolicies,
     expressionTemplates: promptTemplates.expression,
     agentIdentity,
     memoryKnowledgeEnabled,
@@ -118,6 +126,13 @@ export function createMessageComposition(
 ) {
   const identity = options.agentIdentity ?? DEFAULT_AGENT_IDENTITY;
   const promptTemplates = loadFirstPartyPromptTemplates();
+  const runtimeIdentity: AgentIdentity = {
+    name: promptTemplates.identityName,
+    aliases: promptTemplates.identityAliases,
+    persona: promptTemplates.identityPersona,
+    timeZone: identity.timeZone,
+  };
+  const renderStructuredOutputPrompt = loadStructuredOutputPromptRenderer();
   const catalog = createMessageCatalog(
     identity,
     options.memoryEnabled ? options.cognition?.identity : undefined,
@@ -200,7 +215,7 @@ export function createMessageComposition(
   const activations = createFirstPartyModuleActivations(
     catalog,
     moduleConfigs,
-    identity,
+    runtimeIdentity,
   );
   const models = new Map<string, ReturnType<KaguyaLlmModelResolver>>();
   const activeModel = new AsyncLocalStorage<{
@@ -211,6 +226,7 @@ export function createMessageComposition(
     readonly generationOptions: KaguyaLlmGenerationOptions;
   }>();
   const modelTask: RuntimeModelTaskOptions = {
+    renderStructuredOutputPrompt,
     approvals: activations
       .filter((activation) =>
         [

@@ -5,6 +5,7 @@
  * 代码库关系：消息编译器通过 key 获取已有模板输入，Node 仅通过已声明 templateId 定位 default/local 文件。
  * 输入输出与副作用：仅常量，无运行时用户、身份或记忆数据，也不执行文件操作。
  */
+import type { PromptResourceDefinition } from "@kaguya/prompt";
 import type { ModulePromptTemplateDefinition } from "@kaguya/sdk";
 const messageVariables = [
   "is_assistant",
@@ -25,6 +26,8 @@ const messageVariables = [
 ] as const;
 export const outerVariables = [
   "persona",
+  "behavior_policy",
+  "platform_style",
   "name",
   "aliases",
   "self_account",
@@ -206,8 +209,32 @@ export const messageModulePromptTemplates: readonly ModulePromptTemplateDefiniti
     ...messageTemplateDeclarations.map((item) => ({
       ...item,
       templateId: item.fileStem,
+      mutability: "editable" as const,
     })),
-    ...authorizedMessageTemplateDeclarations,
+    ...authorizedMessageTemplateDeclarations.map((item) => ({
+      ...item,
+      mutability: "editable" as const,
+    })),
+    {
+      templateId: "message-composer.behavior",
+      name: "message-composer-behavior",
+      displayName: "消息编写通用行为",
+      description: "真实性、安全、情绪理解和避免元叙述等平台无关规则。",
+      allowedVariables: [],
+      allowedPartials: [],
+      composes: [],
+      mutability: "editable" as const,
+    },
+    ...["default", "qq", "web"].map((platform) => ({
+      templateId: `message-composer.platform-style${platform === "default" ? "" : `-${platform}`}`,
+      name: `message-composer-platform-style-${platform}`,
+      displayName: `消息表达风格（${platform}）`,
+      description: `${platform} 平台的消息表达风格。`,
+      allowedVariables: [],
+      allowedPartials: [],
+      composes: [],
+      mutability: "editable" as const,
+    })),
   ];
 export const expressionTemplateDeclarations = [
   {
@@ -234,8 +261,12 @@ export const expressionTemplateDeclarations = [
   },
 ] as const;
 export const expressionModulePromptTemplates: readonly ModulePromptTemplateDefinition[] =
-  expressionTemplateDeclarations;
+  expressionTemplateDeclarations.map((item) => ({
+    ...item,
+    mutability: "editable" as const,
+  }));
 export const plannerTemplateDeclaration: ModulePromptTemplateDefinition = {
+  mutability: "editable",
   templateId: "heartflow.planner",
   name: "planner",
   displayName: "对话规划",
@@ -248,11 +279,58 @@ export const plannerTemplateDeclaration: ModulePromptTemplateDefinition = {
     "memory",
     "turn",
     "conversation",
+    "platform_policy",
   ],
   allowedPartials: [],
   composes: [],
 };
+export const plannerPlatformPolicyDeclarations: readonly ModulePromptTemplateDefinition[] =
+  ["default", "qq", "web"].map((platform) => ({
+    mutability: "editable" as const,
+    templateId: `heartflow.platform-policy${platform === "default" ? "" : `-${platform}`}`,
+    name: `heartflow-platform-policy-${platform}`,
+    displayName: `平台参与策略（${platform}）`,
+    description: `${platform} 平台的参与和静默策略。`,
+    allowedVariables: [],
+    allowedPartials: [],
+    composes: [],
+  }));
+
+export const identityNameTemplateDeclaration: PromptResourceDefinition = {
+  templateId: "identity.name",
+  name: "identity-name",
+  displayName: "辉夜名称",
+  description: "工作区级 Agent 主名称。",
+  content: "",
+  allowedVariables: [],
+  allowedPartials: [],
+  composes: [],
+  mutability: "editable",
+};
+export const identityAliasesTemplateDeclaration: PromptResourceDefinition = {
+  templateId: "identity.aliases",
+  name: "identity-aliases",
+  displayName: "辉夜别名",
+  description: "工作区级 Agent 别名，每行一个。",
+  content: "",
+  allowedVariables: [],
+  allowedPartials: [],
+  composes: [],
+  mutability: "editable",
+};
+export const identityPersonaTemplateDeclaration: PromptResourceDefinition = {
+  templateId: "identity.persona",
+  name: "identity-persona",
+  displayName: "辉夜身份设定",
+  description: "工作区级身份、经历、性格与关系设定。",
+  content: "",
+  allowedVariables: [],
+  allowedPartials: [],
+  composes: [],
+  mutability: "editable",
+};
 export const personFactTemplateDeclaration: ModulePromptTemplateDefinition = {
+  mutability: "editable",
   templateId: "person-fact",
   name: "person-fact",
   displayName: "人物事实提取",
@@ -265,7 +343,12 @@ export const personFactTemplateDeclaration: ModulePromptTemplateDefinition = {
 /** 所有第一方模板组的白名单；文件初始化和存储与模块声明共用此入口。 */
 export const firstPartyPromptTemplateGroups = [
   messageModulePromptTemplates,
-  [plannerTemplateDeclaration],
+  [plannerTemplateDeclaration, ...plannerPlatformPolicyDeclarations],
+  [
+    identityNameTemplateDeclaration,
+    identityAliasesTemplateDeclaration,
+    identityPersonaTemplateDeclaration,
+  ],
   [personFactTemplateDeclaration],
   expressionModulePromptTemplates,
 ] as const;

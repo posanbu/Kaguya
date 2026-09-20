@@ -9,21 +9,21 @@ import { profileFieldErrors } from "./profile-field-errors.js";
 it("只返回允许路径，不回显错误 message、输入值或任意键", () => {
   const result = profileFieldErrors({
     issues: [
-      { path: ["identity", "aliases", 0], message: "SECRET" },
+      { path: ["identity", "timeZone"], message: "SECRET" },
       { path: ["ai", "providers", 0, "settings", "SECRET"], input: "SECRET" },
     ],
   });
-  expect(result.map((issue) => issue.path)).toEqual(["identity.aliases.0", ""]);
+  expect(result.map((issue) => issue.path)).toEqual(["identity.timeZone", ""]);
   expect(JSON.stringify(result)).not.toContain("SECRET");
 });
 it("AJV required 指向所属字段，未知错误安全返回空列表", () => {
   expect(
     profileFieldErrors({
       validation: [
-        { instancePath: "/identity", params: { missingProperty: "persona" } },
+        { instancePath: "/identity", params: { missingProperty: "timeZone" } },
       ],
     })[0]?.path,
-  ).toBe("identity.persona");
+  ).toBe("identity.timeZone");
   expect(
     profileFieldErrors({
       validation: [

@@ -157,5 +157,10 @@ export {
 } from "./first-party/memory-cognition/index.js";
 
 export * from "./first-party/message-authorization.js";
+export {
+  identityAliasesTemplateDeclaration,
+  identityNameTemplateDeclaration,
+  identityPersonaTemplateDeclaration,
+} from "./prompt-declarations.js";
 
 export { createAuthorizedMessagePromptRenderer } from "./first-party/message-composer/authorized-prompt.js";

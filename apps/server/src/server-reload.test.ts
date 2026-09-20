@@ -153,7 +153,7 @@ async function save(server: StartedKaguyaServer) {
     headers,
     payload: {
       name: loaded.name,
-      identity: { ...loaded.identity, persona: "updated persona" },
+      identity: loaded.identity,
       acknowledgedWarnings: [],
       ai: {
         ...loaded.ai,
@@ -472,8 +472,8 @@ it("reports successful persistence even when a separate module snapshot is unrea
   );
   const saved = await save(f.server);
   expect(saved.application).toBeUndefined();
-  expect((await f.manager.getProfile("default")).identity.persona).toBe(
-    "updated persona",
+  expect((await f.manager.getProfile("default")).identity.timeZone).toBe(
+    "Asia/Shanghai",
   );
   expect(
     (

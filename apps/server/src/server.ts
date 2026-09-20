@@ -19,6 +19,7 @@
  * Inspection 仅在 Runtime 可用时注入，不把 settings、凭据或数据库对象放入 HTTP 响应。
  */
 import { ModuleTemplateManagement } from "./module-template-management.js";
+import { IdentityPersonaManagement } from "./identity-persona-management.js";
 import { ModuleSettingsManagement } from "./module-settings-management.js";
 import { GatewayAllowlist } from "@kaguya/runtime";
 import {
@@ -56,6 +57,7 @@ import {
   createFirstPartyModuleConfigDefaults,
   type FirstPartyModuleInstanceConfig,
 } from "@kaguya/modules";
+import { loadFirstPartyPromptTemplates } from "@kaguya/modules/prompt-templates/node";
 import {
   closeLogger,
   createLogger,
@@ -111,6 +113,14 @@ interface DegradationReport {
   readonly error: unknown;
 }
 
+function workspaceIdentity() {
+  const templates = loadFirstPartyPromptTemplates();
+  return {
+    name: templates.identityName,
+    aliases: templates.identityAliases,
+  };
+}
+
 class ServerStartupPhaseError extends Error {
   readonly phase: ServerStartupPhase;
   override readonly cause: unknown;
@@ -163,7 +173,7 @@ export async function startKaguyaServer(
       rootDir: bootstrap.configRoot,
       defaults: createFirstPartyModuleConfigDefaults(
         "production",
-        selectedProfile.identity,
+        workspaceIdentity(),
       ),
     });
     createMessageComposition(undefined, {
@@ -375,7 +385,7 @@ export async function startKaguyaServer(
           rootDir: bootstrap.configRoot,
           defaults: createFirstPartyModuleConfigDefaults(
             "production",
-            profile.identity,
+            workspaceIdentity(),
           ),
           initialize: false,
         });
@@ -512,6 +522,9 @@ export async function startKaguyaServer(
         configuration,
         moduleTemplates: new ModuleTemplateManagement({
           catalog: createMessageCatalog(),
+          exclusive: (operation) => configuration.exclusive(operation),
+        }),
+        identityPersona: new IdentityPersonaManagement({
           exclusive: (operation) => configuration.exclusive(operation),
         }),
         moduleSettings: new ModuleSettingsManagement({

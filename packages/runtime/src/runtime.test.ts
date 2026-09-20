@@ -24,6 +24,7 @@ import {
   KaguyaLlmClient,
   type KaguyaLlmModelResolver,
 } from "@kaguya/llm/client";
+import { createStructuredOutputPromptRenderer } from "@kaguya/llm";
 import {
   createFirstPartyModuleCatalog,
   createFirstPartyModuleActivations,
@@ -103,6 +104,9 @@ import {
 } from "./runtime.js";
 
 const TEST_TIMEOUT = 15_000;
+const renderStructuredOutputPrompt = createStructuredOutputPromptRenderer(
+  "JSON schema: {{json_schema}}",
+);
 const resources: Array<{
   runtime?: KaguyaRuntime;
   database: Awaited<ReturnType<typeof createTestingDatabase>>;
@@ -1807,6 +1811,7 @@ function createMessageComposition(
       { capability: oneShotScheduleCapability, value: oneShotSchedule },
     ],
     modelTask: {
+      renderStructuredOutputPrompt,
       approvals: activations
         .filter((a) =>
           [

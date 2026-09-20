@@ -83,7 +83,7 @@ function fixture(ready = true) {
     initial,
     edit: () => {
       current = structuredClone(current);
-      current.profile.identity.persona = "next persona";
+      current.profile.identity.timeZone = "Asia/Tokyo";
     },
     changeModule: () => {
       current = {

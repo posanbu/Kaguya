@@ -120,6 +120,7 @@ export interface InformationPromptRendererDefinition {
 }
 /** 模块静态声明拥有的模板；只含契约，不包含运行时 Prompt 或变量值。 */
 export interface ModulePromptTemplateDefinition {
+  readonly mutability: "editable" | "readonly";
   readonly templateId: string;
   readonly name: string;
   readonly displayName: string;

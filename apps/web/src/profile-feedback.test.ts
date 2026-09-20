@@ -16,9 +16,6 @@ const profile: UserConfigProfile = {
   id: "default",
   name: "default",
   identity: {
-    name: "Kaguya",
-    aliases: ["辉夜"],
-    persona: "test",
     timeZone: "Asia/Shanghai",
   },
   inboundAllowlist: [],
@@ -49,21 +46,16 @@ const profile: UserConfigProfile = {
   platforms: [],
 };
 describe("配置错误定位", () => {
-  it("合法表单无错误，别名重复名字和数值边界可定位", () => {
+  it("合法表单无错误，数值边界可定位", () => {
     const fields = profileToEditorFields(profile);
     expect(validateProfileFields(fields)).toEqual([]);
     expect(
       validateProfileFields({
         ...fields,
-        agentAliasesText: "Kaguya",
         lightTimeoutSeconds: "300.001",
         heavyRecommendedDurationMs: "3.5",
       }).map((issue) => issue.field),
-    ).toEqual([
-      "agentAliasesText",
-      "lightTimeoutSeconds",
-      "heavyRecommendedDurationMs",
-    ]);
+    ).toEqual(["lightTimeoutSeconds", "heavyRecommendedDurationMs"]);
     expect(
       validateProfileFields({
         ...fields,

@@ -75,7 +75,7 @@ export interface FirstPartyModuleInstanceConfig {
 
 export function createFirstPartyModuleConfigDefaults(
   profile: "production" | "test" = "production",
-  identity: AgentIdentity = DEFAULT_AGENT_IDENTITY,
+  identity: Pick<AgentIdentity, "name" | "aliases"> = DEFAULT_AGENT_IDENTITY,
 ): readonly FirstPartyModuleInstanceConfig[] {
   return Object.freeze([
     Object.freeze({
@@ -184,7 +184,7 @@ export function createFirstPartyModuleConfigDefaults(
 export function createFirstPartyModuleActivations(
   catalog: InformationModuleCatalog,
   configs: readonly FirstPartyModuleInstanceConfig[],
-  identity: AgentIdentity = DEFAULT_AGENT_IDENTITY,
+  identity: Pick<AgentIdentity, "name" | "aliases"> = DEFAULT_AGENT_IDENTITY,
 ): readonly InformationModuleActivation[] {
   return Object.freeze(
     configs
@@ -231,11 +231,9 @@ export function createFirstPartyModuleActivations(
   );
 }
 
-const DEFAULT_AGENT_IDENTITY: AgentIdentity = {
+const DEFAULT_AGENT_IDENTITY: Pick<AgentIdentity, "name" | "aliases"> = {
   name: "Kaguya",
   aliases: ["辉夜"],
-  persona: "Default Kaguya persona",
-  timeZone: "Asia/Shanghai",
 };
 
 /** 配置诊断只包含实例、字段路径和阶段，不回显配置值或凭据。 */

@@ -176,15 +176,12 @@ export class KaguyaLlmClient {
           : undefined;
       if (jsonMode && schema?.validate === undefined)
         throw new Error("JSON output requires a local schema validator");
-      const schemaPrompt = jsonMode
-        ? `\n\n只输出一个符合以下 JSON Schema 的 JSON 值，不要使用 Markdown 代码块：\n${JSON.stringify(await schema!.jsonSchema)}`
-        : "";
       const typedOutput =
         schema === undefined ? undefined : Output.object({ schema });
       const common = {
         timeout: timeoutMs,
         model: this.#resolveModel(request),
-        prompt: request.prompt.text + schemaPrompt,
+        prompt: request.prompt.text,
         abortSignal: signal,
         maxRetries: 0,
         ...(generationOptions.reasoning === undefined

@@ -115,7 +115,9 @@ Heartbeat 到期只产生 `agent.turn.candidate`。Heartflow 使用 scope genera
 
 Memory 变量在完整当前 turn 之前，合计最多 4,000 个 Unicode 字符；召回失败会退化为空内容，不阻塞当前回复。message intent、历史 `core.memory.text` 和原始 inbound 的 renderer 都在 manifest 中声明，每个模板变量保留其 informationIds，LLM requested 使用 `core:uses-context` 引用追溯实际输入。一个原子可同时支持多个变量，一个变量也可聚合多个原子。未知 kind 不会被静默当作文本注入。scope、claim、上下文和终态都由 Information DAG 表达，不引入进程内 Session 或可变对话桶。
 
-一方模块的可编辑 Prompt 由 `packages/modules/templates/*.default.hbs` 的受限 Handlebars 模板生成，包括 Planner、消息编写及其场景和上下文补充、授权正文、表达学习与选择、人物事实提取。default 文件进入 Git；同名 `*.local.hbs` 被 Git 忽略，存在时优先使用。`pnpm prompt:init` 为已声明模板创建缺失的 local 副本，保留已有内容；正常加载只读文件。覆盖在重启后生效，具体操作见[本地覆盖 Prompt](../guide/configuration.md#本地覆盖-prompt)。
+生产 Prompt 通过深模块 `@kaguya/prompt` 的显式资源声明、受限 Handlebars 编译、完整性校验和 digest 进入运行时。editable 资源允许被 Git 忽略的 `*.local.hbs`；readonly 资源只接受仓库 default。`pnpm prompt:init` 只为 editable 资源创建缺失副本。资源包括统一名称、别名与 persona、Planner 与平台参与策略、消息编写通用行为与平台表达风格、场景和上下文、授权正文、表达学习与选择、人物事实，以及 LLM 层 readonly 的 JSON Schema 输出协议。
+
+所有 object Model Task 在写入 `core.model.task.requested` 前渲染结构化输出协议；持久化 Prompt 就是实际发送文本，协议模板、`json_schema` 变量、template digest 和 prompt digest 因而共同进入任务指纹。Provider 支持时仍可额外使用服务端 schema 输出能力。
 
 声明变量可出现零次或多次，实际使用的逻辑变量进入 provenance；未知变量、动态或递归 partial 和非内建 helper 会在启动时失败。替换不做 XML/HTML 逃逸或额外包裹，数据边界由模板作者负责。跨会话授权的渲染器由 composition 装配后注入 Runtime，宿主只提供已授权说明、冻结背景及其来源引用；模板修改不改变目标复核、正文确认或投递权限。
 

@@ -7,9 +7,6 @@
 import { describe, expect, it } from "vitest";
 
 const identity = {
-  name: "Kaguya",
-  aliases: ["辉夜"],
-  persona: "test",
   timeZone: "Asia/Shanghai",
 };
 
@@ -152,13 +149,10 @@ describe("user configuration schemas", () => {
     ).toBe(false);
   });
 
-  it("normalizes identity text and rejects duplicate or primary-name aliases", () => {
+  it("keeps only the Profile-scoped identity time zone", () => {
     expect(
       userConfigProfileSettingsSchema.parse({
         identity: {
-          name: " Kaguya ",
-          aliases: [" 辉夜 ", "Moon"],
-          persona: " concise ",
           timeZone: "Asia/Shanghai",
         },
         ai: { providers: [] },
@@ -166,31 +160,30 @@ describe("user configuration schemas", () => {
         platforms: [],
       }).identity,
     ).toEqual({
-      name: "Kaguya",
-      aliases: ["辉夜", "Moon"],
-      persona: "concise",
       timeZone: "Asia/Shanghai",
     });
     expect(
-      userConfigProfileSettingsSchema.parse({
+      userConfigProfileSettingsSchema.safeParse({
         identity: {
           name: "Kaguya",
           aliases: ["辉夜", " 辉夜 "],
-          persona: "test",
           timeZone: "Asia/Shanghai",
         },
         ai: { providers: [] },
         memory: { enabled: false },
         platforms: [],
-      }).identity.aliases,
-    ).toEqual(["辉夜"]);
+      }).success,
+    ).toBe(false);
+  });
+
+  it("strictly rejects removed Profile identity resources", () => {
     expect(
       userConfigProfileSettingsSchema.safeParse({
         identity: {
           name: "Kaguya",
-          aliases: ["Kaguya"],
-          persona: "test",
+          aliases: ["辉夜"],
           timeZone: "Asia/Shanghai",
+          persona: "legacy persona",
         },
         ai: { providers: [] },
         memory: { enabled: false },
@@ -201,11 +194,7 @@ describe("user configuration schemas", () => {
 
   it("requires a valid IANA identity time zone", () => {
     const settings = {
-      identity: {
-        name: "Kaguya",
-        aliases: ["辉夜"],
-        persona: "test",
-      },
+      identity: {},
       ai: { providers: [] },
       memory: { enabled: false },
       platforms: [],

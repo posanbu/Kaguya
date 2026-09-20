@@ -60,6 +60,7 @@ import {
 import { DeveloperConsole, developerPage } from "./DeveloperConsole.js";
 
 import { AdapterStatusPanel } from "./AdapterStatusPanel.js";
+import { IdentityPersonaEditor } from "./IdentityPersonaEditor.js";
 
 import {
   AlertCircle,
@@ -980,78 +981,9 @@ function ProfileManagementScreen({
                       <legend>Agent 身份</legend>
                       <ProfileSectionIssues section="identity" />
                       <p className="field-help">
-                        名字、别名和人设会用于回复
-                        Prompt；保存后手动应用才生效。
+                        名字、别名和身份正文是工作区级 Prompt 资源；Profile
+                        只保存时区。
                       </p>
-                      <label className="field">
-                        <span>Agent 名字</span>
-                        <ProfileField name="agentName">
-                          <input
-                            value={editorFields.agentName}
-                            onChange={(event) =>
-                              setEditorFields((current) =>
-                                current === undefined
-                                  ? current
-                                  : {
-                                      ...current,
-                                      agentName: event.target.value,
-                                    },
-                              )
-                            }
-                            autoComplete="off"
-                            placeholder="Kaguya"
-                            required
-                          />
-                        </ProfileField>
-                      </label>
-                      <label className="field">
-                        <span>Agent 别名</span>
-                        <ProfileField name="agentAliasesText">
-                          <textarea
-                            value={editorFields.agentAliasesText}
-                            onChange={(event) =>
-                              setEditorFields((current) =>
-                                current === undefined
-                                  ? current
-                                  : {
-                                      ...current,
-                                      agentAliasesText: event.target.value,
-                                    },
-                              )
-                            }
-                            rows={3}
-                            spellCheck={false}
-                            aria-describedby="agent-aliases-help"
-                            placeholder="辉夜"
-                            required
-                          />
-                        </ProfileField>
-                        <span id="agent-aliases-help" className="field-help">
-                          每行一个别名；保存时会去除首尾空白并去重。
-                        </span>
-                      </label>
-                      <label className="field">
-                        <span>Agent 人设</span>
-                        <ProfileField name="agentPersona">
-                          <textarea
-                            className="persona-editor"
-                            value={editorFields.agentPersona}
-                            onChange={(event) =>
-                              setEditorFields((current) =>
-                                current === undefined
-                                  ? current
-                                  : {
-                                      ...current,
-                                      agentPersona: event.target.value,
-                                    },
-                              )
-                            }
-                            rows={6}
-                            placeholder="描述 Agent 的身份、语气和回复边界"
-                            required
-                          />
-                        </ProfileField>
-                      </label>
                       <label className="field">
                         <span>Agent 时区</span>
                         <ProfileField name="agentTimeZone">
@@ -1076,6 +1008,7 @@ function ProfileManagementScreen({
                           用于理解当前时间、早晚和跨天语义。
                         </span>
                       </label>
+                      <IdentityPersonaEditor token={config.token} />
                     </fieldset>
                     <fieldset className="identity-fields">
                       <legend>模型服务</legend>

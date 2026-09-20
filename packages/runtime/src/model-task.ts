@@ -18,6 +18,7 @@
 import { createHash } from "node:crypto";
 import { InformationCore } from "@kaguya/engine";
 import { KaguyaLlmError, type KaguyaLlmClient } from "@kaguya/llm/client";
+import type { StructuredOutputPromptRenderer } from "@kaguya/llm";
 import {
   type CompiledPrompt,
   type DeepReadonly,
@@ -95,6 +96,7 @@ export interface ModelTaskClientOptions {
     policy: z.infer<typeof modelTaskSelectionPolicySchema>,
   ) => z.infer<typeof modelTaskResolvedModelSchema>;
   readonly now?: () => Date;
+  readonly renderStructuredOutputPrompt: StructuredOutputPromptRenderer;
 }
 const terminalGroup = "kaguya.model.task.result.v1";
 type Requested = DeepReadonly<
@@ -109,12 +111,14 @@ export class ModelTaskClient implements ModelTaskCapability {
   readonly #client: Pick<KaguyaLlmClient, "generate">;
   readonly #resolveModel: ModelTaskClientOptions["resolveModel"];
   readonly #now: () => Date;
+  readonly #renderStructuredOutputPrompt: StructuredOutputPromptRenderer;
   readonly #inflight = new Map<string, Set<AbortController>>();
   constructor(options: ModelTaskClientOptions) {
     this.#core = options.core;
     this.#client = options.client;
     this.#resolveModel = options.resolveModel;
     this.#now = options.now ?? (() => new Date());
+    this.#renderStructuredOutputPrompt = options.renderStructuredOutputPrompt;
   }
 
   async execute<TOutput>(
@@ -142,7 +146,15 @@ export class ModelTaskClient implements ModelTaskCapability {
       .parse(task.allowedTiers);
     if (!allowed.includes(selectionPolicy.tier))
       throw new Error("Disallowed model tier");
-    const prompt = informationCompiledPromptSchema.parse(request.prompt);
+    const inputJsonSchema =
+      task.outputMode === "object"
+        ? z.toJSONSchema(task.outputSchema, { io: "input" })
+        : undefined;
+    const renderedPrompt =
+      inputJsonSchema === undefined
+        ? request.prompt
+        : this.#renderStructuredOutputPrompt(request.prompt, inputJsonSchema);
+    const prompt = informationCompiledPromptSchema.parse(renderedPrompt);
     const metadata = modelTaskMetadataSchema
       .omit({ resolvedModel: true })
       .parse({
@@ -205,9 +217,10 @@ export class ModelTaskClient implements ModelTaskCapability {
         return resultFromWinner<TOutput>(terminal, requested.informationId);
     }
     // 输入 JSON schema 不包含任务 transform；真实 client 在此边界只产生未转换输入。
-    const providerSchema = z.fromJSONSchema(
-      z.toJSONSchema(task.outputSchema, { io: "input" }),
-    );
+    const providerSchema =
+      inputJsonSchema === undefined
+        ? task.outputSchema
+        : z.fromJSONSchema(inputJsonSchema);
     const resolvedModel = requested
       ? undefined
       : modelTaskResolvedModelSchema.parse(this.#resolveModel(selectionPolicy));

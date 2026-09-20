@@ -12,6 +12,7 @@
  * 展示契约：中文名称与职责说明由定义直接提供给 Inspection 和 WebUI，稳定 kind 与协议字段保持不变。
  */
 import { plannerTemplateDeclaration } from "../../prompt-declarations.js";
+import { selectPlatformPromptResource } from "@kaguya/prompt";
 import {
   z,
   type CompiledPrompt,
@@ -216,6 +217,7 @@ export function compilePlannerPrompt(
   atoms: readonly DeepReadonly<InformationAtom>[],
   turn: DeepReadonly<InformationAtom>,
   promptTemplate: string,
+  platformPolicies?: Readonly<Record<"default" | "qq" | "web", string>>,
 ): CompiledPrompt {
   const payload: any = turnContextCompletedInformationKind.payloadSchema.parse(
     turn.payload,
@@ -248,6 +250,16 @@ export function compilePlannerPrompt(
       ),
   );
   const values = [
+    {
+      name: "platform_policy",
+      content: platformPolicies
+        ? selectPlatformPromptResource(
+            platformPolicies,
+            payload.source.platform,
+          )
+        : "",
+      informationIds: [turn.informationId],
+    },
     {
       name: "current_time",
       content: JSON.stringify(currentTime),

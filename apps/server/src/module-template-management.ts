@@ -56,6 +56,7 @@ export class ModuleTemplateManagement {
       templates: declarations.map((d) => ({
         ...values.find((v) => v.templateId === d.templateId)!,
         templateId: d.templateId,
+        mutability: d.mutability,
         name: d.name,
         displayName: d.displayName,
         description: d.description,
