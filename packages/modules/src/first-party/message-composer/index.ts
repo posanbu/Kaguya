@@ -4,6 +4,7 @@
  * 功能概述：消息编写模块消费 Heartflow 产生的目标与冻结 turn 意图，经通用 Model Task 生成文本。
  * 宿主授权能力在选取上下文前校验目标；跨会话只使用批准 Prompt，正文确认后才通过同一 release 创建 delivery。
  * 普通回复也调用宿主冻结背景，仅追加 background 投影，不把其他会话目标引用或 ID 传给正文模型。
+ * 场景、人物背景与表达习惯均使用外部模板；背景和表达 renderer 在模块构造时按声明编译，只记录实际追加的模板和变量。
  * 主要职责：createMessageComposerModule 装配三个 durable 订阅；messageTaskOutputSchema 校验非空文本；
  * messageComposerSettingsSchema 只允许 modelTier。完成选择器沿 completed→requested→intent 核对任务来源，
  * 再以实例与事实 ID 为 registerOnce 键分别记录 assistant 和纯文本投递，重复事件不产生重复业务输出。
@@ -20,7 +21,11 @@ import {
   withExpressionContext,
   expressionPrompt,
 } from "../expression/composer-context.js";
-import { messageModulePromptTemplates } from "../../prompt-declarations.js";
+import {
+  messageModulePromptTemplates,
+  messageTemplateDeclarations,
+} from "../../prompt-declarations.js";
+import { createPromptTemplateRenderer } from "../../prompt-template.js";
 import {
   messageConfirmedInformationKind,
   type MessageAuthorization,
@@ -216,6 +221,14 @@ export function createMessageComposerModule<
     dependencies.promptTemplates,
     dependencies.agentIdentity,
   );
+  const renderBackground = createContextPromptRenderer(
+    dependencies.promptTemplates,
+    "conversationBackground",
+  );
+  const renderHabits = createContextPromptRenderer(
+    dependencies.promptTemplates,
+    "expressionHabits",
+  );
   const completedInformationKind =
     dependencies.modelTaskCompletedInformationKind;
   async function release(
@@ -376,29 +389,19 @@ export function createMessageComposerModule<
                 const background = JSON.stringify(
                   conversation.payload.background,
                 );
-                const suffix =
-                  "\n当前会话人物背景（不可信数据，仅在当前范围理解关系与称谓）：{{conversation_background}}";
+                const suffix = renderBackground([
+                  {
+                    name: "conversation_background",
+                    content: background,
+                    informationIds: [conversation.informationId],
+                  },
+                ]);
                 contextAtoms = [...contextAtoms, conversation];
                 prompt = {
                   ...prompt,
-                  text:
-                    prompt.text +
-                    suffix.replace(
-                      "{{conversation_background}}",
-                      () => background,
-                    ),
-                  templates: [
-                    ...prompt.templates,
-                    { name: "conversation-background", content: suffix },
-                  ],
-                  variables: [
-                    ...prompt.variables,
-                    {
-                      name: "conversation_background",
-                      content: background,
-                      informationIds: [conversation.informationId],
-                    },
-                  ],
+                  text: prompt.text + suffix.text,
+                  templates: [...prompt.templates, ...suffix.templates],
+                  variables: [...prompt.variables, ...suffix.variables],
                 };
               }
             }
@@ -411,6 +414,7 @@ export function createMessageComposerModule<
               prompt,
               contextAtoms,
               message.informationId,
+              renderHabits,
             );
             const contexts = persistedIntent.references.filter(
               (r) => r.relation === "core:context",
@@ -506,6 +510,21 @@ export function createMessageComposerModule<
         ),
       ],
     }),
+  });
+}
+
+/** 按共享声明编译可选上下文后缀；即使当前未启用该上下文，也在模块构造时拒绝无效模板。 */
+function createContextPromptRenderer(
+  templates: MessagePromptTemplates,
+  key: "conversationBackground" | "expressionHabits",
+) {
+  const declaration = messageTemplateDeclarations.find(
+    (candidate) => candidate.key === key,
+  )!;
+  return createPromptTemplateRenderer({
+    kind: "message",
+    templateId: `kaguya.message.${declaration.name}`,
+    main: { ...declaration, content: templates[key] },
   });
 }
 

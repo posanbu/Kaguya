@@ -12,10 +12,13 @@
  * 重放先按指纹读取 requested/terminal，不依赖模型 resolver；新请求仍只经 registerOnce 写入。
  * provider 仅校验由任务输入导出的无 transform schema；本层唯一执行任务 parse/transform，
  * 再检查 JSON 与 informationPayloadSchema。重放不执行任务 transform，存储/fencing 异常不转业务失败。
+ * LLM 边界内重试仍只提交一个终态；失败仅保存受控结构化分类与尝试次数，并保留已知用量和耗时。
+ * readFailureMetrics 对错误携带的指标再次执行数值及账本校验；不合法时丢弃指标并使用宿主耗时。
  */
 import { createHash } from "node:crypto";
 import { InformationCore } from "@kaguya/engine";
 import { KaguyaLlmError, type KaguyaLlmClient } from "@kaguya/llm/client";
+import type { StructuredOutputPromptRenderer } from "@kaguya/llm";
 import {
   type CompiledPrompt,
   type DeepReadonly,
@@ -93,6 +96,7 @@ export interface ModelTaskClientOptions {
     policy: z.infer<typeof modelTaskSelectionPolicySchema>,
   ) => z.infer<typeof modelTaskResolvedModelSchema>;
   readonly now?: () => Date;
+  readonly renderStructuredOutputPrompt: StructuredOutputPromptRenderer;
 }
 const terminalGroup = "kaguya.model.task.result.v1";
 type Requested = DeepReadonly<
@@ -107,12 +111,14 @@ export class ModelTaskClient implements ModelTaskCapability {
   readonly #client: Pick<KaguyaLlmClient, "generate">;
   readonly #resolveModel: ModelTaskClientOptions["resolveModel"];
   readonly #now: () => Date;
+  readonly #renderStructuredOutputPrompt: StructuredOutputPromptRenderer;
   readonly #inflight = new Map<string, Set<AbortController>>();
   constructor(options: ModelTaskClientOptions) {
     this.#core = options.core;
     this.#client = options.client;
     this.#resolveModel = options.resolveModel;
     this.#now = options.now ?? (() => new Date());
+    this.#renderStructuredOutputPrompt = options.renderStructuredOutputPrompt;
   }
 
   async execute<TOutput>(
@@ -140,7 +146,15 @@ export class ModelTaskClient implements ModelTaskCapability {
       .parse(task.allowedTiers);
     if (!allowed.includes(selectionPolicy.tier))
       throw new Error("Disallowed model tier");
-    const prompt = informationCompiledPromptSchema.parse(request.prompt);
+    const inputJsonSchema =
+      task.outputMode === "object"
+        ? z.toJSONSchema(task.outputSchema, { io: "input" })
+        : undefined;
+    const renderedPrompt =
+      inputJsonSchema === undefined
+        ? request.prompt
+        : this.#renderStructuredOutputPrompt(request.prompt, inputJsonSchema);
+    const prompt = informationCompiledPromptSchema.parse(renderedPrompt);
     const metadata = modelTaskMetadataSchema
       .omit({ resolvedModel: true })
       .parse({
@@ -203,9 +217,10 @@ export class ModelTaskClient implements ModelTaskCapability {
         return resultFromWinner<TOutput>(terminal, requested.informationId);
     }
     // 输入 JSON schema 不包含任务 transform；真实 client 在此边界只产生未转换输入。
-    const providerSchema = z.fromJSONSchema(
-      z.toJSONSchema(task.outputSchema, { io: "input" }),
-    );
+    const providerSchema =
+      inputJsonSchema === undefined
+        ? task.outputSchema
+        : z.fromJSONSchema(inputJsonSchema);
     const resolvedModel = requested
       ? undefined
       : modelTaskResolvedModelSchema.parse(this.#resolveModel(selectionPolicy));
@@ -308,6 +323,7 @@ export class ModelTaskClient implements ModelTaskCapability {
           return resultFromWinner<TOutput>(winner, requested.informationId);
         throw new Error("Model task execution interrupted");
       }
+      const llmError = error instanceof KaguyaLlmError ? error : undefined;
       const winner = await this.#core.commitTerminal(
         terminalGroup,
         requested.informationId,
@@ -316,9 +332,11 @@ export class ModelTaskClient implements ModelTaskCapability {
           ...this.terminalInput(requested),
           payload: {
             ...persisted,
-            ...(metrics ?? {
-              durationMs: Math.max(0, this.#now().getTime() - startedAt),
-            }),
+            ...(metrics ??
+              readFailureMetrics(
+                llmError,
+                Math.max(0, this.#now().getTime() - startedAt),
+              )),
             error: {
               name: "ModelTaskError",
               kind:
@@ -330,6 +348,16 @@ export class ModelTaskClient implements ModelTaskCapability {
                   ? (error.stage ?? failureStage)
                   : failureStage,
               message: "Model task generation failed",
+              ...(llmError?.structuredOutputFailure === undefined
+                ? {}
+                : {
+                    structuredOutputFailure: llmError.structuredOutputFailure,
+                  }),
+              ...(llmError?.attemptCount === undefined ||
+              !Number.isSafeInteger(llmError.attemptCount) ||
+              llmError.attemptCount < 1
+                ? {}
+                : { attemptCount: llmError.attemptCount }),
             },
           },
         },
@@ -440,6 +468,34 @@ export class ModelTaskClient implements ModelTaskCapability {
     }
     return undefined;
   }
+}
+
+function readFailureMetrics(
+  error: KaguyaLlmError | undefined,
+  fallbackDurationMs: number,
+): { durationMs: number; usage?: Record<string, number> } {
+  const candidate = {
+    durationMs: error?.durationMs ?? fallbackDurationMs,
+    ...(error?.usage === undefined ? {} : { usage: error.usage }),
+  };
+  const validNumbers = z
+    .object({
+      durationMs: z.number().nonnegative(),
+      usage: z.record(z.string(), z.number().nonnegative()).optional(),
+    })
+    .strict()
+    .safeParse(candidate);
+  if (
+    !validNumbers.success ||
+    !informationPayloadSchema.safeParse(validNumbers.data).success
+  )
+    return { durationMs: fallbackDurationMs };
+  return {
+    durationMs: validNumbers.data.durationMs,
+    ...(validNumbers.data.usage === undefined
+      ? {}
+      : { usage: validNumbers.data.usage }),
+  };
 }
 
 function persistedMetadata(requested: Requested) {

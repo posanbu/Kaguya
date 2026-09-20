@@ -104,7 +104,7 @@ core.runtime.context
 
 Server 启动时打开 Profile Registry 与六个显式模块实例文件，检查全局 selected Profile，并先验证数据库连接、PostgreSQL 17、严格 schema v1 与 Runtime Kind。随后才为 light/heavy target 创建模型客户端。Provider key 只存在于权限保护的 Profile JSON、配置管理器和 provider factory，不进入模块 settings、信息原子、Prompt 或日志。AI 与数据库连接检查独立执行；schema 不兼容则在任何监听前退出。完整流程见[配置生命周期](./configuration-lifecycle)。
 
-`consumer.failed` 的消费者若再次失败，或失败事实无法提交，Core 只交给 bootstrap 诊断边界，不递归生成失败原子。因此系统没有自动重试，也没有内建工作队列。
+`consumer.failed` 的消费者若再次失败，或失败事实无法提交，Core 只交给 bootstrap 诊断边界，不递归生成失败原子。Core 不自动重试该失败通知，也没有内建工作队列。
 
 ## 配置、模型与数据边界
 
@@ -113,6 +113,16 @@ selected Profile 的 `runtime.databaseUrl` 是 PostgreSQL 连接真值，必填�
 Profile Registry 维护一个全局 `selectedProfileId`。Server 在启动时只读取该 Profile 并构造共享 light/heavy 模型解析器；模块 settings、入站 payload 和信息原子不携带 `profileId`，也没有回退到其他 Profile、Provider 或模型的路径。
 
 同一 Profile 还提供 host、port、Web 路径、CORS、可信代理、限流、日志、allowlist、Memory、平台与插件。应用环境只定位 `KAGUYA_CONFIG_ROOT`。Gateway Token 是每次启动生成的临时 capability，不写入 Profile。NapCat UI/API 只读写 selected Profile 的平台条目。
+
+### 结构化模型输出
+
+Planner、Composer 等结构化 Model Task 需要符合业务 schema 的结果。Server 按每个 tier 实际选中的 Provider 解析输出能力：只有 `settings.supportsStructuredOutputs === true` 才把 `generationOptions.structuredOutputMode` 设为 `schema`；缺省或为 `false` 时设为 `json`。能力选择与同一 tier 的思考参数、硬超时和推荐时长一起传给 LLM client，不跨 Provider 继承。
+
+`json` 模式通过 `Output.json()` 请求 JSON，再由 LLM client 使用任务输入 schema 本地校验；`schema` 模式通过 `Output.object({ schema })` 请求服务端 JSON Schema 约束。Chat Completions 接受 JSON 格式并不证明服务端支持 JSON Schema，系统不会因此把 Provider 的支持标志改为 `true`。当前 OpenAI-compatible 路径仍使用 Chat Completions，不新增 Responses API 能力。
+
+JSON 模式首次出现空输出、JSON 解析失败、schema 不匹配或截断时，至多重试一次；schema 模式只进行一次结构化尝试。重试共用该逻辑调用的硬超时和取消信号，并累计已知 token usage，不能重置预算或产生第二组 Runtime 任务生命周期。格式恢复失败后，`core.model.task.failed` 和日志通过 `structuredOutputFailure` 区分 `empty`、`invalid-json`、`schema-mismatch` 与 `truncated`，并记录 `attemptCount`；诊断不持久化模型原始响应或 Provider 响应体。
+
+客户端的输入校验器由任务的 JSON Schema 重建；完整任务 schema 的自定义 refinement 与 transform 仍由 Model Task 执行，冻结索引和目标授权继续由业务模块检查。这些上层检查失败仍安全闭合，不属于格式重试范围。
 
 ## 启动与关闭顺序
 

@@ -4,7 +4,7 @@
  * 主要职责：`createLogger/createModuleLogger` 构造 logger；`runWithLogContext` 传播
  * information/request/workflow/node 上下文；配置解析、serializer 与关闭 helper 统一日志边界。
  * 代码库关系：Server、Runtime、数据库投影和 adapters 共用本入口；`information.ts`
- * 提供 atom 日志投影并由这里重新导出。
+ * 提供 atom 日志投影并由这里重新导出；`pretty.ts` 只渲染脱敏后的终端记录，JSON 契约不变。
  * 输入输出与副作用：logger 会向 stdout、文件或注入 stream 写记录；异步上下文仅接受
  * 白名单非空字符串，旧事件执行身份不再进入日志字段。
  */
@@ -18,6 +18,10 @@ import pino, {
   type LoggerOptions,
 } from "pino";
 import pinoPretty from "pino-pretty";
+
+import { createPrettyOptions, supportsPrettyColors } from "./pretty.js";
+
+export { formatPrettyMessage } from "./pretty.js";
 
 export {
   MAX_INFORMATION_CONTENT_CODE_POINTS,
@@ -483,19 +487,15 @@ function createOutput(options: CreateLoggerOptions): {
     const destination = options.destination ?? 1;
     return {
       stream: pinoPretty({
+        ...createPrettyOptions(
+          supportsPrettyColors(
+            destination === 2 ? process.stderr.isTTY : process.stdout.isTTY,
+          ),
+          () =>
+            destination === 2 ? process.stderr.columns : process.stdout.columns,
+        ),
         destination,
         sync: true,
-        colorize:
-          destination === 1
-            ? process.stdout.isTTY
-            : destination === 2
-              ? process.stderr.isTTY
-              : false,
-        translateTime: "SYS:standard",
-        singleLine: true,
-        messageFormat: formatPrettyMessage,
-        ignore:
-          "service,module,event,pid,hostname,informationId,kind,occurredAt,source,references,detail,sensitivity,promptFull,promptVariables",
       }),
       closeStream: false,
     };
@@ -524,71 +524,6 @@ function createOutput(options: CreateLoggerOptions): {
     }),
     closeStream: destination !== 1 && destination !== 2,
   };
-}
-
-export function formatPrettyMessage(log: Record<string, unknown>): string {
-  const namespace = typeof log.module === "string" ? log.module : "";
-  const event = typeof log.event === "string" ? log.event : "";
-  const message = typeof log.msg === "string" ? log.msg : "";
-  const identity =
-    typeof log.informationId === "string" && typeof log.kind === "string"
-      ? `[${shortInformationId(log.informationId)}] ${log.kind}${formatPrettyReferences(log.references)}`
-      : "";
-  const header = [namespace, event, identity, message]
-    .filter(Boolean)
-    .join(" ");
-  if (log.detail !== true || typeof log.promptFull !== "string") return header;
-  const prompt = log.promptFull
-    .split("\n")
-    .map((line) => `    ${line}`)
-    .join("\n");
-  const variables = Array.isArray(log.promptVariables)
-    ? log.promptVariables
-        .filter(isRecord)
-        .map((variable) => {
-          const ids = Array.isArray(variable.informationIds)
-            ? variable.informationIds
-                .filter((id): id is string => typeof id === "string")
-                .map(shortInformationId)
-                .join(",") || "-"
-            : "-";
-          const variableName =
-            typeof variable.variableName === "string"
-              ? variable.variableName
-              : "unknown";
-          const digest =
-            typeof variable.contentDigest === "string"
-              ? variable.contentDigest
-              : "unknown";
-          return `    ${variableName} information=${ids} digest=${digest}`;
-        })
-        .join("\n")
-    : "";
-  return `${header}\n  Prompt:\n${prompt}${variables ? `\n  Provenance:\n${variables}` : ""}`;
-}
-
-function formatPrettyReferences(value: unknown): string {
-  if (!Array.isArray(value) || value.length === 0) return "";
-  const grouped = new Map<string, string[]>();
-  for (const reference of value) {
-    if (
-      !isRecord(reference) ||
-      typeof reference.relation !== "string" ||
-      typeof reference.informationId !== "string"
-    )
-      continue;
-    const ids = grouped.get(reference.relation) ?? [];
-    ids.push(shortInformationId(reference.informationId));
-    grouped.set(reference.relation, ids);
-  }
-  if (grouped.size === 0) return "";
-  return ` ← ${[...grouped]
-    .map(([relation, ids]) => `${relation}:${ids.join(",")}`)
-    .join(" · ")}`;
-}
-
-function shortInformationId(informationId: string): string {
-  return Array.from(informationId).slice(0, 8).join("");
 }
 
 function validateOutputOptions(options: CreateLoggerOptions): void {

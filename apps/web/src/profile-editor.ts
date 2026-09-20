@@ -24,9 +24,6 @@ const OPENAI_COMPATIBLE_PROVIDER_TYPE = "openai-compatible";
 interface MutableProfile {
   name: string;
   identity: {
-    name: string;
-    aliases: string[];
-    persona: string;
     timeZone: string;
   };
   inboundAllowlist: string[];
@@ -90,9 +87,6 @@ interface MutablePlatform {
 
 export interface ProfileEditorFields {
   readonly name: string;
-  readonly agentName: string;
-  readonly agentAliasesText: string;
-  readonly agentPersona: string;
   readonly agentTimeZone: string;
   readonly baseUrl: string;
   readonly apiKey: string;
@@ -117,9 +111,6 @@ export function profileToEditorFields(
   const provider = findEditableProvider(profile);
   return {
     name: profile.name,
-    agentName: profile.identity.name,
-    agentAliasesText: profile.identity.aliases.join("\n"),
-    agentPersona: profile.identity.persona,
     agentTimeZone: profile.identity.timeZone,
     baseUrl: provider?.baseUrl ?? "",
     apiKey: provider?.apiKey ?? "",
@@ -167,16 +158,6 @@ export function mergeProfileEditorFields(
 
   next.name = fields.name;
   next.identity = {
-    name: fields.agentName.trim(),
-    aliases: [
-      ...new Set(
-        fields.agentAliasesText
-          .split(/\r?\n/u)
-          .map((alias) => alias.trim())
-          .filter(Boolean),
-      ),
-    ],
-    persona: fields.agentPersona.trim(),
     timeZone: fields.agentTimeZone.trim(),
   };
   next.memory.enabled = fields.memoryEnabled;

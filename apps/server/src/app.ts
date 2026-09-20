@@ -28,6 +28,8 @@
 import { profileFieldErrors } from "./profile-field-errors.js";
 import { registerModuleTemplateRoutes } from "./module-template-routes.js";
 import type { ModuleTemplateManagement } from "./module-template-management.js";
+import { registerIdentityPersonaRoutes } from "./identity-persona-routes.js";
+import type { IdentityPersonaManagement } from "./identity-persona-management.js";
 import { registerModuleSettingsRoutes } from "./module-settings-routes.js";
 import type { ModuleSettingsManagement } from "./module-settings-management.js";
 import { registerMessageTargetRoutes } from "./message-targets.js";
@@ -336,15 +338,8 @@ const memoryConfigJsonSchema = {
 const agentIdentityJsonSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["name", "aliases", "persona", "timeZone"],
+  required: ["timeZone"],
   properties: {
-    name: { type: "string", minLength: 1 },
-    aliases: {
-      type: "array",
-      minItems: 1,
-      items: { type: "string", minLength: 1 },
-    },
-    persona: { type: "string", minLength: 1 },
     timeZone: { type: "string", minLength: 1 },
   },
 } as const;
@@ -598,6 +593,7 @@ export interface CreateHttpApplicationOptions {
   configuration?: ConfigurationManagement;
   moduleSettings?: ModuleSettingsManagement;
   moduleTemplates?: ModuleTemplateManagement;
+  identityPersona?: IdentityPersonaManagement;
   logger?: FastifyBaseLogger;
   discoverModels?: typeof discoverOpenAiCompatibleModels;
 }
@@ -627,6 +623,11 @@ export async function createHttpApplication(
     app,
     requireGatewayToken(options, "management"),
     options.moduleTemplates,
+  );
+  registerIdentityPersonaRoutes(
+    app,
+    requireGatewayToken(options, "management"),
+    options.identityPersona,
   );
   registerModuleSettingsRoutes(
     app,

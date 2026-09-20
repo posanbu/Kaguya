@@ -1,6 +1,7 @@
 /**
  * 功能概述：用 PGlite 验证生产 MemoryStore 的幂等、冲突、范围过滤与稀疏排序。
  * 主要职责：覆盖全局检索、namespace/account/scope 组合、中英文和单字符路径。
+ * 分离发生时间与入库时间，防止迟到原文污染冻结的历史检索。
  * 代码库关系：复用正式 v1 schema 与 PostgresMemoryStore，不用内存替身掩盖 SQL 行为。
  * 输入输出与副作用：每例创建并关闭隔离 PGlite 数据库。
  */
@@ -127,6 +128,36 @@ describe("PostgresMemoryStore", () => {
         (hit) => hit.document.sourceInformationId,
       ),
     ).toEqual(["source-cn"]);
+  });
+
+  it("applies event and recording cutoffs independently and retains exact-boundary evidence", async () => {
+    const { database, memory } = await setup();
+    await appendSource(database, "old-event", "2026-09-06T10:00:00.000Z");
+    await memory.put(input("old-event", "coffee"));
+    const query = {
+      query: "coffee",
+      occurredBefore: "2026-09-06T11:00:00.000Z",
+      limit: 8,
+    };
+    expect(
+      await sourceIds(memory, {
+        ...query,
+        recordedBefore: "2026-09-06T11:30:00.000Z",
+      }),
+    ).toEqual([]);
+    expect(
+      await sourceIds(memory, {
+        ...query,
+        recordedBefore: "2026-09-06T12:00:00.000Z",
+      }),
+    ).toEqual(["old-event"]);
+    expect(
+      await sourceIds(memory, {
+        ...query,
+        occurredBefore: "2026-09-06T09:00:00.000Z",
+        recordedBefore: "2026-09-06T13:00:00.000Z",
+      }),
+    ).toEqual([]);
   });
 
   it("supports global recall and ANDs independently optional key dimensions", async () => {

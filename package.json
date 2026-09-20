@@ -13,6 +13,7 @@
     "start": "pnpm --filter @kaguya/server start",
     "typecheck": "tsc -b --pretty false && pnpm --filter @kaguya/web typecheck",
     "lint": "eslint .",
+    "logs:preview": "tsc -b packages/logger && node scripts/logger-preview.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
@@ -24,7 +25,10 @@
     "demo": "pnpm --filter @kaguya/demo start",
     "test:modules": "tsc -b && vitest run packages/modules/src",
     "test:flow": "tsc -b && vitest run apps/server/src/speech-planner.test.ts packages/runtime/src/runtime.test.ts",
-    "test:persistence": "tsc -b && vitest run packages/database/src"
+    "test:persistence": "tsc -b && vitest run packages/database/src",
+    "preview:association": "tsc -b && tsx apps/server/src/preview/association.ts",
+    "preview:arousal": "tsc -b && tsx apps/server/src/preview/arousal.ts",
+    "prompt:init": "tsx scripts/init-prompt-locals.ts"
   },
   "devDependencies": {
     "@types/node": "24.13.3",

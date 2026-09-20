@@ -2,6 +2,7 @@
  * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * Planner 普通日志仅保留元数据，不能泄漏 Prompt 预览或模型输出。
  * fixture 显式批准合成 QQ 目标，生产 Runtime 默认为空出站白名单。
+ * 测试显式注入统一文件模板，避免 Planner 或 Expression 绕过 default/local 选择。
  * 功能概述：用真实 PGlite、Core 和 ModuleHost 验证 `KaguyaRuntime` 的完整信息 DAG。
  * Planner 使用独立 object Model Task，测试分别定位 plan 与 compose，确保故障静默与唯一分派。
  * 主要职责：覆盖 Web 入站到投递成功的直接因果链、生成失败不会继续 assistant/outbound/delivery、
@@ -10,16 +11,20 @@
  * in-flight 关闭、关闭后 ingress 拒绝、数据库初始化错误固定分类及抛出型反射属性，
  * 以及消费者失败与其他结果并存；默认 message Prompt 必须带原子 provenance 和有序
  * uses-context 引用。
+ * Memory 集成用例推进宿主时钟越过数据库实际入库时刻，分别验证未来入库证据被排除与后续正常召回。
  * 代码库关系：测试直接消费 Runtime 的 `InformationIngress.submit` 和注入数据库选项；默认业务
  * 模块来自 `@kaguya/modules`，自定义 fixture 只用于隔离并发和消费者故障语义。
  * 输入输出与副作用：每个用例创建隔离的内存 PGlite 数据库，Runtime 只写 information
  * ledger；所有创建 PGlite 的用例共享 15 秒跨平台超时，测试结束显式关闭注入数据库，
  * 并检查持久化 payload 不包含 raw/provider secret。
  */
+import { loadFirstPartyPromptTemplates } from "@kaguya/modules/prompt-templates/node";
+const testPrompts = loadFirstPartyPromptTemplates();
 import {
   KaguyaLlmClient,
   type KaguyaLlmModelResolver,
 } from "@kaguya/llm/client";
+import { createStructuredOutputPromptRenderer } from "@kaguya/llm";
 import {
   createFirstPartyModuleCatalog,
   createFirstPartyModuleActivations,
@@ -77,6 +82,7 @@ const testIdentity = {
   timeZone: "Asia/Shanghai",
 };
 const testMessageTemplates = {
+  ...testPrompts.messageComposer,
   main: "{{scene}}{{history}}{{memory}}{{turn}}",
   history: "{{#each messages}}{{> history-inbound}}{{/each}}",
   historyInbound: "{{content}}",
@@ -98,6 +104,9 @@ import {
 } from "./runtime.js";
 
 const TEST_TIMEOUT = 15_000;
+const renderStructuredOutputPrompt = createStructuredOutputPromptRenderer(
+  "JSON schema: {{json_schema}}",
+);
 const resources: Array<{
   runtime?: KaguyaRuntime;
   database: Awaited<ReturnType<typeof createTestingDatabase>>;
@@ -582,12 +591,18 @@ describe("KaguyaRuntime", () => {
   it(
     "recalls a Web Memory globally through its original inbound provenance",
     async () => {
+      // MemoryStore 使用真实入库时钟；不能让测试的固定 Runtime 时钟停留在写入之前。
+      let nowMs = Date.now();
       const { runtime, database } = await createRuntime({
         memory: { enabled: true },
+        now: () => new Date(nowMs),
       });
       await runtime.start();
 
-      const first = await runtime.submit(webMessage("remember moonlight"));
+      const first = await runtime.submit({
+        ...webMessage("remember moonlight"),
+        occurredAt: new Date(nowMs - 1000).toISOString(),
+      });
       await settleDeliveries(database);
       const firstGraph = await database.information.query({
         informationId: first.rootInformationId,
@@ -595,7 +610,7 @@ describe("KaguyaRuntime", () => {
       const firstInbound = firstGraph.find(
         ({ kind }) => kind === inboundTextInformationKind.kind,
       )!;
-      await database.memory.put({
+      const saved = await database.memory.put({
         sourceInformationId: firstInbound.informationId,
         sourceKind: firstInbound.kind,
         content: "remember moonlight",
@@ -609,10 +624,22 @@ describe("KaguyaRuntime", () => {
         },
       });
 
+      await expect(
+        database.memory.recall({
+          query: "moonlight",
+          limit: 8,
+          occurredBefore: firstInbound.occurredAt,
+          recordedBefore: new Date(
+            Date.parse(saved.document.createdAt) - 1,
+          ).toISOString(),
+        }),
+      ).resolves.toEqual([]);
+      nowMs = Math.max(Date.now(), Date.parse(saved.document.createdAt));
+
       const second = await runtime.submit({
         ...webMessage("moonlight again"),
         platformMessageId: "request-2",
-        occurredAt: "2026-09-04T00:00:02.000Z",
+        occurredAt: new Date(nowMs).toISOString(),
       });
       let secondGraph: Awaited<ReturnType<typeof database.information.query>> =
         [];
@@ -1766,6 +1793,8 @@ function createMessageComposition(
     deliveryFailedInformationKind,
     executionExhaustedInformationKind,
     promptTemplates: testMessageTemplates,
+    plannerTemplate: testPrompts.planner,
+    expressionTemplates: testPrompts.expression,
     agentIdentity: testIdentity,
   });
   const activations =
@@ -1782,6 +1811,7 @@ function createMessageComposition(
       { capability: oneShotScheduleCapability, value: oneShotSchedule },
     ],
     modelTask: {
+      renderStructuredOutputPrompt,
       approvals: activations
         .filter((a) =>
           [

@@ -2,6 +2,7 @@
  * 功能概述：把已脱敏的领域字段渲染成可读的标签、列表和键值，不以 JSON 作为默认界面。
  * InspectionFields 展示服务端声明的字段；ReadableValue 递归处理习惯/评分组成等结构，
  * 保留未知标识原值，限制初始展开的数组长度。InspectionStatus 给常见结果加中文与文字状态。
+ * 联想状态和检索原因使用明确中文标签；未知枚举仍保留原值。
  * 只渲染文本，不执行 HTML，也不解析来自内容的链接；原始 JSON 留给详情折叠区。
  */
 import type { JsonValue } from "@kaguya/schema";
@@ -26,7 +27,16 @@ const words: Record<string, string> = {
   ambiguous: "存在歧义",
   degraded: "降级",
   validated: "已验证",
-  matched: "已匹配",
+  matched: "已召回",
+  unavailable: "不可用",
+  "policy-filtered": "策略过滤",
+  "sparse-match": "稀疏检索命中",
+  "coverage-ranked": "按覆盖程度排序",
+  "no-sparse-match": "没有稀疏匹配",
+  "no-candidate": "没有候选",
+  "empty-query-policy": "查询为空，跳过检索",
+  "provider-unavailable": "检索服务不可用",
+  "retrieval-failed": "检索失败",
   "no-candidates": "没有候选",
   "no-match": "没有匹配项",
   "score-below-threshold": "分数未达到阈值",

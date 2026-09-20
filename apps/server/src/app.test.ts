@@ -193,9 +193,6 @@ describe("application API gateway", () => {
         inboundAllowlist: [],
         outboundAllowlist: [],
         identity: {
-          name: "Kaguya",
-          aliases: ["辉夜"],
-          persona: "test",
           timeZone: "Asia/Shanghai",
         },
         ai: { providers: [] },
@@ -211,9 +208,6 @@ describe("application API gateway", () => {
           inboundAllowlist: [],
           outboundAllowlist: [],
           identity: {
-            name: "Kaguya",
-            aliases: ["辉夜"],
-            persona: "test",
             timeZone: "Asia/Shanghai",
           },
           ai: { providers: [] },
@@ -388,9 +382,6 @@ describe("application API gateway", () => {
       inboundAllowlist: ["qq:private:112233"],
       outboundAllowlist: ["qq:private:112233"],
       identity: {
-        name: "Kaguya",
-        aliases: ["辉夜"],
-        persona: "test",
         timeZone: "Asia/Shanghai",
       },
       ai: { providers: [] },
@@ -1354,9 +1345,6 @@ function stubManagement(): ConfigurationManagement {
       inboundAllowlist: [],
       outboundAllowlist: [],
       identity: {
-        name: "Kaguya",
-        aliases: ["辉夜"],
-        persona: "test",
         timeZone: "Asia/Shanghai",
       },
       ai: { providers: [] },
@@ -1377,9 +1365,6 @@ function readyProfileReplacement(
 ) {
   return {
     identity: {
-      name: "Kaguya",
-      aliases: ["辉夜"],
-      persona: "test",
       timeZone: "Asia/Shanghai",
     },
     name,
@@ -1515,8 +1500,6 @@ it("Profile 校验通过真实 HTTP 返回安全字段路径，GET 检查属于�
       outboundAllowlist: [],
       identity: {
         name: "Kaguya",
-        aliases: ["Kaguya"],
-        persona: "test",
         timeZone: "Asia/Shanghai",
       },
       ai: { providers: [] },
@@ -1532,7 +1515,7 @@ it("Profile 校验通过真实 HTTP 返回安全字段路径，GET 检查属于�
     });
     expect(invalid.statusCode).toBe(400);
     expect(invalid.json().error.fieldErrors).toContainEqual(
-      expect.objectContaining({ path: "identity.aliases.0" }),
+      expect.objectContaining({ path: "identity" }),
     );
     const unknown = await app.inject({
       method: "PUT",

@@ -5,6 +5,7 @@
  * 已投递 assistant 才可进入历史，每条输入通过同目标成功回执链或入站 ID 查询引用上下文。associationMessageContextSelector 校验关联终态因果。
  * 代码库关系：index.ts 声明选择器与渲染器，message-prompt 使用冻结快照编译；Engine 按返回 ID 重载事实。
  * 输入输出与副作用：只读 ledger、返回去重 ID；缺少 turn、输入或记忆授权时抛错，不回退到复制的末条正文。
+ * 冻结原文记忆额外核验目标范围和事件截止点；检索命中或显式引用不能放宽消息来源权限。
  */
 import type {
   CompiledPrompt,
@@ -43,6 +44,7 @@ import {
   resolveMessageQuote,
   sameMessageTarget,
 } from "./message-quote.js";
+import { isMemorySourceInScope } from "../memory-knowledge/selector.js";
 
 export const currentAcceptedMessageSelector = defineInformationSelector({
   selectorId: "agent.message.current-intent",
@@ -89,6 +91,14 @@ export const turnMessageContextSelector = defineInformationSelector({
     for (const id of intent.memoryInformationIds) {
       if (!byId.has(id))
         throw new Error(`Missing frozen memory reference: ${id}`);
+      const memory = byId.get(id)!;
+      if (
+        memory.kind === inboundTextInformationKind.kind &&
+        !isMemorySourceInScope(memory, intent.target, String(turn.payload.asOf))
+      )
+        throw new Error(
+          "Frozen memory source is outside the turn scope or cutoff",
+        );
     }
     const inputIds = new Set(inputs.map((atom) => atom.informationId));
     const memoryIds = new Set(intent.memoryInformationIds);

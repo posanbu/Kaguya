@@ -1,5 +1,6 @@
 /**
  * 默认源码及允许变量来自 prompt-declarations；可传入装配阶段预检的本地模板。
+ * Prompt 正文由装配入口注入已加载的 default/local 模板，本文件不保留独立默认文本。
  * 功能概述：Heartflow 的独立结构化 Planner 契约、只读上下文选择器和纯 Prompt 编译器。
  * 主要职责：plannerActionSchema 严格限制动作及原因；plannerDecisionInformationKind 持久化唯一分派结果；
  * plannerContextSelector 复用 Composer 的同范围成功投递历史过滤与冻结记忆授权；compilePlannerPrompt
@@ -10,10 +11,8 @@
  * Prompt 中的用户文本属于数据，不具有指令权限。原始 Prompt 与模型结果不写普通日志。
  * 展示契约：中文名称与职责说明由定义直接提供给 Inspection 和 WebUI，稳定 kind 与协议字段保持不变。
  */
-import {
-  DEFAULT_PLANNER_TEMPLATE,
-  plannerTemplateDeclaration,
-} from "../../prompt-declarations.js";
+import { plannerTemplateDeclaration } from "../../prompt-declarations.js";
+import { selectPlatformPromptResource } from "@kaguya/prompt";
 import {
   z,
   type CompiledPrompt,
@@ -217,7 +216,8 @@ export function compilePlannerPrompt(
   identity: AgentIdentity,
   atoms: readonly DeepReadonly<InformationAtom>[],
   turn: DeepReadonly<InformationAtom>,
-  promptTemplate = DEFAULT_PLANNER_TEMPLATE,
+  promptTemplate: string,
+  platformPolicies?: Readonly<Record<"default" | "qq" | "web", string>>,
 ): CompiledPrompt {
   const payload: any = turnContextCompletedInformationKind.payloadSchema.parse(
     turn.payload,
@@ -250,6 +250,16 @@ export function compilePlannerPrompt(
       ),
   );
   const values = [
+    {
+      name: "platform_policy",
+      content: platformPolicies
+        ? selectPlatformPromptResource(
+            platformPolicies,
+            payload.source.platform,
+          )
+        : "",
+      informationIds: [turn.informationId],
+    },
     {
       name: "current_time",
       content: JSON.stringify(currentTime),

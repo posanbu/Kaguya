@@ -1,9 +1,13 @@
 /**
  * 功能概述：通过真实 InformationCore、ModuleHost 与测试数据库验证 Heartflow 持久化编排。
- * fixture/appendCandidate 构造身份屏障及候选链，submitDecision 注入注意力终态；
- * atoms/waitForKind 等待异步订阅输出。Planner 测试验证严格输出、故障静默与 supersession fencing。覆盖意图去重、冻结上下文、路由、等待和失败终态，
- * 保证 composer 只收到目标与完整 turn 来源；afterEach 关闭宿主、Core 和数据库。
+ * fixture 显式注入文件加载的 Planner 模板；appendCandidate 构造身份屏障及候选链，
+ * submitDecision 注入注意力终态。所有持久化条件等待共享 8 秒/20 毫秒策略，覆盖启动、冻结及终态。
+ * waitForDelivery 等待指定订阅的持久化 ack，确保迟到模型结果已被完整处理后再断言没有意图；
+ * 两个受控 Planner 测试在 finally 释放模型屏障，避免失败时残留任务污染 afterEach 清理。
+ * 历史积压用例串行写入 13 组共 104 个来源事实，单独保留 30 秒总预算覆盖初始化、写入、两轮等待及清理。
+ * 测试覆盖严格输出、故障静默、幂等、路由和 supersession fencing；afterEach 关闭宿主、Core 和数据库。
  */
+import { loadFirstPartyPromptTemplates } from "../../node/prompt-templates.js";
 import { createTestingDatabase } from "@kaguya/database/testing";
 import {
   executionExhaustedInformationKind,
@@ -54,6 +58,8 @@ import {
   waitRequestedInformationKind,
 } from "../information-kinds.js";
 
+const plannerTemplate = loadFirstPartyPromptTemplates().planner;
+const persistenceWait = { timeout: 8000, interval: 20 };
 const modelTaskCapability = defineModuleCapability<
   import("../message-composer/index.js").ModelTaskCapability
 >("kaguya:model-task", 1);
@@ -171,6 +177,7 @@ async function fixture(
   const database = await createTestingDatabase();
   await database.prepareSchema();
   const module = createHeartflowModule({
+    plannerTemplate,
     modelTaskCapability,
     agentIdentity,
     deliveryDeliveredInformationKind,
@@ -216,6 +223,7 @@ async function fixture(
       },
     ],
   });
+  resources.push({ host, core, database });
   await core.start();
   const start = () =>
     host.start([
@@ -232,7 +240,6 @@ async function fixture(
       },
     ]);
   if (startImmediately) await start();
-  resources.push({ host, core, database });
   return { core, database, module, start };
 }
 
@@ -396,7 +403,24 @@ async function waitForKind(
     const found = (await atoms(database)).find((atom) => atom.kind === kind);
     expect(found).toBeDefined();
     return found!;
-  });
+  }, persistenceWait);
+}
+
+async function waitForDelivery(
+  database: Awaited<ReturnType<typeof createTestingDatabase>>,
+  subscriptionId: string,
+  informationId: string,
+) {
+  await vi.waitFor(async () => {
+    const delivery = await database.sql.query<{
+      state: string;
+      attempts: number;
+    }>(
+      "SELECT state, attempts FROM information_deliveries WHERE subscription_id = $1 AND information_id = $2",
+      [`heartflow.test:${subscriptionId}`, informationId],
+    );
+    expect(delivery.rows).toEqual([{ state: "acked", attempts: 1 }]);
+  }, persistenceWait);
 }
 
 async function submitDecision(
@@ -510,11 +534,9 @@ async function dispatchSubscription(
 describe("heartflow", () => {
   it("interrupts a pending Planner when a new same-scope message arrives", async () => {
     const { core, database } = await fixture();
-    let release!: () => void;
+    const blocked = Promise.withResolvers<void>();
     execute.mockImplementationOnce(async () => {
-      await new Promise<void>((resolve) => {
-        release = resolve;
-      });
+      await blocked.promise;
       return {
         status: "completed",
         output: {
@@ -530,46 +552,69 @@ describe("heartflow", () => {
         terminalInformationId: "terminal",
       };
     });
-    const { context, inbound, candidate } = await appendCandidate(core, {
-      requestId: "interrupt-first",
-      text: "先说一句",
-      occurredAt: "2026-09-08T00:00:01.000Z",
-    });
-    await waitForKind(database, turnContextCompletedInformationKind.kind);
-    await submitDecision(core, database, "attend", candidate.informationId);
-    await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
-    await core.register(inboundTextInformationKind, {
-      occurredAt: "2026-09-08T00:00:02.000Z",
-      source: "adapter:test",
-      payload: {
-        text: "补充一句",
-        source: {
-          ...inbound.payload.source,
-          platformMessageId: "interrupt-second",
+    try {
+      const { context, inbound, candidate } = await appendCandidate(core, {
+        requestId: "interrupt-first",
+        text: "先说一句",
+        occurredAt: "2026-09-08T00:00:01.000Z",
+      });
+      await waitForKind(database, turnContextCompletedInformationKind.kind);
+      const decision = await submitDecision(
+        core,
+        database,
+        "attend",
+        candidate.informationId,
+      );
+      await vi.waitFor(
+        () => expect(execute).toHaveBeenCalledTimes(1),
+        persistenceWait,
+      );
+      await core.register(inboundTextInformationKind, {
+        occurredAt: "2026-09-08T00:00:02.000Z",
+        source: "adapter:test",
+        payload: {
+          text: "补充一句",
+          source: {
+            ...inbound.payload.source,
+            platformMessageId: "interrupt-second",
+          },
         },
-      },
-      references: [
-        { relation: "core:context", informationId: context.informationId },
-      ],
-    });
-    const terminal = await waitForKind(
-      database,
-      turnInterruptedInformationKind.kind,
-    );
-    expect(terminal.payload.rebuildAttempt).toBe(1);
-    expect(
-      (await atoms(database)).some(
-        (atom) => atom.kind === turnDecisionInterruptedInformationKind.kind,
-      ),
-    ).toBe(true);
-    release();
-    await vi.waitFor(async () => {
+        references: [
+          { relation: "core:context", informationId: context.informationId },
+        ],
+      });
+      const terminal = await waitForKind(
+        database,
+        turnInterruptedInformationKind.kind,
+      );
+      expect(terminal.payload.rebuildAttempt).toBe(1);
       expect(
-        (await atoms(database)).some(
+        (await atoms(database)).filter(
+          (atom) => atom.kind === turnDecisionInterruptedInformationKind.kind,
+        ),
+      ).toHaveLength(1);
+      blocked.resolve();
+      await waitForDelivery(
+        database,
+        "agent.heartflow.dispatch.decision",
+        decision.informationId,
+      );
+      const all = await atoms(database);
+      expect(
+        all.some(
           (atom) => atom.kind === messageIntentRequestedInformationKind.kind,
         ),
       ).toBe(false);
-    });
+      expect(
+        all.filter((atom) => atom.kind === turnInterruptedInformationKind.kind),
+      ).toHaveLength(1);
+      expect(
+        all.filter((atom) => atom.kind === "agent.turn.plan.completed"),
+      ).toHaveLength(0);
+      expect(execute).toHaveBeenCalledTimes(1);
+    } finally {
+      blocked.resolve();
+    }
   });
 
   it("joins identity whether it arrives before or after the candidate", async () => {
@@ -726,6 +771,7 @@ describe("heartflow", () => {
 
   it("routes only from the latest frozen input and carries memory IDs without copying content", async () => {
     const module = createHeartflowModule({
+      plannerTemplate,
       modelTaskCapability,
       agentIdentity,
       deliveryDeliveredInformationKind,
@@ -965,13 +1011,16 @@ describe("heartflow", () => {
       occurredAt: "2026-09-08T00:00:02.000Z",
     });
 
-    await vi.waitFor(async () => {
-      expect(
-        (await atoms(database)).filter(
-          ({ kind }) => kind === turnClaimedInformationKind.kind,
-        ),
-      ).toHaveLength(1);
-    });
+    await waitForDelivery(
+      database,
+      `agent.heartflow.progress.${turnCandidateInformationKind.kind}`,
+      second.candidate.informationId,
+    );
+    expect(
+      (await atoms(database)).filter(
+        ({ kind }) => kind === turnClaimedInformationKind.kind,
+      ),
+    ).toHaveLength(1);
     const claim = (await atoms(database)).find(
       ({ kind }) => kind === turnClaimedInformationKind.kind,
     )!;
@@ -1009,7 +1058,7 @@ describe("heartflow", () => {
       );
       expect(current).toHaveLength(2);
       return current;
-    });
+    }, persistenceWait);
     expect(
       claims.find(
         (atom) =>
@@ -1058,8 +1107,16 @@ describe("heartflow", () => {
       expect(
         current.filter(({ kind }) => kind === turnClaimedInformationKind.kind),
       ).toHaveLength(2);
+      expect(
+        current.some(
+          (atom) =>
+            atom.kind === turnContextCompletedInformationKind.kind &&
+            atom.payload.candidateInformationId ===
+              second.candidate.informationId,
+        ),
+      ).toBe(true);
       return current;
-    });
+    }, persistenceWait);
     const latestContext = all
       .filter(({ kind }) => kind === turnContextCompletedInformationKind.kind)
       .find(
@@ -1227,29 +1284,9 @@ describe("Planner durable dispatch", () => {
     },
   );
   it("discards a late Planner completion after supersession", async () => {
-    let release!: (value: any) => void;
-    execute.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          release = resolve;
-        }),
-    );
-    const { core, database } = await fixture();
-    await appendCandidate(core, {
-      requestId: "old-plan",
-      text: "first",
-      occurredAt: "2026-09-08T00:00:01.000Z",
-    });
-    await waitForKind(database, turnContextCompletedInformationKind.kind);
-    await submitDecision(core, database, "attend");
-    await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
-    await appendCandidate(core, {
-      requestId: "new-plan",
-      text: "second",
-      occurredAt: "2026-09-08T00:00:02.000Z",
-    });
-    await waitForKind(database, turnSupersededInformationKind.kind);
-    release({
+    const blocked =
+      Promise.withResolvers<Awaited<ReturnType<typeof execute>>>();
+    const lateResult = {
       status: "completed",
       output: {
         action: "message",
@@ -1262,70 +1299,117 @@ describe("Planner durable dispatch", () => {
       },
       requestedInformationId: "request",
       terminalInformationId: "terminal",
-    });
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(
-      (await atoms(database)).some(
-        (atom) => atom.kind === messageIntentRequestedInformationKind.kind,
-      ),
-    ).toBe(false);
+    };
+    execute.mockImplementationOnce(() => blocked.promise);
+    try {
+      const { core, database } = await fixture();
+      const old = await appendCandidate(core, {
+        requestId: "old-plan",
+        text: "first",
+        occurredAt: "2026-09-08T00:00:01.000Z",
+      });
+      await waitForKind(database, turnContextCompletedInformationKind.kind);
+      const decision = await submitDecision(core, database, "attend");
+      await vi.waitFor(
+        () => expect(execute).toHaveBeenCalledTimes(1),
+        persistenceWait,
+      );
+      await appendCandidate(core, {
+        requestId: "new-plan",
+        text: "second",
+        occurredAt: "2026-09-08T00:00:02.000Z",
+      });
+      const superseded = await waitForKind(
+        database,
+        turnSupersededInformationKind.kind,
+      );
+      expect(superseded.payload.candidateInformationId).toBe(
+        old.candidate.informationId,
+      );
+      blocked.resolve(lateResult);
+      await waitForDelivery(
+        database,
+        "agent.heartflow.dispatch.decision",
+        decision.informationId,
+      );
+      const all = await atoms(database);
+      expect(
+        all.some(
+          (atom) => atom.kind === messageIntentRequestedInformationKind.kind,
+        ),
+      ).toBe(false);
+      expect(
+        all.filter((atom) => atom.kind === turnSupersededInformationKind.kind),
+      ).toHaveLength(1);
+      expect(
+        all.filter((atom) => atom.kind === "agent.turn.plan.completed"),
+      ).toHaveLength(0);
+      expect(execute).toHaveBeenCalledTimes(1);
+    } finally {
+      blocked.resolve(lateResult);
+    }
   });
 });
 
-it("recovers legacy unclaimed backlog with one frozen context and one model/action decision", async () => {
-  const f = await fixture(false, { now: "2026-09-08T01:00:00.000Z" });
-  const backlog = [];
-  for (let i = 0; i < 12; i++)
-    backlog.push(
-      await appendCandidate(f.core, {
-        requestId: `legacy-${i}`,
-        text: `legacy ${i}`,
-        occurredAt: `2026-09-08T00:00:${String(i).padStart(2, "0")}.000Z`,
-        identityBeforeCandidate: true,
-      }),
+// 13 组候选共 104 次串行事实写入，再加初始化、两轮各最多 8 秒的持久化等待与清理；仅此批量用例增加总预算。
+it(
+  "recovers legacy unclaimed backlog with one frozen context and one model/action decision",
+  { timeout: 30_000 },
+  async () => {
+    const f = await fixture(false, { now: "2026-09-08T01:00:00.000Z" });
+    const backlog = [];
+    for (let i = 0; i < 12; i++)
+      backlog.push(
+        await appendCandidate(f.core, {
+          requestId: `legacy-${i}`,
+          text: `legacy ${i}`,
+          occurredAt: `2026-09-08T00:00:${String(i).padStart(2, "0")}.000Z`,
+          identityBeforeCandidate: true,
+        }),
+      );
+    await f.start();
+    await appendCandidate(f.core, {
+      requestId: "newest",
+      text: "newest",
+      occurredAt: "2026-09-08T00:00:20.000Z",
+      identityBeforeCandidate: true,
+    });
+    await waitForKind(f.database, turnContextCompletedInformationKind.kind);
+    const contexts = await (
+      await atoms(f.database)
+    ).filter((a) => a.kind === turnContextCompletedInformationKind.kind);
+    expect(contexts).toHaveLength(1);
+    expect((contexts[0]!.payload as any).inputs).toHaveLength(13);
+    const backlogProjection = (contexts[0]!.payload as any).backlog;
+    expect(backlogProjection.isBacklog).toBe(true);
+    expect(backlogProjection.thresholdMs).toBe(120_000);
+    expect(backlogProjection.oldestInputAgeMs).toBe(
+      Date.parse(backlogProjection.evaluatedAt) -
+        Date.parse("2026-09-08T00:00:00.000Z"),
     );
-  await f.start();
-  await appendCandidate(f.core, {
-    requestId: "newest",
-    text: "newest",
-    occurredAt: "2026-09-08T00:00:20.000Z",
-    identityBeforeCandidate: true,
-  });
-  await waitForKind(f.database, turnContextCompletedInformationKind.kind);
-  const contexts = await (
-    await atoms(f.database)
-  ).filter((a) => a.kind === turnContextCompletedInformationKind.kind);
-  expect(contexts).toHaveLength(1);
-  expect((contexts[0]!.payload as any).inputs).toHaveLength(13);
-  const backlogProjection = (contexts[0]!.payload as any).backlog;
-  expect(backlogProjection.isBacklog).toBe(true);
-  expect(backlogProjection.thresholdMs).toBe(120_000);
-  expect(backlogProjection.oldestInputAgeMs).toBe(
-    Date.parse(backlogProjection.evaluatedAt) -
-      Date.parse("2026-09-08T00:00:00.000Z"),
-  );
-  expect(backlogProjection.newestInputAgeMs).toBe(
-    Date.parse(backlogProjection.evaluatedAt) -
-      Date.parse("2026-09-08T00:00:20.000Z"),
-  );
-  expect(
-    await (
+    expect(backlogProjection.newestInputAgeMs).toBe(
+      Date.parse(backlogProjection.evaluatedAt) -
+        Date.parse("2026-09-08T00:00:20.000Z"),
+    );
+    expect(
+      await (
+        await atoms(f.database)
+      ).filter((a) => a.kind === turnSupersededInformationKind.kind),
+    ).toHaveLength(12);
+    const claims = await (
       await atoms(f.database)
-    ).filter((a) => a.kind === turnSupersededInformationKind.kind),
-  ).toHaveLength(12);
-  const claims = await (
-    await atoms(f.database)
-  ).filter((a) => a.kind === turnClaimedInformationKind.kind);
-  expect(claims).toHaveLength(1);
-  await submitDecision(f.core, f.database, "attend");
-  await waitForKind(f.database, messageIntentRequestedInformationKind.kind);
-  expect(execute).toHaveBeenCalledTimes(1);
-  expect(
-    await (
-      await atoms(f.database)
-    ).filter((a) => a.kind === messageIntentRequestedInformationKind.kind),
-  ).toHaveLength(1);
-});
+    ).filter((a) => a.kind === turnClaimedInformationKind.kind);
+    expect(claims).toHaveLength(1);
+    await submitDecision(f.core, f.database, "attend");
+    await waitForKind(f.database, messageIntentRequestedInformationKind.kind);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(
+      await (
+        await atoms(f.database)
+      ).filter((a) => a.kind === messageIntentRequestedInformationKind.kind),
+    ).toHaveLength(1);
+  },
+);
 
 it("lets Planner close an expired recovered topic without creating a message intent", async () => {
   const f = await fixture(false, { now: "2026-09-08T01:00:00.000Z" });
@@ -1353,9 +1437,9 @@ it("lets Planner close an expired recovered topic without creating a message int
       }) as any,
   );
   await submitDecision(f.core, f.database, "attend");
-  await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
-  const plannerDecision = (await atoms(f.database)).find(
-    (atom) => atom.kind === "agent.turn.plan.completed",
+  const plannerDecision = await waitForKind(
+    f.database,
+    "agent.turn.plan.completed",
   );
   expect((plannerDecision?.payload as any)?.action).toEqual({
     action: "silent",
@@ -1385,7 +1469,12 @@ it("preserves merged inputs across an unfinished identity barrier and delayed id
     text: "new",
     occurredAt: "2026-09-08T00:00:02.000Z",
   });
-  await waitForKind(f.database, turnClaimedInformationKind.kind);
+  const claim = await waitForKind(f.database, turnClaimedInformationKind.kind);
+  await waitForDelivery(
+    f.database,
+    `agent.heartflow.progress.${turnClaimedInformationKind.kind}`,
+    claim.informationId,
+  );
   expect(
     (await atoms(f.database)).filter(
       (a) => a.kind === turnContextCompletedInformationKind.kind,
@@ -1537,7 +1626,7 @@ describe("persistent scope focus", () => {
                   next.candidate.informationId,
             ),
           ).toBe(true),
-        { timeout: 5000 },
+        persistenceWait,
       );
       expect(
         (await atoms(database)).find(

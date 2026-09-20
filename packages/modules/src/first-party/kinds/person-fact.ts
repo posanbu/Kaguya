@@ -2,10 +2,12 @@
  * 功能概述：person-fact 领域的 Information schema 与不可变定义，独立维护本领域引用和日志投影。
  * 主要职责：下列 schema 校验入账载荷，各 kind 声明因果关系、上下文和诊断元数据；无 I/O。
  * 代码库关系：information-kinds.ts 稳定重导出公共对象；跨领域只复用相邻文件定义，保持 Registry 对象身份。
+ * 输入输出与副作用：候选输入在 debug 投影中展示脱敏限长预览；提取结果的 info 摘要不含正文，
+ * 只有 sensitivity=content 的 debug detail 投影 fact。这里只格式化已登记领域载荷，不读取模型原始输出。
  */
 import { z } from "@kaguya/schema";
 import { defineInformationKind } from "@kaguya/sdk";
-import { nonBlankString } from "./shared.js";
+import { contentPreview, nonBlankString } from "./shared.js";
 
 export const personFactCandidateInformationPayloadSchema = z
   .object({
@@ -39,7 +41,10 @@ export const personFactCandidateInformationKind = defineInformationKind({
   log: {
     enabled: true,
     level: "debug",
-    project: () => ({ event: "person.fact.candidate" }),
+    project: ({ payload }) => ({
+      event: "person.fact.candidate",
+      ...contentPreview(payload.text),
+    }),
   },
 });
 
@@ -77,5 +82,12 @@ export const personFactExtractedInformationKind = defineInformationKind({
     enabled: true,
     level: "info",
     project: () => ({ event: "person.fact.extracted" }),
+    detail: {
+      sensitivity: "content",
+      project: ({ payload }) => ({
+        event: "person.fact.extracted",
+        ...contentPreview(payload.fact),
+      }),
+    },
   },
 });

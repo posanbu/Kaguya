@@ -13,5 +13,6 @@ coverage/
 .worktrees/
 .impeccable/
 packages/modules/templates/*.local.hbs
+packages/modules/templates/*.local.hbs.*.tmp
 init.sh
 docs/.vitepress/cache/

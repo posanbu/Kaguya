@@ -155,9 +155,6 @@ function completeProfile(
     id: "default",
     name: "default",
     identity: {
-      name: "Kaguya",
-      aliases: ["辉夜"],
-      persona: "test",
       timeZone: "Asia/Shanghai",
     },
     ai: { providers: [] },

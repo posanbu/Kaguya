@@ -1,10 +1,14 @@
 /**
+ * 测试显式注入统一文件模板，避免 Planner 或 Expression 绕过 default/local 选择。
  * 功能概述：验证 first-party Catalog 默认配置及激活边界。
  * 主要职责：catalog fixture 注入宿主能力与共享 kind，测试八个默认模块、严格 modelTier 设置、
  * disabled 配置校验与旧 reply/outbound 配置拒绝；Profile 身份决定 Heartflow botNames。
+ * 检查视图只引用 Catalog 中的模块 Kind，或由 model-task 能力及请求 Surface 明确声明的 Runtime 请求 Kind。
  * 代码库关系：直接约束 catalog 工厂以及 message-composer 模块的公开 settings schema。
  * 输入输出与副作用：纯内存组装，不连接模型或数据库；错误包含重新初始化说明。
  */
+import { loadFirstPartyPromptTemplates } from "../node/prompt-templates.js";
+const testPrompts = loadFirstPartyPromptTemplates();
 import { describe, expect, it } from "vitest";
 
 import { executionExhaustedInformationKind } from "@kaguya/engine";
@@ -24,6 +28,7 @@ const testIdentity = {
   timeZone: "Asia/Shanghai",
 };
 const testMessageTemplates = {
+  ...testPrompts.messageComposer,
   main: "{{scene}}{{history}}{{memory}}{{turn}}",
   history: "{{#each messages}}{{> history-inbound}}{{/each}}",
   historyInbound: "{{content}}",
@@ -61,6 +66,8 @@ function catalog() {
     deliveryFailedInformationKind: kind("core.delivery.failed") as never,
     executionExhaustedInformationKind,
     promptTemplates: testMessageTemplates,
+    plannerTemplate: testPrompts.planner,
+    expressionTemplates: testPrompts.expression,
     agentIdentity: testIdentity,
   });
 }
@@ -73,7 +80,7 @@ describe("first-party module configuration", () => {
         .flatMap((d) => [...d.manifest.produces, ...d.manifest.consumes])
         .map((k) => k.kind),
     );
-    expect(definitions).toHaveLength(11);
+    expect(definitions).toHaveLength(12);
     for (const { manifest } of definitions) {
       expect(manifest.inspection?.mechanism.length).toBeGreaterThan(0);
       expect(manifest.inspection?.views.length).toBeGreaterThan(0);
@@ -82,7 +89,25 @@ describe("first-party module configuration", () => {
         expect(Object.isFrozen(view.fields)).toBe(true);
         expect(Object.isFrozen(view.fields[0])).toBe(true);
         expect(view.fields.length).toBeGreaterThan(0);
-        for (const kind of view.kinds) expect(kinds.has(kind), kind).toBe(true);
+        for (const kind of view.kinds) {
+          if (kind === "core.model.task.requested") {
+            // 请求由 Runtime 注册，业务模块无需为了检查页面而声明消费或生产。
+            expect(manifest.requires).toContainEqual({
+              id: "kaguya:model-task",
+              apiVersion: 1,
+            });
+            expect(manifest.inspection!.surface?.components).toEqual(
+              expect.arrayContaining([
+                expect.objectContaining({
+                  type: "model-request-browser",
+                  viewId: view.id,
+                }),
+              ]),
+            );
+          } else {
+            expect(kinds.has(kind), kind).toBe(true);
+          }
+        }
       }
     }
   });

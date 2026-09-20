@@ -3,9 +3,11 @@
  * 主要职责：createFirstPartyModuleCatalog 接收宿主 Model Task token 和共享 completed kind，构造身份、时机与消息合成定义；
  * createFirstPartyModuleConfigDefaults 提供首次落盘模板，createFirstPartyModuleActivations
  * 同时提供独立 Memory writeback 定义，由 composition 在 Memory 启用时选择；
+ * 事件与 Wiki 原型单独进入 Catalog，只有显式 knowledgeEnabled 才自动激活。
  * 严格校验已加载的实例文件，拒绝旧回复配置并提示重新初始化，与“可发现”的 Catalog 分开。
  * 代码库关系：Server、Demo 和测试组合入口传入 Runtime 的实际 token/definition；工厂仅依赖模块侧
  * 结构类型，保留 completed payload 泛型与对象身份，避免 modules 反向依赖 Runtime。
+ * 模板正文由 composition 分别注入 Composer、Planner 与 Expression，默认值与本地覆盖统一在 Node 加载器选择。
  * 输入输出与副作用：纯内存定义，没有 timer、环境读取、连接、全局注册或动态目录扫描。
  */
 import {
@@ -14,11 +16,15 @@ import {
   type InformationModuleActivation,
 } from "@kaguya/sdk";
 import type { JsonObject } from "@kaguya/schema";
-import { createExpressionModule } from "./expression/index.js";
+import {
+  createExpressionModule,
+  type ExpressionPromptTemplates,
+} from "./expression/index.js";
 import { attentionFocusModule } from "./attention-focus/index.js";
 import { memoryCognitionModule } from "./memory-cognition/index.js";
 import { memoryIndexModule } from "./memory-index/index.js";
 import { memoryWritebackModule } from "./memory-writeback/index.js";
+import { memoryKnowledgeModule } from "./memory-knowledge/index.js";
 import { associationModule } from "./association/index.js";
 import { identityModule } from "./identity/index.js";
 import { attentionArousalModule } from "./attention-arousal/index.js";
@@ -36,17 +42,24 @@ import {
 export function createFirstPartyModuleCatalog<
   P extends ModelTaskCompletedInformationPayload,
 >(
-  options: CreateMessageComposerModuleOptions<P> & CreateHeartflowModuleOptions,
+  options: CreateMessageComposerModuleOptions<P> &
+    CreateHeartflowModuleOptions & {
+      readonly expressionTemplates: ExpressionPromptTemplates;
+    },
 ) {
   return defineInformationModuleCatalog(
     associationModule,
     memoryWritebackModule,
+    memoryKnowledgeModule,
     memoryIndexModule,
     memoryCognitionModule,
     identityModule,
     attentionArousalModule,
     attentionFocusModule,
-    createExpressionModule(options),
+    createExpressionModule({
+      ...options,
+      promptTemplates: options.expressionTemplates,
+    }),
     createMessageComposerModule({ ...options, expressionEnabled: true }),
     heartbeatModule,
     createHeartflowModule(options),
@@ -62,7 +75,7 @@ export interface FirstPartyModuleInstanceConfig {
 
 export function createFirstPartyModuleConfigDefaults(
   profile: "production" | "test" = "production",
-  identity: AgentIdentity = DEFAULT_AGENT_IDENTITY,
+  identity: Pick<AgentIdentity, "name" | "aliases"> = DEFAULT_AGENT_IDENTITY,
 ): readonly FirstPartyModuleInstanceConfig[] {
   return Object.freeze([
     Object.freeze({
@@ -171,7 +184,7 @@ export function createFirstPartyModuleConfigDefaults(
 export function createFirstPartyModuleActivations(
   catalog: InformationModuleCatalog,
   configs: readonly FirstPartyModuleInstanceConfig[],
-  identity: AgentIdentity = DEFAULT_AGENT_IDENTITY,
+  identity: Pick<AgentIdentity, "name" | "aliases"> = DEFAULT_AGENT_IDENTITY,
 ): readonly InformationModuleActivation[] {
   return Object.freeze(
     configs
@@ -218,11 +231,9 @@ export function createFirstPartyModuleActivations(
   );
 }
 
-const DEFAULT_AGENT_IDENTITY: AgentIdentity = {
+const DEFAULT_AGENT_IDENTITY: Pick<AgentIdentity, "name" | "aliases"> = {
   name: "Kaguya",
   aliases: ["辉夜"],
-  persona: "Default Kaguya persona",
-  timeZone: "Asia/Shanghai",
 };
 
 /** 配置诊断只包含实例、字段路径和阶段，不回显配置值或凭据。 */

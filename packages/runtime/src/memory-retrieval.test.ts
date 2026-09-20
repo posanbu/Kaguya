@@ -1,6 +1,7 @@
 /**
  * 功能概述：验证 MemoryRecall 到命名 Information 检索策略的安全适配。
  * 主要职责：覆盖 source ID 去重、Runtime limit 注入和仓储故障的空结果降级。
+ * 可选 knowledge guard 只允许已有候选的可用子集通过，撤回和过滤故障均不回落到未过滤原文。
  * 代码库关系：Core 会用返回 ID 重载并授权原始 inbound；本测试不伪造 Memory atom。
  * 输入输出与副作用：使用内存替身，无数据库或日志 I/O。
  */
@@ -58,5 +59,39 @@ describe("MemoryInformationRetrievalStrategy", () => {
     });
     expect(JSON.stringify(reportFailure.mock.calls)).not.toContain("private");
     expect(JSON.stringify(reportFailure.mock.calls)).not.toContain("secret");
+  });
+  it("keeps unprojected evidence but rejects revoked sources and extra guard IDs", async () => {
+    const recall = async () => [
+      { document, score: 1 },
+      {
+        document: { ...document, sourceInformationId: "unprojected" },
+        score: 0.5,
+      },
+    ];
+    const filterAvailableSourceIds = vi.fn(async () => [
+      "unprojected",
+      "unrequested",
+    ]);
+    const strategy = new MemoryInformationRetrievalStrategy(
+      { recall },
+      { filterAvailableSourceIds },
+    );
+    await expect(
+      strategy.retrieve({ input: { query: "moon" }, limit: 8 }),
+    ).resolves.toEqual(["unprojected"]);
+    expect(filterAvailableSourceIds).toHaveBeenCalledWith({
+      sourceInformationIds: ["source-1", "unprojected"],
+    });
+    const closed = new MemoryInformationRetrievalStrategy(
+      { recall },
+      {
+        filterAvailableSourceIds: async () => {
+          throw new Error("unavailable");
+        },
+      },
+    );
+    await expect(
+      closed.retrieve({ input: { query: "moon" }, limit: 8 }),
+    ).resolves.toEqual([]);
   });
 });

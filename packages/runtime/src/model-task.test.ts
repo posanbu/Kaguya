@@ -3,11 +3,14 @@
  * 主要职责：fixture 创建隔离账本；用不同任务 schema 检查去重、预检、取消及 claim fencing。
  * 代码库关系：消费 model-task 与 information-kinds；transform 测试组合真实 KaguyaLlmClient
  * 与内存 provider，其余并发场景以可控 generate 替身隔离外部调用。
+ * 失败用例检查结构化输出分类、尝试次数及累计指标的白名单持久化，并验证重放只保留一个终态。
+ * 异常失败指标须回退宿主耗时，非法尝试次数须省略；数据库提交失败仍向调用方传播。
  * 输入输出与副作用：只写测试数据库；敏感字符串是泄漏探针；每例关闭 Core 与数据库。
  */
 import { createTestingDatabase } from "@kaguya/database/testing";
 import { InformationCore, InformationKindRegistry } from "@kaguya/engine";
-import { KaguyaLlmClient } from "@kaguya/llm/client";
+import { KaguyaLlmClient, KaguyaLlmError } from "@kaguya/llm/client";
+import { createStructuredOutputPromptRenderer } from "@kaguya/llm";
 import { createRepeatingDeterministicModel } from "@kaguya/llm/testing";
 import { z } from "@kaguya/schema";
 import {
@@ -26,6 +29,9 @@ import {
 } from "./information-kinds.js";
 
 const secret = "credential=secret postgresql://private";
+const renderStructuredOutputPrompt = createStructuredOutputPromptRenderer(
+  "JSON schema: {{json_schema}}",
+);
 const sourceKind = defineInformationKind({
   kind: "test.input",
   displayName: "Test Input",
@@ -105,6 +111,7 @@ async function fixture(durable = false) {
   });
   const options = {
     core,
+    renderStructuredOutputPrompt,
     client: { generate } as Pick<KaguyaLlmClient, "generate">,
     resolveModel: () => ({ providerId: "test", modelId: "test-heavy" }),
   };
@@ -150,13 +157,17 @@ it("reuses requested identity across instances and canonical key order, with onl
     atoms.filter((a) => a.kind === "core.model.task.requested"),
   ).toHaveLength(1);
   const requested = atoms.find((a) => a.kind === "core.model.task.requested")!;
+  const expectedPrompt = renderStructuredOutputPrompt(
+    f.request.prompt,
+    z.toJSONSchema(f.request.task.outputSchema, { io: "input" }),
+  );
   expect(requested.payload).toMatchObject({
     taskId: "test.reply",
     version: "1",
     activation: f.request.activation,
     selectionPolicy: { tier: "heavy" },
     resolvedModel: { providerId: "test", modelId: "test-heavy" },
-    prompt: { variables: f.request.prompt.variables },
+    prompt: expectedPrompt,
   });
   expect(
     requested.references
@@ -299,25 +310,120 @@ it.each(["suffix", "shape"])(
   },
 );
 
-it("does not turn terminal storage errors into business failure", async () => {
-  const f = await fixture();
-  const append = vi
-    .spyOn(f.db.information.reliable, "appendTerminal")
-    .mockRejectedValue(new Error(secret));
-  try {
-    await expect(f.client.execute(f.request)).rejects.toThrow(
-      "Model task execution could not be committed",
+it.each(["completed", "failed"])(
+  "does not hide %s terminal storage errors",
+  async (terminal) => {
+    const f = await fixture();
+    if (terminal === "failed")
+      f.generate.mockRejectedValue(
+        new KaguyaLlmError(secret, {
+          kind: "non-retryable",
+          stage: "structured-output-parse",
+          cause: secret,
+          usage: { totalTokens: -1 },
+        }),
+      );
+    const append = vi
+      .spyOn(f.db.information.reliable, "appendTerminal")
+      .mockRejectedValue(new Error(secret));
+    try {
+      await expect(f.client.execute(f.request)).rejects.toThrow(
+        "Model task execution could not be committed",
+      );
+      expect(append).toHaveBeenCalledTimes(1);
+      expect(
+        (await f.atoms())
+          .filter((a) => a.kind.startsWith("core.model.task."))
+          .map((a) => a.kind),
+      ).toEqual(["core.model.task.requested"]);
+    } finally {
+      append.mockRestore();
+    }
+  },
+);
+
+it.each([
+  { label: "negative token count", usage: { totalTokens: -1 }, durationMs: 19 },
+  {
+    label: "ledger-forbidden usage key",
+    usage: { profileId: 1 },
+    durationMs: 19,
+  },
+  {
+    label: "non-finite token count",
+    usage: { totalTokens: Infinity },
+    durationMs: 19,
+  },
+  { label: "negative duration", usage: { totalTokens: 7 }, durationMs: -1 },
+  { label: "NaN duration", usage: { totalTokens: 7 }, durationMs: NaN },
+  {
+    label: "infinite duration",
+    usage: { totalTokens: 7 },
+    durationMs: Infinity,
+  },
+])(
+  "commits one safe failed terminal with $label",
+  async ({ usage, durationMs }) => {
+    const f = await fixture();
+    const now = vi
+      .fn()
+      .mockReturnValueOnce(new Date(1_000))
+      .mockReturnValueOnce(new Date(2_000))
+      .mockReturnValue(new Date(2_050));
+    const client = new ModelTaskClient({ ...f.options, now });
+    f.generate.mockRejectedValue(
+      new KaguyaLlmError(secret, {
+        kind: "non-retryable",
+        stage: "structured-output-parse",
+        cause: secret,
+        usage,
+        durationMs,
+        structuredOutputFailure: "invalid-json",
+        attemptCount: 2,
+      }),
     );
-    expect(append).toHaveBeenCalledTimes(1);
+    const result = await client.execute(f.request);
+    expect(result).toMatchObject({
+      status: "failed",
+      error: { attemptCount: 2 },
+    });
+    const terminals = (await f.atoms()).filter(
+      (atom) =>
+        atom.kind.startsWith("core.model.task.") &&
+        atom.kind !== "core.model.task.requested",
+    );
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0]!.payload).toMatchObject({ durationMs: 50 });
+    expect(terminals[0]!.payload).not.toHaveProperty("usage");
+    expect(JSON.stringify(terminals[0]!.payload)).not.toContain(secret);
+    expect(await client.execute(f.request)).toEqual(result);
+    expect(f.generate).toHaveBeenCalledTimes(1);
+  },
+);
+
+it.each([0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
+  "omits invalid failure attempt count %s without losing the failed terminal",
+  async (attemptCount) => {
+    const f = await fixture();
+    f.generate.mockRejectedValue(
+      new KaguyaLlmError(secret, {
+        kind: "non-retryable",
+        stage: "structured-output-parse",
+        cause: secret,
+        attemptCount,
+      }),
+    );
+    const result = await f.client.execute(f.request);
+    expect(result.status).toBe("failed");
+    if (result.status === "failed")
+      expect(result.error).not.toHaveProperty("attemptCount");
     expect(
-      (await f.atoms())
-        .filter((a) => a.kind.startsWith("core.model.task."))
-        .map((a) => a.kind),
-    ).toEqual(["core.model.task.requested"]);
-  } finally {
-    append.mockRestore();
-  }
-});
+      (await f.atoms()).filter(
+        (atom) => atom.kind === "core.model.task.failed",
+      ),
+    ).toHaveLength(1);
+  },
+);
 
 it("does not copy ledger-rejected usage into the safe failed payload", async () => {
   const f = await fixture();
@@ -448,6 +554,92 @@ it.each(["schema", "provider"])(
     expect(f.generate).toHaveBeenCalledTimes(1);
   },
 );
+
+it.each(["empty", "invalid-json", "schema-mismatch", "truncated"] as const)(
+  "persists safe %s diagnostics and failure usage with one terminal on replay",
+  async (structuredOutputFailure) => {
+    const f = await fixture();
+    const usage = { inputTokens: 11, outputTokens: 7, totalTokens: 18 };
+    f.generate.mockRejectedValue(
+      new KaguyaLlmError(secret, {
+        kind: "non-retryable",
+        stage: "structured-output-parse",
+        cause: {
+          text: secret,
+          response: { headers: { authorization: secret } },
+        },
+        structuredOutputFailure,
+        attemptCount: 2,
+        usage,
+        durationMs: 19,
+      }),
+    );
+    const result = await f.client.execute(f.request);
+    expect(result).toMatchObject({
+      status: "failed",
+      error: {
+        name: "ModelTaskError",
+        kind: "non-retryable",
+        stage: "structured-output-parse",
+        message: "Model task generation failed",
+        structuredOutputFailure,
+        attemptCount: 2,
+      },
+    });
+    expect(await f.client.execute(f.request)).toEqual(result);
+    expect(f.generate).toHaveBeenCalledTimes(1);
+    const terminals = (await f.atoms()).filter(
+      (a) =>
+        a.kind.startsWith("core.model.task.") &&
+        a.kind !== "core.model.task.requested",
+    );
+    expect(terminals).toHaveLength(1);
+    const failed = terminals[0]!;
+    expect(failed.payload).toMatchObject({ usage, durationMs: 19 });
+    const definition = modelTaskInformationKinds.find(
+      (kind) => kind.kind === failed.kind,
+    )!;
+    expect(definition.log.enabled).toBe(true);
+    if (definition.log.enabled) {
+      const projection = definition.log.project(failed as never);
+      expect(projection).toMatchObject({
+        structuredOutputFailure,
+        attemptCount: 2,
+        durationMs: 19,
+      });
+      expect(JSON.stringify(projection)).not.toContain(secret);
+    }
+    expect(JSON.stringify(failed.payload)).not.toContain(secret);
+    expect(JSON.stringify(result)).not.toContain(secret);
+  },
+);
+
+it("preserves completed generation metrics when task validation subsequently fails", async () => {
+  const f = await fixture();
+  const result = await f.client.execute({
+    ...f.request,
+    task: {
+      ...f.request.task,
+      outputSchema: f.request.task.outputSchema.transform(() => {
+        throw new KaguyaLlmError(secret, {
+          kind: "non-retryable",
+          stage: "structured-output-parse",
+          cause: secret,
+          usage: { totalTokens: 999 },
+          durationMs: 999,
+        });
+      }),
+    },
+  });
+  expect(result.status).toBe("failed");
+  const failed = (await f.atoms()).find(
+    (a) => a.kind === "core.model.task.failed",
+  )!;
+  expect(failed.payload).toMatchObject({
+    usage: { totalTokens: 7 },
+    durationMs: 5,
+  });
+});
 
 it.each(["completed", "failed", "cancelled"])(
   "returns the %s winner to concurrent losers in the same terminal group",

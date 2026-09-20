@@ -7,6 +7,7 @@
  * handler 故障由 Core 记录为带模块消费者身份的 `consumer.failed`；并直接覆盖共享
  * start/stop promise、停止与创建竞态、rollback/dispose 全量失败聚合、在途 handler 等待
  * 及 instance source grammar。
+ * ready 在订阅与可靠投递启动后执行；ready 失败撤销所有订阅并逆序清理，不把宿主标为启动成功。
  * 代码库关系：覆盖最终 `module-host.ts` 对 SDK `onInformation` 和 Core
  * `on`/`register` 的适配；MemoryLedger 模拟 Core 所要求的 append-only 与结构化只读
  * 存储边界。
@@ -213,6 +214,149 @@ async function startHost(
 }
 
 describe("ModuleHost", () => {
+  it("runs ready after subscriptions and reliable delivery while start has no consumers", async () => {
+    const { core } = createCore();
+    await core.start();
+    const runtimeContext = await appendContext(core);
+    const startDelivery = vi.spyOn(core, "startReliableDelivery");
+    const received: string[] = [];
+    let startSignal: AbortSignal | undefined;
+    const module = defineInformationModule({
+      manifest: {
+        protocolVersion: 1,
+        moduleVersion: "1.0.0",
+        definitionId: "acme.readiness",
+        displayName: "Readiness",
+        summary: "Tests readiness ordering.",
+        description: "Publishes startup work after subscriptions are ready.",
+        settingsSchema: z.object({}).strict(),
+        consumes: [inboundKind],
+        produces: [],
+        selectors: [],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
+      },
+      create: () => ({
+        provisions: [],
+        subscriptions: [
+          onInformation(
+            inboundKind,
+            { subscriptionId: "readiness", delivery: "live" },
+            (atom) => {
+              received.push(atom.payload.text);
+            },
+          ),
+        ],
+        start: async (context) => {
+          startSignal = context.signal;
+          await core.register(
+            inboundKind,
+            registration({ text: "start" }, runtimeContext),
+          );
+          expect(received).toEqual([]);
+          expect(startDelivery).not.toHaveBeenCalled();
+        },
+        ready: async (context) => {
+          expect(context.signal).toBe(startSignal);
+          expect(startDelivery).toHaveBeenCalledTimes(1);
+          await core.register(
+            inboundKind,
+            registration({ text: "ready" }, runtimeContext),
+          );
+        },
+      }),
+    });
+    const host = await startHost(module, core);
+    expect(received).toEqual(["ready"]);
+    await host.stop();
+    await core.close();
+  });
+
+  it("rolls back every activation and stops delivery when ready rejects", async () => {
+    const { core } = createCore();
+    await core.start();
+    const stopDelivery = vi.spyOn(core, "stopReliableDelivery");
+    const stages: string[] = [];
+    const signals: AbortSignal[] = [];
+    const failure = new Error("readiness failed");
+    const observations: ModuleHostObservation[] = [];
+    const module = defineInformationModule({
+      manifest: {
+        protocolVersion: 1,
+        moduleVersion: "1.0.0",
+        definitionId: "acme.ready-failure",
+        displayName: "Readiness failure",
+        summary: "Tests readiness rollback.",
+        description:
+          "Disposes both initialized modules after readiness failure.",
+        settingsSchema: z.object({}).strict(),
+        consumes: [inboundKind],
+        produces: [],
+        selectors: [],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
+      },
+      create: ({ instanceId }, context) => {
+        signals.push(context.signal);
+        return {
+          provisions: [],
+          subscriptions: [],
+          start: () => {
+            stages.push(`start:${instanceId}`);
+          },
+          ready: () => {
+            stages.push(`ready:${instanceId}`);
+            if (instanceId === "b") throw failure;
+          },
+          stop: () => {
+            stages.push(`stop:${instanceId}`);
+          },
+          dispose: () => {
+            stages.push(`dispose:${instanceId}`);
+          },
+        };
+      },
+    });
+    const host = new ModuleHost({
+      core,
+      catalog: defineInformationModuleCatalog(module),
+      observer: (event) => {
+        observations.push(event);
+      },
+    });
+    await expect(
+      host.start(
+        ["a", "b"].map((instanceId) => ({
+          instanceId,
+          definitionId: module.manifest.definitionId,
+          settings: {},
+        })),
+      ),
+    ).rejects.toBe(failure);
+    expect(stages).toEqual([
+      "start:a",
+      "start:b",
+      "ready:a",
+      "ready:b",
+      "stop:b",
+      "stop:a",
+      "dispose:b",
+      "dispose:a",
+    ]);
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+    expect(stopDelivery).toHaveBeenCalled();
+    expect(observations).toContainEqual(
+      expect.objectContaining({
+        event: "module.start.failed",
+        instanceId: "b",
+        fields: { phase: "ready", errorType: "Error" },
+      }),
+    );
+    await expect(host.start([])).rejects.toThrow("cannot be restarted");
+    await core.close();
+  });
   it("reports authoritative startup and isolates declared module diagnostics", async () => {
     const { core } = createCore();
     await core.start();

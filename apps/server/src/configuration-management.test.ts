@@ -409,9 +409,6 @@ async function createRuntimeBackedManagement(root: string) {
 function readyProfileSettings(lightModelId: string, heavyModelId: string) {
   return {
     identity: {
-      name: "Kaguya",
-      aliases: ["辉夜"],
-      persona: "test",
       timeZone: "Asia/Shanghai",
     },
     ai: {

@@ -32,9 +32,6 @@ const completeProfile: UserConfigProfile = {
   inboundAllowlist: ["qq:group:778899", "invalid-rule"],
   outboundAllowlist: ["qq:group:778899", "invalid-rule"],
   identity: {
-    name: "Kaguya",
-    aliases: ["辉夜", "Moon"],
-    persona: "test persona",
     timeZone: "Asia/Shanghai",
   },
   ai: {
@@ -94,9 +91,6 @@ const emptyDefaultProfile: UserConfigProfile = {
   inboundAllowlist: [],
   outboundAllowlist: [],
   identity: {
-    name: "Kaguya",
-    aliases: ["辉夜"],
-    persona: "test",
     timeZone: "Asia/Shanghai",
   },
   ai: {
@@ -113,9 +107,6 @@ const warningProfile: UserConfigProfile = {
   inboundAllowlist: ["*:private:*"],
   outboundAllowlist: ["*:private:*"],
   identity: {
-    name: "Kaguya",
-    aliases: ["辉夜"],
-    persona: "test",
     timeZone: "Asia/Shanghai",
   },
   ai: {
@@ -146,9 +137,6 @@ describe("profileToEditorFields", () => {
   it("extracts the visible fields from a populated profile", () => {
     expect(profileToEditorFields(completeProfile)).toEqual({
       name: "Production",
-      agentName: "Kaguya",
-      agentAliasesText: "辉夜\nMoon",
-      agentPersona: "test persona",
       agentTimeZone: "Asia/Shanghai",
       baseUrl: "https://api.example/v1",
       apiKey: "provider-secret",
@@ -171,9 +159,6 @@ describe("profileToEditorFields", () => {
   it("returns empty editor fields for the reserved default profile", () => {
     expect(profileToEditorFields(emptyDefaultProfile)).toEqual({
       name: "default",
-      agentName: "Kaguya",
-      agentAliasesText: "辉夜",
-      agentPersona: "test",
       agentTimeZone: "Asia/Shanghai",
       baseUrl: "",
       apiKey: "",
@@ -233,9 +218,6 @@ describe("mergeProfileEditorFields", () => {
     const merged = mergeProfileEditorFields(completeProfile, {
       ...fields,
       name: "Production v2",
-      agentName: " Luna ",
-      agentAliasesText: "月\n 月 \nMoon",
-      agentPersona: " custom persona ",
       agentTimeZone: " Asia/Tokyo ",
       baseUrl: "https://api.example/v2",
       apiKey: "provider-secret-v2",
@@ -251,9 +233,6 @@ describe("mergeProfileEditorFields", () => {
       inboundAllowlist: ["qq:group:778899", "invalid-rule", "qq:group:778899"],
       outboundAllowlist: ["qq:group:778899", "invalid-rule"],
       identity: {
-        name: "Luna",
-        aliases: ["月", "Moon"],
-        persona: "custom persona",
         timeZone: "Asia/Tokyo",
       },
       acknowledgedWarnings: [],
@@ -330,9 +309,6 @@ describe("mergeProfileEditorFields", () => {
       inboundAllowlist: [],
       outboundAllowlist: [],
       identity: {
-        name: "Kaguya",
-        aliases: ["辉夜"],
-        persona: "test",
         timeZone: "Asia/Shanghai",
       },
       acknowledgedWarnings: [],

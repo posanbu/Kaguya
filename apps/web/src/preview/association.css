@@ -1,0 +1,112 @@
+/*
+ * 功能概述：独立设计预览外壳，只承载演示状态切换与紧凑页面标题，给真实组件保留主要空间。
+ * 代码库关系：由 preview/association.tsx 引入，沿用工作台颜色和按钮约定；正式模块页不加载此文件。
+ * 主要职责与副作用：使用 4px 倍数的间距、固定文字层级和 800/520px 断点；窄屏状态控件换行，保留键盘焦点。
+ */
+.association-preview {
+  min-height: 100dvh;
+}
+.preview-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding: 0.5rem 1.5rem;
+  background: var(--kaguya-paper);
+  border-bottom: 1px solid var(--kaguya-line);
+  font-size: 0.75rem;
+  color: var(--kaguya-muted);
+}
+.preview-bar strong {
+  color: var(--kaguya-ink);
+  font-weight: 600;
+}
+.preview-bar fieldset {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding: 0;
+  border: 0;
+  margin: 0;
+}
+.preview-bar legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.preview-bar button {
+  min-height: 2.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+.preview-bar button[aria-pressed="true"] {
+  border-color: var(--kaguya-line);
+  background: var(--kaguya-paper-soft);
+  color: var(--kaguya-coral-strong);
+}
+.preview-bar button:hover {
+  background: var(--kaguya-paper-soft);
+}
+.preview-bar button:focus-visible {
+  outline: 2px solid var(--kaguya-coral-strong);
+  outline-offset: 2px;
+}
+.preview-live {
+  margin-left: auto;
+}
+.association-preview main {
+  max-width: 80rem;
+  margin: 0 auto;
+  padding: 1.5rem 2rem 2rem;
+}
+.preview-header {
+  margin-bottom: 1.25rem;
+}
+.preview-header h1 {
+  font-size: 1.5rem;
+  line-height: 1.4;
+  margin: 0 0 0.5rem;
+  font-weight: 600;
+}
+.preview-header p {
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--kaguya-muted);
+  margin: 0;
+}
+.preview-trace {
+  overflow-wrap: anywhere;
+}
+.preview-trace .wb-button {
+  margin: 0.25rem 0;
+  max-width: 100%;
+  white-space: normal;
+  text-align: left;
+}
+@media (max-width: 800px) {
+  .association-preview main {
+    padding: 1.5rem;
+  }
+  .preview-live {
+    display: none;
+  }
+}
+@media (max-width: 520px) {
+  .preview-bar {
+    padding: 0.5rem 1rem;
+    gap: 0.25rem 0.75rem;
+  }
+  .association-preview main {
+    padding: 1.25rem 1rem 2rem;
+  }
+  .preview-header {
+    margin-bottom: 1rem;
+  }
+}

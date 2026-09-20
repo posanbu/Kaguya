@@ -1,6 +1,8 @@
 /**
  * ModuleRegistrationInput.openScope 为 registerOnce 声明开放范围及释放终态组，仍由 Core 验证并提交。
  * promptTemplates 显式声明模块模板归属，Catalog 冻结其变量、partial 与组成关系。
+ * record-browser 校验根 Kind、状态字段、双向关系分组和来源投影的 view/字段白名单，随后与状态选项一起深冻结。
+ * model-request-browser 校验模型能力、请求归属字段和受支持的任务模式；Runtime 产生的请求无需由模块重复声明产出。
  * inspection 显式声明领域视图、字段和机制；校验后冻结，供 Host 只读投影，不提供任意查询执行。
  * 功能概述：定义唯一版本化模块协议、显式 Catalog 与受控能力边界，供模块作者和 Host 共用。
  * 主要职责：defineInformationModule 校验静态清单；Catalog 确定性合并并拒绝身份冲突；
@@ -8,7 +10,7 @@
  * 代码库关系：Engine 在 create 前预检这些声明，Runtime 只装配 Catalog 与 activations；
  * handler 通过受限 context 派生原子和选择上下文，无法取得裸存储或全局配置。
  * 输入输出与副作用：定义只构造冻结内存元数据，无 I/O；settings 由 Host parse 后深冻结。
- * start/stop/dispose 与 AbortSignal 表达资源生命周期；业务顺序由 information DAG 表达。
+ * start/ready/stop/dispose 与 AbortSignal 表达资源生命周期；ready 在订阅与可靠投递就绪后登记启动任务，业务顺序仍由 information DAG 表达。
  */
 import type {
   DeepReadonly,
@@ -118,6 +120,7 @@ export interface InformationPromptRendererDefinition {
 }
 /** 模块静态声明拥有的模板；只含契约，不包含运行时 Prompt 或变量值。 */
 export interface ModulePromptTemplateDefinition {
+  readonly mutability: "editable" | "readonly";
   readonly templateId: string;
   readonly name: string;
   readonly displayName: string;
@@ -210,6 +213,8 @@ export interface InformationModuleInstance {
   readonly subscriptions: readonly InformationModuleSubscription[];
   readonly provisions: readonly ModuleCapabilityImplementation[];
   start?(context: InformationModuleLifecycleContext): Promise<void> | void;
+  /** 所有模块启动、订阅安装及可靠投递启用后调用；可登记需要当前订阅接收的启动事实，失败回滚整个宿主。 */
+  ready?(context: InformationModuleLifecycleContext): Promise<void> | void;
   describeStartup?():
     ModuleStartupDescription | Promise<ModuleStartupDescription>;
   stop?(): Promise<void> | void;
@@ -418,12 +423,85 @@ function validateInspectionSurface(
     const view = views.get(component.viewId);
     if (!view)
       throw new Error(`Unknown inspection surface view: ${component.viewId}`);
+    if (component.type === "model-request-browser") {
+      if (
+        !manifest.requires.some(
+          (capability) =>
+            capability.id === "kaguya:model-task" &&
+            capability.apiVersion === 1,
+        ) ||
+        !view.kinds.includes("core.model.task.requested") ||
+        [
+          "taskId",
+          "activation.definitionId",
+          "sourceInformationId",
+          "contextInformationId",
+        ].some((path) => !view.fields.some((field) => field.path === path))
+      )
+        throw new Error("Invalid inspection model request contract");
+      const expectedTask =
+        component.mode === "planner"
+          ? "agent.turn.plan"
+          : "agent.message.compose";
+      if (component.taskId !== expectedTask)
+        throw new Error("Invalid inspection model request task mode");
+      continue;
+    }
     if (component.type === "status-summary") {
       if (
         component.kinds.some((kind) => !view.kinds.includes(kind)) ||
         !view.fields.some(({ path }) => path === component.statusField)
       )
         throw new Error("Unknown inspection surface status field");
+      continue;
+    }
+    if (component.type === "record-browser") {
+      const requireFields = (
+        viewId: string,
+        kinds: readonly string[],
+        paths: readonly string[],
+      ) => {
+        const target = views.get(viewId);
+        if (
+          !target ||
+          kinds.some((kind) => !target.kinds.includes(kind)) ||
+          paths.some(
+            (path) =>
+              !["informationId", "occurredAt", "source"].includes(path) &&
+              !target.fields.some((field) => field.path === path),
+          )
+        )
+          throw new Error("Unknown inspection surface record field");
+      };
+      if (!producedKinds.has(component.recordKind))
+        throw new Error("Unknown inspection surface record kind");
+      requireFields(
+        component.viewId,
+        [component.recordKind],
+        [
+          component.titleField,
+          ...(component.status ? [component.status.field] : []),
+          ...component.searchFields,
+          ...component.fields.map((field) => field.path),
+        ],
+      );
+      if (
+        new Set(component.relations.map(({ id }) => id)).size !==
+        component.relations.length
+      )
+        throw new Error("Duplicate inspection surface relation id");
+      for (const relation of component.relations) {
+        requireFields(relation.viewId, relation.kinds, [
+          ...relation.fields.map((field) => field.path),
+          ...(relation.rankField ? [relation.rankField] : []),
+        ]);
+        if (relation.source)
+          requireFields(
+            relation.source.viewId,
+            relation.source.kinds,
+            relation.source.fields.map((field) => field.path),
+          );
+      }
       continue;
     }
     if (

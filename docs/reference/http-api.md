@@ -17,6 +17,10 @@ description: Kaguya 统一 Server 的路由、认证、Profile 与消息协议�
 
 **实际存储** — `GET /api/v1/inspection/modules/:definitionId/storage` 仅对声明 storage 的模块开放。支持 `limit`（1–50，默认 20）和 `cursor`，返回 `available`、`items`、`nextCursor`。文档页按 memory ID 排序；向量页按文档、模型、版本与维度排序，不返回向量数值。库为全局共享，不随实例过滤；可选表不存在返回 available=false，数据库故障返回安全错误。
 
+**模型请求目录** — `GET /api/v1/inspection/modules/:definitionId/surfaces/:surfaceId` 对 `model-request-browser` Surface 返回逐次请求摘要。一行对应一条真实的 `core.model.task.requested`，按请求的模块归属与任务 ID 筛选，包含历史实例。支持 `limit`（1–50，默认 20）和绑定查询条件的 `cursor`；有界扫描可能返回空 `items` 与非空 `nextCursor`，此时仍可继续翻页。在线心流与消息组织分别使用 `planner-requests`、`composer-requests`。
+
+**单次请求详情** — `GET /api/v1/inspection/modules/:definitionId/surfaces/:surfaceId/requests/:requestId` 返回该请求关联的冻结输入或授权发送要求、模型终态、业务结果及来源链。完整 Prompt 来自请求落账时保存的文本，脱敏后返回，不用当前模板重新生成。缺失上下文、缺失 Prompt 和有界查询截断分别显式标记；模型调用完成不代表消息已经投递。
+
 `apps/server` 在一个 Fastify 实例中提供 Web UI、健康检查、OpenAPI、配置管理和消息入口。默认地址是 `http://127.0.0.1:3000`。
 
 ## 公共路由

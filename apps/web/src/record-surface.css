@@ -1,0 +1,656 @@
+/*
+ * 功能概述：声明式记录浏览器的排版层，保留 Kaguya 色系并以查询、结果、候选正文建立阅读层级。
+ * 主要职责：桌面采用固定目录和可滚动详情；按容器宽度折叠为单栏。状态以红黄绿语义颜色配合图形；正文、标签、数据使用统一字号与间距。
+ * 代码库关系：RecordSurface/QueryHeading/SourceFields 使用本文件；共享 InspectionFields 只在此 Surface 内作紧凑排列。
+ * 输入输出与副作用：候选行样式仅匹配直属条目，不影响内部原因列表；长字段自动换行，焦点与触控目标保持可见。
+ */
+.record-surface {
+  --record-title-size: 1.25rem;
+  --record-body-size: 1rem;
+  --record-ui-size: 0.875rem;
+  --record-meta-size: 0.75rem;
+  --record-inset: 1.5rem;
+  --record-gap: 1rem;
+  --record-section-gap: 1.5rem;
+  --record-success: #237645;
+  --record-warning: #8a5a00;
+  --record-error: #b43a36;
+  display: grid;
+  gap: var(--record-gap);
+  min-width: 0;
+  container: record-surface / inline-size;
+  color: var(--kaguya-ink);
+}
+.record-surface ::selection {
+  background: color-mix(in srgb, var(--kaguya-coral) 22%, var(--kaguya-paper));
+  color: var(--kaguya-ink);
+}
+.record-toolbar {
+  display: flex;
+  align-items: end;
+  gap: 0.5rem;
+}
+.record-toolbar label {
+  display: grid;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 0;
+  font-size: var(--record-meta-size);
+  font-weight: 500;
+  color: var(--kaguya-muted);
+}
+.record-toolbar .wb-button {
+  min-height: 2.75rem;
+}
+.record-search {
+  position: relative;
+  display: block;
+}
+.record-search svg {
+  position: absolute;
+  left: 0.875rem;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.record-search input {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.625rem 0.75rem 0.625rem 2.5rem;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 8px;
+  background: var(--kaguya-paper);
+  color: var(--kaguya-ink);
+  caret-color: var(--kaguya-coral-strong);
+  font: inherit;
+  font-size: var(--record-ui-size);
+}
+.record-search input::placeholder {
+  color: var(--kaguya-muted);
+  opacity: 1;
+}
+.record-surface :is(button, input, summary):focus-visible {
+  outline: 2px solid var(--kaguya-coral-strong);
+  outline-offset: 3px;
+}
+.record-filter {
+  display: flex;
+  gap: var(--record-gap);
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: var(--record-ui-size);
+  overflow-wrap: anywhere;
+}
+.record-browser {
+  display: grid;
+  grid-template-columns: 18.5rem minmax(0, 1fr);
+  height: clamp(32rem, 70dvh, 52rem);
+  min-width: 0;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 12px;
+  background: var(--kaguya-paper);
+  overflow: clip;
+}
+.record-directory {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--kaguya-line);
+  background: var(--kaguya-paper-soft);
+}
+.record-directory > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 1.25rem 1rem 0;
+}
+.record-directory h3 {
+  margin: 0;
+  font-size: var(--record-ui-size);
+  font-weight: 600;
+}
+.record-directory > header > span,
+.record-order {
+  font-size: var(--record-meta-size);
+  color: var(--kaguya-muted);
+}
+.record-order {
+  margin: 0.375rem 1rem 1rem;
+}
+.record-directory > ol {
+  flex: 1;
+  min-height: 0;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+  scrollbar-color: var(--kaguya-line) transparent;
+  scrollbar-width: thin;
+}
+.record-directory > ol > li {
+  border-top: 1px solid var(--kaguya-line);
+}
+.record-directory > ol > li > button {
+  position: relative;
+  display: grid;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.875rem 1.75rem 1rem 1rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--kaguya-ink);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.record-directory > ol > li > button:hover {
+  background: var(--kaguya-paper);
+}
+.record-directory > ol > li > button[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--kaguya-coral) 7%, var(--kaguya-paper));
+}
+.record-directory > ol > li > button:focus-visible {
+  outline-offset: -3px;
+}
+.record-row-meta {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--kaguya-muted);
+  font-size: var(--record-meta-size);
+  font-variant-numeric: tabular-nums;
+}
+.record-surface .record-status {
+  --record-status-color: var(--kaguya-muted);
+  --record-status-fill: currentColor;
+  --record-status-symbol: var(--kaguya-paper);
+  color: var(--record-status-color);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  flex-shrink: 0;
+}
+.record-surface .record-status-success {
+  --record-status-color: var(--record-success);
+}
+.record-surface .record-status-warning {
+  --record-status-color: var(--record-warning);
+  --record-status-fill: var(--kaguya-gold);
+  --record-status-symbol: #33251f;
+}
+.record-surface .record-status-error {
+  --record-status-color: var(--record-error);
+}
+.record-status svg > circle {
+  fill: var(--record-status-fill);
+  stroke: currentColor;
+}
+.record-status svg > :is(path, polyline, line) {
+  stroke: var(--record-status-symbol);
+}
+:root[data-theme="dark"] .record-surface {
+  --record-success: #7bd4a2;
+  --record-warning: #edc564;
+  --record-error: #ff9690;
+}
+.record-directory .wb-status {
+  border: 0;
+  padding: 0;
+  font-size: var(--record-meta-size);
+  background: transparent;
+  white-space: nowrap;
+}
+.record-directory strong {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-size: var(--record-ui-size);
+  font-weight: 400;
+  line-height: 1.6;
+}
+.record-directory [aria-pressed="true"] strong {
+  font-weight: 600;
+}
+.record-row-arrow {
+  position: absolute;
+  right: 0.5rem;
+  bottom: 1.125rem;
+  color: var(--kaguya-muted);
+}
+.record-directory .developer-pager {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.75rem;
+  border-top: 1px solid var(--kaguya-line);
+  font-size: var(--record-meta-size);
+}
+.record-directory .developer-pager .wb-button {
+  padding-inline: 0.625rem;
+  min-height: 2.75rem;
+  font-size: var(--record-meta-size);
+}
+.record-detail {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--record-inset);
+  scrollbar-gutter: stable;
+  scrollbar-color: var(--kaguya-line) transparent;
+  scrollbar-width: thin;
+}
+.record-heading h3 {
+  margin: 0;
+  color: var(--kaguya-ink);
+  font-size: var(--record-title-size);
+  font-weight: 600;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  scroll-margin-top: var(--record-inset);
+}
+.record-heading h3:focus-visible {
+  outline: 2px solid var(--kaguya-coral-strong);
+  outline-offset: 4px;
+}
+.record-query-collapsed {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.record-query-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0 1rem;
+  margin-top: 0.375rem;
+}
+.record-query-meta > time {
+  font-size: var(--record-meta-size);
+  color: var(--kaguya-muted);
+  font-variant-numeric: tabular-nums;
+}
+.record-surface .record-trace-button.wb-button,
+.record-surface .record-expand.wb-button {
+  min-height: 2.75rem;
+  border: 0;
+  padding: 0.5rem 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--kaguya-muted);
+  font-size: var(--record-meta-size);
+  font-weight: 500;
+}
+.record-surface .record-trace-button.wb-button:hover,
+.record-surface .record-expand.wb-button:hover {
+  color: var(--kaguya-coral-strong);
+  box-shadow: none;
+  text-decoration: underline;
+  text-underline-offset: 0.25em;
+}
+.record-scope {
+  margin: 1.5rem 0 0;
+  padding: 0;
+  border-top: 1px solid var(--kaguya-line);
+}
+.record-scope > summary {
+  min-height: 2.75rem;
+  padding-block: 0.75rem;
+  color: var(--kaguya-muted);
+  font-size: var(--record-ui-size);
+  cursor: pointer;
+}
+.record-scope > .inspection-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem 1.5rem;
+  margin: 0;
+  padding-block: 0.5rem;
+}
+.record-scope > .inspection-fields > div {
+  display: grid;
+  align-content: start;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.25rem;
+  padding: 0;
+  border: 0;
+}
+.record-scope dt {
+  font-size: var(--record-meta-size);
+  font-weight: 400;
+  line-height: 1.5;
+  color: var(--kaguya-muted);
+}
+.record-scope dd {
+  font-size: var(--record-ui-size);
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+.record-scope .inspection-fields .inspection-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.5rem;
+  margin: 0;
+}
+.record-scope .inspection-fields .inspection-fields > div {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  align-items: baseline;
+  padding: 0;
+  border: 0;
+}
+.record-section {
+  min-width: 0;
+  padding-top: var(--record-section-gap);
+}
+.record-section > header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+.record-section h4 {
+  margin: 0;
+  font-size: var(--record-ui-size);
+  font-weight: 600;
+  line-height: 1.5;
+}
+.record-section > header > span:not(.wb-status) {
+  color: var(--kaguya-muted);
+  font-size: var(--record-meta-size);
+}
+.record-section > ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.record-section > ol > li {
+  display: flex;
+  gap: 1rem;
+  padding: 1.25rem 0;
+  border-bottom: 1px solid var(--kaguya-line);
+}
+.record-section > ol > li:first-child {
+  padding-top: 0.5rem;
+}
+.record-section > ol > li:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.record-section-body {
+  min-width: 0;
+  flex: 1;
+}
+.record-section-body > .inspection-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem 1.5rem;
+  margin: 0.625rem 0 0;
+}
+.record-section-body > .inspection-fields > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.375rem 0.75rem;
+  border: 0;
+  padding: 0;
+}
+.record-section-body > .inspection-fields :is(dt, dd) {
+  font-size: var(--record-meta-size);
+  line-height: 1.6;
+  color: var(--kaguya-muted);
+}
+.record-section-body .inspection-values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.record-section-body .inspection-values > li {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.record-section-field-grid > ol > li {
+  padding: 0;
+}
+.record-section-field-grid .record-section-body {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem 1rem;
+  flex-wrap: wrap;
+}
+.record-section-field-grid .record-section-body > .inspection-fields {
+  margin: 0;
+}
+.record-section-field-grid .record-actions {
+  margin-left: auto;
+}
+.record-section-ranked-list {
+  margin-top: 1rem;
+  border-top: 1px solid var(--kaguya-line);
+}
+.record-rank {
+  flex: 0 0 1.25rem;
+  color: var(--kaguya-muted);
+  font-size: var(--record-meta-size);
+  line-height: 2;
+  font-variant-numeric: tabular-nums;
+}
+.record-source-fields {
+  display: grid;
+  gap: 0.625rem;
+  margin: 0;
+}
+.record-source-fields dd {
+  min-width: 0;
+  margin: 0;
+}
+.record-source-content > dt {
+  color: var(--kaguya-muted);
+  font-size: var(--record-meta-size);
+  margin-bottom: 0.25rem;
+}
+.record-source-content > dd {
+  font-size: var(--record-body-size);
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+  max-width: 70ch;
+}
+.record-source-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  color: var(--kaguya-muted);
+}
+.record-source-meta :is(dt, dd) {
+  font-size: var(--record-meta-size);
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+.record-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+.record-section-ranked-list .record-actions > .wb-button:first-child {
+  color: var(--kaguya-coral-strong);
+}
+.record-muted,
+.record-source-missing {
+  margin: 0;
+  color: var(--kaguya-muted);
+  font-size: var(--record-ui-size);
+  line-height: 1.7;
+}
+.record-source-missing {
+  display: flex;
+  gap: 0.75rem;
+  align-items: start;
+}
+.record-source-missing > svg {
+  flex-shrink: 0;
+  margin-top: 0.25rem;
+  color: var(--record-warning);
+}
+.record-source-missing strong {
+  color: var(--kaguya-ink);
+  font-size: var(--record-body-size);
+  font-weight: 600;
+}
+.record-source-missing p {
+  margin: 0.25rem 0 0;
+}
+.record-notice {
+  margin: 1.5rem 0 0;
+  padding-top: 1rem;
+  border-top: 1px solid var(--kaguya-line);
+  color: var(--kaguya-muted);
+  font-size: var(--record-meta-size);
+  line-height: 1.7;
+}
+.record-mechanism {
+  color: var(--kaguya-muted);
+  font-size: var(--record-meta-size);
+}
+.record-mechanism summary {
+  width: fit-content;
+  padding-block: 0.75rem;
+  min-height: 2.75rem;
+  cursor: pointer;
+}
+.record-mechanism ol {
+  margin-block: 0.5rem;
+  padding-left: 1.25rem;
+  max-width: 70ch;
+}
+.record-mechanism li {
+  margin-block: 0.5rem;
+  line-height: 1.8;
+}
+.record-empty {
+  padding: 4rem 1.5rem;
+  text-align: center;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 12px;
+  color: var(--kaguya-muted);
+}
+.record-empty h3 {
+  color: var(--kaguya-ink);
+  font-size: var(--record-body-size);
+}
+.record-empty p {
+  font-size: var(--record-ui-size);
+  line-height: 1.7;
+}
+.record-back.wb-button {
+  display: none;
+}
+.record-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgb(20 15 12 / 40%);
+  z-index: 80;
+}
+.record-trace {
+  position: fixed;
+  inset: 0 0 0 auto;
+  width: min(45rem, 95vw);
+  overflow: auto;
+  background: var(--kaguya-paper);
+  z-index: 81;
+  padding: 1.5rem;
+  border-left: 1px solid var(--kaguya-line);
+}
+.record-trace > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+.record-trace h2 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+.record-trace > header p {
+  color: var(--kaguya-muted);
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+.record-trace pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@container record-surface (max-width: 800px) {
+  .record-browser {
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+  }
+  .record-directory {
+    border-right: 0;
+    border-bottom: 1px solid var(--kaguya-line);
+  }
+  .record-directory > ol {
+    flex: none;
+    max-height: 14rem;
+  }
+  .record-detail {
+    overflow: visible;
+  }
+  .record-back.wb-button {
+    display: inline-flex;
+    margin-bottom: 1rem;
+  }
+}
+@container record-surface (max-width: 520px) {
+  .record-toolbar {
+    flex-wrap: wrap;
+  }
+  .record-toolbar label {
+    flex-basis: 100%;
+  }
+  .record-detail {
+    padding: 1.25rem 1rem;
+  }
+  .record-heading h3 {
+    font-size: 1.125rem;
+  }
+  .record-scope > .inspection-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.875rem 1rem;
+  }
+  .record-section-field-grid .record-section-body {
+    display: block;
+  }
+  .record-section-field-grid .record-actions {
+    margin: 0;
+  }
+  .record-section > ol > li {
+    gap: 0.625rem;
+  }
+}
+@container record-surface (max-width: 320px) {
+  .record-scope > .inspection-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 520px) {
+  .record-trace {
+    width: 100vw;
+    padding: 1.25rem 1rem;
+  }
+}

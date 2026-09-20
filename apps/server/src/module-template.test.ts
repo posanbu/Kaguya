@@ -1,6 +1,6 @@
 /**
  * 功能概述：验证真实模板文件的本地覆盖、恢复、整组校验与并发保护。
- * 主要职责：构造临时默认模板和 Catalog，拒绝未知变量/helper/partial、空白、语法及循环；
+ * 主要职责：复制全部受版本控制的默认模板构造临时 Catalog，拒绝未知变量/helper/partial、空白、语法及循环；
  * 确认校验失败不写文件，默认模板字节不变、源码来源可追踪，错误不泄露模板片段。
  * 代码库关系：直接驱动 ModuleTemplateManagement 与模块 Node 存储；运行模板加载器验证消费覆盖。
  * 输入输出与副作用：只操作临时目录，不调用模型、重启或发送消息。
@@ -13,6 +13,7 @@ import {
   rm,
   symlink,
   writeFile,
+  readdir,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -66,22 +67,11 @@ async function fixture(cyclic = false) {
           },
     ),
   };
-  for (const id of [
-    "message-composer",
-    "message-composer.plan",
-    "message-composer.history",
-    "message-composer.history-inbound",
-    "message-composer.history-assistant",
-    "message-composer.memory",
-    "message-composer.memory-item",
-    "message-composer.quoted",
-    "message-composer.turn",
-    "person-fact",
-  ])
-    await copyFile(
-      join(process.cwd(), `packages/modules/templates/${id}.default.hbs`),
-      join(path, `${id}.default.hbs`),
-    );
+  const templatesPath = join(process.cwd(), "packages/modules/templates");
+  for (const file of (await readdir(templatesPath)).filter((name) =>
+    name.endsWith(".default.hbs"),
+  ))
+    await copyFile(join(templatesPath, file), join(path, file));
   let tail: Promise<unknown> = Promise.resolve();
   const exclusive = <T>(op: () => Promise<T>) => {
     const result = tail.then(op, op);
@@ -174,7 +164,12 @@ it.runIf(canCreateSymlinks())(
     const { service, path } = await fixture();
     expect(
       service.get("agent.heartflow.online").templates.map((t) => t.templateId),
-    ).toEqual(["heartflow.planner"]);
+    ).toEqual([
+      "heartflow.planner",
+      "heartflow.platform-policy",
+      "heartflow.platform-policy-qq",
+      "heartflow.platform-policy-web",
+    ]);
     expect(service.get("agent.memory.cognition").templates).toEqual([]);
     await expect(
       service.change("agent.heartflow.online", "message-composer", {
@@ -277,3 +272,28 @@ it("authenticates template routes and sanitizes invalid syntax responses", async
     await app.close();
   }
 });
+
+it.each(["expression.learn", "expression.select"])(
+  "expression override %s is loaded and reset without changing defaults",
+  async (tid) => {
+    const { service, root, path } = await fixture();
+    const id = "agent.expression";
+    const before = await readFile(join(path, `${tid}.default.hbs`), "utf8");
+    const saved = await service.change(id, tid, {
+      revision: service.get(id).revision,
+      content: "CUSTOM {{context}}",
+    });
+    expect(
+      loadFirstPartyPromptTemplates({ root }).expression[
+        tid === "expression.learn" ? "learn" : "select"
+      ],
+    ).toBe("CUSTOM {{context}}");
+    await service.change(id, tid, { revision: saved.revision }, true);
+    expect(await readFile(join(path, `${tid}.default.hbs`), "utf8")).toBe(
+      before,
+    );
+    expect(
+      service.get(id).templates.find((t) => t.templateId === tid)!.source,
+    ).toBe("default");
+  },
+);

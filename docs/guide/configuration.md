@@ -48,13 +48,11 @@ Gateway Token 不写入 runtime，也不是 runtime 的合法字段。它在每�
 
 **Profile 名称** — 1 至 100 个字符，用于人类识别；Profile ID 是系统生成的稳定标识。
 
-**Agent 身份** — `identity.name`、至少一个 `identity.aliases` 和 `identity.persona` 都是必填项。别名会 trim、去重，且不能与主名字相同。Message Prompt 和 Heartflow 提及识别统一使用这里的名字与别名；平台自己的账号仍取当前消息的 `selfId`。旧 Profile 缺少 `identity` 时会明确报告配置不完整，不会自动迁移。可手工补充：
+**Agent 身份** — Profile 只保存 `identity.timeZone`。主名称、别名和 persona 正文分别由工作区级 `identity.name`、`identity.aliases`、`identity.persona` Prompt 资源管理，Message Composer、Heartflow 和名称识别在启动时使用同一份解析结果。别名资源每行一个，加载时 trim、去重，且不能与主名称相同。旧 Profile 中的 `identity.name`、`identity.aliases` 或 `identity.persona` 会因为未知字段被明确拒绝，不会兼容读取或自动迁移。
 
 ```json
 "identity": {
-  "name": "Kaguya",
-  "aliases": ["辉夜"],
-  "persona": "是人类，正在上网和群友聊天。回复自然、简短。"
+  "timeZone": "Asia/Shanghai"
 }
 ```
 
@@ -86,10 +84,30 @@ Gateway Token 不写入 runtime，也不是 runtime 的合法字段。它在每�
 
 ## 本地覆盖 Prompt
 
-一方 Prompt 模板位于 `packages/modules/templates/`。把任意 `*.default.hbs` 复制为对应的 `*.local.hbs`，即可修改当前源码工作区的 Prompt；本地文件优先于默认文件，被 Git 忽略，且只在 Server 重启时重新读取。
+仓库拥有的生产 Prompt 由 `@kaguya/prompt` 统一校验和加载。模块与身份资源位于 `packages/modules/templates/`，结构化输出协议位于 `packages/llm/templates/`。每个资源都有提交到 GitHub 的 `*.default.hbs`；标记为 editable 的资源还允许同名 `*.local.hbs`，存在时优先使用。readonly 资源（例如 JSON 输出协议）禁止 local 覆盖。
+
+在仓库根目录执行以下命令，可为全部 editable 模板创建缺失的 local 副本，已有 local 保持原样；readonly 模板不会被初始化：
+
+::: code-group
+
+```bash [初始化本地 Prompt ~vscode-icons:file-type-shell~]
+pnpm prompt:init
+```
+
+:::
+
+也可以只把需要修改的 `*.default.hbs` 复制为对应的 `*.local.hbs`。可编辑范围包括工作区名称、别名、persona、消息编写通用行为、QQ/Web 表达风格、群聊与私聊场景、Heartflow Planner 与 QQ/Web 参与策略、授权正文、表达学习与选择，以及人物事实提取。平台键严格使用标准消息 `platform`；`qq`、`web` 精确匹配，其他值回退通用资源。
+
+### 从旧 Profile 手工升级身份资源
+
+本次升级是破坏式变更，不提供迁移命令。升级前先备份旧 `identity.name`、`identity.aliases` 和 `identity.persona`：将主名称写入 `packages/modules/templates/identity.name.local.hbs`，将别名按每行一个写入 `identity.aliases.local.hbs`，将只描述身份、经历、性格和关系的内容写入 `identity.persona.local.hbs`；把短句、活力、群聊参与等表达规则分别写入 QQ 的 style/policy 资源。随后从每个 Profile JSON 删除 `name`、`aliases`、`persona`，仅保留 `identity.timeZone`，最后重启 Server。配置页的身份资源编辑器会写相同的工作区级 local 文件，并明确提示重启生效。
+
+模块管理页保存模板时只写 local；“恢复默认”会删除对应的 local，重新使用 default。正常启动和读取不会重新生成 local。保存、手工编辑或恢复后都需要重启 Server 才会生效。
+
+升级代码时，新的 default 只会影响没有 local 覆盖的模板。已有 local 不会被覆盖或自动合并；需要采用新版默认内容时，可先备份自己的修改，再恢复默认或手动合并差异。
 
 ::: warning Handlebars 边界
-声明的变量可以不出现，也可以重复出现；未知变量、未知或动态 partial、自定义 helper、递归 partial、空文件和读取失败会使 Server 拒绝启动。只开放 `each`、`if`、`unless` 与固定静态 partial，不允许任意磁盘 include。动态内容按原文写入，不会自动添加 XML 包裹或进行逃逸，模板作者必须维护清晰的数据边界与安全提示。
+声明的变量可以不出现，也可以重复出现；未知变量、未知或动态 partial、自定义 helper、递归 partial、空文件和读取失败会使 Server 拒绝启动。默认文件也必须存在，不会以代码内置文本代替。只开放 `each`、`if`、`unless` 与固定静态 partial，不允许任意磁盘 include。动态内容按原文写入，不会自动添加 XML 包裹或进行逃逸，模板作者必须维护清晰的数据边界与安全提示。
 :::
 
 Message Composer 的层级为消息 partial → 历史、Memory、引用上下文与完整当前 turn → 外层 `message-composer`。当前 turn 不指定一条必须回答的目标消息。历史最多 30 条；历史 12,000 字符和 Memory 4,000 字符预算按 Unicode code point 在消息层渲染后、集合层渲染前执行。可用变量和全部模板名记录在 `packages/modules/src/first-party/message-composer/README.md`。

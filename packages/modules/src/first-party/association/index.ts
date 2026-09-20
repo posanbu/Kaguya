@@ -12,6 +12,7 @@
  * `kaguya.memory.sparse`，Message Composer 消费 completed terminal 并再次由 Core
  * 重载原始 inbound。selector 只能访问 Engine 授权的账本读取端口。
  * 召回显式传入冻结 target 的 scope，防止稀疏或向量路径跨平台/适配器/群组读取。
+ * 事件与入库截止点分别取冻结 asOf 和 turn 的登记时间，迟到旧证据不能通过生成前检索越过冻结边界。
  * 输入输出与副作用：输入为意图 target、冻结 turn、identity terminal 和 scope；输出为带因果、context、
  * identity、request/candidate/source 引用的持久原子。重复投递使用 registerOnce/commitTerminal
  * 幂等；检索异常只记录脱敏 reason code，candidate payload 不复制 source 正文。
@@ -203,6 +204,7 @@ export const associationCandidateSelector = defineInformationSelector({
         },
       ],
       occurredBefore: query.asOf,
+      recordedBefore: turns[0]!.occurredAt,
       excludeSourceInformationIds: inbound.map(
         ({ informationId }) => informationId,
       ),
