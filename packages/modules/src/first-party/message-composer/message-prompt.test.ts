@@ -33,6 +33,8 @@ describe("message prompt", () => {
     );
     expect(result.kind).toBe("message");
     expect(result.text).toContain("FIRST_INPUT");
+    expect(result.text).toContain("像真实 QQ 聊天一样");
+    expect(result.text).toContain("保持真实自然");
     expect(result.text).toContain("账号 bot-1");
     expect(result.text).toContain("LAST_INPUT");
     expect(result.text).toContain("引用消息 ID：platform-0");

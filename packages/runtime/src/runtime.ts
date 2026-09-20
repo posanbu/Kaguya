@@ -127,7 +127,7 @@ export interface RuntimeModelTaskApproval {
 }
 export type RuntimeModelTaskOptions = Pick<
   ModelTaskClientOptions,
-  "client" | "resolveModel"
+  "client" | "resolveModel" | "renderStructuredOutputPrompt"
 > & {
   readonly approvals: readonly RuntimeModelTaskApproval[];
 };

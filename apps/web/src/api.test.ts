@@ -36,9 +36,6 @@ const profile = {
   inboundAllowlist: [],
   outboundAllowlist: [],
   identity: {
-    name: "Kaguya",
-    aliases: ["辉夜"],
-    persona: "test",
     timeZone: "Asia/Shanghai",
   },
   ai: { providers: [] },
@@ -50,9 +47,6 @@ const replacement = {
   inboundAllowlist: ["qq:private:112233"],
   outboundAllowlist: ["qq:private:112233"],
   identity: {
-    name: "Kaguya",
-    aliases: ["辉夜"],
-    persona: "test",
     timeZone: "Asia/Shanghai",
   },
   acknowledgedWarnings: [],
@@ -301,9 +295,7 @@ it("Profile 保存失败保留服务端字段路径", async () => {
           code: "invalid_request",
           message: "invalid",
           requestId: "fixture",
-          fieldErrors: [
-            { path: "identity.aliases.0", message: "字段约束错误" },
-          ],
+          fieldErrors: [{ path: "identity.timeZone", message: "字段约束错误" }],
         },
       },
       { status: 400 },
@@ -312,6 +304,6 @@ it("Profile 保存失败保留服务端字段路径", async () => {
   await expect(
     replaceProfile(config, "default", replacement, request),
   ).rejects.toMatchObject({
-    fieldErrors: [{ path: "identity.aliases.0", message: "字段约束错误" }],
+    fieldErrors: [{ path: "identity.timeZone", message: "字段约束错误" }],
   });
 });

@@ -100,9 +100,6 @@ export interface UserConfigProfile {
   readonly inboundAllowlist: readonly string[];
   readonly outboundAllowlist: readonly string[];
   readonly identity: {
-    readonly name: string;
-    readonly aliases: readonly string[];
-    readonly persona: string;
     readonly timeZone: string;
   };
   readonly ai: {
@@ -717,12 +714,7 @@ function isProfileMetadata(value: unknown): value is ProfileMetadata {
 function isProfileIdentity(
   value: unknown,
 ): value is UserConfigProfile["identity"] {
-  return (
-    isRecord(value) &&
-    typeof value.name === "string" &&
-    isStringArray(value.aliases) &&
-    typeof value.persona === "string"
-  );
+  return isRecord(value) && typeof value.timeZone === "string";
 }
 
 function isOptionalConfigurationIssueArray(

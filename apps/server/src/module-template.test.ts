@@ -164,7 +164,12 @@ it.runIf(canCreateSymlinks())(
     const { service, path } = await fixture();
     expect(
       service.get("agent.heartflow.online").templates.map((t) => t.templateId),
-    ).toEqual(["heartflow.planner"]);
+    ).toEqual([
+      "heartflow.planner",
+      "heartflow.platform-policy",
+      "heartflow.platform-policy-qq",
+      "heartflow.platform-policy-web",
+    ]);
     expect(service.get("agent.memory.cognition").templates).toEqual([]);
     await expect(
       service.change("agent.heartflow.online", "message-composer", {

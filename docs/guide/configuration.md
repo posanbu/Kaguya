@@ -48,13 +48,11 @@ Gateway Token 不写入 runtime，也不是 runtime 的合法字段。它在每�
 
 **Profile 名称** — 1 至 100 个字符，用于人类识别；Profile ID 是系统生成的稳定标识。
 
-**Agent 身份** — `identity.name`、至少一个 `identity.aliases` 和 `identity.persona` 都是必填项。别名会 trim、去重，且不能与主名字相同。Message Prompt 和 Heartflow 提及识别统一使用这里的名字与别名；平台自己的账号仍取当前消息的 `selfId`。旧 Profile 缺少 `identity` 时会明确报告配置不完整，不会自动迁移。可手工补充：
+**Agent 身份** — Profile 只保存 `identity.timeZone`。主名称、别名和 persona 正文分别由工作区级 `identity.name`、`identity.aliases`、`identity.persona` Prompt 资源管理，Message Composer、Heartflow 和名称识别在启动时使用同一份解析结果。别名资源每行一个，加载时 trim、去重，且不能与主名称相同。旧 Profile 中的 `identity.name`、`identity.aliases` 或 `identity.persona` 会因为未知字段被明确拒绝，不会兼容读取或自动迁移。
 
 ```json
 "identity": {
-  "name": "Kaguya",
-  "aliases": ["辉夜"],
-  "persona": "是人类，正在上网和群友聊天。回复自然、简短。"
+  "timeZone": "Asia/Shanghai"
 }
 ```
 
@@ -86,9 +84,9 @@ Gateway Token 不写入 runtime，也不是 runtime 的合法字段。它在每�
 
 ## 本地覆盖 Prompt
 
-一方模块的 Prompt 模板统一位于 `packages/modules/templates/`。每个模板都有提交到 GitHub 的 `*.default.hbs`，以及可选的同名 `*.local.hbs` 本地副本。local 被 Git 忽略，存在时优先使用；缺失时使用 default。本地覆盖对当前工作区使用该模板的模块实例和 Profile 共同生效。
+仓库拥有的生产 Prompt 由 `@kaguya/prompt` 统一校验和加载。模块与身份资源位于 `packages/modules/templates/`，结构化输出协议位于 `packages/llm/templates/`。每个资源都有提交到 GitHub 的 `*.default.hbs`；标记为 editable 的资源还允许同名 `*.local.hbs`，存在时优先使用。readonly 资源（例如 JSON 输出协议）禁止 local 覆盖。
 
-在仓库根目录执行以下命令，可为全部已声明模板创建缺失的 local 副本，已有 local 保持原样：
+在仓库根目录执行以下命令，可为全部 editable 模板创建缺失的 local 副本，已有 local 保持原样；readonly 模板不会被初始化：
 
 ::: code-group
 
@@ -98,7 +96,11 @@ pnpm prompt:init
 
 :::
 
-也可以只把需要修改的 `*.default.hbs` 复制为对应的 `*.local.hbs`。可编辑范围包括消息编写、群聊与私聊场景及积压提示、人物背景与表达参考、跨会话授权正文、Heartflow Planner、表达学习与选择，以及人物事实提取。没有模型指令的模块不会额外提供空模板。
+也可以只把需要修改的 `*.default.hbs` 复制为对应的 `*.local.hbs`。可编辑范围包括工作区名称、别名、persona、消息编写通用行为、QQ/Web 表达风格、群聊与私聊场景、Heartflow Planner 与 QQ/Web 参与策略、授权正文、表达学习与选择，以及人物事实提取。平台键严格使用标准消息 `platform`；`qq`、`web` 精确匹配，其他值回退通用资源。
+
+### 从旧 Profile 手工升级身份资源
+
+本次升级是破坏式变更，不提供迁移命令。升级前先备份旧 `identity.name`、`identity.aliases` 和 `identity.persona`：将主名称写入 `packages/modules/templates/identity.name.local.hbs`，将别名按每行一个写入 `identity.aliases.local.hbs`，将只描述身份、经历、性格和关系的内容写入 `identity.persona.local.hbs`；把短句、活力、群聊参与等表达规则分别写入 QQ 的 style/policy 资源。随后从每个 Profile JSON 删除 `name`、`aliases`、`persona`，仅保留 `identity.timeZone`，最后重启 Server。配置页的身份资源编辑器会写相同的工作区级 local 文件，并明确提示重启生效。
 
 模块管理页保存模板时只写 local；“恢复默认”会删除对应的 local，重新使用 default。正常启动和读取不会重新生成 local。保存、手工编辑或恢复后都需要重启 Server 才会生效。
 

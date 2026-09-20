@@ -147,9 +147,6 @@ vi.mock("./secure-files.js", async (importOriginal) => {
 
 const roots: string[] = [];
 const identity = {
-  name: "Kaguya",
-  aliases: ["辉夜"],
-  persona: "test persona",
   timeZone: "Asia/Shanghai",
 };
 
@@ -279,8 +276,6 @@ describe("FileUserConfigManager profile lifecycle", () => {
         id: "default",
         name: "default",
         identity: expect.objectContaining({
-          name: "Kaguya",
-          aliases: ["辉夜"],
           timeZone: "Asia/Shanghai",
         }),
         ai: { providers: [] },

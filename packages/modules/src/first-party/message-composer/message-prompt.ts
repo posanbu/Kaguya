@@ -26,6 +26,7 @@ import {
   type CompiledPromptTemplateSet,
   type RestrictedPromptTemplate,
 } from "../../prompt-template.js";
+import { selectPlatformPromptResource } from "@kaguya/prompt";
 import {
   assistantTextInformationKind,
   coreMemoryTextInformationKind,
@@ -50,6 +51,8 @@ export interface AgentIdentity {
 }
 
 export interface MessagePromptTemplates {
+  readonly behavior: string;
+  readonly platformStyles: Readonly<Record<"default" | "qq" | "web", string>>;
   readonly main: string;
   readonly scene: string;
   readonly conversationBackground: string;
@@ -204,6 +207,14 @@ export function createMessagePromptCompiler(
     const turn = nested.render("turn", { messages });
     const prompt = renderOuter([
       variable("persona", identity.persona),
+      variable("behavior_policy", templates.behavior),
+      variable(
+        "platform_style",
+        selectPlatformPromptResource(
+          templates.platformStyles,
+          payload.target.platform,
+        ),
+      ),
       variable("name", identity.name),
       variable("aliases", identity.aliases.join("、")),
       variable(

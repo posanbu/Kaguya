@@ -40,15 +40,6 @@ export function validateProfileFields(
     issues.push({ field, section: fieldSection(field), message, warning });
   if (!fields.name.trim() || fields.name.trim().length > 100)
     add("name", "Profile 名称需为 1–100 个字符。");
-  if (!fields.agentName.trim()) add("agentName", "请输入 Agent 名字。");
-  const aliases = fields.agentAliasesText
-    .split(/\r?\n/u)
-    .map((value) => value.trim())
-    .filter(Boolean);
-  if (!aliases.length) add("agentAliasesText", "请至少填写一个 Agent 别名。");
-  else if (aliases.includes(fields.agentName.trim()))
-    add("agentAliasesText", "别名不能与 Agent 名字相同。");
-  if (!fields.agentPersona.trim()) add("agentPersona", "请输入 Agent 人设。");
   if (!isIanaTimeZone(fields.agentTimeZone.trim()))
     add("agentTimeZone", "请输入有效的 IANA 时区，例如 Asia/Shanghai。");
   try {
@@ -89,19 +80,12 @@ export function mapProfileProblem(
 ): ProfileProblem {
   const paths: Record<string, Field> = {
     name: "name",
-    "identity.name": "agentName",
-    "identity.aliases": "agentAliasesText",
-    "identity.persona": "agentPersona",
     "identity.timeZone": "agentTimeZone",
     inboundAllowlist: "inboundAllowlistText",
     outboundAllowlist: "outboundAllowlistText",
     "memory.enabled": "memoryEnabled",
   };
-  let field =
-    paths[problem.path] ??
-    (problem.path.startsWith("identity.aliases.")
-      ? "agentAliasesText"
-      : undefined);
+  let field = paths[problem.path];
   const preferred = profile.ai.providers.findIndex(
     (provider) =>
       provider.id === profile.ai.defaultProviderId &&

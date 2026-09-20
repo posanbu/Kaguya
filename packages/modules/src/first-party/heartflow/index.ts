@@ -19,7 +19,10 @@
  */
 import { firstPartyInspection } from "../inspection.js";
 import { activeFocus, focusOpened } from "../attention-focus/facts.js";
-import { plannerTemplateDeclaration } from "../../prompt-declarations.js";
+import {
+  plannerPlatformPolicyDeclarations,
+  plannerTemplateDeclaration,
+} from "../../prompt-declarations.js";
 import { scopeOf } from "../heartbeat/observation.js";
 import {
   type MessageAuthorization,
@@ -89,6 +92,9 @@ export interface CreateHeartflowModuleOptions {
   readonly messageAuthorizationCapability?: ModuleCapability<MessageAuthorization>;
   readonly agentIdentity: AgentIdentity;
   readonly plannerTemplate: string;
+  readonly plannerPlatformPolicies?: Readonly<
+    Record<"default" | "qq" | "web", string>
+  >;
   readonly cognitionIdentity?: CognitionIdentity;
   /** Knowledge 开启时，旧认知快照也必须通过完整来源撤回检查。 */
   readonly memoryKnowledgeEnabled?: boolean;
@@ -822,7 +828,10 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
       description:
         "消费回合候选及身份、注意力、模型和投递结果，经身份屏障冻结上下文，再请求 Planner 选择发言、等待或静默；输出消息意图、等待请求和回合终态，不执行平台传输。",
       settingsSchema: heartflowSettingsSchema,
-      promptTemplates: [plannerTemplateDeclaration],
+      promptTemplates: [
+        plannerTemplateDeclaration,
+        ...plannerPlatformPolicyDeclarations,
+      ],
       consumes: [
         inboundTextInformationKind,
         observationWakeInformationKind,
@@ -1023,6 +1032,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
                       taskAtoms,
                       turn,
                       options.plannerTemplate,
+                      options.plannerPlatformPolicies,
                     ),
                 contextAtoms: taskAtoms,
               });

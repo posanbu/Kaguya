@@ -971,9 +971,6 @@ describe("unified server composition", () => {
         name: "default",
         acknowledgedWarnings: [],
         identity: {
-          name: "Kaguya",
-          aliases: ["辉夜"],
-          persona: "test",
           timeZone: "Asia/Shanghai",
         },
         ai: {
@@ -1219,9 +1216,6 @@ async function selectedProfile(manager: FileUserConfigManager) {
 function readyProfileSettings(lightModelId: string, heavyModelId: string) {
   return {
     identity: {
-      name: "Kaguya",
-      aliases: ["辉夜"],
-      persona: "test",
       timeZone: "Asia/Shanghai",
     },
     ai: {

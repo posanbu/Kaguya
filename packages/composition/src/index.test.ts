@@ -122,9 +122,6 @@ describe("shared Runtime Composition", () => {
 
   it("derives approvals from enabled activations and preserves host options", () => {
     const identity = {
-      name: "Moon",
-      aliases: ["月"],
-      persona: "test persona",
       timeZone: "Asia/Shanghai",
     };
     const moduleConfigs = modules
@@ -165,7 +162,7 @@ describe("shared Runtime Composition", () => {
       composition.activations.find(
         ({ definitionId }) => definitionId === "agent.heartflow.online",
       )?.settings,
-    ).toMatchObject({ botNames: ["Moon", "月"] });
+    ).toMatchObject({ botNames: ["Kaguya", "辉夜"] });
     expect(composition.memory).toEqual({ enabled: true });
     expect(
       createMessageComposition(undefined, { moduleConfigs }).memory,

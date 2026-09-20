@@ -275,6 +275,16 @@ async function compilePlannerEvaluation(vars) {
     ).href,
     pathToFileURL(__filename).href,
   );
+  const templateModule = await tsImport(
+    pathToFileURL(
+      path.resolve(
+        __dirname,
+        "../packages/modules/src/node/prompt-templates.ts",
+      ),
+    ).href,
+    pathToFileURL(__filename).href,
+  );
+  const templates = templateModule.loadFirstPartyPromptTemplates();
   const { atoms } = fixtureModule.fixture(vars.turn.inputs);
   const turn = atoms.find(
     (atom) => atom.kind === "agent.turn.context.completed",
@@ -288,6 +298,8 @@ async function compilePlannerEvaluation(vars) {
     },
     atoms,
     turn,
+    templates.planner,
+    templates.plannerPlatformPolicies,
   );
   return {
     output: prompt.text,

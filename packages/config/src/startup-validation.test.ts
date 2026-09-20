@@ -122,9 +122,6 @@ function completeReplacement() {
     name: "default",
     acknowledgedWarnings: [],
     identity: {
-      name: "Kaguya",
-      aliases: ["辉夜"],
-      persona: "test",
       timeZone: "Asia/Shanghai",
     },
     runtime: {

@@ -68,9 +68,7 @@ curl http://127.0.0.1:3000/api/v1/profiles \
 {
   "name": "本地配置",
   "identity": {
-    "name": "Kaguya",
-    "aliases": ["辉夜"],
-    "persona": "是人类，正在上网和群友聊天。回复自然、简短。"
+    "timeZone": "Asia/Shanghai"
   },
   "inboundAllowlist": ["qq:group:REPLACE_GROUP_ID"],
   "outboundAllowlist": ["qq:private:REPLACE_USER_ID"],
@@ -155,6 +153,10 @@ adapter 转换为对应协议字段；例如 OpenAI-compatible adapter 会映射
 ## 选择 Profile
 
 `PUT /api/v1/profiles/selection` 把一个现有 Profile 设为全局 selected。选择变化后需要重启；接口不会替你启动、停止或热重载 Runtime。
+
+## 工作区身份资源
+
+`/api/v1/identity/name-template`、`/api/v1/identity/aliases-template` 和 `/api/v1/identity/persona-template` 分别管理工作区级主名称、别名和 persona。各资源的 `GET` 读取当前内容；`PUT` 请求体为 `{ "revision": "...", "content": "..." }`，保存受限 Handlebars local 覆盖；`DELETE` 请求体为 `{ "revision": "..." }`，删除覆盖并恢复仓库 default。三者均使用 management 认证并返回 `effect: "restart_required"`。revision 不匹配返回 `409`，资源超过 128 KiB、为空、含未知变量或非法语法时返回 `400`。名称必须非空；别名按行解析、去重后必须至少一个且不能等于主名称。这些资源影响全部 Profile，不属于 Profile replace 正文；Profile 的 `identity` 只接受 `timeZone`。
 
 ::: code-group
 

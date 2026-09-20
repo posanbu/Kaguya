@@ -62,7 +62,7 @@ describe("bounded JSON output recovery", () => {
       );
       const sent = JSON.stringify(model.doGenerateCalls[0]?.prompt);
       expect(sent).toContain("answer");
-      expect(sent).toContain("required");
+      expect(sent).not.toContain("JSON Schema");
       expect(sent).not.toContain("secret");
     },
   );

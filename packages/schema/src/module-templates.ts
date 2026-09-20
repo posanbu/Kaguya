@@ -7,6 +7,7 @@
 import { z } from "zod";
 export const moduleTemplateViewSchema = z.strictObject({
   templateId: z.string(),
+  mutability: z.enum(["editable", "readonly"]),
   name: z.string(),
   displayName: z.string(),
   description: z.string(),

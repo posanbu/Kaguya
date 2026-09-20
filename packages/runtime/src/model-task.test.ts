@@ -10,6 +10,7 @@
 import { createTestingDatabase } from "@kaguya/database/testing";
 import { InformationCore, InformationKindRegistry } from "@kaguya/engine";
 import { KaguyaLlmClient, KaguyaLlmError } from "@kaguya/llm/client";
+import { createStructuredOutputPromptRenderer } from "@kaguya/llm";
 import { createRepeatingDeterministicModel } from "@kaguya/llm/testing";
 import { z } from "@kaguya/schema";
 import {
@@ -28,6 +29,9 @@ import {
 } from "./information-kinds.js";
 
 const secret = "credential=secret postgresql://private";
+const renderStructuredOutputPrompt = createStructuredOutputPromptRenderer(
+  "JSON schema: {{json_schema}}",
+);
 const sourceKind = defineInformationKind({
   kind: "test.input",
   displayName: "Test Input",
@@ -107,6 +111,7 @@ async function fixture(durable = false) {
   });
   const options = {
     core,
+    renderStructuredOutputPrompt,
     client: { generate } as Pick<KaguyaLlmClient, "generate">,
     resolveModel: () => ({ providerId: "test", modelId: "test-heavy" }),
   };
@@ -152,13 +157,17 @@ it("reuses requested identity across instances and canonical key order, with onl
     atoms.filter((a) => a.kind === "core.model.task.requested"),
   ).toHaveLength(1);
   const requested = atoms.find((a) => a.kind === "core.model.task.requested")!;
+  const expectedPrompt = renderStructuredOutputPrompt(
+    f.request.prompt,
+    z.toJSONSchema(f.request.task.outputSchema, { io: "input" }),
+  );
   expect(requested.payload).toMatchObject({
     taskId: "test.reply",
     version: "1",
     activation: f.request.activation,
     selectionPolicy: { tier: "heavy" },
     resolvedModel: { providerId: "test", modelId: "test-heavy" },
-    prompt: { variables: f.request.prompt.variables },
+    prompt: expectedPrompt,
   });
   expect(
     requested.references
