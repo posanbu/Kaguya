@@ -21,6 +21,7 @@ import { firstPartyInspection } from "../inspection.js";
 import { activeFocus, focusOpened } from "../attention-focus/facts.js";
 import {
   plannerPlatformPolicyDeclarations,
+  plannerBootstrapPolicyDeclaration,
   plannerTemplateDeclaration,
 } from "../../prompt-declarations.js";
 import { scopeOf } from "../heartbeat/observation.js";
@@ -62,6 +63,7 @@ import {
   type InformationSelectorLedger,
 } from "@kaguya/sdk";
 import { MEMORY_RETRIEVAL_STRATEGY_ID } from "@kaguya/memory";
+import { buildTurnBootstrap } from "./bootstrap.js";
 
 import {
   observationWakeInformationKind,
@@ -91,7 +93,10 @@ export interface CreateHeartflowModuleOptions {
   readonly modelTaskCapability: ModuleCapability<ModelTaskCapability>;
   readonly messageAuthorizationCapability?: ModuleCapability<MessageAuthorization>;
   readonly agentIdentity: AgentIdentity;
+  /** selected Profile 是否启用 Memory；用于区分关闭与本轮没有授权证据。 */
+  readonly memoryEnabled: boolean;
   readonly plannerTemplate: string;
+  readonly plannerBootstrapPolicy: string;
   readonly plannerPlatformPolicies?: Readonly<
     Record<"default" | "qq" | "web", string>
   >;
@@ -830,6 +835,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
       settingsSchema: heartflowSettingsSchema,
       promptTemplates: [
         plannerTemplateDeclaration,
+        plannerBootstrapPolicyDeclaration,
         ...plannerPlatformPolicyDeclarations,
       ],
       consumes: [
@@ -936,7 +942,13 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
             async (_atom, context) => {
               const state = await context.select(heartflowStateSelector);
               const memories = await context.select(memorySelector);
-              await progressCandidates(state, memories, settings, context);
+              await progressCandidates(
+                state,
+                memories,
+                settings,
+                options.memoryEnabled,
+                context,
+              );
             },
           ),
         ),
@@ -1033,6 +1045,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
                       turn,
                       options.plannerTemplate,
                       options.plannerPlatformPolicies,
+                      options.plannerBootstrapPolicy,
                     ),
                 contextAtoms: taskAtoms,
               });
@@ -1157,7 +1170,13 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
                 context,
               );
               const memories = await context.select(memorySelector);
-              await progressCandidates(state, memories, settings, context);
+              await progressCandidates(
+                state,
+                memories,
+                settings,
+                options.memoryEnabled,
+                context,
+              );
             },
           ),
         ),
@@ -1208,6 +1227,7 @@ async function progressCandidates(
   atoms: readonly DeepReadonly<InformationAtom>[],
   memories: readonly DeepReadonly<InformationAtom>[],
   settings: DeepReadonly<HeartflowSettings>,
+  memoryEnabled: boolean,
   context: InformationModuleHandlerContext,
 ) {
   const candidates = atoms.filter(
@@ -1234,7 +1254,14 @@ async function progressCandidates(
       ...winner,
       payload: { ...winner.payload, sourceInformationIds },
     };
-    await progressCandidate(merged, atoms, memories, settings, context);
+    await progressCandidate(
+      merged,
+      atoms,
+      memories,
+      settings,
+      memoryEnabled,
+      context,
+    );
     if (open.length < 2) continue;
     const refreshed = await context.select(heartflowStateSelector);
     const claim = claimForCandidate(winner.informationId, refreshed);
@@ -1262,6 +1289,7 @@ async function progressCandidate(
   atoms: readonly DeepReadonly<InformationAtom>[],
   memories: readonly DeepReadonly<InformationAtom>[],
   settings: DeepReadonly<HeartflowSettings>,
+  memoryEnabled: boolean,
   context: InformationModuleHandlerContext,
 ) {
   const map = new Map(atoms.map((atom) => [atom.informationId, atom]));
@@ -1636,6 +1664,24 @@ async function progressCandidate(
     context.now().toISOString(),
     settings.staleAfterMs,
   );
+  const bootstrap = buildTurnBootstrap(
+    completeInputs,
+    atoms,
+    memoryEnabled,
+    memories.length,
+  );
+  const bootstrapEvidenceIds = [
+    ...new Set(
+      completeInputs.flatMap(({ identity }) => {
+        const value = identity.payload as Record<string, unknown>;
+        return [value.scopeInformationId, value.personInformationId].filter(
+          (id): id is string =>
+            typeof id === "string" &&
+            atoms.some(({ informationId }) => informationId === id),
+        );
+      }),
+    ),
+  ];
   await context.registerOnce(
     "agent.turn.context.completed",
     claim.informationId,
@@ -1691,6 +1737,7 @@ async function progressCandidate(
         stale:
           Number.isFinite(asOfMs) &&
           Date.parse(payload.firedAt) - asOfMs > settings.staleAfterMs,
+        bootstrap,
         ...(memories.length === 0
           ? {}
           : { memory: memories.map(({ informationId }) => informationId) }),
@@ -1709,6 +1756,10 @@ async function progressCandidate(
             informationId: identity.informationId,
           },
         ]),
+        ...bootstrapEvidenceIds.map((informationId) => ({
+          relation: "core:uses-context" as const,
+          informationId,
+        })),
         ...(focus
           ? [
               {

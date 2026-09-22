@@ -35,6 +35,8 @@ describe("message prompt", () => {
     expect(result.text).toContain("FIRST_INPUT");
     expect(result.text).toContain("像真实 QQ 聊天一样");
     expect(result.text).toContain("保持真实自然");
+    expect(result.text).toContain('"mode":"legacy-unknown"');
+    expect(result.text).toContain("persona 只描述你自己");
     expect(result.text).toContain("账号 bot-1");
     expect(result.text).toContain("LAST_INPUT");
     expect(result.text).toContain("引用消息 ID：platform-0");
@@ -47,6 +49,9 @@ describe("message prompt", () => {
     expect(
       result.variables.find((v) => v.name === "plan")?.informationIds,
     ).toEqual([f.intent.informationId, f.messages.at(-1)!.informationId]);
+    expect(
+      result.variables.find((v) => v.name === "bootstrap")?.informationIds,
+    ).toEqual([f.turn.informationId]);
     expect(result.text).toContain("话题：当前话题");
     expect(result.text).toContain("回复动作：自然回应");
     expect(result.text).toContain("话题锚点是主要回复对象");

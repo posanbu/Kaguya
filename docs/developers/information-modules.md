@@ -131,13 +131,19 @@ Memory 变量在完整当前 turn 之前，合计最多 4,000 个 Unicode 字符
 
 Planner 支持 `message | wait | silent`。宿主按本轮冻结人物/会话背景和目标解析投影；`message.target` 可选择当前会话、可验证的群/私聊引用，或明确的无法解析状态。自然语言跨会话由宿主复核后自动创建统一消息意图，不再依赖管理端确认，仍独立检查出站白名单与最终目标。Planner 由现有 Heartflow 实例装配，默认 light tier，无需新增 speech 实例或 Profile/API/WebUI 配置。首次请求冻结 Prompt 与上下文选择，重放复用已持久化任务；wait 为 5–120 秒并复用三次总预算与 durable heartbeat，失败和取消统一以 `planner-unavailable` 静默结束。普通日志不记录 Planner Prompt 预览或原始模型输出。
 
+每个新建的 `agent.turn.context.completed` 都包含版本化 bootstrap 投影。Heartflow 根据冻结输入、身份实体创建来源和本轮获授权的 Memory，确定 `cold-start | warming | established`，并分别记录 Memory、会话与每个输入人物的状态。该判断不调用模型。相关身份实体作为 context 引用保留，因此重放不会受后来消息或 Memory 变化影响。旧 v1 事实缺少 bootstrap 时由公共归一化函数映射为保守的 `legacy-unknown`。
+
+Prompt 仍提供 `context_bootstrap`，用于描述 Planner 或 Composer 本次实际可见的历史和 Memory。它会受上下文选择和字符预算影响；版本化 `bootstrap` 则随冻结 turn 固定。两者职责不同，均不能被解释为整个数据库是否为空的结论。
+
+Planner 使用独立的 `heartflow.bootstrap-policy` 判断冷启动时是否值得询问必要信息。Composer 使用独立的 `message-composer.bootstrap` 自然表达未知状态。persona 只描述 Agent 自身，不能作为用户、关系、会话历史或世界背景的证据。Expression、Person Fact、Memory cognition、Knowledge 和 Association 只消费带来源引用的事实；证据不足、空结果或失败均保持未知。
+
 ## 声明可编辑资源
 
 模块的 `settingsSchema` 是运行时、配置读取和保存共同使用的 Zod schema。可公开字段在 schema 上使用 `.meta({ public: true, title: "中文名", description: "字段用途", default: 默认值 })`，只读字段额外声明 `readOnly: true`。未明确公开的字段不会进入管理响应；当前表单支持字符串、数字、整数、布尔值与字符串数组。无法投影的公开复杂结构会拒绝展示，不能退回原始 settings JSON。
 
 `manifest.promptTemplates` 显式声明模板稳定 ID、内部名称、中文名称、用途、允许变量、允许 partial 和组成关系。第一方声明集中在 `packages/modules/src/prompt-declarations.ts`，运行编译器和 Node 资源加载器复用这份声明。Node 存储只解析注册资源，不扫描文件名推断模块归属；新增模板必须同时接入真实运行时消费链。人物事实模板由对应模块声明，但未加入当前 Catalog 时不会误归属给 Memory 模块。
 
-管理端只写本地覆盖并检查完整模板组，不渲染用户数据。校验使用非缓存编译路径，避免每次编辑都永久保留编译结果。所有已声明模板都必须有对应的 default 文件；Planner 同样使用 `heartflow.planner.default.hbs` 与 `heartflow.planner.local.hbs`，不再另存代码默认值。
+管理端只写本地覆盖并检查完整模板组，不渲染用户数据。校验使用非缓存编译路径，避免每次编辑都永久保留编译结果。所有已声明模板都必须有对应的 default 文件；Planner 使用 `heartflow.planner.*.hbs` 与 `heartflow.bootstrap-policy.*.hbs`，Composer 使用 `message-composer.bootstrap.*.hbs`，不另存代码默认值。
 
 恢复默认会删除对应 local；后续读取直接使用 default，不会自动重建副本。升级默认文件只影响没有 local 覆盖的模板，已有 local 由使用者自行合并或恢复。模块清单、模板存储与运行编译必须保持同一套声明，不能通过目录扫描推断归属，也不能新增只有管理界面可编辑、实际任务却不使用的模板。
 

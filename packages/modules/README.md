@@ -30,7 +30,9 @@ protocol v2 模块 Manifest 必须提供非空的 `displayName`、单行 `summar
 
 ## Prompt 模板
 
-所有一方模块的可编辑 Prompt 都保存在 `templates/`：`*.default.hbs` 是提交到 GitHub 的默认模板，同名 `*.local.hbs` 是 Git 忽略的本地覆盖。范围包括 Message Composer 的主模板、消息与记忆排版、会话场景、积压提示、人物背景、表达参考和授权正文，Heartflow Planner、Expression 的学习与选择，以及人物事实提取；没有模型指令的模块不需要占位模板。
+所有一方模块的可编辑 Prompt 都保存在 `templates/`：`*.default.hbs` 是提交到 GitHub 的默认模板，同名 `*.local.hbs` 是 Git 忽略的本地覆盖。范围包括 Message Composer 的主模板、bootstrap 表达、消息与记忆排版、会话场景、积压提示、人物背景、表达参考和授权正文，Heartflow Planner、bootstrap 策略、Expression 的学习与选择，以及人物事实提取；没有模型指令的模块不需要占位模板。
+
+persona 只定义 Agent 自身身份与性格。人物、关系、会话历史和世界背景必须来自带 Information 引用的冻结证据。Memory、Knowledge、Association 或人物事实提取返回空结果或失败时，下游保持未知，不能把缺失证据改写为事实。
 
 在仓库根目录运行 `pnpm prompt:init`，可为所有已声明模板创建缺失的 local 副本；已有 local 保持原样。也可以只复制需要修改的 default 文件。加载时优先使用 local，仅在 local 不存在时读取 default；因此升级默认模板不会覆盖本地定制，已有 local 也不会自动合并上游变化。本地覆盖属于当前工作区，供使用该模板的实例和 Profile 共享。
 

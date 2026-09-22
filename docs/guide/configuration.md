@@ -48,7 +48,7 @@ Gateway Token 不写入 runtime，也不是 runtime 的合法字段。它在每�
 
 **Profile 名称** — 1 至 100 个字符，用于人类识别；Profile ID 是系统生成的稳定标识。
 
-**Agent 身份** — Profile 只保存 `identity.timeZone`。主名称、别名和 persona 正文分别由工作区级 `identity.name`、`identity.aliases`、`identity.persona` Prompt 资源管理，Message Composer、Heartflow 和名称识别在启动时使用同一份解析结果。别名资源每行一个，加载时 trim、去重，且不能与主名称相同。旧 Profile 中的 `identity.name`、`identity.aliases` 或 `identity.persona` 会因为未知字段被明确拒绝，不会兼容读取或自动迁移。
+**Agent 身份** — Profile 只保存 `identity.timeZone`。主名称、别名和 persona 正文分别由工作区级 `identity.name`、`identity.aliases`、`identity.persona` Prompt 资源管理，Message Composer、Heartflow 和名称识别在启动时使用同一份解析结果。persona 只描述 Agent 自身身份与性格，不能充当人物、关系、会话历史或世界背景的证据。别名资源每行一个，加载时 trim、去重，且不能与主名称相同。旧 Profile 中的 `identity.name`、`identity.aliases` 或 `identity.persona` 会因为未知字段被明确拒绝，不会兼容读取或自动迁移。
 
 ```json
 "identity": {
@@ -96,7 +96,7 @@ pnpm prompt:init
 
 :::
 
-也可以只把需要修改的 `*.default.hbs` 复制为对应的 `*.local.hbs`。可编辑范围包括工作区名称、别名、persona、消息编写通用行为、QQ/Web 表达风格、群聊与私聊场景、Heartflow Planner 与 QQ/Web 参与策略、授权正文、表达学习与选择，以及人物事实提取。平台键严格使用标准消息 `platform`；`qq`、`web` 精确匹配，其他值回退通用资源。
+也可以只把需要修改的 `*.default.hbs` 复制为对应的 `*.local.hbs`。可编辑范围包括工作区名称、别名、persona、消息编写通用行为、bootstrap 表达、QQ/Web 表达风格、群聊与私聊场景、Heartflow Planner、冷启动策略与 QQ/Web 参与策略、授权正文、表达学习与选择，以及人物事实提取。平台键严格使用标准消息 `platform`；`qq`、`web` 精确匹配，其他值回退通用资源。
 
 ### 从旧 Profile 手工升级身份资源
 
@@ -110,7 +110,7 @@ pnpm prompt:init
 声明的变量可以不出现，也可以重复出现；未知变量、未知或动态 partial、自定义 helper、递归 partial、空文件和读取失败会使 Server 拒绝启动。默认文件也必须存在，不会以代码内置文本代替。只开放 `each`、`if`、`unless` 与固定静态 partial，不允许任意磁盘 include。动态内容按原文写入，不会自动添加 XML 包裹或进行逃逸，模板作者必须维护清晰的数据边界与安全提示。
 :::
 
-Message Composer 的层级为消息 partial → 历史、Memory、引用上下文与完整当前 turn → 外层 `message-composer`。当前 turn 不指定一条必须回答的目标消息。历史最多 30 条；历史 12,000 字符和 Memory 4,000 字符预算按 Unicode code point 在消息层渲染后、集合层渲染前执行。可用变量和全部模板名记录在 `packages/modules/src/first-party/message-composer/README.md`。
+Message Composer 的层级为消息 partial → bootstrap、历史、Memory、引用上下文与完整当前 turn → 外层 `message-composer`。当前 turn 不指定一条必须回答的目标消息。bootstrap 由账本事实确定，并区分冷启动、逐步建立上下文和稳定状态；模板只能决定如何表达，不能改写这些状态。历史最多 30 条；历史 12,000 字符和 Memory 4,000 字符预算按 Unicode code point 在消息层渲染后、集合层渲染前执行。可用变量和全部模板名记录在 `packages/modules/src/first-party/message-composer/README.md`。
 
 ## 管理多个 Profile
 

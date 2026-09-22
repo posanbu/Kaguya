@@ -93,6 +93,8 @@ describe("KaguyaRuntime one-shot scheduler lifecycle", () => {
         executionExhaustedInformationKind,
         promptTemplates: testMessageTemplates,
         plannerTemplate: testPrompts.planner,
+        plannerBootstrapPolicy: testPrompts.plannerBootstrapPolicy,
+        memoryEnabled: false,
         expressionTemplates: testPrompts.expression,
         agentIdentity: testIdentity,
       }),
@@ -150,6 +152,8 @@ describe("KaguyaRuntime one-shot scheduler lifecycle", () => {
       executionExhaustedInformationKind,
       promptTemplates: testMessageTemplates,
       plannerTemplate: testPrompts.planner,
+      plannerBootstrapPolicy: testPrompts.plannerBootstrapPolicy,
+      memoryEnabled: false,
       expressionTemplates: testPrompts.expression,
       agentIdentity: testIdentity,
     });

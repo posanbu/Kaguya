@@ -136,7 +136,12 @@ function completedAtom(
         definitionId: "demo.person.fact.extract",
       },
       selectionPolicy: { tier: "light" },
-      output: { personId: "person-1", name: "Ada", fact: "likes tea" },
+      output: {
+        status: "fact",
+        personId: "person-1",
+        name: "Ada",
+        fact: "likes tea",
+      },
       ...payload,
     },
     references: [
@@ -243,7 +248,12 @@ function result(
   if (status === "completed")
     return {
       status,
-      output: { personId: "person-1", name: "Ada", fact: "likes tea" },
+      output: {
+        status: "fact",
+        personId: "person-1",
+        name: "Ada",
+        fact: "likes tea",
+      },
       requestedInformationId: "requested-1",
       terminalInformationId: "completion-1",
     };
@@ -333,47 +343,64 @@ describe("createPersonFactTaskModule", () => {
     expect(request!.contextAtoms).toEqual([candidate]);
     expect(
       request!.task.outputSchema.parse({
+        status: "fact",
         personId: "person-1",
         name: "Ada",
         fact: "likes tea",
       }),
-    ).toEqual({ personId: "person-1", name: "Ada", fact: "likes tea" });
+    ).toEqual({
+      status: "fact",
+      personId: "person-1",
+      name: "Ada",
+      fact: "likes tea",
+    });
+    expect(
+      request!.task.outputSchema.parse({
+        status: "insufficient-evidence",
+      }),
+    ).toEqual({ status: "insufficient-evidence" });
     for (const output of [
-      { personId: "person-1", name: "Ada" },
-      { personId: "person-1", name: "Ada", fact: "" },
-      { personId: "person-1", name: "Ada", fact: "likes tea", extra: true },
+      { status: "fact", personId: "person-1", name: "Ada" },
+      { status: "fact", personId: "person-1", name: "Ada", fact: "" },
+      {
+        status: "fact",
+        personId: "person-1",
+        name: "Ada",
+        fact: "likes tea",
+        extra: true,
+      },
+      { status: "insufficient-evidence", fact: "invented" },
     ])
       expect(request!.task.outputSchema.safeParse(output).success).toBe(false);
     expect(registrations).toEqual([]);
   });
 
-  it.each([null, "knows Kaguya from school"])(
-    "never writes unsupported person facts: %s",
-    async (fact) => {
-      const executor: ModelTaskCapability = {
-        execute: async () => result("completed") as ModelTaskResult<never>,
-        cancel: async () => {
-          throw new Error("unexpected cancellation");
-        },
-      };
-      const { instance } = await createInstance(executor);
-      const candidate = candidateAtom();
-      const completed = completedAtom({
-        output: { personId: "person-1", name: "Ada", fact },
-      });
-      const registrations: Registration[] = [];
-      const execution = instance.subscriptions[1]!.handle(
+  it("never writes a person fact that is not quoted from its evidence", async () => {
+    const executor: ModelTaskCapability = {
+      execute: async () => result("completed") as ModelTaskResult<never>,
+      cancel: async () => {
+        throw new Error("unexpected cancellation");
+      },
+    };
+    const { instance } = await createInstance(executor);
+    const candidate = candidateAtom();
+    const completed = completedAtom({
+      output: {
+        status: "fact",
+        personId: "person-1",
+        name: "Ada",
+        fact: "knows Kaguya from school",
+      },
+    });
+    const registrations: Registration[] = [];
+    await expect(
+      instance.subscriptions[1]!.handle(
         completed,
         handlerContext(completed, executor, [candidate], registrations),
-      );
-      if (fact === null) await execution;
-      else
-        await expect(execution).rejects.toThrow(
-          "must quote its candidate evidence",
-        );
-      expect(registrations).toEqual([]);
-    },
-  );
+      ),
+    ).rejects.toThrow("must quote its candidate evidence");
+    expect(registrations).toEqual([]);
+  });
 
   it.each(["completed", "failed", "cancelled"] as const)(
     "does not write a domain atom directly from the %s execute result",
@@ -441,6 +468,27 @@ describe("createPersonFactTaskModule", () => {
     );
   });
 
+  it("does not register a person fact when evidence is insufficient", async () => {
+    const executor: ModelTaskCapability = {
+      execute: async () => result("completed") as ModelTaskResult<never>,
+      cancel: async () => {
+        throw new Error("unexpected cancellation");
+      },
+    };
+    const { instance } = await createInstance(executor);
+    const completed = completedAtom({
+      output: { status: "insufficient-evidence" },
+    });
+    const registrations: Registration[] = [];
+
+    await instance.subscriptions[1]!.handle(
+      completed,
+      handlerContext(completed, executor, [candidateAtom()], registrations),
+    );
+
+    expect(registrations).toEqual([]);
+  });
+
   it.each([
     [{ taskId: "other.task" }, "task"],
     [{ version: "2" }, "version"],
@@ -479,14 +527,25 @@ describe("createPersonFactTaskModule", () => {
 
   it.each([
     {
+      status: "fact",
       personId: "person-1",
       name: "Ada",
       fact: "likes tea",
       extra: "forbidden",
     },
-    { personId: "person-1", name: "Ada" },
-    { personId: "person-2", name: "Ada", fact: "likes tea" },
-    { personId: "person-1", name: "Grace", fact: "likes tea" },
+    { status: "fact", personId: "person-1", name: "Ada" },
+    {
+      status: "fact",
+      personId: "person-2",
+      name: "Ada",
+      fact: "likes tea",
+    },
+    {
+      status: "fact",
+      personId: "person-1",
+      name: "Grace",
+      fact: "likes tea",
+    },
   ])(
     "rejects invalid structural or candidate-inconsistent output",
     async (output) => {

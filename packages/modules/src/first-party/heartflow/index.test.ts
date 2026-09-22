@@ -178,6 +178,8 @@ async function fixture(
   await database.prepareSchema();
   const module = createHeartflowModule({
     plannerTemplate,
+    plannerBootstrapPolicy: "bootstrap policy",
+    memoryEnabled: false,
     modelTaskCapability,
     agentIdentity,
     deliveryDeliveredInformationKind,
@@ -631,6 +633,18 @@ describe("heartflow", () => {
       turnContextCompletedInformationKind.kind,
     );
     expect((context.payload as any).inputs).toHaveLength(1);
+    expect((context.payload as any).bootstrap).toEqual({
+      version: 1,
+      mode: "cold-start",
+      memory: { state: "disabled", selectedCount: 0 },
+      conversation: { state: "ephemeral" },
+      participants: [
+        {
+          inputInformationId: (context.payload as any).inputs[0].informationId,
+          state: "unresolved",
+        },
+      ],
+    });
   });
 
   it.each([
@@ -772,6 +786,8 @@ describe("heartflow", () => {
   it("routes only from the latest frozen input and carries memory IDs without copying content", async () => {
     const module = createHeartflowModule({
       plannerTemplate,
+      plannerBootstrapPolicy: "bootstrap policy",
+      memoryEnabled: false,
       modelTaskCapability,
       agentIdentity,
       deliveryDeliveredInformationKind,

@@ -104,6 +104,8 @@ export {
   personResolutionInformationKind,
   personContextCompletedInformationKind,
   turnContextCompletedInformationKind,
+  turnBootstrapProjectionSchema,
+  normalizeTurnBootstrap,
   attentionArousalCompletedInformationKind,
   waitRequestedInformationKind,
   heartbeatScheduledInformationKind,
@@ -126,6 +128,8 @@ export {
   type AssociationQueryInformationPayload,
   type AssociationRequestedInformationPayload,
   type MessageIntentRequestedInformationPayload,
+  type TurnBootstrapProjection,
+  type NormalizedTurnBootstrapProjection,
 } from "./first-party/information-kinds.js";
 export {
   createFirstPartyModuleCatalog,

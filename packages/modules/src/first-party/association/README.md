@@ -10,7 +10,7 @@
 
 ## 数据流与边界
 
-只通过声明式 Selector 和 Memory retrieval capability 读取账本事实，结果以引用保留来源。
+只通过声明式 Selector 和 Memory retrieval capability 读取账本事实，结果以引用保留来源。空召回和可选召回失败不会成为新的事实，也不能被下游解释为虚构背景。
 
 ## Settings
 

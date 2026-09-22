@@ -15,6 +15,7 @@ import {
   identityNameTemplateDeclaration,
   identityPersonaTemplateDeclaration,
   plannerTemplateDeclaration,
+  plannerBootstrapPolicyDeclaration,
   plannerPlatformPolicyDeclarations,
   personFactTemplateDeclaration,
 } from "../prompt-declarations.js";
@@ -36,6 +37,7 @@ export interface FirstPartyPromptTemplates {
   readonly messageComposer: MessagePromptTemplates;
   readonly personFact: string;
   readonly planner: string;
+  readonly plannerBootstrapPolicy: string;
   readonly plannerPlatformPolicies: Readonly<
     Record<"default" | "qq" | "web", string>
   >;
@@ -48,7 +50,11 @@ export function loadFirstPartyPromptTemplates(
     options.root,
   );
   const planner = readPromptResources(
-    [plannerTemplateDeclaration, ...plannerPlatformPolicyDeclarations],
+    [
+      plannerTemplateDeclaration,
+      plannerBootstrapPolicyDeclaration,
+      ...plannerPlatformPolicyDeclarations,
+    ],
     options.root,
   );
   const identity = readPromptResources(
@@ -71,7 +77,11 @@ export function loadFirstPartyPromptTemplates(
     [expressionModulePromptTemplates, expression],
     [messageModulePromptTemplates, messages],
     [
-      [plannerTemplateDeclaration, ...plannerPlatformPolicyDeclarations],
+      [
+        plannerTemplateDeclaration,
+        plannerBootstrapPolicyDeclaration,
+        ...plannerPlatformPolicyDeclarations,
+      ],
       planner,
     ],
     [
@@ -151,6 +161,10 @@ export function loadFirstPartyPromptTemplates(
     personFact: person[0]!.content,
     planner: planner.find(
       (value) => value.templateId === plannerTemplateDeclaration.templateId,
+    )!.content,
+    plannerBootstrapPolicy: planner.find(
+      (value) =>
+        value.templateId === plannerBootstrapPolicyDeclaration.templateId,
     )!.content,
     plannerPlatformPolicies: {
       default: planner.find(

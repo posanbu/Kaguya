@@ -10,11 +10,17 @@
 
 ## 数据流与边界
 
-使用 scope generation、identity barrier 和 `asOf` Selector 冻结回合。Attention Arousal 只负责必要性门控：`attend` 表示 eligible。只有 eligible turn 创建 `agent.turn.plan` v1（object、light tier）任务。Planner Prompt 读取 Agent 身份、规划规则、同范围历史（assistant 必须成功投递）、冻结记忆和完整 turn；私聊、@ 与回复机器人通过正常硬门禁后进入 Planner，仍允许选择 silent。
+使用 scope generation、identity barrier 和 `asOf` Selector 冻结回合。Attention Arousal 只负责必要性门控：`attend` 表示 eligible。只有 eligible turn 创建 `agent.turn.plan` v1（object、light tier）任务。Planner Prompt 读取 Agent 身份、规划规则、同范围历史（assistant 必须成功投递）、冻结记忆、完整 turn 和确定性的 bootstrap 投影；私聊、@ 与回复机器人通过正常硬门禁后进入 Planner，仍允许选择 silent。
+
+bootstrap 只依据冻结输入、身份实体的创建来源和本轮获授权的 Memory。它区分 `cold-start`、`warming`、`established`，并分别记录 Memory、会话和每个输入人物的可知状态。新 turn 必须写入完整投影；旧账本事实缺少该字段时统一归一化为保守的 `legacy-unknown`，不会根据重放时的新消息或新 Memory 改写历史判断。身份实体证据通过 Information 引用保留在 turn context 上。
+
+Planner 同时保留 `context_bootstrap`。该变量描述本次 Prompt 实际可见的历史和 Memory 数量；版本化 `bootstrap` 描述冻结回合在账本中的可追溯状态。前者受选择与预算影响，后者随 turn 固定。两者都不能证明整个数据库为空，也不能自行证明人物关系。
 
 ## Settings
 
 配置机器人名称、群聊/直接会话频率、mute 和积压分类阈值。`staleAfterMs` 仅标记整批输入是否积压；超过阈值不再自动丢弃，而由 Planner 根据话题是否仍待处理、是否已被后续消息解决或依赖即时场景决定 message、wait 或 silent。Planner 使用共享 Agent 身份和宿主授权的 light 模型，无需新增实例配置。
+
+`heartflow.bootstrap-policy` 是独立的可编辑 Planner 策略。冷启动只在确有交流价值时询问必要信息；没有可靠证据时保持不确定，不补写人物关系、共同经历或群聊背景。进入稳定状态后按正常消息流转，不重复声明“没有记忆”。静态 persona 只定义 Agent 自身，不能充当外部事实。
 
 ## 可靠性、幂等和失败行为
 

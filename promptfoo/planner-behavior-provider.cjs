@@ -59,13 +59,30 @@ class PlannerBehaviorProvider {
         root,
         "packages/modules/templates/heartflow.planner.default.hbs",
       );
-    const variables = Object.entries({
+    const fixtureVariables = {
       context_bootstrap: JSON.stringify({
         mode: "unknown",
         reason: "legacy-snapshot",
       }),
+      bootstrap_policy: fs.readFileSync(
+        path.join(
+          root,
+          "packages/modules/templates/heartflow.bootstrap-policy.default.hbs",
+        ),
+        "utf8",
+      ),
+      bootstrap: JSON.stringify({
+        version: 1,
+        mode: "legacy-unknown",
+        memory: { state: "unknown", selectedCount: 0 },
+        conversation: { state: "unknown" },
+        participants: [],
+      }),
       ...context.vars.fixture.variables,
-    }).map(([name, content]) => ({ name, content, informationIds: [] }));
+    };
+    const variables = Object.entries(fixtureVariables).map(
+      ([name, content]) => ({ name, content, informationIds: [] }),
+    );
     const compiled = renderer.createPromptTemplateRenderer({
       kind: "route",
       templateId: "promptfoo.planner.behavior",
