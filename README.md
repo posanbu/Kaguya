@@ -1,7 +1,5 @@
 <div align="center">
 
-  <img src="docs/public/kaguya-logo.png" width="112" alt="Kaguya 金色月牙标志">
-
   <h1>辉夜 Kaguya</h1>
   <p>以事件感知世界，以记忆形成自我。</p>
   <sub><sup>An event-driven AI companion, shaped by memory.</sup></sub>
@@ -28,9 +26,13 @@
 
 <sub><sup>Meet Kaguya</sup></sub>
 
+<img src="docs/public/kaguya-logo.png" align="right" width="26%" alt="Kaguya 金色月牙标志">
+
 辉夜 Kaguya 是一个基于大语言模型的聊天智能体，希望成为亲切、自然的 AI 群友：一起闲聊、一起吐槽，在合适的时候接话，也为倾听和沉默留出空间。
 
 支撑这一目标的是一套 **event-driven（事件驱动）框架**：以单一 session 承载持续运行的智能体，通过统一 event bus 连接消息、记忆、插件与外设。我们希望辉夜的个性从经历中形成，让不同的相处过程塑造不同的她。
+
+<br clear="both">
 
 <a id="design"></a>
 
