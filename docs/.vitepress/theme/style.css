@@ -1,4 +1,14 @@
+/*
+ * 功能概述：定义 Kaguya 文档站主题，复用 Web UI 的纸纹、云层与夜间神社背景。
+ * 主要职责：主题变量保持正文、导航和代码块可读；body 及装饰伪元素按 VitePress .dark 切换背景。
+ * 代码库关系：theme/index.ts 加载本样式；images/theme 素材与 apps/web/public/theme 相同，
+ * 背景参数对应 apps/web/src/components/workbench.css 及 styles.css 的工作台壳层。
+ * 输入输出与副作用：纯视觉样式，不改变文档内容或交互；装饰层固定在内容下方且不接收指针事件。
+ */
 :root {
+  --vp-c-bg: #fffdf9;
+  --vp-c-bg-alt: #f4f0eb;
+  --kaguya-doc-paper: rgb(255 253 249 / 94%);
   --vp-c-brand-1: #c95d20;
   --vp-c-brand-2: #df6f28;
   --vp-c-brand-3: #ef8a43;
@@ -6,13 +16,27 @@
   --vp-c-tip-1: #c95d20;
   --vp-c-tip-soft: rgba(239, 138, 67, 0.14);
   --vp-home-hero-name-color: transparent;
-  --vp-home-hero-name-background: linear-gradient(120deg, #b94e19 10%, #ed7b32 48%, #f6aa62 88%);
-  --vp-home-hero-image-background-image: radial-gradient(circle, rgba(255, 188, 111, 0.46), rgba(255, 224, 184, 0.2) 48%, transparent 72%);
+  --vp-home-hero-name-background: linear-gradient(
+    120deg,
+    #b94e19 10%,
+    #ed7b32 48%,
+    #f6aa62 88%
+  );
+  --vp-home-hero-image-background-image: radial-gradient(
+    circle,
+    rgba(255, 188, 111, 0.46),
+    rgba(255, 224, 184, 0.2) 48%,
+    transparent 72%
+  );
   --vp-home-hero-image-filter: blur(42px);
   --vp-layout-max-width: 1500px;
 }
 
 .dark {
+  --vp-c-bg: #111d31;
+  --vp-c-bg-alt: #17253a;
+  --vp-c-bg-soft: #17253a;
+  --kaguya-doc-paper: rgb(17 29 49 / 94%);
   --vp-c-brand-1: #ffad68;
   --vp-c-brand-2: #f4954e;
   --vp-c-brand-3: #df732d;
@@ -22,10 +46,81 @@
 }
 
 body {
-  background-image:
-    radial-gradient(circle at 8% 10%, rgba(239, 138, 67, 0.09), transparent 24rem),
-    radial-gradient(circle at 92% 12%, rgba(255, 207, 146, 0.1), transparent 22rem);
+  position: relative;
+  isolation: isolate;
+  background-color: #efece9;
+  background-image: url("/images/theme/bg-light.png");
+  background-size: 77px 133px;
   background-attachment: fixed;
+}
+
+body::before,
+body::after {
+  position: fixed;
+  z-index: -1;
+  inset: 0;
+  pointer-events: none;
+}
+
+body::before {
+  content: "";
+  background-image:
+    url("/images/theme/cloud.webp"), url("/images/theme/cloud.webp");
+  background-repeat: no-repeat;
+  background-position:
+    8% 14%,
+    90% 72%;
+  background-size:
+    202px 72px,
+    152px auto;
+  opacity: 0.16;
+}
+
+.dark body {
+  background-color: #071526;
+  background-image:
+    linear-gradient(180deg, rgb(5 17 35 / 18%) 0 48%, rgb(29 12 34 / 34%) 100%),
+    url("/images/theme/bg-dark.webp");
+  background-size: cover;
+}
+
+.dark body::before {
+  inset: 64px 0 0;
+  background-image: url("/images/theme/torii.svg");
+  background-position: center bottom -34px;
+  background-size: min(1120px, 96vw) auto;
+  opacity: 0.42;
+}
+
+.dark body::after {
+  content: "";
+  inset: 64px 0 0;
+  background-image:
+    url("/images/theme/neon-cloud-1.webp"),
+    url("/images/theme/neon-cloud-2.webp"), url("/images/theme/neon-fish.webp"),
+    url("/images/theme/neon-octopus.webp");
+  background-repeat: no-repeat;
+  background-position:
+    left -34px top 14%,
+    right -30px top 42%,
+    left 2px bottom 5%,
+    right 2px bottom 7%;
+  background-size:
+    184px auto,
+    178px auto,
+    92px auto,
+    98px auto;
+  opacity: 0.36;
+  filter: drop-shadow(0 0 7px rgb(104 224 226 / 32%));
+  mix-blend-mode: screen;
+}
+
+/* 正文保留纸面底色，背景纹理只作衬托，不穿透代码和阅读内容。 */
+.VPDoc > .container > .content {
+  padding-top: 24px;
+  padding-bottom: 24px;
+  background: var(--kaguya-doc-paper);
+  border-radius: 12px;
 }
 
 .VPNavBarTitle .logo {
@@ -44,8 +139,15 @@ body {
 
 .VPFeature {
   border: 1px solid var(--vp-c-divider);
-  background: color-mix(in srgb, var(--vp-c-bg-soft) 90%, rgba(255, 240, 220, 0.1));
-  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  background: color-mix(
+    in srgb,
+    var(--vp-c-bg-soft) 90%,
+    rgba(255, 240, 220, 0.1)
+  );
+  transition:
+    transform 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
 }
 
 .VPFeature:hover {
@@ -75,5 +177,22 @@ body {
 
   .VPHomeHero .text {
     font-size: 28px;
+  }
+}
+
+@media (max-width: 767px) {
+  .VPDoc {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .VPDoc > .container > .content {
+    padding: 16px 12px;
+  }
+
+  .vp-doc div[class*="language-"],
+  .vp-code-group .tabs {
+    margin-right: -12px;
+    margin-left: -12px;
   }
 }

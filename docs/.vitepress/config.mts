@@ -25,7 +25,7 @@ export default withMermaid(
     lastUpdated: true,
     srcExclude: ["AGENTS.md", "README.md"],
     title: "Kaguya 文档",
-    description: "事件驱动、模块可插拔的 TypeScript AI Bot Runtime 文档",
+    description: "Kaguya 安装启动、模型配置、QQ 接入与使用指南",
     head: [
       ["meta", { name: "theme-color", content: "#df6f28" }],
       [
@@ -37,11 +37,24 @@ export default withMermaid(
       logo: "/kaguya-logo.png",
       siteTitle: "Kaguya",
       nav: [
-        { text: "界面设计", link: "/design/" },
-        { text: "使用指南", link: "/guide/" },
-        { text: "开发文档", link: "/developers/" },
-        { text: "参考资料", link: "/reference/" },
-        { text: "项目", link: "/project/" },
+        {
+          text: "用户手册",
+          link: "/guide/",
+          activeMatch:
+            "^/guide/($|installation|webui|message-targets|maintenance)",
+        },
+        {
+          text: "配置详解",
+          link: "/guide/configuration",
+          activeMatch:
+            "^/guide/(configuration|models|persona|napcat|reply-settings|memory|modules|runtime)$",
+        },
+        { text: "常见问题", link: "/guide/troubleshooting" },
+        {
+          text: "开发文档",
+          link: "/developers/",
+          activeMatch: "^/(developers|reference|design)/",
+        },
       ],
       sidebar,
       search: { provider: "local" },
@@ -59,7 +72,7 @@ export default withMermaid(
         text: "在 GitHub 上编辑",
       },
       footer: {
-        message: "事件驱动、模块可插拔的 TypeScript AI Bot Runtime",
+        message: "Kaguya · 安装、配置与使用指南",
         copyright: "Kaguya contributors",
       },
     },

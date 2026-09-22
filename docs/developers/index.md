@@ -43,7 +43,7 @@ Kaguya 采用 pnpm workspace 和 TypeScript project references。应用负责装
 
 **`packages/scheduler`** — 可恢复的 Durable Cadence 与绝对时间 One-Shot 调度原语。
 
-当前 Runtime 使用 PostgreSQL Information Ledger。Memory 文档与 2-gram 倒排项保存在独立表中，不写成 Information atom；selected Profile 的 `memory.enabled` 默认关闭，关闭时只保留 association/Prompt 形状而不读取或返回实际信息。显式开启后，召回命中仍以来源 `informationId` 回到不可变账本。one-shot scheduler 通过同一数据库保存 requested atom 与 arm projection，Runtime 启动时恢复 open arm。消息自动写入、认知提取与向量索引分别属于后续工作，不能把稀疏召回底座描述成已经具备事实演化。
+当前 Runtime 使用 PostgreSQL Information Ledger。Memory 文档与 2-gram 倒排项保存在独立表中，不写成 Information atom；selected Profile 的 `memory.enabled` 默认关闭，关闭时只保留 association/Prompt 形状而不读取或返回实际信息。显式开启后，召回命中仍以来源 `informationId` 回到不可变账本。one-shot scheduler 通过同一数据库保存 requested atom 与 arm projection，Runtime 启动时恢复 open arm。原始消息写回已实现；向量索引和 Mem0 认知在配置对应服务后按需启用，具体范围见[Memory 认知层](./memory)。
 
 ## 依赖方向
 
@@ -88,7 +88,7 @@ flowchart LR
 
 ### 理解一次性调度
 
-阅读[Durable One-Shot 调度](./scheduler)，了解 schedule、replacement、due 投递、唯一 terminal 与关闭恢复边界。固定间隔的可恢复周期工作使用 [Durable Cadence](../guide/cadence)；日历、Cron 与时区策略仍属于 #81。
+阅读[Durable One-Shot 调度](./scheduler)，了解 schedule、replacement、due 投递、唯一 terminal 与关闭恢复边界。固定间隔的可恢复周期工作使用 [Durable Cadence](./cadence)；日历、Cron 与时区策略仍属于 #81。
 
 ### 修改代码
 
@@ -101,3 +101,7 @@ flowchart LR
 ### 查询接口
 
 进入[参考资料](../reference/)，查阅 HTTP API 与环境变量的精确定义。
+
+## 界面设计资料
+
+设计讨论面向贡献者，见[界面设计](../design/)与[配置流程设计](../design/configuration-flow)。使用步骤以[用户手册](../guide/)为准。
