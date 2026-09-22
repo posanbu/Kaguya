@@ -129,6 +129,7 @@ pnpm dev
 
 欢迎分享你希望辉夜参与的聊天场景，也欢迎改进代码、文档和使用体验。
 
+- **社区交流**：加入 [Discord 群组](https://discord.gg/PwvtanURJV)，交流使用体验、分享想法并讨论开发。
 - **问题与建议**：前往 [GitHub Issues](https://github.com/posanbu/Kaguya/issues)，描述预期行为、实际表现和复现步骤。
 - **参与开发**：先阅读[贡献指南](CONTRIBUTING.md)，了解环境准备、模块边界和验证要求。
 - **编写模块**：从[信息模块开发](docs/developers/information-modules.md)开始，了解如何订阅信息、产生结果并接入运行时。
