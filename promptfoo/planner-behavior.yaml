@@ -1,0 +1,14 @@
+description: "#211 Planner 行为评测（显式联网；脱敏日志与边界反例）"
+prompts:
+  - "评测 {{caseId}}"
+providers:
+  - id: file://planner-behavior-provider.cjs
+tests: file://planner-behavior-cases.json
+defaultTest:
+  assert:
+    - type: javascript
+      value: "context.providerResponse.metadata.valid === true"
+    - type: javascript
+      value: "JSON.parse(output).action === context.vars.expectedAction"
+evaluateOptions:
+  maxConcurrency: 2
