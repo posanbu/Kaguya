@@ -1,58 +1,51 @@
 ---
-title: 使用指南
-description: 从安装、首次配置到 Web UI 的 Kaguya 使用入口。
+title: 快速上手
+description: 从安装 Kaguya 到在浏览器中完成第一次聊天。
 ---
 
-# 使用指南
+# 快速上手
 
-Kaguya 是一个以持久化信息 DAG 组织运行事实、模块可插拔的 TypeScript AI Bot Runtime。当前唯一长期运行入口是 `apps/server`：它在同一进程、同一端口提供 Web UI、HTTP API，并可选连接 NapCat。
+Kaguya 是一个可以在网页和 QQ 中聊天的 AI 机器人。先在浏览器里完成一次私聊，再按需要连接 QQ、修改角色或开启记忆。
 
-::: tip 推荐阅读顺序
-第一次使用时，依次阅读“安装与启动 → 配置 Kaguya → 使用 Web UI”。如果需要接入模块或理解消息为什么这样流动，再进入开发文档。
-:::
+## 准备什么
 
-## Kaguya 当前能做什么
+- Git、Node.js **24.18.0** 和 pnpm **11.9.0**。
+- 已启动的 Docker Desktop、OrbStack 或其他兼容 Docker CLI 的引擎，用于本地 PostgreSQL 17。
+- 一个兼容 OpenAI API 的模型服务：服务地址、API Key 和可用模型名称。
 
-**接收消息** — Web UI 通过 HTTP 提交文本；NapCat 可以把 OneBot 消息标准化后交给同一个 Runtime。
+工具尚未安装时，先看[安装与启动](./installation)。
 
-**运行模块链** — 默认链以 Kind 显式连接入站、过滤、消息意图、LLM、assistant 和投递。模块也可以选择不回复，或注册自己的信息原子。
+## 启动 Kaguya
 
-**管理模型配置** — Web UI 可以创建、编辑、选择和删除 Profile。Provider、API Key 和 light/heavy 模型目标保存在权限受保护的 profile store。
+::: code-group
 
-**记录执行过程** — PostgreSQL information ledger 保存不可变原子和显式引用；每个 Core 事实只使用 `informationId`。
-
-## 一次典型启动
-
-```mermaid
-flowchart LR
-  A[准备 Node.js 与 pnpm] --> B[安装依赖]
-  B --> C[启动统一 Server]
-  C --> D[打开终端打印的完整访问链接]
-  D --> E{配置是否就绪}
-  E -- 否 --> F[在 Web UI 补齐或确认配置]
-  F --> G[重启 Server]
-  E -- 是 --> H[进入消息界面]
-  G --> H
+```bash [终端 ~vscode-icons:file-type-shell~]
+git clone https://github.com/posanbu/Kaguya.git
+cd Kaguya
+pnpm install
+pnpm dev
 ```
 
-## 继续阅读
+:::
 
-### 安装与启动
+首次启动会准备本地数据库和配置文件。保持终端运行，打开其中打印的完整 **Kaguya access URL**。默认端口是 `3000`，链接末尾包含本次启动的访问令牌，请勿分享。
 
-查看[安装与启动](./installation)，准备固定版本工具链，并分别运行开发模式、生产模式或文档站。
+## 填写模型
 
-### 首次配置
+在配置页填写 **Base URL、API Key、轻量模型、重量模型**。只有一个模型时，Light 和 Heavy 可以填写同一个模型名称；其余参数先保留默认值，Memory 可以暂时关闭。
 
-查看[配置 Kaguya](./configuration)，理解 setup mode、profile、模型层级和敏感文件边界。
+保存配置后，进入“配置生效管理”，点击“应用当前配置”。看到已生效且 Runtime 可用后，进入“消息”页。若页面提示需要重启，回到终端按 `Ctrl+C`，再次执行 `pnpm dev`，并打开新打印的访问链接。
 
-### 浏览器界面
+每个字段的含义见[模型配置](./models)。
 
-查看[使用 Web UI](./webui)，了解同源页面、每次启动的访问链接以及当前响应边界。
+## 发送第一条消息
 
-### 遇到问题
+在“消息”页输入一句话并发送。回复完成后会显示在对话中，当前不逐字输出。一直没有回答时，按[机器人不回复](./troubleshooting#机器人不回复)检查。
 
-查看[故障排查](./troubleshooting)，按页面现象、HTTP 状态和日志事件定位问题。
+## 接下来做什么
 
-## 需要提前知道的边界
-
-Kaguya 当前没有持久事件队列、自动重试、去重、模块热更新或沙箱。HTTP 消息接口只确认 Web gateway 已接受消息，不等待后台 Runtime 完成，也不返回模型回答或提供 SSE。Core 不按用户、群聊或来源自动组织上下文；后续数据关系需要由显式信息引用和模块逻辑表达。
+- [接入 QQ](./napcat)：连接 NapCat，并设置入站和出站白名单。
+- [角色与回复风格](./persona)：修改名称、人设和说话方式。
+- [发言频率与等待](./reply-settings)：调整群聊参与和连续消息的等待时间。
+- [记忆配置](./memory)：让历史消息参与后续回复。
+- [配置概览](./configuration)：查找其他设置的入口和生效方式。

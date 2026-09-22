@@ -1,51 +1,90 @@
-/** 功能概述：维护中文文档站侧栏；sidebar 按使用、开发与参考分组，维护跨会话消息指南及 Memory 认知层入口供读者查阅。由 VitePress 配置读取，无运行期 I/O。 */
+/**
+ * 功能概述：按用户任务组织文档导航，将安装和配置与开发资料分开。
+ * 主要职责：userGuide 提供入门、配置和日常使用目录；developerGuide 收纳架构、接口与设计资料。
+ * 代码库关系：config.mts 导入 sidebar，由 VitePress 按页面路径选择对应目录；新增页面在这里登记。
+ * 输入输出与副作用：导出静态路由映射，没有运行期 I/O；旧 guide 调度页仍可访问并指向开发文档。
+ */
 import type { DefaultTheme } from "vitepress";
 
-export const sidebar: DefaultTheme.SidebarItem[] = [
+const userGuide: DefaultTheme.SidebarItem[] = [
   {
-    text: "界面设计",
+    text: "开始使用",
     items: [
-      { text: "设计概览", link: "/design/" },
-      { text: "配置流程设计", link: "/design/configuration-flow" },
-    ],
-  },
-  {
-    text: "使用指南",
-    items: [
-      { text: "指南首页", link: "/guide/" },
+      { text: "快速上手", link: "/guide/" },
       { text: "安装与启动", link: "/guide/installation" },
-      { text: "配置 Kaguya", link: "/guide/configuration" },
-      { text: "使用 Web UI", link: "/guide/webui" },
-      { text: "跨会话消息", link: "/guide/message-targets" },
-      { text: "Durable Cadence", link: "/guide/cadence" },
-      { text: "故障排查", link: "/guide/troubleshooting" },
     ],
   },
+  {
+    text: "配置详解",
+    items: [
+      { text: "配置概览", link: "/guide/configuration" },
+      { text: "模型配置", link: "/guide/models" },
+      { text: "角色与回复风格", link: "/guide/persona" },
+      { text: "接入 QQ（NapCat）", link: "/guide/napcat" },
+      { text: "发言频率与等待", link: "/guide/reply-settings" },
+      { text: "记忆配置", link: "/guide/memory" },
+      { text: "模块配置", link: "/guide/modules" },
+      { text: "运行参数", link: "/guide/runtime" },
+    ],
+  },
+  {
+    text: "日常使用",
+    items: [
+      { text: "网页管理与聊天", link: "/guide/webui" },
+      { text: "跨会话消息", link: "/guide/message-targets" },
+      { text: "更新与备份", link: "/guide/maintenance" },
+      { text: "常见问题", link: "/guide/troubleshooting" },
+    ],
+  },
+];
+
+const developerGuide: DefaultTheme.SidebarItem[] = [
   {
     text: "开发文档",
     items: [
       { text: "开发概览", link: "/developers/" },
       { text: "运行时架构", link: "/developers/architecture" },
+      { text: "信息模块 SDK", link: "/developers/information-modules" },
       { text: "Memory 认知层", link: "/developers/memory" },
       { text: "配置生命周期", link: "/developers/configuration-lifecycle" },
       { text: "信息账本", link: "/developers/information-ledger" },
       { text: "Runtime 可观测性", link: "/developers/observability" },
-      { text: "Durable One-Shot 调度", link: "/developers/scheduler" },
+      { text: "一次性调度", link: "/developers/scheduler" },
+      { text: "短心跳恢复", link: "/developers/heartbeat" },
+      { text: "周期维护调度", link: "/developers/cadence" },
       { text: "参与贡献", link: "/developers/contributing" },
       { text: "文档编写规范", link: "/developers/markdown-features" },
     ],
   },
   {
-    text: "参考资料",
+    text: "接口参考",
+    collapsed: true,
     items: [
       { text: "参考入口", link: "/reference/" },
       { text: "HTTP API", link: "/reference/http-api" },
       { text: "Profile API", link: "/reference/profile-api" },
       { text: "环境变量", link: "/reference/environment-variables" },
+      {
+        text: "启动配置校验",
+        link: "/reference/startup-configuration-validation",
+      },
     ],
   },
   {
-    text: "项目",
-    items: [{ text: "状态与路线图", link: "/project/" }],
+    text: "设计与项目",
+    collapsed: true,
+    items: [
+      { text: "界面设计", link: "/design/" },
+      { text: "配置流程设计", link: "/design/configuration-flow" },
+      { text: "状态与路线图", link: "/project/" },
+    ],
   },
 ];
+
+export const sidebar: DefaultTheme.Sidebar = {
+  "/guide/": userGuide,
+  "/developers/": developerGuide,
+  "/reference/": developerGuide,
+  "/design/": developerGuide,
+  "/project/": developerGuide,
+};

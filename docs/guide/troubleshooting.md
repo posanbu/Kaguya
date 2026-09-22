@@ -1,15 +1,15 @@
 ---
-title: 故障排查
-description: 根据页面现象、HTTP 状态与日志快速定位 Kaguya 常见问题。
+title: 常见问题
+description: 排查页面无法打开、配置未生效、模型和 QQ 不回复等问题。
 ---
 
-# 故障排查
+# 常见问题
 
-先保留出错终端中的 `event`、requestId 和 traceId，不要公开 API Key、Authorization、消息正文或整个 `.data/` 目录。
+按实际现象检查。报告问题时提供复现步骤和错误信息，删除访问令牌、API Key、数据库密码及私人消息内容。
 
-## 页面完全打不开
+## 页面打不开
 
-确认 `pnpm dev` 仍在运行，然后检查健康接口：
+确认启动终端仍在运行，地址与终端打印的一致。默认端口的健康检查：
 
 ::: code-group
 
@@ -17,62 +17,62 @@ description: 根据页面现象、HTTP 状态与日志快速定位 Kaguya 常见
 Invoke-RestMethod http://127.0.0.1:3000/healthz
 ```
 
-```bash [curl ~vscode-icons:file-type-shell~]
+```bash [macOS / Linux ~vscode-icons:file-type-shell~]
 curl http://127.0.0.1:3000/healthz
 ```
 
 :::
 
-若没有 `{"status":"ok"}`，先运行 `pnpm postgres:status`，再检查 Docker Desktop/OrbStack、端口占用、PostgreSQL 17、`server.start.failed`、Node/pnpm 版本和生产模式下是否已经执行 `pnpm build`。schema metadata 缺失、版本不是 1、存在旧 `kaguya_schema_migrations` 或所需对象不完整都会在 HTTP、Runtime 和 Adapter 监听前终止 Server；系统不会自动修复。连接暂时不可用仍按运行时不可用处理。若健康接口正常而页面失败，检查浏览器请求和 Web 静态产物。
+正常应返回 `{"status":"ok"}`。没有响应时，检查终端启动错误、端口占用、Node.js/pnpm 版本；使用本地数据库时运行 `pnpm postgres:status` 并确认 Docker 已启动。生产模式缺少网页文件时执行 `pnpm build` 后重新启动。
 
-## 一直停在配置页面
+## 提示访问受限或 401
 
-查看 `/api/v1/profiles` 返回的 status。`invalid` 表示必填内容有问题；`review_required` 表示仍有警告未确认；`restart_required` 表示配置已保存但进程尚未重启。
+每次重启都生成新令牌。打开当前终端打印的完整 `Kaguya access URL`，不要继续刷新旧链接。完整链接必须包含 `#gatewayToken=...`。
 
-不要通过手工修改 Registry 来绕过页面。先在 Web UI 修正字段，保存后停止并重新启动 Server。
+## 配置保存了，但没有变化
 
-## 重启后出现 401
+到“配置生效管理”确认目标 Profile 已设为当前，并点击“应用当前配置”。顶栏切换查看对象和保存文件都不会自动应用。
 
-Server 每次启动都会生成新 token，旧链接随即失效。回到当前运行 `pnpm dev` 或 `pnpm start` 的终端，重新打开完整的 `Kaguya access URL`；只刷新旧链接仍会继续使用旧 fragment。
+**无效配置 `invalid`** — 修正页面列出的字段。
 
-## 配置目录无法打开
+**需要确认 `review_required`** — 阅读并处理当前配置的警告。
 
-权限不安全、符号链接、路径越界、损坏 JSON 或不符合严格 v1 schema 的 Registry 都会被拒绝。先备份目录，再根据错误码修复权限或重新建立 v1 配置；当前没有自动迁移。
+**需要重启 `restart_required`** — 停止服务，再以原命令启动，并打开新链接。
 
-同一 `KAGUYA_CONFIG_ROOT` 不要同时交给两个 Server 或配置写入进程。Windows 生产环境需确认 NTFS ACL，POSIX 目录和文件分别使用 `0700` 与 `0600`。
+名称、人设和其他 Prompt 修改需要重启。更多说明见[配置概览](./configuration)。
 
-## 消息显示 accepted，但没有回复
+## 机器人不回复
 
-这是当前接口定义：202 只表示 Web gateway 接受消息，Runtime 在后台处理。Web UI 没有回复查询或 SSE；默认 Web 入站也没有可用的 outbound destination。通过 `web:${requestId}` 在日志中追踪，或使用已经注册 transport 的平台验证投递。
+1. 在“Gateway / Adapter”确认 Runtime 可用；网页能打开不代表模型已经就绪。
+2. 确认模型地址、密钥、模型 ID 正确，且保存后已应用。
+3. QQ 场景检查 NapCat 已连接，以及目标同时满足入站和出站白名单。
+4. 检查静默模式、发言频率和等待设置。机器人可能决定不参与当前对话。
+5. 在检查页面或日志中确认是否有模型超时、供应商错误或投递失败。
+
+Web 私聊支持显示回复，并在刷新后恢复当前会话记录。接口的 `202 accepted` 只是收到消息，回复还需要等待后续处理完成。
+
+## 模型超时或参数报错
+
+核对供应商模型支持的思考参数；不确定时恢复供应商默认。模型超时默认 300 秒，可在配置页分层设置。建议耗时只记录期望，不会中断请求。连接参数见[模型配置](./models)。
+
+供应商拒绝密钥时，需要检查该服务的密钥或账号状态，反复重启 Kaguya 无法修复被禁用的凭据。
+
+## QQ 连接失败
+
+检查 NapCat 已登录，开启的是正向 WebSocket，Kaguya 填写的地址可达且 access token 一致。`selfId` 如有填写，必须是机器人自己的 QQ 号。详细步骤见[接入 QQ](./napcat)。
 
 ## 返回 429、413 或 415
 
-**429** — 超过当前来源的限流窗口；默认每 60 秒 30 次。
+**`429`** — 超过限流，默认每 60 秒 30 次，稍后再试。
 
-**413** — 整个请求体超过 256 KiB。
+**`413`** — 请求体超过 256 KiB，缩短消息。
 
-**415** — Content-Type 不受支持；消息接口使用 `application/json`。
+**`415`** — 请求格式不支持。自建客户端提交消息时使用 `application/json`。
 
-文本本身最多 131072 个 Unicode code point，且 trim 后不能只剩空白。
+## 配置文件或数据库校验失败
 
-## Web UI 正常但 NapCat 失败
+先备份，再根据日志修复对应字段。JSON 损坏、旧结构或缺少模块都可能阻止启动；处理方法见[更新与备份](./maintenance)。
 
-在 Web UI 的 NapCat 页面检查 enabled、WebSocket URL、访问凭据和 self ID；这些值只从 selected Profile 的平台条目读取。NapCat 连接失败不会停止 HTTP 与 Web UI；查看 `module=adapter:napcat` 的结构化日志。
+配置目录不能是越界路径或不允许的符号链接。POSIX 目录和文件分别使用 `0700`、`0600` 权限；Windows 使用受限的 NTFS ACL。同一配置目录不要同时运行两个 Kaguya 服务。
 
-## 文档站本地与线上不一致
-
-本地热更新预览与 GitHub Pages 必须使用同一分支内容。先执行生产构建；随后通过 `/Kaguya/` 基础路径预览，而不是只检查开发首页。线上仍旧时，确认 PR 已合并、Pages workflow 使用最新 main，并清除浏览器缓存。
-
-::: code-group
-
-```bash [生产预览 ~vscode-icons:file-type-shell~]
-cd docs
-pnpm --ignore-workspace docs:build
-pnpm --ignore-workspace docs:preview
-```
-
-:::
-
-## 报告问题时提供什么
-
-提供复现步骤、预期行为、实际行为、操作系统、`node --version`、`pnpm --version`、相关日志事件和 requestId。密钥、Token、消息内容和完整配置文件必须删除或替换为占位值。
+数据库需要 PostgreSQL 17；旧结构、版本错误或表结构不完整不会被自动忽略。保留数据，核对版本要求后处理。

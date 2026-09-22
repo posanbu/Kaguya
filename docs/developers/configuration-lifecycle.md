@@ -49,25 +49,25 @@ Registry 可以保存多个 Profile，但 Server 只用一个显式 selected Pro
 
 这种约束避免同一进程中同时出现不可追踪的 Provider、密钥和模型路由。模块若支持显式 `profileId`，仍必须通过受控的 resolver，而不是自行读取配置文件。
 
-## 变更何时需要重启
+## 保存、选择与应用
 
-**创建 Profile** — 新 Profile 未选中，不改变当前 Runtime，通常不要求重启；Web 管理门面会继承 selected Profile 的隐藏 runtime。
+创建或编辑 Profile 只持久化配置；切换 selected Profile 只改变下一次要应用的方案。顶栏的编辑对象与全局 selected Profile 也不是同一状态。
 
-**编辑未选中 Profile** — 只改变磁盘中的备用配置，通常不要求重启。
+`ConfigurationApplicationCoordinator` 记录已选中与已生效版本。显式应用时，在配置写锁内校验 revision、预检新配置、停止旧运行实例并启动新实例。模型、Memory、平台、白名单和模块参数可通过这条路径更新；消息入口在切换期间短暂暂停，Gateway Token 不变。
 
-**编辑 selected Profile** — 磁盘可见配置变化，但当前进程仍持有旧对象，返回 `restartRequired: true`。Web 完整替换只把顶层 `inboundAllowlist` 和 `outboundAllowlist` 合并回隐藏 runtime，其他 runtime 字段保持不变；目标缺少 runtime 时返回冲突。
+应用失败会尝试恢复旧快照；关闭失败或回滚失败时保持降级，不能把保存成功当成应用成功。操作步骤见[配置概览](../guide/configuration#保存后怎样生效)。
 
-**切换 selected Profile** — 全局选择变化，返回 `restartRequired: true`。
+## 仍需重启的变更
 
-**删除 Profile** — 只允许非 `default`、非 selected Profile，因此不会直接影响当前 Runtime。
+`host`、`port`、`databaseMode`、`databaseUrl`、`webDistPath`、`corsOrigins`、`trustProxy`、限流和日志字段属于进程参数。应用协调器发现变化时返回 `restart_required` 和字段名，不热替换这些资源。
 
-`restartRequired` 是当前 ConfigurationManagement 实例维护的进程内状态。它不会热替换已创建的 Runtime；重启后重新从磁盘计算 readiness。
+名称、别名、人设及其他 Prompt local 文件保存后也需要重启，不能仅应用 Profile。重启会生成新 Gateway Token。
 
 ## Readiness 的含义
 
 Profile 的 Provider、models、默认 Provider、light/heavy targets 和引用关系必须通过 schema 与一致性检查。启用的 Provider 必须声明模型；默认 Provider 必须启用；light/heavy 必须引用已启用 Provider 中已声明的模型目标，也可以共享同一个目标。
 
-`memory.enabled` 缺省为 `false`。关闭时不装配内置 PostgreSQL Memory 召回或 capability，但 association terminal 仍会以 unavailable 结果推进回复；这不是一次返回空命中的真实检索。
+新建 Profile 的 `memory.enabled` 显式写为 `false`。关闭时不装配内置 PostgreSQL Memory 召回或 capability，但 association terminal 仍会以 unavailable 结果推进回复；这不是一次返回空命中的真实检索。
 
 缺少 Base URL 或 API Key 可能形成 warning。用户必须显式确认当前实际存在的 warning；完整替换 Profile 时，旧 acknowledgement 不会自动继承，避免把过去的确认误用到新配置。
 
@@ -75,9 +75,9 @@ Gateway allowlist 是 `platform:group|private:target_id` 字符串数组。平�
 
 ## 资源创建与关闭
 
-Server 先创建 AdapterHost，再独立检查 AI 与数据库。满足条件时由 Host 注册 transport 并启动 Runtime；下游失败后清理部分资源，清理异常不阻止降级启动。Runtime ingress 只在启动时绑定，不做热接入。
+Server 先创建 AdapterHost，再独立检查 AI 与数据库。满足条件时由 Host 注册 transport 并启动 Runtime；下游失败后清理部分资源，清理异常不阻止降级启动。显式应用通过协调器切换运行实例及其 ingress。
 
-关闭先将 ingress 标为 stopping，再停止 HTTP 和全部 Adapter；随后排空 Runtime、关闭数据库与 Web 资源，最后关闭 Logger。单项失败不跳过其他清理。消息不缓存、不排队、不重放，修复后重启。
+关闭先将 ingress 标为 stopping，再停止 HTTP 和全部 Adapter；随后排空 Runtime、关闭数据库与 Web 资源，最后关闭 Logger。单项失败不跳过其他清理。应用暂停期间不应把请求失败当成已接收；修复后按应用结果继续处理。
 
 ## 安全边界
 
