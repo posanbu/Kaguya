@@ -98,6 +98,8 @@ it("loads every declared module template from files and never creates local file
   writeDefaults(directory.path);
   const loaded = loadFirstPartyPromptTemplates({ root: directory.url });
   expect(loaded.planner).toBe("heartflow.planner");
+  expect(loaded.plannerBootstrapPolicy).toBe("heartflow.bootstrap-policy");
+  expect(loaded.messageComposer.bootstrap).toBe("message-composer.bootstrap");
   expect(loaded.expression).toEqual({
     learn: "expression.learn",
     select: "expression.select",

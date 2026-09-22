@@ -36,6 +36,7 @@ import {
   messageIntentRequestedInformationKind,
   messageIntentRequestedInformationPayloadSchema,
   turnContextCompletedInformationKind,
+  normalizeTurnBootstrap,
 } from "../information-kinds.js";
 
 import {
@@ -64,6 +65,7 @@ export interface MessagePromptTemplates {
   readonly historyInbound: string;
   readonly historyAssistant: string;
   readonly memory: string;
+  readonly bootstrap: string;
   readonly memoryItem: string;
   readonly quoted: string;
   readonly turn: string;
@@ -134,6 +136,9 @@ export function createMessagePromptCompiler(
       newestInputAgeMs: number;
     };
     if (!backlog) throw new Error("Frozen turn requires backlog timing");
+    const bootstrap = normalizeTurnBootstrap(
+      turnContext!.payload as Readonly<Record<string, unknown>>,
+    );
     const currentTime = formatZonedInstant(
       backlog.evaluatedAt,
       identity.timeZone,
@@ -257,6 +262,11 @@ export function createMessagePromptCompiler(
       ]),
       variable("history", history.content, history.informationIds),
       variable("memory", memories.content, memories.informationIds),
+      variable(
+        "bootstrap",
+        nested.render("bootstrap", { bootstrap: JSON.stringify(bootstrap) }),
+        [turnContext!.informationId],
+      ),
       variable("turn", turn, [
         ...new Set([
           ...inputs.map((input) => input.informationId),

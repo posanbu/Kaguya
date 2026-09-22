@@ -94,6 +94,7 @@ export function createMessageCatalog(
   cognitionIdentity?: CognitionIdentity,
   memoryKnowledgeEnabled = false,
   promptTemplates = loadFirstPartyPromptTemplates(),
+  memoryEnabled = false,
 ) {
   const agentIdentity: AgentIdentity = {
     name: promptTemplates.identityName,
@@ -113,9 +114,11 @@ export function createMessageCatalog(
     executionExhaustedInformationKind,
     promptTemplates: promptTemplates.messageComposer,
     plannerTemplate: promptTemplates.planner,
+    plannerBootstrapPolicy: promptTemplates.plannerBootstrapPolicy,
     plannerPlatformPolicies: promptTemplates.plannerPlatformPolicies,
     expressionTemplates: promptTemplates.expression,
     agentIdentity,
+    memoryEnabled,
     memoryKnowledgeEnabled,
     ...(cognitionIdentity ? { cognitionIdentity } : {}),
   });
@@ -138,6 +141,7 @@ export function createMessageComposition(
     options.memoryEnabled ? options.cognition?.identity : undefined,
     !!options.memoryEnabled && !!options.memoryKnowledgeEnabled,
     promptTemplates,
+    !!options.memoryEnabled,
   );
   const memoryEnabled = options.memoryEnabled ?? false;
   const knowledgeEnabled =

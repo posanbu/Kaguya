@@ -10,7 +10,7 @@
 
 ## 数据流与边界
 
-学习来源只包括真实用户入站，拒绝自身发言、媒体占位、系统内容和噪声。scope 必须来自真实 Identity 实体且与目标一致；不存在 fallback ID。每条模式保留来源 Information ID。选择上下文绑定冻结 turn 与 message intent，至多注入三条。
+学习来源只包括已引用的真实用户入站，拒绝自身发言、媒体占位、系统内容和噪声。scope 必须来自真实 Identity 实体且与目标一致；不存在 fallback ID。每条模式保留来源 Information ID。没有足够的已引用消息时不归纳表达习惯，也不以 persona 或模型常识补齐。选择上下文绑定冻结 turn 与 message intent，至多注入三条。
 
 Composer 使用独立 expression_habits 变量，provenance 指向选择结果及来源批次。提示明确要求自然匹配时才参考，不能改变事实、动作、授权或目标。受限枚举拒绝人名、账号、长原文和私密事实进入表达库。
 

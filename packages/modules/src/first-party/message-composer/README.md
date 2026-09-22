@@ -18,9 +18,11 @@
 
 默认模板位于 `packages/modules/templates/message-composer.default.hbs`。本地覆盖使用同名 `*.local.hbs`，文件被 Git 忽略，Server 重启后重新加载；旧 `llm-reply.*.local.hbs` 不再加载。
 
-模板分为 `message-composer` 外层，以及 `.history`、`.history-inbound`、`.history-assistant`、`.memory`、`.memory-item`、`.quoted`、`.turn`。集合层允许 `each`、`if`、`unless` 和明确声明的静态 partial；动态 partial、递归和自定义 helper 会被拒绝。
+模板分为 `message-composer` 外层，以及 `.bootstrap`、`.history`、`.history-inbound`、`.history-assistant`、`.memory`、`.memory-item`、`.quoted`、`.turn`。集合层允许 `each`、`if`、`unless` 和明确声明的静态 partial；动态 partial、递归和自定义 helper 会被拒绝。
 
-外层变量为 `persona`、`name`、`aliases`、`self_account`、`scene`、`history`、`memory`、`turn`。消息层提供 `occurred_at`、`sender_name`、`sender_id`、`platform`、`adapter_id`、`destination`、`message_id`、`mentions`、`reply_to`、`content`、`quoted_message`、`self_account`、`name` 和 `is_assistant`。引用内容属于对应入站的 `quoted_message`，不是全局必须回答的消息。
+外层变量包含 `context_bootstrap`、`bootstrap`、`persona`、`name`、`aliases`、`self_account`、`scene`、`history`、`memory` 和 `turn`。消息层提供 `occurred_at`、`sender_name`、`sender_id`、`platform`、`adapter_id`、`destination`、`message_id`、`mentions`、`reply_to`、`content`、`quoted_message`、`self_account`、`name` 和 `is_assistant`。引用内容属于对应入站的 `quoted_message`，不是全局必须回答的消息。
+
+`.bootstrap` 把 Heartflow 已冻结的可知状态转为自然表达约束。`context_bootstrap` 另行说明经过历史与 Memory 预算后真正展示给 Composer 的证据数量。Composer 可以承认当前不知道某个人或会话背景，但不能把未知写成否定事实，也不能用 persona 补齐外部关系和共同经历。旧 turn 使用 `legacy-unknown`，保证恢复时采取保守表达。
 
 只有冻结 turn 被标记为积压时，`scene` 才补充首末输入年龄，并提示 Composer 按语境决定是否自然承接迟到；不会强制道歉或说明系统恢复。实时回合的 `scene` 不变，旧 turn 缺少积压投影时按实时回合兼容处理。
 

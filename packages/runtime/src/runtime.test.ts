@@ -1794,6 +1794,8 @@ function createMessageComposition(
     executionExhaustedInformationKind,
     promptTemplates: testMessageTemplates,
     plannerTemplate: testPrompts.planner,
+    plannerBootstrapPolicy: testPrompts.plannerBootstrapPolicy,
+    memoryEnabled: false,
     expressionTemplates: testPrompts.expression,
     agentIdentity: testIdentity,
   });

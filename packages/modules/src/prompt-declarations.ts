@@ -38,6 +38,7 @@ export const outerVariables = [
   "plan",
   "history",
   "memory",
+  "bootstrap",
   "turn",
 ] as const;
 
@@ -52,6 +53,7 @@ export const messageTemplateDeclarations = [
     allowedPartials: [],
     composes: [
       "message-composer.scene",
+      "message-composer.bootstrap",
       "message-composer.plan",
       "message-composer.history",
       "message-composer.memory",
@@ -135,6 +137,17 @@ export const messageTemplateDeclarations = [
     displayName: "引用消息",
     description: "组织输入所引用的消息内容与标识。",
     allowedVariables: ["message", "message_id"],
+    allowedPartials: [],
+    composes: [],
+  },
+  {
+    key: "bootstrap",
+    fileStem: "message-composer.bootstrap",
+    name: "bootstrap",
+    displayName: "冷启动表达策略",
+    description:
+      "根据冻结的会话、人物与 Memory 证据状态约束未知信息的自然表达。",
+    allowedVariables: ["bootstrap"],
     allowedPartials: [],
     composes: [],
   },
@@ -283,10 +296,24 @@ export const plannerTemplateDeclaration: ModulePromptTemplateDefinition = {
     "turn",
     "conversation",
     "platform_policy",
+    "bootstrap",
+    "bootstrap_policy",
   ],
   allowedPartials: [],
   composes: [],
 };
+export const plannerBootstrapPolicyDeclaration: ModulePromptTemplateDefinition =
+  {
+    mutability: "editable",
+    templateId: "heartflow.bootstrap-policy",
+    name: "heartflow-bootstrap-policy",
+    displayName: "冷启动参与策略",
+    description:
+      "依据确定性的 bootstrap 投影决定是否询问、承认未知或进入正常交流。",
+    allowedVariables: [],
+    allowedPartials: [],
+    composes: [],
+  };
 export const plannerPlatformPolicyDeclarations: readonly ModulePromptTemplateDefinition[] =
   ["default", "qq", "web"].map((platform) => ({
     mutability: "editable" as const,
@@ -347,7 +374,11 @@ export const personFactTemplateDeclaration: ModulePromptTemplateDefinition = {
 /** 所有第一方模板组的白名单；文件初始化和存储与模块声明共用此入口。 */
 export const firstPartyPromptTemplateGroups = [
   messageModulePromptTemplates,
-  [plannerTemplateDeclaration, ...plannerPlatformPolicyDeclarations],
+  [
+    plannerTemplateDeclaration,
+    plannerBootstrapPolicyDeclaration,
+    ...plannerPlatformPolicyDeclarations,
+  ],
   [
     identityNameTemplateDeclaration,
     identityAliasesTemplateDeclaration,

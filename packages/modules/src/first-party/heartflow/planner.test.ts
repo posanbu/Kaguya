@@ -8,6 +8,8 @@ import { loadFirstPartyPromptTemplates } from "../../node/prompt-templates.js";
 const plannerTemplate = loadFirstPartyPromptTemplates().planner;
 const plannerPlatformPolicies =
   loadFirstPartyPromptTemplates().plannerPlatformPolicies;
+const plannerBootstrapPolicy =
+  loadFirstPartyPromptTemplates().plannerBootstrapPolicy;
 import { describe, expect, it } from "vitest";
 import { compilePlannerPrompt, plannerActionSchema } from "./planner.js";
 import { inboundTextInformationKind } from "../information-kinds.js";
@@ -78,12 +80,18 @@ describe("Planner contract", () => {
       turn,
       plannerTemplate,
       plannerPlatformPolicies,
+      plannerBootstrapPolicy,
     );
     expect(prompt.text).toContain(identity.persona);
     expect(prompt.text).toContain("FIRST_SENTINEL");
     expect(prompt.text).toContain("LAST_SENTINEL");
     expect(prompt.text).toContain("不可信数据");
     expect(prompt.text).toContain("QQ 中参与要克制");
+    expect(prompt.text).toContain("bootstrap 只描述账本能够证明的熟悉度");
+    expect(prompt.text).toContain('"mode":"legacy-unknown"');
+    expect(
+      prompt.variables.find((v) => v.name === "bootstrap")?.informationIds,
+    ).toEqual([turn.informationId]);
     expect(prompt.text).toContain('"isBacklog":true');
     expect(prompt.text).toContain('"newestInputAgeMs":180000');
     expect(prompt.text).toContain(

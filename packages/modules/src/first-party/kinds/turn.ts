@@ -37,6 +37,85 @@ const turnInputSchema = z
   })
   .strict();
 
+export const turnBootstrapProjectionSchema = z
+  .object({
+    version: z.literal(1),
+    mode: z.enum(["cold-start", "warming", "established"]),
+    memory: z
+      .object({
+        state: z.enum(["disabled", "no-authorized-evidence", "available"]),
+        selectedCount: z.number().int().nonnegative(),
+      })
+      .strict(),
+    conversation: z
+      .object({
+        state: z.enum(["first-seen", "known", "ephemeral", "unresolved"]),
+      })
+      .strict(),
+    participants: z
+      .array(
+        z
+          .object({
+            inputInformationId: nonBlankString,
+            state: z.enum(["first-seen", "known", "unresolved"]),
+          })
+          .strict(),
+      )
+      .min(1),
+  })
+  .strict();
+
+export type TurnBootstrapProjection = z.infer<
+  typeof turnBootstrapProjectionSchema
+>;
+
+export type NormalizedTurnBootstrapProjection =
+  | TurnBootstrapProjection
+  | {
+      readonly version: 1;
+      readonly mode: "legacy-unknown";
+      readonly memory: {
+        readonly state: "unknown" | "available";
+        readonly selectedCount: number;
+      };
+      readonly conversation: { readonly state: "unknown" };
+      readonly participants: readonly {
+        readonly inputInformationId: string;
+        readonly state: "unresolved";
+      }[];
+    };
+
+/**
+ * 旧回合没有 bootstrap 投影。读取时只根据已冻结字段恢复可证明的信息，
+ * 其余状态保持 unknown，避免把旧事实误判为已认识人物或会话。
+ */
+export function normalizeTurnBootstrap(
+  payload: Readonly<Record<string, unknown>>,
+): NormalizedTurnBootstrapProjection {
+  const current = turnBootstrapProjectionSchema.safeParse(payload.bootstrap);
+  if (current.success) return current.data;
+  const memories = Array.isArray(payload.memory) ? payload.memory : [];
+  const inputs = Array.isArray(payload.inputs) ? payload.inputs : [];
+  return {
+    version: 1,
+    mode: "legacy-unknown",
+    memory: {
+      state: memories.length > 0 ? "available" : "unknown",
+      selectedCount: memories.length,
+    },
+    conversation: { state: "unknown" },
+    participants: inputs.flatMap((input) => {
+      const informationId =
+        input && typeof input === "object" && "informationId" in input
+          ? (input as { informationId?: unknown }).informationId
+          : undefined;
+      return typeof informationId === "string" && informationId.trim()
+        ? [{ inputInformationId: informationId, state: "unresolved" as const }]
+        : [];
+    }),
+  };
+}
+
 export const turnClaimedInformationKind = defineInformationKind({
   kind: "agent.turn.claimed",
   displayName: "回合认领",
@@ -379,6 +458,7 @@ const turnContextPayloadSchema = z
     safe: z.boolean(),
     destinationAvailable: z.boolean(),
     stale: z.boolean(),
+    bootstrap: turnBootstrapProjectionSchema.optional(),
     /** Optional enrichments are intentionally advisory and do not affect timing. */
     memory: z.array(nonBlankString).optional(),
     association: z.array(nonBlankString).optional(),

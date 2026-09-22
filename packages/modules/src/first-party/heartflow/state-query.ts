@@ -12,7 +12,10 @@ import {
 import { type InformationSelectorLedger } from "@kaguya/sdk";
 import {
   observationWakeInformationKind,
+  chatScopeEntityInformationKind,
   inboundTextInformationKind,
+  personContextCompletedInformationKind,
+  personEntityInformationKind,
   turnClaimedInformationKind,
 } from "../information-kinds.js";
 import { uniqueAtoms } from "./turn-state.js";
@@ -91,15 +94,7 @@ export async function hydrateCandidate(
     }
   }
   for (const inbound of inbounds) {
-    remember(
-      await related(
-        ledger,
-        inbound.informationId,
-        "core:status-of",
-        "incoming",
-        100,
-      ),
-    );
+    await hydrateIdentityEntities(ledger, inbound, remember);
   }
   remember(
     await related(
@@ -135,15 +130,7 @@ export async function hydrateCandidate(
       ),
     );
     for (const input of inputs)
-      remember(
-        await related(
-          ledger,
-          input.informationId,
-          "core:status-of",
-          "incoming",
-          100,
-        ),
-      );
+      await hydrateIdentityEntities(ledger, input, remember);
   }
   const scopeKey = (candidate.payload as any).scopeKey;
   const focusGrants = remember(
@@ -193,15 +180,7 @@ export async function hydrateCandidate(
       ),
     );
     for (const inbound of recoveryInputs)
-      remember(
-        await related(
-          ledger,
-          inbound.informationId,
-          "core:status-of",
-          "incoming",
-          100,
-        ),
-      );
+      await hydrateIdentityEntities(ledger, inbound, remember);
 
     const claimCandidates = remember(
       await related(
@@ -240,6 +219,43 @@ export async function hydrateCandidate(
       );
     }
   }
+}
+
+async function hydrateIdentityEntities(
+  ledger: InformationSelectorLedger,
+  inbound: DeepReadonly<InformationAtom>,
+  remember: (
+    atoms: readonly DeepReadonly<InformationAtom>[],
+  ) => readonly DeepReadonly<InformationAtom>[],
+) {
+  const identity = remember(
+    await related(
+      ledger,
+      inbound.informationId,
+      "core:status-of",
+      "incoming",
+      100,
+    ),
+  );
+  const entityIds = identity
+    .filter(({ kind }) => kind === personContextCompletedInformationKind.kind)
+    .flatMap(({ payload }) => {
+      const value = payload as Record<string, unknown>;
+      return [value.scopeInformationId, value.personInformationId].filter(
+        (id): id is string => typeof id === "string",
+      );
+    });
+  if (entityIds.length)
+    remember(
+      await ledger.find({
+        kinds: [
+          chatScopeEntityInformationKind.kind,
+          personEntityInformationKind.kind,
+        ],
+        informationIds: entityIds,
+        limit: entityIds.length,
+      }),
+    );
 }
 
 export async function candidatesForClaims(
