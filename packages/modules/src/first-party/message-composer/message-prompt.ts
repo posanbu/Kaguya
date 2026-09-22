@@ -1,4 +1,5 @@
 /**
+ * context_bootstrap 仅统计预算裁剪后实际展示的历史与记忆，不因隐藏证据将新参与者视为熟人。
  * 嵌套模板的变量与 partial 直接复用模块静态声明，管理保存与运行编译保持同一约束。
  * 功能概述：将消息意图和冻结 turn 编译为分层 Handlebars Prompt，所有本轮输入拥有相同模板地位；积压时向 Composer 提供年龄供自然衔接。
  * 主要职责：createMessagePromptCompiler 预编译模板并返回纯函数；compileMessagePrompt 提供一次性入口；
@@ -8,6 +9,7 @@
  * 输入输出与副作用：意图没有正文，正文从 turn.inputs 读取；每条输入保留引用上下文及成功回执、请求、assistant 的原始溯源且不裁剪，不特殊处理末条。
  * 缺少冻结 turn 或身份不一致即抛错；不写账本、不调用模型、不创建出站引用标记。
  */
+import { contextBootstrapVariable } from "../context-bootstrap.js";
 import {
   messageTemplateDeclarations,
   outerVariables,
@@ -206,6 +208,15 @@ export function createMessagePromptCompiler(
     });
     const turn = nested.render("turn", { messages });
     const prompt = renderOuter([
+      contextBootstrapVariable(
+        turnContext!,
+        atoms.filter((atom) =>
+          history.informationIds.includes(atom.informationId),
+        ),
+        atoms.filter((atom) =>
+          memories.informationIds.includes(atom.informationId),
+        ),
+      ),
       variable("persona", identity.persona),
       variable("behavior_policy", templates.behavior),
       variable(

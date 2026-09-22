@@ -3,6 +3,7 @@
  * 主要职责：messageTemplateDeclarations/plannerTemplateDeclaration/personFactTemplateDeclaration
  * 以及 expressionModulePromptTemplates 供 manifest、受限编译器与 Node 存储使用；正文全部来自 default/local 文件。
  * 代码库关系：消息编译器通过 key 获取已有模板输入，Node 仅通过已声明 templateId 定位 default/local 文件。
+ * context_bootstrap 向 Planner 和 Composer 暴露冻结的证据可用性；人设仅定义角色表达，不作为现实关系来源。
  * 输入输出与副作用：仅常量，无运行时用户、身份或记忆数据，也不执行文件操作。
  */
 import type { PromptResourceDefinition } from "@kaguya/prompt";
@@ -25,6 +26,7 @@ const messageVariables = [
   "name",
 ] as const;
 export const outerVariables = [
+  "context_bootstrap",
   "persona",
   "behavior_policy",
   "platform_style",
@@ -273,6 +275,7 @@ export const plannerTemplateDeclaration: ModulePromptTemplateDefinition = {
   description:
     "根据冻结会话上下文选择 message、wait 或 silent，不生成消息正文。",
   allowedVariables: [
+    "context_bootstrap",
     "current_time",
     "identity",
     "history",
@@ -322,7 +325,8 @@ export const identityPersonaTemplateDeclaration: PromptResourceDefinition = {
   templateId: "identity.persona",
   name: "identity-persona",
   displayName: "辉夜身份设定",
-  description: "工作区级身份、经历、性格与关系设定。",
+  description:
+    "工作区级角色身份与表达性格；虚构背景不是现实经历或人物关系证据。",
   content: "",
   allowedVariables: [],
   allowedPartials: [],

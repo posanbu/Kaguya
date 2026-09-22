@@ -1,4 +1,5 @@
 /**
+ * 无证据结果覆盖显式弃答与拒绝原文之外的事实；异步 handler 直接 await，无后台轮询或固定等待。
  * 功能概述：验证 person-fact 模块以非 reply 候选原子调用通用 Model Task，并只把可信完成结果写成业务事实。
  * 主要职责：请求用例检查 capability、activation、tier、source/context 与 Prompt provenance；完成用例检查
  * task/version/definition/source 归属、严格 person/name/fact 输出、候选身份一致性和 registerOnce 去重。
@@ -345,6 +346,34 @@ describe("createPersonFactTaskModule", () => {
       expect(request!.task.outputSchema.safeParse(output).success).toBe(false);
     expect(registrations).toEqual([]);
   });
+
+  it.each([null, "knows Kaguya from school"])(
+    "never writes unsupported person facts: %s",
+    async (fact) => {
+      const executor: ModelTaskCapability = {
+        execute: async () => result("completed") as ModelTaskResult<never>,
+        cancel: async () => {
+          throw new Error("unexpected cancellation");
+        },
+      };
+      const { instance } = await createInstance(executor);
+      const candidate = candidateAtom();
+      const completed = completedAtom({
+        output: { personId: "person-1", name: "Ada", fact },
+      });
+      const registrations: Registration[] = [];
+      const execution = instance.subscriptions[1]!.handle(
+        completed,
+        handlerContext(completed, executor, [candidate], registrations),
+      );
+      if (fact === null) await execution;
+      else
+        await expect(execution).rejects.toThrow(
+          "must quote its candidate evidence",
+        );
+      expect(registrations).toEqual([]);
+    },
+  );
 
   it.each(["completed", "failed", "cancelled"] as const)(
     "does not write a domain atom directly from the %s execute result",

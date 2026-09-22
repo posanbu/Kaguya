@@ -4,6 +4,7 @@
  * callApi 用生产 plannerActionSchema 校验动作，并检查焦点索引及等待预算。
  * 代码库关系：供 planner-behavior.yaml 使用；复用 modules 的模板声明及 schema，
  * fixture.variables 对应账本 core.model.task.requested.prompt.variables，不重做上下文召回。
+ * 旧快照没有 context_bootstrap 时显式标记 unknown；不从脱敏历史补造身份或空库状态，已有字段原样保留。
  * 输入输出与副作用：只读模板/profile，向 profile light 模型发送评测请求；不写账本、不发送群消息。
  * 必须显式设置 KAGUYA_EVAL_PROFILE；密钥不进入配置、输出或异常正文，网络故障计为评测错误。
  */
@@ -58,9 +59,13 @@ class PlannerBehaviorProvider {
         root,
         "packages/modules/templates/heartflow.planner.default.hbs",
       );
-    const variables = Object.entries(context.vars.fixture.variables).map(
-      ([name, content]) => ({ name, content, informationIds: [] }),
-    );
+    const variables = Object.entries({
+      context_bootstrap: JSON.stringify({
+        mode: "unknown",
+        reason: "legacy-snapshot",
+      }),
+      ...context.vars.fixture.variables,
+    }).map(([name, content]) => ({ name, content, informationIds: [] }));
     const compiled = renderer.createPromptTemplateRenderer({
       kind: "route",
       templateId: "promptfoo.planner.behavior",
