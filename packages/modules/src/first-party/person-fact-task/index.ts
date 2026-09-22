@@ -1,4 +1,5 @@
 /**
+ * 无事实候选允许 fact=null 并结束处理；非空事实必须为候选原文片段，防止无来源文本入账。
  * candidate renderer 只展示结构化候选数据；提取规则仅来自注入的 person-fact.default/local 模板。
  * 人物事实模板显式归属此模块，其允许变量复用静态声明；未装入 Catalog 不展示。
  * 功能概述：实现最小 person-fact Model Task 垂直切片，把非 reply 候选编译为可追溯 Prompt，
@@ -65,7 +66,7 @@ export const personFactTaskOutputSchema = z
   .object({
     personId: nonBlankString,
     name: nonBlankString,
-    fact: nonBlankString,
+    fact: nonBlankString.nullable(),
   })
   .strict();
 export type PersonFactTaskOutput = z.infer<typeof personFactTaskOutputSchema>;
@@ -259,6 +260,7 @@ export function createPersonFactTaskModule<
               completed.payload.output,
             );
             const domainPayload = validateDomainFact(candidate.payload, output);
+            if (domainPayload === null) return;
             await context.registerOnce(
               "kaguya.person-fact.extracted.v1",
               completed.informationId,
@@ -379,8 +381,11 @@ function isOwnedCompletion(
 function validateDomainFact(
   candidate: DeepReadonly<PersonFactCandidateInformationPayload>,
   output: PersonFactTaskOutput,
-): PersonFactExtractedPayload {
+): PersonFactExtractedPayload | null {
   if (output.personId !== candidate.personId || output.name !== candidate.name)
     throw new Error("Extracted person identity must match its candidate");
+  if (output.fact === null) return null;
+  if (!candidate.text.includes(output.fact))
+    throw new Error("Extracted person fact must quote its candidate evidence");
   return personFactExtractedPayloadSchema.parse(output);
 }
