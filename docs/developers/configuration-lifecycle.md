@@ -26,7 +26,7 @@ sequenceDiagram
     C->>P: open
   end
   S->>C: get selected registry readiness
-  S->>D: 连接、PostgreSQL 版本、schema v1、Kind 检查
+  S->>D: 连接、PostgreSQL 版本、strict schema v1、观察协议与 Kind 检查
   alt 数据库失败
     S->>S: 记录降级原因并继续启动
   end

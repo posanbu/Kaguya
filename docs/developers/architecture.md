@@ -54,13 +54,14 @@ flowchart LR
   Persist --> Broadcast[当前消费者并发广播]
   Broadcast --> Identity[Identity terminal]
   Broadcast --> Heartbeat[Durable heartbeat]
-  Heartbeat --> Candidate[agent.turn.candidate]
-  Candidate --> Heartflow[Generational claim / identity barrier]
+  Heartbeat --> Candidate[Non-semantic observation opportunity]
+  Candidate --> Arousal[Arousal state / observe / defer]
+  Arousal -->|observe| Heartflow[Bounded unread query / identity barrier]
   Identity --> Heartflow
   Heartflow --> Turn[Immutable turn context]
-  Turn --> Speech[Speak / wait / silent decision]
-  Speech --> Heartflow
-  Heartflow -->|speak| Intent[agent.message.intent.requested]
+  Turn --> Planner[Message / wait / silent]
+  Planner --> Heartflow
+  Heartflow -->|message| Intent[agent.message.intent.requested]
   Heartflow -->|wait| Wait[agent.wait.requested]
   Heartflow -->|silent| Silent[agent.turn.silent]
   Intent --> LLM[Model Task / assistant / delivery]
@@ -78,17 +79,20 @@ HTTP `202 accepted` 在 Web gateway 接收消息后立即返回；Runtime dispat
 ```text
 core.runtime.context
   -> core.message.inbound.text
+  -> agent.attention.arousal.activity -> 空闲休眠 one-shot deadline
   -> agent.person.context.completed
   -> agent.heartbeat.scheduled
   -> core.schedule.one-shot.requested
   -> core.schedule.one-shot.due
   -> agent.heartbeat.fired
   -> agent.turn.candidate
-  -> agent.turn.claimed
-  -> agent.turn.started
-  -> agent.turn.context.completed
+  -> agent.attention.arousal.state.recorded
   -> agent.attention.arousal.completed
-     -> speak: agent.message.intent.requested -> core.model.task.* -> core.message.assistant.text
+     -> awake 或收到唤醒信号: observe
+     -> asleep 且无唤醒信号: defer -> agent.turn.terminal -> 等待周期 deadline 或直接通知
+     -> observe: agent.turn.claimed -> agent.turn.started -> identity terminal
+        -> agent.turn.context.completed -> agent.turn.plan.completed
+     -> message: agent.message.intent.requested -> core.model.task.* -> core.message.assistant.text
                -> core.delivery.requested -> core.delivery.delivered | core.delivery.failed
                -> agent.turn.completed | agent.turn.failed
                -> core.model.task.failed | cancelled -> agent.turn.failed
@@ -96,13 +100,13 @@ core.runtime.context
      -> silent: agent.turn.silent
 ```
 
-同一 destination scope 的 claim 带单调 generation。新 candidate 若在旧 claim 作出 speech decision 前到达，会先赢得旧 claim 的 decision gate，再写入旧 turn 的 `superseded` 终态；旧分支不能继续产生 message intent。Heartflow 等到 candidate 引用的每条 inbound 都具有 identity terminal，才冻结多输入 turn context。`speak`、`wait`、`silent` 只由 Heartflow 分派，默认链中没有 inbound 直达 turn context、always-reply 或 speech-to-reply 桥接旁路。
+同一 destination scope 的 claim 带单调 generation。新 candidate 若在旧 claim 作出 Planner decision 前到达，会先赢得旧 claim 的 decision gate，再写入旧 turn 的 `superseded` 终态；旧分支不能继续产生 message intent。Candidate 不携带正文引用；Arousal 从最新 `agent.attention.arousal.state.recorded` 读取全局唤醒状态，没有事实时默认 `awake`。无消息与夜间休眠策略默认关闭，启用后分别以持久化绝对 deadline 实现预设两分钟无消息休眠、23:00–07:00 夜间休眠和五分钟周期唤醒。私聊、Web、@、回复、Focus 与周期复查重新确认 `awake`；`awake` 下普通机会也 observe。Heartflow 仅在 observe 后按候选的注册水位上下界读取未读，并等到每条 inbound 都具有 identity terminal 后冻结多输入 turn context。`message`、`wait`、`silent` 只由 Planner 决定，默认链中没有 inbound 直达 turn context、always-reply 或 speech-to-reply 桥接旁路。
 
 每条派生边都带有直接输入的 `core:caused-by` 引用，并继承唯一的 `core:context`。跨入站合并时，模块只能把 context 重定位到当前 handler 通过声明式 Selector 选出的 `core.runtime.context`。Model Task、消费者重试耗尽和投递失败都是账本事实；平台发送成功后注册 `core.delivery.delivered`，并由 Heartflow 写入唯一 turn terminal。
 
 ## 消费者失败不会回滚已提交事实
 
-Server 启动时打开 Profile Registry 与六个显式模块实例文件，检查全局 selected Profile，并先验证数据库连接、PostgreSQL 17、严格 schema v1 与 Runtime Kind。随后才为 light/heavy target 创建模型客户端。Provider key 只存在于权限保护的 Profile JSON、配置管理器和 provider factory，不进入模块 settings、信息原子、Prompt 或日志。AI 与数据库连接检查独立执行；schema 不兼容则在任何监听前退出。完整流程见[配置生命周期](./configuration-lifecycle)。
+Server 启动时打开 Profile Registry 与六个显式模块实例文件，检查全局 selected Profile，并先验证数据库连接、PostgreSQL 17、严格数据库 schema v1、`attention-observation.v1` 协议标记与 Runtime Kind。随后才为 light/heavy target 创建模型客户端。Provider key 只存在于权限保护的 Profile JSON、配置管理器和 provider factory，不进入模块 settings、信息原子、Prompt 或日志。AI 与数据库连接检查独立执行；schema 不兼容则在任何监听前退出。完整流程见[配置生命周期](./configuration-lifecycle)。
 
 `consumer.failed` 的消费者若再次失败，或失败事实无法提交，Core 只交给 bootstrap 诊断边界，不递归生成失败原子。Core 不自动重试该失败通知，也没有内建工作队列。
 
@@ -146,22 +150,22 @@ Memory 开启时，composition 自动加入原始写回模块；配置相应 pro
 
 Server 将当前生效 GatewayAllowlist 和 AdapterHost 目录注入 Runtime。MessageTargetService 只向管理路由暴露解析与两阶段批准，向 Composer 注入的 capability 则是仅含 prepare/stage 的冻结门面，不暴露 Core、目录或批准方法。授权事实本身不构成权限；Runtime 的私有授权记录绑定具体 intent、assistant、目标、连接代次及有效期，重启后默认失效。
 
-管理端批准的说明保存在 `agent.message.target.authorized`，作为独立冻结上下文。跨会话 intent 沿用 target/turn/memoryInformationIds 契约，引用该上下文及独立 candidate/claim；candidate 保留原 heartbeat 溯源并标记 managementAuthorizationId，Heartflow 不为它重复规划。Association 不扩展其 Memory。正文确认产生 `agent.message.content.confirmed`，唤醒 Composer 共用的 release 函数创建原有 delivery 请求。
+管理端批准的说明保存在 `agent.message.target.authorized`，作为独立冻结上下文。跨会话 intent 沿用 target/turn/memoryInformationIds 契约，引用该上下文及独立 candidate/claim；candidate 保留原观察触发溯源并标记 managementAuthorizationId，Heartflow 不为它重复规划。Association 不扩展其 Memory。正文确认产生 `agent.message.content.confirmed`，唤醒 Composer 共用的 release 函数创建原有 delivery 请求。
 
 最终目的地检查覆盖错误模块输出、重放及配置显式应用后的恢复领取；拒绝使用不含目标 ID 的失败 payload。成功投递的跨会话 assistant 可通过确认因果链进入目标会话历史。接口见 [HTTP API](../reference/http-api.md)，操作见[跨会话消息](../guide/message-targets.md)。
 
 ## 观察式调度与创建阶段防积压
 
-系统持续观察信息流，不把每条消息或每批消息定义为必须处理的回合。信息经过廉价过滤后，快模型选择 `message`、`wait` 或 `silent`；慢模型仅为获准行动生成正文。`turn`、`candidate`、`claim` 是持久化调度、幂等与并发控制事实，不决定信息处理模型，也不保证逐条回复。
+系统在入站通知注册时直接为所属 scope 产生非语义观察机会，不把每条消息定义为必须回复的回合。Arousal 不调用模型、不读取正文，维护初始为 `awake` 的持久化唤醒状态，并按通知、Focus、周期复查和 one-shot 时间事实决定 `observe | defer`。observe 后 Planner 才独占相关性、话题选择、参与价值及 `message | wait | silent`。正文生成仍只发生在获准 message 后。`turn`、`candidate`、`claim` 是持久化调度、幂等与并发控制事实，不保证逐条回复。
 
-Heartbeat 对普通群消息保留首个稀疏观察时刻，连续到达不会无限推迟观察，也不会逐条替换 schedule。私聊、Web 输入、@机器人、回复机器人及全体提及可立即提升调度；回复归属优先使用平台 senderId，缺失时核对同目标的已投递消息标识。模型返回的等待时长决定后续观察节奏。
+Heartbeat 以 `openScope` 和成功观察水位聚合同 scope 通知，不为普通入站安排 timer。Arousal awake 时普通机会直接 observe；asleep 时 defer，消息继续积攒且不推进水位。全局活动更新最近消息和空闲 deadline，但不会自行唤醒 asleep；夜间边界和五分钟周期唤醒各有独立 one-shot，周期到期为仍有积压的会话创建 recheck。私聊、Web 输入、@机器人、回复机器人、全体提及和有效 Focus 可重新唤醒；回复归属优先使用平台 senderId，缺失时核对同目标的已投递消息标识。Planner 的 wait 继续使用独立预算。
 
-候选注册携带 `openScope`，数据库在同 scope 的 head 行锁内竞争。不同到期信号只得到一个开放 candidate；每个信号的操作别名仍指向原赢家，所以旧信号重放不会开启新一轮。等待 schedule 记录前驱 candidate，避免旧等待到期信号在后续观察完成后重新启动模型。指定 `agent.turn.terminal` 终态释放槽，平台投递和授权边界保持原有职责。
+候选注册携带 `openScope`，数据库在同 scope 的 head 行锁内竞争。并发通知或到期信号只得到一个开放 candidate；每个信号的操作别名仍指向原赢家，所以旧信号重放不会开启新一轮。等待 schedule 记录前驱 candidate，避免旧等待到期信号在后续观察完成后重新启动模型。指定 `agent.turn.terminal` 终态释放槽，平台投递和授权边界保持原有职责。
 
-开放期间入站账本保存待观察集合，普通和即时唤醒分别按 candidate 去重。冻结前的唤醒把新增来源纳入当前观察，身份屏障仍完整保留；已冻结的观察继续使用原输入；终态订阅读取水位之后的最新输入，最多提交一次必要后续观察。水位按持久化位置而非消息时间戳推进，因此相同或迟到时间戳不会把消息误判为已观察。Heartbeat 每次水位读取保留最近至多 1000 条新增入站，冻结前可与已持久化的恢复或唤醒来源合并；不补建逐条历史回合。
+开放期间入站账本保存待观察集合，普通和即时唤醒分别按 candidate 去重。Candidate 只冻结上次成功观察之后的排他下界、本次机会的包含上界、未读数量和平台信号，不冻结正文集合。Arousal defer、重复 delivery、调度失败或进程重启都不推进水位；只有 Heartflow 成功冻结 turn context 才记录 `observedThroughInformationId`。observe 后的有界查询最多读取 1000 条，上界之前进入当前 turn，上界之后留给下一次观察。水位按持久化位置而非消息时间戳推进，因此相同或迟到时间戳不能越界。
 
 ## 恢复阶段一次爬楼
 
-重启、旧数据或竞争遗留多个开放 candidate 时，Heartflow 在 scope 内合并来源，只推进最新的一次观察。合并来源作为 claim 的 `core:uses-context` 引用先持久化；即使身份屏障尚未就绪、旧 candidate 已终结或身份结果迟到，恢复仍读取同一组来源。其他 candidate 被终结，不按历史顺序重放模型。Planner 决策提交和最终发送仍由既有操作槽、终态槽与执行租约保护；迟到结果在派发前重新检查当前终态。
+重启或竞争遗留开放 candidate 时，Heartflow 只推进已有 Arousal observe 的机会，并继续使用候选冻结的上下水位；defer 和未决机会不会读取正文。claim 的 `core:uses-context` 引用只在 observe 后写入。身份屏障尚未就绪或身份结果迟到时，恢复仍读取同一有界集合。Planner 决策提交和最终发送继续由既有操作槽、终态槽与执行租约保护；迟到结果在派发前重新检查当前终态。
 
 在线 Selector 从 `information_lifecycle` 的开放集合读取 candidate，并按 scope 的注册位置索引读取最近 claim。该投影和 `information_scope_heads` 可变，业务原子和引用保持只追加。数据库启动时首次建立并回填投影，后续启动不重复扫描历史；写入原子、关闭投影和可靠执行意图同事务提交。历史规模与恢复测试分别验证开放索引查询和合并动作唯一性。

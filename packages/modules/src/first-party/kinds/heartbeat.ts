@@ -8,9 +8,51 @@ import { defineInformationKind } from "@kaguya/sdk";
 import { nonBlankString } from "./shared.js";
 import { inboundTextInformationKind } from "./message.js";
 
-const heartbeatReasonSchema = z.enum(["message", "wait", "interrupt"]);
+const heartbeatReasonSchema = z.enum([
+  "message",
+  "wait",
+  "interrupt",
+  "recheck",
+]);
 
 const heartbeatPolicyVersionSchema = z.literal("short-heartbeat.v1");
+const attentionOpportunityPolicyVersionSchema = z.literal(
+  "attention-opportunity.v1",
+);
+
+export const attentionArousalActivityInformationKind = defineInformationKind({
+  kind: "agent.attention.arousal.activity",
+  displayName: "全局消息活动",
+  description:
+    "Heartbeat 将入站注册投影为不含正文的全局活动事实；Arousal 用它直接重置休眠 deadline。",
+  payloadSchema: z
+    .object({
+      inboundInformationId: nonBlankString,
+      observedAt: z.iso.datetime({ offset: true }),
+      policyVersion: z.literal("attention-activity.v1"),
+    })
+    .strict(),
+  references: {
+    "core:caused-by": {
+      required: true,
+      multiple: false,
+      targetKinds: [inboundTextInformationKind.kind],
+    },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
+  },
+  log: {
+    enabled: true,
+    level: "debug",
+    project: ({ payload }) => ({
+      event: "attention.arousal.activity",
+      observedAt: payload.observedAt,
+    }),
+  },
+});
 
 const heartbeatTerminalReference = {
   "core:caused-by": { required: true, multiple: false },
@@ -42,7 +84,7 @@ const heartbeatScheduledPayloadSchema = z
     scopeKey: nonBlankString,
     asOf: z.iso.datetime({ offset: true }),
   })
-  .strict();
+  .strict() as any;
 
 export const heartbeatScheduledInformationKind = defineInformationKind({
   kind: "agent.heartbeat.scheduled",
@@ -108,7 +150,7 @@ export const heartbeatSupersededInformationKind = defineInformationKind({
   kind: "agent.heartbeat.superseded",
   displayName: "短心跳被替代",
   description:
-    "新的聚合请求替代已有心跳时登记旧心跳终态；用于追踪防抖替换并避免旧调度重复唤醒。",
+    "新的等待或打断请求替代已有心跳时登记旧心跳终态；用于追踪延迟替换并避免旧调度重复唤醒。",
   payloadSchema: z
     .object({ replacementInformationId: nonBlankString })
     .strict(),
@@ -143,28 +185,43 @@ export const heartbeatFailedInformationKind = defineInformationKind({
 
 const turnCandidatePayloadSchema = z
   .object({
-    heartbeatInformationId: nonBlankString,
+    triggerInformationId: nonBlankString,
     reason: heartbeatReasonSchema,
     dueAt: z.iso.datetime({ offset: true }),
     firedAt: z.iso.datetime({ offset: true }),
     platform: nonBlankString,
     adapterId: nonBlankString,
     destination: platformDestinationSchema,
-    sourceInformationIds: z.array(nonBlankString).min(1),
+    unreadAfterInformationId: nonBlankString.optional(),
+    unreadThroughInformationId: nonBlankString,
+    unreadCount: z.number().int().min(1).max(1000),
+    signals: z
+      .array(
+        z.enum([
+          "private",
+          "web",
+          "mention-self",
+          "mention-all",
+          "reply-self",
+          "passive",
+          "recheck",
+        ]),
+      )
+      .min(1),
     scopeKey: nonBlankString,
     asOf: z.iso.datetime({ offset: true }),
-    policyVersion: heartbeatPolicyVersionSchema,
+    policyVersion: attentionOpportunityPolicyVersionSchema,
     rebuildAttempt: z.number().int().min(0).default(0),
     attempt: z.number().int().min(0),
     totalWaitBudget: z.number().int().min(0),
   })
-  .strict();
+  .strict() as any;
 
 export const turnCandidateInformationKind = defineInformationKind({
   kind: "agent.turn.candidate",
-  displayName: "待处理回合候选",
+  displayName: "注意力观察机会",
   description:
-    "心跳将聚合输入整理为候选时登记来源、范围和等待策略；Heartflow 认领后构造冻结上下文并决定后续动作。",
+    "入站通知或延迟调度登记不含正文的观察机会，只保存范围、触发事实、未读注册水位、数量与平台信号；Arousal 决定 observe 后 Heartflow 才能查询正文。",
   payloadSchema: z.union([
     turnCandidatePayloadSchema,
     turnCandidatePayloadSchema.extend({
@@ -172,28 +229,11 @@ export const turnCandidateInformationKind = defineInformationKind({
     }),
   ]),
   references: {
-    "core:caused-by": {
-      required: true,
-      multiple: false,
-      targetKinds: [
-        "core.schedule.one-shot.due",
-        "agent.message.target.authorized",
-      ],
-    },
-    "agent:heartbeat-fired": {
-      required: true,
-      multiple: false,
-      targetKinds: [heartbeatFiredInformationKind.kind],
-    },
+    "core:caused-by": { required: true, multiple: false },
     "core:context": {
       required: true,
       multiple: false,
       targetKinds: ["core.runtime.context"],
-    },
-    "core:uses-context": {
-      required: true,
-      multiple: true,
-      targetKinds: [inboundTextInformationKind.kind],
     },
   },
   log: {
@@ -204,7 +244,8 @@ export const turnCandidateInformationKind = defineInformationKind({
       reason: payload.reason,
       dueAt: payload.dueAt,
       firedAt: payload.firedAt,
-      sourceCount: payload.sourceInformationIds.length,
+      unreadCount: payload.unreadCount,
+      signals: payload.signals,
     }),
   },
 });

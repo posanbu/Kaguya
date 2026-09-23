@@ -2,7 +2,7 @@
  * 测试显式注入统一文件模板，避免 Planner 或 Expression 绕过 default/local 选择。
  * 功能概述：验证 first-party Catalog 默认配置及激活边界。
  * 主要职责：catalog fixture 注入宿主能力与共享 kind，测试八个默认模块、严格 modelTier 设置、
- * disabled 配置校验与旧 reply/outbound 配置拒绝；Profile 身份决定 Heartflow botNames。
+ * disabled 配置校验与旧 reply/outbound 配置拒绝；Profile 身份不再投影进 Heartflow 设置。
  * 检查视图只引用 Catalog 中的模块 Kind，或由 model-task 能力及请求 Surface 明确声明的 Runtime 请求 Kind。
  * 代码库关系：直接约束 catalog 工厂以及 message-composer 模块的公开 settings schema。
  * 输入输出与副作用：纯内存组装，不连接模型或数据库；错误包含重新初始化说明。
@@ -207,7 +207,7 @@ describe("first-party module configuration", () => {
     ).toBe(false);
   });
 
-  it("uses Profile identity as the only effective Heartflow bot-name source", () => {
+  it("does not project Profile identity into Heartflow settings", () => {
     const customIdentity = {
       name: "Luna",
       aliases: ["月"],
@@ -218,16 +218,11 @@ describe("first-party module configuration", () => {
       "production",
       customIdentity,
     );
-    const legacy = defaults.map((item) =>
-      item.definitionId === "agent.heartflow.online"
-        ? { ...item, settings: { ...item.settings, botNames: ["Legacy"] } }
-        : item,
-    );
     const heartflow = createFirstPartyModuleActivations(
       catalog(),
-      legacy,
+      defaults,
       customIdentity,
     ).find(({ definitionId }) => definitionId === "agent.heartflow.online");
-    expect(heartflow?.settings).toMatchObject({ botNames: ["Luna", "月"] });
+    expect(heartflow?.settings).not.toHaveProperty("botNames");
   });
 });

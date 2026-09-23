@@ -22,11 +22,11 @@ protocol v2 模块 Manifest 必须提供非空的 `displayName`、单行 `summar
 
 ## Heartbeat 与 Heartflow
 
-`heartbeatModule`（定义 ID：`agent.heartbeat.short`）依赖 `oneShotScheduleCapability`，消费 inbound text、`agent.wait.requested` 和 one-shot due，产生 heartbeat schedule/terminal 以及 `agent.turn.candidate`。`createHeartflowModule()` 使用 scope generation、identity barrier 和不可变多输入 context，把 Attention Arousal 的 `attend | defer | ignore` 推进为 message intent、wait 或 silent，并为每个 turn 提交唯一终态。
+`heartbeatModule`（定义 ID：`agent.heartbeat.short`）按 scope 积攒 inbound 通知并直接产生不含正文的 `agent.turn.candidate`；`oneShotScheduleCapability` 只服务 Planner wait/interrupt。Attention Arousal 维护默认 `awake` 的持久化唤醒状态，并根据状态、通知信号和 Focus 记录 `observe | defer`；`createHeartflowModule()` 仅在 observe 后按注册水位读取未读，经 scope generation、identity barrier 和不可变多输入 context 交给 Planner 选择 message、wait 或 silent，并为每个 turn 提交唯一终态。
 
-`createFirstPartyModuleActivations("production")` 使用 1500 ms 去抖，`"test"` 使用 0 ms；两种 profile 都启用 Heartbeat 与 Heartflow。Heartbeat payload 使用绝对时间和稳定 destination scope。消息延期通过 one-shot replacement 合并，进程重启由 durable scheduler 恢复。
+`createFirstPartyModuleActivations("production")` 与 `"test"` 都启用 Heartbeat 与 Heartflow。普通入站不等待定时防抖；开放观察和未读水位负责 scope 聚合。Planner wait/interrupt payload 使用绝对时间和稳定 destination scope，进程重启由 durable scheduler 恢复。
 
-默认 Catalog 不含 always-reply 或 inbound-to-context 旁路。Message Composer 当前只接收 Heartflow 的 `attend` 临时桥接，并沿 turn provenance 把 delivery terminal 交回 Heartflow 完成回合。
+默认 Catalog 不含 always-reply 或 inbound-to-context 旁路。Message Composer 只接收 Planner 获胜的 message intent，并沿 turn provenance 把 delivery terminal 交回 Heartflow 完成回合。
 
 ## Prompt 模板
 

@@ -15,7 +15,7 @@ description: 按用途找到 Kaguya 的设置，并了解保存、应用和重�
 
 **连接 QQ、限定聊天范围** — 设置 NapCat 和双向白名单，见[接入 QQ](./napcat)。
 
-**控制回复频率和等待** — 在“检查 → 模块”调整 Heartflow、Attention Arousal 和 Heartbeat，见[发言频率与等待](./reply-settings)。
+**控制唤醒、休眠和等待** — 在“检查 → 模块”调整 Attention Arousal、Heartflow 和 Heartbeat，见[发言、休眠与等待](./reply-settings)。
 
 **使用历史记忆** — 在配置页开启 Memory，见[记忆配置](./memory)。
 

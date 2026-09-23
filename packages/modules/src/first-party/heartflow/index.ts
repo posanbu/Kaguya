@@ -6,25 +6,25 @@
  * 在线 Heartflow 编排器。所有推进都由可重放 Information 事实驱动；模块不保存
  * per-chat 状态，也不依赖订阅安装顺序。
  * createHeartflowModule 注入投递/模型失败 kind，返回声明订阅的模块；settings schema
- * 校验频率与安全策略。state/memory selector 从账本读取因果链及记忆，冻结完整输入。
+ * 校验 Focus、时效与安全策略。state/memory selector 从账本读取因果链及记忆，冻结完整输入。
  * Planner 重放沿已持久化请求复用 Prompt 和上下文选择，防止迟到历史触发第二次模型任务。
  * 规划前通过双时间截止点约束的 knowledge 导航至多四条实体原文，再留出 sparse 旁路；可选认知快照优先保留至多两条，总计八条。
  * Knowledge 开启时，认知快照的全部原始来源必须通过撤回 guard，检查缺失或失败都不使用该快照。
  * 宿主 conversation 能力冻结背景和候选；跨会话获胜决策交给 route 复核，失败关闭当前 turn，不回退发送。
  * dispatchDecision 仅将独立 Planner 的获胜 message 结果按 claim 注册一次意图，末条输入决定目标；
- * turn 标识及引用保留完整冻结上下文，正文生成交给 composer。defer/ignore 与失败路径
+ * turn 标识及引用保留完整冻结上下文，正文生成交给 composer。wait/silent 与失败路径
  * 写入等待或终态；registerOnce/commitTerminal 保证重放幂等，模型 I/O 经宿主 capability 执行，平台 I/O 由 delivery 层负责。
  * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
  * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
  */
 import { firstPartyInspection } from "../inspection.js";
-import { activeFocus, focusOpened } from "../attention-focus/facts.js";
+import { focusOpened } from "../attention-focus/facts.js";
 import {
-  plannerPlatformPolicyDeclarations,
   plannerBootstrapPolicyDeclaration,
+  plannerPlatformPolicyDeclarations,
   plannerTemplateDeclaration,
 } from "../../prompt-declarations.js";
-import { scopeOf } from "../heartbeat/observation.js";
+import { isImmediateObservation, scopeOf } from "../heartbeat/observation.js";
 import {
   type MessageAuthorization,
   conversationContextInformationKind,
@@ -84,16 +84,28 @@ import {
   turnInterruptedInformationKind,
   turnWaitingInformationKind,
   waitRequestedInformationKind,
-  type AttentionArousalPayload,
 } from "../information-kinds.js";
 
 type AnyKind = InformationKindDefinition<string, any>;
+
+interface PlannerDispatch {
+  readonly action: "message" | "wait" | "silent";
+  readonly candidateInformationId: string;
+  readonly claimInformationId: string;
+  readonly turnContextInformationId: string;
+  readonly source: any;
+  readonly attempt: number;
+  readonly totalWaitBudget: number;
+  readonly reasonCodes: readonly string[];
+  readonly dueAt?: string;
+  readonly delayMs?: number;
+  readonly wakePolicy?: "recheckAt" | "cooldown";
+}
 
 export interface CreateHeartflowModuleOptions {
   readonly modelTaskCapability: ModuleCapability<ModelTaskCapability>;
   readonly messageAuthorizationCapability?: ModuleCapability<MessageAuthorization>;
   readonly agentIdentity: AgentIdentity;
-  /** selected Profile 是否启用 Memory；用于区分关闭与本轮没有授权证据。 */
   readonly memoryEnabled: boolean;
   readonly plannerTemplate: string;
   readonly plannerBootstrapPolicy: string;
@@ -113,69 +125,6 @@ export interface CreateHeartflowModuleOptions {
 
 export const heartflowSettingsSchema = z
   .object({
-    botNames: z.array(z.string().trim().min(1)).meta({
-      title: "机器人名称",
-      description: "由当前 Profile 身份提供，此处仅保留全局文件中的值。",
-      public: true,
-      readOnly: true,
-    }),
-    groupFrequency: z.number().min(0).max(1).meta({
-      title: "群聊回复频率",
-      description: "群聊参与频率，范围为 0 到 1。",
-      public: true,
-      default: 1,
-    }),
-    privateFrequency: z.number().min(0).max(1).meta({
-      title: "私聊回复频率",
-      description: "私聊参与频率，范围为 0 到 1。",
-      public: true,
-      default: 1,
-    }),
-    focusFrequencyMultiplier: z.number().min(0).max(4).default(1).meta({
-      title: "Focus 发言频率倍率",
-      description: "输入具体数值；在基础或动态频率之后应用，最终不超过 1。",
-      public: true,
-      default: 1,
-    }),
-    dynamicFrequencyEnabled: z.boolean().default(false).meta({
-      title: "启用动态发言频率",
-      description: "按平台、会话和本地时间段覆盖基础频率。",
-      public: true,
-      default: false,
-    }),
-    dynamicFrequencyRules: z
-      .array(
-        z
-          .object({
-            platform: z.string().default(""),
-            itemId: z.string().default(""),
-            chatType: z.enum(["group", "private"]),
-            time: z.string().default(""),
-            value: z.number().min(0).max(1),
-          })
-          .strict(),
-      )
-      .default([
-        {
-          platform: "",
-          itemId: "",
-          chatType: "group",
-          time: "00:00-08:59",
-          value: 0.8,
-        },
-        {
-          platform: "",
-          itemId: "",
-          chatType: "group",
-          time: "09:00-18:59",
-          value: 1,
-        },
-      ])
-      .meta({
-        title: "动态频率规则",
-        description: "具体会话优先；支持跨午夜时间段，未命中则回退基础频率。",
-        public: true,
-      }),
     muted: z.boolean().meta({
       title: "静默模式",
       description: "开启后抑制主动回复。",
@@ -210,84 +159,6 @@ export const heartflowSettingsSchema = z
   })
   .strict();
 export type HeartflowSettings = z.infer<typeof heartflowSettingsSchema>;
-
-export function resolveEffectiveFrequency(
-  settings: DeepReadonly<HeartflowSettings>,
-  source: {
-    platform: string;
-    destination: { kind: string; groupId?: string; userId?: string };
-  },
-  asOf: string,
-  focusActive: boolean,
-): { frequency: number; ruleIndex: number | null } {
-  const chatType = source.destination.kind === "group" ? "group" : "private";
-  const targetId =
-    chatType === "group"
-      ? source.destination.groupId
-      : source.destination.userId;
-  let frequency =
-    chatType === "group" ? settings.groupFrequency : settings.privateFrequency;
-  let ruleIndex: number | null = null;
-  let best: readonly [number, number] = [-1, -1];
-  if (settings.dynamicFrequencyEnabled) {
-    const date = new Date(asOf);
-    const minute = date.getHours() * 60 + date.getMinutes();
-    settings.dynamicFrequencyRules.forEach((rule, index) => {
-      if (rule.chatType !== chatType) return;
-      if (
-        rule.platform &&
-        rule.platform !== "*" &&
-        rule.platform !== source.platform
-      )
-        return;
-      if (rule.itemId && rule.itemId !== "*" && rule.itemId !== targetId)
-        return;
-      if (rule.itemId && !targetId) return;
-      const targetPriority =
-        (rule.itemId && rule.itemId !== "*" ? 2 : 0) +
-        (rule.platform && rule.platform !== "*" ? 1 : 0);
-      let timePriority = 0;
-      if (rule.time && rule.time !== "*") {
-        const match = /^(\d{2}):(\d{2})-(\d{2}):(\d{2})$/u.exec(rule.time);
-        if (!match) return;
-        const start = Number(match[1]) * 60 + Number(match[2]);
-        const end = Number(match[3]) * 60 + Number(match[4]);
-        if (
-          start > 1439 ||
-          end > 1439 ||
-          Number(match[2]) > 59 ||
-          Number(match[4]) > 59
-        )
-          return;
-        if (
-          start <= end
-            ? minute < start || minute > end
-            : minute < start && minute > end
-        )
-          return;
-        timePriority = 1;
-      }
-      if (
-        targetPriority > best[0] ||
-        (targetPriority === best[0] && timePriority > best[1])
-      ) {
-        best = [targetPriority, timePriority];
-        frequency = rule.value;
-        ruleIndex = index;
-      }
-    });
-  }
-  return {
-    frequency: Math.min(
-      1,
-      Math.max(
-        0,
-        frequency * (focusActive ? settings.focusFrequencyMultiplier : 1),
-      ),
-    ),
-    ruleIndex,
-  };
-}
 
 const plannerInterruptSelector = defineInformationSelector({
   selectorId: "agent.heartflow.planner-interrupt",
@@ -324,7 +195,6 @@ const plannerInterruptSelector = defineInformationSelector({
             }
           : {
               scopeKey,
-              openOnly: true,
               registrationOrder: true,
               order: "desc" as const,
             }),
@@ -360,6 +230,14 @@ const plannerInterruptSelector = defineInformationSelector({
         limit: 30,
       }),
     );
+    const candidateStatuses = add(
+      await ledger.related({
+        from: [candidate.informationId],
+        relation: "core:status-of",
+        direction: "incoming",
+        limit: 30,
+      }),
+    );
     const frozen = add(
       await ledger.related({
         from: [claim.informationId],
@@ -368,7 +246,7 @@ const plannerInterruptSelector = defineInformationSelector({
         limit: 100,
       }),
     ).find((atom) => atom.kind === turnContextCompletedInformationKind.kind);
-    for (const attention of claimStatuses.filter(
+    for (const attention of [...claimStatuses, ...candidateStatuses].filter(
       (atom) => atom.kind === attentionArousalCompletedInformationKind.kind,
     )) {
       add(
@@ -447,17 +325,6 @@ export const heartflowStateSelector = defineInformationSelector({
         }),
       )[0];
       if (inbound !== undefined) {
-        anchors = remember(
-          await ledger.find({
-            kinds: [turnCandidateInformationKind.kind],
-            payloadContains: {
-              sourceInformationIds: [inbound.informationId],
-            },
-            openOnly: true,
-            order: "asc",
-            limit: 1_000,
-          }),
-        );
         const recoveryClaims = remember(
           await related(
             ledger,
@@ -471,10 +338,7 @@ export const heartflowStateSelector = defineInformationSelector({
             a.kind === turnClaimedInformationKind.kind ||
             a.kind === observationWakeInformationKind.kind,
         );
-        anchors = [
-          ...anchors,
-          ...(await candidatesForClaims(ledger, recoveryClaims, remember)),
-        ];
+        anchors = await candidatesForClaims(ledger, recoveryClaims, remember);
       }
     } else if (sourceAtom.kind === turnClaimedInformationKind.kind) {
       anchors = remember(
@@ -497,14 +361,15 @@ export const heartflowStateSelector = defineInformationSelector({
     } else if (
       sourceAtom.kind === attentionArousalCompletedInformationKind.kind
     ) {
-      remember(
+      anchors = remember(
         await related(
           ledger,
           sourceAtom.informationId,
-          "core:uses-context",
+          "core:status-of",
           "outgoing",
         ),
-      );
+      ).filter(({ kind }) => kind === turnCandidateInformationKind.kind);
+    } else if (sourceAtom.kind === turnContextCompletedInformationKind.kind) {
       const claims = remember(
         await related(
           ledger,
@@ -524,23 +389,29 @@ export const heartflowStateSelector = defineInformationSelector({
           "outgoing",
         ),
       );
-      const inboundCandidates = (
+      const inboundClaims = (
         await Promise.all(
           statusTargets
             .filter(({ kind }) => kind === inboundTextInformationKind.kind)
             .map((inbound) =>
-              ledger.find({
-                kinds: [turnCandidateInformationKind.kind],
-                payloadContains: {
-                  sourceInformationIds: [inbound.informationId],
-                },
-                order: "asc",
-                limit: 1_000,
-              }),
+              related(
+                ledger,
+                inbound.informationId,
+                "core:uses-context",
+                "incoming",
+                1_000,
+              ),
             ),
         )
-      ).flat();
-      remember(inboundCandidates);
+      )
+        .flat()
+        .filter((atom) => atom.kind === turnClaimedInformationKind.kind);
+      remember(inboundClaims);
+      const inboundCandidates = await candidatesForClaims(
+        ledger,
+        inboundClaims,
+        remember,
+      );
       anchors = [
         ...(await traceTurnCandidates(ledger, statusTargets, remember)),
         ...inboundCandidates,
@@ -586,6 +457,17 @@ export const heartflowMemorySelector = defineInformationSelector({
     let candidates: readonly DeepReadonly<InformationAtom>[] = [];
     if (sourceAtom.kind === turnCandidateInformationKind.kind) {
       candidates = [sourceAtom];
+    } else if (
+      sourceAtom.kind === attentionArousalCompletedInformationKind.kind
+    ) {
+      candidates = (
+        await ledger.related({
+          from: [sourceAtom.informationId],
+          relation: "core:status-of",
+          direction: "outgoing",
+          limit: 1,
+        })
+      ).filter((atom) => atom.kind === turnCandidateInformationKind.kind);
     } else if (sourceAtom.kind === personContextCompletedInformationKind.kind) {
       const inbound = (
         await ledger.related({
@@ -596,26 +478,51 @@ export const heartflowMemorySelector = defineInformationSelector({
         })
       )[0];
       if (inbound !== undefined) {
-        candidates = await ledger.find({
-          kinds: [turnCandidateInformationKind.kind],
-          payloadContains: { sourceInformationIds: [inbound.informationId] },
-          order: "asc",
-          limit: 1_000,
-        });
+        const claims = (
+          await ledger.related({
+            from: [inbound.informationId],
+            relation: "core:uses-context",
+            direction: "incoming",
+            limit: 1_000,
+          })
+        ).filter((atom) => atom.kind === turnClaimedInformationKind.kind);
+        candidates = (
+          await Promise.all(
+            claims.map((claim) =>
+              ledger.related({
+                from: [claim.informationId],
+                relation: "agent:turn-candidate",
+                direction: "outgoing",
+                limit: 1,
+              }),
+            ),
+          )
+        ).flat();
       }
     }
     const memories = new Map<string, DeepReadonly<InformationAtom>>();
     let knowledgeCount = 0;
     for (const candidate of candidates) {
       if (memories.size >= 8) break;
-      const inbounds = (
-        await ledger.related({
-          from: [candidate.informationId],
-          relation: "core:uses-context",
-          direction: "outgoing",
-          limit: 1_000,
-        })
-      ).filter(({ kind }) => kind === inboundTextInformationKind.kind);
+      const candidatePayload = candidate.payload as any;
+      const inbounds = await ledger.find({
+        kinds: [inboundTextInformationKind.kind],
+        scopeKey: candidatePayload.scopeKey,
+        registrationOrder: true,
+        ...(candidatePayload.unreadAfterInformationId
+          ? { afterInformationId: candidatePayload.unreadAfterInformationId }
+          : {}),
+        throughInformationId: candidatePayload.unreadThroughInformationId,
+        payloadContains: {
+          source: {
+            platform: candidatePayload.platform,
+            adapterId: candidatePayload.adapterId,
+            destination: candidatePayload.destination,
+          },
+        },
+        order: "asc",
+        limit: 1_000,
+      });
       const query = inbounds
         .map((atom) => (atom.payload as any).text as string)
         .join("\n")
@@ -719,6 +626,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
       (atom) => atom.kind === turnCandidateInformationKind.kind,
     );
     if (!candidate) return false;
+    if (turnTerminalFor(candidate.informationId, atoms)) return false;
     const claim = atoms.find(
       (atom) =>
         atom.kind === turnClaimedInformationKind.kind &&
@@ -745,7 +653,6 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
       }
       return true;
     }
-    if (source?.kind === "core.model.task.requested") return false;
     const frozen = atoms.find(
       (atom) =>
         atom.kind === turnContextCompletedInformationKind.kind &&
@@ -754,8 +661,9 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
     const attention = atoms.find(
       (atom) =>
         atom.kind === attentionArousalCompletedInformationKind.kind &&
-        (atom.payload as any).claimInformationId === claim.informationId &&
-        (atom.payload as any).outcome === "attend",
+        (atom.payload as any).candidateInformationId ===
+          candidate.informationId &&
+        (atom.payload as any).outcome === "observe",
     );
     if (!frozen || !attention) return false;
     const attempt = Number((candidate.payload as any).rebuildAttempt ?? 0);
@@ -825,13 +733,13 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
   const module = defineInformationModule({
     manifest: {
       protocolVersion: 1,
-      moduleVersion: "1.0.0",
+      moduleVersion: "2.0.0",
       definitionId: "agent.heartflow.online",
       inspection: firstPartyInspection["agent.heartflow.online"],
       displayName: "在线回合编排",
       summary: "协调候选认领、上下文冻结、规划和回合终态。",
       description:
-        "消费回合候选及身份、注意力、模型和投递结果，经身份屏障冻结上下文，再请求 Planner 选择发言、等待或静默；输出消息意图、等待请求和回合终态，不执行平台传输。",
+        "只在非语义注意力观察决定 observe 后消费候选，按注册水位读取未读并经身份屏障冻结上下文，再请求 Planner 选择发言、等待或静默；输出消息意图、等待请求和回合终态，不执行平台传输。",
       settingsSchema: heartflowSettingsSchema,
       promptTemplates: [
         plannerTemplateDeclaration,
@@ -845,6 +753,8 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
         personContextCompletedInformationKind,
         turnClaimedInformationKind,
         attentionArousalCompletedInformationKind,
+        turnContextCompletedInformationKind,
+        plannerDecisionInformationKind,
         turnCompletedInformationKind,
         turnWaitingInformationKind,
         turnSilentInformationKind,
@@ -922,8 +832,6 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
             ]
           : []),
         ...[
-          observationWakeInformationKind,
-          turnCandidateInformationKind,
           personContextCompletedInformationKind,
           turnClaimedInformationKind,
           turnCompletedInformationKind,
@@ -952,205 +860,311 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
             },
           ),
         ),
-        onInformation(
+        ...[
           attentionArousalCompletedInformationKind,
+          turnContextCompletedInformationKind,
+        ].map((definition) =>
+          onInformation(
+            definition as AnyKind,
+            {
+              subscriptionId: `agent.heartflow.observe.${definition.kind}`,
+              delivery: "durable",
+            },
+            async (sourceAtom, context) => {
+              if (
+                sourceAtom.kind ===
+                attentionArousalCompletedInformationKind.kind
+              ) {
+                if (sourceAtom.payload.outcome !== "observe") return;
+                const state = await context.select(heartflowStateSelector);
+                const memories = await context.select(memorySelector);
+                await progressCandidates(
+                  state,
+                  memories,
+                  settings,
+                  options.memoryEnabled,
+                  context,
+                );
+                return;
+              }
+              const state = await context.select(heartflowStateSelector);
+              const decision = state.find(
+                (atom) =>
+                  atom.kind === attentionArousalCompletedInformationKind.kind &&
+                  atom.payload.candidateInformationId ===
+                    sourceAtom.payload.candidateInformationId &&
+                  atom.payload.outcome === "observe",
+              );
+              const candidate = state.find(
+                (atom) =>
+                  atom.kind === turnCandidateInformationKind.kind &&
+                  atom.informationId ===
+                    sourceAtom.payload.candidateInformationId,
+              );
+              const claim = state.find(
+                (atom) =>
+                  atom.kind === turnClaimedInformationKind.kind &&
+                  atom.informationId === sourceAtom.payload.claimInformationId,
+              );
+              if (!decision || !candidate || !claim) return;
+              if (await maybeInterruptPlanner(context, settings)) return;
+              const gate = {
+                ...decision.payload,
+                claimInformationId: claim.informationId,
+                turnContextInformationId: sourceAtom.informationId,
+                source: sourceAtom.payload.source,
+                attempt: candidate.payload.attempt,
+                totalWaitBudget: candidate.payload.totalWaitBudget,
+              } as any;
+              if (turnTerminalFor(gate.candidateInformationId, state)) return;
+              if (
+                state.some(
+                  (atom) =>
+                    atom.kind === turnDecisionSupersededInformationKind.kind &&
+                    atom.payload.claimInformationId === gate.claimInformationId,
+                )
+              )
+                return;
+              const blockedReasons = [
+                ...(sourceAtom.payload.muted ? ["muted"] : []),
+                ...(!sourceAtom.payload.safe ? ["unsafe"] : []),
+                ...(!sourceAtom.payload.destinationAvailable
+                  ? ["no-destination"]
+                  : []),
+              ];
+              if (blockedReasons.length) {
+                await dispatchDecision(
+                  {
+                    action: "silent",
+                    candidateInformationId: gate.candidateInformationId,
+                    claimInformationId: gate.claimInformationId,
+                    turnContextInformationId: gate.turnContextInformationId,
+                    source: gate.source,
+                    attempt: gate.attempt,
+                    totalWaitBudget: gate.totalWaitBudget,
+                    reasonCodes: blockedReasons,
+                  },
+                  state,
+                  context,
+                );
+                return;
+              }
+              let selected = [
+                ...(await context.select(plannerContextSelector)),
+              ];
+              const turn = selected.find(
+                (atom) => atom.informationId === gate.turnContextInformationId,
+              )!;
+              const authorization = options.messageAuthorizationCapability
+                ? context.use(options.messageAuthorizationCapability)
+                : undefined;
+              if (authorization?.conversation) {
+                const conversation = await authorization.conversation(turn);
+                selected = [
+                  ...selected.filter(
+                    (a) => a.kind !== conversationContextInformationKind.kind,
+                  ),
+                  conversation,
+                ];
+              }
+              const runtimeContextId = sourceAtom.references.find(
+                (reference) => reference.relation === "core:context",
+              )!.informationId;
+              const persisted = selected.find(
+                (atom) =>
+                  atom.kind === "core.model.task.requested" &&
+                  atom.payload.taskId === PLANNER_TASK_ID &&
+                  atom.payload.version === "1" &&
+                  (
+                    atom.payload.activation as {
+                      instanceId?: string;
+                      definitionId?: string;
+                    }
+                  )?.instanceId === activation.instanceId &&
+                  (atom.payload.activation as { definitionId?: string })
+                    ?.definitionId === activation.definitionId,
+              );
+              const byId = new Map(
+                selected.map((atom) => [atom.informationId, atom]),
+              );
+              const taskAtoms = persisted
+                ? (persisted.payload.contextInformationIds as string[]).map(
+                    (id) => {
+                      const atom = byId.get(id);
+                      if (!atom)
+                        throw new Error("Missing persisted Planner context");
+                      return atom;
+                    },
+                  )
+                : selected.filter(
+                    (atom) => atom.kind !== "core.model.task.requested",
+                  );
+              const result = await context
+                .use(options.modelTaskCapability)
+                .execute({
+                  task: {
+                    taskId: PLANNER_TASK_ID,
+                    version: "1",
+                    outputMode: "object",
+                    outputSchema: plannerActionSchema,
+                    allowedTiers: ["light", "heavy"],
+                  },
+                  sourceInformationId: sourceAtom.informationId,
+                  contextInformationId: runtimeContextId,
+                  activation,
+                  selectionPolicy: { tier: "light" },
+                  prompt: persisted
+                    ? (persisted.payload.prompt as unknown as CompiledPrompt)
+                    : compilePlannerPrompt(
+                        options.agentIdentity,
+                        taskAtoms,
+                        turn,
+                        options.plannerTemplate,
+                        options.plannerPlatformPolicies,
+                        options.plannerBootstrapPolicy,
+                      ),
+                  contextAtoms: taskAtoms,
+                });
+              const parsed =
+                result.status === "completed"
+                  ? plannerActionSchema.safeParse(result.output)
+                  : undefined;
+              let action: z.infer<
+                typeof plannerDecisionInformationKind.payloadSchema
+              >["action"] = parsed?.success
+                ? parsed.data
+                : { action: "silent", reason: "planner-unavailable" };
+              if (
+                action.action === "message" &&
+                !validFocusInputIndexes(
+                  action.composition.focusInputIndexes,
+                  (turn.payload as any).inputs.length,
+                )
+              )
+                action = { action: "silent", reason: "planner-unavailable" };
+              if (
+                action.action === "wait" &&
+                gate.attempt >= gate.totalWaitBudget
+              )
+                action = { action: "silent", reason: "wait-budget-exhausted" };
+              const winner = await context.commitTerminal(
+                "agent.turn.decision",
+                gate.claimInformationId,
+                plannerDecisionInformationKind,
+                {
+                  payload: {
+                    turnContextInformationId: sourceAtom.informationId,
+                    action,
+                  },
+                  references: [
+                    {
+                      relation: "core:uses-context",
+                      informationId: result.terminalInformationId,
+                    },
+                    {
+                      relation: "core:status-of",
+                      informationId: gate.claimInformationId,
+                    },
+                  ],
+                },
+              );
+              if (
+                winner.kind !== plannerDecisionInformationKind.kind ||
+                winner.payload.turnContextInformationId !==
+                  sourceAtom.informationId
+              )
+                return;
+              action = plannerDecisionInformationKind.payloadSchema.parse(
+                winner.payload,
+              ).action;
+              if (
+                action.action === "message" &&
+                action.target &&
+                action.target.kind !== "current"
+              ) {
+                const routed = authorization?.route
+                  ? await authorization.route(turn, winner)
+                  : { status: "failed", reason: "target-unavailable" };
+                if (routed.status === "failed") {
+                  await context.commitTerminal(
+                    "agent.turn.terminal",
+                    gate.candidateInformationId,
+                    turnFailedInformationKind,
+                    {
+                      payload: {
+                        candidateInformationId: gate.candidateInformationId,
+                        claimInformationId: gate.claimInformationId,
+                        scopeKey: String(turn.payload.scopeKey),
+                        reason: routed.reason ?? "target-unavailable",
+                      },
+                      references: terminalReferences(
+                        gate.candidateInformationId,
+                        gate.claimInformationId,
+                      ),
+                    },
+                  );
+                }
+                return;
+              }
+            },
+          ),
+        ),
+        onInformation(
+          plannerDecisionInformationKind,
           {
-            subscriptionId: "agent.heartflow.dispatch.decision",
+            subscriptionId: "agent.heartflow.dispatch-plan",
             delivery: "durable",
           },
-          async (decision, context) => {
-            if (await maybeInterruptPlanner(context, settings)) return;
-            const gate = decision.payload as AttentionArousalPayload;
+          async (plan, context) => {
             const state = await context.select(heartflowStateSelector);
-            if (turnTerminalFor(gate.candidateInformationId, state)) return;
-            if (
-              state.some(
-                (atom) =>
-                  atom.kind === turnDecisionSupersededInformationKind.kind &&
-                  atom.payload.claimInformationId === gate.claimInformationId,
-              )
-            )
-              return;
-            if (gate.outcome !== "attend") {
-              await dispatchDecision(decision, state, context);
-              return;
-            }
-            let selected = [...(await context.select(plannerContextSelector))];
-            const turn = selected.find(
-              (atom) => atom.informationId === gate.turnContextInformationId,
-            )!;
-            const authorization = options.messageAuthorizationCapability
-              ? context.use(options.messageAuthorizationCapability)
-              : undefined;
-            if (authorization?.conversation) {
-              const conversation = await authorization.conversation(turn);
-              selected = [
-                ...selected.filter(
-                  (a) => a.kind !== conversationContextInformationKind.kind,
-                ),
-                conversation,
-              ];
-            }
-            const runtimeContextId = decision.references.find(
-              (reference) => reference.relation === "core:context",
-            )!.informationId;
-            const persisted = selected.find(
+            const turn = state.find(
               (atom) =>
-                atom.kind === "core.model.task.requested" &&
-                atom.payload.taskId === PLANNER_TASK_ID &&
-                atom.payload.version === "1" &&
-                (
-                  atom.payload.activation as {
-                    instanceId?: string;
-                    definitionId?: string;
-                  }
-                )?.instanceId === activation.instanceId &&
-                (atom.payload.activation as { definitionId?: string })
-                  ?.definitionId === activation.definitionId,
+                atom.kind === turnContextCompletedInformationKind.kind &&
+                atom.informationId === plan.payload.turnContextInformationId,
             );
-            const byId = new Map(
-              selected.map((atom) => [atom.informationId, atom]),
+            if (!turn) return;
+            const candidate = state.find(
+              (atom) =>
+                atom.kind === turnCandidateInformationKind.kind &&
+                atom.informationId === turn.payload.candidateInformationId,
             );
-            const taskAtoms = persisted
-              ? (persisted.payload.contextInformationIds as string[]).map(
-                  (id) => {
-                    const atom = byId.get(id);
-                    if (!atom)
-                      throw new Error("Missing persisted Planner context");
-                    return atom;
-                  },
-                )
-              : selected.filter(
-                  (atom) => atom.kind !== "core.model.task.requested",
-                );
-            const result = await context
-              .use(options.modelTaskCapability)
-              .execute({
-                task: {
-                  taskId: PLANNER_TASK_ID,
-                  version: "1",
-                  outputMode: "object",
-                  outputSchema: plannerActionSchema,
-                  allowedTiers: ["light", "heavy"],
-                },
-                sourceInformationId: decision.informationId,
-                contextInformationId: runtimeContextId,
-                activation,
-                selectionPolicy: { tier: "light" },
-                prompt: persisted
-                  ? (persisted.payload.prompt as unknown as CompiledPrompt)
-                  : compilePlannerPrompt(
-                      options.agentIdentity,
-                      taskAtoms,
-                      turn,
-                      options.plannerTemplate,
-                      options.plannerPlatformPolicies,
-                      options.plannerBootstrapPolicy,
-                    ),
-                contextAtoms: taskAtoms,
-              });
-            const parsed =
-              result.status === "completed"
-                ? plannerActionSchema.safeParse(result.output)
-                : undefined;
-            let action: z.infer<
-              typeof plannerDecisionInformationKind.payloadSchema
-            >["action"] = parsed?.success
-              ? parsed.data
-              : { action: "silent", reason: "planner-unavailable" };
-            if (
-              action.action === "message" &&
-              !validFocusInputIndexes(
-                action.composition.focusInputIndexes,
-                (turn.payload as any).inputs.length,
-              )
-            )
-              action = { action: "silent", reason: "planner-unavailable" };
-            if (
-              action.action === "wait" &&
-              gate.attempt >= gate.totalWaitBudget
-            )
-              action = { action: "silent", reason: "wait-budget-exhausted" };
-            const winner = await context.commitTerminal(
-              "agent.turn.decision",
-              gate.claimInformationId,
-              plannerDecisionInformationKind,
-              {
-                payload: { gateInformationId: decision.informationId, action },
-                references: [
-                  {
-                    relation: "core:uses-context",
-                    informationId: result.terminalInformationId,
-                  },
-                  {
-                    relation: "core:status-of",
-                    informationId: gate.claimInformationId,
-                  },
-                ],
-              },
+            const claim = state.find(
+              (atom) =>
+                atom.kind === turnClaimedInformationKind.kind &&
+                atom.informationId === turn.payload.claimInformationId,
             );
-            if (
-              winner.kind !== plannerDecisionInformationKind.kind ||
-              winner.payload.gateInformationId !== decision.informationId
-            )
-              return;
-            action = plannerDecisionInformationKind.payloadSchema.parse(
-              winner.payload,
-            ).action;
-            if (
-              action.action === "message" &&
-              action.target &&
-              action.target.kind !== "current"
-            ) {
-              const routed = authorization?.route
-                ? await authorization.route(turn, winner)
-                : { status: "failed", reason: "target-unavailable" };
-              if (routed.status === "failed") {
-                await context.commitTerminal(
-                  "agent.turn.terminal",
-                  gate.candidateInformationId,
-                  turnFailedInformationKind,
-                  {
-                    payload: {
-                      candidateInformationId: gate.candidateInformationId,
-                      claimInformationId: gate.claimInformationId,
-                      scopeKey: String(turn.payload.scopeKey),
-                      reason: routed.reason ?? "target-unavailable",
-                    },
-                    references: terminalReferences(
-                      gate.candidateInformationId,
-                      gate.claimInformationId,
-                    ),
-                  },
-                );
-              }
-              return;
-            }
-            const payload = {
-              ...decision.payload,
-              outcome:
-                action.action === "message"
-                  ? "attend"
-                  : action.action === "wait"
-                    ? "defer"
-                    : "ignore",
+            if (!candidate || !claim) return;
+            const action = plan.payload.action;
+            const dispatch: PlannerDispatch = {
+              action: action.action,
+              candidateInformationId: candidate.informationId,
+              claimInformationId: claim.informationId,
+              turnContextInformationId: turn.informationId,
+              source: turn.payload.source,
+              attempt: Number(candidate.payload.attempt),
+              totalWaitBudget: Number(candidate.payload.totalWaitBudget),
               reasonCodes: [action.reason],
-              totalWaitBudget: gate.totalWaitBudget,
               ...(action.action === "wait"
                 ? {
                     delayMs: action.waitSeconds * 1000,
                     dueAt: new Date(
-                      Date.parse(winner.occurredAt) + action.waitSeconds * 1000,
+                      Date.parse(plan.occurredAt) + action.waitSeconds * 1000,
                     ).toISOString(),
                   }
                 : {}),
             };
-            const current = await context.select(heartflowStateSelector);
             await dispatchDecision(
-              { ...decision, payload },
-              current,
+              dispatch,
+              state,
               context,
-              action.action === "message" ? action.composition : undefined,
+              action.action === "message"
+                ? {
+                    ...action.composition,
+                    focusInputIndexes: [
+                      ...action.composition.focusInputIndexes,
+                    ],
+                  }
+                : undefined,
             );
           },
         ),
@@ -1234,7 +1248,13 @@ async function progressCandidates(
     (a) =>
       a.kind === turnCandidateInformationKind.kind &&
       !turnTerminalFor(a.informationId, atoms) &&
-      a.payload.managementAuthorizationId === undefined,
+      a.payload.managementAuthorizationId === undefined &&
+      atoms.some(
+        (decision) =>
+          decision.kind === attentionArousalCompletedInformationKind.kind &&
+          decision.payload.candidateInformationId === a.informationId &&
+          decision.payload.outcome === "observe",
+      ),
   );
   const scopes = new Set(candidates.map((a) => String(a.payload.scopeKey)));
   for (const scope of scopes) {
@@ -1242,20 +1262,8 @@ async function progressCandidates(
       .filter((a) => a.payload.scopeKey === scope)
       .sort(compareCandidates);
     const winner = open.at(-1)!;
-    // 仅恢复路径合并旧积压。新输入正常由 Heartbeat 的开放槽保留到下一观察。
-    const sourceInformationIds = [
-      ...new Set(
-        open.flatMap(
-          (a) => (a.payload as any).sourceInformationIds as string[],
-        ),
-      ),
-    ];
-    const merged = {
-      ...winner,
-      payload: { ...winner.payload, sourceInformationIds },
-    };
     await progressCandidate(
-      merged,
+      winner,
       atoms,
       memories,
       settings,
@@ -1298,9 +1306,27 @@ async function progressCandidate(
   if (payload.managementAuthorizationId !== undefined) return;
   const runtimeContext = referenced(candidate, "core:context", map)[0];
   if (runtimeContext === undefined) return;
-  let effectiveSourceInformationIds = [
-    ...(payload.sourceInformationIds as string[]),
-  ];
+  const scopedInbounds = atoms.filter(
+    (atom) =>
+      atom.kind === inboundTextInformationKind.kind &&
+      sameScope((atom.payload as any).source, {
+        platform: payload.platform,
+        adapterId: payload.adapterId,
+        destination: payload.destination,
+      }),
+  );
+  const upperIndex = scopedInbounds.findIndex(
+    (atom) => atom.informationId === payload.unreadThroughInformationId,
+  );
+  if (upperIndex < 0) return;
+  let effectiveSourceInformationIds = scopedInbounds
+    .slice(
+      Math.max(0, upperIndex - Number(payload.unreadCount) + 1),
+      upperIndex + 1,
+    )
+    .map((atom) => atom.informationId);
+  if (effectiveSourceInformationIds.length !== Number(payload.unreadCount))
+    return;
 
   const claims = atoms
     .filter(
@@ -1377,13 +1403,6 @@ async function progressCandidate(
             : { contextInformationId: oldContext.informationId }),
         },
       );
-      effectiveSourceInformationIds = [
-        ...new Set([
-          ...((latestCandidate.payload as any)
-            .sourceInformationIds as string[]),
-          ...effectiveSourceInformationIds,
-        ]),
-      ];
     }
   }
 
@@ -1436,29 +1455,6 @@ async function progressCandidate(
       (i) => i.informationId,
     );
     payload.asOf = frozenContext.payload.asOf;
-  } else {
-    const wakeSources = atoms
-      .filter(
-        (a) =>
-          a.kind === observationWakeInformationKind.kind &&
-          a.references.some(
-            (r) =>
-              r.relation === "agent:turn-candidate" &&
-              r.informationId === candidate.informationId,
-          ),
-      )
-      .flatMap((a) =>
-        a.references
-          .filter((r) => r.relation === "core:uses-context")
-          .map((r) => r.informationId),
-      );
-    effectiveSourceInformationIds = [
-      ...new Set([...effectiveSourceInformationIds, ...wakeSources]),
-    ];
-    for (const id of wakeSources) {
-      const occurredAt = map.get(id)?.occurredAt;
-      if (occurredAt && occurredAt > payload.asOf) payload.asOf = occurredAt;
-    }
   }
 
   await context.registerOnce(
@@ -1521,73 +1517,11 @@ async function progressCandidate(
   const text = completeInputs
     .map(({ inbound }) => (inbound.payload as any).text as string)
     .join("\n");
-  const selfId = source.selfId as string | undefined;
+  const signals = new Set<string>(payload.signals);
   const mentionedSelf =
-    selfId !== undefined &&
-    (source.mentions ?? []).some(
-      (mention: any) => mention.kind === "user" && mention.id === selfId,
-    );
-  const deliveredMessageIds = new Set(
-    atoms
-      .filter(({ kind }) => kind === "core.delivery.delivered")
-      .flatMap((atom) => {
-        const id = (atom.payload as any).platformMessageId;
-        return typeof id === "string" ? [id] : [];
-      }),
-  );
-  const repliedToSelf =
-    source.replyTo !== undefined &&
-    ((selfId !== undefined && source.replyTo.senderId === selfId) ||
-      deliveredMessageIds.has(source.replyTo.platformMessageId));
-  const normalizedText = text.toLocaleLowerCase();
-  const namedSelf = settings.botNames.some((name) =>
-    normalizedText.includes(name.toLocaleLowerCase()),
-  );
+    signals.has("mention-self") || signals.has("mention-all");
+  const repliedToSelf = signals.has("reply-self");
   const asOfMs = Date.parse(payload.asOf);
-  const recentStartMs = asOfMs - 5 * 60_000;
-  const recentInbound = atoms.filter(
-    (atom) =>
-      atom.kind === inboundTextInformationKind.kind &&
-      Date.parse(atom.occurredAt) >= recentStartMs &&
-      Date.parse(atom.occurredAt) <= asOfMs &&
-      sameScope((atom.payload as any).source, source),
-  );
-  const recentDelivered = atoms.filter(
-    (atom) =>
-      atom.kind === "core.delivery.delivered" &&
-      Date.parse(atom.occurredAt) >= recentStartMs &&
-      Date.parse(atom.occurredAt) <= asOfMs &&
-      sameDeliveryScope(atom.payload as any, source),
-  );
-  const intervalInbounds = atoms
-    .filter(
-      (atom) =>
-        atom.kind === inboundTextInformationKind.kind &&
-        Date.parse(atom.occurredAt) >= asOfMs - 30 * 60_000 &&
-        Date.parse(atom.occurredAt) <= asOfMs &&
-        sameScope((atom.payload as any).source, source),
-    )
-    .sort(
-      (left, right) =>
-        Date.parse(left.occurredAt) - Date.parse(right.occurredAt),
-    );
-  const intervals = intervalInbounds.slice(1).flatMap((atom, index) => {
-    const interval =
-      Date.parse(atom.occurredAt) -
-      Date.parse(intervalInbounds[index]!.occurredAt);
-    return interval >= 2_000 ? [interval] : [];
-  });
-  const averageIntervalMs =
-    intervals.length === 0
-      ? 30_000
-      : Math.max(
-          30_000,
-          intervals.reduce((sum, value) => sum + value, 0) / intervals.length,
-        );
-  const lastInboundAt = intervalInbounds.at(-1)?.occurredAt;
-  const idleReachedAverage =
-    lastInboundAt !== undefined &&
-    asOfMs - Date.parse(lastInboundAt) >= averageIntervalMs;
   const isGroup = source.destination?.kind === "group";
   // Web and other point-to-agent transports are direct conversations just
   // like platform private messages; only an explicit group uses group policy.
@@ -1595,27 +1529,28 @@ async function progressCandidate(
   const safe = completeInputs.every(
     ({ identity }) => (identity.payload as any).status !== "failed",
   );
-  let focus = isGroup
-    ? activeFocus(atoms, payload.scopeKey, payload.asOf)
-    : undefined;
-  const directInput = completeInputs.findLast(({ inbound }) => {
-    const p = inboundTextInformationKind.payloadSchema.parse(inbound.payload);
-    return (
-      settings.botNames.some((name) =>
-        p.text.toLocaleLowerCase().includes(name.toLocaleLowerCase()),
-      ) ||
-      (p.source.selfId !== undefined &&
-        (p.source.mentions?.some(
-          (m: { kind: string; id?: string }) =>
-            m.kind === "user" && m.id === p.source.selfId,
-        ) ||
-          p.source.replyTo?.senderId === p.source.selfId)) ||
-      (p.source.replyTo !== undefined &&
-        deliveredMessageIds.has(p.source.replyTo.platformMessageId))
-    );
-  });
+  const observation = atoms.find(
+    (atom) =>
+      atom.kind === attentionArousalCompletedInformationKind.kind &&
+      atom.payload.candidateInformationId === candidate.informationId &&
+      atom.payload.outcome === "observe",
+  );
+  let focus =
+    isGroup && observation?.payload.focusState === "active"
+      ? referenced(observation, "core:uses-context", map).find(
+          (atom) =>
+            atom.informationId === observation.payload.focusInformationId,
+        )
+      : undefined;
+  const directInput =
+    mentionedSelf || repliedToSelf
+      ? (completeInputs.find(({ inbound }) =>
+          isImmediateObservation((inbound.payload as any).source),
+        ) ?? completeInputs.at(-1))
+      : undefined;
   if (isGroup && directInput) {
     const direct = directInput.inbound;
+    const focusStartedAt = context.now().toISOString();
     const opened = await context.registerOnce(
       "agent.attention.focus.open",
       direct.informationId,
@@ -1624,15 +1559,11 @@ async function progressCandidate(
         payload: {
           scopeKey: payload.scopeKey,
           generation: direct.informationId,
-          startedAt: direct.occurredAt,
+          startedAt: focusStartedAt,
           expiresAt: new Date(
-            Date.parse(direct.occurredAt) + settings.focusIdleMs,
+            Date.parse(focusStartedAt) + settings.focusIdleMs,
           ).toISOString(),
-          reason: mentionedSelf
-            ? "mentioned-self"
-            : repliedToSelf
-              ? "replied-to-self"
-              : "named-self",
+          reason: mentionedSelf ? "mentioned-self" : "replied-to-self",
           sourceInformationId: direct.informationId,
         },
         references: [
@@ -1644,21 +1575,8 @@ async function progressCandidate(
         contextInformationId: runtimeContext.informationId,
       },
     );
-    focus = activeFocus(
-      [
-        ...atoms.filter((a) => a.informationId !== opened.informationId),
-        opened,
-      ],
-      payload.scopeKey,
-      payload.asOf,
-    );
+    focus = opened;
   }
-  const effectiveFrequency = resolveEffectiveFrequency(
-    settings,
-    source,
-    payload.asOf,
-    focus !== undefined,
-  );
   const backlog = assessInputBacklog(
     completeInputs.map(({ inbound }) => inbound.occurredAt),
     context.now().toISOString(),
@@ -1711,6 +1629,7 @@ async function progressCandidate(
             ...copyOptionalIdentity(identity.payload as any),
           },
         })),
+        observedThroughInformationId: payload.unreadThroughInformationId,
         text,
         source,
         messageCount: completeInputs.length,
@@ -1725,12 +1644,6 @@ async function progressCandidate(
           : {}),
         mentionedSelf,
         repliedToSelf,
-        namedSelf,
-        recentSelfReplies: recentDelivered.length,
-        recentWindowMessages: recentInbound.length + recentDelivered.length,
-        idleReachedAverage,
-        frequency: effectiveFrequency.frequency,
-        frequencyRuleIndex: effectiveFrequency.ruleIndex,
         muted: settings.muted,
         safe,
         destinationAvailable: source.destination !== undefined,
@@ -1779,7 +1692,7 @@ async function progressCandidate(
 }
 
 async function dispatchDecision(
-  decision: DeepReadonly<InformationAtom>,
+  payload: PlannerDispatch,
   atoms: readonly DeepReadonly<InformationAtom>[],
   context: InformationModuleHandlerContext,
   composition?: Extract<
@@ -1787,7 +1700,6 @@ async function dispatchDecision(
     { action: "message" }
   >["composition"],
 ) {
-  const payload = decision.payload as AttentionArousalPayload;
   const candidate = atoms.find(
     (atom) => atom.informationId === payload.candidateInformationId,
   );
@@ -1811,12 +1723,12 @@ async function dispatchDecision(
     claimInformationId: claim.informationId,
     scopeKey: candidatePayload.scopeKey,
   };
-  if (payload.outcome === "attend") {
+  if (payload.action === "message") {
     if (!composition)
-      throw new Error("Attend decision requires composition intent");
+      throw new Error("Message decision requires composition intent");
     const targetInput = (turnContext.payload as any).inputs.at(-1);
     if (targetInput === undefined)
-      throw new Error("Attend decision requires a target turn input");
+      throw new Error("Message decision requires a target turn input");
     await context.registerOnce(
       "agent.heartflow.message-intent",
       claim.informationId,
@@ -1855,7 +1767,7 @@ async function dispatchDecision(
     );
     return;
   }
-  if (payload.outcome === "defer") {
+  if (payload.action === "wait") {
     if (payload.dueAt === undefined || payload.delayMs === undefined)
       throw new Error("Wait decision requires dueAt and delayMs");
     const sourceInformationIds = (turnContext.payload as any).inputs.map(
@@ -1869,7 +1781,7 @@ async function dispatchDecision(
         payload: {
           dueAt: payload.dueAt,
           delayMs: payload.delayMs,
-          reason: payload.reasonCodes[0] ?? "score-below-speak-threshold",
+          reason: payload.reasonCodes[0] ?? "await-more-context",
           attempt: payload.attempt + 1,
           totalWaitBudget: payload.totalWaitBudget,
           wakePolicy: payload.wakePolicy ?? "recheckAt",
@@ -1902,7 +1814,7 @@ async function dispatchDecision(
     candidate.informationId,
     turnSilentInformationKind,
     {
-      payload: { ...terminalInput, reasonCodes: payload.reasonCodes },
+      payload: { ...terminalInput, reasonCodes: [...payload.reasonCodes] },
       references: terminalReferences(
         candidate.informationId,
         claim.informationId,
@@ -2083,15 +1995,6 @@ function traceCandidateIds(
         queue.push(reference.informationId);
     }
   }
-  for (const atom of atoms) {
-    if (
-      atom.kind === turnCandidateInformationKind.kind &&
-      ((atom.payload as any).sourceInformationIds as string[]).some((id) =>
-        visited.has(id),
-      )
-    )
-      candidates.add(atom.informationId);
-  }
   return candidates;
 }
 
@@ -2169,7 +2072,6 @@ import {
   TURN_TERMINAL_KINDS,
   referenced,
   sameScope,
-  sameDeliveryScope,
   identityTerminalFor,
   hasExhaustedStatus,
   turnTerminalFor,

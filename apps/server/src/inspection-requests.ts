@@ -168,27 +168,27 @@ async function projectRequest(
       : undefined;
   const expectedSource =
     browser.mode === "planner"
-      ? "agent.attention.arousal.completed"
+      ? "agent.turn.context.completed"
       : "agent.message.intent.requested";
   const validSource =
     source?.kind === expectedSource &&
     uniqueReference(source, "core:context", runtimeContextId)
       ? source
       : undefined;
-  const turnId = validSource
-    ? textAt(
-        validSource.payload,
-        browser.mode === "planner"
-          ? "turnContextInformationId"
-          : "turn.contextInformationId",
-      )
-    : undefined;
+  const turnId =
+    browser.mode === "planner"
+      ? validSource?.informationId
+      : validSource
+        ? textAt(validSource.payload, "turn.contextInformationId")
+        : undefined;
   const turnCandidate =
-    turnId &&
-    validSource &&
-    references(validSource, "core:uses-context", turnId)
-      ? await ledger.get(turnId)
-      : undefined;
+    browser.mode === "planner"
+      ? validSource
+      : turnId &&
+          validSource &&
+          references(validSource, "core:uses-context", turnId)
+        ? await ledger.get(turnId)
+        : undefined;
   const sourceTurn =
     browser.mode === "planner"
       ? validSource?.payload
@@ -326,7 +326,7 @@ async function projectRequest(
     const plan = plans.find(
       (atom) =>
         validSource &&
-        field(atom.payload, "gateInformationId") ===
+        field(atom.payload, "turnContextInformationId") ===
           validSource.informationId &&
         uniqueReference(atom, "core:caused-by", validSource.informationId) &&
         uniqueReference(

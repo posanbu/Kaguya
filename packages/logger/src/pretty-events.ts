@@ -20,10 +20,15 @@ const PANELS: Readonly<Record<string, PrettyEventPanel>> = {
     fieldsTitle: "决策",
     contentTitle: "决策依据",
   },
-  "turn.decision": {
-    title: "注意力 · 回合评估",
+  "attention.observation": {
+    title: "注意力 · 观察结果",
     color: 36,
-    fieldsTitle: "评估结果",
+    fieldsTitle: "观察事实",
+  },
+  "attention.arousal.state": {
+    title: "注意力 · 唤醒状态",
+    color: 36,
+    fieldsTitle: "状态事实",
   },
   "message.assistant": {
     title: "回复生成 · 输出",

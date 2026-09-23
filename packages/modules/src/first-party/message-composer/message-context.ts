@@ -16,6 +16,7 @@ import type {
 import {
   defineInformationSelector,
   type InformationSelectorContext,
+  type InformationSelectorLedger,
   type InformationPromptRendererDefinition,
 } from "@kaguya/sdk";
 
@@ -71,199 +72,213 @@ export const turnMessageContextSelector = defineInformationSelector({
     )
       throw new Error("Message intent must reference its frozen turn context");
     const turn = turns[0]!;
-    const inputs = frozenTurnInputs([turn], intent);
-    const context = await ledger.related({
-      from: [turn.informationId],
-      relation: "core:uses-context",
-      direction: "outgoing",
-      limit: 1000,
+    return selectFrozenTurnMessageContext({
+      ledger,
+      sourceInformationId: sourceAtom.informationId,
+      turn,
+      intent,
     });
-    const byId = new Map(context.map((atom) => [atom.informationId, atom]));
-    for (const input of inputs) {
-      if (
-        byId.get(input.informationId)?.kind !== inboundTextInformationKind.kind
-      )
-        throw new Error(
-          `Missing frozen turn input reference: ${input.informationId}`,
-        );
-    }
-    // 意图列出的记忆必须由冻结上下文授权，不从当前会话临时推测。
-    for (const id of intent.memoryInformationIds) {
-      if (!byId.has(id))
-        throw new Error(`Missing frozen memory reference: ${id}`);
-      const memory = byId.get(id)!;
-      if (
-        memory.kind === inboundTextInformationKind.kind &&
-        !isMemorySourceInScope(memory, intent.target, String(turn.payload.asOf))
-      )
-        throw new Error(
-          "Frozen memory source is outside the turn scope or cutoff",
-        );
-    }
-    const inputIds = new Set(inputs.map((atom) => atom.informationId));
-    const memoryIds = new Set(intent.memoryInformationIds);
-    for (const id of intent.composition.focusInformationIds) {
-      if (!inputIds.has(id))
-        throw new Error(`Composition focus is outside frozen turn: ${id}`);
-    }
-    const recent = await ledger.find({
-      kinds: [
-        inboundTextInformationKind.kind,
-        assistantTextInformationKind.kind,
-      ],
-      occurredBefore: String(turn.payload.asOf),
-      payloadContains: { source: intent.target },
-      order: "desc",
-      limit: 120,
-    });
-    const visible = (
-      await Promise.all(
-        recent.map(async (atom) =>
-          atom.kind !== assistantTextInformationKind.kind ||
-          (await assistantWasDelivered(atom, ledger, String(turn.payload.asOf)))
-            ? atom
-            : undefined,
-        ),
-      )
-    ).filter(
-      (atom): atom is DeepReadonly<InformationAtom> => atom !== undefined,
-    );
-    const quotes: DeepReadonly<InformationAtom>[] = [];
-    for (const input of inputs) {
-      const quoteId = inboundTextInformationKind.payloadSchema.parse(
-        input.payload,
-      ).source.replyTo?.platformMessageId;
-      if (quoteId === undefined) continue;
-      const [inbound, receipts] = await Promise.all([
-        ledger.find({
-          kinds: [inboundTextInformationKind.kind],
-          occurredBefore: new Date(
-            Date.parse(String(turn.payload.asOf)) + 1,
-          ).toISOString(),
-          payloadContains: {
-            source: { ...intent.target, platformMessageId: quoteId },
-          },
-          order: "desc",
-          limit: 2,
-        }),
-        ledger.find({
-          kinds: ["core.delivery.delivered"],
-          occurredBefore: new Date(
-            Date.parse(String(turn.payload.asOf)) + 1,
-          ).toISOString(),
-          payloadContains: {
-            platform: intent.target.platform,
-            adapterId: intent.target.adapterId,
-            target: intent.target.destination,
-            ok: true,
-            platformMessageId: quoteId,
-          },
-          order: "desc",
-          limit: 2,
-        }),
-      ]);
-      // 保留有界冲突证据，避免 compiler 仅看到历史预算留下的一条候选而重新猜测。
-      const conflictEvidence = [
-        ...new Map(
-          [...inputs, ...inbound, ...receipts]
-            .filter(
-              (atom) =>
-                beforeQuoteCutoff(atom, String(turn.payload.asOf)) &&
-                (atom.kind === inboundTextInformationKind.kind
-                  ? sameMessageTarget(atom.payload.source, intent.target) &&
-                    inboundTextInformationKind.payloadSchema.safeParse(
-                      atom.payload,
-                    ).data?.source.platformMessageId === quoteId
-                  : atom.kind === "core.delivery.delivered" &&
-                    atom.payload.ok === true &&
-                    atom.payload.platformMessageId === quoteId &&
-                    sameMessageTarget(
-                      { ...atom.payload, destination: atom.payload.target },
-                      intent.target,
-                    )),
-            )
-            .map((atom) => [atom.informationId, atom]),
-        ).values(),
-      ];
-      if (conflictEvidence.length > 1) {
-        quotes.push(...conflictEvidence);
-        continue;
-      }
-      if (inbound.length >= 2 || receipts.length >= 2) continue;
-      const candidates = [...inputs, ...inbound, ...receipts];
-      for (const receipt of receipts) {
-        if (
-          receipt.kind !== "core.delivery.delivered" ||
-          receipt.payload.ok !== true ||
-          !sameMessageTarget(
-            { ...receipt.payload, destination: receipt.payload.target },
-            intent.target,
-          ) ||
-          !beforeQuoteCutoff(receipt, String(turn.payload.asOf))
-        )
-          continue;
-        const requests = await ledger.related({
-          from: [receipt.informationId],
-          relation: "core:status-of",
-          direction: "outgoing",
-          limit: 2,
-        });
-        if (requests.length !== 1) continue;
-        const request = requests[0]!;
-        candidates.push(request);
-        if (
-          request.kind !== "core.delivery.requested" ||
-          !sameMessageTarget(request.payload, intent.target) ||
-          !beforeQuoteCutoff(request, String(turn.payload.asOf))
-        )
-          continue;
-        const assistants = await ledger.related({
-          from: [request.informationId],
-          relation: "core:caused-by",
-          direction: "outgoing",
-          limit: 2,
-        });
-        if (assistants.length === 1) {
-          candidates.push(assistants[0]!);
-          if (assistants[0]!.kind === "agent.message.content.confirmed") {
-            candidates.push(
-              ...(await ledger.related({
-                from: [assistants[0]!.informationId],
-                relation: "core:caused-by",
-                direction: "outgoing",
-                limit: 2,
-              })),
-            );
-          }
-        }
-      }
-      const quote = resolveMessageQuote(
-        candidates,
-        quoteId,
-        intent.target,
-        String(turn.payload.asOf),
-      );
-      if (quote) quotes.push(...quote.provenance);
-    }
-    const history = fitHistoryBudget(
-      visible.filter(
-        (atom) =>
-          !inputIds.has(atom.informationId) &&
-          !memoryIds.has(atom.informationId),
-      ),
-    );
-    return [
-      ...new Set([
-        sourceAtom.informationId,
-        turn.informationId,
-        ...inputs.map((atom) => atom.informationId),
-        ...intent.memoryInformationIds,
-        ...history.map((atom) => atom.informationId),
-        ...quotes.map((atom) => atom.informationId),
-      ]),
-    ];
   },
 });
+
+/**
+ * Select the immutable context authorized by an already-resolved turn.
+ * Callers remain responsible for proving how their source reaches `turn`;
+ * this helper deliberately does not reinterpret the source atom as an intent.
+ */
+export async function selectFrozenTurnMessageContext(options: {
+  readonly ledger: InformationSelectorLedger;
+  readonly sourceInformationId: InformationId;
+  readonly turn: DeepReadonly<InformationAtom>;
+  readonly intent: ReturnType<
+    typeof messageIntentRequestedInformationPayloadSchema.parse
+  >;
+}): Promise<readonly InformationId[]> {
+  const { ledger, sourceInformationId, turn, intent } = options;
+  const inputs = frozenTurnInputs([turn], intent);
+  const context = await ledger.related({
+    from: [turn.informationId],
+    relation: "core:uses-context",
+    direction: "outgoing",
+    limit: 1000,
+  });
+  const byId = new Map(context.map((atom) => [atom.informationId, atom]));
+  for (const input of inputs) {
+    if (byId.get(input.informationId)?.kind !== inboundTextInformationKind.kind)
+      throw new Error(
+        `Missing frozen turn input reference: ${input.informationId}`,
+      );
+  }
+  // 意图列出的记忆必须由冻结上下文授权，不从当前会话临时推测。
+  for (const id of intent.memoryInformationIds) {
+    if (!byId.has(id))
+      throw new Error(`Missing frozen memory reference: ${id}`);
+    const memory = byId.get(id)!;
+    if (
+      memory.kind === inboundTextInformationKind.kind &&
+      !isMemorySourceInScope(memory, intent.target, String(turn.payload.asOf))
+    )
+      throw new Error(
+        "Frozen memory source is outside the turn scope or cutoff",
+      );
+  }
+  const inputIds = new Set(inputs.map((atom) => atom.informationId));
+  const memoryIds = new Set(intent.memoryInformationIds);
+  for (const id of intent.composition.focusInformationIds) {
+    if (!inputIds.has(id))
+      throw new Error(`Composition focus is outside frozen turn: ${id}`);
+  }
+  const recent = await ledger.find({
+    kinds: [inboundTextInformationKind.kind, assistantTextInformationKind.kind],
+    occurredBefore: String(turn.payload.asOf),
+    payloadContains: { source: intent.target },
+    order: "desc",
+    limit: 120,
+  });
+  const visible = (
+    await Promise.all(
+      recent.map(async (atom) =>
+        atom.kind !== assistantTextInformationKind.kind ||
+        (await assistantWasDelivered(atom, ledger, String(turn.payload.asOf)))
+          ? atom
+          : undefined,
+      ),
+    )
+  ).filter((atom): atom is DeepReadonly<InformationAtom> => atom !== undefined);
+  const quotes: DeepReadonly<InformationAtom>[] = [];
+  for (const input of inputs) {
+    const quoteId = inboundTextInformationKind.payloadSchema.parse(
+      input.payload,
+    ).source.replyTo?.platformMessageId;
+    if (quoteId === undefined) continue;
+    const [inbound, receipts] = await Promise.all([
+      ledger.find({
+        kinds: [inboundTextInformationKind.kind],
+        occurredBefore: new Date(
+          Date.parse(String(turn.payload.asOf)) + 1,
+        ).toISOString(),
+        payloadContains: {
+          source: { ...intent.target, platformMessageId: quoteId },
+        },
+        order: "desc",
+        limit: 2,
+      }),
+      ledger.find({
+        kinds: ["core.delivery.delivered"],
+        occurredBefore: new Date(
+          Date.parse(String(turn.payload.asOf)) + 1,
+        ).toISOString(),
+        payloadContains: {
+          platform: intent.target.platform,
+          adapterId: intent.target.adapterId,
+          target: intent.target.destination,
+          ok: true,
+          platformMessageId: quoteId,
+        },
+        order: "desc",
+        limit: 2,
+      }),
+    ]);
+    // 保留有界冲突证据，避免 compiler 仅看到历史预算留下的一条候选而重新猜测。
+    const conflictEvidence = [
+      ...new Map(
+        [...inputs, ...inbound, ...receipts]
+          .filter(
+            (atom) =>
+              beforeQuoteCutoff(atom, String(turn.payload.asOf)) &&
+              (atom.kind === inboundTextInformationKind.kind
+                ? sameMessageTarget(atom.payload.source, intent.target) &&
+                  inboundTextInformationKind.payloadSchema.safeParse(
+                    atom.payload,
+                  ).data?.source.platformMessageId === quoteId
+                : atom.kind === "core.delivery.delivered" &&
+                  atom.payload.ok === true &&
+                  atom.payload.platformMessageId === quoteId &&
+                  sameMessageTarget(
+                    { ...atom.payload, destination: atom.payload.target },
+                    intent.target,
+                  )),
+          )
+          .map((atom) => [atom.informationId, atom]),
+      ).values(),
+    ];
+    if (conflictEvidence.length > 1) {
+      quotes.push(...conflictEvidence);
+      continue;
+    }
+    if (inbound.length >= 2 || receipts.length >= 2) continue;
+    const candidates = [...inputs, ...inbound, ...receipts];
+    for (const receipt of receipts) {
+      if (
+        receipt.kind !== "core.delivery.delivered" ||
+        receipt.payload.ok !== true ||
+        !sameMessageTarget(
+          { ...receipt.payload, destination: receipt.payload.target },
+          intent.target,
+        ) ||
+        !beforeQuoteCutoff(receipt, String(turn.payload.asOf))
+      )
+        continue;
+      const requests = await ledger.related({
+        from: [receipt.informationId],
+        relation: "core:status-of",
+        direction: "outgoing",
+        limit: 2,
+      });
+      if (requests.length !== 1) continue;
+      const request = requests[0]!;
+      candidates.push(request);
+      if (
+        request.kind !== "core.delivery.requested" ||
+        !sameMessageTarget(request.payload, intent.target) ||
+        !beforeQuoteCutoff(request, String(turn.payload.asOf))
+      )
+        continue;
+      const assistants = await ledger.related({
+        from: [request.informationId],
+        relation: "core:caused-by",
+        direction: "outgoing",
+        limit: 2,
+      });
+      if (assistants.length === 1) {
+        candidates.push(assistants[0]!);
+        if (assistants[0]!.kind === "agent.message.content.confirmed") {
+          candidates.push(
+            ...(await ledger.related({
+              from: [assistants[0]!.informationId],
+              relation: "core:caused-by",
+              direction: "outgoing",
+              limit: 2,
+            })),
+          );
+        }
+      }
+    }
+    const quote = resolveMessageQuote(
+      candidates,
+      quoteId,
+      intent.target,
+      String(turn.payload.asOf),
+    );
+    if (quote) quotes.push(...quote.provenance);
+  }
+  const history = fitHistoryBudget(
+    visible.filter(
+      (atom) =>
+        !inputIds.has(atom.informationId) && !memoryIds.has(atom.informationId),
+    ),
+  );
+  return [
+    ...new Set([
+      sourceInformationId,
+      turn.informationId,
+      ...inputs.map((atom) => atom.informationId),
+      ...intent.memoryInformationIds,
+      ...history.map((atom) => atom.informationId),
+      ...quotes.map((atom) => atom.informationId),
+    ]),
+  ];
+}
 
 export const associationMessageContextSelector = defineInformationSelector({
   selectorId: "kaguya.message.association-context",

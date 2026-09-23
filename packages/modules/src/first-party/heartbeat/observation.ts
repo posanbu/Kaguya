@@ -23,6 +23,9 @@ import {
   turnInterruptedInformationKind,
   turnDecisionInterruptedInformationKind,
   turnContextCompletedInformationKind,
+  attentionArousalCompletedInformationKind,
+  attentionArousalStateRecordedInformationKind,
+  heartbeatScheduledInformationKind,
 } from "../information-kinds.js";
 interface ObservationSource {
   platform?: string;
@@ -105,7 +108,7 @@ export const heartbeatDueSelector = defineInformationSelector({
         limit: 1,
       })
     )[0];
-    if (heartbeat === undefined) return [];
+    if (heartbeat?.kind !== heartbeatScheduledInformationKind.kind) return [];
     const runtimeContext = await ledger.related({
       from: [heartbeat.informationId],
       relation: "core:context",
@@ -120,6 +123,7 @@ export const heartbeatDueSelector = defineInformationSelector({
 });
 
 export const observationTerminals = [
+  attentionArousalCompletedInformationKind,
   turnCompletedInformationKind,
   turnWaitingInformationKind,
   turnSilentInformationKind,
@@ -171,6 +175,94 @@ export const heartbeatIdleBackoffSelector = defineInformationSelector({
       }
     }
     return selected.map((atom) => atom.informationId);
+  },
+});
+
+export const heartbeatDeferredObservationSelector = defineInformationSelector({
+  selectorId: "agent.heartbeat.deferred-observations",
+  select: async ({ sourceAtom, ledger }) => {
+    if (
+      sourceAtom.kind !== attentionArousalStateRecordedInformationKind.kind ||
+      !(sourceAtom.payload.reasonCodes as readonly string[]).includes(
+        "periodic-wake",
+      )
+    )
+      return [];
+    const selected = new Map<string, DeepReadonly<InformationAtom>>();
+    selected.set(sourceAtom.informationId, sourceAtom);
+    const heartbeatUpper = sourceAtom.payload.lastInboundInformationId as
+      string | null;
+    if (heartbeatUpper === null) return [...selected.keys()];
+
+    const outcomes = await ledger.find({
+      kinds: [attentionArousalCompletedInformationKind.kind],
+      registrationOrder: true,
+      order: "desc",
+      limit: 1000,
+    });
+    const latestByScope = new Map<string, DeepReadonly<InformationAtom>>();
+    for (const outcome of outcomes) {
+      const scopeKey = String(outcome.payload.scopeKey ?? "");
+      if (scopeKey && !latestByScope.has(scopeKey))
+        latestByScope.set(scopeKey, outcome);
+    }
+    for (const [scopeKey, outcome] of latestByScope) {
+      if (outcome.payload.outcome !== "defer") continue;
+      const candidate = (
+        await ledger.related({
+          from: [outcome.informationId],
+          relation: "core:status-of",
+          direction: "outgoing",
+          limit: 1,
+        })
+      ).find((atom) => atom.kind === turnCandidateInformationKind.kind);
+      if (!candidate) continue;
+      const runtimeContext = (
+        await ledger.related({
+          from: [candidate.informationId],
+          relation: "core:context",
+          direction: "outgoing",
+          limit: 1,
+        })
+      )[0];
+      if (!runtimeContext) continue;
+      const candidatePayload = candidate.payload as any;
+      const observed = (
+        await ledger.find({
+          kinds: [turnContextCompletedInformationKind.kind],
+          scopeKey,
+          registrationOrder: true,
+          order: "desc",
+          limit: 1,
+        })
+      )[0];
+      const watermark = observed?.payload.observedThroughInformationId as
+        string | undefined;
+      const inbounds = await ledger.find({
+        kinds: [inboundTextInformationKind.kind],
+        ...(watermark ? { afterInformationId: watermark } : {}),
+        throughInformationId: heartbeatUpper,
+        registrationOrder: true,
+        scopeKey,
+        payloadContains: {
+          source: {
+            platform: candidatePayload.platform,
+            adapterId: candidatePayload.adapterId,
+            destination: candidatePayload.destination,
+          },
+        },
+        order: "asc",
+        limit: 1000,
+      });
+      if (!inbounds.length) continue;
+      selected.set(outcome.informationId, outcome);
+      selected.set(candidate.informationId, candidate);
+      if (observed) selected.set(observed.informationId, observed);
+      selected.set(runtimeContext.informationId, runtimeContext);
+      for (const inbound of inbounds)
+        selected.set(inbound.informationId, inbound);
+    }
+    return [...selected.keys()];
   },
 });
 
@@ -241,8 +333,18 @@ export const heartbeatObservationSelector = defineInformationSelector({
       limit: 1,
     });
     const candidate = latest[0];
+    const observedContexts = await ledger.find({
+      kinds: [turnContextCompletedInformationKind.kind],
+      scopeKey,
+      registrationOrder: true,
+      order: "desc",
+      limit: 1,
+    });
     const selected = new Map(
-      [...open, ...latest].map((a) => [a.informationId, a]),
+      [...open, ...latest, ...observedContexts].map((a) => [
+        a.informationId,
+        a,
+      ]),
     );
     if (candidate) {
       const interruptedDecisions = await ledger.find({
@@ -284,51 +386,9 @@ export const heartbeatObservationSelector = defineInformationSelector({
           }
         : undefined);
     if (target) {
-      let watermark = (
-        candidate?.payload.sourceInformationIds as string[] | undefined
-      )?.at(-1);
-      // 恢复合并的来源被冻结在 claim 中；按注册位置取上界，避免回放已爬楼的迟到时间戳输入。
-      const terminal = [...selected.values()].find(
-        (a) =>
-          a.payload.candidateInformationId === candidate?.informationId &&
-          observationTerminals.some((k) => k.kind === a.kind),
-      );
-      if (terminal) {
-        const claim = (
-          await ledger.related({
-            from: [terminal.informationId],
-            relation: "agent:turn-claim",
-            direction: "outgoing",
-            limit: 1,
-          })
-        )[0];
-        const frozen = claim
-          ? (
-              await ledger.related({
-                from: [claim.informationId],
-                relation: "agent:turn-claim",
-                direction: "incoming",
-                limit: 100,
-              })
-            ).find((a) => a.kind === "agent.turn.context.completed")
-          : undefined;
-        const ids = frozen
-          ? (frozen.payload.inputs as any[]).map((i) => i.informationId)
-          : (claim?.references
-              .filter((r) => r.relation === "core:uses-context")
-              .map((r) => r.informationId) ?? []);
-        if (ids.length)
-          watermark =
-            (
-              await ledger.find({
-                kinds: [inboundTextInformationKind.kind],
-                informationIds: ids,
-                registrationOrder: true,
-                order: "desc",
-                limit: 1,
-              })
-            )[0]?.informationId ?? watermark;
-      }
+      const observed = observedContexts[0];
+      const watermark = observed?.payload.observedThroughInformationId as
+        string | undefined;
       const inbounds = await ledger.find({
         kinds: [inboundTextInformationKind.kind],
         ...(watermark ? { afterInformationId: watermark } : {}),
@@ -341,10 +401,10 @@ export const heartbeatObservationSelector = defineInformationSelector({
             destination: target.destination,
           },
         },
-        order: "desc",
+        order: "asc",
         limit: 1000,
       });
-      for (const a of [...inbounds].reverse()) selected.set(a.informationId, a);
+      for (const a of inbounds) selected.set(a.informationId, a);
     }
     for (const inbound of [...selected.values()].filter(
       (a) => a.kind === inboundTextInformationKind.kind,
@@ -396,7 +456,43 @@ export function openObservations(
       !atoms.some(
         (t) =>
           observationTerminals.some((k) => k.kind === t.kind) &&
+          !(
+            t.kind === attentionArousalCompletedInformationKind.kind &&
+            t.payload.outcome !== "defer"
+          ) &&
           t.payload.candidateInformationId === a.informationId,
       ),
   );
+}
+
+export function observationSignals(
+  source: ObservationSource,
+  state: readonly DeepReadonly<InformationAtom>[],
+): string[] {
+  const signals: string[] = [];
+  if (source.destination?.kind === "private") signals.push("private");
+  if (source.destination?.kind === "web") signals.push("web");
+  if (
+    (source.mentions ?? []).some(
+      (mention) =>
+        mention.kind === "user" &&
+        source.selfId !== undefined &&
+        mention.id === source.selfId,
+    )
+  )
+    signals.push("mention-self");
+  if ((source.mentions ?? []).some((mention) => mention.kind === "all"))
+    signals.push("mention-all");
+  if (
+    (source.selfId !== undefined &&
+      source.replyTo?.senderId === source.selfId) ||
+    (source.replyTo?.platformMessageId !== undefined &&
+      state.some(
+        (atom) =>
+          atom.kind === "core.delivery.delivered" &&
+          atom.payload.platformMessageId === source.replyTo?.platformMessageId,
+      ))
+  )
+    signals.push("reply-self");
+  return signals.length ? signals : ["passive"];
 }

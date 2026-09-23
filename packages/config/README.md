@@ -175,7 +175,7 @@ AI, Memory, platforms, and review. Module activation is configured separately
 under `modules/<instanceId>/config.json`. The development PostgreSQL command
 may add a complete safe local `runtime` only when that field is entirely absent;
 it never replaces a partially invalid runtime. Database connection, PostgreSQL
-17, strict schema v1 preparation, and Runtime Kind synchronization must pass before HTTP or any
+17, strict schema v1 and observation-protocol preparation, and Runtime Kind synchronization must pass before HTTP or any
 other ingress listens. After that preflight, an incomplete AI Profile may use
 the Web configuration UI while Runtime and adapter ingress remain stopped until a complete Profile is saved and explicitly applied.
 Corrupt stores and unsafe or inaccessible paths fail startup and are never

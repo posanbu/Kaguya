@@ -11,7 +11,7 @@ import {
 } from "@kaguya/schema";
 import { type InformationSelectorLedger } from "@kaguya/sdk";
 import {
-  observationWakeInformationKind,
+  attentionArousalCompletedInformationKind,
   chatScopeEntityInformationKind,
   inboundTextInformationKind,
   personContextCompletedInformationKind,
@@ -30,73 +30,31 @@ export async function hydrateCandidate(
   remember(
     await related(ledger, candidate.informationId, "core:context", "outgoing"),
   );
+  const payload = candidate.payload as any;
   const inbounds = remember(
-    await related(
-      ledger,
-      candidate.informationId,
-      "core:uses-context",
-      "outgoing",
-      1_000,
-    ),
-  ).filter(({ kind }) => kind === inboundTextInformationKind.kind);
-  const source = (inbounds.at(-1)?.payload as any)?.source;
-  if (source !== undefined) {
-    const asOfMs = Date.parse((candidate.payload as any).asOf);
-    const occurredBefore = new Date(asOfMs + 1).toISOString();
-    remember(
-      await ledger.find({
-        kinds: [inboundTextInformationKind.kind],
-        occurredAfter: new Date(asOfMs - 30 * 60_000).toISOString(),
-        occurredBefore,
-        payloadContains: {
-          source: {
-            platform: source.platform,
-            adapterId: source.adapterId,
-            destination: source.destination,
-          },
+    await ledger.find({
+      kinds: [inboundTextInformationKind.kind],
+      scopeKey: payload.scopeKey,
+      registrationOrder: true,
+      ...(payload.unreadAfterInformationId
+        ? { afterInformationId: payload.unreadAfterInformationId }
+        : {}),
+      throughInformationId: payload.unreadThroughInformationId,
+      payloadContains: {
+        source: {
+          platform: payload.platform,
+          adapterId: payload.adapterId,
+          destination: payload.destination,
         },
-        order: "asc",
-        limit: 1_000,
-      }),
-    );
-    remember(
-      await ledger.find({
-        kinds: ["core.delivery.delivered"],
-        occurredAfter: new Date(asOfMs - 30 * 60_000).toISOString(),
-        occurredBefore,
-        payloadContains: {
-          ok: true,
-          platform: source.platform,
-          adapterId: source.adapterId,
-          target: source.destination,
-        },
-        order: "asc",
-        limit: 1_000,
-      }),
-    );
-    const repliedMessageId = source.replyTo?.platformMessageId;
-    if (typeof repliedMessageId === "string") {
-      remember(
-        await ledger.find({
-          kinds: ["core.delivery.delivered"],
-          occurredBefore,
-          payloadContains: {
-            ok: true,
-            platform: source.platform,
-            adapterId: source.adapterId,
-            target: source.destination,
-            platformMessageId: repliedMessageId,
-          },
-          order: "desc",
-          limit: 1,
-        }),
-      );
-    }
-  }
+      },
+      order: "asc",
+      limit: 1_000,
+    }),
+  );
   for (const inbound of inbounds) {
     await hydrateIdentityEntities(ledger, inbound, remember);
   }
-  remember(
+  const candidateStatuses = remember(
     await related(
       ledger,
       candidate.informationId,
@@ -105,6 +63,18 @@ export async function hydrateCandidate(
       10,
     ),
   );
+  for (const observation of candidateStatuses.filter(
+    (atom) => atom.kind === attentionArousalCompletedInformationKind.kind,
+  ))
+    remember(
+      await related(
+        ledger,
+        observation.informationId,
+        "core:uses-context",
+        "outgoing",
+        10,
+      ),
+    );
   const candidateLinks = remember(
     await related(
       ledger,
@@ -117,21 +87,6 @@ export async function hydrateCandidate(
   const ownClaims = candidateLinks.filter(
     (a) => a.kind === turnClaimedInformationKind.kind,
   );
-  for (const wake of candidateLinks.filter(
-    (a) => a.kind === observationWakeInformationKind.kind,
-  )) {
-    const inputs = remember(
-      await related(
-        ledger,
-        wake.informationId,
-        "core:uses-context",
-        "outgoing",
-        1000,
-      ),
-    );
-    for (const input of inputs)
-      await hydrateIdentityEntities(ledger, input, remember);
-  }
   const scopeKey = (candidate.payload as any).scopeKey;
   const focusGrants = remember(
     await ledger.find({

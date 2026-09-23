@@ -123,7 +123,6 @@ export const messageIntentRequestedInformationKind = defineInformationKind({
       required: true,
       multiple: false,
       targetKinds: [
-        "agent.attention.arousal.completed",
         "agent.turn.plan.completed",
         "agent.message.target.authorized",
       ],

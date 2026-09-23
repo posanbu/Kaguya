@@ -1,6 +1,6 @@
 /**
  * 功能概述：把已脱敏的领域字段渲染成可读的标签、列表和键值，不以 JSON 作为默认界面。
- * InspectionFields 展示服务端声明的字段；ReadableValue 递归处理习惯/评分组成等结构，
+ * InspectionFields 展示服务端声明的字段；ReadableValue 递归处理习惯等结构，
  * 保留未知标识原值，限制初始展开的数组长度。InspectionStatus 给常见结果加中文与文字状态。
  * 联想状态和检索原因使用明确中文标签；未知枚举仍保留原值。
  * 只渲染文本，不执行 HTML，也不解析来自内容的链接；原始 JSON 留给详情折叠区。
@@ -8,9 +8,8 @@
 import type { JsonValue } from "@kaguya/schema";
 import { StatusBadge } from "./components/ui.js";
 const words: Record<string, string> = {
-  attend: "进入规划",
+  observe: "查看未读",
   defer: "延后观察",
-  ignore: "忽略",
   completed: "已完成",
   complete: "已完成",
   failed: "失败",
@@ -39,11 +38,8 @@ const words: Record<string, string> = {
   "retrieval-failed": "检索失败",
   "no-candidates": "没有候选",
   "no-match": "没有匹配项",
-  "score-below-threshold": "分数未达到阈值",
-  "score-threshold-met": "达到分数阈值",
   "wait-budget-exhausted": "等待预算已用尽",
   muted: "已静音",
-  "frequency-zero": "频率为零",
   "private-conversation": "私聊输入",
   "topic-expired": "话题已过期",
   "no-response-needed": "无需回复",
@@ -59,12 +55,6 @@ const words: Record<string, string> = {
   web: "网页",
 };
 const labels: Record<string, string> = {
-  relevance: "相关性",
-  content: "内容",
-  pressure: "积压压力",
-  recentPresencePenalty: "近期在场惩罚",
-  frequencyFactor: "频率因子",
-  preFrequencyScore: "频率调整前分数",
   situation: "情境",
   style: "表达方式",
   occurrences: "出现次数",
@@ -100,7 +90,7 @@ export function statusLabel(value: string) {
 export function InspectionStatus({ value }: { value: string }) {
   const tone = ["failed", "invalid", "rejected"].includes(value)
     ? "error"
-    : ["completed", "complete", "attend", "validated"].includes(value)
+    : ["completed", "complete", "observe", "validated"].includes(value)
       ? "success"
       : ["defer", "wait", "degraded", "ambiguous"].includes(value)
         ? "warning"

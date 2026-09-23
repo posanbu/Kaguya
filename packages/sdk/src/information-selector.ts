@@ -17,9 +17,12 @@ import type {
 export interface InformationFindQuery {
   /** 只读无 status-of / terminal 的开放原子投影；scopeKey 在投影索引内过滤。 */
   readonly openOnly?: boolean;
-  /** 按持久化位置排序；afterInformationId 为排他的已注册水位，不受消息时间戳影响。 */
+  /** 按持久化位置排序；水位按注册位置比较，不受消息时间戳影响。 */
   readonly registrationOrder?: boolean;
+  /** 排他的注册水位下界。 */
   readonly afterInformationId?: InformationId;
+  /** 包含本条记录的注册水位上界。 */
+  readonly throughInformationId?: InformationId;
   readonly scopeKey?: string;
   readonly informationIds?: readonly InformationId[];
   readonly kinds?: readonly string[];

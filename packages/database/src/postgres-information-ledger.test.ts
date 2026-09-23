@@ -167,9 +167,18 @@ describePostgres("information repository (PostgreSQL)", () => {
           await database.information.find({
             ...query,
             afterInformationId: visible[0]!.informationId,
+            throughInformationId: visible[1]!.informationId,
           })
         ).map((atom) => atom.informationId),
       ).toEqual(["second-web-delivery"]);
+      expect(
+        (
+          await database.information.find({
+            ...query,
+            throughInformationId: visible[0]!.informationId,
+          })
+        ).map((atom) => atom.informationId),
+      ).toEqual(["first-web-delivery"]);
     } finally {
       release.resolve();
       await Promise.allSettled(

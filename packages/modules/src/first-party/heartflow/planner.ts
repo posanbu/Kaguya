@@ -23,7 +23,7 @@ import {
 } from "@kaguya/schema";
 import { defineInformationKind, defineInformationSelector } from "@kaguya/sdk";
 import { createPromptTemplateRenderer } from "../../prompt-template.js";
-import { turnMessageContextSelector } from "../message-composer/message-context.js";
+import { selectFrozenTurnMessageContext } from "../message-composer/message-context.js";
 import type { AgentIdentity } from "../message-composer/message-prompt.js";
 import {
   assistantTextInformationKind,
@@ -100,7 +100,7 @@ export const plannerDecisionInformationKind = defineInformationKind({
     "Planner 输出通过严格校验并获得决策锁后登记发言、等待或静默；Heartflow 只分派获胜结果，规划不可用时以静默闭合。",
   payloadSchema: z
     .object({
-      gateInformationId: z.string().min(1),
+      turnContextInformationId: z.string().min(1),
       action: z.union([
         plannerActionSchema,
         z
@@ -140,50 +140,59 @@ export const plannerDecisionInformationKind = defineInformationKind({
 export const plannerContextSelector = defineInformationSelector({
   selectorId: "agent.heartflow.planner-context",
   select: async ({ sourceAtom, ledger }) => {
-    const turns = await ledger.related({
-      from: [sourceAtom.informationId],
-      relation: "core:uses-context",
-      direction: "outgoing",
-      limit: 1000,
-    });
+    const turns =
+      sourceAtom.kind === turnContextCompletedInformationKind.kind
+        ? [sourceAtom]
+        : await ledger.related({
+            from: [sourceAtom.informationId],
+            relation: "core:uses-context",
+            direction: "outgoing",
+            limit: 1000,
+          });
     const turn = turns.find(
-      (atom) =>
-        atom.kind === turnContextCompletedInformationKind.kind &&
-        atom.informationId === sourceAtom.payload.turnContextInformationId,
+      (atom) => atom.kind === turnContextCompletedInformationKind.kind,
     );
     if (!turn) throw new Error("Planner requires its frozen turn");
     const payload: any =
       turnContextCompletedInformationKind.payloadSchema.parse(turn.payload);
     const source = payload.inputs.at(-1).source;
-    // 仅构造选择器参数，不在账本提前发布 message intent。
-    const selected = await turnMessageContextSelector.select({
+    const selected = await selectFrozenTurnMessageContext({
       ledger,
-      sourceAtom: {
-        ...sourceAtom,
-        payload: {
-          target: {
-            adapterId: source.adapterId,
-            platform: source.platform,
-            destination: source.destination,
-          },
-          turn: {
-            candidateInformationId: payload.candidateInformationId,
-            claimInformationId: payload.claimInformationId,
-            contextInformationId: turn.informationId,
-          },
-          memoryInformationIds: payload.memory ?? [],
-          composition: {
-            focusInformationIds: [payload.inputs.at(-1).informationId],
-            topic: "Planner context selection",
-            replyAct: "select context",
-          },
+      sourceInformationId: turn.informationId,
+      turn,
+      intent: {
+        target: {
+          adapterId: source.adapterId,
+          platform: source.platform,
+          destination: source.destination,
+        },
+        turn: {
+          candidateInformationId: payload.candidateInformationId,
+          claimInformationId: payload.claimInformationId,
+          contextInformationId: turn.informationId,
+        },
+        memoryInformationIds: payload.memory ?? [],
+        composition: {
+          focusInformationIds: [payload.inputs.at(-1).informationId],
+          topic: "Planner context selection",
+          replyAct: "select context",
         },
       },
     });
     // 重放必须复用首次 requested 的 Prompt 和原子顺序，避免迟到历史改变任务指纹。
+    const gates = await ledger.find({
+      kinds: ["agent.attention.arousal.completed"],
+      payloadContains: {
+        candidateInformationId: payload.candidateInformationId,
+        outcome: "observe",
+      },
+      registrationOrder: true,
+      order: "desc",
+      limit: 1,
+    });
     const requests = (
       await ledger.related({
-        from: [sourceAtom.informationId],
+        from: [turn.informationId],
         relation: "core:caused-by",
         direction: "incoming",
         limit: 1000,
@@ -208,6 +217,8 @@ export const plannerContextSelector = defineInformationSelector({
     return [
       ...new Set([
         ...selected,
+        turn.informationId,
+        ...gates.map((atom) => atom.informationId),
         ...requests.map((atom) => atom.informationId),
         ...persisted.map((atom) => atom.informationId),
       ]),

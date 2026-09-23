@@ -1136,8 +1136,9 @@ describe("KaguyaRuntime", () => {
           "agent.chat.scope.binding",
           "agent.person.resolution",
           "agent.person.context.completed",
+          "agent.attention.arousal.activity",
           "agent.attention.arousal.completed",
-          "agent.heartbeat.scheduled",
+          "agent.attention.arousal.state.recorded",
           "agent.turn.candidate",
           "agent.turn.claimed",
           "agent.turn.started",
@@ -1157,8 +1158,9 @@ describe("KaguyaRuntime", () => {
 
       const byKind = new Map(graph.map((atom) => [atom.kind, atom]));
       const chain = [
-        ["agent.attention.arousal.completed", "agent.turn.context.completed"],
-        ["agent.message.intent.requested", "agent.attention.arousal.completed"],
+        ["agent.attention.arousal.completed", "agent.turn.candidate"],
+        ["agent.turn.plan.completed", "agent.turn.context.completed"],
+        ["agent.message.intent.requested", "agent.turn.plan.completed"],
         ["core.model.task.requested", "agent.message.intent.requested"],
         ["core.model.task.completed", "core.model.task.requested"],
         ["core.message.assistant.text", "core.model.task.completed"],
@@ -1185,7 +1187,7 @@ describe("KaguyaRuntime", () => {
   );
 
   it(
-    "defers an ordinary group event and does not treat mentioning another user as attention",
+    "observes an ordinary group event while awake without treating another mention as a wake signal",
     async () => {
       const { runtime, database } = await createRuntime();
       await runtime.start();
@@ -1204,14 +1206,19 @@ describe("KaguyaRuntime", () => {
       );
 
       expect(arousal?.payload).toMatchObject({
-        outcome: "defer",
-        score: 50,
-        attempt: 0,
-        totalWaitBudget: 3,
+        outcome: "observe",
+        arousalState: "awake",
+        wakeSignal: false,
+        signals: ["passive"],
+        unreadCount: 1,
+        reasonCodes: ["arousal-awake"],
+        policyVersion: "attention-observation.v1",
       });
-      expect(graph.map(({ kind }) => kind)).toContain("agent.wait.requested");
-      expect(graph.map(({ kind }) => kind)).not.toContain(
-        "agent.message.intent.requested",
+      expect(graph.map(({ kind }) => kind)).toContain(
+        "agent.attention.arousal.state.recorded",
+      );
+      expect(graph.map(({ kind }) => kind)).toContain(
+        "agent.turn.context.completed",
       );
     },
     TEST_TIMEOUT,
@@ -1971,7 +1978,7 @@ it.each([
     expect(
       graph.find((atom) => atom.kind === "agent.attention.arousal.completed")
         ?.payload.outcome,
-    ).toBe("attend");
+    ).toBe("observe");
     expect(
       graph.find((atom) => atom.kind === "agent.turn.silent")?.payload
         .reasonCodes,

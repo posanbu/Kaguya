@@ -2,54 +2,38 @@
 
 ## 目的与非目标
 
-协调在线 Agent 回合的可靠推进；不实现具体注意评分、消息正文生成或平台发送；在 eligible 门控之后调用独立 Planner Model Task。
+Heartflow 只在 `agent.attention.arousal.completed: observe` 后读取正文，协调候选认领、上下文冻结、Planner 和回合终态。它不实现注意评分、消息正文生成或平台传输。
 
 ## 消费和产生
 
-消费 candidate、身份终态、注意决策及宿主终态，产生 claim、冻结 context、分派请求和 turn terminal。
+消费 candidate、observe 决策、Identity terminal、冻结 context、Planner 结果及宿主投递/失败终态；产生 claim、started、完整 turn context、Focus opened、消息意图、wait 请求和唯一 turn terminal。
 
 ## 数据流与边界
 
-使用 scope generation、identity barrier 和 `asOf` Selector 冻结回合。Attention Arousal 只负责必要性门控：`attend` 表示 eligible。只有 eligible turn 创建 `agent.turn.plan` v1（object、light tier）任务。Planner Prompt 读取 Agent 身份、规划规则、同范围历史（assistant 必须成功投递）、冻结记忆、完整 turn 和确定性的 bootstrap 投影；私聊、@ 与回复机器人通过正常硬门禁后进入 Planner，仍允许选择 silent。
+Heartflow 按 candidate 的排他下界和包含式上界查询最多 1000 条同 scope 入站，等待每条 Identity terminal，再一次性冻结上下文。晚到时间戳不能越过注册水位，上界后的新消息留给下一次观察。`defer` 不产生 claim 或 context。
 
-bootstrap 只依据冻结输入、身份实体的创建来源和本轮获授权的 Memory。它区分 `cold-start`、`warming`、`established`，并分别记录 Memory、会话和每个输入人物的可知状态。新 turn 必须写入完整投影；旧账本事实缺少该字段时统一归一化为保守的 `legacy-unknown`，不会根据重放时的新消息或新 Memory 改写历史判断。身份实体证据通过 Information 引用保留在 turn context 上。
+冻结后才执行 mute、安全、目标和授权检查。Planner 独占相关性、话题选择、参与价值及 `message | wait | silent`。群聊直接通知在 observe 后开启 Focus；成功投递续租，silent/failed 关闭，wait 保持自然到期。
 
-Planner 同时保留 `context_bootstrap`。该变量描述本次 Prompt 实际可见的历史和 Memory 数量；版本化 `bootstrap` 描述冻结回合在账本中的可追溯状态。前者受选择与预算影响，后者随 turn 固定。两者都不能证明整个数据库为空，也不能自行证明人物关系。
+bootstrap 只依据冻结输入、身份实体创建来源和本轮授权 Memory，区分 `cold-start`、`warming`、`established`；缺少字段的旧事实仅归一为保守的 `legacy-unknown`。版本化投影和身份实体证据随 turn 冻结，不由后续消息或 Memory 改写。
 
 ## Settings
 
-配置机器人名称、群聊/直接会话频率、mute 和积压分类阈值。`staleAfterMs` 仅标记整批输入是否积压；超过阈值不再自动丢弃，而由 Planner 根据话题是否仍待处理、是否已被后续消息解决或依赖即时场景决定 message、wait 或 silent。Planner 使用共享 Agent 身份和宿主授权的 light 模型，无需新增实例配置。
-
-`heartflow.bootstrap-policy` 是独立的可编辑 Planner 策略。冷启动只在确有交流价值时询问必要信息；没有可靠证据时保持不确定，不补写人物关系、共同经历或群聊背景。进入稳定状态后按正常消息流转，不重复声明“没有记忆”。静态 persona 只定义 Agent 自身，不能充当外部事实。
+`muted` 在 observe 后抑制主动回复；`focusIdleMs` 管理 Focus 租期；`staleAfterMs` 标记积压供 Planner 判断；`plannerInterruptMaxConsecutiveCount` 限制同轮重规划。`heartflow.bootstrap-policy` 是独立可编辑的 Planner 策略。旧称呼、频率和 Arousal 评分设置已删除。
 
 ## 可靠性、幂等和失败行为
 
-每个 candidate 只有一个 claim 和 turn terminal。eligible 门控使用 `agent.turn.attention` 命名空间，非 eligible 门控直接提交廉价等待或静默决策；Planner 终态 `agent.turn.plan.completed` 和候选替代共用 `agent.turn.decision` 锁，只有获胜结果可以分派。重放复用通用 Model Task 的持久化请求与终态，以及按 claim 的动作幂等键。重启后 durable 订阅恢复，迟到结果不能越过 supersession。
+claim、context、Planner decision 和 terminal 使用稳定键与排他槽。重复 candidate、重复 delivery、进程重启和旧代际 one-shot 不会创建第二个有效 turn；身份未完成时保持开放，身份耗尽、授权失败或目标不可用时 fail-closed。只有完整 context 成功冻结后才记录 `observedThroughInformationId`。
 
-Planner failed、cancelled、非法 JSON 或 schema 错误均正常提交 `silent: planner-unavailable`，不回退 message、不生成 turn.failed。持久化自身不可用时交由 durable runner 重试，不能将尚未提交的模型结果当作成功。
-
-wait 复用 `agent.wait.requested`，始终 `wakeOnMessage=true`。新消息合并旧输入并携带累计 attempt；重启恢复或定时唤醒后重新执行门控和 Planner。门控等待与 Planner 等待共享最多三次总预算，耗尽后的 wait 变为 `silent: wait-budget-exhausted`。
+Planner failed、cancelled、非法输出或模型不可用会安全降级为 silent。Planner wait 使用独立 `totalWaitBudget`；Arousal defer 不消耗预算。重放复用已持久化 Prompt 和上下文，supersession 后的迟到结果不能派发。
 
 ## 日志与可观测性
 
-记录 context、claim、规划动作及枚举原因、waiting、silent、completed、failed 和 superseded 生命周期。普通日志不包含完整 Prompt 或原始模型输出。
+记录 claim、context、水位、bootstrap、规划动作、waiting、silent、completed、failed、interrupted 和 superseded 生命周期。普通日志不包含完整 Prompt、原始模型输出或未观察正文。
 
 ## 典型场景
 
-Planner 只允许以下严格 JSON，不允许额外字段或原始平台目标：
+observe 后冻结该 scope 的全部有界未读，再由 Planner 选择 message、wait 或 silent。直接群聊输入可开启 Focus，但仍允许 Planner silent；跨会话目标必须通过宿主授权复核。超大积压按 1000 条上限自然分批，不跳过水位。
 
-- `message`：`reason` 为 `respond` 或 `contribute`。省略 `target` 或使用 `{kind: "current"}` 时创建当前会话意图；跨会话只能选择 `{kind: "group" | "private", reference, instruction}` 中宿主提供的本轮引用，`instruction` 仅说明本次明确要求发送的内容。`{kind: "unresolved", reason}` 会关闭 turn 并记录安全失败，不能回退当前群。
-- `wait`：`reason` 为 `await-more-context` 或 `avoid-interruption`；`waitSeconds` 为 5–120 的整数。
-- `silent`：`reason` 为 `no-response-needed`、`already-addressed` 或 `avoid-interruption`；不调用 Composer 或投递。
+## 破坏式协议
 
-不 eligible 的门控 `defer` 保留廉价 Heartbeat 重判；`ignore` 正常结束。离线 `pnpm prompt:test` 使用真实 Planner 编译器验证结构与字段限制，不调用外部模型。
-
-Planner 首次请求持久化后，重放会恢复相同 Prompt、上下文原子及顺序，不因迟到历史改变任务指纹；已经完成的模型任务不会重复调用。普通请求日志不记录 Planner Prompt 预览，完整 Prompt 仅限显式 content detail 诊断。
-
-宿主 `conversation` 能力在规划前冻结 `agent.conversation.context.frozen`，提供不含原始目标 ID 的解析投影及当前会话/人物背景。背景也用于普通消息编写，不以跨会话意图为前提。跨会话获胜决策调用 `route`，宿主验证引用、目录、有效期与出站策略后创建统一意图；模型本身不能授予出站权限。重启后已冻结 Prompt 可重放，但临时引用失效，待发跨会话请求安全关闭。
-
-系统以持续观察为模型，turn/candidate/claim 仅是调度事实。正常积压由 Heartbeat 在创建阶段阻止；恢复路径把同 scope 遗留 candidate 合并为一次观察。合并来源持久化在 claim 引用中，身份屏障迟到不会丢失来源。冻结上下文记录评估时刻、首末输入年龄和分类阈值；Attention 保留安全、静默、目标与频率硬门禁，话题时效交给 Planner。Planner 的迟到结果在派发前复核当前终态。Selector 只查询开放 candidate 与最近 claim，避免反复扫描历史。
-
-内部实现分为在线编排入口、state-query.ts 的账本水合与分页、turn-state.ts 的纯引用与状态投影。外部 Kind 和提交槽保持稳定。
-
-群聊的真实直接输入在冻结前按入站 ID 开启关注租约。Focus 投影提供 scope 隔离的相关性；合并旧输入不重新开租。focusIdleMs 默认为 120000 毫秒。成功投递续租、静默或失败关闭、到期调度由 attention-focus 模块处理。
+旧 turn context、candidate、Arousal payload 和模块配置必须重置；仓库不提供 legacy union、双读或迁移分支。

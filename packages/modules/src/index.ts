@@ -32,10 +32,16 @@ export {
   heartbeatDueSelector,
 } from "./first-party/heartbeat/index.js";
 export {
+  createAttentionArousalModule,
   attentionArousalModule,
   attentionArousalSettingsSchema,
+  attentionArousalStateSelector,
+  attentionArousalTimerSelector,
   decideAttentionArousal,
-  scoreAttentionArousal,
+  isNightSleepTime,
+  localTimeOfDay,
+  nextLocalTimeOccurrence,
+  type CreateAttentionArousalModuleOptions,
   type AttentionArousalOutcome,
   type AttentionArousalSettings,
 } from "./first-party/attention-arousal/index.js";
@@ -106,8 +112,10 @@ export {
   turnContextCompletedInformationKind,
   turnBootstrapProjectionSchema,
   normalizeTurnBootstrap,
+  attentionArousalStateRecordedInformationKind,
   attentionArousalCompletedInformationKind,
   waitRequestedInformationKind,
+  attentionArousalActivityInformationKind,
   heartbeatScheduledInformationKind,
   heartbeatFiredInformationKind,
   heartbeatSupersededInformationKind,
@@ -130,6 +138,7 @@ export {
   type MessageIntentRequestedInformationPayload,
   type TurnBootstrapProjection,
   type NormalizedTurnBootstrapProjection,
+  type AttentionArousalState,
 } from "./first-party/information-kinds.js";
 export {
   createFirstPartyModuleCatalog,

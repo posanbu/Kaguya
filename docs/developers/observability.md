@@ -47,7 +47,7 @@ pnpm logs:preview --json
 
 ## 按级别展开 DAG
 
-默认 `info` 显示业务终态和每轮 `turn.decision` 摘要；`debug` 显示排障所需的主要内部节点；完整 DAG 的机械节点使用 `trace`。Pretty 输出把完整 ID 缩成 8 个字符，并把引用显示成 `relation:短ID`；JSON 始终保留完整 `informationId` 与完整 `references`。
+默认 `info` 显示业务终态、`attention.observation` 观察结果与 `turn.plan` 规划摘要；`debug` 显示排障所需的主要内部节点；完整 DAG 的机械节点使用 `trace`。Pretty 输出把完整 ID 缩成 8 个字符，并把引用显示成 `relation:短ID`；JSON 始终保留完整 `informationId` 与完整 `references`。
 
 ```dotenv
 KAGUYA_LOG_LEVEL=info

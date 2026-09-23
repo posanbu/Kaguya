@@ -1,5 +1,5 @@
 /**
- * find 支持经校验的 openOnly、scopeKey、registrationOrder 与排他 afterInformationId，不在模块内扫描历史。
+ * find 支持经校验的 openOnly、scopeKey、registrationOrder 与注册水位上下界，不在模块内扫描历史。
  * 功能概述：在 Core 内执行 Information Selector，并为每次调用建立独立的只读授权作用域。
  * 主要职责：校验 Selector 输出、阻止重复/未知/越权 ID、按选择顺序重新加载原子，
  * 并提供受约束的 find、单跳引用遍历与命名检索读取。
@@ -52,6 +52,7 @@ const findSchema = z
     openOnly: z.boolean().optional(),
     registrationOrder: z.boolean().optional(),
     afterInformationId: informationIdSchema.optional(),
+    throughInformationId: informationIdSchema.optional(),
     scopeKey: z.string().min(1).optional(),
     informationIds: z.array(informationIdSchema).min(1).optional(),
     kinds: z.array(z.string().trim().min(1)).min(1).optional(),
@@ -237,6 +238,9 @@ class SelectorReadScope {
       ...(parsed.data.afterInformationId === undefined
         ? {}
         : { afterInformationId: parsed.data.afterInformationId }),
+      ...(parsed.data.throughInformationId === undefined
+        ? {}
+        : { throughInformationId: parsed.data.throughInformationId }),
       ...(parsed.data.openOnly === undefined
         ? {}
         : { openOnly: parsed.data.openOnly }),

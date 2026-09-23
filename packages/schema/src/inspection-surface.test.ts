@@ -153,13 +153,13 @@ it("rejects executable paths and unbounded relation reads", () => {
     }),
   ).toThrow();
 });
-it("preserves gate declarations and stable field paths while rejecting invalid state contracts", () => {
+it("preserves observation declarations and stable field paths while rejecting invalid state contracts", () => {
   const gate = {
     ...component,
     presentation: "attention-gate",
     status: {
       field: "outcome",
-      options: [{ value: "attend", label: "放行至规划" }],
+      options: [{ value: "observe", label: "查看未读" }],
     },
     relations: [{ ...component.relations[0], direction: "forward" }],
   };
@@ -170,13 +170,13 @@ it("preserves gate declarations and stable field paths while rejecting invalid s
     inspectionPresentationSchema.parse({
       title: "门控",
       fields: [
-        { path: "score", label: "分数", value: 42 },
-        { label: "旧字段", value: false },
+        { path: "unreadCount", label: "未读数量", value: 42 },
+        { label: "兼容字段", value: false },
       ],
     }).fields,
   ).toEqual([
-    { path: "score", label: "分数", value: 42 },
-    { label: "旧字段", value: false },
+    { path: "unreadCount", label: "未读数量", value: 42 },
+    { label: "兼容字段", value: false },
   ]);
   for (const invalid of [
     { ...gate, status: { ...gate.status, field: "outcome[0]" } },

@@ -6,15 +6,15 @@
 import { it, expect } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { InspectionFields, InspectionStatus } from "./InspectionFields.js";
-it("renders decision evidence and habits without exposing raw JSON as the primary view", () => {
+it("renders observation state and habits without exposing raw JSON as the primary view", () => {
   const html = renderToStaticMarkup(
     <>
       <InspectionStatus value="defer" />
       <InspectionFields
         fields={[
-          { label: "分数", value: 52 },
-          { label: "当时阈值", value: 80 },
-          { label: "原因", value: ["score-below-threshold"] },
+          { label: "结果", value: "observe" },
+          { label: "未读数量", value: 3 },
+          { label: "原因", value: ["periodic-recheck"] },
           {
             label: "表达习惯",
             value: [
@@ -32,8 +32,8 @@ it("renders decision evidence and habits without exposing raw JSON as the primar
   );
   for (const text of [
     "延后观察",
-    "当时阈值",
-    "分数未达到阈值",
+    "查看未读",
+    "periodic-recheck",
     "情境",
     "逐步解释",
     "出现次数",

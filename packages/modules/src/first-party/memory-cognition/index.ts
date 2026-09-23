@@ -37,8 +37,10 @@ import {
 import { onInformation } from "@kaguya/sdk";
 import {
   coreMemoryTextInformationKind,
+  attentionArousalCompletedInformationKind,
   inboundTextInformationKind,
   turnCandidateInformationKind,
+  turnClaimedInformationKind,
   personContextCompletedInformationKind,
 } from "../information-kinds.js";
 import { memoryWritebackCompletedInformationKind } from "../memory-writeback/index.js";
@@ -421,8 +423,37 @@ export function createCognitionMemorySelector(
   return defineInformationSelector({
     selectorId: "kaguya.memory.cognition.completed-snapshot",
     select: async ({ sourceAtom, ledger }) => {
-      let candidates = [sourceAtom];
-      if (sourceAtom.kind === personContextCompletedInformationKind.kind) {
+      let candidates: readonly DeepReadonly<InformationAtom>[] = [];
+      if (sourceAtom.kind === turnCandidateInformationKind.kind) {
+        const decisions = await ledger.related({
+          from: [sourceAtom.informationId],
+          relation: "core:status-of",
+          direction: "incoming",
+          limit: 10,
+        });
+        if (
+          decisions.some(
+            (atom) =>
+              atom.kind === attentionArousalCompletedInformationKind.kind &&
+              atom.payload.outcome === "observe",
+          )
+        )
+          candidates = [sourceAtom];
+      } else if (
+        sourceAtom.kind === attentionArousalCompletedInformationKind.kind &&
+        sourceAtom.payload.outcome === "observe"
+      ) {
+        candidates = (
+          await ledger.related({
+            from: [sourceAtom.informationId],
+            relation: "core:status-of",
+            direction: "outgoing",
+            limit: 1,
+          })
+        ).filter((atom) => atom.kind === turnCandidateInformationKind.kind);
+      } else if (
+        sourceAtom.kind === personContextCompletedInformationKind.kind
+      ) {
         const inbound = (
           await ledger.related({
             from: [sourceAtom.informationId],
@@ -431,29 +462,51 @@ export function createCognitionMemorySelector(
             limit: 1,
           })
         )[0];
-        candidates = inbound
-          ? [
-              ...(await ledger.find({
-                kinds: [turnCandidateInformationKind.kind],
-                payloadContains: {
-                  sourceInformationIds: [inbound.informationId],
-                },
-                limit: 1000,
-              })),
-            ]
-          : [];
+        if (inbound) {
+          const claims = (
+            await ledger.related({
+              from: [inbound.informationId],
+              relation: "core:uses-context",
+              direction: "incoming",
+              limit: 1000,
+            })
+          ).filter((atom) => atom.kind === turnClaimedInformationKind.kind);
+          candidates = (
+            await Promise.all(
+              claims.map((claim) =>
+                ledger.related({
+                  from: [claim.informationId],
+                  relation: "agent:turn-candidate",
+                  direction: "outgoing",
+                  limit: 1,
+                }),
+              ),
+            )
+          ).flat();
+        }
       }
       const selected = [];
       for (const candidate of candidates) {
         if (candidate.kind !== turnCandidateInformationKind.kind) continue;
-        const inbounds = (
-          await ledger.related({
-            from: [candidate.informationId],
-            relation: "core:uses-context",
-            direction: "outgoing",
-            limit: 1000,
-          })
-        ).filter((atom) => atom.kind === inboundTextInformationKind.kind);
+        const payload = candidate.payload as any;
+        const inbounds = await ledger.find({
+          kinds: [inboundTextInformationKind.kind],
+          scopeKey: payload.scopeKey,
+          registrationOrder: true,
+          ...(payload.unreadAfterInformationId
+            ? { afterInformationId: payload.unreadAfterInformationId }
+            : {}),
+          throughInformationId: payload.unreadThroughInformationId,
+          payloadContains: {
+            source: {
+              platform: payload.platform,
+              adapterId: payload.adapterId,
+              destination: payload.destination,
+            },
+          },
+          order: "asc",
+          limit: 1000,
+        });
         for (const inbound of inbounds) {
           const source = inboundTextInformationKind.payloadSchema.parse(
             inbound.payload,

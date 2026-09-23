@@ -73,7 +73,8 @@ const EVENT_NAMES: Readonly<Record<string, string>> = {
   "turn.started": "回合已开始",
   "turn.claimed": "回合已认领",
   "turn.context.completed": "回合上下文已准备",
-  "turn.decision": "注意力决策",
+  "attention.observation": "注意力观察",
+  "attention.arousal.state": "Arousal 唤醒状态",
   "turn.decision.interrupted": "回合决策已中断",
   "turn.decision.superseded": "回合决策已被替代",
   "turn.plan": "回合规划完成",
@@ -151,7 +152,7 @@ const FIELD_NAMES: Readonly<Record<string, string>> = {
   promptVariableCount: "变量数",
   contentLength: "正文字符数",
   contentTruncated: "正文已截断",
-  outcome: "决策",
+  outcome: "结果",
   score: "得分",
   reasonCodes: "原因",
   errorType: "错误类型",
@@ -519,11 +520,10 @@ function formatValue(key: string, value: unknown): string {
       return statusName(value);
     if (key === "outcome")
       return (
-        ownValue(
-          { attend: "关注", defer: "稍后处理", ignore: "忽略" },
-          value,
-        ) ?? value
+        ownValue({ observe: "查看未读", defer: "延后观察" }, value) ?? value
       );
+    if (key === "state")
+      return ownValue({ awake: "唤醒态", asleep: "休眠态" }, value) ?? value;
     if (key === "targetKind")
       return (
         ownValue({ group: "群聊", private: "私聊", web: "网页" }, value) ??

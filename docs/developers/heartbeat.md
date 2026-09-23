@@ -1,32 +1,39 @@
-# 短心跳的延期与恢复
+# Scope 通知观察与等待恢复
 
-短心跳是一个显式激活的 Information Module。它把入站消息或 `agent.wait.requested` 转换为 durable one-shot schedule，到期后记录 `agent.heartbeat.fired` 与 `agent.turn.candidate`。模块不调用 LLM 或平台 transport，因此 candidate 只是交给 Heartflow 处理的事实。
+Heartbeat 是一个显式激活的 Information Module。它不调用 LLM 或平台 transport，也不按固定 tick 轮询。入站注册后，它只为对应 scope 竞争一个不含正文的 `agent.turn.candidate`；正文仍留在 Information Ledger，直到 Arousal 决定 `observe` 后才由 Heartflow 按水位读取。
 
-## 配置与生命周期
+## 入站与水位
 
-first-party production 与 test activation profile 都启用 `agent.heartbeat.short` 和 `agent.heartflow.online`。production 的 `messageDebounceMs` 为 1500 ms，test 为 0 ms；自定义 composition 仍可停用 activation。未激活时不会安装 durable subscription，也不会创建后台计时器。
+每条入站先写入不含正文的全局 `agent.attention.arousal.activity`，再检查该 scope 的开放观察：
 
-schedule 使用绝对 `dueAt`、稳定 `scopeKey` 和按到达顺序保存的 `sourceInformationIds`。新消息发现同 scope 的 open schedule 后，使用 one-shot `replace` 原子替换旧 schedule，并为旧 heartbeat 写入 `superseded` terminal。旧 schedule 不会再次触发 candidate。
+- 没有开放观察时，立即登记 candidate，冻结最近一次成功观察后的排他下界、本次注册水位的包含式上界、未读数量和平台通知信号。
+- 已有开放观察时，新通知继续积攒在同一 scope；直接通知可登记 wake 事实，但不会把正文复制到 candidate。
+- `awake` 时 Arousal 默认 `observe`；`asleep` 且没有直接通知、有效 Focus 或周期复查时 `defer`。
+- `defer`、重复投递、调度失败和进程重启都不推进已观察水位。只有 Heartflow 成功冻结 turn context 后，`observedThroughInformationId` 才成为下一次查询下界。
 
-Runtime 关闭时不写入 cancelled。one-shot scheduler 的 open arm 保留在数据库中，重启时恢复并处理 overdue schedule；因此进程短暂停机不会丢失 wait 或 debounce 事实。
+注册顺序而不是消息时间戳决定边界，因此晚到时间戳不能跨过已经冻结的水位。上界之后登记的消息留给下一次观察。
 
-`wakeOnMessage` 为 `true` 时，消息会替换 wait deadline 并重新计算 debounce；为 `false` 时保留原 deadline，但仍把新消息引用并入新的 heartbeat 事实。达到 `attempt` 或 `totalWaitBudget` 后，模块不会自动制造下一次 wait。
+## One-shot 调度
+
+普通入站不创建消息防抖 timer，也没有固定 cadence、全局 tick 或心跳计数。持久化 one-shot 用于：
+
+- Planner 的 `wait` 与规划中断后的 quiet window；
+- Arousal 的全局空闲休眠、夜间边界和休眠周期唤醒。
+
+schedule 使用绝对 `dueAt` 和稳定 operation key。Runtime 关闭时不把开放 schedule 写成 cancelled；重启后从数据库恢复并处理 overdue schedule。`replace` 和 terminal 提交都保持幂等，旧代际到期不能产生第二个有效 candidate。
 
 ## 事实链
 
 ```text
-inbound / agent.wait.requested
-  -> agent.heartbeat.scheduled
-  -> core.schedule.one-shot.requested
-  -> core.schedule.one-shot.due
-  -> agent.heartbeat.fired | agent.heartbeat.superseded
+inbound
+  -> agent.attention.arousal.activity
   -> agent.turn.candidate
-  -> agent.turn.claimed
-  -> agent.turn.started
-  -> agent.turn.context.completed
-  -> agent.attention.arousal.completed
-  -> reply | wait | silent
+  -> agent.attention.arousal.completed: observe | defer
+  -> observe: agent.turn.claimed -> agent.turn.context.completed
+  -> Planner: message | wait | silent
   -> agent.turn.completed | waiting | silent | failed | superseded
 ```
 
-所有终态均通过幂等 terminal API 写入；重复投递只会得到已有终态，不会产生第二个 candidate。新消息在旧 claim 决策前到达时，Heartflow 会终结旧 decision gate 与旧 turn，并把旧 turn 已冻结的输入带入下一代 context。
+Planner `wait` 到期会恢复候选；休眠周期到期只为仍有积压的 scope 产生 `recheck`。两者都复用原有水位和开放 scope 约束，不把一次通知变成逐条回复保证。
+
+这是破坏式协议更新。旧 candidate、turn context、Arousal 数据库事实和模块配置不提供双读或迁移适配，升级前需要重置。

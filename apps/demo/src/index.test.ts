@@ -78,19 +78,20 @@ describe("demo entry point", () => {
       informationIdGenerator: () => `demo-information-${++sequence}`,
     });
 
-    expect(receipt.rootInformationId).toBe("demo-information-1");
+    expect(receipt.rootInformationId).toMatch(/^demo-information-\d+$/u);
     expect(output).toEqual([
-      "root informationId: demo-information-1",
+      `root informationId: ${receipt.rootInformationId}`,
       "agent.association.completed: 1",
       "agent.association.query: 1",
       "agent.association.requested: 1",
+      "agent.attention.arousal.activity: 1",
       "agent.attention.arousal.completed: 1",
+      "agent.attention.arousal.state.recorded: 2",
       "agent.chat.scope.binding: 1",
       "agent.chat.scope.entity: 1",
       "agent.conversation.context.frozen: 1",
       "agent.expression.selection.completed: 1",
       "agent.expression.selection.requested: 1",
-      "agent.heartbeat.scheduled: 1",
       "agent.message.intent.requested: 1",
       "agent.person.context.completed: 1",
       "agent.person.resolution: 1",

@@ -1,145 +1,68 @@
-/**
- * 功能概述：通过真实 InformationCore、ModuleHost 与测试数据库验证 Heartflow 持久化编排。
- * fixture 显式注入文件加载的 Planner 模板；appendCandidate 构造身份屏障及候选链，
- * submitDecision 注入注意力终态。所有持久化条件等待共享 8 秒/20 毫秒策略，覆盖启动、冻结及终态。
- * waitForDelivery 等待指定订阅的持久化 ack，确保迟到模型结果已被完整处理后再断言没有意图；
- * 两个受控 Planner 测试在 finally 释放模型屏障，避免失败时残留任务污染 afterEach 清理。
- * 历史积压用例串行写入 13 组共 104 个来源事实，单独保留 30 秒总预算覆盖初始化、写入、两轮等待及清理。
- * 测试覆盖严格输出、故障静默、幂等、路由和 supersession fencing；afterEach 关闭宿主、Core 和数据库。
- */
-import { loadFirstPartyPromptTemplates } from "../../node/prompt-templates.js";
+import { afterEach, expect, it, vi } from "vitest";
 import { createTestingDatabase } from "@kaguya/database/testing";
 import {
-  executionExhaustedInformationKind,
   InformationCore,
   InformationKindRegistry,
   ModuleHost,
+  executionExhaustedInformationKind,
 } from "@kaguya/engine";
-import {
-  freezeInformationAtom,
-  informationIdSchema,
-  type PlatformDestination,
-  z,
-} from "@kaguya/schema";
+import { z } from "@kaguya/schema";
 import {
   catalogInformationKinds,
   defineInformationKind,
-  defineModuleCapability,
   defineInformationModuleCatalog,
+  defineModuleCapability,
 } from "@kaguya/sdk";
 import {
   oneShotDueInformationKind,
   oneShotRequestedInformationKind,
 } from "@kaguya/scheduler";
-import { afterEach, describe, expect, it, vi } from "vitest";
-
+import { loadFirstPartyPromptTemplates } from "../../node/prompt-templates.js";
+import { createHeartflowModule } from "./index.js";
 import { focusOpened } from "../attention-focus/facts.js";
-import { fixture as messageFixture } from "../message-composer/test-fixtures.js";
-import { createHeartflowModule, heartflowSettingsSchema } from "./index.js";
+import { scopeOf } from "../heartbeat/observation.js";
 import {
-  observationWakeInformationKind,
+  attentionArousalCompletedInformationKind,
+  attentionArousalStateRecordedInformationKind,
   heartbeatFiredInformationKind,
   heartbeatScheduledInformationKind,
   inboundTextInformationKind,
-  personContextCompletedInformationKind,
-  attentionArousalCompletedInformationKind,
   messageIntentRequestedInformationKind,
+  personContextCompletedInformationKind,
   turnCandidateInformationKind,
-  turnClaimedInformationKind,
-  turnCompletedInformationKind,
   turnContextCompletedInformationKind,
-  turnDecisionSupersededInformationKind,
-  turnDecisionInterruptedInformationKind,
-  turnFailedInformationKind,
   turnSilentInformationKind,
-  turnSupersededInformationKind,
-  turnInterruptedInformationKind,
   turnWaitingInformationKind,
   waitRequestedInformationKind,
 } from "../information-kinds.js";
 
-const plannerTemplate = loadFirstPartyPromptTemplates().planner;
-const persistenceWait = { timeout: 8000, interval: 20 };
-const modelTaskCapability = defineModuleCapability<
-  import("../message-composer/index.js").ModelTaskCapability
->("kaguya:model-task", 1);
-const agentIdentity = {
-  name: "Kaguya",
-  aliases: ["辉夜"],
-  persona: "测试身份",
-  timeZone: "Asia/Shanghai",
-};
-const execute = vi.fn(async () => ({
-  status: "completed",
-  output: {
-    action: "message",
-    reason: "respond",
-    composition: {
-      focusInputIndexes: [0],
-      topic: "测试话题",
-      replyAct: "回应",
-    },
-  },
-  requestedInformationId: "request",
-  terminalInformationId: "terminal",
-}));
-const runtimeContextInformationKind = defineInformationKind({
+const runtimeContext = defineInformationKind({
   kind: "core.runtime.context",
-  displayName: "Core Runtime Context",
-  description: "Information carried by the core.runtime.context kind.",
+  displayName: "test context",
+  description: "test context",
   payloadSchema: z.object({ requestId: z.string() }).strict(),
   references: {},
   log: { enabled: false },
 });
-
-const deliveryDeliveredInformationKind = defineInformationKind({
-  kind: "core.delivery.delivered",
-  displayName: "Core Delivery Delivered",
-  description: "Information carried by the core.delivery.delivered kind.",
-  payloadSchema: z.object({ ok: z.literal(true) }).strict(),
-  references: {
-    "core:caused-by": { required: true, multiple: false },
-    "core:status-of": { required: true, multiple: false },
-  },
-  log: { enabled: false },
-});
-
-const deliveryFailedInformationKind = defineInformationKind({
-  kind: "core.delivery.failed",
-  displayName: "Core Delivery Failed",
-  description: "Information carried by the core.delivery.failed kind.",
-  payloadSchema: z.object({ ok: z.literal(false) }).strict(),
-  references: {
-    "core:caused-by": { required: true, multiple: false },
-    "core:status-of": { required: true, multiple: false },
-  },
-  log: { enabled: false },
-});
-
-const modelTaskFailedInformationKind = defineInformationKind({
-  kind: "core.model.task.failed",
-  displayName: "Core Model Task Failed",
-  description: "Information carried by the core.model.task.failed kind.",
-  payloadSchema: z.object({ failed: z.literal(true) }).strict(),
-  references: {
-    "core:caused-by": { required: true, multiple: false },
-    "core:status-of": { required: true, multiple: false },
-  },
-  log: { enabled: false },
-});
-
-const modelTaskCancelledInformationKind = defineInformationKind({
-  kind: "core.model.task.cancelled",
-  displayName: "Core Model Task Cancelled",
-  description: "Information carried by the core.model.task.cancelled kind.",
-  payloadSchema: z.object({ cancelled: z.literal(true) }).strict(),
-  references: {
-    "core:caused-by": { required: true, multiple: false },
-    "core:status-of": { required: true, multiple: false },
-  },
-  log: { enabled: false },
-});
-
+const terminal = (kind: string, ok: boolean) =>
+  defineInformationKind({
+    kind,
+    displayName: kind,
+    description: kind,
+    payloadSchema: z.object({ ok: z.literal(ok) }).strict(),
+    references: {
+      "core:caused-by": { required: true, multiple: false },
+      "core:status-of": { required: true, multiple: false },
+    },
+    log: { enabled: false },
+  });
+const delivered = terminal("core.delivery.delivered", true);
+const deliveryFailed = terminal("core.delivery.failed", false);
+const modelFailed = terminal("core.model.task.failed", false);
+const modelCancelled = terminal("core.model.task.cancelled", false);
+const modelTaskCapability = defineModuleCapability<
+  import("../message-composer/index.js").ModelTaskCapability
+>("kaguya:model-task", 1);
 const resources: Array<{
   host: ModuleHost;
   core: InformationCore;
@@ -147,10 +70,25 @@ const resources: Array<{
 }> = [];
 
 afterEach(async () => {
-  execute.mockReset();
-  execute.mockResolvedValue({
-    status: "completed",
-    output: {
+  for (const item of resources.splice(0).reverse()) {
+    await item.host.stop();
+    await item.core.close();
+    await item.database.close();
+  }
+});
+
+async function fixture(
+  options: {
+    action?: any;
+    muted?: boolean;
+    now?: string;
+  } = {},
+) {
+  const database = await createTestingDatabase();
+  await database.prepareSchema();
+  const execute = vi.fn(async (request: any) => ({
+    status: "completed" as const,
+    output: options.action ?? {
       action: "message",
       reason: "respond",
       composition: {
@@ -160,1410 +98,242 @@ afterEach(async () => {
       },
     },
     requestedInformationId: "request",
-    terminalInformationId: "terminal",
-  });
-  for (const { host, core, database } of resources.splice(0).reverse()) {
-    await host.stop();
-    await core.close();
-    await database.close();
-  }
-});
-
-async function fixture(
-  startImmediately = true,
-  options: { now?: string; staleAfterMs?: number } = {},
-) {
-  execute.mockClear();
-  const database = await createTestingDatabase();
-  await database.prepareSchema();
+    terminalInformationId: request.sourceInformationId,
+  }));
+  const promptTemplates = loadFirstPartyPromptTemplates();
   const module = createHeartflowModule({
-    plannerTemplate,
-    plannerBootstrapPolicy: "bootstrap policy",
+    plannerTemplate: promptTemplates.planner,
+    plannerBootstrapPolicy: promptTemplates.plannerBootstrapPolicy,
     memoryEnabled: false,
     modelTaskCapability,
-    agentIdentity,
-    deliveryDeliveredInformationKind,
-    deliveryFailedInformationKind,
-    modelTaskFailedInformationKind,
-    modelTaskCancelledInformationKind,
+    agentIdentity: {
+      name: "Kaguya",
+      aliases: ["辉夜"],
+      persona: "测试身份",
+      timeZone: "Asia/Shanghai",
+    },
+    deliveryDeliveredInformationKind: delivered,
+    deliveryFailedInformationKind: deliveryFailed,
+    modelTaskFailedInformationKind: modelFailed,
+    modelTaskCancelledInformationKind: modelCancelled,
     executionExhaustedInformationKind,
   });
   const catalog = defineInformationModuleCatalog(module);
   const registry = new InformationKindRegistry();
-  registry.registerBuiltin(runtimeContextInformationKind);
+  registry.registerBuiltin(runtimeContext);
   for (const definition of catalogInformationKinds(catalog)) {
     if (definition === executionExhaustedInformationKind) continue;
-    if (definition.kind.startsWith("core."))
-      registry.registerBuiltin(definition);
-    else registry.register(definition);
+    definition.kind.startsWith("core.")
+      ? registry.registerBuiltin(definition)
+      : registry.register(definition);
   }
   for (const definition of [
     heartbeatScheduledInformationKind,
     heartbeatFiredInformationKind,
-  ]) {
+    attentionArousalStateRecordedInformationKind,
+  ])
     registry.register(definition);
-  }
   let sequence = 0;
+  const now = () => new Date(options.now ?? "2026-09-22T08:00:10.000Z");
   const core = new InformationCore({
     registry,
     store: database.information,
+    now,
     nextInformationId: () => `heartflow-${++sequence}`,
-    now: () => new Date(options.now ?? "2026-09-08T00:00:10.000Z"),
   });
   const host = new ModuleHost({
     core,
     catalog,
+    now,
     capabilities: [
       {
         capability: modelTaskCapability,
-        value: {
-          execute: async (request: any) => ({
-            ...(await execute()),
-            terminalInformationId: request.sourceInformationId,
-          }),
-        },
+        value: { execute, cancel: async () => undefined },
       },
     ],
   });
-  resources.push({ host, core, database });
   await core.start();
-  const start = () =>
-    host.start([
-      {
-        instanceId: "heartflow.test",
-        definitionId: module.manifest.definitionId,
-        settings: {
-          botNames: ["Kaguya", "辉夜"],
-          groupFrequency: 1,
-          privateFrequency: 1,
-          muted: false,
-          staleAfterMs: options.staleAfterMs ?? 120_000,
-        },
+  await host.start([
+    {
+      instanceId: "heartflow.test",
+      definitionId: module.manifest.definitionId,
+      settings: {
+        muted: options.muted ?? false,
+        focusIdleMs: 120_000,
+        staleAfterMs: 120_000,
+        plannerInterruptMaxConsecutiveCount: 2,
       },
-    ]);
-  if (startImmediately) await start();
-  return { core, database, module, start };
+    },
+  ]);
+  resources.push({ host, core, database });
+  return { core, database, execute };
 }
 
-async function appendCandidate(
+async function appendOpportunity(
   core: InformationCore,
-  input: {
-    requestId: string;
-    text: string;
-    occurredAt: string;
-    scopeKey?: string;
-    identityBeforeCandidate?: boolean;
-    appendIdentity?: boolean;
-    destination?: PlatformDestination;
+  options: {
+    texts: string[];
+    signals?: string[];
+    group?: boolean;
+    identities?: boolean;
+    occurredAt?: string[];
+    includeLower?: boolean;
   },
 ) {
-  const context = await core.register(runtimeContextInformationKind, {
-    occurredAt: input.occurredAt,
+  const at = "2026-09-22T08:00:00.000Z";
+  const context = await core.register(runtimeContext, {
+    occurredAt: at,
     source: "core:test",
-    payload: { requestId: input.requestId },
+    payload: { requestId: `request-${options.texts.join("-")}` },
     references: [],
   });
+  const destination = options.group
+    ? { kind: "group" as const, groupId: "room" }
+    : {
+        kind: "web" as const,
+        conversationId: "00000000-0000-4000-8000-000000000001",
+      };
   const source = {
+    platform: options.group ? "qq" : "web",
     adapterId: "adapter",
-    platform: "web",
-    platformMessageId: input.requestId,
-    destination: input.destination ?? { kind: "web" as const },
-    senderId: "web",
+    destination,
+    senderId: "user",
+    selfId: "bot",
   };
-  const inbound = await core.register(inboundTextInformationKind, {
-    occurredAt: input.occurredAt,
-    source: "adapter:test",
-    payload: { text: input.text, source },
-    references: [
-      { relation: "core:context", informationId: context.informationId },
-    ],
-  });
-  const appendIdentity = () =>
-    core.register(personContextCompletedInformationKind, {
-      occurredAt: input.occurredAt,
-      source: "module:identity",
+  const inputs = [];
+  const count = options.texts.length + (options.includeLower ? 1 : 0);
+  for (let index = 0; index < count; index += 1) {
+    const lower = options.includeLower && index === 0;
+    const inbound = await core.register(inboundTextInformationKind, {
+      occurredAt:
+        options.occurredAt?.[index] ??
+        new Date(Date.parse(at) + index * 1000).toISOString(),
+      source: "adapter:test",
       payload: {
-        status: "unresolved" as const,
-        scopeMode: "ephemeral" as const,
-        platform: "web",
-        adapterId: "adapter",
+        text: lower
+          ? "already observed"
+          : options.texts[index - (options.includeLower ? 1 : 0)]!,
+        source: {
+          ...source,
+          platformMessageId: `message-${index}`,
+        },
       },
       references: [
-        { relation: "core:caused-by", informationId: inbound.informationId },
         { relation: "core:context", informationId: context.informationId },
-        { relation: "core:status-of", informationId: inbound.informationId },
       ],
     });
-  if (input.appendIdentity !== false && input.identityBeforeCandidate !== false)
-    await appendIdentity();
+    inputs.push(inbound);
+    if (options.identities !== false && !lower)
+      await appendIdentity(
+        core,
+        context.informationId,
+        inbound.informationId,
+        inbound.occurredAt,
+      );
+  }
   const heartbeat = await core.register(heartbeatScheduledInformationKind, {
-    occurredAt: input.occurredAt,
+    occurredAt: at,
     source: "module:heartbeat",
     payload: {
-      reason: "message" as const,
-      dueAt: input.occurredAt,
-      policyVersion: "short-heartbeat.v1" as const,
-      platform: "web",
-      adapterId: "adapter",
-      destination: source.destination,
-      sourceInformationIds: [inbound.informationId],
+      reason: "message",
+      dueAt: at,
+      policyVersion: "short-heartbeat.v1",
+      platform: source.platform,
+      adapterId: source.adapterId,
+      destination,
+      sourceInformationIds: inputs.map((input) => input.informationId),
       wakeOnMessage: true,
       attempt: 0,
       rebuildAttempt: 0,
       totalWaitBudget: 1,
-      scopeKey: input.scopeKey ?? "web:adapter:web:",
-      asOf: input.occurredAt,
+      scopeKey: scopeOf(source),
+      asOf: at,
     },
-    references: [
-      { relation: "core:caused-by", informationId: inbound.informationId },
-      { relation: "core:context", informationId: context.informationId },
-      { relation: "core:uses-context", informationId: inbound.informationId },
-    ],
+    references: inputs
+      .map((input) => ({
+        relation: "core:uses-context",
+        informationId: input.informationId,
+      }))
+      .concat([
+        { relation: "core:context", informationId: context.informationId },
+        { relation: "core:caused-by", informationId: inputs[0]!.informationId },
+      ]),
   });
   const requested = await core.register(oneShotRequestedInformationKind, {
-    occurredAt: input.occurredAt,
-    source: "core:test",
+    occurredAt: at,
+    source: "core:scheduler",
     payload: {
       operationKey: `test:${heartbeat.informationId}`,
-      dueAt: input.occurredAt,
+      dueAt: at,
       input: {},
-      activation: {
-        instanceId: "heartflow.test",
-        definitionId: "agent.heartbeat.short",
-      },
+      activation: { instanceId: "heartbeat", definitionId: "heartbeat" },
     },
     references: [
       { relation: "core:caused-by", informationId: heartbeat.informationId },
     ],
   });
   const due = await core.register(oneShotDueInformationKind, {
-    occurredAt: input.occurredAt,
-    source: "core:test",
+    occurredAt: at,
+    source: "core:scheduler",
     payload: {
       scheduleInformationId: requested.informationId,
-      dueAt: input.occurredAt,
-      deliveredAt: input.occurredAt,
+      dueAt: at,
+      deliveredAt: at,
     },
     references: [
       { relation: "core:status-of", informationId: requested.informationId },
     ],
   });
-  const fired = await core.register(heartbeatFiredInformationKind, {
-    occurredAt: input.occurredAt,
+  await core.register(heartbeatFiredInformationKind, {
+    occurredAt: at,
     source: "module:heartbeat",
-    payload: { firedAt: input.occurredAt },
+    payload: { firedAt: at },
     references: [
       { relation: "core:caused-by", informationId: due.informationId },
       { relation: "core:status-of", informationId: heartbeat.informationId },
+      { relation: "core:context", informationId: context.informationId },
     ],
   });
+  const lower = options.includeLower ? inputs[0] : undefined;
+  const unread = options.includeLower ? inputs.slice(1) : inputs;
   const candidate = await core.register(turnCandidateInformationKind, {
-    occurredAt: input.occurredAt,
+    occurredAt: at,
     source: "module:heartbeat",
     payload: {
-      heartbeatInformationId: heartbeat.informationId,
-      reason: "message" as const,
-      dueAt: input.occurredAt,
-      firedAt: input.occurredAt,
-      platform: "web",
-      adapterId: "adapter",
-      destination: source.destination,
-      sourceInformationIds: [inbound.informationId],
-      scopeKey: input.scopeKey ?? "web:adapter:web:",
-      asOf: input.occurredAt,
-      policyVersion: "short-heartbeat.v1" as const,
-      attempt: 0,
+      triggerInformationId: due.informationId,
+      reason: "message",
+      dueAt: at,
+      firedAt: at,
+      platform: source.platform,
+      adapterId: source.adapterId,
+      destination,
+      ...(lower ? { unreadAfterInformationId: lower.informationId } : {}),
+      unreadThroughInformationId: unread.at(-1)!.informationId,
+      unreadCount: unread.length,
+      signals: options.signals ?? [options.group ? "passive" : "web"],
+      scopeKey: String(heartbeat.payload.scopeKey),
+      asOf: unread.at(-1)!.occurredAt,
+      policyVersion: "attention-opportunity.v1",
       rebuildAttempt: 0,
+      attempt: 0,
       totalWaitBudget: 1,
     },
     references: [
       { relation: "core:caused-by", informationId: due.informationId },
-      { relation: "agent:heartbeat-fired", informationId: fired.informationId },
       { relation: "core:context", informationId: context.informationId },
-      { relation: "core:uses-context", informationId: inbound.informationId },
     ],
   });
-  if (input.appendIdentity !== false && input.identityBeforeCandidate === false)
-    await appendIdentity();
-  return { context, inbound, candidate, appendIdentity };
+  return { context, inputs, unread, candidate };
 }
 
-async function atoms(
-  database: Awaited<ReturnType<typeof createTestingDatabase>>,
-) {
-  return database.information.find({
-    occurredAfter: "2026-09-07T00:00:00.000Z",
-    limit: 1_000,
-  });
-}
-
-async function waitForKind(
-  database: Awaited<ReturnType<typeof createTestingDatabase>>,
-  kind: string,
-) {
-  return vi.waitFor(async () => {
-    const found = (await atoms(database)).find((atom) => atom.kind === kind);
-    expect(found).toBeDefined();
-    return found!;
-  }, persistenceWait);
-}
-
-async function waitForDelivery(
-  database: Awaited<ReturnType<typeof createTestingDatabase>>,
-  subscriptionId: string,
-  informationId: string,
-) {
-  await vi.waitFor(async () => {
-    const delivery = await database.sql.query<{
-      state: string;
-      attempts: number;
-    }>(
-      "SELECT state, attempts FROM information_deliveries WHERE subscription_id = $1 AND information_id = $2",
-      [`heartflow.test:${subscriptionId}`, informationId],
-    );
-    expect(delivery.rows).toEqual([{ state: "acked", attempts: 1 }]);
-  }, persistenceWait);
-}
-
-async function submitDecision(
+async function appendIdentity(
   core: InformationCore,
-  database: Awaited<ReturnType<typeof createTestingDatabase>>,
-  outcome: "attend" | "defer" | "ignore",
-  candidateInformationId?: string,
+  contextInformationId: string,
+  inboundInformationId: string,
+  occurredAt: string,
 ) {
-  const state = await atoms(database);
-  const claim = state.find(
-    (atom) =>
-      atom.kind === turnClaimedInformationKind.kind &&
-      (candidateInformationId === undefined ||
-        (atom.payload as any).candidateInformationId ===
-          candidateInformationId),
-  )!;
-  const turnContext = state.find(
-    (atom) =>
-      atom.kind === turnContextCompletedInformationKind.kind &&
-      (candidateInformationId === undefined ||
-        (atom.payload as any).candidateInformationId ===
-          candidateInformationId),
-  )!;
-  const payload = turnContext.payload as any;
-  return core.commitTerminal(
-    outcome === "attend" ? "agent.turn.attention" : "agent.turn.decision",
-    claim.informationId,
-    attentionArousalCompletedInformationKind,
-    {
-      occurredAt: "2026-09-08T00:00:10.000Z",
-      source: "module:speech",
-      payload: {
-        outcome,
-        text: payload.text,
-        source: payload.source,
-        candidateInformationId: payload.candidateInformationId,
-        claimInformationId: claim.informationId,
-        turnContextInformationId: turnContext.informationId,
-        score: outcome === "attend" ? 80 : outcome === "defer" ? 50 : 0,
-        threshold: 80,
-        components: {
-          relevance: 0,
-          content: 0,
-          pressure: 0,
-          recentPresencePenalty: 0,
-          frequencyFactor: 1,
-          preFrequencyScore: 0,
-        },
-        reasonCodes: outcome === "ignore" ? ["muted"] : [],
-        missingInputs: ["memory", "association"],
-        policyDigest: "test-policy",
-        settingsDigest: "test-settings",
-        ...(outcome === "defer"
-          ? {
-              dueAt: "2026-09-08T00:01:00.000Z",
-              delayMs: 50_000,
-              wakePolicy: "recheckAt" as const,
-            }
-          : {}),
-        attempt: 0,
-        totalWaitBudget: 1,
-      },
-      references: [
-        {
-          relation: "core:caused-by",
-          informationId: turnContext.informationId,
-        },
-        {
-          relation: "core:context",
-          informationId: turnContext.references.find(
-            ({ relation }) => relation === "core:context",
-          )!.informationId,
-        },
-        {
-          relation: "core:uses-context",
-          informationId: turnContext.informationId,
-        },
-        { relation: "agent:turn-claim", informationId: claim.informationId },
-        { relation: "core:status-of", informationId: claim.informationId },
-      ],
-    },
-  );
-}
-
-async function dispatchSubscription(
-  module: ReturnType<typeof createHeartflowModule>,
-) {
-  const instance = await module.create(
-    {
-      instanceId: "heartflow.test",
-      settings: heartflowSettingsSchema.parse({
-        botNames: [],
-        groupFrequency: 1,
-        privateFrequency: 1,
-        muted: false,
-        staleAfterMs: 120_000,
-      }),
-      activation: {
-        instanceId: "heartflow.test",
-        definitionId: module.manifest.definitionId,
-      },
-    },
-    {} as never,
-  );
-  return instance.subscriptions.find(
-    ({ subscriptionId }) =>
-      subscriptionId === "agent.heartflow.dispatch.decision",
-  )!;
-}
-
-describe("heartflow", () => {
-  it("interrupts a pending Planner when a new same-scope message arrives", async () => {
-    const { core, database } = await fixture();
-    const blocked = Promise.withResolvers<void>();
-    execute.mockImplementationOnce(async () => {
-      await blocked.promise;
-      return {
-        status: "completed",
-        output: {
-          action: "message",
-          reason: "respond",
-          composition: {
-            focusInputIndexes: [0],
-            topic: "测试话题",
-            replyAct: "回应",
-          },
-        },
-        requestedInformationId: "request",
-        terminalInformationId: "terminal",
-      };
-    });
-    try {
-      const { context, inbound, candidate } = await appendCandidate(core, {
-        requestId: "interrupt-first",
-        text: "先说一句",
-        occurredAt: "2026-09-08T00:00:01.000Z",
-      });
-      await waitForKind(database, turnContextCompletedInformationKind.kind);
-      const decision = await submitDecision(
-        core,
-        database,
-        "attend",
-        candidate.informationId,
-      );
-      await vi.waitFor(
-        () => expect(execute).toHaveBeenCalledTimes(1),
-        persistenceWait,
-      );
-      await core.register(inboundTextInformationKind, {
-        occurredAt: "2026-09-08T00:00:02.000Z",
-        source: "adapter:test",
-        payload: {
-          text: "补充一句",
-          source: {
-            ...inbound.payload.source,
-            platformMessageId: "interrupt-second",
-          },
-        },
-        references: [
-          { relation: "core:context", informationId: context.informationId },
-        ],
-      });
-      const terminal = await waitForKind(
-        database,
-        turnInterruptedInformationKind.kind,
-      );
-      expect(terminal.payload.rebuildAttempt).toBe(1);
-      expect(
-        (await atoms(database)).filter(
-          (atom) => atom.kind === turnDecisionInterruptedInformationKind.kind,
-        ),
-      ).toHaveLength(1);
-      blocked.resolve();
-      await waitForDelivery(
-        database,
-        "agent.heartflow.dispatch.decision",
-        decision.informationId,
-      );
-      const all = await atoms(database);
-      expect(
-        all.some(
-          (atom) => atom.kind === messageIntentRequestedInformationKind.kind,
-        ),
-      ).toBe(false);
-      expect(
-        all.filter((atom) => atom.kind === turnInterruptedInformationKind.kind),
-      ).toHaveLength(1);
-      expect(
-        all.filter((atom) => atom.kind === "agent.turn.plan.completed"),
-      ).toHaveLength(0);
-      expect(execute).toHaveBeenCalledTimes(1);
-    } finally {
-      blocked.resolve();
-    }
-  });
-
-  it("joins identity whether it arrives before or after the candidate", async () => {
-    const { core, database } = await fixture();
-    await appendCandidate(core, {
-      requestId: "late-identity",
-      text: "moon",
-      occurredAt: "2026-09-08T00:00:01.000Z",
-      identityBeforeCandidate: false,
-    });
-
-    const context = await waitForKind(
-      database,
-      turnContextCompletedInformationKind.kind,
-    );
-    expect((context.payload as any).inputs).toHaveLength(1);
-    expect((context.payload as any).bootstrap).toEqual({
-      version: 1,
-      mode: "cold-start",
-      memory: { state: "disabled", selectedCount: 0 },
-      conversation: { state: "ephemeral" },
-      participants: [
-        {
-          inputInformationId: (context.payload as any).inputs[0].informationId,
-          state: "unresolved",
-        },
-      ],
-    });
-  });
-
-  it.each([
-    [
-      "defer",
-      waitRequestedInformationKind.kind,
-      turnWaitingInformationKind.kind,
-    ],
-    ["ignore", undefined, turnSilentInformationKind.kind],
-  ] as const)(
-    "dispatches %s as a first-class terminal",
-    async (action, effect, terminal) => {
-      const { core, database } = await fixture();
-      await appendCandidate(core, {
-        requestId: action,
-        text: action,
-        occurredAt: "2026-09-08T00:00:01.000Z",
-      });
-      await waitForKind(database, turnContextCompletedInformationKind.kind);
-      await submitDecision(core, database, action);
-      expect(execute).not.toHaveBeenCalled();
-
-      await waitForKind(database, terminal);
-      const all = await atoms(database);
-      expect(
-        all.some(
-          ({ kind }) => kind === messageIntentRequestedInformationKind.kind,
-        ),
-      ).toBe(false);
-      if (effect === undefined) {
-        expect(
-          all.some(({ kind }) => kind === waitRequestedInformationKind.kind),
-        ).toBe(false);
-      } else {
-        const wait = all.find(({ kind }) => kind === effect)!;
-        expect((wait.payload as any).attempt).toBe(1);
-      }
-    },
-  );
-
-  it.each([
-    { kind: "private", userId: "recipient" },
-    { kind: "group", groupId: "room" },
-  ] satisfies PlatformDestination[])(
-    "dispatches a replayed attend decision to one intent for %j",
-    async (destination) => {
-      const { core, database, module } = await fixture();
-      const { candidate } = await appendCandidate(core, {
-        destination,
-        requestId: "attend",
-        text: "attend",
-        occurredAt: "2026-09-08T00:00:01.000Z",
-      });
-      await waitForKind(database, turnContextCompletedInformationKind.kind);
-
-      const first = await submitDecision(core, database, "attend");
-      const replay = await submitDecision(core, database, "attend");
-      expect(replay.informationId).toBe(first.informationId);
-
-      const intent = await waitForKind(
-        database,
-        messageIntentRequestedInformationKind.kind,
-      );
-      const frozenContext = (await atoms(database)).find(
-        ({ kind }) => kind === turnContextCompletedInformationKind.kind,
-      )!;
-      const claimId = (frozenContext.payload as any).claimInformationId;
-      expect(intent.payload).toEqual({
-        target: { adapterId: "adapter", platform: "web", destination },
-        turn: {
-          candidateInformationId: candidate.informationId,
-          claimInformationId: claimId,
-          contextInformationId: frozenContext.informationId,
-        },
-        memoryInformationIds: [],
-        composition: {
-          focusInformationIds: [
-            (frozenContext.payload as any).inputs[0].informationId,
-          ],
-          topic: "测试话题",
-          replyAct: "回应",
-        },
-      });
-      expect(intent.references).toEqual(
-        expect.arrayContaining([
-          { relation: "core:caused-by", informationId: first.informationId },
-          {
-            relation: "core:uses-context",
-            informationId: frozenContext.informationId,
-          },
-          { relation: "agent:turn-claim", informationId: claimId },
-          {
-            relation: "agent:turn-candidate",
-            informationId: candidate.informationId,
-          },
-        ]),
-      );
-      const dispatch = await dispatchSubscription(module);
-      const registerOnce = vi.fn(async (operation, key, definition, input) =>
-        core.registerOnce(operation, key, definition, {
-          ...input,
-          source: "module:heartflow.test",
-          occurredAt: first.occurredAt,
-          references: [
-            ...input.references,
-            { relation: "core:caused-by", informationId: first.informationId },
-            ...first.references.filter(
-              ({ relation }) => relation === "core:context",
-            ),
-          ],
-        }),
-      );
-      const replayContext = {
-        select: async () => atoms(database),
-        registerOnce,
-        use: () => ({ execute }),
-        commitTerminal: async () =>
-          (await atoms(database)).find(
-            (atom) => atom.kind === "agent.turn.plan.completed",
-          ),
-      };
-      await dispatch.handle(first, replayContext as never);
-      await dispatch.handle(first, replayContext as never);
-      expect(registerOnce).toHaveBeenCalledTimes(2);
-      expect(await registerOnce.mock.results[0]!.value).toMatchObject({
-        informationId: intent.informationId,
-      });
-      expect(await registerOnce.mock.results[1]!.value).toMatchObject({
-        informationId: intent.informationId,
-      });
-      expect(
-        (await atoms(database)).filter(
-          ({ kind }) => kind === messageIntentRequestedInformationKind.kind,
-        ),
-      ).toHaveLength(1);
-    },
-  );
-
-  it("routes only from the latest frozen input and carries memory IDs without copying content", async () => {
-    const module = createHeartflowModule({
-      plannerTemplate,
-      plannerBootstrapPolicy: "bootstrap policy",
-      memoryEnabled: false,
-      modelTaskCapability,
-      agentIdentity,
-      deliveryDeliveredInformationKind,
-      deliveryFailedInformationKind,
-      modelTaskFailedInformationKind,
-      modelTaskCancelledInformationKind,
-      executionExhaustedInformationKind,
-    });
-    const dispatch = await dispatchSubscription(module);
-    const atom = (id: string, kind: string, payload: any) =>
-      freezeInformationAtom({
-        informationId: informationIdSchema.parse(id),
-        kind,
-        payload,
-        source: "module:test",
-        occurredAt: "2026-09-08T00:00:01.000Z",
-        references: [
-          {
-            relation: "core:context",
-            informationId: informationIdSchema.parse("runtime-context"),
-          },
-        ],
-      });
-    const oldSource = {
-      senderId: "old-sender",
-      platformMessageId: "old-message",
-      adapterId: "old",
-      platform: "qq",
-      destination: { kind: "private", userId: "old-user" },
-    };
-    const latestSource = {
-      adapterId: "latest",
-      platform: "qq",
-      destination: { kind: "group", groupId: "room" },
-      platformMessageId: "incoming-id",
-      senderId: "sender",
-      replyTo: { platformMessageId: "quoted" },
-    };
-    const candidate = atom("candidate", turnCandidateInformationKind.kind, {
-      scopeKey: "scope",
-    });
-    const claim = atom("claim", turnClaimedInformationKind.kind, {
-      candidateInformationId: "candidate",
-    });
-    const frozenContext = atom(
-      "context",
-      turnContextCompletedInformationKind.kind,
-      {
-        ...messageFixture().atoms.find(
-          (atom) => atom.kind === turnContextCompletedInformationKind.kind,
-        )!.payload,
-        candidateInformationId: "candidate",
-        claimInformationId: "claim",
-        source: oldSource,
-        asOf: "2026-09-08T00:00:01.000Z",
-        attempt: 0,
-        totalWaitBudget: 3,
-        text: "full frozen body",
-        memory: ["memory-1", "memory-2"],
-        inputs: [
-          {
-            ...(
-              messageFixture().atoms.find(
-                (atom) =>
-                  atom.kind === turnContextCompletedInformationKind.kind,
-              )!.payload as any
-            ).inputs[0],
-            informationId: "old",
-            text: "first body",
-            source: { ...latestSource, ...oldSource },
-          },
-          {
-            ...(
-              messageFixture().atoms.find(
-                (atom) =>
-                  atom.kind === turnContextCompletedInformationKind.kind,
-              )!.payload as any
-            ).inputs[1],
-            informationId: "latest",
-            text: "last body",
-            source: latestSource,
-          },
-        ],
-      },
-    );
-    const decision = atom(
-      "decision",
-      attentionArousalCompletedInformationKind.kind,
-      {
-        outcome: "attend",
-        candidateInformationId: "candidate",
-        claimInformationId: "claim",
-        turnContextInformationId: "context",
-        source: oldSource,
-        attempt: 0,
-        totalWaitBudget: 3,
-      },
-    );
-    const laterInbound = atom("later", inboundTextInformationKind.kind, {
-      text: "not frozen",
-      source: oldSource,
-    });
-    const registerOnce = vi.fn(async () => decision);
-    await dispatch.handle(decision, {
-      select: async () => [candidate, claim, frozenContext, laterInbound],
-      registerOnce,
-      use: () => ({ execute }),
-      commitTerminal: async (
-        _operation: string,
-        _key: string,
-        definition: any,
-        input: any,
-      ) => atom("plan", definition.kind, input.payload),
-    } as never);
-    expect(registerOnce).toHaveBeenCalledExactlyOnceWith(
-      "agent.heartflow.message-intent",
-      "claim",
-      messageIntentRequestedInformationKind,
-      {
-        payload: {
-          target: {
-            adapterId: "latest",
-            platform: "qq",
-            destination: { kind: "group", groupId: "room" },
-          },
-          turn: {
-            candidateInformationId: "candidate",
-            claimInformationId: "claim",
-            contextInformationId: "context",
-          },
-          memoryInformationIds: ["memory-1", "memory-2"],
-          composition: {
-            focusInformationIds: ["old"],
-            topic: "测试话题",
-            replyAct: "回应",
-          },
-        },
-        references: [
-          { relation: "core:uses-context", informationId: "context" },
-          { relation: "agent:turn-claim", informationId: "claim" },
-          { relation: "agent:turn-candidate", informationId: "candidate" },
-        ],
-      },
-    );
-  });
-
-  it("turns an exhausted online stage into one failed terminal", async () => {
-    const { core, database } = await fixture();
-    const { candidate } = await appendCandidate(core, {
-      requestId: "exhausted",
-      text: "exhausted",
-      occurredAt: "2026-09-08T00:00:01.000Z",
-    });
-    const turnContext = await waitForKind(
-      database,
-      turnContextCompletedInformationKind.kind,
-    );
-
-    await core.register(executionExhaustedInformationKind, {
-      occurredAt: "2026-09-08T00:00:10.000Z",
-      source: "core:reliable-dag",
-      payload: { subscriptionId: "core.speech.turn-context", attempts: 3 },
-      references: [
-        {
-          relation: "core:caused-by",
-          informationId: turnContext.informationId,
-        },
-        {
-          relation: "core:status-of",
-          informationId: turnContext.informationId,
-        },
-      ],
-    });
-
-    const failed = await waitForKind(database, turnFailedInformationKind.kind);
-    expect(failed.payload as any).toMatchObject({
-      candidateInformationId: candidate.informationId,
-      reason: "execution-exhausted",
-    });
-    expect(
-      (await atoms(database)).filter(
-        (atom) =>
-          atom.kind === turnFailedInformationKind.kind &&
-          atom.references.some(
-            (reference) =>
-              reference.relation === "core:status-of" &&
-              reference.informationId === candidate.informationId,
-          ),
-      ),
-    ).toHaveLength(1);
-  });
-
-  it("fails the identity barrier when its inbound delivery is exhausted", async () => {
-    const { core, database } = await fixture();
-    const { inbound, candidate } = await appendCandidate(core, {
-      requestId: "identity-exhausted",
-      text: "identity exhausted",
-      occurredAt: "2026-09-08T00:00:01.000Z",
-      appendIdentity: false,
-    });
-
-    await core.register(executionExhaustedInformationKind, {
-      occurredAt: "2026-09-08T00:00:10.000Z",
-      source: "core:reliable-dag",
-      payload: { subscriptionId: "core.identity.inbound", attempts: 3 },
-      references: [
-        { relation: "core:caused-by", informationId: inbound.informationId },
-        { relation: "core:status-of", informationId: inbound.informationId },
-      ],
-    });
-
-    const failed = await waitForKind(database, turnFailedInformationKind.kind);
-    expect(failed.payload).toMatchObject({
-      candidateInformationId: candidate.informationId,
-      reason: "identity-exhausted",
-    });
-    expect(
-      (await atoms(database)).some(
-        ({ kind }) => kind === turnContextCompletedInformationKind.kind,
-      ),
-    ).toBe(false);
-  });
-
-  it("queues a post-decision candidate until the active turn terminates", async () => {
-    const { core, database } = await fixture();
-    const first = await appendCandidate(core, {
-      requestId: "active-first",
-      text: "first",
-      occurredAt: "2026-09-08T00:00:01.000Z",
-    });
-    await waitForKind(database, turnContextCompletedInformationKind.kind);
-    const decision = await submitDecision(core, database, "attend");
-    await waitForKind(database, messageIntentRequestedInformationKind.kind);
-    const second = await appendCandidate(core, {
-      requestId: "queued-second",
-      text: "second",
-      occurredAt: "2026-09-08T00:00:02.000Z",
-    });
-
-    await waitForDelivery(
-      database,
-      `agent.heartflow.progress.${turnCandidateInformationKind.kind}`,
-      second.candidate.informationId,
-    );
-    expect(
-      (await atoms(database)).filter(
-        ({ kind }) => kind === turnClaimedInformationKind.kind,
-      ),
-    ).toHaveLength(1);
-    const claim = (await atoms(database)).find(
-      ({ kind }) => kind === turnClaimedInformationKind.kind,
-    )!;
-    const completed = await core.commitTerminal(
-      "agent.turn.terminal",
-      first.candidate.informationId,
-      turnCompletedInformationKind,
-      {
-        occurredAt: "2026-09-08T00:00:10.000Z",
-        source: "runtime:test-delivery",
-        payload: {
-          candidateInformationId: first.candidate.informationId,
-          claimInformationId: claim.informationId,
-          scopeKey: "web:adapter:web:",
-          deliveryTerminalInformationId: "simulated-delivery-terminal",
-        },
-        references: [
-          { relation: "core:caused-by", informationId: decision.informationId },
-          {
-            relation: "core:context",
-            informationId: first.context.informationId,
-          },
-          {
-            relation: "core:status-of",
-            informationId: first.candidate.informationId,
-          },
-          { relation: "agent:turn-claim", informationId: claim.informationId },
-        ],
-      },
-    );
-
-    const claims = await vi.waitFor(async () => {
-      const current = (await atoms(database)).filter(
-        ({ kind }) => kind === turnClaimedInformationKind.kind,
-      );
-      expect(current).toHaveLength(2);
-      return current;
-    }, persistenceWait);
-    expect(
-      claims.find(
-        (atom) =>
-          (atom.payload as any).candidateInformationId ===
-          second.candidate.informationId,
-      )?.payload,
-    ).toMatchObject({
-      generation: 1,
-      predecessorTerminalInformationId: completed.informationId,
-    });
-    expect(
-      (await atoms(database)).some(
-        ({ kind }) => kind === turnSupersededInformationKind.kind,
-      ),
-    ).toBe(false);
-  });
-
-  it("supersedes an undecided turn and carries its frozen inputs forward", async () => {
-    const { core, database } = await fixture();
-    const first = await appendCandidate(core, {
-      requestId: "first",
-      text: "first",
-      occurredAt: "2026-09-08T00:00:01.000Z",
-    });
-    await waitForKind(database, turnContextCompletedInformationKind.kind);
-    const second = await appendCandidate(core, {
-      requestId: "second",
-      text: "second",
-      occurredAt: "2026-09-08T00:00:02.000Z",
-    });
-
-    await waitForKind(database, turnDecisionSupersededInformationKind.kind);
-    const all = await vi.waitFor(async () => {
-      const current = await atoms(database);
-      expect(
-        current.some(
-          (atom) =>
-            atom.kind === turnSupersededInformationKind.kind &&
-            atom.references.some(
-              (reference) =>
-                reference.relation === "core:status-of" &&
-                reference.informationId === first.candidate.informationId,
-            ),
-        ),
-      ).toBe(true);
-      expect(
-        current.filter(({ kind }) => kind === turnClaimedInformationKind.kind),
-      ).toHaveLength(2);
-      expect(
-        current.some(
-          (atom) =>
-            atom.kind === turnContextCompletedInformationKind.kind &&
-            atom.payload.candidateInformationId ===
-              second.candidate.informationId,
-        ),
-      ).toBe(true);
-      return current;
-    }, persistenceWait);
-    const latestContext = all
-      .filter(({ kind }) => kind === turnContextCompletedInformationKind.kind)
-      .find(
-        (atom) =>
-          (atom.payload as any).candidateInformationId ===
-          second.candidate.informationId,
-      )!;
-    expect(
-      (latestContext.payload as any).inputs.map(
-        (input: any) => input.informationId,
-      ),
-    ).toEqual([first.inbound.informationId, second.inbound.informationId]);
-
-    await submitDecision(
-      core,
-      database,
-      "attend",
-      second.candidate.informationId,
-    );
-    const intent = await waitForKind(
-      database,
-      messageIntentRequestedInformationKind.kind,
-    );
-    expect(intent.payload).toEqual({
-      target: {
-        adapterId: "adapter",
-        platform: "web",
-        destination: { kind: "web" },
-      },
-      turn: {
-        candidateInformationId: second.candidate.informationId,
-        contextInformationId: latestContext.informationId,
-        claimInformationId: (latestContext.payload as any).claimInformationId,
-      },
-      memoryInformationIds: [],
-      composition: {
-        focusInformationIds: [
-          (latestContext.payload as any).inputs[0].informationId,
-        ],
-        topic: "测试话题",
-        replyAct: "回应",
-      },
-    });
-  });
-});
-
-describe("Planner durable dispatch", () => {
-  it.each([
-    [
-      "message",
-      {
-        action: "message",
-        reason: "respond",
-        composition: {
-          focusInputIndexes: [0],
-          topic: "测试话题",
-          replyAct: "回应",
-        },
-      },
-      "agent.message.intent.requested",
-    ],
-    [
-      "wait",
-      { action: "wait", reason: "await-more-context", waitSeconds: 7 },
-      "agent.turn.waiting",
-    ],
-    [
-      "silent",
-      { action: "silent", reason: "no-response-needed" },
-      "agent.turn.silent",
-    ],
-    [
-      "extra destination",
-      { action: "message", reason: "respond", destination: "forbidden" },
-      "agent.turn.silent",
-    ],
-    ["invalid JSON", "not JSON", "agent.turn.silent"],
-    [
-      "invalid wait",
-      { action: "wait", reason: "await-more-context", waitSeconds: 121 },
-      "agent.turn.silent",
-    ],
-    [
-      "out-of-range anchor",
-      {
-        action: "message",
-        reason: "respond",
-        composition: {
-          focusInputIndexes: [1],
-          topic: "测试话题",
-          replyAct: "回应",
-        },
-      },
-      "agent.turn.silent",
-    ],
-  ])("dispatches %s with one fenced action", async (_name, output, kind) => {
-    execute.mockResolvedValue({
-      status: "completed",
-      output,
-      requestedInformationId: "request",
-      terminalInformationId: "terminal",
-    } as never);
-    const { core, database } = await fixture();
-    await appendCandidate(core, {
-      requestId: "planner",
-      text: "hello",
-      occurredAt: "2026-09-08T00:00:01.000Z",
-    });
-    await waitForKind(database, turnContextCompletedInformationKind.kind);
-    await submitDecision(core, database, "attend");
-    await waitForKind(database, String(kind));
-    const all = await atoms(database);
-    expect(execute).toHaveBeenCalledTimes(1);
-    expect(
-      all.filter((atom) => atom.kind === "agent.turn.plan.completed"),
-    ).toHaveLength(1);
-    expect(all.some((atom) => atom.kind === "agent.turn.failed")).toBe(false);
-    if (kind !== "agent.message.intent.requested")
-      expect(
-        all.some((atom) => atom.kind === "agent.message.intent.requested"),
-      ).toBe(false);
-    if (kind === "agent.turn.waiting")
-      expect(
-        all.find((atom) => atom.kind === "agent.wait.requested")?.payload,
-      ).toMatchObject({ attempt: 1, delayMs: 7000, wakeOnMessage: true });
-    if (
-      [
-        "extra destination",
-        "invalid JSON",
-        "invalid wait",
-        "out-of-range anchor",
-      ].includes(String(_name))
-    )
-      expect(
-        all.find((atom) => atom.kind === "agent.turn.silent")?.payload
-          .reasonCodes,
-      ).toEqual(["planner-unavailable"]);
-  });
-  it.each(["failed", "cancelled"])(
-    "closes %s Planner normally",
-    async (status) => {
-      execute.mockResolvedValue({
-        status,
-        requestedInformationId: "request",
-        terminalInformationId: "terminal",
-      } as never);
-      const { core, database } = await fixture();
-      await appendCandidate(core, {
-        requestId: status,
-        text: "hello",
-        occurredAt: "2026-09-08T00:00:01.000Z",
-      });
-      await waitForKind(database, turnContextCompletedInformationKind.kind);
-      await submitDecision(core, database, "attend");
-      expect(
-        (await waitForKind(database, "agent.turn.silent")).payload.reasonCodes,
-      ).toEqual(["planner-unavailable"]);
-      expect(
-        (await atoms(database)).some((atom) =>
-          ["agent.turn.failed", "agent.message.intent.requested"].includes(
-            atom.kind,
-          ),
-        ),
-      ).toBe(false);
-    },
-  );
-  it("discards a late Planner completion after supersession", async () => {
-    const blocked =
-      Promise.withResolvers<Awaited<ReturnType<typeof execute>>>();
-    const lateResult = {
-      status: "completed",
-      output: {
-        action: "message",
-        reason: "respond",
-        composition: {
-          focusInputIndexes: [0],
-          topic: "测试话题",
-          replyAct: "回应",
-        },
-      },
-      requestedInformationId: "request",
-      terminalInformationId: "terminal",
-    };
-    execute.mockImplementationOnce(() => blocked.promise);
-    try {
-      const { core, database } = await fixture();
-      const old = await appendCandidate(core, {
-        requestId: "old-plan",
-        text: "first",
-        occurredAt: "2026-09-08T00:00:01.000Z",
-      });
-      await waitForKind(database, turnContextCompletedInformationKind.kind);
-      const decision = await submitDecision(core, database, "attend");
-      await vi.waitFor(
-        () => expect(execute).toHaveBeenCalledTimes(1),
-        persistenceWait,
-      );
-      await appendCandidate(core, {
-        requestId: "new-plan",
-        text: "second",
-        occurredAt: "2026-09-08T00:00:02.000Z",
-      });
-      const superseded = await waitForKind(
-        database,
-        turnSupersededInformationKind.kind,
-      );
-      expect(superseded.payload.candidateInformationId).toBe(
-        old.candidate.informationId,
-      );
-      blocked.resolve(lateResult);
-      await waitForDelivery(
-        database,
-        "agent.heartflow.dispatch.decision",
-        decision.informationId,
-      );
-      const all = await atoms(database);
-      expect(
-        all.some(
-          (atom) => atom.kind === messageIntentRequestedInformationKind.kind,
-        ),
-      ).toBe(false);
-      expect(
-        all.filter((atom) => atom.kind === turnSupersededInformationKind.kind),
-      ).toHaveLength(1);
-      expect(
-        all.filter((atom) => atom.kind === "agent.turn.plan.completed"),
-      ).toHaveLength(0);
-      expect(execute).toHaveBeenCalledTimes(1);
-    } finally {
-      blocked.resolve(lateResult);
-    }
-  });
-});
-
-// 13 组候选共 104 次串行事实写入，再加初始化、两轮各最多 8 秒的持久化等待与清理；仅此批量用例增加总预算。
-it(
-  "recovers legacy unclaimed backlog with one frozen context and one model/action decision",
-  { timeout: 30_000 },
-  async () => {
-    const f = await fixture(false, { now: "2026-09-08T01:00:00.000Z" });
-    const backlog = [];
-    for (let i = 0; i < 12; i++)
-      backlog.push(
-        await appendCandidate(f.core, {
-          requestId: `legacy-${i}`,
-          text: `legacy ${i}`,
-          occurredAt: `2026-09-08T00:00:${String(i).padStart(2, "0")}.000Z`,
-          identityBeforeCandidate: true,
-        }),
-      );
-    await f.start();
-    await appendCandidate(f.core, {
-      requestId: "newest",
-      text: "newest",
-      occurredAt: "2026-09-08T00:00:20.000Z",
-      identityBeforeCandidate: true,
-    });
-    await waitForKind(f.database, turnContextCompletedInformationKind.kind);
-    const contexts = await (
-      await atoms(f.database)
-    ).filter((a) => a.kind === turnContextCompletedInformationKind.kind);
-    expect(contexts).toHaveLength(1);
-    expect((contexts[0]!.payload as any).inputs).toHaveLength(13);
-    const backlogProjection = (contexts[0]!.payload as any).backlog;
-    expect(backlogProjection.isBacklog).toBe(true);
-    expect(backlogProjection.thresholdMs).toBe(120_000);
-    expect(backlogProjection.oldestInputAgeMs).toBe(
-      Date.parse(backlogProjection.evaluatedAt) -
-        Date.parse("2026-09-08T00:00:00.000Z"),
-    );
-    expect(backlogProjection.newestInputAgeMs).toBe(
-      Date.parse(backlogProjection.evaluatedAt) -
-        Date.parse("2026-09-08T00:00:20.000Z"),
-    );
-    expect(
-      await (
-        await atoms(f.database)
-      ).filter((a) => a.kind === turnSupersededInformationKind.kind),
-    ).toHaveLength(12);
-    const claims = await (
-      await atoms(f.database)
-    ).filter((a) => a.kind === turnClaimedInformationKind.kind);
-    expect(claims).toHaveLength(1);
-    await submitDecision(f.core, f.database, "attend");
-    await waitForKind(f.database, messageIntentRequestedInformationKind.kind);
-    expect(execute).toHaveBeenCalledTimes(1);
-    expect(
-      await (
-        await atoms(f.database)
-      ).filter((a) => a.kind === messageIntentRequestedInformationKind.kind),
-    ).toHaveLength(1);
-  },
-);
-
-it("lets Planner close an expired recovered topic without creating a message intent", async () => {
-  const f = await fixture(false, { now: "2026-09-08T01:00:00.000Z" });
-  await appendCandidate(f.core, {
-    requestId: "expired-topic",
-    text: "刚才外面下雨了",
-    occurredAt: "2026-09-08T00:00:00.000Z",
-    identityBeforeCandidate: true,
-  });
-  await f.start();
-  await appendCandidate(f.core, {
-    requestId: "expired-topic-followup",
-    text: "现在已经晴了",
-    occurredAt: "2026-09-08T00:00:20.000Z",
-    identityBeforeCandidate: true,
-  });
-  await waitForKind(f.database, turnContextCompletedInformationKind.kind);
-  execute.mockImplementationOnce(
-    async () =>
-      ({
-        status: "completed",
-        output: { action: "silent", reason: "topic-expired" },
-        requestedInformationId: "request-expired",
-        terminalInformationId: "terminal-expired",
-      }) as any,
-  );
-  await submitDecision(f.core, f.database, "attend");
-  const plannerDecision = await waitForKind(
-    f.database,
-    "agent.turn.plan.completed",
-  );
-  expect((plannerDecision?.payload as any)?.action).toEqual({
-    action: "silent",
-    reason: "topic-expired",
-  });
-  const silent = await waitForKind(f.database, turnSilentInformationKind.kind);
-  expect((silent.payload as any).reasonCodes).toContain("topic-expired");
-  expect(execute).toHaveBeenCalledTimes(1);
-  expect(
-    (await atoms(f.database)).some(
-      (atom) => atom.kind === messageIntentRequestedInformationKind.kind,
-    ),
-  ).toBe(false);
-});
-
-it("preserves merged inputs across an unfinished identity barrier and delayed identity replay", async () => {
-  const f = await fixture(false);
-  const old = await appendCandidate(f.core, {
-    requestId: "missing-identity",
-    text: "old",
-    occurredAt: "2026-09-08T00:00:01.000Z",
-    appendIdentity: false,
-  });
-  await f.start();
-  await appendCandidate(f.core, {
-    requestId: "ready",
-    text: "new",
-    occurredAt: "2026-09-08T00:00:02.000Z",
-  });
-  const claim = await waitForKind(f.database, turnClaimedInformationKind.kind);
-  await waitForDelivery(
-    f.database,
-    `agent.heartflow.progress.${turnClaimedInformationKind.kind}`,
-    claim.informationId,
-  );
-  expect(
-    (await atoms(f.database)).filter(
-      (a) => a.kind === turnContextCompletedInformationKind.kind,
-    ),
-  ).toHaveLength(0);
-  await old.appendIdentity();
-  const context = await waitForKind(
-    f.database,
-    turnContextCompletedInformationKind.kind,
-  );
-  expect(
-    (context.payload as any).inputs.map((i: any) => i.informationId),
-  ).toContain(old.inbound.informationId);
-  expect((context.payload as any).inputs).toHaveLength(2);
-});
-
-it("refreshes the unique observation with an urgent input before context freezing", async () => {
-  const f = await fixture(false);
-  const original = await appendCandidate(f.core, {
-    requestId: "waiting-identity",
-    text: "ordinary",
-    occurredAt: "2026-09-08T00:00:01.000Z",
-    appendIdentity: false,
-  });
-  const urgent = await f.core.register(inboundTextInformationKind, {
-    occurredAt: "2026-09-08T00:00:02.000Z",
-    source: "adapter:test",
-    payload: {
-      text: "urgent",
-      source: {
-        ...(original.inbound.payload as any).source,
-        platformMessageId: "urgent",
-        selfId: "bot",
-        mentions: [{ kind: "user", id: "bot" }],
-      },
-    },
-    references: [
-      {
-        relation: "core:context",
-        informationId: original.context.informationId,
-      },
-    ],
-  });
-  await f.start();
-  await f.core.registerOnce(
-    "test.wake",
-    "urgent",
-    observationWakeInformationKind,
-    {
-      occurredAt: urgent.occurredAt,
-      source: "module:heartbeat",
-      payload: {
-        scopeKey: String(original.candidate.payload.scopeKey),
-        immediate: true,
-      },
-      references: [
-        { relation: "core:caused-by", informationId: urgent.informationId },
-        {
-          relation: "core:context",
-          informationId: original.context.informationId,
-        },
-        {
-          relation: "agent:turn-candidate",
-          informationId: original.candidate.informationId,
-        },
-        { relation: "core:uses-context", informationId: urgent.informationId },
-      ],
-    },
-  );
-  await waitForKind(f.database, turnClaimedInformationKind.kind);
-  await original.appendIdentity();
-  await f.core.register(personContextCompletedInformationKind, {
-    occurredAt: urgent.occurredAt,
+  return core.register(personContextCompletedInformationKind, {
+    occurredAt,
     source: "module:identity",
     payload: {
       status: "unresolved",
@@ -1572,88 +342,301 @@ it("refreshes the unique observation with an urgent input before context freezin
       adapterId: "adapter",
     },
     references: [
-      { relation: "core:caused-by", informationId: urgent.informationId },
-      {
-        relation: "core:context",
-        informationId: original.context.informationId,
-      },
-      { relation: "core:status-of", informationId: urgent.informationId },
+      { relation: "core:caused-by", informationId: inboundInformationId },
+      { relation: "core:context", informationId: contextInformationId },
+      { relation: "core:status-of", informationId: inboundInformationId },
     ],
   });
-  const frozen = await waitForKind(
-    f.database,
-    turnContextCompletedInformationKind.kind,
+}
+
+async function decide(
+  core: InformationCore,
+  candidate: any,
+  outcome: "observe" | "defer",
+  focus?: any,
+) {
+  const arousalState = outcome === "observe" ? "awake" : "asleep";
+  const state = await core.registerOnce(
+    "test.arousal.state",
+    candidate.informationId,
+    attentionArousalStateRecordedInformationKind,
+    {
+      occurredAt: "2026-09-22T08:00:10.000Z",
+      source: "module:arousal",
+      payload: {
+        state: arousalState,
+        cause: outcome === "observe" ? "signal" : "external",
+        scopeKey: candidate.payload.scopeKey,
+        candidateInformationId: candidate.informationId,
+        lastEvaluatedAt: "2026-09-22T08:00:10.000Z",
+        lastInboundInformationId: candidate.payload.unreadThroughInformationId,
+        lastActivityAt: "2026-09-22T08:00:10.000Z",
+        sleepStartedAt:
+          arousalState === "asleep" ? "2026-09-22T08:00:10.000Z" : null,
+        lastPeriodicWakeAt: null,
+        reasonCodes: outcome === "observe" ? ["test-observe"] : ["test-asleep"],
+        policyVersion: "attention-observation.v1",
+      },
+      references: [
+        { relation: "core:caused-by", informationId: candidate.informationId },
+        ...candidate.references.filter(
+          (reference: any) => reference.relation === "core:context",
+        ),
+      ],
+    },
   );
-  expect(frozen.payload.candidateInformationId).toBe(
-    original.candidate.informationId,
-  );
-  expect((frozen.payload.inputs as any[]).map((i) => i.text)).toEqual([
-    "ordinary",
-    "urgent",
-  ]);
-  expect(frozen.payload.mentionedSelf).toBe(true);
+  const input = {
+    occurredAt: "2026-09-22T08:00:10.000Z",
+    source: "module:arousal",
+    payload: {
+      outcome,
+      arousalState,
+      arousalStateInformationId: state.informationId,
+      wakeSignal: outcome === "observe",
+      candidateInformationId: candidate.informationId,
+      scopeKey: candidate.payload.scopeKey,
+      ...(candidate.payload.unreadAfterInformationId
+        ? {
+            unreadAfterInformationId:
+              candidate.payload.unreadAfterInformationId,
+          }
+        : {}),
+      unreadThroughInformationId: candidate.payload.unreadThroughInformationId,
+      unreadCount: candidate.payload.unreadCount,
+      signals: candidate.payload.signals,
+      focusState: focus ? "active" : "inactive",
+      ...(focus
+        ? {
+            focusInformationId: focus.informationId,
+            focusExpiresAt: focus.payload.expiresAt,
+          }
+        : {}),
+      reasonCodes:
+        outcome === "observe"
+          ? [focus ? "focus-active" : candidate.payload.signals[0]]
+          : ["arousal-asleep"],
+      policyVersion: "attention-observation.v1",
+    },
+    references: [
+      { relation: "core:caused-by", informationId: candidate.informationId },
+      { relation: "core:status-of", informationId: candidate.informationId },
+      {
+        relation: "core:uses-context" as const,
+        informationId: state.informationId,
+      },
+      ...(focus
+        ? [
+            {
+              relation: "core:uses-context" as const,
+              informationId: focus.informationId,
+            },
+          ]
+        : []),
+      ...candidate.references.filter(
+        (reference: any) => reference.relation === "core:context",
+      ),
+    ],
+  };
+  return outcome === "defer"
+    ? core.commitTerminal(
+        "agent.turn.terminal",
+        candidate.informationId,
+        attentionArousalCompletedInformationKind,
+        input,
+      )
+    : core.register(attentionArousalCompletedInformationKind, input);
+}
+
+async function all(database: any) {
+  return database.information.find({
+    occurredAfter: "2026-09-21T00:00:00.000Z",
+    registrationOrder: true,
+    order: "asc",
+    limit: 1000,
+  });
+}
+
+async function waitFor(database: any, kind: string) {
+  return vi.waitFor(async () => {
+    const atom = (await all(database)).find((item: any) => item.kind === kind);
+    expect(atom).toBeDefined();
+    return atom;
+  });
+}
+
+it("does not read or freeze a turn before observe, and defer leaves it absent", async () => {
+  const { core, database, execute } = await fixture();
+  const opportunity = await appendOpportunity(core, {
+    texts: ["ordinary group message"],
+    group: true,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 30));
   expect(
-    (await atoms(f.database)).filter(
-      (a) => a.kind === turnCandidateInformationKind.kind,
+    (await all(database)).some(
+      (atom: any) => atom.kind === turnContextCompletedInformationKind.kind,
     ),
-  ).toHaveLength(1);
+  ).toBe(false);
+  expect(opportunity.candidate.payload).not.toHaveProperty("text");
+  await decide(core, opportunity.candidate, "defer");
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  expect(
+    (await all(database)).some(
+      (atom: any) => atom.kind === turnContextCompletedInformationKind.kind,
+    ),
+  ).toBe(false);
+  expect(execute).not.toHaveBeenCalled();
 });
 
-describe("persistent scope focus", () => {
-  it("opens before context freeze, boosts only the same group, and expires by frozen time", async () => {
-    const { core, database } = await fixture();
-    const first = await appendCandidate(core, {
-      requestId: "focus-first",
-      text: "辉夜，帮我看看",
-      occurredAt: "2026-09-08T00:00:00.000Z",
-      scopeKey: "group:one",
-      destination: { kind: "group", groupId: "one" },
-    });
-    await waitForKind(database, turnContextCompletedInformationKind.kind);
-    const opened = (await atoms(database)).find(
-      (a) => a.kind === focusOpened.kind,
-    )!;
-    expect(opened.payload.sourceInformationId).toBe(
-      first.inbound.informationId,
-    );
-    const initial = (await atoms(database)).find(
-      (a) => a.kind === turnContextCompletedInformationKind.kind,
-    )!;
-    expect(initial.payload.focusInformationId).toBe(opened.informationId);
-    for (const [id, scope, time, expected] of [
-      ["followup", "group:one", "2026-09-08T00:00:20.000Z", true],
-      ["other", "group:two", "2026-09-08T00:00:30.000Z", false],
-      ["expired", "group:one", "2026-09-08T00:03:00.000Z", false],
-    ] as const) {
-      const next = await appendCandidate(core, {
-        requestId: id,
-        text: "然后继续这个话题",
-        occurredAt: time,
-        scopeKey: scope,
-        destination: { kind: "group", groupId: scope },
-      });
-      await vi.waitFor(
-        async () =>
-          expect(
-            (await atoms(database)).some(
-              (a) =>
-                a.kind === turnContextCompletedInformationKind.kind &&
-                a.payload.candidateInformationId ===
-                  next.candidate.informationId,
-            ),
-          ).toBe(true),
-        persistenceWait,
-      );
-      expect(
-        (await atoms(database)).find(
-          (a) =>
-            a.kind === turnContextCompletedInformationKind.kind &&
-            a.payload.candidateInformationId === next.candidate.informationId,
-        )!.payload.focusActive,
-      ).toBe(expected);
-    }
+it("freezes exactly the registration-watermark window after observe", async () => {
+  const { core, database } = await fixture({
+    action: { action: "silent", reason: "no-response-needed" },
+  });
+  const opportunity = await appendOpportunity(core, {
+    texts: ["first unread", "second unread"],
+    includeLower: true,
+    occurredAt: [
+      "2026-09-22T09:00:00.000Z",
+      "2026-09-22T07:00:00.000Z",
+      "2026-09-22T06:00:00.000Z",
+    ],
+  });
+  await decide(core, opportunity.candidate, "observe");
+  const context = await waitFor(
+    database,
+    turnContextCompletedInformationKind.kind,
+  );
+  expect(context.payload.inputs.map((input: any) => input.text)).toEqual([
+    "first unread",
+    "second unread",
+  ]);
+  expect(context.payload.observedThroughInformationId).toBe(
+    opportunity.unread.at(-1)!.informationId,
+  );
+  await waitFor(database, turnSilentInformationKind.kind);
+});
+
+it("waits for Identity terminal before freezing the observed batch", async () => {
+  const { core, database } = await fixture({
+    action: { action: "silent", reason: "no-response-needed" },
+  });
+  const opportunity = await appendOpportunity(core, {
+    texts: ["identity pending"],
+    identities: false,
+  });
+  await decide(core, opportunity.candidate, "observe");
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  expect(
+    (await all(database)).some(
+      (atom: any) => atom.kind === turnContextCompletedInformationKind.kind,
+    ),
+  ).toBe(false);
+  await appendIdentity(
+    core,
+    opportunity.context.informationId,
+    opportunity.unread[0]!.informationId,
+    opportunity.unread[0]!.occurredAt,
+  );
+  await waitFor(database, turnContextCompletedInformationKind.kind);
+});
+
+it("uses the Focus lease frozen by Arousal instead of recomputing it", async () => {
+  const { core, database } = await fixture({
+    action: { action: "silent", reason: "no-response-needed" },
+  });
+  const opportunity = await appendOpportunity(core, {
+    texts: ["focused group input"],
+    group: true,
+  });
+  const focus = await core.register(focusOpened, {
+    occurredAt: "2026-09-22T08:00:05.000Z",
+    source: "module:test",
+    payload: {
+      scopeKey: opportunity.candidate.payload.scopeKey,
+      generation: "frozen-focus",
+      startedAt: "2026-09-22T08:00:05.000Z",
+      expiresAt: "2026-09-22T08:02:05.000Z",
+      reason: "delivered",
+      sourceInformationId: opportunity.unread[0]!.informationId,
+    },
+    references: [
+      {
+        relation: "core:caused-by",
+        informationId: opportunity.unread[0]!.informationId,
+      },
+      {
+        relation: "core:uses-context",
+        informationId: opportunity.unread[0]!.informationId,
+      },
+      {
+        relation: "core:context",
+        informationId: opportunity.context.informationId,
+      },
+    ],
+  });
+  await decide(core, opportunity.candidate, "observe", focus);
+  const turn = await waitFor(
+    database,
+    turnContextCompletedInformationKind.kind,
+  );
+  expect(turn.payload).toMatchObject({
+    focusActive: true,
+    focusInformationId: focus.informationId,
+    focusExpiresAt: focus.payload.expiresAt,
+  });
+});
+
+it.each([
+  [
+    {
+      action: "message",
+      reason: "respond",
+      composition: {
+        focusInputIndexes: [0],
+        topic: "topic",
+        replyAct: "reply",
+      },
+    },
+    messageIntentRequestedInformationKind.kind,
+  ],
+  [
+    { action: "wait", reason: "await-more-context", waitSeconds: 30 },
+    turnWaitingInformationKind.kind,
+  ],
+  [
+    { action: "silent", reason: "no-response-needed" },
+    turnSilentInformationKind.kind,
+  ],
+] as const)("keeps Planner ownership of %s", async (action, expectedKind) => {
+  const { core, database } = await fixture({ action });
+  const opportunity = await appendOpportunity(core, {
+    texts: ["planner input"],
+  });
+  await decide(core, opportunity.candidate, "observe");
+  await waitFor(database, expectedKind);
+  if (action.action === "wait")
     expect(
-      (await atoms(database)).filter((a) => a.kind === focusOpened.kind),
-    ).toHaveLength(1);
+      (await all(database)).some(
+        (atom: any) => atom.kind === waitRequestedInformationKind.kind,
+      ),
+    ).toBe(true);
+});
+
+it("applies mute after observe and opens Focus only from a direct group signal", async () => {
+  const muted = await fixture({ muted: true });
+  const blocked = await appendOpportunity(muted.core, {
+    texts: ["@bot hello"],
+    group: true,
+    signals: ["mention-self"],
+  });
+  await decide(muted.core, blocked.candidate, "observe");
+  await waitFor(muted.database, turnSilentInformationKind.kind);
+  expect(muted.execute).not.toHaveBeenCalled();
+  expect(
+    (await all(muted.database)).find(
+      (atom: any) => atom.kind === "agent.attention.focus.opened",
+    )?.payload,
+  ).toMatchObject({
+    startedAt: "2026-09-22T08:00:10.000Z",
+    expiresAt: "2026-09-22T08:02:10.000Z",
   });
 });

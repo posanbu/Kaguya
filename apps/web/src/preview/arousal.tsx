@@ -83,8 +83,8 @@ function Preview() {
       </div>
       <main>
         <header className="preview-header">
-          <h1>注意力唤醒</h1>
-          <p>检查一次输入为何关注、延后或忽略。</p>
+          <h1>注意力观察</h1>
+          <p>检查唤醒状态、唤醒来源，以及何时查看全部未读。</p>
         </header>
         {error && <FieldMessage tone="error">{error}</FieldMessage>}
         {module && (
