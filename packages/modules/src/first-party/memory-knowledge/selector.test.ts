@@ -50,6 +50,31 @@ function reader(
 }
 
 describe("planning knowledge recall", () => {
+  it("returns empty Web memory when the knowledge strategy is disabled", async () => {
+    const ledger = reader();
+    ledger.retrieve = vi.fn(async () => {
+      throw new Error("disabled");
+    });
+    const current = atom("web-current", "core.message.inbound.text", {
+      text: "小夏喜欢什么？",
+      source: {
+        platform: "web",
+        adapterId: "webui",
+        destination: { kind: "web" },
+        senderId: "browser",
+        platformMessageId: "web-current",
+      },
+    });
+    await expect(
+      selectKnowledgeMemory(ledger, {
+        inbounds: [current],
+        occurredBefore: cutoff,
+        recordedBefore: recorded,
+        limit: 8,
+      }),
+    ).resolves.toEqual([]);
+    expect(ledger.retrieve).toHaveBeenCalledOnce();
+  });
   it("keeps other speakers in the same scope while rejecting future, foreign and current evidence", async () => {
     const current = [inbound("current-a"), inbound("current-b")];
     const future = {

@@ -1,4 +1,5 @@
 /**
+ * 导出 PostgresMemoryIngestionStore，复用同一数据库执行幂等排队与原子 Memory 写入。
  * 功能概述：提供 Kaguya 唯一的 PostgreSQL 信息账本入口，组合驱动、schema 准备与
  * append-only `InformationRepository`。
  * 额外导出可选 PostgresMemoryKnowledgeStore（knowledge 属性，显式 prepareMemoryKnowledgeSchema 初始化）与 PostgresMemoryVectorIndex，启用流程由宿主显式执行而不影响 sparse-only schema。
@@ -131,3 +132,9 @@ export {
   type PostgresMemoryKnowledgeStoreOptions,
 } from "./memory-knowledge.js";
 export { prepareMemoryKnowledgeSchema } from "./memory-knowledge-schema.js";
+export {
+  PostgresMemoryIngestionStore,
+  MemoryIngestionError,
+  type MemoryIngestionContext,
+  type ClaimedMemoryIngestion,
+} from "./memory-ingestion.js";

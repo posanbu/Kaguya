@@ -1,4 +1,5 @@
 /**
+ * 消费人工录入来源 Kind，正文编译经正常记忆变量保留来源，不修改身份或规则模板。
  * manifest.promptTemplates 显式声明消息模板组，供管理端按归属读取。
  * modelTier 的公开中文 schema 元数据由全局配置表单消费，保存仍使用同一校验。
  * 功能概述：消息编写模块消费 Heartflow 产生的目标与冻结 turn 意图，经通用 Model Task 生成文本。
@@ -14,6 +15,7 @@
  * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
  * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
  */
+import { userStatementInformationKind } from "../memory-knowledge/ingestion-kinds.js";
 import { firstPartyInspection } from "../inspection.js";
 import { expressionSelected, expressionReady } from "../expression/facts.js";
 import {
@@ -311,6 +313,7 @@ export function createMessageComposerModule<
       settingsSchema: messageComposerSettingsSchema,
       promptTemplates: messageModulePromptTemplates,
       consumes: [
+        userStatementInformationKind,
         ...(dependencies.expressionEnabled ? [expressionSelected] : []),
         messageConfirmedInformationKind,
         messageIntentRequestedInformationKind,

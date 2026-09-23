@@ -1,5 +1,6 @@
 /**
- * 功能概述：所有认证后页面共享的工作台、四域侧栏和移动导航抽屉。
+ * 导航新增独立 /memory 记忆录入域，桌面侧栏与移动抽屉共用同一入口和当前位置判断。
+ * 功能概述：所有认证后页面共享的工作台、五域侧栏和移动导航抽屉。
  * 主要职责：AppShell 提供顶栏 profileSlot/actions 插槽；SideNav 通过 currentPath
  * 标识任务域。useNavigationGuard 注册离开保护，useWorkbenchNavigate 复用受保护导航。
  * 代码库关系：App.tsx 管理认证及 history，页面作为 children 注入；复杂交互采用
@@ -21,6 +22,7 @@ import {
 } from "react";
 import {
   House,
+  BookOpen,
   Menu,
   MessagesSquare,
   ScanSearch,
@@ -33,10 +35,12 @@ import "./workbench.css";
 export const workbenchRoutes = [
   { path: "/", label: "概览", icon: House },
   { path: "/messages", label: "消息", icon: MessagesSquare },
+  { path: "/memory", label: "记忆录入", icon: BookOpen },
   { path: "/profiles", label: "配置", icon: Settings2 },
   { path: "/developer/modules", label: "检查", icon: ScanSearch },
 ] as const;
 export function navigationDomain(path: string): string {
+  if (path === "/memory") return "/memory";
   if (path.startsWith("/developer")) return "/developer/modules";
   if (path.startsWith("/profiles") || path.startsWith("/configuration"))
     return "/profiles";

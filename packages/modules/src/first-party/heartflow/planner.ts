@@ -1,4 +1,5 @@
 /**
+ * memory 变量携带来源类型和原文 ID，人工录入与运行时聊天观测在规划输入中可区分。
  * context_bootstrap 显式说明本轮证据缺口，避免把身份解析或角色设定误当作既有关系。
  * 默认源码及允许变量来自 prompt-declarations；可传入装配阶段预检的本地模板。
  * Prompt 正文由装配入口注入已加载的 default/local 模板，本文件不保留独立默认文本。
@@ -330,7 +331,14 @@ export function compilePlannerPrompt(
     },
     {
       name: "memory",
-      content: JSON.stringify(memories.map((atom) => atom.payload.text)),
+      content: JSON.stringify(
+        memories.map((atom) => ({
+          sourceKind: atom.kind,
+          sourceInformationId: atom.informationId,
+          sourceType: atom.payload.sourceType,
+          text: atom.payload.text,
+        })),
+      ),
       informationIds: memories.map((atom) => atom.informationId),
     },
     {

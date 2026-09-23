@@ -1,4 +1,5 @@
 /**
+ * 记忆录入路由复用 management 认证，202 仅表示任务排队，持久结果由独立查询返回。
  * Profile GET 返回该编辑对象的 readiness；校验错误通过白名单路径投影为安全 fieldErrors。
  * 模块模板管理路由共用 management 认证，仅返回未渲染源码与安全校验代码。
  * 模块 settings 路由由独立注册器接入，共用 management 认证并只返回安全字段。
@@ -26,6 +27,8 @@
  * Web 私聊 POST 携带会话标识，GET 通过双登记水位恢复已入站/已送达历史；两者均先鉴权。
  */
 import { profileFieldErrors } from "./profile-field-errors.js";
+import { registerMemoryIngestionRoutes } from "./memory-ingestion-routes.js";
+import type { MemoryIngestionService } from "./memory-ingestion.js";
 import { registerModuleTemplateRoutes } from "./module-template-routes.js";
 import type { ModuleTemplateManagement } from "./module-template-management.js";
 import { registerIdentityPersonaRoutes } from "./identity-persona-routes.js";
@@ -620,6 +623,7 @@ export interface CreateHttpApplicationOptions {
   moduleSettings?: ModuleSettingsManagement;
   moduleTemplates?: ModuleTemplateManagement;
   identityPersona?: IdentityPersonaManagement;
+  memoryIngestion?: MemoryIngestionService;
   logger?: FastifyBaseLogger;
   discoverModels?: typeof discoverOpenAiCompatibleModels;
 }
@@ -659,6 +663,11 @@ export async function createHttpApplication(
     app,
     requireGatewayToken(options, "management"),
     options.moduleSettings,
+  );
+  registerMemoryIngestionRoutes(
+    app,
+    requireGatewayToken(options, "management"),
+    options.memoryIngestion,
   );
 
   app.addHook("onRequest", (request, _reply, done) => {
