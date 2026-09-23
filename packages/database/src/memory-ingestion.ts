@@ -356,6 +356,8 @@ export class PostgresMemoryIngestionStore {
         const subject = resolved.get(item.subjectKey);
         if (item.supersedesClaimId && item.supplementsClaimId)
           throw new MemoryIngestionError("revision_conflict", 409);
+        if (subject?.created && item.supplementsClaimId)
+          throw new MemoryIngestionError("revision_conflict", 409);
         if (!subject || subject.created || item.supersedesClaimId) continue;
         const object = item.objectSubjectKey
           ? resolved.get(item.objectSubjectKey)
@@ -457,23 +459,6 @@ export class PostgresMemoryIngestionStore {
           [job.scopeInformationId, subject.id, item.predicate],
         );
         const existing = existingRows.rows.map((r) => r.input);
-        const duplicate = existing.find(
-          (c) =>
-            c.value === value &&
-            c.epistemic === item.epistemic &&
-            (item.validTo ?? undefined) === c.validTo &&
-            (!item.validFrom || c.validFrom === item.validFrom),
-        );
-        if (duplicate) {
-          results.push({
-            status: "linked",
-            label: `${subject.label} · ${item.predicate}：${item.value}`,
-            entityInformationId: subject.id,
-            claimId: duplicate.claimId,
-            sourceInformationId: sourceIds.get(job.requestId)!,
-          });
-          continue;
-        }
         if (item.supersedesClaimId) {
           const old = existing.find(
             (c) => c.claimId === item.supersedesClaimId,
@@ -486,6 +471,27 @@ export class PostgresMemoryIngestionStore {
           );
           if (sources.rows.some((s) => s.source_kind !== USER_STATEMENT_KIND))
             throw new MemoryIngestionError("revision_conflict", 409);
+        }
+        const duplicate = existing.find(
+          (c) =>
+            c.value === value &&
+            c.epistemic === item.epistemic &&
+            (item.validTo ?? undefined) === c.validTo &&
+            (!item.validFrom || c.validFrom === item.validFrom),
+        );
+        if (
+          duplicate &&
+          (!item.supersedesClaimId ||
+            duplicate.claimId === item.supersedesClaimId)
+        ) {
+          results.push({
+            status: "linked",
+            label: `${subject.label} · ${item.predicate}：${item.value}`,
+            entityInformationId: subject.id,
+            claimId: duplicate.claimId,
+            sourceInformationId: sourceIds.get(job.requestId)!,
+          });
+          continue;
         }
         const claimId = `user-claim:${job.requestId}:${index}`;
         const sourceInput = evidence.at(-1)!;

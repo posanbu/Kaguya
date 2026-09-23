@@ -358,6 +358,23 @@ function contract(create: () => Promise<KaguyaDatabase>) {
         .map((c) => c.value)
         .sort(),
     ).toEqual(["天文", "绘画"]);
+    addition.claims[0]!.supplementsClaimId = null;
+    addition.claims[0]!.supersedesClaimId = old.claimId!;
+    const revision = await f.apply(
+      submission({ text: "更正：小夏喜欢绘画，不再喜欢天文。" }),
+      addition,
+    );
+    expect(revision.results.find((r) => r.claimId)?.status).toBe("revised");
+    const after = new Date().toISOString();
+    const obsolete = await f.db.knowledge.recall({
+      scopeInformationId: WEB_MEMORY_SCOPE_ID,
+      query: "天文",
+      occurredBefore: after,
+      recordedBefore: after,
+      limit: 100,
+    });
+    expect(obsolete.claims).toHaveLength(0);
+    expect(obsolete.events).toHaveLength(0);
   });
   it("does not queue a failed task while the same session is processing", async () => {
     const f = await fixture();
