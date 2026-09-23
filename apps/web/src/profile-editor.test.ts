@@ -1,4 +1,5 @@
 /**
+ * 同步核对事件 / Wiki 开关在编辑字段中的默认值及往返，原有高级配置保持不丢失。
  * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * 超时回归覆盖秒/毫秒往返、空值默认和非法值拒绝，并验证保存不丢失其他 Provider 数据。
  * 架构说明：本测试文件定义 Web 端 Profile 编辑器的纯函数边界，
@@ -153,6 +154,7 @@ describe("profileToEditorFields", () => {
       inboundAllowlistText: "qq:group:778899\ninvalid-rule",
       outboundAllowlistText: "qq:group:778899\ninvalid-rule",
       memoryEnabled: true,
+      memoryKnowledgeEnabled: false,
     });
   });
 
@@ -175,6 +177,7 @@ describe("profileToEditorFields", () => {
       inboundAllowlistText: "",
       outboundAllowlistText: "",
       memoryEnabled: false,
+      memoryKnowledgeEnabled: false,
     });
   });
 

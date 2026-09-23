@@ -1,4 +1,5 @@
 /**
+ * 声明人工记忆来源 Kind 为可消费上下文，正常召回冻结后交给 Planner。
  * manifest 声明 Planner 模板；调用 compilePlannerPrompt 时传入装配阶段加载的 default/local 文本，不再使用代码内默认值。
  * settings schema 的公开中文元数据供管理表单使用，运行时与保存共用约束。
  * 管理端批准的跨会话 candidate 由宿主直接认领，不再触发 Planner；其 delivery 仍使用本模块统一 turn 终态。
@@ -17,6 +18,7 @@
  * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
  * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
  */
+import { userStatementInformationKind } from "../memory-knowledge/ingestion-kinds.js";
 import { firstPartyInspection } from "../inspection.js";
 import { focusOpened } from "../attention-focus/facts.js";
 import {
@@ -747,6 +749,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
         ...plannerPlatformPolicyDeclarations,
       ],
       consumes: [
+        userStatementInformationKind,
         inboundTextInformationKind,
         observationWakeInformationKind,
         turnCandidateInformationKind,

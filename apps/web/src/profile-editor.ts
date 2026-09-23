@@ -1,4 +1,5 @@
 /**
+ * memoryKnowledgeEnabled 与 knowledgeEnabled 双向映射，保存时保留原有高级 Memory 字段。
  * profileToEditorFields/mergeProfileEditorFields 分别转换两个方向的规则文本，修改一侧不改另一侧。
  * 架构说明：本模块是 Web 端 Profile 表单与完整 Profile 文档之间的
  * 客户端保全边界。它把可见的名称、URL、API Key、轻重模型、网关白名单与
@@ -48,6 +49,7 @@ interface MutableProfile {
   };
   memory: {
     enabled: boolean;
+    knowledgeEnabled?: boolean;
   };
   platforms: MutablePlatform[];
   review?: {
@@ -103,6 +105,7 @@ export interface ProfileEditorFields {
   readonly inboundAllowlistText: string;
   readonly outboundAllowlistText: string;
   readonly memoryEnabled: boolean;
+  readonly memoryKnowledgeEnabled: boolean;
 }
 
 export function profileToEditorFields(
@@ -146,6 +149,7 @@ export function profileToEditorFields(
     inboundAllowlistText: profile.inboundAllowlist.join("\n"),
     outboundAllowlistText: profile.outboundAllowlist.join("\n"),
     memoryEnabled: profile.memory.enabled,
+    memoryKnowledgeEnabled: profile.memory.knowledgeEnabled ?? false,
   };
 }
 
@@ -161,6 +165,11 @@ export function mergeProfileEditorFields(
     timeZone: fields.agentTimeZone.trim(),
   };
   next.memory.enabled = fields.memoryEnabled;
+  if (
+    fields.memoryKnowledgeEnabled ||
+    next.memory.knowledgeEnabled !== undefined
+  )
+    next.memory.knowledgeEnabled = fields.memoryKnowledgeEnabled;
   next.inboundAllowlist = fields.inboundAllowlistText
     .split(/\r?\n/u)
     .map((rule) => rule.trim())

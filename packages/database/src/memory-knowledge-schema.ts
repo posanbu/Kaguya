@@ -1,4 +1,5 @@
 /**
+ * 附加录入会话、版本化任务及租约表用于中断恢复，旧 Information schema 无需迁移。
  * 功能概述：为可选第一方知识 Memory 建立 PostgreSQL 投影表，不修改 v1 Information 身份账本。
  * 主要职责：prepareMemoryKnowledgeSchema 幂等安装事件、参与实体、断言证据、episode 与 Wiki 不可变修订；范围锁行串行化关联写入。
  * 代码库关系：KaguyaDatabase 的显式初始化方法调用本文件；PostgresMemoryKnowledgeStore 使用相同外键及范围/时间索引。
@@ -73,6 +74,23 @@ export async function prepareMemoryKnowledgeSchema(
         PRIMARY KEY(scope_id, entity_id)
       );
       CREATE INDEX IF NOT EXISTS memory_knowledge_wiki_dirty_idx ON memory_knowledge_wiki_pages(scope_id, entity_id) WHERE dirty;
+      CREATE TABLE IF NOT EXISTS memory_ingestion_locks (id text PRIMARY KEY);
+      INSERT INTO memory_ingestion_locks(id) VALUES('web-scope') ON CONFLICT DO NOTHING;
+      CREATE TABLE IF NOT EXISTS memory_ingestion_sessions (
+        session_id text PRIMARY KEY, scope_id text NOT NULL, source_type text NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS memory_ingestion_jobs (
+        request_id text PRIMARY KEY, session_id text NOT NULL REFERENCES memory_ingestion_sessions(session_id),
+        scope_id text NOT NULL REFERENCES information_atoms(information_id), contract_version integer NOT NULL,
+        input jsonb NOT NULL, status text NOT NULL DEFAULT 'queued', attempt integer NOT NULL DEFAULT 0,
+        plan jsonb, result jsonb NOT NULL DEFAULT '{}', lease_token text, lease_until timestamptz,
+        created_at timestamptz NOT NULL DEFAULT date_trunc('milliseconds',clock_timestamp()),
+        updated_at timestamptz NOT NULL DEFAULT date_trunc('milliseconds',clock_timestamp()),
+        CHECK(status IN ('queued','processing','clarification','succeeded','partial','failed'))
+      );
+      CREATE INDEX IF NOT EXISTS memory_ingestion_session_idx ON memory_ingestion_jobs(session_id,created_at,request_id);
+      CREATE INDEX IF NOT EXISTS memory_ingestion_pending_idx ON memory_ingestion_jobs(created_at,request_id)
+        WHERE status IN ('queued','processing');
       CREATE TABLE IF NOT EXISTS memory_knowledge_wiki_revisions (
         scope_id text NOT NULL, entity_id text NOT NULL, version integer NOT NULL,
         operation_id text NOT NULL, recorded_at timestamptz NOT NULL DEFAULT date_trunc('milliseconds', clock_timestamp()),

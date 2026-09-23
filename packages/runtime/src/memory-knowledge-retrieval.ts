@@ -1,4 +1,5 @@
 /**
+ * userStatementsOnly 查询按最多八个分词检索人工原文片段；无相关关键词时不固定注入整份设定。
  * 功能概述：把实体、断言与 Wiki 导航结果收束为可由 Core 重载的原始证据 ID。
  * 主要职责：MemoryKnowledgeInformationRetrievalStrategy 要求明确 canonical scope 和两种截止点，
  * 实体 Wiki 仅提供最多两条原始来源导航；页面版本与证据均须在双时间截止点内，撤回与脏页不进入本次读取。
@@ -12,12 +13,13 @@ import {
   type KnowledgeEvent,
   type MemoryKnowledgeAccess,
 } from "@kaguya/memory";
-import { informationIdSchema, z } from "@kaguya/schema";
+import { informationIdSchema, z, USER_STATEMENT_KIND } from "@kaguya/schema";
 
 const querySchema = z
   .object({
     scopeInformationId: informationIdSchema,
     entityInformationId: informationIdSchema.optional(),
+    userStatementsOnly: z.boolean().optional(),
     query: z
       .string()
       .trim()
@@ -51,6 +53,50 @@ export class MemoryKnowledgeInformationRetrievalStrategy implements InformationR
   }: Parameters<InformationRetrievalStrategy["retrieve"]>[0]) {
     try {
       const query = querySchema.parse({ ...input, limit });
+      if (query.userStatementsOnly) {
+        const { userStatementsOnly: _only, ...base } = query;
+        const tokens = [
+          ...new Set(
+            [
+              ...new Intl.Segmenter("zh", { granularity: "word" }).segment(
+                query.query ?? "",
+              ),
+            ]
+              .filter(
+                (s) =>
+                  s.isWordLike &&
+                  s.segment.length >= 2 &&
+                  ![
+                    "什么",
+                    "怎么",
+                    "现在",
+                    "之前",
+                    "可以",
+                    "一个",
+                    "他们",
+                    "我们",
+                    "你们",
+                    "知道",
+                  ].includes(s.segment),
+              )
+              .map((s) => s.segment),
+          ),
+        ].slice(0, 8);
+        const sources = new Set<string>();
+        for (const token of tokens) {
+          const result = await this.memory.recall({ ...base, query: token });
+          for (const event of result.events) {
+            if (
+              event.sourceKind === USER_STATEMENT_KIND &&
+              isEventAllowed(event, query)
+            )
+              sources.add(event.sourceInformationId);
+            if (sources.size >= limit) break;
+          }
+          if (sources.size >= limit) break;
+        }
+        return Object.freeze([...sources]);
+      }
       const wikiSources = await this.wikiSources(query);
       const result = await this.memory.recall(query);
       const sources = new Set<string>(wikiSources);
@@ -135,7 +181,8 @@ function isEventAllowed(
   query: z.infer<typeof querySchema>,
 ): boolean {
   return (
-    event.sourceKind === "core.message.inbound.text" &&
+    (event.sourceKind === "core.message.inbound.text" ||
+      event.sourceKind === USER_STATEMENT_KIND) &&
     event.scopeInformationId === query.scopeInformationId &&
     Date.parse(event.occurredAt) <= Date.parse(query.occurredBefore) &&
     Date.parse(event.recordedAt) <= Date.parse(query.recordedBefore)

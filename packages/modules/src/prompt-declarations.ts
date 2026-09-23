@@ -1,4 +1,5 @@
 /**
+ * memoryIngestionTemplateDeclaration 只声明通用整理规则，用户原文始终在输入数据通道中提供。
  * 功能概述：第一方模板的唯一静态契约，显式声明归属、变量与组成关系。
  * 主要职责：messageTemplateDeclarations/plannerTemplateDeclaration/personFactTemplateDeclaration
  * 以及 expressionModulePromptTemplates 供 manifest、受限编译器与 Node 存储使用；正文全部来自 default/local 文件。
@@ -372,7 +373,20 @@ export const personFactTemplateDeclaration: ModulePromptTemplateDefinition = {
 };
 
 /** 所有第一方模板组的白名单；文件初始化和存储与模块声明共用此入口。 */
+export const memoryIngestionTemplateDeclaration: ModulePromptTemplateDefinition =
+  {
+    templateId: "memory-ingestion",
+    name: "memory-ingestion",
+    displayName: "主动记忆整理规则",
+    description:
+      "把用户原文整理为有证据的受约束写入计划；原文由输入数据通道提供。",
+    allowedVariables: [],
+    allowedPartials: [],
+    composes: [],
+    mutability: "editable",
+  };
 export const firstPartyPromptTemplateGroups = [
+  [memoryIngestionTemplateDeclaration],
   messageModulePromptTemplates,
   [
     plannerTemplateDeclaration,

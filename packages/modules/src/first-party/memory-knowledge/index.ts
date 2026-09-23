@@ -1,4 +1,5 @@
 /**
+ * Manifest 同时登记人工完整输入、可召回原文片段、无账号主体和 WebUI 共用范围，并公开整理规则模板。
  * 功能概述：在显式启用的事件记忆原型中，将身份终态和通用事件可靠投影为有来源的实体 Wiki。
  * 主要职责：seedIdentity 保留消息说话者及 reply-to；recordEvent 幂等保存原文和名称观察；
  * schedulePage 冻结双时间截止点与页面版本；refreshPage 用 CAS 写入有界章节并发布只读修订。
@@ -40,6 +41,14 @@ import {
   memoryWikiUpdatedInformationKind,
 } from "./kinds.js";
 export * from "./kinds.js";
+export * from "./ingestion-kinds.js";
+import {
+  userStatementInformationKind,
+  userInputInformationKind,
+  userSubjectInformationKind,
+  userMemoryScopeInformationKind,
+} from "./ingestion-kinds.js";
+import { memoryIngestionTemplateDeclaration } from "../../prompt-declarations.js";
 
 const GENERATOR_VERSION = "evidence-extract-v1";
 const PAGE_SIZE = 50;
@@ -195,6 +204,10 @@ export const memoryKnowledgeModule = defineInformationModule({
       memoryKnowledgeMaintenanceInformationKind,
     ],
     produces: [
+      userStatementInformationKind,
+      userInputInformationKind,
+      userSubjectInformationKind,
+      userMemoryScopeInformationKind,
       memoryEventSubmittedInformationKind,
       memoryKnowledgeBackfillInformationKind,
       memoryWikiRefreshInformationKind,
@@ -205,6 +218,7 @@ export const memoryKnowledgeModule = defineInformationModule({
     ],
     selectors: [sourceSelector, backfillSelector, backfillEvidenceSelector],
     promptRenderers: [],
+    promptTemplates: [memoryIngestionTemplateDeclaration],
     requires: [memoryKnowledgeCapability, memoryKnowledgeBootstrapCapability],
     provides: [],
   },

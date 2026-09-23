@@ -14,16 +14,17 @@ describe("工作台导航契约", () => {
     expect(navigationDomain("/configuration/application")).toBe("/profiles");
     expect(navigationDomain("/adapters")).toBe("/");
     expect(navigationDomain("/messages")).toBe("/messages");
+    expect(navigationDomain("/memory")).toBe("/memory");
     expect(navigationDomain("/")).toBe("/");
   });
-  it("四个键盘可达链接只标记一个当前域", () => {
+  it("五个键盘可达链接只标记一个当前域", () => {
     const html = renderToStaticMarkup(
       <SideNav currentPath="/developer/atoms" onNavigate={() => {}} />,
     );
-    expect(html.match(/<a /g)).toHaveLength(4);
+    expect(html.match(/<a /g)).toHaveLength(5);
     expect(html.match(/aria-current="page"/g)).toHaveLength(1);
     expect(html).toContain('href="/developer/modules" aria-current="page"');
-    for (const label of ["概览", "消息", "配置", "检查"])
+    for (const label of ["概览", "消息", "记忆录入", "配置", "检查"])
       expect(html).toContain(label);
     expect(html).not.toContain('href="/adapters"');
   });

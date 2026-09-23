@@ -1,4 +1,5 @@
 /**
+ * 人工记忆片段须逐字回指完整原文；召回只保留仍有有效断言的片段，修订后旧内容不会经事件旁路复活。
  * 功能概述：实现第一方事件—断言—实体 Wiki 的 PostgreSQL 基座，复用 Information ID，不产生第二套人物身份。
  * 主要职责：putEvent/appendClaim/putEpisode 校验账本与同范围证据并幂等追加；断言替代/撤回只允许同一陈述者视角；recall 冻结发生和记录时间，显式给出缺口；
  * writeWikiRevision 以 operationId 重放和版本 CAS 保存不可变修订；revokeSource 写来源 tombstone，invalidateEntity 幂等执行身份修订并标脏页面。
@@ -31,6 +32,13 @@ import {
   type KnowledgeCutoff,
 } from "@kaguya/memory";
 import type { SqlDatabase, SqlTransaction } from "./driver.js";
+import {
+  USER_MEMORY_SCOPE_KIND,
+  WEB_MEMORY_SCOPE_ID,
+  USER_STATEMENT_KIND,
+  USER_INPUT_KIND,
+  userStatementPayloadSchema,
+} from "@kaguya/schema";
 
 type EventRow = {
   input: KnowledgeEventInput;
@@ -68,7 +76,10 @@ export class PostgresMemoryKnowledgeStore implements MemoryKnowledgeAccess {
     private readonly database: SqlDatabase,
     options: PostgresMemoryKnowledgeStoreOptions = {},
   ) {
-    this.scopeKinds = options.scopeKinds ?? ["device.entity"];
+    this.scopeKinds = options.scopeKinds ?? [
+      "device.entity",
+      USER_MEMORY_SCOPE_KIND,
+    ];
   }
   private lockScope(tx: SqlTransaction, scopeId: string): Promise<void> {
     return lockScope(tx, scopeId, this.scopeKinds);
@@ -126,6 +137,44 @@ export class PostgresMemoryKnowledgeStore implements MemoryKnowledgeAccess {
           atom.payload.text !== parsed.content ||
           scope.rows[0]?.kind !== "agent.chat.scope.entity" ||
           !sameNativeScope(address, scope.rows[0].payload)
+        )
+          throw new KnowledgeEvidenceError();
+      }
+      if (atom.kind === USER_STATEMENT_KIND) {
+        const payload = userStatementPayloadSchema.safeParse(atom.payload);
+        if (
+          !payload.success ||
+          payload.data.text !== parsed.content ||
+          payload.data.scopeInformationId !== parsed.scopeInformationId
+        )
+          throw new KnowledgeEvidenceError();
+        const scope = await tx.query<{ payload: Record<string, unknown> }>(
+          "SELECT payload FROM information_atoms WHERE information_id=$1",
+          [parsed.scopeInformationId],
+        );
+        if (
+          !scope.rows[0] ||
+          !sameNativeScope(payload.data.scope, scope.rows[0].payload)
+        )
+          throw new KnowledgeEvidenceError();
+        const original = await tx.query<{ kind: string; payload: unknown }>(
+          "SELECT a.kind,a.payload FROM information_atoms a JOIN information_references r ON r.target_information_id=a.information_id WHERE r.information_id=$1 AND r.relation='agent:source' AND a.information_id=$2",
+          [
+            parsed.sourceInformationId,
+            payload.data.originalSourceInformationId ?? null,
+          ],
+        );
+        const originalPayload = userStatementPayloadSchema.safeParse(
+          original.rows[0]?.payload,
+        );
+        if (
+          original.rows[0]?.kind !== USER_INPUT_KIND ||
+          !originalPayload.success ||
+          originalPayload.data.scopeInformationId !==
+            parsed.scopeInformationId ||
+          originalPayload.data.requestId !== payload.data.requestId ||
+          originalPayload.data.sourceType !== payload.data.sourceType ||
+          !originalPayload.data.text.includes(payload.data.text)
         )
           throw new KnowledgeEvidenceError();
       }
@@ -323,6 +372,11 @@ export class PostgresMemoryKnowledgeStore implements MemoryKnowledgeAccess {
         `
         SELECT e.* FROM memory_knowledge_events e
         WHERE e.scope_id=$1 AND e.occurred_at <= $2::timestamptz AND e.recorded_at <= $3::timestamptz AND e.revoked_at IS NULL
+          AND (e.source_kind <> 'agent.user.statement' OR EXISTS(
+            SELECT 1 FROM memory_knowledge_claim_evidence ce JOIN memory_knowledge_claims c ON c.claim_id=ce.claim_id
+            WHERE ce.source_id=e.source_id AND c.scope_id=e.scope_id AND c.invalidated_at IS NULL AND c.retracts_id IS NULL
+              AND c.valid_from <= $2::timestamptz AND (c.valid_to IS NULL OR c.valid_to >= $2::timestamptz) AND c.recorded_at <= $3::timestamptz
+              AND NOT EXISTS(SELECT 1 FROM memory_knowledge_claims n WHERE (n.supersedes_id=c.claim_id OR n.retracts_id=c.claim_id) AND n.recorded_at <= $3::timestamptz AND n.valid_from <= $2::timestamptz)))
           AND ($4::text IS NULL OR EXISTS(SELECT 1 FROM memory_knowledge_event_entities p WHERE p.source_id=e.source_id AND p.entity_id=$4))
           AND ($5::text = '' OR strpos(lower(e.input->>'content'),lower($5))>0)
         ORDER BY e.occurred_at DESC, e.source_id ASC LIMIT $6`,
@@ -696,7 +750,12 @@ async function lockScope(
     !scope.kind.endsWith(".entity") ||
     (scope.kind === "agent.chat.scope.entity"
       ? scope.payload.scopeMode !== "canonical"
-      : !scopeKinds.includes(scope.kind))
+      : !scopeKinds.includes(scope.kind)) ||
+    (scope?.kind === USER_MEMORY_SCOPE_KIND &&
+      (scopeId !== WEB_MEMORY_SCOPE_ID ||
+        scope.payload.platform !== "web" ||
+        scope.payload.adapterId !== "web.ui.main" ||
+        !same(scope.payload.destination, { kind: "web" })))
   )
     throw new KnowledgeEvidenceError();
   await tx.query(

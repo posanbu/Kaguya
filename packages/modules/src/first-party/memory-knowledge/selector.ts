@@ -1,4 +1,5 @@
 /**
+ * 人工记忆使用同范围有界关键词召回；WebUI 共用范围仅接受 management 录入片段，不读取其他会话聊天记录。
  * 功能概述：在规划前以 canonical scope 查询知识记忆，再验证原始消息的来源范围与时间。
  * 主要职责：selectKnowledgeMemory 从当前入站的身份终态解析单个规范范围；
  * 已解析人物使用实体导航选近期原文，缺少人物时才用有界关键词，避免拿整条问句做精确子串检索。
@@ -7,7 +8,13 @@
  * 输入输出与副作用：仅有界读取账本与命名检索；未启用、身份不一致及检索故障返回空，不扩张在线权限。
  */
 import { MEMORY_KNOWLEDGE_RETRIEVAL_STRATEGY_ID } from "@kaguya/memory";
-import type { DeepReadonly, InformationAtom } from "@kaguya/schema";
+import {
+  USER_STATEMENT_KIND,
+  WEB_MEMORY_SCOPE_ID,
+  userStatementPayloadSchema,
+  type DeepReadonly,
+  type InformationAtom,
+} from "@kaguya/schema";
 import type { InformationSelectorLedger } from "@kaguya/sdk";
 import {
   chatScopeEntityInformationKind,
@@ -29,6 +36,21 @@ export function isMemorySourceInScope(
   scope: Scope,
   occurredBefore: string,
 ): boolean {
+  if (atom.kind === USER_STATEMENT_KIND) {
+    const parsed = userStatementPayloadSchema.safeParse(atom.payload);
+    return (
+      parsed.success &&
+      Date.parse(atom.occurredAt) <= Date.parse(occurredBefore) &&
+      sameScope(parsed.data.scope, scope) &&
+      atom.references.some(
+        (r) =>
+          r.relation === "agent:scope" &&
+          r.informationId === parsed.data.scopeInformationId,
+      ) &&
+      (scope.destination.kind !== "web" ||
+        parsed.data.scopeInformationId === WEB_MEMORY_SCOPE_ID)
+    );
+  }
   if (
     atom.kind !== inboundTextInformationKind.kind ||
     !(Date.parse(atom.occurredAt) <= Date.parse(occurredBefore))
@@ -55,12 +77,37 @@ export async function selectKnowledgeMemory(
       input.inbounds[0]!.payload,
     ).source;
     if (
-      first.destination.kind === "web" ||
       input.inbounds.some(
         (atom) => !isMemorySourceInScope(atom, first, input.occurredBefore),
       )
     )
       return [];
+    const manualQuery = input.inbounds
+      .map((a) => String(a.payload.text ?? ""))
+      .join("\n");
+    const recallManual = async (scopeInformationId: string) => {
+      const found = await ledger.retrieve({
+        strategyId: MEMORY_KNOWLEDGE_RETRIEVAL_STRATEGY_ID,
+        input: {
+          scopeInformationId,
+          query: Array.from(manualQuery).slice(0, 512).join(""),
+          userStatementsOnly: true,
+          occurredBefore: input.occurredBefore,
+          recordedBefore: input.recordedBefore,
+        },
+        limit: input.limit,
+      });
+      return found
+        .filter(
+          (a) =>
+            a.kind === USER_STATEMENT_KIND &&
+            a.payload.scopeInformationId === scopeInformationId &&
+            isMemorySourceInScope(a, first, input.occurredBefore),
+        )
+        .slice(0, input.limit);
+    };
+    if (first.destination.kind === "web")
+      return await recallManual(WEB_MEMORY_SCOPE_ID);
     // 原生范围已对整批输入核验；只解析首条身份，避免每条输入增加一次查询。
     const terminals = (
       await ledger.related({
@@ -128,7 +175,10 @@ export async function selectKnowledgeMemory(
     });
     const excluded = new Set(input.inbounds.map((atom) => atom.informationId));
     const selected = new Map<string, DeepReadonly<InformationAtom>>();
+    for (const atom of await recallManual(scopeInformationId))
+      selected.set(atom.informationId, atom);
     for (const atom of recalled) {
+      if (selected.size >= input.limit) break;
       if (
         !excluded.has(atom.informationId) &&
         isMemorySourceInScope(atom, first, input.occurredBefore)

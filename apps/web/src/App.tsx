@@ -1,4 +1,5 @@
 /**
+ * 主导航 /memory 挂载独立记忆录入页；Profile 的 knowledgeEnabled 开关与 Memory 总开关共同启用该能力。
  * ProfileFeedback 将所属配置问题映射到字段/区块，useProfileDraft 统一保存、放弃、取消保护。
  * ProfileWorkspace 提供全局编辑 ID 与操作锁，配置页保持单栏，保存/选择/应用独立。
  * 根路径挂载只读 Overview，配置读取失败由概览独立反馈；401 仍通过全局锁屏处理。
@@ -120,6 +121,7 @@ const TIME_ZONE_OPTIONS = (() => {
 })();
 
 import { ConfigurationApplicationScreen } from "./ConfigurationApplicationScreen.js";
+import { MemoryIngestion } from "./MemoryIngestion.js";
 import {
   deleteProfile,
   discoverModels,
@@ -237,6 +239,7 @@ export function App() {
     return <ConfigurationStatusError message={configurationError} />;
 
   const renderPage = () => {
+    if (path === "/memory") return <MemoryIngestion token={token} />;
     if (isOverview)
       return (
         <AdapterManagementSection
@@ -1149,6 +1152,28 @@ function ProfileManagementScreen({
                           协议形状，不读取、写入或召回实际信息。
                         </span>
                       </label>
+                      <label className="setup-check">
+                        <input
+                          type="checkbox"
+                          checked={editorFields.memoryKnowledgeEnabled}
+                          disabled={!editorFields.memoryEnabled}
+                          onChange={(event) =>
+                            setEditorFields((current) =>
+                              current === undefined
+                                ? current
+                                : {
+                                    ...current,
+                                    memoryKnowledgeEnabled:
+                                      event.target.checked,
+                                  },
+                            )
+                          }
+                        />
+                        <span>启用事件 / Wiki 记忆与主动录入</span>
+                      </label>
+                      <p className="field-help">
+                        同时开启后，可从主导航的“记忆录入”整理人物、偏好和关系。保存并应用配置后生效。
+                      </p>
                     </fieldset>
                     <button
                       className="setup-button"
