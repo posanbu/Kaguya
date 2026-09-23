@@ -39,7 +39,26 @@ const candidate: any = {
   ...base,
   informationId: "candidate",
   kind: "agent.turn.candidate",
-  payload: { asOf: "2026-09-01T00:01:00.000Z" },
+  payload: {
+    asOf: "2026-09-01T00:01:00.000Z",
+    scopeKey: "qq:qq:group:group",
+    platform: source.platform,
+    adapterId: source.adapterId,
+    destination: source.destination,
+    unreadThroughInformationId: inbound.informationId,
+  },
+};
+const observation: any = {
+  ...base,
+  informationId: "observation",
+  kind: "agent.attention.arousal.completed",
+  payload: {
+    outcome: "observe",
+    arousalState: "awake",
+    arousalStateInformationId: "arousal-state",
+    wakeSignal: false,
+    candidateInformationId: "candidate",
+  },
 };
 const memory: any = {
   ...base,
@@ -71,7 +90,11 @@ async function select(
     current?: any;
   } = {},
 ) {
-  const find = vi.fn(async () => snapshots);
+  const find = vi.fn(async (query: any) =>
+    query.kinds?.includes("core.message.inbound.text")
+      ? [options.current ?? inbound]
+      : snapshots,
+  );
   const retrieve = vi.fn(options.retrieve ?? (async () => evidence));
   const ids = await createCognitionMemorySelector(identity, {
     requireEvidenceGuard: options.requireEvidenceGuard ?? false,
@@ -81,8 +104,8 @@ async function select(
       find,
       retrieve,
       related: async (query) =>
-        query.from[0] === "candidate"
-          ? [options.current ?? inbound]
+        query.from[0] === "candidate" && query.relation === "core:status-of"
+          ? [observation]
           : query.relation === "agent:evidence"
             ? evidence
             : [selectedMemory],

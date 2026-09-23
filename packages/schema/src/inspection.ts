@@ -3,7 +3,7 @@
  * 主要职责：各 inspection*Schema 校验 Module、Atom 摘要/详情、游标页和有界 Flow；
  * 对应类型供服务端投影与 WebUI 共享，领域视图/机制由 Manifest 声明；presentation 展示安全字段。
  * inspectionStorageSchema 区分真实存储不可用与空页，游标不包含内容。
- * record-browser 声明按事实时间浏览的记录、双向引用分组与受限来源投影；可声明注意力门控展示及状态选项。
+ * record-browser 声明按事实时间浏览的记录、双向引用分组与受限来源投影；可声明注意力观察展示及状态选项。
  * presentation.fields 的可选 path 保留稳定字段身份，中文 label 仅用于展示；旧客户端和未声明状态的记录兼容。
  * model-request-browser 按模块与任务隔离每次请求，独立详情保留冻结输入、完整脱敏 Prompt 和投递证据。
  * 代码库关系：由 schema/index.ts 导出，server/inspection.ts 产出，Web API 校验后展示。

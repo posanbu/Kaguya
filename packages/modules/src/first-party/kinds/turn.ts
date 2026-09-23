@@ -1,8 +1,7 @@
 /**
  * 功能概述：turn 领域的 Information schema 与不可变定义，独立维护本领域引用和日志投影。
  * 主要职责：下列 schema 校验入账载荷，各 kind 声明因果关系、上下文和诊断元数据；无 I/O。
- * attentionScoreEvidenceSchema 保存四个评分分项的实际输入、命中步骤和有符号贡献；完成记录中可缺省以兼容历史事实。
- * evidence 只接受有限 JSON 数字与有界说明文字，禁止把频率为零时的 Infinity 写入账本；不从旧字段补造证据。
+ * Arousal 只保存唤醒状态、观察机会、水位、非语义信号与 Focus 快照；正文仅在 observe 后进入回合上下文。
  * 代码库关系：information-kinds.ts 稳定重导出公共对象；跨领域只复用相邻文件定义，保持 Registry 对象身份。
  */
 import { z } from "@kaguya/schema";
@@ -438,6 +437,7 @@ const turnContextPayloadSchema = z
       })
       .strict(),
     inputs: z.array(turnInputSchema).min(1),
+    observedThroughInformationId: nonBlankString,
     text: z.string(),
     source: messageSourceSchema,
     messageCount: z.number().int().min(0),
@@ -445,15 +445,9 @@ const turnContextPayloadSchema = z
     isGroup: z.boolean(),
     mentionedSelf: z.boolean(),
     repliedToSelf: z.boolean(),
-    namedSelf: z.boolean(),
     focusActive: z.boolean().optional(),
     focusInformationId: nonBlankString.optional(),
     focusExpiresAt: z.iso.datetime({ offset: true }).optional(),
-    recentSelfReplies: z.number().int().min(0),
-    recentWindowMessages: z.number().int().min(0),
-    idleReachedAverage: z.boolean(),
-    frequency: z.number().min(0).max(1),
-    frequencyRuleIndex: z.number().int().min(0).nullable().optional(),
     muted: z.boolean(),
     safe: z.boolean(),
     destinationAvailable: z.boolean(),
@@ -476,7 +470,7 @@ export const turnContextCompletedInformationKind = defineInformationKind({
   kind: "agent.turn.context.completed",
   displayName: "回合上下文就绪",
   description:
-    "身份屏障结束后冻结输入、来源、时机及积压年龄；注意力评估与规划只消费这份可重放上下文，语义时效由 Planner 判断。",
+    "Arousal 决定 observe 后，Heartflow 等待身份屏障并冻结有界未读、来源、时机及积压年龄；只有 Planner 消费正文并判断语义时效。",
   payloadSchema: turnContextPayloadSchema,
   references: {
     "core:caused-by": { required: true, multiple: false },
@@ -500,105 +494,154 @@ export const turnContextCompletedInformationKind = defineInformationKind({
       return {
         event: "turn.context.completed",
         messageCount: input.messageCount,
-        direct: input.mentionedSelf || input.repliedToSelf || input.namedSelf,
-        frequency: input.frequency,
+        direct: input.mentionedSelf || input.repliedToSelf,
+        observedThroughInformationId: input.observedThroughInformationId,
       };
     },
   },
 });
 
-const attentionScoreEvidenceSchema = z
-  .object({
-    version: z.literal(1),
-    parts: z
-      .array(
-        z
-          .object({
-            id: z.enum([
-              "relevance",
-              "content",
-              "pressure",
-              "recentPresencePenalty",
-            ]),
-            value: z.number(),
-            facts: z
-              .array(
-                z
-                  .object({
-                    label: z.string().min(1).max(120),
-                    value: z.union([
-                      z.string().max(2000),
-                      z.number(),
-                      z.boolean(),
-                    ]),
-                  })
-                  .strict(),
-              )
-              .max(40),
-            steps: z
-              .array(
-                z
-                  .object({
-                    label: z.string().min(1).max(120),
-                    delta: z.number(),
-                  })
-                  .strict(),
-              )
-              .min(1)
-              .max(10),
-            formula: z.string().max(1000).optional(),
-          })
-          .strict(),
-      )
-      .length(4)
-      .refine(
-        (parts) => new Set(parts.map(({ id }) => id)).size === parts.length,
-        "Score evidence parts must be unique",
-      ),
-  })
-  .strict();
+const attentionArousalStateSchema = z.enum(["awake", "asleep"]);
 
-type ParsedScoreEvidence = z.infer<typeof attentionScoreEvidenceSchema>;
-/** 生成的 JSON 省略 formula 时不写 undefined，满足 ModuleRegistrationInput 的严格 JSON 契约。 */
-export type AttentionArousalScoreEvidence = Omit<
-  ParsedScoreEvidence,
-  "parts"
-> & {
-  parts: Array<
-    Omit<ParsedScoreEvidence["parts"][number], "formula"> & { formula?: string }
-  >;
-};
+const attentionArousalTimeStateFields = {
+  lastEvaluatedAt: z.iso.datetime({ offset: true }),
+  lastInboundInformationId: nonBlankString.nullable(),
+  lastActivityAt: z.iso.datetime({ offset: true }),
+  sleepStartedAt: z.iso.datetime({ offset: true }).nullable(),
+  lastPeriodicWakeAt: z.iso.datetime({ offset: true }).nullable(),
+} as const;
+
+const attentionArousalStatePayloadSchema = z.discriminatedUnion("cause", [
+  z
+    .object({
+      state: z.literal("awake"),
+      cause: z.literal("default"),
+      scopeKey: nonBlankString,
+      candidateInformationId: nonBlankString,
+      ...attentionArousalTimeStateFields,
+      reasonCodes: z.array(nonBlankString).min(1),
+      policyVersion: z.literal("attention-observation.v1"),
+    })
+    .strict(),
+  z
+    .object({
+      state: z.literal("awake"),
+      cause: z.literal("signal"),
+      scopeKey: nonBlankString,
+      candidateInformationId: nonBlankString,
+      ...attentionArousalTimeStateFields,
+      reasonCodes: z.array(nonBlankString).min(1),
+      policyVersion: z.literal("attention-observation.v1"),
+    })
+    .strict(),
+  z
+    .object({
+      state: attentionArousalStateSchema,
+      cause: z.literal("activity"),
+      activityInformationId: nonBlankString,
+      ...attentionArousalTimeStateFields,
+      reasonCodes: z.array(nonBlankString).min(1),
+      policyVersion: z.literal("attention-observation.v1"),
+    })
+    .strict(),
+  z
+    .object({
+      state: attentionArousalStateSchema,
+      cause: z.literal("timer"),
+      timerInformationId: nonBlankString,
+      ...attentionArousalTimeStateFields,
+      reasonCodes: z.array(nonBlankString).min(1),
+      policyVersion: z.literal("attention-observation.v1"),
+    })
+    .strict(),
+  z
+    .object({
+      state: attentionArousalStateSchema,
+      cause: z.literal("policy"),
+      scopeKey: nonBlankString,
+      candidateInformationId: nonBlankString,
+      ...attentionArousalTimeStateFields,
+      reasonCodes: z.array(nonBlankString).min(1),
+      policyVersion: z.literal("attention-observation.v1"),
+    })
+    .strict(),
+  z
+    .object({
+      state: attentionArousalStateSchema,
+      cause: z.literal("external"),
+      scopeKey: nonBlankString.optional(),
+      candidateInformationId: nonBlankString.optional(),
+      ...attentionArousalTimeStateFields,
+      reasonCodes: z.array(nonBlankString).min(1),
+      policyVersion: z.literal("attention-observation.v1"),
+    })
+    .strict(),
+]) as any;
+
+export type AttentionArousalState = z.infer<typeof attentionArousalStateSchema>;
+
+export const attentionArousalStateRecordedInformationKind =
+  defineInformationKind({
+    kind: "agent.attention.arousal.state.recorded",
+    displayName: "Arousal 状态已记录",
+    description:
+      "记录机器人当前唤醒状态和时间锚点；最新注册事实是状态真值，通知、Focus、消息活动与周期检查可重新确认 awake。",
+    payloadSchema: attentionArousalStatePayloadSchema,
+    references: {
+      "core:caused-by": {
+        required: false,
+        multiple: false,
+        targetKinds: [
+          "agent.turn.candidate",
+          "agent.attention.arousal.activity",
+          "core.schedule.one-shot.due",
+        ],
+      },
+      "core:context": {
+        required: false,
+        multiple: false,
+        targetKinds: ["core.runtime.context"],
+      },
+      "core:uses-context": {
+        required: false,
+        multiple: true,
+        targetKinds: ["agent.attention.arousal.state.recorded"],
+      },
+    },
+    log: {
+      enabled: true,
+      level: "info",
+      project: ({ payload }) => {
+        const input = payload as any;
+        return {
+          event: "attention.arousal.state",
+          state: input.state,
+          cause: input.cause,
+          lastEvaluatedAt: input.lastEvaluatedAt,
+          lastActivityAt: input.lastActivityAt,
+          reasonCodes: input.reasonCodes,
+        };
+      },
+    },
+  });
 
 const attentionArousalPayloadSchema = z
   .object({
-    outcome: z.enum(["attend", "defer", "ignore"]),
-    text: z.string(),
-    source: messageSourceSchema,
+    outcome: z.enum(["observe", "defer"]),
+    arousalState: attentionArousalStateSchema,
+    arousalStateInformationId: nonBlankString,
+    wakeSignal: z.boolean(),
     candidateInformationId: nonBlankString,
-    claimInformationId: nonBlankString,
-    turnContextInformationId: nonBlankString,
-    score: z.number(),
-    threshold: z.number().int().min(0).max(100),
-    components: z
-      .object({
-        relevance: z.number(),
-        content: z.number(),
-        pressure: z.number(),
-        recentPresencePenalty: z.number(),
-        frequencyFactor: z.number(),
-        preFrequencyScore: z.number(),
-      })
-      .strict(),
-    scoreEvidence: attentionScoreEvidenceSchema.optional(),
+    scopeKey: nonBlankString,
+    unreadAfterInformationId: nonBlankString.optional(),
+    unreadThroughInformationId: nonBlankString,
+    unreadCount: z.number().int().min(1).max(1000),
+    signals: z.array(nonBlankString).min(1),
+    focusState: z.enum(["active", "inactive", "unavailable"]),
+    focusInformationId: nonBlankString.optional(),
+    focusExpiresAt: z.iso.datetime({ offset: true }).optional(),
     reasonCodes: z.array(nonBlankString),
-    missingInputs: z.array(nonBlankString),
-    policyDigest: nonBlankString,
-    settingsDigest: nonBlankString,
-    dueAt: nonBlankString.optional(),
-    delayMs: z.number().int().min(0).optional(),
-    attempt: z.number().int().min(0),
-    totalWaitBudget: z.number().int().min(0),
-    wakePolicy: z.literal("recheckAt").optional(),
+    policyVersion: z.literal("attention-observation.v1"),
   })
   .strict() as any;
 
@@ -608,31 +651,34 @@ export type AttentionArousalPayload = z.infer<
 
 export const attentionArousalCompletedInformationKind = defineInformationKind({
   kind: "agent.attention.arousal.completed",
-  displayName: "注意力评估结果",
+  displayName: "注意力观察结果",
   description:
-    "对冻结回合完成安全门控及显著性评分后记录关注、延后或忽略、分项得分和原因；Heartflow 据此进入规划或结束回合。",
+    "依据持久化唤醒状态、平台信号和 Focus 租约记录观察或延后；observe 后 Heartflow 才能读取正文。",
   payloadSchema: attentionArousalPayloadSchema,
   references: {
     "core:caused-by": {
       required: true,
       multiple: false,
-      targetKinds: [turnContextCompletedInformationKind.kind],
+      targetKinds: ["agent.turn.candidate"],
     },
     "core:context": {
       required: true,
       multiple: false,
       targetKinds: ["core.runtime.context"],
     },
-    "core:uses-context": { required: true, multiple: true },
-    "agent:turn-claim": {
+    "core:uses-context": {
       required: true,
-      multiple: false,
-      targetKinds: ["agent.turn.claimed"],
+      multiple: true,
+      targetKinds: [
+        attentionArousalStateRecordedInformationKind.kind,
+        "agent.attention.focus.opened",
+        "agent.attention.focus.renewed",
+      ],
     },
     "core:status-of": {
       required: true,
       multiple: false,
-      targetKinds: ["agent.turn.claimed"],
+      targetKinds: ["agent.turn.candidate"],
     },
   },
   log: {
@@ -641,15 +687,14 @@ export const attentionArousalCompletedInformationKind = defineInformationKind({
     project: ({ payload }) => {
       const input = payload as any;
       return {
-        event: "turn.decision",
+        event: "attention.observation",
         outcome: input.outcome,
-        score: input.score,
         reasonCodes: input.reasonCodes,
-        missingInputs: input.missingInputs,
-        attempt: input.attempt,
-        totalWaitBudget: input.totalWaitBudget,
-        ...(input.dueAt === undefined ? {} : { dueAt: input.dueAt }),
-        ...(input.delayMs === undefined ? {} : { delayMs: input.delayMs }),
+        unreadCount: input.unreadCount,
+        signals: input.signals,
+        focusState: input.focusState,
+        arousalState: input.arousalState,
+        wakeSignal: input.wakeSignal,
       };
     },
   },
@@ -677,7 +722,7 @@ export const waitRequestedInformationKind = defineInformationKind({
     "core:caused-by": {
       required: true,
       multiple: false,
-      targetKinds: [attentionArousalCompletedInformationKind.kind],
+      targetKinds: ["agent.turn.plan.completed"],
     },
     "core:context": {
       required: true,

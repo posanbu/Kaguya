@@ -2,7 +2,7 @@
  * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * 兼容 #136 的 agent.turn.plan 与 message/wait/silent 契约，仅增强已合并的单一 Planner 链。
  * 测试显式批准合成 QQ 目标，Runtime 未注入策略时默认拒绝非 Web 出站。
- * 功能概述：通过真实 Runtime/PGlite 与 DeepSeek-compatible HTTP mock 验证两层发言决策。
+ * 功能概述：通过真实 Runtime/PGlite 与 DeepSeek-compatible HTTP mock 验证先观察、后规划的发言链。
  * fixture 装配正式 Catalog、light Planner 和 heavy Composer；settle 等待 durable 订阅闭合，
  * restart 保留数据库并重建宿主，advance 推进持久 heartbeat 时钟。仅 mock provider HTTP，
  * waitForPersistence 将本 fixture 的启动、打断、重建、重放及 settle 等待统一到已有的 8 秒
@@ -10,13 +10,16 @@
  * 尚未提交决策的 Planner 可由新输入打断；静默窗后合并旧、新输入重构，已提交决策仍保持唯一终态。
  * 覆盖 message/wait/silent 与 target union 的 JSON mode 本地校验、一次结构修复、耗尽后失败关闭、
  * 累计 usage 和单 requested/terminal/decision；重试复用冻结 Prompt，重放与新输入取消均不重复落地。
- * 同时保留直接信号、共享等待预算和并发入站去重回归。
+ * 同时保留直接信号、Planner 独立等待预算和并发入站去重回归。
  * 所有消息和密钥均为合成测试数据；清理按 Runtime、数据库顺序关闭，不访问外部服务。
  */
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { createMessageComposition } from "@kaguya/composition";
 import { createTestingDatabase } from "@kaguya/database/testing";
-import { createFirstPartyModuleConfigDefaults } from "@kaguya/modules";
+import {
+  attentionArousalStateRecordedInformationKind,
+  createFirstPartyModuleConfigDefaults,
+} from "@kaguya/modules";
 import {
   KaguyaRuntime,
   GatewayAllowlist,
@@ -433,8 +436,8 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
     },
   );
 
-  it("ordinary group reactions and mentions of others do not invoke Planner", async () => {
-    const f = await fixture([speak]);
+  it("observes an ordinary group opportunity while Arousal is awake", async () => {
+    const f = await fixture([silent]);
     await f.submit(
       f.message("m1", {
         text: "哈哈",
@@ -443,8 +446,19 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
       }),
     );
     await f.settle();
-    expect(f.requests).toHaveLength(0);
-    expect(kinds(await f.atoms())).toContain("agent.turn.waiting");
+    expect(f.requests).toHaveLength(1);
+    const graph = await f.atoms();
+    expect(
+      graph.find((atom) => atom.kind === "agent.attention.arousal.completed")
+        ?.payload,
+    ).toMatchObject({
+      outcome: "observe",
+      arousalState: "awake",
+      wakeSignal: false,
+      reasonCodes: ["arousal-awake"],
+    });
+    expect(kinds(graph)).toContain("agent.turn.context.completed");
+    expect(kinds(graph)).toContain("agent.turn.silent");
   });
 
   it("recovers wait across restart, merges a new message, and replies once", async () => {
@@ -719,9 +733,25 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
     },
   );
 
-  it("shares the budget between the deterministic gate and Planner", async () => {
-    const f = await fixture([wait, wait, wait]);
+  it("keeps Arousal defer outside the Planner wait budget", async () => {
+    const f = await fixture([wait, wait, wait, wait]);
     const group = { kind: "group" as const, groupId: "group" };
+    await f.core().register(attentionArousalStateRecordedInformationKind, {
+      occurredAt: "2026-09-12T12:00:00.000Z",
+      source: "module:test",
+      payload: {
+        state: "asleep",
+        cause: "external",
+        lastEvaluatedAt: "2026-09-12T12:00:00.000Z",
+        lastInboundInformationId: null,
+        lastActivityAt: "2026-09-12T12:00:00.000Z",
+        sleepStartedAt: "2026-09-12T12:00:00.000Z",
+        lastPeriodicWakeAt: null,
+        reasonCodes: ["test-asleep"],
+        policyVersion: "attention-observation.v1",
+      },
+      references: [],
+    });
     await f.submit(f.message("m1", { target: group, text: "哈哈" }));
     await f.settle();
     expect(f.requests).toHaveLength(0);
@@ -733,7 +763,7 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
       }),
     );
     await f.settle();
-    for (let round = 0; round < 2; round++) {
+    for (let round = 0; round < 3; round++) {
       f.setTime(6000);
       await f.restart();
       await waitForPersistence(() =>

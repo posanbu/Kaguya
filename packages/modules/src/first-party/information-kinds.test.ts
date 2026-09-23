@@ -247,7 +247,6 @@ describe("message intent protocol", () => {
       "core:caused-by": {
         required: true,
         targetKinds: [
-          "agent.attention.arousal.completed",
           "agent.turn.plan.completed",
           "agent.message.target.authorized",
         ],

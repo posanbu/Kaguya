@@ -1,11 +1,10 @@
 /**
  * 功能概述：第一方模块拥有的检查视图，定义门控机制、历史/数据分组和可读字段。
  * 记忆联想用 record-browser 按查询串起完成事实、排名候选和 canonical source；字段与文案均由本模块声明。
- * 注意力用 attention-gate 展示完成事实，状态来自 outcome，通过 core:uses-context 正向引用冻结上下文；不补写历史条件。
+ * 注意力用 attention-gate 展示唤醒状态与 observe/defer 完成事实，只投影非语义信号、水位与 Focus 快照。
  * 在线心流与消息组织用 model-request-browser 按持久化模型请求浏览，完整 Prompt 与来源由独立详情承载。
  * 主要职责：firstPartyInspection 由各模块 Manifest 显式引用；view 将稳定字段路径与中文标题绑定。
- * arousalFields/arousalContextFields 复用门控根事实与冻结条件白名单，列表、详情和 SDK 校验使用相同字段契约；
- * scoreEvidence 暴露当时保存的分项计算依据，缺省的旧记录不借当前实现补算。
+ * arousalFields 由列表、详情和 SDK 校验复用；不查询或展示正文，也不补写历史条件。
  * 代码库关系：SDK 校验声明，Host 投影给 Server；Server 按声明查询账本，Web 使用通用视图。
  * 输入输出与副作用：纯静态元数据，无 I/O、配置值或 UI 组件；历史记录只说明当时事实，不推断当前状态。
  */
@@ -21,42 +20,38 @@ const view = (
 ) => ({ id, title, description, kinds, fields: fields(entries) });
 const arousalFields = {
   outcome: "结果",
-  text: "输入",
-  source: "来源会话",
-  score: "分数",
-  threshold: "当时阈值",
-  components: "评分组成",
-  scoreEvidence: "评分计算依据",
-  reasonCodes: "原因",
-  attempt: "等待次数",
-  totalWaitBudget: "等待预算",
-  dueAt: "再次检查",
-  policyDigest: "策略标识",
-  settingsDigest: "配置标识",
-  turnContextInformationId: "冻结上下文",
-  missingInputs: "缺失输入",
-};
-const arousalContextFields = {
+  arousalState: "Arousal 状态",
+  arousalStateInformationId: "状态事实",
+  wakeSignal: "唤醒信号",
   scopeKey: "会话范围",
-  asOf: "冻结时刻",
-  inputs: "冻结输入",
-  isPrivate: "私聊",
-  isGroup: "群聊",
-  mentionedSelf: "提及自己",
-  repliedToSelf: "回复自己",
-  namedSelf: "称呼自己",
-  muted: "已静音",
-  safe: "安全检查通过",
-  destinationAvailable: "目标可用",
-  frequency: "有效频率",
-  frequencyRuleIndex: "命中频率规则",
-  focusActive: "关注生效",
-  focusInformationId: "关注记录",
-  focusExpiresAt: "关注到期",
-  messageCount: "消息数量",
-  recentSelfReplies: "近期自身回复数",
-  recentWindowMessages: "近期窗口消息数",
-  idleReachedAverage: "达到平均空闲时间",
+  candidateInformationId: "观察机会",
+  unreadAfterInformationId: "未读下界",
+  unreadThroughInformationId: "未读上界",
+  unreadCount: "未读数量",
+  signals: "触发信号",
+  focusState: "Focus 状态",
+  focusInformationId: "Focus 租约",
+  focusExpiresAt: "Focus 到期",
+  reasonCodes: "原因",
+  policyVersion: "策略版本",
+};
+const arousalViewFields = {
+  ...arousalFields,
+  state: "状态",
+  cause: "状态来源",
+  reason: "触发原因",
+  dueAt: "预约时间",
+  firedAt: "唤醒时间",
+  startedAt: "开始时间",
+  expiresAt: "到期时间",
+  generation: "代次",
+  heartbeatInformationId: "短心跳",
+  triggerInformationId: "观察触发",
+  lastEvaluatedAt: "最近检查时间",
+  lastInboundInformationId: "最近全局消息",
+  lastActivityAt: "最近活动时间",
+  sleepStartedAt: "休眠开始时间",
+  lastPeriodicWakeAt: "上次周期唤醒时间",
 };
 const modelRequestsView = () =>
   view(
@@ -275,34 +270,31 @@ export const firstPartyInspection = {
   },
   "agent.attention.arousal": {
     mechanism: [
-      "各条路径均记录相关性、内容、压力、在场惩罚与频率因子的评分；决策先检查静音、安全、目标可用性与频率为零等硬门禁。",
-      "硬门禁通过后，私聊或满足直接唤醒规则时放行至规划；否则按评分决定。放行不代表已经回复。",
-      "分数达到阈值则放行；未达到时按等待预算延后或忽略。历史中的阈值、策略标识与配置标识是当时记录的值。",
+      "Heartbeat 只登记未读水位、数量与平台通知信号，不把正文交给 Arousal。",
+      "Arousal 最新状态事实是唤醒状态真值；空闲休眠、夜间边界与周期唤醒分别等待持久化绝对 deadline，初始状态为 awake。",
+      "私聊、Web、@、回复、有效 Focus 或周期复查会确认唤醒；休眠状态默认每五分钟短暂唤醒一次。",
+      "awake 状态下观察机会默认 observe；只有显式 asleep 且没有唤醒信号时才 defer。",
+      "defer 不推进已观察水位；只有 observe 后 Heartflow 才按上下界读取并冻结全部未读。",
     ],
     views: [
       view(
         "gates",
-        "门控历史",
-        "为什么关注、延后或忽略这批输入。",
-        ["agent.attention.arousal.completed"],
-        {
-          ...arousalFields,
-          "source.destination.groupId": "群聊标识",
-          "source.destination.userId": "私聊标识",
-        },
-      ),
-      view(
-        "context",
-        "冻结上下文",
-        "门控当时引用的冻结输入与条件；缺失字段不推断为否。",
-        ["agent.turn.context.completed"],
-        arousalContextFields,
+        "观察历史",
+        "为什么本次查看未读，或为什么先延后。",
+        [
+          "agent.attention.arousal.completed",
+          "agent.attention.arousal.state.recorded",
+          "agent.turn.candidate",
+          "agent.attention.focus.opened",
+          "agent.attention.focus.renewed",
+        ],
+        arousalViewFields,
       ),
     ],
     surface: {
       version: 1,
       id: "arousal",
-      title: "注意力门控",
+      title: "注意力观察",
       layout: { type: "master-detail", areas: ["main", "context"] },
       components: [
         {
@@ -312,41 +304,90 @@ export const firstPartyInspection = {
           area: "main",
           viewId: "gates",
           recordKind: "agent.attention.arousal.completed",
-          titleField: "text",
-          searchFields: [
-            "text",
-            "source.destination.groupId",
-            "source.destination.userId",
-          ],
+          titleField: "scopeKey",
+          searchFields: ["scopeKey", "signals", "reasonCodes", "arousalState"],
           fields: fields(arousalFields),
           status: {
             field: "outcome",
             options: [
-              { value: "attend", label: "放行至规划" },
+              { value: "observe", label: "查看未读" },
               { value: "defer", label: "延后观察" },
-              { value: "ignore", label: "本次忽略" },
             ],
           },
           labels: {
-            directory: "门控历史",
-            search: "搜索输入或会话",
-            placeholder: "输入关键词、群号或用户标识",
-            empty: "暂无符合条件的门控记录",
-            mechanism: "门控机制",
+            directory: "观察历史",
+            search: "搜索会话或触发信号",
+            placeholder: "输入会话范围、通知或原因",
+            empty: "暂无符合条件的观察记录",
+            mechanism: "观察机制",
           },
           notice:
-            "按当时记录解释门控结果；放行至规划不代表已经回复，缺失的历史条件不作推断。",
+            "这里只展示当时已记录的唤醒状态、通知、Focus 与水位事实；observe 不代表 Planner 最终回复。",
           relations: [
             {
-              id: "context",
-              title: "冻结上下文",
-              viewId: "context",
-              kinds: ["agent.turn.context.completed"],
+              id: "candidate",
+              title: "观察机会",
+              viewId: "gates",
+              kinds: ["agent.turn.candidate"],
+              reference: "core:status-of",
+              direction: "forward",
+              presentation: "field-grid",
+              fields: fields({
+                reason: "调度原因",
+                dueAt: "预约时间",
+                firedAt: "唤醒时间",
+                scopeKey: "会话范围",
+                unreadAfterInformationId: "未读下界",
+                unreadThroughInformationId: "未读上界",
+                unreadCount: "未读数量",
+                signals: "触发信号",
+              }),
+              empty: "未找到关联的观察机会。",
+              limit: 1,
+            },
+            {
+              id: "arousal-state",
+              title: "唤醒状态",
+              viewId: "gates",
+              kinds: ["agent.attention.arousal.state.recorded"],
               reference: "core:uses-context",
               direction: "forward",
               presentation: "field-grid",
-              fields: fields(arousalContextFields),
-              empty: "未找到引用的冻结上下文；历史条件无法确认。",
+              fields: fields({
+                state: "状态",
+                cause: "状态来源",
+                reasonCodes: "唤醒原因",
+                scopeKey: "触发会话",
+                candidateInformationId: "观察机会",
+                lastEvaluatedAt: "最近检查时间",
+                lastInboundInformationId: "最近全局消息",
+                lastActivityAt: "最近活动时间",
+                sleepStartedAt: "休眠开始时间",
+                lastPeriodicWakeAt: "上次周期唤醒时间",
+                policyVersion: "策略版本",
+              }),
+              empty: "本次没有关联的唤醒状态事实。",
+              limit: 1,
+            },
+            {
+              id: "focus",
+              title: "Focus 租约",
+              viewId: "gates",
+              kinds: [
+                "agent.attention.focus.opened",
+                "agent.attention.focus.renewed",
+              ],
+              reference: "core:uses-context",
+              direction: "forward",
+              presentation: "field-grid",
+              fields: fields({
+                scopeKey: "会话范围",
+                reason: "开启原因",
+                startedAt: "开始时间",
+                expiresAt: "到期时间",
+                generation: "代次",
+              }),
+              empty: "本次没有有效 Focus 租约。",
               limit: 1,
             },
           ],
@@ -358,6 +399,7 @@ export const firstPartyInspection = {
   "agent.heartbeat.short": {
     mechanism: [
       "按会话合并连续输入，以持久化调度唤醒观察。",
+      "每条入站只登记全局活动事实；Arousal 用持久化 one-shot 直接等待无消息休眠、夜间边界与周期唤醒的绝对时间。",
       "wait、规划中断、安静窗口和无动作退避共同决定再次观察时间。",
     ],
     views: [
@@ -367,6 +409,7 @@ export const firstPartyInspection = {
         "记录调度、替换和观察水位；历史预约不代表当前仍待执行。",
         [
           "agent.heartbeat.scheduled",
+          "agent.attention.arousal.activity",
           "agent.heartbeat.fired",
           "agent.heartbeat.superseded",
           "agent.heartbeat.failed",
@@ -375,11 +418,16 @@ export const firstPartyInspection = {
         ],
         {
           reason: "触发原因",
+          observedAt: "活动时间",
+          inboundInformationId: "活动消息水位",
           dueAt: "预约时间",
           scopeKey: "会话范围",
           attempt: "尝试次数",
           firedAt: "实际唤醒",
-          sourceInformationIds: "来源",
+          unreadAfterInformationId: "上次观察水位",
+          unreadThroughInformationId: "本次机会水位",
+          unreadCount: "未读数量",
+          signals: "触发信号",
           destination: "会话",
           replacementInformationId: "替换记录",
           error: "失败原因",
@@ -390,8 +438,8 @@ export const firstPartyInspection = {
   },
   "agent.heartflow.online": {
     mechanism: [
-      "认领候选并冻结上下文；同一会话的开放回合由持久化约束协调。",
-      "注意力通过后由 Planner 选择 message、wait 或 silent；记录中断与替换。",
+      "仅在 Arousal 记录 observe 后认领候选，并按上下水位读取、冻结全部未读。",
+      "身份屏障完成后由 Planner 选择 message、wait 或 silent；记录中断与替换。",
       "只有投递事实确认后才能判定发送完成。",
     ],
     views: [
@@ -416,9 +464,8 @@ export const firstPartyInspection = {
           reason: "原因",
           reasonCodes: "原因",
           inputs: "冻结输入",
+          observedThroughInformationId: "已观察水位",
           asOf: "决策时刻",
-          frequency: "有效频率",
-          frequencyRuleIndex: "命中频率规则",
           dueAt: "再次唤醒",
           candidateInformationId: "候选",
           claimInformationId: "认领",

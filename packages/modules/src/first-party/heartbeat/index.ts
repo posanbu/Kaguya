@@ -4,8 +4,8 @@
  * 代码库关系：Catalog 与管理表单共用 schema，Host 负责创建实例。
  * 输入输出与副作用：字段声明无副作用；订阅处理写入调度原子，不直接发送消息。
  * heartbeatObservationSelector 只读取开放集合与最近水位；开放期间入站账本即待观察集合。
- * due 用事务 openScope 注册唯一候选；终态 resume 合并期间新输入，只安排一次后续观察。
- * isImmediateObservation 识别私聊、@ 与回复机器人；普通群消息保留首个稀疏观察时刻，避免连续输入饿死。
+ * 入站按 scope 直接竞争唯一候选；due 仅恢复 Planner wait/interrupt，终态 resume 合并期间新输入。
+ * isImmediateObservation 识别私聊、@ 与回复机器人，用于唤醒休眠状态和提升已有观察。
  * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
  */
 import { firstPartyInspection } from "../inspection.js";
@@ -16,6 +16,7 @@ import {
   oneShotScheduleCapability,
 } from "@kaguya/scheduler";
 import {
+  attentionArousalActivityInformationKind,
   heartbeatScheduledInformationKind,
   heartbeatFiredInformationKind,
   heartbeatSupersededInformationKind,
@@ -27,16 +28,11 @@ import {
   turnWaitingInformationKind,
   turnDecisionInterruptedInformationKind,
   turnInterruptedInformationKind,
+  attentionArousalStateRecordedInformationKind,
 } from "../information-kinds.js";
 
 export const heartbeatSettingsSchema = z
   .object({
-    messageDebounceMs: z.number().int().min(0).meta({
-      title: "消息防抖时间",
-      description: "收集同一会话连续输入的等待时间，单位毫秒。",
-      public: true,
-      default: 1500,
-    }),
     plannerInterruptQuietMs: z
       .number()
       .int()
@@ -57,7 +53,7 @@ export const heartbeatSettingsSchema = z
     }),
     totalWaitBudget: z.number().int().min(0).max(20).meta({
       title: "连续等待上限",
-      description: "连续 wait 或注意力延后最多允许多少次。",
+      description: "Planner 连续 wait 最多允许多少次。",
       public: true,
       default: 3,
     }),
@@ -91,21 +87,23 @@ export type HeartbeatSettings = z.infer<typeof heartbeatSettingsSchema>;
 export const heartbeatModule = defineInformationModule({
   manifest: {
     protocolVersion: 1,
-    moduleVersion: "1.0.0",
+    moduleVersion: "2.0.0",
     definitionId: "agent.heartbeat.short",
     inspection: firstPartyInspection["agent.heartbeat.short"],
-    displayName: "持久化短心跳",
-    summary: "合并入站水位与等待信号，可靠唤醒稀疏观察。",
+    displayName: "持久化观察调度",
+    summary: "按会话积攒通知，并为 awake 状态直接产生观察机会。",
     description:
-      "消费入站消息和等待请求，按防抖、替换及预算策略提交单次调度；到期后竞争唯一开放观察与心跳终态，持久化和触发由 Scheduler 能力负责。",
+      "入站消息直接竞争同一会话的唯一开放观察；未观察内容继续按水位积攒，Planner wait 与 interrupt 才使用持久化单次调度。",
     settingsSchema: heartbeatSettingsSchema,
     consumes: [
+      attentionArousalStateRecordedInformationKind,
       inboundTextInformationKind,
       waitRequestedInformationKind,
       oneShotDueInformationKind,
       ...observationTerminals,
     ],
     produces: [
+      attentionArousalActivityInformationKind,
       heartbeatScheduledInformationKind,
       heartbeatFiredInformationKind,
       heartbeatSupersededInformationKind,
@@ -118,6 +116,7 @@ export const heartbeatModule = defineInformationModule({
       heartbeatDueSelector,
       heartbeatObservationSelector,
       heartbeatIdleBackoffSelector,
+      heartbeatDeferredObservationSelector,
     ],
     promptRenderers: [],
     requires: [oneShotScheduleCapability],
@@ -176,7 +175,7 @@ export const heartbeatModule = defineInformationModule({
     const schedule = async (
       atom: any,
       context: any,
-      reason: "message" | "wait" | "interrupt",
+      reason: "message" | "wait" | "interrupt" | "recheck",
       dueAt: string,
       sourceIds: string[],
       wakeOnMessage: boolean,
@@ -291,9 +290,8 @@ export const heartbeatModule = defineInformationModule({
     return {
       provisions: [],
       describeStartup: () => ({
-        summary: "Durable short heartbeat ready",
+        summary: "Scope notification observation ready",
         fields: {
-          messageDebounceMs: settings.messageDebounceMs,
           plannerInterruptQuietMs: settings.plannerInterruptQuietMs,
           noActionBackoffBaseMs: settings.noActionBackoffBaseMs,
           maxReplacementAttempts: settings.maxReplacementAttempts,
@@ -303,20 +301,123 @@ export const heartbeatModule = defineInformationModule({
       }),
       subscriptions: [
         onInformation(
+          attentionArousalStateRecordedInformationKind,
+          { subscriptionId: "heartbeat.arousal-wake", delivery: "durable" },
+          async (atom, context) => {
+            const reasons = atom.payload.reasonCodes as readonly string[];
+            if (!reasons.includes("periodic-wake")) return;
+            const selected = await context.select(
+              heartbeatDeferredObservationSelector,
+            );
+            const candidates = selected.filter(
+              (item) => item.kind === turnCandidateInformationKind.kind,
+            );
+            for (const previousCandidate of candidates) {
+              const p = previousCandidate.payload as any;
+              const pending = selected.filter(
+                (item) =>
+                  item.kind === inboundTextInformationKind.kind &&
+                  scopeOf((item.payload as any).source) === p.scopeKey,
+              );
+              const latest = pending.at(-1);
+              if (!latest) continue;
+              const runtimeContext = selected.find(
+                (item) =>
+                  item.kind === "core.runtime.context" &&
+                  previousCandidate.references.some(
+                    (reference) =>
+                      reference.relation === "core:context" &&
+                      reference.informationId === item.informationId,
+                  ),
+              );
+              if (!runtimeContext) continue;
+              const observed = selected.find(
+                (item) =>
+                  item.kind === "agent.turn.context.completed" &&
+                  item.payload.scopeKey === previousCandidate.payload.scopeKey,
+              );
+              const signals = [
+                ...new Set([
+                  ...pending.flatMap((inbound) =>
+                    observationSignals(
+                      (inbound.payload as any).source,
+                      selected,
+                    ),
+                  ),
+                  "recheck",
+                ]),
+              ];
+              await context.registerOnce(
+                "agent.turn.candidate",
+                `${atom.informationId}:${String(p.scopeKey)}`,
+                turnCandidateInformationKind,
+                {
+                  openScope: {
+                    key: String(p.scopeKey),
+                    terminalGroup: "agent.turn.terminal",
+                  },
+                  payload: {
+                    triggerInformationId: atom.informationId,
+                    reason: "recheck" as const,
+                    dueAt: atom.occurredAt,
+                    firedAt: atom.occurredAt,
+                    platform: p.platform,
+                    adapterId: p.adapterId,
+                    destination: p.destination,
+                    ...(observed?.payload.observedThroughInformationId
+                      ? {
+                          unreadAfterInformationId: String(
+                            observed.payload.observedThroughInformationId,
+                          ),
+                        }
+                      : {}),
+                    unreadThroughInformationId: latest.informationId,
+                    unreadCount: pending.length,
+                    signals,
+                    scopeKey: p.scopeKey,
+                    asOf: latest.occurredAt,
+                    policyVersion: "attention-opportunity.v1" as const,
+                    rebuildAttempt: Number(p.rebuildAttempt ?? 0),
+                    attempt: Number(p.attempt ?? 0),
+                    totalWaitBudget: Number(
+                      p.totalWaitBudget ?? settings.totalWaitBudget,
+                    ),
+                  },
+                  references: [],
+                  contextInformationId: runtimeContext.informationId,
+                },
+              );
+            }
+          },
+        ),
+        onInformation(
           inboundTextInformationKind,
           { subscriptionId: "heartbeat.message", delivery: "durable" },
           async (atom, context) => {
+            await context.registerOnce(
+              "agent.attention.arousal.activity",
+              atom.informationId,
+              attentionArousalActivityInformationKind,
+              {
+                payload: {
+                  inboundInformationId: atom.informationId,
+                  observedAt: context.now().toISOString(),
+                  policyVersion: "attention-activity.v1" as const,
+                },
+                references: [],
+              },
+            );
             const observations = await context.select(
               heartbeatObservationSelector,
             );
             const candidate = openObservations(observations)[0];
             if (candidate) {
               const pendingInputs = observations.filter(
-                (a) => a.kind === inboundTextInformationKind.kind,
+                (item) => item.kind === inboundTextInformationKind.kind,
               );
               if (
                 !pendingInputs.some(
-                  (a) => a.informationId === atom.informationId,
+                  (item) => item.informationId === atom.informationId,
                 )
               )
                 return;
@@ -326,7 +427,7 @@ export const heartbeatModule = defineInformationModule({
               );
               await context.registerOnce(
                 "agent.observation.wake",
-                `${candidate.informationId}:${immediate ? "immediate" : "normal"}`,
+                `${candidate.informationId}:${atom.informationId}`,
                 observationWakeInformationKind,
                 {
                   payload: {
@@ -334,12 +435,12 @@ export const heartbeatModule = defineInformationModule({
                     immediate,
                   },
                   references: [
-                    ...pendingInputs.map((a) => ({
-                      relation: "core:uses-context",
-                      informationId: a.informationId,
+                    ...pendingInputs.map((item) => ({
+                      relation: "core:uses-context" as const,
+                      informationId: item.informationId,
                     })),
                     {
-                      relation: "agent:turn-candidate",
+                      relation: "agent:turn-candidate" as const,
                       informationId: candidate.informationId,
                     },
                   ],
@@ -355,37 +456,97 @@ export const heartbeatModule = defineInformationModule({
               atom.payload.source,
               observations,
             );
-            if (previous && !immediate && previousInput?.reason !== "interrupt")
+            const latestObservation = observations.find(
+              (item) => item.kind === turnCandidateInformationKind.kind,
+            );
+            const interruptionPendingSchedule =
+              !previous &&
+              latestObservation !== undefined &&
+              observations.some(
+                (item) =>
+                  (item.kind === turnInterruptedInformationKind.kind ||
+                    item.kind ===
+                      turnDecisionInterruptedInformationKind.kind) &&
+                  item.payload.candidateInformationId ===
+                    latestObservation.informationId,
+              );
+            if (interruptionPendingSchedule) return;
+            if (!previous) {
+              const pendingInputs = observations.filter(
+                (item) => item.kind === inboundTextInformationKind.kind,
+              );
+              const latest = pendingInputs.at(-1);
+              if (!latest) return;
+              const observedContext = observations.find(
+                (item) => item.kind === "agent.turn.context.completed",
+              );
+              const signals = [
+                ...new Set(
+                  pendingInputs.flatMap((input) =>
+                    observationSignals(
+                      (input.payload as any).source,
+                      observations,
+                    ),
+                  ),
+                ),
+              ];
+              const now = context.now().toISOString();
+              await context.registerOnce(
+                "agent.turn.candidate",
+                atom.informationId,
+                turnCandidateInformationKind,
+                {
+                  openScope: {
+                    key: scopeOf(atom.payload.source),
+                    terminalGroup: "agent.turn.terminal",
+                  },
+                  payload: {
+                    triggerInformationId: atom.informationId,
+                    reason: "message" as const,
+                    dueAt: now,
+                    firedAt: now,
+                    platform: atom.payload.source.platform,
+                    adapterId: atom.payload.source.adapterId,
+                    destination: atom.payload.source.destination,
+                    ...(observedContext?.payload
+                      .observedThroughInformationId === undefined
+                      ? {}
+                      : {
+                          unreadAfterInformationId: String(
+                            observedContext.payload
+                              .observedThroughInformationId,
+                          ),
+                        }),
+                    unreadThroughInformationId: latest.informationId,
+                    unreadCount: pendingInputs.length,
+                    signals,
+                    scopeKey: scopeOf(atom.payload.source),
+                    asOf: latest.occurredAt,
+                    policyVersion: "attention-opportunity.v1" as const,
+                    rebuildAttempt: 0,
+                    attempt: 0,
+                    totalWaitBudget: settings.totalWaitBudget,
+                  },
+                  references: [],
+                },
+              );
               return;
+            }
             const preserveWait =
               !immediate &&
               previousInput?.reason === "wait" &&
               previousInput?.wakeOnMessage === false;
-            const dueAt = preserveWait
-              ? previous.payload.dueAt
-              : new Date(
-                  Math.max(
-                    context.now().getTime() +
-                      (previousInput?.reason === "interrupt"
-                        ? settings.plannerInterruptQuietMs
-                        : immediate
-                          ? 0
-                          : settings.messageDebounceMs),
-                    await idleBackoffDueAt(
-                      context,
-                      observations.filter(
-                        (a) => a.kind === inboundTextInformationKind.kind,
-                      ).length,
-                      immediate,
-                      (atom.payload as any).source,
-                    ),
-                  ),
-                ).toISOString();
-            const reason = preserveWait
-              ? "wait"
-              : previousInput?.reason === "interrupt"
-                ? "interrupt"
-                : "message";
+            const preserveRecheck =
+              !immediate && previousInput?.reason === "recheck";
+            if (previous && (preserveWait || preserveRecheck)) return;
+            const dueAt = new Date(
+              context.now().getTime() +
+                (previousInput?.reason === "interrupt"
+                  ? settings.plannerInterruptQuietMs
+                  : 0),
+            ).toISOString();
+            const reason =
+              previousInput?.reason === "interrupt" ? "interrupt" : "message";
             const sourceIds = [
               ...(Array.isArray(previousInput?.sourceInformationIds)
                 ? previousInput.sourceInformationIds
@@ -398,7 +559,7 @@ export const heartbeatModule = defineInformationModule({
               reason,
               dueAt,
               sourceIds,
-              preserveWait ? false : true,
+              true,
               previousInput?.attempt ?? 0,
               previousInput?.totalWaitBudget ?? settings.totalWaitBudget,
               previous?.informationId,
@@ -472,7 +633,7 @@ export const heartbeatModule = defineInformationModule({
               return;
             }
             if (result.status === "fired") {
-              const fired = await context.commitTerminal(
+              await context.commitTerminal(
                 "agent.heartbeat",
                 hb.informationId,
                 heartbeatFiredInformationKind,
@@ -513,28 +674,14 @@ export const heartbeatModule = defineInformationModule({
                 )
               )
                 return;
-              const observed = new Set(
-                state
-                  .filter((a) => a.kind === turnCandidateInformationKind.kind)
-                  .flatMap((a) => (a.payload as any).sourceInformationIds),
-              );
               const pending = state.filter(
-                (a) =>
-                  a.kind === inboundTextInformationKind.kind &&
-                  !observed.has(a.informationId),
+                (a) => a.kind === inboundTextInformationKind.kind,
               );
-              const sourceIds = pending.length
-                ? [
-                    ...new Set([
-                      ...(p.reason === "wait" ||
-                      p.reason === "interrupt" ||
-                      p.attempt > 0
-                        ? p.sourceInformationIds
-                        : []),
-                      ...pending.map((a) => a.informationId),
-                    ]),
-                  ]
-                : p.sourceInformationIds;
+              const replayCandidate = state.find(
+                (a) =>
+                  a.kind === turnCandidateInformationKind.kind &&
+                  a.informationId === p.predecessorCandidateInformationId,
+              );
               if (
                 !pending.length &&
                 p.reason !== "wait" &&
@@ -549,6 +696,29 @@ export const heartbeatModule = defineInformationModule({
                     p.asOf,
                   )
                 : p.asOf;
+              const upperInformationId =
+                pending.at(-1)?.informationId ??
+                (replayCandidate?.payload.unreadThroughInformationId as
+                  string | undefined);
+              if (!upperInformationId) return;
+              const observedContext = state.find(
+                (a) => a.kind === "agent.turn.context.completed",
+              );
+              const unreadAfterInformationId = replayCandidate
+                ? (replayCandidate.payload.unreadAfterInformationId as
+                    string | undefined)
+                : (observedContext?.payload.observedThroughInformationId as
+                    string | undefined);
+              const signals = [
+                ...new Set([
+                  ...pending.flatMap((a) =>
+                    observationSignals((a.payload as any).source, state),
+                  ),
+                  ...(p.reason === "recheck" || p.reason === "wait"
+                    ? ["recheck"]
+                    : []),
+                ]),
+              ];
               await context.registerOnce(
                 "agent.turn.candidate",
                 hb.informationId,
@@ -559,31 +729,31 @@ export const heartbeatModule = defineInformationModule({
                     terminalGroup: "agent.turn.terminal",
                   },
                   payload: {
-                    heartbeatInformationId: hb.informationId,
+                    triggerInformationId: atom.informationId,
                     reason: p.reason,
                     dueAt: p.dueAt,
                     firedAt: context.now().toISOString(),
                     platform: p.platform,
                     adapterId: p.adapterId,
                     destination: p.destination,
-                    sourceInformationIds: sourceIds,
+                    ...(unreadAfterInformationId
+                      ? {
+                          unreadAfterInformationId,
+                        }
+                      : {}),
+                    unreadThroughInformationId: upperInformationId,
+                    unreadCount:
+                      Number(replayCandidate?.payload.unreadCount ?? 0) +
+                      pending.length,
+                    signals,
                     scopeKey: p.scopeKey,
                     asOf,
-                    policyVersion: p.policyVersion,
+                    policyVersion: "attention-opportunity.v1" as const,
                     rebuildAttempt: p.rebuildAttempt ?? 0,
                     attempt: p.attempt,
                     totalWaitBudget: p.totalWaitBudget,
                   },
-                  references: [
-                    {
-                      relation: "agent:heartbeat-fired",
-                      informationId: fired.informationId,
-                    },
-                    ...sourceIds.map((informationId: string) => ({
-                      relation: "core:uses-context" as const,
-                      informationId,
-                    })),
-                  ],
+                  references: [],
                   ...(runtimeContext === undefined
                     ? {}
                     : { contextInformationId: runtimeContext.informationId }),
@@ -603,48 +773,95 @@ export const heartbeatModule = defineInformationModule({
               delivery: "durable",
             },
             async (atom, context) => {
+              const deferred =
+                atom.kind === "agent.attention.arousal.completed" &&
+                (atom.payload as any).outcome === "defer";
               const state = await context.select(heartbeatObservationSelector);
               if (openObservations(state).length) return;
-              const observed = new Set(
-                state
-                  .filter((a) => a.kind === turnCandidateInformationKind.kind)
-                  .flatMap((a) => (a.payload as any).sourceInformationIds),
-              );
               const pending = state.filter(
-                (a) =>
-                  a.kind === inboundTextInformationKind.kind &&
-                  !observed.has(a.informationId),
+                (item) => item.kind === inboundTextInformationKind.kind,
               );
               const latest = pending.at(-1);
               if (!latest) return;
               const existing = await context.select(heartbeatScopeSelector);
               const previous = existing[0] as any;
-              const urgent = pending.some((a) =>
-                immediateInState((a.payload as any).source, state),
+              const urgent = pending.some((item) =>
+                immediateInState((item.payload as any).source, state),
               );
+              if (deferred && !urgent) return;
               const interrupted = atom.kind === "agent.turn.interrupted";
               if (previous && !urgent && !interrupted) return;
               const previousObservation = state.find(
-                (a) => a.kind === turnCandidateInformationKind.kind,
-              )!;
+                (item) => item.kind === turnCandidateInformationKind.kind,
+              );
+              if (!previousObservation) return;
               const waiting = state.some(
-                (a) =>
-                  a.kind === turnWaitingInformationKind.kind &&
-                  a.payload.candidateInformationId ===
+                (item) =>
+                  item.kind === turnWaitingInformationKind.kind &&
+                  item.payload.candidateInformationId ===
                     previousObservation.informationId,
               );
               const attempt =
                 previous?.payload?.input?.attempt ??
                 (waiting ? Number(previousObservation.payload.attempt) + 1 : 0);
-              const sources = [
-                ...new Set([
-                  ...(waiting || interrupted
-                    ? (previousObservation.payload
-                        .sourceInformationIds as string[])
-                    : []),
-                  ...pending.map((a) => a.informationId),
-                ]),
-              ];
+              if (!previous && !interrupted) {
+                const observedContext = state.find(
+                  (item) => item.kind === "agent.turn.context.completed",
+                );
+                const signals = [
+                  ...new Set(
+                    pending.flatMap((input) =>
+                      observationSignals((input.payload as any).source, state),
+                    ),
+                  ),
+                ];
+                const now = context.now().toISOString();
+                await context.registerOnce(
+                  "agent.turn.candidate",
+                  atom.informationId,
+                  turnCandidateInformationKind,
+                  {
+                    openScope: {
+                      key: scopeOf((latest.payload as any).source),
+                      terminalGroup: "agent.turn.terminal",
+                    },
+                    payload: {
+                      triggerInformationId: atom.informationId,
+                      reason: "message" as const,
+                      dueAt: now,
+                      firedAt: now,
+                      platform: (latest.payload as any).source.platform,
+                      adapterId: (latest.payload as any).source.adapterId,
+                      destination: (latest.payload as any).source.destination,
+                      ...(observedContext?.payload
+                        .observedThroughInformationId === undefined
+                        ? {}
+                        : {
+                            unreadAfterInformationId: String(
+                              observedContext.payload
+                                .observedThroughInformationId,
+                            ),
+                          }),
+                      unreadThroughInformationId: latest.informationId,
+                      unreadCount: pending.length,
+                      signals,
+                      scopeKey: scopeOf((latest.payload as any).source),
+                      asOf: latest.occurredAt,
+                      policyVersion: "attention-opportunity.v1" as const,
+                      rebuildAttempt: Number(
+                        (previousObservation.payload as any).rebuildAttempt ??
+                          0,
+                      ),
+                      attempt,
+                      totalWaitBudget: Number(
+                        previousObservation.payload.totalWaitBudget,
+                      ),
+                    },
+                    references: [],
+                  },
+                );
+                return;
+              }
               await schedule(
                 {
                   ...atom,
@@ -659,7 +876,7 @@ export const heartbeatModule = defineInformationModule({
                         ? settings.plannerInterruptQuietMs
                         : urgent
                           ? 0
-                          : settings.messageDebounceMs),
+                          : 0),
                     await idleBackoffDueAt(
                       context,
                       pending.length,
@@ -668,7 +885,7 @@ export const heartbeatModule = defineInformationModule({
                     ),
                   ),
                 ).toISOString(),
-                sources,
+                pending.map((item) => item.informationId),
                 true,
                 attempt,
                 Number(previousObservation.payload.totalWaitBudget),
@@ -696,7 +913,9 @@ import {
   observationTerminals,
   heartbeatObservationSelector,
   heartbeatIdleBackoffSelector,
+  heartbeatDeferredObservationSelector,
   immediateInState,
+  observationSignals,
   openObservations,
 } from "./observation.js";
 export {

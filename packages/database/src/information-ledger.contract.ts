@@ -299,6 +299,48 @@ export function defineInformationLedgerContract(
     );
 
     it(
+      "bounds registration-order reads with an exclusive lower and inclusive upper watermark",
+      async () => {
+        const database = await createMigratedDatabase();
+        await database.information.synchronizeKinds([contextKind.kind]);
+        for (const [informationId, occurredAt] of [
+          ["atom-watermark-lower", "2026-09-04T00:00:03.000Z"],
+          ["atom-watermark-first", "2026-09-04T00:00:01.000Z"],
+          ["atom-watermark-upper", "2026-09-04T00:00:02.000Z"],
+          ["atom-watermark-late", "2026-09-03T00:00:00.000Z"],
+        ] as const) {
+          await database.information.append(
+            createAtom(
+              informationId,
+              contextKind.kind,
+              occurredAt,
+              { name: informationId },
+              [],
+            ),
+            [],
+          );
+        }
+
+        const found = await database.information.find({
+          kinds: [contextKind.kind],
+          registrationOrder: true,
+          afterInformationId: informationIdSchema.parse("atom-watermark-lower"),
+          throughInformationId: informationIdSchema.parse(
+            "atom-watermark-upper",
+          ),
+          order: "asc",
+          limit: 10,
+        });
+
+        expect(found.map(({ informationId }) => informationId)).toEqual([
+          "atom-watermark-first",
+          "atom-watermark-upper",
+        ]);
+      },
+      TEST_TIMEOUT,
+    );
+
+    it(
       "applies limit after deterministic ordering",
       async () => {
         const database = await createMigratedDatabase();

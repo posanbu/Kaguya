@@ -357,7 +357,8 @@ export class InformationRepository implements InformationLedger {
       const projected =
         query.openOnly ||
         query.registrationOrder ||
-        query.afterInformationId !== undefined;
+        query.afterInformationId !== undefined ||
+        query.throughInformationId !== undefined;
       const predicates: string[] = [];
       const bind = (value: unknown): string => {
         values.push(value);
@@ -384,6 +385,9 @@ export class InformationRepository implements InformationLedger {
       if (query.afterInformationId !== undefined)
         predicates.push(`o.position >
         (SELECT position FROM information_lifecycle WHERE information_id=${bind(query.afterInformationId)})`);
+      if (query.throughInformationId !== undefined)
+        predicates.push(`o.position <=
+        (SELECT position FROM information_lifecycle WHERE information_id=${bind(query.throughInformationId)})`);
       if (query.sources !== undefined) {
         predicates.push(`a.source = ANY(${bind([...query.sources])}::text[])`);
       }

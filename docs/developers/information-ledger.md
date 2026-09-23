@@ -33,7 +33,7 @@ InformationLedger 是异步端口，只暴露受控操作：
 
 ## PostgreSQL 与 PGlite
 
-`packages/database` 提供 PostgreSQL 协议的追加式实现。公共连接入口先检查实际服务器大版本，只接受 PostgreSQL 17。空 schema 会在一个事务中创建全部 v1 表、索引、触发器和单行 `kaguya_schema_metadata(version = 1)`；已有 schema 只做严格验证并复用数据。历史 ledger、未知版本、缺失 metadata 或不完整结构都会以不兼容 schema 错误终止启动，不会补表、升级或降级运行。普通测试使用 PGlite，真实数据库套件使用隔离的随机 schema。
+`packages/database` 提供 PostgreSQL 协议的追加式实现。公共连接入口先检查实际服务器大版本，只接受 PostgreSQL 17。空 schema 会在一个事务中创建全部 v1 表、索引、触发器和单行 `kaguya_schema_metadata(version = 1, information_protocol = 'attention-observation.v1')`；已有 schema 只做严格验证并复用数据。缺少当前观察协议标记的旧 v1 ledger、未知版本、缺失 metadata 或不完整结构都会以不兼容 schema 错误终止启动，不会补表、升级或降级运行。普通测试使用 PGlite，真实数据库套件使用隔离的随机 schema。
 
 这不是 SQLite 账本实现。生产使用 PostgreSQL，测试可使用兼容的 PGlite 基础设施。
 

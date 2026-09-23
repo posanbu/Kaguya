@@ -212,6 +212,31 @@ describe("Information Selector", () => {
     ]);
   });
 
+  it("passes explicit registration watermarks to the ledger", async () => {
+    const { core, ledger, source, memory } = await fixture();
+    const selector = defineInformationSelector({
+      selectorId: "test.registration-window",
+      async select({ ledger: reader }) {
+        await reader.find({
+          kinds: [memoryKind.kind],
+          registrationOrder: true,
+          afterInformationId: source.informationId,
+          throughInformationId: memory.informationId,
+          order: "asc",
+          limit: 10,
+        });
+        return [];
+      },
+    });
+    await select(core, selector, source.informationId);
+    expect(ledger.findQueries.at(-1)).toMatchObject({
+      registrationOrder: true,
+      afterInformationId: source.informationId,
+      throughInformationId: memory.informationId,
+      order: "asc",
+    });
+  });
+
   it("forwards payload containment and deterministic order", async () => {
     const { core, ledger, source } = await fixture();
     const selector = defineInformationSelector({

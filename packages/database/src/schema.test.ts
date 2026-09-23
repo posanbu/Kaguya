@@ -10,13 +10,16 @@ afterEach(async () => {
 });
 
 describe("database schema v1", () => {
-  it("initializes an empty schema and reuses complete v1 data", async () => {
+  it("initializes an empty schema and reuses the current observation protocol", async () => {
     const database = await createDatabase();
     await database.prepareSchema();
-    const metadata = await database.sql.query<{ version: number }>(
-      "SELECT version FROM kaguya_schema_metadata",
-    );
-    expect(metadata.rows).toEqual([{ version: 1 }]);
+    const metadata = await database.sql.query<{
+      version: number;
+      information_protocol: string;
+    }>("SELECT version, information_protocol FROM kaguya_schema_metadata");
+    expect(metadata.rows).toEqual([
+      { version: 1, information_protocol: "attention-observation.v1" },
+    ]);
     await database.sql.query(
       "INSERT INTO information_kinds (kind) VALUES ($1)",
       ["test.kind"],
@@ -66,6 +69,17 @@ describe("database schema v1", () => {
     await damaged.prepareSchema();
     await damaged.sql.exec("DROP INDEX information_atoms_kind_occurred_at_idx");
     await expect(damaged.prepareSchema()).rejects.toBeInstanceOf(
+      UnsupportedDatabaseSchemaError,
+    );
+  });
+
+  it("rejects a v1 database without the current protocol marker before reading legacy payloads", async () => {
+    const database = await createDatabase();
+    await database.prepareSchema();
+    await database.sql.exec(
+      "ALTER TABLE kaguya_schema_metadata DROP COLUMN information_protocol",
+    );
+    await expect(database.prepareSchema()).rejects.toBeInstanceOf(
       UnsupportedDatabaseSchemaError,
     );
   });

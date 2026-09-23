@@ -178,33 +178,34 @@ async function seedRequest(id: string, options: SeedOptions = {}) {
     options.authorization === "manual"
       ? { ...turn, contextInformationId: id + "-authorization" }
       : turn;
-  const sourceRefs = [
-    context,
-    ...(mode === "planner" ? [ref("core:caused-by", id + "-turn")] : []),
-    ...(options.missingContext
-      ? []
-      : options.authorization
-        ? [
-            ref("core:uses-context", id + "-authorization"),
-            ref("agent:target-authorization", id + "-authorization"),
-          ]
-        : [ref("core:uses-context", id + "-turn")]),
-  ];
-  await append(
-    id + "-source",
+  const sourceId =
     mode === "planner"
-      ? "agent.attention.arousal.completed"
-      : "agent.message.intent.requested",
-    mode === "planner"
-      ? { ...turn, turnContextInformationId: id + "-turn", outcome: "attend" }
-      : { turn: sourceTurn, target },
-    sourceRefs,
-  );
+      ? options.missingContext
+        ? id + "-candidate"
+        : id + "-turn"
+      : id + "-source";
+  if (mode === "composer")
+    await append(
+      sourceId,
+      "agent.message.intent.requested",
+      { turn: sourceTurn, target },
+      [
+        context,
+        ...(options.missingContext
+          ? []
+          : options.authorization
+            ? [
+                ref("core:uses-context", id + "-authorization"),
+                ref("agent:target-authorization", id + "-authorization"),
+              ]
+            : [ref("core:uses-context", id + "-turn")]),
+      ],
+    );
   const metadata = {
     taskId: browser.taskId,
     version: "1",
     activation: { definitionId, instanceId: "old-instance" },
-    sourceInformationId: id + "-source",
+    sourceInformationId: sourceId,
     contextInformationId: "runtime-context",
     resolvedModel: { providerId: "test-provider", modelId: "test-model" },
   };
@@ -212,7 +213,7 @@ async function seedRequest(id: string, options: SeedOptions = {}) {
     id,
     "core.model.task.requested",
     { ...metadata, prompt: { text: longPrompt } },
-    [context, ref("core:caused-by", id + "-source")],
+    [context, ref("core:caused-by", sourceId)],
   );
   if (terminal === "pending") return { metadata, turn: sourceTurn };
   await append(
@@ -247,7 +248,7 @@ async function seedRequest(id: string, options: SeedOptions = {}) {
       id + "-plan",
       "agent.turn.plan.completed",
       {
-        gateInformationId: id + "-source",
+        turnContextInformationId: sourceId,
         action: {
           action,
           reason: action === "silent" ? "wait-budget-exhausted" : "respond",
@@ -257,7 +258,7 @@ async function seedRequest(id: string, options: SeedOptions = {}) {
       [
         context,
         ref("core:uses-context", id + "-terminal"),
-        ref("core:caused-by", id + "-source"),
+        ref("core:caused-by", sourceId),
         ref("core:status-of", id + "-claim"),
       ],
     );
@@ -268,7 +269,7 @@ async function seedRequest(id: string, options: SeedOptions = {}) {
         { ...turn, dueAt: "2026-09-19T10:00:30.000Z" },
         [
           context,
-          ref("core:caused-by", id + "-source"),
+          ref("core:caused-by", id + "-plan"),
           ref("core:status-of", id + "-candidate"),
           ref("agent:turn-claim", id + "-claim"),
         ],
@@ -360,7 +361,6 @@ beforeAll(async () => {
     "agent.turn.candidate",
     "agent.turn.claimed",
     "agent.turn.context.completed",
-    "agent.attention.arousal.completed",
     "agent.message.intent.requested",
     "agent.message.target.authorized",
     "core.model.task.requested",
@@ -472,7 +472,7 @@ it("authenticates both routes, preserves historical bindings and isolates task/m
   for (const query of [
     "q=not-supported",
     "platform=qq",
-    "status=attend",
+    "status=observe",
     "after=2026-09-19T00:00:00.000Z",
     "before=2026-09-20T00:00:00.000Z",
   ])
@@ -603,7 +603,7 @@ it("rejects mismatched model terminal metadata and unrelated planner edges in a 
     "core.model.task.completed",
     {
       ...request!.payload,
-      sourceInformationId: "plan-wait-source",
+      sourceInformationId: "plan-wait-turn",
       output: { action: "silent" },
     },
     [
@@ -615,11 +615,14 @@ it("rejects mismatched model terminal metadata and unrelated planner edges in a 
   await append(
     "zz-wrong-plan",
     "agent.turn.plan.completed",
-    { gateInformationId: "plan-message-source", action: { action: "silent" } },
+    {
+      turnContextInformationId: "plan-message-turn",
+      action: { action: "silent" },
+    },
     [
       context,
       ref("core:uses-context", "plan-message-terminal"),
-      ref("core:caused-by", "plan-wait-source"),
+      ref("core:caused-by", "plan-wait-turn"),
       ref("core:status-of", "plan-wait-claim"),
     ],
   );
@@ -644,7 +647,7 @@ it("follows the exact Planner message intent through Composer and delivery witho
     { turn, target },
     [
       context,
-      ref("core:caused-by", "plan-downstream-source"),
+      ref("core:caused-by", "plan-downstream-plan"),
       ref("core:uses-context", turn.contextInformationId),
     ],
   );
@@ -738,7 +741,7 @@ it("follows the exact Planner message intent through Composer and delivery witho
   );
   await append("plan-no-prompt", "core.model.task.requested", seeded.metadata, [
     context,
-    ref("core:caused-by", "plan-downstream-source"),
+    ref("core:caused-by", "plan-downstream-turn"),
   ]);
   expect(
     inspectionRequestDetailSchema.parse(
@@ -847,22 +850,12 @@ it("reports bounded input truncation while preserving the latest triggering cont
     },
     [context],
   );
-  await append(
-    "large-gate",
-    "agent.attention.arousal.completed",
-    { ...ids, turnContextInformationId: "large-turn" },
-    [
-      context,
-      ref("core:caused-by", "large-turn"),
-      ref("core:uses-context", "large-turn"),
-    ],
-  );
   const template = await database.information.get("plan-message");
   await append(
     "large-request",
     "core.model.task.requested",
-    { ...template!.payload, sourceInformationId: "large-gate" },
-    [context, ref("core:caused-by", "large-gate")],
+    { ...template!.payload, sourceInformationId: "large-turn" },
+    [context, ref("core:caused-by", "large-turn")],
   );
   const detail = inspectionRequestDetailSchema.parse(
     (await get("/requests/large-request")).json().data,

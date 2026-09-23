@@ -3,7 +3,7 @@
  * 功能概述：验证开发者 API 在真实 PGlite 账本上的认证、脱敏、游标分页、详情和有界 Flow。
  * 主要职责：fixture 创建两个独立 context 与跨 context 引用；通过 Fastify inject 检查
  * 无认证先拒绝、同时间分页不丢消息、过滤绑定、完整 Prompt 保留及秘密移除、只读与错误隔离。
- * 门控证据保留历史阈值及配置标识，标识不被描述为可比较的版本或当前运行配置。
+ * 注意力观察只投影唤醒状态、非语义信号、水位、未读数量和 Focus 快照，不读取正文。
  * 代码库关系：Runtime 业务装配统一来自 @kaguya/composition；组合 app.ts、inspection.ts、真实 Runtime Manifest 和 database/testing；
  * 不调用外部模型或真实网络，每次测试关闭 Fastify、Runtime 与内存数据库。
  * 输入输出与副作用：仅隔离测试数据库 I/O；对比请求前后原子数量确保检查接口不追加事实。
@@ -276,10 +276,10 @@ describe("developer inspection", () => {
     expect(JSON.stringify(await database.information.get("b"))).toBe(original);
     expect((await get("atoms/missing")).statusCode).toBe(404);
   });
-  it("shows frozen gate evidence, filters by registered view and binds pagination to it", async () => {
-    for (const [id, source, score] of [
-      ["gate-a", "module:attention-arousal.default", 52],
-      ["gate-b", "module:historical-gate", 85],
+  it("shows non-semantic observations, filters by registered view and binds pagination to it", async () => {
+    for (const [id, source, outcome, signal] of [
+      ["gate-a", "module:attention-arousal.default", "defer", "passive"],
+      ["gate-b", "module:historical-gate", "observe", "recheck"],
     ] as const) {
       await database.information.append(
         freezeInformationAtom({
@@ -288,13 +288,20 @@ describe("developer inspection", () => {
           occurredAt: time,
           source,
           payload: {
-            outcome: score < 80 ? "defer" : "attend",
-            score,
-            threshold: 80,
-            reasonCodes: ["score-below-threshold"],
-            components: { relevance: 25, content: 20 },
-            text: "x".repeat(795) + token + " trailing text",
-            settingsDigest: "historical-v1",
+            outcome,
+            arousalState: outcome === "observe" ? "awake" : "asleep",
+            arousalStateInformationId: id + "-state",
+            wakeSignal: outcome === "observe",
+            candidateInformationId: id + "-candidate",
+            scopeKey: "qq:napcat:group:20002",
+            unreadThroughInformationId: id + "-upper",
+            unreadCount: outcome === "observe" ? 5 : 2,
+            signals: [signal],
+            focusState: "inactive",
+            reasonCodes: [
+              outcome === "observe" ? "periodic-recheck" : "arousal-asleep",
+            ],
+            policyVersion: "attention-observation.v1",
           },
           references: [],
         }),
@@ -308,15 +315,14 @@ describe("developer inspection", () => {
     const first = response.json().data;
     expect(first.items[0].informationId).toBe("gate-b");
     expect(first.items[0].presentation.fields).toContainEqual({
-      label: "当时阈值",
-      value: 80,
+      label: "未读数量",
+      value: 5,
     });
     expect(first.items[0].presentation.fields).toContainEqual({
-      label: "配置标识",
-      value: "historical-v1",
+      label: "策略版本",
+      value: "attention-observation.v1",
     });
-    // 必须先脱敏再截断；摘要边界处也不能泄露已知秘密的前半段。
-    expect(response.body).not.toContain("inspection-gateway");
+    expect(response.body).not.toContain("正文");
     const second = (
       await get(query + "&cursor=" + encodeURIComponent(first.nextCursor))
     ).json().data;
@@ -348,7 +354,7 @@ describe("developer inspection", () => {
       (await get(query + "&after=2026-09-12T00:00:00Z")).json().data.items,
     ).toEqual([]);
     const stored = await database.information.get("gate-a");
-    expect(stored!.payload.text).toContain(token);
+    expect(stored!.payload).not.toHaveProperty("text");
   });
   it("reads real shared Memory documents while inactive and distinguishes missing vector storage", async () => {
     const address = {

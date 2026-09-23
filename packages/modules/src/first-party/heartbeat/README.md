@@ -2,32 +2,30 @@
 
 ## 目的与非目标
 
-可靠地去抖、延期并重新唤醒待处理事件；不判断注意、话题或行动。
+Heartbeat 可靠地按 scope 积攒入站注册水位并产生观察机会。它不判断正文含义、话题或回复动作，也不按固定 tick 轮询。
 
 ## 消费和产生
 
-消费入站文本、`agent.wait.requested` 和 one-shot due，产生 heartbeat 生命周期及 turn candidate。
+消费入站文本、Arousal 状态、`agent.wait.requested`、one-shot due 和观察/回合终态；产生全局活动、heartbeat 生命周期、开放观察 wake 与 `agent.turn.candidate`。
 
 ## 数据流与边界
 
-业务模块决定 dueAt 和聚合输入；Scheduler 只提供 durable one-shot 能力。
+每条入站先投影不含正文的活动事实，再直接为所属 scope 竞争唯一开放观察。Candidate 只记录排他下界、包含式上界、未读数量和 `private / web / mention-self / mention-all / reply-self / passive / recheck` 信号，不冻结正文。开放期间和 asleep defer 后的新消息继续留在未读水位中。
+
+只有 `agent.turn.context.completed.observedThroughInformationId` 是成功观察水位。查询按注册位置而非消息时间戳推进，最多冻结 1000 条；上界之后的消息留给下一次观察。
 
 ## Settings
 
-配置消息去抖、调度替换重试和注意重判总预算。
+`plannerInterruptQuietMs` 控制规划打断后的安静窗口；`maxReplacementAttempts` 与 `totalWaitBudget` 限制替换和 Planner wait；`noActionBackoffStartCount`、`noActionBackoffBaseMs`、`noActionBackoffCapMs`、`noActionBackoffBypassPendingCount` 控制连续 silent 后的退避恢复。普通入站没有 `messageDebounceMs`。
 
 ## 可靠性、幂等和失败行为
 
-同一 scope 的新消息替换开放 schedule，并显式终结旧 heartbeat；进程重启后由 Scheduler 恢复。
+同 scope 的 `openScope` 保持唯一开放 candidate；注册、替换和 terminal 使用稳定键。defer、重复 delivery、调度失败、进程重启和没有冻结 context 的终态都不推进水位。durable one-shot 只用于 Planner wait/interrupt、silent 后恢复以及 Arousal 自己的绝对休眠 deadline，不使用 cadence、tick 或计数器。
 
 ## 日志与可观测性
 
-记录 scheduled、fired、superseded、failed 和 source 数量。
+记录 candidate 的触发类型、未读数量和水位，以及 scheduled、fired、superseded、failed 生命周期；不记录未观察正文。
 
 ## 典型场景
 
-Attention Arousal 返回 `defer` 后，15 秒重新生成携带累计输入的 candidate。
-
-创建阶段防积压：同 scope 由事务 `openScope` 保持一个开放 candidate。普通群消息共用首个 schedule；私聊、@ 和回复机器人提升即时唤醒。开放期间新输入保留在账本，终态后按持久化位置水位最多安排一次后续观察。`agent.observation.wake` 对普通和即时唤醒分别去重，也负责触发旧积压恢复；不要求每条消息得到回复。
-
-observation.ts 集中维护 typed 来源判定、开放观察投影和有界 Selector；index.ts 保留设置、订阅与调度提交。原导出通过入口重导出，外部调用不需要迁移。
+awake 收到普通通知时立即创建观察机会；开放期间的新通知按 scope 积攒。asleep 时普通机会 defer，直接通知或周期 wake 可重新观察全部积压。Planner wait 到期沿原水位恢复，不把通知逐条变成回复。

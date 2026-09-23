@@ -37,7 +37,7 @@ const defaults: readonly ModuleInstanceConfig[] = [
     instanceId: "heartbeat.default",
     definitionId: "agent.heartbeat.short",
     enabled: false,
-    settings: { messageDebounceMs: 1500 },
+    settings: { plannerInterruptQuietMs: 1000 },
   },
 ];
 

@@ -25,6 +25,8 @@ curl http://127.0.0.1:3000/healthz
 
 正常应返回 `{"status":"ok"}`。没有响应时，检查终端启动错误、端口占用、Node.js/pnpm 版本；使用本地数据库时运行 `pnpm postgres:status` 并确认 Docker 已启动。生产模式缺少网页文件时执行 `pnpm build` 后重新启动。
 
+若日志提示 schema metadata 缺失、版本不是 1、缺少 `attention-observation.v1` 协议标记、存在旧 `kaguya_schema_migrations` 或所需对象不完整，Server 会在监听 HTTP、Runtime 和 Adapter 前终止；该破坏式升级不会自动修复旧数据库。
+
 ## 提示访问受限或 401
 
 每次重启都生成新令牌。打开当前终端打印的完整 `Kaguya access URL`，不要继续刷新旧链接。完整链接必须包含 `#gatewayToken=...`。
@@ -46,7 +48,7 @@ curl http://127.0.0.1:3000/healthz
 1. 在“Gateway / Adapter”确认 Runtime 可用；网页能打开不代表模型已经就绪。
 2. 确认模型地址、密钥、模型 ID 正确，且保存后已应用。
 3. QQ 场景检查 NapCat 已连接，以及目标同时满足入站和出站白名单。
-4. 检查静默模式、发言频率和等待设置。机器人可能决定不参与当前对话。
+4. 检查唤醒/休眠状态、静默模式和 Planner 等待设置。机器人可能仍在休眠积攒通知，或决定不参与当前对话。
 5. 在检查页面或日志中确认是否有模型超时、供应商错误或投递失败。
 
 Web 私聊支持显示回复，并在刷新后恢复当前会话记录。接口的 `202 accepted` 只是收到消息，回复还需要等待后续处理完成。

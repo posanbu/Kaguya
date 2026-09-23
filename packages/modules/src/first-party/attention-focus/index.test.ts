@@ -29,7 +29,7 @@ const grantPayload = {
   generation: "source",
   startedAt: "2026-09-09T00:00:00.000Z",
   expiresAt: "2026-09-09T00:02:00.000Z",
-  reason: "named-self",
+  reason: "mentioned-self",
   sourceInformationId: "source",
 };
 it("persists one expiry arm, restores it after restart and commits an expiry terminal", async () => {

@@ -57,10 +57,13 @@ export {
   normalizeTurnBootstrap,
   turnContextCompletedInformationKind,
   type AttentionArousalPayload,
+  type AttentionArousalState,
+  attentionArousalStateRecordedInformationKind,
   attentionArousalCompletedInformationKind,
   waitRequestedInformationKind,
 } from "./kinds/turn.js";
 export {
+  attentionArousalActivityInformationKind,
   heartbeatScheduledInformationKind,
   heartbeatFiredInformationKind,
   heartbeatSupersededInformationKind,

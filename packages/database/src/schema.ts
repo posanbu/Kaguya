@@ -1,5 +1,5 @@
 /**
- * 功能概述：初始化并校验 PostgreSQL v1 账本；prepareLifecycleProjection 建立可重建的开放集合及 scope 槽。
+ * 功能概述：初始化并校验 PostgreSQL v1 账本及观察协议标记；prepareLifecycleProjection 建立可重建的开放集合及 scope 槽。
  * 主要职责：prepareDatabaseSchema 在启动事务中校验既有结构并首次回填投影；后续启动不扫描历史。
  * prepareWebMemoryDestination 兼容旧 Web 目标约束，允许 conversationId 索引；旧 NULL 行不改写。
  * lifecycle 回填与在线追加使用同一 Web conversationId scope，保持历史查询和观察范围一致。
@@ -9,6 +9,7 @@
 import type { SqlDatabase } from "./driver.js";
 
 export const POSTGRES_SCHEMA_VERSION = 1;
+export const INFORMATION_PROTOCOL_VERSION = "attention-observation.v1";
 
 const REQUIRED_TABLES = [
   "kaguya_schema_metadata",
@@ -38,7 +39,7 @@ const REQUIRED_INDEXES = [
 ] as const;
 
 const REQUIRED_COLUMNS: Readonly<Record<string, readonly string[]>> = {
-  kaguya_schema_metadata: ["singleton", "version"],
+  kaguya_schema_metadata: ["singleton", "version", "information_protocol"],
   information_kinds: ["kind"],
   information_atoms: [
     "information_id",
@@ -127,7 +128,9 @@ export async function prepareDatabaseSchema(
     await tx.exec(`
       CREATE TABLE kaguya_schema_metadata (
         singleton boolean PRIMARY KEY CHECK (singleton),
-        version integer NOT NULL CHECK (version = 1)
+        version integer NOT NULL CHECK (version = 1),
+        information_protocol text NOT NULL
+          CHECK (information_protocol = '${INFORMATION_PROTOCOL_VERSION}')
       );
 
       CREATE TABLE information_kinds (
@@ -275,8 +278,10 @@ export async function prepareDatabaseSchema(
     `);
 
     await tx.query(
-      `INSERT INTO kaguya_schema_metadata (singleton, version) VALUES (true, $1)`,
-      [POSTGRES_SCHEMA_VERSION],
+      `INSERT INTO kaguya_schema_metadata
+         (singleton, version, information_protocol)
+       VALUES (true, $1, $2)`,
+      [POSTGRES_SCHEMA_VERSION, INFORMATION_PROTOCOL_VERSION],
     );
     await prepareLifecycleProjection(tx);
   });
@@ -311,11 +316,15 @@ async function validateCurrentSchema(
   const metadata = await database.query<{
     singleton: boolean;
     version: number;
-  }>("SELECT singleton, version FROM kaguya_schema_metadata");
+    information_protocol: string;
+  }>(
+    "SELECT singleton, version, information_protocol FROM kaguya_schema_metadata",
+  );
   if (
     metadata.rows.length !== 1 ||
     metadata.rows[0]?.singleton !== true ||
-    metadata.rows[0]?.version !== POSTGRES_SCHEMA_VERSION
+    metadata.rows[0]?.version !== POSTGRES_SCHEMA_VERSION ||
+    metadata.rows[0]?.information_protocol !== INFORMATION_PROTOCOL_VERSION
   ) {
     throw new UnsupportedDatabaseSchemaError();
   }

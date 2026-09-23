@@ -55,7 +55,7 @@ const inspection: ModuleInspection = {
         fields: [{ path: "text", label: "输入" }],
         status: {
           field: "outcome",
-          options: [{ value: "attend", label: "放行至规划" }],
+          options: [{ value: "observe", label: "查看未读" }],
         },
         labels: {
           directory: "记录",

@@ -27,7 +27,7 @@ import { memoryWritebackModule } from "./memory-writeback/index.js";
 import { memoryKnowledgeModule } from "./memory-knowledge/index.js";
 import { associationModule } from "./association/index.js";
 import { identityModule } from "./identity/index.js";
-import { attentionArousalModule } from "./attention-arousal/index.js";
+import { createAttentionArousalModule } from "./attention-arousal/index.js";
 import { heartbeatModule } from "./heartbeat/index.js";
 import {
   createHeartflowModule,
@@ -54,7 +54,7 @@ export function createFirstPartyModuleCatalog<
     memoryIndexModule,
     memoryCognitionModule,
     identityModule,
-    attentionArousalModule,
+    createAttentionArousalModule({ timeZone: options.agentIdentity.timeZone }),
     attentionFocusModule,
     createExpressionModule({
       ...options,
@@ -75,7 +75,7 @@ export interface FirstPartyModuleInstanceConfig {
 
 export function createFirstPartyModuleConfigDefaults(
   profile: "production" | "test" = "production",
-  identity: Pick<AgentIdentity, "name" | "aliases"> = DEFAULT_AGENT_IDENTITY,
+  _identity: Pick<AgentIdentity, "name" | "aliases"> = DEFAULT_AGENT_IDENTITY,
 ): readonly FirstPartyModuleInstanceConfig[] {
   return Object.freeze([
     Object.freeze({
@@ -107,13 +107,13 @@ export function createFirstPartyModuleConfigDefaults(
       definitionId: "agent.attention.arousal",
       enabled: true,
       settings: Object.freeze({
-        focusRelevance: 40,
-        forceDirectReply: true,
-        forceNameReply: false,
-        threshold: 80,
-        deferMs: 15_000,
-        policyDigest: "attention-arousal:maibot-v1",
-        settingsDigest: "attention-arousal:default-v1",
+        idleSleepEnabled: false,
+        idleSleepAfterMs: 120_000,
+        nightSleepEnabled: false,
+        nightSleepStart: "23:00",
+        nightSleepEnd: "07:00",
+        periodicWakeEnabled: true,
+        periodicWakeEveryMs: 300_000,
       }),
     }),
     Object.freeze({
@@ -122,7 +122,6 @@ export function createFirstPartyModuleConfigDefaults(
       definitionId: "agent.heartbeat.short",
       enabled: true,
       settings: Object.freeze({
-        messageDebounceMs: profile === "test" ? 0 : 1500,
         plannerInterruptQuietMs: 1000,
         maxReplacementAttempts: 3,
         totalWaitBudget: 3,
@@ -138,29 +137,9 @@ export function createFirstPartyModuleConfigDefaults(
       definitionId: "agent.heartflow.online",
       enabled: true,
       settings: Object.freeze({
-        botNames: [identity.name, ...identity.aliases],
-        groupFrequency: 1,
-        privateFrequency: 1,
-        focusFrequencyMultiplier: 1,
-        dynamicFrequencyEnabled: false,
-        dynamicFrequencyRules: [
-          {
-            platform: "",
-            itemId: "",
-            chatType: "group",
-            time: "00:00-08:59",
-            value: 0.8,
-          },
-          {
-            platform: "",
-            itemId: "",
-            chatType: "group",
-            time: "09:00-18:59",
-            value: 1,
-          },
-        ],
         plannerInterruptMaxConsecutiveCount: 2,
         muted: false,
+        focusIdleMs: 120_000,
         staleAfterMs: 120_000,
       }),
     }),
@@ -184,7 +163,7 @@ export function createFirstPartyModuleConfigDefaults(
 export function createFirstPartyModuleActivations(
   catalog: InformationModuleCatalog,
   configs: readonly FirstPartyModuleInstanceConfig[],
-  identity: Pick<AgentIdentity, "name" | "aliases"> = DEFAULT_AGENT_IDENTITY,
+  _identity: Pick<AgentIdentity, "name" | "aliases"> = DEFAULT_AGENT_IDENTITY,
 ): readonly InformationModuleActivation[] {
   return Object.freeze(
     configs
@@ -204,12 +183,7 @@ export function createFirstPartyModuleActivations(
           throw new Error(`Unknown module definition: ${config.definitionId}`);
         }
         const settings = definition.manifest.settingsSchema.safeParse(
-          config.definitionId === "agent.heartflow.online"
-            ? {
-                ...config.settings,
-                botNames: [identity.name, ...identity.aliases],
-              }
-            : config.settings,
+          config.settings,
         );
         if (!settings.success) {
           throw new ModuleConfigurationError(

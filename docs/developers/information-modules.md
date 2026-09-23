@@ -105,9 +105,9 @@ Runtime 的 `submit()` 返回已接受输入的根 ID；可靠回复异步推进
 
 Selector 通过受限只读账本的 `find()`、`related()`、`retrieve()` 取得候选，只返回有序 informationId。`find()` 支持 JSON payload containment 和确定性的正序/倒序查询。Core 校验 ID、拒绝重复或越权结果，并按顺序重新加载冻结原子。模块不能把未落账 payload 拼成上下文。派生输出通常继承输入的 `core:context`；需要跨入站合并时，可用 `contextInformationId` 重定位，但目标必须是该 handler 已通过声明式 Selector 选出的 `core.runtime.context`。
 
-首次生成的模块配置显式启用 Identity、durable Heartbeat、Heartflow、Attention Arousal、Association 与 Message Composer，并把 Heartbeat、Heartflow 和注意力参数完整写入文件。Runtime 拥有的 Model Task 失败/取消、delivery terminal 与 `execution.exhausted` definition 由 composition root 注入 Heartflow，Catalog 不复制这些 kind。
+首次生成的模块配置显式启用 Identity、durable Heartbeat、Heartflow、Attention Arousal、Association 与 Message Composer。Arousal 直接用持久化 one-shot 和绝对 deadline 实现两分钟全局空闲休眠、本地 `HH:mm` 夜间边界与五分钟周期唤醒，不使用固定 tick 或心跳计数。旧 30 秒被动复查已删除。Focus 租约时长仍由 Heartflow 的 `focusIdleMs` 管理。Runtime 拥有的 Model Task 失败/取消、delivery terminal 与 `execution.exhausted` definition 由 composition root 注入 Heartflow，Catalog 不复制这些 kind。
 
-Heartbeat 到期只产生 `agent.turn.candidate`。Heartflow 使用 scope generation 领取 candidate，等待全部 inbound 的 identity terminal，再按 `asOf` 冻结不可变的多输入 `agent.turn.context.completed`。Attention Arousal 只提交 claim 的唯一 `attend | defer | ignore` 决策；Heartflow 仅在 attend 后执行独立的 `agent.turn.plan` v1，并按 `agent.turn.plan.completed` 的 `message | wait | silent` 分派为 message intent、wait 或 silent，并在 delivery、等待、静默、supersession 或耗尽时写入一个 turn terminal。默认 Catalog 不包含 always-reply 或 inbound-to-context 旁路。
+每条入站先投影不含正文的全局活动事实，再直接为所属 scope 竞争一个不含正文引用的 `agent.turn.candidate`，记录未读注册水位、数量与平台通知信号。同 scope 已开放或尚未成功冻结的通知继续留在未读水位中。Attention Arousal 读取最新 `agent.attention.arousal.state.recorded`、候选和 Focus 租约，提交唯一的 `observe | defer` 决策。初始状态为 `awake`；直接观察信号会重新确认 `awake`，`awake` 下普通机会默认 observe。`defer` 不创建 turn context、不推进水位；休眠周期 deadline 可产生 recheck。只有 `observe` 后，Heartflow 才以候选的排他下界和包含上界查询最多 1000 条未读，等待这些 inbound 的 identity terminal，再冻结不可变的多输入 `agent.turn.context.completed`。随后独立的 `agent.turn.plan` v1 按 `message | wait | silent` 分派为 message intent、wait 或 silent，并在 delivery、等待、静默、supersession 或耗尽时写入一个 turn terminal。默认 Catalog 不包含 always-reply 或 inbound-to-context 旁路。
 
 `createMessageComposerModule()` 默认直接消费 Heartflow 产生的 `agent.message.intent.requested`，并通过 message intent 的 `core:uses-context` 找到冻结 turn context。Memory 默认由 selected Profile 关闭；此时 Heartflow 的可选检索退化为空，Prompt 仍包含当前冻结输入。Association 继续记录 requested、query、candidate 和 completed 审计 DAG，但不再作为 Message Composer 的门禁。
 
@@ -123,7 +123,7 @@ Memory 变量在完整当前 turn 之前，合计最多 4,000 个 Unicode 字符
 
 ## Message Intent 与 Composer
 
-必要性门控通过且 Planner 判定 message 后，Heartflow 为一个冻结 turn 确定性创建一次 `agent.message.intent.requested`。其严格 payload 包含 `target: { adapterId, platform, destination }`、`turn: { candidateInformationId, claimInformationId, contextInformationId }` 与 `memoryInformationIds`。`target` 取自冻结 turn 的最新入站来源；意图本身不复制源正文、源平台消息 ID、发送者信息或引用标记。
+观察完成、硬门禁通过且 Planner 判定 message 后，Heartflow 为一个冻结 turn 确定性创建一次 `agent.message.intent.requested`。其严格 payload 包含 `target: { adapterId, platform, destination }`、`turn: { candidateInformationId, claimInformationId, contextInformationId }` 与 `memoryInformationIds`。`target` 取自冻结 turn 的最新入站来源；意图本身不复制源正文、源平台消息 ID、发送者信息或引用标记。
 
 默认 `agent.message-composer` 模块由 `message-composer.default` 实例激活，执行 `agent.message.compose` Model Task，使用 `message` Prompt kind。Composer 通过引用重载完整冻结 turn，把其中所有输入作为当前回合共同呈现；最后一条输入没有必须回答的特殊地位。历史与 Memory 分别受预算限制，当前冻结输入不因历史预算被剔除。入站引用只帮助理解上下文，默认出站内容始终为 `kind: "text"`。
 
@@ -151,13 +151,13 @@ Planner 使用独立的 `heartflow.bootstrap-policy` 判断冷启动时是否值
 
 `context.registerOnce(operation, key, kind, input)` 可在 `input.openScope` 指定 `{ key, terminalGroup }`。同 operation 和 scope key 的并发调用共享一个开放原子，只有指定终态组的 `commitTerminal` 释放范围；各 operation key 的重放永久复用原结果。普通 `register` 和 `commitTerminal` 不接受这一创建约束。该能力用于稀疏观察等需要阻止创建阶段积压的场景，不代替动作幂等键或平台授权。
 
-Selector 的 `find` 支持 `openOnly`、`scopeKey`、`registrationOrder` 和排他的 `afterInformationId`。`openOnly` 读取尚无 `core:status-of` 或 terminal 提交的生命周期投影；`registrationOrder` 按持久化位置排序，`afterInformationId` 限定水位后的原子。普通 kind、payload、时间与数量约束仍然有效，查询结果仍经过 Selector 的授权与重新加载验证。scope 来自 payload 的 `scopeKey`、schedule input 的 `scopeKey` 或规范化消息 source；禁止模块直接读取投影表。
+Selector 的 `find` 支持 `openOnly`、`scopeKey`、`registrationOrder`、排他的 `afterInformationId` 和包含式 `throughInformationId`。`openOnly` 读取尚无 `core:status-of` 或 terminal 提交的生命周期投影；注册顺序上下界按持久化位置裁剪，与消息时间戳无关。普通 kind、payload、时间与数量约束仍然有效，查询结果仍经过 Selector 的授权与重新加载验证。scope 来自 payload 的 `scopeKey`、schedule input 的 `scopeKey` 或规范化消息 source；禁止模块直接读取投影表。
 
-恢复超大引用集合时，`related.offset` 按引用顺序分页，每页仍受 `limit` 限制；`find.informationIds` 可在一组已知原子中选取注册水位。Heartflow 恢复会分页遍历开放集合，避免 1000 条查询上限截断遗留 candidate 或已冻结来源。
+恢复超大引用集合时，`related.offset` 按引用顺序分页，每页仍受 `limit` 限制；`find.informationIds` 可在一组已知原子中选取注册水位。在线观察按候选冻结的上下水位读取最多 1000 条；上界之后注册的消息保留到下一次观察，不会靠时间戳越界。
 
 ## 关注与表达的独立生命周期
 
-`agent.attention.focus` 保存群聊的 opened、renewed、closed、expired。Heartflow 在冻结前以真实直接入站 ID 幂等开启，并将同 scope 的有效租约投影写入 turn context。Attention Arousal 使用可配置的 focusRelevance，但仍先检查静默、安全、目标可用性、输入时效和频率。成功投递的回合可续租，Planner 的 wait 不等于成功参与。
+`agent.attention.focus` 保存群聊的 opened、renewed、closed、expired。Arousal 在读取正文前冻结当时有效的租约事实；直接通知或有效 Focus 会记录唤醒信号并确认 `awake`。Heartflow 在观察后以真实直接入站 ID 幂等开启 Focus，并将同 scope 的有效租约投影写入 turn context。成功投递续租，silent 或 failed 关闭本轮使用的代际，Planner 的 wait 保持租约自然到期。mute、安全、目标和授权检查在 observe 后、Planner 或派发前安全闭合，不属于 Arousal 心理状态。
 
 `agent.expression` 的后台学习消费真实 Identity scope，冻结一批真人入站，再经可重放 Model Task 归纳受限场景与风格。输出整体核验来源后落账，不保存人名、账号或原文。在线选择发生在获胜 message intent 之后，冻结最多 24 个候选，选择至多三条；Composer 消费独立的 expression_habits 变量，空选择保持当前生成行为。
 
@@ -169,7 +169,7 @@ Selector 的 `find` 支持 `openOnly`、`scopeKey`、`registrationOrder` 和排�
 
 检查页的模块信息流直接连接 Manifest 中的 produces 与 consumes，支持聚焦一个模块观察上下游，并区分可用定义与已激活实例。消息流显示已观察阶段计数，并可导出不含 payload 或 Prompt 的紧凑诊断 JSON。零计数不代表失败，截断标记与图外引用必须共同判断。
 
-本阶段保留现有持久化基线；schema 迁移链、retention、容量治理、全量投影修复仍属于后续独立工作。
+本协议是破坏式升级：Arousal、candidate、turn context 和 Inspection 只接受新严格 payload，旧数据库和旧模块配置必须重置后启动；仓库不提供旧评分 payload 的双读、展示或迁移分支。retention、容量治理和全量投影修复仍属于后续独立工作。
 
 常用反馈入口先执行增量 TypeScript 构建，避免 workspace dist 过期：
 

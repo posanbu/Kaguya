@@ -23,8 +23,10 @@ import {
 } from "@kaguya/scheduler";
 import { oneShotScheduleCapability } from "@kaguya/scheduler";
 import { heartbeatModule, isImmediateObservation } from "./index.js";
+import { attentionArousalModule } from "../attention-arousal/index.js";
 import {
   inboundTextInformationKind,
+  attentionArousalStateRecordedInformationKind,
   turnSilentInformationKind,
   turnClaimedInformationKind,
 } from "../information-kinds.js";
@@ -41,11 +43,16 @@ const runtimeContext = defineInformationKind({
   references: {},
   log: { enabled: false },
 });
-async function fixture() {
+async function fixture(
+  withArousal = false,
+  arousalSettings: Record<string, unknown> = {},
+) {
   const db = await createTestingDatabase();
   await db.prepareSchema();
   const registry = new InformationKindRegistry();
-  const catalog = defineInformationModuleCatalog(heartbeatModule);
+  const catalog = withArousal
+    ? defineInformationModuleCatalog(heartbeatModule, attentionArousalModule)
+    : defineInformationModuleCatalog(heartbeatModule);
   const kinds = new Map(
     [
       ...catalogInformationKinds(catalog),
@@ -84,11 +91,19 @@ async function fixture() {
       instanceId: "heartbeat.test",
       definitionId: heartbeatModule.manifest.definitionId,
       settings: {
-        messageDebounceMs: 1500,
         maxReplacementAttempts: 3,
         totalWaitBudget: 3,
       },
     },
+    ...(withArousal
+      ? [
+          {
+            instanceId: "arousal.test",
+            definitionId: attentionArousalModule.manifest.definitionId,
+            settings: arousalSettings,
+          },
+        ]
+      : []),
   ]);
   clean.push(async () => {
     await host.stop();
@@ -134,9 +149,44 @@ async function fixture() {
       order: "asc",
       limit: 1000,
     });
-  const fire = async () => {
+  const setArousalState = async (state: "awake" | "asleep") => {
+    const atom = await core.register(
+      attentionArousalStateRecordedInformationKind,
+      {
+        occurredAt: now().toISOString(),
+        source: "module:test",
+        payload: {
+          state,
+          cause: "external",
+          lastEvaluatedAt: now().toISOString(),
+          lastInboundInformationId: null,
+          lastActivityAt: now().toISOString(),
+          sleepStartedAt: state === "asleep" ? now().toISOString() : null,
+          lastPeriodicWakeAt: null,
+          reasonCodes: ["test"],
+          policyVersion: "attention-observation.v1",
+        },
+        references: [
+          { relation: "core:context", informationId: context.informationId },
+        ],
+      },
+    );
+    await settle();
+    return atom;
+  };
+  const fire = async (
+    definitionId = heartbeatModule.manifest.definitionId,
+    purpose?: string,
+  ) => {
     const arms = await db.information.oneShotSchedules.listOpen({ limit: 100 });
-    for (const arm of arms.arms)
+    for (const arm of arms.arms) {
+      const request = await db.information.get(arm.scheduleInformationId);
+      const payload = request?.payload as any;
+      if (
+        payload?.activation?.definitionId !== definitionId ||
+        (purpose !== undefined && payload?.input?.purpose !== purpose)
+      )
+        continue;
       await core.registerOnce(
         "test.due",
         arm.scheduleInformationId,
@@ -157,6 +207,7 @@ async function fixture() {
           ],
         },
       );
+    }
     await settle();
   };
   const finish = async (candidate: any) => {
@@ -213,47 +264,116 @@ async function fixture() {
     await settle();
     return terminal;
   };
-  return { db, core, inbound, atoms, fire, finish };
+  return {
+    db,
+    core,
+    inbound,
+    atoms,
+    fire,
+    finish,
+    setArousalState,
+  };
 }
-it("keeps one sparse group schedule, then one open observation and one successor for many equal-time inputs", async () => {
+it("opens one scope immediately and carries later notifications into the next observation", async () => {
   const f = await fixture();
-  const first = await f.inbound();
-  const second = await f.inbound();
+  await f.inbound();
+  await f.inbound();
   expect(await f.atoms("consumer.failed")).toEqual([]);
-  expect(await f.atoms("agent.heartbeat.scheduled")).toHaveLength(1);
-  await f.fire();
+  expect(await f.atoms("agent.heartbeat.scheduled")).toHaveLength(0);
   const candidates = await f.atoms("agent.turn.candidate");
   expect(candidates).toHaveLength(1);
-  expect(candidates[0]!.payload.sourceInformationIds).toEqual([
-    first.informationId,
-    second.informationId,
-  ]);
+  expect(candidates[0]!.payload).toMatchObject({
+    unreadCount: 1,
+    signals: ["passive"],
+  });
+  expect(candidates[0]!.payload).not.toHaveProperty("sourceInformationIds");
   const later = [];
   for (let i = 0; i < 10; i++) later.push(await f.inbound());
-  expect(await f.atoms("agent.heartbeat.scheduled")).toHaveLength(1);
+  expect(await f.atoms("agent.heartbeat.scheduled")).toHaveLength(0);
   expect(await f.atoms("agent.turn.candidate")).toHaveLength(1);
+  expect(await f.atoms("agent.observation.wake")).toHaveLength(11);
   await f.finish(candidates[0]);
-  expect(await f.atoms("agent.heartbeat.scheduled")).toHaveLength(2);
-  await f.fire();
   const all = await f.atoms("agent.turn.candidate");
   expect(all).toHaveLength(2);
-  expect(all[1]!.payload.sourceInformationIds).toEqual(
-    later.map((a) => a.informationId),
-  );
+  expect(all[1]!.payload).toMatchObject({
+    unreadThroughInformationId: later.at(-1)!.informationId,
+    unreadCount: 12,
+  });
   await f.finish(all[1]);
-  expect(await f.atoms("agent.heartbeat.scheduled")).toHaveLength(2);
+  expect(await f.atoms("agent.heartbeat.scheduled")).toHaveLength(0);
   expect(await f.atoms("consumer.failed")).toHaveLength(0);
 });
-it("promotes a pending group observation immediately when mentioned", async () => {
+it("marks a direct notification as an immediate wake for the open scope", async () => {
   const f = await fixture();
   await f.inbound();
   await f.inbound({ mentions: [{ kind: "user", id: "bot" }] });
-  const schedules = await f.atoms("agent.heartbeat.scheduled");
-  expect(schedules).toHaveLength(2);
-  expect(schedules[0]!.payload.dueAt).toBe("2026-09-14T00:00:01.500Z");
-  expect(schedules[1]!.payload.dueAt).toBe("2026-09-14T00:00:00.000Z");
-  await f.fire();
+  expect(await f.atoms("agent.heartbeat.scheduled")).toHaveLength(0);
   expect(await f.atoms("agent.turn.candidate")).toHaveLength(1);
+  const wakes = await f.atoms("agent.observation.wake");
+  expect(wakes).toHaveLength(1);
+  expect(wakes.at(-1)!.payload.immediate).toBe(true);
+});
+it("defaults Arousal to awake and observes the first passive opportunity", async () => {
+  const f = await fixture(true);
+  await f.inbound();
+  await vi.waitFor(async () => {
+    const decisions = await f.atoms("agent.attention.arousal.completed");
+    expect(decisions.map((atom) => atom.payload.outcome)).toEqual(["observe"]);
+    expect(decisions[0]!.payload).toMatchObject({
+      arousalState: "awake",
+      wakeSignal: false,
+      reasonCodes: ["arousal-awake"],
+    });
+  });
+  expect(await f.atoms("agent.heartbeat.scheduled")).toHaveLength(0);
+  expect(await f.atoms("agent.attention.arousal.state.recorded")).toHaveLength(
+    1,
+  );
+});
+
+it("defers during night sleep and lets the periodic deadline recheck accumulated unread", async () => {
+  const f = await fixture(true, {
+    nightSleepEnabled: true,
+    nightSleepStart: "00:00",
+    nightSleepEnd: "23:59",
+  });
+  await f.setArousalState("asleep");
+  await f.inbound();
+  await vi.waitFor(async () => {
+    const decisions = await f.atoms("agent.attention.arousal.completed");
+    expect(decisions.map((atom) => atom.payload.outcome)).toEqual(["defer"]);
+    expect(decisions[0]!.payload).toMatchObject({
+      arousalState: "asleep",
+      wakeSignal: false,
+      reasonCodes: ["arousal-asleep"],
+    });
+  });
+  const schedules = await f.atoms("agent.heartbeat.scheduled");
+  expect(schedules).toHaveLength(0);
+  await f.inbound();
+  await vi.waitFor(async () => {
+    const decisions = await f.atoms("agent.attention.arousal.completed");
+    expect(decisions.map((atom) => atom.payload.outcome)).toEqual([
+      "defer",
+      "defer",
+    ]);
+    expect(decisions[1]!.payload.unreadCount).toBe(2);
+  });
+  await f.fire(attentionArousalModule.manifest.definitionId, "periodic-wake");
+  await vi.waitFor(async () => {
+    const decisions = await f.atoms("agent.attention.arousal.completed");
+    expect(decisions.map((atom) => atom.payload.outcome)).toEqual([
+      "defer",
+      "defer",
+      "observe",
+    ]);
+    expect(decisions[2]!.payload.signals).toContain("recheck");
+    expect(decisions[2]!.payload.unreadCount).toBe(2);
+    expect(decisions[2]!.payload).toMatchObject({
+      arousalState: "awake",
+      wakeSignal: true,
+    });
+  });
 });
 it("recognizes private, replies and broadcast mentions without treating ordinary group messages as urgent", () => {
   expect(isImmediateObservation({ destination: { kind: "private" } })).toBe(

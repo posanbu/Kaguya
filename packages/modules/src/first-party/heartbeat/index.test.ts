@@ -14,9 +14,19 @@ import { describe, expect, it, vi } from "vitest";
 
 import { heartbeatModule, heartbeatSettingsSchema } from "./index.js";
 import {
+  heartbeatDeferredObservationSelector,
+  heartbeatObservationSelector,
+  heartbeatScopeSelector,
+} from "./observation.js";
+import {
+  attentionArousalActivityInformationKind,
+  attentionArousalCompletedInformationKind,
   heartbeatScheduledInformationKind,
   heartbeatSupersededInformationKind,
+  attentionArousalStateRecordedInformationKind,
   inboundTextInformationKind,
+  turnCandidateInformationKind,
+  turnContextCompletedInformationKind,
 } from "../information-kinds.js";
 
 const source = {
@@ -28,6 +38,438 @@ const source = {
 };
 
 describe("heartbeatModule", () => {
+  it("has no cadence dependency and produces activity facts", () => {
+    expect(
+      heartbeatModule.manifest.consumes.some(({ kind }) =>
+        kind.includes("cadence"),
+      ),
+    ).toBe(false);
+    expect(heartbeatModule.manifest.produces.map(({ kind }) => kind)).toContain(
+      attentionArousalActivityInformationKind.kind,
+    );
+  });
+
+  it("opens the accumulated scope immediately when a notification arrives", async () => {
+    const schedule = vi.fn<OneShotScheduleCapability["schedule"]>();
+    const oneShot: OneShotScheduleCapability = {
+      schedule,
+      replace: async () => {
+        throw new Error("unexpected replace");
+      },
+      finish: async () => {
+        throw new Error("unexpected finish");
+      },
+    };
+    const instance = await heartbeatModule.create(
+      {
+        instanceId: "heartbeat.test",
+        settings: heartbeatSettingsSchema.parse({
+          maxReplacementAttempts: 3,
+          totalWaitBudget: 3,
+        }),
+        activation: {
+          instanceId: "heartbeat.test",
+          definitionId: heartbeatModule.manifest.definitionId,
+        },
+      },
+      {
+        signal: new AbortController().signal,
+        now: () => new Date("2026-09-08T00:00:10.000Z"),
+        report: async () => undefined,
+        use: () => oneShot as never,
+      },
+    );
+    const inbound = freezeInformationAtom({
+      informationId: informationIdSchema.parse("inbound-direct"),
+      kind: inboundTextInformationKind.kind,
+      occurredAt: "2026-09-08T00:00:09.000Z",
+      source: "adapter:test",
+      payload: {
+        text: "pending",
+        source: {
+          ...source,
+          platform: "qq",
+          adapterId: "adapter",
+          destination: { kind: "group", groupId: "room" },
+        },
+      },
+      references: [
+        {
+          relation: "core:context",
+          informationId: informationIdSchema.parse("runtime-context-direct"),
+        },
+      ],
+    });
+    const registerOnce = vi.fn(async () => inbound);
+    const select = vi
+      .fn()
+      .mockResolvedValueOnce([inbound])
+      .mockResolvedValueOnce([]);
+
+    const subscription = instance.subscriptions.find(
+      ({ subscriptionId }) => subscriptionId === "heartbeat.message",
+    )!;
+    await subscription.handle(inbound, {
+      now: () => new Date("2026-09-08T00:00:10.000Z"),
+      select,
+      registerOnce,
+    } as never);
+
+    expect(schedule).not.toHaveBeenCalled();
+    expect(registerOnce).toHaveBeenCalledWith(
+      "agent.turn.candidate",
+      inbound.informationId,
+      turnCandidateInformationKind,
+      expect.objectContaining({
+        openScope: {
+          key: "qq:adapter:group:room",
+          terminalGroup: "agent.turn.terminal",
+        },
+        payload: expect.objectContaining({
+          triggerInformationId: inbound.informationId,
+          reason: "message",
+          unreadThroughInformationId: inbound.informationId,
+          unreadCount: 1,
+          signals: ["passive"],
+          policyVersion: "attention-opportunity.v1",
+        }),
+        references: [],
+      }),
+    );
+  });
+
+  it("reopens all accumulated unread when a direct signal races an asleep defer", async () => {
+    const oneShot: OneShotScheduleCapability = {
+      schedule: async () => {
+        throw new Error("unexpected schedule");
+      },
+      replace: async () => {
+        throw new Error("unexpected replace");
+      },
+      finish: async () => {
+        throw new Error("unexpected finish");
+      },
+    };
+    const instance = await heartbeatModule.create(
+      {
+        instanceId: "heartbeat.test",
+        settings: heartbeatSettingsSchema.parse({
+          maxReplacementAttempts: 3,
+          totalWaitBudget: 3,
+        }),
+        activation: {
+          instanceId: "heartbeat.test",
+          definitionId: heartbeatModule.manifest.definitionId,
+        },
+      },
+      {
+        signal: new AbortController().signal,
+        now: () => new Date("2026-09-08T00:00:10.000Z"),
+        report: async () => undefined,
+        use: () => oneShot as never,
+      },
+    );
+    const candidate = freezeInformationAtom({
+      informationId: informationIdSchema.parse("candidate-deferred-direct"),
+      kind: turnCandidateInformationKind.kind,
+      occurredAt: "2026-09-08T00:00:08.000Z",
+      source: "module:heartbeat.test",
+      payload: {
+        scopeKey: "qq:adapter:group:room",
+        rebuildAttempt: 0,
+        attempt: 0,
+        totalWaitBudget: 3,
+      },
+      references: [],
+    });
+    const deferred = freezeInformationAtom({
+      informationId: informationIdSchema.parse("arousal-deferred-direct"),
+      kind: attentionArousalCompletedInformationKind.kind,
+      occurredAt: "2026-09-08T00:00:09.000Z",
+      source: "module:arousal.test",
+      payload: {
+        outcome: "defer",
+        candidateInformationId: candidate.informationId,
+      },
+      references: [],
+    });
+    const input = (id: string, mentions: Array<Record<string, string>> = []) =>
+      freezeInformationAtom({
+        informationId: informationIdSchema.parse(id),
+        kind: inboundTextInformationKind.kind,
+        occurredAt: "2026-09-08T00:00:10.000Z",
+        source: "adapter:test",
+        payload: {
+          text: id,
+          source: {
+            platform: "qq",
+            adapterId: "adapter",
+            destination: { kind: "group", groupId: "room" },
+            senderId: "user",
+            selfId: "bot",
+            mentions,
+          },
+        },
+        references: [],
+      });
+    const ordinary = input("inbound-ordinary");
+    const direct = input("inbound-direct-race", [{ kind: "user", id: "bot" }]);
+    const registerOnce = vi.fn(async () => candidate);
+    const subscription = instance.subscriptions.find(
+      ({ subscriptionId }) =>
+        subscriptionId ===
+        `heartbeat.resume.${attentionArousalCompletedInformationKind.kind}`,
+    )!;
+
+    await subscription.handle(deferred, {
+      now: () => new Date("2026-09-08T00:00:10.000Z"),
+      select: async (selector: { selectorId: string }) =>
+        selector.selectorId === heartbeatObservationSelector.selectorId
+          ? [candidate, deferred, ordinary, direct]
+          : selector.selectorId === heartbeatScopeSelector.selectorId
+            ? []
+            : [],
+      registerOnce,
+    } as never);
+
+    expect(registerOnce).toHaveBeenCalledWith(
+      "agent.turn.candidate",
+      deferred.informationId,
+      turnCandidateInformationKind,
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          unreadThroughInformationId: direct.informationId,
+          unreadCount: 2,
+          signals: ["passive", "mention-self"],
+        }),
+      }),
+    );
+  });
+
+  it("rechecks deferred unread only when the periodic timer wakes", async () => {
+    const oneShot: OneShotScheduleCapability = {
+      schedule: async () => {
+        throw new Error("unexpected schedule");
+      },
+      replace: async () => {
+        throw new Error("unexpected replace");
+      },
+      finish: async () => {
+        throw new Error("unexpected finish");
+      },
+    };
+    const instance = await heartbeatModule.create(
+      {
+        instanceId: "heartbeat.test",
+        settings: heartbeatSettingsSchema.parse({
+          maxReplacementAttempts: 3,
+          totalWaitBudget: 3,
+        }),
+        activation: {
+          instanceId: "heartbeat.test",
+          definitionId: heartbeatModule.manifest.definitionId,
+        },
+      },
+      {
+        signal: new AbortController().signal,
+        now: () => new Date("2026-09-08T00:00:10.000Z"),
+        report: async () => undefined,
+        use: () => oneShot as never,
+      },
+    );
+    const state = freezeInformationAtom({
+      informationId: informationIdSchema.parse("arousal-state-2"),
+      kind: attentionArousalStateRecordedInformationKind.kind,
+      occurredAt: "2026-09-08T00:00:10.000Z",
+      source: "module:arousal.test",
+      payload: {
+        state: "asleep",
+        cause: "timer",
+        timerInformationId: "one-shot-due-2",
+        lastEvaluatedAt: "2026-09-08T00:00:10.000Z",
+        lastInboundInformationId: "inbound-2",
+        lastActivityAt: "2026-09-08T00:00:09.000Z",
+        sleepStartedAt: null,
+        lastPeriodicWakeAt: "2026-09-08T00:00:10.000Z",
+        reasonCodes: ["periodic-wake"],
+        policyVersion: "attention-observation.v1",
+      },
+      references: [],
+    });
+    const candidate = freezeInformationAtom({
+      informationId: informationIdSchema.parse("candidate-deferred"),
+      kind: turnCandidateInformationKind.kind,
+      occurredAt: "2026-09-08T00:00:00.000Z",
+      source: "module:heartbeat.test",
+      payload: {
+        triggerInformationId: "heartbeat-old",
+        reason: "message",
+        dueAt: "2026-09-08T00:00:00.000Z",
+        firedAt: "2026-09-08T00:00:00.000Z",
+        platform: "qq",
+        adapterId: "adapter",
+        destination: { kind: "group", groupId: "room" },
+        unreadThroughInformationId: "inbound-1",
+        unreadCount: 1,
+        signals: ["passive"],
+        scopeKey: "qq:adapter:group:room",
+        asOf: "2026-09-08T00:00:00.000Z",
+        policyVersion: "attention-opportunity.v1",
+        rebuildAttempt: 0,
+        attempt: 0,
+        totalWaitBudget: 3,
+      },
+      references: [
+        {
+          relation: "core:context",
+          informationId: informationIdSchema.parse("runtime-context"),
+        },
+      ],
+    });
+    const inbound = freezeInformationAtom({
+      informationId: informationIdSchema.parse("inbound-2"),
+      kind: inboundTextInformationKind.kind,
+      occurredAt: "2026-09-08T00:00:09.000Z",
+      source: "adapter:test",
+      payload: {
+        text: "pending",
+        source: {
+          adapterId: "adapter",
+          platform: "qq",
+          platformMessageId: "message-2",
+          destination: { kind: "group", groupId: "room" },
+          senderId: "user",
+        },
+      },
+      references: [],
+    });
+    const runtimeContext = freezeInformationAtom({
+      informationId: informationIdSchema.parse("runtime-context"),
+      kind: "core.runtime.context",
+      occurredAt: "2026-09-08T00:00:00.000Z",
+      source: "runtime:test",
+      payload: {},
+      references: [],
+    });
+    const registerOnce = vi.fn(async () => candidate);
+    const subscription = instance.subscriptions.find(
+      ({ subscriptionId }) => subscriptionId === "heartbeat.arousal-wake",
+    )!;
+    await subscription.handle(state, {
+      select: async () => [state, runtimeContext, candidate, inbound],
+      registerOnce,
+    } as never);
+    expect(registerOnce).toHaveBeenCalledWith(
+      "agent.turn.candidate",
+      `${state.informationId}:qq:adapter:group:room`,
+      turnCandidateInformationKind,
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          reason: "recheck",
+          triggerInformationId: state.informationId,
+          unreadThroughInformationId: inbound.informationId,
+          unreadCount: 1,
+          signals: ["passive", "recheck"],
+        }),
+        references: [],
+        contextInformationId: runtimeContext.informationId,
+      }),
+    );
+  });
+
+  it("bounds a periodic recheck at the inbound watermark captured by Arousal", async () => {
+    const state = freezeInformationAtom({
+      informationId: informationIdSchema.parse("arousal-state-upper"),
+      kind: attentionArousalStateRecordedInformationKind.kind,
+      occurredAt: "2026-09-08T00:00:10.000Z",
+      source: "module:arousal.test",
+      payload: {
+        state: "asleep",
+        cause: "timer",
+        timerInformationId: "one-shot-due-upper",
+        lastEvaluatedAt: "2026-09-08T00:00:10.000Z",
+        lastInboundInformationId: "inbound-upper",
+        lastActivityAt: "2026-09-08T00:00:09.000Z",
+        sleepStartedAt: null,
+        lastPeriodicWakeAt: "2026-09-08T00:00:10.000Z",
+        reasonCodes: ["periodic-wake"],
+        policyVersion: "attention-observation.v1",
+      },
+      references: [],
+    });
+    const outcome = freezeInformationAtom({
+      informationId: informationIdSchema.parse("arousal-defer-upper"),
+      kind: attentionArousalCompletedInformationKind.kind,
+      occurredAt: "2026-09-08T00:00:00.000Z",
+      source: "module:arousal.test",
+      payload: {
+        outcome: "defer",
+        scopeKey: "qq:adapter:group:room",
+      },
+      references: [],
+    });
+    const candidate = freezeInformationAtom({
+      informationId: informationIdSchema.parse("candidate-upper"),
+      kind: turnCandidateInformationKind.kind,
+      occurredAt: outcome.occurredAt,
+      source: "module:heartbeat.test",
+      payload: {
+        scopeKey: "qq:adapter:group:room",
+        platform: "qq",
+        adapterId: "adapter",
+        destination: { kind: "group", groupId: "room" },
+      },
+      references: [],
+    });
+    const runtimeContext = freezeInformationAtom({
+      informationId: informationIdSchema.parse("runtime-context-upper"),
+      kind: "core.runtime.context",
+      occurredAt: outcome.occurredAt,
+      source: "runtime:test",
+      payload: {},
+      references: [],
+    });
+    const inbound = freezeInformationAtom({
+      informationId: informationIdSchema.parse("inbound-before-upper"),
+      kind: inboundTextInformationKind.kind,
+      occurredAt: "2026-09-08T00:00:09.000Z",
+      source: "adapter:test",
+      payload: { text: "pending", source: {} },
+      references: [],
+    });
+    const find = vi.fn(async (query: { kinds?: readonly string[] }) => {
+      if (query.kinds?.includes(attentionArousalCompletedInformationKind.kind))
+        return [outcome];
+      if (query.kinds?.includes(turnContextCompletedInformationKind.kind))
+        return [];
+      if (query.kinds?.includes(inboundTextInformationKind.kind))
+        return [inbound];
+      return [];
+    });
+    const related = vi.fn(
+      async (query: { from: readonly string[]; relation: string }) => {
+        if (query.from.includes(outcome.informationId)) return [candidate];
+        if (query.from.includes(candidate.informationId))
+          return [runtimeContext];
+        return [];
+      },
+    );
+
+    await heartbeatDeferredObservationSelector.select({
+      sourceAtom: state,
+      ledger: { find, related },
+    } as never);
+
+    expect(find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kinds: [inboundTextInformationKind.kind],
+        throughInformationId: "inbound-upper",
+        registrationOrder: true,
+        order: "asc",
+      }),
+    );
+  });
+
   it("replaces the open generation and carries ordered source ids forward", async () => {
     const replace = vi.fn<OneShotScheduleCapability["replace"]>(async () => ({
       scheduleInformationId: informationIdSchema.parse("schedule-new"),
@@ -50,7 +492,6 @@ describe("heartbeatModule", () => {
       {
         instanceId: "heartbeat.test",
         settings: heartbeatSettingsSchema.parse({
-          messageDebounceMs: 1_500,
           maxReplacementAttempts: 3,
           totalWaitBudget: 3,
         }),
@@ -130,7 +571,10 @@ describe("heartbeatModule", () => {
       }),
     );
 
-    await instance.subscriptions[0]!.handle(inbound, {
+    const messageSubscription = instance.subscriptions.find(
+      ({ subscriptionId }) => subscriptionId === "heartbeat.message",
+    )!;
+    await messageSubscription.handle(inbound, {
       signal: new AbortController().signal,
       definitionId: heartbeatModule.manifest.definitionId,
       instanceId: "heartbeat.test",
@@ -146,6 +590,19 @@ describe("heartbeatModule", () => {
       commitTerminal,
     } as never);
 
+    expect(registerOnce).toHaveBeenCalledWith(
+      "agent.attention.arousal.activity",
+      inbound.informationId,
+      attentionArousalActivityInformationKind,
+      {
+        payload: {
+          inboundInformationId: inbound.informationId,
+          observedAt: "2026-09-08T00:00:10.000Z",
+          policyVersion: "attention-activity.v1",
+        },
+        references: [],
+      },
+    );
     expect(registerOnce).toHaveBeenCalledWith(
       "agent.heartbeat.scheduled",
       inbound.informationId,

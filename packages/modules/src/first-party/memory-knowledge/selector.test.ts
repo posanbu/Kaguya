@@ -107,13 +107,19 @@ describe("planning knowledge recall", () => {
     const current = inbound("current");
     const candidate = atom("candidate", "agent.turn.candidate", {
       asOf: cutoff,
+      scopeKey: "qq:adapter:group:group-1",
+      platform: target.platform,
+      adapterId: target.adapterId,
+      destination: target.destination,
+      unreadThroughInformationId: current.informationId,
     });
     const ledger = reader();
-    const identityReader = ledger.related;
-    ledger.related = async (query) =>
-      query.from[0] === candidate.informationId
+    const entityReader = ledger.find;
+    ledger.find = vi.fn(async (query) =>
+      query.kinds?.includes("core.message.inbound.text")
         ? [current]
-        : identityReader(query);
+        : entityReader(query),
+    );
     ledger.retrieve = vi.fn(async (query) => {
       if (query.strategyId === "kaguya.memory.knowledge")
         throw new Error("disabled");
@@ -128,13 +134,19 @@ describe("planning knowledge recall", () => {
     const current = inbound("current");
     const candidate = atom("candidate", "agent.turn.candidate", {
       asOf: cutoff,
+      scopeKey: "qq:adapter:group:group-1",
+      platform: target.platform,
+      adapterId: target.adapterId,
+      destination: target.destination,
+      unreadThroughInformationId: current.informationId,
     });
     const ledger = reader();
-    const identityReader = ledger.related;
-    ledger.related = async (query) =>
-      query.from[0] === candidate.informationId
+    const entityReader = ledger.find;
+    ledger.find = vi.fn(async (query) =>
+      query.kinds?.includes("core.message.inbound.text")
         ? [current]
-        : identityReader(query);
+        : entityReader(query),
+    );
     ledger.retrieve = vi.fn(async (query) =>
       query.strategyId === "kaguya.memory.knowledge"
         ? Array.from({ length: 6 }, (_, i) => inbound(`knowledge-${i}`))

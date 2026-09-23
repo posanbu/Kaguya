@@ -17,6 +17,7 @@ import { PostgresMemoryKnowledgeStore } from "./memory-knowledge.js";
 import { prepareMemoryKnowledgeSchema } from "./memory-knowledge-schema.js";
 import { prepareDatabaseSchema } from "./schema.js";
 export {
+  INFORMATION_PROTOCOL_VERSION,
   POSTGRES_SCHEMA_VERSION,
   UnsupportedDatabaseSchemaError,
 } from "./schema.js";

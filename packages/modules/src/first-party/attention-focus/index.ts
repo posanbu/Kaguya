@@ -90,12 +90,13 @@ export const focusStateSelector = defineInformationSelector({
 export const attentionFocusModule = defineInformationModule({
   manifest: {
     protocolVersion: 1,
-    moduleVersion: "1.0.0",
+    moduleVersion: "2.0.0",
     definitionId: "agent.attention.focus",
     inspection: firstPartyInspection["agent.attention.focus"],
     displayName: "持续关注",
     summary: "持久化群聊关注租约，成功参与续租，空闲自动到期。",
-    description: "关注只提供相关性，不改变 Planner 决策或绕过硬门禁。",
+    description:
+      "关注租约只为 Arousal 提供非语义 observe 信号，不改变 Planner 决策或绕过硬门禁。",
     settingsSchema: z.object({}).strict(),
     consumes: [
       focusOpened,

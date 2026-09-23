@@ -24,6 +24,22 @@ vi.mock("@kaguya/modules", async (importOriginal) => {
 afterEach(() => vi.mocked(modules.createFirstPartyModuleCatalog).mockReset());
 
 describe("shared Runtime Composition", () => {
+  it("does not install a polling cadence for Heartbeat", () => {
+    const defaults = modules.createFirstPartyModuleConfigDefaults("test");
+    const enabled = createMessageComposition(undefined, {
+      moduleConfigs: defaults,
+    });
+    expect("cadence" in enabled).toBe(false);
+    const disabled = createMessageComposition(undefined, {
+      moduleConfigs: defaults.map((config) =>
+        config.definitionId === "agent.heartbeat.short"
+          ? { ...config, enabled: false }
+          : config,
+      ),
+    });
+    expect("cadence" in disabled).toBe(false);
+  });
+
   it("enables knowledge only with both switches and respects an explicitly disabled instance", () => {
     const moduleConfigs = modules.createFirstPartyModuleConfigDefaults("test");
     const enabled = createMessageComposition(undefined, {
@@ -162,7 +178,7 @@ describe("shared Runtime Composition", () => {
       composition.activations.find(
         ({ definitionId }) => definitionId === "agent.heartflow.online",
       )?.settings,
-    ).toMatchObject({ botNames: ["Kaguya", "辉夜"] });
+    ).not.toHaveProperty("botNames");
     expect(composition.memory).toEqual({ enabled: true });
     expect(
       createMessageComposition(undefined, { moduleConfigs }).memory,

@@ -182,11 +182,29 @@ it("first-party editable schemas expose names, constraints and no invented insta
       default: 3,
     }),
   );
+  const arousal = await service.get("agent.attention.arousal");
+  expect(arousal.fields).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        key: "idleSleepEnabled",
+        title: "全局无消息休眠",
+        default: false,
+      }),
+      expect.objectContaining({
+        key: "idleSleepAfterMs",
+        default: 120_000,
+      }),
+      expect.objectContaining({
+        key: "periodicWakeEveryMs",
+        default: 300_000,
+      }),
+    ]),
+  );
   expect(
     (await service.get("agent.heartflow.online")).fields.find(
       (f) => f.key === "botNames",
-    )?.readOnly,
-  ).toBe(true);
+    ),
+  ).toBeUndefined();
   expect((await service.get("agent.memory.cognition")).instances).toEqual([]);
 });
 it("maps an invalid array element to its public field path", async () => {

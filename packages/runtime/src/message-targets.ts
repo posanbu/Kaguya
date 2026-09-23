@@ -675,7 +675,7 @@ export class MessageTargetService implements MessageAuthorization {
         ],
       },
     );
-    // 独立 candidate/claim 防止复用已关闭来源 turn 的终态槽；来源 heartbeat 仅保留溯源。
+    // 独立 candidate/claim 防止复用已关闭来源 turn 的终态槽；原观察触发仅保留溯源。
     const originalCandidate = await this.read(
       provenance.candidateInformationId,
     );
