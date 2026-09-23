@@ -29,6 +29,7 @@ import {
   assistantTextInformationKind,
   inboundTextInformationKind,
   turnContextCompletedInformationKind,
+  normalizeTurnBootstrap,
 } from "../information-kinds.js";
 import { formatZonedInstant } from "../temporal-context.js";
 
@@ -220,6 +221,7 @@ export function compilePlannerPrompt(
   turn: DeepReadonly<InformationAtom>,
   promptTemplate: string,
   platformPolicies?: Readonly<Record<"default" | "qq" | "web", string>>,
+  bootstrapPolicy = "",
 ): CompiledPrompt {
   const payload: any = turnContextCompletedInformationKind.payloadSchema.parse(
     turn.payload,
@@ -253,6 +255,20 @@ export function compilePlannerPrompt(
   );
   const values = [
     contextBootstrapVariable(turn, histories, memories),
+    {
+      name: "bootstrap_policy",
+      content: bootstrapPolicy,
+      informationIds: [],
+    },
+    {
+      name: "bootstrap",
+      content: JSON.stringify(
+        normalizeTurnBootstrap(
+          turn.payload as Readonly<Record<string, unknown>>,
+        ),
+      ),
+      informationIds: [turn.informationId],
+    },
     {
       name: "platform_policy",
       content: platformPolicies

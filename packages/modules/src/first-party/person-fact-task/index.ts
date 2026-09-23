@@ -62,13 +62,17 @@ export type {
 
 const nonBlankString = z.string().trim().min(1);
 
-export const personFactTaskOutputSchema = z
-  .object({
-    personId: nonBlankString,
-    name: nonBlankString,
-    fact: nonBlankString.nullable(),
-  })
-  .strict();
+export const personFactTaskOutputSchema = z.discriminatedUnion("status", [
+  z
+    .object({
+      status: z.literal("fact"),
+      personId: nonBlankString,
+      name: nonBlankString,
+      fact: nonBlankString,
+    })
+    .strict(),
+  z.object({ status: z.literal("insufficient-evidence") }).strict(),
+]);
 export type PersonFactTaskOutput = z.infer<typeof personFactTaskOutputSchema>;
 
 export const personFactTaskSettingsSchema = z
@@ -259,6 +263,7 @@ export function createPersonFactTaskModule<
             const output = personFactTaskOutputSchema.parse(
               completed.payload.output,
             );
+            if (output.status === "insufficient-evidence") return;
             const domainPayload = validateDomainFact(candidate.payload, output);
             if (domainPayload === null) return;
             await context.registerOnce(
@@ -380,12 +385,15 @@ function isOwnedCompletion(
 
 function validateDomainFact(
   candidate: DeepReadonly<PersonFactCandidateInformationPayload>,
-  output: PersonFactTaskOutput,
-): PersonFactExtractedPayload | null {
+  output: Extract<PersonFactTaskOutput, { status: "fact" }>,
+): PersonFactExtractedPayload {
   if (output.personId !== candidate.personId || output.name !== candidate.name)
     throw new Error("Extracted person identity must match its candidate");
-  if (output.fact === null) return null;
   if (!candidate.text.includes(output.fact))
     throw new Error("Extracted person fact must quote its candidate evidence");
-  return personFactExtractedPayloadSchema.parse(output);
+  return personFactExtractedPayloadSchema.parse({
+    personId: output.personId,
+    name: output.name,
+    fact: output.fact,
+  });
 }

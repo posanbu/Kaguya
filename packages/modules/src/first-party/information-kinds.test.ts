@@ -18,9 +18,36 @@ import {
   associationCompletedInformationPayloadSchema,
   deliveryRequestedInformationKind,
   waitRequestedInformationKind,
+  turnBootstrapProjectionSchema,
 } from "./information-kinds.js";
 
 describe("persistent first-party information payloads", () => {
+  it("validates a strict versioned bootstrap projection", () => {
+    const projection = {
+      version: 1 as const,
+      mode: "cold-start" as const,
+      memory: {
+        state: "no-authorized-evidence" as const,
+        selectedCount: 0,
+      },
+      conversation: { state: "first-seen" as const },
+      participants: [
+        { inputInformationId: "input-1", state: "first-seen" as const },
+      ],
+    };
+    expect(turnBootstrapProjectionSchema.parse(projection)).toEqual(projection);
+    expect(
+      turnBootstrapProjectionSchema.safeParse({ ...projection, extra: true })
+        .success,
+    ).toBe(false);
+    expect(
+      turnBootstrapProjectionSchema.safeParse({
+        ...projection,
+        memory: { state: "empty", selectedCount: 0 },
+      }).success,
+    ).toBe(false);
+  });
+
   it("requires explicit turn provenance on assistant and delivery facts", () => {
     const assistant = {
       text: "hello",

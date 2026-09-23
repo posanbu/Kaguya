@@ -300,6 +300,7 @@ async function compilePlannerEvaluation(vars) {
     turn,
     templates.planner,
     templates.plannerPlatformPolicies,
+    templates.plannerBootstrapPolicy,
   );
   return {
     output: prompt.text,

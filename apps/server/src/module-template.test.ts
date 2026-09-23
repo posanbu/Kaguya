@@ -1,7 +1,7 @@
 /**
  * 功能概述：验证真实模板文件的本地覆盖、恢复、整组校验与并发保护。
  * 主要职责：复制全部受版本控制的默认模板构造临时 Catalog，拒绝未知变量/helper/partial、空白、语法及循环；
- * 确认校验失败不写文件，默认模板字节不变、源码来源可追踪，错误不泄露模板片段。
+ * 精确核对包含冷启动策略的 Heartflow 模板目录；确认校验失败不写文件，默认模板字节不变、源码来源可追踪，错误不泄露模板片段。
  * 代码库关系：直接驱动 ModuleTemplateManagement 与模块 Node 存储；运行模板加载器验证消费覆盖。
  * 输入输出与副作用：只操作临时目录，不调用模型、重启或发送消息。
  */
@@ -166,6 +166,7 @@ it.runIf(canCreateSymlinks())(
       service.get("agent.heartflow.online").templates.map((t) => t.templateId),
     ).toEqual([
       "heartflow.planner",
+      "heartflow.bootstrap-policy",
       "heartflow.platform-policy",
       "heartflow.platform-policy-qq",
       "heartflow.platform-policy-web",
