@@ -27,9 +27,9 @@ description: 在网页中调整模块参数、启用状态和 Prompt 模板。
 
 以上三个模块的参数见[发言频率与等待](./reply-settings)。
 
-**表达学习 `expression.default`** — 从聊天中学习并选择表达习惯。`batchSize` 默认 `8`，范围 `2–24`，控制一次学习所需的消息批次大小；调大通常需要积累更多消息。
+**表达学习 `memory.expression.default`** — 从聊天中学习并选择表达习惯。`batchSize` 默认 `8`，范围 `2–24`，控制一次学习所需的消息批次大小；调大通常需要积累更多消息。
 
-**联想 `association.default`、身份 `identity.default`、关注 `attention-focus.default`** — 默认无可调 settings，通常保留启用。是否使用实际记忆由 [Memory 开关](./memory)控制。
+**联想 `memory.association.default`、身份 `memory.identity.default`、关注 `attention-focus.default`** — 默认无可调 settings，通常保留启用。是否使用实际记忆由 [Memory 开关](./memory)控制。
 
 ## 启用与停用
 

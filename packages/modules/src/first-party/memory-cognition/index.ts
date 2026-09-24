@@ -3,7 +3,7 @@
  * 身份未解析或 ephemeral 范围只保留 raw Memory，不触发长期认知；
  * memoryCognitionModule 冻结同聊天范围内最多 32 条已入库来源，群聊保留多参与者，私聊维持账号隔离；
  * worker 从 Memory 重载并比对来源正文、地址、事件截止点和请求时刻，
- * 经版本化 provider 产生事实，再登记 core.memory.text 和唯一 terminal；未完成文本不进入 Prompt。
+ * 经版本化 provider 产生事实，再登记 memory.text 和唯一 terminal；未完成文本不进入 Prompt。
  * cognitionEvidenceSelector 重载直接来源；createCognitionMemorySelector 按 provider/revision/asOf
  * 选择最新完整快照并核对直接证据，返回可由 Core 再次加载的 Memory atom ID。
  * knowledge 开启时通过命名 guard 核验整个证据闭包，任一来源撤回或 guard 不可用都拒绝该快照。
@@ -58,7 +58,7 @@ const commonReferences = {
   },
 } as const;
 export const memoryCognitionRequestedInformationKind = defineInformationKind({
-  kind: "agent.memory.cognition.requested",
+  kind: "memory.cognition.requested",
   displayName: "记忆认知请求",
   description:
     "认知处理前冻结有限来源窗口和提供方身份；外部认知能力据此生成可核对证据的快照。",
@@ -74,7 +74,7 @@ export const memoryCognitionRequestedInformationKind = defineInformationKind({
   log: { enabled: false },
 });
 export const memoryCognitionCompletedInformationKind = defineInformationKind({
-  kind: "agent.memory.cognition.completed",
+  kind: "memory.cognition.completed",
   displayName: "记忆认知结果",
   description:
     "认知结果通过证据检查后登记完成、空结果或被替代状态；后续可沿来源引用审计快照，不将无证据输出写为原始记忆。",
@@ -117,7 +117,7 @@ export function cognitionScopeKey(source: {
   ]);
 }
 const windowSelector = defineInformationSelector({
-  selectorId: "kaguya.memory.cognition.window",
+  selectorId: "memory.cognition.window",
   select: async ({ sourceAtom, ledger }) => {
     const writebacks = await ledger.related({
       from: [sourceAtom.informationId],
@@ -194,7 +194,7 @@ const windowSelector = defineInformationSelector({
   },
 });
 export const cognitionEvidenceSelector = defineInformationSelector({
-  selectorId: "kaguya.memory.cognition.evidence",
+  selectorId: "memory.cognition.evidence",
   select: async ({ sourceAtom, ledger }) =>
     (
       await ledger.related({
@@ -209,8 +209,9 @@ export const memoryCognitionModule = defineInformationModule({
   manifest: {
     protocolVersion: 1,
     moduleVersion: "1.0.0",
-    definitionId: "agent.memory.cognition",
-    inspection: firstPartyInspection["agent.memory.cognition"],
+    definitionId: "memory.cognition",
+    tags: ["memory"],
+    inspection: firstPartyInspection["memory.cognition"],
     displayName: "记忆认知快照",
     summary: "通过可替换的认知提供方生成有来源证据的快照。",
     description:
@@ -239,7 +240,7 @@ export const memoryCognitionModule = defineInformationModule({
         onInformation(
           memoryWritebackCompletedInformationKind,
           {
-            subscriptionId: "kaguya.memory.cognition.request.v1",
+            subscriptionId: "memory.cognition.request.v1",
             delivery: "durable",
           },
           async (completed, context) => {
@@ -261,7 +262,7 @@ export const memoryCognitionModule = defineInformationModule({
               (doc) => doc.sourceInformationId,
             );
             await context.registerOnce(
-              "kaguya.memory.cognition.request.v1",
+              "memory.cognition.request.v1",
               JSON.stringify([
                 provider.identity.providerId,
                 provider.identity.revision,
@@ -289,7 +290,7 @@ export const memoryCognitionModule = defineInformationModule({
         onInformation(
           memoryCognitionRequestedInformationKind,
           {
-            subscriptionId: "kaguya.memory.cognition.execute.v1",
+            subscriptionId: "memory.cognition.execute.v1",
             delivery: "durable",
           },
           async (request, context) => {
@@ -342,7 +343,7 @@ export const memoryCognitionModule = defineInformationModule({
                 status = parsed.facts.length ? "completed" : "empty";
                 if (parsed.facts.length) {
                   const memory = await context.registerOnce(
-                    "kaguya.memory.cognition.text.v1",
+                    "memory.cognition.text.v1",
                     request.informationId,
                     coreMemoryTextInformationKind,
                     {
@@ -379,7 +380,7 @@ export const memoryCognitionModule = defineInformationModule({
               }
             }
             await context.commitTerminal(
-              "kaguya.memory.cognition.terminal.v1",
+              "memory.cognition.terminal.v1",
               request.informationId,
               memoryCognitionCompletedInformationKind,
               {
@@ -421,7 +422,7 @@ export function createCognitionMemorySelector(
   options: { readonly requireEvidenceGuard?: boolean } = {},
 ) {
   return defineInformationSelector({
-    selectorId: "kaguya.memory.cognition.completed-snapshot",
+    selectorId: "memory.cognition.completed-snapshot",
     select: async ({ sourceAtom, ledger }) => {
       let candidates: readonly DeepReadonly<InformationAtom>[] = [];
       if (sourceAtom.kind === turnCandidateInformationKind.kind) {

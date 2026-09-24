@@ -24,7 +24,7 @@ const inherited = {
 } as const;
 
 export const memoryEventSubmittedInformationKind = defineInformationKind({
-  kind: "agent.memory.event.submitted",
+  kind: "memory.knowledge.event.submitted",
   displayName: "通用记忆事件登记",
   description:
     "显式登记消息、观测或动作反馈的原始来源、场景和实体归属，可靠保存后再更新派生页面。",
@@ -39,7 +39,7 @@ export const memoryEventSubmittedInformationKind = defineInformationKind({
 });
 
 export const memoryKnowledgeBackfillInformationKind = defineInformationKind({
-  kind: "agent.memory.knowledge.backfill.requested",
+  kind: "memory.knowledge.backfill.requested",
   displayName: "事件记忆历史回填",
   description:
     "按账本登记顺序逐页重放身份终态与显式事件，每页最多 50 条；停机后继续未完成页面。",
@@ -88,7 +88,7 @@ export const memoryKnowledgeMutationSchema = z.discriminatedUnion("operation", [
     .strict(),
 ]);
 export const memoryKnowledgeMutationInformationKind = defineInformationKind({
-  kind: "agent.memory.knowledge.mutation.requested",
+  kind: "memory.knowledge.mutation.requested",
   displayName: "记忆证据修订请求",
   description:
     "通过可靠任务追加显式断言或经历、撤回原始证据或使实体派生认识失效，随后安排受影响脏页恢复。",
@@ -103,7 +103,7 @@ export const memoryKnowledgeMutationInformationKind = defineInformationKind({
   log: { enabled: false },
 });
 export const memoryKnowledgeMaintenanceInformationKind = defineInformationKind({
-  kind: "agent.memory.knowledge.maintenance.requested",
+  kind: "memory.knowledge.maintenance.requested",
   displayName: "记忆脏页恢复",
   description:
     "逐页扫描持久化失效页并安排版本化刷新；失败页面不阻塞其后的页面。",
@@ -123,7 +123,7 @@ export const memoryKnowledgeMaintenanceInformationKind = defineInformationKind({
 });
 
 export const memoryWikiRefreshInformationKind = defineInformationKind({
-  kind: "agent.memory.wiki.refresh.requested",
+  kind: "memory.knowledge.wiki.refresh.requested",
   displayName: "Wiki 页面刷新请求",
   description:
     "冻结页面及失效版本、事件时间和入库时间截止点，以比较并交换方式生成可追溯修订。",
@@ -151,7 +151,7 @@ export const memoryWikiRefreshInformationKind = defineInformationKind({
 });
 
 export const memoryWikiUpdatedInformationKind = defineInformationKind({
-  kind: "agent.memory.wiki.updated",
+  kind: "memory.knowledge.wiki.updated",
   displayName: "Wiki 页面修订",
   description:
     "保存有界页面章节、修订版本和原始证据引用，供开发者只读检查；不替代执行反馈或语义验证。",
@@ -179,7 +179,7 @@ export const memoryWikiUpdatedInformationKind = defineInformationKind({
 });
 
 export const memoryKnowledgeCompletedInformationKind = defineInformationKind({
-  kind: "agent.memory.knowledge.completed",
+  kind: "memory.knowledge.completed",
   displayName: "事件记忆处理结果",
   description:
     "记录投影或回填任务完成、跳过和版本竞争结果；失败交给可靠任务重试与耗尽记录。",
@@ -196,4 +196,4 @@ export const memoryKnowledgeCompletedInformationKind = defineInformationKind({
 export const memoryKnowledgeBootstrapCapability = defineModuleCapability<{
   requestBackfill(): Promise<void>;
   requestMaintenance(): Promise<void>;
-}>("kaguya:memory.knowledge-bootstrap", 1);
+}>("memory:knowledge.bootstrap", 1);

@@ -36,7 +36,7 @@ export function memoryIngestionPrompt(
   });
   return {
     kind: "memory",
-    templateId: "kaguya.memory.ingestion.v1",
+    templateId: "memory.ingestion.v1",
     text: `${rules}\n\nDATA (JSON):\n${data}`,
     templates: [{ name: "rules", content: rules }],
     variables: [{ name: "input_data", content: data, informationIds: [] }],

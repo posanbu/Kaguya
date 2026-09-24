@@ -116,44 +116,52 @@ describe("developer inspection", () => {
           informationId,
           kind,
           occurredAt: identityTime,
-          source: "module:identity.default",
+          source: "module:memory.identity.default",
           payload,
           references: [],
         }),
         [],
       );
-    await appendIdentity("person-ada", "agent.person.entity", {
+    await appendIdentity("person-ada", "memory.identity.person.entity", {
       accountId: "10001",
     });
-    await appendIdentity("account-ada", "agent.platform.account.entity", {
-      platform: "qq",
-      adapterId: "napcat",
-      accountId: "10001",
-    });
-    await appendIdentity("observed-ada", "agent.person.observed", {
+    await appendIdentity(
+      "account-ada",
+      "memory.identity.platform.account.entity",
+      {
+        platform: "qq",
+        adapterId: "napcat",
+        accountId: "10001",
+      },
+    );
+    await appendIdentity("observed-ada", "memory.identity.person.observed", {
       accountId: "10001",
       nickname: "Ada",
       card: "Ada · 研究组",
       observedAt: identityTime,
     });
-    await appendIdentity("scope-ada", "agent.chat.scope.entity", {
+    await appendIdentity("scope-ada", "memory.identity.chat.scope.entity", {
       platform: "qq",
       adapterId: "napcat",
       destination: { kind: "group", id: "20002" },
       scopeMode: "canonical",
     });
-    await appendIdentity("resolution-ada", "agent.person.resolution", {
-      status: "complete",
-      scopeMode: "canonical",
-      platform: "qq",
-      adapterId: "napcat",
-      scopeInformationId: "scope-ada",
-      accountInformationId: "account-ada",
-      personInformationId: "person-ada",
-    });
+    await appendIdentity(
+      "resolution-ada",
+      "memory.identity.person.resolution",
+      {
+        status: "complete",
+        scopeMode: "canonical",
+        platform: "qq",
+        adapterId: "napcat",
+        scopeInformationId: "scope-ada",
+        accountInformationId: "account-ada",
+        personInformationId: "person-ada",
+      },
+    );
     await appendIdentity(
       "identity-completed-ada",
-      "agent.person.context.completed",
+      "memory.identity.person.context.completed",
       {
         status: "complete",
         scopeMode: "canonical",
@@ -210,6 +218,12 @@ describe("developer inspection", () => {
         m.definitionId === "agent.message-composer",
     );
     expect(composer.bindings[0].instanceId).toBe("message-composer.default");
+    expect(composer.tags).toEqual([]);
+    expect(
+      modules.find(
+        (m: { definitionId: string }) => m.definitionId === "memory.identity",
+      ).tags,
+    ).toEqual(["memory"]);
     expect(composer.promptRenderers.length).toBeGreaterThan(0);
     expect(response.body).not.toContain('"settings":');
     expect(response.body).not.toContain(token);
@@ -333,21 +347,21 @@ describe("developer inspection", () => {
         .data.items[0].informationId,
     ).toBe("gate-a");
     expect((await get(query + "&source=module:other")).statusCode).toBe(400);
-    expect((await get(query + "&kind=core.memory.text")).statusCode).toBe(400);
+    expect((await get(query + "&kind=memory.text")).statusCode).toBe(400);
     expect(
       (
         await get(
-          "atoms?definitionId=agent.expression&view=library&cursor=" +
+          "atoms?definitionId=memory.expression&view=library&cursor=" +
             encodeURIComponent(first.nextCursor),
         )
       ).statusCode,
     ).toBe(400);
     expect(
-      (await get("atoms?definitionId=agent.expression&view=missing"))
+      (await get("atoms?definitionId=memory.expression&view=missing"))
         .statusCode,
     ).toBe(404);
     expect(
-      (await get("flows?definitionId=agent.expression&view=library"))
+      (await get("flows?definitionId=memory.expression&view=library"))
         .statusCode,
     ).toBe(400);
     expect(
@@ -372,7 +386,7 @@ describe("developer inspection", () => {
         occurredAt: time,
         address: { ...address, platformMessageId: source },
       });
-    const path = "modules/agent.memory.writeback/storage?limit=1";
+    const path = "modules/memory.writeback/storage?limit=1";
     expect((await get(path, false)).statusCode).toBe(401);
     const response = await get(path);
     expect(response.statusCode).toBe(200);
@@ -387,22 +401,21 @@ describe("developer inspection", () => {
     expect(second.items[0].id).not.toBe(first.items[0].id);
     expect(second.nextCursor).toBeNull();
     expect(
-      (await get("modules/agent.memory.index/storage")).json().data.available,
+      (await get("modules/memory.index/storage")).json().data.available,
     ).toBe(false);
     expect(
-      (await get("modules/agent.memory.index/storage?cursor=invalid"))
-        .statusCode,
+      (await get("modules/memory.index/storage?cursor=invalid")).statusCode,
     ).toBe(400);
     expect((await get(path.replace("limit=1", "limit=999"))).statusCode).toBe(
       400,
     );
-    expect((await get("modules/agent.expression/storage")).statusCode).toBe(
+    expect((await get("modules/memory.expression/storage")).statusCode).toBe(
       404,
     );
     expect((await database.memory.getBySource("a"))!.content).toContain(token);
   });
   it("projects the identity surface with bounded search, filters, summary and related detail", async () => {
-    const path = "modules/core.identity.normalize/surfaces/people";
+    const path = "modules/memory.identity/surfaces/people";
     expect((await get(path, false)).statusCode).toBe(401);
     const response = await get(path + "?q=研究组&platform=qq&status=complete");
     expect(response.statusCode).toBe(200);

@@ -27,7 +27,7 @@ const identityTerminalSchema = z
   .strict() as any;
 
 export const chatScopeEntityInformationKind = defineInformationKind({
-  kind: "agent.chat.scope.entity",
+  kind: "memory.identity.chat.scope.entity",
   displayName: "会话范围实体",
   description:
     "身份归一时建立的平台会话范围，区分规范范围和临时范围；回合隔离与记忆范围选择通过引用复用它。",
@@ -51,7 +51,7 @@ export const chatScopeEntityInformationKind = defineInformationKind({
     enabled: true,
     level: "debug",
     project: ({ payload }) => ({
-      event: "identity.scope.entity",
+      event: "memory.identity.scope.entity",
       platform: payload.platform,
       adapterId: payload.adapterId,
       scopeMode: payload.scopeMode,
@@ -60,7 +60,7 @@ export const chatScopeEntityInformationKind = defineInformationKind({
 });
 
 export const chatScopeBindingInformationKind = defineInformationKind({
-  kind: "agent.chat.scope.binding",
+  kind: "memory.identity.chat.scope.binding",
   displayName: "会话范围绑定",
   description:
     "身份归一时将平台目标绑定到会话实体；后续消息据此解析相同范围并追溯绑定依据。",
@@ -88,7 +88,7 @@ export const chatScopeBindingInformationKind = defineInformationKind({
     enabled: true,
     level: "debug",
     project: ({ payload }) => ({
-      event: "identity.scope.binding",
+      event: "memory.identity.scope.binding",
       platform: payload.platform,
       adapterId: payload.adapterId,
     }),
@@ -96,7 +96,7 @@ export const chatScopeBindingInformationKind = defineInformationKind({
 });
 
 export const platformAccountEntityInformationKind = defineInformationKind({
-  kind: "agent.platform.account.entity",
+  kind: "memory.identity.platform.account.entity",
   displayName: "平台账号实体",
   description:
     "身份归一时为平台、适配器与账号建立实体；人物观察和绑定通过引用关联同一平台账号。",
@@ -119,7 +119,7 @@ export const platformAccountEntityInformationKind = defineInformationKind({
     enabled: true,
     level: "debug",
     project: ({ payload }) => ({
-      event: "identity.account.entity",
+      event: "memory.identity.account.entity",
       platform: payload.platform,
       adapterId: payload.adapterId,
     }),
@@ -127,7 +127,7 @@ export const platformAccountEntityInformationKind = defineInformationKind({
 });
 
 export const platformAccountBindingInformationKind = defineInformationKind({
-  kind: "agent.platform.account.binding",
+  kind: "memory.identity.platform.account.binding",
   displayName: "账号人物绑定",
   description:
     "账号被关联到人物实体时记录绑定事实；后续人物解析据此复用人物身份并保留账号来源。",
@@ -150,12 +150,12 @@ export const platformAccountBindingInformationKind = defineInformationKind({
   log: {
     enabled: true,
     level: "debug",
-    project: () => ({ event: "identity.account.binding" }),
+    project: () => ({ event: "memory.identity.account.binding" }),
   },
 });
 
 export const personEntityInformationKind = defineInformationKind({
-  kind: "agent.person.entity",
+  kind: "memory.identity.person.entity",
   displayName: "人物实体",
   description:
     "身份归一需要建立人物身份时登记关联账号；人物解析和后续上下文以该实体引用表示人物。",
@@ -171,12 +171,12 @@ export const personEntityInformationKind = defineInformationKind({
   log: {
     enabled: true,
     level: "debug",
-    project: () => ({ event: "identity.person.entity" }),
+    project: () => ({ event: "memory.identity.person.entity" }),
   },
 });
 
 export const personObservedInformationKind = defineInformationKind({
-  kind: "agent.person.observed",
+  kind: "memory.identity.person.observed",
   displayName: "人物资料观察",
   description:
     "处理入站消息时记录账号昵称、群名片和观察时间；下游可追溯当时看到的资料，不将展示名称直接作为稳定身份。",
@@ -205,7 +205,7 @@ export const personObservedInformationKind = defineInformationKind({
     enabled: true,
     level: "debug",
     project: ({ payload }) => ({
-      event: "identity.person.observed",
+      event: "memory.identity.person.observed",
       hasNickname: payload.nickname !== undefined,
       hasCard: payload.card !== undefined,
     }),
@@ -213,7 +213,7 @@ export const personObservedInformationKind = defineInformationKind({
 });
 
 export const personResolutionInformationKind = defineInformationKind({
-  kind: "agent.person.resolution",
+  kind: "memory.identity.person.resolution",
   displayName: "人物身份解析结果",
   description:
     "人物解析完成时记录成功、未解析、歧义、降级或失败及实体引用；下游据此区分身份可用性与平台原始事实。",
@@ -232,7 +232,7 @@ export const personResolutionInformationKind = defineInformationKind({
     project: ({ payload }) => {
       const input = payload as any;
       return {
-        event: "identity.person.resolution",
+        event: "memory.identity.person.resolution",
         status: input.status,
         scopeMode: input.scopeMode,
         platform: input.platform,
@@ -243,7 +243,7 @@ export const personResolutionInformationKind = defineInformationKind({
 });
 
 export const personContextCompletedInformationKind = defineInformationKind({
-  kind: "agent.person.context.completed",
+  kind: "memory.identity.person.context.completed",
   displayName: "消息身份上下文就绪",
   description:
     "单条入站消息的身份处理结束后登记状态和实体引用；释放 Heartflow 身份屏障并触发独立原始记忆写回。",
@@ -267,7 +267,7 @@ export const personContextCompletedInformationKind = defineInformationKind({
     project: ({ payload }) => {
       const input = payload as any;
       return {
-        event: "identity.context.completed",
+        event: "memory.identity.context.completed",
         status: input.status,
         scopeMode: input.scopeMode,
         platform: input.platform,

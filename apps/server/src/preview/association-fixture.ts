@@ -26,10 +26,10 @@ export const associationPreviewModule = inspectionModuleSchema.parse({
 export async function seedAssociationPreview(database: KaguyaDatabase) {
   await database.information.synchronizeKinds([
     "core.message.inbound.text",
-    "core.memory.text",
-    "agent.association.query",
-    "agent.association.candidate",
-    "agent.association.completed",
+    "memory.text",
+    "memory.association.query",
+    "memory.association.candidate",
+    "memory.association.completed",
   ]);
   const append = async (
     id: string,
@@ -108,7 +108,7 @@ export async function seedAssociationPreview(database: KaguyaDatabase) {
     ).toISOString();
     await append(
       id,
-      "agent.association.query",
+      "memory.association.query",
       {
         query: query!,
         queryText: query!,
@@ -128,7 +128,7 @@ export async function seedAssociationPreview(database: KaguyaDatabase) {
     for (let rank = candidates - 1; rank >= 0; rank--) {
       await append(
         `${id}-candidate-${rank}`,
-        "agent.association.candidate",
+        "memory.association.candidate",
         {
           rank,
           strategy: "sparse-2gram",
@@ -151,7 +151,7 @@ export async function seedAssociationPreview(database: KaguyaDatabase) {
     if (status !== "pending")
       await append(
         `${id}-result`,
-        "agent.association.completed",
+        "memory.association.completed",
         {
           status: status!,
           candidateCount: candidates,

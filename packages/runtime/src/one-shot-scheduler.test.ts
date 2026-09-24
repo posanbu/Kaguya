@@ -168,8 +168,8 @@ describe("KaguyaRuntime one-shot scheduler lifecycle", () => {
         approvals: [
           {
             activation: {
-              instanceId: "expression.default",
-              definitionId: "agent.expression",
+              instanceId: "memory.expression.default",
+              definitionId: "memory.expression",
             },
             selectionPolicy: { tier: "light" },
           },

@@ -9,7 +9,7 @@ description: 用显式 Catalog、能力声明与 Information DAG 组合可检查
 
 ## 唯一模块协议
 
-`defineInformationModule()` 的 manifest 必须包含 `protocolVersion: 1`、稳定 `definitionId`、语义版本 `moduleVersion`、非空 `displayName`、单行 `summary`、完整 `description`、`settingsSchema`，以及 `consumes`、`produces`、`selectors`、`promptRenderers`、`requires`、`provides` 六组声明。每个模块目录还必须携带相邻 `README.md`。Runtime 不读取 Markdown。协议只接受当前 v1，其他版本直接失败。
+`defineInformationModule()` 的 manifest 必须包含 `protocolVersion: 1`、稳定 `definitionId`、语义版本 `moduleVersion`、非空 `displayName`、单行 `summary`、完整 `description`、`settingsSchema`，以及 `consumes`、`produces`、`selectors`、`promptRenderers`、`requires`、`provides` 六组声明。可选 `tags` 使用唯一的小写短标签表达管理界面分类，不参与激活或执行；第一方 Memory 域统一声明 `memory`。每个模块目录还必须携带相邻 `README.md`。Runtime 不读取 Markdown。协议只接受当前 v1，其他版本直接失败。
 
 `consumes` 约束订阅输入，`produces` 约束派生输出。Selector 与 renderer 使用稳定 ID，并列入 manifest；`context.select()` 拒绝未声明的 Selector。订阅与声明必须引用同一份 kind definition，不能用结构相似的对象替代。Catalog 合并顺序不会改变创建顺序。
 
@@ -67,6 +67,8 @@ const activations = [
 
 每个实例配置位于 `<KAGUYA_CONFIG_ROOT>/modules/<instanceId>/config.json`，严格包含 `version: 1`、`instanceId`、`definitionId`、`enabled` 和完整 `settings`。仅当整个 `modules/` 不存在时，Server 才写入六个一方实例模板；目录一旦存在，缺文件、未知实例、身份不符、版本错误或缺少 settings 字段都会阻止启动且不会被修复。修改文件后必须重启。`enabled: false` 的有效实例不激活，但 settings 仍需通过完整 schema 校验。
 
+Memory 命名空间升级不迁移既有模块配置或 Information ledger。旧的 Identity、Expression、Association 与 `agent.memory.*` 标识会被严格配置校验拒绝；升级时必须备份后使用全新数据库和不存在的 `modules/` 目录重新初始化，不能只改 JSON 中的字符串，也不能在同一账本中混用两套 Kind。
+
 仓库内的一方模块使用 `packages/modules/src/first-party/<module>/index.ts`，测试与模块放在同一目录。共用 Kind 放在 `src/first-party/information-kinds.ts`，Catalog 固定放在 `src/first-party/catalog.ts`。Catalog 必须显式 import 并注册每个受信模块；Runtime 禁止扫描目录或根据文件名自动发现模块。新增文件若未进入 Catalog，就不会注册、激活或取得执行权限。包根 `src/index.ts` 继续提供稳定公共导出，调用方不依赖一方模块内部路径。
 
 `consumes` 与 `produces` 是模块 Kind 的唯一接口。Runtime 从 Catalog 中各 Manifest 的这两个字段收集定义，只单独注册 Runtime、Engine 与 Scheduler 自身拥有的基础 Kind。不要维护第二份模块 Kind 总表。
@@ -113,7 +115,7 @@ Selector 通过受限只读账本的 `find()`、`related()`、`retrieve()` 取�
 
 显式开启 `memory.enabled` 后，关联检索才以冻结 turn 的全部输入按顺序组成 query 执行全局召回，最多选择 8 条不晚于当前请求、且排除当前 turn 全部输入的结果。身份结果仍写入审计元数据，但不缩小默认召回范围，Web 和 ephemeral 消息同样进入这条链。Runtime 的命名检索策略只返回来源 ID，Core 随后从追加式账本重新加载并授权原始 inbound atom，因此 candidate 和 Prompt provenance 都直接指向不可变消息，而不是临时 Memory atom。
 
-Memory 变量在完整当前 turn 之前，合计最多 4,000 个 Unicode 字符；召回失败会退化为空内容，不阻塞当前回复。message intent、历史 `core.memory.text` 和原始 inbound 的 renderer 都在 manifest 中声明，每个模板变量保留其 informationIds，LLM requested 使用 `core:uses-context` 引用追溯实际输入。一个原子可同时支持多个变量，一个变量也可聚合多个原子。未知 kind 不会被静默当作文本注入。scope、claim、上下文和终态都由 Information DAG 表达，不引入进程内 Session 或可变对话桶。
+Memory 变量在完整当前 turn 之前，合计最多 4,000 个 Unicode 字符；召回失败会退化为空内容，不阻塞当前回复。message intent、历史 `memory.text` 和原始 inbound 的 renderer 都在 manifest 中声明，每个模板变量保留其 informationIds，LLM requested 使用 `core:uses-context` 引用追溯实际输入。一个原子可同时支持多个变量，一个变量也可聚合多个原子。未知 kind 不会被静默当作文本注入。scope、claim、上下文和终态都由 Information DAG 表达，不引入进程内 Session 或可变对话桶。
 
 生产 Prompt 通过深模块 `@kaguya/prompt` 的显式资源声明、受限 Handlebars 编译、完整性校验和 digest 进入运行时。editable 资源允许被 Git 忽略的 `*.local.hbs`；readonly 资源只接受仓库 default。`pnpm prompt:init` 只为 editable 资源创建缺失副本。资源包括统一名称、别名与 persona、Planner 与平台参与策略、消息编写通用行为与平台表达风格、场景和上下文、授权正文、表达学习与选择、人物事实，以及 LLM 层 readonly 的 JSON Schema 输出协议。
 
@@ -159,7 +161,7 @@ Selector 的 `find` 支持 `openOnly`、`scopeKey`、`registrationOrder`、排�
 
 `agent.attention.focus` 保存群聊的 opened、renewed、closed、expired。Arousal 在读取正文前冻结当时有效的租约事实；直接通知或有效 Focus 会记录唤醒信号并确认 `awake`。Heartflow 在观察后以真实直接入站 ID 幂等开启 Focus，并将同 scope 的有效租约投影写入 turn context。成功投递续租，silent 或 failed 关闭本轮使用的代际，Planner 的 wait 保持租约自然到期。mute、安全、目标和授权检查在 observe 后、Planner 或派发前安全闭合，不属于 Arousal 心理状态。
 
-`agent.expression` 的后台学习消费真实 Identity scope，冻结一批真人入站，再经可重放 Model Task 归纳受限场景与风格。输出整体核验来源后落账，不保存人名、账号或原文。在线选择发生在获胜 message intent 之后，冻结最多 24 个候选，选择至多三条；Composer 消费独立的 expression_habits 变量，空选择保持当前生成行为。
+`memory.expression` 的后台学习消费真实 Identity scope，冻结一批真人入站，再经可重放 Model Task 归纳受限场景与风格。输出整体核验来源后落账，不保存人名、账号或原文。在线选择发生在获胜 message intent 之后，冻结最多 24 个候选，选择至多三条；Composer 消费独立的 expression_habits 变量，空选择保持当前生成行为。
 
 这两条链均通过 Information 引用可追溯，不复用事实 Memory，不改变 Planner 的 message、wait、silent 协议。
 

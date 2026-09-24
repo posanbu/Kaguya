@@ -63,7 +63,7 @@ const observation: any = {
 const memory: any = {
   ...base,
   informationId: "memory",
-  kind: "core.memory.text",
+  kind: "memory.text",
   references: [{ relation: "core:uses-context", informationId: "inbound" }],
   payload: { text: "provider fact" },
 };
@@ -71,7 +71,7 @@ const identity = { providerId: "test", revision: "v1" };
 const snapshot: any = {
   ...base,
   informationId: "snapshot",
-  kind: "agent.memory.cognition.completed",
+  kind: "memory.cognition.completed",
   payload: {
     identity,
     scopeKey: cognitionScopeKey(source),
@@ -251,7 +251,7 @@ describe("completed cognition selection", () => {
 });
 
 const windowSelector = memoryCognitionModule.manifest.selectors.find(
-  (selector) => selector.selectorId === "kaguya.memory.cognition.window",
+  (selector) => selector.selectorId === "memory.cognition.window",
 )!;
 async function selectWindow(
   history: any[],
@@ -263,7 +263,7 @@ async function selectWindow(
     sourceAtom: {
       ...base,
       informationId: "writeback-completed",
-      kind: "agent.memory.writeback.completed",
+      kind: "memory.writeback.completed",
       payload: {},
     },
     ledger: {
@@ -275,7 +275,7 @@ async function selectWindow(
             {
               ...base,
               informationId: "writeback-request",
-              kind: "agent.memory.writeback.requested",
+              kind: "memory.writeback.requested",
               payload: {},
             },
           ];
@@ -284,7 +284,7 @@ async function selectWindow(
             {
               ...base,
               informationId: "identity",
-              kind: "agent.person.context.completed",
+              kind: "memory.identity.person.context.completed",
               payload: {
                 scopeMode,
                 status: "complete",
@@ -457,7 +457,7 @@ async function executeCognition(
     ...base,
     occurredAt: candidate.payload.asOf,
     informationId: "request",
-    kind: "agent.memory.cognition.requested",
+    kind: "memory.cognition.requested",
     payload: {
       identity: payload.identity,
       scopeKey: payload.scopeKey,

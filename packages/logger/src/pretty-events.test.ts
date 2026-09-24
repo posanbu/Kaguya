@@ -49,7 +49,7 @@ describe("module input/output panels", () => {
 
   it("displays memory input, registered text and empty retrieval using only available fields", () => {
     const query = formatPrettyMessage({
-      event: "association.query",
+      event: "memory.association.query",
       method: "sparse-2gram",
       route: "message",
       queryLength: 8,
@@ -69,7 +69,7 @@ describe("module input/output panels", () => {
     expect(memory).toContain("├─ 记忆正文预览");
     expect(memory).toContain("用户喜欢天文观测。");
     const empty = formatPrettyMessage({
-      event: "association.completed",
+      event: "memory.association.completed",
       status: "empty",
       candidateCount: 0,
       reasonCodes: ["no-sparse-match"],
@@ -79,7 +79,7 @@ describe("module input/output panels", () => {
     expect(empty).toContain("候选数量=0");
     expect(empty).not.toContain("正文");
     const candidate = formatPrettyMessage({
-      event: "association.candidate",
+      event: "memory.association.candidate",
       rank: 0,
       strategy: "sparse-2gram",
       reasonCodes: ["coverage-ranked"],
@@ -90,7 +90,7 @@ describe("module input/output panels", () => {
 
   it("frames actual expression summaries and keeps missing content out of info logs", () => {
     const output = formatPrettyMessage({
-      event: "expression.selected",
+      event: "memory.expression.selected",
       count: 1,
       reason: "自然匹配",
       habitSummaries: ["分享喜悦 → 简短感叹"],
@@ -167,7 +167,7 @@ describe("module input/output panels", () => {
     (columns) => {
       const output = formatPrettyMessage(
         {
-          event: "association.query",
+          event: "memory.association.query",
           marker: "x".repeat(columns - 26),
           queryLength: 20,
           route: "👩🏽‍💻中文",

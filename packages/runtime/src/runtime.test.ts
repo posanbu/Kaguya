@@ -323,13 +323,13 @@ describe("KaguyaRuntime", () => {
           )
           .map((entry) => entry.definitionId),
       ).toEqual([
-        "core.association.memory",
         "agent.attention.arousal",
         "agent.attention.focus",
-        "agent.expression",
         "agent.heartbeat.short",
         "agent.heartflow.online",
-        "core.identity.normalize",
+        "memory.association",
+        "memory.expression",
+        "memory.identity",
         "agent.message-composer",
       ]);
       expect(logs).toContainEqual(
@@ -532,7 +532,7 @@ describe("KaguyaRuntime", () => {
       const { runtime, database } = await createRuntime({
         retrievalStrategies: [
           {
-            strategyId: "kaguya.memory.sparse",
+            strategyId: "memory.sparse",
             retrieve: customRetrieve,
           },
         ],
@@ -736,7 +736,7 @@ describe("KaguyaRuntime", () => {
         informationId: second.rootInformationId,
       });
       const association = secondGraph.find(
-        ({ kind }) => kind === "agent.association.completed",
+        ({ kind }) => kind === "memory.association.completed",
       );
       const requested = secondGraph.find(
         ({ kind, payload }) =>
@@ -754,7 +754,7 @@ describe("KaguyaRuntime", () => {
         reasonCodes: ["provider-unavailable"],
       });
       expect(
-        secondGraph.some(({ kind }) => kind === "agent.association.candidate"),
+        secondGraph.some(({ kind }) => kind === "memory.association.candidate"),
       ).toBe(false);
       expect(payload.prompt.provenance).toEqual(
         expect.arrayContaining([
@@ -1132,19 +1132,19 @@ describe("KaguyaRuntime", () => {
         new Set([
           "core.message.inbound.text",
           "agent.message.intent.requested",
-          "agent.expression.selection.requested",
-          "agent.expression.selection.completed",
-          "agent.association.requested",
-          "agent.association.query",
-          "agent.association.completed",
+          "memory.expression.selection.requested",
+          "memory.expression.selection.completed",
+          "memory.association.requested",
+          "memory.association.query",
+          "memory.association.completed",
           "core.model.task.requested",
           "core.model.task.completed",
           "core.message.assistant.text",
           "core.delivery.requested",
-          "agent.chat.scope.entity",
-          "agent.chat.scope.binding",
-          "agent.person.resolution",
-          "agent.person.context.completed",
+          "memory.identity.chat.scope.entity",
+          "memory.identity.chat.scope.binding",
+          "memory.identity.person.resolution",
+          "memory.identity.person.context.completed",
           "agent.attention.arousal.activity",
           "agent.attention.arousal.completed",
           "agent.attention.arousal.state.recorded",
@@ -1835,7 +1835,7 @@ function createMessageComposition(
           [
             "agent.message-composer",
             "agent.heartflow.online",
-            "agent.expression",
+            "memory.expression",
           ].includes(a.definitionId),
         )
         .map((a) => ({

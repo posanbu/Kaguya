@@ -6,11 +6,11 @@
 
 ## 消费和产生
 
-消费 `agent.person.context.completed` 与 `agent.memory.writeback.requested`；产生 requested、completed、empty、failed。
+消费 `memory.identity.person.context.completed` 与 `memory.writeback.requested`；产生 requested、completed、empty、failed。
 
 ## 数据流与边界
 
-通过 `core:status-of` 加载 inbound，request 只保留引用，worker 通过 `kaguya:memory@1` 写库。Web ephemeral 与 canonical 消息均参与。
+通过 `core:status-of` 加载 inbound，request 只保留引用，worker 通过 `memory:access@1` 写库。Web ephemeral 与 canonical 消息均参与。
 
 ## Settings
 

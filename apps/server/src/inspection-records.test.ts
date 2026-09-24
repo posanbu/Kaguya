@@ -19,7 +19,7 @@ import {
 let database: Awaited<ReturnType<typeof createTestingDatabase>>;
 const app = Fastify();
 const base =
-  "/api/v1/inspection/modules/core.association.memory/surfaces/associations";
+  "/api/v1/inspection/modules/memory.association/surfaces/associations";
 const headers = { authorization: "Bearer test-preview" };
 beforeAll(async () => {
   database = await createTestingDatabase();
@@ -121,7 +121,7 @@ it("does not join unrelated edges or expose unapproved fields and leaves the led
   await database.information.append(
     freezeInformationAtom({
       informationId: "wrong-edge",
-      kind: "agent.association.candidate",
+      kind: "memory.association.candidate",
       occurredAt: "2026-09-19T07:42:00.000Z",
       source: "preview:test",
       payload: { rank: 99 },
@@ -134,7 +134,7 @@ it("does not join unrelated edges or expose unapproved fields and leaves the led
   await database.information.append(
     freezeInformationAtom({
       informationId: "secret-query",
-      kind: "agent.association.query",
+      kind: "memory.association.query",
       occurredAt: "2026-09-19T07:42:00.000Z",
       source: "preview:test",
       payload: {
@@ -146,7 +146,7 @@ it("does not join unrelated edges or expose unapproved fields and leaves the led
     [],
   );
   const before = await database.information.inspectPage({
-    kind: "agent.association.query",
+    kind: "memory.association.query",
     limit: 100,
   });
   const detail = await get("/entities/demo-query-01");
@@ -161,7 +161,7 @@ it("does not join unrelated edges or expose unapproved fields and leaves the led
   );
   expect(
     await database.information.inspectPage({
-      kind: "agent.association.query",
+      kind: "memory.association.query",
       limit: 100,
     }),
   ).toEqual(before);
@@ -172,7 +172,7 @@ it("reports bounded relation truncation and rejects source kinds outside the dec
     (item) => item.type === "record-browser",
   )!;
   browser.relations[1]!.limit = 1;
-  browser.relations[1]!.source!.kinds = ["core.memory.text"];
+  browser.relations[1]!.source!.kinds = ["memory.text"];
   const service = createInspectionService({
     ledger: database.information,
     modules: () => [module],

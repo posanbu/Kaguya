@@ -16,7 +16,7 @@ vi.mock("./use-inspection.js", () => ({
     path?.includes("/entities/") ? fixture.detail : fixture.page,
 }));
 const module = {
-  definitionId: "core.association.memory",
+  definitionId: "memory.association",
   inspection: {
     mechanism: ["范围内检索"],
     views: [],
@@ -31,7 +31,7 @@ const module = {
           type: "record-browser",
           area: "main",
           viewId: "queries",
-          recordKind: "agent.association.query",
+          recordKind: "memory.association.query",
           titleField: "query",
           searchFields: ["query"],
           fields: [],
@@ -48,7 +48,7 @@ const module = {
               id: "result",
               title: "结果",
               viewId: "retrieval",
-              kinds: ["agent.association.completed"],
+              kinds: ["memory.association.completed"],
               reference: "core:caused-by",
               presentation: "field-grid",
               fields: [],
@@ -59,7 +59,7 @@ const module = {
               id: "candidates",
               title: "候选",
               viewId: "retrieval",
-              kinds: ["agent.association.candidate"],
+              kinds: ["memory.association.candidate"],
               reference: "core:caused-by",
               presentation: "ranked-list",
               fields: [],

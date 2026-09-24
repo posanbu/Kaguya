@@ -52,6 +52,7 @@ function moduleFor(
 ): InspectionModule {
   return {
     definitionId,
+    tags: [],
     displayName: definitionId,
     summary: "请求记录",
     description: "测试",

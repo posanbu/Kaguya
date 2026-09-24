@@ -124,14 +124,14 @@ async function fixture(knowledgeEnabled = true) {
     await host.start([
       {
         instanceId: "identity",
-        definitionId: "core.identity.normalize",
+        definitionId: "memory.identity",
         settings: {},
       },
       ...(enabled
         ? [
             {
               instanceId: "knowledge",
-              definitionId: "agent.memory.knowledge",
+              definitionId: "memory.knowledge",
               settings: {},
             },
           ]
@@ -206,8 +206,8 @@ async function fixture(knowledgeEnabled = true) {
           ? JSON.stringify(
               await database.information.find({
                 kinds: [
-                  "agent.memory.knowledge.backfill.requested",
-                  "agent.memory.event.submitted",
+                  "memory.knowledge.backfill.requested",
+                  "memory.knowledge.event.submitted",
                   "core.execution.exhausted",
                 ],
                 limit: 20,
@@ -294,7 +294,7 @@ describe("durable event and Wiki projection", () => {
           ),
         ).toBeDefined();
         const skipped = await f.database.information.find({
-          kinds: ["agent.memory.knowledge.completed"],
+          kinds: ["memory.knowledge.completed"],
           payloadContains: { status: "skipped" },
           limit: 100,
         });

@@ -11,11 +11,11 @@ description: 修改 Kaguya 的名称、人设、时区和平台表达方式。
 
 配置页的“Agent 身份”提供工作区资源编辑器：
 
-**名称 `identity.name`** — 机器人主名称。
+**名称 `memory.identity.name`** — 机器人主名称。
 
-**别名 `identity.aliases`** — 每行一个称呼，例如“辉夜”。不要与主名称重复；这些称呼也用于识别聊天中的叫名。
+**别名 `memory.identity.aliases`** — 每行一个称呼，例如“辉夜”。不要与主名称重复；这些称呼也用于识别聊天中的叫名。
 
-**人设 `identity.persona`** — 描述 Agent 自身身份与性格，不能作为现实人物、关系、会话历史或世界背景的证据。回复长度和平台表达习惯放到风格模板中，方便单独调整。
+**人设 `memory.identity.persona`** — 描述 Agent 自身身份与性格，不能作为现实人物、关系、会话历史或世界背景的证据。回复长度和平台表达习惯放到风格模板中，方便单独调整。
 
 **时区 `identity.timeZone`** — 默认 `Asia/Shanghai`，使用 IANA 时区名称，用于提示词中的当前时间与消息时间显示。动态频率时段目前按服务器本地时区匹配。它保存在当前 Profile 中。
 
@@ -39,7 +39,7 @@ description: 修改 Kaguya 的名称、人设、时区和平台表达方式。
 
 **Heartflow → `heartflow.platform-policy-qq` / `platform-policy-web`** — 分平台调整参与对话的方式；通用回退模板为 `heartflow.platform-policy`。
 
-表达学习模块的 `expression.learn` 和 `expression.select` 分别影响表达习惯的学习与选择。页面会列出模板用途和允许变量，修改前先看这些说明。
+表达学习模块的 `memory.expression.learn` 和 `memory.expression.select` 分别影响表达习惯的学习与选择。页面会列出模板用途和允许变量，修改前先看这些说明。
 
 每次围绕一个可观察的问题修改，例如“QQ 回复经常重复上一句”。保存、重启后，用相近场景检查效果；仅修改 Planner 不会直接规定最终回复的全部措辞。
 

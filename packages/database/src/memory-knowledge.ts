@@ -135,7 +135,7 @@ export class PostgresMemoryKnowledgeStore implements MemoryKnowledgeAccess {
         if (
           !isRecord(address) ||
           atom.payload.text !== parsed.content ||
-          scope.rows[0]?.kind !== "agent.chat.scope.entity" ||
+          scope.rows[0]?.kind !== "memory.identity.chat.scope.entity" ||
           !sameNativeScope(address, scope.rows[0].payload)
         )
           throw new KnowledgeEvidenceError();
@@ -748,7 +748,7 @@ async function lockScope(
   if (
     !scope ||
     !scope.kind.endsWith(".entity") ||
-    (scope.kind === "agent.chat.scope.entity"
+    (scope.kind === "memory.identity.chat.scope.entity"
       ? scope.payload.scopeMode !== "canonical"
       : !scopeKinds.includes(scope.kind)) ||
     (scope?.kind === USER_MEMORY_SCOPE_KIND &&
@@ -931,7 +931,7 @@ async function assertEventActorAndScope(
     const result = await tx.query<{ valid: boolean }>(
       `SELECT EXISTS(
       SELECT 1 FROM information_references r JOIN information_atoms a ON a.information_id=r.information_id
-      WHERE r.target_information_id=$1 AND r.relation='core:status-of' AND a.kind='agent.person.context.completed'
+      WHERE r.target_information_id=$1 AND r.relation='core:status-of' AND a.kind='memory.identity.person.context.completed'
         AND a.payload->>'scopeMode'='canonical' AND a.payload->>'status'='complete'
         AND a.payload->>'scopeInformationId'=$2 AND a.payload->>'personInformationId'=$3
     ) AS valid`,

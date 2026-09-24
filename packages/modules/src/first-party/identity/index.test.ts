@@ -37,10 +37,10 @@ async function fixture() {
   };
   const instance = await identityModule.create(
     {
-      instanceId: "identity.test",
+      instanceId: "memory.identity.test",
       settings: {},
       activation: {
-        instanceId: "identity.test",
+        instanceId: "memory.identity.test",
         definitionId: identityModule.manifest.definitionId,
       },
     },
@@ -60,7 +60,7 @@ async function fixture() {
           informationId: informationIdSchema.parse(`identity-${slots.size}`),
           kind: definition.kind,
           occurredAt: lifecycle.now().toISOString(),
-          source: "module:identity.test",
+          source: "module:memory.identity.test",
           payload: definition.payloadSchema.parse(input.payload),
           references: [...(input.references ?? [])],
         }),
@@ -96,7 +96,7 @@ async function fixture() {
       await instance.subscriptions[0]!.handle(atom, {
         ...lifecycle,
         definitionId: identityModule.manifest.definitionId,
-        instanceId: "identity.test",
+        instanceId: "memory.identity.test",
         sourceAtom: atom,
         registerOnce,
         commitTerminal: registerOnce,
@@ -105,7 +105,7 @@ async function fixture() {
           throw new Error("Identity must use idempotent registration");
         },
       });
-      return slots.get(JSON.stringify(["core.identity.context", id]))!;
+      return slots.get(JSON.stringify(["memory.identity.context", id]))!;
     },
   };
 }

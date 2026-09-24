@@ -15,7 +15,7 @@ import { requestMemoryIngestion } from "./memory-ingestion-api.js";
 const job = memoryIngestionJobSchema.parse({
   requestId: "a9f2fb21-fb2c-43c2-bc3b-671f2d48e2e5",
   sessionId: "510d9011-d810-4a78-b1ab-c213e5f44ea4",
-  scopeInformationId: "kaguya:memory:global",
+  scopeInformationId: "memory:access:global",
   sourceType: "user_statement",
   text: "<script>unsafe()</script>",
   contractVersion: 2,

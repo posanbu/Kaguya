@@ -40,7 +40,7 @@ const inherited = {
   },
 } as const;
 export const memoryIndexRequestedInformationKind = defineInformationKind({
-  kind: "agent.memory.index.requested",
+  kind: "memory.index.requested",
   displayName: "记忆向量索引请求",
   description:
     "原始记忆写回后按来源和模型版本登记索引请求；向量处理器据此生成可恢复的派生向量，不修改原文。",
@@ -54,7 +54,7 @@ export const memoryIndexRequestedInformationKind = defineInformationKind({
   log: { enabled: false },
 });
 export const memoryBackfillRequestedInformationKind = defineInformationKind({
-  kind: "agent.memory.index.backfill.requested",
+  kind: "memory.index.backfill.requested",
   displayName: "记忆向量回填请求",
   description:
     "启动向量回填时冻结模型身份、游标和批量大小；处理器按有界分页恢复历史记忆索引。",
@@ -69,7 +69,7 @@ export const memoryBackfillRequestedInformationKind = defineInformationKind({
   log: { enabled: false },
 });
 export const memoryIndexCompletedInformationKind = defineInformationKind({
-  kind: "agent.memory.index.completed",
+  kind: "memory.index.completed",
   displayName: "记忆向量处理结果",
   description:
     "单条索引或回填页处理结束后登记完成、来源缺失或版本过期；维护流程据此追踪进度而不唤醒在线回合。",
@@ -91,9 +91,9 @@ export const memoryIndexCompletedInformationKind = defineInformationKind({
 });
 export const memoryIndexBootstrapCapability = defineModuleCapability<{
   requestBackfill(identity: EmbeddingIdentity): Promise<void>;
-}>("kaguya:memory.index-bootstrap", 1);
+}>("memory:index.bootstrap", 1);
 const sourceSelector = defineInformationSelector({
-  selectorId: "kaguya.memory.index.source",
+  selectorId: "memory.index.source",
   select: async ({ sourceAtom, ledger }) => {
     const requests = await ledger.related({
       from: [sourceAtom.informationId],
@@ -121,8 +121,9 @@ export const memoryIndexModule = defineInformationModule({
   manifest: {
     protocolVersion: 1,
     moduleVersion: "1.0.0",
-    definitionId: "agent.memory.index",
-    inspection: firstPartyInspection["agent.memory.index"],
+    definitionId: "memory.index",
+    tags: ["memory"],
+    inspection: firstPartyInspection["memory.index"],
     displayName: "记忆向量索引",
     summary: "为原始记忆建立按模型版本隔离的可恢复向量。",
     description:
@@ -159,14 +160,14 @@ export const memoryIndexModule = defineInformationModule({
       subscriptions: [
         onInformation(
           memoryWritebackCompletedInformationKind,
-          { subscriptionId: "kaguya.memory.index.new.v1", delivery: "durable" },
+          { subscriptionId: "memory.index.new.v1", delivery: "durable" },
           async (_completed, context) => {
             const sources = await context.select(sourceSelector);
             if (sources.length !== 1)
               throw new Error("Invalid writeback source");
             const sourceInformationId = sources[0]!.informationId;
             await context.registerOnce(
-              "kaguya.memory.index.document.v1",
+              "memory.index.document.v1",
               JSON.stringify([
                 embeddingIdentityKey(provider.identity),
                 sourceInformationId,
@@ -179,7 +180,7 @@ export const memoryIndexModule = defineInformationModule({
         onInformation(
           memoryBackfillRequestedInformationKind,
           {
-            subscriptionId: "kaguya.memory.index.backfill.v1",
+            subscriptionId: "memory.index.backfill.v1",
             delivery: "durable",
           },
           async (request, context) => {
@@ -199,7 +200,7 @@ export const memoryIndexModule = defineInformationModule({
               });
               for (const document of page)
                 await context.registerOnce(
-                  "kaguya.memory.index.document.v1",
+                  "memory.index.document.v1",
                   JSON.stringify([
                     embeddingIdentityKey(payload.identity),
                     document.sourceInformationId,
@@ -214,7 +215,7 @@ export const memoryIndexModule = defineInformationModule({
                 );
               if (page.length === payload.batchSize)
                 await context.registerOnce(
-                  "kaguya.memory.index.page.v1",
+                  "memory.index.page.v1",
                   JSON.stringify([
                     embeddingIdentityKey(payload.identity),
                     page.at(-1)!.memoryId,
@@ -229,7 +230,7 @@ export const memoryIndexModule = defineInformationModule({
                 );
             }
             await context.commitTerminal(
-              "kaguya.memory.index.terminal.v1",
+              "memory.index.terminal.v1",
               request.informationId,
               memoryIndexCompletedInformationKind,
               {
@@ -251,7 +252,7 @@ export const memoryIndexModule = defineInformationModule({
         onInformation(
           memoryIndexRequestedInformationKind,
           {
-            subscriptionId: "kaguya.memory.index.execute.v1",
+            subscriptionId: "memory.index.execute.v1",
             delivery: "durable",
           },
           async (request, context) => {
@@ -290,7 +291,7 @@ export const memoryIndexModule = defineInformationModule({
               }
             }
             await context.commitTerminal(
-              "kaguya.memory.index.terminal.v1",
+              "memory.index.terminal.v1",
               request.informationId,
               memoryIndexCompletedInformationKind,
               {

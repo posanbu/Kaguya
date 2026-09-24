@@ -662,6 +662,7 @@ export class ModuleHost {
     return this.#options.catalog.definitions
       .map(({ manifest }) => ({
         definitionId: manifest.definitionId,
+        tags: [...(manifest.tags ?? [])],
         displayName: manifest.displayName,
         ...(manifest.inspection ? { inspection: manifest.inspection } : {}),
         summary: manifest.summary,

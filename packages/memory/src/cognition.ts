@@ -58,10 +58,10 @@ export interface MemoryCognitionProvider {
   ): Promise<MemoryCognitionResult>;
 }
 export const memoryCognitionCapability =
-  defineModuleCapability<MemoryCognitionProvider>("kaguya:memory.cognition", 1);
+  defineModuleCapability<MemoryCognitionProvider>("memory:cognition", 1);
 /** Knowledge 启用时，Core 通过此只读策略检查快照的全部来源是否仍可使用。 */
 export const MEMORY_COGNITION_EVIDENCE_GUARD_STRATEGY_ID =
-  "kaguya.memory.cognition.evidence-guard";
+  "memory.cognition.evidence-guard";
 export function validateCognitionInput(input: MemoryCognitionInput): void {
   cognitionInputSchema.parse(input);
   if (

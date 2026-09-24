@@ -20,7 +20,7 @@ const inbound = atom("input-1", "core.message.inbound.text", {
 });
 
 function identity(scopeMode: "canonical" | "ephemeral" = "canonical") {
-  return atom("identity-1", "agent.person.context.completed", {
+  return atom("identity-1", "memory.identity.person.context.completed", {
     status: scopeMode === "canonical" ? "complete" : "unresolved",
     scopeMode,
     platform: "qq",

@@ -10,9 +10,12 @@ function fixture() {
   const root = pathToFileURL(
     `${mkdtempSync(join(tmpdir(), "kaguya-persona-"))}/`,
   );
-  writeFileSync(new URL("identity.name.default.hbs", root), "Kaguya");
-  writeFileSync(new URL("identity.aliases.default.hbs", root), "辉夜");
-  writeFileSync(new URL("identity.persona.default.hbs", root), "默认辉夜身份");
+  writeFileSync(new URL("memory.identity.name.default.hbs", root), "Kaguya");
+  writeFileSync(new URL("memory.identity.aliases.default.hbs", root), "辉夜");
+  writeFileSync(
+    new URL("memory.identity.persona.default.hbs", root),
+    "默认辉夜身份",
+  );
   return new IdentityPersonaManagement({
     root,
     exclusive: (operation) => operation(),

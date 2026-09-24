@@ -138,7 +138,7 @@ async function fixture() {
     expectedCompleted += 1;
     await vi.waitFor(async () => {
       const completed = await database.information.find({
-        kinds: ["agent.memory.cognition.completed"],
+        kinds: ["memory.cognition.completed"],
         limit: 100,
       });
       expect(completed).toHaveLength(expectedCompleted);
@@ -177,7 +177,7 @@ describe("durable multi-participant cognition", () => {
       late.informationId,
     ]);
     const completed = await f.database.information.find({
-      kinds: ["agent.memory.cognition.completed"],
+      kinds: ["memory.cognition.completed"],
       limit: 100,
     });
     const correctionSnapshot = completed.find((atom) =>

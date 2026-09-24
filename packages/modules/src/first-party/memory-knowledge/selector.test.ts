@@ -33,7 +33,7 @@ function reader(
 ): InformationSelectorLedger {
   return {
     related: vi.fn(async () => [
-      atom("identity", "agent.person.context.completed", {
+      atom("identity", "memory.identity.person.context.completed", {
         status: options.status ?? "complete",
         scopeMode: options.scopeMode ?? "canonical",
         scopeInformationId: "scope-1",
@@ -41,7 +41,7 @@ function reader(
       }),
     ]),
     find: vi.fn(async () => [
-      atom("scope-1", "agent.chat.scope.entity", {
+      atom("scope-1", "memory.identity.chat.scope.entity", {
         ...target,
         scopeMode: "canonical",
       }),
@@ -151,7 +151,7 @@ describe("planning knowledge recall", () => {
         inbound("foreign", "other-group"),
         current[0]!,
         future,
-        atom("wiki", "core.memory.text", { text: "unsupported summary" }),
+        atom("wiki", "memory.text", { text: "unsupported summary" }),
       ],
     });
     const selected = await selectKnowledgeMemory(ledger, {
@@ -192,7 +192,7 @@ describe("planning knowledge recall", () => {
       expect(ledger.retrieve).toHaveBeenCalledWith(
         expect.objectContaining({
           input: expect.objectContaining({
-            scopeInformationId: "kaguya:memory:global",
+            scopeInformationId: "memory:access:global",
             userStatementsOnly: true,
           }),
         }),
@@ -218,8 +218,7 @@ describe("planning knowledge recall", () => {
         : entityReader(query),
     );
     ledger.retrieve = vi.fn(async (query) => {
-      if (query.strategyId === "kaguya.memory.knowledge")
-        throw new Error("disabled");
+      if (query.strategyId === "memory.knowledge") throw new Error("disabled");
       return [inbound("raw-source"), inbound("foreign", "other-group")];
     });
     await expect(
@@ -245,7 +244,7 @@ describe("planning knowledge recall", () => {
         : entityReader(query),
     );
     ledger.retrieve = vi.fn(async (query) =>
-      query.strategyId === "kaguya.memory.knowledge"
+      query.strategyId === "memory.knowledge"
         ? Array.from({ length: 6 }, (_, i) => inbound(`knowledge-${i}`))
         : Array.from({ length: 8 }, (_, i) => inbound(`raw-${i}`)),
     );
@@ -258,7 +257,7 @@ describe("planning knowledge recall", () => {
       4,
     );
     expect(ledger.retrieve).toHaveBeenLastCalledWith(
-      expect.objectContaining({ strategyId: "kaguya.memory.sparse", limit: 4 }),
+      expect.objectContaining({ strategyId: "memory.sparse", limit: 4 }),
     );
   });
 });

@@ -41,18 +41,18 @@ const PANELS: Readonly<Record<string, PrettyEventPanel>> = {
     color: 33,
     fieldsTitle: "生成请求",
   },
-  "association.query": {
+  "memory.association.query": {
     title: "记忆联想 · 检索输入",
     color: 35,
     fieldsTitle: "检索条件",
     contentTitle: "查询文本预览",
   },
-  "association.candidate": {
+  "memory.association.candidate": {
     title: "记忆联想 · 召回候选",
     color: 35,
     fieldsTitle: "候选信息",
   },
-  "association.completed": {
+  "memory.association.completed": {
     title: "记忆联想 · 检索结果",
     color: 35,
     fieldsTitle: "召回结果",
@@ -85,12 +85,12 @@ const PANELS: Readonly<Record<string, PrettyEventPanel>> = {
     fieldsTitle: "提取信息",
     contentTitle: "事实正文预览",
   },
-  "expression.learned": {
+  "memory.expression.learned": {
     title: "表达学习 · 输出",
     color: 33,
     fieldsTitle: "学习结果",
   },
-  "expression.selected": {
+  "memory.expression.selected": {
     title: "表达选择 · 输出",
     color: 33,
     fieldsTitle: "选择结果",
@@ -149,8 +149,8 @@ function modelTaskName(taskId: unknown): string {
     "agent.turn.plan": "Planner",
     "agent.message.compose": "回复生成",
     "core.person.fact.extract": "人物记忆",
-    "agent.expression.learn": "表达学习",
-    "agent.expression.select": "表达选择",
+    "memory.expression.learn": "表达学习",
+    "memory.expression.select": "表达选择",
   };
   return typeof taskId === "string" && taskId
     ? Object.hasOwn(names, taskId)

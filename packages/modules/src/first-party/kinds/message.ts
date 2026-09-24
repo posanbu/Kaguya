@@ -202,7 +202,7 @@ export const filterDecisionInformationKind = defineInformationKind({
 });
 
 export const coreMemoryTextInformationKind = defineInformationKind({
-  kind: "core.memory.text",
+  kind: "memory.text",
   displayName: "记忆文本",
   description:
     "带显式来源引用的记忆正文，登记后供联想检索及 Prompt 上下文选择使用，来源可沿引用追溯。",

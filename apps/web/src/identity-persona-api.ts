@@ -2,7 +2,11 @@ import { z } from "@kaguya/schema";
 import { GATEWAY_UNAUTHORIZED_EVENT } from "./api.js";
 
 const viewSchema = z.strictObject({
-  templateId: z.enum(["identity.name", "identity.aliases", "identity.persona"]),
+  templateId: z.enum([
+    "memory.identity.name",
+    "memory.identity.aliases",
+    "memory.identity.persona",
+  ]),
   displayName: z.string(),
   description: z.string(),
   allowedVariables: z.array(z.string()),

@@ -14,7 +14,7 @@ afterEach(async () => {
   for (const fn of cleanup.splice(0).reverse()) await fn();
 });
 const configs = createFirstPartyModuleConfigDefaults("test").filter(
-  (config) => config.definitionId === "core.identity.normalize",
+  (config) => config.definitionId === "memory.identity",
 );
 async function fixture(
   options: { enabled?: boolean; vector?: boolean; cognition?: boolean } = {},
@@ -96,8 +96,8 @@ describe("independent Memory background loop", () => {
   it("writes, embeds and publishes evidence without online modules", async () => {
     const f = await fixture({ vector: true, cognition: true });
     await f.submit();
-    await f.wait("agent.memory.writeback.completed");
-    const cognition = await f.wait("agent.memory.cognition.completed");
+    await f.wait("memory.writeback.completed");
+    const cognition = await f.wait("memory.cognition.completed");
     await vi.waitFor(async () =>
       expect(
         (await f.database.sql.query("SELECT * FROM memory_document_vectors"))
@@ -115,7 +115,7 @@ describe("independent Memory background loop", () => {
   it("rebuilds historical vectors after model revision changes on restart", async () => {
     const f = await fixture({ vector: true });
     await f.submit();
-    await f.wait("agent.memory.writeback.completed");
+    await f.wait("memory.writeback.completed");
     await vi.waitFor(async () =>
       expect(
         (await f.database.sql.query("SELECT * FROM memory_document_vectors"))
@@ -150,8 +150,8 @@ describe("independent Memory background loop", () => {
     await f.runtime.close();
     const next = f.create();
     await next.start();
-    await f.wait("agent.memory.cognition.completed");
-    expect(await f.find("agent.memory.cognition.requested")).toHaveLength(1);
+    await f.wait("memory.cognition.completed");
+    expect(await f.find("memory.cognition.requested")).toHaveLength(1);
     expect(
       await f.database.memory.recall({ query: "月亮", limit: 10 }),
     ).toHaveLength(1);
@@ -164,14 +164,14 @@ describe("independent Memory background loop", () => {
     expect(
       await f.database.memory.recall({ query: "月亮", limit: 10 }),
     ).toHaveLength(1);
-    expect(await f.find("core.memory.text")).toEqual([]);
+    expect(await f.find("memory.text")).toEqual([]);
   });
   it("does not write, embed or infer when Memory is disabled", async () => {
     const f = await fixture({ enabled: false, vector: true, cognition: true });
     await f.submit();
-    await f.wait("agent.person.context.completed");
+    await f.wait("memory.identity.person.context.completed");
     await f.runtime.close();
-    expect(await f.find("agent.memory.writeback.requested")).toEqual([]);
+    expect(await f.find("memory.writeback.requested")).toEqual([]);
     expect(f.embed).not.toHaveBeenCalled();
     expect(f.evolve).not.toHaveBeenCalled();
   });
@@ -188,7 +188,7 @@ describe("independent Memory background loop", () => {
       mentions: [],
       raw: {},
     });
-    const completed = await f.wait("agent.memory.writeback.completed");
+    const completed = await f.wait("memory.writeback.completed");
     await vi.waitFor(async () => {
       const result = await f.database.sql.query(
         "SELECT state FROM information_deliveries WHERE information_id = $1 AND subscription_id LIKE '%cognition.request%'",

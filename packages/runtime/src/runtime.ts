@@ -576,7 +576,7 @@ export class KaguyaRuntime implements InformationIngress {
       const enabledSuppliedCapabilities = memoryEnabled
         ? (suppliedCapabilities ?? [])
         : (suppliedCapabilities ?? []).filter(
-            ({ capability }) => !capability.id.startsWith("kaguya:memory"),
+            ({ capability }) => !capability.id.startsWith("memory:access"),
           );
       const capabilities = [
         {

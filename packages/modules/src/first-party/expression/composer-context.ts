@@ -17,7 +17,7 @@ import {
 import { messageIntentRequestedInformationKind } from "../information-kinds.js";
 import { expressionSelected } from "./facts.js";
 export const expressionDispatchSelector = defineInformationSelector({
-  selectorId: "agent.expression.composer.dispatch",
+  selectorId: "memory.expression.composer.dispatch",
   select: async ({ sourceAtom, ledger }) => {
     const selected = expressionSelected.payloadSchema.parse(sourceAtom.payload);
     const refs = await ledger.related({
@@ -37,7 +37,7 @@ export const expressionDispatchSelector = defineInformationSelector({
 });
 export function withExpressionContext(base: InformationSelectorDefinition) {
   return defineInformationSelector({
-    selectorId: "agent.expression.composer.context",
+    selectorId: "memory.expression.composer.context",
     select: async (context) => {
       const ids = await expressionDispatchSelector.select(context);
       const atoms = await context.ledger.find({

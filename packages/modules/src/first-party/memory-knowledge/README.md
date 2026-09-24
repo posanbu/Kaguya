@@ -6,11 +6,11 @@
 
 ## 消费和产生
 
-消费 `person.context.completed`、`agent.memory.event.submitted`、证据修订请求、历史回填、脏页维护和 Wiki 刷新请求。产生事件提交、逐页回填、页面刷新、不可变页面修订及唯一处理终态。通用事件生产者必须显式给出已有来源和范围引用；动作的 requested、generated、started、completed、failed、interrupted、responded 保留为不同阶段。
+消费 `memory.identity.person.context.completed`、`memory.knowledge.event.submitted`、证据修订请求、历史回填、脏页维护和 Wiki 刷新请求。产生事件提交、逐页回填、页面刷新、不可变页面修订及唯一处理终态。通用事件生产者必须显式给出已有来源和范围引用；动作的 requested、generated、started、completed、failed、interrupted、responded 保留为不同阶段。
 
 ## 数据流与边界
 
-canonical 消息自动保存说话者、reply-to 和原文，昵称/群名片作为带时间的观察断言保存。被谈论者需要显式归属，不从正文猜测。其他模块通过 `agent.memory.knowledge.mutation.requested` 可靠提交带原始证据的断言、episode、撤回与失效操作。没有页面、页面失效或刷新失败都只表示当前没有可消费证据，不能据此生成背景。
+canonical 消息自动保存说话者、reply-to 和原文，昵称/群名片作为带时间的观察断言保存。被谈论者需要显式归属，不从正文猜测。其他模块通过 `memory.knowledge.mutation.requested` 可靠提交带原始证据的断言、episode、撤回与失效操作。没有页面、页面失效或刷新失败都只表示当前没有可消费证据，不能据此生成背景。
 
 每次页面生成最多选择 8 条事件和 8 条断言，单段正文保留最多 3000 字符，并公开截断标记；完整正文仍在事件层，不能把页面当完整历史。来源范围、事件时间与入库时间分别校验。页面引用原始证据，旧页面不能反复作为新证据输入。
 

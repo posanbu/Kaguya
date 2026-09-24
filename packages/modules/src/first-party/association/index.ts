@@ -7,9 +7,9 @@
  * 从当前意图的 runtime context 找到 identity terminal，并按冻结 inputs 授权重载全部入站原子；`associationCandidateSelector`
  * 从 Message Intent DAG 重载当前 inbound，并调用宿主注入的受控 Memory retrieval strategy；失败时按
  * unavailable/failed 终态 fail closed，不生成游离文本或触发新的消息生成。
- * 代码库关系：消费 `messageIntentRequestedInformationKind` 和 `agent.person.context.completed`，
+ * 代码库关系：消费 `messageIntentRequestedInformationKind` 和 `memory.identity.person.context.completed`，
  * 产生 `information-kinds.ts` 中的四类 association kind；Runtime 注入
- * `kaguya.memory.sparse`，Message Composer 消费 completed terminal 并再次由 Core
+ * `memory.sparse`，Message Composer 消费 completed terminal 并再次由 Core
  * 重载原始 inbound。selector 只能访问 Engine 授权的账本读取端口。
  * 召回显式传入冻结 target 的 scope，防止稀疏或向量路径跨平台/适配器/群组读取。
  * 事件与入库截止点分别取冻结 asOf 和 turn 的登记时间，迟到旧证据不能通过生成前检索越过冻结边界。
@@ -51,7 +51,7 @@ import {
 } from "../information-kinds.js";
 
 export const associationRetrievalStartedDiagnostic = defineModuleDiagnostic({
-  event: "association.retrieval.started",
+  event: "memory.association.retrieval.started",
   message: "Association retrieval started",
   level: "info",
   payloadSchema: z
@@ -80,7 +80,7 @@ const identityTerminalPayloadSchema = z
   .passthrough();
 
 export const associationIdentitySelector = defineInformationSelector({
-  selectorId: "kaguya.association.identity-terminal",
+  selectorId: "memory.association.identity-terminal",
   select: async ({ sourceAtom, ledger }) => {
     const context = await ledger.related({
       from: [sourceAtom.informationId],
@@ -98,7 +98,7 @@ export const associationIdentitySelector = defineInformationSelector({
             limit: 100,
           });
     const terminals = identity.filter(
-      ({ kind }) => kind === "agent.person.context.completed",
+      ({ kind }) => kind === "memory.identity.person.context.completed",
     );
     const turns = await ledger.related({
       from: [sourceAtom.informationId],
@@ -138,7 +138,7 @@ export const associationIdentitySelector = defineInformationSelector({
 });
 
 export const associationCandidateSelector = defineInformationSelector({
-  selectorId: "kaguya.association.memory-candidates",
+  selectorId: "memory.association.memory-candidates",
   select: async ({ sourceAtom, ledger }) => {
     const query = associationQueryInformationPayloadSchema.parse(
       sourceAtom.payload,
@@ -224,8 +224,9 @@ export const associationModule = defineInformationModule({
   manifest: {
     protocolVersion: 1,
     moduleVersion: "1.0.0",
-    definitionId: "core.association.memory",
-    inspection: firstPartyInspection["core.association.memory"],
+    definitionId: "memory.association",
+    tags: ["memory"],
+    inspection: firstPartyInspection["memory.association"],
     displayName: "记忆联想",
     summary: "为当前消息意图召回范围内可追溯的记忆候选。",
     description:
@@ -257,7 +258,7 @@ export const associationModule = defineInformationModule({
     subscriptions: [
       onInformation(
         messageIntentRequestedInformationKind,
-        { subscriptionId: "kaguya.association.request", delivery: "durable" },
+        { subscriptionId: "memory.association.request", delivery: "durable" },
         async (intent, context) => {
           // 管理端批准的隔离上下文不扩展任何源会话或目标会话 Memory。
           if (
@@ -273,7 +274,7 @@ export const associationModule = defineInformationModule({
             associationIdentitySelector,
           );
           const identityAtom = identityAtoms.find(
-            ({ kind }) => kind === "agent.person.context.completed",
+            ({ kind }) => kind === "memory.identity.person.context.completed",
           );
           const turnContext = identityAtoms.find(
             ({ kind }) => kind === turnContextCompletedInformationKind.kind,
@@ -302,7 +303,7 @@ export const associationModule = defineInformationModule({
               ? { status: "unavailable" as const }
               : identityTerminalPayloadSchema.parse(identityAtom.payload);
           await context.registerOnce(
-            "kaguya.association.requested.v1",
+            "memory.association.requested.v1",
             intent.informationId,
             associationRequestedInformationKind,
             {
@@ -342,13 +343,13 @@ export const associationModule = defineInformationModule({
       ),
       onInformation(
         associationRequestedInformationKind,
-        { subscriptionId: "kaguya.association.query", delivery: "durable" },
+        { subscriptionId: "memory.association.query", delivery: "durable" },
         async (request, context) => {
           const payload = associationRequestedInformationPayloadSchema.parse(
             request.payload,
           );
           await context.registerOnce(
-            "kaguya.association.query.v1",
+            "memory.association.query.v1",
             request.informationId,
             associationQueryInformationKind,
             {
@@ -370,7 +371,7 @@ export const associationModule = defineInformationModule({
       ),
       onInformation(
         associationQueryInformationKind,
-        { subscriptionId: "kaguya.association.retrieve", delivery: "durable" },
+        { subscriptionId: "memory.association.retrieve", delivery: "durable" },
         async (query, context) => {
           const payload = associationQueryInformationPayloadSchema.parse(
             query.payload,
@@ -413,7 +414,7 @@ export const associationModule = defineInformationModule({
           const candidateInformationIds: InformationId[] = [];
           for (const [rank, memory] of memories.entries()) {
             const candidate = await context.registerOnce(
-              "kaguya.association.candidate.v1",
+              "memory.association.candidate.v1",
               `${query.informationId}:${memory.informationId}`,
               associationCandidateInformationKind,
               {
@@ -439,7 +440,7 @@ export const associationModule = defineInformationModule({
           }
 
           await context.commitTerminal(
-            "kaguya.association.terminal.v1",
+            "memory.association.terminal.v1",
             payload.requestInformationId,
             associationCompletedInformationKind,
             {

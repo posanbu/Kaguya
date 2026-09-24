@@ -150,27 +150,25 @@ export function createMessageComposition(
     (config) =>
       (memoryEnabled ||
         ![
-          "agent.memory.writeback",
-          "agent.memory.index",
-          "agent.memory.cognition",
-          "agent.memory.knowledge",
+          "memory.writeback",
+          "memory.index",
+          "memory.cognition",
+          "memory.knowledge",
         ].includes(config.definitionId)) &&
-      (knowledgeEnabled || config.definitionId !== "agent.memory.knowledge") &&
+      (knowledgeEnabled || config.definitionId !== "memory.knowledge") &&
       (options.embedding !== undefined ||
-        config.definitionId !== "agent.memory.index") &&
+        config.definitionId !== "memory.index") &&
       (options.cognition !== undefined ||
-        config.definitionId !== "agent.memory.cognition"),
+        config.definitionId !== "memory.cognition"),
   );
   if (
     memoryEnabled &&
-    !moduleConfigs.some(
-      (config) => config.definitionId === "agent.memory.writeback",
-    )
+    !moduleConfigs.some((config) => config.definitionId === "memory.writeback")
   ) {
     moduleConfigs.push({
       version: 1,
-      instanceId: "memory-writeback.default",
-      definitionId: "agent.memory.writeback",
+      instanceId: "memory.writeback.default",
+      definitionId: "memory.writeback",
       enabled: true,
       settings: {},
     });
@@ -178,41 +176,35 @@ export function createMessageComposition(
   if (
     memoryEnabled &&
     options.embedding &&
-    !moduleConfigs.some(
-      (config) => config.definitionId === "agent.memory.index",
-    )
+    !moduleConfigs.some((config) => config.definitionId === "memory.index")
   )
     moduleConfigs.push({
       version: 1,
-      instanceId: "memory-index.default",
-      definitionId: "agent.memory.index",
+      instanceId: "memory.index.default",
+      definitionId: "memory.index",
       enabled: true,
       settings: {},
     });
   if (
     memoryEnabled &&
     options.cognition &&
-    !moduleConfigs.some(
-      (config) => config.definitionId === "agent.memory.cognition",
-    )
+    !moduleConfigs.some((config) => config.definitionId === "memory.cognition")
   )
     moduleConfigs.push({
       version: 1,
-      instanceId: "memory-cognition.default",
-      definitionId: "agent.memory.cognition",
+      instanceId: "memory.cognition.default",
+      definitionId: "memory.cognition",
       enabled: true,
       settings: {},
     });
   if (
     knowledgeEnabled &&
-    !moduleConfigs.some(
-      (config) => config.definitionId === "agent.memory.knowledge",
-    )
+    !moduleConfigs.some((config) => config.definitionId === "memory.knowledge")
   )
     moduleConfigs.push({
       version: 1,
-      instanceId: "memory-knowledge.default",
-      definitionId: "agent.memory.knowledge",
+      instanceId: "memory.knowledge.default",
+      definitionId: "memory.knowledge",
       enabled: true,
       settings: {},
     });
@@ -236,7 +228,7 @@ export function createMessageComposition(
         [
           "agent.message-composer",
           "agent.heartflow.online",
-          "agent.expression",
+          "memory.expression",
         ].includes(activation.definitionId),
       )
       .map((activation) => ({
@@ -310,7 +302,7 @@ export function createMessageComposition(
                   identity: EmbeddingProvider["identity"],
                 ) => {
                   await core.registerOnce(
-                    "kaguya.memory.index.page.v1",
+                    "memory.index.page.v1",
                     JSON.stringify([embeddingIdentityKey(identity), "root"]),
                     memoryBackfillRequestedInformationKind,
                     {

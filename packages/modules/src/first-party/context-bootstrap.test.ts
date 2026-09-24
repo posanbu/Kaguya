@@ -83,7 +83,7 @@ describe("context bootstrap", () => {
   it("moves to contextual with sourced memory and history without treating every participant as familiar", () => {
     const f = fixture();
     const history = prior("previous", "sender-0");
-    const memory = atom("memory", "core.memory.text", {
+    const memory = atom("memory", "memory.text", {
       text: "群友自述喜欢音乐",
     });
     const turn = atom(f.turn.informationId, f.turn.kind, {
@@ -166,10 +166,10 @@ describe("context bootstrap", () => {
   it("counts only memory visible after Composer's character budget", () => {
     const f = fixture();
     const memories = [
-      atom("long-memory", "core.memory.text", {
+      atom("long-memory", "memory.text", {
         text: "有来源的长记忆".repeat(5000),
       }),
-      atom("hidden-memory", "core.memory.text", { text: "不应计入可见证据" }),
+      atom("hidden-memory", "memory.text", { text: "不应计入可见证据" }),
     ];
     const intent = atom(
       f.intent.informationId,

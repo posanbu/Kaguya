@@ -12,17 +12,17 @@ const stages = [
   { label: "入站", matches: (k: string) => k === "core.message.inbound.text" },
   {
     label: "身份",
-    matches: (k: string) =>
-      k.startsWith("agent.person.") ||
-      k.startsWith("agent.chat.") ||
-      k.startsWith("agent.platform."),
+    matches: (k: string) => k.startsWith("memory.identity."),
   },
   {
     label: "记忆",
     matches: (k: string) =>
-      k.startsWith("agent.memory.") ||
-      k.startsWith("agent.association.") ||
-      k === "core.memory.text",
+      k.startsWith("memory.writeback.") ||
+      k.startsWith("memory.index.") ||
+      k.startsWith("memory.cognition.") ||
+      k.startsWith("memory.knowledge.") ||
+      k.startsWith("memory.association.") ||
+      k === "memory.text",
   },
   { label: "模型", matches: (k: string) => k.startsWith("core.model.task.") },
   {
@@ -36,7 +36,7 @@ const stages = [
   },
   { label: "关注", matches: (k: string) => k.startsWith("agent.attention.") },
   { label: "规划", matches: (k: string) => k === "agent.turn.plan.completed" },
-  { label: "表达", matches: (k: string) => k.startsWith("agent.expression.") },
+  { label: "表达", matches: (k: string) => k.startsWith("memory.expression.") },
   { label: "投递", matches: (k: string) => k.startsWith("core.delivery.") },
   {
     label: "终态",

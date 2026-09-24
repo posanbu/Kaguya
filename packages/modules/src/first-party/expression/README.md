@@ -16,7 +16,7 @@ Composer 使用独立 expression_habits 变量，provenance 指向选择结果�
 
 ## Settings
 
-batchSize 默认 8，范围 2–24。默认实例 expression.default；通过 kaguya:expression.ready 声明 Composer 的流水线依赖，避免关闭模块后静默丢失回复。
+batchSize 默认 8，范围 2–24。默认实例 `memory.expression.default`；通过 `memory:expression.ready` 声明 Composer 的流水线依赖，避免关闭模块后静默丢失回复。
 
 ## 可靠性、幂等和失败行为
 

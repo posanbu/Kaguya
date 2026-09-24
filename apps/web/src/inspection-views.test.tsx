@@ -15,6 +15,7 @@ const kind = {
 };
 const base: InspectionModule = {
   definitionId: "source",
+  tags: [],
   displayName: "来源模块",
   summary: "来源",
   description: "产生输入事实",
