@@ -8,6 +8,7 @@ import type { InformationSelectorLedger } from "@kaguya/sdk";
 import { describe, expect, it, vi } from "vitest";
 import { atom, target } from "../message-composer/test-fixtures.js";
 import { heartflowMemorySelector } from "../heartflow/index.js";
+import { personContextCompletedInformationKind } from "../information-kinds.js";
 import { selectKnowledgeMemory } from "./selector.js";
 import { GLOBAL_MEMORY_SCOPE_ID, USER_STATEMENT_KIND } from "@kaguya/schema";
 
@@ -313,7 +314,7 @@ it("retrieves stored character evidence by agent name without copying another pe
 it("uses up to four recent participants and shares evidence slots without starving later speakers", async () => {
   const ledger = reader();
   ledger.related = vi.fn(async ({ from }) => [
-    atom(`identity-${from[0]}`, "agent.person.context.completed", {
+    atom(`identity-${from[0]}`, personContextCompletedInformationKind.kind, {
       status: "complete",
       scopeMode: "canonical",
       scopeInformationId: "scope-1",
