@@ -17,7 +17,7 @@ import {
   USER_INPUT_KIND,
   USER_SUBJECT_KIND,
   USER_MEMORY_SCOPE_KIND,
-  WEB_MEMORY_SCOPE_ID,
+  GLOBAL_MEMORY_SCOPE_ID,
   type MemoryIngestionPlan,
   type MemoryIngestionSubmission,
 } from "@kaguya/schema";
@@ -33,16 +33,17 @@ function submission(
   return {
     requestId: randomUUID(),
     sessionId: randomUUID(),
-    scopeInformationId: WEB_MEMORY_SCOPE_ID,
+    scopeInformationId: GLOBAL_MEMORY_SCOPE_ID,
     sourceType: "character_setting",
     text,
     resolutions: [],
+    targetClaimId: null,
     ...overrides,
   };
 }
 function plan(): MemoryIngestionPlan {
   return {
-    version: 1,
+    version: 2,
     subjects: [
       {
         key: "xia",
@@ -138,11 +139,11 @@ function contract(create: () => Promise<KaguyaDatabase>) {
       text,
       submitter: "webui:management",
       sourceType: "character_setting",
-      scopeInformationId: WEB_MEMORY_SCOPE_ID,
+      scopeInformationId: GLOBAL_MEMORY_SCOPE_ID,
     });
     const subject = result.results.find((r) => r.label === "小夏")!;
     const wiki = await f.db.knowledge.readWikiPage({
-      scopeInformationId: WEB_MEMORY_SCOPE_ID,
+      scopeInformationId: GLOBAL_MEMORY_SCOPE_ID,
       entityInformationId: subject.entityInformationId!,
     });
     expect(wiki?.dirty).toBe(false);
@@ -183,7 +184,7 @@ function contract(create: () => Promise<KaguyaDatabase>) {
         })),
       );
     await append("native-person", "agent.person.entity", { accountId: "100" }, [
-      { relation: "agent:scope", informationId: WEB_MEMORY_SCOPE_ID },
+      { relation: "agent:scope", informationId: GLOBAL_MEMORY_SCOPE_ID },
     ]);
     for (const [account, person, nickname] of [
       ["qq-account", "native-person", "小林"],
@@ -224,9 +225,12 @@ function contract(create: () => Promise<KaguyaDatabase>) {
           kind: USER_SUBJECT_KIND,
           occurredAt: "2026-01-01T00:00:00Z",
           source: "test:seed",
-          payload: { label: "小林", scopeInformationId: WEB_MEMORY_SCOPE_ID },
+          payload: {
+            label: "小林",
+            scopeInformationId: GLOBAL_MEMORY_SCOPE_ID,
+          },
           references: [
-            { relation: "agent:scope", informationId: WEB_MEMORY_SCOPE_ID },
+            { relation: "agent:scope", informationId: GLOBAL_MEMORY_SCOPE_ID },
           ],
         },
         [{ relation: "agent:scope", required: true, multiple: false }],
@@ -284,7 +288,7 @@ function contract(create: () => Promise<KaguyaDatabase>) {
     expect(result.results.find((r) => r.claimId)?.status).toBe("revised");
     const cutoff = new Date().toISOString();
     const recall = await f.db.knowledge.recall({
-      scopeInformationId: WEB_MEMORY_SCOPE_ID,
+      scopeInformationId: GLOBAL_MEMORY_SCOPE_ID,
       entityInformationId: old.entityInformationId,
       occurredBefore: cutoff,
       recordedBefore: cutoff,
@@ -294,7 +298,7 @@ function contract(create: () => Promise<KaguyaDatabase>) {
       recall.claims.filter((c) => c.predicate === "喜好").map((c) => c.value),
     ).toEqual(["绘画"]);
     const obsolete = await f.db.knowledge.recall({
-      scopeInformationId: WEB_MEMORY_SCOPE_ID,
+      scopeInformationId: GLOBAL_MEMORY_SCOPE_ID,
       query: "天文",
       occurredBefore: cutoff,
       recordedBefore: cutoff,
@@ -311,7 +315,7 @@ function contract(create: () => Promise<KaguyaDatabase>) {
       ).rows,
     ).toHaveLength(1);
     const wiki = await f.db.knowledge.readWikiPage({
-      scopeInformationId: WEB_MEMORY_SCOPE_ID,
+      scopeInformationId: GLOBAL_MEMORY_SCOPE_ID,
       entityInformationId: old.entityInformationId!,
     });
     expect(
@@ -346,7 +350,7 @@ function contract(create: () => Promise<KaguyaDatabase>) {
     ).toBe("succeeded");
     const cutoff = new Date().toISOString();
     const recalled = await f.db.knowledge.recall({
-      scopeInformationId: WEB_MEMORY_SCOPE_ID,
+      scopeInformationId: GLOBAL_MEMORY_SCOPE_ID,
       entityInformationId: old.entityInformationId,
       occurredBefore: cutoff,
       recordedBefore: cutoff,
@@ -367,7 +371,7 @@ function contract(create: () => Promise<KaguyaDatabase>) {
     expect(revision.results.find((r) => r.claimId)?.status).toBe("revised");
     const after = new Date().toISOString();
     const obsolete = await f.db.knowledge.recall({
-      scopeInformationId: WEB_MEMORY_SCOPE_ID,
+      scopeInformationId: GLOBAL_MEMORY_SCOPE_ID,
       query: "天文",
       occurredBefore: after,
       recordedBefore: after,
@@ -423,6 +427,189 @@ function contract(create: () => Promise<KaguyaDatabase>) {
       code: "unsupported_evidence",
     });
   });
+  it("lists global records across sessions and deletes/restores without recalling removed evidence", async () => {
+    const f = await fixture();
+    await f.apply(submission());
+    const records = await new PostgresMemoryIngestionStore(f.db.sql).records(
+      "天文",
+    );
+    expect(records.hasMore).toBe(false);
+    expect(records.records).toHaveLength(1);
+    const saved = records.records[0]!;
+    expect(saved).toMatchObject({
+      subjectLabel: "小夏",
+      predicate: "喜好",
+      value: "天文",
+      deleted: false,
+    });
+    const operation = {
+      operationId: randomUUID(),
+      claimId: saved.claimId,
+      action: "delete",
+    };
+    const deleted = await f.store.mutateRecord(operation);
+    expect(deleted.deleted).toBe(true);
+    expect(await f.store.mutateRecord(operation)).toEqual(deleted);
+    await expect(
+      f.store.mutateRecord({ ...operation, action: "restore" }),
+    ).rejects.toMatchObject({ code: "request_id_conflict" });
+    await expect(
+      f.store.mutateRecord({ ...operation, operationId: randomUUID() }),
+    ).rejects.toMatchObject({ code: "record_changed" });
+    const recall = () => {
+      const cutoff = new Date().toISOString();
+      return f.db.knowledge.recall({
+        scopeInformationId: GLOBAL_MEMORY_SCOPE_ID,
+        entityInformationId: saved.subjectInformationId,
+        occurredBefore: cutoff,
+        recordedBefore: cutoff,
+        limit: 100,
+      });
+    };
+    const afterDelete = await recall();
+    expect(afterDelete.claims.map((c) => c.predicate)).toEqual(["朋友"]);
+    expect(afterDelete.events.map((e) => e.content).join(" ")).not.toContain(
+      "喜欢天文",
+    );
+    const wiki = await f.db.knowledge.readWikiPage({
+      scopeInformationId: GLOBAL_MEMORY_SCOPE_ID,
+      entityInformationId: saved.subjectInformationId,
+    });
+    expect(wiki?.latestRevision?.sections.map((s) => s.heading)).toEqual([
+      "朋友",
+    ]);
+    expect((await f.store.records("天文")).records).toEqual([deleted]);
+    const restore = {
+      operationId: randomUUID(),
+      claimId: deleted.claimId,
+      action: "restore",
+    };
+    const restored = await f.store.mutateRecord(restore);
+    expect(restored).toMatchObject({ value: "天文", deleted: false });
+    expect(await f.store.mutateRecord(restore)).toEqual(restored);
+    expect((await recall()).claims).toHaveLength(2);
+    expect((await f.store.records("天文")).records).toEqual([restored]);
+    await expect(
+      f.store.mutateRecord({
+        ...operation,
+        operationId: randomUUID(),
+        claimId: "foreign",
+      }),
+    ).rejects.toMatchObject({ code: "record_changed" });
+  });
+  it("modifies only the selected record using a new instruction and rejects stale targets", async () => {
+    const f = await fixture();
+    await f.apply(submission());
+    const target = (await f.store.records("天文")).records[0]!;
+    // 记录按钮已明确选择主体，即使存在同名人物也不应再次要求身份选择。
+    await f.db.information.append(
+      {
+        informationId: "another-xia",
+        kind: USER_SUBJECT_KIND,
+        occurredAt: "2026-01-01T00:00:00Z",
+        source: "test:seed",
+        payload: { label: "小夏", scopeInformationId: GLOBAL_MEMORY_SCOPE_ID },
+        references: [
+          { relation: "agent:scope", informationId: GLOBAL_MEMORY_SCOPE_ID },
+        ],
+      },
+      [{ relation: "agent:scope", required: true, multiple: false }],
+    );
+    const input = submission({
+      text: "把喜好改成绘画。",
+      targetClaimId: target.claimId,
+    });
+    await f.store.submit(input);
+    const claimed = (await f.store.claim())!;
+    expect((await f.store.context(claimed.job)).targetClaim?.claimId).toBe(
+      target.claimId,
+    );
+    const edit: MemoryIngestionPlan = {
+      version: 2,
+      subjects: [
+        {
+          key: "xia",
+          label: "小夏",
+          existingEntityId: target.subjectInformationId,
+          evidenceQuote: input.text,
+        },
+      ],
+      claims: [
+        {
+          ...plan().claims[0]!,
+          value: "绘画",
+          evidenceQuote: input.text,
+          supersedesClaimId: target.claimId,
+        },
+      ],
+      questions: [],
+      unprocessed: [],
+    };
+    await f.store.savePlan(claimed, edit);
+    const result = await f.store.apply(claimed);
+    expect(result.results.find((r) => r.status === "revised")).toMatchObject({
+      supersedesClaimId: target.claimId,
+    });
+    const current = (await f.store.records()).records;
+    expect(current.map((r) => r.value).sort()).toEqual(
+      ["从小认识的朋友", "绘画"].sort(),
+    );
+    const nextTarget = current.find((r) => r.predicate === "喜好")!;
+    await f.store.submit(
+      submission({
+        text: "把喜好改成音乐。",
+        targetClaimId: nextTarget.claimId,
+      }),
+    );
+    const pending = (await f.store.claim())!;
+    await f.store.savePlan(pending, {
+      ...edit,
+      claims: [
+        {
+          ...edit.claims[0]!,
+          evidenceQuote: "把喜好改成音乐。",
+          value: "音乐",
+          supersedesClaimId: nextTarget.claimId,
+        },
+      ],
+      subjects: [{ ...edit.subjects[0]!, evidenceQuote: "把喜好改成音乐。" }],
+    });
+    await f.store.mutateRecord({
+      operationId: randomUUID(),
+      claimId: nextTarget.claimId,
+      action: "delete",
+    });
+    await expect(f.store.apply(pending)).rejects.toMatchObject({
+      code: "record_changed",
+    });
+    expect(
+      (await f.store.records()).records.find((r) => r.predicate === "喜好"),
+    ).toMatchObject({ deleted: true, value: "绘画" });
+  });
+  it("does not let a delayed untargeted plan resurrect deleted evidence", async () => {
+    const f = await fixture();
+    await f.apply(submission());
+    const target = (await f.store.records("天文")).records[0]!;
+    await f.store.submit(submission());
+    const pending = (await f.store.claim())!;
+    await f.store.savePlan(pending, plan());
+    await f.store.mutateRecord({
+      operationId: randomUUID(),
+      claimId: target.claimId,
+      action: "delete",
+    });
+    await expect(f.store.apply(pending)).rejects.toMatchObject({
+      code: "record_changed",
+    });
+    expect((await f.store.records("天文")).records).toMatchObject([
+      { deleted: true },
+    ]);
+    // 明确的新指令可以重新录入，旧任务的原文不行。
+    await f.apply(submission());
+    expect(
+      (await f.store.records("天文")).records.filter((r) => !r.deleted),
+    ).toHaveLength(1);
+  });
   it("recovers an expired lease with its frozen plan and rejects stale worker writes", async () => {
     const f = await fixture();
     const input = submission();
@@ -456,13 +643,12 @@ function contract(create: () => Promise<KaguyaDatabase>) {
     ).rejects.toMatchObject({ code: "invalid_submission" });
     await f.store.submit(input);
     await expect(
-      f.store.submit(
-        submission({
-          sessionId: input.sessionId,
-          scopeInformationId: "foreign",
-        }),
-      ),
-    ).rejects.toMatchObject({ code: "session_scope_conflict" });
+      f.store.submit({
+        ...submission(),
+        sessionId: input.sessionId,
+        scopeInformationId: "foreign",
+      }),
+    ).rejects.toMatchObject({ code: "invalid_submission" });
     await f.db.sql.query(
       "UPDATE memory_ingestion_jobs SET contract_version=0 WHERE request_id=$1",
       [input.requestId],

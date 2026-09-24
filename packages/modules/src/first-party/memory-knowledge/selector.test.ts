@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import { atom, target } from "../message-composer/test-fixtures.js";
 import { heartflowMemorySelector } from "../heartflow/index.js";
 import { selectKnowledgeMemory } from "./selector.js";
+import { GLOBAL_MEMORY_SCOPE_ID, USER_STATEMENT_KIND } from "@kaguya/schema";
 
 const cutoff = "2026-09-09T00:00:02.000Z";
 const recorded = "2026-09-09T00:00:04.000Z";
@@ -50,6 +51,69 @@ function reader(
 }
 
 describe("planning knowledge recall", () => {
+  it("recalls the same global manual evidence in Web and native chats even with unresolved identity", async () => {
+    const payload = {
+      requestId: "3cf97a61-741c-4294-af7b-f8a430d1bc09",
+      sessionId: "178933a7-7c91-4d34-a21b-b0d6f441cbfa",
+      scopeInformationId: GLOBAL_MEMORY_SCOPE_ID,
+      sourceType: "character_setting",
+      submitter: "webui:management",
+      text: "小夏喜欢天文",
+      originalSourceInformationId: "original",
+      scope: {
+        platform: "web",
+        adapterId: "web.ui.main",
+        destination: { kind: "web" },
+      },
+    };
+    const reference = [
+      { relation: "agent:scope", informationId: GLOBAL_MEMORY_SCOPE_ID },
+    ];
+    const manual = atom(
+      "global-manual",
+      USER_STATEMENT_KIND,
+      payload,
+      reference,
+    );
+    const ledger = reader({
+      status: "ambiguous",
+      retrieved: [
+        manual,
+        atom("forged", USER_STATEMENT_KIND, payload),
+        atom(
+          "old-scope",
+          USER_STATEMENT_KIND,
+          { ...payload, scopeInformationId: "other-scope" },
+          reference,
+        ),
+        inbound("foreign", "other-group"),
+      ],
+    });
+    const web = atom("web", "core.message.inbound.text", {
+      text: "小夏喜欢什么？",
+      source: {
+        platform: "web",
+        adapterId: "webui",
+        destination: { kind: "web" },
+        senderId: "browser",
+        platformMessageId: "web",
+      },
+    });
+    for (const current of [
+      web,
+      inbound("qq-a"),
+      inbound("qq-b", "another-group"),
+    ]) {
+      expect(
+        await selectKnowledgeMemory(ledger, {
+          inbounds: [current],
+          occurredBefore: cutoff,
+          recordedBefore: recorded,
+          limit: 8,
+        }),
+      ).toEqual([manual]);
+    }
+  });
   it("returns empty Web memory when the knowledge strategy is disabled", async () => {
     const ledger = reader();
     ledger.retrieve = vi.fn(async () => {
@@ -124,7 +188,15 @@ describe("planning knowledge recall", () => {
           limit: 8,
         }),
       ).resolves.toEqual([]);
-      expect(ledger.retrieve).not.toHaveBeenCalled();
+      expect(ledger.retrieve).toHaveBeenCalledOnce();
+      expect(ledger.retrieve).toHaveBeenCalledWith(
+        expect.objectContaining({
+          input: expect.objectContaining({
+            scopeInformationId: "kaguya:memory:global",
+            userStatementsOnly: true,
+          }),
+        }),
+      );
     },
   );
 

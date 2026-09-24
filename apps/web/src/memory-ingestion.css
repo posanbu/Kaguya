@@ -1,6 +1,6 @@
 /* 记忆录入沿用工作台颜色与控件；对话按原文和实际结果组织，窄屏保持单栏及完整错误恢复入口。 */
 .memory-ingestion-page {
-  width: min(100%, 960px);
+  width: min(100%, 1240px);
   margin-inline: auto;
   padding: 28px;
   min-width: 0;
@@ -35,11 +35,6 @@
   opacity: 1;
   color: var(--kaguya-muted);
   -webkit-text-fill-color: var(--kaguya-muted);
-}
-.ingestion-scope-note {
-  color: var(--kaguya-muted);
-  line-height: 1.7;
-  margin: 12px 0 24px;
 }
 .ingestion-conversation {
   min-height: 200px;
@@ -181,5 +176,125 @@
   .ingestion-records > li {
     grid-template-columns: 4.5em minmax(0, 1fr);
     gap: 8px;
+  }
+}
+
+/* 全局记录与对话并列，窄屏折为上下布局；操作始终紧邻其作用对象。 */
+.ingestion-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  gap: 32px;
+  margin-top: 24px;
+  align-items: start;
+}
+.ingestion-dialogue {
+  min-width: 0;
+}
+.ingestion-library {
+  min-width: 0;
+  border-left: 1px solid var(--kaguya-line);
+  padding-left: 24px;
+}
+.ingestion-library-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.ingestion-library h2 {
+  font-size: 1.125rem;
+  margin: 0;
+}
+.ingestion-search {
+  display: grid;
+  gap: 8px;
+  font-size: 0.875rem;
+  margin: 16px 0;
+}
+.ingestion-search input {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--kaguya-paper);
+  color: var(--kaguya-ink);
+  font: inherit;
+}
+.ingestion-saved-records {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ingestion-saved-records > li {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 18px 0;
+  border-top: 1px solid var(--kaguya-line);
+}
+.ingestion-saved-records > li > div:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ingestion-saved-records p {
+  margin: 6px 0;
+  line-height: 1.7;
+}
+.ingestion-saved-records small,
+.ingestion-saved-records details,
+.ingestion-library-empty {
+  color: var(--kaguya-muted);
+  font-size: 0.875rem;
+  line-height: 1.7;
+}
+.ingestion-saved-records summary {
+  cursor: pointer;
+  min-height: 32px;
+  padding-top: 8px;
+}
+.ingestion-saved-records .is-deleted > div:first-child > p {
+  text-decoration: line-through;
+  color: var(--kaguya-muted);
+}
+.ingestion-record-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.ingestion-record-actions .wb-button {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 8px;
+}
+.ingestion-edit-target {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  line-height: 1.6;
+  padding: 8px 0;
+}
+.ingestion-edit-target span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ingestion-pagination {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+}
+@media (max-width: 1000px) {
+  .ingestion-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ingestion-library {
+    border-left: 0;
+    border-top: 1px solid var(--kaguya-line);
+    padding: 24px 0 0;
   }
 }

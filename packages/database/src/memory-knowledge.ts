@@ -34,7 +34,7 @@ import {
 import type { SqlDatabase, SqlTransaction } from "./driver.js";
 import {
   USER_MEMORY_SCOPE_KIND,
-  WEB_MEMORY_SCOPE_ID,
+  GLOBAL_MEMORY_SCOPE_ID,
   USER_STATEMENT_KIND,
   USER_INPUT_KIND,
   userStatementPayloadSchema,
@@ -752,7 +752,7 @@ async function lockScope(
       ? scope.payload.scopeMode !== "canonical"
       : !scopeKinds.includes(scope.kind)) ||
     (scope?.kind === USER_MEMORY_SCOPE_KIND &&
-      (scopeId !== WEB_MEMORY_SCOPE_ID ||
+      (scopeId !== GLOBAL_MEMORY_SCOPE_ID ||
         scope.payload.platform !== "web" ||
         scope.payload.adapterId !== "web.ui.main" ||
         !same(scope.payload.destination, { kind: "web" })))

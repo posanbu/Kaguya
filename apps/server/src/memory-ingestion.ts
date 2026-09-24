@@ -32,6 +32,7 @@ export function memoryIngestionPrompt(
     })),
     candidates: context.candidates,
     existingClaims: context.claims,
+    targetClaim: context.targetClaim,
   });
   return {
     kind: "memory",

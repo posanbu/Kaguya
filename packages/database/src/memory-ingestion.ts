@@ -1,13 +1,18 @@
 /**
  * 功能概述：将主动记忆录入保存为可恢复任务，并把经校验的计划原子提交到现有 Memory。
- * 主要职责：submit 按 requestId 幂等排队并固定会话范围；claim 用数据库租约恢复中断；
- * context 提供同会话原文、同范围实体和有效断言；apply 校验引用/证据/歧义后追加来源、
+ * 主要职责：submit 按 requestId 幂等排队并固定全局存储与来源类型；claim 用数据库租约恢复中断；
+ * context 提供同会话原文、全局实体、待修改记录和有效断言；apply 校验引用/证据/歧义后追加来源、
  * 实体、断言和 Wiki 修订，最后写入可核对的结果。retry 复用任务和已冻结计划。
  * 代码库关系：server workflow 调用本仓储；InformationRepository 与 KnowledgeStore
  * 在同一外层事务中工作，失败回滚全部内容。范围锁保护去重与修订，租约防止迟到写入。
- * 输入输出与副作用：所有写入受版本 1 契约约束，管理提交者固定且不接收 Token；
+ * 输入输出与副作用：所有写入受版本 2 契约约束，管理提交者固定且不接收 Token；
  * 自由文本仅是数据。没有独立 persona 配置，不写模板、系统指令或工具权限。
  */
+import {
+  listIngestionRecords,
+  readIngestionRecord,
+  mutateIngestionRecord,
+} from "./memory-ingestion-records.js";
 import { randomUUID } from "node:crypto";
 import {
   MEMORY_INGESTION_VERSION,
@@ -15,7 +20,7 @@ import {
   USER_INPUT_KIND,
   USER_SUBJECT_KIND,
   USER_MEMORY_SCOPE_KIND,
-  WEB_MEMORY_SCOPE_ID,
+  GLOBAL_MEMORY_SCOPE_ID,
   memoryIngestionSubmissionSchema,
   memoryIngestionPlanSchema,
   memoryIngestionJobSchema,
@@ -62,6 +67,7 @@ export interface MemoryIngestionContext {
   history: MemoryIngestionJob[];
   candidates: Candidate[];
   claims: KnowledgeClaim[];
+  targetClaim: KnowledgeClaim | null;
 }
 export interface ClaimedMemoryIngestion {
   job: MemoryIngestionJob;
@@ -72,22 +78,11 @@ export interface ClaimedMemoryIngestion {
 export class PostgresMemoryIngestionStore {
   constructor(private readonly database: SqlDatabase) {}
 
-  async options() {
-    const scopes = await this.database.query<{
-      information_id: string;
-      payload: Record<string, unknown>;
-    }>(
-      "SELECT information_id,payload FROM information_atoms WHERE kind='agent.chat.scope.entity' AND payload->>'scopeMode'='canonical' ORDER BY occurred_at DESC LIMIT 100",
-    );
-    return {
-      scopes: [
-        { informationId: WEB_MEMORY_SCOPE_ID, label: "WebUI 的所有会话" },
-        ...scopes.rows.map((row) => ({
-          informationId: row.information_id,
-          label: scopeLabel(row.payload),
-        })),
-      ],
-    };
+  records(query = "", offset = 0) {
+    return listIngestionRecords(this.database, query, offset);
+  }
+  mutateRecord(input: unknown) {
+    return mutateIngestionRecord(this.database, input);
   }
 
   async submit(input: unknown): Promise<MemoryIngestionJob> {
@@ -122,6 +117,14 @@ export class PostgresMemoryIngestionStore {
         return jobFromRow(existing);
       }
       await ensureScope(tx, parsed.data.scopeInformationId);
+      if (parsed.data.targetClaimId) {
+        const target = await readIngestionRecord(tx, parsed.data.targetClaimId);
+        if (
+          target.record.deleted ||
+          target.record.sourceType !== parsed.data.sourceType
+        )
+          throw new MemoryIngestionError("record_changed", 409);
+      }
       const size = await tx.query<{
         count: number;
         size: number;
@@ -232,7 +235,18 @@ export class PostgresMemoryIngestionStore {
       recordedBefore: cutoff,
       limit: 100,
     });
-    return { job, history, candidates, claims: [...recalled.claims] };
+    const target = job.targetClaimId
+      ? await readIngestionRecord(this.database, job.targetClaimId)
+      : undefined;
+    if (target?.record.deleted)
+      throw new MemoryIngestionError("record_changed", 409);
+    return {
+      job,
+      history,
+      candidates,
+      claims: [...recalled.claims],
+      targetClaim: target?.claim ?? null,
+    };
   }
   async savePlan(claim: ClaimedMemoryIngestion, input: unknown): Promise<void> {
     const parsed = memoryIngestionPlanSchema.safeParse(input);
@@ -300,6 +314,18 @@ export class PostgresMemoryIngestionStore {
       );
       const history = historyRows.rows.map(jobFromRow);
       const candidates = await readCandidates(tx, job.scopeInformationId);
+      const target = job.targetClaimId
+        ? await readIngestionRecord(tx, job.targetClaimId)
+        : undefined;
+      if (target) {
+        if (target.record.deleted)
+          throw new MemoryIngestionError("record_changed", 409);
+        if (
+          plan.claims.length > 1 ||
+          plan.claims.some((c) => c.supersedesClaimId !== job.targetClaimId)
+        )
+          throw new MemoryIngestionError("invalid_plan");
+      }
       validateEvidence(plan, history);
       const questions = [...plan.questions];
       const ambiguities: MemoryIngestionJob["ambiguities"] = [];
@@ -308,6 +334,12 @@ export class PostgresMemoryIngestionStore {
           .flatMap((j) => j.resolutions)
           .map((r) => [normalize(r.label), r.entityInformationId]),
       );
+      // 点击具体记录已经明确选中了人物，不能因全局同名候选再次询问身份。
+      if (target)
+        bindings.set(
+          normalize(target.record.subjectLabel),
+          target.record.subjectInformationId,
+        );
       const resolved = new Map<
         string,
         { id: string; label: string; created: boolean }
@@ -454,6 +486,25 @@ export class PostgresMemoryIngestionStore {
         const value = object
           ? `${item.value} [entity:${object.id}]`
           : item.value;
+        // 删除与 AI 计划提交共用 scope 锁。旧原文不能在删除后重新生成同一条记忆；
+        // 用户删除后发送的新指令仍可明确重新录入。
+        const sourceInput = evidence.at(-1)!;
+        const deleted = await tx.query(
+          `SELECT d.claim_id FROM memory_knowledge_claims d
+           JOIN memory_knowledge_claims old ON old.claim_id=d.retracts_id
+           WHERE d.scope_id=$1 AND d.subject_id=$2
+             AND old.input->>'predicate'=$3 AND old.input->>'value'=$4
+             AND d.recorded_at >= $5::timestamptz LIMIT 1`,
+          [
+            job.scopeInformationId,
+            subject.id,
+            item.predicate,
+            value,
+            sourceInput.createdAt,
+          ],
+        );
+        if (deleted.rows.length)
+          throw new MemoryIngestionError("record_changed", 409);
         const existingRows = await tx.query<{ input: KnowledgeClaim }>(
           "SELECT c.input FROM memory_knowledge_claims c WHERE scope_id=$1 AND subject_id=$2 AND c.invalidated_at IS NULL AND c.retracts_id IS NULL AND c.input->>'predicate'=$3 AND NOT EXISTS(SELECT 1 FROM memory_knowledge_claims n WHERE n.supersedes_id=c.claim_id OR n.retracts_id=c.claim_id) ORDER BY recorded_at DESC LIMIT 100",
           [job.scopeInformationId, subject.id, item.predicate],
@@ -494,7 +545,6 @@ export class PostgresMemoryIngestionStore {
           continue;
         }
         const claimId = `user-claim:${job.requestId}:${index}`;
-        const sourceInput = evidence.at(-1)!;
         const sourceId = `user-statement:${job.requestId}:${index}`;
         const originalSourceInformationId = sourceIds.get(
           sourceInput.requestId,
@@ -595,7 +645,7 @@ export class PostgresMemoryIngestionStore {
           expectedVersion: page.version,
           expectedDirtyVersion: page.dirtyVersion,
           evidenceCutoff: { occurredBefore: cutoff, recordedBefore: cutoff },
-          generatorVersion: "user-ingestion-v1",
+          generatorVersion: "user-ingestion-v2",
           sections,
         });
       }
@@ -691,7 +741,7 @@ async function appendAtom(
   );
 }
 async function ensureScope(tx: SqlTransaction, scopeId: string) {
-  if (scopeId === WEB_MEMORY_SCOPE_ID) {
+  if (scopeId === GLOBAL_MEMORY_SCOPE_ID) {
     const repository = new InformationRepository(transactionDatabase(tx));
     // 并发首次创建由全局会话初始化锁序列化，避免 duplicate atom 异常破坏事务。
     await tx.query(
@@ -716,27 +766,7 @@ async function ensureScope(tx: SqlTransaction, scopeId: string) {
       destination: { kind: "web" as const },
     };
   }
-  const row = await tx.query<{
-    kind: string;
-    payload: Record<string, unknown>;
-  }>("SELECT kind,payload FROM information_atoms WHERE information_id=$1", [
-    scopeId,
-  ]);
-  const atom = row.rows[0];
-  if (
-    atom?.kind !== "agent.chat.scope.entity" ||
-    atom.payload.scopeMode !== "canonical"
-  )
-    throw new MemoryIngestionError("invalid_scope");
-  return userStatementPayloadSchema.shape.scope.parse({
-    platform: atom.payload.platform,
-    adapterId: atom.payload.adapterId,
-    destination: atom.payload.destination,
-  });
-}
-function scopeLabel(scope: Record<string, unknown>) {
-  const destination = scope.destination as Record<string, unknown>;
-  return `${scope.platform} · ${destination.kind === "group" ? "群 " + destination.groupId : "私聊 " + destination.userId} · ${scope.adapterId}`;
+  throw new MemoryIngestionError("invalid_scope");
 }
 async function readCandidates(
   tx: SqlTransaction,
