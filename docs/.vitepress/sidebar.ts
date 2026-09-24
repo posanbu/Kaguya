@@ -1,6 +1,7 @@
 /**
  * 功能概述：按用户任务组织文档导航，将安装和配置与开发资料分开。
  * 主要职责：userGuide 提供入门、配置和日常使用目录；developerGuide 收纳架构、接口与设计资料。
+ * Web 检视调研分组汇集八个研究专题，明确它们是决策资料而非已接入能力。
  * 代码库关系：config.mts 导入 sidebar，由 VitePress 按页面路径选择对应目录；新增页面在这里登记。
  * 输入输出与副作用：导出静态路由映射，没有运行期 I/O；旧 guide 调度页仍可访问并指向开发文档。
  */
@@ -54,6 +55,24 @@ const developerGuide: DefaultTheme.SidebarItem[] = [
       { text: "周期维护调度", link: "/developers/cadence" },
       { text: "参与贡献", link: "/developers/contributing" },
       { text: "文档编写规范", link: "/developers/markdown-features" },
+    ],
+  },
+  {
+    text: "Web 检视调研",
+    collapsed: true,
+    items: [
+      { text: "范围与结论总览", link: "/developers/research/" },
+      {
+        text: "数据库与领域检视",
+        link: "/developers/research/data-inspection",
+      },
+      { text: "HTTP 与认证", link: "/developers/research/http-auth" },
+      { text: "Server State", link: "/developers/research/server-state" },
+      { text: "路由与导航", link: "/developers/research/routing" },
+      { text: "Inspection Surface", link: "/developers/research/surfaces" },
+      { text: "表格与 Master-detail", link: "/developers/research/tables" },
+      { text: "应用壳层与后台框架", link: "/developers/research/app-shell" },
+      { text: "真实浏览器测试", link: "/developers/research/browser-testing" },
     ],
   },
   {
