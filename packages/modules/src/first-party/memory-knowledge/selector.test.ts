@@ -2,6 +2,7 @@
  * 功能概述：保护规划前知识检索的 canonical 身份、scope 和有界原文旁路。
  * 主要职责：检验数据库角色设定召回、多人预算公平与失败隔离，以及多人同群、未解析/临时身份拒绝、错误检索来源隔离及 knowledge 未启用的空结果。
  * 代码库关系：使用真实 selectKnowledgeMemory 和 heartflowMemorySelector，防止 Core 可读授权被误当作聊天范围授权。
+ * 身份终态样本引用 personContextCompletedInformationKind，与检索器共享事件定义，避免命名空间迁移后样本被过滤。
  * 输入输出与副作用：以冻结 Information 原子驱动只读替身，无网络或数据库。
  */
 import type { InformationSelectorLedger } from "@kaguya/sdk";
@@ -9,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 import { atom, target } from "../message-composer/test-fixtures.js";
 import { heartflowMemorySelector } from "../heartflow/index.js";
 import { selectKnowledgeMemory } from "./selector.js";
+import { personContextCompletedInformationKind } from "../information-kinds.js";
 import { GLOBAL_MEMORY_SCOPE_ID, USER_STATEMENT_KIND } from "@kaguya/schema";
 
 const cutoff = "2026-09-09T00:00:02.000Z";
@@ -33,7 +35,7 @@ function reader(
 ): InformationSelectorLedger {
   return {
     related: vi.fn(async () => [
-      atom("identity", "memory.identity.person.context.completed", {
+      atom("identity", personContextCompletedInformationKind.kind, {
         status: options.status ?? "complete",
         scopeMode: options.scopeMode ?? "canonical",
         scopeInformationId: "scope-1",
@@ -313,7 +315,7 @@ it("retrieves stored character evidence by agent name without copying another pe
 it("uses up to four recent participants and shares evidence slots without starving later speakers", async () => {
   const ledger = reader();
   ledger.related = vi.fn(async ({ from }) => [
-    atom(`identity-${from[0]}`, "agent.person.context.completed", {
+    atom(`identity-${from[0]}`, personContextCompletedInformationKind.kind, {
       status: "complete",
       scopeMode: "canonical",
       scopeInformationId: "scope-1",
