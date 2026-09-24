@@ -1,4 +1,5 @@
 /**
+ * 来源中可选 expressions 保存 QQ 素材元数据，供独立插件消费，不代表图片语义。
  * 功能概述：提供一方 Information kind 共用的非空字符串、消息来源 schema 与受限日志预览。
  * 主要职责：contentPreview 先完整脱敏再按 Unicode 码点截取正文，并转义控制字符；
  * sanitizeLoggedContent 屏蔽连接串、完整 Authorization 凭据和私钥材料，避免截断破坏匹配边界。
@@ -7,7 +8,11 @@
  * 输入输出与副作用：contentLength 始终记录原文字数；原文或脱敏后预览超过 168 码点时
  * contentTruncated 为 true 并添加省略号。脱敏占位符不改变原文字数统计。
  */
-import { platformDestinationSchema, z } from "@kaguya/schema";
+import {
+  qqExpressionSchema,
+  platformDestinationSchema,
+  z,
+} from "@kaguya/schema";
 
 export const nonBlankString = z.string().trim().min(1);
 
@@ -77,6 +82,7 @@ export const messageSourceSchema = z
       .strict()
       .optional(),
     selfId: nonBlankString.optional(),
+    expressions: z.array(qqExpressionSchema).max(8).optional(),
     mentions: z
       .array(
         z.union([

@@ -1,4 +1,5 @@
 /**
+ * 测试夹具显式装配 QQ 表情模板，验证新增模块契约与既有流程兼容。
  * 模型审批覆盖 Heartflow Planner 与 Expression 的 light，以及 Composer 的 heavy，恢复屏障仍由 Runtime 统一管理。
  * 测试显式注入统一文件模板，避免 Planner 或 Expression 绕过 default/local 选择。
  * 功能概述：验证 Runtime 生命周期与 durable one-shot scheduler 的装配边界。
@@ -96,6 +97,7 @@ describe("KaguyaRuntime one-shot scheduler lifecycle", () => {
         plannerBootstrapPolicy: testPrompts.plannerBootstrapPolicy,
         memoryEnabled: false,
         expressionTemplates: testPrompts.expression,
+        qqExpressionTemplates: testPrompts.qqExpression,
         agentIdentity: testIdentity,
       }),
       activations: [],
@@ -155,6 +157,7 @@ describe("KaguyaRuntime one-shot scheduler lifecycle", () => {
       plannerBootstrapPolicy: testPrompts.plannerBootstrapPolicy,
       memoryEnabled: false,
       expressionTemplates: testPrompts.expression,
+      qqExpressionTemplates: testPrompts.qqExpression,
       agentIdentity: testIdentity,
     });
     const runtime = new KaguyaRuntime({
@@ -166,6 +169,13 @@ describe("KaguyaRuntime one-shot scheduler lifecycle", () => {
       ),
       modelTask: {
         approvals: [
+          {
+            activation: {
+              instanceId: "qq-expression.default",
+              definitionId: "plugin.qq-expression",
+            },
+            selectionPolicy: { tier: "light" },
+          },
           {
             activation: {
               instanceId: "memory.expression.default",

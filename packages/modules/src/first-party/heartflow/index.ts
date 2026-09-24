@@ -1,4 +1,5 @@
 /**
+ * 获胜计划的可选 tone 传给消息意图，供独立表情插件判断语境，不改变参与门控。
  * 声明人工记忆来源 Kind 为可消费上下文，正常召回冻结后交给 Planner。
  * manifest 声明 Planner 模板；调用 compilePlannerPrompt 时传入装配阶段加载的 default/local 文本，不再使用代码内默认值。
  * settings schema 的公开中文元数据供管理表单使用，运行时与保存共用约束。
@@ -1880,6 +1881,7 @@ function resolveMessageComposition(
     ),
     topic: composition.topic,
     replyAct: composition.replyAct,
+    ...("tone" in composition ? { tone: composition.tone } : {}),
     ...("guidance" in composition ? { guidance: composition.guidance } : {}),
   };
 }

@@ -1,4 +1,5 @@
 /**
+ * 声明独立 QQ 表情推断与选择模板，确保文件覆盖、管理界面和运行时使用相同契约。
  * memoryIngestionTemplateDeclaration 只声明通用整理规则，用户原文始终在输入数据通道中提供。
  * 功能概述：第一方模板的唯一静态契约，显式声明归属、变量与组成关系。
  * 主要职责：messageTemplateDeclarations/plannerTemplateDeclaration/personFactTemplateDeclaration
@@ -281,6 +282,36 @@ export const expressionModulePromptTemplates: readonly ModulePromptTemplateDefin
     ...item,
     mutability: "editable" as const,
   }));
+export const qqExpressionTemplateDeclarations = [
+  {
+    key: "learn",
+    templateId: "qq-expression.learn",
+    fileStem: "qq-expression.learn",
+    name: "qq-expression-learn",
+    displayName: "QQ 表情语义推断",
+    description: "仅从聊天上下文推断表情用法。",
+    allowedVariables: ["context"],
+    allowedPartials: [],
+    composes: [],
+  },
+  {
+    key: "select",
+    templateId: "qq-expression.select",
+    fileStem: "qq-expression.select",
+    name: "qq-expression-select",
+    displayName: "QQ 表情选择",
+    description: "按规划语境选择至多一个表情。",
+    allowedVariables: ["context"],
+    allowedPartials: [],
+    composes: [],
+  },
+] as const;
+export const qqExpressionModulePromptTemplates: readonly ModulePromptTemplateDefinition[] =
+  qqExpressionTemplateDeclarations.map((d) => ({
+    ...d,
+    mutability: "editable" as const,
+  }));
+
 export const plannerTemplateDeclaration: ModulePromptTemplateDefinition = {
   mutability: "editable",
   templateId: "heartflow.planner",
@@ -400,4 +431,5 @@ export const firstPartyPromptTemplateGroups = [
   ],
   [personFactTemplateDeclaration],
   expressionModulePromptTemplates,
+  qqExpressionModulePromptTemplates,
 ] as const;

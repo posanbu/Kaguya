@@ -1,4 +1,5 @@
 /**
+ * 补充 QQ 插件在真实 Runtime 中的收藏、发送回执、语境门控和重启限频验证。
  * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * 兼容 #136 的 agent.turn.plan 与 message/wait/silent 契约，仅增强已合并的单一 Planner 链。
  * 测试显式批准合成 QQ 目标，Runtime 未注入策略时默认拒绝非 Web 出站。
@@ -51,7 +52,11 @@ const speak = {
 const silent = { action: "silent", reason: "no-response-needed" };
 const wait = { action: "wait", reason: "await-more-context", waitSeconds: 5 };
 
-async function fixture(outputs: unknown[]) {
+async function fixture(outputs: unknown[], qqExpression = false) {
+  let expressionChoice: {
+    assetInformationId: string | null;
+    emoji: string | null;
+  } = { assetInformationId: null, emoji: "😂" };
   const database = await createTestingDatabase();
   let now = Date.parse("2026-09-12T12:00:00.000Z");
   const requests: Record<string, any>[] = [];
@@ -60,15 +65,36 @@ async function fixture(outputs: unknown[]) {
     const request = JSON.parse(String(init?.body));
     const promptText = JSON.stringify(request.messages);
     const learning = promptText.includes("归纳这批真人消息");
+    const qqSelecting = promptText.includes("已判定幽默/友好调侃");
+    const qqLearning = promptText.includes("你负责从文字上下文推断一个");
+    const qqSourceText = request.messages
+      .map((m: { content: unknown }) =>
+        typeof m.content === "string" ? m.content : JSON.stringify(m.content),
+      )
+      .join("\n");
     const selecting = promptText.includes("依据冻结回合和已获胜的消息意图");
-    (learning || selecting ? backgroundRequests : requests).push(request);
-    const pending = learning
-      ? { patterns: [] }
-      : selecting
-        ? { habitIds: [] }
-        : request.model === "deepseek-light"
-          ? (outputs.shift() ?? silent)
-          : "reply-body";
+    (learning || selecting || qqSelecting || qqLearning
+      ? backgroundRequests
+      : requests
+    ).push(request);
+    const pending = qqSelecting
+      ? expressionChoice
+      : qqLearning
+        ? {
+            meaning: "好笑的无奈",
+            usage: "友好自嘲",
+            confidence: 0.95,
+            evidenceIds: [
+              qqSourceText.match(/"id":"([^"]+)"/u)?.[1] ?? "missing",
+            ],
+          }
+        : learning
+          ? { patterns: [] }
+          : selecting
+            ? { habitIds: [] }
+            : request.model === "deepseek-light"
+              ? (outputs.shift() ?? silent)
+              : "reply-body";
     const output = typeof pending === "function" ? await pending() : pending;
     if (output === "HTTP_FAILURE")
       return new Response("synthetic-provider-error", { status: 400 });
@@ -106,7 +132,22 @@ async function fixture(outputs: unknown[]) {
       modelId: `deepseek-${modelTier}`,
       model: provider.chatModel(`deepseek-${modelTier}`),
     }),
-    { moduleConfigs: createFirstPartyModuleConfigDefaults("test") },
+    {
+      moduleConfigs: [
+        ...createFirstPartyModuleConfigDefaults("test"),
+        ...(qqExpression
+          ? [
+              {
+                version: 1 as const,
+                instanceId: "qq-expression.default",
+                definitionId: "plugin.qq-expression",
+                enabled: true,
+                settings: { cooldownSeconds: 60, minMessagesBetween: 3 },
+              },
+            ]
+          : []),
+      ],
+    },
   );
   const delivered = vi.fn(async (target: PlatformInboundMessage["target"]) => ({
     ok: true as const,
@@ -179,9 +220,14 @@ async function fixture(outputs: unknown[]) {
     ...extra,
   });
   return {
+    waitForDeliveries: (count: number) =>
+      waitForPersistence(() => expect(delivered).toHaveBeenCalledTimes(count)),
     database,
     requests,
     backgroundRequests,
+    useExpression(choice: typeof expressionChoice) {
+      expressionChoice = choice;
+    },
     delivered,
     atoms,
     settle,
@@ -926,3 +972,125 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
     expect(f.delivered).not.toHaveBeenCalled();
   });
 });
+
+describe("independent QQ expression plugin through real Runtime", () => {
+  const humorous = {
+    ...speak,
+    composition: { ...speak.composition, tone: "humorous" },
+  };
+  it("limits Unicode emoji across restart and preserves the ordinary reply pipeline", async () => {
+    const f = await fixture(
+      Array.from({ length: 8 }, () => humorous),
+      true,
+    );
+    for (let i = 0; i < 4; i++) {
+      f.setTime(1);
+      await f.submit(f.message(`emoji-${i}`));
+      await f.waitForDeliveries(i + 1);
+      await f.settle();
+    }
+    expect(
+      (await f.atoms()).filter((a) =>
+        /consumer.failed|execution.exhausted/.test(a.kind),
+      ),
+    ).toEqual([]);
+    const contents = () =>
+      f.delivered.mock.calls.map(
+        (call) => (call as unknown as [unknown, { text: string }])[1].text,
+      );
+    expect(contents()).toEqual([
+      "reply-body",
+      "reply-body",
+      "reply-body",
+      "reply-body 😂",
+    ]);
+    // 新消息只推进 1 毫秒，保证先后顺序且仍在冷却窗口内；重启不得归还额度。
+    // 冷却到期边界由纯策略测试控制，不混入真实 Scheduler 的到期触发。
+    await f.restart();
+    for (let i = 4; i < 8; i++) {
+      f.setTime(1);
+      await f.submit(f.message(`emoji-${i}`));
+      await f.waitForDeliveries(i + 1);
+      await f.settle();
+    }
+    expect(contents().slice(4)).toEqual(
+      Array.from({ length: 4 }, () => "reply-body"),
+    );
+    expect(
+      (await f.atoms()).filter((a) => a.kind === "core.delivery.delivered"),
+    ).toHaveLength(8);
+  }, 30000); // 八轮真实持久化与重启，单个等待仍沿用 8 秒状态预算。
+  it("sends a collected QQ face only in a humorous plan and falls back on neutral plans", async () => {
+    const f = await fixture(
+      [humorous, humorous, humorous, humorous, speak],
+      true,
+    );
+    await f.submit(
+      f.message("face-source", {
+        text: "哈哈这次又翻车了[face:14]",
+        expressions: [{ kind: "face", id: "14" }],
+      }),
+    );
+    await f.settle();
+    const asset = (await f.atoms()).find(
+      (a) => a.kind === "plugin.qq-expression.collected",
+    )!;
+    expect(asset).toBeDefined();
+    expect(
+      (await f.atoms()).find((a) => a.kind === "plugin.qq-expression.learned")
+        ?.payload.confidence,
+    ).toBe(0.95);
+    f.useExpression({ assetInformationId: asset.informationId, emoji: null });
+    for (let i = 1; i < 5; i++) {
+      f.setTime(1);
+      await f.submit(f.message(`face-${i}`));
+      await f.waitForDeliveries(i + 1);
+      await f.settle();
+    }
+    expect(
+      (f.delivered.mock.calls[3] as unknown as [unknown, unknown])[1],
+    ).toMatchObject({
+      text: "reply-body",
+      expression: { kind: "face", id: "14" },
+    });
+    expect(
+      (f.delivered.mock.calls[4] as unknown as [unknown, unknown])[1],
+    ).toEqual({ kind: "text", text: "reply-body" });
+    expect(
+      (await f.atoms()).filter((a) => a.kind === "core.delivery.delivered"),
+    ).toHaveLength(5);
+  });
+});
+
+it("keeps normal delivery alive when the optional expression model fails", async () => {
+  const humorous = {
+    ...speak,
+    composition: { ...speak.composition, tone: "humorous" },
+  };
+  const f = await fixture(
+    Array.from({ length: 4 }, () => humorous),
+    true,
+  );
+  f.useExpression("HTTP_FAILURE" as never);
+  for (let i = 0; i < 4; i++) {
+    f.setTime(1);
+    await f.submit(f.message(`optional-failure-${i}`));
+    await f.waitForDeliveries(i + 1);
+    await f.settle();
+  }
+  expect(
+    (f.delivered.mock.calls[3] as unknown as [unknown, unknown])[1],
+  ).toEqual({ kind: "text", text: "reply-body" });
+  const graph = await f.atoms();
+  expect(
+    graph.some(
+      (a) =>
+        a.kind === "core.model.task.failed" &&
+        a.payload.taskId === "plugin.qq-expression.select",
+    ),
+  ).toBe(true);
+  expect(graph.filter((a) => a.kind === "agent.turn.failed")).toHaveLength(0);
+  expect(
+    graph.filter((a) => a.kind === "core.delivery.delivered"),
+  ).toHaveLength(4);
+}, 30000);

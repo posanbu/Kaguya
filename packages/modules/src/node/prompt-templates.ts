@@ -1,4 +1,5 @@
 /**
+ * QQ 表情 learn/select 模板纳入同一 default/local 读取和校验流程。
  * 功能概述：第一方模板的 Node 加载入口，优先读取显式声明的 local 覆盖。
  * 主要职责：loadFirstPartyPromptTemplates 返回消息组、授权消息、Planner、人物事实和表达学习模板并预检整组。
  * 代码库关系：资源存储与编译器共用 prompt-declarations；composition 注入运行模块。
@@ -6,6 +7,8 @@
  */
 import type { MessagePromptTemplates } from "../first-party/message-composer/message-prompt.js";
 import {
+  qqExpressionModulePromptTemplates,
+  qqExpressionTemplateDeclarations,
   expressionModulePromptTemplates,
   expressionTemplateDeclarations,
   authorizedMessageTemplateDeclarations,
@@ -29,6 +32,7 @@ export interface FirstPartyPromptTemplates {
   readonly identityName: string;
   readonly identityAliases: readonly string[];
   readonly identityPersona: string;
+  readonly qqExpression: { readonly learn: string; readonly select: string };
   readonly expression: { readonly learn: string; readonly select: string };
   readonly authorizedMessage: {
     readonly automatic: string;
@@ -69,11 +73,16 @@ export function loadFirstPartyPromptTemplates(
     [personFactTemplateDeclaration],
     options.root,
   );
+  const qqExpression = readPromptResources(
+    qqExpressionModulePromptTemplates,
+    options.root,
+  );
   const expression = readPromptResources(
     expressionModulePromptTemplates,
     options.root,
   );
   for (const [declarations, values] of [
+    [qqExpressionModulePromptTemplates, qqExpression],
     [expressionModulePromptTemplates, expression],
     [messageModulePromptTemplates, messages],
     [
@@ -115,6 +124,12 @@ export function loadFirstPartyPromptTemplates(
   if (identityAliases.includes(identityName))
     throw new Error("Agent identity aliases must differ from the name");
   return {
+    qqExpression: Object.fromEntries(
+      qqExpressionTemplateDeclarations.map((d) => [
+        d.key,
+        qqExpression.find((v) => v.templateId === d.templateId)!.content,
+      ]),
+    ) as unknown as FirstPartyPromptTemplates["qqExpression"],
     identityName,
     identityAliases,
     identityPersona: identity[2]!.content,

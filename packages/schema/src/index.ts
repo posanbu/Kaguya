@@ -1,4 +1,5 @@
 /**
+ * QQ 表情使用独立结构化素材契约，出站保留原 text/reply 兼容性；图片只允许已缓存 base64。
  * memory-ingestion.ts 导出受约束的录入计划、进度及带原文引用的来源 DTO。
  * module-templates.ts 提供未渲染模板管理 DTO，避免与 CompiledPrompt 混用。
  * module-settings.ts 导出全局模块配置安全 DTO，供管理端与通用表单共同校验。
@@ -69,8 +70,60 @@ export const platformDestinationSchema = z
       : { kind: "web", conversationId: destination.conversationId };
   });
 
+/** QQ 素材仅传输结构，不承诺图片语义；持久化图片由插件保存为受限 base64。 */
+const marketFaceSchema = z
+  .object({
+    kind: z.literal("mface"),
+    id: z
+      .string()
+      .regex(/^[a-zA-Z0-9_-]+$/u)
+      .max(128),
+    packageId: z.string().regex(/^\d{1,15}$/u),
+    key: z
+      .string()
+      .regex(/^[a-zA-Z0-9_-]+$/u)
+      .max(128),
+  })
+  .strict();
+export const qqExpressionSchema = z.discriminatedUnion("kind", [
+  marketFaceSchema,
+  z
+    .object({ kind: z.literal("face"), id: z.string().regex(/^\d{1,6}$/u) })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("sticker"),
+      id: z.string().min(1).max(256),
+      url: z.url().max(4096),
+    })
+    .strict(),
+]);
+export type QqExpression = z.infer<typeof qqExpressionSchema>;
+export const outboundExpressionSchema = z.discriminatedUnion("kind", [
+  marketFaceSchema,
+  z
+    .object({ kind: z.literal("face"), id: z.string().regex(/^\d{1,6}$/u) })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("sticker"),
+      file: z
+        .string()
+        .regex(/^base64:\/\/[A-Za-z0-9+/]+=*$/u)
+        .max(1400000),
+    })
+    .strict(),
+]);
+export type OutboundExpression = z.infer<typeof outboundExpressionSchema>;
+
 export const outboundMessageContentSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("text"), text: z.string().min(1) }).strict(),
+  z
+    .object({
+      kind: z.literal("text"),
+      text: z.string().min(1),
+      expression: outboundExpressionSchema.optional(),
+    })
+    .strict(),
   z
     .object({
       kind: z.literal("reply"),
@@ -78,11 +131,11 @@ export const outboundMessageContentSchema = z.discriminatedUnion("kind", [
       text: z.string().min(1),
     })
     .strict(),
-]);
+]) as z.ZodType<OutboundMessageContent>;
 
-export type OutboundMessageContent = z.infer<
-  typeof outboundMessageContentSchema
->;
+export type OutboundMessageContent =
+  | { kind: "text"; text: string; expression?: OutboundExpression }
+  | { kind: "reply"; text: string; replyToPlatformMessageId: string };
 
 export const promptVariableSchema = z.object({
   name: z.string().regex(/^[a-z][a-z0-9_]*$/u),

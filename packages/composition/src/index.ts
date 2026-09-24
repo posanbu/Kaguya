@@ -1,4 +1,5 @@
 /**
+ * 按 QQ 表情实例实际开关装配草稿处理器并批准其 light 模型任务，非 QQ 和禁用路径保持原行为。
  * 模板加载器统一选择所有模块的 default/local 正文；Catalog 注入 Planner、Composer 和 Expression，授权正文渲染器注入 Runtime。
  * 功能概述：作为 Server 与 Demo 共用的唯一 Runtime Composition 边界，组装业务 Catalog 与宿主批准的 Model Task 能力。
  * Memory 开启时加入缺省 writeback activation，关闭时移除写回实例；尊重已配置实例的禁用状态。
@@ -95,6 +96,7 @@ export function createMessageCatalog(
   memoryKnowledgeEnabled = false,
   promptTemplates = loadFirstPartyPromptTemplates(),
   memoryEnabled = false,
+  qqExpressionEnabled = false,
 ) {
   const agentIdentity: AgentIdentity = {
     name: promptTemplates.identityName,
@@ -117,6 +119,8 @@ export function createMessageCatalog(
     plannerBootstrapPolicy: promptTemplates.plannerBootstrapPolicy,
     plannerPlatformPolicies: promptTemplates.plannerPlatformPolicies,
     expressionTemplates: promptTemplates.expression,
+    qqExpressionTemplates: promptTemplates.qqExpression,
+    qqExpressionEnabled,
     agentIdentity,
     memoryEnabled,
     memoryKnowledgeEnabled,
@@ -142,6 +146,9 @@ export function createMessageComposition(
     !!options.memoryEnabled && !!options.memoryKnowledgeEnabled,
     promptTemplates,
     !!options.memoryEnabled,
+    options.moduleConfigs.some(
+      (c) => c.definitionId === "plugin.qq-expression" && c.enabled,
+    ),
   );
   const memoryEnabled = options.memoryEnabled ?? false;
   const knowledgeEnabled =
@@ -229,6 +236,7 @@ export function createMessageComposition(
           "agent.message-composer",
           "agent.heartflow.online",
           "memory.expression",
+          "plugin.qq-expression",
         ].includes(activation.definitionId),
       )
       .map((activation) => ({

@@ -1,4 +1,5 @@
 /**
+ * ModuleHost 与 Core 共用可控时钟，模块派生事实和限频测试不会混用墙钟。
  * 功能概述：认知模块测试的真实 PGlite、Core 与 ModuleHost 夹具，验证引用校验、幂等槽与调度持久化。
  * cognitiveFixture 装配显式模块和时钟；模型替身只替换外部生成，结果仍通过 Core 持久化去重。
  * restart 关闭并重建宿主和 Core，保留数据库；close 由测试 finally 调用，不连接真实模型或平台。
@@ -144,6 +145,7 @@ export async function cognitiveFixture(
       cancel: async () => undefined,
     };
     host = new ModuleHost({
+      now: () => new Date(now),
       core,
       catalog,
       capabilities: [

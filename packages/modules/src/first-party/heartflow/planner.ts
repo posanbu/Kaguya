@@ -1,4 +1,5 @@
 /**
+ * composition 兼容可选 tone（neutral/humorous/teasing），旧快照继续有效；缺失时表情插件保守禁用。
  * memory 变量携带来源类型和原文 ID，人工录入与运行时聊天观测在规划输入中可区分。
  * context_bootstrap 显式说明本轮证据缺口，避免把身份解析或角色设定误当作既有关系。
  * 默认源码及允许变量来自 prompt-declarations；可传入装配阶段预检的本地模板。
@@ -65,6 +66,19 @@ const plannerCompositionShape = {
   replyAct: z.string().trim().min(1).max(120),
 };
 export const plannerCompositionSchema = z.union([
+  z
+    .object({
+      ...plannerCompositionShape,
+      tone: z.enum(["neutral", "humorous", "teasing"]),
+    })
+    .strict(),
+  z
+    .object({
+      ...plannerCompositionShape,
+      tone: z.enum(["neutral", "humorous", "teasing"]),
+      guidance: z.string().trim().min(1).max(500),
+    })
+    .strict(),
   z.object(plannerCompositionShape).strict(),
   z
     .object({
@@ -126,6 +140,8 @@ export function plannerActionSchemaForTurn(turn: {
   const composition = z.union([
     plannerCompositionSchema.options[0].extend({ focusInputIndexes }),
     plannerCompositionSchema.options[1].extend({ focusInputIndexes }),
+    plannerCompositionSchema.options[2].extend({ focusInputIndexes }),
+    plannerCompositionSchema.options[3].extend({ focusInputIndexes }),
   ]);
   const message = plannerActionSchema.options[0].extend({ composition });
   return turn.attempt < turn.totalWaitBudget

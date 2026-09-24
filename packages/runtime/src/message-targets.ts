@@ -1,4 +1,5 @@
 /**
+ * 解析 message composition 时保留可选 tone；跨目标授权和正文确认流程保持原有边界。
  * 功能概述：管理跨会话目录解析、短期候选、目标授权和正文确认，所有批准状态只由可信宿主持有。
  * 五分钟缓存随查询/路由清理，活跃目标授权数量有界；
  * conversation 冻结双投影并限制到当前 adapter 和本轮人物/目标；route 从持久化 Planner 决策创建自动授权，stage 绑定唯一正文。
@@ -1038,6 +1039,7 @@ function resolveComposition(
     ),
     topic: composition.topic,
     replyAct: composition.replyAct,
+    ...("tone" in composition ? { tone: composition.tone } : {}),
     ...("guidance" in composition ? { guidance: composition.guidance } : {}),
   };
 }

@@ -1,4 +1,5 @@
 /**
+ * 兼容 CQ/数组的 face、mface 和表情图片，保留可复用素材；出站显式编码表情段，普通文本不解析为动作。
  * 功能概述：在 OneBot wire event/action 与 Kaguya 平台消息契约之间做双向转换，
  * adapter 层只保留外部身份和内容，不产生 Core identity。
  * 主要职责：`normalizeOneBotMessageEvent` 校验 message event、过滤机器人自身、
@@ -9,7 +10,12 @@
  * 输入输出与副作用：转换函数无 I/O；非法/空白/不支持事件返回 `undefined`，
  * 缺失外部时间时才调用注入的 `now`，raw 仅留在边界值中。
  */
-import { z, type OutboundMessageContent } from "@kaguya/schema";
+import {
+  z,
+  qqExpressionSchema,
+  type QqExpression,
+  type OutboundMessageContent,
+} from "@kaguya/schema";
 
 import type {
   PlatformInboundMessage,
@@ -102,7 +108,12 @@ export function normalizeOneBotMessageEvent(
         : new Date(event.time * 1000).toISOString(),
     text,
     mentions: normalizedMessage.mentions,
-    ...(normalizedMessage.replyTo ? { replyTo: normalizedMessage.replyTo } : {}),
+    ...(normalizedMessage.expressions.length
+      ? { expressions: normalizedMessage.expressions }
+      : {}),
+    ...(normalizedMessage.replyTo
+      ? { replyTo: normalizedMessage.replyTo }
+      : {}),
     target,
     sender: senderFor(event.sender, userId),
     raw: input as Record<string, unknown>,
@@ -114,7 +125,7 @@ export function buildOneBotSendAction(
   content: string | OutboundMessageContent,
   echo: string,
 ): OneBotActionRequest {
-  const normalized =
+  const normalized: OutboundMessageContent =
     typeof content === "string"
       ? ({ kind: "text", text: content } as const)
       : content;
@@ -128,6 +139,26 @@ export function buildOneBotSendAction(
         ]
       : []),
     { type: "text", data: { text: normalized.text } },
+    ...(normalized.kind === "text" && normalized.expression
+      ? [
+          normalized.expression.kind === "mface"
+            ? {
+                type: "mface",
+                data: {
+                  emoji_id: normalized.expression.id,
+                  emoji_package_id: Number(normalized.expression.packageId),
+                  summary: "[表情]",
+                  key: normalized.expression.key,
+                },
+              }
+            : normalized.expression.kind === "face"
+              ? { type: "face", data: { id: normalized.expression.id } }
+              : {
+                  type: "image",
+                  data: { file: normalized.expression.file, sub_type: 1 },
+                },
+        ]
+      : []),
   ];
   if (target.kind === "private") {
     return {
@@ -160,17 +191,60 @@ function normalizeMessage(
   message: string | readonly ParsedOneBotMessageSegment[],
 ): {
   readonly text: string;
+  readonly expressions: readonly QqExpression[];
   readonly mentions: readonly PlatformMessageMention[];
   readonly replyTo?: { readonly platformMessageId: string };
 } {
   const mentions: PlatformMessageMention[] = [];
-  const reply = typeof message === "string" ? undefined : message.find((segment) => segment.type === "reply");
-  const replyTo = reply === undefined ? undefined : normalizeOptionalText(reply.data?.id);
+  // CQ 字符串先按 wire 结构分段；转义只解一次，正文中的转义 CQ 不会成为媒体。
+  if (typeof message === "string") message = parseCqSegments(message);
+  const expressions = message
+    .flatMap((segment): QqExpression[] => {
+      const data = segment.data ?? {};
+      const candidate =
+        segment.type === "mface"
+          ? {
+              kind: "mface",
+              id: String(data.emoji_id ?? ""),
+              packageId: String(data.emoji_package_id ?? ""),
+              key: data.key,
+            }
+          : segment.type === "face"
+            ? { kind: "face", id: String(data.id ?? "") }
+            : segment.type === "image" &&
+                (String(data.sub_type) === "1" || data.file === "marketface")
+              ? {
+                  kind: "sticker",
+                  id: String(
+                    data.file_unique ||
+                      (data.file !== "marketface" ? data.file : "") ||
+                      data.file_id ||
+                      data.url ||
+                      "",
+                  ),
+                  url: data.url,
+                }
+              : undefined;
+      const parsed = qqExpressionSchema.safeParse(candidate);
+      return parsed.success ? [parsed.data] : [];
+    })
+    .slice(0, 8);
+  const reply =
+    typeof message === "string"
+      ? undefined
+      : message.find((segment) => segment.type === "reply");
+  const replyTo =
+    reply === undefined ? undefined : normalizeOptionalText(reply.data?.id);
   const text =
     typeof message === "string"
       ? normalizeStringMessage(message, mentions)
       : message.map((segment) => segmentToText(segment, mentions)).join("");
-  return { text, mentions, ...(replyTo ? { replyTo: { platformMessageId: replyTo } } : {}) };
+  return {
+    text,
+    mentions,
+    expressions,
+    ...(replyTo ? { replyTo: { platformMessageId: replyTo } } : {}),
+  };
 }
 
 function segmentToText(
@@ -249,4 +323,37 @@ function normalizeOptionalText(value: unknown): string | undefined {
   if (typeof value !== "string" && typeof value !== "number") return undefined;
   const normalized = String(value).trim();
   return normalized || undefined;
+}
+
+/** OneBot CQ 数组/字符串使用同一正规化入口，拒绝将转义文字作为动作执行。 */
+function parseCqSegments(message: string): ParsedOneBotMessageSegment[] {
+  const decode = (s: string) =>
+    s
+      .replace(/&#44;/gu, ",")
+      .replace(/&#91;/gu, "[")
+      .replace(/&#93;/gu, "]")
+      .replace(/&amp;/gu, "&");
+  const segments: ParsedOneBotMessageSegment[] = [];
+  let cursor = 0;
+  for (const match of message.matchAll(/\[CQ:([a-z_]+)((?:,[^\]]*)?)\]/gu)) {
+    if (match.index > cursor)
+      segments.push({
+        type: "text",
+        data: { text: decode(message.slice(cursor, match.index)) },
+      });
+    const data: Record<string, unknown> = {};
+    for (const field of match[2]!.split(",").slice(1)) {
+      const split = field.indexOf("=");
+      if (split > 0)
+        data[field.slice(0, split)] = decode(field.slice(split + 1));
+    }
+    segments.push({ type: match[1]!, data });
+    cursor = match.index + match[0].length;
+  }
+  if (cursor < message.length)
+    segments.push({
+      type: "text",
+      data: { text: decode(message.slice(cursor)) },
+    });
+  return segments;
 }
