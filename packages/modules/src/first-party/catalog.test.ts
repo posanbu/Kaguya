@@ -1,4 +1,5 @@
 /**
+ * 测试夹具显式装配 QQ 表情模板，验证新增模块契约与既有流程兼容。
  * 测试显式注入统一文件模板，避免 Planner 或 Expression 绕过 default/local 选择。
  * 功能概述：验证 first-party Catalog 默认配置及激活边界。
  * 主要职责：catalog fixture 注入宿主能力与共享 kind，测试八个默认模块、严格 modelTier 设置、
@@ -70,6 +71,7 @@ function catalog() {
     plannerBootstrapPolicy: testPrompts.plannerBootstrapPolicy,
     memoryEnabled: false,
     expressionTemplates: testPrompts.expression,
+    qqExpressionTemplates: testPrompts.qqExpression,
     agentIdentity: testIdentity,
   });
 }
@@ -82,7 +84,7 @@ describe("first-party module configuration", () => {
         .flatMap((d) => [...d.manifest.produces, ...d.manifest.consumes])
         .map((k) => k.kind),
     );
-    expect(definitions).toHaveLength(12);
+    expect(definitions).toHaveLength(13);
     for (const { manifest } of definitions) {
       expect(manifest.inspection?.mechanism.length).toBeGreaterThan(0);
       expect(manifest.inspection?.views.length).toBeGreaterThan(0);
@@ -113,14 +115,14 @@ describe("first-party module configuration", () => {
       }
     }
   });
-  it("materializes eight complete v1 defaults and activates enabled instances", () => {
+  it("materializes nine complete v1 defaults and activates enabled instances", () => {
     const defaults = createFirstPartyModuleConfigDefaults("production");
-    expect(defaults).toHaveLength(8);
+    expect(defaults).toHaveLength(9);
     expect(
       defaults.every(({ version, enabled }) => version === 1 && enabled),
     ).toBe(true);
     expect(createFirstPartyModuleActivations(catalog(), defaults)).toHaveLength(
-      8,
+      9,
     );
   });
 

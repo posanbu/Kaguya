@@ -1,4 +1,5 @@
 /**
+ * expressions 是可选 QQ 素材元数据；其他平台无需提供，不包含视觉识别结果。
  * 功能概述：定义平台 adapter 与 Core ingress 之间的最小结构契约，
  * 使 Web、NapCat 和 Runtime 只共享正规化内容、外部平台身份与接收回执。
  * 主要职责：`PlatformInboundMessage` 保留 adapter/platform、外部 message ID、
@@ -11,6 +12,7 @@
  * 不是 Core identity，且契约中不存在 adapter 自造的跟踪身份。
  */
 import type {
+  QqExpression,
   InformationId,
   OutboundMessageContent,
   PlatformDestination,
@@ -41,6 +43,8 @@ export interface PlatformInboundMessage {
   readonly platformMessageId: string;
   readonly occurredAt: string;
   readonly text: string;
+  /** 可选结构化 QQ 表情素材；非 QQ 平台无需提供。 */
+  readonly expressions?: readonly QqExpression[];
   readonly mentions: readonly PlatformMessageMention[];
   readonly replyTo?: PlatformMessageReplyTo;
   readonly target: PlatformMessageTarget;

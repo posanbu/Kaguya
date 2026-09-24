@@ -1,4 +1,5 @@
 /**
+ * QQ 表情独立进入 Catalog 和生产默认配置，显式关闭后不安装 Composer 草稿处理路径。
  * 功能概述：集中显式导入 first-party 模块，提供可被 composition root 选择和合并的 Catalog。
  * 主要职责：createFirstPartyModuleCatalog 接收宿主 Model Task token 和共享 completed kind，构造身份、时机与消息合成定义；
  * createFirstPartyModuleConfigDefaults 提供首次落盘模板，createFirstPartyModuleActivations
@@ -10,6 +11,7 @@
  * 模板正文由 composition 分别注入 Composer、Planner 与 Expression，默认值与本地覆盖统一在 Node 加载器选择。
  * 输入输出与副作用：纯内存定义，没有 timer、环境读取、连接、全局注册或动态目录扫描。
  */
+import { createQqExpressionModule } from "./qq-expression/index.js";
 import {
   defineInformationModuleCatalog,
   type InformationModuleCatalog,
@@ -45,9 +47,15 @@ export function createFirstPartyModuleCatalog<
   options: CreateMessageComposerModuleOptions<P> &
     CreateHeartflowModuleOptions & {
       readonly expressionTemplates: ExpressionPromptTemplates;
+      readonly qqExpressionTemplates: { learn: string; select: string };
+      readonly qqExpressionEnabled?: boolean;
     },
 ) {
   return defineInformationModuleCatalog(
+    createQqExpressionModule({
+      modelTaskCapability: options.modelTaskCapability,
+      templates: options.qqExpressionTemplates,
+    }),
     associationModule,
     memoryWritebackModule,
     memoryKnowledgeModule,
@@ -60,7 +68,11 @@ export function createFirstPartyModuleCatalog<
       ...options,
       promptTemplates: options.expressionTemplates,
     }),
-    createMessageComposerModule({ ...options, expressionEnabled: true }),
+    createMessageComposerModule({
+      ...options,
+      expressionEnabled: true,
+      draftProcessingEnabled: options.qqExpressionEnabled ?? false,
+    }),
     heartbeatModule,
     createHeartflowModule(options),
   );
@@ -157,6 +169,17 @@ export function createFirstPartyModuleConfigDefaults(
       enabled: true,
       settings: Object.freeze({ batchSize: 8 }),
     }),
+    ...(profile === "production"
+      ? [
+          {
+            version: 1 as const,
+            instanceId: "qq-expression.default",
+            definitionId: "plugin.qq-expression",
+            enabled: true,
+            settings: Object.freeze({}),
+          },
+        ]
+      : []),
   ]);
 }
 

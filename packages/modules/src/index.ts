@@ -1,4 +1,5 @@
 /**
+ * 公开独立 QQ 表情模块工厂，导入不执行收藏、下载或发送。
  * 主动录入来源 Kind 与通用整理模板声明供宿主消费，正文从 default/local 资源读取。
  * 导出跨会话批准/确认事实和窄 MessageAuthorization token，供 composition 与 Runtime 共享对象身份。
  * 授权消息渲染工厂供 composition 注入 Runtime，模板正文不再由宿主内嵌。
@@ -179,3 +180,5 @@ export {
 } from "./prompt-declarations.js";
 
 export { createAuthorizedMessagePromptRenderer } from "./first-party/message-composer/authorized-prompt.js";
+
+export { createQqExpressionModule } from "./first-party/qq-expression/index.js";

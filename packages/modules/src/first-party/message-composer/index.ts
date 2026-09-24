@@ -1,4 +1,5 @@
 /**
+ * 启用独立草稿处理器时，QQ 模型输出先登记 draft；最终 assistant 仍经过原有授权和唯一投递槽。
  * 消费人工录入来源 Kind，正文编译经正常记忆变量保留来源，不修改身份或规则模板。
  * manifest.promptTemplates 显式声明消息模板组，供管理端按归属读取。
  * modelTier 的公开中文 schema 元数据由全局配置表单消费，保存仍使用同一校验。
@@ -75,6 +76,12 @@ import {
   type AgentIdentity,
   type MessagePromptTemplates,
 } from "./message-prompt.js";
+
+import {
+  messageDraftInformationKind,
+  messagePreparedInformationKind,
+  messageDraftProcessorReady,
+} from "../kinds/message.js";
 
 export const modelTierSchema = z.enum(["light", "heavy"]);
 export type ModelTier = z.infer<typeof modelTierSchema>;
@@ -201,6 +208,8 @@ export interface CreateMessageComposerModuleOptions<
     P
   >;
   readonly expressionEnabled?: boolean;
+  /** 装配时有独立展示插件才启用；本模块不决定表情策略。 */
+  readonly draftProcessingEnabled?: boolean;
   readonly selector?: InformationSelectorDefinition;
   readonly promptTemplates: MessagePromptTemplates;
   readonly agentIdentity: AgentIdentity;
@@ -258,7 +267,13 @@ export function createMessageComposerModule<
           adapterId: assistantPayload.source.adapterId,
           platform: assistantPayload.source.platform,
           destination: assistantPayload.source.destination,
-          message: { kind: "text", text: assistantPayload.text },
+          message: {
+            kind: "text",
+            text: assistantPayload.text,
+            ...(assistantPayload.expression
+              ? { expression: assistantPayload.expression }
+              : {}),
+          },
           turn: assistantPayload.turn,
         },
         references:
@@ -297,6 +312,9 @@ export function createMessageComposerModule<
         assistantHistoryPromptRenderer,
       ],
       requires: [
+        ...(dependencies.draftProcessingEnabled
+          ? [messageDraftProcessorReady]
+          : []),
         ...(dependencies.expressionEnabled ? [expressionReady] : []),
         modelTaskCapability,
         ...(dependencies.messageAuthorizationCapability
@@ -313,6 +331,9 @@ export function createMessageComposerModule<
       settingsSchema: messageComposerSettingsSchema,
       promptTemplates: messageModulePromptTemplates,
       consumes: [
+        ...(dependencies.draftProcessingEnabled
+          ? [messagePreparedInformationKind]
+          : []),
         userStatementInformationKind,
         ...(dependencies.expressionEnabled ? [expressionSelected] : []),
         messageConfirmedInformationKind,
@@ -323,6 +344,9 @@ export function createMessageComposerModule<
         inboundTextInformationKind,
       ],
       produces: [
+        ...(dependencies.draftProcessingEnabled
+          ? [messageDraftInformationKind]
+          : []),
         assistantTextInformationKind,
         deliveryRequestedInformationKind,
       ],
@@ -337,6 +361,34 @@ export function createMessageComposerModule<
         },
       }),
       subscriptions: [
+        ...(dependencies.draftProcessingEnabled
+          ? [
+              onInformation(
+                messagePreparedInformationKind,
+                {
+                  subscriptionId: "kaguya.message.prepared",
+                  delivery: "durable",
+                },
+                async (prepared, context) => {
+                  if (
+                    prepared.payload.originatingModuleInstanceId !==
+                    context.instanceId
+                  )
+                    return;
+                  await context.registerOnce(
+                    "kaguya.message.prepared-assistant",
+                    prepared.informationId,
+                    assistantTextInformationKind,
+                    {
+                      payload: assistantTextInformationKind.payloadSchema.parse(
+                        prepared.payload,
+                      ),
+                    },
+                  );
+                },
+              ),
+            ]
+          : []),
         onInformation(
           (dependencies.expressionEnabled
             ? expressionSelected
@@ -481,7 +533,10 @@ export function createMessageComposerModule<
             await context.registerOnce(
               "kaguya.message.assistant.v1",
               `${context.instanceId}:${completed.informationId}`,
-              assistantTextInformationKind,
+              dependencies.draftProcessingEnabled &&
+                message.payload.target.platform === "qq"
+                ? messageDraftInformationKind
+                : assistantTextInformationKind,
               {
                 payload: {
                   text: output,

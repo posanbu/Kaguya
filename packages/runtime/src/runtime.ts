@@ -1,4 +1,5 @@
 /**
+ * 入站 expressions 仅透传给插件，Runtime 不推断表情含义或改变调度。
  * 授权消息正文由 composition 注入的渲染器提供；Runtime 只传冻结变量并维持权限检查。
  * Runtime 只接收 outboundAllowlist；目标授权与最终 transport 前终检使用它，入站权限属于 AdapterHost。
  * Memory knowledge 仅在双开关启用时准备附加投影表、注册检索及 bootstrap；停用保留历史修订和原始账本。
@@ -901,6 +902,9 @@ export class KaguyaRuntime implements InformationIngress {
             },
             ...(input.selfId ? { selfId: input.selfId } : {}),
             mentions: [...input.mentions],
+            ...(input.expressions?.length
+              ? { expressions: [...input.expressions] }
+              : {}),
             ...(input.replyTo ? { replyTo: { ...input.replyTo } } : {}),
           },
         },

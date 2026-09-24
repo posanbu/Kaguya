@@ -1,4 +1,5 @@
 /**
+ * 测试夹具显式装配 QQ 表情模板，验证新增模块契约与既有流程兼容。
  * 功能概述：验证 OneBot 入站事件仅被正规化为平台内容与外部身份，
  * 以及出站文本/回复如何编码为 OneBot action，不允许 adapter 生成 Core 身份。
  * 主要职责：覆盖私聊、群聊、mention、降级 segment、自身消息过滤和发送 action；
@@ -257,4 +258,121 @@ it("ignores messages authored by the connected bot account", () => {
   );
 
   expect(message).toBeUndefined();
+});
+
+describe("QQ expression wire compatibility", () => {
+  const event = {
+    post_type: "message",
+    message_type: "group",
+    self_id: 9,
+    user_id: 1,
+    group_id: 2,
+    message_id: 3,
+  };
+  const options = {
+    adapterId: "qq",
+    now: () => new Date("2026-09-24T00:00:00Z"),
+  };
+  it("preserves face, sticker, marketplace and emoji while excluding normal photos", () => {
+    const input = normalizeOneBotMessageEvent(
+      {
+        ...event,
+        message: [
+          { type: "text", data: { text: "😂" } },
+          { type: "face", data: { id: 14 } },
+          {
+            type: "image",
+            data: {
+              file: "a.gif",
+              url: "https://gchat.qpic.cn/a",
+              sub_type: 1,
+            },
+          },
+          {
+            type: "image",
+            data: {
+              file: "photo.jpg",
+              url: "https://gchat.qpic.cn/photo",
+              sub_type: 0,
+            },
+          },
+          {
+            type: "mface",
+            data: { emoji_id: "1", emoji_package_id: "2", key: "abc" },
+          },
+        ],
+      },
+      options,
+    )!;
+    expect(input.text).toBe("😂[face:14][image][image][mface]");
+    expect(input.expressions).toEqual([
+      { kind: "face", id: "14" },
+      { kind: "sticker", id: "a.gif", url: "https://gchat.qpic.cn/a" },
+      { kind: "mface", id: "1", packageId: "2", key: "abc" },
+    ]);
+  });
+  it("parses CQ strings without promoting escaped text to actions", () => {
+    const result = normalizeOneBotMessageEvent(
+      {
+        ...event,
+        message: "&#91;CQ:face,id=1&#93;[CQ:face,id=14][CQ:reply,id=8]",
+      },
+      options,
+    )!;
+    expect(result.text).toBe("[CQ:face,id=1][face:14][reply:8]");
+    expect(result.expressions).toEqual([{ kind: "face", id: "14" }]);
+    expect(result.replyTo).toEqual({ platformMessageId: "8" });
+  });
+  it("encodes one structured expression beside Unicode text", () => {
+    const action = buildOneBotSendAction(
+      { kind: "group", groupId: "2" },
+      { kind: "text", text: "😂", expression: { kind: "face", id: "14" } },
+      "one",
+    );
+    expect(action.params.message).toEqual([
+      { type: "text", data: { text: "😂" } },
+      { type: "face", data: { id: "14" } },
+    ]);
+    expect(
+      buildOneBotSendAction(
+        { kind: "group", groupId: "2" },
+        {
+          kind: "text",
+          text: "哈哈",
+          expression: { kind: "sticker", file: "base64://R0lGODlh" },
+        },
+        "two",
+      ).params.message[1],
+    ).toEqual({
+      type: "image",
+      data: { file: "base64://R0lGODlh", sub_type: 1 },
+    });
+  });
+});
+
+it("round-trips a marketplace expression with a nonnumeric emoji ID", () => {
+  expect(
+    buildOneBotSendAction(
+      { kind: "group", groupId: "2" },
+      {
+        kind: "text",
+        text: "哈哈",
+        expression: {
+          kind: "mface",
+          id: "a2Bc9d",
+          packageId: "123",
+          key: "abc123",
+        },
+      },
+      "market",
+    ).params.message[1],
+  ).toEqual({
+    type: "mface",
+    data: {
+      emoji_id: "a2Bc9d",
+      emoji_package_id: 123,
+      key: "abc123",
+      summary: "[表情]",
+    },
+  });
 });

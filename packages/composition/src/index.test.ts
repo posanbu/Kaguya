@@ -1,4 +1,5 @@
 /**
+ * QQ 表情实例开关同时控制草稿处理路径和模型审批；关闭后恢复原 Composer 产出。
  * 功能概述：验证唯一 Runtime Composition 的目录演化、激活选择和宿主依赖边界。
  * Memory 开启时共享工厂自动补入独立写回实例，并在关闭态移除后台实例。
  * knowledge 双开关的启用、禁用和显式实例开关保持独立，避免旧 Profile 自动进入实验路径。
@@ -198,4 +199,33 @@ describe("shared Runtime Composition", () => {
       );
     },
   );
+});
+
+it("installs the QQ draft processor only while its independent instance is enabled", () => {
+  const configs = modules.createFirstPartyModuleConfigDefaults("production");
+  for (const enabled of [true, false]) {
+    const composition = createMessageComposition(undefined, {
+      moduleConfigs: configs.map((c) =>
+        c.definitionId === "plugin.qq-expression" ? { ...c, enabled } : c,
+      ),
+    });
+    const composer = composition.catalog.definitions.find(
+      (d) => d.manifest.definitionId === "agent.message-composer",
+    )!;
+    expect(
+      composer.manifest.produces.some(
+        (kind) => kind.kind === "agent.message.draft",
+      ),
+    ).toBe(enabled);
+    expect(
+      composition.activations.some(
+        (a) => a.definitionId === "plugin.qq-expression",
+      ),
+    ).toBe(enabled);
+    expect(
+      composition.modelTask.approvals.some(
+        (a) => a.activation.definitionId === "plugin.qq-expression",
+      ),
+    ).toBe(enabled);
+  }
 });

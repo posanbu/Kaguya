@@ -1,4 +1,5 @@
 /**
+ * 可选草稿与结构化表情是展示插件扩展点；assistant 保留原目标、回合和来源因果链。
  * 功能概述：message 领域的 Information schema 与不可变定义，独立维护本领域引用和日志投影。
  * 主要职责：下列 schema 校验入账载荷，各 kind 声明因果关系、上下文和诊断元数据；无 I/O。
  * 代码库关系：information-kinds.ts 稳定重导出公共对象；跨领域只复用相邻文件定义，保持 Registry 对象身份。
@@ -7,10 +8,12 @@
  */
 import {
   outboundMessageContentSchema,
+  outboundExpressionSchema,
+  type OutboundExpression,
   platformDestinationSchema,
   z,
 } from "@kaguya/schema";
-import { defineInformationKind } from "@kaguya/sdk";
+import { defineInformationKind, defineModuleCapability } from "@kaguya/sdk";
 import {
   nonBlankString,
   messageSourceSchema,
@@ -53,6 +56,19 @@ const messageCompositionShape = {
   replyAct: z.string().trim().min(1).max(120),
 };
 export const messageCompositionSchema = z.union([
+  z
+    .object({
+      ...messageCompositionShape,
+      tone: z.enum(["neutral", "humorous", "teasing"]),
+    })
+    .strict(),
+  z
+    .object({
+      ...messageCompositionShape,
+      tone: z.enum(["neutral", "humorous", "teasing"]),
+      guidance: z.string().trim().min(1).max(500),
+    })
+    .strict(),
   z.object(messageCompositionShape).strict(),
   z
     .object({
@@ -251,15 +267,22 @@ export const assistantTextInformationKind = defineInformationKind({
           platformMessageId?: string;
         }
       >,
+      expression: outboundExpressionSchema.optional(),
       originatingModuleInstanceId: nonBlankString,
       turn: turnProvenanceSchema.nullable(),
     })
-    .strict(),
+    .strict() as z.ZodType<{
+    text: string;
+    source: MessageTarget & { selfId?: string; platformMessageId?: string };
+    expression?: OutboundExpression;
+    originatingModuleInstanceId: string;
+    turn: z.infer<typeof turnProvenanceSchema> | null;
+  }>,
   references: {
     "core:caused-by": {
       required: true,
       multiple: false,
-      targetKinds: ["core.model.task.completed"],
+      targetKinds: ["core.model.task.completed", "agent.message.prepared"],
     },
     "core:context": {
       required: true,
@@ -334,3 +357,46 @@ export const deliveryRequestedInformationKind = defineInformationKind({
     },
   },
 });
+
+/** 独立展示插件的可选草稿入口；未启用插件时 Composer 直接保存 assistant。 */
+export const messageDraftInformationKind = defineInformationKind({
+  kind: "agent.message.draft",
+  displayName: "消息展示草稿",
+  description: "正文生成后的可选展示处理，保持原消息目标、回合与生成来源。",
+  payloadSchema: assistantTextInformationKind.payloadSchema,
+  references: {
+    "core:caused-by": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.model.task.completed"],
+    },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
+  },
+  log: { enabled: false },
+});
+
+/** 可选展示插件的完成入口；Composer 在此之后登记正式 assistant 并执行既有授权。 */
+export const messagePreparedInformationKind = defineInformationKind({
+  kind: "agent.message.prepared",
+  displayName: "已处理的消息草稿",
+  description: "展示插件完成后返回正文与可选素材，不代表已发送。",
+  payloadSchema: assistantTextInformationKind.payloadSchema,
+  references: {
+    "core:caused-by": { required: true, multiple: false },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
+  },
+  log: { enabled: false },
+});
+
+/** 同一宿主仅允许一个草稿处理器，避免不同插件并行改写同一条消息。 */
+export const messageDraftProcessorReady = defineModuleCapability<{
+  readonly ready: true;
+}>("agent:message-draft-processor", 1);

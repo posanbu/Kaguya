@@ -1,4 +1,5 @@
 /**
+ * 测试夹具显式装配 QQ 表情模板，验证新增模块契约与既有流程兼容。
  * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * Planner 普通日志仅保留元数据，不能泄漏 Prompt 预览或模型输出。
  * fixture 显式批准合成 QQ 目标，生产 Runtime 默认为空出站白名单。
@@ -1813,6 +1814,7 @@ function createMessageComposition(
     plannerBootstrapPolicy: testPrompts.plannerBootstrapPolicy,
     memoryEnabled: false,
     expressionTemplates: testPrompts.expression,
+    qqExpressionTemplates: testPrompts.qqExpression,
     agentIdentity: testIdentity,
   });
   const activations =

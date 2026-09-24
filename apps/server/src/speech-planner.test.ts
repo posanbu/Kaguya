@@ -1,4 +1,5 @@
 /**
+ * 补充 QQ 插件在真实 Runtime 中的收藏、发送回执、语境门控和重启限频验证。
  * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * 兼容 #136 的 agent.turn.plan 与 message/wait/silent 契约，仅增强已合并的单一 Planner 链。
  * 测试显式批准合成 QQ 目标，Runtime 未注入策略时默认拒绝非 Web 出站。
@@ -7,6 +8,9 @@
  * restart 保留数据库并重建宿主，advance 推进持久 heartbeat 时钟。仅 mock provider HTTP，
  * waitForPersistence 将本 fixture 的启动、打断、重建、重放及 settle 等待统一到已有的 8 秒
  * 持久化预算，条件满足即继续；不改变注入时钟、业务静默窗、等待次数或精确行为断言。
+ * 多次取消、重建与重启场景另设 30 秒总预算；QQ 四至五轮 45 秒、八轮加重启 60 秒。
+ * macOS 四轮实测约 26 秒，Windows 八轮约 29 秒，顺序 I/O 不能套用单轮的 15 秒总上限；
+ * 每次状态等待仍受 8 秒预算约束，不增加业务 deadline 或允许的重试次数。
  * 尚未提交决策的 Planner 可由新输入打断；静默窗后合并旧、新输入重构，已提交决策仍保持唯一终态。
  * 覆盖 message/wait/silent 与 target union 的 JSON mode 本地校验、一次结构修复、耗尽后失败关闭、
  * 累计 usage 和单 requested/terminal/decision；重试复用冻结 Prompt，重放与新输入取消均不重复落地。
@@ -31,6 +35,9 @@ import type { PlatformInboundMessage } from "@kaguya/platform-adapters";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const PERSISTENCE_WAIT = { timeout: 8000, interval: 20 } as const;
+const MULTI_STAGE_TIMEOUT = 30_000;
+const QQ_MULTI_TURN_TIMEOUT = 45_000;
+const QQ_RESTART_TIMEOUT = 60_000;
 function waitForPersistence(assertion: () => void | Promise<void>) {
   return vi.waitFor(assertion, PERSISTENCE_WAIT);
 }
@@ -51,7 +58,11 @@ const speak = {
 const silent = { action: "silent", reason: "no-response-needed" };
 const wait = { action: "wait", reason: "await-more-context", waitSeconds: 5 };
 
-async function fixture(outputs: unknown[]) {
+async function fixture(outputs: unknown[], qqExpression = false) {
+  let expressionChoice: {
+    assetInformationId: string | null;
+    emoji: string | null;
+  } = { assetInformationId: null, emoji: "😂" };
   const database = await createTestingDatabase();
   let now = Date.parse("2026-09-12T12:00:00.000Z");
   const requests: Record<string, any>[] = [];
@@ -60,15 +71,36 @@ async function fixture(outputs: unknown[]) {
     const request = JSON.parse(String(init?.body));
     const promptText = JSON.stringify(request.messages);
     const learning = promptText.includes("归纳这批真人消息");
+    const qqSelecting = promptText.includes("已判定幽默/友好调侃");
+    const qqLearning = promptText.includes("你负责从文字上下文推断一个");
+    const qqSourceText = request.messages
+      .map((m: { content: unknown }) =>
+        typeof m.content === "string" ? m.content : JSON.stringify(m.content),
+      )
+      .join("\n");
     const selecting = promptText.includes("依据冻结回合和已获胜的消息意图");
-    (learning || selecting ? backgroundRequests : requests).push(request);
-    const pending = learning
-      ? { patterns: [] }
-      : selecting
-        ? { habitIds: [] }
-        : request.model === "deepseek-light"
-          ? (outputs.shift() ?? silent)
-          : "reply-body";
+    (learning || selecting || qqSelecting || qqLearning
+      ? backgroundRequests
+      : requests
+    ).push(request);
+    const pending = qqSelecting
+      ? expressionChoice
+      : qqLearning
+        ? {
+            meaning: "好笑的无奈",
+            usage: "友好自嘲",
+            confidence: 0.95,
+            evidenceIds: [
+              qqSourceText.match(/"id":"([^"]+)"/u)?.[1] ?? "missing",
+            ],
+          }
+        : learning
+          ? { patterns: [] }
+          : selecting
+            ? { habitIds: [] }
+            : request.model === "deepseek-light"
+              ? (outputs.shift() ?? silent)
+              : "reply-body";
     const output = typeof pending === "function" ? await pending() : pending;
     if (output === "HTTP_FAILURE")
       return new Response("synthetic-provider-error", { status: 400 });
@@ -106,7 +138,22 @@ async function fixture(outputs: unknown[]) {
       modelId: `deepseek-${modelTier}`,
       model: provider.chatModel(`deepseek-${modelTier}`),
     }),
-    { moduleConfigs: createFirstPartyModuleConfigDefaults("test") },
+    {
+      moduleConfigs: [
+        ...createFirstPartyModuleConfigDefaults("test"),
+        ...(qqExpression
+          ? [
+              {
+                version: 1 as const,
+                instanceId: "qq-expression.default",
+                definitionId: "plugin.qq-expression",
+                enabled: true,
+                settings: { cooldownSeconds: 60, minMessagesBetween: 3 },
+              },
+            ]
+          : []),
+      ],
+    },
   );
   const delivered = vi.fn(async (target: PlatformInboundMessage["target"]) => ({
     ok: true as const,
@@ -179,9 +226,14 @@ async function fixture(outputs: unknown[]) {
     ...extra,
   });
   return {
+    waitForDeliveries: (count: number) =>
+      waitForPersistence(() => expect(delivered).toHaveBeenCalledTimes(count)),
     database,
     requests,
     backgroundRequests,
+    useExpression(choice: typeof expressionChoice) {
+      expressionChoice = choice;
+    },
     delivered,
     atoms,
     settle,
@@ -490,31 +542,35 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
     expect(kinds(graph)).toContain("agent.turn.silent");
   });
 
-  it("recovers wait across restart, merges a new message, and replies once", async () => {
-    const f = await fixture([wait, speak]);
-    await f.submit(f.message());
-    await f.settle();
-    await f.restart();
-    f.setTime(1000);
-    const next = f.message("m2", { text: "补充完整上下文" });
-    await f.submit(next);
-    await f.settle();
-    expect(f.requests.map((r) => r.model)).toEqual([
-      "deepseek-light",
-      "deepseek-light",
-      "deepseek-heavy",
-    ]);
-    const graph = await f.atoms();
-    const turns = graph.filter(
-      (a) => a.kind === "agent.turn.context.completed",
-    );
-    expect(turns.at(-1)?.payload.inputs).toHaveLength(2);
-    expect(turns.at(-1)?.payload.attempt).toBe(1);
-    expect(f.delivered).toHaveBeenCalledTimes(1);
-    await f.restart();
-    await f.settle();
-    expect(f.delivered).toHaveBeenCalledTimes(1);
-  });
+  it(
+    "recovers wait across restart, merges a new message, and replies once",
+    async () => {
+      const f = await fixture([wait, speak]);
+      await f.submit(f.message());
+      await f.settle();
+      await f.restart();
+      f.setTime(1000);
+      const next = f.message("m2", { text: "补充完整上下文" });
+      await f.submit(next);
+      await f.settle();
+      expect(f.requests.map((r) => r.model)).toEqual([
+        "deepseek-light",
+        "deepseek-light",
+        "deepseek-heavy",
+      ]);
+      const graph = await f.atoms();
+      const turns = graph.filter(
+        (a) => a.kind === "agent.turn.context.completed",
+      );
+      expect(turns.at(-1)?.payload.inputs).toHaveLength(2);
+      expect(turns.at(-1)?.payload.attempt).toBe(1);
+      expect(f.delivered).toHaveBeenCalledTimes(1);
+      await f.restart();
+      await f.settle();
+      expect(f.delivered).toHaveBeenCalledTimes(1);
+    },
+    MULTI_STAGE_TIMEOUT,
+  );
 
   it.each([false, true])(
     "interrupts Planner during repair=%s and coalesces incoming messages after the quiet window",
@@ -591,128 +647,141 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
         release(speak);
       }
     },
+    MULTI_STAGE_TIMEOUT,
   );
 
-  it("refreshes the interruption quiet window from the latest message", async () => {
-    let release!: (value: unknown) => void;
-    const blocked = new Promise((resolve) => {
-      release = resolve;
-    });
-    const f = await fixture([() => blocked, silent]);
-    try {
-      await f.submit(f.message());
-      await waitForPersistence(() => expect(f.requests).toHaveLength(1));
-      f.setTime(1000);
-      await f.submit(f.message("m2"));
-      await waitForPersistence(async () =>
-        expect(kinds(await f.atoms())).toContain("agent.turn.interrupted"),
-      );
-      release(silent);
-      await f.settle();
-      f.setTime(500);
-      await f.submit(f.message("m3"));
-      await f.settle();
-      f.setTime(900);
-      await f.restart();
-      await f.settle();
-      expect(f.requests).toHaveLength(1);
-      f.setTime(101);
-      await f.restart();
-      await f.settle();
-      expect(f.requests).toHaveLength(2);
-      expect(
-        (await f.atoms())
-          .filter((a) => a.kind === "agent.turn.context.completed")
-          .at(-1)?.payload.inputs,
-      ).toHaveLength(3);
-    } finally {
-      release(silent);
-    }
-  });
-
-  it("stops interrupting after two Planner rebuilds", async () => {
-    const releases: ((value: unknown) => void)[] = [];
-    const blocked = () =>
-      new Promise((resolve) => {
-        releases.push(resolve);
+  it(
+    "refreshes the interruption quiet window from the latest message",
+    async () => {
+      let release!: (value: unknown) => void;
+      const blocked = new Promise((resolve) => {
+        release = resolve;
       });
-    const f = await fixture([blocked, blocked, blocked, silent]);
-    try {
-      await f.submit(f.message());
-      await waitForPersistence(() => expect(releases).toHaveLength(1));
-      for (let round = 1; round <= 2; round++) {
+      const f = await fixture([() => blocked, silent]);
+      try {
+        await f.submit(f.message());
+        await waitForPersistence(() => expect(f.requests).toHaveLength(1));
         f.setTime(1000);
-        await f.submit(f.message(`m${round + 1}`));
+        await f.submit(f.message("m2"));
         await waitForPersistence(async () =>
-          expect(
-            (await f.atoms()).filter(
-              (a) => a.kind === "agent.turn.interrupted",
-            ),
-          ).toHaveLength(round),
+          expect(kinds(await f.atoms())).toContain("agent.turn.interrupted"),
         );
-        releases[round - 1]!(silent);
+        release(silent);
+        await f.settle();
+        f.setTime(500);
+        await f.submit(f.message("m3"));
+        await f.settle();
+        f.setTime(900);
+        await f.restart();
+        await f.settle();
+        expect(f.requests).toHaveLength(1);
+        f.setTime(101);
+        await f.restart();
+        await f.settle();
+        expect(f.requests).toHaveLength(2);
+        expect(
+          (await f.atoms())
+            .filter((a) => a.kind === "agent.turn.context.completed")
+            .at(-1)?.payload.inputs,
+        ).toHaveLength(3);
+      } finally {
+        release(silent);
+      }
+    },
+    MULTI_STAGE_TIMEOUT,
+  );
+
+  it(
+    "stops interrupting after two Planner rebuilds",
+    async () => {
+      const releases: ((value: unknown) => void)[] = [];
+      const blocked = () =>
+        new Promise((resolve) => {
+          releases.push(resolve);
+        });
+      const f = await fixture([blocked, blocked, blocked, silent]);
+      try {
+        await f.submit(f.message());
+        await waitForPersistence(() => expect(releases).toHaveLength(1));
+        for (let round = 1; round <= 2; round++) {
+          f.setTime(1000);
+          await f.submit(f.message(`m${round + 1}`));
+          await waitForPersistence(async () =>
+            expect(
+              (await f.atoms()).filter(
+                (a) => a.kind === "agent.turn.interrupted",
+              ),
+            ).toHaveLength(round),
+          );
+          releases[round - 1]!(silent);
+          await f.settle();
+          f.setTime(1001);
+          await f.restart();
+          await waitForPersistence(() =>
+            expect(releases).toHaveLength(round + 1),
+          );
+        }
+        f.setTime(1000);
+        await f.submit(f.message("m4"));
+        await waitForPersistence(async () =>
+          expect(kinds(await f.atoms())).toContain("agent.observation.wake"),
+        );
+        expect(
+          (await f.atoms()).filter((a) => a.kind === "agent.turn.interrupted"),
+        ).toHaveLength(2);
+        releases[2]!(silent);
+        await f.settle();
+      } finally {
+        for (const release of releases) release(silent);
+      }
+    },
+    MULTI_STAGE_TIMEOUT,
+  );
+
+  it(
+    "rebuilds on new input without consuming the wait budget",
+    async () => {
+      let release!: (value: unknown) => void;
+      const blocked = new Promise((resolve) => {
+        release = resolve;
+      });
+      const f = await fixture([() => blocked, speak]);
+      try {
+        await f.submit(f.message());
+        await waitForPersistence(() => expect(f.requests).toHaveLength(1));
+        f.setTime(1000);
+        await f.submit(f.message("during-wait"));
+        await waitForPersistence(async () =>
+          expect(kinds(await f.atoms())).toContain("agent.observation.wake"),
+        );
+        release(wait);
         await f.settle();
         f.setTime(1001);
         await f.restart();
-        await waitForPersistence(() =>
-          expect(releases).toHaveLength(round + 1),
+        await f.settle();
+        const turns = (await f.atoms()).filter(
+          (a) => a.kind === "agent.turn.context.completed",
         );
+        expect(turns).toHaveLength(2);
+        expect(turns[1]!.payload.attempt).toBe(0);
+        expect(
+          (await f.atoms())
+            .filter((a) => a.kind === "agent.turn.candidate")
+            .at(-1)?.payload.rebuildAttempt,
+        ).toBe(1);
+        expect(turns[1]!.payload.inputs).toHaveLength(2);
+        expect(f.delivered).toHaveBeenCalledTimes(1);
+        f.setTime(10000);
+        await f.restart();
+        await f.settle();
+        expect(f.requests).toHaveLength(3);
+        expect(f.delivered).toHaveBeenCalledTimes(1);
+      } finally {
+        release(wait);
       }
-      f.setTime(1000);
-      await f.submit(f.message("m4"));
-      await waitForPersistence(async () =>
-        expect(kinds(await f.atoms())).toContain("agent.observation.wake"),
-      );
-      expect(
-        (await f.atoms()).filter((a) => a.kind === "agent.turn.interrupted"),
-      ).toHaveLength(2);
-      releases[2]!(silent);
-      await f.settle();
-    } finally {
-      for (const release of releases) release(silent);
-    }
-  });
-
-  it("rebuilds on new input without consuming the wait budget", async () => {
-    let release!: (value: unknown) => void;
-    const blocked = new Promise((resolve) => {
-      release = resolve;
-    });
-    const f = await fixture([() => blocked, speak]);
-    try {
-      await f.submit(f.message());
-      await waitForPersistence(() => expect(f.requests).toHaveLength(1));
-      f.setTime(1000);
-      await f.submit(f.message("during-wait"));
-      await waitForPersistence(async () =>
-        expect(kinds(await f.atoms())).toContain("agent.observation.wake"),
-      );
-      release(wait);
-      await f.settle();
-      f.setTime(1001);
-      await f.restart();
-      await f.settle();
-      const turns = (await f.atoms()).filter(
-        (a) => a.kind === "agent.turn.context.completed",
-      );
-      expect(turns).toHaveLength(2);
-      expect(turns[1]!.payload.attempt).toBe(0);
-      expect(
-        (await f.atoms())
-          .filter((a) => a.kind === "agent.turn.candidate")
-          .at(-1)?.payload.rebuildAttempt,
-      ).toBe(1);
-      expect(turns[1]!.payload.inputs).toHaveLength(2);
-      expect(f.delivered).toHaveBeenCalledTimes(1);
-      f.setTime(10000);
-      await f.restart();
-      await f.settle();
-      expect(f.requests).toHaveLength(3);
-      expect(f.delivered).toHaveBeenCalledTimes(1);
-    } finally {
-      release(wait);
-    }
-  });
+    },
+    MULTI_STAGE_TIMEOUT,
+  );
 
   it("cancels an in-flight Planner and ignores its late message output", async () => {
     let release!: (value: unknown) => void;
@@ -762,63 +831,67 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
     },
   );
 
-  it("keeps Arousal defer outside the Planner wait budget", async () => {
-    const f = await fixture([wait, wait, wait, wait]);
-    const group = { kind: "group" as const, groupId: "group" };
-    await f.core().register(attentionArousalStateRecordedInformationKind, {
-      occurredAt: "2026-09-12T12:00:00.000Z",
-      source: "module:test",
-      payload: {
-        state: "asleep",
-        cause: "external",
-        lastEvaluatedAt: "2026-09-12T12:00:00.000Z",
-        lastInboundInformationId: null,
-        lastActivityAt: "2026-09-12T12:00:00.000Z",
-        sleepStartedAt: "2026-09-12T12:00:00.000Z",
-        lastPeriodicWakeAt: null,
-        reasonCodes: ["test-asleep"],
-        policyVersion: "attention-observation.v1",
-      },
-      references: [],
-    });
-    await f.submit(f.message("m1", { target: group, text: "哈哈" }));
-    await f.settle();
-    expect(f.requests).toHaveLength(0);
-    f.setTime(1000);
-    await f.submit(
-      f.message("m2", {
-        target: group,
-        mentions: [{ kind: "user", id: "bot" }],
-      }),
-    );
-    await f.settle();
-    for (let round = 0; round < 3; round++) {
-      f.setTime(6000);
-      await f.restart();
-      await waitForPersistence(() =>
-        expect(f.requests).toHaveLength(round === 2 ? 5 : round + 2),
+  it(
+    "keeps Arousal defer outside the Planner wait budget",
+    async () => {
+      const f = await fixture([wait, wait, wait, wait]);
+      const group = { kind: "group" as const, groupId: "group" };
+      await f.core().register(attentionArousalStateRecordedInformationKind, {
+        occurredAt: "2026-09-12T12:00:00.000Z",
+        source: "module:test",
+        payload: {
+          state: "asleep",
+          cause: "external",
+          lastEvaluatedAt: "2026-09-12T12:00:00.000Z",
+          lastInboundInformationId: null,
+          lastActivityAt: "2026-09-12T12:00:00.000Z",
+          sleepStartedAt: "2026-09-12T12:00:00.000Z",
+          lastPeriodicWakeAt: null,
+          reasonCodes: ["test-asleep"],
+          policyVersion: "attention-observation.v1",
+        },
+        references: [],
+      });
+      await f.submit(f.message("m1", { target: group, text: "哈哈" }));
+      await f.settle();
+      expect(f.requests).toHaveLength(0);
+      f.setTime(1000);
+      await f.submit(
+        f.message("m2", {
+          target: group,
+          mentions: [{ kind: "user", id: "bot" }],
+        }),
       );
       await f.settle();
-    }
-    const graph = await f.atoms();
-    expect(f.requests).toHaveLength(5);
-    expect(
-      graph.filter(
-        (a) =>
-          a.kind === "core.model.task.requested" &&
-          a.payload.taskId === "agent.turn.plan",
-      ),
-    ).toHaveLength(4);
-    expect(graph.filter((a) => a.kind === "agent.wait.requested")).toHaveLength(
-      3,
-    );
-    expect(
-      graph.filter((a) => a.kind === "agent.turn.plan.completed").at(-1)
-        ?.payload,
-    ).toMatchObject({
-      action: { action: "silent", reason: "no-response-needed" },
-    });
-  });
+      for (let round = 0; round < 3; round++) {
+        f.setTime(6000);
+        await f.restart();
+        await waitForPersistence(() =>
+          expect(f.requests).toHaveLength(round === 2 ? 5 : round + 2),
+        );
+        await f.settle();
+      }
+      const graph = await f.atoms();
+      expect(f.requests).toHaveLength(5);
+      expect(
+        graph.filter(
+          (a) =>
+            a.kind === "core.model.task.requested" &&
+            a.payload.taskId === "agent.turn.plan",
+        ),
+      ).toHaveLength(4);
+      expect(
+        graph.filter((a) => a.kind === "agent.wait.requested"),
+      ).toHaveLength(3);
+      expect(
+        graph.filter((a) => a.kind === "agent.turn.plan.completed").at(-1)
+          ?.payload,
+      ).toMatchObject({
+        action: { action: "silent", reason: "no-response-needed" },
+      });
+    },
+    MULTI_STAGE_TIMEOUT,
+  );
 
   it("starts wait at persisted model completion even when the Planner is slow", async () => {
     let release!: (value: unknown) => void;
@@ -842,87 +915,232 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
     }
   });
 
-  it("rebuilds after a decision write failure when new input arrives before decision commit", async () => {
-    const f = await fixture([speak, speak]);
-    const commit = f.core().commitTerminal.bind(f.core());
-    let interrupted = false;
-    const hook = vi
-      .spyOn(f.core(), "commitTerminal")
-      .mockImplementation((...args) => {
-        if (args[2].kind === "agent.turn.plan.completed" && !interrupted) {
-          interrupted = true;
-          return Promise.reject(
-            new Error("synthetic decision write interruption"),
-          );
-        }
-        return commit(...args);
-      });
-    try {
+  it(
+    "rebuilds after a decision write failure when new input arrives before decision commit",
+    async () => {
+      const f = await fixture([speak, speak]);
+      const commit = f.core().commitTerminal.bind(f.core());
+      let interrupted = false;
+      const hook = vi
+        .spyOn(f.core(), "commitTerminal")
+        .mockImplementation((...args) => {
+          if (args[2].kind === "agent.turn.plan.completed" && !interrupted) {
+            interrupted = true;
+            return Promise.reject(
+              new Error("synthetic decision write interruption"),
+            );
+          }
+          return commit(...args);
+        });
+      try {
+        await f.submit(f.message());
+        await waitForPersistence(() => expect(interrupted).toBe(true));
+        await f.submit(
+          f.message("late-history", {
+            occurredAt: "2026-09-12T11:59:00.000Z",
+            text: "BACKDATED_HISTORY",
+          }),
+        );
+        f.setTime(10000);
+        await f.restart();
+        await f.settle();
+        f.setTime(1001);
+        await f.restart();
+        await f.settle();
+        const graph = await f.atoms();
+        expect(f.requests.map((r) => r.model)).toEqual([
+          "deepseek-light",
+          "deepseek-light",
+          "deepseek-heavy",
+        ]);
+        expect(JSON.stringify(f.requests[0])).not.toContain(
+          "BACKDATED_HISTORY",
+        );
+        expect(JSON.stringify(f.requests[1])).toContain("BACKDATED_HISTORY");
+        expect(
+          graph.filter((a) => a.kind === "agent.turn.plan.completed"),
+        ).toHaveLength(1);
+        expect(
+          graph.filter((a) => a.kind === "agent.turn.decision.interrupted"),
+        ).toHaveLength(1);
+        expect(f.delivered).toHaveBeenCalledTimes(1);
+      } finally {
+        hook.mockRestore();
+      }
+    },
+    MULTI_STAGE_TIMEOUT,
+  );
+
+  it(
+    "expiry recovers after restart and stops at the shared three-wait budget",
+    async () => {
+      const f = await fixture([wait, wait, wait, wait]);
       await f.submit(f.message());
-      await waitForPersistence(() => expect(interrupted).toBe(true));
+      await f.settle();
+      for (let round = 1; round <= 3; round++) {
+        f.setTime(6000);
+        await f.restart();
+        await waitForPersistence(() =>
+          expect(f.requests).toHaveLength(round === 3 ? 5 : round + 1),
+        );
+        await f.settle();
+      }
+      const graph = await f.atoms();
+      expect(f.requests).toHaveLength(5);
+      expect(
+        graph.filter(
+          (a) =>
+            a.kind === "core.model.task.requested" &&
+            a.payload.taskId === "agent.turn.plan",
+        ),
+      ).toHaveLength(4);
+      expect(
+        graph.filter((a) => a.kind === "agent.wait.requested"),
+      ).toHaveLength(3);
+      expect(
+        graph.filter((a) => a.kind === "agent.turn.plan.completed").at(-1)
+          ?.payload,
+      ).toMatchObject({
+        action: { action: "silent", reason: "no-response-needed" },
+      });
+      expect(kinds(graph)).not.toContain("agent.turn.failed");
+      expect(f.delivered).not.toHaveBeenCalled();
+    },
+    MULTI_STAGE_TIMEOUT,
+  );
+});
+
+describe("independent QQ expression plugin through real Runtime", () => {
+  const humorous = {
+    ...speak,
+    composition: { ...speak.composition, tone: "humorous" },
+  };
+  it(
+    "limits Unicode emoji across restart and preserves the ordinary reply pipeline",
+    async () => {
+      const f = await fixture(
+        Array.from({ length: 8 }, () => humorous),
+        true,
+      );
+      for (let i = 0; i < 4; i++) {
+        f.setTime(1);
+        await f.submit(f.message(`emoji-${i}`));
+        await f.waitForDeliveries(i + 1);
+        await f.settle();
+      }
+      expect(
+        (await f.atoms()).filter((a) =>
+          /consumer.failed|execution.exhausted/.test(a.kind),
+        ),
+      ).toEqual([]);
+      const contents = () =>
+        f.delivered.mock.calls.map(
+          (call) => (call as unknown as [unknown, { text: string }])[1].text,
+        );
+      expect(contents()).toEqual([
+        "reply-body",
+        "reply-body",
+        "reply-body",
+        "reply-body 😂",
+      ]);
+      // 新消息只推进 1 毫秒，保证先后顺序且仍在冷却窗口内；重启不得归还额度。
+      // 冷却到期边界由纯策略测试控制，不混入真实 Scheduler 的到期触发。
+      await f.restart();
+      for (let i = 4; i < 8; i++) {
+        f.setTime(1);
+        await f.submit(f.message(`emoji-${i}`));
+        await f.waitForDeliveries(i + 1);
+        await f.settle();
+      }
+      expect(contents().slice(4)).toEqual(
+        Array.from({ length: 4 }, () => "reply-body"),
+      );
+      expect(
+        (await f.atoms()).filter((a) => a.kind === "core.delivery.delivered"),
+      ).toHaveLength(8);
+    },
+    QQ_RESTART_TIMEOUT,
+  );
+  it(
+    "sends a collected QQ face only in a humorous plan and falls back on neutral plans",
+    async () => {
+      const f = await fixture(
+        [humorous, humorous, humorous, humorous, speak],
+        true,
+      );
       await f.submit(
-        f.message("late-history", {
-          occurredAt: "2026-09-12T11:59:00.000Z",
-          text: "BACKDATED_HISTORY",
+        f.message("face-source", {
+          text: "哈哈这次又翻车了[face:14]",
+          expressions: [{ kind: "face", id: "14" }],
         }),
       );
-      f.setTime(10000);
-      await f.restart();
+      await f.waitForDeliveries(1);
       await f.settle();
-      f.setTime(1001);
-      await f.restart();
-      await f.settle();
-      const graph = await f.atoms();
-      expect(f.requests.map((r) => r.model)).toEqual([
-        "deepseek-light",
-        "deepseek-light",
-        "deepseek-heavy",
-      ]);
-      expect(JSON.stringify(f.requests[0])).not.toContain("BACKDATED_HISTORY");
-      expect(JSON.stringify(f.requests[1])).toContain("BACKDATED_HISTORY");
+      const asset = (await f.atoms()).find(
+        (a) => a.kind === "plugin.qq-expression.collected",
+      )!;
+      expect(asset).toBeDefined();
       expect(
-        graph.filter((a) => a.kind === "agent.turn.plan.completed"),
-      ).toHaveLength(1);
+        (await f.atoms()).find((a) => a.kind === "plugin.qq-expression.learned")
+          ?.payload.confidence,
+      ).toBe(0.95);
+      f.useExpression({ assetInformationId: asset.informationId, emoji: null });
+      for (let i = 1; i < 5; i++) {
+        f.setTime(1);
+        await f.submit(f.message(`face-${i}`));
+        await f.waitForDeliveries(i + 1);
+        await f.settle();
+      }
       expect(
-        graph.filter((a) => a.kind === "agent.turn.decision.interrupted"),
-      ).toHaveLength(1);
-      expect(f.delivered).toHaveBeenCalledTimes(1);
-    } finally {
-      hook.mockRestore();
-    }
-  });
-
-  it("expiry recovers after restart and stops at the shared three-wait budget", async () => {
-    const f = await fixture([wait, wait, wait, wait]);
-    await f.submit(f.message());
-    await f.settle();
-    for (let round = 1; round <= 3; round++) {
-      f.setTime(6000);
-      await f.restart();
-      await waitForPersistence(() =>
-        expect(f.requests).toHaveLength(round === 3 ? 5 : round + 1),
-      );
-      await f.settle();
-    }
-    const graph = await f.atoms();
-    expect(f.requests).toHaveLength(5);
-    expect(
-      graph.filter(
-        (a) =>
-          a.kind === "core.model.task.requested" &&
-          a.payload.taskId === "agent.turn.plan",
-      ),
-    ).toHaveLength(4);
-    expect(graph.filter((a) => a.kind === "agent.wait.requested")).toHaveLength(
-      3,
-    );
-    expect(
-      graph.filter((a) => a.kind === "agent.turn.plan.completed").at(-1)
-        ?.payload,
-    ).toMatchObject({
-      action: { action: "silent", reason: "no-response-needed" },
-    });
-    expect(kinds(graph)).not.toContain("agent.turn.failed");
-    expect(f.delivered).not.toHaveBeenCalled();
-  });
+        (f.delivered.mock.calls[3] as unknown as [unknown, unknown])[1],
+      ).toMatchObject({
+        text: "reply-body",
+        expression: { kind: "face", id: "14" },
+      });
+      expect(
+        (f.delivered.mock.calls[4] as unknown as [unknown, unknown])[1],
+      ).toEqual({ kind: "text", text: "reply-body" });
+      expect(
+        (await f.atoms()).filter((a) => a.kind === "core.delivery.delivered"),
+      ).toHaveLength(5);
+    },
+    QQ_MULTI_TURN_TIMEOUT,
+  );
 });
+
+it(
+  "keeps normal delivery alive when the optional expression model fails",
+  async () => {
+    const humorous = {
+      ...speak,
+      composition: { ...speak.composition, tone: "humorous" },
+    };
+    const f = await fixture(
+      Array.from({ length: 4 }, () => humorous),
+      true,
+    );
+    f.useExpression("HTTP_FAILURE" as never);
+    for (let i = 0; i < 4; i++) {
+      f.setTime(1);
+      await f.submit(f.message(`optional-failure-${i}`));
+      await f.waitForDeliveries(i + 1);
+      await f.settle();
+    }
+    expect(
+      (f.delivered.mock.calls[3] as unknown as [unknown, unknown])[1],
+    ).toEqual({ kind: "text", text: "reply-body" });
+    const graph = await f.atoms();
+    expect(
+      graph.some(
+        (a) =>
+          a.kind === "core.model.task.failed" &&
+          a.payload.taskId === "plugin.qq-expression.select",
+      ),
+    ).toBe(true);
+    expect(graph.filter((a) => a.kind === "agent.turn.failed")).toHaveLength(0);
+    expect(
+      graph.filter((a) => a.kind === "core.delivery.delivered"),
+    ).toHaveLength(4);
+  },
+  QQ_MULTI_TURN_TIMEOUT,
+);
