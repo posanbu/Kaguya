@@ -741,6 +741,28 @@ export const firstPartyInspection = {
         { status: "结果" },
       ),
     ],
+    surface: {
+      version: 1,
+      id: "raw-memory",
+      title: "原始记忆",
+      layout: { type: "sections", areas: ["documents"] },
+      components: [
+        {
+          id: "memory-documents",
+          type: "storage-browser",
+          area: "documents",
+          columns: ["平台", "适配器", "会话", "账号", "发生时间", "正文"],
+          empty: "还没有原始记忆。",
+        },
+      ],
+      hiddenSections: [
+        "responsibilities",
+        "settings",
+        "templates",
+        "prompt-renderers",
+        "diagnostics",
+      ],
+    },
   },
   "memory.index": {
     storage: "vectors",

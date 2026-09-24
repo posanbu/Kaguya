@@ -932,6 +932,65 @@
   color: var(--kaguya-muted);
   font-size: 12px;
 }
+.storage-surface {
+  gap: 14px;
+}
+.storage-table {
+  min-width: 0;
+  overflow-x: auto;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 12px;
+  background: var(--kaguya-paper);
+  scrollbar-color: var(--kaguya-line) transparent;
+}
+.storage-table-grid {
+  display: grid;
+  grid-template-columns:
+    minmax(64px, 0.55fr) minmax(120px, 0.9fr) minmax(135px, 1fr)
+    minmax(100px, 0.75fr) minmax(150px, 1fr) minmax(220px, 2fr);
+  align-items: center;
+  gap: 14px;
+  min-width: 920px;
+}
+.storage-table-header {
+  min-height: 40px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--kaguya-line);
+  background: var(--kaguya-paper-soft);
+  color: var(--kaguya-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.storage-table ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.storage-table li + li {
+  border-top: 1px solid var(--kaguya-line);
+}
+.storage-table-row {
+  min-height: 48px;
+  padding: 9px 14px;
+  background: transparent;
+  color: var(--kaguya-ink);
+}
+.storage-table-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.storage-table-row > span:last-child {
+  color: var(--kaguya-ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+.storage-table-row > span:not(:last-child) {
+  color: var(--kaguya-muted);
+  font-variant-numeric: tabular-nums;
+}
 .surface-browser {
   display: grid;
   grid-template-columns: minmax(310px, 0.72fr) minmax(0, 1.28fr);

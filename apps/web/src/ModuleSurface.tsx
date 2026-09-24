@@ -1,7 +1,8 @@
 /**
  * 功能概述：渲染模块 Manifest 声明的受控检查 Surface；首版提供状态摘要、实体主从浏览、关系列表、时间线与关系图。
- * record-browser 按 presentation 分派到注意力观察 GateSurface 或通用 RecordSurface；实体浏览保持现有身份页面行为。
+ * wiki-browser 分派给页面目录与正文阅读器；record-browser 按 presentation 分派注意力观察或通用记录详情。
  * model-request-browser 分派给独立 RequestSurface，按持久化模型请求提供目录与详情。
+ * storage-browser 分派给紧凑持久库表格，避免通用历史标签和卡片列表干扰领域浏览。
  * 主要职责：将搜索和筛选转换为只读 Inspection 查询，保持稳定游标；实体选择加载独立详情并允许追溯原始 Atom。
  * 代码库关系：ModulePages 在模块声明 surface 时挂载本组件；布局来自 Manifest，数据由版本化 surface DTO 提供。
  * 输入输出与副作用：只执行认证 GET、history 内页面状态与可访问焦点移动；不执行模块提供的代码，不修改人物事实。
@@ -9,6 +10,8 @@
 import { RecordSurface } from "./RecordSurface.js";
 import { GateSurface } from "./GateSurface.js";
 import { RequestSurface } from "./RequestSurface.js";
+import { StorageSurface } from "./StorageSurface.js";
+import { WikiSurface } from "./WikiSurface.js";
 import {
   inspectionSurfaceEntitySchema,
   inspectionSurfacePageSchema,
@@ -43,6 +46,24 @@ interface ModuleSurfaceProps {
 /** 分派组件不持有 Hook，跨模块导航时按 definitionId 隔离搜索、选择和异步详情状态。 */
 export function ModuleSurface(props: ModuleSurfaceProps) {
   const surface = props.module.inspection?.surface;
+  const storage = surface?.components.find(
+    (component) => component.type === "storage-browser",
+  );
+  if (storage)
+    return (
+      <StorageSurface
+        key={props.module.definitionId}
+        {...props}
+        browser={storage}
+      />
+    );
+  const wiki = surface?.components.find(
+    (component) => component.type === "wiki-browser",
+  );
+  if (wiki)
+    return (
+      <WikiSurface key={props.module.definitionId} {...props} browser={wiki} />
+    );
   const requests = surface?.components.find(
     (component) => component.type === "model-request-browser",
   );

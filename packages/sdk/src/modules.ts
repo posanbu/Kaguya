@@ -436,9 +436,24 @@ function validateInspectionSurface(
     if (!surface.layout.areas.includes(component.area))
       throw new Error(`Unknown inspection surface area: ${component.area}`);
     if (component.type === "mechanism-steps") continue;
+    if (component.type === "storage-browser") {
+      if (!inspection.storage)
+        throw new Error("Inspection storage browser requires storage");
+      if (new Set(component.columns).size !== component.columns.length)
+        throw new Error("Duplicate inspection storage column");
+      continue;
+    }
     const view = views.get(component.viewId);
     if (!view)
       throw new Error(`Unknown inspection surface view: ${component.viewId}`);
+    if (component.type === "wiki-browser") {
+      if (
+        !producedKinds.has(component.pageKind) ||
+        !view.kinds.includes(component.pageKind)
+      )
+        throw new Error("Invalid inspection Wiki page contract");
+      continue;
+    }
     if (component.type === "model-request-browser") {
       if (
         !manifest.requires.some(
