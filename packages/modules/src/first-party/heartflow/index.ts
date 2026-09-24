@@ -8,8 +8,8 @@
  * per-chat 状态，也不依赖订阅安装顺序。
  * createHeartflowModule 注入投递/模型失败 kind，返回声明订阅的模块；settings schema
  * 校验 Focus、时效与安全策略。state/memory selector 从账本读取因果链及记忆，冻结完整输入。
- * Planner 重放沿已持久化请求复用 Prompt 和上下文选择，防止迟到历史触发第二次模型任务。
- * 规划前通过双时间截止点约束的 knowledge 导航至多四条实体原文，再留出 sparse 旁路；可选认知快照优先保留至多两条，总计八条。
+ * Planner v2 在模型结构修复阶段检查本轮动作边界；v1 重放保留原 schema。重放沿持久化请求复用 Prompt 和上下文，防止迟到历史触发第二次任务。
+ * 规划前按最近多条输入与发言者召回话题、人物和角色设定原文，保留双时间截止点及 sparse 旁路；可选认知快照至多两条，总计八条。
  * Knowledge 开启时，认知快照的全部原始来源必须通过撤回 guard，检查缺失或失败都不使用该快照。
  * 宿主 conversation 能力冻结背景和候选；跨会话获胜决策交给 route 复核，失败关闭当前 turn，不回退发送。
  * dispatchDecision 仅将独立 Planner 的获胜 message 结果按 claim 注册一次意图，末条输入决定目标；
@@ -34,6 +34,7 @@ import {
 import {
   compilePlannerPrompt,
   plannerActionSchema,
+  plannerActionSchemaForTurn,
   plannerContextSelector,
   plannerDecisionInformationKind,
   PLANNER_TASK_ID,
@@ -66,6 +67,7 @@ import {
 } from "@kaguya/sdk";
 import { MEMORY_RETRIEVAL_STRATEGY_ID } from "@kaguya/memory";
 import { buildTurnBootstrap } from "./bootstrap.js";
+import { buildRecallQuery } from "./recall-query.js";
 
 import {
   observationWakeInformationKind,
@@ -453,142 +455,154 @@ export const heartflowStateSelector = defineInformationSelector({
   },
 });
 
-export const heartflowMemorySelector = defineInformationSelector({
-  selectorId: "agent.heartflow.optional-memory",
-  select: async ({ sourceAtom, ledger }) => {
-    let candidates: readonly DeepReadonly<InformationAtom>[] = [];
-    if (sourceAtom.kind === turnCandidateInformationKind.kind) {
-      candidates = [sourceAtom];
-    } else if (
-      sourceAtom.kind === attentionArousalCompletedInformationKind.kind
-    ) {
-      candidates = (
-        await ledger.related({
-          from: [sourceAtom.informationId],
-          relation: "core:status-of",
-          direction: "outgoing",
-          limit: 1,
-        })
-      ).filter((atom) => atom.kind === turnCandidateInformationKind.kind);
-    } else if (sourceAtom.kind === personContextCompletedInformationKind.kind) {
-      const inbound = (
-        await ledger.related({
-          from: [sourceAtom.informationId],
-          relation: "core:status-of",
-          direction: "outgoing",
-          limit: 1,
-        })
-      )[0];
-      if (inbound !== undefined) {
-        const claims = (
-          await ledger.related({
-            from: [inbound.informationId],
-            relation: "core:uses-context",
-            direction: "incoming",
-            limit: 1_000,
-          })
-        ).filter((atom) => atom.kind === turnClaimedInformationKind.kind);
+export function createHeartflowMemorySelector(
+  agentNames: readonly string[] = [],
+) {
+  return defineInformationSelector({
+    selectorId: "agent.heartflow.optional-memory",
+    select: async ({ sourceAtom, ledger }) => {
+      let candidates: readonly DeepReadonly<InformationAtom>[] = [];
+      if (sourceAtom.kind === turnCandidateInformationKind.kind) {
+        candidates = [sourceAtom];
+      } else if (
+        sourceAtom.kind === attentionArousalCompletedInformationKind.kind
+      ) {
         candidates = (
-          await Promise.all(
-            claims.map((claim) =>
-              ledger.related({
-                from: [claim.informationId],
-                relation: "agent:turn-candidate",
-                direction: "outgoing",
-                limit: 1,
-              }),
-            ),
-          )
-        ).flat();
-      }
-    }
-    const memories = new Map<string, DeepReadonly<InformationAtom>>();
-    let knowledgeCount = 0;
-    for (const candidate of candidates) {
-      if (memories.size >= 8) break;
-      const candidatePayload = candidate.payload as any;
-      const inbounds = await ledger.find({
-        kinds: [inboundTextInformationKind.kind],
-        scopeKey: candidatePayload.scopeKey,
-        registrationOrder: true,
-        ...(candidatePayload.unreadAfterInformationId
-          ? { afterInformationId: candidatePayload.unreadAfterInformationId }
-          : {}),
-        throughInformationId: candidatePayload.unreadThroughInformationId,
-        payloadContains: {
-          source: {
-            platform: candidatePayload.platform,
-            adapterId: candidatePayload.adapterId,
-            destination: candidatePayload.destination,
-          },
-        },
-        order: "asc",
-        limit: 1_000,
-      });
-      const query = inbounds
-        .map((atom) => (atom.payload as any).text as string)
-        .join("\n")
-        .trim();
-      if (query.length === 0) continue;
-      const knowledge = await selectKnowledgeMemory(ledger, {
-        inbounds,
-        occurredBefore: String(candidate.payload.asOf),
-        recordedBefore: candidate.occurredAt,
-        limit: Math.min(4 - knowledgeCount, 8 - memories.size),
-      });
-      for (const atom of knowledge) {
-        if (!memories.has(atom.informationId)) knowledgeCount += 1;
-        memories.set(atom.informationId, atom);
-      }
-      if (memories.size >= 8) break;
-      try {
-        const selected = await ledger.retrieve({
-          strategyId: MEMORY_RETRIEVAL_STRATEGY_ID,
-          input: {
-            query: Array.from(query).slice(0, 512).join(""),
-            scopes: inbounds.map((atom) => {
-              const source = inboundTextInformationKind.payloadSchema.parse(
-                atom.payload,
-              ).source;
-              return {
-                platform: source.platform,
-                adapterId: source.adapterId,
-                destination: source.destination,
-              };
-            }),
-            occurredBefore: (candidate.payload as any).asOf,
-            recordedBefore: candidate.occurredAt,
-            excludeSourceInformationIds: inbounds.map(
-              ({ informationId }) => informationId,
-            ),
-          },
-          limit: 8 - memories.size,
-        });
-        const excluded = new Set(inbounds.map((atom) => atom.informationId));
-        for (const atom of selected) {
-          if (
-            !excluded.has(atom.informationId) &&
-            inbounds.some((inbound) =>
-              isMemorySourceInScope(
-                atom,
-                inboundTextInformationKind.payloadSchema.parse(inbound.payload)
-                  .source,
-                String(candidate.payload.asOf),
+          await ledger.related({
+            from: [sourceAtom.informationId],
+            relation: "core:status-of",
+            direction: "outgoing",
+            limit: 1,
+          })
+        ).filter((atom) => atom.kind === turnCandidateInformationKind.kind);
+      } else if (
+        sourceAtom.kind === personContextCompletedInformationKind.kind
+      ) {
+        const inbound = (
+          await ledger.related({
+            from: [sourceAtom.informationId],
+            relation: "core:status-of",
+            direction: "outgoing",
+            limit: 1,
+          })
+        )[0];
+        if (inbound !== undefined) {
+          const claims = (
+            await ledger.related({
+              from: [inbound.informationId],
+              relation: "core:uses-context",
+              direction: "incoming",
+              limit: 1_000,
+            })
+          ).filter((atom) => atom.kind === turnClaimedInformationKind.kind);
+          candidates = (
+            await Promise.all(
+              claims.map((claim) =>
+                ledger.related({
+                  from: [claim.informationId],
+                  relation: "agent:turn-candidate",
+                  direction: "outgoing",
+                  limit: 1,
+                }),
               ),
             )
-          )
-            memories.set(atom.informationId, atom);
-          if (memories.size >= 8) break;
+          ).flat();
         }
-      } catch {
-        // Optional Memory never blocks the online turn.
       }
-    }
-    return [...memories.keys()];
-  },
-});
+      const memories = new Map<string, DeepReadonly<InformationAtom>>();
+      let knowledgeCount = 0;
+      for (const candidate of candidates) {
+        if (memories.size >= 8) break;
+        const candidatePayload = candidate.payload as any;
+        const inbounds = await ledger.find({
+          kinds: [inboundTextInformationKind.kind],
+          scopeKey: candidatePayload.scopeKey,
+          registrationOrder: true,
+          ...(candidatePayload.unreadAfterInformationId
+            ? { afterInformationId: candidatePayload.unreadAfterInformationId }
+            : {}),
+          throughInformationId: candidatePayload.unreadThroughInformationId,
+          payloadContains: {
+            source: {
+              platform: candidatePayload.platform,
+              adapterId: candidatePayload.adapterId,
+              destination: candidatePayload.destination,
+            },
+          },
+          order: "asc",
+          limit: 1_000,
+        });
+        const query = buildRecallQuery(
+          inbounds.map((atom) => String(atom.payload.text ?? "")),
+        );
+        if (query.length === 0) continue;
+        const knowledge = await selectKnowledgeMemory(ledger, {
+          inbounds,
+          occurredBefore: String(candidate.payload.asOf),
+          recordedBefore: candidate.occurredAt,
+          limit: Math.min(4 - knowledgeCount, 8 - memories.size),
+          agentNames,
+        });
+        for (const atom of knowledge) {
+          if (!memories.has(atom.informationId)) knowledgeCount += 1;
+          memories.set(atom.informationId, atom);
+        }
+        if (memories.size >= 8) break;
+        try {
+          const selected = await ledger.retrieve({
+            strategyId: MEMORY_RETRIEVAL_STRATEGY_ID,
+            input: {
+              query,
+              scopes: inbounds.map((atom) => {
+                const source = inboundTextInformationKind.payloadSchema.parse(
+                  atom.payload,
+                ).source;
+                return {
+                  platform: source.platform,
+                  adapterId: source.adapterId,
+                  destination: source.destination,
+                };
+              }),
+              occurredBefore: (candidate.payload as any).asOf,
+              recordedBefore: candidate.occurredAt,
+              excludeSourceInformationIds: inbounds.map(
+                ({ informationId }) => informationId,
+              ),
+            },
+            limit: 8 - memories.size,
+          });
+          const excluded = new Set(inbounds.map((atom) => atom.informationId));
+          for (const atom of selected) {
+            if (
+              !excluded.has(atom.informationId) &&
+              inbounds.some((inbound) =>
+                isMemorySourceInScope(
+                  atom,
+                  inboundTextInformationKind.payloadSchema.parse(
+                    inbound.payload,
+                  ).source,
+                  String(candidate.payload.asOf),
+                ),
+              )
+            )
+              memories.set(atom.informationId, atom);
+            if (memories.size >= 8) break;
+          }
+        } catch {
+          // Optional Memory never blocks the online turn.
+        }
+      }
+      return [...memories.keys()];
+    },
+  });
+}
+export const heartflowMemorySelector = createHeartflowMemorySelector();
 
 export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
+  const scopedMemorySelector = createHeartflowMemorySelector([
+    options.agentIdentity.name,
+    ...options.agentIdentity.aliases,
+  ]);
   const cognitive = options.cognitionIdentity
     ? createCognitionMemorySelector(options.cognitionIdentity, {
         requireEvidenceGuard: options.memoryKnowledgeEnabled ?? false,
@@ -599,11 +613,11 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
         selectorId: heartflowMemorySelector.selectorId,
         select: async (context) => {
           const snapshots = (await cognitive.select(context)).slice(0, 2);
-          const sources = await heartflowMemorySelector.select(context);
+          const sources = await scopedMemorySelector.select(context);
           return [...new Set([...snapshots, ...sources])].slice(0, 8);
         },
       })
-    : heartflowMemorySelector;
+    : scopedMemorySelector;
   const deliveryKinds = [
     options.deliveryDeliveredInformationKind,
     options.deliveryFailedInformationKind,
@@ -977,7 +991,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
                 (atom) =>
                   atom.kind === "core.model.task.requested" &&
                   atom.payload.taskId === PLANNER_TASK_ID &&
-                  atom.payload.version === "1" &&
+                  ["1", "2"].includes(String(atom.payload.version)) &&
                   (
                     atom.payload.activation as {
                       instanceId?: string;
@@ -1007,9 +1021,17 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
                 .execute({
                   task: {
                     taskId: PLANNER_TASK_ID,
-                    version: "1",
+                    version: String(persisted?.payload.version ?? "2"),
                     outputMode: "object",
-                    outputSchema: plannerActionSchema,
+                    // 旧任务重放保留原 schema 指纹；新任务在模型结构修复阶段就拒绝越界焦点和超预算等待。
+                    outputSchema:
+                      persisted?.payload.version === "1"
+                        ? plannerActionSchema
+                        : plannerActionSchemaForTurn({
+                            inputs: (turn.payload as any).inputs,
+                            attempt: gate.attempt,
+                            totalWaitBudget: gate.totalWaitBudget,
+                          }),
                     allowedTiers: ["light", "heavy"],
                   },
                   sourceInformationId: sourceAtom.informationId,

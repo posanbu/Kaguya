@@ -10,5 +10,7 @@ defaultTest:
       value: "context.providerResponse.metadata.valid === true"
     - type: javascript
       value: "JSON.parse(output).action === context.vars.expectedAction"
+    - type: javascript
+      value: "!context.vars.expectedFocus || JSON.stringify(JSON.parse(output).composition?.focusInputIndexes) === JSON.stringify(context.vars.expectedFocus)"
 evaluateOptions:
   maxConcurrency: 2

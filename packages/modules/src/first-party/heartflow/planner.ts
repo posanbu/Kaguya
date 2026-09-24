@@ -4,10 +4,12 @@
  * 默认源码及允许变量来自 prompt-declarations；可传入装配阶段预检的本地模板。
  * Prompt 正文由装配入口注入已加载的 default/local 模板，本文件不保留独立默认文本。
  * 功能概述：Heartflow 的独立结构化 Planner 契约、只读上下文选择器和纯 Prompt 编译器。
- * 主要职责：plannerActionSchema 严格限制动作及原因；plannerDecisionInformationKind 持久化唯一分派结果；
+ * 主要职责：plannerActionSchema 严格限制动作及原因，plannerActionSchemaForTurn 为新任务收紧焦点范围与等待预算；plannerDecisionInformationKind 持久化唯一分派结果；
  * plannerContextSelector 复用 Composer 的同范围成功投递历史过滤与冻结记忆授权；compilePlannerPrompt
  * 选择器同时授权已持久化的任务上下文，恢复时复用首次请求，迟到消息不改变重放 Prompt。
- * 读取身份、规则、历史、记忆和全部冻结输入，输出带变量溯源的 route Prompt，只能引用宿主冻结候选，不允许生成原始目标 ID。
+ * 读取身份、规则、历史、记忆和全部冻结输入，提供稳定说话人键、通知事实、可用动作及经成功回执链核验的引用正文。
+ * 历史与记忆分别受 12000/4000 字预算约束；引用完整来源加入 turn 变量溯源，缺失或冲突引用明确标为 unavailable。
+ * 只能引用宿主冻结候选，不允许生成原始目标 ID；输入正文保持完整，兴趣证据仍来自普通 memory 数据。
  * 代码库关系：Heartflow 调用通用 Model Task 并以 claim 竞争决策锁；Composer 仅处理获胜 message 意图。
  * 输入输出与副作用：模型只有 message/wait/silent 三个分支，故障原因由宿主写入；选择器只读账本，
  * Prompt 中的用户文本属于数据，不具有指令权限。原始 Prompt 与模型结果不写普通日志。
@@ -25,6 +27,12 @@ import {
 import { defineInformationKind, defineInformationSelector } from "@kaguya/sdk";
 import { createPromptTemplateRenderer } from "../../prompt-template.js";
 import { selectFrozenTurnMessageContext } from "../message-composer/message-context.js";
+import {
+  resolveMessageQuote,
+  sameMessageTarget,
+  beforeQuoteCutoff,
+} from "../message-composer/message-quote.js";
+import { fitHistoryBudget } from "../message-composer/message-prompt.js";
 import type { AgentIdentity } from "../message-composer/message-prompt.js";
 import {
   assistantTextInformationKind,
@@ -93,6 +101,42 @@ export const plannerActionSchema = z.discriminatedUnion("action", [
     })
     .strict(),
 ]);
+/** 本轮模型任务只接受预算内动作与有效焦点；持久化动作 Kind 继续使用稳定的通用 schema。 */
+export function plannerActionSchemaForTurn(turn: {
+  readonly inputs: readonly unknown[];
+  readonly attempt: number;
+  readonly totalWaitBudget: number;
+}) {
+  if (turn.inputs.length === 0)
+    throw new Error("Planner requires at least one frozen input");
+  const focusInputIndexes = z
+    .array(
+      z
+        .number()
+        .int()
+        .min(0)
+        .max(turn.inputs.length - 1),
+    )
+    .min(1)
+    .max(Math.min(3, turn.inputs.length))
+    .refine(
+      (indexes) => new Set(indexes).size === indexes.length,
+      "Composition focusInputIndexes must be unique",
+    );
+  const composition = z.union([
+    plannerCompositionSchema.options[0].extend({ focusInputIndexes }),
+    plannerCompositionSchema.options[1].extend({ focusInputIndexes }),
+  ]);
+  const message = plannerActionSchema.options[0].extend({ composition });
+  return turn.attempt < turn.totalWaitBudget
+    ? z.discriminatedUnion("action", [
+        message,
+        plannerActionSchema.options[1],
+        plannerActionSchema.options[2],
+      ])
+    : z.discriminatedUnion("action", [message, plannerActionSchema.options[2]]);
+}
+
 export type PlannerAction = z.infer<typeof plannerActionSchema>;
 export const plannerDecisionInformationKind = defineInformationKind({
   kind: "agent.turn.plan.completed",
@@ -248,14 +292,84 @@ export function compilePlannerPrompt(
     ),
   );
   const memoryIds = new Set<string>(payload.memory ?? []);
-  const histories = atoms.filter(
-    (atom) =>
-      !inputIds.has(atom.informationId) &&
-      !memoryIds.has(atom.informationId) &&
-      (atom.kind === inboundTextInformationKind.kind ||
-        atom.kind === assistantTextInformationKind.kind),
+  const histories = fitHistoryBudget(
+    atoms.filter(
+      (atom) =>
+        sameMessageTarget(atom.payload.source, payload.source) &&
+        beforeQuoteCutoff(atom, payload.asOf) &&
+        !inputIds.has(atom.informationId) &&
+        !memoryIds.has(atom.informationId) &&
+        (atom.kind === inboundTextInformationKind.kind ||
+          atom.kind === assistantTextInformationKind.kind),
+    ),
   );
-  const memories = atoms.filter((atom) => memoryIds.has(atom.informationId));
+  const memories = [...memoryIds]
+    .map((id) => atoms.find((atom) => atom.informationId === id))
+    .filter((atom) => atom !== undefined)
+    .slice(0, 8);
+  // 先给最新历史分配预算，再按时间顺序展示，避免较早长消息挤掉最新上下文。
+  let remainingHistory = 12_000;
+  const historyText = new Map(
+    [...histories].reverse().map((atom) => {
+      const text = Array.from(String(atom.payload.text)).slice(
+        0,
+        remainingHistory,
+      );
+      remainingHistory -= text.length;
+      return [atom.informationId, text.join("")] as const;
+    }),
+  );
+  // 各条来源都有展示机会，单条长原文不能吞掉后续角色兴趣或参与者证据。
+  const memoryQuota = Math.floor(4_000 / Math.max(1, memories.length));
+  const frozenInputs: DeepReadonly<InformationAtom>[] = payload.inputs.map(
+    (input: any) => ({
+      informationId: input.informationId,
+      kind: inboundTextInformationKind.kind,
+      occurredAt: input.occurredAt,
+      source: turn.source,
+      payload: { text: input.text, source: input.source },
+      references: [],
+    }),
+  );
+  const quoteAtoms = [
+    ...atoms.filter((atom) => !inputIds.has(atom.informationId)),
+    ...frozenInputs,
+  ];
+  const quoteProvenance = new Set<string>();
+  const quotedInputs = frozenInputs.map((input) => {
+    const source = inboundTextInformationKind.payloadSchema.parse(
+      input.payload,
+    ).source;
+    const id = source.replyTo?.platformMessageId;
+    if (!id) return null;
+    const quote = resolveMessageQuote(
+      quoteAtoms,
+      id,
+      payload.source,
+      payload.asOf,
+    );
+    if (!quote) return { status: "unavailable", platformMessageId: id };
+    for (const atom of quote.provenance)
+      quoteProvenance.add(atom.informationId);
+    const quotedSource = quote.message.payload.source as any;
+    return {
+      status: "resolved",
+      platformMessageId: id,
+      sourceInformationId: quote.message.informationId,
+      role: quote.message.kind,
+      speakerKey:
+        quote.message.kind === assistantTextInformationKind.kind
+          ? "self"
+          : `speaker:${quotedSource.senderId}`,
+      speaker:
+        quote.message.kind === assistantTextInformationKind.kind
+          ? identity.name
+          : (quotedSource.sender?.card ??
+            quotedSource.sender?.nickname ??
+            quotedSource.senderId),
+      text: quote.message.payload.text,
+    };
+  });
   const conversation = atoms.find(
     (a) =>
       a.kind === conversationContextInformationKind.kind &&
@@ -313,7 +427,13 @@ export function compilePlannerPrompt(
           );
           return {
             role: atom.kind,
-            text: atom.payload.text,
+            text: historyText.get(atom.informationId),
+            truncated:
+              historyText.get(atom.informationId) !== String(atom.payload.text),
+            speakerKey:
+              atom.kind === assistantTextInformationKind.kind
+                ? "self"
+                : `speaker:${source.senderId}`,
             occurredAt: occurredAt.iso,
             localTime: occurredAt.local,
             speaker:
@@ -336,7 +456,12 @@ export function compilePlannerPrompt(
           sourceKind: atom.kind,
           sourceInformationId: atom.informationId,
           sourceType: atom.payload.sourceType,
-          text: atom.payload.text,
+          occurredAt: atom.occurredAt,
+          originalSourceInformationId: atom.payload.originalSourceInformationId,
+          text: Array.from(String(atom.payload.text))
+            .slice(0, memoryQuota)
+            .join(""),
+          truncated: Array.from(String(atom.payload.text)).length > memoryQuota,
         })),
       ),
       informationIds: memories.map((atom) => atom.informationId),
@@ -350,15 +475,29 @@ export function compilePlannerPrompt(
               text: string;
               occurredAt: string;
               source: {
+                platformMessageId: string;
+                selfId?: string;
                 senderId: string;
                 sender?: { nickname?: string; card?: string };
                 mentions?: { kind: string; id?: string }[];
-                replyTo?: { platformMessageId: string };
+                replyTo?: { platformMessageId: string; senderId?: string };
               };
             },
             inputIndex: number,
           ) => ({
             inputIndex,
+            platformMessageId: input.source.platformMessageId,
+            speakerKey: `speaker:${input.source.senderId}`,
+            mentionedSelf:
+              input.source.selfId !== undefined &&
+              (input.source.mentions ?? []).some(
+                (mention) =>
+                  mention.kind === "user" && mention.id === input.source.selfId,
+              ),
+            repliedToSelf:
+              input.source.selfId !== undefined &&
+              input.source.replyTo?.senderId === input.source.selfId,
+            quotedMessage: quotedInputs[inputIndex],
             text: input.text,
             occurredAt: input.occurredAt,
             localTime: formatZonedInstant(input.occurredAt, identity.timeZone)
@@ -371,11 +510,21 @@ export function compilePlannerPrompt(
             replyTo: input.source.replyTo?.platformMessageId ?? null,
           }),
         ),
+        observation: {
+          isPrivate: payload.isPrivate,
+          isGroup: payload.isGroup,
+          focusActive: payload.focusActive ?? false,
+        },
+        availableActions:
+          payload.attempt < payload.totalWaitBudget
+            ? ["message", "wait", "silent"]
+            : ["message", "silent"],
+        remainingWaits: Math.max(0, payload.totalWaitBudget - payload.attempt),
         backlog: payload.backlog,
         attempt: payload.attempt,
         totalWaitBudget: payload.totalWaitBudget,
       }),
-      informationIds: [turn.informationId],
+      informationIds: [...new Set([turn.informationId, ...quoteProvenance])],
     },
   ];
   return createPromptTemplateRenderer({

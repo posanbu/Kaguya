@@ -1,3 +1,10 @@
+/**
+ * 功能概述：通过真实 InformationCore/PGlite 验证先观察再冻结上下文、Planner 分派和唯一终态。
+ * 主要职责：fixture 安装 Heartflow 与受控模型能力；appendOpportunity/decide 构造通知与观察事实；
+ * waitFor/settle 按 8 秒持久化预算等待事实或 durable 队列收敛，否定断言不依赖固定休眠。
+ * 代码库关系：配合 planner.test.ts 的纯编译测试及 Server 的真实模型任务协议测试；不访问外部模型。
+ * 输入输出与副作用：每项测试使用独立数据库并在结束时关闭 Host/Core/数据库，保留精确输入水位与动作断言。
+ */
 import { afterEach, expect, it, vi } from "vitest";
 import { createTestingDatabase } from "@kaguya/database/testing";
 import {
@@ -456,12 +463,22 @@ async function all(database: any) {
   });
 }
 
+const PERSISTENCE_WAIT = { timeout: 8000, interval: 20 } as const;
+async function settle(
+  database: Awaited<ReturnType<typeof createTestingDatabase>>,
+) {
+  await vi.waitFor(
+    async () =>
+      expect((await database.information.reliable.health()).pending).toBe(0),
+    PERSISTENCE_WAIT,
+  );
+}
 async function waitFor(database: any, kind: string) {
   return vi.waitFor(async () => {
     const atom = (await all(database)).find((item: any) => item.kind === kind);
     expect(atom).toBeDefined();
     return atom;
-  });
+  }, PERSISTENCE_WAIT);
 }
 
 it("does not read or freeze a turn before observe, and defer leaves it absent", async () => {
@@ -470,7 +487,7 @@ it("does not read or freeze a turn before observe, and defer leaves it absent", 
     texts: ["ordinary group message"],
     group: true,
   });
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await settle(database);
   expect(
     (await all(database)).some(
       (atom: any) => atom.kind === turnContextCompletedInformationKind.kind,
@@ -478,7 +495,7 @@ it("does not read or freeze a turn before observe, and defer leaves it absent", 
   ).toBe(false);
   expect(opportunity.candidate.payload).not.toHaveProperty("text");
   await decide(core, opportunity.candidate, "defer");
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await settle(database);
   expect(
     (await all(database)).some(
       (atom: any) => atom.kind === turnContextCompletedInformationKind.kind,
@@ -524,7 +541,7 @@ it("waits for Identity terminal before freezing the observed batch", async () =>
     identities: false,
   });
   await decide(core, opportunity.candidate, "observe");
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await settle(database);
   expect(
     (await all(database)).some(
       (atom: any) => atom.kind === turnContextCompletedInformationKind.kind,
