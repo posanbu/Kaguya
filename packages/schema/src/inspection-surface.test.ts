@@ -12,6 +12,7 @@ import {
   inspectionPresentationSchema,
   inspectionRequestPageSchema,
   inspectionRequestDetailSchema,
+  inspectionModulesSchema,
 } from "./inspection.js";
 const component = {
   id: "queries",
@@ -50,6 +51,36 @@ const surface = (value: unknown) => ({
   title: "记录",
   layout: { type: "master-detail", areas: ["main"] },
   components: [value],
+});
+
+it("accepts active module bindings that do not consume a capability", () => {
+  expect(
+    inspectionModulesSchema.parse({
+      version: 1,
+      modules: [
+        {
+          definitionId: "memory.writeback",
+          tags: ["memory"],
+          displayName: "原始记忆",
+          summary: "保存原文",
+          description: "保存原文",
+          moduleVersion: "1.0.0",
+          protocolVersion: 1,
+          settingsSchemaFingerprint: "fingerprint",
+          consumes: [],
+          produces: [],
+          selectors: [],
+          promptRenderers: [],
+          diagnostics: [],
+          requires: [],
+          provides: [],
+          bindings: [
+            { instanceId: "memory.writeback.default", capabilities: [] },
+          ],
+        },
+      ],
+    }).modules[0]?.bindings[0]?.capabilities,
+  ).toEqual([]);
 });
 
 it("accepts model requests with bounded-scan continuation and an independent complete prompt", () => {
@@ -129,6 +160,48 @@ it("accepts bounded declarative records without identity-only metadata", () => {
       nextCursor: null,
     }).items,
   ).toEqual([]);
+});
+it("accepts a page-oriented Wiki browser", () => {
+  expect(
+    moduleInspectionSurfaceSchema.parse(
+      surface({
+        id: "pages",
+        type: "wiki-browser",
+        area: "main",
+        viewId: "pages",
+        pageKind: "memory.knowledge.wiki.updated",
+        empty: "还没有 Wiki 页面。",
+      }),
+    ).components[0],
+  ).toMatchObject({
+    type: "wiki-browser",
+    pageKind: "memory.knowledge.wiki.updated",
+  });
+});
+it("accepts a bounded storage table and its page-specific hidden sections", () => {
+  const parsed = moduleInspectionSurfaceSchema.parse({
+    ...surface({
+      id: "documents",
+      type: "storage-browser",
+      area: "main",
+      columns: ["正文", "会话", "发生时间"],
+      empty: "还没有原始记忆。",
+    }),
+    hiddenSections: ["settings", "prompt-renderers"],
+  });
+  expect(parsed.components[0]!.type).toBe("storage-browser");
+  expect(parsed.hiddenSections).toEqual(["settings", "prompt-renderers"]);
+  expect(() =>
+    moduleInspectionSurfaceSchema.parse({
+      ...surface({
+        id: "documents",
+        type: "storage-browser",
+        area: "main",
+        columns: [],
+        empty: "暂无",
+      }),
+    }),
+  ).toThrow();
 });
 it("rejects executable paths and unbounded relation reads", () => {
   expect(() =>

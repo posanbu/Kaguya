@@ -125,7 +125,7 @@ export const memoryWritebackModule = defineInformationModule({
     definitionId: "memory.writeback",
     tags: ["memory"],
     inspection: firstPartyInspection["memory.writeback"],
-    displayName: "原始记忆写回",
+    displayName: "原始记忆",
     summary: "将入站原文可靠保存到独立记忆存储。",
     description:
       "消费消息身份终态并沿引用重载原始入站文本，提交幂等写回请求及完成、空内容或失败结果；即使回合不发言也保存原文，向量与认知处理独立进行。",

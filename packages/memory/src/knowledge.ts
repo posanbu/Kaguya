@@ -198,6 +198,14 @@ export interface MemoryKnowledgeAccess {
     limit: number;
     after?: { scopeInformationId: string; entityInformationId: string };
   }): Promise<readonly WikiPage[]>;
+  listWikiPages(input: {
+    limit: number;
+    before?: {
+      recordedAt: string;
+      scopeInformationId: string;
+      entityInformationId: string;
+    };
+  }): Promise<readonly WikiPage[]>;
   readWikiPage(input: {
     scopeInformationId: string;
     entityInformationId: string;

@@ -253,6 +253,70 @@ describe("模块独立页面", () => {
     expect(surfaced).toContain("正在整理人物与身份资料");
     expect(surfaced).not.toContain("模块数据视图");
   });
+  it("lets a storage surface remove generic controls and irrelevant technical sections", () => {
+    const settings = vi.fn(() => <p>配置表单</p>);
+    const templates = vi.fn(() => <p>模板表单</p>);
+    const html = render(
+      <ModuleDetails
+        module={{
+          ...module,
+          definitionId: "memory.writeback",
+          displayName: "原始记忆",
+          inspection: {
+            storage: "memory",
+            mechanism: ["写回步骤"],
+            views: [
+              {
+                id: "writeback",
+                title: "写回历史",
+                description: "历史",
+                kinds: [module.produces[0]!.kind],
+                fields: [{ path: "status", label: "结果" }],
+              },
+            ],
+            surface: {
+              version: 1,
+              id: "raw-memory",
+              title: "原始记忆",
+              layout: { type: "sections", areas: ["documents"] },
+              components: [
+                {
+                  id: "documents",
+                  type: "storage-browser",
+                  area: "documents",
+                  columns: ["正文", "会话", "发生时间"],
+                  empty: "还没有原始记忆。",
+                },
+              ],
+              hiddenSections: [
+                "responsibilities",
+                "settings",
+                "templates",
+                "prompt-renderers",
+                "diagnostics",
+              ],
+            },
+          },
+        }}
+        token="test"
+        DetailComponent={() => null}
+        SettingsSection={settings}
+        TemplatesSection={templates}
+      />,
+    );
+    expect(html).toContain('<h2 tabindex="-1">原始记忆</h2>');
+    expect(html).toContain("正在加载原始记忆");
+    expect(html).not.toContain("模块职责与输入输出");
+    expect(html).not.toContain("运行机制");
+    expect(html).not.toContain("数据存储");
+    expect(html).not.toContain("写回历史");
+    expect(html).not.toContain("模块配置");
+    expect(html).not.toContain("提示词模板");
+    expect(html).not.toContain("Prompt renderer");
+    expect(html).not.toContain("Selector、Capability、绑定与诊断");
+    expect(settings).not.toHaveBeenCalled();
+    expect(templates).not.toHaveBeenCalled();
+  });
   it.each([
     [{}, "正在加载模块"],
     [{ error: "Runtime 尚未就绪" }, "模块检查暂不可用"],
