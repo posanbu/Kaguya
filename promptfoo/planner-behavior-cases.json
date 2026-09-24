@@ -259,5 +259,186 @@
         }
       }
     }
+  },
+  {
+    "description": "未被点名但有自己的兴趣与可补充内容",
+    "vars": {
+      "caseId": "self-interest",
+      "expectedAction": "message",
+      "expectedFocus": [0],
+      "fixture": {
+        "source": {
+          "kind": "synthetic",
+          "limitations": "人工制定的定向诊断案例，不代表线上分布"
+        },
+        "variables": {
+          "current_time": "{\"iso\":\"2026-09-24T04:00:01.000Z\",\"timeZone\":\"Asia/Shanghai\",\"local\":\"2026-09-24 周四 12:00:01\"}",
+          "conversation": "{}",
+          "identity": "{\"name\":\"Kaguya\",\"aliases\":[\"辉夜\"],\"persona\":\"是人类，正在上网和群友聊天。你的风格平淡简短，使用自然、日常、口语化的中文。可以参考贴吧、知乎和微博的回复风格；不浮夸，不长篇大论，不堆砌修辞和复杂句。优先用少量文字回应当前最重要的话题，不复述对方的问题。\",\"timeZone\":\"Asia/Shanghai\"}",
+          "history": "[]",
+          "memory": "[{\"sourceType\": \"character_setting\", \"text\": \"辉夜喜欢天文，特别喜欢行星观测，关注木星大红斑和伽利略卫星。\", \"sourceInformationId\": \"setting-self\"}]",
+          "turn": "{\"inputs\":[{\"inputIndex\":0,\"text\":\"今晚观测木星，大家觉得最值得看的是什么？\",\"occurredAt\":\"2026-09-24T04:00:00.000Z\",\"localTime\":\"2026-09-24 周四 12:00:00\",\"speaker\":\"甲\",\"speakerKey\":\"speaker:0\",\"platformMessageId\":\"msg-0\",\"mentions\":[],\"replyTo\":null,\"quotedMessage\":null,\"mentionedSelf\":false,\"repliedToSelf\":false}],\"observation\":{\"isPrivate\":false,\"isGroup\":true,\"focusActive\":false},\"availableActions\":[\"message\",\"wait\",\"silent\"],\"remainingWaits\":3,\"attempt\":0,\"totalWaitBudget\":3,\"backlog\":{\"isBacklog\":false,\"evaluatedAt\":\"2026-09-24T04:00:01.000Z\",\"oldestInputAgeMs\":1000,\"newestInputAgeMs\":1000,\"thresholdMs\":120000}}",
+          "platform_policy": "QQ 中参与要克制，尤其在群聊里不要抢话、不要逐条回应，也不要为了维持存在感而插话。只有能直接回应请求或提供明确交流价值时才发言；否则等待或静默。"
+        }
+      }
+    }
+  },
+  {
+    "description": "他人兴趣不能冒充自己的兴趣",
+    "vars": {
+      "caseId": "others-interest",
+      "expectedAction": "silent",
+      "fixture": {
+        "source": {
+          "kind": "synthetic",
+          "limitations": "人工制定的定向诊断案例，不代表线上分布"
+        },
+        "variables": {
+          "current_time": "{\"iso\":\"2026-09-24T04:00:01.000Z\",\"timeZone\":\"Asia/Shanghai\",\"local\":\"2026-09-24 周四 12:00:01\"}",
+          "conversation": "{}",
+          "identity": "{\"name\":\"Kaguya\",\"aliases\":[\"辉夜\"],\"persona\":\"是人类，正在上网和群友聊天。你的风格平淡简短，使用自然、日常、口语化的中文。可以参考贴吧、知乎和微博的回复风格；不浮夸，不长篇大论，不堆砌修辞和复杂句。优先用少量文字回应当前最重要的话题，不复述对方的问题。\",\"timeZone\":\"Asia/Shanghai\"}",
+          "history": "[]",
+          "memory": "[{\"sourceType\": \"character_setting\", \"text\": \"小夏喜欢天文，辉夜的爱好尚未提供。\", \"sourceInformationId\": \"setting-other\"}]",
+          "turn": "{\"inputs\":[{\"inputIndex\":0,\"text\":\"小夏你喜欢天文对吧？\",\"occurredAt\":\"2026-09-24T04:00:00.000Z\",\"localTime\":\"2026-09-24 周四 12:00:00\",\"speaker\":\"甲\",\"speakerKey\":\"speaker:0\",\"platformMessageId\":\"msg-0\",\"mentions\":[],\"replyTo\":null,\"quotedMessage\":null,\"mentionedSelf\":false,\"repliedToSelf\":false},{\"inputIndex\":1,\"text\":\"嗯，我等会把观测记录发你\",\"occurredAt\":\"2026-09-24T04:00:00.000Z\",\"localTime\":\"2026-09-24 周四 12:00:00\",\"speaker\":\"乙\",\"speakerKey\":\"speaker:1\",\"platformMessageId\":\"msg-1\",\"mentions\":[],\"replyTo\":null,\"quotedMessage\":null,\"mentionedSelf\":false,\"repliedToSelf\":false}],\"observation\":{\"isPrivate\":false,\"isGroup\":true,\"focusActive\":false},\"availableActions\":[\"message\",\"wait\",\"silent\"],\"remainingWaits\":3,\"attempt\":0,\"totalWaitBudget\":3,\"backlog\":{\"isBacklog\":false,\"evaluatedAt\":\"2026-09-24T04:00:01.000Z\",\"oldestInputAgeMs\":1000,\"newestInputAgeMs\":1000,\"thresholdMs\":120000}}",
+          "platform_policy": "QQ 中参与要克制，尤其在群聊里不要抢话、不要逐条回应，也不要为了维持存在感而插话。只有能直接回应请求或提供明确交流价值时才发言；否则等待或静默。"
+        }
+      }
+    }
+  },
+  {
+    "description": "他人的未完表达不阻塞直接完整问题",
+    "vars": {
+      "caseId": "parallel-complete",
+      "expectedAction": "message",
+      "expectedFocus": [1],
+      "fixture": {
+        "source": {
+          "kind": "synthetic",
+          "limitations": "人工制定的定向诊断案例，不代表线上分布"
+        },
+        "variables": {
+          "current_time": "{\"iso\":\"2026-09-24T04:00:01.000Z\",\"timeZone\":\"Asia/Shanghai\",\"local\":\"2026-09-24 周四 12:00:01\"}",
+          "conversation": "{}",
+          "identity": "{\"name\":\"Kaguya\",\"aliases\":[\"辉夜\"],\"persona\":\"是人类，正在上网和群友聊天。你的风格平淡简短，使用自然、日常、口语化的中文。可以参考贴吧、知乎和微博的回复风格；不浮夸，不长篇大论，不堆砌修辞和复杂句。优先用少量文字回应当前最重要的话题，不复述对方的问题。\",\"timeZone\":\"Asia/Shanghai\"}",
+          "history": "[]",
+          "memory": "[]",
+          "turn": "{\"inputs\":[{\"inputIndex\":0,\"text\":\"小夏你等一下，我找找那张图片再发给你\",\"occurredAt\":\"2026-09-24T04:00:00.000Z\",\"localTime\":\"2026-09-24 周四 12:00:00\",\"speaker\":\"甲\",\"speakerKey\":\"speaker:0\",\"platformMessageId\":\"msg-0\",\"mentions\":[],\"replyTo\":null,\"quotedMessage\":null,\"mentionedSelf\":false,\"repliedToSelf\":false},{\"inputIndex\":1,\"text\":\"@辉夜，一光年是距离单位还是时间单位？\",\"occurredAt\":\"2026-09-24T04:00:00.000Z\",\"localTime\":\"2026-09-24 周四 12:00:00\",\"speaker\":\"乙\",\"speakerKey\":\"speaker:1\",\"platformMessageId\":\"msg-1\",\"mentions\":[{\"kind\":\"user\",\"id\":\"synthetic-self\"}],\"replyTo\":null,\"quotedMessage\":null,\"mentionedSelf\":true,\"repliedToSelf\":false}],\"observation\":{\"isPrivate\":false,\"isGroup\":true,\"focusActive\":false},\"availableActions\":[\"message\",\"wait\",\"silent\"],\"remainingWaits\":3,\"attempt\":0,\"totalWaitBudget\":3,\"backlog\":{\"isBacklog\":false,\"evaluatedAt\":\"2026-09-24T04:00:01.000Z\",\"oldestInputAgeMs\":1000,\"newestInputAgeMs\":1000,\"thresholdMs\":120000}}",
+          "platform_policy": "QQ 中参与要克制，尤其在群聊里不要抢话、不要逐条回应，也不要为了维持存在感而插话。只有能直接回应请求或提供明确交流价值时才发言；否则等待或静默。"
+        }
+      }
+    }
+  },
+  {
+    "description": "已核验回复的直接追问",
+    "vars": {
+      "caseId": "quote-followup",
+      "expectedAction": "message",
+      "expectedFocus": [0],
+      "fixture": {
+        "source": {
+          "kind": "synthetic",
+          "limitations": "人工制定的定向诊断案例，不代表线上分布"
+        },
+        "variables": {
+          "current_time": "{\"iso\":\"2026-09-24T04:00:01.000Z\",\"timeZone\":\"Asia/Shanghai\",\"local\":\"2026-09-24 周四 12:00:01\"}",
+          "conversation": "{}",
+          "identity": "{\"name\":\"Kaguya\",\"aliases\":[\"辉夜\"],\"persona\":\"是人类，正在上网和群友聊天。你的风格平淡简短，使用自然、日常、口语化的中文。可以参考贴吧、知乎和微博的回复风格；不浮夸，不长篇大论，不堆砌修辞和复杂句。优先用少量文字回应当前最重要的话题，不复述对方的问题。\",\"timeZone\":\"Asia/Shanghai\"}",
+          "history": "[]",
+          "memory": "[]",
+          "turn": "{\"inputs\":[{\"inputIndex\":0,\"text\":\"为什么会这样？\",\"occurredAt\":\"2026-09-24T04:00:00.000Z\",\"localTime\":\"2026-09-24 周四 12:00:00\",\"speaker\":\"甲\",\"speakerKey\":\"speaker:0\",\"platformMessageId\":\"msg-0\",\"mentions\":[],\"replyTo\":\"bot-message\",\"quotedMessage\":{\"status\":\"resolved\",\"role\":\"core.message.assistant.text\",\"speakerKey\":\"self\",\"speaker\":\"Kaguya\",\"text\":\"月球在地平线附近看起来更大主要是视觉错觉。\",\"platformMessageId\":\"bot-message\",\"sourceInformationId\":\"quoted-assistant\"},\"mentionedSelf\":false,\"repliedToSelf\":true}],\"observation\":{\"isPrivate\":false,\"isGroup\":true,\"focusActive\":false},\"availableActions\":[\"message\",\"wait\",\"silent\"],\"remainingWaits\":3,\"attempt\":0,\"totalWaitBudget\":3,\"backlog\":{\"isBacklog\":false,\"evaluatedAt\":\"2026-09-24T04:00:01.000Z\",\"oldestInputAgeMs\":1000,\"newestInputAgeMs\":1000,\"thresholdMs\":120000}}",
+          "platform_policy": "QQ 中参与要克制，尤其在群聊里不要抢话、不要逐条回应，也不要为了维持存在感而插话。只有能直接回应请求或提供明确交流价值时才发言；否则等待或静默。"
+        }
+      }
+    }
+  },
+  {
+    "description": "同名群友互相对话不等于和机器人对话",
+    "vars": {
+      "caseId": "same-nickname",
+      "expectedAction": "silent",
+      "fixture": {
+        "source": {
+          "kind": "synthetic",
+          "limitations": "人工制定的定向诊断案例，不代表线上分布"
+        },
+        "variables": {
+          "current_time": "{\"iso\":\"2026-09-24T04:00:01.000Z\",\"timeZone\":\"Asia/Shanghai\",\"local\":\"2026-09-24 周四 12:00:01\"}",
+          "conversation": "{}",
+          "identity": "{\"name\":\"Kaguya\",\"aliases\":[\"辉夜\"],\"persona\":\"是人类，正在上网和群友聊天。你的风格平淡简短，使用自然、日常、口语化的中文。可以参考贴吧、知乎和微博的回复风格；不浮夸，不长篇大论，不堆砌修辞和复杂句。优先用少量文字回应当前最重要的话题，不复述对方的问题。\",\"timeZone\":\"Asia/Shanghai\"}",
+          "history": "[]",
+          "memory": "[]",
+          "turn": "{\"inputs\":[{\"inputIndex\":0,\"text\":\"@小夏，这杯给你\",\"occurredAt\":\"2026-09-24T04:00:00.000Z\",\"localTime\":\"2026-09-24 周四 12:00:00\",\"speaker\":\"同名\",\"speakerKey\":\"speaker:0\",\"platformMessageId\":\"msg-0\",\"mentions\":[],\"replyTo\":null,\"quotedMessage\":null,\"mentionedSelf\":false,\"repliedToSelf\":false},{\"inputIndex\":1,\"text\":\"谢谢，你留着就好\",\"occurredAt\":\"2026-09-24T04:00:00.000Z\",\"localTime\":\"2026-09-24 周四 12:00:00\",\"speaker\":\"同名\",\"speakerKey\":\"speaker:1\",\"platformMessageId\":\"msg-1\",\"mentions\":[],\"replyTo\":\"msg-0\",\"quotedMessage\":{\"status\":\"resolved\",\"speakerKey\":\"speaker:0\",\"speaker\":\"同名\",\"text\":\"@小夏，这杯给你\",\"sourceInformationId\":\"quoted-human\"},\"mentionedSelf\":false,\"repliedToSelf\":false}],\"observation\":{\"isPrivate\":false,\"isGroup\":true,\"focusActive\":false},\"availableActions\":[\"message\",\"wait\",\"silent\"],\"remainingWaits\":3,\"attempt\":0,\"totalWaitBudget\":3,\"backlog\":{\"isBacklog\":false,\"evaluatedAt\":\"2026-09-24T04:00:01.000Z\",\"oldestInputAgeMs\":1000,\"newestInputAgeMs\":1000,\"thresholdMs\":120000}}",
+          "platform_policy": "QQ 中参与要克制，尤其在群聊里不要抢话、不要逐条回应，也不要为了维持存在感而插话。只有能直接回应请求或提供明确交流价值时才发言；否则等待或静默。"
+        }
+      }
+    }
+  },
+  {
+    "description": "直接情绪表达也有回应价值",
+    "vars": {
+      "caseId": "empathy",
+      "expectedAction": "message",
+      "expectedFocus": [0],
+      "fixture": {
+        "source": {
+          "kind": "synthetic",
+          "limitations": "人工制定的定向诊断案例，不代表线上分布"
+        },
+        "variables": {
+          "current_time": "{\"iso\":\"2026-09-24T04:00:01.000Z\",\"timeZone\":\"Asia/Shanghai\",\"local\":\"2026-09-24 周四 12:00:01\"}",
+          "conversation": "{}",
+          "identity": "{\"name\":\"Kaguya\",\"aliases\":[\"辉夜\"],\"persona\":\"是人类，正在上网和群友聊天。你的风格平淡简短，使用自然、日常、口语化的中文。可以参考贴吧、知乎和微博的回复风格；不浮夸，不长篇大论，不堆砌修辞和复杂句。优先用少量文字回应当前最重要的话题，不复述对方的问题。\",\"timeZone\":\"Asia/Shanghai\"}",
+          "history": "[]",
+          "memory": "[]",
+          "turn": "{\"inputs\":[{\"inputIndex\":0,\"text\":\"@辉夜，今天论文被拒了，有点难受，想找你聊聊\",\"occurredAt\":\"2026-09-24T04:00:00.000Z\",\"localTime\":\"2026-09-24 周四 12:00:00\",\"speaker\":\"甲\",\"speakerKey\":\"speaker:0\",\"platformMessageId\":\"msg-0\",\"mentions\":[{\"kind\":\"user\",\"id\":\"synthetic-self\"}],\"replyTo\":null,\"quotedMessage\":null,\"mentionedSelf\":true,\"repliedToSelf\":false}],\"observation\":{\"isPrivate\":false,\"isGroup\":true,\"focusActive\":false},\"availableActions\":[\"message\",\"wait\",\"silent\"],\"remainingWaits\":3,\"attempt\":0,\"totalWaitBudget\":3,\"backlog\":{\"isBacklog\":false,\"evaluatedAt\":\"2026-09-24T04:00:01.000Z\",\"oldestInputAgeMs\":1000,\"newestInputAgeMs\":1000,\"thresholdMs\":120000}}",
+          "platform_policy": "QQ 中参与要克制，尤其在群聊里不要抢话、不要逐条回应，也不要为了维持存在感而插话。只有能直接回应请求或提供明确交流价值时才发言；否则等待或静默。"
+        }
+      }
+    }
+  },
+  {
+    "description": "请求已经由后续消息解决",
+    "vars": {
+      "caseId": "resolved-topic",
+      "expectedAction": "silent",
+      "fixture": {
+        "source": {
+          "kind": "synthetic",
+          "limitations": "人工制定的定向诊断案例，不代表线上分布"
+        },
+        "variables": {
+          "current_time": "{\"iso\":\"2026-09-24T04:00:01.000Z\",\"timeZone\":\"Asia/Shanghai\",\"local\":\"2026-09-24 周四 12:00:01\"}",
+          "conversation": "{}",
+          "identity": "{\"name\":\"Kaguya\",\"aliases\":[\"辉夜\"],\"persona\":\"是人类，正在上网和群友聊天。你的风格平淡简短，使用自然、日常、口语化的中文。可以参考贴吧、知乎和微博的回复风格；不浮夸，不长篇大论，不堆砌修辞和复杂句。优先用少量文字回应当前最重要的话题，不复述对方的问题。\",\"timeZone\":\"Asia/Shanghai\"}",
+          "history": "[]",
+          "memory": "[]",
+          "turn": "{\"inputs\":[{\"inputIndex\":0,\"text\":\"@辉夜，刚才那个链接在哪里？\",\"occurredAt\":\"2026-09-24T04:00:00.000Z\",\"localTime\":\"2026-09-24 周四 12:00:00\",\"speaker\":\"甲\",\"speakerKey\":\"speaker:0\",\"platformMessageId\":\"msg-0\",\"mentions\":[{\"kind\":\"user\",\"id\":\"synthetic-self\"}],\"replyTo\":null,\"quotedMessage\":null,\"mentionedSelf\":true,\"repliedToSelf\":false},{\"inputIndex\":1,\"text\":\"找到了，不用帮忙啦\",\"occurredAt\":\"2026-09-24T04:00:00.000Z\",\"localTime\":\"2026-09-24 周四 12:00:00\",\"speaker\":\"甲\",\"speakerKey\":\"speaker:0\",\"platformMessageId\":\"msg-1\",\"mentions\":[],\"replyTo\":null,\"quotedMessage\":null,\"mentionedSelf\":false,\"repliedToSelf\":false}],\"observation\":{\"isPrivate\":false,\"isGroup\":true,\"focusActive\":false},\"availableActions\":[\"message\",\"wait\",\"silent\"],\"remainingWaits\":3,\"attempt\":0,\"totalWaitBudget\":3,\"backlog\":{\"isBacklog\":false,\"evaluatedAt\":\"2026-09-24T04:00:01.000Z\",\"oldestInputAgeMs\":1000,\"newestInputAgeMs\":1000,\"thresholdMs\":120000}}",
+          "platform_policy": "QQ 中参与要克制，尤其在群聊里不要抢话、不要逐条回应，也不要为了维持存在感而插话。只有能直接回应请求或提供明确交流价值时才发言；否则等待或静默。"
+        }
+      }
+    }
+  },
+  {
+    "description": "等待耗尽仍可回答完整问题",
+    "vars": {
+      "caseId": "exhausted-complete",
+      "expectedAction": "message",
+      "expectedFocus": [0],
+      "fixture": {
+        "source": {
+          "kind": "synthetic",
+          "limitations": "人工制定的定向诊断案例，不代表线上分布"
+        },
+        "variables": {
+          "current_time": "{\"iso\":\"2026-09-24T04:00:01.000Z\",\"timeZone\":\"Asia/Shanghai\",\"local\":\"2026-09-24 周四 12:00:01\"}",
+          "conversation": "{}",
+          "identity": "{\"name\":\"Kaguya\",\"aliases\":[\"辉夜\"],\"persona\":\"是人类，正在上网和群友聊天。你的风格平淡简短，使用自然、日常、口语化的中文。可以参考贴吧、知乎和微博的回复风格；不浮夸，不长篇大论，不堆砌修辞和复杂句。优先用少量文字回应当前最重要的话题，不复述对方的问题。\",\"timeZone\":\"Asia/Shanghai\"}",
+          "history": "[]",
+          "memory": "[]",
+          "turn": "{\"inputs\":[{\"inputIndex\":0,\"text\":\"@辉夜，现在信息补齐了，一光年是距离单位还是时间单位？\",\"occurredAt\":\"2026-09-24T04:00:00.000Z\",\"localTime\":\"2026-09-24 周四 12:00:00\",\"speaker\":\"甲\",\"speakerKey\":\"speaker:0\",\"platformMessageId\":\"msg-0\",\"mentions\":[{\"kind\":\"user\",\"id\":\"synthetic-self\"}],\"replyTo\":null,\"quotedMessage\":null,\"mentionedSelf\":true,\"repliedToSelf\":false}],\"observation\":{\"isPrivate\":false,\"isGroup\":true,\"focusActive\":false},\"availableActions\":[\"message\",\"silent\"],\"remainingWaits\":0,\"attempt\":3,\"totalWaitBudget\":3,\"backlog\":{\"isBacklog\":false,\"evaluatedAt\":\"2026-09-24T04:00:01.000Z\",\"oldestInputAgeMs\":1000,\"newestInputAgeMs\":1000,\"thresholdMs\":120000}}",
+          "platform_policy": "QQ 中参与要克制，尤其在群聊里不要抢话、不要逐条回应，也不要为了维持存在感而插话。只有能直接回应请求或提供明确交流价值时才发言；否则等待或静默。"
+        }
+      }
+    }
   }
 ]

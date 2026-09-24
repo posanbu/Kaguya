@@ -160,6 +160,10 @@ Server 将当前生效 GatewayAllowlist 和 AdapterHost 目录注入 Runtime。M
 
 Heartbeat 以 `openScope` 和成功观察水位聚合同 scope 通知，不为普通入站安排 timer。Arousal awake 时普通机会直接 observe；asleep 时 defer，消息继续积攒且不推进水位。全局活动更新最近消息和空闲 deadline，但不会自行唤醒 asleep；夜间边界和五分钟周期唤醒各有独立 one-shot，周期到期为仍有积压的会话创建 recheck。私聊、Web 输入、@机器人、回复机器人、全体提及和有效 Focus 可重新唤醒；回复归属优先使用平台 senderId，缺失时核对同目标的已投递消息标识。Planner 的 wait 继续使用独立预算。
 
+观察后的 Planner 将完整输入、同范围历史、核验后的引用正文和可选记忆放在一起判断。记忆查询分摊最近八条不同输入的 512 字预算，并覆盖最近四位发言者的规范身份；全局角色设定按机器人名称/别名检索，和话题、人物证据轮流共享配额。兴趣只作为数据库中的来源证据，不进入 Arousal，也不作为自动发言开关。未启用 Knowledge 或没有匹配的设定时，模型不能凭空补造兴趣。
+
+`agent.turn.plan` 新任务使用版本 2 的本轮输出 schema：焦点索引必须落在冻结输入范围内，等待耗尽时只接受 message 或 silent。模型结构修复仍最多一次，失败则安全静默；已持久化的版本 1 请求保留原 schema、Prompt 与上下文以稳定重放。话题理解、自然参与及是否等待仍由 Planner 决定，宿主只约束结构和预算。
+
 候选注册携带 `openScope`，数据库在同 scope 的 head 行锁内竞争。并发通知或到期信号只得到一个开放 candidate；每个信号的操作别名仍指向原赢家，所以旧信号重放不会开启新一轮。等待 schedule 记录前驱 candidate，避免旧等待到期信号在后续观察完成后重新启动模型。指定 `agent.turn.terminal` 终态释放槽，平台投递和授权边界保持原有职责。
 
 开放期间入站账本保存待观察集合，普通和即时唤醒分别按 candidate 去重。Candidate 只冻结上次成功观察之后的排他下界、本次机会的包含上界、未读数量和平台信号，不冻结正文集合。Arousal defer、重复 delivery、调度失败或进程重启都不推进水位；只有 Heartflow 成功冻结 turn context 才记录 `observedThroughInformationId`。observe 后的有界查询最多读取 1000 条，上界之前进入当前 turn，上界之后留给下一次观察。水位按持久化位置而非消息时间戳推进，因此相同或迟到时间戳不能越界。

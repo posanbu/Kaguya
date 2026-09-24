@@ -1,7 +1,7 @@
 /**
  * 功能概述：验证联网行为评测的失败边界，防止非法模型结果或服务错误被当作通过。
  * 主要职责：用临时虚构 profile 和内存 fetch 替身覆盖焦点越界、等待耗尽、非法 JSON、
- * 合法动作与 HTTP 错误脱敏；不请求真实模型或服务器。
+ * 本轮 schema 与旧版对照、合法动作与 HTTP 错误脱敏；不请求真实模型或服务器。
  * 旧冻结快照缺少冷启动字段时保持 unknown，新快照原样重放，不能把缺字段解释为空库。
  * 代码库关系：直接调用 planner-behavior-provider.cjs，并使用生产渲染器和动作 schema。
  * 输入输出与副作用：临时文件在结束后移除，环境变量及 fetch 在每个用例后恢复。
@@ -131,5 +131,43 @@ it.each([undefined, '{"mode":"contextual","memoryCount":1}'])(
       expect(snapshot.vars.fixture.variables).not.toHaveProperty(
         "context_bootstrap",
       );
+  },
+);
+
+it.each(["1", "2"])(
+  "uses the requested task contract for an exhausted turn: v%s",
+  async (version) => {
+    vi.stubEnv("KAGUYA_EVAL_PROFILE", profilePath);
+    vi.stubEnv("KAGUYA_EVAL_TASK_VERSION", version);
+    const fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: '{"action":"silent","reason":"no-response-needed"}',
+            },
+          },
+        ],
+      }),
+    });
+    vi.stubGlobal("fetch", fetch);
+    const result = await new Provider({}).callApi(
+      "",
+      context("budget-incomplete"),
+    );
+    const body = JSON.parse(fetch.mock.calls[0]![1].body);
+    const schemaText = body.messages[0].content.split(
+      "JSON Schema 的 JSON 值，不要使用 Markdown 代码块：",
+    )[1];
+    expect(schemaText).toBeDefined();
+    const schema = JSON.parse(schemaText);
+    expect(
+      schema.oneOf.some(
+        (branch: any) => branch.properties.action.const === "wait",
+      ),
+    ).toBe(version === "1");
+    expect(result.metadata.taskVersion).toBe(version);
+    expect(result.metadata.valid).toBe(true);
   },
 );

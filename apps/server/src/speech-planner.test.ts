@@ -10,6 +10,7 @@
  * 尚未提交决策的 Planner 可由新输入打断；静默窗后合并旧、新输入重构，已提交决策仍保持唯一终态。
  * 覆盖 message/wait/silent 与 target union 的 JSON mode 本地校验、一次结构修复、耗尽后失败关闭、
  * 累计 usage 和单 requested/terminal/decision；重试复用冻结 Prompt，重放与新输入取消均不重复落地。
+ * Planner v2 的每轮 schema 在模型修复阶段拒绝超预算 wait 与焦点越界；保留单次结构修复和单一回合终态。
  * 同时保留直接信号、Planner 独立等待预算和并发入站去重回归。
  * 所有消息和密钥均为合成测试数据；清理按 Runtime、数据库顺序关闭，不访问外部服务。
  */
@@ -396,6 +397,34 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
     },
   );
 
+  it("repairs out-of-turn focus before dispatch and replays the v2 decision once", async () => {
+    const f = await fixture([
+      {
+        ...speak,
+        composition: { ...speak.composition, focusInputIndexes: [1] },
+      },
+      speak,
+    ]);
+    await f.submit(f.message());
+    await f.settle();
+    const before = await f.atoms();
+    expect(f.requests).toHaveLength(3); // invalid Planner, repaired Planner, Composer
+    const task = before.find(
+      (a) =>
+        a.kind === "core.model.task.requested" &&
+        a.payload.taskId === "agent.turn.plan",
+    )!;
+    expect(task.payload.version).toBe("2");
+    expect(
+      before.filter((a) => a.kind === "agent.turn.plan.completed"),
+    ).toHaveLength(1);
+    expect(f.delivered).toHaveBeenCalledTimes(1);
+    await f.restart();
+    await f.settle();
+    expect(f.requests).toHaveLength(3);
+    expect(f.delivered).toHaveBeenCalledTimes(1);
+  });
+
   it("fails closed without structural repair for an HTTP failure", async () => {
     const f = await fixture(["HTTP_FAILURE", speak]);
     await f.submit(f.message());
@@ -767,11 +796,19 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
       f.setTime(6000);
       await f.restart();
       await waitForPersistence(() =>
-        expect(f.requests).toHaveLength(round + 2),
+        expect(f.requests).toHaveLength(round === 2 ? 5 : round + 2),
       );
       await f.settle();
     }
     const graph = await f.atoms();
+    expect(f.requests).toHaveLength(5);
+    expect(
+      graph.filter(
+        (a) =>
+          a.kind === "core.model.task.requested" &&
+          a.payload.taskId === "agent.turn.plan",
+      ),
+    ).toHaveLength(4);
     expect(graph.filter((a) => a.kind === "agent.wait.requested")).toHaveLength(
       3,
     );
@@ -779,7 +816,7 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
       graph.filter((a) => a.kind === "agent.turn.plan.completed").at(-1)
         ?.payload,
     ).toMatchObject({
-      action: { action: "silent", reason: "wait-budget-exhausted" },
+      action: { action: "silent", reason: "no-response-needed" },
     });
   });
 
@@ -863,11 +900,19 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
       f.setTime(6000);
       await f.restart();
       await waitForPersistence(() =>
-        expect(f.requests).toHaveLength(round + 1),
+        expect(f.requests).toHaveLength(round === 3 ? 5 : round + 1),
       );
       await f.settle();
     }
     const graph = await f.atoms();
+    expect(f.requests).toHaveLength(5);
+    expect(
+      graph.filter(
+        (a) =>
+          a.kind === "core.model.task.requested" &&
+          a.payload.taskId === "agent.turn.plan",
+      ),
+    ).toHaveLength(4);
     expect(graph.filter((a) => a.kind === "agent.wait.requested")).toHaveLength(
       3,
     );
@@ -875,7 +920,7 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
       graph.filter((a) => a.kind === "agent.turn.plan.completed").at(-1)
         ?.payload,
     ).toMatchObject({
-      action: { action: "silent", reason: "wait-budget-exhausted" },
+      action: { action: "silent", reason: "no-response-needed" },
     });
     expect(kinds(graph)).not.toContain("agent.turn.failed");
     expect(f.delivered).not.toHaveBeenCalled();

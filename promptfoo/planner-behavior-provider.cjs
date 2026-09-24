@@ -1,7 +1,7 @@
 /**
  * 功能概述：将脱敏冻结变量接回真实 Prompt 渲染器，调用显式配置的模型验证 Planner 行为。
  * 主要职责：PlannerBehaviorProvider 读取指定模板和评测 profile，生成 JSON 模型请求；
- * callApi 用生产 plannerActionSchema 校验动作，并检查焦点索引及等待预算。
+ * callApi 使用生产结构化协议及本轮 schema 校验动作；KAGUYA_EVAL_TASK_VERSION=1 可复现通用旧契约。
  * 代码库关系：供 planner-behavior.yaml 使用；复用 modules 的模板声明及 schema，
  * fixture.variables 对应账本 core.model.task.requested.prompt.variables，不重做上下文召回。
  * 旧快照没有 context_bootstrap 时显式标记 unknown；不从脱敏历史补造身份或空库状态，已有字段原样保留。
@@ -33,6 +33,10 @@ async function loadModules() {
         ),
       )
     ),
+    import(pathToFileURL(path.join(root, "packages/schema/dist/index.js"))),
+    import(
+      pathToFileURL(path.join(root, "packages/llm/dist/protocol-prompt.js"))
+    ),
   ]));
 }
 class PlannerBehaviorProvider {
@@ -52,7 +56,8 @@ class PlannerBehaviorProvider {
     const provider = profile.ai.providers.find((p) => p.id === tier.providerId);
     if (!provider?.enabled || !provider.apiKey)
       return { error: "Light provider is unavailable" };
-    const [renderer, declarations, planner] = await loadModules();
+    const [renderer, declarations, planner, schema, protocol] =
+      await loadModules();
     const templatePath =
       process.env.KAGUYA_EVAL_TEMPLATE ||
       path.join(
@@ -83,7 +88,13 @@ class PlannerBehaviorProvider {
     const variables = Object.entries(fixtureVariables).map(
       ([name, content]) => ({ name, content, informationIds: [] }),
     );
-    const compiled = renderer.createPromptTemplateRenderer({
+    const turn = JSON.parse(context.vars.fixture.variables.turn);
+    const taskVersion = process.env.KAGUYA_EVAL_TASK_VERSION || "2";
+    const actionSchema =
+      taskVersion === "1"
+        ? planner.plannerActionSchema
+        : planner.plannerActionSchemaForTurn(turn);
+    const rendered = renderer.createPromptTemplateRenderer({
       kind: "route",
       templateId: "promptfoo.planner.behavior",
       main: {
@@ -91,6 +102,15 @@ class PlannerBehaviorProvider {
         content: fs.readFileSync(templatePath, "utf8"),
       },
     })(variables);
+    const compiled = protocol.createStructuredOutputPromptRenderer(
+      fs.readFileSync(
+        path.join(
+          root,
+          "packages/llm/templates/structured-output-json.default.hbs",
+        ),
+        "utf8",
+      ),
+    )(rendered, schema.z.toJSONSchema(actionSchema, { io: "input" }));
     let response;
     try {
       response = await fetch(
@@ -124,8 +144,7 @@ class PlannerBehaviorProvider {
     if (typeof output !== "string") return { error: "Model returned no text" };
     let valid = false;
     try {
-      const decision = planner.plannerActionSchema.parse(JSON.parse(output));
-      const turn = JSON.parse(context.vars.fixture.variables.turn);
+      const decision = actionSchema.parse(JSON.parse(output));
       valid =
         decision.action === "message"
           ? decision.composition.focusInputIndexes.every(
@@ -139,6 +158,7 @@ class PlannerBehaviorProvider {
       output,
       metadata: {
         valid,
+        taskVersion,
         model: tier.modelId,
         promptDigest: createHash("sha256").update(compiled.text).digest("hex"),
       },

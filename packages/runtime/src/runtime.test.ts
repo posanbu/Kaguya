@@ -4,6 +4,8 @@
  * fixture 显式批准合成 QQ 目标，生产 Runtime 默认为空出站白名单。
  * 测试显式注入统一文件模板，避免 Planner 或 Expression 绕过 default/local 选择。
  * 功能概述：用真实 PGlite、Core 和 ModuleHost 验证 `KaguyaRuntime` 的完整信息 DAG。
+ * 数据库收敛、日志落地和模型任务前置等待共用 8 秒持久化预算；超时附带队列元数据，内存取消与关闭 deadline 单独验证。
+ * Planner v2 拒绝耗尽后的 wait；持续非法响应经一次修复后以 planner-unavailable 静默闭合。
  * Planner 使用独立 object Model Task，测试分别定位 plan 与 compose，确保故障静默与唯一分派。
  * 主要职责：覆盖 Web 入站到投递成功的直接因果链、生成失败不会继续 assistant/outbound/delivery、
  * 三类 transport 失败、无订阅持久化、同 kind 消费并发与多 message composer activation 共享模型任务后
@@ -104,6 +106,7 @@ import {
 } from "./runtime.js";
 
 const TEST_TIMEOUT = 15_000;
+const PERSISTENCE_WAIT = { timeout: 8000, interval: 20 } as const;
 const renderStructuredOutputPrompt = createStructuredOutputPromptRenderer(
   "JSON schema: {{json_schema}}",
 );
@@ -229,11 +232,20 @@ async function createRuntime(
 }
 
 async function settleDeliveries(database: KaguyaDatabase): Promise<void> {
-  await vi.waitFor(
-    async () =>
-      expect((await database.information.reliable.health()).pending).toBe(0),
-    { timeout: 5000, interval: 25 },
-  );
+  try {
+    await vi.waitFor(async () => {
+      const health = await database.information.reliable.health();
+      expect(health.pending, JSON.stringify(health)).toBe(0);
+    }, PERSISTENCE_WAIT);
+  } catch (cause) {
+    const pending = await database.sql.query(
+      "SELECT subscription_id, state, attempts FROM information_deliveries WHERE state IN ('pending', 'claimed') ORDER BY subscription_id LIMIT 20",
+    );
+    throw new Error(
+      `Runtime delivery queue did not settle: ${JSON.stringify(pending.rows)}`,
+      { cause },
+    );
+  }
 }
 
 async function createGatedRuntime() {
@@ -292,7 +304,7 @@ describe("KaguyaRuntime", () => {
           expect(lines.some((line) => line.includes('"detail":true'))).toBe(
             true,
           ),
-        { timeout: 5000, interval: 25 },
+        PERSISTENCE_WAIT,
       );
       const logs = lines.flatMap((chunk) =>
         chunk
@@ -643,21 +655,18 @@ describe("KaguyaRuntime", () => {
       });
       let secondGraph: Awaited<ReturnType<typeof database.information.query>> =
         [];
-      await vi.waitFor(
-        async () => {
-          secondGraph = await database.information.query({
-            informationId: second.rootInformationId,
-          });
-          expect(
-            secondGraph.some(
-              ({ kind, payload }) =>
-                kind === modelTaskRequestedInformationKind.kind &&
-                payload.taskId === "agent.message.compose",
-            ),
-          ).toBe(true);
-        },
-        { timeout: 5000, interval: 25 },
-      );
+      await vi.waitFor(async () => {
+        secondGraph = await database.information.query({
+          informationId: second.rootInformationId,
+        });
+        expect(
+          secondGraph.some(
+            ({ kind, payload }) =>
+              kind === modelTaskRequestedInformationKind.kind &&
+              payload.taskId === "agent.message.compose",
+          ),
+        ).toBe(true);
+      }, PERSISTENCE_WAIT);
       const requested = secondGraph.find(
         ({ kind, payload }) =>
           kind === modelTaskRequestedInformationKind.kind &&
@@ -2088,7 +2097,7 @@ it("recovers Planner waits after restart, merges new input and exhausts the shar
   expect(
     graph.find((atom) => atom.kind === "agent.turn.silent")?.payload
       .reasonCodes,
-  ).toEqual(["wait-budget-exhausted"]);
+  ).toEqual(["planner-unavailable"]);
   expect(
     graph.some((atom) =>
       [
@@ -2098,5 +2107,8 @@ it("recovers Planner waits after restart, merges new input and exhausts the shar
       ].includes(atom.kind),
     ),
   ).toBe(false);
-  expect(model.doGenerateCalls).toHaveLength(4);
+  expect(model.doGenerateCalls).toHaveLength(5);
+  expect(
+    graph.filter((atom) => atom.kind === "core.model.task.failed"),
+  ).toHaveLength(1);
 }, 30000);

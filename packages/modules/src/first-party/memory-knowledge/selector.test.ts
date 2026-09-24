@@ -1,6 +1,6 @@
 /**
  * 功能概述：保护规划前知识检索的 canonical 身份、scope 和有界原文旁路。
- * 主要职责：检验多人同群、未解析/临时身份拒绝、错误检索来源隔离及 knowledge 未启用的空结果。
+ * 主要职责：检验数据库角色设定召回、多人预算公平与失败隔离，以及多人同群、未解析/临时身份拒绝、错误检索来源隔离及 knowledge 未启用的空结果。
  * 代码库关系：使用真实 selectKnowledgeMemory 和 heartflowMemorySelector，防止 Core 可读授权被误当作聊天范围授权。
  * 输入输出与副作用：以冻结 Information 原子驱动只读替身，无网络或数据库。
  */
@@ -173,7 +173,7 @@ describe("planning knowledge recall", () => {
         }),
       }),
     );
-    expect(ledger.related).toHaveBeenCalledTimes(1);
+    expect(ledger.related).toHaveBeenCalledTimes(2);
   });
 
   it.each([{ scopeMode: "ephemeral" }, { status: "ambiguous" }])(
@@ -261,4 +261,102 @@ describe("planning knowledge recall", () => {
       expect.objectContaining({ strategyId: "kaguya.memory.sparse", limit: 4 }),
     );
   });
+});
+
+it("retrieves stored character evidence by agent name without copying another person's preference", async () => {
+  const payload = {
+    requestId: "3cf97a61-741c-4294-af7b-f8a430d1bc09",
+    sessionId: "178933a7-7c91-4d34-a21b-b0d6f441cbfa",
+    scopeInformationId: GLOBAL_MEMORY_SCOPE_ID,
+    sourceType: "character_setting",
+    submitter: "webui:management",
+    text: "辉夜喜欢天文，会关心行星观测",
+    originalSourceInformationId: "original",
+    scope: {
+      platform: "web",
+      adapterId: "web.ui.main",
+      destination: { kind: "web" },
+    },
+  };
+  const self = atom("self-interest", USER_STATEMENT_KIND, payload, [
+    { relation: "agent:scope", informationId: GLOBAL_MEMORY_SCOPE_ID },
+  ]);
+  const other = atom(
+    "other-interest",
+    USER_STATEMENT_KIND,
+    { ...payload, sourceType: "user_statement", text: "小夏喜欢天文" },
+    [...self.references],
+  );
+  const ledger = reader();
+  ledger.retrieve = vi.fn(async (request) =>
+    request.input.query === "辉夜" ? [other, self] : [],
+  );
+  const result = await selectKnowledgeMemory(ledger, {
+    inbounds: [inbound("current")],
+    occurredBefore: cutoff,
+    recordedBefore: recorded,
+    limit: 4,
+    agentNames: ["Kaguya", "辉夜"],
+  });
+  expect(result).toEqual([self]);
+  expect(ledger.retrieve).toHaveBeenCalledWith(
+    expect.objectContaining({
+      input: expect.objectContaining({
+        query: "辉夜",
+        userStatementsOnly: true,
+        recordedBefore: recorded,
+        occurredBefore: cutoff,
+      }),
+    }),
+  );
+});
+
+it("uses up to four recent participants and shares evidence slots without starving later speakers", async () => {
+  const ledger = reader();
+  ledger.related = vi.fn(async ({ from }) => [
+    atom(`identity-${from[0]}`, "agent.person.context.completed", {
+      status: "complete",
+      scopeMode: "canonical",
+      scopeInformationId: "scope-1",
+      personInformationId: `person-${from[0]}`,
+    }),
+  ]);
+  ledger.retrieve = vi.fn(async (request) =>
+    request.input.entityInformationId
+      ? Array.from({ length: 4 }, (_, i) =>
+          inbound(`${request.input.entityInformationId}-${i}`),
+        )
+      : [],
+  );
+  const selected = await selectKnowledgeMemory(ledger, {
+    inbounds: Array.from({ length: 6 }, (_, i) => inbound(`speaker-${i}`)),
+    occurredBefore: cutoff,
+    recordedBefore: recorded,
+    limit: 4,
+  });
+  expect(selected.map((a) => a.informationId)).toEqual([
+    "person-speaker-5-0",
+    "person-speaker-4-0",
+    "person-speaker-3-0",
+    "person-speaker-2-0",
+  ]);
+  expect(ledger.related).toHaveBeenCalledTimes(4);
+});
+
+it("keeps another participant's evidence when one identity lookup fails", async () => {
+  const ledger = reader({ retrieved: [inbound("available-background")] });
+  const related = ledger.related;
+  ledger.related = vi.fn(async (request) => {
+    if (request.from[0] === "bad") throw new Error("unavailable");
+    return related(request);
+  });
+  const selected = await selectKnowledgeMemory(ledger, {
+    inbounds: [inbound("good"), inbound("bad")],
+    occurredBefore: cutoff,
+    recordedBefore: recorded,
+    limit: 4,
+  });
+  expect(selected.map((a) => a.informationId)).toEqual([
+    "available-background",
+  ]);
 });
