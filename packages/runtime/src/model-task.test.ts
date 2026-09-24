@@ -4,14 +4,16 @@
  * 代码库关系：消费 model-task 与 information-kinds；transform 测试组合真实 KaguyaLlmClient
  * 与内存 provider，其余并发场景以可控 generate 替身隔离外部调用。
  * 失败用例检查结构化输出分类、尝试次数及累计指标的白名单持久化，并验证重放只保留一个终态。
- * 异常失败指标须回退宿主耗时，非法尝试次数须省略；数据库提交失败仍向调用方传播。
+ * 异常失败指标须回退宿主耗时，非法尝试次数和 Provider 字段须省略；数据库提交失败仍向调用方传播。
  * 输入输出与副作用：只写测试数据库；敏感字符串是泄漏探针；每例关闭 Core 与数据库。
+ * 并发/取消用例等待真实 provider 调用出现，统一使用有界轮询，不依赖 runner 的短默认等待。
  */
 import { createTestingDatabase } from "@kaguya/database/testing";
 import { InformationCore, InformationKindRegistry } from "@kaguya/engine";
 import { KaguyaLlmClient, KaguyaLlmError } from "@kaguya/llm/client";
 import { createStructuredOutputPromptRenderer } from "@kaguya/llm";
 import { createRepeatingDeterministicModel } from "@kaguya/llm/testing";
+import { formatPrettyMessage } from "@kaguya/logger";
 import { z } from "@kaguya/schema";
 import {
   defineInformationKind,
@@ -25,10 +27,12 @@ import {
 } from "./model-task.js";
 import {
   modelTaskInformationKinds,
+  modelTaskFailedInformationKind,
   runtimeContextInformationKind,
 } from "./information-kinds.js";
 
 const secret = "credential=secret postgresql://private";
+const modelTaskWait = { timeout: 8_000, interval: 20 } as const;
 const renderStructuredOutputPrompt = createStructuredOutputPromptRenderer(
   "JSON schema: {{json_schema}}",
 );
@@ -425,6 +429,93 @@ it.each([0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
   },
 );
 
+it("drops invalid provider fields without losing the failed terminal or safe reason", async () => {
+  const f = await fixture();
+  f.generate.mockRejectedValue(
+    new KaguyaLlmError(secret, {
+      kind: "non-retryable",
+      stage: "provider-request",
+      cause: new Error(secret),
+      providerFailure: {
+        reason: "authentication-failed",
+        statusCode: 999,
+        code: secret,
+        type: "auth_error",
+        responseBody: secret,
+      } as never,
+    }),
+  );
+  const result = await f.client.execute(f.request);
+  expect(result).toMatchObject({
+    status: "failed",
+    error: {
+      providerFailure: {
+        type: "auth_error",
+        reason: "authentication-failed",
+      },
+    },
+  });
+  const failed = (await f.atoms()).find(
+    (atom) => atom.kind === "core.model.task.failed",
+  )!;
+  expect(
+    modelTaskFailedInformationKind.payloadSchema.parse(failed.payload).error,
+  ).toMatchObject({
+    providerFailure: {
+      type: "auth_error",
+      reason: "authentication-failed",
+    },
+  });
+  expect(JSON.stringify([result, failed.payload])).not.toContain(secret);
+  expect(await f.client.execute(f.request)).toEqual(result);
+  expect(f.generate).toHaveBeenCalledTimes(1);
+});
+
+it("projects the same provider diagnosis to JSON and Pretty logs on replay", async () => {
+  const f = await fixture();
+  f.generate.mockRejectedValue(
+    new KaguyaLlmError(secret, {
+      kind: "non-retryable",
+      stage: "provider-request",
+      cause: new Error(secret),
+      providerFailure: {
+        statusCode: 401,
+        type: "auth_error",
+        reason: "credential-blocked",
+      },
+    }),
+  );
+  const first = await f.client.execute(f.request);
+  expect(first.status).toBe("failed");
+  const failed = (await f.atoms()).find(
+    (atom) => atom.kind === "core.model.task.failed",
+  )!;
+  if (!modelTaskFailedInformationKind.log.enabled)
+    throw new Error("Model task failure log projection disabled");
+  const projected = modelTaskFailedInformationKind.log.project!(
+    failed as never,
+  );
+  expect(projected).toMatchObject({
+    event: "model.task.lifecycle",
+    providerStatusCode: 401,
+    providerErrorType: "auth_error",
+    providerFailureReason: "credential-blocked",
+    providerAction: "检查或更新 API Key；若由组织管理，联系管理员解除封禁",
+  });
+  const pretty = formatPrettyMessage(projected);
+  for (const phrase of [
+    "上游 HTTP=401",
+    "Provider 错误类型=auth_error",
+    "诊断=credential-blocked",
+    "处理建议=检查或更新 API Key",
+  ])
+    expect(pretty).toContain(phrase);
+  for (const value of [first, failed.payload, projected, pretty])
+    expect(JSON.stringify(value)).not.toContain(secret);
+  expect(await f.client.execute(f.request)).toEqual(first);
+  expect(f.generate).toHaveBeenCalledTimes(1);
+});
+
 it("does not copy ledger-rejected usage into the safe failed payload", async () => {
   const f = await fixture();
   f.generate.mockResolvedValue({
@@ -655,7 +746,10 @@ it.each(["completed", "failed", "cancelled"])(
         }),
     );
     const slow = f.client.execute(f.request);
-    await vi.waitFor(() => expect(f.generate).toHaveBeenCalledTimes(1));
+    await vi.waitFor(
+      () => expect(f.generate).toHaveBeenCalledTimes(1),
+      modelTaskWait,
+    );
     const requested = (await f.atoms()).find(
       (a) => a.kind === "core.model.task.requested",
     )!;
@@ -704,7 +798,7 @@ it("aborts the active provider request after durable cancellation wins", async (
     });
   });
   const pending = f.client.execute(f.request);
-  await vi.waitFor(() => expect(activeSignal).toBeDefined());
+  await vi.waitFor(() => expect(activeSignal).toBeDefined(), modelTaskWait);
   const requested = (await f.atoms()).find(
     (atom) => atom.kind === "core.model.task.requested",
   )!;
@@ -736,7 +830,10 @@ it.each(["abort", "lease"])(
       f.client.execute(f.request),
     );
     const rejection = pending.catch((error) => error as Error);
-    await vi.waitFor(() => expect(f.generate).toHaveBeenCalledTimes(1));
+    await vi.waitFor(
+      () => expect(f.generate).toHaveBeenCalledTimes(1),
+      modelTaskWait,
+    );
     expect(f.generate.mock.calls[0]![0].signal.aborted).toBe(false);
     if (mode === "abort") controller.abort(new Error(secret));
     else await reliable.release(claim);

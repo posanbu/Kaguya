@@ -10,7 +10,9 @@
  * generationOptions.timeoutMs（默认 300 秒）由共享取消信号覆盖全部尝试；外部 abort 优先。
  * JSON mode 给冻结 Prompt 附加固定 Schema 提示，使用 Output.json 请求并在本地严格校验；
  * schema mode 仅供已声明服务端 Schema 能力的模型使用。重试不附加模型原文、不重新选择模型。
- * normalizeError 仅暴露空响应、JSON、Schema、截断分类及尝试数；原始错误保存在私有字段。
+ * PROVIDER_ERROR_CODES/TYPES 与 ProviderFailureReason 限定可流出边界的词表；
+ * normalizeError 还从直接或包装的 APICallError 提取有界状态与固定词表诊断；原始错误、
+ * 响应正文和请求数据仍只留在私有字段，供 Runtime 写入的字段不包含上游自由文本。
  */
 import type { CompiledPrompt, LlmErrorKind } from "@kaguya/schema";
 import {
@@ -63,6 +65,40 @@ export type KaguyaLlmFailureStage =
   "provider-request" | "structured-output-parse";
 export type KaguyaStructuredOutputFailure =
   "empty" | "invalid-json" | "schema-mismatch" | "truncated";
+export const PROVIDER_ERROR_CODES = [
+  "auth_error",
+  "authentication_error",
+  "invalid_api_key",
+  "permission_denied",
+  "insufficient_quota",
+  "rate_limit_exceeded",
+  "model_not_found",
+  "invalid_request_error",
+  "server_error",
+] as const;
+export const PROVIDER_ERROR_TYPES = [
+  "auth_error",
+  "authentication_error",
+  "invalid_request_error",
+  "permission_error",
+  "rate_limit_error",
+  "server_error",
+] as const;
+export type ProviderFailureReason =
+  | "authentication-failed"
+  | "credential-blocked"
+  | "model-access-denied"
+  | "rate-limited"
+  | "invalid-request"
+  | "model-not-found"
+  | "provider-unavailable"
+  | "unknown";
+export interface ProviderFailure {
+  readonly statusCode?: number;
+  readonly code?: (typeof PROVIDER_ERROR_CODES)[number];
+  readonly type?: (typeof PROVIDER_ERROR_TYPES)[number];
+  readonly reason: ProviderFailureReason;
+}
 
 interface LlmFailureMetrics {
   readonly attemptCount?: number;
@@ -74,6 +110,7 @@ export class KaguyaLlmError extends Error {
   readonly kind: KaguyaLlmErrorKind;
   readonly stage: KaguyaLlmFailureStage;
   readonly structuredOutputFailure?: KaguyaStructuredOutputFailure;
+  readonly providerFailure?: ProviderFailure;
   readonly attemptCount?: number;
   readonly durationMs?: number;
   readonly usage?: Record<string, number>;
@@ -86,6 +123,7 @@ export class KaguyaLlmError extends Error {
       stage: KaguyaLlmFailureStage;
       cause: unknown;
       structuredOutputFailure?: KaguyaStructuredOutputFailure;
+      providerFailure?: ProviderFailure;
     } & LlmFailureMetrics,
   ) {
     super(message);
@@ -95,6 +133,8 @@ export class KaguyaLlmError extends Error {
     this.#cause = options.cause;
     if (options.structuredOutputFailure !== undefined)
       this.structuredOutputFailure = options.structuredOutputFailure;
+    if (options.providerFailure !== undefined)
+      this.providerFailure = options.providerFailure;
     if (options.attemptCount !== undefined)
       this.attemptCount = options.attemptCount;
     if (options.durationMs !== undefined) this.durationMs = options.durationMs;
@@ -341,12 +381,135 @@ function normalizeError(
     : isRetryableError(error)
       ? "retryable"
       : "non-retryable";
+  const diagnostic = kind === "cancelled" ? undefined : providerFailure(error);
   return new KaguyaLlmError(controlledErrorMessage(kind), {
     ...metrics,
     kind,
     stage: "provider-request",
+    ...(diagnostic === undefined ? {} : { providerFailure: diagnostic }),
     cause: error,
   });
+}
+
+function providerFailure(error: unknown): ProviderFailure | undefined {
+  const apiError = findApiCallError(error);
+  if (apiError === undefined) return undefined;
+  const statusCode =
+    Number.isSafeInteger(apiError.statusCode) &&
+    apiError.statusCode !== undefined &&
+    apiError.statusCode >= 100 &&
+    apiError.statusCode <= 599
+      ? apiError.statusCode
+      : undefined;
+  // 仅从有限大小的 JSON 正文读取固定位置；匹配后立即丢弃自由文本。
+  let body: Record<string, unknown> | undefined;
+  if (
+    apiError.responseBody !== undefined &&
+    apiError.responseBody.length <= 16_384
+  ) {
+    try {
+      const parsed: unknown = JSON.parse(apiError.responseBody);
+      if (isRecord(parsed))
+        body = isRecord(parsed.error) ? parsed.error : parsed;
+    } catch {
+      // 非 JSON/HTML 响应只允许 HTTP 状态参与诊断。
+    }
+  }
+  const code = allowedIdentifier(body?.code, PROVIDER_ERROR_CODES);
+  const type = allowedIdentifier(body?.type, PROVIDER_ERROR_TYPES);
+  const message = typeof body?.message === "string" ? body.message : "";
+  const blocked =
+    /\b(?:api[ -]?key|key|credential|token)\s+(?:is\s+)?(?:blocked|disabled|revoked)\b/iu.test(
+      message,
+    );
+  const reason = classifyProviderFailure(statusCode, code, type, blocked);
+  return {
+    ...(statusCode === undefined ? {} : { statusCode }),
+    ...(code === undefined ? {} : { code }),
+    ...(type === undefined ? {} : { type }),
+    reason,
+  };
+}
+
+function classifyProviderFailure(
+  statusCode: number | undefined,
+  code: ProviderFailure["code"],
+  type: ProviderFailure["type"],
+  blocked: boolean,
+): ProviderFailureReason {
+  if (
+    blocked &&
+    (statusCode === 401 ||
+      statusCode === 403 ||
+      code === "auth_error" ||
+      type === "auth_error")
+  )
+    return "credential-blocked";
+  if (statusCode === 401) return "authentication-failed";
+  if (statusCode === 403) return "model-access-denied";
+  if (statusCode === 429) return "rate-limited";
+  if (statusCode !== undefined && statusCode >= 500)
+    return "provider-unavailable";
+  if (code === "model_not_found") return "model-not-found";
+  if (code === "server_error" || type === "server_error")
+    return "provider-unavailable";
+  if (
+    code === "rate_limit_exceeded" ||
+    code === "insufficient_quota" ||
+    type === "rate_limit_error"
+  )
+    return "rate-limited";
+  if (
+    code === "invalid_api_key" ||
+    code === "auth_error" ||
+    code === "authentication_error" ||
+    type === "auth_error" ||
+    type === "authentication_error"
+  )
+    return "authentication-failed";
+  if (code === "permission_denied" || type === "permission_error")
+    return "model-access-denied";
+  if (
+    statusCode === 400 ||
+    statusCode === 422 ||
+    code === "invalid_request_error" ||
+    type === "invalid_request_error"
+  )
+    return "invalid-request";
+  return "unknown";
+}
+
+function findApiCallError(error: unknown): APICallError | undefined {
+  let current = error;
+  const seen = new Set<unknown>();
+  for (
+    let depth = 0;
+    depth < 8 && current !== null && !seen.has(current);
+    depth++
+  ) {
+    seen.add(current);
+    if (APICallError.isInstance(current)) return current;
+    if (RetryError.isInstance(current)) current = current.lastError;
+    else if (isRecord(current)) current = current.cause;
+    else return undefined;
+  }
+  return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function allowedIdentifier<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+): T | undefined {
+  return typeof value === "string" &&
+    value.length <= 64 &&
+    /^[a-z][a-z0-9_]*$/u.test(value) &&
+    (allowed as readonly string[]).includes(value)
+    ? (value as T)
+    : undefined;
 }
 
 function isAbortError(error: unknown): boolean {

@@ -7,7 +7,8 @@
  * 代码库关系：由 index.ts 的同步 pretty 输出调用；展示词表对应 Server、AdapterHost、
  * ModuleHost 和 Information kind 的稳定事件码，未知模块、事件及字段原样显示。
  * 输入输出与副作用：纯函数，不读取业务载荷、不修改记录、不改变日志级别或 JSON 输出。
- * Prompt 仅在既有 detail 记录中展开；外部文本的终端控制字符转义，所有续行显式缩进。
+ * Prompt 仅在既有 detail 记录中展开；模型失败的 Provider 状态、稳定原因和固定建议
+ * 使用中文标签展示，外部文本的终端控制字符转义，所有续行显式缩进。
  */
 import type { PrettyOptions } from "pino-pretty";
 import stringWidth from "string-width";
@@ -158,6 +159,11 @@ const FIELD_NAMES: Readonly<Record<string, string>> = {
   errorType: "错误类型",
   errorKind: "错误分类",
   failureStage: "失败阶段",
+  providerStatusCode: "上游 HTTP",
+  providerErrorCode: "Provider 错误码",
+  providerErrorType: "Provider 错误类型",
+  providerFailureReason: "诊断",
+  providerAction: "处理建议",
   phase: "阶段",
   err: "错误",
   error: "错误",

@@ -8,7 +8,8 @@
  * 代码库关系：直接约束 `information-kinds.ts` composition 输出；`KaguyaRuntime.start()` 会按
  * 此集合注册 Registry，ModuleHost 和 lifecycle/delivery consumer 必须使用同一 definition 身份。
  * 输入输出与副作用：纯内存检查 schema、引用规则和日志投影；不会启动 Core 或连接数据库。
- * Model Task 失败诊断只接受固定分类与正整数次数，拒绝原始响应及 provider 错误字段。
+ * Model Task 失败诊断只接受固定分类、正整数次数及受限 Provider 字段；旧事实仍可读取，
+ * 请求/响应原文与原始错误对象不能进入 payload。
  */
 import { consumerFailedInformationKind } from "@kaguya/engine";
 import {
@@ -166,6 +167,61 @@ describe("runtime information kinds", () => {
         }).success,
       ).toBe(false);
     }
+  });
+
+  it("accepts optional safe provider diagnostics while preserving old failed records", () => {
+    const legacyError = {
+      name: "ModelTaskError",
+      kind: "non-retryable",
+      stage: "provider-request",
+      message: "Model task generation failed",
+      attemptCount: 1,
+    };
+    const payload = { ...metadata, durationMs: 5, error: legacyError };
+    expect(
+      modelTaskFailedInformationKind.payloadSchema.parse(payload).error,
+    ).toEqual(legacyError);
+    const providerFailure = {
+      statusCode: 401,
+      type: "auth_error",
+      reason: "credential-blocked",
+    };
+    const current = {
+      ...payload,
+      error: { ...legacyError, providerFailure },
+    };
+    expect(
+      modelTaskFailedInformationKind.payloadSchema.parse(current).error,
+    ).toEqual(current.error);
+    for (const invalid of [
+      { statusCode: 999 },
+      { statusCode: 1.5 },
+      { code: "sk_private_key" },
+      { type: "custom_error" },
+      { reason: "raw provider message" },
+      { responseBody: "private response" },
+      { profileId: "private" },
+    ]) {
+      expect(
+        modelTaskFailedInformationKind.payloadSchema.safeParse({
+          ...payload,
+          error: {
+            ...legacyError,
+            providerFailure: { ...providerFailure, ...invalid },
+          },
+        }).success,
+      ).toBe(false);
+    }
+    expect(
+      modelTaskFailedInformationKind.payloadSchema.safeParse({
+        ...payload,
+        error: {
+          ...legacyError,
+          stage: "task-schema-validation",
+          providerFailure,
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it("derives canonical prompt variable provenance and digests", () => {
