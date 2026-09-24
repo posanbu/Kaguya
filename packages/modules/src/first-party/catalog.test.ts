@@ -124,6 +124,28 @@ describe("first-party module configuration", () => {
     );
   });
 
+  it("classifies exactly the seven memory definitions", () => {
+    const tagged = catalog()
+      .definitions.filter(({ manifest }) => manifest.tags?.includes("memory"))
+      .map(({ manifest }) => manifest.definitionId);
+    expect(tagged).toEqual([
+      "memory.association",
+      "memory.cognition",
+      "memory.expression",
+      "memory.identity",
+      "memory.index",
+      "memory.knowledge",
+      "memory.writeback",
+    ]);
+    expect(tagged).not.toEqual(
+      expect.arrayContaining([
+        "core.identity.normalize",
+        "agent.expression",
+        "core.association.memory",
+      ]),
+    );
+  });
+
   it("uses only modelTier for the default message composer", () => {
     expect(createFirstPartyModuleConfigDefaults()[0]).toEqual({
       version: 1,

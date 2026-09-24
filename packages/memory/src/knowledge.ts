@@ -234,8 +234,8 @@ export class KnowledgeEvidenceError extends Error {
   }
 }
 export const memoryKnowledgeCapability =
-  defineModuleCapability<MemoryKnowledgeAccess>("kaguya:memory.knowledge", 1);
-export const MEMORY_KNOWLEDGE_RETRIEVAL_STRATEGY_ID = "kaguya.memory.knowledge";
+  defineModuleCapability<MemoryKnowledgeAccess>("memory:knowledge", 1);
+export const MEMORY_KNOWLEDGE_RETRIEVAL_STRATEGY_ID = "memory.knowledge";
 
 // 与 first-party 模块的命名对齐，保持唯一 schema 和错误类型。
 export const memoryEventInputSchema = knowledgeEventInputSchema;

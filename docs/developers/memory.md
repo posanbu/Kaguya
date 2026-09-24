@@ -5,6 +5,8 @@ description: Memory 原始文档、可重建向量与可替换认知层的边界
 
 # Memory 认知层选型
 
+> **破坏性命名升级：** Memory、Identity、Expression 与 Association 已统一使用 `memory.*` 协议命名空间。旧 definitionId、Information Kind、可靠操作键、模板和 capability 不提供别名、双读或自动迁移。升级既有实例前必须停机并备份配置根与数据库，然后使用全新数据库重新初始化模块配置；禁止在同一实例中混用新旧命名。
+
 ## ADR：采用独立 Mem0 REST 服务
 
 **状态 — 已实现。** 对应 #90。原始消息只由 Kaguya 的 PostgreSQL MemoryStore 保存；认知服务不取得 Kaguya 数据库连接、模型密钥或全局账本读取权限。
@@ -53,7 +55,7 @@ Mem0 服务需要支持 `POST /memories` 的 `infer`、`user_id`、`run_id`、`m
 
 ## 原始消息写回
 
-`agent.memory.writeback` durable 消费身份终态，用原始 inbound Information ID 登记唯一 request。Web ephemeral 与 canonical 消息都写入，人物 ID 不作为 Memory 主键。正文仅保存在原始文档，request/terminal 不复制正文。空正文、非法输入与来源冲突有明确终态；数据库瞬时错误由 Reliable Runner 有界重试，stop 保留 pending。
+`memory.writeback` durable 消费身份终态，用原始 inbound Information ID 登记唯一 request。Web ephemeral 与 canonical 消息都写入，人物 ID 不作为 Memory 主键。正文仅保存在原始文档，request/terminal 不复制正文。空正文、非法输入与来源冲突有明确终态；数据库瞬时错误由 Reliable Runner 有界重试，stop 保留 pending。
 
 composition 在 Memory 开启时补入写回实例；存在显式配置时尊重其 `enabled`。index/cognition 实例只在相应 provider 存在且总开关开启时加入。没有在线 Heartflow、Heartbeat、Composer 也能验收后台闭环。
 
@@ -77,7 +79,7 @@ composition 在 Memory 开启时补入写回实例；存在显式配置时尊重
 
 **状态 — 显式启用的首版原型，对应 #197。** 原始账本继续保存不可变 Information；新增 PostgreSQL 投影保存通用事件、追加式断言、episode 和 Wiki 修订。它们复用 canonical entity atom 的 `informationId`，不创建第二套人物 ID，也不引入隐藏 Session。事件处理关系仍由 Information DAG 表达；主体、说话者和经历关系独立保存。
 
-在 Profile 的 `memory` 对象加入 `knowledgeEnabled: true`，并保持 `enabled: true`，才会创建附加表、激活 `agent.memory.knowledge`、注册实体检索与恢复任务。省略该字段保留原有行为。按现有配置流程保存并显式应用或重启；回退时关闭该字段，保留原始文档和新投影用于审计，不删除数据。默认方案的改变仍需质量与成本评测。
+在 Profile 的 `memory` 对象加入 `knowledgeEnabled: true`，并保持 `enabled: true`，才会创建附加表、激活 `memory.knowledge`、注册实体检索与恢复任务。省略该字段保留原有行为。按现有配置流程保存并显式应用或重启；回退时关闭该字段，保留原始文档和新投影用于审计，不删除数据。默认方案的改变仍需质量与成本评测。
 
 **来源与归属 — 显式、可追溯。** `MemoryKnowledgeAccess.putEvent` 接收来源 ID、范围 ID、事件时间、事件类型、正文、actor 与 subjects；reply-to、媒体片段和动作阶段为可选字段。事件的入库时间由数据库产生。canonical 消息的原文、平台范围及已解析说话者必须与账本一致，匿名 Web 不进入长期投影。通用事件自身需要 `agent:scope` 来源引用，已解析 actor 需要可核验的来源绑定；设备默认使用 `device.entity`，其他范围 kind 由宿主显式允许。`generated`、`completed`、`failed` 等动作阶段分别保存，不能互相替代。
 
@@ -89,7 +91,7 @@ composition 在 Memory 开启时补入写回实例；存在显式配置时尊重
 
 **恢复与修订 — 持久化工作流。** 模块启动登记回填根，按账本登记顺序每页最多 50 条处理历史身份终态与显式事件；实时订阅不能代替历史回填。数据库记录持久 dirty 状态，刷新冻结页面版本及 dirtyVersion，通过 CAS 拒绝过期更新。revision 的 operationId 覆盖数据库提交后进程中断的重试窗口。启动及可靠 mutation 完成后登记有游标的维护任务，逐页安排脏页恢复；单页刷新失败不会阻塞其他维护页。
 
-其他模块通过 `agent.memory.knowledge.mutation.requested` 可靠追加断言/episode、撤回来源或使实体投影失效，相关证据与范围必须显式引用。实体失效用操作 ID 幂等执行，重试旧修订不会撤回之后新增的证据。永久非法事件以 skipped 终态隔离，瞬时数据库失败继续由 Reliable Runner 有界重试。直接调用仓储是宿主管理接口，调用方需要显式触发维护；在线模块应使用可靠协议。
+其他模块通过 `memory.knowledge.mutation.requested` 可靠追加断言/episode、撤回来源或使实体投影失效，相关证据与范围必须显式引用。实体失效用操作 ID 幂等执行，重试旧修订不会撤回之后新增的证据。永久非法事件以 skipped 终态隔离，瞬时数据库失败继续由 Reliable Runner 有界重试。直接调用仓储是宿主管理接口，调用方需要显式触发维护；在线模块应使用可靠协议。
 
 **规划与生成 — 冻结并重载原始证据。** Heartflow 在规划前使用同范围、双时间截止点和总预算选择记忆；实体导航与当前 Wiki 来源只作为寻找原文的入口。Core 重载原始 Information 后，模块还会再次核验原生范围与事件时间。Mem0、知识导航与 sparse/hybrid 共用有界选择；知识路径关闭或不可用时保留原文基线。页面尚未覆盖的新事件仍可以走原文路径。撤回来源在知识路径开启时同时过滤 raw 召回及包含该来源的认知快照，避免通过另一条检索路径重新引入。
 

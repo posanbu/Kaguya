@@ -120,9 +120,9 @@ describe("associationModule", () => {
     const registerOnce = vi.fn();
     const instance = await associationModule.create(
       {
-        instanceId: "association.default",
+        instanceId: "memory.association.default",
         activation: {
-          instanceId: "association.default",
+          instanceId: "memory.association.default",
           definitionId: associationModule.manifest.definitionId,
         },
         settings: {},
@@ -141,7 +141,7 @@ describe("associationModule", () => {
       registerOnce,
     } as any);
     expect(registerOnce).toHaveBeenCalledWith(
-      "kaguya.association.requested.v1",
+      "memory.association.requested.v1",
       intent.informationId,
       associationRequestedInformationKind,
       expect.objectContaining({
@@ -193,7 +193,7 @@ describe("associationModule", () => {
       informationId: informationIdSchema.parse("association-query-1"),
       kind: associationQueryInformationKind.kind,
       occurredAt: "2026-09-04T00:00:01.000Z",
-      source: "module:association.default",
+      source: "module:memory.association.default",
       payload: {
         requestInformationId: "association-request-1",
         sourceInformationId: "intent-current",
@@ -261,7 +261,7 @@ describe("associationModule", () => {
       }),
     ).resolves.toEqual([historicalInbound.informationId]);
     expect(retrieve).toHaveBeenCalledWith({
-      strategyId: "kaguya.memory.sparse",
+      strategyId: "memory.sparse",
       input: {
         query: "hello",
         scopes: [query.payload.scope],

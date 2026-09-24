@@ -388,7 +388,7 @@ export const messagePromptRenderer: InformationPromptRendererDefinition =
   });
 export const memoryPromptRenderer: InformationPromptRendererDefinition =
   Object.freeze({
-    rendererId: "kaguya.memory.text",
+    rendererId: "memory.text",
     displayName: "Memory text",
     description: "Renders selected memory text as Prompt context.",
     kinds: [coreMemoryTextInformationKind],
@@ -398,7 +398,7 @@ export const memoryPromptRenderer: InformationPromptRendererDefinition =
 
 export const inboundMemoryPromptRenderer: InformationPromptRendererDefinition =
   Object.freeze({
-    rendererId: "kaguya.memory.inbound-text",
+    rendererId: "memory.inbound-text",
     displayName: "Historical inbound text",
     description:
       "Renders a selected historical inbound message as prompt context.",

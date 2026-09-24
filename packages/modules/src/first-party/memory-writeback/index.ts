@@ -27,7 +27,7 @@ import {
 } from "../information-kinds.js";
 
 export const memoryWritebackRequestedInformationKind = defineInformationKind({
-  kind: "agent.memory.writeback.requested",
+  kind: "memory.writeback.requested",
   displayName: "原始记忆写回请求",
   description:
     "入站消息身份处理结束后登记仅引用来源的写回意图；可靠消费者重载正文并幂等写入独立记忆。",
@@ -57,7 +57,7 @@ export const memoryWritebackRequestedInformationKind = defineInformationKind({
 });
 function terminalKind<S extends "completed" | "empty" | "failed">(status: S) {
   return defineInformationKind({
-    kind: `agent.memory.writeback.${status}` as const,
+    kind: `memory.writeback.${status}` as const,
     displayName: {
       completed: "原始记忆写回完成",
       empty: "原始记忆内容为空",
@@ -102,7 +102,7 @@ export const memoryWritebackCompletedInformationKind =
 export const memoryWritebackEmptyInformationKind = terminalKind("empty");
 export const memoryWritebackFailedInformationKind = terminalKind("failed");
 export const writebackSourceSelector = defineInformationSelector({
-  selectorId: "kaguya.memory.writeback.source",
+  selectorId: "memory.writeback.source",
   select: async ({ sourceAtom, ledger }) => {
     const relation =
       sourceAtom.kind === personContextCompletedInformationKind.kind
@@ -122,8 +122,9 @@ export const memoryWritebackModule = defineInformationModule({
   manifest: {
     protocolVersion: 1,
     moduleVersion: "1.0.0",
-    definitionId: "agent.memory.writeback",
-    inspection: firstPartyInspection["agent.memory.writeback"],
+    definitionId: "memory.writeback",
+    tags: ["memory"],
+    inspection: firstPartyInspection["memory.writeback"],
     displayName: "原始记忆写回",
     summary: "将入站原文可靠保存到独立记忆存储。",
     description:
@@ -152,7 +153,7 @@ export const memoryWritebackModule = defineInformationModule({
         onInformation(
           personContextCompletedInformationKind,
           {
-            subscriptionId: "kaguya.memory.writeback.request.v1",
+            subscriptionId: "memory.writeback.request.v1",
             delivery: "durable",
           },
           async (identity, context) => {
@@ -164,7 +165,7 @@ export const memoryWritebackModule = defineInformationModule({
             )
               throw new Error("Invalid writeback identity source");
             await context.registerOnce(
-              "kaguya.memory.writeback.request.v1",
+              "memory.writeback.request.v1",
               source.informationId,
               memoryWritebackRequestedInformationKind,
               {
@@ -182,7 +183,7 @@ export const memoryWritebackModule = defineInformationModule({
         onInformation(
           memoryWritebackRequestedInformationKind,
           {
-            subscriptionId: "kaguya.memory.writeback.execute.v1",
+            subscriptionId: "memory.writeback.execute.v1",
             delivery: "durable",
           },
           async (request, context) => {
@@ -234,7 +235,7 @@ export const memoryWritebackModule = defineInformationModule({
             ];
             if (status === "completed")
               await context.commitTerminal(
-                "kaguya.memory.writeback.terminal.v1",
+                "memory.writeback.terminal.v1",
                 request.informationId,
                 memoryWritebackCompletedInformationKind,
                 {
@@ -247,7 +248,7 @@ export const memoryWritebackModule = defineInformationModule({
               );
             else if (status === "empty")
               await context.commitTerminal(
-                "kaguya.memory.writeback.terminal.v1",
+                "memory.writeback.terminal.v1",
                 request.informationId,
                 memoryWritebackEmptyInformationKind,
                 {
@@ -257,7 +258,7 @@ export const memoryWritebackModule = defineInformationModule({
               );
             else
               await context.commitTerminal(
-                "kaguya.memory.writeback.terminal.v1",
+                "memory.writeback.terminal.v1",
                 request.informationId,
                 memoryWritebackFailedInformationKind,
                 {

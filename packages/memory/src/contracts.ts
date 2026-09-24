@@ -20,7 +20,7 @@ import { defineModuleCapability } from "@kaguya/sdk";
 export const MEMORY_MAX_CONTENT_CODE_POINTS = 16_384;
 export const MEMORY_MAX_QUERY_CODE_POINTS = 512;
 export const MEMORY_MAX_FILTER_KEYS = 100;
-export const MEMORY_RETRIEVAL_STRATEGY_ID = "kaguya.memory.sparse";
+export const MEMORY_RETRIEVAL_STRATEGY_ID = "memory.sparse";
 
 const nonBlankString = z.string().trim().min(1);
 const boundedCodePoints = (maximum: number, label: string) =>
@@ -138,7 +138,7 @@ export interface MemoryRecall {
 export type MemoryAccess = MemoryStore & MemoryRecall;
 
 export const memoryCapability = defineModuleCapability<MemoryAccess>(
-  "kaguya:memory",
+  "memory:access",
   1,
 );
 

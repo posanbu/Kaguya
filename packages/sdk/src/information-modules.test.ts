@@ -92,6 +92,8 @@ describe("information module SDK", () => {
     expect(readyContext).toBe(context);
     expect(readyContext?.signal).toBe(signal);
     expect(readyContext?.now().toISOString()).toBe("2026-09-19T00:00:00.000Z");
+    expect(module.manifest.tags).toEqual([]);
+    expect(Object.isFrozen(module.manifest.tags)).toBe(true);
   });
   it("requires and freezes module and prompt display metadata", () => {
     const promptRenderer = {
@@ -107,6 +109,7 @@ describe("information module SDK", () => {
         summary: "Test information module.",
         moduleVersion: "1.0.0",
         definitionId: "acme.prompt",
+        tags: ["memory"],
         displayName: "Acme prompt",
         description: "Compiles Acme input into model context.",
         settingsSchema: z.object({}).strict(),
@@ -121,6 +124,8 @@ describe("information module SDK", () => {
     });
 
     expect(module.manifest.summary).toBe("Test information module.");
+    expect(module.manifest.tags).toEqual(["memory"]);
+    expect(Object.isFrozen(module.manifest.tags)).toBe(true);
     expect(module.manifest.description).toBe(
       "Compiles Acme input into model context.",
     );
@@ -146,6 +151,18 @@ describe("information module SDK", () => {
         },
       }),
     ).toThrow(/invalid renderer/iu);
+    expect(() =>
+      defineInformationModule({
+        ...module,
+        manifest: { ...module.manifest, tags: ["memory", "memory"] },
+      }),
+    ).toThrow(/tags must be unique/iu);
+    expect(() =>
+      defineInformationModule({
+        ...module,
+        manifest: { ...module.manifest, tags: ["Memory"] },
+      }),
+    ).toThrow(/lowercase identifiers/iu);
   });
 
   it("validates and deeply freezes declarative inspection surfaces", () => {

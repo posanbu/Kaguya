@@ -54,7 +54,7 @@ const GENERATOR_VERSION = "evidence-extract-v1";
 const PAGE_SIZE = 50;
 type WikiSection = WikiRevisionInput["sections"][number];
 const sourceSelector = defineInformationSelector({
-  selectorId: "kaguya.memory.knowledge.source",
+  selectorId: "memory.knowledge.source",
   select: async ({ sourceAtom, ledger }) => {
     const related = await ledger.related({
       from: [sourceAtom.informationId],
@@ -91,7 +91,7 @@ const sourceSelector = defineInformationSelector({
   },
 });
 const backfillSelector = defineInformationSelector({
-  selectorId: "kaguya.memory.knowledge.backfill",
+  selectorId: "memory.knowledge.backfill",
   select: async ({ sourceAtom, ledger }) => {
     const p = memoryKnowledgeBackfillInformationKind.payloadSchema.parse(
       sourceAtom.payload,
@@ -112,7 +112,7 @@ const backfillSelector = defineInformationSelector({
   },
 });
 const backfillEvidenceSelector = defineInformationSelector({
-  selectorId: "kaguya.memory.knowledge.backfill-evidence",
+  selectorId: "memory.knowledge.backfill-evidence",
   select: async (context) => {
     const ids = await backfillSelector.select(context);
     if (!ids.length) return [];
@@ -157,7 +157,8 @@ export const memoryKnowledgeModule = defineInformationModule({
   manifest: {
     protocolVersion: 1,
     moduleVersion: "1.0.0",
-    definitionId: "agent.memory.knowledge",
+    definitionId: "memory.knowledge",
+    tags: ["memory"],
     displayName: "事件与 Wiki 记忆",
     summary: "持续保存有实体归属的事件和可追溯 Wiki 修订。",
     description:
@@ -232,7 +233,7 @@ export const memoryKnowledgeModule = defineInformationModule({
         onInformation(
           memoryKnowledgeMutationInformationKind,
           {
-            subscriptionId: "kaguya.memory.knowledge.mutation.v1",
+            subscriptionId: "memory.knowledge.mutation.v1",
             delivery: "durable",
           },
           async (request, context) => {
@@ -270,7 +271,7 @@ export const memoryKnowledgeModule = defineInformationModule({
                 operationId: request.informationId,
               });
             await context.registerOnce(
-              "kaguya.memory.knowledge.maintenance.page.v1",
+              "memory.knowledge.maintenance.page.v1",
               request.informationId,
               memoryKnowledgeMaintenanceInformationKind,
               { payload: { after: null } },
@@ -281,7 +282,7 @@ export const memoryKnowledgeModule = defineInformationModule({
         onInformation(
           memoryKnowledgeMaintenanceInformationKind,
           {
-            subscriptionId: "kaguya.memory.knowledge.maintenance.v1",
+            subscriptionId: "memory.knowledge.maintenance.v1",
             delivery: "durable",
           },
           async (request, context) => {
@@ -307,7 +308,7 @@ export const memoryKnowledgeModule = defineInformationModule({
                 entityInformationId: last.entityInformationId,
               };
               await context.registerOnce(
-                "kaguya.memory.knowledge.maintenance.page.v1",
+                "memory.knowledge.maintenance.page.v1",
                 request.informationId,
                 memoryKnowledgeMaintenanceInformationKind,
                 { payload: { after } },
@@ -319,7 +320,7 @@ export const memoryKnowledgeModule = defineInformationModule({
         onInformation(
           personContextCompletedInformationKind,
           {
-            subscriptionId: "kaguya.memory.knowledge.identity.v1",
+            subscriptionId: "memory.knowledge.identity.v1",
             delivery: "durable",
           },
           async (identity, context) => {
@@ -333,7 +334,7 @@ export const memoryKnowledgeModule = defineInformationModule({
         onInformation(
           memoryEventSubmittedInformationKind,
           {
-            subscriptionId: "kaguya.memory.knowledge.event.v1",
+            subscriptionId: "memory.knowledge.event.v1",
             delivery: "durable",
           },
           async (request, context) => {
@@ -348,7 +349,7 @@ export const memoryKnowledgeModule = defineInformationModule({
         onInformation(
           memoryWikiRefreshInformationKind,
           {
-            subscriptionId: "kaguya.memory.knowledge.wiki.v1",
+            subscriptionId: "memory.knowledge.wiki.v1",
             delivery: "durable",
           },
           async (request, context) => {
@@ -359,7 +360,7 @@ export const memoryKnowledgeModule = defineInformationModule({
         onInformation(
           memoryKnowledgeBackfillInformationKind,
           {
-            subscriptionId: "kaguya.memory.knowledge.backfill.v1",
+            subscriptionId: "memory.knowledge.backfill.v1",
             delivery: "durable",
           },
           async (request, context) => {
@@ -377,7 +378,7 @@ export const memoryKnowledgeModule = defineInformationModule({
             }
             if (page.length === PAGE_SIZE)
               await context.registerOnce(
-                "kaguya.memory.knowledge.backfill.page.v1",
+                "memory.knowledge.backfill.page.v1",
                 JSON.stringify([
                   request.informationId,
                   page.at(-1)!.informationId,
@@ -432,7 +433,7 @@ async function seedIdentity(
           label: message.source.senderId || "unknown",
         };
   await context.registerOnce(
-    "kaguya.memory.knowledge.event.v1",
+    "memory.knowledge.event.v1",
     source.informationId,
     memoryEventSubmittedInformationKind,
     {
@@ -574,7 +575,7 @@ async function schedulePage(
     limit: 8,
   });
   await context.registerOnce(
-    "kaguya.memory.knowledge.refresh.v1",
+    "memory.knowledge.refresh.v1",
     JSON.stringify([
       scopeInformationId,
       entityInformationId,
@@ -665,7 +666,7 @@ async function refreshPage(
       ),
     ];
     await context.registerOnce(
-      "kaguya.memory.knowledge.revision.v1",
+      "memory.knowledge.revision.v1",
       JSON.stringify([
         p.scopeInformationId,
         p.entityInformationId,
@@ -724,7 +725,7 @@ async function complete(
   context: InformationModuleHandlerContext,
 ) {
   await context.commitTerminal(
-    "kaguya.memory.knowledge.terminal.v1",
+    "memory.knowledge.terminal.v1",
     request.informationId,
     memoryKnowledgeCompletedInformationKind,
     {

@@ -42,7 +42,7 @@ async function append(
   payload?: JsonObject,
 ) {
   payload ??=
-    kind === "agent.chat.scope.entity"
+    kind === "memory.identity.chat.scope.entity"
       ? scopePayload(id)
       : kind === "core.message.inbound.text"
         ? { text: "Alice likes tea", source: scopePayload("scope-a") }
@@ -81,7 +81,7 @@ async function append(
     await db.information.append(
       freezeInformationAtom({
         informationId: informationIdSchema.parse(`identity-${id}`),
-        kind: "agent.person.context.completed",
+        kind: "memory.identity.person.context.completed",
         occurredAt: time,
         source: "identity",
         payload: {
@@ -107,18 +107,18 @@ async function setup() {
   await db.prepareSchema();
   await db.prepareMemoryKnowledgeSchema();
   await db.information.synchronizeKinds([
-    "agent.chat.scope.entity",
-    "agent.person.entity",
+    "memory.identity.chat.scope.entity",
+    "memory.identity.person.entity",
     "device.entity",
     "device.observation",
     "core.message.inbound.text",
-    "agent.memory.wiki.revision",
-    "agent.person.context.completed",
+    "memory.knowledge.wiki.revision",
+    "memory.identity.person.context.completed",
   ]);
   for (const id of ["scope-a", "scope-b"])
-    await append(db, id, "agent.chat.scope.entity");
+    await append(db, id, "memory.identity.chat.scope.entity");
   for (const id of ["alice", "bob"])
-    await append(db, id, "agent.person.entity");
+    await append(db, id, "memory.identity.person.entity");
   await append(db, "sensor", "device.entity");
   return db;
 }
@@ -267,10 +267,16 @@ describe("PostgresMemoryKnowledgeStore", () => {
     await expect(
       db.knowledge.putEvent(event("raw", "alice")),
     ).rejects.toBeInstanceOf(KnowledgeEvidenceError);
-    await append(db, "ephemeral", "agent.chat.scope.entity", occurredAt, {
-      ...scopePayload("ephemeral"),
-      scopeMode: "ephemeral",
-    });
+    await append(
+      db,
+      "ephemeral",
+      "memory.identity.chat.scope.entity",
+      occurredAt,
+      {
+        ...scopePayload("ephemeral"),
+        scopeMode: "ephemeral",
+      },
+    );
     await expect(
       db.knowledge.putEvent(event("raw", "ephemeral")),
     ).rejects.toBeInstanceOf(KnowledgeEvidenceError);
@@ -285,7 +291,7 @@ describe("PostgresMemoryKnowledgeStore", () => {
     await expect(
       db.knowledge.putEvent({ ...event("future"), occurredAt: later }),
     ).rejects.toBeInstanceOf(KnowledgeEvidenceError);
-    await append(db, "summary", "agent.memory.wiki.revision");
+    await append(db, "summary", "memory.knowledge.wiki.revision");
     await expect(
       db.knowledge.putEvent(event("summary")),
     ).rejects.toBeInstanceOf(KnowledgeEvidenceError);

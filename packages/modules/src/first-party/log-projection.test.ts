@@ -157,7 +157,7 @@ describe("first-party content projections", () => {
         limit: 8,
       }),
     ).toEqual({
-      event: "association.query",
+      event: "memory.association.query",
       route: "message",
       method: "sparse-2gram",
       queryLength: Array.from(query).length,
@@ -236,7 +236,7 @@ describe("expression summaries", () => {
         version: 1,
       }),
     ).toEqual({
-      event: "expression.learned",
+      event: "memory.expression.learned",
       status: "completed",
       count: 1,
       habitSummaries: ["表达疑惑 → 短句直说"],
@@ -258,7 +258,7 @@ describe("expression summaries", () => {
         version: 1,
       }),
     ).toEqual({
-      event: "expression.selected",
+      event: "memory.expression.selected",
       count: 1,
       reason: "selected",
       habitSummaries: ["表达疑惑 → 短句直说"],
@@ -276,7 +276,7 @@ describe("expression summaries", () => {
         version: 1,
       }),
     ).toEqual({
-      event: "expression.selected",
+      event: "memory.expression.selected",
       count: 0,
       reason: "no-candidates",
       habitSummaries: [],

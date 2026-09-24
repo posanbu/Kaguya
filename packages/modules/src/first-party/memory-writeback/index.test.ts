@@ -110,7 +110,7 @@ async function fixture() {
   async function terminal(kind = "completed") {
     return vi.waitFor(async () => {
       const found = await database.information.find({
-        kinds: [`agent.memory.writeback.${kind}`],
+        kinds: [`memory.writeback.${kind}`],
         limit: 100,
       });
       expect(
@@ -141,7 +141,7 @@ describe("durable raw Memory writeback", () => {
         source.informationId,
       ]);
       const requests = await f.database.information.find({
-        kinds: ["agent.memory.writeback.requested"],
+        kinds: ["memory.writeback.requested"],
         limit: 10,
       });
       expect(requests).toHaveLength(1);
@@ -205,13 +205,13 @@ describe("durable raw Memory writeback", () => {
     await f.host.stop();
     expect(
       await f.database.information.find({
-        kinds: ["agent.memory.writeback.requested"],
+        kinds: ["memory.writeback.requested"],
         limit: 10,
       }),
     ).toHaveLength(1);
     expect(
       await f.database.information.find({
-        kinds: ["agent.memory.writeback.completed"],
+        kinds: ["memory.writeback.completed"],
         limit: 10,
       }),
     ).toHaveLength(1);

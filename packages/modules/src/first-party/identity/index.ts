@@ -28,8 +28,9 @@ export const identityModule = defineInformationModule({
   manifest: {
     protocolVersion: 1,
     moduleVersion: "1.0.0",
-    definitionId: "core.identity.normalize",
-    inspection: firstPartyInspection["core.identity.normalize"],
+    definitionId: "memory.identity",
+    tags: ["memory"],
+    inspection: firstPartyInspection["memory.identity"],
     displayName: "身份归一",
     summary: "将入站平台账号与会话解析为可追溯的稳定身份。",
     description:
@@ -60,13 +61,13 @@ export const identityModule = defineInformationModule({
     subscriptions: [
       onInformation(
         inboundTextInformationKind,
-        { subscriptionId: "core.identity.inbound", delivery: "durable" },
+        { subscriptionId: "memory.identity.inbound", delivery: "durable" },
         async (atom, context) => {
           const source = atom.payload as any;
           const s = source.source;
           const scopeMode = s.platform === "web" ? "ephemeral" : "canonical";
           const scope = await context.registerOnce(
-            "core.identity.scope",
+            "memory.identity.scope",
             scopeMode === "ephemeral" &&
               (s.destination.kind !== "web" || !s.destination.conversationId)
               ? atom.informationId
@@ -82,7 +83,7 @@ export const identityModule = defineInformationModule({
             } as any,
           );
           await context.registerOnce(
-            "core.identity.scope.binding",
+            "memory.identity.scope.binding",
             scope.informationId,
             chatScopeBindingInformationKind,
             {
@@ -101,7 +102,7 @@ export const identityModule = defineInformationModule({
           let personInformationId: string | undefined;
           if (scopeMode === "canonical" && s.senderId) {
             const account = await context.registerOnce(
-              "core.identity.account",
+              "memory.identity.account",
               key([s.platform, s.adapterId, s.senderId]),
               platformAccountEntityInformationKind,
               {
@@ -114,14 +115,14 @@ export const identityModule = defineInformationModule({
             );
             accountInformationId = account.informationId;
             const person = await context.registerOnce(
-              "core.identity.person",
+              "memory.identity.person",
               key([s.platform, s.adapterId, s.senderId]),
               personEntityInformationKind,
               { payload: { accountId: s.senderId } },
             );
             personInformationId = person.informationId;
             await context.registerOnce(
-              "core.identity.account.binding",
+              "memory.identity.account.binding",
               account.informationId,
               platformAccountBindingInformationKind,
               {
@@ -140,7 +141,7 @@ export const identityModule = defineInformationModule({
             const sender = s.sender;
             if (sender?.nickname || sender?.card) {
               await context.registerOnce(
-                "core.identity.person.observed",
+                "memory.identity.person.observed",
                 atom.informationId,
                 personObservedInformationKind,
                 {
@@ -172,13 +173,13 @@ export const identityModule = defineInformationModule({
             ...(personInformationId ? { personInformationId } : {}),
           } as const;
           await context.registerOnce(
-            "core.identity.resolution",
+            "memory.identity.resolution",
             atom.informationId,
             personResolutionInformationKind,
             { payload: terminalPayload },
           );
           await context.commitTerminal(
-            "core.identity.context",
+            "memory.identity.context",
             atom.informationId,
             personContextCompletedInformationKind,
             {

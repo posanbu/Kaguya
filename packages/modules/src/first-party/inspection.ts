@@ -74,7 +74,7 @@ const modelRequestsView = () =>
     },
   );
 export const firstPartyInspection = {
-  "core.identity.normalize": {
+  "memory.identity": {
     mechanism: [
       "按平台、适配器和目标解析会话范围。",
       "关联账号与人物实体；无法确认时明确记录 unresolved 或 ambiguous。",
@@ -85,12 +85,12 @@ export const firstPartyInspection = {
         "身份与会话库",
         "持久化实体与绑定；每条记录可追溯来源。",
         [
-          "agent.chat.scope.entity",
-          "agent.chat.scope.binding",
-          "agent.platform.account.entity",
-          "agent.platform.account.binding",
-          "agent.person.entity",
-          "agent.person.observed",
+          "memory.identity.chat.scope.entity",
+          "memory.identity.chat.scope.binding",
+          "memory.identity.platform.account.entity",
+          "memory.identity.platform.account.binding",
+          "memory.identity.person.entity",
+          "memory.identity.person.observed",
         ],
         {
           platform: "平台",
@@ -109,7 +109,10 @@ export const firstPartyInspection = {
         "history",
         "归一历史",
         "身份处理的明确结果。",
-        ["agent.person.resolution", "agent.person.context.completed"],
+        [
+          "memory.identity.person.resolution",
+          "memory.identity.person.context.completed",
+        ],
         {
           status: "结果",
           platform: "平台",
@@ -133,7 +136,7 @@ export const firstPartyInspection = {
           type: "status-summary",
           area: "summary",
           viewId: "history",
-          kinds: ["agent.person.context.completed"],
+          kinds: ["memory.identity.person.context.completed"],
           statusField: "status",
           windowHours: 24,
         },
@@ -142,11 +145,11 @@ export const firstPartyInspection = {
           type: "entity-browser",
           area: "main",
           viewId: "identities",
-          entityKind: "agent.person.entity",
+          entityKind: "memory.identity.person.entity",
           entityKeyField: "accountId",
           activity: {
             viewId: "identities",
-            kinds: ["agent.person.observed"],
+            kinds: ["memory.identity.person.observed"],
             entityKeyField: "accountId",
           },
           titleFields: [
@@ -157,29 +160,29 @@ export const firstPartyInspection = {
           searchFields: [
             {
               viewId: "identities",
-              kind: "agent.person.entity",
+              kind: "memory.identity.person.entity",
               path: "accountId",
             },
             {
               viewId: "identities",
-              kind: "agent.person.observed",
+              kind: "memory.identity.person.observed",
               path: "nickname",
             },
             {
               viewId: "identities",
-              kind: "agent.person.observed",
+              kind: "memory.identity.person.observed",
               path: "card",
             },
           ],
           platform: {
             viewId: "identities",
-            kind: "agent.platform.account.entity",
+            kind: "memory.identity.platform.account.entity",
             field: "platform",
             entityKeyField: "accountId",
           },
           status: {
             viewId: "history",
-            kinds: ["agent.person.context.completed"],
+            kinds: ["memory.identity.person.context.completed"],
             entityField: "personInformationId",
             statusField: "status",
           },
@@ -189,8 +192,8 @@ export const firstPartyInspection = {
               title: "平台账号与绑定",
               viewId: "identities",
               kinds: [
-                "agent.platform.account.entity",
-                "agent.platform.account.binding",
+                "memory.identity.platform.account.entity",
+                "memory.identity.platform.account.binding",
               ],
               match: { source: "entity-key", field: "accountId" },
               presentation: "relation-list",
@@ -206,7 +209,7 @@ export const firstPartyInspection = {
               id: "observations",
               title: "名称观察时间线",
               viewId: "identities",
-              kinds: ["agent.person.observed"],
+              kinds: ["memory.identity.person.observed"],
               match: { source: "entity-key", field: "accountId" },
               presentation: "timeline",
               fields: [
@@ -221,8 +224,8 @@ export const firstPartyInspection = {
               title: "最近识别结果",
               viewId: "history",
               kinds: [
-                "agent.person.resolution",
-                "agent.person.context.completed",
+                "memory.identity.person.resolution",
+                "memory.identity.person.context.completed",
               ],
               match: {
                 source: "entity-id",
@@ -241,11 +244,11 @@ export const firstPartyInspection = {
               id: "scopes",
               title: "关联会话范围",
               viewId: "identities",
-              kinds: ["agent.chat.scope.entity"],
+              kinds: ["memory.identity.chat.scope.entity"],
               match: { source: "entity-id", field: "informationId" },
               via: {
                 viewId: "history",
-                kinds: ["agent.person.context.completed"],
+                kinds: ["memory.identity.person.context.completed"],
                 matchField: "personInformationId",
                 selectField: "scopeInformationId",
               },
@@ -516,7 +519,7 @@ export const firstPartyInspection = {
       ),
     ],
   },
-  "agent.expression": {
+  "memory.expression": {
     mechanism: [
       "从真人消息批次中学习受限的情境与表达方式，验证后整体落库。",
       "按会话聚合习惯，当前语境最多选择三项；空结果不影响正文生成。",
@@ -526,7 +529,7 @@ export const firstPartyInspection = {
         "library",
         "表达习惯库",
         "已持久化学习批次，保留验证状态和来源；重复习惯可能出现在多个批次中。",
-        ["agent.expression.learning.completed"],
+        ["memory.expression.learning.completed"],
         {
           status: "验证结果",
           habits: "情境与表达方式",
@@ -539,9 +542,9 @@ export const firstPartyInspection = {
         "学习与选用历史",
         "查看冻结样本、候选与最终选用。",
         [
-          "agent.expression.learning.requested",
-          "agent.expression.selection.requested",
-          "agent.expression.selection.completed",
+          "memory.expression.learning.requested",
+          "memory.expression.selection.requested",
+          "memory.expression.selection.completed",
         ],
         {
           habits: "选用习惯",
@@ -554,7 +557,7 @@ export const firstPartyInspection = {
       ),
     ],
   },
-  "core.association.memory": {
+  "memory.association": {
     mechanism: [
       "从冻结回合的输入构造查询；检索仅限同一平台、适配器和会话，且早于截止时间。",
       "用 sparse-2gram 检索，按覆盖程度排序，最多召回 8 条；排除本轮输入。",
@@ -565,7 +568,7 @@ export const firstPartyInspection = {
         "queries",
         "联想查询",
         "实际查询及冻结的检索范围。",
-        ["agent.association.query"],
+        ["memory.association.query"],
         {
           query: "查询",
           queryText: "原始输入",
@@ -577,14 +580,14 @@ export const firstPartyInspection = {
           asOf: "截止时间",
           method: "检索方法",
           limit: "候选上限",
-          "identity.status": "身份状态",
+          "memory.identity.status": "身份状态",
         },
       ),
       view(
         "retrieval",
         "召回结果与候选",
         "记录结果、排名与原因；不推断是否采用。",
-        ["agent.association.candidate", "agent.association.completed"],
+        ["memory.association.candidate", "memory.association.completed"],
         {
           rank: "排名",
           strategy: "检索策略",
@@ -597,7 +600,7 @@ export const firstPartyInspection = {
         "sources",
         "记忆来源",
         "沿候选的 canonical source 引用读取原始记录。",
-        ["core.message.inbound.text", "core.memory.text"],
+        ["core.message.inbound.text", "memory.text"],
         {
           text: "原文",
           source: "来源会话",
@@ -615,7 +618,7 @@ export const firstPartyInspection = {
           type: "record-browser",
           area: "main",
           viewId: "queries",
-          recordKind: "agent.association.query",
+          recordKind: "memory.association.query",
           titleField: "query",
           searchFields: [
             "query",
@@ -646,7 +649,7 @@ export const firstPartyInspection = {
               id: "result",
               title: "召回结果",
               viewId: "retrieval",
-              kinds: ["agent.association.completed"],
+              kinds: ["memory.association.completed"],
               reference: "core:caused-by",
               presentation: "field-grid",
               fields: fields({
@@ -660,7 +663,7 @@ export const firstPartyInspection = {
               id: "candidates",
               title: "记忆候选",
               viewId: "retrieval",
-              kinds: ["agent.association.candidate"],
+              kinds: ["memory.association.candidate"],
               reference: "core:caused-by",
               presentation: "ranked-list",
               rankField: "rank",
@@ -670,7 +673,7 @@ export const firstPartyInspection = {
               source: {
                 reference: "agent:canonical-source",
                 viewId: "sources",
-                kinds: ["core.message.inbound.text", "core.memory.text"],
+                kinds: ["core.message.inbound.text", "memory.text"],
                 fields: fields({ text: "原文", occurredAt: "来源时间" }),
               },
             },
@@ -718,7 +721,7 @@ export const firstPartyInspection = {
       ],
     },
   },
-  "agent.memory.writeback": {
+  "memory.writeback": {
     storage: "memory",
     mechanism: [
       "身份处理结束后按来源幂等保存入站原文，在线回合静默也会写回。",
@@ -730,16 +733,16 @@ export const firstPartyInspection = {
         "写回历史",
         "写回事实与原始文档库分开查询；无终态不能直接认定失败。",
         [
-          "agent.memory.writeback.requested",
-          "agent.memory.writeback.completed",
-          "agent.memory.writeback.empty",
-          "agent.memory.writeback.failed",
+          "memory.writeback.requested",
+          "memory.writeback.completed",
+          "memory.writeback.empty",
+          "memory.writeback.failed",
         ],
         { status: "结果" },
       ),
     ],
   },
-  "agent.memory.index": {
+  "memory.index": {
     storage: "vectors",
     mechanism: [
       "原始文档与向量分开存储，向量按模型、revision 和维度隔离。",
@@ -751,9 +754,9 @@ export const firstPartyInspection = {
         "索引与回填历史",
         "回填游标与结果来自持久化事实。",
         [
-          "agent.memory.index.requested",
-          "agent.memory.index.backfill.requested",
-          "agent.memory.index.completed",
+          "memory.index.requested",
+          "memory.index.backfill.requested",
+          "memory.index.completed",
         ],
         {
           identity: "模型版本",
@@ -765,7 +768,7 @@ export const firstPartyInspection = {
       ),
     ],
   },
-  "agent.memory.cognition": {
+  "memory.cognition": {
     mechanism: [
       "从已写入文档中冻结有界证据窗口，交由指定 provider/revision 处理。",
       "仅验证完成的快照可被选用；空结果、失效版本和非法输出分别记录。",
@@ -775,17 +778,14 @@ export const firstPartyInspection = {
         "snapshots",
         "认知快照库",
         "持久化正文与证据引用；当前查询不代表已被某次回复使用。",
-        ["core.memory.text"],
+        ["memory.text"],
         { text: "记忆内容", provenance: "来源" },
       ),
       view(
         "cognition",
         "认知处理历史",
         "provider 版本、证据窗口与验证结果。",
-        [
-          "agent.memory.cognition.requested",
-          "agent.memory.cognition.completed",
-        ],
+        ["memory.cognition.requested", "memory.cognition.completed"],
         {
           identity: "提供方版本",
           status: "结果",

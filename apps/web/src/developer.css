@@ -328,7 +328,8 @@
 .module-entry-copy {
   min-width: 0;
 }
-.module-entry h2 {
+.module-entry h2,
+.module-entry h3 {
   font-size: 17px;
   margin: 0;
   overflow-wrap: anywhere;
@@ -407,6 +408,26 @@
 }
 .module-overview > li {
   min-width: 0;
+}
+.module-groups {
+  display: grid;
+  gap: 24px;
+  margin-top: 20px;
+}
+.module-group > h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0;
+  font-size: 18px;
+}
+.module-group > h2 > span {
+  color: var(--kaguya-muted);
+  font-size: 13px;
+  font-weight: 400;
+}
+.module-group .module-overview {
+  margin-top: 10px;
 }
 .module-details > a {
   width: fit-content;

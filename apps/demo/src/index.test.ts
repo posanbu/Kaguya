@@ -81,20 +81,11 @@ describe("demo entry point", () => {
     expect(receipt.rootInformationId).toMatch(/^demo-information-\d+$/u);
     expect(output).toEqual([
       `root informationId: ${receipt.rootInformationId}`,
-      "agent.association.completed: 1",
-      "agent.association.query: 1",
-      "agent.association.requested: 1",
       "agent.attention.arousal.activity: 1",
       "agent.attention.arousal.completed: 1",
       "agent.attention.arousal.state.recorded: 2",
-      "agent.chat.scope.binding: 1",
-      "agent.chat.scope.entity: 1",
       "agent.conversation.context.frozen: 1",
-      "agent.expression.selection.completed: 1",
-      "agent.expression.selection.requested: 1",
       "agent.message.intent.requested: 1",
-      "agent.person.context.completed: 1",
-      "agent.person.resolution: 1",
       "agent.turn.candidate: 1",
       "agent.turn.claimed: 1",
       "agent.turn.completed: 1",
@@ -108,6 +99,15 @@ describe("demo entry point", () => {
       "core.model.task.completed: 2",
       "core.model.task.requested: 2",
       "core.runtime.context: 1",
+      "memory.association.completed: 1",
+      "memory.association.query: 1",
+      "memory.association.requested: 1",
+      "memory.expression.selection.completed: 1",
+      "memory.expression.selection.requested: 1",
+      "memory.identity.chat.scope.binding: 1",
+      "memory.identity.chat.scope.entity: 1",
+      "memory.identity.person.context.completed: 1",
+      "memory.identity.person.resolution: 1",
     ]);
   }, 20_000);
 

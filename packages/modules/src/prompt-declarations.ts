@@ -255,8 +255,8 @@ export const messageModulePromptTemplates: readonly ModulePromptTemplateDefiniti
 export const expressionTemplateDeclarations = [
   {
     key: "learn",
-    fileStem: "expression.learn",
-    templateId: "expression.learn",
+    fileStem: "memory.expression.learn",
+    templateId: "memory.expression.learn",
     name: "expression-learn",
     displayName: "表达习惯学习",
     description: "从真人消息提取有证据支持的抽象表达习惯。",
@@ -266,8 +266,8 @@ export const expressionTemplateDeclarations = [
   },
   {
     key: "select",
-    fileStem: "expression.select",
-    templateId: "expression.select",
+    fileStem: "memory.expression.select",
+    templateId: "memory.expression.select",
     name: "expression-select",
     displayName: "表达习惯选择",
     description: "依据冻结回合和消息意图选择合适的表达习惯。",
@@ -328,7 +328,7 @@ export const plannerPlatformPolicyDeclarations: readonly ModulePromptTemplateDef
   }));
 
 export const identityNameTemplateDeclaration: PromptResourceDefinition = {
-  templateId: "identity.name",
+  templateId: "memory.identity.name",
   name: "identity-name",
   displayName: "辉夜名称",
   description: "工作区级 Agent 主名称。",
@@ -339,7 +339,7 @@ export const identityNameTemplateDeclaration: PromptResourceDefinition = {
   mutability: "editable",
 };
 export const identityAliasesTemplateDeclaration: PromptResourceDefinition = {
-  templateId: "identity.aliases",
+  templateId: "memory.identity.aliases",
   name: "identity-aliases",
   displayName: "辉夜别名",
   description: "工作区级 Agent 别名，每行一个。",
@@ -350,7 +350,7 @@ export const identityAliasesTemplateDeclaration: PromptResourceDefinition = {
   mutability: "editable",
 };
 export const identityPersonaTemplateDeclaration: PromptResourceDefinition = {
-  templateId: "identity.persona",
+  templateId: "memory.identity.persona",
   name: "identity-persona",
   displayName: "辉夜身份设定",
   description:
@@ -375,7 +375,7 @@ export const personFactTemplateDeclaration: ModulePromptTemplateDefinition = {
 /** 所有第一方模板组的白名单；文件初始化和存储与模块声明共用此入口。 */
 export const memoryIngestionTemplateDeclaration: ModulePromptTemplateDefinition =
   {
-    templateId: "memory-ingestion",
+    templateId: "memory.ingestion",
     name: "memory-ingestion",
     displayName: "主动记忆整理规则",
     description:

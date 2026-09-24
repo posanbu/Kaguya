@@ -101,6 +101,10 @@ describe("module instance configuration", () => {
 
   it.each([
     ["legacy definition", { ...defaults[0], definitionId: "demo.reply.llm" }],
+    [
+      "legacy memory definition",
+      { ...defaults[0], definitionId: "core.identity.normalize" },
+    ],
     ["wrong version", { ...defaults[0], version: 2 }],
     [
       "missing settings",

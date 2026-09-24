@@ -101,6 +101,76 @@ export interface ModuleDetailSections {
   readonly SettingsSection?: ComponentType<ModuleEditorProps>;
   readonly TemplatesSection?: ComponentType<ModuleEditorProps>;
 }
+export function filterModules(
+  modules: readonly InspectionModule[],
+  search: string,
+): readonly InspectionModule[] {
+  const query = search.trim().toLowerCase();
+  return modules.filter((module) =>
+    `${module.definitionId} ${module.displayName} ${module.summary} ${(module.tags ?? []).join(" ")}`
+      .toLowerCase()
+      .includes(query),
+  );
+}
+export function groupModules(modules: readonly InspectionModule[]) {
+  return [
+    {
+      id: "memory",
+      title: "Memory",
+      modules: modules.filter((module) => module.tags?.includes("memory")),
+    },
+    {
+      id: "other",
+      title: "其他模块",
+      modules: modules.filter((module) => !module.tags?.includes("memory")),
+    },
+  ].filter((group) => group.modules.length > 0);
+}
+function ModuleGroup({
+  id,
+  title,
+  modules,
+}: {
+  id: string;
+  title: string;
+  modules: readonly InspectionModule[];
+}) {
+  const headingId = `module-group-${id}`;
+  return (
+    <section className="module-group" aria-labelledby={headingId}>
+      <h2 id={headingId}>
+        {title}
+        <span>{modules.length} 个模块</span>
+      </h2>
+      <ul className="module-overview">
+        {modules.map((module) => (
+          <li key={module.definitionId}>
+            <ModuleLink
+              path={moduleDetailPath(module.definitionId)}
+              className="module-entry"
+            >
+              <div className="module-entry-copy">
+                <h3>{module.displayName}</h3>
+                <p title={module.summary}>{module.summary}</p>
+                <code>{module.definitionId}</code>
+              </div>
+              <div className="module-entry-meta">
+                <StatusBadge
+                  tone={module.bindings.length ? "success" : "neutral"}
+                >
+                  {module.bindings.length ? "已激活" : "未激活"}
+                </StatusBadge>
+                <span>
+                  输入 {module.consumes.length} · 输出 {module.produces.length}
+                </span>
+              </div>
+            </ModuleLink>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
 export function ModuleOverview({
   modules,
 }: {
@@ -108,11 +178,8 @@ export function ModuleOverview({
 }) {
   const [search, setSearch] = useState("");
   const [view, setView] = useState<"list" | "topology">("list");
-  const visible = modules.filter((module) =>
-    `${module.definitionId} ${module.displayName} ${module.summary}`
-      .toLowerCase()
-      .includes(search.trim().toLowerCase()),
-  );
+  const visible = filterModules(modules, search);
+  const groups = groupModules(visible);
   return (
     <section aria-label="模块总览">
       <div className="module-summary-strip">
@@ -153,7 +220,7 @@ export function ModuleOverview({
               type="search"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="名称或 definition ID"
+              placeholder="名称、definition ID 或标签"
             />
           </label>
           {!modules.length ? (
@@ -161,33 +228,11 @@ export function ModuleOverview({
           ) : !visible.length ? (
             <FieldMessage>没有匹配的模块，请调整搜索条件。</FieldMessage>
           ) : null}
-          <ul className="module-overview">
-            {visible.map((module) => (
-              <li key={module.definitionId}>
-                <ModuleLink
-                  path={moduleDetailPath(module.definitionId)}
-                  className="module-entry"
-                >
-                  <div className="module-entry-copy">
-                    <h2>{module.displayName}</h2>
-                    <p title={module.summary}>{module.summary}</p>
-                    <code>{module.definitionId}</code>
-                  </div>
-                  <div className="module-entry-meta">
-                    <StatusBadge
-                      tone={module.bindings.length ? "success" : "neutral"}
-                    >
-                      {module.bindings.length ? "已激活" : "未激活"}
-                    </StatusBadge>
-                    <span>
-                      输入 {module.consumes.length} · 输出{" "}
-                      {module.produces.length}
-                    </span>
-                  </div>
-                </ModuleLink>
-              </li>
+          <div className="module-groups">
+            {groups.map((group) => (
+              <ModuleGroup key={group.id} {...group} />
             ))}
-          </ul>
+          </div>
         </>
       )}
     </section>

@@ -80,7 +80,7 @@ HTTP `202 accepted` 在 Web gateway 接收消息后立即返回；Runtime dispat
 core.runtime.context
   -> core.message.inbound.text
   -> agent.attention.arousal.activity -> 空闲休眠 one-shot deadline
-  -> agent.person.context.completed
+  -> memory.identity.person.context.completed
   -> agent.heartbeat.scheduled
   -> core.schedule.one-shot.requested
   -> core.schedule.one-shot.due

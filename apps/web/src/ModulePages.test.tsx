@@ -15,6 +15,8 @@ import {
   type ModuleEditorProps,
   ModulePage,
   ModuleDetails,
+  filterModules,
+  groupModules,
   moduleDefinitionId,
   moduleDetailPath,
   navigateModuleLink,
@@ -22,6 +24,7 @@ import {
 
 const module: InspectionModule = {
   definitionId: "agent.message-composer",
+  tags: [],
   displayName: "消息合成",
   summary: "根据冻结上下文生成消息。",
   description: "读取选定的上下文，通过模型生成正文并提出投递请求。",
@@ -143,6 +146,44 @@ describe("模块独立页面", () => {
     expect(html).not.toContain(module.description);
     expect(html).not.toContain(module.consumes[0]!.description);
     expect(html).not.toContain("secret-token");
+  });
+  it("groups memory-tagged modules without duplicating cards", () => {
+    const memoryModule = {
+      ...module,
+      definitionId: "memory.identity",
+      displayName: "身份归一",
+      tags: ["memory"],
+    };
+    const groups = groupModules([memoryModule, module]);
+    expect(groups.map(({ title, modules }) => [title, modules.length])).toEqual(
+      [
+        ["Memory", 1],
+        ["其他模块", 1],
+      ],
+    );
+    const html = render(
+      <ModulePage
+        token="test"
+        path="/developer/modules"
+        state={{ data: { modules: [memoryModule, module] } }}
+      />,
+    );
+    expect(html).toContain("Memory<span>1 个模块</span>");
+    expect(html).toContain("其他模块<span>1 个模块</span>");
+    expect(html.match(/memory\.identity/gu)).toHaveLength(2);
+  });
+  it("includes tags in module search and omits empty groups", () => {
+    const memoryModule = {
+      ...module,
+      definitionId: "memory.identity",
+      tags: ["memory"],
+    };
+    expect(filterModules([module, memoryModule], "MEMORY")).toEqual([
+      memoryModule,
+    ]);
+    expect(groupModules([memoryModule]).map((group) => group.title)).toEqual([
+      "Memory",
+    ]);
   });
   it("shows semantic details and collapses renderer and technical metadata", () => {
     const html = render(

@@ -30,7 +30,7 @@ export interface EmbeddingProvider {
   embed(text: string, signal: AbortSignal): Promise<readonly number[]>;
 }
 export const embeddingCapability = defineModuleCapability<EmbeddingProvider>(
-  "kaguya:memory.embedding",
+  "memory:embedding",
   1,
 );
 export interface MemoryDocumentReader {
@@ -41,7 +41,7 @@ export interface MemoryDocumentReader {
   }): Promise<readonly MemoryDocument[]>;
 }
 export const memoryDocumentReaderCapability =
-  defineModuleCapability<MemoryDocumentReader>("kaguya:memory.documents", 1);
+  defineModuleCapability<MemoryDocumentReader>("memory:documents", 1);
 export interface MemoryVectorIndex {
   putVector(
     memoryId: string,
@@ -55,7 +55,7 @@ export interface MemoryVectorIndex {
   ): Promise<readonly MemoryRecallHit[]>;
 }
 export const memoryVectorCapability = defineModuleCapability<MemoryVectorIndex>(
-  "kaguya:memory.vector",
+  "memory:vector",
   1,
 );
 export function validateEmbedding(

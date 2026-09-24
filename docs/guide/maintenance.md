@@ -41,7 +41,7 @@ pnpm build
 
 **仍有 `runtime.gatewayAllowlist`** — 备份后删除旧字段，明确填写 `inboundAllowlist` 和 `outboundAllowlist` 两个数组。如需保留原来的双向范围，可将旧规则复制到两侧。
 
-**Profile 仍含身份正文** — 将旧 `identity.name`、`identity.aliases`、`identity.persona` 分别保存到同名 local 模板，别名每行一个。随后从 Profile 的 `identity` 中删除这三个字段，只保留 `timeZone`。
+**Profile 仍含身份正文** — 将旧 Profile 的 `identity.name`、`identity.aliases`、`identity.persona` 分别保存到 `memory.identity.name`、`memory.identity.aliases`、`memory.identity.persona` local 模板，别名每行一个。随后从 Profile 的 `identity` 中删除这三个字段，只保留 `timeZone`。
 
 **模板无效** — 对照同名 default 的变量和结构修正 local。旧 `llm-reply.*.local.hbs` 不再加载，应按当前 `message-composer` 模板重建。
 

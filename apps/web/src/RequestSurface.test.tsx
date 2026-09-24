@@ -48,6 +48,7 @@ const browser = {
 } as const;
 const module = {
   definitionId,
+  tags: [],
   displayName: "自定义请求模块",
   summary: "按请求查看决定。",
   description: "不应出现在请求详情中的技术说明",

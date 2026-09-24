@@ -171,7 +171,7 @@ it.runIf(canCreateSymlinks())(
       "heartflow.platform-policy-qq",
       "heartflow.platform-policy-web",
     ]);
-    expect(service.get("agent.memory.cognition").templates).toEqual([]);
+    expect(service.get("memory.cognition").templates).toEqual([]);
     await expect(
       service.change("agent.heartflow.online", "message-composer", {
         revision: "anything",
@@ -274,11 +274,11 @@ it("authenticates template routes and sanitizes invalid syntax responses", async
   }
 });
 
-it.each(["expression.learn", "expression.select"])(
+it.each(["memory.expression.learn", "memory.expression.select"])(
   "expression override %s is loaded and reset without changing defaults",
   async (tid) => {
     const { service, root, path } = await fixture();
-    const id = "agent.expression";
+    const id = "memory.expression";
     const before = await readFile(join(path, `${tid}.default.hbs`), "utf8");
     const saved = await service.change(id, tid, {
       revision: service.get(id).revision,
@@ -286,7 +286,7 @@ it.each(["expression.learn", "expression.select"])(
     });
     expect(
       loadFirstPartyPromptTemplates({ root }).expression[
-        tid === "expression.learn" ? "learn" : "select"
+        tid === "memory.expression.learn" ? "learn" : "select"
       ],
     ).toBe("CUSTOM {{context}}");
     await service.change(id, tid, { revision: saved.revision }, true);

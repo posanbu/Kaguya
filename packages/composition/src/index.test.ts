@@ -52,9 +52,7 @@ describe("shared Runtime Composition", () => {
       knowledgeEnabled: true,
     });
     expect(
-      enabled.activations.some(
-        (a) => a.definitionId === "agent.memory.knowledge",
-      ),
+      enabled.activations.some((a) => a.definitionId === "memory.knowledge"),
     ).toBe(true);
     for (const options of [
       { memoryEnabled: true },
@@ -64,7 +62,7 @@ describe("shared Runtime Composition", () => {
         createMessageComposition(undefined, {
           moduleConfigs,
           ...options,
-        }).activations.some((a) => a.definitionId === "agent.memory.knowledge"),
+        }).activations.some((a) => a.definitionId === "memory.knowledge"),
       ).toBe(false);
     }
     const disabled = createMessageComposition(undefined, {
@@ -75,22 +73,20 @@ describe("shared Runtime Composition", () => {
         {
           version: 1,
           instanceId: "knowledge.custom",
-          definitionId: "agent.memory.knowledge",
+          definitionId: "memory.knowledge",
           enabled: false,
           settings: {},
         },
       ],
     });
     expect(
-      disabled.activations.some(
-        (a) => a.definitionId === "agent.memory.knowledge",
-      ),
+      disabled.activations.some((a) => a.definitionId === "memory.knowledge"),
     ).toBe(false);
   });
   it("adopts an added and then removed catalog definition without an app registry", () => {
     const original = createMessageCatalog();
     const base = original.definitions.find(
-      ({ manifest }) => manifest.definitionId === "core.identity.normalize",
+      ({ manifest }) => manifest.definitionId === "memory.identity",
     )!;
     const extra = {
       ...base,
@@ -162,8 +158,8 @@ describe("shared Runtime Composition", () => {
       },
       {
         activation: {
-          instanceId: "expression.default",
-          definitionId: "agent.expression",
+          instanceId: "memory.expression.default",
+          definitionId: "memory.expression",
         },
         selectionPolicy: { tier: "light" },
       },
@@ -171,7 +167,7 @@ describe("shared Runtime Composition", () => {
     expect(composition.activations).toHaveLength(moduleConfigs.length);
     expect(
       composition.activations.some(
-        ({ definitionId }) => definitionId === "agent.memory.writeback",
+        ({ definitionId }) => definitionId === "memory.writeback",
       ),
     ).toBe(true);
     expect(

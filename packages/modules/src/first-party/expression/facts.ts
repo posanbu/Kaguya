@@ -66,7 +66,7 @@ const refs = {
   "core:uses-context": { required: true, multiple: true },
 } as const;
 export const expressionLearningRequested = defineInformationKind({
-  kind: "agent.expression.learning.requested",
+  kind: "memory.expression.learning.requested",
   displayName: "表达学习请求",
   description: "冻结真实会话、一批真实用户消息和学习版本。",
   payloadSchema: z
@@ -81,7 +81,7 @@ export const expressionLearningRequested = defineInformationKind({
   log: { enabled: false },
 });
 export const expressionLearned = defineInformationKind({
-  kind: "agent.expression.learning.completed",
+  kind: "memory.expression.learning.completed",
   displayName: "表达学习结果",
   description: "完整验证后一次性保存批次，失败批次不产生可见习惯。",
   payloadSchema: z
@@ -101,7 +101,7 @@ export const expressionLearned = defineInformationKind({
     enabled: true,
     level: "debug",
     project: ({ payload }) => ({
-      event: "expression.learned",
+      event: "memory.expression.learned",
       status: payload.status,
       count: payload.habits.length,
       habitSummaries: payload.habits.map(
@@ -111,7 +111,7 @@ export const expressionLearned = defineInformationKind({
   },
 });
 export const expressionSelectionRequested = defineInformationKind({
-  kind: "agent.expression.selection.requested",
+  kind: "memory.expression.selection.requested",
   displayName: "表达选择请求",
   description: "绑定获胜消息意图及冻结回合、候选与计数。",
   payloadSchema: z
@@ -129,7 +129,7 @@ export const selectionOutputSchema = z
   .object({ habitIds: z.array(z.string()).max(3) })
   .strict();
 export const expressionSelected = defineInformationKind({
-  kind: "agent.expression.selection.completed",
+  kind: "memory.expression.selection.completed",
   displayName: "表达选择结果",
   description: "仅提供自然匹配时使用的措辞参考，空集合保持原消息行为。",
   payloadSchema: z
@@ -150,7 +150,7 @@ export const expressionSelected = defineInformationKind({
     enabled: true,
     level: "debug",
     project: ({ payload }) => ({
-      event: "expression.selected",
+      event: "memory.expression.selected",
       count: payload.habits.length,
       reason: payload.reason,
       habitSummaries: payload.habits.map(
@@ -161,6 +161,6 @@ export const expressionSelected = defineInformationKind({
 });
 
 export const expressionReady = defineModuleCapability<{ readonly ready: true }>(
-  "kaguya:expression.ready",
+  "memory:expression.ready",
   1,
 );

@@ -99,11 +99,11 @@ function contract(create: () => Promise<KaguyaDatabase>) {
       USER_INPUT_KIND,
       USER_SUBJECT_KIND,
       USER_MEMORY_SCOPE_KIND,
-      "agent.chat.scope.entity",
-      "agent.person.entity",
-      "agent.person.observed",
-      "agent.platform.account.entity",
-      "agent.platform.account.binding",
+      "memory.identity.chat.scope.entity",
+      "memory.identity.person.entity",
+      "memory.identity.person.observed",
+      "memory.identity.platform.account.entity",
+      "memory.identity.platform.account.binding",
     ]);
     const store = new PostgresMemoryIngestionStore(db.sql);
     const apply = async (input: MemoryIngestionSubmission, output = plan()) => {
@@ -183,25 +183,28 @@ function contract(create: () => Promise<KaguyaDatabase>) {
           multiple: false,
         })),
       );
-    await append("native-person", "agent.person.entity", { accountId: "100" }, [
-      { relation: "agent:scope", informationId: GLOBAL_MEMORY_SCOPE_ID },
-    ]);
+    await append(
+      "native-person",
+      "memory.identity.person.entity",
+      { accountId: "100" },
+      [{ relation: "agent:scope", informationId: GLOBAL_MEMORY_SCOPE_ID }],
+    );
     for (const [account, person, nickname] of [
       ["qq-account", "native-person", "小林"],
       ["other-account", "other-person", "不相关的人"],
     ]) {
-      await append(account!, "agent.platform.account.entity", {
+      await append(account!, "memory.identity.platform.account.entity", {
         accountId: "100",
       });
       await append(
         `${account}-binding`,
-        "agent.platform.account.binding",
+        "memory.identity.platform.account.binding",
         { accountId: "100", personInformationId: person! },
         [{ relation: "core:binds", informationId: account! }],
       );
       await append(
         `${account}-observed`,
-        "agent.person.observed",
+        "memory.identity.person.observed",
         { accountId: "100", nickname: nickname! },
         [{ relation: "core:observes", informationId: account! }],
       );

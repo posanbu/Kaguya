@@ -136,6 +136,8 @@ export interface InformationModuleManifest<TSettings = unknown> {
   readonly definitionId: string;
   readonly moduleVersion: string;
   readonly displayName: string;
+  /** 用于 Catalog 与管理界面的稳定领域分类；不参与模块激活或执行。 */
+  readonly tags?: readonly string[];
   readonly summary: string;
   readonly description: string;
   readonly settingsSchema: z.ZodType<TSettings>;
@@ -261,6 +263,19 @@ export function defineInformationModule<TSettings>(
     throw new Error("module summary must be a non-empty single line");
   if (typeof m.description !== "string" || !m.description.trim())
     throw new Error("module description must not be empty");
+  const tags = m.tags ?? [];
+  if (
+    !Array.isArray(tags) ||
+    tags.some(
+      (tag) =>
+        typeof tag !== "string" ||
+        tag.length > 32 ||
+        !/^[a-z][a-z0-9-]*$/u.test(tag),
+    )
+  )
+    throw new Error("module tags must be lowercase identifiers");
+  if (new Set(tags).size !== tags.length)
+    throw new Error("module tags must be unique");
   if (m.protocolVersion !== 1)
     throw new Error("unsupported information module protocol version");
   if (
@@ -349,6 +364,7 @@ export function defineInformationModule<TSettings>(
     ...definition,
     manifest: Object.freeze({
       ...m,
+      tags: Object.freeze([...tags]),
       ...(m.inspection
         ? {
             inspection: Object.freeze({

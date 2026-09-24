@@ -49,7 +49,7 @@ async function setup(
     ],
     (request) => {
       requests.push(request);
-      return request.task.taskId === "agent.expression.learn"
+      return request.task.taskId === "memory.expression.learn"
         ? {
             patterns: [
               {
@@ -226,12 +226,12 @@ describe("expression persistent pipeline", () => {
       expect(f.requests).toHaveLength(2);
       for (const task of ["learn", "select"] as const) {
         const request = f.requests.find(
-          (value) => value.task.taskId === `agent.expression.${task}`,
+          (value) => value.task.taskId === `memory.expression.${task}`,
         )!;
         expect(request.prompt.templates).toEqual([
           { name: `expression-${task}`, content: templates[task] },
         ]);
-        expect(request.prompt.templateId).toBe(`kaguya.expression.${task}.v1`);
+        expect(request.prompt.templateId).toBe(`memory.expression.${task}.v1`);
         const variable = request.prompt.variables[0]!;
         expect(request.prompt.variables).toHaveLength(1);
         expect(variable.name).toBe("context");

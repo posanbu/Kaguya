@@ -120,65 +120,65 @@ information.debug({
   event: "memory.text.registered",
   ...previewInformationContent(memoryText),
   informationId: "memory01-demo",
-  kind: "core.memory.text",
+  kind: "memory.text",
   references: [
     { relation: "core:uses-context", informationId: "oldchat1-demo" },
   ],
 });
 const query = "明天一起看月亮，望远镜与上次观测笔记 🌙";
 information.debug({
-  event: "association.query",
+  event: "memory.association.query",
   method: "sparse-2gram",
   route: "message",
   queryLength: Array.from(query).length,
   limit: 3,
   ...previewInformationContent(query),
   informationId: "query001-demo",
-  kind: "agent.association.query",
+  kind: "memory.association.query",
   references: [{ relation: "core:caused-by", informationId: "assocreq-demo" }],
 });
 information.debug({
-  event: "association.candidate",
+  event: "memory.association.candidate",
   rank: 0,
   strategy: "sparse-2gram",
   reasonCodes: ["sparse-match", "coverage-ranked"],
   informationId: "cand0001-demo",
-  kind: "agent.association.candidate",
+  kind: "memory.association.candidate",
   references: [
     { relation: "core:caused-by", informationId: "query001-demo" },
     { relation: "agent:canonical-source", informationId: "memory01-demo" },
   ],
 });
 information.info({
-  event: "association.completed",
+  event: "memory.association.completed",
   status: "matched",
   route: "message",
   method: "sparse-2gram",
   candidateCount: 1,
   reasonCodes: ["sparse-match", "coverage-ranked"],
   informationId: "assoc001-demo",
-  kind: "agent.association.completed",
+  kind: "memory.association.completed",
   references: [
     { relation: "core:caused-by", informationId: "query001-demo" },
     { relation: "agent:candidate", informationId: "cand0001-demo" },
   ],
 });
 information.debug({
-  event: "expression.learned",
+  event: "memory.expression.learned",
   status: "completed",
   count: 2,
   habitSummaries: ["分享喜悦 → 简短感叹", "礼貌回应 → 先回应再补充"],
   informationId: "exprlrn1-demo",
-  kind: "agent.expression.learning.completed",
+  kind: "memory.expression.learning.completed",
   references: [{ relation: "core:caused-by", informationId: "exprmdl1-demo" }],
 });
 information.debug({
-  event: "expression.selected",
+  event: "memory.expression.selected",
   count: 1,
   reason: "当前对话是熟悉朋友之间的活动邀请。",
   habitSummaries: ["礼貌回应 → 先回应再补充"],
   informationId: "exprsel1-demo",
-  kind: "agent.expression.selection.completed",
+  kind: "memory.expression.selection.completed",
   references: [{ relation: "core:caused-by", informationId: "exprmdl2-demo" }],
 });
 information.debug({
@@ -247,7 +247,7 @@ for (const status of ["completed", "empty", "failed"]) {
     event: "memory.writeback.terminal",
     status,
     informationId: `write-${status}-demo`,
-    kind: `agent.memory.writeback.${status}`,
+    kind: `memory.writeback.${status}`,
     references: [
       {
         relation: "core:status-of",
@@ -257,14 +257,14 @@ for (const status of ["completed", "empty", "failed"]) {
   });
 }
 information.info({
-  event: "association.completed",
+  event: "memory.association.completed",
   status: "empty",
   route: "message",
   method: "sparse-2gram",
   candidateCount: 0,
   reasonCodes: ["no-sparse-match"],
   informationId: "assoc002-demo",
-  kind: "agent.association.completed",
+  kind: "memory.association.completed",
   references: [{ relation: "core:caused-by", informationId: "query002-demo" }],
 });
 adapter.warn(

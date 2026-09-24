@@ -6,11 +6,11 @@
 
 ## 消费和产生
 
-消费 writeback completed 与 cognition requested；产生 cognition completed 和只有完成后才可消费的 core.memory.text。
+消费 writeback completed 与 cognition requested；产生 cognition completed 和只有完成后才可消费的 memory.text。
 
 ## 数据流与边界
 
-只由 canonical 且人物明确的身份终态触发，ephemeral/Web 只保存 raw Memory。冻结同 platform、adapter、destination 中最近最多 32 条已持久化消息；群聊保留各参与者，私聊额外要求同一发送账号。provider 通过 `kaguya:memory.cognition@1` 接收正文、各自账号与有序来源；Mem0 输入显式保留陈述者、场景、事件时间和 Information ID，不把所有消息当作同一人的自述。结果保留直接证据引用。
+只由 canonical 且人物明确的身份终态触发，ephemeral/Web 只保存 raw Memory。冻结同 platform、adapter、destination 中最近最多 32 条已持久化消息；群聊保留各参与者，私聊额外要求同一发送账号。provider 通过 `memory:cognition@1` 接收正文、各自账号与有序来源；Mem0 输入显式保留陈述者、场景、事件时间和 Information ID，不把所有消息当作同一人的自述。结果保留直接证据引用。
 
 worker 重载时逐项比对账本和持久化原文，校验事件截止点与文档入库时间；读取消费侧再次核对场景和证据截止点。新快照使用 `scene.v2` 范围键，历史单发送者快照保留审计，旧 pending request 仍按原范围恢复。Mem0 operation 命名空间保持隔离。空结果或调用失败只表示本轮没有可用的授权证据，不能解释为人物、关系或世界背景的事实。
 

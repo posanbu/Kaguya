@@ -205,7 +205,7 @@ it("first-party editable schemas expose names, constraints and no invented insta
       (f) => f.key === "botNames",
     ),
   ).toBeUndefined();
-  expect((await service.get("agent.memory.cognition")).instances).toEqual([]);
+  expect((await service.get("memory.cognition")).instances).toEqual([]);
 });
 it("maps an invalid array element to its public field path", async () => {
   const rootDir = await mkdtemp(join(tmpdir(), "module-array-"));

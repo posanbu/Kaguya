@@ -101,8 +101,8 @@ it("loads every declared module template from files and never creates local file
   expect(loaded.plannerBootstrapPolicy).toBe("heartflow.bootstrap-policy");
   expect(loaded.messageComposer.bootstrap).toBe("message-composer.bootstrap");
   expect(loaded.expression).toEqual({
-    learn: "expression.learn",
-    select: "expression.select",
+    learn: "memory.expression.learn",
+    select: "memory.expression.select",
   });
   expect(loaded.authorizedMessage).toEqual({
     automatic: "message-composer.authorized-automatic",

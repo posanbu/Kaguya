@@ -82,7 +82,7 @@ vi.mock("./use-inspection.js", () => ({
 import { ModuleSurface } from "./ModuleSurface.js";
 
 const module = {
-  definitionId: "core.identity.normalize",
+  definitionId: "memory.identity",
   displayName: "身份归一",
   summary: "将账号解析为人物。",
   description: "只读身份检查。",
@@ -111,7 +111,7 @@ const module = {
           type: "status-summary",
           area: "summary",
           viewId: "history",
-          kinds: ["agent.person.context.completed"],
+          kinds: ["memory.identity.person.context.completed"],
           statusField: "status",
           windowHours: 24,
         },
@@ -120,24 +120,24 @@ const module = {
           type: "entity-browser",
           area: "main",
           viewId: "identities",
-          entityKind: "agent.person.entity",
+          entityKind: "memory.identity.person.entity",
           entityKeyField: "accountId",
           activity: {
             viewId: "identities",
-            kinds: ["agent.person.observed"],
+            kinds: ["memory.identity.person.observed"],
             entityKeyField: "accountId",
           },
           titleFields: [{ path: "nickname", label: "昵称" }],
           searchFields: [],
           platform: {
             viewId: "identities",
-            kind: "agent.platform.account.entity",
+            kind: "memory.identity.platform.account.entity",
             field: "platform",
             entityKeyField: "accountId",
           },
           status: {
             viewId: "history",
-            kinds: ["agent.person.context.completed"],
+            kinds: ["memory.identity.person.context.completed"],
             entityField: "personInformationId",
             statusField: "status",
           },

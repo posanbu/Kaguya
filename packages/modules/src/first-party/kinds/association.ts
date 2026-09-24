@@ -66,7 +66,7 @@ export type AssociationRequestedInformationPayload = z.infer<
 >;
 
 export const associationRequestedInformationKind = defineInformationKind({
-  kind: "agent.association.requested",
+  kind: "memory.association.requested",
   displayName: "记忆联想请求",
   description:
     "收到消息意图后冻结检索范围、身份和时间边界；联想处理据此构造查询，避免使用范围外或迟到信息。",
@@ -85,7 +85,7 @@ export const associationRequestedInformationKind = defineInformationKind({
     "agent:identity-terminal": {
       required: false,
       multiple: false,
-      targetKinds: ["agent.person.context.completed"],
+      targetKinds: ["memory.identity.person.context.completed"],
     },
   },
   log: {
@@ -94,7 +94,7 @@ export const associationRequestedInformationKind = defineInformationKind({
     project: ({ payload }) => {
       const input = payload as any;
       return {
-        event: "association.requested",
+        event: "memory.association.requested",
         route: input.route,
         method: input.method,
         identityStatus: input.identity.status,
@@ -123,7 +123,7 @@ export type AssociationQueryInformationPayload = z.infer<
 >;
 
 export const associationQueryInformationKind = defineInformationKind({
-  kind: "agent.association.query",
+  kind: "memory.association.query",
   displayName: "记忆联想查询",
   description:
     "联想请求被处理时记录实际查询文本、方法、范围和数量上限；检索结果以此作为候选的直接来源。",
@@ -146,7 +146,7 @@ export const associationQueryInformationKind = defineInformationKind({
     project: ({ payload }) => {
       const input = payload as any;
       return {
-        event: "association.query",
+        event: "memory.association.query",
         route: input.route,
         method: input.method,
         queryLength: Array.from(input.query as string).length,
@@ -171,7 +171,7 @@ export type AssociationCandidateInformationPayload = z.infer<
 >;
 
 export const associationCandidateInformationKind = defineInformationKind({
-  kind: "agent.association.candidate",
+  kind: "memory.association.candidate",
   displayName: "记忆联想候选",
   description:
     "检索命中后记录候选排名与入选原因，并引用原始记忆；消息上下文选择器沿引用读取获准材料。",
@@ -205,7 +205,7 @@ export const associationCandidateInformationKind = defineInformationKind({
     enabled: true,
     level: "debug",
     project: ({ payload }) => ({
-      event: "association.candidate",
+      event: "memory.association.candidate",
       rank: payload.rank,
       strategy: payload.strategy,
       reasonCodes: payload.reasonCodes,
@@ -231,7 +231,7 @@ export type AssociationCompletedInformationPayload = z.infer<
 >;
 
 export const associationCompletedInformationKind = defineInformationKind({
-  kind: "agent.association.completed",
+  kind: "memory.association.completed",
   displayName: "记忆联想结果",
   description:
     "一次联想结束时汇总命中、空结果、策略过滤或故障及候选数量；消息合成模块据此继续生成，不将空结果误判为尚未完成。",
@@ -262,7 +262,7 @@ export const associationCompletedInformationKind = defineInformationKind({
     enabled: true,
     level: "info",
     project: ({ payload }) => ({
-      event: "association.completed",
+      event: "memory.association.completed",
       status: payload.status,
       route: payload.route,
       method: payload.method,

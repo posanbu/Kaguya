@@ -30,7 +30,7 @@ import {
 import "./memory-ingestion.css";
 import { MemoryRecords } from "./MemoryRecords.js";
 
-const STORAGE_KEY = "kaguya:memory-ingestion:v2";
+const STORAGE_KEY = "memory:access-ingestion:v2";
 interface Draft {
   sessionId: string;
   text: string;

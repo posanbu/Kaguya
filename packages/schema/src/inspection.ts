@@ -217,8 +217,13 @@ const kind = z.object({
   description: z.string(),
 });
 const capability = z.object({ id: z.string(), apiVersion: z.number() });
+const moduleTag = z
+  .string()
+  .max(32)
+  .regex(/^[a-z][a-z0-9-]*$/u);
 export const inspectionModuleSchema = z.object({
   definitionId: z.string(),
+  tags: z.array(moduleTag).default([]),
   inspection: moduleInspectionSchema.optional(),
   displayName: z.string(),
   summary: z.string(),

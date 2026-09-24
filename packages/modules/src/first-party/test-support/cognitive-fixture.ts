@@ -69,7 +69,7 @@ export async function cognitiveFixture(
     instanceId: m.manifest.definitionId + ".test",
     definitionId: m.manifest.definitionId,
     settings: m.manifest.settingsSchema.parse(
-      m.manifest.definitionId === "agent.expression" ? { batchSize: 2 } : {},
+      m.manifest.definitionId === "memory.expression" ? { batchSize: 2 } : {},
     ),
   }));
   async function start() {

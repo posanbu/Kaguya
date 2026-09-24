@@ -52,7 +52,7 @@ async function get(ledger: InformationSelectorLedger, id: string) {
   return (await ledger.find({ informationIds: [id], limit: 1 }))[0];
 }
 const learningSelector = defineInformationSelector({
-  selectorId: "agent.expression.learning.sources",
+  selectorId: "memory.expression.learning.sources",
   select: async ({ sourceAtom, ledger }) => {
     if (sourceAtom.kind === expressionLearningRequested.kind) {
       const p = expressionLearningRequested.payloadSchema.parse(
@@ -140,7 +140,7 @@ const learningSelector = defineInformationSelector({
   },
 });
 const selectionSelector = defineInformationSelector({
-  selectorId: "agent.expression.selection.context",
+  selectorId: "memory.expression.selection.context",
   select: async ({ sourceAtom, ledger }) => {
     if (sourceAtom.kind === expressionSelectionRequested.kind) {
       const refs = await ledger.related({
@@ -219,7 +219,7 @@ export function createExpressionModule(
       declaration.key,
       createPromptTemplateRenderer({
         kind: "state",
-        templateId: `kaguya.expression.${declaration.key}.v1`,
+        templateId: `memory.expression.${declaration.key}.v1`,
         main: {
           ...declaration,
           content: options.promptTemplates[declaration.key],
@@ -234,8 +234,9 @@ export function createExpressionModule(
     manifest: {
       protocolVersion: 1,
       moduleVersion: "1.0.0",
-      definitionId: "agent.expression",
-      inspection: firstPartyInspection["agent.expression"],
+      definitionId: "memory.expression",
+      tags: ["memory"],
+      inspection: firstPartyInspection["memory.expression"],
       displayName: "聊天表达习惯",
       summary: "从真人聊天学习抽象风格，按当前语境选择少量参考。",
       description:
@@ -275,7 +276,7 @@ export function createExpressionModule(
       subscriptions: [
         onInformation(
           personContextCompletedInformationKind,
-          { subscriptionId: "expression.batch", delivery: "durable" },
+          { subscriptionId: "memory.expression.batch", delivery: "durable" },
           async (atom, context) => {
             const state = await context.select(learningSelector);
             const scope = state.find(
@@ -284,7 +285,7 @@ export function createExpressionModule(
             const sources = state.filter(humanText);
             if (!scope || sources.length < settings.batchSize) return;
             await context.registerOnce(
-              "agent.expression.learning.batch",
+              "memory.expression.learning.batch",
               sources.at(-1)!.informationId,
               expressionLearningRequested,
               {
@@ -304,7 +305,7 @@ export function createExpressionModule(
         ),
         onInformation(
           expressionLearningRequested,
-          { subscriptionId: "expression.learn", delivery: "durable" },
+          { subscriptionId: "memory.expression.learn", delivery: "durable" },
           async (atom, context) => {
             const state = await context.select(learningSelector);
             const sources = state.filter(humanText);
@@ -315,7 +316,7 @@ export function createExpressionModule(
               .use(options.modelTaskCapability)
               .execute({
                 task: {
-                  taskId: "agent.expression.learn",
+                  taskId: "memory.expression.learn",
                   version: "1",
                   outputMode: "object",
                   outputSchema: learningOutputSchema,
@@ -344,7 +345,7 @@ export function createExpressionModule(
                   )
                 : undefined;
             await context.commitTerminal(
-              "agent.expression.learning",
+              "memory.expression.learning",
               atom.informationId,
               expressionLearned,
               {
@@ -386,7 +387,7 @@ export function createExpressionModule(
         onInformation(
           messageIntentRequestedInformationKind,
           {
-            subscriptionId: "expression.selection.freeze",
+            subscriptionId: "memory.expression.selection.freeze",
             delivery: "durable",
           },
           async (atom, context) => {
@@ -395,7 +396,7 @@ export function createExpressionModule(
               (a) => a.kind === chatScopeEntityInformationKind.kind,
             );
             await context.registerOnce(
-              "agent.expression.selection.request",
+              "memory.expression.selection.request",
               atom.informationId,
               expressionSelectionRequested,
               {
@@ -417,7 +418,7 @@ export function createExpressionModule(
         ),
         onInformation(
           expressionSelectionRequested,
-          { subscriptionId: "expression.select", delivery: "durable" },
+          { subscriptionId: "memory.expression.select", delivery: "durable" },
           async (atom, context) => {
             const state = await context.select(selectionSelector);
             let ids: string[] = [];
@@ -428,7 +429,7 @@ export function createExpressionModule(
                 .use(options.modelTaskCapability)
                 .execute({
                   task: {
-                    taskId: "agent.expression.select",
+                    taskId: "memory.expression.select",
                     version: "1",
                     outputMode: "object",
                     outputSchema: selectionOutputSchema,
@@ -475,7 +476,7 @@ export function createExpressionModule(
                     : result.status;
             }
             await context.commitTerminal(
-              "agent.expression.selection",
+              "memory.expression.selection",
               atom.informationId,
               expressionSelected,
               {
