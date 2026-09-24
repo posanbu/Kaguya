@@ -3,6 +3,8 @@
  * 身份未解析或 ephemeral 范围只保留 raw Memory，不触发长期认知；
  * memoryCognitionModule 冻结同聊天范围内最多 32 条已入库来源，群聊保留多参与者，私聊维持账号隔离；
  * worker 从 Memory 重载并比对来源正文、地址、事件截止点和请求时刻，
+ * 再从同一批不可变入站原文补回 replyTo；只解析窗口内唯一目标，缺失或歧义保留 null，
+ * 不改写 raw 文档、不为回复关系扩大冻结窗口。provider 输入的回复关系随副本一起深冻结。
  * 经版本化 provider 产生事实，再登记 memory.text 和唯一 terminal；未完成文本不进入 Prompt。
  * cognitionEvidenceSelector 重载直接来源；createCognitionMemorySelector 按 provider/revision/asOf
  * 选择最新完整快照并核对直接证据，返回可由 Core 再次加载的 Memory atom ID。
@@ -20,6 +22,7 @@ import {
   memoryDocumentReaderCapability,
   validateCognitionResult,
   freezeCognitionInput,
+  resolveCognitionReplyTarget,
   type CognitionIdentity,
   type MemoryDocument,
 } from "@kaguya/memory";
@@ -246,7 +249,7 @@ export const memoryCognitionModule = defineInformationModule({
           async (completed, context) => {
             const atoms = await context.select(windowSelector);
             if (!atoms.length) return;
-            const documents = [];
+            const documents: MemoryDocument[] = [];
             for (const atom of atoms) {
               const doc = await reader.getBySource(atom.informationId);
               if (doc) {
@@ -310,7 +313,7 @@ export const memoryCognitionModule = defineInformationModule({
               payload.identity.revision === provider.identity.revision
             ) {
               try {
-                const documents = [];
+                const documents: MemoryDocument[] = [];
                 for (const id of payload.sourceInformationIds) {
                   const doc = await reader.getBySource(id);
                   const atom = evidenceById.get(id);
@@ -328,7 +331,37 @@ export const memoryCognitionModule = defineInformationModule({
                 }
                 const input = freezeCognitionInput({
                   operationKey: request.informationId,
-                  documents,
+                  documents: documents.map((document) => {
+                    // reader 的契约只提供 raw 字段；新增回复元数据只能取自已验证的账本。
+                    const rawDocument: MemoryDocument = {
+                      memoryId: document.memoryId,
+                      sourceInformationId: document.sourceInformationId,
+                      sourceKind: document.sourceKind,
+                      content: document.content,
+                      occurredAt: document.occurredAt,
+                      createdAt: document.createdAt,
+                      address: document.address,
+                    };
+                    const { source } =
+                      inboundTextInformationKind.payloadSchema.parse(
+                        evidenceById.get(document.sourceInformationId)!.payload,
+                      );
+                    if (!source.replyTo) return rawDocument;
+                    return {
+                      ...rawDocument,
+                      replyTo: {
+                        platformMessageId: source.replyTo.platformMessageId,
+                        ...(source.replyTo.senderId === undefined
+                          ? {}
+                          : { senderId: source.replyTo.senderId }),
+                        sourceInformationId: resolveCognitionReplyTarget(
+                          documents,
+                          document.sourceInformationId,
+                          source.replyTo,
+                        ),
+                      },
+                    };
+                  }),
                   sourceInformationIds: payload.sourceInformationIds,
                 });
                 const signal = AbortSignal.any([
