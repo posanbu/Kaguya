@@ -7,7 +7,10 @@
  * provenance；终态使用同一 requested 的 status-of，输出仅为 JSON，具体 schema 由调用方拥有。
  * modelTaskInformationKinds 提供独立注册集合；日志默认投影摘要与 Prompt 预览，debug detail
  * 才投影经凭据清理的完整 Prompt 和 provenance，不包含模型输出或 provider 原始响应。
- * 结构化失败仅增加空响应、JSON/schema/截断分类与尝试次数；usage/duration 沿用终态指标。
+ * 结构化失败记录解析分类；Provider 请求失败另存有界诊断并投影固定处理建议；
+ * 旧失败事实仍按原 schema 分支读取，usage/duration 沿用终态指标。
+ * modelTaskProvider*Schema 校验 HTTP 状态、固定 code/type/reason 和可选字段组合；
+ * providerFailureAction 只从稳定原因生成运维建议，不读取上游原始 message。
  * 主要职责：Runtime definition 约束严格 payload、直接 caused-by/status-of/context 与
  * requested uses-context 引用及脱敏日志投影；`builtInInformationKinds` 原样复用 Engine
  * 与 modules 的 definitions，保证每个字面 kind 只存在一个对象定义。
@@ -21,6 +24,11 @@ import { createHash } from "node:crypto";
 
 import { consumerFailedInformationKind } from "@kaguya/engine";
 import { previewInformationContent } from "@kaguya/logger";
+import {
+  PROVIDER_ERROR_CODES,
+  PROVIDER_ERROR_TYPES,
+  type ProviderFailureReason,
+} from "@kaguya/llm/client";
 import {
   deliveryRequestedInformationKind,
   conversationContextInformationKind,
@@ -309,8 +317,75 @@ const structuredOutputFailureSchema = z.enum([
   "truncated",
 ]);
 const attemptCountSchema = z.number().int().positive();
+export const modelTaskProviderStatusCodeSchema = z
+  .number()
+  .int()
+  .min(100)
+  .max(599);
+export const modelTaskProviderCodeSchema = z.enum(PROVIDER_ERROR_CODES);
+export const modelTaskProviderTypeSchema = z.enum(PROVIDER_ERROR_TYPES);
+export const modelTaskProviderReasonSchema = z.enum([
+  "authentication-failed",
+  "credential-blocked",
+  "model-access-denied",
+  "rate-limited",
+  "invalid-request",
+  "model-not-found",
+  "provider-unavailable",
+  "unknown",
+]);
+const providerFailureBaseSchema = z
+  .object({
+    reason: modelTaskProviderReasonSchema,
+  })
+  .strict();
+// 八种可选字段组合各自输出纯 JSON，避免 optional 的 undefined 破坏账本载荷类型。
+export const modelTaskProviderFailureSchema = z.union([
+  providerFailureBaseSchema.extend({
+    statusCode: modelTaskProviderStatusCodeSchema,
+    code: modelTaskProviderCodeSchema,
+    type: modelTaskProviderTypeSchema,
+  }),
+  providerFailureBaseSchema.extend({
+    statusCode: modelTaskProviderStatusCodeSchema,
+    code: modelTaskProviderCodeSchema,
+  }),
+  providerFailureBaseSchema.extend({
+    statusCode: modelTaskProviderStatusCodeSchema,
+    type: modelTaskProviderTypeSchema,
+  }),
+  providerFailureBaseSchema.extend({
+    code: modelTaskProviderCodeSchema,
+    type: modelTaskProviderTypeSchema,
+  }),
+  providerFailureBaseSchema.extend({
+    statusCode: modelTaskProviderStatusCodeSchema,
+  }),
+  providerFailureBaseSchema.extend({ code: modelTaskProviderCodeSchema }),
+  providerFailureBaseSchema.extend({ type: modelTaskProviderTypeSchema }),
+  providerFailureBaseSchema,
+]);
+const providerFailureAction: Readonly<Record<ProviderFailureReason, string>> = {
+  "authentication-failed": "检查或更新 API Key 与鉴权配置",
+  "credential-blocked": "检查或更新 API Key；若由组织管理，联系管理员解除封禁",
+  "model-access-denied": "核对账号的模型访问授权",
+  "rate-limited": "检查额度与限流策略，稍后重试",
+  "invalid-request": "核对模型请求参数与 Provider 能力",
+  "model-not-found": "核对模型 ID 与 Provider 可用模型列表",
+  "provider-unavailable": "检查上游服务状态，稍后重试",
+  unknown: "查看 Provider 状态与配置后进一步排查",
+};
 // 严格联合表达可省略字段，保证每个分支都只产生 JSON，避免 optional 输出包含 undefined。
 export const modelTaskSafeErrorSchema = z.union([
+  modelTaskSafeErrorBaseSchema.extend({
+    stage: z.literal("provider-request"),
+    providerFailure: modelTaskProviderFailureSchema,
+    attemptCount: attemptCountSchema,
+  }),
+  modelTaskSafeErrorBaseSchema.extend({
+    stage: z.literal("provider-request"),
+    providerFailure: modelTaskProviderFailureSchema,
+  }),
   modelTaskSafeErrorBaseSchema.extend({
     structuredOutputFailure: structuredOutputFailureSchema,
     attemptCount: attemptCountSchema,
@@ -452,6 +527,22 @@ export const modelTaskFailedInformationKind = defineInformationKind({
       ...(!("attemptCount" in payload.error)
         ? {}
         : { attemptCount: payload.error.attemptCount }),
+      ...(!("providerFailure" in payload.error)
+        ? {}
+        : {
+            ...("statusCode" in payload.error.providerFailure
+              ? { providerStatusCode: payload.error.providerFailure.statusCode }
+              : {}),
+            ...("code" in payload.error.providerFailure
+              ? { providerErrorCode: payload.error.providerFailure.code }
+              : {}),
+            ...("type" in payload.error.providerFailure
+              ? { providerErrorType: payload.error.providerFailure.type }
+              : {}),
+            providerFailureReason: payload.error.providerFailure.reason,
+            providerAction:
+              providerFailureAction[payload.error.providerFailure.reason],
+          }),
     }),
   },
 });

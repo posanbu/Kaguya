@@ -12,8 +12,8 @@
  * 重放先按指纹读取 requested/terminal，不依赖模型 resolver；新请求仍只经 registerOnce 写入。
  * provider 仅校验由任务输入导出的无 transform schema；本层唯一执行任务 parse/transform，
  * 再检查 JSON 与 informationPayloadSchema。重放不执行任务 transform，存储/fencing 异常不转业务失败。
- * LLM 边界内重试仍只提交一个终态；失败仅保存受控结构化分类与尝试次数，并保留已知用量和耗时。
- * readFailureMetrics 对错误携带的指标再次执行数值及账本校验；不合法时丢弃指标并使用宿主耗时。
+ * LLM 边界内重试仍只提交一个终态；失败只保存受控结构化分类、Provider 诊断与尝试次数。
+ * readFailureMetrics/readProviderFailure 对跨边界值再次校验，非法指标或诊断不会阻断失败终态提交。
  */
 import { createHash } from "node:crypto";
 import { InformationCore } from "@kaguya/engine";
@@ -42,6 +42,11 @@ import {
   modelTaskFailedInformationKind,
   modelTaskCancelledInformationKind,
   modelTaskSafeErrorSchema,
+  modelTaskProviderFailureSchema,
+  modelTaskProviderReasonSchema,
+  modelTaskProviderStatusCodeSchema,
+  modelTaskProviderCodeSchema,
+  modelTaskProviderTypeSchema,
 } from "./information-kinds.js";
 
 export interface ModelTaskRequest<TOutput> {
@@ -358,6 +363,9 @@ export class ModelTaskClient implements ModelTaskCapability {
               llmError.attemptCount < 1
                 ? {}
                 : { attemptCount: llmError.attemptCount }),
+              ...(llmError?.stage !== "provider-request"
+                ? {}
+                : readProviderFailure(llmError.providerFailure)),
             },
           },
         },
@@ -496,6 +504,33 @@ function readFailureMetrics(
       ? {}
       : { usage: validNumbers.data.usage }),
   };
+}
+
+function readProviderFailure(value: unknown): {
+  providerFailure?: z.infer<typeof modelTaskProviderFailureSchema>;
+} {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return {};
+  const input = value as Record<string, unknown>;
+  const reason = modelTaskProviderReasonSchema.safeParse(input.reason);
+  if (!reason.success) return {};
+  const statusCode = modelTaskProviderStatusCodeSchema.safeParse(
+    input.statusCode,
+  );
+  const code = modelTaskProviderCodeSchema.safeParse(input.code);
+  const type = modelTaskProviderTypeSchema.safeParse(input.type);
+  const candidate = {
+    reason: reason.data,
+    ...(statusCode.success && statusCode.data !== undefined
+      ? { statusCode: statusCode.data }
+      : {}),
+    ...(code.success && code.data !== undefined ? { code: code.data } : {}),
+    ...(type.success && type.data !== undefined ? { type: type.data } : {}),
+  };
+  const valid = modelTaskProviderFailureSchema.safeParse(candidate);
+  if (!valid.success || !informationPayloadSchema.safeParse(candidate).success)
+    return {};
+  return { providerFailure: valid.data };
 }
 
 function persistedMetadata(requested: Requested) {
