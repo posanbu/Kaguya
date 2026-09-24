@@ -465,6 +465,13 @@ describe("PostgresMemoryKnowledgeStore", () => {
     expect(
       await db.knowledge.listWikiRevisions({ ...input, limit: 10 }),
     ).toEqual([saved]);
+    expect(await db.knowledge.listWikiPages({ limit: 10 })).toEqual([
+      expect.objectContaining({
+        scopeInformationId: input.scopeInformationId,
+        entityInformationId: input.entityInformationId,
+        latestRevision: saved,
+      }),
+    ]);
   });
 
   it("keeps old persistent claims ahead of recent chatter within a bounded evidence budget", async () => {

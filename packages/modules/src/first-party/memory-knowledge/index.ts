@@ -159,8 +159,8 @@ export const memoryKnowledgeModule = defineInformationModule({
     moduleVersion: "1.0.0",
     definitionId: "memory.knowledge",
     tags: ["memory"],
-    displayName: "事件与 Wiki 记忆",
-    summary: "持续保存有实体归属的事件和可追溯 Wiki 修订。",
+    displayName: "Wiki 记忆",
+    summary: "持续整理有实体归属、可追溯的 Wiki 页面。",
     description:
       "显式启用后可靠回填原始经历，保留人物与场景的 Information 身份、断言视角及来源；页面是有界派生概览，支持原文旁路。",
     inspection: {
@@ -180,7 +180,10 @@ export const memoryKnowledgeModule = defineInformationModule({
             { path: "entityInformationId", label: "实体" },
             { path: "scopeInformationId", label: "来源范围" },
             { path: "version", label: "版本" },
-            { path: "evidenceCutoff", label: "证据截止" },
+            {
+              path: "evidenceCutoff.occurredBefore",
+              label: "证据截止",
+            },
             { path: "text", label: "页面章节" },
             { path: "sourceInformationIds", label: "原始证据" },
             { path: "truncated", label: "有界截断" },
@@ -194,6 +197,29 @@ export const memoryKnowledgeModule = defineInformationModule({
           fields: [{ path: "status", label: "处理结果" }],
         },
       ],
+      surface: {
+        version: 1,
+        id: "wiki-memory",
+        title: "Wiki 记忆",
+        layout: { type: "master-detail", areas: ["pages"] },
+        components: [
+          {
+            id: "wiki-pages",
+            type: "wiki-browser",
+            area: "pages",
+            viewId: "pages",
+            pageKind: memoryWikiUpdatedInformationKind.kind,
+            empty: "还没有 Wiki 页面。",
+          },
+        ],
+        hiddenSections: [
+          "responsibilities",
+          "settings",
+          "templates",
+          "prompt-renderers",
+          "diagnostics",
+        ],
+      },
     },
     settingsSchema: z.object({}).strict(),
     consumes: [

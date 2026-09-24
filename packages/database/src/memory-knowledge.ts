@@ -4,7 +4,7 @@
  * 主要职责：putEvent/appendClaim/putEpisode 校验账本与同范围证据并幂等追加；断言替代/撤回只允许同一陈述者视角；recall 冻结发生和记录时间，显式给出缺口；
  * writeWikiRevision 以 operationId 重放和版本 CAS 保存不可变修订；revokeSource 写来源 tombstone，invalidateEntity 幂等执行身份修订并标脏页面。
  * 代码库关系：memory/knowledge.ts 定义 capability 契约；memory-knowledge-schema.ts 建表；Runtime 和 first-party 模块负责原始事件生产与 Wiki 内容生成。
- * filterAvailableSourceIds 仅过滤原文 ID 可用性以保护 raw 旁路；listDirtyPages 用复合游标分页，坏页不会阻塞后续维护。
+ * filterAvailableSourceIds 仅过滤原文 ID 可用性以保护 raw 旁路；listDirtyPages 与 listWikiPages 用复合游标分页。
  * 输入输出与副作用：每个写事务先锁定 scope 行，跨进程竞争也遵循同一顺序；只返回指定范围，所有列表有界；数据库时间不能由调用方伪造。
  * 内部 assertEntities/readEvidence 阻止消息充当实体及派生摘要充当原始证据；pageFromRow 在 dirty 时隐藏正文，历史 revision 只供审计。
  */
@@ -65,6 +65,7 @@ type RevisionRow = {
   recorded_at: Date | string;
   version: number;
 };
+type PageRevisionRow = PageRow & Pick<RevisionRow, "input" | "recorded_at">;
 
 export interface PostgresMemoryKnowledgeStoreOptions {
   /** 通用非聊天 scope 必须是显式批准的已有实体 kind。聊天 scope 始终校验 canonical payload。 */
@@ -486,6 +487,42 @@ export class PostgresMemoryKnowledgeStore implements MemoryKnowledgeAccess {
       ],
     );
     return result.rows.map(pageFromRow);
+  }
+
+  async listWikiPages(input: {
+    limit: number;
+    before?: {
+      recordedAt: string;
+      scopeInformationId: string;
+      entityInformationId: string;
+    };
+  }): Promise<readonly WikiPage[]> {
+    assertLimit(input.limit);
+    if (input.before) {
+      assertId(input.before.scopeInformationId);
+      assertId(input.before.entityInformationId);
+      if (Number.isNaN(Date.parse(input.before.recordedAt)))
+        throw new KnowledgeEvidenceError();
+    }
+    const result = await this.database.query<PageRevisionRow>(
+      `SELECT p.*,r.input,r.recorded_at
+       FROM memory_knowledge_wiki_pages p
+       JOIN memory_knowledge_wiki_revisions r
+         ON r.scope_id=p.scope_id AND r.entity_id=p.entity_id AND r.version=p.version
+       WHERE ($2::timestamptz IS NULL OR (r.recorded_at,p.scope_id,p.entity_id)<($2,$3,$4))
+       ORDER BY r.recorded_at DESC,p.scope_id DESC,p.entity_id DESC
+       LIMIT $1`,
+      [
+        input.limit,
+        input.before?.recordedAt ?? null,
+        input.before?.scopeInformationId ?? null,
+        input.before?.entityInformationId ?? null,
+      ],
+    );
+    return result.rows.map((row) => ({
+      ...pageFromRow(row),
+      latestRevision: revisionFromRow(row),
+    }));
   }
 
   async readWikiPage(input: {

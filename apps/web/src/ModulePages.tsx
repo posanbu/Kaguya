@@ -2,6 +2,7 @@
  * 功能概述：检查区模块紧凑总览与独立详情页，展示内容直接取自 Inspection 的定义元数据。
  * 主要职责：moduleDetailPath/moduleDefinitionId 编解码稳定 ID；ModuleOverview 提供搜索和原生链接；
  * ModuleDetails 根据 Manifest 挂载逐模型请求页面或通用运行检查；请求详情独占内容区，技术元数据不叠加。
+ * 领域 Surface 可声明隐藏不适用的通用配置、模板、Renderer 与诊断区，职责和输入输出仍保留。
  * ModulePage 处理不可用和未找到，模块与请求深链接共用稳定 ID 解码。
  * 代码库关系：DeveloperConsole 传入已校验的模块数据和当前路径；ModuleLink 使用 AppShell 导航守卫；
  * ModuleEditorProps 仅将 definitionId/token 交给可选 SettingsSection/TemplatesSection，不预定义编辑 DTO。
@@ -258,6 +259,9 @@ export function ModuleDetails({
   const requestBrowser = module.inspection?.surface?.components.find(
     (component) => component.type === "model-request-browser",
   );
+  const hiddenSections = new Set(
+    module.inspection?.surface?.hiddenSections ?? [],
+  );
   const isRequestDetail = requestRoute(path) !== undefined;
   if (isRequestDetail && !requestBrowser)
     return (
@@ -315,42 +319,44 @@ export function ModuleDetails({
       )}
       {!isRequestDetail && (
         <>
-          <details className="developer-card">
-            <summary>模块职责与输入输出</summary>
-            <section aria-label="模块职责">
-              <h3>模块职责</h3>
-              <p>{module.description}</p>
-            </section>
-            <div className="module-kind-columns">
-              {(["consumes", "produces"] as const).map((field, index) => (
-                <section
-                  className="developer-card"
-                  key={field}
-                  aria-label={index ? "输出信息" : "输入信息"}
-                >
-                  <h3>
-                    {index ? "输出信息" : "输入信息"} · {module[field].length}
-                  </h3>
-                  {module[field].length ? (
-                    <ul className="module-kind-list">
-                      {module[field].map((kind) => (
-                        <li key={kind.kind}>
-                          <details>
-                            <summary>{kind.displayName}</summary>
-                            <p>{kind.description}</p>
-                            <code>{kind.kind}</code>
-                          </details>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p>没有声明{index ? "输出" : "输入"}信息。</p>
-                  )}
-                </section>
-              ))}
-            </div>
-          </details>
-          {SettingsSection && (
+          {!hiddenSections.has("responsibilities") && (
+            <details className="developer-card">
+              <summary>模块职责与输入输出</summary>
+              <section aria-label="模块职责">
+                <h3>模块职责</h3>
+                <p>{module.description}</p>
+              </section>
+              <div className="module-kind-columns">
+                {(["consumes", "produces"] as const).map((field, index) => (
+                  <section
+                    className="developer-card"
+                    key={field}
+                    aria-label={index ? "输出信息" : "输入信息"}
+                  >
+                    <h3>
+                      {index ? "输出信息" : "输入信息"} · {module[field].length}
+                    </h3>
+                    {module[field].length ? (
+                      <ul className="module-kind-list">
+                        {module[field].map((kind) => (
+                          <li key={kind.kind}>
+                            <details>
+                              <summary>{kind.displayName}</summary>
+                              <p>{kind.description}</p>
+                              <code>{kind.kind}</code>
+                            </details>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p>没有声明{index ? "输出" : "输入"}信息。</p>
+                    )}
+                  </section>
+                ))}
+              </div>
+            </details>
+          )}
+          {SettingsSection && !hiddenSections.has("settings") && (
             <details className="developer-card" aria-label="模块配置">
               <summary>模块配置</summary>
               <SettingsSection
@@ -359,7 +365,7 @@ export function ModuleDetails({
               />
             </details>
           )}
-          {TemplatesSection && (
+          {TemplatesSection && !hiddenSections.has("templates") && (
             <details className="developer-card" aria-label="提示词模板">
               <summary>提示词模板</summary>
               <TemplatesSection
@@ -368,79 +374,85 @@ export function ModuleDetails({
               />
             </details>
           )}
-          <details className="developer-card">
-            <summary>Prompt renderer · {module.promptRenderers.length}</summary>
-            {module.promptRenderers.length ? (
-              module.promptRenderers.map((renderer) => (
-                <section key={renderer.rendererId}>
-                  <h3>{renderer.displayName}</h3>
-                  <p>{renderer.description}</p>
-                  <code>{renderer.rendererId}</code>
-                  <p>{renderer.kinds.join("、")}</p>
-                </section>
-              ))
-            ) : (
-              <p>没有声明 Prompt renderer。</p>
-            )}
-          </details>
-          <details className="developer-card">
-            <summary>Selector、Capability、绑定与诊断</summary>
-            <dl className="inspection-fields">
-              <div>
-                <dt>模块 / 协议版本</dt>
-                <dd>
-                  {module.moduleVersion} / {module.protocolVersion}
-                </dd>
-              </div>
-              <div>
-                <dt>上下文选择器</dt>
-                <dd>{module.selectors.join("、") || "无"}</dd>
-              </div>
-              <div>
-                <dt>所需能力</dt>
-                <dd>
-                  {module.requires
-                    .map((c) => `${c.id} · v${c.apiVersion}`)
-                    .join("、") || "无"}
-                </dd>
-              </div>
-              <div>
-                <dt>提供能力</dt>
-                <dd>
-                  {module.provides
-                    .map((c) => `${c.id} · v${c.apiVersion}`)
-                    .join("、") || "无"}
-                </dd>
-              </div>
-              <div>
-                <dt>实例绑定</dt>
-                <dd>
-                  {module.bindings.map((b) => (
-                    <section key={b.instanceId}>
-                      <code>{b.instanceId}</code>
-                      <ul>
-                        {b.capabilities.map((c) => (
-                          <li key={c.capabilityId}>
-                            {c.capabilityId} → {c.provider}
-                          </li>
-                        ))}
-                      </ul>
-                    </section>
-                  ))}
-                </dd>
-              </div>
-              <div>
-                <dt>诊断事件声明</dt>
-                <dd>{module.diagnostics.join("、") || "无"}</dd>
-              </div>
-              <div>
-                <dt>设置 schema 指纹</dt>
-                <dd>
-                  <code>{module.settingsSchemaFingerprint}</code>
-                </dd>
-              </div>
-            </dl>
-          </details>
+          {!hiddenSections.has("prompt-renderers") && (
+            <details className="developer-card">
+              <summary>
+                Prompt renderer · {module.promptRenderers.length}
+              </summary>
+              {module.promptRenderers.length ? (
+                module.promptRenderers.map((renderer) => (
+                  <section key={renderer.rendererId}>
+                    <h3>{renderer.displayName}</h3>
+                    <p>{renderer.description}</p>
+                    <code>{renderer.rendererId}</code>
+                    <p>{renderer.kinds.join("、")}</p>
+                  </section>
+                ))
+              ) : (
+                <p>没有声明 Prompt renderer。</p>
+              )}
+            </details>
+          )}
+          {!hiddenSections.has("diagnostics") && (
+            <details className="developer-card">
+              <summary>Selector、Capability、绑定与诊断</summary>
+              <dl className="inspection-fields">
+                <div>
+                  <dt>模块 / 协议版本</dt>
+                  <dd>
+                    {module.moduleVersion} / {module.protocolVersion}
+                  </dd>
+                </div>
+                <div>
+                  <dt>上下文选择器</dt>
+                  <dd>{module.selectors.join("、") || "无"}</dd>
+                </div>
+                <div>
+                  <dt>所需能力</dt>
+                  <dd>
+                    {module.requires
+                      .map((c) => `${c.id} · v${c.apiVersion}`)
+                      .join("、") || "无"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>提供能力</dt>
+                  <dd>
+                    {module.provides
+                      .map((c) => `${c.id} · v${c.apiVersion}`)
+                      .join("、") || "无"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>实例绑定</dt>
+                  <dd>
+                    {module.bindings.map((b) => (
+                      <section key={b.instanceId}>
+                        <code>{b.instanceId}</code>
+                        <ul>
+                          {b.capabilities.map((c) => (
+                            <li key={c.capabilityId}>
+                              {c.capabilityId} → {c.provider}
+                            </li>
+                          ))}
+                        </ul>
+                      </section>
+                    ))}
+                  </dd>
+                </div>
+                <div>
+                  <dt>诊断事件声明</dt>
+                  <dd>{module.diagnostics.join("、") || "无"}</dd>
+                </div>
+                <div>
+                  <dt>设置 schema 指纹</dt>
+                  <dd>
+                    <code>{module.settingsSchemaFingerprint}</code>
+                  </dd>
+                </div>
+              </dl>
+            </details>
+          )}
         </>
       )}
     </article>

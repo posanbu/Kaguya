@@ -7,7 +7,11 @@
 import Fastify from "fastify";
 import { beforeAll, afterAll, expect, it } from "vitest";
 import { createTestingDatabase } from "@kaguya/database/testing";
-import { freezeInformationAtom, type InspectionModule } from "@kaguya/schema";
+import {
+  freezeInformationAtom,
+  inspectionSurfaceEntitySchema,
+  type InspectionModule,
+} from "@kaguya/schema";
 import {
   createInspectionService,
   registerInspectionRoutes,
@@ -178,10 +182,12 @@ it("reports bounded relation truncation and rejects source kinds outside the dec
     modules: () => [module],
     secrets: {},
   });
-  const detail = await service.surfaceEntity(
-    module.definitionId,
-    "associations",
-    "demo-query-01",
+  const detail = inspectionSurfaceEntitySchema.parse(
+    await service.surfaceEntity(
+      module.definitionId,
+      "associations",
+      "demo-query-01",
+    ),
   );
   expect(detail.sections[1]!.truncated).toBe(true);
   expect(detail.sections[1]!.items).toHaveLength(1);

@@ -9,8 +9,8 @@ import type { InformationSelectorLedger } from "@kaguya/sdk";
 import { describe, expect, it, vi } from "vitest";
 import { atom, target } from "../message-composer/test-fixtures.js";
 import { heartflowMemorySelector } from "../heartflow/index.js";
-import { selectKnowledgeMemory } from "./selector.js";
 import { personContextCompletedInformationKind } from "../information-kinds.js";
+import { selectKnowledgeMemory } from "./selector.js";
 import { GLOBAL_MEMORY_SCOPE_ID, USER_STATEMENT_KIND } from "@kaguya/schema";
 
 const cutoff = "2026-09-09T00:00:02.000Z";

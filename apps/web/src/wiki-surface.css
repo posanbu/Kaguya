@@ -1,0 +1,283 @@
+.wiki-surface {
+  display: grid;
+  grid-template-columns: minmax(250px, 0.62fr) minmax(0, 1.38fr);
+  min-height: 620px;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 12px;
+  background: var(--kaguya-paper);
+  overflow: hidden;
+}
+.wiki-directory {
+  min-width: 0;
+  border-right: 1px solid var(--kaguya-line);
+  background: var(--kaguya-paper-soft);
+}
+.wiki-directory > header {
+  min-height: 66px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--kaguya-line);
+}
+.wiki-directory > header div {
+  display: grid;
+  gap: 2px;
+}
+.wiki-directory h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.wiki-directory header span,
+.wiki-page-row-meta,
+.wiki-page-excerpt {
+  color: var(--kaguya-muted);
+  font-size: 12px;
+}
+.wiki-directory > ol {
+  max-height: 66vh;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+  scrollbar-color: var(--kaguya-line) transparent;
+}
+.wiki-directory li + li {
+  border-top: 1px solid var(--kaguya-line);
+}
+.wiki-directory li > button {
+  position: relative;
+  width: 100%;
+  min-height: 94px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px 12px;
+  padding: 15px 16px;
+  border: 0;
+  background: transparent;
+  color: var(--kaguya-ink);
+  text-align: left;
+  cursor: pointer;
+}
+.wiki-directory li > button:hover,
+.wiki-directory li > button[aria-pressed="true"] {
+  background: var(--kaguya-paper);
+}
+.wiki-directory li > button[aria-pressed="true"] {
+  box-shadow: inset 3px 0 var(--kaguya-coral);
+}
+.wiki-directory li > button:focus-visible {
+  outline: 2px solid var(--kaguya-coral);
+  outline-offset: -3px;
+}
+.wiki-page-row-heading {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.wiki-page-row-heading svg {
+  flex: 0 0 auto;
+  color: var(--kaguya-coral-strong);
+}
+.wiki-page-row-heading strong,
+.wiki-page-excerpt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wiki-page-row-meta,
+.wiki-page-excerpt {
+  grid-column: 1 / -1;
+}
+.wiki-directory .inspection-pager {
+  padding: 14px 16px;
+  border-top: 1px solid var(--kaguya-line);
+}
+.wiki-document {
+  min-width: 0;
+  max-height: 76vh;
+  overflow-y: auto;
+  padding: 30px clamp(24px, 4vw, 54px) 52px;
+  scrollbar-color: var(--kaguya-line) transparent;
+}
+.wiki-article {
+  width: min(100%, 75ch);
+  margin: 0 auto;
+}
+.wiki-back {
+  display: none;
+}
+.wiki-document-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 24px;
+  padding-bottom: 22px;
+  border-bottom: 1px solid var(--kaguya-line);
+}
+.wiki-document-heading > div {
+  display: grid;
+  gap: 6px;
+}
+.wiki-page-type {
+  color: var(--kaguya-muted);
+  font-size: 12px;
+}
+.wiki-document-heading h3 {
+  margin: 0;
+  font-size: clamp(24px, 3vw, 34px);
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+.wiki-state {
+  flex: 0 0 auto;
+  padding: 4px 9px;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 999px;
+  color: var(--kaguya-muted);
+  font-size: 12px;
+}
+.wiki-state.is-dirty {
+  border-color: color-mix(in srgb, var(--kaguya-coral) 55%, var(--kaguya-line));
+  color: var(--kaguya-coral-strong);
+}
+.wiki-page-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 28px;
+  margin: 18px 0 0;
+}
+.wiki-page-meta > div {
+  display: grid;
+  gap: 3px;
+}
+.wiki-page-meta dt {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--kaguya-muted);
+  font-size: 11px;
+}
+.wiki-page-meta dd {
+  margin: 0;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.wiki-dirty-note {
+  margin: 22px 0 0;
+  padding: 11px 14px;
+  border: 1px solid
+    color-mix(in srgb, var(--kaguya-coral) 38%, var(--kaguya-line));
+  border-radius: 8px;
+  color: var(--kaguya-ink);
+  font-size: 13px;
+}
+.wiki-sections {
+  display: grid;
+  margin-top: 30px;
+}
+.wiki-sections > section {
+  padding: 26px 0;
+  border-top: 1px solid var(--kaguya-line);
+}
+.wiki-sections > section:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+.wiki-sections h4 {
+  margin: 0 0 10px;
+  font-size: 16px;
+  line-height: 1.4;
+}
+.wiki-sections section > p {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  line-height: 1.8;
+}
+.wiki-sections details,
+.wiki-history {
+  margin-top: 14px;
+  color: var(--kaguya-muted);
+  font-size: 12px;
+}
+.wiki-sections summary,
+.wiki-history summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--kaguya-muted);
+}
+.wiki-sections details p {
+  margin: 12px 0 6px;
+  line-height: 1.6;
+}
+.wiki-sections details ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  overflow-wrap: anywhere;
+}
+.wiki-history {
+  padding-top: 20px;
+  border-top: 1px solid var(--kaguya-line);
+}
+.wiki-history summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+}
+.wiki-history ol {
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.wiki-history li {
+  display: grid;
+  grid-template-columns: 48px minmax(150px, 1fr) auto;
+  gap: 12px;
+  padding: 9px 0;
+  border-top: 1px solid var(--kaguya-line);
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 800px) {
+  .wiki-surface {
+    display: block;
+    min-height: 0;
+  }
+  .wiki-directory {
+    border-right: 0;
+  }
+  .wiki-surface[data-page-open="false"] .wiki-document,
+  .wiki-surface[data-page-open="true"] .wiki-directory {
+    display: none;
+  }
+  .wiki-document {
+    max-height: none;
+    padding: 18px 18px 40px;
+  }
+  .wiki-back {
+    display: inline-flex;
+    margin-bottom: 24px;
+  }
+  .wiki-directory > ol {
+    max-height: none;
+  }
+}
+@media (max-width: 520px) {
+  .wiki-document-heading h3 {
+    font-size: 25px;
+  }
+  .wiki-page-meta {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+  .wiki-history li {
+    grid-template-columns: 44px 1fr;
+  }
+  .wiki-history li span:last-child {
+    grid-column: 2;
+  }
+}
