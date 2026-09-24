@@ -1,5 +1,5 @@
 /**
- * 人工记忆使用同范围有界关键词召回；WebUI 共用范围仅接受 management 录入片段，不读取其他会话聊天记录。
+ * 人工录入在全局范围按关键词召回；原始平台消息仍逐条校验聊天范围，不因全局记忆而跨会话读取。
  * 功能概述：在规划前以 canonical scope 查询知识记忆，再验证原始消息的来源范围与时间。
  * 主要职责：selectKnowledgeMemory 从当前入站的身份终态解析单个规范范围；
  * 已解析人物使用实体导航选近期原文，缺少人物时才用有界关键词，避免拿整条问句做精确子串检索。
@@ -10,7 +10,7 @@
 import { MEMORY_KNOWLEDGE_RETRIEVAL_STRATEGY_ID } from "@kaguya/memory";
 import {
   USER_STATEMENT_KIND,
-  WEB_MEMORY_SCOPE_ID,
+  GLOBAL_MEMORY_SCOPE_ID,
   userStatementPayloadSchema,
   type DeepReadonly,
   type InformationAtom,
@@ -41,14 +41,15 @@ export function isMemorySourceInScope(
     return (
       parsed.success &&
       Date.parse(atom.occurredAt) <= Date.parse(occurredBefore) &&
-      sameScope(parsed.data.scope, scope) &&
+      parsed.data.scopeInformationId === GLOBAL_MEMORY_SCOPE_ID &&
+      parsed.data.scope.platform === "web" &&
+      parsed.data.scope.adapterId === "web.ui.main" &&
+      parsed.data.scope.destination.kind === "web" &&
       atom.references.some(
         (r) =>
           r.relation === "agent:scope" &&
           r.informationId === parsed.data.scopeInformationId,
-      ) &&
-      (scope.destination.kind !== "web" ||
-        parsed.data.scopeInformationId === WEB_MEMORY_SCOPE_ID)
+      )
     );
   }
   if (
@@ -72,6 +73,7 @@ export async function selectKnowledgeMemory(
   },
 ): Promise<readonly DeepReadonly<InformationAtom>[]> {
   if (input.inbounds.length === 0 || input.limit <= 0) return [];
+  let globalMemory: readonly DeepReadonly<InformationAtom>[] = [];
   try {
     const first = inboundTextInformationKind.payloadSchema.parse(
       input.inbounds[0]!.payload,
@@ -106,8 +108,8 @@ export async function selectKnowledgeMemory(
         )
         .slice(0, input.limit);
     };
-    if (first.destination.kind === "web")
-      return await recallManual(WEB_MEMORY_SCOPE_ID);
+    globalMemory = await recallManual(GLOBAL_MEMORY_SCOPE_ID).catch(() => []);
+    if (first.destination.kind === "web") return globalMemory;
     // 原生范围已对整批输入核验；只解析首条身份，避免每条输入增加一次查询。
     const terminals = (
       await ledger.related({
@@ -119,14 +121,14 @@ export async function selectKnowledgeMemory(
     ).filter(
       (atom) => atom.kind === personContextCompletedInformationKind.kind,
     );
-    if (terminals.length !== 1) return [];
+    if (terminals.length !== 1) return globalMemory;
     const identity = terminals[0]!.payload;
     if (
       identity.status !== "complete" ||
       identity.scopeMode !== "canonical" ||
       typeof identity.scopeInformationId !== "string"
     )
-      return [];
+      return globalMemory;
     const scopeInformationId = identity.scopeInformationId;
     const entityInformationId =
       typeof identity.personInformationId === "string"
@@ -147,7 +149,7 @@ export async function selectKnowledgeMemory(
       parsed.data.scopeMode !== "canonical" ||
       !sameScope(parsed.data, first)
     )
-      return [];
+      return globalMemory;
     const query = Array.from(
       input.inbounds
         .map(
@@ -175,8 +177,7 @@ export async function selectKnowledgeMemory(
     });
     const excluded = new Set(input.inbounds.map((atom) => atom.informationId));
     const selected = new Map<string, DeepReadonly<InformationAtom>>();
-    for (const atom of await recallManual(scopeInformationId))
-      selected.set(atom.informationId, atom);
+    for (const atom of globalMemory) selected.set(atom.informationId, atom);
     for (const atom of recalled) {
       if (selected.size >= input.limit) break;
       if (
@@ -188,7 +189,7 @@ export async function selectKnowledgeMemory(
     }
     return [...selected.values()];
   } catch {
-    return [];
+    return globalMemory;
   }
 }
 

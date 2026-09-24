@@ -1,6 +1,6 @@
 /**
  * 功能概述：提供主动记忆录入的管理 API，先鉴权再读取或写入。
- * 主要职责：options 列出可选范围；jobs 接收并返回持久排队凭据；session 读取进度；retry 复用原任务。
+ * 主要职责：records 列出全局已录入断言，mutate 执行可撤销删除；jobs 接收并返回持久排队凭据；session 读取进度；retry 复用原任务。
  * 代码库关系：app.ts 复用 management Token 注册，动态 service 在 Memory/knowledge 未启用时明确返回 503。
  * 输入输出与副作用：响应不缓存，不回显模型异常、凭据或计划；202 只表示接受，不表示已经入库。
  */
@@ -47,10 +47,27 @@ export function registerMemoryIngestionRoutes(
     if (!parsed.success) throw new MemoryIngestionError("invalid_request_id");
     return parsed.data;
   };
-  app.get(
-    "/api/v1/memory-ingestion/options",
+  app.get<{ Querystring: { query?: string; offset?: string } }>(
+    "/api/v1/memory-ingestion/records",
     { onRequest: auth },
-    (_request, reply) => run(reply, () => store().options()),
+    (request, reply) =>
+      run(reply, async () => {
+        const parsed = z
+          .object({
+            query: z.string().max(200).default(""),
+            offset: z.coerce.number().int().min(0).max(100000).default(0),
+          })
+          .strict()
+          .safeParse(request.query);
+        if (!parsed.success)
+          throw new MemoryIngestionError("invalid_record_query");
+        return store().records(parsed.data.query, parsed.data.offset);
+      }),
+  );
+  app.post(
+    "/api/v1/memory-ingestion/records/mutate",
+    { onRequest: auth },
+    (request, reply) => run(reply, () => store().mutateRecord(request.body)),
   );
   app.get<{ Params: { sessionId: string } }>(
     "/api/v1/memory-ingestion/sessions/:sessionId",

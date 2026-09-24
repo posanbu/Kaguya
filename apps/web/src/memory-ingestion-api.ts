@@ -16,16 +16,17 @@ export function ingestionErrorMessage(code: string): string {
     invalid_plan: "AI 返回的整理格式不符合要求，请重试。",
     unsupported_evidence:
       "AI 整理结果缺少对应原文，未写入记忆。请重试或补充明确说明。",
+    record_changed: "这条记忆已被修改或删除，请刷新后重新选择。",
+    record_expired: "这条记忆已过期，请重新录入适用的新内容。",
     revision_conflict: "需要修订的记忆已经变化，请补充说明后重新整理。",
-    foreign_entity: "AI 选择了适用范围之外的人物，未写入记忆。请重试。",
-    scope_too_large:
-      "该范围的人物数量超过本次整理上限，请改用更具体的聊天范围。",
+    foreign_entity: "AI 选择了不存在的人物，未写入记忆。请重试。",
+    scope_too_large: "记忆中的人物数量超过本次整理上限，暂时无法继续整理。",
     processing_interrupted: "处理被服务重启或配置切换中断，可以重试。",
     model_retryable: "模型服务暂时不可用，可以重试。",
     model_non_retryable: "模型请求失败，请检查模型配置后重试。",
     model_cancelled: "模型处理超时或被取消，可以重试。",
     invalid_resolution: "所选身份与当前候选不一致，请重新选择人物。",
-    invalid_scope: "该适用范围已不可用，请开始新录入并重新选择。",
+    invalid_scope: "这条任务使用了旧的记忆范围，请开始新录入。",
   };
   return messages[code] ?? "本次处理未完成。原文已保留，请重试或补充说明。";
 }

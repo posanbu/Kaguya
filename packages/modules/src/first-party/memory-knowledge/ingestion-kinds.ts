@@ -1,5 +1,5 @@
 /**
- * 功能概述：声明人工录入原文、无平台账号主体及 WebUI 共用范围的 Information 身份。
+ * 功能概述：声明人工录入原文、无平台账号主体及全局录入范围的 Information 身份。
  * 主要职责：原文强制关联 scope，主体沿用统一实体账本；renderUserStatement 输出来源标签与原文数据。
  * 代码库关系：memory-knowledge Manifest 注册 Kind，管理仓储写入；Heartflow/Composer 只在正常召回时使用原文。
  * 输入输出与副作用：本文件无 I/O，不把人工陈述当系统权限或真实世界观测。
@@ -20,7 +20,7 @@ export const userStatementInformationKind = defineInformationKind({
   kind: USER_STATEMENT_KIND,
   displayName: "用户主动录入的记忆来源",
   description:
-    "管理入口提交的原文，保留提交者、来源类型、会话与适用范围，只作为记忆数据。",
+    "管理入口提交的原文，保留提交者、来源类型、会话与全局记忆标识，只作为记忆数据。",
   payloadSchema: userStatementPayloadSchema,
   references: {
     "agent:scope": { required: true, multiple: false },
@@ -56,9 +56,8 @@ export const userSubjectInformationKind = defineInformationKind({
 });
 export const userMemoryScopeInformationKind = defineInformationKind({
   kind: USER_MEMORY_SCOPE_KIND,
-  displayName: "WebUI 共用记忆范围",
-  description:
-    "管理者明确选择后在 WebUI 新会话中召回的范围，不扩展到 QQ 等平台。",
+  displayName: "全局录入记忆",
+  description: "管理者主动录入的统一记忆，供 WebUI 和平台聊天按需召回。",
   payloadSchema: z
     .object({
       platform: z.literal("web"),
