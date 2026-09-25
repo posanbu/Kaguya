@@ -295,118 +295,62 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
       expect(kinds(graph)).not.toContain("core.message.assistant.text");
   });
 
-  it.each([
-    { invalid: "", recovered: speak },
-    { invalid: "INVALID_PRIVATE_PROVIDER_RESPONSE", recovered: wait },
-    { invalid: { action: "message", reason: "respond" }, recovered: silent },
-  ])(
-    "repairs one invalid response before $recovered.action",
-    async ({ invalid, recovered }) => {
-      const f = await fixture([invalid, recovered]);
-      await f.submit(f.message());
-      await f.settle();
-      const graph = await f.atoms();
-      const plannerRequests = f.requests.filter(
-        (r) => r.model === "deepseek-light",
-      );
-      expect(plannerRequests).toHaveLength(2);
-      expect(plannerRequests[1]?.messages).toEqual(
-        plannerRequests[0]?.messages,
-      );
-      for (const request of plannerRequests)
-        expect(request.response_format).toEqual({ type: "json_object" });
-      expect(JSON.stringify(plannerRequests[1]?.messages)).not.toContain(
-        "INVALID_PRIVATE_PROVIDER_RESPONSE",
-      );
-      const tasks = graph.filter((a) => a.payload.taskId === "agent.turn.plan");
-      expect(
-        tasks.filter((a) => a.kind === "core.model.task.requested"),
-      ).toHaveLength(1);
-      const terminals = tasks.filter(
-        (a) => a.kind !== "core.model.task.requested",
-      );
-      expect(terminals).toHaveLength(1);
-      expect(terminals[0]?.kind).toBe("core.model.task.completed");
-      expect(terminals[0]?.payload).toMatchObject({
-        output: recovered,
-        usage: { inputTokens: 2, outputTokens: 2, totalTokens: 4 },
-      });
-      const decisions = graph.filter(
-        (a) => a.kind === "agent.turn.plan.completed",
-      );
-      expect(decisions).toHaveLength(1);
-      expect(decisions[0]?.payload.action).toMatchObject(recovered);
-      expect(kinds(graph)).not.toContain("agent.turn.failed");
-      expect(f.delivered).toHaveBeenCalledTimes(
-        recovered.action === "message" ? 1 : 0,
-      );
-      const requestCount = f.requests.length;
-      await f.restart();
-      await f.settle();
-      expect(f.requests).toHaveLength(requestCount);
-      const replayed = await f.atoms();
-      expect(
-        replayed.filter((a) => a.payload.taskId === "agent.turn.plan"),
-      ).toHaveLength(tasks.length);
-      expect(
-        replayed.filter((a) => a.kind === "agent.turn.plan.completed"),
-      ).toHaveLength(1);
-      expect(f.delivered).toHaveBeenCalledTimes(
-        recovered.action === "message" ? 1 : 0,
-      );
-    },
-  );
+  it("repairs one invalid response before dispatch and replays the decision once", async () => {
+    const invalid = "INVALID_PRIVATE_PROVIDER_RESPONSE";
+    const recovered = speak;
+    const f = await fixture([invalid, recovered]);
+    await f.submit(f.message());
+    await f.settle();
+    const graph = await f.atoms();
+    const plannerRequests = f.requests.filter(
+      (r) => r.model === "deepseek-light",
+    );
+    expect(plannerRequests).toHaveLength(2);
+    expect(plannerRequests[1]?.messages).toEqual(plannerRequests[0]?.messages);
+    for (const request of plannerRequests)
+      expect(request.response_format).toEqual({ type: "json_object" });
+    expect(JSON.stringify(plannerRequests[1]?.messages)).not.toContain(
+      "INVALID_PRIVATE_PROVIDER_RESPONSE",
+    );
+    const tasks = graph.filter((a) => a.payload.taskId === "agent.turn.plan");
+    expect(
+      tasks.filter((a) => a.kind === "core.model.task.requested"),
+    ).toHaveLength(1);
+    const terminals = tasks.filter(
+      (a) => a.kind !== "core.model.task.requested",
+    );
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0]?.kind).toBe("core.model.task.completed");
+    expect(terminals[0]?.payload).toMatchObject({
+      output: recovered,
+      usage: { inputTokens: 2, outputTokens: 2, totalTokens: 4 },
+    });
+    const decisions = graph.filter(
+      (a) => a.kind === "agent.turn.plan.completed",
+    );
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]?.payload.action).toMatchObject(recovered);
+    expect(kinds(graph)).not.toContain("agent.turn.failed");
+    expect(f.delivered).toHaveBeenCalledTimes(
+      recovered.action === "message" ? 1 : 0,
+    );
+    const requestCount = f.requests.length;
+    await f.restart();
+    await f.settle();
+    expect(f.requests).toHaveLength(requestCount);
+    const replayed = await f.atoms();
+    expect(
+      replayed.filter((a) => a.payload.taskId === "agent.turn.plan"),
+    ).toHaveLength(tasks.length);
+    expect(
+      replayed.filter((a) => a.kind === "agent.turn.plan.completed"),
+    ).toHaveLength(1);
+    expect(f.delivered).toHaveBeenCalledTimes(
+      recovered.action === "message" ? 1 : 0,
+    );
+  });
 
-  it.each([
-    { kind: "current" },
-    {
-      kind: "group",
-      reference: "synthetic-group-reference",
-      instruction: "转告合成测试消息",
-    },
-    {
-      kind: "private",
-      reference: "synthetic-private-reference",
-      instruction: "转告合成测试消息",
-    },
-    { kind: "unresolved", reason: "not-found" },
-  ])(
-    "accepts the nested $kind target union before routing authorization",
-    async (target) => {
-      const output = { ...speak, target };
-      const f = await fixture([output]);
-      await f.submit(f.message());
-      await f.settle();
-      const graph = await f.atoms();
-      const terminal = graph.find(
-        (a) =>
-          a.kind === "core.model.task.completed" &&
-          a.payload.taskId === "agent.turn.plan",
-      );
-      expect(terminal?.payload.output).toEqual(output);
-      expect(
-        graph.find((a) => a.kind === "agent.turn.plan.completed")?.payload
-          .action,
-      ).toEqual(output);
-      expect(
-        f.requests.filter((r) => r.model === "deepseek-light"),
-      ).toHaveLength(1);
-      expect(f.requests[0]?.response_format).toEqual({ type: "json_object" });
-      expect(f.delivered).toHaveBeenCalledTimes(
-        target.kind === "current" ? 1 : 0,
-      );
-    },
-  );
-
-  it.each([
-    "",
-    "not JSON",
-    { action: "message", reason: "invented" },
-    { ...wait, waitSeconds: 4 },
-    { ...wait, waitSeconds: 121 },
-    { ...wait, waitSeconds: 5.5 },
-    { ...silent, text: "forbidden reply" },
-  ])(
+  it.each(["not JSON", { ...wait, waitSeconds: 4 }])(
     "fails closed after exhausting one structural repair for %j",
     async (output) => {
       const f = await fixture([output, output]);

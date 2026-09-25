@@ -111,7 +111,7 @@ pnpm --dir docs --ignore-workspace docs:check
 - **Schema 与 SDK**：校验 Information Atom、Kind definition、payload、引用规则与模块 API。
 - **Engine**：验证 Kind Registry、提交先于广播、同 Kind 消费者并发、因果引用，以及 `consumer.failed` 的隔离和递归保护。
 - **Modules 与 Runtime**：验证过滤 DAG、LLM requested/completed/failed、assistant、delivery requested/delivered/failed、关闭 drain 与 ingress 生命周期。
-- **Database**：普通测试使用 PGlite；`test:postgres` 收集所有读取测试 URL 的真实 PostgreSQL suite，覆盖账本、索引、可靠执行、Memory、one-shot schedule 与 Model Task persistence，并以扫描门禁防止遗漏；不清空应用 schema、容器或数据卷。
+- **Database**：普通测试使用 PGlite；`test:postgres` 收集所有读取测试 URL 的真实 PostgreSQL suite，覆盖账本、索引、可靠执行、Memory、one-shot schedule 与 Model Task persistence，并以扫描门禁防止遗漏；不清空应用 schema、容器或数据卷。当前产品与开发测试的兼容边界见 `docs/developers/testing-compatibility.md`。
 - **Config、Server 与 Web**：验证全局 `selectedProfileId`、Profile management、认证、HTTP 响应、窄 ingress 和 setup mode。
 - **平台适配器与 demo**：验证平台内容正规化、transport receipt 与 PostgreSQL demo。
 

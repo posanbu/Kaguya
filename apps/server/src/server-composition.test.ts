@@ -24,7 +24,14 @@ import {
   createMessageComposition,
   type RuntimeModelSelectionResolver,
 } from "@kaguya/composition";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -380,10 +387,9 @@ describe("unified server composition", () => {
     const workspaceRoot = tempWorkspaceRoot();
     const configRoot = join(workspaceRoot, "config");
     mkdirSync(configRoot, { recursive: true });
-    writeFileSync(
-      join(configRoot, "index.json"),
-      JSON.stringify({ version: 2 }),
-    );
+    const indexPath = join(configRoot, "index.json");
+    const invalidIndex = JSON.stringify({ version: 2 });
+    writeFileSync(indexPath, invalidIndex);
 
     const stream = new LogStream();
     const rootLogger = createLogger({ service: "kaguya-server-test", stream });
@@ -402,6 +408,8 @@ describe("unified server composition", () => {
     }).catch((thrown: unknown) => thrown);
 
     expect(error).toMatchObject({ code: "CONFIG_CORRUPT_STORE" });
+    expect(readFileSync(indexPath, "utf8")).toBe(invalidIndex);
+    expect(readdirSync(configRoot)).toEqual(["index.json"]);
     expect(createLoggerSpy).toHaveBeenCalledTimes(1);
     expect(closeLoggerSpy).toHaveBeenCalledWith(rootLogger);
     expect(stream.logs()).toEqual(

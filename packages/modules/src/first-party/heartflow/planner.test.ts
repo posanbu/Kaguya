@@ -45,6 +45,53 @@ describe("Planner contract", () => {
     ).toBe(true);
   });
   it.each([
+    { kind: "current" },
+    {
+      kind: "group",
+      reference: "synthetic-group-reference",
+      instruction: "转告合成测试消息",
+    },
+    {
+      kind: "private",
+      reference: "synthetic-private-reference",
+      instruction: "转告合成测试消息",
+    },
+    { kind: "unresolved", reason: "not-found" },
+  ])("accepts the nested $kind target contract", (target) => {
+    expect(
+      plannerActionSchema.safeParse({
+        action: "message",
+        reason: "respond",
+        target,
+        composition: {
+          focusInputIndexes: [0],
+          topic: "当前消息",
+          replyAct: "回应用户",
+        },
+      }).success,
+    ).toBe(true);
+  });
+  it.each([
+    "ambiguous",
+    "unrecognized",
+    "unreachable",
+    "not-found",
+    "unauthorized",
+  ])("accepts unresolved target reason %s", (reason) => {
+    expect(
+      plannerActionSchema.safeParse({
+        action: "message",
+        reason: "respond",
+        target: { kind: "unresolved", reason },
+        composition: {
+          focusInputIndexes: [0],
+          topic: "当前消息",
+          replyAct: "回应用户",
+        },
+      }).success,
+    ).toBe(true);
+  });
+  it.each([
     undefined,
     { focusInputIndexes: [], topic: "话题", replyAct: "回应" },
     { focusInputIndexes: [0, 0], topic: "话题", replyAct: "回应" },

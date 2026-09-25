@@ -52,6 +52,7 @@ const developerGuide: DefaultTheme.SidebarItem[] = [
       { text: "Memory 认知层", link: "/developers/memory" },
       { text: "配置生命周期", link: "/developers/configuration-lifecycle" },
       { text: "信息账本", link: "/developers/information-ledger" },
+      { text: "测试与兼容边界", link: "/developers/testing-compatibility" },
       { text: "Runtime 可观测性", link: "/developers/observability" },
       { text: "一次性调度", link: "/developers/scheduler" },
       { text: "短心跳恢复", link: "/developers/heartbeat" },

@@ -62,7 +62,7 @@ description: Kaguya 当前已实现能力、明确边界和后续演进方向。
 
 **Web 回复读取通道** — `POST /api/v1/messages` 的 `202 accepted` 仅表示已接收；`GET /api/v1/messages` 按 `conversationId` 与游标读取持久消息和成功投递的回复。尚未成功投递的生成文本不会作为已送达回复展示；协议见 [HTTP API](../reference/http-api#公共路由)。
 
-**旧数据自动迁移** — 旧 SQLite 与旧配置索引会被拒绝，不会自动删除或转换。
+**旧数据自动迁移** — 旧 SQLite 与旧配置索引会被拒绝，不会自动删除或转换。当前数据库内部仍有受限的 Web Memory 约束调整和 lifecycle 投影回填；支持边界与现状见[测试与兼容边界](../developers/testing-compatibility)。
 
 ## 后续实施顺序
 

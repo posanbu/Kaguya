@@ -7,6 +7,8 @@ description: Server 启动时如何加载 Profile、创建 Runtime，并处理�
 
 `apps/server` 是正式服务的配置与资源生命周期入口，Runtime 业务装配统一调用 `@kaguya/composition`。它负责把磁盘配置变成运行对象，并明确区分“配置已写入”与“当前进程已采用”。这个边界让模型选择、密钥使用和故障范围保持可预测。
 
+当前格式的支持范围与配置测试归属见[测试与兼容边界](./testing-compatibility)。
+
 ## 启动阶段
 
 ```mermaid

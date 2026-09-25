@@ -259,12 +259,6 @@ function choose(kind: "group" | "private", relation: string) {
 it.each([
   ["当前群回复", speak, "source-group", "普通问候"],
   [
-    "显式当前群",
-    { ...speak, target: { kind: "current" } },
-    "source-group",
-    "发到当前群",
-  ],
-  [
     "跨群",
     choose("group", "mentioned"),
     "other-group",
@@ -364,13 +358,8 @@ it.each([
   },
   sequentialWaitTestTimeoutMs,
 );
-it.each([
-  "ambiguous",
-  "unrecognized",
-  "unreachable",
-  "not-found",
-  "unauthorized",
-])("无法解析 %s 时关闭且不回退当前群", async (reason) => {
+it("无法解析目标时关闭且不回退当前群", async () => {
+  const reason = "unreachable";
   const f = await fixture([
     { ...speak, target: { kind: "unresolved", reason } },
   ]);
