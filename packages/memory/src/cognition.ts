@@ -2,6 +2,10 @@
  * 功能概述：定义外部认知 provider 的严格文档输入、来源输出与受控 Mem0 REST 适配器。
  * MemoryCognitionProvider 仅接收已持久化文档快照；validateCognitionInput 允许同群多参与者，
  * 保留私聊账号边界；validateCognitionResult 拒绝缺失、乱序或越权来源。
+ * MemoryCognitionDocument 仅为认知输入附加平台原生 replyTo；resolveCognitionReplyTarget
+ * 在本次文档窗口内按消息 ID 和可选发送者寻找唯一非自身目标，不查询窗口外数据、不猜测人物。
+ * replyTo.sourceInformationId 为 null 表示没有唯一可验证目标，不代表原始消息没有回复关系；
+ * validateCognitionInput 复核映射，freezeCognitionInput 为 provider 创建深冻结的独立快照。
  * Mem0CognitionProvider 将每个 operation 映射为独立命名空间，委托外部服务提取/消解冲突，
  * 再把最终可见事实与完整输入证据关联；消息保留账号、场景、时间和 Information 来源，
  * 账号只代表陈述者，不把第一人称或转述自动绑定为被谈论者。本包不实现事实提取、合并或演化启发式。
@@ -21,8 +25,19 @@ export const cognitionDocumentSchema = memoryDocumentInputSchema
   .extend({
     memoryId: z.string().min(1),
     createdAt: z.iso.datetime({ offset: true }),
+    replyTo: z
+      .object({
+        platformMessageId: z.string().trim().min(1),
+        senderId: z.string().trim().min(1).optional(),
+        sourceInformationId: z.string().min(1).nullable(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
+export type MemoryCognitionDocument = Readonly<
+  z.infer<typeof cognitionDocumentSchema>
+>;
 export const cognitionInputSchema = z
   .object({
     operationKey: z.string().min(1),
@@ -32,7 +47,7 @@ export const cognitionInputSchema = z
   .strict();
 export interface MemoryCognitionInput {
   readonly operationKey: string;
-  readonly documents: readonly MemoryDocument[];
+  readonly documents: readonly MemoryCognitionDocument[];
   readonly sourceInformationIds: readonly string[];
 }
 export const cognitionResultSchema = z
@@ -62,6 +77,24 @@ export const memoryCognitionCapability =
 /** Knowledge 启用时，Core 通过此只读策略检查快照的全部来源是否仍可使用。 */
 export const MEMORY_COGNITION_EVIDENCE_GUARD_STRATEGY_ID =
   "memory.cognition.evidence-guard";
+/** 仅从同一已校验 scope 的有界文档中解析原生回复目标；缺失或歧义均返回 null。 */
+export function resolveCognitionReplyTarget(
+  documents: readonly MemoryDocument[],
+  sourceInformationId: string,
+  replyTo: {
+    readonly platformMessageId: string;
+    readonly senderId?: string | undefined;
+  },
+): string | null {
+  const matches = documents.filter(
+    (doc) =>
+      doc.sourceInformationId !== sourceInformationId &&
+      doc.address.platformMessageId === replyTo.platformMessageId &&
+      (replyTo.senderId === undefined ||
+        doc.address.accountId === replyTo.senderId),
+  );
+  return matches.length === 1 ? matches[0]!.sourceInformationId : null;
+}
 export function validateCognitionInput(input: MemoryCognitionInput): void {
   cognitionInputSchema.parse(input);
   if (
@@ -85,6 +118,17 @@ export function validateCognitionInput(input: MemoryCognitionInput): void {
         JSON.stringify(first.destination)
     )
       throw new Error("Mixed cognition scope");
+  for (const doc of input.documents)
+    if (
+      doc.replyTo &&
+      doc.replyTo.sourceInformationId !==
+        resolveCognitionReplyTarget(
+          input.documents,
+          doc.sourceInformationId,
+          doc.replyTo,
+        )
+    )
+      throw new Error("Invalid cognition evidence");
 }
 /** 冻结传给可替换 provider 的副本，避免它通过修改数组改变之后的来源校验边界。 */
 export function freezeCognitionInput(
@@ -198,6 +242,7 @@ export class Mem0CognitionProvider implements MemoryCognitionProvider {
             role: "user",
             content: JSON.stringify({
               sourceInformationId: doc.sourceInformationId,
+              platformMessageId: doc.address.platformMessageId,
               occurredAt: doc.occurredAt,
               speaker: {
                 platform: doc.address.platform,
@@ -206,6 +251,7 @@ export class Mem0CognitionProvider implements MemoryCognitionProvider {
               },
               destination: doc.address.destination,
               text: doc.content,
+              ...(doc.replyTo === undefined ? {} : { replyTo: doc.replyTo }),
             }),
           })),
           metadata: { sourceInformationIds: input.sourceInformationIds },

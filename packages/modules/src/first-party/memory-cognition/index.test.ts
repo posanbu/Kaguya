@@ -3,6 +3,8 @@
  * ledger 测试替身记录明确来源链，覆盖多人群聊、空快照替代旧事实、跨范围、未来证据
  * 和 Web conversationId 范围隔离；模块 worker 使用持久化文档替身验证冻结截止点、
  * 来源一致性、版本迁移和请求隔离；Web 隔离不改变 Identity 对长期认知的准入限制，
+ * 回复链仅从请求的原始证据投影，覆盖插话、目标缺席、重复平台 ID 与额外返回来源；
+ * replyTo 与原文一起冻结，重放不扩窗、不把未验证的目标当作直接证据。
  * 不调用外部模型，不模拟或实现任何事实演化算法。
  */
 import { describe, expect, it, vi } from "vitest";
@@ -423,6 +425,7 @@ async function executeCognition(
   documents: MemoryDocument[],
   evidence = [inbound],
   payload = snapshot.payload,
+  sourceInformationIds = evidence.map((atom) => atom.informationId),
 ) {
   const evolve = vi.fn(
     async (_input: MemoryCognitionInput, _signal: AbortSignal) => ({
@@ -462,7 +465,7 @@ async function executeCognition(
       identity: payload.identity,
       scopeKey: payload.scopeKey,
       asOf: payload.asOf,
-      sourceInformationIds: evidence.map((atom) => atom.informationId),
+      sourceInformationIds,
     },
   };
   await instance.subscriptions[1]!.handle(request, {
@@ -474,6 +477,120 @@ async function executeCognition(
   return { evolve, commitTerminal, registerOnce };
 }
 describe("frozen cognition evidence execution", () => {
+  it("does not accept reply metadata supplied by the raw document reader", async () => {
+    const second = {
+      ...inbound,
+      informationId: "second",
+      payload: {
+        text: "另一位参与者的独立发言",
+        source: {
+          ...source,
+          senderId: "speaker-b",
+          platformMessageId: "second-message",
+        },
+      },
+    };
+    const documents = [
+      asDocument(inbound),
+      {
+        ...asDocument(second),
+        replyTo: {
+          platformMessageId: "message",
+          sourceInformationId: "inbound",
+        },
+      },
+    ];
+    const f = await executeCognition(documents, [inbound, second]);
+    expect(f.evolve).toHaveBeenCalledOnce();
+    expect(f.evolve.mock.calls[0]![0].documents[1]).not.toHaveProperty(
+      "replyTo",
+    );
+  });
+  it("preserves a reply across an intervening speaker from canonical evidence", async () => {
+    const question = {
+      ...inbound,
+      payload: {
+        text: "你现在还喝咖啡吗？",
+        source: { ...source, platformMessageId: "question" },
+      },
+    };
+    const interruption = {
+      ...inbound,
+      informationId: "interruption",
+      payload: {
+        text: "我刚泡了一杯茶",
+        source: {
+          ...source,
+          senderId: "speaker-b",
+          platformMessageId: "aside",
+        },
+      },
+    };
+    const reply = {
+      ...inbound,
+      informationId: "reply",
+      payload: {
+        text: "已经戒了",
+        source: {
+          ...source,
+          senderId: "speaker-c",
+          platformMessageId: "answer",
+          replyTo: { platformMessageId: "question", senderId: "user" },
+        },
+      },
+    };
+    const evidence = [question, interruption, reply];
+    const documents = evidence.map(asDocument);
+    const first = await executeCognition(documents, evidence);
+    const input = first.evolve.mock.calls[0]![0];
+    expect(input.documents.map((doc) => doc.address.accountId)).toEqual([
+      "user",
+      "speaker-b",
+      "speaker-c",
+    ]);
+    expect(input.documents[2]!.replyTo).toEqual({
+      platformMessageId: "question",
+      senderId: "user",
+      sourceInformationId: "inbound",
+    });
+    expect(Object.isFrozen(input.documents[2]!.replyTo)).toBe(true);
+    expect(documents[2]).not.toHaveProperty("replyTo");
+    const replay = await executeCognition(documents, evidence);
+    expect(replay.evolve.mock.calls[0]![0]).toEqual(input);
+  });
+  it("does not resolve a reply through evidence outside the frozen request", async () => {
+    const reply = {
+      ...inbound,
+      informationId: "reply",
+      payload: {
+        text: "已经戒了",
+        source: {
+          ...source,
+          platformMessageId: "answer",
+          replyTo: { platformMessageId: "message", senderId: "user" },
+        },
+      },
+    };
+    const documents = [asDocument(inbound), asDocument(reply)];
+    const first = await executeCognition(documents, [reply], snapshot.payload, [
+      "reply",
+    ]);
+    // 即使恢复时 selector 多返回目标原文，冻结 source IDs 仍是唯一解析范围。
+    const replay = await executeCognition(
+      documents,
+      [inbound, reply],
+      snapshot.payload,
+      ["reply"],
+    );
+    const input = first.evolve.mock.calls[0]![0];
+    expect(input.sourceInformationIds).toEqual(["reply"]);
+    expect(input.documents[0]!.replyTo).toEqual({
+      platformMessageId: "message",
+      senderId: "user",
+      sourceInformationId: null,
+    });
+    expect(replay.evolve.mock.calls[0]![0]).toEqual(input);
+  });
   it("passes a frozen multi-speaker scene with an operation-specific key", async () => {
     const other = {
       ...inbound,

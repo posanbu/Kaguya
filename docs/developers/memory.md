@@ -71,9 +71,24 @@ composition 在 Memory 开启时补入写回实例；存在显式配置时尊重
 
 身份未解析或 ephemeral/Web 消息不触发长期认知。canonical 消息写回完成后，在同场景的最近 32 条消息内冻结已持久化来源；其他参与者按各自的平台账号保留归属，不依据昵称合并人物。认知 request 只携带稳定 provider 身份、有序来源、范围和事件截止时间。worker 从 Memory 重载文档，与账本核对正文、地址和事件时间，并拒绝晚于事件截止点或请求登记时刻才持久化的文档。成功时登记文本和唯一完成终态；文本先提交但终态尚未完成的中间状态不会进入 Prompt。后续 Heartflow 选择同 provider/revision、同场景、截止时间内的完整快照，重新核对直接证据与截止点；私聊同时保留账号边界。原始消息仍独立参与召回。
 
+**回复关系 — 只补充冻结窗口内的证据。** worker 从已核验的入站账本原子读取 `source.replyTo`，补入交给 provider 的临时 cognition document；原始 `MemoryDocument` 和数据库结构不变。可选 `replyTo` 包含平台原生 `platformMessageId`、可选发送者提示 `senderId`，以及 `sourceInformationId: string | null`。只有同一冻结窗口内存在唯一的非自身目标，且平台消息 ID 与可用的发送者提示都匹配，才填入目标 Information ID；目标不在窗口、存在歧义或只有自身匹配时保留外部回复引用，将该 ID 置为 `null`。这表示目标尚未在当前证据中解析，不表示回复不存在。
+
+Mem0 的每条消息同时保留本消息的 `platformMessageId` 和可用的 `replyTo`，因此群聊中的提问、插话与短句回应仍有可核验的关系。输入没有回复关系时可继续省略该字段，旧输入保持兼容。重试始终从 request 冻结的有序来源 ID 重载并校验原文，不为了补齐 reply 链自动扩展窗口；解析到目标也不等于已经证明某条派生事实的语义归属。
+
 群聊窗口使用带 `scene.v2` 标记的范围键。历史单发送者快照继续保留供审计，新的在线选择不把它们当作多人场景快照；尚未完成的旧 request 仍可在原有单账号范围内恢复。新旧请求都保持各自的 operation 命名空间隔离，不把远端历史当作增量人物画像。上述迁移不删除原始 MemoryDocument，也不改变 sparse/hybrid 召回约束。
 
 认知是一个最多 32 条文档的有界窗口，不能作为无限历史画像。外部服务的事实质量与语义证据判断仍需部署方评估；本地自动化测试验证的是协议、来源/范围、失败隔离与恢复，不代替真实服务的质量评测。
+
+## Memory 形成模型的当前边界
+
+[#74 重新打开后的问题](https://github.com/posanbu/Kaguya/issues/74)是长期记忆的基本单元仍以单条消息为中心。补全回复证据让 provider 更准确地看到当前窗口的关系，但尚未完成 episode 存储、稀疏／向量索引、召回排序、Prompt 投影和 Inspection 展示的契约迁移。
+
+以下职责区分用于说明当前实现与后续设计的衔接；[#242](https://github.com/posanbu/Kaguya/issues/242) 的形成模型仍待人工确认，尚未确定最终切分算法或存储结构。
+
+- **Raw evidence — 原始证据。** 不可变 Information 与逐消息 Memory 写回保存原文及来源。逐条保存仍然有效，后续调整派生单元不应删除这条证据路径。
+- **Context — 当前情境。** 当前 cognition 使用最多 32 条同范围消息作为有界输入。它表达本次实际可见的证据范围；多个 tick 如何累积为稳定 observation，仍由 [#244](https://github.com/posanbu/Kaguya/issues/244) 设计。
+- **Experience / episode — 共同经历。** 现有 Knowledge 契约允许显式关联多个原始事件。自动语义分段、reply 链补全和形成触发规则尚未确定，32 条窗口不能直接视作一段完整经历。
+- **Long-term cognition — 长期认识。** 现有 provider 产出 operation 隔离的有界快照，Knowledge 保存显式断言及其修订。如何让经历持续形成可修正、可召回的认识，仍需明确完整证据范围、幂等键和迁移边界。
 
 ## ADR：事件、实体与 Wiki 的可回退原型
 
