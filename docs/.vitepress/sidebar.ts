@@ -44,6 +44,8 @@ const developerGuide: DefaultTheme.SidebarItem[] = [
     text: "开发文档",
     items: [
       { text: "开发概览", link: "/developers/" },
+      { text: "持续 Agent 设计原则", link: "/developers/continuous-agent" },
+      { text: "外部设计参考", link: "/developers/design-references" },
       { text: "运行时架构", link: "/developers/architecture" },
       { text: "信息模块 SDK", link: "/developers/information-modules" },
       { text: "Memory 认知层", link: "/developers/memory" },

@@ -5,7 +5,7 @@ description: Kaguya HTTP、配置、信息 Kind 与存储边界的查询入口�
 
 # 参考资料
 
-本分区记录可以直接从当前代码和 schema 核对的事实。使用教程放在[使用指南](../guide/)，设计理由放在[运行时架构](../developers/architecture)。
+本分区记录可以直接从当前代码和 schema 核对的事实。使用教程放在[使用指南](../guide/)，设计理由放在[运行时架构](../developers/architecture)，外部项目与研究资料放在[外部设计参考](../developers/design-references)。
 
 ## 可用参考
 
