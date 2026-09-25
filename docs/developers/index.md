@@ -86,6 +86,8 @@ flowchart LR
 
 阅读[信息模块 SDK](./information-modules)，使用 `onInformation` 消费输入并以 `context.register()` 派生下一原子。
 
+需要查看 Planner、Composer 实际使用的 Prompt 模板原文和变量装配时，阅读 [LLM Prompt 装配与原文](./prompt-assembly)。页面直接嵌入仓库中的 `.hbs` 文件，模板修改后随文档构建更新。
+
 ### 理解启动配置
 
 阅读[配置生命周期](./configuration-lifecycle)，了解 Server 为什么先检查 selected Profile，以及哪些修改需要重启。
