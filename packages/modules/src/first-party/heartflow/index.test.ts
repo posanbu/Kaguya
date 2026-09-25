@@ -1,4 +1,5 @@
 /**
+ * 迟到候选按注册顺序接续已完成回合，事件发生时间只影响语义积压，不倒置候选优先级。
  * 功能概述：通过真实 InformationCore/PGlite 验证先观察再冻结上下文、Planner 分派和唯一终态。
  * 主要职责：fixture 安装 Heartflow 与受控模型能力；appendOpportunity/decide 构造通知与观察事实；
  * waitFor/settle 按 8 秒持久化预算等待事实或 durable 队列收敛，否定断言不依赖固定休眠。
@@ -530,6 +531,43 @@ it("freezes exactly the registration-watermark window after observe", async () =
     opportunity.unread.at(-1)!.informationId,
   );
   await waitFor(database, turnSilentInformationKind.kind);
+});
+
+it("processes a later registered opportunity with an earlier event time after a completed turn", async () => {
+  const { core, database, execute } = await fixture({
+    action: { action: "silent", reason: "no-response-needed" },
+  });
+  const first = await appendOpportunity(core, {
+    texts: ["newer event"],
+    occurredAt: ["2026-09-22T08:00:00.000Z"],
+  });
+  await decide(core, first.candidate, "observe");
+  await waitFor(database, turnSilentInformationKind.kind);
+  await settle(database);
+  const late = await appendOpportunity(core, {
+    texts: ["late event"],
+    occurredAt: ["2026-09-22T07:00:00.000Z"],
+  });
+  await decide(core, late.candidate, "observe");
+  await settle(database);
+  const atoms = await all(database);
+  const frozen = atoms.filter(
+    (atom: any) => atom.kind === turnContextCompletedInformationKind.kind,
+  );
+  expect(frozen).toHaveLength(2);
+  expect(frozen[1].payload.inputs.map((input: any) => input.text)).toEqual([
+    "late event",
+  ]);
+  expect(frozen[1].payload.observedThroughInformationId).toBe(
+    late.unread[0]!.informationId,
+  );
+  expect(
+    atoms.filter((atom: any) => atom.kind === turnSilentInformationKind.kind),
+  ).toHaveLength(2);
+  expect(
+    atoms.filter((atom: any) => atom.kind === "agent.turn.superseded"),
+  ).toHaveLength(0);
+  expect(execute).toHaveBeenCalledTimes(2);
 });
 
 it("waits for Identity terminal before freezing the observed batch", async () => {

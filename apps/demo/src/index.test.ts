@@ -1,4 +1,5 @@
 /**
+ * 固定相同时间戳并让第二轮 UUID 字典序更小，验证旧终态不会反复替代新候选；仍保留真实 UUID 重复运行用例。
  * Demo 与 Server 共用 Composition；确定性图计数包含每轮一次的结构化会话背景。
  * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * 功能概述：验证 demo 以 PostgreSQL information ledger 运行确定性入站 DAG，
@@ -109,6 +110,40 @@ describe("demo entry point", () => {
       "memory.identity.person.context.completed: 1",
       "memory.identity.person.resolution: 1",
     ]);
+  }, 20_000);
+
+  it("uses registration order when the next run has lexically smaller UUIDs at the same time", async () => {
+    const database = await createTestingDatabase();
+    databases.push(database);
+    const moduleConfigs = createFirstPartyModuleConfigDefaults("test");
+    const roots: string[] = [];
+    for (const prefix of [
+      "ffffffff-ffff-4fff-8fff",
+      "00000000-0000-4000-8000",
+    ]) {
+      let sequence = 0;
+      const receipt = await runDemo({
+        database,
+        moduleConfigs,
+        writeLine: () => undefined,
+        informationIdGenerator: () =>
+          `${prefix}-${(++sequence).toString(16).padStart(12, "0")}`,
+      });
+      roots.push(receipt.rootInformationId);
+      const graph = await database.information.query({
+        informationId: receipt.rootInformationId,
+      });
+      expect(
+        graph.filter((atom) => atom.kind === "agent.turn.completed"),
+      ).toHaveLength(1);
+      expect(
+        graph.filter((atom) => atom.kind === "core.delivery.delivered"),
+      ).toHaveLength(1);
+      expect(
+        graph.filter((atom) => atom.kind === "agent.turn.superseded"),
+      ).toHaveLength(0);
+    }
+    expect(roots[1]!.localeCompare(roots[0]!)).toBeLessThan(0);
   }, 20_000);
 
   it("can run twice against the same persistent ledger with production ids", async () => {

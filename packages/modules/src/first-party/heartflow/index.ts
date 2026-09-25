@@ -1,4 +1,5 @@
 /**
+ * 候选新旧由 Selector 的账本注册顺序确定；相同/迟到业务时间及随机 UUID 不改变消费先后。
  * 获胜计划的可选 tone 传给消息意图，供独立表情插件判断语境，不改变参与门控。
  * 声明人工记忆来源 Kind 为可消费上下文，正常召回冻结后交给 Planner。
  * manifest 声明 Planner 模板；调用 compilePlannerPrompt 时传入装配阶段加载的 default/local 文本，不再使用代码内默认值。
@@ -452,7 +453,33 @@ export const heartflowStateSelector = defineInformationSelector({
       if (candidate.kind !== turnCandidateInformationKind.kind) continue;
       await hydrateCandidate(ledger, candidate, remember);
     }
-    return [...selected.keys()];
+    // 水合会先加入触发候选，再补旧 claim；Map 插入顺序不能代表账本先后。
+    // 只重排已经选中的候选，分页保留全部身份，不扩张读取范围或按事件时间排序。
+    const candidateIds = [...selected.values()]
+      .filter((atom) => atom.kind === turnCandidateInformationKind.kind)
+      .map((atom) => atom.informationId);
+    if (candidateIds.length === 0) return [...selected.keys()];
+    const orderedCandidateIds: string[] = [];
+    let afterInformationId: string | undefined;
+    for (;;) {
+      const page = await ledger.find({
+        informationIds: candidateIds,
+        registrationOrder: true,
+        order: "asc",
+        limit: 1000,
+        ...(afterInformationId ? { afterInformationId } : {}),
+      });
+      orderedCandidateIds.push(...page.map((atom) => atom.informationId));
+      if (page.length < 1000) break;
+      afterInformationId = page.at(-1)!.informationId;
+    }
+    if (orderedCandidateIds.length !== candidateIds.length)
+      throw new Error("Heartflow candidate registration order is incomplete");
+    const candidatesSet = new Set(candidateIds);
+    return [
+      ...[...selected.keys()].filter((id) => !candidatesSet.has(id)),
+      ...orderedCandidateIds,
+    ];
   },
 });
 
@@ -1284,9 +1311,8 @@ async function progressCandidates(
   );
   const scopes = new Set(candidates.map((a) => String(a.payload.scopeKey)));
   for (const scope of scopes) {
-    const open = candidates
-      .filter((a) => a.payload.scopeKey === scope)
-      .sort(compareCandidates);
+    // heartflowStateSelector 保证候选子序列按持久注册位置递增。
+    const open = candidates.filter((a) => a.payload.scopeKey === scope);
     const winner = open.at(-1)!;
     await progressCandidate(
       winner,
@@ -1376,7 +1402,7 @@ async function progressCandidate(
     latestCandidate !== undefined &&
     latestCandidate.informationId !== candidate.informationId
   ) {
-    if (compareCandidates(candidate, latestCandidate) <= 0) {
+    if (atoms.indexOf(candidate) <= atoms.indexOf(latestCandidate)) {
       await supersedeCandidate(
         candidate,
         latestClaim,
@@ -2106,7 +2132,6 @@ import {
   outgoingStatusTarget,
   terminalReferences,
   assertTurnLink,
-  compareCandidates,
   compareClaims,
   uniqueAtoms,
   copyOptionalIdentity,

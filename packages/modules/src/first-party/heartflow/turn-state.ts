@@ -180,16 +180,6 @@ export function assertTurnLink(
     throw new Error("Speech decision references an inconsistent turn");
 }
 
-export function compareCandidates(
-  left: DeepReadonly<InformationAtom>,
-  right: DeepReadonly<InformationAtom>,
-) {
-  const byTime =
-    Date.parse((left.payload as any).asOf) -
-    Date.parse((right.payload as any).asOf);
-  return byTime || left.informationId.localeCompare(right.informationId);
-}
-
 export function compareClaims(
   left: DeepReadonly<InformationAtom>,
   right: DeepReadonly<InformationAtom>,

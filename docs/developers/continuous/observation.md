@@ -53,6 +53,8 @@ Arousal 的 `defer` 记录下一次检查条件和到期唤醒，不能确认正
 
 [`Memory cognition`](https://github.com/posanbu/Kaguya/blob/ff5544603f528601b7a8930cf0396199691de4c2/packages/modules/src/first-party/memory-cognition/index.ts)使用独立 `scene.v2` key；其窗口选择规则也不同于 Heartbeat。实现应列出群聊、私聊、Web conversation 等映射样例并验证隔离，不能直接把两个 key 视为同义词。已有 `agent.turn.*` 的 terminal 继续描述当前协议，不自动解释为本设计中所有消费者的成功观察。
 
+Heartflow 的候选新旧比较按账本注册顺序进行：同时间戳下 UUID 字典序较小的新候选，以及发生时间较早但后来接收的候选，都不能被已经完成的旧候选反复替代。这修复了现有前台链的排序边界，仍不等于已实现各消费者独立的 observation 协议。
+
 后续工作包括统一映射契约、持久消费范围、快照版本及进度投影；协议新增字段使用版本化读取，旧记录通过明确兼容路径查询。旧记录只能证明其原本保存的范围，不能为其补造缺失的完整性证明。
 
 ### 映射样例与冲突处理
