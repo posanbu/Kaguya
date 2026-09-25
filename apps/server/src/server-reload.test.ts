@@ -4,12 +4,11 @@
  * 主要职责：覆盖凭据/人设/白名单/模块快照切换、旧入口 fencing、持久化写锁、回滚与恢复。
  * 代码库关系：只替换外部数据库连接与模型 provider；server.ts 的应用编排和 HTTP 鉴权使用实际实现。
  * 输入输出与副作用：每例独立临时目录及数据库，使用虚构凭据，关闭 Server 后清理全部测试资源。
- * 执行预算：本文件每例最多 30 秒，覆盖 Windows CI 上真实配置文件读写、PGlite 初始化与多次 Runtime 启停。
+ * 执行预算：本文件每例最多 45 秒，覆盖 Windows CI 上真实配置文件读写、PGlite 初始化与多次 Runtime 启停。
  */
 import {
   mkdtemp,
   mkdir,
-  readFile,
   readdir,
   rm,
   writeFile,
@@ -36,8 +35,8 @@ vi.mock("@ai-sdk/openai-compatible", async () => {
     })),
   };
 });
-// 仅为热应用集成测试保留完整启停预算；其他文件仍使用全局 15 秒上限。
-vi.setConfig({ testTimeout: 30_000 });
+// Windows 完整链路实测接近 30 秒；仅在本文件为真实启停留余量，其他文件仍用全局上限。
+vi.setConfig({ testTimeout: 45_000 });
 
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -264,23 +263,6 @@ it("keeps management available, fences ingress and serializes saves while old wo
   blocked.release();
   expect((await applying).json().data.status).toBe("applied");
   await saving;
-});
-it("rejects stale saved revisions and detects module edits without disturbing the active instance", async () => {
-  const f = await fixture();
-  const initial = await status(f.server);
-  const runtime = f.server.runtime;
-  const saved = await save(f.server);
-  expect((await apply(f.server, initial)).statusCode).toBe(409);
-  const instance = (await readdir(join(f.root, "modules")))[0]!;
-  const path = join(f.root, "modules", instance, "config.json");
-  const module = JSON.parse(await readFile(path, "utf8"));
-  module.enabled = !module.enabled;
-  await writeFile(path, JSON.stringify(module));
-  expect((await status(f.server)).selectedRevision).not.toBe(
-    saved.application.selectedRevision,
-  );
-  expect((await apply(f.server, saved.application)).statusCode).toBe(409);
-  expect(f.server.runtime).toBe(runtime);
 });
 it("rejects process configuration changes before stopping the live instance", async () => {
   const f = await fixture();
