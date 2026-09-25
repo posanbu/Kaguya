@@ -133,6 +133,8 @@ Memory 变量在完整当前 turn 之前，合计最多 4,000 个 Unicode 字符
 
 生产 Prompt 通过深模块 `@kaguya/prompt` 的显式资源声明、受限 Handlebars 编译、完整性校验和 digest 进入运行时。editable 资源允许被 Git 忽略的 `*.local.hbs`；readonly 资源只接受仓库 default。`pnpm prompt:init` 只为 editable 资源创建缺失副本。资源包括统一名称、别名与 persona、Planner 与平台参与策略、消息编写通用行为与平台表达风格、场景和上下文、授权正文、表达学习与选择、人物事实，以及 LLM 层 readonly 的 JSON Schema 输出协议。
 
+Planner、Composer 和 JSON Schema 协议的生产模板原文与装配入口见 [LLM Prompt 装配与原文](./prompt-assembly)；页面在构建时直接读取 `.hbs` 文件，避免复制模板正文后产生偏差。
+
 所有 object Model Task 在写入 `core.model.task.requested` 前渲染结构化输出协议；持久化 Prompt 就是实际发送文本，协议模板、`json_schema` 变量、template digest 和 prompt digest 因而共同进入任务指纹。Provider 支持时仍可额外使用服务端 schema 输出能力。
 
 声明变量可出现零次或多次，实际使用的逻辑变量进入 provenance；未知变量、动态或递归 partial 和非内建 helper 会在启动时失败。替换不做 XML/HTML 逃逸或额外包裹，数据边界由模板作者负责。跨会话授权的渲染器由 composition 装配后注入 Runtime，宿主只提供已授权说明、冻结背景及其来源引用；模板修改不改变目标复核、正文确认或投递权限。

@@ -48,6 +48,7 @@ const developerGuide: DefaultTheme.SidebarItem[] = [
       { text: "外部设计参考", link: "/developers/design-references" },
       { text: "运行时架构", link: "/developers/architecture" },
       { text: "信息模块 SDK", link: "/developers/information-modules" },
+      { text: "LLM Prompt 装配与原文", link: "/developers/prompt-assembly" },
       { text: "Memory 认知层", link: "/developers/memory" },
       { text: "配置生命周期", link: "/developers/configuration-lifecycle" },
       { text: "信息账本", link: "/developers/information-ledger" },

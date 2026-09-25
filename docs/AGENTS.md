@@ -6,6 +6,7 @@
 4. 图片放在 `public/images/`；站点级品牌资源直接放在 `public/`。
 5. 内容页避免 Markdown 表格，优先使用“粗体字段名 — 说明”的定义式写法。
 6. 独立代码示例放进 `::: code-group`，标签显式指定 Iconify 图标。
+7. Prompt 原文页面直接嵌入仓库 `.hbs` 文件；模板列表、变量装配或分支改变时，同步更新 `developers/prompt-assembly.md`，不复制一份静态模板正文。
 
 ## 仓库地图
 
