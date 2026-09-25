@@ -41,6 +41,11 @@ export interface ReliableInformationLedger {
   configureSubscriptions(
     subscriptions: readonly DurableSubscriptionDefinition[],
   ): Promise<void>;
+  /** Change one subscription without pausing unrelated deliveries. */
+  setSubscription?(
+    subscription: DurableSubscriptionDefinition,
+    enabled: boolean,
+  ): Promise<void>;
   claim(
     subscriptionId: string,
     leaseMs: number,

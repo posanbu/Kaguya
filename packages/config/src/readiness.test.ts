@@ -23,7 +23,6 @@ function profileWith(
   const light = targets[0] ?? { providerId: "missing", modelId: "missing" };
   const heavy = targets[1] ?? light;
   return userConfigProfileSchema.parse({
-    version: 1,
     id: "4f649709-50d9-4fc4-8df4-95f96163f7c9",
     name: "test",
     identity: {
@@ -36,16 +35,6 @@ function profileWith(
       modelTiers: { light, heavy },
       providers,
     },
-    memory: { enabled: false },
-    platforms: [
-      {
-        id: "platform-1",
-        type: "test",
-        enabled: true,
-        credentials: {},
-        settings: {},
-      },
-    ],
     ...overrides,
   });
 }
@@ -194,7 +183,7 @@ describe("inspectUserConfigProfile", () => {
             settings: {},
           },
         ],
-        { platforms: [] },
+        {},
       ),
     );
 

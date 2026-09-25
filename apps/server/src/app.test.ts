@@ -210,7 +210,6 @@ describe("application API gateway", () => {
         warnings: [],
       })),
       getProfile: vi.fn(async () => ({
-        version: 1 as const,
         id: "default",
         name: "default",
         inboundAllowlist: [],
@@ -219,13 +218,10 @@ describe("application API gateway", () => {
           timeZone: "Asia/Shanghai",
         },
         ai: { providers: [] },
-        memory: { enabled: false },
-        platforms: [],
       })),
       createProfile: vi.fn(),
       replaceProfile: vi.fn(async () => ({
         profile: {
-          version: 1 as const,
           id: "default",
           name: "default",
           inboundAllowlist: [],
@@ -234,8 +230,6 @@ describe("application API gateway", () => {
             timeZone: "Asia/Shanghai",
           },
           ai: { providers: [] },
-          memory: { enabled: false },
-          platforms: [],
         },
         restartRequired: true,
       })),
@@ -342,8 +336,6 @@ describe("application API gateway", () => {
             id: expect.stringMatching(UUID_PATTERN),
             name: "work",
             ai: { providers: [] },
-            memory: { enabled: false },
-            platforms: [],
           },
         },
       });
@@ -389,8 +381,6 @@ describe("application API gateway", () => {
             id: created.profile.id,
             name: "work",
             ai: { providers: [] },
-            memory: { enabled: false },
-            platforms: [],
           },
         },
       });
@@ -400,7 +390,6 @@ describe("application API gateway", () => {
   it("exposes both safe allowlist fields and rejects runtime replacement", async () => {
     const configuration = stubManagement();
     vi.mocked(configuration.getProfile).mockResolvedValueOnce({
-      version: 1,
       id: "default",
       name: "default",
       inboundAllowlist: ["qq:private:112233"],
@@ -409,8 +398,6 @@ describe("application API gateway", () => {
         timeZone: "Asia/Shanghai",
       },
       ai: { providers: [] },
-      memory: { enabled: false },
-      platforms: [],
     });
     const app = await createHttpApplication({ config, configuration });
 
@@ -468,7 +455,6 @@ describe("application API gateway", () => {
       const created = await management.createProfile("work");
       const payload = {
         ...readyProfileReplacement("work", "light-model", "heavy-model"),
-        memory: { enabled: true },
       };
 
       const response = await app.inject({
@@ -488,8 +474,6 @@ describe("application API gateway", () => {
             inboundAllowlist: payload.inboundAllowlist,
             outboundAllowlist: payload.outboundAllowlist,
             ai: payload.ai,
-            memory: { enabled: true },
-            platforms: [],
           },
         },
       });
@@ -1324,8 +1308,6 @@ async function withManagementApp(
     acknowledgedWarnings: [],
     identity: profile.identity,
     ai: profile.ai,
-    memory: profile.memory,
-    platforms: profile.platforms,
     runtime: {
       host: "127.0.0.1",
       port: 3000,
@@ -1364,7 +1346,6 @@ function stubManagement(): ConfigurationManagement {
       issues: [],
     })),
     getProfile: vi.fn(async () => ({
-      version: 1 as const,
       id: "default",
       name: "default",
       inboundAllowlist: [],
@@ -1373,8 +1354,6 @@ function stubManagement(): ConfigurationManagement {
         timeZone: "Asia/Shanghai",
       },
       ai: { providers: [] },
-      memory: { enabled: false },
-      platforms: [],
     })),
     createProfile: vi.fn(),
     replaceProfile: vi.fn(),
@@ -1414,8 +1393,6 @@ function readyProfileReplacement(
         },
       ],
     },
-    memory: { enabled: false },
-    platforms: [],
   };
 }
 
@@ -1528,8 +1505,6 @@ it("Profile 校验通过真实 HTTP 返回安全字段路径，GET 检查属于�
         timeZone: "Asia/Shanghai",
       },
       ai: { providers: [] },
-      memory: { enabled: false },
-      platforms: [],
       acknowledgedWarnings: [],
     };
     const invalid = await app.inject({

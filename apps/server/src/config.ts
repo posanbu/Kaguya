@@ -15,6 +15,7 @@ import {
   runtimeConfigSchema,
   type RuntimeConfig,
   type UserConfigProfile,
+  type ModuleInstanceConfig,
 } from "@kaguya/config";
 
 const defaultConfigRoot = fileURLToPath(
@@ -80,6 +81,11 @@ export function createServerConfig(
   profile: UserConfigProfile,
   bootstrap: ServerBootstrapConfig,
   nextGatewayToken: () => string = () => randomBytes(32).toString("base64url"),
+  napcat: NapCatConfig = {
+    enabled: false,
+    adapterId: "napcat.qq.main",
+    reconnectMs: 3000,
+  },
 ): ServerConfig {
   const result = runtimeConfigSchema.safeParse(profile.runtime);
   if (!result.success) throw new ServerRuntimeConfigurationError();
@@ -101,7 +107,7 @@ export function createServerConfig(
     logFormat: runtime.logFormat,
     inboundAllowlist: runtime.inboundAllowlist,
     outboundAllowlist: runtime.outboundAllowlist,
-    napcat: inspectNapCatConfig(profile),
+    napcat,
   };
 }
 
@@ -113,9 +119,11 @@ export function assertLoopbackHost(host: string): void {
   }
 }
 
-export function inspectNapCatConfig(profile: UserConfigProfile): NapCatConfig {
+export function inspectNapCatConfig(
+  configs: readonly ModuleInstanceConfig[],
+): NapCatConfig {
   try {
-    return readNapCatConfig(profile);
+    return readNapCatConfig(configs);
   } catch {
     return {
       enabled: true,
@@ -126,31 +134,25 @@ export function inspectNapCatConfig(profile: UserConfigProfile): NapCatConfig {
   }
 }
 
-function readNapCatConfig(profile: UserConfigProfile): NapCatConfig {
-  const configured = profile.platforms.filter(
-    ({ enabled, type }) => enabled && type === "napcat",
+function readNapCatConfig(
+  configs: readonly ModuleInstanceConfig[],
+): NapCatConfig {
+  const platform = configs.find(
+    (item) => item.definitionId === "adapter.napcat",
   );
-  if (configured.length === 0) {
+  if (!platform?.enabled) {
     return {
       enabled: false,
       adapterId: "napcat.qq.main",
       reconnectMs: 3000,
     };
   }
-  if (configured.length !== 1) {
-    throw new ServerRuntimeConfigurationError(
-      "Selected Profile must enable at most one NapCat platform",
-    );
-  }
-  const platform = configured[0]!;
-  const adapterId = stringSetting(platform.settings.adapterId);
+  const adapterId = "napcat.qq.main";
   const wsUrl = stringSetting(platform.settings.wsUrl);
   const selfId = stringSetting(platform.settings.selfId);
   const reconnectMs = numberSetting(platform.settings.reconnectMs);
-  const accessToken = stringSetting(platform.credentials.accessToken);
+  const accessToken = stringSetting(platform.settings.accessToken);
   if (
-    adapterId === undefined ||
-    adapterId === "web.ui.main" ||
     wsUrl === undefined ||
     reconnectMs === undefined ||
     !Number.isInteger(reconnectMs) ||

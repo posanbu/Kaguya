@@ -1037,8 +1037,6 @@ describe("unified server composition", () => {
             },
           ],
         },
-        memory: { enabled: false },
-        platforms: [],
       });
       await manager.acknowledgeConfigurationWarnings(
         manager.getSelectedProfileId(),
@@ -1266,8 +1264,6 @@ function readyProfileSettings(lightModelId: string, heavyModelId: string) {
         },
       ],
     },
-    memory: { enabled: false },
-    platforms: [],
   };
 }
 

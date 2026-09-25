@@ -13,15 +13,34 @@ const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const fn of cleanup.splice(0).reverse()) await fn();
 });
-const configs = createFirstPartyModuleConfigDefaults("test").filter(
-  (config) => config.definitionId === "memory.identity",
-);
 async function fixture(
   options: { enabled?: boolean; vector?: boolean; cognition?: boolean } = {},
 ) {
   const database = await createTestingDatabase({
     vector: options.vector ?? false,
   });
+  const configs = createFirstPartyModuleConfigDefaults("test")
+    .filter((config) =>
+      [
+        "memory.identity",
+        "memory.writeback",
+        "memory.index",
+        "memory.cognition",
+      ].includes(config.definitionId),
+    )
+    .map((config) => ({
+      ...config,
+      enabled:
+        config.definitionId === "memory.identity" ||
+        (options.enabled !== false &&
+          config.definitionId === "memory.writeback") ||
+        (options.enabled !== false &&
+          options.vector === true &&
+          config.definitionId === "memory.index") ||
+        (options.enabled !== false &&
+          options.cognition === true &&
+          config.definitionId === "memory.cognition"),
+    }));
   cleanup.push(() => database.close());
   const embed = vi.fn(async () => [1, 0]);
   const evolve = vi.fn(
@@ -93,6 +112,40 @@ async function fixture(
   return { database, runtime, create, embed, evolve, submit, find, wait };
 }
 describe("independent Memory background loop", () => {
+  it("switches raw Memory without restarting the identity module or deleting saved messages", async () => {
+    const f = await fixture();
+    await f.submit();
+    await f.wait("memory.writeback.completed");
+    const configs = createFirstPartyModuleConfigDefaults("test").filter(
+      (config) =>
+        ["memory.identity", "memory.writeback"].includes(config.definitionId),
+    );
+    const switchRaw = async (enabled: boolean) => {
+      const composition = createMessageComposition(undefined, {
+        moduleConfigs: configs.map((config) => ({
+          ...config,
+          enabled: config.definitionId === "memory.identity" || enabled,
+        })),
+        memoryEnabled: enabled,
+      });
+      await f.runtime.replaceMemoryFeatures({
+        memory: composition.memory,
+        activations: composition.activations,
+        capabilities: composition.capabilities,
+      });
+    };
+    await switchRaw(false);
+    await f.submit(f.runtime, "关闭期间的消息", "second");
+    await f.wait("memory.identity.person.context.completed", 2);
+    expect(await f.find("memory.writeback.completed")).toHaveLength(1);
+    await switchRaw(true);
+    await f.submit(f.runtime, "重新开启后的消息", "third");
+    await f.wait("memory.writeback.completed", 2);
+    expect(
+      await f.database.memory.recall({ query: "月亮", limit: 10 }),
+    ).toHaveLength(1);
+  });
+
   it("writes, embeds and publishes evidence without online modules", async () => {
     const f = await fixture({ vector: true, cognition: true });
     await f.submit();

@@ -188,16 +188,6 @@ function readySettings(
         },
       ],
     },
-    memory: { enabled: false },
-    platforms: [
-      {
-        id: "platform-1",
-        type: "test",
-        enabled: true,
-        credentials: {},
-        settings: {},
-      },
-    ],
   };
 }
 
@@ -220,8 +210,6 @@ function reviewSettings(): UserConfigProfileSettings {
         },
       ],
     },
-    memory: { enabled: false },
-    platforms: [],
   };
 }
 
@@ -272,15 +260,12 @@ describe("FileUserConfigManager profile lifecycle", () => {
       expect(
         await readJson(join(rootDir, "profiles/profile_default.json")),
       ).toEqual({
-        version: 1,
         id: "default",
         name: "default",
         identity: expect.objectContaining({
           timeZone: "Asia/Shanghai",
         }),
         ai: { providers: [] },
-        memory: { enabled: false },
-        platforms: [],
       });
       await expect(FileUserConfigManager.inspect({ rootDir })).resolves.toEqual(
         expect.objectContaining({
@@ -367,8 +352,6 @@ describe("FileUserConfigManager profile lifecycle", () => {
           },
         ],
       },
-      memory: { enabled: false },
-      platforms: [],
     });
 
     expect((await manager.getProfile(created.id)).ai.providers[0]?.apiKey).toBe(
@@ -406,8 +389,6 @@ describe("FileUserConfigManager profile lifecycle", () => {
             ? { defaultProviderId: undefined }
             : {}),
         },
-        memory: { enabled: false },
-        platforms: [],
       };
 
       const created = await manager.createProfile(`invalid-${field}`);
@@ -456,8 +437,6 @@ describe("FileUserConfigManager profile lifecycle", () => {
           },
         ],
       },
-      memory: { enabled: false },
-      platforms: [],
     });
     const reopened = await FileUserConfigManager.open({ rootDir });
     const reopenedProfile = await reopened.getProfile(created.id);
@@ -468,7 +447,7 @@ describe("FileUserConfigManager profile lifecycle", () => {
     expect(Object.hasOwn(replaced.ai.providers[0]!, "apiKey")).toBe(false);
   });
 
-  it("persists explicit Memory enablement across replacement and reopen", async () => {
+  it("keeps Profiles independent from Memory modules", async () => {
     const rootDir = await createBootstrappedRoot();
     const manager = await FileUserConfigManager.open({ rootDir });
     const created = await manager.createProfile("memory-enabled");
@@ -479,13 +458,12 @@ describe("FileUserConfigManager profile lifecycle", () => {
       name: created.name,
       acknowledgedWarnings: [],
       identity,
-      memory: { enabled: true },
     });
     const reopened = await FileUserConfigManager.open({ rootDir });
 
-    expect(replaced.memory).toEqual({ enabled: true });
+    expect(replaced).not.toHaveProperty("memory");
     await expect(reopened.getProfile(created.id)).resolves.toMatchObject({
-      memory: { enabled: true },
+      id: created.id,
     });
   });
 
@@ -510,8 +488,6 @@ describe("FileUserConfigManager profile lifecycle", () => {
           },
         ],
       },
-      memory: { enabled: false },
-      platforms: [],
     });
 
     replaced.ai.providers[0]!.apiKey = "mutated";
@@ -542,8 +518,6 @@ describe("FileUserConfigManager profile lifecycle", () => {
         identity,
         name: " renamed ",
         ai: { providers: [] },
-        memory: { enabled: false },
-        platforms: [],
       }),
     ).resolves.toMatchObject({
       name: "renamed",
@@ -563,8 +537,6 @@ describe("FileUserConfigManager profile lifecycle", () => {
         identity,
         name: " personal ",
         ai: { providers: [] },
-        memory: { enabled: false },
-        platforms: [],
       }),
     ).rejects.toMatchObject({ code: "CONFIG_PROFILE_NAME_CONFLICT" });
   });
@@ -710,8 +682,6 @@ describe("FileUserConfigManager profile lifecycle", () => {
         identity,
         name: "after-update",
         ai: { providers: [] },
-        memory: { enabled: false },
-        platforms: [],
       });
 
       expect(updated).toMatchObject({
@@ -766,8 +736,6 @@ describe("FileUserConfigManager profile lifecycle", () => {
             },
           ],
         },
-        memory: { enabled: false },
-        platforms: [],
       } as never),
     ).rejects.toMatchObject({
       code: "CONFIG_INVALID_INPUT",
@@ -790,7 +758,6 @@ describe("FileUserConfigManager profile lifecycle", () => {
         identity,
         name: "default",
         ai: { providers: [] },
-        platforms: [],
         plugins: [
           {
             id: "plugin-1",
@@ -822,41 +789,34 @@ describe("FileUserConfigManager profile lifecycle", () => {
     const settings = JSON.parse(
       '{"__proto__":{"constructor":{"prototype":"nested-secret"}},"constructor":"own-constructor","prototype":["own-prototype"]}',
     ) as JsonObject;
-    const credentials = JSON.parse(
-      '{"__proto__":"credential-proto","constructor":"credential-constructor","prototype":"credential-prototype"}',
-    ) as JsonObject;
 
     const created = await manager.createProfile("prototype-keys");
     const replaced = await manager.replaceProfile(created.id, {
       acknowledgedWarnings: [],
       identity,
       name: created.name,
-      ai: { providers: [] },
-      memory: { enabled: false },
-      platforms: [
-        {
-          id: "platform-1",
-          type: "test",
-          enabled: true,
-          credentials,
-          settings,
-        },
-      ],
+      ai: {
+        providers: [
+          {
+            id: "provider",
+            type: "openai-compatible",
+            enabled: false,
+            models: [],
+            settings,
+          },
+        ],
+      },
     });
     const firstRead = await manager.getProfile(created.id);
     const reopened = await FileUserConfigManager.open({ rootDir });
     const reopenedRead = await reopened.getProfile(created.id);
 
     for (const profile of [replaced, firstRead, reopenedRead]) {
-      const platformSettings = profile.platforms[0]!.settings;
-      const platformCredentials = profile.platforms[0]!.credentials;
-      expect(Object.hasOwn(platformSettings, "__proto__")).toBe(true);
-      expect(Object.hasOwn(platformSettings, "constructor")).toBe(true);
-      expect(Object.hasOwn(platformSettings, "prototype")).toBe(true);
-      expect(JSON.stringify(platformSettings)).toBe(JSON.stringify(settings));
-      expect(JSON.stringify(platformCredentials)).toBe(
-        JSON.stringify(credentials),
-      );
+      const providerSettings = profile.ai.providers[0]!.settings;
+      expect(Object.hasOwn(providerSettings, "__proto__")).toBe(true);
+      expect(Object.hasOwn(providerSettings, "constructor")).toBe(true);
+      expect(Object.hasOwn(providerSettings, "prototype")).toBe(true);
+      expect(JSON.stringify(providerSettings)).toBe(JSON.stringify(settings));
     }
 
     expect(Object.prototype).not.toHaveProperty("nested-secret");
@@ -909,8 +869,6 @@ describe("FileUserConfigManager profile lifecycle", () => {
       identity,
       name: work.name,
       ai: { providers: [] },
-      memory: { enabled: false },
-      platforms: [],
     });
     sensitiveFileFaults.write.push({
       target: "index",
@@ -923,8 +881,6 @@ describe("FileUserConfigManager profile lifecycle", () => {
         identity,
         name: work.name,
         ai: { providers: [] },
-        memory: { enabled: true },
-        platforms: [],
       }),
     ).rejects.toMatchObject({
       code: "CONFIG_IO_ERROR",
@@ -937,8 +893,8 @@ describe("FileUserConfigManager profile lifecycle", () => {
           join(rootDir, "profiles", `profile_${work.id}.json`),
           "utf8",
         ),
-      ).memory,
-    ).toEqual({ enabled: false });
+      ).id,
+    ).toBe(work.id);
   });
 
   it("reports a failed replacement rollback as the cause", async () => {
@@ -950,8 +906,6 @@ describe("FileUserConfigManager profile lifecycle", () => {
       identity,
       name: work.name,
       ai: { providers: [] },
-      memory: { enabled: false },
-      platforms: [],
     });
     const path = join(rootDir, "profiles", `profile_${work.id}.json`);
     sensitiveFileFaults.write.push(
@@ -971,8 +925,6 @@ describe("FileUserConfigManager profile lifecycle", () => {
         identity,
         name: work.name,
         ai: { providers: [] },
-        memory: { enabled: true },
-        platforms: [],
       }),
     ).rejects.toMatchObject({
       code: "CONFIG_IO_ERROR",
@@ -1100,8 +1052,6 @@ describe("FileUserConfigManager profile resolution", () => {
           },
         ],
       },
-      memory: { enabled: false },
-      platforms: [],
     });
 
     const error = await manager
@@ -1175,6 +1125,28 @@ describe("FileUserConfigManager corruption safety", () => {
     },
   );
 
+  it.each([1, 2])(
+    "rejects a versioned Profile %i without migrating it",
+    async (version) => {
+      const rootDir = await createBootstrappedRoot();
+      const path = join(rootDir, "profiles/profile_default.json");
+      const profile = JSON.parse(await readFile(path, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      profile.version = version;
+      await writeFile(path, JSON.stringify(profile), "utf8");
+      const before = await readFile(path, "utf8");
+      await expect(
+        FileUserConfigManager.open({ rootDir }),
+      ).rejects.toMatchObject({
+        code: "CONFIG_CORRUPT_STORE",
+        message: expect.stringContaining("Versioned Profiles are unsupported"),
+      });
+      await expect(readFile(path, "utf8")).resolves.toBe(before);
+    },
+  );
+
   it("rejects a malformed referenced profile without exposing its secret", async () => {
     const rootDir = await createBootstrappedRoot();
     const manager = await FileUserConfigManager.open({ rootDir });
@@ -1184,11 +1156,9 @@ describe("FileUserConfigManager corruption safety", () => {
     await writeFile(
       path,
       JSON.stringify({
-        version: 1,
         id: profileId,
         name: "default",
         ai: { providers: [] },
-        platforms: [],
         plugins: [{ id: "", enabled: true, settings: { token: secret } }],
       }),
       "utf8",
@@ -1225,7 +1195,7 @@ describe("FileUserConfigManager corruption safety", () => {
       rateLimitWindowMs: 60_000,
       logLevel: "info",
       logFormat: "json",
-      inboundAllowlist: { platforms: [], userIds: [], groupIds: [] },
+      inboundAllowlist: { userIds: [], groupIds: [] },
       outboundAllowlist: [],
     };
     await writeFile(path, JSON.stringify(profile), "utf8");
@@ -1282,8 +1252,6 @@ describe("FileUserConfigManager corruption safety", () => {
           defaultProviderId: "missing",
           providers: [],
         },
-        memory: { enabled: false },
-        platforms: [],
         plugins: [{ id: "", enabled: true, settings: { token: secret } }],
       } as never)
       .catch((caught: unknown) => caught);

@@ -382,8 +382,6 @@ async function replaceProfileRuntime(
     acknowledgedWarnings: profile.review?.acknowledgedWarnings ?? [],
     identity: profile.identity,
     ai: profile.ai,
-    memory: profile.memory,
-    platforms: profile.platforms,
     runtime,
   });
 }

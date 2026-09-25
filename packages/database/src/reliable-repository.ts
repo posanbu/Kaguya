@@ -68,6 +68,21 @@ export class ReliableInformationRepository implements ReliableInformationLedger 
     });
   }
 
+  async setSubscription(
+    subscription: DurableSubscriptionDefinition,
+    enabled: boolean,
+  ): Promise<void> {
+    identity(subscription.subscriptionId);
+    const result = await this.db.query(
+      `INSERT INTO information_subscriptions(subscription_id, kind, enabled) VALUES ($1,$2,$3)
+       ON CONFLICT(subscription_id) DO UPDATE SET enabled = EXCLUDED.enabled
+       WHERE information_subscriptions.kind = EXCLUDED.kind RETURNING subscription_id`,
+      [subscription.subscriptionId, subscription.kind, enabled],
+    );
+    if (!result.rowCount)
+      throw new Error("Durable subscription identity changed kind");
+  }
+
   async claim(
     subscriptionId: string,
     leaseMs: number,

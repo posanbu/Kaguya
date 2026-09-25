@@ -47,11 +47,6 @@ interface MutableProfile {
     };
     providers: MutableProvider[];
   };
-  memory: {
-    enabled: boolean;
-    knowledgeEnabled?: boolean;
-  };
-  platforms: MutablePlatform[];
   review?: {
     acknowledgedWarnings: string[];
   };
@@ -79,14 +74,6 @@ interface MutableProvider {
   settings: Record<string, unknown>;
 }
 
-interface MutablePlatform {
-  id: string;
-  type: string;
-  enabled: boolean;
-  credentials: Record<string, unknown>;
-  settings: Record<string, unknown>;
-}
-
 export interface ProfileEditorFields {
   readonly name: string;
   readonly agentTimeZone: string;
@@ -104,8 +91,6 @@ export interface ProfileEditorFields {
   readonly heavyRecommendedDurationMs: string;
   readonly inboundAllowlistText: string;
   readonly outboundAllowlistText: string;
-  readonly memoryEnabled: boolean;
-  readonly memoryKnowledgeEnabled: boolean;
 }
 
 export function profileToEditorFields(
@@ -148,8 +133,6 @@ export function profileToEditorFields(
     ),
     inboundAllowlistText: profile.inboundAllowlist.join("\n"),
     outboundAllowlistText: profile.outboundAllowlist.join("\n"),
-    memoryEnabled: profile.memory.enabled,
-    memoryKnowledgeEnabled: profile.memory.knowledgeEnabled ?? false,
   };
 }
 
@@ -164,12 +147,6 @@ export function mergeProfileEditorFields(
   next.identity = {
     timeZone: fields.agentTimeZone.trim(),
   };
-  next.memory.enabled = fields.memoryEnabled;
-  if (
-    fields.memoryKnowledgeEnabled ||
-    next.memory.knowledgeEnabled !== undefined
-  )
-    next.memory.knowledgeEnabled = fields.memoryKnowledgeEnabled;
   next.inboundAllowlist = fields.inboundAllowlistText
     .split(/\r?\n/u)
     .map((rule) => rule.trim())
@@ -202,8 +179,6 @@ export function mergeProfileEditorFields(
     identity: next.identity,
     acknowledgedWarnings: computeAcknowledgedWarnings(next),
     ai: next.ai as ReplaceProfileInput["ai"],
-    memory: next.memory,
-    platforms: next.platforms,
   };
 }
 

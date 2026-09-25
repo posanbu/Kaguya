@@ -110,26 +110,17 @@ const retrievalSchema = z
   .strict();
 
 export class InformationSelectorExecutor {
-  readonly #strategies: ReadonlyMap<string, InformationRetrievalStrategy>;
+  #strategies: ReadonlyMap<string, InformationRetrievalStrategy>;
 
   constructor(
     private readonly ledger: InformationLedger,
     strategies: readonly InformationRetrievalStrategy[] = [],
   ) {
-    const byId = new Map<string, InformationRetrievalStrategy>();
-    for (const strategy of strategies) {
-      const strategyId = strategy.strategyId.trim();
-      if (strategyId.length === 0) {
-        throw new Error("information retrieval strategy id must not be blank");
-      }
-      if (byId.has(strategyId)) {
-        throw new Error(
-          `Duplicate information retrieval strategy: ${strategyId}`,
-        );
-      }
-      byId.set(strategyId, strategy);
-    }
-    this.#strategies = byId;
+    this.#strategies = validateStrategies(strategies);
+  }
+
+  replaceStrategies(strategies: readonly InformationRetrievalStrategy[]): void {
+    this.#strategies = validateStrategies(strategies);
   }
 
   async select(
@@ -186,6 +177,25 @@ export class InformationSelectorExecutor {
       }),
     );
   }
+}
+
+function validateStrategies(
+  strategies: readonly InformationRetrievalStrategy[],
+) {
+  const byId = new Map<string, InformationRetrievalStrategy>();
+  for (const strategy of strategies) {
+    const strategyId = strategy.strategyId.trim();
+    if (strategyId.length === 0) {
+      throw new Error("information retrieval strategy id must not be blank");
+    }
+    if (byId.has(strategyId)) {
+      throw new Error(
+        `Duplicate information retrieval strategy: ${strategyId}`,
+      );
+    }
+    byId.set(strategyId, strategy);
+  }
+  return byId;
 }
 
 class SelectorReadScope {

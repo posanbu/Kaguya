@@ -128,7 +128,43 @@ export const memoryIndexModule = defineInformationModule({
     summary: "为原始记忆建立按模型版本隔离的可恢复向量。",
     description:
       "消费写回完成事实和有界回填请求，通过嵌入能力建立派生向量并记录处理结果；保留原始记忆，支持分页恢复，不触发在线回合。",
-    settingsSchema: z.object({}).strict(),
+    settingsSchema: z
+      .object({
+        providerId: z.string().min(1).optional().meta({
+          title: "提供方 ID",
+          description: "Embedding 提供方标识。",
+          public: true,
+        }),
+        modelId: z.string().min(1).optional().meta({
+          title: "模型 ID",
+          description: "Embedding 模型标识。",
+          public: true,
+        }),
+        revision: z
+          .string()
+          .min(1)
+          .optional()
+          .meta({ title: "版本", description: "模型版本标识。", public: true }),
+        dimensions: z
+          .number()
+          .int()
+          .min(1)
+          .max(16000)
+          .optional()
+          .meta({ title: "维度", description: "向量维度。", public: true }),
+        baseUrl: z.url().optional().meta({
+          title: "服务地址",
+          description: "Embedding API 地址。",
+          public: true,
+        }),
+        apiKey: z.string().min(1).optional().meta({
+          title: "API Key",
+          description: "Embedding API 凭据；留空则保留原值。",
+          public: true,
+          secret: true,
+        }),
+      })
+      .strict(),
     consumes: [
       memoryWritebackCompletedInformationKind,
       memoryIndexRequestedInformationKind,
@@ -156,7 +192,7 @@ export const memoryIndexModule = defineInformationModule({
       bootstrap = lifecycle.use(memoryIndexBootstrapCapability);
     return {
       provisions: [],
-      start: () => bootstrap.requestBackfill(provider.identity),
+      ready: () => bootstrap.requestBackfill(provider.identity),
       subscriptions: [
         onInformation(
           memoryWritebackCompletedInformationKind,

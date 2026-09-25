@@ -81,7 +81,6 @@ await configs.replaceProfile("default", {
       },
     ],
   },
-  memory: { enabled: false },
   runtime: {
     host: "127.0.0.1",
     port: 3000,
@@ -97,7 +96,6 @@ await configs.replaceProfile("default", {
     inboundAllowlist: ["qq:group:REPLACE_GROUP_ID"],
     outboundAllowlist: ["qq:private:REPLACE_USER_ID"],
   },
-  platforms: [],
   acknowledgedWarnings: [],
 });
 ```
@@ -136,8 +134,6 @@ await configs.replaceProfile(created.id, {
       },
     ],
   },
-  memory: { enabled: false },
-  platforms: [],
   acknowledgedWarnings: [],
 });
 
@@ -162,16 +158,15 @@ now requires an explicit ID and never falls back. Existing profiles without
 `ai.modelTiers` remain editable, but their readiness is `invalid`; target
 selection is never inferred from provider model-array order.
 
-`replaceProfile()` replaces the complete `ai`, `memory`, and `platforms`
-settings set; it is not a partial merge. The reserved `default` profile may be
+`replaceProfile()` replaces the complete `ai` settings set; it is not a partial merge. The reserved `default` profile may be
 configured, but it cannot be renamed or deleted. The registry index and Profile
-formats both require `version: 1`; the index contains metadata plus
-`selectedProfileId`. Other versions and legacy shapes fail ordinary schema
+formats use `version: 1` for the registry index and no version field for Profiles; the index contains metadata plus
+`selectedProfileId`. Versioned Profiles and legacy shapes fail ordinary schema
 validation. Existing documents are never converted, repaired, or deleted.
 
 At server startup, `KAGUYA_CONFIG_ROOT` is loaded into a profile
 registry. The selected Profile is the persisted source for runtime, database,
-AI, Memory, platforms, and review. Module activation is configured separately
+AI, and review. Memory and NapCat are global module and adapter instances configured
 under `modules/<instanceId>/config.json`. The development PostgreSQL command
 may add a complete safe local `runtime` only when that field is entirely absent;
 it never replaces a partially invalid runtime. Database connection, PostgreSQL
@@ -217,8 +212,8 @@ remove it from repository history where required.
 
 Use `validateStartupConfiguration({ rootDir })` for a read-only validation pass
 before constructing runtime services. It opens the existing registry, validates
-the selected Profile and its `runtime` settings, requires an enabled non-Web
-platform, and applies adapter-specific checks to NapCat entries. Runtime
+the selected Profile and its `runtime` settings. NapCat is validated from its
+global adapter instance when enabled. Runtime
 configuration uses a PostgreSQL `databaseUrl`; it does not
 bootstrap a missing registry or mutate files.
 
@@ -247,7 +242,7 @@ issue list rather than the Profile object or the original configuration error.
 
 ## 旧 Registry 手动更新
 
-不提供自动迁移 API，Server 与开发数据库准备均只接受严格 v1 配置。用户需停止服务、备份整个 Registry，再手动更新 Profile 字段和索引版本。不要只把 version 从 3 改成 1；旧 plugins、runtime.gatewayToken 需要移除，identity、memory 及 runtime 必填字段需要补齐。完整操作与恢复步骤见根 README。
+不提供自动迁移 API。旧 Profile 的 `version`、`memory` 和 `platforms` 字段，以及缺少新版 Memory 与适配器实例的模块目录会明确报错。用户需停止服务、备份配置目录和数据库，建立无版本字段的 Profile 与完整模块实例，重新填写 provider 和 NapCat 设置。原有 PostgreSQL 数据库可继续使用，停用开关不会删除记录。操作说明见[配置指南](../../docs/guide/configuration.md)。
 
 `ai.modelTiers.light.generation.timeoutMs` 与 `heavy.generation.timeoutMs` 可配置 1–300000 ms 的模型硬超时。省略时使用 300000 ms；`recommendedDurationMs` 仍是独立的软预算。
 

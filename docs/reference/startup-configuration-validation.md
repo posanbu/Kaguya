@@ -30,12 +30,12 @@ Server 启动失败日志使用稳定的 `phase` 标记失败位置：`configura
 
 校验按照配置依赖关系分为几个层次：
 
-- Registry：确认 `index.json`、Profile 版本和 selected Profile 可以安全读取；
-- Profile：检查 AI provider、模型层级、平台条目和插件条目的 schema；
-- Runtime：检查监听地址、端口、PostgreSQL database URL、路径、网关令牌、CORS、代理信任、限流和日志参数；
-- Adapter：对已启用的 NapCat 条目检查 `ws://`/`wss://` 地址、`adapterId`、重连间隔和凭据类型。
+- Registry：确认 `index.json` 与无版本字段的 selected Profile 可以安全读取；
+- Profile：检查 AI provider、模型层级与身份设置的 schema；
+- Runtime：检查监听地址、端口、PostgreSQL database URL、路径、CORS、代理信任、限流和日志参数；
+- Adapter：NapCat 使用独立的工作区配置，启用时检查 `ws://`/`wss://` 地址、重连间隔和凭据类型。
 
-至少一个已启用的非 Web 平台是运行前置条件。Web UI 属于内建适配器，不满足这一条件；插件可以为空，但非法插件结构仍会报告错误。
+Web 适配器始终启用；NapCat 可独立关闭。启动校验不要求非 Web 平台存在。
 
 ## 配置来源与安全边界
 

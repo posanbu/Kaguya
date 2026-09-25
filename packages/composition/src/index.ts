@@ -30,7 +30,7 @@ import {
   memoryBackfillRequestedInformationKind,
 } from "@kaguya/modules";
 import { createCompatibleEmbeddingProvider } from "@kaguya/llm/embedding";
-import type { MemoryConfig } from "@kaguya/config";
+import { memoryConfigSchema, type MemoryConfig } from "@kaguya/config";
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import {
@@ -80,6 +80,11 @@ export interface MessageCompositionOptions {
   readonly moduleConfigs: readonly FirstPartyModuleInstanceConfig[];
   readonly agentIdentity?: Pick<AgentIdentity, "timeZone">;
 }
+export interface MemoryFeatureState {
+  enabled: boolean;
+  knowledgeEnabled: boolean;
+  cognitionIdentity?: CognitionIdentity;
+}
 export function createDeterministicModelSelectionResolver(): RuntimeModelSelectionResolver {
   const model = createPlanningDeterministicModel(
     "It is a lovely night for watching the moon.",
@@ -97,6 +102,7 @@ export function createMessageCatalog(
   promptTemplates = loadFirstPartyPromptTemplates(),
   memoryEnabled = false,
   qqExpressionEnabled = false,
+  memoryFeatureState?: MemoryFeatureState,
 ) {
   const agentIdentity: AgentIdentity = {
     name: promptTemplates.identityName,
@@ -122,9 +128,17 @@ export function createMessageCatalog(
     qqExpressionTemplates: promptTemplates.qqExpression,
     qqExpressionEnabled,
     agentIdentity,
-    memoryEnabled,
-    memoryKnowledgeEnabled,
-    ...(cognitionIdentity ? { cognitionIdentity } : {}),
+    memoryEnabled: memoryFeatureState
+      ? () => memoryFeatureState.enabled
+      : memoryEnabled,
+    memoryKnowledgeEnabled: memoryFeatureState
+      ? () => memoryFeatureState.knowledgeEnabled
+      : memoryKnowledgeEnabled,
+    ...(memoryFeatureState
+      ? { cognitionIdentity: () => memoryFeatureState.cognitionIdentity }
+      : cognitionIdentity
+        ? { cognitionIdentity }
+        : {}),
   });
 }
 export function createMessageComposition(
@@ -140,6 +154,14 @@ export function createMessageComposition(
     timeZone: identity.timeZone,
   };
   const renderStructuredOutputPrompt = loadStructuredOutputPromptRenderer();
+  const memoryFeatureState: MemoryFeatureState = {
+    enabled: options.memoryEnabled ?? false,
+    knowledgeEnabled:
+      !!options.memoryEnabled && !!options.memoryKnowledgeEnabled,
+    ...(options.cognition
+      ? { cognitionIdentity: options.cognition.identity }
+      : {}),
+  };
   const catalog = createMessageCatalog(
     identity,
     options.memoryEnabled ? options.cognition?.identity : undefined,
@@ -149,6 +171,7 @@ export function createMessageComposition(
     options.moduleConfigs.some(
       (c) => c.definitionId === "plugin.qq-expression" && c.enabled,
     ),
+    memoryFeatureState,
   );
   const memoryEnabled = options.memoryEnabled ?? false;
   const knowledgeEnabled =
@@ -168,53 +191,6 @@ export function createMessageComposition(
       (options.cognition !== undefined ||
         config.definitionId !== "memory.cognition"),
   );
-  if (
-    memoryEnabled &&
-    !moduleConfigs.some((config) => config.definitionId === "memory.writeback")
-  ) {
-    moduleConfigs.push({
-      version: 1,
-      instanceId: "memory.writeback.default",
-      definitionId: "memory.writeback",
-      enabled: true,
-      settings: {},
-    });
-  }
-  if (
-    memoryEnabled &&
-    options.embedding &&
-    !moduleConfigs.some((config) => config.definitionId === "memory.index")
-  )
-    moduleConfigs.push({
-      version: 1,
-      instanceId: "memory.index.default",
-      definitionId: "memory.index",
-      enabled: true,
-      settings: {},
-    });
-  if (
-    memoryEnabled &&
-    options.cognition &&
-    !moduleConfigs.some((config) => config.definitionId === "memory.cognition")
-  )
-    moduleConfigs.push({
-      version: 1,
-      instanceId: "memory.cognition.default",
-      definitionId: "memory.cognition",
-      enabled: true,
-      settings: {},
-    });
-  if (
-    knowledgeEnabled &&
-    !moduleConfigs.some((config) => config.definitionId === "memory.knowledge")
-  )
-    moduleConfigs.push({
-      version: 1,
-      instanceId: "memory.knowledge.default",
-      definitionId: "memory.knowledge",
-      enabled: true,
-      settings: {},
-    });
   const activations = createFirstPartyModuleActivations(
     catalog,
     moduleConfigs,
@@ -279,6 +255,7 @@ export function createMessageComposition(
     },
   };
   return {
+    memoryFeatureState,
     authorizedMessagePromptRenderer: createAuthorizedMessagePromptRenderer(
       promptTemplates.authorizedMessage,
     ),
@@ -354,4 +331,32 @@ export function createMemoryCompositionOptions(
       ? { cognition: new Mem0CognitionProvider(memory.cognition) }
       : {}),
   };
+}
+
+/** Derive Memory's runtime options solely from global module instances. */
+export function memoryConfigFromModules(
+  configs: readonly FirstPartyModuleInstanceConfig[],
+): MemoryConfig {
+  const active = (id: string) =>
+    configs.find((config) => config.definitionId === id && config.enabled);
+  const raw = active("memory.writeback") !== undefined;
+  const knowledge = active("memory.knowledge") !== undefined;
+  const index = active("memory.index");
+  const cognition = active("memory.cognition");
+  if (!raw && (knowledge || index || cognition))
+    throw new Error("Memory dependents require memory.writeback");
+  const config = {
+    enabled: raw,
+    knowledgeEnabled: knowledge,
+    ...(index ? { embedding: index.settings } : {}),
+    ...(cognition
+      ? { cognition: { provider: "mem0-rest", ...cognition.settings } }
+      : {}),
+  };
+  const parsed = memoryConfigSchema.safeParse(config);
+  if (!parsed.success)
+    throw new Error(
+      "Memory provider settings are incomplete. Configure the module before enabling it.",
+    );
+  return parsed.data;
 }

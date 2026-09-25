@@ -9,9 +9,9 @@ description: 配置 NapCat WebSocket、机器人账号和入站出站白名单�
 
 ## 填写连接信息
 
-在 Web UI 的“Gateway / Adapter”中打开 NapCat 设置。
+在 Web UI 的“概览”中打开 NapCat 设置；同一位置有独立开关。NapCat 是工作区级适配器，不随 Profile 切换。
 
-**启用 `enabled`** — 是否连接 NapCat，默认关闭。
+**NapCat 开关** — 是否连接 NapCat，默认关闭。普通断线会显示“已开启、重连中”。
 
 **WebSocket URL `wsUrl`** — NapCat 的正向 WebSocket 地址，以 `ws://` 或 `wss://` 开头。必须使用从 Kaguya 所在机器能够访问的地址；不要填 NapCat 管理网页地址。
 
@@ -21,7 +21,7 @@ description: 配置 NapCat WebSocket、机器人账号和入站出站白名单�
 
 **重连间隔 `reconnectMs`** — 连接断开后再次尝试的间隔，默认 `3000` 毫秒，范围 `100–3600000`。它不控制回复速度。
 
-保存后还需设置白名单，再到“配置生效管理”点击“应用当前配置”。
+NapCat 设置保存后立即生效。白名单属于 Profile，保存后仍须到“配置生效管理”点击“应用当前配置”。
 
 ## 允许哪些群和私聊
 
@@ -52,7 +52,7 @@ qq:private:987654321
 
 ## 验证接入
 
-1. 保存 NapCat 和白名单，并应用当前配置。
+1. 保存 NapCat 设置，开启 NapCat，再保存白名单并应用当前 Profile。
 2. 在“Gateway / Adapter”确认 NapCat 已连接，Runtime 可用。
 3. 在允许的群里 @ 机器人发送一句话，或从允许的 QQ 号私聊。
 

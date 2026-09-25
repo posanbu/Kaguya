@@ -82,8 +82,6 @@ async function fixture(incomplete = false) {
         },
       ],
     },
-    memory: { enabled: false },
-    platforms: [],
     runtime: {
       host: "127.0.0.1",
       port: 3000,
@@ -162,8 +160,6 @@ async function save(server: StartedKaguyaServer) {
           apiKey: "updated-private-key",
         })),
       },
-      memory: { enabled: true },
-      platforms: loaded.platforms,
       inboundAllowlist: ["qq:group:123"],
       outboundAllowlist: ["qq:group:123"],
     },
@@ -391,32 +387,46 @@ it("keeps management available after rollback failure and recovers on explicit r
   );
 });
 
-it("rolls back adapter startup failure and applies persisted NapCat settings on retry", async () => {
+it("restores NapCat configuration after targeted activation fails and allows retry", async () => {
   const f = await fixture();
-  const initial = await status(f.server);
+  const current = await f.server.app.inject({ url: "/api/v1/napcat", headers });
+  expect(current.statusCode).toBe(200);
+  const payload = {
+    revision: current.json().data.revision,
+    enabled: false,
+    wsUrl: "ws://127.0.0.1:9",
+    selfId: "123",
+    accessToken: "fake-napcat-token",
+    reconnectMs: 4000,
+  };
+  vi.spyOn(AdapterHost.prototype, "replaceAdapter").mockRejectedValueOnce(
+    new Error("adapter failed"),
+  );
+  const failed = await f.server.app.inject({
+    method: "PUT",
+    url: "/api/v1/napcat",
+    headers,
+    payload,
+  });
+  expect(failed.statusCode).toBe(503);
+  expect(
+    (await f.server.app.inject({ url: "/api/v1/napcat", headers })).json().data,
+  ).toMatchObject({
+    enabled: false,
+    reconnectMs: 3000,
+    revision: payload.revision,
+  });
   const saved = await f.server.app.inject({
     method: "PUT",
     url: "/api/v1/napcat",
     headers,
-    payload: {
-      enabled: false,
-      wsUrl: "ws://127.0.0.1:9",
-      selfId: "123",
-      accessToken: "fake-napcat-token",
-      reconnectMs: 4000,
-    },
+    payload,
   });
   expect(saved.statusCode).toBe(200);
-  const next = saved.json().data.application;
-  vi.spyOn(AdapterHost.prototype, "start").mockRejectedValueOnce(
-    new Error("adapter failed"),
-  );
-  expect((await apply(f.server, next)).json().data).toMatchObject({
-    status: "failed",
-    application: { appliedRevision: initial.appliedRevision },
+  expect(saved.json().data).toMatchObject({
+    restartRequired: false,
+    status: { enabled: false, reconnectMs: 4000 },
   });
-  expect((await apply(f.server, next)).json().data.status).toBe("applied");
-  expect((await status(f.server)).appliedRevision).toBe(next.selectedRevision);
 });
 
 it("switches the selected Profile with matching applied identity", async () => {

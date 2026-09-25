@@ -59,6 +59,7 @@ import {
   memoryVectorCapability,
   HybridMemoryRecall,
   type EmbeddingProvider,
+  type CognitionIdentity,
 } from "@kaguya/memory";
 import { PostgresMemoryVectorIndex } from "@kaguya/database";
 import {
@@ -158,6 +159,19 @@ export interface RuntimeMemoryOptions {
   readonly embedding?: EmbeddingProvider;
 }
 
+const MEMORY_FEATURE_IDS = new Set([
+  "memory.writeback",
+  "memory.knowledge",
+  "memory.index",
+  "memory.cognition",
+]);
+function isMemoryFeature(definitionId: string): boolean {
+  return MEMORY_FEATURE_IDS.has(definitionId);
+}
+function isMemoryCapability(id: string): boolean {
+  return id.startsWith("memory:");
+}
+
 type KaguyaRuntimeBaseOptions = {
   /** 由 composition 注入已选择 default/local 的授权消息渲染器。 */
   readonly authorizedMessagePromptRenderer?: AuthorizedMessagePromptRenderer;
@@ -175,6 +189,11 @@ type KaguyaRuntimeBaseOptions = {
   readonly retrievalStrategies?: readonly InformationRetrievalStrategy[];
   /** 默认关闭；开启后装配内置 PostgreSQL Memory capability 与稀疏召回。 */
   readonly memory?: RuntimeMemoryOptions;
+  readonly memoryFeatureState?: {
+    enabled: boolean;
+    knowledgeEnabled: boolean;
+    cognitionIdentity?: CognitionIdentity;
+  };
   readonly modelTask?: RuntimeModelTaskOptions;
   readonly cadence?: {
     readonly definitions: readonly CadenceDefinitionInput[];
@@ -294,6 +313,12 @@ export class KaguyaRuntime implements InformationIngress {
   #ownsDatabase = false;
   #core: InformationCore | undefined;
   #moduleHost: ModuleHost | undefined;
+  readonly #memoryHosts = new Map<
+    string,
+    { host: ModuleHost; activation: InformationModuleActivation }
+  >();
+  #hostCapabilities: readonly ModuleCapabilityImplementation[] = [];
+  #memoryOptions: RuntimeMemoryOptions = { enabled: false };
   #cadence: CadenceCoordinator | undefined;
   #cadenceUnsubscribe: readonly (() => void)[] = [];
   #oneShotSchedule: OneShotScheduleCapability | undefined;
@@ -332,7 +357,16 @@ export class KaguyaRuntime implements InformationIngress {
   inspectModules() {
     if (this.#state !== "started" || this.#moduleHost === undefined)
       throw new RuntimeUnavailableError("Runtime inspection is unavailable");
-    return this.#moduleHost.inspect();
+    const main = this.#moduleHost.inspect();
+    const auxiliary = [...this.#memoryHosts.values()].flatMap(({ host }) =>
+      host.inspect(),
+    );
+    return main.map((definition) => {
+      const active = auxiliary.find(
+        (item) => item.definitionId === definition.definitionId,
+      );
+      return active ? { ...definition, bindings: active.bindings } : definition;
+    });
   }
 
   registerTransport(registration: RuntimeTransportRegistration): void {
@@ -346,6 +380,226 @@ export class KaguyaRuntime implements InformationIngress {
       throw new Error(`Duplicate outbound transport: ${key}`);
     }
     this.#transports.set(key, registration);
+  }
+
+  /** Replace only Memory workers and retrieval; the online host and Web ingress stay live. */
+  async replaceMemoryFeatures(input: {
+    memory: RuntimeMemoryOptions;
+    activations: readonly InformationModuleActivation[];
+    capabilities?: RuntimeCapabilities;
+    cognitionIdentity?: CognitionIdentity;
+  }): Promise<void> {
+    if (
+      this.#state !== "started" ||
+      !this.#core ||
+      !this.#database ||
+      !this.#oneShotSchedule
+    )
+      throw new RuntimeUnavailableError(
+        "Memory switching requires a running Runtime",
+      );
+    const core = this.#core;
+    const database = this.#database;
+    const desired = input.activations.filter((item) =>
+      isMemoryFeature(item.definitionId),
+    );
+    if (!input.memory.enabled && desired.length)
+      throw new Error("Memory dependents require raw Memory");
+    if (
+      desired.some((item) => item.definitionId === "memory.index") &&
+      !input.memory.embedding
+    )
+      throw new Error("Embedding provider is required for memory.index");
+    if (input.memory.knowledgeEnabled)
+      await database.prepareMemoryKnowledgeSchema();
+    const vectorIndex = input.memory.embedding
+      ? new PostgresMemoryVectorIndex(database.sql)
+      : undefined;
+    if (vectorIndex) await vectorIndex.prepare();
+    const supplied =
+      typeof input.capabilities === "function"
+        ? input.capabilities({
+            core,
+            now: this.#now,
+            oneShotSchedule: this.#oneShotSchedule,
+          })
+        : (input.capabilities ?? []);
+    const capabilities: ModuleCapabilityImplementation[] = [
+      ...this.#hostCapabilities.filter(
+        ({ capability }) => !isMemoryCapability(capability.id),
+      ),
+      ...(input.memory.enabled
+        ? [
+            { capability: memoryCapability, value: database.memory },
+            {
+              capability: memoryDocumentReaderCapability,
+              value: database.memory,
+            },
+          ]
+        : []),
+      ...(input.memory.embedding && vectorIndex
+        ? [
+            { capability: embeddingCapability, value: input.memory.embedding },
+            { capability: memoryVectorCapability, value: vectorIndex },
+          ]
+        : []),
+      ...(input.memory.knowledgeEnabled
+        ? [
+            {
+              capability: memoryKnowledgeCapability,
+              value: database.knowledge,
+            },
+            {
+              capability: memoryKnowledgeBootstrapCapability,
+              value: createMemoryKnowledgeBootstrap({ core, now: this.#now }),
+            },
+          ]
+        : []),
+      ...supplied.filter(({ capability }) => isMemoryCapability(capability.id)),
+    ];
+    const previous = new Map(this.#memoryHosts);
+    const oldCapabilities = this.#hostCapabilities;
+    const state = this.options.memoryFeatureState;
+    const oldCognitionIdentity = state?.cognitionIdentity;
+    if (!input.memory.enabled && state) state.enabled = false;
+    if (!input.memory.knowledgeEnabled && state) state.knowledgeEnabled = false;
+    try {
+      for (const [id, active] of [...this.#memoryHosts].reverse()) {
+        const next = desired.find((item) => item.definitionId === id);
+        if (next && JSON.stringify(next) === JSON.stringify(active.activation))
+          continue;
+        await active.host.stop();
+        this.#memoryHosts.delete(id);
+      }
+      for (const activation of desired) {
+        if (this.#memoryHosts.has(activation.definitionId)) continue;
+        const host = this.#createMemoryHost(capabilities);
+        await host.start([activation]);
+        this.#memoryHosts.set(activation.definitionId, { host, activation });
+      }
+      const strategies = this.#createMemoryStrategies(
+        database,
+        input.memory,
+        vectorIndex,
+      );
+      core.replaceRetrievalStrategies(strategies);
+      this.#hostCapabilities = capabilities;
+      this.#memoryOptions = input.memory;
+      if (state) {
+        state.enabled = input.memory.enabled;
+        state.knowledgeEnabled = input.memory.knowledgeEnabled ?? false;
+        if (input.cognitionIdentity)
+          state.cognitionIdentity = input.cognitionIdentity;
+        else delete state.cognitionIdentity;
+      }
+    } catch (error) {
+      const recoveryFailures: unknown[] = [];
+      for (const [id, active] of [...this.#memoryHosts].reverse()) {
+        if (previous.get(id)?.host === active.host) continue;
+        try {
+          await active.host.stop();
+        } catch (failure) {
+          recoveryFailures.push(failure);
+        }
+        this.#memoryHosts.delete(id);
+      }
+      for (const [id, old] of previous) {
+        if (this.#memoryHosts.has(id)) continue;
+        try {
+          const host = this.#createMemoryHost(oldCapabilities);
+          await host.start([old.activation]);
+          this.#memoryHosts.set(id, { host, activation: old.activation });
+        } catch (failure) {
+          recoveryFailures.push(failure);
+        }
+      }
+      if (state) {
+        state.enabled = this.#memoryOptions.enabled;
+        state.knowledgeEnabled = this.#memoryOptions.knowledgeEnabled ?? false;
+        if (oldCognitionIdentity)
+          state.cognitionIdentity = oldCognitionIdentity;
+        else delete state.cognitionIdentity;
+      }
+      if (recoveryFailures.length)
+        throw new AggregateError(
+          [error, ...recoveryFailures],
+          "Memory switch and recovery failed",
+        );
+      throw error;
+    }
+  }
+
+  #createMemoryHost(
+    capabilities: readonly ModuleCapabilityImplementation[],
+  ): ModuleHost {
+    return new ModuleHost({
+      core: this.#core!,
+      catalog: this.options.catalog,
+      capabilities,
+      now: this.#now,
+      drainTimeoutMs: this.options.drainTimeoutMs ?? 5000,
+      manageReliableDelivery: false,
+      observer: (observation) => this.#observeModule(observation),
+    });
+  }
+
+  #createMemoryStrategies(
+    database: KaguyaDatabase,
+    memory: RuntimeMemoryOptions,
+    vectorIndex?: PostgresMemoryVectorIndex,
+  ): InformationRetrievalStrategy[] {
+    const base = (this.options.retrievalStrategies ?? []).filter(
+      ({ strategyId }) =>
+        ![
+          MEMORY_RETRIEVAL_STRATEGY_ID,
+          MEMORY_KNOWLEDGE_RETRIEVAL_STRATEGY_ID,
+          MEMORY_COGNITION_EVIDENCE_GUARD_STRATEGY_ID,
+        ].includes(strategyId),
+    );
+    if (!memory.enabled) return [...base];
+    const recall =
+      vectorIndex && memory.embedding
+        ? new HybridMemoryRecall(database.memory, vectorIndex, memory.embedding)
+        : database.memory;
+    const sparse = new MemoryInformationRetrievalStrategy(recall, {
+      reportFailure: ({ errorType }) =>
+        this.#runtimeLogger?.error(
+          { event: "memory.recall.failed", errorType },
+          "Memory recall failed",
+        ),
+    });
+    const knowledge = memory.knowledgeEnabled ?? false;
+    const wrapped: InformationRetrievalStrategy = knowledge
+      ? {
+          strategyId: sparse.strategyId,
+          retrieve: async (query) => {
+            try {
+              const ids = [...(await sparse.retrieve(query))].slice(
+                0,
+                query.limit,
+              );
+              const available = new Set(
+                await database.knowledge.filterAvailableSourceIds({
+                  sourceInformationIds: ids,
+                }),
+              );
+              return ids.filter((id) => available.has(id));
+            } catch {
+              return [];
+            }
+          },
+        }
+      : sparse;
+    return [
+      ...base,
+      wrapped,
+      ...(knowledge
+        ? [
+            new MemoryKnowledgeInformationRetrievalStrategy(database.knowledge),
+            new MemoryCognitionEvidenceGuardStrategy(database.knowledge),
+          ]
+        : []),
+    ];
   }
 
   start(): Promise<void> {
@@ -634,6 +888,8 @@ export class KaguyaRuntime implements InformationIngress {
           enabledSuppliedCapabilities,
         ),
       ];
+      this.#hostCapabilities = capabilities;
+      this.#memoryOptions = this.options.memory ?? { enabled: false };
       const moduleHost = new ModuleHost({
         drainTimeoutMs: this.options.drainTimeoutMs ?? 5000,
         core,
@@ -648,7 +904,18 @@ export class KaguyaRuntime implements InformationIngress {
         deliveryRequestedInformationKind,
         (request) => this.#deliver(request),
       );
-      await moduleHost.start(this.options.activations);
+      await moduleHost.start(
+        this.options.activations.filter(
+          (activation) => !isMemoryFeature(activation.definitionId),
+        ),
+      );
+      for (const activation of this.options.activations.filter((item) =>
+        isMemoryFeature(item.definitionId),
+      )) {
+        const host = this.#createMemoryHost(capabilities);
+        await host.start([activation]);
+        this.#memoryHosts.set(activation.definitionId, { host, activation });
+      }
       this.#assertStarting();
       if (this.options.cadence !== undefined) {
         this.#cadence = new CadenceCoordinator({
@@ -726,6 +993,9 @@ export class KaguyaRuntime implements InformationIngress {
         await this.#core?.stopReliableDelivery({ drain: true });
       }
       await this.#moduleHost?.stop().catch(() => undefined);
+      await Promise.allSettled(
+        [...this.#memoryHosts.values()].map(({ host }) => host.stop()),
+      );
       await starting?.catch(() => undefined);
       await drainRuntimeOperations(
         [...this.#inFlight],
@@ -762,6 +1032,9 @@ export class KaguyaRuntime implements InformationIngress {
       this.#cadenceUnsubscribe = [];
       this.#cadence = undefined;
       try {
+        for (const { host } of [...this.#memoryHosts.values()].reverse())
+          await host.stop();
+        this.#memoryHosts.clear();
         await this.#moduleHost?.stop();
       } catch (error) {
         failures.push(error);

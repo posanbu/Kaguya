@@ -25,7 +25,7 @@ afterEach(async () => {
 });
 
 describe("startup configuration validation", () => {
-  it("reports missing runtime and external platform configuration", async () => {
+  it("reports missing runtime configuration", async () => {
     const root = await createRoot();
 
     await expect(
@@ -33,10 +33,6 @@ describe("startup configuration validation", () => {
     ).rejects.toMatchObject({
       issues: expect.arrayContaining([
         expect.objectContaining({ code: "RUNTIME_INVALID", path: "runtime" }),
-        expect.objectContaining({
-          code: "PLATFORM_REQUIRED",
-          path: "platforms",
-        }),
       ]),
     } satisfies Partial<StartupConfigurationError>);
   });
@@ -52,7 +48,7 @@ describe("startup configuration validation", () => {
     const result = await validateStartupConfiguration({ rootDir: root });
 
     expect(result.runtime.port).toBe(7897);
-    expect(result.profile.platforms[0]?.type).toBe("napcat");
+    expect(result.profile).not.toHaveProperty("version");
   });
 
   it("never includes credentials in validation issues", async () => {
@@ -60,16 +56,17 @@ describe("startup configuration validation", () => {
     const manager = await FileUserConfigManager.open({ rootDir: root });
     await manager.replaceProfile(manager.getSelectedProfileId(), {
       ...completeReplacement(),
-      platforms: [
-        {
-          id: "napcat.qq.main",
-          type: "napcat",
-          enabled: true,
-          credentials: { accessToken: "secret-token-value" },
-          settings: { adapterId: "napcat.qq.main", wsUrl: "http://bad" },
-        },
-      ],
     });
+    const path = join(root, "profiles", "profile_default.json");
+    const persisted = JSON.parse(await readFile(path, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    persisted.runtime = {
+      ...completeReplacement().runtime,
+      databaseUrl: "bad-secret-token-value",
+    };
+    await writeFile(path, JSON.stringify(persisted), "utf8");
 
     const error = await validateStartupConfiguration({ rootDir: root }).catch(
       (thrown: unknown) => thrown,
@@ -89,7 +86,7 @@ describe("startup configuration validation", () => {
     profile.runtime = {
       ...completeReplacement().runtime,
       databaseUrl: "postgresql://user:persisted-secret@127.0.0.1:5432/kaguya",
-      inboundAllowlist: { platforms: [], userIds: [], groupIds: [] },
+      inboundAllowlist: { userIds: [], groupIds: [] },
       outboundAllowlist: [],
     };
     await writeFile(path, JSON.stringify(profile), "utf8");
@@ -157,19 +154,5 @@ function completeReplacement() {
         },
       ],
     },
-    memory: { enabled: false },
-    platforms: [
-      {
-        id: "napcat.qq.main",
-        type: "napcat",
-        enabled: true,
-        credentials: { accessToken: "test-only-placeholder" },
-        settings: {
-          adapterId: "napcat.qq.main",
-          wsUrl: "ws://127.0.0.1:3001",
-          reconnectMs: 3000,
-        },
-      },
-    ],
   };
 }

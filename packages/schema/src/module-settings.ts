@@ -12,6 +12,7 @@ export const moduleSettingsFieldSchema = z.strictObject({
   type: z.enum(["string", "number", "integer", "boolean", "array"]),
   itemType: z.enum(["string", "object"]).optional(),
   readOnly: z.boolean(),
+  secret: z.boolean().optional(),
   required: z.boolean(),
   minimum: z.number().optional(),
   maximum: z.number().optional(),
@@ -29,7 +30,7 @@ export const moduleSettingsInstanceSchema = z.strictObject({
 export const moduleSettingsViewSchema = z.strictObject({
   definitionId: z.string(),
   scope: z.literal("global"),
-  effect: z.literal("explicit_apply"),
+  effect: z.enum(["explicit_apply", "immediate"]),
   fields: z.array(moduleSettingsFieldSchema),
   instances: z.array(moduleSettingsInstanceSchema),
 });

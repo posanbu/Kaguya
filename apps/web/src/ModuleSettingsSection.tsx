@@ -18,6 +18,19 @@ import {
   requestModuleSettings,
   ModuleSettingsRequestError,
 } from "./module-settings-api.js";
+import {
+  FEATURE_CHANGED_EVENT,
+  getFeatures,
+  putFeature,
+  type FeatureId,
+  type FeatureView,
+} from "./feature-api.js";
+const MEMORY_FEATURES = new Set([
+  "memory.writeback",
+  "memory.knowledge",
+  "memory.index",
+  "memory.cognition",
+]);
 export function ModuleSettingsSection(props: ModuleEditorProps) {
   return (
     <SettingsLoader key={`${props.definitionId}:${props.token}`} {...props} />
@@ -39,11 +52,22 @@ function SettingsLoader({ definitionId, token }: ModuleEditorProps) {
     });
     return () => controller.abort();
   }, [definitionId, token]);
+  useEffect(() => {
+    const refresh = () => {
+      void requestModuleSettings(token, definitionId).then(setView, () =>
+        setError("无法同步模块状态，请重新读取。"),
+      );
+    };
+    window.addEventListener(FEATURE_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(FEATURE_CHANGED_EVENT, refresh);
+  }, [definitionId, token]);
   return (
     <div>
       <p>
-        全局模块配置：不随顶栏 Profile
-        切换。保存后需要在生效管理中显式应用；运行实例不会立即改变。
+        全局模块配置：不随顶栏 Profile 切换。
+        {MEMORY_FEATURES.has(definitionId)
+          ? "设置保存后立即应用；启停与概览同步。"
+          : "其他模块保存后需在生效管理中显式应用。"}
       </p>
       {error ? (
         <p role="alert">{error}</p>
@@ -88,8 +112,13 @@ function InstanceEditor({
     readonly { path: string; message: string }[]
   >([]);
   const dirty =
-    enabled !== saved.enabled ||
+    (!MEMORY_FEATURES.has(definitionId) && enabled !== saved.enabled) ||
     JSON.stringify(values) !== JSON.stringify(saved.settings);
+  useEffect(() => {
+    setSaved(instance);
+    setEnabled(instance.enabled);
+    if (!dirty) setValues(instance.settings);
+  }, [instance]);
   useNavigationGuard(
     () => !dirty || window.confirm("模块配置尚未保存，确定离开吗？"),
   );
@@ -123,7 +152,7 @@ function InstanceEditor({
         instanceId: saved.instanceId,
         replacement: {
           revision: saved.revision,
-          enabled,
+          enabled: MEMORY_FEATURES.has(definitionId) ? saved.enabled : enabled,
           settings: submittedValues,
         },
       });
@@ -134,8 +163,12 @@ function InstanceEditor({
       setValues(next.settings);
       setEnabled(next.enabled);
       setNotice(
-        "全局配置已保存。请前往生效管理，显式应用当前配置；运行实例尚未改变。",
+        MEMORY_FEATURES.has(definitionId)
+          ? "配置已保存并应用。"
+          : "全局配置已保存。请前往生效管理，显式应用当前配置；运行实例尚未改变。",
       );
+      if (MEMORY_FEATURES.has(definitionId))
+        window.dispatchEvent(new Event(FEATURE_CHANGED_EVENT));
     } catch (error) {
       setNotice(
         error instanceof Error ? error.message : "保存失败，输入已保留。",
@@ -179,15 +212,24 @@ function InstanceEditor({
       }}
     >
       <h4>{saved.instanceId}</h4>
+      {MEMORY_FEATURES.has(definitionId) && (
+        <MemoryModuleSwitch
+          token={token}
+          id={definitionId as FeatureId}
+          dirty={dirty}
+        />
+      )}
       <fieldset disabled={busy}>
-        <label>
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={(event) => setEnabled(event.target.checked)}
-          />
-          配置启用状态
-        </label>
+        {!MEMORY_FEATURES.has(definitionId) && (
+          <label>
+            <input
+              type="checkbox"
+              checked={enabled}
+              onChange={(event) => setEnabled(event.target.checked)}
+            />
+            配置启用状态
+          </label>
+        )}
         {fields.length === 0 && <p>无需配置 settings 字段。</p>}
         {fields.map((field) => (
           <div key={field.key}>
@@ -240,6 +282,76 @@ function InstanceEditor({
           </p>
         ))}
     </form>
+  );
+}
+function MemoryModuleSwitch({
+  token,
+  id,
+  dirty,
+}: {
+  token: string;
+  id: FeatureId;
+  dirty: boolean;
+}) {
+  const [view, setView] = useState<FeatureView>();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let live = true;
+    const refresh = () =>
+      void getFeatures(token).then(
+        (next) => {
+          if (live) setView(next);
+        },
+        () => {
+          if (live) setError("无法读取开关状态。");
+        },
+      );
+    refresh();
+    window.addEventListener(FEATURE_CHANGED_EVENT, refresh);
+    return () => {
+      live = false;
+      window.removeEventListener(FEATURE_CHANGED_EVENT, refresh);
+    };
+  }, [token]);
+  const feature = view?.features.find((item) => item.id === id);
+  const change = async (enabled: boolean) => {
+    if (!view || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      setView(await putFeature(token, id, enabled, view.revision));
+      window.dispatchEvent(new Event(FEATURE_CHANGED_EVENT));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "切换失败。");
+      void getFeatures(token).then(setView, () => undefined);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="module-feature-switch">
+      <label>
+        <input
+          type="checkbox"
+          role="switch"
+          checked={feature?.enabled ?? false}
+          disabled={
+            !feature || busy || dirty || (!!feature.blocker && !feature.enabled)
+          }
+          onChange={(event) => void change(event.target.checked)}
+        />
+        启用此模块
+      </label>
+      {dirty && <small>请先保存当前设置再切换。</small>}
+      {feature?.blocker === "memory.writeback" && (
+        <small>请先开启原始记忆。</small>
+      )}
+      {feature?.enabled && !feature.active && (
+        <small>模块未运行，请检查配置或 Runtime 状态。</small>
+      )}
+      {error && <p role="alert">{error}</p>}
+    </div>
   );
 }
 function FieldControl({
@@ -297,9 +409,10 @@ function FieldControl({
   const number = field.type === "number" || field.type === "integer";
   return (
     <input
-      type={number ? "number" : "text"}
+      type={field.secret ? "password" : number ? "number" : "text"}
       readOnly={field.readOnly}
-      required={field.required}
+      required={field.required && !field.secret}
+      autoComplete={field.secret ? "new-password" : undefined}
       value={
         typeof value === "string" || typeof value === "number" ? value : ""
       }

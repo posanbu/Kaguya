@@ -139,12 +139,9 @@ describe("user configuration schemas", () => {
   it("requires an explicit Agent identity on existing Profiles", () => {
     expect(
       userConfigProfileSchema.safeParse({
-        version: 1,
         id: profileId,
         name: "legacy",
         ai: { providers: [] },
-        memory: { enabled: false },
-        platforms: [],
       }).success,
     ).toBe(false);
   });
@@ -156,8 +153,6 @@ describe("user configuration schemas", () => {
           timeZone: "Asia/Shanghai",
         },
         ai: { providers: [] },
-        memory: { enabled: false },
-        platforms: [],
       }).identity,
     ).toEqual({
       timeZone: "Asia/Shanghai",
@@ -170,8 +165,6 @@ describe("user configuration schemas", () => {
           timeZone: "Asia/Shanghai",
         },
         ai: { providers: [] },
-        memory: { enabled: false },
-        platforms: [],
       }).success,
     ).toBe(false);
   });
@@ -186,8 +179,6 @@ describe("user configuration schemas", () => {
           persona: "legacy persona",
         },
         ai: { providers: [] },
-        memory: { enabled: false },
-        platforms: [],
       }).success,
     ).toBe(false);
   });
@@ -196,8 +187,6 @@ describe("user configuration schemas", () => {
     const settings = {
       identity: {},
       ai: { providers: [] },
-      memory: { enabled: false },
-      platforms: [],
     };
     expect(userConfigProfileSettingsSchema.safeParse(settings).success).toBe(
       false,
@@ -298,8 +287,8 @@ describe("user configuration schemas", () => {
     expect(
       runtimeConfigSchema.safeParse({
         ...baseRuntime,
-        inboundAllowlist: { platforms: [], userIds: [], groupIds: [] },
-        outboundAllowlist: { platforms: [], userIds: [], groupIds: [] },
+        inboundAllowlist: { userIds: [], groupIds: [] },
+        outboundAllowlist: { userIds: [], groupIds: [] },
       }).success,
     ).toBe(false);
     expect(
@@ -421,9 +410,8 @@ describe("user configuration schemas", () => {
     ).toBe(false);
   });
 
-  it("preserves plaintext AI and platform credentials", () => {
+  it("preserves plaintext AI credentials without platform fields", () => {
     const profile = userConfigProfileSchema.parse({
-      version: 1,
       id: profileId,
       name: "personal",
       identity,
@@ -441,42 +429,45 @@ describe("user configuration schemas", () => {
           },
         ],
       },
-      memory: { enabled: false },
-      platforms: [
-        {
-          id: "platform-1",
-          type: "discord",
-          enabled: true,
-          credentials: { token: "test-platform-token" },
-          settings: { guild: "test-guild" },
-        },
-      ],
     });
 
     expect(profile.ai.providers[0]?.apiKey).toBe("test-ai-key");
-    expect(profile.platforms[0]?.credentials).toEqual({
-      token: "test-platform-token",
-    });
+    expect(profile).not.toHaveProperty("platforms");
   });
 
-  it("requires Memory settings and preserves explicit enablement", () => {
+  it.each([1, 2])("rejects a version field on Profile (%i)", (version) => {
+    expect(
+      userConfigProfileSchema.safeParse({
+        id: profileId,
+        name: "personal",
+        identity,
+        ai: { providers: [] },
+        version,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects legacy Memory and platform fields in Profile settings", () => {
     const base = {
       identity,
       ai: { providers: [] },
-      platforms: [],
     };
 
-    expect(userConfigProfileSettingsSchema.safeParse(base).success).toBe(false);
-    expect(
-      userConfigProfileSettingsSchema.parse({
-        ...base,
-        memory: { enabled: true },
-      }).memory,
-    ).toEqual({ enabled: true });
+    expect(userConfigProfileSettingsSchema.safeParse(base).success).toBe(true);
     expect(
       userConfigProfileSettingsSchema.safeParse({
         ...base,
-        memory: { enabled: false, provider: "unexpected" },
+        memory: { enabled: true },
+      }).success,
+    ).toBe(false);
+    expect(
+      userConfigProfileSettingsSchema.safeParse({ ...base, platforms: [] })
+        .success,
+    ).toBe(false);
+    expect(
+      userConfigProfileSettingsSchema.safeParse({
+        ...base,
+        napcat: { enabled: true },
       }).success,
     ).toBe(false);
   });
@@ -498,8 +489,6 @@ describe("user configuration schemas", () => {
           { ...duplicateProvider, enabled: false },
         ],
       },
-      memory: { enabled: false },
-      platforms: [],
     });
 
     expect(result.success).toBe(false);
@@ -529,8 +518,6 @@ describe("user configuration schemas", () => {
             },
           ],
         },
-        memory: { enabled: false },
-        platforms: [],
       }).ai.defaultProviderId,
     ).toBe("provider-1");
   });
@@ -538,12 +525,9 @@ describe("user configuration schemas", () => {
   it("rejects retired persisted warning acknowledgements", () => {
     expect(
       userConfigProfileSchema.safeParse({
-        version: 1,
         id: profileId,
         name: "personal",
         ai: { providers: [] },
-        memory: { enabled: false },
-        platforms: [],
         review: { acknowledgedWarnings: ["platforms-empty"] },
       }).success,
     ).toBe(false);
@@ -602,8 +586,6 @@ describe("user configuration schemas", () => {
             },
           ],
         },
-        memory: { enabled: false },
-        platforms: [],
       }).success,
     ).toBe(false);
   });
@@ -626,8 +608,6 @@ describe("user configuration schemas", () => {
           },
         ],
       },
-      memory: { enabled: false },
-      platforms: [],
     }).ai.providers[0]!.settings;
 
     expect(Object.getPrototypeOf(parsed)).toBeNull();
@@ -661,8 +641,6 @@ describe("user configuration schemas", () => {
           },
         ],
       },
-      memory: { enabled: false },
-      platforms: [],
     }).ai.providers[0]!.settings;
 
     expect(JSON.stringify(parsed)).toBe(JSON.stringify(nullPrototypeValue));
@@ -731,21 +709,16 @@ describe("user configuration schemas", () => {
         userConfigProfileSettingsSchema.safeParse({
           identity,
           ai: { providers: [] },
-          memory: { enabled: false },
-          platforms: [],
         }).success,
     ],
     [
       "profile",
       () =>
         userConfigProfileSchema.safeParse({
-          version: 1,
           id: profileId,
           name: "default",
           identity,
           ai: { providers: [] },
-          memory: { enabled: false },
-          platforms: [],
         }).success,
     ],
     [
@@ -815,12 +788,9 @@ describe("user configuration schemas", () => {
       "review",
       () =>
         userConfigProfileSchema.safeParse({
-          version: 1,
           id: profileId,
           name: "default",
           ai: { providers: [] },
-          memory: { enabled: false },
-          platforms: [],
           review: undefined,
         }).success,
     ],

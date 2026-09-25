@@ -104,6 +104,24 @@ export class ConfigurationApplication implements ConfigurationApplicationService
     this.#selected = structuredClone(await this.options.read());
     return this.snapshotStatus();
   }
+  /** A targeted module/plugin switch has already applied its new activation. */
+  markModulesApplied(
+    moduleConfigs: ConfigurationSnapshot["moduleConfigs"],
+    definitionIds: readonly string[],
+  ): void {
+    if (!this.#active) return;
+    const selected = new Map(
+      moduleConfigs
+        .filter((config) => definitionIds.includes(config.definitionId))
+        .map((config) => [config.instanceId, config]),
+    );
+    this.#active = {
+      ...this.#active,
+      moduleConfigs: this.#active.moduleConfigs.map((config) =>
+        structuredClone(selected.get(config.instanceId) ?? config),
+      ),
+    };
+  }
   async status(): Promise<ConfigurationApplicationStatus> {
     if (this.#busy) return this.snapshotStatus();
     return this.options.exclusive(() => this.captureStatus());

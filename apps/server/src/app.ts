@@ -35,6 +35,10 @@ import { registerIdentityPersonaRoutes } from "./identity-persona-routes.js";
 import type { IdentityPersonaManagement } from "./identity-persona-management.js";
 import { registerModuleSettingsRoutes } from "./module-settings-routes.js";
 import type { ModuleSettingsManagement } from "./module-settings-management.js";
+import {
+  FeatureManagementError,
+  type FeatureManagement,
+} from "./feature-management.js";
 import { registerMessageTargetRoutes } from "./message-targets.js";
 import type { MessageTargetService } from "@kaguya/runtime";
 import {
@@ -57,8 +61,6 @@ import {
   inspectUserConfigProfile,
   aiConfigSchema,
   agentIdentitySchema,
-  memoryConfigSchema,
-  platformConfigSchema,
   profileIdSchema,
 } from "@kaguya/config";
 import { runWithLogContext } from "@kaguya/logger";
@@ -141,14 +143,13 @@ const replaceProfileRequestSchema = z
     outboundAllowlist: z.array(z.string()),
     identity: agentIdentitySchema,
     ai: aiConfigSchema,
-    memory: memoryConfigSchema,
-    platforms: z.array(platformConfigSchema),
     acknowledgedWarnings: z.array(z.string().trim().min(1)),
   })
   .strict();
 
 const napCatSettingsRequestSchema = z
   .object({
+    revision: z.string().regex(/^[a-f0-9]{64}$/u),
     enabled: z.boolean(),
     wsUrl: z.string().trim().optional(),
     accessToken: z.string().optional(),
@@ -351,18 +352,14 @@ const userConfigProfileJsonSchema = {
   type: "object",
   additionalProperties: false,
   required: [
-    "version",
     "id",
     "name",
     "inboundAllowlist",
     "outboundAllowlist",
     "identity",
     "ai",
-    "memory",
-    "platforms",
   ],
   properties: {
-    version: { type: "integer", enum: [1] },
     id: profileIdJsonSchema,
     name: { type: "string", minLength: 1 },
     inboundAllowlist: {
@@ -375,11 +372,6 @@ const userConfigProfileJsonSchema = {
     },
     identity: agentIdentityJsonSchema,
     ai: aiConfigJsonSchema,
-    memory: memoryConfigJsonSchema,
-    platforms: {
-      type: "array",
-      items: platformConfigJsonSchema,
-    },
     review: profileReviewJsonSchema,
   },
 } as const;
@@ -411,8 +403,6 @@ const replaceProfileRequestJsonSchema = {
     "outboundAllowlist",
     "identity",
     "ai",
-    "memory",
-    "platforms",
     "acknowledgedWarnings",
   ],
   properties: {
@@ -427,8 +417,6 @@ const replaceProfileRequestJsonSchema = {
     },
     identity: agentIdentityJsonSchema,
     ai: aiConfigJsonSchema,
-    memory: memoryConfigJsonSchema,
-    platforms: { type: "array", items: platformConfigJsonSchema },
     acknowledgedWarnings: {
       type: "array",
       items: { type: "string", minLength: 1 },
@@ -621,6 +609,7 @@ export interface CreateHttpApplicationOptions {
   adapterHost?: Pick<AdapterHost, "status">;
   configuration?: ConfigurationManagement;
   moduleSettings?: ModuleSettingsManagement;
+  featureManagement?: FeatureManagement;
   moduleTemplates?: ModuleTemplateManagement;
   identityPersona?: IdentityPersonaManagement;
   memoryIngestion?: MemoryIngestionService;
@@ -850,6 +839,82 @@ export async function createHttpApplication(
   );
 
   app.get(
+    "/api/v1/features",
+    {
+      onRequest: requireGatewayToken(options, "management"),
+      schema: {
+        tags: ["Features"],
+        summary: "Read independent feature switches",
+      },
+    },
+    async (_request, reply) => {
+      reply.header("Cache-Control", "no-store");
+      if (!options.featureManagement)
+        throw new ApiGatewayError(
+          "features_unavailable",
+          "Feature management unavailable",
+          503,
+        );
+      return { data: await options.featureManagement.get() };
+    },
+  );
+  app.put(
+    "/api/v1/features/:featureId",
+    {
+      onRequest: requireGatewayToken(options, "management"),
+      schema: {
+        tags: ["Features"],
+        summary: "Switch one feature and apply it immediately",
+        params: {
+          type: "object",
+          required: ["featureId"],
+          properties: { featureId: { type: "string" } },
+        },
+        body: {
+          type: "object",
+          additionalProperties: false,
+          required: ["enabled", "revision"],
+          properties: {
+            enabled: { type: "boolean" },
+            revision: { type: "string", pattern: "^[a-f0-9]{64}$" },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      reply.header("Cache-Control", "no-store");
+      if (!options.featureManagement)
+        throw new ApiGatewayError(
+          "features_unavailable",
+          "Feature management unavailable",
+          503,
+        );
+      const { featureId } = z
+        .strictObject({ featureId: z.string() })
+        .parse(request.params);
+      const input = z
+        .strictObject({
+          enabled: z.boolean(),
+          revision: z.string().regex(/^[a-f0-9]{64}$/u),
+        })
+        .parse(request.body);
+      try {
+        return {
+          data: await options.featureManagement.toggle(
+            featureId,
+            input.enabled,
+            input.revision,
+          ),
+        };
+      } catch (error) {
+        if (error instanceof FeatureManagementError)
+          throw new ApiGatewayError(error.code, error.code, error.status);
+        throw error;
+      }
+    },
+  );
+
+  app.get(
     "/api/v1/napcat",
     {
       onRequest: requireGatewayToken(options, "management"),
@@ -860,7 +925,14 @@ export async function createHttpApplication(
         (await requireManagement(
           options.configuration,
         ).getNapCatSettings?.()) ?? defaultNapCatSettings;
-      return { data: toNapCatStatus(settings) };
+      return {
+        data: {
+          ...toNapCatStatus(settings),
+          revision:
+            (await options.featureManagement?.get())?.revision ??
+            "0".repeat(64),
+        },
+      };
     },
   );
 
@@ -873,31 +945,36 @@ export async function createHttpApplication(
     async (request) => {
       const body = napCatSettingsRequestSchema.parse(request.body);
       const management = requireManagement(options.configuration);
-      if (
-        management.getNapCatSettings === undefined ||
-        management.saveNapCatSettings === undefined
-      ) {
+      if (!options.featureManagement || !management.getNapCatSettings) {
         throw new Error("NapCat configuration management is unavailable");
       }
       const current = await management.getNapCatSettings();
-      const settings = await management.saveNapCatSettings({
-        enabled: body.enabled,
-        ...(body.wsUrl ? { wsUrl: body.wsUrl } : {}),
-        ...(body.accessToken?.trim()
-          ? { accessToken: body.accessToken.trim() }
-          : current.accessToken === undefined
-            ? {}
-            : { accessToken: current.accessToken }),
-        ...(body.selfId ? { selfId: body.selfId } : {}),
-        reconnectMs: body.reconnectMs,
-      });
+      let result;
+      try {
+        result = await options.featureManagement.updateNapCat(
+          {
+            enabled: body.enabled,
+            ...(body.wsUrl ? { wsUrl: body.wsUrl } : {}),
+            ...(body.accessToken?.trim()
+              ? { accessToken: body.accessToken.trim() }
+              : current.accessToken === undefined
+                ? {}
+                : { accessToken: current.accessToken }),
+            ...(body.selfId ? { selfId: body.selfId } : {}),
+            reconnectMs: body.reconnectMs,
+          },
+          body.revision,
+        );
+      } catch (error) {
+        if (error instanceof FeatureManagementError)
+          throw new ApiGatewayError(error.code, error.code, error.status);
+        throw error;
+      }
+      const settings = await management.getNapCatSettings();
       return {
         data: {
-          status: toNapCatStatus(settings),
-          restartRequired: true,
-          ...(settings.application
-            ? { application: settings.application }
-            : {}),
+          status: { ...toNapCatStatus(settings), revision: result.revision },
+          restartRequired: false,
         },
       };
     },

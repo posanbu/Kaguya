@@ -22,7 +22,6 @@ function gate() {
 function fixture(ready = true) {
   const initial: ConfigurationSnapshot = {
     profile: {
-      version: 1,
       id: "default",
       name: "default",
       ...emptyUserConfigProfileSettings(),
@@ -49,6 +48,13 @@ function fixture(ready = true) {
         definitionId: "test",
         enabled: true,
         settings: { token: "private-module-key" },
+      },
+      {
+        version: 1,
+        instanceId: "memory.writeback.default",
+        definitionId: "memory.writeback",
+        enabled: false,
+        settings: {},
       },
     ],
   };
@@ -88,9 +94,22 @@ function fixture(ready = true) {
     changeModule: () => {
       current = {
         ...current,
-        moduleConfigs: [{ ...current.moduleConfigs[0]!, enabled: false }],
+        moduleConfigs: [
+          { ...current.moduleConfigs[0]!, enabled: false },
+          ...current.moduleConfigs.slice(1),
+        ],
       };
     },
+    changeFeature: () => {
+      current = {
+        ...current,
+        moduleConfigs: [
+          current.moduleConfigs[0]!,
+          { ...current.moduleConfigs[1]!, enabled: true },
+        ],
+      };
+    },
+    savedModules: () => structuredClone(current.moduleConfigs),
     setPort: () => {
       current.profile.runtime!.port = 3456;
     },
@@ -103,6 +122,14 @@ async function input(application: ConfigurationApplication) {
     revision: s.selectedRevision,
   };
 }
+
+it("keeps unrelated pending module edits pending after a targeted feature switch", async () => {
+  const f = fixture();
+  f.changeModule();
+  f.changeFeature();
+  f.application.markModulesApplied(f.savedModules(), ["memory.writeback"]);
+  expect(await f.application.status()).toMatchObject({ state: "pending" });
+});
 
 it("distinguishes saved and active versions and applies each snapshot only once", async () => {
   const f = fixture();

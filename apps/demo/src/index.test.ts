@@ -49,8 +49,6 @@ describe("demo entry point", () => {
       identity: profile.identity,
       acknowledgedWarnings: [],
       ai: profile.ai,
-      memory: profile.memory,
-      platforms: profile.platforms,
       runtime: demoRuntime,
     });
 

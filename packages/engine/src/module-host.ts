@@ -44,6 +44,8 @@ export interface ModuleHostOptions {
   readonly capabilities?: readonly ModuleCapabilityImplementation[];
   readonly now?: () => Date;
   readonly drainTimeoutMs?: number;
+  /** Auxiliary hosts share the parent's reliable runner. */
+  readonly manageReliableDelivery?: boolean;
   readonly observer?: ModuleHostObserver;
 }
 export interface ModuleHostObservation {
@@ -251,7 +253,9 @@ export class ModuleHost {
           }
         }
       phase = "reliable-delivery";
-      await this.#options.core.startReliableDelivery();
+      if (this.#options.manageReliableDelivery === false)
+        await this.#options.core.syncReliableSubscriptions();
+      else await this.#options.core.startReliableDelivery();
       this.assertStarting();
       phase = "ready";
       for (const module of this.#active) {
@@ -291,7 +295,9 @@ export class ModuleHost {
         },
       });
       for (const unsubscribe of this.#unsubscribe.splice(0)) unsubscribe();
-      await this.#options.core.stopReliableDelivery();
+      if (this.#options.manageReliableDelivery === false)
+        await this.#options.core.syncReliableSubscriptions();
+      else await this.#options.core.stopReliableDelivery();
       const failures = await this.cleanup();
       this.#startupRollbackFailures.push(...failures);
       if (this.#state === "starting") this.#state = "stopped";
@@ -309,12 +315,17 @@ export class ModuleHost {
     const starting =
       this.#state === "starting" ? this.#startPromise : undefined;
     this.#state = "stopping";
-    const stopDelivery = this.#options.core.stopReliableDelivery();
+    const stopDelivery =
+      this.#options.manageReliableDelivery === false
+        ? Promise.resolve()
+        : this.#options.core.stopReliableDelivery();
     for (const controller of this.#controllers) controller.abort();
     this.#stopPromise = (async () => {
       await starting?.catch(() => undefined);
       await stopDelivery;
       for (const unsubscribe of this.#unsubscribe.splice(0)) unsubscribe();
+      if (this.#options.manageReliableDelivery === false)
+        await this.#options.core.syncReliableSubscriptions();
       const failures = [
         ...this.#startupRollbackFailures.splice(0),
         ...(await this.cleanup()),

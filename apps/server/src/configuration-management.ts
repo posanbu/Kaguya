@@ -28,7 +28,10 @@ import {
   type ExistingConfigurationReadiness,
   type ReplaceUserConfigProfileInput,
   type UserConfigProfile,
+  loadModuleInstanceConfigs,
+  writeModuleInstanceConfig,
 } from "@kaguya/config";
+import { createFirstPartyModuleConfigDefaults } from "@kaguya/modules";
 
 import {
   defaultNapCatSettings,
@@ -176,8 +179,6 @@ export async function createConfigurationManagement(
           acknowledgedWarnings: [],
           identity: profile.identity,
           ai: profile.ai,
-          memory: profile.memory,
-          platforms: profile.platforms,
           runtime: selected.runtime,
         });
       }
@@ -218,12 +219,10 @@ export async function createConfigurationManagement(
       return { profile: toEditableProfile(profile), restartRequired };
     },
     getNapCatSettings() {
-      return readSelectedNapCatSettings(manager);
+      return readNapCatModuleSettings(rootDir);
     },
     async saveNapCatSettings(settings) {
-      const saved = await writeSelectedNapCatSettings(manager, settings);
-      restartRequired = true;
-      return saved;
+      return writeNapCatModuleSettings(rootDir, settings);
     },
   };
   return {
@@ -257,7 +256,7 @@ export function projectMemoryInfrastructure(
   const runtime = profile.runtime;
   if (runtime === undefined)
     return {
-      enabled: profile.memory.enabled,
+      enabled: false,
       databaseMode: "unconfigured",
       engine: "PostgreSQL 17",
       storageKind: "unconfigured",
@@ -265,7 +264,7 @@ export function projectMemoryInfrastructure(
   const databaseUrl = new URL(runtime.databaseUrl);
   const database = decodeURIComponent(databaseUrl.pathname.replace(/^\//u, ""));
   return {
-    enabled: profile.memory.enabled,
+    enabled: true,
     databaseMode: runtime.databaseMode,
     engine: "PostgreSQL 17",
     host: databaseUrl.hostname,
@@ -291,55 +290,41 @@ function toEditableProfile(
   };
 }
 
-async function readSelectedNapCatSettings(
-  manager: FileUserConfigManager,
+async function readNapCatModuleSettings(
+  rootDir: string,
 ): Promise<NapCatSettings> {
-  const profile = await manager.getProfile(manager.getSelectedProfileId());
-  const platform = profile.platforms.find(({ type }) => type === "napcat");
-  if (platform === undefined) return defaultNapCatSettings;
+  const configs = await loadModuleInstanceConfigs({
+    rootDir,
+    defaults: createFirstPartyModuleConfigDefaults(),
+    initialize: false,
+  });
+  const config = configs.find((item) => item.definitionId === "adapter.napcat");
+  if (!config) return defaultNapCatSettings;
   return validateNapCatSettings({
-    enabled: platform.enabled,
-    wsUrl: platform.settings.wsUrl,
-    accessToken: platform.credentials.accessToken,
-    selfId: platform.settings.selfId,
-    reconnectMs: platform.settings.reconnectMs ?? 3000,
+    enabled: config.enabled,
+    ...config.settings,
   });
 }
 
-async function writeSelectedNapCatSettings(
-  manager: FileUserConfigManager,
+async function writeNapCatModuleSettings(
+  rootDir: string,
   input: NapCatSettings,
 ): Promise<NapCatSettings> {
   const settings = validateNapCatSettings(input);
-  const profile = await manager.getProfile(manager.getSelectedProfileId());
-  const current = profile.platforms.find(({ type }) => type === "napcat");
-  const adapterId = current?.id ?? "napcat.qq.main";
-  const platform = {
-    id: adapterId,
-    type: "napcat",
-    enabled: settings.enabled,
-    credentials:
-      settings.accessToken === undefined
-        ? {}
-        : { accessToken: settings.accessToken },
-    settings: {
-      adapterId,
-      ...(settings.wsUrl === undefined ? {} : { wsUrl: settings.wsUrl }),
-      ...(settings.selfId === undefined ? {} : { selfId: settings.selfId }),
-      reconnectMs: settings.reconnectMs,
-    },
-  };
-  await manager.replaceProfile(profile.id, {
-    name: profile.name,
-    acknowledgedWarnings: profile.review?.acknowledgedWarnings ?? [],
-    identity: profile.identity,
-    ai: profile.ai,
-    memory: profile.memory,
-    platforms: [
-      ...profile.platforms.filter(({ type }) => type !== "napcat"),
-      platform,
-    ],
-    ...(profile.runtime === undefined ? {} : { runtime: profile.runtime }),
+  const configs = await loadModuleInstanceConfigs({
+    rootDir,
+    defaults: createFirstPartyModuleConfigDefaults(),
+    initialize: false,
+  });
+  const current = configs.find(
+    (item) => item.definitionId === "adapter.napcat",
+  );
+  if (!current) throw new Error("NapCat plugin configuration is missing");
+  const { enabled, ...rest } = settings;
+  await writeModuleInstanceConfig(rootDir, {
+    ...current,
+    enabled,
+    settings: rest,
   });
   return settings;
 }

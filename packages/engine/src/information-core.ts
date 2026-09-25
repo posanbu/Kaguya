@@ -253,10 +253,6 @@ export class InformationCore implements OneShotScheduleCorePort {
   ): () => void {
     this.assertOpen();
     this.registry.assertRegistered(definition);
-    if (this.#reliableRunner)
-      throw new Error(
-        "Durable subscriptions must be installed before delivery starts",
-      );
     if (this.#durableSubscriptions.has(subscriptionId))
       throw new Error("Duplicate durable subscription ID");
     this.#durableSubscriptions.set(subscriptionId, {
@@ -281,6 +277,18 @@ export class InformationCore implements OneShotScheduleCorePort {
       subscriptions: [...this.#durableSubscriptions.values()],
     });
     await this.#reliableRunner.start();
+  }
+  async syncReliableSubscriptions(): Promise<void> {
+    if (this.#reliableRunner)
+      await this.#reliableRunner.syncSubscriptions([
+        ...this.#durableSubscriptions.values(),
+      ]);
+  }
+  replaceRetrievalStrategies(
+    strategies: readonly InformationRetrievalStrategy[],
+  ): void {
+    this.assertState("started");
+    this.#selectorExecutor.replaceStrategies(strategies);
   }
   async stopReliableDelivery(options: { drain?: boolean } = {}): Promise<void> {
     await this.#reliableRunner?.stop(options);

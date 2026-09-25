@@ -37,6 +37,8 @@ export class ReliableInformationRunner {
   readonly #ledger: ReliableInformationLedger;
   readonly #options: ReliableInformationRunnerOptions;
   readonly #shutdown = new AbortController();
+  readonly #subscriptions = new Map<string, ReliableInformationSubscription>();
+  readonly #controllers = new Map<string, AbortController>();
   #running = false;
   #started = false;
   #timer: ReturnType<typeof setTimeout> | undefined;
@@ -48,6 +50,12 @@ export class ReliableInformationRunner {
     if (!options.core.store.reliable)
       throw new Error("Reliable information ledger is required");
     this.#ledger = options.core.store.reliable;
+    for (const subscription of options.subscriptions) {
+      if (this.#subscriptions.has(subscription.subscriptionId))
+        throw new Error("Duplicate durable subscription");
+      this.#subscriptions.set(subscription.subscriptionId, subscription);
+      this.#controllers.set(subscription.subscriptionId, new AbortController());
+    }
     for (const [value, min, max] of [
       [options.leaseMs ?? DEFAULT_LEASE_MS, 1, 86400000],
       [options.maxAttempts ?? 3, 1, 100],
@@ -65,12 +73,48 @@ export class ReliableInformationRunner {
       return Promise.reject(new Error("Reliable runner cannot restart"));
     this.#started = true;
     this.#start = (async () => {
-      await this.#ledger.configureSubscriptions(this.#options.subscriptions);
+      await this.#ledger.configureSubscriptions([
+        ...this.#subscriptions.values(),
+      ]);
       if (this.#stop || this.#shutdown.signal.aborted) return;
       this.#running = true;
       this.schedule(0);
     })();
     return this.#start;
+  }
+  /** Synchronize one changed subscription at a time, leaving all other claims running. */
+  async syncSubscriptions(
+    next: readonly ReliableInformationSubscription[],
+  ): Promise<void> {
+    await this.#start;
+    if (!this.#running) return;
+    if (!this.#ledger.setSubscription)
+      throw new Error("Dynamic durable subscriptions are unavailable");
+    const desired = new Map(next.map((item) => [item.subscriptionId, item]));
+    if (desired.size !== next.length)
+      throw new Error("Duplicate durable subscription");
+    for (const [id, previous] of this.#subscriptions) {
+      const replacement = desired.get(id);
+      if (
+        replacement?.kind === previous.kind &&
+        replacement.handle === previous.handle
+      )
+        continue;
+      await this.#ledger.setSubscription(previous, false);
+      this.#subscriptions.delete(id);
+      this.#controllers.get(id)?.abort(new Error("Subscription disabled"));
+      this.#controllers.delete(id);
+      await boundedWait(
+        this.#inFlight.get(id),
+        this.#options.drainTimeoutMs ?? 5000,
+      );
+    }
+    for (const [id, subscription] of desired) {
+      if (this.#subscriptions.has(id)) continue;
+      await this.#ledger.setSubscription(subscription, true);
+      this.#subscriptions.set(id, subscription);
+      this.#controllers.set(id, new AbortController());
+    }
   }
   stop(options: { drain?: boolean } = {}): Promise<void> {
     if (this.#stop) return this.#stop;
@@ -97,12 +141,13 @@ export class ReliableInformationRunner {
   private schedule(delay: number): void {
     if (!this.#running) return;
     this.#timer = setTimeout(() => {
-      for (const subscription of this.#options.subscriptions) {
+      for (const subscription of this.#subscriptions.values()) {
         if (this.#inFlight.has(subscription.subscriptionId)) continue;
         const work = this.consume(subscription)
           .catch(() => undefined)
           .finally(() => {
-            this.#inFlight.delete(subscription.subscriptionId);
+            if (this.#inFlight.get(subscription.subscriptionId) === work)
+              this.#inFlight.delete(subscription.subscriptionId);
           });
         this.#inFlight.set(subscription.subscriptionId, work);
       }
@@ -114,12 +159,14 @@ export class ReliableInformationRunner {
     subscription: ReliableInformationSubscription,
   ): Promise<void> {
     if (!this.#running) return;
+    const controller = this.#controllers.get(subscription.subscriptionId);
+    if (!controller) return;
     const claim = await this.#ledger.claim(
       subscription.subscriptionId,
       this.#options.leaseMs ?? DEFAULT_LEASE_MS,
     );
     if (!claim) return;
-    if (!this.#running) {
+    if (!this.#running || controller.signal.aborted) {
       await this.#ledger.release(claim);
       return;
     }
@@ -128,7 +175,11 @@ export class ReliableInformationRunner {
       () => expired.abort(new Error("Information lease expired")),
       Math.max(0, new Date(claim.leaseUntil).getTime() - Date.now()),
     );
-    const signal = AbortSignal.any([this.#shutdown.signal, expired.signal]);
+    const signal = AbortSignal.any([
+      this.#shutdown.signal,
+      controller.signal,
+      expired.signal,
+    ]);
     let removeAbort = () => {};
     try {
       if (claim.attempt > (this.#options.maxAttempts ?? 3)) {
@@ -151,7 +202,7 @@ export class ReliableInformationRunner {
       signal.throwIfAborted();
       await this.#ledger.ack(claim);
     } catch {
-      await this.fail(claim, signal);
+      await this.fail(claim, signal, controller.signal);
     } finally {
       removeAbort();
       clearTimeout(leaseTimer);
@@ -160,8 +211,9 @@ export class ReliableInformationRunner {
   private async fail(
     claim: InformationClaim,
     signal: AbortSignal,
+    subscriptionSignal: AbortSignal,
   ): Promise<void> {
-    if (this.#shutdown.signal.aborted) {
+    if (this.#shutdown.signal.aborted || subscriptionSignal.aborted) {
       await this.#ledger.release(claim);
       return;
     }

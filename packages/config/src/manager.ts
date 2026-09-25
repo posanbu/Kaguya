@@ -160,7 +160,6 @@ export class FileUserConfigManager {
 
     const createdAt = new Date().toISOString();
     const profile: UserConfigProfile = {
-      version: 1,
       id: "default",
       name: "default",
       ...emptyUserConfigProfileSettings(),
@@ -377,7 +376,6 @@ export class FileUserConfigManager {
     const id = randomUUID();
     const timestamp = new Date().toISOString();
     const profile: UserConfigProfile = {
-      version: 1,
       id,
       name: normalizedName,
       ...emptyUserConfigProfileSettings(),
@@ -429,7 +427,6 @@ export class FileUserConfigManager {
     }
 
     const profileWithoutReview: UserConfigProfile = {
-      version: 1,
       id: profileId,
       name,
       ...parsedReplacement.settings,
@@ -598,6 +595,11 @@ function parsePersistedProfile(
   value: unknown,
   path: string,
 ): UserConfigProfile {
+  if (value !== null && typeof value === "object" && "version" in value)
+    throw new ConfigError(
+      "CONFIG_CORRUPT_STORE",
+      "Versioned Profiles are unsupported. Create a new configuration root and re-enter Profile, Memory module and NapCat plugin settings; the PostgreSQL database can be reused.",
+    );
   const parsed = userConfigProfileSchema.safeParse(value);
   if (!parsed.success) {
     throw new ConfigError(
@@ -731,9 +733,7 @@ function parseReplacementInput(value: unknown): {
       readonly acknowledgedWarnings?: unknown;
       readonly ai?: unknown;
       readonly identity?: unknown;
-      readonly memory?: unknown;
       readonly name?: unknown;
-      readonly platforms?: unknown;
       readonly runtime?: unknown;
     };
     return {
@@ -744,8 +744,6 @@ function parseReplacementInput(value: unknown): {
       settings: parseSettings({
         identity: replacement.identity,
         ai: replacement.ai,
-        memory: replacement.memory,
-        platforms: replacement.platforms,
         runtime: replacement.runtime,
       }),
     };

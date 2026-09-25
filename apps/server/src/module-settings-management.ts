@@ -35,6 +35,10 @@ export class ModuleSettingsManagement {
       catalog: InformationModuleCatalog;
       defaults: readonly ModuleInstanceConfig[];
       exclusive: <T>(operation: () => Promise<T>) => Promise<T>;
+      replaceFeature?: (
+        current: readonly ModuleInstanceConfig[],
+        next: readonly ModuleInstanceConfig[],
+      ) => Promise<void>;
     },
   ) {}
   private definition(id: string) {
@@ -72,6 +76,7 @@ export class ModuleSettingsManagement {
           type: field.type,
           ...(field.type === "array" ? { itemType: field.items.type } : {}),
           readOnly: field.readOnly === true,
+          ...(field.secret === true ? { secret: true } : {}),
           required: (json.required ?? []).includes(key),
           ...Object.fromEntries(
             ["minimum", "maximum", "minLength", "maxLength", "enum", "default"]
@@ -102,7 +107,14 @@ export class ModuleSettingsManagement {
     return {
       definitionId: id,
       scope: "global",
-      effect: "explicit_apply",
+      effect: [
+        "memory.writeback",
+        "memory.knowledge",
+        "memory.index",
+        "memory.cognition",
+      ].includes(id)
+        ? "immediate"
+        : "explicit_apply",
       fields,
       instances: configs.map((c) => ({
         instanceId: c.instanceId,
@@ -110,7 +122,7 @@ export class ModuleSettingsManagement {
         revision: this.revision(c),
         settings: Object.fromEntries(
           fields
-            .filter((f) => Object.hasOwn(c.settings, f.key))
+            .filter((f) => !f.secret && Object.hasOwn(c.settings, f.key))
             .map((f) => [f.key, c.settings[f.key]]),
         ),
       })),
@@ -127,7 +139,8 @@ export class ModuleSettingsManagement {
         throw new ModuleSettingsError(400, "invalid_module_settings");
       const definition = this.definition(id);
       const fields = this.fields(id);
-      const current = (await this.load()).find(
+      const configs = await this.load();
+      const current = configs.find(
         (c) => c.definitionId === id && c.instanceId === instanceId,
       );
       if (!current)
@@ -140,6 +153,7 @@ export class ModuleSettingsManagement {
       const settings = { ...current.settings };
       for (const field of fields) {
         const value = parsed.data.settings[field.key];
+        if (field.secret && (value === undefined || value === "")) continue;
         if (
           field.readOnly &&
           JSON.stringify(value) !== JSON.stringify(current.settings[field.key])
@@ -162,11 +176,30 @@ export class ModuleSettingsManagement {
             message: "字段值不符合模块声明的类型或约束，请检查输入。",
           })),
         );
-      await writeModuleInstanceConfig(this.options.rootDir, {
+      const replacement: ModuleInstanceConfig = {
         ...current,
         enabled: parsed.data.enabled,
         settings: validation.data,
-      });
+      };
+      if (
+        [
+          "memory.writeback",
+          "memory.knowledge",
+          "memory.index",
+          "memory.cognition",
+        ].includes(id)
+      ) {
+        if (replacement.enabled !== current.enabled)
+          throw new ModuleSettingsError(400, "use_feature_switch");
+        if (!this.options.replaceFeature)
+          throw new ModuleSettingsError(503, "feature_switch_unavailable");
+        await this.options.replaceFeature(
+          configs,
+          configs.map((config) =>
+            config.instanceId === instanceId ? replacement : config,
+          ),
+        );
+      } else await writeModuleInstanceConfig(this.options.rootDir, replacement);
       return this.get(id);
     });
   }
