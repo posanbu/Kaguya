@@ -13,6 +13,20 @@ description: 用显式 Catalog、能力声明与 Information DAG 组合可检查
 
 `consumes` 约束订阅输入，`produces` 约束派生输出。Selector 与 renderer 使用稳定 ID，并列入 manifest；`context.select()` 拒绝未声明的 Selector。订阅与声明必须引用同一份 kind definition，不能用结构相似的对象替代。Catalog 合并顺序不会改变创建顺序。
 
+## 触发单位与语义处理单位
+
+模块消费某个 Information Kind，只能证明该原子会触发 handler，不能证明它就是模块的完整业务输入。相关 Information 到达可以作为 wake tick；tick 不自动构成 turn，也不承诺生成回复、外部动作或长期记忆。需要更多上下文的模块应通过已声明 Selector 读取并冻结授权范围，而不是把 handler 参数默认为全部语境。
+
+每个模块相邻的 `README.md` 除了目的、输入输出和可靠性边界，还应说明：
+
+- 哪些 Information 会唤醒模块，以及它们为何与该职责相关；
+- 实际处理单条原子、未读水位范围、冻结 context、证据集合还是其他语义单位；
+- 哪个终态、水位或幂等操作证明处理已经完成，失败后如何恢复；
+- 输出是派生事实、决策、外部副作用还是无动作结果；
+- 派生结果如何通过引用回到直接证据。
+
+这项约束不禁止逐条处理。Identity 可以逐条正规化发送者，raw Memory 可以逐条保存消息；但认知、关系或表达习惯模块不能仅因为一条 atom 触发订阅，就未经说明地把它当成完整情境。统一术语见[持续 Agent 设计原则](./continuous-agent)。当前 module protocol v1 不为这些说明增加 manifest 字段，Runtime 也不读取 Markdown。
+
 ::: code-group
 
 ```ts [显式模块与 Catalog ~vscode-icons:file-type-typescript~]

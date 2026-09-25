@@ -9,6 +9,8 @@ Kaguya 的正式服务使用一个长期运行进程。`apps/server` 负责读�
 
 Core 中每项运行事实都是不可变 `InformationAtom`，且只以 `informationId` 作为身份。外部平台消息 ID、HTTP request ID、用户与群组 ID 仍可作为领域数据，但它们不构成 Core 身份，也不建立 session 或隐式上下文隔离。
 
+在项目的持续 Agent 语义中，相关 Information 到达可以形成一次 wake tick：它提醒系统某个场景发生了变化，但不自动构成 turn、回复或长期记忆。`InformationAtom` 是证据与触发载体，模块订阅的原子也不自动等于模块需要理解的完整业务输入。术语和模块检查项见[持续 Agent 设计原则](./continuous-agent)。
+
 ## 运行形态
 
 ```mermaid
@@ -54,11 +56,11 @@ flowchart LR
   Persist --> Broadcast[当前消费者并发广播]
   Broadcast --> Identity[Identity terminal]
   Broadcast --> Heartbeat[Durable heartbeat]
-  Heartbeat --> Candidate[Non-semantic observation opportunity]
+  Heartbeat --> Candidate[Wake opportunity / turn candidate]
   Candidate --> Arousal[Arousal state / observe / defer]
   Arousal -->|observe| Heartflow[Bounded unread query / identity barrier]
   Identity --> Heartflow
-  Heartflow --> Turn[Immutable turn context]
+  Heartflow --> Turn[Observation snapshot / turn context]
   Turn --> Planner[Message / wait / silent]
   Planner --> Heartflow
   Heartflow -->|message| Intent[agent.message.intent.requested]
@@ -73,6 +75,8 @@ flowchart LR
 Web HTTP 请求只允许文本和 requestId。Web adapter 会补齐平台、sender 与 target 等规范字段；其他平台入站还包含经过 schema 校验的 adapter、平台消息 ID、self ID、destination、sender 和 mentions。adapter 原始 payload 不进入事件或持久化 metadata。
 
 HTTP `202 accepted` 在 Web gateway 接收消息后立即返回；Runtime dispatch 在后台继续。该状态不证明事件链、模型调用或投递已经完成。
+
+当前协议仍使用 `agent.turn.*` 组织观察和决策生命周期。语义上，Heartbeat candidate 更接近 wake opportunity：它保存非语义通知和水位，不表示已经完成观察。Heartflow 只有在 Arousal 选择 `observe` 后才读取候选水位内的多条输入并冻结 turn context；这份多输入快照接近当前实现中的 observation。上述映射不改变现有 Kind 名称或数据库协议。
 
 默认在线链由 Heartflow 以可重放事实推进：
 

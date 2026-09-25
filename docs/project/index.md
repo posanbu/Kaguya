@@ -7,6 +7,16 @@ description: Kaguya 当前已实现能力、明确边界和后续演进方向。
 
 本页只把有代码和测试支持的行为作为当前事实。后续方向可能在 Issue 与 PR 中调整，不应被当作已交付接口。
 
+## 持续 Agent 故事的实现状态
+
+项目以“持续感知、自然互动”为统一故事：相关 Information 到达可以唤醒 Agent，但 tick 不自动等于 turn；模块的订阅单位也不自动等于完整语义输入。完整约束见[持续 Agent 设计原则](../developers/continuous-agent)。
+
+**已经对齐** — InformationAtom 已作为不可变证据保存；Heartbeat candidate 只携带通知与水位；Arousal 将被唤醒与完成观察分开；Heartflow 在 `observe` 后冻结多条输入；Planner 明确支持 `message | wait | silent`；Expression 使用多来源批次学习。
+
+**部分对齐** — 当前 `agent.turn.*` 同时承载调度、观察和决策生命周期，名称仍容易被理解成逐消息问答；Heartflow 的多输入 turn context 接近 observation，但协议尚未采用这套领域术语。输入与输出按各自节奏推进目前是设计哲学，不是统一并发协议。
+
+**仍待设计** — 同场景的多个 tick 如何形成稳定情境、重叠 cognition 窗口如何演进为经历导向的 Memory、以及持续情境如何驱动和修订行动，仍需分别通过设计 Issue 决定。本页不会提前指定 episode 分段、通用取消机制或破坏式 Kind 重命名。
+
 ## 当前已实现
 
 ::: timeline 统一运行入口
