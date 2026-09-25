@@ -91,6 +91,10 @@ flowchart LR
 
 现有实现细节以[运行时架构](./architecture)、[信息模块 SDK](./information-modules)和[Memory 认知层](./memory)为准。本页定义项目故事和设计检查项，不把待讨论方向描述为已经交付的协议。TML Interaction Models、GPT-Live 与 MaiBot 的可借鉴部分和适用边界集中记录在[外部设计参考](./design-references)。
 
+## 领域设计入口
+
+[#241](https://github.com/posanbu/Kaguya/issues/241) 的具体设计见[持续情境、记忆与行动契约](./continuous/)。该设计分别定义观察进度、Memory 形成进度和行动状态，给出冻结输入、经历修订、失败恢复与新信息干预的边界；这些规则仍待实现，当前映射不因文档增加而改变。
+
 ## 术语迁移边界
 
 本轮只调整文档语言，不重命名 `agent.turn.*` Information Kind、Heartbeat、Heartflow、数据库结构或模块配置。旧术语继续精确描述当前接口；新的项目讨论不再用 `session` 或单条“回合”暗示请求—回复模型。
