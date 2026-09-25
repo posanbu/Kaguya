@@ -53,7 +53,21 @@ Arousal 的 `defer` 记录下一次检查条件和到期唤醒，不能确认正
 
 [`Memory cognition`](https://github.com/posanbu/Kaguya/blob/ff5544603f528601b7a8930cf0396199691de4c2/packages/modules/src/first-party/memory-cognition/index.ts)使用独立 `scene.v2` key；其窗口选择规则也不同于 Heartbeat。实现应列出群聊、私聊、Web conversation 等映射样例并验证隔离，不能直接把两个 key 视为同义词。已有 `agent.turn.*` 的 terminal 继续描述当前协议，不自动解释为本设计中所有消费者的成功观察。
 
+Heartflow 的候选新旧比较按账本注册顺序进行：同时间戳下 UUID 字典序较小的新候选，以及发生时间较早但后来接收的候选，都不能被已经完成的旧候选反复替代。这修复了现有前台链的排序边界，仍不等于已实现各消费者独立的 observation 协议。
+
 后续工作包括统一映射契约、持久消费范围、快照版本及进度投影；协议新增字段使用版本化读取，旧记录通过明确兼容路径查询。旧记录只能证明其原本保存的范围，不能为其补造缺失的完整性证明。
+
+### 映射样例与冲突处理
+
+以下样例来自上述两处当前实现，用于约束迁移；示例中的 `qq`、`napcat`、`G`、`U` 是合成地址，`C` 表示有效的 Web conversation UUID。新的 scene 标识应登记这些地址的结构化映射，不能仅解析旧字符串推断身份。
+
+- **群聊**：平台 `qq`、适配器 `napcat`、群 `G` 的 Heartbeat scope 是 `qq:napcat:group:G`；cognition key 为 `["scene.v2","qq","napcat",null,{"kind":"group","groupId":"G"}]`。同群不同发言者共享场景，人物归属仍逐条保留。
+- **私聊**：目标 `U` 对应 `qq:napcat:private:U`；cognition key 还包含来源 `senderId`。映射到同一入口地址不意味着可以取消该 sender 读取约束；历史上分开的消费范围继续分别读取。
+- **Web**：带 conversation `C` 的 Heartbeat scope 为 `web:web:web:C`（假设平台和适配器均为 `web`）；无 conversation 的旧输入使用 `web:web:web:`。两者保持隔离。cognition key 同时保留 destination 和 sender，不把所有 Web 输入归为一个会话。
+
+旧 Heartbeat key 用冒号连接地址，不能假定该字符串可以无歧义地反向拆分。例如 `(platform=a:b, adapterId=c)` 和 `(platform=a, adapterId=b:c)` 可能生成相同字符串。迁移以来源 atom 中的完整地址及已有权限契约为证据；相同旧 key 下出现不同地址时登记冲突并分开映射，缺少地址的旧记录保留为未解析状态，不自动扩大可读范围。
+
+现有 durable subscription 能恢复其已登记交付，但新增订阅不会自动获得此前全部历史。启用独立 observation 消费者时，需要持久登记扫描起点、读取契约与回填任务；无法证明旧 context 完整覆盖的区间保持待处理，不能直接把最新 `agent.turn.context.completed` 当作所有新消费者的起始成功水位。
 
 ## 可验证时序与未采用方案
 

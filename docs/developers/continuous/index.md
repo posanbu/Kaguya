@@ -5,7 +5,7 @@ description: 持续 Agent 的领域设计、现有协议映射与分阶段实施
 
 # 持续情境、记忆与行动契约
 
-本文承接 [#241](https://github.com/posanbu/Kaguya/issues/241) 和[持续 Agent 设计原则](../continuous-agent)。设计方向已在 2026-09-25 的人工评审中确认：先确定 scene、冻结快照与水位的公共契约，再分别落实 Memory 形成和行动生命周期。本文把这一方向展开为供 PR 评审的具体规则；**规则属于目标设计，尚未由本次文档变更实现，也不代表三个 HITL issue 已完成最终验收。**
+本文承接 [#241](https://github.com/posanbu/Kaguya/issues/241) 和[持续 Agent 设计原则](../continuous-agent)。设计方向已在 2026-09-25 的人工评审中确认：先确定 scene、冻结快照与水位的公共契约，再分别落实 Memory 形成和行动生命周期。本文把这一方向落实为三个专题的设计结论、协议映射与可验证时序，已由 [PR #251](https://github.com/posanbu/Kaguya/pull/251) 合入。**规则属于目标设计，尚未由本次文档变更实现；设计合入与功能验收分别记录。**
 
 当前行为核对基线为 [`ff554460`](https://github.com/posanbu/Kaguya/tree/ff5544603f528601b7a8930cf0396199691de4c2)。当前接口仍以[运行时架构](../architecture)、[Memory 认知层](../memory)和对应源码为准；本文的领域标识不自动成为新的公开字段或 Information Kind。
 
@@ -60,4 +60,12 @@ description: 持续 Agent 的领域设计、现有协议映射与分阶段实施
 
 迁移采用增量方式：保留 `agent.turn.*`、现有 scope key、原始 Information ID 和旧 Memory；新增版本化投影与显式映射。旧 cognition 窗口没有证明完整经历，不自动转换成已验证 episode；旧投递记录也不推断未知的外部结果。回填、启用和回退必须有单独边界，不能只改名称就宣布行为完成。
 
-设计 PR 合并后，项目状态只能更新为“领域设计已形成、实现待完成”；后续实现通过自己的验收后再逐项更新。#241 及子议题的人工验收、设计合入、实现完成和部署是四个分别核实的状态。
+设计 PR 已合并，项目状态为“领域设计已形成、实现待完成”；后续实现通过自己的验收后再逐项更新。#241 及子议题的人工验收、设计合入、实现完成和部署是四个分别核实的状态。
+
+## 设计验收入口
+
+[#244](https://github.com/posanbu/Kaguya/issues/244) 的身份、合并、冻结、连续进度、失败/放弃与恢复要求，对应[情境与观察](./observation)；其中的映射样例明确说明旧 Heartbeat scope 与 cognition key 为什么不能直接互换。
+
+[#242](https://github.com/posanbu/Kaguya/issues/242) 的四层 Memory、真实输入、幂等/修正、既有模块迁移和群聊示例，对应[经历与长期认识](./memory-formation)。[#243](https://github.com/posanbu/Kaguya/issues/243) 的决策结果、执行阶段、新信息干预、协议映射与群聊/语音时序，对应[决策与行动](./action-lifecycle)。三个专题均记录未采用方案及其原因。
+
+这完成了 #241 所要求的领域设计交付与实现拆分。主分支已有设计文档；#247–#250 的行为验收仍分别进行。具体 Schema、数据库约束、策略阈值、provider 适配和端到端效果属于实现验证，不能用本页或设计评审代替。
