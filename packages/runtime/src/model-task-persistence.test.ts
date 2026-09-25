@@ -9,6 +9,9 @@
  * 日志使用 Runtime 的持久 outbox 与注入 logger，metrics/inspection 分别来自 executionHealth/ModuleHost；
  * 所有敏感字串均为合成探针，清理按 runner、Runtime、数据库顺序执行，不输出真实连接串。
  * JSON mode 连续结构化失败仍只产生一个 requested/failed，日志仅记录安全分类、次数和耗时。
+ * shutdown 用 barrier 延迟真实 claim release，分别等待 handler 与数据库释放完成；持久化轮询
+ * 沿用 Model Task 的 8 秒预算；settleOnCleanup 立即观察所有执行结果，失败路径释放 provider/gate
+ * 并等待每个后台任务后再关闭数据库，afterEach 汇总清理错误而不跳过后续资源。
  */
 import { existsSync } from "node:fs";
 import {
@@ -131,11 +134,32 @@ const activations = [{ ...activation, settings: { privateValue: secret } }];
 const subscriptions = [
   { subscriptionId: "test.model.consume", kind: sourceKind.kind },
 ];
+const persistenceWait = { timeout: 8_000, interval: 20 } as const;
 const cleanups: Array<() => Promise<unknown>> = [];
 afterEach(async () => {
-  vi.restoreAllMocks();
-  for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+  const errors: unknown[] = [];
+  try {
+    for (const cleanup of cleanups.splice(0).reverse()) {
+      try {
+        await cleanup();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+  } finally {
+    vi.restoreAllMocks();
+  }
+  if (errors.length)
+    throw new AggregateError(errors, "Persistence cleanup failed");
 });
+
+function settleOnCleanup(release: () => void, ...work: Promise<unknown>[]) {
+  const settled = Promise.allSettled(work);
+  cleanups.push(async () => {
+    release();
+    await settled;
+  });
+}
 
 function barrier() {
   let release!: () => void;
@@ -408,6 +432,7 @@ for (const backend of ["PGlite", "PostgreSQL"] as const) {
           () => f.client.execute(f.request),
         );
         const rejected = pending.catch((error: unknown) => error);
+        settleOnCleanup(() => deferred.release(), rejected);
         await deferred.started;
         const requested = await assertLedger(f);
         await f.runtime.close();
@@ -561,12 +586,13 @@ for (const backend of ["PGlite", "PostgreSQL"] as const) {
               }),
             }),
         );
-        const pending = Promise.all(
-          clients.map((client) => client.execute(f.request)),
-        );
+        const executions = clients.map((client) => client.execute(f.request));
+        const pending = Promise.all(executions);
+        settleOnCleanup(() => deferred.release(), pending, ...executions);
         try {
-          await vi.waitFor(() =>
-            expect(deferred.model.doGenerateCalls).toHaveLength(4),
+          await vi.waitFor(
+            () => expect(deferred.model.doGenerateCalls).toHaveLength(4),
+            persistenceWait,
           );
           await assertLedger(f);
         } finally {
@@ -647,6 +673,7 @@ for (const backend of ["PGlite", "PostgreSQL"] as const) {
           });
           const f = await fixture(backend, deferred.model);
           const slow = f.client.execute(f.request);
+          settleOnCleanup(() => deferred.release(), slow);
           await deferred.started;
           const requested = await assertLedger(f);
           const otherProvider = model();
@@ -694,6 +721,7 @@ for (const backend of ["PGlite", "PostgreSQL"] as const) {
           f.client.execute(f.request),
         );
         const rejected = pending.catch((error: unknown) => error);
+        settleOnCleanup(() => deferred.release(), rejected);
         await deferred.started;
         await assertLedger(f);
         await f.expire(claim);
@@ -741,21 +769,73 @@ for (const backend of ["PGlite", "PostgreSQL"] as const) {
             },
           ],
         });
-        cleanups.push(() => runner.stop());
-        await runner.start();
-        await deferred.started;
-        await assertLedger(f);
-        await runner.stop();
-        expect(signal?.aborted).toBe(true);
-        deferred.release();
-        await finished.promise;
-        expect(failures).toHaveLength(1);
-        await assertLedger(f);
-        const delivery = await f.db.sql.query(
-          "SELECT state, attempts FROM information_deliveries WHERE subscription_id = $1",
-          [subscriptions[0]!.subscriptionId],
+        const releaseEntered = barrier();
+        const allowRelease = barrier();
+        const release = f.db.information.reliable.release.bind(
+          f.db.information.reliable,
         );
-        expect(delivery.rows).toEqual([{ state: "pending", attempts: 0 }]);
+        let releaseWork: Promise<boolean> | undefined;
+        const releaseHook = vi
+          .spyOn(f.db.information.reliable, "release")
+          .mockImplementation((claim) => {
+            releaseWork = allowRelease.promise.then(() => release(claim));
+            releaseEntered.release();
+            return releaseWork;
+          });
+        const claim = f.db.information.reliable.claim.bind(
+          f.db.information.reliable,
+        );
+        let claimWork: Promise<InformationClaim | undefined> | undefined;
+        const claimHook = vi
+          .spyOn(f.db.information.reliable, "claim")
+          .mockImplementation((...args) => {
+            claimWork = claim(...args);
+            return claimWork;
+          });
+        const finishRunner = async () => {
+          deferred.release();
+          allowRelease.release();
+          await runner.stop();
+          // 即使前置断言失败时 claim 还在查询，也等它决定是否需要释放再关闭数据库。
+          const claimed = await claimWork;
+          if (signal) await finished.promise;
+          if (claimed) await releaseEntered.promise;
+          await releaseWork;
+        };
+        cleanups.push(finishRunner);
+        try {
+          await runner.start();
+          await deferred.started;
+          await assertLedger(f);
+          await runner.stop();
+          expect(signal?.aborted).toBe(true);
+          deferred.release();
+          await finished.promise;
+          expect(failures).toHaveLength(1);
+          await assertLedger(f);
+          await releaseEntered.promise;
+          // stop 的有界等待已结束，但真实 release 被 barrier 阻挡，确定性覆盖原失败窗口。
+          const held = await f.db.sql.query(
+            "SELECT state, attempts FROM information_deliveries WHERE subscription_id = $1",
+            [subscriptions[0]!.subscriptionId],
+          );
+          expect(held.rows).toEqual([{ state: "claimed", attempts: 1 }]);
+          allowRelease.release();
+          // 观察真实 SQL 的完成和返回值，不能仅依赖 handler finally 或吞掉 release 错误。
+          expect(await releaseWork).toBe(true);
+          const delivery = await f.db.sql.query(
+            "SELECT state, attempts FROM information_deliveries WHERE subscription_id = $1",
+            [subscriptions[0]!.subscriptionId],
+          );
+          expect(delivery.rows).toEqual([{ state: "pending", attempts: 0 }]);
+        } finally {
+          try {
+            await finishRunner();
+          } finally {
+            claimHook.mockRestore();
+            releaseHook.mockRestore();
+          }
+        }
         const recoveredProvider = model();
         await f.restart(recoveredProvider);
         const outcomes: ModelTaskResult<{ text: string }>[] = [];
@@ -775,8 +855,9 @@ for (const backend of ["PGlite", "PostgreSQL"] as const) {
         });
         cleanups.push(() => replacement.stop());
         await replacement.start();
-        await vi.waitFor(async () =>
-          expect((await f.core.executionHealth()).pending).toBe(0),
+        await vi.waitFor(
+          async () => expect((await f.core.executionHealth()).pending).toBe(0),
+          persistenceWait,
         );
         expect(outcomes).toHaveLength(1);
         await assertLedger(f, outcomes[0]!);
@@ -804,6 +885,7 @@ for (const backend of ["PGlite", "PostgreSQL"] as const) {
               });
             });
           const pending = f.client.execute(f.request);
+          settleOnCleanup(() => release.release(), pending);
           if (status !== "completed") {
             await entered.promise;
             const requested = await assertLedger(f);
