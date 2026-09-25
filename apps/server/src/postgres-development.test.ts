@@ -238,8 +238,6 @@ describe("Profile-backed PostgreSQL selection", () => {
           },
         ],
       },
-      memory: { enabled: true },
-      platforms: [],
     });
     const runner = runningManagedRunner(5432);
     const databaseChecks: Array<{ url: string; prepareSchema: boolean }> = [];
@@ -265,8 +263,8 @@ describe("Profile-backed PostgreSQL selection", () => {
     expect(profile.ai).toEqual(
       expect.objectContaining({ defaultProviderId: "provider-1" }),
     );
-    expect(profile.memory).toEqual({ enabled: true });
-    expect(profile.platforms).toEqual([]);
+    expect(profile).not.toHaveProperty("memory");
+    expect(profile).not.toHaveProperty("platforms");
     expect(profile.review).toBeUndefined();
     expect(databaseChecks).toEqual([
       { url: managedConnectionUrl(5432), prepareSchema: true },
@@ -283,8 +281,6 @@ describe("Profile-backed PostgreSQL selection", () => {
       acknowledgedWarnings: [],
       identity: profile.identity,
       ai: profile.ai,
-      memory: profile.memory,
-      platforms: profile.platforms,
       runtime: runtime(externalUrl, "external"),
     });
     let dockerCalls = 0;
@@ -485,8 +481,6 @@ async function configuredManagedRoot(): Promise<string> {
     acknowledgedWarnings: [],
     identity: profile.identity,
     ai: profile.ai,
-    memory: profile.memory,
-    platforms: profile.platforms,
     runtime: runtime(managedConnectionUrl(5432), "managed"),
   });
   return root;

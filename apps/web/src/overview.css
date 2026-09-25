@@ -26,10 +26,95 @@
     border-color 160ms ease-out,
     box-shadow 160ms ease-out;
 }
-.overview-tile:not(:disabled) {
+.overview-feature-tile {
+  grid-template-rows: auto 1fr auto auto;
+}
+.overview-feature-tile:hover {
+  border-color: color-mix(
+    in srgb,
+    var(--overview-tone) 42%,
+    var(--kaguya-line)
+  );
+}
+.overview-feature-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 8px;
+  margin-top: 12px;
+}
+.overview-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 42px;
+  height: 26px;
   cursor: pointer;
 }
-.overview-tile:not(:disabled):hover {
+.overview-switch input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+  z-index: 1;
+}
+.overview-switch input:disabled {
+  cursor: not-allowed;
+}
+.overview-switch-track {
+  width: 42px;
+  height: 26px;
+  border-radius: 999px;
+  background: var(--kaguya-line);
+  transition: background 160ms ease-out;
+}
+.overview-switch-track::after {
+  content: "";
+  display: block;
+  width: 20px;
+  height: 20px;
+  margin: 3px;
+  border-radius: 50%;
+  background: var(--kaguya-paper);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 18%);
+  transition: transform 160ms ease-out;
+}
+.overview-switch input:checked + .overview-switch-track {
+  background: var(--kaguya-cyan);
+}
+.overview-switch input:checked + .overview-switch-track::after {
+  transform: translateX(16px);
+}
+.overview-switch input:focus-visible + .overview-switch-track {
+  outline: 2px solid var(--kaguya-coral);
+  outline-offset: 3px;
+}
+.overview-switch input:disabled + .overview-switch-track {
+  opacity: 0.45;
+}
+.overview-feature-detail {
+  border: 0;
+  padding: 4px;
+  background: none;
+  color: var(--kaguya-ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.overview-feature-detail:focus-visible {
+  outline: 2px solid var(--kaguya-coral);
+  outline-offset: 2px;
+}
+button.overview-tile:not(:disabled) {
+  cursor: pointer;
+}
+button.overview-tile:not(:disabled):hover {
   transform: translateY(-2px);
   border-color: color-mix(
     in srgb,
@@ -38,7 +123,7 @@
   );
   box-shadow: 0 8px 24px rgb(0 0 0 / 8%);
 }
-.overview-tile:focus-visible {
+button.overview-tile:focus-visible {
   outline: 2px solid var(--kaguya-coral);
   outline-offset: 3px;
 }
@@ -103,5 +188,10 @@
   .overview-tile {
     width: 100%;
     padding: 16px;
+  }
+}
+@media (max-width: 380px) {
+  .overview-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

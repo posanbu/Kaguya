@@ -242,10 +242,7 @@ export function App() {
     if (path === "/memory") return <MemoryIngestion token={token} />;
     if (isOverview)
       return (
-        <AdapterManagementSection
-          token={token}
-          onRestartRequired={() => void navigate("/configuration/application")}
-        >
+        <AdapterManagementSection token={token}>
           {(openNapCatConfiguration, napCatWsUrl, napCatEndpointState) => (
             <Overview
               token={token}
@@ -1123,58 +1120,6 @@ function ProfileManagementScreen({
                         </label>
                       </div>
                     </fieldset>
-                    <fieldset className="identity-fields">
-                      <legend>Memory</legend>
-                      <ProfileSectionIssues section="memory" />
-                      <label
-                        className="setup-check"
-                        title="关闭时仅保留联想与 Prompt 协议形状，不读取、写入或召回实际信息。"
-                      >
-                        <ProfileField name="memoryEnabled">
-                          <input
-                            type="checkbox"
-                            checked={editorFields.memoryEnabled}
-                            onChange={(event) =>
-                              setEditorFields((current) =>
-                                current === undefined
-                                  ? current
-                                  : {
-                                      ...current,
-                                      memoryEnabled: event.target.checked,
-                                    },
-                              )
-                            }
-                          />
-                        </ProfileField>
-                        <span>启用 Memory</span>
-                        <span className="wb-sr-only">
-                          关闭时仅保留联想与 Prompt
-                          协议形状，不读取、写入或召回实际信息。
-                        </span>
-                      </label>
-                      <label className="setup-check">
-                        <input
-                          type="checkbox"
-                          checked={editorFields.memoryKnowledgeEnabled}
-                          disabled={!editorFields.memoryEnabled}
-                          onChange={(event) =>
-                            setEditorFields((current) =>
-                              current === undefined
-                                ? current
-                                : {
-                                    ...current,
-                                    memoryKnowledgeEnabled:
-                                      event.target.checked,
-                                  },
-                            )
-                          }
-                        />
-                        <span>启用事件 / Wiki 记忆与主动录入</span>
-                      </label>
-                      <p className="field-help">
-                        同时开启后，可从主导航的“记忆录入”整理人物、偏好和关系。保存并应用配置后生效。
-                      </p>
-                    </fieldset>
                     <button
                       className="setup-button"
                       type="submit"
@@ -1337,11 +1282,9 @@ function ModelTierEditor({
 
 function AdapterManagementSection({
   token,
-  onRestartRequired,
   children,
 }: {
   readonly token: string;
-  readonly onRestartRequired: () => void;
   readonly children: (
     openNapCatConfiguration: () => void,
     napCatWsUrl: string | undefined,
@@ -1350,6 +1293,7 @@ function AdapterManagementSection({
 }) {
   const config = useMemo(() => ({ token }), [token]);
   const [enabled, setEnabled] = useState(false);
+  const [revision, setRevision] = useState("");
   const [wsUrl, setWsUrl] = useState("");
   const [accessToken, setAccessToken] = useState("");
   const [selfId, setSelfId] = useState("");
@@ -1367,6 +1311,7 @@ function AdapterManagementSection({
   useEffect(() => {
     void getNapCatStatus(config).then(
       (status) => {
+        setRevision(status.revision);
         setEnabled(status.enabled);
         setWsUrl(status.wsUrl ?? "");
         setSelfId(status.selfId ?? "");
@@ -1382,6 +1327,25 @@ function AdapterManagementSection({
       },
     );
   }, [config]);
+  useEffect(() => {
+    const refresh = () => {
+      void getNapCatStatus(config).then(
+        (status) => {
+          setRevision(status.revision);
+          setEnabled(status.enabled);
+          if (!configurationOpen) {
+            setWsUrl(status.wsUrl ?? "");
+            setSelfId(status.selfId ?? "");
+            setReconnectMs(String(status.reconnectMs));
+            setHasAccessToken(status.hasAccessToken);
+          }
+        },
+        () => undefined,
+      );
+    };
+    window.addEventListener("kaguya:features-changed", refresh);
+    return () => window.removeEventListener("kaguya:features-changed", refresh);
+  }, [config, configurationOpen]);
 
   const handleSave = async (event: FormEvent) => {
     event.preventDefault();
@@ -1389,6 +1353,7 @@ function AdapterManagementSection({
     setError(undefined);
     try {
       const result = await saveNapCatSettings(config, {
+        revision,
         enabled,
         wsUrl,
         accessToken,
@@ -1396,9 +1361,10 @@ function AdapterManagementSection({
         reconnectMs: Number(reconnectMs),
       });
       setHasAccessToken(result.status.hasAccessToken);
+      setRevision(result.status.revision);
       setEndpointState("ready");
       setConfigurationOpen(false);
-      onRestartRequired();
+      window.dispatchEvent(new Event("kaguya:features-changed"));
     } catch (reason) {
       setError(errorMessage(reason));
     } finally {
@@ -1424,8 +1390,8 @@ function AdapterManagementSection({
           <Dialog.Content className="wb-dialog napcat-dialog">
             <Dialog.Title>配置 NapCat</Dialog.Title>
             <Dialog.Description>
-              填写 NapCat OneBot 正向 WebSocket（服务器）参数。保存后手动应用，
-              适配器会用新配置重新连接，无需重启 Kaguya。
+              填写 NapCat OneBot 正向
+              WebSocket（服务器）参数。保存后适配器会重新连接。
             </Dialog.Description>
             {error ? <FieldMessage tone="error">{error}</FieldMessage> : null}
             {loading ? (
@@ -1439,14 +1405,6 @@ function AdapterManagementSection({
                 className="setup-form"
                 onSubmit={(event) => void handleSave(event)}
               >
-                <label className="setup-check">
-                  <input
-                    type="checkbox"
-                    checked={enabled}
-                    onChange={(event) => setEnabled(event.target.checked)}
-                  />
-                  <span>启用 NapCat</span>
-                </label>
                 <label className="field">
                   <span>正向 WebSocket 服务器地址</span>
                   <input

@@ -40,7 +40,6 @@ const metadata = {
   updatedAt: "2026-08-30T00:00:00.000Z",
 };
 const profile = {
-  version: 1 as const,
   id: "default",
   name: "default",
   inboundAllowlist: [],
@@ -49,8 +48,6 @@ const profile = {
     timeZone: "Asia/Shanghai",
   },
   ai: { providers: [] },
-  memory: { enabled: false },
-  platforms: [],
 };
 const replacement = {
   name: "default",
@@ -78,8 +75,6 @@ const replacement = {
       },
     ],
   },
-  memory: { enabled: false },
-  platforms: [],
 };
 
 describe("gateway API client", () => {
@@ -236,7 +231,6 @@ describe("gateway API client", () => {
     expect(JSON.parse(String(request.mock.calls[3]?.[1]?.body))).toMatchObject({
       inboundAllowlist: ["qq:private:112233"],
       outboundAllowlist: ["qq:private:112233"],
-      memory: { enabled: false },
     });
   });
 });

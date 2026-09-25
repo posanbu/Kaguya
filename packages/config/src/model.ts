@@ -218,22 +218,11 @@ const runtimeConfigInnerSchema = z.strictObject({
 
 export const runtimeConfigSchema = runtimeConfigInnerSchema;
 
-const userConfigProfileSettingsInnerSchema = z
-  .strictObject({
-    identity: agentIdentitySchema,
-    ai: aiConfigSchema,
-    memory: memoryConfigSchema,
-    platforms: z.array(platformConfigSchema),
-    runtime: runtimeConfigSchema.optional(),
-  })
-  .superRefine((settings, context) => {
-    addDuplicateIdIssues(
-      settings.platforms,
-      "platform",
-      ["platforms"],
-      context,
-    );
-  });
+const userConfigProfileSettingsInnerSchema = z.strictObject({
+  identity: agentIdentitySchema,
+  ai: aiConfigSchema,
+  runtime: runtimeConfigSchema.optional(),
+});
 
 export const userConfigProfileSettingsSchema = guardSchemaInput(
   userConfigProfileSettingsInnerSchema,
@@ -245,7 +234,6 @@ const userConfigProfileReviewSchema = z.strictObject({
 
 const userConfigProfileInnerSchema = userConfigProfileSettingsInnerSchema
   .safeExtend({
-    version: z.literal(1),
     id: profileIdSchema,
     name: z.string().trim().min(1),
     review: userConfigProfileReviewSchema.optional(),
@@ -543,7 +531,5 @@ export function emptyUserConfigProfileSettings(): UserConfigProfileSettings {
   return {
     identity: structuredClone(DEFAULT_AGENT_IDENTITY),
     ai: { providers: [] },
-    memory: { enabled: false },
-    platforms: [],
   };
 }

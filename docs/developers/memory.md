@@ -5,7 +5,7 @@ description: Memory 原始文档、可重建向量与可替换认知层的边界
 
 # Memory 认知层选型
 
-> **破坏性命名升级：** Memory、Identity、Expression 与 Association 已统一使用 `memory.*` 协议命名空间。旧 definitionId、Information Kind、可靠操作键、模板和 capability 不提供别名、双读或自动迁移。升级既有实例前必须停机并备份配置根与数据库，然后使用全新数据库重新初始化模块配置；禁止在同一实例中混用新旧命名。
+> **历史命名空间边界：** Memory、Identity、Expression 与 Association 已统一使用 `memory.*` 协议命名空间。更早期的 definitionId、Information Kind、可靠操作键、模板和 capability 不提供别名或双读。本次独立开关的配置变更不会删除现有 PostgreSQL 消息、索引或记忆记录；旧命名空间实例仍需单独处理，不应混用。
 
 ## 处理单位与当前边界
 
@@ -21,7 +21,7 @@ Memory 需要区分触发单位、原始证据和派生认识。相关 Informati
 
 选择 [Mem0 OSS](https://github.com/mem0ai/mem0) 作为首个可替换 provider，通过其 [REST API](https://github.com/mem0ai/mem0/blob/c7ee362aff94a369af70f13f2b4f853f6793ff4c/server/main.py) 独立部署。2026-09-12 核对的上游 revision 为 `c7ee362aff94a369af70f13f2b4f853f6793ff4c`，[许可证为 Apache-2.0](https://github.com/mem0ai/mem0/blob/c7ee362aff94a369af70f13f2b4f853f6793ff4c/LICENSE)。Kaguya 不复制、vendor 或改写 Mem0/A_Memorix 的演化源码。A_Memorix 的 AGPL 与 Alpha 部署评估不纳入本次默认接入。
 
-**部署 — 独立服务。** Mem0 自行管理其 LLM、embedding、向量和历史后端；只在 selected Profile 显式启用时调用。服务凭据由宿主持有，模块只能使用版本化 `MemoryCognitionProvider` capability。不得向在线 Prompt 暴露服务地址、密钥或原始异常。
+**部署 — 独立服务。** Mem0 自行管理其 LLM、embedding、向量和历史后端；只在工作区的认知记忆实例显式启用时调用。服务凭据由宿主持有，模块只能使用版本化 `MemoryCognitionProvider` capability。不得向在线 Prompt 暴露服务地址、密钥或原始异常。
 
 **演化单位 — 有界证据快照。** 每次输入是同一 platform、adapter、destination 内已持久化的有序原始文档窗口。群聊保留不同账号的提问、转述与纠正；私聊还要求同一发送账号。每条输入保留陈述者的平台账号、场景、事件时间和 source Information ID，陈述者不自动等同于被谈论者。provider 独立完成提取与冲突消解；Kaguya 不实现事实合并启发式。每个 operation 继续使用独立上游命名空间，避免服务隐藏历史把未授权来源带入结果。派生快照保留完整的直接 source Information 引用，按证据截止时间选择最新的已完成快照，旧快照仍可审计。
 
@@ -31,33 +31,7 @@ Memory 需要区分触发单位、原始证据和派生认识。相关 Informati
 
 ## 配置和启用
 
-`memory.enabled` 默认 `false`。单独设为 `true` 会启用可靠原始写回与稀疏召回；embedding 与 cognition 都是可选项。以下是 Profile 的 Memory 片段，凭据应替换为自己服务的值，不应提交到 Git。Web 表单只显示总开关，provider 配置通过受保护的 Profile JSON 管理。
-
-::: code-group
-
-```json [Profile 片段 ~vscode-icons:file-type-json~]
-{
-  "memory": {
-    "enabled": true,
-    "embedding": {
-      "providerId": "local-embeddings",
-      "modelId": "configured-embedding-model",
-      "revision": "deployment-v1",
-      "dimensions": 1536,
-      "baseUrl": "http://127.0.0.1:8001/v1",
-      "apiKey": "replace-locally"
-    },
-    "cognition": {
-      "provider": "mem0-rest",
-      "revision": "deployment-v1",
-      "baseUrl": "http://127.0.0.1:8000",
-      "apiKey": "replace-locally"
-    }
-  }
-}
-```
-
-:::
+`memory.writeback` 默认关闭，开启后提供可靠原始写回与稀疏召回。`memory.knowledge`、`memory.index` 和 `memory.cognition` 是独立的工作区模块实例，均依赖原始记忆。概览提供即时开关；模块设置页填写 embedding 和 Mem0 的 `revision`、`baseUrl`、`apiKey` 等参数。密钥写入后不会在读取接口中回显。Profile 不包含 Memory 字段，也不带版本字段。
 
 Mem0 服务需要支持 `POST /memories` 的 `infer`、`user_id`、`run_id`、`metadata`，以及 `GET /memories` 的同名过滤与 `top_k`。部署与凭据由服务端管理，Kaguya 不启动该服务，也不把自身模型密钥交给它。适配器要求返回的 `user_id` 与 `metadata.sourceInformationIds` 对应本次操作；不符合契约时拒绝结果。每次认知最多读取 32 条同范围已入库消息，返回最多 32 条事实，超时为 30 秒。它保留完整输入窗口作为保守的来源集合，不把集合引用声称为逐句语义验证。
 
@@ -65,7 +39,7 @@ Mem0 服务需要支持 `POST /memories` 的 `infer`、`user_id`、`run_id`、`m
 
 `memory.writeback` durable 消费身份终态，用原始 inbound Information ID 登记唯一 request。Web ephemeral 与 canonical 消息都写入，人物 ID 不作为 Memory 主键。正文仅保存在原始文档，request/terminal 不复制正文。空正文、非法输入与来源冲突有明确终态；数据库瞬时错误由 Reliable Runner 有界重试，stop 保留 pending。
 
-composition 在 Memory 开启时补入写回实例；存在显式配置时尊重其 `enabled`。index/cognition 实例只在相应 provider 存在且总开关开启时加入。没有在线 Heartflow、Heartbeat、Composer 也能验收后台闭环。
+composition 只使用持久化配置中显式启用的写回、索引和认知实例。没有在线 Heartflow、Heartbeat、Composer 也能验收后台闭环。
 
 ## 向量与混合召回
 

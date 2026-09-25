@@ -106,6 +106,36 @@ export function createFirstPartyModuleConfigDefaults(
       enabled: true,
       settings: Object.freeze({}),
     }),
+    ...(
+      [
+        "memory.writeback",
+        "memory.knowledge",
+        "memory.index",
+        "memory.cognition",
+      ] as const
+    ).map((definitionId) =>
+      Object.freeze({
+        version: 1 as const,
+        instanceId: `${definitionId}.default`,
+        definitionId,
+        enabled: false,
+        settings: Object.freeze({}),
+      }),
+    ),
+    Object.freeze({
+      version: 1 as const,
+      instanceId: "adapter.web.main",
+      definitionId: "adapter.web",
+      enabled: true,
+      settings: Object.freeze({}),
+    }),
+    Object.freeze({
+      version: 1 as const,
+      instanceId: "adapter.napcat.main",
+      definitionId: "adapter.napcat",
+      enabled: false,
+      settings: Object.freeze({ reconnectMs: 3000 }),
+    }),
     Object.freeze({
       version: 1 as const,
       instanceId: "memory.identity.default",
@@ -190,6 +220,7 @@ export function createFirstPartyModuleActivations(
 ): readonly InformationModuleActivation[] {
   return Object.freeze(
     configs
+      .filter((config) => !config.definitionId.startsWith("adapter."))
       .map((config) => {
         if (
           config.definitionId === "demo.reply.llm" ||

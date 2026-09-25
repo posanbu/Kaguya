@@ -316,11 +316,14 @@ it("registers only usable outbound transports without coupling adapter start to 
     submit: async () => ({ rootInformationId: "root", deliveries: [] }),
   });
   expect(start).not.toHaveBeenCalled();
-  expect(registerTransport).toHaveBeenCalledExactlyOnceWith({
-    adapterId: "qq",
-    platform: "qq",
-    transport: outboundTransport,
-  });
+  expect(registerTransport).toHaveBeenCalledTimes(3);
+  expect(registerTransport).toHaveBeenCalledWith(
+    expect.objectContaining({
+      adapterId: "qq",
+      platform: "qq",
+      transport: expect.any(Object),
+    }),
+  );
   await host.start();
   expect(start).toHaveBeenCalledOnce();
   await host.stop();

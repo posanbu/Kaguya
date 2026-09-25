@@ -219,7 +219,26 @@ export const memoryCognitionModule = defineInformationModule({
     summary: "通过可替换的认知提供方生成有来源证据的快照。",
     description:
       "原始记忆写回后冻结已持久化原文的有限窗口，提交认知请求并验证提供方结果，输出完成、空结果或被替代的快照；与在线回复独立，不改写原始记忆。",
-    settingsSchema: z.object({}).strict(),
+    settingsSchema: z
+      .object({
+        revision: z.string().min(1).optional().meta({
+          title: "版本",
+          description: "Mem0 配置版本。",
+          public: true,
+        }),
+        baseUrl: z.url().optional().meta({
+          title: "服务地址",
+          description: "Mem0 REST API 地址。",
+          public: true,
+        }),
+        apiKey: z.string().min(1).optional().meta({
+          title: "API Key",
+          description: "Mem0 API 凭据；留空则保留原值。",
+          public: true,
+          secret: true,
+        }),
+      })
+      .strict(),
     consumes: [
       memoryWritebackCompletedInformationKind,
       memoryCognitionRequestedInformationKind,

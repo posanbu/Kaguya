@@ -21,7 +21,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
-import { FileUserConfigManager } from "@kaguya/config";
+import {
+  FileUserConfigManager,
+  loadModuleInstanceConfigs,
+} from "@kaguya/config";
+import { createFirstPartyModuleConfigDefaults } from "@kaguya/modules";
 
 import {
   createConfigurationManagement,
@@ -119,7 +123,7 @@ describe("configuration management", () => {
         status: "ready",
         selectedProfileId: created.profile.id,
         memoryInfrastructure: expect.objectContaining({
-          enabled: false,
+          enabled: true,
           databaseMode: "external",
           host: "database.example",
           port: 5432,
@@ -159,8 +163,6 @@ describe("configuration management", () => {
         acknowledgedWarnings: [],
         identity: created.profile.identity,
         ai: { providers: [] },
-        memory: { enabled: false },
-        platforms: [],
       });
 
       expect(replaced.restartRequired).toBe(true);
@@ -215,8 +217,6 @@ describe("configuration management", () => {
         acknowledgedWarnings: [],
         identity: original.identity,
         ai: original.ai,
-        memory: original.memory,
-        platforms: original.platforms,
         runtime: runtimeFixture,
       });
       const management = await createConfigurationManagement(root);
@@ -236,8 +236,6 @@ describe("configuration management", () => {
         acknowledgedWarnings: [],
         identity: original.identity,
         ai: original.ai,
-        memory: original.memory,
-        platforms: original.platforms,
       });
       await expect(management.getProfile(original.id)).resolves.toMatchObject({
         inboundAllowlist: ["qq:group:778899"],
@@ -274,8 +272,6 @@ describe("configuration management", () => {
           acknowledgedWarnings: [],
           identity: original.identity,
           ai: original.ai,
-          memory: original.memory,
-          platforms: original.platforms,
           runtime: runtimeFixture,
         });
         const profilePath = join(root, "profiles", "profile_default.json");
@@ -323,9 +319,10 @@ describe("configuration management", () => {
     }
   });
 
-  it("reads and writes NapCat through the selected Profile", async () => {
+  it("reads and writes NapCat through global module configuration", async () => {
     const root = await mkdtemp(join(tmpdir(), "kaguya-setup-napcat-"));
     try {
+      await initializeModules(root);
       const management = await createConfigurationManagement(root);
       const settings = {
         enabled: true,
@@ -340,21 +337,16 @@ describe("configuration management", () => {
       );
       await expect(management.getNapCatSettings?.()).resolves.toEqual(settings);
       const selected = await management.getProfile("default");
-      expect(selected.platforms).toContainEqual(
-        expect.objectContaining({
-          id: "napcat.qq.main",
-          type: "napcat",
-          enabled: true,
-        }),
-      );
+      expect(selected).not.toHaveProperty("platforms");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
 
-  it("ignores napcat.json and reads only the selected Profile", async () => {
+  it("ignores napcat.json and reads global module configuration", async () => {
     const root = await mkdtemp(join(tmpdir(), "kaguya-configuration-napcat-"));
     try {
+      await initializeModules(root);
       await writeFile(
         join(root, "napcat.json"),
         JSON.stringify({ enabled: true, accessToken: "legacy-secret" }),
@@ -373,6 +365,14 @@ describe("configuration management", () => {
     }
   });
 });
+
+async function initializeModules(rootDir: string): Promise<void> {
+  await loadModuleInstanceConfigs({
+    rootDir,
+    defaults: createFirstPartyModuleConfigDefaults("production"),
+    initialize: true,
+  });
+}
 
 const runtimeFixture = {
   host: "127.0.0.1",
@@ -412,8 +412,6 @@ async function createRuntimeBackedManagement(root: string) {
     acknowledgedWarnings: [],
     identity: profile.identity,
     ai: profile.ai,
-    memory: profile.memory,
-    platforms: profile.platforms,
     runtime: runtimeFixture,
   });
   return createConfigurationManagement(root);
@@ -442,7 +440,5 @@ function readyProfileSettings(lightModelId: string, heavyModelId: string) {
         },
       ],
     },
-    memory: { enabled: false },
-    platforms: [],
   };
 }

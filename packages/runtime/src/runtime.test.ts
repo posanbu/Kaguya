@@ -216,16 +216,28 @@ async function createRuntime(
 ) {
   const database = await createTestingDatabase();
   let id = 0;
+  const memoryEnabled = overrides.memory?.enabled === true;
+  const activations = memoryEnabled
+    ? createFirstPartyModuleActivations(
+        createMessageComposition(undefined, undefined, true).catalog,
+        createFirstPartyModuleConfigDefaults("test").map((config) =>
+          config.definitionId === "memory.writeback"
+            ? { ...config, enabled: true }
+            : config,
+        ),
+      )
+    : overrides.activations;
+  const composition = createMessageComposition(
+    overrides.resolveModelSelection,
+    activations,
+    memoryEnabled,
+  );
   const runtime = new KaguyaRuntime({
-    ...createMessageComposition(),
+    ...composition,
     outboundAllowlist: new GatewayAllowlist(["qq:group:*", "qq:private:*"]),
     database,
     now: () => new Date("2026-09-04T00:00:01.000Z"),
     informationIdGenerator: () => `runtime-atom-${++id}`,
-    ...createMessageComposition(
-      overrides.resolveModelSelection,
-      overrides.activations,
-    ),
     ...overrides,
   });
   resources.push({ runtime, database });
@@ -1800,6 +1812,7 @@ function createDeterministicModelSelectionResolver(): RuntimeModelSelectionResol
 function createMessageComposition(
   resolveModelSelection: RuntimeModelSelectionResolver = createDeterministicModelSelectionResolver(),
   providedActivations?: readonly InformationModuleActivation[],
+  memoryEnabled = false,
 ) {
   const catalog = createFirstPartyModuleCatalog({
     modelTaskCapability,
@@ -1812,7 +1825,7 @@ function createMessageComposition(
     promptTemplates: testMessageTemplates,
     plannerTemplate: testPrompts.planner,
     plannerBootstrapPolicy: testPrompts.plannerBootstrapPolicy,
-    memoryEnabled: false,
+    memoryEnabled,
     expressionTemplates: testPrompts.expression,
     qqExpressionTemplates: testPrompts.qqExpression,
     agentIdentity: testIdentity,

@@ -32,6 +32,7 @@ export interface GatewayConfig {
 }
 
 export interface NapCatStatus {
+  readonly revision: string;
   readonly enabled: boolean;
   readonly wsUrl?: string;
   readonly hasAccessToken: boolean;
@@ -40,6 +41,7 @@ export interface NapCatStatus {
 }
 
 export interface NapCatSettingsInput {
+  readonly revision: string;
   readonly enabled: boolean;
   readonly wsUrl: string;
   readonly accessToken: string;
@@ -49,7 +51,7 @@ export interface NapCatSettingsInput {
 
 export interface NapCatMutationResult {
   readonly status: NapCatStatus;
-  readonly restartRequired: true;
+  readonly restartRequired: false;
   readonly application?: ConfigurationApplicationStatus;
 }
 
@@ -118,7 +120,6 @@ export interface UserConfigProfilePlatform {
 }
 
 export interface UserConfigProfile {
-  readonly version: 1;
   readonly id: string;
   readonly name: string;
   readonly inboundAllowlist: readonly string[];
@@ -144,11 +145,6 @@ export interface UserConfigProfile {
     };
     readonly providers: readonly UserConfigProfileProvider[];
   };
-  readonly memory: {
-    readonly enabled: boolean;
-    readonly knowledgeEnabled?: boolean;
-  };
-  readonly platforms: readonly UserConfigProfilePlatform[];
   readonly review?: {
     readonly acknowledgedWarnings: readonly string[];
   };
@@ -247,11 +243,6 @@ export interface ReplaceProfileInput {
     };
     readonly providers: readonly UserConfigProfileProvider[];
   };
-  readonly memory: {
-    readonly enabled: boolean;
-    readonly knowledgeEnabled?: boolean;
-  };
-  readonly platforms: readonly UserConfigProfilePlatform[];
 }
 
 export type ProfileReplacementInput = ReplaceProfileInput;
@@ -737,7 +728,7 @@ function isNapCatMutationResponse(
     isRecord(value.data) &&
     (value.data.application === undefined ||
       isApplicationStatus(value.data.application)) &&
-    value.data.restartRequired === true &&
+    value.data.restartRequired === false &&
     isNapCatStatus(value.data.status)
   );
 }
@@ -746,6 +737,7 @@ function isNapCatStatus(value: unknown): value is NapCatStatus {
   if (!isRecord(value)) return false;
   return (
     typeof value.enabled === "boolean" &&
+    typeof value.revision === "string" &&
     typeof value.hasAccessToken === "boolean" &&
     typeof value.reconnectMs === "number" &&
     (value.wsUrl === undefined || typeof value.wsUrl === "string") &&
@@ -898,23 +890,17 @@ function isOptionalString(value: unknown): value is string | undefined {
 function isUserConfigProfile(value: unknown): value is UserConfigProfile {
   return (
     isRecord(value) &&
-    value.version === 1 &&
+    !("version" in value) &&
     typeof value.id === "string" &&
     typeof value.name === "string" &&
     isProfileIdentity(value.identity) &&
     isStringArray(value.inboundAllowlist) &&
     isStringArray(value.outboundAllowlist) &&
     isProfileAi(value.ai) &&
-    isProfileMemory(value.memory) &&
-    isProfilePlatformArray(value.platforms) &&
     !("plugins" in value) &&
     !("runtime" in value) &&
     (value.review === undefined || isProfileReview(value.review))
   );
-}
-
-function isProfileMemory(value: unknown): value is UserConfigProfile["memory"] {
-  return isRecord(value) && typeof value.enabled === "boolean";
 }
 
 function isProfileAi(value: unknown): value is UserConfigProfile["ai"] {

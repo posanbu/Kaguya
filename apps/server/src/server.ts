@@ -27,6 +27,7 @@ import {
 } from "./memory-ingestion.js";
 import { IdentityPersonaManagement } from "./identity-persona-management.js";
 import { ModuleSettingsManagement } from "./module-settings-management.js";
+import { FEATURE_IDS, FeatureManagement } from "./feature-management.js";
 import { GatewayAllowlist } from "@kaguya/runtime";
 import {
   createInspectionService,
@@ -41,6 +42,7 @@ import {
   createMessageCatalog,
   createMessageComposition,
   createMemoryCompositionOptions,
+  memoryConfigFromModules,
   type RuntimeModelSelectionResolver,
 } from "@kaguya/composition";
 import { pathToFileURL } from "node:url";
@@ -89,15 +91,11 @@ import {
   type ServerConfig,
 } from "./config.js";
 import { createGatewayAuthenticator } from "./gateway-auth.js";
-import { createNapCatSupervisor } from "./napcat.js";
+import { createServerAdapterHost, napCatPlugin } from "./adapter-plugins.js";
 import { createConfigurationManagement } from "./configuration-management.js";
 import { AdapterHost } from "./adapter-host.js";
-import type {
-  AdapterConnectionStatus,
-  RuntimeUnavailableReason,
-} from "@kaguya/platform-adapters";
+import type { RuntimeUnavailableReason } from "@kaguya/platform-adapters";
 import { registerWebUi, type WebUiHandle } from "./web.js";
-import { createWebOutboundTransport } from "@kaguya/platform-adapters";
 import { createWebChatHistory } from "./web-chat.js";
 
 export interface StartedKaguyaServer {
@@ -185,11 +183,23 @@ export async function startKaguyaServer(
         workspaceIdentity(),
       ),
     });
+    if (
+      moduleConfigs.find((item) => item.definitionId === "adapter.web")
+        ?.enabled !== true
+    )
+      throw new Error("Web adapter plugin must remain enabled");
     createMessageComposition(undefined, {
       moduleConfigs,
       agentIdentity: selectedProfile.identity,
     });
-    config = providedConfig ?? createServerConfig(selectedProfile, bootstrap);
+    config =
+      providedConfig ??
+      createServerConfig(
+        selectedProfile,
+        bootstrap,
+        undefined,
+        inspectNapCatConfig(moduleConfigs),
+      );
     assertLoopbackHost(config.host);
   } catch (error) {
     rootLogger ??= createLogger({ service: "kaguya" });
@@ -237,8 +247,8 @@ export async function startKaguyaServer(
   const memoryIngestion = new MemoryIngestionService(() =>
     runtime &&
     database &&
-    selectedProfile.memory.enabled &&
-    selectedProfile.memory.knowledgeEnabled
+    memoryConfigFromModules(moduleConfigs).enabled &&
+    memoryConfigFromModules(moduleConfigs).knowledgeEnabled
       ? {
           store: new PostgresMemoryIngestionStore(database.sql),
           generate: createMemoryIngestionGenerator(
@@ -310,7 +320,9 @@ export async function startKaguyaServer(
           database,
           logger: rootLogger,
           ...createMessageComposition(resolveModelSelection, {
-            ...createMemoryCompositionOptions(selectedProfile.memory),
+            ...createMemoryCompositionOptions(
+              memoryConfigFromModules(moduleConfigs),
+            ),
             moduleConfigs,
             agentIdentity: selectedProfile.identity,
           }),
@@ -421,12 +433,14 @@ export async function startKaguyaServer(
           bootstrap,
           () => config.gatewayToken,
         );
-        if (inspectNapCatConfig(snapshot.profile).configurationError)
+        if (inspectNapCatConfig(snapshot.moduleConfigs).configurationError)
           throw new Error("Invalid adapter configuration");
         createMessageComposition(
           createRuntimeModelSelectionResolver(snapshot.profile),
           {
-            ...createMemoryCompositionOptions(snapshot.profile.memory),
+            ...createMemoryCompositionOptions(
+              memoryConfigFromModules(snapshot.moduleConfigs),
+            ),
             moduleConfigs: snapshot.moduleConfigs,
             agentIdentity: snapshot.profile.identity,
           },
@@ -460,7 +474,7 @@ export async function startKaguyaServer(
           ...config,
           inboundAllowlist: snapshot.profile.runtime!.inboundAllowlist,
           outboundAllowlist: snapshot.profile.runtime!.outboundAllowlist,
-          napcat: inspectNapCatConfig(snapshot.profile),
+          napcat: inspectNapCatConfig(snapshot.moduleConfigs),
         };
         const nextHost = createServerAdapterHost(nextConfig, rootLogger);
         nextHost.pauseIngress();
@@ -480,7 +494,9 @@ export async function startKaguyaServer(
             ...createMessageComposition(
               createRuntimeModelSelectionResolver(snapshot.profile),
               {
-                ...createMemoryCompositionOptions(snapshot.profile.memory),
+                ...createMemoryCompositionOptions(
+                  memoryConfigFromModules(snapshot.moduleConfigs),
+                ),
                 moduleConfigs: snapshot.moduleConfigs,
                 agentIdentity: snapshot.profile.identity,
               },
@@ -536,6 +552,76 @@ export async function startKaguyaServer(
     configuration.setApplicationStatusProvider(() =>
       application!.captureStatus(),
     );
+    const featureManagement = new FeatureManagement({
+      rootDir: bootstrap.configRoot,
+      defaults: createFirstPartyModuleConfigDefaults(),
+      exclusive: (operation) => configuration.exclusive(operation),
+      activateMemory: async (nextConfigs) => {
+        if (!runtime) throw new Error("Runtime is unavailable");
+        const memory = memoryConfigFromModules(nextConfigs);
+        const composition = createMessageComposition(
+          createRuntimeModelSelectionResolver(selectedProfile),
+          {
+            ...createMemoryCompositionOptions(memory),
+            moduleConfigs: nextConfigs,
+            agentIdentity: selectedProfile.identity,
+          },
+        );
+        await memoryIngestion.pause();
+        try {
+          await runtime.replaceMemoryFeatures({
+            memory: composition.memory,
+            activations: composition.activations,
+            capabilities: composition.capabilities,
+            ...(composition.memoryFeatureState.cognitionIdentity
+              ? {
+                  cognitionIdentity:
+                    composition.memoryFeatureState.cognitionIdentity,
+                }
+              : {}),
+          });
+        } catch (error) {
+          if (!(error instanceof AggregateError)) memoryIngestion.start();
+          throw error;
+        }
+      },
+      activateNapCat: (nextConfigs) => {
+        const napcat = inspectNapCatConfig(nextConfigs);
+        return adapterHost.replaceAdapter(
+          napCatPlugin.create(napcat, adapterHost, rootLogger!),
+        );
+      },
+      activeMemory: () => {
+        try {
+          return (
+            runtime
+              ?.inspectModules()
+              .filter((item) => item.bindings.length > 0)
+              .map((item) => item.definitionId) ?? []
+          );
+        } catch {
+          return [];
+        }
+      },
+      napCatLifecycle: () => {
+        const status = adapterHost
+          .status()
+          .adapters.find((item) => item.type === "napcat");
+        return (
+          status && {
+            lifecycle: status.lifecycle,
+            connectivity: status.connectivity,
+          }
+        );
+      },
+      committed: (nextConfigs) => {
+        moduleConfigs = nextConfigs;
+        application?.markModulesApplied(nextConfigs, FEATURE_IDS);
+        secretHistory.push({ moduleConfigs: nextConfigs });
+        memoryIngestion.start();
+      },
+      recovered: () => memoryIngestion.start(),
+    });
     app = await inStartupPhase("http_application", () =>
       createHttpApplication({
         config: effectiveConfig,
@@ -543,6 +629,7 @@ export async function startKaguyaServer(
         memoryIngestion,
         messageTargets: () => runtime?.messageTargets,
         configurationApplication: application,
+        featureManagement,
         gatewayAuth,
         webGateway: { ingest: (input) => adapterHost.webGateway.ingest(input) },
         webChatHistory: () =>
@@ -563,6 +650,8 @@ export async function startKaguyaServer(
           catalog: createMessageCatalog(),
           defaults: createFirstPartyModuleConfigDefaults(),
           exclusive: (operation) => configuration.exclusive(operation),
+          replaceFeature: (current, next) =>
+            featureManagement.replaceUnlocked(current, next),
         }),
         logger: httpLogger,
       }),
@@ -624,48 +713,6 @@ export async function startKaguyaServer(
   };
   unregisterShutdown = registerShutdownHandlers(started, serverLogger);
   return started;
-}
-
-/** 每次切换创建独立适配器宿主；旧 NapCat 回调不引用新宿主，暂停入站不影响旧出口。 */
-function createServerAdapterHost(
-  config: ServerConfig,
-  logger: KaguyaLogger,
-): AdapterHost {
-  const host = new AdapterHost(logger, config.inboundAllowlist);
-  host.register({
-    adapterId: "web.ui.main",
-    type: "web",
-    platform: "web",
-    enabled: true,
-    outboundTransport: createWebOutboundTransport(),
-    start: async () => {},
-    stop: async () => {},
-  });
-  let reportStatus: ((status: AdapterConnectionStatus) => void) | undefined;
-  const napcat = createNapCatSupervisor({
-    config: config.napcat,
-    ingress: host.ingress,
-    logger: createModuleLogger(logger, "adapter:napcat"),
-    allowsInbound: (message) => host.acceptInbound(message),
-    reportStatus: (status) => reportStatus?.(status),
-  });
-  host.register({
-    adapterId: config.napcat.adapterId,
-    type: "napcat",
-    platform: "qq",
-    enabled: config.napcat.enabled,
-    ...(config.napcat.configurationError
-      ? { configurationError: config.napcat.configurationError }
-      : {}),
-    outboundTransport: napcat,
-    targetDirectory: napcat,
-    start: async (report) => {
-      reportStatus = report;
-      await napcat.start();
-    },
-    stop: () => napcat.stop(),
-  });
-  return host;
 }
 
 async function inStartupPhase<Result>(

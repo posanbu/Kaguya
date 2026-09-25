@@ -35,6 +35,8 @@ type RuntimeTarget = InformationIngress & {
 export class AdapterHost {
   private readonly adapters = new Map<string, HostedAdapter>();
   private readonly snapshots = new Map<string, AdapterSnapshot>();
+  private readonly outboundInFlight = new Map<string, Set<Promise<unknown>>>();
+  private readonly replacing = new Set<string>();
   private readonly allowlist: GatewayAllowlist;
   private state: AdapterHostStatus["adapterHostState"] = "stopped";
   private runtime: InformationIngress | undefined;
@@ -81,16 +83,115 @@ export class AdapterHost {
   /** Runtime keeps its pre-start transport registration contract; binding is finalized only after start succeeds. */
   registerTransports(runtime: RuntimeTarget): void {
     for (const adapter of this.adapters.values()) {
-      if (
-        adapter.enabled &&
-        !adapter.configurationError &&
-        adapter.outboundTransport
-      )
+      if (adapter.outboundTransport)
         runtime.registerTransport({
           adapterId: adapter.adapterId,
           platform: adapter.platform,
-          transport: adapter.outboundTransport,
+          transport: {
+            sendMessage: (target, message, metadata) => {
+              const current = this.adapters.get(adapter.adapterId);
+              if (
+                !current?.enabled ||
+                this.snapshots.get(adapter.adapterId)?.lifecycle !==
+                  "running" ||
+                !current.outboundTransport
+              )
+                throw new Error("Adapter is disabled");
+              const pending = Promise.resolve(
+                current.outboundTransport.sendMessage(
+                  target,
+                  message,
+                  metadata,
+                ),
+              );
+              let active = this.outboundInFlight.get(adapter.adapterId);
+              if (!active)
+                this.outboundInFlight.set(
+                  adapter.adapterId,
+                  (active = new Set()),
+                );
+              active.add(pending);
+              void pending
+                .finally(() => active!.delete(pending))
+                .catch(() => undefined);
+              return pending;
+            },
+          },
         });
+    }
+  }
+
+  /** Replace a single static plugin without suspending Web or other adapters. */
+  async replaceAdapter(next: HostedAdapter): Promise<void> {
+    const id = next.adapterId;
+    const previous = this.adapters.get(id);
+    if (
+      !previous ||
+      previous.type === "web" ||
+      previous.type !== next.type ||
+      previous.platform !== next.platform ||
+      this.stopping ||
+      !this.startPromise ||
+      this.replacing.has(id)
+    )
+      throw new Error("Adapter cannot be replaced");
+    if (next.configurationError)
+      throw new Error("Adapter configuration is invalid");
+    this.replacing.add(id);
+    const previousSnapshot = this.snapshots.get(id)!;
+    let oldStopped = false;
+    try {
+      this.patch(id, { lifecycle: "stopping" });
+      const work = [...(this.outboundInFlight.get(id) ?? [])];
+      if (work.length) {
+        const drained = await Promise.race([
+          Promise.allSettled(work).then(() => true),
+          new Promise<false>((resolve) =>
+            setTimeout(() => resolve(false), 5000),
+          ),
+        ]);
+        if (!drained) throw new Error("Adapter outbound drain timed out");
+      }
+      if (previous.enabled) {
+        await previous.stop();
+        oldStopped = true;
+      }
+      this.adapters.set(id, next);
+      this.patch(id, {
+        enabled: next.enabled,
+        lifecycle: next.enabled ? "starting" : "disabled",
+        connectivity:
+          next.platform === "web" ? "not_applicable" : "disconnected",
+      });
+      if (next.enabled) {
+        await next.start((status) => {
+          if (this.adapters.get(id) === next && !this.stopping)
+            this.connectionStatus(id, status);
+        });
+        this.patch(id, { lifecycle: "running" });
+      }
+    } catch (error) {
+      if (this.adapters.get(id) === next && next.enabled)
+        await next.stop().catch(() => undefined);
+      this.adapters.set(id, previous);
+      this.snapshots.set(id, previousSnapshot);
+      if (oldStopped) {
+        try {
+          await previous.start((status) => {
+            if (this.adapters.get(id) === previous && !this.stopping)
+              this.connectionStatus(id, status);
+          });
+        } catch (recoveryError) {
+          this.patch(id, { lifecycle: "failed", errorType: "start_failed" });
+          throw new AggregateError(
+            [error, recoveryError],
+            "Adapter switch and recovery failed",
+          );
+        }
+      }
+      throw error;
+    } finally {
+      this.replacing.delete(id);
     }
   }
   finalizeRuntime(

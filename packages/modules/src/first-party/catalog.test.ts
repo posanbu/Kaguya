@@ -115,11 +115,22 @@ describe("first-party module configuration", () => {
       }
     }
   });
-  it("materializes nine complete v1 defaults and activates enabled instances", () => {
+  it("materializes four disabled Memory features and static adapters", () => {
     const defaults = createFirstPartyModuleConfigDefaults("production");
-    expect(defaults).toHaveLength(9);
+    expect(defaults).toHaveLength(15);
+    expect(defaults.every(({ version }) => version === 1)).toBe(true);
+    for (const id of [
+      "memory.writeback",
+      "memory.knowledge",
+      "memory.index",
+      "memory.cognition",
+      "adapter.napcat",
+    ])
+      expect(
+        defaults.find((config) => config.definitionId === id)?.enabled,
+      ).toBe(false);
     expect(
-      defaults.every(({ version, enabled }) => version === 1 && enabled),
+      defaults.find((config) => config.definitionId === "adapter.web")?.enabled,
     ).toBe(true);
     expect(createFirstPartyModuleActivations(catalog(), defaults)).toHaveLength(
       9,

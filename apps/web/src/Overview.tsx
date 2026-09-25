@@ -1,10 +1,10 @@
 /**
- * 功能概述：工作台根路径的只读系统概览，回答 Runtime、Adapter 和 Memory 物理基础设施是否就绪。
+ * 功能概述：工作台概览展示基础设施状态，并提供 Memory 与 NapCat 的即时开关。
  * 主要职责：Overview 读取安全接入快照和当前 Profile 的脱敏 Memory 存储摘要；
  * OverviewTile 用等尺寸图标、核心状态和紧凑元数据表达就绪度。
  * useRead 在重试、Token 变化及卸载时丢弃过期结果。
  * 代码库关系：App 挂载本页，复用 api.ts 安全 DTO 和 #144 基础组件与导航回调。
- * 输入输出与副作用：只发 GET，不读取凭据、不应用配置、不发送消息；共享接入请求的
+ * 输入输出与副作用：读取状态并在用户切换时提交版本校验请求；共享接入请求的
  * Runtime 与 Adapter 分开显示，读取失败不会推断为停机。
  */
 import {
@@ -17,6 +17,14 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { getAdapterStatus, type MemoryInfrastructureSummary } from "./api.js";
+import {
+  FEATURE_CHANGED_EVENT,
+  getFeatures,
+  putFeature,
+  type FeatureId,
+  type FeatureStatus,
+  type FeatureView,
+} from "./feature-api.js";
 import { Button, Dialog, PageHeader, StatusBadge } from "./components/ui.js";
 import "./overview.css";
 
@@ -46,6 +54,7 @@ function useRead<T>(token: string, load: (token: string) => Promise<T>) {
 }
 const readAdapters = (token: string) =>
   getAdapterStatus({ token }, new AbortController().signal);
+const readFeatures = (token: string) => getFeatures(token);
 const labels: Record<string, string> = {
   ready: "可接收消息",
   runtime_unavailable: "消息入口不可用",
@@ -107,6 +116,71 @@ function OverviewTile({
       {meta ? <span className="overview-tile-meta">{meta}</span> : null}
       {detail && <span className="wb-sr-only">{detail}</span>}
     </button>
+  );
+}
+
+function FeatureTile({
+  title,
+  icon: Icon,
+  feature,
+  busy,
+  onSwitch,
+  onDetails,
+  meta,
+}: {
+  title: string;
+  icon: LucideIcon;
+  feature: FeatureStatus | undefined;
+  busy: boolean;
+  onSwitch: (enabled: boolean) => void;
+  onDetails: () => void;
+  meta?: string;
+}) {
+  const blocked = !!feature?.blocker && !feature.enabled;
+  const status = !feature
+    ? "读取中"
+    : busy
+      ? "切换中"
+      : feature.lifecycle === "retrying"
+        ? "已开启，重连中"
+        : feature.active
+          ? "运行中"
+          : feature.enabled
+            ? "启动失败"
+            : "已关闭";
+  return (
+    <article
+      className={`overview-tile overview-feature-tile overview-tile-${feature?.active ? "success" : feature?.enabled ? "error" : "neutral"}`}
+    >
+      <span className="overview-tile-icon" aria-hidden="true">
+        <Icon />
+      </span>
+      <span className="overview-tile-title">{title}</span>
+      <strong className="overview-tile-status">{status}</strong>
+      <div className="overview-feature-actions">
+        <label className="overview-switch">
+          <span className="wb-sr-only">{title}</span>
+          <input
+            type="checkbox"
+            role="switch"
+            aria-label={`${title}开关`}
+            checked={feature?.enabled ?? false}
+            disabled={!feature || busy || blocked}
+            onChange={(event) => onSwitch(event.target.checked)}
+          />
+          <span aria-hidden="true" className="overview-switch-track" />
+        </label>
+        <button
+          type="button"
+          className="overview-feature-detail"
+          onClick={onDetails}
+        >
+          配置
+        </button>
+      </div>
+      {meta && <span className="overview-tile-meta">{meta}</span>}
+      {blocked && <span className="overview-tile-meta">先开启原始记忆</span>}
+    </article>
   );
 }
 
@@ -208,6 +282,35 @@ export function Overview({
   focusAdapters?: boolean;
 }) {
   const adapters = useRead(token, readAdapters);
+  const featureRead = useRead(token, readFeatures);
+  const [featureView, setFeatureView] = useState<FeatureView>();
+  const [featureBusy, setFeatureBusy] = useState<FeatureId>();
+  const [featureError, setFeatureError] = useState("");
+  useEffect(() => setFeatureView(featureRead.data), [featureRead.data]);
+  useEffect(() => {
+    const refresh = () => featureRead.retry();
+    window.addEventListener(FEATURE_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(FEATURE_CHANGED_EVENT, refresh);
+  }, [featureRead.retry]);
+  const feature = (id: FeatureId) =>
+    featureView?.features.find((item) => item.id === id);
+  const switchFeature = async (id: FeatureId, enabled: boolean) => {
+    if (!featureView || featureBusy) return;
+    setFeatureBusy(id);
+    setFeatureError("");
+    try {
+      setFeatureView(
+        await putFeature(token, id, enabled, featureView.revision),
+      );
+      adapters.retry();
+      window.dispatchEvent(new Event(FEATURE_CHANGED_EVENT));
+    } catch (error) {
+      setFeatureError(error instanceof Error ? error.message : "切换失败");
+      featureRead.retry();
+    } finally {
+      setFeatureBusy(undefined);
+    }
+  };
   const runtime = adapters.data?.runtime;
   const adapterHeading = useRef<HTMLHeadingElement>(null);
   const [memoryDialogOpen, setMemoryDialogOpen] = useState(false);
@@ -224,6 +327,7 @@ export function Overview({
           <Button
             onClick={() => {
               adapters.retry();
+              featureRead.retry();
               onRefreshConfiguration();
             }}
           >
@@ -285,15 +389,23 @@ export function Overview({
           onClick={adapters.data ? () => navigate("/adapters") : undefined}
         />
         <OverviewTile
-          title="Memory"
+          title="PostgreSQL"
           status={
-            memoryInfrastructure === undefined
+            adapters.loading
               ? "读取中"
-              : memoryInfrastructure.enabled
-                ? "已启用"
-                : "已关闭"
+              : runtime?.reason === "database_unavailable"
+                ? "不可用"
+                : runtime?.ingress === "ready"
+                  ? "运行中"
+                  : "状态未知"
           }
-          tone={memoryInfrastructure?.enabled ? "success" : "neutral"}
+          tone={
+            runtime?.reason === "database_unavailable"
+              ? "error"
+              : runtime?.ingress === "ready"
+                ? "success"
+                : "neutral"
+          }
           icon={Database}
           meta={
             memoryInfrastructure
@@ -312,13 +424,63 @@ export function Overview({
       </div>
       <section
         className="overview-adapter-section"
+        aria-labelledby="overview-memory-title"
+      >
+        <h2 id="overview-memory-title">记忆</h2>
+        {featureError && <p role="alert">{featureError}</p>}
+        {featureRead.error && (
+          <p role="alert">无法读取功能状态，请刷新概览。</p>
+        )}
+        <div className="overview-grid" aria-live="polite">
+          {(
+            [
+              ["memory.writeback", "原始记忆", Database],
+              ["memory.knowledge", "事件 / Wiki", Globe2],
+              ["memory.index", "向量索引", Activity],
+              ["memory.cognition", "Mem0 认知记忆", ServerCog],
+            ] as const
+          ).map(([id, title, icon]) => (
+            <FeatureTile
+              key={id}
+              title={title}
+              icon={icon}
+              feature={feature(id)}
+              busy={featureBusy !== undefined}
+              onSwitch={(enabled) => void switchFeature(id, enabled)}
+              onDetails={() =>
+                navigate(`/developer/modules/${encodeURIComponent(id)}`)
+              }
+            />
+          ))}
+        </div>
+      </section>
+      <section
+        className="overview-adapter-section"
         aria-labelledby="overview-adapter-title"
       >
         <h2 id="overview-adapter-title" ref={adapterHeading} tabIndex={-1}>
           接入
         </h2>
         <div className="overview-grid overview-adapter-grid" aria-live="polite">
+          <FeatureTile
+            title="NapCat"
+            icon={Cable}
+            feature={feature("adapter.napcat")}
+            busy={featureBusy !== undefined}
+            onSwitch={(enabled) =>
+              void switchFeature("adapter.napcat", enabled)
+            }
+            onDetails={onConfigureNapCat}
+            meta={
+              napCatEndpointState === "loading"
+                ? "端点读取中"
+                : napCatEndpointState === "error"
+                  ? "端点读取失败"
+                  : (napCatEndpointLabel(napCatWsUrl) ?? "协议/端口未配置")
+            }
+          />
           {adapters.data?.adapters
+            .filter((adapter) => adapter.type.toLowerCase() !== "napcat")
             .toSorted(
               (left, right) =>
                 adapterOrder(left.type) - adapterOrder(right.type),
@@ -334,20 +496,7 @@ export function Overview({
                   tone={status.tone}
                   icon={type === "web" ? Globe2 : Cable}
                   detail={`Adapter ${adapter.adapterId}`}
-                  meta={
-                    type === "napcat"
-                      ? napCatEndpointState === "loading"
-                        ? "端点读取中"
-                        : napCatEndpointState === "error"
-                          ? "端点读取失败"
-                          : (napCatEndpointLabel(napCatWsUrl) ??
-                            "协议/端口未配置")
-                      : type === "web"
-                        ? "默认组件 · 无需配置"
-                        : undefined
-                  }
-                  onClick={type === "napcat" ? onConfigureNapCat : undefined}
-                  opensDialog={type === "napcat"}
+                  meta={type === "web" ? "默认组件 · 无需配置" : undefined}
                 />
               );
             })}
@@ -366,7 +515,9 @@ export function Overview({
                 <StatusBadge
                   tone={memoryInfrastructure.enabled ? "success" : "neutral"}
                 >
-                  {memoryInfrastructure.enabled ? "Memory 已启用" : "Memory 已关闭"}
+                  {memoryInfrastructure.enabled
+                    ? "PostgreSQL 已配置"
+                    : "PostgreSQL 未配置"}
                 </StatusBadge>
                 <dl className="memory-infrastructure-details">
                   <div>

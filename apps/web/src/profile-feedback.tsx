@@ -30,7 +30,7 @@ export function fieldSection(field: Field): Section {
   if (field === "name") return "profile";
   if (field.startsWith("agent")) return "identity";
   if (field.endsWith("AllowlistText")) return "allowlist";
-  return field === "memoryEnabled" ? "memory" : "models";
+  return "models";
 }
 export function validateProfileFields(
   fields: ProfileEditorFields,
@@ -83,7 +83,6 @@ export function mapProfileProblem(
     "identity.timeZone": "agentTimeZone",
     inboundAllowlist: "inboundAllowlistText",
     outboundAllowlist: "outboundAllowlistText",
-    "memory.enabled": "memoryEnabled",
   };
   let field = paths[problem.path];
   const preferred = profile.ai.providers.findIndex(

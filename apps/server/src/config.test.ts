@@ -74,28 +74,25 @@ describe("Profile-backed server configuration", () => {
     }
   });
 
-  it("maps the selected Profile NapCat platform", () => {
-    const profile = completeProfile({
-      platforms: [
-        {
-          id: "napcat.qq.primary",
-          type: "napcat",
-          enabled: true,
-          credentials: { accessToken: "secret-token" },
-          settings: {
-            adapterId: "napcat.qq.primary",
-            wsUrl: "ws://127.0.0.1:3001",
-            selfId: "10001",
-            reconnectMs: 500,
-          },
-        },
-      ],
-    });
+  it("maps the global NapCat plugin configuration", () => {
+    const profile = completeProfile();
     expect(
-      createServerConfig(profile, {
-        configRoot: "/tmp/config",
-        development: false,
-      }).napcat,
+      createServerConfig(
+        profile,
+        {
+          configRoot: "/tmp/config",
+          development: false,
+        },
+        undefined,
+        {
+          enabled: true,
+          adapterId: "napcat.qq.primary",
+          wsUrl: "ws://127.0.0.1:3001",
+          accessToken: "secret-token",
+          selfId: "10001",
+          reconnectMs: 500,
+        },
+      ).napcat,
     ).toEqual({
       enabled: true,
       adapterId: "napcat.qq.primary",
@@ -106,26 +103,22 @@ describe("Profile-backed server configuration", () => {
     });
   });
 
-  it.each([
-    {},
-    { adapterId: "qq", wsUrl: "https://secret", reconnectMs: 3000 },
-    { adapterId: "web.ui.main", wsUrl: "ws://localhost", reconnectMs: 3000 },
-  ])("isolates invalid NapCat configuration", (settings) => {
-    const profile = completeProfile({
-      platforms: [
-        {
-          id: "qq",
-          type: "napcat",
-          enabled: true,
-          settings,
-          credentials: { accessToken: "secret" },
-        },
-      ],
-    });
-    const result = createServerConfig(profile, {
-      configRoot: "/tmp/config",
-      development: false,
-    });
+  it("keeps a plugin configuration error isolated from Profile runtime", () => {
+    const profile = completeProfile();
+    const result = createServerConfig(
+      profile,
+      {
+        configRoot: "/tmp/config",
+        development: false,
+      },
+      undefined,
+      {
+        enabled: true,
+        adapterId: "napcat.qq.main",
+        reconnectMs: 3000,
+        configurationError: "configuration_invalid",
+      },
+    );
     expect(result.napcat).toMatchObject({
       enabled: true,
       configurationError: "configuration_invalid",
@@ -151,15 +144,12 @@ function completeProfile(
   overrides: Partial<UserConfigProfile> = {},
 ): UserConfigProfile {
   return {
-    version: 1,
     id: "default",
     name: "default",
     identity: {
       timeZone: "Asia/Shanghai",
     },
     ai: { providers: [] },
-    memory: { enabled: false },
-    platforms: [],
     runtime: {
       host: "localhost",
       port: 4100,

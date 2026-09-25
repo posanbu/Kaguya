@@ -112,15 +112,16 @@ export interface CreateHeartflowModuleOptions {
   readonly modelTaskCapability: ModuleCapability<ModelTaskCapability>;
   readonly messageAuthorizationCapability?: ModuleCapability<MessageAuthorization>;
   readonly agentIdentity: AgentIdentity;
-  readonly memoryEnabled: boolean;
+  readonly memoryEnabled: boolean | (() => boolean);
   readonly plannerTemplate: string;
   readonly plannerBootstrapPolicy: string;
   readonly plannerPlatformPolicies?: Readonly<
     Record<"default" | "qq" | "web", string>
   >;
-  readonly cognitionIdentity?: CognitionIdentity;
+  readonly cognitionIdentity?:
+    CognitionIdentity | (() => CognitionIdentity | undefined);
   /** Knowledge 开启时，旧认知快照也必须通过完整来源撤回检查。 */
-  readonly memoryKnowledgeEnabled?: boolean;
+  readonly memoryKnowledgeEnabled?: boolean | (() => boolean);
   readonly deliveryDeliveredInformationKind: AnyKind;
   readonly deliveryFailedInformationKind: AnyKind;
   readonly modelTaskFailedInformationKind: AnyKind;
@@ -631,21 +632,32 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
     options.agentIdentity.name,
     ...options.agentIdentity.aliases,
   ]);
-  const cognitive = options.cognitionIdentity
-    ? createCognitionMemorySelector(options.cognitionIdentity, {
-        requireEvidenceGuard: options.memoryKnowledgeEnabled ?? false,
-      })
-    : undefined;
-  const memorySelector = cognitive
-    ? defineInformationSelector({
-        selectorId: heartflowMemorySelector.selectorId,
-        select: async (context) => {
-          const snapshots = (await cognitive.select(context)).slice(0, 2);
-          const sources = await scopedMemorySelector.select(context);
-          return [...new Set([...snapshots, ...sources])].slice(0, 8);
-        },
-      })
-    : scopedMemorySelector;
+  const memoryEnabled = () =>
+    typeof options.memoryEnabled === "function"
+      ? options.memoryEnabled()
+      : options.memoryEnabled;
+  const memorySelector = defineInformationSelector({
+    selectorId: heartflowMemorySelector.selectorId,
+    select: async (context) => {
+      if (!memoryEnabled()) return [];
+      const identity =
+        typeof options.cognitionIdentity === "function"
+          ? options.cognitionIdentity()
+          : options.cognitionIdentity;
+      const snapshots = identity
+        ? (
+            await createCognitionMemorySelector(identity, {
+              requireEvidenceGuard:
+                typeof options.memoryKnowledgeEnabled === "function"
+                  ? options.memoryKnowledgeEnabled()
+                  : (options.memoryKnowledgeEnabled ?? false),
+            }).select(context)
+          ).slice(0, 2)
+        : [];
+      const sources = await scopedMemorySelector.select(context);
+      return [...new Set([...snapshots, ...sources])].slice(0, 8);
+    },
+  });
   const deliveryKinds = [
     options.deliveryDeliveredInformationKind,
     options.deliveryFailedInformationKind,
@@ -899,7 +911,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
                 state,
                 memories,
                 settings,
-                options.memoryEnabled,
+                memoryEnabled(),
                 context,
               );
             },
@@ -927,7 +939,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
                   state,
                   memories,
                   settings,
-                  options.memoryEnabled,
+                  memoryEnabled(),
                   context,
                 );
                 return;
@@ -1241,7 +1253,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
                 state,
                 memories,
                 settings,
-                options.memoryEnabled,
+                memoryEnabled(),
                 context,
               );
             },

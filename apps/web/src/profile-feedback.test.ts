@@ -12,7 +12,6 @@ import {
 import { profileToEditorFields } from "./profile-editor.js";
 import type { UserConfigProfile } from "./api.js";
 const profile: UserConfigProfile = {
-  version: 1,
   id: "default",
   name: "default",
   identity: {
@@ -42,8 +41,6 @@ const profile: UserConfigProfile = {
       },
     ],
   },
-  memory: { enabled: false },
-  platforms: [],
 };
 describe("配置错误定位", () => {
   it("合法表单无错误，数值边界可定位", () => {

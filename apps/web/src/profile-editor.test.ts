@@ -27,7 +27,6 @@ import {
 import type { UserConfigProfile } from "./api.js";
 
 const completeProfile: UserConfigProfile = {
-  version: 1,
   id: "b3f1d59f-f1e2-4b63-b9de-d1aa8d0d1c44",
   name: "Production",
   inboundAllowlist: ["qq:group:778899", "invalid-rule"],
@@ -65,28 +64,12 @@ const completeProfile: UserConfigProfile = {
       },
     ],
   },
-  memory: { enabled: true },
-  platforms: [
-    {
-      id: "qq",
-      type: "qq",
-      enabled: true,
-      credentials: {
-        token: "platform-secret",
-        meta: { keep: true },
-      },
-      settings: {
-        nested: { keep: true },
-      },
-    },
-  ],
   review: {
     acknowledgedWarnings: ["provider-base-url-missing:default-provider"],
   },
 };
 
 const emptyDefaultProfile: UserConfigProfile = {
-  version: 1,
   id: "default",
   name: "default",
   inboundAllowlist: [],
@@ -97,12 +80,9 @@ const emptyDefaultProfile: UserConfigProfile = {
   ai: {
     providers: [],
   },
-  memory: { enabled: false },
-  platforms: [],
 };
 
 const warningProfile: UserConfigProfile = {
-  version: 1,
   id: "warning-profile",
   name: "Warning",
   inboundAllowlist: ["*:private:*"],
@@ -127,8 +107,6 @@ const warningProfile: UserConfigProfile = {
       },
     ],
   },
-  memory: { enabled: false },
-  platforms: [],
   review: {
     acknowledgedWarnings: ["provider-base-url-missing:default-provider"],
   },
@@ -153,8 +131,6 @@ describe("profileToEditorFields", () => {
       heavyRecommendedDurationMs: "5000",
       inboundAllowlistText: "qq:group:778899\ninvalid-rule",
       outboundAllowlistText: "qq:group:778899\ninvalid-rule",
-      memoryEnabled: true,
-      memoryKnowledgeEnabled: false,
     });
   });
 
@@ -176,8 +152,6 @@ describe("profileToEditorFields", () => {
       heavyRecommendedDurationMs: "5000",
       inboundAllowlistText: "",
       outboundAllowlistText: "",
-      memoryEnabled: false,
-      memoryKnowledgeEnabled: false,
     });
   });
 
@@ -228,7 +202,6 @@ describe("mergeProfileEditorFields", () => {
       heavyModel: "heavy-model-v2",
       inboundAllowlistText:
         " qq:group:778899 \n\ninvalid-rule\nqq:group:778899",
-      memoryEnabled: false,
     });
 
     expect(merged).toEqual({
@@ -279,21 +252,6 @@ describe("mergeProfileEditorFields", () => {
           },
         ],
       },
-      memory: { enabled: false },
-      platforms: [
-        {
-          id: "qq",
-          type: "qq",
-          enabled: true,
-          credentials: {
-            token: "platform-secret",
-            meta: { keep: true },
-          },
-          settings: {
-            nested: { keep: true },
-          },
-        },
-      ],
     });
   });
 
@@ -343,8 +301,6 @@ describe("mergeProfileEditorFields", () => {
           },
         ],
       },
-      memory: { enabled: false },
-      platforms: [],
     });
   });
 
