@@ -5,7 +5,7 @@ description: scene、tick、冻结快照与可恢复观察进度的目标契约�
 
 # 情境与观察
 
-本文回应 [#244](https://github.com/posanbu/Kaguya/issues/244)，属于[持续情境契约](./)中的待实现设计。目标是使多个 tick 能共同形成一次有界读取，并在并发和重启后说明哪些信息已被读取、哪些仍待处理。
+本文回应 [#244](https://github.com/posanbu/Kaguya/issues/244)，属于[持续情境契约](./)。下文先说明目标设计；[已实现的存储与 Runtime 端口](#持久观察端口-v1)单独记录实现范围。前台与 Memory 的自动迁移、defer 调度和领域检查界面仍由 #247–250 跟踪。
 
 ## 身份与范围
 
@@ -55,7 +55,7 @@ Arousal 的 `defer` 记录下一次检查条件和到期唤醒，不能确认正
 
 Heartflow 的候选新旧比较按账本注册顺序进行：同时间戳下 UUID 字典序较小的新候选，以及发生时间较早但后来接收的候选，都不能被已经完成的旧候选反复替代。这修复了现有前台链的排序边界，仍不等于已实现各消费者独立的 observation 协议。
 
-后续工作包括统一映射契约、持久消费范围、快照版本及进度投影；协议新增字段使用版本化读取，旧记录通过明确兼容路径查询。旧记录只能证明其原本保存的范围，不能为其补造缺失的完整性证明。
+持久观察端口 v1 已提供结构化映射、冻结来源和消费者独立进度；既有 Heartflow、cognition 尚未切换到该端口。旧记录只能证明其原本保存的范围，不能为其补造缺失的完整性证明。
 
 ### 映射样例与冲突处理
 
@@ -68,6 +68,24 @@ Heartflow 的候选新旧比较按账本注册顺序进行：同时间戳下 UUI
 旧 Heartbeat key 用冒号连接地址，不能假定该字符串可以无歧义地反向拆分。例如 `(platform=a:b, adapterId=c)` 和 `(platform=a, adapterId=b:c)` 可能生成相同字符串。迁移以来源 atom 中的完整地址及已有权限契约为证据；相同旧 key 下出现不同地址时登记冲突并分开映射，缺少地址的旧记录保留为未解析状态，不自动扩大可读范围。
 
 现有 durable subscription 能恢复其已登记交付，但新增订阅不会自动获得此前全部历史。启用独立 observation 消费者时，需要持久登记扫描起点、读取契约与回填任务；无法证明旧 context 完整覆盖的区间保持待处理，不能直接把最新 `agent.turn.context.completed` 当作所有新消费者的起始成功水位。
+
+## 持久观察端口 v1
+
+SDK 的 `observationCapability`（`agent:observation`，API v1）由 Runtime 注入，模块在 `requires` 中显式声明后调用。它是受信任模块的存储能力，不向 HTTP 或 WebUI 直接开放，也不授予新的用户读取权限；调用模块负责先确定允许读取的地址与 sender 约束。当前默认第一方模块没有启用该能力，因此安装数据库投影不会改变前台回复或 Memory 的消费进度。
+
+`sceneIdentity` 用版本化 JSON 元组 `scene.v1` 表示平台、适配器和完整目标。`legacyHeartbeatScope` 与 `legacyCognitionScope` 保留旧 key 的生成方式；查询同时校验结构化地址，避免旧分隔符碰撞导致混读。私聊与旧 Web cognition 可以通过 `senderId` 保留更窄的范围；不自动按昵称关联或导入缺少地址的记录。
+
+**冻结入口** — `freezeNext` 接收 scene 地址、`consumerId`、`policyVersion`、来源 `kinds`、成功 `resultKind`，以及可选 sender、来源上界、补充 Information ID 和页大小。同一 scene、消费者、策略版本和 sender 构成独立流；首次调用登记读取契约，随后改变 Kind 契约会报冲突。变更策略需要显式新版本，新流从账本起点扫描，不继承未经证明的旧水位。
+
+冻结在既有来源写入锁与流进度行锁下执行，按 `information_lifecycle.position` 取最多一页（默认 64，上限 1000）。只推进实际选中来源的上界；`hasMore` 表示冻结时该上界限制内是否还有下一页，不代表后来不会新增输入。补充上下文必须是已存在且显式属于相同地址和 sender 范围的不可变原子，精确 ID 随快照保存；当前端口不接收跨场景或无场景归属的 Memory revision。补充历史不单独推进水位，缺失或范围不符会拒绝冻结。
+
+**失败与重试** — 一个流最多有一份未完成快照。`fail` 保存受控错误码但不推进水位；后续 `freezeNext` 返回原快照，包括来源、补充版本和策略。新的页大小、截止 ID 或补充版本不会改写已经冻结的页。本版本串行确认各页，前页失败时不能创建后页，因此不会出现后页完成越过失败缺口；目标设计中的多段并行完成尚未开放。
+
+**成功与恢复** — 消费者先用既有 `registerOnce`、以 observation ID 为稳定键持久化结果，再调用 `finish`。结果必须使用契约指定的 Kind、以 `payload.observationId` 绑定本快照，并直接引用全部来源与补充版本。`finish` 在同一事务中记录完成结果 ID 并推进连续水位；两个 worker 提交相同结果可幂等成功，不同结果只有一个能胜出。结果原子先提交、进度尚未更新时，恢复逻辑复用相同唯一键取得原结果再调用 `finish`，不需要重复领域副作用。观察完成仍不证明模型判断正确或外部消息已送达。
+
+**迁移与检查** — `KaguyaDatabase.prepareSchema` 在既有 schema v1 之后增量建立 `information_scenes`、`information_observation_progress` 和 `information_observations`，不重写旧 scope、Kind、引用或 `agent.turn.*`。端口没有注册通用完成 Kind；结果 Kind 由消费模块声明，并满足上述绑定与引用规则。只读 `read` 和 `progress` 可用于模块恢复和检查，尚未接入领域 DTO 或界面。停止启用消费者即可保留数据并退出新流程；回退程序不需要删除这些附加表。
+
+新消费者仍须显式登记启动扫描与持久唤醒任务。Runtime 集成测试在 `ready` 登记持久扫描请求，再由 durable handler 连续读取有界页：结果已提交但未确认时重建 Runtime，复用旧快照与结果；停机期间直接落账的迟到输入也进入后续页，无需在线广播。数据库测试另以事务中断验证冻结及确认回滚，并在 PostgreSQL 多连接和关闭重连后检查同一行为。这些测试不等于已有生产消费者自动执行回填、defer 到期检查、放弃或替代；这些接入仍是 #247 的后续验收项。
 
 ## 可验证时序与未采用方案
 

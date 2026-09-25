@@ -1,4 +1,5 @@
 /**
+ * PostgreSQL 门禁覆盖观察快照的并发冻结、独立水位、事务中断及关闭重连。
  * PostgreSQL 门禁同时执行主动记忆录入的事务、恢复及修订契约。
  * 功能概述：暴露 postgres:start/status/check、默认开发启动和真实 PostgreSQL 测试入口。
  * 主要职责：解析稳定命令与可选端口，尝试数据库准备后启动 Server，测试入口仍要求数据库就绪，并转发
@@ -38,6 +39,8 @@ export const POSTGRES_TEST_FILES = [
   "packages/database/src/postgres-information-ledger.test.ts",
   "packages/database/src/postgres-index.test.ts",
   "packages/database/src/postgres-reliable.test.ts",
+  "packages/database/src/observation-store.test.ts",
+  "packages/runtime/src/observation-runtime.test.ts",
   "packages/database/src/postgres-memory-store.test.ts",
   "packages/database/src/memory-knowledge-postgres.test.ts",
   "packages/database/src/memory-ingestion.test.ts",

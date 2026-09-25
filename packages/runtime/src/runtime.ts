@@ -1,4 +1,5 @@
 /**
+ * observationCapability 提供持久观察快照与独立成功进度；只有显式声明依赖的可信模块可调用，不自动迁移旧消费者。
  * 入站 expressions 仅透传给插件，Runtime 不推断表情含义或改变调度。
  * 授权消息正文由 composition 注入的渲染器提供；Runtime 只传冻结变量并维持权限检查。
  * Runtime 只接收 outboundAllowlist；目标授权与最终 transport 前终检使用它，入站权限属于 AdapterHost。
@@ -97,7 +98,7 @@ import type {
   OutboundMessageContent,
   PlatformDestination,
 } from "@kaguya/schema";
-import { defineInformationSelector } from "@kaguya/sdk";
+import { defineInformationSelector, observationCapability } from "@kaguya/sdk";
 import type {
   InformationKindDefinition,
   InformationModuleActivation,
@@ -834,6 +835,7 @@ export class KaguyaRuntime implements InformationIngress {
             ({ capability }) => !capability.id.startsWith("memory:access"),
           );
       const capabilities = [
+        { capability: observationCapability, value: database.observations },
         {
           capability: messageAuthorizationCapability,
           value: Object.freeze({

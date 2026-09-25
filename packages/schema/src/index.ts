@@ -1,4 +1,5 @@
 /**
+ * scene.ts 导出无 I/O 的 scene 身份与历史 scope 别名映射。
  * QQ 表情使用独立结构化素材契约，出站保留原 text/reply 兼容性；图片只允许已缓存 base64。
  * memory-ingestion.ts 导出受约束的录入计划、进度及带原文引用的来源 DTO。
  * module-templates.ts 提供未渲染模板管理 DTO，避免与 CompiledPrompt 混用。
@@ -176,3 +177,5 @@ export * from "./module-settings.js";
 
 export * from "./module-templates.js";
 export * from "./memory-ingestion.js";
+
+export * from "./scene.js";

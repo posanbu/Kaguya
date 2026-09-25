@@ -1,4 +1,5 @@
 /**
+ * observations 提供附加的独立消费进度与冻结快照；prepareSchema 增量安装，不重写旧账本。
  * 导出 PostgresMemoryIngestionStore，复用同一数据库执行幂等排队与原子 Memory 写入。
  * 功能概述：提供 Kaguya 唯一的 PostgreSQL 信息账本入口，组合驱动、schema 准备与
  * append-only `InformationRepository`。
@@ -11,6 +12,8 @@
  * 输入输出与副作用：连接、schema 准备、查询和关闭均为异步数据库 I/O；公开 `sql` 供包级
  * 集成测试与运维边界使用，不再创建 SQLite 文件或旧消息/运行记录仓储。
  */
+import { PostgresObservationStore } from "./observation-store.js";
+import { prepareObservationSchema } from "./observation-schema.js";
 import { PgDatabase, type SqlDatabase } from "./driver.js";
 import { InformationRepository } from "./information-repository.js";
 import { PostgresMemoryStore } from "./memory-store.js";
@@ -82,11 +85,13 @@ export {
 } from "./memory-store.js";
 
 export class KaguyaDatabase {
+  readonly observations: PostgresObservationStore;
   readonly information: InformationRepository;
   readonly memory: PostgresMemoryStore;
   readonly knowledge: PostgresMemoryKnowledgeStore;
 
   constructor(readonly sql: SqlDatabase) {
+    this.observations = new PostgresObservationStore(sql);
     this.information = new InformationRepository(sql);
     this.memory = new PostgresMemoryStore(sql);
     this.knowledge = new PostgresMemoryKnowledgeStore(sql);
@@ -113,6 +118,7 @@ export class KaguyaDatabase {
 
   async prepareSchema(): Promise<void> {
     await prepareDatabaseSchema(this.sql);
+    await prepareObservationSchema(this.sql);
   }
 
   async prepareMemoryKnowledgeSchema(): Promise<void> {
@@ -138,3 +144,5 @@ export {
   type MemoryIngestionContext,
   type ClaimedMemoryIngestion,
 } from "./memory-ingestion.js";
+
+export { PostgresObservationStore } from "./observation-store.js";
