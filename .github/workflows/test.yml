@@ -4,19 +4,23 @@ on:
   pull_request:
     branches:
       - main
+  schedule:
+    - cron: "0 3 * * *"
+      timezone: Asia/Shanghai
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: test-${{ github.workflow }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: test-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   docs:
     name: documentation
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 3
 
     defaults:
       run:
@@ -47,7 +51,7 @@ jobs:
   quality:
     name: lint and typecheck
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 3
 
     steps:
       - name: Checkout
@@ -71,8 +75,46 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+  pr-contracts:
+    name: PR contracts and startup
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace types
+        run: pnpm exec tsc -b
+
+      - name: Run fast contracts and startup tests
+        run: >-
+          pnpm exec vitest run
+          packages/config/src/model.test.ts
+          packages/config/src/manager.test.ts
+          packages/config/src/module-config.test.ts
+          packages/config/src/startup-validation.test.ts
+          packages/database/src/schema.test.ts
+          packages/modules/src/first-party/heartflow/planner.test.ts
+          apps/server/src/configuration-application.test.ts
+          apps/server/src/server-composition.test.ts
+
   test:
     name: test (${{ matrix.os }}, shard ${{ matrix.shard }}/2)
+    if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
@@ -109,6 +151,7 @@ jobs:
 
   postgres:
     name: PostgreSQL integration
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:

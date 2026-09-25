@@ -58,6 +58,8 @@ pnpm exec vitest run apps/server/src
 
 ## 测试边界
 
+PR 的 GitHub Actions 快速门禁并行运行文档、lint/typecheck 和选定的契约及 Server 启动测试，目标等待约 3 分钟。全量 Ubuntu、macOS、Windows 分片与真实 PostgreSQL 套件每天北京时间 03:00 运行，也支持在 Actions 的 **Test** 工作流中手动触发；涉及持久化、并发或跨系统行为的 PR 合并前可手动触发该分支的全量检查。具体保证见[测试与兼容边界](./testing-compatibility)。
+
 **模型** — 使用 `ai/test` 的确定性模型，禁止访问真实 Provider。
 
 **数据库** — 普通测试使用 PGlite，不读取个人环境中的数据库或配置目录。本地 `pnpm test:postgres` 自动复用固定的托管 PostgreSQL 17；CI 显式提供测试专用 `KAGUYA_TEST_DATABASE_URL` 时绕过 Docker 和 Profile。专用命令收集账本、索引、可靠执行、Memory、one-shot schedule 和 Model Task persistence，并以扫描门禁防止 URL 驱动 suite 遗漏。suite 只删除自己的随机 `kaguya_test_*` schema。
