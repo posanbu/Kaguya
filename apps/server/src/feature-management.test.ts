@@ -108,3 +108,55 @@ it("rejects stale versions and restores persisted state on activation failure", 
   expect(f.committed).toHaveBeenCalledTimes(1);
   expect(f.recovered).toHaveBeenCalledOnce();
 });
+
+it("keeps NapCat settings unchanged after activation failure and allows retry", async () => {
+  const f = await fixture();
+  const before = await f.management.get();
+  const original = await loadModuleInstanceConfigs({
+    rootDir: f.rootDir,
+    defaults: createFirstPartyModuleConfigDefaults("test"),
+    initialize: false,
+  });
+  const next = {
+    enabled: false,
+    wsUrl: "ws://127.0.0.1:9",
+    selfId: "123",
+    accessToken: "fake-napcat-token",
+    reconnectMs: 4000,
+  };
+  f.activateNapCat.mockRejectedValueOnce(new Error("adapter failed"));
+
+  await expect(
+    f.management.updateNapCat(next, before.revision),
+  ).rejects.toMatchObject({
+    status: 503,
+    code: "feature_activation_failed",
+  });
+  expect((await f.management.get()).revision).toBe(before.revision);
+  expect(
+    await loadModuleInstanceConfigs({
+      rootDir: f.rootDir,
+      defaults: createFirstPartyModuleConfigDefaults("test"),
+      initialize: false,
+    }),
+  ).toEqual(original);
+  expect(f.recovered).toHaveBeenCalledOnce();
+  expect(f.committed).not.toHaveBeenCalled();
+
+  await expect(
+    f.management.updateNapCat(next, before.revision),
+  ).resolves.toMatchObject({
+    revision: expect.not.stringMatching(before.revision),
+  });
+  expect(f.activateNapCat).toHaveBeenCalledTimes(2);
+  expect(f.committed).toHaveBeenCalledOnce();
+  const persisted = await loadModuleInstanceConfigs({
+    rootDir: f.rootDir,
+    defaults: createFirstPartyModuleConfigDefaults("test"),
+    initialize: false,
+  });
+  const { enabled, ...settings } = next;
+  expect(
+    persisted.find((config) => config.definitionId === "adapter.napcat"),
+  ).toMatchObject({ enabled, settings: expect.objectContaining(settings) });
+});

@@ -109,7 +109,9 @@ jobs:
           packages/config/src/startup-validation.test.ts
           packages/database/src/schema.test.ts
           packages/modules/src/first-party/heartflow/planner.test.ts
+          apps/server/src/app.test.ts
           apps/server/src/configuration-application.test.ts
+          apps/server/src/feature-management.test.ts
           apps/server/src/server-composition.test.ts
 
   test:

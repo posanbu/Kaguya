@@ -6,13 +6,7 @@
  * 输入输出与副作用：每例独立临时目录及数据库，使用虚构凭据，关闭 Server 后清理全部测试资源。
  * 执行预算：本文件每例最多 45 秒，覆盖 Windows CI 上真实配置文件读写、PGlite 初始化与多次 Runtime 启停。
  */
-import {
-  mkdtemp,
-  mkdir,
-  readdir,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -367,48 +361,6 @@ it("keeps management available after rollback failure and recovers on explicit r
   expect((await apply(f.server, saved.application)).json().data.status).toBe(
     "applied",
   );
-});
-
-it("restores NapCat configuration after targeted activation fails and allows retry", async () => {
-  const f = await fixture();
-  const current = await f.server.app.inject({ url: "/api/v1/napcat", headers });
-  expect(current.statusCode).toBe(200);
-  const payload = {
-    revision: current.json().data.revision,
-    enabled: false,
-    wsUrl: "ws://127.0.0.1:9",
-    selfId: "123",
-    accessToken: "fake-napcat-token",
-    reconnectMs: 4000,
-  };
-  vi.spyOn(AdapterHost.prototype, "replaceAdapter").mockRejectedValueOnce(
-    new Error("adapter failed"),
-  );
-  const failed = await f.server.app.inject({
-    method: "PUT",
-    url: "/api/v1/napcat",
-    headers,
-    payload,
-  });
-  expect(failed.statusCode).toBe(503);
-  expect(
-    (await f.server.app.inject({ url: "/api/v1/napcat", headers })).json().data,
-  ).toMatchObject({
-    enabled: false,
-    reconnectMs: 3000,
-    revision: payload.revision,
-  });
-  const saved = await f.server.app.inject({
-    method: "PUT",
-    url: "/api/v1/napcat",
-    headers,
-    payload,
-  });
-  expect(saved.statusCode).toBe(200);
-  expect(saved.json().data).toMatchObject({
-    restartRequired: false,
-    status: { enabled: false, reconnectMs: 4000 },
-  });
 });
 
 it("switches the selected Profile with matching applied identity", async () => {
