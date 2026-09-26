@@ -5,7 +5,7 @@ description: 持续 Agent 的领域设计、现有协议映射与分阶段实施
 
 # 持续情境、记忆与行动契约
 
-本文承接 [#241](https://github.com/posanbu/Kaguya/issues/241) 和[持续 Agent 设计原则](../continuous-agent)。设计方向已在 2026-09-25 的人工评审中确认：先确定 scene、冻结快照与水位的公共契约，再分别落实 Memory 形成和行动生命周期。本文把这一方向落实为三个专题的设计结论、协议映射与可验证时序，已由 [PR #251](https://github.com/posanbu/Kaguya/pull/251) 合入。**规则属于目标设计，尚未由本次文档变更实现；设计合入与功能验收分别记录。**
+本文承接 [#241](https://github.com/posanbu/Kaguya/issues/241) 和[持续 Agent 设计原则](../continuous-agent)。设计方向已在 2026-09-25 的人工评审中确认：先确定 scene、冻结快照与水位的公共契约，再分别落实 Memory 形成和行动生命周期。本文把这一方向落实为三个专题的设计结论、协议映射与可验证时序，已由 [PR #251](https://github.com/posanbu/Kaguya/pull/251) 合入。**设计合入与功能验收分别记录。** [持久观察端口 v1](./observation#持久观察端口-v1)已实现存储与 Runtime 能力，第一方消费者迁移及 Memory、行动的领域行为仍待实现。
 
 当前行为核对基线为 [`ff554460`](https://github.com/posanbu/Kaguya/tree/ff5544603f528601b7a8930cf0396199691de4c2)。当前接口仍以[运行时架构](../architecture)、[Memory 认知层](../memory)和对应源码为准；本文的领域标识不自动成为新的公开字段或 Information Kind。
 
