@@ -7,6 +7,8 @@ description: Kaguya 架构、包职责和贡献流程入口。
 
 Kaguya 采用 pnpm workspace 和 TypeScript project references。应用负责装配；基础包通过公开入口提供信息原子、Kind、模块、数据、模型与配置能力。运行期事实通过 `informationId` 和显式引用组织，不使用事件身份或隐式 session。
 
+当前格式的产品承诺、历史兼容代码与各层测试的职责见[测试与兼容边界](./testing-compatibility)。
+
 ## 仓库结构
 
 **`packages/composition`** — Server 与 Demo 共用的 Runtime 业务装配，统一接入 Catalog、activations、模型审批与宿主能力。

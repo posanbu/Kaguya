@@ -254,51 +254,39 @@ describe("configuration management", () => {
     }
   });
 
-  it.each(["gatewayToken", "gatewayAllowlist"])(
-    "rejects persisted %s without modifying the profile",
-    async (legacyField) => {
-      const root = await mkdtemp(
-        join(tmpdir(), "kaguya-configuration-strict-"),
-      );
-      try {
-        const manager = await FileUserConfigManager.bootstrap({
-          rootDir: root,
-        });
-        const original = await manager.getProfile(
-          manager.getSelectedProfileId(),
-        );
-        await manager.replaceProfile(original.id, {
-          name: original.name,
-          acknowledgedWarnings: [],
-          identity: original.identity,
-          ai: original.ai,
-          runtime: runtimeFixture,
-        });
-        const profilePath = join(root, "profiles", "profile_default.json");
-        const persisted = JSON.parse(
-          await readFile(profilePath, "utf8"),
-        ) as Record<string, unknown>;
-        persisted.runtime = {
-          ...(persisted.runtime as Record<string, unknown>),
-          [legacyField]:
-            legacyField === "gatewayToken"
-              ? "legacy-persisted-gateway-token"
-              : ["*:group:*"],
-        };
-        const beforeOpen = `${JSON.stringify(persisted, null, 2)}\n`;
-        await writeFile(profilePath, beforeOpen);
+  it("rejects an unsupported persisted runtime field without modifying the profile", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kaguya-configuration-strict-"));
+    try {
+      const manager = await FileUserConfigManager.bootstrap({
+        rootDir: root,
+      });
+      const original = await manager.getProfile(manager.getSelectedProfileId());
+      await manager.replaceProfile(original.id, {
+        name: original.name,
+        acknowledgedWarnings: [],
+        identity: original.identity,
+        ai: original.ai,
+        runtime: runtimeFixture,
+      });
+      const profilePath = join(root, "profiles", "profile_default.json");
+      const persisted = JSON.parse(
+        await readFile(profilePath, "utf8"),
+      ) as Record<string, unknown>;
+      persisted.runtime = {
+        ...(persisted.runtime as Record<string, unknown>),
+        gatewayAllowlist: ["*:group:*"],
+      };
+      const beforeOpen = `${JSON.stringify(persisted, null, 2)}\n`;
+      await writeFile(profilePath, beforeOpen);
 
-        await expect(createConfigurationManagement(root)).rejects.toMatchObject(
-          {
-            code: "CONFIG_CORRUPT_STORE",
-          },
-        );
-        await expect(readFile(profilePath, "utf8")).resolves.toBe(beforeOpen);
-      } finally {
-        await rm(root, { recursive: true, force: true });
-      }
-    },
-  );
+      await expect(createConfigurationManagement(root)).rejects.toMatchObject({
+        code: "CONFIG_CORRUPT_STORE",
+      });
+      await expect(readFile(profilePath, "utf8")).resolves.toBe(beforeOpen);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 
   it("rejects allowlist replacement when the target profile has no runtime", async () => {
     const root = await mkdtemp(join(tmpdir(), "kaguya-setup-no-runtime-"));

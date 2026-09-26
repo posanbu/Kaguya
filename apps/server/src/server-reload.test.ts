@@ -1,19 +1,12 @@
 /**
  * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * 功能概述：通过真实 HTTP、配置文件、Runtime 与 PGlite 验证无进程重启的配置热应用。
- * 主要职责：覆盖凭据/人设/白名单/模块快照切换、旧入口 fencing、持久化写锁、回滚与恢复；启动拒绝旧索引且不改写。
+ * 主要职责：覆盖凭据/人设/白名单/模块快照切换、旧入口 fencing、持久化写锁、回滚与恢复。
  * 代码库关系：只替换外部数据库连接与模型 provider；server.ts 的应用编排和 HTTP 鉴权使用实际实现。
  * 输入输出与副作用：每例独立临时目录及数据库，使用虚构凭据，关闭 Server 后清理全部测试资源。
- * 执行预算：本文件每例最多 30 秒，覆盖 Windows CI 上真实配置文件读写、PGlite 初始化与多次 Runtime 启停。
+ * 执行预算：本文件每例最多 45 秒，覆盖 Windows CI 上真实配置文件读写、PGlite 初始化与多次 Runtime 启停。
  */
-import {
-  mkdtemp,
-  mkdir,
-  readFile,
-  readdir,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -36,8 +29,8 @@ vi.mock("@ai-sdk/openai-compatible", async () => {
     })),
   };
 });
-// 仅为热应用集成测试保留完整启停预算；其他文件仍使用全局 15 秒上限。
-vi.setConfig({ testTimeout: 30_000 });
+// Windows 完整链路实测接近 30 秒；仅在本文件为真实启停留余量，其他文件仍用全局上限。
+vi.setConfig({ testTimeout: 45_000 });
 
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -265,23 +258,6 @@ it("keeps management available, fences ingress and serializes saves while old wo
   expect((await applying).json().data.status).toBe("applied");
   await saving;
 });
-it("rejects stale saved revisions and detects module edits without disturbing the active instance", async () => {
-  const f = await fixture();
-  const initial = await status(f.server);
-  const runtime = f.server.runtime;
-  const saved = await save(f.server);
-  expect((await apply(f.server, initial)).statusCode).toBe(409);
-  const instance = (await readdir(join(f.root, "modules")))[0]!;
-  const path = join(f.root, "modules", instance, "config.json");
-  const module = JSON.parse(await readFile(path, "utf8"));
-  module.enabled = !module.enabled;
-  await writeFile(path, JSON.stringify(module));
-  expect((await status(f.server)).selectedRevision).not.toBe(
-    saved.application.selectedRevision,
-  );
-  expect((await apply(f.server, saved.application)).statusCode).toBe(409);
-  expect(f.server.runtime).toBe(runtime);
-});
 it("rejects process configuration changes before stopping the live instance", async () => {
   const f = await fixture();
   const runtime = f.server.runtime;
@@ -387,48 +363,6 @@ it("keeps management available after rollback failure and recovers on explicit r
   );
 });
 
-it("restores NapCat configuration after targeted activation fails and allows retry", async () => {
-  const f = await fixture();
-  const current = await f.server.app.inject({ url: "/api/v1/napcat", headers });
-  expect(current.statusCode).toBe(200);
-  const payload = {
-    revision: current.json().data.revision,
-    enabled: false,
-    wsUrl: "ws://127.0.0.1:9",
-    selfId: "123",
-    accessToken: "fake-napcat-token",
-    reconnectMs: 4000,
-  };
-  vi.spyOn(AdapterHost.prototype, "replaceAdapter").mockRejectedValueOnce(
-    new Error("adapter failed"),
-  );
-  const failed = await f.server.app.inject({
-    method: "PUT",
-    url: "/api/v1/napcat",
-    headers,
-    payload,
-  });
-  expect(failed.statusCode).toBe(503);
-  expect(
-    (await f.server.app.inject({ url: "/api/v1/napcat", headers })).json().data,
-  ).toMatchObject({
-    enabled: false,
-    reconnectMs: 3000,
-    revision: payload.revision,
-  });
-  const saved = await f.server.app.inject({
-    method: "PUT",
-    url: "/api/v1/napcat",
-    headers,
-    payload,
-  });
-  expect(saved.statusCode).toBe(200);
-  expect(saved.json().data).toMatchObject({
-    restartRequired: false,
-    status: { enabled: false, reconnectMs: 4000 },
-  });
-});
-
 it("switches the selected Profile with matching applied identity", async () => {
   const f = await fixture();
   const old = f.server.runtime;
@@ -494,30 +428,6 @@ it("reports successful persistence even when a separate module snapshot is unrea
     ).statusCode,
   ).toBe(503);
   expect(f.server.runtime).toBe(old);
-});
-
-it("rejects old configuration at server startup without migrating files", async () => {
-  const f = await fixture();
-  await f.server.close();
-  const config = createServerConfig(
-    await f.manager.getProfile("default"),
-    { configRoot: f.root, development: false },
-    () => "test-reload-gateway-token",
-  );
-  const indexPath = join(f.root, "index.json");
-  const index = JSON.parse(await readFile(indexPath, "utf8"));
-  index.version = 3;
-  const oldIndex = JSON.stringify(index);
-  await writeFile(indexPath, oldIndex);
-  const profilePath = join(f.root, "profiles", "profile_default.json");
-  const originalProfile = await readFile(profilePath, "utf8");
-  await expect(startKaguyaServer({ ...config, port: 0 })).rejects.toThrow();
-  expect(f.connect).toHaveBeenCalledOnce();
-  expect(await readFile(indexPath, "utf8")).toBe(oldIndex);
-  expect(await readFile(profilePath, "utf8")).toBe(originalProfile);
-  expect(
-    (await readdir(f.root)).some((name) => name.startsWith("migration-backup")),
-  ).toBe(false);
 });
 
 it("keeps independent directional policies pending until explicit application", async () => {

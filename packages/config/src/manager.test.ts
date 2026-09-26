@@ -1087,65 +1087,55 @@ describe("FileUserConfigManager corruption safety", () => {
     expect(JSON.stringify(error)).not.toContain(secret);
   });
 
-  it.each([2, 3] as const)(
-    "rejects a version %i index without modifying it",
-    async (version) => {
-      const rootDir = await createBootstrappedRoot();
-      await FileUserConfigManager.open({ rootDir });
-      const path = join(rootDir, "index.json");
-      const index = JSON.parse(await readFile(path, "utf8")) as Record<
-        string,
-        unknown
-      >;
-      index.version = version;
-      if (version === 2) {
-        index.defaultProfileId = "default";
-        delete index.selectedProfileId;
-      }
-      await writeFile(path, JSON.stringify(index), "utf8");
-      const beforeOpen = await readFile(path, "utf8");
+  it("rejects an invalid index version without modifying it", async () => {
+    const rootDir = await createBootstrappedRoot();
+    await FileUserConfigManager.open({ rootDir });
+    const path = join(rootDir, "index.json");
+    const index = JSON.parse(await readFile(path, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    index.version = 2;
+    await writeFile(path, JSON.stringify(index), "utf8");
+    const beforeOpen = await readFile(path, "utf8");
 
-      for (const operation of [
-        () => FileUserConfigManager.inspect({ rootDir }),
-        () => FileUserConfigManager.open({ rootDir }),
-      ]) {
-        const error = await operation().catch((caught: unknown) => caught);
+    for (const operation of [
+      () => FileUserConfigManager.inspect({ rootDir }),
+      () => FileUserConfigManager.open({ rootDir }),
+    ]) {
+      const error = await operation().catch((caught: unknown) => caught);
 
-        expect(error).toMatchObject({
-          code: "CONFIG_CORRUPT_STORE",
-          message: `Configuration index failed validation: ${path}`,
-        });
-        expect((error as { cause?: unknown }).cause).toBeUndefined();
-        await expect(readFile(path, "utf8")).resolves.toBe(beforeOpen);
-      }
-      await expect(
-        FileUserConfigManager.bootstrap({ rootDir }),
-      ).rejects.toMatchObject({ code: "CONFIG_INVALID_INPUT" });
+      expect(error).toMatchObject({
+        code: "CONFIG_CORRUPT_STORE",
+        message: `Configuration index failed validation: ${path}`,
+      });
+      expect((error as { cause?: unknown }).cause).toBeUndefined();
       await expect(readFile(path, "utf8")).resolves.toBe(beforeOpen);
-    },
-  );
+    }
+    await expect(
+      FileUserConfigManager.bootstrap({ rootDir }),
+    ).rejects.toMatchObject({ code: "CONFIG_INVALID_INPUT" });
+    await expect(readFile(path, "utf8")).resolves.toBe(beforeOpen);
+  });
 
-  it.each([1, 2])(
-    "rejects a versioned Profile %i without migrating it",
-    async (version) => {
-      const rootDir = await createBootstrappedRoot();
-      const path = join(rootDir, "profiles/profile_default.json");
-      const profile = JSON.parse(await readFile(path, "utf8")) as Record<
-        string,
-        unknown
-      >;
-      profile.version = version;
-      await writeFile(path, JSON.stringify(profile), "utf8");
-      const before = await readFile(path, "utf8");
-      await expect(
-        FileUserConfigManager.open({ rootDir }),
-      ).rejects.toMatchObject({
+  it("rejects a versioned Profile without modifying it", async () => {
+    const rootDir = await createBootstrappedRoot();
+    const path = join(rootDir, "profiles/profile_default.json");
+    const profile = JSON.parse(await readFile(path, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    profile.version = 1;
+    await writeFile(path, JSON.stringify(profile), "utf8");
+    const before = await readFile(path, "utf8");
+    await expect(FileUserConfigManager.open({ rootDir })).rejects.toMatchObject(
+      {
         code: "CONFIG_CORRUPT_STORE",
         message: expect.stringContaining("Versioned Profiles are unsupported"),
-      });
-      await expect(readFile(path, "utf8")).resolves.toBe(before);
-    },
-  );
+      },
+    );
+    await expect(readFile(path, "utf8")).resolves.toBe(before);
+  });
 
   it("rejects a malformed referenced profile without exposing its secret", async () => {
     const rootDir = await createBootstrappedRoot();

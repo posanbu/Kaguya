@@ -52,7 +52,13 @@ pnpm exec vitest run apps/server/src
 
 `typecheck` 使用 TypeScript build mode，可能更新 `dist/` 和增量构建信息；它不是 no-emit 检查。Promptfoo 使用固定数据和本地 source bridge，不创建真实模型，也不读取 API Key。
 
+## 本地界面预览
+
+记忆联想页面可在仓库根目录运行 `pnpm preview:association`，打开 `http://localhost:5189/preview-association.html`。该入口使用合成数据和独立的内存 PGlite，不读取个人配置或调用模型；前端源码支持 Vite 热更新，修改 Schema 或 Server 投影后需重启预览。它只监听本机，不进入正式 Web 构建。
+
 ## 测试边界
+
+PR 的 GitHub Actions 快速门禁并行运行文档、lint/typecheck 和选定的契约及 Server 启动测试，目标等待约 3 分钟。全量 Ubuntu、macOS、Windows 分片与真实 PostgreSQL 套件每天北京时间 03:00 运行，也支持在 Actions 的 **Test** 工作流中手动触发；涉及持久化、并发或跨系统行为的 PR 合并前可手动触发该分支的全量检查。具体保证见[测试与兼容边界](./testing-compatibility)。
 
 **模型** — 使用 `ai/test` 的确定性模型，禁止访问真实 Provider。
 
@@ -84,9 +90,9 @@ pnpm exec vitest run apps/server/src
 
 ## PostgreSQL 账本迁移
 
-数据库模式由 `packages/database/src/schema.ts` 管理，并由 `KaguyaDatabase.prepareSchema()` 初始化空 schema 或验证完整 v1。已有结构绝不补表或升级。payload 使用 `JSONB`；原子与显式引用由外键保护，原子、引用和日志投影 outbox 在同一事务写入。信息原子与引用只允许追加；状态变化必须注册新原子，而不能更新或删除旧记录。
+数据库模式由 `packages/database/src/schema.ts` 管理，并由 `KaguyaDatabase.prepareSchema()` 初始化空 schema 或验证 v1 账本。现有实现还会调整旧 Web Memory 约束，并在缺少 lifecycle 投影时回填；这两条路径的测试应保留到代码清理时。payload 使用 `JSONB`；原子与显式引用由外键保护，原子、引用和日志投影 outbox 在同一事务写入。信息原子与引用只允许追加；状态变化必须注册新原子，而不能更新或删除旧记录。
 
-公共数据库入口必须先检查实际服务器大版本，只接受 PostgreSQL 17，再允许 schema 准备或 Runtime ingress。schema metadata 不是严格 v1、缺少当前观察协议标记、旧 ledger、部分结构或伪造 metadata 必须以稳定不兼容错误终止启动；不要实现自动导入、转换或修复。错误和日志不得包含完整数据库 URL、Docker 环境、原始 stderr、凭据或原始错误对象。Adapter received 按已确认策略输出完整消息正文，须遵循可观测性文档的留存边界。
+公共数据库入口必须先检查实际服务器大版本，只接受 PostgreSQL 17，再允许 schema 准备或 Runtime ingress。schema metadata 不是严格 v1、缺少当前观察协议标记、旧 ledger、部分结构或伪造 metadata 必须以稳定不兼容错误终止启动；不得据此增加其他旧结构的自动导入或转换。错误和日志不得包含完整数据库 URL、Docker 环境、原始 stderr、凭据或原始错误对象。Adapter received 按已确认策略输出完整消息正文，须遵循可观测性文档的留存边界。
 
 ## 文档同步要求
 

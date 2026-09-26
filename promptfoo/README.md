@@ -14,7 +14,7 @@
 
 运行时版本 2 在结构修复阶段就拒绝超预算 wait 与越界焦点；旧任务仍保留 `silent / wait-budget-exhausted` 兜底。本评测不执行结构修复，原始非法输出直接记为失败，避免恢复机制掩盖模型未遵循契约。
 
-本次上下文与决策改动的对照见 [2026-09-24 评测结果](RESULTS-211-PLANNER.md)。早期 #212 的结果见 `RESULTS-211.md`，其 22/24 仅属于当时的 Planner 提示词实验。后续 #222 已移除 Arousal 的语义评分；当前实现进一步补充数据库角色设定、多人背景、引用正文及本轮动作约束。这里仍只评测冻结输入到模型输出，检索正确性、持久化和重放由独立测试覆盖，不把本评测当成线上整体效果。
+历史对照结果保留在 Git 中：[2026-09-24 Planner 评测](https://github.com/posanbu/Kaguya/blob/a0a565a21279f4fac72e1fd381323c101e50af65/promptfoo/RESULTS-211-PLANNER.md)和[早期 #212 评测](https://github.com/posanbu/Kaguya/blob/a0a565a21279f4fac72e1fd381323c101e50af65/promptfoo/RESULTS-211.md)。后者的 22/24 仅属于当时的 Planner 提示词实验。后续 #222 已移除 Arousal 的语义评分；当前实现进一步补充数据库角色设定、多人背景、引用正文及本轮动作约束。这里仍只评测冻结输入到模型输出，检索正确性、持久化和重放由独立测试覆盖，不把本评测当成线上整体效果。
 
 ## 运行方式
 
