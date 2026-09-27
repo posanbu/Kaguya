@@ -1,5 +1,5 @@
 /**
- * 功能概述：初始化并校验 PostgreSQL v1 账本及观察协议标记；prepareLifecycleProjection 建立可重建的开放集合及 scope 槽。
+ * 功能概述：初始化并校验 PostgreSQL v1 账本及 Router/Light/Heavy 协议标记；prepareLifecycleProjection 建立可重建的开放集合及 scope 槽。
  * 主要职责：prepareDatabaseSchema 在启动事务中校验既有结构并首次回填投影；后续启动不扫描历史。
  * prepareWebMemoryDestination 兼容旧 Web 目标约束，允许 conversationId 索引；旧 NULL 行不改写。
  * lifecycle 回填与在线追加使用同一 Web conversationId scope，保持历史查询和观察范围一致。
@@ -9,7 +9,7 @@
 import type { SqlDatabase } from "./driver.js";
 
 export const POSTGRES_SCHEMA_VERSION = 1;
-export const INFORMATION_PROTOCOL_VERSION = "attention-observation.v1";
+export const INFORMATION_PROTOCOL_VERSION = "router-light-heavy.v1";
 
 const REQUIRED_TABLES = [
   "kaguya_schema_metadata",

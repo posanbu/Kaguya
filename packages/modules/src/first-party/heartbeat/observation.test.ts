@@ -238,7 +238,7 @@ async function fixture(
       },
     );
     const terminal = await core.commitTerminal(
-      "agent.turn.terminal",
+      "agent.router.turn.terminal",
       candidate.informationId,
       turnSilentInformationKind,
       {
@@ -280,7 +280,7 @@ it("opens one scope immediately and carries later notifications into the next ob
   await f.inbound();
   expect(await f.atoms("consumer.failed")).toEqual([]);
   expect(await f.atoms("agent.heartbeat.scheduled")).toHaveLength(0);
-  const candidates = await f.atoms("agent.turn.candidate");
+  const candidates = await f.atoms("agent.heartbeat.candidate");
   expect(candidates).toHaveLength(1);
   expect(candidates[0]!.payload).toMatchObject({
     unreadCount: 1,
@@ -290,10 +290,10 @@ it("opens one scope immediately and carries later notifications into the next ob
   const later = [];
   for (let i = 0; i < 10; i++) later.push(await f.inbound());
   expect(await f.atoms("agent.heartbeat.scheduled")).toHaveLength(0);
-  expect(await f.atoms("agent.turn.candidate")).toHaveLength(1);
-  expect(await f.atoms("agent.observation.wake")).toHaveLength(11);
+  expect(await f.atoms("agent.heartbeat.candidate")).toHaveLength(1);
+  expect(await f.atoms("agent.heartbeat.observation.wake")).toHaveLength(11);
   await f.finish(candidates[0]);
-  const all = await f.atoms("agent.turn.candidate");
+  const all = await f.atoms("agent.heartbeat.candidate");
   expect(all).toHaveLength(2);
   expect(all[1]!.payload).toMatchObject({
     unreadThroughInformationId: later.at(-1)!.informationId,
@@ -308,8 +308,8 @@ it("marks a direct notification as an immediate wake for the open scope", async 
   await f.inbound();
   await f.inbound({ mentions: [{ kind: "user", id: "bot" }] });
   expect(await f.atoms("agent.heartbeat.scheduled")).toHaveLength(0);
-  expect(await f.atoms("agent.turn.candidate")).toHaveLength(1);
-  const wakes = await f.atoms("agent.observation.wake");
+  expect(await f.atoms("agent.heartbeat.candidate")).toHaveLength(1);
+  const wakes = await f.atoms("agent.heartbeat.observation.wake");
   expect(wakes).toHaveLength(1);
   expect(wakes.at(-1)!.payload.immediate).toBe(true);
 });

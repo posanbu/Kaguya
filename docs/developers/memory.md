@@ -15,7 +15,7 @@ description: 当前五个 Memory 模块的职责与未完成状态。
 | `memory.native`     | [未完成，Issue #265](https://github.com/posanbu/Kaguya/issues/265) | 规划联想与索引的一体化自研记忆。         |
 | `memory.mem0`       | [未完成，Issue #266](https://github.com/posanbu/Kaguya/issues/266) | 规划基于 Mem0 的认知记忆。               |
 
-`native` 和 `mem0` 只有目录定义。配置默认值不生成它们的实例，模块宿主拒绝激活，设置 API 不暴露启用入口。两者没有订阅、后台任务或检索入口。原 `association`、`index`、`cognition` 的在线运行接线已经移除；Heartflow 不再直接调用原始记忆检索，Composer 也不再等待联想终态。
+`native` 和 `mem0` 只有目录定义。配置默认值不生成它们的实例，模块宿主拒绝激活，设置 API 不暴露启用入口。两者没有订阅、后台任务或检索入口。原 `association`、`index`、`cognition` 的在线运行接线已经移除；Router 不再直接调用原始记忆检索，Heavy 也不再等待联想终态。
 
 ## 原始写回
 

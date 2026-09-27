@@ -44,7 +44,7 @@ const browser = {
   area: "main",
   viewId: "requests",
   taskId: "custom.task",
-  mode: "planner",
+  mode: "light",
 } as const;
 const module = {
   definitionId,
@@ -207,7 +207,7 @@ describe("逐请求页面", () => {
     const html = render(requestDetailPath(definitionId, requestId));
     expect(html).toContain("触发输入全文");
     expect(html).toContain("回应消息");
-    expect(html).toContain("返回Planner 决策列表");
+    expect(html).toContain("返回Light 决策列表");
     expect(html).not.toContain(fullPrompt);
     expect(html).not.toContain("实际投递回执");
     expect(html).not.toContain("不应出现在请求详情中的技术说明");
@@ -265,7 +265,7 @@ describe("逐请求页面", () => {
   it("uses composer metadata to show generated content instead of planner actions", () => {
     const composer = structuredClone(module);
     Object.assign(composer.inspection!.surface!.components[0]!, {
-      mode: "composer",
+      mode: "heavy",
     });
     const html = render(requestDetailPath(definitionId, requestId), composer);
     expect(html).toContain("消息生成详情");

@@ -121,7 +121,7 @@ export function RequestSurface({
   const loadedPage = useRef<InspectionRequestSummary[]>([]);
   const route = requestRoute(path);
   const surface = module.inspection!.surface!;
-  const composer = browser.mode === "composer";
+  const heavy = browser.mode === "heavy";
   const title = surface.title;
   const base = `modules/${encodeURIComponent(module.definitionId)}/surfaces/${encodeURIComponent(surface.id)}`;
   const parameters = new URLSearchParams({ limit: "20" });
@@ -149,7 +149,7 @@ export function RequestSurface({
       <RequestDetail
         key={route.requestId}
         module={module}
-        composer={composer}
+        heavy={heavy}
         requestId={route.requestId}
         view={route.view}
         sourceInformationId={route.sourceInformationId}
@@ -183,19 +183,19 @@ export function RequestSurface({
         <div className="request-state">
           <h3>暂无请求记录</h3>
           <p>
-            {composer
-              ? "Planner 决定表达并发起生成请求后，记录会出现在这里。"
-              : "发起 Planner 请求后，记录会出现在这里。"}
+            {heavy
+              ? "Light 决定表达并发起生成请求后，记录会出现在这里。"
+              : "发起 Light 请求后，记录会出现在这里。"}
           </p>
         </div>
       ) : (
         <div
-          className={`request-list${composer ? " request-list-composer" : ""}`}
+          className={`request-list${heavy ? " request-list-heavy" : ""}`}
         >
           <div className="request-columns" aria-hidden="true">
             <span>时间</span>
             <span>触发消息</span>
-            <span>{composer ? "生成内容" : "决定动作"}</span>
+            <span>{heavy ? "生成内容" : "决定动作"}</span>
             <span />
           </div>
           {page.data.items.map((item) => (
@@ -262,7 +262,7 @@ function RequestError({
 }
 function RequestDetail({
   module,
-  composer,
+  heavy,
   requestId,
   view,
   state,
@@ -274,7 +274,7 @@ function RequestDetail({
   siblings,
 }: {
   module: InspectionModule;
-  composer: boolean;
+  heavy: boolean;
   requestId: string;
   view: RequestView;
   state: { data?: InspectionRequestDetail; error?: string };
@@ -302,7 +302,7 @@ function RequestDetail({
           className="request-back"
         >
           <ArrowLeft size={15} aria-hidden="true" />
-          返回{composer ? "消息生成" : "Planner 决策"}列表
+          返回{heavy ? "消息生成" : "Light 决策"}列表
         </RequestLink>
         {siblingIndex >= 0 && (
           <nav className="request-siblings" aria-label="本页相邻请求">
@@ -339,7 +339,7 @@ function RequestDetail({
       </div>
       <header className="request-detail-heading">
         <h1 ref={heading} tabIndex={-1}>
-          {composer ? "消息生成详情" : "Planner 决策详情"}
+          {heavy ? "消息生成详情" : "Light 决策详情"}
         </h1>
         {data && (
           <p>
@@ -377,7 +377,7 @@ function RequestDetail({
             ))}
           </nav>
           {view === "overview" ? (
-            <RequestOverview data={data} composer={composer} />
+            <RequestOverview data={data} heavy={heavy} />
           ) : view === "prompt" ? (
             <section
               className="request-prompt"
@@ -447,10 +447,10 @@ function RequestDetail({
 }
 function RequestOverview({
   data,
-  composer,
+  heavy,
 }: {
   data: InspectionRequestDetail;
-  composer: boolean;
+  heavy: boolean;
 }) {
   return (
     <div className="request-overview">
@@ -483,9 +483,9 @@ function RequestOverview({
         )}
       </section>
       <section aria-labelledby="request-result-title">
-        <h2 id="request-result-title">{composer ? "生成内容" : "决定动作"}</h2>
+        <h2 id="request-result-title">{heavy ? "生成内容" : "决定动作"}</h2>
         <p className="request-result">
-          {composer
+          {heavy
             ? data.result.text ||
               data.request.outcomeText ||
               requestStatus(data.request.status)

@@ -4,7 +4,7 @@
  * 代码库关系：Catalog 与管理表单共用 schema，Host 负责创建实例。
  * 输入输出与副作用：字段声明无副作用；订阅处理写入调度原子，不直接发送消息。
  * heartbeatObservationSelector 只读取开放集合与最近水位；开放期间入站账本即待观察集合。
- * 入站按 scope 直接竞争唯一候选；due 仅恢复 Planner wait/interrupt，终态 resume 合并期间新输入。
+ * 入站按 scope 直接竞争唯一候选；due 仅恢复 Light wait/interrupt，终态 resume 合并期间新输入。
  * isImmediateObservation 识别私聊、@ 与回复机器人，用于唤醒休眠状态和提升已有观察。
  * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
  */
@@ -33,7 +33,7 @@ import {
 
 export const heartbeatSettingsSchema = z
   .object({
-    plannerInterruptQuietMs: z
+    interruptQuietMs: z
       .number()
       .int()
       .min(0)
@@ -53,7 +53,7 @@ export const heartbeatSettingsSchema = z
     }),
     totalWaitBudget: z.number().int().min(0).max(20).meta({
       title: "连续等待上限",
-      description: "Planner 连续 wait 最多允许多少次。",
+      description: "Light 连续 wait 最多允许多少次。",
       public: true,
       default: 3,
     }),
@@ -93,7 +93,7 @@ export const heartbeatModule = defineInformationModule({
     displayName: "持久化观察调度",
     summary: "按会话积攒通知，并为 awake 状态直接产生观察机会。",
     description:
-      "入站消息直接竞争同一会话的唯一开放观察；未观察内容继续按水位积攒，Planner wait 与 interrupt 才使用持久化单次调度。",
+      "入站消息直接竞争同一会话的唯一开放观察；未观察内容继续按水位积攒，Light wait 与 interrupt 才使用持久化单次调度。",
     settingsSchema: heartbeatSettingsSchema,
     consumes: [
       attentionArousalStateRecordedInformationKind,
@@ -145,7 +145,7 @@ export const heartbeatModule = defineInformationModule({
         heartbeatIdleBackoffSelector,
       )) as any[];
       const frozen = terminals.find(
-        (atom) => atom.kind === "agent.turn.context.completed",
+        (atom) => atom.kind === "agent.router.turn.context.completed",
       );
       if (
         frozen?.payload.focusActive &&
@@ -154,15 +154,15 @@ export const heartbeatModule = defineInformationModule({
       )
         return 0;
       const consecutive = terminals.findIndex(
-        (atom) => atom.kind !== "agent.turn.silent",
+        (atom) => atom.kind !== "agent.router.turn.silent",
       );
       const count =
         consecutive < 0
-          ? terminals.filter((atom) => atom.kind === "agent.turn.silent").length
+          ? terminals.filter((atom) => atom.kind === "agent.router.turn.silent").length
           : consecutive;
       if (count < settings.noActionBackoffStartCount) return 0;
       const latest = terminals.find(
-        (atom) => atom.kind === "agent.turn.silent",
+        (atom) => atom.kind === "agent.router.turn.silent",
       );
       if (!latest) return 0;
       const delay = Math.min(
@@ -292,7 +292,7 @@ export const heartbeatModule = defineInformationModule({
       describeStartup: () => ({
         summary: "Scope notification observation ready",
         fields: {
-          plannerInterruptQuietMs: settings.plannerInterruptQuietMs,
+          interruptQuietMs: settings.interruptQuietMs,
           noActionBackoffBaseMs: settings.noActionBackoffBaseMs,
           maxReplacementAttempts: settings.maxReplacementAttempts,
           totalWaitBudget: settings.totalWaitBudget,
@@ -333,7 +333,7 @@ export const heartbeatModule = defineInformationModule({
               if (!runtimeContext) continue;
               const observed = selected.find(
                 (item) =>
-                  item.kind === "agent.turn.context.completed" &&
+                  item.kind === "agent.router.turn.context.completed" &&
                   item.payload.scopeKey === previousCandidate.payload.scopeKey,
               );
               const signals = [
@@ -348,13 +348,13 @@ export const heartbeatModule = defineInformationModule({
                 ]),
               ];
               await context.registerOnce(
-                "agent.turn.candidate",
+                "agent.heartbeat.candidate",
                 `${atom.informationId}:${String(p.scopeKey)}`,
                 turnCandidateInformationKind,
                 {
                   openScope: {
                     key: String(p.scopeKey),
-                    terminalGroup: "agent.turn.terminal",
+                    terminalGroup: "agent.router.turn.terminal",
                   },
                   payload: {
                     triggerInformationId: atom.informationId,
@@ -426,7 +426,7 @@ export const heartbeatModule = defineInformationModule({
                 observations,
               );
               await context.registerOnce(
-                "agent.observation.wake",
+                "agent.heartbeat.observation.wake",
                 `${candidate.informationId}:${atom.informationId}`,
                 observationWakeInformationKind,
                 {
@@ -478,7 +478,7 @@ export const heartbeatModule = defineInformationModule({
               const latest = pendingInputs.at(-1);
               if (!latest) return;
               const observedContext = observations.find(
-                (item) => item.kind === "agent.turn.context.completed",
+                (item) => item.kind === "agent.router.turn.context.completed",
               );
               const signals = [
                 ...new Set(
@@ -492,13 +492,13 @@ export const heartbeatModule = defineInformationModule({
               ];
               const now = context.now().toISOString();
               await context.registerOnce(
-                "agent.turn.candidate",
+                "agent.heartbeat.candidate",
                 atom.informationId,
                 turnCandidateInformationKind,
                 {
                   openScope: {
                     key: scopeOf(atom.payload.source),
-                    terminalGroup: "agent.turn.terminal",
+                    terminalGroup: "agent.router.turn.terminal",
                   },
                   payload: {
                     triggerInformationId: atom.informationId,
@@ -542,7 +542,7 @@ export const heartbeatModule = defineInformationModule({
             const dueAt = new Date(
               context.now().getTime() +
                 (previousInput?.reason === "interrupt"
-                  ? settings.plannerInterruptQuietMs
+                  ? settings.interruptQuietMs
                   : 0),
             ).toISOString();
             const reason =
@@ -702,7 +702,7 @@ export const heartbeatModule = defineInformationModule({
                   string | undefined);
               if (!upperInformationId) return;
               const observedContext = state.find(
-                (a) => a.kind === "agent.turn.context.completed",
+                (a) => a.kind === "agent.router.turn.context.completed",
               );
               const unreadAfterInformationId = replayCandidate
                 ? (replayCandidate.payload.unreadAfterInformationId as
@@ -720,13 +720,13 @@ export const heartbeatModule = defineInformationModule({
                 ]),
               ];
               await context.registerOnce(
-                "agent.turn.candidate",
+                "agent.heartbeat.candidate",
                 hb.informationId,
                 turnCandidateInformationKind,
                 {
                   openScope: {
                     key: p.scopeKey,
-                    terminalGroup: "agent.turn.terminal",
+                    terminalGroup: "agent.router.turn.terminal",
                   },
                   payload: {
                     triggerInformationId: atom.informationId,
@@ -789,7 +789,7 @@ export const heartbeatModule = defineInformationModule({
                 immediateInState((item.payload as any).source, state),
               );
               if (deferred && !urgent) return;
-              const interrupted = atom.kind === "agent.turn.interrupted";
+              const interrupted = atom.kind === "agent.router.turn.interrupted";
               if (previous && !urgent && !interrupted) return;
               const previousObservation = state.find(
                 (item) => item.kind === turnCandidateInformationKind.kind,
@@ -806,7 +806,7 @@ export const heartbeatModule = defineInformationModule({
                 (waiting ? Number(previousObservation.payload.attempt) + 1 : 0);
               if (!previous && !interrupted) {
                 const observedContext = state.find(
-                  (item) => item.kind === "agent.turn.context.completed",
+                  (item) => item.kind === "agent.router.turn.context.completed",
                 );
                 const signals = [
                   ...new Set(
@@ -817,13 +817,13 @@ export const heartbeatModule = defineInformationModule({
                 ];
                 const now = context.now().toISOString();
                 await context.registerOnce(
-                  "agent.turn.candidate",
+                  "agent.heartbeat.candidate",
                   atom.informationId,
                   turnCandidateInformationKind,
                   {
                     openScope: {
                       key: scopeOf((latest.payload as any).source),
-                      terminalGroup: "agent.turn.terminal",
+                      terminalGroup: "agent.router.turn.terminal",
                     },
                     payload: {
                       triggerInformationId: atom.informationId,
@@ -873,7 +873,7 @@ export const heartbeatModule = defineInformationModule({
                   Math.max(
                     context.now().getTime() +
                       (interrupted
-                        ? settings.plannerInterruptQuietMs
+                        ? settings.interruptQuietMs
                         : urgent
                           ? 0
                           : 0),

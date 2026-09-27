@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# 功能概述：运行 issue #181 的独立短策略探针，不调用或替代生产 Planner。
+# 功能概述：运行 issue #181 的独立短策略探针，不调用或替代生产 Light。
 # 主要职责：load_dataset 校验三档上下文；build_messages/build_request 隔离 gold 并
 # 固定提示词和采样参数；parse_sse 按 SSE 事件边界解析流；execute_attempt 记录单次
 # 请求、完整事件、token/完成耗时及错误；summarize 以全部尝试为分母聚合；run/main
@@ -39,7 +39,7 @@ SYSTEM_PROMPT_VERSION = "1"
 CONTEXTS = ("compact", "medium", "long")
 ACTIONS = {"message", "wait", "silent"}
 INTENTS = {"answer", "clarify", "support", "acknowledge", "boundary", "coordinate", "defer", "none"}
-SYSTEM_PROMPT = """你正在执行 kaguya-fast-policy-probe/v1 独立短策略探针；这不是生产 Planner。
+SYSTEM_PROMPT = """你正在执行 kaguya-fast-policy-probe/v1 独立短策略探针；这不是生产 Light。
 阅读 user 消息中的 JSON 上下文，只决定下一步短策略，不生成实际回复，不解释推理。
 只输出一个 JSON 对象，严格包含四个字段：
 {"action":"message|wait|silent","intent":"answer|clarify|support|acknowledge|boundary|coordinate|defer|none","provide":["I1"],"avoid":["I2"]}

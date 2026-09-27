@@ -27,7 +27,7 @@ const source = defineInformationKind({
   references: {},
   log: { enabled: false },
 });
-// 与当前 Planner/PGlite fixture 一致：等待真实投递完成，最多 8 秒，满足条件即返回。
+// 与当前 Light/PGlite fixture 一致：等待真实投递完成，最多 8 秒，满足条件即返回。
 const DURABLE_WAIT = { timeout: 8000, interval: 20 } as const;
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {

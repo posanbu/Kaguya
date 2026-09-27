@@ -15,7 +15,7 @@ import {
   createExpressionModule,
   type ExpressionPromptTemplates,
 } from "./index.js";
-import type { ModelTaskRequest } from "../message-composer/index.js";
+import type { ModelTaskRequest } from "../heavy/index.js";
 import { loadFirstPartyPromptTemplates } from "../../node/prompt-templates.js";
 import { createPromptTemplateRenderer } from "../../prompt-template.js";
 import { messageTemplateDeclarations } from "../../prompt-declarations.js";
@@ -30,8 +30,8 @@ import {
   chatScopeEntityInformationKind,
 } from "../information-kinds.js";
 import { humanText, projectHabits, validateHabits } from "./policy.js";
-import { atom, fixture } from "../message-composer/test-fixtures.js";
-import { expressionPrompt } from "./composer-context.js";
+import { atom, fixture } from "../heavy/test-fixtures.js";
+import { expressionPrompt } from "./heavy-context.js";
 const persistenceWait = { timeout: 5000 };
 async function setup(
   invalid = false,
@@ -357,7 +357,7 @@ describe("expression policy", () => {
             (declaration) => declaration.key === "expressionHabits",
           )!,
           content:
-            loadFirstPartyPromptTemplates().messageComposer.expressionHabits,
+            loadFirstPartyPromptTemplates().heavy.expressionHabits,
         },
       }),
     );

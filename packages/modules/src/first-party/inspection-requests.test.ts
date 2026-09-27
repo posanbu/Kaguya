@@ -1,5 +1,5 @@
 /**
- * 功能概述：验证 Planner 与消息组织的请求 Surface 声明以及 SDK 的能力、归属字段和任务模式边界。
+ * 功能概述：验证 Light 与消息组织的请求 Surface 声明以及 SDK 的能力、归属字段和任务模式边界。
  * 主要职责：用真实 firstPartyInspection 构建最小模块，检查深冻结，拒绝缺失模型能力、请求 Kind、归属字段与错配任务。
  * 代码库关系：覆盖 inspection.ts 与 SDK defineInformationModule 的集成，不运行模型、数据库或异步订阅。
  * 输入输出与副作用：只解析和修改独立的元数据副本；不改全局 Manifest，不请求网络。
@@ -14,8 +14,8 @@ import { expect, it } from "vitest";
 import { firstPartyInspection } from "./inspection.js";
 
 const definitions = [
-  "agent.heartflow.online",
-  "agent.message-composer",
+  "agent.router",
+  "agent.heavy",
 ] as const;
 function define(inspection: ModuleInspection, hasModelCapability = true) {
   return defineInformationModule({
@@ -55,9 +55,9 @@ it.each(definitions)(
     );
     if (browser.type === "model-request-browser") {
       expect(browser.taskId).toBe(
-        definitionId === "agent.heartflow.online"
-          ? "agent.turn.plan"
-          : "agent.message.compose",
+        definitionId === "agent.router"
+          ? "agent.light.decide"
+          : "agent.heavy.respond",
       );
     }
   },
@@ -90,7 +90,7 @@ it("rejects missing ownership metadata and mismatched task projection", () => {
   const browser = wrongTask.surface!.components[0]!;
   if (browser.type !== "model-request-browser")
     throw new Error("Expected model requests");
-  browser.taskId = "agent.message.compose";
+  browser.taskId = "agent.heavy.respond";
   expect(() => define(wrongTask)).toThrow(
     "Invalid inspection model request task mode",
   );

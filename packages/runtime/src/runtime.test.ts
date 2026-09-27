@@ -1,13 +1,13 @@
 /**
  * 测试夹具显式装配 QQ 表情模板，验证新增模块契约与既有流程兼容。
  * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
- * Planner 普通日志仅保留元数据，不能泄漏 Prompt 预览或模型输出。
+ * Light 普通日志仅保留元数据，不能泄漏 Prompt 预览或模型输出。
  * fixture 显式批准合成 QQ 目标，生产 Runtime 默认为空出站白名单。
- * 测试显式注入统一文件模板，避免 Planner 或 Expression 绕过 default/local 选择。
+ * 测试显式注入统一文件模板，避免 Light 或 Expression 绕过 default/local 选择。
  * 功能概述：用真实 PGlite、Core 和 ModuleHost 验证 `KaguyaRuntime` 的完整信息 DAG。
  * 数据库收敛、日志落地和模型任务前置等待共用 8 秒持久化预算；超时附带队列元数据，内存取消与关闭 deadline 单独验证。
- * Planner v2 拒绝耗尽后的 wait；持续非法响应经一次修复后以 planner-unavailable 静默闭合。
- * Planner 使用独立 object Model Task，测试分别定位 plan 与 compose，确保故障静默与唯一分派。
+ * Light v2 拒绝耗尽后的 wait；持续非法响应经一次修复后以 light-unavailable 静默闭合。
+ * Light 使用独立 object Model Task，测试分别定位 plan 与 compose，确保故障静默与唯一分派。
  * 主要职责：覆盖 Web 入站到投递成功的直接因果链、生成失败不会继续 assistant/outbound/delivery、
  * 三类 transport 失败、无订阅持久化、同 kind 消费并发与多 message composer activation 共享模型任务后
  * 各自按 intent target 投递纯文本，默认 OneBot action 仅含 text 段、start/close 确定性交错、
@@ -85,7 +85,7 @@ const testIdentity = {
   timeZone: "Asia/Shanghai",
 };
 const testMessageTemplates = {
-  ...testPrompts.messageComposer,
+  ...testPrompts.heavy,
   main: "{{scene}}{{history}}{{memory}}{{turn}}",
   history: "{{#each messages}}{{> history-inbound}}{{/each}}",
   historyInbound: "{{content}}",
@@ -314,7 +314,7 @@ describe("KaguyaRuntime", () => {
         namespaceLevels: {
           "runtime:information": "trace",
           "runtime:modules": "debug",
-          "runtime:module:agent.message-composer": "debug",
+          "runtime:module:agent.heavy": "debug",
         },
         stream: {
           write: (line) => {
@@ -352,25 +352,24 @@ describe("KaguyaRuntime", () => {
           .map((entry) => entry.definitionId),
       ).toEqual([
         "agent.attention.arousal",
-        "agent.attention.focus",
         "agent.heartbeat.short",
-        "agent.heartflow.online",
         "memory.expression",
+        "agent.heavy",
         "memory.identity",
-        "agent.message-composer",
+        "agent.router",
       ]);
       expect(logs).toContainEqual(
         expect.objectContaining({
-          module: "runtime:module:agent.message-composer",
-          event: "message.model.dispatching",
-          taskId: "agent.message.compose",
+          module: "runtime:module:agent.heavy",
+          event: "heavy.model.dispatching",
+          taskId: "agent.heavy.respond",
           tier: "heavy",
         }),
       );
       const plannerSummary = logs.find(
         (entry) =>
           entry.kind === "core.model.task.requested" &&
-          entry.taskId === "agent.turn.plan" &&
+          entry.taskId === "agent.light.decide" &&
           entry.detail !== true,
       );
       expect(plannerSummary).toMatchObject({
@@ -384,19 +383,19 @@ describe("KaguyaRuntime", () => {
         (entry) =>
           entry.module === "runtime:information" &&
           entry.kind === "core.model.task.requested" &&
-          entry.taskId === "agent.message.compose" &&
+          entry.taskId === "agent.heavy.respond" &&
           entry.detail !== true,
       );
       const requestDetail = logs.find(
         (entry) =>
           entry.module === "runtime:information" &&
           entry.kind === "core.model.task.requested" &&
-          entry.taskId === "agent.message.compose" &&
+          entry.taskId === "agent.heavy.respond" &&
           entry.detail === true,
       );
       expect(requestSummary).toMatchObject({
         event: "model.task.lifecycle",
-        taskId: "agent.message.compose",
+        taskId: "agent.heavy.respond",
         tier: "heavy",
         providerId: "test",
         modelId: "deterministic-heavy",
@@ -431,7 +430,7 @@ describe("KaguyaRuntime", () => {
     await database.information.reliable.configureSubscriptions([
       {
         subscriptionId:
-          "message-composer.default:kaguya.message.model-task-completed",
+          "heavy.default:kaguya.heavy.model-task-completed",
         kind: "core.model.task.completed",
       },
     ]);
@@ -441,7 +440,7 @@ describe("KaguyaRuntime", () => {
     "rejects %s model capability before module create",
     async (mode) => {
       const base = createMessageComposition().catalog.definitions.find(
-        (d) => d.manifest.definitionId === "agent.message-composer",
+        (d) => d.manifest.definitionId === "agent.heavy",
       )!;
       const create = vi.fn(base.create);
       const definition = defineInformationModule({ ...base, create });
@@ -474,7 +473,7 @@ describe("KaguyaRuntime", () => {
     let activation: unknown;
     let exposed: string[] = [];
     const base = createMessageComposition().catalog.definitions.find(
-      (d) => d.manifest.definitionId === "agent.message-composer",
+      (d) => d.manifest.definitionId === "agent.heavy",
     )!;
     const definition = defineInformationModule({
       ...base,
@@ -497,8 +496,8 @@ describe("KaguyaRuntime", () => {
     await runtime.start();
     expect(value).toBeInstanceOf(ModelTaskClient);
     expect(activation).toEqual({
-      instanceId: "message-composer.default",
-      definitionId: "agent.message-composer",
+      instanceId: "heavy.default",
+      definitionId: "agent.heavy",
     });
     expect(exposed).not.toEqual(expect.arrayContaining(["core"]));
     for (const forbidden of [
@@ -515,14 +514,14 @@ describe("KaguyaRuntime", () => {
       {
         activation: {
           instanceId: "forged",
-          definitionId: "agent.message-composer",
+          definitionId: "agent.heavy",
         },
         selectionPolicy: { tier: "heavy" as const },
       },
       {
         activation: {
-          instanceId: "message-composer.default",
-          definitionId: "agent.message-composer",
+          instanceId: "heavy.default",
+          definitionId: "agent.heavy",
         },
         selectionPolicy: { tier: "light" as const },
       },
@@ -531,7 +530,7 @@ describe("KaguyaRuntime", () => {
         value!.execute({
           ...request,
           task: {
-            taskId: "agent.message.compose",
+            taskId: "agent.heavy.respond",
             version: "1",
             outputMode: "object",
             allowedTiers: ["light", "heavy"],
@@ -572,16 +571,16 @@ describe("KaguyaRuntime", () => {
         informationId: result.rootInformationId,
       });
       const reply = graph.find(
-        ({ kind }) => kind === "agent.message.intent.requested",
+        ({ kind }) => kind === "agent.router.message.intent.requested",
       )!;
       const requested = graph.find(
         ({ kind, payload }) =>
           kind === "core.model.task.requested" &&
-          payload.taskId === "agent.message.compose",
+          payload.taskId === "agent.heavy.respond",
       )!;
 
       const context = graph.find(
-        ({ kind }) => kind === "agent.turn.context.completed",
+        ({ kind }) => kind === "agent.router.turn.context.completed",
       )!;
       const inbound = graph.find(
         ({ kind }) => kind === "core.message.inbound.text",
@@ -602,13 +601,13 @@ describe("KaguyaRuntime", () => {
           requested.payload,
         );
       expect(requestedPayload).toMatchObject({
-        taskId: "agent.message.compose",
+        taskId: "agent.heavy.respond",
         version: "1",
         outputMode: "text",
         sourceInformationId: reply.informationId,
         activation: {
-          instanceId: "message-composer.default",
-          definitionId: "agent.message-composer",
+          instanceId: "heavy.default",
+          definitionId: "agent.heavy",
         },
         selectionPolicy: { tier: "heavy" },
         resolvedModel: { providerId: "test", modelId: "deterministic-heavy" },
@@ -684,14 +683,14 @@ describe("KaguyaRuntime", () => {
           secondGraph.some(
             ({ kind, payload }) =>
               kind === modelTaskRequestedInformationKind.kind &&
-              payload.taskId === "agent.message.compose",
+              payload.taskId === "agent.heavy.respond",
           ),
         ).toBe(true);
       }, PERSISTENCE_WAIT);
       const requested = secondGraph.find(
         ({ kind, payload }) =>
           kind === modelTaskRequestedInformationKind.kind &&
-          payload.taskId === "agent.message.compose",
+          payload.taskId === "agent.heavy.respond",
       )!;
       const payload = modelTaskRequestedInformationKind.payloadSchema.parse(
         requested.payload,
@@ -753,7 +752,7 @@ describe("KaguyaRuntime", () => {
       const requested = secondGraph.find(
         ({ kind, payload }) =>
           kind === modelTaskRequestedInformationKind.kind &&
-          payload.taskId === "agent.message.compose",
+          payload.taskId === "agent.heavy.respond",
       )!;
       const payload = modelTaskRequestedInformationKind.payloadSchema.parse(
         requested.payload,
@@ -1138,7 +1137,7 @@ describe("KaguyaRuntime", () => {
       expect(new Set(graph.map(({ kind }) => kind))).toEqual(
         new Set([
           "core.message.inbound.text",
-          "agent.message.intent.requested",
+          "agent.router.message.intent.requested",
           "memory.expression.selection.requested",
           "memory.expression.selection.completed",
           "core.model.task.requested",
@@ -1152,12 +1151,12 @@ describe("KaguyaRuntime", () => {
           "agent.attention.arousal.activity",
           "agent.attention.arousal.completed",
           "agent.attention.arousal.state.recorded",
-          "agent.turn.candidate",
-          "agent.turn.claimed",
-          "agent.turn.started",
-          "agent.turn.context.completed",
-          "agent.turn.plan.completed",
-          "agent.turn.completed",
+          "agent.heartbeat.candidate",
+          "agent.router.turn.claimed",
+          "agent.router.turn.started",
+          "agent.router.turn.context.completed",
+          "agent.light.decision.completed",
+          "agent.router.turn.completed",
           "core.delivery.delivered",
         ]),
       );
@@ -1171,10 +1170,10 @@ describe("KaguyaRuntime", () => {
 
       const byKind = new Map(graph.map((atom) => [atom.kind, atom]));
       const chain = [
-        ["agent.attention.arousal.completed", "agent.turn.candidate"],
-        ["agent.turn.plan.completed", "agent.turn.context.completed"],
-        ["agent.message.intent.requested", "agent.turn.plan.completed"],
-        ["core.model.task.requested", "agent.message.intent.requested"],
+        ["agent.attention.arousal.completed", "agent.heartbeat.candidate"],
+        ["agent.light.decision.completed", "agent.router.turn.context.completed"],
+        ["agent.router.message.intent.requested", "agent.light.decision.completed"],
+        ["core.model.task.requested", "agent.router.message.intent.requested"],
         ["core.model.task.completed", "core.model.task.requested"],
         ["core.message.assistant.text", "core.model.task.completed"],
         ["core.delivery.requested", "core.message.assistant.text"],
@@ -1231,7 +1230,7 @@ describe("KaguyaRuntime", () => {
         "agent.attention.arousal.state.recorded",
       );
       expect(graph.map(({ kind }) => kind)).toContain(
-        "agent.turn.context.completed",
+        "agent.router.turn.context.completed",
       );
     },
     TEST_TIMEOUT,
@@ -1274,7 +1273,7 @@ describe("KaguyaRuntime", () => {
         expect.arrayContaining([
           "core.model.task.requested",
           "core.model.task.failed",
-          "agent.turn.silent",
+          "agent.router.turn.silent",
         ]),
       );
       for (const forbiddenKind of [
@@ -1297,13 +1296,13 @@ describe("KaguyaRuntime", () => {
       const { runtime, database } = await createRuntime({
         activations: [
           ...createMessageComposition().activations.filter(
-            (a) => a.definitionId !== "agent.message-composer",
+            (a) => a.definitionId !== "agent.heavy",
           ),
-          ...["message-composer.one", "message-composer.two"].map(
+          ...["heavy.one", "heavy.two"].map(
             (instanceId) => ({
               instanceId,
-              definitionId: "agent.message-composer",
-              settings: { modelTier: "heavy" as const },
+              definitionId: "agent.heavy",
+              settings: {},
             }),
           ),
         ],
@@ -1337,7 +1336,7 @@ describe("KaguyaRuntime", () => {
           .filter((atom) => atom.kind === "core.model.task.completed")
           .map((atom) => atom.payload.taskId)
           .sort(),
-      ).toEqual(["agent.message.compose", "agent.turn.plan"]);
+      ).toEqual(["agent.heavy.respond", "agent.light.decide"]);
       expect(count("core.message.assistant.text")).toBe(2);
       expect(count("core.delivery.requested")).toBe(2);
       expect(sendMessage).toHaveBeenCalledTimes(2);
@@ -1350,7 +1349,7 @@ describe("KaguyaRuntime", () => {
           .filter((atom) => atom.kind === "core.message.assistant.text")
           .map(({ payload }) => payload.originatingModuleInstanceId)
           .sort(),
-      ).toEqual(["message-composer.one", "message-composer.two"]);
+      ).toEqual(["heavy.one", "heavy.two"]);
     },
     TEST_TIMEOUT,
   );
@@ -1411,7 +1410,7 @@ describe("KaguyaRuntime", () => {
 
       expect(result.deliveries).toEqual([]);
       expect(graph.map(({ kind }) => kind)).toContain("core.delivery.failed");
-      expect(graph.map(({ kind }) => kind)).toContain("agent.turn.failed");
+      expect(graph.map(({ kind }) => kind)).toContain("agent.router.turn.failed");
       expect(graph.map(({ kind }) => kind)).not.toContain("consumer.failed");
       const failed = graph.find(({ kind }) => kind === "core.delivery.failed")!;
       const requested = graph.find(
@@ -1452,7 +1451,7 @@ describe("KaguyaRuntime", () => {
 
       expect(result.deliveries).toEqual([]);
       expect(graph.map(({ kind }) => kind)).toContain("core.delivery.failed");
-      expect(graph.map(({ kind }) => kind)).toContain("agent.turn.failed");
+      expect(graph.map(({ kind }) => kind)).toContain("agent.router.turn.failed");
       expect(graph.map(({ kind }) => kind)).not.toContain("consumer.failed");
       expect(JSON.stringify(graph)).not.toContain(
         "provider-token-must-not-enter-ledger",
@@ -1491,7 +1490,7 @@ describe("KaguyaRuntime", () => {
 
       expect(result.deliveries).toEqual([]);
       expect(graph.map(({ kind }) => kind)).toContain("core.delivery.failed");
-      expect(graph.map(({ kind }) => kind)).toContain("agent.turn.failed");
+      expect(graph.map(({ kind }) => kind)).toContain("agent.router.turn.failed");
       expect(graph.map(({ kind }) => kind)).not.toContain("consumer.failed");
       expect(JSON.stringify(graph)).not.toMatch(
         /provider-specific failure|failed-receipt-raw/,
@@ -1577,7 +1576,7 @@ describe("KaguyaRuntime", () => {
         ),
         activations: [
           ...createMessageComposition().activations.filter(
-            (a) => a.definitionId !== "agent.message-composer",
+            (a) => a.definitionId !== "agent.heavy",
           ),
           {
             instanceId: "observer.one",
@@ -1814,8 +1813,8 @@ function createMessageComposition(
     deliveryFailedInformationKind,
     executionExhaustedInformationKind,
     promptTemplates: testMessageTemplates,
-    plannerTemplate: testPrompts.planner,
-    plannerBootstrapPolicy: testPrompts.plannerBootstrapPolicy,
+    lightTemplate: testPrompts.light,
+    lightBootstrapPolicy: testPrompts.lightBootstrapPolicy,
     expressionTemplates: testPrompts.expression,
     qqExpressionTemplates: testPrompts.qqExpression,
     agentIdentity: testIdentity,
@@ -1838,8 +1837,8 @@ function createMessageComposition(
       approvals: activations
         .filter((a) =>
           [
-            "agent.message-composer",
-            "agent.heartflow.online",
+            "agent.heavy",
+            "agent.router",
             "memory.expression",
           ].includes(a.definitionId),
         )
@@ -1849,12 +1848,9 @@ function createMessageComposition(
             definitionId: a.definitionId,
           },
           selectionPolicy: {
-            tier:
-              a.definitionId !== "agent.message-composer"
-                ? "light"
-                : z
-                    .object({ modelTier: z.enum(["light", "heavy"]) })
-                    .parse(a.settings).modelTier,
+            tier: (a.definitionId === "agent.heavy" ? "heavy" : "light") as
+              | "light"
+              | "heavy",
           },
         })),
       client: new KaguyaLlmClient({
@@ -1970,7 +1966,7 @@ it.each([
     },
   ],
 ])(
-  "allows Planner silence for QQ %s without Composer or delivery",
+  "allows Light silence for QQ %s without Heavy or delivery",
   async (_name, input) => {
     const model = createPlanningDeterministicModel("must not be composed", {
       action: "silent",
@@ -1994,20 +1990,20 @@ it.each([
         ?.payload.outcome,
     ).toBe("observe");
     expect(
-      graph.find((atom) => atom.kind === "agent.turn.silent")?.payload
+      graph.find((atom) => atom.kind === "agent.router.turn.silent")?.payload
         .reasonCodes,
     ).toEqual(["no-response-needed"]);
     expect(
       graph
         .filter((atom) => atom.kind === "core.model.task.requested")
         .map((atom) => atom.payload.taskId),
-    ).toEqual(["agent.turn.plan"]);
+    ).toEqual(["agent.light.decide"]);
     expect(
       graph.some((atom) =>
         [
           "core.message.assistant.text",
           "core.delivery.requested",
-          "agent.turn.failed",
+          "agent.router.turn.failed",
         ].includes(atom.kind),
       ),
     ).toBe(false);
@@ -2016,7 +2012,7 @@ it.each([
   TEST_TIMEOUT,
 );
 
-it("recovers Planner waits after restart, merges new input and exhausts the shared budget", async () => {
+it("recovers Light waits after restart, merges new input and exhausts the shared budget", async () => {
   const model = createPlanningDeterministicModel("must not be composed", {
     action: "wait",
     reason: "await-more-context",
@@ -2043,7 +2039,7 @@ it("recovers Planner waits after restart, merges new input and exhausts the shar
       limit: 1000,
     });
   expect(
-    (await all()).find((atom) => atom.kind === "agent.wait.requested")?.payload,
+    (await all()).find((atom) => atom.kind === "agent.router.wait.requested")?.payload,
   ).toMatchObject({ attempt: 1, wakeOnMessage: true });
   await runtime.close();
   currentTime = new Date("2026-09-04T00:00:02.000Z");
@@ -2065,11 +2061,11 @@ it("recovers Planner waits after restart, merges new input and exhausts the shar
   await settleDeliveries(database);
   expect(
     (await all())
-      .filter((atom) => atom.kind === "agent.wait.requested")
+      .filter((atom) => atom.kind === "agent.router.wait.requested")
       .map((atom) => atom.payload.attempt),
   ).toEqual([1, 2]);
   const latestTurn = (await all())
-    .filter((atom) => atom.kind === "agent.turn.context.completed")
+    .filter((atom) => atom.kind === "agent.router.turn.context.completed")
     .at(-1)!;
   expect(
     (latestTurn.payload.inputs as any[]).map((input) => input.text),
@@ -2096,19 +2092,19 @@ it("recovers Planner waits after restart, merges new input and exhausts the shar
   const graph = await all();
   expect(
     graph
-      .filter((atom) => atom.kind === "agent.wait.requested")
+      .filter((atom) => atom.kind === "agent.router.wait.requested")
       .map((atom) => atom.payload.attempt),
   ).toEqual([1, 2, 3]);
   expect(
-    graph.find((atom) => atom.kind === "agent.turn.silent")?.payload
+    graph.find((atom) => atom.kind === "agent.router.turn.silent")?.payload
       .reasonCodes,
-  ).toEqual(["planner-unavailable"]);
+  ).toEqual(["light-unavailable"]);
   expect(
     graph.some((atom) =>
       [
         "core.message.assistant.text",
         "core.delivery.requested",
-        "agent.turn.failed",
+        "agent.router.turn.failed",
       ].includes(atom.kind),
     ),
   ).toBe(false);

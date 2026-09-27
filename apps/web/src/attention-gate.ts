@@ -119,7 +119,7 @@ export function gateDecision(fields: readonly GateField[]): GateDecision {
             : "观察结果无法确认";
   const summary =
     outcome === "observe"
-      ? "本次允许 Heartflow 按记录的水位读取全部未读；是否参与仍由 Planner 决定。"
+      ? "本次允许 Router 按记录的水位读取全部未读；是否参与仍由 Light 决定。"
       : outcome === "defer"
         ? "本次没有读取或冻结正文，未读水位保持不变。"
         : "记录缺少新协议所需的观察结果，不能推断当时行为。";

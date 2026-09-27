@@ -1,21 +1,21 @@
 /**
  * 补充 QQ 插件在真实 Runtime 中的收藏、发送回执、语境门控和重启限频验证。
  * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
- * 兼容 #136 的 agent.turn.plan 与 message/wait/silent 契约，仅增强已合并的单一 Planner 链。
+ * 兼容 #136 的 agent.light.decide 与 message/wait/silent 契约，仅增强已合并的单一 Light 链。
  * 测试显式批准合成 QQ 目标，Runtime 未注入策略时默认拒绝非 Web 出站。
  * 功能概述：通过真实 Runtime/PGlite 与 DeepSeek-compatible HTTP mock 验证先观察、后规划的发言链。
- * fixture 装配正式 Catalog、light Planner 和 heavy Composer；settle 等待 durable 订阅闭合，
+ * fixture 装配正式 Catalog、light Light 和 heavy Heavy；settle 等待 durable 订阅闭合，
  * restart 保留数据库并重建宿主，advance 推进持久 heartbeat 时钟。仅 mock provider HTTP，
  * waitForPersistence 将本 fixture 的启动、打断、重建、重放及 settle 等待统一到已有的 8 秒
  * 持久化预算，条件满足即继续；不改变注入时钟、业务静默窗、等待次数或精确行为断言。
  * 多次取消、重建与重启场景另设 30 秒总预算；QQ 四至五轮 45 秒、八轮加重启 60 秒。
  * macOS 四轮实测约 26 秒，Windows 八轮约 29 秒，顺序 I/O 不能套用单轮的 15 秒总上限；
  * 每次状态等待仍受 8 秒预算约束，不增加业务 deadline 或允许的重试次数。
- * 尚未提交决策的 Planner 可由新输入打断；静默窗后合并旧、新输入重构，已提交决策仍保持唯一终态。
+ * 尚未提交决策的 Light 可由新输入打断；静默窗后合并旧、新输入重构，已提交决策仍保持唯一终态。
  * 覆盖 message/wait/silent 与 target union 的 JSON mode 本地校验、一次结构修复、耗尽后失败关闭、
  * 累计 usage 和单 requested/terminal/decision；重试复用冻结 Prompt，重放与新输入取消均不重复落地。
- * Planner v2 的每轮 schema 在模型修复阶段拒绝超预算 wait 与焦点越界；保留单次结构修复和单一回合终态。
- * 同时保留直接信号、Planner 独立等待预算和并发入站去重回归。
+ * Light v2 的每轮 schema 在模型修复阶段拒绝超预算 wait 与焦点越界；保留单次结构修复和单一回合终态。
+ * 同时保留直接信号、Light 独立等待预算和并发入站去重回归。
  * 所有消息和密钥均为合成测试数据；清理按 Runtime、数据库顺序关闭，不访问外部服务。
  */
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
@@ -257,13 +257,13 @@ function kinds(
   return atoms.map((a) => a.kind);
 }
 
-describe("Heartflow Planner via DeepSeek-compatible provider", () => {
+describe("Router Light via DeepSeek-compatible provider", () => {
   it.each([speak, silent, wait])("closes the $action DAG", async (output) => {
     const f = await fixture([output]);
     await f.submit(f.message());
     await f.settle();
     const graph = await f.atoms();
-    const decision = graph.find((a) => a.kind === "agent.turn.plan.completed")!;
+    const decision = graph.find((a) => a.kind === "agent.light.decision.completed")!;
     expect((decision.payload.action as { action: string }).action).toBe(
       output.action,
     );
@@ -279,12 +279,12 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
     expect(JSON.stringify(f.requests[0]?.messages)).toContain("waitSeconds");
     expect(kinds(graph)).toContain(
       output.action === "message"
-        ? "agent.turn.completed"
+        ? "agent.router.turn.completed"
         : output.action === "wait"
-          ? "agent.turn.waiting"
-          : "agent.turn.silent",
+          ? "agent.router.turn.waiting"
+          : "agent.router.turn.silent",
     );
-    expect(kinds(graph)).not.toContain("agent.turn.failed");
+    expect(kinds(graph)).not.toContain("agent.router.turn.failed");
     expect(f.requests.filter((r) => r.model === "deepseek-heavy")).toHaveLength(
       output.action === "message" ? 1 : 0,
     );
@@ -312,7 +312,7 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
     expect(JSON.stringify(plannerRequests[1]?.messages)).not.toContain(
       "INVALID_PRIVATE_PROVIDER_RESPONSE",
     );
-    const tasks = graph.filter((a) => a.payload.taskId === "agent.turn.plan");
+    const tasks = graph.filter((a) => a.payload.taskId === "agent.light.decide");
     expect(
       tasks.filter((a) => a.kind === "core.model.task.requested"),
     ).toHaveLength(1);
@@ -326,11 +326,11 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
       usage: { inputTokens: 2, outputTokens: 2, totalTokens: 4 },
     });
     const decisions = graph.filter(
-      (a) => a.kind === "agent.turn.plan.completed",
+      (a) => a.kind === "agent.light.decision.completed",
     );
     expect(decisions).toHaveLength(1);
     expect(decisions[0]?.payload.action).toMatchObject(recovered);
-    expect(kinds(graph)).not.toContain("agent.turn.failed");
+    expect(kinds(graph)).not.toContain("agent.router.turn.failed");
     expect(f.delivered).toHaveBeenCalledTimes(
       recovered.action === "message" ? 1 : 0,
     );
@@ -340,10 +340,10 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
     expect(f.requests).toHaveLength(requestCount);
     const replayed = await f.atoms();
     expect(
-      replayed.filter((a) => a.payload.taskId === "agent.turn.plan"),
+      replayed.filter((a) => a.payload.taskId === "agent.light.decide"),
     ).toHaveLength(tasks.length);
     expect(
-      replayed.filter((a) => a.kind === "agent.turn.plan.completed"),
+      replayed.filter((a) => a.kind === "agent.light.decision.completed"),
     ).toHaveLength(1);
     expect(f.delivered).toHaveBeenCalledTimes(
       recovered.action === "message" ? 1 : 0,
@@ -358,17 +358,17 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
       await f.settle();
       const graph = await f.atoms();
       expect(
-        graph.find((a) => a.kind === "agent.turn.plan.completed")?.payload,
+        graph.find((a) => a.kind === "agent.light.decision.completed")?.payload,
       ).toMatchObject({
-        action: { action: "silent", reason: "planner-unavailable" },
+        action: { action: "silent", reason: "light-unavailable" },
       });
-      expect(kinds(graph)).toContain("agent.turn.silent");
-      expect(kinds(graph)).not.toContain("agent.turn.failed");
+      expect(kinds(graph)).toContain("agent.router.turn.silent");
+      expect(kinds(graph)).not.toContain("agent.router.turn.failed");
       expect(kinds(graph)).not.toContain("core.message.assistant.text");
       expect(f.requests).toHaveLength(2);
       expect(f.requests[1]?.messages).toEqual(f.requests[0]?.messages);
       expect(f.delivered).not.toHaveBeenCalled();
-      const tasks = graph.filter((a) => a.payload.taskId === "agent.turn.plan");
+      const tasks = graph.filter((a) => a.payload.taskId === "agent.light.decide");
       expect(
         tasks.filter((a) => a.kind === "core.model.task.requested"),
       ).toHaveLength(1);
@@ -378,17 +378,17 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
           .map((a) => a.kind),
       ).toEqual(["core.model.task.failed"]);
       expect(
-        graph.filter((a) => a.kind === "agent.turn.plan.completed"),
+        graph.filter((a) => a.kind === "agent.light.decision.completed"),
       ).toHaveLength(1);
       await f.restart();
       await f.settle();
       expect(f.requests).toHaveLength(2);
       const replayed = await f.atoms();
       expect(
-        replayed.filter((a) => a.payload.taskId === "agent.turn.plan"),
+        replayed.filter((a) => a.payload.taskId === "agent.light.decide"),
       ).toHaveLength(tasks.length);
       expect(
-        replayed.filter((a) => a.kind === "agent.turn.plan.completed"),
+        replayed.filter((a) => a.kind === "agent.light.decision.completed"),
       ).toHaveLength(1);
     },
   );
@@ -404,15 +404,15 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
     await f.submit(f.message());
     await f.settle();
     const before = await f.atoms();
-    expect(f.requests).toHaveLength(3); // invalid Planner, repaired Planner, Composer
+    expect(f.requests).toHaveLength(3); // invalid Light, repaired Light, Heavy
     const task = before.find(
       (a) =>
         a.kind === "core.model.task.requested" &&
-        a.payload.taskId === "agent.turn.plan",
+        a.payload.taskId === "agent.light.decide",
     )!;
     expect(task.payload.version).toBe("2");
     expect(
-      before.filter((a) => a.kind === "agent.turn.plan.completed"),
+      before.filter((a) => a.kind === "agent.light.decision.completed"),
     ).toHaveLength(1);
     expect(f.delivered).toHaveBeenCalledTimes(1);
     await f.restart();
@@ -427,13 +427,13 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
     await f.settle();
     const graph = await f.atoms();
     expect(
-      graph.find((a) => a.kind === "agent.turn.plan.completed")?.payload.action,
+      graph.find((a) => a.kind === "agent.light.decision.completed")?.payload.action,
     ).toEqual({
       action: "silent",
-      reason: "planner-unavailable",
+      reason: "light-unavailable",
     });
     expect(kinds(graph)).toContain("core.model.task.failed");
-    expect(kinds(graph)).toContain("agent.turn.silent");
+    expect(kinds(graph)).toContain("agent.router.turn.silent");
     expect(kinds(graph)).not.toContain("core.message.assistant.text");
     expect(f.requests).toHaveLength(1);
     expect(f.delivered).not.toHaveBeenCalled();
@@ -450,14 +450,14 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
       replyTo: { platformMessageId: "old", senderId: "bot" },
     },
   ] as Partial<PlatformInboundMessage>[])(
-    "direct input enters Planner but can remain silent: %j",
+    "direct input enters Light but can remain silent: %j",
     async (extra) => {
       const f = await fixture([silent]);
       await f.submit(f.message("m1", extra));
       await f.settle();
       expect(f.requests).toHaveLength(1);
       expect(f.delivered).not.toHaveBeenCalled();
-      expect(kinds(await f.atoms())).toContain("agent.turn.silent");
+      expect(kinds(await f.atoms())).toContain("agent.router.turn.silent");
     },
   );
 
@@ -482,8 +482,8 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
       wakeSignal: false,
       reasonCodes: ["arousal-awake"],
     });
-    expect(kinds(graph)).toContain("agent.turn.context.completed");
-    expect(kinds(graph)).toContain("agent.turn.silent");
+    expect(kinds(graph)).toContain("agent.router.turn.context.completed");
+    expect(kinds(graph)).toContain("agent.router.turn.silent");
   });
 
   it(
@@ -504,7 +504,7 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
       ]);
       const graph = await f.atoms();
       const turns = graph.filter(
-        (a) => a.kind === "agent.turn.context.completed",
+        (a) => a.kind === "agent.router.turn.context.completed",
       );
       expect(turns.at(-1)?.payload.inputs).toHaveLength(2);
       expect(turns.at(-1)?.payload.attempt).toBe(1);
@@ -517,7 +517,7 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
   );
 
   it.each([false, true])(
-    "interrupts Planner during repair=%s and coalesces incoming messages after the quiet window",
+    "interrupts Light during repair=%s and coalesces incoming messages after the quiet window",
     async (duringRepair) => {
       let release!: (value: unknown) => void;
       const blocked = new Promise((resolve) => {
@@ -538,10 +538,10 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
         for (let i = 0; i < 8; i++)
           await f.submit(f.message(`m${i + 2}`, { text: `更新的消息 ${i}` }));
         await waitForPersistence(async () =>
-          expect(kinds(await f.atoms())).toContain("agent.observation.wake"),
+          expect(kinds(await f.atoms())).toContain("agent.heartbeat.observation.wake"),
         );
         expect(
-          (await f.atoms()).filter((a) => a.kind === "agent.turn.candidate"),
+          (await f.atoms()).filter((a) => a.kind === "agent.heartbeat.candidate"),
         ).toHaveLength(1);
         expect(f.requests).toHaveLength(blockedRequestCount);
         release(speak);
@@ -551,10 +551,10 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
         await f.settle();
         const graph = await f.atoms();
         expect(
-          graph.filter((a) => a.kind === "agent.turn.decision.interrupted"),
+          graph.filter((a) => a.kind === "agent.router.turn.decision.interrupted"),
         ).toHaveLength(1);
         expect(
-          graph.filter((a) => a.kind === "agent.turn.context.completed").at(-1)
+          graph.filter((a) => a.kind === "agent.router.turn.context.completed").at(-1)
             ?.payload.inputs,
         ).toHaveLength(9);
         expect(f.requests.map((r) => r.model)).toEqual([
@@ -567,7 +567,7 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
           graph.filter((a) => a.kind === "core.message.assistant.text"),
         ).toHaveLength(1);
         const plannerTasks = graph.filter(
-          (a) => a.payload.taskId === "agent.turn.plan",
+          (a) => a.payload.taskId === "agent.light.decide",
         );
         expect(
           plannerTasks.filter((a) => a.kind === "core.model.task.requested"),
@@ -579,7 +579,7 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
           plannerTasks.filter((a) => a.kind === "core.model.task.completed"),
         ).toHaveLength(1);
         expect(
-          graph.filter((a) => a.kind === "agent.turn.plan.completed"),
+          graph.filter((a) => a.kind === "agent.light.decision.completed"),
         ).toHaveLength(1);
         expect(f.delivered).toHaveBeenCalledTimes(1);
         const requestCount = f.requests.length;
@@ -608,7 +608,7 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
         f.setTime(1000);
         await f.submit(f.message("m2"));
         await waitForPersistence(async () =>
-          expect(kinds(await f.atoms())).toContain("agent.turn.interrupted"),
+          expect(kinds(await f.atoms())).toContain("agent.router.turn.interrupted"),
         );
         release(silent);
         await f.settle();
@@ -625,7 +625,7 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
         expect(f.requests).toHaveLength(2);
         expect(
           (await f.atoms())
-            .filter((a) => a.kind === "agent.turn.context.completed")
+            .filter((a) => a.kind === "agent.router.turn.context.completed")
             .at(-1)?.payload.inputs,
         ).toHaveLength(3);
       } finally {
@@ -636,7 +636,7 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
   );
 
   it(
-    "stops interrupting after two Planner rebuilds",
+    "stops interrupting after two Light rebuilds",
     async () => {
       const releases: ((value: unknown) => void)[] = [];
       const blocked = () =>
@@ -653,7 +653,7 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
           await waitForPersistence(async () =>
             expect(
               (await f.atoms()).filter(
-                (a) => a.kind === "agent.turn.interrupted",
+                (a) => a.kind === "agent.router.turn.interrupted",
               ),
             ).toHaveLength(round),
           );
@@ -668,10 +668,10 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
         f.setTime(1000);
         await f.submit(f.message("m4"));
         await waitForPersistence(async () =>
-          expect(kinds(await f.atoms())).toContain("agent.observation.wake"),
+          expect(kinds(await f.atoms())).toContain("agent.heartbeat.observation.wake"),
         );
         expect(
-          (await f.atoms()).filter((a) => a.kind === "agent.turn.interrupted"),
+          (await f.atoms()).filter((a) => a.kind === "agent.router.turn.interrupted"),
         ).toHaveLength(2);
         releases[2]!(silent);
         await f.settle();
@@ -696,7 +696,7 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
         f.setTime(1000);
         await f.submit(f.message("during-wait"));
         await waitForPersistence(async () =>
-          expect(kinds(await f.atoms())).toContain("agent.observation.wake"),
+          expect(kinds(await f.atoms())).toContain("agent.heartbeat.observation.wake"),
         );
         release(wait);
         await f.settle();
@@ -704,13 +704,13 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
         await f.restart();
         await f.settle();
         const turns = (await f.atoms()).filter(
-          (a) => a.kind === "agent.turn.context.completed",
+          (a) => a.kind === "agent.router.turn.context.completed",
         );
         expect(turns).toHaveLength(2);
         expect(turns[1]!.payload.attempt).toBe(0);
         expect(
           (await f.atoms())
-            .filter((a) => a.kind === "agent.turn.candidate")
+            .filter((a) => a.kind === "agent.heartbeat.candidate")
             .at(-1)?.payload.rebuildAttempt,
         ).toBe(1);
         expect(turns[1]!.payload.inputs).toHaveLength(2);
@@ -727,7 +727,7 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
     MULTI_STAGE_TIMEOUT,
   );
 
-  it("cancels an in-flight Planner and ignores its late message output", async () => {
+  it("cancels an in-flight Light and ignores its late message output", async () => {
     let release!: (value: unknown) => void;
     const blocked = new Promise((resolve) => {
       release = resolve;
@@ -744,13 +744,13 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
       await f.settle();
       const graph = await f.atoms();
       expect(kinds(graph)).toContain("core.model.task.cancelled");
-      expect(kinds(graph)).toContain("agent.turn.silent");
-      expect(kinds(graph)).not.toContain("agent.turn.failed");
+      expect(kinds(graph)).toContain("agent.router.turn.silent");
+      expect(kinds(graph)).not.toContain("agent.router.turn.failed");
       expect(kinds(graph)).not.toContain("core.message.assistant.text");
       expect(
-        graph.find((a) => a.kind === "agent.turn.plan.completed")?.payload
+        graph.find((a) => a.kind === "agent.light.decision.completed")?.payload
           .action,
-      ).toEqual({ action: "silent", reason: "planner-unavailable" });
+      ).toEqual({ action: "silent", reason: "light-unavailable" });
       expect(f.requests).toHaveLength(1);
     } finally {
       release(speak);
@@ -776,7 +776,7 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
   );
 
   it(
-    "keeps Arousal defer outside the Planner wait budget",
+    "keeps Arousal defer outside the Light wait budget",
     async () => {
       const f = await fixture([wait, wait, wait, wait]);
       const group = { kind: "group" as const, groupId: "group" };
@@ -821,14 +821,14 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
         graph.filter(
           (a) =>
             a.kind === "core.model.task.requested" &&
-            a.payload.taskId === "agent.turn.plan",
+            a.payload.taskId === "agent.light.decide",
         ),
       ).toHaveLength(4);
       expect(
-        graph.filter((a) => a.kind === "agent.wait.requested"),
+        graph.filter((a) => a.kind === "agent.router.wait.requested"),
       ).toHaveLength(3);
       expect(
-        graph.filter((a) => a.kind === "agent.turn.plan.completed").at(-1)
+        graph.filter((a) => a.kind === "agent.light.decision.completed").at(-1)
           ?.payload,
       ).toMatchObject({
         action: { action: "silent", reason: "no-response-needed" },
@@ -837,7 +837,7 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
     MULTI_STAGE_TIMEOUT,
   );
 
-  it("starts wait at persisted model completion even when the Planner is slow", async () => {
+  it("starts wait at persisted model completion even when the Light is slow", async () => {
     let release!: (value: unknown) => void;
     const blocked = new Promise((resolve) => {
       release = resolve;
@@ -851,7 +851,7 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
       await f.settle();
       const graph = await f.atoms();
       expect(
-        graph.find((a) => a.kind === "agent.wait.requested")?.payload.dueAt,
+        graph.find((a) => a.kind === "agent.router.wait.requested")?.payload.dueAt,
       ).toBe("2026-09-12T12:01:05.000Z");
       expect(f.requests).toHaveLength(1);
     } finally {
@@ -868,7 +868,7 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
       const hook = vi
         .spyOn(f.core(), "commitTerminal")
         .mockImplementation((...args) => {
-          if (args[2].kind === "agent.turn.plan.completed" && !interrupted) {
+          if (args[2].kind === "agent.light.decision.completed" && !interrupted) {
             interrupted = true;
             return Promise.reject(
               new Error("synthetic decision write interruption"),
@@ -902,10 +902,10 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
         );
         expect(JSON.stringify(f.requests[1])).toContain("BACKDATED_HISTORY");
         expect(
-          graph.filter((a) => a.kind === "agent.turn.plan.completed"),
+          graph.filter((a) => a.kind === "agent.light.decision.completed"),
         ).toHaveLength(1);
         expect(
-          graph.filter((a) => a.kind === "agent.turn.decision.interrupted"),
+          graph.filter((a) => a.kind === "agent.router.turn.decision.interrupted"),
         ).toHaveLength(1);
         expect(f.delivered).toHaveBeenCalledTimes(1);
       } finally {
@@ -935,19 +935,19 @@ describe("Heartflow Planner via DeepSeek-compatible provider", () => {
         graph.filter(
           (a) =>
             a.kind === "core.model.task.requested" &&
-            a.payload.taskId === "agent.turn.plan",
+            a.payload.taskId === "agent.light.decide",
         ),
       ).toHaveLength(4);
       expect(
-        graph.filter((a) => a.kind === "agent.wait.requested"),
+        graph.filter((a) => a.kind === "agent.router.wait.requested"),
       ).toHaveLength(3);
       expect(
-        graph.filter((a) => a.kind === "agent.turn.plan.completed").at(-1)
+        graph.filter((a) => a.kind === "agent.light.decision.completed").at(-1)
           ?.payload,
       ).toMatchObject({
         action: { action: "silent", reason: "no-response-needed" },
       });
-      expect(kinds(graph)).not.toContain("agent.turn.failed");
+      expect(kinds(graph)).not.toContain("agent.router.turn.failed");
       expect(f.delivered).not.toHaveBeenCalled();
     },
     MULTI_STAGE_TIMEOUT,
@@ -1081,7 +1081,7 @@ it(
           a.payload.taskId === "plugin.qq-expression.select",
       ),
     ).toBe(true);
-    expect(graph.filter((a) => a.kind === "agent.turn.failed")).toHaveLength(0);
+    expect(graph.filter((a) => a.kind === "agent.router.turn.failed")).toHaveLength(0);
     expect(
       graph.filter((a) => a.kind === "core.delivery.delivered"),
     ).toHaveLength(4);

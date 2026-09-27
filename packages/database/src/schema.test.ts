@@ -10,7 +10,7 @@ afterEach(async () => {
 });
 
 describe("database schema v1", () => {
-  it("initializes an empty schema and reuses the current observation protocol", async () => {
+  it("initializes an empty schema with the Router/Light/Heavy protocol", async () => {
     const database = await createDatabase();
     await database.prepareSchema();
     const metadata = await database.sql.query<{
@@ -18,7 +18,7 @@ describe("database schema v1", () => {
       information_protocol: string;
     }>("SELECT version, information_protocol FROM kaguya_schema_metadata");
     expect(metadata.rows).toEqual([
-      { version: 1, information_protocol: "attention-observation.v1" },
+      { version: 1, information_protocol: "router-light-heavy.v1" },
     ]);
     await database.sql.query(
       "INSERT INTO information_kinds (kind) VALUES ($1)",
@@ -78,6 +78,20 @@ describe("database schema v1", () => {
     await database.prepareSchema();
     await database.sql.exec(
       "ALTER TABLE kaguya_schema_metadata DROP COLUMN information_protocol",
+    );
+    await expect(database.prepareSchema()).rejects.toBeInstanceOf(
+      UnsupportedDatabaseSchemaError,
+    );
+  });
+
+  it("rejects an old observation-protocol ledger", async () => {
+    const database = await createDatabase();
+    await database.prepareSchema();
+    await database.sql.exec(
+      "ALTER TABLE kaguya_schema_metadata DROP CONSTRAINT kaguya_schema_metadata_information_protocol_check",
+    );
+    await database.sql.exec(
+      "UPDATE kaguya_schema_metadata SET information_protocol = 'attention-observation.v1'",
     );
     await expect(database.prepareSchema()).rejects.toBeInstanceOf(
       UnsupportedDatabaseSchemaError,

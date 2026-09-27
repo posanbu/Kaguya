@@ -101,7 +101,7 @@ Host 在任何 `create()` 前完成全部启用实例的 settings parse、深冻
 
 `host.inspect()` 从 Catalog 与实际绑定生成 definition/module/protocol 版本、模块名称与说明、settings schema 的 SHA-256 指纹、输入输出 Kind 的 ID/名称/说明、Selector ID、renderer 的 ID/名称/说明/适用 Kind，以及 capability bindings。它不输出 settings 值、URL、凭据、Prompt、人物或记忆正文。Inspection API 与 WebUI 必须直接使用 Manifest 的展示字段，不能维护模块或 Kind 名称映射。
 
-在线心流与消息组织通过 `inspection.surface` 的 `model-request-browser` 声明逐次模型请求页面，使用 `viewId`、`taskId` 与 `mode` 绑定数据范围。SDK 要求模块声明 `kaguya:model-task@1` 能力，并在视图中声明请求 Kind 及任务、模块归属、触发记录和上下文字段；Planner 与 Composer 的 mode 必须匹配各自任务 ID。模型请求由 Runtime 落账，因此不要求业务模块把该 Kind 列入 `produces`。WebUI 从声明生成列表与独立详情路由，完整 Prompt 仅通过受认证的单次请求检查接口读取，不进入 Manifest 摘要。
+在线心流与消息组织通过 `inspection.surface` 的 `model-request-browser` 声明逐次模型请求页面，使用 `viewId`、`taskId` 与 `mode` 绑定数据范围。SDK 要求模块声明 `kaguya:model-task@1` 能力，并在视图中声明请求 Kind 及任务、模块归属、触发记录和上下文字段；Light 与 Heavy 的 mode 必须匹配各自任务 ID。模型请求由 Runtime 落账，因此不要求业务模块把该 Kind 列入 `produces`。WebUI 从声明生成列表与独立详情路由，完整 Prompt 仅通过受认证的单次请求检查接口读取，不进入 Manifest 摘要。
 
 ## 可靠派生与终态
 
@@ -115,45 +115,45 @@ Runtime 的 `submit()` 返回已接受输入的根 ID；可靠回复异步推进
 
 ## Durable One-Shot 能力
 
-需要等待、去抖或延迟一次处理的模块可以声明 `kaguya:schedule.one-shot@1`，并把输入身份放在 opaque JSON `input` 中。模块负责决定何时调用 `replace()` 合并输入、如何读取 requested atom，以及在 due consumer 中调用 `finish()`。调度器只负责绝对时间、恢复和唯一终态；它不会启动 Heartbeat、Heartflow、Attention Arousal 或 Model Task，也不会解释模块输入。
+需要等待、去抖或延迟一次处理的模块可以声明 `kaguya:schedule.one-shot@1`，并把输入身份放在 opaque JSON `input` 中。模块负责决定何时调用 `replace()` 合并输入、如何读取 requested atom，以及在 due consumer 中调用 `finish()`。调度器只负责绝对时间、恢复和唯一终态；它不会启动 Heartbeat、Router、Attention Arousal 或 Model Task，也不会解释模块输入。
 
 ## 显式上下文与 Prompt
 
 Selector 通过受限只读账本的 `find()`、`related()`、`retrieve()` 取得候选，只返回有序 informationId。`find()` 支持 JSON payload containment 和确定性的正序/倒序查询。Core 校验 ID、拒绝重复或越权结果，并按顺序重新加载冻结原子。模块不能把未落账 payload 拼成上下文。派生输出通常继承输入的 `core:context`；需要跨入站合并时，可用 `contextInformationId` 重定位，但目标必须是该 handler 已通过声明式 Selector 选出的 `core.runtime.context`。
 
-首次生成的模块配置显式启用 Identity、durable Heartbeat、Heartflow、Attention Arousal、Association 与 Message Composer。Arousal 直接用持久化 one-shot 和绝对 deadline 实现两分钟全局空闲休眠、本地 `HH:mm` 夜间边界与五分钟周期唤醒，不使用固定 tick 或心跳计数。旧 30 秒被动复查已删除。Focus 租约时长仍由 Heartflow 的 `focusIdleMs` 管理。Runtime 拥有的 Model Task 失败/取消、delivery terminal 与 `execution.exhausted` definition 由 composition root 注入 Heartflow，Catalog 不复制这些 kind。
+首次生成的模块配置显式启用 Identity、durable Heartbeat、Router、Attention Arousal 与 Heavy。Arousal 直接用持久化 one-shot 和绝对 deadline 实现两分钟全局空闲休眠、本地 `HH:mm` 夜间边界与五分钟周期唤醒，不使用固定 tick 或心跳计数。旧 30 秒被动复查已删除。Focus 租约时长仍由 Router 的 `focusIdleMs` 管理。Runtime 拥有的 Model Task 失败/取消、delivery terminal 与 `execution.exhausted` definition 由 composition root 注入 Router，Catalog 不复制这些 kind。
 
-每条入站先投影不含正文的全局活动事实，再直接为所属 scope 竞争一个不含正文引用的 `agent.turn.candidate`，记录未读注册水位、数量与平台通知信号。同 scope 已开放或尚未成功冻结的通知继续留在未读水位中。Attention Arousal 读取最新 `agent.attention.arousal.state.recorded`、候选和 Focus 租约，提交唯一的 `observe | defer` 决策。初始状态为 `awake`；直接观察信号会重新确认 `awake`，`awake` 下普通机会默认 observe。`defer` 不创建 turn context、不推进水位；休眠周期 deadline 可产生 recheck。只有 `observe` 后，Heartflow 才以候选的排他下界和包含上界查询最多 1000 条未读，等待这些 inbound 的 identity terminal，再冻结不可变的多输入 `agent.turn.context.completed`。随后独立的 `agent.turn.plan` v1 按 `message | wait | silent` 分派为 message intent、wait 或 silent，并在 delivery、等待、静默、supersession 或耗尽时写入一个 turn terminal。默认 Catalog 不包含 always-reply 或 inbound-to-context 旁路。
+每条入站先投影不含正文的全局活动事实，再直接为所属 scope 竞争一个不含正文引用的 `agent.heartbeat.candidate`，记录未读注册水位、数量与平台通知信号。同 scope 已开放或尚未成功冻结的通知继续留在未读水位中。Attention Arousal 读取最新 `agent.attention.arousal.state.recorded`、候选和 Focus 租约，提交唯一的 `observe | defer` 决策。初始状态为 `awake`；直接观察信号会重新确认 `awake`，`awake` 下普通机会默认 observe。`defer` 不创建 turn context、不推进水位；休眠周期 deadline 可产生 recheck。只有 `observe` 后，Router 才以候选的排他下界和包含上界查询最多 1000 条未读，等待这些 inbound 的 identity terminal，再冻结不可变的多输入 `agent.router.turn.context.completed`。随后 Router 内部的 `agent.light.decide` v1 按 `message | wait | silent` 分派为 message intent、wait 或 silent，并在 delivery、等待、静默、supersession 或耗尽时写入一个 turn terminal。默认 Catalog 不包含 always-reply 或 inbound-to-context 旁路。
 
-`createMessageComposerModule()` 默认直接消费 Heartflow 产生的 `agent.message.intent.requested`，并通过 message intent 的 `core:uses-context` 找到冻结 turn context。Memory 默认由 selected Profile 关闭；此时 Heartflow 的可选检索退化为空，Prompt 仍包含当前冻结输入。Association 继续记录 requested、query、candidate 和 completed 审计 DAG，但不再作为 Message Composer 的门禁。
+`createHeavyModule()` 默认直接消费 Router 产生的 `agent.router.message.intent.requested`，并通过 message intent 的 `core:uses-context` 找到冻结 turn context。Memory 默认由 selected Profile 关闭；此时 Router 的可选检索退化为空，Prompt 仍包含当前冻结输入。可选 Memory 检索不作为 Heavy 的门禁。
 
 显式开启 `memory.enabled` 后，关联检索才以冻结 turn 的全部输入按顺序组成 query 执行全局召回，最多选择 8 条不晚于当前请求、且排除当前 turn 全部输入的结果。身份结果仍写入审计元数据，但不缩小默认召回范围，Web 和 ephemeral 消息同样进入这条链。Runtime 的命名检索策略只返回来源 ID，Core 随后从追加式账本重新加载并授权原始 inbound atom，因此 candidate 和 Prompt provenance 都直接指向不可变消息，而不是临时 Memory atom。
 
 Memory 变量在完整当前 turn 之前，合计最多 4,000 个 Unicode 字符；召回失败会退化为空内容，不阻塞当前回复。message intent、历史 `memory.text` 和原始 inbound 的 renderer 都在 manifest 中声明，每个模板变量保留其 informationIds，LLM requested 使用 `core:uses-context` 引用追溯实际输入。一个原子可同时支持多个变量，一个变量也可聚合多个原子。未知 kind 不会被静默当作文本注入。scope、claim、上下文和终态都由 Information DAG 表达，不引入进程内 Session 或可变对话桶。
 
-生产 Prompt 通过深模块 `@kaguya/prompt` 的显式资源声明、受限 Handlebars 编译、完整性校验和 digest 进入运行时。editable 资源允许被 Git 忽略的 `*.local.hbs`；readonly 资源只接受仓库 default。`pnpm prompt:init` 只为 editable 资源创建缺失副本。资源包括统一名称、别名与 persona、Planner 与平台参与策略、消息编写通用行为与平台表达风格、场景和上下文、授权正文、表达学习与选择、人物事实，以及 LLM 层 readonly 的 JSON Schema 输出协议。
+生产 Prompt 通过深模块 `@kaguya/prompt` 的显式资源声明、受限 Handlebars 编译、完整性校验和 digest 进入运行时。editable 资源允许被 Git 忽略的 `*.local.hbs`；readonly 资源只接受仓库 default。`pnpm prompt:init` 只为 editable 资源创建缺失副本。资源包括统一名称、别名与 persona、Light 与平台参与策略、消息编写通用行为与平台表达风格、场景和上下文、授权正文、表达学习与选择、人物事实，以及 LLM 层 readonly 的 JSON Schema 输出协议。
 
-Planner、Composer 和 JSON Schema 协议的生产模板原文与装配入口见 [LLM Prompt 装配与原文](./prompt-assembly)；页面在构建时直接读取 `.hbs` 文件，避免复制模板正文后产生偏差。
+Light、Heavy 和 JSON Schema 协议的生产模板原文与装配入口见 [LLM Prompt 装配与原文](./prompt-assembly)；页面在构建时直接读取 `.hbs` 文件，避免复制模板正文后产生偏差。
 
 所有 object Model Task 在写入 `core.model.task.requested` 前渲染结构化输出协议；持久化 Prompt 就是实际发送文本，协议模板、`json_schema` 变量、template digest 和 prompt digest 因而共同进入任务指纹。Provider 支持时仍可额外使用服务端 schema 输出能力。
 
 声明变量可出现零次或多次，实际使用的逻辑变量进入 provenance；未知变量、动态或递归 partial 和非内建 helper 会在启动时失败。替换不做 XML/HTML 逃逸或额外包裹，数据边界由模板作者负责。跨会话授权的渲染器由 composition 装配后注入 Runtime，宿主只提供已授权说明、冻结背景及其来源引用；模板修改不改变目标复核、正文确认或投递权限。
 
-## Message Intent 与 Composer
+## Message Intent 与 Heavy
 
-观察完成、硬门禁通过且 Planner 判定 message 后，Heartflow 为一个冻结 turn 确定性创建一次 `agent.message.intent.requested`。其严格 payload 包含 `target: { adapterId, platform, destination }`、`turn: { candidateInformationId, claimInformationId, contextInformationId }` 与 `memoryInformationIds`。`target` 取自冻结 turn 的最新入站来源；意图本身不复制源正文、源平台消息 ID、发送者信息或引用标记。
+观察完成、硬门禁通过且 Light 判定 message 后，Router 为一个冻结 turn 确定性创建一次 `agent.router.message.intent.requested`。其严格 payload 包含 `target: { adapterId, platform, destination }`、`turn: { candidateInformationId, claimInformationId, contextInformationId }` 与 `memoryInformationIds`。`target` 取自冻结 turn 的最新入站来源；意图本身不复制源正文、源平台消息 ID、发送者信息或引用标记。
 
-默认 `agent.message-composer` 模块由 `message-composer.default` 实例激活，执行 `agent.message.compose` Model Task，使用 `message` Prompt kind。Composer 通过引用重载完整冻结 turn，把其中所有输入作为当前回合共同呈现；最后一条输入没有必须回答的特殊地位。历史与 Memory 分别受预算限制，当前冻结输入不因历史预算被剔除。入站引用只帮助理解上下文，默认出站内容始终为 `kind: "text"`。
+默认 `agent.heavy` 模块由 `heavy.default` 实例激活，执行 `agent.heavy.respond` Model Task，使用 `message` Prompt kind。Heavy 通过引用重载完整冻结 turn，把其中所有输入作为当前回合共同呈现；最后一条输入没有必须回答的特殊地位。历史与 Memory 分别受预算限制，当前冻结输入不因历史预算被剔除。入站引用只帮助理解上下文，默认出站内容始终为 `kind: "text"`。
 
 旧 reply 信息原子不会迁移或由新模块处理，旧 Prompt kind 和 Model Task ID 不再属于当前协议。旧模块配置须备份后重新初始化，不能仅重命名旧文件来保留旧 outbound 设置。公共 `OutboundMessageContent.kind: "reply"` 与 OneBot 显式引用能力继续保留，供专用模块主动构造。
 
-Planner 支持 `message | wait | silent`。宿主按本轮冻结人物/会话背景和目标解析投影；`message.target` 可选择当前会话、可验证的群/私聊引用，或明确的无法解析状态。自然语言跨会话由宿主复核后自动创建统一消息意图，不再依赖管理端确认，仍独立检查出站白名单与最终目标。Planner 由现有 Heartflow 实例装配，默认 light tier，无需新增 speech 实例或 Profile/API/WebUI 配置。首次请求冻结 Prompt 与上下文选择，重放复用已持久化任务；wait 为 5–120 秒并复用三次总预算与 durable heartbeat，失败和取消统一以 `planner-unavailable` 静默结束。普通日志不记录 Planner Prompt 预览或原始模型输出。
+Light 支持 `message | wait | silent`。宿主按本轮冻结人物/会话背景和目标解析投影；`message.target` 可选择当前会话、可验证的群/私聊引用，或明确的无法解析状态。自然语言跨会话由宿主复核后自动创建统一消息意图，不再依赖管理端确认，仍独立检查出站白名单与最终目标。Light 由现有 Router 实例装配，默认 light tier，无需新增 speech 实例或 Profile/API/WebUI 配置。首次请求冻结 Prompt 与上下文选择，重放复用已持久化任务；wait 为 5–120 秒并复用三次总预算与 durable heartbeat，失败和取消统一以 `light-unavailable` 静默结束。普通日志不记录 Light Prompt 预览或原始模型输出。
 
-每个新建的 `agent.turn.context.completed` 都包含版本化 bootstrap 投影。Heartflow 根据冻结输入、身份实体创建来源和本轮获授权的 Memory，确定 `cold-start | warming | established`，并分别记录 Memory、会话与每个输入人物的状态。该判断不调用模型。相关身份实体作为 context 引用保留，因此重放不会受后来消息或 Memory 变化影响。旧 v1 事实缺少 bootstrap 时由公共归一化函数映射为保守的 `legacy-unknown`。
+每个新建的 `agent.router.turn.context.completed` 都包含版本化 bootstrap 投影。Router 根据冻结输入、身份实体创建来源和本轮获授权的 Memory，确定 `cold-start | warming | established`，并分别记录 Memory、会话与每个输入人物的状态。该判断不调用模型。相关身份实体作为 context 引用保留，因此重放不会受后来消息或 Memory 变化影响。旧协议事实不进入新账本。
 
-Prompt 仍提供 `context_bootstrap`，用于描述 Planner 或 Composer 本次实际可见的历史和 Memory。它会受上下文选择和字符预算影响；版本化 `bootstrap` 则随冻结 turn 固定。两者职责不同，均不能被解释为整个数据库是否为空的结论。
+Prompt 仍提供 `context_bootstrap`，用于描述 Light 或 Heavy 本次实际可见的历史和 Memory。它会受上下文选择和字符预算影响；版本化 `bootstrap` 则随冻结 turn 固定。两者职责不同，均不能被解释为整个数据库是否为空的结论。
 
-Planner 使用独立的 `heartflow.bootstrap-policy` 判断冷启动时是否值得询问必要信息。Composer 使用独立的 `message-composer.bootstrap` 自然表达未知状态。persona 只描述 Agent 自身，不能作为用户、关系、会话历史或世界背景的证据。Expression、Person Fact、Memory cognition 和 Association 只消费带来源引用的事实；证据不足、空结果或失败均保持未知。
+Light 使用独立的 `light.bootstrap-policy` 判断冷启动时是否值得询问必要信息。Heavy 使用独立的 `heavy.bootstrap` 自然表达未知状态。persona 只描述 Agent 自身，不能作为用户、关系、会话历史或世界背景的证据。Expression、Person Fact 与 Memory cognition 只消费带来源引用的事实；证据不足、空结果或失败均保持未知。
 
 ## 声明可编辑资源
 
@@ -161,7 +161,7 @@ Planner 使用独立的 `heartflow.bootstrap-policy` 判断冷启动时是否值
 
 `manifest.promptTemplates` 显式声明模板稳定 ID、内部名称、中文名称、用途、允许变量、允许 partial 和组成关系。第一方声明集中在 `packages/modules/src/prompt-declarations.ts`，运行编译器和 Node 资源加载器复用这份声明。Node 存储只解析注册资源，不扫描文件名推断模块归属；新增模板必须同时接入真实运行时消费链。人物事实模板由对应模块声明，但未加入当前 Catalog 时不会误归属给 Memory 模块。
 
-管理端只写本地覆盖并检查完整模板组，不渲染用户数据。校验使用非缓存编译路径，避免每次编辑都永久保留编译结果。所有已声明模板都必须有对应的 default 文件；Planner 使用 `heartflow.planner.*.hbs` 与 `heartflow.bootstrap-policy.*.hbs`，Composer 使用 `message-composer.bootstrap.*.hbs`，不另存代码默认值。
+管理端只写本地覆盖并检查完整模板组，不渲染用户数据。校验使用非缓存编译路径，避免每次编辑都永久保留编译结果。所有已声明模板都必须有对应的 default 文件；Light 使用 `light.decision.*.hbs` 与 `light.bootstrap-policy.*.hbs`，Heavy 使用 `heavy.bootstrap.*.hbs`，不另存代码默认值。
 
 恢复默认会删除对应 local；后续读取直接使用 default，不会自动重建副本。升级默认文件只影响没有 local 覆盖的模板，已有 local 由使用者自行合并或恢复。模块清单、模板存储与运行编译必须保持同一套声明，不能通过目录扫描推断归属，也不能新增只有管理界面可编辑、实际任务却不使用的模板。
 
@@ -175,15 +175,15 @@ Selector 的 `find` 支持 `openOnly`、`scopeKey`、`registrationOrder`、排�
 
 ## 关注与表达的独立生命周期
 
-`agent.attention.focus` 保存群聊的 opened、renewed、closed、expired。Arousal 在读取正文前冻结当时有效的租约事实；直接通知或有效 Focus 会记录唤醒信号并确认 `awake`。Heartflow 在观察后以真实直接入站 ID 幂等开启 Focus，并将同 scope 的有效租约投影写入 turn context。成功投递续租，silent 或 failed 关闭本轮使用的代际，Planner 的 wait 保持租约自然到期。mute、安全、目标和授权检查在 observe 后、Planner 或派发前安全闭合，不属于 Arousal 心理状态。
+`agent.router` 保存群聊的 opened、renewed、closed、expired。Arousal 在读取正文前冻结当时有效的租约事实；直接通知或有效 Focus 会记录唤醒信号并确认 `awake`。Router 在观察后以真实直接入站 ID 幂等开启 Focus，并将同 scope 的有效租约投影写入 turn context。成功投递续租，silent 或 failed 关闭本轮使用的代际，Light 的 wait 保持租约自然到期。mute、安全、目标和授权检查在 observe 后、Light 或派发前安全闭合，不属于 Arousal 心理状态。
 
-`memory.expression` 的后台学习消费真实 Identity scope，冻结一批真人入站，再经可重放 Model Task 归纳受限场景与风格。输出整体核验来源后落账，不保存人名、账号或原文。在线选择发生在获胜 message intent 之后，冻结最多 24 个候选，选择至多三条；Composer 消费独立的 expression_habits 变量，空选择保持当前生成行为。
+`memory.expression` 的后台学习消费真实 Identity scope，冻结一批真人入站，再经可重放 Model Task 归纳受限场景与风格。输出整体核验来源后落账，不保存人名、账号或原文。在线选择发生在获胜 message intent 之后，冻结最多 24 个候选，选择至多三条；Heavy 消费独立的 expression_habits 变量，空选择保持当前生成行为。
 
-这两条链均通过 Information 引用可追溯，不复用事实 Memory，不改变 Planner 的 message、wait、silent 协议。
+这两条链均通过 Information 引用可追溯，不复用事实 Memory，不改变 Light 的 message、wait、silent 协议。
 
 ## 实现与诊断入口
 
-一方 Kind 的稳定入口仍为 information-kinds.ts，具体 schema 与定义位于 kinds/ 的 message、turn、heartbeat、identity、association 和 person-fact 文件；重导出保持对象身份。Heartflow 的 state-query.ts 负责账本水合，turn-state.ts 负责纯状态投影，index.ts 负责推进与提交。
+一方 Kind 的稳定入口仍为 information-kinds.ts，具体 schema 与定义位于 kinds/ 的 message、turn、heartbeat、identity、association 和 person-fact 文件；重导出保持对象身份。Router 的 state-query.ts 负责账本水合，turn-state.ts 负责纯状态投影，index.ts 负责推进与提交。
 
 检查页的模块信息流直接连接 Manifest 中的 produces 与 consumes，支持聚焦一个模块观察上下游，并区分可用定义与已激活实例。消息流显示已观察阶段计数，并可导出不含 payload 或 Prompt 的紧凑诊断 JSON。零计数不代表失败，截断标记与图外引用必须共同判断。
 

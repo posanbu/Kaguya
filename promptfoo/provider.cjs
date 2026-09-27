@@ -1,7 +1,7 @@
 /**
  * 功能概述：为离线 promptfoo 结构回归连接真实仓库 Prompt 编译器。
  * 主要职责：KaguyaPromptProvider 按 kind 分派；message 通过 compileMessagePrompt 与默认模板编译完整冻结 turn，
- * planner 通过 Heartflow 的真实编译器验证动作边界；route/state/memory 继续使用通用模板渲染器校验结构。参数格式或编译失败直接抛错。
+ * planner 通过 Router 的真实编译器验证动作边界；route/state/memory 继续使用通用模板渲染器校验结构。参数格式或编译失败直接抛错。
  * 代码库关系：tsx 加载 modules 源码，message-fixture 构造与生产 schema 一致的意图与冻结输入。
  * 输入输出与副作用：输入评测 vars，输出文本及模板变量溯源；只读本地源码和模板，不调用模型或网络。
  */
@@ -13,7 +13,7 @@ const PROMPT_KINDS = new Set([
   "message",
   "state",
   "memory",
-  "planner",
+  "light",
 ]);
 const PROMPT_SOURCE_PATH = path.resolve(
   __dirname,
@@ -41,7 +41,7 @@ class KaguyaPromptProvider {
       throw new Error(`unsupported prompt kind: ${kind}`);
     }
 
-    if (kind === "planner") return compilePlannerEvaluation(vars);
+    if (kind === "light") return compileLightEvaluation(vars);
     if (kind === "message") return compileMessageEvaluation(vars);
 
     const createPromptTemplateRenderer = await loadPromptRenderer();
@@ -220,7 +220,7 @@ module.exports.PROMPT_SOURCE_PATH = PROMPT_SOURCE_PATH;
 async function compileMessageEvaluation(vars) {
   const { tsImport } = require("tsx/esm/api");
   const source =
-    "packages/modules/src/first-party/message-composer/message-prompt.ts";
+    "packages/modules/src/first-party/heavy/message-prompt.ts";
   const compiler = await tsImport(
     pathToFileURL(path.resolve(__dirname, "..", source)).href,
     pathToFileURL(__filename).href,
@@ -239,7 +239,7 @@ async function compileMessageEvaluation(vars) {
     requireArray(requireRecord(vars.turn, "turn").inputs, "turn.inputs"),
   );
   const prompt = compiler.compileMessagePrompt(
-    loader.loadFirstPartyPromptTemplates().messageComposer,
+    loader.loadFirstPartyPromptTemplates().heavy,
     {
       name: "Kaguya",
       aliases: ["辉夜"],
@@ -259,9 +259,9 @@ async function compileMessageEvaluation(vars) {
   };
 }
 
-async function compilePlannerEvaluation(vars) {
+async function compileLightEvaluation(vars) {
   const { tsImport } = require("tsx/esm/api");
-  const source = "packages/modules/src/first-party/heartflow/planner.ts";
+  const source = "packages/modules/src/first-party/router/light.ts";
   const compiler = await tsImport(
     pathToFileURL(path.resolve(__dirname, "..", source)).href,
     pathToFileURL(__filename).href,
@@ -270,7 +270,7 @@ async function compilePlannerEvaluation(vars) {
     pathToFileURL(
       path.resolve(
         __dirname,
-        "../packages/modules/src/first-party/message-composer/test-fixtures.ts",
+        "../packages/modules/src/first-party/heavy/test-fixtures.ts",
       ),
     ).href,
     pathToFileURL(__filename).href,
@@ -287,9 +287,9 @@ async function compilePlannerEvaluation(vars) {
   const templates = templateModule.loadFirstPartyPromptTemplates();
   const { atoms } = fixtureModule.fixture(vars.turn.inputs);
   const turn = atoms.find(
-    (atom) => atom.kind === "agent.turn.context.completed",
+    (atom) => atom.kind === "agent.router.turn.context.completed",
   );
-  const prompt = compiler.compilePlannerPrompt(
+  const prompt = compiler.compileLightPrompt(
     {
       name: "Kaguya",
       aliases: ["辉夜"],
@@ -298,9 +298,9 @@ async function compilePlannerEvaluation(vars) {
     },
     atoms,
     turn,
-    templates.planner,
-    templates.plannerPlatformPolicies,
-    templates.plannerBootstrapPolicy,
+    templates.light,
+    templates.lightPlatformPolicies,
+    templates.lightBootstrapPolicy,
   );
   return {
     output: prompt.text,

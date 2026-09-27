@@ -1,5 +1,5 @@
 /**
- * 功能概述：为 Planner 与 Composer 生成本轮可见证据的冷启动状态，不推断数据库是否为空。
+ * 功能概述：为 Light 与 Heavy 生成本轮可见证据的冷启动状态，不推断数据库是否为空。
  * 主要职责：contextBootstrapVariable 从冻结 turn、实际展示的历史和记忆生成结构化 Prompt 变量；
  * 按输入索引区分参与者的身份解析状态和可见历史，账号已建档不等同于熟人。
  * 代码库关系：两个 Prompt 编译器在选取及裁剪上下文后调用；行为措辞由各自 default/local 模板控制。
@@ -20,7 +20,7 @@ import {
 import {
   beforeQuoteCutoff,
   sameMessageTarget,
-} from "./message-composer/message-quote.js";
+} from "./heavy/message-quote.js";
 
 // turn 公共 schema 当前擦除了推导类型；这里仅为其已验证字段保留最小只读视图。
 type Source = z.infer<

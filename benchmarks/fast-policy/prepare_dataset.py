@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""从只读导出的真实 Planner 请求构建 fast-policy probe 的三档上下文。
+"""从只读导出的真实 Light 请求构建 fast-policy probe 的三档上下文。
 
 功能概述：此离线适配器连接 export_workload.mjs 与 runner.py，不调用模型、不生成
 标准答案，也不把旧模型结果当作标签。build_case 解析首次冻结的 CompiledPrompt
@@ -92,7 +92,7 @@ def prepare(source_path: Path, output_dir: Path) -> dict:
                 "context_limits": CONTEXT_LIMITS, "context_summary": context_summary,
                 "identical_context_cases": {f"{a}:{b}":sum(c["contexts"][a] == c["contexts"][b] for c in cases)
                                              for a,b in [("compact","medium"),("medium","long"),("compact","long")]},
-                "limitations": ["no independent gold labels", "custom probe, not production Planner replay",
+                "limitations": ["no independent gold labels", "custom probe, not production Light replay",
                                 "information selection restricted to current-input IDs", "context levels are available-data subsets, not fixed token budgets"]}
     manifest_path = output_dir/"dataset-manifest.json"
     write_private(manifest_path, (json.dumps(manifest, ensure_ascii=False, indent=2)+"\n").encode())

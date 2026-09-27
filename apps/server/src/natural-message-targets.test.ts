@@ -1,6 +1,6 @@
 /**
  * 功能概述：以正式 Composition、Runtime、PGlite 和受控 HTTP provider 验证自然语言跨会话链路。
- * fixture 仅替换模型响应、在线目录与 transport，仍执行身份识别、Planner、Composer、授权和 durable 去重。
+ * fixture 仅替换模型响应、在线目录与 transport，仍执行身份识别、Light、Heavy、授权和 durable 去重。
  * projection 只提取模板中人物/会话上下文的单行 JSON，避免把 Provider 追加的 Schema 提示当成业务数据；
  * choose 从该投影读取已解析的不透明目标引用，仍由正式授权服务执行范围和投递校验；授权正文模板保留背景和发送说明的原始账本来源。
  * 覆盖双投影的范围隔离、群/私聊选择、歧义与撤销后的失败关闭；所有账号、正文和凭据均为合成数据。
@@ -236,7 +236,7 @@ function projection(request: Record<string, any>) {
   const line = text.split("\n").find((line: string) => line.startsWith(prefix));
   expect(
     line,
-    "Planner Prompt must include the frozen conversation projection",
+    "Light Prompt must include the frozen conversation projection",
   ).toBeDefined();
   return JSON.parse(line!.slice(prefix.length));
 }
@@ -287,9 +287,9 @@ it.each([
     expect(JSON.stringify(f.delivered.mock.calls[0])).toContain(destination);
     const graph = await f.atoms();
     expect(
-      graph.filter((a) => a.kind === "agent.message.intent.requested"),
+      graph.filter((a) => a.kind === "agent.router.message.intent.requested"),
     ).toHaveLength(1);
-    expect(graph.filter((a) => a.kind === "agent.turn.completed")).toHaveLength(
+    expect(graph.filter((a) => a.kind === "agent.router.turn.completed")).toHaveLength(
       1,
     );
     const plan = f.requests.find((r) => r.model === "deepseek-light")!;
@@ -308,7 +308,7 @@ it.each([
     const composed = graph.find(
       (a) =>
         a.kind === "core.model.task.requested" &&
-        a.payload.taskId === "agent.message.compose",
+        a.payload.taskId === "agent.heavy.respond",
     )!;
     expect(JSON.stringify(composed.payload.prompt)).toContain("当前研究群");
     expect(JSON.stringify(composed.payload.prompt)).toContain("小明");
@@ -338,15 +338,15 @@ it.each([
         name: "instruction",
         content: "会议三点开始",
         informationIds: [
-          graph.find((atom) => atom.kind === "agent.message.target.authorized")!
+          graph.find((atom) => atom.kind === "agent.router.message.target.authorized")!
             .informationId,
         ],
       });
       const turn = graph.find(
-        (a) => a.kind === "agent.turn.context.completed",
+        (a) => a.kind === "agent.router.turn.context.completed",
       )!;
       const decision = graph.find(
-        (a) => a.kind === "agent.turn.plan.completed",
+        (a) => a.kind === "agent.light.decision.completed",
       )!;
       await Promise.all([
         f.service().route(turn, decision),
@@ -367,7 +367,7 @@ it("无法解析目标时关闭且不回退当前群", async () => {
   await f.settle();
   expect(f.delivered).not.toHaveBeenCalled();
   expect(
-    (await f.atoms()).find((a) => a.kind === "agent.turn.failed")?.payload
+    (await f.atoms()).find((a) => a.kind === "agent.router.turn.failed")?.payload
       .reason,
   ).toBe(`target-${reason}`);
   expect(f.requests).toHaveLength(1);
@@ -429,7 +429,7 @@ it.each(["撤销白名单", "移除目标", "重连"])(
     expect(
       (await f.atoms()).some((a) => a.kind === "core.delivery.failed"),
     ).toBe(true);
-    expect((await f.atoms()).some((a) => a.kind === "agent.turn.failed")).toBe(
+    expect((await f.atoms()).some((a) => a.kind === "agent.router.turn.failed")).toBe(
       true,
     );
   },
@@ -449,13 +449,13 @@ it("伪造目标引用被拒绝", async () => {
   await f.settle();
   expect(f.delivered).not.toHaveBeenCalled();
   expect(
-    (await f.atoms()).find((a) => a.kind === "agent.turn.failed")?.payload
+    (await f.atoms()).find((a) => a.kind === "agent.router.turn.failed")?.payload
       .reason,
   ).toBe("target-not-found");
 });
 
 it(
-  "意图写入失败后重放原 Planner 决策，不重复模型或投递",
+  "意图写入失败后重放原 Light 决策，不重复模型或投递",
   async () => {
     const f = await fixture([choose("group", "mentioned")]);
     const register = f.core().registerOnce.bind(f.core());
@@ -463,7 +463,7 @@ it(
     const hook = vi
       .spyOn(f.core(), "registerOnce")
       .mockImplementation((...args) => {
-        if (args[2].kind === "agent.message.intent.requested" && !interrupted) {
+        if (args[2].kind === "agent.router.message.intent.requested" && !interrupted) {
           interrupted = true;
           return Promise.reject(
             new Error("synthetic intent write interruption"),
@@ -486,7 +486,7 @@ it(
       expect(f.delivered).toHaveBeenCalledTimes(1);
       expect(
         (await f.atoms()).filter(
-          (a) => a.kind === "agent.message.intent.requested",
+          (a) => a.kind === "agent.router.message.intent.requested",
         ),
       ).toHaveLength(1);
     } finally {
@@ -500,8 +500,8 @@ it("跨会话不能复用重启前的冻结引用", async () => {
   await f.submit(f.message());
   await f.settle();
   const graph = await f.atoms();
-  const turn = graph.find((a) => a.kind === "agent.turn.context.completed")!;
-  const decision = graph.find((a) => a.kind === "agent.turn.plan.completed")!;
+  const turn = graph.find((a) => a.kind === "agent.router.turn.context.completed")!;
+  const decision = graph.find((a) => a.kind === "agent.light.decision.completed")!;
   await f.restart();
   const result = await f.service().route(turn, decision);
   expect(result.status).toBe("failed");
@@ -530,7 +530,7 @@ it("仅入站获准不会产生出站候选授权", async () => {
   await f.settle();
   expect(f.delivered).not.toHaveBeenCalled();
   expect(
-    (await f.atoms()).find((a) => a.kind === "agent.turn.failed")?.payload
+    (await f.atoms()).find((a) => a.kind === "agent.router.turn.failed")?.payload
       .reason,
   ).toBe("target-unauthorized");
 });

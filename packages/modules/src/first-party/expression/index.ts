@@ -1,5 +1,5 @@
 /**
- * 功能概述：独立的后台表达学习与在线表达选择模块；Composer 仅消费冻结选择结果。
+ * 功能概述：独立的后台表达学习与在线表达选择模块；Heavy 仅消费冻结选择结果。
  * learningSelector 验证 Identity 指向真实 canonical scope，按持久化水位收集最多 24 条入站。
  * selectionSelector 绑定获胜 intent 的冻结 turn，严格按真实 scope 召回已验证批次，杜绝 fallback scope。
  * 两阶段请求先落账，再调用可重放 Model Task；全部输出验证后提交唯一终态，模型失败/取消生成空结果。
@@ -28,7 +28,7 @@ import {
   messageIntentRequestedInformationKind,
   turnContextCompletedInformationKind,
 } from "../information-kinds.js";
-import type { CreateMessageComposerModuleOptions } from "../message-composer/index.js";
+import type { CreateHeavyModuleOptions } from "../heavy/index.js";
 import { createPromptTemplateRenderer } from "../../prompt-template.js";
 import {
   expressionModulePromptTemplates,
@@ -210,7 +210,7 @@ function prompt(
   ]);
 }
 export function createExpressionModule(
-  options: Pick<CreateMessageComposerModuleOptions, "modelTaskCapability"> & {
+  options: Pick<CreateHeavyModuleOptions, "modelTaskCapability"> & {
     readonly promptTemplates: ExpressionPromptTemplates;
   },
 ) {

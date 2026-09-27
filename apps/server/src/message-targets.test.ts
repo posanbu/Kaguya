@@ -1,6 +1,6 @@
 /**
  * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
- * 功能概述：使用真实 PGlite/Runtime/Composer 验证管理端跨会话授权及投递终检。
+ * 功能概述：使用真实 PGlite/Runtime/Heavy 验证管理端跨会话授权及投递终检。
  * 主要职责：覆盖目录解析、两次确认、注入的授权模板及变量来源、上下文隔离、伪造目的地、断线代次和失败 turn；所有平台 I/O 使用 spy。
  * 代码库关系：正式 composition 提供确定性模型，MessageTargetService 使用假目录，账本保持真实持久化与 durable 消费。
  * 输入输出与副作用：每例独立内存数据库，测试后关闭 Runtime；不调用真实模型或 QQ。
@@ -157,7 +157,7 @@ async function fixture(
   });
   await settle();
   const turn = (await atoms()).find(
-    (a) => a.kind === "agent.turn.context.completed",
+    (a) => a.kind === "agent.router.turn.context.completed",
   )!;
   expect(turn).toBeDefined();
   const restart = async () => {
@@ -278,7 +278,7 @@ it.each(["100", "200"])(
         name: "instruction",
         content: "请告知会议改到下午三点。",
         informationIds: [
-          graph.find((atom) => atom.kind === "agent.message.target.authorized")!
+          graph.find((atom) => atom.kind === "agent.router.message.target.authorized")!
             .informationId,
         ],
       },
@@ -313,7 +313,7 @@ it.each(["100", "200"])(
     expect(
       (await f.atoms()).some(
         (a) =>
-          a.kind === "agent.turn.completed" &&
+          a.kind === "agent.router.turn.completed" &&
           a.payload.candidateInformationId ===
             (intent.payload.turn as { candidateInformationId: string })
               .candidateInformationId,
@@ -356,7 +356,7 @@ it("uses the injected authorized prompt without changing frozen instructions or 
   expect(render).toHaveBeenCalledTimes(1);
   const graph = await f.atoms();
   const authorization = graph.find(
-    (atom) => atom.kind === "agent.message.target.authorized",
+    (atom) => atom.kind === "agent.router.message.target.authorized",
   )!;
   expect(render.mock.calls[0]![0]).toEqual({
     automatic: false,
@@ -480,7 +480,7 @@ it("blocks forged final destinations with a redacted failure and closes the isol
   expect(
     graph.some(
       (a) =>
-        a.kind === "agent.turn.failed" &&
+        a.kind === "agent.router.turn.failed" &&
         a.payload.candidateInformationId ===
           (assistant.payload.turn as { candidateInformationId: string })
             .candidateInformationId,

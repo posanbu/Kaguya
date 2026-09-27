@@ -306,7 +306,7 @@ describe("createPersonFactTaskModule", () => {
       "core.person.fact.candidate",
     );
     expect(personFactCandidateInformationKind.kind).not.toBe(
-      "agent.message.intent.requested",
+      "agent.router.message.intent.requested",
     );
     expect(definition.manifest.requires).toEqual([
       { id: "kaguya:model-task", apiVersion: 1 },

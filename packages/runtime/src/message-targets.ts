@@ -2,9 +2,9 @@
  * 解析 message composition 时保留可选 tone；跨目标授权和正文确认流程保持原有边界。
  * 功能概述：管理跨会话目录解析、短期候选、目标授权和正文确认，所有批准状态只由可信宿主持有。
  * 五分钟缓存随查询/路由清理，活跃目标授权数量有界；
- * conversation 冻结双投影并限制到当前 adapter 和本轮人物/目标；route 从持久化 Planner 决策创建自动授权，stage 绑定唯一正文。
+ * conversation 冻结双投影并限制到当前 adapter 和本轮人物/目标；route 从持久化 Light 决策创建自动授权，stage 绑定唯一正文。
  * 主要职责：resolve 返回显式结果；authorize 冻结批准说明并创建标准 intent；confirm 绑定精确 assistant；
- * prepare/stage 是 Composer 的窄能力；validateDelivery 对请求因果链、连接代次和正文再次验证。
+ * prepare/stage 是 Heavy 的窄能力；validateDelivery 对请求因果链、连接代次和正文再次验证。
  * 代码库关系：Server 管理认证路由调用本类，Runtime 注入 Core/目录/生效 allowlist 和授权正文渲染器；不读取模板文件或直接调用 transport。
  * AuthorizedMessagePromptRenderer 只接收授权说明和已冻结的背景变量；prepare 保留其来源引用，未装配渲染器时拒绝生成正文。
  * 输入输出与副作用：持久化授权/确认事实，私有授权表重启失效；目录、白名单或内容变化拒绝；不记录文本或 ID。
@@ -23,7 +23,7 @@ import {
 import {
   conversationContextInformationKind,
   turnContextCompletedInformationKind,
-  plannerActionSchema,
+  lightActionSchema,
   messageIntentRequestedInformationKind,
   messageIntentRequestedInformationPayloadSchema,
   targetAuthorizedInformationKind,
@@ -383,7 +383,7 @@ export class MessageTargetService implements MessageAuthorization {
       turn.payload,
     ) as unknown as FrozenRoutingTurn;
     if (
-      decision.kind !== "agent.turn.plan.completed" ||
+      decision.kind !== "agent.light.decision.completed" ||
       !decision.references.some(
         (r) =>
           r.relation === "core:status-of" &&
@@ -391,7 +391,7 @@ export class MessageTargetService implements MessageAuthorization {
       )
     )
       return fail("target-invalid-decision");
-    const action = plannerActionSchema.parse(decision.payload.action);
+    const action = lightActionSchema.parse(decision.payload.action);
     if (
       action.action !== "message" ||
       !action.target ||
@@ -418,7 +418,7 @@ export class MessageTargetService implements MessageAuthorization {
       contextInformationId: turn.informationId,
     };
     const authorization = await this.core.registerOnce(
-      "runtime.planner.authorization.v1",
+      "runtime.light.authorization.v1",
       decision.informationId,
       targetAuthorizedInformationKind,
       {
@@ -449,7 +449,7 @@ export class MessageTargetService implements MessageAuthorization {
     };
     this.#approvals.set(authorization.informationId, approval);
     const intent = await this.core.registerOnce(
-      "agent.heartflow.message-intent",
+      "agent.router.message-intent",
       payload.claimInformationId,
       messageIntentRequestedInformationKind,
       {
@@ -489,7 +489,7 @@ export class MessageTargetService implements MessageAuthorization {
   async sources() {
     if (this.#closed) return [];
     const turns = await this.core.find({
-      kinds: ["agent.turn.context.completed"],
+      kinds: ["agent.router.turn.context.completed"],
       order: "desc",
       limit: 50,
     });
@@ -601,7 +601,7 @@ export class MessageTargetService implements MessageAuthorization {
         "candidateId" in candidate &&
         (
           await this.core.find({
-            kinds: ["agent.turn.failed"],
+            kinds: ["agent.router.turn.failed"],
             payloadContains: {
               candidateInformationId: String(candidate.candidateId),
             },
@@ -643,7 +643,7 @@ export class MessageTargetService implements MessageAuthorization {
       return { status: "expired" as const };
     if (this.#approvals.size >= 1000) return { status: "unavailable" as const };
     const turn = await this.read(parsed.sourceTurnContextInformationId);
-    if (turn.kind !== "agent.turn.context.completed")
+    if (turn.kind !== "agent.router.turn.context.completed")
       throw new Error("invalid-source-turn");
     const sourceTurn = turnContextCompletedInformationKind.payloadSchema.parse(
       turn.payload,
@@ -827,7 +827,7 @@ export class MessageTargetService implements MessageAuthorization {
     }
     const turn = await this.read(payload.turn.contextInformationId);
     if (
-      turn.kind !== "agent.turn.context.completed" ||
+      turn.kind !== "agent.router.turn.context.completed" ||
       turn.payload.candidateInformationId !==
         payload.turn.candidateInformationId ||
       turn.payload.claimInformationId !== payload.turn.claimInformationId
@@ -1021,7 +1021,7 @@ export class MessageTargetService implements MessageAuthorization {
 function resolveComposition(
   turn: FrozenRoutingTurn,
   composition: Extract<
-    z.infer<typeof plannerActionSchema>,
+    z.infer<typeof lightActionSchema>,
     { action: "message" }
   >["composition"],
 ) {

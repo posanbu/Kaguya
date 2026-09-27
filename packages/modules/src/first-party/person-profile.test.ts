@@ -10,9 +10,9 @@ import {
   renderPersonProfileSections,
   selectActivePersonProfiles,
 } from "./person-profile.js";
-import { compilePlannerPrompt } from "./heartflow/planner.js";
-import { compileMessagePrompt } from "./message-composer/message-prompt.js";
-import { atom, fixture, identity } from "./message-composer/test-fixtures.js";
+import { compileLightPrompt } from "./router/light.js";
+import { compileMessagePrompt } from "./heavy/message-prompt.js";
+import { atom, fixture, identity } from "./heavy/test-fixtures.js";
 
 const templates = loadFirstPartyPromptTemplates();
 const entry = (text: string) => ({
@@ -69,7 +69,7 @@ describe("person profile prompt", () => {
     expect(Array.from(withNames).length).toBeLessThanOrEqual(900);
   });
 
-  it("uses the same frozen revision in Planner and Composer after later edits", () => {
+  it("uses the same frozen revision in Light and Heavy after later edits", () => {
     const f = fixture(["聊聊星空"]);
     const selected = {
       personInformationId: "person-1",
@@ -138,29 +138,29 @@ describe("person profile prompt", () => {
       previousRevisionInformationId: "profile-1",
     });
     const atoms = [f.intent, turn, ...f.messages, original, edited];
-    const planner = compilePlannerPrompt(
+    const planner = compileLightPrompt(
       identity,
       atoms,
       turn,
-      templates.planner,
+      templates.light,
     );
     const composer = compileMessagePrompt(
-      templates.messageComposer,
+      templates.heavy,
       identity,
       atoms,
       f.intent.informationId,
     );
     expect(planner.text).toBe(
-      compilePlannerPrompt(
+      compileLightPrompt(
         identity,
         atoms.filter((item) => item.informationId !== "profile-2"),
         turn,
-        templates.planner,
+        templates.light,
       ).text,
     );
     expect(composer.text).toBe(
       compileMessagePrompt(
-        templates.messageComposer,
+        templates.heavy,
         identity,
         atoms.filter((item) => item.informationId !== "profile-2"),
         f.intent.informationId,

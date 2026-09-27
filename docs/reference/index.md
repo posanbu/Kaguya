@@ -27,7 +27,7 @@ description: Kaguya HTTP、配置、信息 Kind 与存储边界的查询入口�
 
 **`core.message.inbound.text`** — 已被 Runtime 注册的正规化入站文本。
 
-**`agent.message.intent.requested`** — Heartflow 为 eligible turn 注册的消息意图，包含显式 `target`、冻结 `turn` provenance 与 `memoryInformationIds`，不包含源正文或引用标记。
+**`agent.router.message.intent.requested`** — Router 为 eligible turn 注册的消息意图，包含显式 `target`、冻结 `turn` provenance 与 `memoryInformationIds`，不包含源正文或引用标记。
 
 **`filter.decision`** — 过滤拒绝事实，payload 固定包含 `accepted: false`、原因和过滤器定义 ID；它不承担定向路由。
 

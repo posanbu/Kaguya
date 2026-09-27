@@ -1,6 +1,6 @@
 /**
  * 功能概述：用真实 HTTP 路由、Runtime、正式模块组合和 PGlite 信息账本验证 WebUI 私聊闭环。
- * 主要职责：fixture 仅替换模型供应商 HTTP，保留 Planner、Composer、Web transport 与历史读取；
+ * 主要职责：fixture 仅替换模型供应商 HTTP，保留 Light、Heavy、Web transport 与历史读取；
  * exchange 在同一个显式持久化等待预算内确认回复可读和订阅队列闭合，避免把 202 当成回复完成。
  * 代码库关系：通过 app.ts 与 web-gateway.ts 接收入站，web-chat.ts 从成功投递事实恢复历史；
  * platform-adapters 提供真实 Web 出站，composition 提供与服务端相同的业务 DAG。
@@ -29,7 +29,7 @@ import { createWebMessageGateway } from "./web-gateway.js";
 
 const gatewayToken = "synthetic-web-chat-test-token";
 const adapterId = "web.ui.main";
-// 与真实 Planner/PGlite fixture 保持一致，条件满足立即继续，不固定休眠。
+// 与真实 Light/PGlite fixture 保持一致，条件满足立即继续，不固定休眠。
 const durableWait = { timeout: 8_000, interval: 20 };
 // HTTP 历史独立限流为每分钟 120 次；三轮最长等待总计不超过 96 次轮询。
 const historyWait = { timeout: durableWait.timeout, interval: 250 };

@@ -684,7 +684,7 @@ it("keeps independent directional policies pending until explicit application", 
   expect(await outboundStatus("100")).toBe("resolved");
   expect(
     await f.databases[0]!.information.find({
-      kinds: ["core.message.inbound.text", "agent.turn.context.completed"],
+      kinds: ["core.message.inbound.text", "agent.router.turn.context.completed"],
       limit: 10,
     }),
   ).toEqual([]);

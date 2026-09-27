@@ -28,8 +28,8 @@ const MODULE_NAMES: Readonly<Record<string, string>> = {
   "runtime:information": "信息流",
   "adapter:napcat": "NapCat",
   "adapter:web": "网页聊天",
-  "agent.heartflow.online": "心流",
-  "agent.message-composer": "消息生成",
+  "agent.router": "心流",
+  "agent.heavy": "消息生成",
   "memory.raw": "记忆写入",
   "demo.person.fact.extract": "人物记忆",
 };
@@ -58,7 +58,7 @@ const EVENT_NAMES: Readonly<Record<string, string>> = {
   "information.bootstrap.failed": "信息引导失败",
   "scheduler.cadence.failed": "节奏调度失败",
   "model.task.prompt": "模型任务 Prompt 详情",
-  "message.model.dispatching": "准备生成回复",
+  "heavy.model.dispatching": "准备生成回复",
   "person-fact.model.dispatching": "准备提取人物记忆",
   "message.inbound": "收到消息",
   "message.assistant": "回复已生成",
@@ -75,7 +75,7 @@ const EVENT_NAMES: Readonly<Record<string, string>> = {
   "attention.arousal.state": "Arousal 唤醒状态",
   "turn.decision.interrupted": "回合决策已中断",
   "turn.decision.superseded": "回合决策已被替代",
-  "turn.plan": "回合规划完成",
+  "light.decision": "回合规划完成",
   "speech.wait.requested": "等待下一次唤醒",
   "memory.raw.requested": "原始记忆写入请求已登记",
   "person.fact.candidate": "准备提取人物事实",
@@ -180,8 +180,8 @@ const LIFECYCLE_NAMES: Readonly<Record<string, string>> = {
 };
 
 const MESSAGE_NAMES: Readonly<Record<string, string>> = {
-  "Information DAG heartflow ready": "心流已就绪",
-  "Message composer pipeline ready": "消息生成已就绪",
+  "Information DAG router ready": "心流已就绪",
+  "Heavy pipeline ready": "消息生成已就绪",
   "Memory association ready": "联想记忆已就绪",
   "Person-fact extraction pipeline ready": "人物记忆提取已就绪",
   "Attention arousal gate ready": "注意力评估已就绪",

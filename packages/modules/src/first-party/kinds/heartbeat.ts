@@ -130,7 +130,7 @@ export const heartbeatFiredInformationKind = defineInformationKind({
   kind: "agent.heartbeat.fired",
   displayName: "短心跳已触发",
   description:
-    "调度到期且心跳被处理时登记触发结果；心跳模块由此形成可供 Heartflow 认领的回合候选。",
+    "调度到期且心跳被处理时登记触发结果；心跳模块由此形成可供 Router 认领的回合候选。",
   payloadSchema: z
     .object({ firedAt: z.iso.datetime({ offset: true }) })
     .strict(),
@@ -218,10 +218,10 @@ const turnCandidatePayloadSchema = z
   .strict() as any;
 
 export const turnCandidateInformationKind = defineInformationKind({
-  kind: "agent.turn.candidate",
+  kind: "agent.heartbeat.candidate",
   displayName: "注意力观察机会",
   description:
-    "入站通知或延迟调度登记不含正文的观察机会，只保存范围、触发事实、未读注册水位、数量与平台信号；Arousal 决定 observe 后 Heartflow 才能查询正文。",
+    "入站通知或延迟调度登记不含正文的观察机会，只保存范围、触发事实、未读注册水位、数量与平台信号；Arousal 决定 observe 后 Router 才能查询正文。",
   payloadSchema: z.union([
     turnCandidatePayloadSchema,
     turnCandidatePayloadSchema.extend({
@@ -251,7 +251,7 @@ export const turnCandidateInformationKind = defineInformationKind({
 });
 
 export const observationWakeInformationKind = defineInformationKind({
-  kind: "agent.observation.wake",
+  kind: "agent.heartbeat.observation.wake",
   displayName: "开放观察唤醒",
   description: "提升同 scope 的唯一观察或恢复遗留积压，不创建消息回合队列。",
   payloadSchema: z
@@ -272,7 +272,7 @@ export const observationWakeInformationKind = defineInformationKind({
     "agent:turn-candidate": {
       required: true,
       multiple: false,
-      targetKinds: ["agent.turn.candidate"],
+      targetKinds: ["agent.heartbeat.candidate"],
     },
   },
   log: {

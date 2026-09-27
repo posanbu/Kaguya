@@ -26,4 +26,4 @@
 
 ## 典型场景
 
-Heartflow 在冻结 turn context 前等待每条入站的身份终态。
+Router 在冻结 turn context 前等待每条入站的身份终态。

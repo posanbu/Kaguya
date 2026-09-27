@@ -1,6 +1,6 @@
 # Kaguya fast-policy benchmark
 
-本目录提供 [issue #181](https://github.com/posanbu/Kaguya/issues/181) 的独立短策略基准工具：比较 Flash / Pro、thinking off / low 和 compact / medium / long 三档上下文，共 12 个条件。它不会修改生产 Planner、启动机器人或发送平台消息。
+本目录提供 [issue #181](https://github.com/posanbu/Kaguya/issues/181) 的独立短策略基准工具：比较 Flash / Pro、thinking off / low 和 compact / medium / long 三档上下文，共 12 个条件。它不会修改生产 Light、启动机器人或发送平台消息。
 
 **正式实验由使用者运行。本次只交付代码，不提供模型优劣结论。** 工具硬性限制单个运行进程最多 20 个同时在途请求；不要同时启动多个 runner 或同时运行 preflight，以免合计超过并发上限。
 
@@ -14,7 +14,7 @@
 
 `action` 为 `message | wait | silent`；`intent` 为 `answer | clarify | support | acknowledge | boundary | coordinate | defer | none`。`provide` 和 `avoid` 只能引用当前 context 的 `information` ID，ID 不可重复，两组不能相交。
 
-这是为了精确评分而定义的 `kaguya-fast-policy-probe/v1`。生产 Planner 的 `composition.topic/replyAct/guidance/focusInputIndexes` 为另一套协议；本工具的得分不能直接宣称为生产 Planner 的端到端效果。
+这是为了精确评分而定义的 `kaguya-fast-policy-probe/v1`。生产 Light 的 `composition.topic/replyAct/guidance/focusInputIndexes` 为另一套协议；本工具的得分不能直接宣称为生产 Light 的端到端效果。
 
 模型名默认 `deepseek-flash` 和 `deepseek-v4-pro`，端点默认 `https://api.llm.ustc.edu.cn/v1`。DeepSeek 官方将 `deepseek-flash` 定义为 V4.1 Flash，并使用 `thinking.type` 与 `reasoning_effort` 控制推理；第三方网关是否保持该映射和参数语义，仍须根据响应、网关配置及 preflight 核查。[官方模型说明](https://api-docs.deepseek.com/)、[thinking 参数](https://api-docs.deepseek.com/guides/thinking_mode/)。
 
@@ -41,7 +41,7 @@ python3 benchmarks/fast-policy/prepare_dataset.py \
 
 如果部署使用仓库外的配置目录，将 `--config-root` 换成实际配置根。执行者需要有读取配置和数据库的权限；真实配置、API key、原始导出与模型响应均不随 PR 分发。单独克隆使实验工具与部署目录分离，无需切换正在运行服务的分支或重载服务。
 
-exporter 使用 PostgreSQL `REPEATABLE READ READ ONLY` 事务，仅选择 `core.model.task.requested` 中 `taskId=agent.turn.plan` 的请求及其显式引用的上下文，包含历史成功、取消和失败请求，不按旧结果筛选。不会把后验模型回答当标签，也不会补入请求之后才出现的上下文。
+exporter 使用 PostgreSQL `REPEATABLE READ READ ONLY` 事务，仅选择 `core.model.task.requested` 中 `taskId=agent.light.decide` 的请求及其显式引用的上下文，包含历史成功、取消和失败请求，不按旧结果筛选。不会把后验模型回答当标签，也不会补入请求之后才出现的上下文。
 
 `prepare_dataset.py` 保留每条请求的冻结时间、身份、当前 turn 和会话关系，固定以下嵌套规则：
 
@@ -51,7 +51,7 @@ exporter 使用 PostgreSQL `REPEATABLE READ READ ONLY` 事务，仅选择 `core.
 
 三档的当前输入和候选信息 ID 完全一致，候选信息来自当前输入。增加历史只帮助选择当前输入，不扩大信息候选集合。因此这里的信息选择只衡量当前输入 ID 的取舍，不能代表对长期记忆秘密的完整泄露审计。三档是实际可用数据的子集，不承诺固定 token 长度，也不重复文本补足预算。manifest 会统计三档实际增量和完全相同的案例数。
 
-只读检查时服务器有 53 条冻结 Planner 请求，少于 issue 建议的 100–300 条；再次导出时应以新 manifest 的实际数量为准。不能把重复调用、context 变体或示例数据算成新的真实 workload。
+只读检查时服务器有 53 条冻结 Light 请求，少于 issue 建议的 100–300 条；再次导出时应以新 manifest 的实际数量为准。不能把重复调用、context 变体或示例数据算成新的真实 workload。
 
 ## 标注与离线核查
 

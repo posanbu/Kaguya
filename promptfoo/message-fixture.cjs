@@ -29,7 +29,7 @@ function messageFixture(texts) {
       },
     }),
   );
-  const turn = make("turn-1", "agent.turn.context.completed", {
+  const turn = make("turn-1", "agent.router.turn.context.completed", {
     candidateInformationId: "candidate-1",
     claimInformationId: "claim-1",
     scopeKey: "eval-scope",
@@ -45,6 +45,16 @@ function messageFixture(texts) {
       },
     })),
     observedThroughInformationId: messages.at(-1).informationId,
+    bootstrap: {
+      version: 1,
+      mode: "cold-start",
+      memory: { state: "disabled", selectedCount: 0 },
+      conversation: { state: "first-seen" },
+      participants: messages.map((message) => ({
+        inputInformationId: message.informationId,
+        state: "first-seen",
+      })),
+    },
     text: "LEGACY_COPIED_BODY",
     source: messages[0]?.payload.source,
     messageCount: messages.length,
@@ -66,7 +76,7 @@ function messageFixture(texts) {
       thresholdMs: 120000,
     },
   });
-  const intent = make("intent-1", "agent.message.intent.requested", {
+  const intent = make("intent-1", "agent.router.message.intent.requested", {
     target,
     turn: {
       candidateInformationId: "candidate-1",

@@ -25,23 +25,23 @@ description: 修改 Kaguya 的名称、人设、时区和平台表达方式。
 
 在“检查 → 模块”打开相应模块的 Prompt 模板。
 
-**消息编写模块 → `message-composer.behavior`** — 通用回复要求，例如信息量、避免重复和表达方式。
+**消息编写模块 → `heavy.behavior`** — 通用回复要求，例如信息量、避免重复和表达方式。
 
-**消息编写模块 → `message-composer.platform-style-qq` / `platform-style-web`** — 分别调整 QQ 与 Web 的说话风格；通用回退模板为 `message-composer.platform-style`。
+**消息编写模块 → `heavy.platform-style-qq` / `platform-style-web`** — 分别调整 QQ 与 Web 的说话风格；通用回退模板为 `heavy.platform-style`。
 
-**消息编写模块 → `message-composer.scene`** — 群聊、私聊等场景的表达要求。
+**消息编写模块 → `heavy.scene`** — 群聊、私聊等场景的表达要求。
 
-**消息编写模块 → `message-composer.bootstrap`** — 调整缺少上下文时如何自然表达未知状态。
+**消息编写模块 → `heavy.bootstrap`** — 调整缺少上下文时如何自然表达未知状态。
 
-**Heartflow → `heartflow.bootstrap-policy`** — 调整冷启动时是否参与或询问的策略。冷启动状态来自本轮冻结的会话、人物与获授权 Memory 证据；模板不能改写状态，也不能把空召回当成从未认识对方的证明。
+**Router → `light.bootstrap-policy`** — 调整冷启动时是否参与或询问的策略。冷启动状态来自本轮冻结的会话、人物与获授权 Memory 证据；模板不能改写状态，也不能把空召回当成从未认识对方的证明。
 
-**Heartflow → `heartflow.planner`** — 决定回复、等待或静默的整体要求。
+**Router → `light.decision`** — 决定回复、等待或静默的整体要求。
 
-**Heartflow → `heartflow.platform-policy-qq` / `platform-policy-web`** — 分平台调整参与对话的方式；通用回退模板为 `heartflow.platform-policy`。
+**Router → `light.platform-policy-qq` / `platform-policy-web`** — 分平台调整参与对话的方式；通用回退模板为 `light.platform-policy`。
 
 表达学习模块的 `memory.expression.learn` 和 `memory.expression.select` 分别影响表达习惯的学习与选择。页面会列出模板用途和允许变量，修改前先看这些说明。
 
-每次围绕一个可观察的问题修改，例如“QQ 回复经常重复上一句”。保存、重启后，用相近场景检查效果；仅修改 Planner 不会直接规定最终回复的全部措辞。
+每次围绕一个可观察的问题修改，例如“QQ 回复经常重复上一句”。保存、重启后，用相近场景检查效果；仅修改 Light 不会直接规定最终回复的全部措辞。
 
 ## 默认模板与本地模板
 

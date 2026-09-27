@@ -35,7 +35,7 @@ export const identityModule = defineInformationModule({
     displayName: "身份归一",
     summary: "归一平台身份，并为稳定人物维护可追溯的手动画像。",
     description:
-      "消费入站消息，建立会话、账号和人物实体及绑定，输出身份上下文终态；管理端另存手动画像版本，服务重启后供 Planner 与 Composer 参考。自动从 Memory 提取尚未接入。",
+      "消费入站消息，建立会话、账号和人物实体及绑定，输出身份上下文终态；管理端另存手动画像版本，服务重启后供 Light 与 Heavy 参考。自动从 Memory 提取尚未接入。",
     settingsSchema,
     consumes: [inboundTextInformationKind],
     produces: [

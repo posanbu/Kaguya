@@ -2,21 +2,21 @@
 
 ## 目的与非目标
 
-从真实聊天归纳可复用的场景与语言表面形式，独立于 Persona、事实 Memory 和 Planner。当前使用严格的场景与风格枚举，包括短句、反问、先回应再补充、语气词节制等；不保存任意句式原文，也不模仿某个具体用户。
+从真实聊天归纳可复用的场景与语言表面形式，独立于 Persona、事实 Memory 和 Light。当前使用严格的场景与风格枚举，包括短句、反问、先回应再补充、语气词节制等；不保存任意句式原文，也不模仿某个具体用户。
 
 ## 消费和产生
 
-消费 Identity 的真实 canonical scope 终态，后台冻结 learning.requested 并产生 learning.completed。消费已获胜的 message intent，先冻结 selection.requested，再产生 selection.completed；无候选也会产生空选择。Composer 只消费已冻结选择。
+消费 Identity 的真实 canonical scope 终态，后台冻结 learning.requested 并产生 learning.completed。消费已获胜的 message intent，先冻结 selection.requested，再产生 selection.completed；无候选也会产生空选择。Heavy 只消费已冻结选择。
 
 ## 数据流与边界
 
 学习来源只包括已引用的真实用户入站，拒绝自身发言、媒体占位、系统内容和噪声。scope 必须来自真实 Identity 实体且与目标一致；不存在 fallback ID。每条模式保留来源 Information ID。没有足够的已引用消息时不归纳表达习惯，也不以 persona 或模型常识补齐。选择上下文绑定冻结 turn 与 message intent，至多注入三条。
 
-Composer 使用独立 expression_habits 变量，provenance 指向选择结果及来源批次。提示明确要求自然匹配时才参考，不能改变事实、动作、授权或目标。受限枚举拒绝人名、账号、长原文和私密事实进入表达库。
+Heavy 使用独立 expression_habits 变量，provenance 指向选择结果及来源批次。提示明确要求自然匹配时才参考，不能改变事实、动作、授权或目标。受限枚举拒绝人名、账号、长原文和私密事实进入表达库。
 
 ## Settings
 
-batchSize 默认 8，范围 2–24。默认实例 `memory.expression.default`；通过 `memory:expression.ready` 声明 Composer 的流水线依赖，避免关闭模块后静默丢失回复。
+batchSize 默认 8，范围 2–24。默认实例 `memory.expression.default`；通过 `memory:expression.ready` 声明 Heavy 的流水线依赖，避免关闭模块后静默丢失回复。
 
 ## 可靠性、幂等和失败行为
 
@@ -30,4 +30,4 @@ batchSize 默认 8，范围 2–24。默认实例 `memory.expression.default`；
 
 ## 典型场景
 
-一个群在解释问题时经常采用短句，学习批次归纳该模式。下一次类似讨论进入 message 决策后，选择模型可选中它，Composer 自然缩短句子；轻松闲聊与其不匹配时选择空集合，沿用当前 Persona 与冻结事实生成。
+一个群在解释问题时经常采用短句，学习批次归纳该模式。下一次类似讨论进入 message 决策后，选择模型可选中它，Heavy 自然缩短句子；轻松闲聊与其不匹配时选择空集合，沿用当前 Persona 与冻结事实生成。

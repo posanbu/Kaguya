@@ -25,7 +25,7 @@ import {
 import type {
   ModelTaskCapability,
   ModelTaskRequest,
-} from "../message-composer/index.js";
+} from "../heavy/index.js";
 import * as kinds from "../information-kinds.js";
 export const modelToken = defineModuleCapability<ModelTaskCapability>(
   "kaguya:model-task",

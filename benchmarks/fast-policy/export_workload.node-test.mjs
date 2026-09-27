@@ -22,7 +22,7 @@ function request() {
     information_id: "request-test-only",
     occurred_at: "2026-01-02T00:00:00Z",
     payload: {
-      taskId: "agent.turn.plan",
+      taskId: "agent.light.decide",
       contextInformationIds: [
         "old-b",
         "future",

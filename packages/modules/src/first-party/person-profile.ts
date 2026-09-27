@@ -1,4 +1,4 @@
-/** 同一人物画像区块供管理预览、Planner 和 Composer 复用。内容始终是引用数据。 */
+/** 同一人物画像区块供管理预览、Light 和 Heavy 复用。内容始终是引用数据。 */
 import {
   PERSON_PROFILE_REVISION_KIND,
   personProfileRevisionPayloadSchema,

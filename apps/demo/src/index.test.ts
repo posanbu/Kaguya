@@ -5,7 +5,7 @@
  * 功能概述：验证 demo 以 PostgreSQL information ledger 运行确定性入站 DAG，
  * 输出根 `informationId` 和每个衍生 kind 的计数，不再使用 SQLite path 或 dispatch。
  * 主要职责：覆盖 selected Profile runtime 读取与旧数据库环境变量忽略，并用真实内存 PGlite
- * 运行 Web 消息的 context、inbound、Planner、message intent、Composer Model Task、assistant 与 delivery 链。
+ * 运行 Web 消息的 context、inbound、Light、message intent、Heavy Model Task、assistant 与 delivery 链。
  * 代码库关系：直接调用 `index.ts` 导出的 `readDemoDatabaseUrl`/`runDemo`；
  * 测试数据库来自 `@kaguya/database/testing`，实际 CLI 则由同一 URL 连接方式启动。
  * 输入输出与副作用：用例收集内存输出行并显式关闭 PGlite；
@@ -83,14 +83,14 @@ describe("demo entry point", () => {
       "agent.attention.arousal.activity: 1",
       "agent.attention.arousal.completed: 1",
       "agent.attention.arousal.state.recorded: 2",
-      "agent.conversation.context.frozen: 1",
-      "agent.message.intent.requested: 1",
-      "agent.turn.candidate: 1",
-      "agent.turn.claimed: 1",
-      "agent.turn.completed: 1",
-      "agent.turn.context.completed: 1",
-      "agent.turn.plan.completed: 1",
-      "agent.turn.started: 1",
+      "agent.heartbeat.candidate: 1",
+      "agent.light.decision.completed: 1",
+      "agent.router.conversation.context.frozen: 1",
+      "agent.router.message.intent.requested: 1",
+      "agent.router.turn.claimed: 1",
+      "agent.router.turn.completed: 1",
+      "agent.router.turn.context.completed: 1",
+      "agent.router.turn.started: 1",
       "core.delivery.delivered: 1",
       "core.delivery.requested: 1",
       "core.message.assistant.text: 1",
@@ -129,13 +129,13 @@ describe("demo entry point", () => {
         informationId: receipt.rootInformationId,
       });
       expect(
-        graph.filter((atom) => atom.kind === "agent.turn.completed"),
+        graph.filter((atom) => atom.kind === "agent.router.turn.completed"),
       ).toHaveLength(1);
       expect(
         graph.filter((atom) => atom.kind === "core.delivery.delivered"),
       ).toHaveLength(1);
       expect(
-        graph.filter((atom) => atom.kind === "agent.turn.superseded"),
+        graph.filter((atom) => atom.kind === "agent.router.turn.superseded"),
       ).toHaveLength(0);
     }
     expect(roots[1]!.localeCompare(roots[0]!)).toBeLessThan(0);

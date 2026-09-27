@@ -12,7 +12,7 @@ import { createQqExpressionModule } from "./index.js";
 import { collected, learned, observed } from "./facts.js";
 import { inboundTextInformationKind } from "../information-kinds.js";
 import { loadFirstPartyPromptTemplates } from "../../node/prompt-templates.js";
-import type { ModelTaskRequest } from "../message-composer/index.js";
+import type { ModelTaskRequest } from "../heavy/index.js";
 const wait = { timeout: 8000, interval: 20 };
 async function setup(invalid = false) {
   const requests: ModelTaskRequest<unknown>[] = [];

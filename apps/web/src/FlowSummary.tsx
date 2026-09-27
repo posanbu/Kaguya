@@ -26,10 +26,10 @@ const stages = [
   },
   {
     label: "冻结",
-    matches: (k: string) => k === "agent.turn.context.completed",
+    matches: (k: string) => k === "agent.router.turn.context.completed",
   },
   { label: "关注", matches: (k: string) => k.startsWith("agent.attention.") },
-  { label: "规划", matches: (k: string) => k === "agent.turn.plan.completed" },
+  { label: "规划", matches: (k: string) => k === "agent.light.decision.completed" },
   { label: "表达", matches: (k: string) => k.startsWith("memory.expression.") },
   { label: "投递", matches: (k: string) => k.startsWith("core.delivery.") },
   {

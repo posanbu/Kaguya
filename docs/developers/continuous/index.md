@@ -58,7 +58,7 @@ description: 持续 Agent 的领域设计、现有协议映射与分阶段实施
 - [#249：行动有效性与执行生命周期](https://github.com/posanbu/Kaguya/issues/249)，依赖 #247，可与 #248 并行。
 - [#250：领域检视与贯穿验收](https://github.com/posanbu/Kaguya/issues/250)，可先设计投影，完整验收依赖上述三个实现任务。
 
-迁移采用增量方式：保留 `agent.turn.*`、现有 scope key、原始 Information ID 和旧 Memory；新增版本化投影与显式映射。旧 cognition 窗口没有证明完整经历，不自动转换成已验证 episode；旧投递记录也不推断未知的外部结果。回填、启用和回退必须有单独边界，不能只改名称就宣布行为完成。
+迁移采用增量方式：保留 `agent.router.turn.*`、现有 scope key、原始 Information ID 和旧 Memory；新增版本化投影与显式映射。旧 cognition 窗口没有证明完整经历，不自动转换成已验证 episode；旧投递记录也不推断未知的外部结果。回填、启用和回退必须有单独边界，不能只改名称就宣布行为完成。
 
 设计 PR 已合并，项目状态为“领域设计已形成、实现待完成”；后续实现通过自己的验收后再逐项更新。#241 及子议题的人工验收、设计合入、实现完成和部署是四个分别核实的状态。
 

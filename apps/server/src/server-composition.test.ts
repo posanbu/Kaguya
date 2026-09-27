@@ -1,7 +1,7 @@
 /**
  * Web 入站 DAG 同样产生当前会话背景投影，保持 Composition 与 Runtime 的事实集合断言同步。
  * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
- * 默认 DAG 验证 eligible turn 先调用 Planner，再由 Composer 生成消息。
+ * 默认 DAG 验证 eligible turn 先调用 Light，再由 Heavy 生成消息。
  * tier 配置回归同时覆盖 generation.timeoutMs、思考与推荐时长参数传递；
  * 结构化输出仅在对应 Provider 明确声明支持时选择 schema，缺省或 false 均选择 json。
  * 功能概述：验证 Server 作为唯一 composition root 组合 PostgreSQL information
@@ -62,7 +62,7 @@ import {
 } from "./server.js";
 import { createWebMessageGateway } from "./web-gateway.js";
 import { registerWebUi } from "./web.js";
-import { messageComposerSettingsSchema } from "@kaguya/modules";
+import { heavySettingsSchema } from "@kaguya/modules";
 
 const chatModel = vi.fn((modelId: string) => ({ modelId }));
 
@@ -270,16 +270,16 @@ describe("unified server composition", () => {
         "memory.identity.person.context.completed",
         "agent.attention.arousal.completed",
         "agent.attention.arousal.state.recorded",
-        "agent.turn.candidate",
-        "agent.turn.claimed",
-        "agent.turn.completed",
-        "agent.turn.context.completed",
-        "agent.conversation.context.frozen",
-        "agent.turn.plan.completed",
-        "agent.turn.started",
+        "agent.heartbeat.candidate",
+        "agent.router.turn.claimed",
+        "agent.router.turn.completed",
+        "agent.router.turn.context.completed",
+        "agent.router.conversation.context.frozen",
+        "agent.light.decision.completed",
+        "agent.router.turn.started",
         "memory.identity.person.resolution",
         "core.message.inbound.text",
-        "agent.message.intent.requested",
+        "agent.router.message.intent.requested",
         "memory.expression.selection.requested",
         "memory.expression.selection.completed",
         "core.model.task.requested",
@@ -293,7 +293,7 @@ describe("unified server composition", () => {
       graph.find(
         ({ kind, payload }) =>
           kind === "core.model.task.requested" &&
-          payload.taskId === "agent.message.compose",
+          payload.taskId === "agent.heavy.respond",
       )?.payload,
     ).toMatchObject({
       resolvedModel: {
@@ -1154,7 +1154,7 @@ describe("unified server composition", () => {
       createRuntimeModelSelectionResolver(await selectedProfile(manager));
 
     expect(
-      messageComposerSettingsSchema.safeParse({
+      heavySettingsSchema.safeParse({
         profileId: "profile-override",
         modelTier: "light",
       }).success,

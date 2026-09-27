@@ -204,7 +204,7 @@ it("first-party editable schemas expose names, constraints and no invented insta
     ]),
   );
   expect(
-    (await service.get("agent.heartflow.online")).fields.find(
+    (await service.get("agent.router")).fields.find(
       (f) => f.key === "botNames",
     ),
   ).toBeUndefined();

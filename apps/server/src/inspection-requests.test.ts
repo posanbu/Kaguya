@@ -33,18 +33,18 @@ const target = {
   platform: "qq",
   destination: { kind: "group", groupId: "group-a" },
 };
-const planner: RequestBrowser = {
+const light: RequestBrowser = {
   id: "requests",
   type: "model-request-browser",
   area: "main",
   viewId: "requests",
-  taskId: "agent.turn.plan",
-  mode: "planner",
+  taskId: "agent.light.decide",
+  mode: "light",
 };
 const composer: RequestBrowser = {
-  ...planner,
-  taskId: "agent.message.compose",
-  mode: "composer",
+  ...light,
+  taskId: "agent.heavy.respond",
+  mode: "heavy",
 };
 function moduleFor(
   definitionId: string,
@@ -81,12 +81,12 @@ function moduleFor(
   };
 }
 const modules = [
-  moduleFor("agent.heartflow.online", planner),
-  moduleFor("agent.message-composer", composer),
+  moduleFor("agent.router", light),
+  moduleFor("agent.heavy", composer),
 ];
-const base = (mode: "planner" | "composer" = "planner") =>
-  `/api/v1/inspection/modules/${mode === "planner" ? "agent.heartflow.online" : "agent.message-composer"}/surfaces/requests`;
-const get = (suffix = "", mode: "planner" | "composer" = "planner") =>
+const base = (mode: "light" | "heavy" = "light") =>
+  `/api/v1/inspection/modules/${mode === "light" ? "agent.router" : "agent.heavy"}/surfaces/requests`;
+const get = (suffix = "", mode: "light" | "heavy" = "light") =>
   app.inject({ method: "GET", url: base(mode) + suffix, headers });
 const ref = (relation: string, informationId: string) => ({
   relation,
@@ -118,7 +118,7 @@ async function append(
   return atom;
 }
 type SeedOptions = {
-  mode?: "planner" | "composer";
+  mode?: "light" | "heavy";
   terminal?: "completed" | "failed" | "cancelled" | "pending";
   action?: "message" | "wait" | "silent";
   adopted?: boolean;
@@ -128,14 +128,14 @@ type SeedOptions = {
   authorization?: "manual" | "automatic";
 };
 async function seedRequest(id: string, options: SeedOptions = {}) {
-  const mode = options.mode ?? "planner";
+  const mode = options.mode ?? "light";
   const terminal = options.terminal ?? "completed";
   const action = options.action ?? "message";
-  const browser = mode === "planner" ? planner : composer;
+  const browser = mode === "light" ? light : composer;
   const definitionId =
-    mode === "planner" ? modules[0]!.definitionId : modules[1]!.definitionId;
-  await append(id + "-candidate", "agent.turn.candidate");
-  await append(id + "-claim", "agent.turn.claimed");
+    mode === "light" ? modules[0]!.definitionId : modules[1]!.definitionId;
+  await append(id + "-candidate", "agent.heartbeat.candidate");
+  await append(id + "-claim", "agent.router.turn.claimed");
   const turn = {
     candidateInformationId: id + "-candidate",
     claimInformationId: id + "-claim",
@@ -143,7 +143,7 @@ async function seedRequest(id: string, options: SeedOptions = {}) {
   };
   await append(
     id + "-turn",
-    "agent.turn.context.completed",
+    "agent.router.turn.context.completed",
     {
       ...turn,
       inputs: [
@@ -166,7 +166,7 @@ async function seedRequest(id: string, options: SeedOptions = {}) {
   if (options.authorization)
     await append(
       id + "-authorization",
-      "agent.message.target.authorized",
+      "agent.router.message.target.authorized",
       {
         target,
         turn,
@@ -180,15 +180,15 @@ async function seedRequest(id: string, options: SeedOptions = {}) {
       ? { ...turn, contextInformationId: id + "-authorization" }
       : turn;
   const sourceId =
-    mode === "planner"
+    mode === "light"
       ? options.missingContext
         ? id + "-candidate"
         : id + "-turn"
       : id + "-source";
-  if (mode === "composer")
+  if (mode === "heavy")
     await append(
       sourceId,
-      "agent.message.intent.requested",
+      "agent.router.message.intent.requested",
       { turn: sourceTurn, target },
       [
         context,
@@ -225,7 +225,7 @@ async function seedRequest(id: string, options: SeedOptions = {}) {
       ...(terminal === "completed"
         ? {
             output:
-              mode === "composer"
+              mode === "heavy"
                 ? longText
                 : {
                     action: "wait",
@@ -244,10 +244,10 @@ async function seedRequest(id: string, options: SeedOptions = {}) {
     },
     [context, ref("core:caused-by", id), ref("core:status-of", id)],
   );
-  if (mode === "planner" && options.adopted !== false) {
+  if (mode === "light" && options.adopted !== false) {
     await append(
       id + "-plan",
-      "agent.turn.plan.completed",
+      "agent.light.decision.completed",
       {
         turnContextInformationId: sourceId,
         action: {
@@ -266,7 +266,7 @@ async function seedRequest(id: string, options: SeedOptions = {}) {
     if (action !== "message")
       await append(
         id + "-turn-terminal",
-        "agent.turn." + (action === "wait" ? "waiting" : "silent"),
+        "agent.router.turn." + (action === "wait" ? "waiting" : "silent"),
         { ...turn, dueAt: "2026-09-19T10:00:30.000Z" },
         [
           context,
@@ -277,7 +277,7 @@ async function seedRequest(id: string, options: SeedOptions = {}) {
       );
   }
   if (
-    mode === "composer" &&
+    mode === "heavy" &&
     terminal === "completed" &&
     options.adopted !== false
   ) {
@@ -295,7 +295,7 @@ async function seedRequest(id: string, options: SeedOptions = {}) {
     if (options.confirmed)
       await append(
         id + "-confirmed",
-        "agent.message.content.confirmed",
+        "agent.heavy.message.content.confirmed",
         { assistantInformationId: id + "-assistant" },
         [context, ref("core:caused-by", id + "-assistant")],
       );
@@ -333,7 +333,7 @@ async function seedRequest(id: string, options: SeedOptions = {}) {
       );
       await append(
         id + "-turn-terminal",
-        "agent.turn." +
+        "agent.router.turn." +
           (options.delivery === "delivered" ? "completed" : "failed"),
         {
           ...sourceTurn,
@@ -359,23 +359,23 @@ beforeAll(async () => {
   await database.information.synchronizeKinds([
     "core.runtime.context",
     "core.message.inbound.text",
-    "agent.turn.candidate",
-    "agent.turn.claimed",
-    "agent.turn.context.completed",
-    "agent.message.intent.requested",
-    "agent.message.target.authorized",
+    "agent.heartbeat.candidate",
+    "agent.router.turn.claimed",
+    "agent.router.turn.context.completed",
+    "agent.router.message.intent.requested",
+    "agent.router.message.target.authorized",
     "core.model.task.requested",
     "core.model.task.completed",
     "core.model.task.failed",
     "core.model.task.cancelled",
-    "agent.turn.plan.completed",
-    "agent.turn.decision.interrupted",
-    "agent.turn.waiting",
-    "agent.turn.silent",
-    "agent.turn.completed",
-    "agent.turn.failed",
+    "agent.light.decision.completed",
+    "agent.router.turn.decision.interrupted",
+    "agent.router.turn.waiting",
+    "agent.router.turn.silent",
+    "agent.router.turn.completed",
+    "agent.router.turn.failed",
     "core.message.assistant.text",
-    "agent.message.content.confirmed",
+    "agent.heavy.message.content.confirmed",
     "core.delivery.requested",
     "core.delivery.delivered",
     "core.delivery.failed",
@@ -390,24 +390,24 @@ beforeAll(async () => {
     ["plan-cancelled", { terminal: "cancelled", action: "silent" }],
     ["plan-interrupted", { adopted: false }],
     ["plan-missing", { missingContext: true }],
-    ["compose-delivered", { mode: "composer", delivery: "delivered" }],
-    ["compose-failed-delivery", { mode: "composer", delivery: "failed" }],
+    ["compose-delivered", { mode: "heavy", delivery: "delivered" }],
+    ["compose-failed-delivery", { mode: "heavy", delivery: "failed" }],
     [
       "compose-confirmed",
       {
-        mode: "composer",
+        mode: "heavy",
         delivery: "delivered",
         confirmed: true,
         authorization: "manual",
       },
     ],
-    ["compose-authorized", { mode: "composer", authorization: "automatic" }],
-    ["compose-model-only", { mode: "composer", adopted: false }],
+    ["compose-authorized", { mode: "heavy", authorization: "automatic" }],
+    ["compose-model-only", { mode: "heavy", adopted: false }],
   ] as [string, SeedOptions][])
     await seedRequest(id, options);
   await append(
     "plan-interrupt-winner",
-    "agent.turn.decision.interrupted",
+    "agent.router.turn.decision.interrupted",
     {
       candidateInformationId: "plan-interrupted-candidate",
       claimInformationId: "plan-interrupted-claim",
@@ -415,7 +415,7 @@ beforeAll(async () => {
     [context, ref("core:status-of", "plan-interrupted-claim")],
   );
   await append("foreign-request", "core.model.task.requested", {
-    taskId: planner.taskId,
+    taskId: light.taskId,
     activation: { definitionId: "foreign-module" },
   });
   await append("wrong-task-request", "core.model.task.requested", {
@@ -468,7 +468,7 @@ it("authenticates both routes, preserves historical bindings and isolates task/m
       .size,
   ).toBe(4);
   expect(
-    (await get(`?cursor=${first.nextCursor}`, "composer")).statusCode,
+    (await get(`?cursor=${first.nextCursor}`, "heavy")).statusCode,
   ).toBe(400);
   for (const query of [
     "q=not-supported",
@@ -545,7 +545,7 @@ it("shows adopted planner decisions instead of raw outputs and distinguishes pen
 it("separates generated text from direct, confirmed and failed delivery and preserves authorized instruction provenance", async () => {
   const detail = async (id: string) =>
     inspectionRequestDetailSchema.parse(
-      (await get("/requests/" + id, "composer")).json().data,
+      (await get("/requests/" + id, "heavy")).json().data,
     );
   const sent = await detail("compose-delivered");
   expect(sent.result.text).toBe(longText.replaceAll(secret, "[REDACTED]"));
@@ -615,7 +615,7 @@ it("rejects mismatched model terminal metadata and unrelated planner edges in a 
   );
   await append(
     "zz-wrong-plan",
-    "agent.turn.plan.completed",
+    "agent.light.decision.completed",
     {
       turnContextInformationId: "plan-message-turn",
       action: { action: "silent" },
@@ -639,12 +639,12 @@ it("rejects mismatched model terminal metadata and unrelated planner edges in a 
   );
 });
 
-it("follows the exact Planner message intent through Composer and delivery without replacing the adopted action", async () => {
+it("follows the exact Light message intent through Heavy and delivery without replacing the adopted action", async () => {
   const seeded = await seedRequest("plan-downstream");
   const turn = seeded.turn;
   await append(
     "downstream-intent",
-    "agent.message.intent.requested",
+    "agent.router.message.intent.requested",
     { turn, target },
     [
       context,
@@ -712,7 +712,7 @@ it("follows the exact Planner message intent through Composer and delivery witho
   );
   await append(
     "downstream-turn-terminal",
-    "agent.turn.completed",
+    "agent.router.turn.completed",
     { ...turn, deliveryTerminalInformationId: "downstream-receipt" },
     [
       context,
@@ -759,7 +759,7 @@ it("continues an empty bounded scan without skipping its next matching request",
       occurredAt: time,
       source: "runtime:model-task",
       payload: {
-        taskId: index < 501 ? "another-task" : planner.taskId,
+        taskId: index < 501 ? "another-task" : light.taskId,
         activation: { definitionId: modules[0]!.definitionId },
       },
       references: [],
@@ -789,7 +789,7 @@ it("continues an empty bounded scan without skipping its next matching request",
   const first = await requestPage(
     ledger,
     modules[0]!.definitionId,
-    planner,
+    light,
     20,
   );
   expect(first.items).toEqual([]);
@@ -797,7 +797,7 @@ it("continues an empty bounded scan without skipping its next matching request",
   const second = await requestPage(
     ledger,
     modules[0]!.definitionId,
-    planner,
+    light,
     20,
     first.cursor!,
   );
@@ -817,7 +817,7 @@ it("does not borrow delivery or a completed turn from another request of the sam
     [context, ref("core:caused-by", "compose-delivered-source")],
   );
   const detail = inspectionRequestDetailSchema.parse(
-    (await get("/requests/compose-same-intent-pending", "composer")).json()
+    (await get("/requests/compose-same-intent-pending", "heavy")).json()
       .data,
   );
   expect(detail.request.status).toBe("pending");
@@ -825,7 +825,7 @@ it("does not borrow delivery or a completed turn from another request of the sam
     detail.trace.some(
       (item) =>
         item.kind === "core.delivery.delivered" ||
-        item.kind === "agent.turn.completed",
+        item.kind === "agent.router.turn.completed",
     ),
   ).toBe(false);
   expect(detail.trace.map((item) => item.informationId)).not.toContain(
@@ -840,7 +840,7 @@ it("reports bounded input truncation while preserving the latest triggering cont
   };
   await append(
     "large-turn",
-    "agent.turn.context.completed",
+    "agent.router.turn.context.completed",
     {
       ...ids,
       inputs: Array.from({ length: 101 }, (_, i) => ({

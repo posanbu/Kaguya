@@ -1,9 +1,9 @@
 /**
- * QQ 表情实例开关同时控制草稿处理路径和模型审批；关闭后恢复原 Composer 产出。
+ * QQ 表情实例开关同时控制草稿处理路径和模型审批；关闭后恢复原 Heavy 产出。
  * 功能概述：验证唯一 Runtime Composition 的目录演化、激活选择和宿主依赖边界。
  * Memory 实例只由全局模块配置显式激活。
  * 主要职责：模拟一方 Catalog 新增与移除定义，确认共享工厂直接采用变更；检查禁用实例
- * 不获得 Model Task 审批，Heartflow 独立获得 light Planner 审批、身份和 Memory 选项保持原有语义，并约束两个应用直接使用正式入口。
+ * 不获得 Model Task 审批，Router 独立获得 light Light 审批、身份和 Memory 选项保持原有语义，并约束两个应用直接使用正式入口。
  * 代码库关系：mock 仅替换 @kaguya/modules 的 Catalog 工厂，其他定义、配置校验及模板均为真实实现；
  * 应用的实际启动和投递行为另由 server-composition.test.ts 与 demo/index.test.ts 覆盖。
  * 输入输出与副作用：纯内存装配与源码读取，不启动 Runtime 或连接外部服务；每例恢复 mock。
@@ -111,7 +111,7 @@ describe("shared Runtime Composition", () => {
     const moduleConfigs = modules
       .createFirstPartyModuleConfigDefaults("test")
       .map((config) =>
-        config.definitionId === "agent.message-composer"
+        config.definitionId === "agent.heavy"
           ? { ...config, enabled: false }
           : config,
       );
@@ -123,8 +123,8 @@ describe("shared Runtime Composition", () => {
     expect(composition.modelTask.approvals).toEqual([
       {
         activation: {
-          instanceId: "heartflow.default",
-          definitionId: "agent.heartflow.online",
+          instanceId: "router.default",
+          definitionId: "agent.router",
         },
         selectionPolicy: { tier: "light" },
       },
@@ -149,7 +149,7 @@ describe("shared Runtime Composition", () => {
     ).toBe(false);
     expect(
       composition.activations.find(
-        ({ definitionId }) => definitionId === "agent.heartflow.online",
+        ({ definitionId }) => definitionId === "agent.router",
       )?.settings,
     ).not.toHaveProperty("botNames");
     expect(composition.memory).toEqual({ enabled: true });
@@ -186,11 +186,11 @@ it("installs the QQ draft processor only while its independent instance is enabl
       ),
     });
     const composer = composition.catalog.definitions.find(
-      (d) => d.manifest.definitionId === "agent.message-composer",
+      (d) => d.manifest.definitionId === "agent.heavy",
     )!;
     expect(
       composer.manifest.produces.some(
-        (kind) => kind.kind === "agent.message.draft",
+        (kind) => kind.kind === "agent.heavy.message.draft",
       ),
     ).toBe(enabled);
     expect(

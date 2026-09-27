@@ -78,7 +78,7 @@ export const firstPartyInspection = {
     mechanism: [
       "按平台、适配器和目标解析会话范围。",
       "关联账号与人物实体；无法确认时明确记录 unresolved 或 ambiguous。",
-      "人物画像由管理端手动维护；保存后重启服务才进入 Planner 与 Composer，Memory 自动提取尚未接入。",
+      "人物画像由管理端手动维护；保存后重启服务才进入 Light 与 Heavy，Memory 自动提取尚未接入。",
     ],
     views: [
       view(
@@ -273,7 +273,7 @@ export const firstPartyInspection = {
       "Arousal 最新状态事实是唤醒状态真值；空闲休眠、夜间边界与周期唤醒分别等待持久化绝对 deadline，初始状态为 awake。",
       "私聊、Web、@、回复、有效 Focus 或周期复查会确认唤醒；休眠状态默认每五分钟短暂唤醒一次。",
       "awake 状态下观察机会默认 observe；只有显式 asleep 且没有唤醒信号时才 defer。",
-      "defer 不推进已观察水位；只有 observe 后 Heartflow 才按上下界读取并冻结全部未读。",
+      "defer 不推进已观察水位；只有 observe 后 Router 才按上下界读取并冻结全部未读。",
     ],
     views: [
       view(
@@ -283,9 +283,9 @@ export const firstPartyInspection = {
         [
           "agent.attention.arousal.completed",
           "agent.attention.arousal.state.recorded",
-          "agent.turn.candidate",
-          "agent.attention.focus.opened",
-          "agent.attention.focus.renewed",
+          "agent.heartbeat.candidate",
+          "agent.router.focus.opened",
+          "agent.router.focus.renewed",
         ],
         arousalViewFields,
       ),
@@ -321,13 +321,13 @@ export const firstPartyInspection = {
             mechanism: "观察机制",
           },
           notice:
-            "这里只展示当时已记录的唤醒状态、通知、Focus 与水位事实；observe 不代表 Planner 最终回复。",
+            "这里只展示当时已记录的唤醒状态、通知、Focus 与水位事实；observe 不代表 Light 最终回复。",
           relations: [
             {
               id: "candidate",
               title: "观察机会",
               viewId: "gates",
-              kinds: ["agent.turn.candidate"],
+              kinds: ["agent.heartbeat.candidate"],
               reference: "core:status-of",
               direction: "forward",
               presentation: "field-grid",
@@ -373,8 +373,8 @@ export const firstPartyInspection = {
               title: "Focus 租约",
               viewId: "gates",
               kinds: [
-                "agent.attention.focus.opened",
-                "agent.attention.focus.renewed",
+                "agent.router.focus.opened",
+                "agent.router.focus.renewed",
               ],
               reference: "core:uses-context",
               direction: "forward",
@@ -412,8 +412,8 @@ export const firstPartyInspection = {
           "agent.heartbeat.fired",
           "agent.heartbeat.superseded",
           "agent.heartbeat.failed",
-          "agent.observation.wake",
-          "agent.turn.candidate",
+          "agent.heartbeat.observation.wake",
+          "agent.heartbeat.candidate",
         ],
         {
           reason: "触发原因",
@@ -435,11 +435,13 @@ export const firstPartyInspection = {
       ),
     ],
   },
-  "agent.heartflow.online": {
+  "agent.router": {
     mechanism: [
       "仅在 Arousal 记录 observe 后认领候选，并按上下水位读取、冻结全部未读。",
-      "身份屏障完成后由 Planner 选择 message、wait 或 silent；记录中断与替换。",
+      "身份屏障完成后由 Light 选择 message、wait 或 silent；记录中断与替换。",
       "只有投递事实确认后才能判定发送完成。",
+      "直接唤醒或成功参与可开启、续租群聊关注。",
+      "租约到期和关闭只影响对应代际；关注不绕过硬门禁。",
     ],
     views: [
       modelRequestsView(),
@@ -448,15 +450,15 @@ export const firstPartyInspection = {
         "回合与规划",
         "冻结输入、话题时效、模型动作与终态。",
         [
-          "agent.turn.context.completed",
-          "agent.turn.plan.completed",
-          "agent.turn.completed",
-          "agent.turn.waiting",
-          "agent.turn.silent",
-          "agent.turn.failed",
-          "agent.turn.superseded",
-          "agent.turn.interrupted",
-          "agent.turn.decision.interrupted",
+          "agent.router.turn.context.completed",
+          "agent.light.decision.completed",
+          "agent.router.turn.completed",
+          "agent.router.turn.waiting",
+          "agent.router.turn.silent",
+          "agent.router.turn.failed",
+          "agent.router.turn.superseded",
+          "agent.router.turn.interrupted",
+          "agent.router.turn.decision.interrupted",
         ],
         {
           action: "规划动作",
@@ -470,39 +472,15 @@ export const firstPartyInspection = {
           claimInformationId: "认领",
         },
       ),
-    ],
-    surface: {
-      version: 1,
-      id: "planner-requests",
-      title: "Planner 决策",
-      layout: { type: "sections", areas: ["requests"] },
-      components: [
-        {
-          id: "requests",
-          type: "model-request-browser",
-          area: "requests",
-          viewId: "model-requests",
-          taskId: "agent.turn.plan",
-          mode: "planner",
-        },
-      ],
-    },
-  },
-  "agent.attention.focus": {
-    mechanism: [
-      "直接唤醒或成功参与可开启、续租群聊关注。",
-      "到期和关闭只影响指定代际，旧租约到期不会关闭新租约；关注不绕过硬门禁。",
-    ],
-    views: [
       view(
         "leases",
         "关注租约历史",
         "按记录时间展示开启、续租、关闭和到期；不能把一页历史当作全局有效租约表。",
         [
-          "agent.attention.focus.opened",
-          "agent.attention.focus.renewed",
-          "agent.attention.focus.closed",
-          "agent.attention.focus.expired",
+          "agent.router.focus.opened",
+          "agent.router.focus.renewed",
+          "agent.router.focus.closed",
+          "agent.router.focus.expired",
         ],
         {
           scopeKey: "会话范围",
@@ -514,6 +492,22 @@ export const firstPartyInspection = {
         },
       ),
     ],
+    surface: {
+      version: 1,
+      id: "light-requests",
+      title: "Light 决策",
+      layout: { type: "sections", areas: ["requests"] },
+      components: [
+        {
+          id: "requests",
+          type: "model-request-browser",
+          area: "requests",
+          viewId: "model-requests",
+          taskId: "agent.light.decide",
+          mode: "light",
+        },
+      ],
+    },
   },
   "memory.expression": {
     mechanism: [
@@ -553,7 +547,7 @@ export const firstPartyInspection = {
       ),
     ],
   },
-  "agent.message-composer": {
+  "agent.heavy": {
     mechanism: [
       "沿显式引用选择冻结输入、历史、记忆和表达参考，再编译 Prompt。",
       "模型生成正文后提交助手消息与投递请求；请求不等于投递成功。",
@@ -576,8 +570,8 @@ export const firstPartyInspection = {
     ],
     surface: {
       version: 1,
-      id: "composer-requests",
-      title: "消息生成",
+      id: "heavy-requests",
+      title: "Heavy 正文生成",
       layout: { type: "sections", areas: ["requests"] },
       components: [
         {
@@ -585,8 +579,8 @@ export const firstPartyInspection = {
           type: "model-request-browser",
           area: "requests",
           viewId: "model-requests",
-          taskId: "agent.message.compose",
-          mode: "composer",
+          taskId: "agent.heavy.respond",
+          mode: "heavy",
         },
       ],
     },

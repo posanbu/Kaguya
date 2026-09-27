@@ -1,6 +1,6 @@
 /**
  * 功能概述：验证真实事件字段在终端中的输入、输出与记忆面板契约。
- * 主要职责：覆盖 Planner 输入/决策、记忆查询/正文/空结果、表达习惯与错误；
+ * 主要职责：覆盖 Light 输入/决策、记忆查询/正文/空结果、表达习惯与错误；
  * 确保普通生命周期保持短行、没有记录的模型返回或召回正文不会被凭空补出。
  * 代码库关系：串联 pretty.ts、pretty-events.ts 与 pretty-panel.ts，并通过 prettyFactory
  * 检查运行中终端列数变化，以及窄屏框内完整字段的优先折行；正文来源投影的安全边界
@@ -16,10 +16,10 @@ import { describe, expect, it } from "vitest";
 import { createPrettyOptions, formatPrettyMessage } from "./pretty.js";
 
 describe("module input/output panels", () => {
-  it("separates Planner Prompt, provenance and the actual decision output", () => {
+  it("separates Light Prompt, provenance and the actual decision output", () => {
     const prompt = formatPrettyMessage({
       event: "model.task.prompt",
-      taskId: "agent.turn.plan",
+      taskId: "agent.light.decide",
       detail: true,
       promptFull: "请决定下一步。\n用户提到：一起看月亮 🌙",
       promptVariables: [
@@ -30,17 +30,17 @@ describe("module input/output panels", () => {
         },
       ],
     });
-    expect(prompt).toContain("╭─ Planner · 输入 Prompt");
+    expect(prompt).toContain("╭─ Light · 输入 Prompt");
     expect(prompt).toContain("├─ Prompt");
     expect(prompt).toContain("├─ Provenance");
     expect(prompt).toContain("用户提到：一起看月亮 🌙");
     expect(prompt.match(/请决定下一步/gu)).toHaveLength(1);
     const decision = formatPrettyMessage({
-      event: "turn.plan",
+      event: "light.decision",
       action: "message",
       reason: "用户正在邀请我，应当回应。",
     });
-    expect(decision).toContain("╭─ Planner · 决策输出");
+    expect(decision).toContain("╭─ Light · 决策输出");
     expect(decision).toContain("动作=message");
     expect(decision).toContain("├─ 原因说明");
     expect(decision).toContain("用户正在邀请我，应当回应。");
@@ -96,13 +96,13 @@ describe("module input/output panels", () => {
       {
         event: "model.task.lifecycle",
         status: "failed",
-        taskId: "agent.turn.plan",
+        taskId: "agent.light.decide",
         failureStage: "structured-output-parse",
         attemptCount: 2,
       },
       true,
     );
-    expect(error).toContain("\u001b[31m╭─ Planner · 执行失败");
+    expect(error).toContain("\u001b[31m╭─ Light · 执行失败");
     expect(error).toContain("尝试次数=2");
   });
 

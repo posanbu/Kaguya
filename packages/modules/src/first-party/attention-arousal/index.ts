@@ -23,8 +23,8 @@ import {
   type AttentionArousalState,
   turnCandidateInformationKind,
 } from "../information-kinds.js";
-import { activeFocus } from "../attention-focus/facts.js";
-import { focusStateSelector } from "../attention-focus/index.js";
+import { activeFocus } from "../router/focus-facts.js";
+import { focusStateSelector } from "../router/focus.js";
 
 export const attentionArousalSettingsSchema = z
   .object({
@@ -286,7 +286,7 @@ export function createAttentionArousalModule(
       displayName: "注意力观察",
       summary: "维护机器人唤醒状态，并在读取正文前决定观察或延后。",
       description:
-        "初始保持 awake；全局空闲、夜间休眠和周期唤醒使用持久化 one-shot 直接等待绝对时间，不轮询也不累计 tick。通知、Focus 与周期复查会确认唤醒；相关性、话题和参与价值仍由 Planner 独占。",
+        "初始保持 awake；全局空闲、夜间休眠和周期唤醒使用持久化 one-shot 直接等待绝对时间，不轮询也不累计 tick。通知、Focus 与周期复查会确认唤醒；相关性、话题和参与价值仍由 Light 独占。",
       settingsSchema: attentionArousalSettingsSchema,
       consumes: [
         turnCandidateInformationKind,
@@ -554,7 +554,7 @@ export function createAttentionArousalModule(
               };
               if (decision.outcome === "defer")
                 await context.commitTerminal(
-                  "agent.turn.terminal",
+                  "agent.router.turn.terminal",
                   candidate.informationId,
                   attentionArousalCompletedInformationKind,
                   input,
