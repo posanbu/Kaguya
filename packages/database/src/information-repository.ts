@@ -291,6 +291,7 @@ export class InformationRepository implements InformationLedger {
     readonly rootKeyPath: readonly string[];
     readonly activityKinds: readonly string[];
     readonly activityKeyPath: readonly string[];
+    readonly activityRootId?: boolean;
     readonly limit: number;
     readonly informationIds?: readonly string[];
     readonly cursor?: {
@@ -316,7 +317,9 @@ export class InformationRepository implements InformationLedger {
         return `$${values.length}`;
       };
       const rootKind = bind(query.rootKind);
-      const rootPath = bind([...query.rootKeyPath]);
+      const rootPath = query.activityRootId
+        ? undefined
+        : bind([...query.rootKeyPath]);
       const activityKinds = bind([...query.activityKinds]);
       const activityPath = bind([...query.activityKeyPath]);
       const predicates = [`root.kind = ${rootKind}`];
@@ -338,7 +341,7 @@ export class InformationRepository implements InformationLedger {
            WHERE kind = ANY(${activityKinds}::text[])
            GROUP BY payload #>> ${activityPath}::text[]
          ) activity
-           ON activity.entity_key = root.payload #>> ${rootPath}::text[]
+           ON activity.entity_key = ${query.activityRootId ? "root.information_id" : `root.payload #>> ${rootPath}::text[]`}
          WHERE ${predicates.join(" AND ")}
          ORDER BY COALESCE(activity.latest_at, root.occurred_at::timestamptz) DESC,
                   root.information_id DESC
@@ -525,7 +528,7 @@ export class InformationRepository implements InformationLedger {
   }
 }
 
-async function appendInformationAtom(
+export async function appendInformationAtom(
   tx: SqlTransaction,
   atom: DeepReadonly<InformationAtom>,
   expectations: readonly InformationReferenceExpectation[],

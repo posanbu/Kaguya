@@ -18,6 +18,14 @@ export {
   associationModule,
 } from "./first-party/association/index.js";
 export { identityModule } from "./first-party/identity/index.js";
+export {
+  renderPersonProfileSections,
+  displayPersonName,
+  appendPersonProfilesToPrompt,
+  type FrozenPersonProfile,
+  type FrozenPersonName,
+  type ActivePersonProfiles,
+} from "./first-party/person-profile.js";
 export * from "./first-party/memory-knowledge/index.js";
 export { memoryIngestionTemplateDeclaration } from "./prompt-declarations.js";
 export {

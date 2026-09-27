@@ -19,6 +19,7 @@ import {
   personObservedInformationKind,
   personResolutionInformationKind,
   personContextCompletedInformationKind,
+  personProfileRevisionInformationKind,
 } from "../information-kinds.js";
 
 const settingsSchema = z.object({}).strict();
@@ -27,14 +28,14 @@ const key = (value: unknown) => JSON.stringify(value);
 export const identityModule = defineInformationModule({
   manifest: {
     protocolVersion: 1,
-    moduleVersion: "1.0.0",
+    moduleVersion: "1.1.0",
     definitionId: "memory.identity",
     tags: ["memory"],
     inspection: firstPartyInspection["memory.identity"],
     displayName: "身份归一",
-    summary: "将入站平台账号与会话解析为可追溯的稳定身份。",
+    summary: "归一平台身份，并为稳定人物维护可追溯的手动画像。",
     description:
-      "消费入站消息，建立会话、账号和人物实体及绑定，输出身份上下文终态供回合屏障和记忆写回使用；保留未解析与降级状态，不负责鉴权或回复决策。",
+      "消费入站消息，建立会话、账号和人物实体及绑定，输出身份上下文终态；管理端另存手动画像版本，服务重启后供 Planner 与 Composer 参考。自动从 Memory 提取尚未接入。",
     settingsSchema,
     consumes: [inboundTextInformationKind],
     produces: [
@@ -46,6 +47,7 @@ export const identityModule = defineInformationModule({
       personObservedInformationKind,
       personResolutionInformationKind,
       personContextCompletedInformationKind,
+      personProfileRevisionInformationKind,
     ],
     selectors: [],
     promptRenderers: [],
@@ -100,6 +102,7 @@ export const identityModule = defineInformationModule({
 
           let accountInformationId: string | undefined;
           let personInformationId: string | undefined;
+          let initialName: string | undefined;
           if (scopeMode === "canonical" && s.senderId) {
             const account = await context.registerOnce(
               "memory.identity.account",
@@ -118,16 +121,26 @@ export const identityModule = defineInformationModule({
               "memory.identity.person",
               key([s.platform, s.adapterId, s.senderId]),
               personEntityInformationKind,
-              { payload: { accountId: s.senderId } },
+              {
+                payload: {
+                  initialName: s.sender?.nickname?.trim() || s.senderId,
+                  initialNameSource: s.sender?.nickname?.trim()
+                    ? "platform_nickname"
+                    : "account_id",
+                },
+              },
             );
             personInformationId = person.informationId;
+            initialName =
+              typeof person.payload.initialName === "string"
+                ? person.payload.initialName
+                : undefined;
             await context.registerOnce(
               "memory.identity.account.binding",
               account.informationId,
               platformAccountBindingInformationKind,
               {
                 payload: {
-                  accountId: s.senderId,
                   personInformationId: person.informationId,
                 },
                 references: [
@@ -146,7 +159,6 @@ export const identityModule = defineInformationModule({
                 personObservedInformationKind,
                 {
                   payload: {
-                    accountId: s.senderId,
                     ...(sender.nickname ? { nickname: sender.nickname } : {}),
                     ...(sender.card ? { card: sender.card } : {}),
                     observedAt: atom.occurredAt,
@@ -171,6 +183,7 @@ export const identityModule = defineInformationModule({
             scopeInformationId: scope.informationId,
             ...(accountInformationId ? { accountInformationId } : {}),
             ...(personInformationId ? { personInformationId } : {}),
+            ...(personInformationId && initialName ? { initialName } : {}),
           } as const;
           await context.registerOnce(
             "memory.identity.resolution",

@@ -784,9 +784,18 @@ async function readCandidates(
         JOIN information_references bound ON bound.target_information_id=observed.target_information_id AND bound.relation='core:binds'
         JOIN information_atoms binding ON binding.information_id=bound.information_id
         WHERE o.kind='memory.identity.person.observed' AND binding.kind='memory.identity.platform.account.binding' AND binding.payload->>'personInformationId'=a.information_id
-        ORDER BY o.occurred_at DESC LIMIT 1),a.payload->>'accountId',a.information_id) AS label,
-      COALESCE(a.payload->>'accountId','用户录入的主体') AS description
-    FROM information_atoms a WHERE a.kind IN ('agent.user.subject.entity','memory.identity.person.entity') AND (
+        ORDER BY o.occurred_at DESC LIMIT 1),a.payload->>'initialName',primary_account.account_id,a.payload->>'accountId',a.information_id) AS label,
+      COALESCE(primary_account.account_id,a.payload->>'accountId','用户录入的主体') AS description
+    FROM information_atoms a
+    LEFT JOIN LATERAL (
+      SELECT account.payload->>'accountId' AS account_id
+      FROM information_atoms binding
+      JOIN information_references bound ON bound.information_id=binding.information_id AND bound.relation='core:binds'
+      JOIN information_atoms account ON account.information_id=bound.target_information_id AND account.kind='memory.identity.platform.account.entity'
+      WHERE binding.kind='memory.identity.platform.account.binding' AND binding.payload->>'personInformationId'=a.information_id
+      ORDER BY binding.occurred_at,binding.information_id LIMIT 1
+    ) primary_account ON TRUE
+    WHERE a.kind IN ('agent.user.subject.entity','memory.identity.person.entity') AND (
       EXISTS(SELECT 1 FROM information_references r WHERE r.information_id=a.information_id AND r.relation='agent:scope' AND r.target_information_id=$1)
       OR EXISTS(SELECT 1 FROM memory_knowledge_event_entities p JOIN memory_knowledge_events e ON e.source_id=p.source_id WHERE p.entity_id=a.information_id AND e.scope_id=$1 AND e.revoked_at IS NULL))
     ORDER BY a.information_id LIMIT 201`,

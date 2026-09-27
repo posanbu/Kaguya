@@ -110,6 +110,7 @@ describe("developer inspection", () => {
       informationId: string,
       kind: string,
       payload: InformationAtom["payload"],
+      references: InformationAtom["references"] = [],
     ) =>
       database.information.append(
         freezeInformationAtom({
@@ -118,13 +119,33 @@ describe("developer inspection", () => {
           occurredAt: identityTime,
           source: "module:memory.identity.default",
           payload,
-          references: [],
+          references,
         }),
-        [],
+        [...new Set(references.map((reference) => reference.relation))].map(
+          (relation) => ({
+            relation,
+            required: false,
+            multiple: true,
+          }),
+        ),
       );
-    await appendIdentity("person-ada", "memory.identity.person.entity", {
-      accountId: "10001",
+    await appendIdentity("inbound-ada", "core.message.inbound.text", {
+      source: {
+        platform: "qq",
+        adapterId: "napcat",
+        senderId: "10001",
+        sender: { nickname: "Ada", card: "Ada · 研究组" },
+        destination: { kind: "group", id: "20002" },
+      },
     });
+    await appendIdentity(
+      "person-ada",
+      "memory.identity.person.entity",
+      {
+        initialName: "Ada",
+      },
+      [{ relation: "core:caused-by", informationId: "inbound-ada" }],
+    );
     await appendIdentity(
       "account-ada",
       "memory.identity.platform.account.entity",
@@ -134,12 +155,99 @@ describe("developer inspection", () => {
         accountId: "10001",
       },
     );
-    await appendIdentity("observed-ada", "memory.identity.person.observed", {
+    await appendIdentity(
+      "observed-ada",
+      "memory.identity.person.observed",
+      {
+        nickname: "Ada",
+        card: "Ada · 研究组",
+        observedAt: identityTime,
+      },
+      [
+        { relation: "core:caused-by", informationId: "inbound-ada" },
+        { relation: "core:observes", informationId: "account-ada" },
+      ],
+    );
+    await appendIdentity(
+      "binding-ada",
+      "memory.identity.platform.account.binding",
+      {
+        personInformationId: "person-ada",
+      },
+      [{ relation: "core:binds", informationId: "account-ada" }],
+    );
+    for (const [suffix, groupId, card] of [
+      ["other-group", "30003", "第二个群名片"],
+      ["later", "20002", "Ada · 新研究组"],
+    ] as const) {
+      await appendIdentity(
+        `inbound-ada-${suffix}`,
+        "core.message.inbound.text",
+        {
+          source: {
+            platform: "qq",
+            adapterId: "napcat",
+            senderId: "10001",
+            sender: { nickname: "Ada 新昵称", card },
+            destination: { kind: "group", groupId },
+          },
+        },
+      );
+      await appendIdentity(
+        `observed-ada-${suffix}`,
+        "memory.identity.person.observed",
+        {
+          nickname: "Ada 新昵称",
+          card,
+          observedAt: identityTime,
+        },
+        [
+          {
+            relation: "core:caused-by",
+            informationId: `inbound-ada-${suffix}`,
+          },
+          { relation: "core:observes", informationId: "account-ada" },
+        ],
+      );
+    }
+    await appendIdentity(
+      "account-ada-2",
+      "memory.identity.platform.account.entity",
+      {
+        platform: "qq",
+        adapterId: "napcat",
+        accountId: "10002",
+      },
+    );
+    await appendIdentity(
+      "binding-ada-2",
+      "memory.identity.platform.account.binding",
+      {
+        personInformationId: "person-ada",
+      },
+      [{ relation: "core:binds", informationId: "account-ada-2" }],
+    );
+    await appendIdentity("person-other", "memory.identity.person.entity", {
       accountId: "10001",
-      nickname: "Ada",
-      card: "Ada · 研究组",
-      observedAt: identityTime,
     });
+    await appendIdentity(
+      "account-other",
+      "memory.identity.platform.account.entity",
+      {
+        platform: "discord",
+        adapterId: "discord",
+        accountId: "10001",
+      },
+    );
+    await appendIdentity(
+      "binding-other",
+      "memory.identity.platform.account.binding",
+      {
+        accountId: "10001",
+        personInformationId: "person-other",
+      },
+      [{ relation: "core:binds", informationId: "account-other" }],
+    );
     await appendIdentity("scope-ada", "memory.identity.chat.scope.entity", {
       platform: "qq",
       adapterId: "napcat",
@@ -171,6 +279,7 @@ describe("developer inspection", () => {
         accountInformationId: "account-ada",
         personInformationId: "person-ada",
       },
+      [{ relation: "core:status-of", informationId: "inbound-ada" }],
     );
     original = JSON.stringify(await database.information.get("b"));
   });
@@ -424,8 +533,8 @@ describe("developer inspection", () => {
     expect(page.items).toHaveLength(1);
     expect(page.items[0]).toMatchObject({
       entityId: "person-ada",
-      entityKey: "10001",
-      title: "Ada · 研究组",
+      entityKey: "person-ada",
+      title: "Ada",
       platform: "qq",
       status: "complete",
     });
@@ -435,13 +544,49 @@ describe("developer inspection", () => {
     });
     expect(page.platforms).toContain("qq");
     const detail = (await get(path + "/entities/person-ada")).json().data;
+    expect(detail.entity.title).toBe("Ada");
+    expect(detail.entity.subtitle).toBe("人物 ID · person-ada");
+    expect(
+      detail.entity.fields.some(
+        (field: { label: string }) => field.label === "账号",
+      ),
+    ).toBe(false);
+    expect(detail.accounts).toMatchObject([
+      { platform: "qq", accountId: "10001", nickname: "Ada 新昵称" },
+      { platform: "qq", accountId: "10002", nickname: null },
+    ]);
+    expect(detail.groupCards).toMatchObject([
+      { platform: "qq", groupId: "20002", card: "Ada · 新研究组" },
+      { platform: "qq", groupId: "30003", card: "第二个群名片" },
+    ]);
+    expect(detail.groupCards[0]).not.toHaveProperty("accountId");
+    expect(detail.recognitionStats).toEqual({
+      count: 1,
+      firstAt: time,
+      lastAt: time,
+    });
+    const other = (await get(path + "/entities/person-other")).json().data;
+    expect(other.accounts).toMatchObject([
+      { platform: "discord", accountId: "10001", nickname: null },
+    ]);
+    expect(other.groupCards).toEqual([]);
+    expect(
+      other.sections.find(
+        (section: { id: string }) => section.id === "observations",
+      ).items,
+    ).toEqual([]);
+    expect(
+      (await get(path + "?platform=discord"))
+        .json()
+        .data.items.map((item: { entityId: string }) => item.entityId),
+    ).toEqual(["person-other"]);
     expect(
       detail.sections.find(
         (section: { id: string }) => section.id === "observations",
       ).items[0].fields,
     ).toContainEqual({
       label: "群名片",
-      value: "Ada · 研究组",
+      value: "Ada · 新研究组",
     });
     expect(
       detail.sections.find((section: { id: string }) => section.id === "scopes")
@@ -452,7 +597,7 @@ describe("developer inspection", () => {
     expect((await get(path + "?limit=51")).statusCode).toBe(400);
     expect(
       JSON.stringify(await database.information.get("person-ada")),
-    ).toContain("10001");
+    ).not.toContain('"accountId"');
   });
   it("keeps flows within one context, preserves reference edges and reports truncation", async () => {
     const response = await get("flows/ctx-a");

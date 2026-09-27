@@ -47,6 +47,7 @@ import {
   type FirstPartyModuleInstanceConfig,
   type ModuleModelSelection,
   type AgentIdentity,
+  type ActivePersonProfiles,
 } from "@kaguya/modules";
 import { loadFirstPartyPromptTemplates } from "@kaguya/modules/prompt-templates/node";
 import { loadStructuredOutputPromptRenderer } from "@kaguya/llm/prompt-templates/node";
@@ -79,6 +80,7 @@ export interface MessageCompositionOptions {
   readonly cognition?: MemoryCognitionProvider;
   readonly moduleConfigs: readonly FirstPartyModuleInstanceConfig[];
   readonly agentIdentity?: Pick<AgentIdentity, "timeZone">;
+  readonly activePersonProfiles?: ActivePersonProfiles;
 }
 export interface MemoryFeatureState {
   enabled: boolean;
@@ -103,6 +105,7 @@ export function createMessageCatalog(
   memoryEnabled = false,
   qqExpressionEnabled = false,
   memoryFeatureState?: MemoryFeatureState,
+  activePersonProfiles?: ActivePersonProfiles,
 ) {
   const agentIdentity: AgentIdentity = {
     name: promptTemplates.identityName,
@@ -128,6 +131,7 @@ export function createMessageCatalog(
     qqExpressionTemplates: promptTemplates.qqExpression,
     qqExpressionEnabled,
     agentIdentity,
+    ...(activePersonProfiles ? { activePersonProfiles } : {}),
     memoryEnabled: memoryFeatureState
       ? () => memoryFeatureState.enabled
       : memoryEnabled,
@@ -172,6 +176,7 @@ export function createMessageComposition(
       (c) => c.definitionId === "plugin.qq-expression" && c.enabled,
     ),
     memoryFeatureState,
+    options.activePersonProfiles,
   );
   const memoryEnabled = options.memoryEnabled ?? false;
   const knowledgeEnabled =

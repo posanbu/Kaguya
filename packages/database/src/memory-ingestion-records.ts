@@ -24,7 +24,7 @@ type RecordRow = {
   payload: unknown;
   recorded_at: string | Date;
 };
-const recordQuery = `SELECT c.input, COALESCE(a.payload->>'label',a.payload->>'accountId',a.information_id) AS label,
+const recordQuery = `SELECT c.input, COALESCE(a.payload->>'label',a.payload->>'initialName',a.payload->>'accountId',a.information_id) AS label,
   s.payload, c.recorded_at FROM memory_knowledge_claims c
   JOIN information_atoms a ON a.information_id=c.subject_id
   JOIN information_atoms s ON s.information_id=(c.input->'evidenceSourceInformationIds'->>0)
@@ -111,14 +111,12 @@ export async function refreshIngestionWiki(
     expectedDirtyVersion: page.dirtyVersion,
     evidenceCutoff: { occurredBefore: cutoff, recordedBefore: cutoff },
     generatorVersion: "user-ingestion-v2",
-    sections: memory.claims
-      .slice(0, 16)
-      .map((c) => ({
-        heading: c.predicate,
-        content: `[${c.epistemic}] ${c.value}`,
-        evidenceSourceInformationIds: c.evidenceSourceInformationIds,
-        claimIds: [c.claimId],
-      })),
+    sections: memory.claims.slice(0, 16).map((c) => ({
+      heading: c.predicate,
+      content: `[${c.epistemic}] ${c.value}`,
+      evidenceSourceInformationIds: c.evidenceSourceInformationIds,
+      claimIds: [c.claimId],
+    })),
   });
 }
 export async function mutateIngestionRecord(

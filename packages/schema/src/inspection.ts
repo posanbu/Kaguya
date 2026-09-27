@@ -404,6 +404,38 @@ export const inspectionSurfaceEntitySchema = z.object({
   version: z.literal(1),
   surfaceId: z.string(),
   entity: surfaceListItemSchema,
+  accounts: z
+    .array(
+      z.object({
+        platform: z.string(),
+        adapterId: z.string(),
+        accountId: z.string(),
+        nickname: z.string().nullable(),
+        accountInformationId: z.string(),
+        bindingInformationId: z.string(),
+      }),
+    )
+    .optional(),
+  accountsTruncated: z.boolean().optional(),
+  groupCards: z
+    .array(
+      z.object({
+        platform: z.string(),
+        groupId: z.string(),
+        card: z.string(),
+        observedAt: z.string(),
+        sourceInformationId: z.string(),
+      }),
+    )
+    .optional(),
+  groupCardsTruncated: z.boolean().optional(),
+  recognitionStats: z
+    .object({
+      count: z.number().int().nonnegative(),
+      firstAt: z.string().nullable(),
+      lastAt: z.string().nullable(),
+    })
+    .optional(),
   sections: z.array(
     z.object({
       id: z.string(),

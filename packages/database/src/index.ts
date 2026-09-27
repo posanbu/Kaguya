@@ -13,6 +13,7 @@
  */
 import { PgDatabase, type SqlDatabase } from "./driver.js";
 import { InformationRepository } from "./information-repository.js";
+import { PersonProfileRepository } from "./person-profile-repository.js";
 import { PostgresMemoryStore } from "./memory-store.js";
 import { PostgresMemoryKnowledgeStore } from "./memory-knowledge.js";
 import { prepareMemoryKnowledgeSchema } from "./memory-knowledge-schema.js";
@@ -83,11 +84,13 @@ export {
 
 export class KaguyaDatabase {
   readonly information: InformationRepository;
+  readonly personProfiles: PersonProfileRepository;
   readonly memory: PostgresMemoryStore;
   readonly knowledge: PostgresMemoryKnowledgeStore;
 
   constructor(readonly sql: SqlDatabase) {
     this.information = new InformationRepository(sql);
+    this.personProfiles = new PersonProfileRepository(sql);
     this.memory = new PostgresMemoryStore(sql);
     this.knowledge = new PostgresMemoryKnowledgeStore(sql);
   }
@@ -123,6 +126,14 @@ export class KaguyaDatabase {
     await this.sql.close();
   }
 }
+
+export {
+  PersonProfileRepository,
+  PersonProfileStoreError,
+  profileAccountKey,
+  type ActivePersonProfileSnapshot,
+  type StoredPersonProfile,
+} from "./person-profile-repository.js";
 
 export { PostgresMemoryVectorIndex } from "./memory-vector.js";
 export { inspectMemoryVectors } from "./memory-inspection.js";

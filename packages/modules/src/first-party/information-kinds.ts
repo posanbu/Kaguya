@@ -81,3 +81,4 @@ export {
   personResolutionInformationKind,
   personContextCompletedInformationKind,
 } from "./kinds/identity.js";
+export { personProfileRevisionInformationKind } from "./kinds/person-profile.js";

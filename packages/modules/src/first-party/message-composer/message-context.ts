@@ -48,6 +48,7 @@ import {
 } from "./message-quote.js";
 import { isMemorySourceInScope } from "../memory-knowledge/selector.js";
 import { USER_STATEMENT_KIND } from "@kaguya/schema";
+import { PERSON_PROFILE_REVISION_KIND } from "@kaguya/schema";
 
 export const currentAcceptedMessageSelector = defineInformationSelector({
   selectorId: "agent.message.current-intent",
@@ -124,6 +125,13 @@ export async function selectFrozenTurnMessageContext(options: {
       throw new Error(
         "Frozen memory source is outside the turn scope or cutoff",
       );
+  }
+  const profileIds = ((turn.payload as any).personProfiles ?? []).map(
+    (profile: { profileInformationId: string }) => profile.profileInformationId,
+  );
+  for (const id of profileIds) {
+    if (byId.get(id)?.kind !== PERSON_PROFILE_REVISION_KIND)
+      throw new Error(`Missing frozen person profile reference: ${id}`);
   }
   const inputIds = new Set(inputs.map((atom) => atom.informationId));
   const memoryIds = new Set(intent.memoryInformationIds);
@@ -277,6 +285,7 @@ export async function selectFrozenTurnMessageContext(options: {
       turn.informationId,
       ...inputs.map((atom) => atom.informationId),
       ...intent.memoryInformationIds,
+      ...profileIds,
       ...history.map((atom) => atom.informationId),
       ...quotes.map((atom) => atom.informationId),
     ]),

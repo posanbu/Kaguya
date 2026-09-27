@@ -236,7 +236,10 @@ it("connects same-named speakers and frozen input quotes without conflating thei
   };
   const { value } = compiledView(atoms, current);
   const view = value("turn");
-  expect(view.inputs.map((i: any) => i.speaker)).toEqual(["同名", "同名"]);
+  expect(view.inputs.map((i: any) => i.speaker)).toEqual([
+    "同名（sender-0）",
+    "同名（sender-1）",
+  ]);
   expect(view.inputs.map((i: any) => i.speakerKey)).toEqual([
     "speaker:sender-0",
     "speaker:sender-1",
@@ -249,6 +252,7 @@ it("connects same-named speakers and frozen input quotes without conflating thei
     status: "resolved",
     text: "去看木星吗？",
     sourceInformationId: "input-0",
+    speaker: "同名（sender-0）",
   });
   expect(view.observation).toMatchObject({ isGroup: true, focusActive: true });
   expect(view.availableActions).toEqual(["message", "silent"]);

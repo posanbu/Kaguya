@@ -176,3 +176,4 @@ export * from "./module-settings.js";
 
 export * from "./module-templates.js";
 export * from "./memory-ingestion.js";
+export * from "./person-profile.js";

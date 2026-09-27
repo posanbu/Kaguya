@@ -1089,6 +1089,284 @@
   padding-bottom: 18px;
   border-bottom: 1px solid var(--kaguya-line);
 }
+.person-profile-editor {
+  margin: 24px 0;
+  padding: 20px;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 12px;
+  background: var(--kaguya-paper-soft);
+}
+.person-readonly-section {
+  margin-top: 20px;
+  padding: 18px 20px;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 12px;
+  background: var(--kaguya-paper);
+}
+.person-readonly-section > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.person-readonly-section h4,
+.person-readonly-section h5,
+.person-readonly-section p {
+  margin: 0;
+}
+.person-readonly-section h4 {
+  font-size: 15px;
+}
+.person-readonly-section h5 {
+  margin: 16px 0 7px;
+  font-size: 13px;
+}
+.person-readonly-section > header span,
+.person-readonly-section p {
+  color: var(--kaguya-muted);
+  font-size: 12px;
+}
+.person-readonly-empty {
+  padding: 12px 0;
+}
+.person-readonly-table-wrap {
+  overflow-x: auto;
+}
+.person-readonly-section table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  text-align: left;
+}
+.person-readonly-section th,
+.person-readonly-section td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--kaguya-line);
+  vertical-align: top;
+}
+.person-readonly-section th {
+  color: var(--kaguya-muted);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.person-readonly-section td {
+  overflow-wrap: anywhere;
+}
+.person-readonly-section td button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--kaguya-coral-strong);
+  cursor: pointer;
+}
+.person-recognition-stats dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+.person-recognition-stats dl > div {
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--kaguya-paper-soft);
+}
+.person-recognition-stats dt {
+  color: var(--kaguya-muted);
+  font-size: 11px;
+}
+.person-recognition-stats dd {
+  margin: 5px 0 0;
+  font-size: 13px;
+}
+.person-profile-basics {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+  padding: 15px;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 10px;
+  background: var(--kaguya-paper);
+}
+.person-profile-basics label {
+  display: grid;
+  gap: 5px;
+  color: var(--kaguya-muted);
+  font-size: 11px;
+}
+.person-profile-name-state {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(120px, 1fr);
+  gap: 12px;
+}
+.person-profile-basics input,
+.person-profile-basics select,
+.person-profile-basics textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 8px;
+  background: var(--kaguya-paper);
+  color: var(--kaguya-ink);
+  font: inherit;
+  font-size: 13px;
+}
+.person-profile-basics textarea {
+  resize: vertical;
+}
+.person-profile-aliases ul {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.person-profile-aliases li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+.person-profile-aliases li button {
+  width: 38px;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 8px;
+  background: var(--kaguya-paper);
+  color: var(--kaguya-muted);
+  cursor: pointer;
+}
+@media (max-width: 680px) {
+  .person-profile-name-state,
+  .person-recognition-stats dl {
+    grid-template-columns: 1fr;
+  }
+}
+.person-profile-editor > header,
+.person-profile-section-heading,
+.person-profile-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+.person-profile-editor h4,
+.person-profile-editor h5,
+.person-profile-editor p {
+  margin: 0;
+}
+.person-profile-editor h4 {
+  font-size: 16px;
+}
+.person-profile-editor h5 {
+  font-size: 13px;
+}
+.person-profile-editor p,
+.person-profile-actions > span {
+  color: var(--kaguya-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.person-profile-sections {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+.person-profile-section {
+  padding: 15px;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 10px;
+  background: var(--kaguya-paper);
+}
+.person-profile-section-heading p {
+  margin-top: 4px;
+}
+.person-profile-section-heading .wb-button {
+  flex: none;
+}
+.person-profile-section ul {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.person-profile-section li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+.person-profile-section li label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  color: var(--kaguya-muted);
+  font-size: 11px;
+}
+.person-profile-section textarea {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+}
+.person-profile-row-actions {
+  display: flex;
+  gap: 4px;
+}
+.person-profile-row-actions button {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 8px;
+  background: var(--kaguya-paper);
+  color: var(--kaguya-muted);
+  cursor: pointer;
+}
+.person-profile-row-actions button:hover:not(:disabled) {
+  color: var(--kaguya-coral-strong);
+}
+.person-profile-row-actions button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.person-profile-row-actions button:focus-visible {
+  outline: 3px solid var(--kaguya-focus);
+}
+.person-profile-empty {
+  margin-top: 12px !important;
+}
+.person-profile-actions {
+  margin-top: 18px;
+}
+.person-profile-preview,
+.person-profile-memory {
+  margin-top: 18px;
+  padding: 15px;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 10px;
+  background: var(--kaguya-paper);
+}
+.person-profile-preview p,
+.person-profile-memory p {
+  margin-top: 5px;
+}
+.person-profile-preview pre {
+  margin: 12px 0 0;
+  padding: 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border-radius: 8px;
+  background: var(--kaguya-paper-soft);
+  color: var(--kaguya-ink);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.person-profile-memory {
+  border-style: dashed;
+}
 .surface-detail h3,
 .surface-detail > header p {
   margin: 0;
