@@ -87,7 +87,7 @@ flowchart LR
 
 **Memory cognition** — 当前由每条 writeback 完成触发，再读取同场景最近最多 32 条消息形成有界快照。它没有只读触发消息，但会随每条新消息产生高度重叠的窗口；长期认知应如何形成仍是待讨论设计。
 
-**Knowledge 与 Expression** — Knowledge 已能保存 event、claim 与 episode，但在线消息主要仍先投影为单个 event；Expression 已按多条来源批次学习。它们说明不同 Memory 职责可以选择不同的业务输入单位。
+**Expression** — Expression 按多条来源批次学习，说明派生记忆可以选择与逐条原始消息不同的业务输入单位。
 
 现有实现细节以[运行时架构](./architecture)、[信息模块 SDK](./information-modules)和[Memory 认知层](./memory)为准。本页定义项目故事和设计检查项，不把待讨论方向描述为已经交付的协议。TML Interaction Models、GPT-Live 与 MaiBot 的可借鉴部分和适用边界集中记录在[外部设计参考](./design-references)。
 

@@ -20,7 +20,6 @@ const stages = [
       k.startsWith("memory.writeback.") ||
       k.startsWith("memory.index.") ||
       k.startsWith("memory.cognition.") ||
-      k.startsWith("memory.knowledge.") ||
       k.startsWith("memory.association.") ||
       k === "memory.text",
   },

@@ -18,10 +18,6 @@ worker 重载时逐项比对账本和持久化原文，校验事件截止点与�
 
 每次重试仍从 request 冻结的有序来源 ID 重载证据，不为补齐回复目标自动扩窗。reply 关系只说明消息之间的引用，不证明派生事实的语义归属，也不代表当前窗口已经包含完整经历。
 
-开启 Knowledge 后，在线选择通过 Core 命名策略检查快照的整个来源集合。任一来源已撤回或因身份修正失效，就拒绝整份快照；策略未注册或仓储检查失败时同样拒绝。关闭 Knowledge 时保持原有认知基线，不调用该检查。该规则保护历史 Mem0 快照，不把部分仍有效的来源当成整份摘要仍然成立的证明。
-
-逐消息 raw evidence 继续保存原文；本模块的窗口提供本次可见 context；Knowledge 可显式关联多事件 episode；provider 当前形成的仍是有界 cognition 快照。[#74](https://github.com/posanbu/Kaguya/issues/74) 的 episode 存储、索引、召回、Prompt 与 Inspection 迁移尚未完成，[#242](https://github.com/posanbu/Kaguya/issues/242) 的形成模型和自动切分规则仍待人工确认。补全 reply 证据不改变这些边界。
-
 ## Settings
 
 模块使用严格空设置。selected Profile 的 `memory.enabled` 控制全局开关；provider 端点与凭据由 composition 持有，不进入模块 settings。

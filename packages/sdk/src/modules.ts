@@ -446,14 +446,6 @@ function validateInspectionSurface(
     const view = views.get(component.viewId);
     if (!view)
       throw new Error(`Unknown inspection surface view: ${component.viewId}`);
-    if (component.type === "wiki-browser") {
-      if (
-        !producedKinds.has(component.pageKind) ||
-        !view.kinds.includes(component.pageKind)
-      )
-        throw new Error("Invalid inspection Wiki page contract");
-      continue;
-    }
     if (component.type === "model-request-browser") {
       if (
         !manifest.requires.some(

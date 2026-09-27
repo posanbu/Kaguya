@@ -2,7 +2,6 @@
  * QQ 表情实例开关同时控制草稿处理路径和模型审批；关闭后恢复原 Composer 产出。
  * 功能概述：验证唯一 Runtime Composition 的目录演化、激活选择和宿主依赖边界。
  * Memory 实例只由全局模块配置显式激活。
- * knowledge 双开关的启用、禁用和显式实例开关保持独立，避免旧 Profile 自动进入实验路径。
  * 主要职责：模拟一方 Catalog 新增与移除定义，确认共享工厂直接采用变更；检查禁用实例
  * 不获得 Model Task 审批，Heartflow 独立获得 light Planner 审批、身份和 Memory 选项保持原有语义，并约束两个应用直接使用正式入口。
  * 代码库关系：mock 仅替换 @kaguya/modules 的 Catalog 工厂，其他定义、配置校验及模板均为真实实现；
@@ -41,42 +40,20 @@ describe("shared Runtime Composition", () => {
     expect("cadence" in disabled).toBe(false);
   });
 
-  it("enables knowledge only with both switches and respects an explicitly disabled instance", () => {
-    const moduleConfigs = modules.createFirstPartyModuleConfigDefaults("test");
+  it("activates raw Memory only when its instance is enabled", () => {
+    const defaults = modules.createFirstPartyModuleConfigDefaults("test");
     const enabled = createMessageComposition(undefined, {
-      moduleConfigs: moduleConfigs.map((config) =>
-        ["memory.writeback", "memory.knowledge"].includes(config.definitionId)
+      moduleConfigs: defaults.map((config) =>
+        config.definitionId === "memory.writeback"
           ? { ...config, enabled: true }
           : config,
       ),
       memoryEnabled: true,
-      memoryKnowledgeEnabled: true,
     });
-    expect(enabled.memory).toMatchObject({
-      enabled: true,
-      knowledgeEnabled: true,
-    });
+    expect(enabled.memory).toEqual({ enabled: true });
     expect(
-      enabled.activations.some((a) => a.definitionId === "memory.knowledge"),
+      enabled.activations.some((a) => a.definitionId === "memory.writeback"),
     ).toBe(true);
-    for (const enabledId of ["memory.writeback", "memory.knowledge"]) {
-      expect(
-        createMessageComposition(undefined, {
-          moduleConfigs: moduleConfigs.map((config) =>
-            config.definitionId === enabledId
-              ? { ...config, enabled: true }
-              : config,
-          ),
-          memoryEnabled: enabledId === "memory.writeback",
-        }).activations.some((a) => a.definitionId === "memory.knowledge"),
-      ).toBe(false);
-    }
-    const disabled = createMessageComposition(undefined, {
-      moduleConfigs,
-    });
-    expect(
-      disabled.activations.some((a) => a.definitionId === "memory.knowledge"),
-    ).toBe(false);
   });
   it("adopts an added and then removed catalog definition without an app registry", () => {
     const original = createMessageCatalog();

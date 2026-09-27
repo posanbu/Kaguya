@@ -161,23 +161,6 @@ it("accepts bounded declarative records without identity-only metadata", () => {
     }).items,
   ).toEqual([]);
 });
-it("accepts a page-oriented Wiki browser", () => {
-  expect(
-    moduleInspectionSurfaceSchema.parse(
-      surface({
-        id: "pages",
-        type: "wiki-browser",
-        area: "main",
-        viewId: "pages",
-        pageKind: "memory.knowledge.wiki.updated",
-        empty: "还没有 Wiki 页面。",
-      }),
-    ).components[0],
-  ).toMatchObject({
-    type: "wiki-browser",
-    pageKind: "memory.knowledge.wiki.updated",
-  });
-});
 it("accepts a bounded storage table and its page-specific hidden sections", () => {
   const parsed = moduleInspectionSurfaceSchema.parse({
     ...surface({

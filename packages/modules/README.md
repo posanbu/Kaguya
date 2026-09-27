@@ -32,7 +32,7 @@ protocol v2 模块 Manifest 必须提供非空的 `displayName`、单行 `summar
 
 所有一方模块的可编辑 Prompt 都保存在 `templates/`：`*.default.hbs` 是提交到 GitHub 的默认模板，同名 `*.local.hbs` 是 Git 忽略的本地覆盖。范围包括 Message Composer 的主模板、bootstrap 表达、消息与记忆排版、会话场景、积压提示、人物背景、表达参考和授权正文，Heartflow Planner、bootstrap 策略、Expression 的学习与选择，以及人物事实提取；没有模型指令的模块不需要占位模板。
 
-persona 只定义 Agent 自身身份与性格。人物、关系、会话历史和世界背景必须来自带 Information 引用的冻结证据。Memory、Knowledge、Association 或人物事实提取返回空结果或失败时，下游保持未知，不能把缺失证据改写为事实。
+persona 只定义 Agent 自身身份与性格。人物、关系、会话历史和世界背景必须来自带 Information 引用的冻结证据。Memory、Association 或人物事实提取返回空结果或失败时，下游保持未知，不能把缺失证据改写为事实。
 
 在仓库根目录运行 `pnpm prompt:init`，可为所有已声明模板创建缺失的 local 副本；已有 local 保持原样。也可以只复制需要修改的 default 文件。加载时优先使用 local，仅在 local 不存在时读取 default；因此升级默认模板不会覆盖本地定制，已有 local 也不会自动合并上游变化。本地覆盖属于当前工作区，供使用该模板的实例和 Profile 共享。
 
@@ -56,7 +56,7 @@ persona 只定义 Agent 自身身份与性格。人物、关系、会话历史�
 | Message Composer                              | 使用裁剪后的证据状态，缺少相关依据时承认未知；角色、表达习惯和规划指引不能充当事实。授权跨会话正文同样不补造背景。 |
 | Association                                   | 召回来源事实，允许空结果或可选失败；没有结果不解释为事实不存在。                                                   |
 | Memory Writeback、Memory Index                | 仅持久化或索引真实来源，不制造初始记忆。                                                                           |
-| Memory Cognition、Memory Knowledge            | 使用已持久化证据及其范围、时间和来源校验；空输入不凭人设演化人物画像，页面和模型输出不替代原始证据。               |
+| Memory Cognition                              | 使用已持久化证据及其范围、时间和来源校验；空输入不凭人设演化人物画像，页面和模型输出不替代原始证据。               |
 | Expression                                    | 无候选或证据不足返回空集合；新证据充分时照常学习。习惯仅限定措辞，不能证明关系或事实。                             |
 | Person Fact Task                              | 允许 `fact: null` 弃答；非空事实必须是候选原文片段，避免无来源文字入账。摘录仍可能是用户自述，不代表独立确认。     |
 

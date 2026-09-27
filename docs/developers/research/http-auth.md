@@ -15,7 +15,6 @@ description: 核查五条前端请求路径、fragment Token 生命周期及响�
 
 - [module-settings-api.ts](https://github.com/posanbu/Kaguya/blob/2dad5c8330a6668e293f79995b2f477ce71ecc61/apps/web/src/module-settings-api.ts#L19-L54) 有空 Token 检查、可选 signal、共享 schema 与字段错误；字段数组只有粗粒度检查。
 - [module-templates-api.ts](https://github.com/posanbu/Kaguya/blob/2dad5c8330a6668e293f79995b2f477ce71ecc61/apps/web/src/module-templates-api.ts#L23-L63) 有空 Token 检查、可选 signal 和共享 schema，但错误主要是普通 `Error` 与业务提示映射。
-- [memory-ingestion-api.ts](https://github.com/posanbu/Kaguya/blob/2dad5c8330a6668e293f79995b2f477ce71ecc61/apps/web/src/memory-ingestion-api.ts#L33-L68) 有可选 signal、调用方传入 schema，并保留错误 code/status；有 body 时发 POST，没有自动重复写入。
 - [identity-persona-api.ts](https://github.com/posanbu/Kaguya/blob/2dad5c8330a6668e293f79995b2f477ce71ecc61/apps/web/src/identity-persona-api.ts#L1-L52) 用局部 Zod schema，但未暴露 signal，也未在发请求前拒绝空 Token。
 
 这四条路径均直接 `response.json()`，断网、Abort、空响应及代理返回 HTML 时会暴露不同异常形态。统一传输的价值是让调用者能稳定区分这些情形，同时保留 409 冲突、字段提示和草稿恢复等业务语义；更换库本身不能完成这一工作。

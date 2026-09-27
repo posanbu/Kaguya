@@ -36,7 +36,6 @@ async function fixture() {
   );
   const activateNapCat = vi.fn(async () => {});
   const committed = vi.fn();
-  const recovered = vi.fn();
   const management = new FeatureManagement({
     rootDir,
     defaults,
@@ -49,7 +48,6 @@ async function fixture() {
       connectivity: "disconnected",
     }),
     committed,
-    recovered,
   });
   return {
     rootDir,
@@ -57,7 +55,6 @@ async function fixture() {
     activateMemory,
     activateNapCat,
     committed,
-    recovered,
     failNext: () => {
       fail = true;
     },
@@ -71,7 +68,6 @@ it("cascades raw Memory off and keeps children off when reopened", async () => {
     f.management.toggle("memory.index", true, view.revision),
   ).rejects.toMatchObject({ code: "memory_writeback_required" });
   view = await f.management.toggle("memory.writeback", true, view.revision);
-  view = await f.management.toggle("memory.knowledge", true, view.revision);
   view = await f.management.toggle("memory.writeback", false, view.revision);
   expect(
     view.features
@@ -80,7 +76,7 @@ it("cascades raw Memory off and keeps children off when reopened", async () => {
   ).toBe(true);
   view = await f.management.toggle("memory.writeback", true, view.revision);
   expect(
-    view.features.find((item) => item.id === "memory.knowledge")?.enabled,
+    view.features.find((item) => item.id === "memory.index")?.enabled,
   ).toBe(false);
   expect(f.activateNapCat).not.toHaveBeenCalled();
 });
@@ -106,7 +102,6 @@ it("rejects stale versions and restores persisted state on activation failure", 
   ).toBe(true);
   expect(after.revision).toBe(current.revision);
   expect(f.committed).toHaveBeenCalledTimes(1);
-  expect(f.recovered).toHaveBeenCalledOnce();
 });
 
 it("keeps NapCat settings unchanged after activation failure and allows retry", async () => {
@@ -140,7 +135,6 @@ it("keeps NapCat settings unchanged after activation failure and allows retry", 
       initialize: false,
     }),
   ).toEqual(original);
-  expect(f.recovered).toHaveBeenCalledOnce();
   expect(f.committed).not.toHaveBeenCalled();
 
   await expect(

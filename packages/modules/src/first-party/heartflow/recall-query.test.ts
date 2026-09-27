@@ -1,7 +1,6 @@
 /**
  * 功能概述：验证 Planner 查询预算不会被早期长消息独占，证据合并保持多来源公平。
  * 主要职责：覆盖 Unicode 上限、最近话题、长消息首尾、重复输入与原文 ID 去重。
- * 代码库关系：直接测试 Knowledge 与 sparse 共用的纯查询策略，无数据库或模型请求。
  */
 import { expect, it } from "vitest";
 import { buildRecallQuery, mergeRecallLanes } from "./recall-query.js";

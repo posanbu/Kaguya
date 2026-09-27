@@ -437,7 +437,6 @@ export function Overview({
           {(
             [
               ["memory.writeback", "原始记忆", Database],
-              ["memory.knowledge", "事件 / Wiki", Globe2],
               ["memory.index", "向量索引", Activity],
               ["memory.cognition", "Mem0 认知记忆", ServerCog],
             ] as const

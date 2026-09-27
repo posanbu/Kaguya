@@ -1,5 +1,4 @@
 /**
- * memoryKnowledgeEnabled 与 knowledgeEnabled 双向映射，保存时保留原有高级 Memory 字段。
  * profileToEditorFields/mergeProfileEditorFields 分别转换两个方向的规则文本，修改一侧不改另一侧。
  * 架构说明：本模块是 Web 端 Profile 表单与完整 Profile 文档之间的
  * 客户端保全边界。它把可见的名称、URL、API Key、轻重模型、网关白名单与

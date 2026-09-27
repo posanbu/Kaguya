@@ -1,5 +1,4 @@
 /**
- * MemoryIngestionService 随 Runtime 就绪状态开放，配置切换和关闭先取消并等待在途整理任务。
  * 模板管理与配置应用共享写锁，只写本地覆盖，用户需重启加载新模板。
  * 模块配置管理复用 configuration.exclusive，与显式应用共锁；保存不会切换运行实例。
  * 启动和显式热应用分别把 inboundAllowlist 交给 AdapterHost、outboundAllowlist 交给 Runtime 及目标授权服务。
@@ -21,10 +20,6 @@
  * Web adapter 将回复交付给持久账本；WebChatHistory 只投影已送达消息，热应用后读取当前数据库。
  */
 import { ModuleTemplateManagement } from "./module-template-management.js";
-import {
-  MemoryIngestionService,
-  createMemoryIngestionGenerator,
-} from "./memory-ingestion.js";
 import { IdentityPersonaManagement } from "./identity-persona-management.js";
 import { PersonProfileManagement } from "./person-profile-management.js";
 import { ModuleSettingsManagement } from "./module-settings-management.js";
@@ -60,7 +55,6 @@ import {
 } from "@kaguya/config";
 import {
   KaguyaDatabase,
-  PostgresMemoryIngestionStore,
   UnsupportedDatabaseSchemaError,
   type ActivePersonProfileSnapshot,
 } from "@kaguya/database";
@@ -253,27 +247,12 @@ export async function startKaguyaServer(
     metadataByPerson: new Map(),
     initialNames: new Map(),
   };
-  const memoryIngestion = new MemoryIngestionService(() =>
-    runtime &&
-    database &&
-    memoryConfigFromModules(moduleConfigs).enabled &&
-    memoryConfigFromModules(moduleConfigs).knowledgeEnabled
-      ? {
-          store: new PostgresMemoryIngestionStore(database.sql),
-          generate: createMemoryIngestionGenerator(
-            createRuntimeModelSelectionResolver(selectedProfile),
-          ),
-        }
-      : undefined,
-  );
-
   const close = (): Promise<void> => {
     unregisterShutdown?.();
     shuttingDown = true;
     adapterHost.beginStopping();
     closePromise ??= (async () => {
       await application?.beginShutdown();
-      await memoryIngestion.close();
       await closeResources({
         app,
         webUi,
@@ -419,7 +398,6 @@ export async function startKaguyaServer(
           : undefined;
     };
     refreshInspection();
-    memoryIngestion.start();
     application = new ConfigurationApplication({
       initial: initialSnapshot,
       initiallyReady: runtime !== undefined,
@@ -460,7 +438,6 @@ export async function startKaguyaServer(
         );
       },
       stop: async () => {
-        await memoryIngestion.pause();
         adapterHost.beginStopping();
         inspection = undefined;
         const failures: unknown[] = [];
@@ -541,7 +518,6 @@ export async function startKaguyaServer(
           selectedProfile = snapshot.profile;
           moduleConfigs = snapshot.moduleConfigs;
           refreshInspection();
-          memoryIngestion.start();
           nextHost.resumeIngress();
         } catch {
           nextHost.beginStopping();
@@ -582,7 +558,6 @@ export async function startKaguyaServer(
             activePersonProfiles,
           },
         );
-        await memoryIngestion.pause();
         try {
           await runtime.replaceMemoryFeatures({
             memory: composition.memory,
@@ -596,7 +571,6 @@ export async function startKaguyaServer(
               : {}),
           });
         } catch (error) {
-          if (!(error instanceof AggregateError)) memoryIngestion.start();
           throw error;
         }
       },
@@ -633,16 +607,13 @@ export async function startKaguyaServer(
         moduleConfigs = nextConfigs;
         application?.markModulesApplied(nextConfigs, FEATURE_IDS);
         secretHistory.push({ moduleConfigs: nextConfigs });
-        memoryIngestion.start();
       },
-      recovered: () => memoryIngestion.start(),
     });
     app = await inStartupPhase("http_application", () =>
       createHttpApplication({
         config: effectiveConfig,
         inspection: () => inspection,
         modelRequestMetrics: () => database?.modelRequestMetrics,
-        memoryIngestion,
         messageTargets: () => runtime?.messageTargets,
         configurationApplication: application,
         featureManagement,

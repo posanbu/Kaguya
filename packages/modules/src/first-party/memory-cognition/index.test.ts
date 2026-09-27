@@ -9,7 +9,6 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import {
-  MEMORY_COGNITION_EVIDENCE_GUARD_STRATEGY_ID,
   memoryCognitionCapability,
   type MemoryDocument,
   type MemoryCognitionInput,
@@ -87,7 +86,6 @@ async function select(
   evidence = [inbound],
   selectedMemory = memory,
   options: {
-    requireEvidenceGuard?: boolean;
     retrieve?: () => Promise<any[]>;
     current?: any;
   } = {},
@@ -98,9 +96,7 @@ async function select(
       : snapshots,
   );
   const retrieve = vi.fn(options.retrieve ?? (async () => evidence));
-  const ids = await createCognitionMemorySelector(identity, {
-    requireEvidenceGuard: options.requireEvidenceGuard ?? false,
-  }).select({
+  const ids = await createCognitionMemorySelector(identity).select({
     sourceAtom: candidate,
     ledger: {
       find,
@@ -190,63 +186,8 @@ describe("completed cognition selection", () => {
     );
     expect(result.ids).toEqual([]);
   });
-  it("checks the full snapshot closure when Knowledge is enabled", async () => {
-    const result = await select([snapshot], [inbound], memory, {
-      requireEvidenceGuard: true,
-    });
-    expect(result.ids).toEqual(["memory"]);
-    expect(result.retrieve).toHaveBeenCalledWith({
-      strategyId: MEMORY_COGNITION_EVIDENCE_GUARD_STRATEGY_ID,
-      input: { sourceInformationIds: ["inbound"] },
-      limit: 1,
-    });
-  });
-  it("rejects the whole snapshot if any evidence was revoked", async () => {
-    const second = { ...inbound, informationId: "second" };
-    const result = await select(
-      [snapshot],
-      [inbound, second],
-      {
-        ...memory,
-        references: [inbound, second].map((atom) => ({
-          relation: "core:uses-context",
-          informationId: atom.informationId,
-        })),
-      },
-      {
-        requireEvidenceGuard: true,
-        retrieve: async () => [inbound],
-      },
-    );
-    expect(result.ids).toEqual([]);
-    expect(result.retrieve).toHaveBeenCalledWith(
-      expect.objectContaining({
-        input: { sourceInformationIds: ["inbound", "second"] },
-        limit: 2,
-      }),
-    );
-  });
-  it("fails closed when an enabled guard is missing, broken or returns other evidence", async () => {
-    const unavailable = await select([snapshot], [inbound], memory, {
-      requireEvidenceGuard: true,
-      retrieve: async () => {
-        throw new Error("Unknown retrieval strategy");
-      },
-    });
-    expect(unavailable.ids).toEqual([]);
-    const substituted = await select([snapshot], [inbound], memory, {
-      requireEvidenceGuard: true,
-      retrieve: async () => [{ ...inbound, informationId: "unrelated" }],
-    });
-    expect(substituted.ids).toEqual([]);
-  });
-  it("retains the existing cognition baseline without Knowledge", async () => {
-    const result = await select([snapshot], [inbound], memory, {
-      requireEvidenceGuard: false,
-      retrieve: async () => {
-        throw new Error("guard should not be invoked");
-      },
-    });
+  it("keeps a snapshot with intact direct evidence", async () => {
+    const result = await select();
     expect(result.ids).toEqual(["memory"]);
     expect(result.retrieve).not.toHaveBeenCalled();
   });
