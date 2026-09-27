@@ -1,8 +1,8 @@
 /**
  * 功能概述：定义跨会话发送的宿主授权能力和审计事实，复用统一 message intent。
- * conversation 冻结当前范围背景与不透明目标引用；route 仅接受已持久化的获胜 Planner 决策，自动投递仍由宿主校验。
- * 主要职责：prepare 校验意图并提供隔离的冻结 Prompt；stage 暂存 Composer 正文，确认事实唤醒原订阅释放投递。
- * 代码库关系：Runtime 提供能力，composition 向 Composer 注入 token；HTTP 管理端只能调用宿主的确认入口。
+ * conversation 冻结当前范围背景与不透明目标引用；route 仅接受已持久化的获胜 Light 决策，自动投递仍由宿主校验。
+ * 主要职责：prepare 校验意图并提供隔离的冻结 Prompt；stage 暂存 Heavy 正文，确认事实唤醒原订阅释放投递。
+ * 代码库关系：Runtime 提供能力，composition 向 Heavy 注入 token；HTTP 管理端只能调用宿主的确认入口。
  * 输入输出与副作用：事实可持久化但不能自行授予权限；真实授权由宿主私有状态核验，重启默认失效。
  * 展示契约：中文名称与职责说明由定义直接提供给 Inspection 和 WebUI，稳定 kind 与协议字段保持不变。
  */
@@ -17,7 +17,7 @@ import {
   messageTargetSchema,
   turnProvenanceSchema,
 } from "./information-kinds.js";
-export const plannerTargetSchema = z.discriminatedUnion("kind", [
+export const lightTargetSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("current") }).strict(),
   z
     .object({
@@ -39,9 +39,9 @@ export const plannerTargetSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
 ]);
-export type PlannerTarget = z.infer<typeof plannerTargetSchema>;
+export type LightTarget = z.infer<typeof lightTargetSchema>;
 export const conversationContextInformationKind = defineInformationKind({
-  kind: "agent.conversation.context.frozen",
+  kind: "agent.router.conversation.context.frozen",
   displayName: "冻结会话上下文",
   description:
     "保存当前回合最小化的会话与人物背景及不透明目标路由引用；该事实本身不能授予发送权限。",
@@ -95,7 +95,7 @@ export const conversationContextInformationKind = defineInformationKind({
     "core:uses-context": {
       required: true,
       multiple: false,
-      targetKinds: ["agent.turn.context.completed"],
+      targetKinds: ["agent.router.turn.context.completed"],
     },
   },
   log: {
@@ -131,10 +131,10 @@ export const messageAuthorizationCapability =
     1,
   );
 export const targetAuthorizedInformationKind = defineInformationKind({
-  kind: "agent.message.target.authorized",
+  kind: "agent.router.message.target.authorized",
   displayName: "跨会话目标授权事实",
   description:
-    "管理端批准隔离指令后记录目标、回合及有效期；Composer 仍需通过宿主私有能力验证，单独重放此事实不能获得发送权限。",
+    "管理端批准隔离指令后记录目标、回合及有效期；Heavy 仍需通过宿主私有能力验证，单独重放此事实不能获得发送权限。",
   payloadSchema: z
     .object({
       target: messageTargetSchema,
@@ -152,7 +152,7 @@ export const targetAuthorizedInformationKind = defineInformationKind({
     "core:uses-context": {
       required: true,
       multiple: false,
-      targetKinds: ["agent.turn.context.completed"],
+      targetKinds: ["agent.router.turn.context.completed"],
     },
   },
   log: {
@@ -167,10 +167,10 @@ export const targetAuthorizedInformationKind = defineInformationKind({
   },
 });
 export const messageConfirmedInformationKind = defineInformationKind({
-  kind: "agent.message.content.confirmed",
+  kind: "agent.heavy.message.content.confirmed",
   displayName: "消息正文已确认",
   description:
-    "管理端确认某条生成正文后记录其标识；原 Composer 订阅经宿主验证后释放对应投递，确认不适用于其他正文。",
+    "管理端确认某条生成正文后记录其标识；原 Heavy 订阅经宿主验证后释放对应投递，确认不适用于其他正文。",
   payloadSchema: z
     .object({ assistantInformationId: z.string().min(1) })
     .strict(),

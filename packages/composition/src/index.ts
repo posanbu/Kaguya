@@ -1,17 +1,17 @@
 /**
  * 按 QQ 表情实例实际开关装配草稿处理器并批准其 light 模型任务，非 QQ 和禁用路径保持原行为。
- * 模板加载器统一选择所有模块的 default/local 正文；Catalog 注入 Planner、Composer 和 Expression，授权正文渲染器注入 Runtime。
+ * 模板加载器统一选择所有模块的 default/local 正文；Catalog 注入 Light、Heavy 和 Expression，授权正文渲染器注入 Runtime。
  * 功能概述：作为 Server 与 Demo 共用的唯一 Runtime Composition 边界，组装业务 Catalog 与宿主批准的 Model Task 能力。
  * 原始记忆开启时激活 memory.raw，关闭时移除该实例；未完成模块没有实例。
- * Heartflow 与 Composer 同时注入宿主目标授权能力；自然语言跨会话自动校验，管理端路径仍需正文确认。
+ * Router 与 Heavy 同时注入宿主目标授权能力；自然语言跨会话自动校验，管理端路径仍需正文确认。
  * 主要职责：createMessageCatalog 加载模板并注入 Runtime kind/token，供运行时及数据库 kind 检查共用；
  * createMessageComposition 注入共享 token/definition，按 activation 设置批准 tier，
  * 并将 provider client 与模型解析器交给 Runtime 构造受控 ModelTaskClient；providerId/modelId
  * 作为复合身份写入审计数据并通过异步调用上下文选择模型，避免同名 model 跨 provider 串线；
  * createDeterministicModelSelectionResolver 为离线演示提供确定性模型。
  * 代码库关系：apps/server 与 apps/demo 直接导入 @kaguya/composition；本包位于 Runtime 之上，
- * 不负责数据库连接、HTTP、transport 注册或进程启停。从 loadFirstPartyPromptTemplates().messageComposer 读取模板，组合 agent.message-composer、
- * Heartflow Planner（light）与 Runtime 通用生命周期、LLM client；settings 只含 modelTier，投递目标由消息 intent 决定。
+ * 不负责数据库连接、HTTP、transport 注册或进程启停。从 loadFirstPartyPromptTemplates().heavy 读取模板，组合 agent.heavy、
+ * Router 内部 Light 与 Runtime 通用生命周期、LLM client；Light、Heavy 档位固定，投递目标由消息 intent 决定。
  * 输入输出与副作用：构造阶段无网络或连接；模型句柄按复合 key 存于宿主闭包，
  * Runtime 校验 activation/policy、重载因果 context 并写通用任务生命周期，模块经 context.use 调用。
  */
@@ -29,7 +29,6 @@ import {
   messageAuthorizationCapability,
   createFirstPartyModuleCatalog,
   createFirstPartyModuleActivations,
-  messageComposerSettingsSchema,
   type FirstPartyModuleInstanceConfig,
   type ModuleModelSelection,
   type AgentIdentity,
@@ -100,10 +99,10 @@ export function createMessageCatalog(
     deliveryDeliveredInformationKind,
     deliveryFailedInformationKind,
     executionExhaustedInformationKind,
-    promptTemplates: promptTemplates.messageComposer,
-    plannerTemplate: promptTemplates.planner,
-    plannerBootstrapPolicy: promptTemplates.plannerBootstrapPolicy,
-    plannerPlatformPolicies: promptTemplates.plannerPlatformPolicies,
+    promptTemplates: promptTemplates.heavy,
+    lightTemplate: promptTemplates.light,
+    lightBootstrapPolicy: promptTemplates.lightBootstrapPolicy,
+    lightPlatformPolicies: promptTemplates.lightPlatformPolicies,
     expressionTemplates: promptTemplates.expression,
     qqExpressionTemplates: promptTemplates.qqExpression,
     qqExpressionEnabled,
@@ -157,8 +156,8 @@ export function createMessageComposition(
     approvals: activations
       .filter((activation) =>
         [
-          "agent.message-composer",
-          "agent.heartflow.online",
+          "agent.heavy",
+          "agent.router",
           "memory.expression",
           "plugin.qq-expression",
         ].includes(activation.definitionId),
@@ -169,11 +168,7 @@ export function createMessageComposition(
           definitionId: activation.definitionId,
         },
         selectionPolicy: {
-          tier:
-            activation.definitionId !== "agent.message-composer"
-              ? "light"
-              : messageComposerSettingsSchema.parse(activation.settings)
-                  .modelTier,
+          tier: activation.definitionId === "agent.heavy" ? "heavy" : "light",
         },
       })),
     client: new KaguyaLlmClient({

@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * 功能概述：为 issue #181 从生产 Information 账本导出首次冻结的 Planner 输入，
+ * 功能概述：为 issue #181 从生产 Information 账本导出首次冻结的 Light 输入，
  * 保留真实工作负载及溯源，同时禁止读取同一请求的后验模型结果或补入未来上下文。
  * 主要职责：parseArguments 解析配置目录、私有输出路径与源码根目录；exportWorkload
  * 在 PostgreSQL REPEATABLE READ / READ ONLY 事务中读取请求和它已声明的上下文；
  * atomRecord 恢复账本公开字段；writePrivateFile 独占创建权限 0600 的数据和清单。
  * 代码库关系：从 packages/database 的 pg 依赖读取 information_atoms/references，
- * 与 Runtime 的 core.model.task.requested、agent.turn.plan 冻结契约一致；下游
+ * 与 Runtime 的 core.model.task.requested、agent.light.decide 冻结契约一致；下游
  * fast-policy benchmark 消费 source-private.jsonl，生产 Runtime 不加载本文件。
  * 输入输出与副作用：配置中的数据库凭据只驻留内存，终端只显示计数和内容哈希；
  * 输出包含私人会话，默认写入 gitignored .data，目录权限 0700；已有输出拒绝覆盖。
@@ -171,7 +171,7 @@ async function exportWorkload(options) {
          FROM information_atoms
          WHERE kind = $1 AND payload->>'taskId' = $2
          ORDER BY occurred_at, information_id`,
-        ["core.model.task.requested", "agent.turn.plan"],
+        ["core.model.task.requested", "agent.light.decide"],
       )
     ).rows;
     const allIds = [
@@ -235,7 +235,7 @@ async function exportWorkload(options) {
   }).trim();
   const manifest = {
     schema_version: 1,
-    source: "kaguya-information-ledger-frozen-planner-requests",
+    source: "kaguya-information-ledger-frozen-light-requests",
     source_git_sha: gitSha,
     source_request_count: records.length,
     unique_prompt_count: new Set(
@@ -251,7 +251,7 @@ async function exportWorkload(options) {
     export_started_at: startedAt,
     export_completed_at: new Date().toISOString(),
     database_access: "REPEATABLE READ READ ONLY; rolled back",
-    selection: "all frozen agent.turn.plan requests; no result filtering",
+    selection: "all frozen agent.light.decide requests; no result filtering",
     contains_private_conversation_data: true,
     post_request_context_excluded: true,
   };
@@ -284,7 +284,7 @@ if (
 ) {
   if (process.argv.includes("--help")) {
     console.log(
-      "Usage: node export_workload.mjs [--repo-root PATH] [--config-root PATH] [--output PRIVATE_JSONL]\nExports frozen Planner requests using a read-only transaction; never calls a model.",
+      "Usage: node export_workload.mjs [--repo-root PATH] [--config-root PATH] [--output PRIVATE_JSONL]\nExports frozen Light requests using a read-only transaction; never calls a model.",
     );
   } else
     try {

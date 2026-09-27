@@ -468,9 +468,9 @@ function validateInspectionSurface(
       )
         throw new Error("Invalid inspection model request contract");
       const expectedTask =
-        component.mode === "planner"
-          ? "agent.turn.plan"
-          : "agent.message.compose";
+        component.mode === "light"
+          ? "agent.light.decide"
+          : "agent.heavy.respond";
       if (component.taskId !== expectedTask)
         throw new Error("Invalid inspection model request task mode");
       continue;

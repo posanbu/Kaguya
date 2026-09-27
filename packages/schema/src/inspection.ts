@@ -60,7 +60,7 @@ const surfaceComponentSchema = z.discriminatedUnion("type", [
     area: z.string().trim().min(1),
     viewId: z.string().trim().min(1),
     taskId: z.string().trim().min(1),
-    mode: z.enum(["planner", "composer"]),
+    mode: z.enum(["light", "heavy"]),
   }),
   z.object({
     id: z.string().trim().min(1),

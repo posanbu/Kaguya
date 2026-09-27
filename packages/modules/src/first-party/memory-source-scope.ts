@@ -1,7 +1,7 @@
 /** Validate recalled raw messages against the frozen turn target and event cutoff. */
 import type { DeepReadonly, InformationAtom } from "@kaguya/schema";
 import { inboundTextInformationKind } from "./information-kinds.js";
-import { sameMessageTarget } from "./message-composer/message-quote.js";
+import { sameMessageTarget } from "./heavy/message-quote.js";
 
 export function isMemorySourceInScope(
   atom: DeepReadonly<InformationAtom>,

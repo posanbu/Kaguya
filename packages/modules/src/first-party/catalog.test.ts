@@ -1,11 +1,11 @@
 /**
  * 测试夹具显式装配 QQ 表情模板，验证新增模块契约与既有流程兼容。
- * 测试显式注入统一文件模板，避免 Planner 或 Expression 绕过 default/local 选择。
+ * 测试显式注入统一文件模板，避免 Light 或 Expression 绕过 default/local 选择。
  * 功能概述：验证 first-party Catalog 默认配置及激活边界。
  * 主要职责：catalog fixture 注入宿主能力与共享 kind，测试八个默认模块、严格 modelTier 设置、
- * disabled 配置校验与旧 reply/outbound 配置拒绝；Profile 身份不再投影进 Heartflow 设置。
+ * disabled 配置校验与旧 reply/outbound 配置拒绝；Profile 身份不再投影进 Router 设置。
  * 检查视图只引用 Catalog 中的模块 Kind，或由 model-task 能力及请求 Surface 明确声明的 Runtime 请求 Kind。
- * 代码库关系：直接约束 catalog 工厂以及 message-composer 模块的公开 settings schema。
+ * 代码库关系：直接约束 catalog 工厂以及 heavy 模块的公开 settings schema。
  * 输入输出与副作用：纯内存组装，不连接模型或数据库；错误包含重新初始化说明。
  */
 import { loadFirstPartyPromptTemplates } from "../node/prompt-templates.js";
@@ -29,7 +29,7 @@ const testIdentity = {
   timeZone: "Asia/Shanghai",
 };
 const testMessageTemplates = {
-  ...testPrompts.messageComposer,
+  ...testPrompts.heavy,
   main: "{{scene}}{{history}}{{memory}}{{turn}}",
   history: "{{#each messages}}{{> history-inbound}}{{/each}}",
   historyInbound: "{{content}}",
@@ -67,8 +67,8 @@ function catalog() {
     deliveryFailedInformationKind: kind("core.delivery.failed") as never,
     executionExhaustedInformationKind,
     promptTemplates: testMessageTemplates,
-    plannerTemplate: testPrompts.planner,
-    plannerBootstrapPolicy: testPrompts.plannerBootstrapPolicy,
+    lightTemplate: testPrompts.light,
+    lightBootstrapPolicy: testPrompts.lightBootstrapPolicy,
     expressionTemplates: testPrompts.expression,
     qqExpressionTemplates: testPrompts.qqExpression,
     agentIdentity: testIdentity,
@@ -83,7 +83,7 @@ describe("first-party module configuration", () => {
         .flatMap((d) => [...d.manifest.produces, ...d.manifest.consumes])
         .map((k) => k.kind),
     );
-    expect(definitions).toHaveLength(11);
+    expect(definitions).toHaveLength(10);
     for (const { manifest } of definitions) {
       if (manifest.development?.status === "incomplete") {
         expect(manifest.inspection).toBeUndefined();
@@ -123,7 +123,7 @@ describe("first-party module configuration", () => {
   });
   it("materializes only raw Memory as a switchable feature", () => {
     const defaults = createFirstPartyModuleConfigDefaults("production");
-    expect(defaults).toHaveLength(11);
+    expect(defaults).toHaveLength(10);
     expect(defaults.every(({ version }) => version === 1)).toBe(true);
     for (const id of ["memory.raw", "adapter.napcat"])
       expect(
@@ -133,7 +133,7 @@ describe("first-party module configuration", () => {
       defaults.find((config) => config.definitionId === "adapter.web")?.enabled,
     ).toBe(true);
     expect(createFirstPartyModuleActivations(catalog(), defaults)).toHaveLength(
-      8,
+      7,
     );
   });
 
@@ -187,18 +187,22 @@ describe("first-party module configuration", () => {
     }
   });
 
-  it("uses only modelTier for the default message composer", () => {
+  it("fixes Heavy to the heavy tier with no module settings", () => {
     expect(createFirstPartyModuleConfigDefaults()[0]).toEqual({
       version: 1,
-      instanceId: "message-composer.default",
-      definitionId: "agent.message-composer",
+      instanceId: "heavy.default",
+      definitionId: "agent.heavy",
       enabled: true,
-      settings: { modelTier: "heavy" },
+      settings: {},
     });
   });
 
   it.each([
     { instanceId: "reply.default", definitionId: "demo.reply.llm" },
+    { instanceId: "heartflow.default", definitionId: "agent.heartflow.online" },
+    { instanceId: "message-composer.default", definitionId: "agent.message-composer" },
+    { instanceId: "attention-focus.default", definitionId: "agent.attention.focus" },
+    { settings: { modelTier: "heavy" } },
     {
       settings: {
         modelTier: "heavy",
@@ -225,14 +229,14 @@ describe("first-party module configuration", () => {
           { ...defaults[0]!, ...legacy, enabled: false },
           ...defaults.slice(1),
         ]),
-      ).toThrow(/Reinitialize module configuration/);
+      ).toThrow(/Reinitialize module configuration|Unknown module definition/);
     },
   );
 
   it("exposes only the message intent protocol across catalog definitions", () => {
     const definitions = catalog().definitions;
     expect(definitions.map(({ manifest }) => manifest.definitionId)).toContain(
-      "agent.message-composer",
+      "agent.heavy",
     );
     expect(
       definitions.map(({ manifest }) => manifest.definitionId),
@@ -240,7 +244,7 @@ describe("first-party module configuration", () => {
     const kinds = definitions
       .flatMap(({ manifest }) => [...manifest.consumes, ...manifest.produces])
       .map(({ kind }) => kind);
-    expect(kinds).toContain("agent.message.intent.requested");
+    expect(kinds).toContain("agent.router.message.intent.requested");
     expect(kinds).not.toContain("core.reply.requested");
   });
 
@@ -270,7 +274,7 @@ describe("first-party module configuration", () => {
     ).toBe(false);
   });
 
-  it("does not project Profile identity into Heartflow settings", () => {
+  it("does not project Profile identity into Router settings", () => {
     const customIdentity = {
       name: "Luna",
       aliases: ["月"],
@@ -281,11 +285,11 @@ describe("first-party module configuration", () => {
       "production",
       customIdentity,
     );
-    const heartflow = createFirstPartyModuleActivations(
+    const router = createFirstPartyModuleActivations(
       catalog(),
       defaults,
       customIdentity,
-    ).find(({ definitionId }) => definitionId === "agent.heartflow.online");
-    expect(heartflow?.settings).not.toHaveProperty("botNames");
+    ).find(({ definitionId }) => definitionId === "agent.router");
+    expect(router?.settings).not.toHaveProperty("botNames");
   });
 });

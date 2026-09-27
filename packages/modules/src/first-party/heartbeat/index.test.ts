@@ -117,13 +117,13 @@ describe("heartbeatModule", () => {
 
     expect(schedule).not.toHaveBeenCalled();
     expect(registerOnce).toHaveBeenCalledWith(
-      "agent.turn.candidate",
+      "agent.heartbeat.candidate",
       inbound.informationId,
       turnCandidateInformationKind,
       expect.objectContaining({
         openScope: {
           key: "qq:adapter:group:room",
-          terminalGroup: "agent.turn.terminal",
+          terminalGroup: "agent.router.turn.terminal",
         },
         payload: expect.objectContaining({
           triggerInformationId: inbound.informationId,
@@ -233,7 +233,7 @@ describe("heartbeatModule", () => {
     } as never);
 
     expect(registerOnce).toHaveBeenCalledWith(
-      "agent.turn.candidate",
+      "agent.heartbeat.candidate",
       deferred.informationId,
       turnCandidateInformationKind,
       expect.objectContaining({
@@ -360,7 +360,7 @@ describe("heartbeatModule", () => {
       registerOnce,
     } as never);
     expect(registerOnce).toHaveBeenCalledWith(
-      "agent.turn.candidate",
+      "agent.heartbeat.candidate",
       `${state.informationId}:qq:adapter:group:room`,
       turnCandidateInformationKind,
       expect.objectContaining({

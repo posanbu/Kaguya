@@ -27,7 +27,7 @@ GPT-Live 将持续对话与后台任务分开：前台可以在监听和说话�
 
 对 Kaguya 的参考点是：**互动存在感与深度工作可以按不同节奏推进，但必须共享可解释的上下文和生命周期。** 这与“输入/输出双轨”的实现哲学相符，也提醒我们在行动设计中明确规划期间的新 tick、结果回流和行动修订。
 
-边界：Kaguya 不依赖 GPT-Live，也不把其 delegation、session 或供应商事件协议作为自身领域模型。当前 Heartbeat、Heartflow 和 Planner 的存在不表示已经具备语音全双工能力。
+边界：Kaguya 不依赖 GPT-Live，也不把其 delegation、session 或供应商事件协议作为自身领域模型。当前 Heartbeat、Router 和 Light 的存在不表示已经具备语音全双工能力。
 
 ## MaiBot
 

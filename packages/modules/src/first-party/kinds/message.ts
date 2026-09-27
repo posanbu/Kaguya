@@ -124,7 +124,7 @@ export const inboundTextInformationKind = defineInformationKind({
 });
 
 export const messageIntentRequestedInformationKind = defineInformationKind({
-  kind: "agent.message.intent.requested",
+  kind: "agent.router.message.intent.requested",
   displayName: "消息生成意图",
   description:
     "回合规划选择发言后提出的生成请求，固定目标、回合来源和获准记忆；联想模块据此召回记忆，消息合成模块据此选择上下文并生成正文。",
@@ -133,14 +133,14 @@ export const messageIntentRequestedInformationKind = defineInformationKind({
     "agent:target-authorization": {
       required: false,
       multiple: false,
-      targetKinds: ["agent.message.target.authorized"],
+      targetKinds: ["agent.router.message.target.authorized"],
     },
     "core:caused-by": {
       required: true,
       multiple: false,
       targetKinds: [
-        "agent.turn.plan.completed",
-        "agent.message.target.authorized",
+        "agent.light.decision.completed",
+        "agent.router.message.target.authorized",
       ],
     },
     "core:context": {
@@ -152,19 +152,19 @@ export const messageIntentRequestedInformationKind = defineInformationKind({
       required: true,
       multiple: true,
       targetKinds: [
-        "agent.turn.context.completed",
-        "agent.message.target.authorized",
+        "agent.router.turn.context.completed",
+        "agent.router.message.target.authorized",
       ],
     },
     "agent:turn-claim": {
       required: true,
       multiple: false,
-      targetKinds: ["agent.turn.claimed"],
+      targetKinds: ["agent.router.turn.claimed"],
     },
     "agent:turn-candidate": {
       required: true,
       multiple: false,
-      targetKinds: ["agent.turn.candidate"],
+      targetKinds: ["agent.heartbeat.candidate"],
     },
   },
   log: {
@@ -282,7 +282,7 @@ export const assistantTextInformationKind = defineInformationKind({
     "core:caused-by": {
       required: true,
       multiple: false,
-      targetKinds: ["core.model.task.completed", "agent.message.prepared"],
+      targetKinds: ["core.model.task.completed", "agent.heavy.message.prepared"],
     },
     "core:context": {
       required: true,
@@ -324,7 +324,7 @@ export const deliveryRequestedInformationKind = defineInformationKind({
       multiple: false,
       targetKinds: [
         assistantTextInformationKind.kind,
-        "agent.message.content.confirmed",
+        "agent.heavy.message.content.confirmed",
       ],
     },
     "core:context": {
@@ -335,12 +335,12 @@ export const deliveryRequestedInformationKind = defineInformationKind({
     "agent:turn-claim": {
       required: false,
       multiple: false,
-      targetKinds: ["agent.turn.claimed"],
+      targetKinds: ["agent.router.turn.claimed"],
     },
     "agent:turn-candidate": {
       required: false,
       multiple: false,
-      targetKinds: ["agent.turn.candidate"],
+      targetKinds: ["agent.heartbeat.candidate"],
     },
   },
   log: {
@@ -358,9 +358,9 @@ export const deliveryRequestedInformationKind = defineInformationKind({
   },
 });
 
-/** 独立展示插件的可选草稿入口；未启用插件时 Composer 直接保存 assistant。 */
+/** 独立展示插件的可选草稿入口；未启用插件时 Heavy 直接保存 assistant。 */
 export const messageDraftInformationKind = defineInformationKind({
-  kind: "agent.message.draft",
+  kind: "agent.heavy.message.draft",
   displayName: "消息展示草稿",
   description: "正文生成后的可选展示处理，保持原消息目标、回合与生成来源。",
   payloadSchema: assistantTextInformationKind.payloadSchema,
@@ -379,9 +379,9 @@ export const messageDraftInformationKind = defineInformationKind({
   log: { enabled: false },
 });
 
-/** 可选展示插件的完成入口；Composer 在此之后登记正式 assistant 并执行既有授权。 */
+/** 可选展示插件的完成入口；Heavy 在此之后登记正式 assistant 并执行既有授权。 */
 export const messagePreparedInformationKind = defineInformationKind({
-  kind: "agent.message.prepared",
+  kind: "agent.heavy.message.prepared",
   displayName: "已处理的消息草稿",
   description: "展示插件完成后返回正文与可选素材，不代表已发送。",
   payloadSchema: assistantTextInformationKind.payloadSchema,

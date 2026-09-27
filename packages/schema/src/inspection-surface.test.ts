@@ -87,8 +87,8 @@ it("accepts model requests with bounded-scan continuation and an independent com
     type: "model-request-browser",
     area: "main",
     viewId: "model-requests",
-    taskId: "agent.turn.plan",
-    mode: "planner",
+    taskId: "agent.light.decide",
+    mode: "light",
   };
   expect(
     moduleInspectionSurfaceSchema.parse(surface(browser)).components[0]!.type,

@@ -69,7 +69,7 @@ describe("message composer evaluation", () => {
       vars: { kind: "message", persona: "MESSAGE_PERSONA", turn: { inputs } },
     });
     expect(result.metadata.rendererSource).toBe(
-      "packages/modules/src/first-party/message-composer/message-prompt.ts",
+      "packages/modules/src/first-party/heavy/message-prompt.ts",
     );
     expect(result.metadata.kind).toBe("message");
     for (const input of inputs) expect(result.output).toContain(input);

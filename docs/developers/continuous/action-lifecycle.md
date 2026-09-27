@@ -15,13 +15,13 @@ Decision 固定所用 observation、Memory revision、策略版本和判断原�
 
 ## 三种自然互动结果
 
-**Message** — 判断决定生成消息意图。Composer 仅在此路径生成正文；生成后还要经过发送前有效性和授权检查。Decision 成功不意味着已经投递，外部结果单独记录。后续支持工具/设备时使用能力专属 intent，不强塞进 message 正文或伪造投递记录。
+**Message** — 判断决定生成消息意图。Heavy 仅在此路径生成正文；生成后还要经过发送前有效性和授权检查。Decision 成功不意味着已经投递，外部结果单独记录。后续支持工具/设备时使用能力专属 intent，不强塞进 message 正文或伪造投递记录。
 
 **Wait** — 已完成本次判断，主动等待更多证据、依赖结果或指定时间。记录原因、等待范围、到期条件、预算及稳定 schedule 身份。满足条件后创建后续判断并引用原 wait，超时也产生可解释结果。观察进度保留，等待不能靠回滚“已读”实现；重复恢复不产生多个有效 timer 或重复行动。
 
 **Silent** — 当前判断决定不采取外部行动。记录原因及证据，不生成隐式回复；后续新 tick 仍可唤醒。它不阻止独立 Memory 形成，也不意味着消息未被读取。
 
-需要区分自然选择和降级路径。当前 Planner 在模型不可用时可能输出带 `planner-unavailable` 原因的 silent；检视应显示为降级静默并关联模型失败，不能以“无动作是正常结果”为理由隐藏失败。Wait budget 耗尽同样保留原因。
+需要区分自然选择和降级路径。当前 Light 在模型不可用时可能输出带 `light-unavailable` 原因的 silent；检视应显示为降级静默并关联模型失败，不能以“无动作是正常结果”为理由隐藏失败。Wait budget 耗尽同样保留原因。
 
 ## 新信息在什么阶段生效
 
@@ -29,7 +29,7 @@ Decision 固定所用 observation、Memory revision、策略版本和判断原�
 
 **规划中** — 若新证据使旧问题或目标失效，记录旧规划被替代，由后续 observation 重新判断。旧模型调用可以尝试取消，但即便仍返回，其结果也不能再次派发已失效 intent。无关信息允许旧规划继续，后续判断保留已在处理的任务状态，避免重复行动。
 
-**排队中或正文生成中** — 副作用开始前校验 intent 当前版本、替代/取消状态、依赖和权限。取消与 dispatch 竞争时，以持久状态的原子比较决定胜者；worker 持有租约还不够，真正派发时仍需验证有效执行身份。若取消胜出，迟到 Composer/Planner 输出只留作诊断，不产生发送请求。
+**排队中或正文生成中** — 副作用开始前校验 intent 当前版本、替代/取消状态、依赖和权限。取消与 dispatch 竞争时，以持久状态的原子比较决定胜者；worker 持有租约还不够，真正派发时仍需验证有效执行身份。若取消胜出，迟到 Heavy/Light 输出只留作诊断，不产生发送请求。
 
 **执行中** — 根据能力处理。可取消任务发出取消请求，收到执行方确认后才记录 cancelled；已部分执行则记录已发生部分和剩余部分状态。不可取消或已完成的行动保留事实，通过新判断决定是否补充或补偿。补偿是有来源的新 action，也需要授权，不能修改历史结果假装原行动没发生。
 
@@ -39,9 +39,9 @@ Decision 固定所用 observation、Memory revision、策略版本和判断原�
 
 ## 当前协议映射与迁移
 
-当前 [`Heartflow`](https://github.com/posanbu/Kaguya/blob/ff5544603f528601b7a8930cf0396199691de4c2/packages/modules/src/first-party/heartflow/index.ts)已消费冻结 turn context，持久化 Planner decision、派发 message/wait/silent 并处理 delivery terminal；已有 interrupted、superseded 等终态和持久任务可以作为起点。存在这些 Kind 不代表所有工具、设备已经遵守上述竞态与取消契约。
+当前 [`Router`](https://github.com/posanbu/Kaguya/blob/ff5544603f528601b7a8930cf0396199691de4c2/packages/modules/src/first-party/router/index.ts)已消费冻结 turn context，持久化 Light decision、派发 message/wait/silent 并处理 delivery terminal；已有 interrupted、superseded 等终态和持久任务可以作为起点。存在这些 Kind 不代表所有工具、设备已经遵守上述竞态与取消契约。
 
-迁移先为现有 decision、message intent、model task 和 delivery 的关联补齐版本与检查边界，并在兼容投影中显示不同进度。保留 `agent.turn.*` 名称和旧 payload 读取；新能力通过独立版本化契约接入。历史 `turn.completed` 只按旧协议解释，不扩展成“所有外部行动和记忆均完成”。
+迁移先为现有 decision、message intent、model task 和 delivery 的关联补齐版本与检查边界，并在兼容投影中显示不同进度。保留 `agent.router.turn.*` 名称和旧 payload 读取；新能力通过独立版本化契约接入。历史 `turn.completed` 只按旧协议解释，不扩展成“所有外部行动和记忆均完成”。
 
 初期先验证消息和一个可控工具的执行边界；TTS/设备按各自后续任务接入。本文的 live/语音时序是验收要求，不表示当前 Kaguya 已具备全双工语音能力，也不把 TTS 合成成功当成播放成功。
 
@@ -51,7 +51,7 @@ O1 包含 A 的提问、C 的插话和 B 的「已经戒了」，D1 决定发送
 
 如果旧消息已经成功发送，O2 保留这一事实，D2 可选择补充更正；如果发送请求已出但结果未知，先记录 unknown 并核对，不直接重发。重启后 D1 仍只能有一个有效派发身份，D2 也不能根据缺少终态推断原消息一定未发送。
 
-验收覆盖新信息分别落在规划、Composer、排队、dispatch 竞争点及回执丢失阶段，并测试无关插话不会无条件取消有效任务。每一步检查来源、版本、持久状态及真实模拟执行次数，不仅断言生成了新回复。
+验收覆盖新信息分别落在规划、Heavy、排队、dispatch 竞争点及回执丢失阶段，并测试无关插话不会无条件取消有效任务。每一步检查来源、版本、持久状态及真实模拟执行次数，不仅断言生成了新回复。
 
 ## Live / 语音时序
 

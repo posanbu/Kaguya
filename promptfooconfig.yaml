@@ -75,7 +75,7 @@ tests:
 
   - description: Planner 读取完整冻结 turn 并严格限制动作字段
     vars:
-      kind: planner
+      kind: light
       persona: PLANNER_PERSONA
       turn:
         inputs:

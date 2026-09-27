@@ -1,10 +1,10 @@
 /**
  * 功能概述：独立 QQ 表情插件，从真人上下文推断收藏表情的用法，并对草稿进行低频装饰。
  * collectionSelector 隔离群/适配器并限量选择上下文；收藏素材与学习结果独立持久化。
- * draftSelector 仅允许当前会话及 Planner 明确幽默/调侃意图，候选和来源先冻结再调用模型。
+ * draftSelector 仅允许当前会话及 Light 明确幽默/调侃意图，候选和来源先冻结再调用模型。
  * finalSelector 恢复原草稿、冻结来源及近期输出；串行额度提交防止并发草稿连发表情。
  * 所有模型失败、未知语义、跨群请求和额度不足均退回原正文；不主动发言、不改变投递授权。
- * Composer 只在显式启用插件时产生草稿，插件保存 prepared 后仍由 Composer 登记 assistant 并沿原链路发送。
+ * Heavy 只在显式启用插件时产生草稿，插件保存 prepared 后仍由 Heavy 登记 assistant 并沿原链路发送。
  */
 import { createHash } from "node:crypto";
 import {
@@ -30,7 +30,7 @@ import {
   messagePreparedInformationKind,
   messageDraftProcessorReady,
 } from "../kinds/message.js";
-import type { CreateMessageComposerModuleOptions } from "../message-composer/index.js";
+import type { CreateHeavyModuleOptions } from "../heavy/index.js";
 import { createPromptTemplateRenderer } from "../../prompt-template.js";
 import { qqExpressionTemplateDeclarations } from "../../prompt-declarations.js";
 import {
@@ -228,7 +228,7 @@ const finalSelector = defineInformationSelector({
   },
 });
 export function createQqExpressionModule(
-  options: Pick<CreateMessageComposerModuleOptions, "modelTaskCapability"> & {
+  options: Pick<CreateHeavyModuleOptions, "modelTaskCapability"> & {
     templates: { learn: string; select: string };
     cacheSticker?: (url: string) => Promise<string | undefined>;
   },
@@ -602,7 +602,7 @@ export function createQqExpressionModule(
                           outputSchema: selectionSchema,
                           allowedTiers: ["light"],
                         },
-                        // 可选语义任务以真实入站为因果来源，失败不能沿 Composer 链结束回复。
+                        // 可选语义任务以真实入站为因果来源，失败不能沿 Heavy 链结束回复。
                         // 冻结草稿和选择请求仍列在 contextAtoms 中，保留完整审计与重放指纹。
                         sourceInformationId: semanticSource!.informationId,
                         contextInformationId: semanticSource!.references.find(
@@ -658,7 +658,7 @@ export function createQqExpressionModule(
                         text += ` ${choice.emoji}`;
                     }
                   } catch {
-                    /* 选用失败仅回退正文，发送授权仍由 Composer 处理。 */
+                    /* 选用失败仅回退正文，发送授权仍由 Heavy 处理。 */
                   }
                 }
                 await context.registerOnce(

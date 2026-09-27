@@ -79,9 +79,9 @@ flowchart LR
 
 **Attention Arousal** — 在读取正文前决定 `observe | defer`。这证明被唤醒与完成观察是两个阶段。
 
-**Heartflow turn context** — 在 `observe` 后按上下水位读取多条未读并冻结完整输入，接近当前实现中的 observation snapshot。
+**Router turn context** — 在 `observe` 后按上下水位读取多条未读并冻结完整输入，接近当前实现中的 observation snapshot。
 
-**Planner 与 Composer** — Planner 面向冻结输入选择 `message | wait | silent`，Composer 只为已经获准的 message 编写正文。收到 Information 与生成消息之间没有逐条直连旁路。
+**Light 与 Heavy** — Light 面向冻结输入选择 `message | wait | silent`，Heavy 只为已经获准的 message 编写正文。收到 Information 与生成消息之间没有逐条直连旁路。
 
 **Memory writeback** — 逐条保存原始 inbound，是证据层行为，不应仅因处理单位为单条消息而被移除。
 
@@ -97,6 +97,6 @@ flowchart LR
 
 ## 术语迁移边界
 
-本轮只调整文档语言，不重命名 `agent.turn.*` Information Kind、Heartbeat、Heartflow、数据库结构或模块配置。旧术语继续精确描述当前接口；新的项目讨论不再用 `session` 或单条“回合”暗示请求—回复模型。
+当前实现使用 `agent.heartbeat.candidate`、`agent.router.turn.*` 与 `agent.light.decision.completed` 记录观察和决策生命周期。Router 合并了原回合编排与 Focus 租约职责；本页的 tick、observation 和 action 仍是领域设计语言，不额外承诺一套新的统一并发协议。
 
 如果后续 Issue 决定调整协议名称，应单独说明兼容、迁移、历史数据和检查界面影响，不能仅做字符串替换。

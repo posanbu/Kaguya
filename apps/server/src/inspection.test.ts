@@ -324,9 +324,9 @@ describe("developer inspection", () => {
     expect(modules.length).toBeGreaterThan(0);
     const composer = modules.find(
       (m: { definitionId: string }) =>
-        m.definitionId === "agent.message-composer",
+        m.definitionId === "agent.heavy",
     );
-    expect(composer.bindings[0].instanceId).toBe("message-composer.default");
+    expect(composer.bindings[0].instanceId).toBe("heavy.default");
     expect(composer.tags).toEqual([]);
     expect(
       modules.find(

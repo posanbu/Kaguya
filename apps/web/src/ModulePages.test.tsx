@@ -23,7 +23,7 @@ import {
 } from "./ModulePages.js";
 
 const module: InspectionModule = {
-  definitionId: "agent.message-composer",
+  definitionId: "agent.heavy",
   tags: [],
   displayName: "消息合成",
   summary: "根据冻结上下文生成消息。",
@@ -33,7 +33,7 @@ const module: InspectionModule = {
   settingsSchemaFingerprint: "fingerprint",
   consumes: [
     {
-      kind: "agent.message.intent.requested",
+      kind: "agent.router.message.intent.requested",
       displayName: "消息生成意图",
       description: "回合规划决定发言后产生，供消息合成使用。",
     },
@@ -51,7 +51,7 @@ const module: InspectionModule = {
       rendererId: "prompt.renderer",
       displayName: "上下文渲染",
       description: "将选定输入转换为提示词。",
-      kinds: ["agent.message.intent.requested"],
+      kinds: ["agent.router.message.intent.requested"],
     },
   ],
   requires: [],

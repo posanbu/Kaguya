@@ -100,11 +100,11 @@ export async function runDemo(
     const receipt = await runtime.submit(inbound);
     const deadline = Date.now() + 10_000;
     const terminalKinds = new Set([
-      "agent.turn.completed",
-      "agent.turn.waiting",
-      "agent.turn.silent",
-      "agent.turn.failed",
-      "agent.turn.superseded",
+      "agent.router.turn.completed",
+      "agent.router.turn.waiting",
+      "agent.router.turn.silent",
+      "agent.router.turn.failed",
+      "agent.router.turn.superseded",
     ]);
     while (true) {
       const health = await options.database.information.reliable.health();

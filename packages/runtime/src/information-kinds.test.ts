@@ -76,7 +76,7 @@ describe("runtime information kinds", () => {
       },
     };
     expect(messageIntentRequestedInformationKind.kind).toBe(
-      "agent.message.intent.requested",
+      "agent.router.message.intent.requested",
     );
     expect(messageIntentRequestedInformationKind.payloadSchema).toBe(
       messageIntentRequestedInformationPayloadSchema,
@@ -273,9 +273,9 @@ describe("runtime information kinds", () => {
 
   it("aggregates every owned definition exactly once", () => {
     expect(builtInInformationKinds.map(({ kind }) => kind)).toEqual([
-      "agent.conversation.context.frozen",
-      "agent.message.target.authorized",
-      "agent.message.content.confirmed",
+      "agent.router.conversation.context.frozen",
+      "agent.router.message.target.authorized",
+      "agent.heavy.message.content.confirmed",
       "core.runtime.context",
       "consumer.failed",
       "core.message.inbound.text",

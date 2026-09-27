@@ -461,8 +461,8 @@ export function PersonProfileEditor({
           <section className="person-profile-preview">
             <h5>重启后 prompt 区块预览</h5>
             <p>
-              展示当前草稿经长度限制后的内容；保存并重启后用于 Planner 和
-              Composer。
+              展示当前草稿经长度限制后的内容；保存并重启后用于 Light 和
+              Heavy。
             </p>
             <p>
               重启后名称：{previewFor === draftKey ? previewName : "正在更新…"}

@@ -1,5 +1,5 @@
 /**
- * 功能概述：用虚构的启动、Planner 输入输出、回复、记忆、表达学习和失败记录预览控制台框。
+ * 功能概述：用虚构的启动、Light 输入输出、回复、记忆、表达学习和失败记录预览控制台框。
  * 主要职责：沿 createLogger/createModuleLogger 的真实输出路径写入与 kind 投影同名的字段；
  * previewInformationContent 生成受限正文，historyDigest 为虚构变量生成摘要，--json 对照机器格式。
  * 代码库关系：根 pnpm logs:preview 先构建 logger，再执行本文件；不导入业务服务、不启动 Server 或连接数据库。
@@ -31,8 +31,8 @@ createModuleLogger(root, "runtime:modules").info(
     event: "modules.assembled",
     moduleCount: 2,
     order: [
-      { definitionId: "agent.heartflow.online", instanceId: "heartflow-demo" },
-      { definitionId: "agent.message-composer", instanceId: "composer-demo" },
+      { definitionId: "agent.router", instanceId: "router-demo" },
+      { definitionId: "agent.heavy", instanceId: "heavy-demo" },
     ],
   },
   "Information modules assembled",
@@ -78,7 +78,7 @@ information.debug({
   status: "requested",
   detail: true,
   sensitivity: "content",
-  taskId: "agent.turn.plan",
+  taskId: "agent.light.decide",
   taskVersion: "1",
   promptFull: [
     "你是辉夜的回合规划器。请根据当前对话决定回复、等待或保持安静。",
@@ -102,11 +102,11 @@ information.debug({
   ],
 });
 information.info({
-  event: "turn.plan",
+  event: "light.decision",
   action: "message",
   reason: "respond",
   informationId: "planout1-demo",
-  kind: "agent.turn.plan.completed",
+  kind: "agent.light.decision.completed",
   references: [{ relation: "core:caused-by", informationId: "planmdl1-demo" }],
 });
 
@@ -186,7 +186,7 @@ information.debug({
   status: "requested",
   detail: true,
   sensitivity: "content",
-  taskId: "agent.message.compose",
+  taskId: "agent.heavy.respond",
   taskVersion: "1",
   promptFull: `你是辉夜，请自然回应邀请，并确认自己负责的物品。\n${history}`,
   promptVariables: [
@@ -205,7 +205,7 @@ information.debug({
 information.info({
   event: "model.task.lifecycle",
   status: "completed",
-  taskId: "agent.message.compose",
+  taskId: "agent.heavy.respond",
   providerId: "demo",
   modelId: "demo-model",
   durationMs: 1248,
@@ -215,7 +215,7 @@ information.info({
   ...previewInformationContent(
     "好呀，我来带望远镜！🔭\n明天先看天气，再确认集合时间；如果云太多，就一起整理上次的观测笔记。",
   ),
-  originatingModuleInstanceId: "composer-demo",
+  originatingModuleInstanceId: "heavy-demo",
   informationId: "reply001-demo",
   kind: "core.message.assistant.text",
   references: [{ relation: "core:caused-by", informationId: "model001-demo" }],
@@ -279,7 +279,7 @@ adapter.warn(
 information.error({
   event: "model.task.lifecycle",
   status: "failed",
-  taskId: "agent.turn.plan",
+  taskId: "agent.light.decide",
   errorKind: "retryable",
   failureStage: "structured-output-parse",
   structuredOutputFailure: "invalid-json",

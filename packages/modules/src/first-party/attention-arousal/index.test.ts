@@ -108,7 +108,7 @@ describe("attention observation policy", () => {
         ({ selectorId }) => selectorId,
       ),
     ).toEqual([
-      "agent.attention.focus.state",
+      "agent.router.focus.state",
       attentionArousalStateSelector.selectorId,
       attentionArousalTimerSelector.selectorId,
     ]);

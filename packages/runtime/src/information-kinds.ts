@@ -1,7 +1,7 @@
 /**
  * conversationContextInformationKind 注册宿主冻结的背景与目标解析投影，内容日志仅输出目录状态。
  * 出站策略拒绝使用不含 target ID 的失败分支；消费者通过请求引用关联 turn，日志只投影安全字段。
- * Planner 的普通请求日志仅投影任务元数据，不包含 Prompt 预览；显式 content detail 保留受控诊断。
+ * Light 的普通请求日志仅投影任务元数据，不包含 Prompt 预览；显式 content detail 保留受控诊断。
  * 功能概述：定义 Runtime 自有的 context、通用 Model Task 生命周期和投递结果 kind，并聚合内建 DAG。
  * Model Task：四个 modelTask*InformationKind 保存任务版本、选择策略、模型、激活来源与 Prompt
  * provenance；终态使用同一 requested 的 status-of，输出仅为 JSON，具体 schema 由调用方拥有。
@@ -135,7 +135,7 @@ export const deliveryDeliveredInformationKind = defineInformationKind({
   kind: "core.delivery.delivered",
   displayName: "平台投递成功",
   description:
-    "适配器确认投递完成后记录发送结果；Heartflow 据此闭合回合，历史选择器只将成功投递的助手消息纳入历史。",
+    "适配器确认投递完成后记录发送结果；Router 据此闭合回合，历史选择器只将成功投递的助手消息纳入历史。",
   payloadSchema: z.union([
     z
       .object({
@@ -183,7 +183,7 @@ export const deliveryFailedInformationKind = defineInformationKind({
   kind: "core.delivery.failed",
   displayName: "平台投递失败",
   description:
-    "平台发送未完成时记录安全错误和目标信息；Heartflow 与诊断据此结束失败路径，不把已生成正文当作已送达。",
+    "平台发送未完成时记录安全错误和目标信息；Router 与诊断据此结束失败路径，不把已生成正文当作已送达。",
   payloadSchema: z.union([
     z
       .object({
@@ -425,7 +425,7 @@ export const modelTaskRequestedInformationKind = defineInformationKind({
       outputMode: payload.outputMode,
       promptCharacters: Array.from(payload.prompt.text).length,
       promptVariableCount: payload.prompt.variables.length,
-      ...(payload.taskId === "agent.turn.plan"
+      ...(payload.taskId === "agent.light.decide"
         ? {}
         : promptPreview(payload.prompt.text)),
     }),

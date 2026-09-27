@@ -26,4 +26,4 @@ request/terminal 可通过 Information Inspection 查看。普通日志只包含
 
 ## 典型场景
 
-工作区开启原始记忆后，即使没有 Heartflow、Heartbeat 或 Composer，也可以保存消息。
+工作区开启原始记忆后，即使没有 Router、Heartbeat 或 Heavy，也可以保存消息。

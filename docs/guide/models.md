@@ -29,9 +29,9 @@ description: 模型服务地址、API Key、轻重模型、思考强度和超时
 
 **推荐响应时间（建议耗时）** — 对模型延迟的期望，单位为毫秒；表单初始显示 Light `2000`、Heavy `5000`。它用于调度和耗时记录，超过该值不会中止模型请求。不要用它代替超时设置。
 
-## 让回复使用 Light 模型
+## Light 与 Heavy 档位
 
-在“检查 → 模块”找到消息编写模块 `message-composer.default`，把 `modelTier` 从默认 `heavy` 改成 `light`，保存后显式应用。模型名称仍在 Profile 中配置。
+Light 固定使用 Profile 的 `light` 档位，Heavy 固定使用 `heavy` 档位；两个档位可以指向同一模型。模型名称在 Profile 中配置，模块设置不提供 `modelTier` 切换。
 
 ## 多供应商与高级参数
 

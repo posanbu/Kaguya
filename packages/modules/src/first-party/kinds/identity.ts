@@ -257,7 +257,7 @@ export const personContextCompletedInformationKind = defineInformationKind({
   kind: "memory.identity.person.context.completed",
   displayName: "消息身份上下文就绪",
   description:
-    "单条入站消息的身份处理结束后登记状态和实体引用；释放 Heartflow 身份屏障并触发独立原始记忆写回。",
+    "单条入站消息的身份处理结束后登记状态和实体引用；释放 Router 身份屏障并触发独立原始记忆写回。",
   payloadSchema: identityTerminalSchema,
   references: {
     "core:caused-by": { required: true, multiple: false },

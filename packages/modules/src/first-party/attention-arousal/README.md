@@ -6,7 +6,7 @@ Arousal 在读取正文前维护机器人唤醒状态并决定是否观察。它
 
 ## 消费和产生
 
-消费不含正文的 `agent.turn.candidate`、全局消息活动、one-shot due 和 Focus 租约投影；产生 `agent.attention.arousal.state.recorded` 与唯一的 `agent.attention.arousal.completed: observe | defer`。
+消费不含正文的 `agent.heartbeat.candidate`、全局消息活动、one-shot due 和 Focus 租约投影；产生 `agent.attention.arousal.state.recorded` 与唯一的 `agent.attention.arousal.completed: observe | defer`。
 
 ## 数据流与边界
 

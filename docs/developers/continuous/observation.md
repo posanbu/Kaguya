@@ -35,7 +35,7 @@ description: scene、tick、冻结快照与可恢复观察进度的目标契约�
 
 成功状态及其进度更新应在同一原子提交中生效，或由唯一完成事实驱动可幂等重建的进度投影。一个 observation 只能有一个成功提交；并发提交通过预期进度版本校验，失败者重新读取状态，不覆盖胜者。
 
-完成 observation 证明快照按契约完整可用，不证明事实推断正确，也不要求已调用 Planner。Planner 失败不会撤销已成功的读取；后续判断可以引用旧 observation 加新 observation，无需通过伪造“未读”重跑全部输入。
+完成 observation 证明快照按契约完整可用，不证明事实推断正确，也不要求已调用 Light。Light 失败不会撤销已成功的读取；后续判断可以引用旧 observation 加新 observation，无需通过伪造“未读”重跑全部输入。
 
 ## 合并、延期与恢复
 
@@ -49,11 +49,11 @@ Arousal 的 `defer` 记录下一次检查条件和到期唤醒，不能确认正
 
 ## 当前实现映射与缺口
 
-[`Heartbeat scopeOf`](https://github.com/posanbu/Kaguya/blob/ff5544603f528601b7a8930cf0396199691de4c2/packages/modules/src/first-party/heartbeat/observation.ts)按入口地址构造 scope，candidate 携带未读边界；Selector 从 `agent.turn.context.completed` 读取观察水位。Attention Arousal 在正文读取前选择 observe/defer；Heartflow 持久化完整输入和 `observedThroughInformationId`，这些是可保留的基础。
+[`Heartbeat scopeOf`](https://github.com/posanbu/Kaguya/blob/ff5544603f528601b7a8930cf0396199691de4c2/packages/modules/src/first-party/heartbeat/observation.ts)按入口地址构造 scope，candidate 携带未读边界；Selector 从 `agent.router.turn.context.completed` 读取观察水位。Attention Arousal 在正文读取前选择 observe/defer；Router 持久化完整输入和 `observedThroughInformationId`，这些是可保留的基础。
 
-[`Memory cognition`](https://github.com/posanbu/Kaguya/blob/ff5544603f528601b7a8930cf0396199691de4c2/packages/modules/src/first-party/memory-cognition/index.ts)使用独立 `scene.v2` key；其窗口选择规则也不同于 Heartbeat。实现应列出群聊、私聊、Web conversation 等映射样例并验证隔离，不能直接把两个 key 视为同义词。已有 `agent.turn.*` 的 terminal 继续描述当前协议，不自动解释为本设计中所有消费者的成功观察。
+[`Memory cognition`](https://github.com/posanbu/Kaguya/blob/ff5544603f528601b7a8930cf0396199691de4c2/packages/modules/src/first-party/memory-cognition/index.ts)使用独立 `scene.v2` key；其窗口选择规则也不同于 Heartbeat。实现应列出群聊、私聊、Web conversation 等映射样例并验证隔离，不能直接把两个 key 视为同义词。已有 `agent.router.turn.*` 的 terminal 继续描述当前协议，不自动解释为本设计中所有消费者的成功观察。
 
-Heartflow 的候选新旧比较按账本注册顺序进行：同时间戳下 UUID 字典序较小的新候选，以及发生时间较早但后来接收的候选，都不能被已经完成的旧候选反复替代。这修复了现有前台链的排序边界，仍不等于已实现各消费者独立的 observation 协议。
+Router 的候选新旧比较按账本注册顺序进行：同时间戳下 UUID 字典序较小的新候选，以及发生时间较早但后来接收的候选，都不能被已经完成的旧候选反复替代。这修复了现有前台链的排序边界，仍不等于已实现各消费者独立的 observation 协议。
 
 后续工作包括统一映射契约、持久消费范围、快照版本及进度投影；协议新增字段使用版本化读取，旧记录通过明确兼容路径查询。旧记录只能证明其原本保存的范围，不能为其补造缺失的完整性证明。
 
@@ -67,11 +67,11 @@ Heartflow 的候选新旧比较按账本注册顺序进行：同时间戳下 UUI
 
 旧 Heartbeat key 用冒号连接地址，不能假定该字符串可以无歧义地反向拆分。例如 `(platform=a:b, adapterId=c)` 和 `(platform=a, adapterId=b:c)` 可能生成相同字符串。迁移以来源 atom 中的完整地址及已有权限契约为证据；相同旧 key 下出现不同地址时登记冲突并分开映射，缺少地址的旧记录保留为未解析状态，不自动扩大可读范围。
 
-现有 durable subscription 能恢复其已登记交付，但新增订阅不会自动获得此前全部历史。启用独立 observation 消费者时，需要持久登记扫描起点、读取契约与回填任务；无法证明旧 context 完整覆盖的区间保持待处理，不能直接把最新 `agent.turn.context.completed` 当作所有新消费者的起始成功水位。
+现有 durable subscription 能恢复其已登记交付，但新增订阅不会自动获得此前全部历史。启用独立 observation 消费者时，需要持久登记扫描起点、读取契约与回填任务；无法证明旧 context 完整覆盖的区间保持待处理，不能直接把最新 `agent.router.turn.context.completed` 当作所有新消费者的起始成功水位。
 
 ## 可验证时序与未采用方案
 
-在 scene G 接收 a、b，冻结 O1 覆盖 a–b；规划期间接收 c，c 属于后续 O2。O1 成功、Planner 失败后重启，前台观察进度仍止于 b，待处理 c 被恢复；重试 Planner 引用原 O1。若 O1 读取失败，即使 O2 已完成，也不能跳过 a–b 的缺口。若 c 的发生时间早于 a，接收顺序仍确保 c 被发现。
+在 scene G 接收 a、b，冻结 O1 覆盖 a–b；规划期间接收 c，c 属于后续 O2。O1 成功、Light 失败后重启，前台观察进度仍止于 b，待处理 c 被恢复；重试 Light 引用原 O1。若 O1 读取失败，即使 O2 已完成，也不能跳过 a–b 的缺口。若 c 的发生时间早于 a，接收顺序仍确保 c 被发现。
 
 验收还应覆盖重复 tick、超过单页上限、相同发生时间、defer 后无新消息、映射冲突和两个 worker 并发提交。断言观察范围、成功事实和水位，不以等待固定时长代替完成条件。
 

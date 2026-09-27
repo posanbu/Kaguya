@@ -55,7 +55,7 @@ const module = {
               id: "candidate",
               title: "观察机会",
               viewId: "gates",
-              kinds: ["agent.turn.candidate"],
+              kinds: ["agent.heartbeat.candidate"],
               reference: "core:status-of",
               presentation: "field-grid",
               fields: [{ path: "unreadCount", label: "未读数量" }],

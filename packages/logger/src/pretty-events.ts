@@ -1,7 +1,7 @@
 /**
  * 功能概述：为需要成组阅读的模块输入、领域输出与记忆日志选择终端面板主题。
  * 主要职责：prettyPanelForLog 仅匹配实际已有的 event/taskId，返回标题、边框颜色和正文标签；
- * modelTaskName 区分 Planner、回复生成、人物记忆及表达学习，未知任务保留原 taskId。
+ * modelTaskName 区分 Light、回复生成、人物记忆及表达学习，未知任务保留原 taskId。
  * 代码库关系：pretty.ts 在 Pino 完成脱敏后查询本表；事件对应 Runtime 模型请求及 modules
  * 的 log.project，面板不查账本、不组合不同请求、不凭空补出模型返回或召回原文。
  * 输入输出与副作用：纯展示元数据；普通生命周期保持日志行，JSON 与日志级别不受影响。
@@ -14,8 +14,8 @@ export interface PrettyEventPanel {
 }
 
 const PANELS: Readonly<Record<string, PrettyEventPanel>> = {
-  "turn.plan": {
-    title: "Planner · 决策输出",
+  "light.decision": {
+    title: "Light · 决策输出",
     color: 32,
     fieldsTitle: "决策",
     contentTitle: "决策依据",
@@ -124,8 +124,8 @@ export function prettyPanelForLog(
 
 function modelTaskName(taskId: unknown): string {
   const names: Readonly<Record<string, string>> = {
-    "agent.turn.plan": "Planner",
-    "agent.message.compose": "回复生成",
+    "agent.light.decide": "Light",
+    "agent.heavy.respond": "回复生成",
     "core.person.fact.extract": "人物记忆",
     "memory.expression.learn": "表达学习",
     "memory.expression.select": "表达选择",

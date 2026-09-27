@@ -104,7 +104,7 @@ export async function seedArousalPreview(database: KaguyaDatabase) {
     turnCandidateInformationKind.kind,
     attentionArousalStateRecordedInformationKind.kind,
     attentionArousalCompletedInformationKind.kind,
-    "agent.attention.focus.opened",
+    "agent.router.focus.opened",
   ]);
   const append = async (
     informationId: string,
@@ -212,7 +212,7 @@ export async function seedArousalPreview(database: KaguyaDatabase) {
       focusExpiresAt = new Date(Date.parse(occurredAt) + 90_000).toISOString();
       await append(
         focusInformationId,
-        "agent.attention.focus.opened",
+        "agent.router.focus.opened",
         {
           scopeKey,
           generation: id,

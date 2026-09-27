@@ -17,9 +17,9 @@ description: 在网页中调整模块参数、启用状态和 Prompt 模板。
 
 ## 常用模块
 
-**消息编写 `message-composer.default`** — 生成回复正文。`modelTier` 默认 `heavy`，也可以选择 `light`，实际模型在 Profile 中指定。
+**Heavy `heavy.default`** — 生成回复正文，固定使用 Profile 的 `heavy` 档位。
 
-**对话参与 `heartflow.default`** — 管理群聊、私聊频率及等待或静默的判断。
+**Router `router.default`** — 认领并冻结观察后的输入，调用内部 Light 决定发送、等待或静默，并管理 Focus 租约。Light 固定使用 Profile 的 `light` 档位；两个档位可以指向同一实际模型。
 
 **注意力 `attention-arousal.default`** — 控制 @、叫名和持续关注相关设置。
 
@@ -29,7 +29,7 @@ description: 在网页中调整模块参数、启用状态和 Prompt 模板。
 
 **表达学习 `memory.expression.default`** — 从聊天中学习并选择表达习惯。`batchSize` 默认 `8`，范围 `2–24`，控制一次学习所需的消息批次大小；调大通常需要积累更多消息。
 
-**身份 `memory.identity.default`、关注 `attention-focus.default`** — 默认无可调 settings，通常保留启用。`memory.native` 与 `memory.mem0` 在目录中标记“未完成”，没有实例或开关。
+**身份 `memory.identity.default`** — 默认无可调 settings，通常保留启用。Focus 是 Router 的内部职责，没有独立实例；`memory.native` 与 `memory.mem0` 在目录中标记“未完成”，没有实例或开关。
 
 ## 启用与停用
 

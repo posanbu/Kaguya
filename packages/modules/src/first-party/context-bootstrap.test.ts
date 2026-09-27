@@ -1,6 +1,6 @@
 /**
  * 功能概述：验证冷启动状态来自冻结且可见的证据，而非身份建档、人设或全库推断。
- * 主要职责：通过真实 Planner/Composer 编译器覆盖空上下文、历史与记忆渐进补全、陌生参与者、
+ * 主要职责：通过真实 Light/Heavy 编译器覆盖空上下文、历史与记忆渐进补全、陌生参与者、
  * 裁剪和冻结截止边界；模板覆盖用例确认角色化措辞仍由声明的 default/local 契约控制。
  * 代码库关系：复用消息 fixture、Node 默认模板与 contextBootstrapVariable，不调用外部模型。
  * 输入输出与副作用：仅内存原子与纯函数断言，无数据库、时钟等待或网络副作用。
@@ -8,14 +8,14 @@
 import { describe, expect, it } from "vitest";
 import { loadFirstPartyPromptTemplates } from "../node/prompt-templates.js";
 import { contextBootstrapVariable } from "./context-bootstrap.js";
-import { compilePlannerPrompt } from "./heartflow/planner.js";
-import { compileMessagePrompt } from "./message-composer/message-prompt.js";
+import { compileLightPrompt } from "./router/light.js";
+import { compileMessagePrompt } from "./heavy/message-prompt.js";
 import {
   atom,
   fixture,
   identity,
   target,
-} from "./message-composer/test-fixtures.js";
+} from "./heavy/test-fixtures.js";
 import { type CompiledPrompt } from "@kaguya/schema";
 
 const templates = loadFirstPartyPromptTemplates();
@@ -39,14 +39,14 @@ describe("context bootstrap", () => {
   it("keeps complete identity and rich fictional persona distinct from actual familiarity", () => {
     const f = fixture();
     const persona = { ...identity, persona: "我曾在月亮与所有群友一起唱歌" };
-    const planner = compilePlannerPrompt(
+    const planner = compileLightPrompt(
       persona,
       f.atoms,
       f.turn,
-      templates.planner,
+      templates.light,
     );
     const composer = compileMessagePrompt(
-      templates.messageComposer,
+      templates.heavy,
       persona,
       f.atoms,
       f.intent.informationId,
@@ -98,9 +98,9 @@ describe("context bootstrap", () => {
     );
     const atoms = [intent, turn, ...f.messages, history, memory];
     for (const prompt of [
-      compilePlannerPrompt(identity, atoms, turn, templates.planner),
+      compileLightPrompt(identity, atoms, turn, templates.light),
       compileMessagePrompt(
-        templates.messageComposer,
+        templates.heavy,
         identity,
         atoms,
         intent.informationId,
@@ -163,7 +163,7 @@ describe("context bootstrap", () => {
     ).toBe(true);
   });
 
-  it("counts only memory visible after Composer's character budget", () => {
+  it("counts only memory visible after Heavy's character budget", () => {
     const f = fixture();
     const memories = [
       atom("long-memory", "memory.text", {
@@ -181,7 +181,7 @@ describe("context bootstrap", () => {
       [...f.intent.references],
     );
     const prompt = compileMessagePrompt(
-      templates.messageComposer,
+      templates.heavy,
       identity,
       [intent, f.turn, ...f.messages, ...memories],
       intent.informationId,
@@ -198,7 +198,7 @@ describe("context bootstrap", () => {
     const f = fixture();
     const prompt = compileMessagePrompt(
       {
-        ...templates.messageComposer,
+        ...templates.heavy,
         main: "辉夜先听你介绍：{{context_bootstrap}}",
       },
       identity,

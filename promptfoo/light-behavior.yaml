@@ -1,0 +1,16 @@
+description: "#211 Light 行为评测（显式联网；脱敏日志与边界反例）"
+prompts:
+  - "评测 {{caseId}}"
+providers:
+  - id: file://light-behavior-provider.cjs
+tests: file://light-behavior-cases.json
+defaultTest:
+  assert:
+    - type: javascript
+      value: "context.providerResponse.metadata.valid === true"
+    - type: javascript
+      value: "JSON.parse(output).action === context.vars.expectedAction"
+    - type: javascript
+      value: "!context.vars.expectedFocus || JSON.stringify(JSON.parse(output).composition?.focusInputIndexes) === JSON.stringify(context.vars.expectedFocus)"
+evaluateOptions:
+  maxConcurrency: 2

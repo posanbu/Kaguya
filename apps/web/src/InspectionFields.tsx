@@ -43,7 +43,7 @@ const words: Record<string, string> = {
   "private-conversation": "私聊输入",
   "topic-expired": "话题已过期",
   "no-response-needed": "无需回复",
-  "planner-unavailable": "规划器不可用",
+  "light-unavailable": "规划器不可用",
   "avoid-interruption": "避免打断",
   "await-more-context": "等待更多上下文",
   respond: "回应消息",

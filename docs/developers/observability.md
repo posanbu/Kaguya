@@ -27,7 +27,7 @@ Pretty 将时间缩短为本地 `HH:mm:ss`，保留明确的日志级别，并�
 
 面板只渲染当前记录，不从账本补读正文，也不把并发请求合成一次调用。JSON 保留机器字段名、完整 ID 和引用；下述新增的 debug 查询文本与记忆正文投影也会出现在 JSON 中。Pretty 格式化本身不改变字段、日志级别或已有脱敏规则。
 
-可在仓库根目录运行以下虚构样例，无需启动服务、读取 Profile 或连接数据库。预览固定使用 debug，覆盖 Planner 输入输出、回复、原始记忆写入终态、人物事实、表达习惯及模型失败；长中文和 emoji 用于查看边框换行与截断：
+可在仓库根目录运行以下虚构样例，无需启动服务、读取 Profile 或连接数据库。预览固定使用 debug，覆盖 Light 输入输出、回复、原始记忆写入终态、人物事实、表达习惯及模型失败；长中文和 emoji 用于查看边框换行与截断：
 
 ::: code-group
 
@@ -43,7 +43,7 @@ pnpm logs:preview --json
 
 ## 模块输入、输出与记忆框
 
-**Planner 与回复** — `model.task.prompt` 的 debug detail 显示完整输入 Prompt 与变量来源；`turn.plan` 显示实际投影出的动作和原因；`message.assistant` 显示生成的正文预览。模型任务失败另有红色结果框，保留失败阶段、错误分类和尝试次数。生成正文不代表平台已经送达，投递结果仍由 delivery 事件说明。
+**Light 与回复** — `model.task.prompt` 的 debug detail 显示完整输入 Prompt 与变量来源；`turn.plan` 显示实际投影出的动作和原因；`message.assistant` 显示生成的正文预览。模型任务失败另有红色结果框，保留失败阶段、错误分类和尝试次数。生成正文不代表平台已经送达，投递结果仍由 delivery 事件说明。
 
 **原始记忆写入** — debug 的 `memory.raw.terminal` 展示 `completed`、`empty` 或 `failed`。请求与终态投影只包含状态和来源引用，不包含原文。`memory.native` 与 `memory.mem0` 目前不产生运行日志。
 
@@ -64,18 +64,18 @@ KAGUYA_LOG_LEVELS=runtime:information=trace
 
 ## Prompt 显示
 
-`core.model.task.requested` 的 info 摘要包含 task/version、activation、tier、实际 provider/model、Prompt 字符数和 variable 数。除 `agent.turn.plan` 外，其他任务还包含最多 168 个 Unicode 字符的 `promptPreview`；Planner 的输入内容在 debug 展开。debug detail 额外包含完整 Prompt 以及按模块声明顺序排列的 variable provenance、informationIds 与 digest。Pretty 把它们放入输入框的 Prompt 与来源分区；JSON 把相同数据保存在 `promptFull` 和 `promptVariables` 字段。
+`core.model.task.requested` 的 info 摘要包含 task/version、activation、tier、实际 provider/model、Prompt 字符数和 variable 数。除 `agent.light.decide` 外，其他任务还包含最多 168 个 Unicode 字符的 `promptPreview`；Light 的输入内容在 debug 展开。debug detail 额外包含完整 Prompt 以及按模块声明顺序排列的 variable provenance、informationIds 与 digest。Pretty 把它们放入输入框的 Prompt 与来源分区；JSON 把相同数据保存在 `promptFull` 和 `promptVariables` 字段。
 
 ```dotenv
 # 只展开 Information DAG 和完整 Prompt
 KAGUYA_LOG_LEVELS=runtime:information=debug
 
 # 只展开一个模块的临时诊断
-KAGUYA_LOG_LEVELS=runtime:module:agent.message-composer=debug
+KAGUYA_LOG_LEVELS=runtime:module:agent.heavy=debug
 ```
 
 ::: warning 内容留存
-非 Planner 的 Prompt preview、入站内容和 assistant 预览在 info 可见；完整 Prompt 只在 debug 可见。debug 还包含查询文本、记忆正文、人物事实预览和表达习惯。已识别的凭据赋值、连接 URL 和私钥块仍会被替换。debug 内容会进入终端或 JSON destination，生产启用前必须确认访问权限、留存周期和下游采集策略。
+非 Light 的 Prompt preview、入站内容和 assistant 预览在 info 可见；完整 Prompt 只在 debug 可见。debug 还包含查询文本、记忆正文、人物事实预览和表达习惯。已识别的凭据赋值、连接 URL 和私钥块仍会被替换。debug 内容会进入终端或 JSON destination，生产启用前必须确认访问权限、留存周期和下游采集策略。
 :::
 
 ## 模块诊断边界

@@ -43,7 +43,7 @@
 .request-list {
   --request-columns: 170px minmax(0, 1fr) 144px 20px;
 }
-.request-list-composer {
+.request-list-heavy {
   --request-columns: 170px minmax(0, 1fr) minmax(0, 1.1fr) 20px;
 }
 .request-columns,
@@ -361,7 +361,7 @@
     grid-row: 1;
     grid-column: 2;
   }
-  .request-list-composer .request-outcome::before {
+  .request-list-heavy .request-outcome::before {
     content: "生成：";
     color: var(--kaguya-muted);
   }

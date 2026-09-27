@@ -3,7 +3,7 @@
  * scopeOf 和 isImmediateObservation 使用 typed 来源判断范围与即时信号；Web conversationId 隔离浏览器会话，
  * 未携带会话 ID 的旧 Web 消息保持原范围键；openObservations 按终态过滤开放候选。
  * 三个 Selector 分别恢复 scope schedule、due 来源和观察水位；immediateInState 仅认可成功投递的引用目标。
- * 查询有界且不写账本，保持原有导出对象身份与 Scheduler/Heartflow 外部契约。
+ * 查询有界且不写账本，保持原有导出对象身份与 Scheduler/Router 外部契约。
  */
 import type { DeepReadonly, InformationAtom } from "@kaguya/schema";
 import { defineInformationSelector } from "@kaguya/sdk";
