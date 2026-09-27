@@ -43,6 +43,7 @@ export const POSTGRES_TEST_FILES = [
   "packages/database/src/memory-ingestion.test.ts",
   "packages/database/src/web-conversation-storage.test.ts",
   "packages/database/src/one-shot-schedule-repository.test.ts",
+  "packages/database/src/model-request-metrics.test.ts",
   "packages/runtime/src/model-task-persistence.test.ts",
 ] as const;
 

@@ -26,6 +26,7 @@ import {
   type FeatureView,
 } from "./feature-api.js";
 import { Button, Dialog, PageHeader, StatusBadge } from "./components/ui.js";
+import { ModelMetricsPanel } from "./ModelMetricsPanel.js";
 import "./overview.css";
 
 type ReadState<T> = { data?: T; error: boolean; loading: boolean };
@@ -422,6 +423,7 @@ export function Overview({
           opensDialog
         />
       </div>
+      <ModelMetricsPanel token={token} />
       <section
         className="overview-adapter-section"
         aria-labelledby="overview-memory-title"

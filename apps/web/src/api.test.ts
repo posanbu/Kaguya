@@ -14,6 +14,7 @@ import {
   discoverModels,
   applyConfiguration,
   getConfigurationApplication,
+  getModelRequestMetrics,
   GatewayRequestError,
   getProfile,
   listProfiles,
@@ -78,6 +79,65 @@ const replacement = {
 };
 
 describe("gateway API client", () => {
+  it("reads and validates model metrics for the selected window", async () => {
+    const data = {
+      version: 1,
+      window: {
+        id: "24h",
+        startedAt: "2026-09-26T12:00:00.000Z",
+        endedAt: "2026-09-27T12:00:00.000Z",
+        bucketDurationMs: 3_600_000,
+      },
+      series: [],
+      tiers: Object.fromEntries(
+        ["light", "heavy"].map((tier) => [
+          tier,
+          {
+            tier,
+            requestCount: 0,
+            callsPerHour: 0,
+            outcomes: { completed: 0, failed: 0, cancelled: 0, pending: 0 },
+            latencyMs: {
+              sampleCount: 0,
+              average: null,
+              p50: null,
+              p95: null,
+              buckets: [],
+            },
+            tokens: {
+              sampleCount: 0,
+              missingCount: 0,
+              averageInput: null,
+              averageOutput: null,
+              averageTotal: null,
+              p50Total: null,
+              p95Total: null,
+              buckets: [],
+            },
+            cost: { status: "unavailable", reason: "pricing-not-configured" },
+          },
+        ]),
+      ),
+    };
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json({ data }));
+    const signal = new AbortController().signal;
+
+    await expect(
+      getModelRequestMetrics(config, "24h", signal, request),
+    ).resolves.toMatchObject({ window: { id: "24h" } });
+    expect(request).toHaveBeenCalledWith(
+      "/api/v1/metrics/model-requests?window=24h",
+      {
+        method: "GET",
+        headers: { authorization: "Bearer test-gateway-token" },
+        signal,
+        cache: "no-store",
+      },
+    );
+  });
+
   it("discovers models with current unsaved provider fields", async () => {
     const request = vi
       .fn<typeof fetch>()

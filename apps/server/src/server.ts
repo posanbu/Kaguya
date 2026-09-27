@@ -641,6 +641,7 @@ export async function startKaguyaServer(
       createHttpApplication({
         config: effectiveConfig,
         inspection: () => inspection,
+        modelRequestMetrics: () => database?.modelRequestMetrics,
         memoryIngestion,
         messageTargets: () => runtime?.messageTargets,
         configurationApplication: application,

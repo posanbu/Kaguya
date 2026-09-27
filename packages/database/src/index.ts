@@ -18,6 +18,7 @@ import { PostgresMemoryStore } from "./memory-store.js";
 import { PostgresMemoryKnowledgeStore } from "./memory-knowledge.js";
 import { prepareMemoryKnowledgeSchema } from "./memory-knowledge-schema.js";
 import { prepareDatabaseSchema } from "./schema.js";
+import { ModelRequestMetricsRepository } from "./model-request-metrics.js";
 export {
   INFORMATION_PROTOCOL_VERSION,
   POSTGRES_SCHEMA_VERSION,
@@ -87,12 +88,14 @@ export class KaguyaDatabase {
   readonly personProfiles: PersonProfileRepository;
   readonly memory: PostgresMemoryStore;
   readonly knowledge: PostgresMemoryKnowledgeStore;
+  readonly modelRequestMetrics: ModelRequestMetricsRepository;
 
   constructor(readonly sql: SqlDatabase) {
     this.information = new InformationRepository(sql);
     this.personProfiles = new PersonProfileRepository(sql);
     this.memory = new PostgresMemoryStore(sql);
     this.knowledge = new PostgresMemoryKnowledgeStore(sql);
+    this.modelRequestMetrics = new ModelRequestMetricsRepository(sql);
   }
 
   static async connect(options: {
@@ -143,6 +146,7 @@ export {
   type PostgresMemoryKnowledgeStoreOptions,
 } from "./memory-knowledge.js";
 export { prepareMemoryKnowledgeSchema } from "./memory-knowledge-schema.js";
+export { ModelRequestMetricsRepository } from "./model-request-metrics.js";
 export {
   PostgresMemoryIngestionStore,
   MemoryIngestionError,
