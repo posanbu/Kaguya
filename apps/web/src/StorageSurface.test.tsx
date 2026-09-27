@@ -41,7 +41,7 @@ import { ModuleSurface } from "./ModuleSurface.js";
 import { compactStorageValue } from "./StorageSurface.js";
 
 const module = {
-  definitionId: "memory.writeback",
+  definitionId: "memory.raw",
   tags: ["memory"],
   displayName: "原始记忆",
   summary: "保存入站原文。",

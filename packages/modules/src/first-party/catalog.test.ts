@@ -69,7 +69,6 @@ function catalog() {
     promptTemplates: testMessageTemplates,
     plannerTemplate: testPrompts.planner,
     plannerBootstrapPolicy: testPrompts.plannerBootstrapPolicy,
-    memoryEnabled: false,
     expressionTemplates: testPrompts.expression,
     qqExpressionTemplates: testPrompts.qqExpression,
     agentIdentity: testIdentity,
@@ -84,8 +83,15 @@ describe("first-party module configuration", () => {
         .flatMap((d) => [...d.manifest.produces, ...d.manifest.consumes])
         .map((k) => k.kind),
     );
-    expect(definitions).toHaveLength(12);
+    expect(definitions).toHaveLength(11);
     for (const { manifest } of definitions) {
+      if (manifest.development?.status === "incomplete") {
+        expect(manifest.inspection).toBeUndefined();
+        expect(manifest.consumes).toEqual([]);
+        expect(manifest.produces).toEqual([]);
+        expect(manifest.requires).toEqual([]);
+        continue;
+      }
       expect(manifest.inspection?.mechanism.length).toBeGreaterThan(0);
       expect(manifest.inspection?.views.length).toBeGreaterThan(0);
       expect(Object.isFrozen(manifest.inspection)).toBe(true);
@@ -115,16 +121,11 @@ describe("first-party module configuration", () => {
       }
     }
   });
-  it("materializes three disabled Memory features and static adapters", () => {
+  it("materializes only raw Memory as a switchable feature", () => {
     const defaults = createFirstPartyModuleConfigDefaults("production");
-    expect(defaults).toHaveLength(14);
+    expect(defaults).toHaveLength(11);
     expect(defaults.every(({ version }) => version === 1)).toBe(true);
-    for (const id of [
-      "memory.writeback",
-      "memory.index",
-      "memory.cognition",
-      "adapter.napcat",
-    ])
+    for (const id of ["memory.raw", "adapter.napcat"])
       expect(
         defaults.find((config) => config.definitionId === id)?.enabled,
       ).toBe(false);
@@ -132,21 +133,20 @@ describe("first-party module configuration", () => {
       defaults.find((config) => config.definitionId === "adapter.web")?.enabled,
     ).toBe(true);
     expect(createFirstPartyModuleActivations(catalog(), defaults)).toHaveLength(
-      9,
+      8,
     );
   });
 
-  it("classifies exactly the six memory definitions", () => {
+  it("classifies exactly the five memory definitions", () => {
     const tagged = catalog()
       .definitions.filter(({ manifest }) => manifest.tags?.includes("memory"))
       .map(({ manifest }) => manifest.definitionId);
     expect(tagged).toEqual([
-      "memory.association",
-      "memory.cognition",
       "memory.expression",
       "memory.identity",
-      "memory.index",
-      "memory.writeback",
+      "memory.mem0",
+      "memory.native",
+      "memory.raw",
     ]);
     expect(tagged).not.toEqual(
       expect.arrayContaining([
@@ -155,6 +155,36 @@ describe("first-party module configuration", () => {
         "core.association.memory",
       ]),
     );
+  });
+
+  it("lists unfinished Memory modules with issues and refuses activation", () => {
+    const definitions = catalog();
+    const defaults = createFirstPartyModuleConfigDefaults("test");
+    for (const [id, issue] of [
+      ["memory.native", 265],
+      ["memory.mem0", 266],
+    ] as const) {
+      const definition = definitions.definitions.find(
+        ({ manifest }) => manifest.definitionId === id,
+      );
+      expect(definition?.manifest.development).toEqual({
+        status: "incomplete",
+        issueUrl: `https://github.com/posanbu/Kaguya/issues/${issue}`,
+      });
+      expect(defaults.some((config) => config.definitionId === id)).toBe(false);
+      expect(() =>
+        createFirstPartyModuleActivations(definitions, [
+          ...defaults,
+          {
+            version: 1,
+            instanceId: `${id}.default`,
+            definitionId: id,
+            enabled: true,
+            settings: {},
+          },
+        ]),
+      ).toThrow(`Incomplete module cannot be activated: ${id}`);
+    }
   });
 
   it("uses only modelTier for the default message composer", () => {

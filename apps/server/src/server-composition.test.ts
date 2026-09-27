@@ -264,9 +264,6 @@ describe("unified server composition", () => {
     });
     expect(new Set(graph.map(({ kind }) => kind))).toEqual(
       new Set([
-        "memory.association.completed",
-        "memory.association.query",
-        "memory.association.requested",
         "agent.attention.arousal.activity",
         "memory.identity.chat.scope.binding",
         "memory.identity.chat.scope.entity",

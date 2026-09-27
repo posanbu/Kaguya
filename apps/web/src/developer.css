@@ -408,6 +408,18 @@
 }
 .module-overview > li {
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.module-overview .module-entry {
+  height: auto;
+  flex: 1;
+}
+.module-issue-link {
+  align-self: flex-start;
+  color: var(--kaguya-coral-strong);
+  font-size: 13px;
 }
 .module-groups {
   display: grid;

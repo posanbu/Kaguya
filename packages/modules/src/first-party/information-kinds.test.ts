@@ -14,8 +14,6 @@ import {
   inboundTextInformationKind,
   messageIntentRequestedInformationKind,
   messageIntentRequestedInformationPayloadSchema,
-  associationRequestedInformationKind,
-  associationCompletedInformationPayloadSchema,
   deliveryRequestedInformationKind,
   waitRequestedInformationKind,
   turnBootstrapProjectionSchema,
@@ -242,47 +240,10 @@ describe("message intent protocol", () => {
     ).toBe(false);
   });
 
-  it("requires claim and candidate references and moves association to the message route", () => {
+  it("requires claim and candidate references on message intent", () => {
     expect(messageIntentRequestedInformationKind.references).toMatchObject({
-      "core:caused-by": {
-        required: true,
-        targetKinds: [
-          "agent.turn.plan.completed",
-          "agent.message.target.authorized",
-        ],
-      },
-      "core:uses-context": {
-        required: true,
-        targetKinds: [
-          "agent.turn.context.completed",
-          "agent.message.target.authorized",
-        ],
-      },
       "agent:turn-claim": { required: true },
       "agent:turn-candidate": { required: true },
     });
-    expect(
-      associationRequestedInformationKind.references["core:caused-by"]!
-        .targetKinds,
-    ).toEqual([messageIntentRequestedInformationKind.kind]);
-    const payload = {
-      requestInformationId: "request",
-      queryInformationId: "query",
-      sourceInformationId: "intent",
-      route: "message",
-      method: "sparse-2gram",
-      status: "empty",
-      candidateCount: 0,
-      reasonCodes: ["empty"],
-    };
-    expect(
-      associationCompletedInformationPayloadSchema.safeParse(payload).success,
-    ).toBe(true);
-    expect(
-      associationCompletedInformationPayloadSchema.safeParse({
-        ...payload,
-        route: "reply",
-      }).success,
-    ).toBe(false);
   });
 });

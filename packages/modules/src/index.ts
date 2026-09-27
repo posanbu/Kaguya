@@ -10,11 +10,6 @@
  * 并传入 modelTaskCapability token；Host 只消费显式 Catalog 中的 Manifest。
  * 输入输出与副作用：仅 re-export，导入本文件不会注册 kind、调用 LLM 或发送平台消息。
  */
-export {
-  associationCandidateSelector,
-  associationIdentitySelector,
-  associationModule,
-} from "./first-party/association/index.js";
 export { identityModule } from "./first-party/identity/index.js";
 export {
   renderPersonProfileSections,
@@ -27,7 +22,6 @@ export {
 export {
   createHeartflowModule,
   heartflowSettingsSchema,
-  heartflowMemorySelector,
   heartflowStateSelector,
   plannerActionSchema,
   type CreateHeartflowModuleOptions,
@@ -80,20 +74,11 @@ export {
 } from "./first-party/person-fact-task/index.js";
 export {
   compileMessagePromptFromInformation,
-  associationMessageContextSelector,
   currentAcceptedMessageSelector,
   turnMessageContextSelector,
   inboundMemoryPromptRenderer,
 } from "./first-party/message-composer/message-context.js";
 export {
-  associationCandidateInformationKind,
-  associationCandidateInformationPayloadSchema,
-  associationCompletedInformationKind,
-  associationCompletedInformationPayloadSchema,
-  associationQueryInformationKind,
-  associationQueryInformationPayloadSchema,
-  associationRequestedInformationKind,
-  associationRequestedInformationPayloadSchema,
   assistantTextInformationKind,
   coreMemoryTextInformationKind,
   deliveryRequestedInformationKind,
@@ -138,10 +123,6 @@ export {
   turnSupersededInformationKind,
   type PersonFactCandidateInformationPayload,
   type PersonFactExtractedPayload,
-  type AssociationCandidateInformationPayload,
-  type AssociationCompletedInformationPayload,
-  type AssociationQueryInformationPayload,
-  type AssociationRequestedInformationPayload,
   type MessageIntentRequestedInformationPayload,
   type TurnBootstrapProjection,
   type NormalizedTurnBootstrapProjection,
@@ -155,26 +136,15 @@ export {
 } from "./first-party/catalog.js";
 
 export {
-  memoryWritebackModule,
-  memoryWritebackRequestedInformationKind,
-  memoryWritebackCompletedInformationKind,
-  memoryWritebackEmptyInformationKind,
-  memoryWritebackFailedInformationKind,
-} from "./first-party/memory-writeback/index.js";
+  memoryRawModule,
+  memoryRawRequestedInformationKind,
+  memoryRawCompletedInformationKind,
+  memoryRawEmptyInformationKind,
+  memoryRawFailedInformationKind,
+} from "./first-party/memory-raw/index.js";
 
-export {
-  memoryIndexModule,
-  memoryIndexRequestedInformationKind,
-  memoryBackfillRequestedInformationKind,
-  memoryIndexCompletedInformationKind,
-  memoryIndexBootstrapCapability,
-} from "./first-party/memory-index/index.js";
-
-export {
-  memoryCognitionModule,
-  memoryCognitionRequestedInformationKind,
-  memoryCognitionCompletedInformationKind,
-} from "./first-party/memory-cognition/index.js";
+export { memoryNativeModule } from "./first-party/memory-native/index.js";
+export { memoryMem0Module } from "./first-party/memory-mem0/index.js";
 
 export * from "./first-party/message-authorization.js";
 export {

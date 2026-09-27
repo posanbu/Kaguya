@@ -41,34 +41,12 @@ const PANELS: Readonly<Record<string, PrettyEventPanel>> = {
     color: 33,
     fieldsTitle: "生成请求",
   },
-  "memory.association.query": {
-    title: "记忆联想 · 检索输入",
-    color: 35,
-    fieldsTitle: "检索条件",
-    contentTitle: "查询文本预览",
-  },
-  "memory.association.candidate": {
-    title: "记忆联想 · 召回候选",
-    color: 35,
-    fieldsTitle: "候选信息",
-  },
-  "memory.association.completed": {
-    title: "记忆联想 · 检索结果",
-    color: 35,
-    fieldsTitle: "召回结果",
-  },
-  "memory.text.registered": {
-    title: "记忆 · 正文登记",
-    color: 35,
-    fieldsTitle: "记忆信息",
-    contentTitle: "记忆正文预览",
-  },
-  "memory.writeback.requested": {
+  "memory.raw.requested": {
     title: "原始记忆 · 写入请求",
     color: 35,
     fieldsTitle: "请求信息",
   },
-  "memory.writeback.terminal": {
+  "memory.raw.terminal": {
     title: "原始记忆 · 写入结果",
     color: 35,
     fieldsTitle: "写入状态",

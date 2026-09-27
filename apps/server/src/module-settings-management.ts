@@ -45,7 +45,8 @@ export class ModuleSettingsManagement {
     const definition = this.options.catalog.definitions.find(
       (d) => d.manifest.definitionId === id,
     );
-    if (!definition) throw new ModuleSettingsError(404, "module_not_found");
+    if (!definition || definition.manifest.development)
+      throw new ModuleSettingsError(404, "module_not_found");
     return definition;
   }
   private fields(id: string): ModuleSettingsField[] {
@@ -107,11 +108,7 @@ export class ModuleSettingsManagement {
     return {
       definitionId: id,
       scope: "global",
-      effect: ["memory.writeback", "memory.index", "memory.cognition"].includes(
-        id,
-      )
-        ? "immediate"
-        : "explicit_apply",
+      effect: ["memory.raw"].includes(id) ? "immediate" : "explicit_apply",
       fields,
       instances: configs.map((c) => ({
         instanceId: c.instanceId,
@@ -178,9 +175,7 @@ export class ModuleSettingsManagement {
         enabled: parsed.data.enabled,
         settings: validation.data,
       };
-      if (
-        ["memory.writeback", "memory.index", "memory.cognition"].includes(id)
-      ) {
+      if (["memory.raw"].includes(id)) {
         if (replacement.enabled !== current.enabled)
           throw new ModuleSettingsError(400, "use_feature_switch");
         if (!this.options.replaceFeature)

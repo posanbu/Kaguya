@@ -27,7 +27,7 @@ Pretty 将时间缩短为本地 `HH:mm:ss`，保留明确的日志级别，并�
 
 面板只渲染当前记录，不从账本补读正文，也不把并发请求合成一次调用。JSON 保留机器字段名、完整 ID 和引用；下述新增的 debug 查询文本与记忆正文投影也会出现在 JSON 中。Pretty 格式化本身不改变字段、日志级别或已有脱敏规则。
 
-可在仓库根目录运行以下虚构样例，无需启动服务、读取 Profile 或连接数据库。预览固定使用 debug，覆盖 Planner 输入输出、回复、记忆命中／空结果、写入终态、人物事实、表达习惯及模型失败；长中文和 emoji 用于查看边框换行与截断：
+可在仓库根目录运行以下虚构样例，无需启动服务、读取 Profile 或连接数据库。预览固定使用 debug，覆盖 Planner 输入输出、回复、原始记忆写入终态、人物事实、表达习惯及模型失败；长中文和 emoji 用于查看边框换行与截断：
 
 ::: code-group
 
@@ -45,9 +45,7 @@ pnpm logs:preview --json
 
 **Planner 与回复** — `model.task.prompt` 的 debug detail 显示完整输入 Prompt 与变量来源；`turn.plan` 显示实际投影出的动作和原因；`message.assistant` 显示生成的正文预览。模型任务失败另有红色结果框，保留失败阶段、错误分类和尝试次数。生成正文不代表平台已经送达，投递结果仍由 delivery 事件说明。
 
-**记忆联想** — debug 的 `memory.association.query` 显示检索方法、入口、上限及查询文本预览；`memory.association.candidate` 只显示排名、策略、入选原因和 `agent:canonical-source` 引用。候选日志没有命中正文，终端不会为它加载或补造正文。info 的 `memory.association.completed` 汇总命中、空结果或失败及候选数量。
-
-**记忆登记与写入** — debug 的 `memory.text.registered` 显示受限的记忆正文预览。`memory.writeback.terminal` 单独展示 `completed`、`empty` 或 `failed`；原始 writeback 投影只有状态和来源引用，不包含写入正文。这两类框分别对应正文登记与写回终态。
+**原始记忆写入** — debug 的 `memory.raw.terminal` 展示 `completed`、`empty` 或 `failed`。请求与终态投影只包含状态和来源引用，不包含原文。`memory.native` 与 `memory.mem0` 目前不产生运行日志。
 
 **人物事实与表达习惯** — `person.fact.extracted` 的 info 保留完成摘要，同一 Atom 的 debug detail 显示事实正文预览。debug 的 `memory.expression.learned` 和 `memory.expression.selected` 分别显示学习、选择的数量与状态或原因，并将 `habitSummaries` 逐条列为“情境 → 表达风格”。
 

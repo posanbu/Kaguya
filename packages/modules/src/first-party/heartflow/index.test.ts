@@ -112,7 +112,6 @@ async function fixture(
   const module = createHeartflowModule({
     plannerTemplate: promptTemplates.planner,
     plannerBootstrapPolicy: promptTemplates.plannerBootstrapPolicy,
-    memoryEnabled: false,
     modelTaskCapability,
     agentIdentity: {
       name: "Kaguya",

@@ -1,6 +1,6 @@
 /**
- * 功能概述：在真实 PostgreSQL 上验证 Memory schema、幂等写入与稀疏召回。
- * 主要职责：防止 PGlite 与生产 SQL 在数组、时区或约束语义上产生偏差。
+ * 功能概述：在真实 PostgreSQL 上验证原始 Memory schema 与幂等写入。
+ * 主要职责：防止 PGlite 与生产 SQL 在时区或约束语义上产生偏差。
  * 代码库关系：由根 test:postgres 显式执行，测试工厂提供隔离 schema。
  * 输入输出与副作用：需要 KAGUYA_TEST_DATABASE_URL；测试结束删除临时 schema。
  */
@@ -18,7 +18,7 @@ const describePostgres =
   connectionString === undefined ? describe.skip : describe;
 
 describePostgres("PostgresMemoryStore", () => {
-  it("writes idempotently and recalls through the production indexes", async () => {
+  it("writes idempotently without building the unfinished native index", async () => {
     const database = await createPostgresTestingDatabase(connectionString!);
     try {
       await database.prepareSchema();
@@ -51,10 +51,12 @@ describePostgres("PostgresMemoryStore", () => {
       };
       expect((await database.memory.put(input)).created).toBe(true);
       expect((await database.memory.put(input)).created).toBe(false);
+      expect((await database.memory.getBySource("source-pg"))?.content).toBe(
+        "PostgreSQL moon memory",
+      );
       expect(
-        (await database.memory.recall({ query: "moon", limit: 8 }))[0]?.document
-          .sourceInformationId,
-      ).toBe("source-pg");
+        (await database.sql.query("SELECT * FROM memory_document_ngrams")).rows,
+      ).toEqual([]);
     } finally {
       await database.close();
     }

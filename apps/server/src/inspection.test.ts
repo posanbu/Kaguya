@@ -495,7 +495,7 @@ describe("developer inspection", () => {
         occurredAt: time,
         address: { ...address, platformMessageId: source },
       });
-    const path = "modules/memory.writeback/storage?limit=1";
+    const path = "modules/memory.raw/storage?limit=1";
     expect((await get(path, false)).statusCode).toBe(401);
     const response = await get(path);
     expect(response.statusCode).toBe(200);
@@ -509,12 +509,7 @@ describe("developer inspection", () => {
     ).json().data;
     expect(second.items[0].id).not.toBe(first.items[0].id);
     expect(second.nextCursor).toBeNull();
-    expect(
-      (await get("modules/memory.index/storage")).json().data.available,
-    ).toBe(false);
-    expect(
-      (await get("modules/memory.index/storage?cursor=invalid")).statusCode,
-    ).toBe(400);
+    expect((await get("modules/memory.native/storage")).statusCode).toBe(404);
     expect((await get(path.replace("limit=1", "limit=999"))).statusCode).toBe(
       400,
     );

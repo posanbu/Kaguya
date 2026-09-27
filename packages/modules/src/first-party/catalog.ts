@@ -3,7 +3,7 @@
  * 功能概述：集中显式导入 first-party 模块，提供可被 composition root 选择和合并的 Catalog。
  * 主要职责：createFirstPartyModuleCatalog 接收宿主 Model Task token 和共享 completed kind，构造身份、时机与消息合成定义；
  * createFirstPartyModuleConfigDefaults 提供首次落盘模板，createFirstPartyModuleActivations
- * 同时提供独立 Memory writeback 定义，由 composition 在 Memory 启用时选择；
+ * 同时提供 memory.raw 定义及未完成的 native/mem0 目录项；
  * 严格校验已加载的实例文件，拒绝旧回复配置并提示重新初始化，与“可发现”的 Catalog 分开。
  * 代码库关系：Server、Demo 和测试组合入口传入 Runtime 的实际 token/definition；工厂仅依赖模块侧
  * 结构类型，保留 completed payload 泛型与对象身份，避免 modules 反向依赖 Runtime。
@@ -22,10 +22,9 @@ import {
   type ExpressionPromptTemplates,
 } from "./expression/index.js";
 import { attentionFocusModule } from "./attention-focus/index.js";
-import { memoryCognitionModule } from "./memory-cognition/index.js";
-import { memoryIndexModule } from "./memory-index/index.js";
-import { memoryWritebackModule } from "./memory-writeback/index.js";
-import { associationModule } from "./association/index.js";
+import { memoryRawModule } from "./memory-raw/index.js";
+import { memoryNativeModule } from "./memory-native/index.js";
+import { memoryMem0Module } from "./memory-mem0/index.js";
 import { identityModule } from "./identity/index.js";
 import { createAttentionArousalModule } from "./attention-arousal/index.js";
 import { heartbeatModule } from "./heartbeat/index.js";
@@ -54,10 +53,9 @@ export function createFirstPartyModuleCatalog<
       modelTaskCapability: options.modelTaskCapability,
       templates: options.qqExpressionTemplates,
     }),
-    associationModule,
-    memoryWritebackModule,
-    memoryIndexModule,
-    memoryCognitionModule,
+    memoryRawModule,
+    memoryNativeModule,
+    memoryMem0Module,
     identityModule,
     createAttentionArousalModule({ timeZone: options.agentIdentity.timeZone }),
     attentionFocusModule,
@@ -98,21 +96,11 @@ export function createFirstPartyModuleConfigDefaults(
     }),
     Object.freeze({
       version: 1 as const,
-      instanceId: "memory.association.default",
-      definitionId: "memory.association",
-      enabled: true,
+      instanceId: "memory.raw.default",
+      definitionId: "memory.raw",
+      enabled: false,
       settings: Object.freeze({}),
     }),
-    ...(["memory.writeback", "memory.index", "memory.cognition"] as const).map(
-      (definitionId) =>
-        Object.freeze({
-          version: 1 as const,
-          instanceId: `${definitionId}.default`,
-          definitionId,
-          enabled: false,
-          settings: Object.freeze({}),
-        }),
-    ),
     Object.freeze({
       version: 1 as const,
       instanceId: "adapter.web.main",
@@ -226,6 +214,11 @@ export function createFirstPartyModuleActivations(
         );
         if (definition === undefined) {
           throw new Error(`Unknown module definition: ${config.definitionId}`);
+        }
+        if (definition.manifest.development?.status === "incomplete") {
+          throw new Error(
+            `Incomplete module cannot be activated: ${config.definitionId}`,
+          );
         }
         const settings = definition.manifest.settingsSchema.safeParse(
           config.settings,

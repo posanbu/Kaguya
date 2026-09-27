@@ -136,6 +136,11 @@ export interface InformationModuleManifest<TSettings = unknown> {
   readonly definitionId: string;
   readonly moduleVersion: string;
   readonly displayName: string;
+  /** Definition is listed for planning, but must never be activated. */
+  readonly development?: {
+    readonly status: "incomplete";
+    readonly issueUrl: string;
+  };
   /** 用于 Catalog 与管理界面的稳定领域分类；不参与模块激活或执行。 */
   readonly tags?: readonly string[];
   readonly summary: string;

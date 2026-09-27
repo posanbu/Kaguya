@@ -30,8 +30,7 @@ const MODULE_NAMES: Readonly<Record<string, string>> = {
   "adapter:web": "网页聊天",
   "agent.heartflow.online": "心流",
   "agent.message-composer": "消息生成",
-  "memory.association": "联想",
-  "memory.writeback": "记忆写入",
+  "memory.raw": "记忆写入",
   "demo.person.fact.extract": "人物记忆",
 };
 
@@ -57,8 +56,6 @@ const EVENT_NAMES: Readonly<Record<string, string>> = {
   "information.log.failed": "信息日志投影失败",
   "information.log.outbox.failed": "信息日志写入失败",
   "information.bootstrap.failed": "信息引导失败",
-  "memory.vector.unavailable": "向量记忆不可用",
-  "memory.recall.failed": "记忆召回失败",
   "scheduler.cadence.failed": "节奏调度失败",
   "model.task.prompt": "模型任务 Prompt 详情",
   "message.model.dispatching": "准备生成回复",
@@ -80,12 +77,7 @@ const EVENT_NAMES: Readonly<Record<string, string>> = {
   "turn.decision.superseded": "回合决策已被替代",
   "turn.plan": "回合规划完成",
   "speech.wait.requested": "等待下一次唤醒",
-  "memory.association.retrieval.started": "开始检索联想记忆",
-  "memory.association.completed": "联想检索完成",
-  "memory.association.query": "查询联想记忆",
-  "memory.association.candidate": "找到记忆候选",
-  "memory.text.registered": "记忆正文已登记",
-  "memory.writeback.requested": "原始记忆写入请求已登记",
+  "memory.raw.requested": "原始记忆写入请求已登记",
   "person.fact.candidate": "准备提取人物事实",
   "person.fact.extracted": "人物事实提取完成",
   "memory.expression.learned": "表达习惯学习完成",
@@ -184,7 +176,7 @@ const LIFECYCLE_NAMES: Readonly<Record<string, string>> = {
   "delivery.lifecycle": "消息投递",
   "turn.lifecycle": "回合",
   "heartbeat.lifecycle": "心跳",
-  "memory.writeback.terminal": "记忆写入",
+  "memory.raw.terminal": "记忆写入",
 };
 
 const MESSAGE_NAMES: Readonly<Record<string, string>> = {

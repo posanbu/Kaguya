@@ -221,7 +221,7 @@ async function createRuntime(
     ? createFirstPartyModuleActivations(
         createMessageComposition(undefined, undefined, true).catalog,
         createFirstPartyModuleConfigDefaults("test").map((config) =>
-          config.definitionId === "memory.writeback"
+          config.definitionId === "memory.raw"
             ? { ...config, enabled: true }
             : config,
         ),
@@ -230,7 +230,6 @@ async function createRuntime(
   const composition = createMessageComposition(
     overrides.resolveModelSelection,
     activations,
-    memoryEnabled,
   );
   const runtime = new KaguyaRuntime({
     ...composition,
@@ -289,6 +288,22 @@ function parentId(
 }
 
 describe("KaguyaRuntime", () => {
+  it("keeps main module bindings visible beside the separate raw host", async () => {
+    const { runtime } = await createRuntime({ memory: { enabled: true } });
+    await runtime.start();
+    const modules = runtime.inspectModules();
+    for (const id of ["memory.identity", "memory.expression", "memory.raw"]) {
+      expect(
+        modules.find((module) => module.definitionId === id)?.bindings,
+      ).toHaveLength(1);
+    }
+    for (const id of ["memory.native", "memory.mem0"]) {
+      expect(
+        modules.find((module) => module.definitionId === id)?.bindings,
+      ).toHaveLength(0);
+    }
+  });
+
   it(
     "logs module startup and expands the persisted Information DAG at debug",
     async () => {
@@ -340,7 +355,6 @@ describe("KaguyaRuntime", () => {
         "agent.attention.focus",
         "agent.heartbeat.short",
         "agent.heartflow.online",
-        "memory.association",
         "memory.expression",
         "memory.identity",
         "agent.message-composer",
@@ -614,7 +628,7 @@ describe("KaguyaRuntime", () => {
   );
 
   it(
-    "recalls a Web Memory globally through its original inbound provenance",
+    "keeps raw Memory out of the chat prompt until native Memory is implemented",
     async () => {
       // MemoryStore 使用真实入库时钟；不能让测试的固定 Runtime 时钟停留在写入之前。
       let nowMs = Date.now();
@@ -649,16 +663,10 @@ describe("KaguyaRuntime", () => {
         },
       });
 
-      await expect(
-        database.memory.recall({
-          query: "moonlight",
-          limit: 8,
-          occurredBefore: firstInbound.occurredAt,
-          recordedBefore: new Date(
-            Date.parse(saved.document.createdAt) - 1,
-          ).toISOString(),
-        }),
-      ).resolves.toEqual([]);
+      expect(
+        (await database.memory.getBySource(firstInbound.informationId))
+          ?.content,
+      ).toBe("remember moonlight");
       nowMs = Math.max(Date.now(), Date.parse(saved.document.createdAt));
 
       const second = await runtime.submit({
@@ -689,23 +697,17 @@ describe("KaguyaRuntime", () => {
         requested.payload,
       );
 
-      expect(payload.prompt.provenance).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            variableName: "memory",
-            informationIds: [firstInbound.informationId],
-          }),
-        ]),
+      expect(payload.prompt.provenance).toContainEqual(
+        expect.objectContaining({ variableName: "memory", informationIds: [] }),
       );
-      expect(payload.prompt.variables).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            name: "memory",
-            informationIds: [firstInbound.informationId],
-          }),
-        ]),
-      );
-      expect(payload.prompt.text).toContain("remember moonlight");
+      expect(
+        secondGraph.some(
+          ({ kind }) =>
+            kind.startsWith("memory.association.") ||
+            kind.startsWith("memory.index.") ||
+            kind.startsWith("memory.cognition."),
+        ),
+      ).toBe(false);
     },
     TEST_TIMEOUT,
   );
@@ -748,9 +750,6 @@ describe("KaguyaRuntime", () => {
       const secondGraph = await database.information.query({
         informationId: second.rootInformationId,
       });
-      const association = secondGraph.find(
-        ({ kind }) => kind === "memory.association.completed",
-      );
       const requested = secondGraph.find(
         ({ kind, payload }) =>
           kind === modelTaskRequestedInformationKind.kind &&
@@ -761,13 +760,8 @@ describe("KaguyaRuntime", () => {
       );
 
       expect(recall).not.toHaveBeenCalled();
-      expect(association?.payload).toMatchObject({
-        status: "unavailable",
-        candidateCount: 0,
-        reasonCodes: ["provider-unavailable"],
-      });
       expect(
-        secondGraph.some(({ kind }) => kind === "memory.association.candidate"),
+        secondGraph.some(({ kind }) => kind.startsWith("memory.association.")),
       ).toBe(false);
       expect(payload.prompt.provenance).toEqual(
         expect.arrayContaining([
@@ -1147,9 +1141,6 @@ describe("KaguyaRuntime", () => {
           "agent.message.intent.requested",
           "memory.expression.selection.requested",
           "memory.expression.selection.completed",
-          "memory.association.requested",
-          "memory.association.query",
-          "memory.association.completed",
           "core.model.task.requested",
           "core.model.task.completed",
           "core.message.assistant.text",
@@ -1825,7 +1816,6 @@ function createMessageComposition(
     promptTemplates: testMessageTemplates,
     plannerTemplate: testPrompts.planner,
     plannerBootstrapPolicy: testPrompts.plannerBootstrapPolicy,
-    memoryEnabled,
     expressionTemplates: testPrompts.expression,
     qqExpressionTemplates: testPrompts.qqExpression,
     agentIdentity: testIdentity,

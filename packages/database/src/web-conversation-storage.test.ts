@@ -122,7 +122,7 @@ it("isolates Web lifecycle scopes during append and projection rebuild", async (
   }
 }, 15_000);
 
-it("upgrades the old Web memory constraint and recalls each conversation independently", async () => {
+it("upgrades the old Web memory constraint and preserves each conversation document", async () => {
   const database = await createDatabase();
   try {
     await database.prepareSchema();
@@ -163,18 +163,9 @@ it("upgrades the old Web memory constraint and recalls each conversation indepen
       conversationId: conversationB,
     });
     for (const expected of [legacy.document, a.document, b.document]) {
-      const hits = await database.memory.recall({
-        query: "moon",
-        limit: 10,
-        scopes: [
-          {
-            platform: "web",
-            adapterId: "web.ui.main",
-            destination: expected.address.destination,
-          },
-        ],
-      });
-      expect(hits.map((hit) => hit.document)).toEqual([expected]);
+      expect(
+        await database.memory.getBySource(expected.sourceInformationId),
+      ).toEqual(expected);
     }
     await expect(
       database.sql.query(

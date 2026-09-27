@@ -172,6 +172,40 @@ describe("模块独立页面", () => {
     expect(html).toContain("其他模块<span>1 个模块</span>");
     expect(html.match(/memory\.identity/gu)).toHaveLength(2);
   });
+  it("shows unfinished Memory with an Issue link and no settings editor", () => {
+    const planned: InspectionModule = {
+      ...module,
+      definitionId: "memory.native",
+      tags: ["memory"],
+      development: {
+        status: "incomplete",
+        issueUrl: "https://github.com/posanbu/Kaguya/issues/265",
+      },
+      bindings: [],
+    };
+    const overview = render(
+      <ModulePage
+        token="test"
+        path="/developer/modules"
+        state={{ data: { modules: [planned] } }}
+      />,
+    );
+    expect(overview).toContain("未完成");
+    expect(overview).toContain(
+      'href="https://github.com/posanbu/Kaguya/issues/265"',
+    );
+    const details = render(
+      <ModuleDetails
+        module={planned}
+        token="test"
+        revision={0}
+        path={moduleDetailPath(planned.definitionId)}
+        SettingsSection={() => <p>设置编辑器</p>}
+      />,
+    );
+    expect(details).toContain("跟踪 Issue");
+    expect(details).not.toContain("设置编辑器");
+  });
   it("includes tags in module search and omits empty groups", () => {
     const memoryModule = {
       ...module,
@@ -260,7 +294,7 @@ describe("模块独立页面", () => {
       <ModuleDetails
         module={{
           ...module,
-          definitionId: "memory.writeback",
+          definitionId: "memory.raw",
           displayName: "原始记忆",
           inspection: {
             storage: "memory",

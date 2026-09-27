@@ -14,7 +14,6 @@ import { randomUUID } from "node:crypto";
 import {
   MemorySourceConflictError,
   memoryDestinationIdentity,
-  memorySparseDocumentGrams,
   memorySparseGrams,
   parseMemoryDocumentInput,
   parseMemoryRecallQuery,
@@ -75,7 +74,6 @@ export class PostgresMemoryStore implements MemoryAccess {
       createdAt: this.#now().toISOString(),
     });
     const destination = memoryDestinationIdentity(parsed.address.destination);
-    const grams = memorySparseDocumentGrams(parsed.content);
 
     return this.database.transaction(async (tx) => {
       const inserted = await tx.query<MemoryDocumentRow>(
@@ -105,15 +103,6 @@ export class PostgresMemoryStore implements MemoryAccess {
       );
 
       if (inserted.rows[0] !== undefined) {
-        if (grams.length > 0) {
-          await tx.query(
-            `INSERT INTO memory_document_ngrams (memory_id, gram)
-             SELECT $1, gram
-             FROM unnest($2::text[]) AS gram
-             ON CONFLICT DO NOTHING`,
-            [candidate.memoryId, [...grams]],
-          );
-        }
         return Object.freeze({
           document: rowToDocument(inserted.rows[0]),
           created: true,

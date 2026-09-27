@@ -25,11 +25,7 @@ import {
   type FeatureId,
   type FeatureView,
 } from "./feature-api.js";
-const MEMORY_FEATURES = new Set([
-  "memory.writeback",
-  "memory.index",
-  "memory.cognition",
-]);
+const MEMORY_FEATURES = new Set(["memory.raw"]);
 export function ModuleSettingsSection(props: ModuleEditorProps) {
   return (
     <SettingsLoader key={`${props.definitionId}:${props.token}`} {...props} />
@@ -343,9 +339,6 @@ function MemoryModuleSwitch({
         启用此模块
       </label>
       {dirty && <small>请先保存当前设置再切换。</small>}
-      {feature?.blocker === "memory.writeback" && (
-        <small>请先开启原始记忆。</small>
-      )}
       {feature?.enabled && !feature.active && (
         <small>模块未运行，请检查配置或 Runtime 状态。</small>
       )}

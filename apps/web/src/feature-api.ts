@@ -1,12 +1,7 @@
 import { GATEWAY_UNAUTHORIZED_EVENT } from "./api.js";
 
 export const FEATURE_CHANGED_EVENT = "kaguya:features-changed";
-export const FEATURE_IDS = [
-  "memory.writeback",
-  "memory.index",
-  "memory.cognition",
-  "adapter.napcat",
-] as const;
+export const FEATURE_IDS = ["memory.raw", "adapter.napcat"] as const;
 export type FeatureId = (typeof FEATURE_IDS)[number];
 export interface FeatureStatus {
   id: FeatureId;
@@ -55,11 +50,7 @@ async function request(
     throw new Error(
       error === "feature_configuration_changed"
         ? "配置已变化，请刷新后重试。"
-        : error === "memory_writeback_required"
-          ? "请先开启原始记忆。"
-          : error === "memory_configuration_invalid"
-            ? "请先填写该记忆模块的提供方配置。"
-            : "切换失败，请检查模块状态并重试。",
+        : "切换失败，请检查模块状态并重试。",
     );
   }
   const data = (payload as { data?: unknown }).data;

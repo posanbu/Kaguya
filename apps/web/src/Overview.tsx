@@ -434,25 +434,21 @@ export function Overview({
           <p role="alert">无法读取功能状态，请刷新概览。</p>
         )}
         <div className="overview-grid" aria-live="polite">
-          {(
-            [
-              ["memory.writeback", "原始记忆", Database],
-              ["memory.index", "向量索引", Activity],
-              ["memory.cognition", "Mem0 认知记忆", ServerCog],
-            ] as const
-          ).map(([id, title, icon]) => (
-            <FeatureTile
-              key={id}
-              title={title}
-              icon={icon}
-              feature={feature(id)}
-              busy={featureBusy !== undefined}
-              onSwitch={(enabled) => void switchFeature(id, enabled)}
-              onDetails={() =>
-                navigate(`/developer/modules/${encodeURIComponent(id)}`)
-              }
-            />
-          ))}
+          {([["memory.raw", "原始记忆", Database]] as const).map(
+            ([id, title, icon]) => (
+              <FeatureTile
+                key={id}
+                title={title}
+                icon={icon}
+                feature={feature(id)}
+                busy={featureBusy !== undefined}
+                onSwitch={(enabled) => void switchFeature(id, enabled)}
+                onDetails={() =>
+                  navigate(`/developer/modules/${encodeURIComponent(id)}`)
+                }
+              />
+            ),
+          )}
         </div>
       </section>
       <section

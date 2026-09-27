@@ -412,6 +412,10 @@ export class ModuleHost {
       if (!definition)
         throw new ModuleDefinitionNotFoundError(activation.definitionId);
       if (activation.enabled === false) continue;
+      if (definition.manifest.development?.status === "incomplete")
+        throw new Error(
+          `Incomplete module cannot be activated: ${activation.definitionId}`,
+        );
       const settings = deepFreeze(
         definition.manifest.settingsSchema.parse(activation.settings),
       );
@@ -678,6 +682,7 @@ export class ModuleHost {
         ...(manifest.inspection ? { inspection: manifest.inspection } : {}),
         summary: manifest.summary,
         description: manifest.description,
+        ...(manifest.development ? { development: manifest.development } : {}),
         moduleVersion: manifest.moduleVersion,
         protocolVersion: manifest.protocolVersion,
         settingsSchemaFingerprint: schemaFingerprint({

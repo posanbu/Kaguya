@@ -64,29 +64,37 @@ async function fixture() {
 it("cascades raw Memory off and keeps children off when reopened", async () => {
   const f = await fixture();
   let view = await f.management.get();
-  await expect(
-    f.management.toggle("memory.index", true, view.revision),
-  ).rejects.toMatchObject({ code: "memory_writeback_required" });
-  view = await f.management.toggle("memory.writeback", true, view.revision);
-  view = await f.management.toggle("memory.writeback", false, view.revision);
+  for (const id of [
+    "memory.index",
+    "memory.cognition",
+    "memory.native",
+    "memory.mem0",
+  ]) {
+    await expect(
+      f.management.toggle(id, true, view.revision),
+    ).rejects.toMatchObject({ code: "feature_not_found" });
+  }
+  view = await f.management.toggle("memory.raw", true, view.revision);
+  view = await f.management.toggle("memory.raw", false, view.revision);
   expect(
     view.features
       .filter((item) => item.id.startsWith("memory."))
       .every((item) => !item.enabled),
   ).toBe(true);
-  view = await f.management.toggle("memory.writeback", true, view.revision);
-  expect(
-    view.features.find((item) => item.id === "memory.index")?.enabled,
-  ).toBe(false);
+  view = await f.management.toggle("memory.raw", true, view.revision);
+  expect(view.features.map((item) => item.id)).toEqual([
+    "memory.raw",
+    "adapter.napcat",
+  ]);
   expect(f.activateNapCat).not.toHaveBeenCalled();
 });
 
 it("rejects stale versions and restores persisted state on activation failure", async () => {
   const f = await fixture();
   const before = await f.management.get();
-  await f.management.toggle("memory.writeback", true, before.revision);
+  await f.management.toggle("memory.raw", true, before.revision);
   await expect(
-    f.management.toggle("memory.writeback", false, before.revision),
+    f.management.toggle("memory.raw", false, before.revision),
   ).rejects.toMatchObject({
     status: 409,
     code: "feature_configuration_changed",
@@ -94,12 +102,12 @@ it("rejects stale versions and restores persisted state on activation failure", 
   f.failNext();
   const current = await f.management.get();
   await expect(
-    f.management.toggle("memory.writeback", false, current.revision),
+    f.management.toggle("memory.raw", false, current.revision),
   ).rejects.toMatchObject({ code: "feature_activation_failed" });
   const after = await f.management.get();
-  expect(
-    after.features.find((item) => item.id === "memory.writeback")?.enabled,
-  ).toBe(true);
+  expect(after.features.find((item) => item.id === "memory.raw")?.enabled).toBe(
+    true,
+  );
   expect(after.revision).toBe(current.revision);
   expect(f.committed).toHaveBeenCalledTimes(1);
 });

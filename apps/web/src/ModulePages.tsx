@@ -159,13 +159,27 @@ function ModuleGroup({
                 <StatusBadge
                   tone={module.bindings.length ? "success" : "neutral"}
                 >
-                  {module.bindings.length ? "已激活" : "未激活"}
+                  {module.development
+                    ? "未完成"
+                    : module.bindings.length
+                      ? "已激活"
+                      : "未激活"}
                 </StatusBadge>
                 <span>
                   输入 {module.consumes.length} · 输出 {module.produces.length}
                 </span>
               </div>
             </ModuleLink>
+            {module.development && (
+              <a
+                className="module-issue-link"
+                href={module.development.issueUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                跟踪 Issue
+              </a>
+            )}
           </li>
         ))}
       </ul>
@@ -281,8 +295,21 @@ export function ModuleDetails({
             </h2>
             <p>{module.summary}</p>
             <StatusBadge tone={module.bindings.length ? "success" : "neutral"}>
-              {module.bindings.length ? "已激活" : "未激活"}
+              {module.development
+                ? "未完成"
+                : module.bindings.length
+                  ? "已激活"
+                  : "未激活"}
             </StatusBadge>
+            {module.development && (
+              <a
+                href={module.development.issueUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                跟踪 Issue
+              </a>
+            )}
             <p>
               <code>{module.definitionId}</code>
             </p>
@@ -356,15 +383,17 @@ export function ModuleDetails({
               </div>
             </details>
           )}
-          {SettingsSection && !hiddenSections.has("settings") && (
-            <details className="developer-card" aria-label="模块配置">
-              <summary>模块配置</summary>
-              <SettingsSection
-                definitionId={module.definitionId}
-                token={token}
-              />
-            </details>
-          )}
+          {SettingsSection &&
+            !module.development &&
+            !hiddenSections.has("settings") && (
+              <details className="developer-card" aria-label="模块配置">
+                <summary>模块配置</summary>
+                <SettingsSection
+                  definitionId={module.definitionId}
+                  token={token}
+                />
+              </details>
+            )}
           {TemplatesSection && !hiddenSections.has("templates") && (
             <details className="developer-card" aria-label="提示词模板">
               <summary>提示词模板</summary>

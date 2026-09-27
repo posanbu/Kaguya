@@ -16,12 +16,7 @@ const stages = [
   },
   {
     label: "记忆",
-    matches: (k: string) =>
-      k.startsWith("memory.writeback.") ||
-      k.startsWith("memory.index.") ||
-      k.startsWith("memory.cognition.") ||
-      k.startsWith("memory.association.") ||
-      k === "memory.text",
+    matches: (k: string) => k.startsWith("memory.raw."),
   },
   { label: "模型", matches: (k: string) => k.startsWith("core.model.task.") },
   {

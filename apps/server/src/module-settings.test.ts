@@ -208,53 +208,27 @@ it("first-party editable schemas expose names, constraints and no invented insta
       (f) => f.key === "botNames",
     ),
   ).toBeUndefined();
-  expect((await service.get("memory.cognition")).instances).toEqual([
-    expect.objectContaining({
-      enabled: false,
-      instanceId: "memory.cognition.default",
-    }),
-  ]);
+  await expect(service.get("memory.mem0")).rejects.toMatchObject({
+    status: 404,
+  });
+  await expect(service.get("memory.native")).rejects.toMatchObject({
+    status: 404,
+  });
 });
-it("hides stored Memory provider keys and preserves them when left blank", async () => {
-  const rootDir = await mkdtemp(join(tmpdir(), "module-memory-secret-"));
+it("does not expose settings for unfinished Memory definitions", async () => {
+  const rootDir = await mkdtemp(join(tmpdir(), "module-incomplete-"));
   roots.push(rootDir);
-  const defaults = createFirstPartyModuleConfigDefaults("test").map((config) =>
-    config.definitionId === "memory.index"
-      ? { ...config, settings: { apiKey: "hidden-embedding-key" } }
-      : config,
-  );
+  const defaults = createFirstPartyModuleConfigDefaults("test");
   await loadModuleInstanceConfigs({ rootDir, defaults, initialize: true });
   const service = new ModuleSettingsManagement({
     rootDir,
     catalog: createMessageCatalog(),
     defaults,
     exclusive: (operation) => operation(),
-    replaceFeature: async (_current, next) => {
-      await writeModuleInstanceConfig(
-        rootDir,
-        next.find((config) => config.definitionId === "memory.index")!,
-      );
-    },
   });
-  const before = await service.get("memory.index");
-  expect(before.fields.find((field) => field.key === "apiKey")?.secret).toBe(
-    true,
-  );
-  expect(JSON.stringify(before)).not.toContain("hidden-embedding-key");
-  await service.replace("memory.index", "memory.index.default", {
-    revision: before.instances[0]!.revision,
-    enabled: false,
-    settings: { apiKey: "" },
-  });
-  const after = await loadModuleInstanceConfigs({
-    rootDir,
-    defaults,
-    initialize: false,
-  });
-  expect(
-    after.find((config) => config.definitionId === "memory.index")?.settings
-      .apiKey,
-  ).toBe("hidden-embedding-key");
+  for (const id of ["memory.native", "memory.mem0"]) {
+    await expect(service.get(id)).rejects.toMatchObject({ status: 404 });
+  }
 });
 
 it("maps an invalid array element to its public field path", async () => {
