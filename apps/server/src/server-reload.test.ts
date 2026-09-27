@@ -14,6 +14,12 @@ import { FileUserConfigManager } from "@kaguya/config";
 import { KaguyaDatabase } from "@kaguya/database";
 import { createTestingDatabase } from "@kaguya/database/testing";
 import { KaguyaRuntime } from "@kaguya/runtime";
+import {
+  emptyPersonProfileSections,
+  emptyPersonProfileMetadata,
+  freezeInformationAtom,
+  informationAtomSchema,
+} from "@kaguya/schema";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { startKaguyaServer, type StartedKaguyaServer } from "./server.js";
 import { AdapterHost } from "./adapter-host.js";
@@ -215,6 +221,177 @@ it("replaces downstream instances while retaining HTTP, authentication, database
     await f.server.app.inject({ url: "/api/v1/profiles", headers })
   ).json().data;
   expect(list.status).toBe("ready");
+});
+
+it("keeps a saved person profile pending across configuration hot apply", async () => {
+  const f = await fixture();
+  await f.databases[0]!.information.append(
+    freezeInformationAtom(
+      informationAtomSchema.parse({
+        informationId: "profile-account-nova",
+        kind: "memory.identity.platform.account.entity",
+        occurredAt: new Date().toISOString(),
+        source: "test:person-profile",
+        payload: {
+          platform: "qq",
+          adapterId: "napcat",
+          accountId: "account-nova",
+        },
+        references: [],
+      }),
+    ),
+    [],
+  );
+  await f.databases[0]!.information.append(
+    freezeInformationAtom(
+      informationAtomSchema.parse({
+        informationId: "profile-person-nova",
+        kind: "memory.identity.person.entity",
+        occurredAt: new Date().toISOString(),
+        source: "test:person-profile",
+        payload: { initialName: "首次昵称" },
+        references: [],
+      }),
+    ),
+    [],
+  );
+  await f.databases[0]!.information.append(
+    freezeInformationAtom(
+      informationAtomSchema.parse({
+        informationId: "profile-binding-nova",
+        kind: "memory.identity.platform.account.binding",
+        occurredAt: new Date().toISOString(),
+        source: "test:person-profile",
+        payload: { personInformationId: "profile-person-nova" },
+        references: [
+          { relation: "core:binds", informationId: "profile-account-nova" },
+        ],
+      }),
+    ),
+    [
+      {
+        relation: "core:binds",
+        required: true,
+        multiple: false,
+        targetKinds: ["memory.identity.platform.account.entity"],
+      },
+    ],
+  );
+  const url = "/api/v1/people/profile-person-nova/profile";
+  expect((await f.server.app.inject({ url })).statusCode).toBe(401);
+  const sections = {
+    ...emptyPersonProfileSections(),
+    stableFacts: [
+      {
+        id: "00000000-0000-4000-8000-000000000001",
+        text: "喜欢天文学",
+        source: "manual",
+        evidenceInformationIds: [],
+      },
+    ],
+  };
+  const metadata = {
+    ...emptyPersonProfileMetadata(),
+    primaryName: "手动称呼",
+    aliases: [
+      {
+        id: "00000000-0000-4000-8000-000000000002",
+        text: "另一个称呼",
+        source: "manual",
+        evidenceInformationIds: [],
+      },
+    ],
+    nameReason: "人工确认",
+    knownStatus: "known",
+  };
+  const preview = await f.server.app.inject({
+    method: "POST",
+    url: `${url}/preview`,
+    headers,
+    payload: { sections, metadata },
+  });
+  expect(preview.statusCode).toBe(200);
+  expect(preview.json().data.preview).toContain("账号 account-nova");
+  const stored = await f.server.app.inject({
+    method: "PUT",
+    url,
+    headers,
+    payload: { revision: 0, sections, metadata },
+  });
+  expect(stored.statusCode).toBe(200);
+  expect(stored.json().data).toMatchObject({
+    revision: 1,
+    activeRevision: 0,
+    restartRequired: true,
+    preview: preview.json().data.preview,
+    activeName: "首次昵称",
+    previewName: "手动称呼",
+    activeKnownStatus: "unset",
+  });
+  expect(
+    (
+      await f.server.app.inject({
+        method: "PUT",
+        url,
+        headers,
+        payload: { revision: 0, sections },
+      })
+    ).statusCode,
+  ).toBe(409);
+  const config = await save(f.server);
+  expect((await apply(f.server, config.application)).statusCode).toBe(200);
+  const afterApply = await f.server.app.inject({ url, headers });
+  expect(afterApply.json().data).toMatchObject({
+    revision: 1,
+    activeRevision: 0,
+    restartRequired: true,
+    activeName: "首次昵称",
+    activeKnownStatus: "unset",
+  });
+  const directoryUrl =
+    "/api/v1/inspection/modules/memory.identity/surfaces/people";
+  const beforeDirectory = await f.server.app.inject({
+    url: directoryUrl,
+    headers,
+  });
+  expect(beforeDirectory.statusCode, beforeDirectory.body).toBe(200);
+  expect(beforeDirectory.json().data.items).toContainEqual(
+    expect.objectContaining({
+      entityId: "profile-person-nova",
+      title: "首次昵称",
+    }),
+  );
+
+  const database = f.databases[0]!;
+  const closeDatabase = database.close.bind(database);
+  vi.spyOn(database, "close").mockResolvedValue(undefined);
+  cleanup.push(closeDatabase);
+  await f.server.close();
+  f.connect.mockImplementationOnce(async () => database);
+  const restarted = await startKaguyaServer({
+    ...createServerConfig(
+      await f.manager.getProfile("default"),
+      { configRoot: f.root, development: false },
+      () => "test-reload-gateway-token",
+    ),
+    port: 0,
+  });
+  cleanup.push(() => restarted.close());
+  const afterRestart = await restarted.app.inject({ url, headers });
+  expect(afterRestart.json().data).toMatchObject({
+    revision: 1,
+    activeRevision: 1,
+    restartRequired: false,
+    activeName: "手动称呼",
+    activeKnownStatus: "known",
+  });
+  expect(
+    (await restarted.app.inject({ url: directoryUrl, headers }))
+      .json()
+      .data.items.find(
+        (item: { entityId: string }) => item.entityId === "profile-person-nova",
+      )?.title,
+  ).toBe("手动称呼");
 });
 it("keeps management available, fences ingress and serializes saves while old work is draining", async () => {
   const f = await fixture();

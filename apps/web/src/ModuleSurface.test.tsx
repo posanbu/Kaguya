@@ -17,13 +17,45 @@ vi.mock("./use-inspection.js", () => ({
             surfaceId: "people",
             entity: {
               entityId: "person-1",
-              entityKey: "10001",
-              title: "Ada · 研究组",
-              subtitle: "qq · 10001",
+              entityKey: "person-1",
+              title: "Ada",
+              subtitle: "人物 ID · person-1",
               platform: "qq",
               status: "complete",
               occurredAt: "2026-09-18T01:00:00Z",
-              fields: [{ label: "账号", value: "10001" }],
+              fields: [{ label: "最近识别", value: "2026-09-18T01:00:00Z" }],
+            },
+            accounts: [
+              {
+                platform: "qq",
+                adapterId: "napcat",
+                accountId: "10001",
+                nickname: "Ada",
+                accountInformationId: "account-1",
+                bindingInformationId: "binding-1",
+              },
+              {
+                platform: "discord",
+                adapterId: "discord",
+                accountId: "7788",
+                nickname: null,
+                accountInformationId: "account-2",
+                bindingInformationId: "binding-2",
+              },
+            ],
+            groupCards: [
+              {
+                platform: "qq",
+                groupId: "20002",
+                card: "Ada · 研究组",
+                observedAt: "2026-09-18T01:00:00Z",
+                sourceInformationId: "observation-1",
+              },
+            ],
+            recognitionStats: {
+              count: 3,
+              firstAt: "2026-09-17T01:00:00Z",
+              lastAt: "2026-09-18T01:00:00Z",
             },
             sections: [
               {
@@ -63,13 +95,13 @@ vi.mock("./use-inspection.js", () => ({
             items: [
               {
                 entityId: "person-1",
-                entityKey: "10001",
-                title: "Ada · 研究组",
-                subtitle: "qq · 10001",
+                entityKey: "person-1",
+                title: "Ada",
+                subtitle: "人物 ID · person-1",
                 platform: "qq",
                 status: "complete",
                 occurredAt: "2026-09-18T01:00:00Z",
-                fields: [{ label: "账号", value: "10001" }],
+                fields: [{ label: "最近识别", value: "2026-09-18T01:00:00Z" }],
               },
             ],
             platforms: ["qq"],
@@ -159,7 +191,14 @@ it("renders identity status, person-first navigation and semantic detail section
   );
   expect(html).toContain("最近 24 小时识别状态");
   expect(html).toContain("人物目录");
-  expect(html).toContain("Ada · 研究组");
+  expect(html).toContain("Ada");
+  expect(html).not.toContain("Ada（10001）");
+  expect(html).toContain("绑定账号");
+  expect(html).toContain("最近平台昵称");
+  expect(html).toContain("识别次数");
+  expect(html).toContain("群名片");
+  expect(html).toContain("人物画像");
+  expect(html).toContain("自动提取尚未接入");
   expect(html).toContain("名称观察时间线");
   expect(html).toContain("查看原始 Atom");
   expect(html).toContain("尚未记录相关资料");

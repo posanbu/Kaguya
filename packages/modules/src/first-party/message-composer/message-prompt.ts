@@ -14,6 +14,11 @@ import { contextBootstrapVariable } from "../context-bootstrap.js";
 import { USER_STATEMENT_KIND } from "@kaguya/schema";
 import { renderUserStatement } from "../memory-knowledge/ingestion-kinds.js";
 import {
+  appendPersonProfilesToPrompt,
+  displayPersonName,
+  frozenSpeakerName,
+} from "../person-profile.js";
+import {
   messageTemplateDeclarations,
   outerVariables,
 } from "../../prompt-declarations.js";
@@ -132,6 +137,10 @@ export function createMessagePromptCompiler(
     const turnContext = atoms.find(
       (atom) => atom.informationId === payload.turn.contextInformationId,
     );
+    const personProfiles = (turnContext?.payload as any)?.personProfiles ?? [];
+    const personNames = (turnContext?.payload as any)?.personNames ?? [];
+    const speakerName = (source: MessageSource) =>
+      frozenSpeakerName(source, personProfiles, personNames, atoms);
     const backlog = (turnContext?.payload as any)?.backlog as {
       isBacklog: boolean;
       evaluatedAt: string;
@@ -162,7 +171,7 @@ export function createMessagePromptCompiler(
         (atom.kind === inboundTextInformationKind.kind ||
           atom.kind === assistantTextInformationKind.kind),
     );
-    const history = renderHistory(nested, historyAtoms, identity);
+    const history = renderHistory(nested, historyAtoms, identity, speakerName);
     const memories = renderMemories(
       nested,
       payload.memoryInformationIds.map((id) => {
@@ -171,6 +180,7 @@ export function createMessagePromptCompiler(
         return atom;
       }),
       identity,
+      speakerName,
     );
     const quoteIds: InformationId[] = [];
     const messages = inputs.map((input) => {
@@ -191,10 +201,10 @@ export function createMessagePromptCompiler(
       if (quote)
         quoteIds.push(...quote.provenance.map((atom) => atom.informationId));
       return {
-        ...messageContext(input, identity),
+        ...messageContext(input, identity, speakerName),
         quoted_message: quotedAtom
           ? nested.render("quoted", {
-              message: renderMessage(nested, quotedAtom, identity),
+              message: renderMessage(nested, quotedAtom, identity, speakerName),
               message_id: quotedId,
             })
           : "",
@@ -212,7 +222,9 @@ export function createMessagePromptCompiler(
       topic: composition.topic,
       reply_act: composition.replyAct,
       guidance: "guidance" in composition ? composition.guidance : "",
-      messages: focusedInputs.map((input) => messageContext(input, identity)),
+      messages: focusedInputs.map((input) =>
+        messageContext(input, identity, speakerName),
+      ),
     });
     const turn = nested.render("turn", { messages });
     const prompt = renderOuter([
@@ -277,7 +289,12 @@ export function createMessagePromptCompiler(
         ]),
       ]),
     ]);
-    return { ...prompt, templates: allTemplates };
+    return appendPersonProfilesToPrompt(
+      { ...prompt, templates: allTemplates },
+      (turnContext!.payload as any).personProfiles ?? [],
+      atoms,
+      personNames,
+    );
   };
 }
 
@@ -377,6 +394,7 @@ function renderHistory(
   renderer: CompiledPromptTemplateSet,
   atoms: readonly DeepReadonly<InformationAtom>[],
   identity: AgentIdentity,
+  speakerName: (source: MessageSource) => string = displayName,
 ): { content: string; informationIds: InformationId[] } {
   let remaining = ZH_CN_MESSAGE_PROMPT.historyCharacterLimit;
   const contexts = new Map<InformationId, Record<string, unknown>>();
@@ -385,7 +403,7 @@ function renderHistory(
     .reverse()
     .slice(0, ZH_CN_MESSAGE_PROMPT.historyMessageLimit)) {
     if (remaining <= 0) break;
-    const context = messageContext(atom, identity);
+    const context = messageContext(atom, identity, speakerName);
     const name = context.is_assistant ? "history-assistant" : "history-inbound";
     const bounded = boundRenderedContext(renderer, name, context, remaining);
     const cost = Array.from(renderer.render(name, bounded)).length;
@@ -408,6 +426,7 @@ function renderMemories(
   renderer: CompiledPromptTemplateSet,
   atoms: readonly DeepReadonly<InformationAtom>[],
   identity: AgentIdentity,
+  speakerName: (source: MessageSource) => string = displayName,
 ): { content: string; informationIds: InformationId[] } {
   let remaining = ZH_CN_MESSAGE_PROMPT.memoryCharacterLimit;
   const items: { content: string }[] = [];
@@ -419,7 +438,7 @@ function renderMemories(
         ? memoryText(atom)
         : atom.kind === USER_STATEMENT_KIND
           ? renderUserStatement(atom)
-          : renderMessage(renderer, atom, identity);
+          : renderMessage(renderer, atom, identity, speakerName);
     const context = boundRenderedContext(
       renderer,
       "memory-item",
@@ -468,8 +487,9 @@ function renderMessage(
   renderer: CompiledPromptTemplateSet,
   atom: DeepReadonly<InformationAtom>,
   identity: AgentIdentity,
+  speakerName: (source: MessageSource) => string = displayName,
 ): string {
-  const context = messageContext(atom, identity);
+  const context = messageContext(atom, identity, speakerName);
   return renderer.render(
     context.is_assistant ? "history-assistant" : "history-inbound",
     context,
@@ -479,6 +499,7 @@ function renderMessage(
 function messageContext(
   atom: DeepReadonly<InformationAtom>,
   identity: AgentIdentity,
+  speakerName: (source: MessageSource) => string = displayName,
 ): Record<string, unknown> {
   const payload = messagePayload(atom);
   const source = payload.source as MessageSource;
@@ -490,7 +511,7 @@ function messageContext(
     sender_name:
       atom.kind === assistantTextInformationKind.kind
         ? identity.name
-        : displayName(source),
+        : speakerName(source),
     sender_id:
       atom.kind === assistantTextInformationKind.kind
         ? (source.selfId ?? "")
@@ -539,7 +560,10 @@ function destinationLabel(destination: MessageSource["destination"]): string {
 }
 
 function displayName(source: MessageSource): string {
-  return source.sender?.card ?? source.sender?.nickname ?? source.senderId;
+  return displayPersonName(
+    source.sender?.nickname ?? source.senderId,
+    source.senderId,
+  );
 }
 
 function compareAtoms(

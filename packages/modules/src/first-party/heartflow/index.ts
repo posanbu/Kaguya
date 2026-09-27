@@ -69,6 +69,10 @@ import {
 } from "@kaguya/sdk";
 import { MEMORY_RETRIEVAL_STRATEGY_ID } from "@kaguya/memory";
 import { buildTurnBootstrap } from "./bootstrap.js";
+import {
+  selectActivePersonProfiles,
+  type ActivePersonProfiles,
+} from "../person-profile.js";
 import { buildRecallQuery } from "./recall-query.js";
 
 import {
@@ -113,6 +117,7 @@ export interface CreateHeartflowModuleOptions {
   readonly messageAuthorizationCapability?: ModuleCapability<MessageAuthorization>;
   readonly agentIdentity: AgentIdentity;
   readonly memoryEnabled: boolean | (() => boolean);
+  readonly activePersonProfiles?: ActivePersonProfiles;
   readonly plannerTemplate: string;
   readonly plannerBootstrapPolicy: string;
   readonly plannerPlatformPolicies?: Readonly<
@@ -912,6 +917,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
                 memories,
                 settings,
                 memoryEnabled(),
+                options.activePersonProfiles,
                 context,
               );
             },
@@ -940,6 +946,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
                   memories,
                   settings,
                   memoryEnabled(),
+                  options.activePersonProfiles,
                   context,
                 );
                 return;
@@ -1254,6 +1261,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
                 memories,
                 settings,
                 memoryEnabled(),
+                options.activePersonProfiles,
                 context,
               );
             },
@@ -1307,6 +1315,7 @@ async function progressCandidates(
   memories: readonly DeepReadonly<InformationAtom>[],
   settings: DeepReadonly<HeartflowSettings>,
   memoryEnabled: boolean,
+  activePersonProfiles: ActivePersonProfiles | undefined,
   context: InformationModuleHandlerContext,
 ) {
   const candidates = atoms.filter(
@@ -1332,6 +1341,7 @@ async function progressCandidates(
       memories,
       settings,
       memoryEnabled,
+      activePersonProfiles,
       context,
     );
     if (open.length < 2) continue;
@@ -1362,6 +1372,7 @@ async function progressCandidate(
   memories: readonly DeepReadonly<InformationAtom>[],
   settings: DeepReadonly<HeartflowSettings>,
   memoryEnabled: boolean,
+  activePersonProfiles: ActivePersonProfiles | undefined,
   context: InformationModuleHandlerContext,
 ) {
   const map = new Map(atoms.map((atom) => [atom.informationId, atom]));
@@ -1576,6 +1587,93 @@ async function progressCandidate(
     inbound: DeepReadonly<InformationAtom>;
     identity: DeepReadonly<InformationAtom>;
   }[];
+  const personProfiles = frozenContext
+    ? (((frozenContext.payload as any).personProfiles ?? []) as ReturnType<
+        typeof selectActivePersonProfiles
+      >)
+    : selectActivePersonProfiles(
+        completeInputs.map(({ inbound, identity }) => ({
+          source: (inbound.payload as any).source,
+          personInformationId:
+            (identity.payload as any).status === "complete" &&
+            (identity.payload as any).scopeMode === "canonical"
+              ? (identity.payload as any).personInformationId
+              : undefined,
+        })),
+        (completeInputs.at(-1)!.inbound.payload as any).source.destination
+          ?.kind === "group",
+        activePersonProfiles,
+      );
+  const personNames = frozenContext
+    ? (((frozenContext.payload as any).personNames ?? []) as {
+        personInformationId: string;
+        speakerKey: string;
+        initialName: string;
+        platform?: string;
+        adapterId?: string;
+      }[])
+    : [
+        ...new Map([
+          ...completeInputs.flatMap(({ inbound, identity }) => {
+            const resolved = identity.payload as any;
+            if (
+              resolved.status !== "complete" ||
+              resolved.scopeMode !== "canonical" ||
+              !resolved.personInformationId
+            )
+              return [];
+            const inputSource = (inbound.payload as any).source;
+            const speakerKey = `speaker:${inputSource.senderId}`;
+            return [
+              [
+                JSON.stringify([
+                  inputSource.platform,
+                  inputSource.adapterId,
+                  inputSource.senderId,
+                ]),
+                {
+                  personInformationId: String(resolved.personInformationId),
+                  speakerKey,
+                  platform: inputSource.platform,
+                  adapterId: inputSource.adapterId,
+                  initialName:
+                    activePersonProfiles?.initialNames?.get(
+                      String(resolved.personInformationId),
+                    ) ||
+                    String(
+                      resolved.initialName ||
+                        inputSource.sender?.nickname ||
+                        inputSource.senderId,
+                    ),
+                },
+              ] as const,
+            ];
+          }),
+          ...personProfiles.flatMap((profile) => {
+            const initialName = activePersonProfiles?.initialNames?.get(
+              profile.personInformationId,
+            );
+            if (!initialName || !profile.platform || !profile.adapterId)
+              return [];
+            return [
+              [
+                JSON.stringify([
+                  profile.platform,
+                  profile.adapterId,
+                  profile.speakerKey.slice("speaker:".length),
+                ]),
+                {
+                  personInformationId: profile.personInformationId,
+                  speakerKey: profile.speakerKey,
+                  platform: profile.platform,
+                  adapterId: profile.adapterId,
+                  initialName,
+                },
+              ] as const,
+            ];
+          }),
+        ]).values(),
+      ];
   const last = completeInputs.at(-1)!;
   const source = (last.inbound.payload as any).source;
   const text = completeInputs
@@ -1718,9 +1816,11 @@ async function progressCandidate(
         ...(memories.length === 0
           ? {}
           : { memory: memories.map(({ informationId }) => informationId) }),
+        ...(personProfiles.length === 0 ? {} : { personProfiles }),
+        ...(personNames.length === 0 ? {} : { personNames }),
         attempt: payload.attempt,
         totalWaitBudget: payload.totalWaitBudget,
-      },
+      } as any,
       references: [
         { relation: "agent:turn-claim", informationId: claim.informationId },
         ...completeInputs.flatMap(({ inbound, identity }) => [
@@ -1748,6 +1848,10 @@ async function progressCandidate(
         ...memories.map(({ informationId }) => ({
           relation: "core:uses-context" as const,
           informationId,
+        })),
+        ...personProfiles.map(({ profileInformationId }) => ({
+          relation: "core:uses-context" as const,
+          informationId: profileInformationId,
         })),
       ],
       contextInformationId: runtimeContext.informationId,

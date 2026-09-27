@@ -26,6 +26,7 @@ import {
   createMemoryIngestionGenerator,
 } from "./memory-ingestion.js";
 import { IdentityPersonaManagement } from "./identity-persona-management.js";
+import { PersonProfileManagement } from "./person-profile-management.js";
 import { ModuleSettingsManagement } from "./module-settings-management.js";
 import { FEATURE_IDS, FeatureManagement } from "./feature-management.js";
 import { GatewayAllowlist } from "@kaguya/runtime";
@@ -61,6 +62,7 @@ import {
   KaguyaDatabase,
   PostgresMemoryIngestionStore,
   UnsupportedDatabaseSchemaError,
+  type ActivePersonProfileSnapshot,
 } from "@kaguya/database";
 import {
   createFirstPartyModuleConfigDefaults,
@@ -244,6 +246,13 @@ export async function startKaguyaServer(
   let runtime: KaguyaRuntime | undefined;
   let failedRuntime: KaguyaRuntime | undefined;
   let database: KaguyaDatabase | undefined;
+  let activePersonProfiles: ActivePersonProfileSnapshot = {
+    byPerson: new Map(),
+    byAccount: new Map(),
+    revisions: new Map(),
+    metadataByPerson: new Map(),
+    initialNames: new Map(),
+  };
   const memoryIngestion = new MemoryIngestionService(() =>
     runtime &&
     database &&
@@ -299,6 +308,7 @@ export async function startKaguyaServer(
     try {
       database = await connectInformationDatabase(effectiveConfig.databaseUrl);
       await prepareConfigurationDatabase(database);
+      activePersonProfiles = await database.personProfiles.loadActiveSnapshot();
     } catch (error) {
       if (error instanceof UnsupportedDatabaseSchemaError) throw error;
       degradationReports.push({
@@ -325,6 +335,7 @@ export async function startKaguyaServer(
             ),
             moduleConfigs,
             agentIdentity: selectedProfile.identity,
+            activePersonProfiles,
           }),
         });
         adapterHost.registerTransports(runtime);
@@ -403,6 +414,7 @@ export async function startKaguyaServer(
               database,
               modules: () => activeRuntime.inspectModules(),
               secrets: secretHistory,
+              activePersonProfiles,
             })
           : undefined;
     };
@@ -443,6 +455,7 @@ export async function startKaguyaServer(
             ),
             moduleConfigs: snapshot.moduleConfigs,
             agentIdentity: snapshot.profile.identity,
+            activePersonProfiles,
           },
         );
       },
@@ -499,6 +512,7 @@ export async function startKaguyaServer(
                 ),
                 moduleConfigs: snapshot.moduleConfigs,
                 agentIdentity: snapshot.profile.identity,
+                activePersonProfiles,
               },
             ),
           });
@@ -565,6 +579,7 @@ export async function startKaguyaServer(
             ...createMemoryCompositionOptions(memory),
             moduleConfigs: nextConfigs,
             agentIdentity: selectedProfile.identity,
+            activePersonProfiles,
           },
         );
         await memoryIngestion.pause();
@@ -645,6 +660,10 @@ export async function startKaguyaServer(
         identityPersona: new IdentityPersonaManagement({
           exclusive: (operation) => configuration.exclusive(operation),
         }),
+        personProfiles: new PersonProfileManagement(
+          () => database,
+          activePersonProfiles,
+        ),
         moduleSettings: new ModuleSettingsManagement({
           rootDir: bootstrap.configRoot,
           catalog: createMessageCatalog(),

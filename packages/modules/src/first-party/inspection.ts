@@ -78,6 +78,7 @@ export const firstPartyInspection = {
     mechanism: [
       "按平台、适配器和目标解析会话范围。",
       "关联账号与人物实体；无法确认时明确记录 unresolved 或 ambiguous。",
+      "人物画像由管理端手动维护；保存后重启服务才进入 Planner 与 Composer，Memory 自动提取尚未接入。",
     ],
     views: [
       view(
@@ -91,18 +92,22 @@ export const firstPartyInspection = {
           "memory.identity.platform.account.binding",
           "memory.identity.person.entity",
           "memory.identity.person.observed",
+          "memory.identity.person.profile.revision",
         ],
         {
           platform: "平台",
           adapterId: "适配器",
           destination: "会话",
           accountId: "账号",
+          initialName: "初始称呼",
+          informationId: "人物 ID",
           personInformationId: "人物",
           displayName: "名称",
           scopeMode: "范围类型",
           nickname: "昵称",
           card: "群名片",
           observedAt: "观察时间",
+          revision: "画像版本",
         },
       ),
       view(
@@ -146,22 +151,21 @@ export const firstPartyInspection = {
           area: "main",
           viewId: "identities",
           entityKind: "memory.identity.person.entity",
-          entityKeyField: "accountId",
+          entityKeyField: "informationId",
           activity: {
-            viewId: "identities",
-            kinds: ["memory.identity.person.observed"],
-            entityKeyField: "accountId",
+            viewId: "history",
+            kinds: ["memory.identity.person.context.completed"],
+            entityKeyField: "personInformationId",
           },
           titleFields: [
-            { path: "card", label: "群名片" },
-            { path: "nickname", label: "昵称" },
-            { path: "accountId", label: "账号" },
+            { path: "initialName", label: "初始称呼" },
+            { path: "informationId", label: "人物 ID" },
           ],
           searchFields: [
             {
               viewId: "identities",
               kind: "memory.identity.person.entity",
-              path: "accountId",
+              path: "initialName",
             },
             {
               viewId: "identities",
@@ -187,24 +191,6 @@ export const firstPartyInspection = {
             statusField: "status",
           },
           relations: [
-            {
-              id: "accounts",
-              title: "平台账号与绑定",
-              viewId: "identities",
-              kinds: [
-                "memory.identity.platform.account.entity",
-                "memory.identity.platform.account.binding",
-              ],
-              match: { source: "entity-key", field: "accountId" },
-              presentation: "relation-list",
-              fields: [
-                { path: "platform", label: "平台" },
-                { path: "adapterId", label: "适配器" },
-                { path: "accountId", label: "账号" },
-                { path: "personInformationId", label: "人物" },
-              ],
-              limit: 20,
-            },
             {
               id: "observations",
               title: "名称观察时间线",
@@ -238,6 +224,16 @@ export const firstPartyInspection = {
                 { path: "scopeMode", label: "范围类型" },
                 { path: "scopeInformationId", label: "会话范围" },
               ],
+              limit: 20,
+            },
+            {
+              id: "profile-versions",
+              title: "画像保存版本",
+              viewId: "identities",
+              kinds: ["memory.identity.person.profile.revision"],
+              match: { source: "entity-id", field: "personInformationId" },
+              presentation: "timeline",
+              fields: [{ path: "revision", label: "版本" }],
               limit: 20,
             },
             {

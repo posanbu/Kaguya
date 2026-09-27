@@ -10,6 +10,10 @@ import type { InformationSelectorContext } from "@kaguya/sdk";
 import { turnMessageContextSelector } from "./message-context.js";
 import { atom, fixture, target } from "./test-fixtures.js";
 import { assistantTextInformationKind } from "../information-kinds.js";
+import {
+  PERSON_PROFILE_REVISION_KIND,
+  emptyPersonProfileSections,
+} from "@kaguya/schema";
 function ledger(
   f: ReturnType<typeof fixture>,
 ): InformationSelectorContext["ledger"] {
@@ -63,6 +67,58 @@ describe("turnMessageContextSelector", () => {
         ledger: reader,
       }),
     ).rejects.toThrow("input reference");
+  });
+  it("selects the frozen profile revision and rejects a missing profile reference", async () => {
+    const f = fixture(["CURRENT_INPUT"]);
+    const profile = atom("profile-revision-1", PERSON_PROFILE_REVISION_KIND, {
+      personInformationId: "person-1",
+      revision: 1,
+      sections: emptyPersonProfileSections(),
+      previousRevisionInformationId: null,
+    });
+    const turn = atom(
+      f.turn.informationId,
+      f.turn.kind,
+      {
+        ...f.turn.payload,
+        personProfiles: [
+          {
+            personInformationId: "person-1",
+            profileInformationId: profile.informationId,
+            speakerKey: "qq:adapter:sender-0",
+          },
+        ],
+      },
+      [
+        ...f.turn.references,
+        {
+          relation: "core:uses-context",
+          informationId: profile.informationId,
+        },
+      ],
+    );
+    const reader = ledger(f);
+    reader.related = async (q) =>
+      q.from.includes(f.intent.informationId)
+        ? [turn]
+        : q.from.includes(turn.informationId)
+          ? [...f.messages, profile]
+          : [];
+    await expect(
+      turnMessageContextSelector.select({
+        sourceAtom: f.intent,
+        ledger: reader,
+      }),
+    ).resolves.toContain(profile.informationId);
+
+    reader.related = async (q) =>
+      q.from.includes(f.intent.informationId) ? [turn] : f.messages;
+    await expect(
+      turnMessageContextSelector.select({
+        sourceAtom: f.intent,
+        ledger: reader,
+      }),
+    ).rejects.toThrow("Missing frozen person profile reference");
   });
   it.each(["foreign-scope", "future"])(
     "rejects frozen raw memory outside %s boundaries",

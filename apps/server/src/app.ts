@@ -32,6 +32,8 @@ import type { MemoryIngestionService } from "./memory-ingestion.js";
 import { registerModuleTemplateRoutes } from "./module-template-routes.js";
 import type { ModuleTemplateManagement } from "./module-template-management.js";
 import { registerIdentityPersonaRoutes } from "./identity-persona-routes.js";
+import { registerPersonProfileRoutes } from "./person-profile-routes.js";
+import type { PersonProfileManagement } from "./person-profile-management.js";
 import type { IdentityPersonaManagement } from "./identity-persona-management.js";
 import { registerModuleSettingsRoutes } from "./module-settings-routes.js";
 import type { ModuleSettingsManagement } from "./module-settings-management.js";
@@ -612,6 +614,7 @@ export interface CreateHttpApplicationOptions {
   featureManagement?: FeatureManagement;
   moduleTemplates?: ModuleTemplateManagement;
   identityPersona?: IdentityPersonaManagement;
+  personProfiles?: PersonProfileManagement;
   memoryIngestion?: MemoryIngestionService;
   logger?: FastifyBaseLogger;
   discoverModels?: typeof discoverOpenAiCompatibleModels;
@@ -647,6 +650,11 @@ export async function createHttpApplication(
     app,
     requireGatewayToken(options, "management"),
     options.identityPersona,
+  );
+  registerPersonProfileRoutes(
+    app,
+    requireGatewayToken(options, "management"),
+    options.personProfiles,
   );
   registerModuleSettingsRoutes(
     app,

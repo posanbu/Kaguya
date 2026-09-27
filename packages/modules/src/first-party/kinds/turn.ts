@@ -455,6 +455,33 @@ const turnContextPayloadSchema = z
     bootstrap: turnBootstrapProjectionSchema.optional(),
     /** Optional enrichments are intentionally advisory and do not affect timing. */
     memory: z.array(nonBlankString).optional(),
+    personProfiles: z
+      .array(
+        z
+          .object({
+            personInformationId: nonBlankString,
+            profileInformationId: nonBlankString,
+            speakerKey: nonBlankString,
+            platform: nonBlankString.optional(),
+            adapterId: nonBlankString.optional(),
+          })
+          .strict(),
+      )
+      .max(3)
+      .optional(),
+    personNames: z
+      .array(
+        z
+          .object({
+            personInformationId: nonBlankString,
+            speakerKey: nonBlankString,
+            initialName: nonBlankString,
+            platform: nonBlankString.optional(),
+            adapterId: nonBlankString.optional(),
+          })
+          .strict(),
+      )
+      .optional(),
     association: z.array(nonBlankString).optional(),
     recheckAt: nonBlankString.optional(),
     attempt: z.number().int().min(0),

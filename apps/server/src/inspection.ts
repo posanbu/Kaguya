@@ -30,7 +30,11 @@ import {
 } from "./inspection-wiki.js";
 import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { InformationRepository, KaguyaDatabase } from "@kaguya/database";
+import type {
+  InformationRepository,
+  KaguyaDatabase,
+  ActivePersonProfileSnapshot,
+} from "@kaguya/database";
 import {
   z,
   inspectionModulesSchema,
@@ -53,6 +57,12 @@ import {
   type ModuleInspectionSurfaceV1,
 } from "@kaguya/schema";
 import { createInspectionRedactor } from "./inspection-redaction.js";
+import {
+  findPeopleByAccount,
+  readPersonBasics,
+  readPersonObservationIds,
+  readPrimaryAccounts,
+} from "./person-basics.js";
 import {
   readInspectionStorage,
   StorageCursorError,
@@ -186,6 +196,7 @@ export interface InspectionSource {
   readonly modules: () => unknown;
   readonly secrets: unknown;
   readonly database?: KaguyaDatabase;
+  readonly activePersonProfiles?: ActivePersonProfileSnapshot;
   readonly now?: () => Date;
 }
 type SurfaceBrowser = Extract<
@@ -301,9 +312,34 @@ async function eligibleSurfaceEntityIds(
     platform?: string | undefined;
     status?: string | undefined;
   },
+  database?: KaguyaDatabase,
+  activePersonProfiles?: ActivePersonProfileSnapshot,
 ): Promise<Set<string> | undefined> {
   const restrictions: Set<string>[] = [];
-  if (query.q) {
+  if (browser.entityKind === "memory.identity.person.entity" && database) {
+    if (query.q) {
+      const matches = await findPeopleByAccount(database, { q: query.q });
+      const needle = query.q.toLocaleLowerCase();
+      for (const [personId, name] of activePersonProfiles?.initialNames ?? [])
+        if (name.toLocaleLowerCase().includes(needle)) matches.add(personId);
+      for (const [
+        personId,
+        metadata,
+      ] of activePersonProfiles?.metadataByPerson ?? [])
+        if (
+          [
+            metadata.primaryName,
+            ...metadata.aliases.map((alias) => alias.text),
+          ].some((name) => name?.toLocaleLowerCase().includes(needle))
+        )
+          matches.add(personId);
+      restrictions.push(matches);
+    }
+    if (query.platform)
+      restrictions.push(
+        await findPeopleByAccount(database, { platform: query.platform }),
+      );
+  } else if (query.q) {
     const keys = new Set<string>();
     for (const field of browser.searchFields) {
       const rows = await ledger.inspectPage({
@@ -331,7 +367,10 @@ async function eligibleSurfaceEntityIds(
       ),
     );
   }
-  if (query.platform) {
+  if (
+    query.platform &&
+    !(browser.entityKind === "memory.identity.person.entity" && database)
+  ) {
     const accounts = await ledger.inspectPage({
       kind: browser.platform.kind,
       payloadIn: {
@@ -392,8 +431,18 @@ async function buildSurfaceItems(
   ledger: InspectionLedger,
   browser: SurfaceBrowser,
   roots: readonly DeepReadonly<InformationAtom>[],
+  database?: KaguyaDatabase,
+  activePersonProfiles?: ActivePersonProfileSnapshot,
 ) {
   if (!roots.length) return [];
+  const people = browser.entityKind === "memory.identity.person.entity";
+  const primaryAccounts =
+    people && database
+      ? await readPrimaryAccounts(
+          database,
+          roots.map((root) => root.informationId),
+        )
+      : new Map<string, { platform: string; accountId: string }>();
   const keys = uniqueStrings(
     roots.map((atom) => readAtomField(atom, browser.entityKeyField)),
   );
@@ -401,11 +450,13 @@ async function buildSurfaceItems(
     browser.platform.kind,
     ...browser.searchFields.map(({ kind }) => kind),
   ]);
-  const related = await ledger.inspectPage({
-    kinds: relatedKinds,
-    payloadIn: { path: browser.entityKeyField.split("."), values: keys },
-    limit: 501,
-  });
+  const related = people
+    ? []
+    : await ledger.inspectPage({
+        kinds: relatedKinds,
+        payloadIn: { path: browser.entityKeyField.split("."), values: keys },
+        limit: 501,
+      });
   const statuses = await ledger.inspectPage({
     kinds: browser.status.kinds,
     payloadIn: {
@@ -428,7 +479,7 @@ async function buildSurfaceItems(
       (atom) =>
         readAtomField(atom, browser.status.entityField) === root.informationId,
     );
-    const title =
+    const genericTitle =
       browser.titleFields
         .map(({ path }) =>
           [root, ...rows]
@@ -436,27 +487,51 @@ async function buildSurfaceItems(
             .find((value) => typeof value === "string" && value.trim()),
         )
         .find((value) => typeof value === "string") ?? entityKey;
-    const platform = platformRow
-      ? readAtomField(platformRow, browser.platform.field)
-      : undefined;
+    const platform = people
+      ? primaryAccounts.get(root.informationId)?.platform
+      : platformRow
+        ? readAtomField(platformRow, browser.platform.field)
+        : undefined;
+    const title = people
+      ? activePersonProfiles?.metadataByPerson.get(root.informationId)
+          ?.primaryName ||
+        activePersonProfiles?.initialNames.get(root.informationId) ||
+        String(
+          root.payload.initialName ||
+            primaryAccounts.get(root.informationId)?.accountId ||
+            root.payload.accountId ||
+            root.informationId,
+        )
+      : genericTitle;
     const status = statusRow
       ? readAtomField(statusRow, browser.status.statusField)
       : undefined;
-    const latest = rows[0]?.occurredAt ?? root.occurredAt;
+    const latest = people
+      ? (statusRow?.occurredAt ?? root.occurredAt)
+      : (rows[0]?.occurredAt ?? root.occurredAt);
     return {
       entityId: root.informationId,
       entityKey,
       title,
-      subtitle: `${typeof platform === "string" ? platform : "未知平台"} · ${entityKey}`,
+      subtitle: people
+        ? `人物 ID · ${root.informationId}`
+        : `${typeof platform === "string" ? platform : "未知平台"} · ${entityKey}`,
       ...(typeof platform === "string" ? { platform } : {}),
       ...(typeof status === "string" ? { status } : {}),
       occurredAt: latest,
       fields: [
-        { label: "账号", value: entityKey },
-        ...(typeof platform === "string"
-          ? [{ label: "平台", value: platform }]
-          : []),
-        { label: "最近观察", value: latest },
+        ...(people
+          ? []
+          : [
+              { label: "账号", value: entityKey },
+              ...(typeof platform === "string"
+                ? [{ label: "平台", value: platform }]
+                : []),
+            ]),
+        {
+          label: people ? (statusRow ? "最近识别" : "人物建立") : "最近观察",
+          value: latest,
+        },
       ],
     };
   });
@@ -819,18 +894,37 @@ export function createInspectionService(source: InspectionSource) {
       if (query.after || query.before)
         throw new InspectionError(400, "invalid_inspection_request");
       if (!status) throw new InspectionError(500, "invalid_module_surface");
-      const entityIds = await eligibleSurfaceEntityIds(ledger, browser, query);
+      const entityIds = await eligibleSurfaceEntityIds(
+        ledger,
+        browser,
+        query,
+        source.database,
+        source.activePersonProfiles,
+      );
       const roots = await ledger.inspectEntityPage({
         rootKind: browser.entityKind,
         rootKeyPath: browser.entityKeyField.split("."),
-        activityKinds: browser.activity.kinds,
-        activityKeyPath: browser.activity.entityKeyField.split("."),
+        activityKinds:
+          browser.entityKind === "memory.identity.person.entity"
+            ? browser.status.kinds
+            : browser.activity.kinds,
+        activityKeyPath:
+          browser.entityKind === "memory.identity.person.entity"
+            ? browser.status.entityField.split(".")
+            : browser.activity.entityKeyField.split("."),
+        activityRootId: browser.entityKind === "memory.identity.person.entity",
         limit: query.limit + 1,
         ...(cursor ? { cursor } : {}),
         ...(entityIds ? { informationIds: [...entityIds] } : {}),
       });
       const page = roots.slice(0, query.limit);
-      const items = await buildSurfaceItems(ledger, browser, page);
+      const items = await buildSurfaceItems(
+        ledger,
+        browser,
+        page,
+        source.database,
+        source.activePersonProfiles,
+      );
       const summaryAfter = new Date(
         (source.now?.() ?? new Date()).getTime() -
           status.windowHours * 60 * 60 * 1000,
@@ -926,7 +1020,13 @@ export function createInspectionService(source: InspectionSource) {
       }
       if (!root || root.kind !== browser.entityKind)
         throw new InspectionError(404, "surface_entity_not_found");
-      const [entity] = await buildSurfaceItems(ledger, browser, [root]);
+      const [entity] = await buildSurfaceItems(
+        ledger,
+        browser,
+        [root],
+        source.database,
+        source.activePersonProfiles,
+      );
       if (!entity) throw new InspectionError(404, "surface_entity_not_found");
       const entityKey = String(
         readAtomField(root, browser.entityKeyField) ?? "",
@@ -951,20 +1051,39 @@ export function createInspectionService(source: InspectionSource) {
             ),
           );
         }
-        const rows = matchValues.length
-          ? await ledger.inspectPage({
-              kinds: relation.kinds,
-              ...(relation.match.field === "informationId"
-                ? { informationIds: matchValues }
-                : {
-                    payloadIn: {
-                      path: relation.match.field.split("."),
-                      values: matchValues,
-                    },
-                  }),
-              limit: Math.min(501, relation.limit + 1),
-            })
-          : [];
+        // 人物观察按绑定引用归属；旧 Surface 声明中的 accountId 只作无数据库回退。
+        const rows =
+          browser.entityKind === "memory.identity.person.entity" &&
+          relation.id === "observations" &&
+          source.database
+            ? (
+                await Promise.all(
+                  (
+                    await readPersonObservationIds(
+                      source.database,
+                      entityId,
+                      relation.limit + 1,
+                    )
+                  ).map((id) => ledger.get(id)),
+                )
+              ).filter(
+                (atom): atom is DeepReadonly<InformationAtom> =>
+                  atom !== undefined,
+              )
+            : matchValues.length
+              ? await ledger.inspectPage({
+                  kinds: relation.kinds,
+                  ...(relation.match.field === "informationId"
+                    ? { informationIds: matchValues }
+                    : {
+                        payloadIn: {
+                          path: relation.match.field.split("."),
+                          values: matchValues,
+                        },
+                      }),
+                  limit: Math.min(501, relation.limit + 1),
+                })
+              : [];
         sections.push({
           id: relation.id,
           title: relation.title,
@@ -983,8 +1102,20 @@ export function createInspectionService(source: InspectionSource) {
           })),
         });
       }
+      const basics =
+        definitionId === "memory.identity" &&
+        surfaceId === "people" &&
+        source.database
+          ? await readPersonBasics(source.database, entityId)
+          : {};
       return inspectionSurfaceEntitySchema.parse(
-        redact({ version: 1, surfaceId: surface.id, entity, sections }),
+        redact({
+          version: 1,
+          surfaceId: surface.id,
+          entity,
+          sections,
+          ...basics,
+        }),
       );
     },
     async surfaceRequest(

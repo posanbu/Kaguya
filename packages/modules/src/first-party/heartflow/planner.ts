@@ -17,6 +17,10 @@
  * 展示契约：中文名称与职责说明由定义直接提供给 Inspection 和 WebUI，稳定 kind 与协议字段保持不变。
  */
 import { contextBootstrapVariable } from "../context-bootstrap.js";
+import {
+  appendPersonProfilesToPrompt,
+  frozenSpeakerName,
+} from "../person-profile.js";
 import { plannerTemplateDeclaration } from "../../prompt-declarations.js";
 import { selectPlatformPromptResource } from "@kaguya/prompt";
 import {
@@ -298,6 +302,10 @@ export function compilePlannerPrompt(
   const payload: any = turnContextCompletedInformationKind.payloadSchema.parse(
     turn.payload,
   );
+  const personProfiles = payload.personProfiles ?? [];
+  const personNames = payload.personNames ?? [];
+  const speakerName = (source: any) =>
+    frozenSpeakerName(source, personProfiles, personNames, atoms);
   const currentTime = formatZonedInstant(
     payload.backlog.evaluatedAt,
     identity.timeZone,
@@ -380,9 +388,7 @@ export function compilePlannerPrompt(
       speaker:
         quote.message.kind === assistantTextInformationKind.kind
           ? identity.name
-          : (quotedSource.sender?.card ??
-            quotedSource.sender?.nickname ??
-            quotedSource.senderId),
+          : speakerName(quotedSource),
       text: quote.message.payload.text,
     };
   });
@@ -455,9 +461,7 @@ export function compilePlannerPrompt(
             speaker:
               atom.kind === assistantTextInformationKind.kind
                 ? identity.name
-                : (source.sender?.card ??
-                  source.sender?.nickname ??
-                  source.senderId),
+                : speakerName(source),
             platformMessageId: source.platformMessageId ?? null,
             replyTo: source.replyTo?.platformMessageId ?? null,
           };
@@ -518,10 +522,7 @@ export function compilePlannerPrompt(
             occurredAt: input.occurredAt,
             localTime: formatZonedInstant(input.occurredAt, identity.timeZone)
               .local,
-            speaker:
-              input.source.sender?.card ??
-              input.source.sender?.nickname ??
-              input.source.senderId,
+            speaker: speakerName(input.source),
             mentions: input.source.mentions ?? [],
             replyTo: input.source.replyTo?.platformMessageId ?? null,
           }),
@@ -543,7 +544,7 @@ export function compilePlannerPrompt(
       informationIds: [...new Set([turn.informationId, ...quoteProvenance])],
     },
   ];
-  return createPromptTemplateRenderer({
+  const prompt = createPromptTemplateRenderer({
     kind: "route",
     templateId: "kaguya.planner.zh-CN/v1",
     main: {
@@ -551,4 +552,10 @@ export function compilePlannerPrompt(
       content: promptTemplate,
     },
   })(values);
+  return appendPersonProfilesToPrompt(
+    prompt,
+    payload.personProfiles ?? [],
+    atoms,
+    personNames,
+  );
 }

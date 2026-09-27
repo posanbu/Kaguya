@@ -18,6 +18,8 @@ import {
   chatScopeEntityInformationKind,
   inboundTextInformationKind,
   personEntityInformationKind,
+  personObservedInformationKind,
+  platformAccountBindingInformationKind,
   platformAccountEntityInformationKind,
 } from "../information-kinds.js";
 import { identityModule } from "./index.js";
@@ -75,6 +77,7 @@ async function fixture() {
       destination: PlatformDestination,
       platform = "web",
       adapterId = "web.ui.main",
+      sender?: { userId: string; nickname?: string; card?: string },
     ) {
       const atom = freezeInformationAtom({
         informationId: informationIdSchema.parse(id),
@@ -88,6 +91,7 @@ async function fixture() {
             adapterId,
             destination,
             senderId: "same-sender",
+            ...(sender ? { sender } : {}),
             platformMessageId: id,
           },
         }),
@@ -141,6 +145,52 @@ it("reuses a Web conversation scope without creating a persistent person", async
   }
   expect(f.all(personEntityInformationKind.kind)).toHaveLength(0);
   expect(f.all(platformAccountEntityInformationKind.kind)).toHaveLength(0);
+});
+
+it("fixes the initial name from the first platform nickname, never a group card", async () => {
+  const f = await fixture();
+  const group = { kind: "group" as const, groupId: "group-1" };
+  const first = await f.inbound("first-qq", group, "qq", "qq.main", {
+    userId: "same-sender",
+    nickname: "首次昵称",
+    card: "群名片",
+  });
+  const later = await f.inbound("later-qq", group, "qq", "qq.main", {
+    userId: "same-sender",
+    nickname: "后来昵称",
+    card: "后来群名片",
+  });
+  expect(f.all(personEntityInformationKind.kind)).toHaveLength(1);
+  expect(f.all(personEntityInformationKind.kind)[0]?.payload).toMatchObject({
+    initialName: "首次昵称",
+    initialNameSource: "platform_nickname",
+  });
+  expect(
+    f.all(personEntityInformationKind.kind)[0]?.payload.accountId,
+  ).toBeUndefined();
+  expect(
+    f.all(platformAccountBindingInformationKind.kind)[0]?.payload.accountId,
+  ).toBeUndefined();
+  expect(
+    f.all(personObservedInformationKind.kind)[0]?.payload.accountId,
+  ).toBeUndefined();
+  expect(first.payload.initialName).toBe("首次昵称");
+  expect(later.payload.initialName).toBe("首次昵称");
+  expect(
+    f.all(personObservedInformationKind.kind).at(-1)?.payload.nickname,
+  ).toBe("后来昵称");
+
+  const noNickname = await fixture();
+  await noNickname.inbound("card-only", group, "qq", "qq.main", {
+    userId: "same-sender",
+    card: "只有群名片",
+  });
+  expect(
+    noNickname.all(personEntityInformationKind.kind)[0]?.payload,
+  ).toMatchObject({
+    initialName: "same-sender",
+    initialNameSource: "account_id",
+  });
 });
 
 it("preserves per-inbound scopes for legacy Web and canonical identities for QQ", async () => {
