@@ -59,7 +59,7 @@ it("accepts active module bindings that do not consume a capability", () => {
       version: 1,
       modules: [
         {
-          definitionId: "memory.writeback",
+          definitionId: "memory.raw",
           tags: ["memory"],
           displayName: "原始记忆",
           summary: "保存原文",
@@ -74,9 +74,7 @@ it("accepts active module bindings that do not consume a capability", () => {
           diagnostics: [],
           requires: [],
           provides: [],
-          bindings: [
-            { instanceId: "memory.writeback.default", capabilities: [] },
-          ],
+          bindings: [{ instanceId: "memory.raw.default", capabilities: [] }],
         },
       ],
     }).modules[0]?.bindings[0]?.capabilities,

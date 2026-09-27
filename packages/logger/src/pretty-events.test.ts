@@ -47,45 +47,13 @@ describe("module input/output panels", () => {
     expect(decision).not.toContain("Prompt");
   });
 
-  it("displays memory input, registered text and empty retrieval using only available fields", () => {
-    const query = formatPrettyMessage({
-      event: "memory.association.query",
-      method: "sparse-2gram",
-      route: "message",
-      queryLength: 8,
-      limit: 8,
-      contentPreview: "以前看月亮的约定",
-      contentTruncated: false,
+  it("frames raw Memory terminal without inventing message content", () => {
+    const terminal = formatPrettyMessage({
+      event: "memory.raw.terminal",
+      status: "completed",
     });
-    expect(query).toContain("╭─ 记忆联想 · 检索输入");
-    expect(query).toContain("├─ 查询文本预览");
-    expect(query).toContain("以前看月亮的约定");
-    const memory = formatPrettyMessage({
-      event: "memory.text.registered",
-      contentPreview: "用户喜欢天文观测。",
-      contentTruncated: false,
-    });
-    expect(memory).toContain("╭─ 记忆 · 正文登记");
-    expect(memory).toContain("├─ 记忆正文预览");
-    expect(memory).toContain("用户喜欢天文观测。");
-    const empty = formatPrettyMessage({
-      event: "memory.association.completed",
-      status: "empty",
-      candidateCount: 0,
-      reasonCodes: ["no-sparse-match"],
-    });
-    expect(empty).toContain("╭─ 记忆联想 · 检索结果");
-    expect(empty).toContain("状态=无结果");
-    expect(empty).toContain("候选数量=0");
-    expect(empty).not.toContain("正文");
-    const candidate = formatPrettyMessage({
-      event: "memory.association.candidate",
-      rank: 0,
-      strategy: "sparse-2gram",
-      reasonCodes: ["coverage-ranked"],
-    });
-    expect(candidate).toContain("╭─ 记忆联想 · 召回候选");
-    expect(candidate).not.toContain("正文");
+    expect(terminal).toContain("原始记忆 · 写入结果");
+    expect(terminal).not.toContain("正文");
   });
 
   it("frames actual expression summaries and keeps missing content out of info logs", () => {
@@ -167,7 +135,7 @@ describe("module input/output panels", () => {
     (columns) => {
       const output = formatPrettyMessage(
         {
-          event: "memory.association.query",
+          event: "memory.raw.terminal",
           marker: "x".repeat(columns - 26),
           queryLength: 20,
           route: "👩🏽‍💻中文",

@@ -6,7 +6,7 @@
 
 ## 消费和产生
 
-消费 `memory.identity.person.context.completed` 与 `memory.writeback.requested`；产生 requested、completed、empty、failed。
+消费 `memory.identity.person.context.completed` 与 `memory.raw.requested`；产生 requested、completed、empty、failed。
 
 ## 数据流与边界
 
@@ -14,7 +14,7 @@
 
 ## Settings
 
-模块使用严格空设置。selected Profile 的 `memory.enabled` 控制全局开关；provider 端点与凭据由 composition 持有，不进入模块 settings。
+模块使用严格空设置。工作区 `memory.raw` 实例的 `enabled` 控制即时开关；未完成的 native/mem0 没有 provider 设置。
 
 ## 可靠性、幂等和失败行为
 
@@ -26,4 +26,4 @@ request/terminal 可通过 Information Inspection 查看。普通日志只包含
 
 ## 典型场景
 
-Profile 开启 Memory 后，即使没有 Heartflow、Heartbeat 或 Composer，也可以保存消息。
+工作区开启原始记忆后，即使没有 Heartflow、Heartbeat 或 Composer，也可以保存消息。

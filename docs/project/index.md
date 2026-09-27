@@ -80,9 +80,7 @@ InformationLedger 已改为异步端口；PostgreSQL 17 实现追加式存储、
 
 ### Memory 底座与后续分层
 
-独立消息 Memory、Unicode 2-gram 稀疏召回和 first-party Prompt 接入已由 #74 实现。Memory 行不属于 Information Ledger；检索命中会重新加载原始 inbound atom，使 provenance 保持为不可变消息。在线回合按冻结聊天范围召回，并排除当前消息和未来消息。
-
-可靠逐消息写回、pgvector 可恢复回填与混合召回、可替换 Mem0 REST 认知层已接入。它们在 Profile 中显式启用，后台链不等待 reply，也不构造回合。认知以有界证据窗口产生快照，Kaguya 不自写演化启发式；部署及验收边界见 [Memory 认知层](../developers/memory.md)。周期调度与日志投影维护继续独立运行。
+原始消息由 `memory.raw` 可靠写回。`memory.identity` 与 `memory.expression` 继续运行；自研联想/索引统一归入尚未完成的 `memory.native`，Mem0 认知归入尚未完成的 `memory.mem0`。在线回合目前不调用旧检索链。具体边界见 [Memory 模块文档](../developers/memory.md)。
 
 ### PostgreSQL 运维演进
 

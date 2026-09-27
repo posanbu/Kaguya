@@ -23,7 +23,7 @@ import {
   inboundTextInformationKind,
   personContextCompletedInformationKind,
 } from "../information-kinds.js";
-import { memoryWritebackModule } from "./index.js";
+import { memoryRawModule } from "./index.js";
 
 const contextKind = defineInformationKind({
   kind: "core.runtime.context",
@@ -42,7 +42,7 @@ async function fixture() {
   await database.prepareSchema();
   const catalog = defineInformationModuleCatalog(
     identityModule,
-    memoryWritebackModule,
+    memoryRawModule,
   );
   const registry = new InformationKindRegistry();
   registry.registerBuiltin(contextKind);
@@ -110,7 +110,7 @@ async function fixture() {
   async function terminal(kind = "completed") {
     return vi.waitFor(async () => {
       const found = await database.information.find({
-        kinds: [`memory.writeback.${kind}`],
+        kinds: [`memory.raw.${kind}`],
         limit: 100,
       });
       expect(
@@ -136,12 +136,11 @@ describe("durable raw Memory writeback", () => {
       const done = await f.terminal();
       expect(done.payload).toEqual({ status: "completed", version: 1 });
       expect(JSON.stringify(done)).not.toContain("消息正文");
-      const hits = await f.database.memory.recall({ query: "消息", limit: 10 });
-      expect(hits.map((hit) => hit.document.sourceInformationId)).toEqual([
-        source.informationId,
-      ]);
+      expect(
+        (await f.database.memory.getBySource(source.informationId))?.content,
+      ).toBe("消息正文");
       const requests = await f.database.information.find({
-        kinds: ["memory.writeback.requested"],
+        kinds: ["memory.raw.requested"],
         limit: 10,
       });
       expect(requests).toHaveLength(1);
@@ -163,9 +162,9 @@ describe("durable raw Memory writeback", () => {
     await f.submit("可恢复消息");
     await f.terminal();
     expect(f.put).toHaveBeenCalledTimes(2);
-    expect(
-      await f.database.memory.recall({ query: "消息", limit: 10 }),
-    ).toHaveLength(1);
+    expect(await f.database.memory.listDocuments({ limit: 10 })).toHaveLength(
+      1,
+    );
   });
   it("records a permanent source conflict without retries", async () => {
     const f = await fixture();
@@ -197,7 +196,7 @@ describe("durable raw Memory writeback", () => {
     );
     await vi.waitFor(async () => {
       const delivery = await f.database.sql.query(
-        "SELECT state FROM information_deliveries WHERE information_id = $1 AND subscription_id LIKE '%memory.writeback.request%'",
+        "SELECT state FROM information_deliveries WHERE information_id = $1 AND subscription_id LIKE '%memory.raw.request%'",
         [replay.informationId],
       );
       expect(delivery.rows).toEqual([{ state: "acked" }]);
@@ -205,13 +204,13 @@ describe("durable raw Memory writeback", () => {
     await f.host.stop();
     expect(
       await f.database.information.find({
-        kinds: ["memory.writeback.requested"],
+        kinds: ["memory.raw.requested"],
         limit: 10,
       }),
     ).toHaveLength(1);
     expect(
       await f.database.information.find({
-        kinds: ["memory.writeback.completed"],
+        kinds: ["memory.raw.completed"],
         limit: 10,
       }),
     ).toHaveLength(1);

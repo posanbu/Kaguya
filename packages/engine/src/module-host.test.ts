@@ -214,6 +214,49 @@ async function startHost(
 }
 
 describe("ModuleHost", () => {
+  it("refuses an unfinished definition before creating its instance", async () => {
+    const { core } = createCore();
+    await core.start();
+    const create = vi.fn(() => ({ provisions: [], subscriptions: [] }));
+    const module = defineInformationModule({
+      manifest: {
+        protocolVersion: 1,
+        moduleVersion: "0.0.0",
+        definitionId: "memory.native",
+        displayName: "自研记忆",
+        summary: "未完成",
+        description: "尚无运行逻辑。",
+        development: {
+          status: "incomplete",
+          issueUrl: "https://github.com/posanbu/Kaguya/issues/265",
+        },
+        settingsSchema: z.object({}).strict(),
+        consumes: [],
+        produces: [],
+        selectors: [],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
+      },
+      create,
+    });
+    const host = new ModuleHost({
+      core,
+      catalog: defineInformationModuleCatalog(module),
+    });
+    await expect(
+      host.start([
+        {
+          instanceId: "memory.native.default",
+          definitionId: "memory.native",
+          settings: {},
+        },
+      ]),
+    ).rejects.toThrow("Incomplete module cannot be activated: memory.native");
+    expect(create).not.toHaveBeenCalled();
+    await core.close();
+  });
+
   it("runs ready after subscriptions and reliable delivery while start has no consumers", async () => {
     const { core } = createCore();
     await core.start();

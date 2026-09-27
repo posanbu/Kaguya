@@ -44,7 +44,7 @@ describe("shared Runtime Composition", () => {
     const defaults = modules.createFirstPartyModuleConfigDefaults("test");
     const enabled = createMessageComposition(undefined, {
       moduleConfigs: defaults.map((config) =>
-        config.definitionId === "memory.writeback"
+        config.definitionId === "memory.raw"
           ? { ...config, enabled: true }
           : config,
       ),
@@ -52,7 +52,7 @@ describe("shared Runtime Composition", () => {
     });
     expect(enabled.memory).toEqual({ enabled: true });
     expect(
-      enabled.activations.some((a) => a.definitionId === "memory.writeback"),
+      enabled.activations.some((a) => a.definitionId === "memory.raw"),
     ).toBe(true);
   });
   it("adopts an added and then removed catalog definition without an app registry", () => {
@@ -144,7 +144,7 @@ describe("shared Runtime Composition", () => {
     );
     expect(
       composition.activations.some(
-        ({ definitionId }) => definitionId === "memory.writeback",
+        ({ definitionId }) => definitionId === "memory.raw",
       ),
     ).toBe(false);
     expect(

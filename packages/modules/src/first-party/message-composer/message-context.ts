@@ -3,7 +3,7 @@
  * 功能概述：消息编写模块的受控账本选择器及 Prompt 预览入口，不参与 Heartflow 的发言决策。
  * 已确认的跨会话消息通过 confirmation→assistant 因果链验证成功投递，才能进入同目标历史或引用。
  * 主要职责：turnMessageContextSelector 核对 intent→turn 引用并保留全部冻结输入；仅辅助历史受预算限制，
- * 已投递 assistant 才可进入历史，每条输入通过同目标成功回执链或入站 ID 查询引用上下文。associationMessageContextSelector 校验关联终态因果。
+ * 已投递 assistant 才可进入历史，每条输入通过同目标成功回执链或入站 ID 查询引用上下文。
  * 代码库关系：index.ts 声明选择器与渲染器，message-prompt 使用冻结快照编译；Engine 按返回 ID 重载事实。
  * 输入输出与副作用：只读 ledger、返回去重 ID；缺少 turn、输入或记忆授权时抛错，不回退到复制的末条正文。
  * 冻结原文记忆额外核验目标范围和事件截止点；检索命中或显式引用不能放宽消息来源权限。
@@ -24,10 +24,6 @@ import {
 import {
   coreMemoryTextInformationKind,
   assistantTextInformationKind,
-  associationCandidateInformationKind,
-  associationCompletedInformationKind,
-  associationQueryInformationKind,
-  associationRequestedInformationKind,
   inboundTextInformationKind,
   messageIntentRequestedInformationKind,
   messageIntentRequestedInformationPayloadSchema,
@@ -290,97 +286,6 @@ export async function selectFrozenTurnMessageContext(options: {
   ];
 }
 
-export const associationMessageContextSelector = defineInformationSelector({
-  selectorId: "kaguya.message.association-context",
-  select: async ({ sourceAtom, ledger }) => {
-    const completed = associationCompletedInformationKind.payloadSchema.parse(
-      sourceAtom.payload,
-    );
-    const request = await related(
-      ledger,
-      sourceAtom.informationId,
-      "agent:request",
-      "outgoing",
-      associationRequestedInformationKind.kind,
-    );
-    const query = await related(
-      ledger,
-      sourceAtom.informationId,
-      "core:caused-by",
-      "outgoing",
-      associationQueryInformationKind.kind,
-    );
-    if (
-      request.length !== 1 ||
-      query.length !== 1 ||
-      request[0]!.informationId !== completed.requestInformationId ||
-      query[0]!.informationId !== completed.queryInformationId
-    ) {
-      throw new Error("Association terminal references are inconsistent");
-    }
-    const intents = await related(
-      ledger,
-      request[0]!.informationId,
-      "core:caused-by",
-      "outgoing",
-      messageIntentRequestedInformationKind.kind,
-    );
-    if (
-      intents.length !== 1 ||
-      intents[0]!.informationId !== completed.sourceInformationId
-    ) {
-      throw new Error(
-        "Association terminal source message intent is inconsistent",
-      );
-    }
-    if (completed.status !== "matched") {
-      return turnMessageContextSelector.select({
-        sourceAtom: intents[0]!,
-        ledger,
-      });
-    }
-
-    const candidates = (
-      await ledger.related({
-        from: [query[0]!.informationId],
-        relation: "core:caused-by",
-        direction: "incoming",
-        limit: 100,
-      })
-    )
-      .filter(({ kind }) => kind === associationCandidateInformationKind.kind)
-      .sort((left, right) => candidateRank(left) - candidateRank(right));
-    const memories: InformationId[] = [];
-    for (const candidate of candidates) {
-      const sources = await ledger.related({
-        from: [candidate.informationId],
-        relation: "agent:canonical-source",
-        direction: "outgoing",
-        limit: 1,
-      });
-      if (
-        sources.length !== 1 ||
-        (sources[0]!.kind !== coreMemoryTextInformationKind.kind &&
-          sources[0]!.kind !== inboundTextInformationKind.kind)
-      ) {
-        throw new Error(
-          "Association candidate must reference one Memory source",
-        );
-      }
-      memories.push(sources[0]!.informationId);
-    }
-    return [
-      ...new Set([
-        ...memories,
-        ...(await turnMessageContextSelector.select({
-          sourceAtom: intents[0]!,
-          ledger,
-        })),
-      ]),
-    ];
-  },
-});
-
 export const messagePromptRenderer: InformationPromptRendererDefinition =
   Object.freeze({
     rendererId: "kaguya.message.text",
@@ -464,13 +369,6 @@ async function related(
       limit: 10,
     })
   ).filter((atom) => atom.kind === kind);
-}
-
-function candidateRank(atom: DeepReadonly<InformationAtom>): number {
-  const payload = associationCandidateInformationKind.payloadSchema.parse(
-    atom.payload,
-  );
-  return payload.rank;
 }
 
 async function assistantWasDelivered(

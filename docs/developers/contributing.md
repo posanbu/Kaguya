@@ -54,8 +54,6 @@ pnpm exec vitest run apps/server/src
 
 ## 本地界面预览
 
-记忆联想页面可在仓库根目录运行 `pnpm preview:association`，打开 `http://localhost:5189/preview-association.html`。该入口使用合成数据和独立的内存 PGlite，不读取个人配置或调用模型；前端源码支持 Vite 热更新，修改 Schema 或 Server 投影后需重启预览。它只监听本机，不进入正式 Web 构建。
-
 ## 测试边界
 
 PR 的 GitHub Actions 快速门禁并行运行文档、lint/typecheck 和选定的契约及 Server 启动测试，目标等待约 3 分钟。全量 Ubuntu、macOS、Windows 分片与真实 PostgreSQL 套件每天北京时间 03:00 运行，也支持在 Actions 的 **Test** 工作流中手动触发；涉及持久化、并发或跨系统行为的 PR 合并前可手动触发该分支的全量检查。具体保证见[测试与兼容边界](./testing-compatibility)。

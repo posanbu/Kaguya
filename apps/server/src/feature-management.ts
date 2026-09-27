@@ -11,12 +11,7 @@ import {
   type NapCatSettings,
 } from "./napcat-config.js";
 
-export const FEATURE_IDS = [
-  "memory.writeback",
-  "memory.index",
-  "memory.cognition",
-  "adapter.napcat",
-] as const;
+export const FEATURE_IDS = ["memory.raw", "adapter.napcat"] as const;
 export type FeatureId = (typeof FEATURE_IDS)[number];
 
 export interface FeatureStatus {
@@ -71,9 +66,6 @@ export class FeatureManagement {
   private view(configs: readonly ModuleInstanceConfig[]): FeatureView {
     const running = new Set(this.options.activeMemory());
     const napcat = this.options.napCatLifecycle();
-    const raw =
-      configs.find((config) => config.definitionId === "memory.writeback")
-        ?.enabled ?? false;
     return {
       revision: this.revision(configs),
       features: FEATURE_IDS.map((id) => {
@@ -100,9 +92,6 @@ export class FeatureManagement {
             napcat?.connectivity === "retrying"
               ? "retrying"
               : lifecycle,
-          ...(!raw && id.startsWith("memory.") && id !== "memory.writeback"
-            ? { blocker: "memory.writeback" }
-            : {}),
           ...(this.#degraded ? { blocker: "recovery_failed" } : {}),
         };
       }),
@@ -122,25 +111,8 @@ export class FeatureManagement {
       const current = await this.load();
       if (revision !== this.revision(current))
         throw new FeatureManagementError(409, "feature_configuration_changed");
-      const raw = current.find(
-        (config) => config.definitionId === "memory.writeback",
-      )?.enabled;
-      if (
-        enabled &&
-        id.startsWith("memory.") &&
-        id !== "memory.writeback" &&
-        !raw
-      )
-        throw new FeatureManagementError(409, "memory_writeback_required");
       const next = current.map((config) => {
-        if (
-          config.definitionId === id ||
-          (id === "memory.writeback" &&
-            !enabled &&
-            config.definitionId.startsWith("memory.") &&
-            FEATURE_IDS.includes(config.definitionId as FeatureId))
-        )
-          return { ...config, enabled };
+        if (config.definitionId === id) return { ...config, enabled };
         return config;
       });
       await this.replaceUnlocked(current, next);
@@ -215,15 +187,7 @@ export class FeatureManagement {
         await this.options.activateNapCat(next);
         appliedNapCat = true;
       }
-      // Dependents are disabled before raw Memory, so a crash never leaves enabled children with raw off.
-      const ordered = [...changed].sort((a, b) =>
-        a.definitionId === "memory.writeback" && !a.enabled
-          ? 1
-          : b.definitionId === "memory.writeback" && !b.enabled
-            ? -1
-            : 0,
-      );
-      for (const config of ordered) {
+      for (const config of changed) {
         await writeModuleInstanceConfig(this.options.rootDir, config);
         written.push(
           current.find((item) => item.instanceId === config.instanceId)!,

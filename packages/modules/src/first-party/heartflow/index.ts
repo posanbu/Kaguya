@@ -10,7 +10,7 @@
  * createHeartflowModule 注入投递/模型失败 kind，返回声明订阅的模块；settings schema
  * 校验 Focus、时效与安全策略。state/memory selector 从账本读取因果链及记忆，冻结完整输入。
  * Planner v2 在模型结构修复阶段检查本轮动作边界；v1 重放保留原 schema。重放沿持久化请求复用 Prompt 和上下文，防止迟到历史触发第二次任务。
- * 规划前按最近多条输入与发言者召回话题、人物和角色设定原文，保留双时间截止点及 sparse 旁路；可选认知快照至多两条，总计八条。
+ * 规划前使用冻结的本轮输入与聊天历史；未完成的记忆模块不提供额外召回。
  * 宿主 conversation 能力冻结背景和候选；跨会话获胜决策交给 route 复核，失败关闭当前 turn，不回退发送。
  * dispatchDecision 仅将独立 Planner 的获胜 message 结果按 claim 注册一次意图，末条输入决定目标；
  * turn 标识及引用保留完整冻结上下文，正文生成交给 composer。wait/silent 与失败路径
@@ -43,9 +43,6 @@ import type {
   ModelTaskCapability,
 } from "../message-composer/index.js";
 import type { ModuleCapability } from "@kaguya/sdk";
-import { createCognitionMemorySelector } from "../memory-cognition/index.js";
-import { isMemorySourceInScope } from "../memory-source-scope.js";
-import type { CognitionIdentity } from "@kaguya/memory";
 
 import {
   type CompiledPrompt,
@@ -61,13 +58,11 @@ import {
   type InformationModuleHandlerContext,
   type InformationSelectorLedger,
 } from "@kaguya/sdk";
-import { MEMORY_RETRIEVAL_STRATEGY_ID } from "@kaguya/memory";
 import { buildTurnBootstrap } from "./bootstrap.js";
 import {
   selectActivePersonProfiles,
   type ActivePersonProfiles,
 } from "../person-profile.js";
-import { buildRecallQuery } from "./recall-query.js";
 
 import {
   observationWakeInformationKind,
@@ -110,15 +105,12 @@ export interface CreateHeartflowModuleOptions {
   readonly modelTaskCapability: ModuleCapability<ModelTaskCapability>;
   readonly messageAuthorizationCapability?: ModuleCapability<MessageAuthorization>;
   readonly agentIdentity: AgentIdentity;
-  readonly memoryEnabled: boolean | (() => boolean);
   readonly activePersonProfiles?: ActivePersonProfiles;
   readonly plannerTemplate: string;
   readonly plannerBootstrapPolicy: string;
   readonly plannerPlatformPolicies?: Readonly<
     Record<"default" | "qq" | "web", string>
   >;
-  readonly cognitionIdentity?:
-    CognitionIdentity | (() => CognitionIdentity | undefined);
   readonly deliveryDeliveredInformationKind: AnyKind;
   readonly deliveryFailedInformationKind: AnyKind;
   readonly modelTaskFailedInformationKind: AnyKind;
@@ -481,158 +473,7 @@ export const heartflowStateSelector = defineInformationSelector({
   },
 });
 
-export function createHeartflowMemorySelector() {
-  return defineInformationSelector({
-    selectorId: "agent.heartflow.optional-memory",
-    select: async ({ sourceAtom, ledger }) => {
-      let candidates: readonly DeepReadonly<InformationAtom>[] = [];
-      if (sourceAtom.kind === turnCandidateInformationKind.kind) {
-        candidates = [sourceAtom];
-      } else if (
-        sourceAtom.kind === attentionArousalCompletedInformationKind.kind
-      ) {
-        candidates = (
-          await ledger.related({
-            from: [sourceAtom.informationId],
-            relation: "core:status-of",
-            direction: "outgoing",
-            limit: 1,
-          })
-        ).filter((atom) => atom.kind === turnCandidateInformationKind.kind);
-      } else if (
-        sourceAtom.kind === personContextCompletedInformationKind.kind
-      ) {
-        const inbound = (
-          await ledger.related({
-            from: [sourceAtom.informationId],
-            relation: "core:status-of",
-            direction: "outgoing",
-            limit: 1,
-          })
-        )[0];
-        if (inbound !== undefined) {
-          const claims = (
-            await ledger.related({
-              from: [inbound.informationId],
-              relation: "core:uses-context",
-              direction: "incoming",
-              limit: 1_000,
-            })
-          ).filter((atom) => atom.kind === turnClaimedInformationKind.kind);
-          candidates = (
-            await Promise.all(
-              claims.map((claim) =>
-                ledger.related({
-                  from: [claim.informationId],
-                  relation: "agent:turn-candidate",
-                  direction: "outgoing",
-                  limit: 1,
-                }),
-              ),
-            )
-          ).flat();
-        }
-      }
-      const memories = new Map<string, DeepReadonly<InformationAtom>>();
-      for (const candidate of candidates) {
-        if (memories.size >= 8) break;
-        const candidatePayload = candidate.payload as any;
-        const inbounds = await ledger.find({
-          kinds: [inboundTextInformationKind.kind],
-          scopeKey: candidatePayload.scopeKey,
-          registrationOrder: true,
-          ...(candidatePayload.unreadAfterInformationId
-            ? { afterInformationId: candidatePayload.unreadAfterInformationId }
-            : {}),
-          throughInformationId: candidatePayload.unreadThroughInformationId,
-          payloadContains: {
-            source: {
-              platform: candidatePayload.platform,
-              adapterId: candidatePayload.adapterId,
-              destination: candidatePayload.destination,
-            },
-          },
-          order: "asc",
-          limit: 1_000,
-        });
-        const query = buildRecallQuery(
-          inbounds.map((atom) => String(atom.payload.text ?? "")),
-        );
-        if (query.length === 0) continue;
-        try {
-          const selected = await ledger.retrieve({
-            strategyId: MEMORY_RETRIEVAL_STRATEGY_ID,
-            input: {
-              query,
-              scopes: inbounds.map((atom) => {
-                const source = inboundTextInformationKind.payloadSchema.parse(
-                  atom.payload,
-                ).source;
-                return {
-                  platform: source.platform,
-                  adapterId: source.adapterId,
-                  destination: source.destination,
-                };
-              }),
-              occurredBefore: (candidate.payload as any).asOf,
-              recordedBefore: candidate.occurredAt,
-              excludeSourceInformationIds: inbounds.map(
-                ({ informationId }) => informationId,
-              ),
-            },
-            limit: 8 - memories.size,
-          });
-          const excluded = new Set(inbounds.map((atom) => atom.informationId));
-          for (const atom of selected) {
-            if (
-              !excluded.has(atom.informationId) &&
-              inbounds.some((inbound) =>
-                isMemorySourceInScope(
-                  atom,
-                  inboundTextInformationKind.payloadSchema.parse(
-                    inbound.payload,
-                  ).source,
-                  String(candidate.payload.asOf),
-                ),
-              )
-            )
-              memories.set(atom.informationId, atom);
-            if (memories.size >= 8) break;
-          }
-        } catch {
-          // Optional Memory never blocks the online turn.
-        }
-      }
-      return [...memories.keys()];
-    },
-  });
-}
-export const heartflowMemorySelector = createHeartflowMemorySelector();
-
 export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
-  const scopedMemorySelector = createHeartflowMemorySelector();
-  const memoryEnabled = () =>
-    typeof options.memoryEnabled === "function"
-      ? options.memoryEnabled()
-      : options.memoryEnabled;
-  const memorySelector = defineInformationSelector({
-    selectorId: heartflowMemorySelector.selectorId,
-    select: async (context) => {
-      if (!memoryEnabled()) return [];
-      const identity =
-        typeof options.cognitionIdentity === "function"
-          ? options.cognitionIdentity()
-          : options.cognitionIdentity;
-      const snapshots = identity
-        ? (await createCognitionMemorySelector(identity).select(context)).slice(
-            0,
-            2,
-          )
-        : [];
-      const sources = await scopedMemorySelector.select(context);
-      return [...new Set([...snapshots, ...sources])].slice(0, 8);
-    },
-  });
   const deliveryKinds = [
     options.deliveryDeliveredInformationKind,
     options.deliveryFailedInformationKind,
@@ -819,7 +660,6 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
       selectors: [
         heartflowStateSelector,
         plannerInterruptSelector,
-        memorySelector,
         plannerContextSelector,
       ],
       promptRenderers: [],
@@ -880,12 +720,9 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
             },
             async (_atom, context) => {
               const state = await context.select(heartflowStateSelector);
-              const memories = await context.select(memorySelector);
               await progressCandidates(
                 state,
-                memories,
                 settings,
-                memoryEnabled(),
                 options.activePersonProfiles,
                 context,
               );
@@ -909,12 +746,9 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
               ) {
                 if (sourceAtom.payload.outcome !== "observe") return;
                 const state = await context.select(heartflowStateSelector);
-                const memories = await context.select(memorySelector);
                 await progressCandidates(
                   state,
-                  memories,
                   settings,
-                  memoryEnabled(),
                   options.activePersonProfiles,
                   context,
                 );
@@ -1224,12 +1058,9 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
                 state,
                 context,
               );
-              const memories = await context.select(memorySelector);
               await progressCandidates(
                 state,
-                memories,
                 settings,
-                memoryEnabled(),
                 options.activePersonProfiles,
                 context,
               );
@@ -1281,9 +1112,7 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
 
 async function progressCandidates(
   atoms: readonly DeepReadonly<InformationAtom>[],
-  memories: readonly DeepReadonly<InformationAtom>[],
   settings: DeepReadonly<HeartflowSettings>,
-  memoryEnabled: boolean,
   activePersonProfiles: ActivePersonProfiles | undefined,
   context: InformationModuleHandlerContext,
 ) {
@@ -1307,9 +1136,7 @@ async function progressCandidates(
     await progressCandidate(
       winner,
       atoms,
-      memories,
       settings,
-      memoryEnabled,
       activePersonProfiles,
       context,
     );
@@ -1338,9 +1165,7 @@ async function progressCandidates(
 async function progressCandidate(
   candidate: DeepReadonly<InformationAtom>,
   atoms: readonly DeepReadonly<InformationAtom>[],
-  memories: readonly DeepReadonly<InformationAtom>[],
   settings: DeepReadonly<HeartflowSettings>,
-  memoryEnabled: boolean,
   activePersonProfiles: ActivePersonProfiles | undefined,
   context: InformationModuleHandlerContext,
 ) {
@@ -1713,12 +1538,7 @@ async function progressCandidate(
     context.now().toISOString(),
     settings.staleAfterMs,
   );
-  const bootstrap = buildTurnBootstrap(
-    completeInputs,
-    atoms,
-    memoryEnabled,
-    memories.length,
-  );
+  const bootstrap = buildTurnBootstrap(completeInputs, atoms, false, 0);
   const bootstrapEvidenceIds = [
     ...new Set(
       completeInputs.flatMap(({ identity }) => {
@@ -1782,9 +1602,6 @@ async function progressCandidate(
           Number.isFinite(asOfMs) &&
           Date.parse(payload.firedAt) - asOfMs > settings.staleAfterMs,
         bootstrap,
-        ...(memories.length === 0
-          ? {}
-          : { memory: memories.map(({ informationId }) => informationId) }),
         ...(personProfiles.length === 0 ? {} : { personProfiles }),
         ...(personNames.length === 0 ? {} : { personNames }),
         attempt: payload.attempt,
@@ -1814,10 +1631,6 @@ async function progressCandidate(
               },
             ]
           : []),
-        ...memories.map(({ informationId }) => ({
-          relation: "core:uses-context" as const,
-          informationId,
-        })),
         ...personProfiles.map(({ profileInformationId }) => ({
           relation: "core:uses-context" as const,
           informationId: profileInformationId,
@@ -1882,11 +1695,7 @@ async function dispatchDecision(
             claimInformationId: claim.informationId,
             contextInformationId: turnContext.informationId,
           },
-          memoryInformationIds: Array.isArray(
-            (turnContext.payload as any).memory,
-          )
-            ? (turnContext.payload as any).memory
-            : [],
+          memoryInformationIds: [],
           composition: resolveMessageComposition(turnContext, composition),
         },
         references: [

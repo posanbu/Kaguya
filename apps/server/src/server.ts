@@ -563,12 +563,6 @@ export async function startKaguyaServer(
             memory: composition.memory,
             activations: composition.activations,
             capabilities: composition.capabilities,
-            ...(composition.memoryFeatureState.cognitionIdentity
-              ? {
-                  cognitionIdentity:
-                    composition.memoryFeatureState.cognitionIdentity,
-                }
-              : {}),
           });
         } catch (error) {
           throw error;

@@ -2,7 +2,7 @@
  * 按 QQ 表情实例实际开关装配草稿处理器并批准其 light 模型任务，非 QQ 和禁用路径保持原行为。
  * 模板加载器统一选择所有模块的 default/local 正文；Catalog 注入 Planner、Composer 和 Expression，授权正文渲染器注入 Runtime。
  * 功能概述：作为 Server 与 Demo 共用的唯一 Runtime Composition 边界，组装业务 Catalog 与宿主批准的 Model Task 能力。
- * Memory 开启时加入缺省 writeback activation，关闭时移除写回实例；尊重已配置实例的禁用状态。
+ * 原始记忆开启时激活 memory.raw，关闭时移除该实例；未完成模块没有实例。
  * Heartflow 与 Composer 同时注入宿主目标授权能力；自然语言跨会话自动校验，管理端路径仍需正文确认。
  * 主要职责：createMessageCatalog 加载模板并注入 Runtime kind/token，供运行时及数据库 kind 检查共用；
  * createMessageComposition 注入共享 token/definition，按 activation 设置批准 tier，
@@ -15,20 +15,6 @@
  * 输入输出与副作用：构造阶段无网络或连接；模型句柄按复合 key 存于宿主闭包，
  * Runtime 校验 activation/policy、重载因果 context 并写通用任务生命周期，模块经 context.use 调用。
  */
-import {
-  Mem0CognitionProvider,
-  embeddingIdentityKey,
-  type EmbeddingProvider,
-  type MemoryCognitionProvider,
-  type CognitionIdentity,
-  memoryCognitionCapability,
-} from "@kaguya/memory";
-import {
-  memoryIndexBootstrapCapability,
-  messageAuthorizationCapability,
-  memoryBackfillRequestedInformationKind,
-} from "@kaguya/modules";
-import { createCompatibleEmbeddingProvider } from "@kaguya/llm/embedding";
 import { memoryConfigSchema, type MemoryConfig } from "@kaguya/config";
 import { AsyncLocalStorage } from "node:async_hooks";
 
@@ -40,6 +26,7 @@ import {
 import { createPlanningDeterministicModel } from "@kaguya/llm/testing";
 import {
   createAuthorizedMessagePromptRenderer,
+  messageAuthorizationCapability,
   createFirstPartyModuleCatalog,
   createFirstPartyModuleActivations,
   messageComposerSettingsSchema,
@@ -74,15 +61,12 @@ export type RuntimeModelSelectionResolver = (
 };
 export interface MessageCompositionOptions {
   readonly memoryEnabled?: boolean;
-  readonly embedding?: EmbeddingProvider;
-  readonly cognition?: MemoryCognitionProvider;
   readonly moduleConfigs: readonly FirstPartyModuleInstanceConfig[];
   readonly agentIdentity?: Pick<AgentIdentity, "timeZone">;
   readonly activePersonProfiles?: ActivePersonProfiles;
 }
 export interface MemoryFeatureState {
   enabled: boolean;
-  cognitionIdentity?: CognitionIdentity;
 }
 export function createDeterministicModelSelectionResolver(): RuntimeModelSelectionResolver {
   const model = createPlanningDeterministicModel(
@@ -96,11 +80,8 @@ export function createDeterministicModelSelectionResolver(): RuntimeModelSelecti
 }
 export function createMessageCatalog(
   configuredIdentity: Pick<AgentIdentity, "timeZone"> = DEFAULT_AGENT_IDENTITY,
-  cognitionIdentity?: CognitionIdentity,
   promptTemplates = loadFirstPartyPromptTemplates(),
-  memoryEnabled = false,
   qqExpressionEnabled = false,
-  memoryFeatureState?: MemoryFeatureState,
   activePersonProfiles?: ActivePersonProfiles,
 ) {
   const agentIdentity: AgentIdentity = {
@@ -128,14 +109,6 @@ export function createMessageCatalog(
     qqExpressionEnabled,
     agentIdentity,
     ...(activePersonProfiles ? { activePersonProfiles } : {}),
-    memoryEnabled: memoryFeatureState
-      ? () => memoryFeatureState.enabled
-      : memoryEnabled,
-    ...(memoryFeatureState
-      ? { cognitionIdentity: () => memoryFeatureState.cognitionIdentity }
-      : cognitionIdentity
-        ? { cognitionIdentity }
-        : {}),
   });
 }
 export function createMessageComposition(
@@ -153,32 +126,18 @@ export function createMessageComposition(
   const renderStructuredOutputPrompt = loadStructuredOutputPromptRenderer();
   const memoryFeatureState: MemoryFeatureState = {
     enabled: options.memoryEnabled ?? false,
-    ...(options.cognition
-      ? { cognitionIdentity: options.cognition.identity }
-      : {}),
   };
   const catalog = createMessageCatalog(
     identity,
-    options.memoryEnabled ? options.cognition?.identity : undefined,
     promptTemplates,
-    !!options.memoryEnabled,
     options.moduleConfigs.some(
       (c) => c.definitionId === "plugin.qq-expression" && c.enabled,
     ),
-    memoryFeatureState,
     options.activePersonProfiles,
   );
   const memoryEnabled = options.memoryEnabled ?? false;
   const moduleConfigs = options.moduleConfigs.filter(
-    (config) =>
-      (memoryEnabled ||
-        !["memory.writeback", "memory.index", "memory.cognition"].includes(
-          config.definitionId,
-        )) &&
-      (options.embedding !== undefined ||
-        config.definitionId !== "memory.index") &&
-      (options.cognition !== undefined ||
-        config.definitionId !== "memory.cognition"),
+    (config) => memoryEnabled || config.definitionId !== "memory.raw",
   );
   const activations = createFirstPartyModuleActivations(
     catalog,
@@ -250,46 +209,10 @@ export function createMessageComposition(
     ),
     catalog,
     activations,
-    memory: {
-      enabled: memoryEnabled,
-      ...(memoryEnabled && options.embedding
-        ? { embedding: options.embedding }
-        : {}),
-    },
+    memory: { enabled: memoryEnabled },
     modelTask,
-    capabilities: ({
-      oneShotSchedule,
-      core,
-      now,
-    }: RuntimeCapabilityContext) => [
+    capabilities: ({ oneShotSchedule }: RuntimeCapabilityContext) => [
       { capability: oneShotScheduleCapability, value: oneShotSchedule },
-      ...(memoryEnabled && options.cognition
-        ? [{ capability: memoryCognitionCapability, value: options.cognition }]
-        : []),
-      ...(memoryEnabled && options.embedding
-        ? [
-            {
-              capability: memoryIndexBootstrapCapability,
-              value: {
-                requestBackfill: async (
-                  identity: EmbeddingProvider["identity"],
-                ) => {
-                  await core.registerOnce(
-                    "memory.index.page.v1",
-                    JSON.stringify([embeddingIdentityKey(identity), "root"]),
-                    memoryBackfillRequestedInformationKind,
-                    {
-                      source: "composition:memory-index",
-                      occurredAt: now().toISOString(),
-                      payload: { identity, batchSize: 50, afterMemoryId: null },
-                      references: [],
-                    },
-                  );
-                },
-              },
-            },
-          ]
-        : []),
     ],
   };
 }
@@ -304,44 +227,17 @@ function modelIdentityKey(identity: {
 /** 只从宿主已经校验的 selected Profile 构造 provider；关闭态不读取凭据或创建客户端。 */
 export function createMemoryCompositionOptions(
   memory: MemoryConfig,
-): Pick<
-  MessageCompositionOptions,
-  "memoryEnabled" | "embedding" | "cognition"
-> {
-  if (!memory.enabled) return { memoryEnabled: false };
-  return {
-    memoryEnabled: true,
-    ...(memory.embedding
-      ? { embedding: createCompatibleEmbeddingProvider(memory.embedding) }
-      : {}),
-    ...(memory.cognition
-      ? { cognition: new Mem0CognitionProvider(memory.cognition) }
-      : {}),
-  };
+): Pick<MessageCompositionOptions, "memoryEnabled"> {
+  return { memoryEnabled: memory.enabled };
 }
 
-/** Derive Memory's runtime options solely from global module instances. */
+/** Derive raw Memory's runtime state from its global instance. */
 export function memoryConfigFromModules(
   configs: readonly FirstPartyModuleInstanceConfig[],
 ): MemoryConfig {
-  const active = (id: string) =>
-    configs.find((config) => config.definitionId === id && config.enabled);
-  const raw = active("memory.writeback") !== undefined;
-  const index = active("memory.index");
-  const cognition = active("memory.cognition");
-  if (!raw && (index || cognition))
-    throw new Error("Memory dependents require memory.writeback");
-  const config = {
-    enabled: raw,
-    ...(index ? { embedding: index.settings } : {}),
-    ...(cognition
-      ? { cognition: { provider: "mem0-rest", ...cognition.settings } }
-      : {}),
-  };
-  const parsed = memoryConfigSchema.safeParse(config);
-  if (!parsed.success)
-    throw new Error(
-      "Memory provider settings are incomplete. Configure the module before enabling it.",
-    );
-  return parsed.data;
+  return memoryConfigSchema.parse({
+    enabled: configs.some(
+      (config) => config.definitionId === "memory.raw" && config.enabled,
+    ),
+  });
 }

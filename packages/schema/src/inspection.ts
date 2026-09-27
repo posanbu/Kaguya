@@ -239,6 +239,9 @@ const moduleTag = z
   .regex(/^[a-z][a-z0-9-]*$/u);
 export const inspectionModuleSchema = z.object({
   definitionId: z.string(),
+  development: z
+    .object({ status: z.literal("incomplete"), issueUrl: z.url() })
+    .optional(),
   tags: z.array(moduleTag).default([]),
   inspection: moduleInspectionSchema.optional(),
   displayName: z.string(),

@@ -553,132 +553,6 @@ export const firstPartyInspection = {
       ),
     ],
   },
-  "memory.association": {
-    mechanism: [
-      "从冻结回合的输入构造查询；检索仅限同一平台、适配器和会话，且早于截止时间。",
-      "用 sparse-2gram 检索，按覆盖程度排序，最多召回 8 条；排除本轮输入。",
-      "候选只记录排名与来源引用。消息合成沿引用重新读取材料，召回不代表最终进入 Prompt。",
-    ],
-    views: [
-      view(
-        "queries",
-        "联想查询",
-        "实际查询及冻结的检索范围。",
-        ["memory.association.query"],
-        {
-          query: "查询",
-          queryText: "原始输入",
-          "scope.platform": "平台",
-          "scope.adapterId": "适配器",
-          "scope.destination": "会话",
-          "scope.destination.groupId": "群号",
-          "scope.destination.userId": "用户",
-          asOf: "截止时间",
-          method: "检索方法",
-          limit: "候选上限",
-          "memory.identity.status": "身份状态",
-        },
-      ),
-      view(
-        "retrieval",
-        "召回结果与候选",
-        "记录结果、排名与原因；不推断是否采用。",
-        ["memory.association.candidate", "memory.association.completed"],
-        {
-          rank: "排名",
-          strategy: "检索策略",
-          reasonCodes: "原因",
-          candidateCount: "候选数量",
-          status: "结果",
-        },
-      ),
-      view(
-        "sources",
-        "记忆来源",
-        "沿候选的 canonical source 引用读取原始记录。",
-        ["core.message.inbound.text", "memory.text"],
-        {
-          text: "原文",
-          source: "来源会话",
-        },
-      ),
-    ],
-    surface: {
-      version: 1,
-      id: "associations",
-      title: "记忆联想",
-      layout: { type: "master-detail", areas: ["main", "context"] },
-      components: [
-        {
-          id: "queries",
-          type: "record-browser",
-          area: "main",
-          viewId: "queries",
-          recordKind: "memory.association.query",
-          titleField: "query",
-          searchFields: [
-            "query",
-            "scope.platform",
-            "scope.adapterId",
-            "scope.destination.groupId",
-            "scope.destination.userId",
-          ],
-          fields: fields({
-            "scope.platform": "平台",
-            "scope.adapterId": "适配器",
-            "scope.destination": "会话",
-            asOf: "截止时间",
-            method: "检索方法",
-            limit: "候选上限",
-          }),
-          labels: {
-            directory: "联想记录",
-            search: "查找联想",
-            placeholder: "查询内容、平台、适配器或会话 ID",
-            empty: "尚无联想查询。处理消息意图后，记录会出现在这里。",
-            mechanism: "记忆联想如何工作",
-          },
-          notice:
-            "候选表示已召回的材料；是否进入 Prompt，需沿原始记录继续追溯。",
-          relations: [
-            {
-              id: "result",
-              title: "召回结果",
-              viewId: "retrieval",
-              kinds: ["memory.association.completed"],
-              reference: "core:caused-by",
-              presentation: "field-grid",
-              fields: fields({
-                candidateCount: "候选数量",
-                reasonCodes: "原因",
-              }),
-              empty: "尚未记录完成结果；当前无法判断召回是否完成。",
-              limit: 1,
-            },
-            {
-              id: "candidates",
-              title: "记忆候选",
-              viewId: "retrieval",
-              kinds: ["memory.association.candidate"],
-              reference: "core:caused-by",
-              presentation: "ranked-list",
-              rankField: "rank",
-              fields: fields({ reasonCodes: "原因" }),
-              empty: "这次查询尚无候选记录。",
-              limit: 10,
-              source: {
-                reference: "agent:canonical-source",
-                viewId: "sources",
-                kinds: ["core.message.inbound.text", "memory.text"],
-                fields: fields({ text: "原文", occurredAt: "来源时间" }),
-              },
-            },
-          ],
-        },
-        { id: "mechanism", type: "mechanism-steps", area: "context" },
-      ],
-    },
-  },
   "agent.message-composer": {
     mechanism: [
       "沿显式引用选择冻结输入、历史、记忆和表达参考，再编译 Prompt。",
@@ -717,7 +591,7 @@ export const firstPartyInspection = {
       ],
     },
   },
-  "memory.writeback": {
+  "memory.raw": {
     storage: "memory",
     mechanism: [
       "身份处理结束后按来源幂等保存入站原文，在线回合静默也会写回。",
@@ -729,10 +603,10 @@ export const firstPartyInspection = {
         "写回历史",
         "写回事实与原始文档库分开查询；无终态不能直接认定失败。",
         [
-          "memory.writeback.requested",
-          "memory.writeback.completed",
-          "memory.writeback.empty",
-          "memory.writeback.failed",
+          "memory.raw.requested",
+          "memory.raw.completed",
+          "memory.raw.empty",
+          "memory.raw.failed",
         ],
         { status: "结果" },
       ),
@@ -759,60 +633,5 @@ export const firstPartyInspection = {
         "diagnostics",
       ],
     },
-  },
-  "memory.index": {
-    storage: "vectors",
-    mechanism: [
-      "原始文档与向量分开存储，向量按模型、revision 和维度隔离。",
-      "后台有界分页回填；模型切换后旧任务可能标为 superseded。",
-    ],
-    views: [
-      view(
-        "index",
-        "索引与回填历史",
-        "回填游标与结果来自持久化事实。",
-        [
-          "memory.index.requested",
-          "memory.index.backfill.requested",
-          "memory.index.completed",
-        ],
-        {
-          identity: "模型版本",
-          status: "结果",
-          sourceInformationId: "文档来源",
-          afterMemoryId: "回填游标",
-          batchSize: "批次大小",
-        },
-      ),
-    ],
-  },
-  "memory.cognition": {
-    mechanism: [
-      "从已写入文档中冻结有界证据窗口，交由指定 provider/revision 处理。",
-      "仅验证完成的快照可被选用；空结果、失效版本和非法输出分别记录。",
-    ],
-    views: [
-      view(
-        "snapshots",
-        "认知快照库",
-        "持久化正文与证据引用；当前查询不代表已被某次回复使用。",
-        ["memory.text"],
-        { text: "记忆内容", provenance: "来源" },
-      ),
-      view(
-        "cognition",
-        "认知处理历史",
-        "provider 版本、证据窗口与验证结果。",
-        ["memory.cognition.requested", "memory.cognition.completed"],
-        {
-          identity: "提供方版本",
-          status: "结果",
-          scopeKey: "会话范围",
-          asOf: "截止时间",
-          sourceInformationIds: "证据来源",
-          memoryInformationId: "快照",
-        },
-      ),
-    ],
   },
 } satisfies Record<string, ModuleInspection>;

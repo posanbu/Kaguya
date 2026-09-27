@@ -16,7 +16,6 @@ import {
   expressionSelected,
   type Habit,
 } from "./expression/facts.js";
-import { associationQueryInformationKind } from "./kinds/association.js";
 import { coreMemoryTextInformationKind } from "./kinds/message.js";
 import {
   personFactCandidateInformationKind,
@@ -131,41 +130,6 @@ describe("first-party content projections", () => {
       contentTruncated: false,
     });
     expect(payload).toEqual(original);
-  });
-
-  it("shows the actual association query without substituting the original input", () => {
-    const query = "古典 音乐 token=query-secret";
-    expect(associationQueryInformationKind.log).toMatchObject({
-      enabled: true,
-      level: "debug",
-    });
-    expect(
-      project(associationQueryInformationKind, {
-        requestInformationId: "request-1",
-        sourceInformationId: "source-1",
-        queryText: "原始用户输入不应替代实际查询",
-        query,
-        asOf: "2026-09-19T00:00:00.000Z",
-        route: "message",
-        method: "sparse-2gram",
-        identity: { status: "unresolved" },
-        scope: {
-          platform: "qq",
-          adapterId: "onebot.main",
-          destination: { kind: "group", groupId: "group-1" },
-        },
-        limit: 8,
-      }),
-    ).toEqual({
-      event: "memory.association.query",
-      route: "message",
-      method: "sparse-2gram",
-      queryLength: Array.from(query).length,
-      limit: 8,
-      contentPreview: "古典 音乐 token=[REDACTED]",
-      contentLength: Array.from(query).length,
-      contentTruncated: false,
-    });
   });
 
   it("projects person-fact input at debug without exposing person identifiers", () => {

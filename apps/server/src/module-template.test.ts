@@ -171,7 +171,7 @@ it.runIf(canCreateSymlinks())(
       "heartflow.platform-policy-qq",
       "heartflow.platform-policy-web",
     ]);
-    expect(service.get("memory.cognition").templates).toEqual([]);
+    expect(service.get("memory.mem0").templates).toEqual([]);
     await expect(
       service.change("agent.heartflow.online", "message-composer", {
         revision: "anything",

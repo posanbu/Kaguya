@@ -51,8 +51,8 @@ function fixture(ready = true) {
       },
       {
         version: 1,
-        instanceId: "memory.writeback.default",
-        definitionId: "memory.writeback",
+        instanceId: "memory.raw.default",
+        definitionId: "memory.raw",
         enabled: false,
         settings: {},
       },
@@ -127,7 +127,7 @@ it("keeps unrelated pending module edits pending after a targeted feature switch
   const f = fixture();
   f.changeModule();
   f.changeFeature();
-  f.application.markModulesApplied(f.savedModules(), ["memory.writeback"]);
+  f.application.markModulesApplied(f.savedModules(), ["memory.raw"]);
   expect(await f.application.status()).toMatchObject({ state: "pending" });
 });
 
