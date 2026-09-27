@@ -11,13 +11,13 @@ description: 核对 Manifest 与实际 renderer 的差异，比较注册表、�
 
 开发者通过 Surface 找到模块记录，再沿证据理解一次处理。Manifest 描述字段与布局，但“字段合法”“组件被渲染”“领域含义正确”是三个不同条件。当前 [Schema](https://github.com/posanbu/Kaguya/blob/2dad5c8330a6668e293f79995b2f477ce71ecc61/packages/schema/src/inspection.ts#L184) 接受 `stack`、`sections`、`master-detail`、`responsive-grid` 和多个 area、component；这不意味着 Web 已按这些声明组合页面。
 
-[ModuleSurface](https://github.com/posanbu/Kaguya/blob/2dad5c8330a6668e293f79995b2f477ce71ecc61/apps/web/src/ModuleSurface.tsx#L46) 仍按 storage、wiki、request、record、entity 的优先级查找并提前返回；同类型也只取首个。实体页面另取一个 mechanism。服务端 [findSurface](https://github.com/posanbu/Kaguya/blob/2dad5c8330a6668e293f79995b2f477ce71ecc61/apps/server/src/inspection.ts#L220) 则按数组顺序选择首个 entity、record、request 或 wiki browser，并单独查找 status；storage 使用独立查询入口。两侧选取规则不同，多 browser 声明存在匹配风险，不能仅靠换 renderer 库解决。
+[ModuleSurface](https://github.com/posanbu/Kaguya/blob/2dad5c8330a6668e293f79995b2f477ce71ecc61/apps/web/src/ModuleSurface.tsx#L46) 仍按 storage、request、record、entity 的优先级查找并提前返回；同类型也只取首个。实体页面另取一个 mechanism。服务端 [findSurface](https://github.com/posanbu/Kaguya/blob/2dad5c8330a6668e293f79995b2f477ce71ecc61/apps/server/src/inspection.ts#L220) 则按数组顺序选择首个 entity、record 或 request browser，并单独查找 status；storage 使用独立查询入口。两侧选取规则不同，多 browser 声明存在匹配风险，不能仅靠换 renderer 库解决。
 
-需要修正 issue 的历史语境：[PR #239](https://github.com/posanbu/Kaguya/pull/239) 后已有 Storage 声明列、Wiki 阅读器和隐藏无关通用区块的能力。不能将其描述成“所有声明都无效”。尚存的问题是缺少任意多区域组合的执行路径，以及通用层仍包含“人物”“原始记忆”等领域文案。已知但未被当前分派覆盖的组合，可能没有明确反馈；未知 type 则首先受到 Zod 联合类型约束，不能一概称为被 Web 静默忽略。
+需要修正 issue 的历史语境：[PR #239](https://github.com/posanbu/Kaguya/pull/239) 后已有 Storage 声明列和隐藏无关通用区块的能力。不能将其描述成“所有声明都无效”。尚存的问题是缺少任意多区域组合的执行路径，以及通用层仍包含“人物”“原始记忆”等领域文案。已知但未被当前分派覆盖的组合，可能没有明确反馈；未知 type 则首先受到 Zod 联合类型约束，不能一概称为被 Web 静默忽略。
 
 ## 候选分别解决哪一层
 
-**Zod 加自有 React renderer registry。** [Zod](https://zod.dev/) 验证描述与 DTO；项目维护 type 到受控组件的映射。适合保留 Gate、Request、Wiki 的领域组件，逐步核对覆盖关系。代价是布局、版本兼容、错误解释和组件覆盖均由项目负责；Zod 本身不会生成界面。[MIT 许可证](https://github.com/colinhacks/zod/blob/main/LICENSE) 允许免费商业使用，需保留声明。注册表模式不是独立收费框架，也不是当前代码中已经完成的通用注册机制。
+**Zod 加自有 React renderer registry。** [Zod](https://zod.dev/) 验证描述与 DTO；项目维护 type 到受控组件的映射。适合保留 Gate、Request 的领域组件，逐步核对覆盖关系。代价是布局、版本兼容、错误解释和组件覆盖均由项目负责；Zod 本身不会生成界面。[MIT 许可证](https://github.com/colinhacks/zod/blob/main/LICENSE) 允许免费商业使用，需保留声明。注册表模式不是独立收费框架，也不是当前代码中已经完成的通用注册机制。
 
 **JSON Forms。** 官方以 JSON Schema 描述数据，以 UI Schema 描述布局、显隐及控件，并支持自定义 renderer、只读展示。适合结构稳定、接近表单的属性检视；若用于请求 Trace，需要转换现有 Zod/Manifest、提供自有 renderer 并处理数据获取，不能把 readonly 表单当作领域检视成品。React 集成可嵌入现有页面，但采用现成主题还需评价与 Radix/CSS 的重叠。核心为 MIT；商业服务不属于免费库承诺。[架构与能力](https://jsonforms.io/docs/)、[许可证](https://github.com/eclipsesource/jsonforms/blob/master/LICENSE)。
 

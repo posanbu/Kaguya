@@ -1,7 +1,6 @@
 /**
  * 功能概述：验证 Profile Memory provider 的严格端点、版本身份与凭据脱敏边界。
  * 测试保留默认关闭语义，拒绝混合 URL 凭据和未知字段；不发起任何网络连接或读取用户配置。
- * 事件与 Wiki 原型必须显式 opt-in，旧 Profile 不增加隐式开启字段。
  */
 import { describe, expect, it } from "vitest";
 import { memoryConfigSchema } from "./model.js";
@@ -36,12 +35,9 @@ describe("Memory Profile configuration", () => {
       }).success,
     ).toBe(false);
   });
-  it("accepts an explicit knowledge opt-in without changing legacy defaults", () => {
+  it("rejects the removed Knowledge configuration field", () => {
     expect(
-      memoryConfigSchema.parse({ enabled: true, knowledgeEnabled: true }),
-    ).toEqual({ enabled: true, knowledgeEnabled: true });
-    expect(
-      memoryConfigSchema.safeParse({ enabled: true, knowledgeEnabled: "true" })
+      memoryConfigSchema.safeParse({ enabled: true, knowledgeEnabled: true })
         .success,
     ).toBe(false);
   });

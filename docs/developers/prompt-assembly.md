@@ -9,6 +9,8 @@ description: 查看 Planner、Composer 与结构化输出协议的生产模板�
 
 模板中的双花括号标记在每次请求时填入动态变量；`if`、`each` 块控制条件和循环；静态 partial 插入下方对应的子模板。本地 `*.local.hbs` 覆盖可编辑资源时，运行时使用 local 内容，因此某次请求的最终文本应以请求详情中的持久化 Prompt 为准。
 
+当前模板声明包含 Planner、Composer、身份、表达与人物事实等仍在使用的任务；主动记忆录入模板已随对应模块移除。
+
 ## Planner：决定是否发送
 
 Heartflow 把冻结 turn、身份、同会话历史、选中记忆、平台参与策略和当前会话背景填入 [Planner 主模板](https://github.com/posanbu/Kaguya/blob/main/packages/modules/templates/heartflow.planner.default.hbs)。`turn` 包含完整本轮输入、引用解析结果、可用动作及等待预算；历史与记忆有独立预算。[变量编译位置](https://github.com/posanbu/Kaguya/blob/main/packages/modules/src/first-party/heartflow/planner.ts)。

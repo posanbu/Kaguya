@@ -1,6 +1,6 @@
 /**
  * composition 兼容可选 tone（neutral/humorous/teasing），旧快照继续有效；缺失时表情插件保守禁用。
- * memory 变量携带来源类型和原文 ID，人工录入与运行时聊天观测在规划输入中可区分。
+ * memory 变量携带原文来源 ID，与当前聊天输入在规划时区分。
  * context_bootstrap 显式说明本轮证据缺口，避免把身份解析或角色设定误当作既有关系。
  * 默认源码及允许变量来自 prompt-declarations；可传入装配阶段预检的本地模板。
  * Prompt 正文由装配入口注入已加载的 default/local 模板，本文件不保留独立默认文本。

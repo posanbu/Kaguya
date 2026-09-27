@@ -31,7 +31,7 @@ Memory 需要区分触发单位、原始证据和派生认识。相关 Informati
 
 ## 配置和启用
 
-`memory.writeback` 默认关闭，开启后提供可靠原始写回与稀疏召回。`memory.knowledge`、`memory.index` 和 `memory.cognition` 是独立的工作区模块实例，均依赖原始记忆。概览提供即时开关；模块设置页填写 embedding 和 Mem0 的 `revision`、`baseUrl`、`apiKey` 等参数。密钥写入后不会在读取接口中回显。Profile 不包含 Memory 字段，也不带版本字段。
+`memory.writeback` 默认关闭，开启后提供可靠原始写回与稀疏召回。`memory.index` 和 `memory.cognition` 是独立的工作区模块实例，均依赖原始记忆。概览提供即时开关；模块设置页填写 embedding 和 Mem0 的 `revision`、`baseUrl`、`apiKey` 等参数。密钥写入后不会在读取接口中回显。Profile 不包含 Memory 字段，也不带版本字段。
 
 Mem0 服务需要支持 `POST /memories` 的 `infer`、`user_id`、`run_id`、`metadata`，以及 `GET /memories` 的同名过滤与 `top_k`。部署与凭据由服务端管理，Kaguya 不启动该服务，也不把自身模型密钥交给它。适配器要求返回的 `user_id` 与 `metadata.sourceInformationIds` 对应本次操作；不符合契约时拒绝结果。每次认知最多读取 32 条同范围已入库消息，返回最多 32 条事实，超时为 30 秒。它保留完整输入窗口作为保守的来源集合，不把集合引用声称为逐句语义验证。
 
@@ -69,31 +69,5 @@ Mem0 的每条消息同时保留本消息的 `platformMessageId` 和可用的 `r
 
 - **Raw evidence — 原始证据。** 不可变 Information 与逐消息 Memory 写回保存原文及来源。逐条保存仍然有效，后续调整派生单元不应删除这条证据路径。
 - **Context — 当前情境。** 当前 cognition 使用最多 32 条同范围消息作为有界输入。它表达本次实际可见的证据范围；多个 tick 如何累积为稳定 observation，仍由 [#244](https://github.com/posanbu/Kaguya/issues/244) 设计。
-- **Experience / episode — 共同经历。** 现有 Knowledge 契约允许显式关联多个原始事件。自动语义分段、reply 链补全和形成触发规则尚未确定，32 条窗口不能直接视作一段完整经历。
-- **Long-term cognition — 长期认识。** 现有 provider 产出 operation 隔离的有界快照，Knowledge 保存显式断言及其修订。如何让经历持续形成可修正、可召回的认识，仍需明确完整证据范围、幂等键和迁移边界。
-
-## ADR：事件、实体与 Wiki 的可回退原型
-
-**状态 — 显式启用的首版原型，对应 #197。** 原始账本继续保存不可变 Information；新增 PostgreSQL 投影保存通用事件、追加式断言、episode 和 Wiki 修订。它们复用 canonical entity atom 的 `informationId`，不创建第二套人物 ID，也不引入隐藏 Session。事件处理关系仍由 Information DAG 表达；主体、说话者和经历关系独立保存。
-
-在 Profile 的 `memory` 对象加入 `knowledgeEnabled: true`，并保持 `enabled: true`，才会创建附加表、激活 `memory.knowledge`、注册实体检索与恢复任务。省略该字段保留原有行为。按现有配置流程保存并显式应用或重启；回退时关闭该字段，保留原始文档和新投影用于审计，不删除数据。默认方案的改变仍需质量与成本评测。
-
-**来源与归属 — 显式、可追溯。** `MemoryKnowledgeAccess.putEvent` 接收来源 ID、范围 ID、事件时间、事件类型、正文、actor 与 subjects；reply-to、媒体片段和动作阶段为可选字段。事件的入库时间由数据库产生。canonical 消息的原文、平台范围及已解析说话者必须与账本一致，匿名 Web 不进入长期投影。通用事件自身需要 `agent:scope` 来源引用，已解析 actor 需要可核验的来源绑定；设备默认使用 `device.entity`，其他范围 kind 由宿主显式允许。`generated`、`completed`、`failed` 等动作阶段分别保存，不能互相替代。
-
-**断言与经历 — 保留视角和演化。** 断言保存主体、陈述者、predicate、value、认识性质、有效区间、入库时间、原始来源以及精确的 supersedes/retracts 关系。不同人的互相矛盾陈述可以并存；修订不会机械覆盖其他人的视角。episode 将多个原始事件关联为一个经历。新消息自动提取的仅是平台昵称和群名片观察，正文不自动转成人物偏好。第三人称转述、玩笑、隐含指代、语义 episode 分段及身份误合并后的正确重绑定仍需后续提取/身份模块与质量验证。
-
-**Wiki — 有界的证据入口。** 每个页面以范围与实体组合寻址，不跨范围拼接。页面有版本、生成器版本、双时间截止点、章节与原始证据。默认生成器使用原文摘录和显式断言，最多 8 条来源预算，最多 16 个章节，单段展示最多 3000 字符；截断会公开标记。重要旧断言的证据先于近期闲聊获得预算，完整原文保留旁路。这里的原始来源存在性校验不等于语义支持验证，页面不提供执行权限。
-
-`readWikiPage` 只提供当前未失效页面；`listWikiRevisions` 按版本分页提供历史审计。开发者控制台的“事件与 Wiki 记忆”显示修订正文、范围、原始 ID、时间和截断状态，历史修订不能被当作当前认识。原文超过 16000 个 UTF-16 code units 时，首版不创建事件投影，原始 Information 及既有 raw Memory 写回继续保留其各自契约。
-
-**恢复与修订 — 持久化工作流。** 模块启动登记回填根，按账本登记顺序每页最多 50 条处理历史身份终态与显式事件；实时订阅不能代替历史回填。数据库记录持久 dirty 状态，刷新冻结页面版本及 dirtyVersion，通过 CAS 拒绝过期更新。revision 的 operationId 覆盖数据库提交后进程中断的重试窗口。启动及可靠 mutation 完成后登记有游标的维护任务，逐页安排脏页恢复；单页刷新失败不会阻塞其他维护页。
-
-其他模块通过 `memory.knowledge.mutation.requested` 可靠追加断言/episode、撤回来源或使实体投影失效，相关证据与范围必须显式引用。实体失效用操作 ID 幂等执行，重试旧修订不会撤回之后新增的证据。永久非法事件以 skipped 终态隔离，瞬时数据库失败继续由 Reliable Runner 有界重试。直接调用仓储是宿主管理接口，调用方需要显式触发维护；在线模块应使用可靠协议。
-
-**规划与生成 — 冻结并重载原始证据。** Heartflow 在规划前使用同范围、双时间截止点和总预算选择记忆；实体导航与当前 Wiki 来源只作为寻找原文的入口。Core 重载原始 Information 后，模块还会再次核验原生范围与事件时间。Mem0、知识导航与 sparse/hybrid 共用有界选择；知识路径关闭或不可用时保留原文基线。页面尚未覆盖的新事件仍可以走原文路径。撤回来源在知识路径开启时同时过滤 raw 召回及包含该来源的认知快照，避免通过另一条检索路径重新引入。
-
-## 首版验证与后续评测
-
-本地确定性回放覆盖多人转述/纠正、同昵称不同人、改昵称、跨范围隔离、双时间截止、迟到事件、显式断言冲突与撤回、通用设备反馈、CAS、数据库提交后重试、历史回填、停用重开和脏页恢复。这些测试验证协议与可靠性，不测量真实模型的回答正确率、群聊参与适当性或人物归属能力。
-
-Mem0 仍是已有 operation 隔离的对照路径，原文 sparse/hybrid 保留；未接入 Hindsight、Zep/Graphiti，也未据公开分数决定更换默认 provider。后续需在实验前固定中文多人对话与设备事件回放、模型及 Prompt 版本、原始证据顺序、上下文/检索预算、评价规则和验收阈值。至少对照原文、Mem0、实体与断言、实体与断言加 Wiki，分别保存原始输出、证据命中、拒答、人物串线、时间更新、成本、延迟及失败样例；离线构建成本独立报告。在取得这些证据前，#197 的 provider 对照、质量收益与默认上线决策仍未完成。
+- **Experience / episode — 共同经历。** 当前未实现独立的经历存储。自动语义分段、reply 链补全和形成触发规则尚未确定，32 条窗口不能直接视作一段完整经历。
+- **Long-term cognition — 长期认识。** 现有 provider 产出 operation 隔离的有界快照。如何让经历持续形成可修正、可召回的认识，仍需明确完整证据范围、幂等键和迁移边界。

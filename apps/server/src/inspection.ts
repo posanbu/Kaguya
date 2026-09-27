@@ -22,12 +22,6 @@ import {
   matchesRequest,
   type RequestBrowser,
 } from "./inspection-requests.js";
-import {
-  decodeWikiPageId,
-  wikiPageDetail,
-  wikiPageDirectory,
-  type WikiBrowser,
-} from "./inspection-wiki.js";
 import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type {
@@ -47,8 +41,6 @@ import {
   inspectionSurfaceEntitySchema,
   inspectionRequestPageSchema,
   inspectionRequestDetailSchema,
-  inspectionWikiPageSchema,
-  inspectionWikiPageDetailSchema,
   type InspectionModule,
   type InspectionRequestSummary,
   type JsonValue,
@@ -238,14 +230,10 @@ function findSurface(
   if (!module || !surface || surface.id !== surfaceId)
     throw new InspectionError(404, "module_surface_not_found");
   const browser = surface.components.find(
-    (
-      component,
-    ): component is
-      SurfaceBrowser | RecordBrowser | RequestBrowser | WikiBrowser =>
+    (component): component is SurfaceBrowser | RecordBrowser | RequestBrowser =>
       component.type === "entity-browser" ||
       component.type === "record-browser" ||
-      component.type === "model-request-browser" ||
-      component.type === "wiki-browser",
+      component.type === "model-request-browser",
   );
   const status = surface.components.find(
     (component): component is SurfaceStatus =>
@@ -769,46 +757,6 @@ export function createInspectionService(source: InspectionSource) {
         )
         .digest("hex");
       const cursor = decodeSurfaceCursor(query.cursor, filter);
-      if (browser.type === "wiki-browser") {
-        if (
-          query.q ||
-          query.platform ||
-          query.status ||
-          query.after ||
-          query.before
-        )
-          throw new InspectionError(400, "invalid_inspection_request");
-        if (!source.database)
-          throw new InspectionError(503, "inspection_unavailable");
-        if (cursor && !decodeWikiPageId(cursor.informationId))
-          throw new InspectionError(400, "invalid_cursor");
-        const page = await wikiPageDirectory(
-          source.database.knowledge,
-          query.limit,
-          cursor
-            ? {
-                occurredAt: cursor.occurredAt,
-                pageId: cursor.informationId,
-              }
-            : undefined,
-        );
-        return inspectionWikiPageSchema.parse(
-          redact({
-            version: 1,
-            surfaceId: surface.id,
-            items: page.items,
-            nextCursor: page.cursor
-              ? encodeSurfaceCursor(
-                  {
-                    occurredAt: page.cursor.occurredAt,
-                    entityId: page.cursor.pageId,
-                  },
-                  filter,
-                )
-              : null,
-          }),
-        );
-      }
       if (browser.type === "model-request-browser") {
         if (
           query.q ||
@@ -994,18 +942,6 @@ export function createInspectionService(source: InspectionSource) {
       );
       if (browser.type === "model-request-browser")
         throw new InspectionError(404, "surface_entity_not_found");
-      if (browser.type === "wiki-browser") {
-        if (!source.database)
-          throw new InspectionError(503, "inspection_unavailable");
-        const detail = await wikiPageDetail(
-          source.database.knowledge,
-          entityId,
-        );
-        if (!detail) throw new InspectionError(404, "surface_entity_not_found");
-        return inspectionWikiPageDetailSchema.parse(
-          redact({ version: 1, surfaceId: surface.id, ...detail }),
-        );
-      }
       const root = await ledger.get(parseRequest(id, entityId));
       if (browser.type === "record-browser") {
         if (!root || root.kind !== browser.recordKind)

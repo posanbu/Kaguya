@@ -4,7 +4,6 @@
  * 主要职责：createFirstPartyModuleCatalog 接收宿主 Model Task token 和共享 completed kind，构造身份、时机与消息合成定义；
  * createFirstPartyModuleConfigDefaults 提供首次落盘模板，createFirstPartyModuleActivations
  * 同时提供独立 Memory writeback 定义，由 composition 在 Memory 启用时选择；
- * 事件与 Wiki 原型单独进入 Catalog，只有显式 knowledgeEnabled 才自动激活。
  * 严格校验已加载的实例文件，拒绝旧回复配置并提示重新初始化，与“可发现”的 Catalog 分开。
  * 代码库关系：Server、Demo 和测试组合入口传入 Runtime 的实际 token/definition；工厂仅依赖模块侧
  * 结构类型，保留 completed payload 泛型与对象身份，避免 modules 反向依赖 Runtime。
@@ -26,7 +25,6 @@ import { attentionFocusModule } from "./attention-focus/index.js";
 import { memoryCognitionModule } from "./memory-cognition/index.js";
 import { memoryIndexModule } from "./memory-index/index.js";
 import { memoryWritebackModule } from "./memory-writeback/index.js";
-import { memoryKnowledgeModule } from "./memory-knowledge/index.js";
 import { associationModule } from "./association/index.js";
 import { identityModule } from "./identity/index.js";
 import { createAttentionArousalModule } from "./attention-arousal/index.js";
@@ -58,7 +56,6 @@ export function createFirstPartyModuleCatalog<
     }),
     associationModule,
     memoryWritebackModule,
-    memoryKnowledgeModule,
     memoryIndexModule,
     memoryCognitionModule,
     identityModule,
@@ -106,21 +103,15 @@ export function createFirstPartyModuleConfigDefaults(
       enabled: true,
       settings: Object.freeze({}),
     }),
-    ...(
-      [
-        "memory.writeback",
-        "memory.knowledge",
-        "memory.index",
-        "memory.cognition",
-      ] as const
-    ).map((definitionId) =>
-      Object.freeze({
-        version: 1 as const,
-        instanceId: `${definitionId}.default`,
-        definitionId,
-        enabled: false,
-        settings: Object.freeze({}),
-      }),
+    ...(["memory.writeback", "memory.index", "memory.cognition"] as const).map(
+      (definitionId) =>
+        Object.freeze({
+          version: 1 as const,
+          instanceId: `${definitionId}.default`,
+          definitionId,
+          enabled: false,
+          settings: Object.freeze({}),
+        }),
     ),
     Object.freeze({
       version: 1 as const,

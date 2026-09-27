@@ -84,7 +84,7 @@ describe("first-party module configuration", () => {
         .flatMap((d) => [...d.manifest.produces, ...d.manifest.consumes])
         .map((k) => k.kind),
     );
-    expect(definitions).toHaveLength(13);
+    expect(definitions).toHaveLength(12);
     for (const { manifest } of definitions) {
       expect(manifest.inspection?.mechanism.length).toBeGreaterThan(0);
       expect(manifest.inspection?.views.length).toBeGreaterThan(0);
@@ -115,13 +115,12 @@ describe("first-party module configuration", () => {
       }
     }
   });
-  it("materializes four disabled Memory features and static adapters", () => {
+  it("materializes three disabled Memory features and static adapters", () => {
     const defaults = createFirstPartyModuleConfigDefaults("production");
-    expect(defaults).toHaveLength(15);
+    expect(defaults).toHaveLength(14);
     expect(defaults.every(({ version }) => version === 1)).toBe(true);
     for (const id of [
       "memory.writeback",
-      "memory.knowledge",
       "memory.index",
       "memory.cognition",
       "adapter.napcat",
@@ -137,7 +136,7 @@ describe("first-party module configuration", () => {
     );
   });
 
-  it("classifies exactly the seven memory definitions", () => {
+  it("classifies exactly the six memory definitions", () => {
     const tagged = catalog()
       .definitions.filter(({ manifest }) => manifest.tags?.includes("memory"))
       .map(({ manifest }) => manifest.definitionId);
@@ -147,7 +146,6 @@ describe("first-party module configuration", () => {
       "memory.expression",
       "memory.identity",
       "memory.index",
-      "memory.knowledge",
       "memory.writeback",
     ]);
     expect(tagged).not.toEqual(

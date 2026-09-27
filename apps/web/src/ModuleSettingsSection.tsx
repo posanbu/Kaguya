@@ -27,7 +27,6 @@ import {
 } from "./feature-api.js";
 const MEMORY_FEATURES = new Set([
   "memory.writeback",
-  "memory.knowledge",
   "memory.index",
   "memory.cognition",
 ]);

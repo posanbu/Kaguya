@@ -1,7 +1,6 @@
 /**
  * 候选新旧由 Selector 的账本注册顺序确定；相同/迟到业务时间及随机 UUID 不改变消费先后。
  * 获胜计划的可选 tone 传给消息意图，供独立表情插件判断语境，不改变参与门控。
- * 声明人工记忆来源 Kind 为可消费上下文，正常召回冻结后交给 Planner。
  * manifest 声明 Planner 模板；调用 compilePlannerPrompt 时传入装配阶段加载的 default/local 文本，不再使用代码内默认值。
  * settings schema 的公开中文元数据供管理表单使用，运行时与保存共用约束。
  * 管理端批准的跨会话 candidate 由宿主直接认领，不再触发 Planner；其 delivery 仍使用本模块统一 turn 终态。
@@ -12,7 +11,6 @@
  * 校验 Focus、时效与安全策略。state/memory selector 从账本读取因果链及记忆，冻结完整输入。
  * Planner v2 在模型结构修复阶段检查本轮动作边界；v1 重放保留原 schema。重放沿持久化请求复用 Prompt 和上下文，防止迟到历史触发第二次任务。
  * 规划前按最近多条输入与发言者召回话题、人物和角色设定原文，保留双时间截止点及 sparse 旁路；可选认知快照至多两条，总计八条。
- * Knowledge 开启时，认知快照的全部原始来源必须通过撤回 guard，检查缺失或失败都不使用该快照。
  * 宿主 conversation 能力冻结背景和候选；跨会话获胜决策交给 route 复核，失败关闭当前 turn，不回退发送。
  * dispatchDecision 仅将独立 Planner 的获胜 message 结果按 claim 注册一次意图，末条输入决定目标；
  * turn 标识及引用保留完整冻结上下文，正文生成交给 composer。wait/silent 与失败路径
@@ -20,7 +18,6 @@
  * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
  * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
  */
-import { userStatementInformationKind } from "../memory-knowledge/ingestion-kinds.js";
 import { firstPartyInspection } from "../inspection.js";
 import { focusOpened } from "../attention-focus/facts.js";
 import {
@@ -47,10 +44,7 @@ import type {
 } from "../message-composer/index.js";
 import type { ModuleCapability } from "@kaguya/sdk";
 import { createCognitionMemorySelector } from "../memory-cognition/index.js";
-import {
-  isMemorySourceInScope,
-  selectKnowledgeMemory,
-} from "../memory-knowledge/selector.js";
+import { isMemorySourceInScope } from "../memory-source-scope.js";
 import type { CognitionIdentity } from "@kaguya/memory";
 
 import {
@@ -125,8 +119,6 @@ export interface CreateHeartflowModuleOptions {
   >;
   readonly cognitionIdentity?:
     CognitionIdentity | (() => CognitionIdentity | undefined);
-  /** Knowledge 开启时，旧认知快照也必须通过完整来源撤回检查。 */
-  readonly memoryKnowledgeEnabled?: boolean | (() => boolean);
   readonly deliveryDeliveredInformationKind: AnyKind;
   readonly deliveryFailedInformationKind: AnyKind;
   readonly modelTaskFailedInformationKind: AnyKind;
@@ -489,9 +481,7 @@ export const heartflowStateSelector = defineInformationSelector({
   },
 });
 
-export function createHeartflowMemorySelector(
-  agentNames: readonly string[] = [],
-) {
+export function createHeartflowMemorySelector() {
   return defineInformationSelector({
     selectorId: "agent.heartflow.optional-memory",
     select: async ({ sourceAtom, ledger }) => {
@@ -544,7 +534,6 @@ export function createHeartflowMemorySelector(
         }
       }
       const memories = new Map<string, DeepReadonly<InformationAtom>>();
-      let knowledgeCount = 0;
       for (const candidate of candidates) {
         if (memories.size >= 8) break;
         const candidatePayload = candidate.payload as any;
@@ -570,18 +559,6 @@ export function createHeartflowMemorySelector(
           inbounds.map((atom) => String(atom.payload.text ?? "")),
         );
         if (query.length === 0) continue;
-        const knowledge = await selectKnowledgeMemory(ledger, {
-          inbounds,
-          occurredBefore: String(candidate.payload.asOf),
-          recordedBefore: candidate.occurredAt,
-          limit: Math.min(4 - knowledgeCount, 8 - memories.size),
-          agentNames,
-        });
-        for (const atom of knowledge) {
-          if (!memories.has(atom.informationId)) knowledgeCount += 1;
-          memories.set(atom.informationId, atom);
-        }
-        if (memories.size >= 8) break;
         try {
           const selected = await ledger.retrieve({
             strategyId: MEMORY_RETRIEVAL_STRATEGY_ID,
@@ -633,10 +610,7 @@ export function createHeartflowMemorySelector(
 export const heartflowMemorySelector = createHeartflowMemorySelector();
 
 export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
-  const scopedMemorySelector = createHeartflowMemorySelector([
-    options.agentIdentity.name,
-    ...options.agentIdentity.aliases,
-  ]);
+  const scopedMemorySelector = createHeartflowMemorySelector();
   const memoryEnabled = () =>
     typeof options.memoryEnabled === "function"
       ? options.memoryEnabled()
@@ -650,14 +624,10 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
           ? options.cognitionIdentity()
           : options.cognitionIdentity;
       const snapshots = identity
-        ? (
-            await createCognitionMemorySelector(identity, {
-              requireEvidenceGuard:
-                typeof options.memoryKnowledgeEnabled === "function"
-                  ? options.memoryKnowledgeEnabled()
-                  : (options.memoryKnowledgeEnabled ?? false),
-            }).select(context)
-          ).slice(0, 2)
+        ? (await createCognitionMemorySelector(identity).select(context)).slice(
+            0,
+            2,
+          )
         : [];
       const sources = await scopedMemorySelector.select(context);
       return [...new Set([...snapshots, ...sources])].slice(0, 8);
@@ -808,7 +778,6 @@ export function createHeartflowModule(options: CreateHeartflowModuleOptions) {
         ...plannerPlatformPolicyDeclarations,
       ],
       consumes: [
-        userStatementInformationKind,
         inboundTextInformationKind,
         observationWakeInformationKind,
         turnCandidateInformationKind,

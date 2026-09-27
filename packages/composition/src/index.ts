@@ -3,7 +3,6 @@
  * 模板加载器统一选择所有模块的 default/local 正文；Catalog 注入 Planner、Composer 和 Expression，授权正文渲染器注入 Runtime。
  * 功能概述：作为 Server 与 Demo 共用的唯一 Runtime Composition 边界，组装业务 Catalog 与宿主批准的 Model Task 能力。
  * Memory 开启时加入缺省 writeback activation，关闭时移除写回实例；尊重已配置实例的禁用状态。
- * knowledgeEnabled 显式控制事件与 Wiki 原型，未设置时不改变原文及 provider 的激活行为。
  * Heartflow 与 Composer 同时注入宿主目标授权能力；自然语言跨会话自动校验，管理端路径仍需正文确认。
  * 主要职责：createMessageCatalog 加载模板并注入 Runtime kind/token，供运行时及数据库 kind 检查共用；
  * createMessageComposition 注入共享 token/definition，按 activation 设置批准 tier，
@@ -75,7 +74,6 @@ export type RuntimeModelSelectionResolver = (
 };
 export interface MessageCompositionOptions {
   readonly memoryEnabled?: boolean;
-  readonly memoryKnowledgeEnabled?: boolean;
   readonly embedding?: EmbeddingProvider;
   readonly cognition?: MemoryCognitionProvider;
   readonly moduleConfigs: readonly FirstPartyModuleInstanceConfig[];
@@ -84,7 +82,6 @@ export interface MessageCompositionOptions {
 }
 export interface MemoryFeatureState {
   enabled: boolean;
-  knowledgeEnabled: boolean;
   cognitionIdentity?: CognitionIdentity;
 }
 export function createDeterministicModelSelectionResolver(): RuntimeModelSelectionResolver {
@@ -100,7 +97,6 @@ export function createDeterministicModelSelectionResolver(): RuntimeModelSelecti
 export function createMessageCatalog(
   configuredIdentity: Pick<AgentIdentity, "timeZone"> = DEFAULT_AGENT_IDENTITY,
   cognitionIdentity?: CognitionIdentity,
-  memoryKnowledgeEnabled = false,
   promptTemplates = loadFirstPartyPromptTemplates(),
   memoryEnabled = false,
   qqExpressionEnabled = false,
@@ -135,9 +131,6 @@ export function createMessageCatalog(
     memoryEnabled: memoryFeatureState
       ? () => memoryFeatureState.enabled
       : memoryEnabled,
-    memoryKnowledgeEnabled: memoryFeatureState
-      ? () => memoryFeatureState.knowledgeEnabled
-      : memoryKnowledgeEnabled,
     ...(memoryFeatureState
       ? { cognitionIdentity: () => memoryFeatureState.cognitionIdentity }
       : cognitionIdentity
@@ -160,8 +153,6 @@ export function createMessageComposition(
   const renderStructuredOutputPrompt = loadStructuredOutputPromptRenderer();
   const memoryFeatureState: MemoryFeatureState = {
     enabled: options.memoryEnabled ?? false,
-    knowledgeEnabled:
-      !!options.memoryEnabled && !!options.memoryKnowledgeEnabled,
     ...(options.cognition
       ? { cognitionIdentity: options.cognition.identity }
       : {}),
@@ -169,7 +160,6 @@ export function createMessageComposition(
   const catalog = createMessageCatalog(
     identity,
     options.memoryEnabled ? options.cognition?.identity : undefined,
-    !!options.memoryEnabled && !!options.memoryKnowledgeEnabled,
     promptTemplates,
     !!options.memoryEnabled,
     options.moduleConfigs.some(
@@ -179,18 +169,12 @@ export function createMessageComposition(
     options.activePersonProfiles,
   );
   const memoryEnabled = options.memoryEnabled ?? false;
-  const knowledgeEnabled =
-    memoryEnabled && (options.memoryKnowledgeEnabled ?? false);
   const moduleConfigs = options.moduleConfigs.filter(
     (config) =>
       (memoryEnabled ||
-        ![
-          "memory.writeback",
-          "memory.index",
-          "memory.cognition",
-          "memory.knowledge",
-        ].includes(config.definitionId)) &&
-      (knowledgeEnabled || config.definitionId !== "memory.knowledge") &&
+        !["memory.writeback", "memory.index", "memory.cognition"].includes(
+          config.definitionId,
+        )) &&
       (options.embedding !== undefined ||
         config.definitionId !== "memory.index") &&
       (options.cognition !== undefined ||
@@ -268,7 +252,6 @@ export function createMessageComposition(
     activations,
     memory: {
       enabled: memoryEnabled,
-      ...(knowledgeEnabled ? { knowledgeEnabled: true } : {}),
       ...(memoryEnabled && options.embedding
         ? { embedding: options.embedding }
         : {}),
@@ -323,12 +306,11 @@ export function createMemoryCompositionOptions(
   memory: MemoryConfig,
 ): Pick<
   MessageCompositionOptions,
-  "memoryEnabled" | "memoryKnowledgeEnabled" | "embedding" | "cognition"
+  "memoryEnabled" | "embedding" | "cognition"
 > {
   if (!memory.enabled) return { memoryEnabled: false };
   return {
     memoryEnabled: true,
-    ...(memory.knowledgeEnabled ? { memoryKnowledgeEnabled: true } : {}),
     ...(memory.embedding
       ? { embedding: createCompatibleEmbeddingProvider(memory.embedding) }
       : {}),
@@ -345,14 +327,12 @@ export function memoryConfigFromModules(
   const active = (id: string) =>
     configs.find((config) => config.definitionId === id && config.enabled);
   const raw = active("memory.writeback") !== undefined;
-  const knowledge = active("memory.knowledge") !== undefined;
   const index = active("memory.index");
   const cognition = active("memory.cognition");
-  if (!raw && (knowledge || index || cognition))
+  if (!raw && (index || cognition))
     throw new Error("Memory dependents require memory.writeback");
   const config = {
     enabled: raw,
-    knowledgeEnabled: knowledge,
     ...(index ? { embedding: index.settings } : {}),
     ...(cognition
       ? { cognition: { provider: "mem0-rest", ...cognition.settings } }

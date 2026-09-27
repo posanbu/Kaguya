@@ -153,7 +153,7 @@ Planner 支持 `message | wait | silent`。宿主按本轮冻结人物/会话背
 
 Prompt 仍提供 `context_bootstrap`，用于描述 Planner 或 Composer 本次实际可见的历史和 Memory。它会受上下文选择和字符预算影响；版本化 `bootstrap` 则随冻结 turn 固定。两者职责不同，均不能被解释为整个数据库是否为空的结论。
 
-Planner 使用独立的 `heartflow.bootstrap-policy` 判断冷启动时是否值得询问必要信息。Composer 使用独立的 `message-composer.bootstrap` 自然表达未知状态。persona 只描述 Agent 自身，不能作为用户、关系、会话历史或世界背景的证据。Expression、Person Fact、Memory cognition、Knowledge 和 Association 只消费带来源引用的事实；证据不足、空结果或失败均保持未知。
+Planner 使用独立的 `heartflow.bootstrap-policy` 判断冷启动时是否值得询问必要信息。Composer 使用独立的 `message-composer.bootstrap` 自然表达未知状态。persona 只描述 Agent 自身，不能作为用户、关系、会话历史或世界背景的证据。Expression、Person Fact、Memory cognition 和 Association 只消费带来源引用的事实；证据不足、空结果或失败均保持未知。
 
 ## 声明可编辑资源
 

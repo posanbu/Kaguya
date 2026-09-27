@@ -13,7 +13,6 @@ import {
 
 export const FEATURE_IDS = [
   "memory.writeback",
-  "memory.knowledge",
   "memory.index",
   "memory.cognition",
   "adapter.napcat",
@@ -54,7 +53,6 @@ export class FeatureManagement {
       napCatLifecycle():
         { lifecycle: string; connectivity: string } | undefined;
       committed(configs: readonly ModuleInstanceConfig[]): void;
-      recovered(): void;
     },
   ) {}
 
@@ -250,12 +248,6 @@ export class FeatureManagement {
       if (appliedMemory)
         try {
           await this.options.activateMemory(current);
-        } catch (failure) {
-          failures.push(failure);
-        }
-      if (!failures.length)
-        try {
-          this.options.recovered();
         } catch (failure) {
           failures.push(failure);
         }

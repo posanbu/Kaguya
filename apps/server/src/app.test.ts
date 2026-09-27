@@ -112,7 +112,6 @@ describe("application API gateway", () => {
           connectivity: "disconnected",
         }),
         committed: () => {},
-        recovered: () => {},
       });
       app = await createHttpApplication({
         config,

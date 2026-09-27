@@ -1,11 +1,9 @@
 /**
  * 公开独立 QQ 表情模块工厂，导入不执行收藏、下载或发送。
- * 主动录入来源 Kind 与通用整理模板声明供宿主消费，正文从 default/local 资源读取。
  * 导出跨会话批准/确认事实和窄 MessageAuthorization token，供 composition 与 Runtime 共享对象身份。
  * 授权消息渲染工厂供 composition 注入 Runtime，模板正文不再由宿主内嵌。
  * 功能概述：汇总 modules 包的信息原子 kind、Heartflow、Message Composer与 person-fact Model Task 公共契约。
  * 额外导出后台原始消息写回模块与 request/terminal kind，供 composition 显式装配。
- * memory-knowledge 导出显式事件提交、Wiki 修订与历史回填协议，供宿主选择启用。
  * 主要职责：导出 `createHeartflowModule`、`createMessageComposerModule`、
  * `createPersonFactTaskModule`、默认 Selector 名称以及各阶段 kind/schema；旧事件定义、reply-only completed schema 和定向事件模块不再公开。
  * 代码库关系：apps composition root 通过 first-party/catalog.ts 工厂选择模块，注入 shared completed definition，
@@ -26,8 +24,6 @@ export {
   type FrozenPersonName,
   type ActivePersonProfiles,
 } from "./first-party/person-profile.js";
-export * from "./first-party/memory-knowledge/index.js";
-export { memoryIngestionTemplateDeclaration } from "./prompt-declarations.js";
 export {
   createHeartflowModule,
   heartflowSettingsSchema,

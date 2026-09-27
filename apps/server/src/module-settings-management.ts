@@ -107,12 +107,9 @@ export class ModuleSettingsManagement {
     return {
       definitionId: id,
       scope: "global",
-      effect: [
-        "memory.writeback",
-        "memory.knowledge",
-        "memory.index",
-        "memory.cognition",
-      ].includes(id)
+      effect: ["memory.writeback", "memory.index", "memory.cognition"].includes(
+        id,
+      )
         ? "immediate"
         : "explicit_apply",
       fields,
@@ -182,12 +179,7 @@ export class ModuleSettingsManagement {
         settings: validation.data,
       };
       if (
-        [
-          "memory.writeback",
-          "memory.knowledge",
-          "memory.index",
-          "memory.cognition",
-        ].includes(id)
+        ["memory.writeback", "memory.index", "memory.cognition"].includes(id)
       ) {
         if (replacement.enabled !== current.enabled)
           throw new ModuleSettingsError(400, "use_feature_switch");

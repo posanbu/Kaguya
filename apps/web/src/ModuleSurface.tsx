@@ -1,6 +1,5 @@
 /**
  * 功能概述：渲染模块 Manifest 声明的受控检查 Surface；首版提供状态摘要、实体主从浏览、关系列表、时间线与关系图。
- * wiki-browser 分派给页面目录与正文阅读器；record-browser 按 presentation 分派注意力观察或通用记录详情。
  * model-request-browser 分派给独立 RequestSurface，按持久化模型请求提供目录与详情。
  * storage-browser 分派给紧凑持久库表格，避免通用历史标签和卡片列表干扰领域浏览。
  * 主要职责：将搜索和筛选转换为只读 Inspection 查询，保持稳定游标；实体选择加载独立详情并允许追溯原始 Atom。
@@ -12,7 +11,6 @@ import { PersonProfileEditor } from "./PersonProfileEditor.js";
 import { GateSurface } from "./GateSurface.js";
 import { RequestSurface } from "./RequestSurface.js";
 import { StorageSurface } from "./StorageSurface.js";
-import { WikiSurface } from "./WikiSurface.js";
 import {
   inspectionSurfaceEntitySchema,
   inspectionSurfacePageSchema,
@@ -57,13 +55,6 @@ export function ModuleSurface(props: ModuleSurfaceProps) {
         {...props}
         browser={storage}
       />
-    );
-  const wiki = surface?.components.find(
-    (component) => component.type === "wiki-browser",
-  );
-  if (wiki)
-    return (
-      <WikiSurface key={props.module.definitionId} {...props} browser={wiki} />
     );
   const requests = surface?.components.find(
     (component) => component.type === "model-request-browser",

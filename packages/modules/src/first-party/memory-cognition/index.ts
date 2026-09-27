@@ -8,7 +8,6 @@
  * 经版本化 provider 产生事实，再登记 memory.text 和唯一 terminal；未完成文本不进入 Prompt。
  * cognitionEvidenceSelector 重载直接来源；createCognitionMemorySelector 按 provider/revision/asOf
  * 选择最新完整快照并核对直接证据，返回可由 Core 再次加载的 Memory atom ID。
- * knowledge 开启时通过命名 guard 核验整个证据闭包，任一来源撤回或 guard 不可用都拒绝该快照。
  * provider 超时/暂时错误交给 Reliable Runner，source/schema 失败关闭；后台链不触发在线回合。
  * 展示契约：中文名称与职责说明由定义直接提供给 Inspection 和 WebUI，稳定 kind 与协议字段保持不变。
  * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
@@ -16,7 +15,6 @@
 import { firstPartyInspection } from "../inspection.js";
 import {
   awaitWithSignal,
-  MEMORY_COGNITION_EVIDENCE_GUARD_STRATEGY_ID,
   cognitionIdentitySchema,
   memoryCognitionCapability,
   memoryDocumentReaderCapability,
@@ -469,10 +467,7 @@ export const memoryCognitionModule = defineInformationModule({
     };
   },
 });
-export function createCognitionMemorySelector(
-  identity: CognitionIdentity,
-  options: { readonly requireEvidenceGuard?: boolean } = {},
-) {
+export function createCognitionMemorySelector(identity: CognitionIdentity) {
   return defineInformationSelector({
     selectorId: "memory.cognition.completed-snapshot",
     select: async ({ sourceAtom, ledger }) => {
@@ -618,26 +613,6 @@ export function createCognitionMemorySelector(
           const evidenceIds = new Set(
             evidence.map((atom) => atom.informationId),
           );
-          if (options.requireEvidenceGuard) {
-            try {
-              const available = await ledger.retrieve({
-                strategyId: MEMORY_COGNITION_EVIDENCE_GUARD_STRATEGY_ID,
-                input: { sourceInformationIds: [...evidenceIds] },
-                limit: evidenceIds.size,
-              });
-              const availableIds = new Set(
-                available.map((atom) => atom.informationId),
-              );
-              if (
-                availableIds.size !== evidenceIds.size ||
-                [...evidenceIds].some((id) => !availableIds.has(id))
-              )
-                continue;
-            } catch {
-              // 开启态不可因策略缺失、账本或仓储故障退回未检查的旧快照。
-              continue;
-            }
-          }
           const memories = await ledger.related({
             from: [snapshot.atom.informationId],
             relation: "agent:memory",

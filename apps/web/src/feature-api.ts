@@ -3,7 +3,6 @@ import { GATEWAY_UNAUTHORIZED_EVENT } from "./api.js";
 export const FEATURE_CHANGED_EVENT = "kaguya:features-changed";
 export const FEATURE_IDS = [
   "memory.writeback",
-  "memory.knowledge",
   "memory.index",
   "memory.cognition",
   "adapter.napcat",

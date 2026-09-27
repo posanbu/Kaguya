@@ -30,7 +30,7 @@ pnpm build
 
 :::
 
-当前 [`ModuleSurface`](https://github.com/posanbu/Kaguya/blob/2dad5c8330a6668e293f79995b2f477ce71ecc61/apps/web/src/ModuleSurface.tsx) 已分派 Storage、Wiki、Request、Record/Gate 和 Entity 页面，因此“没有领域检视页面”不成立。但按类型查找首个匹配组件并提前返回的行为仍存在；支持部分专用 Surface，不等于已支持 Manifest 的任意多区域组合。具体差异见 [Surface 调研](./surfaces)。
+当前 [`ModuleSurface`](https://github.com/posanbu/Kaguya/blob/2dad5c8330a6668e293f79995b2f477ce71ecc61/apps/web/src/ModuleSurface.tsx) 已分派 Storage、Request、Record/Gate 和 Entity 页面，因此“没有领域检视页面”不成立。但按类型查找首个匹配组件并提前返回的行为仍存在；支持部分专用 Surface，不等于已支持 Manifest 的任意多区域组合。具体差异见 [Surface 调研](./surfaces)。
 
 ## 八个专题与条件建议
 

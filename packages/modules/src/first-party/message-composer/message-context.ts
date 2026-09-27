@@ -1,5 +1,5 @@
 /**
- * 冻结的人工原文片段与普通消息均须再次通过范围和事件截止点检查。
+ * 冻结的原始消息记忆须再次通过范围和事件截止点检查。
  * 功能概述：消息编写模块的受控账本选择器及 Prompt 预览入口，不参与 Heartflow 的发言决策。
  * 已确认的跨会话消息通过 confirmation→assistant 因果链验证成功投递，才能进入同目标历史或引用。
  * 主要职责：turnMessageContextSelector 核对 intent→turn 引用并保留全部冻结输入；仅辅助历史受预算限制，
@@ -46,8 +46,7 @@ import {
   resolveMessageQuote,
   sameMessageTarget,
 } from "./message-quote.js";
-import { isMemorySourceInScope } from "../memory-knowledge/selector.js";
-import { USER_STATEMENT_KIND } from "@kaguya/schema";
+import { isMemorySourceInScope } from "../memory-source-scope.js";
 import { PERSON_PROFILE_REVISION_KIND } from "@kaguya/schema";
 
 export const currentAcceptedMessageSelector = defineInformationSelector({
@@ -118,8 +117,7 @@ export async function selectFrozenTurnMessageContext(options: {
       throw new Error(`Missing frozen memory reference: ${id}`);
     const memory = byId.get(id)!;
     if (
-      (memory.kind === inboundTextInformationKind.kind ||
-        memory.kind === USER_STATEMENT_KIND) &&
+      memory.kind === inboundTextInformationKind.kind &&
       !isMemorySourceInScope(memory, intent.target, String(turn.payload.asOf))
     )
       throw new Error(
