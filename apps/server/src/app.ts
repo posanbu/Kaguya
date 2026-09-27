@@ -66,7 +66,12 @@ import {
   profileIdSchema,
 } from "@kaguya/config";
 import { runWithLogContext } from "@kaguya/logger";
-import { webConversationIdSchema, z } from "@kaguya/schema";
+import {
+  modelMetricsWindowSchema,
+  webConversationIdSchema,
+  z,
+} from "@kaguya/schema";
+import type { ModelRequestMetricsRepository } from "@kaguya/database";
 import {
   InvalidWebChatCursorError,
   type WebChatHistoryReader,
@@ -607,6 +612,8 @@ export interface CreateHttpApplicationOptions {
   webChatHistory?: () => WebChatHistoryReader | undefined;
   messageTargets?: () => MessageTargetService | undefined;
   inspection?: InspectionService | (() => InspectionService | undefined);
+  modelRequestMetrics?: () =>
+    Pick<ModelRequestMetricsRepository, "read"> | undefined;
   configurationApplication?: ConfigurationApplicationService | undefined;
   adapterHost?: Pick<AdapterHost, "status">;
   configuration?: ConfigurationManagement;
@@ -713,6 +720,41 @@ export async function createHttpApplication(
     app,
     options.inspection,
     requireGatewayToken(options, "management"),
+  );
+
+  app.get(
+    "/api/v1/metrics/model-requests",
+    {
+      onRequest: requireGatewayToken(options, "management"),
+      schema: {
+        tags: ["Metrics"],
+        summary: "Read aggregated light and heavy model request metrics",
+        security: [{ bearerAuth: [] }],
+        querystring: {
+          type: "object",
+          additionalProperties: false,
+          required: ["window"],
+          properties: {
+            window: { type: "string", enum: ["24h", "7d", "30d"] },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      reply.header("Cache-Control", "no-store");
+      const metrics = options.modelRequestMetrics?.();
+      if (!metrics)
+        throw new ApiGatewayError(
+          "model_metrics_unavailable",
+          "Model request metrics unavailable",
+          503,
+        );
+      const query = z
+        .object({ window: modelMetricsWindowSchema })
+        .strict()
+        .parse(request.query);
+      return { data: await metrics.read(query.window) };
+    },
   );
 
   app.get(

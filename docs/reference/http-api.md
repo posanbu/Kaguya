@@ -45,11 +45,23 @@ description: Kaguya 统一 Server 的路由、认证、Profile 与消息协议�
 
 **`POST /api/v1/models/discover`** — 需要 Bearer Token，使用请求中的 OpenAI-compatible `baseUrl` 与 `apiKey` 临时读取模型列表；不保存凭据或模型列表。
 
+**`GET /api/v1/metrics/model-requests?window=24h|7d|30d`** — 需要 Bearer Token，按 Model Task 请求时间聚合 light/heavy 调用频率、终态、延迟和 token。响应禁止缓存。
+
 **`POST /api/v1/messages`** — 需要 Bearer Token，校验并把一条 Web 文本消息交给 gateway 后台分发。
 
 **`GET /api/v1/messages`** — 需要 Bearer Token，按 `conversationId` 读取持久化的 Web 私聊消息与成功投递的回复。
 
 生产 SPA fallback 只处理接受 `text/html` 的 GET 页面请求，显式排除 `/api/*` 与 `/healthz`。未知 API 返回结构化 `404 not_found`。
+
+## 模型调用指标
+
+`GET /api/v1/metrics/model-requests` 的 `window` 必填，只接受 `24h`、`7d` 或 `30d`。三个窗口分别使用 1 小时、6 小时和 1 天时间桶。服务端返回确定的 `startedAt`、`endedAt` 与 `bucketDurationMs`，界面再按浏览器本地时区显示时间。
+
+一次调用由 `core.model.task.requested` 计数，并通过 `core:status-of` 关联 completed、failed 或 cancelled 终态。结构化输出的内部重试不会重复增加调用数。没有终态的请求计入 pending；所有已结束请求参与延迟统计。token 只统计终态中真实存在的 usage，`missingCount` 单独报告缺失样本，缺失值不会当作零。
+
+接口兼容 `inputTokens` / `outputTokens` 与旧的 `promptTokens` / `completionTokens`。缺少 `totalTokens` 时，仅在输入和输出均存在时求和。指标覆盖当前账本中的全部 Profile 与 Runtime 实例，只返回聚合值，不返回 Prompt、输出或平台消息。费用固定返回 `unavailable` 和 `pricing-not-configured`，因为当前没有可信的历史价格快照。
+
+未知查询参数、缺失窗口或非法窗口返回 `400 invalid_request`。数据库尚未就绪返回 `503 model_metrics_unavailable`，查询故障返回安全的 `500 internal_error`。
 
 ## Bearer 认证
 
