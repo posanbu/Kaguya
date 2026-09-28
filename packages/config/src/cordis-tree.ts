@@ -1,8 +1,16 @@
+/**
+ * 功能概述：读取和校验宿主服务及可安装模块的 Cordis 配置快照。
+ * 主要职责：固定宿主服务必须存在；模块条目允许 npm/file 包、非固定 instanceId 和内联 settings，
+ * definitionId 将实例关联到包声明。禁用外部包时不要求加载代码，历史 Kind 由账本保存。
+ * 代码库关系：module-config 加载内置文件配置，Composition 负责外部包声明/schema 预检。
+ * 输入输出与副作用：敏感 YAML 原子读写；拒绝重复 ID、别名、未知服务与不安全实例路径。
+ */
 import { join } from "node:path";
 
 import { isAlias, parseDocument, stringify, visit } from "yaml";
 import { z } from "zod";
 
+import { jsonObjectSchema } from "./model.js";
 import { ConfigError } from "./errors.js";
 import {
   assertPathInside,
@@ -25,6 +33,11 @@ const entrySchema = z.strictObject({
   id: z.string().min(1),
   name: z.string().min(1),
   disabled: z.boolean(),
+  definitionId: z
+    .string()
+    .regex(/^[a-z][a-z0-9._-]*$/u)
+    .optional(),
+  settings: jsonObjectSchema.optional(),
 });
 const treeSchema = z.strictObject({ plugins: z.array(entrySchema) });
 
@@ -67,12 +80,33 @@ export function validateCordisTree(
   const known = new Map(expected.map((entry) => [entry.id, entry.name]));
   const seen = new Set<string>();
   for (const entry of parsed.data.plugins) {
-    if (seen.has(entry.id) || known.get(entry.id) !== entry.name)
-      throw invalidTree();
+    if (seen.has(entry.id)) throw invalidTree();
+    if (known.has(entry.id)) {
+      if (
+        known.get(entry.id) !== entry.name ||
+        entry.definitionId !== undefined ||
+        entry.settings !== undefined
+      )
+        throw invalidTree();
+    } else {
+      if (
+        !/^module\.[a-z0-9]+(?:[.-][a-z0-9]+)*$/u.test(entry.id) ||
+        !entry.definitionId
+      )
+        throw invalidTree();
+      const builtin = [...known.values()].includes(entry.name);
+      if (builtin && entry.name !== `kaguya/module/${entry.definitionId}`)
+        throw invalidTree();
+      const packageName = /^(?:@[a-z0-9._-]+\/)?[a-z0-9][a-z0-9._-]*$/u.test(
+        entry.name,
+      );
+      const local = /^file:.+/u.test(entry.name);
+      if (!builtin && !packageName && !local) throw invalidTree();
+    }
     if (entry.id.startsWith("service.") && entry.disabled) throw invalidTree();
     seen.add(entry.id);
   }
-  if (seen.size !== known.size) throw invalidTree();
+  if ([...known.keys()].some((id) => !seen.has(id))) throw invalidTree();
   return freezeTree(parsed.data);
 }
 
@@ -153,7 +187,7 @@ function treePath(rootDir: string): string {
 function freezeTree(tree: CordisPluginTree): CordisPluginTree {
   return Object.freeze({
     plugins: Object.freeze(
-      tree.plugins.map((entry) => Object.freeze({ ...entry })),
+      tree.plugins.map((entry) => freezeJson({ ...entry })),
     ),
   });
 }
@@ -174,4 +208,12 @@ function isMissing(error: unknown): boolean {
     "code" in error &&
     error.code === "ENOENT"
   );
+}
+
+function freezeJson<T>(value: T): T {
+  if (value && typeof value === "object") {
+    for (const child of Object.values(value)) freezeJson(child);
+    Object.freeze(value);
+  }
+  return value;
 }

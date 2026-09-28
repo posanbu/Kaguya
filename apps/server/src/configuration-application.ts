@@ -11,6 +11,7 @@ import { createHmac, randomBytes } from "node:crypto";
 import type { ModuleInstanceConfig, UserConfigProfile } from "@kaguya/config";
 
 export interface ConfigurationSnapshot {
+  readonly pluginTree?: import("@kaguya/config").CordisPluginTree;
   readonly profile: UserConfigProfile;
   readonly moduleConfigs: readonly ModuleInstanceConfig[];
 }
@@ -58,7 +59,7 @@ interface Options {
   readonly initiallyReady: boolean;
   readonly read: () => Promise<ConfigurationSnapshot>;
   readonly exclusive: <T>(operation: () => Promise<T>) => Promise<T>;
-  readonly validate: (snapshot: ConfigurationSnapshot) => void;
+  readonly validate: (snapshot: ConfigurationSnapshot) => void | Promise<void>;
   readonly stop: () => Promise<void>;
   readonly start: (snapshot: ConfigurationSnapshot) => Promise<void>;
   readonly applied: () => void;
@@ -178,7 +179,7 @@ export class ConfigurationApplication implements ConfigurationApplicationService
     if (fields.length)
       return this.result("restart_required", { restartFields: fields });
     try {
-      this.options.validate(next);
+      await this.options.validate(next);
     } catch {
       return this.result("failed", { errorCode: "invalid_configuration" });
     }

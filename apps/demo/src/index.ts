@@ -83,7 +83,6 @@ export async function runDemo(
     await assembly.mount("configuration", [], () => options);
     await assembly.mount("logging", ["configuration"], () => console);
     await assembly.mount("catalog", ["logging"], () => catalog);
-    await assembly.mountModules();
     await assembly.mount("database", ["catalog"], () => options.database);
     await assembly.mount("adapter", ["catalog"], () => transport);
     const runtime = await assembly.mount(
@@ -91,6 +90,7 @@ export async function runDemo(
       ["database", "adapter", "catalog"],
       async () => {
         const instance = new KaguyaRuntime({
+          moduleLifecycle: assembly.moduleLifecycle,
           ...createMessageComposition(undefined, {
             moduleConfigs: options.moduleConfigs,
             catalog,

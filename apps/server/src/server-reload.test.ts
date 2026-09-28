@@ -6,13 +6,26 @@
  * 输入输出与副作用：每例独立临时目录及数据库，使用虚构凭据，关闭 Server 后清理全部测试资源。
  * 执行预算：本文件每例最多 45 秒，覆盖 Windows CI 上真实配置文件读写、PGlite 初始化与多次 Runtime 启停。
  */
-import { mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  cp,
+  mkdtemp,
+  mkdir,
+  readdir,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   FileUserConfigManager,
   loadModuleInstanceConfigs,
+  loadCordisTree,
+  writeCordisTree,
 } from "@kaguya/config";
 import { createFirstPartyModuleConfigDefaults } from "@kaguya/modules";
 import { KaguyaDatabase } from "@kaguya/database";
@@ -26,6 +39,7 @@ import {
 } from "@kaguya/schema";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { startKaguyaServer, type StartedKaguyaServer } from "./server.js";
+import * as configurationManagement from "./configuration-management.js";
 import { AdapterHost } from "./adapter-host.js";
 import { createServerConfig } from "./config.js";
 
@@ -212,13 +226,15 @@ it("replaces downstream instances while retaining HTTP, authentication, database
     payload: { text: "after hot apply" },
   });
   expect(input.statusCode).toBe(202);
-  await vi.waitFor(async () =>
-    expect(
-      await f.databases[0]!.information.find({
-        kinds: ["core.message.inbound.text"],
-        limit: 10,
-      }),
-    ).toHaveLength(1),
+  await vi.waitFor(
+    async () =>
+      expect(
+        await f.databases[0]!.information.find({
+          kinds: ["core.message.inbound.text"],
+          limit: 10,
+        }),
+      ).toHaveLength(1),
+    { timeout: 8000, interval: 20 },
   );
   const current = f.server.runtime;
   expect(
@@ -452,6 +468,23 @@ it("keeps a saved person profile pending across configuration hot apply", async 
   ).toBe("手动称呼");
 });
 it("keeps management available, fences ingress and serializes saves while old work is draining", async () => {
+  let saveQueued: (() => void) | undefined;
+  const createManagement =
+    configurationManagement.createConfigurationManagement;
+  vi.spyOn(
+    configurationManagement,
+    "createConfigurationManagement",
+  ).mockImplementation(async (...args) => {
+    const management = await createManagement(...args);
+    return {
+      ...management,
+      replaceProfile: (...args) => {
+        const result = management.replaceProfile(...args);
+        saveQueued?.();
+        return result;
+      },
+    };
+  });
   const f = await fixture();
   const saved = await save(f.server);
   const oldRuntime = f.server.runtime!;
@@ -484,10 +517,12 @@ it("keeps management available, fences ingress and serializes saves while old wo
   ).toBe(503);
   expect((await apply(f.server, saved.application)).statusCode).toBe(409);
   let finishedSave = false;
+  const queued = gate();
+  saveQueued = queued.release;
   const saving = save(f.server).then(() => {
     finishedSave = true;
   });
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await queued.promise;
   expect(finishedSave).toBe(false);
   blocked.release();
   expect((await applying).json().data.status).toBe("applied");
@@ -749,4 +784,129 @@ it("keeps independent directional policies pending until explicit application", 
       limit: 10,
     }),
   ).toEqual([]);
+});
+
+it("loads external modules through explicit subtree reload and restores the old plugin snapshot after failure", async () => {
+  const f = await fixture();
+  const database = f.databases[0]!;
+  const originalApp = f.server.app;
+  const defaults = createFirstPartyModuleConfigDefaults();
+  const base = await loadCordisTree({
+    rootDir: f.root,
+    modules: defaults,
+    initialize: false,
+  });
+  const modules = join(f.root, "node_modules");
+  await mkdir(join(modules, "@kaguya"), { recursive: true });
+  const require = createRequire(import.meta.url);
+  for (const name of ["sdk", "schema"])
+    await symlink(
+      dirname(dirname(require.resolve(`@kaguya/${name}`))),
+      join(modules, "@kaguya", name),
+      "junction",
+    );
+  const installed = join(modules, "@kaguya-example", "echo");
+  await cp(
+    fileURLToPath(new URL("../../../examples/plugins/echo", import.meta.url)),
+    installed,
+    { recursive: true },
+  );
+  const entry = {
+    id: "module.external.echo",
+    name: "@kaguya-example/echo",
+    definitionId: "example.echo",
+    disabled: false,
+    settings: { label: "hot" },
+  };
+  await writeCordisTree(
+    f.root,
+    { plugins: [...base.plugins, entry] },
+    defaults,
+  );
+  expect(
+    (await apply(f.server, await status(f.server))).json().data.status,
+  ).toBe("applied");
+  expect(f.server.app).toBe(originalApp);
+  expect(f.connect).toHaveBeenCalledTimes(1);
+  expect(
+    f.server
+      .runtime!.inspectModules()
+      .find((item) => item.definitionId === "example.echo")?.bindings,
+  ).toHaveLength(1);
+  const send = async (id: string) => {
+    await f.server.runtime!.submit({
+      platform: "web",
+      adapterId: "web.ui.main",
+      platformMessageId: id,
+      occurredAt: "2026-09-28T00:00:00.000Z",
+      text: "hello",
+      mentions: [],
+      target: { kind: "web" },
+      sender: { userId: "fixture" },
+      raw: {},
+    });
+    await vi.waitFor(
+      async () =>
+        expect((await database.information.reliable.health()).pending).toBe(0),
+      { timeout: 8000, interval: 20 },
+    );
+  };
+  await send("external-first");
+  const first = await database.information.find({
+    kinds: ["example.echo.record.v1"],
+    limit: 10,
+  });
+  expect(first).toHaveLength(1);
+  expect(first[0]!.payload).toEqual({ label: "hot", length: 5 });
+  const failed = join(modules, "@kaguya-example", "echo-failed");
+  await cp(installed, failed, { recursive: true });
+  const source = await readFile(join(failed, "index.mjs"), "utf8");
+  await writeFile(
+    join(failed, "index.mjs"),
+    source.replace(
+      "provisions: [],",
+      'provisions: [], start: () => { throw new Error("fixture-start-failed"); },',
+    ),
+  );
+  await writeCordisTree(
+    f.root,
+    {
+      plugins: [
+        ...base.plugins,
+        { ...entry, name: "@kaguya-example/echo-failed" },
+      ],
+    },
+    defaults,
+  );
+  expect(
+    (await apply(f.server, await status(f.server))).json().data,
+  ).toMatchObject({ status: "failed", errorCode: "apply_failed" });
+  await send("external-after-rollback");
+  expect(
+    await database.information.find({
+      kinds: ["example.echo.record.v1"],
+      limit: 10,
+    }),
+  ).toHaveLength(2);
+  await writeCordisTree(f.root, base, defaults);
+  expect(
+    (await apply(f.server, await status(f.server))).json().data.status,
+  ).toBe("applied");
+  await send("external-removed");
+  expect(
+    await database.information.find({
+      kinds: ["example.echo.record.v1"],
+      limit: 10,
+    }),
+  ).toHaveLength(2);
+  expect(
+    f.server
+      .runtime!.inspectModules()
+      .some((item) => item.definitionId === "example.echo"),
+  ).toBe(false);
+  expect(
+    (await database.information.listKindContracts()).some(
+      (item) => item.kind === "example.echo.record.v1",
+    ),
+  ).toBe(true);
 });

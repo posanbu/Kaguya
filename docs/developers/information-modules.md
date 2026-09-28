@@ -5,7 +5,7 @@ description: 用显式 Catalog、能力声明与 Information DAG 组合可检查
 
 # 信息模块协议与可靠消费
 
-模块通过不可变 Information Atom 协作。Catalog 声明哪些受信代码可用，activation 决定哪些实例启用以及各自的设置；新增文件不会自动取得执行权限。Server 与 Demo 共用 `@kaguya/composition` 的 `createMessageComposition()`，由它调用唯一的一方 Catalog 与 activation 工厂，并把 Catalog、activations 与宿主 capabilities 传给 `KaguyaRuntime`。第三方 Catalog 必须同样显式 import，再通过 `mergeInformationModuleCatalogs()` 合并。
+模块通过不可变 Information Atom 协作。Catalog 声明哪些受信代码可用，activation 决定哪些实例启用以及各自的设置；新增文件不会自动取得执行权限。Server 从 `cordis.yml` 发现明确启用的外部插件，将其声明与内置 Catalog 合并。Server 与 Demo 共用 `@kaguya/composition` 的 `createMessageComposition()`，把 Catalog、activations 与宿主 capabilities 传给 `KaguyaRuntime`；直接嵌入 Runtime 的调用方也可显式合并 Catalog。
 
 ## 唯一模块协议
 
@@ -79,13 +79,51 @@ const activations = [
 
 :::
 
-每个实例配置位于 `<KAGUYA_CONFIG_ROOT>/modules/<instanceId>/config.json`，严格包含 `version: 1`、`instanceId`、`definitionId`、`enabled` 和完整 `settings`。仅当整个 `modules/` 不存在时，Server 才写入六个一方实例模板；目录一旦存在，缺文件、未知实例、身份不符、版本错误或缺少 settings 字段都会阻止启动且不会被修复。修改文件后必须重启。`enabled: false` 的有效实例不激活，但 settings 仍需通过完整 schema 校验。
+内置实例的配置位于 `<KAGUYA_CONFIG_ROOT>/modules/<instanceId>/config.json`，只包含 `version: 1`、`instanceId`、`definitionId` 和 `settings`。启停由 `cordis.yml` 的 `disabled` 决定。已有内置目录缺文件或身份不符时仍会报错，不自动修复。附加实例与外部包在插件树中直接声明 `definitionId` 和 `settings`，无需修改固定默认实例列表。
 
-Memory 命名空间升级不迁移既有模块配置或 Information ledger。旧的 Identity、Expression、Association 与 `agent.memory.*` 标识会被严格配置校验拒绝；升级时必须备份后使用全新数据库和不存在的 `modules/` 目录重新初始化，不能只改 JSON 中的字符串，也不能在同一账本中混用两套 Kind。
+仓库内的一方模块由 `packages/modules/src/first-party/catalog.ts` 提供内置声明源。独立插件包通过下面的公共协议加入 Catalog，无需修改 Server、Runtime、Composition、Database 或一方 Catalog。Runtime 不扫描任意目录，只装载配置中明确选择的包。
 
-仓库内的一方模块使用 `packages/modules/src/first-party/<module>/index.ts`，测试与模块放在同一目录。共用 Kind 放在 `src/first-party/information-kinds.ts`，Catalog 固定放在 `src/first-party/catalog.ts`。Catalog 必须显式 import 并注册每个受信模块；Runtime 禁止扫描目录或根据文件名自动发现模块。新增文件若未进入 Catalog，就不会注册、激活或取得执行权限。包根 `src/index.ts` 继续提供稳定公共导出，调用方不依赖一方模块内部路径。
+## 安装独立模块包
 
-`consumes` 与 `produces` 是模块 Kind 的唯一接口。Runtime 从 Catalog 中各 Manifest 的这两个字段收集定义，只单独注册 Runtime、Engine 与 Scheduler 自身拥有的基础 Kind。不要维护第二份模块 Kind 总表。
+包默认导出 `defineModulePlugin({ id, version, modules, modelTasks?, compatibility? })` 的结果，或接收 `ModulePluginHost` 的声明工厂。工厂通过 `host.kind(name)` 获取宿主 Kind 的同一对象，避免重新定义或捆绑另一份宿主 Kind。包负责 moduleVersion、settingsSchema、Kind、订阅与 requires/provides；需要已有 Model Task 能力时，用 `modelTasks: { "example.module": "light" }` 申请档位，模型、凭据和调用授权仍由宿主负责。
+
+完整示例位于仓库的 `examples/plugins/echo/`，可独立打包。当前 SDK 是工作区包，安装插件时需要把同一版本 SDK 和 schema 作为 peer 链接到插件安装目录。先构建 Kaguya，再在配置根安装示例：
+
+::: code-group
+
+```bash [本地示例包 ~vscode-icons:file-type-shell~]
+# KAGUYA_ROOT 指向 Kaguya 仓库，KAGUYA_CONFIG_ROOT 指向已初始化的配置根。
+pnpm --dir "$KAGUYA_ROOT" build
+pnpm --dir "$KAGUYA_CONFIG_ROOT" --ignore-workspace add \
+  "link:$KAGUYA_ROOT/packages/sdk" \
+  "link:$KAGUYA_ROOT/packages/schema" \
+  "file:$KAGUYA_ROOT/examples/plugins/echo"
+```
+
+```yaml [追加到 cordis.yml 的 plugins ~vscode-icons:file-type-yaml~]
+- id: module.echo.my-instance
+  name: "@kaguya-example/echo"
+  disabled: false
+  definitionId: example.echo
+  settings:
+    label: installed
+```
+
+:::
+
+`name` 从配置根解析已安装的 npm 包，也接受 `file:./plugins/example/index.mjs`。它不会自动联网安装包。一个包可声明多个模块，也可用不同 `id` 配置同一模块的多个实例。相同包只发现一次；重复插件身份、模块定义、Kind 对象冲突、非法设置与缺失能力都有独立诊断，任何处理器创建前先完成整个启用集合的预检。
+
+修改插件树后，使用配置页的显式应用切换 Runtime/Adapter 子树，或重启服务。显式应用先冻结新声明和 Kind Registry、完成数据库契约检查，再暂停入站、排空旧实例并重建模块 fiber；HTTP、认证和数据库连接保持不变。激活失败会撤销新订阅和能力，用旧快照恢复服务。包代码更换采用新的安装路径或包版本；直接覆盖已被 Node 导入的同一路径代码需要进程重启，以免 ESM 缓存继续使用旧代码。
+
+## 持久 Kind 与兼容读取
+
+外部 Kind 使用 `defineVersionedInformationKind({ owner, version, kind, ... })`，其中 owner 等于插件 id，Kind 以 `.v<version>` 结尾。数据库只进行一次通用的 `information_kinds.contract` 扩展，此后新插件和新版本只是新增元数据行。契约保存 owner、版本、JSON Schema 与引用规则；同一个 Kind 的契约必须完全相同，不兼容变更发布新版本。外部 payload schema 必须能表示为 JSON Schema，不接受运行时 transform 作为持久契约。
+
+停用或删除插件条目不会删除 Atom 或历史 Kind 元数据，也不会让当前 Catalog 缩小变成数据库启动错误。停用条目不导入对应包，因此停用后可移除包文件。原始账本读取只验证 Atom 信封和 JSON，始终返回原始 Kind 与 payload；当前没有处理器的历史事实不会被自动交给其他版本。新启用订阅不回填停用期间的事实，重新安装同一实例可以继续已有可靠投递的恢复语义。
+
+需要解释旧版本时，由插件保留旧定义，并在清单的 `compatibility` 中声明 `{ from: oldKind, to: currentKind, convert }`。宿主同时收集旧版本定义并检查持久契约。读取时调用 `readPluginInformation(plugin, atom, targetKind)`；也可用底层的 `readCompatibleInformation` 显式提供读取规则。读取器先验证旧 payload，再转换并校验当前 schema；返回冻结的 payload 投影，不替换 informationId、Kind 或任何账本记录。未声明的旧版本报错。数据库不会根据当前插件代码批量改写历史数据。
+
+`consumes` 与 `produces` 声明模块当前的业务 Kind 接口，插件的 `compatibility` 补充需要解释的历史版本。宿主从这些声明收集定义，只单独注册 Runtime、Engine 与 Scheduler 自身拥有的基础 Kind。不要维护第二份模块 Kind 总表。
 
 ## 能力与生命周期
 

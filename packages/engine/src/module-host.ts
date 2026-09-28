@@ -1,5 +1,6 @@
 /**
  * prepare 将 registerOnce 的 openScope 约束透传给 Core，保持来源和 context 的校验。
+ * Cordis lifecycle 通过 mount/unmount 拥有每个模块的创建和释放；宿主保留能力预检、订阅及有界排空责任。
  * 功能概述：按唯一 SDK Catalog 协议预检并托管模块，严格隔离声明能力与业务原子。
  * 主要职责：preflight 在任何 create 前验证配置、kind、Selector、renderer 和能力图；
  * start 按确定性拓扑顺序创建/启动，全部成功后开放订阅和可靠投递，再调用 ready 登记可被消费的启动任务；失败逆序 stop/dispose。
@@ -38,7 +39,17 @@ import {
   type InformationModuleSubscription,
 } from "@kaguya/sdk";
 import { InformationCore } from "./information-core.js";
+export interface ModuleHostLifecycle {
+  mount(
+    instanceId: string,
+    dependencies: readonly string[],
+    start: () => Promise<void>,
+    stop: () => Promise<void>,
+  ): Promise<void>;
+  unmount(instanceId: string): Promise<void>;
+}
 export interface ModuleHostOptions {
+  readonly lifecycle?: ModuleHostLifecycle;
   readonly core: InformationCore;
   readonly catalog: InformationModuleCatalog;
   readonly capabilities?: readonly ModuleCapabilityImplementation[];
@@ -66,6 +77,16 @@ export interface ModuleHostObservation {
 export type ModuleHostObserver = (
   observation: ModuleHostObservation,
 ) => void | Promise<void>;
+export class MissingModuleCapabilityError extends Error {
+  readonly code = "MODULE_CAPABILITY_MISSING";
+  constructor(
+    readonly capabilityId: string,
+    readonly instanceId: string,
+  ) {
+    super(`Missing capability: ${capabilityId} (${instanceId})`);
+    this.name = "MissingModuleCapabilityError";
+  }
+}
 export class ModuleDefinitionNotFoundError extends Error {
   constructor(readonly definitionId: string) {
     super(`Information module definition is not registered: ${definitionId}`);
@@ -100,6 +121,9 @@ export class ModuleHost {
   readonly #controllers = new Set<AbortController>();
   readonly #unsubscribe: Array<() => void> = [];
   readonly #inFlight = new Set<Promise<unknown>>();
+  readonly #moduleUnsubscribe = new Map<string, Array<() => void>>();
+  readonly #moduleInFlight = new Map<string, Set<Promise<unknown>>>();
+  readonly #moduleStops = new Map<string, Promise<void>>();
   readonly #values = new Map<string, ModuleCapabilityImplementation>();
   readonly #bindings = new Map<string, Map<string, string>>();
   #state: "new" | "starting" | "started" | "stopping" | "stopped" = "new";
@@ -147,74 +171,86 @@ export class ModuleHost {
       for (const activation of prepared) {
         current = activation;
         this.assertStarting();
-        const context = this.createLifecycleContext(activation);
-        await this.observe(
-          moduleLifecycleObservation(
-            "module.starting",
-            "debug",
-            "Information module starting",
-            activation,
-            { phase: "create" },
-          ),
-        );
-        phase = "create";
-        const instance = await activation.definition.create(
-          {
-            instanceId: activation.instanceId,
-            settings: activation.settings,
-            activation: Object.freeze({
-              instanceId: activation.instanceId,
-              definitionId: activation.definition.manifest.definitionId,
-            }),
-          },
-          context,
-        );
-        const active: ActiveInformationModule = {
-          ...activation,
-          instance,
-          subscriptions: [],
-          provisions: [],
-        };
-        this.#active.push(active);
-        this.assertStarting();
-        phase = "validate";
-        this.validateInstance(active);
-        for (const value of active.provisions)
-          this.#values.set(value.capability.id, value);
-        phase = "start";
-        await instance.start?.(context);
-        this.assertStarting();
-        let startup: ModuleStartupDescription | undefined;
-        let statusFailure: string | undefined;
-        if (instance.describeStartup !== undefined) {
-          try {
-            startup = validateStartupDescription(
-              await instance.describeStartup(),
-            );
-          } catch (error) {
-            statusFailure = safeErrorType(error);
-          }
-        }
-        await this.observe(
-          moduleLifecycleObservation(
-            "module.started",
-            "info",
-            startup?.summary ?? "Information module started",
-            activation,
-            { ...(startup?.fields ?? {}) },
-          ),
-        );
-        if (statusFailure !== undefined) {
+        const startModule = async () => {
+          const context = this.createLifecycleContext(activation);
           await this.observe(
             moduleLifecycleObservation(
-              "module.status.failed",
-              "warn",
-              "Information module startup status failed",
+              "module.starting",
+              "debug",
+              "Information module starting",
               activation,
-              { errorType: statusFailure },
+              { phase: "create" },
             ),
           );
-        }
+          phase = "create";
+          const instance = await activation.definition.create(
+            {
+              instanceId: activation.instanceId,
+              settings: activation.settings,
+              activation: Object.freeze({
+                instanceId: activation.instanceId,
+                definitionId: activation.definition.manifest.definitionId,
+              }),
+            },
+            context,
+          );
+          const active: ActiveInformationModule = {
+            ...activation,
+            instance,
+            subscriptions: [],
+            provisions: [],
+          };
+          this.#active.push(active);
+          this.assertStarting();
+          phase = "validate";
+          this.validateInstance(active);
+          for (const value of active.provisions)
+            this.#values.set(value.capability.id, value);
+          phase = "start";
+          await instance.start?.(context);
+          this.assertStarting();
+          let startup: ModuleStartupDescription | undefined;
+          let statusFailure: string | undefined;
+          if (instance.describeStartup !== undefined) {
+            try {
+              startup = validateStartupDescription(
+                await instance.describeStartup(),
+              );
+            } catch (error) {
+              statusFailure = safeErrorType(error);
+            }
+          }
+          await this.observe(
+            moduleLifecycleObservation(
+              "module.started",
+              "info",
+              startup?.summary ?? "Information module started",
+              activation,
+              { ...(startup?.fields ?? {}) },
+            ),
+          );
+          if (statusFailure !== undefined) {
+            await this.observe(
+              moduleLifecycleObservation(
+                "module.status.failed",
+                "warn",
+                "Information module startup status failed",
+                activation,
+                { errorType: statusFailure },
+              ),
+            );
+          }
+        };
+        if (this.#options.lifecycle) {
+          await this.#options.lifecycle.mount(
+            activation.instanceId,
+            [...this.#bindings.get(activation.instanceId)!.values()].filter(
+              (id) => id !== "@host",
+            ),
+            startModule,
+            () => this.stopModule(activation.instanceId),
+          );
+        } else await startModule();
         current = undefined;
       }
       // 所有 create/start 均成功之后，才安装任何业务订阅。
@@ -222,12 +258,13 @@ export class ModuleHost {
       for (const module of this.#active)
         for (const subscription of module.subscriptions) {
           if (subscription.delivery === "durable") {
-            this.#unsubscribe.push(
+            this.subscribe(
+              module,
               this.#options.core.onDurable(
                 `${module.instanceId}:${subscription.subscriptionId}`,
                 subscription.definition,
                 (atom, signal) =>
-                  this.trackHandler(() =>
+                  this.trackHandler(module.instanceId, () =>
                     subscription.handle(
                       atom,
                       this.createContext(module, atom, signal),
@@ -236,7 +273,8 @@ export class ModuleHost {
               ),
             );
           } else {
-            this.#unsubscribe.push(
+            this.subscribe(
+              module,
               this.#options.core.on(
                 subscription.definition,
                 {
@@ -245,7 +283,7 @@ export class ModuleHost {
                   instanceId: module.instanceId,
                 },
                 (atom) =>
-                  this.trackHandler(() =>
+                  this.trackHandler(module.instanceId, () =>
                     subscription.handle(atom, this.createContext(module, atom)),
                   ),
               ),
@@ -286,6 +324,9 @@ export class ModuleHost {
         fields: {
           phase,
           errorType: safeErrorType(error),
+          ...(error instanceof MissingModuleCapabilityError
+            ? { capabilityId: error.capabilityId, instanceId: error.instanceId }
+            : {}),
           ...(current === undefined
             ? {}
             : {
@@ -342,9 +383,81 @@ export class ModuleHost {
   private async cleanup(): Promise<unknown[]> {
     // create 抛出时尚未进入 active，但其已获得的 signal 同样必须取消。
     for (const controller of this.#controllers) controller.abort();
-    const modules = this.#active.splice(0).reverse(),
+    if (!this.#options.lifecycle) {
+      const modules = this.#active.splice(0).reverse(),
+        failures: unknown[] = [];
+      for (const module of modules)
+        try {
+          await runCleanupHook(
+            module,
+            "stop",
+            this.#options.drainTimeoutMs ?? 5000,
+          );
+        } catch (error) {
+          failures.push(error);
+        }
+      await boundedDrain(
+        [...this.#inFlight],
+        this.#options.drainTimeoutMs ?? 5000,
+      );
+      for (const module of modules)
+        try {
+          await runCleanupHook(
+            module,
+            "dispose",
+            this.#options.drainTimeoutMs ?? 5000,
+          );
+        } catch (error) {
+          failures.push(error);
+        }
+      this.#values.clear();
+      this.#controllers.clear();
+      return failures;
+    }
+    const modules = [...this.#active].reverse(),
       failures: unknown[] = [];
-    for (const module of modules)
+    for (const module of modules) {
+      try {
+        await this.#options.lifecycle?.unmount(module.instanceId);
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        await this.stopModule(module.instanceId);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    this.#values.clear();
+    this.#controllers.clear();
+    return failures;
+  }
+  private subscribe(
+    module: ActiveInformationModule,
+    unsubscribe: () => void,
+  ): void {
+    const subscriptions = this.#moduleUnsubscribe.get(module.instanceId) ?? [];
+    subscriptions.push(unsubscribe);
+    this.#moduleUnsubscribe.set(module.instanceId, subscriptions);
+    this.#unsubscribe.push(unsubscribe);
+  }
+
+  private stopModule(instanceId: string): Promise<void> {
+    const pending = this.#moduleStops.get(instanceId);
+    if (pending) return pending;
+    const module = this.#active.find((item) => item.instanceId === instanceId);
+    if (!module) return Promise.resolve();
+    const operation = (async () => {
+      module.controller.abort();
+      for (const unsubscribe of this.#moduleUnsubscribe.get(instanceId) ?? [])
+        unsubscribe();
+      this.#moduleUnsubscribe.delete(instanceId);
+      const failures: unknown[] = [];
+      try {
+        await this.#options.core.syncReliableSubscriptions();
+      } catch (error) {
+        failures.push(error);
+      }
       try {
         await runCleanupHook(
           module,
@@ -354,11 +467,15 @@ export class ModuleHost {
       } catch (error) {
         failures.push(error);
       }
-    await boundedDrain(
-      [...this.#inFlight],
-      this.#options.drainTimeoutMs ?? 5000,
-    );
-    for (const module of modules)
+      try {
+        await boundedDrain(
+          [...(this.#moduleInFlight.get(instanceId) ?? [])],
+          this.#options.drainTimeoutMs ?? 5000,
+          instanceId,
+        );
+      } catch (error) {
+        failures.push(error);
+      }
       try {
         await runCleanupHook(
           module,
@@ -368,9 +485,18 @@ export class ModuleHost {
       } catch (error) {
         failures.push(error);
       }
-    this.#values.clear();
-    this.#controllers.clear();
-    return failures;
+      this.#active.splice(this.#active.indexOf(module), 1);
+      for (const value of module.provisions)
+        this.#values.delete(value.capability.id);
+      this.#controllers.delete(module.controller);
+      if (failures.length)
+        throw new AggregateError(
+          failures,
+          `Module cleanup failed: ${instanceId}`,
+        );
+    })();
+    this.#moduleStops.set(instanceId, operation);
+    return operation;
   }
   private preflight(
     activations: readonly InformationModuleActivation[],
@@ -456,7 +582,11 @@ export class ModuleHost {
       const bindings = new Map<string, string>();
       for (const required of module.definition.manifest.requires) {
         const provider = providers.get(required.id);
-        if (!provider) throw new Error(`Missing capability: ${required.id}`);
+        if (!provider)
+          throw new MissingModuleCapabilityError(
+            required.id,
+            module.instanceId,
+          );
         if (provider.capability.apiVersion !== required.apiVersion)
           throw new Error(`Capability version mismatch: ${required.id}`);
         bindings.set(required.id, provider.instanceId);
@@ -817,10 +947,18 @@ export class ModuleHost {
       throw new Error("ModuleHost startup was cancelled");
   }
   private trackHandler(
+    instanceId: string,
     handler: () => unknown | Promise<unknown>,
   ): Promise<unknown> {
     const operation = Promise.resolve().then(handler);
     this.#inFlight.add(operation);
+    const pending =
+      this.#moduleInFlight.get(instanceId) ?? new Set<Promise<unknown>>();
+    this.#moduleInFlight.set(instanceId, pending);
+    pending.add(operation);
+    void operation
+      .finally(() => pending.delete(operation))
+      .catch(() => undefined);
     void operation.then(
       () => this.#inFlight.delete(operation),
       () => this.#inFlight.delete(operation),
@@ -864,14 +1002,21 @@ function schemaFingerprint(definition: InformationModuleDefinition): string {
 async function boundedDrain(
   pending: readonly Promise<unknown>[],
   timeout: number,
+  instanceId?: string,
 ): Promise<void> {
   if (!pending.length) return;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await Promise.race([
       Promise.allSettled(pending),
-      new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, timeout);
+      new Promise<void>((resolve, reject) => {
+        timer = setTimeout(
+          () =>
+            instanceId === undefined
+              ? resolve()
+              : reject(new Error(`Module drain timed out: ${instanceId}`)),
+          timeout,
+        );
       }),
     ]);
   } finally {

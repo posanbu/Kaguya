@@ -5,7 +5,7 @@ description: Kaguya 统一 Server、持久化信息 DAG、模块与数据边界�
 
 # 运行时架构
 
-Kaguya 的正式服务使用一个长期运行进程。`apps/server` 读取配置根的 `cordis.yml`，用 Cordis 内置插件树装配配置、日志、Catalog、数据库、Adapter、Runtime、HTTP 和 Web UI；Server 与 `apps/demo` 共用 `@kaguya/composition` 的装配器与 Runtime 业务工厂。`@kaguya/runtime` 负责唯一的 `InformationIngress`、信息 DAG、LLM 生命周期和投递结果。
+Kaguya 的正式服务使用一个长期运行进程。`apps/server` 读取配置根的 `cordis.yml`，用 Cordis 插件树装配配置、日志、Catalog、数据库、Adapter、Runtime、HTTP 和 Web UI；Server 与 `apps/demo` 共用 `@kaguya/composition` 的装配器与 Runtime 业务工厂。`@kaguya/runtime` 负责唯一的 `InformationIngress`、信息 DAG、LLM 生命周期和投递结果。
 
 Core 中每项运行事实都是不可变 `InformationAtom`，且只以 `informationId` 作为身份。外部平台消息 ID、HTTP request ID、用户与群组 ID 仍可作为领域数据，但它们不构成 Core 身份，也不建立 session 或隐式上下文隔离。
 
@@ -34,13 +34,13 @@ flowchart LR
 
 ## Runtime Composition 边界
 
-`packages/composition/src/index.ts` 是 Server 与 Demo 共用的正式组装入口，不依赖任一应用。`CordisAssembly` 只解析校验过的内置 `cordis:` 插件条目，用服务依赖控制启动，并由插件 fiber 释放服务资源。`createMessageCatalog(identity?)` 加载一方 Prompt 模板，将 Runtime 的 Model Task capability 和生命周期 Kind 注入 `@kaguya/modules` 的 Catalog 工厂；同一 Catalog 对象用于数据库 Kind 预检和当前 Runtime。
+`packages/composition` 是 Server 与 Demo 共用的正式组装入口。`createMessageCatalog` 提供内置声明；`loadModulePlugins` 从配置根导入显式安装的外部包，合并模块清单并生成冻结的 Kind Registry。数据库预检与 Runtime 接收同一个 Registry 实例，处理器尚未创建时就完成所有 Kind 的冲突和持久契约检查。
 
-`createMessageComposition(resolveModelSelection, options)` 根据 `moduleConfigs` 校验并生成激活集合，注入身份、Memory 开关与可选 embedding/cognition provider、Model Task 审批及 LLM client，并绑定 Runtime 提供的 one-shot scheduler。返回值直接展开到 `new KaguyaRuntime(...)` 的参数中。模块定义与默认实例仍集中在 `packages/modules/src/first-party/catalog.ts`：新增或移除普通一方模块时，在这里调整目录和默认配置，并更新已有实例配置，无须分别修改 Server 和 Demo。若模块需要新的宿主能力，则只在共享 composition 中接线。
+`createMessageComposition` 根据实例设置与插件的模型档位申请构造受控能力。插件自行提供模块定义、settings schema、输入输出 Kind、版本与处理器；普通新插件不会引入应用或数据库中的模块 ID 分支。基础包不反向依赖应用，插件申请未提供的宿主能力会在模块创建前失败。
 
-Server 传入 selected Profile 的模型解析器、身份、Memory 开关和已加载的模块配置；启动与配置显式应用都走同一工厂。配置根的插件树仅在启动时读取，模块实例文件只保存身份和 `settings`；`disabled` 是启停真值。Demo 使用内存默认树，省略解析器时使用 `createDeterministicModelSelectionResolver()` 的固定模型回答，Memory 默认关闭。Demo 自己保留固定消息、时间、演示 transport 和账本统计输出。
+`CordisAssembly` 将宿主资源注册成 Context 服务，并为每个启用模块创建真实 fiber。ModuleHost 仍负责能力图预检、拓扑启动、订阅、可靠执行与有界排空；fiber 拥有对应实例的创建与停止回调。卸载会撤销订阅和能力、取消 signal 并等待在途工作；宿主按逆序逐项等待释放完成，随后才关闭数据库。Cordis 实时事件不替代持久总线或账本。
 
-Composition 工厂构造本身不连接数据库或调用模型，也不启动 timer。Cordis 管理服务的启动依赖与资源释放；Adapter 注册 transport 后 Runtime 才启动。`ModuleHost` 继续执行信息模块处理器，账本、总线和可靠投递不经 Cordis 转发。`pnpm dev`、`pnpm start` 和 `pnpm demo` 的入口不变。
+Server 在启动及显式配置应用时冻结插件树、设置和已导入包。重载暂停入站并切换 Runtime/Adapter 子树，保留 HTTP、认证与数据库；失败使用旧声明快照恢复。历史 Kind 元数据独立于当前激活集合保存，兼容读取只产生投影，不修改 Atom。Demo 使用内存默认树与确定性模型，入口命令保持不变。
 
 ## 持久化优先的信息流
 

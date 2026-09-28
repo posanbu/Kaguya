@@ -198,7 +198,7 @@ HTTP 日志不记录 Authorization、body、query 或消息正文。生产部署
 
 **读取配置** — `GET /api/v1/modules/:definitionId/settings` 返回公开字段元数据、插件树中的期望 `enabled`、当前 `running`、安全 `settings` 和不透明 `revision`，以及 `scope: global`、`effect: explicit_apply | restart_required`。读取与替换均以模块 settings schema 为最终校验依据。
 
-**替换实例** — `PUT /api/v1/modules/:definitionId/instances/:instanceId/settings` 接受完整 `{ revision, enabled, settings }`。启停只修改 `cordis.yml`，设置只修改实例 JSON；启停重启生效，Memory 与 NapCat 的设置也重启生效，其余纯设置由显式应用生效。`settings` 应包含读取结果中的全部公开字段；隐藏字段由服务端保留，未知字段与只读字段变更被拒绝。字段错误返回 `error.fields`，每项具有 `path` 和固定安全 `message`；数组元素路径如 `names.0` 对应顶级控件。实例版本过期返回 `409 module_configuration_changed`。
+**替换实例** — `PUT /api/v1/modules/:definitionId/instances/:instanceId/settings` 接受完整 `{ revision, enabled, settings }`。启停修改 `cordis.yml`；内置实例设置保存在实例 JSON，附加实例设置保存在树条目内。普通模块的启停与设置由显式应用生效，Memory 与 NapCat 的专用开关及设置仍需重启。`settings` 应包含读取结果中的全部公开字段；隐藏字段由服务端保留，未知字段与只读字段变更被拒绝。字段错误返回 `error.fields`，每项具有 `path` 和固定安全 `message`；数组元素路径如 `names.0` 对应顶级控件。实例版本过期返回 `409 module_configuration_changed`。
 
 **读取模板** — `GET /api/v1/modules/:definitionId/templates` 返回静态模板声明、源码、默认源码、`source: default | local`、组级 `revision` 和 `effect: restart_required`。接口不返回运行时渲染结果。
 

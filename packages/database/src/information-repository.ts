@@ -2,8 +2,8 @@
  * 功能概述：本模块实现信息原子在 PostgreSQL 中的 append-only 仓储，
  * 负责 kind 同步、原子追加、按 id 读取与反向引用查询，并把数据库错误
  * 归一为仓储层错误，供 engine 的 `InformationLedger` 直接消费。
- * 主要职责：`InformationRepository` 在启动期以幂等方式登记当前 kind，并拒绝缺失历史 kind 的
- * Registry；它还校验引用 expectations、事务写入 atom/reference/outbox、提供 `get/getMany/find/query`，
+ * 主要职责：`InformationRepository` 在启动期以幂等事务登记当前 Kind 及版本契约，保留停用插件的
+ * 历史元数据；同名契约变更使整个事务失败。它还校验引用 expectations、事务写入 atom/reference/outbox、提供 `get/getMany/find/query`，
  * 并通过 reliable 端口提供原子去重与执行表；append 同事务写入 durable 投递意图，管理待投影日志的读取、成功确认与失败计数。
  * 代码库关系：`InformationCore` 只会看到这里实现的 ledger 端口；`driver.ts`
  * 提供事务与 query 抽象，`schema.ts` 则初始化或验证表结构、索引和 mutation 触发器。
@@ -30,7 +30,10 @@ import type {
   InformationReferenceExpectation,
   InformationReferenceQuery,
 } from "@kaguya/engine";
-import type { InformationFindQuery } from "@kaguya/sdk";
+import type {
+  InformationFindQuery,
+  InformationKindDefinition,
+} from "@kaguya/sdk";
 
 import {
   OneShotScheduleRepository,
@@ -62,6 +65,14 @@ export class InformationStoreError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
     this.name = "InformationStoreError";
+  }
+}
+
+export class InformationKindContractConflictError extends InformationStoreError {
+  readonly code = "INFORMATION_KIND_CONTRACT_CONFLICT";
+  constructor(readonly kind: string) {
+    super(`Information kind contract conflict: ${kind}; publish a new version`);
+    this.name = "InformationKindContractConflictError";
   }
 }
 
@@ -123,19 +134,61 @@ export class InformationRepository implements InformationLedger {
     );
   }
 
-  async synchronizeKinds(kinds: readonly string[]): Promise<void> {
+  async synchronizeKinds(
+    kinds: readonly string[],
+    definitions: readonly InformationKindDefinition<string, any>[] = [],
+  ): Promise<void> {
     await this.database.transaction(async (tx) => {
       const desiredKinds = normalizeKinds(kinds);
       await insertKinds(tx, desiredKinds);
-      const existingRows = await tx.query<KindRow>(
-        "SELECT kind FROM information_kinds ORDER BY kind ASC",
-      );
-      const existingKinds = existingRows.rows.map(({ kind }) => kind);
-
-      if (!areKindsIncludedIn(existingKinds, desiredKinds)) {
-        throw new InformationKindSetMismatchError(desiredKinds, existingKinds);
+      for (const definition of [...definitions].sort((a, b) =>
+        a.kind.localeCompare(b.kind),
+      )) {
+        if (!desiredKinds.includes(definition.kind))
+          throw new InformationStoreError("Kind contract is not declared");
+        if (!definition.persistence) continue;
+        const contract = JSON.stringify({
+          ...definition.persistence,
+          references: definition.references,
+        });
+        // 锁定声明行，保证多个启动进程不能分别接受冲突契约。
+        const previous = await tx.query<{ contract: unknown }>(
+          "SELECT contract FROM information_kinds WHERE kind = $1 FOR UPDATE",
+          [definition.kind],
+        );
+        if (previous.rows[0]?.contract === null) {
+          const history = await tx.query(
+            "SELECT 1 FROM information_atoms WHERE kind = $1 LIMIT 1",
+            [definition.kind],
+          );
+          if (history.rows.length)
+            throw new InformationStoreError(
+              `Cannot claim a historical unversioned Kind: ${definition.kind}`,
+            );
+          await tx.query(
+            "UPDATE information_kinds SET contract = $2::jsonb WHERE kind = $1 AND contract IS NULL",
+            [definition.kind, contract],
+          );
+        }
+        const matches = await tx.query(
+          "SELECT 1 FROM information_kinds WHERE kind = $1 AND contract = $2::jsonb",
+          [definition.kind, contract],
+        );
+        if (!matches.rows.length)
+          throw new InformationKindContractConflictError(definition.kind);
       }
     });
+  }
+
+  /** 历史契约只读入口；停用/卸载不会移除条目，Atom 的原始读取不依赖当前插件。 */
+  async listKindContracts(): Promise<
+    readonly { kind: string; contract: JsonObject | null }[]
+  > {
+    const result = await this.database.query<{
+      kind: string;
+      contract: JsonObject | null;
+    }>("SELECT kind, contract FROM information_kinds ORDER BY kind");
+    return result.rows;
   }
 
   async append(
@@ -796,14 +849,6 @@ function normalizeKinds(kinds: readonly string[]): readonly string[] {
     throw new InformationStoreError("information kind set contains duplicates");
   }
   return uniqueKinds.sort((left, right) => left.localeCompare(right));
-}
-
-function areKindsIncludedIn(
-  existingKinds: readonly string[],
-  desiredKinds: readonly string[],
-): boolean {
-  const desiredKindSet = new Set(desiredKinds);
-  return existingKinds.every((kind) => desiredKindSet.has(kind));
 }
 
 function decodeJsonObject(value: unknown): JsonObject {

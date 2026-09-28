@@ -24,6 +24,18 @@
     },
     {
       "path": "../memory"
+    },
+    {
+      "path": "../engine"
+    },
+    {
+      "path": "../sdk"
+    },
+    {
+      "path": "../schema"
+    },
+    {
+      "path": "../database"
     }
   ]
 }
