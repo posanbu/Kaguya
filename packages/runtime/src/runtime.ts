@@ -5,6 +5,7 @@
  * 为 Router 注入 conversation/route 窄能力，结构化候选由宿主冻结，自动跨会话投递继续经过最终授权检查。
  * close({ drain: true }) 用于热应用：停止调度与 claim 领取，允许已领取任务有界完成，
  * 然后 abort/清理旧宿主；外部注入的数据库保持打开，可供下一 Runtime 复用。
+ * createRuntimeKindRegistry 冻结完整 Kind（包括兼容读取版本），供数据库预检与 Runtime 共享；moduleLifecycle 注入真实插件 fiber。
  * 功能概述：以 PostgreSQL information ledger 装配通用 Runtime，接受显式 Catalog、activations 和宿主 capabilities。
  * 主要职责：start 注册完整 kind 并预检模块，最后开放 ingress；submit 持久化 context/inbound 后返回接受凭据；
  * 最终发送前使用当前出站 GatewayAllowlist 校验目的地，拒绝时只记录安全失败码和目标类型。
@@ -157,6 +158,8 @@ type KaguyaRuntimeBaseOptions = {
   readonly logger?: KaguyaLogger;
   readonly now?: () => Date;
   readonly informationIdGenerator?: InformationIdGenerator;
+  readonly kindRegistry?: InformationKindRegistry;
+  readonly moduleLifecycle?: import("@kaguya/engine").ModuleHostLifecycle;
   readonly catalog: InformationModuleCatalog;
   readonly activations: readonly InformationModuleActivation[];
   readonly capabilities?: RuntimeCapabilities;
@@ -200,6 +203,28 @@ export function runtimeInformationKindNames(
       .map(({ kind }) => kind)
       .sort(),
   );
+}
+
+/** 预检与 Runtime 共用同一个完整、冻结的 Registry；包括未激活处理器的已安装声明。 */
+export function createRuntimeKindRegistry(
+  catalog: InformationModuleCatalog,
+  additional: readonly InformationKindDefinition<string, any>[] = [],
+): InformationKindRegistry {
+  const registry = createRegistry(catalog.definitions);
+  for (const definition of [
+    consumerFailedInformationKind,
+    executionExhaustedInformationKind,
+    ...oneShotInformationKinds,
+  ]) {
+    if (registry.has(definition.kind)) registry.assertRegistered(definition);
+    else registry.registerBuiltin(definition);
+  }
+  for (const definition of additional) {
+    if (registry.has(definition.kind)) registry.assertRegistered(definition);
+    else registry.register(definition);
+  }
+  registry.seal();
+  return registry;
 }
 
 export class RuntimeUnavailableError extends Error {
@@ -458,6 +483,9 @@ export class KaguyaRuntime implements InformationIngress {
     return new ModuleHost({
       core: this.#core!,
       catalog: this.options.catalog,
+      ...(this.options.moduleLifecycle
+        ? { lifecycle: this.options.moduleLifecycle }
+        : {}),
       capabilities,
       now: this.#now,
       drainTimeoutMs: this.options.drainTimeoutMs ?? 5000,
@@ -500,8 +528,12 @@ export class KaguyaRuntime implements InformationIngress {
       }
       this.#assertStarting();
       const definitions = this.options.catalog.definitions;
-      const registry = createRegistry(definitions);
-      const allDefinitions = collectDefinitions(definitions);
+      const registry =
+        this.options.kindRegistry ??
+        createRuntimeKindRegistry(this.options.catalog);
+      for (const definition of collectDefinitions(definitions))
+        registry.assertRegistered(definition);
+      const allDefinitions = registry.definitions();
       const logProjectionRunner = new InformationLogProjectionRunner({
         repository: database.information,
         sink:
@@ -649,6 +681,9 @@ export class KaguyaRuntime implements InformationIngress {
         drainTimeoutMs: this.options.drainTimeoutMs ?? 5000,
         core,
         catalog: this.options.catalog,
+        ...(this.options.moduleLifecycle
+          ? { lifecycle: this.options.moduleLifecycle }
+          : {}),
         capabilities,
         now: this.#now,
         observer: (observation) => this.#observeModule(observation),

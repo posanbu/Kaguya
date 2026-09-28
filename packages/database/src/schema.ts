@@ -1,6 +1,7 @@
 /**
  * 功能概述：初始化并校验 PostgreSQL v1 账本及 Router/Light/Heavy 协议标记；prepareLifecycleProjection 建立可重建的开放集合及 scope 槽。
  * 主要职责：prepareDatabaseSchema 在启动事务中校验既有结构并首次回填投影；后续启动不扫描历史。
+ * prepareKindContracts 只增加通用 Kind 契约列，后续插件安装与升级不再执行模块专用 DDL。
  * prepareWebMemoryDestination 兼容旧 Web 目标约束，允许 conversationId 索引；旧 NULL 行不改写。
  * lifecycle 回填与在线追加使用同一 Web conversationId scope，保持历史查询和观察范围一致。
  * 代码库关系：InformationRepository 同事务维护投影，ReliableInformationRepository 锁定 scope head；原子仍只追加。
@@ -120,6 +121,7 @@ export async function prepareDatabaseSchema(
       await validateCurrentSchema(tx, tableNames);
       await prepareWebMemoryDestination(tx);
       await prepareLifecycleProjection(tx);
+      await prepareKindContracts(tx);
       return;
     }
     if (tableNames.size > 0) {
@@ -284,7 +286,17 @@ export async function prepareDatabaseSchema(
       [POSTGRES_SCHEMA_VERSION, INFORMATION_PROTOCOL_VERSION],
     );
     await prepareLifecycleProjection(tx);
+    await prepareKindContracts(tx);
   });
+}
+
+/** 一次通用迁移：插件升级只追加 Kind/契约记录，不再增加模块专用 DDL。 */
+async function prepareKindContracts(
+  database: Pick<SqlDatabase, "exec">,
+): Promise<void> {
+  await database.exec(
+    "ALTER TABLE information_kinds ADD COLUMN IF NOT EXISTS contract jsonb",
+  );
 }
 
 async function validateCurrentSchema(

@@ -1,0 +1,14 @@
+{
+  "name": "@kaguya-example/echo",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": "./index.mjs",
+  "files": [
+    "index.mjs"
+  ],
+  "peerDependencies": {
+    "@kaguya/sdk": "*",
+    "@kaguya/schema": "*"
+  }
+}

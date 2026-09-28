@@ -1,6 +1,7 @@
 /**
  * registerOnce 可附带 openScope，由数据库原子复用唯一开放赢家；普通 register/terminal 拒绝此参数。
  * stopReliableDelivery 可选 drain：停止领取后有界等待活跃 claim，再执行 shutdown fencing，支持 Runtime 热切换。
+ * 接收已冻结的完整 Registry 时验证内建对象身份；启动把同一份定义及版本契约交给账本同步。
  * 架构说明：本模块把 registry、store 与 bus 组合成信息 Core，
  * 负责启动前注册同步、注册时的 ID 生成、引用 expectations 传递、并发广播与故障事实。
  * 主要职责：`registerOnce`/`commitTerminal` 在数据库原子竞争且只广播新赢家；durable handler 由 claim 与 signal 保护；
@@ -103,7 +104,10 @@ export interface InformationReferenceQuery {
 export interface InformationLedger {
   readonly oneShotSchedules?: import("@kaguya/scheduler").OneShotScheduleProjectionStore;
   readonly reliable?: import("./reliable-types.js").ReliableInformationLedger;
-  synchronizeKinds(kinds: readonly string[]): Promise<void>;
+  synchronizeKinds(
+    kinds: readonly string[],
+    definitions?: readonly InformationKindDefinition<string, any>[],
+  ): Promise<void>;
   append(
     atom: DeepReadonly<InformationAtom>,
     expectations: readonly InformationReferenceExpectation[],
@@ -192,13 +196,19 @@ export class InformationCore implements OneShotScheduleCorePort {
       throw new Error("Invalid core drain timeout");
     this.registry = options.registry;
     this.store = options.store;
-    this.registry.registerBuiltin(consumerFailedInformationKind);
-    this.registry.registerBuiltin(executionExhaustedInformationKind);
-    this.registry.registerBuiltin(oneShotRequestedInformationKind);
-    this.registry.registerBuiltin(oneShotDueInformationKind);
-    this.registry.registerBuiltin(oneShotSupersededInformationKind);
-    this.registry.registerBuiltin(oneShotFiredInformationKind);
-    this.registry.registerBuiltin(oneShotFailedInformationKind);
+    for (const definition of [
+      consumerFailedInformationKind,
+      executionExhaustedInformationKind,
+      oneShotRequestedInformationKind,
+      oneShotDueInformationKind,
+      oneShotSupersededInformationKind,
+      oneShotFiredInformationKind,
+      oneShotFailedInformationKind,
+    ]) {
+      if (this.registry.has(definition.kind))
+        this.registry.assertRegistered(definition);
+      else this.registry.registerBuiltin(definition);
+    }
     this.#bus = new InformationBus();
     this.#nextInformationId = options.nextInformationId;
     this.#now = options.now ?? (() => new Date());
@@ -743,6 +753,7 @@ export class InformationCore implements OneShotScheduleCorePort {
       this.registry.seal();
       await this.store.synchronizeKinds(
         this.registry.definitions().map((definition) => definition.kind),
+        this.registry.definitions(),
       );
       if (this.#state !== "starting") {
         return;

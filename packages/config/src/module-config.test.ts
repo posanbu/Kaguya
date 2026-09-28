@@ -1,6 +1,6 @@
 /**
  * 功能概述：验证模块配置首次落盘与已有配置的拒绝策略。
- * 主要职责：覆盖只读状态查询不初始化配置、默认实例、版本/身份及插件树校验。
+ * 主要职责：覆盖只读状态查询不初始化配置、默认实例、版本/身份及插件树校验；附加实例以内联 settings 独立保存。
  * 代码库关系：直接调用 module-config 的加载器与信封 schema，使用临时目录模拟 Server 配置根。
  * 输入输出与副作用：仅写测试临时目录，afterEach 清理；错误不得悄悄重写用户配置。
  */
@@ -20,8 +20,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   loadModuleInstanceConfigs,
   moduleInstanceConfigSchema,
+  writeModuleInstanceConfig,
   type ModuleInstanceConfig,
 } from "./module-config.js";
+import { loadCordisTree, writeCordisTree } from "./cordis-tree.js";
 
 const roots: string[] = [];
 const defaults: readonly ModuleInstanceConfig[] = [
@@ -54,6 +56,48 @@ afterEach(async () => {
 });
 
 describe("module instance configuration", () => {
+  it("loads arbitrary instances and updates their inline settings without instance directories", async () => {
+    const rootDir = await createRoot();
+    await loadModuleInstanceConfigs({ rootDir, defaults });
+    const base = await loadCordisTree({ rootDir, modules: defaults });
+    const entries = ["first", "second"].map((name) => ({
+      id: `module.echo.${name}`,
+      name: "@example/echo",
+      definitionId: "example.echo",
+      disabled: name === "second",
+      settings: { label: name },
+    }));
+    await writeCordisTree(
+      rootDir,
+      { plugins: [...base.plugins, ...entries] },
+      defaults,
+    );
+    const configs = await loadModuleInstanceConfigs({ rootDir, defaults });
+    expect(configs.slice(defaults.length)).toEqual(
+      entries.map((entry) => ({
+        version: 1,
+        instanceId: entry.id.slice(7),
+        definitionId: entry.definitionId,
+        enabled: !entry.disabled,
+        settings: entry.settings,
+      })),
+    );
+    await writeModuleInstanceConfig(
+      rootDir,
+      {
+        ...configs[defaults.length]!,
+        settings: { label: "edited" },
+      },
+      defaults,
+    );
+    const updated = await loadModuleInstanceConfigs({ rootDir, defaults });
+    expect(updated[defaults.length]?.settings).toEqual({ label: "edited" });
+    expect(updated[defaults.length + 1]).toEqual(configs[defaults.length + 1]);
+    expect((await readdir(join(rootDir, "modules"))).sort()).toEqual(
+      defaults.map((item) => item.instanceId).sort(),
+    );
+  });
+
   it("bootstraps complete v1 files only when the modules directory is absent", async () => {
     const rootDir = await createRoot();
     await expect(

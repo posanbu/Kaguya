@@ -56,7 +56,7 @@ Profile 可以保存不同的模型、时区和运行设置，例如为测试和
 
 **`profiles/profile_<id>.json`** — 保存该方案的模型、时区和运行参数。初始方案为 `profiles/profile_default.json`；Profile 文件不含版本字段。
 
-**`cordis.yml`** — 保存内置服务与模块实例的插件条目；`disabled` 决定下次启动的启停状态。
+**`cordis.yml`** — 保存宿主服务、内置及外部模块实例条目；附加实例可直接携带 `definitionId` 和 `settings`。普通模块的变更经显式应用生效，Memory/NapCat 专用开关仍需重启。
 
 **`modules/<instanceId>/config.json`** — 保存工作区模块与适配器的身份及 `settings`，不含启停字段。
 
@@ -66,4 +66,4 @@ Profile 可以保存不同的模型、时区和运行设置，例如为测试和
 
 ## 当前配置格式
 
-Profile 不含 `version` 字段。配置根需要完整的 `cordis.yml` 和固定模块实例文件；格式或身份不匹配时启动会报配置错误。停用模块不会删除已经保存的消息或记忆数据。
+Profile 不含 `version` 字段。配置根需要完整的宿主服务条目和内置实例文件；外部实例在插件树中声明，无需修改默认列表。格式、Kind 契约或身份不匹配会报告错误。停用或卸载保留历史消息、Kind 元数据和记忆数据。外部包安装步骤见[信息模块开发](../developers/information-modules)。

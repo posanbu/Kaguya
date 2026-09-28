@@ -17,6 +17,10 @@
  */
 import { memoryConfigSchema, type MemoryConfig } from "@kaguya/config";
 export { CordisAssembly } from "./cordis-assembly.js";
+export {
+  loadModulePlugins,
+  type ModulePluginSnapshot,
+} from "./module-plugins.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import {
@@ -60,6 +64,7 @@ export type RuntimeModelSelectionResolver = (
   readonly generationOptions?: KaguyaLlmGenerationOptions;
 };
 export interface MessageCompositionOptions {
+  readonly pluginModelTasks?: Readonly<Record<string, "light" | "heavy">>;
   readonly memoryEnabled?: boolean;
   readonly moduleConfigs: readonly FirstPartyModuleInstanceConfig[];
   readonly agentIdentity?: Pick<AgentIdentity, "timeZone">;
@@ -140,7 +145,13 @@ export function createMessageComposition(
     );
   const memoryEnabled = options.memoryEnabled ?? false;
   const moduleConfigs = options.moduleConfigs.filter(
-    (config) => memoryEnabled || config.definitionId !== "memory.raw",
+    (config) =>
+      (memoryEnabled || config.definitionId !== "memory.raw") &&
+      (config.enabled ||
+        catalog.definitions.some(
+          ({ manifest }) => manifest.definitionId === config.definitionId,
+        ) ||
+        config.definitionId.startsWith("adapter.")),
   );
   const activations = createFirstPartyModuleActivations(
     catalog,
@@ -158,13 +169,15 @@ export function createMessageComposition(
   const modelTask: RuntimeModelTaskOptions = {
     renderStructuredOutputPrompt,
     approvals: activations
-      .filter((activation) =>
-        [
-          "agent.heavy",
-          "agent.router",
-          "memory.expression",
-          "plugin.qq-expression",
-        ].includes(activation.definitionId),
+      .filter(
+        (activation) =>
+          [
+            "agent.heavy",
+            "agent.router",
+            "memory.expression",
+            "plugin.qq-expression",
+          ].includes(activation.definitionId) ||
+          options.pluginModelTasks?.[activation.definitionId] !== undefined,
       )
       .map((activation) => ({
         activation: {
@@ -172,7 +185,9 @@ export function createMessageComposition(
           definitionId: activation.definitionId,
         },
         selectionPolicy: {
-          tier: activation.definitionId === "agent.heavy" ? "heavy" : "light",
+          tier:
+            options.pluginModelTasks?.[activation.definitionId] ??
+            (activation.definitionId === "agent.heavy" ? "heavy" : "light"),
         },
       })),
     client: new KaguyaLlmClient({

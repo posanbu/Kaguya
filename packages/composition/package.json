@@ -20,6 +20,12 @@
     "@kaguya/memory": "workspace:*",
     "@kaguya/modules": "workspace:*",
     "@kaguya/runtime": "workspace:*",
-    "@kaguya/scheduler": "workspace:*"
+    "@kaguya/scheduler": "workspace:*",
+    "@kaguya/engine": "workspace:*",
+    "@kaguya/sdk": "workspace:*",
+    "@kaguya/schema": "workspace:*"
+  },
+  "devDependencies": {
+    "@kaguya/database": "workspace:*"
   }
 }

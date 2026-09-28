@@ -196,7 +196,11 @@ export class ModuleSettingsManagement {
           JSON.stringify(replacement.settings) !==
           JSON.stringify(current.settings);
         if (settingsChanged)
-          await writeModuleInstanceConfig(this.options.rootDir, replacement);
+          await writeModuleInstanceConfig(
+            this.options.rootDir,
+            replacement,
+            this.options.defaults,
+          );
         try {
           if (replacement.enabled !== current.enabled)
             await writeCordisModuleEnabled(
@@ -207,7 +211,11 @@ export class ModuleSettingsManagement {
             );
         } catch (error) {
           if (settingsChanged)
-            await writeModuleInstanceConfig(this.options.rootDir, current);
+            await writeModuleInstanceConfig(
+              this.options.rootDir,
+              current,
+              this.options.defaults,
+            );
           throw error;
         }
       }

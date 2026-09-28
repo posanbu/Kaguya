@@ -2,6 +2,7 @@
  * 模板管理与配置应用共享写锁，只写本地覆盖，用户需重启加载新模板。
  * 模块配置管理复用 configuration.exclusive，与显式应用共锁；保存不会切换运行实例。
  * 启动和显式热应用分别把 inboundAllowlist 交给 AdapterHost、outboundAllowlist 交给 Runtime 及目标授权服务。
+ * 插件清单在数据库前冻结 Catalog/Kind；预检、运行和失败回滚复用相同快照，真实 fiber 负责模块生命周期。
  * 功能概述：Server composition root，组合配置、数据库、Runtime、HTTP/Web 与 NapCat 生命周期。
  * 主要职责：startKaguyaServer 验证 Profile 和模块配置后启动宿主；close 逆序释放资源；
  * createRuntimeModelSelectionResolver 根据 Profile 批准的 tier 解析 provider/model、思考参数及硬超时；
@@ -38,6 +39,8 @@ import {
 import {
   createMessageCatalog,
   createMessageComposition,
+  loadModulePlugins,
+  type ModulePluginSnapshot,
   createMemoryCompositionOptions,
   memoryConfigFromModules,
   type RuntimeModelSelectionResolver,
@@ -59,6 +62,7 @@ import {
 } from "@kaguya/config";
 import {
   KaguyaDatabase,
+  InformationKindContractConflictError,
   UnsupportedDatabaseSchemaError,
   type ActivePersonProfileSnapshot,
 } from "@kaguya/database";
@@ -76,7 +80,7 @@ import {
 import {
   KaguyaRuntime,
   RuntimeDatabaseInitializationError,
-  runtimeInformationKindNames,
+  createRuntimeKindRegistry,
 } from "@kaguya/runtime";
 import type { FastifyInstance } from "fastify";
 
@@ -164,6 +168,14 @@ export async function startKaguyaServer(
   let moduleConfigs: readonly FirstPartyModuleInstanceConfig[];
   let bootTree: CordisPluginTree;
   let catalog: ReturnType<typeof createMessageCatalog>;
+  let pluginSnapshot: ModulePluginSnapshot;
+  const pluginSnapshots = new Map<string, ModulePluginSnapshot>();
+  const pluginSnapshotKey = (snapshot: ConfigurationSnapshot) =>
+    JSON.stringify([
+      snapshot.pluginTree,
+      snapshot.moduleConfigs,
+      snapshot.profile.identity,
+    ]);
   const activePersonProfiles: ActivePersonProfileSnapshot = {
     byPerson: new Map(),
     byAccount: new Map(),
@@ -220,7 +232,16 @@ export async function startKaguyaServer(
       ),
       activePersonProfiles,
     );
+    pluginSnapshot = await loadModulePlugins({
+      rootDir: bootstrap.configRoot,
+      tree: bootTree,
+      catalog,
+      configs: moduleConfigs,
+    });
+    catalog = pluginSnapshot.catalog;
+    moduleConfigs = pluginSnapshot.configs;
     createMessageComposition(undefined, {
+      pluginModelTasks: pluginSnapshot.modelTasks,
       moduleConfigs,
       catalog,
       agentIdentity: selectedProfile.identity,
@@ -338,9 +359,14 @@ export async function startKaguyaServer(
       closeLogger,
     );
     mounted.add("logging");
-    await assembly.mount("catalog", ["logging"], () => catalog);
+    await assembly.mount("catalog", ["logging"], () =>
+      Object.freeze({
+        get definitions() {
+          return catalog.definitions;
+        },
+      }),
+    );
     mounted.add("catalog");
-    await assembly.mountModules();
     const degradationReports: DegradationReport[] = [];
     const degradationReasons: RuntimeUnavailableReason[] = [];
     let resolveModelSelection: RuntimeModelSelectionResolver | undefined;
@@ -365,7 +391,10 @@ export async function startKaguyaServer(
             effectiveConfig.databaseUrl,
           );
           try {
-            await prepareConfigurationDatabase(connection, catalog);
+            await prepareConfigurationDatabase(
+              connection,
+              pluginSnapshot.kindRegistry,
+            );
             Object.assign(
               activePersonProfiles,
               await connection.personProfiles.loadActiveSnapshot(),
@@ -380,7 +409,11 @@ export async function startKaguyaServer(
       );
       mounted.add("database");
     } catch (error) {
-      if (error instanceof UnsupportedDatabaseSchemaError) throw error;
+      if (
+        error instanceof UnsupportedDatabaseSchemaError ||
+        error instanceof InformationKindContractConflictError
+      )
+        throw error;
       degradationReports.push({
         reason: "database_unavailable",
         phase: "database",
@@ -402,11 +435,14 @@ export async function startKaguyaServer(
     ) {
       try {
         runtime = new KaguyaRuntime({
+          kindRegistry: pluginSnapshot.kindRegistry,
+          moduleLifecycle: assembly.moduleLifecycle,
           outboundAllowlist: new GatewayAllowlist(config.outboundAllowlist),
           targetDirectory: adapterHost,
           database,
           logger: rootLogger,
           ...createMessageComposition(resolveModelSelection, {
+            pluginModelTasks: pluginSnapshot.modelTasks,
             ...createMemoryCompositionOptions(
               memoryConfigFromModules(moduleConfigs),
             ),
@@ -491,7 +527,9 @@ export async function startKaguyaServer(
     const initialSnapshot: ConfigurationSnapshot = {
       profile: selectedProfile,
       moduleConfigs,
+      pluginTree: bootTree,
     };
+    pluginSnapshots.set(pluginSnapshotKey(initialSnapshot), pluginSnapshot);
     const refreshInspection = () => {
       const activeRuntime = runtime;
       inspection =
@@ -515,6 +553,11 @@ export async function startKaguyaServer(
         const profile = await configuration.getRuntimeProfile(
           status.selectedProfileId,
         );
+        const pluginTree = await loadCordisTree({
+          rootDir: bootstrap.configRoot,
+          modules: createFirstPartyModuleConfigDefaults(),
+          initialize: false,
+        });
         const configs = await loadModuleInstanceConfigs({
           rootDir: bootstrap.configRoot,
           defaults: createFirstPartyModuleConfigDefaults(
@@ -522,10 +565,11 @@ export async function startKaguyaServer(
             workspaceIdentity(),
           ),
           initialize: false,
-          treeSnapshot: bootTree,
+          treeSnapshot: pluginTree,
         });
         return {
           profile,
+          pluginTree,
           moduleConfigs: configs.map((item) =>
             ["memory.raw", "adapter.napcat"].includes(item.definitionId)
               ? (moduleConfigs.find(
@@ -535,7 +579,27 @@ export async function startKaguyaServer(
           ),
         };
       },
-      validate: (snapshot) => {
+      validate: async (snapshot) => {
+        const nextPlugins = await loadModulePlugins({
+          rootDir: bootstrap.configRoot,
+          tree: snapshot.pluginTree ?? bootTree,
+          configs: snapshot.moduleConfigs,
+          catalog: createMessageCatalog(
+            snapshot.profile.identity,
+            undefined,
+            snapshot.moduleConfigs.some(
+              (item) =>
+                item.definitionId === "plugin.qq-expression" && item.enabled,
+            ),
+            activePersonProfiles,
+          ),
+        });
+        pluginSnapshots.set(pluginSnapshotKey(snapshot), nextPlugins);
+        if (database)
+          await prepareConfigurationDatabase(
+            database,
+            nextPlugins.kindRegistry,
+          );
         createServerConfig(
           snapshot.profile,
           bootstrap,
@@ -549,8 +613,9 @@ export async function startKaguyaServer(
             ...createMemoryCompositionOptions(
               memoryConfigFromModules(snapshot.moduleConfigs),
             ),
-            moduleConfigs: snapshot.moduleConfigs,
-            catalog,
+            moduleConfigs: nextPlugins.configs,
+            catalog: nextPlugins.catalog,
+            pluginModelTasks: nextPlugins.modelTasks,
             agentIdentity: snapshot.profile.identity,
             activePersonProfiles,
           },
@@ -585,6 +650,9 @@ export async function startKaguyaServer(
         failedRuntime = undefined;
       },
       start: async (snapshot) => {
+        const nextPlugins = pluginSnapshots.get(pluginSnapshotKey(snapshot));
+        if (!nextPlugins)
+          throw new Error("Module plugin snapshot was not prepared");
         const nextConfig = {
           ...config,
           inboundAllowlist: snapshot.profile.runtime!.inboundAllowlist,
@@ -606,7 +674,10 @@ export async function startKaguyaServer(
                   config.databaseUrl,
                 );
                 try {
-                  await prepareConfigurationDatabase(connection, catalog);
+                  await prepareConfigurationDatabase(
+                    connection,
+                    nextPlugins.kindRegistry,
+                  );
                   return connection;
                 } catch (error) {
                   await connection.close().catch(() => undefined);
@@ -625,8 +696,9 @@ export async function startKaguyaServer(
           );
           mounted.add("adapter");
           nextHostMounted = true;
-          await assembly!.mountModules();
           nextRuntime = new KaguyaRuntime({
+            kindRegistry: nextPlugins.kindRegistry,
+            moduleLifecycle: assembly!.moduleLifecycle,
             outboundAllowlist: new GatewayAllowlist(
               nextConfig.outboundAllowlist,
             ),
@@ -639,8 +711,9 @@ export async function startKaguyaServer(
                 ...createMemoryCompositionOptions(
                   memoryConfigFromModules(snapshot.moduleConfigs),
                 ),
-                moduleConfigs: snapshot.moduleConfigs,
-                catalog,
+                moduleConfigs: nextPlugins.configs,
+                catalog: nextPlugins.catalog,
+                pluginModelTasks: nextPlugins.modelTasks,
                 agentIdentity: snapshot.profile.identity,
                 activePersonProfiles,
               },
@@ -677,7 +750,9 @@ export async function startKaguyaServer(
           runtime = nextRuntime;
           adapterHost = nextHost;
           selectedProfile = snapshot.profile;
-          moduleConfigs = snapshot.moduleConfigs;
+          moduleConfigs = nextPlugins.configs;
+          pluginSnapshot = nextPlugins;
+          catalog = nextPlugins.catalog;
           refreshInspection();
           nextHost.resumeIngress();
         } catch {
@@ -754,7 +829,9 @@ export async function startKaguyaServer(
         adapterHost: { status: () => adapterHost.status() },
         configuration,
         moduleTemplates: new ModuleTemplateManagement({
-          catalog,
+          get catalog() {
+            return catalog;
+          },
           exclusive: (operation) => configuration.exclusive(operation),
         }),
         identityPersona: new IdentityPersonaManagement({
@@ -766,7 +843,9 @@ export async function startKaguyaServer(
         ),
         moduleSettings: new ModuleSettingsManagement({
           rootDir: bootstrap.configRoot,
-          catalog,
+          get catalog() {
+            return catalog;
+          },
           defaults: createFirstPartyModuleConfigDefaults(),
           exclusive: (operation) => configuration.exclusive(operation),
           running: (instanceId, definitionId) => {
@@ -1003,15 +1082,20 @@ async function connectInformationDatabase(
 
 async function prepareConfigurationDatabase(
   database: KaguyaDatabase,
-  catalog: ReturnType<typeof createMessageCatalog>,
+  registry: ReturnType<typeof createRuntimeKindRegistry>,
 ): Promise<void> {
   try {
     await database.prepareSchema();
     await database.information.synchronizeKinds(
-      runtimeInformationKindNames(catalog),
+      registry.definitions().map(({ kind }) => kind),
+      registry.definitions(),
     );
   } catch (error) {
-    if (error instanceof UnsupportedDatabaseSchemaError) throw error;
+    if (
+      error instanceof UnsupportedDatabaseSchemaError ||
+      error instanceof InformationKindContractConflictError
+    )
+      throw error;
     throw new InformationDatabaseConnectionError(error);
   }
 }

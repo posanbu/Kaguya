@@ -1,5 +1,6 @@
 /**
  * openScope 是 registerOnce 的可选并发约束，宿主透传给 Core，不写入业务 payload。
+ * persistence 由独立插件 SDK 绑定 owner、schema 版本及可序列化契约，数据库按此拒绝同名不兼容变更。
  * 架构说明：本模块定义信息 kind 的声明契约、引用规则、日志策略与注册输入，并以
  * 当前递归路径校验 JSON schema，使 pipe 可安全复用同一个非递归子 schema。
  * 主要职责：`defineInformationKind` 校验 dotted kind、严格 JSON payload schema、引用
@@ -15,6 +16,7 @@ import {
   type JsonObject,
   z,
 } from "@kaguya/schema";
+import type { InformationKindPersistence } from "./module-plugin.js";
 
 export type InformationLogLevel = "trace" | "debug" | "info" | "warn" | "error";
 
@@ -53,6 +55,8 @@ export interface InformationKindDefinition<
   K extends string,
   P extends JsonObject,
 > {
+  /** 外部插件 Kind 的持久契约；由 defineVersionedInformationKind 创建。 */
+  readonly persistence?: InformationKindPersistence;
   readonly kind: K;
   readonly displayName: string;
   readonly description: string;

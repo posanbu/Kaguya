@@ -1,3 +1,4 @@
+/** 验证 Cordis 真实服务与模块 fiber 的依赖释放、创建失败回滚及再次装载；测试以生命周期 Promise 同步。 */
 import { expect, it } from "vitest";
 import { defaultCordisTree } from "@kaguya/config";
 import { CordisAssembly } from "./cordis-assembly.js";
@@ -25,7 +26,11 @@ it("loads built-in services through Cordis and releases resources in dependency 
     await assembly.mount(
       "logging",
       ["configuration"],
-      () => ({ value: 2 }),
+      (ctx) => ({
+        value:
+          CordisAssembly.service<{ value: number }>(ctx, "configuration")
+            .value + 1,
+      }),
       () => {
         events.push("logging");
       },
@@ -38,7 +43,16 @@ it("loads built-in services through Cordis and releases resources in dependency 
         events.push("catalog");
       },
     );
-    await assembly.mountModules();
+    await assembly.moduleLifecycle.mount(
+      "heavy.default",
+      [],
+      async () => {
+        events.push("module.start");
+      },
+      async () => {
+        events.push("module.stop");
+      },
+    );
     await assembly.mount(
       "adapter",
       ["catalog"],

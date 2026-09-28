@@ -1,6 +1,6 @@
 /**
  * 功能概述：此测试模块把 information ledger 的持久化行为定义为可由多个数据库后端注册的契约，防止 PGlite 与真实 PostgreSQL 的语义漂移。
- * 主要职责：`defineInformationLedgerContract` 接收显示名称和 `KaguyaDatabase` factory，注册 kind 的新增登记与历史缺失拒绝、原子追加、引用校验、读取排序与 outbox 投影的共享行为测试。
+ * 主要职责：`defineInformationLedgerContract` 接收显示名称和 `KaguyaDatabase` factory，注册 Kind 的新增登记与历史保留、原子追加、引用校验、读取排序与 outbox 投影的共享行为测试。
  * 代码库关系：`information-repository.test.ts` 用 PGlite factory 注册；`postgres-information-ledger.test.ts` 用 schema 隔离的 PostgreSQL factory 注册；仓储、迁移和 runner 是被测的生产边界。
  * 输入输出与副作用：每个用例迁移独立数据库，并在 `afterEach` 关闭它；断言只通过公开数据库 API 与原始 SQL 观察持久化及事务结果。
  */
@@ -12,7 +12,10 @@ import {
   type JsonObject,
   z,
 } from "@kaguya/schema";
-import { defineInformationKind } from "@kaguya/sdk";
+import {
+  defineInformationKind,
+  defineVersionedInformationKind,
+} from "@kaguya/sdk";
 
 import {
   InformationIdConflictError,
@@ -132,7 +135,7 @@ export function defineInformationLedgerContract(
     });
 
     it(
-      "registers added kinds but rejects removing persisted kinds",
+      "registers added kinds and retains persisted kinds when plugins are removed",
       async () => {
         const database = await createMigratedDatabase();
         await database.information.synchronizeKinds([contextKind.kind]);
@@ -142,7 +145,76 @@ export function defineInformationLedgerContract(
         ]);
         await expect(
           database.information.synchronizeKinds([contextKind.kind]),
-        ).rejects.toBeInstanceOf(InformationStoreError);
+        ).resolves.toBeUndefined();
+        expect(
+          (await database.information.listKindContracts()).map(
+            ({ kind }) => kind,
+          ),
+        ).toEqual([contextKind.kind, inboundKind.kind].sort());
+      },
+      TEST_TIMEOUT,
+    );
+
+    it(
+      "preserves version contracts and atoms while rolling back conflicting registration batches",
+      async () => {
+        const database = await createMigratedDatabase();
+        const kind = defineVersionedInformationKind({
+          ...plainKind,
+          kind: "example.contract.v1",
+          owner: "example.contract",
+          version: 1,
+        });
+        await database.information.synchronizeKinds([kind.kind], [kind]);
+        const atom = createAtom(
+          "atom-version-contract",
+          kind.kind,
+          "2026-09-01T00:00:00.000Z",
+          { nested: { values: ["original"] } },
+          [],
+        );
+        await database.information.append(atom, []);
+        const contracts = await database.information.listKindContracts();
+        expect(contracts).toEqual([
+          {
+            kind: kind.kind,
+            contract: { ...kind.persistence, references: kind.references },
+          },
+        ]);
+        await database.prepareSchema();
+        await database.information.synchronizeKinds([]);
+        expect(await database.information.listKindContracts()).toEqual(
+          contracts,
+        );
+        expect(await database.information.get(atom.informationId)).toEqual(
+          atom,
+        );
+        const conflict = defineVersionedInformationKind({
+          kind: kind.kind,
+          displayName: "Conflicting contract",
+          description: "Attempts to reuse the same persisted version.",
+          references: {},
+          log: { enabled: false },
+          owner: "example.contract",
+          version: 1,
+          payloadSchema: z.object({ changed: z.string() }).strict(),
+        });
+        await expect(
+          database.information.synchronizeKinds(
+            [kind.kind, "example.new.v1"],
+            [conflict],
+          ),
+        ).rejects.toMatchObject({
+          code: "INFORMATION_KIND_CONTRACT_CONFLICT",
+          kind: kind.kind,
+        });
+        expect(await database.information.listKindContracts()).toEqual(
+          contracts,
+        );
+        await database.information.synchronizeKinds([kind.kind], [kind]);
+        expect(await database.information.get(atom.informationId)).toEqual(
+          atom,
+        );
       },
       TEST_TIMEOUT,
     );
@@ -1063,8 +1135,14 @@ export function defineInformationLedgerContract(
 
         const first = runner.projectPending();
         const second = runner.projectPending();
-        await vi.waitFor(() => expect(projected).toHaveLength(1));
-        release();
+        try {
+          await vi.waitFor(() => expect(projected).toHaveLength(1), {
+            timeout: 8000,
+            interval: 20,
+          });
+        } finally {
+          release();
+        }
         await Promise.all([first, second]);
 
         expect(projected).toEqual([atom.informationId]);

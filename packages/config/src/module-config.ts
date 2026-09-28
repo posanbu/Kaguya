@@ -5,6 +5,7 @@
  * 写入完整默认配置；configPath 和 assertUniqueDefaults 拒绝越界路径及重复实例。
  * 代码库关系：Server 传入 first-party Catalog 默认实例，模块 settings 由 Catalog 二次严格校验。
  * initialize=false 用于热应用状态检查，目录缺失时仅报错而不写默认值。
+ * 外部/附加实例直接来自已冻结树的 definitionId/settings，不需要维护默认实例列表或创建配置目录。
  * 输入输出与副作用：读写敏感 JSON；已有目录不自动补齐，格式或身份错误按配置校验失败处理。
  */
 import { lstat, readdir } from "node:fs/promises";
@@ -17,6 +18,7 @@ import {
   loadCordisTree,
   moduleEnabled,
   validateCordisTree,
+  writeCordisTree,
   type CordisPluginTree,
 } from "./cordis-tree.js";
 import { jsonObjectSchema, type JsonObject } from "./model.js";
@@ -65,6 +67,15 @@ export async function loadModuleInstanceConfigs(options: {
         modules: options.defaults,
         initialize: !modulesExist && options.initialize !== false,
       });
+  const additional = tree.plugins
+    .filter((entry) => entry.definitionId !== undefined)
+    .map((entry) => ({
+      version: 1 as const,
+      instanceId: entry.id.slice("module.".length),
+      definitionId: entry.definitionId!,
+      enabled: !entry.disabled,
+      settings: structuredClone(entry.settings ?? {}),
+    }));
   if (!modulesExist) {
     if (options.initialize === false)
       throw corrupt("Module configuration is missing");
@@ -76,10 +87,13 @@ export async function loadModuleInstanceConfigs(options: {
         moduleInstanceConfigSchema.parse(withoutEnabled(config)),
       );
     }
-    return options.defaults.map((config) => ({
-      ...structuredClone(config),
-      enabled: moduleEnabled(tree, config.instanceId),
-    }));
+    return [
+      ...options.defaults.map((config) => ({
+        ...structuredClone(config),
+        enabled: moduleEnabled(tree, config.instanceId),
+      })),
+      ...additional,
+    ];
   }
 
   const stats = await lstat(modulesRoot);
@@ -128,15 +142,43 @@ export async function loadModuleInstanceConfigs(options: {
       enabled: moduleEnabled(tree, parsed.data.instanceId),
     });
   }
-  return result;
+  return [...result, ...additional];
 }
 
 /** 替换已存在且身份固定的实例；调用方必须持有配置写锁并完成 schema 与 revision 校验。 */
 export async function writeModuleInstanceConfig(
   rootDir: string,
   config: ModuleInstanceConfig,
+  defaults?: readonly ModuleInstanceConfig[],
 ): Promise<void> {
   const parsed = moduleInstanceConfigSchema.parse(withoutEnabled(config));
+  if (defaults) {
+    const tree = await loadCordisTree({
+      rootDir,
+      modules: defaults,
+      initialize: false,
+    });
+    const entry = tree.plugins.find(
+      (entry) => entry.id === `module.${parsed.instanceId}`,
+    );
+    if (entry?.definitionId !== undefined) {
+      if (entry.definitionId !== parsed.definitionId)
+        throw new ConfigError(
+          "CONFIG_INVALID_INPUT",
+          "Module identity cannot change",
+        );
+      await writeCordisTree(
+        rootDir,
+        {
+          plugins: tree.plugins.map((item) =>
+            item === entry ? { ...item, settings: parsed.settings } : item,
+          ),
+        },
+        defaults,
+      );
+      return;
+    }
+  }
   const root = join(rootDir, "modules");
   assertPathInside(rootDir, root);
   const path = configPath(root, parsed.instanceId);

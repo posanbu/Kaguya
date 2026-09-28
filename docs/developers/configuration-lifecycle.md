@@ -47,7 +47,7 @@ Runtime 原因限定为 configuration_not_ready、database_unavailable、runtime
 
 ## 为什么只使用 selected Profile
 
-Registry 可以保存多个 Profile，但 Server 只用一个显式 selected Profile 装配全局 Runtime。启动时校验并冻结 `cordis.yml` 内置插件树，实例身份与设置从 `modules/` 加载；禁用实例仍保留其内置 Kind 定义。Server 不会因为模型调用失败而自动切换，也不会根据单条消息隐式选择其他 Profile。
+Registry 可以保存多个 Profile，但 Server 只用一个显式 selected Profile 装配全局 Runtime。启动时校验并冻结 `cordis.yml` 插件树，内置实例从 `modules/` 加载，附加实例使用树中的定义与设置；外部包清单合并后形成冻结的 Kind Registry。停用/卸载不删除历史 Kind 元数据。Server 不会因为模型调用失败而自动切换，也不会根据单条消息隐式选择其他 Profile。
 
 这种约束避免同一进程中同时出现不可追踪的 Provider、密钥和模型路由。模块若支持显式 `profileId`，仍必须通过受控的 resolver，而不是自行读取配置文件。
 
@@ -55,7 +55,7 @@ Registry 可以保存多个 Profile，但 Server 只用一个显式 selected Pro
 
 创建或编辑 Profile 只持久化配置；切换 selected Profile 只改变下一次要应用的方案。顶栏的编辑对象与全局 selected Profile 也不是同一状态。
 
-`ConfigurationApplicationCoordinator` 记录已选中与已生效版本。显式应用时，在配置写锁内校验 revision、预检新配置，由 Cordis 卸载并重建 Runtime/Adapter 子树。模型、白名单和普通模块参数可通过这条路径更新；消息入口在切换期间短暂暂停，HTTP 与 Gateway Token 不变。应用沿用本次启动的插件树快照，不读取磁盘上的新启停状态。
+`ConfigurationApplicationCoordinator` 记录已选中与已生效版本。显式应用时，在配置写锁内校验 revision、预检新配置，由 Cordis 卸载并重建 Runtime/Adapter 子树。模型、白名单和普通模块参数可通过这条路径更新；消息入口在切换期间短暂暂停，HTTP 与 Gateway Token 不变。应用读取新的插件树并在关闭旧实例前验证包声明、设置与 Kind 契约；新激活失败会使用旧声明快照回滚。外部插件可以通过此路径安装、切换实例和卸载。
 
 应用失败会尝试恢复旧快照；关闭失败或回滚失败时保持降级，不能把保存成功当成应用成功。操作步骤见[配置概览](../guide/configuration#保存后怎样生效)。
 
@@ -65,7 +65,7 @@ Registry 可以保存多个 Profile，但 Server 只用一个显式 selected Pro
 
 名称、别名、人设及其他 Prompt local 文件保存后也需要重启，不能仅应用 Profile。重启会生成新 Gateway Token。
 
-模块启停只写 `cordis.yml`，Memory 与 NapCat 的设置只写实例文件；这些变更均在重启后生效。其他模块的纯设置变更继续由显式应用生效。管理界面分别显示期望状态与当前运行状态。
+Memory 与 NapCat 的专用管理开关和设置仍在重启后生效。其他模块及外部插件的树条目、实例与设置可通过显式应用生效；直接覆盖同一路径已导入的插件代码需重启进程，版本升级可采用新的包安装路径。管理界面分别显示期望状态与当前运行状态。
 
 ## Readiness 的含义
 

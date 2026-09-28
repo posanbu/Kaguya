@@ -198,6 +198,19 @@ importers:
       '@kaguya/scheduler':
         specifier: workspace:*
         version: link:../scheduler
+      '@kaguya/engine':
+        specifier: workspace:*
+        version: link:../engine
+      '@kaguya/schema':
+        specifier: workspace:*
+        version: link:../schema
+      '@kaguya/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+    devDependencies:
+      '@kaguya/database':
+        specifier: workspace:*
+        version: link:../database
 
   packages/config:
     dependencies:

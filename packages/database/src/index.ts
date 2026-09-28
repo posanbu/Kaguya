@@ -57,6 +57,7 @@ export async function assertSupportedPostgresVersion(
 export {
   InformationIdConflictError,
   InformationKindSetMismatchError,
+  InformationKindContractConflictError,
   InformationRepository,
   InformationStoreError,
   InvalidInformationReferenceError,
