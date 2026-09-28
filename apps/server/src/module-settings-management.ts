@@ -8,6 +8,7 @@
 import { createHmac, randomBytes } from "node:crypto";
 import {
   loadModuleInstanceConfigs,
+  writeCordisModuleEnabled,
   writeModuleInstanceConfig,
   type ModuleInstanceConfig,
 } from "@kaguya/config";
@@ -35,6 +36,7 @@ export class ModuleSettingsManagement {
       catalog: InformationModuleCatalog;
       defaults: readonly ModuleInstanceConfig[];
       exclusive: <T>(operation: () => Promise<T>) => Promise<T>;
+      running?: (instanceId: string, definitionId: string) => boolean;
       replaceFeature?: (
         current: readonly ModuleInstanceConfig[],
         next: readonly ModuleInstanceConfig[],
@@ -108,11 +110,14 @@ export class ModuleSettingsManagement {
     return {
       definitionId: id,
       scope: "global",
-      effect: ["memory.raw"].includes(id) ? "immediate" : "explicit_apply",
+      effect: ["memory.raw", "adapter.napcat"].includes(id)
+        ? "restart_required"
+        : "explicit_apply",
       fields,
       instances: configs.map((c) => ({
         instanceId: c.instanceId,
         enabled: c.enabled,
+        running: this.options.running?.(c.instanceId, c.definitionId) ?? false,
         revision: this.revision(c),
         settings: Object.fromEntries(
           fields
@@ -175,7 +180,7 @@ export class ModuleSettingsManagement {
         enabled: parsed.data.enabled,
         settings: validation.data,
       };
-      if (["memory.raw"].includes(id)) {
+      if (["memory.raw", "adapter.napcat"].includes(id)) {
         if (replacement.enabled !== current.enabled)
           throw new ModuleSettingsError(400, "use_feature_switch");
         if (!this.options.replaceFeature)
@@ -186,7 +191,26 @@ export class ModuleSettingsManagement {
             config.instanceId === instanceId ? replacement : config,
           ),
         );
-      } else await writeModuleInstanceConfig(this.options.rootDir, replacement);
+      } else {
+        const settingsChanged =
+          JSON.stringify(replacement.settings) !==
+          JSON.stringify(current.settings);
+        if (settingsChanged)
+          await writeModuleInstanceConfig(this.options.rootDir, replacement);
+        try {
+          if (replacement.enabled !== current.enabled)
+            await writeCordisModuleEnabled(
+              this.options.rootDir,
+              this.options.defaults,
+              instanceId,
+              replacement.enabled,
+            );
+        } catch (error) {
+          if (settingsChanged)
+            await writeModuleInstanceConfig(this.options.rootDir, current);
+          throw error;
+        }
+      }
       return this.get(id);
     });
   }

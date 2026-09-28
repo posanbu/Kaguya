@@ -16,6 +16,7 @@
  * Runtime 校验 activation/policy、重载因果 context 并写通用任务生命周期，模块经 context.use 调用。
  */
 import { memoryConfigSchema, type MemoryConfig } from "@kaguya/config";
+export { CordisAssembly } from "./cordis-assembly.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import {
@@ -63,6 +64,7 @@ export interface MessageCompositionOptions {
   readonly moduleConfigs: readonly FirstPartyModuleInstanceConfig[];
   readonly agentIdentity?: Pick<AgentIdentity, "timeZone">;
   readonly activePersonProfiles?: ActivePersonProfiles;
+  readonly catalog?: ReturnType<typeof createMessageCatalog>;
 }
 export interface MemoryFeatureState {
   enabled: boolean;
@@ -126,14 +128,16 @@ export function createMessageComposition(
   const memoryFeatureState: MemoryFeatureState = {
     enabled: options.memoryEnabled ?? false,
   };
-  const catalog = createMessageCatalog(
-    identity,
-    promptTemplates,
-    options.moduleConfigs.some(
-      (c) => c.definitionId === "plugin.qq-expression" && c.enabled,
-    ),
-    options.activePersonProfiles,
-  );
+  const catalog =
+    options.catalog ??
+    createMessageCatalog(
+      identity,
+      promptTemplates,
+      options.moduleConfigs.some(
+        (c) => c.definitionId === "plugin.qq-expression" && c.enabled,
+      ),
+      options.activePersonProfiles,
+    );
   const memoryEnabled = options.memoryEnabled ?? false;
   const moduleConfigs = options.moduleConfigs.filter(
     (config) => memoryEnabled || config.definitionId !== "memory.raw",

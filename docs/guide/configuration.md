@@ -30,7 +30,7 @@ description: 按用途找到 Kaguya 的设置，并了解保存、应用和重�
 3. 进入“配置生效管理”，核对所选配置，点击“应用当前配置”。
 4. 确认页面显示已生效；如果提示需要重启，则停止并重新启动 Kaguya。
 
-模型、白名单和普通模块参数可通过显式应用更新。Memory 与 NapCat 的概览开关及其设置保存后立即生效。**名称、人设及其他 Prompt 模板需要重启**；端口、数据库和日志等进程参数也需要重启。
+模型、白名单和普通模块参数可通过显式应用更新。所有模块启停、Memory 与 NapCat 的设置保存后需要重启。**名称、人设及其他 Prompt 模板需要重启**；端口、数据库和日志等进程参数也需要重启。
 
 “保存成功”表示内容已写入文件，不代表机器人已经使用新配置。应用失败时查看页面原因，修正后再试。
 
@@ -56,7 +56,9 @@ Profile 可以保存不同的模型、时区和运行设置，例如为测试和
 
 **`profiles/profile_<id>.json`** — 保存该方案的模型、时区和运行参数。初始方案为 `profiles/profile_default.json`；Profile 文件不含版本字段。
 
-**`modules/<instanceId>/config.json`** — 保存工作区模块与适配器的开关和设置，包括 Memory 与 NapCat。
+**`cordis.yml`** — 保存内置服务与模块实例的插件条目；`disabled` 决定下次启动的启停状态。
+
+**`modules/<instanceId>/config.json`** — 保存工作区模块与适配器的身份及 `settings`，不含启停字段。
 
 **`packages/modules/templates/*.local.hbs`** — 保存本地角色与 Prompt 修改，位于源码目录，不在配置目录中。
 
@@ -64,4 +66,4 @@ Profile 可以保存不同的模型、时区和运行设置，例如为测试和
 
 ## 当前配置格式
 
-当前 Profile 不含 `version`、旧 `memory` 或 `platforms` 字段；模块目录需要包含当前的 Memory 与适配器实例。不符合当前格式的文件不会自动转换，启动时会报配置错误。处理前先备份配置目录和数据库，再建立符合当前格式的 Profile 与模块配置，在网页填写 Memory provider 和 NapCat 连接设置。仍符合当前数据库结构时，继续指向原 PostgreSQL 数据库可保留消息与记忆数据；停用开关不会删除这些数据。
+Profile 不含 `version` 字段。配置根需要完整的 `cordis.yml` 和固定模块实例文件；格式或身份不匹配时启动会报配置错误。停用模块不会删除已经保存的消息或记忆数据。

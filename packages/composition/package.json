@@ -13,11 +13,13 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
+    "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/cordis-plugin-loader": "1.0.5",
     "@kaguya/config": "workspace:*",
     "@kaguya/llm": "workspace:*",
+    "@kaguya/memory": "workspace:*",
     "@kaguya/modules": "workspace:*",
     "@kaguya/runtime": "workspace:*",
-    "@kaguya/scheduler": "workspace:*",
-    "@kaguya/memory": "workspace:*"
+    "@kaguya/scheduler": "workspace:*"
   }
 }

@@ -1,7 +1,8 @@
-/** Immediate, revision-checked switches for global Memory and adapter plugins. */
+/** Revision-checked desired state for restart-bound Memory and NapCat plugins. */
 import { createHmac, randomBytes } from "node:crypto";
 import {
   loadModuleInstanceConfigs,
+  writeCordisModuleEnabled,
   writeModuleInstanceConfig,
   type ModuleInstanceConfig,
 } from "@kaguya/config";
@@ -42,8 +43,6 @@ export class FeatureManagement {
       rootDir: string;
       defaults: readonly ModuleInstanceConfig[];
       exclusive<T>(operation: () => Promise<T>): Promise<T>;
-      activateMemory(configs: readonly ModuleInstanceConfig[]): Promise<void>;
-      activateNapCat(configs: readonly ModuleInstanceConfig[]): Promise<void>;
       activeMemory(): readonly string[];
       napCatLifecycle():
         { lifecycle: string; connectivity: string } | undefined;
@@ -78,7 +77,7 @@ export class FeatureManagement {
             : running.has(id)
               ? "running"
               : enabled
-                ? "failed"
+                ? "pending_restart"
                 : "disabled";
         const active =
           id === "adapter.napcat" ? lifecycle === "running" : running.has(id);
@@ -92,7 +91,11 @@ export class FeatureManagement {
             napcat?.connectivity === "retrying"
               ? "retrying"
               : lifecycle,
-          ...(this.#degraded ? { blocker: "recovery_failed" } : {}),
+          ...(this.#degraded
+            ? { blocker: "recovery_failed" }
+            : enabled !== active
+              ? { blocker: "restart_required" }
+              : {}),
         };
       }),
     };
@@ -169,49 +172,47 @@ export class FeatureManagement {
     } catch {
       throw new FeatureManagementError(400, "napcat_configuration_invalid");
     }
-    const memoryChanged = changed.some((config) =>
-      config.definitionId.startsWith("memory."),
-    );
-    const napcatChanged = changed.some(
-      (config) => config.definitionId === "adapter.napcat",
-    );
-    let appliedMemory = false;
-    let appliedNapCat = false;
-    const written: ModuleInstanceConfig[] = [];
+    const writtenSettings: ModuleInstanceConfig[] = [];
+    const writtenSwitches: ModuleInstanceConfig[] = [];
     try {
-      if (memoryChanged) {
-        await this.options.activateMemory(next);
-        appliedMemory = true;
-      }
-      if (napcatChanged) {
-        await this.options.activateNapCat(next);
-        appliedNapCat = true;
-      }
       for (const config of changed) {
-        await writeModuleInstanceConfig(this.options.rootDir, config);
-        written.push(
-          current.find((item) => item.instanceId === config.instanceId)!,
-        );
+        const previous = current.find(
+          (item) => item.instanceId === config.instanceId,
+        )!;
+        if (
+          JSON.stringify(config.settings) !== JSON.stringify(previous.settings)
+        ) {
+          await writeModuleInstanceConfig(this.options.rootDir, config);
+          writtenSettings.push(previous);
+        }
+        if (config.enabled !== previous.enabled) {
+          await writeCordisModuleEnabled(
+            this.options.rootDir,
+            this.options.defaults,
+            config.instanceId,
+            config.enabled,
+          );
+          writtenSwitches.push(previous);
+        }
       }
       this.options.committed(next);
       this.#degraded = false;
     } catch (error) {
       const failures: unknown[] = [];
-      for (const config of written.reverse())
+      for (const config of writtenSwitches.reverse())
+        try {
+          await writeCordisModuleEnabled(
+            this.options.rootDir,
+            this.options.defaults,
+            config.instanceId,
+            config.enabled,
+          );
+        } catch (failure) {
+          failures.push(failure);
+        }
+      for (const config of writtenSettings.reverse())
         try {
           await writeModuleInstanceConfig(this.options.rootDir, config);
-        } catch (failure) {
-          failures.push(failure);
-        }
-      if (appliedNapCat)
-        try {
-          await this.options.activateNapCat(current);
-        } catch (failure) {
-          failures.push(failure);
-        }
-      if (appliedMemory)
-        try {
-          await this.options.activateMemory(current);
         } catch (failure) {
           failures.push(failure);
         }

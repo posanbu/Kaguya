@@ -124,7 +124,6 @@ it("projects explicit metadata and atomically rejects stale concurrent replaceme
     reason: { status: 409 },
   });
   expect(JSON.parse(await readFile(path, "utf8"))).toMatchObject({
-    enabled: false,
     settings: { count: 3, secret: "DO-NOT-EXPOSE" },
   });
 });

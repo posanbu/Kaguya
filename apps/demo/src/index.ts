@@ -9,14 +9,15 @@
  * 输入输出与副作用：CLI 会建立一个 PostgreSQL 连接、准备 schema、写入账本并输出统计；
  * 连接或运行失败只输出安全错误类型，不回显数据库 URL 或原始异常。
  */
-import { createMessageComposition } from "@kaguya/composition";
+import {
+  CordisAssembly,
+  createMessageCatalog,
+  createMessageComposition,
+} from "@kaguya/composition";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import {
-  FileUserConfigManager,
-  loadModuleInstanceConfigs,
-} from "@kaguya/config";
+import { FileUserConfigManager, defaultCordisTree } from "@kaguya/config";
 import { KaguyaDatabase } from "@kaguya/database";
 import {
   createFirstPartyModuleConfigDefaults,
@@ -61,15 +62,11 @@ export async function readDemoDatabaseUrl(
 export async function runDemo(
   options: RunDemoOptions,
 ): Promise<InboundReceipt> {
-  const runtime = new KaguyaRuntime({
-    ...createMessageComposition(undefined, {
-      moduleConfigs: options.moduleConfigs,
-    }),
-    database: options.database,
-    now: () => new Date("2026-09-04T00:00:00.000Z"),
-    informationIdGenerator: options.informationIdGenerator ?? randomUUID,
-  });
-  runtime.registerTransport({
+  const assembly = await CordisAssembly.create(
+    defaultCordisTree(options.moduleConfigs),
+  );
+  const catalog = createMessageCatalog();
+  const transport = {
     adapterId: "demo.web.main",
     platform: "web",
     transport: {
@@ -81,9 +78,33 @@ export async function runDemo(
         platformMessageId: "demo-delivery-1",
       }),
     },
-  });
-  await runtime.start();
+  } satisfies Parameters<KaguyaRuntime["registerTransport"]>[0];
   try {
+    await assembly.mount("configuration", [], () => options);
+    await assembly.mount("logging", ["configuration"], () => console);
+    await assembly.mount("catalog", ["logging"], () => catalog);
+    await assembly.mountModules();
+    await assembly.mount("database", ["catalog"], () => options.database);
+    await assembly.mount("adapter", ["catalog"], () => transport);
+    const runtime = await assembly.mount(
+      "runtime",
+      ["database", "adapter", "catalog"],
+      async () => {
+        const instance = new KaguyaRuntime({
+          ...createMessageComposition(undefined, {
+            moduleConfigs: options.moduleConfigs,
+            catalog,
+          }),
+          database: options.database,
+          now: () => new Date("2026-09-04T00:00:00.000Z"),
+          informationIdGenerator: options.informationIdGenerator ?? randomUUID,
+        });
+        instance.registerTransport(transport);
+        await instance.start();
+        return instance;
+      },
+      (instance) => instance.close(),
+    );
     const inbound = normalizeWebInboundMessage(
       {
         requestId: "demo-request-1",
@@ -142,16 +163,12 @@ export async function runDemo(
     }
     return receipt;
   } finally {
-    await runtime.close();
+    await assembly.dispose();
   }
 }
 
 async function main(): Promise<void> {
-  const configRoot = readDemoConfigRoot();
-  const moduleConfigs = await loadModuleInstanceConfigs({
-    rootDir: configRoot,
-    defaults: createFirstPartyModuleConfigDefaults("production"),
-  });
+  const moduleConfigs = createFirstPartyModuleConfigDefaults("production");
   const database = await KaguyaDatabase.connect({
     connectionString: await readDemoDatabaseUrl(),
   });

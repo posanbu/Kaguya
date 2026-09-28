@@ -24,13 +24,14 @@ export const moduleSettingsFieldSchema = z.strictObject({
 export const moduleSettingsInstanceSchema = z.strictObject({
   instanceId: z.string(),
   enabled: z.boolean(),
+  running: z.boolean(),
   revision: z.string(),
   settings: z.record(z.string(), z.unknown()),
 });
 export const moduleSettingsViewSchema = z.strictObject({
   definitionId: z.string(),
   scope: z.literal("global"),
-  effect: z.enum(["explicit_apply", "immediate"]),
+  effect: z.enum(["explicit_apply", "restart_required"]),
   fields: z.array(moduleSettingsFieldSchema),
   instances: z.array(moduleSettingsInstanceSchema),
 });
