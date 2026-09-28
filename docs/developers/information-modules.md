@@ -5,7 +5,7 @@ description: 用显式 Catalog、能力声明与 Information DAG 组合可检查
 
 # 信息模块协议与可靠消费
 
-模块通过不可变 Information Atom 协作。Catalog 声明哪些受信代码可用，activation 决定哪些实例启用以及各自的设置；新增文件不会自动取得执行权限。Server 与 Demo 共用 `@kaguya/composition` 的 `createMessageComposition()`，由它调用唯一的一方 Catalog 与 activation 工厂，并把 Catalog、activations 与宿主 capabilities 传给 `KaguyaRuntime`。第三方 Catalog 必须同样显式 import，再通过 `mergeInformationModuleCatalogs()` 合并。
+模块通过不可变 Information Atom 协作。Catalog 声明哪些受信代码可用，activation 决定哪些实例启用以及各自的设置；新增文件不会自动取得执行权限。Server 从 `cordis.yml` 发现明确启用的外部插件，将其声明与内置 Catalog 合并。Server 与 Demo 共用 `@kaguya/composition` 的 `createMessageComposition()`，把 Catalog、activations 与宿主 capabilities 传给 `KaguyaRuntime`；直接嵌入 Runtime 的调用方也可显式合并 Catalog。
 
 ## 唯一模块协议
 
@@ -123,7 +123,7 @@ pnpm --dir "$KAGUYA_CONFIG_ROOT" --ignore-workspace add \
 
 需要解释旧版本时，由插件保留旧定义，并在清单的 `compatibility` 中声明 `{ from: oldKind, to: currentKind, convert }`。宿主同时收集旧版本定义并检查持久契约。读取时调用 `readPluginInformation(plugin, atom, targetKind)`；也可用底层的 `readCompatibleInformation` 显式提供读取规则。读取器先验证旧 payload，再转换并校验当前 schema；返回冻结的 payload 投影，不替换 informationId、Kind 或任何账本记录。未声明的旧版本报错。数据库不会根据当前插件代码批量改写历史数据。
 
-`consumes` 与 `produces` 是模块 Kind 的唯一接口。Runtime 从 Catalog 中各 Manifest 的这两个字段收集定义，只单独注册 Runtime、Engine 与 Scheduler 自身拥有的基础 Kind。不要维护第二份模块 Kind 总表。
+`consumes` 与 `produces` 声明模块当前的业务 Kind 接口，插件的 `compatibility` 补充需要解释的历史版本。宿主从这些声明收集定义，只单独注册 Runtime、Engine 与 Scheduler 自身拥有的基础 Kind。不要维护第二份模块 Kind 总表。
 
 ## 能力与生命周期
 
