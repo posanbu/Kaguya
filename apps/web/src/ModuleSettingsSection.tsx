@@ -2,7 +2,7 @@
  * 功能概述：模块详情页的全局 settings 表单，控件完全由模块字段元数据生成。
  * 主要职责：ModuleSettingsSection 读取实例；InstanceEditor 保留失败草稿并发送带 revision 的完整替换。
  * 代码库关系：通过 #152 的 section 插槽接收 definitionId/token；独立客户端复用共享响应 schema。
- * 输入输出与副作用：保存只写磁盘并提示显式应用；切换模块取消读取，不自动应用配置。
+ * 输入输出与副作用：普通模块的设置与启停保存后提示显式应用；Memory/NapCat 保留重启提示；切换模块取消读取，不自动应用配置。
  */
 import "./module-editors.css";
 import { Button } from "./components/ui.js";
@@ -64,7 +64,7 @@ function SettingsLoader({ definitionId, token }: ModuleEditorProps) {
           ? "设置与启停保存后需重启生效。"
           : view?.effect === "restart_required"
             ? "设置与启停保存后需重启生效。"
-            : "设置保存后需显式应用；启停保存后需重启生效。"}
+            : "设置与启停保存后需显式应用生效。"}
       </p>
       {error ? (
         <p role="alert">{error}</p>
@@ -160,9 +160,7 @@ function InstanceEditor({
       setValues(next.settings);
       setEnabled(next.enabled);
       setNotice(
-        MEMORY_FEATURES.has(definitionId) ||
-          definitionId === "adapter.napcat" ||
-          enabled !== saved.enabled
+        MEMORY_FEATURES.has(definitionId) || definitionId === "adapter.napcat"
           ? "配置已保存。重启后生效；当前运行状态未改变。"
           : "全局配置已保存。请前往生效管理，显式应用当前配置。",
       );
