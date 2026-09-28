@@ -6,7 +6,7 @@
  * disabled 配置校验与旧 reply/outbound 配置拒绝；Profile 身份不再投影进 Router 设置。
  * 检查视图只引用 Catalog 中的模块 Kind，或由 model-task 能力及请求 Surface 明确声明的 Runtime 请求 Kind。
  * 代码库关系：直接约束 catalog 工厂以及 heavy 模块的公开 settings schema。
- * 输入输出与副作用：纯内存组装，不连接模型或数据库；错误包含重新初始化说明。
+ * 输入输出与副作用：纯内存组装，不连接模型或数据库；错误不包含设置值。
  */
 import { loadFirstPartyPromptTemplates } from "../node/prompt-templates.js";
 const testPrompts = loadFirstPartyPromptTemplates();
@@ -200,8 +200,14 @@ describe("first-party module configuration", () => {
   it.each([
     { instanceId: "reply.default", definitionId: "demo.reply.llm" },
     { instanceId: "heartflow.default", definitionId: "agent.heartflow.online" },
-    { instanceId: "message-composer.default", definitionId: "agent.message-composer" },
-    { instanceId: "attention-focus.default", definitionId: "agent.attention.focus" },
+    {
+      instanceId: "message-composer.default",
+      definitionId: "agent.message-composer",
+    },
+    {
+      instanceId: "attention-focus.default",
+      definitionId: "agent.attention.focus",
+    },
     { settings: { modelTier: "heavy" } },
     {
       settings: {
@@ -220,18 +226,17 @@ describe("first-party module configuration", () => {
         },
       },
     },
-  ])(
-    "rejects legacy configuration with reinitialization guidance",
-    (legacy) => {
-      const defaults = createFirstPartyModuleConfigDefaults();
-      expect(() =>
-        createFirstPartyModuleActivations(catalog(), [
-          { ...defaults[0]!, ...legacy, enabled: false },
-          ...defaults.slice(1),
-        ]),
-      ).toThrow(/Reinitialize module configuration|Unknown module definition/);
-    },
-  );
+  ])("rejects invalid module configuration", (legacy) => {
+    const defaults = createFirstPartyModuleConfigDefaults();
+    expect(() =>
+      createFirstPartyModuleActivations(catalog(), [
+        { ...defaults[0]!, ...legacy, enabled: false },
+        ...defaults.slice(1),
+      ]),
+    ).toThrow(
+      /Unknown module configuration|Unknown module definition|Module settings failed validation/,
+    );
+  });
 
   it("exposes only the message intent protocol across catalog definitions", () => {
     const definitions = catalog().definitions;

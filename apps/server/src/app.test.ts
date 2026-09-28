@@ -88,7 +88,7 @@ function authorization(scheme = "Bearer") {
 }
 
 describe("application API gateway", () => {
-  it("returns NapCat activation failure without changing settings and accepts retry", async () => {
+  it("saves NapCat settings for restart without activating the adapter", async () => {
     const root = await mkdtemp(join(tmpdir(), "kaguya-napcat-api-"));
     let app: Awaited<ReturnType<typeof createHttpApplication>> | undefined;
     try {
@@ -99,13 +99,10 @@ describe("application API gateway", () => {
         initialize: true,
       });
       const configuration = await createConfigurationManagement(root);
-      const activateNapCat = vi.fn(async () => {});
       const featureManagement = new FeatureManagement({
         rootDir: root,
         defaults,
         exclusive: (operation) => operation(),
-        activateMemory: async () => {},
-        activateNapCat,
         activeMemory: () => [],
         napCatLifecycle: () => ({
           lifecycle: "stopped",
@@ -131,26 +128,6 @@ describe("application API gateway", () => {
         accessToken: "fake-napcat-token",
         reconnectMs: 4000,
       };
-      activateNapCat.mockRejectedValueOnce(new Error("adapter failed"));
-      const failed = await app.inject({
-        method: "PUT",
-        url: "/api/v1/napcat",
-        headers: authorization(),
-        payload,
-      });
-      expect(failed.statusCode).toBe(503);
-      expect(failed.json()).toMatchObject({
-        error: { code: "feature_activation_failed" },
-      });
-      const unchanged = await app.inject({
-        url: "/api/v1/napcat",
-        headers: authorization(),
-      });
-      expect(unchanged.json().data).toMatchObject({
-        enabled: false,
-        reconnectMs: 3000,
-        revision: payload.revision,
-      });
       const saved = await app.inject({
         method: "PUT",
         url: "/api/v1/napcat",
@@ -159,10 +136,9 @@ describe("application API gateway", () => {
       });
       expect(saved.statusCode).toBe(200);
       expect(saved.json().data).toMatchObject({
-        restartRequired: false,
+        restartRequired: true,
         status: { enabled: false, reconnectMs: 4000 },
       });
-      expect(activateNapCat).toHaveBeenCalledTimes(2);
     } finally {
       await app?.close();
       await rm(root, { recursive: true, force: true });

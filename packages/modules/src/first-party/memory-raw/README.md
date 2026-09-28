@@ -14,7 +14,7 @@
 
 ## Settings
 
-模块使用严格空设置。工作区 `memory.raw` 实例的 `enabled` 控制即时开关；未完成的 native/mem0 没有 provider 设置。
+模块使用严格空设置。工作区 `memory.raw` 实例由 `cordis.yml` 的 `disabled` 控制，重启后生效；未完成的 native/mem0 没有 provider 设置。
 
 ## 可靠性、幂等和失败行为
 

@@ -1,5 +1,5 @@
 /**
- * 功能概述：工作台概览展示基础设施状态，并提供 Memory 与 NapCat 的即时开关。
+ * 功能概述：工作台概览展示基础设施状态，并提供 Memory 与 NapCat 的待重启开关。
  * 主要职责：Overview 读取安全接入快照和当前 Profile 的脱敏 Memory 存储摘要；
  * OverviewTile 用等尺寸图标、核心状态和紧凑元数据表达就绪度。
  * useRead 在重试、Token 变化及卸载时丢弃过期结果。
@@ -137,18 +137,20 @@ function FeatureTile({
   onDetails: () => void;
   meta?: string;
 }) {
-  const blocked = !!feature?.blocker && !feature.enabled;
+  const blocked = feature?.blocker === "recovery_failed";
   const status = !feature
     ? "读取中"
     : busy
       ? "切换中"
       : feature.lifecycle === "retrying"
         ? "已开启，重连中"
-        : feature.active
-          ? "运行中"
-          : feature.enabled
-            ? "启动失败"
-            : "已关闭";
+        : feature.enabled !== feature.active
+          ? "待重启生效"
+          : feature.active
+            ? "运行中"
+            : feature.enabled
+              ? "启动失败"
+              : "已关闭";
   return (
     <article
       className={`overview-tile overview-feature-tile overview-tile-${feature?.active ? "success" : feature?.enabled ? "error" : "neutral"}`}
@@ -180,7 +182,13 @@ function FeatureTile({
         </button>
       </div>
       {meta && <span className="overview-tile-meta">{meta}</span>}
-      {blocked && <span className="overview-tile-meta">先开启原始记忆</span>}
+      {feature && (
+        <span className="overview-tile-meta">
+          期望：{feature.enabled ? "开启" : "关闭"} · 当前：
+          {feature.active ? "运行" : "未运行"}
+        </span>
+      )}
+      {blocked && <span className="overview-tile-meta">请检查配置状态</span>}
     </article>
   );
 }

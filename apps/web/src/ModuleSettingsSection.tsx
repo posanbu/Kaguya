@@ -61,8 +61,10 @@ function SettingsLoader({ definitionId, token }: ModuleEditorProps) {
       <p>
         全局模块配置：不随顶栏 Profile 切换。
         {MEMORY_FEATURES.has(definitionId)
-          ? "设置保存后立即应用；启停与概览同步。"
-          : "其他模块保存后需在生效管理中显式应用。"}
+          ? "设置与启停保存后需重启生效。"
+          : view?.effect === "restart_required"
+            ? "设置与启停保存后需重启生效。"
+            : "设置保存后需显式应用；启停保存后需重启生效。"}
       </p>
       {error ? (
         <p role="alert">{error}</p>
@@ -158,9 +160,11 @@ function InstanceEditor({
       setValues(next.settings);
       setEnabled(next.enabled);
       setNotice(
-        MEMORY_FEATURES.has(definitionId)
-          ? "配置已保存并应用。"
-          : "全局配置已保存。请前往生效管理，显式应用当前配置；运行实例尚未改变。",
+        MEMORY_FEATURES.has(definitionId) ||
+          definitionId === "adapter.napcat" ||
+          enabled !== saved.enabled
+          ? "配置已保存。重启后生效；当前运行状态未改变。"
+          : "全局配置已保存。请前往生效管理，显式应用当前配置。",
       );
       if (MEMORY_FEATURES.has(definitionId))
         window.dispatchEvent(new Event(FEATURE_CHANGED_EVENT));
@@ -225,6 +229,10 @@ function InstanceEditor({
             配置启用状态
           </label>
         )}
+        <small>
+          期望：{saved.enabled ? "开启" : "关闭"} · 当前：
+          {saved.running ? "运行" : "未运行"}
+        </small>
         {fields.length === 0 && <p>无需配置 settings 字段。</p>}
         {fields.map((field) => (
           <div key={field.key}>
@@ -332,15 +340,19 @@ function MemoryModuleSwitch({
           role="switch"
           checked={feature?.enabled ?? false}
           disabled={
-            !feature || busy || dirty || (!!feature.blocker && !feature.enabled)
+            !feature || busy || dirty || feature.blocker === "recovery_failed"
           }
           onChange={(event) => void change(event.target.checked)}
         />
         启用此模块
       </label>
       {dirty && <small>请先保存当前设置再切换。</small>}
-      {feature?.enabled && !feature.active && (
-        <small>模块未运行，请检查配置或 Runtime 状态。</small>
+      {feature && (
+        <small>
+          期望：{feature.enabled ? "开启" : "关闭"} · 当前：
+          {feature.active ? "运行" : "未运行"}
+          {feature.enabled !== feature.active ? "；重启后生效" : ""}
+        </small>
       )}
       {error && <p role="alert">{error}</p>}
     </div>

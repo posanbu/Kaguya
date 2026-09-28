@@ -5,7 +5,7 @@
  * 写入完整默认配置；configPath 和 assertUniqueDefaults 拒绝越界路径及重复实例。
  * 代码库关系：Server 传入 first-party Catalog 默认实例，模块 settings 由 Catalog 二次严格校验。
  * initialize=false 用于热应用状态检查，目录缺失时仅报错而不写默认值。
- * 输入输出与副作用：读写敏感 JSON；已有目录不自动迁移或修复，旧实例及损坏配置报错并提示重新初始化。
+ * 输入输出与副作用：读写敏感 JSON；已有目录不自动补齐，格式或身份错误按配置校验失败处理。
  */
 import { lstat, readdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -13,6 +13,12 @@ import { join } from "node:path";
 import { z } from "zod";
 
 import { ConfigError } from "./errors.js";
+import {
+  loadCordisTree,
+  moduleEnabled,
+  validateCordisTree,
+  type CordisPluginTree,
+} from "./cordis-tree.js";
 import { jsonObjectSchema, type JsonObject } from "./model.js";
 import {
   assertPathInside,
@@ -27,30 +33,53 @@ export const moduleInstanceConfigSchema = z.strictObject({
   version: z.literal(1),
   instanceId: instanceIdSchema,
   definitionId: z.string().trim().min(1),
-  enabled: z.boolean(),
   settings: jsonObjectSchema,
 });
 
-export type ModuleInstanceConfig = z.infer<typeof moduleInstanceConfigSchema>;
+export type StoredModuleInstanceConfig = z.infer<
+  typeof moduleInstanceConfigSchema
+>;
+export type ModuleInstanceConfig = StoredModuleInstanceConfig & {
+  readonly enabled: boolean;
+};
 
 export async function loadModuleInstanceConfigs(options: {
   readonly rootDir: string;
   readonly initialize?: boolean;
   readonly defaults: readonly ModuleInstanceConfig[];
+  readonly treeSnapshot?: CordisPluginTree;
 }): Promise<readonly ModuleInstanceConfig[]> {
   const modulesRoot = join(options.rootDir, "modules");
   assertPathInside(options.rootDir, modulesRoot);
   assertUniqueDefaults(options.defaults);
 
-  if (!(await pathExists(modulesRoot))) {
+  const modulesExist = await pathExists(modulesRoot);
+  const treeExists =
+    options.treeSnapshot !== undefined ||
+    (await pathExists(join(options.rootDir, "cordis.yml")));
+  if (modulesExist !== treeExists) throw corrupt("Configuration is incomplete");
+  const tree = options.treeSnapshot
+    ? validateCordisTree(options.treeSnapshot, options.defaults)
+    : await loadCordisTree({
+        rootDir: options.rootDir,
+        modules: options.defaults,
+        initialize: !modulesExist && options.initialize !== false,
+      });
+  if (!modulesExist) {
     if (options.initialize === false)
       throw corrupt("Module configuration is missing");
     await ensureSensitiveDirectory(modulesRoot);
     for (const config of options.defaults) {
       const path = configPath(modulesRoot, config.instanceId);
-      await writeSensitiveJson(path, moduleInstanceConfigSchema.parse(config));
+      await writeSensitiveJson(
+        path,
+        moduleInstanceConfigSchema.parse(withoutEnabled(config)),
+      );
     }
-    return options.defaults.map((config) => structuredClone(config));
+    return options.defaults.map((config) => ({
+      ...structuredClone(config),
+      enabled: moduleEnabled(tree, config.instanceId),
+    }));
   }
 
   const stats = await lstat(modulesRoot);
@@ -94,7 +123,10 @@ export async function loadModuleInstanceConfigs(options: {
     ) {
       throw corrupt("Module configuration failed validation");
     }
-    result.push(parsed.data);
+    result.push({
+      ...parsed.data,
+      enabled: moduleEnabled(tree, parsed.data.instanceId),
+    });
   }
   return result;
 }
@@ -104,7 +136,7 @@ export async function writeModuleInstanceConfig(
   rootDir: string,
   config: ModuleInstanceConfig,
 ): Promise<void> {
-  const parsed = moduleInstanceConfigSchema.parse(config);
+  const parsed = moduleInstanceConfigSchema.parse(withoutEnabled(config));
   const root = join(rootDir, "modules");
   assertPathInside(rootDir, root);
   const path = configPath(root, parsed.instanceId);
@@ -122,6 +154,13 @@ export async function writeModuleInstanceConfig(
   await writeSensitiveJson(path, parsed);
 }
 
+function withoutEnabled(
+  config: ModuleInstanceConfig,
+): StoredModuleInstanceConfig {
+  const { enabled: _enabled, ...stored } = config;
+  return stored;
+}
+
 function configPath(modulesRoot: string, instanceId: string): string {
   const path = join(modulesRoot, instanceId, "config.json");
   assertPathInside(modulesRoot, path);
@@ -131,7 +170,7 @@ function configPath(modulesRoot: string, instanceId: string): string {
 function assertUniqueDefaults(defaults: readonly ModuleInstanceConfig[]): void {
   const ids = new Set<string>();
   for (const item of defaults) {
-    const parsed = moduleInstanceConfigSchema.safeParse(item);
+    const parsed = moduleInstanceConfigSchema.safeParse(withoutEnabled(item));
     if (!parsed.success || ids.has(item.instanceId)) {
       throw new ConfigError("CONFIG_INVALID_INPUT", "Invalid module defaults");
     }
@@ -157,9 +196,5 @@ async function pathExists(path: string): Promise<boolean> {
 }
 
 function corrupt(message: string, cause?: unknown): ConfigError {
-  return new ConfigError(
-    "CONFIG_CORRUPT_STORE",
-    `${message}. Reinitialize module configuration.`,
-    { cause },
-  );
+  return new ConfigError("CONFIG_CORRUPT_STORE", message, { cause });
 }

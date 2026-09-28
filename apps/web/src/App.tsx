@@ -1387,8 +1387,8 @@ function AdapterManagementSection({
           <Dialog.Content className="wb-dialog napcat-dialog">
             <Dialog.Title>配置 NapCat</Dialog.Title>
             <Dialog.Description>
-              填写 NapCat OneBot 正向
-              WebSocket（服务器）参数。保存后适配器会重新连接。
+              填写 NapCat OneBot 正向 WebSocket（服务器）参数。保存后重启
+              Kaguya，适配器才会使用新设置。
             </Dialog.Description>
             {error ? <FieldMessage tone="error">{error}</FieldMessage> : null}
             {loading ? (

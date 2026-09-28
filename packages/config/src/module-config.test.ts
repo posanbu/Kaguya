@@ -1,6 +1,6 @@
 /**
  * 功能概述：验证模块配置首次落盘与已有配置的拒绝策略。
- * 主要职责：覆盖只读状态查询不初始化配置、heavy 默认实例、版本/身份校验、旧 reply 配置重新初始化提示及原文件保留。
+ * 主要职责：覆盖只读状态查询不初始化配置、默认实例、版本/身份及插件树校验。
  * 代码库关系：直接调用 module-config 的加载器与信封 schema，使用临时目录模拟 Server 配置根。
  * 输入输出与副作用：仅写测试临时目录，afterEach 清理；错误不得悄悄重写用户配置。
  */
@@ -40,6 +40,12 @@ const defaults: readonly ModuleInstanceConfig[] = [
     settings: { interruptQuietMs: 1000 },
   },
 ];
+const storedHeavy = {
+  version: 1 as const,
+  instanceId: "heavy.default",
+  definitionId: "agent.heavy",
+  settings: {},
+};
 
 afterEach(async () => {
   await Promise.all(
@@ -64,7 +70,15 @@ describe("module instance configuration", () => {
           "utf8",
         ),
       ),
-    ).toEqual(defaults[0]);
+    ).toEqual({
+      version: 1,
+      instanceId: "heavy.default",
+      definitionId: "agent.heavy",
+      settings: {},
+    });
+    expect(await readFile(join(rootDir, "cordis.yml"), "utf8")).toContain(
+      "module.heavy.default",
+    );
     await expect(
       loadModuleInstanceConfigs({ rootDir, defaults }),
     ).resolves.toEqual(defaults);
@@ -91,7 +105,6 @@ describe("module instance configuration", () => {
         loadModuleInstanceConfigs({ rootDir, defaults }),
       ).rejects.toMatchObject({
         code: "CONFIG_CORRUPT_STORE",
-        message: expect.stringContaining("Reinitialize module configuration"),
       });
       expect(await readdir(join(rootDir, "modules"))).not.toContain(
         "heavy.default",
@@ -100,24 +113,24 @@ describe("module instance configuration", () => {
   );
 
   it.each([
-    ["legacy definition", { ...defaults[0], definitionId: "demo.reply.llm" }],
+    ["legacy definition", { ...storedHeavy, definitionId: "demo.reply.llm" }],
     [
       "legacy memory definition",
-      { ...defaults[0], definitionId: "core.identity.normalize" },
+      { ...storedHeavy, definitionId: "core.identity.normalize" },
     ],
-    ["wrong version", { ...defaults[0], version: 2 }],
+    ["wrong version", { ...storedHeavy, version: 2 }],
+    ["old enabled field", { ...storedHeavy, enabled: true }],
     [
       "missing settings",
       {
         version: 1,
         instanceId: "heavy.default",
         definitionId: "agent.heavy",
-        enabled: true,
       },
     ],
     [
       "mismatched identity",
-      { ...defaults[0], instanceId: "heartbeat.default" },
+      { ...storedHeavy, instanceId: "heartbeat.default" },
     ],
   ])("rejects %s without repairing the file", async (_label, invalid) => {
     const rootDir = await createRoot();
@@ -129,7 +142,6 @@ describe("module instance configuration", () => {
       loadModuleInstanceConfigs({ rootDir, defaults }),
     ).rejects.toMatchObject({
       code: "CONFIG_CORRUPT_STORE",
-      message: expect.stringContaining("Reinitialize module configuration"),
     });
     expect(await readFile(path, "utf8")).toBe(serialized);
   });
@@ -137,7 +149,9 @@ describe("module instance configuration", () => {
   it("rejects unsafe and duplicate default identities", async () => {
     expect(
       moduleInstanceConfigSchema.safeParse({
-        ...defaults[0],
+        version: 1,
+        definitionId: "agent.heavy",
+        settings: {},
         instanceId: "../reply",
       }).success,
     ).toBe(false);

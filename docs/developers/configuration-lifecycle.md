@@ -47,7 +47,7 @@ Runtime 原因限定为 configuration_not_ready、database_unavailable、runtime
 
 ## 为什么只使用 selected Profile
 
-Registry 可以保存多个 Profile，但 Server 只用一个显式 selected Profile 装配全局 Runtime。数据库、Server runtime、模型路由、`memory.enabled` 和平台都在这一步冻结；模块实例则从配置根的 `modules/` 独立加载。Server 不会因为模型调用失败而自动切换，也不会根据单条消息隐式选择其他 Profile。
+Registry 可以保存多个 Profile，但 Server 只用一个显式 selected Profile 装配全局 Runtime。启动时校验并冻结 `cordis.yml` 内置插件树，实例身份与设置从 `modules/` 加载；禁用实例仍保留其内置 Kind 定义。Server 不会因为模型调用失败而自动切换，也不会根据单条消息隐式选择其他 Profile。
 
 这种约束避免同一进程中同时出现不可追踪的 Provider、密钥和模型路由。模块若支持显式 `profileId`，仍必须通过受控的 resolver，而不是自行读取配置文件。
 
@@ -55,7 +55,7 @@ Registry 可以保存多个 Profile，但 Server 只用一个显式 selected Pro
 
 创建或编辑 Profile 只持久化配置；切换 selected Profile 只改变下一次要应用的方案。顶栏的编辑对象与全局 selected Profile 也不是同一状态。
 
-`ConfigurationApplicationCoordinator` 记录已选中与已生效版本。显式应用时，在配置写锁内校验 revision、预检新配置、停止旧运行实例并启动新实例。模型、Memory、平台、白名单和模块参数可通过这条路径更新；消息入口在切换期间短暂暂停，Gateway Token 不变。
+`ConfigurationApplicationCoordinator` 记录已选中与已生效版本。显式应用时，在配置写锁内校验 revision、预检新配置，由 Cordis 卸载并重建 Runtime/Adapter 子树。模型、白名单和普通模块参数可通过这条路径更新；消息入口在切换期间短暂暂停，HTTP 与 Gateway Token 不变。应用沿用本次启动的插件树快照，不读取磁盘上的新启停状态。
 
 应用失败会尝试恢复旧快照；关闭失败或回滚失败时保持降级，不能把保存成功当成应用成功。操作步骤见[配置概览](../guide/configuration#保存后怎样生效)。
 
@@ -64,6 +64,8 @@ Registry 可以保存多个 Profile，但 Server 只用一个显式 selected Pro
 `host`、`port`、`databaseMode`、`databaseUrl`、`webDistPath`、`corsOrigins`、`trustProxy`、限流和日志字段属于进程参数。应用协调器发现变化时返回 `restart_required` 和字段名，不热替换这些资源。
 
 名称、别名、人设及其他 Prompt local 文件保存后也需要重启，不能仅应用 Profile。重启会生成新 Gateway Token。
+
+模块启停只写 `cordis.yml`，Memory 与 NapCat 的设置只写实例文件；这些变更均在重启后生效。其他模块的纯设置变更继续由显式应用生效。管理界面分别显示期望状态与当前运行状态。
 
 ## Readiness 的含义
 
@@ -77,9 +79,9 @@ Gateway allowlist 是 `platform:group|private:target_id` 字符串数组。平�
 
 ## 资源创建与关闭
 
-Server 先创建 AdapterHost，再独立检查 AI 与数据库。满足条件时由 Host 注册 transport 并启动 Runtime；下游失败后清理部分资源，清理异常不阻止降级启动。显式应用通过协调器切换运行实例及其 ingress。
+Server 校验整棵插件树后冻结共享 Catalog，再独立检查 AI 与数据库。满足条件时由 AdapterHost 注册 transport 并启动 Runtime；下游失败后清理部分资源，清理异常不阻止降级启动。显式应用通过协调器切换 Runtime/Adapter 子树及其 ingress。
 
-关闭先将 ingress 标为 stopping，再停止 HTTP 和全部 Adapter；随后排空 Runtime、关闭数据库与 Web 资源，最后关闭 Logger。单项失败不跳过其他清理。应用暂停期间不应把请求失败当成已接收；修复后按应用结果继续处理。
+关闭先将 ingress 标为 stopping，再由 Cordis 逆依赖释放 Web UI、HTTP、Runtime、Adapter、数据库和 Logger。Runtime 关闭时排空已接收工作；单项失败不跳过其他清理。应用暂停期间不应把请求失败当成已接收；修复后按应用结果继续处理。
 
 ## 安全边界
 

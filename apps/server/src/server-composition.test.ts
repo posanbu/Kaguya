@@ -42,7 +42,12 @@ import {
   UnsupportedDatabaseSchemaError,
 } from "@kaguya/database";
 import { createTestingDatabase } from "@kaguya/database/testing";
-import { FileUserConfigManager } from "@kaguya/config";
+import {
+  FileUserConfigManager,
+  loadModuleInstanceConfigs,
+  writeCordisModuleEnabled,
+  writeModuleInstanceConfig,
+} from "@kaguya/config";
 import { closeLogger, createLogger, createModuleLogger } from "@kaguya/logger";
 import { createRepeatingDeterministicModel } from "@kaguya/llm/testing";
 import { createFirstPartyModuleConfigDefaults } from "@kaguya/modules";
@@ -109,6 +114,33 @@ function tempWorkspaceRoot(): string {
   const root = mkdtempSync(join(tmpdir(), "kaguya-server-composition-"));
   roots.push(root);
   return root;
+}
+
+async function bootstrapWithModules(
+  rootDir: string,
+): Promise<FileUserConfigManager> {
+  const manager = await FileUserConfigManager.bootstrap({ rootDir });
+  await loadModuleInstanceConfigs({
+    rootDir,
+    defaults: createFirstPartyModuleConfigDefaults(),
+  });
+  return manager;
+}
+
+async function enableNapCat(
+  rootDir: string,
+  settings: Record<string, unknown> = {},
+): Promise<void> {
+  const defaults = createFirstPartyModuleConfigDefaults();
+  const configs = await loadModuleInstanceConfigs({ rootDir, defaults });
+  const current = configs.find(
+    (item) => item.definitionId === "adapter.napcat",
+  )!;
+  await writeModuleInstanceConfig(rootDir, {
+    ...current,
+    settings: { reconnectMs: 3000, ...settings },
+  });
+  await writeCordisModuleEnabled(rootDir, defaults, current.instanceId, true);
 }
 
 function config(workspaceRoot: string): ServerConfig {
@@ -431,7 +463,7 @@ describe("unified server composition", () => {
   it("connects the information database once and redacts credentials from startup errors", async () => {
     const root = mkdtempSync(join(tmpdir(), "kaguya-database-startup-"));
     roots.push(root);
-    const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+    const manager = await bootstrapWithModules(root);
     const selectedProfileId = manager.getSelectedProfileId();
     await manager.replaceProfile(
       selectedProfileId,
@@ -486,7 +518,7 @@ describe("unified server composition", () => {
   it("redacts credentials when the first database I/O fails during Runtime startup", async () => {
     const root = mkdtempSync(join(tmpdir(), "kaguya-database-prepare-"));
     roots.push(root);
-    const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+    const manager = await bootstrapWithModules(root);
     const selectedProfileId = manager.getSelectedProfileId();
     await manager.replaceProfile(
       selectedProfileId,
@@ -541,7 +573,7 @@ describe("unified server composition", () => {
 
   it("treats an incompatible database schema as fatal before listening", async () => {
     const root = tempWorkspaceRoot();
-    const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+    const manager = await bootstrapWithModules(root);
     await manager.replaceProfile(
       manager.getSelectedProfileId(),
       readyProfileReplacement(
@@ -569,7 +601,7 @@ describe("unified server composition", () => {
   it("classifies non-database Runtime startup failures without leaking their details", async () => {
     const root = mkdtempSync(join(tmpdir(), "kaguya-runtime-startup-"));
     roots.push(root);
-    const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+    const manager = await bootstrapWithModules(root);
     const selectedProfileId = manager.getSelectedProfileId();
     await manager.replaceProfile(
       selectedProfileId,
@@ -619,7 +651,7 @@ describe("unified server composition", () => {
       join(tmpdir(), "kaguya-selected-profile-startup-"),
     );
     roots.push(root);
-    const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+    const manager = await bootstrapWithModules(root);
     const selectedProfileId = manager.getSelectedProfileId();
     await manager.replaceProfile(
       selectedProfileId,
@@ -661,7 +693,7 @@ describe("unified server composition", () => {
     "checks the database independently when AI is incomplete (database failure: %s)",
     async (databaseFails) => {
       const root = tempWorkspaceRoot();
-      await FileUserConfigManager.bootstrap({ rootDir: root });
+      await bootstrapWithModules(root);
       const webDistPath = join(root, "web");
       mkdirSync(webDistPath, { recursive: true });
       writeFileSync(join(webDistPath, "index.html"), "<main>Kaguya</main>");
@@ -677,17 +709,13 @@ describe("unified server composition", () => {
       const startAdapter = vi
         .spyOn(NapCatConnectionSupervisor.prototype, "start")
         .mockResolvedValue();
+      await enableNapCat(root, { wsUrl: "ws://localhost:3001" });
       const serverConfig = config(root);
       const server = await startKaguyaServer({
         ...serverConfig,
         configRoot: root,
         webDistPath,
         port: 0,
-        napcat: {
-          ...serverConfig.napcat,
-          enabled: true,
-          wsUrl: "ws://localhost:3001",
-        },
       });
       try {
         expect(connect).toHaveBeenCalledOnce();
@@ -715,7 +743,7 @@ describe("unified server composition", () => {
 
   it("keeps Runtime and Web running with invalid NapCat configuration and drains after stopping ingress", async () => {
     const root = tempWorkspaceRoot();
-    const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+    const manager = await bootstrapWithModules(root);
     await manager.replaceProfile(
       "default",
       readyProfileReplacement(
@@ -728,17 +756,13 @@ describe("unified server composition", () => {
     writeFileSync(join(webDistPath, "index.html"), "<main>Kaguya</main>");
     const database = await createTestingDatabase();
     vi.spyOn(KaguyaDatabase, "connect").mockResolvedValueOnce(database);
+    await enableNapCat(root);
     const serverConfig = config(root);
     const server = await startKaguyaServer({
       ...serverConfig,
       configRoot: root,
       webDistPath,
       port: 0,
-      napcat: {
-        ...serverConfig.napcat,
-        enabled: true,
-        configurationError: "configuration_invalid",
-      },
     });
     expect(server.runtime).toBeDefined();
     expect(server.adapterHost.status().adapters).toEqual(
@@ -773,7 +797,7 @@ describe("unified server composition", () => {
 
   it("retains failed cleanup resources for the final shutdown attempt", async () => {
     const root = tempWorkspaceRoot();
-    const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+    const manager = await bootstrapWithModules(root);
     await manager.replaceProfile(
       "default",
       readyProfileReplacement(
@@ -882,16 +906,14 @@ describe("unified server composition", () => {
       rootLogger,
     );
     const serverConfig = config(root);
+    await enableNapCat(serverConfig.configRoot, {
+      wsUrl: "ws://127.0.0.1:3001",
+    });
 
     const server = await startKaguyaServer({
       ...serverConfig,
       webDistPath,
       port: 0,
-      napcat: {
-        ...serverConfig.napcat,
-        enabled: true,
-        wsUrl: "ws://127.0.0.1:3001",
-      },
     });
     expect(server.adapterHost.status().adapters).toEqual(
       expect.arrayContaining([
@@ -911,7 +933,7 @@ describe("unified server composition", () => {
   it("creates a heavy/light resolver from frozen profile configuration", async () => {
     const root = mkdtempSync(join(tmpdir(), "kaguya-profile-resolver-"));
     roots.push(root);
-    const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+    const manager = await bootstrapWithModules(root);
     await manager.replaceProfile(
       manager.getSelectedProfileId(),
       readyProfileReplacement(
@@ -948,7 +970,7 @@ describe("unified server composition", () => {
   it("freezes the selected profile even if the registry selection changes later", async () => {
     const root = mkdtempSync(join(tmpdir(), "kaguya-profile-resolver-"));
     roots.push(root);
-    const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+    const manager = await bootstrapWithModules(root);
     await manager.replaceProfile(
       manager.getSelectedProfileId(),
       readyProfileReplacement(
@@ -1001,7 +1023,7 @@ describe("unified server composition", () => {
     async ({ supportsStructuredOutputs, structuredOutputMode }) => {
       const root = mkdtempSync(join(tmpdir(), "kaguya-profile-resolver-"));
       roots.push(root);
-      const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+      const manager = await bootstrapWithModules(root);
       await manager.replaceProfile(manager.getSelectedProfileId(), {
         name: "default",
         acknowledgedWarnings: [],
@@ -1081,7 +1103,7 @@ describe("unified server composition", () => {
 
   it("uses the selected tier provider capability without inheriting the default provider capability", async () => {
     const root = tempWorkspaceRoot();
-    const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+    const manager = await bootstrapWithModules(root);
     const settings = readyProfileSettings("light-model", "heavy-model");
     await manager.replaceProfile(manager.getSelectedProfileId(), {
       ...readyProfileReplacement("default", settings),
@@ -1125,7 +1147,7 @@ describe("unified server composition", () => {
   it("rejects an incomplete selected profile before creating provider clients", async () => {
     const root = mkdtempSync(join(tmpdir(), "kaguya-incomplete-profile-"));
     roots.push(root);
-    const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+    const manager = await bootstrapWithModules(root);
     vi.mocked(createOpenAICompatible).mockClear();
     const profile = await manager.getProfile(manager.getSelectedProfileId());
 
@@ -1138,7 +1160,7 @@ describe("unified server composition", () => {
   it("rejects profile overrides at the module boundary and resolver call site", async () => {
     const root = mkdtempSync(join(tmpdir(), "kaguya-profile-resolver-"));
     roots.push(root);
-    const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+    const manager = await bootstrapWithModules(root);
     await manager.replaceProfile(
       manager.getSelectedProfileId(),
       readyProfileReplacement(

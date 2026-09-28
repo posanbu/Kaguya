@@ -10,7 +10,11 @@ import { mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { FileUserConfigManager } from "@kaguya/config";
+import {
+  FileUserConfigManager,
+  loadModuleInstanceConfigs,
+} from "@kaguya/config";
+import { createFirstPartyModuleConfigDefaults } from "@kaguya/modules";
 import { KaguyaDatabase } from "@kaguya/database";
 import { createTestingDatabase } from "@kaguya/database/testing";
 import { KaguyaRuntime } from "@kaguya/runtime";
@@ -55,6 +59,10 @@ async function fixture(incomplete = false) {
   const root = await mkdtemp(join(tmpdir(), "kaguya-reload-"));
   cleanup.push(() => rm(root, { recursive: true, force: true }));
   const manager = await FileUserConfigManager.bootstrap({ rootDir: root });
+  await loadModuleInstanceConfigs({
+    rootDir: root,
+    defaults: createFirstPartyModuleConfigDefaults(),
+  });
   const profile = await manager.getProfile("default");
   const web = join(root, "web");
   await mkdir(web);
@@ -221,6 +229,56 @@ it("replaces downstream instances while retaining HTTP, authentication, database
     await f.server.app.inject({ url: "/api/v1/profiles", headers })
   ).json().data;
   expect(list.status).toBe("ready");
+});
+
+it("keeps a saved module switch pending through Profile apply and activates it after restart", async () => {
+  const f = await fixture();
+  const first = (
+    await f.server.app.inject({ url: "/api/v1/features", headers })
+  ).json().data;
+  const changed = await f.server.app.inject({
+    method: "PUT",
+    url: "/api/v1/features/memory.raw",
+    headers,
+    payload: { enabled: true, revision: first.revision },
+  });
+  expect(changed.statusCode).toBe(200);
+  expect(
+    changed
+      .json()
+      .data.features.find((item: { id: string }) => item.id === "memory.raw"),
+  ).toMatchObject({
+    enabled: true,
+    active: false,
+    blocker: "restart_required",
+  });
+  const saved = await save(f.server);
+  expect((await apply(f.server, saved.application)).statusCode).toBe(200);
+  expect(
+    f.server
+      .runtime!.inspectModules()
+      .some(
+        (item) =>
+          item.definitionId === "memory.raw" && item.bindings.length > 0,
+      ),
+  ).toBe(false);
+  await f.server.close();
+  const profile = await f.manager.getProfile("default");
+  const nextConfig = createServerConfig(
+    profile,
+    { configRoot: f.root, development: false },
+    () => "test-reload-gateway-token",
+  );
+  const restarted = await startKaguyaServer({ ...nextConfig, port: 0 });
+  cleanup.push(() => restarted.close());
+  expect(
+    restarted
+      .runtime!.inspectModules()
+      .some(
+        (item) =>
+          item.definitionId === "memory.raw" && item.bindings.length > 0,
+      ),
+  ).toBe(true);
 });
 
 it("keeps a saved person profile pending across configuration hot apply", async () => {
@@ -684,7 +742,10 @@ it("keeps independent directional policies pending until explicit application", 
   expect(await outboundStatus("100")).toBe("resolved");
   expect(
     await f.databases[0]!.information.find({
-      kinds: ["core.message.inbound.text", "agent.router.turn.context.completed"],
+      kinds: [
+        "core.message.inbound.text",
+        "agent.router.turn.context.completed",
+      ],
       limit: 10,
     }),
   ).toEqual([]);

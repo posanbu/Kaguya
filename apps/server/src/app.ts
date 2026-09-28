@@ -905,7 +905,7 @@ export async function createHttpApplication(
       onRequest: requireGatewayToken(options, "management"),
       schema: {
         tags: ["Features"],
-        summary: "Switch one feature and apply it immediately",
+        summary: "Save the desired feature state for the next restart",
         params: {
           type: "object",
           required: ["featureId"],
@@ -1015,7 +1015,7 @@ export async function createHttpApplication(
       return {
         data: {
           status: { ...toNapCatStatus(settings), revision: result.revision },
-          restartRequired: false,
+          restartRequired: true,
         },
       };
     },

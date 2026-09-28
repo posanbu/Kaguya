@@ -4,7 +4,7 @@
  * 主要职责：createFirstPartyModuleCatalog 接收宿主 Model Task token 和共享 completed kind，构造身份、时机与消息合成定义；
  * createFirstPartyModuleConfigDefaults 提供首次落盘模板，createFirstPartyModuleActivations
  * 同时提供 memory.raw 定义及未完成的 native/mem0 目录项；
- * 严格校验已加载的实例文件，拒绝旧回复配置并提示重新初始化，与“可发现”的 Catalog 分开。
+ * 严格校验已加载的实例文件，与“可发现”的 Catalog 分开。
  * 代码库关系：Server、Demo 和测试组合入口传入 Runtime 的实际 token/definition；工厂仅依赖模块侧
  * 结构类型，保留 completed payload 泛型与对象身份，避免 modules 反向依赖 Runtime。
  * 模板正文由 composition 分别注入 Heavy、Light 与 Expression，默认值与本地覆盖统一在 Node 加载器选择。
@@ -194,9 +194,7 @@ export function createFirstPartyModuleActivations(
           config.definitionId === "demo.reply.llm" ||
           config.instanceId === "reply.default"
         ) {
-          throw new Error(
-            "Legacy reply configuration is unsupported. Reinitialize module configuration.",
-          );
+          throw new Error("Unknown module configuration");
         }
         const definition = catalog.definitions.find(
           ({ manifest }) => manifest.definitionId === config.definitionId,
@@ -247,7 +245,7 @@ export class ModuleConfigurationError extends Error {
     readonly paths: readonly string[],
   ) {
     super(
-      `Module settings failed validation: ${instanceId} (${definitionId}), fields: ${paths.join(", ")}. Reinitialize module configuration.`,
+      `Module settings failed validation: ${instanceId} (${definitionId}), fields: ${paths.join(", ")}.`,
     );
     this.name = "ModuleConfigurationError";
   }

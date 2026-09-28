@@ -118,6 +118,20 @@ export async function ensureSensitiveDirectory(path: string): Promise<void> {
 
 export async function readSensitiveJson(path: string): Promise<unknown> {
   try {
+    return JSON.parse(await readSensitiveText(path));
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new ConfigError(
+        "CONFIG_CORRUPT_STORE",
+        `Configuration JSON is invalid: ${path}`,
+      );
+    }
+    throw error;
+  }
+}
+
+export async function readSensitiveText(path: string): Promise<string> {
+  try {
     await validateManagedPath(path, "file");
     if (process.platform !== "win32") {
       await chmod(path, FILE_MODE);
@@ -128,7 +142,7 @@ export async function readSensitiveJson(path: string): Promise<unknown> {
         (process.platform === "win32" ? 0 : constants.O_NOFOLLOW),
     );
     try {
-      return JSON.parse(await handle.readFile("utf8"));
+      return await handle.readFile("utf8");
     } finally {
       await handle.close();
     }
@@ -136,13 +150,7 @@ export async function readSensitiveJson(path: string): Promise<unknown> {
     if (error instanceof ConfigError) {
       throw error;
     }
-    if (error instanceof SyntaxError) {
-      throw new ConfigError(
-        "CONFIG_CORRUPT_STORE",
-        `Configuration JSON is invalid: ${path}`,
-      );
-    }
-    throw normalizeFileError("read sensitive JSON", path, error);
+    throw normalizeFileError("read sensitive file", path, error);
   }
 }
 
@@ -160,6 +168,26 @@ export async function writeSensitiveJson(
     );
   }
 
+  try {
+    await writeSensitiveText(path, serializedValue);
+  } catch (error) {
+    if (
+      error instanceof ConfigError &&
+      error.message === `Failed to write sensitive file: ${path}`
+    )
+      throw new ConfigError(
+        error.code,
+        `Failed to write sensitive JSON: ${path}`,
+        { cause: error.cause },
+      );
+    throw error;
+  }
+}
+
+export async function writeSensitiveText(
+  path: string,
+  value: string,
+): Promise<void> {
   const directory = dirname(path);
   const temporaryPath = `${path}.${randomUUID()}.tmp`;
   let handle: Awaited<ReturnType<typeof open>> | undefined;
@@ -178,7 +206,7 @@ export async function writeSensitiveJson(
     if (process.platform !== "win32") {
       await chmod(temporaryPath, FILE_MODE);
     }
-    await handle.writeFile(serializedValue, "utf8");
+    await handle.writeFile(value, "utf8");
     await handle.sync();
     await handle.close();
     handle = undefined;
@@ -189,7 +217,7 @@ export async function writeSensitiveJson(
     if (error instanceof ConfigError) {
       throw error;
     }
-    throw normalizeFileError("write sensitive JSON", path, error);
+    throw normalizeFileError("write sensitive file", path, error);
   }
 
   if (process.platform !== "win32") {

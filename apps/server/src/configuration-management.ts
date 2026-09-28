@@ -30,6 +30,7 @@ import {
   type UserConfigProfile,
   loadModuleInstanceConfigs,
   writeModuleInstanceConfig,
+  writeCordisModuleEnabled,
 } from "@kaguya/config";
 import { createFirstPartyModuleConfigDefaults } from "@kaguya/modules";
 
@@ -321,10 +322,19 @@ async function writeNapCatModuleSettings(
   );
   if (!current) throw new Error("NapCat plugin configuration is missing");
   const { enabled, ...rest } = settings;
-  await writeModuleInstanceConfig(rootDir, {
-    ...current,
-    enabled,
-    settings: rest,
-  });
+  const next = { ...current, enabled, settings: rest };
+  await writeModuleInstanceConfig(rootDir, next);
+  try {
+    if (enabled !== current.enabled)
+      await writeCordisModuleEnabled(
+        rootDir,
+        createFirstPartyModuleConfigDefaults(),
+        current.instanceId,
+        enabled,
+      );
+  } catch (error) {
+    await writeModuleInstanceConfig(rootDir, current);
+    throw error;
+  }
   return settings;
 }
