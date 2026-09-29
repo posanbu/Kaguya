@@ -63,11 +63,6 @@ describe("Light contract", () => {
         action: "message",
         reason: "respond",
         target,
-        composition: {
-          focusInputIndexes: [0],
-          topic: "当前消息",
-          replyAct: "回应用户",
-        },
       }).success,
     ).toBe(true);
   });
@@ -83,25 +78,23 @@ describe("Light contract", () => {
         action: "message",
         reason: "respond",
         target: { kind: "unresolved", reason },
-        composition: {
-          focusInputIndexes: [0],
-          topic: "当前消息",
-          replyAct: "回应用户",
-        },
       }).success,
     ).toBe(true);
   });
   it.each([
-    undefined,
-    { focusInputIndexes: [], topic: "话题", replyAct: "回应" },
-    { focusInputIndexes: [0, 0], topic: "话题", replyAct: "回应" },
-    { focusInputIndexes: [0, 1, 2, 3], topic: "话题", replyAct: "回应" },
-  ])("rejects invalid message composition %j", (composition) => {
+    {
+      composition: { focusInputIndexes: [0], topic: "话题", replyAct: "回应" },
+    },
+    { topic: "话题" },
+    { replyAct: "回应" },
+    { guidance: "多问一句" },
+    { tone: "humorous" },
+  ])("rejects generated guidance %j", (generated) => {
     expect(
       lightActionSchema.safeParse({
         action: "message",
         reason: "respond",
-        composition,
+        ...generated,
       }).success,
     ).toBe(false);
   });
@@ -418,7 +411,7 @@ it("keeps recent context and later interest evidence visible beside long sources
   });
 });
 
-it("rejects exhausted waits and out-of-range focus before model task completion", () => {
+it("rejects exhausted waits and generated guidance before model task completion", () => {
   const available = lightActionSchemaForTurn({
     inputs: [{}],
     attempt: 0,
@@ -432,16 +425,17 @@ it("rejects exhausted waits and out-of-range focus before model task completion"
   const wait = { action: "wait", reason: "await-more-context", waitSeconds: 5 };
   expect(available.safeParse(wait).success).toBe(true);
   expect(exhausted.safeParse(wait).success).toBe(false);
-  const message = {
-    action: "message",
-    reason: "respond",
-    composition: { focusInputIndexes: [1], topic: "topic", replyAct: "answer" },
-  };
-  expect(available.safeParse(message).success).toBe(false);
+  const message = { action: "message", reason: "respond" };
+  expect(available.safeParse(message).success).toBe(true);
+  expect(exhausted.safeParse(message).success).toBe(true);
   expect(
     exhausted.safeParse({
       ...message,
-      composition: { ...message.composition, focusInputIndexes: [0] },
+      composition: {
+        focusInputIndexes: [0],
+        topic: "topic",
+        replyAct: "answer",
+      },
     }).success,
-  ).toBe(true);
+  ).toBe(false);
 });

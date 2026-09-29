@@ -24,6 +24,7 @@ import {
   conversationContextInformationKind,
   turnContextCompletedInformationKind,
   lightActionSchema,
+  legacyLightActionSchema,
   messageIntentRequestedInformationKind,
   messageIntentRequestedInformationPayloadSchema,
   targetAuthorizedInformationKind,
@@ -391,7 +392,9 @@ export class MessageTargetService implements MessageAuthorization {
       )
     )
       return fail("target-invalid-decision");
-    const action = lightActionSchema.parse(decision.payload.action);
+    const action = z
+      .union([lightActionSchema, legacyLightActionSchema])
+      .parse(decision.payload.action);
     if (
       action.action !== "message" ||
       !action.target ||
@@ -459,7 +462,6 @@ export class MessageTargetService implements MessageAuthorization {
           target,
           turn: provenance,
           memoryInformationIds: [],
-          composition: resolveComposition(payload, action.composition),
         },
         references: [
           { relation: "core:context", informationId: contextId(turn) },
@@ -1016,30 +1018,4 @@ export class MessageTargetService implements MessageAuthorization {
       return false;
     }
   }
-}
-
-function resolveComposition(
-  turn: FrozenRoutingTurn,
-  composition: Extract<
-    z.infer<typeof lightActionSchema>,
-    { action: "message" }
-  >["composition"],
-) {
-  const indexes = composition.focusInputIndexes;
-  if (
-    indexes.length < 1 ||
-    indexes.length > 3 ||
-    new Set(indexes).size !== indexes.length ||
-    indexes.some((index) => index < 0 || index >= turn.inputs.length)
-  )
-    throw new Error("target-invalid-composition");
-  return {
-    focusInformationIds: indexes.map(
-      (index) => turn.inputs[index]!.informationId,
-    ),
-    topic: composition.topic,
-    replyAct: composition.replyAct,
-    ...("tone" in composition ? { tone: composition.tone } : {}),
-    ...("guidance" in composition ? { guidance: composition.guidance } : {}),
-  };
 }

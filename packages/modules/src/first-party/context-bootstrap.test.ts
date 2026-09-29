@@ -10,12 +10,7 @@ import { loadFirstPartyPromptTemplates } from "../node/prompt-templates.js";
 import { contextBootstrapVariable } from "./context-bootstrap.js";
 import { compileLightPrompt } from "./router/light.js";
 import { compileMessagePrompt } from "./heavy/message-prompt.js";
-import {
-  atom,
-  fixture,
-  identity,
-  target,
-} from "./heavy/test-fixtures.js";
+import { atom, fixture, identity, target } from "./heavy/test-fixtures.js";
 import { type CompiledPrompt } from "@kaguya/schema";
 
 const templates = loadFirstPartyPromptTemplates();
@@ -75,9 +70,10 @@ describe("context bootstrap", () => {
         prompt.variables.find((v) => v.name === "context_bootstrap")!
           .informationIds,
       ).toEqual([f.turn.informationId]);
-      expect(prompt.text).toContain("坦率");
       expect(prompt.text).toContain("角色");
     }
+    expect(planner.text).toContain("不能用来补造现实");
+    expect(composer.text).toContain("不能单独证明现实关系");
   });
 
   it("moves to contextual with sourced memory and history without treating every participant as familiar", () => {

@@ -2,15 +2,15 @@
 
 ## 目的与非目标
 
-在 Router 已决定发送消息后，根据完整冻结 turn 编写一条自然消息。模块不选择发言时机、不执行 Light，也不检索跨会话目标。
+在 Router 选择把回合交给 Heavy 后，根据完整冻结 turn 独立决定生成一条自然消息或保持沉默。模块不执行 Light，也不检索跨会话目标。
 
 ## 消费和产生
 
-消费 `agent.router.message.intent.requested` 与 `agent.heavy.respond` 的 Model Task 完成事实，产生 assistant text 和 delivery request。默认定义 ID 为 `agent.heavy`，实例为 `heavy.default`，Prompt kind 为 `message`。
+消费 `agent.router.message.intent.requested` 与 `agent.heavy.respond` 的 Model Task 完成事实；普通回复可产生 assistant text 和 delivery request，或 `agent.heavy.response.silent`。默认定义 ID 为 `agent.heavy`，实例为 `heavy.default`，Prompt kind 为 `message`。
 
 ## 数据流与边界
 
-意图严格包含 `target: { adapterId, platform, destination }`、必填 turn provenance 和 `memoryInformationIds`。意图不复制源消息正文、源平台消息 ID 或引用标记。Selector 沿引用重载冻结 context 及其全部输入，并验证目标范围与 provenance。Heavy 使用整个 `turn.inputs`，不会把最后一条输入标成必须回答的目标消息。
+新意图严格包含 `target: { adapterId, platform, destination }`、必填 turn provenance 和 `memoryInformationIds`。旧意图中的 `composition` 仍可解析以支持重放，但不再进入 Heavy Prompt。意图不复制源消息正文、源平台消息 ID 或引用标记。Selector 沿引用重载冻结 context 及其全部输入，并验证目标范围与 provenance。Heavy 使用整个 `turn.inputs`，不会把最后一条输入标成必须回答的目标消息。
 
 历史只纳入同范围入站及已成功投递的 assistant；Memory 必须来自意图明确列出的冻结引用。引用机器人消息时，Selector 通过同目标的成功投递回执追溯 assistant 原子，并把回执与因果链保留为引用溯源；晚于冻结时点的回执、失败投递和歧义结果不会用于解析。每条入站的引用可作为理解上下文，出站始终是普通 `kind: "text"`，投递地址只来自意图 target。公共 OneBot `kind: "reply"` 能力保留给专用模块。
 
@@ -34,7 +34,7 @@ settings 为空对象 `{}`。模型固定使用 Profile 的 `heavy` 档位；模
 
 ## 可靠性、幂等和失败行为
 
-稳定任务键复用等价 Model Task；assistant 与 delivery 使用实例级 `registerOnce` 去重。模型 failed/cancelled 不生成 assistant，缺少冻结引用或 provenance 不一致时拒绝继续。旧 reply kind、模块和任务不会获得兼容处理，也不迁移历史原子。
+普通回复使用 v2 结构化输出：`message(text)` 或 `silent`；授权跨会话发送和旧任务继续使用 v1 文本输出。稳定任务键复用等价 Model Task；assistant、silent 与 delivery 使用实例级 `registerOnce` 去重。silent 不生成 assistant 或投递，由 Router 关闭回合。模型 failed/cancelled 不生成 assistant，缺少冻结引用或 provenance 不一致时拒绝继续。
 
 ## 日志与可观测性
 
@@ -42,7 +42,7 @@ settings 为空对象 `{}`。模型固定使用 Profile 的 `heavy` 档位；模
 
 ## 典型场景
 
-群聊中多条输入在同一 turn 冻结后，Router 创建一个当前群聊消息意图。Heavy 结合全部发言生成一条自然消息，默认 OneBot action 只包含 text segment，即使某条入站消息带有引用标记。
+群聊中多条输入在同一 turn 冻结后，Router 创建一个当前群聊消息意图。Heavy 结合全部发言，判断是否仍值得回应；发言时只完成一次自然交流动作，可按语境使用短句，也不设固定字数上限。默认 OneBot action 只包含 text segment，即使某条入站消息带有引用标记。
 
 ## 自然语言跨会话与背景
 

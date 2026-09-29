@@ -107,16 +107,14 @@ async function fixture(options: { registerTransport?: boolean } = {}) {
       output = { habitIds: [] };
     } else if (request.model === "web-test-heavy") {
       composerPrompts.push(prompt);
-      output = `Web reply ${composerPrompts.length}`;
+      output = {
+        action: "message",
+        text: `Web reply ${composerPrompts.length}`,
+      };
     } else {
       output = {
         action: "message",
         reason: "respond",
-        composition: {
-          focusInputIndexes: [0],
-          topic: "当前消息",
-          replyAct: "回应用户",
-        },
       };
     }
     return new Response(

@@ -348,11 +348,13 @@ async function projectRequest(
             : result.action === "silent"
               ? "保持静默"
               : "已记录规划结果";
-      const topic = textAt(plan.payload, "action.composition.topic");
-      const replyAct = textAt(plan.payload, "action.composition.replyAct");
-      const guidance = textAt(plan.payload, "action.composition.guidance");
+      const targetKind = textAt(plan.payload, "action.target.kind");
       result.text =
-        [topic, replyAct, guidance].filter(Boolean).join("\n") || outcomeText;
+        result.action === "message"
+          ? targetKind && targetKind !== "current"
+            ? `交由 Heavy 判断；目标：${targetKind}`
+            : "交由 Heavy 根据原始对话判断"
+          : outcomeText;
       add(plan, "实际规划决定", result.action);
       if (detail && result.action === "message" && validSource && turn) {
         const linked = [
@@ -442,6 +444,14 @@ async function projectRequest(
       }
     }
   } else if (terminal?.kind === "core.model.task.completed") {
+    const silent = (
+      await reverse(terminal, "core:caused-by", ["agent.heavy.response.silent"])
+    ).find(
+      (atom) =>
+        validSource &&
+        field(atom.payload, "intentInformationId") ===
+          validSource.informationId,
+    );
     const assistants = await reverse(terminal, "core:caused-by", [
       "core.message.assistant.text",
     ]);
@@ -459,9 +469,17 @@ async function projectRequest(
           field(validSource.payload, "target"),
         ),
     );
+    const output = field(terminal.payload, "output");
     const text = assistant
       ? textAt(assistant.payload, "text")
-      : string(field(terminal.payload, "output"));
+      : (textAt(terminal.payload, "output.text") ??
+        (typeof output === "string" ? output : undefined));
+    if (silent) {
+      result.action = "silent";
+      outcomeText = "Heavy 判断无需回复";
+      result.text = outcomeText;
+      add(silent, outcomeText, "silent");
+    }
     if (text !== undefined) {
       result.text = text;
       outcomeText = assistant

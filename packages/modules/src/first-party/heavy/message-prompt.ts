@@ -78,7 +78,7 @@ export interface HeavyPromptTemplates {
 }
 
 export const ZH_CN_MESSAGE_PROMPT = Object.freeze({
-  version: "zh-CN/v1",
+  version: "zh-CN/v2",
   historyMessageLimit: 30,
   historyCharacterLimit: 12_000,
   memoryCharacterLimit: 4_000,
@@ -208,22 +208,13 @@ export function createMessagePromptCompiler(
           : "",
       };
     });
-    const composition = payload.composition;
-    const focusedInputs = composition.focusInformationIds.map((id) => {
+    for (const id of "composition" in payload
+      ? payload.composition.focusInformationIds
+      : []) {
       const input = inputs.find((candidate) => candidate.informationId === id);
       if (!input)
         throw new Error(`Composition focus is outside frozen turn: ${id}`);
-      return input;
-    });
-    const plan = nested.render("plan", {
-      current_time: `${currentTime.local} (${currentTime.timeZone}; ${currentTime.iso})`,
-      topic: composition.topic,
-      reply_act: composition.replyAct,
-      guidance: "guidance" in composition ? composition.guidance : "",
-      messages: focusedInputs.map((input) =>
-        messageContext(input, identity, speakerName),
-      ),
-    });
+    }
     const turn = nested.render("turn", { messages });
     const prompt = renderOuter([
       contextBootstrapVariable(
@@ -269,10 +260,6 @@ export function createMessagePromptCompiler(
         `${currentTime.local} (${currentTime.timeZone}; ${currentTime.iso})`,
         [turnContext!.informationId],
       ),
-      variable("plan", plan, [
-        message.informationId,
-        ...focusedInputs.map((input) => input.informationId),
-      ]),
       variable("history", history.content, history.informationIds),
       variable("memory", memories.content, memories.informationIds),
       variable(
@@ -381,6 +368,7 @@ function compileNested(templates: HeavyPromptTemplates) {
       .filter(
         (d) =>
           d.key !== "main" &&
+          d.key !== "plan" &&
           d.key !== "conversationBackground" &&
           d.key !== "expressionHabits",
       )

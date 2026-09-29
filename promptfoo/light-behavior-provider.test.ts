@@ -50,14 +50,10 @@ it("requires an explicit profile before making network requests", async () => {
   expect(fetch).not.toHaveBeenCalled();
 });
 it.each([
+  ["direct-question", '{"action":"message","reason":"respond"}', true],
   [
     "direct-question",
     '{"action":"message","reason":"respond","composition":{"focusInputIndexes":[0],"topic":"评测","replyAct":"解释"}}',
-    true,
-  ],
-  [
-    "direct-question",
-    '{"action":"message","reason":"respond","composition":{"focusInputIndexes":[1],"topic":"评测","replyAct":"解释"}}',
     false,
   ],
   [

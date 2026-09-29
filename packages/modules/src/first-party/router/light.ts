@@ -1,11 +1,11 @@
 /**
- * composition 兼容可选 tone（neutral/humorous/teasing），旧快照继续有效；缺失时表情插件保守禁用。
+ * 新版 Light 只判断参与动作与必要目标；旧版 composition 仅用于已持久化任务重放。
  * memory 变量携带原文来源 ID，与当前聊天输入在规划时区分。
  * context_bootstrap 显式说明本轮证据缺口，避免把身份解析或角色设定误当作既有关系。
  * 默认源码及允许变量来自 prompt-declarations；可传入装配阶段预检的本地模板。
  * Prompt 正文由装配入口注入已加载的 default/local 模板，本文件不保留独立默认文本。
  * 功能概述：Router 的独立结构化 Light 契约、只读上下文选择器和纯 Prompt 编译器。
- * 主要职责：lightActionSchema 严格限制动作及原因，lightActionSchemaForTurn 为新任务收紧焦点范围与等待预算；lightDecisionInformationKind 持久化唯一分派结果；
+ * 主要职责：lightActionSchema 严格限制动作及原因，lightActionSchemaForTurn 为新任务收紧等待预算；lightDecisionInformationKind 持久化唯一分派结果；
  * lightContextSelector 复用 Heavy 的同范围成功投递历史过滤与冻结记忆授权；compileLightPrompt
  * 选择器同时授权已持久化的任务上下文，恢复时复用首次请求，迟到消息不改变重放 Prompt。
  * 读取身份、规则、历史、记忆和全部冻结输入，提供稳定说话人键、通知事实、可用动作及经成功回执链核验的引用正文。
@@ -91,7 +91,7 @@ export const lightCompositionSchema = z.union([
     })
     .strict(),
 ]);
-export const lightActionSchema = z.discriminatedUnion("action", [
+export const legacyLightActionSchema = z.discriminatedUnion("action", [
   z
     .object({
       action: z.literal("message"),
@@ -119,8 +119,34 @@ export const lightActionSchema = z.discriminatedUnion("action", [
     })
     .strict(),
 ]);
-/** 本轮模型任务只接受预算内动作与有效焦点；持久化动作 Kind 继续使用稳定的通用 schema。 */
+export const lightActionSchema = z.discriminatedUnion("action", [
+  z
+    .object({
+      action: z.literal("message"),
+      reason: z.enum(["respond", "contribute"]),
+      target: lightTargetSchema.default({ kind: "current" }),
+    })
+    .strict(),
+  legacyLightActionSchema.options[1],
+  legacyLightActionSchema.options[2],
+]);
+/** 新任务只校验参与动作与等待预算；旧任务保留原焦点校验以便重放。 */
 export function lightActionSchemaForTurn(turn: {
+  readonly inputs: readonly unknown[];
+  readonly attempt: number;
+  readonly totalWaitBudget: number;
+}) {
+  if (turn.inputs.length === 0)
+    throw new Error("Light requires at least one frozen input");
+  return turn.attempt < turn.totalWaitBudget
+    ? lightActionSchema
+    : z.discriminatedUnion("action", [
+        lightActionSchema.options[0],
+        lightActionSchema.options[2],
+      ]);
+}
+
+export function legacyLightActionSchemaForTurn(turn: {
   readonly inputs: readonly unknown[];
   readonly attempt: number;
   readonly totalWaitBudget: number;
@@ -147,14 +173,17 @@ export function lightActionSchemaForTurn(turn: {
     lightCompositionSchema.options[2].extend({ focusInputIndexes }),
     lightCompositionSchema.options[3].extend({ focusInputIndexes }),
   ]);
-  const message = lightActionSchema.options[0].extend({ composition });
+  const message = legacyLightActionSchema.options[0].extend({ composition });
   return turn.attempt < turn.totalWaitBudget
     ? z.discriminatedUnion("action", [
         message,
-        lightActionSchema.options[1],
-        lightActionSchema.options[2],
+        legacyLightActionSchema.options[1],
+        legacyLightActionSchema.options[2],
       ])
-    : z.discriminatedUnion("action", [message, lightActionSchema.options[2]]);
+    : z.discriminatedUnion("action", [
+        message,
+        legacyLightActionSchema.options[2],
+      ]);
 }
 
 export type LightAction = z.infer<typeof lightActionSchema>;
@@ -168,6 +197,7 @@ export const lightDecisionInformationKind = defineInformationKind({
       turnContextInformationId: z.string().min(1),
       action: z.union([
         lightActionSchema,
+        legacyLightActionSchema,
         z
           .object({
             action: z.literal("silent"),
@@ -237,11 +267,6 @@ export const lightContextSelector = defineInformationSelector({
           contextInformationId: turn.informationId,
         },
         memoryInformationIds: payload.memory ?? [],
-        composition: {
-          focusInformationIds: [payload.inputs.at(-1).informationId],
-          topic: "Light context selection",
-          replyAct: "select context",
-        },
       },
     });
     // 重放必须复用首次 requested 的 Prompt 和原子顺序，避免迟到历史改变任务指纹。

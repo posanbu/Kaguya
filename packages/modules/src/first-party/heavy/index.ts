@@ -58,6 +58,7 @@ import {
   inboundTextInformationKind,
   messageIntentRequestedInformationKind,
   messageIntentRequestedInformationPayloadSchema,
+  heavyResponseSilentInformationKind,
   type MessageIntentRequestedInformationPayload,
 } from "../information-kinds.js";
 import {
@@ -88,15 +89,10 @@ export interface ModuleModelSelection {
   readonly modelTier: ModelTier;
 }
 
-export type {
-  AgentIdentity,
-  HeavyPromptTemplates,
-} from "./message-prompt.js";
+export type { AgentIdentity, HeavyPromptTemplates } from "./message-prompt.js";
 
 export const heavySettingsSchema = z.object({}).strict();
-export type HeavySettings = z.infer<
-  typeof heavySettingsSchema
->;
+export type HeavySettings = z.infer<typeof heavySettingsSchema>;
 
 export const messageModelDispatchingDiagnostic = defineModuleDiagnostic({
   event: "heavy.model.dispatching",
@@ -105,9 +101,9 @@ export const messageModelDispatchingDiagnostic = defineModuleDiagnostic({
   payloadSchema: z
     .object({
       taskId: z.literal("agent.heavy.respond"),
-      taskVersion: z.literal("1"),
-      outputMode: z.literal("text"),
-      promptVersion: z.literal("zh-CN/v1"),
+      taskVersion: z.enum(["1", "2"]),
+      outputMode: z.enum(["text", "object"]),
+      promptVersion: z.literal("zh-CN/v2"),
       tier: z.literal("heavy"),
       promptCharacters: z.number().int().nonnegative(),
       promptVariableCount: z.number().int().nonnegative(),
@@ -121,6 +117,12 @@ export const messageModelDispatchingDiagnostic = defineModuleDiagnostic({
 });
 
 export const messageTaskOutputSchema = z.string().trim().min(1);
+export const messageResponseOutputSchema = z.discriminatedUnion("action", [
+  z
+    .object({ action: z.literal("message"), text: z.string().trim().min(1) })
+    .strict(),
+  z.object({ action: z.literal("silent") }).strict(),
+]);
 
 export interface ModelTaskRequest<TOutput> {
   readonly task: {
@@ -332,6 +334,7 @@ export function createHeavyModule<
         inboundTextInformationKind,
       ],
       produces: [
+        heavyResponseSilentInformationKind,
         ...(dependencies.draftProcessingEnabled
           ? [messageDraftInformationKind]
           : []),
@@ -464,10 +467,11 @@ export function createHeavyModule<
             );
             if (contexts.length !== 1)
               throw new Error("Message intent must have one context");
+            const ordinaryReply = authorized === undefined;
             await context.report(messageModelDispatchingDiagnostic, {
               taskId: "agent.heavy.respond",
-              taskVersion: "1",
-              outputMode: "text",
+              taskVersion: ordinaryReply ? "2" : "1",
+              outputMode: ordinaryReply ? "object" : "text",
               promptVersion: ZH_CN_MESSAGE_PROMPT.version,
               tier: "heavy",
               promptCharacters: Array.from(prompt.text).length,
@@ -479,12 +483,14 @@ export function createHeavyModule<
               memoryCharacters: variableCharacters(prompt, "memory"),
               turnCharacters: variableCharacters(prompt, "turn"),
             });
-            await context.use(modelTaskCapability).execute({
+            await context.use(modelTaskCapability).execute<unknown>({
               task: {
                 taskId: "agent.heavy.respond",
-                version: "1",
-                outputMode: "text",
-                outputSchema: messageTaskOutputSchema,
+                version: ordinaryReply ? "2" : "1",
+                outputMode: ordinaryReply ? "object" : "text",
+                outputSchema: ordinaryReply
+                  ? messageResponseOutputSchema
+                  : messageTaskOutputSchema,
                 allowedTiers: ["heavy"],
               },
               sourceInformationId: persistedIntent.informationId,
@@ -505,19 +511,55 @@ export function createHeavyModule<
           async (completed, context) => {
             if (
               completed.payload.taskId !== "agent.heavy.respond" ||
-              completed.payload.version !== "1" ||
+              (completed.payload.version !== "1" &&
+                completed.payload.version !== "2") ||
               completed.payload.activation.definitionId !==
                 activation.definitionId ||
               completed.payload.selectionPolicy.tier !== "heavy"
             )
               return;
-            const output = messageTaskOutputSchema.parse(
-              completed.payload.output,
-            );
             const message = requireSelectedMessageIntent(
               await context.select(completedMessageSelector),
               completed.payload.sourceInformationId,
             );
+            const response =
+              completed.payload.version === "2"
+                ? messageResponseOutputSchema.parse(completed.payload.output)
+                : {
+                    action: "message" as const,
+                    text: messageTaskOutputSchema.parse(
+                      completed.payload.output,
+                    ),
+                  };
+            if (response.action === "silent") {
+              await context.registerOnce(
+                "kaguya.heavy.silent.v1",
+                `${context.instanceId}:${completed.informationId}`,
+                heavyResponseSilentInformationKind,
+                {
+                  payload: {
+                    intentInformationId: message.informationId,
+                    turn: message.payload.turn,
+                  },
+                  references: [
+                    {
+                      relation: "core:uses-context",
+                      informationId: message.informationId,
+                    },
+                    {
+                      relation: "agent:turn-claim",
+                      informationId: message.payload.turn.claimInformationId,
+                    },
+                    {
+                      relation: "agent:turn-candidate",
+                      informationId:
+                        message.payload.turn.candidateInformationId,
+                    },
+                  ],
+                },
+              );
+              return;
+            }
             await context.registerOnce(
               "kaguya.heavy.assistant.v1",
               `${context.instanceId}:${completed.informationId}`,
@@ -527,7 +569,7 @@ export function createHeavyModule<
                 : assistantTextInformationKind,
               {
                 payload: {
-                  text: output,
+                  text: response.text,
                   source: message.payload.target,
                   originatingModuleInstanceId: context.instanceId,
                   turn: message.payload.turn,

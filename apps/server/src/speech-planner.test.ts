@@ -49,16 +49,15 @@ afterEach(async () => {
 const speak = {
   action: "message",
   reason: "respond",
-  composition: {
-    focusInputIndexes: [0],
-    topic: "当前消息",
-    replyAct: "回应用户",
-  },
 };
 const silent = { action: "silent", reason: "no-response-needed" };
 const wait = { action: "wait", reason: "await-more-context", waitSeconds: 5 };
 
-async function fixture(outputs: unknown[], qqExpression = false) {
+async function fixture(
+  outputs: unknown[],
+  qqExpression = false,
+  heavyResponse: unknown = { action: "message", text: "reply-body" },
+) {
   let expressionChoice: {
     assetInformationId: string | null;
     emoji: string | null;
@@ -100,7 +99,7 @@ async function fixture(outputs: unknown[], qqExpression = false) {
             ? { habitIds: [] }
             : request.model === "deepseek-light"
               ? (outputs.shift() ?? silent)
-              : "reply-body";
+              : heavyResponse;
     const output = typeof pending === "function" ? await pending() : pending;
     if (output === "HTTP_FAILURE")
       return new Response("synthetic-provider-error", { status: 400 });
@@ -263,7 +262,9 @@ describe("Router Light via DeepSeek-compatible provider", () => {
     await f.submit(f.message());
     await f.settle();
     const graph = await f.atoms();
-    const decision = graph.find((a) => a.kind === "agent.light.decision.completed")!;
+    const decision = graph.find(
+      (a) => a.kind === "agent.light.decision.completed",
+    )!;
     expect((decision.payload.action as { action: string }).action).toBe(
       output.action,
     );
@@ -295,6 +296,47 @@ describe("Router Light via DeepSeek-compatible provider", () => {
       expect(kinds(graph)).not.toContain("core.message.assistant.text");
   });
 
+  it("lets Heavy decline a Light message without creating an assistant or delivery", async () => {
+    const f = await fixture([speak], false, { action: "silent" });
+    await f.submit(f.message("heavy-decline"));
+    await f.settle();
+    const graph = await f.atoms();
+    expect(
+      graph.find((a) => a.kind === "agent.light.decision.completed")?.payload
+        .action,
+    ).toMatchObject(speak);
+    expect(
+      graph.find(
+        (a) =>
+          a.kind === "core.model.task.requested" &&
+          a.payload.taskId === "agent.heavy.respond",
+      )?.payload,
+    ).toMatchObject({ version: "2", outputMode: "object" });
+    expect(
+      graph.filter((a) => a.kind === "agent.heavy.response.silent"),
+    ).toHaveLength(1);
+    expect(
+      graph
+        .filter((a) => a.kind === "agent.router.turn.silent")
+        .map((a) => a.payload.reasonCodes),
+    ).toEqual([["heavy-declined"]]);
+    expect(
+      graph.some(
+        (a) =>
+          a.kind === "core.message.assistant.text" ||
+          a.kind === "core.delivery.requested",
+      ),
+    ).toBe(false);
+    expect(f.delivered).not.toHaveBeenCalled();
+    const requestCount = f.requests.length;
+    await f.restart();
+    await f.settle();
+    expect(f.requests).toHaveLength(requestCount);
+    expect(
+      (await f.atoms()).filter((a) => a.kind === "agent.router.turn.silent"),
+    ).toHaveLength(1);
+  });
+
   it("repairs one invalid response before dispatch and replays the decision once", async () => {
     const invalid = "INVALID_PRIVATE_PROVIDER_RESPONSE";
     const recovered = speak;
@@ -312,7 +354,9 @@ describe("Router Light via DeepSeek-compatible provider", () => {
     expect(JSON.stringify(plannerRequests[1]?.messages)).not.toContain(
       "INVALID_PRIVATE_PROVIDER_RESPONSE",
     );
-    const tasks = graph.filter((a) => a.payload.taskId === "agent.light.decide");
+    const tasks = graph.filter(
+      (a) => a.payload.taskId === "agent.light.decide",
+    );
     expect(
       tasks.filter((a) => a.kind === "core.model.task.requested"),
     ).toHaveLength(1);
@@ -368,7 +412,9 @@ describe("Router Light via DeepSeek-compatible provider", () => {
       expect(f.requests).toHaveLength(2);
       expect(f.requests[1]?.messages).toEqual(f.requests[0]?.messages);
       expect(f.delivered).not.toHaveBeenCalled();
-      const tasks = graph.filter((a) => a.payload.taskId === "agent.light.decide");
+      const tasks = graph.filter(
+        (a) => a.payload.taskId === "agent.light.decide",
+      );
       expect(
         tasks.filter((a) => a.kind === "core.model.task.requested"),
       ).toHaveLength(1);
@@ -393,11 +439,15 @@ describe("Router Light via DeepSeek-compatible provider", () => {
     },
   );
 
-  it("repairs out-of-turn focus before dispatch and replays the v2 decision once", async () => {
+  it("repairs an obsolete composition field before dispatch and replays the v3 decision once", async () => {
     const f = await fixture([
       {
         ...speak,
-        composition: { ...speak.composition, focusInputIndexes: [1] },
+        composition: {
+          focusInputIndexes: [0],
+          topic: "topic",
+          replyAct: "reply",
+        },
       },
       speak,
     ]);
@@ -410,7 +460,7 @@ describe("Router Light via DeepSeek-compatible provider", () => {
         a.kind === "core.model.task.requested" &&
         a.payload.taskId === "agent.light.decide",
     )!;
-    expect(task.payload.version).toBe("2");
+    expect(task.payload.version).toBe("3");
     expect(
       before.filter((a) => a.kind === "agent.light.decision.completed"),
     ).toHaveLength(1);
@@ -427,7 +477,8 @@ describe("Router Light via DeepSeek-compatible provider", () => {
     await f.settle();
     const graph = await f.atoms();
     expect(
-      graph.find((a) => a.kind === "agent.light.decision.completed")?.payload.action,
+      graph.find((a) => a.kind === "agent.light.decision.completed")?.payload
+        .action,
     ).toEqual({
       action: "silent",
       reason: "light-unavailable",
@@ -538,10 +589,14 @@ describe("Router Light via DeepSeek-compatible provider", () => {
         for (let i = 0; i < 8; i++)
           await f.submit(f.message(`m${i + 2}`, { text: `更新的消息 ${i}` }));
         await waitForPersistence(async () =>
-          expect(kinds(await f.atoms())).toContain("agent.heartbeat.observation.wake"),
+          expect(kinds(await f.atoms())).toContain(
+            "agent.heartbeat.observation.wake",
+          ),
         );
         expect(
-          (await f.atoms()).filter((a) => a.kind === "agent.heartbeat.candidate"),
+          (await f.atoms()).filter(
+            (a) => a.kind === "agent.heartbeat.candidate",
+          ),
         ).toHaveLength(1);
         expect(f.requests).toHaveLength(blockedRequestCount);
         release(speak);
@@ -551,11 +606,14 @@ describe("Router Light via DeepSeek-compatible provider", () => {
         await f.settle();
         const graph = await f.atoms();
         expect(
-          graph.filter((a) => a.kind === "agent.router.turn.decision.interrupted"),
+          graph.filter(
+            (a) => a.kind === "agent.router.turn.decision.interrupted",
+          ),
         ).toHaveLength(1);
         expect(
-          graph.filter((a) => a.kind === "agent.router.turn.context.completed").at(-1)
-            ?.payload.inputs,
+          graph
+            .filter((a) => a.kind === "agent.router.turn.context.completed")
+            .at(-1)?.payload.inputs,
         ).toHaveLength(9);
         expect(f.requests.map((r) => r.model)).toEqual([
           ...(duringRepair ? ["deepseek-light"] : []),
@@ -608,7 +666,9 @@ describe("Router Light via DeepSeek-compatible provider", () => {
         f.setTime(1000);
         await f.submit(f.message("m2"));
         await waitForPersistence(async () =>
-          expect(kinds(await f.atoms())).toContain("agent.router.turn.interrupted"),
+          expect(kinds(await f.atoms())).toContain(
+            "agent.router.turn.interrupted",
+          ),
         );
         release(silent);
         await f.settle();
@@ -668,10 +728,14 @@ describe("Router Light via DeepSeek-compatible provider", () => {
         f.setTime(1000);
         await f.submit(f.message("m4"));
         await waitForPersistence(async () =>
-          expect(kinds(await f.atoms())).toContain("agent.heartbeat.observation.wake"),
+          expect(kinds(await f.atoms())).toContain(
+            "agent.heartbeat.observation.wake",
+          ),
         );
         expect(
-          (await f.atoms()).filter((a) => a.kind === "agent.router.turn.interrupted"),
+          (await f.atoms()).filter(
+            (a) => a.kind === "agent.router.turn.interrupted",
+          ),
         ).toHaveLength(2);
         releases[2]!(silent);
         await f.settle();
@@ -696,7 +760,9 @@ describe("Router Light via DeepSeek-compatible provider", () => {
         f.setTime(1000);
         await f.submit(f.message("during-wait"));
         await waitForPersistence(async () =>
-          expect(kinds(await f.atoms())).toContain("agent.heartbeat.observation.wake"),
+          expect(kinds(await f.atoms())).toContain(
+            "agent.heartbeat.observation.wake",
+          ),
         );
         release(wait);
         await f.settle();
@@ -851,7 +917,8 @@ describe("Router Light via DeepSeek-compatible provider", () => {
       await f.settle();
       const graph = await f.atoms();
       expect(
-        graph.find((a) => a.kind === "agent.router.wait.requested")?.payload.dueAt,
+        graph.find((a) => a.kind === "agent.router.wait.requested")?.payload
+          .dueAt,
       ).toBe("2026-09-12T12:01:05.000Z");
       expect(f.requests).toHaveLength(1);
     } finally {
@@ -868,7 +935,10 @@ describe("Router Light via DeepSeek-compatible provider", () => {
       const hook = vi
         .spyOn(f.core(), "commitTerminal")
         .mockImplementation((...args) => {
-          if (args[2].kind === "agent.light.decision.completed" && !interrupted) {
+          if (
+            args[2].kind === "agent.light.decision.completed" &&
+            !interrupted
+          ) {
             interrupted = true;
             return Promise.reject(
               new Error("synthetic decision write interruption"),
@@ -905,7 +975,9 @@ describe("Router Light via DeepSeek-compatible provider", () => {
           graph.filter((a) => a.kind === "agent.light.decision.completed"),
         ).toHaveLength(1);
         expect(
-          graph.filter((a) => a.kind === "agent.router.turn.decision.interrupted"),
+          graph.filter(
+            (a) => a.kind === "agent.router.turn.decision.interrupted",
+          ),
         ).toHaveLength(1);
         expect(f.delivered).toHaveBeenCalledTimes(1);
       } finally {
@@ -955,15 +1027,11 @@ describe("Router Light via DeepSeek-compatible provider", () => {
 });
 
 describe("independent QQ expression plugin through real Runtime", () => {
-  const humorous = {
-    ...speak,
-    composition: { ...speak.composition, tone: "humorous" },
-  };
   it(
-    "limits Unicode emoji across restart and preserves the ordinary reply pipeline",
+    "does not append emoji without Light tone across restart",
     async () => {
       const f = await fixture(
-        Array.from({ length: 8 }, () => humorous),
+        Array.from({ length: 8 }, () => speak),
         true,
       );
       for (let i = 0; i < 4; i++) {
@@ -985,7 +1053,7 @@ describe("independent QQ expression plugin through real Runtime", () => {
         "reply-body",
         "reply-body",
         "reply-body",
-        "reply-body 😂",
+        "reply-body",
       ]);
       // 新消息只推进 1 毫秒，保证先后顺序且仍在冷却窗口内；重启不得归还额度。
       // 冷却到期边界由纯策略测试控制，不混入真实 Scheduler 的到期触发。
@@ -1006,12 +1074,9 @@ describe("independent QQ expression plugin through real Runtime", () => {
     QQ_RESTART_TIMEOUT,
   );
   it(
-    "sends a collected QQ face only in a humorous plan and falls back on neutral plans",
+    "collects QQ face but does not select it without Light tone",
     async () => {
-      const f = await fixture(
-        [humorous, humorous, humorous, humorous, speak],
-        true,
-      );
+      const f = await fixture([speak, speak, speak, speak, speak], true);
       await f.submit(
         f.message("face-source", {
           text: "哈哈这次又翻车了[face:14]",
@@ -1035,15 +1100,11 @@ describe("independent QQ expression plugin through real Runtime", () => {
         await f.waitForDeliveries(i + 1);
         await f.settle();
       }
-      expect(
-        (f.delivered.mock.calls[3] as unknown as [unknown, unknown])[1],
-      ).toMatchObject({
-        text: "reply-body",
-        expression: { kind: "face", id: "14" },
-      });
-      expect(
-        (f.delivered.mock.calls[4] as unknown as [unknown, unknown])[1],
-      ).toEqual({ kind: "text", text: "reply-body" });
+      for (const call of f.delivered.mock.calls)
+        expect((call as unknown as [unknown, unknown])[1]).toEqual({
+          kind: "text",
+          text: "reply-body",
+        });
       expect(
         (await f.atoms()).filter((a) => a.kind === "core.delivery.delivered"),
       ).toHaveLength(5);
@@ -1051,40 +1112,3 @@ describe("independent QQ expression plugin through real Runtime", () => {
     QQ_MULTI_TURN_TIMEOUT,
   );
 });
-
-it(
-  "keeps normal delivery alive when the optional expression model fails",
-  async () => {
-    const humorous = {
-      ...speak,
-      composition: { ...speak.composition, tone: "humorous" },
-    };
-    const f = await fixture(
-      Array.from({ length: 4 }, () => humorous),
-      true,
-    );
-    f.useExpression("HTTP_FAILURE" as never);
-    for (let i = 0; i < 4; i++) {
-      f.setTime(1);
-      await f.submit(f.message(`optional-failure-${i}`));
-      await f.waitForDeliveries(i + 1);
-      await f.settle();
-    }
-    expect(
-      (f.delivered.mock.calls[3] as unknown as [unknown, unknown])[1],
-    ).toEqual({ kind: "text", text: "reply-body" });
-    const graph = await f.atoms();
-    expect(
-      graph.some(
-        (a) =>
-          a.kind === "core.model.task.failed" &&
-          a.payload.taskId === "plugin.qq-expression.select",
-      ),
-    ).toBe(true);
-    expect(graph.filter((a) => a.kind === "agent.router.turn.failed")).toHaveLength(0);
-    expect(
-      graph.filter((a) => a.kind === "core.delivery.delivered"),
-    ).toHaveLength(4);
-  },
-  QQ_MULTI_TURN_TIMEOUT,
-);

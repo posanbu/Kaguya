@@ -23,7 +23,7 @@ import {
 import { atom, fixture, identity, target } from "./test-fixtures.js";
 const templates = loadFirstPartyPromptTemplates().heavy;
 describe("message prompt", () => {
-  it("marks Light anchors as primary while preserving every frozen input", () => {
+  it("preserves every frozen input without Light writing guidance", () => {
     const f = fixture();
     const result = compileMessagePrompt(
       templates,
@@ -46,15 +46,14 @@ describe("message prompt", () => {
     expect(
       result.variables.find((v) => v.name === "turn")?.informationIds,
     ).toEqual(f.messages.map((m) => m.informationId));
-    expect(
-      result.variables.find((v) => v.name === "plan")?.informationIds,
-    ).toEqual([f.intent.informationId, f.messages.at(-1)!.informationId]);
+    expect(result.variables.some((v) => v.name === "plan")).toBe(false);
+    expect(result.templates.some((t) => t.name === "plan")).toBe(false);
+    expect(result.text).not.toContain("话题锚点是主要回复对象");
     expect(
       result.variables.find((v) => v.name === "bootstrap")?.informationIds,
     ).toEqual([f.turn.informationId]);
-    expect(result.text).toContain("话题：当前话题");
-    expect(result.text).toContain("回复动作：自然回应");
-    expect(result.text).toContain("话题锚点是主要回复对象");
+    expect(result.text).not.toContain("话题：当前话题");
+    expect(result.text).not.toContain("回复动作：自然回应");
     expect(result.text).toContain("2026-09-09 周三 08:00:03");
     expect(result.text).toContain("2026-09-09 周三 08:00:01");
     expect(result.variables.some((v) => v.name === "target")).toBe(false);
@@ -185,6 +184,7 @@ describe("message prompt", () => {
     const payload = messageIntentRequestedInformationPayloadSchema.parse(
       f.intent.payload,
     );
+    if (!("composition" in payload)) throw new Error("Expected legacy intent");
     const intent = atom(f.intent.informationId, f.intent.kind, {
       ...payload,
       composition: {

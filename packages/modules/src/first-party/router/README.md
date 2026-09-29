@@ -12,7 +12,7 @@ Router 只在 `agent.attention.arousal.completed: observe` 后读取正文，协
 
 Router 按 candidate 的排他下界和包含式上界查询最多 1000 条同 scope 入站，等待每条 Identity terminal，再一次性冻结上下文。晚到时间戳不能越过注册水位，上界后的新消息留给下一次观察。`defer` 不产生 claim 或 context。
 
-冻结后才执行 mute、安全、目标和授权检查。Light 独占相关性、话题选择、参与价值及 `message | wait | silent`。群聊直接通知在 observe 后开启 Focus；成功投递续租，silent/failed 关闭，wait 保持自然到期。
+冻结后才执行 mute、安全、目标和授权检查。Light 判断参与价值并选择 `message | wait | silent`；`message` 只传目标和冻结引用，不传生成的话题、焦点、回复动作或写作建议。Heavy 读取同一份冻结 turn，独立决定发言或沉默。群聊直接通知在 observe 后开启 Focus；成功投递续租，silent/failed 关闭，wait 保持自然到期。
 
 bootstrap 只依据冻结输入、身份实体创建来源和本轮授权 Memory，区分 `cold-start`、`warming`、`established`。版本化投影和身份实体证据随 turn 冻结，不由后续消息或 Memory 改写。
 
@@ -22,9 +22,9 @@ bootstrap 只依据冻结输入、身份实体创建来源和本轮授权 Memory
 
 回复兴趣来自已入库且本次召回的原文，不新增自动判定兴趣的打分器；没有证据则保持未知。
 
-Light 的每条冻结输入包含稳定的 `speakerKey`、平台消息标识、直接通知事实和经宿主核验的 `quotedMessage`。引用通过同会话、截止时间和成功投递链验证；缺失或冲突时显式标为 `unavailable`，不会猜测正文。历史与记忆分别限制为 12000 字和 4000 字：历史优先保留最新内容，记忆按已选来源平均分配配额并标记裁剪；本轮输入保持完整，引用链保留原始 ID 溯源。模型按对话对象、表达完整性和新增交流价值选择话题，不因其他人的未完表达阻塞一个独立完整的直接问题。
+Light 的每条冻结输入包含稳定的 `speakerKey`、平台消息标识、直接通知事实和经宿主核验的 `quotedMessage`。引用通过同会话、截止时间和成功投递链验证；缺失或冲突时显式标为 `unavailable`，不会猜测正文。历史与记忆分别限制为 12000 字和 4000 字：历史优先保留最新内容，记忆按已选来源平均分配配额并标记裁剪；本轮输入保持完整，引用链保留原始 ID 溯源。模型按对话对象、表达完整性和新增交流价值决定是否参与，不因其他人的未完表达阻塞一个独立完整的直接问题。
 
-`agent.light.decide` 模型任务按本轮输入数量限制焦点索引，并在等待预算耗尽时移除 wait 分支。非法输出先经过一次结构修复，仍不合法则安全静默；不会登记越界消息意图或第四次等待。
+`agent.light.decide` v3 模型任务在等待预算耗尽时移除 wait 分支。非法输出先经过一次结构修复，仍不合法则安全静默；不会登记非法消息意图或第四次等待。旧版任务按持久化 schema 和 Prompt 重放。
 
 ## Settings
 
@@ -34,7 +34,7 @@ Light 的每条冻结输入包含稳定的 `speakerKey`、平台消息标识、�
 
 claim、context、Light decision 和 terminal 使用稳定键与排他槽。重复 candidate、重复 delivery、进程重启和旧代际 one-shot 不会创建第二个有效 turn；身份未完成时保持开放，身份耗尽、授权失败或目标不可用时 fail-closed。只有完整 context 成功冻结后才记录 `observedThroughInformationId`。
 
-Light failed、cancelled、非法输出或模型不可用会安全降级为 silent。Light wait 使用独立 `totalWaitBudget`；Arousal defer 不消耗预算。重放复用已持久化 Prompt 和上下文，supersession 后的迟到结果不能派发。
+Light failed、cancelled、非法输出或模型不可用会安全降级为 silent。Light wait 使用独立 `totalWaitBudget`；Arousal defer 不消耗预算。Heavy 若选择 silent，Router 记录 `heavy-declined` 终态，不创建投递。重放复用已持久化 Prompt 和上下文，supersession 后的迟到结果不能派发。
 
 ## 日志与可观测性
 
@@ -43,10 +43,6 @@ Light failed、cancelled、非法输出或模型不可用会安全降级为 sile
 ## 典型场景
 
 observe 后冻结该 scope 的全部有界未读，再由 Light 选择 message、wait 或 silent。直接群聊输入可开启 Focus，但仍允许 Light silent；跨会话目标必须通过宿主授权复核。超大积压按 1000 条上限自然分批，不跳过水位。
-
-## 破坏式协议
-
-旧账本和模块配置必须在停服后人工重置；仓库不提供双读或迁移分支。
 
 ## Focus 租约
 
