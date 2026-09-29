@@ -82,14 +82,18 @@ export const inboundTextInformationPayloadSchema = z
   .object({ text: z.string(), source: messageSourceSchema })
   .strict();
 
-export const messageIntentRequestedInformationPayloadSchema = z
-  .object({
-    target: messageTargetSchema,
-    turn: turnProvenanceSchema,
-    memoryInformationIds: z.array(nonBlankString),
-    composition: messageCompositionSchema,
-  })
-  .strict();
+const messageIntentShape = {
+  target: messageTargetSchema,
+  turn: turnProvenanceSchema,
+  memoryInformationIds: z.array(nonBlankString),
+};
+/** 旧意图保留解析；新意图不向 Heavy 传递 Light 生成的内容。 */
+export const messageIntentRequestedInformationPayloadSchema = z.union([
+  z.object(messageIntentShape).strict(),
+  z
+    .object({ ...messageIntentShape, composition: messageCompositionSchema })
+    .strict(),
+]);
 
 export type MessageIntentRequestedInformationPayload = z.infer<
   typeof messageIntentRequestedInformationPayloadSchema
@@ -178,6 +182,51 @@ export const messageIntentRequestedInformationKind = defineInformationKind({
         platform: input.target.platform,
       };
     },
+  },
+});
+
+export const heavyResponseSilentInformationKind = defineInformationKind({
+  kind: "agent.heavy.response.silent",
+  displayName: "Heavy 决定静默",
+  description:
+    "Heavy 阅读冻结原始对话后放弃本次发言；Router 据此闭合回合，不产生助手消息或投递。",
+  payloadSchema: z
+    .object({
+      intentInformationId: nonBlankString,
+      turn: turnProvenanceSchema,
+    })
+    .strict(),
+  references: {
+    "core:caused-by": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.model.task.completed"],
+    },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
+    "core:uses-context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["agent.router.message.intent.requested"],
+    },
+    "agent:turn-claim": {
+      required: true,
+      multiple: false,
+      targetKinds: ["agent.router.turn.claimed"],
+    },
+    "agent:turn-candidate": {
+      required: true,
+      multiple: false,
+      targetKinds: ["agent.heartbeat.candidate"],
+    },
+  },
+  log: {
+    enabled: true,
+    level: "info",
+    project: () => ({ event: "heavy.response", action: "silent" }),
   },
 });
 
@@ -282,7 +331,10 @@ export const assistantTextInformationKind = defineInformationKind({
     "core:caused-by": {
       required: true,
       multiple: false,
-      targetKinds: ["core.model.task.completed", "agent.heavy.message.prepared"],
+      targetKinds: [
+        "core.model.task.completed",
+        "agent.heavy.message.prepared",
+      ],
     },
     "core:context": {
       required: true,

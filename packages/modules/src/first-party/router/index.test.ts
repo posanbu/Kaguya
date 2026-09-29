@@ -101,11 +101,6 @@ async function fixture(
     output: options.action ?? {
       action: "message",
       reason: "respond",
-      composition: {
-        focusInputIndexes: [0],
-        topic: "测试话题",
-        replyAct: "回应",
-      },
     },
     requestedInformationId: "request",
     terminalInformationId: request.sourceInformationId,
@@ -134,7 +129,8 @@ async function fixture(
     if (
       definition === executionExhaustedInformationKind ||
       definition.kind.startsWith("core.schedule.")
-    ) continue;
+    )
+      continue;
     definition.kind.startsWith("core.")
       ? registry.registerBuiltin(definition)
       : registry.register(definition);
@@ -653,11 +649,6 @@ it.each([
     {
       action: "message",
       reason: "respond",
-      composition: {
-        focusInputIndexes: [0],
-        topic: "topic",
-        replyAct: "reply",
-      },
     },
     messageIntentRequestedInformationKind.kind,
   ],

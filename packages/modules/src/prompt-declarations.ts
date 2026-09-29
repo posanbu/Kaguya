@@ -36,7 +36,6 @@ export const outerVariables = [
   "self_account",
   "scene",
   "current_time",
-  "plan",
   "history",
   "memory",
   "bootstrap",
@@ -55,7 +54,6 @@ export const messageTemplateDeclarations = [
     composes: [
       "heavy.scene",
       "heavy.bootstrap",
-      "heavy.plan",
       "heavy.history",
       "heavy.memory",
       "heavy.turn",
@@ -65,8 +63,9 @@ export const messageTemplateDeclarations = [
     key: "plan",
     fileStem: "heavy.plan",
     name: "plan",
-    displayName: "消息表达意图",
-    description: "组织 Light 选中的话题、动作、指引和话题锚点。",
+    displayName: "旧版消息表达意图",
+    description:
+      "保留旧版模板资源；新任务不向 Heavy 注入 Light 生成的表达计划。",
     allowedVariables: [
       "current_time",
       "topic",
@@ -86,10 +85,7 @@ export const messageTemplateDeclarations = [
     description: "组织同一会话中的历史消息。",
     allowedVariables: ["messages", ...messageVariables],
     allowedPartials: ["history-inbound", "history-assistant"],
-    composes: [
-      "heavy.history-inbound",
-      "heavy.history-assistant",
-    ],
+    composes: ["heavy.history-inbound", "heavy.history-assistant"],
   },
   {
     key: "historyInbound",
@@ -333,18 +329,17 @@ export const lightTemplateDeclaration: ModulePromptTemplateDefinition = {
   allowedPartials: [],
   composes: [],
 };
-export const lightBootstrapPolicyDeclaration: ModulePromptTemplateDefinition =
-  {
-    mutability: "editable",
-    templateId: "light.bootstrap-policy",
-    name: "router-bootstrap-policy",
-    displayName: "冷启动参与策略",
-    description:
-      "依据确定性的 bootstrap 投影决定是否询问、承认未知或进入正常交流。",
-    allowedVariables: [],
-    allowedPartials: [],
-    composes: [],
-  };
+export const lightBootstrapPolicyDeclaration: ModulePromptTemplateDefinition = {
+  mutability: "editable",
+  templateId: "light.bootstrap-policy",
+  name: "router-bootstrap-policy",
+  displayName: "冷启动参与策略",
+  description:
+    "依据确定性的 bootstrap 投影决定是否询问、承认未知或进入正常交流。",
+  allowedVariables: [],
+  allowedPartials: [],
+  composes: [],
+};
 export const lightPlatformPolicyDeclarations: readonly ModulePromptTemplateDefinition[] =
   ["default", "qq", "web"].map((platform) => ({
     mutability: "editable" as const,

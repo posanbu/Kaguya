@@ -126,6 +126,7 @@ type SeedOptions = {
   delivery?: "delivered" | "failed";
   confirmed?: boolean;
   authorization?: "manual" | "automatic";
+  heavySilent?: boolean;
 };
 async function seedRequest(id: string, options: SeedOptions = {}) {
   const mode = options.mode ?? "light";
@@ -204,7 +205,7 @@ async function seedRequest(id: string, options: SeedOptions = {}) {
     );
   const metadata = {
     taskId: browser.taskId,
-    version: "1",
+    version: options.heavySilent ? "2" : "1",
     activation: { definitionId, instanceId: "old-instance" },
     sourceInformationId: sourceId,
     contextInformationId: "runtime-context",
@@ -226,7 +227,9 @@ async function seedRequest(id: string, options: SeedOptions = {}) {
         ? {
             output:
               mode === "heavy"
-                ? longText
+                ? options.heavySilent
+                  ? { action: "silent" }
+                  : longText
                 : {
                     action: "wait",
                     waitSeconds: 30,
@@ -279,7 +282,8 @@ async function seedRequest(id: string, options: SeedOptions = {}) {
   if (
     mode === "heavy" &&
     terminal === "completed" &&
-    options.adopted !== false
+    options.adopted !== false &&
+    !options.heavySilent
   ) {
     await append(
       id + "-assistant",
@@ -350,6 +354,18 @@ async function seedRequest(id: string, options: SeedOptions = {}) {
       );
     }
   }
+  if (mode === "heavy" && options.heavySilent && terminal === "completed") {
+    await append(
+      id + "-silent",
+      "agent.heavy.response.silent",
+      { intentInformationId: sourceId, turn: sourceTurn },
+      [
+        context,
+        ref("core:caused-by", id + "-terminal"),
+        ref("core:uses-context", sourceId),
+      ],
+    );
+  }
   return { metadata, turn: sourceTurn };
 }
 
@@ -375,6 +391,7 @@ beforeAll(async () => {
     "agent.router.turn.completed",
     "agent.router.turn.failed",
     "core.message.assistant.text",
+    "agent.heavy.response.silent",
     "agent.heavy.message.content.confirmed",
     "core.delivery.requested",
     "core.delivery.delivered",
@@ -403,6 +420,7 @@ beforeAll(async () => {
     ],
     ["compose-authorized", { mode: "heavy", authorization: "automatic" }],
     ["compose-model-only", { mode: "heavy", adopted: false }],
+    ["compose-silent", { mode: "heavy", heavySilent: true }],
   ] as [string, SeedOptions][])
     await seedRequest(id, options);
   await append(
@@ -467,9 +485,9 @@ it("authenticates both routes, preserves historical bindings and isolates task/m
     new Set([...first.items, ...second.items].map((item) => item.requestId))
       .size,
   ).toBe(4);
-  expect(
-    (await get(`?cursor=${first.nextCursor}`, "heavy")).statusCode,
-  ).toBe(400);
+  expect((await get(`?cursor=${first.nextCursor}`, "heavy")).statusCode).toBe(
+    400,
+  );
   for (const query of [
     "q=not-supported",
     "platform=qq",
@@ -594,6 +612,12 @@ it("separates generated text from direct, confirmed and failed delivery and pres
   expect(modelOnly.result.reason).toContain("尚无对应的最终消息");
   expect(modelOnly.trace.some((item) => item.status === "delivered")).toBe(
     false,
+  );
+  const silent = await detail("compose-silent");
+  expect(silent.result.action).toBe("silent");
+  expect(silent.result.text).toBe("Heavy 判断无需回复");
+  expect(silent.trace).toContainEqual(
+    expect.objectContaining({ informationId: "compose-silent-silent" }),
   );
 });
 
@@ -786,12 +810,7 @@ it("continues an empty bounded scan without skipping its next matching request",
         .slice(0, query.limit);
     },
   };
-  const first = await requestPage(
-    ledger,
-    modules[0]!.definitionId,
-    light,
-    20,
-  );
+  const first = await requestPage(ledger, modules[0]!.definitionId, light, 20);
   expect(first.items).toEqual([]);
   expect(first.cursor?.informationId).toBe(rows[500]!.informationId);
   const second = await requestPage(
@@ -817,8 +836,7 @@ it("does not borrow delivery or a completed turn from another request of the sam
     [context, ref("core:caused-by", "compose-delivered-source")],
   );
   const detail = inspectionRequestDetailSchema.parse(
-    (await get("/requests/compose-same-intent-pending", "heavy")).json()
-      .data,
+    (await get("/requests/compose-same-intent-pending", "heavy")).json().data,
   );
   expect(detail.request.status).toBe("pending");
   expect(

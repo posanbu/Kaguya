@@ -114,11 +114,6 @@ function intentPayload() {
       contextInformationId: "context",
     },
     memoryInformationIds: [],
-    composition: {
-      focusInformationIds: ["input"],
-      topic: "测试话题",
-      replyAct: "回应",
-    },
   };
 }
 
@@ -131,6 +126,16 @@ describe("message intent protocol", () => {
     expect(
       messageIntentRequestedInformationPayloadSchema.parse(payload),
     ).toEqual(payload);
+    expect(
+      messageIntentRequestedInformationPayloadSchema.parse({
+        ...payload,
+        composition: {
+          focusInformationIds: ["input"],
+          topic: "旧话题",
+          replyAct: "回应",
+        },
+      }),
+    ).toHaveProperty("composition.topic", "旧话题");
     for (const key of Object.keys(payload)) {
       const incomplete = { ...payload } as Record<string, unknown>;
       delete incomplete[key];

@@ -1,6 +1,6 @@
 /**
  * 候选新旧由 Selector 的账本注册顺序确定；相同/迟到业务时间及随机 UUID 不改变消费先后。
- * 获胜计划的可选 tone 传给消息意图，供独立表情插件判断语境，不改变参与门控。
+ * 新版 Light 的 message 决策只传目标与冻结引用；旧版 composition 仅用于账本兼容。
  * manifest 声明 Light 模板；调用 compileLightPrompt 时传入装配阶段加载的 default/local 文本，不再使用代码内默认值。
  * settings schema 的公开中文元数据供管理表单使用，运行时与保存共用约束。
  * 管理端批准的跨会话 candidate 由宿主直接认领，不再触发 Light；其 delivery 仍使用本模块统一 turn 终态。
@@ -21,7 +21,10 @@
 import { firstPartyInspection } from "../inspection.js";
 import { focusOpened, focusRenewed, focusKinds } from "./focus-facts.js";
 import { focusStateSelector, createRouterFocusSubscriptions } from "./focus.js";
-import { oneShotDueInformationKind, oneShotScheduleCapability } from "@kaguya/scheduler";
+import {
+  oneShotDueInformationKind,
+  oneShotScheduleCapability,
+} from "@kaguya/scheduler";
 import {
   lightBootstrapPolicyDeclaration,
   lightPlatformPolicyDeclarations,
@@ -36,14 +39,13 @@ import {
   compileLightPrompt,
   lightActionSchema,
   lightActionSchemaForTurn,
+  legacyLightActionSchema,
+  legacyLightActionSchemaForTurn,
   lightContextSelector,
   lightDecisionInformationKind,
   LIGHT_TASK_ID,
 } from "./light.js";
-import type {
-  AgentIdentity,
-  ModelTaskCapability,
-} from "../heavy/index.js";
+import type { AgentIdentity, ModelTaskCapability } from "../heavy/index.js";
 import type { ModuleCapability } from "@kaguya/sdk";
 
 import {
@@ -71,6 +73,7 @@ import {
   inboundTextInformationKind,
   personContextCompletedInformationKind,
   messageIntentRequestedInformationKind,
+  heavyResponseSilentInformationKind,
   attentionArousalCompletedInformationKind,
   turnCandidateInformationKind,
   turnClaimedInformationKind,
@@ -339,6 +342,15 @@ export const routerStateSelector = defineInformationSelector({
         anchors = await candidatesForClaims(ledger, recoveryClaims, remember);
       }
     } else if (sourceAtom.kind === turnClaimedInformationKind.kind) {
+      anchors = remember(
+        await related(
+          ledger,
+          sourceAtom.informationId,
+          "agent:turn-candidate",
+          "outgoing",
+        ),
+      );
+    } else if (sourceAtom.kind === heavyResponseSilentInformationKind.kind) {
       anchors = remember(
         await related(
           ledger,
@@ -632,6 +644,7 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
         attentionArousalCompletedInformationKind,
         turnContextCompletedInformationKind,
         lightDecisionInformationKind,
+        heavyResponseSilentInformationKind,
         turnCompletedInformationKind,
         turnWaitingInformationKind,
         turnSilentInformationKind,
@@ -824,9 +837,7 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
                 );
                 return;
               }
-              let selected = [
-                ...(await context.select(lightContextSelector)),
-              ];
+              let selected = [...(await context.select(lightContextSelector))];
               const turn = selected.find(
                 (atom) => atom.informationId === gate.turnContextInformationId,
               )!;
@@ -849,7 +860,8 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
                 (atom) =>
                   atom.kind === "core.model.task.requested" &&
                   atom.payload.taskId === LIGHT_TASK_ID &&
-                  atom.payload.version === "2" &&
+                  (atom.payload.version === "2" ||
+                    atom.payload.version === "3") &&
                   (
                     atom.payload.activation as {
                       instanceId?: string;
@@ -879,9 +891,11 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
                 .execute({
                   task: {
                     taskId: LIGHT_TASK_ID,
-                    version: "2",
+                    version: persisted?.payload.version === "2" ? "2" : "3",
                     outputMode: "object",
-                    outputSchema: lightActionSchemaForTurn({
+                    outputSchema: (persisted?.payload.version === "2"
+                      ? legacyLightActionSchemaForTurn
+                      : lightActionSchemaForTurn)({
                       inputs: (turn.payload as any).inputs,
                       attempt: gate.attempt,
                       totalWaitBudget: gate.totalWaitBudget,
@@ -906,21 +920,16 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
                 });
               const parsed =
                 result.status === "completed"
-                  ? lightActionSchema.safeParse(result.output)
+                  ? (persisted?.payload.version === "2"
+                      ? legacyLightActionSchema
+                      : lightActionSchema
+                    ).safeParse(result.output)
                   : undefined;
               let action: z.infer<
                 typeof lightDecisionInformationKind.payloadSchema
               >["action"] = parsed?.success
                 ? parsed.data
                 : { action: "silent", reason: "light-unavailable" };
-              if (
-                action.action === "message" &&
-                !validFocusInputIndexes(
-                  action.composition.focusInputIndexes,
-                  (turn.payload as any).inputs.length,
-                )
-              )
-                action = { action: "silent", reason: "light-unavailable" };
               if (
                 action.action === "wait" &&
                 gate.attempt >= gate.totalWaitBudget
@@ -1032,18 +1041,61 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
                   }
                 : {}),
             };
-            await dispatchDecision(
-              dispatch,
-              state,
-              context,
-              action.action === "message"
-                ? {
-                    ...action.composition,
-                    focusInputIndexes: [
-                      ...action.composition.focusInputIndexes,
-                    ],
-                  }
-                : undefined,
+            await dispatchDecision(dispatch, state, context);
+          },
+        ),
+        onInformation(
+          heavyResponseSilentInformationKind,
+          {
+            subscriptionId: "agent.router.heavy-silent",
+            delivery: "durable",
+          },
+          async (silent, context) => {
+            const state = await context.select(routerStateSelector);
+            const provenance = silent.payload.turn;
+            const candidate = state.find(
+              (atom) =>
+                atom.kind === turnCandidateInformationKind.kind &&
+                atom.informationId === provenance.candidateInformationId,
+            );
+            const claim = state.find(
+              (atom) =>
+                atom.kind === turnClaimedInformationKind.kind &&
+                atom.informationId === provenance.claimInformationId,
+            );
+            const turn = state.find(
+              (atom) =>
+                atom.kind === turnContextCompletedInformationKind.kind &&
+                atom.informationId === provenance.contextInformationId,
+            );
+            if (!candidate || !claim || !turn)
+              throw new Error("Heavy silent references an incomplete turn");
+            assertTurnLink(candidate, claim, turn);
+            if (
+              !silent.references.some(
+                (reference) =>
+                  reference.relation === "core:uses-context" &&
+                  reference.informationId ===
+                    silent.payload.intentInformationId,
+              )
+            )
+              throw new Error("Heavy silent must reference its message intent");
+            await context.commitTerminal(
+              "agent.router.turn.terminal",
+              candidate.informationId,
+              turnSilentInformationKind,
+              {
+                payload: {
+                  candidateInformationId: candidate.informationId,
+                  claimInformationId: claim.informationId,
+                  scopeKey: String(candidate.payload.scopeKey),
+                  reasonCodes: ["heavy-declined"],
+                },
+                references: terminalReferences(
+                  candidate.informationId,
+                  claim.informationId,
+                ),
+              },
             );
           },
         ),
@@ -1649,10 +1701,6 @@ async function dispatchDecision(
   payload: LightDispatch,
   atoms: readonly DeepReadonly<InformationAtom>[],
   context: InformationModuleHandlerContext,
-  composition?: Extract<
-    z.infer<typeof lightActionSchema>,
-    { action: "message" }
-  >["composition"],
 ) {
   const candidate = atoms.find(
     (atom) => atom.informationId === payload.candidateInformationId,
@@ -1678,8 +1726,6 @@ async function dispatchDecision(
     scopeKey: candidatePayload.scopeKey,
   };
   if (payload.action === "message") {
-    if (!composition)
-      throw new Error("Message decision requires composition intent");
     const targetInput = (turnContext.payload as any).inputs.at(-1);
     if (targetInput === undefined)
       throw new Error("Message decision requires a target turn input");
@@ -1700,7 +1746,6 @@ async function dispatchDecision(
             contextInformationId: turnContext.informationId,
           },
           memoryInformationIds: [],
-          composition: resolveMessageComposition(turnContext, composition),
         },
         references: [
           {
@@ -1771,43 +1816,6 @@ async function dispatchDecision(
       ),
     },
   );
-}
-
-function validFocusInputIndexes(
-  indexes: readonly number[],
-  inputCount: number,
-): boolean {
-  return (
-    indexes.length >= 1 &&
-    indexes.length <= 3 &&
-    new Set(indexes).size === indexes.length &&
-    indexes.every(
-      (index) => Number.isInteger(index) && index >= 0 && index < inputCount,
-    )
-  );
-}
-
-function resolveMessageComposition(
-  turn: DeepReadonly<InformationAtom>,
-  composition: Extract<
-    z.infer<typeof lightActionSchema>,
-    { action: "message" }
-  >["composition"],
-) {
-  const inputs = (turn.payload as any).inputs as {
-    informationId: string;
-  }[];
-  if (!validFocusInputIndexes(composition.focusInputIndexes, inputs.length))
-    throw new Error("Composition focus indexes are outside frozen turn");
-  return {
-    focusInformationIds: composition.focusInputIndexes.map(
-      (index) => inputs[index]!.informationId,
-    ),
-    topic: composition.topic,
-    replyAct: composition.replyAct,
-    ...("tone" in composition ? { tone: composition.tone } : {}),
-    ...("guidance" in composition ? { guidance: composition.guidance } : {}),
-  };
 }
 
 async function finishDelivery(
@@ -2036,4 +2044,4 @@ import {
   assessInputBacklog,
 } from "./turn-state.js";
 
-export { lightActionSchema } from "./light.js";
+export { lightActionSchema, legacyLightActionSchema } from "./light.js";

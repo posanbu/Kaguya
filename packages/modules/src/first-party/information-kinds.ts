@@ -12,6 +12,7 @@ export {
   type MessageIntentRequestedInformationPayload,
   inboundTextInformationKind,
   messageIntentRequestedInformationKind,
+  heavyResponseSilentInformationKind,
   filterDecisionInformationKind,
   coreMemoryTextInformationKind,
   assistantTextInformationKind,

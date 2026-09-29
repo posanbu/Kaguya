@@ -129,7 +129,9 @@ export async function selectFrozenTurnMessageContext(options: {
   }
   const inputIds = new Set(inputs.map((atom) => atom.informationId));
   const memoryIds = new Set(intent.memoryInformationIds);
-  for (const id of intent.composition.focusInformationIds) {
+  for (const id of "composition" in intent
+    ? intent.composition.focusInformationIds
+    : []) {
     if (!inputIds.has(id))
       throw new Error(`Composition focus is outside frozen turn: ${id}`);
   }

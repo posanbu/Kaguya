@@ -28,11 +28,6 @@ afterEach(async () => {
 const speak = {
   action: "message",
   reason: "respond",
-  composition: {
-    focusInputIndexes: [0],
-    topic: "当前消息",
-    replyAct: "回应用户",
-  },
 };
 const silent = { action: "silent", reason: "no-response-needed" };
 
@@ -93,7 +88,9 @@ async function fixture(
     const pending =
       request.model === "deepseek-light"
         ? (outputs.shift() ?? silent)
-        : "reply-body";
+        : request.response_format?.type === "json_object"
+          ? { action: "message", text: "reply-body" }
+          : "reply-body";
     const output =
       typeof pending === "function" ? await pending(request) : pending;
     if (request.model !== "deepseek-light") options.composer?.();
@@ -286,12 +283,14 @@ it.each([
     expect(f.delivered).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(f.delivered.mock.calls[0])).toContain(destination);
     const graph = await f.atoms();
-    expect(
-      graph.filter((a) => a.kind === "agent.router.message.intent.requested"),
-    ).toHaveLength(1);
-    expect(graph.filter((a) => a.kind === "agent.router.turn.completed")).toHaveLength(
-      1,
+    const intents = graph.filter(
+      (a) => a.kind === "agent.router.message.intent.requested",
     );
+    expect(intents).toHaveLength(1);
+    expect(intents[0]!.payload).not.toHaveProperty("composition");
+    expect(
+      graph.filter((a) => a.kind === "agent.router.turn.completed"),
+    ).toHaveLength(1);
     const plan = f.requests.find((r) => r.model === "deepseek-light")!;
     const p = projection(plan);
     expect(p.background.name).toBe("当前研究群");
@@ -310,6 +309,11 @@ it.each([
         a.kind === "core.model.task.requested" &&
         a.payload.taskId === "agent.heavy.respond",
     )!;
+    expect(composed.payload).toMatchObject(
+      destination === "source-group"
+        ? { version: "2", outputMode: "object" }
+        : { version: "1", outputMode: "text" },
+    );
     expect(JSON.stringify(composed.payload.prompt)).toContain("当前研究群");
     expect(JSON.stringify(composed.payload.prompt)).toContain("小明");
     expect(JSON.stringify(composed.payload.prompt)).not.toContain(
@@ -338,8 +342,9 @@ it.each([
         name: "instruction",
         content: "会议三点开始",
         informationIds: [
-          graph.find((atom) => atom.kind === "agent.router.message.target.authorized")!
-            .informationId,
+          graph.find(
+            (atom) => atom.kind === "agent.router.message.target.authorized",
+          )!.informationId,
         ],
       });
       const turn = graph.find(
@@ -367,8 +372,8 @@ it("无法解析目标时关闭且不回退当前群", async () => {
   await f.settle();
   expect(f.delivered).not.toHaveBeenCalled();
   expect(
-    (await f.atoms()).find((a) => a.kind === "agent.router.turn.failed")?.payload
-      .reason,
+    (await f.atoms()).find((a) => a.kind === "agent.router.turn.failed")
+      ?.payload.reason,
   ).toBe(`target-${reason}`);
   expect(f.requests).toHaveLength(1);
 });
@@ -429,9 +434,9 @@ it.each(["撤销白名单", "移除目标", "重连"])(
     expect(
       (await f.atoms()).some((a) => a.kind === "core.delivery.failed"),
     ).toBe(true);
-    expect((await f.atoms()).some((a) => a.kind === "agent.router.turn.failed")).toBe(
-      true,
-    );
+    expect(
+      (await f.atoms()).some((a) => a.kind === "agent.router.turn.failed"),
+    ).toBe(true);
   },
 );
 it("伪造目标引用被拒绝", async () => {
@@ -449,8 +454,8 @@ it("伪造目标引用被拒绝", async () => {
   await f.settle();
   expect(f.delivered).not.toHaveBeenCalled();
   expect(
-    (await f.atoms()).find((a) => a.kind === "agent.router.turn.failed")?.payload
-      .reason,
+    (await f.atoms()).find((a) => a.kind === "agent.router.turn.failed")
+      ?.payload.reason,
   ).toBe("target-not-found");
 });
 
@@ -463,7 +468,10 @@ it(
     const hook = vi
       .spyOn(f.core(), "registerOnce")
       .mockImplementation((...args) => {
-        if (args[2].kind === "agent.router.message.intent.requested" && !interrupted) {
+        if (
+          args[2].kind === "agent.router.message.intent.requested" &&
+          !interrupted
+        ) {
           interrupted = true;
           return Promise.reject(
             new Error("synthetic intent write interruption"),
@@ -500,8 +508,12 @@ it("跨会话不能复用重启前的冻结引用", async () => {
   await f.submit(f.message());
   await f.settle();
   const graph = await f.atoms();
-  const turn = graph.find((a) => a.kind === "agent.router.turn.context.completed")!;
-  const decision = graph.find((a) => a.kind === "agent.light.decision.completed")!;
+  const turn = graph.find(
+    (a) => a.kind === "agent.router.turn.context.completed",
+  )!;
+  const decision = graph.find(
+    (a) => a.kind === "agent.light.decision.completed",
+  )!;
   await f.restart();
   const result = await f.service().route(turn, decision);
   expect(result.status).toBe("failed");
@@ -530,7 +542,7 @@ it("仅入站获准不会产生出站候选授权", async () => {
   await f.settle();
   expect(f.delivered).not.toHaveBeenCalled();
   expect(
-    (await f.atoms()).find((a) => a.kind === "agent.router.turn.failed")?.payload
-      .reason,
+    (await f.atoms()).find((a) => a.kind === "agent.router.turn.failed")
+      ?.payload.reason,
   ).toBe("target-unauthorized");
 });

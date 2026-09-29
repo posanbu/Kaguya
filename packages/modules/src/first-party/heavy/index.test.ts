@@ -26,6 +26,7 @@ import {
   createHeavyModule,
   heavySettingsSchema,
   messageTaskOutputSchema,
+  messageResponseOutputSchema,
   type ModelTaskRequest,
   type ModelTaskResult,
   type ModelTaskCapability,
@@ -49,7 +50,7 @@ const completedKind = defineInformationKind({
         .object({ instanceId: z.string(), definitionId: z.string() })
         .strict(),
       selectionPolicy: z.object({ tier: z.enum(["light", "heavy"]) }).strict(),
-      output: z.string(),
+      output: z.union([z.string(), messageResponseOutputSchema]),
     })
     .strict(),
   references: {},
@@ -180,12 +181,7 @@ describe("message composer", () => {
     expect(
       messageIntentRequestedInformationPayloadSchema.parse(payload),
     ).toEqual(payload);
-    for (const field of [
-      "target",
-      "turn",
-      "memoryInformationIds",
-      "composition",
-    ]) {
+    for (const field of ["target", "turn", "memoryInformationIds"]) {
       const missing = { ...payload };
       delete missing[field];
       expect(
@@ -220,8 +216,18 @@ describe("message composer", () => {
     expect(messageTaskOutputSchema.safeParse({ text: "x" }).success).toBe(
       false,
     );
+    expect(messageResponseOutputSchema.parse({ action: "silent" })).toEqual({
+      action: "silent",
+    });
+    expect(
+      messageResponseOutputSchema.parse({ action: "message", text: " 好 " }),
+    ).toEqual({ action: "message", text: "好" });
+    expect(
+      messageResponseOutputSchema.safeParse({ action: "message", text: "  " })
+        .success,
+    ).toBe(false);
   });
-  it("dispatches one text task with the complete frozen turn and canonical diagnostics", async () => {
+  it("dispatches one structured task with the complete frozen turn and canonical diagnostics", async () => {
     const s = await setup();
     expect(s.definition.manifest.definitionId).toBe("agent.heavy");
     expect(s.definition.manifest.requires).toEqual([
@@ -236,8 +242,8 @@ describe("message composer", () => {
     };
     expect(request.task).toMatchObject({
       taskId: "agent.heavy.respond",
-      version: "1",
-      outputMode: "text",
+      version: "2",
+      outputMode: "object",
     });
     expect(request.prompt.text).toContain("FIRST_INPUT");
     expect(request.prompt.text).toContain("LAST_INPUT");
@@ -306,7 +312,7 @@ describe("message composer", () => {
     for (const override of [
       { taskId: "foreign.task" },
       { taskId: "core.reply.generate" },
-      { version: "2" },
+      { version: "9" },
       { selectionPolicy: { tier: "light" } },
       { activation: { ...activation, definitionId: "foreign.module" } },
     ]) {

@@ -24,6 +24,7 @@ export {
   routerSettingsSchema,
   routerStateSelector,
   lightActionSchema,
+  legacyLightActionSchema,
   type CreateRouterModuleOptions,
 } from "./first-party/router/index.js";
 export {
@@ -49,6 +50,7 @@ export {
 export {
   createHeavyModule,
   messageTaskOutputSchema,
+  messageResponseOutputSchema,
   heavySettingsSchema,
   modelTierSchema,
   type CreateHeavyModuleOptions,
@@ -92,6 +94,7 @@ export {
   personFactExtractedInformationKind,
   personFactExtractedPayloadSchema,
   messageIntentRequestedInformationKind,
+  heavyResponseSilentInformationKind,
   messageIntentRequestedInformationPayloadSchema,
   chatScopeEntityInformationKind,
   chatScopeBindingInformationKind,

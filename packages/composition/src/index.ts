@@ -28,7 +28,10 @@ import {
   type KaguyaLlmGenerationOptions,
   type KaguyaLlmModelResolver,
 } from "@kaguya/llm/client";
-import { createPlanningDeterministicModel } from "@kaguya/llm/testing";
+import {
+  createPlanningDeterministicModel,
+  createRepeatingDeterministicModel,
+} from "@kaguya/llm/testing";
 import {
   createAuthorizedMessagePromptRenderer,
   messageAuthorizationCapability,
@@ -75,13 +78,17 @@ export interface MemoryFeatureState {
   enabled: boolean;
 }
 export function createDeterministicModelSelectionResolver(): RuntimeModelSelectionResolver {
-  const model = createPlanningDeterministicModel(
+  const lightModel = createPlanningDeterministicModel(
     "It is a lovely night for watching the moon.",
   );
+  const heavyModel = createRepeatingDeterministicModel({
+    action: "message",
+    text: "It is a lovely night for watching the moon.",
+  });
   return ({ modelTier }) => ({
     providerId: "kaguya-deterministic",
     modelId: `deterministic-${modelTier}`,
-    model,
+    model: modelTier === "light" ? lightModel : heavyModel,
   });
 }
 export function createMessageCatalog(

@@ -151,7 +151,9 @@ const draftSelector = defineInformationSelector({
     if (
       scopeKey(turnSource) !== scopeKey(intent.target) ||
       !["humorous", "teasing"].includes(
-        "tone" in intent.composition ? intent.composition.tone : "neutral",
+        "composition" in intent && "tone" in intent.composition
+          ? intent.composition.tone
+          : "neutral",
       )
     )
       return ids;

@@ -1,7 +1,7 @@
 /**
  * 功能概述：将脱敏冻结变量接回真实 Prompt 渲染器，调用显式配置的模型验证 Light 行为。
  * 主要职责：LightBehaviorProvider 读取指定模板和评测 profile，生成 JSON 模型请求；
- * callApi 使用生产结构化协议及本轮 schema 校验动作；KAGUYA_EVAL_TASK_VERSION=1 可复现通用旧契约。
+ * callApi 使用生产结构化协议及本轮 schema 校验动作；旧任务版本可重放旧契约。
  * 代码库关系：供 light-behavior.yaml 使用；复用 modules 的模板声明及 schema，
  * fixture.variables 对应账本 core.model.task.requested.prompt.variables，不重做上下文召回。
  * 旧快照没有 context_bootstrap 时显式标记 unknown；不从脱敏历史补造身份或空库状态，已有字段原样保留。
@@ -27,10 +27,7 @@ async function loadModules() {
     ),
     import(
       pathToFileURL(
-        path.join(
-          root,
-          "packages/modules/dist/first-party/router/light.js",
-        ),
+        path.join(root, "packages/modules/dist/first-party/router/light.js"),
       )
     ),
     import(pathToFileURL(path.join(root, "packages/schema/dist/index.js"))),
@@ -60,10 +57,7 @@ class LightBehaviorProvider {
       await loadModules();
     const templatePath =
       process.env.KAGUYA_EVAL_TEMPLATE ||
-      path.join(
-        root,
-        "packages/modules/templates/light.decision.default.hbs",
-      );
+      path.join(root, "packages/modules/templates/light.decision.default.hbs");
     const fixtureVariables = {
       context_bootstrap: JSON.stringify({
         mode: "unknown",
@@ -89,11 +83,13 @@ class LightBehaviorProvider {
       ([name, content]) => ({ name, content, informationIds: [] }),
     );
     const turn = JSON.parse(context.vars.fixture.variables.turn);
-    const taskVersion = process.env.KAGUYA_EVAL_TASK_VERSION || "2";
+    const taskVersion = process.env.KAGUYA_EVAL_TASK_VERSION || "3";
     const actionSchema =
       taskVersion === "1"
-        ? light.lightActionSchema
-        : light.lightActionSchemaForTurn(turn);
+        ? light.legacyLightActionSchema
+        : taskVersion === "2"
+          ? light.legacyLightActionSchemaForTurn(turn)
+          : light.lightActionSchemaForTurn(turn);
     const rendered = renderer.createPromptTemplateRenderer({
       kind: "route",
       templateId: "promptfoo.light.behavior",
@@ -144,13 +140,8 @@ class LightBehaviorProvider {
     if (typeof output !== "string") return { error: "Model returned no text" };
     let valid = false;
     try {
-      const decision = actionSchema.parse(JSON.parse(output));
-      valid =
-        decision.action === "message"
-          ? decision.composition.focusInputIndexes.every(
-              (i) => i < turn.inputs.length,
-            )
-          : decision.action !== "wait" || turn.attempt < turn.totalWaitBudget;
+      actionSchema.parse(JSON.parse(output));
+      valid = true;
     } catch {
       /* 不修复模型输出，保留非法 JSON 或 schema 失败。 */
     }
