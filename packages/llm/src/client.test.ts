@@ -97,6 +97,11 @@ describe("generic KaguyaLlmClient boundary", () => {
       reason: "model-access-denied",
     },
     { statusCode: 429, body: "<html>private</html>", reason: "rate-limited" },
+    {
+      statusCode: 402,
+      body: '{"error":{"code":"invalid_request_error"}}',
+      reason: "insufficient-balance",
+    },
     { statusCode: 400, body: "not json", reason: "invalid-request" },
     { statusCode: 422, body: "{}", reason: "invalid-request" },
     { statusCode: 503, body: "{}", reason: "provider-unavailable" },
