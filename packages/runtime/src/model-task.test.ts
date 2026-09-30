@@ -514,6 +514,49 @@ it("projects the same provider diagnosis to JSON and Pretty logs on replay", asy
   expect(f.generate).toHaveBeenCalledTimes(1);
 });
 
+it("reports HTTP 402 as insufficient balance in the failed task and logs", async () => {
+  const f = await fixture();
+  f.generate.mockRejectedValue(
+    new KaguyaLlmError("Model task generation failed", {
+      kind: "non-retryable",
+      stage: "provider-request",
+      cause: new Error(secret),
+      providerFailure: {
+        statusCode: 402,
+        code: "invalid_request_error",
+        reason: "insufficient-balance",
+      },
+    }),
+  );
+  const result = await f.client.execute(f.request);
+  expect(result).toMatchObject({
+    status: "failed",
+    error: {
+      providerFailure: {
+        statusCode: 402,
+        code: "invalid_request_error",
+        reason: "insufficient-balance",
+      },
+    },
+  });
+  const failed = (await f.atoms()).find(
+    (atom) => atom.kind === "core.model.task.failed",
+  )!;
+  if (!modelTaskFailedInformationKind.log.enabled)
+    throw new Error("Model task failure log projection disabled");
+  const projected = modelTaskFailedInformationKind.log.project!(
+    failed as never,
+  );
+  expect(projected).toMatchObject({
+    providerStatusCode: 402,
+    providerFailureReason: "insufficient-balance",
+    providerAction: "检查 Provider 账户余额",
+  });
+  expect(formatPrettyMessage(projected)).toContain("处理建议=检查 Provider 账户余额");
+  expect(await f.client.execute(f.request)).toEqual(result);
+  expect(f.generate).toHaveBeenCalledTimes(1);
+});
+
 it("does not copy ledger-rejected usage into the safe failed payload", async () => {
   const f = await fixture();
   f.generate.mockResolvedValue({

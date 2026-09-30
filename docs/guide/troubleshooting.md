@@ -59,6 +59,8 @@ Web 私聊支持显示回复，并在刷新后恢复当前会话记录。接口�
 
 供应商拒绝密钥时，需要检查该服务的密钥或账号状态，反复重启 Kaguya 无法修复被禁用的凭据。
 
+**DeepSeek 返回 `HTTP 402`** — [官方错误码说明](https://api-docs.deepseek.com/zh-cn/quick_start/error_codes/)将其定义为账户余额不足。检查 DeepSeek 账户余额，或切换到已配置且可用的 Provider。Kaguya 会将此类失败标记为 `insufficient-balance`；本轮已失败的模型任务不会因余额恢复而自动重发。
+
 ## QQ 连接失败
 
 检查 NapCat 已登录，开启的是正向 WebSocket，Kaguya 填写的地址可达且 access token 一致。`selfId` 如有填写，必须是机器人自己的 QQ 号。详细步骤见[接入 QQ](./napcat)。

@@ -89,6 +89,7 @@ export type ProviderFailureReason =
   | "credential-blocked"
   | "model-access-denied"
   | "rate-limited"
+  | "insufficient-balance"
   | "invalid-request"
   | "model-not-found"
   | "provider-unavailable"
@@ -447,6 +448,7 @@ function classifyProviderFailure(
     return "credential-blocked";
   if (statusCode === 401) return "authentication-failed";
   if (statusCode === 403) return "model-access-denied";
+  if (statusCode === 402) return "insufficient-balance";
   if (statusCode === 429) return "rate-limited";
   if (statusCode !== undefined && statusCode >= 500)
     return "provider-unavailable";
