@@ -132,7 +132,7 @@ it("rejects invalid sources before writing and never echoes parser source", asyn
     ).rejects.toMatchObject({ code: "ENOENT" });
   }
 });
-it("validates cyclic partials across the group before saving", async () => {
+it("rejects removed history templates as partials", async () => {
   const { service } = await fixture(true);
   const id = "agent.heavy";
   await expect(
@@ -140,7 +140,7 @@ it("validates cyclic partials across the group before saving", async () => {
       revision: service.get(id).revision,
       content: "{{> history}}",
     }),
-  ).rejects.toMatchObject({ status: 400, code: "recursive_partial" });
+  ).rejects.toMatchObject({ status: 400, code: "invalid_partial" });
 });
 it("group CAS rejects a second editor even when it writes a different template", async () => {
   const { service, path } = await fixture();
@@ -148,14 +148,14 @@ it("group CAS rejects a second editor even when it writes a different template",
   const revision = service.get(id).revision;
   const results = await Promise.allSettled([
     service.change(id, "heavy", { revision, content: "valid" }),
-    service.change(id, "heavy.turn", { revision, content: "other" }),
+    service.change(id, "heavy.scene", { revision, content: "other" }),
   ]);
   expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
   expect(results.find((r) => r.status === "rejected")).toMatchObject({
     reason: { status: 409 },
   });
   await expect(
-    readFile(join(path, "heavy.turn.local.hbs")),
+    readFile(join(path, "heavy.scene.local.hbs")),
   ).rejects.toMatchObject({ code: "ENOENT" });
 });
 it.runIf(canCreateSymlinks())(
@@ -196,10 +196,10 @@ it("planner override is consumed by the production template loader", async () =>
   const id = "agent.router";
   await service.change(id, "light.decision", {
     revision: service.get(id).revision,
-    content: "Light {{identity}} {{turn}}",
+    content: "Light {{identity}} {{scope_context}}",
   });
   expect(loadFirstPartyPromptTemplates({ root }).light).toBe(
-    "Light {{identity}} {{turn}}",
+    "Light {{identity}} {{scope_context}}",
   );
 });
 

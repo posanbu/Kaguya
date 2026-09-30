@@ -246,7 +246,6 @@ async function fixture(backend: Backend, provider = model()) {
   let request: ModelTaskRequest<{ text: string }> = {
     task: {
       taskId: "test.extract",
-      version: "1",
       outputMode: "object",
       outputSchema: z.object({ text: z.string() }).strict(),
       allowedTiers: ["heavy"],
@@ -342,7 +341,7 @@ async function assertLedger(f: Fixture, result?: ModelTaskResult<unknown>) {
   expect(requested).toHaveLength(1);
   expect(terminals).toHaveLength(result ? 1 : 0);
   const slots = await f.db.sql.query(
-    "SELECT slot_type, information_id FROM information_commit_slots WHERE namespace IN ('kaguya.model.task.requested.v1', 'kaguya.model.task.result.v1')",
+    "SELECT slot_type, information_id FROM information_commit_slots WHERE namespace IN ('kaguya.model.task.requested', 'kaguya.model.task.result')",
   );
   expect(slots.rows).toEqual(
     expect.arrayContaining([
@@ -361,7 +360,6 @@ async function assertLedger(f: Fixture, result?: ModelTaskResult<unknown>) {
   );
   expect(requested[0]!.payload).toMatchObject({
     taskId: "test.extract",
-    version: "1",
     activation,
     sourceInformationId: f.request.sourceInformationId,
     resolvedModel: { providerId: "test-provider", modelId: "test-heavy" },

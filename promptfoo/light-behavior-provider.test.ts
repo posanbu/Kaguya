@@ -130,11 +130,10 @@ it.each([undefined, '{"mode":"contextual","memoryCount":1}'])(
   },
 );
 
-it.each(["1", "2"])(
-  "uses the requested task contract for an exhausted turn: v%s",
-  async (version) => {
+it(
+  "uses the current action contract for an exhausted turn",
+  async () => {
     vi.stubEnv("KAGUYA_EVAL_PROFILE", profilePath);
-    vi.stubEnv("KAGUYA_EVAL_TASK_VERSION", version);
     const fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -162,8 +161,7 @@ it.each(["1", "2"])(
       schema.oneOf.some(
         (branch: any) => branch.properties.action.const === "wait",
       ),
-    ).toBe(version === "1");
-    expect(result.metadata.taskVersion).toBe(version);
+    ).toBe(false);
     expect(result.metadata.valid).toBe(true);
   },
 );

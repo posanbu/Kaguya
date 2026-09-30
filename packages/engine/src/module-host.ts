@@ -270,6 +270,10 @@ export class ModuleHost {
                       this.createContext(module, atom, signal),
                     ),
                   ).then(() => undefined),
+                {
+                  ...(subscription.retryForever === undefined ? {} : { retryForever: subscription.retryForever }),
+                  ...(subscription.retryDelayMs === undefined ? {} : { retryDelayMs: subscription.retryDelayMs }),
+                },
               ),
             );
           } else {

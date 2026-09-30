@@ -18,7 +18,7 @@ describe("database schema v1", () => {
       information_protocol: string;
     }>("SELECT version, information_protocol FROM kaguya_schema_metadata");
     expect(metadata.rows).toEqual([
-      { version: 1, information_protocol: "router-light-heavy.v1" },
+      { version: 2, information_protocol: "router-light-heavy.v2" },
     ]);
     await database.sql.query(
       "INSERT INTO information_kinds (kind) VALUES ($1)",

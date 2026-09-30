@@ -317,7 +317,6 @@ export function createExpressionModule(
               .execute({
                 task: {
                   taskId: "memory.expression.learn",
-                  version: "1",
                   outputMode: "object",
                   outputSchema: learningOutputSchema,
                   allowedTiers: ["light"],
@@ -430,7 +429,6 @@ export function createExpressionModule(
                 .execute({
                   task: {
                     taskId: "memory.expression.select",
-                    version: "1",
                     outputMode: "object",
                     outputSchema: selectionOutputSchema,
                     allowedTiers: ["light"],

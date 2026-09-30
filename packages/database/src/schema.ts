@@ -1,5 +1,5 @@
 /**
- * 功能概述：初始化并校验 PostgreSQL v1 账本及 Router/Light/Heavy 协议标记；prepareLifecycleProjection 建立可重建的开放集合及 scope 槽。
+ * 功能概述：初始化并校验 PostgreSQL v2 账本及 Router/Light/Heavy 协议标记；prepareLifecycleProjection 建立可重建的开放集合及 scope 槽。
  * 主要职责：prepareDatabaseSchema 在启动事务中校验既有结构并首次回填投影；后续启动不扫描历史。
  * prepareKindContracts 只增加通用 Kind 契约列，后续插件安装与升级不再执行模块专用 DDL。
  * prepareWebMemoryDestination 兼容旧 Web 目标约束，允许 conversationId 索引；旧 NULL 行不改写。
@@ -9,8 +9,8 @@
  */
 import type { SqlDatabase } from "./driver.js";
 
-export const POSTGRES_SCHEMA_VERSION = 1;
-export const INFORMATION_PROTOCOL_VERSION = "router-light-heavy.v1";
+export const POSTGRES_SCHEMA_VERSION = 2;
+export const INFORMATION_PROTOCOL_VERSION = "router-light-heavy.v2";
 
 const REQUIRED_TABLES = [
   "kaguya_schema_metadata",
@@ -122,6 +122,7 @@ export async function prepareDatabaseSchema(
       await prepareWebMemoryDestination(tx);
       await prepareLifecycleProjection(tx);
       await prepareKindContracts(tx);
+      await prepareRawEventMemory(tx);
       return;
     }
     if (tableNames.size > 0) {
@@ -130,7 +131,7 @@ export async function prepareDatabaseSchema(
     await tx.exec(`
       CREATE TABLE kaguya_schema_metadata (
         singleton boolean PRIMARY KEY CHECK (singleton),
-        version integer NOT NULL CHECK (version = 1),
+        version integer NOT NULL CHECK (version = 2),
         information_protocol text NOT NULL
           CHECK (information_protocol = '${INFORMATION_PROTOCOL_VERSION}')
       );
@@ -287,7 +288,45 @@ export async function prepareDatabaseSchema(
     );
     await prepareLifecycleProjection(tx);
     await prepareKindContracts(tx);
+    await prepareRawEventMemory(tx);
   });
+}
+
+/** Raw Memory is an idempotent ledger projection, independent of optional sparse indexing. */
+async function prepareRawEventMemory(tx: import("./driver.js").SqlTransaction): Promise<void> {
+  await tx.query("SELECT pg_advisory_xact_lock(168168)");
+  const existed = await tx.query<{ events: string | null; rejections: string | null }>("SELECT to_regclass('memory_raw_events')::text AS events, to_regclass('memory_raw_rejections')::text AS rejections");
+  await tx.exec(`
+    CREATE TABLE IF NOT EXISTS memory_raw_events (
+      information_id text PRIMARY KEY REFERENCES information_atoms(information_id),
+      kind text NOT NULL,
+      payload jsonb NOT NULL,
+      "references" jsonb NOT NULL,
+      scope jsonb,
+      scope_key text,
+      occurred_at timestamptz NOT NULL,
+      position bigint NOT NULL,
+      is_semantic boolean NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS memory_raw_events_global_idx
+      ON memory_raw_events(occurred_at DESC, position DESC) WHERE is_semantic;
+    CREATE INDEX IF NOT EXISTS memory_raw_events_scope_idx
+      ON memory_raw_events(scope_key, occurred_at DESC, position DESC) WHERE is_semantic;
+    CREATE TABLE IF NOT EXISTS memory_raw_checkpoint (
+      singleton boolean PRIMARY KEY CHECK(singleton),
+      position bigint NOT NULL DEFAULT 0
+    );
+    INSERT INTO memory_raw_checkpoint(singleton, position) VALUES(true, 0)
+      ON CONFLICT (singleton) DO NOTHING;
+    CREATE TABLE IF NOT EXISTS memory_raw_rejections (
+      inbound_information_id text PRIMARY KEY REFERENCES information_atoms(information_id),
+      position bigint NOT NULL
+    );
+  `);
+  if (!existed.rows[0]?.events || !existed.rows[0]?.rejections) {
+    await tx.query("UPDATE memory_raw_checkpoint SET position=0 WHERE singleton=true");
+    await tx.query("DELETE FROM memory_raw_rejections");
+  }
 }
 
 /** 一次通用迁移：插件升级只追加 Kind/契约记录，不再增加模块专用 DDL。 */

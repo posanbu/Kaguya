@@ -311,8 +311,8 @@ it.each([
     )!;
     expect(composed.payload).toMatchObject(
       destination === "source-group"
-        ? { version: "2", outputMode: "object" }
-        : { version: "1", outputMode: "text" },
+        ? { outputMode: "object" }
+        : { outputMode: "text" },
     );
     expect(JSON.stringify(composed.payload.prompt)).toContain("当前研究群");
     expect(JSON.stringify(composed.payload.prompt)).toContain("小明");

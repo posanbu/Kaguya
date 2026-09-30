@@ -307,6 +307,7 @@ describe("unified server composition", () => {
         "agent.router.turn.completed",
         "agent.router.turn.context.completed",
         "agent.router.conversation.context.frozen",
+        "agent.router.memory.context.frozen",
         "agent.light.decision.completed",
         "agent.router.turn.started",
         "memory.identity.person.resolution",

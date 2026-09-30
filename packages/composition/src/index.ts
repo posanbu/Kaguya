@@ -16,6 +16,7 @@
  * Runtime 校验 activation/policy、重载因果 context 并写通用任务生命周期，模块经 context.use 调用。
  */
 import { memoryConfigSchema, type MemoryConfig } from "@kaguya/config";
+import { rawContextCapability } from "@kaguya/memory";
 export { CordisAssembly } from "./cordis-assembly.js";
 export {
   loadModulePlugins,
@@ -104,6 +105,7 @@ export function createMessageCatalog(
     timeZone: configuredIdentity.timeZone,
   };
   return createFirstPartyModuleCatalog({
+    rawContextCapability,
     messageAuthorizationCapability,
     modelTaskCapability,
     modelTaskCompletedInformationKind,

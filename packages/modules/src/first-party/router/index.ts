@@ -1,6 +1,6 @@
 /**
  * 候选新旧由 Selector 的账本注册顺序确定；相同/迟到业务时间及随机 UUID 不改变消费先后。
- * 新版 Light 的 message 决策只传目标与冻结引用；旧版 composition 仅用于账本兼容。
+ * Light 的 message 决策只传目标与冻结引用。
  * manifest 声明 Light 模板；调用 compileLightPrompt 时传入装配阶段加载的 default/local 文本，不再使用代码内默认值。
  * settings schema 的公开中文元数据供管理表单使用，运行时与保存共用约束。
  * 管理端批准的跨会话 candidate 由宿主直接认领，不再触发 Light；其 delivery 仍使用本模块统一 turn 终态。
@@ -19,6 +19,8 @@
  * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
  */
 import { firstPartyInspection } from "../inspection.js";
+import type { RawContextAccess } from "@kaguya/memory";
+import { frozenRawContextInformationKind } from "./raw-context.js";
 import { focusOpened, focusRenewed, focusKinds } from "./focus-facts.js";
 import { focusStateSelector, createRouterFocusSubscriptions } from "./focus.js";
 import {
@@ -39,8 +41,6 @@ import {
   compileLightPrompt,
   lightActionSchema,
   lightActionSchemaForTurn,
-  legacyLightActionSchema,
-  legacyLightActionSchemaForTurn,
   lightContextSelector,
   lightDecisionInformationKind,
   LIGHT_TASK_ID,
@@ -56,6 +56,7 @@ import {
 } from "@kaguya/schema";
 import {
   defineInformationModule,
+  defineModuleDiagnostic,
   defineInformationSelector,
   onInformation,
   type InformationKindDefinition,
@@ -92,6 +93,19 @@ import {
 
 type AnyKind = InformationKindDefinition<string, any>;
 
+export const rawMemoryBarrierFailureDiagnostic = defineModuleDiagnostic({
+  event: "router.memory.barrier.failed",
+  message: "Raw Memory projection failed; turn remains pending",
+  level: "error",
+  payloadSchema: z
+    .object({
+      errorType: z.string().min(1),
+      turnInformationId: z.string().min(1),
+    })
+    .strict(),
+  project: (payload) => ({ ...payload }),
+});
+
 interface LightDispatch {
   readonly action: "message" | "wait" | "silent";
   readonly candidateInformationId: string;
@@ -108,6 +122,7 @@ interface LightDispatch {
 
 export interface CreateRouterModuleOptions {
   readonly modelTaskCapability: ModuleCapability<ModelTaskCapability>;
+  readonly rawContextCapability: ModuleCapability<RawContextAccess>;
   readonly messageAuthorizationCapability?: ModuleCapability<MessageAuthorization>;
   readonly agentIdentity: AgentIdentity;
   readonly activePersonProfiles?: ActivePersonProfiles;
@@ -627,6 +642,7 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
       description:
         "只在非语义注意力观察决定 observe 后消费候选，按注册水位读取未读并经身份屏障冻结上下文，再请求内部 Light 选择发言、等待或静默；维护 Focus 租约，输出消息意图、等待请求和回合终态，不执行平台传输。",
       settingsSchema: routerSettingsSchema,
+      diagnostics: [rawMemoryBarrierFailureDiagnostic],
       promptTemplates: [
         lightTemplateDeclaration,
         lightBootstrapPolicyDeclaration,
@@ -666,6 +682,7 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
         turnDecisionSupersededInformationKind,
         turnDecisionInterruptedInformationKind,
         turnContextCompletedInformationKind,
+        frozenRawContextInformationKind,
         messageIntentRequestedInformationKind,
         waitRequestedInformationKind,
         turnCompletedInformationKind,
@@ -685,6 +702,7 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
       requires: [
         oneShotScheduleCapability,
         options.modelTaskCapability,
+        options.rawContextCapability,
         ...(options.messageAuthorizationCapability
           ? [options.messageAuthorizationCapability]
           : []),
@@ -759,6 +777,9 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
             {
               subscriptionId: `agent.router.observe.${definition.kind}`,
               delivery: "durable",
+              ...(definition.kind === turnContextCompletedInformationKind.kind
+                ? { retryForever: true, retryDelayMs: 5_000 }
+                : {}),
             },
             async (sourceAtom, context) => {
               if (
@@ -837,7 +858,75 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
                 );
                 return;
               }
-              let selected = [...(await context.select(lightContextSelector))];
+              let selected: DeepReadonly<InformationAtom>[] = [
+                ...(await context.select(lightContextSelector)),
+              ];
+              const hasPersistedPrompt = selected.some(
+                (atom) =>
+                  atom.kind === "core.model.task.requested" &&
+                  atom.payload.taskId === LIGHT_TASK_ID &&
+                  (atom.payload.activation as { instanceId?: string })
+                    ?.instanceId === activation.instanceId &&
+                  (atom.payload.activation as { definitionId?: string })
+                    ?.definitionId === activation.definitionId,
+              );
+              let rawAtom = selected.find(
+                (atom) =>
+                  atom.kind === frozenRawContextInformationKind.kind &&
+                  atom.payload.turnInformationId === sourceAtom.informationId,
+              );
+              if (!rawAtom && !hasPersistedPrompt) {
+                let frozenRaw;
+                try {
+                  frozenRaw = await context.use(options.rawContextCapability).freeze({
+                        turnInformationId: sourceAtom.informationId,
+                        asOf: sourceAtom.payload.backlog.evaluatedAt,
+                        scope: {
+                          platform: sourceAtom.payload.source.platform,
+                          adapterId: sourceAtom.payload.source.adapterId,
+                          destination: sourceAtom.payload.source.destination,
+                        },
+                        unreadInformationIds: sourceAtom.payload.inputs.map(
+                          (input: any) => input.informationId,
+                        ),
+                      });
+                } catch (error) {
+                  await context.report(rawMemoryBarrierFailureDiagnostic, {
+                    errorType:
+                      error instanceof Error ? error.name : "UnknownError",
+                    turnInformationId: sourceAtom.informationId,
+                  });
+                  throw error;
+                }
+                rawAtom =
+                  frozenRaw &&
+                  (await context.registerOnce(
+                    "agent.router.memory.context.frozen",
+                    sourceAtom.informationId,
+                    frozenRawContextInformationKind,
+                    {
+                      payload: {
+                        turnInformationId: sourceAtom.informationId,
+                        global: {
+                          text: frozenRaw.global.text,
+                          informationIds: [...frozenRaw.global.informationIds],
+                        },
+                        currentScope: {
+                          text: frozenRaw.currentScope.text,
+                          informationIds: [
+                            ...frozenRaw.currentScope.informationIds,
+                          ],
+                        },
+                        overBudget: frozenRaw.overBudget,
+                        characterCount: frozenRaw.characterCount,
+                      },
+                      contextInformationId: sourceAtom.references.find(
+                        (r) => r.relation === "core:context",
+                      )!.informationId,
+                    },
+                  ));
+                if (rawAtom) selected.push(rawAtom);
+              }
               const turn = selected.find(
                 (atom) => atom.informationId === gate.turnContextInformationId,
               )!;
@@ -860,8 +949,6 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
                 (atom) =>
                   atom.kind === "core.model.task.requested" &&
                   atom.payload.taskId === LIGHT_TASK_ID &&
-                  (atom.payload.version === "2" ||
-                    atom.payload.version === "3") &&
                   (
                     atom.payload.activation as {
                       instanceId?: string;
@@ -891,11 +978,8 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
                 .execute({
                   task: {
                     taskId: LIGHT_TASK_ID,
-                    version: persisted?.payload.version === "2" ? "2" : "3",
                     outputMode: "object",
-                    outputSchema: (persisted?.payload.version === "2"
-                      ? legacyLightActionSchemaForTurn
-                      : lightActionSchemaForTurn)({
+                    outputSchema: lightActionSchemaForTurn({
                       inputs: (turn.payload as any).inputs,
                       attempt: gate.attempt,
                       totalWaitBudget: gate.totalWaitBudget,
@@ -920,10 +1004,7 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
                 });
               const parsed =
                 result.status === "completed"
-                  ? (persisted?.payload.version === "2"
-                      ? legacyLightActionSchema
-                      : lightActionSchema
-                    ).safeParse(result.output)
+                  ? lightActionSchema.safeParse(result.output)
                   : undefined;
               let action: z.infer<
                 typeof lightDecisionInformationKind.payloadSchema
@@ -2044,4 +2125,4 @@ import {
   assessInputBacklog,
 } from "./turn-state.js";
 
-export { lightActionSchema, legacyLightActionSchema } from "./light.js";
+export { lightActionSchema } from "./light.js";

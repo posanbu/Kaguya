@@ -257,7 +257,6 @@ const modelTaskProvenanceSchema = z.array(
 export const modelTaskMetadataSchema = z
   .object({
     taskId: nonBlankString,
-    version: nonBlankString,
     outputMode: modelTaskOutputModeSchema,
     sourceInformationId: informationIdSchema,
     contextInformationId: informationIdSchema,
@@ -416,7 +415,6 @@ export const modelTaskRequestedInformationKind = defineInformationKind({
       event: "model.task.lifecycle",
       status: "requested",
       taskId: payload.taskId,
-      taskVersion: payload.version,
       activationDefinitionId: payload.activation.definitionId,
       activationInstanceId: payload.activation.instanceId,
       tier: payload.selectionPolicy.tier,
@@ -435,7 +433,6 @@ export const modelTaskRequestedInformationKind = defineInformationKind({
         event: "model.task.prompt",
         status: "requested",
         taskId: payload.taskId,
-        taskVersion: payload.version,
         promptFull: sanitizePromptForLogging(payload.prompt.text),
         promptVariables: payload.prompt.provenance.map((entry) => ({
           variableName: entry.variableName,
@@ -475,7 +472,6 @@ export const modelTaskCompletedInformationKind = defineInformationKind({
       event: "model.task.lifecycle",
       status: "completed",
       taskId: payload.taskId,
-      taskVersion: payload.version,
       activationDefinitionId: payload.activation.definitionId,
       activationInstanceId: payload.activation.instanceId,
       tier: payload.selectionPolicy.tier,
@@ -511,7 +507,6 @@ export const modelTaskFailedInformationKind = defineInformationKind({
       event: "model.task.lifecycle",
       status: "failed",
       taskId: payload.taskId,
-      taskVersion: payload.version,
       activationDefinitionId: payload.activation.definitionId,
       activationInstanceId: payload.activation.instanceId,
       tier: payload.selectionPolicy.tier,
@@ -565,7 +560,6 @@ export const modelTaskCancelledInformationKind = defineInformationKind({
       event: "model.task.lifecycle",
       status: "cancelled",
       taskId: payload.taskId,
-      taskVersion: payload.version,
       activationDefinitionId: payload.activation.definitionId,
       activationInstanceId: payload.activation.instanceId,
       tier: payload.selectionPolicy.tier,

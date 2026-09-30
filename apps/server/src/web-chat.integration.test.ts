@@ -310,7 +310,14 @@ describe("Web private chat through the production information DAG", () => {
     expect(f.composerPrompts).toHaveLength(3);
     expect(f.composerPrompts[2]).toContain("蓝色月亮");
     expect(f.composerPrompts[2]).toContain("Web reply 1");
-    expect(f.composerPrompts[2]).not.toContain("绿色森林");
+    expect(f.composerPrompts[2]).toContain("绿色森林");
+    const composedText = (JSON.parse(f.composerPrompts[2]!) as { content: string }[])
+      .map((message) => message.content)
+      .join("\n");
+    const currentScope = composedText
+      .split("【当前 scope 上下文：近期、历史保底与未读消息】\n")[1]
+      ?.split("\n\n")[0];
+    expect(currentScope).not.toContain("绿色森林");
     expect((await f.read(conversationB)).messages).toEqual(other.messages);
 
     const incremental = await f.read(conversationA, first.cursor);

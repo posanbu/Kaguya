@@ -1,7 +1,7 @@
 /**
  * 功能概述：独立 QQ 表情插件，从真人上下文推断收藏表情的用法，并对草稿进行低频装饰。
  * collectionSelector 隔离群/适配器并限量选择上下文；收藏素材与学习结果独立持久化。
- * draftSelector 仅允许当前会话及 Light 明确幽默/调侃意图，候选和来源先冻结再调用模型。
+ * draftSelector 仅允许当前会话，候选和来源先冻结再调用模型。
  * finalSelector 恢复原草稿、冻结来源及近期输出；串行额度提交防止并发草稿连发表情。
  * 所有模型失败、未知语义、跨群请求和额度不足均退回原正文；不主动发言、不改变投递授权。
  * Heavy 只在显式启用插件时产生草稿，插件保存 prepared 后仍由 Heavy 登记 assistant 并沿原链路发送。
@@ -148,14 +148,7 @@ const draftSelector = defineInformationSelector({
       return ids;
     const turnSource = turn.payload.source as unknown as typeof intent.target;
     // 跨会话的确认正文不加装饰，不把本群收藏转发到其他群。
-    if (
-      scopeKey(turnSource) !== scopeKey(intent.target) ||
-      !["humorous", "teasing"].includes(
-        "composition" in intent && "tone" in intent.composition
-          ? intent.composition.tone
-          : "neutral",
-      )
-    )
+    if (scopeKey(turnSource) !== scopeKey(intent.target))
       return ids;
     const inputId = (
       turn.payload.inputs as unknown as { informationId: string }[]
@@ -436,7 +429,6 @@ export function createQqExpressionModule(
                   .execute({
                     task: {
                       taskId: "plugin.qq-expression.learn",
-                      version: "1",
                       outputMode: "object",
                       outputSchema: meaningSchema,
                       allowedTiers: ["light"],
@@ -599,7 +591,6 @@ export function createQqExpressionModule(
                       .execute({
                         task: {
                           taskId: "plugin.qq-expression.select",
-                          version: "1",
                           outputMode: "object",
                           outputSchema: selectionSchema,
                           allowedTiers: ["light"],
@@ -615,7 +606,6 @@ export function createQqExpressionModule(
                         contextAtoms: promptAtoms,
                         prompt: render("select", promptAtoms, {
                           text,
-                          composition: intent!.payload.composition,
                           context: (
                             turn!.payload.inputs as unknown as {
                               text: string;

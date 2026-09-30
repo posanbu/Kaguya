@@ -127,15 +127,15 @@ describe("message intent protocol", () => {
       messageIntentRequestedInformationPayloadSchema.parse(payload),
     ).toEqual(payload);
     expect(
-      messageIntentRequestedInformationPayloadSchema.parse({
+      messageIntentRequestedInformationPayloadSchema.safeParse({
         ...payload,
         composition: {
           focusInformationIds: ["input"],
           topic: "旧话题",
           replyAct: "回应",
         },
-      }),
-    ).toHaveProperty("composition.topic", "旧话题");
+      }).success,
+    ).toBe(false);
     for (const key of Object.keys(payload)) {
       const incomplete = { ...payload } as Record<string, unknown>;
       delete incomplete[key];

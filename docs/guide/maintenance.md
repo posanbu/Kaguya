@@ -35,9 +35,9 @@ pnpm build
 
 ## 旧配置导致启动失败
 
-### Router / Light / Heavy 破坏式切换
+### 更早的 Router / Light / Heavy 破坏式切换
 
-此次协议切换不提供自动迁移或旧实例别名。必须先停止 Server 和所有写账本的进程，备份配置、local Prompt 和数据库，再人工清空旧 Information 数据库，以空库启动新版。不要把旧库的协议错误当作可忽略警告，也不要把旧库重新接回新版。清空会永久移除旧聊天、原始与派生记忆、人物画像、QQ 收藏以及模型任务和投递历史；需要保留时应在切换前做独立备份，旧数据不会导入新库。仅对确认属于当前工作区的数据库执行清空操作。
+这项早于 `router-light-heavy.v1` 的协议切换不提供自动迁移或旧实例别名。必须先停止 Server 和所有写账本的进程，备份配置、local Prompt 和数据库，再人工清空旧 Information 数据库，以空库启动新版。不要把旧库的协议错误当作可忽略警告，也不要把旧库重新接回新版。清空会永久移除旧聊天、原始与派生记忆、人物画像、QQ 收藏以及模型任务和投递历史；需要保留时应在切换前做独立备份，旧数据不会导入新库。仅对确认属于当前工作区的数据库执行清空操作。
 
 在 `modules/` 中人工将 `heartflow.default` 改为 `router.default`、定义 ID 改为 `agent.router`，并将 `plannerInterruptMaxConsecutiveCount` 改为 `lightInterruptMaxConsecutiveCount`；将 `message-composer.default` 改为 `heavy.default`、定义 ID 改为 `agent.heavy`，删除其 `modelTier` 并使 `settings` 为 `{}`；删除 `attention-focus.default`。Heartbeat 保留实例和已有数值，只把 `plannerInterruptQuietMs` 字段改为 `interruptQuietMs`。新版不会接受旧目录或旧字段。
 
@@ -51,7 +51,7 @@ pnpm build
 
 **模板无效** — 对照同名 default 的变量和结构修正 local。旧 `llm-reply.*.local.hbs` 不再加载，应按当前 `heavy` 模板重建。
 
-**数据库结构或版本不兼容** — 保留备份，核对该版本要求。Router / Light / Heavy 切换按上文在停服后人工清空旧库；其他版本错误不能仅靠改写协议标记解决。
+**数据库结构或版本不兼容** — 保留备份，核对该版本要求。已有 `router-light-heavy.v1` 账本按[信息账本的手动迁移步骤](../developers/information-ledger.md)升级到 v2，保留原始 Information；更早的 Router / Light / Heavy 切换仍按上文处理。不要只修改协议标记来跳过数据迁移。
 
 ## 恢复默认模板
 

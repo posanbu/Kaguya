@@ -205,7 +205,6 @@ async function seedRequest(id: string, options: SeedOptions = {}) {
     );
   const metadata = {
     taskId: browser.taskId,
-    version: options.heavySilent ? "2" : "1",
     activation: { definitionId, instanceId: "old-instance" },
     sourceInformationId: sourceId,
     contextInformationId: "runtime-context",
@@ -678,7 +677,6 @@ it("follows the exact Light message intent through Heavy and delivery without re
   );
   const metadata = {
     taskId: composer.taskId,
-    version: "1",
     activation: {
       definitionId: modules[1]!.definitionId,
       instanceId: "old-instance",

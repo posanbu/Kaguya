@@ -123,7 +123,6 @@ async function fixture(durable = false) {
   const request = {
     task: {
       taskId: "test.reply",
-      version: "1",
       outputMode: "object" as const,
       outputSchema: z.object({ text: z.string() }).strict(),
       allowedTiers: ["heavy"] as const,
@@ -167,7 +166,6 @@ it("reuses requested identity across instances and canonical key order, with onl
   );
   expect(requested.payload).toMatchObject({
     taskId: "test.reply",
-    version: "1",
     activation: f.request.activation,
     selectionPolicy: { tier: "heavy" },
     resolvedModel: { providerId: "test", modelId: "test-heavy" },
@@ -902,7 +900,6 @@ it("returns the persisted winner output without applying a transform again", asy
 
 it.each([
   "task",
-  "version",
   "source",
   "kind",
   "content",
@@ -921,7 +918,6 @@ it.each([
     task: { ...f.request.task, allowedTiers: ["light", "heavy"] as const },
   };
   if (mode === "task") changed.task.taskId = "test.another";
-  if (mode === "version") changed.task.version = "2";
   if (mode === "source")
     changed.sourceInformationId = f.request.contextAtoms[1]!.informationId;
   if (mode === "kind")

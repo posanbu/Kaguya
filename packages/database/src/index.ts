@@ -11,9 +11,11 @@
  * 集成测试与运维边界使用，不再创建 SQLite 文件或旧消息/运行记录仓储。
  */
 import { PgDatabase, type SqlDatabase } from "./driver.js";
+export { PgDatabase, type SqlDatabase } from "./driver.js";
 import { InformationRepository } from "./information-repository.js";
 import { PersonProfileRepository } from "./person-profile-repository.js";
 import { PostgresMemoryStore } from "./memory-store.js";
+import { PostgresRawEventStore } from "./raw-event-store.js";
 import { prepareDatabaseSchema } from "./schema.js";
 import { ModelRequestMetricsRepository } from "./model-request-metrics.js";
 export {
@@ -80,17 +82,20 @@ export {
   PostgresMemoryStore,
   type PostgresMemoryStoreOptions,
 } from "./memory-store.js";
+export { PostgresRawEventStore } from "./raw-event-store.js";
 
 export class KaguyaDatabase {
   readonly information: InformationRepository;
   readonly personProfiles: PersonProfileRepository;
   readonly memory: PostgresMemoryStore;
+  readonly rawEvents: PostgresRawEventStore;
   readonly modelRequestMetrics: ModelRequestMetricsRepository;
 
   constructor(readonly sql: SqlDatabase) {
     this.information = new InformationRepository(sql);
     this.personProfiles = new PersonProfileRepository(sql);
     this.memory = new PostgresMemoryStore(sql);
+    this.rawEvents = new PostgresRawEventStore(sql);
     this.modelRequestMetrics = new ModelRequestMetricsRepository(sql);
   }
 

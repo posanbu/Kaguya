@@ -11,6 +11,7 @@ import { loadFirstPartyPromptTemplates } from "@kaguya/modules/prompt-templates/
 const testPrompts = loadFirstPartyPromptTemplates();
 import { createTestingDatabase } from "@kaguya/database/testing";
 import { KaguyaLlmClient } from "@kaguya/llm/client";
+import { rawContextCapability } from "@kaguya/memory";
 import {
   createFirstPartyModuleCatalog,
   createFirstPartyModuleActivations,
@@ -40,15 +41,11 @@ const testIdentity = {
 };
 const testMessageTemplates = {
   ...testPrompts.heavy,
-  main: "{{scene}}{{history}}{{memory}}{{turn}}",
-  history: "{{#each messages}}{{> history-inbound}}{{/each}}",
+  main: "{{scene}}{{global_context}}{{scope_context}}{{memory}}",
   historyInbound: "{{content}}",
   historyAssistant: "{{content}}",
   memory: "{{#each items}}{{> memory-item}}{{/each}}",
   memoryItem: "{{content}}",
-  quoted: "{{message}}",
-  turn: "{{#each messages}}{{> history-inbound}}{{/each}}",
-  plan: "{{topic}} {{reply_act}}",
 };
 
 import {
@@ -85,6 +82,7 @@ describe("KaguyaRuntime one-shot scheduler lifecycle", () => {
     const runtime = new KaguyaRuntime({
       database,
       catalog: createFirstPartyModuleCatalog({
+        rawContextCapability,
         modelTaskCapability,
         modelTaskCompletedInformationKind,
         modelTaskFailedInformationKind,
@@ -144,6 +142,7 @@ describe("KaguyaRuntime one-shot scheduler lifecycle", () => {
     const recovery = deferred<void>();
     const model = createRepeatingDeterministicModel({ text: "done" });
     const catalog = createFirstPartyModuleCatalog({
+      rawContextCapability,
       modelTaskCapability,
       modelTaskCompletedInformationKind,
       modelTaskFailedInformationKind,

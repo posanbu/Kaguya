@@ -1,7 +1,7 @@
 /**
  * 功能概述：将脱敏冻结变量接回真实 Prompt 渲染器，调用显式配置的模型验证 Light 行为。
  * 主要职责：LightBehaviorProvider 读取指定模板和评测 profile，生成 JSON 模型请求；
- * callApi 使用生产结构化协议及本轮 schema 校验动作；旧任务版本可重放旧契约。
+ * callApi 使用生产结构化协议及本轮 schema 校验动作。
  * 代码库关系：供 light-behavior.yaml 使用；复用 modules 的模板声明及 schema，
  * fixture.variables 对应账本 core.model.task.requested.prompt.variables，不重做上下文召回。
  * 旧快照没有 context_bootstrap 时显式标记 unknown；不从脱敏历史补造身份或空库状态，已有字段原样保留。
@@ -77,19 +77,16 @@ class LightBehaviorProvider {
         conversation: { state: "unknown" },
         participants: [],
       }),
+      global_context: context.vars.fixture.variables.history || "",
+      scope_context: context.vars.fixture.variables.turn || "",
+      decision_state: JSON.stringify(JSON.parse(context.vars.fixture.variables.turn)),
       ...context.vars.fixture.variables,
     };
     const variables = Object.entries(fixtureVariables).map(
       ([name, content]) => ({ name, content, informationIds: [] }),
     );
     const turn = JSON.parse(context.vars.fixture.variables.turn);
-    const taskVersion = process.env.KAGUYA_EVAL_TASK_VERSION || "3";
-    const actionSchema =
-      taskVersion === "1"
-        ? light.legacyLightActionSchema
-        : taskVersion === "2"
-          ? light.legacyLightActionSchemaForTurn(turn)
-          : light.lightActionSchemaForTurn(turn);
+    const actionSchema = light.lightActionSchemaForTurn(turn);
     const rendered = renderer.createPromptTemplateRenderer({
       kind: "route",
       templateId: "promptfoo.light.behavior",
@@ -149,7 +146,6 @@ class LightBehaviorProvider {
       output,
       metadata: {
         valid,
-        taskVersion,
         model: tier.modelId,
         promptDigest: createHash("sha256").update(compiled.text).digest("hex"),
       },

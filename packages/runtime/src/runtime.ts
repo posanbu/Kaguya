@@ -16,7 +16,7 @@
  * Model Task 由 composeModelTaskCapabilities 注入批准的 ModelTaskClient；ApprovedModelTaskClient
  * 校验宿主 activation/tier 白名单，provider、resolver、Core 与 approval 数据均保存在私有字段，
  * 模块只通过 #76 的 context.use 获得通用能力。缺少批准或无效 capability 在任何 create 前拒绝。
- * Memory 默认关闭；开启后只给 memory.raw 装配 PostgreSQL 原始写回能力。
+ * 原始事件 Memory 常开；可选 Memory 开关只装配额外的入站文档、稀疏索引与召回能力。
  * Runtime 过滤旧检索策略，不创建稀疏、向量或认知工作者。
  * inspectModules 仅在 started 状态返回模块声明、版本、Kind、Prompt 和能力绑定的只读投影。
  * ModuleHost observation 在这里映射到 lifecycle/module 命名空间，持久 Atom 单独进入 information logger。
@@ -48,7 +48,7 @@ import {
   createModuleLogger,
   type KaguyaLogger,
 } from "@kaguya/logger";
-import { MEMORY_RETRIEVAL_STRATEGY_ID, memoryCapability } from "@kaguya/memory";
+import { MEMORY_RETRIEVAL_STRATEGY_ID, memoryCapability, rawContextCapability } from "@kaguya/memory";
 import {
   deliveryRequestedInformationKind,
   messageAuthorizationCapability,
@@ -164,7 +164,7 @@ type KaguyaRuntimeBaseOptions = {
   readonly activations: readonly InformationModuleActivation[];
   readonly capabilities?: RuntimeCapabilities;
   readonly retrievalStrategies?: readonly InformationRetrievalStrategy[];
-  /** 默认关闭；开启后只装配原始消息写回能力。 */
+  /** 可选长期原文索引默认关闭；原始事件投影始终运行。 */
   readonly memory?: RuntimeMemoryOptions;
   readonly memoryFeatureState?: {
     enabled: boolean;
@@ -322,6 +322,9 @@ export class KaguyaRuntime implements InformationIngress {
   #oneShotScheduler: DurableOneShotScheduler | undefined;
   #oneShotRecoveryPromise: Promise<void> | undefined;
   #oneShotSchedulerReady = false;
+  #rawProjectionTimer: ReturnType<typeof setInterval> | undefined;
+  #rawProjectionInFlight = false;
+  #rawProjectionPromise: Promise<void> | undefined;
   readonly #oneShotPendingRefresh = new Set<InformationId>();
 
   constructor(private readonly options: KaguyaRuntimeOptions) {
@@ -398,6 +401,7 @@ export class KaguyaRuntime implements InformationIngress {
       );
     const core = this.#core;
     const database = this.#database;
+    if (input.memory.enabled) await database.memory.backfillSparseIndex();
     const desired = input.activations.filter((item) =>
       isMemoryFeature(item.definitionId),
     );
@@ -415,6 +419,7 @@ export class KaguyaRuntime implements InformationIngress {
       ...this.#hostCapabilities.filter(
         ({ capability }) => !isMemoryCapability(capability.id),
       ),
+      { capability: rawContextCapability, value: database.rawEvents },
       ...(input.memory.enabled
         ? [{ capability: memoryCapability, value: database.memory }]
         : []),
@@ -564,6 +569,7 @@ export class KaguyaRuntime implements InformationIngress {
         },
       });
       const memoryEnabled = this.options.memory?.enabled ?? false;
+      if (memoryEnabled) await database.memory.backfillSparseIndex();
       const baseRetrievalStrategies = (
         this.options.retrievalStrategies ?? []
       ).filter(({ strategyId }) => strategyId !== MEMORY_RETRIEVAL_STRATEGY_ID);
@@ -651,6 +657,7 @@ export class KaguyaRuntime implements InformationIngress {
             ({ capability }) => !capability.id.startsWith("memory:access"),
           );
       const capabilities = [
+        { capability: rawContextCapability, value: database.rawEvents },
         {
           capability: messageAuthorizationCapability,
           value: Object.freeze({
@@ -699,6 +706,19 @@ export class KaguyaRuntime implements InformationIngress {
           (activation) => !isMemoryFeature(activation.definitionId),
         ),
       );
+      const projectRaw = () => {
+        if (this.#rawProjectionInFlight || this.#state === "closing" || this.#state === "closed") return;
+        this.#rawProjectionInFlight = true;
+        this.#rawProjectionPromise = database.rawEvents.projectLatest().then(() => undefined).catch((error) => {
+          this.#runtimeLogger?.error(
+            { event: "memory.raw.projection.failed", errorType: safeErrorType(error) },
+            "Raw Memory event projection failed",
+          );
+        }).finally(() => { this.#rawProjectionInFlight = false; this.#rawProjectionPromise = undefined; });
+      };
+      this.#rawProjectionTimer = setInterval(projectRaw, 1_000);
+      this.#rawProjectionTimer.unref?.();
+      projectRaw();
       for (const activation of this.options.activations.filter((item) =>
         isMemoryFeature(item.definitionId),
       )) {
@@ -808,6 +828,9 @@ export class KaguyaRuntime implements InformationIngress {
     if (this.#cleanupPromise !== undefined) return this.#cleanupPromise;
     this.#cleanupPromise = (async () => {
       const failures: unknown[] = [];
+      if (this.#rawProjectionTimer) clearInterval(this.#rawProjectionTimer);
+      this.#rawProjectionTimer = undefined;
+      if (this.#rawProjectionPromise) await drainRuntimeOperations([this.#rawProjectionPromise], this.options.drainTimeoutMs ?? 5_000);
       try {
         await this.#oneShotScheduler?.stop();
       } catch (error) {

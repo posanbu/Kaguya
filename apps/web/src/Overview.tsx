@@ -442,7 +442,7 @@ export function Overview({
           <p role="alert">无法读取功能状态，请刷新概览。</p>
         )}
         <div className="overview-grid" aria-live="polite">
-          {([["memory.raw", "原始记忆", Database]] as const).map(
+          {([["memory.raw", "长期记忆索引", Database]] as const).map(
             ([id, title, icon]) => (
               <FeatureTile
                 key={id}

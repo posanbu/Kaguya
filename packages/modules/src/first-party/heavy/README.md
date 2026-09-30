@@ -18,7 +18,7 @@
 
 默认模板位于 `packages/modules/templates/heavy.default.hbs`。本地覆盖使用同名 `*.local.hbs`，文件被 Git 忽略，Server 重启后重新加载；旧 `llm-reply.*.local.hbs` 不再加载。
 
-模板分为 `heavy` 外层，以及 `.bootstrap`、`.history`、`.history-inbound`、`.history-assistant`、`.memory`、`.memory-item`、`.quoted`、`.turn`。集合层允许 `each`、`if`、`unless` 和明确声明的静态 partial；动态 partial、递归和自定义 helper 会被拒绝。
+模板分为 `heavy` 外层，以及 `.bootstrap`、`.history-inbound`、`.history-assistant`、`.memory`、`.memory-item`、`.scene` 等当前生效的资源。`.history-inbound` 和 `.history-assistant` 只用于独立记忆中的消息引用；双层事件 Context 由冻结 Memory 文本提供。集合层允许 `each`、`if`、`unless` 和明确声明的静态 partial；动态 partial、递归和自定义 helper 会被拒绝。
 
 外层变量包含 `context_bootstrap`、`bootstrap`、`persona`、`name`、`aliases`、`self_account`、`scene`、`history`、`memory` 和 `turn`。消息层提供 `occurred_at`、`sender_name`、`sender_id`、`platform`、`adapter_id`、`destination`、`message_id`、`mentions`、`reply_to`、`content`、`quoted_message`、`self_account`、`name` 和 `is_assistant`。引用内容属于对应入站的 `quoted_message`，不是全局必须回答的消息。
 
@@ -34,7 +34,7 @@ settings 为空对象 `{}`。模型固定使用 Profile 的 `heavy` 档位；模
 
 ## 可靠性、幂等和失败行为
 
-普通回复使用 v2 结构化输出：`message(text)` 或 `silent`；授权跨会话发送和旧任务继续使用 v1 文本输出。稳定任务键复用等价 Model Task；assistant、silent 与 delivery 使用实例级 `registerOnce` 去重。silent 不生成 assistant 或投递，由 Router 关闭回合。模型 failed/cancelled 不生成 assistant，缺少冻结引用或 provenance 不一致时拒绝继续。
+普通回复使用结构化输出：`message(text)` 或 `silent`；授权跨会话发送使用文本输出。稳定任务键复用等价 Model Task；assistant、silent 与 delivery 使用实例级 `registerOnce` 去重。silent 不生成 assistant 或投递，由 Router 关闭回合。模型 failed/cancelled 不生成 assistant，缺少冻结引用或 provenance 不一致时拒绝继续。
 
 ## 日志与可观测性
 

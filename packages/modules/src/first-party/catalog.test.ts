@@ -13,6 +13,7 @@ const testPrompts = loadFirstPartyPromptTemplates();
 import { describe, expect, it } from "vitest";
 
 import { executionExhaustedInformationKind } from "@kaguya/engine";
+import { rawContextCapability } from "@kaguya/memory";
 import { z } from "@kaguya/schema";
 import { defineInformationKind, defineModuleCapability } from "@kaguya/sdk";
 
@@ -30,15 +31,11 @@ const testIdentity = {
 };
 const testMessageTemplates = {
   ...testPrompts.heavy,
-  main: "{{scene}}{{history}}{{memory}}{{turn}}",
-  history: "{{#each messages}}{{> history-inbound}}{{/each}}",
+  main: "{{scene}}{{global_context}}{{scope_context}}{{memory}}",
   historyInbound: "{{content}}",
   historyAssistant: "{{content}}",
   memory: "{{#each items}}{{> memory-item}}{{/each}}",
   memoryItem: "{{content}}",
-  quoted: "{{message}}",
-  turn: "{{#each messages}}{{> history-inbound}}{{/each}}",
-  plan: "{{topic}} {{reply_act}}",
 };
 
 function catalog() {
@@ -52,6 +49,7 @@ function catalog() {
       log: { enabled: false },
     });
   return createFirstPartyModuleCatalog({
+    rawContextCapability,
     modelTaskCapability: defineModuleCapability(
       "kaguya:model-task",
       1,

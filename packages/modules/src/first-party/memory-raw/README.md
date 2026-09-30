@@ -1,8 +1,8 @@
-# 原始消息写回
+# 可选入站原文索引
 
 ## 目的与非目标
 
-将每条身份终态对应的 inbound 写入独立 Memory，不读取 assistant、不提取事实、不依赖回复。
+开关开启时，将每条身份终态对应的 inbound 写入额外的长期文档与稀疏索引，不读取 assistant、不提取事实、不依赖回复。供 Light/Heavy 使用的原始事件投影由 Runtime 常开维护，与本模块独立。
 
 ## 消费和产生
 
@@ -26,4 +26,4 @@ request/terminal 可通过 Information Inspection 查看。普通日志只包含
 
 ## 典型场景
 
-工作区开启原始记忆后，即使没有 Router、Heartbeat 或 Heavy，也可以保存消息。
+工作区开启长期记忆索引后，即使没有 Router、Heartbeat 或 Heavy，也可以为入站消息建立额外文档。常开事件背景不受此开关影响。

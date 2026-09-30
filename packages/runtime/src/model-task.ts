@@ -1,5 +1,5 @@
 /**
- * 功能概述：提供模块可声明的通用模型任务能力，任务 ID、版本及输出 schema 由调用方拥有。
+ * 功能概述：提供模块可声明的通用模型任务能力，任务 ID 及输出 schema 由调用方拥有。
  * 主要职责：modelTaskCapability 是版本化 token；ModelTaskClient.execute 重载 selected atoms、
  * 校验 Prompt provenance 并以规范 JSON 摘要 registerOnce，随后复用或竞争唯一终态；cancel
  * 是唯一业务取消入口，任意 reason 仅持久化固定安全说明。ModelTaskResult 仅返回赢家及校验后输出。
@@ -52,7 +52,6 @@ import {
 export interface ModelTaskRequest<TOutput> {
   readonly task: {
     readonly taskId: string;
-    readonly version: string;
     readonly outputMode: "text" | "object";
     readonly outputSchema: z.ZodType<TOutput>;
     readonly allowedTiers: readonly ("light" | "heavy")[];
@@ -103,7 +102,7 @@ export interface ModelTaskClientOptions {
   readonly now?: () => Date;
   readonly renderStructuredOutputPrompt: StructuredOutputPromptRenderer;
 }
-const terminalGroup = "kaguya.model.task.result.v1";
+const terminalGroup = "kaguya.model.task.result";
 type Requested = DeepReadonly<
   InformationAtom<
     "core.model.task.requested",
@@ -164,7 +163,6 @@ export class ModelTaskClient implements ModelTaskCapability {
       .omit({ resolvedModel: true })
       .parse({
         taskId: task.taskId,
-        version: task.version,
         outputMode: task.outputMode,
         sourceInformationId: request.sourceInformationId,
         contextInformationId: request.contextInformationId,
@@ -214,7 +212,7 @@ export class ModelTaskClient implements ModelTaskCapability {
       contexts[0]!.informationId !== metadata.contextInformationId
     )
       throw new Error("Invalid source context");
-    const key = fingerprint(metadata);
+    const key = modelTaskFingerprint(metadata);
     let requested = await this.readRequested(metadata.sourceInformationId, key);
     if (requested) {
       const terminal = await this.readTerminal(requested.informationId);
@@ -230,7 +228,7 @@ export class ModelTaskClient implements ModelTaskCapability {
       ? undefined
       : modelTaskResolvedModelSchema.parse(this.#resolveModel(selectionPolicy));
     requested ??= await this.#core.registerOnce(
-      "kaguya.model.task.requested.v1",
+      "kaguya.model.task.requested",
       key,
       modelTaskRequestedInformationKind,
       {
@@ -467,7 +465,7 @@ export class ModelTaskClient implements ModelTaskCapability {
       const payload = modelTaskRequestedInformationKind.payloadSchema.parse(
         atom.payload,
       );
-      if (fingerprint(payload) === key)
+      if (modelTaskFingerprint(payload) === key)
         return {
           ...atom,
           kind: modelTaskRequestedInformationKind.kind,
@@ -576,11 +574,10 @@ async function resultFromWinner<T = unknown>(
 function digest(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
-function fingerprint(
+export function modelTaskFingerprint(
   metadata: Pick<
     z.infer<typeof modelTaskMetadataSchema>,
     | "taskId"
-    | "version"
     | "outputMode"
     | "sourceInformationId"
     | "promptKind"
@@ -594,7 +591,6 @@ function fingerprint(
   return digest(
     canonical({
       taskId: metadata.taskId,
-      version: metadata.version,
       outputMode: metadata.outputMode,
       sourceInformationId: metadata.sourceInformationId,
       promptKind: metadata.promptKind,

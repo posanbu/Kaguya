@@ -44,6 +44,7 @@ import {
 } from "./message-quote.js";
 import { isMemorySourceInScope } from "../memory-source-scope.js";
 import { PERSON_PROFILE_REVISION_KIND } from "@kaguya/schema";
+import { frozenRawContextInformationKind } from "../router/raw-context.js";
 
 export const currentAcceptedMessageSelector = defineInformationSelector({
   selectorId: "agent.heavy.message.current-intent",
@@ -70,12 +71,19 @@ export const turnMessageContextSelector = defineInformationSelector({
     )
       throw new Error("Message intent must reference its frozen turn context");
     const turn = turns[0]!;
-    return selectFrozenTurnMessageContext({
+    const selected = await selectFrozenTurnMessageContext({
       ledger,
       sourceInformationId: sourceAtom.informationId,
       turn,
       intent,
     });
+    const requests = (await ledger.related({
+      from: [sourceAtom.informationId],
+      relation: "core:caused-by",
+      direction: "incoming",
+      limit: 100,
+    })).filter((atom) => atom.kind === "core.model.task.requested" && atom.payload.taskId === "agent.heavy.respond");
+    return [...new Set([...selected, ...requests.flatMap((atom) => [atom.informationId, ...((atom.payload.contextInformationIds as string[]) ?? [])])])];
   },
 });
 
@@ -129,12 +137,6 @@ export async function selectFrozenTurnMessageContext(options: {
   }
   const inputIds = new Set(inputs.map((atom) => atom.informationId));
   const memoryIds = new Set(intent.memoryInformationIds);
-  for (const id of "composition" in intent
-    ? intent.composition.focusInformationIds
-    : []) {
-    if (!inputIds.has(id))
-      throw new Error(`Composition focus is outside frozen turn: ${id}`);
-  }
   const recent = await ledger.find({
     kinds: [inboundTextInformationKind.kind, assistantTextInformationKind.kind],
     occurredBefore: String(turn.payload.asOf),
@@ -275,6 +277,13 @@ export async function selectFrozenTurnMessageContext(options: {
         !inputIds.has(atom.informationId) && !memoryIds.has(atom.informationId),
     ),
   );
+  const rawSnapshots = await ledger.related({
+    from: [turn.informationId],
+    relation: "core:caused-by",
+    direction: "incoming",
+    limit: 100,
+  });
+  const rawSnapshot = rawSnapshots.find((atom) => atom.kind === frozenRawContextInformationKind.kind && atom.payload.turnInformationId === turn.informationId);
   return [
     ...new Set([
       sourceInformationId,
@@ -283,6 +292,7 @@ export async function selectFrozenTurnMessageContext(options: {
       ...intent.memoryInformationIds,
       ...profileIds,
       ...history.map((atom) => atom.informationId),
+      ...(rawSnapshot ? [rawSnapshot.informationId] : []),
       ...quotes.map((atom) => atom.informationId),
     ]),
   ];
