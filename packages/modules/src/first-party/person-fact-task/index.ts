@@ -89,7 +89,6 @@ export const personFactModelDispatchingDiagnostic = defineModuleDiagnostic({
   payloadSchema: z
     .object({
       taskId: z.literal("core.person.fact.extract"),
-      taskVersion: z.literal("1"),
       tier: modelTierSchema,
       promptCharacters: z.number().int().nonnegative(),
       promptVariableCount: z.number().int().nonnegative(),
@@ -182,7 +181,6 @@ export function createPersonFactTaskModule<
         fields: {
           modelTier: settings.modelTier,
           taskId: "core.person.fact.extract",
-          taskVersion: "1",
         },
       }),
       subscriptions: [
@@ -208,7 +206,6 @@ export function createPersonFactTaskModule<
             );
             await context.report(personFactModelDispatchingDiagnostic, {
               taskId: "core.person.fact.extract",
-              taskVersion: "1",
               tier: settings.modelTier,
               promptCharacters: Array.from(prompt.text).length,
               promptVariableCount: prompt.variables.length,
@@ -216,7 +213,6 @@ export function createPersonFactTaskModule<
             await context.use(modelTaskCapability).execute({
               task: {
                 taskId: "core.person.fact.extract",
-                version: "1",
                 outputMode: "object",
                 outputSchema: personFactTaskOutputSchema,
                 allowedTiers: ["light", "heavy"],
@@ -377,7 +373,6 @@ function isOwnedCompletion(
 ): boolean {
   return (
     payload.taskId === "core.person.fact.extract" &&
-    payload.version === "1" &&
     payload.activation.definitionId === definitionId &&
     payload.selectionPolicy.tier === modelTier
   );

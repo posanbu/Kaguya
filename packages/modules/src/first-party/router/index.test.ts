@@ -28,6 +28,7 @@ import {
   oneShotRequestedInformationKind,
 } from "@kaguya/scheduler";
 import { loadFirstPartyPromptTemplates } from "../../node/prompt-templates.js";
+import { rawContextCapability } from "@kaguya/memory";
 import { createRouterModule } from "./index.js";
 import { focusOpened } from "../router/focus-facts.js";
 import { scopeOf } from "../heartbeat/observation.js";
@@ -107,6 +108,7 @@ async function fixture(
   }));
   const promptTemplates = loadFirstPartyPromptTemplates();
   const module = createRouterModule({
+    rawContextCapability,
     lightTemplate: promptTemplates.light,
     lightBootstrapPolicy: promptTemplates.lightBootstrapPolicy,
     modelTaskCapability,
@@ -154,6 +156,7 @@ async function fixture(
     catalog,
     now,
     capabilities: [
+      { capability: rawContextCapability, value: database.rawEvents },
       {
         capability: modelTaskCapability,
         value: { execute, cancel: async () => undefined },

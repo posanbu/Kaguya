@@ -86,6 +86,7 @@ describe("demo entry point", () => {
       "agent.heartbeat.candidate: 1",
       "agent.light.decision.completed: 1",
       "agent.router.conversation.context.frozen: 1",
+      "agent.router.memory.context.frozen: 1",
       "agent.router.message.intent.requested: 1",
       "agent.router.turn.claimed: 1",
       "agent.router.turn.completed: 1",

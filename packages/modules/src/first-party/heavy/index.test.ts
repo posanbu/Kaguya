@@ -242,7 +242,6 @@ describe("message composer", () => {
     };
     expect(request.task).toMatchObject({
       taskId: "agent.heavy.respond",
-      version: "2",
       outputMode: "object",
     });
     expect(request.prompt.text).toContain("FIRST_INPUT");
@@ -252,16 +251,40 @@ describe("message composer", () => {
       expect.objectContaining({ event: "heavy.model.dispatching" }),
       expect.objectContaining({
         taskId: "agent.heavy.respond",
-        turnCharacters: expect.any(Number),
+        globalContextCharacters: expect.any(Number),
+        scopeContextCharacters: expect.any(Number),
       }),
     );
     expect(s.registerOnce).not.toHaveBeenCalled();
+  });
+  it("replays a persisted Heavy request with its original Prompt", async () => {
+    const s = await setup();
+    const oldPrompt = {
+      templateId: "persisted-heavy",
+      text: "PERSISTED_PROMPT",
+      templates: [],
+      variables: [],
+    };
+    const persisted = atom("old-heavy-request", "core.model.task.requested", {
+      taskId: "agent.heavy.respond",
+      activation,
+      prompt: oldPrompt,
+      contextInformationIds: s.f.atoms.map((item) => item.informationId),
+    });
+    vi.mocked(s.context.select).mockResolvedValue([...s.f.atoms, persisted]);
+    await s.instance.subscriptions[0]!.handle(s.f.intent as never, s.context);
+    expect(s.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: expect.objectContaining({ taskId: "agent.heavy.respond" }),
+        prompt: oldPrompt,
+        contextAtoms: s.f.atoms,
+      }),
+    );
   });
   it("records target-only assistant and text delivery, preserving turn without reply markers", async () => {
     const s = await setup();
     const completed = atom("completed-1", completedKind.kind, {
       taskId: "agent.heavy.respond",
-      version: "1",
       sourceInformationId: s.f.intent.informationId,
       activation: { ...activation, instanceId: "another-instance" },
       selectionPolicy: { tier: "heavy" },
@@ -312,13 +335,11 @@ describe("message composer", () => {
     for (const override of [
       { taskId: "foreign.task" },
       { taskId: "core.reply.generate" },
-      { version: "9" },
       { selectionPolicy: { tier: "light" } },
       { activation: { ...activation, definitionId: "foreign.module" } },
     ]) {
       const completed = atom("completed-1", completedKind.kind, {
         taskId: "agent.heavy.respond",
-        version: "1",
         sourceInformationId: "intent-1",
         activation,
         selectionPolicy: { tier: "heavy" },

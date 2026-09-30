@@ -4,5 +4,6 @@
  * 本入口不建立连接或注册任务，供 database、modules 与 composition 引用版本化 capability。
  */
 export * from "./contracts.js";
+export * from "./raw-events.js";
 export * from "./vector.js";
 export * from "./cognition.js";

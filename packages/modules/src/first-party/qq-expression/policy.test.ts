@@ -50,27 +50,11 @@ it("does not reset cooldown when a busy conversation truncates recent history", 
   expect(stripEmoji("© 2026 ™ ordinary")).toBe("© 2026 ™ ordinary");
 });
 
-it.each([
-  [undefined, false],
-  ["neutral", false],
-  ["humorous", true],
-  ["teasing", true],
-] as const)(
-  "allows expression context only for an explicit humorous plan (%s)",
-  async (tone, allowed) => {
+it(
+  "selects same-scope expression context without a Light composition field",
+  async () => {
     const f = fixture();
-    const intent = atom(
-      f.intent.informationId,
-      f.intent.kind,
-      {
-        ...f.intent.payload,
-        composition: {
-          ...(f.intent.payload.composition as JsonObject),
-          ...(tone ? { tone } : {}),
-        },
-      },
-      [...f.intent.references],
-    );
+    const intent = f.intent;
     const request = atom("request", "core.model.task.requested", {}, [
       { relation: "core:caused-by", informationId: intent.informationId },
     ]);
@@ -103,7 +87,7 @@ it.each([
       retrieve: async () => [],
     };
     const ids = await selector.select({ sourceAtom: draft, ledger });
-    expect(ids.includes(f.turn.informationId)).toBe(allowed);
+    expect(ids.includes(f.turn.informationId)).toBe(true);
     const crossDraft = atom(
       "cross",
       draft.kind,

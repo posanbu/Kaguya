@@ -13,9 +13,9 @@ description: 查看 Light、Heavy 与结构化输出协议的生产模板，以�
 
 ## Light：决定是否交给 Heavy
 
-Router 把冻结 turn、身份、同会话历史、选中记忆、平台参与策略和当前会话背景填入 [Light 主模板](https://github.com/posanbu/Kaguya/blob/main/packages/modules/templates/light.decision.default.hbs)。`turn` 包含完整本轮输入、引用解析结果、可用动作及等待预算；历史与记忆有独立预算。[变量编译位置](https://github.com/posanbu/Kaguya/blob/main/packages/modules/src/first-party/router/light.ts)。
+Router 先等待原始 Memory 写入越过本轮账本上界，再冻结 `global_context` 与 `scope_context`。前者包含近十分钟各 scope 的运行事件；后者包含当前 scope 近十分钟、窗口前最近三十条语义事件及全部带“未读”标记的本轮入站原文。两块文本及完整来源 ID 持久化在同一个冻结事实中。Light 还读取身份、选中记忆、平台参与策略、当前会话背景和 `decision_state` 中的动作及等待预算。[变量编译位置](https://github.com/posanbu/Kaguya/blob/main/packages/modules/src/first-party/router/light.ts)、[原始 Memory 读取](https://github.com/posanbu/Kaguya/blob/main/packages/database/src/raw-event-store.ts)。
 
-当前 Light 任务为 v3，输出 `message | wait | silent` 和理由；`message` 只附带必要的目标信息，不传话题、回复动作、焦点、语气或写作建议。已持久化的 v1/v2 任务仍按原协议重放。
+当前 Light 任务输出 `message | wait | silent` 和理由；`message` 只附带必要的目标信息，不传话题、回复动作、焦点、语气或写作建议。Model Task 不再保存版本字段；已完成任务的请求仍保留原始 Prompt。
 
 ::: code-group
 
@@ -44,11 +44,9 @@ Light 是 `object` Model Task。Runtime 先把任务输出 schema 转为 JSON Sc
 
 ## Heavy：独立决定普通回复或沉默
 
-Light 选择 `message` 后，Heavy 根据消息意图重载同一份冻结 turn。Light 生成的表达计划不会进入 Heavy Prompt；旧意图中的 `composition` 仍可解析以支持重放，但不会用来指导生成。`turn` 展示本轮全部输入。历史只含同目标的入站和已成功投递的 assistant 消息，最多 30 条、12,000 个 Unicode 字符；记忆最多 4,000 个字符。本轮输入不受历史预算裁剪。[上下文选择](https://github.com/posanbu/Kaguya/blob/main/packages/modules/src/first-party/heavy/message-context.ts)、[变量编译](https://github.com/posanbu/Kaguya/blob/main/packages/modules/src/first-party/heavy/message-prompt.ts)。
+Light 选择 `message` 后，Heavy 根据消息意图取得同一个原始 Memory 冻结事实，逐字复用 `global_context` 与 `scope_context`。Light 生成的表达计划不会进入 Heavy Prompt。独立 `memory`、人物资料、场景和 `conversation.background` 保持原职责。两块事件文本共以 32,000 字为目标预算；三十条历史保底与未读原文不裁剪。[上下文选择](https://github.com/posanbu/Kaguya/blob/main/packages/modules/src/first-party/heavy/message-context.ts)、[变量编译](https://github.com/posanbu/Kaguya/blob/main/packages/modules/src/first-party/heavy/message-prompt.ts)。
 
-`heavy.plan` 模板资源只为旧配置保留；新版编译器不渲染它，也不把它附在模型请求中。
-
-以下是 [Heavy 主模板](https://github.com/posanbu/Kaguya/blob/main/packages/modules/templates/heavy.default.hbs)，其中 `behavior_policy`、`platform_style`、`scene`、`bootstrap`、`history`、`memory`、`turn` 会替换为后续模板渲染结果；`persona`、身份、时间、冻结事实和上下文状态也在请求时填入。
+以下是 [Heavy 主模板](https://github.com/posanbu/Kaguya/blob/main/packages/modules/templates/heavy.default.hbs)，其中 `behavior_policy`、`platform_style`、`scene`、`bootstrap`、`global_context`、`scope_context`、`memory` 会替换为后续模板渲染结果；`persona`、身份、时间、冻结事实和上下文状态也在请求时填入。新请求没有独立的 `history` 或 `turn` 文本段。
 
 ::: code-group
 
@@ -71,19 +69,14 @@ Light 选择 `message` 后，Heavy 根据消息意图重载同一份冻结 turn�
 
 :::
 
-### 历史、记忆与完整本轮
+### 原始事件背景与记忆
 
-`history-inbound` 同时用于历史入站和本轮输入；引用正文经同目标、冻结截止时间与唯一来源核验后，作为该条输入的 `quoted_message` 展示。
+事件描述由各 Information Kind 专属包装器在冻结时生成；成功投递与失败尝试有不同状态措辞，入站原生回复关系保留在描述中。没有证据链的事件不显示。请求、草稿和模型任务不作为独立背景事件。独立记忆仍使用以下模板。
 
 ::: code-group
 
-<<< ../../packages/modules/templates/heavy.history.default.hbs [历史列表 ~~vscode-icons:file-type-handlebars~~]
-<<< ../../packages/modules/templates/heavy.history-inbound.default.hbs [入站消息 ~~vscode-icons:file-type-handlebars~~]
-<<< ../../packages/modules/templates/heavy.history-assistant.default.hbs [已发送消息 ~~vscode-icons:file-type-handlebars~~]
 <<< ../../packages/modules/templates/heavy.memory.default.hbs [记忆列表 ~~vscode-icons:file-type-handlebars~~]
 <<< ../../packages/modules/templates/heavy.memory-item.default.hbs [单条记忆 ~~vscode-icons:file-type-handlebars~~]
-<<< ../../packages/modules/templates/heavy.turn.default.hbs [完整本轮 ~~vscode-icons:file-type-handlebars~~]
-<<< ../../packages/modules/templates/heavy.quoted.default.hbs [引用消息 ~~vscode-icons:file-type-handlebars~~]
 
 :::
 
@@ -100,7 +93,7 @@ Light 选择 `message` 后，Heavy 根据消息意图重载同一份冻结 turn�
 
 :::
 
-普通回复的 Heavy 任务为 v2 `object` Model Task，返回 `{"action":"message","text":"..."}` 或 `{"action":"silent"}`。选择 silent 时记录事实并结束回合，不创建 assistant 或投递。已授权的跨会话发送及旧版普通任务仍使用 v1 `text` 输出。Runtime 核对变量的来源 ID、保存最终 `prompt.text`、模板和 digest；结构化任务追加 JSON Schema 协议，LLM client 使用保存的 `prompt.text` 调用模型。这条 Model Task 路径不另传 `system` 字段。[持久化与调用](https://github.com/posanbu/Kaguya/blob/main/packages/runtime/src/model-task.ts)、[LLM client](https://github.com/posanbu/Kaguya/blob/main/packages/llm/src/client.ts)。
+普通回复的 Heavy 任务为 `object` Model Task，返回 `{"action":"message","text":"..."}` 或 `{"action":"silent"}`。选择 silent 时记录事实并结束回合，不创建 assistant 或投递。已授权的跨会话发送使用 `text` 模式。Runtime 核对变量的来源 ID、保存最终 `prompt.text`、模板和 digest；结构化任务追加 JSON Schema 协议，LLM client 使用保存的 `prompt.text` 调用模型。这条 Model Task 路径不另传 `system` 字段。[持久化与调用](https://github.com/posanbu/Kaguya/blob/main/packages/runtime/src/model-task.ts)、[LLM client](https://github.com/posanbu/Kaguya/blob/main/packages/llm/src/client.ts)。
 
 ## 查看某一次请求的完整文本
 

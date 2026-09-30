@@ -24,7 +24,6 @@ export {
   routerSettingsSchema,
   routerStateSelector,
   lightActionSchema,
-  legacyLightActionSchema,
   type CreateRouterModuleOptions,
 } from "./first-party/router/index.js";
 export {

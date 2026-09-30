@@ -51,6 +51,7 @@ import {
   sameMessageTarget,
 } from "./message-quote.js";
 import { formatZonedInstant } from "../temporal-context.js";
+import { frozenRawContextInformationKind } from "../router/raw-context.js";
 
 export interface AgentIdentity {
   readonly name: string;
@@ -66,19 +67,14 @@ export interface HeavyPromptTemplates {
   readonly scene: string;
   readonly conversationBackground: string;
   readonly expressionHabits: string;
-  readonly plan: string;
-  readonly history: string;
   readonly historyInbound: string;
   readonly historyAssistant: string;
   readonly memory: string;
   readonly bootstrap: string;
   readonly memoryItem: string;
-  readonly quoted: string;
-  readonly turn: string;
 }
 
 export const ZH_CN_MESSAGE_PROMPT = Object.freeze({
-  version: "zh-CN/v2",
   historyMessageLimit: 30,
   historyCharacterLimit: 12_000,
   memoryCharacterLimit: 4_000,
@@ -101,7 +97,7 @@ export function createMessagePromptCompiler(
   ].some((name) => sceneVariables.has(name));
   const renderOuter = createPromptTemplateRenderer({
     kind: "message",
-    templateId: `kaguya.heavy.${ZH_CN_MESSAGE_PROMPT.version}`,
+    templateId: "kaguya.heavy.zh-CN",
     main: template("heavy", templates.main, outerVariables),
   });
   const outerTemplates = renderOuter(emptyVariables(outerVariables)).templates;
@@ -169,7 +165,7 @@ export function createMessagePromptCompiler(
         (atom.kind === inboundTextInformationKind.kind ||
           atom.kind === assistantTextInformationKind.kind),
     );
-    const history = renderHistory(nested, historyAtoms, identity, speakerName);
+    const boundedHistory = fitHistoryBudget(historyAtoms);
     const memories = renderMemories(
       nested,
       payload.memoryInformationIds.map((id) => {
@@ -180,48 +176,19 @@ export function createMessagePromptCompiler(
       identity,
       speakerName,
     );
-    const quoteIds: InformationId[] = [];
-    const messages = inputs.map((input) => {
-      const quotedId = platformMessageIdOfQuote(input);
-      const quote =
-        quotedId === undefined
-          ? undefined
-          : resolveMessageQuote(
-              [
-                ...atoms.filter((atom) => !inputIds.has(atom.informationId)),
-                ...inputs,
-              ],
-              quotedId,
-              payload.target,
-              asOf,
-            );
-      const quotedAtom = quote?.message;
-      if (quote)
-        quoteIds.push(...quote.provenance.map((atom) => atom.informationId));
-      return {
-        ...messageContext(input, identity, speakerName),
-        quoted_message: quotedAtom
-          ? nested.render("quoted", {
-              message: renderMessage(nested, quotedAtom, identity, speakerName),
-              message_id: quotedId,
-            })
-          : "",
-      };
-    });
-    for (const id of "composition" in payload
-      ? payload.composition.focusInformationIds
-      : []) {
-      const input = inputs.find((candidate) => candidate.informationId === id);
-      if (!input)
-        throw new Error(`Composition focus is outside frozen turn: ${id}`);
-    }
-    const turn = nested.render("turn", { messages });
+    const raw = atoms.find(
+      (atom) =>
+        atom.kind === frozenRawContextInformationKind.kind &&
+        atom.payload.turnInformationId === turnContext!.informationId,
+    );
+    if (!raw) throw new Error("Heavy requires frozen raw Memory context");
+    const rawSnapshot = frozenRawContextInformationKind.payloadSchema.parse(
+      raw.payload,
+    );
     const prompt = renderOuter([
       contextBootstrapVariable(
         turnContext!,
-        atoms.filter((atom) =>
-          history.informationIds.includes(atom.informationId),
-        ),
+        boundedHistory,
         atoms.filter((atom) =>
           memories.informationIds.includes(atom.informationId),
         ),
@@ -260,19 +227,16 @@ export function createMessagePromptCompiler(
         `${currentTime.local} (${currentTime.timeZone}; ${currentTime.iso})`,
         [turnContext!.informationId],
       ),
-      variable("history", history.content, history.informationIds),
+      variable("global_context", rawSnapshot.global.text, [raw.informationId]),
+      variable("scope_context", rawSnapshot.currentScope.text, [
+        raw.informationId,
+      ]),
       variable("memory", memories.content, memories.informationIds),
       variable(
         "bootstrap",
         nested.render("bootstrap", { bootstrap: JSON.stringify(bootstrap) }),
         [turnContext!.informationId],
       ),
-      variable("turn", turn, [
-        ...new Set([
-          ...inputs.map((input) => input.informationId),
-          ...quoteIds,
-        ]),
-      ]),
     ]);
     return appendPersonProfilesToPrompt(
       { ...prompt, templates: allTemplates },
@@ -318,7 +282,6 @@ export function compileMessagePrompt(
     sourceInformationId,
   );
 }
-
 export function renderHistoryAtom(
   atom: DeepReadonly<InformationAtom>,
   identity: AgentIdentity,
@@ -368,44 +331,11 @@ function compileNested(templates: HeavyPromptTemplates) {
       .filter(
         (d) =>
           d.key !== "main" &&
-          d.key !== "plan" &&
           d.key !== "conversationBackground" &&
           d.key !== "expressionHabits",
       )
       .map((d) => ({ ...d, content: templates[d.key] })),
   );
-}
-
-function renderHistory(
-  renderer: CompiledPromptTemplateSet,
-  atoms: readonly DeepReadonly<InformationAtom>[],
-  identity: AgentIdentity,
-  speakerName: (source: MessageSource) => string = displayName,
-): { content: string; informationIds: InformationId[] } {
-  let remaining = ZH_CN_MESSAGE_PROMPT.historyCharacterLimit;
-  const contexts = new Map<InformationId, Record<string, unknown>>();
-  for (const atom of [...atoms]
-    .sort(compareAtoms)
-    .reverse()
-    .slice(0, ZH_CN_MESSAGE_PROMPT.historyMessageLimit)) {
-    if (remaining <= 0) break;
-    const context = messageContext(atom, identity, speakerName);
-    const name = context.is_assistant ? "history-assistant" : "history-inbound";
-    const bounded = boundRenderedContext(renderer, name, context, remaining);
-    const cost = Array.from(renderer.render(name, bounded)).length;
-    if (cost > remaining) continue;
-    remaining -= cost;
-    contexts.set(atom.informationId, bounded);
-  }
-  const ordered = [...atoms]
-    .sort(compareAtoms)
-    .filter((atom) => contexts.has(atom.informationId));
-  return {
-    content: renderer.render("history", {
-      messages: ordered.map((atom) => contexts.get(atom.informationId)!),
-    }),
-    informationIds: ordered.map(({ informationId }) => informationId),
-  };
 }
 
 function renderMemories(
@@ -644,11 +574,4 @@ export function frozenTurnInputs(
       };
     },
   );
-}
-
-function platformMessageIdOfQuote(
-  atom: DeepReadonly<InformationAtom>,
-): string | undefined {
-  return (messagePayload(atom).source as MessageSource).replyTo
-    ?.platformMessageId;
 }

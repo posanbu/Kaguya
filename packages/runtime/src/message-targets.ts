@@ -24,7 +24,6 @@ import {
   conversationContextInformationKind,
   turnContextCompletedInformationKind,
   lightActionSchema,
-  legacyLightActionSchema,
   messageIntentRequestedInformationKind,
   messageIntentRequestedInformationPayloadSchema,
   targetAuthorizedInformationKind,
@@ -392,9 +391,7 @@ export class MessageTargetService implements MessageAuthorization {
       )
     )
       return fail("target-invalid-decision");
-    const action = z
-      .union([lightActionSchema, legacyLightActionSchema])
-      .parse(decision.payload.action);
+    const action = lightActionSchema.parse(decision.payload.action);
     if (
       action.action !== "message" ||
       !action.target ||
@@ -746,13 +743,6 @@ export class MessageTargetService implements MessageAuthorization {
           target,
           turn: approvedTurn,
           memoryInformationIds: [],
-          composition: {
-            focusInformationIds: [
-              String(sourceTurn.inputs.at(-1)!.informationId),
-            ],
-            topic: Array.from(parsed.instruction).slice(0, 200).join(""),
-            replyAct: "按批准要求发送消息",
-          },
         },
         references: [
           { relation: "core:context", informationId: root },

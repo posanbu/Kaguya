@@ -19,6 +19,8 @@ const DEFAULT_LEASE_MS = 330_000;
 export interface ReliableInformationSubscription {
   readonly subscriptionId: string;
   readonly kind: string;
+  readonly retryForever?: boolean;
+  readonly retryDelayMs?: number;
   handle(
     atom: DeepReadonly<InformationAtom>,
     signal: AbortSignal,
@@ -182,7 +184,7 @@ export class ReliableInformationRunner {
     ]);
     let removeAbort = () => {};
     try {
-      if (claim.attempt > (this.#options.maxAttempts ?? 3)) {
+      if (!subscription.retryForever && claim.attempt > (this.#options.maxAttempts ?? 3)) {
         await this.#options.core.exhaustClaim({ ...claim, signal });
         return;
       }
@@ -202,7 +204,7 @@ export class ReliableInformationRunner {
       signal.throwIfAborted();
       await this.#ledger.ack(claim);
     } catch {
-      await this.fail(claim, signal, controller.signal);
+      await this.fail(claim, signal, controller.signal, subscription);
     } finally {
       removeAbort();
       clearTimeout(leaseTimer);
@@ -212,17 +214,18 @@ export class ReliableInformationRunner {
     claim: InformationClaim,
     signal: AbortSignal,
     subscriptionSignal: AbortSignal,
+    subscription: ReliableInformationSubscription,
   ): Promise<void> {
     if (this.#shutdown.signal.aborted || subscriptionSignal.aborted) {
       await this.#ledger.release(claim);
       return;
     }
     if (signal.aborted) return; // 过期 claim 留给下一次领取，不能由旧持有者更改。
-    if (claim.attempt >= (this.#options.maxAttempts ?? 3)) {
+    if (!subscription.retryForever && claim.attempt >= (this.#options.maxAttempts ?? 3)) {
       await this.#options.core.exhaustClaim({ ...claim, signal });
       return;
     }
-    await this.#ledger.retry(claim, this.#options.retryDelayMs ?? 100);
+    await this.#ledger.retry(claim, subscription.retryDelayMs ?? this.#options.retryDelayMs ?? 100);
   }
 }
 async function boundedWait(

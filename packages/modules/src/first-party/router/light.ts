@@ -1,5 +1,5 @@
 /**
- * 新版 Light 只判断参与动作与必要目标；旧版 composition 仅用于已持久化任务重放。
+ * Light 只判断参与动作与必要目标。
  * memory 变量携带原文来源 ID，与当前聊天输入在规划时区分。
  * context_bootstrap 显式说明本轮证据缺口，避免把身份解析或角色设定误当作既有关系。
  * 默认源码及允许变量来自 prompt-declarations；可传入装配阶段预检的本地模板。
@@ -9,7 +9,7 @@
  * lightContextSelector 复用 Heavy 的同范围成功投递历史过滤与冻结记忆授权；compileLightPrompt
  * 选择器同时授权已持久化的任务上下文，恢复时复用首次请求，迟到消息不改变重放 Prompt。
  * 读取身份、规则、历史、记忆和全部冻结输入，提供稳定说话人键、通知事实、可用动作及经成功回执链核验的引用正文。
- * 历史与记忆分别受 12000/4000 字预算约束；引用完整来源加入 turn 变量溯源，缺失或冲突引用明确标为 unavailable。
+ * 运行时读取冻结的原始 Memory 双层上下文。
  * 只能引用宿主冻结候选，不允许生成原始目标 ID；输入正文保持完整，兴趣证据仍来自普通 memory 数据。
  * 代码库关系：Router 调用通用 Model Task 并以 claim 竞争决策锁；Heavy 仅处理获胜 message 意图。
  * 输入输出与副作用：模型只有 message/wait/silent 三个分支，故障原因由宿主写入；选择器只读账本，
@@ -46,6 +46,7 @@ import {
   normalizeTurnBootstrap,
 } from "../information-kinds.js";
 import { formatZonedInstant } from "../temporal-context.js";
+import { frozenRawContextInformationKind } from "./raw-context.js";
 
 import {
   lightTargetSchema,
@@ -53,51 +54,12 @@ import {
 } from "../message-authorization.js";
 
 export const LIGHT_TASK_ID = "agent.light.decide";
-const focusInputIndexesSchema = z
-  .array(z.number().int().nonnegative())
-  .min(1)
-  .max(3)
-  .superRefine((indexes, context) => {
-    if (new Set(indexes).size !== indexes.length)
-      context.addIssue({
-        code: "custom",
-        message: "Composition focusInputIndexes must be unique",
-      });
-  });
-const plannerCompositionShape = {
-  focusInputIndexes: focusInputIndexesSchema,
-  topic: z.string().trim().min(1).max(200),
-  replyAct: z.string().trim().min(1).max(120),
-};
-export const lightCompositionSchema = z.union([
-  z
-    .object({
-      ...plannerCompositionShape,
-      tone: z.enum(["neutral", "humorous", "teasing"]),
-    })
-    .strict(),
-  z
-    .object({
-      ...plannerCompositionShape,
-      tone: z.enum(["neutral", "humorous", "teasing"]),
-      guidance: z.string().trim().min(1).max(500),
-    })
-    .strict(),
-  z.object(plannerCompositionShape).strict(),
-  z
-    .object({
-      ...plannerCompositionShape,
-      guidance: z.string().trim().min(1).max(500),
-    })
-    .strict(),
-]);
-export const legacyLightActionSchema = z.discriminatedUnion("action", [
+export const lightActionSchema = z.discriminatedUnion("action", [
   z
     .object({
       action: z.literal("message"),
       reason: z.enum(["respond", "contribute"]),
       target: lightTargetSchema.default({ kind: "current" }),
-      composition: lightCompositionSchema,
     })
     .strict(),
   z
@@ -119,18 +81,7 @@ export const legacyLightActionSchema = z.discriminatedUnion("action", [
     })
     .strict(),
 ]);
-export const lightActionSchema = z.discriminatedUnion("action", [
-  z
-    .object({
-      action: z.literal("message"),
-      reason: z.enum(["respond", "contribute"]),
-      target: lightTargetSchema.default({ kind: "current" }),
-    })
-    .strict(),
-  legacyLightActionSchema.options[1],
-  legacyLightActionSchema.options[2],
-]);
-/** 新任务只校验参与动作与等待预算；旧任务保留原焦点校验以便重放。 */
+/** 校验参与动作与等待预算。 */
 export function lightActionSchemaForTurn(turn: {
   readonly inputs: readonly unknown[];
   readonly attempt: number;
@@ -146,46 +97,6 @@ export function lightActionSchemaForTurn(turn: {
       ]);
 }
 
-export function legacyLightActionSchemaForTurn(turn: {
-  readonly inputs: readonly unknown[];
-  readonly attempt: number;
-  readonly totalWaitBudget: number;
-}) {
-  if (turn.inputs.length === 0)
-    throw new Error("Light requires at least one frozen input");
-  const focusInputIndexes = z
-    .array(
-      z
-        .number()
-        .int()
-        .min(0)
-        .max(turn.inputs.length - 1),
-    )
-    .min(1)
-    .max(Math.min(3, turn.inputs.length))
-    .refine(
-      (indexes) => new Set(indexes).size === indexes.length,
-      "Composition focusInputIndexes must be unique",
-    );
-  const composition = z.union([
-    lightCompositionSchema.options[0].extend({ focusInputIndexes }),
-    lightCompositionSchema.options[1].extend({ focusInputIndexes }),
-    lightCompositionSchema.options[2].extend({ focusInputIndexes }),
-    lightCompositionSchema.options[3].extend({ focusInputIndexes }),
-  ]);
-  const message = legacyLightActionSchema.options[0].extend({ composition });
-  return turn.attempt < turn.totalWaitBudget
-    ? z.discriminatedUnion("action", [
-        message,
-        legacyLightActionSchema.options[1],
-        legacyLightActionSchema.options[2],
-      ])
-    : z.discriminatedUnion("action", [
-        message,
-        legacyLightActionSchema.options[2],
-      ]);
-}
-
 export type LightAction = z.infer<typeof lightActionSchema>;
 export const lightDecisionInformationKind = defineInformationKind({
   kind: "agent.light.decision.completed",
@@ -197,7 +108,6 @@ export const lightDecisionInformationKind = defineInformationKind({
       turnContextInformationId: z.string().min(1),
       action: z.union([
         lightActionSchema,
-        legacyLightActionSchema,
         z
           .object({
             action: z.literal("silent"),
@@ -329,8 +239,6 @@ export function compileLightPrompt(
   );
   const personProfiles = payload.personProfiles ?? [];
   const personNames = payload.personNames ?? [];
-  const speakerName = (source: any) =>
-    frozenSpeakerName(source, personProfiles, personNames, atoms);
   const currentTime = formatZonedInstant(
     payload.backlog.evaluatedAt,
     identity.timeZone,
@@ -356,67 +264,7 @@ export function compileLightPrompt(
     .map((id) => atoms.find((atom) => atom.informationId === id))
     .filter((atom) => atom !== undefined)
     .slice(0, 8);
-  // 先给最新历史分配预算，再按时间顺序展示，避免较早长消息挤掉最新上下文。
-  let remainingHistory = 12_000;
-  const historyText = new Map(
-    [...histories].reverse().map((atom) => {
-      const text = Array.from(String(atom.payload.text)).slice(
-        0,
-        remainingHistory,
-      );
-      remainingHistory -= text.length;
-      return [atom.informationId, text.join("")] as const;
-    }),
-  );
-  // 各条来源都有展示机会，单条长原文不能吞掉后续角色兴趣或参与者证据。
   const memoryQuota = Math.floor(4_000 / Math.max(1, memories.length));
-  const frozenInputs: DeepReadonly<InformationAtom>[] = payload.inputs.map(
-    (input: any) => ({
-      informationId: input.informationId,
-      kind: inboundTextInformationKind.kind,
-      occurredAt: input.occurredAt,
-      source: turn.source,
-      payload: { text: input.text, source: input.source },
-      references: [],
-    }),
-  );
-  const quoteAtoms = [
-    ...atoms.filter((atom) => !inputIds.has(atom.informationId)),
-    ...frozenInputs,
-  ];
-  const quoteProvenance = new Set<string>();
-  const quotedInputs = frozenInputs.map((input) => {
-    const source = inboundTextInformationKind.payloadSchema.parse(
-      input.payload,
-    ).source;
-    const id = source.replyTo?.platformMessageId;
-    if (!id) return null;
-    const quote = resolveMessageQuote(
-      quoteAtoms,
-      id,
-      payload.source,
-      payload.asOf,
-    );
-    if (!quote) return { status: "unavailable", platformMessageId: id };
-    for (const atom of quote.provenance)
-      quoteProvenance.add(atom.informationId);
-    const quotedSource = quote.message.payload.source as any;
-    return {
-      status: "resolved",
-      platformMessageId: id,
-      sourceInformationId: quote.message.informationId,
-      role: quote.message.kind,
-      speakerKey:
-        quote.message.kind === assistantTextInformationKind.kind
-          ? "self"
-          : `speaker:${quotedSource.senderId}`,
-      speaker:
-        quote.message.kind === assistantTextInformationKind.kind
-          ? identity.name
-          : speakerName(quotedSource),
-      text: quote.message.payload.text,
-    };
-  });
   const conversation = atoms.find(
     (a) =>
       a.kind === conversationContextInformationKind.kind &&
@@ -426,7 +274,7 @@ export function compileLightPrompt(
           r.informationId === turn.informationId,
       ),
   );
-  const values = [
+  let values = [
     contextBootstrapVariable(turn, histories, memories),
     {
       name: "bootstrap_policy",
@@ -464,37 +312,6 @@ export function compileLightPrompt(
     },
     { name: "identity", content: JSON.stringify(identity), informationIds: [] },
     {
-      name: "history",
-      content: JSON.stringify(
-        histories.map((atom) => {
-          const source = (atom.payload as any).source ?? {};
-          const occurredAt = formatZonedInstant(
-            atom.occurredAt,
-            identity.timeZone,
-          );
-          return {
-            role: atom.kind,
-            text: historyText.get(atom.informationId),
-            truncated:
-              historyText.get(atom.informationId) !== String(atom.payload.text),
-            speakerKey:
-              atom.kind === assistantTextInformationKind.kind
-                ? "self"
-                : `speaker:${source.senderId}`,
-            occurredAt: occurredAt.iso,
-            localTime: occurredAt.local,
-            speaker:
-              atom.kind === assistantTextInformationKind.kind
-                ? identity.name
-                : speakerName(source),
-            platformMessageId: source.platformMessageId ?? null,
-            replyTo: source.replyTo?.platformMessageId ?? null,
-          };
-        }),
-      ),
-      informationIds: histories.map((atom) => atom.informationId),
-    },
-    {
       name: "memory",
       content: JSON.stringify(
         memories.map((atom) => ({
@@ -511,67 +328,50 @@ export function compileLightPrompt(
       ),
       informationIds: memories.map((atom) => atom.informationId),
     },
+  ];
+  const raw = atoms.find(
+    (atom) =>
+      atom.kind === frozenRawContextInformationKind.kind &&
+      atom.payload.turnInformationId === turn.informationId,
+  );
+  if (!raw) throw new Error("Light requires frozen raw Memory context");
+  const frozen = frozenRawContextInformationKind.payloadSchema.parse(
+    raw.payload,
+  );
+  values = [
+    ...values,
     {
-      name: "turn",
+      name: "global_context",
+      content: frozen.global.text,
+      informationIds: [raw.informationId],
+    },
+    {
+      name: "scope_context",
+      content: frozen.currentScope.text,
+      informationIds: [raw.informationId],
+    },
+    {
+      name: "decision_state",
       content: JSON.stringify({
-        inputs: payload.inputs.map(
-          (
-            input: {
-              text: string;
-              occurredAt: string;
-              source: {
-                platformMessageId: string;
-                selfId?: string;
-                senderId: string;
-                sender?: { nickname?: string; card?: string };
-                mentions?: { kind: string; id?: string }[];
-                replyTo?: { platformMessageId: string; senderId?: string };
-              };
-            },
-            inputIndex: number,
-          ) => ({
-            inputIndex,
-            platformMessageId: input.source.platformMessageId,
-            speakerKey: `speaker:${input.source.senderId}`,
-            mentionedSelf:
-              input.source.selfId !== undefined &&
-              (input.source.mentions ?? []).some(
-                (mention) =>
-                  mention.kind === "user" && mention.id === input.source.selfId,
-              ),
-            repliedToSelf:
-              input.source.selfId !== undefined &&
-              input.source.replyTo?.senderId === input.source.selfId,
-            quotedMessage: quotedInputs[inputIndex],
-            text: input.text,
-            occurredAt: input.occurredAt,
-            localTime: formatZonedInstant(input.occurredAt, identity.timeZone)
-              .local,
-            speaker: speakerName(input.source),
-            mentions: input.source.mentions ?? [],
-            replyTo: input.source.replyTo?.platformMessageId ?? null,
-          }),
-        ),
+        availableActions:
+          payload.attempt < payload.totalWaitBudget
+            ? ["message", "wait", "silent"]
+            : ["message", "silent"],
+        attempt: payload.attempt,
+        totalWaitBudget: payload.totalWaitBudget,
         observation: {
           isPrivate: payload.isPrivate,
           isGroup: payload.isGroup,
           focusActive: payload.focusActive ?? false,
         },
-        availableActions:
-          payload.attempt < payload.totalWaitBudget
-            ? ["message", "wait", "silent"]
-            : ["message", "silent"],
-        remainingWaits: Math.max(0, payload.totalWaitBudget - payload.attempt),
         backlog: payload.backlog,
-        attempt: payload.attempt,
-        totalWaitBudget: payload.totalWaitBudget,
       }),
-      informationIds: [...new Set([turn.informationId, ...quoteProvenance])],
+      informationIds: [turn.informationId],
     },
   ];
   const prompt = createPromptTemplateRenderer({
     kind: "route",
-    templateId: "kaguya.light.zh-CN/v1",
+    templateId: "kaguya.light.zh-CN",
     main: {
       ...lightTemplateDeclaration,
       content: promptTemplate,

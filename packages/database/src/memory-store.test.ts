@@ -98,7 +98,7 @@ describe("PostgresMemoryStore", () => {
     );
   });
 
-  it("stores raw documents without building the unfinished native index", async () => {
+  it("indexes optional long-term documents for sparse recall", async () => {
     const { database, memory } = await setup();
     await appendSource(database, "source-2", "2026-09-06T10:00:00.000Z");
     await memory.put(input("source-2", "moonlight"));
@@ -106,6 +106,7 @@ describe("PostgresMemoryStore", () => {
     const grams = await database.sql.query(
       "SELECT * FROM memory_document_ngrams",
     );
-    expect(grams.rows).toEqual([]);
+    expect(grams.rows.length).toBeGreaterThan(0);
+    expect((await memory.recall({ query: "moonlight", limit: 5 })).map((hit) => hit.document.sourceInformationId)).toEqual(["source-2"]);
   });
 });

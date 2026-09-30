@@ -84,12 +84,15 @@ function messageFixture(texts) {
       contextInformationId: "turn-1",
     },
     memoryInformationIds: [],
-    composition: {
-      focusInformationIds: [messages[0].informationId],
-      topic: "评测输入",
-      replyAct: "回应输入",
-    },
   });
-  return { atoms: [intent, turn, ...messages], intentId: intent.informationId };
+  const scopeText = messages.map((message) => `[未读] ${message.payload.source.senderId}：${message.payload.text}`).join("\n");
+  const raw = make("raw-1", "agent.router.memory.context.frozen", {
+    turnInformationId: turn.informationId,
+    global: { text: "", informationIds: [] },
+    currentScope: { text: scopeText, informationIds: messages.map((message) => message.informationId) },
+    overBudget: false,
+    characterCount: scopeText.length,
+  });
+  return { atoms: [intent, turn, raw, ...messages], intentId: intent.informationId };
 }
 module.exports = { messageFixture };

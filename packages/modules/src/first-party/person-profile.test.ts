@@ -137,7 +137,7 @@ describe("person profile prompt", () => {
       },
       previousRevisionInformationId: "profile-1",
     });
-    const atoms = [f.intent, turn, ...f.messages, original, edited];
+    const atoms = [f.intent, turn, f.raw, ...f.messages, original, edited];
     const planner = compileLightPrompt(
       identity,
       atoms,
@@ -175,9 +175,9 @@ describe("person profile prompt", () => {
       expect(prompt.text).not.toContain("人工确认");
       expect(prompt.text).not.toContain("未认识");
       const turnVariable = prompt.variables.find(
-        (variable) => variable.name === "turn",
+        (variable) => variable.name === "scope_context",
       );
-      expect(turnVariable?.content).toContain("小艾（sender-0）");
+      expect(turnVariable?.content).toContain("聊聊星空");
       expect(turnVariable?.content).not.toContain("错误群名片");
       expect(
         prompt.variables.find((variable) => variable.name === "person_profiles")

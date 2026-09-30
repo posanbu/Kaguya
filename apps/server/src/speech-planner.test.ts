@@ -61,7 +61,7 @@ async function fixture(
   let expressionChoice: {
     assetInformationId: string | null;
     emoji: string | null;
-  } = { assetInformationId: null, emoji: "😂" };
+  } = { assetInformationId: null, emoji: null };
   const database = await createTestingDatabase();
   let now = Date.parse("2026-09-12T12:00:00.000Z");
   const requests: Record<string, any>[] = [];
@@ -70,7 +70,7 @@ async function fixture(
     const request = JSON.parse(String(init?.body));
     const promptText = JSON.stringify(request.messages);
     const learning = promptText.includes("归纳这批真人消息");
-    const qqSelecting = promptText.includes("已判定幽默/友好调侃");
+    const qqSelecting = promptText.includes("判断当前回复是否自然适合少量表情");
     const qqLearning = promptText.includes("你负责从文字上下文推断一个");
     const qqSourceText = request.messages
       .map((m: { content: unknown }) =>
@@ -257,6 +257,21 @@ function kinds(
 }
 
 describe("Router Light via DeepSeek-compatible provider", () => {
+  it("keeps a turn pending until the raw Memory barrier recovers", async () => {
+    const f = await fixture([speak]);
+    const freeze = vi.spyOn(f.database.rawEvents, "freeze");
+    freeze.mockRejectedValueOnce(new Error("synthetic raw projection outage"));
+    await f.submit(f.message());
+    await waitForPersistence(async () =>
+      expect(freeze).toHaveBeenCalledTimes(1),
+    );
+    expect(f.requests).toHaveLength(0);
+    expect(kinds(await f.atoms())).not.toContain("agent.light.decision.completed");
+    await f.waitForDeliveries(1);
+    await f.settle();
+    expect(kinds(await f.atoms())).toContain("agent.router.turn.completed");
+  }, 15_000);
+
   it.each([speak, silent, wait])("closes the $action DAG", async (output) => {
     const f = await fixture([output]);
     await f.submit(f.message());
@@ -268,6 +283,15 @@ describe("Router Light via DeepSeek-compatible provider", () => {
     expect((decision.payload.action as { action: string }).action).toBe(
       output.action,
     );
+    const lightPrompt = graph.find((a) => a.kind === "core.model.task.requested" && a.payload.taskId === "agent.light.decide")?.payload.prompt as any;
+    expect(lightPrompt.variables.some((v: any) => v.name === "history" || v.name === "turn")).toBe(false);
+    expect(lightPrompt.variables.find((v: any) => v.name === "scope_context")?.content).toContain("【未读】");
+    if (output.action === "message") {
+      const heavyPrompt = graph.find((a) => a.kind === "core.model.task.requested" && a.payload.taskId === "agent.heavy.respond")?.payload.prompt as any;
+      for (const name of ["global_context", "scope_context"])
+        expect(heavyPrompt.variables.find((v: any) => v.name === name)?.content).toBe(lightPrompt.variables.find((v: any) => v.name === name)?.content);
+      expect(heavyPrompt.variables.some((v: any) => v.name === "history" || v.name === "turn")).toBe(false);
+    }
     expect(f.requests.filter((r) => r.model === "deepseek-light")).toHaveLength(
       1,
     );
@@ -311,7 +335,7 @@ describe("Router Light via DeepSeek-compatible provider", () => {
           a.kind === "core.model.task.requested" &&
           a.payload.taskId === "agent.heavy.respond",
       )?.payload,
-    ).toMatchObject({ version: "2", outputMode: "object" });
+    ).toMatchObject({ outputMode: "object" });
     expect(
       graph.filter((a) => a.kind === "agent.heavy.response.silent"),
     ).toHaveLength(1);
@@ -439,7 +463,7 @@ describe("Router Light via DeepSeek-compatible provider", () => {
     },
   );
 
-  it("repairs an obsolete composition field before dispatch and replays the v3 decision once", async () => {
+  it("repairs an obsolete composition field before dispatch and replays the decision once", async () => {
     const f = await fixture([
       {
         ...speak,
@@ -460,7 +484,7 @@ describe("Router Light via DeepSeek-compatible provider", () => {
         a.kind === "core.model.task.requested" &&
         a.payload.taskId === "agent.light.decide",
     )!;
-    expect(task.payload.version).toBe("3");
+    expect(task.payload).not.toHaveProperty("version");
     expect(
       before.filter((a) => a.kind === "agent.light.decision.completed"),
     ).toHaveLength(1);
@@ -824,7 +848,7 @@ describe("Router Light via DeepSeek-compatible provider", () => {
   });
 
   it.each([true, false])(
-    "includes only successfully delivered same-scope assistant history: delivered=%s",
+    "describes the actual same-scope delivery outcome: delivered=%s",
     async (ok) => {
       const f = await fixture([speak, silent]);
       if (!ok)
@@ -837,7 +861,9 @@ describe("Router Light via DeepSeek-compatible provider", () => {
       await f.submit(f.message("m2"));
       await f.settle();
       const prompt = JSON.stringify(f.requests.at(-1)?.messages);
-      expect(prompt.includes("reply-body")).toBe(ok);
+      expect(prompt).toContain("reply-body");
+      expect(prompt).toContain(ok ? "已发送" : "发送失败");
+      if (!ok) expect(prompt).toContain("未被确认收到");
     },
   );
 
@@ -1028,7 +1054,7 @@ describe("Router Light via DeepSeek-compatible provider", () => {
 
 describe("independent QQ expression plugin through real Runtime", () => {
   it(
-    "does not append emoji without Light tone across restart",
+    "leaves replies plain when the expression model declines across restart",
     async () => {
       const f = await fixture(
         Array.from({ length: 8 }, () => speak),
@@ -1074,7 +1100,7 @@ describe("independent QQ expression plugin through real Runtime", () => {
     QQ_RESTART_TIMEOUT,
   );
   it(
-    "collects QQ face but does not select it without Light tone",
+    "collects and selects a known QQ face without Light tone",
     async () => {
       const f = await fixture([speak, speak, speak, speak, speak], true);
       await f.submit(
@@ -1100,11 +1126,11 @@ describe("independent QQ expression plugin through real Runtime", () => {
         await f.waitForDeliveries(i + 1);
         await f.settle();
       }
-      for (const call of f.delivered.mock.calls)
-        expect((call as unknown as [unknown, unknown])[1]).toEqual({
-          kind: "text",
-          text: "reply-body",
-        });
+      const deliveredMessages = f.delivered.mock.calls.map(
+        (call) => (call as unknown as [unknown, { kind: string; text: string; expression?: { kind: string; id: string } }])[1],
+      );
+      expect(deliveredMessages.every((message) => message.kind === "text" && message.text === "reply-body")).toBe(true);
+      expect(deliveredMessages.some((message) => message.expression?.kind === "face" && message.expression.id === "14")).toBe(true);
       expect(
         (await f.atoms()).filter((a) => a.kind === "core.delivery.delivered"),
       ).toHaveLength(5);

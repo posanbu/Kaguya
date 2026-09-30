@@ -209,6 +209,8 @@ export interface InformationModuleHandlerContext extends InformationModuleCreate
 export interface InformationModuleSubscription {
   readonly subscriptionId: string;
   readonly delivery: "live" | "durable";
+  readonly retryForever?: boolean;
+  readonly retryDelayMs?: number;
   readonly kind: string;
   readonly definition: InformationKindDefinition<string, JsonObject>;
   readonly handle: (
@@ -660,6 +662,8 @@ export function onInformation<K extends string, P extends JsonObject>(
   options: {
     readonly subscriptionId: string;
     readonly delivery: "live" | "durable";
+    readonly retryForever?: boolean;
+    readonly retryDelayMs?: number;
   },
   handle: (
     atom: DeepReadonly<InformationAtom<K, P>>,

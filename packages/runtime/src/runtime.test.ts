@@ -22,6 +22,7 @@
  * 并检查持久化 payload 不包含 raw/provider secret。
  */
 import { loadFirstPartyPromptTemplates } from "@kaguya/modules/prompt-templates/node";
+import { rawContextCapability } from "@kaguya/memory";
 const testPrompts = loadFirstPartyPromptTemplates();
 import {
   KaguyaLlmClient,
@@ -86,15 +87,11 @@ const testIdentity = {
 };
 const testMessageTemplates = {
   ...testPrompts.heavy,
-  main: "{{scene}}{{history}}{{memory}}{{turn}}",
-  history: "{{#each messages}}{{> history-inbound}}{{/each}}",
+  main: "{{scene}}{{global_context}}{{scope_context}}{{memory}}",
   historyInbound: "{{content}}",
   historyAssistant: "{{content}}",
   memory: "{{#each items}}{{> memory-item}}{{/each}}",
   memoryItem: "{{content}}",
-  quoted: "{{message}}",
-  turn: "{{#each messages}}{{> history-inbound}}{{/each}}",
-  plan: "{{topic}} {{reply_act}}",
 };
 
 import { GatewayAllowlist } from "./gateway-allowlist.js";
@@ -528,7 +525,6 @@ describe("KaguyaRuntime", () => {
           ...request,
           task: {
             taskId: "agent.heavy.respond",
-            version: "1",
             outputMode: "object",
             allowedTiers: ["light", "heavy"],
             outputSchema: z.object({ text: z.string() }).strict(),
@@ -599,7 +595,6 @@ describe("KaguyaRuntime", () => {
         );
       expect(requestedPayload).toMatchObject({
         taskId: "agent.heavy.respond",
-        version: "2",
         outputMode: "object",
         sourceInformationId: reply.informationId,
         activation: {
@@ -613,8 +608,8 @@ describe("KaguyaRuntime", () => {
       expect(requestedPayload.prompt.provenance).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            variableName: "turn",
-            informationIds: [inbound.informationId],
+            variableName: "scope_context",
+            informationIds: [graph.find((atom) => atom.kind === "agent.router.memory.context.frozen")!.informationId],
           }),
         ]),
       );
@@ -762,10 +757,10 @@ describe("KaguyaRuntime", () => {
       expect(payload.prompt.provenance).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            variableName: "turn",
+            variableName: "scope_context",
             informationIds: [
               secondGraph.find(
-                ({ kind }) => kind === inboundTextInformationKind.kind,
+                ({ kind }) => kind === "agent.router.memory.context.frozen",
               )!.informationId,
             ],
           }),
@@ -1152,6 +1147,7 @@ describe("KaguyaRuntime", () => {
           "agent.router.turn.claimed",
           "agent.router.turn.started",
           "agent.router.turn.context.completed",
+          "agent.router.memory.context.frozen",
           "agent.light.decision.completed",
           "agent.router.turn.completed",
           "core.delivery.delivered",
@@ -1816,6 +1812,7 @@ function createMessageComposition(
   memoryEnabled = false,
 ) {
   const catalog = createFirstPartyModuleCatalog({
+    rawContextCapability,
     modelTaskCapability,
     modelTaskCompletedInformationKind,
     modelTaskFailedInformationKind,

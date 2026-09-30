@@ -92,7 +92,7 @@ describe("context bootstrap", () => {
       { ...f.intent.payload, memoryInformationIds: [memory.informationId] },
       [...f.intent.references],
     );
-    const atoms = [intent, turn, ...f.messages, history, memory];
+    const atoms = [intent, turn, f.raw, ...f.messages, history, memory];
     for (const prompt of [
       compileLightPrompt(identity, atoms, turn, templates.light),
       compileMessagePrompt(
@@ -179,7 +179,7 @@ describe("context bootstrap", () => {
     const prompt = compileMessagePrompt(
       templates.heavy,
       identity,
-      [intent, f.turn, ...f.messages, ...memories],
+      [intent, f.turn, f.raw, ...f.messages, ...memories],
       intent.informationId,
     );
     expect(state(prompt).memoryCount).toBe(1);

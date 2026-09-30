@@ -108,7 +108,7 @@ core.runtime.context
 
 ## 消费者失败不会回滚已提交事实
 
-Server 启动时打开 Profile Registry 与显式模块实例文件，检查全局 selected Profile，并先验证数据库连接、PostgreSQL 17、严格数据库 schema v1、`router-light-heavy.v1` 协议标记与 Runtime Kind。随后才为 light/heavy target 创建模型客户端。Provider key 只存在于权限保护的 Profile JSON、配置管理器和 provider factory，不进入模块 settings、信息原子、Prompt 或日志。AI 与数据库连接检查独立执行；schema 不兼容则在任何监听前退出。完整流程见[配置生命周期](./configuration-lifecycle)。
+Server 启动时打开 Profile Registry 与显式模块实例文件，检查全局 selected Profile，并先验证数据库连接、PostgreSQL 17、严格数据库 schema v2、`router-light-heavy.v2` 协议标记与 Runtime Kind。随后才为 light/heavy target 创建模型客户端。Provider key 只存在于权限保护的 Profile JSON、配置管理器和 provider factory，不进入模块 settings、信息原子、Prompt 或日志。AI 与数据库连接检查独立执行；schema 不兼容则在任何监听前退出。完整流程见[配置生命周期](./configuration-lifecycle)。
 
 `consumer.failed` 的消费者若再次失败，或失败事实无法提交，Core 只交给 bootstrap 诊断边界，不递归生成失败原子。Core 不自动重试该失败通知，也没有内建工作队列。
 

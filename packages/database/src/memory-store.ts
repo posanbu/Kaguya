@@ -15,6 +15,7 @@ import {
   MemorySourceConflictError,
   memoryDestinationIdentity,
   memorySparseGrams,
+  memorySparseDocumentGrams,
   parseMemoryDocumentInput,
   parseMemoryRecallQuery,
   type MemoryAccess,
@@ -103,6 +104,7 @@ export class PostgresMemoryStore implements MemoryAccess {
       );
 
       if (inserted.rows[0] !== undefined) {
+        await indexDocument(tx, candidate.memoryId, candidate.content);
         return Object.freeze({
           document: rowToDocument(inserted.rows[0]),
           created: true,
@@ -113,6 +115,7 @@ export class PostgresMemoryStore implements MemoryAccess {
       if (existing === undefined || !sameDocumentInput(existing, parsed)) {
         throw new MemorySourceConflictError(parsed.sourceInformationId);
       }
+      await indexDocument(tx, existing.memoryId, existing.content);
       return Object.freeze({ document: existing, created: false });
     });
   }
@@ -121,6 +124,20 @@ export class PostgresMemoryStore implements MemoryAccess {
     sourceInformationId: string,
   ): Promise<MemoryDocument | undefined> {
     return readBySource(this.database, sourceInformationId);
+  }
+
+  /** Upgrade previously stored raw messages when optional recall is enabled. */
+  async backfillSparseIndex(): Promise<void> {
+    let after = "";
+    for (;;) {
+      const page = await this.database.query<MemoryDocumentRow>(
+        "SELECT * FROM memory_documents WHERE memory_id>$1 ORDER BY memory_id ASC LIMIT 100",
+        [after],
+      );
+      if (!page.rows.length) return;
+      for (const row of page.rows) await indexDocument(this.database, row.memory_id, row.content);
+      after = page.rows.at(-1)!.memory_id;
+    }
   }
 
   async listDocuments(input: {
@@ -181,6 +198,13 @@ export class PostgresMemoryStore implements MemoryAccess {
       ),
     );
   }
+}
+
+async function indexDocument(tx: SqlTransaction, memoryId: string, content: string): Promise<void> {
+  const grams = memorySparseDocumentGrams(content);
+  if (!grams.length) return;
+  await tx.query(`INSERT INTO memory_document_ngrams(memory_id,gram)
+    SELECT $1, unnest($2::text[]) ON CONFLICT DO NOTHING`, [memoryId, [...grams]]);
 }
 
 async function readBySource(

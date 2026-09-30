@@ -133,7 +133,6 @@ const FIELD_NAMES: Readonly<Record<string, string>> = {
   order: "启动顺序",
   transportCount: "通道数",
   taskId: "任务",
-  taskVersion: "任务版本",
   providerId: "服务商",
   modelId: "模型",
   durationMs: "耗时",

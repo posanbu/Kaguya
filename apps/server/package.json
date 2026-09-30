@@ -10,7 +10,8 @@
     "postgres:start": "pnpm --filter @kaguya/server... build && node dist/postgres-cli.js start",
     "postgres:status": "pnpm --filter @kaguya/server... build && node dist/postgres-cli.js status",
     "postgres:check": "pnpm --filter @kaguya/server... build && node dist/postgres-cli.js check",
-    "postgres:test": "pnpm --filter @kaguya/server... build && node dist/postgres-cli.js test"
+    "postgres:test": "pnpm --filter @kaguya/server... build && node dist/postgres-cli.js test",
+    "migrate:model-task": "pnpm --filter @kaguya/server... build && node dist/model-task-migration-cli.js --apply"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "3.0.14",

@@ -15,6 +15,7 @@ import {
   messageIntentRequestedInformationKind,
   turnContextCompletedInformationKind,
 } from "../information-kinds.js";
+import { frozenRawContextInformationKind } from "../router/raw-context.js";
 export const target = {
   adapterId: "adapter",
   platform: "qq",
@@ -124,11 +125,6 @@ export function fixture(texts = ["FIRST_INPUT", "LAST_INPUT"]) {
         contextInformationId: turn.informationId,
       },
       memoryInformationIds: [],
-      composition: {
-        focusInformationIds: [messages.at(-1)!.informationId],
-        topic: "当前话题",
-        replyAct: "自然回应",
-      },
     },
     [
       { relation: "core:uses-context", informationId: turn.informationId },
@@ -138,5 +134,17 @@ export function fixture(texts = ["FIRST_INPUT", "LAST_INPUT"]) {
       },
     ],
   );
-  return { intent, turn, messages, atoms: [intent, turn, ...messages] };
+  const raw = atom("raw-1", frozenRawContextInformationKind.kind, {
+    turnInformationId: turn.informationId,
+    global: { text: "", informationIds: [] },
+    currentScope: {
+      text: messages.map((message, index) =>
+        `[未读] sender-${index} 于 2026-09-09 周三 08:00:01 发送：${message.payload.text}${index > 0 ? `\n【入站引用参考】引用消息 ID：platform-${index - 1}` : ""}`,
+      ).join("\n"),
+      informationIds: messages.map((message) => message.informationId),
+    },
+    overBudget: false,
+    characterCount: messages.reduce((sum, message) => sum + String(message.payload.text).length, 0),
+  }, [{ relation: "core:caused-by", informationId: turn.informationId }]);
+  return { intent, turn, messages, raw, atoms: [intent, turn, raw, ...messages] };
 }

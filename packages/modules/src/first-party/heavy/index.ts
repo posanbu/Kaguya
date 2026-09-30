@@ -71,7 +71,6 @@ import {
 } from "./message-context.js";
 import {
   createMessagePromptCompiler,
-  ZH_CN_MESSAGE_PROMPT,
   type AgentIdentity,
   type HeavyPromptTemplates,
 } from "./message-prompt.js";
@@ -101,16 +100,13 @@ export const messageModelDispatchingDiagnostic = defineModuleDiagnostic({
   payloadSchema: z
     .object({
       taskId: z.literal("agent.heavy.respond"),
-      taskVersion: z.enum(["1", "2"]),
       outputMode: z.enum(["text", "object"]),
-      promptVersion: z.literal("zh-CN/v2"),
       tier: z.literal("heavy"),
       promptCharacters: z.number().int().nonnegative(),
       promptVariableCount: z.number().int().nonnegative(),
-      historyMessageCount: z.number().int().nonnegative(),
-      historyCharacters: z.number().int().nonnegative(),
+      globalContextCharacters: z.number().int().nonnegative(),
+      scopeContextCharacters: z.number().int().nonnegative(),
       memoryCharacters: z.number().int().nonnegative(),
-      turnCharacters: z.number().int().nonnegative(),
     })
     .strict(),
   project: (payload) => ({ ...payload }),
@@ -127,7 +123,6 @@ export const messageResponseOutputSchema = z.discriminatedUnion("action", [
 export interface ModelTaskRequest<TOutput> {
   readonly task: {
     readonly taskId: string;
-    readonly version: string;
     readonly outputMode: "text" | "object";
     readonly outputSchema: z.ZodType<TOutput>;
     readonly allowedTiers: readonly ("light" | "heavy")[];
@@ -178,7 +173,6 @@ export interface ModelTaskCapability {
 
 export type ModelTaskCompletedInformationPayload = JsonObject & {
   readonly taskId: string;
-  readonly version: string;
   readonly sourceInformationId: string;
   readonly activation: {
     readonly instanceId: string;
@@ -415,14 +409,27 @@ export function createHeavyModule<
               : undefined;
             let contextAtoms =
               authorized?.contextAtoms ?? (await context.select(selector));
+            const persisted = authorized ? undefined : contextAtoms.find(
+              (atom) => atom.kind === "core.model.task.requested" &&
+                atom.payload.taskId === "agent.heavy.respond" &&
+                (atom.payload.activation as any)?.instanceId === context.instanceId,
+            );
+            if (persisted) {
+              const byId = new Map(contextAtoms.map((atom) => [atom.informationId, atom]));
+              contextAtoms = (persisted.payload.contextInformationIds as string[]).map((id) => {
+                const atom = byId.get(id);
+                if (!atom) throw new Error("Missing persisted Heavy context");
+                return atom;
+              });
+            }
             const persistedIntent = requireSelectedMessageIntent(
               contextAtoms,
               message.informationId,
             );
             let prompt =
-              authorized?.prompt ??
+              authorized?.prompt ?? (persisted?.payload.prompt as unknown as CompiledPrompt | undefined) ??
               compilePrompt(contextAtoms, persistedIntent.informationId);
-            if (!authorized && dependencies.messageAuthorizationCapability) {
+            if (!authorized && !persisted && dependencies.messageAuthorizationCapability) {
               const service = context.use(
                 dependencies.messageAuthorizationCapability,
               );
@@ -451,16 +458,13 @@ export function createHeavyModule<
                 };
               }
             }
-            contextAtoms = [
+            contextAtoms = persisted ? contextAtoms : [
               ...new Map(
                 [...contextAtoms, ...selected].map((a) => [a.informationId, a]),
               ).values(),
             ];
-            prompt = expressionPrompt(
-              prompt,
-              contextAtoms,
-              message.informationId,
-              renderHabits,
+            if (!persisted) prompt = expressionPrompt(
+              prompt, contextAtoms, message.informationId, renderHabits,
             );
             const contexts = persistedIntent.references.filter(
               (r) => r.relation === "core:context",
@@ -470,23 +474,17 @@ export function createHeavyModule<
             const ordinaryReply = authorized === undefined;
             await context.report(messageModelDispatchingDiagnostic, {
               taskId: "agent.heavy.respond",
-              taskVersion: ordinaryReply ? "2" : "1",
               outputMode: ordinaryReply ? "object" : "text",
-              promptVersion: ZH_CN_MESSAGE_PROMPT.version,
               tier: "heavy",
               promptCharacters: Array.from(prompt.text).length,
               promptVariableCount: prompt.variables.length,
-              historyMessageCount:
-                prompt.variables.find(({ name }) => name === "history")
-                  ?.informationIds.length ?? 0,
-              historyCharacters: variableCharacters(prompt, "history"),
+              globalContextCharacters: variableCharacters(prompt, "global_context"),
+              scopeContextCharacters: variableCharacters(prompt, "scope_context"),
               memoryCharacters: variableCharacters(prompt, "memory"),
-              turnCharacters: variableCharacters(prompt, "turn"),
             });
             await context.use(modelTaskCapability).execute<unknown>({
               task: {
                 taskId: "agent.heavy.respond",
-                version: ordinaryReply ? "2" : "1",
                 outputMode: ordinaryReply ? "object" : "text",
                 outputSchema: ordinaryReply
                   ? messageResponseOutputSchema
@@ -511,8 +509,6 @@ export function createHeavyModule<
           async (completed, context) => {
             if (
               completed.payload.taskId !== "agent.heavy.respond" ||
-              (completed.payload.version !== "1" &&
-                completed.payload.version !== "2") ||
               completed.payload.activation.definitionId !==
                 activation.definitionId ||
               completed.payload.selectionPolicy.tier !== "heavy"
@@ -523,7 +519,7 @@ export function createHeavyModule<
               completed.payload.sourceInformationId,
             );
             const response =
-              completed.payload.version === "2"
+              completed.payload.outputMode === "object"
                 ? messageResponseOutputSchema.parse(completed.payload.output)
                 : {
                     action: "message" as const,

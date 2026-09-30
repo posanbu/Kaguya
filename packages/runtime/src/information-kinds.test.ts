@@ -33,7 +33,6 @@ import {
 
 const metadata = {
   taskId: "test.task",
-  version: "1",
   outputMode: "object" as const,
   sourceInformationId: "source",
   contextInformationId: "context",
@@ -80,15 +79,15 @@ describe("runtime information kinds", () => {
       messageIntentRequestedInformationPayloadSchema.parse(payload),
     ).toEqual(payload);
     expect(
-      messageIntentRequestedInformationPayloadSchema.parse({
+      messageIntentRequestedInformationPayloadSchema.safeParse({
         ...payload,
         composition: {
           focusInformationIds: ["input"],
           topic: "旧话题",
           replyAct: "回应",
         },
-      }),
-    ).toHaveProperty("composition.topic", "旧话题");
+      }).success,
+    ).toBe(false);
     for (const key of ["target", "turn", "memoryInformationIds"] as const) {
       const { [key]: _missing, ...incomplete } = payload;
       expect(

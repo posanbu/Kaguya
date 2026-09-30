@@ -260,6 +260,7 @@ export class InformationCore implements OneShotScheduleCorePort {
       atom: DeepReadonly<InformationAtom<K, P>>,
       signal: AbortSignal,
     ) => Promise<void> | void,
+    retry?: { readonly retryForever?: boolean; readonly retryDelayMs?: number },
   ): () => void {
     this.assertOpen();
     this.registry.assertRegistered(definition);
@@ -269,6 +270,7 @@ export class InformationCore implements OneShotScheduleCorePort {
       subscriptionId,
       kind: definition.kind,
       handle: handle as ReliableInformationSubscription["handle"],
+      ...retry,
     });
     return () => {
       this.#durableSubscriptions.delete(subscriptionId);

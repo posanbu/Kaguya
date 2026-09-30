@@ -49,7 +49,7 @@ describe("loadFirstPartyPromptTemplates", () => {
 
     const loaded = loadFirstPartyPromptTemplates({ root: directory.url });
     expect(loaded.heavy.main).toBe("  local\n");
-    expect(loaded.heavy.history).toBe("heavy.history");
+    expect(loaded.heavy.memory).toBe("heavy.memory");
     expect(loaded.personFact).toBe("person-fact");
   });
 

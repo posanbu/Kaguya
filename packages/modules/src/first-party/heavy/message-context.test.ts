@@ -316,12 +316,7 @@ function graphLedger(
   };
 }
 
-import { compileMessagePrompt } from "./message-prompt.js";
-import { loadFirstPartyPromptTemplates } from "../../node/prompt-templates.js";
-import { identity } from "./test-fixtures.js";
-const quoteTemplates = loadFirstPartyPromptTemplates().heavy;
-
-it("selects original successful delivery chain and renders its full quote provenance without changing assistant source", async () => {
+it("selects the original successful delivery chain without changing assistant source", async () => {
   const f = quoteFixture();
   const atoms = Object.values(f);
   const before = JSON.stringify(atoms);
@@ -331,21 +326,6 @@ it("selects original successful delivery chain and renders its full quote proven
   });
   for (const entry of [f.receipt, f.request, f.assistant])
     expect(ids).toContain(entry.informationId);
-  const result = compileMessagePrompt(
-    quoteTemplates,
-    identity,
-    atoms.filter((entry) => ids.includes(entry.informationId)),
-    f.intent.informationId,
-  );
-  const turn = result.variables.find((entry) => entry.name === "turn")!;
-  expect(turn.content).toContain("【入站引用参考】");
-  expect(turn.content).toContain("Kaguya：DELIVERED_REPLY");
-  expect(turn.informationIds).toEqual([
-    f.input.informationId,
-    f.receipt.informationId,
-    f.request.informationId,
-    f.assistant.informationId,
-  ]);
   expect(JSON.stringify(atoms)).toBe(before);
   expect(f.assistant.payload.source).toEqual(target);
 });
@@ -362,7 +342,7 @@ it.each([
   "ambiguous-request",
   "ambiguous-assistant",
   "missing-reference",
-])("rejects %s delivery quotes in selector and compiler", async (scenario) => {
+])("rejects %s delivery quotes in selector", async (scenario) => {
   const f = quoteFixture();
   const atoms: TestAtom[] = [
     f.intent,
@@ -470,19 +450,6 @@ it.each([
     expect(ids).toContain("second-receipt");
   } else expect(ids).not.toContain(f.receipt.informationId);
   expect(ids).not.toContain(f.request.informationId);
-  for (const selected of [
-    atoms,
-    atoms.filter((entry) => ids.includes(entry.informationId)),
-  ]) {
-    const turn = compileMessagePrompt(
-      quoteTemplates,
-      identity,
-      selected,
-      f.intent.informationId,
-    ).variables.find((entry) => entry.name === "turn")!;
-    expect(turn.content).not.toContain("【入站引用参考】");
-    expect(turn.informationIds).toEqual([f.input.informationId]);
-  }
 });
 
 it("keeps ordinary historical inbound quotes and their original provenance", async () => {
@@ -497,17 +464,6 @@ it("keeps ordinary historical inbound quotes and their original provenance", asy
     ledger: graphLedger(atoms),
   });
   expect(ids).toContain(inbound.informationId);
-  const turn = compileMessagePrompt(
-    quoteTemplates,
-    identity,
-    atoms.filter((entry) => ids.includes(entry.informationId)),
-    f.intent.informationId,
-  ).variables.find((entry) => entry.name === "turn")!;
-  expect(turn.content).toContain("ORDINARY_QUOTE");
-  expect(turn.informationIds).toEqual([
-    f.input.informationId,
-    inbound.informationId,
-  ]);
 });
 
 it("retains lookup ambiguity evidence when recent history contains only one matching inbound", async () => {
@@ -534,12 +490,4 @@ it("retains lookup ambiguity evidence when recent history contains only one matc
   });
   expect(ids).toContain(first.informationId);
   expect(ids).toContain(second.informationId);
-  const turn = compileMessagePrompt(
-    quoteTemplates,
-    identity,
-    atoms.filter((entry) => ids.includes(entry.informationId)),
-    f.intent.informationId,
-  ).variables.find((entry) => entry.name === "turn")!;
-  expect(turn.content).not.toContain("【入站引用参考】");
-  expect(turn.informationIds).toEqual([f.input.informationId]);
 });
