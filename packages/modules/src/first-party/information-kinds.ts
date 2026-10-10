@@ -16,7 +16,9 @@ export {
   filterDecisionInformationKind,
   coreMemoryTextInformationKind,
   assistantTextInformationKind,
+  authorizedAssistantOutputInformationKind,
   deliveryRequestedInformationKind,
+  messageOutputProcessorReady,
 } from "./kinds/message.js";
 export {
   personFactCandidateInformationPayloadSchema,

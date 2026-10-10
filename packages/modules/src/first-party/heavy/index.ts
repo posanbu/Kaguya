@@ -3,12 +3,12 @@
  * manifest.promptTemplates 显式声明消息模板组，供管理端按归属读取。
  * Heavy 固定使用 heavy 模型档位，模块 settings 为空对象。
  * 功能概述：消息编写模块消费 Router 产生的目标与冻结 turn 意图，经通用 Model Task 生成文本。
- * 宿主授权能力在选取上下文前校验目标；跨会话只使用批准 Prompt，正文确认后才通过同一 release 创建 delivery。
+ * 宿主授权能力在选取上下文前校验目标；跨会话只使用批准 Prompt，正文确认后才通过同一 release 发布授权正文。
  * 普通回复也调用宿主冻结背景，仅追加 background 投影，不把其他会话目标引用或 ID 传给正文模型。
  * 场景、人物背景与表达习惯均使用外部模板；背景和表达 renderer 在模块构造时按声明编译，只记录实际追加的模板和变量。
  * 主要职责：createHeavyModule 装配三个 durable 订阅；messageTaskOutputSchema 校验非空文本；
  * heavySettingsSchema 不接受可调设置。完成选择器沿 completed→requested→intent 核对任务来源，
- * 再以实例与事实 ID 为 registerOnce 键分别记录 assistant 和纯文本投递，重复事件不产生重复业务输出。
+ * 再以实例与事实 ID 为 registerOnce 键分别记录 assistant 和授权正文，交给唯一输出处理器，重复事件不产生重复业务输出。
  * 代码库关系：message-context 选择冻结上下文，message-prompt 编译全部本轮输入；Runtime 注入模型能力及完成定义。
  * 输入输出与副作用：意图只携带 target、turn 与 memoryInformationIds；assistant.source 保留 target，
  * 不复制入站正文或消息 ID，不提供固定路由或自动引用回复。失败或取消的模型任务不产生 assistant。
@@ -53,8 +53,8 @@ import {
 
 import {
   assistantTextInformationKind,
+  authorizedAssistantOutputInformationKind,
   coreMemoryTextInformationKind,
-  deliveryRequestedInformationKind,
   inboundTextInformationKind,
   messageIntentRequestedInformationKind,
   messageIntentRequestedInformationPayloadSchema,
@@ -79,6 +79,7 @@ import {
   messageDraftInformationKind,
   messagePreparedInformationKind,
   messageDraftProcessorReady,
+  messageOutputProcessorReady,
 } from "../kinds/message.js";
 
 export const modelTierSchema = z.enum(["light", "heavy"]);
@@ -244,36 +245,14 @@ export function createHeavyModule<
     )
       return;
     await context.registerOnce(
-      "kaguya.heavy.delivery.v1",
+      "kaguya.heavy.authorized-output.v1",
       `${context.instanceId}:${assistant.informationId}`,
-      deliveryRequestedInformationKind,
+      authorizedAssistantOutputInformationKind,
       {
-        payload: {
-          adapterId: assistantPayload.source.adapterId,
-          platform: assistantPayload.source.platform,
-          destination: assistantPayload.source.destination,
-          message: {
-            kind: "text",
-            text: assistantPayload.text,
-            ...(assistantPayload.expression
-              ? { expression: assistantPayload.expression }
-              : {}),
-          },
-          turn: assistantPayload.turn,
-        },
-        references:
-          assistantPayload.turn == null
-            ? []
-            : [
-                {
-                  relation: "agent:turn-claim" as const,
-                  informationId: assistantPayload.turn.claimInformationId,
-                },
-                {
-                  relation: "agent:turn-candidate" as const,
-                  informationId: assistantPayload.turn.candidateInformationId,
-                },
-              ],
+        ...(context.sourceAtom.informationId === assistant.informationId
+          ? {}
+          : { causedByInformationId: assistant.informationId }),
+        payload: assistantPayload,
       },
     );
   }
@@ -305,6 +284,7 @@ export function createHeavyModule<
         ...(dependencies.messageAuthorizationCapability
           ? [dependencies.messageAuthorizationCapability]
           : []),
+        messageOutputProcessorReady,
       ],
       provides: [],
       definitionId: "agent.heavy",
@@ -312,7 +292,7 @@ export function createHeavyModule<
       displayName: "Heavy 正文生成",
       summary: "根据显式选定的冻结上下文生成待投递正文。",
       description:
-        "消费消息意图与模型结果，选择历史、记忆及当前输入并编译 Prompt，通过 Model Task 生成正文；输出助手消息与投递请求，跨会话正文需经宿主确认后释放。",
+        "消费消息意图与模型结果，选择历史、记忆及当前输入并编译 Prompt，通过 Model Task 生成正文；输出助手消息与授权正文，跨会话正文需经宿主确认后释放。",
       settingsSchema: heavySettingsSchema,
       promptTemplates: heavyModulePromptTemplates,
       consumes: [
@@ -324,6 +304,7 @@ export function createHeavyModule<
         messageIntentRequestedInformationKind,
         completedInformationKind,
         assistantTextInformationKind,
+        authorizedAssistantOutputInformationKind,
         coreMemoryTextInformationKind,
         inboundTextInformationKind,
       ],
@@ -333,7 +314,7 @@ export function createHeavyModule<
           ? [messageDraftInformationKind]
           : []),
         assistantTextInformationKind,
-        deliveryRequestedInformationKind,
+        authorizedAssistantOutputInformationKind,
       ],
       diagnostics: [messageModelDispatchingDiagnostic],
     },
@@ -409,14 +390,22 @@ export function createHeavyModule<
               : undefined;
             let contextAtoms =
               authorized?.contextAtoms ?? (await context.select(selector));
-            const persisted = authorized ? undefined : contextAtoms.find(
-              (atom) => atom.kind === "core.model.task.requested" &&
-                atom.payload.taskId === "agent.heavy.respond" &&
-                (atom.payload.activation as any)?.instanceId === context.instanceId,
-            );
+            const persisted = authorized
+              ? undefined
+              : contextAtoms.find(
+                  (atom) =>
+                    atom.kind === "core.model.task.requested" &&
+                    atom.payload.taskId === "agent.heavy.respond" &&
+                    (atom.payload.activation as any)?.instanceId ===
+                      context.instanceId,
+                );
             if (persisted) {
-              const byId = new Map(contextAtoms.map((atom) => [atom.informationId, atom]));
-              contextAtoms = (persisted.payload.contextInformationIds as string[]).map((id) => {
+              const byId = new Map(
+                contextAtoms.map((atom) => [atom.informationId, atom]),
+              );
+              contextAtoms = (
+                persisted.payload.contextInformationIds as string[]
+              ).map((id) => {
                 const atom = byId.get(id);
                 if (!atom) throw new Error("Missing persisted Heavy context");
                 return atom;
@@ -427,9 +416,15 @@ export function createHeavyModule<
               message.informationId,
             );
             let prompt =
-              authorized?.prompt ?? (persisted?.payload.prompt as unknown as CompiledPrompt | undefined) ??
+              authorized?.prompt ??
+              (persisted?.payload.prompt as unknown as
+                CompiledPrompt | undefined) ??
               compilePrompt(contextAtoms, persistedIntent.informationId);
-            if (!authorized && !persisted && dependencies.messageAuthorizationCapability) {
+            if (
+              !authorized &&
+              !persisted &&
+              dependencies.messageAuthorizationCapability
+            ) {
               const service = context.use(
                 dependencies.messageAuthorizationCapability,
               );
@@ -458,14 +453,23 @@ export function createHeavyModule<
                 };
               }
             }
-            contextAtoms = persisted ? contextAtoms : [
-              ...new Map(
-                [...contextAtoms, ...selected].map((a) => [a.informationId, a]),
-              ).values(),
-            ];
-            if (!persisted) prompt = expressionPrompt(
-              prompt, contextAtoms, message.informationId, renderHabits,
-            );
+            contextAtoms = persisted
+              ? contextAtoms
+              : [
+                  ...new Map(
+                    [...contextAtoms, ...selected].map((a) => [
+                      a.informationId,
+                      a,
+                    ]),
+                  ).values(),
+                ];
+            if (!persisted)
+              prompt = expressionPrompt(
+                prompt,
+                contextAtoms,
+                message.informationId,
+                renderHabits,
+              );
             const contexts = persistedIntent.references.filter(
               (r) => r.relation === "core:context",
             );
@@ -478,8 +482,14 @@ export function createHeavyModule<
               tier: "heavy",
               promptCharacters: Array.from(prompt.text).length,
               promptVariableCount: prompt.variables.length,
-              globalContextCharacters: variableCharacters(prompt, "global_context"),
-              scopeContextCharacters: variableCharacters(prompt, "scope_context"),
+              globalContextCharacters: variableCharacters(
+                prompt,
+                "global_context",
+              ),
+              scopeContextCharacters: variableCharacters(
+                prompt,
+                "scope_context",
+              ),
               memoryCharacters: variableCharacters(prompt, "memory"),
             });
             await context.use(modelTaskCapability).execute<unknown>({

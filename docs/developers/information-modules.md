@@ -113,6 +113,10 @@ pnpm --dir "$KAGUYA_CONFIG_ROOT" --ignore-workspace add \
 
 `name` 从配置根解析已安装的 npm 包，也接受 `file:./plugins/example/index.mjs`。它不会自动联网安装包。一个包可声明多个模块，也可用不同 `id` 配置同一模块的多个实例。相同包只发现一次；重复插件身份、模块定义、Kind 对象冲突、非法设置与缺失能力都有独立诊断，任何处理器创建前先完成整个启用集合的预检。
 
+仓库还提供 `examples/plugins/qwen-tts/`。它以 `agent:message-output-processor` 接管已授权正文。未启用其他输出处理器时，Composition 自动补入默认文字处理器，因此旧配置不需要新增内置实例文件。启用 TTS 插件后不再补入默认处理器，避免同一正文同时产生文字与语音。两个输出插件同时启用会在 Host 预检阶段因 capability 重复而拒绝启动。
+
+输出插件只能消费 `core.message.assistant.authorized`。这个事实由 Heavy 在目标授权成功后登记。插件可以产生 TTS 领域事实和 `core.delivery.requested`，但平台调用仍由 Runtime 完成。最终发送前继续执行当前白名单、目标授权和回合时效检查。
+
 修改插件树后，使用配置页的显式应用切换 Runtime/Adapter 子树，或重启服务。显式应用先冻结新声明和 Kind Registry、完成数据库契约检查，再暂停入站、排空旧实例并重建模块 fiber；HTTP、认证和数据库连接保持不变。激活失败会撤销新订阅和能力，用旧快照恢复服务。包代码更换采用新的安装路径或包版本；直接覆盖已被 Node 导入的同一路径代码需要进程重启，以免 ESM 缓存继续使用旧代码。
 
 ## 持久 Kind 与兼容读取
@@ -128,6 +132,8 @@ pnpm --dir "$KAGUYA_CONFIG_ROOT" --ignore-workspace add \
 ## 能力与生命周期
 
 `defineModuleCapability<T>("namespace:name", apiVersion)` 定义带类型的稳定 token。manifest 的 `requires` 与 `provides` 声明能力依赖；宿主或 provider 返回 `{ capability, value }` 实现。`context.use(token)` 只允许读取已声明且版本匹配的能力。业务模块之间仍通过原子推进阶段，能力承载受控基础设施服务。
+
+`kaguya:media-resource-store@1` 是媒体字节的窄宿主能力。插件只能按 `sha256:<hex>` 写入和读取内容寻址资源，不能把任意本地路径交给平台。账本保存资源引用、校验和、类型和大小；Runtime 在 transport 边界读取并校验字节。默认文件存储位于配置根的 `media/`，单个资源最大 16 MiB，启动时清理最后写入超过七天的资源。清理后历史事实仍存在，再次投递会得到明确失败，不能把过期资源解释为发送成功。
 
 Host 在任何 `create()` 前完成全部启用实例的 settings parse、深冻结、kind/Selector/renderer 校验与能力图检查；缺失、重复、版本不匹配或依赖环都立即失败。解析后的设置必须是普通 JSON 对象、数组或标量（可选字段允许 undefined）；Date、Map、Set、自定义实例和循环结构会在 create 前拒绝。随后按确定性拓扑顺序调用 `create(options, context)` 和 `instance.start(context)`，并核对 provisions 与清单精确一致。全部启动成功后安装订阅、启用可靠投递，再按相同顺序调用可选的 `instance.ready(context)`。所有 ready 完成后 Host 才启动成功，Runtime 最后开放 ingress。
 

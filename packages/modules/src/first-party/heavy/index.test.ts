@@ -232,6 +232,7 @@ describe("message composer", () => {
     expect(s.definition.manifest.definitionId).toBe("agent.heavy");
     expect(s.definition.manifest.requires).toEqual([
       { id: "kaguya:model-task", apiVersion: 1 },
+      { id: "agent:message-output-processor", apiVersion: 1 },
     ]);
     await s.instance.subscriptions[0]!.handle(s.f.intent as never, s.context);
     expect(s.execute).toHaveBeenCalledTimes(1);
@@ -281,7 +282,7 @@ describe("message composer", () => {
       }),
     );
   });
-  it("records target-only assistant and text delivery, preserving turn without reply markers", async () => {
+  it("records target-only assistant and authorized output, preserving turn without reply markers", async () => {
     const s = await setup();
     const completed = atom("completed-1", completedKind.kind, {
       taskId: "agent.heavy.respond",
@@ -312,21 +313,16 @@ describe("message composer", () => {
         s.f.intent.payload,
       ).turn,
     });
-    await s.instance.subscriptions[2]!.handle(assistant as never, s.context);
+    await s.instance.subscriptions[2]!.handle(assistant as never, {
+      ...s.context,
+      sourceAtom: assistant,
+    });
     expect(s.registerOnce).toHaveBeenLastCalledWith(
-      "kaguya.heavy.delivery.v1",
+      "kaguya.heavy.authorized-output.v1",
       `${activation.instanceId}:assistant-1`,
       expect.anything(),
       {
-        payload: {
-          ...target,
-          message: { kind: "text", text: "COMPOSED" },
-          turn: s.f.intent.payload.turn,
-        },
-        references: [
-          { relation: "agent:turn-claim", informationId: "claim-1" },
-          { relation: "agent:turn-candidate", informationId: "candidate-1" },
-        ],
+        payload: assistant.payload,
       },
     );
   });

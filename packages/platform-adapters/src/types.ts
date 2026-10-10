@@ -75,6 +75,16 @@ export interface PlatformOutboundTransport {
   sendMessage(
     target: PlatformMessageTarget,
     message: OutboundMessageContent,
-    metadata?: Record<string, unknown>,
+    metadata?: PlatformOutboundMetadata,
   ): Promise<PlatformDeliveryReceipt>;
+}
+
+export interface PlatformOutboundMetadata extends Record<string, unknown> {
+  readonly rootInformationId?: InformationId;
+  /** 仅在调用 transport 时存在，不进入 Information Ledger。 */
+  readonly media?: {
+    readonly bytes: Uint8Array;
+    readonly mimeType: string;
+    readonly sha256: string;
+  };
 }

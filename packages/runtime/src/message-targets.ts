@@ -990,14 +990,18 @@ export class MessageTargetService implements MessageAuthorization {
         return false;
       if (!approval) return true;
       const message = request.payload.message;
+      const approvedText =
+        message &&
+        typeof message === "object" &&
+        "kind" in message &&
+        (message.kind === "text" || message.kind === "audio") &&
+        "text" in message &&
+        typeof message.text === "string"
+          ? message.text
+          : undefined;
       if (
         !approval.confirmed ||
-        !message ||
-        typeof message !== "object" ||
-        !("kind" in message) ||
-        message.kind !== "text" ||
-        !("text" in message) ||
-        message.text !== approval.text ||
+        approvedText !== approval.text ||
         (approval.deliveryId && approval.deliveryId !== request.informationId)
       )
         return false;

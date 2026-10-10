@@ -69,11 +69,13 @@ export function createWebOutboundTransport(
   adapterId = "web.ui.main",
 ): PlatformOutboundTransport {
   return {
-    async sendMessage(target) {
+    async sendMessage(target, message) {
       const destination = platformDestinationSchema.parse(target);
       if (destination.kind !== "web") {
         throw new Error("Web transport only accepts web destinations");
       }
+      if (message.kind === "audio")
+        throw new Error("Web transport does not support audio delivery");
       return {
         ok: true,
         adapterId,

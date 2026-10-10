@@ -1,0 +1,25 @@
+{
+  "name": "@kaguya-plugin/qwen-tts",
+  "version": "1.0.0",
+  "type": "module",
+  "license": "MIT",
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./provider": "./provider.mjs"
+  },
+  "files": [
+    "index.mjs",
+    "provider.mjs",
+    "LICENSE",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "@kaguya/sdk": "*",
+    "@kaguya/schema": "*"
+  },
+  "devDependencies": {
+    "@kaguya/sdk": "link:../../../packages/sdk",
+    "@kaguya/schema": "link:../../../packages/schema"
+  }
+}

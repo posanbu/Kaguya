@@ -11,6 +11,7 @@
  * 输入输出与副作用：仅 re-export，导入本文件不会注册 kind、调用 LLM 或发送平台消息。
  */
 export { identityModule } from "./first-party/identity/index.js";
+export { textMessageOutputModule } from "./first-party/message-output/index.js";
 export {
   renderPersonProfileSections,
   displayPersonName,
@@ -81,8 +82,10 @@ export {
 } from "./first-party/heavy/message-context.js";
 export {
   assistantTextInformationKind,
+  authorizedAssistantOutputInformationKind,
   coreMemoryTextInformationKind,
   deliveryRequestedInformationKind,
+  messageOutputProcessorReady,
   filterDecisionInformationKind,
   inboundTextInformationKind,
   inboundTextInformationPayloadSchema,
