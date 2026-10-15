@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "dataKind": "synthetic",
+  "targets": [
+    {
+      "scope": {
+        "platform": "qq",
+        "adapterId": "fictional-adapter",
+        "accountId": "bot-demo",
+        "groupId": "group-demo"
+      },
+      "userId": "person-a"
+    },
+    {
+      "scope": {
+        "platform": "qq",
+        "adapterId": "fictional-adapter",
+        "accountId": "bot-demo",
+        "groupId": "group-demo"
+      },
+      "userId": "person-b"
+    },
+    {
+      "scope": {
+        "platform": "qq",
+        "adapterId": "fictional-adapter",
+        "accountId": "bot-demo",
+        "groupId": "group-other"
+      },
+      "userId": "person-a"
+    }
+  ],
+  "blocks": [
+    {
+      "id": "block-history",
+      "split": "history",
+      "start": "2026-01-01T00:00:00+00:00",
+      "end": "2026-01-01T00:10:00+00:00"
+    },
+    {
+      "id": "block-dev",
+      "split": "dev",
+      "start": "2026-01-01T00:10:00+00:00",
+      "end": "2026-01-01T00:20:00+00:00"
+    },
+    {
+      "id": "block-test",
+      "split": "test",
+      "start": "2026-01-01T00:20:00+00:00",
+      "end": "2026-01-01T00:30:00+00:00"
+    }
+  ],
+  "recentMessages": 20,
+  "minGroupSamples": 5
+}
