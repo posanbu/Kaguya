@@ -2,11 +2,15 @@
 
 build_source 提供仅含虚构占位文本的 CompiledPrompt；测试保证三档子集嵌套、信息
 选择空间相同、历史模型输出不进入新请求，以及缺失变量不会静默变成有效样本。
+文件测试在全部平台检查 0600 与独占创建参数、内容完整及拒绝覆盖；实际权限位
+仅在 POSIX 检查。Windows 的 stat 不表达 POSIX 私有位，沿用 exporter 的平台边界。
 """
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from prepare_dataset import build_case, prepare
 
@@ -56,12 +60,18 @@ class PrepareTests(unittest.TestCase):
             path = Path(folder)/"source.jsonl"
             path.write_text(json.dumps(source)+"\n")
             output = Path(folder)/"dataset"
-            meta = prepare(path, output)
+            with patch("prepare_dataset.os.open", wraps=os.open) as create:
+                meta = prepare(path, output)
+            create.assert_any_call(output / "cases.jsonl", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             self.assertEqual(meta["samples"], 1)
             self.assertEqual(meta["gold_samples"], 0)
             self.assertEqual(meta["identical_context_cases"]["compact:long"], 1)
-            self.assertEqual((output/"cases.jsonl").stat().st_mode & 0o777, 0o600)
+            original = (output / "cases.jsonl").read_bytes()
+            self.assertEqual(json.loads(original)["id"], "case-1")
+            if os.name == "posix":
+                self.assertEqual((output/"cases.jsonl").stat().st_mode & 0o777, 0o600)
             with self.assertRaises(ValueError): prepare(path, output)
+            self.assertEqual((output / "cases.jsonl").read_bytes(), original)
 
 
 if __name__ == "__main__": unittest.main()
