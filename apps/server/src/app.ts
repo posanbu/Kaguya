@@ -23,6 +23,7 @@
  * 由 inspection.ts 提供有界查询、统一秘密脱敏及 Runtime 未就绪时的 503。
  * message-targets 路由复用 management 认证并通过动态 Runtime 门面执行目标/正文确认。
  * configuration/status 与 apply 复用管理认证，返回不含秘密的版本及应用结果；冲突返回 409。
+ * NapCat PUT 接受独立采集开关/群/队列预算，旧客户端省略这些字段时保留当前设置；保存后按既有重启流程生效。
  * Web 私聊 POST 携带会话标识，GET 通过双登记水位恢复已入站/已送达历史；两者均先鉴权。
  */
 import { profileFieldErrors } from "./profile-field-errors.js";
@@ -159,6 +160,12 @@ const napCatSettingsRequestSchema = z
     accessToken: z.string().optional(),
     selfId: z.string().trim().optional(),
     reconnectMs: z.number().int().min(100).max(3_600_000),
+    captureEnabled: z.boolean().optional(),
+    captureGroups: z
+      .array(z.string().regex(/^[1-9][0-9]*$/u))
+      .max(100)
+      .optional(),
+    captureQueueLimit: z.number().int().min(1).max(10000).optional(),
   })
   .strict();
 
@@ -1003,6 +1010,21 @@ export async function createHttpApplication(
                 : { accessToken: current.accessToken }),
             ...(body.selfId ? { selfId: body.selfId } : {}),
             reconnectMs: body.reconnectMs,
+            ...(body.captureEnabled !== undefined
+              ? { captureEnabled: body.captureEnabled }
+              : current.captureEnabled !== undefined
+                ? { captureEnabled: current.captureEnabled }
+                : {}),
+            ...(body.captureGroups !== undefined
+              ? { captureGroups: body.captureGroups }
+              : current.captureGroups !== undefined
+                ? { captureGroups: current.captureGroups }
+                : {}),
+            ...(body.captureQueueLimit !== undefined
+              ? { captureQueueLimit: body.captureQueueLimit }
+              : current.captureQueueLimit !== undefined
+                ? { captureQueueLimit: current.captureQueueLimit }
+                : {}),
           },
           body.revision,
         );

@@ -6,6 +6,7 @@
  * `NapCatOneBotAdapter` 正规化 frame、过滤 self ID/action response、执行注入的入站谓词后
  * 调用 `ingress.submit`，
  * 并在 stop 时停止接收、关闭 transport、排空已提交任务。
+ * subscribeToJsonMessages 暴露同一分发器的可释放订阅，旁路采集无需替换 action 或 adapter handler。
  * 代码库关系：`onebot.ts` 提供正规化/action builder，Server `napcat.ts` 提供
  * WebSocket transport、窄 ingress 和日志；`types.ts` 定义入站与投递契约。
  * 输入输出与副作用：出站会写 JSON transport 并创建 timeout；入站提交
@@ -45,10 +46,10 @@ const jsonMessageSubscribers = new WeakMap<
   Set<JsonMessageHandler>
 >();
 
-function subscribeToJsonMessages(
+export function subscribeToJsonMessages(
   transport: JsonMessageTransport,
   handler: JsonMessageHandler,
-): void {
+): () => void {
   let subscribers = jsonMessageSubscribers.get(transport);
   if (subscribers === undefined) {
     subscribers = new Set<JsonMessageHandler>();
@@ -61,6 +62,7 @@ function subscribeToJsonMessages(
     });
   }
   subscribers.add(handler);
+  return () => subscribers.delete(handler);
 }
 
 export interface NapCatActionClientOptions {

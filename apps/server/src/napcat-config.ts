@@ -4,10 +4,15 @@
  * 代码库关系：配置管理层负责 Profile 读写，`config.ts` 从同一 selected Profile
  * 生成启动配置；本模块只保留值对象转换。
  * 输入输出与副作用：本模块只转换内存值；公开状态不泄漏 token。
+ * 独立 captureEnabled/captureGroups/captureQueueLimit 在启动、状态及管理保存间一致传递。
  */
 import type { NapCatConfig } from "./config.js";
+import {
+  readCaptureSettings,
+  type NapCatCaptureSettings,
+} from "./napcat-capture-config.js";
 
-export interface NapCatSettings {
+export interface NapCatSettings extends NapCatCaptureSettings {
   readonly enabled: boolean;
   readonly wsUrl?: string;
   readonly accessToken?: string;
@@ -15,7 +20,7 @@ export interface NapCatSettings {
   readonly reconnectMs: number;
 }
 
-export interface NapCatStatus {
+export interface NapCatStatus extends NapCatCaptureSettings {
   readonly enabled: boolean;
   readonly wsUrl?: string;
   readonly hasAccessToken: boolean;
@@ -35,6 +40,7 @@ export function toNapCatStatus(settings: NapCatSettings): NapCatStatus {
     hasAccessToken: settings.accessToken !== undefined,
     ...(settings.selfId === undefined ? {} : { selfId: settings.selfId }),
     reconnectMs: settings.reconnectMs,
+    ...readCaptureSettings(settings as unknown as Record<string, unknown>),
   };
 }
 
@@ -51,6 +57,7 @@ export function toNapCatConfig(settings: NapCatSettings): NapCatConfig {
       : { accessToken: settings.accessToken }),
     ...(settings.selfId === undefined ? {} : { selfId: settings.selfId }),
     reconnectMs: settings.reconnectMs,
+    ...readCaptureSettings(settings as unknown as Record<string, unknown>),
   };
 }
 
@@ -87,6 +94,7 @@ export function validateNapCatSettings(value: unknown): NapCatSettings {
     ...(accessToken === undefined ? {} : { accessToken }),
     ...(selfId === undefined ? {} : { selfId }),
     reconnectMs,
+    ...readCaptureSettings(record),
   };
 }
 

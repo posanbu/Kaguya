@@ -27,7 +27,8 @@
     "test:flow": "tsc -b && vitest run apps/server/src/speech-planner.test.ts packages/runtime/src/runtime.test.ts",
     "test:persistence": "tsc -b && vitest run packages/database/src",
     "preview:arousal": "tsc -b && tsx apps/server/src/preview/arousal.ts",
-    "prompt:init": "tsx scripts/init-prompt-locals.ts"
+    "prompt:init": "tsx scripts/init-prompt-locals.ts",
+    "capture:export": "tsx apps/server/src/napcat-capture-export.ts"
   },
   "devDependencies": {
     "@types/node": "24.13.3",

@@ -5,6 +5,7 @@
  * 主要职责：`normalizeOneBotMessageEvent` 校验 message event、过滤机器人自身、
  * 正规化 text/mention/sender/target/occurredAt 并保留 `platformMessageId`；
  * `buildOneBotSendAction` 将文本或 reply 内容编码为私聊/群聊 action。
+ * normalizeOneBotCaptureContent 仅投影文本、寻址关系及媒体类型，供独立采集保留自身消息和空正文；不保存媒体 URL。
  * 代码库关系：NapCat adapter 复用入站正规化器与出站 action builder；
  * 输出 `PlatformInboundMessage` 随后由 `InformationIngress` 提交给 Runtime。
  * 输入输出与副作用：转换函数无 I/O；非法/空白/不支持事件返回 `undefined`，
@@ -73,6 +74,35 @@ const eventSchema = z
     message: z.union([z.string(), z.array(segmentSchema)]),
   })
   .passthrough();
+
+export function normalizeOneBotCaptureContent(input: unknown):
+  | {
+      text: string;
+      mentions: readonly PlatformMessageMention[];
+      replyTo?: { readonly platformMessageId: string };
+      mediaTypes: string[];
+    }
+  | undefined {
+  const parsed = z.union([z.string(), z.array(segmentSchema)]).safeParse(input);
+  if (!parsed.success) return undefined;
+  const segments =
+    typeof parsed.data === "string"
+      ? parseCqSegments(parsed.data)
+      : parsed.data;
+  const { text, mentions, replyTo } = normalizeMessage(segments);
+  return {
+    text,
+    mentions,
+    ...(replyTo ? { replyTo } : {}),
+    mediaTypes: [
+      ...new Set(
+        segments
+          .map((s) => s.type)
+          .filter((type) => !["text", "at", "reply"].includes(type)),
+      ),
+    ],
+  };
+}
 
 export function normalizeOneBotMessageEvent(
   input: unknown,

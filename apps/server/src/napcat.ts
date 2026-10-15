@@ -3,6 +3,8 @@
  * 主要职责：Supervisor 转发发送和目录查询；查询期间更换连接时拒绝旧结果。
  * 代码库关系：AdapterHost 拥有入站策略，NapCatActionClient 关联 action 回执；connected 要求 socket open。
  * 输入输出与副作用：打开/关闭连接和重连定时器，目录只接受当前连接的完整快照。
+ * 独立 NapCatCapture 使用现有 transport 订阅，在入站过滤前采集；启动/停止等待 journal 恢复及排空。
+ * 非法 JSON 只形成采集 gap；采集失败记录固定错误类型，不改变重连、入站或发送权限。
  */
 import type {
   TargetDirectory,
@@ -11,6 +13,7 @@ import type {
 import {
   NapCatActionClient,
   NapCatOneBotAdapter,
+  subscribeToJsonMessages,
   type InformationIngress,
   type AdapterConnectionStatus,
   type JsonMessageTransport,
@@ -23,6 +26,9 @@ import type { OutboundMessageContent } from "@kaguya/schema";
 import type { KaguyaLogger } from "@kaguya/logger";
 
 import type { NapCatConfig } from "./config.js";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { NapCatCapture } from "./napcat-capture.js";
 
 export class WebSocketJsonTransport implements JsonMessageTransport {
   private messageHandler: ((message: unknown) => void) | undefined;
@@ -31,20 +37,23 @@ export class WebSocketJsonTransport implements JsonMessageTransport {
   private readonly openHandlers = new Set<() => void>();
   private closed = false;
 
-  constructor(url: string, accessToken?: string) {
+  constructor(url: string, accessToken?: string, onMalformed?: () => void) {
     this.socket = new WebSocket(withAccessToken(url, accessToken));
     this.socket.addEventListener("open", () => {
       if (!this.closed) for (const handler of this.openHandlers) handler();
     });
     this.socket.addEventListener("message", (event) => {
+      if (this.closed) return;
       const data = typeof event.data === "string" ? event.data : "";
       if (!data) {
+        onMalformed?.();
         return;
       }
       let message: unknown;
       try {
         message = JSON.parse(data);
       } catch {
+        onMalformed?.();
         return;
       }
       this.messageHandler?.(message);
@@ -104,6 +113,8 @@ export interface NapCatConnectionSupervisorOptions {
   readonly onDisconnected?: (error?: Error) => void;
   readonly onReconnectScheduled?: (delayMs: number) => void;
   readonly onConnectionError?: (error: unknown) => void;
+  readonly beforeStart?: () => Promise<void>;
+  readonly afterStop?: () => Promise<void>;
 }
 
 export class NapCatConnectionSupervisor implements PlatformOutboundTransport {
@@ -114,19 +125,35 @@ export class NapCatConnectionSupervisor implements PlatformOutboundTransport {
   private readonly retirements = new Map<NapCatConnection, Promise<void>>();
   private stopping = true;
   private attempt = 0;
+  private opening: Promise<void> | undefined;
+  private shutdown: Promise<void> | undefined;
 
   constructor(private readonly options: NapCatConnectionSupervisorOptions) {}
 
   async start(): Promise<void> {
     if (!this.stopping) {
+      await this.opening;
       return;
     }
     this.stopping = false;
+    this.shutdown = undefined;
+    this.opening = this.options.beforeStart?.() ?? Promise.resolve();
+    try {
+      await this.opening;
+    } finally {
+      this.opening = undefined;
+    }
     await this.connect();
   }
 
-  async stop(): Promise<void> {
+  stop(): Promise<void> {
+    this.shutdown ??= this.stopOnce();
+    return this.shutdown;
+  }
+
+  private async stopOnce(): Promise<void> {
     this.stopping = true;
+    await this.opening;
     if (this.reconnectTimer !== undefined) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
@@ -137,6 +164,7 @@ export class NapCatConnectionSupervisor implements PlatformOutboundTransport {
       void this.retire(connection);
     }
     await Promise.allSettled([...this.retirements.values()]);
+    await this.options.afterStop?.();
   }
 
   async listTargets(): Promise<TargetDirectorySnapshot> {
@@ -267,15 +295,63 @@ export function createNapCatSupervisor(options: {
   readonly logger: KaguyaLogger;
   readonly allowsInbound?: (message: PlatformInboundMessage) => boolean;
   readonly reportStatus?: (status: AdapterConnectionStatus) => void;
+  readonly captureRoot?: string;
 }): NapCatConnectionSupervisor {
   let attempt = 0;
+  const reportCaptureError = () => {
+    try {
+      options.logger.error(
+        { event: "napcat.capture.failed", errorType: "capture_io_failed" },
+        "群聊采集未能完成文件操作，请检查私有 journal 和磁盘状态。",
+      );
+    } catch {
+      /* Diagnostics must not stop the adapter. */
+    }
+  };
+  if (
+    options.config.captureEnabled &&
+    (!options.captureRoot || !options.config.selfId)
+  )
+    reportCaptureError();
+  const capture =
+    options.config.captureEnabled &&
+    options.captureRoot &&
+    options.config.selfId
+      ? new NapCatCapture({
+          ...options.config,
+          selfId: options.config.selfId,
+          directory: join(
+            options.captureRoot,
+            options.config.adapterId,
+            options.config.selfId,
+          ),
+          onError: reportCaptureError,
+        })
+      : undefined;
   return new NapCatConnectionSupervisor({
     adapterId: options.config.adapterId,
     reconnectMs: options.config.reconnectMs,
+    beforeStart: async () => {
+      await capture?.start();
+    },
+    afterStop: async () => {
+      try {
+        await capture?.stop();
+      } catch {
+        reportCaptureError();
+      }
+    },
     createConnection: () => {
+      const generation = randomUUID();
       const transport = new WebSocketJsonTransport(
         options.config.wsUrl ?? "",
         options.config.accessToken,
+        () => capture?.malformed(generation),
+      );
+      transport.onOpen?.(() => capture?.connected(generation));
+      transport.onClose(() => capture?.disconnected(generation));
+      const unsubscribe = subscribeToJsonMessages(transport, (frame) =>
+        capture?.receive(frame, generation),
       );
       const sender = new NapCatActionClient({
         adapterId: options.config.adapterId,
@@ -295,7 +371,18 @@ export function createNapCatSupervisor(options: {
           ? { allowsInbound: options.allowsInbound }
           : {}),
       });
-      return { transport, sender, adapter };
+      return {
+        transport,
+        sender,
+        adapter: {
+          start: () => adapter.start(),
+          stop: async () => {
+            capture?.disconnected(generation);
+            unsubscribe();
+            await adapter.stop();
+          },
+        },
+      };
     },
     onConnecting: (value) => {
       attempt = value;

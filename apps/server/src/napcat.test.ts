@@ -3,6 +3,7 @@
  * `InformationIngress` 组合，防止平台连接获得完整 Runtime 或业务模块。
  * 主要职责：覆盖 JSON 解析、access token URL、transport 异常透传、
  * supervisor 重连/退役/停止，以及非空 Server allowlist 从环境配置到真实 OneBot frame
+ * 采集初始化期间 stop 使用显式 barrier 等待资源就绪，再完成关闭；入站通过 Promise 信号确认提交。
  * 的贯通：拒绝消息不得调用 ingress，允许消息才调用 `ingress.submit`。
  * 代码库关系：直接驱动 `napcat.ts`，并经由 platform-adapters 的
  * `NapCatOneBotAdapter` 正规化入站消息；Server 启动时只注入 ingress 与 logger。
@@ -147,9 +148,14 @@ it("applies configured NapCat allowlists before submitting through ingress", asy
   globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
   const logStream = new LogStream();
   const submitted: PlatformInboundMessage[] = [];
+  let signalSubmitted!: () => void;
+  const submittedReady = new Promise<void>((resolve) => {
+    signalSubmitted = resolve;
+  });
   const ingress: InformationIngress = {
     submit: async (message) => {
       submitted.push(message);
+      signalSubmitted();
       return { rootInformationId: "information-1", deliveries: [] };
     },
   };
@@ -192,7 +198,6 @@ it("applies configured NapCat allowlists before submitting through ingress", asy
       message: "denied",
     }),
   });
-  await new Promise((resolve) => setTimeout(resolve, 0));
   expect(submitted).toEqual([]);
 
   FakeWebSocket.latest?.emit("message", {
@@ -205,7 +210,8 @@ it("applies configured NapCat allowlists before submitting through ingress", asy
       message: "hello",
     }),
   });
-  await vi.waitFor(() => expect(submitted).toHaveLength(1));
+  await submittedReady;
+  expect(submitted).toHaveLength(1);
 
   expect(submitted[0]).toMatchObject({
     adapterId: "napcat.qq.main",
@@ -213,6 +219,8 @@ it("applies configured NapCat allowlists before submitting through ingress", asy
     text: "hello",
   });
   expect(submitted[0]).not.toHaveProperty("traceId");
+  await supervisor.stop();
+  await closeLogger(logger);
   expect(logStream.logs()).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
@@ -231,8 +239,6 @@ it("applies configured NapCat allowlists before submitting through ingress", asy
   );
   expect(JSON.stringify(logStream.logs())).toContain("denied");
   expect(JSON.stringify(logStream.logs())).toContain("hello");
-  await supervisor.stop();
-  await closeLogger(logger);
 });
 
 class SupervisorTransport implements JsonMessageTransport {
@@ -256,6 +262,47 @@ class SupervisorTransport implements JsonMessageTransport {
 }
 
 describe("NapCatConnectionSupervisor", () => {
+  it("waits for capture initialization before shutdown without opening a socket", async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const createConnection = vi.fn((): never => {
+      throw new Error("unexpected socket");
+    });
+    const afterStop = vi.fn(async () => {});
+    const supervisor = new NapCatConnectionSupervisor({
+      adapterId: "qq",
+      reconnectMs: 100,
+      createConnection,
+      beforeStart: async () => {
+        entered();
+        await gate;
+      },
+      afterStop,
+    });
+    const starting = supervisor.start();
+    try {
+      await ready;
+      const stopping = supervisor.stop();
+      expect(afterStop).not.toHaveBeenCalled();
+      release();
+      await Promise.all([starting, stopping]);
+      expect(createConnection).not.toHaveBeenCalled();
+      expect(afterStop).toHaveBeenCalledOnce();
+      await supervisor.stop();
+      expect(afterStop).toHaveBeenCalledOnce();
+    } finally {
+      release();
+      await starting;
+      await supervisor.stop();
+    }
+  });
+
   it("recreates the full connection after the configured delay and cancels reconnect on stop", async () => {
     vi.useFakeTimers();
     const connections: Array<{
