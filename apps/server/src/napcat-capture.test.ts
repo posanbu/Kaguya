@@ -23,6 +23,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import {
   CaptureJournal,
   NapCatCapture,
+  writeCaptureBytes,
   type CaptureRecord,
 } from "./napcat-capture.js";
 import { freezeCapture } from "./napcat-capture-export.js";
@@ -311,6 +312,7 @@ it("recovers sequence/dedup state and truncates only an incomplete crash tail", 
   await appendFile(join(f.options.directory, "events.jsonl"), '{"incomplete":');
   f.at(10);
   await f.capture.start();
+  expect(f.capture.status().state).toBe("waiting_for_identity");
   f.capture.connected("g2");
   f.capture.receive(message(), "g2"); // 跨进程重复不能成为新发言。
   f.capture.receive(message(2), "g2");
@@ -340,13 +342,13 @@ it("uses a write barrier to prove queue overflow creates a gap and the missed me
   const f = await fixture({
     captureQueueLimit: 1,
     journalFactory: (directory, onError) =>
-      new CaptureJournal(directory, onError, async (file, data) => {
+      new CaptureJournal(directory, onError, async (file, data, position) => {
         if (first) {
           first = false;
           entered();
           await blocked;
         }
-        await file.writeFile(data);
+        await writeCaptureBytes(file, data, position);
       }),
   });
   // 先释放 barrier 再清理 fixture，即使测试断言失败也不会卡在 stop。
@@ -376,13 +378,13 @@ it("stops claiming coverage on disk failure and can recover the partial final wr
   let fail = true;
   const f = await fixture({
     journalFactory: (directory, onError) =>
-      new CaptureJournal(directory, onError, async (file, data) => {
+      new CaptureJournal(directory, onError, async (file, data, position) => {
         if (fail) {
           fail = false;
-          await file.writeFile(data.subarray(0, 20));
+          await writeCaptureBytes(file, data.subarray(0, 20), position);
           throw new Error("PRIVATE_IO_PATH");
         }
-        await file.writeFile(data);
+        await writeCaptureBytes(file, data, position);
       }),
   });
   f.capture.receive(message(), "g1");
@@ -398,6 +400,7 @@ it("stops claiming coverage on disk failure and can recover the partial final wr
   ).not.toContain("platformMessageId");
   f.at(10);
   await f.capture.start();
+  expect(f.capture.status().state).toBe("waiting_for_identity");
   f.capture.connected("g2");
   f.capture.receive(message(3), "g2");
   await f.capture.settle();

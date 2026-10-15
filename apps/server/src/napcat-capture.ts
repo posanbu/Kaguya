@@ -7,6 +7,7 @@
  * 代码库关系：napcat.ts 复用其现有 JSON transport 订阅；不引用 ingress、Runtime、Memory 或模型。
  * journal 的 message/recall/coverage 行直接对接 benchmarks/participation/core.py；导出器只读取提交字节前缀。
  * 输入输出与副作用：创建 0700 目录、0600 文件和可恢复进程锁；私有记录含稳定平台身份及消息正文。
+ * Windows 的追加权限不提供尾部截断所需的普通写权限；恢复用 r+/wx+ 打开，并按已提交字节偏移写满。
  * 未知 frame、凭据和 action 回执不写入 journal。所有异步写入可通过 settle 等待，不阻塞平台事件回调。
  */
 import { createHash, randomUUID } from "node:crypto";
@@ -114,6 +115,24 @@ async function acquireLock(directory: string): Promise<string> {
   }
 }
 
+export async function writeCaptureBytes(
+  file: FileHandle,
+  data: Buffer,
+  position: number,
+): Promise<void> {
+  let offset = 0;
+  while (offset < data.length) {
+    const { bytesWritten } = await file.write(
+      data,
+      offset,
+      data.length - offset,
+      position + offset,
+    );
+    if (bytesWritten <= 0) throw new Error("capture write made no progress");
+    offset += bytesWritten;
+  }
+}
+
 export class CaptureJournal {
   private handle: FileHandle | undefined;
   private lock: string | undefined;
@@ -130,9 +149,8 @@ export class CaptureJournal {
     private readonly write: (
       handle: FileHandle,
       data: Buffer,
-    ) => Promise<void> = async (file, data) => {
-      await file.writeFile(data);
-    },
+      position: number,
+    ) => Promise<void> = writeCaptureBytes,
   ) {}
 
   async open(): Promise<void> {
@@ -145,7 +163,12 @@ export class CaptureJournal {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
-      this.handle = await open(path, "a+", 0o600);
+      try {
+        this.handle = await open(path, "r+", 0o600);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        this.handle = await open(path, "wx+", 0o600);
+      }
       await this.handle.chmod(0o600);
       const raw = await readFile(path);
       const complete = raw.subarray(0, raw.lastIndexOf(10) + 1);
@@ -211,7 +234,7 @@ export class CaptureJournal {
     this.tail = this.tail
       .then(async () => {
         if (this.failed || !this.handle || !records.length) return;
-        await this.write(this.handle, payload);
+        await this.write(this.handle, payload, this.bytes);
         await this.handle.sync();
         this.hash.update(payload);
         this.bytes += payload.length;
