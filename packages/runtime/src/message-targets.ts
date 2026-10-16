@@ -2,7 +2,8 @@
  * 解析 message composition 时保留可选 tone；跨目标授权和正文确认流程保持原有边界。
  * 功能概述：管理跨会话目录解析、短期候选、目标授权和正文确认，所有批准状态只由可信宿主持有。
  * 五分钟缓存随查询/路由清理，活跃目标授权数量有界；
- * conversation 冻结双投影并限制到当前 adapter 和本轮人物/目标；route 从持久化 Light 决策创建自动授权，stage 绑定唯一正文。
+ * conversation 冻结当前 adapter 的有界群名目录及本轮相关私聊，让 Light 根据简称或描述选择群；
+ * 背景只含本轮人物，不读取目标群正文；route 从持久化 Light 决策创建自动授权，stage 绑定唯一正文。
  * 主要职责：resolve 返回显式结果；authorize 冻结批准说明并创建标准 intent；confirm 绑定精确 assistant；
  * prepare/stage 是 Heavy 的窄能力；validateDelivery 对请求因果链、连接代次和正文再次验证。
  * 代码库关系：Server 管理认证路由调用本类，Runtime 注入 Core/目录/生效 allowlist 和授权正文渲染器；不读取模板文件或直接调用 transport。
@@ -277,6 +278,7 @@ export class MessageTargetService implements MessageAuthorization {
             c.destination.kind === "private" &&
             mentioned.has(c.destination.userId);
           if (
+            c.destination.kind !== "group" &&
             !current &&
             !speaker &&
             !byMention &&
@@ -320,7 +322,13 @@ export class MessageTargetService implements MessageAuthorization {
           resolution.targets.push({
             kind: c.destination.kind,
             name,
-            relation: current ? "current" : speaker ? "speaker" : "mentioned",
+            relation: current
+              ? "current"
+              : speaker
+                ? "speaker"
+                : byMention || (c.name.length > 0 && texts.includes(c.name))
+                  ? "mentioned"
+                  : "available",
             status,
             reference: status === "resolved" ? reference : null,
           });

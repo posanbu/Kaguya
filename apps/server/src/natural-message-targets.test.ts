@@ -3,7 +3,8 @@
  * fixture 仅替换模型响应、在线目录与 transport，仍执行身份识别、Light、Heavy、授权和 durable 去重。
  * projection 只提取模板中人物/会话上下文的单行 JSON，避免把 Provider 追加的 Schema 提示当成业务数据；
  * choose 从该投影读取已解析的不透明目标引用，仍由正式授权服务执行范围和投递校验；授权正文模板保留背景和发送说明的原始账本来源。
- * 覆盖双投影的范围隔离、群/私聊选择、歧义与撤销后的失败关闭；所有账号、正文和凭据均为合成数据。
+ * 覆盖双投影的范围隔离、私聊用简称/描述选择群、目录边界、歧义与撤销后的失败关闭；
+ * Light 仅获得同 adapter 群名候选与相关私聊，Heavy 不接收候选目录；所有账号、正文和凭据均为合成数据。
  */
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { createMessageComposition } from "@kaguya/composition";
@@ -70,6 +71,18 @@ async function fixture(
       platform: "qq",
       destination: { kind: "group" as const, groupId: "unrelated-private-id" },
       name: "无关会话",
+    },
+    {
+      adapterId: "test",
+      platform: "qq",
+      destination: { kind: "private" as const, userId: "unrelated-friend" },
+      name: "无关好友",
+    },
+    {
+      adapterId: "other-adapter",
+      platform: "qq",
+      destination: { kind: "group" as const, groupId: "other-account-group" },
+      name: "其他账号的群",
     },
   ];
   if (options.duplicate)
@@ -303,7 +316,14 @@ it.each([
     );
     expect(JSON.stringify(p)).not.toContain("source-group");
     expect(JSON.stringify(p)).not.toContain("unrelated-private-id");
-    expect(JSON.stringify(p)).not.toContain("无关会话");
+    expect(p.resolution.targets).toContainEqual(
+      expect.objectContaining({
+        name: "无关会话",
+        relation: "available",
+      }),
+    );
+    expect(JSON.stringify(p)).not.toContain("无关好友");
+    expect(JSON.stringify(p)).not.toContain("其他账号的群");
     const composed = graph.find(
       (a) =>
         a.kind === "core.model.task.requested" &&
@@ -316,6 +336,7 @@ it.each([
     );
     expect(JSON.stringify(composed.payload.prompt)).toContain("当前研究群");
     expect(JSON.stringify(composed.payload.prompt)).toContain("小明");
+    expect(JSON.stringify(composed.payload.prompt)).not.toContain("无关会话");
     expect(JSON.stringify(composed.payload.prompt)).not.toContain(
       "other-group",
     );
@@ -363,6 +384,172 @@ it.each([
   },
   sequentialWaitTestTimeoutMs,
 );
+it.each([
+  "去项目群里问一下：会议三点开始吗？",
+  "去讨论科研项目的那个群问一下：会议三点开始吗？",
+])("私聊根据简称或描述选择群：%s", async (text) => {
+  const groupName = "科研项目协作讨论群";
+  const f = await fixture([
+    (request: Record<string, any>) => {
+      const p = projection(request);
+      expect(p.background.scope).toBe("private");
+      const target = p.resolution.targets.find(
+        (t: any) => t.name === groupName,
+      );
+      expect(target).toMatchObject({
+        kind: "group",
+        status: "resolved",
+        relation: "available",
+        reference: expect.any(String),
+      });
+      expect(p.resolution.targets).toContainEqual(
+        expect.objectContaining({ name: "科研设备采购群" }),
+      );
+      return {
+        ...speak,
+        target: {
+          kind: "group",
+          reference: target.reference,
+          instruction: "问一下会议是否三点开始",
+        },
+      };
+    },
+  ]);
+  f.candidates[1]!.name = groupName;
+  f.candidates[4]!.name = "科研设备采购群";
+  expect(text).not.toContain(groupName);
+  await f.submit(
+    f.message("private-request", {
+      text,
+      target: { kind: "private", userId: "speaker-account" },
+      mentions: [],
+    }),
+  );
+  await f.settle();
+  expect(f.delivered).toHaveBeenCalledTimes(1);
+  expect(f.delivered.mock.calls[0]![0]).toEqual({
+    kind: "group",
+    groupId: "other-group",
+  });
+  expect(f.requests.map((r) => r.model)).toEqual([
+    "deepseek-light",
+    "deepseek-heavy",
+  ]);
+  const heavy = JSON.stringify(f.requests[1]);
+  expect(heavy).toContain("问一下会议是否三点开始");
+  expect(heavy).not.toContain("科研设备采购群");
+});
+
+it("群名推断不能绕过出站白名单", async () => {
+  const f = await fixture([
+    (request: Record<string, any>) => {
+      const target = projection(request).resolution.targets.find(
+        (t: any) => t.name === "协作群",
+      );
+      expect(target).toMatchObject({
+        relation: "available",
+        status: "unauthorized",
+        reference: null,
+      });
+      return {
+        ...speak,
+        target: { kind: "unresolved", reason: "unauthorized" },
+      };
+    },
+  ]);
+  vi.spyOn(f.policy, "allowsDestination").mockImplementation(
+    (_platform, destination) => destination.kind === "private",
+  );
+  await f.submit(
+    f.message("denied-private-request", {
+      text: "去合作的群问一下会议时间",
+      target: { kind: "private", userId: "speaker-account" },
+      mentions: [],
+    }),
+  );
+  await f.settle();
+  expect(f.delivered).not.toHaveBeenCalled();
+  expect(f.requests).toHaveLength(1);
+  expect(
+    (await f.atoms()).find((a) => a.kind === "agent.router.turn.failed")
+      ?.payload.reason,
+  ).toBe("target-unauthorized");
+});
+
+it("简称同时符合多个不同群名时可以拒绝选择", async () => {
+  const f = await fixture([
+    (request: Record<string, any>) => {
+      const groups = projection(request).resolution.targets.filter(
+        (t: any) => t.kind === "group" && t.name.includes("项目"),
+      );
+      expect(groups).toHaveLength(2);
+      expect(
+        groups.every(
+          (t: any) => t.status === "resolved" && t.relation === "available",
+        ),
+      ).toBe(true);
+      return {
+        ...speak,
+        target: { kind: "unresolved", reason: "ambiguous" },
+      };
+    },
+  ]);
+  f.candidates[1]!.name = "科研项目协作讨论群";
+  f.candidates[4]!.name = "教学项目协作讨论群";
+  await f.submit(
+    f.message("ambiguous-private-request", {
+      text: "去项目群问一下会议时间",
+      target: { kind: "private", userId: "speaker-account" },
+      mentions: [],
+    }),
+  );
+  await f.settle();
+  expect(f.delivered).not.toHaveBeenCalled();
+  expect(f.requests).toHaveLength(1);
+  expect(
+    (await f.atoms()).find((a) => a.kind === "agent.router.turn.failed")
+      ?.payload.reason,
+  ).toBe("target-ambiguous");
+});
+
+it.each([96, 97])("群目录增加 %i 个候选时遵守完整快照上限", async (extra) => {
+  const f = await fixture([
+    (request: Record<string, any>) => {
+      const p = projection(request);
+      if (extra === 97) {
+        expect(p.resolution).toEqual({ status: "unavailable", targets: [] });
+        return {
+          ...speak,
+          target: { kind: "unresolved", reason: "unreachable" },
+        };
+      }
+      expect(p.resolution.status).toBe("available");
+      expect(p.resolution.targets).toHaveLength(100);
+      return choose("group", "mentioned")(request);
+    },
+  ]);
+  for (let i = 0; i < extra; i++)
+    f.candidates.push({
+      adapterId: "test",
+      platform: "qq",
+      destination: { kind: "group", groupId: `extra-${i}` },
+      name: `其他群 ${i}`,
+    });
+  await f.submit(f.message());
+  await f.settle();
+  expect(f.delivered).toHaveBeenCalledTimes(extra === 96 ? 1 : 0);
+  if (extra === 96)
+    expect(f.delivered.mock.calls[0]![0]).toEqual({
+      kind: "group",
+      groupId: "other-group",
+    });
+  else
+    expect(
+      (await f.atoms()).find((a) => a.kind === "agent.router.turn.failed")
+        ?.payload.reason,
+    ).toBe("target-unreachable");
+});
+
 it("无法解析目标时关闭且不回退当前群", async () => {
   const reason = "unreachable";
   const f = await fixture([

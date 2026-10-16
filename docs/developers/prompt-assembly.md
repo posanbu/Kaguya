@@ -17,6 +17,8 @@ Router 先等待原始 Memory 写入越过本轮账本上界，再冻结 `global
 
 当前 Light 任务输出 `message | wait | silent` 和理由；`message` 只附带必要的目标信息，不传话题、回复动作、焦点、语气或写作建议。Model Task 不再保存版本字段；已完成任务的请求仍保留原始 Prompt。
 
+`conversation.resolution.targets` 提供当前 adapter 的有界群名候选及本轮相关私聊。Light 可以根据简称、关键词或描述选择群，不要求输入包含完整群名。`relation=available` 表示目录候选，`status=resolved` 表示宿主核实该候选可用；两者都不证明用户意图。Light 仍须根据请求区分目标，宿主继续复核引用、出站白名单和连接代次。候选目录不包含目标群正文，也不会传给跨会话正文生成任务。
+
 ::: code-group
 
 <<< ../../packages/modules/templates/light.decision.default.hbs [Light 主模板 ~~vscode-icons:file-type-handlebars~~]

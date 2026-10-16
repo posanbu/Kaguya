@@ -114,6 +114,43 @@ jobs:
           apps/server/src/feature-management.test.ts
           apps/server/src/server-composition.test.ts
 
+  message-targets:
+    name: message targets (${{ matrix.os }})
+    if: github.event_name == 'pull_request'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace types
+        run: pnpm exec tsc -b
+
+      - name: Test cross-conversation routing and authorization
+        run: >-
+          pnpm exec vitest run
+          apps/server/src/natural-message-targets.test.ts
+          apps/server/src/message-targets.test.ts
+          packages/modules/src/first-party/router/light.test.ts
+          packages/modules/src/node/prompt-templates.test.ts
+
   test:
     name: test (${{ matrix.os }}, shard ${{ matrix.shard }}/2)
     if: github.event_name != 'pull_request'

@@ -1,6 +1,7 @@
 /**
  * 功能概述：定义跨会话发送的宿主授权能力和审计事实，复用统一 message intent。
- * conversation 冻结当前范围背景与不透明目标引用；route 仅接受已持久化的获胜 Light 决策，自动投递仍由宿主校验。
+ * conversation 冻结当前范围背景与不透明目标引用；available 关系表示供 Light 推断的群名候选，不表示用户已提及。
+ * route 仅接受已持久化的获胜 Light 决策，自动投递仍由宿主校验。
  * 主要职责：prepare 校验意图并提供隔离的冻结 Prompt；stage 暂存 Heavy 正文，确认事实唤醒原订阅释放投递。
  * 代码库关系：Runtime 提供能力，composition 向 Heavy 注入 token；HTTP 管理端只能调用宿主的确认入口。
  * 输入输出与副作用：事实可持久化但不能自行授予权限；真实授权由宿主私有状态核验，重启默认失效。
@@ -71,7 +72,12 @@ export const conversationContextInformationKind = defineInformationKind({
               .object({
                 kind: z.enum(["group", "private"]),
                 name: z.string(),
-                relation: z.enum(["current", "speaker", "mentioned"]),
+                relation: z.enum([
+                  "current",
+                  "speaker",
+                  "mentioned",
+                  "available",
+                ]),
                 status: z.enum([
                   "resolved",
                   "ambiguous",
