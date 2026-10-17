@@ -6,7 +6,7 @@
  * postgres-development.ts，生产 pnpm start 不经过这里。
  * 输入输出与副作用：可能启动 Docker 容器、补齐 selected Profile runtime 或创建子进程；
  * 不停止/删除容器和数据卷；开发准备失败提示启动 Docker Desktop 并运行 docker info 确认。
- * 使用独立临时 schema。
+ * 使用独立临时 schema；验证清单包含 Memory 节点／边存储契约。
  */
 import { spawn } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
@@ -37,6 +37,7 @@ export const POSTGRES_TEST_FILES = [
   "packages/database/src/postgres-index.test.ts",
   "packages/database/src/postgres-reliable.test.ts",
   "packages/database/src/postgres-memory-store.test.ts",
+  "packages/database/src/memory-graph.test.ts",
   "packages/database/src/web-conversation-storage.test.ts",
   "packages/database/src/one-shot-schedule-repository.test.ts",
   "packages/database/src/model-request-metrics.test.ts",

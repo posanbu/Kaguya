@@ -1,4 +1,5 @@
 /**
+ * Memory 图管理由独立路由复用 management 认证，动态读取当前数据库，读写错误不回显正文。
  * Profile GET 返回该编辑对象的 readiness；校验错误通过白名单路径投影为安全 fieldErrors。
  * 模块模板管理路由共用 management 认证，仅返回未渲染源码与安全校验代码。
  * 模块 settings 路由由独立注册器接入，共用 management 认证并只返回安全字段。
@@ -28,6 +29,7 @@
  */
 import { profileFieldErrors } from "./profile-field-errors.js";
 import { registerModuleTemplateRoutes } from "./module-template-routes.js";
+import { registerMemoryGraphRoutes } from "./memory-graph-routes.js";
 import type { ModuleTemplateManagement } from "./module-template-management.js";
 import { registerIdentityPersonaRoutes } from "./identity-persona-routes.js";
 import { registerPersonProfileRoutes } from "./person-profile-routes.js";
@@ -69,7 +71,10 @@ import {
   webConversationIdSchema,
   z,
 } from "@kaguya/schema";
-import type { ModelRequestMetricsRepository } from "@kaguya/database";
+import type {
+  ModelRequestMetricsRepository,
+  PostgresMemoryGraphStore,
+} from "@kaguya/database";
 import {
   InvalidWebChatCursorError,
   type WebChatHistoryReader,
@@ -626,6 +631,7 @@ export interface CreateHttpApplicationOptions {
   moduleTemplates?: ModuleTemplateManagement;
   identityPersona?: IdentityPersonaManagement;
   personProfiles?: PersonProfileManagement;
+  memoryGraph?: () => PostgresMemoryGraphStore | undefined;
   logger?: FastifyBaseLogger;
   discoverModels?: typeof discoverOpenAiCompatibleModels;
 }
@@ -665,6 +671,11 @@ export async function createHttpApplication(
     app,
     requireGatewayToken(options, "management"),
     options.personProfiles,
+  );
+  registerMemoryGraphRoutes(
+    app,
+    requireGatewayToken(options, "management"),
+    options.memoryGraph ?? (() => undefined),
   );
   registerModuleSettingsRoutes(
     app,

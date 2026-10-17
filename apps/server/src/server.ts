@@ -1,4 +1,5 @@
 /**
+ * Memory 图管理通过动态 database.memoryGraph 门面接入 HTTP，数据库重挂载后使用当前实例。
  * 模板管理与配置应用共享写锁，只写本地覆盖，用户需重启加载新模板。
  * 模块配置管理复用 configuration.exclusive，与显式应用共锁；保存不会切换运行实例。
  * 启动和显式热应用分别把 inboundAllowlist 交给 AdapterHost、outboundAllowlist 交给 Runtime 及目标授权服务。
@@ -817,6 +818,7 @@ export async function startKaguyaServer(
         config: effectiveConfig,
         inspection: () => inspection,
         modelRequestMetrics: () => database?.modelRequestMetrics,
+        memoryGraph: () => database?.memoryGraph,
         messageTargets: () => runtime?.messageTargets,
         configurationApplication: application,
         featureManagement,

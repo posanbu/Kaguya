@@ -1,6 +1,6 @@
 /**
  * 功能概述：验证壳层导航及基础控件的无障碍输出契约，防止路由迁移丢失当前位置。
- * 主要职责：覆盖深层检查/配置路由，五域入口、默认按钮类型、错误反馈和标题语义。
+ * 主要职责：覆盖深层检查/配置及记忆图路由，五个入口、默认按钮类型、错误反馈和标题语义。
  * 代码库关系：直接渲染 SideNav 与 ui.tsx；浏览器焦点和抽屉交互另行真实浏览器验收。
  * 输入输出与副作用：React 服务端渲染生成静态 HTML，无网络、Token 或配置写入。
  */
@@ -14,16 +14,17 @@ describe("工作台导航契约", () => {
     expect(navigationDomain("/configuration/application")).toBe("/profiles");
     expect(navigationDomain("/adapters")).toBe("/");
     expect(navigationDomain("/messages")).toBe("/messages");
+    expect(navigationDomain("/memory")).toBe("/memory");
     expect(navigationDomain("/")).toBe("/");
   });
-  it("四个键盘可达链接只标记一个当前域", () => {
+  it("五个键盘可达链接只标记一个当前域", () => {
     const html = renderToStaticMarkup(
       <SideNav currentPath="/developer/atoms" onNavigate={() => {}} />,
     );
-    expect(html.match(/<a /g)).toHaveLength(4);
+    expect(html.match(/<a /g)).toHaveLength(5);
     expect(html.match(/aria-current="page"/g)).toHaveLength(1);
     expect(html).toContain('href="/developer/modules" aria-current="page"');
-    for (const label of ["概览", "消息", "配置", "检查"])
+    for (const label of ["概览", "消息", "记忆", "配置", "检查"])
       expect(html).toContain(label);
     expect(html).not.toContain('href="/adapters"');
   });

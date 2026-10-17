@@ -108,6 +108,11 @@ jobs:
           packages/config/src/module-config.test.ts
           packages/config/src/startup-validation.test.ts
           packages/database/src/schema.test.ts
+          packages/database/src/memory-graph.test.ts
+          apps/server/src/memory-graph-routes.test.ts
+          apps/web/src/memory-graph-model.test.ts
+          apps/web/src/memory-graph-colors.test.ts
+          apps/web/src/components/AppShell.test.tsx
           packages/modules/src/first-party/heartflow/planner.test.ts
           apps/server/src/app.test.ts
           apps/server/src/configuration-application.test.ts

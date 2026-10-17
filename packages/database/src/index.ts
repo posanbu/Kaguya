@@ -1,5 +1,5 @@
 /**
- * 导出 PostgresMemoryIngestionStore，复用同一数据库执行幂等排队与原子 Memory 写入。
+ * memoryGraph 暴露三字段节点与有向类型边的独立 PostgreSQL 存储。
  * 功能概述：提供 Kaguya 唯一的 PostgreSQL 信息账本入口，组合驱动、schema 准备与
  * append-only `InformationRepository`。
  * inspectMemoryVectors 只读可选索引的分页元数据，不安装扩展或暴露向量正文。
@@ -15,6 +15,7 @@ export { PgDatabase, type SqlDatabase } from "./driver.js";
 import { InformationRepository } from "./information-repository.js";
 import { PersonProfileRepository } from "./person-profile-repository.js";
 import { PostgresMemoryStore } from "./memory-store.js";
+import { PostgresMemoryGraphStore } from "./memory-graph.js";
 import { PostgresRawEventStore } from "./raw-event-store.js";
 import { prepareDatabaseSchema } from "./schema.js";
 import { ModelRequestMetricsRepository } from "./model-request-metrics.js";
@@ -83,11 +84,13 @@ export {
   type PostgresMemoryStoreOptions,
 } from "./memory-store.js";
 export { PostgresRawEventStore } from "./raw-event-store.js";
+export { PostgresMemoryGraphStore } from "./memory-graph.js";
 
 export class KaguyaDatabase {
   readonly information: InformationRepository;
   readonly personProfiles: PersonProfileRepository;
   readonly memory: PostgresMemoryStore;
+  readonly memoryGraph: PostgresMemoryGraphStore;
   readonly rawEvents: PostgresRawEventStore;
   readonly modelRequestMetrics: ModelRequestMetricsRepository;
 
@@ -95,6 +98,7 @@ export class KaguyaDatabase {
     this.information = new InformationRepository(sql);
     this.personProfiles = new PersonProfileRepository(sql);
     this.memory = new PostgresMemoryStore(sql);
+    this.memoryGraph = new PostgresMemoryGraphStore(sql);
     this.rawEvents = new PostgresRawEventStore(sql);
     this.modelRequestMetrics = new ModelRequestMetricsRepository(sql);
   }

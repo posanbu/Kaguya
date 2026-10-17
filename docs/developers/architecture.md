@@ -144,6 +144,8 @@ Runtime 绑定在启动时固定，修复后重启，不支持热绑定、缓存
 
 ## 独立 Memory 后台链
 
+独立的记忆图由 `KaguyaDatabase.memoryGraph` 保存到 PostgreSQL 的 `memory_nodes` 与 `memory_edges`。节点只有 ID、metadata 和正文三列，边保留方向与关系类型。工作台 `/memory` 通过受管理认证保护的 HTTP 接口检视和手动维护；该路径不调用模型或启动自动提取。节点与边在单条 SQL 快照中一起读取，删除节点由外键清理其关联。存储与接口契约见 [Memory 文档](./memory.md#节点与关联存储)。
+
 Memory 开启时，composition 自动加入原始写回模块；配置相应 provider 后才加入索引与认知模块。三者均属于 `@kaguya/modules`，使用 Reliable Runner、版本化 Memory capability 和唯一终态。Runtime 只创建仓储、检索策略、宿主 capability 与生命周期，不编写提取或演化规则。Reliable Runner 按订阅保持至多一个在途任务，空闲订阅独立领取下一条，慢后台 provider 不阻塞在线链后续步骤。
 
 原始消息、可重建 pgvector 投影和外部认知结果分层。回填使用有界 keyset page 与显式 continuation；认知只接收同范围的已持久化文档快照。在线 Router 仅消费此前已完成且带直接证据的快照。详细配置与限制见 [Memory 认知层](./memory.md)。

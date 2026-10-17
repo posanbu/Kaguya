@@ -2,12 +2,13 @@
  * 功能概述：初始化并校验 PostgreSQL v2 账本及 Router/Light/Heavy 协议标记；prepareLifecycleProjection 建立可重建的开放集合及 scope 槽。
  * 主要职责：prepareDatabaseSchema 在启动事务中校验既有结构并首次回填投影；后续启动不扫描历史。
  * prepareKindContracts 只增加通用 Kind 契约列，后续插件安装与升级不再执行模块专用 DDL。
- * prepareWebMemoryDestination 兼容旧 Web 目标约束，允许 conversationId 索引；旧 NULL 行不改写。
+ * prepareMemoryGraphSchema 幂等建立独立节点／边表；prepareWebMemoryDestination 兼容旧 Web 目标约束。
  * lifecycle 回填与在线追加使用同一 Web conversationId scope，保持历史查询和观察范围一致。
  * 代码库关系：InformationRepository 同事务维护投影，ReliableInformationRepository 锁定 scope head；原子仍只追加。
  * 输入输出与副作用：执行 DDL 与首次历史回填；不支持的账本结构报错，失败回滚全部 schema 变更。
  */
 import type { SqlDatabase } from "./driver.js";
+import { prepareMemoryGraphSchema } from "./memory-graph.js";
 
 export const POSTGRES_SCHEMA_VERSION = 2;
 export const INFORMATION_PROTOCOL_VERSION = "router-light-heavy.v2";
@@ -123,6 +124,7 @@ export async function prepareDatabaseSchema(
       await prepareLifecycleProjection(tx);
       await prepareKindContracts(tx);
       await prepareRawEventMemory(tx);
+      await prepareMemoryGraphSchema(tx);
       return;
     }
     if (tableNames.size > 0) {
@@ -289,13 +291,21 @@ export async function prepareDatabaseSchema(
     await prepareLifecycleProjection(tx);
     await prepareKindContracts(tx);
     await prepareRawEventMemory(tx);
+    await prepareMemoryGraphSchema(tx);
   });
 }
 
 /** Raw Memory is an idempotent ledger projection, independent of optional sparse indexing. */
-async function prepareRawEventMemory(tx: import("./driver.js").SqlTransaction): Promise<void> {
+async function prepareRawEventMemory(
+  tx: import("./driver.js").SqlTransaction,
+): Promise<void> {
   await tx.query("SELECT pg_advisory_xact_lock(168168)");
-  const existed = await tx.query<{ events: string | null; rejections: string | null }>("SELECT to_regclass('memory_raw_events')::text AS events, to_regclass('memory_raw_rejections')::text AS rejections");
+  const existed = await tx.query<{
+    events: string | null;
+    rejections: string | null;
+  }>(
+    "SELECT to_regclass('memory_raw_events')::text AS events, to_regclass('memory_raw_rejections')::text AS rejections",
+  );
   await tx.exec(`
     CREATE TABLE IF NOT EXISTS memory_raw_events (
       information_id text PRIMARY KEY REFERENCES information_atoms(information_id),
@@ -324,7 +334,9 @@ async function prepareRawEventMemory(tx: import("./driver.js").SqlTransaction): 
     );
   `);
   if (!existed.rows[0]?.events || !existed.rows[0]?.rejections) {
-    await tx.query("UPDATE memory_raw_checkpoint SET position=0 WHERE singleton=true");
+    await tx.query(
+      "UPDATE memory_raw_checkpoint SET position=0 WHERE singleton=true",
+    );
     await tx.query("DELETE FROM memory_raw_rejections");
   }
 }

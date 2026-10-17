@@ -29,6 +29,7 @@
  * 工作台由 AppShell 统一承载，useWorkbenchRouter 保护 history 导航；根路径预留概览，
  * /messages、/profiles、/configuration/application 分别提供任务入口；接入管理嵌入概览，
  * /adapters 仅作为兼容入口聚焦该区块。
+ * /memory 延迟加载记忆图工作台，提供节点与关系检视、手动编辑和删除；沿用同一管理 Token。
  * 人工跨会话管理界面已移除；会话 UUID 由 WebChat 保存，凭据与编辑状态仅驻留当前页面。
  * DeveloperConsole 接收完整 pathname 以恢复模块详情，负责只读查询与取消，401 继续由本文件统一锁屏。
  * 消息页由 WebChat 管理独立浏览器会话、历史恢复与完整回复轮询；
@@ -88,6 +89,8 @@ import {
   useMemo,
   useRef,
   useState,
+  lazy,
+  Suspense,
   type ReactNode,
 } from "react";
 
@@ -148,6 +151,12 @@ import {
 
 type ConfigurationView =
   "locked" | "checking" | "profiles" | "napcat" | "restart" | "chat" | "error";
+
+const MemoryGraphPage = lazy(() =>
+  import("./MemoryGraph.js").then(({ MemoryGraph }) => ({
+    default: MemoryGraph,
+  })),
+);
 
 interface ClearedLoadedProfileStateSnapshot {
   readonly requestSequence: number;
@@ -237,6 +246,12 @@ export function App() {
     return <ConfigurationStatusError message={configurationError} />;
 
   const renderPage = () => {
+    if (path === "/memory")
+      return (
+        <Suspense fallback={<FieldMessage>正在加载记忆工作台…</FieldMessage>}>
+          <MemoryGraphPage token={token} />
+        </Suspense>
+      );
     if (isOverview)
       return (
         <AdapterManagementSection token={token}>
