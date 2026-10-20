@@ -81,7 +81,7 @@ describe("first-party module configuration", () => {
         .flatMap((d) => [...d.manifest.produces, ...d.manifest.consumes])
         .map((k) => k.kind),
     );
-    expect(definitions).toHaveLength(10);
+    expect(definitions).toHaveLength(11);
     for (const { manifest } of definitions) {
       if (manifest.development?.status === "incomplete") {
         expect(manifest.inspection).toBeUndefined();
@@ -131,7 +131,7 @@ describe("first-party module configuration", () => {
       defaults.find((config) => config.definitionId === "adapter.web")?.enabled,
     ).toBe(true);
     expect(createFirstPartyModuleActivations(catalog(), defaults)).toHaveLength(
-      7,
+      8,
     );
   });
 

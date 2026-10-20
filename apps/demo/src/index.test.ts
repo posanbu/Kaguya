@@ -94,6 +94,7 @@ describe("demo entry point", () => {
       "agent.router.turn.started: 1",
       "core.delivery.delivered: 1",
       "core.delivery.requested: 1",
+      "core.message.assistant.authorized: 1",
       "core.message.assistant.text: 1",
       "core.message.inbound.text: 1",
       "core.model.task.completed: 2",

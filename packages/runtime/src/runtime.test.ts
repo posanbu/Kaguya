@@ -351,6 +351,7 @@ describe("KaguyaRuntime", () => {
         "agent.attention.arousal",
         "agent.heartbeat.short",
         "memory.expression",
+        "agent.message-output.text",
         "agent.heavy",
         "memory.identity",
         "agent.router",
@@ -609,7 +610,11 @@ describe("KaguyaRuntime", () => {
         expect.arrayContaining([
           expect.objectContaining({
             variableName: "scope_context",
-            informationIds: [graph.find((atom) => atom.kind === "agent.router.memory.context.frozen")!.informationId],
+            informationIds: [
+              graph.find(
+                (atom) => atom.kind === "agent.router.memory.context.frozen",
+              )!.informationId,
+            ],
           }),
         ]),
       );
@@ -1135,6 +1140,7 @@ describe("KaguyaRuntime", () => {
           "core.model.task.requested",
           "core.model.task.completed",
           "core.message.assistant.text",
+          "core.message.assistant.authorized",
           "core.delivery.requested",
           "memory.identity.chat.scope.entity",
           "memory.identity.chat.scope.binding",
@@ -1175,6 +1181,7 @@ describe("KaguyaRuntime", () => {
         ["core.model.task.requested", "agent.router.message.intent.requested"],
         ["core.model.task.completed", "core.model.task.requested"],
         ["core.message.assistant.text", "core.model.task.completed"],
+        ["core.message.assistant.authorized", "core.message.assistant.text"],
         ["core.delivery.requested", "core.message.assistant.text"],
         ["core.delivery.delivered", "core.delivery.requested"],
       ] as const;

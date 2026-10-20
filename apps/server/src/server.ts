@@ -47,6 +47,7 @@ import {
   type RuntimeModelSelectionResolver,
 } from "@kaguya/composition";
 import { pathToFileURL } from "node:url";
+import { join } from "node:path";
 
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import type { KaguyaLlmGenerationOptions } from "@kaguya/llm/client";
@@ -80,6 +81,7 @@ import {
 } from "@kaguya/logger";
 import {
   KaguyaRuntime,
+  FileMediaResourceStore,
   RuntimeDatabaseInitializationError,
   createRuntimeKindRegistry,
 } from "@kaguya/runtime";
@@ -442,6 +444,9 @@ export async function startKaguyaServer(
           targetDirectory: adapterHost,
           database,
           logger: rootLogger,
+          mediaResources: new FileMediaResourceStore(
+            join(bootstrap.configRoot, "media"),
+          ),
           ...createMessageComposition(resolveModelSelection, {
             pluginModelTasks: pluginSnapshot.modelTasks,
             ...createMemoryCompositionOptions(
@@ -706,6 +711,9 @@ export async function startKaguyaServer(
             targetDirectory: nextHost,
             database,
             logger: rootLogger,
+            mediaResources: new FileMediaResourceStore(
+              join(bootstrap.configRoot, "media"),
+            ),
             ...createMessageComposition(
               createRuntimeModelSelectionResolver(snapshot.profile),
               {

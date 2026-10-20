@@ -550,7 +550,7 @@ export const firstPartyInspection = {
   "agent.heavy": {
     mechanism: [
       "沿显式引用选择冻结输入、历史、记忆和表达参考，再编译 Prompt。",
-      "模型生成正文后提交助手消息与投递请求；请求不等于投递成功。",
+      "模型生成正文并通过目标授权后发布授权输出；输出处理器选择投递形态，Runtime 记录最终平台结果。",
     ],
     views: [
       modelRequestsView(),
@@ -558,7 +558,7 @@ export const firstPartyInspection = {
         "messages",
         "正文与投递请求",
         "查看生成正文和目标，沿引用继续检查模型任务与实际投递。",
-        ["core.message.assistant.text", "core.delivery.requested"],
+        ["core.message.assistant.text", "core.message.assistant.authorized"],
         {
           text: "正文",
           target: "目标",

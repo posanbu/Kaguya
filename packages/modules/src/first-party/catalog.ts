@@ -27,6 +27,7 @@ import { memoryMem0Module } from "./memory-mem0/index.js";
 import { identityModule } from "./identity/index.js";
 import { createAttentionArousalModule } from "./attention-arousal/index.js";
 import { heartbeatModule } from "./heartbeat/index.js";
+import { textMessageOutputModule } from "./message-output/index.js";
 import {
   createRouterModule,
   type CreateRouterModuleOptions,
@@ -66,6 +67,7 @@ export function createFirstPartyModuleCatalog<
       expressionEnabled: true,
       draftProcessingEnabled: options.qqExpressionEnabled ?? false,
     }),
+    textMessageOutputModule,
     heartbeatModule,
     createRouterModule(options),
   );
@@ -186,48 +188,66 @@ export function createFirstPartyModuleActivations(
   configs: readonly FirstPartyModuleInstanceConfig[],
   _identity: Pick<AgentIdentity, "name" | "aliases"> = DEFAULT_AGENT_IDENTITY,
 ): readonly InformationModuleActivation[] {
-  return Object.freeze(
-    configs
-      .filter((config) => !config.definitionId.startsWith("adapter."))
-      .map((config) => {
-        if (
-          config.definitionId === "demo.reply.llm" ||
-          config.instanceId === "reply.default"
-        ) {
-          throw new Error("Unknown module configuration");
-        }
-        const definition = catalog.definitions.find(
-          ({ manifest }) => manifest.definitionId === config.definitionId,
+  const activations = configs
+    .filter((config) => !config.definitionId.startsWith("adapter."))
+    .map((config) => {
+      if (
+        config.definitionId === "demo.reply.llm" ||
+        config.instanceId === "reply.default"
+      ) {
+        throw new Error("Unknown module configuration");
+      }
+      const definition = catalog.definitions.find(
+        ({ manifest }) => manifest.definitionId === config.definitionId,
+      );
+      if (definition === undefined) {
+        throw new Error(`Unknown module definition: ${config.definitionId}`);
+      }
+      if (definition.manifest.development?.status === "incomplete") {
+        throw new Error(
+          `Incomplete module cannot be activated: ${config.definitionId}`,
         );
-        if (definition === undefined) {
-          throw new Error(`Unknown module definition: ${config.definitionId}`);
-        }
-        if (definition.manifest.development?.status === "incomplete") {
-          throw new Error(
-            `Incomplete module cannot be activated: ${config.definitionId}`,
-          );
-        }
-        const settings = definition.manifest.settingsSchema.safeParse(
-          config.settings,
+      }
+      const settings = definition.manifest.settingsSchema.safeParse(
+        config.settings,
+      );
+      if (!settings.success) {
+        throw new ModuleConfigurationError(
+          config.instanceId,
+          config.definitionId,
+          settings.error.issues.map(
+            (issue) => issue.path.map(String).join(".") || "settings",
+          ),
         );
-        if (!settings.success) {
-          throw new ModuleConfigurationError(
-            config.instanceId,
-            config.definitionId,
-            settings.error.issues.map(
-              (issue) => issue.path.map(String).join(".") || "settings",
-            ),
-          );
-        }
-        return Object.freeze({
-          instanceId: config.instanceId,
-          definitionId: config.definitionId,
-          enabled: config.enabled,
-          settings: settings.data,
-        });
-      })
-      .filter((activation) => activation.enabled),
+      }
+      return Object.freeze({
+        instanceId: config.instanceId,
+        definitionId: config.definitionId,
+        enabled: config.enabled,
+        settings: settings.data,
+      });
+    })
+    .filter((activation) => activation.enabled);
+  const hasOutputProcessor = activations.some((activation) =>
+    catalog.definitions
+      .find(({ manifest }) => manifest.definitionId === activation.definitionId)
+      ?.manifest.provides.some(
+        (capability) => capability.id === "agent:message-output-processor",
+      ),
   );
+  return Object.freeze([
+    ...activations,
+    ...(hasOutputProcessor
+      ? []
+      : [
+          Object.freeze({
+            instanceId: "message-output.text.default",
+            definitionId: "agent.message-output.text",
+            enabled: true,
+            settings: Object.freeze({}),
+          }),
+        ]),
+  ]);
 }
 
 const DEFAULT_AGENT_IDENTITY: Pick<AgentIdentity, "name" | "aliases"> = {

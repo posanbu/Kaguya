@@ -52,6 +52,28 @@ describe("normalizeOneBotMessageEvent", () => {
   });
 });
 
+describe("buildOneBotSendAction audio", () => {
+  it("sends resolved audio bytes as a NapCat record without storing base64 in the message", () => {
+    const bytes = new Uint8Array([82, 73, 70, 70]);
+    const action = buildOneBotSendAction(
+      { kind: "private", userId: "123" },
+      {
+        kind: "audio",
+        resourceId: `sha256:${"a".repeat(64)}`,
+        mimeType: "audio/wav",
+        byteLength: bytes.byteLength,
+        sha256: "a".repeat(64),
+        text: "你好",
+      },
+      "echo",
+      { media: { bytes, mimeType: "audio/wav", sha256: "a".repeat(64) } },
+    );
+    expect(action.params.message).toEqual([
+      { type: "record", data: { file: "base64://UklGRg==" } },
+    ]);
+  });
+});
+
 describe("buildOneBotSendAction", () => {
   it("builds private send actions with text segments", () => {
     expect(

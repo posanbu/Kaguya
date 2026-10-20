@@ -6,13 +6,13 @@
 
 ## 消费和产生
 
-消费 `agent.router.message.intent.requested` 与 `agent.heavy.respond` 的 Model Task 完成事实；普通回复可产生 assistant text 和 delivery request，或 `agent.heavy.response.silent`。默认定义 ID 为 `agent.heavy`，实例为 `heavy.default`，Prompt kind 为 `message`。
+消费 `agent.router.message.intent.requested` 与 `agent.heavy.respond` 的 Model Task 完成事实；普通回复可产生 assistant text 和 `core.message.assistant.authorized`，或 `agent.heavy.response.silent`。默认定义 ID 为 `agent.heavy`，实例为 `heavy.default`，Prompt kind 为 `message`。
 
 ## 数据流与边界
 
 新意图严格包含 `target: { adapterId, platform, destination }`、必填 turn provenance 和 `memoryInformationIds`。旧意图中的 `composition` 仍可解析以支持重放，但不再进入 Heavy Prompt。意图不复制源消息正文、源平台消息 ID 或引用标记。Selector 沿引用重载冻结 context 及其全部输入，并验证目标范围与 provenance。Heavy 使用整个 `turn.inputs`，不会把最后一条输入标成必须回答的目标消息。
 
-历史只纳入同范围入站及已成功投递的 assistant；Memory 必须来自意图明确列出的冻结引用。引用机器人消息时，Selector 通过同目标的成功投递回执追溯 assistant 原子，并把回执与因果链保留为引用溯源；晚于冻结时点的回执、失败投递和歧义结果不会用于解析。每条入站的引用可作为理解上下文，出站始终是普通 `kind: "text"`，投递地址只来自意图 target。公共 OneBot `kind: "reply"` 能力保留给专用模块。
+历史只纳入同范围入站及已成功投递的 assistant；Memory 必须来自意图明确列出的冻结引用。引用机器人消息时，Selector 通过同目标的成功投递回执追溯 assistant 原子，并把回执与因果链保留为引用溯源；晚于冻结时点的回执、失败投递和歧义结果不会用于解析。每条入站的引用可作为理解上下文。Heavy 的统一出口先执行授权检查，再发布授权正文；默认文字处理器或独立 TTS 插件负责选择投递类型，Runtime 发送前再次检查授权。投递地址只来自意图 target。公共 OneBot `kind: "reply"` 能力保留给专用模块。
 
 ## Prompt 模板
 
@@ -34,7 +34,7 @@ settings 为空对象 `{}`。模型固定使用 Profile 的 `heavy` 档位；模
 
 ## 可靠性、幂等和失败行为
 
-普通回复使用结构化输出：`message(text)` 或 `silent`；授权跨会话发送使用文本输出。稳定任务键复用等价 Model Task；assistant、silent 与 delivery 使用实例级 `registerOnce` 去重。silent 不生成 assistant 或投递，由 Router 关闭回合。模型 failed/cancelled 不生成 assistant，缺少冻结引用或 provenance 不一致时拒绝继续。
+普通回复使用结构化输出：`message(text)` 或 `silent`；授权跨会话发送使用文本输出。稳定任务键复用等价 Model Task；assistant、silent 与授权正文使用实例级 `registerOnce` 去重。输出处理器独立保证投递请求幂等，仍保留正文、授权与投递的引用。silent 不生成 assistant 或投递，由 Router 关闭回合。模型 failed/cancelled 不生成 assistant，缺少冻结引用或 provenance 不一致时拒绝继续。
 
 ## 日志与可观测性
 

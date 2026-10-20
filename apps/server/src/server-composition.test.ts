@@ -318,6 +318,7 @@ describe("unified server composition", () => {
         "core.model.task.requested",
         "core.model.task.completed",
         "core.message.assistant.text",
+        "core.message.assistant.authorized",
         "core.delivery.requested",
         "core.delivery.delivered",
       ]),

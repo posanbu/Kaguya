@@ -132,11 +132,34 @@ export const outboundMessageContentSchema = z.discriminatedUnion("kind", [
       text: z.string().min(1),
     })
     .strict(),
+  z
+    .object({
+      kind: z.literal("audio"),
+      resourceId: z.string().regex(/^sha256:[a-f0-9]{64}$/u),
+      mimeType: z.enum(["audio/wav", "audio/mpeg", "audio/ogg"]),
+      byteLength: z
+        .number()
+        .int()
+        .positive()
+        .max(16 * 1024 * 1024),
+      sha256: z.string().regex(/^[a-f0-9]{64}$/u),
+      text: z.string().min(1),
+    })
+    .strict(),
 ]) as z.ZodType<OutboundMessageContent>;
 
 export type OutboundMessageContent =
   | { kind: "text"; text: string; expression?: OutboundExpression }
-  | { kind: "reply"; text: string; replyToPlatformMessageId: string };
+  | { kind: "reply"; text: string; replyToPlatformMessageId: string }
+  | {
+      kind: "audio";
+      resourceId: string;
+      mimeType: "audio/wav" | "audio/mpeg" | "audio/ogg";
+      byteLength: number;
+      sha256: string;
+      /** 已授权正文，也是历史查询与无障碍展示使用的文本回退。 */
+      text: string;
+    };
 
 export const promptVariableSchema = z.object({
   name: z.string().regex(/^[a-z][a-z0-9_]*$/u),

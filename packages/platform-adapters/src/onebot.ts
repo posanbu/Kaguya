@@ -23,6 +23,7 @@ import type {
   PlatformMessageMention,
   PlatformMessageSender,
   PlatformMessageTarget,
+  PlatformOutboundMetadata,
 } from "./types.js";
 
 export interface NormalizeOneBotOptions {
@@ -154,42 +155,55 @@ export function buildOneBotSendAction(
   target: PlatformMessageTarget,
   content: string | OutboundMessageContent,
   echo: string,
+  metadata?: PlatformOutboundMetadata,
 ): OneBotActionRequest {
   const normalized: OutboundMessageContent =
     typeof content === "string"
       ? ({ kind: "text", text: content } as const)
       : content;
-  const message: readonly OneBotMessageSegment[] = [
-    ...(normalized.kind === "reply"
+  const message: readonly OneBotMessageSegment[] =
+    normalized.kind === "audio"
       ? [
           {
-            type: "reply",
-            data: { id: normalized.replyToPlatformMessageId },
+            type: "record",
+            data: {
+              file: `base64://${Buffer.from(requireAudioMedia(normalized, metadata).bytes).toString("base64")}`,
+            },
           },
         ]
-      : []),
-    { type: "text", data: { text: normalized.text } },
-    ...(normalized.kind === "text" && normalized.expression
-      ? [
-          normalized.expression.kind === "mface"
-            ? {
-                type: "mface",
-                data: {
-                  emoji_id: normalized.expression.id,
-                  emoji_package_id: Number(normalized.expression.packageId),
-                  summary: "[表情]",
-                  key: normalized.expression.key,
+      : [
+          ...(normalized.kind === "reply"
+            ? [
+                {
+                  type: "reply",
+                  data: { id: normalized.replyToPlatformMessageId },
                 },
-              }
-            : normalized.expression.kind === "face"
-              ? { type: "face", data: { id: normalized.expression.id } }
-              : {
-                  type: "image",
-                  data: { file: normalized.expression.file, sub_type: 1 },
-                },
-        ]
-      : []),
-  ];
+              ]
+            : []),
+          { type: "text", data: { text: normalized.text } },
+          ...(normalized.kind === "text" && normalized.expression
+            ? [
+                normalized.expression.kind === "mface"
+                  ? {
+                      type: "mface",
+                      data: {
+                        emoji_id: normalized.expression.id,
+                        emoji_package_id: Number(
+                          normalized.expression.packageId,
+                        ),
+                        summary: "[表情]",
+                        key: normalized.expression.key,
+                      },
+                    }
+                  : normalized.expression.kind === "face"
+                    ? { type: "face", data: { id: normalized.expression.id } }
+                    : {
+                        type: "image",
+                        data: { file: normalized.expression.file, sub_type: 1 },
+                      },
+              ]
+            : []),
+        ];
   if (target.kind === "private") {
     return {
       action: "send_private_msg",
@@ -205,6 +219,23 @@ export function buildOneBotSendAction(
     };
   }
   throw new Error("OneBot cannot send messages to web destinations");
+}
+
+function requireAudioMedia(
+  content: Extract<OutboundMessageContent, { kind: "audio" }>,
+  metadata: PlatformOutboundMetadata | undefined,
+) {
+  const media = metadata?.media;
+  if (
+    !media ||
+    media.mimeType !== content.mimeType ||
+    media.sha256 !== content.sha256 ||
+    media.bytes.byteLength !== content.byteLength
+  )
+    throw new Error(
+      "Audio delivery requires a matching resolved media resource",
+    );
+  return media;
 }
 
 function targetFor(
