@@ -116,6 +116,7 @@ jobs:
           apps/web/src/memory-graph-model.test.ts
           apps/web/src/memory-graph-colors.test.ts
           apps/web/src/components/AppShell.test.tsx
+          packages/modules/src/first-party/router/agent-contracts.test.ts
           packages/modules/src/first-party/situation-model.test.ts
           packages/modules/src/first-party/heartflow/planner.test.ts
           apps/server/src/app.test.ts

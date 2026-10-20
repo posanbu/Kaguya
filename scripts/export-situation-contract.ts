@@ -3,13 +3,13 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { format } from "prettier";
-import { z, situationContractSchema } from "../packages/schema/src/index.js";
+import { situationContractSchema } from "../packages/schema/src/situation-contract.js";
 
 const directory = new URL("../contracts/situation-action/v1/", import.meta.url);
 const schema = await format(
   JSON.stringify(
     {
-      ...z.toJSONSchema(situationContractSchema, {
+      ...situationContractSchema.toJSONSchema({
         target: "draft-2020-12",
         reused: "inline",
       }),
