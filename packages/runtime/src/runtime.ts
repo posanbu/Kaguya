@@ -48,7 +48,11 @@ import {
   createModuleLogger,
   type KaguyaLogger,
 } from "@kaguya/logger";
-import { MEMORY_RETRIEVAL_STRATEGY_ID, memoryCapability, rawContextCapability } from "@kaguya/memory";
+import {
+  MEMORY_RETRIEVAL_STRATEGY_ID,
+  memoryCapability,
+  rawContextCapability,
+} from "@kaguya/memory";
 import {
   deliveryRequestedInformationKind,
   messageAuthorizationCapability,
@@ -707,14 +711,29 @@ export class KaguyaRuntime implements InformationIngress {
         ),
       );
       const projectRaw = () => {
-        if (this.#rawProjectionInFlight || this.#state === "closing" || this.#state === "closed") return;
+        if (
+          this.#rawProjectionInFlight ||
+          this.#state === "closing" ||
+          this.#state === "closed"
+        )
+          return;
         this.#rawProjectionInFlight = true;
-        this.#rawProjectionPromise = database.rawEvents.projectLatest().then(() => undefined).catch((error) => {
-          this.#runtimeLogger?.error(
-            { event: "memory.raw.projection.failed", errorType: safeErrorType(error) },
-            "Raw Memory event projection failed",
-          );
-        }).finally(() => { this.#rawProjectionInFlight = false; this.#rawProjectionPromise = undefined; });
+        this.#rawProjectionPromise = database.rawEvents
+          .projectLatest()
+          .then(() => undefined)
+          .catch((error) => {
+            this.#runtimeLogger?.error(
+              {
+                event: "memory.raw.projection.failed",
+                errorType: safeErrorType(error),
+              },
+              "Raw Memory event projection failed",
+            );
+          })
+          .finally(() => {
+            this.#rawProjectionInFlight = false;
+            this.#rawProjectionPromise = undefined;
+          });
       };
       this.#rawProjectionTimer = setInterval(projectRaw, 1_000);
       this.#rawProjectionTimer.unref?.();
@@ -830,7 +849,11 @@ export class KaguyaRuntime implements InformationIngress {
       const failures: unknown[] = [];
       if (this.#rawProjectionTimer) clearInterval(this.#rawProjectionTimer);
       this.#rawProjectionTimer = undefined;
-      if (this.#rawProjectionPromise) await drainRuntimeOperations([this.#rawProjectionPromise], this.options.drainTimeoutMs ?? 5_000);
+      if (this.#rawProjectionPromise)
+        await drainRuntimeOperations(
+          [this.#rawProjectionPromise],
+          this.options.drainTimeoutMs ?? 5_000,
+        );
       try {
         await this.#oneShotScheduler?.stop();
       } catch (error) {
@@ -1030,6 +1053,9 @@ export class KaguyaRuntime implements InformationIngress {
         request.payload.destination,
       ) ||
       !targetAuthorized ||
+      (request.payload.message.kind === "audio" &&
+        Date.parse(request.payload.message.expiresAt) <=
+          this.#now().getTime()) ||
       !this.#messageTargets!.deliveryStillCurrent(request.informationId)
     ) {
       await core.commitTerminal(

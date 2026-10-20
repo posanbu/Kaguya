@@ -150,6 +150,25 @@ Memory 开启时，composition 自动加入原始写回模块；配置相应 pro
 
 原始消息、可重建 pgvector 投影和外部认知结果分层。回填使用有界 keyset page 与显式 continuation；认知只接收同范围的已持久化文档快照。在线 Router 仅消费此前已完成且带直接证据的快照。详细配置与限制见 [Memory 认知层](./memory.md)。
 
+## 可选 TTS 出口
+
+TTS 默认关闭。宿主向 `createMessageComposition` 显式注入 `tts` 能力后，Heavy 在授权通过后
+为当前会话选择文字或语音，共用唯一出口槽。跨会话首版继续使用文字。Server 从选中 Profile provider 的 settings.tts 装配，密钥复用 apiKey；
+启动和热重载共享此入口，NapCat 绑定同一受控存储。配置和音色管理见 [QQ 语音回复](../guide/tts)。
+
+`agent.tts.requested` 冻结正文、目标、回合及合成参数，`agent.tts.started` 标记外部调用已开始，
+`agent.tts.result` 的完成、失败、取消状态竞争同一终态槽。重放复用已存产物；
+远端结果未知且没有产物时回退文字，不自动再次计费。失败回退和语音投递使用同一个操作槽。
+取消或过期结果通过 `agent.tts.delivery.cancelled` 关闭回合，不调用平台。
+
+`core.delivery.requested.message` 增加 `audio` 类型，保留原文、资源摘要、大小、MIME、时长和有效期。
+Runtime 校验 TTS 因果链、原文、目标及有效期，仍执行已有出站白名单与授权检查。
+只有平台回执驱动回合完成；合成完成不表示消息已发送或用户已播放。
+
+`TtsAudioStore` 将音频写入宿主受控目录，总线不存字节。NapCat 可注入资源读取回调，
+在发送边界编码语音段；Web 尚不支持音频且明确拒绝。当前没有自动音频清理或 Web 播放，
+真实音色、音质和 NapCat 格式兼容性需要部署联调。
+
 ## 跨会话目标授权
 
 Server 将当前生效 GatewayAllowlist 和 AdapterHost 目录注入 Runtime。MessageTargetService 只向管理路由暴露解析与两阶段批准，向 Heavy 注入的 capability 则是仅含 prepare/stage 的冻结门面，不暴露 Core、目录或批准方法。授权事实本身不构成权限；Runtime 的私有授权记录绑定具体 intent、assistant、目标、连接代次及有效期，重启后默认失效。

@@ -16,6 +16,10 @@
  * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
  */
 import { firstPartyInspection } from "../inspection.js";
+import { ttsTaskKey } from "@kaguya/llm";
+import { ttsCapability } from "../tts/capability.js";
+import { ttsRequested } from "../tts/facts.js";
+import { decideTtsOutput } from "../tts/output-policy.js";
 import { expressionSelected, expressionReady } from "../expression/facts.js";
 import {
   expressionDispatchSelector,
@@ -91,6 +95,29 @@ export interface ModuleModelSelection {
 export type { AgentIdentity, HeavyPromptTemplates } from "./message-prompt.js";
 
 export const heavySettingsSchema = z.object({}).strict();
+const ttsCurrentScopeSelector = defineInformationSelector({
+  selectorId: "kaguya.heavy.tts-current-scope",
+  async select({ sourceAtom, ledger }) {
+    let current = sourceAtom;
+    for (let depth = 0; depth < 16; depth++) {
+      if (current.kind === messageIntentRequestedInformationKind.kind)
+        return current.references.some(
+          (r) => r.relation === "agent:target-authorization",
+        )
+          ? []
+          : [current.informationId];
+      const parents = await ledger.related({
+        from: [current.informationId],
+        relation: "core:caused-by",
+        direction: "outgoing",
+        limit: 2,
+      });
+      if (parents.length !== 1) return [];
+      current = parents[0]!;
+    }
+    return [];
+  },
+});
 export type HeavySettings = z.infer<typeof heavySettingsSchema>;
 
 export const messageModelDispatchingDiagnostic = defineModuleDiagnostic({
@@ -193,6 +220,8 @@ export interface CreateHeavyModuleOptions<
     P
   >;
   readonly expressionEnabled?: boolean;
+  /** 仅宿主同时安装 TTS 模块和能力时启用；默认保持文字。 */
+  readonly ttsEnabled?: boolean;
   /** 装配时有独立展示插件才启用；本模块不决定表情策略。 */
   readonly draftProcessingEnabled?: boolean;
   readonly selector?: InformationSelectorDefinition;
@@ -243,6 +272,56 @@ export function createHeavyModule<
         .stage(assistant))
     )
       return;
+    if (
+      dependencies.ttsEnabled &&
+      context.sourceAtom.kind === assistantTextInformationKind.kind &&
+      (await context.select(ttsCurrentScopeSelector)).length === 1
+    ) {
+      const plan = await context.use(ttsCapability).plan(assistant);
+      if (
+        plan &&
+        Date.parse(plan.expiresAt) > context.now().getTime() &&
+        decideTtsOutput(
+          { mode: "voice-fallback-text", maxCharacters: plan.maxCharacters },
+          {
+            authorized: true,
+            platform: assistantPayload.source.platform,
+            audioSupported: true,
+            crossConversation: false,
+            text: assistantPayload.text,
+          },
+        ).kind === "voice"
+      ) {
+        // 与文字共用一次性槽，恢复时即使会话设置变化也不能选出第二条出口。
+        await context.registerOnce(
+          "kaguya.heavy.delivery.v1",
+          `${context.instanceId}:${assistant.informationId}`,
+          ttsRequested,
+          {
+            payload: {
+              taskKey: ttsTaskKey(
+                assistant.informationId,
+                assistantPayload.text,
+                plan.identity,
+              ),
+              assistantInformationId: assistant.informationId,
+              text: assistantPayload.text,
+              target: assistantPayload.source,
+              turn: assistantPayload.turn,
+              identity: plan.identity,
+              expiresAt: plan.expiresAt,
+            },
+            references: [
+              {
+                relation: "agent:tts-source",
+                informationId: assistant.informationId,
+              },
+            ],
+          },
+        );
+        return;
+      }
+    }
     await context.registerOnce(
       "kaguya.heavy.delivery.v1",
       `${context.instanceId}:${assistant.informationId}`,
@@ -282,6 +361,7 @@ export function createHeavyModule<
       protocolVersion: 1,
       moduleVersion: "1.0.0",
       selectors: [
+        ...(dependencies.ttsEnabled ? [ttsCurrentScopeSelector] : []),
         ...(dependencies.expressionEnabled ? [expressionDispatchSelector] : []),
         selector,
         ...(selector === currentAcceptedMessageSelector
@@ -297,6 +377,7 @@ export function createHeavyModule<
         assistantHistoryPromptRenderer,
       ],
       requires: [
+        ...(dependencies.ttsEnabled ? [ttsCapability] : []),
         ...(dependencies.draftProcessingEnabled
           ? [messageDraftProcessorReady]
           : []),
@@ -328,6 +409,7 @@ export function createHeavyModule<
         inboundTextInformationKind,
       ],
       produces: [
+        ...(dependencies.ttsEnabled ? [ttsRequested] : []),
         heavyResponseSilentInformationKind,
         ...(dependencies.draftProcessingEnabled
           ? [messageDraftInformationKind]
@@ -409,14 +491,22 @@ export function createHeavyModule<
               : undefined;
             let contextAtoms =
               authorized?.contextAtoms ?? (await context.select(selector));
-            const persisted = authorized ? undefined : contextAtoms.find(
-              (atom) => atom.kind === "core.model.task.requested" &&
-                atom.payload.taskId === "agent.heavy.respond" &&
-                (atom.payload.activation as any)?.instanceId === context.instanceId,
-            );
+            const persisted = authorized
+              ? undefined
+              : contextAtoms.find(
+                  (atom) =>
+                    atom.kind === "core.model.task.requested" &&
+                    atom.payload.taskId === "agent.heavy.respond" &&
+                    (atom.payload.activation as any)?.instanceId ===
+                      context.instanceId,
+                );
             if (persisted) {
-              const byId = new Map(contextAtoms.map((atom) => [atom.informationId, atom]));
-              contextAtoms = (persisted.payload.contextInformationIds as string[]).map((id) => {
+              const byId = new Map(
+                contextAtoms.map((atom) => [atom.informationId, atom]),
+              );
+              contextAtoms = (
+                persisted.payload.contextInformationIds as string[]
+              ).map((id) => {
                 const atom = byId.get(id);
                 if (!atom) throw new Error("Missing persisted Heavy context");
                 return atom;
@@ -427,9 +517,15 @@ export function createHeavyModule<
               message.informationId,
             );
             let prompt =
-              authorized?.prompt ?? (persisted?.payload.prompt as unknown as CompiledPrompt | undefined) ??
+              authorized?.prompt ??
+              (persisted?.payload.prompt as unknown as
+                CompiledPrompt | undefined) ??
               compilePrompt(contextAtoms, persistedIntent.informationId);
-            if (!authorized && !persisted && dependencies.messageAuthorizationCapability) {
+            if (
+              !authorized &&
+              !persisted &&
+              dependencies.messageAuthorizationCapability
+            ) {
               const service = context.use(
                 dependencies.messageAuthorizationCapability,
               );
@@ -458,14 +554,23 @@ export function createHeavyModule<
                 };
               }
             }
-            contextAtoms = persisted ? contextAtoms : [
-              ...new Map(
-                [...contextAtoms, ...selected].map((a) => [a.informationId, a]),
-              ).values(),
-            ];
-            if (!persisted) prompt = expressionPrompt(
-              prompt, contextAtoms, message.informationId, renderHabits,
-            );
+            contextAtoms = persisted
+              ? contextAtoms
+              : [
+                  ...new Map(
+                    [...contextAtoms, ...selected].map((a) => [
+                      a.informationId,
+                      a,
+                    ]),
+                  ).values(),
+                ];
+            if (!persisted)
+              prompt = expressionPrompt(
+                prompt,
+                contextAtoms,
+                message.informationId,
+                renderHabits,
+              );
             const contexts = persistedIntent.references.filter(
               (r) => r.relation === "core:context",
             );
@@ -478,8 +583,14 @@ export function createHeavyModule<
               tier: "heavy",
               promptCharacters: Array.from(prompt.text).length,
               promptVariableCount: prompt.variables.length,
-              globalContextCharacters: variableCharacters(prompt, "global_context"),
-              scopeContextCharacters: variableCharacters(prompt, "scope_context"),
+              globalContextCharacters: variableCharacters(
+                prompt,
+                "global_context",
+              ),
+              scopeContextCharacters: variableCharacters(
+                prompt,
+                "scope_context",
+              ),
               memoryCharacters: variableCharacters(prompt, "memory"),
             });
             await context.use(modelTaskCapability).execute<unknown>({

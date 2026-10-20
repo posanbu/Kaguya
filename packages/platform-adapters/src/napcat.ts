@@ -12,13 +12,17 @@
  * 输入输出与副作用：出站会写 JSON transport 并创建 timeout；入站提交
  * 异常通过可选 callback 报告，context 仅含 adapter ID 和外部 platform message ID。
  */
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import type {
   TargetDirectory,
   TargetDirectorySnapshot,
   ReachableTarget,
 } from "./targets.js";
-import type { OutboundMessageContent } from "@kaguya/schema";
+import {
+  audioResourceSchema,
+  type AudioResource,
+  type OutboundMessageContent,
+} from "@kaguya/schema";
 
 import type {
   InformationIngress,
@@ -70,6 +74,10 @@ export interface NapCatActionClientOptions {
   readonly transport: JsonMessageTransport;
   readonly nextEcho: () => string;
   readonly timeoutMs: number;
+  /** 只按受控资源引用读取字节，不接受来自消息的文件路径。 */
+  readonly resolveAudio?: (
+    resource: AudioResource,
+  ) => Promise<Uint8Array | undefined>;
 }
 
 interface PendingAction {
@@ -172,7 +180,43 @@ export class NapCatActionClient
     message: OutboundMessageContent,
   ): Promise<PlatformDeliveryReceipt> {
     const echo = this.options.nextEcho();
-    const request = buildOneBotSendAction(target, message, echo);
+    let request;
+    if (message.kind === "audio") {
+      if (
+        !this.options.resolveAudio ||
+        Date.parse(message.expiresAt) <= Date.now()
+      )
+        throw new Error("NapCat audio unavailable or expired");
+      const resource = audioResourceSchema.parse(message.audio);
+      const bytes = await this.options.resolveAudio(resource);
+      if (
+        !bytes ||
+        bytes.byteLength !== resource.byteLength ||
+        createHash("sha256").update(bytes).digest("hex") !==
+          resource.resourceId ||
+        Date.parse(message.expiresAt) <= Date.now()
+      )
+        throw new Error("NapCat audio unavailable or expired");
+      const base = buildOneBotSendAction(
+        target,
+        { kind: "text", text: message.text },
+        echo,
+      );
+      request = {
+        ...base,
+        params: {
+          ...base.params,
+          message: [
+            {
+              type: "record",
+              data: {
+                file: `base64://${Buffer.from(bytes).toString("base64")}`,
+              },
+            },
+          ],
+        },
+      };
+    } else request = buildOneBotSendAction(target, message, echo);
     const receipt = new Promise<PlatformDeliveryReceipt>((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(echo);

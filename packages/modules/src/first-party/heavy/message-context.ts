@@ -77,13 +77,27 @@ export const turnMessageContextSelector = defineInformationSelector({
       turn,
       intent,
     });
-    const requests = (await ledger.related({
-      from: [sourceAtom.informationId],
-      relation: "core:caused-by",
-      direction: "incoming",
-      limit: 100,
-    })).filter((atom) => atom.kind === "core.model.task.requested" && atom.payload.taskId === "agent.heavy.respond");
-    return [...new Set([...selected, ...requests.flatMap((atom) => [atom.informationId, ...((atom.payload.contextInformationIds as string[]) ?? [])])])];
+    const requests = (
+      await ledger.related({
+        from: [sourceAtom.informationId],
+        relation: "core:caused-by",
+        direction: "incoming",
+        limit: 100,
+      })
+    ).filter(
+      (atom) =>
+        atom.kind === "core.model.task.requested" &&
+        atom.payload.taskId === "agent.heavy.respond",
+    );
+    return [
+      ...new Set([
+        ...selected,
+        ...requests.flatMap((atom) => [
+          atom.informationId,
+          ...((atom.payload.contextInformationIds as string[]) ?? []),
+        ]),
+      ]),
+    ];
   },
 });
 
@@ -251,6 +265,24 @@ export async function selectFrozenTurnMessageContext(options: {
       });
       if (assistants.length === 1) {
         candidates.push(assistants[0]!);
+        if (assistants[0]!.kind === "agent.tts.result") {
+          candidates.push(
+            ...(await ledger.related({
+              from: [assistants[0]!.informationId],
+              relation: "core:caused-by",
+              direction: "outgoing",
+              limit: 2,
+            })),
+          );
+          candidates.push(
+            ...(await ledger.related({
+              from: [assistants[0]!.informationId],
+              relation: "agent:tts-source",
+              direction: "outgoing",
+              limit: 2,
+            })),
+          );
+        }
         if (assistants[0]!.kind === "agent.heavy.message.content.confirmed") {
           candidates.push(
             ...(await ledger.related({
@@ -283,7 +315,11 @@ export async function selectFrozenTurnMessageContext(options: {
     direction: "incoming",
     limit: 100,
   });
-  const rawSnapshot = rawSnapshots.find((atom) => atom.kind === frozenRawContextInformationKind.kind && atom.payload.turnInformationId === turn.informationId);
+  const rawSnapshot = rawSnapshots.find(
+    (atom) =>
+      atom.kind === frozenRawContextInformationKind.kind &&
+      atom.payload.turnInformationId === turn.informationId,
+  );
   return [
     ...new Set([
       sourceInformationId,
@@ -408,7 +444,13 @@ async function assistantWasDelivered(
         limit: 20,
       })
     : [];
-  const requests = [...direct, ...confirmedRequests].filter(
+  const ttsRequests = await ledger.related({
+    from: [atom.informationId],
+    relation: "agent:tts-source",
+    direction: "incoming",
+    limit: 20,
+  });
+  const requests = [...direct, ...confirmedRequests, ...ttsRequests].filter(
     (request) =>
       request.kind === "core.delivery.requested" &&
       beforeQuoteCutoff(request, asOf) &&

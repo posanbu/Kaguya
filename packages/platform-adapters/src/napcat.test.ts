@@ -15,6 +15,7 @@ import type {
   PlatformInboundMessage,
 } from "./types.js";
 import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
 
 import {
   NapCatActionClient,
@@ -55,6 +56,94 @@ class FakeTransport implements JsonMessageTransport {
 }
 
 describe("NapCatActionClient", () => {
+  it("sends a resolved audio artifact as one record segment and waits for its receipt", async () => {
+    const bytes = Buffer.alloc(48, 1);
+    const audio = {
+      resourceId: createHash("sha256").update(bytes).digest("hex"),
+      mimeType: "audio/wav" as const,
+      byteLength: bytes.length,
+      durationMs: 1,
+    };
+    const transport = new FakeTransport();
+    const sent = Promise.withResolvers<void>();
+    const original = transport.sendJson.bind(transport);
+    transport.sendJson = (value) => {
+      original(value);
+      sent.resolve();
+    };
+    const client = new NapCatActionClient({
+      adapterId: "qq",
+      transport,
+      nextEcho: () => "tts",
+      timeoutMs: 1000,
+      resolveAudio: async () => bytes,
+    });
+    const pending = client.sendMessage(
+      { kind: "group", groupId: "123" },
+      {
+        kind: "audio",
+        text: "approved",
+        audio,
+        expiresAt: new Date(Date.now() + 60000).toISOString(),
+      },
+    );
+    await sent.promise;
+    expect(transport.sent).toEqual([
+      {
+        action: "send_group_msg",
+        echo: "tts",
+        params: {
+          group_id: 123,
+          message: [
+            {
+              type: "record",
+              data: { file: `base64://${bytes.toString("base64")}` },
+            },
+          ],
+        },
+      },
+    ]);
+    transport.receive({
+      status: "ok",
+      retcode: 0,
+      echo: "tts",
+      data: { message_id: 1234 },
+    });
+    await expect(pending).resolves.toMatchObject({
+      ok: true,
+      platformMessageId: "1234",
+    });
+  });
+  it("rejects unsupported or corrupted audio before sending an action", async () => {
+    const transport = new FakeTransport();
+    const message = {
+      kind: "audio" as const,
+      text: "approved",
+      audio: {
+        resourceId: "a".repeat(64),
+        mimeType: "audio/wav" as const,
+        byteLength: 48,
+        durationMs: 1,
+      },
+      expiresAt: new Date(Date.now() + 60000).toISOString(),
+    };
+    for (const extra of [
+      {},
+      { resolveAudio: async () => new Uint8Array(48) },
+    ]) {
+      const client = new NapCatActionClient({
+        adapterId: "qq",
+        transport,
+        nextEcho: () => "tts",
+        timeoutMs: 1000,
+        ...extra,
+      });
+      await expect(
+        client.sendMessage({ kind: "group", groupId: "123" }, message),
+      ).rejects.toThrow("audio unavailable");
+    }
+    expect(transport.sent).toHaveLength(0);
+  });
   it("sends a private action and resolves the matching echo response", async () => {
     const transport = new FakeTransport();
     const client = new NapCatActionClient({

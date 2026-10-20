@@ -19,6 +19,7 @@
  * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
  */
 import { firstPartyInspection } from "../inspection.js";
+import { ttsDeliveryCancelled } from "../tts/facts.js";
 import type { RawContextAccess } from "@kaguya/memory";
 import { frozenRawContextInformationKind } from "./raw-context.js";
 import { focusOpened, focusRenewed, focusKinds } from "./focus-facts.js";
@@ -121,6 +122,7 @@ interface LightDispatch {
 }
 
 export interface CreateRouterModuleOptions {
+  readonly ttsEnabled?: boolean;
   readonly modelTaskCapability: ModuleCapability<ModelTaskCapability>;
   readonly rawContextCapability: ModuleCapability<RawContextAccess>;
   readonly messageAuthorizationCapability?: ModuleCapability<MessageAuthorization>;
@@ -319,7 +321,16 @@ export const routerStateSelector = defineInformationSelector({
     remember([sourceAtom]);
 
     let anchors: readonly DeepReadonly<InformationAtom>[] = [];
-    if (sourceAtom.kind === turnCandidateInformationKind.kind) {
+    if (sourceAtom.kind === ttsDeliveryCancelled.kind) {
+      anchors = remember(
+        await related(
+          ledger,
+          sourceAtom.informationId,
+          "agent:turn-candidate",
+          "outgoing",
+        ),
+      );
+    } else if (sourceAtom.kind === turnCandidateInformationKind.kind) {
       anchors = [sourceAtom];
     } else if (sourceAtom.kind === observationWakeInformationKind.kind) {
       anchors = remember(
@@ -649,6 +660,7 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
         ...lightPlatformPolicyDeclarations,
       ],
       consumes: [
+        ...(options.ttsEnabled ? [ttsDeliveryCancelled] : []),
         focusOpened,
         focusRenewed,
         oneShotDueInformationKind,
@@ -878,18 +890,20 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
               if (!rawAtom && !hasPersistedPrompt) {
                 let frozenRaw;
                 try {
-                  frozenRaw = await context.use(options.rawContextCapability).freeze({
-                        turnInformationId: sourceAtom.informationId,
-                        asOf: sourceAtom.payload.backlog.evaluatedAt,
-                        scope: {
-                          platform: sourceAtom.payload.source.platform,
-                          adapterId: sourceAtom.payload.source.adapterId,
-                          destination: sourceAtom.payload.source.destination,
-                        },
-                        unreadInformationIds: sourceAtom.payload.inputs.map(
-                          (input: any) => input.informationId,
-                        ),
-                      });
+                  frozenRaw = await context
+                    .use(options.rawContextCapability)
+                    .freeze({
+                      turnInformationId: sourceAtom.informationId,
+                      asOf: sourceAtom.payload.backlog.evaluatedAt,
+                      scope: {
+                        platform: sourceAtom.payload.source.platform,
+                        adapterId: sourceAtom.payload.source.adapterId,
+                        destination: sourceAtom.payload.source.destination,
+                      },
+                      unreadInformationIds: sourceAtom.payload.inputs.map(
+                        (input: any) => input.informationId,
+                      ),
+                    });
                 } catch (error) {
                   await context.report(rawMemoryBarrierFailureDiagnostic, {
                     errorType:
@@ -1180,6 +1194,57 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
             );
           },
         ),
+        ...(options.ttsEnabled
+          ? [
+              onInformation(
+                ttsDeliveryCancelled,
+                {
+                  subscriptionId: "agent.router.tts-cancelled",
+                  delivery: "durable",
+                },
+                async (cancelled, context) => {
+                  const state = await context.select(routerStateSelector);
+                  const turn = cancelled.payload.request.turn;
+                  const candidate = state.find(
+                    (a) => a.informationId === turn?.candidateInformationId,
+                  );
+                  const claim = state.find(
+                    (a) => a.informationId === turn?.claimInformationId,
+                  );
+                  if (
+                    candidate &&
+                    claim &&
+                    claim.payload.candidateInformationId ===
+                      candidate.informationId
+                  ) {
+                    await context.commitTerminal(
+                      "agent.router.turn.terminal",
+                      candidate.informationId,
+                      turnFailedInformationKind,
+                      {
+                        payload: {
+                          candidateInformationId: candidate.informationId,
+                          claimInformationId: claim.informationId,
+                          scopeKey: String(candidate.payload.scopeKey),
+                          reason: "tts-cancelled",
+                        },
+                        references: terminalReferences(
+                          candidate.informationId,
+                          claim.informationId,
+                        ),
+                      },
+                    );
+                  }
+                  await progressCandidates(
+                    state,
+                    settings,
+                    options.activePersonProfiles,
+                    context,
+                  );
+                },
+              ),
+            ]
+          : []),
         ...deliveryKinds.map((definition) =>
           onInformation(
             definition,

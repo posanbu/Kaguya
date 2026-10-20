@@ -47,7 +47,9 @@ const messageIntentShape = {
   turn: turnProvenanceSchema,
   memoryInformationIds: z.array(nonBlankString),
 };
-export const messageIntentRequestedInformationPayloadSchema = z.object(messageIntentShape).strict();
+export const messageIntentRequestedInformationPayloadSchema = z
+  .object(messageIntentShape)
+  .strict();
 
 export type MessageIntentRequestedInformationPayload = z.infer<
   typeof messageIntentRequestedInformationPayloadSchema
@@ -321,16 +323,41 @@ export const deliveryRequestedInformationKind = defineInformationKind({
       platform: nonBlankString,
       destination: platformDestinationSchema,
       message: outboundMessageContentSchema,
+      ttsFallbackReason: z
+        .enum([
+          "synthesis_failed",
+          "storage_failed",
+          "outcome_unknown",
+          "resource_missing",
+        ])
+        .optional(),
       turn: turnProvenanceSchema.nullable(),
     })
-    .strict(),
+    .strict() as z.ZodType<{
+    adapterId: string;
+    platform: string;
+    destination: z.infer<typeof platformDestinationSchema>;
+    message: z.infer<typeof outboundMessageContentSchema>;
+    turn: z.infer<typeof turnProvenanceSchema> | null;
+    ttsFallbackReason?:
+      | "synthesis_failed"
+      | "storage_failed"
+      | "outcome_unknown"
+      | "resource_missing";
+  }>,
   references: {
+    "agent:tts-source": {
+      required: false,
+      multiple: false,
+      targetKinds: ["core.message.assistant.text"],
+    },
     "core:caused-by": {
       required: true,
       multiple: false,
       targetKinds: [
         assistantTextInformationKind.kind,
         "agent.heavy.message.content.confirmed",
+        "agent.tts.result",
       ],
     },
     "core:context": {

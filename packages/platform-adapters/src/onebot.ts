@@ -159,6 +159,8 @@ export function buildOneBotSendAction(
     typeof content === "string"
       ? ({ kind: "text", text: content } as const)
       : content;
+  if (normalized.kind === "audio")
+    throw new Error("OneBot audio resource resolver is required");
   const message: readonly OneBotMessageSegment[] = [
     ...(normalized.kind === "reply"
       ? [

@@ -34,6 +34,8 @@ import {
   createFirstPartyModuleActivations,
   createFirstPartyModuleConfigDefaults,
   type ModuleModelSelection,
+  ttsCapability,
+  type TtsHost,
 } from "@kaguya/modules";
 import {
   ModelTaskClient,
@@ -184,6 +186,7 @@ function platformMessage(adapterId = "napcat.qq.main"): PlatformInboundMessage {
 
 async function createRuntime(
   overrides: Partial<{
+    tts: TtsHost;
     drainTimeoutMs: number;
     now: NonNullable<ConstructorParameters<typeof KaguyaRuntime>[0]["now"]>;
     informationIdGenerator: NonNullable<
@@ -227,6 +230,8 @@ async function createRuntime(
   const composition = createMessageComposition(
     overrides.resolveModelSelection,
     activations,
+    false,
+    overrides.tts,
   );
   const runtime = new KaguyaRuntime({
     ...composition,
@@ -285,6 +290,103 @@ function parentId(
 }
 
 describe("KaguyaRuntime", () => {
+  it.each([false, true, "cancelled"] as const)(
+    "persists the TTS chain with a single terminal (failure=%s)",
+    async (fail) => {
+      const resource = {
+        resourceId: "a".repeat(64),
+        mimeType: "audio/wav" as const,
+        byteLength: 48,
+        durationMs: 1,
+      };
+      const synthesize = vi.fn(
+        async (request: Parameters<TtsHost["synthesize"]>[0]) => {
+          if (fail) throw new Error("private-provider-error");
+          return {
+            bytes: new Uint8Array(48),
+            mimeType: "audio/wav" as const,
+            sha256: resource.resourceId,
+            durationMs: 1,
+            synthesizedText: request.text,
+          };
+        },
+      );
+      const host: TtsHost = {
+        plan: async () => ({
+          identity: {
+            provider: "qwen",
+            accountScope: "test",
+            region: "beijing",
+            model: "test",
+            voice: "test",
+            language: "Chinese",
+          },
+          expiresAt: "2026-09-04T00:01:01.000Z",
+          maxCharacters: 600,
+        }),
+        isCurrent: async () => fail !== "cancelled",
+        synthesize,
+        find: async () => undefined,
+        save: async () => resource,
+        exists: async () => true,
+      };
+      const { runtime, database } = await createRuntime({ tts: host });
+      const sendMessage = vi.fn(async (target) => ({
+        ok: true as const,
+        adapterId: "napcat.qq.main",
+        platform: "qq" as const,
+        target,
+        platformMessageId: "sent-tts",
+      }));
+      runtime.registerTransport({
+        adapterId: "napcat.qq.main",
+        platform: "qq",
+        transport: { sendMessage },
+      });
+      await runtime.start();
+      const input = await runtime.submit(platformMessage());
+      await settleDeliveries(database);
+      const graph = await database.information.query({
+        informationId: input.rootInformationId,
+      });
+      const assistant = graph.find(
+        (a) => a.kind === "core.message.assistant.text",
+      )!;
+      const request = graph.find((a) => a.kind === "agent.tts.requested")!;
+      const result = graph.find((a) => a.kind === "agent.tts.result")!;
+      const delivery = graph.find((a) => a.kind === "core.delivery.requested")!;
+      expect(request, JSON.stringify(graph.map((a) => a.kind))).toBeDefined();
+      expect(parentId(request)).toBe(assistant.informationId);
+      expect(parentId(result)).toBe(request.informationId);
+      if (fail === "cancelled") {
+        expect(delivery).toBeUndefined();
+        expect(sendMessage).not.toHaveBeenCalled();
+        expect(synthesize).not.toHaveBeenCalled();
+        expect(
+          graph.filter((a) => a.kind === "agent.tts.delivery.cancelled"),
+        ).toHaveLength(1);
+        expect(
+          graph.filter((a) => a.kind === "agent.router.turn.failed"),
+        ).toHaveLength(1);
+        return;
+      }
+      expect(parentId(delivery)).toBe(result.informationId);
+      expect(delivery.payload.message).toMatchObject({
+        kind: fail ? "text" : "audio",
+        text: assistant.payload.text,
+      });
+      expect(
+        graph.filter((a) => a.kind === "core.delivery.delivered"),
+      ).toHaveLength(1);
+      expect(
+        graph.filter((a) => a.kind === "agent.router.turn.completed"),
+      ).toHaveLength(1);
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(synthesize).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(graph)).not.toContain("private-provider-error");
+    },
+    TEST_TIMEOUT,
+  );
   it("keeps main module bindings visible beside the separate raw host", async () => {
     const { runtime } = await createRuntime({ memory: { enabled: true } });
     await runtime.start();
@@ -609,7 +711,11 @@ describe("KaguyaRuntime", () => {
         expect.arrayContaining([
           expect.objectContaining({
             variableName: "scope_context",
-            informationIds: [graph.find((atom) => atom.kind === "agent.router.memory.context.frozen")!.informationId],
+            informationIds: [
+              graph.find(
+                (atom) => atom.kind === "agent.router.memory.context.frozen",
+              )!.informationId,
+            ],
           }),
         ]),
       );
@@ -1810,8 +1916,10 @@ function createMessageComposition(
   resolveModelSelection: RuntimeModelSelectionResolver = createDeterministicModelSelectionResolver(),
   providedActivations?: readonly InformationModuleActivation[],
   memoryEnabled = false,
+  tts?: TtsHost,
 ) {
   const catalog = createFirstPartyModuleCatalog({
+    ttsEnabled: tts !== undefined,
     rawContextCapability,
     modelTaskCapability,
     modelTaskCompletedInformationKind,
@@ -1829,16 +1937,27 @@ function createMessageComposition(
   });
   const activations =
     providedActivations ??
-    createFirstPartyModuleActivations(
-      catalog,
-      createFirstPartyModuleConfigDefaults("test"),
-    );
+    createFirstPartyModuleActivations(catalog, [
+      ...createFirstPartyModuleConfigDefaults("test"),
+      ...(tts
+        ? [
+            {
+              version: 1 as const,
+              instanceId: "tts.default",
+              definitionId: "agent.tts",
+              enabled: true,
+              settings: {},
+            },
+          ]
+        : []),
+    ]);
   const models = new Map<string, ReturnType<KaguyaLlmModelResolver>>();
   return {
     catalog,
     activations,
     capabilities: ({ oneShotSchedule }: RuntimeCapabilityContext) => [
       { capability: oneShotScheduleCapability, value: oneShotSchedule },
+      ...(tts ? [{ capability: ttsCapability, value: tts }] : []),
     ],
     modelTask: {
       renderStructuredOutputPrompt,

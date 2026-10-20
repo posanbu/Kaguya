@@ -1,3 +1,4 @@
+import { createServerTts, hasEnabledTts } from "./tts.js";
 /**
  * Memory 图管理通过动态 database.memoryGraph 门面接入 HTTP，数据库重挂载后使用当前实例。
  * 模板管理与配置应用共享写锁，只写本地覆盖，用户需重启加载新模板。
@@ -176,6 +177,7 @@ export async function startKaguyaServer(
       snapshot.pluginTree,
       snapshot.moduleConfigs,
       snapshot.profile.identity,
+      hasEnabledTts(snapshot.profile),
     ]);
   const activePersonProfiles: ActivePersonProfileSnapshot = {
     byPerson: new Map(),
@@ -185,6 +187,7 @@ export async function startKaguyaServer(
     initialNames: new Map(),
   };
   let config: ServerConfig;
+  let tts: ReturnType<typeof createServerTts>;
   try {
     bootstrap =
       providedConfig === undefined
@@ -225,6 +228,11 @@ export async function startKaguyaServer(
         ?.enabled !== true
     )
       throw new Error("Web adapter plugin must remain enabled");
+    tts = createServerTts(
+      selectedProfile,
+      bootstrap.configRoot,
+      inspectNapCatConfig(moduleConfigs),
+    );
     catalog = createMessageCatalog(
       selectedProfile.identity,
       undefined,
@@ -232,6 +240,7 @@ export async function startKaguyaServer(
         (item) => item.definitionId === "plugin.qq-expression" && item.enabled,
       ),
       activePersonProfiles,
+      tts !== undefined,
     );
     pluginSnapshot = await loadModulePlugins({
       rootDir: bootstrap.configRoot,
@@ -242,6 +251,7 @@ export async function startKaguyaServer(
     catalog = pluginSnapshot.catalog;
     moduleConfigs = pluginSnapshot.configs;
     createMessageComposition(undefined, {
+      ...(tts ? { tts: tts.host } : {}),
       pluginModelTasks: pluginSnapshot.modelTasks,
       moduleConfigs,
       catalog,
@@ -425,7 +435,7 @@ export async function startKaguyaServer(
     adapterHost = await assembly.mount(
       "adapter",
       ["logging", "catalog"],
-      () => createServerAdapterHost(config, rootLogger),
+      () => createServerAdapterHost(config, rootLogger, tts?.resolveAudio),
       (host) => host.stop(),
     );
     mounted.add("adapter");
@@ -443,6 +453,7 @@ export async function startKaguyaServer(
           database,
           logger: rootLogger,
           ...createMessageComposition(resolveModelSelection, {
+            ...(tts ? { tts: tts.host } : {}),
             pluginModelTasks: pluginSnapshot.modelTasks,
             ...createMemoryCompositionOptions(
               memoryConfigFromModules(moduleConfigs),
@@ -581,6 +592,11 @@ export async function startKaguyaServer(
         };
       },
       validate: async (snapshot) => {
+        const nextTts = createServerTts(
+          snapshot.profile,
+          bootstrap.configRoot,
+          inspectNapCatConfig(snapshot.moduleConfigs),
+        );
         const nextPlugins = await loadModulePlugins({
           rootDir: bootstrap.configRoot,
           tree: snapshot.pluginTree ?? bootTree,
@@ -593,6 +609,7 @@ export async function startKaguyaServer(
                 item.definitionId === "plugin.qq-expression" && item.enabled,
             ),
             activePersonProfiles,
+            nextTts !== undefined,
           ),
         });
         pluginSnapshots.set(pluginSnapshotKey(snapshot), nextPlugins);
@@ -611,6 +628,7 @@ export async function startKaguyaServer(
         createMessageComposition(
           createRuntimeModelSelectionResolver(snapshot.profile),
           {
+            ...(nextTts ? { tts: nextTts.host } : {}),
             ...createMemoryCompositionOptions(
               memoryConfigFromModules(snapshot.moduleConfigs),
             ),
@@ -660,7 +678,16 @@ export async function startKaguyaServer(
           outboundAllowlist: snapshot.profile.runtime!.outboundAllowlist,
           napcat: inspectNapCatConfig(snapshot.moduleConfigs),
         };
-        const nextHost = createServerAdapterHost(nextConfig, rootLogger);
+        const nextTts = createServerTts(
+          snapshot.profile,
+          bootstrap.configRoot,
+          nextConfig.napcat,
+        );
+        const nextHost = createServerAdapterHost(
+          nextConfig,
+          rootLogger,
+          nextTts?.resolveAudio,
+        );
         nextHost.pauseIngress();
         let nextRuntime: KaguyaRuntime | undefined;
         let nextHostMounted = false;
@@ -709,6 +736,7 @@ export async function startKaguyaServer(
             ...createMessageComposition(
               createRuntimeModelSelectionResolver(snapshot.profile),
               {
+                ...(nextTts ? { tts: nextTts.host } : {}),
                 ...createMemoryCompositionOptions(
                   memoryConfigFromModules(snapshot.moduleConfigs),
                 ),

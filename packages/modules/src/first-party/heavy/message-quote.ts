@@ -85,11 +85,30 @@ export function resolveMessageQuote(
   )
     return undefined;
   const cause = uniqueReference(request, "core:caused-by", available);
+  const tts = cause?.kind === "agent.tts.result" ? cause : undefined;
+  const ttsRequest = tts
+    ? uniqueReference(tts, "core:caused-by", available)
+    : undefined;
   const confirmation =
     cause?.kind === "agent.heavy.message.content.confirmed" ? cause : undefined;
-  const assistant = confirmation
-    ? uniqueReference(confirmation, "core:caused-by", available)
-    : cause;
+  const assistant = tts
+    ? uniqueReference(tts, "agent:tts-source", available)
+    : confirmation
+      ? uniqueReference(confirmation, "core:caused-by", available)
+      : cause;
+  if (tts) {
+    const message = request.payload.message as { text?: unknown } | undefined;
+    if (
+      ttsRequest?.kind !== "agent.tts.requested" ||
+      ttsRequest.payload.assistantInformationId !== assistant?.informationId ||
+      !sameMessageTarget(ttsRequest.payload.target, target) ||
+      ttsRequest.payload.text !== assistant?.payload.text ||
+      message?.text !== assistant?.payload.text ||
+      uniqueReference(ttsRequest, "core:caused-by", available)
+        ?.informationId !== assistant?.informationId
+    )
+      return undefined;
+  }
   if (
     confirmation &&
     confirmation.payload.assistantInformationId !== assistant?.informationId
@@ -107,6 +126,7 @@ export function resolveMessageQuote(
     provenance: [
       receipt,
       request,
+      ...(tts && ttsRequest ? [tts, ttsRequest] : []),
       ...(confirmation ? [confirmation] : []),
       assistant,
     ],

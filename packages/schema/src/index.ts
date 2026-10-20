@@ -117,7 +117,29 @@ export const outboundExpressionSchema = z.discriminatedUnion("kind", [
 ]);
 export type OutboundExpression = z.infer<typeof outboundExpressionSchema>;
 
+export const audioResourceSchema = z
+  .object({
+    resourceId: z.string().regex(/^[a-f0-9]{64}$/u),
+    mimeType: z.literal("audio/wav"),
+    byteLength: z
+      .number()
+      .int()
+      .min(44)
+      .max(50 * 1024 * 1024),
+    durationMs: z.number().positive().finite(),
+  })
+  .strict();
+export type AudioResource = z.infer<typeof audioResourceSchema>;
+
 export const outboundMessageContentSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("audio"),
+      text: z.string().min(1),
+      audio: audioResourceSchema,
+      expiresAt: z.iso.datetime(),
+    })
+    .strict(),
   z
     .object({
       kind: z.literal("text"),
@@ -135,6 +157,7 @@ export const outboundMessageContentSchema = z.discriminatedUnion("kind", [
 ]) as z.ZodType<OutboundMessageContent>;
 
 export type OutboundMessageContent =
+  | { kind: "audio"; text: string; audio: AudioResource; expiresAt: string }
   | { kind: "text"; text: string; expression?: OutboundExpression }
   | { kind: "reply"; text: string; replyToPlatformMessageId: string };
 

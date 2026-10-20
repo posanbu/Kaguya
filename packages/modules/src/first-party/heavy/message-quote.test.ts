@@ -119,6 +119,74 @@ const otherWebTarget = {
   },
 };
 const cutoff = "2026-09-14T00:00:00.000Z";
+it("follows a TTS result to its original text and rejects a mismatched transcript", () => {
+  const assistant = atom("assistant", "core.message.assistant.text", {
+    text: "approved",
+    source: target,
+    originatingModuleInstanceId: "heavy",
+    turn: null,
+  });
+  const synthesis = atom(
+    "synthesis",
+    "agent.tts.requested",
+    { assistantInformationId: "assistant", text: "approved", target },
+    "core:caused-by",
+    "assistant",
+  );
+  const result = {
+    ...atom("result", "agent.tts.result", {}, "core:caused-by", "synthesis"),
+    references: [
+      { relation: "core:caused-by", informationId: "synthesis" },
+      { relation: "agent:tts-source", informationId: "assistant" },
+    ],
+  };
+  const delivery = atom(
+    "delivery",
+    "core.delivery.requested",
+    { ...target, message: { kind: "audio", text: "approved" } },
+    "core:caused-by",
+    "result",
+  );
+  const receipt = atom(
+    "receipt",
+    "core.delivery.delivered",
+    {
+      ok: true,
+      platform: "qq",
+      adapterId: "test",
+      target: target.destination,
+      platformMessageId: "sent",
+    },
+    "core:status-of",
+    "delivery",
+  );
+  const atoms = [assistant, synthesis, result, delivery, receipt];
+  expect(
+    resolveMessageQuote(atoms, "sent", target, cutoff)?.provenance.map(
+      (a) => a.informationId,
+    ),
+  ).toEqual(["receipt", "delivery", "result", "synthesis", "assistant"]);
+  expect(
+    resolveMessageQuote(
+      atoms.filter((a) => a !== synthesis),
+      "sent",
+      target,
+      cutoff,
+    ),
+  ).toBeUndefined();
+  expect(
+    resolveMessageQuote(
+      atoms.map((a) =>
+        a === synthesis
+          ? { ...a, payload: { ...a.payload, text: "changed" } }
+          : a,
+      ),
+      "sent",
+      target,
+      cutoff,
+    ),
+  ).toBeUndefined();
+});
 
 it("resolves an inbound quote only inside its Web conversation", () => {
   const quoted = atom("quoted", "core.message.inbound.text", {

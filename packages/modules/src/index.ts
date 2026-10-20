@@ -158,3 +158,11 @@ export {
 export { createAuthorizedMessagePromptRenderer } from "./first-party/heavy/authorized-prompt.js";
 
 export { createQqExpressionModule } from "./first-party/qq-expression/index.js";
+export { createTtsModule } from "./first-party/tts/index.js";
+export { ttsCapability, type TtsHost } from "./first-party/tts/capability.js";
+export {
+  ttsRequested,
+  ttsStarted,
+  ttsResult,
+  type TtsRequest,
+} from "./first-party/tts/facts.js";

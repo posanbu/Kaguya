@@ -22,6 +22,7 @@ const userGuide: DefaultTheme.SidebarItem[] = [
       { text: "模型配置", link: "/guide/models" },
       { text: "角色与回复风格", link: "/guide/persona" },
       { text: "接入 QQ（NapCat）", link: "/guide/napcat" },
+      { text: "QQ 语音回复", link: "/guide/tts" },
       { text: "发言频率与等待", link: "/guide/reply-settings" },
       { text: "记忆配置", link: "/guide/memory" },
       { text: "模块配置", link: "/guide/modules" },

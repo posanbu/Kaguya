@@ -1,3 +1,4 @@
+import type { AudioResource } from "@kaguya/schema";
 /**
  * 功能概述：管理 NapCat WebSocket 连接、重连及只读目标目录。
  * 主要职责：Supervisor 转发发送和目录查询；查询期间更换连接时拒绝旧结果。
@@ -295,6 +296,9 @@ export function createNapCatSupervisor(options: {
   readonly logger: KaguyaLogger;
   readonly allowsInbound?: (message: PlatformInboundMessage) => boolean;
   readonly reportStatus?: (status: AdapterConnectionStatus) => void;
+  readonly resolveAudio?: (
+    resource: AudioResource,
+  ) => Promise<Uint8Array | undefined>;
   readonly captureRoot?: string;
 }): NapCatConnectionSupervisor {
   let attempt = 0;
@@ -354,6 +358,7 @@ export function createNapCatSupervisor(options: {
         capture?.receive(frame, generation),
       );
       const sender = new NapCatActionClient({
+        ...(options.resolveAudio ? { resolveAudio: options.resolveAudio } : {}),
         adapterId: options.config.adapterId,
         transport,
         nextEcho: createEchoFactory(),

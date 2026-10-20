@@ -42,6 +42,8 @@ import {
   type ModuleModelSelection,
   type AgentIdentity,
   type ActivePersonProfiles,
+  ttsCapability,
+  type TtsHost,
 } from "@kaguya/modules";
 import { loadFirstPartyPromptTemplates } from "@kaguya/modules/prompt-templates/node";
 import { loadStructuredOutputPromptRenderer } from "@kaguya/llm/prompt-templates/node";
@@ -68,6 +70,8 @@ export type RuntimeModelSelectionResolver = (
   readonly generationOptions?: KaguyaLlmGenerationOptions;
 };
 export interface MessageCompositionOptions {
+  /** 显式宿主注入；未注入时不安装语音出口或订阅。 */
+  readonly tts?: TtsHost | ((context: RuntimeCapabilityContext) => TtsHost);
   readonly pluginModelTasks?: Readonly<Record<string, "light" | "heavy">>;
   readonly memoryEnabled?: boolean;
   readonly moduleConfigs: readonly FirstPartyModuleInstanceConfig[];
@@ -97,6 +101,7 @@ export function createMessageCatalog(
   promptTemplates = loadFirstPartyPromptTemplates(),
   qqExpressionEnabled = false,
   activePersonProfiles?: ActivePersonProfiles,
+  ttsEnabled = false,
 ) {
   const agentIdentity: AgentIdentity = {
     name: promptTemplates.identityName,
@@ -105,6 +110,7 @@ export function createMessageCatalog(
     timeZone: configuredIdentity.timeZone,
   };
   return createFirstPartyModuleCatalog({
+    ttsEnabled,
     rawContextCapability,
     messageAuthorizationCapability,
     modelTaskCapability,
@@ -151,6 +157,7 @@ export function createMessageComposition(
         (c) => c.definitionId === "plugin.qq-expression" && c.enabled,
       ),
       options.activePersonProfiles,
+      options.tts !== undefined,
     );
   const memoryEnabled = options.memoryEnabled ?? false;
   const moduleConfigs = options.moduleConfigs.filter(
@@ -164,7 +171,18 @@ export function createMessageComposition(
   );
   const activations = createFirstPartyModuleActivations(
     catalog,
-    moduleConfigs,
+    options.tts
+      ? [
+          ...moduleConfigs,
+          {
+            version: 1,
+            instanceId: "tts.default",
+            definitionId: "agent.tts",
+            enabled: true,
+            settings: {},
+          },
+        ]
+      : moduleConfigs,
     runtimeIdentity,
   );
   const models = new Map<string, ReturnType<KaguyaLlmModelResolver>>();
@@ -234,8 +252,19 @@ export function createMessageComposition(
     activations,
     memory: { enabled: memoryEnabled },
     modelTask,
-    capabilities: ({ oneShotSchedule }: RuntimeCapabilityContext) => [
-      { capability: oneShotScheduleCapability, value: oneShotSchedule },
+    capabilities: (context: RuntimeCapabilityContext) => [
+      { capability: oneShotScheduleCapability, value: context.oneShotSchedule },
+      ...(options.tts
+        ? [
+            {
+              capability: ttsCapability,
+              value:
+                typeof options.tts === "function"
+                  ? options.tts(context)
+                  : options.tts,
+            },
+          ]
+        : []),
     ],
   };
 }

@@ -30,6 +30,53 @@ const link = (relation: string, informationId: string) => ({
 });
 
 describe("raw Memory event-specific descriptions", () => {
+  it("retains the transcript of delivered audio with the full TTS evidence chain", () => {
+    const assistant = atom("assistant", "core.message.assistant.text", {
+      text: "正文",
+    });
+    const synthesis = atom(
+      "synthesis",
+      "agent.tts.requested",
+      { assistantInformationId: "assistant", text: "正文", target: scope },
+      [link("core:caused-by", "assistant")],
+    );
+    const outcome = atom("outcome", "agent.tts.result", {}, [
+      link("core:caused-by", "synthesis"),
+    ]);
+    const request = atom(
+      "request",
+      "core.delivery.requested",
+      {
+        destination: scope.destination,
+        message: { kind: "audio", text: "正文" },
+      },
+      [link("core:caused-by", "outcome")],
+    );
+    const receipt = atom(
+      "receipt",
+      "core.delivery.delivered",
+      { ok: true, platformMessageId: "sent" },
+      [link("core:caused-by", "request"), link("core:status-of", "request")],
+    );
+    expect(
+      renderRawEvent(receipt, evidence(assistant, synthesis, outcome, request))
+        ?.text,
+    ).toContain("已发送语音。正文：正文");
+    expect(
+      renderRawEvent(receipt, evidence(assistant, outcome, request)),
+    ).toBeUndefined();
+    expect(
+      renderRawEvent(
+        receipt,
+        evidence(
+          { ...assistant, payload: { text: "changed" } },
+          synthesis,
+          outcome,
+          request,
+        ),
+      ),
+    ).toBeUndefined();
+  });
   it("marks only the supplied unread inbound and keeps the original reply relation", () => {
     const incoming = atom("in", "core.message.inbound.text", {
       text: "原文",

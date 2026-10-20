@@ -6,6 +6,7 @@
  * 输入输出与副作用：记录模型执行与 registerOnce 调用，无真实模型、数据库或网络。
  */
 import { expressionSelected } from "../expression/facts.js";
+import { ttsCapability, type TtsHost } from "../tts/capability.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   defineInformationKind,
@@ -64,6 +65,7 @@ async function setup(
   expressionEnabled = false,
   promptOverrides: Partial<HeavyPromptTemplates> = {},
   authorization?: MessageAuthorization,
+  tts?: TtsHost,
 ) {
   const f = fixture();
   const execute = vi.fn(
@@ -78,6 +80,7 @@ async function setup(
   );
   const registerOnce = vi.fn(async () => f.intent);
   const definition = createHeavyModule({
+    ttsEnabled: tts !== undefined,
     expressionEnabled,
     modelTaskCapability: token,
     modelTaskCompletedInformationKind: completedKind,
@@ -98,9 +101,11 @@ async function setup(
     select: vi.fn(async () => f.atoms),
     registerOnce,
     use: (capability: { id: string }) =>
-      capability.id === messageAuthorizationCapability.id
-        ? authorization
-        : { execute, cancel: vi.fn() },
+      capability.id === ttsCapability.id
+        ? tts
+        : capability.id === messageAuthorizationCapability.id
+          ? authorization
+          : { execute, cancel: vi.fn() },
   } as unknown as InformationModuleHandlerContext;
   const instance = await definition.create(
     {
@@ -113,6 +118,67 @@ async function setup(
   return { f, execute, registerOnce, definition, context, instance };
 }
 describe("message composer", () => {
+  it.each(["allowed", "unauthorized", "cross-conversation"] as const)(
+    "only routes authorized current-scope text to TTS (%s)",
+    async (mode) => {
+      const plan = vi.fn(async () => ({
+        identity: {
+          provider: "qwen" as const,
+          accountScope: "test",
+          region: "beijing" as const,
+          model: "test",
+          voice: "test",
+          language: "Chinese",
+        },
+        expiresAt: new Date(Date.now() + 60000).toISOString(),
+        maxCharacters: 600,
+      }));
+      const s = await setup(
+        false,
+        {},
+        {
+          prepare: async () => undefined,
+          stage: async () => mode !== "unauthorized",
+        },
+        { plan } as unknown as TtsHost,
+      );
+      const assistant = atom(
+        "assistant-tts",
+        assistantTextInformationKind.kind,
+        {
+          text: "你好",
+          source: target,
+          originatingModuleInstanceId: activation.instanceId,
+          turn: messageIntentRequestedInformationPayloadSchema.parse(
+            s.f.intent.payload,
+          ).turn,
+        },
+      );
+      await s.instance.subscriptions[2]!.handle(assistant, {
+        ...s.context,
+        sourceAtom: assistant,
+        select: async () => (mode === "cross-conversation" ? [] : [s.f.intent]),
+      });
+      if (mode === "unauthorized") {
+        expect(plan).not.toHaveBeenCalled();
+        expect(s.registerOnce).not.toHaveBeenCalled();
+      } else {
+        expect(s.registerOnce).toHaveBeenCalledTimes(1);
+        expect(s.registerOnce.mock.calls[0]).toEqual(
+          expect.arrayContaining([
+            "kaguya.heavy.delivery.v1",
+            expect.objectContaining({
+              kind:
+                mode === "allowed"
+                  ? "agent.tts.requested"
+                  : "core.delivery.requested",
+            }),
+          ]),
+        );
+        if (mode === "cross-conversation") expect(plan).not.toHaveBeenCalled();
+      }
+    },
+  );
   it.each(["scene", "conversationBackground", "expressionHabits"] as const)(
     "rejects invalid %s variables during module construction",
     (key) => {

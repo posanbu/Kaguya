@@ -11,6 +11,7 @@
  * 输入输出与副作用：纯内存定义，没有 timer、环境读取、连接、全局注册或动态目录扫描。
  */
 import { createQqExpressionModule } from "./qq-expression/index.js";
+import { createTtsModule } from "./tts/index.js";
 import {
   defineInformationModuleCatalog,
   type InformationModuleCatalog,
@@ -48,6 +49,8 @@ export function createFirstPartyModuleCatalog<
     },
 ) {
   return defineInformationModuleCatalog(
+    // 保留关闭后的历史 kind 契约；只有宿主注入能力时才创建运行实例。
+    createTtsModule(),
     createQqExpressionModule({
       modelTaskCapability: options.modelTaskCapability,
       templates: options.qqExpressionTemplates,

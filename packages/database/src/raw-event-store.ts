@@ -256,6 +256,8 @@ export class PostgresRawEventStore implements RawContextAccess {
         next.depth < 4 &&
         [
           "core.delivery.requested",
+          "agent.tts.result",
+          "agent.tts.requested",
           "agent.heavy.message.content.confirmed",
           "core.model.task.completed",
           "core.model.task.requested",

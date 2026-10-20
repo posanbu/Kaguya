@@ -188,6 +188,61 @@ async function save(server: StartedKaguyaServer) {
   expect(response.statusCode).toBe(200);
   return response.json().data;
 }
+it("enables and disables the TTS host on Profile apply without making cloud calls", async () => {
+  const f = await fixture();
+  const tts = {
+    enabled: true,
+    region: "beijing",
+    accountScope: "test-account",
+    model: "qwen3-tts-vc-2026-01-22",
+    voice: "test-voice",
+    audioHosts: ["test.oss-cn-beijing.aliyuncs.com"],
+    conversations: ["qq:group:123"],
+  };
+  for (const enabled of [true, false]) {
+    const response = await f.server.app.inject({
+      method: "PUT",
+      url: "/api/v1/profiles/default",
+      headers,
+      payload: {
+        name: f.settings.name,
+        identity: f.settings.identity,
+        acknowledgedWarnings: [],
+        inboundAllowlist: [],
+        outboundAllowlist: ["qq:group:123"],
+        ai: {
+          ...f.settings.ai,
+          providers: f.settings.ai.providers.map((p) => ({
+            ...p,
+            settings: { tts: { ...tts, enabled } },
+          })),
+        },
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    if (enabled) {
+      vi.spyOn(KaguyaRuntime.prototype, "start").mockRejectedValueOnce(
+        new Error("simulated TTS activation failure"),
+      );
+      expect(
+        (await apply(f.server, response.json().data.application)).json().data,
+      ).toMatchObject({ status: "failed", errorCode: "apply_failed" });
+      expect(
+        f.server
+          .runtime!.inspectModules()
+          .some((m) => m.definitionId === "agent.tts" && m.bindings.length > 0),
+      ).toBe(false);
+    }
+    const applied = await apply(f.server, response.json().data.application);
+    expect(applied.statusCode).toBe(200);
+    expect(applied.json().data.status).toBe("applied");
+    expect(
+      f.server
+        .runtime!.inspectModules()
+        .some((m) => m.definitionId === "agent.tts" && m.bindings.length > 0),
+    ).toBe(enabled);
+  }
+});
 it("replaces downstream instances while retaining HTTP, authentication, database and live inspection", async () => {
   const f = await fixture();
   const oldRuntime = f.server.runtime!;

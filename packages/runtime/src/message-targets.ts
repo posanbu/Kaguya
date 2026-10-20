@@ -15,6 +15,7 @@ import type { InformationCore } from "@kaguya/engine";
 import { defineInformationSelector } from "@kaguya/sdk";
 import {
   z,
+  audioResourceSchema,
   type CompiledPrompt,
   type DeepReadonly,
   type InformationAtom,
@@ -33,6 +34,8 @@ import {
   turnClaimedInformationKind,
   type MessageAuthorization,
   type MessageTarget,
+  ttsResult,
+  ttsRequested,
 } from "@kaguya/modules";
 import {
   targetKey,
@@ -95,6 +98,30 @@ interface Approval extends Candidate {
 const selfSelector = defineInformationSelector({
   selectorId: "runtime.target.self",
   select: ({ sourceAtom }) => [sourceAtom.informationId],
+});
+const ttsTurnTerminalSelector = defineInformationSelector({
+  selectorId: "runtime.target.tts-turn-terminal",
+  async select({ sourceAtom, ledger }) {
+    return (
+      await ledger.related({
+        from: [sourceAtom.informationId],
+        relation: "core:status-of",
+        direction: "incoming",
+        limit: 32,
+      })
+    )
+      .filter((a) =>
+        [
+          "agent.router.turn.completed",
+          "agent.router.turn.failed",
+          "agent.router.turn.silent",
+          "agent.router.turn.waiting",
+          "agent.router.turn.superseded",
+          "agent.router.turn.interrupted",
+        ].includes(a.kind),
+      )
+      .map((a) => a.informationId);
+  },
 });
 const causeSelector = defineInformationSelector({
   selectorId: "runtime.target.cause",
@@ -790,7 +817,7 @@ export class MessageTargetService implements MessageAuthorization {
     atom: DeepReadonly<InformationAtom>,
   ): Promise<DeepReadonly<InformationAtom>> {
     let current = atom;
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 16; i++) {
       if (current.kind === messageIntentRequestedInformationKind.kind)
         return current;
       const causes = await this.core.select(
@@ -988,6 +1015,66 @@ export class MessageTargetService implements MessageAuthorization {
         platform: String(request.payload.platform),
         destination: request.payload.destination,
       } as MessageTarget;
+      const causeId = request.references.find(
+        (r) => r.relation === "core:caused-by",
+      )?.informationId;
+      const cause = causeId ? await this.read(causeId) : undefined;
+      const message = request.payload.message as
+        | {
+            kind?: string;
+            text?: unknown;
+            audio?: unknown;
+            expiresAt?: unknown;
+          }
+        | undefined;
+      if (cause?.kind === ttsResult.kind) {
+        if (approval) return false; // 首版跨会话 TTS 一律关闭。
+        const result = ttsResult.payloadSchema.parse(cause.payload);
+        const synthesisId = cause.references.find(
+          (r) => r.relation === "core:caused-by",
+        )?.informationId;
+        if (!synthesisId) return false;
+        const synthesis = await this.read(synthesisId);
+        if (synthesis.kind !== ttsRequested.kind) return false;
+        const frozen = ttsRequested.payloadSchema.parse(synthesis.payload);
+        if (
+          frozen.turn &&
+          (
+            await this.core.select(
+              ttsTurnTerminalSelector,
+              frozen.turn.candidateInformationId,
+            )
+          ).length
+        )
+          return false;
+        const assistant = await this.read(frozen.assistantInformationId);
+        if (
+          assistant.kind !== "core.message.assistant.text" ||
+          result.outcome.status === "cancelled" ||
+          JSON.stringify(frozen) !== JSON.stringify(result.request) ||
+          targetKey(frozen.target) !== targetKey(target) ||
+          targetKey(assistant.payload.source as unknown as MessageTarget) !==
+            targetKey(target) ||
+          frozen.text !== assistant.payload.text ||
+          message?.text !== frozen.text ||
+          synthesis.references.find((r) => r.relation === "core:caused-by")
+            ?.informationId !== assistant.informationId ||
+          Date.parse(frozen.expiresAt) <= this.now().getTime()
+        )
+          return false;
+        if (
+          message?.kind === "audio" &&
+          (result.outcome.status !== "completed" ||
+            JSON.stringify(audioResourceSchema.parse(message.audio)) !==
+              JSON.stringify(result.outcome.audio) ||
+            message.expiresAt !== frozen.expiresAt)
+        )
+          return false;
+      } else if (
+        message?.kind === "audio" ||
+        request.payload.ttsFallbackReason !== undefined
+      )
+        return false;
       if (
         targetKey(target) !==
         targetKey(
@@ -997,7 +1084,6 @@ export class MessageTargetService implements MessageAuthorization {
       )
         return false;
       if (!approval) return true;
-      const message = request.payload.message;
       if (
         !approval.confirmed ||
         !message ||

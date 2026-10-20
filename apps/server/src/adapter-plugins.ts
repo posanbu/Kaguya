@@ -1,3 +1,7 @@
+import type { AudioResource } from "@kaguya/schema";
+type AudioResolver = (
+  resource: AudioResource,
+) => Promise<Uint8Array | undefined>;
 /**
  * 功能概述：静态 adapter 注册与实例组合，统一使用已加载的全局配置。
  * 主要职责：webPlugin/napCatPlugin 绑定宿主窄 ingress、状态回报及生命周期；
@@ -25,6 +29,7 @@ export interface AdapterPluginDefinition<Config> {
     host: AdapterHost,
     logger: KaguyaLogger,
     captureRoot?: string,
+    resolveAudio?: AudioResolver,
   ): HostedAdapter;
 }
 
@@ -47,10 +52,11 @@ export const napCatPlugin: AdapterPluginDefinition<NapCatConfig> = {
   definitionId: "adapter.napcat",
   adapterId: "napcat.qq.main",
   required: false,
-  create(config, host, logger, captureRoot) {
+  create(config, host, logger, captureRoot, resolveAudio) {
     let reportStatus: ((status: AdapterConnectionStatus) => void) | undefined;
     const napcat = createNapCatSupervisor({
       config,
+      ...(resolveAudio ? { resolveAudio } : {}),
       ingress: host.ingress,
       logger: createModuleLogger(logger, "adapter:napcat"),
       allowsInbound: (message) => host.acceptInbound(message),
@@ -81,6 +87,7 @@ export const STATIC_ADAPTER_PLUGINS = [webPlugin, napCatPlugin] as const;
 export function createServerAdapterHost(
   config: ServerConfig,
   logger: KaguyaLogger,
+  resolveAudio?: AudioResolver,
 ): AdapterHost {
   const host = new AdapterHost(logger, config.inboundAllowlist);
   host.register(webPlugin.create(undefined, host, logger));
@@ -90,6 +97,7 @@ export function createServerAdapterHost(
       host,
       logger,
       join(config.configRoot, "capture"),
+      resolveAudio,
     ),
   );
   return host;

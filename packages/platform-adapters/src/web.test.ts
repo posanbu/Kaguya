@@ -105,6 +105,24 @@ describe("normalizeWebInboundMessage", () => {
 });
 
 describe("createWebOutboundTransport", () => {
+  it("does not acknowledge unsupported audio as successfully delivered", async () => {
+    await expect(
+      createWebOutboundTransport().sendMessage(
+        { kind: "web" },
+        {
+          kind: "audio",
+          text: "test",
+          expiresAt: "2099-01-01T00:00:00.000Z",
+          audio: {
+            resourceId: "a".repeat(64),
+            mimeType: "audio/wav",
+            byteLength: 48,
+            durationMs: 1,
+          },
+        },
+      ),
+    ).rejects.toThrow("audio delivery is not supported");
+  });
   it("acknowledges each Web destination with a distinct platform receipt", async () => {
     const transport = createWebOutboundTransport();
     const targets: PlatformMessageTarget[] = [

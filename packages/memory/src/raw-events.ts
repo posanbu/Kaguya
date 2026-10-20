@@ -121,7 +121,7 @@ function inboundText(
 function deliveryEvidence(
   event: RawEvent,
   evidence: Evidence,
-): { text: string; target: string } | undefined {
+): { text: string; target: string; audio: boolean } | undefined {
   const request = evidence.get(
     ref(event, "core:status-of"),
     "core.delivery.requested",
@@ -144,6 +144,36 @@ function deliveryEvidence(
   if (JSON.stringify(destination) !== JSON.stringify(event.scope.destination))
     return undefined;
   const source = evidence.get(ref(request, "core:caused-by"));
+  if (source?.kind === "agent.tts.result") {
+    const synthesis = evidence.get(
+      ref(source, "core:caused-by"),
+      "agent.tts.requested",
+    );
+    const assistant = synthesis
+      ? evidence.get(
+          ref(synthesis, "core:caused-by"),
+          "core.message.assistant.text",
+        )
+      : undefined;
+    const frozenTarget = obj(synthesis?.payload.target);
+    if (
+      !synthesis ||
+      !assistant ||
+      synthesis.payload.assistantInformationId !== assistant.informationId ||
+      synthesis.payload.text !== assistant.payload.text ||
+      message?.text !== assistant.payload.text ||
+      frozenTarget?.platform !== event.scope.platform ||
+      frozenTarget?.adapterId !== event.scope.adapterId ||
+      JSON.stringify(frozenTarget?.destination) !==
+        JSON.stringify(event.scope.destination)
+    )
+      return undefined;
+    return {
+      text: String(message!.text),
+      target: target(event.scope),
+      audio: message!.kind === "audio",
+    };
+  }
   if (
     !source ||
     ![
@@ -152,12 +182,16 @@ function deliveryEvidence(
     ].includes(source.kind)
   )
     return undefined;
-  return { text: String(message!.text), target: target(event.scope) };
+  return {
+    text: String(message!.text),
+    target: target(event.scope),
+    audio: false,
+  };
 }
 function delivered(event: RawEvent, evidence: Evidence): string | undefined {
   const proof = deliveryEvidence(event, evidence);
   if (!proof || event.payload.ok !== true) return undefined;
-  return `已发送。正文：${proof.text}；目标：${proof.target}；回执：${str(event.payload.platformMessageId) ?? "平台确认投递（无原生消息 ID）"}`;
+  return `${proof.audio ? "已发送语音" : "已发送"}。正文：${proof.text}；目标：${proof.target}；回执：${str(event.payload.platformMessageId) ?? "平台确认投递（无原生消息 ID）"}`;
 }
 function failed(event: RawEvent, evidence: Evidence): string | undefined {
   const proof = deliveryEvidence(event, evidence);

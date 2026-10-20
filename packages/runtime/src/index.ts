@@ -17,3 +17,4 @@ export * from "./runtime.js";
 export { executionExhaustedInformationKind } from "@kaguya/engine";
 
 export * from "./message-targets.js";
+export * from "./tts-audio-store.js";
