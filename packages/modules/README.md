@@ -19,13 +19,13 @@ protocol v2 模块 Manifest 必须提供非空的 `displayName`、单行 `summar
 - [Heavy](./src/first-party/heavy/README.md)
 - [Person Fact Task](./src/first-party/person-fact-task/README.md)
 
-## Heartbeat 与 Router
+## Heartbeat、情境运行与 Router
 
-`heartbeatModule`（定义 ID：`agent.heartbeat.short`）按 scope 积攒 inbound 通知并直接产生不含正文的 `agent.heartbeat.candidate`；`oneShotScheduleCapability` 只服务 Light wait/interrupt。Attention Arousal 维护默认 `awake` 的持久化唤醒状态，并根据状态、通知信号和 Focus 记录 `observe | defer`；`createRouterModule()` 仅在 observe 后按注册水位读取未读，经 scope generation、identity barrier 和不可变多输入 context 交给 Light 选择 message、wait 或 silent，并为每个 turn 提交唯一终态。
+`heartbeatModule`（定义 ID：`agent.heartbeat.short`）按 scope 积攒 inbound 通知，产生不含正文的 `agent.heartbeat.candidate`。情境运行模块 `agent.situation` 经 scope generation 和 identity barrier 冻结有界证据、召回及已有行动记录。Attention Arousal 再读取冻结边界的元信息，根据唤醒状态、通知信号和 Focus 记录 `observe | defer`。`createRouterModule()` 只在 observe 后调用 Light，选择 message、wait 或 silent。情境运行模块处理生命周期与唯一回合终态。
 
-`createFirstPartyModuleActivations("production")` 与 `"test"` 都启用 Heartbeat 与 Router。普通入站不等待定时防抖；开放观察和未读水位负责 scope 聚合。Light wait/interrupt payload 使用绝对时间和稳定 destination scope，进程重启由 durable scheduler 恢复。
+`createFirstPartyModuleActivations("production")` 与 `"test"` 都启用 Heartbeat、情境运行与 Router。普通入站不等待定时防抖；开放观察和未读水位负责 scope 聚合。Light wait/interrupt payload 使用绝对时间和稳定 destination scope，进程重启由 durable scheduler 恢复。
 
-默认 Catalog 不含 always-reply 或 inbound-to-context 旁路。Heavy 只接收 Light 获胜的 message intent，并沿 turn provenance 把 delivery terminal 交回 Router 完成回合。
+默认 Catalog 不含 always-reply 或 inbound-to-context 旁路。Heavy 只接收 Light 获胜的 message intent，并沿 turn provenance 把 delivery terminal 交回情境运行模块完成回合。
 
 ## Prompt 模板
 
@@ -47,15 +47,15 @@ persona 只定义 Agent 自身身份与性格。人物、关系、会话历史�
 
 默认 Light 在有回应需要但缺少关键背景时可以安排坦率说明、自然追问；Heavy 按角色语气落实。能直接回答的内容照常回答，对方已说明的信息不重复问，群聊不因空库主动打断，冷启动也不绕过等待预算和发送授权。没有新增世界模型，也没有启动时生成虚构记忆的填库动作。
 
-| 第一方模块                                    | 空上下文时的职责与边界                                                                                             |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| Identity                                      | 从实际入站建立账号/会话，保留 unresolved 或 ephemeral 状态；实体存在不等于关系已知。                               |
-| Heartbeat、Attention Arousal、Router Focus    | 继续依据真实事件、时序和已提交状态工作；缺少记忆不增加唤醒、关注或强制回复。                                       |
-| Router Light                             | 显式读取证据可用性，在现有参与策略内安排澄清，不能用人设补造话题背景。                                             |
-| Heavy                              | 使用裁剪后的证据状态，缺少相关依据时承认未知；角色、表达习惯和规划指引不能充当事实。授权跨会话正文同样不补造背景。 |
-| Memory Writeback、Memory Index                | 仅持久化或索引真实来源，不制造初始记忆。                                                                           |
-| Memory Cognition                              | 使用已持久化证据及其范围、时间和来源校验；空输入不凭人设演化人物画像，页面和模型输出不替代原始证据。               |
-| Expression                                    | 无候选或证据不足返回空集合；新证据充分时照常学习。习惯仅限定措辞，不能证明关系或事实。                             |
-| Person Fact Task                              | 允许 `fact: null` 弃答；非空事实必须是候选原文片段，避免无来源文字入账。摘录仍可能是用户自述，不代表独立确认。     |
+| 第一方模块                                 | 空上下文时的职责与边界                                                                                             |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| Identity                                   | 从实际入站建立账号/会话，保留 unresolved 或 ephemeral 状态；实体存在不等于关系已知。                               |
+| Heartbeat、Attention Arousal、Router Focus | 继续依据真实事件、时序和已提交状态工作；缺少记忆不增加唤醒、关注或强制回复。                                       |
+| Router Light                               | 显式读取证据可用性，在现有参与策略内安排澄清，不能用人设补造话题背景。                                             |
+| Heavy                                      | 使用裁剪后的证据状态，缺少相关依据时承认未知；角色、表达习惯和规划指引不能充当事实。授权跨会话正文同样不补造背景。 |
+| Memory Writeback、Memory Index             | 仅持久化或索引真实来源，不制造初始记忆。                                                                           |
+| Memory Cognition                           | 使用已持久化证据及其范围、时间和来源校验；空输入不凭人设演化人物画像，页面和模型输出不替代原始证据。               |
+| Expression                                 | 无候选或证据不足返回空集合；新证据充分时照常学习。习惯仅限定措辞，不能证明关系或事实。                             |
+| Person Fact Task                           | 允许 `fact: null` 弃答；非空事实必须是候选原文片段，避免无来源文字入账。摘录仍可能是用户自述，不代表独立确认。     |
 
 冷启动措辞可在 `light.decision.local.hbs`、`heavy.behavior.local.hbs` 和 `heavy.local.hbs` 中按角色调整；主模板和 Light 声明支持 `context_bootstrap`。沿用现有 default/local 机制，不覆盖本地定制。已有 local 不会自动获得新版规则，升级时需自行合入对应 default 的来源约束和变量，或通过管理端恢复默认后重新定制。

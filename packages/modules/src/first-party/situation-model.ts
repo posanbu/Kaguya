@@ -1,6 +1,6 @@
 /**
  * 情境模型的 Kaguya 纯装配边界。输入来自已冻结证据，函数不查询账本或执行副作用。
- * 默认 Router 尚未调用本入口，运行链迁移由持续情境实施任务独立验收。
+ * 默认情境运行模块调用 buildSituationFrame。检查点仅投影已记录状态，不调用模型。
  */
 import {
   CONTRACT_VERSION,

@@ -2,15 +2,15 @@
 
 ## 目的与非目标
 
-Router 只在 `agent.attention.arousal.completed: observe` 后读取正文，协调候选认领、上下文冻结、Light 和回合终态。它不实现注意评分、消息正文生成或平台传输。
+`agent.router` 是独立的 Light 判断模块。它只在 `agent.attention.arousal.completed: observe` 后读取已冻结正文，决定 message、wait 或 silent。`agent.situation` 承接候选认领、证据冻结、接续与回合终态。两个模块复用本目录的装配和生命周期实现。
 
 ## 消费和产生
 
-消费 candidate、observe 决策、Identity terminal、冻结 context、Light 结果及宿主投递/失败终态；产生 claim、started、完整 turn context、Focus opened、消息意图、wait 请求和唯一 turn terminal。
+Router 消费 observe 决策及其冻结引用，产生 Light 模型任务。情境运行模块消费 candidate、Identity terminal、Light 结果及宿主投递终态，产生 claim、started、turn context、`agent.situation.frozen`、Focus opened、消息意图、wait 请求和唯一 turn terminal。
 
 ## 数据流与边界
 
-Router 按 candidate 的排他下界和包含式上界查询最多 1000 条同 scope 入站，等待每条 Identity terminal，再一次性冻结上下文。晚到时间戳不能越过注册水位，上界后的新消息留给下一次观察。`defer` 不产生 claim 或 context。
+情境运行模块按 candidate 的排他下界和包含式上界查询最多 1000 条同 scope 入站，等待每条 Identity terminal，再一次性冻结上下文。晚到时间戳不能越过注册水位，上界后的新消息留给下一次观察。冻结完成后依次触发注意模块与 Light。`defer` 保留冻结记录，但不推进未读水位。
 
 冻结后才执行 mute、安全、目标和授权检查。Light 判断参与价值并选择 `message | wait | silent`；`message` 只传目标和冻结引用，不传生成的话题、焦点、回复动作或写作建议。Heavy 读取同一份冻结 turn，独立决定发言或沉默。群聊直接通知在 observe 后开启 Focus；成功投递续租，silent/failed 关闭，wait 保持自然到期。
 
@@ -24,7 +24,7 @@ bootstrap 只依据冻结输入、身份实体创建来源和本轮授权 Memory
 
 Light 的每条冻结输入包含稳定的 `speakerKey`、平台消息标识、直接通知事实和经宿主核验的 `quotedMessage`。引用通过同会话、截止时间和成功投递链验证；缺失或冲突时显式标为 `unavailable`，不会猜测正文。历史与记忆分别限制为 12000 字和 4000 字：历史优先保留最新内容，记忆按已选来源平均分配配额并标记裁剪；本轮输入保持完整，引用链保留原始 ID 溯源。模型按对话对象、表达完整性和新增交流价值决定是否参与，不因其他人的未完表达阻塞一个独立完整的直接问题。
 
-`agent.light.decide` v3 模型任务在等待预算耗尽时移除 wait 分支。非法输出先经过一次结构修复，仍不合法则安全静默；不会登记非法消息意图或第四次等待。旧版任务按持久化 schema 和 Prompt 重放。
+`agent.light.decide` v3 模型任务在等待预算耗尽时移除 wait 分支。非法输出先经过一次结构修复，仍不合法则记录模型失败；不会登记非法消息意图或第四次等待。旧版任务按持久化 schema 和 Prompt 重放。
 
 ## Settings
 
@@ -32,9 +32,9 @@ Light 的每条冻结输入包含稳定的 `speakerKey`、平台消息标识、�
 
 ## 可靠性、幂等和失败行为
 
-claim、context、Light decision 和 terminal 使用稳定键与排他槽。重复 candidate、重复 delivery、进程重启和旧代际 one-shot 不会创建第二个有效 turn；身份未完成时保持开放，身份耗尽、授权失败或目标不可用时 fail-closed。只有完整 context 成功冻结后才记录 `observedThroughInformationId`。
+claim、context、Light decision 和 terminal 使用稳定键与排他槽。重复 candidate、重复 delivery、进程重启和旧代际 one-shot 不会创建第二个有效 turn；身份未完成时保持开放，身份耗尽、授权失败或目标不可用时 fail-closed。`observedThroughInformationId` 记录冻结范围，只有对应注意决策为 observe 时才推进已观察水位。
 
-Light failed、cancelled、非法输出或模型不可用会安全降级为 silent。Light wait 使用独立 `totalWaitBudget`；Arousal defer 不消耗预算。Heavy 若选择 silent，Router 记录 `heavy-declined` 终态，不创建投递。重放复用已持久化 Prompt 和上下文，supersession 后的迟到结果不能派发。
+Light failed、cancelled、非法输出或模型不可用记录为失败，不显示为 silent。Light wait 使用独立 `totalWaitBudget`；Arousal defer 不消耗预算。Heavy 若选择 silent，情境运行模块记录 `heavy-declined` 终态，不创建投递。重试复用调用前已持久化的完整输入及原生消息，supersession 后的迟到结果不能派发。
 
 ## 日志与可观测性
 
@@ -42,10 +42,10 @@ Light failed、cancelled、非法输出或模型不可用会安全降级为 sile
 
 ## 典型场景
 
-observe 后冻结该 scope 的全部有界未读，再由 Light 选择 message、wait 或 silent。直接群聊输入可开启 Focus，但仍允许 Light silent；跨会话目标必须通过宿主授权复核。超大积压按 1000 条上限自然分批，不跳过水位。
+先冻结该 scope 的全部有界未读，注意模块允许 observe 后再由 Light 选择 message、wait 或 silent。直接群聊输入可开启 Focus，但仍允许 Light silent；跨会话目标必须通过宿主授权复核。超大积压按 1000 条上限自然分批，不跳过水位。
 
 ## Focus 租约
 
-Focus 是 Router 内部的持久化会话租约，不设独立模块实例。Router 在群聊直接通知完成 observe 后登记 `agent.router.focus.opened`；成功投递续租，silent 或 failed 关闭，wait 保持至自然到期。Arousal 通过 Router 提供的只读 Selector 获取当时有效的租约，私聊不创建租约。
+Focus 是情境运行模块维护的持久化会话租约，不设独立模块实例。它在群聊直接通知完成 observe 后登记 `agent.router.focus.opened`；成功投递续租，silent 或 failed 关闭，wait 保持至自然到期。Arousal 通过 Router 提供的只读 Selector 获取当时有效的租约，私聊不创建租约。
 
 每个 grant 有独立 generation 和 durable 到期调度。开启、续租和终态按稳定来源去重；旧代际到期不能关闭新租约。进程重启后由账本和 Scheduler 恢复。Inspection 通过 caused-by、uses-context 和 status-of 展示生命周期、来源和到期时间。

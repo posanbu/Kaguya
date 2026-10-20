@@ -552,7 +552,9 @@ it("reports HTTP 402 as insufficient balance in the failed task and logs", async
     providerFailureReason: "insufficient-balance",
     providerAction: "检查 Provider 账户余额",
   });
-  expect(formatPrettyMessage(projected)).toContain("处理建议=检查 Provider 账户余额");
+  expect(formatPrettyMessage(projected)).toContain(
+    "处理建议=检查 Provider 账户余额",
+  );
   expect(await f.client.execute(f.request)).toEqual(result);
   expect(f.generate).toHaveBeenCalledTimes(1);
 });
@@ -998,4 +1000,49 @@ it.each([
   expect(
     (await f.atoms()).filter((a) => a.kind === "core.model.task.requested"),
   ).toHaveLength(2);
+});
+
+it("persists native input before dispatch and restores the same native return on replay", async () => {
+  const f = await fixture();
+  const messages = [
+    {
+      role: "assistant" as const,
+      content: [
+        {
+          type: "reasoning",
+          text: "provided",
+          providerOptions: { fixture: { signature: "opaque" } },
+        },
+      ],
+    },
+  ];
+  const native = {
+    version: 1 as const,
+    messages,
+    reasoning: [{ type: "reasoning", text: "provided" }],
+    providerMetadata: { fixture: { id: "response" } },
+  };
+  f.generate.mockImplementation(async (actual) => {
+    const requested = (await f.atoms()).find(
+      (a) => a.kind === "core.model.task.requested",
+    )!;
+    expect(requested.payload.messages).toEqual(actual.messages);
+    expect(actual).not.toHaveProperty("prompt");
+    expect(actual.messages[0]).toEqual(messages[0]);
+    return {
+      output: { text: "hello" },
+      native,
+      usage: { totalTokens: 7 },
+      durationMs: 5,
+    };
+  });
+  const request = { ...f.request, messages };
+  const first = await f.client.execute(request);
+  const replayed = await new ModelTaskClient(f.options).execute(request);
+  expect(replayed).toEqual(first);
+  expect(f.generate).toHaveBeenCalledTimes(1);
+  const completed = (await f.atoms()).find(
+    (a) => a.kind === "core.model.task.completed",
+  )!;
+  expect(completed.payload.native).toEqual(native);
 });

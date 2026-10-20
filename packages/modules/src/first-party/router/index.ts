@@ -18,6 +18,9 @@
  * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
  * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
  */
+import { situationFrozenInformationKind } from "../situation-runtime.js";
+import { situationHistorySelector } from "../situation-history.js";
+import { buildSituationFrame } from "../situation-model.js";
 import { firstPartyInspection } from "../inspection.js";
 import type { RawContextAccess } from "@kaguya/memory";
 import { frozenRawContextInformationKind } from "./raw-context.js";
@@ -49,6 +52,7 @@ import type { AgentIdentity, ModelTaskCapability } from "../heavy/index.js";
 import type { ModuleCapability } from "@kaguya/sdk";
 
 import {
+  jsonObjectSchema,
   type CompiledPrompt,
   type DeepReadonly,
   type InformationAtom,
@@ -503,6 +507,17 @@ export const routerStateSelector = defineInformationSelector({
 });
 
 export function createRouterModule(options: CreateRouterModuleOptions) {
+  return createRoutingModule(options, "router");
+}
+export function createSituationRuntimeModule(
+  options: CreateRouterModuleOptions,
+) {
+  return createRoutingModule(options, "situation");
+}
+function createRoutingModule(
+  options: CreateRouterModuleOptions,
+  role: "router" | "situation",
+) {
   const deliveryKinds = [
     options.deliveryDeliveredInformationKind,
     options.deliveryFailedInformationKind,
@@ -635,12 +650,21 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
     manifest: {
       protocolVersion: 1,
       moduleVersion: "2.0.0",
-      definitionId: "agent.router",
+      definitionId: role === "router" ? "agent.router" : "agent.situation",
       inspection: firstPartyInspection["agent.router"],
-      displayName: "Router 路由与关注",
-      summary: "协调回合认领、上下文冻结、Light 决策、Focus 租约和回合终态。",
-      description:
-        "只在非语义注意力观察决定 observe 后消费候选，按注册水位读取未读并经身份屏障冻结上下文，再请求内部 Light 选择发言、等待或静默；维护 Focus 租约，输出消息意图、等待请求和回合终态，不执行平台传输。",
+      displayName: { router: "Router 参与判断", situation: "情境与行动运行" }[
+        role
+      ],
+      summary: {
+        router: "冻结后由 Light 判断回应、等待或沉默。",
+        situation: "装配并冻结证据，记录行动及实际结果。",
+      }[role],
+      description: {
+        router:
+          "读取冻结快照与注意模块的许可，调用 Light 判断回应、等待或沉默。",
+        situation:
+          "按注册边界冻结原始证据、召回和已记录结果，再触发注意模块。维护行动状态与实际回执。",
+      }[role],
       settingsSchema: routerSettingsSchema,
       diagnostics: [rawMemoryBarrierFailureDiagnostic],
       promptTemplates: [
@@ -675,6 +699,7 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
         options.executionExhaustedInformationKind,
       ],
       produces: [
+        situationFrozenInformationKind,
         ...focusKinds,
         lightDecisionInformationKind,
         turnClaimedInformationKind,
@@ -693,6 +718,7 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
         turnInterruptedInformationKind,
       ],
       selectors: [
+        situationHistorySelector,
         focusStateSelector,
         routerStateSelector,
         lightInterruptSelector,
@@ -742,6 +768,7 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
             ]
           : []),
         ...[
+          turnCandidateInformationKind,
           personContextCompletedInformationKind,
           turnClaimedInformationKind,
           turnCompletedInformationKind,
@@ -768,35 +795,202 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
             },
           ),
         ),
-        ...[
-          attentionArousalCompletedInformationKind,
+        onInformation(
           turnContextCompletedInformationKind,
-        ].map((definition) =>
+          {
+            subscriptionId: "agent.situation.freeze",
+            durableSubscriptionId: `${activation.instanceId.replace(/\.situation$/, "")}:agent.router.observe.agent.router.turn.context.completed`,
+            delivery: "durable",
+            retryForever: true,
+            retryDelayMs: 5_000,
+          },
+          async (turn, context) => {
+            const payload = turn.payload as any;
+            const selected = await context.select(lightContextSelector);
+            let raw = selected.find(
+              (a) =>
+                a.kind === frozenRawContextInformationKind.kind &&
+                a.payload.turnInformationId === turn.informationId,
+            );
+            let snapshot:
+              Awaited<ReturnType<RawContextAccess["freeze"]>> | undefined;
+            if (!raw) {
+              snapshot = await context
+                .use(options.rawContextCapability)
+                .freeze({
+                  turnInformationId: turn.informationId,
+                  asOf: payload.backlog.evaluatedAt,
+                  scope: payload.source,
+                  unreadInformationIds: payload.inputs.map(
+                    (i: { informationId: string }) => i.informationId,
+                  ),
+                });
+              raw = await context.registerOnce(
+                "agent.router.memory.context.frozen",
+                turn.informationId,
+                frozenRawContextInformationKind,
+                {
+                  payload: {
+                    turnInformationId: turn.informationId,
+                    global: {
+                      text: snapshot.global.text,
+                      informationIds: [...snapshot.global.informationIds],
+                    },
+                    currentScope: {
+                      text: snapshot.currentScope.text,
+                      informationIds: [...snapshot.currentScope.informationIds],
+                    },
+                    overBudget: snapshot.overBudget,
+                    characterCount: snapshot.characterCount,
+                    evidence: (snapshot.evidence ?? []).map((item) => ({
+                      ...item,
+                    })),
+                    through: snapshot.through ?? 0,
+                  },
+                },
+              );
+            }
+            const evidence = (raw.payload.evidence ?? []) as any[];
+            const source = payload.source;
+            const destination = source.destination;
+            const sceneId = JSON.stringify([
+              source.platform,
+              source.adapterId,
+              destination.kind,
+              destination.kind === "private"
+                ? destination.userId
+                : destination.kind === "group"
+                  ? destination.groupId
+                  : (destination.conversationId ?? null),
+            ]);
+            const history = await context.select(situationHistorySelector);
+            const previous = history.find(
+              (a) => a.kind === "agent.situation.frozen",
+            );
+            const previousFrame = previous?.payload.frame as any;
+            const recalls = payload.memory?.length
+              ? [
+                  {
+                    sceneId,
+                    revision: turn.informationId,
+                    items: payload.memory.flatMap((id: string) => {
+                      const item = selected.find((a) => a.informationId === id);
+                      return item
+                        ? [
+                            {
+                              id,
+                              text: String(item.payload.text ?? ""),
+                              evidenceIds: [id],
+                            },
+                          ]
+                        : [];
+                    }),
+                  },
+                ]
+              : [];
+            const frame = buildSituationFrame({
+              id: turn.informationId,
+              agentId: "kaguya",
+              sceneId,
+              frozenAt: payload.backlog.evaluatedAt,
+              evidence,
+              through: Number(raw.payload.through ?? 0),
+              recalls,
+              previous: previousFrame
+                ? {
+                    manifestId: previousFrame.id,
+                    through: previousFrame.background.through,
+                  }
+                : null,
+            });
+            const continuity = history
+              .filter((a) => a.kind === "core.model.task.completed")
+              .flatMap((result) => {
+                const intent = history.find(
+                  (a) => a.informationId === result.payload.sourceInformationId,
+                );
+                const candidateId = (intent?.payload.turn as any)
+                  ?.candidateInformationId;
+                const terminal = history.find(
+                  (a) =>
+                    a.payload.candidateInformationId === candidateId &&
+                    a.kind.startsWith("agent.router.turn.") &&
+                    [
+                      "completed",
+                      "silent",
+                      "waiting",
+                      "failed",
+                      "interrupted",
+                      "superseded",
+                    ].includes(a.kind.split(".").at(-1)!),
+                );
+                if (!candidateId) return [];
+                const receipt = history.find(
+                  (a) =>
+                    a.informationId ===
+                    terminal?.payload.deliveryTerminalInformationId,
+                );
+                return [
+                  {
+                    callResultId: result.informationId,
+                    candidateInformationId: candidateId,
+                    status:
+                      receipt?.payload.outcome === "unknown"
+                        ? "unknown"
+                        : (terminal?.kind.split(".").at(-1) ?? "pending"),
+                    receiptId: receipt?.informationId ?? null,
+                    result: receipt?.payload ?? null,
+                  },
+                ];
+              });
+            await context.registerOnce(
+              "agent.situation.frozen",
+              turn.informationId,
+              situationFrozenInformationKind,
+              {
+                payload: {
+                  candidateInformationId: payload.candidateInformationId,
+                  turnInformationId: turn.informationId,
+                  rawInformationId: raw.informationId,
+                  continuity: continuity.map((item) =>
+                    jsonObjectSchema.parse(item),
+                  ),
+                  frame: jsonObjectSchema.parse(frame),
+                  historyInformationIds: history.map((a) => a.informationId),
+                },
+                references: [
+                  ...new Set([
+                    turn.informationId,
+                    payload.candidateInformationId,
+                    raw.informationId,
+                    ...history.map((a) => a.informationId),
+                  ]),
+                ].map((informationId) => ({
+                  relation: "core:uses-context",
+                  informationId,
+                })),
+              },
+            );
+          },
+        ),
+        ...[attentionArousalCompletedInformationKind].map((definition) =>
           onInformation(
             definition as AnyKind,
             {
               subscriptionId: `agent.router.observe.${definition.kind}`,
               delivery: "durable",
-              ...(definition.kind === turnContextCompletedInformationKind.kind
-                ? { retryForever: true, retryDelayMs: 5_000 }
-                : {}),
             },
-            async (sourceAtom, context) => {
-              if (
-                sourceAtom.kind ===
-                attentionArousalCompletedInformationKind.kind
-              ) {
-                if (sourceAtom.payload.outcome !== "observe") return;
-                const state = await context.select(routerStateSelector);
-                await progressCandidates(
-                  state,
-                  settings,
-                  options.activePersonProfiles,
-                  context,
-                );
-                return;
-              }
+            async (gateAtom, context) => {
+              if (gateAtom.payload.outcome !== "observe") return;
               const state = await context.select(routerStateSelector);
+              const sourceAtom = state.find(
+                (a) =>
+                  a.kind === turnContextCompletedInformationKind.kind &&
+                  a.payload.candidateInformationId ===
+                    gateAtom.payload.candidateInformationId,
+              );
+              if (!sourceAtom)
+                throw new Error("Missing frozen situation context");
               const decision = state.find(
                 (atom) =>
                   atom.kind === attentionArousalCompletedInformationKind.kind &&
@@ -875,58 +1069,8 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
                   atom.kind === frozenRawContextInformationKind.kind &&
                   atom.payload.turnInformationId === sourceAtom.informationId,
               );
-              if (!rawAtom && !hasPersistedPrompt) {
-                let frozenRaw;
-                try {
-                  frozenRaw = await context.use(options.rawContextCapability).freeze({
-                        turnInformationId: sourceAtom.informationId,
-                        asOf: sourceAtom.payload.backlog.evaluatedAt,
-                        scope: {
-                          platform: sourceAtom.payload.source.platform,
-                          adapterId: sourceAtom.payload.source.adapterId,
-                          destination: sourceAtom.payload.source.destination,
-                        },
-                        unreadInformationIds: sourceAtom.payload.inputs.map(
-                          (input: any) => input.informationId,
-                        ),
-                      });
-                } catch (error) {
-                  await context.report(rawMemoryBarrierFailureDiagnostic, {
-                    errorType:
-                      error instanceof Error ? error.name : "UnknownError",
-                    turnInformationId: sourceAtom.informationId,
-                  });
-                  throw error;
-                }
-                rawAtom =
-                  frozenRaw &&
-                  (await context.registerOnce(
-                    "agent.router.memory.context.frozen",
-                    sourceAtom.informationId,
-                    frozenRawContextInformationKind,
-                    {
-                      payload: {
-                        turnInformationId: sourceAtom.informationId,
-                        global: {
-                          text: frozenRaw.global.text,
-                          informationIds: [...frozenRaw.global.informationIds],
-                        },
-                        currentScope: {
-                          text: frozenRaw.currentScope.text,
-                          informationIds: [
-                            ...frozenRaw.currentScope.informationIds,
-                          ],
-                        },
-                        overBudget: frozenRaw.overBudget,
-                        characterCount: frozenRaw.characterCount,
-                      },
-                      contextInformationId: sourceAtom.references.find(
-                        (r) => r.relation === "core:context",
-                      )!.informationId,
-                    },
-                  ));
-                if (rawAtom) selected.push(rawAtom);
-              }
+              if (!rawAtom && !hasPersistedPrompt)
+                throw new Error("Situation was not frozen");
               const turn = selected.find(
                 (atom) => atom.informationId === gate.turnContextInformationId,
               )!;
@@ -1002,6 +1146,7 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
                       ),
                   contextAtoms: taskAtoms,
                 });
+              if (result.status !== "completed") return;
               const parsed =
                 result.status === "completed"
                   ? lightActionSchema.safeParse(result.output)
@@ -1213,7 +1358,6 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
             },
             async (terminal, context) => {
               const state = await context.select(routerStateSelector);
-              if (terminal.payload.taskId === LIGHT_TASK_ID) return;
               await failOpenTurns(
                 terminal,
                 definition === options.modelTaskFailedInformationKind
@@ -1241,7 +1385,23 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
             );
           },
         ),
-      ],
+      ]
+        .filter((subscription) => {
+          const light = subscription.subscriptionId.startsWith(
+            "agent.router.observe.",
+          );
+          return role === "router" ? light : !light;
+        })
+        .map((subscription) =>
+          role === "situation" && activation.instanceId.endsWith(".situation")
+            ? {
+                ...subscription,
+                durableSubscriptionId:
+                  subscription.durableSubscriptionId ??
+                  `${activation.instanceId.slice(0, -10)}:${subscription.subscriptionId}`,
+              }
+            : subscription,
+        ),
     }),
   });
   return module;
@@ -1257,13 +1417,7 @@ async function progressCandidates(
     (a) =>
       a.kind === turnCandidateInformationKind.kind &&
       !turnTerminalFor(a.informationId, atoms) &&
-      a.payload.managementAuthorizationId === undefined &&
-      atoms.some(
-        (decision) =>
-          decision.kind === attentionArousalCompletedInformationKind.kind &&
-          decision.payload.candidateInformationId === a.informationId &&
-          decision.payload.outcome === "observe",
-      ),
+      a.payload.managementAuthorizationId === undefined,
   );
   const scopes = new Set(candidates.map((a) => String(a.payload.scopeKey)));
   for (const scope of scopes) {
@@ -1944,7 +2098,14 @@ async function finishDelivery(
       candidate.informationId,
       turnFailedInformationKind,
       {
-        payload: { ...base, reason: "delivery-failed" },
+        payload: {
+          ...base,
+          reason:
+            terminal.payload.outcome === "unknown"
+              ? "delivery-unknown"
+              : "delivery-failed",
+          deliveryTerminalInformationId: terminal.informationId,
+        },
         references: terminalReferences(
           candidate.informationId,
           claim.informationId,

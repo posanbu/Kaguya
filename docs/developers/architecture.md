@@ -57,9 +57,10 @@ flowchart LR
   Broadcast --> Identity[Identity terminal]
   Broadcast --> Heartbeat[Durable heartbeat]
   Heartbeat --> Candidate[Wake opportunity / turn candidate]
-  Candidate --> Arousal[Arousal state / observe / defer]
-  Arousal -->|observe| Router[Router: 冻结输入 / Light 决策 / Focus 租约 / 终态]
-  Identity --> Router
+  Candidate --> Situation[情境运行: 装配并冻结]
+  Identity --> Situation
+  Situation --> Arousal[注意模块: observe / defer]
+  Arousal -->|observe| Router[Router: Light 判断]
   Router -->|message| Intent[agent.router.message.intent.requested]
   Router -->|wait| Wait[agent.router.wait.requested]
   Router -->|silent| Silent[agent.router.turn.silent]
@@ -74,37 +75,35 @@ Web HTTP 请求只允许文本和 requestId。Web adapter 会补齐平台、send
 
 HTTP `202 accepted` 在 Web gateway 接收消息后立即返回；Runtime dispatch 在后台继续。该状态不证明事件链、模型调用或投递已经完成。
 
-当前协议使用 `agent.heartbeat.candidate`、`agent.router.turn.*` 和 `agent.light.decision.completed` 组织观察与决策生命周期。Heartbeat candidate 保存非语义通知和水位，不表示已经完成观察。Router 只有在 Arousal 选择 `observe` 后才读取候选水位内的多条输入并冻结 turn context；这份多输入快照接近当前实现中的 observation。Focus 租约也由 Router 维护。
+当前协议保留 `agent.heartbeat.candidate`、`agent.router.turn.*` 和 `agent.light.decision.completed` 的持久身份。新增 `agent.situation` 承接证据边界、冻结、Focus、行动和终态。`agent.router` 只保留冻结后的 Light 判断。配置装配自动为每个 Router 派生对应的情境运行实例。
 
-默认在线链由 Router 以可重放事实推进：
+默认在线链如下：
 
 ```text
-core.runtime.context
-  -> core.message.inbound.text
-  -> agent.attention.arousal.activity -> 空闲休眠 one-shot deadline
-  -> memory.identity.person.context.completed
-  -> agent.heartbeat.scheduled
-  -> core.schedule.one-shot.requested
-  -> core.schedule.one-shot.due
-  -> agent.heartbeat.fired
-  -> agent.heartbeat.candidate
-  -> agent.attention.arousal.state.recorded
-  -> agent.attention.arousal.completed
-     -> awake 或收到唤醒信号: observe
-     -> asleep 且无唤醒信号: defer -> agent.router.turn.terminal -> 等待周期 deadline 或直接通知
-     -> observe: agent.router.turn.claimed -> agent.router.turn.started -> identity terminal
-        -> agent.router.turn.context.completed -> agent.light.decision.completed
-     -> message: agent.router.message.intent.requested -> core.model.task.* -> core.message.assistant.text
-               -> core.delivery.requested -> core.delivery.delivered | core.delivery.failed
-               -> agent.router.turn.completed | agent.router.turn.failed
-               -> core.model.task.failed | cancelled -> agent.router.turn.failed
-     -> wait: agent.router.wait.requested -> agent.router.turn.waiting -> 下一代 heartbeat
-     -> silent: agent.router.turn.silent
+证据入账 -> Heartbeat candidate -> claim -> 身份就绪
+  -> turn.context.completed -> 原始证据冻结 -> agent.situation.frozen
+  -> 注意模块读取元信息
+     -> defer: 保留未读范围，等待新观察
+     -> observe: Router 调用 Light
+        -> message: Heavy 使用同一冻结输入
+           -> 保存原生返回 -> 行动决定 -> delivery.requested
+           -> delivery.started -> delivered / failed / unknown
+        -> wait: 保存等待期限
+        -> silent: 保存沉默决定
+        -> 模型失败或取消: turn.failed
 ```
 
-同一 destination scope 的 claim 带单调 generation。新 candidate 若在旧 claim 作出 Light decision 前到达，会先赢得旧 claim 的 decision gate，再写入旧 turn 的 `superseded` 终态；旧分支不能继续产生 message intent。Candidate 不携带正文引用；Arousal 从最新 `agent.attention.arousal.state.recorded` 读取全局唤醒状态，没有事实时默认 `awake`。无消息与夜间休眠策略默认关闭，启用后分别以持久化绝对 deadline 实现预设两分钟无消息休眠、23:00–07:00 夜间休眠和五分钟周期唤醒。私聊、Web、@、回复、Focus 与周期复查重新确认 `awake`；`awake` 下普通机会也 observe。Router 仅在 observe 后按候选的注册水位上下界读取未读，并等到每条 inbound 都具有 identity terminal 后冻结多输入 turn context。`message`、`wait`、`silent` 只由 Light 决定，默认链中没有 inbound 直达 turn context、always-reply 或 speech-to-reply 桥接旁路。
+从证据入账开始读。冻结发生在注意模块之前。注意模块不读取正文。Light 只判断回应、等待或沉默。Heavy 才解释情境并决定普通回应内容或沉默。Light 与 Heavy 逐字共用冻结的原始证据，Heavy 另接入原生模型历史和已记录的实际结果。
 
-每条派生边都带有直接输入的 `core:caused-by` 引用，并继承唯一的 `core:context`。跨入站合并时，模块只能把 context 重定位到当前 handler 通过声明式 Selector 选出的 `core.runtime.context`。Model Task、消费者重试耗尽和投递失败都是账本事实；平台发送成功后注册 `core.delivery.delivered`，并由 Router 写入唯一 turn terminal。
+同一 scope 的 claim 带单调 generation。新 candidate 在旧 Light 决策前到达时，可以将旧分支标为 `superseded`。取消或被替代的迟到结果不能派生当前行动。重试复用持久化请求，新观察才形成新快照。
+
+观察水位、模型完成和执行结果分别记录。`defer` 不推进观察水位。`observe` 只表示本批输入进入观察，不能据此推断已回复或投递成功。模型失败不生成沉默事实，也不立即反复处理同一失败输入。
+
+发送前先持久化 `core.delivery.started`。进程恢复后，已有发送标记却没有回执的请求记为 `unknown`，不自动重发。旧版本没有发送标记时，已领取过的投递同样按未知处理。明确失败只来自实际失败回执或发送前的确定性拒绝。
+
+旧订阅身份继续承接已持久化的队列。原候选注意入口只负责兼容排空，新冻结钩子使用独立订阅 ID。原 Router 的情境和行动订阅保留持久 ID，防止切换模块后重复处理外部动作。
+
+每条派生边都带有直接输入的 `core:caused-by` 引用，并继承唯一的 `core:context`。跨入站合并时，模块只能把 context 重定位到当前 handler 通过声明式 Selector 选出的 `core.runtime.context`。Model Task、消费者重试耗尽和投递失败都是账本事实；平台发送成功后注册 `core.delivery.delivered`，并由情境运行模块写入唯一 turn terminal。
 
 ## 消费者失败不会回滚已提交事实
 
@@ -166,14 +165,14 @@ Heartbeat 以 `openScope` 和成功观察水位聚合同 scope 通知，不为�
 
 观察后的 Light 将完整输入、同范围历史、核验后的引用正文和可选记忆放在一起判断。记忆查询分摊最近八条不同输入的 512 字预算，通过原文稀疏检索和可选认知快照提供有来源的背景。兴趣只作为已召回的来源证据，不进入 Arousal，也不作为自动发言开关。没有相应证据时，模型不能凭空补造兴趣。
 
-`agent.light.decide` 使用本轮收紧的输出 schema：焦点索引必须落在冻结输入范围内，等待耗尽时只接受 message 或 silent。模型结构修复仍最多一次，失败则安全静默。话题理解、自然参与及是否等待仍由 Light 决定，宿主只约束结构和预算。旧协议账本不会由新版重放。
+`agent.light.decide` 使用本轮收紧的输出 schema：焦点索引必须落在冻结输入范围内，等待耗尽时只接受 message 或 silent。模型结构修复仍最多一次，失败或取消记录为失败终态，不生成沉默决定。话题理解、自然参与及是否等待仍由 Light 决定，宿主只约束结构和预算。旧协议账本不会由新版重放。
 
 候选注册携带 `openScope`，数据库在同 scope 的 head 行锁内竞争。并发通知或到期信号只得到一个开放 candidate；每个信号的操作别名仍指向原赢家，所以旧信号重放不会开启新一轮。等待 schedule 记录前驱 candidate，避免旧等待到期信号在后续观察完成后重新启动模型。指定 `agent.router.turn.terminal` 终态释放槽，平台投递和授权边界保持原有职责。
 
-开放期间入站账本保存待观察集合，普通和即时唤醒分别按 candidate 去重。Candidate 只冻结上次成功观察之后的排他下界、本次机会的包含上界、未读数量和平台信号，不冻结正文集合。Arousal defer、重复 delivery、调度失败或进程重启都不推进水位；只有 Router 成功冻结 turn context 才记录 `observedThroughInformationId`。observe 后的有界查询最多读取 1000 条，上界之前进入当前 turn，上界之后留给下一次观察。水位按持久化位置而非消息时间戳推进，因此相同或迟到时间戳不能越界。
+开放期间入站账本保存待观察集合，普通和即时唤醒分别按 candidate 去重。Candidate 只冻结上次成功观察之后的排他下界、本次机会的包含上界、未读数量和平台信号，不冻结正文集合。情境运行模块先按候选边界冻结 turn context，最多读取 1000 条。Arousal 之后决定是否 observe。只有获得 observe 的 context 才以 `observedThroughInformationId` 推进成功观察水位。defer、重复 delivery、调度失败或进程重启都不单独推进水位。上界之前进入当前 turn，上界之后留给下一次观察。水位按持久化位置而非消息时间戳推进，因此相同或迟到时间戳不能越界。
 
 ## 恢复阶段一次爬楼
 
-重启或竞争遗留开放 candidate 时，Router 只推进已有 Arousal observe 的机会，并继续使用候选冻结的上下水位；defer 和未决机会不会读取正文。claim 的 `core:uses-context` 引用只在 observe 后写入。身份屏障尚未就绪或身份结果迟到时，恢复仍读取同一有界集合。Light 决策提交和最终发送继续由既有操作槽、终态槽与执行租约保护；迟到结果在派发前重新检查当前终态。
+重启或竞争遗留开放 candidate 时，情境运行模块继续使用候选冻结的上下水位，并在身份屏障就绪后保存同一有界证据集合。冻结记录保留 claim 的 `core:uses-context` 来源。Arousal defer 时保留已冻结记录，只有 observe 才进入 Light。身份结果迟到时仍复用原边界。Light 决策提交和最终发送继续由既有操作槽、终态槽与执行租约保护；迟到结果在派发前重新检查当前终态。
 
 在线 Selector 从 `information_lifecycle` 的开放集合读取 candidate，并按 scope 的注册位置索引读取最近 claim。该投影和 `information_scope_heads` 可变，业务原子和引用保持只追加。数据库启动时首次建立并回填投影，后续启动不重复扫描历史；写入原子、关闭投影和可靠执行意图同事务提交。历史规模与恢复测试分别验证开放索引查询和合并动作唯一性。

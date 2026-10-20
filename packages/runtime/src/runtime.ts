@@ -48,7 +48,11 @@ import {
   createModuleLogger,
   type KaguyaLogger,
 } from "@kaguya/logger";
-import { MEMORY_RETRIEVAL_STRATEGY_ID, memoryCapability, rawContextCapability } from "@kaguya/memory";
+import {
+  MEMORY_RETRIEVAL_STRATEGY_ID,
+  memoryCapability,
+  rawContextCapability,
+} from "@kaguya/memory";
 import {
   deliveryRequestedInformationKind,
   messageAuthorizationCapability,
@@ -100,6 +104,7 @@ import {
   builtInInformationKinds,
   deliveryDeliveredInformationKind,
   deliveryFailedInformationKind,
+  deliveryStartedInformationKind,
   runtimeContextInformationKind,
   modelTaskSelectionPolicySchema,
   modelTaskInformationKinds,
@@ -707,14 +712,29 @@ export class KaguyaRuntime implements InformationIngress {
         ),
       );
       const projectRaw = () => {
-        if (this.#rawProjectionInFlight || this.#state === "closing" || this.#state === "closed") return;
+        if (
+          this.#rawProjectionInFlight ||
+          this.#state === "closing" ||
+          this.#state === "closed"
+        )
+          return;
         this.#rawProjectionInFlight = true;
-        this.#rawProjectionPromise = database.rawEvents.projectLatest().then(() => undefined).catch((error) => {
-          this.#runtimeLogger?.error(
-            { event: "memory.raw.projection.failed", errorType: safeErrorType(error) },
-            "Raw Memory event projection failed",
-          );
-        }).finally(() => { this.#rawProjectionInFlight = false; this.#rawProjectionPromise = undefined; });
+        this.#rawProjectionPromise = database.rawEvents
+          .projectLatest()
+          .then(() => undefined)
+          .catch((error) => {
+            this.#runtimeLogger?.error(
+              {
+                event: "memory.raw.projection.failed",
+                errorType: safeErrorType(error),
+              },
+              "Raw Memory event projection failed",
+            );
+          })
+          .finally(() => {
+            this.#rawProjectionInFlight = false;
+            this.#rawProjectionPromise = undefined;
+          });
       };
       this.#rawProjectionTimer = setInterval(projectRaw, 1_000);
       this.#rawProjectionTimer.unref?.();
@@ -830,7 +850,11 @@ export class KaguyaRuntime implements InformationIngress {
       const failures: unknown[] = [];
       if (this.#rawProjectionTimer) clearInterval(this.#rawProjectionTimer);
       this.#rawProjectionTimer = undefined;
-      if (this.#rawProjectionPromise) await drainRuntimeOperations([this.#rawProjectionPromise], this.options.drainTimeoutMs ?? 5_000);
+      if (this.#rawProjectionPromise)
+        await drainRuntimeOperations(
+          [this.#rawProjectionPromise],
+          this.options.drainTimeoutMs ?? 5_000,
+        );
       try {
         await this.#oneShotScheduler?.stop();
       } catch (error) {
@@ -1019,6 +1043,26 @@ export class KaguyaRuntime implements InformationIngress {
     )
       return;
     const context = uniqueContextReference(request);
+    // Old versions had no started marker. A recovered delivery may already have
+    // reached the platform, so an earlier lease is evidence of an unknown result.
+    const attempts = await required(this.#database, "database").sql.query<{
+      attempts: number;
+    }>(
+      "SELECT attempts FROM information_deliveries WHERE subscription_id = $1 AND information_id = $2",
+      ["kaguya.runtime.delivery", request.informationId],
+    );
+    if (
+      (attempts.rows[0]?.attempts ?? 0) > 1 ||
+      (await core.select(deliveryStartedSelector, request.informationId)).length
+    ) {
+      await this.#registerDeliveryFailure(
+        request,
+        context.informationId,
+        "Delivery result is unknown after recovery",
+        "unknown",
+      );
+      return;
+    }
     const targetAuthorized =
       request.payload.platform === "web" ||
       (await this.#messageTargets!.validateDelivery(request));
@@ -1078,6 +1122,30 @@ export class KaguyaRuntime implements InformationIngress {
       throw error;
     }
 
+    const attemptId = randomUUID();
+    const started = await core.registerOnce(
+      "kaguya.delivery.started.v1",
+      request.informationId,
+      deliveryStartedInformationKind,
+      {
+        occurredAt: this.#now().toISOString(),
+        source: "runtime:delivery",
+        payload: { attemptId },
+        references: [
+          { relation: "core:caused-by", informationId: request.informationId },
+          { relation: "core:context", informationId: context.informationId },
+        ],
+      },
+    );
+    if (started.payload.attemptId !== attemptId) {
+      await this.#registerDeliveryFailure(
+        request,
+        context.informationId,
+        "Delivery result is unknown after recovery",
+        "unknown",
+      );
+      return;
+    }
     let receipt: PlatformDeliveryReceipt;
     try {
       receipt = await registration.transport.sendMessage(
@@ -1089,7 +1157,8 @@ export class KaguyaRuntime implements InformationIngress {
       await this.#registerDeliveryFailure(
         request,
         context.informationId,
-        "Platform transport failed",
+        "Platform transport result is unknown",
+        "unknown",
       );
       throw new OutboundTransportError(
         request.payload.adapterId,
@@ -1138,6 +1207,7 @@ export class KaguyaRuntime implements InformationIngress {
     request: DeliveryRequestedAtom,
     contextInformationId: InformationId,
     error: string,
+    outcome: "failed" | "unknown" = "failed",
   ): Promise<void> {
     await required(this.#core, "information core").commitTerminal(
       "kaguya.delivery.result.v1",
@@ -1152,6 +1222,7 @@ export class KaguyaRuntime implements InformationIngress {
           platform: request.payload.platform,
           target: request.payload.destination,
           error,
+          ...(outcome === "unknown" ? { outcome } : {}),
         },
         references: deliveryResultReferences(
           request.informationId,
@@ -1256,6 +1327,21 @@ function composeModelTaskCapabilities(
   }
   return capabilities;
 }
+
+const deliveryStartedSelector = defineInformationSelector({
+  selectorId: "runtime.delivery.started",
+  select: async ({ sourceAtom, ledger }) =>
+    (
+      await ledger.related({
+        from: [sourceAtom.informationId],
+        relation: "core:caused-by",
+        direction: "incoming",
+        limit: 100,
+      })
+    )
+      .filter((atom) => atom.kind === deliveryStartedInformationKind.kind)
+      .map((atom) => atom.informationId),
+});
 
 const deliveryTerminalSelector = defineInformationSelector({
   selectorId: "runtime.delivery.terminal",

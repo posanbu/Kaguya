@@ -189,6 +189,13 @@ describe("KaguyaRuntime one-shot scheduler lifecycle", () => {
           },
           {
             activation: {
+              instanceId: "router.default.situation",
+              definitionId: "agent.situation",
+            },
+            selectionPolicy: { tier: "light" },
+          },
+          {
+            activation: {
               instanceId: "heavy.default",
               definitionId: "agent.heavy",
             },

@@ -266,7 +266,9 @@ describe("Router Light via DeepSeek-compatible provider", () => {
       expect(freeze).toHaveBeenCalledTimes(1),
     );
     expect(f.requests).toHaveLength(0);
-    expect(kinds(await f.atoms())).not.toContain("agent.light.decision.completed");
+    expect(kinds(await f.atoms())).not.toContain(
+      "agent.light.decision.completed",
+    );
     await f.waitForDeliveries(1);
     await f.settle();
     expect(kinds(await f.atoms())).toContain("agent.router.turn.completed");
@@ -283,14 +285,37 @@ describe("Router Light via DeepSeek-compatible provider", () => {
     expect((decision.payload.action as { action: string }).action).toBe(
       output.action,
     );
-    const lightPrompt = graph.find((a) => a.kind === "core.model.task.requested" && a.payload.taskId === "agent.light.decide")?.payload.prompt as any;
-    expect(lightPrompt.variables.some((v: any) => v.name === "history" || v.name === "turn")).toBe(false);
-    expect(lightPrompt.variables.find((v: any) => v.name === "scope_context")?.content).toContain("【未读】");
+    const lightPrompt = graph.find(
+      (a) =>
+        a.kind === "core.model.task.requested" &&
+        a.payload.taskId === "agent.light.decide",
+    )?.payload.prompt as any;
+    expect(
+      lightPrompt.variables.some(
+        (v: any) => v.name === "history" || v.name === "turn",
+      ),
+    ).toBe(false);
+    expect(
+      lightPrompt.variables.find((v: any) => v.name === "scope_context")
+        ?.content,
+    ).toContain("【未读】");
     if (output.action === "message") {
-      const heavyPrompt = graph.find((a) => a.kind === "core.model.task.requested" && a.payload.taskId === "agent.heavy.respond")?.payload.prompt as any;
+      const heavyPrompt = graph.find(
+        (a) =>
+          a.kind === "core.model.task.requested" &&
+          a.payload.taskId === "agent.heavy.respond",
+      )?.payload.prompt as any;
       for (const name of ["global_context", "scope_context"])
-        expect(heavyPrompt.variables.find((v: any) => v.name === name)?.content).toBe(lightPrompt.variables.find((v: any) => v.name === name)?.content);
-      expect(heavyPrompt.variables.some((v: any) => v.name === "history" || v.name === "turn")).toBe(false);
+        expect(
+          heavyPrompt.variables.find((v: any) => v.name === name)?.content,
+        ).toBe(
+          lightPrompt.variables.find((v: any) => v.name === name)?.content,
+        );
+      expect(
+        heavyPrompt.variables.some(
+          (v: any) => v.name === "history" || v.name === "turn",
+        ),
+      ).toBe(false);
     }
     expect(f.requests.filter((r) => r.model === "deepseek-light")).toHaveLength(
       1,
@@ -427,11 +452,9 @@ describe("Router Light via DeepSeek-compatible provider", () => {
       const graph = await f.atoms();
       expect(
         graph.find((a) => a.kind === "agent.light.decision.completed")?.payload,
-      ).toMatchObject({
-        action: { action: "silent", reason: "light-unavailable" },
-      });
-      expect(kinds(graph)).toContain("agent.router.turn.silent");
-      expect(kinds(graph)).not.toContain("agent.router.turn.failed");
+      ).toBeUndefined();
+      expect(kinds(graph)).toContain("agent.router.turn.failed");
+      expect(kinds(graph)).not.toContain("agent.router.turn.silent");
       expect(kinds(graph)).not.toContain("core.message.assistant.text");
       expect(f.requests).toHaveLength(2);
       expect(f.requests[1]?.messages).toEqual(f.requests[0]?.messages);
@@ -449,7 +472,7 @@ describe("Router Light via DeepSeek-compatible provider", () => {
       ).toEqual(["core.model.task.failed"]);
       expect(
         graph.filter((a) => a.kind === "agent.light.decision.completed"),
-      ).toHaveLength(1);
+      ).toHaveLength(0);
       await f.restart();
       await f.settle();
       expect(f.requests).toHaveLength(2);
@@ -459,7 +482,7 @@ describe("Router Light via DeepSeek-compatible provider", () => {
       ).toHaveLength(tasks.length);
       expect(
         replayed.filter((a) => a.kind === "agent.light.decision.completed"),
-      ).toHaveLength(1);
+      ).toHaveLength(0);
     },
   );
 
@@ -503,12 +526,10 @@ describe("Router Light via DeepSeek-compatible provider", () => {
     expect(
       graph.find((a) => a.kind === "agent.light.decision.completed")?.payload
         .action,
-    ).toEqual({
-      action: "silent",
-      reason: "light-unavailable",
-    });
+    ).toBeUndefined();
     expect(kinds(graph)).toContain("core.model.task.failed");
-    expect(kinds(graph)).toContain("agent.router.turn.silent");
+    expect(kinds(graph)).toContain("agent.router.turn.failed");
+    expect(kinds(graph)).not.toContain("agent.router.turn.silent");
     expect(kinds(graph)).not.toContain("core.message.assistant.text");
     expect(f.requests).toHaveLength(1);
     expect(f.delivered).not.toHaveBeenCalled();
@@ -834,13 +855,13 @@ describe("Router Light via DeepSeek-compatible provider", () => {
       await f.settle();
       const graph = await f.atoms();
       expect(kinds(graph)).toContain("core.model.task.cancelled");
-      expect(kinds(graph)).toContain("agent.router.turn.silent");
-      expect(kinds(graph)).not.toContain("agent.router.turn.failed");
+      expect(kinds(graph)).toContain("agent.router.turn.failed");
+      expect(kinds(graph)).not.toContain("agent.router.turn.silent");
       expect(kinds(graph)).not.toContain("core.message.assistant.text");
       expect(
         graph.find((a) => a.kind === "agent.light.decision.completed")?.payload
           .action,
-      ).toEqual({ action: "silent", reason: "light-unavailable" });
+      ).toBeUndefined();
       expect(f.requests).toHaveLength(1);
     } finally {
       release(speak);
@@ -1127,10 +1148,30 @@ describe("independent QQ expression plugin through real Runtime", () => {
         await f.settle();
       }
       const deliveredMessages = f.delivered.mock.calls.map(
-        (call) => (call as unknown as [unknown, { kind: string; text: string; expression?: { kind: string; id: string } }])[1],
+        (call) =>
+          (
+            call as unknown as [
+              unknown,
+              {
+                kind: string;
+                text: string;
+                expression?: { kind: string; id: string };
+              },
+            ]
+          )[1],
       );
-      expect(deliveredMessages.every((message) => message.kind === "text" && message.text === "reply-body")).toBe(true);
-      expect(deliveredMessages.some((message) => message.expression?.kind === "face" && message.expression.id === "14")).toBe(true);
+      expect(
+        deliveredMessages.every(
+          (message) => message.kind === "text" && message.text === "reply-body",
+        ),
+      ).toBe(true);
+      expect(
+        deliveredMessages.some(
+          (message) =>
+            message.expression?.kind === "face" &&
+            message.expression.id === "14",
+        ),
+      ).toBe(true);
       expect(
         (await f.atoms()).filter((a) => a.kind === "core.delivery.delivered"),
       ).toHaveLength(5);

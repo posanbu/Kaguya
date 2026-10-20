@@ -70,7 +70,11 @@ import type {
   PlatformInboundMessage,
   PlatformOutboundTransport,
 } from "@kaguya/platform-adapters";
-import { z } from "@kaguya/schema";
+import {
+  z,
+  freezeInformationAtom,
+  informationAtomSchema,
+} from "@kaguya/schema";
 import {
   defineInformationKind,
   defineInformationModule,
@@ -354,6 +358,7 @@ describe("KaguyaRuntime", () => {
         "agent.heavy",
         "memory.identity",
         "agent.router",
+        "agent.situation",
       ]);
       expect(logs).toContainEqual(
         expect.objectContaining({
@@ -396,7 +401,7 @@ describe("KaguyaRuntime", () => {
         tier: "heavy",
         providerId: "test",
         modelId: "deterministic-heavy",
-        promptVariableCount: 6,
+        promptVariableCount: 7,
       });
       expect(requestSummary?.promptPreview).toContain("当前是私聊");
       expect(requestSummary?.references).toEqual(expect.any(Array));
@@ -609,7 +614,11 @@ describe("KaguyaRuntime", () => {
         expect.arrayContaining([
           expect.objectContaining({
             variableName: "scope_context",
-            informationIds: [graph.find((atom) => atom.kind === "agent.router.memory.context.frozen")!.informationId],
+            informationIds: [
+              graph.find(
+                (atom) => atom.kind === "agent.router.memory.context.frozen",
+              )!.informationId,
+            ],
           }),
         ]),
       );
@@ -1151,6 +1160,8 @@ describe("KaguyaRuntime", () => {
           "agent.light.decision.completed",
           "agent.router.turn.completed",
           "core.delivery.delivered",
+          "core.delivery.started",
+          "agent.situation.frozen",
         ]),
       );
       expect(result.deliveries).toEqual([]);
@@ -1163,11 +1174,8 @@ describe("KaguyaRuntime", () => {
 
       const byKind = new Map(graph.map((atom) => [atom.kind, atom]));
       const chain = [
-        ["agent.attention.arousal.completed", "agent.heartbeat.candidate"],
-        [
-          "agent.light.decision.completed",
-          "agent.router.turn.context.completed",
-        ],
+        ["agent.attention.arousal.completed", "agent.situation.frozen"],
+        ["agent.light.decision.completed", "agent.attention.arousal.completed"],
         [
           "agent.router.message.intent.requested",
           "agent.light.decision.completed",
@@ -1272,7 +1280,7 @@ describe("KaguyaRuntime", () => {
         expect.arrayContaining([
           "core.model.task.requested",
           "core.model.task.failed",
-          "agent.router.turn.silent",
+          "agent.router.turn.failed",
         ]),
       );
       for (const forbiddenKind of [
@@ -1844,9 +1852,12 @@ function createMessageComposition(
       renderStructuredOutputPrompt,
       approvals: activations
         .filter((a) =>
-          ["agent.heavy", "agent.router", "memory.expression"].includes(
-            a.definitionId,
-          ),
+          [
+            "agent.heavy",
+            "agent.router",
+            "agent.situation",
+            "memory.expression",
+          ].includes(a.definitionId),
         )
         .map((a) => ({
           activation: {
@@ -2102,15 +2113,15 @@ it("recovers Light waits after restart, merges new input and exhausts the shared
       .map((atom) => atom.payload.attempt),
   ).toEqual([1, 2, 3]);
   expect(
-    graph.find((atom) => atom.kind === "agent.router.turn.silent")?.payload
-      .reasonCodes,
-  ).toEqual(["light-unavailable"]);
+    graph.find((atom) => atom.kind === "agent.router.turn.failed")?.payload
+      .reason,
+  ).toEqual("model-task-failed");
   expect(
     graph.some((atom) =>
       [
         "core.message.assistant.text",
         "core.delivery.requested",
-        "agent.router.turn.failed",
+        "agent.router.turn.silent",
       ].includes(atom.kind),
     ),
   ).toBe(false);
@@ -2119,3 +2130,126 @@ it("recovers Light waits after restart, merges new input and exhausts the shared
     graph.filter((atom) => atom.kind === "core.model.task.failed"),
   ).toHaveLength(1);
 }, 30000);
+
+it.each([true, false])(
+  "does not resend a recovered delivery (started marker: %s)",
+  async (hasMarker) => {
+    const { runtime: first, database } = await createRuntime();
+    const sendMessage = vi.fn<PlatformOutboundTransport["sendMessage"]>(
+      async (target) => ({
+        ok: true,
+        adapterId: "web.ui.main",
+        platform: "web",
+        target,
+      }),
+    );
+    first.registerTransport({
+      adapterId: "web.ui.main",
+      platform: "web",
+      transport: { sendMessage },
+    });
+    await first.start();
+    const submitted = await first.submit(webMessage());
+    await settleDeliveries(database);
+    const graph = await database.information.query({
+      informationId: submitted.rootInformationId,
+    });
+    const original = graph.find((a) => a.kind === "core.delivery.requested")!;
+    await first.close();
+    const append = async (atom: typeof original) =>
+      database.information.append(
+        freezeInformationAtom(informationAtomSchema.parse(atom)),
+        [...new Set(atom.references.map((r) => r.relation))].map(
+          (relation) => ({ relation, required: false, multiple: true }),
+        ),
+      );
+    const pending = { ...original, informationId: "recover:delivery" };
+    await append(pending);
+    if (hasMarker)
+      await append({
+        ...original,
+        informationId: "recover:started",
+        kind: "core.delivery.started",
+        payload: { attemptId: "previous-process" },
+        references: [
+          { relation: "core:caused-by", informationId: pending.informationId },
+          {
+            relation: "core:context",
+            informationId: submitted.rootInformationId,
+          },
+        ],
+      });
+    // Simulate an interrupted lease from either the current or legacy runtime.
+    await database.sql.query(
+      "UPDATE information_deliveries SET state = 'pending', attempts = $1 WHERE subscription_id = 'kaguya.runtime.delivery' AND information_id = $2",
+      [hasMarker ? 0 : 1, pending.informationId],
+    );
+    let sequence = 0;
+    const restored = new KaguyaRuntime({
+      ...createMessageComposition(),
+      database,
+      informationIdGenerator: () => `recover:result:${++sequence}`,
+    });
+    resources.find((r) => r.runtime === first)!.runtime = restored;
+    restored.registerTransport({
+      adapterId: "web.ui.main",
+      platform: "web",
+      transport: { sendMessage },
+    });
+    await restored.start();
+    await settleDeliveries(database);
+    const terminal = (
+      await database.information.query({
+        informationId: submitted.rootInformationId,
+      })
+    ).find(
+      (a) =>
+        a.kind === "core.delivery.failed" &&
+        a.references.some(
+          (r) =>
+            r.relation === "core:status-of" &&
+            r.informationId === pending.informationId,
+        ),
+    );
+    expect(terminal?.payload.outcome).toBe("unknown");
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  },
+  TEST_TIMEOUT,
+);
+
+it(
+  "starts against the existing attention and Router durable subscription identities",
+  async () => {
+    const { runtime, database } = await createRuntime();
+    await runtime.start();
+    await runtime.close();
+    await database.information.reliable.configureSubscriptions([
+      {
+        subscriptionId: "attention-arousal.default:attention-arousal.observe",
+        kind: "agent.heartbeat.candidate",
+      },
+      {
+        subscriptionId:
+          "router.default:agent.router.observe.agent.router.turn.context.completed",
+        kind: "agent.router.turn.context.completed",
+      },
+    ]);
+    const restored = new KaguyaRuntime({
+      ...createMessageComposition(),
+      database,
+    });
+    resources.find((r) => r.runtime === runtime)!.runtime = restored;
+    await restored.start();
+    await restored.submit(webMessage());
+    await settleDeliveries(database);
+    expect(
+      (
+        await database.information.find({
+          kinds: ["agent.situation.frozen"],
+          limit: 10,
+        })
+      ).length,
+    ).toBe(1);
+  },
+  TEST_TIMEOUT,
+);

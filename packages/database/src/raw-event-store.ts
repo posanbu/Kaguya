@@ -573,7 +573,53 @@ export class PostgresRawEventStore implements RawContextAccess {
         ...new Set(items.flatMap((item) => item.block.informationIds)),
       ],
     });
+    const includedIds = [
+      ...new Set(
+        [...global, ...current].map((item) => item.event.informationId),
+      ),
+    ];
+    const registered = await this.database.query<{
+      information_id: string;
+      created_at: string | Date;
+    }>(
+      "SELECT information_id, created_at FROM information_log_outbox WHERE information_id=ANY($1::text[])",
+      [includedIds],
+    );
+    const received = new Map(
+      registered.rows.map((row) => [row.information_id, iso(row.created_at)]),
+    );
     return {
+      through,
+      evidence: [
+        ...new Map(
+          [...global, ...current].map((item) => [
+            item.event.informationId,
+            item,
+          ]),
+        ).values(),
+      ]
+        .sort((a, b) => a.event.position - b.event.position)
+        .map(({ event, block }) => ({
+          id: event.informationId,
+          sequence: event.position,
+          sceneId: event.scope ? keyOf(event.scope) : "global",
+          source: event.kind.startsWith("core.delivery.")
+            ? ("delivery" as const)
+            : event.kind === "core.message.inbound.text"
+              ? ("composer" as const)
+              : ("system" as const),
+          actorId: String(
+            (event.payload.source as { senderId?: string } | undefined)
+              ?.senderId ?? "system",
+          ),
+          occurredAt: event.occurredAt,
+          receivedAt: received.get(event.informationId) ?? event.occurredAt,
+          kind: event.kind.startsWith("core.delivery.")
+            ? ("delivery" as const)
+            : ("message" as const),
+          text: block.text,
+          replaces: [],
+        })),
       global: block(global),
       currentScope: block(current),
       overBudget: length() > 32_000,

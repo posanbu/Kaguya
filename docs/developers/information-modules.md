@@ -145,11 +145,13 @@ Host 在任何 `create()` 前完成全部启用实例的 settings parse、深冻
 
 `delivery: "durable"` 的业务订阅使用持久化 delivery、租约 claim、有限重试和 token fencing。订阅只接收登记后的新事实；输入原子与匹配 delivery intent 同事务提交。相同 activation 与 subscription 身份重启后可恢复未确认工作。普通 `live` 订阅用于即时观察，不提供离线恢复。
 
+可靠订阅默认使用 `<instanceId>:<subscriptionId>` 作为持久身份。模块迁移时可通过可选的 `durableSubscriptionId` 保留旧身份，使已有队列由新处理器继续消费。该字段只允许用于 `delivery: "durable"`，格式与订阅 ID 相同。不同启用订阅不得共用同一个持久身份。
+
 `context.registerOnce(operation, key, definition, input)` 为逻辑输出使用唯一槽，并返回实际赢家。`context.commitTerminal(group, subjectInformationId, definition, input)` 为同一主体竞争一个跨 kind 的终态，因此返回类型允许不同终态 kind。操作键必须来自稳定业务输入；实例 ID 只标识投递接收方。演示回复以输入 ID 与设置哈希区分语义任务，相同设置的重复实例会复用同一结果。
 
 宿主为输出补齐 `module:<instanceId>` source、时间、指向输入的 `core:caused-by` 及继承的 `core:context`。调用方不能覆盖这些保留引用。durable handler 不得用普通 `register()` 绕过去重；其嵌套生命周期写入也受当前 claim 保护。重试耗尽会产生 `execution.exhausted` 可见事实，健康检查只返回 pending、retry、exhausted 与最老 pending 年龄。
 
-Runtime 的 `submit()` 返回已接受输入的根 ID；可靠回复异步推进，返回时 `deliveries` 通常为空。调用方应通过账本观察终态。外部模型和平台副作用仍是 at-least-once：进程可能在外部动作完成、账本终态提交之前崩溃。
+Runtime 的 `submit()` 返回已接受输入的根 ID；可靠回复异步推进，返回时 `deliveries` 通常为空。调用方应通过账本观察终态。模型调用在外部返回与账本终态提交之间崩溃时，恢复过程仍可能再次调用模型。平台发送前先登记 `core.delivery.started`；恢复时已有发送标记但缺少回执的请求记为结果未知，不自动重发。
 
 ## Durable One-Shot 能力
 

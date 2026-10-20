@@ -25,6 +25,7 @@ export {
 } from "./first-party/person-profile.js";
 export {
   createRouterModule,
+  createSituationRuntimeModule,
   routerSettingsSchema,
   routerStateSelector,
   lightActionSchema,

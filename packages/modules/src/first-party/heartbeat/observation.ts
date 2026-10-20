@@ -6,7 +6,10 @@
  * 查询有界且不写账本，保持原有导出对象身份与 Scheduler/Router 外部契约。
  */
 import type { DeepReadonly, InformationAtom } from "@kaguya/schema";
-import { defineInformationSelector } from "@kaguya/sdk";
+import {
+  defineInformationSelector,
+  type InformationSelectorLedger,
+} from "@kaguya/sdk";
 import {
   oneShotDueInformationKind,
   oneShotRequestedInformationKind,
@@ -27,6 +30,40 @@ import {
   attentionArousalStateRecordedInformationKind,
   heartbeatScheduledInformationKind,
 } from "../information-kinds.js";
+/** A freeze alone is not an observation. Only an observe gate advances the observation watermark. */
+async function latestObservedContext(
+  ledger: InformationSelectorLedger,
+  scopeKey: string,
+) {
+  let throughInformationId: string | undefined;
+  for (;;) {
+    const turns = await ledger.find({
+      kinds: [turnContextCompletedInformationKind.kind],
+      scopeKey,
+      registrationOrder: true,
+      order: "desc",
+      limit: 1000,
+      ...(throughInformationId ? { throughInformationId } : {}),
+    });
+    for (const turn of turns) {
+      if (turn.informationId === throughInformationId) continue;
+      const decision = (
+        await ledger.find({
+          kinds: [attentionArousalCompletedInformationKind.kind],
+          payloadContains: {
+            candidateInformationId: String(turn.payload.candidateInformationId),
+            outcome: "observe",
+          },
+          limit: 1,
+        })
+      )[0];
+      if (decision) return turn;
+    }
+    if (turns.length < 1000) return undefined;
+    throughInformationId = turns.at(-1)!.informationId;
+  }
+}
+
 interface ObservationSource {
   platform?: string;
   adapterId?: string;
@@ -227,15 +264,7 @@ export const heartbeatDeferredObservationSelector = defineInformationSelector({
       )[0];
       if (!runtimeContext) continue;
       const candidatePayload = candidate.payload as any;
-      const observed = (
-        await ledger.find({
-          kinds: [turnContextCompletedInformationKind.kind],
-          scopeKey,
-          registrationOrder: true,
-          order: "desc",
-          limit: 1,
-        })
-      )[0];
+      const observed = await latestObservedContext(ledger, scopeKey);
       const watermark = observed?.payload.observedThroughInformationId as
         string | undefined;
       const inbounds = await ledger.find({
@@ -333,13 +362,8 @@ export const heartbeatObservationSelector = defineInformationSelector({
       limit: 1,
     });
     const candidate = latest[0];
-    const observedContexts = await ledger.find({
-      kinds: [turnContextCompletedInformationKind.kind],
-      scopeKey,
-      registrationOrder: true,
-      order: "desc",
-      limit: 1,
-    });
+    const observed = await latestObservedContext(ledger, scopeKey);
+    const observedContexts = observed ? [observed] : [];
     const selected = new Map(
       [...open, ...latest, ...observedContexts].map((a) => [
         a.informationId,

@@ -33,18 +33,12 @@ import {
 
 export const heartbeatSettingsSchema = z
   .object({
-    interruptQuietMs: z
-      .number()
-      .int()
-      .min(0)
-      .max(60_000)
-      .default(1000)
-      .meta({
-        title: "规划打断后静默窗",
-        description: "最后一条新消息后等待多久再重构规划，单位毫秒。",
-        public: true,
-        default: 1000,
-      }),
+    interruptQuietMs: z.number().int().min(0).max(60_000).default(1000).meta({
+      title: "规划打断后静默窗",
+      description: "最后一条新消息后等待多久再重构规划，单位毫秒。",
+      public: true,
+      default: 1000,
+    }),
     maxReplacementAttempts: z.number().int().min(1).max(20).meta({
       title: "最大替换次数",
       description: "当前轮次允许替换候选的最大次数。",
@@ -158,7 +152,8 @@ export const heartbeatModule = defineInformationModule({
       );
       const count =
         consecutive < 0
-          ? terminals.filter((atom) => atom.kind === "agent.router.turn.silent").length
+          ? terminals.filter((atom) => atom.kind === "agent.router.turn.silent")
+              .length
           : consecutive;
       if (count < settings.noActionBackoffStartCount) return 0;
       const latest = terminals.find(
@@ -795,6 +790,13 @@ export const heartbeatModule = defineInformationModule({
                 (item) => item.kind === turnCandidateInformationKind.kind,
               );
               if (!previousObservation) return;
+              // A failure keeps unread input but must not create an automatic retry loop.
+              if (
+                atom.kind === "agent.router.turn.failed" &&
+                latest.informationId ===
+                  previousObservation.payload.unreadThroughInformationId
+              )
+                return;
               const waiting = state.some(
                 (item) =>
                   item.kind === turnWaitingInformationKind.kind &&

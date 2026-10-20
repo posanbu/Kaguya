@@ -183,6 +183,7 @@ export function createMessageComposition(
           [
             "agent.heavy",
             "agent.router",
+            "agent.situation",
             "memory.expression",
             "plugin.qq-expression",
           ].includes(activation.definitionId) ||

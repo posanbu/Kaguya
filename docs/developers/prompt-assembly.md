@@ -11,13 +11,13 @@ description: 查看 Light、Heavy 与结构化输出协议的生产模板，以�
 
 当前模板声明包含 Light、Heavy、身份、表达与人物事实等仍在使用的任务；主动记忆录入模板已随对应模块移除。
 
-独立的[情境—行动上下文模型](./situation-model/)定义频繁更新与行动连续性的目标契约。本页继续描述当前生产模板。公共契约或独立插件通过测试，不表示本页模板已经接入连续性检查点。
+[情境—行动上下文模型](./situation-model/)的公共契约保持 `1.0.0`。默认链由 `agent.situation` 冻结证据和已有行动结果，再依次触发注意模块、Light 和 Heavy。原生消息使用独立的运行时扩展 `version: 1`。
 
 ## Light：决定是否交给 Heavy
 
-Router 先等待原始 Memory 写入越过本轮账本上界，再冻结 `global_context` 与 `scope_context`。前者包含近十分钟各 scope 的运行事件；后者包含当前 scope 近十分钟、窗口前最近三十条语义事件及全部带“未读”标记的本轮入站原文。两块文本及完整来源 ID 持久化在同一个冻结事实中。Light 还读取身份、选中记忆、平台参与策略、当前会话背景和 `decision_state` 中的动作及等待预算。[变量编译位置](https://github.com/posanbu/Kaguya/blob/main/packages/modules/src/first-party/router/light.ts)、[原始 Memory 读取](https://github.com/posanbu/Kaguya/blob/main/packages/database/src/raw-event-store.ts)。
+情境运行模块先等待原始 Memory 写入越过本轮账本上界，再冻结 `global_context` 与 `scope_context`。前者包含近十分钟各 scope 的运行事件；后者包含当前 scope 近十分钟、窗口前最近三十条语义事件及全部带“未读”标记的本轮入站原文。两块文本及完整来源 ID 持久化在同一个冻结事实中。Light 还读取身份、选中记忆、平台参与策略、当前会话背景和 `decision_state` 中的动作及等待预算。[变量编译位置](https://github.com/posanbu/Kaguya/blob/main/packages/modules/src/first-party/router/light.ts)、[原始 Memory 读取](https://github.com/posanbu/Kaguya/blob/main/packages/database/src/raw-event-store.ts)。
 
-当前 Light 任务输出 `message | wait | silent` 和理由；`message` 只附带必要的目标信息，不传话题、回复动作、焦点、语气或写作建议。Model Task 不再保存版本字段；已完成任务的请求仍保留原始 Prompt。
+冻结事实生成后，注意模块只读取元信息。允许观察时，独立 Router 调用 Light。`defer` 保留未读范围。当前 Light 任务输出 `message | wait | silent` 和结构化原因码。`message` 只附带必要的目标信息，不传话题、回复动作、焦点、语气或写作建议。Model Task 不再保存版本字段；已完成任务的请求仍保留原始 Prompt。
 
 `conversation.resolution.targets` 提供当前 adapter 的有界群名候选及本轮相关私聊。Light 可以根据简称、关键词或描述选择群，不要求输入包含完整群名。`relation=available` 表示目录候选，`status=resolved` 表示宿主核实该候选可用；两者都不证明用户意图。Light 仍须根据请求区分目标，宿主继续复核引用、出站白名单和连接代次。候选目录不包含目标群正文，也不会传给跨会话正文生成任务。
 
@@ -48,7 +48,7 @@ Light 是 `object` Model Task。Runtime 先把任务输出 schema 转为 JSON Sc
 
 ## Heavy：独立决定普通回复或沉默
 
-Light 选择 `message` 后，Heavy 根据消息意图取得同一个原始 Memory 冻结事实，逐字复用 `global_context` 与 `scope_context`。Light 生成的表达计划不会进入 Heavy Prompt。独立 `memory`、人物资料、场景和 `conversation.background` 保持原职责。两块事件文本共以 32,000 字为目标预算；三十条历史保底与未读原文不裁剪。[上下文选择](https://github.com/posanbu/Kaguya/blob/main/packages/modules/src/first-party/heavy/message-context.ts)、[变量编译](https://github.com/posanbu/Kaguya/blob/main/packages/modules/src/first-party/heavy/message-prompt.ts)。
+Light 选择 `message` 后，Heavy 根据消息意图取得同一个原始 Memory 冻结事实，逐字复用 `global_context` 与 `scope_context`。Light 不生成供 Heavy 使用的情境摘要。独立 `memory`、人物资料、场景和 `conversation.background` 保持原职责。两块事件文本共以 32,000 字为目标预算；三十条历史保底与未读原文不裁剪。[上下文选择](https://github.com/posanbu/Kaguya/blob/main/packages/modules/src/first-party/heavy/message-context.ts)、[变量编译](https://github.com/posanbu/Kaguya/blob/main/packages/modules/src/first-party/heavy/message-prompt.ts)。
 
 以下是 [Heavy 主模板](https://github.com/posanbu/Kaguya/blob/main/packages/modules/templates/heavy.default.hbs)，其中 `behavior_policy`、`platform_style`、`scene`、`bootstrap`、`global_context`、`scope_context`、`memory` 会替换为后续模板渲染结果；`persona`、身份、时间、冻结事实和上下文状态也在请求时填入。新请求没有独立的 `history` 或 `turn` 文本段。
 
@@ -57,6 +57,18 @@ Light 选择 `message` 后，Heavy 根据消息意图取得同一个原始 Memor
 <<< ../../packages/modules/templates/heavy.default.hbs [Heavy 主模板 ~~vscode-icons:file-type-handlebars~~]
 
 :::
+
+### 原生接续与行动结果
+
+Heavy 普通回应任务追加 `action_records`。这些记录来自冻结边界内已保存的模型结果、行动终态和投递回执。装配过程不推断承诺、待办或行动理由。
+
+Model Task 在调用前保存实际 `messages`。请求以同一冻结输入重试。完成后保存服务返回的原生消息、推理项与协议元数据。沉默也保存这些内容。取消或已被替代的结果不进入后续接续。Light 与 Heavy 的记录分开。
+
+LLM 客户端接受文本 `prompt` 或结构化 `messages`，两者互斥。Heavy 接续按原顺序保留兼容模型的原生返回，再附上已记录的执行结果和当前冻结 Prompt。模型身份改变时，只在工具交互闭合后开始新的请求历史。不可读数据保持原形，不转写成正文。
+
+原始证据窗口仍使用既有 32,000 字目标预算。接续另按完整请求的 UTF-8 JSON 字节检查 128,000 字节上限。它是保守容量约束，不是精确 token 计数。先保留未完成行动、等待、未知结果和未配对工具，再选取可容纳的近期闭合片段。必要内容仍超限时记录受阻，不调用摘要模型。原账本记录不删除。
+
+界面只展示服务实际提供的可读推理。没有内容时显示“未提供”。模型错误单独显示，不转换为沉默。
 
 ### 行为、平台与场景
 

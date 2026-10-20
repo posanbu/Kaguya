@@ -130,6 +130,13 @@ describe("shared Runtime Composition", () => {
       },
       {
         activation: {
+          instanceId: "router.default.situation",
+          definitionId: "agent.situation",
+        },
+        selectionPolicy: { tier: "light" },
+      },
+      {
+        activation: {
           instanceId: "memory.expression.default",
           definitionId: "memory.expression",
         },
@@ -140,7 +147,7 @@ describe("shared Runtime Composition", () => {
       moduleConfigs.filter(
         (config) =>
           config.enabled && !config.definitionId.startsWith("adapter."),
-      ).length,
+      ).length + 1,
     );
     expect(
       composition.activations.some(

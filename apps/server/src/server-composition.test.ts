@@ -58,6 +58,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 
 import { createHttpApplication } from "./app.js";
+import { createInspectionService } from "./inspection.js";
+import { situationViewSchema } from "@kaguya/schema";
 import type { ServerConfig } from "./config.js";
 import {
   createRuntimeModelSelectionResolver,
@@ -251,6 +253,12 @@ describe("unified server composition", () => {
     const app = await createHttpApplication({
       config: config(workspaceRoot),
       webGateway,
+      inspection: createInspectionService({
+        ledger: database.information,
+        database,
+        modules: () => runtime.inspectModules(),
+        secrets: { gatewayToken },
+      }),
     });
     resources.app = app;
 
@@ -320,6 +328,8 @@ describe("unified server composition", () => {
         "core.message.assistant.text",
         "core.delivery.requested",
         "core.delivery.delivered",
+        "core.delivery.started",
+        "agent.situation.frozen",
       ]),
     );
     expect(
@@ -334,7 +344,62 @@ describe("unified server composition", () => {
         modelId: "deterministic-heavy",
       },
     });
-    expect(JSON.stringify(graph)).not.toMatch(/traceId|raw/u);
+    const situationResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/inspection/situation",
+      headers: { authorization: `Bearer ${gatewayToken}` },
+    });
+    expect(situationResponse.statusCode).toBe(200);
+    const situation = situationViewSchema.parse(situationResponse.json().data);
+    expect(situation.frames).toHaveLength(1);
+    expect(
+      situation.frames[0]!.current.evidence.map((item) => item.id),
+    ).toContain(inbound!.informationId);
+    expect(new Set(situation.steps.map((step) => step.tier))).toEqual(
+      new Set(["light", "heavy"]),
+    );
+    for (const step of situation.steps) {
+      expect(step).toMatchObject({
+        frameId: situation.frames[0]!.id,
+        sceneId: situation.frames[0]!.current.sceneId,
+        phase: "completed",
+        nativeAvailable: true,
+      });
+      const result = graph.find(
+        (atom) =>
+          atom.kind === "core.model.task.completed" &&
+          atom.references.some(
+            (ref) =>
+              ref.relation === "core:status-of" &&
+              ref.informationId === step.id,
+          ),
+      );
+      expect(result?.payload.native).toMatchObject({ version: 1 });
+      const request = graph.find((atom) => atom.informationId === step.id)!;
+      if (step.tier === "heavy") {
+        expect(
+          (request.payload.messages as { role: string; content: string }[]).at(
+            -1,
+          ),
+        ).toEqual({
+          role: "user",
+          content: (request.payload.prompt as { text: string }).text,
+        });
+      }
+    }
+    const frozenBeforeRead = graph.find(
+      (atom) => atom.kind === "agent.situation.frozen",
+    )!;
+    expect(
+      await database.information.get(frozenBeforeRead.informationId),
+    ).toEqual(frozenBeforeRead);
+    expect(JSON.stringify(graph)).not.toMatch(/traceId/u);
+    // rawInformationId is a provenance link, not an adapter's raw payload.
+    for (const atom of graph) {
+      expect(atom.payload).not.toHaveProperty("raw");
+      if (atom.payload.source)
+        expect(atom.payload.source).not.toHaveProperty("raw");
+    }
     // 数据库初始化和两次持久化等待有独立预算；资源清理由 afterEach 覆盖所有失败路径。
   }, 30_000);
 

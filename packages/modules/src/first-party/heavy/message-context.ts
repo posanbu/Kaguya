@@ -77,13 +77,27 @@ export const turnMessageContextSelector = defineInformationSelector({
       turn,
       intent,
     });
-    const requests = (await ledger.related({
-      from: [sourceAtom.informationId],
-      relation: "core:caused-by",
-      direction: "incoming",
-      limit: 100,
-    })).filter((atom) => atom.kind === "core.model.task.requested" && atom.payload.taskId === "agent.heavy.respond");
-    return [...new Set([...selected, ...requests.flatMap((atom) => [atom.informationId, ...((atom.payload.contextInformationIds as string[]) ?? [])])])];
+    const requests = (
+      await ledger.related({
+        from: [sourceAtom.informationId],
+        relation: "core:caused-by",
+        direction: "incoming",
+        limit: 100,
+      })
+    ).filter(
+      (atom) =>
+        atom.kind === "core.model.task.requested" &&
+        atom.payload.taskId === "agent.heavy.respond",
+    );
+    return [
+      ...new Set([
+        ...selected,
+        ...requests.flatMap((atom) => [
+          atom.informationId,
+          ...((atom.payload.contextInformationIds as string[]) ?? []),
+        ]),
+      ]),
+    ];
   },
 });
 
@@ -283,7 +297,21 @@ export async function selectFrozenTurnMessageContext(options: {
     direction: "incoming",
     limit: 100,
   });
-  const rawSnapshot = rawSnapshots.find((atom) => atom.kind === frozenRawContextInformationKind.kind && atom.payload.turnInformationId === turn.informationId);
+  const rawSnapshot = rawSnapshots.find(
+    (atom) =>
+      atom.kind === frozenRawContextInformationKind.kind &&
+      atom.payload.turnInformationId === turn.informationId,
+  );
+  const situation = rawSnapshots.find(
+    (atom) => atom.kind === "agent.situation.frozen",
+  );
+  const nativeHistoryIds = (situation?.payload.historyInformationIds ??
+    []) as string[];
+  for (let start = 0; start < nativeHistoryIds.length; start += 1000)
+    await ledger.find({
+      informationIds: nativeHistoryIds.slice(start, start + 1000),
+      limit: 1000,
+    });
   return [
     ...new Set([
       sourceInformationId,
@@ -293,6 +321,12 @@ export async function selectFrozenTurnMessageContext(options: {
       ...profileIds,
       ...history.map((atom) => atom.informationId),
       ...(rawSnapshot ? [rawSnapshot.informationId] : []),
+      ...(situation
+        ? [
+            situation.informationId,
+            ...((situation.payload.historyInformationIds ?? []) as string[]),
+          ]
+        : []),
       ...quotes.map((atom) => atom.informationId),
     ]),
   ];

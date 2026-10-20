@@ -1,5 +1,5 @@
 /** The immutable two-block Memory context shared by Light and Heavy. */
-import { z } from "@kaguya/schema";
+import { z, situationEvidenceRecordSchema } from "@kaguya/schema";
 import { defineInformationKind } from "@kaguya/sdk";
 export const frozenRawContextInformationKind = defineInformationKind({
   kind: "agent.router.memory.context.frozen",
@@ -9,6 +9,8 @@ export const frozenRawContextInformationKind = defineInformationKind({
   payloadSchema: z
     .object({
       turnInformationId: z.string().min(1),
+      through: z.number().int().nonnegative().default(0),
+      evidence: z.array(situationEvidenceRecordSchema).default([]),
       global: z
         .object({ text: z.string(), informationIds: z.array(z.string()) })
         .strict(),

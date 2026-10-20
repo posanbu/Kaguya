@@ -261,7 +261,8 @@ export class ModuleHost {
             this.subscribe(
               module,
               this.#options.core.onDurable(
-                `${module.instanceId}:${subscription.subscriptionId}`,
+                subscription.durableSubscriptionId ??
+                  `${module.instanceId}:${subscription.subscriptionId}`,
                 subscription.definition,
                 (atom, signal) =>
                   this.trackHandler(module.instanceId, () =>
@@ -271,8 +272,12 @@ export class ModuleHost {
                     ),
                   ).then(() => undefined),
                 {
-                  ...(subscription.retryForever === undefined ? {} : { retryForever: subscription.retryForever }),
-                  ...(subscription.retryDelayMs === undefined ? {} : { retryDelayMs: subscription.retryDelayMs }),
+                  ...(subscription.retryForever === undefined
+                    ? {}
+                    : { retryForever: subscription.retryForever }),
+                  ...(subscription.retryDelayMs === undefined
+                    ? {}
+                    : { retryDelayMs: subscription.retryDelayMs }),
                 },
               ),
             );
@@ -650,6 +655,12 @@ export class ModuleHost {
       )
         throw new Error("Invalid or duplicate subscription id");
       ids.add(subscription.subscriptionId);
+      if (
+        subscription.durableSubscriptionId !== undefined &&
+        (subscription.delivery !== "durable" ||
+          !/^[a-z][a-z0-9._:-]*$/u.test(subscription.durableSubscriptionId))
+      )
+        throw new Error("Invalid durable subscription identity");
       if (
         subscription.delivery !== "live" &&
         subscription.delivery !== "durable"

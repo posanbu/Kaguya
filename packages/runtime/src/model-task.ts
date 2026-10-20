@@ -16,6 +16,7 @@
  * readFailureMetrics/readProviderFailure 对跨边界值再次校验，非法指标或诊断不会阻断失败终态提交。
  */
 import { createHash } from "node:crypto";
+import { assembleNativeInput } from "./native-input.js";
 import { InformationCore } from "@kaguya/engine";
 import { KaguyaLlmError, type KaguyaLlmClient } from "@kaguya/llm/client";
 import type { StructuredOutputPromptRenderer } from "@kaguya/llm";
@@ -26,6 +27,10 @@ import {
   type JsonValue,
   jsonValueSchema,
   informationPayloadSchema,
+  nativeMessagesSchema,
+  nativeResponseSchema,
+  type NativeMessage,
+  type NativeResponse,
   z,
 } from "@kaguya/schema";
 import {
@@ -62,6 +67,8 @@ export interface ModelTaskRequest<TOutput> {
   readonly selectionPolicy: z.infer<typeof modelTaskSelectionPolicySchema>;
   readonly prompt: CompiledPrompt;
   readonly contextAtoms: readonly DeepReadonly<InformationAtom>[];
+  readonly messages?: NativeMessage[];
+  readonly nativeContinuation?: boolean;
 }
 type ResultIdentity = {
   readonly requestedInformationId: string;
@@ -69,7 +76,11 @@ type ResultIdentity = {
 };
 export type ModelTaskResult<TOutput> = ResultIdentity &
   (
-    | { readonly status: "completed"; readonly output: TOutput }
+    | {
+        readonly status: "completed";
+        readonly output: TOutput;
+        readonly native?: NativeResponse;
+      }
     | {
         readonly status: "failed";
         readonly error: z.infer<typeof modelTaskSafeErrorSchema>;
@@ -159,6 +170,14 @@ export class ModelTaskClient implements ModelTaskCapability {
         ? request.prompt
         : this.#renderStructuredOutputPrompt(request.prompt, inputJsonSchema);
     const prompt = informationCompiledPromptSchema.parse(renderedPrompt);
+    // The final user message is the audited, schema-enriched current prompt.
+    let messages =
+      request.messages === undefined
+        ? undefined
+        : nativeMessagesSchema.parse([
+            ...request.messages,
+            { role: "user", content: prompt.text },
+          ]);
     const metadata = modelTaskMetadataSchema
       .omit({ resolvedModel: true })
       .parse({
@@ -173,6 +192,7 @@ export class ModelTaskClient implements ModelTaskCapability {
         promptTemplateId: prompt.templateId,
         promptTemplateDigest: prompt.templateDigest,
         promptDigest: prompt.promptDigest,
+        messagesDigest: messages ? digest(canonical(messages)) : null,
         provenance: prompt.provenance,
       });
     const selected = await this.#core.getMany(metadata.contextInformationIds);
@@ -227,6 +247,30 @@ export class ModelTaskClient implements ModelTaskCapability {
     const resolvedModel = requested
       ? undefined
       : modelTaskResolvedModelSchema.parse(this.#resolveModel(selectionPolicy));
+    let inputBlocked: "context-budget" | "native-protocol" | null = null;
+    if (!requested && request.nativeContinuation) {
+      if (messages)
+        throw new Error(
+          "Explicit messages and continuation are mutually exclusive",
+        );
+      try {
+        messages = assembleNativeInput({
+          prompt: prompt.text,
+          atoms: selected,
+          taskId: task.taskId,
+          instanceId: request.activation.instanceId,
+          model: resolvedModel!,
+          maxBytes: 128_000,
+        });
+      } catch (error) {
+        if (!(error instanceof Error)) throw error;
+        if (error.message === "SITUATION_CONTEXT_BUDGET_EXCEEDED")
+          inputBlocked = "context-budget";
+        else if (error.message === "NATIVE_TOOL_INTERACTION_OPEN")
+          inputBlocked = "native-protocol";
+        else throw error;
+      }
+    }
     requested ??= await this.#core.registerOnce(
       "kaguya.model.task.requested",
       key,
@@ -234,7 +278,13 @@ export class ModelTaskClient implements ModelTaskCapability {
       {
         occurredAt: this.#now().toISOString(),
         source: "runtime:model-task",
-        payload: { ...metadata, prompt, resolvedModel: resolvedModel! },
+        payload: {
+          ...metadata,
+          prompt,
+          resolvedModel: resolvedModel!,
+          messages: messages ?? null,
+          inputBlocked,
+        },
         references: [
           {
             relation: "core:caused-by",
@@ -266,7 +316,9 @@ export class ModelTaskClient implements ModelTaskCapability {
     let failureStage:
       | "provider-request"
       | "structured-output-parse"
-      | "task-schema-validation" = "provider-request";
+      | "task-schema-validation"
+      | "context-budget"
+      | "native-protocol" = "provider-request";
     let completed: z.infer<
       typeof modelTaskCompletedInformationKind.payloadSchema
     >;
@@ -288,9 +340,19 @@ export class ModelTaskClient implements ModelTaskCapability {
       const signal = executionSignal
         ? AbortSignal.any([executionSignal, controller.signal])
         : controller.signal;
+      if (requested.payload.inputBlocked) {
+        failureStage = requested.payload.inputBlocked;
+        throw new Error("Native input blocked");
+      }
       const generation = await this.#client.generate({
         modelId: persisted.resolvedModel.modelId,
-        prompt: informationCompiledPromptSchema.parse(requested.payload.prompt),
+        ...(requested.payload.messages
+          ? { messages: nativeMessagesSchema.parse(requested.payload.messages) }
+          : {
+              prompt: informationCompiledPromptSchema.parse(
+                requested.payload.prompt,
+              ),
+            }),
         outputMode: persisted.outputMode,
         outputSchema: providerSchema,
         ...(signal ? { signal } : {}),
@@ -314,6 +376,9 @@ export class ModelTaskClient implements ModelTaskCapability {
       completed = modelTaskCompletedInformationKind.payloadSchema.parse({
         ...persisted,
         output,
+        ...(generation.native
+          ? { native: nativeResponseSchema.parse(generation.native) }
+          : {}),
         ...metrics,
       });
       // 与 Core 的 atom payload 使用同一边界：账本受限标识字段属于输出失败。
@@ -532,8 +597,12 @@ function readProviderFailure(value: unknown): {
 }
 
 function persistedMetadata(requested: Requested) {
-  const { prompt: _prompt, ...metadata } =
-    modelTaskRequestedInformationKind.payloadSchema.parse(requested.payload);
+  const {
+    prompt: _prompt,
+    messages: _messages,
+    inputBlocked: _blocked,
+    ...metadata
+  } = modelTaskRequestedInformationKind.payloadSchema.parse(requested.payload);
   return modelTaskMetadataSchema.parse(metadata);
 }
 async function resultFromWinner<T = unknown>(
@@ -545,13 +614,13 @@ async function resultFromWinner<T = unknown>(
     terminalInformationId: atom.informationId,
   };
   if (atom.kind === modelTaskCompletedInformationKind.kind) {
-    const { output } = modelTaskCompletedInformationKind.payloadSchema.parse(
-      atom.payload,
-    );
+    const { output, native } =
+      modelTaskCompletedInformationKind.payloadSchema.parse(atom.payload);
     return {
       ...identity,
       status: "completed",
       output: output as T,
+      ...(native ? { native } : {}),
     };
   }
   if (atom.kind === modelTaskFailedInformationKind.kind)
@@ -586,7 +655,7 @@ export function modelTaskFingerprint(
     | "promptDigest"
     | "provenance"
     | "selectionPolicy"
-  >,
+  > & { messagesDigest?: string | null },
 ): string {
   return digest(
     canonical({
@@ -599,6 +668,9 @@ export function modelTaskFingerprint(
       promptDigest: metadata.promptDigest,
       provenance: metadata.provenance,
       selectionPolicy: metadata.selectionPolicy,
+      ...(metadata.messagesDigest
+        ? { messagesDigest: metadata.messagesDigest }
+        : {}),
     }),
   );
 }

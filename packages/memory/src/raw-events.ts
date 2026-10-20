@@ -1,5 +1,5 @@
 /** Immutable Information copies and one evidence-bound readable wrapper per semantic Kind. */
-import type { PlatformDestination } from "@kaguya/schema";
+import type { EvidenceRecord, PlatformDestination } from "@kaguya/schema";
 import { defineModuleCapability } from "@kaguya/sdk";
 
 export interface RawScope {
@@ -25,6 +25,8 @@ export interface RawContextBlock {
   readonly informationIds: readonly string[];
 }
 export interface FrozenRawContext {
+  readonly through?: number;
+  readonly evidence?: readonly EvidenceRecord[];
   readonly global: RawContextBlock;
   readonly currentScope: RawContextBlock;
   readonly overBudget: boolean;

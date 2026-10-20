@@ -29,6 +29,7 @@ import { createAttentionArousalModule } from "./attention-arousal/index.js";
 import { heartbeatModule } from "./heartbeat/index.js";
 import {
   createRouterModule,
+  createSituationRuntimeModule,
   type CreateRouterModuleOptions,
 } from "./router/index.js";
 import {
@@ -68,6 +69,7 @@ export function createFirstPartyModuleCatalog<
     }),
     heartbeatModule,
     createRouterModule(options),
+    createSituationRuntimeModule(options),
   );
 }
 export interface FirstPartyModuleInstanceConfig {
@@ -188,6 +190,18 @@ export function createFirstPartyModuleActivations(
 ): readonly InformationModuleActivation[] {
   return Object.freeze(
     configs
+      .flatMap((config) =>
+        config.definitionId === "agent.router"
+          ? [
+              config,
+              {
+                ...config,
+                instanceId: `${config.instanceId}.situation`,
+                definitionId: "agent.situation",
+              },
+            ]
+          : [config],
+      )
       .filter((config) => !config.definitionId.startsWith("adapter."))
       .map((config) => {
         if (

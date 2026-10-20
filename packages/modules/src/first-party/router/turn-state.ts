@@ -125,7 +125,9 @@ export function turnTerminalFor(
 ) {
   return atoms.find(
     (atom) =>
-      TURN_TERMINAL_KINDS.has(atom.kind) &&
+      (TURN_TERMINAL_KINDS.has(atom.kind) ||
+        (atom.kind === "agent.attention.arousal.completed" &&
+          atom.payload.outcome === "defer")) &&
       atom.references.some(
         (reference) =>
           reference.relation === "core:status-of" &&

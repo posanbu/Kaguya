@@ -2,11 +2,11 @@
 
 ## 目的与非目标
 
-Arousal 在读取正文前维护机器人唤醒状态并决定是否观察。它不读取入站正文，不判断相关性、话题或参与价值，也不生成回复或执行平台动作。
+Arousal 在情境证据冻结后维护机器人唤醒状态，并决定是否进入模型观察。它不读取入站正文，不判断相关性、话题或参与价值，也不生成回复或执行平台动作。
 
 ## 消费和产生
 
-消费不含正文的 `agent.heartbeat.candidate`、全局消息活动、one-shot due 和 Focus 租约投影；产生 `agent.attention.arousal.state.recorded` 与唯一的 `agent.attention.arousal.completed: observe | defer`。
+消费 `agent.situation.frozen` 关联的 candidate 元信息、全局消息活动、one-shot due 和 Focus 租约投影；产生 `agent.attention.arousal.state.recorded` 与唯一的 `agent.attention.arousal.completed: observe | defer`。
 
 ## 数据流与边界
 
@@ -18,7 +18,7 @@ Arousal 在读取正文前维护机器人唤醒状态并决定是否观察。它
 
 ## 可靠性、幂等和失败行为
 
-状态迁移与 timer 以稳定键写入；绝对 one-shot deadline 可在重启后恢复，不使用固定 tick 或心跳计数。`defer` 不创建 turn context、不推进未读水位。旧状态、旧评分 payload 和旧设置由严格 schema 拒绝。
+状态迁移与 timer 以稳定键写入；绝对 one-shot deadline 可在重启后恢复，不使用固定 tick 或心跳计数。`defer` 保留已有冻结记录，不推进未读水位。旧 candidate 订阅仅确认已持久化任务，不再提前执行注意判断。旧状态、旧评分 payload 和旧设置由严格 schema 拒绝。
 
 ## 日志与可观测性
 

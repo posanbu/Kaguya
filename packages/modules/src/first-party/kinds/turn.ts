@@ -1,7 +1,7 @@
 /**
  * 功能概述：turn 领域的 Information schema 与不可变定义，独立维护本领域引用和日志投影。
  * 主要职责：下列 schema 校验入账载荷，各 kind 声明因果关系、上下文和诊断元数据；无 I/O。
- * Arousal 只保存唤醒状态、观察机会、水位、非语义信号与 Focus 快照；正文仅在 observe 后进入回合上下文。
+ * Arousal 只保存唤醒状态、观察机会、水位、非语义信号与 Focus 快照；正文先冻结，注意模块仅读取元信息。
  * 代码库关系：information-kinds.ts 稳定重导出公共对象；跨领域只复用相邻文件定义，保持 Registry 对象身份。
  */
 import { z } from "@kaguya/schema";
@@ -326,9 +326,14 @@ export const turnFailedInformationKind = defineInformationKind({
   displayName: "回合失败",
   description:
     "回合无法继续推进时记录失败原因及所属认领；可靠执行和诊断可据此识别已结束的失败候选。",
-  payloadSchema: z
-    .object({ ...turnTerminalBaseShape, reason: nonBlankString })
-    .strict(),
+  payloadSchema: z.union([
+    z.strictObject({
+      ...turnTerminalBaseShape,
+      reason: nonBlankString,
+      deliveryTerminalInformationId: nonBlankString,
+    }),
+    z.strictObject({ ...turnTerminalBaseShape, reason: nonBlankString }),
+  ]),
   references: turnTerminalReferences,
   log: {
     enabled: true,
@@ -459,7 +464,7 @@ export const turnContextCompletedInformationKind = defineInformationKind({
   kind: "agent.router.turn.context.completed",
   displayName: "回合上下文就绪",
   description:
-    "Arousal 决定 observe 后，Router 等待身份屏障并冻结有界未读、来源、时机及积压年龄；只有 Light 消费正文并判断语义时效。",
+    "情境运行模块等待身份屏障后冻结有界未读、来源、时机及积压年龄，再触发注意模块和 Light。",
   payloadSchema: turnContextPayloadSchema,
   references: {
     "core:caused-by": { required: true, multiple: false },
@@ -582,6 +587,7 @@ export const attentionArousalStateRecordedInformationKind =
         multiple: false,
         targetKinds: [
           "agent.heartbeat.candidate",
+          "agent.situation.frozen",
           "agent.attention.arousal.activity",
           "core.schedule.one-shot.due",
         ],
@@ -642,13 +648,13 @@ export const attentionArousalCompletedInformationKind = defineInformationKind({
   kind: "agent.attention.arousal.completed",
   displayName: "注意力观察结果",
   description:
-    "依据持久化唤醒状态、平台信号和 Focus 租约记录观察或延后；observe 后 Router 才能读取正文。",
+    "依据持久化唤醒状态、平台信号和 Focus 租约记录观察或延后；冻结完成后触发判断，observe 后 Router 才调用 Light。",
   payloadSchema: attentionArousalPayloadSchema,
   references: {
     "core:caused-by": {
       required: true,
       multiple: false,
-      targetKinds: ["agent.heartbeat.candidate"],
+      targetKinds: ["agent.heartbeat.candidate", "agent.situation.frozen"],
     },
     "core:context": {
       required: true,
@@ -660,6 +666,7 @@ export const attentionArousalCompletedInformationKind = defineInformationKind({
       multiple: true,
       targetKinds: [
         attentionArousalStateRecordedInformationKind.kind,
+        "agent.router.turn.context.completed",
         "agent.router.focus.opened",
         "agent.router.focus.renewed",
       ],

@@ -238,8 +238,30 @@ export function createMessagePromptCompiler(
         [turnContext!.informationId],
       ),
     ]);
+    const situation = atoms.find(
+      (a) =>
+        a.kind === "agent.situation.frozen" &&
+        a.payload.turnInformationId === turnContext!.informationId,
+    );
+    const continuity = situation
+      ? JSON.stringify(situation.payload.continuity ?? [])
+      : "";
     return appendPersonProfilesToPrompt(
-      { ...prompt, templates: allTemplates },
+      {
+        ...prompt,
+        templates: allTemplates,
+        ...(situation
+          ? {
+              text: `${prompt.text}\n\n已记录的行动状态与实际结果：\n${continuity}`,
+              variables: [
+                ...prompt.variables,
+                variable("action_records", continuity, [
+                  situation.informationId,
+                ]),
+              ],
+            }
+          : {}),
+      },
       (turnContext!.payload as any).personProfiles ?? [],
       atoms,
       personNames,

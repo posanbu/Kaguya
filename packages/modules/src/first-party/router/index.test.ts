@@ -29,7 +29,11 @@ import {
 } from "@kaguya/scheduler";
 import { loadFirstPartyPromptTemplates } from "../../node/prompt-templates.js";
 import { rawContextCapability } from "@kaguya/memory";
-import { createRouterModule } from "./index.js";
+import {
+  createRouterModule,
+  createSituationRuntimeModule,
+  routerStateSelector,
+} from "./index.js";
 import { focusOpened } from "../router/focus-facts.js";
 import { scopeOf } from "../heartbeat/observation.js";
 import {
@@ -107,7 +111,7 @@ async function fixture(
     terminalInformationId: request.sourceInformationId,
   }));
   const promptTemplates = loadFirstPartyPromptTemplates();
-  const module = createRouterModule({
+  const moduleOptions = {
     rawContextCapability,
     lightTemplate: promptTemplates.light,
     lightBootstrapPolicy: promptTemplates.lightBootstrapPolicy,
@@ -123,8 +127,10 @@ async function fixture(
     modelTaskFailedInformationKind: modelFailed,
     modelTaskCancelledInformationKind: modelCancelled,
     executionExhaustedInformationKind,
-  });
-  const catalog = defineInformationModuleCatalog(module);
+  };
+  const module = createRouterModule(moduleOptions);
+  const situation = createSituationRuntimeModule(moduleOptions);
+  const catalog = defineInformationModuleCatalog(module, situation);
   const registry = new InformationKindRegistry();
   registry.registerBuiltin(runtimeContext);
   for (const definition of catalogInformationKinds(catalog)) {
@@ -168,18 +174,19 @@ async function fixture(
     ],
   });
   await core.start();
-  await host.start([
-    {
-      instanceId: "router.test",
-      definitionId: module.manifest.definitionId,
+  await host.start(
+    [module, situation].map((definition) => ({
+      instanceId:
+        definition === module ? "router.test" : "router.test.situation",
+      definitionId: definition.manifest.definitionId,
       settings: {
         muted: options.muted ?? false,
         focusIdleMs: 120_000,
         staleAfterMs: 120_000,
         lightInterruptMaxConsecutiveCount: 2,
       },
-    },
-  ]);
+    })),
+  );
   resources.push({ host, core, database });
   return { core, database, execute };
 }
@@ -400,6 +407,19 @@ async function decide(
       ],
     },
   );
+  const turn = await vi.waitFor(async () => {
+    const selected = await core.select(
+      routerStateSelector,
+      candidate.informationId,
+    );
+    const found = selected.find(
+      (a) =>
+        a.kind === turnContextCompletedInformationKind.kind &&
+        a.payload.candidateInformationId === candidate.informationId,
+    );
+    expect(found).toBeDefined();
+    return found!;
+  }, PERSISTENCE_WAIT);
   const input = {
     occurredAt: "2026-09-22T08:00:10.000Z",
     source: "module:arousal",
@@ -439,6 +459,14 @@ async function decide(
         relation: "core:uses-context" as const,
         informationId: state.informationId,
       },
+      ...(turn
+        ? [
+            {
+              relation: "core:uses-context" as const,
+              informationId: turn.informationId,
+            },
+          ]
+        : []),
       ...(focus
         ? [
             {
@@ -489,7 +517,7 @@ async function waitFor(database: any, kind: string) {
   }, PERSISTENCE_WAIT);
 }
 
-it("does not read or freeze a turn before observe, and defer leaves it absent", async () => {
+it("freezes before attention and defer does not call Light or advance progress", async () => {
   const { core, database, execute } = await fixture();
   const opportunity = await appendOpportunity(core, {
     texts: ["ordinary group message"],
@@ -500,7 +528,7 @@ it("does not read or freeze a turn before observe, and defer leaves it absent", 
     (await all(database)).some(
       (atom: any) => atom.kind === turnContextCompletedInformationKind.kind,
     ),
-  ).toBe(false);
+  ).toBe(true);
   expect(opportunity.candidate.payload).not.toHaveProperty("text");
   await decide(core, opportunity.candidate, "defer");
   await settle(database);
@@ -508,11 +536,11 @@ it("does not read or freeze a turn before observe, and defer leaves it absent", 
     (await all(database)).some(
       (atom: any) => atom.kind === turnContextCompletedInformationKind.kind,
     ),
-  ).toBe(false);
+  ).toBe(true);
   expect(execute).not.toHaveBeenCalled();
 });
 
-it("freezes exactly the registration-watermark window after observe", async () => {
+it("freezes exactly the registration-watermark window before observe", async () => {
   const { core, database } = await fixture({
     action: { action: "silent", reason: "no-response-needed" },
   });
@@ -585,7 +613,6 @@ it("waits for Identity terminal before freezing the observed batch", async () =>
     texts: ["identity pending"],
     identities: false,
   });
-  await decide(core, opportunity.candidate, "observe");
   await settle(database);
   expect(
     (await all(database)).some(
@@ -599,9 +626,10 @@ it("waits for Identity terminal before freezing the observed batch", async () =>
     opportunity.unread[0]!.occurredAt,
   );
   await waitFor(database, turnContextCompletedInformationKind.kind);
+  await decide(core, opportunity.candidate, "observe");
 });
 
-it("uses the Focus lease frozen by Arousal instead of recomputing it", async () => {
+it("keeps the earlier frozen input unchanged when attention receives a newer Focus lease", async () => {
   const { core, database } = await fixture({
     action: { action: "silent", reason: "no-response-needed" },
   });
@@ -641,9 +669,7 @@ it("uses the Focus lease frozen by Arousal instead of recomputing it", async () 
     turnContextCompletedInformationKind.kind,
   );
   expect(turn.payload).toMatchObject({
-    focusActive: true,
-    focusInformationId: focus.informationId,
-    focusExpiresAt: focus.payload.expiresAt,
+    focusActive: false,
   });
 });
 

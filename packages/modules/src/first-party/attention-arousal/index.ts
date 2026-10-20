@@ -1,3 +1,7 @@
+import {
+  situationFrozenInformationKind,
+  frozenCandidateSelector,
+} from "../situation-runtime.js";
 /**
  * Arousal 是正文读取之前的非语义唤醒状态机与注意力观察器。
  * 它只消费 Heartbeat 冻结的观察机会、最新唤醒状态与 Focus 租约事实；不得选择入站正文。
@@ -284,11 +288,12 @@ export function createAttentionArousalModule(
       definitionId: "agent.attention.arousal",
       inspection: firstPartyInspection["agent.attention.arousal"],
       displayName: "注意力观察",
-      summary: "维护机器人唤醒状态，并在读取正文前决定观察或延后。",
+      summary: "在情境冻结后读取元信息，决定观察或延后。",
       description:
         "初始保持 awake；全局空闲、夜间休眠和周期唤醒使用持久化 one-shot 直接等待绝对时间，不轮询也不累计 tick。通知、Focus 与周期复查会确认唤醒；相关性、话题和参与价值仍由 Light 独占。",
       settingsSchema: attentionArousalSettingsSchema,
       consumes: [
+        situationFrozenInformationKind,
         turnCandidateInformationKind,
         attentionArousalActivityInformationKind,
         oneShotDueInformationKind,
@@ -298,6 +303,7 @@ export function createAttentionArousalModule(
         attentionArousalCompletedInformationKind,
       ],
       selectors: [
+        frozenCandidateSelector,
         focusStateSelector,
         attentionArousalStateSelector,
         attentionArousalTimerSelector,
@@ -405,13 +411,29 @@ export function createAttentionArousalModule(
           },
         }),
         subscriptions: [
+          // Drain legacy candidate deliveries. Situation owns freezing and re-emits
+          // the new hook, so this adapter never makes an early observation decision.
           onInformation(
             turnCandidateInformationKind,
             {
               subscriptionId: "attention-arousal.observe",
               delivery: "durable",
             },
-            async (candidate, context) => {
+            async () => {},
+          ),
+          onInformation(
+            situationFrozenInformationKind,
+            {
+              subscriptionId: "attention-arousal.observe-frozen",
+              delivery: "durable",
+            },
+            async (frozen, context) => {
+              const frozenAtoms = await context.select(frozenCandidateSelector);
+              const candidate = frozenAtoms.find(
+                (a) =>
+                  a.informationId === frozen.payload.candidateInformationId,
+              );
+              if (!candidate) throw new Error("Missing frozen candidate");
               const payload = candidate.payload as any;
               const focusAtoms = (await context.select(
                 focusStateSelector,
@@ -534,6 +556,10 @@ export function createAttentionArousalModule(
                   policyVersion: "attention-observation.v1" as const,
                 },
                 references: [
+                  {
+                    relation: "core:uses-context" as const,
+                    informationId: frozen.payload.turnInformationId,
+                  },
                   {
                     relation: "core:status-of" as const,
                     informationId: candidate.informationId,

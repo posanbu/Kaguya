@@ -12,7 +12,7 @@ Heartbeat 可靠地按 scope 积攒入站注册水位并产生观察机会。它
 
 每条入站先投影不含正文的活动事实，再直接为所属 scope 竞争唯一开放观察。Candidate 只记录排他下界、包含式上界、未读数量和 `private / web / mention-self / mention-all / reply-self / passive / recheck` 信号，不冻结正文。开放期间和 asleep defer 后的新消息继续留在未读水位中。
 
-只有 `agent.router.turn.context.completed.observedThroughInformationId` 是成功观察水位。查询按注册位置而非消息时间戳推进，最多冻结 1000 条；上界之后的消息留给下一次观察。
+只有对应注意决策为 observe 的 `agent.router.turn.context.completed.observedThroughInformationId` 才是成功观察水位。单独冻结不代表已经观察。查询按注册位置而非消息时间戳推进，最多冻结 1000 条；上界之后的消息留给下一次观察。
 
 ## Settings
 

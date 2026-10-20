@@ -208,6 +208,8 @@ export interface InformationModuleHandlerContext extends InformationModuleCreate
 }
 export interface InformationModuleSubscription {
   readonly subscriptionId: string;
+  /** Explicit durable identity retained when moving a subscription between modules. */
+  readonly durableSubscriptionId?: string;
   readonly delivery: "live" | "durable";
   readonly retryForever?: boolean;
   readonly retryDelayMs?: number;
@@ -661,6 +663,7 @@ export function onInformation<K extends string, P extends JsonObject>(
   definition: InformationKindDefinition<K, P>,
   options: {
     readonly subscriptionId: string;
+    readonly durableSubscriptionId?: string;
     readonly delivery: "live" | "durable";
     readonly retryForever?: boolean;
     readonly retryDelayMs?: number;
@@ -671,6 +674,8 @@ export function onInformation<K extends string, P extends JsonObject>(
   ) => Promise<void> | void,
 ): InformationModuleSubscription {
   assertId(options.subscriptionId, "subscription id");
+  if (options.durableSubscriptionId)
+    assertId(options.durableSubscriptionId, "durable subscription id");
   if (options.delivery !== "live" && options.delivery !== "durable")
     throw new Error("invalid subscription delivery");
   return Object.freeze({

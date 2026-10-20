@@ -133,6 +133,7 @@ export interface ModelTaskRequest<TOutput> {
   readonly selectionPolicy: { readonly tier: "light" | "heavy" };
   readonly prompt: CompiledPrompt;
   readonly contextAtoms: readonly DeepReadonly<InformationAtom>[];
+  readonly nativeContinuation?: boolean;
 }
 
 type ModelTaskResultIdentity = {
@@ -151,7 +152,9 @@ export type ModelTaskResult<TOutput> = ModelTaskResultIdentity &
           readonly stage:
             | "provider-request"
             | "structured-output-parse"
-            | "task-schema-validation";
+            | "task-schema-validation"
+            | "context-budget"
+            | "native-protocol";
           readonly message: "Model task generation failed";
         };
       }
@@ -409,14 +412,22 @@ export function createHeavyModule<
               : undefined;
             let contextAtoms =
               authorized?.contextAtoms ?? (await context.select(selector));
-            const persisted = authorized ? undefined : contextAtoms.find(
-              (atom) => atom.kind === "core.model.task.requested" &&
-                atom.payload.taskId === "agent.heavy.respond" &&
-                (atom.payload.activation as any)?.instanceId === context.instanceId,
-            );
+            const persisted = authorized
+              ? undefined
+              : contextAtoms.find(
+                  (atom) =>
+                    atom.kind === "core.model.task.requested" &&
+                    atom.payload.taskId === "agent.heavy.respond" &&
+                    (atom.payload.activation as any)?.instanceId ===
+                      context.instanceId,
+                );
             if (persisted) {
-              const byId = new Map(contextAtoms.map((atom) => [atom.informationId, atom]));
-              contextAtoms = (persisted.payload.contextInformationIds as string[]).map((id) => {
+              const byId = new Map(
+                contextAtoms.map((atom) => [atom.informationId, atom]),
+              );
+              contextAtoms = (
+                persisted.payload.contextInformationIds as string[]
+              ).map((id) => {
                 const atom = byId.get(id);
                 if (!atom) throw new Error("Missing persisted Heavy context");
                 return atom;
@@ -427,9 +438,15 @@ export function createHeavyModule<
               message.informationId,
             );
             let prompt =
-              authorized?.prompt ?? (persisted?.payload.prompt as unknown as CompiledPrompt | undefined) ??
+              authorized?.prompt ??
+              (persisted?.payload.prompt as unknown as
+                CompiledPrompt | undefined) ??
               compilePrompt(contextAtoms, persistedIntent.informationId);
-            if (!authorized && !persisted && dependencies.messageAuthorizationCapability) {
+            if (
+              !authorized &&
+              !persisted &&
+              dependencies.messageAuthorizationCapability
+            ) {
               const service = context.use(
                 dependencies.messageAuthorizationCapability,
               );
@@ -458,14 +475,23 @@ export function createHeavyModule<
                 };
               }
             }
-            contextAtoms = persisted ? contextAtoms : [
-              ...new Map(
-                [...contextAtoms, ...selected].map((a) => [a.informationId, a]),
-              ).values(),
-            ];
-            if (!persisted) prompt = expressionPrompt(
-              prompt, contextAtoms, message.informationId, renderHabits,
-            );
+            contextAtoms = persisted
+              ? contextAtoms
+              : [
+                  ...new Map(
+                    [...contextAtoms, ...selected].map((a) => [
+                      a.informationId,
+                      a,
+                    ]),
+                  ).values(),
+                ];
+            if (!persisted)
+              prompt = expressionPrompt(
+                prompt,
+                contextAtoms,
+                message.informationId,
+                renderHabits,
+              );
             const contexts = persistedIntent.references.filter(
               (r) => r.relation === "core:context",
             );
@@ -478,8 +504,14 @@ export function createHeavyModule<
               tier: "heavy",
               promptCharacters: Array.from(prompt.text).length,
               promptVariableCount: prompt.variables.length,
-              globalContextCharacters: variableCharacters(prompt, "global_context"),
-              scopeContextCharacters: variableCharacters(prompt, "scope_context"),
+              globalContextCharacters: variableCharacters(
+                prompt,
+                "global_context",
+              ),
+              scopeContextCharacters: variableCharacters(
+                prompt,
+                "scope_context",
+              ),
               memoryCharacters: variableCharacters(prompt, "memory"),
             });
             await context.use(modelTaskCapability).execute<unknown>({
@@ -497,6 +529,7 @@ export function createHeavyModule<
               selectionPolicy: { tier: "heavy" },
               prompt,
               contextAtoms,
+              nativeContinuation: ordinaryReply,
             });
           },
         ),

@@ -108,6 +108,7 @@ describe("attention observation policy", () => {
         ({ selectorId }) => selectorId,
       ),
     ).toEqual([
+      "agent.situation.frozen-candidate",
       "agent.router.focus.state",
       attentionArousalStateSelector.selectorId,
       attentionArousalTimerSelector.selectorId,
@@ -115,6 +116,7 @@ describe("attention observation policy", () => {
     expect(
       attentionArousalModule.manifest.consumes.map(({ kind }) => kind),
     ).toEqual([
+      "agent.situation.frozen",
       turnCandidateInformationKind.kind,
       attentionArousalActivityInformationKind.kind,
       oneShotDueInformationKind.kind,

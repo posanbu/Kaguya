@@ -28,13 +28,15 @@
 
 历史最多 30 条、12,000 个 Unicode code point；Memory 最多 4,000 个 code point。预算在消息渲染后、集合层渲染前执行，完整当前 turn 不受历史预算裁剪。变量可省略或重复使用，provenance 只记录外层实际使用的变量。动态数据不做 XML/HTML 逃逸，模板应明确区分内容与指令。
 
+运行时另行装配冻结的 `action_records` 和原生消息。行动记录只反映已登记状态与实际回执，不在调用前推断待办、承诺或理由。原生历史的预算包含全部消息，并以完整交互为裁剪单位。
+
 ## Settings
 
 settings 为空对象 `{}`。模型固定使用 Profile 的 `heavy` 档位；模板和 Agent 身份由 composition root 注入。升级时需人工更新旧实例配置。
 
 ## 可靠性、幂等和失败行为
 
-普通回复使用结构化输出：`message(text)` 或 `silent`；授权跨会话发送使用文本输出。稳定任务键复用等价 Model Task；assistant、silent 与 delivery 使用实例级 `registerOnce` 去重。silent 不生成 assistant 或投递，由 Router 关闭回合。模型 failed/cancelled 不生成 assistant，缺少冻结引用或 provenance 不一致时拒绝继续。
+普通回复使用结构化输出：`message(text)` 或 `silent`。silent 不要求另写理由。授权跨会话发送使用文本输出。稳定任务键复用等价 Model Task；assistant、silent 与 delivery 使用实例级 `registerOnce` 去重。silent 不生成用于投递的 assistant 原子，由情境运行模块关闭回合。模型任务仍保存服务实际返回的原生消息、推理项和协议元数据，后续调用按兼容协议接续。界面缺少可读推理时显示“未提供”。模型 failed/cancelled 不生成 assistant，缺少冻结引用或 provenance 不一致时拒绝继续。
 
 ## 日志与可观测性
 
