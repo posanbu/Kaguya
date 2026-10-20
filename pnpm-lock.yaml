@@ -175,6 +175,12 @@ importers:
         specifier: ^7.0.0
         version: 7.3.6(@types/node@24.13.3)(lightningcss@1.33.0)(tsx@4.23.1)(yaml@2.9.0)
 
+  packages/agent-contracts:
+    dependencies:
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+
   packages/composition:
     dependencies:
       '@deepseek-ai/cordis':
@@ -314,6 +320,9 @@ importers:
 
   packages/modules:
     dependencies:
+      '@kaguya/agent-contracts':
+        specifier: workspace:*
+        version: link:../agent-contracts
       '@kaguya/llm':
         specifier: workspace:*
         version: link:../llm
@@ -399,6 +408,9 @@ importers:
 
   packages/schema:
     dependencies:
+      '@kaguya/agent-contracts':
+        specifier: workspace:*
+        version: link:../agent-contracts
       zod:
         specifier: 4.4.3
         version: 4.4.3

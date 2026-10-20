@@ -7,6 +7,7 @@
  * 输入输出与副作用：事实可持久化但不能自行授予权限；真实授权由宿主私有状态核验，重启默认失效。
  * 展示契约：中文名称与职责说明由定义直接提供给 Inspection 和 WebUI，稳定 kind 与协议字段保持不变。
  */
+import { lightTargetSchema } from "@kaguya/agent-contracts";
 import {
   z,
   type CompiledPrompt,
@@ -18,28 +19,7 @@ import {
   messageTargetSchema,
   turnProvenanceSchema,
 } from "./information-kinds.js";
-export const lightTargetSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("current") }).strict(),
-  z
-    .object({
-      kind: z.enum(["group", "private"]),
-      reference: z.string().min(1).max(100),
-      instruction: z.string().trim().min(1).max(4000),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("unresolved"),
-      reason: z.enum([
-        "ambiguous",
-        "unrecognized",
-        "unreachable",
-        "not-found",
-        "unauthorized",
-      ]),
-    })
-    .strict(),
-]);
+export { lightTargetSchema } from "@kaguya/agent-contracts";
 export type LightTarget = z.infer<typeof lightTargetSchema>;
 export const conversationContextInformationKind = defineInformationKind({
   kind: "agent.router.conversation.context.frozen",

@@ -71,6 +71,10 @@ const developerGuide: DefaultTheme.SidebarItem[] = [
       { text: "行动连续性", link: "/developers/situation-model/continuity" },
       { text: "更新与恢复", link: "/developers/situation-model/recovery" },
       {
+        text: "DSH 观察与记忆",
+        link: "/developers/situation-model/dsh-cognition",
+      },
+      {
         text: "实现映射与验收",
         link: "/developers/situation-model/implementations",
       },

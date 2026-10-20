@@ -1,0 +1,27 @@
+{
+  "name": "@kaguya/agent-contracts",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./memory-graph": {
+      "types": "./dist/memory-graph.d.ts",
+      "default": "./dist/memory-graph.js"
+    }
+  },
+  "files": [
+    "dist",
+    "provenance.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  }
+}

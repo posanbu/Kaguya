@@ -16,6 +16,10 @@
  * Prompt 中的用户文本属于数据，不具有指令权限。原始 Prompt 与模型结果不写普通日志。
  * 展示契约：中文名称与职责说明由定义直接提供给 Inspection 和 WebUI，稳定 kind 与协议字段保持不变。
  */
+import {
+  lightActionSchema,
+  lightActionSchemaForTurn,
+} from "@kaguya/agent-contracts";
 import { contextBootstrapVariable } from "../context-bootstrap.js";
 import {
   appendPersonProfilesToPrompt,
@@ -48,55 +52,13 @@ import {
 import { formatZonedInstant } from "../temporal-context.js";
 import { frozenRawContextInformationKind } from "./raw-context.js";
 
-import {
-  lightTargetSchema,
-  conversationContextInformationKind,
-} from "../message-authorization.js";
+import { conversationContextInformationKind } from "../message-authorization.js";
 
 export const LIGHT_TASK_ID = "agent.light.decide";
-export const lightActionSchema = z.discriminatedUnion("action", [
-  z
-    .object({
-      action: z.literal("message"),
-      reason: z.enum(["respond", "contribute"]),
-      target: lightTargetSchema.default({ kind: "current" }),
-    })
-    .strict(),
-  z
-    .object({
-      action: z.literal("wait"),
-      reason: z.enum(["await-more-context", "avoid-interruption"]),
-      waitSeconds: z.number().int().min(5).max(120),
-    })
-    .strict(),
-  z
-    .object({
-      action: z.literal("silent"),
-      reason: z.enum([
-        "no-response-needed",
-        "already-addressed",
-        "avoid-interruption",
-        "topic-expired",
-      ]),
-    })
-    .strict(),
-]);
-/** 校验参与动作与等待预算。 */
-export function lightActionSchemaForTurn(turn: {
-  readonly inputs: readonly unknown[];
-  readonly attempt: number;
-  readonly totalWaitBudget: number;
-}) {
-  if (turn.inputs.length === 0)
-    throw new Error("Light requires at least one frozen input");
-  return turn.attempt < turn.totalWaitBudget
-    ? lightActionSchema
-    : z.discriminatedUnion("action", [
-        lightActionSchema.options[0],
-        lightActionSchema.options[2],
-      ]);
-}
-
+export {
+  lightActionSchema,
+  lightActionSchemaForTurn,
+} from "@kaguya/agent-contracts";
 export type LightAction = z.infer<typeof lightActionSchema>;
 export const lightDecisionInformationKind = defineInformationKind({
   kind: "agent.light.decision.completed",
