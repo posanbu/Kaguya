@@ -206,6 +206,36 @@ describe("TTS durable business stages", () => {
     expect(f.host.synthesize).not.toHaveBeenCalled();
     expect(f.deliveries()).toHaveLength(0);
   });
+  it("cancels a prepared audio delivery when authorization changes during resource lookup", async () => {
+    const f = await setup();
+    await f.synthesize();
+    f.host.exists.mockImplementation(async () => {
+      f.host.isCurrent.mockResolvedValue(false);
+      return true;
+    });
+    await f.release();
+    await f.release();
+    expect(f.deliveries()).toHaveLength(0);
+    expect(
+      f.outputs.filter((a) => a.kind === "agent.tts.delivery.cancelled"),
+    ).toHaveLength(1);
+    expect(f.host.synthesize).toHaveBeenCalledTimes(1);
+  });
+  it("falls back once when storing a synthesized artifact fails", async () => {
+    const f = await setup();
+    f.host.save.mockRejectedValue(new Error("private-storage-error"));
+    await f.synthesize();
+    await f.synthesize();
+    await f.release();
+    await f.release();
+    expect(f.host.synthesize).toHaveBeenCalledTimes(1);
+    expect(f.deliveries()).toHaveLength(1);
+    expect(f.deliveries()[0]!.payload).toMatchObject({
+      message: { kind: "text", text: "你好" },
+      ttsFallbackReason: "storage_failed",
+    });
+    expect(JSON.stringify(f.outputs)).not.toContain("private-storage-error");
+  });
   it("discards synthesis completing after cancellation", async () => {
     const f = await setup();
     const started = Promise.withResolvers<void>();

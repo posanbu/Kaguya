@@ -125,3 +125,37 @@ POSIX 文件权限为 0600、目录 0700，Windows 请将 NTFS ACL 限制为服�
 不要把密钥、原始供应商错误或签名下载地址粘贴进公共日志。
 
 离线测试覆盖事件链、恢复、取消、完整性与消息转换；真实 Qwen 合成、八千代音色试听、QQ 接收仍需部署账号验收。
+
+## Issue #214 验收记录
+
+代码可用与部署验收是两个阶段。不能仅凭预设音色能发声、离线测试通过或分支已推送，就关闭
+[Issue #214](https://github.com/posanbu/Kaguya/issues/214)。
+
+**Provider 与音色管理** — `packages/llm/src/qwen-tts.ts` 和 `qwen-voice.ts`、
+`apps/server/src/tts.ts` 和 `tts-cli.ts` 提供区域、凭据、超时、取消、创建和查询契约。
+它们依据 Qwen 接口独立实现；参考项目为
+[yachiyo-qwen-voice-reply](https://github.com/wkf16/yachiyo-qwen-voice-reply)。
+第三方账号的默认 voice ID 不作为已验证音色。
+
+**持久化链路与授权** — `packages/modules/src/first-party/tts/`、
+Heavy 统一出口和 `packages/runtime/src/message-targets.ts` 覆盖任务、执行标记、结果、
+唯一投递、恢复和最终目标检查。模块用例覆盖存储失败后唯一回退，以及资源检查期间授权失效。
+`packages/runtime/src/runtime.test.ts` 的 TTS 集成用例覆盖成功、合成失败、取消和平台发送失败；
+平台发送失败后不再补发文字，以免回执不确定时重复发送。
+
+**音频、平台与历史** — `packages/runtime/src/tts-audio-store.ts` 管理持久化产物；
+NapCat 适配器发送 base64 record，Web 拒绝音频；历史、原始记忆和投递事件保留正文与因果引用。
+真实 NapCat 版本能否接收及播放 WAV，仍需实际部署验证。
+
+**观察与操作文档** — 模块检查页提供合成阶段、耗时和可用用量；投递回执沿引用查看。
+本页提供初始化、传输、生命周期和故障排查说明。
+
+每个部署应单独记录以下结果，缺少证据的项目保持未完成：
+
+- [ ] 使用部署账号与一致的区域、目标模型，成功合成八千代音色，记录 voice ID 与模型。
+- [ ] 人工试听并记录音色相似度、中文可懂度、杂音及停顿，不以普通预设替代角色音色验收。
+- [ ] 真实 QQ 测试会话接收到可播放的语音，记录平台回执与客户端检查结果。
+- [ ] 记录当前代码 SHA、本地测试命令和结果。
+- [ ] 在 PR 中记录同一 head SHA 的 CI 链接和结果；未触发、排队、执行中或未知均不能写成通过。
+
+现有 Test 工作流由面向 main 的 PR、定时任务或手动操作触发；仅推送功能分支不代表已执行 CI。

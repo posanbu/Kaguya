@@ -290,7 +290,7 @@ function parentId(
 }
 
 describe("KaguyaRuntime", () => {
-  it.each([false, true, "cancelled"] as const)(
+  it.each([false, true, "cancelled", "transport-failed"] as const)(
     "persists the TTS chain with a single terminal (failure=%s)",
     async (fail) => {
       const resource = {
@@ -301,7 +301,7 @@ describe("KaguyaRuntime", () => {
       };
       const synthesize = vi.fn(
         async (request: Parameters<TtsHost["synthesize"]>[0]) => {
-          if (fail) throw new Error("private-provider-error");
+          if (fail === true) throw new Error("private-provider-error");
           return {
             bytes: new Uint8Array(48),
             mimeType: "audio/wav" as const,
@@ -331,13 +331,17 @@ describe("KaguyaRuntime", () => {
         exists: async () => true,
       };
       const { runtime, database } = await createRuntime({ tts: host });
-      const sendMessage = vi.fn(async (target) => ({
-        ok: true as const,
-        adapterId: "napcat.qq.main",
-        platform: "qq" as const,
-        target,
-        platformMessageId: "sent-tts",
-      }));
+      const sendMessage = vi.fn(async (target) => {
+        if (fail === "transport-failed")
+          throw new Error("private-transport-error");
+        return {
+          ok: true as const,
+          adapterId: "napcat.qq.main",
+          platform: "qq" as const,
+          target,
+          platformMessageId: "sent-tts",
+        };
+      });
       runtime.registerTransport({
         adapterId: "napcat.qq.main",
         platform: "qq",
@@ -372,9 +376,27 @@ describe("KaguyaRuntime", () => {
       }
       expect(parentId(delivery)).toBe(result.informationId);
       expect(delivery.payload.message).toMatchObject({
-        kind: fail ? "text" : "audio",
+        kind: fail === true ? "text" : "audio",
         text: assistant.payload.text,
       });
+      if (fail === "transport-failed") {
+        expect(
+          graph.filter((a) => a.kind === "core.delivery.requested"),
+        ).toHaveLength(1);
+        expect(
+          graph.filter((a) => a.kind === "core.delivery.failed"),
+        ).toHaveLength(1);
+        expect(
+          graph.filter((a) => a.kind === "agent.router.turn.failed"),
+        ).toHaveLength(1);
+        expect(
+          graph.filter((a) => a.kind === "core.delivery.delivered"),
+        ).toHaveLength(0);
+        expect(sendMessage).toHaveBeenCalledTimes(1);
+        expect(synthesize).toHaveBeenCalledTimes(1);
+        expect(JSON.stringify(graph)).not.toContain("private-transport-error");
+        return;
+      }
       expect(
         graph.filter((a) => a.kind === "core.delivery.delivered"),
       ).toHaveLength(1);
