@@ -43,6 +43,7 @@ import {
   useProfileWorkspace,
 } from "./ProfileWorkspace.js";
 import { Overview } from "./Overview.js";
+import { SituationPage } from "./SituationPage.js";
 import { WebChat } from "./WebChat.js";
 import {
   Button,
@@ -75,12 +76,10 @@ import {
   EyeOff,
   LoaderCircle,
   LockKeyhole,
-  Moon,
   PencilLine,
   RefreshCw,
   Save,
   Settings2,
-  Sun,
   Trash2,
 } from "lucide-react";
 import {
@@ -246,6 +245,7 @@ export function App() {
     return <ConfigurationStatusError message={configurationError} />;
 
   const renderPage = () => {
+    if (path === "/situation") return <SituationPage token={token} />;
     if (path === "/memory")
       return (
         <Suspense fallback={<FieldMessage>正在加载记忆工作台…</FieldMessage>}>
@@ -324,8 +324,6 @@ export function App() {
         currentPath={path}
         onNavigate={navigate}
         registerNavigationGuard={register}
-        profileSlot={<ProfileSwitcher />}
-        actions={<ThemeToggle />}
       >
         {renderPage()}
       </AppShell>
@@ -775,13 +773,16 @@ function ProfileManagementScreen({
             ) : undefined
           }
           actions={
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={onClose}
-            >
-              返回消息
-            </button>
+            <>
+              <ProfileSwitcher />
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={onClose}
+              >
+                返回消息
+              </button>
+            </>
           }
         />
         <main className="setup-main profile-main">
@@ -1612,8 +1613,6 @@ function SetupHeader({ subtitle }: { readonly subtitle: string }) {
   return (
     <header className="topbar">
       <BrandIdentity subtitle={subtitle} />
-      <div className="topbar-spacer" />
-      <ThemeToggle />
     </header>
   );
 }
@@ -1628,41 +1627,6 @@ function BrandIdentity({ subtitle }: { readonly subtitle: string }) {
       </div>
     </div>
   );
-}
-
-type Theme = "light" | "dark";
-
-function ThemeToggle() {
-  const [theme, setTheme] = useState<Theme>(() => readTheme());
-  const nextTheme = theme === "light" ? "dark" : "light";
-  const nextThemeLabel = nextTheme === "dark" ? "深色" : "浅色";
-
-  const toggleTheme = () => {
-    document.documentElement.dataset.theme = nextTheme;
-    try {
-      localStorage.setItem("kaguya.theme", nextTheme);
-    } catch {
-      // The selected theme still applies for this page when storage is unavailable.
-    }
-    setTheme(nextTheme);
-  };
-
-  return (
-    <button
-      className="theme-button"
-      type="button"
-      onClick={toggleTheme}
-      aria-label={`切换至${nextThemeLabel}主题`}
-      title={`切换至${nextThemeLabel}主题`}
-    >
-      {nextTheme === "dark" ? <Moon size={17} /> : <Sun size={17} />}
-      <span>{nextThemeLabel}</span>
-    </button>
-  );
-}
-
-function readTheme(): Theme {
-  return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
 }
 
 export function readGatewayToken(

@@ -5,7 +5,7 @@
  * 主要职责：ProfileWorkspace 保存编辑 ID、操作锁及应用快照；ProfileSwitcher 用 Radix
  * 菜单切换查看对象、用 Dialog 新建配置。profileMenuState 独立投影已生效标记与动态应用状态。
  * 代码库关系：App 在 AppShell 外挂载本 Provider；配置编辑器显式保存/选择/删除，
- * ConfigurationApplicationScreen 回传应用进度。顶栏只调用 create 和只读状态接口。
+ * ConfigurationApplicationScreen 回传应用进度。配置页的切换菜单只调用 create 和只读状态接口。
  * 输入输出与副作用：编辑切换可注册异步草稿守卫；应用期间禁止切换及新建；轮询只读
  * application 状态，失败保留最后快照并明确提示；秘密字段不会进入菜单或浏览器存储。
  */

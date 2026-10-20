@@ -181,3 +181,4 @@ export * from "./module-templates.js";
 export * from "./person-profile.js";
 
 export * from "./memory-graph.js";
+export * from "./situation-view.js";

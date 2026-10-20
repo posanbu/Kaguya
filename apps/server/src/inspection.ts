@@ -23,6 +23,7 @@ import {
   type RequestBrowser,
 } from "./inspection-requests.js";
 import { createHash } from "node:crypto";
+import { readSituation } from "./inspection-situation.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type {
   InformationRepository,
@@ -530,6 +531,9 @@ export function createInspectionService(source: InspectionSource) {
     inspectionModulesSchema.parse({ version: 1, modules: source.modules() })
       .modules;
   return {
+    async situation() {
+      return redact(await readSituation(source.ledger));
+    },
     modules() {
       return inspectionModulesSchema.parse(
         redact({ version: 1, modules: source.modules() }),
@@ -1103,6 +1107,7 @@ export function registerInspectionRoutes(
     (request: FastifyRequest, service: InspectionService) => unknown,
   ][] = [
     ["modules", (_, s) => s.modules()],
+    ["situation", (_, s) => s.situation()],
     [
       "modules/:definitionId/surfaces/:surfaceId",
       (r, s) => {

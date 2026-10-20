@@ -1,6 +1,6 @@
 /**
  * 功能概述：所有认证后页面共享的工作台侧栏和移动导航抽屉；记忆入口指向独立图工作台。
- * 主要职责：AppShell 提供顶栏 profileSlot/actions 插槽；SideNav 通过 currentPath
+ * 主要职责：AppShell 提供侧栏和窄屏导航入口；SideNav 通过 currentPath
  * 标识任务域。useNavigationGuard 注册离开保护，useWorkbenchNavigate 复用受保护导航。
  * 代码库关系：App.tsx 管理认证及 history，页面作为 children 注入；复杂交互采用
  * ui.tsx 导出的 Radix Dialog/DropdownMenu，视觉沿用 workbench.css 和品牌素材。
@@ -21,6 +21,7 @@ import {
 } from "react";
 import {
   House,
+  Compass,
   Menu,
   MessagesSquare,
   Network,
@@ -33,12 +34,14 @@ import { Button, Dialog } from "./ui.js";
 import "./workbench.css";
 export const workbenchRoutes = [
   { path: "/", label: "概览", icon: House },
+  { path: "/situation", label: "情境", icon: Compass },
   { path: "/messages", label: "消息", icon: MessagesSquare },
   { path: "/memory", label: "记忆", icon: Network },
   { path: "/profiles", label: "配置", icon: Settings2 },
   { path: "/developer/modules", label: "检查", icon: ScanSearch },
 ] as const;
 export function navigationDomain(path: string): string {
+  if (path === "/situation") return "/situation";
   if (path === "/memory") return "/memory";
   if (path.startsWith("/developer")) return "/developer/modules";
   if (path.startsWith("/profiles") || path.startsWith("/configuration"))
@@ -199,16 +202,12 @@ export function AppShell({
   children,
   currentPath,
   onNavigate,
-  profileSlot,
-  actions,
   registerNavigationGuard,
 }: {
   children: ReactNode;
   currentPath: string;
   onNavigate: (path: string) => Promise<boolean>;
   registerNavigationGuard: (guard: Guard) => () => void;
-  profileSlot?: ReactNode;
-  actions?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const navigate = useCallback(
@@ -224,7 +223,7 @@ export function AppShell({
       value={{ navigate, register: registerNavigationGuard }}
     >
       <div
-        className={`wb-shell${currentPath === "/messages" ? " wb-shell-messages" : ""}`}
+        className={`wb-shell${currentPath === "/messages" ? " wb-shell-messages" : currentPath === "/situation" ? " wb-shell-situation" : ""}`}
       >
         <a className="wb-skip" href="#workbench-content">
           跳转到页面内容
@@ -237,7 +236,7 @@ export function AppShell({
           <SideNav currentPath={currentPath} onNavigate={navigate} />
         </aside>
         <div className="wb-body">
-          <header className="wb-topbar">
+          <div className="wb-mobile-navigation">
             <Dialog.Root open={open} onOpenChange={setOpen}>
               <Dialog.Trigger asChild>
                 <Button className="wb-menu" aria-label="打开导航">
@@ -260,10 +259,7 @@ export function AppShell({
                 </Dialog.Content>
               </Dialog.Portal>
             </Dialog.Root>
-            <span className="wb-topbar-label">Kaguya 工作台</span>
-            <div className="wb-profile-slot">{profileSlot}</div>
-            {actions}
-          </header>
+          </div>
           <div id="workbench-content" tabIndex={-1} className="wb-content">
             {children}
           </div>

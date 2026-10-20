@@ -21,6 +21,8 @@ description: Kaguya 统一 Server 的路由、认证、Profile 与消息协议�
 
 所有检查接口复用 Gateway Bearer 认证，响应使用 `Cache-Control: no-store`，只执行读取。运行时暂不可用返回 503。
 
+**情境工作台** — `GET /api/v1/inspection/situation` 返回 `version: 1`、冻结快照 `frames`、模型行动 `steps` 和 `truncated`。从最近 50 条冻结记录中读取有效快照，并查询最近 60 次 Light/Heavy 请求，并补入最新快照可关联的未完成行动。记录按账本登记顺序读取。响应区分模型终态与投递结果，只返回已保存的可读推理，不返回原生接续消息。运行时没有冻结记录时返回空数组，不写入或重建历史。
+
 **模块声明** — `GET /api/v1/inspection/modules` 返回 Manifest 名称、绑定与可选 `inspection`。其中 `mechanism` 描述机制，`views` 声明稳定视图 ID、Kind 集合及中文字段，`storage` 指定 Memory 或向量库。
 
 **领域记录** — `GET /api/v1/inspection/atoms?definitionId=agent.attention.arousal&view=gates` 先按声明的 Kind 集合过滤，再游标分页。可叠加 `kind`、`source`、`after`、`before`；指定实例时 source 使用当前 binding 的 `module:<instanceId>`。不指定 source 时包含历史来源。游标绑定查询条件，不能跨模块、视图或过滤条件复用。

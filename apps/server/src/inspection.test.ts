@@ -295,8 +295,24 @@ describe("developer inspection", () => {
       ...(auth ? { headers } : {}),
     });
 
+  it("returns an empty read-only situation view without inventing history", async () => {
+    const before = await database.information.inspectPage({ limit: 100 });
+    const response = await get("situation");
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toEqual({
+      version: 1,
+      frames: [],
+      steps: [],
+      truncated: false,
+    });
+    expect(await database.information.inspectPage({ limit: 100 })).toEqual(
+      before,
+    );
+  });
+
   it("authenticates every endpoint before validating and disables response caching", async () => {
     for (const path of [
+      "situation",
       "modules",
       "atoms?limit=bad",
       "atoms/missing",
@@ -323,8 +339,7 @@ describe("developer inspection", () => {
     const modules = response.json().data.modules;
     expect(modules.length).toBeGreaterThan(0);
     const composer = modules.find(
-      (m: { definitionId: string }) =>
-        m.definitionId === "agent.heavy",
+      (m: { definitionId: string }) => m.definitionId === "agent.heavy",
     );
     expect(composer.bindings[0].instanceId).toBe("heavy.default");
     expect(composer.tags).toEqual([]);
