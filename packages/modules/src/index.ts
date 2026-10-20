@@ -12,6 +12,10 @@
  */
 export { identityModule } from "./first-party/identity/index.js";
 export {
+  buildSituationFrame,
+  assembleSituationContext,
+} from "./first-party/situation-model.js";
+export {
   renderPersonProfileSections,
   displayPersonName,
   appendPersonProfilesToPrompt,

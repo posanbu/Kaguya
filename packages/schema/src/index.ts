@@ -15,6 +15,8 @@
  * 会拒绝未声明字段，平台返回的 `platformMessageId` 仍作为合法外部身份保留。
  */
 export * from "./inspection.js";
+export * from "./situation-context.js";
+export * from "./situation-contract.js";
 export * from "./model-metrics.js";
 
 import { z } from "zod";

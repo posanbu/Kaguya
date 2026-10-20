@@ -74,6 +74,8 @@ flowchart LR
 
 ### 理解项目故事与领域语言
 
+先阅读[情境—行动上下文模型](./situation-model/)，了解如何频繁替换总背景和当前情境，同时保留整个 Agent 的行动连续性。该组文档独立说明模型，再映射 Kaguya 与 DSH 的实现。
+
 阅读[持续 Agent 设计原则](./continuous-agent)，了解为什么 Information 到达是唤醒 tick 而不是 turn，以及模块为什么需要区分订阅触发和完整语义输入。
 
 需要追溯这套故事与连续互动、前后台协作和群聊 Agent 的外部参照时，阅读[外部设计参考](./design-references)。该页只记录可借鉴问题与适用边界，不作为现有能力清单。

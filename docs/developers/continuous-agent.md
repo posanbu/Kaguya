@@ -93,6 +93,8 @@ flowchart LR
 
 ## 领域设计入口
 
+[情境—行动上下文模型](./situation-model/)独立介绍总背景与当前情境、冻结请求、连续性检查点和近期行动轨迹。它定义跨情境的同一条 Agent 主行动线。Kaguya 与 DSH 通过分别实现和共同样例对齐契约，支持状态见[实现映射](./situation-model/implementations)。
+
 [#241](https://github.com/posanbu/Kaguya/issues/241) 的具体设计见[持续情境、记忆与行动契约](./continuous/)。该设计分别定义观察进度、Memory 形成进度和行动状态，给出冻结输入、经历修订、失败恢复与新信息干预的边界；这些规则仍待实现，当前映射不因文档增加而改变。
 
 ## 术语迁移边界

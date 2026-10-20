@@ -19,6 +19,8 @@ description: Kaguya 当前已实现能力、明确边界和后续演进方向。
 
 ## 当前已实现
 
+**情境—行动模型的库级入口** — 新增[独立模型说明](../developers/situation-model/)、版本化 Schema、共同样例和纯装配函数。默认 Router 尚未接入 Agent 级行动账本与检查点。独立 DSH 实现和本项目分别验收，不能把插件的测试结果视为 Kaguya 默认运行链的完成状态。
+
 ::: timeline 统一运行入口
 
 - `apps/server` 在同一 Fastify 实例提供 Web UI、HTTP API 与可选 NapCat。

@@ -62,6 +62,21 @@ const developerGuide: DefaultTheme.SidebarItem[] = [
     ],
   },
   {
+    text: "情境—行动上下文模型",
+    collapsed: false,
+    items: [
+      { text: "模型概览", link: "/developers/situation-model/" },
+      { text: "对象与关系", link: "/developers/situation-model/objects" },
+      { text: "上下文装配", link: "/developers/situation-model/assembly" },
+      { text: "行动连续性", link: "/developers/situation-model/continuity" },
+      { text: "更新与恢复", link: "/developers/situation-model/recovery" },
+      {
+        text: "实现映射与验收",
+        link: "/developers/situation-model/implementations",
+      },
+    ],
+  },
+  {
     text: "持续情境设计（待实现）",
     collapsed: true,
     items: [

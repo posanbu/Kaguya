@@ -11,6 +11,8 @@ description: 查看 Light、Heavy 与结构化输出协议的生产模板，以�
 
 当前模板声明包含 Light、Heavy、身份、表达与人物事实等仍在使用的任务；主动记忆录入模板已随对应模块移除。
 
+独立的[情境—行动上下文模型](./situation-model/)定义频繁更新与行动连续性的目标契约。本页继续描述当前生产模板。公共契约或独立插件通过测试，不表示本页模板已经接入连续性检查点。
+
 ## Light：决定是否交给 Heavy
 
 Router 先等待原始 Memory 写入越过本轮账本上界，再冻结 `global_context` 与 `scope_context`。前者包含近十分钟各 scope 的运行事件；后者包含当前 scope 近十分钟、窗口前最近三十条语义事件及全部带“未读”标记的本轮入站原文。两块文本及完整来源 ID 持久化在同一个冻结事实中。Light 还读取身份、选中记忆、平台参与策略、当前会话背景和 `decision_state` 中的动作及等待预算。[变量编译位置](https://github.com/posanbu/Kaguya/blob/main/packages/modules/src/first-party/router/light.ts)、[原始 Memory 读取](https://github.com/posanbu/Kaguya/blob/main/packages/database/src/raw-event-store.ts)。

@@ -28,7 +28,10 @@
     "test:persistence": "tsc -b && vitest run packages/database/src",
     "preview:arousal": "tsc -b && tsx apps/server/src/preview/arousal.ts",
     "prompt:init": "tsx scripts/init-prompt-locals.ts",
-    "capture:export": "tsx apps/server/src/napcat-capture-export.ts"
+    "capture:export": "tsx apps/server/src/napcat-capture-export.ts",
+    "contracts:generate": "node --import tsx scripts/export-situation-contract.ts",
+    "contracts:check": "node --import tsx scripts/export-situation-contract.ts --check",
+    "contracts:test": "vitest run packages/modules/src/first-party/situation-model.test.ts"
   },
   "devDependencies": {
     "@types/node": "24.13.3",
