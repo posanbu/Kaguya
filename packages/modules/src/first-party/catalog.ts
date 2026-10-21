@@ -1,5 +1,5 @@
 /**
- * QQ 表情独立进入 Catalog 和生产默认配置，显式关闭后不安装 Heavy 草稿处理路径。
+ * QQ 素材维护模块保留 Catalog 注册，生产默认关闭；Heavy 不依赖旧草稿处理能力。
  * 功能概述：集中显式导入 first-party 模块，提供可被 composition root 选择和合并的 Catalog。
  * 主要职责：createFirstPartyModuleCatalog 接收宿主 Model Task token 和共享 completed kind，构造身份、时机与消息合成定义；
  * createFirstPartyModuleConfigDefaults 提供首次落盘模板，createFirstPartyModuleActivations
@@ -44,8 +44,7 @@ export function createFirstPartyModuleCatalog<
   options: CreateHeavyModuleOptions<P> &
     CreateRouterModuleOptions & {
       readonly expressionTemplates: ExpressionPromptTemplates;
-      readonly qqExpressionTemplates: { learn: string; select: string };
-      readonly qqExpressionEnabled?: boolean;
+      readonly qqExpressionTemplates: { learn: string };
     },
 ) {
   return defineInformationModuleCatalog(
@@ -65,7 +64,6 @@ export function createFirstPartyModuleCatalog<
     createHeavyModule({
       ...options,
       expressionEnabled: true,
-      draftProcessingEnabled: options.qqExpressionEnabled ?? false,
     }),
     heartbeatModule,
     createRouterModule(options),
@@ -175,7 +173,7 @@ export function createFirstPartyModuleConfigDefaults(
             version: 1 as const,
             instanceId: "qq-expression.default",
             definitionId: "plugin.qq-expression",
-            enabled: true,
+            enabled: false,
             settings: Object.freeze({}),
           },
         ]

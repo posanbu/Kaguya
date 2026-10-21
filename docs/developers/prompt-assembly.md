@@ -58,6 +58,22 @@ Light 选择 `message` 后，Heavy 根据消息意图取得同一个原始 Memor
 
 :::
 
+### 可选 QQ 表情与正文共用 Heavy
+
+`plugin.qq-expression` 默认关闭，保留的功能只负责素材收藏和有来源的语义学习。它不再消费草稿或追加表情。Light 不提供 tone，也不替 Heavy 选择表情。
+
+Heavy 的 `qqExpressionsEnabled` 默认关闭。开启后，选择器冻结同会话的最新可靠语义、可用素材和真人证据，最多 24 个候选。`qq_expressions` 只展示启用状态、文字说明和本轮 `qq-expression-N` 引用，不展示文件、URL 或平台素材 ID。它作为独立后缀追加到普通 Heavy Prompt，并保留素材与语义来源。
+
+Heavy 结合原始对话和正文，在同一次模型调用中决定是否附加一个素材。message 的可选 `expression` 为候选引用，省略或 null 表示不附加；silent 不携带该字段。严肃、求助、冲突、不确定或证据不足时不附加，不为发素材改写正文。
+
+运行时只解析原请求冻结的引用，再检查会话、置信度和持久化发送额度。检查失败保留原正文。旧请求缺少此变量时不附加；重放不能使用后来的素材替换原候选。跨会话授权正文保持独立的文本输出路径，不加载当前会话素材。
+
+::: code-group
+
+<<< ../../packages/modules/templates/heavy.qq-expressions.default.hbs [Heavy 表情策略 ~~vscode-icons:file-type-handlebars~~]
+
+:::
+
 ### 原生接续与行动结果
 
 Heavy 普通回应任务追加 `action_records`。这些记录来自冻结边界内已保存的模型结果、行动终态和投递回执。装配过程不推断承诺、待办或行动理由。

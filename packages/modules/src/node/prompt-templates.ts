@@ -1,5 +1,5 @@
 /**
- * QQ 表情 learn/select 模板纳入同一 default/local 读取和校验流程。
+ * QQ 表情 learn 与 Heavy 选择模板纳入同一 default/local 读取和校验流程。
  * 功能概述：第一方模板的 Node 加载入口，优先读取显式声明的 local 覆盖。
  * 主要职责：loadFirstPartyPromptTemplates 返回消息组、授权消息、Light、人物事实和表达学习模板并预检整组。
  * 代码库关系：资源存储与编译器共用 prompt-declarations；composition 注入运行模块。
@@ -32,7 +32,7 @@ export interface FirstPartyPromptTemplates {
   readonly identityName: string;
   readonly identityAliases: readonly string[];
   readonly identityPersona: string;
-  readonly qqExpression: { readonly learn: string; readonly select: string };
+  readonly qqExpression: { readonly learn: string };
   readonly expression: { readonly learn: string; readonly select: string };
   readonly authorizedMessage: {
     readonly automatic: string;
@@ -155,8 +155,7 @@ export function loadFirstPartyPromptTemplates(
       ),
       [
         "behavior",
-        messages.find((v) => v.templateId === "heavy.behavior")!
-          .content,
+        messages.find((v) => v.templateId === "heavy.behavior")!.content,
       ],
       [
         "platformStyles",
@@ -164,9 +163,8 @@ export function loadFirstPartyPromptTemplates(
           default: messages.find(
             (v) => v.templateId === "heavy.platform-style",
           )!.content,
-          qq: messages.find(
-            (v) => v.templateId === "heavy.platform-style-qq",
-          )!.content,
+          qq: messages.find((v) => v.templateId === "heavy.platform-style-qq")!
+            .content,
           web: messages.find(
             (v) => v.templateId === "heavy.platform-style-web",
           )!.content,

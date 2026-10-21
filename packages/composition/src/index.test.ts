@@ -184,7 +184,7 @@ describe("shared Runtime Composition", () => {
   );
 });
 
-it("installs the QQ draft processor only while its independent instance is enabled", () => {
+it("never installs the retired QQ draft processor, even if collection is enabled", () => {
   const configs = modules.createFirstPartyModuleConfigDefaults("production");
   for (const enabled of [true, false]) {
     const composition = createMessageComposition(undefined, {
@@ -199,7 +199,7 @@ it("installs the QQ draft processor only while its independent instance is enabl
       composer.manifest.produces.some(
         (kind) => kind.kind === "agent.heavy.message.draft",
       ),
-    ).toBe(enabled);
+    ).toBe(false);
     expect(
       composition.activations.some(
         (a) => a.definitionId === "plugin.qq-expression",

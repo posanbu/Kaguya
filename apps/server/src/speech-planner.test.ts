@@ -58,10 +58,7 @@ async function fixture(
   qqExpression = false,
   heavyResponse: unknown = { action: "message", text: "reply-body" },
 ) {
-  let expressionChoice: {
-    assetInformationId: string | null;
-    emoji: string | null;
-  } = { assetInformationId: null, emoji: null };
+  let expressionChoice: string | null = null;
   const database = await createTestingDatabase();
   let now = Date.parse("2026-09-12T12:00:00.000Z");
   const requests: Record<string, any>[] = [];
@@ -70,7 +67,6 @@ async function fixture(
     const request = JSON.parse(String(init?.body));
     const promptText = JSON.stringify(request.messages);
     const learning = promptText.includes("归纳这批真人消息");
-    const qqSelecting = promptText.includes("判断当前回复是否自然适合少量表情");
     const qqLearning = promptText.includes("你负责从文字上下文推断一个");
     const qqSourceText = request.messages
       .map((m: { content: unknown }) =>
@@ -78,27 +74,28 @@ async function fixture(
       )
       .join("\n");
     const selecting = promptText.includes("依据冻结回合和已获胜的消息意图");
-    (learning || selecting || qqSelecting || qqLearning
-      ? backgroundRequests
-      : requests
-    ).push(request);
-    const pending = qqSelecting
-      ? expressionChoice
-      : qqLearning
-        ? {
-            meaning: "好笑的无奈",
-            usage: "友好自嘲",
-            confidence: 0.95,
-            evidenceIds: [
-              qqSourceText.match(/"id":"([^"]+)"/u)?.[1] ?? "missing",
-            ],
-          }
-        : learning
-          ? { patterns: [] }
-          : selecting
-            ? { habitIds: [] }
-            : request.model === "deepseek-light"
-              ? (outputs.shift() ?? silent)
+    (learning || selecting || qqLearning ? backgroundRequests : requests).push(
+      request,
+    );
+    const pending = qqLearning
+      ? {
+          meaning: "好笑的无奈",
+          usage: "友好自嘲",
+          confidence: 0.95,
+          evidenceIds: [
+            qqSourceText.match(/"id":"([^"]+)"/u)?.[1] ?? "missing",
+          ],
+        }
+      : learning
+        ? { patterns: [] }
+        : selecting
+          ? { habitIds: [] }
+          : request.model === "deepseek-light"
+            ? (outputs.shift() ?? silent)
+            : expressionChoice &&
+                typeof heavyResponse === "object" &&
+                heavyResponse !== null
+              ? { ...heavyResponse, expression: expressionChoice }
               : heavyResponse;
     const output = typeof pending === "function" ? await pending() : pending;
     if (output === "HTTP_FAILURE")
@@ -139,7 +136,18 @@ async function fixture(
     }),
     {
       moduleConfigs: [
-        ...createFirstPartyModuleConfigDefaults("test"),
+        ...createFirstPartyModuleConfigDefaults("test").map((config) =>
+          config.definitionId === "agent.heavy" && qqExpression
+            ? {
+                ...config,
+                settings: {
+                  qqExpressionsEnabled: true,
+                  qqExpressionCooldownSeconds: 60,
+                  qqExpressionMinMessagesBetween: 3,
+                },
+              }
+            : config,
+        ),
         ...(qqExpression
           ? [
               {
@@ -1073,9 +1081,9 @@ describe("Router Light via DeepSeek-compatible provider", () => {
   );
 });
 
-describe("independent QQ expression plugin through real Runtime", () => {
+describe("Heavy QQ expressions through real Runtime", () => {
   it(
-    "leaves replies plain when the expression model declines across restart",
+    "leaves replies plain when Heavy declines or has no candidates across restart",
     async () => {
       const f = await fixture(
         Array.from({ length: 8 }, () => speak),
@@ -1123,7 +1131,7 @@ describe("independent QQ expression plugin through real Runtime", () => {
   it(
     "collects and selects a known QQ face without Light tone",
     async () => {
-      const f = await fixture([speak, speak, speak, speak, speak], true);
+      const f = await fixture([speak, speak, speak, speak, speak, speak], true);
       await f.submit(
         f.message("face-source", {
           text: "哈哈这次又翻车了[face:14]",
@@ -1140,7 +1148,7 @@ describe("independent QQ expression plugin through real Runtime", () => {
         (await f.atoms()).find((a) => a.kind === "plugin.qq-expression.learned")
           ?.payload.confidence,
       ).toBe(0.95);
-      f.useExpression({ assetInformationId: asset.informationId, emoji: null });
+      f.useExpression("qq-expression-1");
       for (let i = 1; i < 5; i++) {
         f.setTime(1);
         await f.submit(f.message(`face-${i}`));
@@ -1175,7 +1183,37 @@ describe("independent QQ expression plugin through real Runtime", () => {
       expect(
         (await f.atoms()).filter((a) => a.kind === "core.delivery.delivered"),
       ).toHaveLength(5);
+      const graph = await f.atoms();
+      expect(
+        graph.some(
+          (a) =>
+            a.kind === "agent.heavy.message.draft" ||
+            a.kind === "agent.heavy.message.prepared" ||
+            a.payload.taskId === "plugin.qq-expression.select",
+        ),
+      ).toBe(false);
+      expect(
+        graph.filter(
+          (a) =>
+            a.kind === "core.model.task.requested" &&
+            a.payload.taskId === "agent.heavy.respond",
+        ),
+      ).toHaveLength(5);
+      expect(deliveredMessages.filter((m) => m.expression)).toHaveLength(1);
+      await f.restart();
+      f.setTime(1);
+      await f.submit(f.message("after-expression-restart"));
+      await f.waitForDeliveries(6);
+      await f.settle();
+      expect(
+        (
+          f.delivered.mock.calls.at(-1) as unknown as [
+            unknown,
+            { expression?: unknown },
+          ]
+        )[1].expression,
+      ).toBeUndefined();
     },
-    QQ_MULTI_TURN_TIMEOUT,
+    QQ_RESTART_TIMEOUT,
   );
 });

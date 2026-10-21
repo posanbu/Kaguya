@@ -228,9 +228,6 @@ export async function startKaguyaServer(
     catalog = createMessageCatalog(
       selectedProfile.identity,
       undefined,
-      moduleConfigs.some(
-        (item) => item.definitionId === "plugin.qq-expression" && item.enabled,
-      ),
       activePersonProfiles,
     );
     pluginSnapshot = await loadModulePlugins({
@@ -588,10 +585,6 @@ export async function startKaguyaServer(
           catalog: createMessageCatalog(
             snapshot.profile.identity,
             undefined,
-            snapshot.moduleConfigs.some(
-              (item) =>
-                item.definitionId === "plugin.qq-expression" && item.enabled,
-            ),
             activePersonProfiles,
           ),
         });

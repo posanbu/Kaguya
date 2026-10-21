@@ -95,7 +95,6 @@ export function createDeterministicModelSelectionResolver(): RuntimeModelSelecti
 export function createMessageCatalog(
   configuredIdentity: Pick<AgentIdentity, "timeZone"> = DEFAULT_AGENT_IDENTITY,
   promptTemplates = loadFirstPartyPromptTemplates(),
-  qqExpressionEnabled = false,
   activePersonProfiles?: ActivePersonProfiles,
 ) {
   const agentIdentity: AgentIdentity = {
@@ -121,7 +120,6 @@ export function createMessageCatalog(
     lightPlatformPolicies: promptTemplates.lightPlatformPolicies,
     expressionTemplates: promptTemplates.expression,
     qqExpressionTemplates: promptTemplates.qqExpression,
-    qqExpressionEnabled,
     agentIdentity,
     ...(activePersonProfiles ? { activePersonProfiles } : {}),
   });
@@ -147,9 +145,6 @@ export function createMessageComposition(
     createMessageCatalog(
       identity,
       promptTemplates,
-      options.moduleConfigs.some(
-        (c) => c.definitionId === "plugin.qq-expression" && c.enabled,
-      ),
       options.activePersonProfiles,
     );
   const memoryEnabled = options.memoryEnabled ?? false;
