@@ -67,6 +67,7 @@ export interface HeavyPromptTemplates {
   readonly scene: string;
   readonly conversationBackground: string;
   readonly expressionHabits: string;
+  readonly qqExpressions: string;
   readonly historyInbound: string;
   readonly historyAssistant: string;
   readonly memory: string;
@@ -354,7 +355,8 @@ function compileNested(templates: HeavyPromptTemplates) {
         (d) =>
           d.key !== "main" &&
           d.key !== "conversationBackground" &&
-          d.key !== "expressionHabits",
+          d.key !== "expressionHabits" &&
+          d.key !== "qqExpressions",
       )
       .map((d) => ({ ...d, content: templates[d.key] })),
   );

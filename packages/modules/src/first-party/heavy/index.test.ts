@@ -1,3 +1,5 @@
+import { collected, learned } from "../qq-expression/facts.js";
+import { scopeKey } from "../qq-expression/policy.js";
 /**
  * 功能概述：验证消息编写的严格意图契约及 intent→Model Task→assistant→纯文本投递三个阶段。
  * 主要职责：保护 modelTier 唯一配置、完整 turn Prompt、失败与取消无业务写入、完成任务 task/version/definition/tier 过滤及外部实例隔离与目标元数据最小化。
@@ -64,6 +66,7 @@ async function setup(
   expressionEnabled = false,
   promptOverrides: Partial<HeavyPromptTemplates> = {},
   authorization?: MessageAuthorization,
+  qqExpressionsEnabled = false,
 ) {
   const f = fixture();
   const execute = vi.fn(
@@ -105,7 +108,10 @@ async function setup(
   const instance = await definition.create(
     {
       instanceId: activation.instanceId,
-      settings: {},
+      settings: heavySettingsSchema.parse({
+        qqExpressionsEnabled,
+        qqExpressionMinMessagesBetween: 3,
+      }),
       activation,
     },
     context,
@@ -201,7 +207,9 @@ describe("message composer", () => {
         source: target,
       }).success,
     ).toBe(false);
-    expect(heavySettingsSchema.parse({})).toEqual({});
+    expect(heavySettingsSchema.parse({})).toMatchObject({
+      qqExpressionsEnabled: false,
+    });
     for (const outbound of [
       { mode: "source", messageKind: "reply" },
       { mode: "fixed", ...target },
@@ -267,6 +275,7 @@ describe("message composer", () => {
     };
     const persisted = atom("old-heavy-request", "core.model.task.requested", {
       taskId: "agent.heavy.respond",
+      sourceInformationId: s.f.intent.informationId,
       activation,
       prompt: oldPrompt,
       contextInformationIds: s.f.atoms.map((item) => item.informationId),
@@ -280,6 +289,22 @@ describe("message composer", () => {
         contextAtoms: s.f.atoms,
       }),
     );
+  });
+  it("does not mistake an earlier native-continuation request for this intent's saved task", async () => {
+    const s = await setup();
+    const history = atom("historical-request", "core.model.task.requested", {
+      taskId: "agent.heavy.respond",
+      sourceInformationId: "earlier-intent",
+      activation,
+      prompt: { text: "MUST_NOT_REUSE" },
+      contextInformationIds: [],
+    });
+    vi.mocked(s.context.select).mockResolvedValue([...s.f.atoms, history]);
+    await s.instance.subscriptions[0]!.handle(s.f.intent as never, s.context);
+    expect(s.execute.mock.calls[0]![0].prompt.text).not.toContain(
+      "MUST_NOT_REUSE",
+    );
+    expect(s.execute.mock.calls[0]![0].prompt.text).toContain("FIRST_INPUT");
   });
   it("records target-only assistant and text delivery, preserving turn without reply markers", async () => {
     const s = await setup();
@@ -370,7 +395,7 @@ it("validates the completion→request→intent causal chain", async () => {
   };
   await expect(
     selector.select({ sourceAtom: completed, ledger }),
-  ).resolves.toEqual([s.f.intent.informationId]);
+  ).resolves.toEqual([s.f.intent.informationId, requested.informationId]);
   const forged = atom("completed-1", completedKind.kind, {
     sourceInformationId: "different-intent",
   });
@@ -484,3 +509,122 @@ describe("frozen expression dispatch", () => {
     ).toEqual(target);
   });
 });
+
+// The same Heavy task returns both text and the optional frozen material reference.
+it.each([null, "qq-expression-1", "invented", "qq-expression-2", "body-emoji"])(
+  "keeps one Heavy call and resolves expression %s before ordinary delivery",
+  async (reference) => {
+    const s = await setup(false, {}, undefined, true);
+    const evidence = s.f.messages[0]!;
+    const asset = atom(
+      "qq-asset",
+      collected.kind,
+      {
+        scope: scopeKey(target),
+        assetId: "face",
+        expression: { kind: "face", id: "14" },
+        sourceInformationId: evidence.informationId,
+      },
+      [
+        {
+          relation: "core:uses-context",
+          informationId: evidence.informationId,
+        },
+      ],
+    );
+    const meaning = atom(
+      "qq-meaning",
+      learned.kind,
+      {
+        scope: scopeKey(target),
+        assetInformationId: asset.informationId,
+        meaning: "好笑的无奈",
+        usage: "友好自嘲",
+        confidence: 0.95,
+        evidenceIds: [evidence.informationId],
+        basis: "context-inference",
+      },
+      [
+        {
+          relation: "core:uses-context",
+          informationId: evidence.informationId,
+        },
+      ],
+    );
+    const atoms = [...s.f.atoms, asset, meaning];
+    vi.mocked(s.context.select).mockResolvedValue(atoms);
+    await s.instance.subscriptions[0]!.handle(s.f.intent as never, s.context);
+    const task = s.execute.mock.calls[0]![0];
+    expect(task.selectionPolicy.tier).toBe("heavy");
+    expect(task.prompt.text).toContain("严肃、悲伤、求助");
+    expect(
+      task.prompt.variables.find((v) => v.name === "qq_expressions")!.content,
+    ).toContain("qq-expression-1");
+    expect(task.prompt.templates.some((t) => t.name === "qq-expressions")).toBe(
+      true,
+    );
+    const request = atom("request-1", "core.model.task.requested", {
+      taskId: task.task.taskId,
+      sourceInformationId: s.f.intent.informationId,
+      prompt: task.prompt as never,
+      contextInformationIds: task.contextAtoms.map((a) => a.informationId),
+    });
+    const history = Array.from({ length: 3 }, (_, i) =>
+      atom(`previous-${i}`, assistantTextInformationKind.kind, {
+        text: "普通正文",
+        source: target,
+      }),
+    );
+    vi.mocked(s.context.select).mockImplementation(async (selector) =>
+      selector.selectorId === "agent.heavy.qq-expression.history"
+        ? history
+        : [...atoms, request],
+    );
+    const completed = atom("completed-1", completedKind.kind, {
+      taskId: "agent.heavy.respond",
+      sourceInformationId: s.f.intent.informationId,
+      activation,
+      selectionPolicy: { tier: "heavy" },
+      outputMode: "object",
+      output: {
+        action: "message",
+        text: reference === "body-emoji" ? "正文完全保留😂" : "正文完全保留",
+        expression: reference === "body-emoji" ? "qq-expression-1" : reference,
+      },
+    });
+    await s.instance.subscriptions[1]!.handle(completed as never, s.context);
+    const registration = s.registerOnce.mock.calls.at(-1) as unknown as [
+      string,
+      string,
+      unknown,
+      { payload: Record<string, unknown> },
+    ];
+    expect(registration[0]).toBe("kaguya.heavy.assistant.v1");
+    expect(registration[3].payload.text).toBe(
+      reference === "body-emoji" ? "正文完全保留😂" : "正文完全保留",
+    );
+    expect(registration[3].payload.expression).toEqual(
+      reference === "qq-expression-1" ? { kind: "face", id: "14" } : undefined,
+    );
+    expect(s.execute).toHaveBeenCalledTimes(1);
+    const assistant = atom(
+      "assistant",
+      assistantTextInformationKind.kind,
+      registration[3].payload as never,
+    );
+    await s.instance.subscriptions[2]!.handle(assistant as never, s.context);
+    const delivery = s.registerOnce.mock.calls.at(-1) as unknown as [
+      string,
+      string,
+      unknown,
+      { payload: { message: Record<string, unknown> } },
+    ];
+    expect(delivery[3].payload.message).toEqual({
+      kind: "text",
+      text: reference === "body-emoji" ? "正文完全保留😂" : "正文完全保留",
+      ...(reference === "qq-expression-1"
+        ? { expression: { kind: "face", id: "14" } }
+        : {}),
+    });
+  },
+);

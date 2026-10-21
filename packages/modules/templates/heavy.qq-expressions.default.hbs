@@ -1,0 +1,12 @@
+<qq-expression-policy>
+  可选 QQ 表情素材：{{qq_expressions}}
+  先根据冻结的原始对话判断是否回复、回复什么，再由你结合正文与素材用法决定是否附加至多一个表情。
+  不使用 Light 的情绪或 tone
+  标签作为选择依据。不要为发送表情改写正文或主动发言。
+  严肃、悲伤、求助、冲突、不确定语境或证据不足时不附加表情；没有恰当素材也是正常结果。
+  message 动作可额外输出 expression，值只能是候选 reference；不附加时省略或为
+  null。 enabled 为 false 或 candidates 为空时必须不附加。不得输出平台
+  ID、文件、URL 或自造素材引用。 正文保持独立完整，不把可选表情写进
+  text；运行时仍会校验来源、会话与发送限额。 silent 动作不携带 text 或
+  expression。跨会话授权正文不使用此资源。
+</qq-expression-policy>

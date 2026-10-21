@@ -32,11 +32,13 @@
 
 ## Settings
 
-settings 为空对象 `{}`。模型固定使用 Profile 的 `heavy` 档位；模板和 Agent 身份由 composition root 注入。升级时需人工更新旧实例配置。
+模型固定使用 Profile 的 `heavy` 档位；模板和 Agent 身份由 composition root 注入。`qqExpressionsEnabled` 默认为 false，显式开启后才允许同一次 Heavy 调用选择 QQ 表情素材。`qqExpressionCooldownSeconds` 默认 600，`qqExpressionMinMessagesBetween` 默认 8，`qqExpressionMinConfidence` 默认 0.85。时间与普通回复间隔必须同时满足，首次使用也受间隔限制。独立收藏模块的开关不控制这些设置。
 
 ## 可靠性、幂等和失败行为
 
-普通回复使用结构化输出：`message(text)` 或 `silent`。silent 不要求另写理由。授权跨会话发送使用文本输出。稳定任务键复用等价 Model Task；assistant、silent 与 delivery 使用实例级 `registerOnce` 去重。silent 不生成用于投递的 assistant 原子，由情境运行模块关闭回合。模型任务仍保存服务实际返回的原生消息、推理项和协议元数据，后续调用按兼容协议接续。界面缺少可读推理时显示“未提供”。模型 failed/cancelled 不生成 assistant，缺少冻结引用或 provenance 不一致时拒绝继续。
+普通回复使用结构化输出：`message(text, expression?)` 或 `silent`。`expression` 可省略或为 null，选用时只能填写本轮 `qq-expression-N` 引用。无效引用、素材不足和限频失败只取消附加，保留完整正文。silent 不要求另写理由。授权跨会话发送使用文本输出。稳定任务键复用等价 Model Task；assistant、silent 与 delivery 使用实例级 `registerOnce` 去重。silent 不生成用于投递的 assistant 原子，由情境运行模块关闭回合。模型任务仍保存服务实际返回的原生消息、推理项和协议元数据，后续调用按兼容协议接续。界面缺少可读推理时显示“未提供”。模型 failed/cancelled 不生成 assistant，缺少冻结引用或 provenance 不一致时拒绝继续。
+
+可选的 `heavy.qq-expressions` 模板接收冻结的 `qq_expressions` 变量，包含启用状态、素材用法和引用。素材与真人证据随 Model Task 保存；重启复用原请求，不重新选择后来素材。完成阶段复核原引用、会话、置信度及持久化发送额度，再通过原授权链登记 assistant 和 delivery。跨会话授权只生成文本，不加载此模板。独立插件已停止消费草稿，因此旧 prepared 也不会触发新的投递。
 
 ## 日志与可观测性
 

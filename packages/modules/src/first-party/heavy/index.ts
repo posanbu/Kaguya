@@ -1,13 +1,13 @@
 /**
- * 启用独立草稿处理器时，QQ 模型输出先登记 draft；最终 assistant 仍经过原有授权和唯一投递槽。
+ * Heavy 直接登记 assistant，不向旧插件分派草稿；可选表情和正文经过同一授权及投递槽。
  * manifest.promptTemplates 显式声明消息模板组，供管理端按归属读取。
- * Heavy 固定使用 heavy 模型档位，模块 settings 为空对象。
+ * Heavy 固定使用 heavy 模型档位，可选 QQ 表情默认关闭。
  * 功能概述：消息编写模块消费 Router 产生的目标与冻结 turn 意图，经通用 Model Task 生成文本。
  * 宿主授权能力在选取上下文前校验目标；跨会话只使用批准 Prompt，正文确认后才通过同一 release 创建 delivery。
  * 普通回复也调用宿主冻结背景，仅追加 background 投影，不把其他会话目标引用或 ID 传给正文模型。
  * 场景、人物背景与表达习惯均使用外部模板；背景和表达 renderer 在模块构造时按声明编译，只记录实际追加的模板和变量。
  * 主要职责：createHeavyModule 装配三个 durable 订阅；messageTaskOutputSchema 校验非空文本；
- * heavySettingsSchema 不接受可调设置。完成选择器沿 completed→requested→intent 核对任务来源，
+ * heavySettingsSchema 控制可选表情及发送限额。完成选择器沿 completed→requested→intent 核对任务来源，
  * 再以实例与事实 ID 为 registerOnce 键分别记录 assistant 和纯文本投递，重复事件不产生重复业务输出。
  * 代码库关系：message-context 选择冻结上下文，message-prompt 编译全部本轮输入；Runtime 注入模型能力及完成定义。
  * 输入输出与副作用：意图只携带 target、turn 与 memoryInformationIds；assistant.source 保留 target，
@@ -76,10 +76,17 @@ import {
 } from "./message-prompt.js";
 
 import {
-  messageDraftInformationKind,
-  messagePreparedInformationKind,
-  messageDraftProcessorReady,
-} from "../kinds/message.js";
+  collected,
+  learned,
+  settingsSchema as qqExpressionSettings,
+} from "../qq-expression/facts.js";
+import { emojiParts } from "../qq-expression/policy.js";
+import {
+  withQqExpressionContext,
+  appendQqExpressionPrompt,
+  resolveQqExpression,
+  qqExpressionHistorySelector,
+} from "../qq-expression/heavy.js";
 
 export const modelTierSchema = z.enum(["light", "heavy"]);
 export type ModelTier = z.infer<typeof modelTierSchema>;
@@ -90,7 +97,20 @@ export interface ModuleModelSelection {
 
 export type { AgentIdentity, HeavyPromptTemplates } from "./message-prompt.js";
 
-export const heavySettingsSchema = z.object({}).strict();
+export const heavySettingsSchema = z
+  .object({
+    qqExpressionsEnabled: z.boolean().default(false).meta({
+      title: "Heavy 选择 QQ 表情",
+      description: "仅选择本轮同会话冻结素材，关闭时不附加表情。",
+      public: true,
+      default: false,
+    }),
+    qqExpressionCooldownSeconds: qqExpressionSettings.shape.cooldownSeconds,
+    qqExpressionMinMessagesBetween:
+      qqExpressionSettings.shape.minMessagesBetween,
+    qqExpressionMinConfidence: qqExpressionSettings.shape.minConfidence,
+  })
+  .strict();
 export type HeavySettings = z.infer<typeof heavySettingsSchema>;
 
 export const messageModelDispatchingDiagnostic = defineModuleDiagnostic({
@@ -115,10 +135,17 @@ export const messageModelDispatchingDiagnostic = defineModuleDiagnostic({
 export const messageTaskOutputSchema = z.string().trim().min(1);
 export const messageResponseOutputSchema = z.discriminatedUnion("action", [
   z
-    .object({ action: z.literal("message"), text: z.string().trim().min(1) })
+    .object({
+      action: z.literal("message"),
+      text: z.string().trim().min(1),
+      expression: z.string().max(80).nullable().optional(),
+    })
     .strict(),
   z.object({ action: z.literal("silent") }).strict(),
-]);
+]) as z.ZodType<
+  | { action: "message"; text: string; expression?: string | null }
+  | { action: "silent" }
+>;
 
 export interface ModelTaskRequest<TOutput> {
   readonly task: {
@@ -196,8 +223,6 @@ export interface CreateHeavyModuleOptions<
     P
   >;
   readonly expressionEnabled?: boolean;
-  /** 装配时有独立展示插件才启用；本模块不决定表情策略。 */
-  readonly draftProcessingEnabled?: boolean;
   readonly selector?: InformationSelectorDefinition;
   readonly promptTemplates: HeavyPromptTemplates;
   readonly agentIdentity: AgentIdentity;
@@ -216,6 +241,7 @@ export function createHeavyModule<
   const selector = dependencies.expressionEnabled
     ? withExpressionContext(baseSelector)
     : baseSelector;
+  const qqSelector = withQqExpressionContext(selector);
   const compilePrompt = createMessagePromptCompiler(
     dependencies.promptTemplates,
     dependencies.agentIdentity,
@@ -227,6 +253,10 @@ export function createHeavyModule<
   const renderHabits = createContextPromptRenderer(
     dependencies.promptTemplates,
     "expressionHabits",
+  );
+  const renderQqExpressions = createContextPromptRenderer(
+    dependencies.promptTemplates,
+    "qqExpressions",
   );
   const completedInformationKind =
     dependencies.modelTaskCompletedInformationKind;
@@ -287,11 +317,13 @@ export function createHeavyModule<
       selectors: [
         ...(dependencies.expressionEnabled ? [expressionDispatchSelector] : []),
         selector,
+        qqSelector,
         ...(selector === currentAcceptedMessageSelector
           ? []
           : [currentAcceptedMessageSelector]),
         completedMessageSelector,
         confirmedAssistantSelector,
+        qqExpressionHistorySelector,
       ],
       promptRenderers: [
         messagePromptRenderer,
@@ -300,9 +332,6 @@ export function createHeavyModule<
         assistantHistoryPromptRenderer,
       ],
       requires: [
-        ...(dependencies.draftProcessingEnabled
-          ? [messageDraftProcessorReady]
-          : []),
         ...(dependencies.expressionEnabled ? [expressionReady] : []),
         modelTaskCapability,
         ...(dependencies.messageAuthorizationCapability
@@ -319,9 +348,8 @@ export function createHeavyModule<
       settingsSchema: heavySettingsSchema,
       promptTemplates: heavyModulePromptTemplates,
       consumes: [
-        ...(dependencies.draftProcessingEnabled
-          ? [messagePreparedInformationKind]
-          : []),
+        collected,
+        learned,
         ...(dependencies.expressionEnabled ? [expressionSelected] : []),
         messageConfirmedInformationKind,
         messageIntentRequestedInformationKind,
@@ -332,308 +360,322 @@ export function createHeavyModule<
       ],
       produces: [
         heavyResponseSilentInformationKind,
-        ...(dependencies.draftProcessingEnabled
-          ? [messageDraftInformationKind]
-          : []),
         assistantTextInformationKind,
         deliveryRequestedInformationKind,
       ],
       diagnostics: [messageModelDispatchingDiagnostic],
     },
-    create: ({ activation }) => ({
-      provisions: [],
-      describeStartup: () => ({
-        summary: "Heavy pipeline ready",
-        fields: {
-          modelTier: "heavy",
-        },
-      }),
-      subscriptions: [
-        ...(dependencies.draftProcessingEnabled
-          ? [
-              onInformation(
-                messagePreparedInformationKind,
-                {
-                  subscriptionId: "kaguya.heavy.prepared",
-                  delivery: "durable",
-                },
-                async (prepared, context) => {
-                  if (
-                    prepared.payload.originatingModuleInstanceId !==
-                    context.instanceId
-                  )
-                    return;
-                  await context.registerOnce(
-                    "kaguya.heavy.prepared-assistant",
-                    prepared.informationId,
-                    assistantTextInformationKind,
-                    {
-                      payload: assistantTextInformationKind.payloadSchema.parse(
-                        prepared.payload,
-                      ),
-                    },
-                  );
-                },
-              ),
-            ]
-          : []),
-        onInformation(
-          (dependencies.expressionEnabled
-            ? expressionSelected
-            : messageIntentRequestedInformationKind) as unknown as InformationKindDefinition<
-            string,
-            JsonObject
-          >,
-          {
-            subscriptionId: dependencies.expressionEnabled
-              ? "kaguya.heavy.expression-selected"
-              : "kaguya.heavy.requested",
-            delivery: "durable",
+    create: ({ activation, settings: inputSettings }) => {
+      const settings = heavySettingsSchema.parse(inputSettings);
+      let completionQueue = Promise.resolve();
+      return {
+        provisions: [],
+        describeStartup: () => ({
+          summary: "Heavy pipeline ready",
+          fields: {
+            modelTier: "heavy",
           },
-          async (input, context) => {
-            const selected = dependencies.expressionEnabled
-              ? await context.select(expressionDispatchSelector)
-              : [];
-            const original = dependencies.expressionEnabled
-              ? selected.find(
-                  (a) => a.informationId === input.payload.intentInformationId,
-                )!
-              : input;
-            const message = {
-              ...original,
-              payload: messageIntentRequestedInformationPayloadSchema.parse(
-                original.payload,
-              ),
-            };
-            const authorized = dependencies.messageAuthorizationCapability
-              ? await context
-                  .use(dependencies.messageAuthorizationCapability)
-                  .prepare(message)
-              : undefined;
-            let contextAtoms =
-              authorized?.contextAtoms ?? (await context.select(selector));
-            const persisted = authorized
-              ? undefined
-              : contextAtoms.find(
-                  (atom) =>
-                    atom.kind === "core.model.task.requested" &&
-                    atom.payload.taskId === "agent.heavy.respond" &&
-                    (atom.payload.activation as any)?.instanceId ===
-                      context.instanceId,
+        }),
+        subscriptions: [
+          onInformation(
+            (dependencies.expressionEnabled
+              ? expressionSelected
+              : messageIntentRequestedInformationKind) as unknown as InformationKindDefinition<
+              string,
+              JsonObject
+            >,
+            {
+              subscriptionId: dependencies.expressionEnabled
+                ? "kaguya.heavy.expression-selected"
+                : "kaguya.heavy.requested",
+              delivery: "durable",
+            },
+            async (input, context) => {
+              const selected = dependencies.expressionEnabled
+                ? await context.select(expressionDispatchSelector)
+                : [];
+              const original = dependencies.expressionEnabled
+                ? selected.find(
+                    (a) =>
+                      a.informationId === input.payload.intentInformationId,
+                  )!
+                : input;
+              const message = {
+                ...original,
+                payload: messageIntentRequestedInformationPayloadSchema.parse(
+                  original.payload,
+                ),
+              };
+              const authorized = dependencies.messageAuthorizationCapability
+                ? await context
+                    .use(dependencies.messageAuthorizationCapability)
+                    .prepare(message)
+                : undefined;
+              let contextAtoms =
+                authorized?.contextAtoms ??
+                (await context.select(
+                  settings.qqExpressionsEnabled ? qqSelector : selector,
+                ));
+              const persisted = authorized
+                ? undefined
+                : contextAtoms.find(
+                    (atom) =>
+                      atom.kind === "core.model.task.requested" &&
+                      atom.payload.taskId === "agent.heavy.respond" &&
+                      atom.payload.sourceInformationId ===
+                        message.informationId &&
+                      (atom.payload.activation as any)?.instanceId ===
+                        context.instanceId,
+                  );
+              if (persisted) {
+                const byId = new Map(
+                  contextAtoms.map((atom) => [atom.informationId, atom]),
                 );
-            if (persisted) {
-              const byId = new Map(
-                contextAtoms.map((atom) => [atom.informationId, atom]),
-              );
-              contextAtoms = (
-                persisted.payload.contextInformationIds as string[]
-              ).map((id) => {
-                const atom = byId.get(id);
-                if (!atom) throw new Error("Missing persisted Heavy context");
-                return atom;
-              });
-            }
-            const persistedIntent = requireSelectedMessageIntent(
-              contextAtoms,
-              message.informationId,
-            );
-            let prompt =
-              authorized?.prompt ??
-              (persisted?.payload.prompt as unknown as
-                CompiledPrompt | undefined) ??
-              compilePrompt(contextAtoms, persistedIntent.informationId);
-            if (
-              !authorized &&
-              !persisted &&
-              dependencies.messageAuthorizationCapability
-            ) {
-              const service = context.use(
-                dependencies.messageAuthorizationCapability,
-              );
-              const turn = contextAtoms.find(
-                (a) =>
-                  a.informationId === message.payload.turn.contextInformationId,
-              );
-              if (service.conversation && turn) {
-                const conversation = await service.conversation(turn);
-                const background = JSON.stringify(
-                  conversation.payload.background,
-                );
-                const suffix = renderBackground([
-                  {
-                    name: "conversation_background",
-                    content: background,
-                    informationIds: [conversation.informationId],
-                  },
-                ]);
-                contextAtoms = [...contextAtoms, conversation];
-                prompt = {
-                  ...prompt,
-                  text: prompt.text + suffix.text,
-                  templates: [...prompt.templates, ...suffix.templates],
-                  variables: [...prompt.variables, ...suffix.variables],
-                };
+                contextAtoms = (
+                  persisted.payload.contextInformationIds as string[]
+                ).map((id) => {
+                  const atom = byId.get(id);
+                  if (!atom) throw new Error("Missing persisted Heavy context");
+                  return atom;
+                });
               }
-            }
-            contextAtoms = persisted
-              ? contextAtoms
-              : [
-                  ...new Map(
-                    [...contextAtoms, ...selected].map((a) => [
-                      a.informationId,
-                      a,
-                    ]),
-                  ).values(),
-                ];
-            if (!persisted)
-              prompt = expressionPrompt(
-                prompt,
+              const persistedIntent = requireSelectedMessageIntent(
                 contextAtoms,
                 message.informationId,
-                renderHabits,
               );
-            const contexts = persistedIntent.references.filter(
-              (r) => r.relation === "core:context",
-            );
-            if (contexts.length !== 1)
-              throw new Error("Message intent must have one context");
-            const ordinaryReply = authorized === undefined;
-            await context.report(messageModelDispatchingDiagnostic, {
-              taskId: "agent.heavy.respond",
-              outputMode: ordinaryReply ? "object" : "text",
-              tier: "heavy",
-              promptCharacters: Array.from(prompt.text).length,
-              promptVariableCount: prompt.variables.length,
-              globalContextCharacters: variableCharacters(
-                prompt,
-                "global_context",
-              ),
-              scopeContextCharacters: variableCharacters(
-                prompt,
-                "scope_context",
-              ),
-              memoryCharacters: variableCharacters(prompt, "memory"),
-            });
-            await context.use(modelTaskCapability).execute<unknown>({
-              task: {
+              let prompt =
+                authorized?.prompt ??
+                (persisted?.payload.prompt as unknown as
+                  CompiledPrompt | undefined) ??
+                compilePrompt(contextAtoms, persistedIntent.informationId);
+              if (
+                !authorized &&
+                !persisted &&
+                dependencies.messageAuthorizationCapability
+              ) {
+                const service = context.use(
+                  dependencies.messageAuthorizationCapability,
+                );
+                const turn = contextAtoms.find(
+                  (a) =>
+                    a.informationId ===
+                    message.payload.turn.contextInformationId,
+                );
+                if (service.conversation && turn) {
+                  const conversation = await service.conversation(turn);
+                  const background = JSON.stringify(
+                    conversation.payload.background,
+                  );
+                  const suffix = renderBackground([
+                    {
+                      name: "conversation_background",
+                      content: background,
+                      informationIds: [conversation.informationId],
+                    },
+                  ]);
+                  contextAtoms = [...contextAtoms, conversation];
+                  prompt = {
+                    ...prompt,
+                    text: prompt.text + suffix.text,
+                    templates: [...prompt.templates, ...suffix.templates],
+                    variables: [...prompt.variables, ...suffix.variables],
+                  };
+                }
+              }
+              contextAtoms = persisted
+                ? contextAtoms
+                : [
+                    ...new Map(
+                      [...contextAtoms, ...selected].map((a) => [
+                        a.informationId,
+                        a,
+                      ]),
+                    ).values(),
+                  ];
+              if (!persisted)
+                prompt = expressionPrompt(
+                  prompt,
+                  contextAtoms,
+                  message.informationId,
+                  renderHabits,
+                );
+              if (
+                !persisted &&
+                !authorized &&
+                settings.qqExpressionsEnabled &&
+                persistedIntent.payload.target.platform === "qq"
+              )
+                prompt = appendQqExpressionPrompt(
+                  prompt,
+                  contextAtoms,
+                  persistedIntent,
+                  settings,
+                  renderQqExpressions,
+                );
+              const contexts = persistedIntent.references.filter(
+                (r) => r.relation === "core:context",
+              );
+              if (contexts.length !== 1)
+                throw new Error("Message intent must have one context");
+              const ordinaryReply = authorized === undefined;
+              await context.report(messageModelDispatchingDiagnostic, {
                 taskId: "agent.heavy.respond",
                 outputMode: ordinaryReply ? "object" : "text",
-                outputSchema: ordinaryReply
-                  ? messageResponseOutputSchema
-                  : messageTaskOutputSchema,
-                allowedTiers: ["heavy"],
-              },
-              sourceInformationId: persistedIntent.informationId,
-              contextInformationId: contexts[0]!.informationId,
-              activation,
-              selectionPolicy: { tier: "heavy" },
-              prompt,
-              contextAtoms,
-              nativeContinuation: ordinaryReply,
-            });
-          },
-        ),
-        onInformation(
-          completedInformationKind,
-          {
-            subscriptionId: "kaguya.heavy.model-task-completed",
-            delivery: "durable",
-          },
-          async (completed, context) => {
-            if (
-              completed.payload.taskId !== "agent.heavy.respond" ||
-              completed.payload.activation.definitionId !==
-                activation.definitionId ||
-              completed.payload.selectionPolicy.tier !== "heavy"
-            )
-              return;
-            const message = requireSelectedMessageIntent(
-              await context.select(completedMessageSelector),
-              completed.payload.sourceInformationId,
-            );
-            const response =
-              completed.payload.outputMode === "object"
-                ? messageResponseOutputSchema.parse(completed.payload.output)
-                : {
-                    action: "message" as const,
-                    text: messageTaskOutputSchema.parse(
-                      completed.payload.output,
-                    ),
-                  };
-            if (response.action === "silent") {
-              await context.registerOnce(
-                "kaguya.heavy.silent.v1",
-                `${context.instanceId}:${completed.informationId}`,
-                heavyResponseSilentInformationKind,
-                {
-                  payload: {
-                    intentInformationId: message.informationId,
-                    turn: message.payload.turn,
+                tier: "heavy",
+                promptCharacters: Array.from(prompt.text).length,
+                promptVariableCount: prompt.variables.length,
+                globalContextCharacters: variableCharacters(
+                  prompt,
+                  "global_context",
+                ),
+                scopeContextCharacters: variableCharacters(
+                  prompt,
+                  "scope_context",
+                ),
+                memoryCharacters: variableCharacters(prompt, "memory"),
+              });
+              await context.use(modelTaskCapability).execute<unknown>({
+                task: {
+                  taskId: "agent.heavy.respond",
+                  outputMode: ordinaryReply ? "object" : "text",
+                  outputSchema: ordinaryReply
+                    ? messageResponseOutputSchema
+                    : messageTaskOutputSchema,
+                  allowedTiers: ["heavy"],
+                },
+                sourceInformationId: persistedIntent.informationId,
+                contextInformationId: contexts[0]!.informationId,
+                activation,
+                selectionPolicy: { tier: "heavy" },
+                prompt,
+                contextAtoms,
+                nativeContinuation: ordinaryReply,
+              });
+            },
+          ),
+          onInformation(
+            completedInformationKind,
+            {
+              subscriptionId: "kaguya.heavy.model-task-completed",
+              delivery: "durable",
+            },
+            (completed, context) => {
+              const run = completionQueue.then(async () => {
+                if (
+                  completed.payload.taskId !== "agent.heavy.respond" ||
+                  completed.payload.activation.definitionId !==
+                    activation.definitionId ||
+                  completed.payload.selectionPolicy.tier !== "heavy"
+                )
+                  return;
+                const frozen = await context.select(completedMessageSelector);
+                const message = requireSelectedMessageIntent(
+                  frozen,
+                  completed.payload.sourceInformationId,
+                );
+                const response =
+                  completed.payload.outputMode === "object"
+                    ? messageResponseOutputSchema.parse(
+                        completed.payload.output,
+                      )
+                    : {
+                        action: "message" as const,
+                        text: messageTaskOutputSchema.parse(
+                          completed.payload.output,
+                        ),
+                      };
+                if (response.action === "silent") {
+                  await context.registerOnce(
+                    "kaguya.heavy.silent.v1",
+                    `${context.instanceId}:${completed.informationId}`,
+                    heavyResponseSilentInformationKind,
+                    {
+                      payload: {
+                        intentInformationId: message.informationId,
+                        turn: message.payload.turn,
+                      },
+                      references: [
+                        {
+                          relation: "core:uses-context",
+                          informationId: message.informationId,
+                        },
+                        {
+                          relation: "agent:turn-claim",
+                          informationId:
+                            message.payload.turn.claimInformationId,
+                        },
+                        {
+                          relation: "agent:turn-candidate",
+                          informationId:
+                            message.payload.turn.candidateInformationId,
+                        },
+                      ],
+                    },
+                  );
+                  return;
+                }
+                const expression =
+                  completed.payload.outputMode === "object" &&
+                  settings.qqExpressionsEnabled &&
+                  emojiParts(response.text).length === 0 &&
+                  "expression" in response &&
+                  typeof response.expression === "string"
+                    ? resolveQqExpression(
+                        response.expression,
+                        frozen,
+                        message,
+                        settings,
+                        await context.select(qqExpressionHistorySelector),
+                        context.now().getTime(),
+                      )
+                    : undefined;
+                await context.registerOnce(
+                  "kaguya.heavy.assistant.v1",
+                  `${context.instanceId}:${completed.informationId}`,
+                  assistantTextInformationKind,
+                  {
+                    payload: {
+                      text: response.text,
+                      ...(expression ? { expression } : {}),
+                      source: message.payload.target,
+                      originatingModuleInstanceId: context.instanceId,
+                      turn: message.payload.turn,
+                    },
                   },
-                  references: [
-                    {
-                      relation: "core:uses-context",
-                      informationId: message.informationId,
-                    },
-                    {
-                      relation: "agent:turn-claim",
-                      informationId: message.payload.turn.claimInformationId,
-                    },
-                    {
-                      relation: "agent:turn-candidate",
-                      informationId:
-                        message.payload.turn.candidateInformationId,
-                    },
-                  ],
-                },
-              );
-              return;
-            }
-            await context.registerOnce(
-              "kaguya.heavy.assistant.v1",
-              `${context.instanceId}:${completed.informationId}`,
-              dependencies.draftProcessingEnabled &&
-                message.payload.target.platform === "qq"
-                ? messageDraftInformationKind
-                : assistantTextInformationKind,
-              {
-                payload: {
-                  text: response.text,
-                  source: message.payload.target,
-                  originatingModuleInstanceId: context.instanceId,
-                  turn: message.payload.turn,
-                },
-              },
-            );
-          },
-        ),
-        onInformation(
-          assistantTextInformationKind,
-          { subscriptionId: "kaguya.heavy.assistant", delivery: "durable" },
-          async (assistant, context) => {
-            await release(assistant, context);
-          },
-        ),
-        onInformation(
-          messageConfirmedInformationKind,
-          { subscriptionId: "kaguya.heavy.confirmed", delivery: "durable" },
-          async (_confirmed, context) => {
-            const assistant = (
-              await context.select(confirmedAssistantSelector)
-            )[0];
-            if (!assistant) throw new Error("target-authorization-required");
-            await release(assistant, context);
-          },
-        ),
-      ],
-    }),
+                );
+              });
+              completionQueue = run.catch(() => undefined);
+              return run;
+            },
+          ),
+          onInformation(
+            assistantTextInformationKind,
+            { subscriptionId: "kaguya.heavy.assistant", delivery: "durable" },
+            async (assistant, context) => {
+              await release(assistant, context);
+            },
+          ),
+          onInformation(
+            messageConfirmedInformationKind,
+            { subscriptionId: "kaguya.heavy.confirmed", delivery: "durable" },
+            async (_confirmed, context) => {
+              const assistant = (
+                await context.select(confirmedAssistantSelector)
+              )[0];
+              if (!assistant) throw new Error("target-authorization-required");
+              await release(assistant, context);
+            },
+          ),
+        ],
+      };
+    },
   });
 }
 
 /** 按共享声明编译可选上下文后缀；即使当前未启用该上下文，也在模块构造时拒绝无效模板。 */
 function createContextPromptRenderer(
   templates: HeavyPromptTemplates,
-  key: "conversationBackground" | "expressionHabits",
+  key: "conversationBackground" | "expressionHabits" | "qqExpressions",
 ) {
   const declaration = messageTemplateDeclarations.find(
     (candidate) => candidate.key === key,
@@ -673,7 +715,19 @@ const completedMessageSelector = defineInformationSelector({
       throw new Error(
         "Model task completion source must match its message intent cause",
       );
-    return [message.informationId];
+    const frozen = await ledger.related({
+      from: [requested[0].informationId],
+      relation: "core:uses-context",
+      direction: "outgoing",
+      limit: 1000,
+    });
+    return [
+      ...new Set([
+        message.informationId,
+        requested[0].informationId,
+        ...frozen.map((a) => a.informationId),
+      ]),
+    ];
   },
 });
 

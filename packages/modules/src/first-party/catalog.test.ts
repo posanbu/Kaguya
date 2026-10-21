@@ -123,7 +123,7 @@ describe("first-party module configuration", () => {
     const defaults = createFirstPartyModuleConfigDefaults("production");
     expect(defaults).toHaveLength(10);
     expect(defaults.every(({ version }) => version === 1)).toBe(true);
-    for (const id of ["memory.raw", "adapter.napcat"])
+    for (const id of ["memory.raw", "adapter.napcat", "plugin.qq-expression"])
       expect(
         defaults.find((config) => config.definitionId === id)?.enabled,
       ).toBe(false);
@@ -131,7 +131,7 @@ describe("first-party module configuration", () => {
       defaults.find((config) => config.definitionId === "adapter.web")?.enabled,
     ).toBe(true);
     expect(createFirstPartyModuleActivations(catalog(), defaults)).toHaveLength(
-      8,
+      7,
     );
   });
 
