@@ -5,6 +5,13 @@
  * 代码库关系：管理 API 和配置应用共用此门面，committed 只回报磁盘状态，不启动采集或模型。
  * 输入输出与副作用：读写私有配置；恢复失败设置 degraded 状态，输出不包含 token。
  */
+/**
+ * 功能概述：管理须重启生效的 Memory/NapCat 期望配置，revision 防止并发覆盖。
+ * 主要职责：toggle/updateNapCat/replaceUnlocked 在共享锁内验证、保存或回滚实例设置及插件树开关；
+ * view 区分磁盘期望与当前生命周期。NapCat 采集参数沿用相同验证与 400 配置错误契约。
+ * 代码库关系：管理 API 和配置应用共用此门面，committed 只回报磁盘状态，不启动采集或模型。
+ * 输入输出与副作用：读写私有配置；恢复失败设置 degraded 状态，输出不包含 token。
+ */
 import { createHmac, randomBytes } from "node:crypto";
 import {
   loadModuleInstanceConfigs,
@@ -18,7 +25,7 @@ import {
   type NapCatSettings,
 } from "./napcat-config.js";
 
-export const FEATURE_IDS = ["memory.raw", "adapter.napcat"] as const;
+export const FEATURE_IDS = ["memory.native", "adapter.napcat"] as const;
 export type FeatureId = (typeof FEATURE_IDS)[number];
 
 export interface FeatureStatus {

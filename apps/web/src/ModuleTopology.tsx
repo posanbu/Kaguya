@@ -4,6 +4,12 @@
  * 每个模块按钮可键盘操作，激活状态来自 bindings；同名 Kind 和重复边去重，外部平台不伪装为本地模块。
  * 由 ModuleOverview 挂载；无额外请求或运行状态推断，接口只反映当前返回的 Catalog 与 activation。
  */
+/**
+ * 功能概述：直接使用 Inspection Manifest 绘制可聚焦的模块信息流，不维护另一份架构清单。
+ * moduleConnections 按 produces/consumes 的稳定 Kind 计算有向边；ModuleTopology 选中模块后展示上下游。
+ * 每个模块按钮可键盘操作，激活状态来自 bindings；同名 Kind 和重复边去重，外部平台不伪装为本地模块。
+ * 由 ModuleOverview 挂载；无额外请求或运行状态推断，接口只反映当前返回的 Catalog 与 activation。
+ */
 import { useState } from "react";
 import { ArrowRight, Boxes, GitBranch } from "lucide-react";
 import type { InspectionModule } from "@kaguya/schema";
@@ -108,6 +114,40 @@ export function ModuleTopology({
           {render(downstream, "to")}
         </section>
       </div>
+      <section aria-label="能力依赖">
+        <h3>能力依赖与当前绑定</h3>
+        {current.requires.length ? (
+          current.requires.map((capability) => {
+            const providers = modules.filter((m) =>
+              m.provides.some(
+                (p) =>
+                  p.id === capability.id &&
+                  p.apiVersion === capability.apiVersion,
+              ),
+            );
+            const bindings = current.bindings.flatMap((b) =>
+              b.capabilities
+                .filter((c) => c.capabilityId === capability.id)
+                .map((c) => `${b.instanceId} → ${c.provider}`),
+            );
+            return (
+              <div className="topology-node" key={capability.id}>
+                <code>
+                  {capability.id} · v{capability.apiVersion}
+                </code>
+                <span>
+                  声明提供方：
+                  {providers.map((p) => p.displayName).join("、") ||
+                    "宿主或外部能力"}
+                </span>
+                <span>当前绑定：{bindings.join("、") || "未绑定"}</span>
+              </div>
+            );
+          })
+        ) : (
+          <p>没有声明能力依赖。</p>
+        )}
+      </section>
       <p className="topology-note">
         连线来自当前 Manifest；表示信息契约，不代表本次消息已执行。
       </p>

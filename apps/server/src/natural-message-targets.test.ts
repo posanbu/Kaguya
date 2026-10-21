@@ -6,6 +6,14 @@
  * 覆盖双投影的范围隔离、私聊用简称/描述选择群、目录边界、歧义与撤销后的失败关闭；
  * Light 仅获得同 adapter 群名候选与相关私聊，Heavy 不接收候选目录；所有账号、正文和凭据均为合成数据。
  */
+/**
+ * 功能概述：以正式 Composition、Runtime、PGlite 和受控 HTTP provider 验证自然语言跨会话链路。
+ * fixture 仅替换模型响应、在线目录与 transport，仍执行身份识别、Light、Heavy、授权和 durable 去重。
+ * projection 只提取模板中人物/会话上下文的单行 JSON，避免把 Provider 追加的 Schema 提示当成业务数据；
+ * choose 从该投影读取已解析的不透明目标引用，仍由正式授权服务执行范围和投递校验；授权正文模板保留背景和发送说明的原始账本来源。
+ * 覆盖双投影的范围隔离、私聊用简称/描述选择群、目录边界、歧义与撤销后的失败关闭；
+ * Light 仅获得同 adapter 群名候选与相关私聊，Heavy 不接收候选目录；所有账号、正文和凭据均为合成数据。
+ */
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { createMessageComposition } from "@kaguya/composition";
 import { createTestingDatabase } from "@kaguya/database/testing";
@@ -35,6 +43,7 @@ const silent = { action: "silent", reason: "no-response-needed" };
 async function fixture(
   outputs: unknown[],
   options: {
+    memory?: boolean;
     unavailable?: boolean;
     duplicate?: boolean;
     composer?: () => void;
@@ -143,7 +152,14 @@ async function fixture(
       modelId: `deepseek-${modelTier}`,
       model: provider.chatModel(`deepseek-${modelTier}`),
     }),
-    { moduleConfigs: createFirstPartyModuleConfigDefaults("test") },
+    {
+      memoryEnabled: options.memory ?? false,
+      moduleConfigs: createFirstPartyModuleConfigDefaults("test").map((c) =>
+        c.definitionId === "memory.native" && options.memory
+          ? { ...c, enabled: true }
+          : c,
+      ),
+    },
   );
   const delivered = vi.fn(async (target: PlatformInboundMessage["target"]) => ({
     ok: true as const,
@@ -310,6 +326,9 @@ it.each([
     expect(p.background.participants).toContainEqual(
       expect.objectContaining({
         name: "小明",
+        ownerId: expect.stringMatching(/^person:/),
+        nickname: "小明",
+        sourceIds: expect.any(Array),
         identityStatus: "complete",
         relation: "speaker",
       }),
@@ -349,16 +368,34 @@ it.each([
       expect(prompt.variables.map((variable) => variable.name)).toEqual([
         "background",
         "instruction",
-        "expression_habits",
       ]);
       const background = prompt.variables[0]!;
       expect(background.informationIds).toHaveLength(1);
       const conversation = graph.find(
         (atom) => atom.informationId === background.informationIds[0],
       )!;
-      expect(background.content).toBe(
-        JSON.stringify(conversation.payload.background),
-      );
+      const saved = conversation.payload.background as {
+        name: string;
+        scope: string;
+        participants: {
+          label: string;
+          name: string;
+          relation: string;
+          identityStatus: string;
+        }[];
+      };
+      expect(JSON.parse(background.content)).toEqual({
+        scope: saved.scope,
+        name: saved.name,
+        participants: saved.participants.map(
+          ({ label, name, relation, identityStatus }) => ({
+            label,
+            name,
+            relation,
+            identityStatus,
+          }),
+        ),
+      });
       expect(prompt.variables[1]).toEqual({
         name: "instruction",
         content: "会议三点开始",
@@ -733,3 +770,84 @@ it("仅入站获准不会产生出站候选授权", async () => {
       ?.payload.reason,
   ).toBe("target-unauthorized");
 });
+
+it(
+  "injects people seen only in frozen history into Light, Heavy and person cards",
+  async () => {
+    const f = await fixture([silent, speak], { memory: true });
+    await f.submit(
+      f.message("earlier", {
+        text: "Kaguya 早上好",
+        sender: { userId: "earlier-person", nickname: "背景人物" },
+      }),
+    );
+    await f.settle();
+    const first = (await f.atoms()).find(
+      (a) => a.kind === "agent.situation.frozen",
+    )!;
+    const firstMemory = (first.payload.frame as any).memory;
+    const person = firstMemory.participants.find(
+      (p: any) => p.accountId === "earlier-person",
+    );
+    expect(person.ownerId).toMatch(/^person:/);
+    await f.database.memoryGraph.native.publish({
+      operationId: "background-person-summary",
+      actor: "manual",
+      nodes: [
+        {
+          expectedRevision: 0,
+          node: {
+            id: "00000000-0000-4000-8000-000000000801",
+            content: "此前在本群见过其发言，尚无相互介绍的记录。",
+            metadata: {
+              system: "native-v1",
+              kind: "person",
+              ownerId: person.ownerId,
+              scope: firstMemory.scope,
+              level: 0,
+              revision: 1,
+              status: "active",
+              locked: false,
+              sourceIds: [],
+              aliases: [],
+              tags: [],
+              occurredAt: firstMemory.frozenAt,
+            },
+          },
+        },
+      ],
+    });
+    f.setTime(2000);
+    await f.submit(f.message("current", { text: "Kaguya 月相是怎么形成的？" }));
+    await f.settle();
+    const plan = f.requests.filter((r) => r.model === "deepseek-light").at(-1)!;
+    expect(projection(plan).background.participants).toContainEqual(
+      expect.objectContaining({
+        name: "背景人物",
+        ownerId: person.ownerId,
+        relation: "participant",
+      }),
+    );
+    const graph = await f.atoms();
+    const prompts = graph
+      .filter((a) => a.kind === "core.model.task.requested")
+      .map((a) => a.payload.prompt as unknown as CompiledPrompt)
+      .filter((p) => p?.variables?.some((v) => v.name === "native_memory"))
+      .map((p) => ({
+        kind: p.kind,
+        memory: JSON.parse(
+          p.variables.find((v) => v.name === "native_memory")!.content,
+        ),
+      }))
+      .filter((p) =>
+        p.memory.fixed.some((n: any) => n.metadata.ownerId === person.ownerId),
+      );
+    expect(prompts.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(prompts.map((p) => p.kind)).size).toBeGreaterThanOrEqual(2);
+    expect(
+      prompts.every((p) => p.memory.fixed[0].content.includes("尚无相互介绍")),
+    ).toBe(true);
+    expect((first.payload.frame as any).memory.fixed).toEqual([]);
+  },
+  sequentialWaitTestTimeoutMs,
+);

@@ -4,6 +4,17 @@
  * cognitiveFixture 装配显式模块和时钟；模型替身只替换外部生成，结果仍通过 Core 持久化去重。
  * restart 关闭并重建宿主和 Core，保留数据库；close 由测试 finally 调用，不连接真实模型或平台。
  */
+/**
+ * ModuleHost 与 Core 共用可控时钟，模块派生事实和限频测试不会混用墙钟。
+ * 功能概述：认知模块测试的真实 PGlite、Core 与 ModuleHost 夹具，验证引用校验、幂等槽与调度持久化。
+ * cognitiveFixture 装配显式模块和时钟；模型替身只替换外部生成，结果仍通过 Core 持久化去重。
+ * restart 关闭并重建宿主和 Core，保留数据库；close 由测试 finally 调用，不连接真实模型或平台。
+ */
+import {
+  nativeMemoryCapability,
+  memoryFormationCapability,
+  createNativeMemoryAccess,
+} from "@kaguya/memory";
 import { createTestingDatabase } from "@kaguya/database/testing";
 import {
   InformationCore,
@@ -22,10 +33,7 @@ import {
   OneShotScheduleClient,
   oneShotScheduleCapability,
 } from "@kaguya/scheduler";
-import type {
-  ModelTaskCapability,
-  ModelTaskRequest,
-} from "../heavy/index.js";
+import type { ModelTaskCapability, ModelTaskRequest } from "../heavy/index.js";
 import * as kinds from "../information-kinds.js";
 export const modelToken = defineModuleCapability<ModelTaskCapability>(
   "kaguya:model-task",
@@ -69,9 +77,7 @@ export async function cognitiveFixture(
   const configs = modules.map((m) => ({
     instanceId: m.manifest.definitionId + ".test",
     definitionId: m.manifest.definitionId,
-    settings: m.manifest.settingsSchema.parse(
-      m.manifest.definitionId === "memory.expression" ? { batchSize: 2 } : {},
-    ),
+    settings: m.manifest.settingsSchema.parse({}),
   }));
   async function start() {
     const registry = new InformationKindRegistry();
@@ -149,6 +155,17 @@ export async function cognitiveFixture(
       core,
       catalog,
       capabilities: [
+        {
+          capability: nativeMemoryCapability,
+          value: createNativeMemoryAccess({
+            enabled: true,
+            store: database.memoryGraph.native,
+          }),
+        },
+        {
+          capability: memoryFormationCapability,
+          value: database.memoryGraph.native,
+        },
         {
           capability: modelToken,
           value: model as unknown as ModelTaskCapability,

@@ -217,13 +217,13 @@ Selector 的 `find` 支持 `openOnly`、`scopeKey`、`registrationOrder`、排�
 
 `agent.router` 保存群聊的 opened、renewed、closed、expired。Arousal 在读取正文前冻结当时有效的租约事实；直接通知或有效 Focus 会记录唤醒信号并确认 `awake`。Router 在观察后以真实直接入站 ID 幂等开启 Focus，并将同 scope 的有效租约投影写入 turn context。成功投递续租，silent 或 failed 关闭本轮使用的代际，Light 的 wait 保持租约自然到期。mute、安全、目标和授权检查在 observe 后、Light 或派发前安全闭合，不属于 Arousal 心理状态。
 
-`memory.expression` 的后台学习消费真实 Identity scope，冻结一批真人入站，再经可重放 Model Task 归纳受限场景与风格。输出整体核验来源后落账，不保存人名、账号或原文。在线选择发生在获胜 message intent 之后，冻结最多 24 个候选，选择至多三条；Heavy 消费独立的 expression_habits 变量，空选择保持当前生成行为。
+`memory.native` 按作用域收集证据，通过同一模型任务形成和整理分层记忆。Light 和 Heavy 使用同一回合冻结的固定摘要与动态召回。表达习惯属于统一图，不再单独学习和选择。
 
 这两条链均通过 Information 引用可追溯，不复用事实 Memory，不改变 Light 的 message、wait、silent 协议。
 
 ## 实现与诊断入口
 
-一方 Kind 的稳定入口仍为 information-kinds.ts，具体 schema 与定义位于 kinds/ 的 message、turn、heartbeat、identity、association 和 person-fact 文件；重导出保持对象身份。Router 的 state-query.ts 负责账本水合，turn-state.ts 负责纯状态投影，index.ts 负责推进与提交。
+一方 Kind 的稳定入口仍为 information-kinds.ts，具体 schema 与定义位于 kinds/ 的 message、turn、heartbeat、identity 和 memory-native 文件；重导出保持对象身份。Router 的 state-query.ts 负责账本水合，turn-state.ts 负责纯状态投影，index.ts 负责推进与提交。
 
 检查页的模块信息流直接连接 Manifest 中的 produces 与 consumes，支持聚焦一个模块观察上下游，并区分可用定义与已激活实例。消息流显示已观察阶段计数，并可导出不含 payload 或 Prompt 的紧凑诊断 JSON。零计数不代表失败，截断标记与图外引用必须共同判断。
 

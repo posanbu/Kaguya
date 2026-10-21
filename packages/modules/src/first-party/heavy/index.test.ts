@@ -5,7 +5,13 @@
  * 代码库关系：真实模块订阅与 schema 配合受限内存 handler context；不绕过编译器或输出校验。
  * 输入输出与副作用：记录模型执行与 registerOnce 调用，无真实模型、数据库或网络。
  */
-import { expressionSelected } from "../expression/facts.js";
+/**
+ * 功能概述：验证消息编写的严格意图契约及 intent→Model Task→assistant→纯文本投递三个阶段。
+ * 主要职责：保护 modelTier 唯一配置、完整 turn Prompt、失败与取消无业务写入、完成任务 task/version/definition/tier 过滤及外部实例隔离与目标元数据最小化。
+ * 后缀模板用例验证构造时拒绝非法变量、背景覆盖的重复插值与实际溯源，以及表达习惯使用注入模板。
+ * 代码库关系：真实模块订阅与 schema 配合受限内存 handler context；不绕过编译器或输出校验。
+ * 输入输出与副作用：记录模型执行与 registerOnce 调用，无真实模型、数据库或网络。
+ */
 import { describe, expect, it, vi } from "vitest";
 import {
   defineInformationKind,
@@ -78,7 +84,6 @@ async function setup(
   );
   const registerOnce = vi.fn(async () => f.intent);
   const definition = createHeavyModule({
-    expressionEnabled,
     modelTaskCapability: token,
     modelTaskCompletedInformationKind: completedKind,
     ...(authorization ? { messageAuthorizationCapability } : {}),
@@ -113,7 +118,7 @@ async function setup(
   return { f, execute, registerOnce, definition, context, instance };
 }
 describe("message composer", () => {
-  it.each(["scene", "conversationBackground", "expressionHabits"] as const)(
+  it.each(["scene", "conversationBackground"] as const)(
     "rejects invalid %s variables during module construction",
     (key) => {
       expect(() =>
@@ -430,57 +435,4 @@ it("does not deliver assistant text originating from another module instance", a
   await s.instance.subscriptions[2]!.handle(assistant as never, s.context);
   expect(s.context.select).not.toHaveBeenCalled();
   expect(s.registerOnce).not.toHaveBeenCalled();
-});
-
-describe("frozen expression dispatch", () => {
-  it("composes from an empty selection with separate provenance and unchanged target", async () => {
-    const expressionHabits = "\n可选风格={{expression_habits}}";
-    const { f, execute, context, instance } = await setup(true, {
-      expressionHabits,
-    });
-    const selected = atom(
-      "expression-selected",
-      expressionSelected.kind,
-      {
-        intentInformationId: f.intent.informationId,
-        scopeInformationId: null,
-        habitIds: [],
-        habits: [],
-        reason: "no-candidates",
-        version: 1,
-      },
-      [
-        {
-          relation: "core:uses-context",
-          informationId: f.intent.informationId,
-        },
-      ],
-    );
-    const selectedContext = {
-      ...context,
-      sourceAtom: selected,
-      select: async () => [...f.atoms, selected],
-    };
-    await instance.subscriptions[0]!.handle(selected, selectedContext);
-    expect(execute).toHaveBeenCalledOnce();
-    const request = execute.mock.calls[0]![0];
-    expect(request.sourceInformationId).toBe(f.intent.informationId);
-    expect(request.prompt.text).toContain("可选风格=[]");
-    expect(
-      request.prompt.templates.filter(
-        (entry) => entry.name === "expression-habits",
-      ),
-    ).toEqual([{ name: "expression-habits", content: expressionHabits }]);
-    expect(
-      request.prompt.variables.find((v) => v.name === "expression_habits"),
-    ).toMatchObject({
-      content: "[]",
-      informationIds: [selected.informationId, f.intent.informationId],
-    });
-    expect(
-      request.contextAtoms.find(
-        (a) => a.informationId === f.intent.informationId,
-      )?.payload.target,
-    ).toEqual(target);
-  });
 });

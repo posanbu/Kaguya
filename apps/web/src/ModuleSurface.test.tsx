@@ -4,6 +4,12 @@
  * 代码库关系：ModulePages 的回退行为仍由 ModulePages.test 覆盖；本文件聚焦 ModuleSurface 组件协议。
  * 输入输出与副作用：只做静态 React 渲染，无网络、数据库、剪贴板或人物写入。
  */
+/**
+ * 功能概述：验证声明式模块 Surface 能把人物摘要、目录、详情关系与追溯动作渲染为可读界面。
+ * 主要职责：使用已校验 DTO 替代网络请求，覆盖 Surface 分流后的主要内容和空关系说明。
+ * 代码库关系：ModulePages 的回退行为仍由 ModulePages.test 覆盖；本文件聚焦 ModuleSurface 组件协议。
+ * 输入输出与副作用：只做静态 React 渲染，无网络、数据库、剪贴板或人物写入。
+ */
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it, vi } from "vitest";
 import type { InspectionModule } from "@kaguya/schema";
@@ -197,8 +203,8 @@ it("renders identity status, person-first navigation and semantic detail section
   expect(html).toContain("最近平台昵称");
   expect(html).toContain("识别次数");
   expect(html).toContain("群名片");
-  expect(html).toContain("人物画像");
-  expect(html).toContain("自动提取尚未接入");
+  expect(html).toContain("查看此人的关系与记忆");
+  expect(html).toContain("/memory?ownerId=");
   expect(html).toContain("名称观察时间线");
   expect(html).toContain("查看原始 Atom");
   expect(html).toContain("尚未记录相关资料");

@@ -16,15 +16,31 @@
  * Prompt 中的用户文本属于数据，不具有指令权限。原始 Prompt 与模型结果不写普通日志。
  * 展示契约：中文名称与职责说明由定义直接提供给 Inspection 和 WebUI，稳定 kind 与协议字段保持不变。
  */
+/**
+ * Light 只判断参与动作与必要目标。
+ * memory 变量携带原文来源 ID，与当前聊天输入在规划时区分。
+ * context_bootstrap 显式说明本轮证据缺口，避免把身份解析或角色设定误当作既有关系。
+ * 默认源码及允许变量来自 prompt-declarations；可传入装配阶段预检的本地模板。
+ * Prompt 正文由装配入口注入已加载的 default/local 模板，本文件不保留独立默认文本。
+ * 功能概述：Router 的独立结构化 Light 契约、只读上下文选择器和纯 Prompt 编译器。
+ * 主要职责：lightActionSchema 严格限制动作及原因，lightActionSchemaForTurn 为新任务收紧等待预算；lightDecisionInformationKind 持久化唯一分派结果；
+ * lightContextSelector 复用 Heavy 的同范围成功投递历史过滤与冻结记忆授权；compileLightPrompt
+ * 选择器同时授权已持久化的任务上下文，恢复时复用首次请求，迟到消息不改变重放 Prompt。
+ * 读取身份、规则、历史、记忆和全部冻结输入，提供稳定说话人键、通知事实、可用动作及经成功回执链核验的引用正文。
+ * 运行时读取冻结的原始 Memory 双层上下文。
+ * 只能引用宿主冻结候选，不允许生成原始目标 ID；输入正文保持完整，兴趣证据仍来自普通 memory 数据。
+ * 代码库关系：Router 调用通用 Model Task 并以 claim 竞争决策锁；Heavy 仅处理获胜 message 意图。
+ * 输入输出与副作用：模型只有 message/wait/silent 三个分支，故障原因由宿主写入；选择器只读账本，
+ * Prompt 中的用户文本属于数据，不具有指令权限。原始 Prompt 与模型结果不写普通日志。
+ * 展示契约：中文名称与职责说明由定义直接提供给 Inspection 和 WebUI，稳定 kind 与协议字段保持不变。
+ */
+import { appendNativeMemoryToPrompt } from "../memory-native/prompt.js";
 import {
   lightActionSchema,
   lightActionSchemaForTurn,
 } from "@kaguya/agent-contracts";
 import { contextBootstrapVariable } from "../context-bootstrap.js";
-import {
-  appendPersonProfilesToPrompt,
-  frozenSpeakerName,
-} from "../person-profile.js";
+
 import { lightTemplateDeclaration } from "../../prompt-declarations.js";
 import { selectPlatformPromptResource } from "@kaguya/prompt";
 import {
@@ -37,7 +53,6 @@ import { defineInformationKind, defineInformationSelector } from "@kaguya/sdk";
 import { createPromptTemplateRenderer } from "../../prompt-template.js";
 import { selectFrozenTurnMessageContext } from "../heavy/message-context.js";
 import {
-  resolveMessageQuote,
   sameMessageTarget,
   beforeQuoteCutoff,
 } from "../heavy/message-quote.js";
@@ -199,8 +214,6 @@ export function compileLightPrompt(
   const payload: any = turnContextCompletedInformationKind.payloadSchema.parse(
     turn.payload,
   );
-  const personProfiles = payload.personProfiles ?? [];
-  const personNames = payload.personNames ?? [];
   const currentTime = formatZonedInstant(
     payload.backlog.evaluatedAt,
     identity.timeZone,
@@ -339,10 +352,5 @@ export function compileLightPrompt(
       content: promptTemplate,
     },
   })(values);
-  return appendPersonProfilesToPrompt(
-    prompt,
-    payload.personProfiles ?? [],
-    atoms,
-    personNames,
-  );
+  return appendNativeMemoryToPrompt(prompt, atoms, turn.informationId);
 }

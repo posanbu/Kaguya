@@ -4,6 +4,12 @@
  * Arousal 只保存唤醒状态、观察机会、水位、非语义信号与 Focus 快照；正文先冻结，注意模块仅读取元信息。
  * 代码库关系：information-kinds.ts 稳定重导出公共对象；跨领域只复用相邻文件定义，保持 Registry 对象身份。
  */
+/**
+ * 功能概述：turn 领域的 Information schema 与不可变定义，独立维护本领域引用和日志投影。
+ * 主要职责：下列 schema 校验入账载荷，各 kind 声明因果关系、上下文和诊断元数据；无 I/O。
+ * Arousal 只保存唤醒状态、观察机会、水位、非语义信号与 Focus 快照；正文先冻结，注意模块仅读取元信息。
+ * 代码库关系：information-kinds.ts 稳定重导出公共对象；跨领域只复用相邻文件定义，保持 Registry 对象身份。
+ */
 import { z } from "@kaguya/schema";
 import { defineInformationKind } from "@kaguya/sdk";
 import { nonBlankString, messageSourceSchema } from "./shared.js";
@@ -36,19 +42,23 @@ const turnInputSchema = z
   })
   .strict();
 
+const registrationEvidenceSchema = z
+  .object({
+    informationId: nonBlankString,
+    recordedAt: z.iso.datetime({ offset: true }),
+    sourceIds: z.array(nonBlankString),
+    createdInCurrentInputs: z.boolean(),
+  })
+  .strict()
+  .nullable();
+
 export const turnBootstrapProjectionSchema = z
   .object({
-    version: z.literal(1),
-    mode: z.enum(["cold-start", "warming", "established"]),
-    memory: z
-      .object({
-        state: z.enum(["disabled", "no-authorized-evidence", "available"]),
-        selectedCount: z.number().int().nonnegative(),
-      })
-      .strict(),
+    version: z.literal(2),
     conversation: z
       .object({
-        state: z.enum(["first-seen", "known", "ephemeral", "unresolved"]),
+        scopeMode: z.enum(["canonical", "ephemeral"]),
+        registration: registrationEvidenceSchema,
       })
       .strict(),
     participants: z
@@ -56,7 +66,8 @@ export const turnBootstrapProjectionSchema = z
         z
           .object({
             inputInformationId: nonBlankString,
-            state: z.enum(["first-seen", "known", "unresolved"]),
+            ownerId: nonBlankString.nullable(),
+            registration: registrationEvidenceSchema,
           })
           .strict(),
       )
@@ -422,20 +433,6 @@ const turnContextPayloadSchema = z
     bootstrap: turnBootstrapProjectionSchema,
     /** Optional enrichments are intentionally advisory and do not affect timing. */
     memory: z.array(nonBlankString).optional(),
-    personProfiles: z
-      .array(
-        z
-          .object({
-            personInformationId: nonBlankString,
-            profileInformationId: nonBlankString,
-            speakerKey: nonBlankString,
-            platform: nonBlankString.optional(),
-            adapterId: nonBlankString.optional(),
-          })
-          .strict(),
-      )
-      .max(3)
-      .optional(),
     personNames: z
       .array(
         z

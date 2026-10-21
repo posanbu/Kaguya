@@ -5,6 +5,13 @@
  * 代码库关系：直接驱动 ConfigurationApplication，生命周期回调可控，实际 Server 集成另测。
  * 输入输出与副作用：全部使用内存快照，不访问真实配置、网络或数据库。
  */
+/**
+ * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
+ * 功能概述：验证热应用协调器的快照一致性、并发隔离、回滚与停机边界。
+ * 主要职责：通过可控资源栅栏模拟并发保存、启动/关闭失败；确认公开结果不包含配置秘密。
+ * 代码库关系：直接驱动 ConfigurationApplication，生命周期回调可控，实际 Server 集成另测。
+ * 输入输出与副作用：全部使用内存快照，不访问真实配置、网络或数据库。
+ */
 import { expect, it, vi } from "vitest";
 import { emptyUserConfigProfileSettings } from "@kaguya/config";
 import {
@@ -51,8 +58,8 @@ function fixture(ready = true) {
       },
       {
         version: 1,
-        instanceId: "memory.raw.default",
-        definitionId: "memory.raw",
+        instanceId: "memory.native.default",
+        definitionId: "memory.native",
         enabled: false,
         settings: {},
       },
@@ -127,7 +134,7 @@ it("keeps unrelated pending module edits pending after a targeted feature switch
   const f = fixture();
   f.changeModule();
   f.changeFeature();
-  f.application.markModulesApplied(f.savedModules(), ["memory.raw"]);
+  f.application.markModulesApplied(f.savedModules(), ["memory.native"]);
   expect(await f.application.status()).toMatchObject({ state: "pending" });
 });
 

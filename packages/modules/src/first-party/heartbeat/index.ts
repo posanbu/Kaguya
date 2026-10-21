@@ -8,6 +8,16 @@
  * isImmediateObservation 识别私聊、@ 与回复机器人，用于唤醒休眠状态和提升已有观察。
  * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
  */
+/**
+ * 功能概述：定义心跳模块的设置、订阅和调度行为。
+ * 主要职责：heartbeatSettingsSchema 提供校验及中文公开字段元数据；模块通过调度能力管理等待。
+ * 代码库关系：Catalog 与管理表单共用 schema，Host 负责创建实例。
+ * 输入输出与副作用：字段声明无副作用；订阅处理写入调度原子，不直接发送消息。
+ * heartbeatObservationSelector 只读取开放集合与最近水位；开放期间入站账本即待观察集合。
+ * 入站按 scope 直接竞争唯一候选；due 仅恢复 Light wait/interrupt，终态 resume 合并期间新输入。
+ * isImmediateObservation 识别私聊、@ 与回复机器人，用于唤醒休眠状态和提升已有观察。
+ * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
+ */
 import { firstPartyInspection } from "../inspection.js";
 import { z } from "@kaguya/schema";
 import { defineInformationModule, onInformation } from "@kaguya/sdk";
@@ -80,6 +90,7 @@ export const heartbeatSettingsSchema = z
 export type HeartbeatSettings = z.infer<typeof heartbeatSettingsSchema>;
 export const heartbeatModule = defineInformationModule({
   manifest: {
+    category: "agent",
     protocolVersion: 1,
     moduleVersion: "2.0.0",
     definitionId: "agent.heartbeat.short",

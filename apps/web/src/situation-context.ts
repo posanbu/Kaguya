@@ -1,6 +1,15 @@
-import { compiledPromptSchema } from "@kaguya/schema";
+import {
+  compiledPromptSchema,
+  nativeMemorySnapshotSchema,
+  type NativeMemorySnapshot,
+} from "@kaguya/schema";
 
 export interface SituationRequestContext {
+  memory?: NativeMemorySnapshot | null;
+  memoryError?: string;
+  identityRaw: string | null;
+  backgroundRaw: string | null;
+  evidenceRaw: string | null;
   behavior: string | null;
   platform: string | null;
   background: {
@@ -11,6 +20,8 @@ export interface SituationRequestContext {
       label: string;
       relation: string;
       identityStatus: string;
+      ownerId: string | null;
+      raw: string;
     }[];
   } | null;
   targets: { name: string; kind: string; status: string }[];
@@ -65,11 +76,6 @@ export function situationRequestContext(
   );
   const resolution = object(conversation.resolution);
   const sourceState = json(values.get("context_bootstrap"));
-  const bootstrapValue = values.get("bootstrap");
-  // Heavy wraps the frozen bootstrap JSON in its authored reliability instructions.
-  const bootstrap = json(
-    bootstrapValue?.split("\n").find((line) => line.trim().startsWith("{")),
-  );
   const decision = json(values.get("decision_state"));
   const backlog = object(decision.backlog);
   let behavior = values.get("behavior_policy") ?? null;
@@ -83,7 +89,20 @@ export function situationRequestContext(
           .replace(/当前时间[：:]\s*$/u, "")
           .trim() || null;
   }
+  const memory = nativeMemorySnapshotSchema.safeParse(
+    json(values.get("native_memory")),
+  );
   return {
+    memory: memory.success ? memory.data : null,
+    ...(values.has("native_memory") && !memory.success
+      ? { memoryError: "此请求的记忆快照无法解析。" }
+      : {}),
+    identityRaw: values.get("identity") ?? values.get("persona") ?? null,
+    backgroundRaw:
+      values.get("conversation") ??
+      values.get("conversation_background") ??
+      null,
+    evidenceRaw: values.get("context_bootstrap") ?? null,
     behavior,
     platform:
       values.get("platform_policy") ?? values.get("platform_style") ?? null,
@@ -98,6 +117,9 @@ export function situationRequestContext(
                   label: text(person.label),
                   relation: text(person.relation),
                   identityStatus: text(person.identityStatus),
+                  ownerId:
+                    typeof person.ownerId === "string" ? person.ownerId : null,
+                  raw: JSON.stringify(person, null, 2),
                 }))
               : [],
           }
@@ -111,7 +133,7 @@ export function situationRequestContext(
       : [],
     resolution:
       typeof resolution.status === "string" ? resolution.status : null,
-    bootstrap: text(bootstrap.mode) || text(sourceState.mode) || null,
+    bootstrap: text(sourceState.mode) || null,
     historyCount: number(sourceState.historyCount),
     attempt: number(decision.attempt),
     waitBudget: number(decision.totalWaitBudget),

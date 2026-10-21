@@ -21,6 +21,29 @@
  * ledger；所有创建 PGlite 的用例共享 15 秒跨平台超时，测试结束显式关闭注入数据库，
  * 并检查持久化 payload 不包含 raw/provider secret。
  */
+/**
+ * 测试夹具显式装配 QQ 表情模板，验证新增模块契约与既有流程兼容。
+ * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
+ * Light 普通日志仅保留元数据，不能泄漏 Prompt 预览或模型输出。
+ * fixture 显式批准合成 QQ 目标，生产 Runtime 默认为空出站白名单。
+ * 测试显式注入统一文件模板，避免 Light 或 Expression 绕过 default/local 选择。
+ * 功能概述：用真实 PGlite、Core 和 ModuleHost 验证 `KaguyaRuntime` 的完整信息 DAG。
+ * 数据库收敛、日志落地和模型任务前置等待共用 8 秒持久化预算；超时附带队列元数据，内存取消与关闭 deadline 单独验证。
+ * Light v2 拒绝耗尽后的 wait；持续非法响应经一次修复后以 light-unavailable 静默闭合。
+ * Light 使用独立 object Model Task，测试分别定位 plan 与 compose，确保故障静默与唯一分派。
+ * 主要职责：覆盖 Web 入站到投递成功的直接因果链、生成失败不会继续 assistant/outbound/delivery、
+ * 三类 transport 失败、无订阅持久化、同 kind 消费并发与多 message composer activation 共享模型任务后
+ * 各自按 intent target 投递纯文本，默认 OneBot action 仅含 text 段、start/close 确定性交错、
+ * in-flight 关闭、关闭后 ingress 拒绝、数据库初始化错误固定分类及抛出型反射属性，
+ * 以及消费者失败与其他结果并存；默认 message Prompt 必须带原子 provenance 和有序
+ * uses-context 引用。
+ * Memory 集成用例推进宿主时钟越过数据库实际入库时刻，分别验证未来入库证据被排除与后续正常召回。
+ * 代码库关系：测试直接消费 Runtime 的 `InformationIngress.submit` 和注入数据库选项；默认业务
+ * 模块来自 `@kaguya/modules`，自定义 fixture 只用于隔离并发和消费者故障语义。
+ * 输入输出与副作用：每个用例创建隔离的内存 PGlite 数据库，Runtime 只写 information
+ * ledger；所有创建 PGlite 的用例共享 15 秒跨平台超时，测试结束显式关闭注入数据库，
+ * 并检查持久化 payload 不包含 raw/provider secret。
+ */
 import { loadFirstPartyPromptTemplates } from "@kaguya/modules/prompt-templates/node";
 import { rawContextCapability } from "@kaguya/memory";
 const testPrompts = loadFirstPartyPromptTemplates();
@@ -53,7 +76,6 @@ import { defineInformationModuleCatalog } from "@kaguya/sdk";
 import { KaguyaDatabase } from "@kaguya/database";
 import { createLogger, type KaguyaLogger } from "@kaguya/logger";
 import { createTestingDatabase } from "@kaguya/database/testing";
-import { memoryCapability } from "@kaguya/memory";
 import { oneShotScheduleCapability } from "@kaguya/scheduler";
 import {
   createDeferredDeterministicModel,
@@ -222,7 +244,7 @@ async function createRuntime(
     ? createFirstPartyModuleActivations(
         createMessageComposition(undefined, undefined, true).catalog,
         createFirstPartyModuleConfigDefaults("test").map((config) =>
-          config.definitionId === "memory.raw"
+          config.definitionId === "memory.native"
             ? { ...config, enabled: true }
             : config,
         ),
@@ -289,19 +311,14 @@ function parentId(
 }
 
 describe("KaguyaRuntime", () => {
-  it("keeps main module bindings visible beside the separate raw host", async () => {
+  it("keeps main module bindings visible beside the native Memory host", async () => {
     const { runtime } = await createRuntime({ memory: { enabled: true } });
     await runtime.start();
     const modules = runtime.inspectModules();
-    for (const id of ["memory.identity", "memory.expression", "memory.raw"]) {
+    for (const id of ["memory.identity", "memory.native"]) {
       expect(
         modules.find((module) => module.definitionId === id)?.bindings,
       ).toHaveLength(1);
-    }
-    for (const id of ["memory.native", "memory.mem0"]) {
-      expect(
-        modules.find((module) => module.definitionId === id)?.bindings,
-      ).toHaveLength(0);
     }
   });
 
@@ -354,7 +371,6 @@ describe("KaguyaRuntime", () => {
       ).toEqual([
         "agent.attention.arousal",
         "agent.heartbeat.short",
-        "memory.expression",
         "agent.heavy",
         "memory.identity",
         "agent.router",
@@ -401,7 +417,7 @@ describe("KaguyaRuntime", () => {
         tier: "heavy",
         providerId: "test",
         modelId: "deterministic-heavy",
-        promptVariableCount: 7,
+        promptVariableCount: 6,
       });
       expect(requestSummary?.promptPreview).toContain("当前是私聊");
       expect(requestSummary?.references).toEqual(expect.any(Array));
@@ -626,208 +642,6 @@ describe("KaguyaRuntime", () => {
     },
     TEST_TIMEOUT,
   );
-
-  it(
-    "keeps raw Memory out of the chat prompt until native Memory is implemented",
-    async () => {
-      // MemoryStore 使用真实入库时钟；不能让测试的固定 Runtime 时钟停留在写入之前。
-      let nowMs = Date.now();
-      const { runtime, database } = await createRuntime({
-        memory: { enabled: true },
-        now: () => new Date(nowMs),
-      });
-      await runtime.start();
-
-      const first = await runtime.submit({
-        ...webMessage("remember moonlight"),
-        occurredAt: new Date(nowMs - 1000).toISOString(),
-      });
-      await settleDeliveries(database);
-      const firstGraph = await database.information.query({
-        informationId: first.rootInformationId,
-      });
-      const firstInbound = firstGraph.find(
-        ({ kind }) => kind === inboundTextInformationKind.kind,
-      )!;
-      const saved = await database.memory.put({
-        sourceInformationId: firstInbound.informationId,
-        sourceKind: firstInbound.kind,
-        content: "remember moonlight",
-        occurredAt: firstInbound.occurredAt,
-        address: {
-          platform: "web",
-          adapterId: "web.ui.main",
-          platformMessageId: "request-1",
-          accountId: "web",
-          destination: { kind: "web" },
-        },
-      });
-
-      expect(
-        (await database.memory.getBySource(firstInbound.informationId))
-          ?.content,
-      ).toBe("remember moonlight");
-      nowMs = Math.max(Date.now(), Date.parse(saved.document.createdAt));
-
-      const second = await runtime.submit({
-        ...webMessage("moonlight again"),
-        platformMessageId: "request-2",
-        occurredAt: new Date(nowMs).toISOString(),
-      });
-      let secondGraph: Awaited<ReturnType<typeof database.information.query>> =
-        [];
-      await vi.waitFor(async () => {
-        secondGraph = await database.information.query({
-          informationId: second.rootInformationId,
-        });
-        expect(
-          secondGraph.some(
-            ({ kind, payload }) =>
-              kind === modelTaskRequestedInformationKind.kind &&
-              payload.taskId === "agent.heavy.respond",
-          ),
-        ).toBe(true);
-      }, PERSISTENCE_WAIT);
-      const requested = secondGraph.find(
-        ({ kind, payload }) =>
-          kind === modelTaskRequestedInformationKind.kind &&
-          payload.taskId === "agent.heavy.respond",
-      )!;
-      const payload = modelTaskRequestedInformationKind.payloadSchema.parse(
-        requested.payload,
-      );
-
-      expect(payload.prompt.provenance).toContainEqual(
-        expect.objectContaining({ variableName: "memory", informationIds: [] }),
-      );
-      expect(
-        secondGraph.some(
-          ({ kind }) =>
-            kind.startsWith("memory.association.") ||
-            kind.startsWith("memory.index.") ||
-            kind.startsWith("memory.cognition."),
-        ),
-      ).toBe(false);
-    },
-    TEST_TIMEOUT,
-  );
-
-  it(
-    "keeps disabled Memory as an unavailable shell without reading stored documents",
-    async () => {
-      const { runtime, database } = await createRuntime();
-      const recall = vi.spyOn(database.memory, "recall");
-      await runtime.start();
-
-      const first = await runtime.submit(webMessage("remember moonlight"));
-      await settleDeliveries(database);
-      const firstGraph = await database.information.query({
-        informationId: first.rootInformationId,
-      });
-      const firstInbound = firstGraph.find(
-        ({ kind }) => kind === inboundTextInformationKind.kind,
-      )!;
-      await database.memory.put({
-        sourceInformationId: firstInbound.informationId,
-        sourceKind: firstInbound.kind,
-        content: "remember moonlight",
-        occurredAt: firstInbound.occurredAt,
-        address: {
-          platform: "web",
-          adapterId: "web.ui.main",
-          platformMessageId: "request-1",
-          accountId: "web",
-          destination: { kind: "web" },
-        },
-      });
-
-      const second = await runtime.submit({
-        ...webMessage("moonlight again"),
-        platformMessageId: "request-2",
-        occurredAt: "2026-09-04T00:00:02.000Z",
-      });
-      await settleDeliveries(database);
-      const secondGraph = await database.information.query({
-        informationId: second.rootInformationId,
-      });
-      const requested = secondGraph.find(
-        ({ kind, payload }) =>
-          kind === modelTaskRequestedInformationKind.kind &&
-          payload.taskId === "agent.heavy.respond",
-      )!;
-      const payload = modelTaskRequestedInformationKind.payloadSchema.parse(
-        requested.payload,
-      );
-
-      expect(recall).not.toHaveBeenCalled();
-      expect(
-        secondGraph.some(({ kind }) => kind.startsWith("memory.association.")),
-      ).toBe(false);
-      expect(payload.prompt.provenance).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            variableName: "scope_context",
-            informationIds: [
-              secondGraph.find(
-                ({ kind }) => kind === "agent.router.memory.context.frozen",
-              )!.informationId,
-            ],
-          }),
-        ]),
-      );
-      expect(payload.prompt.provenance).toContainEqual(
-        expect.objectContaining({
-          variableName: "memory",
-          informationIds: [],
-        }),
-      );
-    },
-    TEST_TIMEOUT,
-  );
-
-  it("does not expose the Memory capability while Memory is disabled", async () => {
-    const create = vi.fn(() => ({ provisions: [], subscriptions: [] }));
-    const consumer = defineInformationModule({
-      manifest: {
-        protocolVersion: 1,
-        summary: "Test information module.",
-        moduleVersion: "1.0.0",
-        definitionId: "test.memory.consumer",
-        displayName: "Memory consumer",
-        description: "Defines the Memory consumer information module.",
-        settingsSchema: z.object({}).strict(),
-        consumes: [],
-        produces: [],
-        selectors: [],
-        promptRenderers: [],
-        requires: [memoryCapability],
-        provides: [],
-      },
-      create,
-    });
-    const database = await createTestingDatabase();
-    const runtime = new KaguyaRuntime({
-      database,
-      catalog: defineInformationModuleCatalog(consumer),
-      activations: [
-        {
-          instanceId: "memory.consumer",
-          definitionId: consumer.manifest.definitionId,
-          settings: {},
-        },
-      ],
-      capabilities: [
-        {
-          capability: memoryCapability,
-          value: database.memory,
-        },
-      ],
-    });
-    resources.push({ runtime, database });
-
-    await expect(runtime.start()).rejects.toThrow(/capability/i);
-    expect(create).not.toHaveBeenCalled();
-  });
 
   it(
     "classifies schema preparation failures without retaining database details",
@@ -1139,8 +953,6 @@ describe("KaguyaRuntime", () => {
         new Set([
           "core.message.inbound.text",
           "agent.router.message.intent.requested",
-          "memory.expression.selection.requested",
-          "memory.expression.selection.completed",
           "core.model.task.requested",
           "core.model.task.completed",
           "core.message.assistant.text",
@@ -1831,7 +1643,8 @@ function createMessageComposition(
     promptTemplates: testMessageTemplates,
     lightTemplate: testPrompts.light,
     lightBootstrapPolicy: testPrompts.lightBootstrapPolicy,
-    expressionTemplates: testPrompts.expression,
+
+    nativeMemoryTemplate: testPrompts.nativeMemory,
     qqExpressionTemplates: testPrompts.qqExpression,
     agentIdentity: testIdentity,
   });
@@ -1856,7 +1669,7 @@ function createMessageComposition(
             "agent.heavy",
             "agent.router",
             "agent.situation",
-            "memory.expression",
+            "memory.native",
           ].includes(a.definitionId),
         )
         .map((a) => ({
@@ -2253,3 +2066,35 @@ it(
   },
   TEST_TIMEOUT,
 );
+
+it("reuses the permanent v1 Memory formation subscription on startup", async () => {
+  const { runtime, database } = await createRuntime({
+    memory: { enabled: true },
+  });
+  await database.prepareSchema();
+  await database.information.synchronizeKinds([
+    "memory.native.formation.requested.v1",
+  ]);
+  await database.information.reliable.setSubscription(
+    {
+      subscriptionId: "memory.native.default:memory.native.form",
+      kind: "memory.native.formation.requested.v1",
+    },
+    false,
+  );
+  await expect(runtime.start()).resolves.toBeUndefined();
+  const subscriptions = await database.sql.query<{
+    subscription_id: string;
+    kind: string;
+    enabled: boolean;
+  }>(
+    "SELECT subscription_id,kind,enabled FROM information_subscriptions WHERE kind LIKE 'memory.native.formation.requested.%'",
+  );
+  expect(subscriptions.rows).toEqual([
+    {
+      subscription_id: "memory.native.default:memory.native.form",
+      kind: "memory.native.formation.requested.v1",
+      enabled: true,
+    },
+  ]);
+});

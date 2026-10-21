@@ -1,29 +1,23 @@
-/**
- * 功能概述：以 PostgreSQL 保存独立的 Memory 节点和有向类型边。
- * 主要职责：原子 upsert 节点与边；updateNode 只更新已有节点，避免并发删除后重新创建。单条 SQL 返回有界图与一跳邻域快照。
- * 代码库关系：实现 memory/graph.ts 契约，由 KaguyaDatabase.memoryGraph 暴露；
- * schema.ts 在启动事务中调用 prepareMemoryGraphSchema，不依赖原始消息或 Information ID。
- * 输入输出与副作用：每个写操作执行一条 SQL；删除节点由外键级联删除关联边。
- */
-import { randomUUID } from "node:crypto";
+/** Memory 图的有界读取投影。所有写入通过 native.publish 完成。 */
+
 import {
-  memoryEdgeInputSchema,
   memoryEdgeQuerySchema,
   memoryNodeIdSchema,
-  memoryNodeInputSchema,
   memoryNodeQuerySchema,
   memoryGraphQuerySchema,
   type MemoryGraphQuery,
   type MemoryGraphSnapshot,
   type MemoryEdge,
-  type MemoryEdgeInput,
   type MemoryEdgeQuery,
   type MemoryGraphAccess,
   type MemoryNode,
-  type MemoryNodeInput,
   type MemoryNodeQuery,
 } from "@kaguya/memory";
-import type { SqlTransaction } from "./driver.js";
+import type { SqlDatabase, SqlTransaction } from "./driver.js";
+import {
+  PostgresNativeMemoryStore,
+  prepareNativeMemorySchema,
+} from "./native-memory.js";
 
 export async function prepareMemoryGraphSchema(
   tx: SqlTransaction,
@@ -45,6 +39,7 @@ export async function prepareMemoryGraphSchema(
     );
     CREATE INDEX IF NOT EXISTS memory_edges_target_idx ON memory_edges(target_id, source_id, relation);
   `);
+  await prepareNativeMemorySchema(tx);
 }
 
 type NodeRow = {
@@ -60,7 +55,13 @@ type EdgeRow = {
 };
 
 export class PostgresMemoryGraphStore implements MemoryGraphAccess {
-  constructor(private readonly database: SqlTransaction) {}
+  readonly native: PostgresNativeMemoryStore;
+  constructor(
+    private readonly database: SqlDatabase,
+    private readonly transactional = false,
+  ) {
+    this.native = new PostgresNativeMemoryStore(database);
+  }
 
   /** 单条 SQL 冻结节点及其内部边，避免并发编辑生成悬空的检视快照。 */
   async readGraph(query: MemoryGraphQuery = {}): Promise<MemoryGraphSnapshot> {
@@ -113,39 +114,10 @@ export class PostgresMemoryGraphStore implements MemoryGraphAccess {
   }
 
   /** 省略 id 时创建节点，指定 id 时完整替换 metadata 和 content。 */
-  async putNode(input: MemoryNodeInput): Promise<MemoryNode> {
-    const parsed = memoryNodeInputSchema.parse(input);
-    const result = await this.database.query<NodeRow>(
-      `INSERT INTO memory_nodes(id, metadata, content) VALUES ($1, $2::jsonb, $3)
-       ON CONFLICT (id) DO UPDATE SET metadata=EXCLUDED.metadata, content=EXCLUDED.content
-       RETURNING id, metadata, content`,
-      [
-        parsed.id ?? randomUUID(),
-        JSON.stringify(parsed.metadata),
-        parsed.content,
-      ],
-    );
-    return result.rows[0]!;
-  }
-
   async getNode(id: string): Promise<MemoryNode | undefined> {
     const result = await this.database.query<NodeRow>(
       "SELECT id, metadata, content FROM memory_nodes WHERE id=$1",
       [memoryNodeIdSchema.parse(id)],
-    );
-    return result.rows[0];
-  }
-
-  async updateNode(
-    input: MemoryNodeInput & { id: string },
-  ): Promise<MemoryNode | undefined> {
-    const parsed = memoryNodeInputSchema
-      .extend({ id: memoryNodeIdSchema })
-      .parse(input);
-    const result = await this.database.query<NodeRow>(
-      `UPDATE memory_nodes SET metadata=$2::jsonb, content=$3 WHERE id=$1
-       RETURNING id, metadata, content`,
-      [parsed.id, JSON.stringify(parsed.metadata), parsed.content],
     );
     return result.rows[0];
   }
@@ -165,30 +137,6 @@ export class PostgresMemoryGraphStore implements MemoryGraphAccess {
     return result.rows;
   }
 
-  async deleteNode(id: string): Promise<boolean> {
-    const result = await this.database.query(
-      "DELETE FROM memory_nodes WHERE id=$1 RETURNING id",
-      [memoryNodeIdSchema.parse(id)],
-    );
-    return result.rows.length > 0;
-  }
-
-  async putEdge(input: MemoryEdgeInput): Promise<MemoryEdge> {
-    const parsed = memoryEdgeInputSchema.parse(input);
-    const result = await this.database.query<EdgeRow>(
-      `INSERT INTO memory_edges(source_id, target_id, relation, metadata) VALUES ($1, $2, $3, $4::jsonb)
-       ON CONFLICT (source_id, target_id, relation) DO UPDATE SET metadata=EXCLUDED.metadata
-       RETURNING source_id, target_id, relation, metadata`,
-      [
-        parsed.sourceId,
-        parsed.targetId,
-        parsed.relation,
-        JSON.stringify(parsed.metadata),
-      ],
-    );
-    return edgeFromRow(result.rows[0]!);
-  }
-
   async listEdges(query: MemoryEdgeQuery): Promise<readonly MemoryEdge[]> {
     const parsed = memoryEdgeQuerySchema.parse(query);
     const direction =
@@ -204,23 +152,6 @@ export class PostgresMemoryGraphStore implements MemoryGraphAccess {
       [parsed.nodeId, parsed.relation ?? null, parsed.limit],
     );
     return result.rows.map(edgeFromRow);
-  }
-
-  async deleteEdge(
-    sourceId: string,
-    targetId: string,
-    relation: string,
-  ): Promise<boolean> {
-    const parsed = memoryEdgeInputSchema.parse({
-      sourceId,
-      targetId,
-      relation,
-    });
-    const result = await this.database.query(
-      "DELETE FROM memory_edges WHERE source_id=$1 AND target_id=$2 AND relation=$3 RETURNING source_id",
-      [parsed.sourceId, parsed.targetId, parsed.relation],
-    );
-    return result.rows.length > 0;
   }
 }
 
@@ -238,6 +169,14 @@ function nodePredicates(
   bind: (value: unknown) => string,
 ): string[] {
   const predicates = ["true"];
+  for (const key of ["kind", "ownerId", "level", "status", "system"] as const) {
+    if (parsed[key] !== undefined)
+      predicates.push(`metadata->>'${key}'=${bind(String(parsed[key]))}`);
+  }
+  if (parsed.expressionType)
+    predicates.push(
+      `metadata->>'expressionType'=${bind(parsed.expressionType)}`,
+    );
   if (parsed.tags.length)
     predicates.push(
       `metadata @> ${bind(JSON.stringify({ tags: parsed.tags }))}::jsonb`,

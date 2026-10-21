@@ -8,6 +8,16 @@
  * 应用的实际启动和投递行为另由 server-composition.test.ts 与 demo/index.test.ts 覆盖。
  * 输入输出与副作用：纯内存装配与源码读取，不启动 Runtime 或连接外部服务；每例恢复 mock。
  */
+/**
+ * QQ 表情实例开关同时控制草稿处理路径和模型审批；关闭后恢复原 Heavy 产出。
+ * 功能概述：验证唯一 Runtime Composition 的目录演化、激活选择和宿主依赖边界。
+ * Memory 实例只由全局模块配置显式激活。
+ * 主要职责：模拟一方 Catalog 新增与移除定义，确认共享工厂直接采用变更；检查禁用实例
+ * 不获得 Model Task 审批，Router 独立获得 light Light 审批、身份和 Memory 选项保持原有语义，并约束两个应用直接使用正式入口。
+ * 代码库关系：mock 仅替换 @kaguya/modules 的 Catalog 工厂，其他定义、配置校验及模板均为真实实现；
+ * 应用的实际启动和投递行为另由 server-composition.test.ts 与 demo/index.test.ts 覆盖。
+ * 输入输出与副作用：纯内存装配与源码读取，不启动 Runtime 或连接外部服务；每例恢复 mock。
+ */
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as modules from "@kaguya/modules";
@@ -40,19 +50,19 @@ describe("shared Runtime Composition", () => {
     expect("cadence" in disabled).toBe(false);
   });
 
-  it("activates raw Memory only when its instance is enabled", () => {
+  it("activates native Memory only when its instance is enabled", () => {
     const defaults = modules.createFirstPartyModuleConfigDefaults("test");
     const enabled = createMessageComposition(undefined, {
       moduleConfigs: defaults.map((config) =>
-        config.definitionId === "memory.raw"
+        config.definitionId === "memory.native"
           ? { ...config, enabled: true }
           : config,
       ),
       memoryEnabled: true,
     });
-    expect(enabled.memory).toEqual({ enabled: true });
+    expect(enabled.memory).toEqual({ enabled: true, embeddings: [] });
     expect(
-      enabled.activations.some((a) => a.definitionId === "memory.raw"),
+      enabled.activations.some((a) => a.definitionId === "memory.native"),
     ).toBe(true);
   });
   it("adopts an added and then removed catalog definition without an app registry", () => {
@@ -135,13 +145,6 @@ describe("shared Runtime Composition", () => {
         },
         selectionPolicy: { tier: "light" },
       },
-      {
-        activation: {
-          instanceId: "memory.expression.default",
-          definitionId: "memory.expression",
-        },
-        selectionPolicy: { tier: "light" },
-      },
     ]);
     expect(composition.activations).toHaveLength(
       moduleConfigs.filter(
@@ -151,7 +154,7 @@ describe("shared Runtime Composition", () => {
     );
     expect(
       composition.activations.some(
-        ({ definitionId }) => definitionId === "memory.raw",
+        ({ definitionId }) => definitionId === "memory.native",
       ),
     ).toBe(false);
     expect(
@@ -159,10 +162,10 @@ describe("shared Runtime Composition", () => {
         ({ definitionId }) => definitionId === "agent.router",
       )?.settings,
     ).not.toHaveProperty("botNames");
-    expect(composition.memory).toEqual({ enabled: true });
+    expect(composition.memory).toEqual({ enabled: false, embeddings: [] });
     expect(
       createMessageComposition(undefined, { moduleConfigs }).memory,
-    ).toEqual({ enabled: false });
+    ).toEqual({ enabled: false, embeddings: [] });
   });
 
   it.each([

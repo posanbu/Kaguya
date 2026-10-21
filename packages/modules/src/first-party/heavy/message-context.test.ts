@@ -5,15 +5,19 @@
  * 代码库关系：调用真实 turnMessageContextSelector，ledger fixture 仅提供授权事实与查询结果。
  * 输入输出与副作用：只读内存样本并记录查询，无数据库或网络。
  */
+/**
+ * 功能概述：验证编写选择器完整保留冻结 turn，不将最后一条消息替换为 intent 的复制正文。
+ * 主要职责：测试完整输入授权、历史 cutoff、已投递 assistant 过滤、引用链溯源及跨作用域/失败/未来/歧义拒绝。
+ * 知识导航产生的原始记忆即使已在冻结引用内，仍必须通过目标范围和截止时间检查。
+ * 代码库关系：调用真实 turnMessageContextSelector，ledger fixture 仅提供授权事实与查询结果。
+ * 输入输出与副作用：只读内存样本并记录查询，无数据库或网络。
+ */
 import { describe, expect, it, vi } from "vitest";
 import type { InformationSelectorContext } from "@kaguya/sdk";
 import { turnMessageContextSelector } from "./message-context.js";
 import { atom, fixture, target } from "./test-fixtures.js";
 import { assistantTextInformationKind } from "../information-kinds.js";
-import {
-  PERSON_PROFILE_REVISION_KIND,
-  emptyPersonProfileSections,
-} from "@kaguya/schema";
+
 function ledger(
   f: ReturnType<typeof fixture>,
 ): InformationSelectorContext["ledger"] {
@@ -67,58 +71,6 @@ describe("turnMessageContextSelector", () => {
         ledger: reader,
       }),
     ).rejects.toThrow("input reference");
-  });
-  it("selects the frozen profile revision and rejects a missing profile reference", async () => {
-    const f = fixture(["CURRENT_INPUT"]);
-    const profile = atom("profile-revision-1", PERSON_PROFILE_REVISION_KIND, {
-      personInformationId: "person-1",
-      revision: 1,
-      sections: emptyPersonProfileSections(),
-      previousRevisionInformationId: null,
-    });
-    const turn = atom(
-      f.turn.informationId,
-      f.turn.kind,
-      {
-        ...f.turn.payload,
-        personProfiles: [
-          {
-            personInformationId: "person-1",
-            profileInformationId: profile.informationId,
-            speakerKey: "qq:adapter:sender-0",
-          },
-        ],
-      },
-      [
-        ...f.turn.references,
-        {
-          relation: "core:uses-context",
-          informationId: profile.informationId,
-        },
-      ],
-    );
-    const reader = ledger(f);
-    reader.related = async (q) =>
-      q.from.includes(f.intent.informationId)
-        ? [turn]
-        : q.from.includes(turn.informationId)
-          ? [...f.messages, profile]
-          : [];
-    await expect(
-      turnMessageContextSelector.select({
-        sourceAtom: f.intent,
-        ledger: reader,
-      }),
-    ).resolves.toContain(profile.informationId);
-
-    reader.related = async (q) =>
-      q.from.includes(f.intent.informationId) ? [turn] : f.messages;
-    await expect(
-      turnMessageContextSelector.select({
-        sourceAtom: f.intent,
-        ledger: reader,
-      }),
-    ).rejects.toThrow("Missing frozen person profile reference");
   });
   it.each(["foreign-scope", "future"])(
     "rejects frozen raw memory outside %s boundaries",

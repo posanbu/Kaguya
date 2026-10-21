@@ -36,9 +36,19 @@ export const conversationContextInformationKind = defineInformationKind({
             z
               .object({
                 label: z.string(),
+                accountId: z.string(),
+                ownerId: z.string().nullable(),
+                sourceIds: z.array(z.string()),
+                nickname: z.string().nullable(),
+                card: z.string().nullable(),
                 name: z.string(),
                 identityStatus: z.string(),
-                relation: z.enum(["speaker", "participant", "mentioned"]),
+                relation: z.enum([
+                  "speaker",
+                  "participant",
+                  "mentioned",
+                  "replied-to",
+                ]),
               })
               .strict(),
           ),

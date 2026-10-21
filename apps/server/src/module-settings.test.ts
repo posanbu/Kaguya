@@ -4,6 +4,12 @@
  * 代码库关系：直接使用 Catalog/Zod、配置文件和 createHttpApplication，不启动运行时。
  * 输入输出与副作用：只写临时目录，无真实消息或配置应用，结束清理所有文件。
  */
+/**
+ * 功能概述：验证模块编辑真正的文件替换、公开投影、并发冲突和 HTTP 认证边界。
+ * 主要职责：临时配置夹具保留隐藏值，竞争相同 revision 必须仅一次成功；非法输入不得落盘。
+ * 代码库关系：直接使用 Catalog/Zod、配置文件和 createHttpApplication，不启动运行时。
+ * 输入输出与副作用：只写临时目录，无真实消息或配置应用，结束清理所有文件。
+ */
 import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import {
   mkdtemp,
@@ -17,10 +23,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { z } from "@kaguya/schema";
-import {
-  loadModuleInstanceConfigs,
-  writeModuleInstanceConfig,
-} from "@kaguya/config";
+import { loadModuleInstanceConfigs } from "@kaguya/config";
 import { createMessageCatalog } from "@kaguya/composition";
 import { createFirstPartyModuleConfigDefaults } from "@kaguya/modules";
 import { ModuleSettingsManagement } from "./module-settings-management.js";
@@ -207,29 +210,10 @@ it("first-party editable schemas expose names, constraints and no invented insta
       (f) => f.key === "botNames",
     ),
   ).toBeUndefined();
-  await expect(service.get("memory.mem0")).rejects.toMatchObject({
-    status: 404,
-  });
-  await expect(service.get("memory.native")).rejects.toMatchObject({
-    status: 404,
-  });
+  expect((await service.get("memory.native")).fields.map((f) => f.key)).toEqual(
+    ["semanticEmbedding", "languageEmbedding"],
+  );
 });
-it("does not expose settings for unfinished Memory definitions", async () => {
-  const rootDir = await mkdtemp(join(tmpdir(), "module-incomplete-"));
-  roots.push(rootDir);
-  const defaults = createFirstPartyModuleConfigDefaults("test");
-  await loadModuleInstanceConfigs({ rootDir, defaults, initialize: true });
-  const service = new ModuleSettingsManagement({
-    rootDir,
-    catalog: createMessageCatalog(),
-    defaults,
-    exclusive: (operation) => operation(),
-  });
-  for (const id of ["memory.native", "memory.mem0"]) {
-    await expect(service.get(id)).rejects.toMatchObject({ status: 404 });
-  }
-});
-
 it("maps an invalid array element to its public field path", async () => {
   const rootDir = await mkdtemp(join(tmpdir(), "module-array-"));
   roots.push(rootDir);

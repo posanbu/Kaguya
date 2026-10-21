@@ -8,9 +8,6 @@ import {
 
 type Tier = "light" | "heavy";
 const bootstrapNames: Record<string, string> = {
-  "cold-start": "冷启动",
-  warming: "补充中",
-  established: "已有上下文",
   contextual: "部分上下文",
   bootstrap: "证据不足",
 };
@@ -58,7 +55,7 @@ export function SituationContextSummary({
           <dd title={targets || undefined}>{routes}</dd>
         </div>
         <div>
-          <dt>冷启动</dt>
+          <dt>上下文</dt>
           <dd
             title={
               context?.historyCount !== null &&
@@ -136,7 +133,12 @@ export function SituationContextFab({
   onTierChange: (tier: Tier) => void;
 }) {
   const [section, setSection] = useState<
-    "behavior" | "platform" | "background"
+    | "behavior"
+    | "platform"
+    | "background"
+    | "conversation"
+    | "self"
+    | "expression"
   >("background");
   const trigger = useRef<HTMLButtonElement>(null);
   const close = () => {
@@ -148,7 +150,7 @@ export function SituationContextFab({
       <Button
         ref={trigger}
         className="situation-context-fab"
-        aria-label={open ? "收起动态上下文" : "展开动态上下文"}
+        aria-label={open ? "收起请求上下文" : "展开请求上下文"}
         aria-expanded={open}
         aria-controls="situation-context-panel"
         onClick={() => onOpenChange(!open)}
@@ -160,7 +162,7 @@ export function SituationContextFab({
         <section
           id="situation-context-panel"
           className="situation-context-panel"
-          aria-label="动态上下文"
+          aria-label="请求上下文"
           onKeyDown={(event) => {
             if (event.key === "Escape") {
               event.preventDefault();
@@ -170,13 +172,13 @@ export function SituationContextFab({
         >
           <header>
             <div>
-              <h2>动态上下文</h2>
+              <h2>请求上下文</h2>
               <p>
                 {tick}
                 {tier ? ` · ${tier === "heavy" ? "Heavy" : "Light"}` : ""}
               </p>
             </div>
-            <Button aria-label="关闭动态上下文" onClick={close}>
+            <Button aria-label="关闭请求上下文" onClick={close}>
               <X size={18} aria-hidden="true" />
             </Button>
           </header>
@@ -220,6 +222,21 @@ export function SituationContextFab({
             >
               人物背景
             </Button>
+            {(
+              [
+                ["conversation", "群聊属性"],
+                ["self", "自我认识"],
+                ["expression", "表达习惯"],
+              ] as const
+            ).map(([id, label]) => (
+              <Button
+                key={id}
+                aria-pressed={section === id}
+                onClick={() => setSection(id)}
+              >
+                {label}
+              </Button>
+            ))}
           </div>
           <div
             className="situation-context-body"
@@ -241,50 +258,158 @@ export function SituationContextFab({
               <p className="situation-context-text">
                 {context.platform || "这条请求未记录平台策略。"}
               </p>
-            ) : context.background ? (
+            ) : section === "conversation" ||
+              section === "self" ||
+              section === "expression" ? (
               <>
-                <h3>{context.background.name || "未命名会话"}</h3>
-                <p className="situation-context-scope">
-                  {context.background.scope === "group"
-                    ? "群聊"
-                    : context.background.scope === "private"
-                      ? "私聊"
-                      : context.background.scope === "web"
-                        ? "网页会话"
-                        : context.background.scope}
-                </p>
-                {context.background.participants.length ? (
-                  context.background.participants.map((person, index) => (
-                    <div
-                      className="situation-context-person"
-                      key={`${person.label}:${index}`}
-                    >
-                      <strong>
-                        {person.name || person.label || "未记录姓名"}
-                      </strong>
-                      <span>
-                        {person.relation === "speaker"
-                          ? "发言人"
-                          : person.relation === "mentioned"
-                            ? "被提及"
-                            : "参与者"}{" "}
-                        ·{" "}
-                        {person.identityStatus === "complete"
-                          ? "身份已解析"
-                          : person.identityStatus || "身份未记录"}
-                      </span>
-                    </div>
-                  ))
-                ) : (
-                  <p>未记录参与者。</p>
+                {section === "self" && (
+                  <details>
+                    <summary>自身身份 Prompt 原文</summary>
+                    <pre className="situation-context-text">
+                      {context.identityRaw ?? "未记录"}
+                    </pre>
+                  </details>
                 )}
+                <FixedMemoryEntries context={context} kind={section} />
               </>
             ) : (
-              <p>这条请求未记录会话人物背景。</p>
+              <PersonBackground context={context} />
             )}
           </div>
         </section>
       )}
     </div>
+  );
+}
+
+function FixedMemoryEntries({
+  context,
+  kind,
+  ownerId,
+  excludeOwners,
+}: {
+  context: SituationRequestContext;
+  kind: "person" | "conversation" | "self" | "expression";
+  ownerId?: string;
+  excludeOwners?: string[];
+}) {
+  if (context.memoryError) return <p role="alert">{context.memoryError}</p>;
+  if (!context.memory) return <p>此请求未记录固定记忆。</p>;
+  if (context.memory.status === "disabled")
+    return <p>此请求的 Memory 已关闭。</p>;
+  const items = context.memory.fixed.filter(
+    (n) =>
+      n.metadata.kind === kind &&
+      (!ownerId || n.metadata.ownerId === ownerId) &&
+      !excludeOwners?.includes(n.metadata.ownerId),
+  );
+  if (excludeOwners && !items.length) return null;
+  return (
+    <section aria-label="固定注入记忆">
+      {!ownerId && (
+        <>
+          <h3>固定记忆</h3>
+          <p>按对象与范围注入，不经过关键词或相似度筛选。</p>
+        </>
+      )}
+      {items.length ? (
+        items.map((node) => (
+          <article key={node.id} className="situation-context-memory-entry">
+            <p className="situation-context-text">{node.content}</p>
+            <span>
+              level 0 · 版本 {node.metadata.revision} · {node.metadata.status}
+            </span>
+            <details>
+              <summary>范围与来源</summary>
+              <p>对象：{node.metadata.ownerId}</p>
+              <p>范围：{node.metadata.scope}</p>
+              <p>记录时间：{node.metadata.occurredAt}</p>
+              <p>{node.metadata.sourceIds.join("、") || "手动记录"}</p>
+            </details>
+            <a href={`/memory?focusId=${encodeURIComponent(node.id)}`}>
+              在记忆图中查看当前版本
+            </a>
+          </article>
+        ))
+      ) : (
+        <p>此请求没有适用的固定摘要。</p>
+      )}
+    </section>
+  );
+}
+
+/** Every displayed fact comes from this saved request, never the current graph. */
+export function PersonBackground({
+  context,
+}: {
+  context: SituationRequestContext;
+}) {
+  const people = context.background?.participants ?? [];
+  const owners = people.flatMap((p) => (p.ownerId ? [p.ownerId] : []));
+  return (
+    <>
+      <h3>{context.background?.name || "未记录会话名称"}</h3>
+      <p className="situation-context-scope">
+        {(
+          { group: "群聊", private: "私聊", web: "网页会话" } as Record<
+            string,
+            string
+          >
+        )[context.background?.scope ?? ""] ?? context.background?.scope}
+      </p>
+      {people.length ? (
+        people.map((person, index) => (
+          <section
+            className="situation-context-person"
+            key={`${person.label}:${index}`}
+            aria-label={person.name || person.label}
+          >
+            <h3>{person.name || person.label || "未记录姓名"}</h3>
+            <p>
+              {(
+                {
+                  speaker: "发言人",
+                  mentioned: "被提及",
+                  "replied-to": "被回复",
+                  participant: "参与者",
+                } as Record<string, string>
+              )[person.relation] ?? person.relation}
+            </p>
+            {person.ownerId ? (
+              <FixedMemoryEntries
+                context={context}
+                kind="person"
+                ownerId={person.ownerId}
+              />
+            ) : (
+              <p>此请求未记录人物关联。</p>
+            )}
+            <details>
+              <summary>账号解析与来源原文</summary>
+              <pre className="situation-context-text">{person.raw}</pre>
+            </details>
+          </section>
+        ))
+      ) : (
+        <p>这条请求未记录参与者。</p>
+      )}
+      <FixedMemoryEntries
+        context={context}
+        kind="person"
+        excludeOwners={owners}
+      />
+      <details>
+        <summary>人物背景 Prompt 原文</summary>
+        <pre className="situation-context-text">
+          {context.backgroundRaw ?? "未记录"}
+        </pre>
+      </details>
+      <details>
+        <summary>上下文证据 Prompt 原文</summary>
+        <pre className="situation-context-text">
+          {context.evidenceRaw ?? "未记录"}
+        </pre>
+      </details>
+    </>
   );
 }

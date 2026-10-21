@@ -82,7 +82,7 @@ InformationLedger 已改为异步端口；PostgreSQL 17 实现追加式存储、
 
 ### Memory 底座与后续分层
 
-原始消息由 `memory.raw` 可靠写回。`memory.identity` 与 `memory.expression` 继续运行；自研联想/索引统一归入尚未完成的 `memory.native`，Mem0 认知归入尚未完成的 `memory.mem0`。在线回合目前不调用旧检索链。具体边界见 [Memory 模块文档](../developers/memory.md)。
+原始消息由事件账本与 Raw 投影保存。身份模块维护实体与账号绑定，`memory.native` 统一维护人物关系、经历、会话、自身和表达记忆。在线回合读取固定摘要并执行混合召回。具体边界见 [Memory 模块文档](../developers/memory.md)。
 
 ### PostgreSQL 运维演进
 

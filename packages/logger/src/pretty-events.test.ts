@@ -7,6 +7,15 @@
  * 另由 modules 的同步测试负责。
  * 输入输出与副作用：只格式化内存中的日志投影，不连接模型或数据库，不开启额外日志级别。
  */
+/**
+ * 功能概述：验证真实事件字段在终端中的输入、输出与记忆面板契约。
+ * 主要职责：覆盖 Light 输入/决策、记忆查询/正文/空结果、表达习惯与错误；
+ * 确保普通生命周期保持短行、没有记录的模型返回或召回正文不会被凭空补出。
+ * 代码库关系：串联 pretty.ts、pretty-events.ts 与 pretty-panel.ts，并通过 prettyFactory
+ * 检查运行中终端列数变化，以及窄屏框内完整字段的优先折行；正文来源投影的安全边界
+ * 另由 modules 的同步测试负责。
+ * 输入输出与副作用：只格式化内存中的日志投影，不连接模型或数据库，不开启额外日志级别。
+ */
 import { stripVTControlCharacters } from "node:util";
 
 import { prettyFactory } from "pino-pretty";
@@ -45,37 +54,6 @@ describe("module input/output panels", () => {
     expect(decision).toContain("├─ 原因说明");
     expect(decision).toContain("用户正在邀请我，应当回应。");
     expect(decision).not.toContain("Prompt");
-  });
-
-  it("frames raw Memory terminal without inventing message content", () => {
-    const terminal = formatPrettyMessage({
-      event: "memory.raw.terminal",
-      status: "completed",
-    });
-    expect(terminal).toContain("原始记忆 · 写入结果");
-    expect(terminal).not.toContain("正文");
-  });
-
-  it("frames actual expression summaries and keeps missing content out of info logs", () => {
-    const output = formatPrettyMessage({
-      event: "memory.expression.selected",
-      count: 1,
-      reason: "自然匹配",
-      habitSummaries: ["分享喜悦 → 简短感叹"],
-    });
-    expect(output).toContain("╭─ 表达选择 · 输出");
-    expect(output).toContain("├─ 表达习惯");
-    expect(output).toContain("分享喜悦 → 简短感叹");
-    expect(
-      formatPrettyMessage({ event: "person.fact.extracted" }),
-    ).not.toContain("╭");
-    expect(
-      formatPrettyMessage({
-        event: "person.fact.extracted",
-        detail: true,
-        contentPreview: "喜欢天文",
-      }),
-    ).toContain("├─ 事实正文预览");
   });
 
   it("keeps routine status lines compact and does not invent generic model output", () => {
@@ -129,32 +107,4 @@ describe("module input/output panels", () => {
       expect(output).toContain("e\u0301");
     }
   });
-
-  it.each([40, 60, 100])(
-    "keeps fields that fit intact at %i terminal columns",
-    (columns) => {
-      const output = formatPrettyMessage(
-        {
-          event: "memory.raw.terminal",
-          marker: "x".repeat(columns - 26),
-          queryLength: 20,
-          route: "👩🏽‍💻中文",
-          selection: {
-            marker: "x".repeat(columns - 28),
-            queryLength: 20,
-          },
-        },
-        false,
-        columns,
-      );
-      const frameLines = output
-        .split("\n")
-        .filter((line) => /^  [╭│├╰]/u.test(line));
-      expect(frameLines.every((line) => stringWidth(line) === columns)).toBe(
-        true,
-      );
-      expect(output.match(/查询字符数=20/gu)).toHaveLength(2);
-      expect(output).toContain("检索入口=👩🏽‍💻中文");
-    },
-  );
 });

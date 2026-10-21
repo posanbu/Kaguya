@@ -15,13 +15,25 @@
  * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
  * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
  */
+/**
+ * 启用独立草稿处理器时，QQ 模型输出先登记 draft；最终 assistant 仍经过原有授权和唯一投递槽。
+ * manifest.promptTemplates 显式声明消息模板组，供管理端按归属读取。
+ * Heavy 固定使用 heavy 模型档位，模块 settings 为空对象。
+ * 功能概述：消息编写模块消费 Router 产生的目标与冻结 turn 意图，经通用 Model Task 生成文本。
+ * 宿主授权能力在选取上下文前校验目标；跨会话只使用批准 Prompt，正文确认后才通过同一 release 创建 delivery。
+ * 普通回复也调用宿主冻结背景，仅追加 background 投影，不把其他会话目标引用或 ID 传给正文模型。
+ * 场景、人物背景与表达习惯均使用外部模板；背景和表达 renderer 在模块构造时按声明编译，只记录实际追加的模板和变量。
+ * 主要职责：createHeavyModule 装配三个 durable 订阅；messageTaskOutputSchema 校验非空文本；
+ * heavySettingsSchema 不接受可调设置。完成选择器沿 completed→requested→intent 核对任务来源，
+ * 再以实例与事实 ID 为 registerOnce 键分别记录 assistant 和纯文本投递，重复事件不产生重复业务输出。
+ * 代码库关系：message-context 选择冻结上下文，message-prompt 编译全部本轮输入；Runtime 注入模型能力及完成定义。
+ * 输入输出与副作用：意图只携带 target、turn 与 memoryInformationIds；assistant.source 保留 target，
+ * 不复制入站正文或消息 ID，不提供固定路由或自动引用回复。失败或取消的模型任务不产生 assistant。
+ * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
+ * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
+ */
 import { firstPartyInspection } from "../inspection.js";
-import { expressionSelected, expressionReady } from "../expression/facts.js";
-import {
-  expressionDispatchSelector,
-  withExpressionContext,
-  expressionPrompt,
-} from "../expression/heavy-context.js";
+import { appendNativeMemoryToPrompt } from "../memory-native/prompt.js";
 import {
   heavyModulePromptTemplates,
   messageTemplateDeclarations,
@@ -53,7 +65,6 @@ import {
 
 import {
   assistantTextInformationKind,
-  coreMemoryTextInformationKind,
   deliveryRequestedInformationKind,
   inboundTextInformationKind,
   messageIntentRequestedInformationKind,
@@ -65,7 +76,6 @@ import {
   inboundMemoryPromptRenderer,
   assistantHistoryPromptRenderer,
   messagePromptRenderer,
-  memoryPromptRenderer,
   currentAcceptedMessageSelector,
   turnMessageContextSelector,
 } from "./message-context.js";
@@ -195,7 +205,6 @@ export interface CreateHeavyModuleOptions<
     "core.model.task.completed",
     P
   >;
-  readonly expressionEnabled?: boolean;
   /** 装配时有独立展示插件才启用；本模块不决定表情策略。 */
   readonly draftProcessingEnabled?: boolean;
   readonly selector?: InformationSelectorDefinition;
@@ -213,9 +222,7 @@ export function createHeavyModule<
   )
     throw new Error("Invalid model task capability");
   const baseSelector = dependencies.selector ?? turnMessageContextSelector;
-  const selector = dependencies.expressionEnabled
-    ? withExpressionContext(baseSelector)
-    : baseSelector;
+  const selector = baseSelector;
   const compilePrompt = createMessagePromptCompiler(
     dependencies.promptTemplates,
     dependencies.agentIdentity,
@@ -223,10 +230,6 @@ export function createHeavyModule<
   const renderBackground = createContextPromptRenderer(
     dependencies.promptTemplates,
     "conversationBackground",
-  );
-  const renderHabits = createContextPromptRenderer(
-    dependencies.promptTemplates,
-    "expressionHabits",
   );
   const completedInformationKind =
     dependencies.modelTaskCompletedInformationKind;
@@ -282,10 +285,10 @@ export function createHeavyModule<
   }
   return defineInformationModule({
     manifest: {
+      category: "agent",
       protocolVersion: 1,
       moduleVersion: "1.0.0",
       selectors: [
-        ...(dependencies.expressionEnabled ? [expressionDispatchSelector] : []),
         selector,
         ...(selector === currentAcceptedMessageSelector
           ? []
@@ -295,7 +298,6 @@ export function createHeavyModule<
       ],
       promptRenderers: [
         messagePromptRenderer,
-        memoryPromptRenderer,
         inboundMemoryPromptRenderer,
         assistantHistoryPromptRenderer,
       ],
@@ -303,7 +305,6 @@ export function createHeavyModule<
         ...(dependencies.draftProcessingEnabled
           ? [messageDraftProcessorReady]
           : []),
-        ...(dependencies.expressionEnabled ? [expressionReady] : []),
         modelTaskCapability,
         ...(dependencies.messageAuthorizationCapability
           ? [dependencies.messageAuthorizationCapability]
@@ -322,12 +323,10 @@ export function createHeavyModule<
         ...(dependencies.draftProcessingEnabled
           ? [messagePreparedInformationKind]
           : []),
-        ...(dependencies.expressionEnabled ? [expressionSelected] : []),
         messageConfirmedInformationKind,
         messageIntentRequestedInformationKind,
         completedInformationKind,
         assistantTextInformationKind,
-        coreMemoryTextInformationKind,
         inboundTextInformationKind,
       ],
       produces: [
@@ -378,31 +377,16 @@ export function createHeavyModule<
             ]
           : []),
         onInformation(
-          (dependencies.expressionEnabled
-            ? expressionSelected
-            : messageIntentRequestedInformationKind) as unknown as InformationKindDefinition<
-            string,
-            JsonObject
-          >,
+          messageIntentRequestedInformationKind,
           {
-            subscriptionId: dependencies.expressionEnabled
-              ? "kaguya.heavy.expression-selected"
-              : "kaguya.heavy.requested",
+            subscriptionId: "kaguya.heavy.requested",
             delivery: "durable",
           },
           async (input, context) => {
-            const selected = dependencies.expressionEnabled
-              ? await context.select(expressionDispatchSelector)
-              : [];
-            const original = dependencies.expressionEnabled
-              ? selected.find(
-                  (a) => a.informationId === input.payload.intentInformationId,
-                )!
-              : input;
             const message = {
-              ...original,
+              ...input,
               payload: messageIntentRequestedInformationPayloadSchema.parse(
-                original.payload,
+                input.payload,
               ),
             };
             const authorized = dependencies.messageAuthorizationCapability
@@ -475,22 +459,11 @@ export function createHeavyModule<
                 };
               }
             }
-            contextAtoms = persisted
-              ? contextAtoms
-              : [
-                  ...new Map(
-                    [...contextAtoms, ...selected].map((a) => [
-                      a.informationId,
-                      a,
-                    ]),
-                  ).values(),
-                ];
-            if (!persisted)
-              prompt = expressionPrompt(
+            if (!persisted && !authorized)
+              prompt = appendNativeMemoryToPrompt(
                 prompt,
                 contextAtoms,
-                message.informationId,
-                renderHabits,
+                message.payload.turn.contextInformationId,
               );
             const contexts = persistedIntent.references.filter(
               (r) => r.relation === "core:context",
@@ -633,7 +606,7 @@ export function createHeavyModule<
 /** 按共享声明编译可选上下文后缀；即使当前未启用该上下文，也在模块构造时拒绝无效模板。 */
 function createContextPromptRenderer(
   templates: HeavyPromptTemplates,
-  key: "conversationBackground" | "expressionHabits",
+  key: "conversationBackground",
 ) {
   const declaration = messageTemplateDeclarations.find(
     (candidate) => candidate.key === key,

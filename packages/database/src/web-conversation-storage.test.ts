@@ -4,6 +4,12 @@
  * 代码库关系：通过 PGlite（或显式测试连接的 PostgreSQL）及仓储公共接口验证 SQL 语义，不以替身跳过约束。
  * 输入输出与副作用：每例创建隔离数据库，按完成 Promise 同步并在 finally 关闭；投影删除只作用于该测试数据库。
  */
+/**
+ * 功能概述：验证浏览器会话在持久化观察范围与原生 Memory 召回中的隔离，不依赖异步 runner。
+ * 主要职责：覆盖同会话连续消息、跨会话与旧匿名数据隔离、lifecycle 投影重建，以及旧 v1 Memory 约束兼容升级。
+ * 代码库关系：通过 PGlite（或显式测试连接的 PostgreSQL）及仓储公共接口验证 SQL 语义，不以替身跳过约束。
+ * 输入输出与副作用：每例创建隔离数据库，按完成 Promise 同步并在 finally 关闭；投影删除只作用于该测试数据库。
+ */
 import { expect, it } from "vitest";
 import {
   freezeInformationAtom,
@@ -117,62 +123,6 @@ it("isolates Web lifecycle scopes during append and projection rebuild", async (
     `);
     await database.prepareSchema();
     await expectIsolation();
-  } finally {
-    await database.close();
-  }
-}, 15_000);
-
-it("upgrades the old Web memory constraint and preserves each conversation document", async () => {
-  const database = await createDatabase();
-  try {
-    await database.prepareSchema();
-    await database.information.synchronizeKinds([kind]);
-    await database.sql.exec(`
-      ALTER TABLE memory_documents
-        DROP CONSTRAINT memory_documents_destination_check,
-        ADD CONSTRAINT memory_documents_check CHECK (
-          (destination_kind = 'web' AND destination_id IS NULL)
-          OR (destination_kind IN ('private', 'group') AND destination_id IS NOT NULL)
-        );
-    `);
-    const put = async (id: string, destination: PlatformDestination) => {
-      await append(database, id, destination);
-      return database.memory.put({
-        sourceInformationId: id,
-        sourceKind: kind,
-        content: "shared moon",
-        occurredAt,
-        address: {
-          platform: "web",
-          adapterId: "web.ui.main",
-          accountId: "same-account-to-isolate-scope-filter",
-          platformMessageId: `request-${id}`,
-          destination,
-        },
-      });
-    };
-    const legacy = await put("legacy-memory", { kind: "web" });
-    await database.prepareSchema();
-    await database.prepareSchema();
-    const a = await put("a-memory", {
-      kind: "web",
-      conversationId: conversationA,
-    });
-    const b = await put("b-memory", {
-      kind: "web",
-      conversationId: conversationB,
-    });
-    for (const expected of [legacy.document, a.document, b.document]) {
-      expect(
-        await database.memory.getBySource(expected.sourceInformationId),
-      ).toEqual(expected);
-    }
-    await expect(
-      database.sql.query(
-        "UPDATE memory_documents SET destination_kind='private', destination_id=NULL WHERE memory_id=$1",
-        [legacy.document.memoryId],
-      ),
-    ).rejects.toThrow();
   } finally {
     await database.close();
   }

@@ -35,20 +35,24 @@ async function fixture() {
 
 it("writes the desired Memory switch only to the plugin tree and leaves runtime state alone", async () => {
   const f = await fixture();
-  const path = join(f.rootDir, "modules/memory.raw.default/config.json");
+  const path = join(f.rootDir, "modules/memory.native.default/config.json");
   const before = await readFile(path, "utf8");
   const initial = await f.management.get();
-  const saved = await f.management.toggle("memory.raw", true, initial.revision);
-  expect(await readFile(path, "utf8")).toBe(before);
-  expect(saved.features.find((item) => item.id === "memory.raw")).toMatchObject(
-    {
-      enabled: true,
-      active: false,
-      blocker: "restart_required",
-    },
+  const saved = await f.management.toggle(
+    "memory.native",
+    true,
+    initial.revision,
   );
+  expect(await readFile(path, "utf8")).toBe(before);
+  expect(
+    saved.features.find((item) => item.id === "memory.native"),
+  ).toMatchObject({
+    enabled: true,
+    active: false,
+    blocker: "restart_required",
+  });
   expect(await readFile(join(f.rootDir, "cordis.yml"), "utf8")).toContain(
-    "id: module.memory.raw.default",
+    "id: module.memory.native.default",
   );
   expect(f.committed).toHaveBeenCalledOnce();
 });
@@ -56,10 +60,10 @@ it("writes the desired Memory switch only to the plugin tree and leaves runtime 
 it("rejects stale revisions without changing the plugin tree", async () => {
   const f = await fixture();
   const before = await f.management.get();
-  await f.management.toggle("memory.raw", true, before.revision);
+  await f.management.toggle("memory.native", true, before.revision);
   const tree = await readFile(join(f.rootDir, "cordis.yml"), "utf8");
   await expect(
-    f.management.toggle("memory.raw", false, before.revision),
+    f.management.toggle("memory.native", false, before.revision),
   ).rejects.toMatchObject({
     status: 409,
     code: "feature_configuration_changed",

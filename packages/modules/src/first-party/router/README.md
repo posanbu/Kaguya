@@ -14,7 +14,7 @@ Router 消费 observe 决策及其冻结引用，产生 Light 模型任务。情
 
 冻结后才执行 mute、安全、目标和授权检查。Light 判断参与价值并选择 `message | wait | silent`；`message` 只传目标和冻结引用，不传生成的话题、焦点、回复动作或写作建议。Heavy 读取同一份冻结 turn，独立决定发言或沉默。群聊直接通知在 observe 后开启 Focus；成功投递续租，silent/failed 关闭，wait 保持自然到期。
 
-bootstrap 只依据冻结输入、身份实体创建来源和本轮授权 Memory，区分 `cold-start`、`warming`、`established`。版本化投影和身份实体证据随 turn 冻结，不由后续消息或 Memory 改写。
+bootstrap 版本 2 仅保存人物及会话的建档来源、时间和是否由本轮输入创建，不推断认识程度。context_bootstrap 在最终 Prompt 装配时统计历史、固定记忆及动态召回，并关联人物节点。Light 与 Heavy 复用同一回合的记忆版本。
 
 ## 规划上下文与回复兴趣
 

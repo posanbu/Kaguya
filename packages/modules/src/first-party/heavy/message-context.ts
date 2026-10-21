@@ -8,6 +8,16 @@
  * 输入输出与副作用：只读 ledger、返回去重 ID；缺少 turn、输入或记忆授权时抛错，不回退到复制的末条正文。
  * 冻结原文记忆额外核验目标范围和事件截止点；检索命中或显式引用不能放宽消息来源权限。
  */
+/**
+ * 冻结的原始消息记忆须再次通过范围和事件截止点检查。
+ * 功能概述：消息编写模块的受控账本选择器及 Prompt 预览入口，不参与 Router 的发言决策。
+ * 已确认的跨会话消息通过 confirmation→assistant 因果链验证成功投递，才能进入同目标历史或引用。
+ * 主要职责：turnMessageContextSelector 核对 intent→turn 引用并保留全部冻结输入；仅辅助历史受预算限制，
+ * 已投递 assistant 才可进入历史，每条输入通过同目标成功回执链或入站 ID 查询引用上下文。
+ * 代码库关系：index.ts 声明选择器与渲染器，message-prompt 使用冻结快照编译；Engine 按返回 ID 重载事实。
+ * 输入输出与副作用：只读 ledger、返回去重 ID；缺少 turn、输入或记忆授权时抛错，不回退到复制的末条正文。
+ * 冻结原文记忆额外核验目标范围和事件截止点；检索命中或显式引用不能放宽消息来源权限。
+ */
 import type {
   CompiledPrompt,
   DeepReadonly,
@@ -22,7 +32,6 @@ import {
 } from "@kaguya/sdk";
 
 import {
-  coreMemoryTextInformationKind,
   assistantTextInformationKind,
   inboundTextInformationKind,
   messageIntentRequestedInformationKind,
@@ -43,7 +52,6 @@ import {
   sameMessageTarget,
 } from "./message-quote.js";
 import { isMemorySourceInScope } from "../memory-source-scope.js";
-import { PERSON_PROFILE_REVISION_KIND } from "@kaguya/schema";
 import { frozenRawContextInformationKind } from "../router/raw-context.js";
 
 export const currentAcceptedMessageSelector = defineInformationSelector({
@@ -141,13 +149,6 @@ export async function selectFrozenTurnMessageContext(options: {
       throw new Error(
         "Frozen memory source is outside the turn scope or cutoff",
       );
-  }
-  const profileIds = ((turn.payload as any).personProfiles ?? []).map(
-    (profile: { profileInformationId: string }) => profile.profileInformationId,
-  );
-  for (const id of profileIds) {
-    if (byId.get(id)?.kind !== PERSON_PROFILE_REVISION_KIND)
-      throw new Error(`Missing frozen person profile reference: ${id}`);
   }
   const inputIds = new Set(inputs.map((atom) => atom.informationId));
   const memoryIds = new Set(intent.memoryInformationIds);
@@ -318,7 +319,6 @@ export async function selectFrozenTurnMessageContext(options: {
       turn.informationId,
       ...inputs.map((atom) => atom.informationId),
       ...intent.memoryInformationIds,
-      ...profileIds,
       ...history.map((atom) => atom.informationId),
       ...(rawSnapshot ? [rawSnapshot.informationId] : []),
       ...(situation
@@ -344,16 +344,6 @@ export const messagePromptRenderer: InformationPromptRendererDefinition =
         messageIntentRequestedInformationPayloadSchema.parse(atom.payload),
       ),
   });
-export const memoryPromptRenderer: InformationPromptRendererDefinition =
-  Object.freeze({
-    rendererId: "memory.text",
-    displayName: "Memory text",
-    description: "Renders selected memory text as Prompt context.",
-    kinds: [coreMemoryTextInformationKind],
-    render: (atom: DeepReadonly<InformationAtom>) =>
-      coreMemoryTextInformationKind.payloadSchema.parse(atom.payload).text,
-  });
-
 export const inboundMemoryPromptRenderer: InformationPromptRendererDefinition =
   Object.freeze({
     rendererId: "memory.inbound-text",

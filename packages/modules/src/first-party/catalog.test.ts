@@ -8,6 +8,16 @@
  * 代码库关系：直接约束 catalog 工厂以及 heavy 模块的公开 settings schema。
  * 输入输出与副作用：纯内存组装，不连接模型或数据库；错误不包含设置值。
  */
+/**
+ * 测试夹具显式装配 QQ 表情模板，验证新增模块契约与既有流程兼容。
+ * 测试显式注入统一文件模板，避免 Light 或 Expression 绕过 default/local 选择。
+ * 功能概述：验证 first-party Catalog 默认配置及激活边界。
+ * 主要职责：catalog fixture 注入宿主能力与共享 kind，测试八个默认模块、严格 modelTier 设置、
+ * disabled 配置校验与旧 reply/outbound 配置拒绝；Profile 身份不再投影进 Router 设置。
+ * 检查视图只引用 Catalog 中的模块 Kind，或由 model-task 能力及请求 Surface 明确声明的 Runtime 请求 Kind。
+ * 代码库关系：直接约束 catalog 工厂以及 heavy 模块的公开 settings schema。
+ * 输入输出与副作用：纯内存组装，不连接模型或数据库；错误不包含设置值。
+ */
 import { loadFirstPartyPromptTemplates } from "../node/prompt-templates.js";
 const testPrompts = loadFirstPartyPromptTemplates();
 import { describe, expect, it } from "vitest";
@@ -67,7 +77,8 @@ function catalog() {
     promptTemplates: testMessageTemplates,
     lightTemplate: testPrompts.light,
     lightBootstrapPolicy: testPrompts.lightBootstrapPolicy,
-    expressionTemplates: testPrompts.expression,
+
+    nativeMemoryTemplate: testPrompts.nativeMemory,
     qqExpressionTemplates: testPrompts.qqExpression,
     agentIdentity: testIdentity,
   });
@@ -81,7 +92,7 @@ describe("first-party module configuration", () => {
         .flatMap((d) => [...d.manifest.produces, ...d.manifest.consumes])
         .map((k) => k.kind),
     );
-    expect(definitions).toHaveLength(11);
+    expect(definitions).toHaveLength(8);
     for (const { manifest } of definitions) {
       if (manifest.development?.status === "incomplete") {
         expect(manifest.inspection).toBeUndefined();
@@ -119,11 +130,14 @@ describe("first-party module configuration", () => {
       }
     }
   });
-  it("materializes only raw Memory as a switchable feature", () => {
+  it("materializes only native Memory as a switchable feature", () => {
     const defaults = createFirstPartyModuleConfigDefaults("production");
-    expect(defaults).toHaveLength(10);
+    expect(defaults).toHaveLength(9);
+    expect(
+      defaults.some((config) => config.definitionId === "memory.expression"),
+    ).toBe(false);
     expect(defaults.every(({ version }) => version === 1)).toBe(true);
-    for (const id of ["memory.raw", "adapter.napcat"])
+    for (const id of ["memory.native", "adapter.napcat"])
       expect(
         defaults.find((config) => config.definitionId === id)?.enabled,
       ).toBe(false);
@@ -131,21 +145,15 @@ describe("first-party module configuration", () => {
       defaults.find((config) => config.definitionId === "adapter.web")?.enabled,
     ).toBe(true);
     expect(createFirstPartyModuleActivations(catalog(), defaults)).toHaveLength(
-      8,
+      7,
     );
   });
 
-  it("classifies exactly the five memory definitions", () => {
+  it("classifies the current identity and unified Memory definitions", () => {
     const tagged = catalog()
       .definitions.filter(({ manifest }) => manifest.tags?.includes("memory"))
       .map(({ manifest }) => manifest.definitionId);
-    expect(tagged).toEqual([
-      "memory.expression",
-      "memory.identity",
-      "memory.mem0",
-      "memory.native",
-      "memory.raw",
-    ]);
+    expect(tagged).toEqual(["memory.identity", "memory.native"]);
     expect(tagged).not.toEqual(
       expect.arrayContaining([
         "core.identity.normalize",
@@ -153,36 +161,6 @@ describe("first-party module configuration", () => {
         "core.association.memory",
       ]),
     );
-  });
-
-  it("lists unfinished Memory modules with issues and refuses activation", () => {
-    const definitions = catalog();
-    const defaults = createFirstPartyModuleConfigDefaults("test");
-    for (const [id, issue] of [
-      ["memory.native", 265],
-      ["memory.mem0", 266],
-    ] as const) {
-      const definition = definitions.definitions.find(
-        ({ manifest }) => manifest.definitionId === id,
-      );
-      expect(definition?.manifest.development).toEqual({
-        status: "incomplete",
-        issueUrl: `https://github.com/posanbu/Kaguya/issues/${issue}`,
-      });
-      expect(defaults.some((config) => config.definitionId === id)).toBe(false);
-      expect(() =>
-        createFirstPartyModuleActivations(definitions, [
-          ...defaults,
-          {
-            version: 1,
-            instanceId: `${id}.default`,
-            definitionId: id,
-            enabled: true,
-            settings: {},
-          },
-        ]),
-      ).toThrow(`Incomplete module cannot be activated: ${id}`);
-    }
   });
 
   it("fixes Heavy to the heavy tier with no module settings", () => {

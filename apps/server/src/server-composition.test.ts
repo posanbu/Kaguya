@@ -20,6 +20,28 @@
  * afterEach 在断言或启动失败后也按 HTTP、Runtime、数据库和 logger 顺序释放资源，避免污染后续用例。
  * 启动错误用人工包含密码的连接异常验证返回值与日志均已脱敏。
  */
+/**
+ * Web 入站 DAG 同样产生当前会话背景投影，保持 Composition 与 Runtime 的事实集合断言同步。
+ * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
+ * 默认 DAG 验证 eligible turn 先调用 Light，再由 Heavy 生成消息。
+ * tier 配置回归同时覆盖 generation.timeoutMs、思考与推荐时长参数传递；
+ * 结构化输出仅在对应 Provider 明确声明支持时选择 schema，缺省或 false 均选择 json。
+ * 功能概述：验证 Server 作为唯一 composition root 组合 PostgreSQL information
+ * database、Runtime、Web/NapCat ingress、HTTP 与启动期选定的全局 Profile。
+ * 主要职责：用真实 PGlite 覆盖 Web 到 information DAG，验证 HTTP/Web UI/Vite
+ * 组合和启动失败关闭；并区分数据库初始化与模块/Runtime 生命周期失败的固定错误分类，
+ * 覆盖未知字母数字类名和抛出型 constructor/name getter；
+ * `createRuntimeModelSelectionResolver` 用例保证 selected Profile
+ * 在启动时冻结、保留 provider/model 复合身份、light/heavy 共用一个 tier-only resolver，
+ * 且模块不能传 `profileId`；同名 model 的跨 provider 并发调用不得串线。
+ * 代码库关系：Runtime 业务装配统一来自 @kaguya/composition；直接驱动 `server.ts`、`app.ts`、`web-gateway.ts` 与 `web.ts`；
+ * 真实配置 Registry 来自 `@kaguya/config`，信息账本来自 `@kaguya/database/testing`，
+ * provider client 创建由 `@ai-sdk/openai-compatible` mock 观察。
+ * 输入输出与副作用：每个用例使用独立临时配置目录或内存 PGlite；
+ * Web DAG fixture 对入站提交及持久订阅收敛统一使用 8 秒/20 毫秒预算；
+ * afterEach 在断言或启动失败后也按 HTTP、Runtime、数据库和 logger 顺序释放资源，避免污染后续用例。
+ * 启动错误用人工包含密码的连接异常验证返回值与日志均已脱敏。
+ */
 import {
   createMessageComposition,
   type RuntimeModelSelectionResolver,
@@ -48,7 +70,7 @@ import {
   writeCordisModuleEnabled,
   writeModuleInstanceConfig,
 } from "@kaguya/config";
-import { closeLogger, createLogger, createModuleLogger } from "@kaguya/logger";
+import { closeLogger, createLogger } from "@kaguya/logger";
 import { createRepeatingDeterministicModel } from "@kaguya/llm/testing";
 import { createFirstPartyModuleConfigDefaults } from "@kaguya/modules";
 import { KaguyaRuntime } from "@kaguya/runtime";
@@ -321,8 +343,6 @@ describe("unified server composition", () => {
         "memory.identity.person.resolution",
         "core.message.inbound.text",
         "agent.router.message.intent.requested",
-        "memory.expression.selection.requested",
-        "memory.expression.selection.completed",
         "core.model.task.requested",
         "core.model.task.completed",
         "core.message.assistant.text",
@@ -1318,15 +1338,19 @@ describe("unified server composition", () => {
     expect(
       createMessageComposition(undefined, {
         memoryEnabled: false,
-        moduleConfigs: createFirstPartyModuleConfigDefaults("test"),
+        moduleConfigs: createFirstPartyModuleConfigDefaults("test").map((c) =>
+          c.definitionId === "memory.native" ? { ...c, enabled: true } : c,
+        ),
       }).memory,
-    ).toEqual({ enabled: false });
+    ).toEqual({ enabled: false, embeddings: [] });
     expect(
       createMessageComposition(undefined, {
         memoryEnabled: true,
-        moduleConfigs: createFirstPartyModuleConfigDefaults("test"),
+        moduleConfigs: createFirstPartyModuleConfigDefaults("test").map((c) =>
+          c.definitionId === "memory.native" ? { ...c, enabled: true } : c,
+        ),
       }).memory,
-    ).toEqual({ enabled: true });
+    ).toEqual({ enabled: true, embeddings: [] });
   });
 });
 

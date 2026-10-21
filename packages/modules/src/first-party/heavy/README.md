@@ -12,13 +12,13 @@
 
 新意图严格包含 `target: { adapterId, platform, destination }`、必填 turn provenance 和 `memoryInformationIds`。旧意图中的 `composition` 仍可解析以支持重放，但不再进入 Heavy Prompt。意图不复制源消息正文、源平台消息 ID 或引用标记。Selector 沿引用重载冻结 context 及其全部输入，并验证目标范围与 provenance。Heavy 使用整个 `turn.inputs`，不会把最后一条输入标成必须回答的目标消息。
 
-历史只纳入同范围入站及已成功投递的 assistant；Memory 必须来自意图明确列出的冻结引用。引用机器人消息时，Selector 通过同目标的成功投递回执追溯 assistant 原子，并把回执与因果链保留为引用溯源；晚于冻结时点的回执、失败投递和歧义结果不会用于解析。每条入站的引用可作为理解上下文，出站始终是普通 `kind: "text"`，投递地址只来自意图 target。公共 OneBot `kind: "reply"` 能力保留给专用模块。
+历史只纳入同范围入站及已成功投递的 assistant。统一 Memory 使用该回合冻结的固定摘要和动态召回，作为 `native_memory` 数据段注入。显式历史消息引用仍须来自意图列出的来源。引用机器人消息时，Selector 通过同目标的成功投递回执追溯 assistant 原子，并把回执与因果链保留为引用溯源；晚于冻结时点的回执、失败投递和歧义结果不会用于解析。每条入站的引用可作为理解上下文，出站始终是普通 `kind: "text"`，投递地址只来自意图 target。公共 OneBot `kind: "reply"` 能力保留给专用模块。
 
 ## Prompt 模板
 
 默认模板位于 `packages/modules/templates/heavy.default.hbs`。本地覆盖使用同名 `*.local.hbs`，文件被 Git 忽略，Server 重启后重新加载；旧 `llm-reply.*.local.hbs` 不再加载。
 
-模板分为 `heavy` 外层，以及 `.bootstrap`、`.history-inbound`、`.history-assistant`、`.memory`、`.memory-item`、`.scene` 等当前生效的资源。`.history-inbound` 和 `.history-assistant` 只用于独立记忆中的消息引用；双层事件 Context 由冻结 Memory 文本提供。集合层允许 `each`、`if`、`unless` 和明确声明的静态 partial；动态 partial、递归和自定义 helper 会被拒绝。
+模板分为 `heavy` 外层，以及 `.bootstrap`、`.history-inbound`、`.history-assistant`、`.memory`、`.memory-item`、`.scene` 等当前生效的资源。`.history-inbound` 和 `.history-assistant` 用于显式历史消息引用。原始事件背景与统一记忆快照分别保留来源和版本。集合层允许 `each`、`if`、`unless` 和明确声明的静态 partial；动态 partial、递归和自定义 helper 会被拒绝。
 
 外层变量包含 `context_bootstrap`、`bootstrap`、`persona`、`name`、`aliases`、`self_account`、`scene`、`history`、`memory` 和 `turn`。消息层提供 `occurred_at`、`sender_name`、`sender_id`、`platform`、`adapter_id`、`destination`、`message_id`、`mentions`、`reply_to`、`content`、`quoted_message`、`self_account`、`name` 和 `is_assistant`。引用内容属于对应入站的 `quoted_message`，不是全局必须回答的消息。
 

@@ -225,14 +225,13 @@ async function fixture(
           destinationAvailable: true,
           stale: false,
           bootstrap: {
-            version: 1,
-            mode: "cold-start",
-            memory: { state: "disabled", selectedCount: 0 },
-            conversation: { state: "ephemeral" },
+            version: 2,
+            conversation: { scopeMode: "ephemeral", registration: null },
             participants: [
               {
                 inputInformationId: inbound.informationId,
-                state: "unresolved",
+                ownerId: null,
+                registration: null,
               },
             ],
           },

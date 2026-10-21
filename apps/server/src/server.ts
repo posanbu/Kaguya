@@ -21,9 +21,31 @@
  * Inspection 仅在 Runtime 可用时注入，不把 settings、凭据或数据库对象放入 HTTP 响应。
  * Web adapter 将回复交付给持久账本；WebChatHistory 只投影已送达消息，热应用后读取当前数据库。
  */
+/**
+ * Memory 图管理通过动态 database.memoryGraph 门面接入 HTTP，数据库重挂载后使用当前实例。
+ * 模板管理与配置应用共享写锁，只写本地覆盖，用户需重启加载新模板。
+ * 模块配置管理复用 configuration.exclusive，与显式应用共锁；保存不会切换运行实例。
+ * 启动和显式热应用分别把 inboundAllowlist 交给 AdapterHost、outboundAllowlist 交给 Runtime 及目标授权服务。
+ * 插件清单在数据库前冻结 Catalog/Kind；预检、运行和失败回滚复用相同快照，真实 fiber 负责模块生命周期。
+ * 功能概述：Server composition root，组合配置、数据库、Runtime、HTTP/Web 与 NapCat 生命周期。
+ * 主要职责：startKaguyaServer 验证 Profile 和模块配置后启动宿主；close 逆序释放资源；
+ * createRuntimeModelSelectionResolver 根据 Profile 批准的 tier 解析 provider/model、思考参数及硬超时；
+ * generationOptionsForTier 仅在该 Provider 明确声明 supportsStructuredOutputs 时启用 schema，
+ * 其他 Provider 使用 json 与 LLM client 的本地业务 schema 校验，不扩大其能力声明。
+ * Memory provider 由共享 composition 从 selected Profile 显式创建，重启/热应用使用相同配置边界。
+ * 代码库关系：Runtime 业务装配统一来自 @kaguya/composition；createMessageCatalog/createMessageComposition 装配消息编写模块；AdapterHost
+ * 启动及显式应用将生效出站 GatewayAllowlist 注入 Runtime，出站恢复领取使用所属配置策略。
+ * 管理适配器；inspectModules 和账本只读端口交给 inspection.ts，配置仅用于秘密脱敏闭包。
+ * 检查服务持有当前数据库的只读文档/向量入口，随运行时应用刷新，未就绪期间不提供检查。
+ * 启动只接受严格 v1 Registry，不自动迁移旧配置；用户须先手动更新配置。
+ * ConfigurationApplication 保留 HTTP/Token/数据库，串行替换完整 Runtime/AdapterHost；
+ * Web、状态与 Inspection 通过动态门面读取当前实例，关闭失败禁止创建第二个活跃宿主。
+ * 输入输出与副作用：连接数据库、监听 HTTP 并启动适配器，失败时释放已创建资源并固定错误分类。
+ * Inspection 仅在 Runtime 可用时注入，不把 settings、凭据或数据库对象放入 HTTP 响应。
+ * Web adapter 将回复交付给持久账本；WebChatHistory 只投影已送达消息，热应用后读取当前数据库。
+ */
 import { ModuleTemplateManagement } from "./module-template-management.js";
 import { IdentityPersonaManagement } from "./identity-persona-management.js";
-import { PersonProfileManagement } from "./person-profile-management.js";
 import { ModuleSettingsManagement } from "./module-settings-management.js";
 import { FeatureManagement } from "./feature-management.js";
 import { CordisAssembly } from "@kaguya/composition";
@@ -65,7 +87,6 @@ import {
   KaguyaDatabase,
   InformationKindContractConflictError,
   UnsupportedDatabaseSchemaError,
-  type ActivePersonProfileSnapshot,
 } from "@kaguya/database";
 import {
   createFirstPartyModuleConfigDefaults,
@@ -177,13 +198,6 @@ export async function startKaguyaServer(
       snapshot.moduleConfigs,
       snapshot.profile.identity,
     ]);
-  const activePersonProfiles: ActivePersonProfileSnapshot = {
-    byPerson: new Map(),
-    byAccount: new Map(),
-    revisions: new Map(),
-    metadataByPerson: new Map(),
-    initialNames: new Map(),
-  };
   let config: ServerConfig;
   try {
     bootstrap =
@@ -231,7 +245,6 @@ export async function startKaguyaServer(
       moduleConfigs.some(
         (item) => item.definitionId === "plugin.qq-expression" && item.enabled,
       ),
-      activePersonProfiles,
     );
     pluginSnapshot = await loadModulePlugins({
       rootDir: bootstrap.configRoot,
@@ -246,6 +259,7 @@ export async function startKaguyaServer(
       moduleConfigs,
       catalog,
       agentIdentity: selectedProfile.identity,
+      ai: selectedProfile.ai,
     });
     config = providedConfig
       ? { ...providedConfig, napcat: inspectNapCatConfig(moduleConfigs) }
@@ -396,10 +410,6 @@ export async function startKaguyaServer(
               connection,
               pluginSnapshot.kindRegistry,
             );
-            Object.assign(
-              activePersonProfiles,
-              await connection.personProfiles.loadActiveSnapshot(),
-            );
             return connection;
           } catch (error) {
             await connection.close().catch(() => undefined);
@@ -450,7 +460,7 @@ export async function startKaguyaServer(
             moduleConfigs,
             catalog,
             agentIdentity: selectedProfile.identity,
-            activePersonProfiles,
+            ai: selectedProfile.ai,
           }),
         });
         adapterHost.registerTransports(runtime);
@@ -540,7 +550,6 @@ export async function startKaguyaServer(
               database,
               modules: () => activeRuntime.inspectModules(),
               secrets: secretHistory,
-              activePersonProfiles,
             })
           : undefined;
     };
@@ -572,7 +581,7 @@ export async function startKaguyaServer(
           profile,
           pluginTree,
           moduleConfigs: configs.map((item) =>
-            ["memory.raw", "adapter.napcat"].includes(item.definitionId)
+            ["memory.native", "adapter.napcat"].includes(item.definitionId)
               ? (moduleConfigs.find(
                   (current) => current.instanceId === item.instanceId,
                 ) ?? item)
@@ -592,7 +601,6 @@ export async function startKaguyaServer(
               (item) =>
                 item.definitionId === "plugin.qq-expression" && item.enabled,
             ),
-            activePersonProfiles,
           ),
         });
         pluginSnapshots.set(pluginSnapshotKey(snapshot), nextPlugins);
@@ -618,7 +626,7 @@ export async function startKaguyaServer(
             catalog: nextPlugins.catalog,
             pluginModelTasks: nextPlugins.modelTasks,
             agentIdentity: snapshot.profile.identity,
-            activePersonProfiles,
+            ai: snapshot.profile.ai,
           },
         );
       },
@@ -716,7 +724,7 @@ export async function startKaguyaServer(
                 catalog: nextPlugins.catalog,
                 pluginModelTasks: nextPlugins.modelTasks,
                 agentIdentity: snapshot.profile.identity,
-                activePersonProfiles,
+                ai: snapshot.profile.ai,
               },
             ),
           });
@@ -839,10 +847,6 @@ export async function startKaguyaServer(
         identityPersona: new IdentityPersonaManagement({
           exclusive: (operation) => configuration.exclusive(operation),
         }),
-        personProfiles: new PersonProfileManagement(
-          () => database,
-          activePersonProfiles,
-        ),
         moduleSettings: new ModuleSettingsManagement({
           rootDir: bootstrap.configRoot,
           get catalog() {

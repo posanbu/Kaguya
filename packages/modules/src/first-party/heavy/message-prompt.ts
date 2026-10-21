@@ -10,12 +10,20 @@
  * 输入输出与副作用：意图没有正文，正文从 turn.inputs 读取；每条输入保留引用上下文及成功回执、请求、assistant 的原始溯源且不裁剪，不特殊处理末条。
  * 缺少冻结 turn 或身份不一致即抛错；不写账本、不调用模型、不创建出站引用标记。
  */
+/**
+ * 原始消息记忆沿用字符预算，不注入 persona 或行为规则。
+ * context_bootstrap 仅统计预算裁剪后实际展示的历史与记忆，不因隐藏证据将新参与者视为熟人。
+ * 嵌套模板的变量与 partial 直接复用模块静态声明，管理保存与运行编译保持同一约束。
+ * 功能概述：将消息意图和冻结 turn 编译为分层 Handlebars Prompt，所有本轮输入拥有相同模板地位；积压时向 Heavy 提供年龄供自然衔接。
+ * 主要职责：createMessagePromptCompiler 预编译模板并返回纯函数；compileMessagePrompt 提供一次性入口；
+ * frozenTurnInputs 核对 turn 身份与目标范围，重建冻结消息；历史与记忆预算函数只限制辅助上下文。
+ * 代码库关系：message-context 选择账本事实，Node 模板加载器提供 HeavyPromptTemplates；场景与积压规则由 scene 模板决定，背景和表达后缀由模块入口独立编译。
+ * 编译结果携带模板源码与变量溯源；scene 只引用模板实际使用的目标或冻结时间事实，不包含尚未追加的上下文后缀。
+ * 输入输出与副作用：意图没有正文，正文从 turn.inputs 读取；每条输入保留引用上下文及成功回执、请求、assistant 的原始溯源且不裁剪，不特殊处理末条。
+ * 缺少冻结 turn 或身份不一致即抛错；不写账本、不调用模型、不创建出站引用标记。
+ */
 import { contextBootstrapVariable } from "../context-bootstrap.js";
-import {
-  appendPersonProfilesToPrompt,
-  displayPersonName,
-  frozenSpeakerName,
-} from "../person-profile.js";
+import { displayPersonName, frozenSpeakerName } from "../person-name.js";
 import {
   messageTemplateDeclarations,
   outerVariables,
@@ -37,7 +45,6 @@ import {
 import { selectPlatformPromptResource } from "@kaguya/prompt";
 import {
   assistantTextInformationKind,
-  coreMemoryTextInformationKind,
   inboundTextInformationKind,
   messageIntentRequestedInformationKind,
   messageIntentRequestedInformationPayloadSchema,
@@ -45,11 +52,7 @@ import {
   normalizeTurnBootstrap,
 } from "../information-kinds.js";
 
-import {
-  beforeQuoteCutoff,
-  resolveMessageQuote,
-  sameMessageTarget,
-} from "./message-quote.js";
+import { beforeQuoteCutoff, sameMessageTarget } from "./message-quote.js";
 import { formatZonedInstant } from "../temporal-context.js";
 import { frozenRawContextInformationKind } from "../router/raw-context.js";
 
@@ -66,7 +69,6 @@ export interface HeavyPromptTemplates {
   readonly main: string;
   readonly scene: string;
   readonly conversationBackground: string;
-  readonly expressionHabits: string;
   readonly historyInbound: string;
   readonly historyAssistant: string;
   readonly memory: string;
@@ -131,10 +133,9 @@ export function createMessagePromptCompiler(
     const turnContext = atoms.find(
       (atom) => atom.informationId === payload.turn.contextInformationId,
     );
-    const personProfiles = (turnContext?.payload as any)?.personProfiles ?? [];
     const personNames = (turnContext?.payload as any)?.personNames ?? [];
     const speakerName = (source: MessageSource) =>
-      frozenSpeakerName(source, personProfiles, personNames, atoms);
+      frozenSpeakerName(source, personNames);
     const backlog = (turnContext?.payload as any)?.backlog as {
       isBacklog: boolean;
       evaluatedAt: string;
@@ -246,26 +247,19 @@ export function createMessagePromptCompiler(
     const continuity = situation
       ? JSON.stringify(situation.payload.continuity ?? [])
       : "";
-    return appendPersonProfilesToPrompt(
-      {
-        ...prompt,
-        templates: allTemplates,
-        ...(situation
-          ? {
-              text: `${prompt.text}\n\n已记录的行动状态与实际结果：\n${continuity}`,
-              variables: [
-                ...prompt.variables,
-                variable("action_records", continuity, [
-                  situation.informationId,
-                ]),
-              ],
-            }
-          : {}),
-      },
-      (turnContext!.payload as any).personProfiles ?? [],
-      atoms,
-      personNames,
-    );
+    return {
+      ...prompt,
+      templates: allTemplates,
+      ...(situation
+        ? {
+            text: `${prompt.text}\n\n已记录的行动状态与实际结果：\n${continuity}`,
+            variables: [
+              ...prompt.variables,
+              variable("action_records", continuity, [situation.informationId]),
+            ],
+          }
+        : {}),
+    };
   };
 }
 
@@ -350,12 +344,7 @@ export function fitMemoryBudget(
 function compileNested(templates: HeavyPromptTemplates) {
   return compilePromptTemplateSet(
     messageTemplateDeclarations
-      .filter(
-        (d) =>
-          d.key !== "main" &&
-          d.key !== "conversationBackground" &&
-          d.key !== "expressionHabits",
-      )
+      .filter((d) => d.key !== "main" && d.key !== "conversationBackground")
       .map((d) => ({ ...d, content: templates[d.key] })),
   );
 }
@@ -371,10 +360,7 @@ function renderMemories(
   const informationIds: InformationId[] = [];
   for (const atom of atoms) {
     if (remaining <= 0) break;
-    const raw =
-      atom.kind === coreMemoryTextInformationKind.kind
-        ? memoryText(atom)
-        : renderMessage(renderer, atom, identity, speakerName);
+    const raw = renderMessage(renderer, atom, identity, speakerName);
     const context = boundRenderedContext(
       renderer,
       "memory-item",
@@ -478,8 +464,6 @@ function messagePayload(atom: DeepReadonly<InformationAtom>) {
 }
 
 function memoryText(atom: DeepReadonly<InformationAtom>): string {
-  if (atom.kind === coreMemoryTextInformationKind.kind)
-    return coreMemoryTextInformationKind.payloadSchema.parse(atom.payload).text;
   return messagePayload(atom).text;
 }
 

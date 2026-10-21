@@ -18,6 +18,26 @@
  * 同时保留直接信号、Light 独立等待预算和并发入站去重回归。
  * 所有消息和密钥均为合成测试数据；清理按 Runtime、数据库顺序关闭，不访问外部服务。
  */
+/**
+ * 补充 QQ 插件在真实 Runtime 中的收藏、发送回执、语境门控和重启限频验证。
+ * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
+ * 兼容 #136 的 agent.light.decide 与 message/wait/silent 契约，仅增强已合并的单一 Light 链。
+ * 测试显式批准合成 QQ 目标，Runtime 未注入策略时默认拒绝非 Web 出站。
+ * 功能概述：通过真实 Runtime/PGlite 与 DeepSeek-compatible HTTP mock 验证先观察、后规划的发言链。
+ * fixture 装配正式 Catalog、light Light 和 heavy Heavy；settle 等待 durable 订阅闭合，
+ * restart 保留数据库并重建宿主，advance 推进持久 heartbeat 时钟。仅 mock provider HTTP，
+ * waitForPersistence 将本 fixture 的启动、打断、重建、重放及 settle 等待统一到已有的 8 秒
+ * 持久化预算，条件满足即继续；不改变注入时钟、业务静默窗、等待次数或精确行为断言。
+ * 多次取消、重建与重启场景另设 30 秒总预算；QQ 四至五轮 45 秒、八轮加重启 60 秒。
+ * macOS 四轮实测约 26 秒，Windows 八轮约 29 秒，顺序 I/O 不能套用单轮的 15 秒总上限；
+ * 每次状态等待仍受 8 秒预算约束，不增加业务 deadline 或允许的重试次数。
+ * 尚未提交决策的 Light 可由新输入打断；静默窗后合并旧、新输入重构，已提交决策仍保持唯一终态。
+ * 覆盖 message/wait/silent 与 target union 的 JSON mode 本地校验、一次结构修复、耗尽后失败关闭、
+ * 累计 usage 和单 requested/terminal/decision；重试复用冻结 Prompt，重放与新输入取消均不重复落地。
+ * Light v2 的每轮 schema 在模型修复阶段拒绝超预算 wait 与焦点越界；保留单次结构修复和单一回合终态。
+ * 同时保留直接信号、Light 独立等待预算和并发入站去重回归。
+ * 所有消息和密钥均为合成测试数据；清理按 Runtime、数据库顺序关闭，不访问外部服务。
+ */
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { createMessageComposition } from "@kaguya/composition";
 import { createTestingDatabase } from "@kaguya/database/testing";
@@ -69,6 +89,7 @@ async function fixture(
   const fetch = vi.fn<typeof globalThis.fetch>(async (_url, init) => {
     const request = JSON.parse(String(init?.body));
     const promptText = JSON.stringify(request.messages);
+    const nativeForming = promptText.includes("你整理有来源的记忆");
     const learning = promptText.includes("归纳这批真人消息");
     const qqSelecting = promptText.includes("判断当前回复是否自然适合少量表情");
     const qqLearning = promptText.includes("你负责从文字上下文推断一个");
@@ -78,28 +99,30 @@ async function fixture(
       )
       .join("\n");
     const selecting = promptText.includes("依据冻结回合和已获胜的消息意图");
-    (learning || selecting || qqSelecting || qqLearning
+    (nativeForming || learning || selecting || qqSelecting || qqLearning
       ? backgroundRequests
       : requests
     ).push(request);
-    const pending = qqSelecting
-      ? expressionChoice
-      : qqLearning
-        ? {
-            meaning: "好笑的无奈",
-            usage: "友好自嘲",
-            confidence: 0.95,
-            evidenceIds: [
-              qqSourceText.match(/"id":"([^"]+)"/u)?.[1] ?? "missing",
-            ],
-          }
-        : learning
-          ? { patterns: [] }
-          : selecting
-            ? { habitIds: [] }
-            : request.model === "deepseek-light"
-              ? (outputs.shift() ?? silent)
-              : heavyResponse;
+    const pending = nativeForming
+      ? { nodes: [], edges: [] }
+      : qqSelecting
+        ? expressionChoice
+        : qqLearning
+          ? {
+              meaning: "好笑的无奈",
+              usage: "友好自嘲",
+              confidence: 0.95,
+              evidenceIds: [
+                qqSourceText.match(/"id":"([^"]+)"/u)?.[1] ?? "missing",
+              ],
+            }
+          : learning
+            ? { patterns: [] }
+            : selecting
+              ? { habitIds: [] }
+              : request.model === "deepseek-light"
+                ? (outputs.shift() ?? silent)
+                : heavyResponse;
     const output = typeof pending === "function" ? await pending() : pending;
     if (output === "HTTP_FAILURE")
       return new Response("synthetic-provider-error", { status: 400 });
@@ -138,8 +161,13 @@ async function fixture(
       model: provider.chatModel(`deepseek-${modelTier}`),
     }),
     {
+      memoryEnabled: qqExpression,
       moduleConfigs: [
-        ...createFirstPartyModuleConfigDefaults("test"),
+        ...createFirstPartyModuleConfigDefaults("test").map((c) =>
+          c.definitionId === "memory.native"
+            ? { ...c, enabled: qqExpression }
+            : c,
+        ),
         ...(qqExpression
           ? [
               {

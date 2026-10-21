@@ -7,6 +7,11 @@ import {
  * 它只消费 Heartbeat 冻结的观察机会、最新唤醒状态与 Focus 租约事实；不得选择入站正文。
  * 默认状态为 awake；既有直接观察信号会确认 awake，awake 状态下普通机会也默认 observe。
  */
+/**
+ * Arousal 是正文读取之前的非语义唤醒状态机与注意力观察器。
+ * 它只消费 Heartbeat 冻结的观察机会、最新唤醒状态与 Focus 租约事实；不得选择入站正文。
+ * 默认状态为 awake；既有直接观察信号会确认 awake，awake 状态下普通机会也默认 observe。
+ */
 import { firstPartyInspection } from "../inspection.js";
 import { z, type DeepReadonly, type InformationAtom } from "@kaguya/schema";
 import {
@@ -283,6 +288,7 @@ export function createAttentionArousalModule(
 ) {
   return defineInformationModule({
     manifest: {
+      category: "agent",
       protocolVersion: 1,
       moduleVersion: "2.0.0",
       definitionId: "agent.attention.arousal",

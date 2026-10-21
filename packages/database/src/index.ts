@@ -10,11 +10,21 @@
  * 输入输出与副作用：连接、schema 准备、查询和关闭均为异步数据库 I/O；公开 `sql` 供包级
  * 集成测试与运维边界使用，不再创建 SQLite 文件或旧消息/运行记录仓储。
  */
+/**
+ * memoryGraph 暴露三字段节点与有向类型边的独立 PostgreSQL 存储。
+ * 功能概述：提供 Kaguya 唯一的 PostgreSQL 信息账本入口，组合驱动、schema 准备与
+ * append-only `InformationRepository`。
+ * inspectMemoryVectors 只读可选索引的分页元数据，不安装扩展或暴露向量正文。
+ * 主要职责：`KaguyaDatabase.connect` 创建真实 PostgreSQL 连接；构造函数支持测试注入
+ * `SqlDatabase`；`prepareSchema` 初始化空 schema 或验证完整 v1；`close` 释放底层连接。
+ * 代码库关系：Runtime 通过本入口连接或注入数据库；`testing.ts` 使用 PGlite 构造同一
+ * `KaguyaDatabase`；Engine 只依赖仓储实现的 `InformationLedger` 端口。
+ * 输入输出与副作用：连接、schema 准备、查询和关闭均为异步数据库 I/O；公开 `sql` 供包级
+ * 集成测试与运维边界使用，不再创建 SQLite 文件或旧消息/运行记录仓储。
+ */
 import { PgDatabase, type SqlDatabase } from "./driver.js";
 export { PgDatabase, type SqlDatabase } from "./driver.js";
 import { InformationRepository } from "./information-repository.js";
-import { PersonProfileRepository } from "./person-profile-repository.js";
-import { PostgresMemoryStore } from "./memory-store.js";
 import { PostgresMemoryGraphStore } from "./memory-graph.js";
 import { PostgresRawEventStore } from "./raw-event-store.js";
 import { prepareDatabaseSchema } from "./schema.js";
@@ -79,25 +89,21 @@ export {
   type InformationLogProjectionBatchResult,
   type InformationLogProjectionRunnerOptions,
 } from "./information-log-projection.js";
-export {
-  PostgresMemoryStore,
-  type PostgresMemoryStoreOptions,
-} from "./memory-store.js";
 export { PostgresRawEventStore } from "./raw-event-store.js";
 export { PostgresMemoryGraphStore } from "./memory-graph.js";
+export {
+  PostgresNativeMemoryStore,
+  NativeMemoryError,
+} from "./native-memory.js";
 
 export class KaguyaDatabase {
   readonly information: InformationRepository;
-  readonly personProfiles: PersonProfileRepository;
-  readonly memory: PostgresMemoryStore;
   readonly memoryGraph: PostgresMemoryGraphStore;
   readonly rawEvents: PostgresRawEventStore;
   readonly modelRequestMetrics: ModelRequestMetricsRepository;
 
   constructor(readonly sql: SqlDatabase) {
     this.information = new InformationRepository(sql);
-    this.personProfiles = new PersonProfileRepository(sql);
-    this.memory = new PostgresMemoryStore(sql);
     this.memoryGraph = new PostgresMemoryGraphStore(sql);
     this.rawEvents = new PostgresRawEventStore(sql);
     this.modelRequestMetrics = new ModelRequestMetricsRepository(sql);
@@ -131,15 +137,6 @@ export class KaguyaDatabase {
   }
 }
 
-export {
-  PersonProfileRepository,
-  PersonProfileStoreError,
-  profileAccountKey,
-  type ActivePersonProfileSnapshot,
-  type StoredPersonProfile,
-} from "./person-profile-repository.js";
-
-export { PostgresMemoryVectorIndex } from "./memory-vector.js";
-export { inspectMemoryVectors } from "./memory-inspection.js";
-
 export { ModelRequestMetricsRepository } from "./model-request-metrics.js";
+
+export { PostgresNativeVectorRetriever } from "./native-memory-vector.js";

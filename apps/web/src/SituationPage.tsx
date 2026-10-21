@@ -174,12 +174,26 @@ export function SituationPage({ token }: { token: string }) {
   const planningContext = useSituationContext(token, planningStep?.id);
   const extraContext = useSituationContext(
     token,
-    contextOpen && inspectedStep?.id !== planningStep?.id
-      ? inspectedStep?.id
-      : undefined,
+    inspectedStep?.id !== planningStep?.id ? inspectedStep?.id : undefined,
   );
   const inspectedContext =
     inspectedStep?.id === planningStep?.id ? planningContext : extraContext;
+  const nativeRecall = inspectedContext.data?.memory;
+  const visibleRecalls =
+    nativeRecall && frame
+      ? [
+          {
+            sceneId: frame.current.sceneId,
+            revision: frame.id,
+            items: nativeRecall.recalled.map(({ node }) => ({
+              id: node.id,
+              text: node.content,
+              ownerId: node.metadata.ownerId,
+              evidenceIds: node.metadata.sourceIds,
+            })),
+          },
+        ]
+      : [];
   const timeline = revisions.toReversed();
   const lastPosition = Math.max(0, timeline.length - 1);
   const position = selectedIndex < 0 ? 0 : lastPosition - selectedIndex;
@@ -242,14 +256,14 @@ export function SituationPage({ token }: { token: string }) {
             <ConsolePane
               title="召回"
               count={
-                frame?.recalls.reduce(
+                visibleRecalls.reduce(
                   (count, recall) => count + recall.items.length,
                   0,
                 ) ?? 0
               }
             >
-              {frame?.recalls.length ? (
-                frame.recalls.map((recall) => (
+              {visibleRecalls.length ? (
+                visibleRecalls.map((recall) => (
                   <div
                     className="situation-recall"
                     key={`${recall.sceneId}:${recall.revision}`}
@@ -260,12 +274,27 @@ export function SituationPage({ token }: { token: string }) {
                     {recall.items.map((item) => (
                       <article className="situation-log-entry" key={item.id}>
                         <p>{item.text}</p>
+                        <a
+                          href={`/memory?focusId=${encodeURIComponent(item.id)}`}
+                        >
+                          对象 {item.ownerId} · 查看当前记忆
+                        </a>
                       </article>
                     ))}
                   </div>
                 ))
               ) : (
-                <p className="situation-console-empty">暂无召回</p>
+                <p className="situation-console-empty">
+                  {inspectedContext.error || inspectedContext.data?.memoryError
+                    ? "召回快照读取失败"
+                    : inspectedStep && !inspectedContext.data
+                      ? "正在读取请求快照…"
+                      : !nativeRecall
+                        ? "未记录"
+                        : nativeRecall.status === "disabled"
+                          ? "Memory 已禁用"
+                          : "无动态召回"}
+                </p>
               )}
             </ConsolePane>
           </div>

@@ -3,6 +3,11 @@
  * 主要职责：下列 schema 校验入账载荷，各 kind 声明因果关系、上下文和诊断元数据；无 I/O。
  * 代码库关系：information-kinds.ts 稳定重导出公共对象；跨领域只复用相邻文件定义，保持 Registry 对象身份。
  */
+/**
+ * 功能概述：identity 领域的 Information schema 与不可变定义，独立维护本领域引用和日志投影。
+ * 主要职责：下列 schema 校验入账载荷，各 kind 声明因果关系、上下文和诊断元数据；无 I/O。
+ * 代码库关系：information-kinds.ts 稳定重导出公共对象；跨领域只复用相邻文件定义，保持 Registry 对象身份。
+ */
 import { platformDestinationSchema, z } from "@kaguya/schema";
 import { defineInformationKind } from "@kaguya/sdk";
 import { nonBlankString } from "./shared.js";
@@ -257,7 +262,7 @@ export const personContextCompletedInformationKind = defineInformationKind({
   kind: "memory.identity.person.context.completed",
   displayName: "消息身份上下文就绪",
   description:
-    "单条入站消息的身份处理结束后登记状态和实体引用；释放 Router 身份屏障并触发独立原始记忆写回。",
+    "单条入站消息的身份处理结束后登记状态和实体引用；释放 Router 身份屏障并向统一 Memory 提供来源。",
   payloadSchema: identityTerminalSchema,
   references: {
     "core:caused-by": { required: true, multiple: false },

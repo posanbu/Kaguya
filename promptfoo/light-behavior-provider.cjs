@@ -71,15 +71,15 @@ class LightBehaviorProvider {
         "utf8",
       ),
       bootstrap: JSON.stringify({
-        version: 1,
-        mode: "legacy-unknown",
-        memory: { state: "unknown", selectedCount: 0 },
-        conversation: { state: "unknown" },
+        version: 2,
+        conversation: { scopeMode: "ephemeral", registration: null },
         participants: [],
       }),
       global_context: context.vars.fixture.variables.history || "",
       scope_context: context.vars.fixture.variables.turn || "",
-      decision_state: JSON.stringify(JSON.parse(context.vars.fixture.variables.turn)),
+      decision_state: JSON.stringify(
+        JSON.parse(context.vars.fixture.variables.turn),
+      ),
       ...context.vars.fixture.variables,
     };
     const variables = Object.entries(fixtureVariables).map(

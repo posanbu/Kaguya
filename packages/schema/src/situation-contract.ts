@@ -1,5 +1,7 @@
 /** 情境—行动契约的运行时校验。JSON Schema 由 scripts/export-situation-contract.ts 导出。 */
+/** 情境—行动契约的运行时校验。JSON Schema 由 scripts/export-situation-contract.ts 导出。 */
 import { z } from "zod";
+import { nativeMemorySnapshotSchema } from "./memory-graph.js";
 
 const id = z.string().min(1);
 const instant = z.iso.datetime();
@@ -55,6 +57,7 @@ export const situationFrameSchema = z.strictObject({
     evidence: z.array(situationEvidenceRecordSchema),
   }),
   recalls: z.array(situationRecallSchema),
+  memory: nativeMemorySnapshotSchema.optional(),
   selection: z
     .strictObject({
       backgroundHistoryOmitted: z.boolean(),

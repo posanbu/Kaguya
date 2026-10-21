@@ -8,6 +8,16 @@
  * 代码库关系：SDK 校验声明，Host 投影给 Server；Server 按声明查询账本，Web 使用通用视图。
  * 输入输出与副作用：纯静态元数据，无 I/O、配置值或 UI 组件；历史记录只说明当时事实，不推断当前状态。
  */
+/**
+ * 功能概述：第一方模块拥有的检查视图，定义门控机制、历史/数据分组和可读字段。
+ * 记忆联想用 record-browser 按查询串起完成事实、排名候选和 canonical source；字段与文案均由本模块声明。
+ * 注意力用 attention-gate 展示唤醒状态与 observe/defer 完成事实，只投影非语义信号、水位与 Focus 快照。
+ * 在线心流与消息组织用 model-request-browser 按持久化模型请求浏览，完整 Prompt 与来源由独立详情承载。
+ * 主要职责：firstPartyInspection 由各模块 Manifest 显式引用；view 将稳定字段路径与中文标题绑定。
+ * arousalFields 由列表、详情和 SDK 校验复用；不查询或展示正文，也不补写历史条件。
+ * 代码库关系：SDK 校验声明，Host 投影给 Server；Server 按声明查询账本，Web 使用通用视图。
+ * 输入输出与副作用：纯静态元数据，无 I/O、配置值或 UI 组件；历史记录只说明当时事实，不推断当前状态。
+ */
 import type { ModuleInspection } from "@kaguya/schema";
 const fields = (entries: Record<string, string>) =>
   Object.entries(entries).map(([path, label]) => ({ path, label }));
@@ -92,7 +102,6 @@ export const firstPartyInspection = {
           "memory.identity.platform.account.binding",
           "memory.identity.person.entity",
           "memory.identity.person.observed",
-          "memory.identity.person.profile.revision",
         ],
         {
           platform: "平台",
@@ -224,16 +233,6 @@ export const firstPartyInspection = {
                 { path: "scopeMode", label: "范围类型" },
                 { path: "scopeInformationId", label: "会话范围" },
               ],
-              limit: 20,
-            },
-            {
-              id: "profile-versions",
-              title: "画像保存版本",
-              viewId: "identities",
-              kinds: ["memory.identity.person.profile.revision"],
-              match: { source: "entity-id", field: "personInformationId" },
-              presentation: "timeline",
-              fields: [{ path: "revision", label: "版本" }],
               limit: 20,
             },
             {
@@ -509,41 +508,36 @@ export const firstPartyInspection = {
       ],
     },
   },
-  "memory.expression": {
+  "memory.native": {
     mechanism: [
-      "从真人消息批次中学习受限的情境与表达方式，验证后整体落库。",
-      "按会话聚合习惯，当前语境最多选择三项；空结果不影响正文生成。",
+      "来源按会话形成持久化批次，默认 8 条或 60 秒触发。",
+      "图、文本索引与版本审计原子发布。向量只辅助召回。",
+      "level 0 直接进入固定上下文，动态召回独立限额。",
     ],
     views: [
       view(
-        "library",
-        "表达习惯库",
-        "已持久化学习批次，保留验证状态和来源；重复习惯可能出现在多个批次中。",
-        ["memory.expression.learning.completed"],
+        "formation",
+        "形成与整理",
+        "冻结来源及发布结果。",
+        [
+          "memory.native.formation.requested.v1",
+          "memory.native.formation.completed.v1",
+          "memory.native.formation.retry.v1",
+        ],
         {
-          status: "验证结果",
-          habits: "情境与表达方式",
+          batchId: "批次",
+          scope: "范围",
+          status: "状态",
           reason: "原因",
-          scopeInformationId: "会话范围",
+          nodeIds: "节点",
         },
       ),
       view(
-        "selection",
-        "学习与选用历史",
-        "查看冻结样本、候选与最终选用。",
-        [
-          "memory.expression.learning.requested",
-          "memory.expression.selection.requested",
-          "memory.expression.selection.completed",
-        ],
-        {
-          habits: "选用习惯",
-          candidates: "候选习惯",
-          reason: "原因",
-          sourceInformationIds: "样本",
-          watermark: "学习水位",
-          scopeInformationId: "会话范围",
-        },
+        "revisions",
+        "版本发布",
+        "图与文本索引已提交的完整修订。",
+        ["memory.native.revision.v1"],
+        { operationId: "操作", nodes: "节点", edges: "连结" },
       ),
     ],
   },
@@ -582,49 +576,6 @@ export const firstPartyInspection = {
           taskId: "agent.heavy.respond",
           mode: "heavy",
         },
-      ],
-    },
-  },
-  "memory.raw": {
-    storage: "memory",
-    mechanism: [
-      "身份处理结束后按来源幂等保存入站原文，在线回合静默也会写回。",
-      "完成、空内容或失败形成唯一终态；暂时故障交给可靠消费者重试。",
-    ],
-    views: [
-      view(
-        "writeback",
-        "写回历史",
-        "写回事实与原始文档库分开查询；无终态不能直接认定失败。",
-        [
-          "memory.raw.requested",
-          "memory.raw.completed",
-          "memory.raw.empty",
-          "memory.raw.failed",
-        ],
-        { status: "结果" },
-      ),
-    ],
-    surface: {
-      version: 1,
-      id: "raw-memory",
-      title: "原始记忆",
-      layout: { type: "sections", areas: ["documents"] },
-      components: [
-        {
-          id: "memory-documents",
-          type: "storage-browser",
-          area: "documents",
-          columns: ["平台", "适配器", "会话", "账号", "发生时间", "正文"],
-          empty: "还没有原始记忆。",
-        },
-      ],
-      hiddenSections: [
-        "responsibilities",
-        "settings",
-        "templates",
-        "prompt-renderers",
-        "diagnostics",
       ],
     },
   },

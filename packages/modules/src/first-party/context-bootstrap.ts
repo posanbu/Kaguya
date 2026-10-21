@@ -17,10 +17,7 @@ import {
   inboundTextInformationKind,
   turnContextCompletedInformationKind,
 } from "./information-kinds.js";
-import {
-  beforeQuoteCutoff,
-  sameMessageTarget,
-} from "./heavy/message-quote.js";
+import { beforeQuoteCutoff, sameMessageTarget } from "./heavy/message-quote.js";
 
 // turn 公共 schema 当前擦除了推导类型；这里仅为其已验证字段保留最小只读视图。
 type Source = z.infer<
@@ -29,10 +26,15 @@ type Source = z.infer<
 interface BootstrapTurn {
   readonly asOf: string;
   readonly source: Source;
+  readonly bootstrap: import("./information-kinds.js").TurnBootstrapProjection;
   readonly inputs: readonly {
     readonly informationId: string;
     readonly source: Source;
-    readonly identity: { readonly status: string; readonly scopeMode: string };
+    readonly identity: {
+      readonly status: string;
+      readonly scopeMode: string;
+      readonly personInformationId?: string;
+    };
   }[];
 }
 
@@ -55,6 +57,14 @@ export function contextBootstrapVariable(
   );
   const participants = payload.inputs.map((input, inputIndex) => ({
     inputIndex,
+    inputInformationId: input.informationId,
+    ownerId: input.identity.personInformationId
+      ? `person:${input.identity.personInformationId}`
+      : null,
+    registration:
+      payload.bootstrap.participants.find(
+        (p) => p.inputInformationId === input.informationId,
+      )?.registration ?? null,
     identityStatus: input.identity.status,
     scopeMode: input.identity.scopeMode,
     priorInboundCount: history.filter((atom) => {
@@ -68,13 +78,18 @@ export function contextBootstrapVariable(
   return {
     name: "context_bootstrap",
     content: JSON.stringify({
+      version: 2,
       mode:
         history.length === 0 && memories.length === 0
           ? "bootstrap"
           : "contextual",
       scope: payload.source.destination.kind,
       historyCount: history.length,
-      memoryCount: memories.length,
+      sourceReferenceCount: memories.length,
+      memoryCount: 0,
+      fixedMemoryCount: 0,
+      recalledMemoryCount: 0,
+      memoryStatus: "unrecorded",
       participants,
     }),
     informationIds: [

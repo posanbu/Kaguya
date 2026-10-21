@@ -7,6 +7,15 @@
  * 输入输出与副作用：读取状态并在用户切换时提交版本校验请求；共享接入请求的
  * Runtime 与 Adapter 分开显示，读取失败不会推断为停机。
  */
+/**
+ * 功能概述：工作台概览展示基础设施状态，并提供 Memory 与 NapCat 的待重启开关。
+ * 主要职责：Overview 读取安全接入快照和当前 Profile 的脱敏 Memory 存储摘要；
+ * OverviewTile 用等尺寸图标、核心状态和紧凑元数据表达就绪度。
+ * useRead 在重试、Token 变化及卸载时丢弃过期结果。
+ * 代码库关系：App 挂载本页，复用 api.ts 安全 DTO 和 #144 基础组件与导航回调。
+ * 输入输出与副作用：读取状态并在用户切换时提交版本校验请求；共享接入请求的
+ * Runtime 与 Adapter 分开显示，读取失败不会推断为停机。
+ */
 import {
   Activity,
   Cable,
@@ -27,6 +36,7 @@ import {
 } from "./feature-api.js";
 import { Button, Dialog, PageHeader, StatusBadge } from "./components/ui.js";
 import { ModelMetricsPanel } from "./ModelMetricsPanel.js";
+import { pollAdapterStatus, type AdapterStatus } from "./adapter-status.js";
 import "./overview.css";
 
 type ReadState<T> = { data?: T; error: boolean; loading: boolean };
@@ -53,8 +63,32 @@ function useRead<T>(token: string, load: (token: string) => Promise<T>) {
   }, [token, load, revision]);
   return { ...state, retry: () => setRevision((value) => value + 1) };
 }
-const readAdapters = (token: string) =>
-  getAdapterStatus({ token }, new AbortController().signal);
+function useAdapterRead(token: string) {
+  const [state, setState] = useState<ReadState<AdapterStatus>>({
+    error: false,
+    loading: true,
+  });
+  const poller = useRef<ReturnType<typeof pollAdapterStatus>>(undefined);
+  useEffect(() => {
+    setState({ error: false, loading: true });
+    const current = pollAdapterStatus({
+      load: (signal) => getAdapterStatus({ token }, signal),
+      visibility: document,
+      onChange: (next) =>
+        setState({
+          ...(next.snapshot ? { data: next.snapshot } : {}),
+          error: next.failed,
+          loading: next.loading && !next.snapshot,
+        }),
+    });
+    poller.current = current;
+    return () => {
+      current.stop();
+      poller.current = undefined;
+    };
+  }, [token]);
+  return { ...state, retry: () => void poller.current?.refresh() };
+}
 const readFeatures = (token: string) => getFeatures(token);
 const labels: Record<string, string> = {
   ready: "可接收消息",
@@ -290,7 +324,7 @@ export function Overview({
   napCatEndpointState: "loading" | "ready" | "error";
   focusAdapters?: boolean;
 }) {
-  const adapters = useRead(token, readAdapters);
+  const adapters = useAdapterRead(token);
   const featureRead = useRead(token, readFeatures);
   const [featureView, setFeatureView] = useState<FeatureView>();
   const [featureBusy, setFeatureBusy] = useState<FeatureId>();
@@ -442,7 +476,7 @@ export function Overview({
           <p role="alert">无法读取功能状态，请刷新概览。</p>
         )}
         <div className="overview-grid" aria-live="polite">
-          {([["memory.raw", "长期记忆索引", Database]] as const).map(
+          {([["memory.native", "Memory", Database]] as const).map(
             ([id, title, icon]) => (
               <FeatureTile
                 key={id}

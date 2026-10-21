@@ -17,7 +17,8 @@ protocol v2 模块 Manifest 必须提供非空的 `displayName`、单行 `summar
 - [Router](./src/first-party/router/README.md)
 - [Identity](./src/first-party/identity/README.md)
 - [Heavy](./src/first-party/heavy/README.md)
-- [Person Fact Task](./src/first-party/person-fact-task/README.md)
+- [Memory](./src/first-party/memory-native/README.md)
+- [QQ Expression](./src/first-party/qq-expression/README.md)
 
 ## Heartbeat、情境运行与 Router
 
@@ -29,7 +30,7 @@ protocol v2 模块 Manifest 必须提供非空的 `displayName`、单行 `summar
 
 ## Prompt 模板
 
-所有一方模块的可编辑 Prompt 都保存在 `templates/`：`*.default.hbs` 是提交到 GitHub 的默认模板，同名 `*.local.hbs` 是 Git 忽略的本地覆盖。范围包括 Heavy 的主模板、bootstrap 表达、消息与记忆排版、会话场景、积压提示、人物背景、表达参考和授权正文，Router Light、bootstrap 策略、Expression 的学习与选择，以及人物事实提取；没有模型指令的模块不需要占位模板。
+所有一方模块的可编辑 Prompt 都保存在 `templates/`：`*.default.hbs` 是提交到 GitHub 的默认模板，同名 `*.local.hbs` 是 Git 忽略的本地覆盖。范围包括 Heavy 的主模板、bootstrap 表达、消息与记忆排版、会话场景、积压提示、会话背景和授权正文，Router Light、bootstrap 策略、Memory 形成与整理，以及 QQ 表情观察与选择；没有模型指令的模块不需要占位模板。
 
 persona 只定义 Agent 自身身份与性格。人物、关系、会话历史和世界背景必须来自带 Information 引用的冻结证据。Memory 检索或人物事实提取返回空结果或失败时，下游保持未知，不能把缺失证据改写为事实。
 

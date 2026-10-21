@@ -26,6 +26,8 @@ export interface RecallSnapshot {
 }
 
 export interface SituationFrame {
+  /** Optional only for historical requests that predate unified Memory. */
+  memory?: FrozenMemorySnapshot | undefined;
   contractVersion: typeof CONTRACT_VERSION;
   id: string;
   agentId: string;
@@ -120,4 +122,52 @@ export interface ContextManifest {
   actions: ActionRecord[];
   rules: string;
   rendered: string;
+}
+
+/** Persisted data contract. No database, embedding implementation or UI dependency. */
+export type MemoryJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | MemoryJsonValue[]
+  | { [key: string]: MemoryJsonValue };
+export interface FrozenMemoryNode {
+  id: string;
+  content: string;
+  metadata: {
+    [key: string]: MemoryJsonValue;
+    system: "native-v1";
+    kind: "person" | "conversation" | "self" | "experience" | "expression";
+    ownerId: string;
+    scope: string;
+    level: number;
+    revision: number;
+    status: "active" | "invalidated" | "archived";
+    locked: boolean;
+    sourceIds: string[];
+    aliases: string[];
+    tags: string[];
+    occurredAt: string;
+  };
+}
+export interface FrozenMemorySnapshot {
+  version: 1;
+  status: "enabled" | "disabled";
+  frozenAt: string;
+  scope: string;
+  owners: string[];
+  fixed: FrozenMemoryNode[];
+  recalled: {
+    node: FrozenMemoryNode;
+    traces: {
+      channel: string;
+      indexVersion: string;
+      rank: number;
+      path: string[];
+    }[];
+    truncated: boolean;
+  }[];
+  degraded: string[];
+  budget: { dynamicCharacters: number; omittedNodeIds: string[] };
 }

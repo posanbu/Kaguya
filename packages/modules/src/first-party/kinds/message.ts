@@ -6,6 +6,14 @@
  * 输入输出与副作用：消息和记忆正文仅经 shared.contentPreview 生成脱敏、限长的日志字段；
  * coreMemoryTextInformationKind 的正文仍只在原有 debug 等级投影，不改变记忆载荷或写回流程。
  */
+/**
+ * 可选草稿与结构化表情是展示插件扩展点；assistant 保留原目标、回合和来源因果链。
+ * 功能概述：message 领域的 Information schema 与不可变定义，独立维护本领域引用和日志投影。
+ * 主要职责：下列 schema 校验入账载荷，各 kind 声明因果关系、上下文和诊断元数据；无 I/O。
+ * 代码库关系：information-kinds.ts 稳定重导出公共对象；跨领域只复用相邻文件定义，保持 Registry 对象身份。
+ * 输入输出与副作用：消息和记忆正文仅经 shared.contentPreview 生成脱敏、限长的日志字段；
+ * coreMemoryTextInformationKind 的正文仍只在原有 debug 等级投影，不改变记忆载荷或写回流程。
+ */
 import {
   outboundMessageContentSchema,
   outboundExpressionSchema,
@@ -47,7 +55,9 @@ const messageIntentShape = {
   turn: turnProvenanceSchema,
   memoryInformationIds: z.array(nonBlankString),
 };
-export const messageIntentRequestedInformationPayloadSchema = z.object(messageIntentShape).strict();
+export const messageIntentRequestedInformationPayloadSchema = z
+  .object(messageIntentShape)
+  .strict();
 
 export type MessageIntentRequestedInformationPayload = z.infer<
   typeof messageIntentRequestedInformationPayloadSchema
@@ -216,37 +226,6 @@ export const filterDecisionInformationKind = defineInformationKind({
       status: "rejected",
       reason: payload.reason,
       filterDefinitionId: payload.filterDefinitionId,
-    }),
-  },
-});
-
-export const coreMemoryTextInformationKind = defineInformationKind({
-  kind: "memory.text",
-  displayName: "记忆文本",
-  description:
-    "带显式来源引用的记忆正文，登记后供联想检索及 Prompt 上下文选择使用，来源可沿引用追溯。",
-  payloadSchema: z.object({ text: z.string().trim().min(1) }).strict(),
-  references: {
-    "core:caused-by": {
-      required: true,
-      multiple: false,
-    },
-    "core:context": {
-      required: true,
-      multiple: false,
-      targetKinds: ["core.runtime.context"],
-    },
-    "core:uses-context": {
-      required: true,
-      multiple: true,
-    },
-  },
-  log: {
-    enabled: true,
-    level: "debug",
-    project: ({ payload }) => ({
-      event: "memory.text.registered",
-      ...contentPreview(payload.text),
     }),
   },
 });

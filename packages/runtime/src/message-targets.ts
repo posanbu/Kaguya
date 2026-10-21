@@ -15,6 +15,7 @@ import type { InformationCore } from "@kaguya/engine";
 import { defineInformationSelector } from "@kaguya/sdk";
 import {
   z,
+  nativeMemorySnapshotSchema,
   type CompiledPrompt,
   type DeepReadonly,
   type InformationAtom,
@@ -69,10 +70,12 @@ interface FrozenRoutingTurn {
     text: string;
     source: MessageTarget & {
       senderId: string;
+      replyTo?: { senderId?: string };
+      selfId?: string;
       sender?: { card?: string; nickname?: string };
       mentions?: ({ kind: "all" } | { kind: "user"; id: string })[];
     };
-    identity: { status: string };
+    identity: { status: string; personInformationId?: string };
   }[];
 }
 interface Candidate {
@@ -197,18 +200,42 @@ export class MessageTargetService implements MessageAuthorization {
               limit: 1000,
             })
           )
-            .filter((a) => a.kind === conversationContextInformationKind.kind)
+            .filter(
+              (a) =>
+                a.kind === conversationContextInformationKind.kind ||
+                a.kind === "agent.situation.frozen",
+            )
             .map((a) => a.informationId),
       }),
       turn.informationId,
     );
-    if (frozen[0]) return frozen[0];
+    const existing = frozen.find(
+      (a) => a.kind === conversationContextInformationKind.kind,
+    );
+    if (existing) return existing;
+    const situation = frozen.find((a) => a.kind === "agent.situation.frozen");
+    const memory = nativeMemorySnapshotSchema.safeParse(
+      (situation?.payload.frame as Record<string, unknown> | undefined)?.memory,
+    );
+    const bindings = memory.success ? (memory.data.people ?? []) : [];
     const payload = turnContextCompletedInformationKind.payloadSchema.parse(
       turn.payload,
     ) as unknown as FrozenRoutingTurn;
     const inputs = payload.inputs;
     const latest = inputs.at(-1)!;
     const source = latest.source;
+    const ownerFor = (accountId: string) => {
+      if (accountId === source.selfId) return "self:kaguya";
+      const owners = [
+        ...new Set(
+          bindings
+            .filter((p) => p.accountId === accountId)
+            .map((p) => p.ownerId),
+        ),
+      ];
+      return owners.length === 1 ? owners[0]! : null;
+    };
+
     const texts = inputs.map((i) => i.text).join("\n");
     type Projection = z.infer<
       typeof conversationContextInformationKind.payloadSchema
@@ -226,6 +253,15 @@ export class MessageTargetService implements MessageAuthorization {
       accounts.set(key, label);
       background.participants.push({
         label,
+        accountId: key,
+        ownerId: input.identity.personInformationId
+          ? `person:${input.identity.personInformationId}`
+          : ownerFor(key),
+        sourceIds: inputs
+          .filter((i) => i.source.senderId === key)
+          .map((i) => i.informationId),
+        nickname: input.source.sender?.nickname ?? null,
+        card: input.source.sender?.card ?? null,
         name: (
           input.source.sender?.card ??
           input.source.sender?.nickname ??
@@ -233,6 +269,69 @@ export class MessageTargetService implements MessageAuthorization {
         ).slice(0, 100),
         identityStatus: input.identity.status,
         relation: key === source.senderId ? "speaker" : "participant",
+      });
+    }
+    for (const input of inputs) {
+      const references = [
+        ...(input.source.mentions ?? []).flatMap((m) =>
+          m.kind === "user"
+            ? [{ accountId: m.id, role: "mentioned" as const }]
+            : [],
+        ),
+        ...(input.source.replyTo?.senderId
+          ? [
+              {
+                accountId: input.source.replyTo.senderId,
+                role: "replied-to" as const,
+              },
+            ]
+          : []),
+      ];
+      for (const reference of references) {
+        if (accounts.has(reference.accountId)) continue;
+        const label = `person-${accounts.size + 1}`;
+        accounts.set(reference.accountId, label);
+        background.participants.push({
+          label,
+          accountId: reference.accountId,
+          ownerId: ownerFor(reference.accountId),
+          sourceIds: [input.informationId],
+          nickname: null,
+          card: null,
+          name: "",
+          identityStatus: ownerFor(reference.accountId)
+            ? "complete"
+            : "unresolved",
+          relation: reference.role,
+        });
+      }
+    }
+    // Historical participants come only from this turn's persisted snapshot.
+    for (const person of memory.success ? memory.data.participants : []) {
+      const local =
+        person.platform === source.platform &&
+        person.adapterId === source.adapterId;
+      if (local && accounts.has(person.accountId)) {
+        const existing = background.participants.find(
+          (p) => p.label === accounts.get(person.accountId),
+        )!;
+        existing.sourceIds = [
+          ...new Set([...existing.sourceIds, ...person.sourceIds]),
+        ];
+        continue;
+      }
+      const label = `person-${background.participants.length + 1}`;
+      if (local) accounts.set(person.accountId, label);
+      background.participants.push({
+        label,
+        accountId: person.accountId,
+        ownerId: person.ownerId,
+        sourceIds: person.sourceIds,
+        nickname: person.nickname,
+        card: person.card,
+        name: person.card ?? person.nickname ?? person.accountId,
+        identityStatus: person.ownerId ? "complete" : "unresolved",
+        relation: person.relation,
       });
     }
     const resolution: Projection["resolution"] = {
@@ -293,17 +392,12 @@ export class MessageTargetService implements MessageAuthorization {
           }
           if (current) background.name = c.name.slice(0, 100);
           const name = c.name.slice(0, 100);
-          if (
-            byMention &&
-            c.destination.kind === "private" &&
-            !accounts.has(c.destination.userId)
-          ) {
-            background.participants.push({
-              label: `mention-${background.participants.length + 1}`,
-              name,
-              identityStatus: "directory-matched",
-              relation: "mentioned",
-            });
+          if (byMention && c.destination.kind === "private") {
+            const accountId = c.destination.userId;
+            const person = background.participants.find(
+              (p) => p.accountId === accountId,
+            );
+            if (person && !person.name) person.name = name;
           }
           const status = !this.allowlist.allowsDestination(
             c.platform,
@@ -878,7 +972,24 @@ export class MessageTargetService implements MessageAuthorization {
           ? {
               background: {
                 name: "background",
-                content: JSON.stringify(conversation.payload.background),
+                content: JSON.stringify(
+                  (() => {
+                    const background =
+                      conversationContextInformationKind.payloadSchema.parse(
+                        conversation.payload,
+                      ).background;
+                    return {
+                      scope: background.scope,
+                      name: background.name,
+                      participants: background.participants.map((p) => ({
+                        label: p.label,
+                        name: p.name,
+                        relation: p.relation,
+                        identityStatus: p.identityStatus,
+                      })),
+                    };
+                  })(),
+                ),
                 informationIds: [conversation.informationId],
               },
             }
