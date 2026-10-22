@@ -324,6 +324,11 @@ function FixedMemoryEntries({
               <p>对象：{node.metadata.ownerId}</p>
               <p>范围：{node.metadata.scope}</p>
               <p>记录时间：{node.metadata.occurredAt}</p>
+              {node.metadata.evidence ? (
+                <pre>{JSON.stringify(node.metadata.evidence, null, 2)}</pre>
+              ) : (
+                <p>证据类型未分类</p>
+              )}
               <p>{node.metadata.sourceIds.join("、") || "手动记录"}</p>
             </details>
             <a href={`/memory?focusId=${encodeURIComponent(node.id)}`}>
@@ -398,6 +403,42 @@ export function PersonBackground({
         kind="person"
         excludeOwners={owners}
       />
+      {(context.memory?.recalled ?? [])
+        .filter((r) => r.node.metadata.kind === "person")
+        .map(({ node, truncated }) => (
+          <article key={node.id} className="situation-context-memory-entry">
+            <h3>本轮召回的人物背景</h3>
+            <p>
+              {node.content}
+              {truncated ? "（已裁剪）" : ""}
+            </p>
+            <details>
+              <summary>背景依据与时间</summary>
+              <pre>{JSON.stringify(node.metadata, null, 2)}</pre>
+            </details>
+          </article>
+        ))}
+      {!!context.memory?.personCandidates?.length && (
+        <section aria-label="人物候选">
+          <h3>人物候选</h3>
+          <p>这些结果是匹配线索，不表示已确认身份。</p>
+          {context.memory.personCandidates.map((candidate) => (
+            <article key={candidate.summary.id}>
+              <p>{candidate.summary.content}</p>
+              <details>
+                <summary>匹配与来源</summary>
+                <pre>{JSON.stringify(candidate, null, 2)}</pre>
+              </details>
+            </article>
+          ))}
+        </section>
+      )}
+      {context.recallRaw && (
+        <details>
+          <summary>本次表达已使用的补查结果</summary>
+          <pre className="situation-context-text">{context.recallRaw}</pre>
+        </details>
+      )}
       <details>
         <summary>人物背景 Prompt 原文</summary>
         <pre className="situation-context-text">

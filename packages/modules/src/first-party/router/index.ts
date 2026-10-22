@@ -991,6 +991,58 @@ function createRoutingModule(
                   ),
                 ]),
               ];
+              const scope = memoryScope(source);
+              const basicContext = {
+                scope,
+                owners,
+                asOf: payload.backlog.evaluatedAt,
+                query: "",
+              };
+              const observations = [
+                ...new Map(
+                  [...backgroundAtoms, ...selected].map((a) => [
+                    a.informationId,
+                    a,
+                  ]),
+                ).values(),
+              ].flatMap((inbound) => {
+                if (
+                  inbound.kind !== "core.message.inbound.text" ||
+                  !String(inbound.payload.text ?? "").trim()
+                )
+                  return [];
+                const parsed =
+                  inboundTextInformationKind.payloadSchema.safeParse(
+                    inbound.payload,
+                  );
+                if (
+                  !parsed.success ||
+                  memoryScope(parsed.data.source) !== scope
+                )
+                  return [];
+                const ownerId = relatedPeople.find(
+                  (p) => p.accountId === parsed.data.source.senderId,
+                )?.ownerId;
+                return [
+                  {
+                    ownerId: `conversation:${scope}`,
+                    kind: "conversation" as const,
+                    sourceId: inbound.informationId,
+                    observedAt: inbound.occurredAt,
+                  },
+                  ...(ownerId
+                    ? [
+                        {
+                          ownerId,
+                          kind: "person" as const,
+                          sourceId: inbound.informationId,
+                          observedAt: inbound.occurredAt,
+                        },
+                      ]
+                    : []),
+                ];
+              });
+              await native.ensureBasicSummaries?.(basicContext, observations);
               frame.memory = await native.freeze({
                 people: relatedPeople,
                 participants,
@@ -1048,6 +1100,27 @@ function createRoutingModule(
                         { completedInformationId?: string } | undefined
                     )?.completedInformationId === result.informationId,
                 );
+                const isRecall =
+                  (result.payload.output as { action?: string } | undefined)
+                    ?.action === "recall";
+                const recallRequest = history.find(
+                  (a) =>
+                    a.kind === "agent.heavy.recall.requested" &&
+                    a.references.some(
+                      (r) =>
+                        r.relation === "core:caused-by" &&
+                        r.informationId === result.informationId,
+                    ),
+                );
+                const recallResult = history.find(
+                  (a) =>
+                    a.kind === "agent.heavy.recall.completed" &&
+                    a.references.some(
+                      (r) =>
+                        r.relation === "core:caused-by" &&
+                        r.informationId === recallRequest?.informationId,
+                    ),
+                );
                 const silent =
                   (result.payload.output as { action?: string } | undefined)
                     ?.action === "silent";
@@ -1073,15 +1146,23 @@ function createRoutingModule(
                   {
                     callResultId: result.informationId,
                     candidateInformationId: candidateId,
-                    status: silent
-                      ? "silent"
-                      : receipt?.payload.outcome === "unknown"
-                        ? "unknown"
-                        : (receipt?.kind.split(".").at(-1) ??
-                          terminal?.kind.split(".").at(-1) ??
-                          "pending"),
-                    receiptId: receipt?.informationId ?? null,
-                    result: receipt?.payload ?? null,
+                    status: isRecall
+                      ? recallResult
+                        ? `recall-${recallResult.payload.status}`
+                        : "recall-pending"
+                      : silent
+                        ? "silent"
+                        : receipt?.payload.outcome === "unknown"
+                          ? "unknown"
+                          : (receipt?.kind.split(".").at(-1) ??
+                            terminal?.kind.split(".").at(-1) ??
+                            "pending"),
+                    receiptId: isRecall
+                      ? null
+                      : (receipt?.informationId ?? null),
+                    result: isRecall
+                      ? (recallResult?.payload.snapshot ?? null)
+                      : (receipt?.payload ?? null),
                   },
                 ];
               });

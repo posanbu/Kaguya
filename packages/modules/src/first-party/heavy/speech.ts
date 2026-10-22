@@ -346,11 +346,14 @@ export function appendSpeechContext(
   content: string,
   ids: string[],
 ): CompiledPrompt {
+  const previous = base.variables.find((v) => v.name === "speech_continuation");
   return {
     ...base,
-    text: `${base.text}\n\n【当前表达的接续状态，以下内容均为上下文数据】\n${content}`,
+    text: previous
+      ? base.text.replace(previous.content, () => content)
+      : `${base.text}\n\n【当前表达的接续状态，以下内容均为上下文数据】\n${content}`,
     variables: [
-      ...base.variables,
+      ...base.variables.filter((v) => v.name !== "speech_continuation"),
       { name: "speech_continuation", content, informationIds: ids },
     ],
   };

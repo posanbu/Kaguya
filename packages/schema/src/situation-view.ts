@@ -14,6 +14,7 @@ export const situationStepViewSchema = z.object({
   reasoning: z.string().nullable(),
   nativeAvailable: z.boolean(),
   receipt: z.string().nullable(),
+  recall: z.string().nullable().exactOptional(),
 });
 export const situationViewSchema = z.object({
   version: z.literal(1),

@@ -50,7 +50,7 @@ Light 是 `object` Model Task。Runtime 先把任务输出 schema 转为 JSON Sc
 
 :::
 
-## Heavy：独立决定普通回复或沉默
+## Heavy：回复、沉默与按需补查
 
 Light 选择 `message` 后，Heavy 根据消息意图取得同一个原始 Memory 冻结事实，逐字复用 `global_context` 与 `scope_context`。Light 不生成供 Heavy 使用的情境摘要。新的 `native_memory` 区块承载统一记忆快照，旧人物画像和独立表达选择不再进入新请求。场景和 `conversation.background` 继续描述会话。两块事件文本共以 32,000 字为目标预算；三十条历史保底与未读原文不裁剪。[上下文选择](https://github.com/posanbu/Kaguya/blob/main/packages/modules/src/first-party/heavy/message-context.ts)、[变量编译](https://github.com/posanbu/Kaguya/blob/main/packages/modules/src/first-party/heavy/message-prompt.ts)。
 
@@ -143,3 +143,11 @@ LLM 客户端接受文本 `prompt` 或结构化 `messages`，两者互斥。Heav
 下一段在上一段成功投递后生成。持久化的接续请求复用原始 Prompt，并追加 `speech_continuation` 数据变量。该变量保留未完成意图、新增入站与每段实际发送结果，来源指向对应账本事实。兼容的原生模型返回继续接入，每次调用的输入保持不可变。插话在下一段处理，当前已开始生成的段通常发完。
 
 默认模拟耗时为 200–1200 毫秒，模型生成时间计入其中。等待由持久化 one-shot 调度完成，不阻塞入站处理。流程测试与真实模型自然度评估分别记录，前者不证明聊天效果。
+
+## 人物背景与补查变量
+
+情境冻结前先补齐有实际来源的最小摘要。`native_memory` 同时保存固定摘要、相关人物细节和未确认的人物候选。证据类型及时间随节点进入实际请求。候选不是身份绑定。全局近期事件背景继续沿用原装配流程。
+
+普通 Heavy 的结构化输出增加 `recall(query, candidateIds)`。检索结果保存为独立事实后，宿主追加 `memory_recall` 变量。变量记录本次表达已经使用的结果及剩余额度。原始 `native_memory` 不变。接续段使用上一段的有效 Prompt，并替换 `speech_continuation`，保留补查记录。每次完整表达最多主动补查两次，Light 不使用此动作。
+
+默认形成模板要求区分稳定背景与近期状态，Heavy 行为模板要求按话题使用背景并避免重复追问。模板原文仍直接嵌入本页对应资源。部署时需检查同名 `.local.hbs` 覆盖。自定义模板不会取消宿主的范围、来源与检索次数校验。

@@ -55,6 +55,7 @@ export function createNativeMemoryModule(
   async function request(
     batch: MemoryBatch,
     context: InformationModuleHandlerContext,
+    contextInformationId?: string,
   ) {
     const owners = [
       ...new Set([
@@ -81,6 +82,7 @@ export function createNativeMemoryModule(
       batch.id,
       nativeMemoryRequested,
       {
+        ...(contextInformationId ? { contextInformationId } : {}),
         payload: {
           batchId: batch.id,
           scope: batch.scope,
@@ -355,14 +357,21 @@ export function createNativeMemoryModule(
           oneShotDueInformationKind,
           { subscriptionId: "memory.native.flush", delivery: "durable" },
           async (atom, context) => {
-            const schedule = (await context.select(sourceSelector))[0];
+            const selected = await context.select(sourceSelector);
+            const schedule = selected.find(
+              (a) => a.kind === "core.schedule.one-shot.requested",
+            );
             const input = schedule?.payload.input as
               { scope?: string; consumer?: string } | undefined;
             if (input?.consumer !== "memory.native" || !input.scope) return;
+            const runtime = selected.find(
+              (a) => a.kind === "core.runtime.context",
+            );
+            if (!runtime) throw new Error("memory_flush_context_missing");
             const batch = await context
               .use(memoryFormationCapability)
               .claim(input.scope, true, context.now().toISOString());
-            if (batch) await request(batch, context);
+            if (batch) await request(batch, context, runtime.informationId);
             await context.use(oneShotScheduleCapability).finish({
               scheduleInformationId: atom.payload.scheduleInformationId,
               status: "fired",

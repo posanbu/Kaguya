@@ -7,6 +7,7 @@ import {
 export interface SituationRequestContext {
   memory?: NativeMemorySnapshot | null;
   memoryError?: string;
+  recallRaw?: string | null;
   identityRaw: string | null;
   backgroundRaw: string | null;
   evidenceRaw: string | null;
@@ -94,6 +95,7 @@ export function situationRequestContext(
   );
   return {
     memory: memory.success ? memory.data : null,
+    recallRaw: values.get("memory_recall") ?? null,
     ...(values.has("native_memory") && !memory.success
       ? { memoryError: "此请求的记忆快照无法解析。" }
       : {}),

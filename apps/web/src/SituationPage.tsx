@@ -24,6 +24,7 @@ const phases = {
   cancelled: "模型调用已取消",
 };
 const actions: Record<string, string> = {
+  recall: "补查记忆",
   message: "回应",
   silent: "沉默",
   wait: "等待",
@@ -37,6 +38,10 @@ const statuses: Record<string, string> = {
   superseded: "已被替代",
   interrupted: "已中断",
   unknown: "投递结果未知",
+  "recall-completed": "检索完成",
+  "recall-disabled": "记忆未启用",
+  "recall-failed": "检索失败",
+  "recall-pending": "正在检索",
   pending: "结果待确认",
 };
 function sceneName(id: string) {
@@ -130,6 +135,12 @@ function Step({ step }: { step: SituationStepView }) {
           ` · ${statuses[step.status] ?? step.status}`}
       </p>
       {step.text && <p className="situation-action-text">{step.text}</p>}
+      {step.recall && (
+        <details>
+          <summary>本次检索结果</summary>
+          <pre>{step.recall}</pre>
+        </details>
+      )}
       <p className="situation-action-reasoning" aria-label="可读推理">
         {step.reasoning ??
           (step.phase === "requested" ? "等待模型返回推理" : "未提供可读推理")}

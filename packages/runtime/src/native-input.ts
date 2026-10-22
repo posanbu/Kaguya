@@ -96,23 +96,52 @@ export function assembleNativeInput(input: {
               a.informationId ===
               terminal?.payload.deliveryTerminalInformationId,
           );
+    const recall =
+      (payload.output as { action?: string } | undefined)?.action === "recall";
+    const recallRequest = input.atoms.find(
+      (a) =>
+        a.kind === "agent.heavy.recall.requested" &&
+        a.references.some(
+          (r) =>
+            r.relation === "core:caused-by" &&
+            r.informationId === atom.informationId,
+        ),
+    );
+    const recallResult = input.atoms.find(
+      (a) =>
+        a.kind === "agent.heavy.recall.completed" &&
+        a.references.some(
+          (r) =>
+            r.relation === "core:caused-by" &&
+            r.informationId === recallRequest?.informationId,
+        ),
+    );
     const outcome: NativeMessage = {
       role: "user",
       content: JSON.stringify({
         actionRecord: atom.informationId,
-        status: silent
-          ? "agent.heavy.response.silent"
-          : (receipt?.kind ?? terminal?.kind ?? "pending"),
-        ...(receipt ? { receipt: receipt.payload } : {}),
+        status: recall
+          ? recallResult
+            ? `recall-${recallResult.payload.status}`
+            : "recall-pending"
+          : silent
+            ? "agent.heavy.response.silent"
+            : (receipt?.kind ?? terminal?.kind ?? "pending"),
+        ...(recall
+          ? { recall: recallResult?.payload.snapshot ?? null }
+          : receipt
+            ? { receipt: receipt.payload }
+            : {}),
       }),
     };
     segments.push({
       messages: [...native.data.messages, outcome],
-      pinned:
-        !terminal ||
-        terminal.kind.endsWith(".waiting") ||
-        receipt?.payload.outcome === "unknown" ||
-        openCalls.size > 0,
+      pinned: recall
+        ? !recallResult
+        : !terminal ||
+          terminal.kind.endsWith(".waiting") ||
+          receipt?.payload.outcome === "unknown" ||
+          openCalls.size > 0,
     });
   }
   // Reserve open interactions first, then admit complete recent segments.

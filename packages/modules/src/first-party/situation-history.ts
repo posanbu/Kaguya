@@ -28,6 +28,37 @@ export const situationHistorySelector = defineInformationSelector({
     }
     add(completed);
     for (const atom of completed) {
+      if (
+        (atom.payload.output as { action?: string } | undefined)?.action ===
+        "recall"
+      ) {
+        const requests = add(
+          await ledger.related({
+            from: [atom.informationId],
+            relation: "core:caused-by",
+            direction: "incoming",
+            limit: 20,
+          }),
+        );
+        for (const request of requests.filter(
+          (a) => a.kind === "agent.heavy.recall.requested",
+        )) {
+          const results = await ledger.related({
+            from: [request.informationId],
+            relation: "core:caused-by",
+            direction: "incoming",
+            limit: 20,
+          });
+          add(
+            await ledger.find({
+              informationIds: results.map((a) => a.informationId),
+              throughInformationId: sourceAtom.informationId,
+              registrationOrder: true,
+              limit: 20,
+            }),
+          );
+        }
+      }
       const deliveries = add(
         await ledger.find({
           kinds: ["core.delivery.requested"],
@@ -152,14 +183,38 @@ export const situationHistorySelector = defineInformationSelector({
             if (part?.type === "tool-call") calls.add(part.toolCallId);
             if (part?.type === "tool-result") calls.delete(part.toolCallId);
           }
-      const unresolved =
-        !terminal ||
-        terminal.kind.endsWith(".waiting") ||
-        receipt?.payload.outcome === "unknown" ||
-        calls.size > 0;
+      const recall =
+        (result.payload.output as { action?: string } | undefined)?.action ===
+        "recall";
+      const recallRequest = [...selected.values()].find(
+        (a) =>
+          a.kind === "agent.heavy.recall.requested" &&
+          a.references.some(
+            (r) =>
+              r.relation === "core:caused-by" &&
+              r.informationId === result.informationId,
+          ),
+      );
+      const recallResult = [...selected.values()].find(
+        (a) =>
+          a.kind === "agent.heavy.recall.completed" &&
+          a.references.some(
+            (r) =>
+              r.relation === "core:caused-by" &&
+              r.informationId === recallRequest?.informationId,
+          ),
+      );
+      const unresolved = recall
+        ? !recallResult
+        : !terminal ||
+          terminal.kind.endsWith(".waiting") ||
+          receipt?.payload.outcome === "unknown" ||
+          calls.size > 0;
       if (index < completed.length - 64 && !unresolved) continue;
       for (const id of [
         result.informationId,
+        recallRequest?.informationId,
+        recallResult?.informationId,
         source?.informationId,
         candidateId,
         ...terminals.map((a) => a.informationId),

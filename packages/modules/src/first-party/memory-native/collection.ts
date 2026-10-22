@@ -15,9 +15,36 @@ export const sourceSelector = defineInformationSelector({
                 r.relation === "core:uses-context",
             )
             .map((r) => r.informationId);
-    return (await ledger.find({ informationIds: ids, limit: 100 })).map(
-      (a) => a.informationId,
+    const selected = await ledger.find({ informationIds: ids, limit: 100 });
+    if (sourceAtom.kind !== oneShotDueInformationKind.kind)
+      return selected.map((a) => a.informationId);
+    // Due events only reference the schedule. Recover context through its explicit source.
+    const sourceIds = selected.flatMap((a) =>
+      a.references
+        .filter((r) => r.relation === "core:caused-by")
+        .map((r) => r.informationId),
     );
+    const sources = sourceIds.length
+      ? await ledger.find({ informationIds: sourceIds, limit: 100 })
+      : [];
+    const contextIds = [
+      ...new Set(
+        sources.flatMap((a) =>
+          a.references
+            .filter((r) => r.relation === "core:context")
+            .map((r) => r.informationId),
+        ),
+      ),
+    ];
+    const contexts = contextIds.length
+      ? await ledger.find({ informationIds: contextIds, limit: 100 })
+      : [];
+    return [
+      ...selected.map((a) => a.informationId),
+      ...contexts
+        .filter((a) => a.kind === "core.runtime.context")
+        .map((a) => a.informationId),
+    ];
   },
 });
 

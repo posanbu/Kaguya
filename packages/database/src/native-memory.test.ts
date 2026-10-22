@@ -60,6 +60,158 @@ describe.each(backends)("native memory ($name)", ({ create }) => {
     await db.prepareSchema();
     return db;
   }
+  it("bootstraps from an actual bound speaker once under concurrency and preserves manual revisions", async () => {
+    const db = await setup();
+    const kinds = [
+      "core.message.inbound.text",
+      "memory.identity.platform.account.entity",
+      "memory.identity.platform.account.binding",
+    ];
+    await db.information.synchronizeKinds(kinds);
+    const append = async (
+      informationId: string,
+      kind: string,
+      payload: Record<string, any>,
+      references: { relation: string; informationId: string }[] = [],
+    ) =>
+      db.information.append(
+        freezeInformationAtom(
+          informationAtomSchema.parse({
+            informationId,
+            kind,
+            payload,
+            references,
+            occurredAt: "2026-10-20T00:00:00Z",
+            source: "test:memory",
+          }),
+        ),
+        references.map((r) => ({
+          relation: r.relation,
+          required: true,
+          multiple: false,
+        })),
+      );
+    await append("account", kinds[1]!, {
+      platform: "qq",
+      adapterId: "qq",
+      accountId: "ada",
+    });
+    await append("binding", kinds[2]!, { personInformationId: "ada" }, [
+      { relation: "core:binds", informationId: "account" },
+    ]);
+    const scope = JSON.stringify(["qq", "qq", "group", "one"]);
+    await append("actual", kinds[0]!, {
+      text: "你好",
+      source: {
+        platform: "qq",
+        adapterId: "qq",
+        senderId: "ada",
+        destination: { kind: "group", groupId: "one" },
+      },
+    });
+    const ctx = {
+      ...input,
+      scope,
+      owners: ["person:ada", `conversation:${scope}`, "person:other"],
+    };
+    const observations = [
+      {
+        ownerId: "person:ada",
+        kind: "person" as const,
+        sourceId: "actual",
+        observedAt: "2026-10-20T00:00:00Z",
+      },
+      {
+        ownerId: `conversation:${scope}`,
+        kind: "conversation" as const,
+        sourceId: "actual",
+        observedAt: "2026-10-20T00:00:00Z",
+      },
+      {
+        ownerId: "person:other",
+        kind: "person" as const,
+        sourceId: "actual",
+        observedAt: "2026-10-20T00:00:00Z",
+      },
+    ];
+    await Promise.all([
+      db.memoryGraph.native.ensureBasicSummaries(ctx, observations),
+      db.memoryGraph.native.ensureBasicSummaries(ctx, observations),
+    ]);
+    const fixed = await db.memoryGraph.native.readFixed(ctx);
+    expect(fixed).toHaveLength(2);
+    expect(fixed.every((n) => n.metadata.sourceIds[0] === "actual")).toBe(true);
+    expect(fixed.some((n) => n.metadata.ownerId === "person:other")).toBe(
+      false,
+    );
+    const person = fixed.find((n) => n.metadata.kind === "person")!;
+    await db.memoryGraph.native.publish({
+      operationId: "manual-basic",
+      actor: "manual",
+      nodes: [
+        {
+          expectedRevision: 1,
+          node: {
+            ...person,
+            content: "手动关系说明",
+            metadata: { ...person.metadata, revision: 2, locked: true },
+          },
+        },
+      ],
+    });
+    await db.prepareSchema();
+    await db.memoryGraph.native.ensureBasicSummaries(ctx, observations);
+    expect(
+      (await db.memoryGraph.native.readFixed(ctx)).find(
+        (n) => n.id === person.id,
+      )?.content,
+    ).toBe("手动关系说明");
+    expect(await db.memoryGraph.native.history(person.id)).toHaveLength(2);
+    await db.memoryGraph.native.ensureBasicSummaries(
+      { ...ctx, scope: "another" },
+      observations,
+    );
+    expect(
+      await db.memoryGraph.native.readFixed({ ...ctx, scope: "another" }),
+    ).toHaveLength(0);
+  });
+  it("returns ambiguous shared people as candidates without binding identities or exposing other private scopes", async () => {
+    const db = await setup();
+    const a = node(81, 0, "shared"),
+      b = {
+        ...node(82, 0, "shared"),
+        metadata: { ...node(82, 0, "shared").metadata, ownerId: "person:b" },
+      };
+    const secret = {
+      ...node(83, 1, "private-b"),
+      content: "私聊钢琴经历",
+      metadata: { ...node(83, 1, "private-b").metadata, ownerId: "person:b" },
+    };
+    await db.memoryGraph.native.publish({
+      operationId: "ambiguous",
+      actor: "manual",
+      nodes: [a, b, secret].map((node) => ({ node, expectedRevision: 0 })),
+    });
+    const access = createNativeMemoryAccess({
+      enabled: true,
+      store: db.memoryGraph.native,
+    });
+    const frozen = await access.freeze({ ...input, owners: [], query: "阿达" });
+    expect(frozen.personCandidates?.map((p) => p.ownerId).sort()).toEqual([
+      "person:ada",
+      "person:b",
+    ]);
+    expect(frozen.people).toEqual([]);
+    expect(frozen.fixed).toEqual([]);
+    expect(frozen.recalled.some((r) => r.node.id === secret.id)).toBe(false);
+    const again = await access.recall!({
+      ...input,
+      owners: [],
+      query: "阿达",
+      explicitIds: [secret.id],
+    });
+    expect(again.recalled.some((r) => r.node.id === secret.id)).toBe(false);
+  });
   it("atomically publishes versions, rejects conflicts and preserves audit history", async () => {
     const db = await setup();
     const n = node(1);
@@ -301,6 +453,83 @@ describe.each(backends)("native memory ($name)", ({ create }) => {
       });
       expect(hits.map((h) => h.node.id)).toContain(a.id);
       expect(await db.memoryGraph.listEdges({ nodeId: a.id })).toEqual([]);
+    },
+  );
+
+  it.each([
+    "core.message.inbound.text",
+    "core.delivery.delivered",
+    "test.unknown.source",
+  ])(
+    "restores legacy provenance only from a supported original atom: %s",
+    async (kind) => {
+      const db = await setup();
+      await db.information.synchronizeKinds([kind]);
+      await db.information.append(
+        freezeInformationAtom(
+          informationAtomSchema.parse({
+            informationId: "legacy-source",
+            kind,
+            occurredAt: "2026-10-20T00:00:00Z",
+            source: "test:memory",
+            references: [],
+            payload: {
+              ok: true,
+              source: {
+                senderId: "speaker",
+                sender: { nickname: "原始昵称" },
+                mentions: [{ kind: "user", id: "mentioned" }],
+                replyTo: { platformMessageId: "quoted", senderId: "other" },
+              },
+            },
+          }),
+        ),
+        [],
+      );
+      const legacy = {
+        id: "legacy-source",
+        scope: "scope-a",
+        ownerId:
+          kind === "core.delivery.delivered" ? "self:kaguya" : "person:ada",
+        text: "原文",
+        occurredAt: "2026-10-20T00:00:00Z",
+        collectedAt: "2026-10-20T00:00:00Z",
+      };
+      await db.sql.query(
+        "INSERT INTO memory_native_sources(id,scope,source) VALUES($1,$2,$3::jsonb)",
+        [legacy.id, legacy.scope, JSON.stringify(legacy)],
+      );
+      if (kind === "test.unknown.source") {
+        await expect(
+          db.memoryGraph.native.claim("scope-a", true),
+        ).rejects.toThrow("memory_source_provenance_unavailable");
+        expect((await db.memoryGraph.native.status()).counts.queued).toBe(1);
+        return;
+      }
+      const batch = await db.memoryGraph.native.claim("scope-a", true);
+      expect(batch!.sources[0]).toMatchObject(legacy);
+      if (kind === "core.delivery.delivered")
+        expect(batch!.sources[0]).toMatchObject({
+          sourceType: "delivered",
+          participants: [],
+          replyTo: null,
+        });
+      else
+        expect(batch!.sources[0]).toMatchObject({
+          sourceType: "inbound",
+          participants: [
+            {
+              role: "speaker",
+              accountId: "speaker",
+              ownerId: "person:ada",
+              nickname: "原始昵称",
+            },
+            { role: "mentioned", accountId: "mentioned", ownerId: null },
+            { role: "replied-to", accountId: "other", ownerId: null },
+          ],
+          replyTo: { platformMessageId: "quoted", senderId: "other" },
+        });
+      expect(await db.memoryGraph.native.claim("scope-a", true)).toEqual(batch);
     },
   );
 

@@ -11,8 +11,148 @@ import { inboundTextInformationKind } from "../information-kinds.js";
 import { loadFirstPartyPromptTemplates } from "../../node/prompt-templates.js";
 import { nativeMemoryRequested } from "./facts.js";
 import { nativeMemorySnapshotSchema } from "@kaguya/schema";
+import {
+  oneShotDueInformationKind,
+  oneShotRequestedInformationKind,
+} from "@kaguya/scheduler";
 
 describe("native Memory formation", () => {
+  it.each(["queued", "pending", "legacy-pending", "legacy-queued"])(
+    "forms a small batch from a context-free timer after restart (%s)",
+    async (mode) => {
+      const f = await cognitiveFixture(
+        [
+          identityModule,
+          createNativeMemoryModule({
+            modelTaskCapability: modelToken,
+            nativeMemoryTemplate: loadFirstPartyPromptTemplates().nativeMemory,
+          }),
+        ],
+        (request) => {
+          const p = nativeMemoryRequested.payloadSchema.parse(
+            request.contextAtoms.find(
+              (a) => a.kind === nativeMemoryRequested.kind,
+            )!.payload,
+          );
+          return {
+            nodes: [
+              {
+                key: "timer-summary",
+                kind: "person",
+                ownerId: p.sources[0]!.ownerId,
+                scope: p.scope,
+                level: 0,
+                content: "本人在本群说今天在看建筑方案，未说明职业。",
+                sourceIds: p.sources.map((s) => s.id),
+                tags: [],
+                aliases: [],
+                status: "active",
+              },
+            ],
+            edges: [],
+          };
+        },
+      );
+      try {
+        const root = await f.context();
+        await f.core.register(inboundTextInformationKind, {
+          source: "adapter:test",
+          occurredAt: "2026-09-09T00:00:10.000Z",
+          payload: {
+            text: "今天在看建筑方案",
+            source: {
+              adapterId: "qq",
+              platform: "qq",
+              destination: { kind: "group", groupId: "one" },
+              senderId: "human",
+              selfId: "bot",
+              platformMessageId: "timer-source",
+            },
+          },
+          references: [
+            { relation: "core:context", informationId: root.informationId },
+          ],
+        });
+        await vi.waitFor(async () =>
+          expect(
+            await f.all(oneShotRequestedInformationKind.kind),
+          ).toHaveLength(1),
+        );
+        expect(await f.all(nativeMemoryRequested.kind)).toHaveLength(0);
+        const schedule = (
+          await f.all(oneShotRequestedInformationKind.kind)
+        )[0]!;
+        if (mode.endsWith("pending")) {
+          // Old flush failures left a claimed batch without a formation request.
+          const input = schedule.payload.input as { scope: string };
+          expect(
+            await f.database.memoryGraph.native.claim(
+              input.scope,
+              true,
+              "2026-09-09T00:01:11.000Z",
+            ),
+          ).toBeDefined();
+        }
+        if (mode.startsWith("legacy")) {
+          await f.database.sql.query(
+            "UPDATE memory_native_sources SET source=source-'sourceType'-'participants'-'replyTo'",
+          );
+          await f.database.sql.query(
+            "UPDATE memory_native_batches SET sources=(SELECT jsonb_agg(s-'sourceType'-'participants'-'replyTo') FROM jsonb_array_elements(sources) s)",
+          );
+        }
+        await f.restart();
+        f.setNow("2026-09-09T00:01:11.000Z");
+        await f.core.register(oneShotDueInformationKind, {
+          source: "core:test",
+          occurredAt: "2026-09-09T00:01:11.000Z",
+          payload: {
+            scheduleInformationId: schedule.informationId,
+            dueAt: "2026-09-09T00:01:10.000Z",
+            deliveredAt: "2026-09-09T00:01:11.000Z",
+          },
+          references: [
+            {
+              relation: "core:status-of",
+              informationId: schedule.informationId,
+            },
+          ],
+        });
+        await vi.waitFor(
+          async () =>
+            expect(
+              await f.all("memory.native.formation.completed.v1"),
+            ).toHaveLength(1),
+          { timeout: 5000 },
+        );
+        expect(
+          (await f.all(nativeMemoryRequested.kind))[0]!.references,
+        ).toContainEqual({
+          relation: "core:context",
+          informationId: root.informationId,
+        });
+        expect(await f.all("execution.exhausted")).toHaveLength(0);
+        expect(
+          (await f.all("memory.native.formation.completed.v1"))[0]!.payload
+            .status,
+        ).toBe("completed");
+        expect(
+          (await f.database.memoryGraph.native.status()).counts.fixed,
+        ).toBe(1);
+        expect(
+          (
+            await f.database.information.oneShotSchedules.listOpen({
+              limit: 10,
+            })
+          ).arms,
+        ).toHaveLength(0);
+        await f.restart();
+        expect(f.calls).toBe(1);
+      } finally {
+        await f.close();
+      }
+    },
+  );
   it("forms after eight sources, revises the same summary after restart, and keeps one level zero", async () => {
     let attempts = 0;
     const f = await cognitiveFixture(

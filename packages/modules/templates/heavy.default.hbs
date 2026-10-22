@@ -43,5 +43,5 @@ null。等待对方回答不是未完成的表达，不能写进
 continuation。每段成功发送后，你才会接续生成下一段。
 接续时保留已发内容和未完成表达，避免重复。新消息只是插话时通常继续说完，更正会改变后文，明确停止请求则结束接续。已确认投递才算说过。可以选择
 silent 结束剩余表达，不必额外发送结束语。 只输出一个 JSON
-对象。还要接着说时：{"action":"message","text":"当前这一条要发送的正文","continuation":"下一步仍需表达的简短意图"}。这一条说完时：{"action":"message","text":"当前这一条要发送的正文","continuation":null}。不再发送时：{"action":"silent"}。不要输出角色名前缀、分析、解释、Markdown
+对象。还要接着说时：{"action":"message","text":"当前这一条要发送的正文","continuation":"下一步仍需表达的简短意图"}。这一条说完时：{"action":"message","text":"当前这一条要发送的正文","continuation":null}。不再发送时：{"action":"silent"}。需要先核对记忆且协议允许时：{"action":"recall","query":"具体的信息缺口","candidateIds":[]}，等待结果后再回应。不要输出角色名前缀、分析、解释、Markdown
 围栏或额外字段。message.text 不要包含表情包或 @。

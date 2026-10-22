@@ -136,7 +136,10 @@ const draftSelector = defineInformationSelector({
       i < 4 && current?.kind !== messageIntentRequestedInformationKind.kind;
       i++
     ) {
-      if (current?.kind === "agent.heavy.step.requested") {
+      if (
+        current?.kind === "agent.heavy.step.requested" ||
+        current?.kind === "agent.heavy.recall.completed"
+      ) {
         const rootId = String(current.payload.intentInformationId);
         if (
           !current.references.some(

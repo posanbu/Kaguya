@@ -114,6 +114,26 @@ export const memoryGraphSnapshotSchema = z.object({
 });
 export type MemoryGraphSnapshot = z.output<typeof memoryGraphSnapshotSchema>;
 
+/** Evidence belongs to a claim, not to an inferred personality score. */
+export const personEvidenceSchema = z
+  .object({
+    basis: z.enum(["self-report", "third-party", "observation", "inference"]),
+    temporality: z.enum(["stable", "recent", "unspecified"]),
+    observedAt: z.iso.datetime({ offset: true }),
+    validFrom: z.iso.datetime({ offset: true }).nullable(),
+    validUntil: z.iso.datetime({ offset: true }).nullable(),
+    sourceScope: nonBlank,
+    supersedes: z.array(memoryNodeIdSchema).default([]),
+  })
+  .strict()
+  .refine(
+    (e) =>
+      !e.validFrom ||
+      !e.validUntil ||
+      Date.parse(e.validFrom) <= Date.parse(e.validUntil),
+    "Invalid evidence interval",
+  );
+
 /** Native metadata is deliberately separate from the historical free-form graph. */
 export const nativeMemoryMetadataSchema = memoryNodeMetadataSchema.extend({
   occurredAt: z.iso.datetime({ offset: true }),
@@ -128,6 +148,7 @@ export const nativeMemoryMetadataSchema = memoryNodeMetadataSchema.extend({
   locked: z.boolean().default(false),
   sourceIds: z.array(nonBlank).default([]),
   aliases: z.array(nonBlank).default([]),
+  evidence: personEvidenceSchema.exactOptional(),
 });
 export const nativeMemoryNodeSchema = memoryNodeSchema.extend({
   metadata: nativeMemoryMetadataSchema,
@@ -189,6 +210,16 @@ export const nativeMemorySnapshotSchema = z.object({
       }),
     )
     .default([]),
+  personCandidates: z
+    .array(
+      z.object({
+        ownerId: nonBlank,
+        summary: nativeMemoryNodeSchema,
+        match: z.enum(["alias", "text", "fuzzy"]),
+        truncated: z.boolean().exactOptional(),
+      }),
+    )
+    .exactOptional(),
   fixed: z.array(nativeMemoryNodeSchema),
   recalled: z.array(memoryRecallItemSchema),
   degraded: z.array(z.string()),

@@ -5,6 +5,17 @@
  * QQ 可经独立表情处理器装饰。全部出站沿用宿主授权，跨会话批准仍仅发送一次。
  * 失败、预算受阻或投递未知交给 Router 记录，不能当作自然结束。
  */
+import type { NativeMemoryAccess } from "@kaguya/memory";
+import { nativeMemorySnapshotSchema } from "@kaguya/schema";
+import {
+  memoryRecallRequested,
+  memoryRecallCompleted,
+  recallActionSchema,
+  recallContextSelector,
+  recallHistory,
+  recallTurnReferences,
+  appendRecallResult,
+} from "./recall.js";
 import { firstPartyInspection } from "../inspection.js";
 import {
   oneShotDueInformationKind,
@@ -115,7 +126,7 @@ export const messageModelDispatchingDiagnostic = defineModuleDiagnostic({
 });
 
 export const messageTaskOutputSchema = z.string().trim().min(1);
-export const messageResponseOutputSchema = z.union([
+export const messageResponseWithoutRecallSchema = z.union([
   z
     .object({
       action: z.literal("message"),
@@ -128,6 +139,16 @@ export const messageResponseOutputSchema = z.union([
     .strict(),
   z.object({ action: z.literal("silent") }).strict(),
 ]);
+
+export const messageResponseOutputSchema = z.union([
+  messageResponseWithoutRecallSchema,
+  recallActionSchema,
+]);
+function responseSchema(prompt: CompiledPrompt, enabled: boolean) {
+  return enabled && recallHistory(prompt).length < 2
+    ? messageResponseOutputSchema
+    : messageResponseWithoutRecallSchema;
+}
 
 export interface ModelTaskRequest<TOutput> {
   readonly task: {
@@ -198,6 +219,7 @@ export interface CreateHeavyModuleOptions<
   P extends ModelTaskCompletedInformationPayload =
     ModelTaskCompletedInformationPayload,
 > {
+  readonly nativeMemoryCapability?: ModuleCapability<NativeMemoryAccess>;
   readonly modelTaskCapability: ModuleCapability<ModelTaskCapability>;
   readonly messageAuthorizationCapability?: ModuleCapability<MessageAuthorization>;
   readonly modelTaskCompletedInformationKind: InformationKindDefinition<
@@ -300,6 +322,7 @@ export function createHeavyModule<
           ? []
           : [currentAcceptedMessageSelector]),
         completedMessageSelector,
+        recallContextSelector,
         confirmedAssistantSelector,
         speechStepContextSelector,
         speechDueSelector,
@@ -316,6 +339,9 @@ export function createHeavyModule<
           ? [messageDraftProcessorReady]
           : []),
         modelTaskCapability,
+        ...(dependencies.nativeMemoryCapability
+          ? [dependencies.nativeMemoryCapability]
+          : []),
         oneShotScheduleCapability,
         ...(dependencies.messageAuthorizationCapability
           ? [dependencies.messageAuthorizationCapability]
@@ -331,6 +357,8 @@ export function createHeavyModule<
       settingsSchema: heavySettingsSchema,
       promptTemplates: heavyModulePromptTemplates,
       consumes: [
+        memoryRecallRequested,
+        memoryRecallCompleted,
         ...(dependencies.draftProcessingEnabled
           ? [messagePreparedInformationKind]
           : []),
@@ -347,6 +375,8 @@ export function createHeavyModule<
           : []),
       ],
       produces: [
+        memoryRecallRequested,
+        memoryRecallCompleted,
         heavyResponseSilentInformationKind,
         ...(dependencies.draftProcessingEnabled
           ? [messageDraftInformationKind]
@@ -514,7 +544,10 @@ export function createHeavyModule<
                 taskId: "agent.heavy.respond",
                 outputMode: ordinaryReply ? "object" : "text",
                 outputSchema: ordinaryReply
-                  ? messageResponseOutputSchema
+                  ? responseSchema(
+                      prompt,
+                      Boolean(dependencies.nativeMemoryCapability),
+                    )
                   : messageTaskOutputSchema,
                 allowedTiers: ["heavy"],
               },
@@ -543,22 +576,83 @@ export function createHeavyModule<
             )
               return;
             const selected = await context.select(completedMessageSelector);
-            const source = selected.find(
+            const modelSource = selected.find(
               (a) => a.informationId === completed.payload.sourceInformationId,
             )!;
+            const source =
+              modelSource.kind === memoryRecallCompleted.kind
+                ? selected.find(
+                    (a) =>
+                      a.informationId ===
+                      modelSource.payload.originalSourceInformationId,
+                  )!
+                : modelSource;
             const step =
               source?.kind === speechStepRequestedInformationKind.kind
                 ? speechStepRequestedInformationKind.payloadSchema.parse(
                     source.payload,
                   )
                 : undefined;
-            if (step && (await context.select(speechClosedSelector)).length)
+            if (
+              (step || modelSource.kind === memoryRecallCompleted.kind) &&
+              (await context.select(speechClosedSelector)).length
+            )
               return;
             const message = requireSelectedMessageIntent(
               selected,
-              step?.intentInformationId ??
-                completed.payload.sourceInformationId,
+              step?.intentInformationId ?? source.informationId,
             );
+            const response =
+              completed.payload.outputMode === "object"
+                ? messageResponseOutputSchema.parse(completed.payload.output)
+                : {
+                    action: "message" as const,
+                    text: messageTaskOutputSchema.parse(
+                      completed.payload.output,
+                    ),
+                  };
+            const request = selected.find(
+              (a) => a.kind === "core.model.task.requested",
+            )!;
+            if (response.action === "recall") {
+              const prompt = compiledPromptSchema.parse(request.payload.prompt);
+              if (
+                recallHistory(prompt).length >= 2 ||
+                !dependencies.nativeMemoryCapability
+              )
+                throw new Error("MEMORY_RECALL_BUDGET_EXCEEDED");
+              const ids = [
+                ...new Set([
+                  ...(request.payload.contextInformationIds as string[]),
+                  ...selected.map((a) => a.informationId),
+                  completed.informationId,
+                ]),
+              ];
+              await context.registerOnce(
+                "kaguya.heavy.recall",
+                completed.informationId,
+                memoryRecallRequested,
+                {
+                  payload: memoryRecallRequested.payloadSchema.parse({
+                    ...message.payload,
+                    intentInformationId: message.informationId,
+                    originalSourceInformationId: source.informationId,
+                    query: response.query,
+                    candidateIds: response.candidateIds,
+                    prompt,
+                    contextInformationIds: ids,
+                  }),
+                  references: [
+                    ...recallTurnReferences(message.payload.turn),
+                    ...ids.map((informationId) => ({
+                      relation: "core:uses-context",
+                      informationId,
+                    })),
+                  ],
+                },
+              );
+              return;
+            }
             if (step)
               await context.registerOnce(
                 "kaguya.heavy.step.observed",
@@ -580,15 +674,6 @@ export function createHeavyModule<
                   ],
                 },
               );
-            const response =
-              completed.payload.outputMode === "object"
-                ? messageResponseOutputSchema.parse(completed.payload.output)
-                : {
-                    action: "message" as const,
-                    text: messageTaskOutputSchema.parse(
-                      completed.payload.output,
-                    ),
-                  };
             if (response.action === "silent") {
               await context.registerOnce(
                 "kaguya.heavy.silent.v1",
@@ -892,7 +977,7 @@ export function createHeavyModule<
                           contextInformationIds: ids,
                           prompt: appendSpeechContext(
                             compiledPromptSchema.parse(
-                              rootRequest.payload.prompt,
+                              previousRequest.payload.prompt,
                             ),
                             content,
                             ids,
@@ -929,7 +1014,10 @@ export function createHeavyModule<
               task: {
                 taskId: "agent.heavy.respond",
                 outputMode: "object",
-                outputSchema: messageResponseOutputSchema,
+                outputSchema: responseSchema(
+                  compiledPromptSchema.parse(step.payload.prompt),
+                  Boolean(dependencies.nativeMemoryCapability),
+                ),
                 allowedTiers: ["heavy"],
               },
               sourceInformationId: step.informationId,
@@ -939,6 +1027,161 @@ export function createHeavyModule<
               activation,
               selectionPolicy: { tier: "heavy" },
               prompt: compiledPromptSchema.parse(step.payload.prompt),
+              contextAtoms: atoms,
+              nativeContinuation: true,
+            });
+          },
+        ),
+        onInformation(
+          memoryRecallRequested,
+          { subscriptionId: "kaguya.heavy.recall", delivery: "durable" },
+          async (request, context) => {
+            if ((await context.select(speechClosedSelector)).length) return;
+            const atoms = await context.select(recallContextSelector);
+            const root = atoms.find(
+              (a) =>
+                a.kind === "core.model.task.requested" &&
+                a.payload.sourceInformationId ===
+                  request.payload.intentInformationId,
+            );
+            if (
+              !root ||
+              (root.payload.activation as { instanceId: string }).instanceId !==
+                context.instanceId
+            )
+              return;
+            if (
+              atoms.some(
+                (a) =>
+                  a.kind === memoryRecallCompleted.kind &&
+                  a.references.some(
+                    (r) =>
+                      r.relation === "core:caused-by" &&
+                      r.informationId === request.informationId,
+                  ),
+              )
+            )
+              return;
+            const variable = request.payload.prompt.variables.find(
+              (v) => v.name === "native_memory",
+            );
+            const base = variable
+              ? nativeMemorySnapshotSchema.parse(JSON.parse(variable.content))
+              : undefined;
+            let snapshot = null;
+            let status: "completed" | "disabled" | "failed" = "disabled";
+            if (base && dependencies.nativeMemoryCapability) {
+              const memory = context.use(dependencies.nativeMemoryCapability);
+              if (memory.enabled) {
+                try {
+                  const prior = recallHistory(
+                    compiledPromptSchema.parse(request.payload.prompt),
+                  ).flatMap((r) => {
+                    const parsed = nativeMemorySnapshotSchema.safeParse(
+                      (r as { snapshot?: unknown }).snapshot,
+                    );
+                    return parsed.success ? [parsed.data] : [];
+                  });
+                  const candidates = [base, ...prior].flatMap((s) => [
+                    ...s.fixed,
+                    ...s.recalled.map((r) => r.node),
+                    ...(s.personCandidates ?? []).map((p) => p.summary),
+                  ]);
+                  const selectedCandidates = candidates.filter((n) =>
+                    request.payload.candidateIds.includes(n.id),
+                  );
+                  snapshot = await (memory.recall ?? memory.freeze).call(
+                    memory,
+                    {
+                      scope: base.scope,
+                      owners: [
+                        ...new Set([
+                          ...base.owners,
+                          ...selectedCandidates.map((n) => n.metadata.ownerId),
+                        ]),
+                      ],
+                      asOf: base.frozenAt,
+                      people: base.people,
+                      participants: base.participants,
+                      query: request.payload.query,
+                      explicitIds: request.payload.candidateIds.filter((id) =>
+                        candidates.some((n) => n.id === id),
+                      ),
+                    },
+                  );
+                  status = "completed";
+                } catch {
+                  status = "failed";
+                }
+              }
+            }
+            await context.registerOnce(
+              "kaguya.heavy.recall-result",
+              request.informationId,
+              memoryRecallCompleted,
+              {
+                payload: memoryRecallCompleted.payloadSchema.parse({
+                  ...request.payload,
+                  contextInformationIds: [
+                    ...request.payload.contextInformationIds,
+                    request.informationId,
+                  ],
+                  status,
+                  snapshot,
+                }),
+                references: [
+                  ...recallTurnReferences(request.payload.turn),
+                  ...request.payload.contextInformationIds.map(
+                    (informationId) => ({
+                      relation: "core:uses-context",
+                      informationId,
+                    }),
+                  ),
+                ],
+              },
+            );
+          },
+        ),
+        onInformation(
+          memoryRecallCompleted,
+          { subscriptionId: "kaguya.heavy.after-recall", delivery: "durable" },
+          async (result, context) => {
+            if ((await context.select(speechClosedSelector)).length) return;
+            const atoms = await context.select(recallContextSelector);
+            const root = atoms.find(
+              (a) =>
+                a.kind === "core.model.task.requested" &&
+                a.payload.sourceInformationId ===
+                  result.payload.intentInformationId,
+            );
+            if (
+              !root ||
+              (root.payload.activation as { instanceId: string }).instanceId !==
+                context.instanceId
+            )
+              return;
+            const prompt = appendRecallResult(
+              compiledPromptSchema.parse(result.payload.prompt),
+              memoryRecallCompleted.payloadSchema.parse(result.payload),
+              result.informationId,
+            );
+            await context.use(modelTaskCapability).execute({
+              task: {
+                taskId: "agent.heavy.respond",
+                outputMode: "object",
+                outputSchema: responseSchema(
+                  prompt,
+                  Boolean(dependencies.nativeMemoryCapability),
+                ),
+                allowedTiers: ["heavy"],
+              },
+              sourceInformationId: result.informationId,
+              contextInformationId: result.references.find(
+                (r) => r.relation === "core:context",
+              )!.informationId,
+              activation,
+              selectionPolicy: { tier: "heavy" },
+              prompt,
               contextAtoms: atoms,
               nativeContinuation: true,
             });
@@ -987,23 +1230,30 @@ const completedMessageSelector = defineInformationSelector({
     const message = sources[0];
     if (
       (message?.kind !== messageIntentRequestedInformationKind.kind &&
-        message?.kind !== speechStepRequestedInformationKind.kind) ||
+        message?.kind !== speechStepRequestedInformationKind.kind &&
+        message?.kind !== memoryRecallCompleted.kind) ||
       message.informationId !== payload.sourceInformationId
     )
       throw new Error(
         "Model task completion source must match its message intent cause",
       );
-    if (message.kind === speechStepRequestedInformationKind.kind)
-      await ledger.find({
-        informationIds: [String(message.payload.intentInformationId)],
-        limit: 1,
-      });
+    const extra =
+      message.kind === memoryRecallCompleted.kind
+        ? [
+            String(message.payload.intentInformationId),
+            String(message.payload.originalSourceInformationId),
+          ]
+        : message.kind === speechStepRequestedInformationKind.kind
+          ? [String(message.payload.intentInformationId)]
+          : [];
+    if (extra.length)
+      await ledger.find({ informationIds: extra, limit: extra.length });
     return [
-      message.informationId,
-      requested[0]!.informationId,
-      ...(message.kind === speechStepRequestedInformationKind.kind
-        ? [String(message.payload.intentInformationId)]
-        : []),
+      ...new Set([
+        message.informationId,
+        requested[0]!.informationId,
+        ...extra,
+      ]),
     ];
   },
 });

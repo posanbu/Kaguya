@@ -75,6 +75,22 @@ export function appendNativeMemoryToPrompt(
       participants: state.participants.map(
         (person: { ownerId: string | null }) => ({
           ...person,
+          memoryVisibility:
+            snapshot.status === "disabled"
+              ? "disabled"
+              : snapshot.fixed.some(
+                    (n) => n.metadata.ownerId === person.ownerId,
+                  )
+                ? snapshot.recalled.some(
+                    (r) => r.node.metadata.ownerId === person.ownerId,
+                  )
+                  ? "summary-and-details"
+                  : "summary-only"
+                : snapshot.recalled.some(
+                      (r) => r.node.metadata.ownerId === person.ownerId,
+                    )
+                  ? "details-only"
+                  : "not-visible",
           fixedNodeIds: snapshot.fixed
             .filter((n) => n.metadata.ownerId === person.ownerId)
             .map((n) => n.id),
@@ -109,8 +125,10 @@ export function appendNativeMemoryToPrompt(
   if (bytes() > 128_000) {
     snapshot.budget.omittedNodeIds.push(
       ...snapshot.recalled.map((r) => r.node.id),
+      ...(snapshot.personCandidates ?? []).map((p) => p.summary.id),
     );
     snapshot.recalled = [];
+    snapshot.personCandidates = [];
     snapshot.budget.dynamicCharacters = 0;
   }
   if (bytes() > 128_000) {

@@ -36,7 +36,7 @@
 
 ## 可靠性、幂等和失败行为
 
-普通回复使用结构化输出：`message(text, continuation)` 或 `silent`。`continuation` 是简短的未完成表达意图，`null` 表示本条投递后结束。旧输出缺少该字段时仍按单条消息处理。silent 不要求另写理由。授权跨会话发送使用文本输出。稳定任务键复用等价 Model Task；assistant、silent 与 delivery 使用实例级 `registerOnce` 去重。silent 不生成用于投递的 assistant 原子，由情境运行模块关闭回合。模型任务仍保存服务实际返回的原生消息、推理项和协议元数据，后续调用按兼容协议接续。界面缺少可读推理时显示“未提供”。模型 failed/cancelled 不生成 assistant，缺少冻结引用或 provenance 不一致时拒绝继续。
+普通回复使用结构化输出：`message(text, continuation)`、`silent` 或 `recall(query, candidateIds)`。`continuation` 是简短的未完成表达意图，`null` 表示本条投递后结束。旧输出缺少该字段时仍按单条消息处理。silent 不要求另写理由。授权跨会话发送使用文本输出。稳定任务键复用等价 Model Task；assistant、silent 与 delivery 使用实例级 `registerOnce` 去重。silent 不生成用于投递的 assistant 原子，由情境运行模块关闭回合。模型任务仍保存服务实际返回的原生消息、推理项和协议元数据，后续调用按兼容协议接续。界面缺少可读推理时显示“未提供”。模型 failed/cancelled 不生成 assistant，缺少冻结引用或 provenance 不一致时拒绝继续。
 
 ## 日志与可观测性
 
@@ -61,3 +61,9 @@ QQ 群聊、私聊和 Web 普通聊天共用逐段流程。初次发言经过 Li
 正在生成或等待发送的当前段通常发完。新消息进入下一段，包括停止请求。Heavy 通常承接普通插话，按更正调整后文，按停止请求结束。未处理的新消息仍由 Heartbeat 接收。接续选择 silent 时，如果已经发送过消息，整个表达记为 completed，保留最后一次成功回执。
 
 每段有独立模型任务和投递身份，重复回执和重启不会创建重复接续步骤或重复投递。投递失败或结果未知会停止自动接续，保留已发部分。模型超时和上下文预算受阻仍按失败处理。已批准的跨会话单次发送维持原授权边界，不自动接续。
+
+## 持久化记忆补查
+
+Heavy 声明可选的 `memory:native` 依赖。普通回复可以请求补查，授权跨会话正文仍保持单次文本生成。请求和结果分别保存为 `agent.heavy.recall.requested` 与 `agent.heavy.recall.completed`。结果冻结后才再次调用模型，重放复用该结果。失败和关闭状态也进入结果记录，不能被解释为此前没有发生过交流。
+
+范围和时间由原始 `native_memory` 决定。候选 ID 必须已经出现在本轮可见记录中，检索不能创建人物绑定。`memory_recall` 保存本次表达的结果与剩余额度，接续继承，默认最多两次。检索不会生成待发消息、提交回合终态或推进观察水位。最终回复和投递继续使用原意图和原接续步骤。

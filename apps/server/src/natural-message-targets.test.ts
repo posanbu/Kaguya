@@ -790,14 +790,18 @@ it(
       (p: any) => p.accountId === "earlier-person",
     );
     expect(person.ownerId).toMatch(/^person:/);
+    const basic = firstMemory.fixed.find(
+      (n: any) => n.metadata.ownerId === person.ownerId,
+    );
+    expect(basic).toBeDefined();
     await f.database.memoryGraph.native.publish({
       operationId: "background-person-summary",
       actor: "manual",
       nodes: [
         {
-          expectedRevision: 0,
+          expectedRevision: basic.metadata.revision,
           node: {
-            id: "00000000-0000-4000-8000-000000000801",
+            id: basic.id,
             content: "此前在本群见过其发言，尚无相互介绍的记录。",
             metadata: {
               system: "native-v1",
@@ -805,7 +809,7 @@ it(
               ownerId: person.ownerId,
               scope: firstMemory.scope,
               level: 0,
-              revision: 1,
+              revision: basic.metadata.revision + 1,
               status: "active",
               locked: false,
               sourceIds: [],
@@ -840,14 +844,25 @@ it(
         ),
       }))
       .filter((p) =>
-        p.memory.fixed.some((n: any) => n.metadata.ownerId === person.ownerId),
+        p.memory.fixed.some(
+          (n: any) =>
+            n.metadata.ownerId === person.ownerId &&
+            n.metadata.revision === basic.metadata.revision + 1,
+        ),
       );
     expect(prompts.length).toBeGreaterThanOrEqual(2);
     expect(new Set(prompts.map((p) => p.kind)).size).toBeGreaterThanOrEqual(2);
     expect(
-      prompts.every((p) => p.memory.fixed[0].content.includes("尚无相互介绍")),
+      prompts.every((p) =>
+        p.memory.fixed.some(
+          (n: any) =>
+            n.metadata.ownerId === person.ownerId &&
+            n.content.includes("尚无相互介绍"),
+        ),
+      ),
     ).toBe(true);
-    expect((first.payload.frame as any).memory.fixed).toEqual([]);
+    expect((first.payload.frame as any).memory.fixed).toContainEqual(basic);
+    expect(basic.content).not.toContain("尚无相互介绍");
   },
   sequentialWaitTestTimeoutMs,
 );

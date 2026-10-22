@@ -128,6 +128,27 @@ export async function readSituation(ledger: InspectionSource["ledger"]) {
         output && typeof output === "object" && !Array.isArray(output)
           ? (output as Record<string, unknown>)
           : null;
+      const recallRequest =
+        value?.action === "recall" && result
+          ? (
+              await ledger.inspectPage({
+                kind: "agent.heavy.recall.requested",
+                referencedId: result.informationId,
+                relation: "core:caused-by",
+                limit: 1,
+              })
+            )[0]
+          : undefined;
+      const recallResult = recallRequest
+        ? (
+            await ledger.inspectPage({
+              kind: "agent.heavy.recall.completed",
+              referencedId: recallRequest.informationId,
+              relation: "core:caused-by",
+              limit: 1,
+            })
+          )[0]
+        : undefined;
       const native = result?.payload.native;
       const parts = record(native).reasoning;
       const reasoning =
@@ -160,17 +181,36 @@ export async function readSituation(ledger: InspectionSource["ledger"]) {
             ? output
             : typeof value?.text === "string"
               ? value.text
-              : "",
-        status: silent
-          ? "silent"
-          : receipt?.payload.outcome === "unknown"
-            ? "unknown"
-            : (stepReceipt?.kind.split(".").at(-1) ??
-              terminal?.kind.split(".").at(-1) ??
-              "pending"),
+              : typeof value?.query === "string"
+                ? value.query
+                : "",
+        ...(value?.action === "recall"
+          ? {
+              recall: recallResult
+                ? JSON.stringify(recallResult.payload.snapshot)
+                : null,
+            }
+          : {}),
+        status:
+          value?.action === "recall"
+            ? recallResult
+              ? `recall-${recallResult.payload.status}`
+              : "recall-pending"
+            : silent
+              ? "silent"
+              : receipt?.payload.outcome === "unknown"
+                ? "unknown"
+                : (stepReceipt?.kind.split(".").at(-1) ??
+                  terminal?.kind.split(".").at(-1) ??
+                  "pending"),
         reasoning,
         nativeAvailable: !!native,
-        receipt: receipt ? JSON.stringify(receipt.payload) : null,
+        receipt:
+          value?.action === "recall"
+            ? null
+            : receipt
+              ? JSON.stringify(receipt.payload)
+              : null,
       };
     }),
   );

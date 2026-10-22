@@ -95,7 +95,21 @@ export interface MemoryCandidate {
   rank: number;
   path?: string[];
 }
+export interface BasicMemoryObservation {
+  ownerId: string;
+  kind: "person" | "conversation";
+  sourceId: string;
+  observedAt: string;
+  name?: string;
+}
 export interface NativeMemoryStore {
+  ensureBasicSummaries?(
+    input: MemoryReadContext,
+    observations: readonly BasicMemoryObservation[],
+  ): Promise<void>;
+  personCandidates?(
+    input: MemoryReadContext,
+  ): Promise<NonNullable<NativeMemorySnapshot["personCandidates"]>>;
   withReadSnapshot?<T>(
     run: (store: NativeMemoryStore) => Promise<T>,
   ): Promise<T>;
@@ -138,6 +152,11 @@ export interface MemoryAuxiliaryRetriever {
 }
 export interface NativeMemoryAccess {
   readonly enabled: boolean;
+  ensureBasicSummaries?(
+    input: MemoryReadContext,
+    observations: readonly BasicMemoryObservation[],
+  ): Promise<void>;
+  recall?(input: MemoryReadContext): Promise<NativeMemorySnapshot>;
   publish(input: MemoryPublication): Promise<readonly NativeMemoryNode[]>;
   freeze(input: MemoryReadContext): Promise<NativeMemorySnapshot>;
   prepare(input: MemoryReadContext): Promise<NativeMemorySnapshot>;
@@ -358,6 +377,19 @@ export function createNativeMemoryAccess(
 ): NativeMemoryAccess {
   return {
     enabled: options.enabled,
+    async ensureBasicSummaries(input, observations) {
+      if (options.enabled)
+        await options.store.ensureBasicSummaries?.(input, observations);
+    },
+    async recall(input) {
+      return this.freeze({
+        ...input,
+        query: input.query.slice(0, 512),
+        ...(input.explicitIds
+          ? { explicitIds: input.explicitIds.slice(0, 8) }
+          : {}),
+      });
+    },
     async prepare(input) {
       if (!options.enabled) throw new Error("MEMORY_DISABLED");
       const nodes = await options.store.forFormation(input);
@@ -419,8 +451,40 @@ export function createNativeMemoryAccess(
         budget: { dynamicCharacters: 0, omittedNodeIds: [] },
       };
       if (!options.enabled) return empty;
+      let candidateCharacters = 0;
+      const candidateOmissions: string[] = [];
+      const personCandidates = (
+        (await options.store.personCandidates?.(input)) ?? []
+      ).flatMap((candidate) => {
+        const remaining = Math.min(1200, 2000 - candidateCharacters);
+        if (remaining <= 0) {
+          candidateOmissions.push(candidate.summary.id);
+          return [];
+        }
+        const chars = Array.from(candidate.summary.content);
+        const content = chars.slice(0, remaining).join("");
+        candidateCharacters += Array.from(content).length;
+        return [
+          {
+            ...candidate,
+            summary: { ...candidate.summary, content },
+            truncated: chars.length > remaining,
+          },
+        ];
+      });
+      input = {
+        ...input,
+        owners: [
+          ...new Set([
+            ...input.owners,
+            ...personCandidates.map((p) => p.ownerId),
+          ]),
+        ],
+      };
       // Fixed reads are mandatory and intentionally outside all retrieval quotas.
-      const fixed = await options.store.readFixed(input);
+      const fixed = (await options.store.readFixed(input)).filter((n) =>
+        empty.owners.includes(n.metadata.ownerId),
+      );
       const candidates = [...(await options.store.candidates(input))];
       const auxiliary =
         auxiliaryResult ?? (await collectAuxiliary(options, input));
@@ -460,10 +524,13 @@ export function createNativeMemoryAccess(
           )
         ).map((n) => [n.id, n]),
       );
-      const fixedIds = new Set(fixed.map((n) => n.id));
+      const fixedIds = new Set([
+        ...fixed.map((n) => n.id),
+        ...personCandidates.map((p) => p.summary.id),
+      ]);
       const recalled: NativeMemorySnapshot["recalled"] = [];
-      const omittedNodeIds: string[] = [];
-      let used = 0,
+      const omittedNodeIds: string[] = [...candidateOmissions];
+      let used = candidateCharacters,
         expressions = 0,
         expressionChars = 0;
       for (const group of groups) {
@@ -509,6 +576,7 @@ export function createNativeMemoryAccess(
       return nativeMemorySnapshotSchema.parse({
         ...empty,
         status: "enabled",
+        personCandidates,
         fixed,
         recalled,
         degraded,

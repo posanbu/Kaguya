@@ -14,6 +14,7 @@ import {
   type NativeMemoryNode,
   type NativeMemoryStore,
   type MemoryReadContext,
+  type BasicMemoryObservation,
   type MemoryCandidate,
   type MemoryFormationAccess,
   type MemorySource,
@@ -278,13 +279,22 @@ export class PostgresNativeMemoryStore
           [scope],
         )
       ).rows[0];
-      if (pending) return pending;
-      const sources = (
+      if (pending) {
+        const sources = await this.restoreSourceProvenance(tx, pending.sources);
+        if (sources !== pending.sources)
+          await tx.query(
+            "UPDATE memory_native_batches SET sources=$2::jsonb WHERE id=$1",
+            [pending.id, JSON.stringify(sources)],
+          );
+        return { ...pending, sources };
+      }
+      const storedSources = (
         await tx.query<{ source: MemorySource }>(
           "SELECT source FROM memory_native_sources WHERE scope=$1 AND batch_id IS NULL ORDER BY ordinal LIMIT 24 FOR UPDATE",
           [scope],
         )
       ).rows.map((r) => r.source);
+      const sources = await this.restoreSourceProvenance(tx, storedSources);
       if (!sources.length) return undefined;
       const readyAt =
         Date.parse(sources[0]!.collectedAt ?? sources[0]!.occurredAt) + 60_000;
@@ -305,6 +315,93 @@ export class PostgresNativeMemoryStore
       );
       return { id, scope, sources };
     });
+  }
+  private async restoreSourceProvenance(
+    tx: SqlTransaction,
+    sources: MemorySource[],
+  ): Promise<MemorySource[]> {
+    let changed = false;
+    const restored: MemorySource[] = [];
+    for (const source of sources) {
+      if (
+        source.sourceType !== undefined ||
+        source.participants !== undefined ||
+        source.replyTo !== undefined
+      ) {
+        restored.push(memorySourceSchema.parse(source));
+        continue;
+      }
+      // Only the historical shape is upgraded, using its immutable original atom.
+      const atom = (
+        await tx.query<{ kind: string; payload: Record<string, any> }>(
+          "SELECT kind,payload FROM information_atoms WHERE information_id=$1",
+          [source.id],
+        )
+      ).rows[0];
+      if (
+        !atom ||
+        !["core.message.inbound.text", "core.delivery.delivered"].includes(
+          atom.kind,
+        )
+      )
+        throw new NativeMemoryError("memory_source_provenance_unavailable");
+      const inbound = atom.kind === "core.message.inbound.text";
+      const raw = atom.payload.source;
+      if (inbound && (!raw || typeof raw.senderId !== "string"))
+        throw new NativeMemoryError("memory_source_provenance_unavailable");
+      const replyTo =
+        inbound && raw.replyTo
+          ? {
+              platformMessageId: raw.replyTo.platformMessageId,
+              senderId: raw.replyTo.senderId ?? null,
+            }
+          : null;
+      const normalized = memorySourceSchema.parse({
+        ...source,
+        sourceType: inbound ? "inbound" : "delivered",
+        participants: inbound
+          ? [
+              {
+                accountId: raw.senderId,
+                ownerId: source.ownerId.startsWith("person:")
+                  ? source.ownerId
+                  : null,
+                role: "speaker",
+                nickname: raw.sender?.nickname ?? null,
+                card: raw.sender?.card ?? null,
+              },
+              ...(raw.mentions ?? [])
+                .filter((m: { kind: string }) => m.kind === "user")
+                .map((m: { id: string }) => ({
+                  accountId: m.id,
+                  ownerId: null,
+                  role: "mentioned",
+                  nickname: null,
+                  card: null,
+                })),
+              ...(replyTo?.senderId
+                ? [
+                    {
+                      accountId: replyTo.senderId,
+                      ownerId: null,
+                      role: "replied-to",
+                      nickname: null,
+                      card: null,
+                    },
+                  ]
+                : []),
+            ]
+          : [],
+        replyTo,
+      });
+      await tx.query(
+        "UPDATE memory_native_sources SET source=$2::jsonb WHERE id=$1",
+        [source.id, JSON.stringify(normalized)],
+      );
+      restored.push(normalized);
+      changed = true;
+    }
+    return changed ? restored : sources;
   }
   async finish(id: string, status: "completed" | "rejected" | "failed") {
     await this.db.query(
@@ -575,6 +672,123 @@ export class PostgresNativeMemoryStore
         )
       ).rows,
     );
+  }
+  async ensureBasicSummaries(
+    input: MemoryReadContext,
+    observations: readonly BasicMemoryObservation[],
+  ) {
+    await this.db.transaction(async (tx) => {
+      await tx.query("SELECT pg_advisory_xact_lock(7149321)");
+      const store = new PostgresNativeMemoryStore({
+        query: tx.query.bind(tx),
+        exec: tx.exec.bind(tx),
+        transaction: async (run) => run(tx),
+        close: async () => {},
+      });
+      for (const observation of observations) {
+        if (
+          !input.owners.includes(observation.ownerId) ||
+          Date.parse(observation.observedAt) > Date.parse(input.asOf)
+        )
+          continue;
+        // Never replace a manual, locked, invalidated or archived summary during bootstrap.
+        const existing = await tx.query(
+          `SELECT id FROM memory_nodes WHERE metadata->>'system'='native-v1'
+          AND metadata->>'ownerId'=$1 AND metadata->>'level'='0'
+          AND metadata->>'scope' IN ($2,'shared') LIMIT 1`,
+          [observation.ownerId, input.scope],
+        );
+        if (existing.rows.length) continue;
+        const source = await tx.query<{ payload: Record<string, any> }>(
+          `SELECT a.payload FROM information_atoms a JOIN information_lifecycle l USING(information_id), memory_native_epoch e
+          WHERE a.information_id=$1 AND a.kind='core.message.inbound.text'
+            AND l.position>e.source_after AND a.occurred_at::timestamptz <= $2::timestamptz`,
+          [observation.sourceId, input.asOf],
+        );
+        const inbound = source.rows[0]?.payload;
+        if (!inbound || !String(inbound.text ?? "").trim()) continue;
+        const scope = inbound.source;
+        if (
+          !scope ||
+          JSON.stringify([
+            scope.platform,
+            scope.adapterId,
+            scope.destination?.kind,
+            scope.destination?.userId ??
+              scope.destination?.groupId ??
+              scope.destination?.conversationId ??
+              null,
+          ]) !== input.scope
+        )
+          continue;
+        // Only a bound speaker's actual utterance establishes a person encounter.
+        if (observation.kind === "person") {
+          const bindings = await store.people({
+            platform: scope.platform,
+            adapterId: scope.adapterId,
+            accountIds: [scope.senderId],
+          });
+          if (!bindings.some((b) => b.ownerId === observation.ownerId))
+            continue;
+        } else if (observation.ownerId !== `conversation:${input.scope}`)
+          continue;
+        const id = randomUUID();
+        await store.publish({
+          operationId: `basic:${createHash("sha256")
+            .update(JSON.stringify([observation.ownerId, input.scope]))
+            .digest("hex")}`,
+          actor: "automatic",
+          nodes: [
+            {
+              expectedRevision: 0,
+              node: {
+                id,
+                content:
+                  observation.kind === "person"
+                    ? "在此会话中有过交流。背景、偏好和交往关系尚待实际来源补充。"
+                    : "此会话已有交流。群体背景和交流习惯尚待实际来源补充。",
+                metadata: {
+                  system: "native-v1",
+                  kind: observation.kind,
+                  ownerId: observation.ownerId,
+                  scope: input.scope,
+                  level: 0,
+                  revision: 1,
+                  status: "active",
+                  locked: false,
+                  sourceIds: [observation.sourceId],
+                  aliases: observation.name ? [observation.name] : [],
+                  tags: [],
+                  occurredAt: observation.observedAt,
+                },
+              },
+            },
+          ],
+          edges: [],
+        });
+      }
+    });
+  }
+  async personCandidates(input: MemoryReadContext) {
+    if (!input.query.trim()) return [];
+    const rows = await this.db.query<Row>(
+      `SELECT n.* FROM memory_nodes n
+      JOIN memory_native_search s ON s.node_id=n.id AND s.revision=(n.metadata->>'revision')::int
+      WHERE n.metadata->>'system'='native-v1' AND n.metadata->>'kind'='person'
+        AND n.metadata->>'level'='0' AND n.metadata->>'status'='active'
+        AND n.metadata->>'scope' IN ($1,'shared')
+        AND (n.metadata->>'occurredAt')::timestamptz <= $3::timestamptz
+        AND NOT (n.metadata->>'ownerId'=ANY($2::text[])) AND s.terms && $4::text[]
+      ORDER BY cardinality(ARRAY(SELECT unnest(s.terms) INTERSECT SELECT unnest($4::text[]))) DESC,n.id LIMIT 5`,
+      [...params(input), memoryFuzzyTerms(input.query)],
+    );
+    return parse(rows.rows).map((summary) => ({
+      ownerId: summary.metadata.ownerId,
+      summary,
+      match: summary.metadata.aliases.some((a) => input.query.includes(a))
+        ? ("alias" as const)
+        : ("fuzzy" as const),
+    }));
   }
   async readFixed(input: MemoryReadContext): Promise<NativeMemoryNode[]> {
     return parse(

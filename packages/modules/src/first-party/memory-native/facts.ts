@@ -1,5 +1,5 @@
 import { memorySourceSchema } from "@kaguya/memory";
-import { z } from "@kaguya/schema";
+import { personEvidenceSchema, z } from "@kaguya/schema";
 import { defineInformationKind } from "@kaguya/sdk";
 export const nativeMemoryRequested = defineInformationKind({
   kind: "memory.native.formation.requested.v1",
@@ -55,6 +55,7 @@ export const formationOutputSchema = z
         z
           .object({
             key: z.string().min(1),
+            evidence: personEvidenceSchema.exactOptional(),
             expressionType: z
               .enum(["habit", "example", "qq-resource"])
               .nullable()

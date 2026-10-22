@@ -149,6 +149,15 @@ export interface FrozenMemoryNode {
     aliases: string[];
     tags: string[];
     occurredAt: string;
+    evidence?: {
+      basis: "self-report" | "third-party" | "observation" | "inference";
+      temporality: "stable" | "recent" | "unspecified";
+      observedAt: string;
+      validFrom: string | null;
+      validUntil: string | null;
+      sourceScope: string;
+      supersedes: string[];
+    };
   };
 }
 export interface FrozenMemorySnapshot {
@@ -157,6 +166,12 @@ export interface FrozenMemorySnapshot {
   frozenAt: string;
   scope: string;
   owners: string[];
+  personCandidates?: {
+    ownerId: string;
+    summary: FrozenMemoryNode;
+    match: "alias" | "text" | "fuzzy";
+    truncated?: boolean;
+  }[];
   fixed: FrozenMemoryNode[];
   recalled: {
     node: FrozenMemoryNode;

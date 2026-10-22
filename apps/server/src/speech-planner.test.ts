@@ -38,6 +38,7 @@
  * 同时保留直接信号、Light 独立等待预算和并发入站去重回归。
  * 所有消息和密钥均为合成测试数据；清理按 Runtime、数据库顺序关闭，不访问外部服务。
  */
+import { readSituation } from "./inspection-situation.js";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { createMessageComposition } from "@kaguya/composition";
 import { createTestingDatabase } from "@kaguya/database/testing";
@@ -285,6 +286,69 @@ function kinds(
 }
 
 describe("Router Light via DeepSeek-compatible provider", () => {
+  it(
+    "freezes first-contact summaries and resumes Heavy from persisted recall after restart",
+    async () => {
+      let calls = 0;
+      const f = await fixture([speak], true, () =>
+        calls++ === 0
+          ? { action: "recall", query: "此前交流的背景", candidateIds: [] }
+          : { action: "message", text: "接着当前话题聊" },
+      );
+      await f.submit(f.message());
+      await f.waitForDeliveries(1);
+      await f.settle();
+      const graph = await f.atoms();
+      expect(calls).toBe(2);
+      const situation = graph.find((a) => a.kind === "agent.situation.frozen")!;
+      const memory = (situation.payload.frame as any).memory;
+      expect(memory.fixed.map((n: any) => n.metadata.kind).sort()).toEqual([
+        "conversation",
+        "person",
+      ]);
+      expect(
+        memory.fixed.every((n: any) => n.metadata.sourceIds.length > 0),
+      ).toBe(true);
+      const recallResult = graph.find(
+        (a) => a.kind === "agent.heavy.recall.completed",
+      )!;
+      expect(recallResult.payload.status).toBe("completed");
+      expect(
+        graph.filter((a) => a.kind === "core.delivery.requested"),
+      ).toHaveLength(1);
+      const followup = graph.find(
+        (a) =>
+          a.kind === "core.model.task.requested" &&
+          a.payload.sourceInformationId === recallResult.informationId,
+      )!;
+      expect(
+        (followup.payload.prompt as any).variables.some(
+          (v: any) => v.name === "memory_recall",
+        ),
+      ).toBe(true);
+      const frozenBefore = JSON.stringify(situation.payload.frame);
+      const projection = await readSituation(f.database.information);
+      expect(projection.steps.find((s) => s.action === "recall")).toMatchObject(
+        { status: "recall-completed", receipt: null },
+      );
+      await f.restart();
+      await f.settle();
+      expect(calls).toBe(2);
+      expect(f.delivered).toHaveBeenCalledTimes(1);
+      const after = await f.atoms();
+      expect(
+        after.filter((a) => a.kind === "agent.heavy.recall.completed"),
+      ).toHaveLength(1);
+      expect(
+        JSON.stringify(
+          after.find((a) => a.informationId === situation.informationId)!
+            .payload.frame,
+        ),
+      ).toBe(frozenBefore);
+    },
+    MULTI_STAGE_TIMEOUT,
+  );
+
   it("keeps a turn pending until the raw Memory barrier recovers", async () => {
     const f = await fixture([speak]);
     const freeze = vi.spyOn(f.database.rawEvents, "freeze");

@@ -80,7 +80,7 @@ describe("context bootstrap", () => {
       expect(prompt.text).toContain("角色");
     }
     expect(planner.text).toContain("不能用来补造现实");
-    expect(composer.text).toContain("不能单独证明现实关系");
+    expect(composer.text).toContain("人物关系由本轮可见摘要与交流事实说明");
   });
 
   it("moves to contextual with sourced memory and history without treating every participant as familiar", () => {

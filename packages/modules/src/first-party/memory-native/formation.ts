@@ -66,12 +66,76 @@ export async function publishFormation(
         ...existing.keys(),
         ...nodes.map((n) => n.node.id),
       ]);
+      const validEvidence = (n: (typeof nodes)[number]["node"]) => {
+        const evidence = n.metadata.evidence;
+        const previous = existing.get(n.id);
+        if (n.metadata.kind !== "person") return !evidence;
+        if (evidence) {
+          if (Date.parse(evidence.observedAt) > Date.parse(occurredAt))
+            return false;
+          if (
+            evidence.sourceScope !== p.scope &&
+            evidence.sourceScope !== previous?.metadata.evidence?.sourceScope
+          )
+            return false;
+          if (
+            evidence.supersedes.some(
+              (id) =>
+                existing.get(id)?.metadata.ownerId !== n.metadata.ownerId ||
+                !nodes.some(
+                  ({ node }) =>
+                    node.id === id && node.metadata.status !== "active",
+                ),
+            )
+          )
+            return false;
+          // A self-report must be grounded in the speaker's own inbound message.
+          if (
+            evidence.basis === "self-report" &&
+            !n.metadata.sourceIds.some(
+              (id) =>
+                p.sources.some(
+                  (s) =>
+                    s.id === id &&
+                    s.sourceType === "inbound" &&
+                    s.ownerId === n.metadata.ownerId,
+                ) ||
+                (previous?.metadata.evidence?.basis === "self-report" &&
+                  previous.metadata.sourceIds.includes(id)),
+            )
+          )
+            return false;
+        }
+        if (n.metadata.scope !== "shared") return true;
+        // Legacy shared summaries can be revised in place, but new shared claims require explicit group self-report.
+        if (previous && n.metadata.status !== "active") return true;
+        if (!evidence)
+          return (
+            previous?.metadata.scope === "shared" &&
+            previous.content === n.content &&
+            n.metadata.sourceIds.every((id) =>
+              previous.metadata.sourceIds.includes(id),
+            )
+          );
+        let group = false;
+        try {
+          group = JSON.parse(evidence.sourceScope)[2] === "group";
+        } catch {
+          /* invalid scope */
+        }
+        return (
+          group &&
+          evidence.basis === "self-report" &&
+          evidence.temporality === "stable"
+        );
+      };
       const valid =
         edges.every(
           (e) => allowedNodes.has(e.sourceId) && allowedNodes.has(e.targetId),
         ) &&
         nodes.every(
           ({ node: n }) =>
+            validEvidence(n) &&
             allowedOwners.has(n.metadata.ownerId) &&
             (!existing.has(n.id) ||
               existing.get(n.id)!.metadata.ownerId === n.metadata.ownerId) &&

@@ -1,0 +1,19 @@
+description: 人物背景多轮对照。两组使用相同 Heavy 模型，逐例人工检查自然度。
+prompts:
+  - "评测 {{caseId}}"
+providers:
+  - id: file://portrait-behavior-provider.cjs
+    label: 有相关背景
+    config:
+      background: true
+  - id: file://portrait-behavior-provider.cjs
+    label: 只有关系摘要
+    config:
+      background: false
+tests: file://portrait-behavior-cases.json
+defaultTest:
+  assert:
+    - type: javascript
+      value: "context.providerResponse.metadata.valid === true"
+evaluateOptions:
+  maxConcurrency: 2
