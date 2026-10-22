@@ -1,4 +1,8 @@
 import {
+  frozenLifecycleSelector,
+  lifecycleStateInformationKind,
+} from "../lifecycle/activity.js";
+import {
   backgroundPeopleSelector,
   freezeBackgroundPeople,
 } from "./background-people.js";
@@ -177,8 +181,8 @@ export const routerSettingsSchema = z
     }),
     focusIdleMs: z.number().int().min(1000).max(3600000).default(120000).meta({
       title: "关注空闲期限",
-      description: "群聊直接唤醒或成功参与后的租约时长，单位毫秒。",
-      public: true,
+      description: "由 Lifecycle 的 activity.scopeIdleMs 统一提供，单位毫秒。",
+      public: false,
       default: 120000,
     }),
     staleAfterMs: z.number().int().min(0).meta({
@@ -698,6 +702,7 @@ function createRoutingModule(
         ...lightPlatformPolicyDeclarations,
       ],
       consumes: [
+        lifecycleStateInformationKind,
         focusOpened,
         focusRenewed,
         oneShotDueInformationKind,
@@ -743,6 +748,7 @@ function createRoutingModule(
         turnInterruptedInformationKind,
       ],
       selectors: [
+        frozenLifecycleSelector,
         situationHistorySelector,
         backgroundPeopleSelector,
         focusStateSelector,
@@ -849,6 +855,9 @@ function createRoutingModule(
                     (i: { informationId: string }) => i.informationId,
                   ),
                 });
+              const activity = (
+                await context.select(frozenLifecycleSelector)
+              )[0];
               raw = await context.registerOnce(
                 "agent.router.memory.context.frozen",
                 turn.informationId,
@@ -857,8 +866,18 @@ function createRoutingModule(
                   payload: {
                     turnInformationId: turn.informationId,
                     global: {
-                      text: snapshot.global.text,
-                      informationIds: [...snapshot.global.informationIds],
+                      text: [
+                        snapshot.global.text,
+                        ...(activity
+                          ? [
+                              `当前生命周期（内部规则状态，不是消息正文）：${JSON.stringify(activity.payload)}`,
+                            ]
+                          : []),
+                      ].join("\n\n"),
+                      informationIds: [
+                        ...snapshot.global.informationIds,
+                        ...(activity ? [activity.informationId] : []),
+                      ],
                     },
                     currentScope: {
                       text: snapshot.currentScope.text,

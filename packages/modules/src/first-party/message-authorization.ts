@@ -32,6 +32,17 @@ export const conversationContextInformationKind = defineInformationKind({
         .object({
           scope: z.enum(["group", "private", "web"]),
           name: z.string(),
+          sourceConversations: z
+            .array(
+              z
+                .object({
+                  sourceInformationIds: z.array(z.string()),
+                  name: z.string().nullable(),
+                  verifiedAt: z.string().nullable(),
+                })
+                .strict(),
+            )
+            .default([]),
           participants: z.array(
             z
               .object({

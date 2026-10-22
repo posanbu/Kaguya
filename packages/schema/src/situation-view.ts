@@ -1,3 +1,4 @@
+import { lifecycleSnapshotSchema } from "./lifecycle.js";
 import { z } from "zod";
 import { situationFrameSchema } from "./situation-contract.js";
 
@@ -18,6 +19,7 @@ export const situationStepViewSchema = z.object({
 });
 export const situationViewSchema = z.object({
   version: z.literal(1),
+  lifecycle: lifecycleSnapshotSchema.nullable().default(null),
   frames: z.array(situationFrameSchema),
   steps: z.array(situationStepViewSchema),
   truncated: z.boolean(),

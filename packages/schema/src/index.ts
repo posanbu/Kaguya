@@ -182,3 +182,9 @@ export * from "./module-templates.js";
 export * from "./memory-graph.js";
 export * from "./situation-view.js";
 export * from "./native-continuation.js";
+export {
+  activitySpanSchema,
+  lifecycleSnapshotSchema,
+  type ActivitySpan,
+  type LifecycleSnapshot,
+} from "./lifecycle.js";

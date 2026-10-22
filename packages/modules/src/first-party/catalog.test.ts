@@ -92,7 +92,7 @@ describe("first-party module configuration", () => {
         .flatMap((d) => [...d.manifest.produces, ...d.manifest.consumes])
         .map((k) => k.kind),
     );
-    expect(definitions).toHaveLength(8);
+    expect(definitions).toHaveLength(7);
     for (const { manifest } of definitions) {
       if (manifest.development?.status === "incomplete") {
         expect(manifest.inspection).toBeUndefined();
@@ -132,7 +132,7 @@ describe("first-party module configuration", () => {
   });
   it("materializes only native Memory as a switchable feature", () => {
     const defaults = createFirstPartyModuleConfigDefaults("production");
-    expect(defaults).toHaveLength(9);
+    expect(defaults).toHaveLength(8);
     expect(
       defaults.some((config) => config.definitionId === "memory.expression"),
     ).toBe(false);
@@ -145,7 +145,7 @@ describe("first-party module configuration", () => {
       defaults.find((config) => config.definitionId === "adapter.web")?.enabled,
     ).toBe(true);
     expect(createFirstPartyModuleActivations(catalog(), defaults)).toHaveLength(
-      7,
+      6,
     );
   });
 
@@ -232,8 +232,8 @@ describe("first-party module configuration", () => {
   it("validates complete settings even for disabled instances", () => {
     const defaults = createFirstPartyModuleConfigDefaults("production");
     const disabled = defaults.map((item) =>
-      item.instanceId === "heartbeat.default"
-        ? { ...item, enabled: false, settings: {} }
+      item.instanceId === "lifecycle.default"
+        ? { ...item, enabled: false, settings: { pulse: { intervalMs: -1 } } }
         : item,
     );
     expect(() =>
@@ -244,13 +244,13 @@ describe("first-party module configuration", () => {
   it("does not activate a valid disabled instance", () => {
     const defaults = createFirstPartyModuleConfigDefaults("production");
     const disabled = defaults.map((item) =>
-      item.instanceId === "heartbeat.default"
+      item.instanceId === "lifecycle.default"
         ? { ...item, enabled: false }
         : item,
     );
     expect(
       createFirstPartyModuleActivations(catalog(), disabled).some(
-        ({ instanceId }) => instanceId === "heartbeat.default",
+        ({ instanceId }) => instanceId === "lifecycle.default",
       ),
     ).toBe(false);
   });

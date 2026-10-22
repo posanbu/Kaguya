@@ -231,6 +231,39 @@ export function SituationPage({ token }: { token: string }) {
   }, [frame?.id]);
   return (
     <div className="situation-page" aria-label="情境工作台">
+      {data?.lifecycle && (
+        <section className="situation-activity" aria-label="当前活动">
+          <strong>
+            当前活动：
+            {
+              {
+                idle: "正在发呆",
+                observing: "正在查看会话",
+                working: "正在处理任务",
+                sleeping: "正在睡觉",
+              }[data.lifecycle.timeline.at(-1)?.activity ?? "idle"]
+            }
+          </strong>
+          <details>
+            <summary>最近十分钟的活动</summary>
+            <ol>
+              {data.lifecycle.timeline.map((span) => (
+                <li key={`${span.startedAt}:${span.activity}:${span.scopeKey}`}>
+                  <time dateTime={span.startedAt}>
+                    {new Date(span.startedAt).toLocaleTimeString()}
+                  </time>
+                  {" — "}
+                  <time dateTime={span.through}>
+                    {new Date(span.through).toLocaleTimeString()}
+                  </time>{" "}
+                  {span.transition}
+                  {span.scopeKey ? `（${span.scopeKey}）` : ""}
+                </li>
+              ))}
+            </ol>
+          </details>
+        </section>
+      )}
       {state.error && (
         <p className="situation-feedback" role="alert">
           读取失败：{state.error}。正在重试，保留上次状态。

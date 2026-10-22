@@ -1,5 +1,6 @@
 import {
   situationFrameSchema,
+  lifecycleSnapshotSchema,
   situationViewSchema,
   type SituationStepView,
 } from "@kaguya/schema";
@@ -17,7 +18,7 @@ const terminalKinds = new Set(
 
 /** Read projection only. Opaque native continuation data never leaves this endpoint. */
 export async function readSituation(ledger: InspectionSource["ledger"]) {
-  const [frozen, requests] = await Promise.all([
+  const [frozen, requests, activities] = await Promise.all([
     ledger.inspectPage({ kind: "agent.situation.frozen", limit: 51 }),
     ledger.inspectPage({
       kind: "core.model.task.requested",
@@ -27,6 +28,7 @@ export async function readSituation(ledger: InspectionSource["ledger"]) {
       },
       limit: 61,
     }),
+    ledger.inspectPage({ kind: "agent.lifecycle.state.recorded", limit: 1 }),
   ]);
   const frames = frozen.slice(0, 50).flatMap((atom) => {
     const result = situationFrameSchema.safeParse(atom.payload.frame);
@@ -216,6 +218,8 @@ export async function readSituation(ledger: InspectionSource["ledger"]) {
   );
   return situationViewSchema.parse({
     version: 1,
+    lifecycle:
+      lifecycleSnapshotSchema.safeParse(activities[0]?.payload).data ?? null,
     frames,
     steps,
     truncated: frozen.length > 50 || requests.length > 60,

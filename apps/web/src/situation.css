@@ -713,3 +713,28 @@
   max-width: 100%;
   font-size: 12px;
 }
+
+.situation-activity {
+  flex-shrink: 0;
+  padding: 10px 16px;
+  color: var(--kaguya-ink);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.situation-activity details {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--kaguya-muted);
+}
+.situation-activity summary {
+  cursor: pointer;
+}
+.situation-activity ol {
+  max-height: 10rem;
+  overflow: auto;
+  padding-left: 20px;
+  line-height: 1.7;
+}
+.situation-activity time {
+  font-variant-numeric: tabular-nums;
+}

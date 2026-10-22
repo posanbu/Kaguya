@@ -1,5 +1,7 @@
 # Heartbeat
 
+此目录仅保留历史导入兼容入口和回归测试。生产装配统一使用 [Lifecycle](../lifecycle/README.md)，下文描述存量事件的兼容行为。
+
 ## 目的与非目标
 
 Heartbeat 可靠地按 scope 积攒入站注册水位并产生观察机会。它不判断正文含义、话题或回复动作，也不按固定 tick 轮询。

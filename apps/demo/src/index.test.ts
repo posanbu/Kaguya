@@ -92,7 +92,14 @@ describe("demo entry point", () => {
     });
 
     expect(receipt.rootInformationId).toMatch(/^demo-information-\d+$/u);
-    expect(output).toEqual([
+    expect(output).toContainEqual(
+      expect.stringMatching(/^agent\.lifecycle\.state\.recorded: [1-9]\d*$/),
+    );
+    expect(
+      output.filter(
+        (line) => !line.startsWith("agent.lifecycle.state.recorded:"),
+      ),
+    ).toEqual([
       `root informationId: ${receipt.rootInformationId}`,
       "agent.attention.arousal.activity: 1",
       "agent.attention.arousal.completed: 1",

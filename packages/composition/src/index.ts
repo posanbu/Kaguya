@@ -1,3 +1,7 @@
+import {
+  lifecycleStartupCapability,
+  lifecycleStartedInformationKind,
+} from "@kaguya/modules";
 /**
  * 按 QQ 表情实例实际开关装配草稿处理器并批准其 light 模型任务，非 QQ 和禁用路径保持原行为。
  * 模板加载器统一选择所有模块的 default/local 正文；Catalog 注入 Light、Heavy 和 Expression，授权正文渲染器注入 Runtime。
@@ -265,8 +269,25 @@ export function createMessageComposition(
       embeddings: memoryEnabled ? nativeEmbeddings(options) : [],
     },
     modelTask,
-    capabilities: ({ oneShotSchedule }: RuntimeCapabilityContext) => [
+    capabilities: ({
+      oneShotSchedule,
+      core,
+      now,
+    }: RuntimeCapabilityContext) => [
       { capability: oneShotScheduleCapability, value: oneShotSchedule },
+      {
+        capability: lifecycleStartupCapability,
+        value: {
+          start: async (instanceId: string) => {
+            await core.register(lifecycleStartedInformationKind, {
+              occurredAt: now().toISOString(),
+              source: `module:${instanceId}`,
+              payload: { instanceId, at: now().toISOString() },
+              references: [],
+            });
+          },
+        },
+      },
     ],
   };
 }

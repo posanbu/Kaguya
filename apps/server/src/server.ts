@@ -1,3 +1,4 @@
+import { migrateLifecycleConfig } from "@kaguya/config";
 /**
  * Memory 图管理通过动态 database.memoryGraph 门面接入 HTTP，数据库重挂载后使用当前实例。
  * 模板管理与配置应用共享写锁，只写本地覆盖，用户需重启加载新模板。
@@ -213,6 +214,10 @@ export async function startKaguyaServer(
           rootDir: bootstrap.configRoot,
         })
       ).status === "setup_required";
+    await migrateLifecycleConfig(
+      bootstrap.configRoot,
+      createFirstPartyModuleConfigDefaults("production", workspaceIdentity()),
+    );
     configuration = await createConfigurationManagement(bootstrap.configRoot);
     configurationStatus = await configuration.getRegistryStatus();
     selectedProfile = await configuration.getRuntimeProfile(

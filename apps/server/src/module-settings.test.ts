@@ -178,33 +178,19 @@ it("first-party editable schemas expose names, constraints and no invented insta
     catalog: createMessageCatalog(),
     exclusive: (op) => op(),
   });
-  const heartbeat = await service.get("agent.heartbeat.short");
-  expect(heartbeat.fields).toContainEqual(
-    expect.objectContaining({
-      key: "maxReplacementAttempts",
-      title: "最大替换次数",
-      maximum: 20,
-      default: 3,
-    }),
-  );
-  const arousal = await service.get("agent.attention.arousal");
-  expect(arousal.fields).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        key: "idleSleepEnabled",
-        title: "全局无消息休眠",
-        default: false,
-      }),
-      expect.objectContaining({
-        key: "idleSleepAfterMs",
-        default: 120_000,
-      }),
-      expect.objectContaining({
-        key: "periodicWakeEveryMs",
-        default: 300_000,
-      }),
-    ]),
-  );
+  const lifecycle = await service.get("agent.lifecycle");
+  expect(lifecycle.fields.map((f) => f.key)).toEqual([
+    "pulse",
+    "activity",
+    "sleep",
+    "observation",
+  ]);
+  expect(lifecycle.fields.map((f) => f.title)).toEqual([
+    "时间节拍",
+    "当前活动",
+    "睡眠与唤醒",
+    "观察调度",
+  ]);
   expect(
     (await service.get("agent.router")).fields.find(
       (f) => f.key === "botNames",

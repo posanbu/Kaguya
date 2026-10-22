@@ -59,6 +59,7 @@ describe("developer inspection", () => {
     database = await createTestingDatabase();
     runtime = new KaguyaRuntime({
       database,
+      now: () => new Date(time),
       ...createMessageComposition(undefined, {
         moduleConfigs: createFirstPartyModuleConfigDefaults("test"),
       }),
@@ -309,7 +310,7 @@ describe("developer inspection", () => {
     const before = await database.information.inspectPage({ limit: 100 });
     const response = await get("situation");
     expect(response.statusCode).toBe(200);
-    expect(response.json().data).toEqual({
+    expect(response.json().data).toMatchObject({
       version: 1,
       frames: [],
       steps: [],
@@ -426,7 +427,7 @@ describe("developer inspection", () => {
   });
   it("shows non-semantic observations, filters by registered view and binds pagination to it", async () => {
     for (const [id, source, outcome, signal] of [
-      ["gate-a", "module:attention-arousal.default", "defer", "passive"],
+      ["gate-a", "module:lifecycle.default", "defer", "passive"],
       ["gate-b", "module:historical-gate", "observe", "recheck"],
     ] as const) {
       await database.information.append(
@@ -456,8 +457,7 @@ describe("developer inspection", () => {
         [],
       );
     }
-    const query =
-      "atoms?definitionId=agent.attention.arousal&view=gates&limit=1";
+    const query = "atoms?definitionId=agent.lifecycle&view=gates&limit=1";
     const response = await get(query);
     expect(response.statusCode).toBe(200);
     const first = response.json().data;
@@ -477,8 +477,8 @@ describe("developer inspection", () => {
     expect(second.items[0].informationId).toBe("gate-a");
     expect(second.nextCursor).toBeNull();
     expect(
-      (await get(query + "&source=module:attention-arousal.default")).json()
-        .data.items[0].informationId,
+      (await get(query + "&source=module:lifecycle.default")).json().data
+        .items[0].informationId,
     ).toBe("gate-a");
     expect((await get(query + "&source=module:other")).statusCode).toBe(400);
     expect((await get(query + "&kind=memory.text")).statusCode).toBe(400);

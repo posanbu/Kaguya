@@ -1,3 +1,7 @@
+import {
+  lifecycleStartupCapability,
+  lifecycleStartedInformationKind,
+} from "@kaguya/modules";
 /**
  * 测试夹具显式装配 QQ 表情模板，验证新增模块契约与既有流程兼容。
  * 模型审批覆盖 Router Light 与 Expression 的 light，以及 Heavy 的 heavy，恢复屏障仍由 Runtime 统一管理。
@@ -213,8 +217,25 @@ describe("KaguyaRuntime one-shot scheduler lifecycle", () => {
         }),
       },
       oneShotRecoveryGate: recovery.promise,
-      capabilities: ({ oneShotSchedule }: RuntimeCapabilityContext) => [
+      capabilities: ({
+        oneShotSchedule,
+        core,
+        now,
+      }: RuntimeCapabilityContext) => [
         { capability: oneShotScheduleCapability, value: oneShotSchedule },
+        {
+          capability: lifecycleStartupCapability,
+          value: {
+            start: async (instanceId: string) => {
+              await core.register(lifecycleStartedInformationKind, {
+                source: `module:${instanceId}`,
+                occurredAt: now().toISOString(),
+                payload: { instanceId, at: now().toISOString() },
+                references: [],
+              });
+            },
+          },
+        },
       ],
     } as never);
     cleanups.push(() => runtime.close());

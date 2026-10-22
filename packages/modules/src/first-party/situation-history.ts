@@ -92,6 +92,23 @@ export const situationHistorySelector = defineInformationSelector({
           limit: 1,
         }),
       )[0];
+      const contextId = (
+        source?.payload.turn as { contextInformationId?: string } | undefined
+      )?.contextInformationId;
+      if (contextId) {
+        await ledger.find({ informationIds: [contextId], limit: 1 });
+        const backgrounds = await ledger.related({
+          from: [contextId],
+          relation: "core:uses-context",
+          direction: "incoming",
+          limit: 1000,
+        });
+        add(
+          backgrounds.filter(
+            (a) => a.kind === "agent.router.conversation.context.frozen",
+          ),
+        );
+      }
       const candidateId = (
         source?.payload.turn as { candidateInformationId?: string } | undefined
       )?.candidateInformationId;
@@ -211,6 +228,19 @@ export const situationHistorySelector = defineInformationSelector({
           receipt?.payload.outcome === "unknown" ||
           calls.size > 0;
       if (index < completed.length - 64 && !unresolved) continue;
+      const contextId = (
+        source?.payload.turn as { contextInformationId?: string } | undefined
+      )?.contextInformationId;
+      for (const background of selected.values())
+        if (
+          background.kind === "agent.router.conversation.context.frozen" &&
+          background.references.some(
+            (r) =>
+              r.relation === "core:uses-context" &&
+              r.informationId === contextId,
+          )
+        )
+          retained.add(background.informationId);
       for (const id of [
         result.informationId,
         recallRequest?.informationId,

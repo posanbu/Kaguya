@@ -264,3 +264,28 @@ describe("read-only situation projection", () => {
     });
   });
 });
+
+it("shows current lifecycle activity without any model request", async () => {
+  const lifecycle = {
+    state: "awake",
+    at,
+    lastActivityAt: at,
+    scopeActivityAt: {},
+    timeline: [
+      {
+        activity: "idle",
+        scopeKey: null,
+        startedAt: at,
+        through: at,
+        reason: "pulse",
+        transition: "暂时没什么事，发会儿呆。",
+      },
+    ],
+  };
+  const view = await readSituation(
+    ledger([atom("activity", "agent.lifecycle.state.recorded", lifecycle)]),
+  );
+  expect(view.lifecycle).toEqual(lifecycle);
+  expect(view.frames).toEqual([]);
+  expect(view.steps).toEqual([]);
+});

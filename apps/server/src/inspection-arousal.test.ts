@@ -12,8 +12,7 @@ import {
 
 let database: Awaited<ReturnType<typeof createTestingDatabase>>;
 const app = Fastify();
-const base =
-  "/api/v1/inspection/modules/agent.attention.arousal/surfaces/arousal";
+const base = "/api/v1/inspection/modules/agent.lifecycle/surfaces/arousal";
 const headers = { authorization: "Bearer arousal-test" };
 
 beforeAll(async () => {

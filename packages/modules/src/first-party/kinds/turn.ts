@@ -587,6 +587,9 @@ export const attentionArousalStateRecordedInformationKind =
           "agent.situation.frozen",
           "agent.attention.arousal.activity",
           "core.schedule.one-shot.due",
+          "core.message.inbound.text",
+          "agent.lifecycle.started",
+          "agent.lifecycle.state.recorded",
         ],
       },
       "core:context": {

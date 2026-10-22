@@ -21,11 +21,9 @@ description: 在网页中调整模块参数、启用状态和 Prompt 模板。
 
 **Router `router.default`** — 认领并冻结观察后的输入，调用内部 Light 决定发送、等待或静默，并管理 Focus 租约。Light 固定使用 Profile 的 `light` 档位；两个档位可以指向同一实际模型。
 
-**注意力 `attention-arousal.default`** — 控制 @、叫名和持续关注相关设置。
+**Lifecycle `lifecycle.default`** — 统一管理时间节拍、当前活动、睡眠唤醒和观察调度。内部子模块共用状态，不能独立启停。
 
-**短心跳 `heartbeat.default`** — 等待连续输入，处理延期和重新规划的时间。
-
-以上三个模块的参数见[发言频率与等待](./reply-settings)。
+Router 与 Lifecycle 的参数见[发言、休眠与等待](./reply-settings)。
 
 **统一记忆 `memory.native.default`** — 人物关系、会话属性、自身、经历和表达共用版本化记忆图。按作用域积累 8 条来源或等待 60 秒形成一批，单批最多 24 条。语义与语言 embedding 独立配置，默认关闭。
 

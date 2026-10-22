@@ -27,6 +27,7 @@ import {
   turnContextCompletedInformationKind,
   lightActionSchema,
   messageIntentRequestedInformationKind,
+  messageTargetSchema,
   messageIntentRequestedInformationPayloadSchema,
   targetAuthorizedInformationKind,
   messageConfirmedInformationKind,
@@ -244,6 +245,7 @@ export class MessageTargetService implements MessageAuthorization {
       scope: source.destination.kind,
       name: source.destination.kind === "group" ? "当前群聊" : "当前会话",
       participants: [],
+      sourceConversations: [],
     };
     const accounts = new Map<string, string>();
     for (const input of inputs) {
@@ -334,6 +336,42 @@ export class MessageTargetService implements MessageAuthorization {
         relation: person.relation,
       });
     }
+    const historicalSources = new Map<
+      string,
+      { target: MessageTarget; informationIds: string[] }
+    >();
+    historicalSources.set(targetKey(source), {
+      target: {
+        adapterId: source.adapterId,
+        platform: source.platform,
+        destination: source.destination,
+      },
+      informationIds: inputs.map((input) => input.informationId),
+    });
+    const historicalIds = Array.isArray(
+      situation?.payload.historyInformationIds,
+    )
+      ? situation.payload.historyInformationIds.filter(
+          (id): id is string => typeof id === "string",
+        )
+      : [];
+    for (const atom of await this.core.getMany(historicalIds)) {
+      const candidate = messageTargetSchema.safeParse(atom.payload.target);
+      if (!candidate.success) continue;
+      const key = targetKey(candidate.data);
+      const entry = historicalSources.get(key) ?? {
+        target: candidate.data,
+        informationIds: [],
+      };
+      entry.informationIds.push(atom.informationId);
+      historicalSources.set(key, entry);
+    }
+    const historicalEntries = [...historicalSources.values()];
+    background.sourceConversations = historicalEntries.map((entry) => ({
+      sourceInformationIds: entry.informationIds,
+      name: null,
+      verifiedAt: null,
+    }));
     const resolution: Projection["resolution"] = {
       status: "unavailable",
       targets: [],
@@ -342,6 +380,21 @@ export class MessageTargetService implements MessageAuthorization {
     if (!this.#closed && this.directory && this.#routeCandidates.size < 1000) {
       try {
         const snapshot = await this.directory.listTargets();
+        for (const [
+          index,
+          historical,
+        ] of background.sourceConversations.entries()) {
+          const matches = snapshot.candidates.filter(
+            (c) => targetKey(c) === targetKey(historicalEntries[index]!.target),
+          );
+          const names = [
+            ...new Set(matches.map((c) => c.name).filter(Boolean)),
+          ];
+          if (names.length === 1) {
+            historical.name = names[0]!;
+            historical.verifiedAt = this.now().toISOString();
+          }
+        }
         const unique = [
           ...new Map(
             snapshot.candidates

@@ -30,7 +30,7 @@ const view = (
 ) => ({ id, title, description, kinds, fields: fields(entries) });
 const arousalFields = {
   outcome: "结果",
-  arousalState: "Arousal 状态",
+  arousalState: "睡眠状态",
   arousalStateInformationId: "状态事实",
   wakeSignal: "唤醒信号",
   scopeKey: "会话范围",
@@ -55,7 +55,7 @@ const arousalViewFields = {
   startedAt: "开始时间",
   expiresAt: "到期时间",
   generation: "代次",
-  heartbeatInformationId: "短心跳",
+  heartbeatInformationId: "观察调度",
   triggerInformationId: "观察触发",
   lastEvaluatedAt: "最近检查时间",
   lastInboundInformationId: "最近全局消息",

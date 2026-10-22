@@ -116,10 +116,25 @@ export function assembleNativeInput(input: {
             r.informationId === recallRequest?.informationId,
         ),
     );
+    const contextId = (
+      source?.payload.turn as { contextInformationId?: string } | undefined
+    )?.contextInformationId;
+    const background = input.atoms.find(
+      (a) =>
+        a.kind === "agent.router.conversation.context.frozen" &&
+        a.references.some(
+          (r) =>
+            r.relation === "core:uses-context" && r.informationId === contextId,
+        ),
+    );
     const outcome: NativeMessage = {
       role: "user",
       content: JSON.stringify({
         actionRecord: atom.informationId,
+        occurredAt: atom.occurredAt,
+        source: source?.payload.target ?? source?.payload.source ?? null,
+        conversation: background?.payload.background ?? null,
+        evidenceRole: "historical-assistant-output-not-current-activity",
         status: recall
           ? recallResult
             ? `recall-${recallResult.payload.status}`

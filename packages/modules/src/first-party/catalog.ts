@@ -31,8 +31,10 @@ import {
 import type { JsonObject } from "@kaguya/schema";
 import { createNativeMemoryModule } from "./memory-native/index.js";
 import { identityModule } from "./identity/index.js";
-import { createAttentionArousalModule } from "./attention-arousal/index.js";
-import { heartbeatModule } from "./heartbeat/index.js";
+import {
+  createLifecycleModule,
+  lifecycleSettingsSchema,
+} from "./lifecycle/index.js";
 import {
   createRouterModule,
   createSituationRuntimeModule,
@@ -64,12 +66,11 @@ export function createFirstPartyModuleCatalog<
       nativeMemoryTemplate: options.nativeMemoryTemplate,
     }),
     identityModule,
-    createAttentionArousalModule({ timeZone: options.agentIdentity.timeZone }),
+    createLifecycleModule({ timeZone: options.agentIdentity.timeZone }),
     createHeavyModule({
       ...options,
       draftProcessingEnabled: options.qqExpressionEnabled ?? false,
     }),
-    heartbeatModule,
     createRouterModule(options),
     createSituationRuntimeModule(options),
   );
@@ -124,33 +125,10 @@ export function createFirstPartyModuleConfigDefaults(
     }),
     Object.freeze({
       version: 1 as const,
-      instanceId: "attention-arousal.default",
-      definitionId: "agent.attention.arousal",
+      instanceId: "lifecycle.default",
+      definitionId: "agent.lifecycle",
       enabled: true,
-      settings: Object.freeze({
-        idleSleepEnabled: false,
-        idleSleepAfterMs: 120_000,
-        nightSleepEnabled: false,
-        nightSleepStart: "23:00",
-        nightSleepEnd: "07:00",
-        periodicWakeEnabled: true,
-        periodicWakeEveryMs: 300_000,
-      }),
-    }),
-    Object.freeze({
-      version: 1 as const,
-      instanceId: "heartbeat.default",
-      definitionId: "agent.heartbeat.short",
-      enabled: true,
-      settings: Object.freeze({
-        interruptQuietMs: 1000,
-        maxReplacementAttempts: 3,
-        totalWaitBudget: 3,
-        noActionBackoffBaseMs: 15_000,
-        noActionBackoffCapMs: 300_000,
-        noActionBackoffStartCount: 2,
-        noActionBackoffBypassPendingCount: 6,
-      }),
+      settings: lifecycleSettingsSchema.parse({}),
     }),
     Object.freeze({
       version: 1 as const,
@@ -183,6 +161,12 @@ export function createFirstPartyModuleActivations(
   configs: readonly FirstPartyModuleInstanceConfig[],
   _identity: Pick<AgentIdentity, "name" | "aliases"> = DEFAULT_AGENT_IDENTITY,
 ): readonly InformationModuleActivation[] {
+  const lifecycle = configs.find(
+    (config) => config.definitionId === "agent.lifecycle" && config.enabled,
+  );
+  const scopeIdleMs = lifecycle
+    ? lifecycleSettingsSchema.parse(lifecycle.settings).activity.scopeIdleMs
+    : undefined;
   return Object.freeze(
     configs
       .flatMap((config) =>
@@ -217,7 +201,10 @@ export function createFirstPartyModuleActivations(
           );
         }
         const settings = definition.manifest.settingsSchema.safeParse(
-          config.settings,
+          scopeIdleMs !== undefined &&
+            ["agent.router", "agent.situation"].includes(config.definitionId)
+            ? { ...config.settings, focusIdleMs: scopeIdleMs }
+            : config.settings,
         );
         if (!settings.success) {
           throw new ModuleConfigurationError(

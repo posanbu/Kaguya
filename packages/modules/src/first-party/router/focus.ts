@@ -1,3 +1,4 @@
+import { lifecycleStateInformationKind } from "../lifecycle/activity.js";
 /**
  * 功能概述：关注租约后台生命周期，消费 Router 的直接开启与回合终态。
  * focusStateSelector 从账本限定 scope 读取最新租约和终态；调度以 grant ID 幂等，重启由 durable delivery 恢复。
@@ -80,7 +81,13 @@ export const focusStateSelector = defineInformationSelector({
           )[0]
         : undefined;
     const scopeKey = String(
-      candidate?.payload.scopeKey ?? sourceAtom.payload.scopeKey,
+      candidate?.payload.scopeKey ??
+        sourceAtom.payload.scopeKey ??
+        (sourceAtom.kind === lifecycleStateInformationKind.kind
+          ? (sourceAtom.payload.timeline as { scopeKey: string | null }[]).at(
+              -1,
+            )?.scopeKey
+          : undefined),
     );
     const grants = await ledger.find({
       kinds: [focusOpened.kind, focusRenewed.kind],
@@ -106,6 +113,43 @@ export function createRouterFocusSubscriptions(
 ) {
   const scheduler = lifecycle.use(oneShotScheduleCapability);
   return [
+    onInformation(
+      lifecycleStateInformationKind,
+      { subscriptionId: "focus.activity", delivery: "durable" },
+      async (atom, context) => {
+        const scopeKey = atom.payload.timeline.at(-1)?.scopeKey;
+        if (!scopeKey || atom.payload.state !== "awake") return;
+        const at = atom.payload.scopeActivityAt[scopeKey];
+        if (!at) return;
+        const state = await context.select(focusStateSelector);
+        const grant = activeFocus(state, scopeKey, at);
+        if (!grant || at <= String(grant.payload.startedAt)) return;
+        const duration =
+          Date.parse(String(grant.payload.expiresAt)) -
+          Date.parse(String(grant.payload.startedAt));
+        await context.registerOnce(
+          "agent.router.focus.activity",
+          `${scopeKey}:${at}`,
+          focusRenewed,
+          {
+            payload: {
+              scopeKey,
+              generation: atom.informationId,
+              startedAt: at,
+              expiresAt: new Date(Date.parse(at) + duration).toISOString(),
+              reason: "actual-activity",
+              sourceInformationId: atom.informationId,
+            },
+            references: [
+              {
+                relation: "core:uses-context",
+                informationId: grant.informationId,
+              },
+            ],
+          },
+        );
+      },
+    ),
     ...[focusOpened, focusRenewed].map((kind) =>
       onInformation(
         kind,

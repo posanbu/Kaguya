@@ -1,3 +1,7 @@
+import {
+  lifecycleStartupCapability,
+  lifecycleStartedInformationKind,
+} from "@kaguya/modules";
 /**
  * 测试夹具显式装配 QQ 表情模板，验证新增模块契约与既有流程兼容。
  * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
@@ -369,9 +373,8 @@ describe("KaguyaRuntime", () => {
           )
           .map((entry) => entry.definitionId),
       ).toEqual([
-        "agent.attention.arousal",
-        "agent.heartbeat.short",
         "agent.heavy",
+        "agent.lifecycle",
         "memory.identity",
         "agent.router",
         "agent.situation",
@@ -962,6 +965,7 @@ describe("KaguyaRuntime", () => {
           "memory.identity.person.resolution",
           "memory.identity.person.context.completed",
           "agent.attention.arousal.activity",
+          "agent.lifecycle.state.recorded",
           "agent.attention.arousal.completed",
           "agent.attention.arousal.state.recorded",
           "agent.heartbeat.candidate",
@@ -1658,8 +1662,25 @@ function createMessageComposition(
   return {
     catalog,
     activations,
-    capabilities: ({ oneShotSchedule }: RuntimeCapabilityContext) => [
+    capabilities: ({
+      oneShotSchedule,
+      core,
+      now,
+    }: RuntimeCapabilityContext) => [
       { capability: oneShotScheduleCapability, value: oneShotSchedule },
+      {
+        capability: lifecycleStartupCapability,
+        value: {
+          start: async (instanceId: string) => {
+            await core.register(lifecycleStartedInformationKind, {
+              occurredAt: now().toISOString(),
+              source: `module:${instanceId}`,
+              payload: { instanceId, at: now().toISOString() },
+              references: [],
+            });
+          },
+        },
+      },
     ],
     modelTask: {
       renderStructuredOutputPrompt,

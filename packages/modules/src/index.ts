@@ -28,14 +28,11 @@ export {
   type CreateRouterModuleOptions,
 } from "./first-party/router/index.js";
 export {
-  heartbeatModule,
   heartbeatSettingsSchema,
   heartbeatScopeSelector,
   heartbeatDueSelector,
 } from "./first-party/heartbeat/index.js";
 export {
-  createAttentionArousalModule,
-  attentionArousalModule,
   attentionArousalSettingsSchema,
   attentionArousalStateSelector,
   attentionArousalTimerSelector,
@@ -133,3 +130,13 @@ export {
 export { createAuthorizedMessagePromptRenderer } from "./first-party/heavy/authorized-prompt.js";
 
 export { createQqExpressionModule } from "./first-party/qq-expression/index.js";
+
+export {
+  createLifecycleModule,
+  lifecycleSettingsSchema,
+} from "./first-party/lifecycle/index.js";
+export {
+  lifecycleStartupCapability,
+  lifecycleStartedInformationKind,
+} from "./first-party/lifecycle/pulse.js";
+export { lifecycleStateInformationKind } from "./first-party/lifecycle/activity.js";
