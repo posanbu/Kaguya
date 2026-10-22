@@ -884,9 +884,48 @@ export class MessageTargetService implements MessageAuthorization {
     atom: DeepReadonly<InformationAtom>,
   ): Promise<DeepReadonly<InformationAtom>> {
     let current = atom;
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 16; i++) {
       if (current.kind === messageIntentRequestedInformationKind.kind)
         return current;
+      if (current.kind === "agent.heavy.step.requested") {
+        const rootId = current.payload.intentInformationId;
+        if (
+          typeof rootId !== "string" ||
+          !current.references.some(
+            (r) =>
+              r.relation === "core:uses-context" && r.informationId === rootId,
+          )
+        )
+          break;
+        const root = await this.read(rootId);
+        if (
+          root.kind !== messageIntentRequestedInformationKind.kind ||
+          root.references.some(
+            (r) => r.relation === "agent:target-authorization",
+          ) ||
+          JSON.stringify(root.payload.turn) !==
+            JSON.stringify(current.payload.turn) ||
+          targetKey(root.payload.target as unknown as MessageTarget) !==
+            targetKey(current.payload.target as unknown as MessageTarget)
+        )
+          break;
+        return root;
+      }
+      if (current.kind === "core.schedule.one-shot.due") {
+        const scheduleId = current.references.find(
+          (r) => r.relation === "core:status-of",
+        )?.informationId;
+        if (!scheduleId) break;
+        const schedule = await this.read(scheduleId);
+        if (
+          schedule.kind !== "core.schedule.one-shot.requested" ||
+          (schedule.payload.input as { purpose?: string }).purpose !==
+            "heavy-speech"
+        )
+          break;
+        current = schedule;
+        continue;
+      }
       const causes = await this.core.select(
         causeSelector,
         current.informationId,

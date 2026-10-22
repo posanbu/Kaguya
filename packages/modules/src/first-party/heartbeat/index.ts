@@ -339,7 +339,8 @@ export const heartbeatModule = defineInformationModule({
               if (!runtimeContext) continue;
               const observed = selected.find(
                 (item) =>
-                  item.kind === "agent.router.turn.context.completed" &&
+                  (item.kind === "agent.router.turn.context.completed" ||
+                    item.kind === "agent.heavy.step.observed") &&
                   item.payload.scopeKey === previousCandidate.payload.scopeKey,
               );
               const signals = [
@@ -484,7 +485,9 @@ export const heartbeatModule = defineInformationModule({
               const latest = pendingInputs.at(-1);
               if (!latest) return;
               const observedContext = observations.find(
-                (item) => item.kind === "agent.router.turn.context.completed",
+                (item) =>
+                  item.kind === "agent.router.turn.context.completed" ||
+                  item.kind === "agent.heavy.step.observed",
               );
               const signals = [
                 ...new Set(
@@ -708,7 +711,9 @@ export const heartbeatModule = defineInformationModule({
                   string | undefined);
               if (!upperInformationId) return;
               const observedContext = state.find(
-                (a) => a.kind === "agent.router.turn.context.completed",
+                (a) =>
+                  a.kind === "agent.router.turn.context.completed" ||
+                  a.kind === "agent.heavy.step.observed",
               );
               const unreadAfterInformationId = replayCandidate
                 ? (replayCandidate.payload.unreadAfterInformationId as
@@ -819,7 +824,9 @@ export const heartbeatModule = defineInformationModule({
                 (waiting ? Number(previousObservation.payload.attempt) + 1 : 0);
               if (!previous && !interrupted) {
                 const observedContext = state.find(
-                  (item) => item.kind === "agent.router.turn.context.completed",
+                  (item) =>
+                    item.kind === "agent.router.turn.context.completed" ||
+                    item.kind === "agent.heavy.step.observed",
                 );
                 const signals = [
                   ...new Set(

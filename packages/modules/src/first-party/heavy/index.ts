@@ -1,38 +1,27 @@
 /**
- * 启用独立草稿处理器时，QQ 模型输出先登记 draft；最终 assistant 仍经过原有授权和唯一投递槽。
- * manifest.promptTemplates 显式声明消息模板组，供管理端按归属读取。
- * Heavy 固定使用 heavy 模型档位，模块 settings 为空对象。
- * 功能概述：消息编写模块消费 Router 产生的目标与冻结 turn 意图，经通用 Model Task 生成文本。
- * 宿主授权能力在选取上下文前校验目标；跨会话只使用批准 Prompt，正文确认后才通过同一 release 创建 delivery。
- * 普通回复也调用宿主冻结背景，仅追加 background 投影，不把其他会话目标引用或 ID 传给正文模型。
- * 场景、人物背景与表达习惯均使用外部模板；背景和表达 renderer 在模块构造时按声明编译，只记录实际追加的模板和变量。
- * 主要职责：createHeavyModule 装配三个 durable 订阅；messageTaskOutputSchema 校验非空文本；
- * heavySettingsSchema 不接受可调设置。完成选择器沿 completed→requested→intent 核对任务来源，
- * 再以实例与事实 ID 为 registerOnce 键分别记录 assistant 和纯文本投递，重复事件不产生重复业务输出。
- * 代码库关系：message-context 选择冻结上下文，message-prompt 编译全部本轮输入；Runtime 注入模型能力及完成定义。
- * 输入输出与副作用：意图只携带 target、turn 与 memoryInformationIds；assistant.source 保留 target，
- * 不复制入站正文或消息 ID，不提供固定路由或自动引用回复。失败或取消的模型任务不产生 assistant。
- * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
- * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
- */
-/**
- * 启用独立草稿处理器时，QQ 模型输出先登记 draft；最终 assistant 仍经过原有授权和唯一投递槽。
- * manifest.promptTemplates 显式声明消息模板组，供管理端按归属读取。
- * Heavy 固定使用 heavy 模型档位，模块 settings 为空对象。
- * 功能概述：消息编写模块消费 Router 产生的目标与冻结 turn 意图，经通用 Model Task 生成文本。
- * 宿主授权能力在选取上下文前校验目标；跨会话只使用批准 Prompt，正文确认后才通过同一 release 创建 delivery。
- * 普通回复也调用宿主冻结背景，仅追加 background 投影，不把其他会话目标引用或 ID 传给正文模型。
- * 场景、人物背景与表达习惯均使用外部模板；背景和表达 renderer 在模块构造时按声明编译，只记录实际追加的模板和变量。
- * 主要职责：createHeavyModule 装配三个 durable 订阅；messageTaskOutputSchema 校验非空文本；
- * heavySettingsSchema 不接受可调设置。完成选择器沿 completed→requested→intent 核对任务来源，
- * 再以实例与事实 ID 为 registerOnce 键分别记录 assistant 和纯文本投递，重复事件不产生重复业务输出。
- * 代码库关系：message-context 选择冻结上下文，message-prompt 编译全部本轮输入；Runtime 注入模型能力及完成定义。
- * 输入输出与副作用：意图只携带 target、turn 与 memoryInformationIds；assistant.source 保留 target，
- * 不复制入站正文或消息 ID，不提供固定路由或自动引用回复。失败或取消的模型任务不产生 assistant。
- * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
- * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
+ * Heavy 根据冻结上下文逐段生成正文，每段成功投递后才创建下一步。
+ * 接续绕过参与判断，保留原意图、原生模型历史、实际回执和新增消息。
+ * 持久化 one-shot 计入模型耗时后安排短暂停顿，独立步骤键贯穿草稿、助手消息和投递。
+ * QQ 可经独立表情处理器装饰。全部出站沿用宿主授权，跨会话批准仍仅发送一次。
+ * 失败、预算受阻或投递未知交给 Router 记录，不能当作自然结束。
  */
 import { firstPartyInspection } from "../inspection.js";
+import {
+  oneShotDueInformationKind,
+  oneShotScheduleCapability,
+} from "@kaguya/scheduler";
+import {
+  pacingSchema,
+  speechReadyAt,
+  speechReadyInformationKind,
+  speechStepRequestedInformationKind,
+  speechObservedInformationKind,
+  speechStepContextSelector,
+  speechDueSelector,
+  speechDeliveredSelector,
+  speechClosedSelector,
+  appendSpeechContext,
+} from "./speech.js";
 import { appendNativeMemoryToPrompt } from "../memory-native/prompt.js";
 import {
   heavyModulePromptTemplates,
@@ -50,6 +39,7 @@ import {
   type JsonObject,
   type JsonValue,
   z,
+  compiledPromptSchema,
 } from "@kaguya/schema";
 import {
   defineInformationModule,
@@ -100,7 +90,9 @@ export interface ModuleModelSelection {
 
 export type { AgentIdentity, HeavyPromptTemplates } from "./message-prompt.js";
 
-export const heavySettingsSchema = z.object({}).strict();
+export const heavySettingsSchema = z
+  .object({ pacing: pacingSchema.optional() })
+  .strict();
 export type HeavySettings = z.infer<typeof heavySettingsSchema>;
 
 export const messageModelDispatchingDiagnostic = defineModuleDiagnostic({
@@ -123,7 +115,14 @@ export const messageModelDispatchingDiagnostic = defineModuleDiagnostic({
 });
 
 export const messageTaskOutputSchema = z.string().trim().min(1);
-export const messageResponseOutputSchema = z.discriminatedUnion("action", [
+export const messageResponseOutputSchema = z.union([
+  z
+    .object({
+      action: z.literal("message"),
+      text: z.string().trim().min(1),
+      continuation: z.string().trim().min(1).nullable(),
+    })
+    .strict(),
   z
     .object({ action: z.literal("message"), text: z.string().trim().min(1) })
     .strict(),
@@ -207,6 +206,10 @@ export interface CreateHeavyModuleOptions<
   >;
   /** 装配时有独立展示插件才启用；本模块不决定表情策略。 */
   readonly draftProcessingEnabled?: boolean;
+  readonly deliveryDeliveredInformationKind?: InformationKindDefinition<
+    string,
+    any
+  >;
   readonly selector?: InformationSelectorDefinition;
   readonly promptTemplates: HeavyPromptTemplates;
   readonly agentIdentity: AgentIdentity;
@@ -266,6 +269,9 @@ export function createHeavyModule<
               : {}),
           },
           turn: assistantPayload.turn,
+          ...(assistantPayload.speech
+            ? { speech: assistantPayload.speech }
+            : {}),
         },
         references:
           assistantPayload.turn == null
@@ -295,6 +301,10 @@ export function createHeavyModule<
           : [currentAcceptedMessageSelector]),
         completedMessageSelector,
         confirmedAssistantSelector,
+        speechStepContextSelector,
+        speechDueSelector,
+        speechDeliveredSelector,
+        speechClosedSelector,
       ],
       promptRenderers: [
         messagePromptRenderer,
@@ -306,6 +316,7 @@ export function createHeavyModule<
           ? [messageDraftProcessorReady]
           : []),
         modelTaskCapability,
+        oneShotScheduleCapability,
         ...(dependencies.messageAuthorizationCapability
           ? [dependencies.messageAuthorizationCapability]
           : []),
@@ -328,6 +339,12 @@ export function createHeavyModule<
         completedInformationKind,
         assistantTextInformationKind,
         inboundTextInformationKind,
+        speechStepRequestedInformationKind,
+        speechReadyInformationKind,
+        oneShotDueInformationKind,
+        ...(dependencies.deliveryDeliveredInformationKind
+          ? [dependencies.deliveryDeliveredInformationKind]
+          : []),
       ],
       produces: [
         heavyResponseSilentInformationKind,
@@ -336,10 +353,13 @@ export function createHeavyModule<
           : []),
         assistantTextInformationKind,
         deliveryRequestedInformationKind,
+        speechStepRequestedInformationKind,
+        speechObservedInformationKind,
+        speechReadyInformationKind,
       ],
       diagnostics: [messageModelDispatchingDiagnostic],
     },
-    create: ({ activation }) => ({
+    create: ({ activation, settings }) => ({
       provisions: [],
       describeStartup: () => ({
         summary: "Heavy pipeline ready",
@@ -365,7 +385,9 @@ export function createHeavyModule<
                   await context.registerOnce(
                     "kaguya.heavy.prepared-assistant",
                     prepared.informationId,
-                    assistantTextInformationKind,
+                    prepared.payload.speech
+                      ? speechReadyInformationKind
+                      : assistantTextInformationKind,
                     {
                       payload: assistantTextInformationKind.payloadSchema.parse(
                         prepared.payload,
@@ -520,10 +542,44 @@ export function createHeavyModule<
               completed.payload.selectionPolicy.tier !== "heavy"
             )
               return;
+            const selected = await context.select(completedMessageSelector);
+            const source = selected.find(
+              (a) => a.informationId === completed.payload.sourceInformationId,
+            )!;
+            const step =
+              source?.kind === speechStepRequestedInformationKind.kind
+                ? speechStepRequestedInformationKind.payloadSchema.parse(
+                    source.payload,
+                  )
+                : undefined;
+            if (step && (await context.select(speechClosedSelector)).length)
+              return;
             const message = requireSelectedMessageIntent(
-              await context.select(completedMessageSelector),
-              completed.payload.sourceInformationId,
+              selected,
+              step?.intentInformationId ??
+                completed.payload.sourceInformationId,
             );
+            if (step)
+              await context.registerOnce(
+                "kaguya.heavy.step.observed",
+                source.informationId,
+                speechObservedInformationKind,
+                {
+                  payload: {
+                    stepInformationId: source.informationId,
+                    scopeKey: step.scopeKey,
+                    observedThroughInformationId:
+                      step.observedThroughInformationId,
+                    turn: step.turn,
+                  },
+                  references: [
+                    {
+                      relation: "core:uses-context",
+                      informationId: source.informationId,
+                    },
+                  ],
+                },
+              );
             const response =
               completed.payload.outputMode === "object"
                 ? messageResponseOutputSchema.parse(completed.payload.output)
@@ -542,6 +598,12 @@ export function createHeavyModule<
                   payload: {
                     intentInformationId: message.informationId,
                     turn: message.payload.turn,
+                    ...(step
+                      ? {
+                          previousDeliveryInformationId:
+                            step.previousDeliveryInformationId,
+                        }
+                      : {}),
                   },
                   references: [
                     {
@@ -562,19 +624,44 @@ export function createHeavyModule<
               );
               return;
             }
+            const requested = selected.find(
+              (a) => a.kind === "core.model.task.requested",
+            );
+            const speech =
+              "continuation" in response && requested
+                ? {
+                    intentInformationId: message.informationId,
+                    stepInformationId: source.informationId,
+                    stepIndex: step?.stepIndex ?? 0,
+                    completedInformationId: completed.informationId,
+                    continuation: z
+                      .string()
+                      .nullable()
+                      .parse(response.continuation),
+                    readyAt: speechReadyAt(
+                      requested.occurredAt,
+                      source.informationId,
+                      response.text,
+                      settings.pacing,
+                    ),
+                  }
+                : undefined;
             await context.registerOnce(
               "kaguya.heavy.assistant.v1",
               `${context.instanceId}:${completed.informationId}`,
               dependencies.draftProcessingEnabled &&
                 message.payload.target.platform === "qq"
                 ? messageDraftInformationKind
-                : assistantTextInformationKind,
+                : speech
+                  ? speechReadyInformationKind
+                  : assistantTextInformationKind,
               {
                 payload: {
                   text: response.text,
                   source: message.payload.target,
                   originatingModuleInstanceId: context.instanceId,
                   turn: message.payload.turn,
+                  ...(speech ? { speech } : {}),
                 },
               },
             );
@@ -596,6 +683,265 @@ export function createHeavyModule<
             )[0];
             if (!assistant) throw new Error("target-authorization-required");
             await release(assistant, context);
+          },
+        ),
+        onInformation(
+          speechReadyInformationKind,
+          { subscriptionId: "kaguya.heavy.pacing", delivery: "durable" },
+          async (ready, context) => {
+            if (
+              ready.payload.originatingModuleInstanceId !== context.instanceId
+            )
+              return;
+            if (ready.payload.speech) {
+              await context.use(oneShotScheduleCapability).schedule({
+                operationKey: `heavy-speech:${context.instanceId}:${ready.informationId}`,
+                sourceInformationId: ready.informationId,
+                dueAt: ready.payload.speech.readyAt,
+                activation,
+                input: {
+                  purpose: "heavy-speech",
+                  readyInformationId: ready.informationId,
+                },
+              });
+            } else
+              await context.registerOnce(
+                "kaguya.heavy.ready-assistant",
+                ready.informationId,
+                assistantTextInformationKind,
+                { payload: ready.payload },
+              );
+          },
+        ),
+        onInformation(
+          oneShotDueInformationKind,
+          { subscriptionId: "kaguya.heavy.pacing-due", delivery: "durable" },
+          async (due, context) => {
+            const atoms = await context.select(speechDueSelector);
+            const ready = atoms.find(
+              (a) => a.kind === speechReadyInformationKind.kind,
+            );
+            if (
+              !ready ||
+              ready.payload.originatingModuleInstanceId !== context.instanceId
+            )
+              return;
+            const runtime = atoms.find(
+              (a) => a.kind === "core.runtime.context",
+            )!;
+            if ((await context.select(speechClosedSelector)).length) {
+              await context.use(oneShotScheduleCapability).finish({
+                scheduleInformationId: due.payload.scheduleInformationId,
+                status: "fired",
+              });
+              return;
+            }
+            await context.registerOnce(
+              "kaguya.heavy.ready-assistant",
+              ready.informationId,
+              assistantTextInformationKind,
+              {
+                payload: assistantTextInformationKind.payloadSchema.parse(
+                  ready.payload,
+                ),
+                contextInformationId: runtime.informationId,
+                references: [
+                  {
+                    relation: "core:uses-context",
+                    informationId: ready.informationId,
+                  },
+                ],
+              },
+            );
+            await context.use(oneShotScheduleCapability).finish({
+              scheduleInformationId: due.payload.scheduleInformationId,
+              status: "fired",
+            });
+          },
+        ),
+        ...(dependencies.deliveryDeliveredInformationKind
+          ? [
+              onInformation(
+                dependencies.deliveryDeliveredInformationKind,
+                {
+                  subscriptionId: "kaguya.heavy.delivered",
+                  delivery: "durable",
+                },
+                async (delivered, context) => {
+                  const atoms = await context.select(speechDeliveredSelector);
+                  const deliveryId = delivered.references.find(
+                    (r) => r.relation === "core:status-of",
+                  )?.informationId;
+                  const delivery = atoms.find(
+                    (a) => a.informationId === deliveryId,
+                  );
+                  if (!delivery) return;
+                  if ((await context.select(speechClosedSelector)).length)
+                    return;
+                  const speech =
+                    deliveryRequestedInformationKind.payloadSchema.parse(
+                      delivery.payload,
+                    ).speech!;
+                  const previous = atoms.find(
+                    (a) => a.informationId === speech.completedInformationId,
+                  )!;
+                  if (
+                    (previous.payload.activation as { instanceId: string })
+                      .instanceId !== context.instanceId
+                  )
+                    return;
+                  const root = requireSelectedMessageIntent(
+                    atoms,
+                    speech.intentInformationId,
+                  );
+                  const priorSource = atoms.find(
+                    (a) => a.informationId === speech.stepInformationId,
+                  )!;
+                  const turn = atoms.find(
+                    (a) =>
+                      a.informationId ===
+                      root.payload.turn.contextInformationId,
+                  )!;
+                  const previousRequest = atoms.find(
+                    (a) =>
+                      a.informationId ===
+                      previous.references.find(
+                        (r) => r.relation === "core:caused-by",
+                      )!.informationId,
+                  )!;
+                  const rootRequest = atoms.find(
+                    (a) =>
+                      a.kind === "core.model.task.requested" &&
+                      a.payload.sourceInformationId === root.informationId,
+                  )!;
+                  const knownIds = new Set(
+                    previousRequest.payload.contextInformationIds as string[],
+                  );
+                  const incoming = atoms.filter(
+                    (a) =>
+                      a.kind === inboundTextInformationKind.kind &&
+                      !knownIds.has(a.informationId),
+                  );
+                  const originalIds = new Set(
+                    rootRequest.payload.contextInformationIds as string[],
+                  );
+                  const interjections = atoms.filter(
+                    (a) =>
+                      a.kind === inboundTextInformationKind.kind &&
+                      !originalIds.has(a.informationId),
+                  );
+                  const through =
+                    incoming.at(-1)?.informationId ??
+                    String(
+                      priorSource.payload.observedThroughInformationId ??
+                        turn.payload.observedThroughInformationId,
+                    );
+                  const content = JSON.stringify({
+                    continuation: speech.continuation,
+                    delivered: atoms
+                      .filter(
+                        (a) =>
+                          a.kind === "core.delivery.requested" &&
+                          (
+                            a.payload.speech as
+                              { intentInformationId?: string } | undefined
+                          )?.intentInformationId === root.informationId,
+                      )
+                      .map((a) => ({
+                        step: a.payload.speech,
+                        message: a.payload.message,
+                        receipt: atoms.find(
+                          (r) =>
+                            r.kind === "core.delivery.delivered" &&
+                            r.references.some(
+                              (ref) =>
+                                ref.relation === "core:status-of" &&
+                                ref.informationId === a.informationId,
+                            ),
+                        )?.payload,
+                      })),
+                    newMessages: incoming.map((a) => ({
+                      id: a.informationId,
+                      at: a.occurredAt,
+                      ...a.payload,
+                    })),
+                    earlierInterjections: interjections
+                      .filter((a) => knownIds.has(a.informationId))
+                      .map((a) => ({
+                        id: a.informationId,
+                        at: a.occurredAt,
+                        ...a.payload,
+                      })),
+                  });
+                  const ids = atoms.map((a) => a.informationId);
+                  await context.registerOnce(
+                    "kaguya.heavy.step",
+                    `${context.instanceId}:${delivered.informationId}`,
+                    speechStepRequestedInformationKind,
+                    {
+                      payload:
+                        speechStepRequestedInformationKind.payloadSchema.parse({
+                          ...root.payload,
+                          intentInformationId: root.informationId,
+                          stepIndex: speech.stepIndex + 1,
+                          continuation: speech.continuation!,
+                          previousDeliveryInformationId:
+                            delivered.informationId,
+                          observedThroughInformationId: through,
+                          scopeKey: String(turn.payload.scopeKey),
+                          contextInformationIds: ids,
+                          prompt: appendSpeechContext(
+                            compiledPromptSchema.parse(
+                              rootRequest.payload.prompt,
+                            ),
+                            content,
+                            ids,
+                          ),
+                        }),
+                      references: ids.map((informationId) => ({
+                        relation: "core:uses-context",
+                        informationId,
+                      })),
+                    },
+                  );
+                },
+              ),
+            ]
+          : []),
+        onInformation(
+          speechStepRequestedInformationKind,
+          { subscriptionId: "kaguya.heavy.step", delivery: "durable" },
+          async (step, context) => {
+            if ((await context.select(speechClosedSelector)).length) return;
+            const atoms = await context.select(speechStepContextSelector);
+            const rootRequest = atoms.find(
+              (a) =>
+                a.kind === "core.model.task.requested" &&
+                a.payload.sourceInformationId ===
+                  step.payload.intentInformationId,
+            )!;
+            if (
+              (rootRequest.payload.activation as { instanceId: string })
+                .instanceId !== context.instanceId
+            )
+              return;
+            await context.use(modelTaskCapability).execute({
+              task: {
+                taskId: "agent.heavy.respond",
+                outputMode: "object",
+                outputSchema: messageResponseOutputSchema,
+                allowedTiers: ["heavy"],
+              },
+              sourceInformationId: step.informationId,
+              contextInformationId: step.references.find(
+                (r) => r.relation === "core:context",
+              )!.informationId,
+              activation,
+              selectionPolicy: { tier: "heavy" },
+              prompt: compiledPromptSchema.parse(step.payload.prompt),
+              contextAtoms: atoms,
+              nativeContinuation: true,
+            });
           },
         ),
       ],
@@ -640,13 +986,25 @@ const completedMessageSelector = defineInformationSelector({
     });
     const message = sources[0];
     if (
-      message?.kind !== messageIntentRequestedInformationKind.kind ||
+      (message?.kind !== messageIntentRequestedInformationKind.kind &&
+        message?.kind !== speechStepRequestedInformationKind.kind) ||
       message.informationId !== payload.sourceInformationId
     )
       throw new Error(
         "Model task completion source must match its message intent cause",
       );
-    return [message.informationId];
+    if (message.kind === speechStepRequestedInformationKind.kind)
+      await ledger.find({
+        informationIds: [String(message.payload.intentInformationId)],
+        limit: 1,
+      });
+    return [
+      message.informationId,
+      requested[0]!.informationId,
+      ...(message.kind === speechStepRequestedInformationKind.kind
+        ? [String(message.payload.intentInformationId)]
+        : []),
+    ];
   },
 });
 

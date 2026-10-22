@@ -46,6 +46,19 @@ export const messageTargetSchema = z
 
 export type MessageTarget = z.infer<typeof messageTargetSchema>;
 
+/** 同一次表达中的独立生成与投递步骤。缺省表示旧版单条消息。 */
+export const speechStepSchema = z
+  .object({
+    intentInformationId: nonBlankString,
+    stepInformationId: nonBlankString,
+    stepIndex: z.int().nonnegative(),
+    completedInformationId: nonBlankString,
+    continuation: nonBlankString.nullable(),
+    readyAt: z.iso.datetime(),
+  })
+  .strict();
+export type SpeechStep = z.infer<typeof speechStepSchema>;
+
 export const inboundTextInformationPayloadSchema = z
   .object({ text: z.string(), source: messageSourceSchema })
   .strict();
@@ -158,8 +171,13 @@ export const heavyResponseSilentInformationKind = defineInformationKind({
     .object({
       intentInformationId: nonBlankString,
       turn: turnProvenanceSchema,
+      previousDeliveryInformationId: nonBlankString.optional(),
     })
-    .strict(),
+    .strict() as z.ZodType<{
+    intentInformationId: string;
+    turn: z.infer<typeof turnProvenanceSchema>;
+    previousDeliveryInformationId?: string;
+  }>,
   references: {
     "core:caused-by": {
       required: true,
@@ -252,6 +270,7 @@ export const assistantTextInformationKind = defineInformationKind({
       expression: outboundExpressionSchema.optional(),
       originatingModuleInstanceId: nonBlankString,
       turn: turnProvenanceSchema.nullable(),
+      speech: speechStepSchema.optional(),
     })
     .strict() as z.ZodType<{
     text: string;
@@ -259,14 +278,18 @@ export const assistantTextInformationKind = defineInformationKind({
     expression?: OutboundExpression;
     originatingModuleInstanceId: string;
     turn: z.infer<typeof turnProvenanceSchema> | null;
+    speech?: SpeechStep;
   }>,
   references: {
+    "core:uses-context": { required: false, multiple: true },
     "core:caused-by": {
       required: true,
       multiple: false,
       targetKinds: [
         "core.model.task.completed",
         "agent.heavy.message.prepared",
+        "agent.heavy.message.ready",
+        "core.schedule.one-shot.due",
       ],
     },
     "core:context": {
@@ -289,20 +312,27 @@ export const assistantTextInformationKind = defineInformationKind({
   },
 });
 
+const deliveryRequestedPayloadSchema = z
+  .object({
+    adapterId: nonBlankString,
+    platform: nonBlankString,
+    destination: platformDestinationSchema,
+    message: outboundMessageContentSchema,
+    turn: turnProvenanceSchema.nullable(),
+    speech: speechStepSchema.optional(),
+  })
+  .strict();
+
 export const deliveryRequestedInformationKind = defineInformationKind({
   kind: "core.delivery.requested",
   displayName: "平台投递请求",
   description:
     "助手正文进入发送阶段时记录明确目标、消息内容和回合来源；Runtime 调用对应适配器并产生成功或失败结果。",
-  payloadSchema: z
-    .object({
-      adapterId: nonBlankString,
-      platform: nonBlankString,
-      destination: platformDestinationSchema,
-      message: outboundMessageContentSchema,
-      turn: turnProvenanceSchema.nullable(),
-    })
-    .strict(),
+  payloadSchema: deliveryRequestedPayloadSchema as z.ZodType<
+    Omit<z.infer<typeof deliveryRequestedPayloadSchema>, "speech"> & {
+      speech?: SpeechStep;
+    }
+  >,
   references: {
     "core:caused-by": {
       required: true,

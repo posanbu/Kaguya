@@ -136,6 +136,18 @@ const draftSelector = defineInformationSelector({
       i < 4 && current?.kind !== messageIntentRequestedInformationKind.kind;
       i++
     ) {
+      if (current?.kind === "agent.heavy.step.requested") {
+        const rootId = String(current.payload.intentInformationId);
+        if (
+          !current.references.some(
+            (r) =>
+              r.relation === "core:uses-context" && r.informationId === rootId,
+          )
+        )
+          return [sourceAtom.informationId];
+        current = await get(ledger, rootId);
+        break;
+      }
       const cause: string | undefined = current?.references.find(
         (r) => r.relation === "core:caused-by",
       )?.informationId;

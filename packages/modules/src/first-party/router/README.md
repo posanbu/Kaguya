@@ -34,7 +34,7 @@ Light 的每条冻结输入包含稳定的 `speakerKey`、平台消息标识、�
 
 claim、context、Light decision 和 terminal 使用稳定键与排他槽。重复 candidate、重复 delivery、进程重启和旧代际 one-shot 不会创建第二个有效 turn；身份未完成时保持开放，身份耗尽、授权失败或目标不可用时 fail-closed。`observedThroughInformationId` 记录冻结范围，只有对应注意决策为 observe 时才推进已观察水位。
 
-Light failed、cancelled、非法输出或模型不可用记录为失败，不显示为 silent。Light wait 使用独立 `totalWaitBudget`；Arousal defer 不消耗预算。Heavy 若选择 silent，情境运行模块记录 `heavy-declined` 终态，不创建投递。重试复用调用前已持久化的完整输入及原生消息，supersession 后的迟到结果不能派发。
+Light failed、cancelled、非法输出或模型不可用记录为失败，不显示为 silent。Light wait 使用独立 `totalWaitBudget`；Arousal defer 不消耗预算。Heavy 首次选择 silent 时记录 `heavy-declined` 终态。逐段表达的中间投递不结束 turn，最后一段成功投递才完成。已经发送部分内容后选择 silent，保留成功回执并记为 completed。重试复用调用前已持久化的完整输入及原生消息，supersession 后的迟到结果不能派发。
 
 ## 日志与可观测性
 

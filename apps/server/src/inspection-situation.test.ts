@@ -57,7 +57,15 @@ function ledger(rows: ReturnType<typeof atom>[]): InspectionSource["ledger"] {
             (!query.kinds || query.kinds.includes(row.kind)) &&
             (!query.payloadIn ||
               query.payloadIn.values.includes(
-                String(row.payload[query.payloadIn.path[0]!]),
+                String(
+                  query.payloadIn.path.reduce<unknown>(
+                    (value, key) =>
+                      value && typeof value === "object"
+                        ? (value as Record<string, unknown>)[key]
+                        : undefined,
+                    row.payload,
+                  ),
+                ),
               )) &&
             (!query.referencedId ||
               row.references.some(
@@ -84,6 +92,52 @@ const requested = (id: string, extra: InformationAtom["payload"] = {}) =>
   });
 
 describe("read-only situation projection", () => {
+  it("associates each speech step with its own receipt and shared frame", async () => {
+    const rows = [
+      turn,
+      atom(
+        "terminal",
+        "agent.router.turn.failed",
+        { deliveryTerminalInformationId: "receipt:2" },
+        statusOf("candidate"),
+      ),
+      ...[1, 2].flatMap((index) => [
+        atom(`step:${index}`, "agent.heavy.step.requested", {
+          turn: { contextInformationId: "turn" },
+        }),
+        requested(`request:${index}`, {
+          taskId: "agent.heavy.respond",
+          sourceInformationId: `step:${index}`,
+        }),
+        atom(
+          `result:${index}`,
+          "core.model.task.completed",
+          { output: { action: "message", text: `第${index}段` } },
+          statusOf(`request:${index}`),
+        ),
+        atom(`delivery:${index}`, "core.delivery.requested", {
+          speech: { completedInformationId: `result:${index}` },
+        }),
+        atom(
+          `receipt:${index}`,
+          index === 1 ? "core.delivery.delivered" : "core.delivery.failed",
+          { outcome: index === 1 ? "delivered" : "unknown" },
+          statusOf(`delivery:${index}`),
+        ),
+      ]),
+    ];
+    const view = await readSituation(ledger(rows));
+    expect(
+      view.steps.map((step) => ({
+        frame: step.frameId,
+        status: step.status,
+        receipt: JSON.parse(step.receipt!),
+      })),
+    ).toEqual([
+      { frame: "turn", status: "delivered", receipt: { outcome: "delivered" } },
+      { frame: "turn", status: "unknown", receipt: { outcome: "unknown" } },
+    ]);
+  });
   it("keeps saved reasoning and delivery uncertainty, redacts secrets, and excludes native messages", async () => {
     const rows = [
       atom("frozen", "agent.situation.frozen", { frame: frame() }),

@@ -1040,19 +1040,46 @@ function createRoutingModule(
                     ].includes(a.kind.split(".").at(-1)!),
                 );
                 if (!candidateId) return [];
-                const receipt = history.find(
+                const delivery = history.find(
                   (a) =>
-                    a.informationId ===
-                    terminal?.payload.deliveryTerminalInformationId,
+                    a.kind === "core.delivery.requested" &&
+                    (
+                      a.payload.speech as
+                        { completedInformationId?: string } | undefined
+                    )?.completedInformationId === result.informationId,
                 );
+                const silent =
+                  (result.payload.output as { action?: string } | undefined)
+                    ?.action === "silent";
+                const receipt = silent
+                  ? undefined
+                  : delivery
+                    ? history.find(
+                        (a) =>
+                          (a.kind === "core.delivery.delivered" ||
+                            a.kind === "core.delivery.failed") &&
+                          a.references.some(
+                            (r) =>
+                              r.relation === "core:status-of" &&
+                              r.informationId === delivery.informationId,
+                          ),
+                      )
+                    : history.find(
+                        (a) =>
+                          a.informationId ===
+                          terminal?.payload.deliveryTerminalInformationId,
+                      );
                 return [
                   {
                     callResultId: result.informationId,
                     candidateInformationId: candidateId,
-                    status:
-                      receipt?.payload.outcome === "unknown"
+                    status: silent
+                      ? "silent"
+                      : receipt?.payload.outcome === "unknown"
                         ? "unknown"
-                        : (terminal?.kind.split(".").at(-1) ?? "pending"),
+                        : (receipt?.kind.split(".").at(-1) ??
+                          terminal?.kind.split(".").at(-1) ??
+                          "pending"),
                     receiptId: receipt?.informationId ?? null,
                     result: receipt?.payload ?? null,
                   },
@@ -1421,6 +1448,27 @@ function createRoutingModule(
               )
             )
               throw new Error("Heavy silent must reference its message intent");
+            if (silent.payload.previousDeliveryInformationId) {
+              await context.commitTerminal(
+                "agent.router.turn.terminal",
+                candidate.informationId,
+                turnCompletedInformationKind,
+                {
+                  payload: {
+                    candidateInformationId: candidate.informationId,
+                    claimInformationId: claim.informationId,
+                    scopeKey: String(candidate.payload.scopeKey),
+                    deliveryTerminalInformationId:
+                      silent.payload.previousDeliveryInformationId,
+                  },
+                  references: terminalReferences(
+                    candidate.informationId,
+                    claim.informationId,
+                  ),
+                },
+              );
+              return;
+            }
             await context.commitTerminal(
               "agent.router.turn.terminal",
               candidate.informationId,
@@ -2115,6 +2163,12 @@ async function finishDelivery(
   const request = outgoingStatusTarget(terminal, atoms);
   const turn = (request?.payload as any)?.turn;
   if (request === undefined || turn === undefined) return;
+  if (
+    delivered &&
+    (request.payload.speech as { continuation?: string | null } | undefined)
+      ?.continuation
+  )
+    return;
   const candidate = atoms.find(
     (atom) => atom.informationId === turn.candidateInformationId,
   );

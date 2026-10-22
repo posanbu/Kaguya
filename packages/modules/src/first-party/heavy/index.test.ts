@@ -237,6 +237,7 @@ describe("message composer", () => {
     expect(s.definition.manifest.definitionId).toBe("agent.heavy");
     expect(s.definition.manifest.requires).toEqual([
       { id: "kaguya:model-task", apiVersion: 1 },
+      { id: "kaguya:schedule.one-shot", apiVersion: 1 },
     ]);
     await s.instance.subscriptions[0]!.handle(s.f.intent as never, s.context);
     expect(s.execute).toHaveBeenCalledTimes(1);
@@ -375,7 +376,7 @@ it("validates the completion→request→intent causal chain", async () => {
   };
   await expect(
     selector.select({ sourceAtom: completed, ledger }),
-  ).resolves.toEqual([s.f.intent.informationId]);
+  ).resolves.toEqual([s.f.intent.informationId, "request-1"]);
   const forged = atom("completed-1", completedKind.kind, {
     sourceInformationId: "different-intent",
   });

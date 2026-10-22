@@ -6,6 +6,7 @@
  * 查询有界且不写账本，保持原有导出对象身份与 Scheduler/Router 外部契约。
  */
 import type { DeepReadonly, InformationAtom } from "@kaguya/schema";
+import { speechObservedInformationKind } from "../heavy/speech.js";
 import {
   defineInformationSelector,
   type InformationSelectorLedger,
@@ -38,7 +39,10 @@ async function latestObservedContext(
   let throughInformationId: string | undefined;
   for (;;) {
     const turns = await ledger.find({
-      kinds: [turnContextCompletedInformationKind.kind],
+      kinds: [
+        turnContextCompletedInformationKind.kind,
+        speechObservedInformationKind.kind,
+      ],
       scopeKey,
       registrationOrder: true,
       order: "desc",
@@ -47,6 +51,7 @@ async function latestObservedContext(
     });
     for (const turn of turns) {
       if (turn.informationId === throughInformationId) continue;
+      if (turn.kind === speechObservedInformationKind.kind) return turn;
       const decision = (
         await ledger.find({
           kinds: [attentionArousalCompletedInformationKind.kind],

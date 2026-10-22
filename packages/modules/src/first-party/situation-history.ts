@@ -28,6 +28,33 @@ export const situationHistorySelector = defineInformationSelector({
     }
     add(completed);
     for (const atom of completed) {
+      const deliveries = add(
+        await ledger.find({
+          kinds: ["core.delivery.requested"],
+          payloadContains: {
+            speech: { completedInformationId: atom.informationId },
+          },
+          throughInformationId: sourceAtom.informationId,
+          registrationOrder: true,
+          limit: 2,
+        }),
+      );
+      for (const delivery of deliveries)
+        add(
+          await ledger.find({
+            informationIds: (
+              await ledger.related({
+                from: [delivery.informationId],
+                relation: "core:status-of",
+                direction: "incoming",
+                limit: 10,
+              })
+            ).map((a) => a.informationId),
+            throughInformationId: sourceAtom.informationId,
+            registrationOrder: true,
+            limit: 10,
+          }),
+        );
       const source = add(
         await ledger.find({
           informationIds: [String(atom.payload.sourceInformationId)],
@@ -98,9 +125,24 @@ export const situationHistorySelector = defineInformationSelector({
           ].some((status) => a.kind === `agent.router.turn.${status}`),
       );
       const terminal = terminals[0];
-      const receipt = selected.get(
-        String(terminal?.payload.deliveryTerminalInformationId),
+      const delivery = [...selected.values()].find(
+        (a) =>
+          a.kind === "core.delivery.requested" &&
+          (a.payload.speech as { completedInformationId?: string } | undefined)
+            ?.completedInformationId === result.informationId,
       );
+      const receipt = delivery
+        ? [...selected.values()].find(
+            (a) =>
+              (a.kind === "core.delivery.delivered" ||
+                a.kind === "core.delivery.failed") &&
+              a.references.some(
+                (r) =>
+                  r.relation === "core:status-of" &&
+                  r.informationId === delivery.informationId,
+              ),
+          )
+        : selected.get(String(terminal?.payload.deliveryTerminalInformationId));
       const calls = new Set<string>();
       const native = result.payload.native as
         { messages?: { content: unknown }[] } | undefined;
@@ -122,6 +164,7 @@ export const situationHistorySelector = defineInformationSelector({
         candidateId,
         ...terminals.map((a) => a.informationId),
         receipt?.informationId,
+        delivery?.informationId,
       ])
         if (id && selected.has(id)) retained.add(id);
     }

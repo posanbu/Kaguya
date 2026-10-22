@@ -2,7 +2,7 @@
 
 ## 目的与非目标
 
-在 Router 选择把回合交给 Heavy 后，根据完整冻结 turn 独立决定生成一条自然消息或保持沉默。模块不执行 Light，也不检索跨会话目标。
+在 Router 选择把回合交给 Heavy 后，根据完整冻结 turn 独立决定发言或保持沉默。发言可以逐段生成，每段成功投递后再接续。模块不执行 Light，也不检索跨会话目标。
 
 ## 消费和产生
 
@@ -32,11 +32,11 @@
 
 ## Settings
 
-settings 为空对象 `{}`。模型固定使用 Profile 的 `heavy` 档位；模板和 Agent 身份由 composition root 注入。升级时需人工更新旧实例配置。
+原有 settings `{}` 继续有效。可选 `pacing` 配置提供 `baseMs: 150`、`perCharacterMs: 25`、`minMs: 200` 和 `maxMs: 1200`。模拟耗时为 `(baseMs + perCharacterMs × Unicode code point 数) × 抖动系数`，随后限制在最短和最长时间之间。抖动系数为 0.85–1.15，由步骤身份稳定确定。计时从模型请求开始，生成超过目标时长后不再增加等待。模型固定使用 Profile 的 `heavy` 档位。
 
 ## 可靠性、幂等和失败行为
 
-普通回复使用结构化输出：`message(text)` 或 `silent`。silent 不要求另写理由。授权跨会话发送使用文本输出。稳定任务键复用等价 Model Task；assistant、silent 与 delivery 使用实例级 `registerOnce` 去重。silent 不生成用于投递的 assistant 原子，由情境运行模块关闭回合。模型任务仍保存服务实际返回的原生消息、推理项和协议元数据，后续调用按兼容协议接续。界面缺少可读推理时显示“未提供”。模型 failed/cancelled 不生成 assistant，缺少冻结引用或 provenance 不一致时拒绝继续。
+普通回复使用结构化输出：`message(text, continuation)` 或 `silent`。`continuation` 是简短的未完成表达意图，`null` 表示本条投递后结束。旧输出缺少该字段时仍按单条消息处理。silent 不要求另写理由。授权跨会话发送使用文本输出。稳定任务键复用等价 Model Task；assistant、silent 与 delivery 使用实例级 `registerOnce` 去重。silent 不生成用于投递的 assistant 原子，由情境运行模块关闭回合。模型任务仍保存服务实际返回的原生消息、推理项和协议元数据，后续调用按兼容协议接续。界面缺少可读推理时显示“未提供”。模型 failed/cancelled 不生成 assistant，缺少冻结引用或 provenance 不一致时拒绝继续。
 
 ## 日志与可观测性
 
@@ -49,3 +49,15 @@ settings 为空对象 `{}`。模型固定使用 Profile 的 `heavy` 档位；模
 ## 自然语言跨会话与背景
 
 普通回复的 Prompt 也包含宿主冻结的当前会话名称、发言人显示名、身份状态和本轮关系。背景投影与目标解析投影分离，正文模型不会获得跨会话候选引用或无关目标 ID。自动跨会话意图由 Runtime 提供隔离的发送要求与背景，不加载其他会话正文或来源群历史/Memory；宿主绑定生成的唯一 assistant 正文后，由统一 delivery 链完成最终出站检查。管理端发起的请求继续沿用正文确认流程。
+
+## 逐段表达与插话
+
+QQ 群聊、私聊和 Web 普通聊天共用逐段流程。初次发言经过 Light，接续直接调用 Heavy。不设固定消息条数上限，模型按语气和意思分段，需要对方回答时结束。每段增加一次 Heavy 调用。
+
+默认 Prompt 要求独立的回应、解释和追问优先分条，即使总字数较少。只有一个意思时仍可单条结束。缺少当前话题的关键背景时允许自然问清，角色设定不能用于补造现实日程。分段由模型决定，这些要求不保证每次生成都符合预期，需要结合实际投递记录检查。
+
+`agent.heavy.message.ready` 保存最终正文和发送期限，one-shot 调度器负责到期释放。`core.delivery.delivered` 只在本段仍有 continuation 时触发 `agent.heavy.step.requested`。下一步保存原意图、步骤序号、冻结上下文、未完成意图、新输入及此前每段实际回执。成功处理后通过 `agent.heavy.step.observed` 推进观察水位。冻结和失败不推进水位。
+
+正在生成或等待发送的当前段通常发完。新消息进入下一段，包括停止请求。Heavy 通常承接普通插话，按更正调整后文，按停止请求结束。未处理的新消息仍由 Heartbeat 接收。接续选择 silent 时，如果已经发送过消息，整个表达记为 completed，保留最后一次成功回执。
+
+每段有独立模型任务和投递身份，重复回执和重启不会创建重复接续步骤或重复投递。投递失败或结果未知会停止自动接续，保留已发部分。模型超时和上下文预算受阻仍按失败处理。已批准的跨会话单次发送维持原授权边界，不自动接续。

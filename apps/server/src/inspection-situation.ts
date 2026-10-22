@@ -90,7 +90,34 @@ export async function readSituation(ledger: InspectionSource["ledger"]) {
       ]);
       const result = results[0];
       const terminal = decisions.find((a) => terminalKinds.has(a.kind));
-      const receiptId = terminal?.payload.deliveryTerminalInformationId;
+      const delivery = result
+        ? (
+            await ledger.inspectPage({
+              kind: "core.delivery.requested",
+              payloadIn: {
+                path: ["speech", "completedInformationId"],
+                values: [result.informationId],
+              },
+              limit: 2,
+            })
+          )[0]
+        : undefined;
+      const stepReceipt = delivery
+        ? (
+            await ledger.inspectPage({
+              referencedId: delivery.informationId,
+              relation: "core:status-of",
+              kinds: ["core.delivery.delivered", "core.delivery.failed"],
+              limit: 2,
+            })
+          )[0]
+        : undefined;
+      const silent = record(result?.payload.output).action === "silent";
+      const receiptId = silent
+        ? undefined
+        : delivery
+          ? stepReceipt?.informationId
+          : terminal?.payload.deliveryTerminalInformationId;
       const receipt =
         typeof receiptId === "string" ? await ledger.get(receiptId) : null;
       const output =
@@ -134,10 +161,13 @@ export async function readSituation(ledger: InspectionSource["ledger"]) {
             : typeof value?.text === "string"
               ? value.text
               : "",
-        status:
-          receipt?.payload.outcome === "unknown"
+        status: silent
+          ? "silent"
+          : receipt?.payload.outcome === "unknown"
             ? "unknown"
-            : (terminal?.kind.split(".").at(-1) ?? "pending"),
+            : (stepReceipt?.kind.split(".").at(-1) ??
+              terminal?.kind.split(".").at(-1) ??
+              "pending"),
         reasoning,
         nativeAvailable: !!native,
         receipt: receipt ? JSON.stringify(receipt.payload) : null,

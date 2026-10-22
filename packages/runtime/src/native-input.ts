@@ -70,13 +70,39 @@ export function assembleNativeInput(input: {
       if (openCalls.size) throw new Error("NATIVE_TOOL_INTERACTION_OPEN");
       continue;
     }
-    const receiptId = terminal?.payload.deliveryTerminalInformationId;
-    const receipt = input.atoms.find((a) => a.informationId === receiptId);
+    const delivery = input.atoms.find(
+      (a) =>
+        a.kind === "core.delivery.requested" &&
+        (a.payload.speech as { completedInformationId?: string } | undefined)
+          ?.completedInformationId === atom.informationId,
+    );
+    const silent =
+      (payload.output as { action?: string } | undefined)?.action === "silent";
+    const receipt = silent
+      ? undefined
+      : delivery
+        ? input.atoms.find(
+            (a) =>
+              (a.kind === "core.delivery.delivered" ||
+                a.kind === "core.delivery.failed") &&
+              a.references.some(
+                (r) =>
+                  r.relation === "core:status-of" &&
+                  r.informationId === delivery.informationId,
+              ),
+          )
+        : input.atoms.find(
+            (a) =>
+              a.informationId ===
+              terminal?.payload.deliveryTerminalInformationId,
+          );
     const outcome: NativeMessage = {
       role: "user",
       content: JSON.stringify({
         actionRecord: atom.informationId,
-        status: terminal?.kind ?? "pending",
+        status: silent
+          ? "agent.heavy.response.silent"
+          : (receipt?.kind ?? terminal?.kind ?? "pending"),
         ...(receipt ? { receipt: receipt.payload } : {}),
       }),
     };

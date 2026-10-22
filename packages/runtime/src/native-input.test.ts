@@ -147,3 +147,63 @@ it("reserves unknown and pending outcomes before trimming closed segments", () =
     { role: "user", content: "冻结情境" },
   ]);
 });
+
+it("replays each part with its own actual receipt within a shared turn", () => {
+  const atoms = segment("speech", "failed");
+  const first = atoms[0]!;
+  atoms.push({ ...first, informationId: "speech:second" });
+  for (const [index, result] of [first, atoms.at(-1)!].entries()) {
+    const deliveryId = `delivery:${index}`;
+    atoms.push({
+      ...first,
+      informationId: deliveryId,
+      kind: "core.delivery.requested",
+      payload: { speech: { completedInformationId: result.informationId } },
+    });
+    atoms.push({
+      ...first,
+      informationId: `receipt:${index}`,
+      kind: index === 0 ? "core.delivery.delivered" : "core.delivery.failed",
+      payload: { outcome: index === 0 ? "delivered" : "unknown" },
+      references: [{ relation: "core:status-of", informationId: deliveryId }],
+    });
+  }
+  const actions = assemble(atoms)
+    .filter(
+      (m) =>
+        m.role === "user" &&
+        typeof m.content === "string" &&
+        m.content.startsWith("{"),
+    )
+    .map((m) => JSON.parse(String(m.content)));
+  expect(actions).toEqual([
+    {
+      actionRecord: "speech:result",
+      status: "core.delivery.delivered",
+      receipt: { outcome: "delivered" },
+    },
+    {
+      actionRecord: "speech:second",
+      status: "core.delivery.failed",
+      receipt: { outcome: "unknown" },
+    },
+  ]);
+});
+
+it("does not assign a previous delivery to a silent continuation", () => {
+  const atoms = segment("silent-step", "completed");
+  atoms[0] = {
+    ...atoms[0]!,
+    payload: { ...atoms[0]!.payload, output: { action: "silent" } },
+  };
+  atoms.push({
+    ...atoms[0]!,
+    informationId: "silent-step:receipt",
+    kind: "core.delivery.delivered",
+    payload: { outcome: "delivered" },
+  });
+  expect(JSON.parse(String(assemble(atoms)[1]!.content))).toEqual({
+    actionRecord: "silent-step:result",
+    status: "agent.heavy.response.silent",
+  });
+});

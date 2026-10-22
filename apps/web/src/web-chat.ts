@@ -2,7 +2,7 @@
  * 功能概述：提供 Web 私聊的浏览器会话标识、乐观消息合并及可取消的增量同步。
  * 主要职责：readConversationId/persistConversationId 仅持久化不含凭据的 UUID；
  * mergeChatMessages/acceptChatMessage 依据服务消息 ID 和用户消息 requestId 消除回显重复，
- * 保留失败草稿并优先使用持久化时间；startConversationPolling 顺序拉完分页，再每两秒读取增量。
+ * 保留失败草稿并优先使用持久化时间；startConversationPolling 顺序拉完分页，再每秒读取增量。
  * 代码库关系：由 useWebChat.ts 消费，通过 api.ts 访问 /api/v1/messages；纯函数和可注入
  * 请求边界由 web-chat.test.ts 覆盖，React 组件不直接管理游标或网络重试。
  * 输入输出与副作用：localStorage 按 origin 保存当前 conversationId，禁用存储时退回内存；
@@ -21,7 +21,7 @@ import {
 export const CONVERSATION_STORAGE_KEY = "kaguya.web.conversationId";
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
-const POLL_INTERVAL = 2_000;
+const POLL_INTERVAL = 1_000;
 
 export interface ChatMessage extends ConversationMessage {
   readonly state: "sending" | "sent" | "failed";
