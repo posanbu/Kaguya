@@ -17,6 +17,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
+    "test:critical": "vitest run --config vitest.critical.config.ts",
     "test:postgres": "pnpm --filter @kaguya/server postgres:test",
     "postgres:start": "pnpm --filter @kaguya/server postgres:start",
     "postgres:status": "pnpm --filter @kaguya/server postgres:status",
