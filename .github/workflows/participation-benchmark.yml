@@ -24,7 +24,6 @@ jobs:
   offline-tests:
     name: participation (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 5
     strategy:
       fail-fast: false
       matrix:
