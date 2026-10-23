@@ -5,6 +5,7 @@
  * 代码库关系：App 的待应用视图挂载此组件，api.ts 负责认证与 DTO 校验；不读取 Profile 凭据。
  * 输入输出与副作用：发起受认证的 GET/POST；组件卸载后忽略读取结果，应用成功通知 App 刷新状态。
  */
+import { FEATURE_CHANGED_EVENT } from "./feature-api.js";
 import { useNavigationGuard } from "./components/AppShell.js";
 import { useProfileWorkspace } from "./ProfileWorkspace.js";
 import { useEffect, useState } from "react";
@@ -63,7 +64,10 @@ export function ConfigurationApplicationScreen({
       const value = await applyConfiguration({ token }, snapshot);
       setResult(value);
       setSnapshot(value.application);
-      if (value.status === "applied") await onApplied();
+      if (value.status === "applied") {
+        window.dispatchEvent(new Event(FEATURE_CHANGED_EVENT));
+        await onApplied();
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "应用失败，请重试。");
       try {
