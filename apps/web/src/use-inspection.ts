@@ -1,6 +1,6 @@
 /**
- * 功能概述：检查页面共用的可取消 GET 状态，加载新查询时不显示旧数据。
- * useInspection 按 token、路径与刷新版本隔离结果，卸载后取消；认证和 DTO 校验由 api.ts 负责。
+ * 功能概述：检查页面共用的可取消 GET 状态，同一查询刷新保留内容，切换查询时不显示旧数据。
+ * useInspection 按 token 和路径隔离结果，刷新版本仅触发请求，卸载后取消；认证和 DTO 校验由 api.ts 负责。
  * 不轮询、不保存 Token；错误作为安全接口消息返回给调用组件。
  */
 import { useEffect, useState } from "react";
@@ -14,7 +14,7 @@ export function useInspection<T>(
   const [state, setState] = useState<{ key: string; data?: T; error?: string }>(
     { key: "" },
   );
-  const key = `${path}:${revision}:${token}`;
+  const key = JSON.stringify([path, token]);
   useEffect(() => {
     if (path === undefined) return;
     const controller = new AbortController();
