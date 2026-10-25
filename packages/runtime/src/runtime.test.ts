@@ -373,6 +373,7 @@ describe("KaguyaRuntime", () => {
           )
           .map((entry) => entry.definitionId),
       ).toEqual([
+        "agent.message-output.text",
         "agent.heavy",
         "agent.lifecycle",
         "memory.identity",
@@ -959,6 +960,7 @@ describe("KaguyaRuntime", () => {
           "core.model.task.requested",
           "core.model.task.completed",
           "core.message.assistant.text",
+          "core.message.assistant.authorized",
           "core.delivery.requested",
           "memory.identity.chat.scope.entity",
           "memory.identity.chat.scope.binding",
@@ -999,6 +1001,7 @@ describe("KaguyaRuntime", () => {
         ["core.model.task.requested", "agent.router.message.intent.requested"],
         ["core.model.task.completed", "core.model.task.requested"],
         ["core.message.assistant.text", "core.model.task.completed"],
+        ["core.message.assistant.authorized", "core.message.assistant.text"],
         ["core.delivery.requested", "core.message.assistant.text"],
         ["core.delivery.delivered", "core.delivery.requested"],
       ] as const;
