@@ -7,41 +7,49 @@ description: 调整唤醒状态、休眠策略、关注租约和 Light 等待。
 
 在“检查 → 模块”打开对应模块，修改参数并保存，再到“配置生效管理”应用。时间字段以 `Ms` 结尾时，单位是毫秒，`1000` 毫秒等于 `1` 秒。
 
-Kaguya 默认处于 `awake`。入站通知按会话 scope 积攒；没有开放观察时立即产生观察机会，Arousal 在 awake 状态默认 `observe`，然后 Router 才读取该 scope 的全部未读并交给 Light。是否发言仍由 Light 的 `message | wait | silent` 决定，不存在关键词评分、频率抽样、固定 tick 或普通消息防抖。
+Lifecycle 的公开实例为 `lifecycle.default`。配置分为 `pulse`、`activity`、`sleep` 和 `observation`。Router 和 Light 判断是否参与，Heavy 生成表达。清醒时每 5 秒推进活动，但不因节拍直接请求模型。
 
-## 唤醒与休眠：Attention Arousal
+## 时间节拍与当前活动
 
-模块实例为 `attention-arousal.default`。
+**`pulse.intervalMs`** — 清醒节拍间隔，默认 `5000`（5 秒）。入睡后停止，唤醒后恢复。重启不逐跳补跑。
 
-**`idleSleepEnabled`** — 是否启用全局无消息休眠，默认关闭。
+**`activity.scopeIdleMs`** — 本会话最后一次实际活动后的退出期限，默认 `120000`（2 分钟）。退出后转为发呆。关注期限共用这一时长和实际活动时间。
 
-**`idleSleepAfterMs`** — 启用后，连续多久没有全局消息进入休眠，默认 `120000`（2 分钟）。
+情境页独立显示当前活动及最近十分钟的合并时间线。相同活动和目标合并为一个时间段。过渡句只供内部情境和控制台使用。
+
+## 睡眠与唤醒
+
+以下字段位于 `sleep` 对象。
+
+**`idleSleepEnabled`** — 是否启用全局空闲入睡，默认开启。
+
+**`idleSleepAfterMs`** — 全局最后一次实际活动后多久入睡，默认 `600000`（10 分钟）。正在执行的模型步骤阻止空闲入睡。节拍、状态文案和空复查不刷新空闲期限。
 
 **`nightSleepEnabled`** — 是否启用夜间休眠，默认关闭。
 
 **`nightSleepStart` / `nightSleepEnd`** — 本地时间的夜间窗口，格式 `HH:mm`，默认 `23:00–07:00`，支持跨午夜。
 
-**`periodicWakeEnabled`** — 是否让休眠状态周期唤醒，默认开启。只有进入休眠后才生效。
+**`periodicWakeEnabled`** — 是否周期复查积压，默认开启。空复查继续睡，不请求模型。
 
 **`periodicWakeEveryMs`** — 休眠后多久复查一次积压，默认 `300000`（5 分钟）。
 
-私聊、Web、@机器人、@全体、回复机器人、有效 Focus 和周期复查会唤醒并观察。普通群聊在 asleep 时延后，不推进未读水位；消息会继续按 scope 积攒。
+私聊、Web、@机器人、@全体和回复机器人立即唤醒。普通群消息在睡眠期间积攒，不推迟既定复查时间。有积压的复查会进入观察流程。
 
 ## 观察后的行为：Router
 
 模块实例为 `router.default`。
 
-**`muted`** — 静默模式，默认 `false`。它在 observe 后抑制主动回复，不改变 Arousal 的唤醒状态。
+**`muted`** — 静默模式，默认 `false`。它在 observe 后抑制主动回复，不改变 Lifecycle 的睡眠状态。
 
-**`focusIdleMs`** — 群聊直接通知观察后开启、成功投递后续租的 Focus 租约时长，默认 `120000`（2 分钟），范围 `1000–3600000`。`wait` 保持租约自然到期，`silent` 或失败会关闭它。
+**`focusIdleMs`** — 启用 Lifecycle 时由 `activity.scopeIdleMs` 统一提供。直接通知开启关注，实际活动续租。`wait` 保持租约自然到期，`silent` 或失败关闭它。
 
 **`staleAfterMs`** — 最近输入多久以前算积压，默认 `120000`。它只供 Light 判断，不会删除消息或改变是否观察。
 
 **`lightInterruptMaxConsecutiveCount`** — 新消息到来时，同一轮最多重新规划几次，默认 `2`，范围 `0–20`；设为 `0` 关闭规划打断。
 
-## Light 等待：Heartbeat
+## 观察调度
 
-模块实例为 `heartbeat.default`。Heartbeat 不为普通入站设置防抖 timer；以下设置只约束 Light wait、规划打断和静默后的退避恢复。
+以下字段位于 Lifecycle 的 `observation` 对象，约束 Light 等待、规划打断和静默后的退避恢复。普通入站不设置防抖 timer。
 
 **`interruptQuietMs`** — 规划被新消息打断后，等待安静多久再继续，默认 `1000`，范围 `0–60000`。
 
@@ -55,4 +63,4 @@ Kaguya 默认处于 `awake`。入站通知按会话 scope 积攒；没有开放�
 
 **`noActionBackoffBypassPendingCount`** — scope 积攒至少多少条新消息时跳过退避，默认 `6`；`0` 表示不按数量跳过。
 
-旧版评分、阈值、叫名强制、动态频率和消息防抖设置已删除。该协议是破坏式更新，旧数据库与旧模块配置需要重置。
+启动时合并旧 Arousal 与 Heartbeat 配置，并在配置根的 `migrations/lifecycle-v1.json` 保存备份。迁移支持重复执行，保留旧订阅消费进度和存量调度，不需要重置数据库。

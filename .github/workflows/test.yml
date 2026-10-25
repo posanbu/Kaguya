@@ -5,7 +5,7 @@ on:
     branches:
       - main
   schedule:
-    - cron: "0 3 * * *"
+    - cron: "0 8 * * *"
       timezone: Asia/Shanghai
   workflow_dispatch:
 
@@ -20,7 +20,6 @@ jobs:
   docs:
     name: documentation
     runs-on: ubuntu-latest
-    timeout-minutes: 3
 
     defaults:
       run:
@@ -51,7 +50,6 @@ jobs:
   quality:
     name: lint and typecheck
     runs-on: ubuntu-latest
-    timeout-minutes: 3
 
     steps:
       - name: Checkout
@@ -79,60 +77,31 @@ jobs:
         run: pnpm typecheck
 
   pr-contracts:
-    name: PR contracts and startup
+    name: PR critical tests (shard ${{ matrix.shard }}/4)
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 3
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v6
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version-file: .node-version
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build workspace types
-        run: pnpm exec tsc -b
-
-      - name: Run fast contracts and startup tests
-        run: >-
-          pnpm exec vitest run
-          packages/config/src/model.test.ts
-          packages/config/src/manager.test.ts
-          packages/config/src/module-config.test.ts
-          packages/config/src/startup-validation.test.ts
-          packages/database/src/schema.test.ts
-          packages/database/src/memory-graph.test.ts
-          apps/server/src/memory-graph-routes.test.ts
-          apps/web/src/memory-graph-model.test.ts
-          apps/web/src/memory-graph-colors.test.ts
-          apps/web/src/components/AppShell.test.tsx
-          packages/modules/src/first-party/router/agent-contracts.test.ts
-          packages/modules/src/first-party/situation-model.test.ts
-          packages/modules/src/first-party/heartflow/planner.test.ts
-          apps/server/src/app.test.ts
-          apps/server/src/configuration-application.test.ts
-          apps/server/src/feature-management.test.ts
-          apps/server/src/server-composition.test.ts
-
-  message-targets:
-    name: message targets (${{ matrix.os }})
-    if: github.event_name == 'pull_request'
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        shard: [1, 2, 3, 4]
+
+    env:
+      KAGUYA_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout
@@ -150,8 +119,52 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build workspace types
-        run: pnpm exec tsc -b
+      - name: Build test dependencies
+        run: pnpm exec tsc -b apps/server
+
+      - name: Run critical tests
+        run: >-
+          pnpm test:critical --shard=${{ matrix.shard }}/4
+          --reporter=default --reporter=json --outputFile=critical-results.json
+
+      - name: Require complete critical test results
+        run: node scripts/check-critical-test-report.mjs critical-results.json
+
+  pr-contracts-result:
+    # 保留原检查名称，供已有分支保护规则继续使用。
+    name: PR contracts and startup
+    if: always() && github.event_name == 'pull_request'
+    needs: pr-contracts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every critical shard to pass
+        env:
+          RESULT: ${{ needs.pr-contracts.result }}
+        run: test "$RESULT" = success
+
+  message-targets:
+    name: message targets (ubuntu-latest)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build test dependencies
+        run: pnpm exec tsc -b apps/server
 
       - name: Test cross-conversation routing and authorization
         run: >-
@@ -160,12 +173,16 @@ jobs:
           apps/server/src/message-targets.test.ts
           packages/modules/src/first-party/router/light.test.ts
           packages/modules/src/node/prompt-templates.test.ts
+          --allowOnly=false --bail=0
+          --reporter=default --reporter=json --outputFile=routing-results.json
+
+      - name: Require complete routing test results
+        run: node scripts/check-critical-test-report.mjs routing-results.json
 
   test:
     name: test (${{ matrix.os }}, shard ${{ matrix.shard }}/2)
     if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -173,7 +190,7 @@ jobs:
           - ubuntu-latest
           - macos-latest
           - windows-latest
-        # 按文件拆成两个完整分片，避免真实数据库套件在较慢 runner 上超过作业时限。
+        # 按文件拆成两个完整分片，缩短真实数据库套件的等待时间。
         shard: [1, 2]
 
     steps:
@@ -202,7 +219,6 @@ jobs:
     name: PostgreSQL integration
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     env:
       KAGUYA_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
 

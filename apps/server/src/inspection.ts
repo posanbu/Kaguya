@@ -11,6 +11,19 @@
  * model-request-browser 通过 inspection-requests.ts 读取模块归属的模型请求，独立详情与完整 Prompt 使用同一认证和脱敏边界。
  * 节点最多 500，边最多 2000，详情引用最多 100，明确报告截断和图外引用；无编辑、重放或订阅。
  */
+/**
+ * 功能概述：把 Runtime Manifest 与 Ledger 转换为版本化只读 Inspection API，复用 Gateway 认证。
+ * 模块领域视图由 Manifest 指定 Kind/字段；仅查询持久化事实，语义摘要在统一脱敏后返回。
+ * 主要职责：createInspectionService 提供模块、游标 Atom 页、详情和以 runtime context 为界的 Flow；
+ * registerInspectionRoutes 仅注册 GET，先认证再校验查询，返回稳定错误及 no-store 缓存策略。
+ * 代码库关系：由 app.ts 注册，server.ts 注入已启动 Runtime 的 inspectModules 和数据库只读端口；
+ * schema 包约束 DTO，inspection-redaction.ts 统一清理所有响应，WebUI 不接触配置或原始数据库对象。
+ * 输入输出与副作用：只执行有界读取；游标绑定过滤条件并校验时间/ID；Flow 不递归扩展其他 context，
+ * registerInspectionRoutes 可接收动态 service getter，热切换期间返回 503，新实例生效后使用新的脱敏快照。
+ * record-browser 的目录按根记录时间分页，可组合已声明状态与起止时间，游标绑定这些筛选；引用分组统一脱敏。
+ * model-request-browser 通过 inspection-requests.ts 读取模块归属的模型请求，独立详情与完整 Prompt 使用同一认证和脱敏边界。
+ * 节点最多 500，边最多 2000，详情引用最多 100，明确报告截断和图外引用；无编辑、重放或订阅。
+ */
 import {
   recordItems,
   recordEntity,
@@ -25,18 +38,13 @@ import {
 import { createHash } from "node:crypto";
 import { readSituation } from "./inspection-situation.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type {
-  InformationRepository,
-  KaguyaDatabase,
-  ActivePersonProfileSnapshot,
-} from "@kaguya/database";
+import type { InformationRepository, KaguyaDatabase } from "@kaguya/database";
 import {
   z,
   inspectionModulesSchema,
   inspectionPageSchema,
   inspectionDetailSchema,
   inspectionFlowSchema,
-  inspectionStorageSchema,
   inspectionSurfacePageSchema,
   inspectionRecordPageSchema,
   inspectionSurfaceEntitySchema,
@@ -56,10 +64,6 @@ import {
   readPersonObservationIds,
   readPrimaryAccounts,
 } from "./person-basics.js";
-import {
-  readInspectionStorage,
-  StorageCursorError,
-} from "./inspection-storage.js";
 
 const date = z.iso.datetime({ offset: true });
 const id = z.string().min(1).max(512);
@@ -189,7 +193,6 @@ export interface InspectionSource {
   readonly modules: () => unknown;
   readonly secrets: unknown;
   readonly database?: KaguyaDatabase;
-  readonly activePersonProfiles?: ActivePersonProfileSnapshot;
   readonly now?: () => Date;
 }
 type SurfaceBrowser = Extract<
@@ -302,26 +305,11 @@ async function eligibleSurfaceEntityIds(
     status?: string | undefined;
   },
   database?: KaguyaDatabase,
-  activePersonProfiles?: ActivePersonProfileSnapshot,
 ): Promise<Set<string> | undefined> {
   const restrictions: Set<string>[] = [];
   if (browser.entityKind === "memory.identity.person.entity" && database) {
     if (query.q) {
       const matches = await findPeopleByAccount(database, { q: query.q });
-      const needle = query.q.toLocaleLowerCase();
-      for (const [personId, name] of activePersonProfiles?.initialNames ?? [])
-        if (name.toLocaleLowerCase().includes(needle)) matches.add(personId);
-      for (const [
-        personId,
-        metadata,
-      ] of activePersonProfiles?.metadataByPerson ?? [])
-        if (
-          [
-            metadata.primaryName,
-            ...metadata.aliases.map((alias) => alias.text),
-          ].some((name) => name?.toLocaleLowerCase().includes(needle))
-        )
-          matches.add(personId);
       restrictions.push(matches);
     }
     if (query.platform)
@@ -421,7 +409,6 @@ async function buildSurfaceItems(
   browser: SurfaceBrowser,
   roots: readonly DeepReadonly<InformationAtom>[],
   database?: KaguyaDatabase,
-  activePersonProfiles?: ActivePersonProfileSnapshot,
 ) {
   if (!roots.length) return [];
   const people = browser.entityKind === "memory.identity.person.entity";
@@ -482,10 +469,7 @@ async function buildSurfaceItems(
         ? readAtomField(platformRow, browser.platform.field)
         : undefined;
     const title = people
-      ? activePersonProfiles?.metadataByPerson.get(root.informationId)
-          ?.primaryName ||
-        activePersonProfiles?.initialNames.get(root.informationId) ||
-        String(
+      ? String(
           root.payload.initialName ||
             primaryAccounts.get(root.informationId)?.accountId ||
             root.payload.accountId ||
@@ -693,31 +677,6 @@ export function createInspectionService(source: InspectionSource) {
         }),
       );
     },
-    async storage(definitionId: string, input: unknown) {
-      const module = modules().find((m) => m.definitionId === definitionId);
-      if (!module?.inspection?.storage)
-        throw new InspectionError(404, "module_storage_not_found");
-      const query = parseRequest(
-        z
-          .object({
-            cursor: z.string().min(1).max(512).optional(),
-            limit: z.coerce.number().int().min(1).max(50).default(20),
-          })
-          .strict(),
-        input,
-      );
-      if (!source.database)
-        throw new InspectionError(503, "inspection_unavailable");
-      return inspectionStorageSchema.parse(
-        redact(
-          await readInspectionStorage(
-            source.database,
-            module.inspection.storage,
-            query,
-          ),
-        ),
-      );
-    },
     async surface(definitionId: string, surfaceId: string, input: unknown) {
       const { module, surface, browser, status } = findSurface(
         modules(),
@@ -851,7 +810,6 @@ export function createInspectionService(source: InspectionSource) {
         browser,
         query,
         source.database,
-        source.activePersonProfiles,
       );
       const roots = await ledger.inspectEntityPage({
         rootKind: browser.entityKind,
@@ -875,7 +833,6 @@ export function createInspectionService(source: InspectionSource) {
         browser,
         page,
         source.database,
-        source.activePersonProfiles,
       );
       const summaryAfter = new Date(
         (source.now?.() ?? new Date()).getTime() -
@@ -965,7 +922,6 @@ export function createInspectionService(source: InspectionSource) {
         browser,
         [root],
         source.database,
-        source.activePersonProfiles,
       );
       if (!entity) throw new InspectionError(404, "surface_entity_not_found");
       const entityKey = String(
@@ -1146,14 +1102,6 @@ export function registerInspectionRoutes(
         );
       },
     ],
-    [
-      "modules/:definitionId/storage",
-      (r, s) =>
-        s.storage(
-          parseRequest(z.object({ definitionId: id }), r.params).definitionId,
-          r.query,
-        ),
-    ],
     ["atoms", (r, s) => s.atoms(r.query)],
     [
       "atoms/:informationId",
@@ -1192,12 +1140,7 @@ export function registerInspectionRoutes(
           if (!active) throw new InspectionError(503, "inspection_unavailable");
           return { data: await handler(request, active) };
         } catch (error) {
-          const status =
-            error instanceof InspectionError
-              ? error.status
-              : error instanceof StorageCursorError
-                ? 400
-                : 500;
+          const status = error instanceof InspectionError ? error.status : 500;
           const code =
             error instanceof InspectionError
               ? error.code

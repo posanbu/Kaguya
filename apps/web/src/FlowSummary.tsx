@@ -4,6 +4,12 @@
  * 导出仅包含节点元数据、引用与截断标记；界面可读字段不进入默认诊断导出。
  * DeveloperConsole 在 DAG 前挂载；下载由用户点击触发，创建的临时 URL 随后释放。
  */
+/**
+ * 功能概述：从有界 Inspection Flow 提炼消息阶段与可导出的紧凑 trace，减少手动翻查原子。
+ * summarizeFlow 只归类已观察事实，不将缺失节点认定为失败；FlowSummary 展示阶段计数及显式截断状态。
+ * 导出仅包含节点元数据、引用与截断标记；界面可读字段不进入默认诊断导出。
+ * DeveloperConsole 在 DAG 前挂载；下载由用户点击触发，创建的临时 URL 随后释放。
+ */
 import type { InspectionFlow } from "@kaguya/schema";
 import { Download } from "lucide-react";
 import { Button } from "./components/ui.js";
@@ -16,7 +22,7 @@ const stages = [
   },
   {
     label: "记忆",
-    matches: (k: string) => k.startsWith("memory.raw."),
+    matches: (k: string) => k.startsWith("memory.native."),
   },
   { label: "模型", matches: (k: string) => k.startsWith("core.model.task.") },
   {
@@ -29,8 +35,10 @@ const stages = [
     matches: (k: string) => k === "agent.router.turn.context.completed",
   },
   { label: "关注", matches: (k: string) => k.startsWith("agent.attention.") },
-  { label: "规划", matches: (k: string) => k === "agent.light.decision.completed" },
-  { label: "表达", matches: (k: string) => k.startsWith("memory.expression.") },
+  {
+    label: "规划",
+    matches: (k: string) => k === "agent.light.decision.completed",
+  },
   { label: "投递", matches: (k: string) => k.startsWith("core.delivery.") },
   {
     label: "终态",

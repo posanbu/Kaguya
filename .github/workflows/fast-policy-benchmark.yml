@@ -5,6 +5,9 @@ on:
     paths:
       - "benchmarks/fast-policy/**"
       - ".github/workflows/fast-policy-benchmark.yml"
+  schedule:
+    - cron: "0 8 * * *"
+      timezone: Asia/Shanghai
   workflow_dispatch:
 
 permissions:

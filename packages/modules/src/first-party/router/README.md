@@ -14,7 +14,7 @@ Router 消费 observe 决策及其冻结引用，产生 Light 模型任务。情
 
 冻结后才执行 mute、安全、目标和授权检查。Light 判断参与价值并选择 `message | wait | silent`；`message` 只传目标和冻结引用，不传生成的话题、焦点、回复动作或写作建议。Heavy 读取同一份冻结 turn，独立决定发言或沉默。群聊直接通知在 observe 后开启 Focus；成功投递续租，silent/failed 关闭，wait 保持自然到期。
 
-bootstrap 只依据冻结输入、身份实体创建来源和本轮授权 Memory，区分 `cold-start`、`warming`、`established`。版本化投影和身份实体证据随 turn 冻结，不由后续消息或 Memory 改写。
+bootstrap 版本 2 仅保存人物及会话的建档来源、时间和是否由本轮输入创建，不推断认识程度。context_bootstrap 在最终 Prompt 装配时统计历史、固定记忆及动态召回，并关联人物节点。Light 与 Heavy 复用同一回合的记忆版本。
 
 ## 规划上下文与回复兴趣
 
@@ -34,7 +34,7 @@ Light 的每条冻结输入包含稳定的 `speakerKey`、平台消息标识、�
 
 claim、context、Light decision 和 terminal 使用稳定键与排他槽。重复 candidate、重复 delivery、进程重启和旧代际 one-shot 不会创建第二个有效 turn；身份未完成时保持开放，身份耗尽、授权失败或目标不可用时 fail-closed。`observedThroughInformationId` 记录冻结范围，只有对应注意决策为 observe 时才推进已观察水位。
 
-Light failed、cancelled、非法输出或模型不可用记录为失败，不显示为 silent。Light wait 使用独立 `totalWaitBudget`；Arousal defer 不消耗预算。Heavy 若选择 silent，情境运行模块记录 `heavy-declined` 终态，不创建投递。重试复用调用前已持久化的完整输入及原生消息，supersession 后的迟到结果不能派发。
+Light failed、cancelled、非法输出或模型不可用记录为失败，不显示为 silent。Light wait 使用独立 `totalWaitBudget`；Arousal defer 不消耗预算。Heavy 首次选择 silent 时记录 `heavy-declined` 终态。逐段表达的中间投递不结束 turn，最后一段成功投递才完成。已经发送部分内容后选择 silent，保留成功回执并记为 completed。重试复用调用前已持久化的完整输入及原生消息，supersession 后的迟到结果不能派发。
 
 ## 日志与可观测性
 

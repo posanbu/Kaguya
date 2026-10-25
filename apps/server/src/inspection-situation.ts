@@ -1,5 +1,6 @@
 import {
   situationFrameSchema,
+  lifecycleSnapshotSchema,
   situationViewSchema,
   type SituationStepView,
 } from "@kaguya/schema";
@@ -17,7 +18,7 @@ const terminalKinds = new Set(
 
 /** Read projection only. Opaque native continuation data never leaves this endpoint. */
 export async function readSituation(ledger: InspectionSource["ledger"]) {
-  const [frozen, requests] = await Promise.all([
+  const [frozen, requests, activities] = await Promise.all([
     ledger.inspectPage({ kind: "agent.situation.frozen", limit: 51 }),
     ledger.inspectPage({
       kind: "core.model.task.requested",
@@ -27,6 +28,7 @@ export async function readSituation(ledger: InspectionSource["ledger"]) {
       },
       limit: 61,
     }),
+    ledger.inspectPage({ kind: "agent.lifecycle.state.recorded", limit: 1 }),
   ]);
   const frames = frozen.slice(0, 50).flatMap((atom) => {
     const result = situationFrameSchema.safeParse(atom.payload.frame);
@@ -90,7 +92,34 @@ export async function readSituation(ledger: InspectionSource["ledger"]) {
       ]);
       const result = results[0];
       const terminal = decisions.find((a) => terminalKinds.has(a.kind));
-      const receiptId = terminal?.payload.deliveryTerminalInformationId;
+      const delivery = result
+        ? (
+            await ledger.inspectPage({
+              kind: "core.delivery.requested",
+              payloadIn: {
+                path: ["speech", "completedInformationId"],
+                values: [result.informationId],
+              },
+              limit: 2,
+            })
+          )[0]
+        : undefined;
+      const stepReceipt = delivery
+        ? (
+            await ledger.inspectPage({
+              referencedId: delivery.informationId,
+              relation: "core:status-of",
+              kinds: ["core.delivery.delivered", "core.delivery.failed"],
+              limit: 2,
+            })
+          )[0]
+        : undefined;
+      const silent = record(result?.payload.output).action === "silent";
+      const receiptId = silent
+        ? undefined
+        : delivery
+          ? stepReceipt?.informationId
+          : terminal?.payload.deliveryTerminalInformationId;
       const receipt =
         typeof receiptId === "string" ? await ledger.get(receiptId) : null;
       const output =
@@ -101,6 +130,27 @@ export async function readSituation(ledger: InspectionSource["ledger"]) {
         output && typeof output === "object" && !Array.isArray(output)
           ? (output as Record<string, unknown>)
           : null;
+      const recallRequest =
+        value?.action === "recall" && result
+          ? (
+              await ledger.inspectPage({
+                kind: "agent.heavy.recall.requested",
+                referencedId: result.informationId,
+                relation: "core:caused-by",
+                limit: 1,
+              })
+            )[0]
+          : undefined;
+      const recallResult = recallRequest
+        ? (
+            await ledger.inspectPage({
+              kind: "agent.heavy.recall.completed",
+              referencedId: recallRequest.informationId,
+              relation: "core:caused-by",
+              limit: 1,
+            })
+          )[0]
+        : undefined;
       const native = result?.payload.native;
       const parts = record(native).reasoning;
       const reasoning =
@@ -133,19 +183,43 @@ export async function readSituation(ledger: InspectionSource["ledger"]) {
             ? output
             : typeof value?.text === "string"
               ? value.text
-              : "",
+              : typeof value?.query === "string"
+                ? value.query
+                : "",
+        ...(value?.action === "recall"
+          ? {
+              recall: recallResult
+                ? JSON.stringify(recallResult.payload.snapshot)
+                : null,
+            }
+          : {}),
         status:
-          receipt?.payload.outcome === "unknown"
-            ? "unknown"
-            : (terminal?.kind.split(".").at(-1) ?? "pending"),
+          value?.action === "recall"
+            ? recallResult
+              ? `recall-${recallResult.payload.status}`
+              : "recall-pending"
+            : silent
+              ? "silent"
+              : receipt?.payload.outcome === "unknown"
+                ? "unknown"
+                : (stepReceipt?.kind.split(".").at(-1) ??
+                  terminal?.kind.split(".").at(-1) ??
+                  "pending"),
         reasoning,
         nativeAvailable: !!native,
-        receipt: receipt ? JSON.stringify(receipt.payload) : null,
+        receipt:
+          value?.action === "recall"
+            ? null
+            : receipt
+              ? JSON.stringify(receipt.payload)
+              : null,
       };
     }),
   );
   return situationViewSchema.parse({
     version: 1,
+    lifecycle:
+      lifecycleSnapshotSchema.safeParse(activities[0]?.payload).data ?? null,
     frames,
     steps,
     truncated: frozen.length > 50 || requests.length > 60,

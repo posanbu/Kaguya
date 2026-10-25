@@ -5,6 +5,13 @@
  * 代码库关系：message-prompt 提供编译校验，templates/heavy.* 提供各层布局；Runtime 消费结果。
  * 输入输出与副作用：只读模板文件；测试使用临时目录验证覆盖策略并在结束后清理。
  */
+/**
+ * 功能概述：负责第一方消息编写和人物事实模板的 Node 文件加载与验证（或其回归测试）。
+ * 主要职责：遍历全模块声明验证 default/local 文件完备性、覆盖优先级和安全初始化；优先 local 并保留空白，
+ * 缺失 local 才回退 default，空模板、读取错误和模板编译错误直接失败。
+ * 代码库关系：message-prompt 提供编译校验，templates/heavy.* 提供各层布局；Runtime 消费结果。
+ * 输入输出与副作用：只读模板文件；测试使用临时目录验证覆盖策略并在结束后清理。
+ */
 import {
   mkdirSync,
   mkdtempSync,
@@ -42,15 +49,11 @@ describe("loadFirstPartyPromptTemplates", () => {
   it("prefers local files and preserves whitespace", () => {
     const directory = root();
     writeDefaults(directory.path);
-    writeFileSync(
-      join(directory.path, "heavy.local.hbs"),
-      "  local\n",
-    );
+    writeFileSync(join(directory.path, "heavy.local.hbs"), "  local\n");
 
     const loaded = loadFirstPartyPromptTemplates({ root: directory.url });
     expect(loaded.heavy.main).toBe("  local\n");
     expect(loaded.heavy.memory).toBe("heavy.memory");
-    expect(loaded.personFact).toBe("person-fact");
   });
 
   it("rejects an empty selected template", () => {
@@ -100,10 +103,6 @@ it("loads every declared module template from files and never creates local file
   expect(loaded.light).toBe("light.decision");
   expect(loaded.lightBootstrapPolicy).toBe("light.bootstrap-policy");
   expect(loaded.heavy.bootstrap).toBe("heavy.bootstrap");
-  expect(loaded.expression).toEqual({
-    learn: "memory.expression.learn",
-    select: "memory.expression.select",
-  });
   expect(loaded.authorizedMessage).toEqual({
     automatic: "heavy.authorized-automatic",
     admin: "heavy.authorized-admin",
@@ -141,10 +140,7 @@ it.each(templateNames)(
 it("initializes missing local copies without replacing existing content or changing defaults", () => {
   const directory = root();
   writeDefaults(directory.path);
-  writeFileSync(
-    join(directory.path, "light.decision.local.hbs"),
-    "MY PLANNER",
-  );
+  writeFileSync(join(directory.path, "light.decision.local.hbs"), "MY PLANNER");
   const result = initializeLocalPromptTemplates(directory.url);
   expect(result.created).toHaveLength(templateNames.length - 1);
   expect(result.preserved).toEqual(["light.decision"]);

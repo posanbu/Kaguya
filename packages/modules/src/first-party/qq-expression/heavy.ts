@@ -3,7 +3,7 @@
  * 素材、最新语义和真人证据一起冻结；模型只看到本轮引用与文字说明。
  * 结束阶段只解析原请求中的候选，并在串行提交前重新检查同会话额度。
  */
-import { z } from "@kaguya/schema";
+import { z, nativeMemorySnapshotSchema } from "@kaguya/schema";
 import type {
   CompiledPrompt,
   DeepReadonly,
@@ -175,6 +175,21 @@ export function qqExpressionCandidates(
     scopeKey(turn.payload.source as typeof intent.payload.target) !== scope
   )
     return [];
+  const frame = atoms.find(
+    (a) =>
+      a.kind === "agent.situation.frozen" &&
+      a.payload.turnInformationId === intent.payload.turn.contextInformationId,
+  );
+  const memory = frame
+    ? nativeMemorySnapshotSchema.safeParse(
+        (frame.payload.frame as Record<string, unknown>)?.memory,
+      )
+    : undefined;
+  if (memory && (!memory.success || memory.data.status !== "enabled"))
+    return [];
+  const nodes = memory?.success
+    ? [...memory.data.fixed, ...memory.data.recalled.map((r) => r.node)]
+    : undefined;
   return atoms
     .filter((a) => a.kind === learned.kind)
     .flatMap((meaning) => {
@@ -213,13 +228,19 @@ export function qqExpressionCandidates(
         )
       )
         return [];
+      const node = nodes?.find(
+        (n) =>
+          n.metadata.qqAssetId === asset.informationId &&
+          Number(n.metadata.confidence) >= settings.qqExpressionMinConfidence,
+      );
+      if (nodes && !node) return [];
       return [
         {
           asset,
           meaning,
           description: {
-            meaning: m.meaning,
-            usage: m.usage,
+            meaning: node?.content ?? m.meaning,
+            usage: node ? "依据本轮统一 Memory 的冻结语义选用" : m.usage,
             confidence: m.confidence,
           },
         },
@@ -252,10 +273,20 @@ export function appendQqExpressionPrompt(
           ...c.description,
         })),
       }),
-      informationIds: candidates.flatMap((c) => [
-        c.asset.informationId,
-        c.meaning.informationId,
-      ]),
+      informationIds: [
+        ...candidates.flatMap((c) => [
+          c.asset.informationId,
+          c.meaning.informationId,
+        ]),
+        ...atoms
+          .filter(
+            (a) =>
+              a.kind === "agent.situation.frozen" &&
+              a.payload.turnInformationId ===
+                intent.payload.turn.contextInformationId,
+          )
+          .map((a) => a.informationId),
+      ],
     },
   ]);
   return {
@@ -273,6 +304,7 @@ export function resolveQqExpression(
   settings: HeavySettings,
   history: readonly Atom[],
   now: number,
+  requestedInformationId?: string,
 ) {
   if (typeof reference !== "string" || !settings.qqExpressionsEnabled)
     return undefined;
@@ -280,7 +312,9 @@ export function resolveQqExpression(
     (a) =>
       a.kind === "core.model.task.requested" &&
       a.payload.taskId === "agent.heavy.respond" &&
-      a.payload.sourceInformationId === intent.informationId,
+      (requestedInformationId
+        ? a.informationId === requestedInformationId
+        : a.payload.sourceInformationId === intent.informationId),
   );
   const prompt = request?.payload.prompt as unknown as
     CompiledPrompt | undefined;
@@ -344,19 +378,39 @@ export const qqExpressionHistorySelector = defineInformationSelector({
           limit: 1,
         })
       : [];
+    const source = intents[0];
+    const root =
+      source &&
+      source.kind !== messageIntentRequestedInformationKind.kind &&
+      typeof source.payload.intentInformationId === "string"
+        ? (
+            await ledger.find({
+              informationIds: [source.payload.intentInformationId],
+              kinds: [messageIntentRequestedInformationKind.kind],
+              limit: 1,
+            })
+          )[0]
+        : source;
     const parsed =
       messageIntentRequestedInformationKind.payloadSchema.safeParse(
-        intents[0]?.payload,
+        root?.payload,
       );
     if (!parsed.success || parsed.data.target.platform !== "qq") return [];
     const history = await ledger.find({
-      kinds: [assistantTextInformationKind.kind],
+      kinds: [assistantTextInformationKind.kind, "agent.heavy.message.ready"],
       payloadContains: { source: parsed.data.target },
       registrationOrder: true,
       order: "desc",
-      limit: 101,
+      limit: 202,
     });
-    return history
+    const unique = new Map<string, Atom>();
+    for (const a of history) {
+      const key =
+        (a.payload.speech as { completedInformationId?: string } | undefined)
+          ?.completedInformationId ?? a.informationId;
+      if (!unique.has(key)) unique.set(key, a);
+    }
+    return [...unique.values()]
       .filter(
         (a) =>
           !a.references.some(
@@ -365,6 +419,7 @@ export const qqExpressionHistorySelector = defineInformationSelector({
               r.informationId === sourceAtom.informationId,
           ),
       )
+      .slice(0, 101)
       .map((a) => a.informationId);
   },
 });

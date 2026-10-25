@@ -25,7 +25,7 @@ description: Kaguya 统一 Server 的路由、认证、Profile 与消息协议�
 
 **模块声明** — `GET /api/v1/inspection/modules` 返回 Manifest 名称、绑定与可选 `inspection`。其中 `mechanism` 描述机制，`views` 声明稳定视图 ID、Kind 集合及中文字段，`storage` 指定 Memory 或向量库。
 
-**领域记录** — `GET /api/v1/inspection/atoms?definitionId=agent.attention.arousal&view=gates` 先按声明的 Kind 集合过滤，再游标分页。可叠加 `kind`、`source`、`after`、`before`；指定实例时 source 使用当前 binding 的 `module:<instanceId>`。不指定 source 时包含历史来源。游标绑定查询条件，不能跨模块、视图或过滤条件复用。
+**领域记录** — `GET /api/v1/inspection/atoms?definitionId=agent.lifecycle&view=gates` 先按声明的 Kind 集合过滤，再游标分页。可叠加 `kind`、`source`、`after`、`before`；指定实例时 source 使用当前 binding 的 `module:<instanceId>`。不指定 source 时包含历史来源。游标绑定查询条件，不能跨模块、视图或过滤条件复用。
 
 **可读摘要** — Atom 页、详情及 Flow 节点附带 `presentation`：中文标题、明确记录的状态和带中文标签的字段。字段先脱敏再截断；详情 `payload` 保留完整脱敏内容。没有终态不能推断为失败。
 

@@ -10,6 +10,18 @@
  * Prompt 仅在既有 detail 记录中展开；模型失败的 Provider 状态、稳定原因和固定建议
  * 使用中文标签展示，外部文本的终端控制字符转义，所有续行显式缩进。
  */
+/**
+ * 功能概述：把 Pino 已完成 serializer/redaction 的记录排成面向人的中文控制台日志。
+ * 主要职责：createPrettyOptions 配置时间与级别；formatPrettyMessage 分离模块、摘要、正文、
+ * 业务字段和 DAG 溯源；模块输入、领域输出和记忆通过 pretty-events.ts 选取主题，
+ * pretty-panel.ts 按终端宽度画分区框，框内字段依据共享正文列宽优先完整折行；
+ * supportsPrettyColors 尊重终端、NO_COLOR 与 TERM=dumb。
+ * 代码库关系：由 index.ts 的同步 pretty 输出调用；展示词表对应 Server、AdapterHost、
+ * ModuleHost 和 Information kind 的稳定事件码，未知模块、事件及字段原样显示。
+ * 输入输出与副作用：纯函数，不读取业务载荷、不修改记录、不改变日志级别或 JSON 输出。
+ * Prompt 仅在既有 detail 记录中展开；模型失败的 Provider 状态、稳定原因和固定建议
+ * 使用中文标签展示，外部文本的终端控制字符转义，所有续行显式缩进。
+ */
 import type { PrettyOptions } from "pino-pretty";
 import stringWidth from "string-width";
 
@@ -30,8 +42,6 @@ const MODULE_NAMES: Readonly<Record<string, string>> = {
   "adapter:web": "网页聊天",
   "agent.router": "心流",
   "agent.heavy": "消息生成",
-  "memory.raw": "记忆写入",
-  "demo.person.fact.extract": "人物记忆",
 };
 
 const EVENT_NAMES: Readonly<Record<string, string>> = {
@@ -59,7 +69,6 @@ const EVENT_NAMES: Readonly<Record<string, string>> = {
   "scheduler.cadence.failed": "节奏调度失败",
   "model.task.prompt": "模型任务 Prompt 详情",
   "heavy.model.dispatching": "准备生成回复",
-  "person-fact.model.dispatching": "准备提取人物记忆",
   "message.inbound": "收到消息",
   "message.assistant": "回复已生成",
   "message.intent.requested": "请求生成消息",
@@ -77,11 +86,6 @@ const EVENT_NAMES: Readonly<Record<string, string>> = {
   "turn.decision.superseded": "回合决策已被替代",
   "light.decision": "回合规划完成",
   "speech.wait.requested": "等待下一次唤醒",
-  "memory.raw.requested": "原始记忆写入请求已登记",
-  "person.fact.candidate": "准备提取人物事实",
-  "person.fact.extracted": "人物事实提取完成",
-  "memory.expression.learned": "表达习惯学习完成",
-  "memory.expression.selected": "表达习惯选择完成",
   "consumer.failed": "信息处理失败",
   "execution.exhausted": "执行重试已耗尽",
 };
@@ -175,7 +179,6 @@ const LIFECYCLE_NAMES: Readonly<Record<string, string>> = {
   "delivery.lifecycle": "消息投递",
   "turn.lifecycle": "回合",
   "heartbeat.lifecycle": "心跳",
-  "memory.raw.terminal": "记忆写入",
 };
 
 const MESSAGE_NAMES: Readonly<Record<string, string>> = {
@@ -350,16 +353,6 @@ export function formatPrettyMessage(
     addSection("原因说明", log.reason);
     used.add("reason");
   }
-  if (panel && Array.isArray(log.habitSummaries)) {
-    addSection(
-      "表达习惯",
-      log.habitSummaries.length
-        ? log.habitSummaries.map((habit) => String(habit)).join("\n")
-        : "本次没有表达习惯",
-    );
-    used.add("habitSummaries");
-  }
-
   const trace: string[] = [];
   if (event) {
     // 未知事件已作为标题出现时不再重复。

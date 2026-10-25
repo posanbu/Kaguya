@@ -1,3 +1,4 @@
+import { lifecycleStateInformationKind } from "../lifecycle/activity.js";
 /**
  * 功能概述：验证 Focus 的真实调度落账与重启恢复，以及纯投影代际和参与终态边界。
  * 真实 PGlite/Core 测试确认 schedule 键与到期终态；参与测试隔离模型和投递 I/O，仅喂入已完成回合事实。
@@ -46,6 +47,7 @@ const focusPartFixture = defineInformationModule({
     description: "Exercises the focus subscriptions inside Router.",
     settingsSchema: z.object({}).strict(),
     consumes: [
+      lifecycleStateInformationKind,
       focusOpened,
       focusRenewed,
       turnCompletedInformationKind,

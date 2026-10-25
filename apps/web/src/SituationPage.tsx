@@ -24,6 +24,7 @@ const phases = {
   cancelled: "模型调用已取消",
 };
 const actions: Record<string, string> = {
+  recall: "补查记忆",
   message: "回应",
   silent: "沉默",
   wait: "等待",
@@ -37,6 +38,10 @@ const statuses: Record<string, string> = {
   superseded: "已被替代",
   interrupted: "已中断",
   unknown: "投递结果未知",
+  "recall-completed": "检索完成",
+  "recall-disabled": "记忆未启用",
+  "recall-failed": "检索失败",
+  "recall-pending": "正在检索",
   pending: "结果待确认",
 };
 function sceneName(id: string) {
@@ -130,6 +135,12 @@ function Step({ step }: { step: SituationStepView }) {
           ` · ${statuses[step.status] ?? step.status}`}
       </p>
       {step.text && <p className="situation-action-text">{step.text}</p>}
+      {step.recall && (
+        <details>
+          <summary>本次检索结果</summary>
+          <pre>{step.recall}</pre>
+        </details>
+      )}
       <p className="situation-action-reasoning" aria-label="可读推理">
         {step.reasoning ??
           (step.phase === "requested" ? "等待模型返回推理" : "未提供可读推理")}
@@ -174,12 +185,26 @@ export function SituationPage({ token }: { token: string }) {
   const planningContext = useSituationContext(token, planningStep?.id);
   const extraContext = useSituationContext(
     token,
-    contextOpen && inspectedStep?.id !== planningStep?.id
-      ? inspectedStep?.id
-      : undefined,
+    inspectedStep?.id !== planningStep?.id ? inspectedStep?.id : undefined,
   );
   const inspectedContext =
     inspectedStep?.id === planningStep?.id ? planningContext : extraContext;
+  const nativeRecall = inspectedContext.data?.memory;
+  const visibleRecalls =
+    nativeRecall && frame
+      ? [
+          {
+            sceneId: frame.current.sceneId,
+            revision: frame.id,
+            items: nativeRecall.recalled.map(({ node }) => ({
+              id: node.id,
+              text: node.content,
+              ownerId: node.metadata.ownerId,
+              evidenceIds: node.metadata.sourceIds,
+            })),
+          },
+        ]
+      : [];
   const timeline = revisions.toReversed();
   const lastPosition = Math.max(0, timeline.length - 1);
   const position = selectedIndex < 0 ? 0 : lastPosition - selectedIndex;
@@ -206,6 +231,39 @@ export function SituationPage({ token }: { token: string }) {
   }, [frame?.id]);
   return (
     <div className="situation-page" aria-label="情境工作台">
+      {data?.lifecycle && (
+        <section className="situation-activity" aria-label="当前活动">
+          <strong>
+            当前活动：
+            {
+              {
+                idle: "正在发呆",
+                observing: "正在查看会话",
+                working: "正在处理任务",
+                sleeping: "正在睡觉",
+              }[data.lifecycle.timeline.at(-1)?.activity ?? "idle"]
+            }
+          </strong>
+          <details>
+            <summary>最近十分钟的活动</summary>
+            <ol>
+              {data.lifecycle.timeline.map((span) => (
+                <li key={`${span.startedAt}:${span.activity}:${span.scopeKey}`}>
+                  <time dateTime={span.startedAt}>
+                    {new Date(span.startedAt).toLocaleTimeString()}
+                  </time>
+                  {" — "}
+                  <time dateTime={span.through}>
+                    {new Date(span.through).toLocaleTimeString()}
+                  </time>{" "}
+                  {span.transition}
+                  {span.scopeKey ? `（${span.scopeKey}）` : ""}
+                </li>
+              ))}
+            </ol>
+          </details>
+        </section>
+      )}
       {state.error && (
         <p className="situation-feedback" role="alert">
           读取失败：{state.error}。正在重试，保留上次状态。
@@ -242,14 +300,14 @@ export function SituationPage({ token }: { token: string }) {
             <ConsolePane
               title="召回"
               count={
-                frame?.recalls.reduce(
+                visibleRecalls.reduce(
                   (count, recall) => count + recall.items.length,
                   0,
                 ) ?? 0
               }
             >
-              {frame?.recalls.length ? (
-                frame.recalls.map((recall) => (
+              {visibleRecalls.length ? (
+                visibleRecalls.map((recall) => (
                   <div
                     className="situation-recall"
                     key={`${recall.sceneId}:${recall.revision}`}
@@ -260,12 +318,27 @@ export function SituationPage({ token }: { token: string }) {
                     {recall.items.map((item) => (
                       <article className="situation-log-entry" key={item.id}>
                         <p>{item.text}</p>
+                        <a
+                          href={`/memory?focusId=${encodeURIComponent(item.id)}`}
+                        >
+                          对象 {item.ownerId} · 查看当前记忆
+                        </a>
                       </article>
                     ))}
                   </div>
                 ))
               ) : (
-                <p className="situation-console-empty">暂无召回</p>
+                <p className="situation-console-empty">
+                  {inspectedContext.error || inspectedContext.data?.memoryError
+                    ? "召回快照读取失败"
+                    : inspectedStep && !inspectedContext.data
+                      ? "正在读取请求快照…"
+                      : !nativeRecall
+                        ? "未记录"
+                        : nativeRecall.status === "disabled"
+                          ? "Memory 已禁用"
+                          : "无动态召回"}
+                </p>
               )}
             </ConsolePane>
           </div>

@@ -12,6 +12,20 @@
  * 拒绝迟到写入并聚合清理错误；inspect 仅包含哈希、身份、声明与绑定，不暴露配置值。
  * inspect 同时投影模块拥有的静态检查视图，历史和存储查询由 Server 的只读端口执行。
  */
+/**
+ * prepare 将 registerOnce 的 openScope 约束透传给 Core，保持来源和 context 的校验。
+ * Cordis lifecycle 通过 mount/unmount 拥有每个模块的创建和释放；宿主保留能力预检、订阅及有界排空责任。
+ * 功能概述：按唯一 SDK Catalog 协议预检并托管模块，严格隔离声明能力与业务原子。
+ * 主要职责：preflight 在任何 create 前验证配置、kind、Selector、renderer 和能力图；
+ * start 按确定性拓扑顺序创建/启动，全部成功后开放订阅和可靠投递，再调用 ready 登记可被消费的启动任务；失败逆序 stop/dispose。
+ * 代码库关系：Runtime 先把 catalogInformationKinds 注册到 Core，再调用本宿主；
+ * durable 订阅由 Core 的 ReliableInformationRunner 执行并受 claim fencing 保护；
+ * SDK 的 use/select/registerOnce/commitTerminal 始终受清单约束，Core 负责最终原子验证与故障事实。
+ * 输入输出与副作用：设置 parse 后深冻结；回滚取消全部 prepared activation，关闭有界排空 live handler；
+ * 每个 stop/dispose hook 都受 drainTimeoutMs 限制，超时记录实例与钩子名称并继续逆序清理，
+ * 拒绝迟到写入并聚合清理错误；inspect 仅包含哈希、身份、声明与绑定，不暴露配置值。
+ * inspect 同时投影模块拥有的静态检查视图，历史和存储查询由 Server 的只读端口执行。
+ */
 import { createHash } from "node:crypto";
 import {
   z,
@@ -823,6 +837,7 @@ export class ModuleHost {
       .map(({ manifest }) => ({
         definitionId: manifest.definitionId,
         tags: [...(manifest.tags ?? [])],
+        category: manifest.category ?? "other",
         displayName: manifest.displayName,
         ...(manifest.inspection ? { inspection: manifest.inspection } : {}),
         summary: manifest.summary,

@@ -4,12 +4,18 @@
  * 代码库关系：Server 从模块 Zod 元数据投影，Web 通用表单校验响应。
  * 输入输出与副作用：纯 schema；revision 为不透明并发令牌，保存仅要求显式应用。
  */
+/**
+ * 功能概述：模块全局配置的安全管理 DTO，与 Inspection 运行时详情分离。
+ * 主要职责：声明可展示字段、实例版本、完整替换输入及字段错误；不承载隐藏 settings。
+ * 代码库关系：Server 从模块 Zod 元数据投影，Web 通用表单校验响应。
+ * 输入输出与副作用：纯 schema；revision 为不透明并发令牌，保存仅要求显式应用。
+ */
 import { z } from "zod";
 export const moduleSettingsFieldSchema = z.strictObject({
   key: z.string(),
   title: z.string(),
   description: z.string(),
-  type: z.enum(["string", "number", "integer", "boolean", "array"]),
+  type: z.enum(["string", "number", "integer", "boolean", "array", "object"]),
   itemType: z.enum(["string", "object"]).optional(),
   readOnly: z.boolean(),
   secret: z.boolean().optional(),

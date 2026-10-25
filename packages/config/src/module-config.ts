@@ -8,6 +8,16 @@
  * 外部/附加实例直接来自已冻结树的 definitionId/settings，不需要维护默认实例列表或创建配置目录。
  * 输入输出与副作用：读写敏感 JSON；已有目录不自动补齐，格式或身份错误按配置校验失败处理。
  */
+/**
+ * writeModuleInstanceConfig 仅替换已存在且身份匹配的实例，调用方负责共享锁和版本校验。
+ * 功能概述：管理 modules/<instanceId>/config.json 的严格加载与首次初始化。
+ * 主要职责：moduleInstanceConfigSchema 验证文件信封；loadModuleInstanceConfigs 仅在目录缺失时
+ * 写入完整默认配置；configPath 和 assertUniqueDefaults 拒绝越界路径及重复实例。
+ * 代码库关系：Server 传入 first-party Catalog 默认实例，模块 settings 由 Catalog 二次严格校验。
+ * initialize=false 用于热应用状态检查，目录缺失时仅报错而不写默认值。
+ * 外部/附加实例直接来自已冻结树的 definitionId/settings，不需要维护默认实例列表或创建配置目录。
+ * 输入输出与副作用：读写敏感 JSON；已有目录不自动补齐，格式或身份错误按配置校验失败处理。
+ */
 import { lstat, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -21,7 +31,7 @@ import {
   writeCordisTree,
   type CordisPluginTree,
 } from "./cordis-tree.js";
-import { jsonObjectSchema, type JsonObject } from "./model.js";
+import { jsonObjectSchema } from "./model.js";
 import {
   assertPathInside,
   ensureSensitiveDirectory,

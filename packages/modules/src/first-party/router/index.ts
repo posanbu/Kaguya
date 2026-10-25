@@ -1,3 +1,31 @@
+import {
+  frozenLifecycleSelector,
+  lifecycleStateInformationKind,
+} from "../lifecycle/activity.js";
+import {
+  backgroundPeopleSelector,
+  freezeBackgroundPeople,
+} from "./background-people.js";
+/**
+ * 候选新旧由 Selector 的账本注册顺序确定；相同/迟到业务时间及随机 UUID 不改变消费先后。
+ * Light 的 message 决策只传目标与冻结引用。
+ * manifest 声明 Light 模板；调用 compileLightPrompt 时传入装配阶段加载的 default/local 文本，不再使用代码内默认值。
+ * settings schema 的公开中文元数据供管理表单使用，运行时与保存共用约束。
+ * 管理端批准的跨会话 candidate 由宿主直接认领，不再触发 Light；其 delivery 仍使用本模块统一 turn 终态。
+ * Selector 只遍历开放 candidate 及最近 claim；恢复旧积压时每 scope 只推进一次合并观察。
+ * 在线 Router 编排器。所有推进都由可重放 Information 事实驱动；模块不保存
+ * per-chat 状态，也不依赖订阅安装顺序。
+ * createRouterModule 注入投递/模型失败 kind，返回声明订阅的模块；settings schema
+ * 校验 Focus、时效与安全策略。state/memory selector 从账本读取因果链及记忆，冻结完整输入。
+ * Light 在模型结构修复阶段检查本轮动作边界；同协议重放沿持久化请求复用 Prompt 和上下文，防止迟到历史触发第二次任务。
+ * 规划前使用冻结的本轮输入与聊天历史；未完成的记忆模块不提供额外召回。
+ * 宿主 conversation 能力冻结背景和候选；跨会话获胜决策交给 route 复核，失败关闭当前 turn，不回退发送。
+ * dispatchDecision 仅将独立 Light 的获胜 message 结果按 claim 注册一次意图，末条输入决定目标；
+ * turn 标识及引用保留完整冻结上下文，正文生成交给 composer。wait/silent 与失败路径
+ * 写入等待或终态；registerOnce/commitTerminal 保证重放幂等，模型 I/O 经宿主 capability 执行，平台 I/O 由 delivery 层负责。
+ * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
+ * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
+ */
 /**
  * 候选新旧由 Selector 的账本注册顺序确定；相同/迟到业务时间及随机 UUID 不改变消费先后。
  * Light 的 message 决策只传目标与冻结引用。
@@ -22,7 +50,11 @@ import { situationFrozenInformationKind } from "../situation-runtime.js";
 import { situationHistorySelector } from "../situation-history.js";
 import { buildSituationFrame } from "../situation-model.js";
 import { firstPartyInspection } from "../inspection.js";
-import type { RawContextAccess } from "@kaguya/memory";
+import {
+  type RawContextAccess,
+  type NativeMemoryAccess,
+  memoryScope,
+} from "@kaguya/memory";
 import { frozenRawContextInformationKind } from "./raw-context.js";
 import { focusOpened, focusRenewed, focusKinds } from "./focus-facts.js";
 import { focusStateSelector, createRouterFocusSubscriptions } from "./focus.js";
@@ -68,10 +100,6 @@ import {
   type InformationSelectorLedger,
 } from "@kaguya/sdk";
 import { buildTurnBootstrap } from "./bootstrap.js";
-import {
-  selectActivePersonProfiles,
-  type ActivePersonProfiles,
-} from "../person-profile.js";
 
 import {
   observationWakeInformationKind,
@@ -127,9 +155,9 @@ interface LightDispatch {
 export interface CreateRouterModuleOptions {
   readonly modelTaskCapability: ModuleCapability<ModelTaskCapability>;
   readonly rawContextCapability: ModuleCapability<RawContextAccess>;
+  readonly nativeMemoryCapability?: ModuleCapability<NativeMemoryAccess>;
   readonly messageAuthorizationCapability?: ModuleCapability<MessageAuthorization>;
   readonly agentIdentity: AgentIdentity;
-  readonly activePersonProfiles?: ActivePersonProfiles;
   readonly lightTemplate: string;
   readonly lightBootstrapPolicy: string;
   readonly lightPlatformPolicies?: Readonly<
@@ -153,8 +181,8 @@ export const routerSettingsSchema = z
     }),
     focusIdleMs: z.number().int().min(1000).max(3600000).default(120000).meta({
       title: "关注空闲期限",
-      description: "群聊直接唤醒或成功参与后的租约时长，单位毫秒。",
-      public: true,
+      description: "由 Lifecycle 的 activity.scopeIdleMs 统一提供，单位毫秒。",
+      public: false,
       default: 120000,
     }),
     staleAfterMs: z.number().int().min(0).meta({
@@ -650,6 +678,7 @@ function createRoutingModule(
     manifest: {
       protocolVersion: 1,
       moduleVersion: "2.0.0",
+      category: "agent",
       definitionId: role === "router" ? "agent.router" : "agent.situation",
       inspection: firstPartyInspection["agent.router"],
       displayName: { router: "Router 参与判断", situation: "情境与行动运行" }[
@@ -673,6 +702,7 @@ function createRoutingModule(
         ...lightPlatformPolicyDeclarations,
       ],
       consumes: [
+        lifecycleStateInformationKind,
         focusOpened,
         focusRenewed,
         oneShotDueInformationKind,
@@ -718,7 +748,9 @@ function createRoutingModule(
         turnInterruptedInformationKind,
       ],
       selectors: [
+        frozenLifecycleSelector,
         situationHistorySelector,
+        backgroundPeopleSelector,
         focusStateSelector,
         routerStateSelector,
         lightInterruptSelector,
@@ -729,6 +761,9 @@ function createRoutingModule(
         oneShotScheduleCapability,
         options.modelTaskCapability,
         options.rawContextCapability,
+        ...(options.nativeMemoryCapability
+          ? [options.nativeMemoryCapability]
+          : []),
         ...(options.messageAuthorizationCapability
           ? [options.messageAuthorizationCapability]
           : []),
@@ -786,12 +821,7 @@ function createRoutingModule(
             },
             async (_atom, context) => {
               const state = await context.select(routerStateSelector);
-              await progressCandidates(
-                state,
-                settings,
-                options.activePersonProfiles,
-                context,
-              );
+              await progressCandidates(state, settings, context);
             },
           ),
         ),
@@ -825,6 +855,9 @@ function createRoutingModule(
                     (i: { informationId: string }) => i.informationId,
                   ),
                 });
+              const activity = (
+                await context.select(frozenLifecycleSelector)
+              )[0];
               raw = await context.registerOnce(
                 "agent.router.memory.context.frozen",
                 turn.informationId,
@@ -833,8 +866,18 @@ function createRoutingModule(
                   payload: {
                     turnInformationId: turn.informationId,
                     global: {
-                      text: snapshot.global.text,
-                      informationIds: [...snapshot.global.informationIds],
+                      text: [
+                        snapshot.global.text,
+                        ...(activity
+                          ? [
+                              `当前生命周期（内部规则状态，不是消息正文）：${JSON.stringify(activity.payload)}`,
+                            ]
+                          : []),
+                      ].join("\n\n"),
+                      informationIds: [
+                        ...snapshot.global.informationIds,
+                        ...(activity ? [activity.informationId] : []),
+                      ],
                     },
                     currentScope: {
                       text: snapshot.currentScope.text,
@@ -903,6 +946,149 @@ function createRoutingModule(
                   }
                 : null,
             });
+            if (options.nativeMemoryCapability) {
+              const native = context.use(options.nativeMemoryCapability);
+              const backgroundAtoms = await context.select(
+                backgroundPeopleSelector,
+              );
+              const participants = await freezeBackgroundPeople(
+                [
+                  ...backgroundAtoms.flatMap<{
+                    informationId: string;
+                    source: unknown;
+                  }>((a) => {
+                    if (a.kind === "core.message.inbound.text")
+                      return [
+                        {
+                          informationId: a.informationId,
+                          source: a.payload.source,
+                        },
+                      ];
+                    if (a.kind === "memory.identity.platform.account.entity")
+                      return [
+                        {
+                          informationId: a.informationId,
+                          source: {
+                            platform: a.payload.platform,
+                            adapterId: a.payload.adapterId,
+                            senderId: a.payload.accountId,
+                          },
+                        },
+                      ];
+                    return [];
+                  }),
+                  ...(payload.inputs ?? []).map((i: any) => ({
+                    informationId: i.informationId,
+                    source: i.source,
+                  })),
+                ],
+                native,
+              );
+              const relatedPeople = participants
+                .filter(
+                  (p) =>
+                    p.platform === source.platform &&
+                    p.adapterId === source.adapterId &&
+                    p.ownerId !== null,
+                )
+                .map((p) => ({ accountId: p.accountId, ownerId: p.ownerId! }));
+              const owners = [
+                ...new Set([
+                  ...participants.flatMap((p) =>
+                    p.ownerId ? [p.ownerId] : [],
+                  ),
+                  "self:kaguya",
+                  "expression:kaguya",
+                  `conversation:${memoryScope(source)}`,
+                  ...(payload.inputs ?? []).flatMap((i: any) =>
+                    i.identity?.personInformationId
+                      ? [`person:${i.identity.personInformationId}`]
+                      : [],
+                  ),
+                  ...(payload.personNames ?? []).map(
+                    (p: any) => `person:${p.personInformationId}`,
+                  ),
+                ]),
+              ];
+              const scope = memoryScope(source);
+              const basicContext = {
+                scope,
+                owners,
+                asOf: payload.backlog.evaluatedAt,
+                query: "",
+              };
+              const observations = [
+                ...new Map(
+                  [...backgroundAtoms, ...selected].map((a) => [
+                    a.informationId,
+                    a,
+                  ]),
+                ).values(),
+              ].flatMap((inbound) => {
+                if (
+                  inbound.kind !== "core.message.inbound.text" ||
+                  !String(inbound.payload.text ?? "").trim()
+                )
+                  return [];
+                const parsed =
+                  inboundTextInformationKind.payloadSchema.safeParse(
+                    inbound.payload,
+                  );
+                if (
+                  !parsed.success ||
+                  memoryScope(parsed.data.source) !== scope
+                )
+                  return [];
+                const ownerId = relatedPeople.find(
+                  (p) => p.accountId === parsed.data.source.senderId,
+                )?.ownerId;
+                return [
+                  {
+                    ownerId: `conversation:${scope}`,
+                    kind: "conversation" as const,
+                    sourceId: inbound.informationId,
+                    observedAt: inbound.occurredAt,
+                  },
+                  ...(ownerId
+                    ? [
+                        {
+                          ownerId,
+                          kind: "person" as const,
+                          sourceId: inbound.informationId,
+                          observedAt: inbound.occurredAt,
+                        },
+                      ]
+                    : []),
+                ];
+              });
+              await native.ensureBasicSummaries?.(basicContext, observations);
+              frame.memory = await native.freeze({
+                people: relatedPeople,
+                participants,
+                scope: memoryScope(source),
+                owners,
+                asOf: payload.backlog.evaluatedAt,
+                query: (payload.inputs ?? [])
+                  .map(
+                    (i: any) =>
+                      selected.find((a) => a.informationId === i.informationId)
+                        ?.payload.text ?? "",
+                  )
+                  .join("\n")
+                  .slice(-512),
+              });
+              frame.recalls = [
+                {
+                  sceneId,
+                  revision: turn.informationId,
+                  items: frame.memory.recalled.map(({ node }) => ({
+                    id: node.id,
+                    text: node.content,
+                    evidenceIds: node.metadata.sourceIds,
+                  })),
+                },
+              ];
+            }
             const continuity = history
               .filter((a) => a.kind === "core.model.task.completed")
               .flatMap((result) => {
@@ -925,21 +1111,77 @@ function createRoutingModule(
                     ].includes(a.kind.split(".").at(-1)!),
                 );
                 if (!candidateId) return [];
-                const receipt = history.find(
+                const delivery = history.find(
                   (a) =>
-                    a.informationId ===
-                    terminal?.payload.deliveryTerminalInformationId,
+                    a.kind === "core.delivery.requested" &&
+                    (
+                      a.payload.speech as
+                        { completedInformationId?: string } | undefined
+                    )?.completedInformationId === result.informationId,
                 );
+                const isRecall =
+                  (result.payload.output as { action?: string } | undefined)
+                    ?.action === "recall";
+                const recallRequest = history.find(
+                  (a) =>
+                    a.kind === "agent.heavy.recall.requested" &&
+                    a.references.some(
+                      (r) =>
+                        r.relation === "core:caused-by" &&
+                        r.informationId === result.informationId,
+                    ),
+                );
+                const recallResult = history.find(
+                  (a) =>
+                    a.kind === "agent.heavy.recall.completed" &&
+                    a.references.some(
+                      (r) =>
+                        r.relation === "core:caused-by" &&
+                        r.informationId === recallRequest?.informationId,
+                    ),
+                );
+                const silent =
+                  (result.payload.output as { action?: string } | undefined)
+                    ?.action === "silent";
+                const receipt = silent
+                  ? undefined
+                  : delivery
+                    ? history.find(
+                        (a) =>
+                          (a.kind === "core.delivery.delivered" ||
+                            a.kind === "core.delivery.failed") &&
+                          a.references.some(
+                            (r) =>
+                              r.relation === "core:status-of" &&
+                              r.informationId === delivery.informationId,
+                          ),
+                      )
+                    : history.find(
+                        (a) =>
+                          a.informationId ===
+                          terminal?.payload.deliveryTerminalInformationId,
+                      );
                 return [
                   {
                     callResultId: result.informationId,
                     candidateInformationId: candidateId,
-                    status:
-                      receipt?.payload.outcome === "unknown"
-                        ? "unknown"
-                        : (terminal?.kind.split(".").at(-1) ?? "pending"),
-                    receiptId: receipt?.informationId ?? null,
-                    result: receipt?.payload ?? null,
+                    status: isRecall
+                      ? recallResult
+                        ? `recall-${recallResult.payload.status}`
+                        : "recall-pending"
+                      : silent
+                        ? "silent"
+                        : receipt?.payload.outcome === "unknown"
+                          ? "unknown"
+                          : (receipt?.kind.split(".").at(-1) ??
+                            terminal?.kind.split(".").at(-1) ??
+                            "pending"),
+                    receiptId: isRecall
+                      ? null
+                      : (receipt?.informationId ?? null),
+                    result: isRecall
+                      ? (recallResult?.payload.snapshot ?? null)
+                      : (receipt?.payload ?? null),
                   },
                 ];
               });
@@ -1306,6 +1548,27 @@ function createRoutingModule(
               )
             )
               throw new Error("Heavy silent must reference its message intent");
+            if (silent.payload.previousDeliveryInformationId) {
+              await context.commitTerminal(
+                "agent.router.turn.terminal",
+                candidate.informationId,
+                turnCompletedInformationKind,
+                {
+                  payload: {
+                    candidateInformationId: candidate.informationId,
+                    claimInformationId: claim.informationId,
+                    scopeKey: String(candidate.payload.scopeKey),
+                    deliveryTerminalInformationId:
+                      silent.payload.previousDeliveryInformationId,
+                  },
+                  references: terminalReferences(
+                    candidate.informationId,
+                    claim.informationId,
+                  ),
+                },
+              );
+              return;
+            }
             await context.commitTerminal(
               "agent.router.turn.terminal",
               candidate.informationId,
@@ -1340,12 +1603,7 @@ function createRoutingModule(
                 state,
                 context,
               );
-              await progressCandidates(
-                state,
-                settings,
-                options.activePersonProfiles,
-                context,
-              );
+              await progressCandidates(state, settings, context);
             },
           ),
         ),
@@ -1410,7 +1668,6 @@ function createRoutingModule(
 async function progressCandidates(
   atoms: readonly DeepReadonly<InformationAtom>[],
   settings: DeepReadonly<RouterSettings>,
-  activePersonProfiles: ActivePersonProfiles | undefined,
   context: InformationModuleHandlerContext,
 ) {
   const candidates = atoms.filter(
@@ -1424,13 +1681,7 @@ async function progressCandidates(
     // routerStateSelector 保证候选子序列按持久注册位置递增。
     const open = candidates.filter((a) => a.payload.scopeKey === scope);
     const winner = open.at(-1)!;
-    await progressCandidate(
-      winner,
-      atoms,
-      settings,
-      activePersonProfiles,
-      context,
-    );
+    await progressCandidate(winner, atoms, settings, context);
     if (open.length < 2) continue;
     const refreshed = await context.select(routerStateSelector);
     const claim = claimForCandidate(winner.informationId, refreshed);
@@ -1457,7 +1708,6 @@ async function progressCandidate(
   candidate: DeepReadonly<InformationAtom>,
   atoms: readonly DeepReadonly<InformationAtom>[],
   settings: DeepReadonly<RouterSettings>,
-  activePersonProfiles: ActivePersonProfiles | undefined,
   context: InformationModuleHandlerContext,
 ) {
   const map = new Map(atoms.map((atom) => [atom.informationId, atom]));
@@ -1672,23 +1922,6 @@ async function progressCandidate(
     inbound: DeepReadonly<InformationAtom>;
     identity: DeepReadonly<InformationAtom>;
   }[];
-  const personProfiles = frozenContext
-    ? (((frozenContext.payload as any).personProfiles ?? []) as ReturnType<
-        typeof selectActivePersonProfiles
-      >)
-    : selectActivePersonProfiles(
-        completeInputs.map(({ inbound, identity }) => ({
-          source: (inbound.payload as any).source,
-          personInformationId:
-            (identity.payload as any).status === "complete" &&
-            (identity.payload as any).scopeMode === "canonical"
-              ? (identity.payload as any).personInformationId
-              : undefined,
-        })),
-        (completeInputs.at(-1)!.inbound.payload as any).source.destination
-          ?.kind === "group",
-        activePersonProfiles,
-      );
   const personNames = frozenContext
     ? (((frozenContext.payload as any).personNames ?? []) as {
         personInformationId: string;
@@ -1721,38 +1954,11 @@ async function progressCandidate(
                   speakerKey,
                   platform: inputSource.platform,
                   adapterId: inputSource.adapterId,
-                  initialName:
-                    activePersonProfiles?.initialNames?.get(
-                      String(resolved.personInformationId),
-                    ) ||
-                    String(
-                      resolved.initialName ||
-                        inputSource.sender?.nickname ||
-                        inputSource.senderId,
-                    ),
-                },
-              ] as const,
-            ];
-          }),
-          ...personProfiles.flatMap((profile) => {
-            const initialName = activePersonProfiles?.initialNames?.get(
-              profile.personInformationId,
-            );
-            if (!initialName || !profile.platform || !profile.adapterId)
-              return [];
-            return [
-              [
-                JSON.stringify([
-                  profile.platform,
-                  profile.adapterId,
-                  profile.speakerKey.slice("speaker:".length),
-                ]),
-                {
-                  personInformationId: profile.personInformationId,
-                  speakerKey: profile.speakerKey,
-                  platform: profile.platform,
-                  adapterId: profile.adapterId,
-                  initialName,
+                  initialName: String(
+                    resolved.initialName ||
+                      inputSource.sender?.nickname ||
+                      inputSource.senderId,
+                  ),
                 },
               ] as const,
             ];
@@ -1829,7 +2035,7 @@ async function progressCandidate(
     context.now().toISOString(),
     settings.staleAfterMs,
   );
-  const bootstrap = buildTurnBootstrap(completeInputs, atoms, false, 0);
+  const bootstrap = buildTurnBootstrap(completeInputs, atoms);
   const bootstrapEvidenceIds = [
     ...new Set(
       completeInputs.flatMap(({ identity }) => {
@@ -1893,7 +2099,6 @@ async function progressCandidate(
           Number.isFinite(asOfMs) &&
           Date.parse(payload.firedAt) - asOfMs > settings.staleAfterMs,
         bootstrap,
-        ...(personProfiles.length === 0 ? {} : { personProfiles }),
         ...(personNames.length === 0 ? {} : { personNames }),
         attempt: payload.attempt,
         totalWaitBudget: payload.totalWaitBudget,
@@ -1922,10 +2127,6 @@ async function progressCandidate(
               },
             ]
           : []),
-        ...personProfiles.map(({ profileInformationId }) => ({
-          relation: "core:uses-context" as const,
-          informationId: profileInformationId,
-        })),
       ],
       contextInformationId: runtimeContext.informationId,
     },
@@ -2062,6 +2263,12 @@ async function finishDelivery(
   const request = outgoingStatusTarget(terminal, atoms);
   const turn = (request?.payload as any)?.turn;
   if (request === undefined || turn === undefined) return;
+  if (
+    delivered &&
+    (request.payload.speech as { continuation?: string | null } | undefined)
+      ?.continuation
+  )
+    return;
   const candidate = atoms.find(
     (atom) => atom.informationId === turn.candidateInformationId,
   );

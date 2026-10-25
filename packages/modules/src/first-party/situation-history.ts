@@ -28,12 +28,87 @@ export const situationHistorySelector = defineInformationSelector({
     }
     add(completed);
     for (const atom of completed) {
+      if (
+        (atom.payload.output as { action?: string } | undefined)?.action ===
+        "recall"
+      ) {
+        const requests = add(
+          await ledger.related({
+            from: [atom.informationId],
+            relation: "core:caused-by",
+            direction: "incoming",
+            limit: 20,
+          }),
+        );
+        for (const request of requests.filter(
+          (a) => a.kind === "agent.heavy.recall.requested",
+        )) {
+          const results = await ledger.related({
+            from: [request.informationId],
+            relation: "core:caused-by",
+            direction: "incoming",
+            limit: 20,
+          });
+          add(
+            await ledger.find({
+              informationIds: results.map((a) => a.informationId),
+              throughInformationId: sourceAtom.informationId,
+              registrationOrder: true,
+              limit: 20,
+            }),
+          );
+        }
+      }
+      const deliveries = add(
+        await ledger.find({
+          kinds: ["core.delivery.requested"],
+          payloadContains: {
+            speech: { completedInformationId: atom.informationId },
+          },
+          throughInformationId: sourceAtom.informationId,
+          registrationOrder: true,
+          limit: 2,
+        }),
+      );
+      for (const delivery of deliveries)
+        add(
+          await ledger.find({
+            informationIds: (
+              await ledger.related({
+                from: [delivery.informationId],
+                relation: "core:status-of",
+                direction: "incoming",
+                limit: 10,
+              })
+            ).map((a) => a.informationId),
+            throughInformationId: sourceAtom.informationId,
+            registrationOrder: true,
+            limit: 10,
+          }),
+        );
       const source = add(
         await ledger.find({
           informationIds: [String(atom.payload.sourceInformationId)],
           limit: 1,
         }),
       )[0];
+      const contextId = (
+        source?.payload.turn as { contextInformationId?: string } | undefined
+      )?.contextInformationId;
+      if (contextId) {
+        await ledger.find({ informationIds: [contextId], limit: 1 });
+        const backgrounds = await ledger.related({
+          from: [contextId],
+          relation: "core:uses-context",
+          direction: "incoming",
+          limit: 1000,
+        });
+        add(
+          backgrounds.filter(
+            (a) => a.kind === "agent.router.conversation.context.frozen",
+          ),
+        );
+      }
       const candidateId = (
         source?.payload.turn as { candidateInformationId?: string } | undefined
       )?.candidateInformationId;
@@ -98,9 +173,24 @@ export const situationHistorySelector = defineInformationSelector({
           ].some((status) => a.kind === `agent.router.turn.${status}`),
       );
       const terminal = terminals[0];
-      const receipt = selected.get(
-        String(terminal?.payload.deliveryTerminalInformationId),
+      const delivery = [...selected.values()].find(
+        (a) =>
+          a.kind === "core.delivery.requested" &&
+          (a.payload.speech as { completedInformationId?: string } | undefined)
+            ?.completedInformationId === result.informationId,
       );
+      const receipt = delivery
+        ? [...selected.values()].find(
+            (a) =>
+              (a.kind === "core.delivery.delivered" ||
+                a.kind === "core.delivery.failed") &&
+              a.references.some(
+                (r) =>
+                  r.relation === "core:status-of" &&
+                  r.informationId === delivery.informationId,
+              ),
+          )
+        : selected.get(String(terminal?.payload.deliveryTerminalInformationId));
       const calls = new Set<string>();
       const native = result.payload.native as
         { messages?: { content: unknown }[] } | undefined;
@@ -110,18 +200,56 @@ export const situationHistorySelector = defineInformationSelector({
             if (part?.type === "tool-call") calls.add(part.toolCallId);
             if (part?.type === "tool-result") calls.delete(part.toolCallId);
           }
-      const unresolved =
-        !terminal ||
-        terminal.kind.endsWith(".waiting") ||
-        receipt?.payload.outcome === "unknown" ||
-        calls.size > 0;
+      const recall =
+        (result.payload.output as { action?: string } | undefined)?.action ===
+        "recall";
+      const recallRequest = [...selected.values()].find(
+        (a) =>
+          a.kind === "agent.heavy.recall.requested" &&
+          a.references.some(
+            (r) =>
+              r.relation === "core:caused-by" &&
+              r.informationId === result.informationId,
+          ),
+      );
+      const recallResult = [...selected.values()].find(
+        (a) =>
+          a.kind === "agent.heavy.recall.completed" &&
+          a.references.some(
+            (r) =>
+              r.relation === "core:caused-by" &&
+              r.informationId === recallRequest?.informationId,
+          ),
+      );
+      const unresolved = recall
+        ? !recallResult
+        : !terminal ||
+          terminal.kind.endsWith(".waiting") ||
+          receipt?.payload.outcome === "unknown" ||
+          calls.size > 0;
       if (index < completed.length - 64 && !unresolved) continue;
+      const contextId = (
+        source?.payload.turn as { contextInformationId?: string } | undefined
+      )?.contextInformationId;
+      for (const background of selected.values())
+        if (
+          background.kind === "agent.router.conversation.context.frozen" &&
+          background.references.some(
+            (r) =>
+              r.relation === "core:uses-context" &&
+              r.informationId === contextId,
+          )
+        )
+          retained.add(background.informationId);
       for (const id of [
         result.informationId,
+        recallRequest?.informationId,
+        recallResult?.informationId,
         source?.informationId,
         candidateId,
         ...terminals.map((a) => a.informationId),
         receipt?.informationId,
+        delivery?.informationId,
       ])
         if (id && selected.has(id)) retained.add(id);
     }

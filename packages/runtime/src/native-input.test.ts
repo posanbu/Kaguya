@@ -147,3 +147,95 @@ it("reserves unknown and pending outcomes before trimming closed segments", () =
     { role: "user", content: "冻结情境" },
   ]);
 });
+
+it("replays each part with its own actual receipt within a shared turn", () => {
+  const atoms = segment("speech", "failed");
+  const first = atoms[0]!;
+  atoms.push({ ...first, informationId: "speech:second" });
+  for (const [index, result] of [first, atoms.at(-1)!].entries()) {
+    const deliveryId = `delivery:${index}`;
+    atoms.push({
+      ...first,
+      informationId: deliveryId,
+      kind: "core.delivery.requested",
+      payload: { speech: { completedInformationId: result.informationId } },
+    });
+    atoms.push({
+      ...first,
+      informationId: `receipt:${index}`,
+      kind: index === 0 ? "core.delivery.delivered" : "core.delivery.failed",
+      payload: { outcome: index === 0 ? "delivered" : "unknown" },
+      references: [{ relation: "core:status-of", informationId: deliveryId }],
+    });
+  }
+  const actions = assemble(atoms)
+    .filter(
+      (m) =>
+        m.role === "user" &&
+        typeof m.content === "string" &&
+        m.content.startsWith("{"),
+    )
+    .map((m) => JSON.parse(String(m.content)));
+  expect(actions).toEqual([
+    expect.objectContaining({
+      actionRecord: "speech:result",
+      status: "core.delivery.delivered",
+      receipt: { outcome: "delivered" },
+    }),
+    expect.objectContaining({
+      actionRecord: "speech:second",
+      status: "core.delivery.failed",
+      receipt: { outcome: "unknown" },
+    }),
+  ]);
+});
+
+it("does not assign a previous delivery to a silent continuation", () => {
+  const atoms = segment("silent-step", "completed");
+  atoms[0] = {
+    ...atoms[0]!,
+    payload: { ...atoms[0]!.payload, output: { action: "silent" } },
+  };
+  atoms.push({
+    ...atoms[0]!,
+    informationId: "silent-step:receipt",
+    kind: "core.delivery.delivered",
+    payload: { outcome: "delivered" },
+  });
+  expect(JSON.parse(String(assemble(atoms)[1]!.content))).toMatchObject({
+    actionRecord: "silent-step:result",
+    status: "agent.heavy.response.silent",
+  });
+});
+
+it("keeps historical assistant time and verified conversation source separate from current activity", () => {
+  const atoms = segment("morning");
+  atoms[0]!.occurredAt = "2026-10-22T03:04:00.000Z";
+  atoms[1]!.payload = {
+    target: {
+      adapterId: "qq",
+      platform: "qq",
+      destination: { kind: "group", groupId: "210794534" },
+    },
+    turn: {
+      candidateInformationId: "morning",
+      contextInformationId: "morning-context",
+    },
+  };
+  atoms.push({
+    informationId: "source",
+    kind: "agent.router.conversation.context.frozen",
+    occurredAt: atoms[0]!.occurredAt,
+    source: "test",
+    payload: { background: { name: "菅弦乐团教务处" } },
+    references: [
+      { relation: "core:uses-context", informationId: "morning-context" },
+    ],
+  });
+  const outcome = JSON.parse(String(assemble(atoms).at(-2)!.content));
+  expect(outcome).toMatchObject({
+    occurredAt: "2026-10-22T03:04:00.000Z",
+    conversation: { name: "菅弦乐团教务处" },
+    evidenceRole: "historical-assistant-output-not-current-activity",
+  });
+});

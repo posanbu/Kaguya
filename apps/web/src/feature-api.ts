@@ -1,7 +1,7 @@
 import { GATEWAY_UNAUTHORIZED_EVENT } from "./api.js";
 
 export const FEATURE_CHANGED_EVENT = "kaguya:features-changed";
-export const FEATURE_IDS = ["memory.raw", "adapter.napcat"] as const;
+export const FEATURE_IDS = ["memory.native", "adapter.napcat"] as const;
 export type FeatureId = (typeof FEATURE_IDS)[number];
 export interface FeatureStatus {
   id: FeatureId;

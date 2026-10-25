@@ -6,6 +6,14 @@
  * 输入输出与副作用：消息和记忆正文仅经 shared.contentPreview 生成脱敏、限长的日志字段；
  * coreMemoryTextInformationKind 的正文仍只在原有 debug 等级投影，不改变记忆载荷或写回流程。
  */
+/**
+ * 可选草稿与结构化表情是展示插件扩展点；assistant 保留原目标、回合和来源因果链。
+ * 功能概述：message 领域的 Information schema 与不可变定义，独立维护本领域引用和日志投影。
+ * 主要职责：下列 schema 校验入账载荷，各 kind 声明因果关系、上下文和诊断元数据；无 I/O。
+ * 代码库关系：information-kinds.ts 稳定重导出公共对象；跨领域只复用相邻文件定义，保持 Registry 对象身份。
+ * 输入输出与副作用：消息和记忆正文仅经 shared.contentPreview 生成脱敏、限长的日志字段；
+ * coreMemoryTextInformationKind 的正文仍只在原有 debug 等级投影，不改变记忆载荷或写回流程。
+ */
 import {
   outboundMessageContentSchema,
   outboundExpressionSchema,
@@ -38,6 +46,19 @@ export const messageTargetSchema = z
 
 export type MessageTarget = z.infer<typeof messageTargetSchema>;
 
+/** 同一次表达中的独立生成与投递步骤。缺省表示旧版单条消息。 */
+export const speechStepSchema = z
+  .object({
+    intentInformationId: nonBlankString,
+    stepInformationId: nonBlankString,
+    stepIndex: z.int().nonnegative(),
+    completedInformationId: nonBlankString,
+    continuation: nonBlankString.nullable(),
+    readyAt: z.iso.datetime(),
+  })
+  .strict();
+export type SpeechStep = z.infer<typeof speechStepSchema>;
+
 export const inboundTextInformationPayloadSchema = z
   .object({ text: z.string(), source: messageSourceSchema })
   .strict();
@@ -47,7 +68,9 @@ const messageIntentShape = {
   turn: turnProvenanceSchema,
   memoryInformationIds: z.array(nonBlankString),
 };
-export const messageIntentRequestedInformationPayloadSchema = z.object(messageIntentShape).strict();
+export const messageIntentRequestedInformationPayloadSchema = z
+  .object(messageIntentShape)
+  .strict();
 
 export type MessageIntentRequestedInformationPayload = z.infer<
   typeof messageIntentRequestedInformationPayloadSchema
@@ -148,8 +171,13 @@ export const heavyResponseSilentInformationKind = defineInformationKind({
     .object({
       intentInformationId: nonBlankString,
       turn: turnProvenanceSchema,
+      previousDeliveryInformationId: nonBlankString.optional(),
     })
-    .strict(),
+    .strict() as z.ZodType<{
+    intentInformationId: string;
+    turn: z.infer<typeof turnProvenanceSchema>;
+    previousDeliveryInformationId?: string;
+  }>,
   references: {
     "core:caused-by": {
       required: true,
@@ -220,37 +248,6 @@ export const filterDecisionInformationKind = defineInformationKind({
   },
 });
 
-export const coreMemoryTextInformationKind = defineInformationKind({
-  kind: "memory.text",
-  displayName: "记忆文本",
-  description:
-    "带显式来源引用的记忆正文，登记后供联想检索及 Prompt 上下文选择使用，来源可沿引用追溯。",
-  payloadSchema: z.object({ text: z.string().trim().min(1) }).strict(),
-  references: {
-    "core:caused-by": {
-      required: true,
-      multiple: false,
-    },
-    "core:context": {
-      required: true,
-      multiple: false,
-      targetKinds: ["core.runtime.context"],
-    },
-    "core:uses-context": {
-      required: true,
-      multiple: true,
-    },
-  },
-  log: {
-    enabled: true,
-    level: "debug",
-    project: ({ payload }) => ({
-      event: "memory.text.registered",
-      ...contentPreview(payload.text),
-    }),
-  },
-});
-
 export const assistantTextInformationKind = defineInformationKind({
   kind: "core.message.assistant.text",
   displayName: "生成的助手消息",
@@ -273,6 +270,7 @@ export const assistantTextInformationKind = defineInformationKind({
       expression: outboundExpressionSchema.optional(),
       originatingModuleInstanceId: nonBlankString,
       turn: turnProvenanceSchema.nullable(),
+      speech: speechStepSchema.optional(),
     })
     .strict() as z.ZodType<{
     text: string;
@@ -280,14 +278,18 @@ export const assistantTextInformationKind = defineInformationKind({
     expression?: OutboundExpression;
     originatingModuleInstanceId: string;
     turn: z.infer<typeof turnProvenanceSchema> | null;
+    speech?: SpeechStep;
   }>,
   references: {
+    "core:uses-context": { required: false, multiple: true },
     "core:caused-by": {
       required: true,
       multiple: false,
       targetKinds: [
         "core.model.task.completed",
         "agent.heavy.message.prepared",
+        "agent.heavy.message.ready",
+        "core.schedule.one-shot.due",
       ],
     },
     "core:context": {
@@ -310,20 +312,27 @@ export const assistantTextInformationKind = defineInformationKind({
   },
 });
 
+const deliveryRequestedPayloadSchema = z
+  .object({
+    adapterId: nonBlankString,
+    platform: nonBlankString,
+    destination: platformDestinationSchema,
+    message: outboundMessageContentSchema,
+    turn: turnProvenanceSchema.nullable(),
+    speech: speechStepSchema.optional(),
+  })
+  .strict();
+
 export const deliveryRequestedInformationKind = defineInformationKind({
   kind: "core.delivery.requested",
   displayName: "平台投递请求",
   description:
     "助手正文进入发送阶段时记录明确目标、消息内容和回合来源；Runtime 调用对应适配器并产生成功或失败结果。",
-  payloadSchema: z
-    .object({
-      adapterId: nonBlankString,
-      platform: nonBlankString,
-      destination: platformDestinationSchema,
-      message: outboundMessageContentSchema,
-      turn: turnProvenanceSchema.nullable(),
-    })
-    .strict(),
+  payloadSchema: deliveryRequestedPayloadSchema as z.ZodType<
+    Omit<z.infer<typeof deliveryRequestedPayloadSchema>, "speech"> & {
+      speech?: SpeechStep;
+    }
+  >,
   references: {
     "core:caused-by": {
       required: true,

@@ -513,7 +513,7 @@ export class NapCatCapture {
       this.fault("unknown_event");
       return;
     }
-    const messageId = id(event.message_id, true);
+    const platformMessageId = id(event.message_id, true);
     const occurred =
       typeof event.time === "number" && Number.isFinite(event.time)
         ? new Date(event.time * 1000).toISOString()
@@ -522,7 +522,7 @@ export class NapCatCapture {
     if (
       (event.post_type === "message" || event.post_type === "message_sent") &&
       event.message_type === "group" &&
-      messageId &&
+      platformMessageId &&
       id(event.user_id)
     ) {
       const content = normalizeOneBotCaptureContent(event.message);
@@ -546,7 +546,7 @@ export class NapCatCapture {
         eventType: "message",
         scope: this.scope(group),
         occurredAt: occurred,
-        platformMessageId: messageId,
+        platformMessageId: platformMessageId,
         senderId: id(event.user_id),
         text: content.text,
         senderName:
@@ -562,7 +562,7 @@ export class NapCatCapture {
           : null,
         mediaTypes: content.mediaTypes,
       };
-      const key = this.key(group, messageId);
+      const key = this.key(group, platformMessageId);
       const previous = this.seen.get(key);
       if (previous !== undefined) {
         this.counters.duplicates!++;
@@ -573,13 +573,13 @@ export class NapCatCapture {
     } else if (
       event.post_type === "notice" &&
       event.notice_type === "group_recall" &&
-      messageId
+      platformMessageId
     ) {
       draft = {
         eventType: "recall",
         scope: this.scope(group),
         occurredAt: occurred,
-        platformMessageId: messageId,
+        platformMessageId: platformMessageId,
       };
     } else {
       this.counters.unknown!++;
@@ -597,7 +597,7 @@ export class NapCatCapture {
         ? "platform_seconds"
         : "received_fallback";
     if (draft.eventType === "message") {
-      this.seen.set(this.key(group, messageId!), this.fingerprint(draft));
+      this.seen.set(this.key(group, platformMessageId!), this.fingerprint(draft));
       this.counters.messages!++;
     } else this.counters.recalls!++;
     this.enqueue([...recovery, draft], time);

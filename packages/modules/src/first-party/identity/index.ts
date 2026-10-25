@@ -6,6 +6,14 @@
  * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
  * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
  */
+/**
+ * 功能概述：把正规化入站消息解析为聊天范围、平台账号与人物实体，并为每条入站提交唯一身份终态。
+ * 主要职责：使用 Core registerOnce/commitTerminal 的原子槽位保证并发、重放和重启幂等；Web 匿名请求只产生
+ * ephemeral 范围，不创建长期人物；有 conversationId 时同一 Web 会话复用范围，无 ID 的旧请求逐条隔离。
+ * 代码库关系：消费 inbound kind，不读取 raw，也不依赖数据库查询投影。
+ * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
+ * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
+ */
 import { firstPartyInspection } from "../inspection.js";
 import { defineInformationModule, onInformation } from "@kaguya/sdk";
 import { z } from "@kaguya/schema";
@@ -19,7 +27,6 @@ import {
   personObservedInformationKind,
   personResolutionInformationKind,
   personContextCompletedInformationKind,
-  personProfileRevisionInformationKind,
 } from "../information-kinds.js";
 
 const settingsSchema = z.object({}).strict();
@@ -27,15 +34,16 @@ const key = (value: unknown) => JSON.stringify(value);
 
 export const identityModule = defineInformationModule({
   manifest: {
+    category: "identity",
     protocolVersion: 1,
     moduleVersion: "1.1.0",
     definitionId: "memory.identity",
     tags: ["memory"],
     inspection: firstPartyInspection["memory.identity"],
     displayName: "身份归一",
-    summary: "归一平台身份，并为稳定人物维护可追溯的手动画像。",
+    summary: "归一平台账号、人物和会话身份。",
     description:
-      "消费入站消息，建立会话、账号和人物实体及绑定，输出身份上下文终态；管理端另存手动画像版本，服务重启后供 Light 与 Heavy 参考。自动从 Memory 提取尚未接入。",
+      "消费入站消息，建立会话、账号和人物实体及绑定，输出身份上下文终态；关系、经历与偏好由 Memory 维护。",
     settingsSchema,
     consumes: [inboundTextInformationKind],
     produces: [
@@ -47,7 +55,6 @@ export const identityModule = defineInformationModule({
       personObservedInformationKind,
       personResolutionInformationKind,
       personContextCompletedInformationKind,
-      personProfileRevisionInformationKind,
     ],
     selectors: [],
     promptRenderers: [],

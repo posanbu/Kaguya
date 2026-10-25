@@ -1,4 +1,5 @@
 /** Ordered, durable projection of semantic Information and its evidence into raw Memory. */
+/** Ordered, durable projection of semantic Information and its evidence into raw Memory. */
 import {
   RAW_PROJECTED_KINDS,
   RAW_SEMANTIC_KINDS,
@@ -66,23 +67,6 @@ function scopeOf(payload: Record<string, unknown>): RawScope | null {
     adapterId,
     destination: destination as RawScope["destination"],
   };
-}
-function profileEvidenceIds(payload: Record<string, unknown>): string[] {
-  const sections = object(payload.sections);
-  const metadata = object(payload.metadata);
-  const entries = [
-    ...Object.values(sections ?? {}).flatMap((value) =>
-      Array.isArray(value) ? value : [],
-    ),
-    ...(Array.isArray(metadata?.aliases) ? metadata.aliases : []),
-  ];
-  return entries.flatMap((entry) =>
-    Array.isArray(object(entry)?.evidenceInformationIds)
-      ? (object(entry)!.evidenceInformationIds as unknown[]).filter(
-          (id): id is string => !!string(id),
-        )
-      : [],
-  );
 }
 const eventOf = (row: RawRow): RawEvent => ({
   informationId: row.information_id,
@@ -217,21 +201,6 @@ export class PostgresRawEventStore implements RawContextAccess {
           ref.relation !== "agent:turn-candidate"
         )
           pending.push({ id: ref.informationId, depth });
-      if (event.kind === "memory.expression.learning.completed") {
-        const scope = string(event.payload.scopeInformationId);
-        if (scope) pending.push({ id: scope, depth });
-        const habits = Array.isArray(event.payload.habits)
-          ? event.payload.habits
-          : [];
-        for (const habit of habits)
-          for (const id of Array.isArray(object(habit)?.sourceInformationIds)
-            ? (object(habit)!.sourceInformationIds as unknown[])
-            : [])
-            if (string(id)) pending.push({ id: String(id), depth });
-      }
-      if (event.kind === "memory.identity.person.profile.revision")
-        for (const id of profileEvidenceIds(event.payload))
-          pending.push({ id, depth });
       if (
         event.kind === "memory.identity.platform.account.binding" &&
         string(event.payload.personInformationId)
@@ -295,13 +264,6 @@ export class PostgresRawEventStore implements RawContextAccess {
         scope = source?.scope ?? null;
       }
     }
-    if (!scope && atom.kind === "memory.expression.learning.completed") {
-      const id = string(atom.payload.scopeInformationId);
-      if (id) {
-        const row = await this.loadLedgerEvent(tx, id);
-        scope = row ? scopeOf(row.payload) : null;
-      }
-    }
     await tx.query(
       `INSERT INTO memory_raw_events(information_id,kind,payload,"references",scope,scope_key,occurred_at,position,is_semantic)
       VALUES($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6,$7,$8,$9)
@@ -332,9 +294,9 @@ export class PostgresRawEventStore implements RawContextAccess {
       start = new Date(end.getTime() - 600_000);
     if (!Number.isFinite(end.getTime()))
       throw new Error("Invalid raw Memory freeze time");
-    const base = `is_semantic AND position <= $1 AND occurred_at <= $2 AND NOT EXISTS
-      (SELECT 1 FROM memory_raw_rejections r WHERE r.inbound_information_id=memory_raw_events.information_id AND r.position <= $1)
-      AND (kind <> 'memory.expression.learning.completed' OR (payload->>'status'='completed' AND jsonb_array_length(payload->'habits')>0))`;
+    const base = `is_semantic AND kind IN ('core.message.inbound.text','core.delivery.delivered','core.delivery.failed','memory.identity.chat.scope.binding','memory.identity.platform.account.binding')
+      AND position <= $1 AND occurred_at <= $2 AND NOT EXISTS
+      (SELECT 1 FROM memory_raw_rejections r WHERE r.inbound_information_id=memory_raw_events.information_id AND r.position <= $1)`;
     const globalQuery = `SELECT * FROM memory_raw_events WHERE ${base} AND occurred_at >= $3 ORDER BY occurred_at DESC,position DESC LIMIT 1000 OFFSET $4`;
     let globalRows = (
       await this.database.query<RawRow>(globalQuery, [
@@ -396,17 +358,6 @@ export class PostgresRawEventStore implements RawContextAccess {
       for (const event of added) all.set(event.informationId, event);
       let frontier = added.flatMap((event) => [
         ...event.references.map((ref) => ref.informationId),
-        ...(event.kind === "memory.expression.learning.completed"
-          ? [
-              String(event.payload.scopeInformationId),
-              ...((event.payload.habits as any[] | undefined) ?? []).flatMap(
-                (habit) => habit.sourceInformationIds ?? [],
-              ),
-            ]
-          : []),
-        ...(event.kind === "memory.identity.person.profile.revision"
-          ? profileEvidenceIds(event.payload)
-          : []),
       ]);
       for (let depth = 0; depth < 4 && frontier.length; depth++) {
         const ids = [

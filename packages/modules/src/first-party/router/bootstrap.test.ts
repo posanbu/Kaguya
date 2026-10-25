@@ -36,97 +36,46 @@ function entity(id: string, kind: string, cause: string) {
   ]);
 }
 
-describe("turn bootstrap projection", () => {
-  it("marks the first canonical conversation and person as cold start", () => {
-    const projection = buildTurnBootstrap(
-      [{ inbound, identity: identity() }],
-      [
-        entity("scope-1", chatScopeEntityInformationKind.kind, "input-1"),
-        entity("person-1", personEntityInformationKind.kind, "input-1"),
+describe("identity registration evidence", () => {
+  it.each(["input-1", "old-input"])(
+    "preserves %s evidence without inferring acquaintance",
+    (cause) => {
+      const projection = buildTurnBootstrap(
+        [{ inbound, identity: identity() }],
+        [
+          entity("scope-1", chatScopeEntityInformationKind.kind, cause),
+          entity("person-1", personEntityInformationKind.kind, cause),
+        ],
+      );
+      expect(projection).toMatchObject({
+        version: 2,
+        participants: [
+          {
+            ownerId: "person:person-1",
+            registration: {
+              sourceIds: [cause],
+              createdInCurrentInputs: cause === "input-1",
+            },
+          },
+        ],
+      });
+      expect(projection).not.toHaveProperty("mode");
+      expect(projection).not.toHaveProperty("memory");
+      expect(projection.participants[0]).not.toHaveProperty("state");
+      expect(normalizeTurnBootstrap({ bootstrap: projection })).toEqual(
+        projection,
+      );
+    },
+  );
+  it("leaves missing evidence unknown", () => {
+    expect(
+      buildTurnBootstrap([{ inbound, identity: identity("ephemeral") }], []),
+    ).toEqual({
+      version: 2,
+      conversation: { scopeMode: "ephemeral", registration: null },
+      participants: [
+        { inputInformationId: "input-1", ownerId: null, registration: null },
       ],
-      true,
-      0,
-    );
-    expect(projection).toEqual({
-      version: 1,
-      mode: "cold-start",
-      memory: { state: "no-authorized-evidence", selectedCount: 0 },
-      conversation: { state: "first-seen" },
-      participants: [{ inputInformationId: "input-1", state: "first-seen" }],
     });
-  });
-
-  it("uses earlier entity causes and authorized memory as grounded evidence", () => {
-    const projection = buildTurnBootstrap(
-      [{ inbound, identity: identity() }],
-      [
-        entity("scope-1", chatScopeEntityInformationKind.kind, "old-input"),
-        entity("person-1", personEntityInformationKind.kind, "old-input"),
-      ],
-      true,
-      2,
-    );
-    expect(projection.mode).toBe("established");
-    expect(projection.memory).toEqual({
-      state: "available",
-      selectedCount: 2,
-    });
-    expect(projection.conversation.state).toBe("known");
-    expect(projection.participants[0]!.state).toBe("known");
-  });
-
-  it("warms an established conversation when a new person first appears", () => {
-    const projection = buildTurnBootstrap(
-      [{ inbound, identity: identity() }],
-      [
-        entity("scope-1", chatScopeEntityInformationKind.kind, "old-input"),
-        entity("person-1", personEntityInformationKind.kind, "input-1"),
-      ],
-      true,
-      0,
-    );
-    expect(projection).toMatchObject({
-      mode: "warming",
-      memory: { state: "no-authorized-evidence", selectedCount: 0 },
-      conversation: { state: "known" },
-      participants: [{ state: "first-seen" }],
-    });
-  });
-
-  it("establishes a known conversation with a known person without memory", () => {
-    const projection = buildTurnBootstrap(
-      [{ inbound, identity: identity() }],
-      [
-        entity("scope-1", chatScopeEntityInformationKind.kind, "old-input"),
-        entity("person-1", personEntityInformationKind.kind, "old-input"),
-      ],
-      true,
-      0,
-    );
-    expect(projection).toMatchObject({
-      mode: "established",
-      memory: { state: "no-authorized-evidence", selectedCount: 0 },
-      conversation: { state: "known" },
-      participants: [{ state: "known" }],
-    });
-  });
-
-  it("keeps ephemeral identity unresolved and distinguishes disabled memory", () => {
-    const projection = buildTurnBootstrap(
-      [{ inbound, identity: identity("ephemeral") }],
-      [],
-      false,
-      0,
-    );
-    expect(projection).toMatchObject({
-      mode: "cold-start",
-      memory: { state: "disabled", selectedCount: 0 },
-      conversation: { state: "ephemeral" },
-      participants: [{ state: "unresolved" }],
-    });
-  });
-
-  it("rejects a turn without the current bootstrap projection", () => {
-    expect(() => normalizeTurnBootstrap({ inputs: [] })).toThrow();
   });
 });

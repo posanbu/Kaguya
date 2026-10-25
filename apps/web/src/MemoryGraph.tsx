@@ -7,6 +7,15 @@
  * 代码库关系：App 在 /memory 挂载；Canvas 复用 react-force-graph 高亮示例，API 对接 PostgresMemoryGraphStore。
  * 输入输出与副作用：只在显式保存／删除时写数据库；失败保留草稿，过期读取取消，离开保护未保存输入。
  */
+/**
+ * 功能概述：Memory 工作台，提供图检视、节点正文／metadata 编辑及有向关系管理。
+ * 主要职责：维护有界筛选、游标、单节点邻域、选择与草稿；关系以方向／类型／节点的紧凑行展示。
+ * 顶部按当前返回范围显示“回忆”数量；操作成功后重新读取真实快照。
+ * 筛选区统一对齐搜索、标签和时间控件；时间范围按需展开，新建有向边的入口称为“新增连结”。
+ * 节点新增／编辑与有向连结共用 Radix 模态弹层；编辑载入原数据，图上连线保留端点，关闭经过草稿保护并返回对应入口。
+ * 代码库关系：App 在 /memory 挂载；Canvas 复用 react-force-graph 高亮示例，API 对接 PostgresMemoryGraphStore。
+ * 输入输出与副作用：只在显式保存／删除时写数据库；失败保留草稿，过期读取取消，离开保护未保存输入。
+ */
 import {
   useCallback,
   useEffect,
@@ -45,6 +54,7 @@ import {
 import { useNavigationGuard } from "./components/AppShell.js";
 import {
   readMemoryGraph,
+  readMemoryHistory,
   saveMemoryNode,
   deleteMemoryNode,
   saveMemoryEdge,
@@ -72,7 +82,17 @@ const errorMessage = (error: unknown) =>
   error instanceof Error ? error.message : "操作失败，请重试。";
 
 export function MemoryGraph({ token }: { token: string }) {
-  const [query, setQuery] = useState<MemoryGraphQuery>({ limit: 100 });
+  const [query, setQuery] = useState<MemoryGraphQuery>(() => ({
+    limit: 100,
+    system: "native-v1",
+    status: "active",
+    ...(new URLSearchParams(window.location.search).get("ownerId")
+      ? { ownerId: new URLSearchParams(window.location.search).get("ownerId")! }
+      : {}),
+    ...(new URLSearchParams(window.location.search).get("focusId")
+      ? { focusId: new URLSearchParams(window.location.search).get("focusId")! }
+      : {}),
+  }));
   const [filters, setFilters] = useState({
     search: "",
     tags: "",
@@ -85,7 +105,9 @@ export function MemoryGraph({ token }: { token: string }) {
   const [colorMode, setColorMode] = useState<MemoryColorMode>("tag");
   const [timeOpen, setTimeOpen] = useState(false);
   const [revision, setRevision] = useState(0);
-  const [selectedId, setSelectedId] = useState<string>();
+  const [selectedId, setSelectedId] = useState<string | undefined>(
+    query.focusId,
+  );
   const [edgeId, setEdgeId] = useState<string>();
   const [editor, setEditor] = useState<Editor>();
   const newMemoryButtonRef = useRef<HTMLButtonElement>(null);
@@ -174,7 +196,7 @@ export function MemoryGraph({ token }: { token: string }) {
     return true;
   };
   const focus = (id: string) => {
-    if (!changeQuery({ focusId: id, limit: 100 })) return;
+    if (!changeQuery({ ...query, focusId: id, limit: 100 })) return;
     setFilters({ search: "", tags: "", from: "", before: "" });
     setSelectedId(id);
   };
@@ -213,7 +235,16 @@ export function MemoryGraph({ token }: { token: string }) {
   };
   const saveEdge = async (input: MemoryEdgeInput) => {
     const succeeded = await perform(async () => {
-      const saved = await saveMemoryEdge(token, input);
+      const saved = await saveMemoryEdge(
+        token,
+        input,
+        Object.fromEntries(
+          (snapshot?.nodes ?? []).map((n) => [
+            n.id,
+            Number(n.metadata.revision),
+          ]),
+        ),
+      );
       setQuery({ focusId: saved.sourceId, limit: 100 });
       setHistory([]);
       setFilters({ search: "", tags: "", from: "", before: "" });
@@ -230,21 +261,31 @@ export function MemoryGraph({ token }: { token: string }) {
     const succeeded = await perform(
       async () => {
         if (deletion.kind === "node") {
-          await deleteMemoryNode(token, deletion.node.id);
+          await deleteMemoryNode(token, deletion.node);
           setSelectedId(undefined);
           if (query.focusId === deletion.node.id) setQuery({ limit: 100 });
         } else {
-          await deleteMemoryEdge(token, deletion.edge);
+          await deleteMemoryEdge(
+            token,
+            deletion.edge,
+            Object.fromEntries(
+              (snapshot?.nodes ?? []).map((n) => [
+                n.id,
+                Number(n.metadata.revision),
+              ]),
+            ),
+          );
           setEdgeId(undefined);
         }
       },
-      deletion.kind === "node" ? "节点及其关联已删除。" : "关系已删除。",
+      deletion.kind === "node" ? "节点已归档。" : "关系已删除。",
     );
     if (succeeded) setDeletion(undefined);
   };
   const applyFilters = (event: FormEvent) => {
     event.preventDefault();
     changeQuery({
+      ...query,
       limit: 100,
       search: filters.search,
       tags: splitTags(filters.tags),
@@ -288,6 +329,92 @@ export function MemoryGraph({ token }: { token: string }) {
           </>
         }
       />
+      <nav className="memory-type-tabs" aria-label="记忆类型">
+        {(
+          [
+            [undefined, "全部"],
+            ["person", "人物"],
+            ["conversation", "会话"],
+            ["self", "自身"],
+            ["experience", "经历"],
+            ["expression", "表达"],
+          ] as const
+        ).map(([kind, label]) => (
+          <Button
+            key={label}
+            aria-pressed={query.kind === kind}
+            onClick={() =>
+              changeQuery({
+                ...query,
+                kind,
+                expressionType: undefined,
+                focusId: undefined,
+                afterId: undefined,
+              })
+            }
+          >
+            {label}
+          </Button>
+        ))}
+        <label>
+          状态
+          <select
+            value={query.status ?? ""}
+            onChange={(e) =>
+              changeQuery({
+                ...query,
+                status: e.target.value as "active" | "invalidated" | "archived",
+              })
+            }
+          >
+            <option value="active">有效</option>
+            <option value="invalidated">待整理</option>
+            <option value="archived">已归档</option>
+          </select>
+        </label>
+        <label>
+          层级
+          <input
+            type="number"
+            min="0"
+            placeholder="全部"
+            value={query.level ?? ""}
+            onChange={(e) =>
+              changeQuery({
+                ...query,
+                level:
+                  e.target.value === "" ? undefined : Number(e.target.value),
+              })
+            }
+          />
+        </label>
+        {query.ownerId && (
+          <Button onClick={() => changeQuery({ ...query, ownerId: undefined })}>
+            清除对象筛选
+          </Button>
+        )}
+        {query.kind === "expression" && (
+          <label>
+            表达内容
+            <select
+              value={query.expressionType ?? ""}
+              onChange={(e) =>
+                changeQuery({
+                  ...query,
+                  expressionType: (e.target.value ||
+                    undefined) as MemoryGraphQuery["expressionType"],
+                })
+              }
+            >
+              <option value="">全部表达</option>
+              <option value="habit">表达习惯</option>
+              <option value="example">文本示例</option>
+              <option value="qq-resource">QQ 表情资源</option>
+            </select>
+          </label>
+        )}
+        <a href="/developer/modules/memory.native">运行检查与配置</a>
+      </nav>
       <form
         className={`memory-filters${timeOpen ? " memory-filters-expanded" : ""}`}
         onSubmit={applyFilters}
@@ -514,6 +641,7 @@ export function MemoryGraph({ token }: { token: string }) {
                   <p className="memory-date">
                     {new Date(selected.metadata.occurredAt).toLocaleString()}
                   </p>
+                  <NativeMemoryDetails node={selected} token={token} />
                   <pre className="memory-content">{selected.content}</pre>
                   <details>
                     <summary>完整 metadata 与 ID</summary>
@@ -538,7 +666,7 @@ export function MemoryGraph({ token }: { token: string }) {
                       }
                     >
                       <Trash2 size={15} />
-                      删除节点
+                      归档节点
                     </Button>
                   </div>
                   <h3 className="memory-relations-heading">当前图中的关系</h3>
@@ -731,12 +859,12 @@ export function MemoryGraph({ token }: { token: string }) {
           <AlertDialog.Content className="wb-dialog">
             <AlertDialog.Title>
               {deletion?.kind === "node"
-                ? "删除这个记忆节点？"
+                ? "归档这个记忆节点？"
                 : "删除这条关系？"}
             </AlertDialog.Title>
             <AlertDialog.Description>
               {deletion?.kind === "node"
-                ? `“${memoryTitle(deletion.node)}”的正文、metadata 和全部入边、出边将永久删除。`
+                ? `归档“${memoryTitle(deletion.node)}”后，它将退出在线记忆。历史版本与关联仍会保留。`
                 : "只删除选中的有向关系，两端的记忆节点继续保留。"}
             </AlertDialog.Description>
             {error && <FieldMessage tone="error">{error}</FieldMessage>}
@@ -785,12 +913,29 @@ function MemoryNodeEditor({
       const { occurredAt, tags, ...extra } = node?.metadata ?? {
         occurredAt: new Date().toISOString(),
         tags: [],
+        system: "native-v1",
+        kind: "self",
+        ownerId: "self:kaguya",
+        scope: "shared",
+        level: 1,
+        revision: 0,
+        status: "active",
+        locked: false,
+        sourceIds: [],
+        aliases: [],
       };
       return {
         content: node?.content ?? "",
         time: toLocalInput(occurredAt),
         tags: tags.join("，"),
         extra: JSON.stringify(extra, null, 2),
+        kind: String(extra.kind ?? "self"),
+        expressionType: String(extra.expressionType ?? "habit"),
+        ownerId: String(extra.ownerId ?? "self:kaguya"),
+        scope: String(extra.scope ?? "shared"),
+        level: Number(extra.level ?? 1),
+        locked: extra.locked === true,
+        status: String(extra.status ?? "active"),
       };
     })(),
   );
@@ -811,6 +956,17 @@ function MemoryNodeEditor({
         content: draft.content,
         metadata: {
           ...extra,
+          system: "native-v1",
+          revision: Number(node?.metadata.revision ?? 0),
+          kind: draft.kind,
+          ...(draft.kind === "expression"
+            ? { expressionType: draft.expressionType }
+            : {}),
+          ownerId: draft.ownerId,
+          scope: draft.scope,
+          level: draft.level,
+          locked: draft.locked,
+          status: draft.status,
           occurredAt: new Date(draft.time).toISOString(),
           tags: splitTags(draft.tags),
         },
@@ -832,6 +988,89 @@ function MemoryNodeEditor({
           <X size={17} />
         </Button>
       </div>
+      <label className="field">
+        类型
+        <select
+          value={draft.kind}
+          onChange={(e) => setDraft({ ...draft, kind: e.target.value })}
+          disabled={busy}
+        >
+          <option value="person">人物</option>
+          <option value="conversation">会话</option>
+          <option value="self">自身</option>
+          <option value="experience">经历</option>
+          <option value="expression">表达</option>
+        </select>
+      </label>
+      {draft.kind === "expression" && (
+        <label className="field">
+          表达内容
+          <select
+            value={draft.expressionType}
+            onChange={(e) =>
+              setDraft({ ...draft, expressionType: e.target.value })
+            }
+          >
+            <option value="habit">表达习惯</option>
+            <option value="example">文本示例</option>
+            <option value="qq-resource">QQ 表情资源</option>
+          </select>
+        </label>
+      )}
+      <label className="field">
+        对象 ID
+        <input
+          required
+          value={draft.ownerId}
+          disabled={busy}
+          onChange={(e) => setDraft({ ...draft, ownerId: e.target.value })}
+        />
+      </label>
+      <label className="field">
+        适用范围
+        <input
+          required
+          value={draft.scope}
+          disabled={busy}
+          onChange={(e) => setDraft({ ...draft, scope: e.target.value })}
+        />
+      </label>
+      <label className="field">
+        抽象层级 level
+        <input
+          required
+          type="number"
+          min="0"
+          step="1"
+          value={draft.level}
+          disabled={busy}
+          onChange={(e) =>
+            setDraft({ ...draft, level: Number(e.target.value) })
+          }
+        />
+      </label>
+      <p>level 0 是适用范围内的唯一固定摘要。其他层级按需召回。</p>
+      <label>
+        <input
+          type="checkbox"
+          checked={draft.locked}
+          disabled={busy}
+          onChange={(e) => setDraft({ ...draft, locked: e.target.checked })}
+        />
+        锁定，禁止自动修改
+      </label>
+      <label className="field">
+        状态
+        <select
+          value={draft.status}
+          disabled={busy}
+          onChange={(e) => setDraft({ ...draft, status: e.target.value })}
+        >
+          <option value="active">有效</option>
+          <option value="invalidated">待整理</option>
+          <option value="archived">已归档</option>
+        </select>
+      </label>
       <label className="field">
         出现时间（本地时区）
         <input
@@ -1048,5 +1287,79 @@ function MemoryEdgeEditor({
         </Button>
       </div>
     </form>
+  );
+}
+
+function NativeMemoryDetails({
+  node,
+  token,
+}: {
+  node: MemoryNode;
+  token: string;
+}) {
+  const [history, setHistory] = useState<unknown>();
+  const [error, setError] = useState("");
+  useEffect(() => {
+    setHistory(undefined);
+    setError("");
+  }, [node.id, node.metadata.revision]);
+  return (
+    <section aria-label="记忆层级与来源">
+      {node.metadata.kind === "expression" && (
+        <p>
+          {node.metadata.expressionType === "qq-resource"
+            ? "QQ 表情资源"
+            : node.metadata.expressionType === "habit"
+              ? "表达习惯"
+              : node.metadata.expressionType === "example"
+                ? "文本示例"
+                : "表达内容（未分类）"}
+        </p>
+      )}
+      <dl>
+        <dt>层级</dt>
+        <dd>
+          level {String(node.metadata.level)}
+          {node.metadata.level === 0 ? " · 固定注入" : " · 按需召回"}
+        </dd>
+        <dt>对象</dt>
+        <dd>{String(node.metadata.ownerId)}</dd>
+        <dt>范围</dt>
+        <dd>{String(node.metadata.scope)}</dd>
+        <dt>版本</dt>
+        <dd>
+          {String(node.metadata.revision)} ·{" "}
+          {node.metadata.status === "active"
+            ? "有效"
+            : node.metadata.status === "archived"
+              ? "已归档"
+              : "待整理"}
+          {node.metadata.locked ? " · 手动锁定" : ""}
+        </dd>
+      </dl>
+      <details>
+        <summary>来源</summary>
+        <pre>{JSON.stringify(node.metadata.sourceIds, null, 2)}</pre>
+      </details>
+      <details
+        onToggle={(e) => {
+          if (e.currentTarget.open && history === undefined)
+            void readMemoryHistory(token, node.id).then(setHistory, (e) =>
+              setError(errorMessage(e)),
+            );
+        }}
+      >
+        <summary>修订历史</summary>
+        {error ? (
+          <FieldMessage tone="error">{error}</FieldMessage>
+        ) : (
+          <pre className="memory-json">
+            {history === undefined
+              ? "正在读取…"
+              : JSON.stringify(history, null, 2)}
+          </pre>
+        )}
+      </details>
+    </section>
   );
 }

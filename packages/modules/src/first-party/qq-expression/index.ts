@@ -1,3 +1,4 @@
+import { nativeMemoryCapability } from "@kaguya/memory";
 /**
  * QQ 素材维护模块，默认关闭；收藏与有来源的语义学习独立持久化。
  * 不订阅草稿或选择请求，不创建 prepared，不参与回复和发送授权。
@@ -29,6 +30,7 @@ import {
   learned,
   meaningSchema,
   selectionRequested,
+  legacySelectionRequested,
   settingsSchema,
 } from "./facts.js";
 import { stripEmoji, scopeKey } from "./policy.js";
@@ -137,6 +139,7 @@ export function createQqExpressionModule(
         observed,
         messageDraftInformationKind,
         selectionRequested,
+        legacySelectionRequested,
         messagePreparedInformationKind,
       ],
       produces: [collected, observed, learned],
@@ -146,7 +149,7 @@ export function createQqExpressionModule(
         ...d,
         mutability: "editable" as const,
       })),
-      requires: [options.modelTaskCapability],
+      requires: [options.modelTaskCapability, nativeMemoryCapability],
       provides: [],
       inspection: {
         mechanism: [
@@ -271,6 +274,7 @@ export function createQqExpressionModule(
             observed,
             { subscriptionId: "qq-expression.learn", delivery: "durable" },
             async (atom, context) => {
+              if (!context.use(nativeMemoryCapability).enabled) return;
               const state = await context.select(sourceSelector);
               const sources = state.filter(
                 (a) => a.kind === inboundTextInformationKind.kind,

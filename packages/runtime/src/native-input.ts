@@ -70,23 +70,93 @@ export function assembleNativeInput(input: {
       if (openCalls.size) throw new Error("NATIVE_TOOL_INTERACTION_OPEN");
       continue;
     }
-    const receiptId = terminal?.payload.deliveryTerminalInformationId;
-    const receipt = input.atoms.find((a) => a.informationId === receiptId);
+    const delivery = input.atoms.find(
+      (a) =>
+        a.kind === "core.delivery.requested" &&
+        (a.payload.speech as { completedInformationId?: string } | undefined)
+          ?.completedInformationId === atom.informationId,
+    );
+    const silent =
+      (payload.output as { action?: string } | undefined)?.action === "silent";
+    const receipt = silent
+      ? undefined
+      : delivery
+        ? input.atoms.find(
+            (a) =>
+              (a.kind === "core.delivery.delivered" ||
+                a.kind === "core.delivery.failed") &&
+              a.references.some(
+                (r) =>
+                  r.relation === "core:status-of" &&
+                  r.informationId === delivery.informationId,
+              ),
+          )
+        : input.atoms.find(
+            (a) =>
+              a.informationId ===
+              terminal?.payload.deliveryTerminalInformationId,
+          );
+    const recall =
+      (payload.output as { action?: string } | undefined)?.action === "recall";
+    const recallRequest = input.atoms.find(
+      (a) =>
+        a.kind === "agent.heavy.recall.requested" &&
+        a.references.some(
+          (r) =>
+            r.relation === "core:caused-by" &&
+            r.informationId === atom.informationId,
+        ),
+    );
+    const recallResult = input.atoms.find(
+      (a) =>
+        a.kind === "agent.heavy.recall.completed" &&
+        a.references.some(
+          (r) =>
+            r.relation === "core:caused-by" &&
+            r.informationId === recallRequest?.informationId,
+        ),
+    );
+    const contextId = (
+      source?.payload.turn as { contextInformationId?: string } | undefined
+    )?.contextInformationId;
+    const background = input.atoms.find(
+      (a) =>
+        a.kind === "agent.router.conversation.context.frozen" &&
+        a.references.some(
+          (r) =>
+            r.relation === "core:uses-context" && r.informationId === contextId,
+        ),
+    );
     const outcome: NativeMessage = {
       role: "user",
       content: JSON.stringify({
         actionRecord: atom.informationId,
-        status: terminal?.kind ?? "pending",
-        ...(receipt ? { receipt: receipt.payload } : {}),
+        occurredAt: atom.occurredAt,
+        source: source?.payload.target ?? source?.payload.source ?? null,
+        conversation: background?.payload.background ?? null,
+        evidenceRole: "historical-assistant-output-not-current-activity",
+        status: recall
+          ? recallResult
+            ? `recall-${recallResult.payload.status}`
+            : "recall-pending"
+          : silent
+            ? "agent.heavy.response.silent"
+            : (receipt?.kind ?? terminal?.kind ?? "pending"),
+        ...(recall
+          ? { recall: recallResult?.payload.snapshot ?? null }
+          : receipt
+            ? { receipt: receipt.payload }
+            : {}),
       }),
     };
     segments.push({
       messages: [...native.data.messages, outcome],
-      pinned:
-        !terminal ||
-        terminal.kind.endsWith(".waiting") ||
-        receipt?.payload.outcome === "unknown" ||
-        openCalls.size > 0,
+      pinned: recall
+        ? !recallResult
+        : !terminal ||
+          terminal.kind.endsWith(".waiting") ||
+          receipt?.payload.outcome === "unknown" ||
+          openCalls.size > 0,
     });
   }
   // Reserve open interactions first, then admit complete recent segments.

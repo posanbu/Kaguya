@@ -1,3 +1,4 @@
+import { qqExpressionHistorySelector } from "./heavy.js";
 /** Heavy 表情决策契约：冻结素材、来源校验、明确不选、重放及发送额度。 */
 import { describe, expect, it } from "vitest";
 import { z } from "@kaguya/schema";
@@ -399,4 +400,93 @@ it("does not renumber a frozen reference when a stricter confidence setting remo
       f.now,
     ),
   ).toEqual({ kind: "face", id: "15" });
+});
+
+it("requires a visible enabled native Memory snapshot when a situation frame exists", () => {
+  const f = data();
+  const memory = {
+    version: 1,
+    status: "enabled",
+    frozenAt: f.turn.occurredAt,
+    scope: "scope",
+    owners: ["expression:kaguya"],
+    fixed: [],
+    recalled: [],
+    degraded: [],
+    budget: { dynamicCharacters: 1000, omittedNodeIds: [] },
+  };
+  const frame = (m: Record<string, unknown>) =>
+    atom("situation", "agent.situation.frozen", {
+      turnInformationId: f.turn.informationId,
+      frame: { memory: m as never },
+    });
+  expect(
+    qqExpressionCandidates([...f.atoms, frame(memory)], f.intent, f.settings),
+  ).toEqual([]);
+  expect(
+    qqExpressionCandidates(
+      [...f.atoms, frame({ ...memory, status: "disabled" })],
+      f.intent,
+      f.settings,
+    ),
+  ).toEqual([]);
+  const node = {
+    id: "00000000-0000-4000-8000-000000000001",
+    content: "管理员核实的素材用法",
+    metadata: {
+      occurredAt: f.turn.occurredAt,
+      system: "native-v1",
+      kind: "expression",
+      ownerId: "expression:kaguya",
+      scope: "scope",
+      level: 1,
+      revision: 2,
+      status: "active",
+      locked: true,
+      sourceIds: [f.messages[0]!.informationId],
+      qqAssetId: f.asset.informationId,
+      confidence: 0.99,
+    },
+  };
+  expect(
+    qqExpressionCandidates(
+      [...f.atoms, frame({ ...memory, fixed: [node] })],
+      f.intent,
+      f.settings,
+    )[0]?.description.meaning,
+  ).toBe(node.content);
+});
+it("counts pending speech-ready reservations once and resolves the root intent for continuation and recall", async () => {
+  const f = data();
+  const step = atom("step", "agent.heavy.step.requested", {
+    intentInformationId: f.intent.informationId,
+  });
+  const completed = atom("result", "core.model.task.completed", {});
+  const speech = { completedInformationId: "prior-completion" };
+  const ready = atom("ready", "agent.heavy.message.ready", {
+    text: "先说一句",
+    expression: { kind: "face", id: "14" },
+    speech,
+  });
+  const assistant = atom(
+    "sent",
+    "core.message.assistant.text",
+    JSON.parse(JSON.stringify(ready.payload)),
+  );
+  const pending = atom("pending", "agent.heavy.message.ready", {
+    text: "尚未发送",
+    speech: { completedInformationId: "next-completion" },
+  });
+  const ledger: InformationSelectorLedger = {
+    find: async (q) =>
+      q.kinds?.includes("core.message.assistant.text")
+        ? [assistant, ready, pending]
+        : [f.intent],
+    related: async (q) =>
+      q.from.includes(completed.informationId) ? [f.request] : [step],
+    retrieve: async () => [],
+  };
+  expect(
+    await qqExpressionHistorySelector.select({ sourceAtom: completed, ledger }),
+  ).toEqual([assistant.informationId, pending.informationId]);
 });

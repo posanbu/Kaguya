@@ -1,16 +1,21 @@
 /**
  * 功能概述：渲染模块 Manifest 声明的受控检查 Surface；首版提供状态摘要、实体主从浏览、关系列表、时间线与关系图。
  * model-request-browser 分派给独立 RequestSurface，按持久化模型请求提供目录与详情。
- * storage-browser 分派给紧凑持久库表格，避免通用历史标签和卡片列表干扰领域浏览。
  * 主要职责：将搜索和筛选转换为只读 Inspection 查询，保持稳定游标；实体选择加载独立详情并允许追溯原始 Atom。
  * 代码库关系：ModulePages 在模块声明 surface 时挂载本组件；布局来自 Manifest，数据由版本化 surface DTO 提供。
- * 输入输出与副作用：Inspection 继续只读；人物详情另走受认证的画像管理接口保存手动版本，保存后重启生效。
+ * 输入输出与副作用：Inspection 继续只读；人物详情只读展示实体、绑定与识别记录，记忆内容在 Memory 工作台管理。
+ */
+/**
+ * 功能概述：渲染模块 Manifest 声明的受控检查 Surface；首版提供状态摘要、实体主从浏览、关系列表、时间线与关系图。
+ * model-request-browser 分派给独立 RequestSurface，按持久化模型请求提供目录与详情。
+ * 主要职责：将搜索和筛选转换为只读 Inspection 查询，保持稳定游标；实体选择加载独立详情并允许追溯原始 Atom。
+ * 代码库关系：ModulePages 在模块声明 surface 时挂载本组件；布局来自 Manifest，数据由版本化 surface DTO 提供。
+ * 输入输出与副作用：Inspection 继续只读；人物详情只读展示实体、绑定与识别记录，记忆内容在 Memory 工作台管理。
  */
 import { RecordSurface } from "./RecordSurface.js";
-import { PersonProfileEditor } from "./PersonProfileEditor.js";
+
 import { GateSurface } from "./GateSurface.js";
 import { RequestSurface } from "./RequestSurface.js";
-import { StorageSurface } from "./StorageSurface.js";
 import {
   inspectionSurfaceEntitySchema,
   inspectionSurfacePageSchema,
@@ -45,17 +50,6 @@ interface ModuleSurfaceProps {
 /** 分派组件不持有 Hook，跨模块导航时按 definitionId 隔离搜索、选择和异步详情状态。 */
 export function ModuleSurface(props: ModuleSurfaceProps) {
   const surface = props.module.inspection?.surface;
-  const storage = surface?.components.find(
-    (component) => component.type === "storage-browser",
-  );
-  if (storage)
-    return (
-      <StorageSurface
-        key={props.module.definitionId}
-        {...props}
-        browser={storage}
-      />
-    );
   const requests = surface?.components.find(
     (component) => component.type === "model-request-browser",
   );
@@ -118,7 +112,6 @@ function EntitySurface({
   const [cursors, setCursors] = useState<string[]>([]);
   const [selected, setSelected] = useState<string>();
   const [trace, setTrace] = useState<string>();
-  const [profileDirty, setProfileDirty] = useState(false);
   const detailHeading = useRef<HTMLHeadingElement>(null);
   const focusDetailAfterLoad = useRef(false);
   const parameters = new URLSearchParams({ limit: "20" });
@@ -153,18 +146,13 @@ function EntitySurface({
     focusDetailAfterLoad.current = false;
     detailHeading.current?.focus();
   }, [detail.data]);
-  const canLeaveProfile = () =>
-    !profileDirty || window.confirm("当前人物画像有未保存修改。确定离开吗？");
   const choose = (entityId: string) => {
-    if (entityId !== activeSelected && !canLeaveProfile()) return;
     focusDetailAfterLoad.current = true;
     setSelected(entityId);
     setTrace(undefined);
-    setProfileDirty(false);
   };
   const apply = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!canLeaveProfile()) return;
     const form = new FormData(event.currentTarget);
     setQuery(String(form.get("q") ?? "").trim());
     setPlatform(String(form.get("platform") ?? ""));
@@ -172,7 +160,6 @@ function EntitySurface({
     setCursors([]);
     setSelected(undefined);
     setTrace(undefined);
-    setProfileDirty(false);
   };
   return (
     <section className="module-surface" aria-label={surface.title}>
@@ -189,11 +176,9 @@ function EntitySurface({
             windowHours={page.data.summary.windowHours}
             selected={status}
             onSelect={(next) => {
-              if (!canLeaveProfile()) return;
               setStatus(next === status ? "" : next);
               setCursors([]);
               setSelected(undefined);
-              setProfileDirty(false);
             }}
           />
           <form
@@ -251,7 +236,6 @@ function EntitySurface({
               token={token}
               headingRef={detailHeading}
               onTrace={setTrace}
-              onProfileDirtyChange={setProfileDirty}
             />
           </div>
           {!page.data.items.length && (
@@ -263,11 +247,9 @@ function EntitySurface({
             cursors={cursors}
             next={page.data.nextCursor}
             change={(next) => {
-              if (!canLeaveProfile()) return;
               setCursors(next);
               setSelected(undefined);
               setTrace(undefined);
-              setProfileDirty(false);
             }}
           />
           {mechanism && module.inspection && (
@@ -380,13 +362,11 @@ function PersonDetail({
   token,
   headingRef,
   onTrace,
-  onProfileDirtyChange,
 }: {
   state: { data?: InspectionSurfaceEntity; error?: string };
   token: string;
   headingRef: RefObject<HTMLHeadingElement | null>;
   onTrace: (id: string) => void;
-  onProfileDirtyChange: (dirty: boolean) => void;
 }) {
   if (state.error)
     return (
@@ -565,12 +545,12 @@ function PersonDetail({
           </div>
         </dl>
       </section>
-      <PersonProfileEditor
-        key={entity.entityId}
-        token={token}
-        personInformationId={entity.entityId}
-        onDirtyChange={onProfileDirtyChange}
-      />
+      <a
+        href={`/memory?ownerId=${encodeURIComponent(`person:${entity.entityId}`)}`}
+      >
+        查看此人的关系与记忆
+      </a>
+
       {sections.map((section) => (
         <SurfaceSection key={section.id} section={section} onTrace={onTrace} />
       ))}

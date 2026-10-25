@@ -5,6 +5,13 @@
  * 代码库关系：直接驱动 ModuleTemplateManagement 与模块 Node 存储；运行模板加载器验证消费覆盖。
  * 输入输出与副作用：只操作临时目录，不调用模型、重启或发送消息。
  */
+/**
+ * 功能概述：验证真实模板文件的本地覆盖、恢复、整组校验与并发保护。
+ * 主要职责：复制全部受版本控制的默认模板构造临时 Catalog，拒绝未知变量/helper/partial、空白、语法及循环；
+ * 精确核对包含冷启动策略的 Router 模板目录；确认校验失败不写文件，默认模板字节不变、源码来源可追踪，错误不泄露模板片段。
+ * 代码库关系：直接驱动 ModuleTemplateManagement 与模块 Node 存储；运行模板加载器验证消费覆盖。
+ * 输入输出与副作用：只操作临时目录，不调用模型、重启或发送消息。
+ */
 import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import {
   mkdtemp,
@@ -127,9 +134,9 @@ it("rejects invalid sources before writing and never echoes parser source", asyn
       service.change(id, "heavy", { revision, content }),
     ).rejects.toMatchObject({ status: 400, code });
     expect(service.get(id).revision).toBe(revision);
-    await expect(
-      readFile(join(path, "heavy.local.hbs")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(join(path, "heavy.local.hbs"))).rejects.toMatchObject(
+      { code: "ENOENT" },
+    );
   }
 });
 it("rejects removed history templates as partials", async () => {
@@ -171,7 +178,6 @@ it.runIf(canCreateSymlinks())(
       "light.platform-policy-qq",
       "light.platform-policy-web",
     ]);
-    expect(service.get("memory.mem0").templates).toEqual([]);
     await expect(
       service.change("agent.router", "heavy", {
         revision: "anything",
@@ -273,28 +279,3 @@ it("authenticates template routes and sanitizes invalid syntax responses", async
     await app.close();
   }
 });
-
-it.each(["memory.expression.learn", "memory.expression.select"])(
-  "expression override %s is loaded and reset without changing defaults",
-  async (tid) => {
-    const { service, root, path } = await fixture();
-    const id = "memory.expression";
-    const before = await readFile(join(path, `${tid}.default.hbs`), "utf8");
-    const saved = await service.change(id, tid, {
-      revision: service.get(id).revision,
-      content: "CUSTOM {{context}}",
-    });
-    expect(
-      loadFirstPartyPromptTemplates({ root }).expression[
-        tid === "memory.expression.learn" ? "learn" : "select"
-      ],
-    ).toBe("CUSTOM {{context}}");
-    await service.change(id, tid, { revision: saved.revision }, true);
-    expect(await readFile(join(path, `${tid}.default.hbs`), "utf8")).toBe(
-      before,
-    );
-    expect(
-      service.get(id).templates.find((t) => t.templateId === tid)!.source,
-    ).toBe("default");
-  },
-);

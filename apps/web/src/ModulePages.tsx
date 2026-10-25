@@ -8,7 +8,18 @@
  * ModuleEditorProps 仅将 definitionId/token 交给可选 SettingsSection/TemplatesSection，不预定义编辑 DTO。
  * 输入输出与副作用：只读展示，普通点击走工作台导航，修饰键和新标签保持浏览器行为；不保存 Token 或应用配置。
  */
+/**
+ * 功能概述：检查区模块紧凑总览与独立详情页，展示内容直接取自 Inspection 的定义元数据。
+ * 主要职责：moduleDetailPath/moduleDefinitionId 编解码稳定 ID；ModuleOverview 提供搜索和原生链接；
+ * ModuleDetails 根据 Manifest 挂载逐模型请求页面或通用运行检查；请求详情独占内容区，技术元数据不叠加。
+ * 领域 Surface 可声明隐藏不适用的通用配置、模板、Renderer 与诊断区，职责和输入输出仍保留。
+ * ModulePage 处理不可用和未找到，模块与请求深链接共用稳定 ID 解码。
+ * 代码库关系：DeveloperConsole 传入已校验的模块数据和当前路径；ModuleLink 使用 AppShell 导航守卫；
+ * ModuleEditorProps 仅将 definitionId/token 交给可选 SettingsSection/TemplatesSection，不预定义编辑 DTO。
+ * 输入输出与副作用：只读展示，普通点击走工作台导航，修饰键和新标签保持浏览器行为；不保存 Token 或应用配置。
+ */
 import { ModuleTopology } from "./ModuleTopology.js";
+import { NativeMemoryStatus } from "./NativeMemoryStatus.js";
 import {
   ModuleRuntimeSection,
   type InspectionDetailProps,
@@ -114,18 +125,20 @@ export function filterModules(
   );
 }
 export function groupModules(modules: readonly InspectionModule[]) {
-  return [
-    {
-      id: "memory",
-      title: "Memory",
-      modules: modules.filter((module) => module.tags?.includes("memory")),
-    },
-    {
-      id: "other",
-      title: "其他模块",
-      modules: modules.filter((module) => !module.tags?.includes("memory")),
-    },
-  ].filter((group) => group.modules.length > 0);
+  const categories = [
+    ["identity", "身份"],
+    ["memory", "Memory"],
+    ["agent", "对话处理"],
+    ["platform", "平台能力"],
+    ["other", "其他模块"],
+  ] as const;
+  return categories
+    .map(([id, title]) => ({
+      id,
+      title,
+      modules: modules.filter((m) => (m.category ?? "other") === id),
+    }))
+    .filter((g) => g.modules.length);
 }
 function ModuleGroup({
   id,
@@ -193,7 +206,8 @@ export function ModuleOverview({
 }) {
   const [search, setSearch] = useState("");
   const [view, setView] = useState<"list" | "topology">("list");
-  const visible = filterModules(modules, search);
+  const current = modules;
+  const visible = filterModules(current, search);
   const groups = groupModules(visible);
   return (
     <section aria-label="模块总览">
@@ -226,7 +240,7 @@ export function ModuleOverview({
         </div>
       </div>
       {view === "topology" ? (
-        <ModuleTopology modules={modules} />
+        <ModuleTopology modules={current} />
       ) : (
         <>
           <label className="developer-search">
@@ -289,6 +303,16 @@ export function ModuleDetails({
       {!isRequestDetail && (
         <>
           <OverviewLink />
+          {module.definitionId === "memory.native" && (
+            <a href="/memory">打开记忆工作台</a>
+          )}
+          {module.definitionId === "memory.native" && (
+            <NativeMemoryStatus
+              token={token}
+              revision={revision}
+              active={module.bindings.length > 0}
+            />
+          )}
           <header>
             <h2 ref={heading} tabIndex={-1}>
               {module.displayName}

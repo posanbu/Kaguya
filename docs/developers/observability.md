@@ -45,9 +45,9 @@ pnpm logs:preview --json
 
 **Light 与回复** — `model.task.prompt` 的 debug detail 显示完整输入 Prompt 与变量来源；`turn.plan` 显示实际投影出的动作和原因；`message.assistant` 显示生成的正文预览。模型任务失败另有红色结果框，保留失败阶段、错误分类和尝试次数。生成正文不代表平台已经送达，投递结果仍由 delivery 事件说明。
 
-**原始记忆写入** — debug 的 `memory.raw.terminal` 展示 `completed`、`empty` 或 `failed`。请求与终态投影只包含状态和来源引用，不包含原文。`memory.native` 与 `memory.mem0` 目前不产生运行日志。
+**记忆运行** — `memory.native` 的运行检查集中显示形成、整理、发布、索引和冻结状态。失败批次保留原因与重试记录。Raw 事件投影独立保存原始证据。
 
-**人物事实与表达习惯** — `person.fact.extracted` 的 info 保留完成摘要，同一 Atom 的 debug detail 显示事实正文预览。debug 的 `memory.expression.learned` 和 `memory.expression.selected` 分别显示学习、选择的数量与状态或原因，并将 `habitSummaries` 逐条列为“情境 → 表达风格”。
+**记忆来源与版本** — 人物事实和表达习惯共用记忆节点与发布记录。检查来源、预期版本及实际发布结果，不从模型响应推断成功。
 
 所有框按对应事件的现有日志级别出现，不使用 MaiBot 的 `show_maisaka_thinking` 开关。查询与记忆正文是新增的 debug 内容投影，先脱敏，再截取最多 168 个 Unicode 码点；`contentLength` 记录原始长度，`contentTruncated` 标明是否截断。
 

@@ -1,5 +1,5 @@
 /**
- * 功能概述：一方 Information Kind 的稳定公共入口；实现按 message、turn、heartbeat、identity 和 person-fact 分域。
+ * 功能概述：一方 Information Kind 的稳定公共入口；实现按 message、turn、heartbeat、identity 和 Memory 分域。
  * 主要职责：仅重导出原有 schema、类型和定义对象，不复制实例、不注册 Kind。
  * 代码库关系：Catalog、模块及宿主继续使用此路径；领域修改留在 kinds/，Registry 对象身份和协议保持一致。
  */
@@ -14,18 +14,9 @@ export {
   messageIntentRequestedInformationKind,
   heavyResponseSilentInformationKind,
   filterDecisionInformationKind,
-  coreMemoryTextInformationKind,
   assistantTextInformationKind,
   deliveryRequestedInformationKind,
 } from "./kinds/message.js";
-export {
-  personFactCandidateInformationPayloadSchema,
-  type PersonFactCandidateInformationPayload,
-  personFactCandidateInformationKind,
-  personFactExtractedPayloadSchema,
-  type PersonFactExtractedPayload,
-  personFactExtractedInformationKind,
-} from "./kinds/person-fact.js";
 export {
   turnClaimedInformationKind,
   turnStartedInformationKind,
@@ -68,4 +59,3 @@ export {
   personResolutionInformationKind,
   personContextCompletedInformationKind,
 } from "./kinds/identity.js";
-export { personProfileRevisionInformationKind } from "./kinds/person-profile.js";

@@ -5,6 +5,13 @@
  * 代码库关系：Server 注入 Catalog、配置目录及 configuration.exclusive；HTTP 只消费安全 DTO。
  * 输入输出与副作用：HMAC revision 防止过期覆盖，错误仅返回受信字段路径与固定提示；不调用 apply。
  */
+/**
+ * 功能概述：对持久化模块配置提供安全读取与并发替换，不接触运行实例。
+ * 主要职责：ModuleSettingsManagement 从同一 settingsSchema 导出公开字段并验证磁盘/输入；
+ * replace 在配置应用共享锁中重读版本，保留隐藏字段并拒绝只读更改，原子写入现有实例。
+ * 代码库关系：Server 注入 Catalog、配置目录及 configuration.exclusive；HTTP 只消费安全 DTO。
+ * 输入输出与副作用：HMAC revision 防止过期覆盖，错误仅返回受信字段路径与固定提示；不调用 apply。
+ */
 import { createHmac, randomBytes } from "node:crypto";
 import {
   loadModuleInstanceConfigs,
@@ -61,7 +68,7 @@ export class ModuleSettingsManagement {
       if (
         !field.title ||
         !field.description ||
-        !["string", "number", "integer", "boolean", "array"].includes(
+        !["string", "number", "integer", "boolean", "array", "object"].includes(
           field.type,
         )
       )
@@ -110,7 +117,7 @@ export class ModuleSettingsManagement {
     return {
       definitionId: id,
       scope: "global",
-      effect: ["memory.raw", "adapter.napcat"].includes(id)
+      effect: ["memory.native", "adapter.napcat"].includes(id)
         ? "restart_required"
         : "explicit_apply",
       fields,
@@ -180,7 +187,7 @@ export class ModuleSettingsManagement {
         enabled: parsed.data.enabled,
         settings: validation.data,
       };
-      if (["memory.raw", "adapter.napcat"].includes(id)) {
+      if (["memory.native", "adapter.napcat"].includes(id)) {
         if (replacement.enabled !== current.enabled)
           throw new ModuleSettingsError(400, "use_feature_switch");
         if (!this.options.replaceFeature)

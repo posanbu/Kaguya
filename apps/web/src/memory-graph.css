@@ -489,3 +489,45 @@
     transition: none !important;
   }
 }
+
+.memory-type-tabs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  padding: 0.75rem 0;
+}
+.memory-type-tabs label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.memory-type-tabs input[type="number"] {
+  width: 5rem;
+}
+.memory-inspector dd {
+  overflow-wrap: anywhere;
+  margin: 0 0 0.6rem;
+}
+.memory-inspector dt {
+  font-weight: 600;
+}
+.memory-type-tabs select,
+.memory-type-tabs input {
+  min-height: 36px;
+  border: 1px solid var(--kaguya-line);
+  border-radius: 8px;
+  background: var(--kaguya-paper);
+  color: var(--kaguya-ink);
+  padding: 6px 8px;
+  font: inherit;
+}
+.memory-type-tabs button[aria-pressed="true"] {
+  border-color: var(--kaguya-coral);
+  background: var(--kaguya-paper-soft);
+  font-weight: 700;
+}
+.memory-type-tabs a {
+  color: var(--kaguya-coral);
+  text-underline-offset: 3px;
+}
