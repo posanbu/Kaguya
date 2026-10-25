@@ -25,7 +25,7 @@ import {
   type FeatureId,
   type FeatureView,
 } from "./feature-api.js";
-const MEMORY_FEATURES = new Set(["memory.raw"]);
+const MEMORY_FEATURES = new Set(["memory.native"]);
 export function ModuleSettingsSection(props: ModuleEditorProps) {
   return (
     <SettingsLoader key={`${props.definitionId}:${props.token}`} {...props} />
@@ -133,15 +133,13 @@ function InstanceEditor({
     try {
       const submittedValues = { ...values };
       for (const field of fields) {
-        if (field.itemType !== "object") continue;
+        if (field.itemType !== "object" && field.type !== "object") continue;
         const draft = submittedValues[field.key];
         if (typeof draft !== "string") continue;
         try {
           submittedValues[field.key] = JSON.parse(draft);
         } catch {
-          setErrors([
-            { path: field.key, message: "请输入有效的 JSON 规则数组。" },
-          ]);
+          setErrors([{ path: field.key, message: "请输入有效的 JSON 配置。" }]);
           return;
         }
       }
@@ -385,6 +383,19 @@ function FieldControl({
           <option key={option}>{option}</option>
         ))}
       </select>
+    );
+  if (field.type === "object")
+    return (
+      <textarea
+        readOnly={field.readOnly}
+        rows={8}
+        value={
+          typeof value === "string"
+            ? value
+            : JSON.stringify(value ?? field.default ?? {}, null, 2)
+        }
+        onChange={(event) => onChange(event.target.value)}
+      />
     );
   if (field.type === "array")
     return (

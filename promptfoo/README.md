@@ -1,4 +1,21 @@
-# Light 行为评测
+# 对话行为评测
+
+## 人物背景多轮对照
+
+`portrait-behavior.yaml` 使用同一 profile 的 Heavy 模型，比较“有相关背景”和“只有关系摘要”。三个合成情景各有两轮，分别检查专业背景、当下更正及不确定背景与交流边界。两组使用相同模板和生成参数，保留模型实际回复供逐例检查。
+
+```sh
+KAGUYA_EVAL_PROFILE=/absolute/path/to/profile.json \
+PROMPTFOO_DISABLE_TELEMETRY=1 PROMPTFOO_DISABLE_UPDATE=1 \
+pnpm exec promptfoo eval -c promptfoo/portrait-behavior.yaml \
+  --no-cache --output /tmp/portrait-comparison.json
+```
+
+运行前先执行 `pnpm exec tsc -b`。此入口调用外部模型服务并产生费用。它使用生产模板及动作校验，但固定 temperature=0、max_tokens=2048、单次超时 60 秒，不复现生产推理参数或调度。补查返回预设的冻结证据，不评估真实检索质量，也不写入运行时账本或发送平台消息。
+
+自动通过仅表示输出结构合法。自然度需要逐例检查背景是否相关、更正是否生效、是否把推测当事实，以及对方不愿展开时是否收住。合成案例的结果不能替代真实交流验收。评测输出和含凭据的 profile 不应提交仓库。
+
+## Light 参与判断
 
 `pnpm prompt:test` 仍是离线结构回归。`light-behavior.yaml` 是独立的联网评测入口，会调用指定 profile 的 light 模型，产生模型费用，但不会接入运行时账本或发送群消息。Provider 使用 [promptfoo 自定义 Provider 接口](https://www.promptfoo.dev/docs/providers/custom-api/)。
 

@@ -1,3 +1,7 @@
+import {
+  createDeterministicModel,
+  createRepeatingDeterministicModel,
+} from "../../../packages/llm/src/testing.ts";
 /** 使用真实 PGlite、ModuleHost 与 Runtime 验证插件的授权输出、持久链和恢复。 */
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -29,7 +33,11 @@ afterEach(async () => {
   }
 });
 
-async function fixture(mode = "voice-fallback-text") {
+async function fixture(
+  mode = "voice-fallback-text",
+  resolveModelSelection,
+  clock = () => now,
+) {
   const root = await mkdtemp(join(tmpdir(), "kaguya-tts-runtime-"));
   const database = await createTestingDatabase();
   const resource = { root, database };
@@ -69,7 +77,7 @@ async function fixture(mode = "voice-fallback-text") {
     platformMessageId: "sent-1",
   }));
   const build = () => {
-    const composition = createMessageComposition(undefined, {
+    const composition = createMessageComposition(resolveModelSelection, {
       catalog,
       moduleConfigs,
     });
@@ -81,7 +89,7 @@ async function fixture(mode = "voice-fallback-text") {
     const runtime = new KaguyaRuntime({
       ...composition,
       database,
-      now: () => now,
+      now: clock,
       mediaResources: new FileMediaResourceStore(root),
       outboundAllowlist: new GatewayAllowlist(["qq:private:42"]),
     });
@@ -334,3 +342,89 @@ describe("independent TTS Runtime composition", () => {
     ).toHaveLength(0);
   });
 });
+
+it("keeps speech metadata through audio delivery and continues only after a successful receipt", async () => {
+  const light = createRepeatingDeterministicModel({
+    action: "message",
+    reason: "respond",
+  });
+  const heavy = createDeterministicModel([
+    { action: "message", text: "先说明情况", continuation: "问清具体安排" },
+    { action: "message", text: "具体怎么安排？", continuation: null },
+  ]);
+  const fetch = vi.fn(async (url) =>
+    String(url).startsWith("https://audio.example/")
+      ? new Response(wav)
+      : new Response(
+          JSON.stringify({
+            output: { audio: { url: "https://audio.example/a.wav" } },
+          }),
+        ),
+  );
+  vi.stubGlobal("fetch", fetch);
+  let virtualTime = now.getTime();
+  const f = await fixture(
+    "voice-fallback-text",
+    ({ modelTier }) => ({
+      providerId: "test",
+      modelId: modelTier,
+      model: modelTier === "light" ? light : heavy,
+    }),
+    () => new Date(virtualTime),
+  );
+  await f.runtime.submit(message());
+  for (let index = 0; index < 2; index++) {
+    let ready;
+    await vi.waitFor(
+      async () => {
+        const rows = await f.database.information.inspectPage({
+          kinds: ["agent.heavy.message.ready"],
+          limit: 10,
+        });
+        ready = rows.find((a) => a.payload.speech?.stepIndex === index);
+        expect(ready).toBeDefined();
+      },
+      { timeout: 8000, interval: 20 },
+    );
+    virtualTime = Math.max(
+      virtualTime,
+      Date.parse(ready.payload.speech.readyAt) + 1,
+    );
+    await vi.waitFor(() => expect(f.sent).toHaveBeenCalledTimes(index + 1), {
+      timeout: 8000,
+      interval: 20,
+    });
+  }
+  await settled(f.database);
+  expect(f.sent.mock.calls.map((call) => [call[1].kind, call[1].text])).toEqual(
+    [
+      ["audio", "先说明情况"],
+      ["audio", "具体怎么安排？"],
+    ],
+  );
+  const deliveries = await f.database.information.inspectPage({
+    kinds: ["core.delivery.requested"],
+    limit: 10,
+  });
+  expect(deliveries.map((a) => a.payload.speech.stepIndex).sort()).toEqual([
+    0, 1,
+  ]);
+  expect(
+    deliveries.find((a) => a.payload.speech.stepIndex === 0).payload.speech
+      .continuation,
+  ).toBe("问清具体安排");
+  expect(
+    deliveries.find((a) => a.payload.speech.stepIndex === 1).payload.speech
+      .continuation,
+  ).toBeNull();
+  const terminals = await f.database.information.inspectPage({
+    kinds: ["core.delivery.delivered", "agent.tts.completed.v1"],
+    limit: 10,
+  });
+  expect(
+    terminals.filter((a) => a.kind === "core.delivery.delivered"),
+  ).toHaveLength(2);
+  expect(
+    terminals.filter((a) => a.kind === "agent.tts.completed.v1"),
+  ).toHaveLength(2);
+}, 30000);

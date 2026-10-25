@@ -5,6 +5,8 @@ description: 冻结观察上的自然互动决策、新信息干预和外部副�
 
 # 决策与行动生命周期
 
+框架无关的[行动连续性](../situation-model/continuity)和[更新与恢复](../situation-model/recovery)定义整个 Agent 的主行动线、依据保留和检查点。本页保留 Kaguya 的能力边界、竞态样例与协议迁移。切换 scene 不等于重置 Agent 的行动历史。
+
 本文回应 [#243](https://github.com/posanbu/Kaguya/issues/243)，属于[持续情境契约](./)中的待实现设计。一次判断可以引用多个 tick 所形成的 observation；消息、工具和设备复用来源关系，按各自能力声明执行与取消规则。
 
 ## 从观察到结果

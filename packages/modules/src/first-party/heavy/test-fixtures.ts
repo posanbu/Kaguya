@@ -4,6 +4,12 @@
  * 代码库关系：本目录测试共享此构造器，真实编译器仍通过 information-kinds schema 校验输入。
  * 输入输出与副作用：输入正文数组，返回独立冻结样本；不使用数据库、网络或全局可变状态。
  */
+/**
+ * 功能概述：为消息编写契约与整轮回归提供可验证的冻结账本样本。
+ * 主要职责：fixture 构造 intent、turn 和全部入站原子；atom 统一冻结 ID、时间与引用。
+ * 代码库关系：本目录测试共享此构造器，真实编译器仍通过 information-kinds schema 校验输入。
+ * 输入输出与副作用：输入正文数组，返回独立冻结样本；不使用数据库、网络或全局可变状态。
+ */
 import {
   freezeInformationAtom,
   informationIdSchema,
@@ -84,13 +90,12 @@ export function fixture(texts = ["FIRST_INPUT", "LAST_INPUT"]) {
       })),
       observedThroughInformationId: messages.at(-1)!.informationId,
       bootstrap: {
-        version: 1,
-        mode: "cold-start",
-        memory: { state: "disabled", selectedCount: 0 },
-        conversation: { state: "first-seen" },
+        version: 2,
+        conversation: { scopeMode: "ephemeral", registration: null },
         participants: messages.map((message) => ({
           inputInformationId: message.informationId,
-          state: "first-seen",
+          ownerId: null,
+          registration: null,
         })),
       },
       text: "LEGACY_LAST_BODY_MUST_NOT_APPEAR",
@@ -134,17 +139,34 @@ export function fixture(texts = ["FIRST_INPUT", "LAST_INPUT"]) {
       },
     ],
   );
-  const raw = atom("raw-1", frozenRawContextInformationKind.kind, {
-    turnInformationId: turn.informationId,
-    global: { text: "", informationIds: [] },
-    currentScope: {
-      text: messages.map((message, index) =>
-        `[未读] sender-${index} 于 2026-09-09 周三 08:00:01 发送：${message.payload.text}${index > 0 ? `\n【入站引用参考】引用消息 ID：platform-${index - 1}` : ""}`,
-      ).join("\n"),
-      informationIds: messages.map((message) => message.informationId),
+  const raw = atom(
+    "raw-1",
+    frozenRawContextInformationKind.kind,
+    {
+      turnInformationId: turn.informationId,
+      global: { text: "", informationIds: [] },
+      currentScope: {
+        text: messages
+          .map(
+            (message, index) =>
+              `[未读] sender-${index} 于 2026-09-09 周三 08:00:01 发送：${message.payload.text}${index > 0 ? `\n【入站引用参考】引用消息 ID：platform-${index - 1}` : ""}`,
+          )
+          .join("\n"),
+        informationIds: messages.map((message) => message.informationId),
+      },
+      overBudget: false,
+      characterCount: messages.reduce(
+        (sum, message) => sum + String(message.payload.text).length,
+        0,
+      ),
     },
-    overBudget: false,
-    characterCount: messages.reduce((sum, message) => sum + String(message.payload.text).length, 0),
-  }, [{ relation: "core:caused-by", informationId: turn.informationId }]);
-  return { intent, turn, messages, raw, atoms: [intent, turn, raw, ...messages] };
+    [{ relation: "core:caused-by", informationId: turn.informationId }],
+  );
+  return {
+    intent,
+    turn,
+    messages,
+    raw,
+    atoms: [intent, turn, raw, ...messages],
+  };
 }

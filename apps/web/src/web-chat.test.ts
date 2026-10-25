@@ -136,7 +136,7 @@ describe("Web conversation polling", () => {
     return { ...polling, ...callbacks };
   };
 
-  it("drains both message cursors before beginning the two-second poll interval", async () => {
+  it("drains both message cursors before beginning the one-second poll interval", async () => {
     const load = vi
       .fn<typeof getConversationMessages>()
       .mockResolvedValueOnce({
@@ -159,7 +159,7 @@ describe("Web conversation polling", () => {
     });
     expect(polling.onMessages.mock.calls).toEqual([[[user]], [[assistant]]]);
     expect(polling.onReady).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(1_999);
+    await vi.advanceTimersByTimeAsync(999);
     expect(load).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(1);
     expect(load).toHaveBeenCalledTimes(3);
@@ -216,13 +216,13 @@ describe("Web conversation polling", () => {
       )
       .mockResolvedValue(emptyPage);
     const polling = start(load);
-    await vi.advanceTimersByTimeAsync(3_999);
+    await vi.advanceTimersByTimeAsync(1_999);
     expect(load).toHaveBeenCalledOnce();
     expect(polling.onError).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(1);
     expect(load).toHaveBeenCalledTimes(2);
     expect(polling.onReady).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(load).toHaveBeenCalledTimes(3);
   });
 

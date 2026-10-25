@@ -732,6 +732,7 @@ function deliveryPayload(source, message) {
     destination: source.payload.source.destination,
     message,
     turn: source.payload.turn,
+    ...(source.payload.speech ? { speech: source.payload.speech } : {}),
   };
 }
 function deliveryReferences(source, result) {

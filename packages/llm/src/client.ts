@@ -14,7 +14,13 @@
  * normalizeError 还从直接或包装的 APICallError 提取有界状态与固定词表诊断；原始错误、
  * 响应正文和请求数据仍只留在私有字段，供 Runtime 写入的字段不包含上游自由文本。
  */
-import type { CompiledPrompt, LlmErrorKind } from "@kaguya/schema";
+import {
+  nativeResponseSchema,
+  type NativeMessage,
+  type NativeResponse,
+  type CompiledPrompt,
+  type LlmErrorKind,
+} from "@kaguya/schema";
 import {
   APICallError,
   asSchema,
@@ -25,16 +31,19 @@ import {
   type FlexibleSchema,
   type LanguageModel,
   type LanguageModelUsage,
+  type ModelMessage,
   RetryError,
 } from "ai";
 
-export interface KaguyaLlmRequest<TOutput = unknown> {
+export type KaguyaLlmRequest<TOutput = unknown> = {
   readonly modelId: string;
-  readonly prompt: CompiledPrompt;
   readonly outputMode: "text" | "object";
   readonly outputSchema: FlexibleSchema<TOutput>;
   readonly signal?: AbortSignal;
-}
+} & (
+  | { readonly prompt: CompiledPrompt; readonly messages?: never }
+  | { readonly messages: NativeMessage[]; readonly prompt?: never }
+);
 
 /** Generation controls supplied by the selected Profile tier and Provider. */
 export interface KaguyaLlmGenerationOptions {
@@ -54,6 +63,7 @@ export interface KaguyaLlmGenerationOptions {
 
 export interface KaguyaLlmGeneration<T> {
   readonly output: T;
+  readonly native?: NativeResponse;
   readonly usage?: Record<string, number>;
   readonly durationMs: number;
   readonly recommendedDurationMs?: number;
@@ -222,7 +232,9 @@ export class KaguyaLlmClient {
       const common = {
         timeout: timeoutMs,
         model: this.#resolveModel(request),
-        prompt: request.prompt.text,
+        ...(request.messages
+          ? { messages: request.messages as ModelMessage[] }
+          : { prompt: request.prompt.text }),
         abortSignal: signal,
         maxRetries: 0,
         ...(generationOptions.reasoning === undefined
@@ -231,6 +243,7 @@ export class KaguyaLlmClient {
       } as const;
       // 所有尝试共享同一模型、Prompt 和 deadline；仅结构化生成失败允许一次恢复。
       let output: unknown;
+      let native: NativeResponse | undefined;
       for (;;) {
         signal.throwIfAborted();
         attemptCount += 1;
@@ -272,6 +285,18 @@ export class KaguyaLlmClient {
               : result.output;
           usage = addUsage(usage, result.usage);
           signal.throwIfAborted();
+          native = nativeResponseSchema.parse(
+            JSON.parse(
+              JSON.stringify({
+                version: 1,
+                messages: result.response.messages,
+                reasoning: result.reasoning,
+                ...(result.providerMetadata
+                  ? { providerMetadata: result.providerMetadata }
+                  : {}),
+              }),
+            ),
+          );
           break;
         } catch (error) {
           if (
@@ -296,6 +321,7 @@ export class KaguyaLlmClient {
       );
       return {
         output: output as TOutput,
+        ...(native ? { native } : {}),
         ...(usage === undefined ? {} : { usage }),
         durationMs,
         ...(generationOptions.recommendedDurationMs === undefined

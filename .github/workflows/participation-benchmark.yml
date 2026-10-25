@@ -1,0 +1,52 @@
+name: Participation benchmark offline tests
+
+on:
+  pull_request:
+    paths:
+      - "benchmarks/participation/**"
+      - "benchmarks/fast-policy/**"
+      - ".github/workflows/participation-benchmark.yml"
+  push:
+    branches: [main]
+    paths:
+      - "benchmarks/participation/**"
+      - "benchmarks/fast-policy/**"
+      - ".github/workflows/participation-benchmark.yml"
+  schedule:
+    - cron: "0 8 * * *"
+      timezone: Asia/Shanghai
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-tests:
+    name: participation (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24.18.0"
+      - name: Test participation protocol and complete offline CLI
+        run: python -m unittest discover -s benchmarks/participation -p "test_*.py" -v
+      - name: Regress fast-policy offline tests
+        run: python -m unittest discover -s benchmarks/fast-policy -p "test_*.py" -v
+      - name: Regress read-only exporter boundaries
+        run: node --test benchmarks/fast-policy/export_workload.node-test.mjs
+      - name: Prepare fictional participation dataset
+        run: python benchmarks/participation/bench.py prepare --source benchmarks/participation/example-events.jsonl --config benchmarks/participation/example-config.json --output .data/participation-ci/dataset
+      - name: Preview complete candidate inputs
+        run: python benchmarks/participation/bench.py preview --dataset .data/participation-ci/dataset --output .data/participation-ci/preview
+      - name: Evaluate history statistics on fictional data
+        run: python benchmarks/participation/bench.py evaluate --dataset .data/participation-ci/dataset --output .data/participation-ci/report

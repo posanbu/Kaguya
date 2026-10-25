@@ -77,22 +77,12 @@
   font-weight: 700;
 }
 .wb-body,
-.wb-content,
-.wb-profile-slot {
+.wb-content {
   min-width: 0;
 }
-.wb-topbar {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
-  padding: 16px 24px;
-  border-bottom: 1px solid var(--kaguya-line);
-  background: color-mix(in srgb, var(--kaguya-paper) 86%, transparent);
-  backdrop-filter: blur(12px);
-}
-.wb-profile-slot {
-  margin-left: auto;
+.wb-mobile-navigation {
+  display: none;
+  flex-shrink: 0;
 }
 .wb-content {
   padding: 24px;
@@ -269,11 +259,9 @@
   .wb-menu {
     display: inline-flex;
   }
-  .wb-topbar {
-    padding: 12px;
-  }
-  .wb-topbar-label {
-    display: none;
+  .wb-mobile-navigation {
+    display: flex;
+    padding: 12px 12px 0;
   }
   .wb-content {
     padding: 16px 12px;
@@ -351,16 +339,6 @@
 .wb-shell-messages .wb-content,
 .wb-content > .message-page {
   flex: 1;
-}
-.wb-shell-messages .wb-topbar {
-  flex-shrink: 0;
-}
-.wb-shell-messages .wb-topbar-label {
-  display: none;
-}
-.wb-shell-messages .wb-profile-slot {
-  flex: 1;
-  margin-left: 0;
 }
 .message-page .wb-page-header {
   flex-shrink: 0;

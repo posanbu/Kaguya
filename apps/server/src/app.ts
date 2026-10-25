@@ -1,4 +1,5 @@
 /**
+ * Memory 图管理由独立路由复用 management 认证，动态读取当前数据库，读写错误不回显正文。
  * Profile GET 返回该编辑对象的 readiness；校验错误通过白名单路径投影为安全 fieldErrors。
  * 模块模板管理路由共用 management 认证，仅返回未渲染源码与安全校验代码。
  * 模块 settings 路由由独立注册器接入，共用 management 认证并只返回安全字段。
@@ -23,14 +24,43 @@
  * 由 inspection.ts 提供有界查询、统一秘密脱敏及 Runtime 未就绪时的 503。
  * message-targets 路由复用 management 认证并通过动态 Runtime 门面执行目标/正文确认。
  * configuration/status 与 apply 复用管理认证，返回不含秘密的版本及应用结果；冲突返回 409。
+ * NapCat PUT 接受独立采集开关/群/队列预算，旧客户端省略这些字段时保留当前设置；保存后按既有重启流程生效。
+ * Web 私聊 POST 携带会话标识，GET 通过双登记水位恢复已入站/已送达历史；两者均先鉴权。
+ */
+/**
+ * Memory 图管理由独立路由复用 management 认证，动态读取当前数据库，读写错误不回显正文。
+ * Profile GET 返回该编辑对象的 readiness；校验错误通过白名单路径投影为安全 fieldErrors。
+ * 模块模板管理路由共用 management 认证，仅返回未渲染源码与安全校验代码。
+ * 模块 settings 路由由独立注册器接入，共用 management 认证并只返回安全字段。
+ * Profile GET/PUT 的严格 DTO 必须包含 inboundAllowlist 与 outboundAllowlist；旧字段不接受。
+ * 功能概述：本文件组装 Kaguya 服务端的 Fastify HTTP 应用，承载匿名健康检查、
+ * OpenAPI 文档、带 readiness 的全局 Profile Registry 管理接口，以及
+ * 窄 Web/Core 消息入口；它是“selected Profile 唯一生效”服务端约束的 HTTP 落点。
+ * 主要职责：`createHttpApplication` 统一注册 CORS、限流、OpenAPI 与错误处理，
+ * 再根据 `webGateway` 与配置管理门面是否存在决定消息入口和管理路由的可用状态；
+ * Profile 列表返回无 secret 的 readiness 元数据；Profile 的创建、读取、
+ * 完整替换、显式选择与删除分别由 `/api/v1/profiles*` 路由承载，并统一通过
+ * `requireManagementToken` 在任何路径/正文校验前拒绝未授权请求。
+ * 代码库关系：本模块消费配置管理层的 `ConfigurationManagement` 门面与
+ * `@kaguya/config` 暴露的 schema 边界、错误码和 Profile 类型；`server.ts`
+ * 会把唯一管理实例传入这里，WebUI 与外部管理客户端都通过这些路由驱动 selected
+ * Profile，而不是直接访问底层 config manager；模型 generation 的 JSON Schema 与 Zod
+ * 同步接受 1–300000 ms 的 timeoutMs，防止请求校验拒绝或响应序列化丢失超时。
+ * 输入输出与副作用：运行时会创建 Fastify 实例并注册中间件；Profile 路由在管理认证
+ * 通过后可能写入配置目录并返回显式安全投影的 Profile 正文；消息路由仅在 `webGateway`
+ * 就绪时非阻塞转发正规化内容，日志不制造 trace ID，否则返回明确的
+ * 503 runtime/core-unavailable 错误。Inspection GET 路由复用 management Token，
+ * 由 inspection.ts 提供有界查询、统一秘密脱敏及 Runtime 未就绪时的 503。
+ * message-targets 路由复用 management 认证并通过动态 Runtime 门面执行目标/正文确认。
+ * configuration/status 与 apply 复用管理认证，返回不含秘密的版本及应用结果；冲突返回 409。
+ * NapCat PUT 接受独立采集开关/群/队列预算，旧客户端省略这些字段时保留当前设置；保存后按既有重启流程生效。
  * Web 私聊 POST 携带会话标识，GET 通过双登记水位恢复已入站/已送达历史；两者均先鉴权。
  */
 import { profileFieldErrors } from "./profile-field-errors.js";
 import { registerModuleTemplateRoutes } from "./module-template-routes.js";
+import { registerMemoryGraphRoutes } from "./memory-graph-routes.js";
 import type { ModuleTemplateManagement } from "./module-template-management.js";
 import { registerIdentityPersonaRoutes } from "./identity-persona-routes.js";
-import { registerPersonProfileRoutes } from "./person-profile-routes.js";
-import type { PersonProfileManagement } from "./person-profile-management.js";
 import type { IdentityPersonaManagement } from "./identity-persona-management.js";
 import { registerModuleSettingsRoutes } from "./module-settings-routes.js";
 import type { ModuleSettingsManagement } from "./module-settings-management.js";
@@ -68,7 +98,10 @@ import {
   webConversationIdSchema,
   z,
 } from "@kaguya/schema";
-import type { ModelRequestMetricsRepository } from "@kaguya/database";
+import type {
+  ModelRequestMetricsRepository,
+  PostgresMemoryGraphStore,
+} from "@kaguya/database";
 import {
   InvalidWebChatCursorError,
   type WebChatHistoryReader,
@@ -159,6 +192,12 @@ const napCatSettingsRequestSchema = z
     accessToken: z.string().optional(),
     selfId: z.string().trim().optional(),
     reconnectMs: z.number().int().min(100).max(3_600_000),
+    captureEnabled: z.boolean().optional(),
+    captureGroups: z
+      .array(z.string().regex(/^[1-9][0-9]*$/u))
+      .max(100)
+      .optional(),
+    captureQueueLimit: z.number().int().min(1).max(10000).optional(),
   })
   .strict();
 
@@ -618,7 +657,7 @@ export interface CreateHttpApplicationOptions {
   featureManagement?: FeatureManagement;
   moduleTemplates?: ModuleTemplateManagement;
   identityPersona?: IdentityPersonaManagement;
-  personProfiles?: PersonProfileManagement;
+  memoryGraph?: () => PostgresMemoryGraphStore | undefined;
   logger?: FastifyBaseLogger;
   discoverModels?: typeof discoverOpenAiCompatibleModels;
 }
@@ -654,10 +693,10 @@ export async function createHttpApplication(
     requireGatewayToken(options, "management"),
     options.identityPersona,
   );
-  registerPersonProfileRoutes(
+  registerMemoryGraphRoutes(
     app,
     requireGatewayToken(options, "management"),
-    options.personProfiles,
+    options.memoryGraph ?? (() => undefined),
   );
   registerModuleSettingsRoutes(
     app,
@@ -1003,6 +1042,21 @@ export async function createHttpApplication(
                 : { accessToken: current.accessToken }),
             ...(body.selfId ? { selfId: body.selfId } : {}),
             reconnectMs: body.reconnectMs,
+            ...(body.captureEnabled !== undefined
+              ? { captureEnabled: body.captureEnabled }
+              : current.captureEnabled !== undefined
+                ? { captureEnabled: current.captureEnabled }
+                : {}),
+            ...(body.captureGroups !== undefined
+              ? { captureGroups: body.captureGroups }
+              : current.captureGroups !== undefined
+                ? { captureGroups: current.captureGroups }
+                : {}),
+            ...(body.captureQueueLimit !== undefined
+              ? { captureQueueLimit: body.captureQueueLimit }
+              : current.captureQueueLimit !== undefined
+                ? { captureQueueLimit: current.captureQueueLimit }
+                : {}),
           },
           body.revision,
         );

@@ -41,38 +41,6 @@ const PANELS: Readonly<Record<string, PrettyEventPanel>> = {
     color: 33,
     fieldsTitle: "生成请求",
   },
-  "memory.raw.requested": {
-    title: "原始记忆 · 写入请求",
-    color: 35,
-    fieldsTitle: "请求信息",
-  },
-  "memory.raw.terminal": {
-    title: "原始记忆 · 写入结果",
-    color: 35,
-    fieldsTitle: "写入状态",
-  },
-  "person.fact.candidate": {
-    title: "人物记忆 · 提取输入",
-    color: 35,
-    fieldsTitle: "输入信息",
-    contentTitle: "来源文本预览",
-  },
-  "person.fact.extracted": {
-    title: "人物记忆 · 提取输出",
-    color: 35,
-    fieldsTitle: "提取信息",
-    contentTitle: "事实正文预览",
-  },
-  "memory.expression.learned": {
-    title: "表达学习 · 输出",
-    color: 33,
-    fieldsTitle: "学习结果",
-  },
-  "memory.expression.selected": {
-    title: "表达选择 · 输出",
-    color: 33,
-    fieldsTitle: "选择结果",
-  },
 };
 
 export function prettyPanelForLog(
@@ -105,12 +73,6 @@ export function prettyPanelForLog(
         fieldsTitle: "失败信息",
       };
   }
-  // info 级人物事实目前只有完成事件，正文只在 debug detail 中出现，避免生成空内容框。
-  if (
-    log.event === "person.fact.extracted" &&
-    typeof log.contentPreview !== "string"
-  )
-    return undefined;
   if (/^(napcat|web)\.inbound\.(submitted|filtered|failed)$/u.test(log.event)) {
     return {
       title: "消息接收 · 输入",
@@ -126,9 +88,6 @@ function modelTaskName(taskId: unknown): string {
   const names: Readonly<Record<string, string>> = {
     "agent.light.decide": "Light",
     "agent.heavy.respond": "回复生成",
-    "core.person.fact.extract": "人物记忆",
-    "memory.expression.learn": "表达学习",
-    "memory.expression.select": "表达选择",
   };
   return typeof taskId === "string" && taskId
     ? Object.hasOwn(names, taskId)

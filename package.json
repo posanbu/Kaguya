@@ -17,6 +17,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
+    "test:critical": "vitest run --config vitest.critical.config.ts",
     "test:postgres": "pnpm --filter @kaguya/server postgres:test",
     "postgres:start": "pnpm --filter @kaguya/server postgres:start",
     "postgres:status": "pnpm --filter @kaguya/server postgres:status",
@@ -27,7 +28,11 @@
     "test:flow": "tsc -b && vitest run apps/server/src/speech-planner.test.ts packages/runtime/src/runtime.test.ts",
     "test:persistence": "tsc -b && vitest run packages/database/src",
     "preview:arousal": "tsc -b && tsx apps/server/src/preview/arousal.ts",
-    "prompt:init": "tsx scripts/init-prompt-locals.ts"
+    "prompt:init": "tsx scripts/init-prompt-locals.ts",
+    "capture:export": "tsx apps/server/src/napcat-capture-export.ts",
+    "contracts:generate": "pnpm --filter @kaguya/agent-contracts build && node --import tsx scripts/export-situation-contract.ts",
+    "contracts:check": "pnpm --filter @kaguya/agent-contracts build && node --import tsx scripts/export-situation-contract.ts --check",
+    "contracts:test": "vitest run packages/modules/src/first-party/situation-model.test.ts"
   },
   "devDependencies": {
     "@types/node": "24.13.3",

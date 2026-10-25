@@ -1,0 +1,5 @@
+{
+  "contractVersion": "1.0.0",
+  "sha256": "1f59f64385c20212af65125d761959c28aec8625d80809824ab963bab89e91ce",
+  "files": ["types.ts", "schema.json", "scenarios.json"]
+}

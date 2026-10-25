@@ -1,6 +1,7 @@
 {
   "files": [],
   "references": [
+    { "path": "./packages/agent-contracts" },
     { "path": "./packages/schema" },
     { "path": "./packages/prompt" },
     { "path": "./packages/config" },

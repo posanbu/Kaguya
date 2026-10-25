@@ -20,8 +20,8 @@ const modules = [
   },
   {
     version: 1 as const,
-    instanceId: "memory.raw.default",
-    definitionId: "memory.raw",
+    instanceId: "memory.native.default",
+    definitionId: "memory.native",
     enabled: false,
     settings: {},
   },
@@ -41,9 +41,14 @@ async function fixture() {
 
 it("projects only tree switches while instance JSON has no enabled field", async () => {
   const rootDir = await fixture();
-  const jsonPath = join(rootDir, "modules/memory.raw.default/config.json");
+  const jsonPath = join(rootDir, "modules/memory.native.default/config.json");
   const before = await readFile(jsonPath, "utf8");
-  await writeCordisModuleEnabled(rootDir, modules, "memory.raw.default", true);
+  await writeCordisModuleEnabled(
+    rootDir,
+    modules,
+    "memory.native.default",
+    true,
+  );
   expect(await readFile(jsonPath, "utf8")).toBe(before);
   const loaded = await loadModuleInstanceConfigs({
     rootDir,
@@ -51,7 +56,7 @@ it("projects only tree switches while instance JSON has no enabled field", async
     initialize: false,
   });
   expect(
-    loaded.find((item) => item.instanceId === "memory.raw.default")?.enabled,
+    loaded.find((item) => item.instanceId === "memory.native.default")?.enabled,
   ).toBe(true);
   expect(JSON.parse(before)).not.toHaveProperty("enabled");
 });
@@ -80,7 +85,12 @@ it("rejects unknown entries, disabled required services and YAML aliases", async
 it("keeps a boot snapshot when the disk tree changes", async () => {
   const rootDir = await fixture();
   const boot = defaultCordisTree(modules);
-  await writeCordisModuleEnabled(rootDir, modules, "memory.raw.default", true);
+  await writeCordisModuleEnabled(
+    rootDir,
+    modules,
+    "memory.native.default",
+    true,
+  );
   const applied = await loadModuleInstanceConfigs({
     rootDir,
     defaults: modules,
@@ -88,6 +98,7 @@ it("keeps a boot snapshot when the disk tree changes", async () => {
     treeSnapshot: boot,
   });
   expect(
-    applied.find((item) => item.instanceId === "memory.raw.default")?.enabled,
+    applied.find((item) => item.instanceId === "memory.native.default")
+      ?.enabled,
   ).toBe(false);
 });

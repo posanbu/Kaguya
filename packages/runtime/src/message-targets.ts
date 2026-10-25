@@ -2,7 +2,8 @@
  * 解析 message composition 时保留可选 tone；跨目标授权和正文确认流程保持原有边界。
  * 功能概述：管理跨会话目录解析、短期候选、目标授权和正文确认，所有批准状态只由可信宿主持有。
  * 五分钟缓存随查询/路由清理，活跃目标授权数量有界；
- * conversation 冻结双投影并限制到当前 adapter 和本轮人物/目标；route 从持久化 Light 决策创建自动授权，stage 绑定唯一正文。
+ * conversation 冻结当前 adapter 的有界群名目录及本轮相关私聊，让 Light 根据简称或描述选择群；
+ * 背景只含本轮人物，不读取目标群正文；route 从持久化 Light 决策创建自动授权，stage 绑定唯一正文。
  * 主要职责：resolve 返回显式结果；authorize 冻结批准说明并创建标准 intent；confirm 绑定精确 assistant；
  * prepare/stage 是 Heavy 的窄能力；validateDelivery 对请求因果链、连接代次和正文再次验证。
  * 代码库关系：Server 管理认证路由调用本类，Runtime 注入 Core/目录/生效 allowlist 和授权正文渲染器；不读取模板文件或直接调用 transport。
@@ -14,6 +15,7 @@ import type { InformationCore } from "@kaguya/engine";
 import { defineInformationSelector } from "@kaguya/sdk";
 import {
   z,
+  nativeMemorySnapshotSchema,
   type CompiledPrompt,
   type DeepReadonly,
   type InformationAtom,
@@ -25,6 +27,7 @@ import {
   turnContextCompletedInformationKind,
   lightActionSchema,
   messageIntentRequestedInformationKind,
+  messageTargetSchema,
   messageIntentRequestedInformationPayloadSchema,
   targetAuthorizedInformationKind,
   messageConfirmedInformationKind,
@@ -68,10 +71,12 @@ interface FrozenRoutingTurn {
     text: string;
     source: MessageTarget & {
       senderId: string;
+      replyTo?: { senderId?: string };
+      selfId?: string;
       sender?: { card?: string; nickname?: string };
       mentions?: ({ kind: "all" } | { kind: "user"; id: string })[];
     };
-    identity: { status: string };
+    identity: { status: string; personInformationId?: string };
   }[];
 }
 interface Candidate {
@@ -196,18 +201,42 @@ export class MessageTargetService implements MessageAuthorization {
               limit: 1000,
             })
           )
-            .filter((a) => a.kind === conversationContextInformationKind.kind)
+            .filter(
+              (a) =>
+                a.kind === conversationContextInformationKind.kind ||
+                a.kind === "agent.situation.frozen",
+            )
             .map((a) => a.informationId),
       }),
       turn.informationId,
     );
-    if (frozen[0]) return frozen[0];
+    const existing = frozen.find(
+      (a) => a.kind === conversationContextInformationKind.kind,
+    );
+    if (existing) return existing;
+    const situation = frozen.find((a) => a.kind === "agent.situation.frozen");
+    const memory = nativeMemorySnapshotSchema.safeParse(
+      (situation?.payload.frame as Record<string, unknown> | undefined)?.memory,
+    );
+    const bindings = memory.success ? (memory.data.people ?? []) : [];
     const payload = turnContextCompletedInformationKind.payloadSchema.parse(
       turn.payload,
     ) as unknown as FrozenRoutingTurn;
     const inputs = payload.inputs;
     const latest = inputs.at(-1)!;
     const source = latest.source;
+    const ownerFor = (accountId: string) => {
+      if (accountId === source.selfId) return "self:kaguya";
+      const owners = [
+        ...new Set(
+          bindings
+            .filter((p) => p.accountId === accountId)
+            .map((p) => p.ownerId),
+        ),
+      ];
+      return owners.length === 1 ? owners[0]! : null;
+    };
+
     const texts = inputs.map((i) => i.text).join("\n");
     type Projection = z.infer<
       typeof conversationContextInformationKind.payloadSchema
@@ -216,6 +245,7 @@ export class MessageTargetService implements MessageAuthorization {
       scope: source.destination.kind,
       name: source.destination.kind === "group" ? "当前群聊" : "当前会话",
       participants: [],
+      sourceConversations: [],
     };
     const accounts = new Map<string, string>();
     for (const input of inputs) {
@@ -225,6 +255,15 @@ export class MessageTargetService implements MessageAuthorization {
       accounts.set(key, label);
       background.participants.push({
         label,
+        accountId: key,
+        ownerId: input.identity.personInformationId
+          ? `person:${input.identity.personInformationId}`
+          : ownerFor(key),
+        sourceIds: inputs
+          .filter((i) => i.source.senderId === key)
+          .map((i) => i.informationId),
+        nickname: input.source.sender?.nickname ?? null,
+        card: input.source.sender?.card ?? null,
         name: (
           input.source.sender?.card ??
           input.source.sender?.nickname ??
@@ -234,6 +273,105 @@ export class MessageTargetService implements MessageAuthorization {
         relation: key === source.senderId ? "speaker" : "participant",
       });
     }
+    for (const input of inputs) {
+      const references = [
+        ...(input.source.mentions ?? []).flatMap((m) =>
+          m.kind === "user"
+            ? [{ accountId: m.id, role: "mentioned" as const }]
+            : [],
+        ),
+        ...(input.source.replyTo?.senderId
+          ? [
+              {
+                accountId: input.source.replyTo.senderId,
+                role: "replied-to" as const,
+              },
+            ]
+          : []),
+      ];
+      for (const reference of references) {
+        if (accounts.has(reference.accountId)) continue;
+        const label = `person-${accounts.size + 1}`;
+        accounts.set(reference.accountId, label);
+        background.participants.push({
+          label,
+          accountId: reference.accountId,
+          ownerId: ownerFor(reference.accountId),
+          sourceIds: [input.informationId],
+          nickname: null,
+          card: null,
+          name: "",
+          identityStatus: ownerFor(reference.accountId)
+            ? "complete"
+            : "unresolved",
+          relation: reference.role,
+        });
+      }
+    }
+    // Historical participants come only from this turn's persisted snapshot.
+    for (const person of memory.success ? memory.data.participants : []) {
+      const local =
+        person.platform === source.platform &&
+        person.adapterId === source.adapterId;
+      if (local && accounts.has(person.accountId)) {
+        const existing = background.participants.find(
+          (p) => p.label === accounts.get(person.accountId),
+        )!;
+        existing.sourceIds = [
+          ...new Set([...existing.sourceIds, ...person.sourceIds]),
+        ];
+        continue;
+      }
+      const label = `person-${background.participants.length + 1}`;
+      if (local) accounts.set(person.accountId, label);
+      background.participants.push({
+        label,
+        accountId: person.accountId,
+        ownerId: person.ownerId,
+        sourceIds: person.sourceIds,
+        nickname: person.nickname,
+        card: person.card,
+        name: person.card ?? person.nickname ?? person.accountId,
+        identityStatus: person.ownerId ? "complete" : "unresolved",
+        relation: person.relation,
+      });
+    }
+    const historicalSources = new Map<
+      string,
+      { target: MessageTarget; informationIds: string[] }
+    >();
+    historicalSources.set(targetKey(source), {
+      target: {
+        adapterId: source.adapterId,
+        platform: source.platform,
+        destination: source.destination,
+      },
+      informationIds: inputs.map((input) => input.informationId),
+    });
+    const historicalIds = Array.isArray(
+      situation?.payload.historyInformationIds,
+    )
+      ? situation.payload.historyInformationIds.filter(
+          (id): id is string => typeof id === "string",
+        )
+      : [];
+    for (const atom of await this.core.getMany(historicalIds)) {
+      const candidate = messageTargetSchema.safeParse(atom.payload.target);
+      if (!candidate.success) continue;
+      const key = targetKey(candidate.data);
+      const entry = historicalSources.get(key) ?? {
+        target: candidate.data,
+        informationIds: [],
+      };
+      entry.informationIds.push(atom.informationId);
+      historicalSources.set(key, entry);
+    }
+    const historicalEntries = [...historicalSources.values()];
+    background.sourceConversations = historicalEntries.map((entry) => ({
+      sourceInformationIds: entry.informationIds,
+      name: null,
+      verifiedAt: null,
+    }));
     const resolution: Projection["resolution"] = {
       status: "unavailable",
       targets: [],
@@ -242,6 +380,21 @@ export class MessageTargetService implements MessageAuthorization {
     if (!this.#closed && this.directory && this.#routeCandidates.size < 1000) {
       try {
         const snapshot = await this.directory.listTargets();
+        for (const [
+          index,
+          historical,
+        ] of background.sourceConversations.entries()) {
+          const matches = snapshot.candidates.filter(
+            (c) => targetKey(c) === targetKey(historicalEntries[index]!.target),
+          );
+          const names = [
+            ...new Set(matches.map((c) => c.name).filter(Boolean)),
+          ];
+          if (names.length === 1) {
+            historical.name = names[0]!;
+            historical.verifiedAt = this.now().toISOString();
+          }
+        }
         const unique = [
           ...new Map(
             snapshot.candidates
@@ -277,6 +430,7 @@ export class MessageTargetService implements MessageAuthorization {
             c.destination.kind === "private" &&
             mentioned.has(c.destination.userId);
           if (
+            c.destination.kind !== "group" &&
             !current &&
             !speaker &&
             !byMention &&
@@ -291,17 +445,12 @@ export class MessageTargetService implements MessageAuthorization {
           }
           if (current) background.name = c.name.slice(0, 100);
           const name = c.name.slice(0, 100);
-          if (
-            byMention &&
-            c.destination.kind === "private" &&
-            !accounts.has(c.destination.userId)
-          ) {
-            background.participants.push({
-              label: `mention-${background.participants.length + 1}`,
-              name,
-              identityStatus: "directory-matched",
-              relation: "mentioned",
-            });
+          if (byMention && c.destination.kind === "private") {
+            const accountId = c.destination.userId;
+            const person = background.participants.find(
+              (p) => p.accountId === accountId,
+            );
+            if (person && !person.name) person.name = name;
           }
           const status = !this.allowlist.allowsDestination(
             c.platform,
@@ -320,7 +469,13 @@ export class MessageTargetService implements MessageAuthorization {
           resolution.targets.push({
             kind: c.destination.kind,
             name,
-            relation: current ? "current" : speaker ? "speaker" : "mentioned",
+            relation: current
+              ? "current"
+              : speaker
+                ? "speaker"
+                : byMention || (c.name.length > 0 && texts.includes(c.name))
+                  ? "mentioned"
+                  : "available",
             status,
             reference: status === "resolved" ? reference : null,
           });
@@ -782,9 +937,48 @@ export class MessageTargetService implements MessageAuthorization {
     atom: DeepReadonly<InformationAtom>,
   ): Promise<DeepReadonly<InformationAtom>> {
     let current = atom;
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 16; i++) {
       if (current.kind === messageIntentRequestedInformationKind.kind)
         return current;
+      if (current.kind === "agent.heavy.step.requested") {
+        const rootId = current.payload.intentInformationId;
+        if (
+          typeof rootId !== "string" ||
+          !current.references.some(
+            (r) =>
+              r.relation === "core:uses-context" && r.informationId === rootId,
+          )
+        )
+          break;
+        const root = await this.read(rootId);
+        if (
+          root.kind !== messageIntentRequestedInformationKind.kind ||
+          root.references.some(
+            (r) => r.relation === "agent:target-authorization",
+          ) ||
+          JSON.stringify(root.payload.turn) !==
+            JSON.stringify(current.payload.turn) ||
+          targetKey(root.payload.target as unknown as MessageTarget) !==
+            targetKey(current.payload.target as unknown as MessageTarget)
+        )
+          break;
+        return root;
+      }
+      if (current.kind === "core.schedule.one-shot.due") {
+        const scheduleId = current.references.find(
+          (r) => r.relation === "core:status-of",
+        )?.informationId;
+        if (!scheduleId) break;
+        const schedule = await this.read(scheduleId);
+        if (
+          schedule.kind !== "core.schedule.one-shot.requested" ||
+          (schedule.payload.input as { purpose?: string }).purpose !==
+            "heavy-speech"
+        )
+          break;
+        current = schedule;
+        continue;
+      }
       const causes = await this.core.select(
         causeSelector,
         current.informationId,
@@ -870,7 +1064,24 @@ export class MessageTargetService implements MessageAuthorization {
           ? {
               background: {
                 name: "background",
-                content: JSON.stringify(conversation.payload.background),
+                content: JSON.stringify(
+                  (() => {
+                    const background =
+                      conversationContextInformationKind.payloadSchema.parse(
+                        conversation.payload,
+                      ).background;
+                    return {
+                      scope: background.scope,
+                      name: background.name,
+                      participants: background.participants.map((p) => ({
+                        label: p.label,
+                        name: p.name,
+                        relation: p.relation,
+                        identityStatus: p.identityStatus,
+                      })),
+                    };
+                  })(),
+                ),
                 informationIds: [conversation.informationId],
               },
             }

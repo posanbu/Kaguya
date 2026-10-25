@@ -5,6 +5,8 @@ description: scene、tick、冻结快照与可恢复观察进度的目标契约�
 
 # 情境与观察
 
+总背景、当前情境和主行动线的公共定义见[对象与关系](../situation-model/objects)，冻结、变化说明与预算见[上下文装配](../situation-model/assembly)。本页继续约束 Kaguya 的场景映射、独立进度和现有协议迁移。总背景关联所有启用入口，仍保留每份证据的来源与 scope。
+
 本文回应 [#244](https://github.com/posanbu/Kaguya/issues/244)，属于[持续情境契约](./)中的待实现设计。目标是使多个 tick 能共同形成一次有界读取，并在并发和重启后说明哪些信息已被读取、哪些仍待处理。
 
 ## 身份与范围

@@ -7,6 +7,10 @@ Kaguya 的 Vercel AI SDK 模型边界。
 - `@kaguya/llm/openai-compatible`：OpenAI-compatible provider adapter；
 - `@kaguya/llm/testing`：基于 `ai/test` 的确定性模型。
 
+## 原生消息与返回
+
+调用输入支持 `prompt` 或结构化 `messages`，两者互斥。成功结果的 `native` 扩展保存原生响应消息、服务返回的推理项及协议元数据。扩展版本为 `1`，独立于情境契约 `1.0.0`。不可读的接续项保持原形，不自动转换成普通正文。
+
 ## 结构化输出
 
 `KaguyaLlmGenerationOptions.structuredOutputMode` 默认为 `json`：结构化任务通过 `Output.json()` 请求 JSON，再用调用方提供的 schema 在本地校验。该模式要求 schema 带有本地 validator；JSON 格式约束不等于服务端 JSON Schema 约束，不能据此认定 Provider 支持 `json_schema`。

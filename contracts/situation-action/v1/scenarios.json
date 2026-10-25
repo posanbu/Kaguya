@@ -1,0 +1,72 @@
+{
+  "contractVersion": "1.0.0",
+  "cases": [
+    {
+      "id": "shared-background-and-current-scene",
+      "events": [
+        {
+          "id": "a1",
+          "sceneId": "qq:A",
+          "source": "onebot",
+          "actorId": "A",
+          "occurredAt": "2026-10-20T00:00:00.000Z",
+          "kind": "message",
+          "text": "继续查询",
+          "replaces": []
+        },
+        {
+          "id": "b1",
+          "sceneId": "qq:B",
+          "source": "onebot",
+          "actorId": "B",
+          "occurredAt": "2026-10-19T23:00:00.000Z",
+          "kind": "message",
+          "text": "另一群的新消息",
+          "replaces": []
+        },
+        {
+          "id": "c1",
+          "sceneId": "qq:A",
+          "source": "composer",
+          "actorId": "operator",
+          "occurredAt": "2026-10-20T00:00:02.000Z",
+          "kind": "message",
+          "text": "补充条件",
+          "replaces": []
+        }
+      ],
+      "currentSceneId": "qq:A",
+      "expectedBackgroundIds": ["a1", "b1", "c1"],
+      "expectedCurrentIds": ["a1", "c1"]
+    },
+    {
+      "id": "correction-preserves-evidence",
+      "events": [
+        {
+          "id": "old",
+          "sceneId": "qq:A",
+          "source": "onebot",
+          "actorId": "B",
+          "occurredAt": "2026-10-20T00:00:00.000Z",
+          "kind": "message",
+          "text": "已经戒了咖啡",
+          "replaces": []
+        },
+        {
+          "id": "new",
+          "sceneId": "qq:A",
+          "source": "onebot",
+          "actorId": "B",
+          "occurredAt": "2026-10-20T00:00:01.000Z",
+          "kind": "correction",
+          "text": "只是晚上不喝",
+          "replaces": ["old"]
+        }
+      ],
+      "currentSceneId": "qq:A",
+      "expectedBackgroundIds": ["old", "new"],
+      "expectedCurrentIds": ["old", "new"],
+      "expectedInvalidatedIds": ["old"]
+    }
+  ]
+}

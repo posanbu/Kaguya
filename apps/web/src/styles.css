@@ -499,36 +499,6 @@ button:disabled {
   filter: drop-shadow(0 7px 12px rgb(168 73 20 / 18%));
 }
 
-.topbar-spacer {
-  flex: 1 1 auto;
-}
-
-.theme-button {
-  display: inline-flex;
-  min-width: 82px;
-  min-height: 40px;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  padding: 8px 12px;
-  border: 1px solid #e2d2c4;
-  border-radius: 7px;
-  background: #fffdf9;
-  color: #694c3b;
-  font-size: 13px;
-  font-weight: 700;
-  transition:
-    border-color 160ms ease,
-    background 160ms ease,
-    color 160ms ease;
-}
-
-.theme-button:hover {
-  border-color: var(--kaguya-coral);
-  background: #fff3e7;
-  color: #9b421f;
-}
-
 .setup-shell .topbar {
   border-bottom-color: #eadfd5;
   background: rgb(255 255 255 / 82%);
@@ -1089,22 +1059,6 @@ button:disabled {
     height: 40px;
   }
 
-  .theme-button {
-    min-width: 44px;
-    min-height: 44px;
-    padding: 8px;
-  }
-
-  .theme-button span {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-
   .workspace,
   .setup-main {
     min-height: calc(100vh - 64px);
@@ -1141,7 +1095,6 @@ button:disabled {
 
   .setup-subtitle,
   .setup-search,
-  .setup-theme-button,
   .setup-github-link {
     display: none;
   }
@@ -1236,8 +1189,7 @@ button:disabled {
   pointer-events: none;
 }
 
-:root[data-theme="dark"] .wb-sidebar,
-:root[data-theme="dark"] .wb-topbar {
+:root[data-theme="dark"] .wb-sidebar {
   background: rgb(7 17 34 / 82%);
   backdrop-filter: blur(14px);
 }
@@ -1291,18 +1243,6 @@ button:disabled {
 
 :root[data-theme="dark"] .brand-logo {
   filter: drop-shadow(0 0 14px rgb(240 138 112 / 30%));
-}
-
-:root[data-theme="dark"] .theme-button {
-  border-color: rgb(104 224 226 / 34%);
-  background: #111f34;
-  color: #dff9f7;
-}
-
-:root[data-theme="dark"] .theme-button:hover {
-  border-color: var(--kaguya-cyan);
-  background: #172941;
-  color: #ffffff;
 }
 
 :root[data-theme="dark"] .topbar h1,

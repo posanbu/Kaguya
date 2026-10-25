@@ -5,13 +5,27 @@ description: Kaguya 统一 Server 的路由、认证、Profile 与消息协议�
 
 # HTTP API
 
+## 记忆图管理
+
+`/api/v1/memory` 下的接口统一要求 Gateway management Bearer Token，并返回 `Cache-Control: no-store`。成功响应使用 `data` 包装；手动写入直接持久化，不触发模型调用。
+
+**图快照** — `GET /api/v1/memory/graph` 支持 `search` 正文子串、重复的 `tags`（全部匹配）、`occurredFrom`（包含）、`occurredBefore`（不包含）、`afterId`、`limit`（1–100，默认 50）和 `focusId`。时间输入需带时区。返回 `nodes`、`edges`、`hasMoreNodes` 和 `hasMoreEdges`，最多包含 100 个节点与 1000 条内部边。`focusId` 限定一跳邻域并优先返回中心节点。
+
+**记忆节点** — `POST /api/v1/memory/nodes` 接受 `metadata` 字典与 `content` 字符串；可指定 UUID `id`，重复 ID 完整替换正文与 metadata。metadata 的 `occurredAt` 必填，`tags` 为字符串数组，其他字段可保存 JSON 值。`GET /api/v1/memory/nodes/:id` 返回单个节点，`PUT /api/v1/memory/nodes/:id` 接受不带 ID 的完整正文与 metadata。`DELETE /api/v1/memory/nodes/:id` 返回 `deleted`，同时级联清理其全部边。
+
+**有向连结** — `POST /api/v1/memory/edges` 接受 `sourceId`、`targetId`、`relation`（默认 `related`）和 `metadata`（默认空字典）。同方向、同类型的连结重复写入时更新 metadata。`DELETE /api/v1/memory/edges` 使用相同请求正文，按两个端点和关系类型精确删除，返回 `deleted`。
+
+**错误** — 输入无效为 400 `invalid_memory_input`；检视或更新的节点不存在为 404 `memory_node_not_found`；连结端点不存在为 409 `memory_endpoint_missing`；数据库未挂载为 503 `memory_unavailable`。其他写入或读取故障为 500 `memory_operation_failed`，响应不回显记忆内容。
+
 ## 模块运行检查
 
 所有检查接口复用 Gateway Bearer 认证，响应使用 `Cache-Control: no-store`，只执行读取。运行时暂不可用返回 503。
 
+**情境工作台** — `GET /api/v1/inspection/situation` 返回 `version: 1`、冻结快照 `frames`、模型行动 `steps` 和 `truncated`。从最近 50 条冻结记录中读取有效快照，并查询最近 60 次 Light/Heavy 请求，并补入最新快照可关联的未完成行动。记录按账本登记顺序读取。响应区分模型终态与投递结果，只返回已保存的可读推理，不返回原生接续消息。运行时没有冻结记录时返回空数组，不写入或重建历史。
+
 **模块声明** — `GET /api/v1/inspection/modules` 返回 Manifest 名称、绑定与可选 `inspection`。其中 `mechanism` 描述机制，`views` 声明稳定视图 ID、Kind 集合及中文字段，`storage` 指定 Memory 或向量库。
 
-**领域记录** — `GET /api/v1/inspection/atoms?definitionId=agent.attention.arousal&view=gates` 先按声明的 Kind 集合过滤，再游标分页。可叠加 `kind`、`source`、`after`、`before`；指定实例时 source 使用当前 binding 的 `module:<instanceId>`。不指定 source 时包含历史来源。游标绑定查询条件，不能跨模块、视图或过滤条件复用。
+**领域记录** — `GET /api/v1/inspection/atoms?definitionId=agent.lifecycle&view=gates` 先按声明的 Kind 集合过滤，再游标分页。可叠加 `kind`、`source`、`after`、`before`；指定实例时 source 使用当前 binding 的 `module:<instanceId>`。不指定 source 时包含历史来源。游标绑定查询条件，不能跨模块、视图或过滤条件复用。
 
 **可读摘要** — Atom 页、详情及 Flow 节点附带 `presentation`：中文标题、明确记录的状态和带中文标签的字段。字段先脱敏再截断；详情 `payload` 保留完整脱敏内容。没有终态不能推断为失败。
 

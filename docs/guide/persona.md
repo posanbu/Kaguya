@@ -33,13 +33,13 @@ description: 修改 Kaguya 的名称、人设、时区和平台表达方式。
 
 **消息编写模块 → `heavy.bootstrap`** — 调整缺少上下文时如何自然表达未知状态。
 
-**Router → `light.bootstrap-policy`** — 调整冷启动时是否参与或询问的策略。冷启动状态来自本轮冻结的会话、人物与获授权 Memory 证据；模板不能改写状态，也不能把空召回当成从未认识对方的证明。
+**Router → `light.bootstrap-policy`** — 调整冷启动时是否参与或询问的策略。建档事实与本轮实际使用的证据分别记录。模板不能把账号建档当成认识，也不能把空召回当成从未见过对方的证明。
 
 **Router → `light.decision`** — 决定回复、等待或静默的整体要求。
 
 **Router → `light.platform-policy-qq` / `platform-policy-web`** — 分平台调整参与对话的方式；通用回退模板为 `light.platform-policy`。
 
-表达学习模块的 `memory.expression.learn` 和 `memory.expression.select` 分别影响表达习惯的学习与选择。页面会列出模板用途和允许变量，修改前先看这些说明。
+统一 Memory 的 `memory.native.form` 模板负责从证据形成与整理记忆，包括表达习惯。页面会列出模板用途和允许变量，修改前先看这些说明。
 
 每次围绕一个可观察的问题修改，例如“QQ 回复经常重复上一句”。保存、重启后，用相近场景检查效果；仅修改 Light 不会直接规定最终回复的全部措辞。
 

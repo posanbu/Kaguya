@@ -1,6 +1,7 @@
 /**
  * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * 管理端跨会话路由必须在任何解析前鉴权；Runtime 缺失返回 503 且禁止缓存。
+ * NapCat 采集设置保存后须重启；旧客户端省略采集字段时保留已配置范围与队列预算。
  * 功能概述：本文件验证 HTTP 应用的受保护 Profile readiness、Profile 管理接口、
  * NapCat 失败恢复、消息入口与统一错误映射上的外部契约，确保服务端只暴露显式的全局 Profile Registry
  * 行为，不再保留临时配置写桥接或隐式 default 回退。
@@ -127,6 +128,9 @@ describe("application API gateway", () => {
         selfId: "123",
         accessToken: "fake-napcat-token",
         reconnectMs: 4000,
+        captureEnabled: true,
+        captureGroups: ["456"],
+        captureQueueLimit: 20,
       };
       const saved = await app.inject({
         method: "PUT",
@@ -138,6 +142,28 @@ describe("application API gateway", () => {
       expect(saved.json().data).toMatchObject({
         restartRequired: true,
         status: { enabled: false, reconnectMs: 4000 },
+      });
+      expect(saved.json().data.status).toMatchObject({
+        captureEnabled: true,
+        captureGroups: ["456"],
+        captureQueueLimit: 20,
+      });
+      const legacySave = await app.inject({
+        method: "PUT",
+        url: "/api/v1/napcat",
+        headers: authorization(),
+        payload: {
+          revision: saved.json().data.status.revision,
+          enabled: false,
+          selfId: "123",
+          reconnectMs: 4000,
+        },
+      });
+      expect(legacySave.statusCode, legacySave.body).toBe(200);
+      expect(legacySave.json().data.status).toMatchObject({
+        captureEnabled: true,
+        captureGroups: ["456"],
+        captureQueueLimit: 20,
       });
     } finally {
       await app?.close();

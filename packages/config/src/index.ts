@@ -100,3 +100,4 @@ export type {
   RuntimeConfig,
   RuntimeConfigInput,
 } from "./model.js";
+export { migrateLifecycleConfig } from "./lifecycle-migration.js";

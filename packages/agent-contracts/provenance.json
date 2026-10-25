@@ -1,0 +1,10 @@
+{
+  "sourceRepository": "https://github.com/posanbu/Kaguya",
+  "sourceCommit": "8e75bea230b8ab5df8e08897be305855d9fc8471",
+  "extractedFrom": [
+    "packages/modules/src/first-party/router/light.ts",
+    "packages/modules/src/first-party/message-authorization.ts",
+    "packages/schema/src/memory-graph.ts"
+  ],
+  "scope": "existing runtime schemas only; no new cognition algorithm"
+}

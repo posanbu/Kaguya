@@ -1,0 +1,62 @@
+name: NapCat capture integration
+
+on:
+  pull_request:
+    paths:
+      - "apps/server/**"
+      - "packages/platform-adapters/**"
+      - "benchmarks/participation/**"
+      - "package.json"
+      - ".github/workflows/napcat-capture.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/server/**"
+      - "packages/platform-adapters/**"
+      - "benchmarks/participation/**"
+      - "package.json"
+      - ".github/workflows/napcat-capture.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    name: napcat capture (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec tsc -b
+      - name: Test capture persistence, transport, configuration and lifecycle
+        run: >-
+          pnpm exec vitest run
+          apps/server/src/napcat-capture.test.ts
+          apps/server/src/napcat-capture-integration.test.ts
+          apps/server/src/napcat.test.ts
+          apps/server/src/napcat-config.test.ts
+          apps/server/src/config.test.ts
+          apps/server/src/app.test.ts
+          apps/server/src/feature-management.test.ts
+          apps/server/src/configuration-management.test.ts
+          apps/server/src/server-composition.test.ts
+          apps/server/src/server-reload.test.ts
+          packages/platform-adapters/src/napcat.test.ts
+          packages/platform-adapters/src/onebot.test.ts
+      - name: Regress offline participation evaluation
+        run: python -m unittest discover -s benchmarks/participation -p "test_*.py" -v

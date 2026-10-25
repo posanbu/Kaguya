@@ -1,3 +1,16 @@
+import {
+  lifecycleStartupCapability,
+  lifecycleStartedInformationKind,
+} from "@kaguya/modules";
+/**
+ * 测试夹具显式装配 QQ 表情模板，验证新增模块契约与既有流程兼容。
+ * 模型审批覆盖 Router Light 与 Expression 的 light，以及 Heavy 的 heavy，恢复屏障仍由 Runtime 统一管理。
+ * 测试显式注入统一文件模板，避免 Light 或 Expression 绕过 default/local 选择。
+ * 功能概述：验证 Runtime 生命周期与 durable one-shot scheduler 的装配边界。
+ * 主要职责：覆盖启动恢复阻塞、关闭顺序和 synthetic debounce/wait 恢复的回归场景。
+ * 代码库关系：直接消费 runtime 公共入口和 scheduler 公共能力；不依赖 apps composition。
+ * 输入输出与副作用：测试数据库、clock 与 runtime 进程生命周期，不模拟模块层 agent。
+ */
 /**
  * 测试夹具显式装配 QQ 表情模板，验证新增模块契约与既有流程兼容。
  * 模型审批覆盖 Router Light 与 Expression 的 light，以及 Heavy 的 heavy，恢复屏障仍由 Runtime 统一管理。
@@ -93,7 +106,8 @@ describe("KaguyaRuntime one-shot scheduler lifecycle", () => {
         promptTemplates: testMessageTemplates,
         lightTemplate: testPrompts.light,
         lightBootstrapPolicy: testPrompts.lightBootstrapPolicy,
-        expressionTemplates: testPrompts.expression,
+
+        nativeMemoryTemplate: testPrompts.nativeMemory,
         qqExpressionTemplates: testPrompts.qqExpression,
         agentIdentity: testIdentity,
       }),
@@ -153,7 +167,8 @@ describe("KaguyaRuntime one-shot scheduler lifecycle", () => {
       promptTemplates: testMessageTemplates,
       lightTemplate: testPrompts.light,
       lightBootstrapPolicy: testPrompts.lightBootstrapPolicy,
-      expressionTemplates: testPrompts.expression,
+
+      nativeMemoryTemplate: testPrompts.nativeMemory,
       qqExpressionTemplates: testPrompts.qqExpression,
       agentIdentity: testIdentity,
     });
@@ -175,15 +190,15 @@ describe("KaguyaRuntime one-shot scheduler lifecycle", () => {
           },
           {
             activation: {
-              instanceId: "memory.expression.default",
-              definitionId: "memory.expression",
+              instanceId: "router.default",
+              definitionId: "agent.router",
             },
             selectionPolicy: { tier: "light" },
           },
           {
             activation: {
-              instanceId: "router.default",
-              definitionId: "agent.router",
+              instanceId: "router.default.situation",
+              definitionId: "agent.situation",
             },
             selectionPolicy: { tier: "light" },
           },
@@ -202,8 +217,25 @@ describe("KaguyaRuntime one-shot scheduler lifecycle", () => {
         }),
       },
       oneShotRecoveryGate: recovery.promise,
-      capabilities: ({ oneShotSchedule }: RuntimeCapabilityContext) => [
+      capabilities: ({
+        oneShotSchedule,
+        core,
+        now,
+      }: RuntimeCapabilityContext) => [
         { capability: oneShotScheduleCapability, value: oneShotSchedule },
+        {
+          capability: lifecycleStartupCapability,
+          value: {
+            start: async (instanceId: string) => {
+              await core.register(lifecycleStartedInformationKind, {
+                source: `module:${instanceId}`,
+                occurredAt: now().toISOString(),
+                payload: { instanceId, at: now().toISOString() },
+                references: [],
+              });
+            },
+          },
+        },
       ],
     } as never);
     cleanups.push(() => runtime.close());

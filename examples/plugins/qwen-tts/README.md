@@ -81,3 +81,7 @@ Qwen3-TTS 非流式接口返回 WAV 下载地址。插件在超时和体积限�
 ## 来源
 
 接口按[Qwen TTS API](https://www.alibabacloud.com/help/en/model-studio/qwen-tts-api)和[音色管理 API](https://www.alibabacloud.com/help/en/model-studio/voice-clone-design-http-api)独立实现。Issue 所引用的 [wkf16/yachiyo-qwen-voice-reply](https://github.com/wkf16/yachiyo-qwen-voice-reply)提供了音色管理和回复流程的参考，其 README 声明 MIT。本包未复制上游 Python 脚本、播放逻辑或安装脚本，使用随包附带的 Kaguya MIT 许可。
+
+## 分段回复与主分支兼容
+
+插件接收的已授权正文保留 Heavy 的分段元数据。文字、语音和文字回退投递均原样透传 `speech`；只有实际平台投递成功才推动下一段，合成成功不代表发送完成。默认文字处理器使用同一约定，插件关闭时分段节奏、recall 和生命周期管理保持原链路。

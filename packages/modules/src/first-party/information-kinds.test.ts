@@ -22,15 +22,10 @@ import {
 describe("persistent first-party information payloads", () => {
   it("validates a strict versioned bootstrap projection", () => {
     const projection = {
-      version: 1 as const,
-      mode: "cold-start" as const,
-      memory: {
-        state: "no-authorized-evidence" as const,
-        selectedCount: 0,
-      },
-      conversation: { state: "first-seen" as const },
+      version: 2 as const,
+      conversation: { scopeMode: "canonical" as const, registration: null },
       participants: [
-        { inputInformationId: "input-1", state: "first-seen" as const },
+        { inputInformationId: "input-1", ownerId: null, registration: null },
       ],
     };
     expect(turnBootstrapProjectionSchema.parse(projection)).toEqual(projection);

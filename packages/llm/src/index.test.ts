@@ -140,6 +140,16 @@ describe("KaguyaLlmClient", () => {
 
     await expect(client.generate(request("message"))).resolves.toEqual({
       output: { text: "Moonlight." },
+      native: {
+        version: 1,
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: '{"text":"Moonlight."}' }],
+          },
+        ],
+        reasoning: [],
+      },
       usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
       durationMs: 25,
     });

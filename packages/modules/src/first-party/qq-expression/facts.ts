@@ -4,6 +4,12 @@
  * selectionRequested 冻结草稿、候选 ID 与输入；不把二进制或远程地址发送给模型。
  * 所有事实沿 Core 引用去重与审计，不依赖 Persona、Memory 或其他学习模块。
  */
+/**
+ * 功能概述：QQ 表情插件独占的收藏、语义推断与选择契约。
+ * collected 持久化可重发素材及冻结来源；learned 仅表示上下文推断，未知不参与候选。
+ * selectionRequested 冻结草稿、候选 ID 与输入；不把二进制或远程地址发送给模型。
+ * 所有事实沿 Core 引用去重与审计，不依赖 Persona、Memory 或其他学习模块。
+ */
 import { z, outboundExpressionSchema } from "@kaguya/schema";
 import { defineInformationKind } from "@kaguya/sdk";
 const refs = {
@@ -73,7 +79,7 @@ export const learned = defineInformationKind({
     }),
   },
 });
-export const selectionRequested = defineInformationKind({
+export const legacySelectionRequested = defineInformationKind({
   kind: "plugin.qq-expression.selection.requested",
   displayName: "表情选择请求",
   description: "冻结同会话的候选与当前草稿，最终仍需通过发送限额。",
@@ -82,6 +88,33 @@ export const selectionRequested = defineInformationKind({
       draftInformationId: z.string(),
       scope: z.string(),
       candidateIds: z.array(z.string()).max(24),
+    })
+    .strict(),
+  references: refs,
+  log: { enabled: false },
+});
+export const selectionRequested = defineInformationKind({
+  kind: "plugin.qq-expression.selection.requested.v2",
+  displayName: "表情选择请求",
+  description: "冻结 Memory 提供的语义、资源引用和草稿。",
+  payloadSchema: z
+    .object({
+      draftInformationId: z.string(),
+      scope: z.string(),
+      candidateIds: z.array(z.string()).max(24),
+      candidates: z
+        .array(
+          z
+            .object({
+              id: z.string(),
+              nodeId: z.string(),
+              revision: z.number().int(),
+              meaning: z.string(),
+              usage: z.string(),
+            })
+            .strict(),
+        )
+        .max(24),
     })
     .strict(),
   references: refs,

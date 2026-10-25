@@ -41,6 +41,8 @@ import {
   type InformationId,
   type JsonObject,
   compiledPromptSchema,
+  nativeMessagesSchema,
+  nativeResponseSchema,
   jsonValueSchema,
   informationIdSchema,
   platformDestinationSchema,
@@ -179,12 +181,36 @@ export const deliveryDeliveredInformationKind = defineInformationKind({
   },
 });
 
+/** A durable send boundary. A recovered dispatch must not send a second time. */
+export const deliveryStartedInformationKind = defineInformationKind({
+  kind: "core.delivery.started",
+  displayName: "平台投递已开始",
+  description:
+    "外部发送前保存唯一尝试标识。恢复时已有标识但无回执的投递标记为结果未知。",
+  payloadSchema: z.strictObject({ attemptId: nonBlankString }),
+  references: {
+    "core:caused-by": {
+      required: true,
+      multiple: false,
+      targetKinds: [deliveryRequestedInformationKind.kind],
+    },
+    "core:context": contextReference,
+  },
+  log: { enabled: false },
+});
+
 export const deliveryFailedInformationKind = defineInformationKind({
   kind: "core.delivery.failed",
   displayName: "平台投递失败",
   description:
     "平台发送未完成时记录安全错误和目标信息；Router 与诊断据此结束失败路径，不把已生成正文当作已送达。",
   payloadSchema: z.union([
+    z.strictObject({
+      ...safeDeliveryBaseShape,
+      ok: z.literal(false),
+      outcome: z.literal("unknown"),
+      error: nonBlankString,
+    }),
     z
       .object({
         ...safeDeliveryBaseShape,
@@ -265,6 +291,7 @@ export const modelTaskMetadataSchema = z
     promptTemplateId: nonBlankString,
     promptTemplateDigest: nonBlankString,
     promptDigest: nonBlankString,
+    messagesDigest: nonBlankString.nullable().default(null),
     provenance: modelTaskProvenanceSchema,
     activation: z
       .object({ instanceId: nonBlankString, definitionId: nonBlankString })
@@ -305,6 +332,8 @@ const modelTaskSafeErrorBaseSchema = z
       "provider-request",
       "structured-output-parse",
       "task-schema-validation",
+      "context-budget",
+      "native-protocol",
     ]),
     message: z.literal("Model task generation failed"),
   })
@@ -403,7 +432,14 @@ export const modelTaskRequestedInformationKind = defineInformationKind({
   description:
     "模块通过受控能力提交任务后冻结 Prompt、模型选择和调用归属；Runtime 据此执行或恢复同一任务并保留输入溯源。",
   payloadSchema: modelTaskMetadataSchema
-    .extend({ prompt: informationCompiledPromptSchema })
+    .extend({
+      prompt: informationCompiledPromptSchema,
+      messages: nativeMessagesSchema.nullable().default(null),
+      inputBlocked: z
+        .enum(["context-budget", "native-protocol"])
+        .nullable()
+        .default(null),
+    })
     .strict(),
   references: {
     "core:caused-by": { required: true, multiple: false },
@@ -460,10 +496,15 @@ export const modelTaskCompletedInformationKind = defineInformationKind({
         ...modelTaskTerminalShape,
         ...modelTaskUsageShape,
         output: modelTaskOutputSchema,
+        native: nativeResponseSchema.nullable().default(null),
       })
       .strict(),
     z
-      .object({ ...modelTaskTerminalShape, output: modelTaskOutputSchema })
+      .object({
+        ...modelTaskTerminalShape,
+        output: modelTaskOutputSchema,
+        native: nativeResponseSchema.nullable().default(null),
+      })
       .strict(),
   ]),
   references: modelTaskTerminalReferences,
@@ -614,5 +655,6 @@ export const builtInInformationKinds = Object.freeze([
   inboundTextInformationKind,
   deliveryRequestedInformationKind,
   deliveryDeliveredInformationKind,
+  deliveryStartedInformationKind,
   deliveryFailedInformationKind,
 ] as const satisfies readonly InformationKindDefinition<string, any>[]);

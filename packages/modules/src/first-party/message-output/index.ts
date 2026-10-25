@@ -80,6 +80,9 @@ export const textMessageOutputModule = defineInformationModule({
                     : {}),
                 },
                 turn: authorized.payload.turn,
+                ...(authorized.payload.speech
+                  ? { speech: authorized.payload.speech }
+                  : {}),
               },
               references:
                 authorized.payload.turn == null

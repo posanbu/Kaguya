@@ -7,9 +7,14 @@
  * 代码库关系：server.ts 在创建 HTTP、Runtime 或 adapter 前调用本模块；开发 PostgreSQL
  * CLI 也复用相同 runtime schema，但容器生命周期不进入生产 Server。
  * 输入输出与副作用：除安全随机数外无 I/O；错误只包含稳定字段名，不包含 URL 或凭据。
+ * 独立采集字段由 napcat-capture-config 校验；启用须明确账号和群，不改变入站/发送 allowlist。
  */
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import {
+  readCaptureSettings,
+  type NapCatCaptureSettings,
+} from "./napcat-capture-config.js";
 
 import {
   runtimeConfigSchema,
@@ -48,7 +53,7 @@ export interface ServerConfig {
 
 export type GatewayAllowlistConfig = readonly string[];
 
-export interface NapCatConfig {
+export interface NapCatConfig extends NapCatCaptureSettings {
   readonly enabled: boolean;
   readonly configurationError?: "configuration_invalid";
   readonly adapterId: string;
@@ -152,6 +157,7 @@ function readNapCatConfig(
   const selfId = stringSetting(platform.settings.selfId);
   const reconnectMs = numberSetting(platform.settings.reconnectMs);
   const accessToken = stringSetting(platform.settings.accessToken);
+  const capture = readCaptureSettings(platform.settings);
   if (
     wsUrl === undefined ||
     reconnectMs === undefined ||
@@ -176,6 +182,7 @@ function readNapCatConfig(
     adapterId,
     wsUrl,
     reconnectMs,
+    ...capture,
     ...(accessToken === undefined ? {} : { accessToken }),
     ...(selfId === undefined ? {} : { selfId }),
   };

@@ -23,7 +23,7 @@ function assertMessagePrompt(output) {
     output.includes("MESSAGE_PERSONA") &&
     output.includes("FIRST_TURN_INPUT") &&
     output.includes("LAST_TURN_INPUT") &&
-    output.includes("【本轮输入】") &&
+    output.includes("【当前 scope 上下文：近期、历史保底与未读消息】") &&
     !output.includes("【目标消息】") &&
     !output.includes("LEGACY_COPIED_BODY") &&
     !output.includes("ROUTE_ONLY_POLICY");

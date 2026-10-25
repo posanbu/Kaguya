@@ -1,8 +1,17 @@
 /**
  * 声明独立 QQ 表情推断与选择模板，确保文件覆盖、管理界面和运行时使用相同契约。
  * 功能概述：第一方模板的唯一静态契约，显式声明归属、变量与组成关系。
- * 主要职责：messageTemplateDeclarations/lightTemplateDeclaration/personFactTemplateDeclaration
- * 以及 expressionModulePromptTemplates 供 manifest、受限编译器与 Node 存储使用；正文全部来自 default/local 文件。
+ * 主要职责：消息、Light 与 Memory 模板声明
+ * 及 QQ 表情模板 供 manifest、受限编译器与 Node 存储使用；正文全部来自 default/local 文件。
+ * 代码库关系：消息编译器通过 key 获取已有模板输入，Node 仅通过已声明 templateId 定位 default/local 文件。
+ * context_bootstrap 向 Light 和 Heavy 暴露冻结的证据可用性；人设仅定义角色表达，不作为现实关系来源。
+ * 输入输出与副作用：仅常量，无运行时用户、身份或记忆数据，也不执行文件操作。
+ */
+/**
+ * 声明独立 QQ 表情推断与选择模板，确保文件覆盖、管理界面和运行时使用相同契约。
+ * 功能概述：第一方模板的唯一静态契约，显式声明归属、变量与组成关系。
+ * 主要职责：消息、Light 与 Memory 模板声明
+ * 及 QQ 表情模板 供 manifest、受限编译器与 Node 存储使用；正文全部来自 default/local 文件。
  * 代码库关系：消息编译器通过 key 获取已有模板输入，Node 仅通过已声明 templateId 定位 default/local 文件。
  * context_bootstrap 向 Light 和 Heavy 暴露冻结的证据可用性；人设仅定义角色表达，不作为现实关系来源。
  * 输入输出与副作用：仅常量，无运行时用户、身份或记忆数据，也不执行文件操作。
@@ -51,11 +60,7 @@ export const messageTemplateDeclarations = [
     description: "组合身份、双层原始事件上下文与记忆，生成消息编写指令。",
     allowedVariables: outerVariables,
     allowedPartials: [],
-    composes: [
-      "heavy.scene",
-      "heavy.bootstrap",
-      "heavy.memory",
-    ],
+    composes: ["heavy.scene", "heavy.bootstrap", "heavy.memory"],
   },
   {
     key: "historyInbound",
@@ -133,16 +138,6 @@ export const messageTemplateDeclarations = [
     allowedPartials: [],
     composes: [],
   },
-  {
-    key: "expressionHabits",
-    fileStem: "heavy.expression-habits",
-    name: "expression-habits",
-    displayName: "表达习惯参考",
-    description: "将已选择的表达习惯限定为措辞参考。",
-    allowedVariables: ["expression_habits"],
-    allowedPartials: [],
-    composes: [],
-  },
 ] as const;
 export const authorizedMessageTemplateDeclarations = [
   {
@@ -198,35 +193,6 @@ export const heavyModulePromptTemplates: readonly ModulePromptTemplateDefinition
       mutability: "editable" as const,
     })),
   ];
-export const expressionTemplateDeclarations = [
-  {
-    key: "learn",
-    fileStem: "memory.expression.learn",
-    templateId: "memory.expression.learn",
-    name: "expression-learn",
-    displayName: "表达习惯学习",
-    description: "从真人消息提取有证据支持的抽象表达习惯。",
-    allowedVariables: ["context"],
-    allowedPartials: [],
-    composes: [],
-  },
-  {
-    key: "select",
-    fileStem: "memory.expression.select",
-    templateId: "memory.expression.select",
-    name: "expression-select",
-    displayName: "表达习惯选择",
-    description: "依据冻结回合和消息意图选择合适的表达习惯。",
-    allowedVariables: ["context"],
-    allowedPartials: [],
-    composes: [],
-  },
-] as const;
-export const expressionModulePromptTemplates: readonly ModulePromptTemplateDefinition[] =
-  expressionTemplateDeclarations.map((item) => ({
-    ...item,
-    mutability: "editable" as const,
-  }));
 export const qqExpressionTemplateDeclarations = [
   {
     key: "learn",
@@ -337,13 +303,13 @@ export const identityPersonaTemplateDeclaration: PromptResourceDefinition = {
   composes: [],
   mutability: "editable",
 };
-export const personFactTemplateDeclaration: ModulePromptTemplateDefinition = {
+export const nativeMemoryTemplateDeclaration: ModulePromptTemplateDefinition = {
   mutability: "editable",
-  templateId: "person-fact",
-  name: "person-fact",
-  displayName: "人物事实提取",
-  description: "从候选证据提取人物事实。",
-  allowedVariables: ["person_id", "name", "candidate"],
+  templateId: "memory.native.form",
+  name: "native-memory-form",
+  displayName: "记忆形成与整理",
+  description: "从冻结证据形成分层记忆和显式关系。",
+  allowedVariables: ["context"],
   allowedPartials: [],
   composes: [],
 };
@@ -361,7 +327,6 @@ export const firstPartyPromptTemplateGroups = [
     identityAliasesTemplateDeclaration,
     identityPersonaTemplateDeclaration,
   ],
-  [personFactTemplateDeclaration],
-  expressionModulePromptTemplates,
   qqExpressionModulePromptTemplates,
+  [nativeMemoryTemplateDeclaration],
 ] as const;

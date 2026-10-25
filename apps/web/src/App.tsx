@@ -29,6 +29,7 @@
  * 工作台由 AppShell 统一承载，useWorkbenchRouter 保护 history 导航；根路径预留概览，
  * /messages、/profiles、/configuration/application 分别提供任务入口；接入管理嵌入概览，
  * /adapters 仅作为兼容入口聚焦该区块。
+ * /memory 延迟加载记忆图工作台，提供节点与关系检视、手动编辑和删除；沿用同一管理 Token。
  * 人工跨会话管理界面已移除；会话 UUID 由 WebChat 保存，凭据与编辑状态仅驻留当前页面。
  * DeveloperConsole 接收完整 pathname 以恢复模块详情，负责只读查询与取消，401 继续由本文件统一锁屏。
  * 消息页由 WebChat 管理独立浏览器会话、历史恢复与完整回复轮询；
@@ -42,6 +43,7 @@ import {
   useProfileWorkspace,
 } from "./ProfileWorkspace.js";
 import { Overview } from "./Overview.js";
+import { SituationPage } from "./SituationPage.js";
 import { WebChat } from "./WebChat.js";
 import {
   Button,
@@ -74,12 +76,10 @@ import {
   EyeOff,
   LoaderCircle,
   LockKeyhole,
-  Moon,
   PencilLine,
   RefreshCw,
   Save,
   Settings2,
-  Sun,
   Trash2,
 } from "lucide-react";
 import {
@@ -88,6 +88,8 @@ import {
   useMemo,
   useRef,
   useState,
+  lazy,
+  Suspense,
   type ReactNode,
 } from "react";
 
@@ -148,6 +150,12 @@ import {
 
 type ConfigurationView =
   "locked" | "checking" | "profiles" | "napcat" | "restart" | "chat" | "error";
+
+const MemoryGraphPage = lazy(() =>
+  import("./MemoryGraph.js").then(({ MemoryGraph }) => ({
+    default: MemoryGraph,
+  })),
+);
 
 interface ClearedLoadedProfileStateSnapshot {
   readonly requestSequence: number;
@@ -237,6 +245,13 @@ export function App() {
     return <ConfigurationStatusError message={configurationError} />;
 
   const renderPage = () => {
+    if (path === "/situation") return <SituationPage token={token} />;
+    if (path === "/memory")
+      return (
+        <Suspense fallback={<FieldMessage>正在加载记忆工作台…</FieldMessage>}>
+          <MemoryGraphPage token={token} />
+        </Suspense>
+      );
     if (isOverview)
       return (
         <AdapterManagementSection token={token}>
@@ -309,8 +324,6 @@ export function App() {
         currentPath={path}
         onNavigate={navigate}
         registerNavigationGuard={register}
-        profileSlot={<ProfileSwitcher />}
-        actions={<ThemeToggle />}
       >
         {renderPage()}
       </AppShell>
@@ -760,13 +773,16 @@ function ProfileManagementScreen({
             ) : undefined
           }
           actions={
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={onClose}
-            >
-              返回消息
-            </button>
+            <>
+              <ProfileSwitcher />
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={onClose}
+              >
+                返回消息
+              </button>
+            </>
           }
         />
         <main className="setup-main profile-main">
@@ -1597,8 +1613,6 @@ function SetupHeader({ subtitle }: { readonly subtitle: string }) {
   return (
     <header className="topbar">
       <BrandIdentity subtitle={subtitle} />
-      <div className="topbar-spacer" />
-      <ThemeToggle />
     </header>
   );
 }
@@ -1613,41 +1627,6 @@ function BrandIdentity({ subtitle }: { readonly subtitle: string }) {
       </div>
     </div>
   );
-}
-
-type Theme = "light" | "dark";
-
-function ThemeToggle() {
-  const [theme, setTheme] = useState<Theme>(() => readTheme());
-  const nextTheme = theme === "light" ? "dark" : "light";
-  const nextThemeLabel = nextTheme === "dark" ? "深色" : "浅色";
-
-  const toggleTheme = () => {
-    document.documentElement.dataset.theme = nextTheme;
-    try {
-      localStorage.setItem("kaguya.theme", nextTheme);
-    } catch {
-      // The selected theme still applies for this page when storage is unavailable.
-    }
-    setTheme(nextTheme);
-  };
-
-  return (
-    <button
-      className="theme-button"
-      type="button"
-      onClick={toggleTheme}
-      aria-label={`切换至${nextThemeLabel}主题`}
-      title={`切换至${nextThemeLabel}主题`}
-    >
-      {nextTheme === "dark" ? <Moon size={17} /> : <Sun size={17} />}
-      <span>{nextThemeLabel}</span>
-    </button>
-  );
-}
-
-function readTheme(): Theme {
-  return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
 }
 
 export function readGatewayToken(

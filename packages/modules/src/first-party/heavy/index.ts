@@ -1,27 +1,39 @@
 /**
- * 启用独立草稿处理器时，QQ 模型输出先登记 draft；最终 assistant 仍经过原有授权和唯一投递槽。
- * manifest.promptTemplates 显式声明消息模板组，供管理端按归属读取。
- * Heavy 固定使用 heavy 模型档位，模块 settings 为空对象。
- * 功能概述：消息编写模块消费 Router 产生的目标与冻结 turn 意图，经通用 Model Task 生成文本。
- * 宿主授权能力在选取上下文前校验目标；跨会话只使用批准 Prompt，正文确认后才通过同一 release 发布授权正文。
- * 普通回复也调用宿主冻结背景，仅追加 background 投影，不把其他会话目标引用或 ID 传给正文模型。
- * 场景、人物背景与表达习惯均使用外部模板；背景和表达 renderer 在模块构造时按声明编译，只记录实际追加的模板和变量。
- * 主要职责：createHeavyModule 装配三个 durable 订阅；messageTaskOutputSchema 校验非空文本；
- * heavySettingsSchema 不接受可调设置。完成选择器沿 completed→requested→intent 核对任务来源，
- * 再以实例与事实 ID 为 registerOnce 键分别记录 assistant 和授权正文，交给唯一输出处理器，重复事件不产生重复业务输出。
- * 代码库关系：message-context 选择冻结上下文，message-prompt 编译全部本轮输入；Runtime 注入模型能力及完成定义。
- * 输入输出与副作用：意图只携带 target、turn 与 memoryInformationIds；assistant.source 保留 target，
- * 不复制入站正文或消息 ID，不提供固定路由或自动引用回复。失败或取消的模型任务不产生 assistant。
- * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
- * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
+ * Heavy 根据冻结上下文逐段生成正文，每段成功投递后才创建下一步。
+ * 接续绕过参与判断，保留原意图、原生模型历史、实际回执和新增消息。
+ * 持久化 one-shot 计入模型耗时后安排短暂停顿，独立步骤键贯穿草稿、助手消息和投递。
+ * QQ 可经独立表情处理器装饰。全部出站沿用宿主授权，跨会话批准仍仅发送一次。
+ * 失败、预算受阻或投递未知交给 Router 记录，不能当作自然结束。
  */
-import { firstPartyInspection } from "../inspection.js";
-import { expressionSelected, expressionReady } from "../expression/facts.js";
+import type { NativeMemoryAccess } from "@kaguya/memory";
+import { nativeMemorySnapshotSchema } from "@kaguya/schema";
 import {
-  expressionDispatchSelector,
-  withExpressionContext,
-  expressionPrompt,
-} from "../expression/heavy-context.js";
+  memoryRecallRequested,
+  memoryRecallCompleted,
+  recallActionSchema,
+  recallContextSelector,
+  recallHistory,
+  recallTurnReferences,
+  appendRecallResult,
+} from "./recall.js";
+import { firstPartyInspection } from "../inspection.js";
+import {
+  oneShotDueInformationKind,
+  oneShotScheduleCapability,
+} from "@kaguya/scheduler";
+import {
+  pacingSchema,
+  speechReadyAt,
+  speechReadyInformationKind,
+  speechStepRequestedInformationKind,
+  speechObservedInformationKind,
+  speechStepContextSelector,
+  speechDueSelector,
+  speechDeliveredSelector,
+  speechClosedSelector,
+  appendSpeechContext,
+} from "./speech.js";
+import { appendNativeMemoryToPrompt } from "../memory-native/prompt.js";
 import {
   heavyModulePromptTemplates,
   messageTemplateDeclarations,
@@ -38,6 +50,7 @@ import {
   type JsonObject,
   type JsonValue,
   z,
+  compiledPromptSchema,
 } from "@kaguya/schema";
 import {
   defineInformationModule,
@@ -54,7 +67,8 @@ import {
 import {
   assistantTextInformationKind,
   authorizedAssistantOutputInformationKind,
-  coreMemoryTextInformationKind,
+  messageOutputProcessorReady,
+  deliveryRequestedInformationKind,
   inboundTextInformationKind,
   messageIntentRequestedInformationKind,
   messageIntentRequestedInformationPayloadSchema,
@@ -65,7 +79,6 @@ import {
   inboundMemoryPromptRenderer,
   assistantHistoryPromptRenderer,
   messagePromptRenderer,
-  memoryPromptRenderer,
   currentAcceptedMessageSelector,
   turnMessageContextSelector,
 } from "./message-context.js";
@@ -79,7 +92,6 @@ import {
   messageDraftInformationKind,
   messagePreparedInformationKind,
   messageDraftProcessorReady,
-  messageOutputProcessorReady,
 } from "../kinds/message.js";
 
 export const modelTierSchema = z.enum(["light", "heavy"]);
@@ -91,7 +103,9 @@ export interface ModuleModelSelection {
 
 export type { AgentIdentity, HeavyPromptTemplates } from "./message-prompt.js";
 
-export const heavySettingsSchema = z.object({}).strict();
+export const heavySettingsSchema = z
+  .object({ pacing: pacingSchema.optional() })
+  .strict();
 export type HeavySettings = z.infer<typeof heavySettingsSchema>;
 
 export const messageModelDispatchingDiagnostic = defineModuleDiagnostic({
@@ -114,12 +128,29 @@ export const messageModelDispatchingDiagnostic = defineModuleDiagnostic({
 });
 
 export const messageTaskOutputSchema = z.string().trim().min(1);
-export const messageResponseOutputSchema = z.discriminatedUnion("action", [
+export const messageResponseWithoutRecallSchema = z.union([
+  z
+    .object({
+      action: z.literal("message"),
+      text: z.string().trim().min(1),
+      continuation: z.string().trim().min(1).nullable(),
+    })
+    .strict(),
   z
     .object({ action: z.literal("message"), text: z.string().trim().min(1) })
     .strict(),
   z.object({ action: z.literal("silent") }).strict(),
 ]);
+
+export const messageResponseOutputSchema = z.union([
+  messageResponseWithoutRecallSchema,
+  recallActionSchema,
+]);
+function responseSchema(prompt: CompiledPrompt, enabled: boolean) {
+  return enabled && recallHistory(prompt).length < 2
+    ? messageResponseOutputSchema
+    : messageResponseWithoutRecallSchema;
+}
 
 export interface ModelTaskRequest<TOutput> {
   readonly task: {
@@ -134,6 +165,7 @@ export interface ModelTaskRequest<TOutput> {
   readonly selectionPolicy: { readonly tier: "light" | "heavy" };
   readonly prompt: CompiledPrompt;
   readonly contextAtoms: readonly DeepReadonly<InformationAtom>[];
+  readonly nativeContinuation?: boolean;
 }
 
 type ModelTaskResultIdentity = {
@@ -152,7 +184,9 @@ export type ModelTaskResult<TOutput> = ModelTaskResultIdentity &
           readonly stage:
             | "provider-request"
             | "structured-output-parse"
-            | "task-schema-validation";
+            | "task-schema-validation"
+            | "context-budget"
+            | "native-protocol";
           readonly message: "Model task generation failed";
         };
       }
@@ -187,15 +221,19 @@ export interface CreateHeavyModuleOptions<
   P extends ModelTaskCompletedInformationPayload =
     ModelTaskCompletedInformationPayload,
 > {
+  readonly nativeMemoryCapability?: ModuleCapability<NativeMemoryAccess>;
   readonly modelTaskCapability: ModuleCapability<ModelTaskCapability>;
   readonly messageAuthorizationCapability?: ModuleCapability<MessageAuthorization>;
   readonly modelTaskCompletedInformationKind: InformationKindDefinition<
     "core.model.task.completed",
     P
   >;
-  readonly expressionEnabled?: boolean;
   /** 装配时有独立展示插件才启用；本模块不决定表情策略。 */
   readonly draftProcessingEnabled?: boolean;
+  readonly deliveryDeliveredInformationKind?: InformationKindDefinition<
+    string,
+    any
+  >;
   readonly selector?: InformationSelectorDefinition;
   readonly promptTemplates: HeavyPromptTemplates;
   readonly agentIdentity: AgentIdentity;
@@ -211,9 +249,7 @@ export function createHeavyModule<
   )
     throw new Error("Invalid model task capability");
   const baseSelector = dependencies.selector ?? turnMessageContextSelector;
-  const selector = dependencies.expressionEnabled
-    ? withExpressionContext(baseSelector)
-    : baseSelector;
+  const selector = baseSelector;
   const compilePrompt = createMessagePromptCompiler(
     dependencies.promptTemplates,
     dependencies.agentIdentity,
@@ -221,10 +257,6 @@ export function createHeavyModule<
   const renderBackground = createContextPromptRenderer(
     dependencies.promptTemplates,
     "conversationBackground",
-  );
-  const renderHabits = createContextPromptRenderer(
-    dependencies.promptTemplates,
-    "expressionHabits",
   );
   const completedInformationKind =
     dependencies.modelTaskCompletedInformationKind;
@@ -258,33 +290,40 @@ export function createHeavyModule<
   }
   return defineInformationModule({
     manifest: {
+      category: "agent",
       protocolVersion: 1,
       moduleVersion: "1.0.0",
       selectors: [
-        ...(dependencies.expressionEnabled ? [expressionDispatchSelector] : []),
         selector,
         ...(selector === currentAcceptedMessageSelector
           ? []
           : [currentAcceptedMessageSelector]),
         completedMessageSelector,
+        recallContextSelector,
         confirmedAssistantSelector,
+        speechStepContextSelector,
+        speechDueSelector,
+        speechDeliveredSelector,
+        speechClosedSelector,
       ],
       promptRenderers: [
         messagePromptRenderer,
-        memoryPromptRenderer,
         inboundMemoryPromptRenderer,
         assistantHistoryPromptRenderer,
       ],
       requires: [
+        messageOutputProcessorReady,
         ...(dependencies.draftProcessingEnabled
           ? [messageDraftProcessorReady]
           : []),
-        ...(dependencies.expressionEnabled ? [expressionReady] : []),
         modelTaskCapability,
+        ...(dependencies.nativeMemoryCapability
+          ? [dependencies.nativeMemoryCapability]
+          : []),
+        oneShotScheduleCapability,
         ...(dependencies.messageAuthorizationCapability
           ? [dependencies.messageAuthorizationCapability]
           : []),
-        messageOutputProcessorReady,
       ],
       provides: [],
       definitionId: "agent.heavy",
@@ -292,33 +331,43 @@ export function createHeavyModule<
       displayName: "Heavy 正文生成",
       summary: "根据显式选定的冻结上下文生成待投递正文。",
       description:
-        "消费消息意图与模型结果，选择历史、记忆及当前输入并编译 Prompt，通过 Model Task 生成正文；输出助手消息与授权正文，跨会话正文需经宿主确认后释放。",
+        "消费消息意图与模型结果，选择历史、记忆及当前输入并编译 Prompt，通过 Model Task 生成正文；输出助手消息与投递请求，跨会话正文需经宿主确认后释放。",
       settingsSchema: heavySettingsSchema,
       promptTemplates: heavyModulePromptTemplates,
       consumes: [
+        memoryRecallRequested,
+        memoryRecallCompleted,
         ...(dependencies.draftProcessingEnabled
           ? [messagePreparedInformationKind]
           : []),
-        ...(dependencies.expressionEnabled ? [expressionSelected] : []),
         messageConfirmedInformationKind,
         messageIntentRequestedInformationKind,
         completedInformationKind,
         assistantTextInformationKind,
-        authorizedAssistantOutputInformationKind,
-        coreMemoryTextInformationKind,
         inboundTextInformationKind,
+        speechStepRequestedInformationKind,
+        speechReadyInformationKind,
+        oneShotDueInformationKind,
+        ...(dependencies.deliveryDeliveredInformationKind
+          ? [dependencies.deliveryDeliveredInformationKind]
+          : []),
       ],
       produces: [
+        authorizedAssistantOutputInformationKind,
+        memoryRecallRequested,
+        memoryRecallCompleted,
         heavyResponseSilentInformationKind,
         ...(dependencies.draftProcessingEnabled
           ? [messageDraftInformationKind]
           : []),
         assistantTextInformationKind,
-        authorizedAssistantOutputInformationKind,
+        speechStepRequestedInformationKind,
+        speechObservedInformationKind,
+        speechReadyInformationKind,
       ],
       diagnostics: [messageModelDispatchingDiagnostic],
     },
-    create: ({ activation }) => ({
+    create: ({ activation, settings }) => ({
       provisions: [],
       describeStartup: () => ({
         summary: "Heavy pipeline ready",
@@ -344,7 +393,9 @@ export function createHeavyModule<
                   await context.registerOnce(
                     "kaguya.heavy.prepared-assistant",
                     prepared.informationId,
-                    assistantTextInformationKind,
+                    prepared.payload.speech
+                      ? speechReadyInformationKind
+                      : assistantTextInformationKind,
                     {
                       payload: assistantTextInformationKind.payloadSchema.parse(
                         prepared.payload,
@@ -356,31 +407,16 @@ export function createHeavyModule<
             ]
           : []),
         onInformation(
-          (dependencies.expressionEnabled
-            ? expressionSelected
-            : messageIntentRequestedInformationKind) as unknown as InformationKindDefinition<
-            string,
-            JsonObject
-          >,
+          messageIntentRequestedInformationKind,
           {
-            subscriptionId: dependencies.expressionEnabled
-              ? "kaguya.heavy.expression-selected"
-              : "kaguya.heavy.requested",
+            subscriptionId: "kaguya.heavy.requested",
             delivery: "durable",
           },
           async (input, context) => {
-            const selected = dependencies.expressionEnabled
-              ? await context.select(expressionDispatchSelector)
-              : [];
-            const original = dependencies.expressionEnabled
-              ? selected.find(
-                  (a) => a.informationId === input.payload.intentInformationId,
-                )!
-              : input;
             const message = {
-              ...original,
+              ...input,
               payload: messageIntentRequestedInformationPayloadSchema.parse(
-                original.payload,
+                input.payload,
               ),
             };
             const authorized = dependencies.messageAuthorizationCapability
@@ -453,22 +489,11 @@ export function createHeavyModule<
                 };
               }
             }
-            contextAtoms = persisted
-              ? contextAtoms
-              : [
-                  ...new Map(
-                    [...contextAtoms, ...selected].map((a) => [
-                      a.informationId,
-                      a,
-                    ]),
-                  ).values(),
-                ];
-            if (!persisted)
-              prompt = expressionPrompt(
+            if (!persisted && !authorized)
+              prompt = appendNativeMemoryToPrompt(
                 prompt,
                 contextAtoms,
-                message.informationId,
-                renderHabits,
+                message.payload.turn.contextInformationId,
               );
             const contexts = persistedIntent.references.filter(
               (r) => r.relation === "core:context",
@@ -497,7 +522,10 @@ export function createHeavyModule<
                 taskId: "agent.heavy.respond",
                 outputMode: ordinaryReply ? "object" : "text",
                 outputSchema: ordinaryReply
-                  ? messageResponseOutputSchema
+                  ? responseSchema(
+                      prompt,
+                      Boolean(dependencies.nativeMemoryCapability),
+                    )
                   : messageTaskOutputSchema,
                 allowedTiers: ["heavy"],
               },
@@ -507,6 +535,7 @@ export function createHeavyModule<
               selectionPolicy: { tier: "heavy" },
               prompt,
               contextAtoms,
+              nativeContinuation: ordinaryReply,
             });
           },
         ),
@@ -524,9 +553,32 @@ export function createHeavyModule<
               completed.payload.selectionPolicy.tier !== "heavy"
             )
               return;
+            const selected = await context.select(completedMessageSelector);
+            const modelSource = selected.find(
+              (a) => a.informationId === completed.payload.sourceInformationId,
+            )!;
+            const source =
+              modelSource.kind === memoryRecallCompleted.kind
+                ? selected.find(
+                    (a) =>
+                      a.informationId ===
+                      modelSource.payload.originalSourceInformationId,
+                  )!
+                : modelSource;
+            const step =
+              source?.kind === speechStepRequestedInformationKind.kind
+                ? speechStepRequestedInformationKind.payloadSchema.parse(
+                    source.payload,
+                  )
+                : undefined;
+            if (
+              (step || modelSource.kind === memoryRecallCompleted.kind) &&
+              (await context.select(speechClosedSelector)).length
+            )
+              return;
             const message = requireSelectedMessageIntent(
-              await context.select(completedMessageSelector),
-              completed.payload.sourceInformationId,
+              selected,
+              step?.intentInformationId ?? source.informationId,
             );
             const response =
               completed.payload.outputMode === "object"
@@ -537,6 +589,69 @@ export function createHeavyModule<
                       completed.payload.output,
                     ),
                   };
+            const request = selected.find(
+              (a) => a.kind === "core.model.task.requested",
+            )!;
+            if (response.action === "recall") {
+              const prompt = compiledPromptSchema.parse(request.payload.prompt);
+              if (
+                recallHistory(prompt).length >= 2 ||
+                !dependencies.nativeMemoryCapability
+              )
+                throw new Error("MEMORY_RECALL_BUDGET_EXCEEDED");
+              const ids = [
+                ...new Set([
+                  ...(request.payload.contextInformationIds as string[]),
+                  ...selected.map((a) => a.informationId),
+                  completed.informationId,
+                ]),
+              ];
+              await context.registerOnce(
+                "kaguya.heavy.recall",
+                completed.informationId,
+                memoryRecallRequested,
+                {
+                  payload: memoryRecallRequested.payloadSchema.parse({
+                    ...message.payload,
+                    intentInformationId: message.informationId,
+                    originalSourceInformationId: source.informationId,
+                    query: response.query,
+                    candidateIds: response.candidateIds,
+                    prompt,
+                    contextInformationIds: ids,
+                  }),
+                  references: [
+                    ...recallTurnReferences(message.payload.turn),
+                    ...ids.map((informationId) => ({
+                      relation: "core:uses-context",
+                      informationId,
+                    })),
+                  ],
+                },
+              );
+              return;
+            }
+            if (step)
+              await context.registerOnce(
+                "kaguya.heavy.step.observed",
+                source.informationId,
+                speechObservedInformationKind,
+                {
+                  payload: {
+                    stepInformationId: source.informationId,
+                    scopeKey: step.scopeKey,
+                    observedThroughInformationId:
+                      step.observedThroughInformationId,
+                    turn: step.turn,
+                  },
+                  references: [
+                    {
+                      relation: "core:uses-context",
+                      informationId: source.informationId,
+                    },
+                  ],
+                },
+              );
             if (response.action === "silent") {
               await context.registerOnce(
                 "kaguya.heavy.silent.v1",
@@ -546,6 +661,12 @@ export function createHeavyModule<
                   payload: {
                     intentInformationId: message.informationId,
                     turn: message.payload.turn,
+                    ...(step
+                      ? {
+                          previousDeliveryInformationId:
+                            step.previousDeliveryInformationId,
+                        }
+                      : {}),
                   },
                   references: [
                     {
@@ -566,19 +687,44 @@ export function createHeavyModule<
               );
               return;
             }
+            const requested = selected.find(
+              (a) => a.kind === "core.model.task.requested",
+            );
+            const speech =
+              "continuation" in response && requested
+                ? {
+                    intentInformationId: message.informationId,
+                    stepInformationId: source.informationId,
+                    stepIndex: step?.stepIndex ?? 0,
+                    completedInformationId: completed.informationId,
+                    continuation: z
+                      .string()
+                      .nullable()
+                      .parse(response.continuation),
+                    readyAt: speechReadyAt(
+                      requested.occurredAt,
+                      source.informationId,
+                      response.text,
+                      settings.pacing,
+                    ),
+                  }
+                : undefined;
             await context.registerOnce(
               "kaguya.heavy.assistant.v1",
               `${context.instanceId}:${completed.informationId}`,
               dependencies.draftProcessingEnabled &&
                 message.payload.target.platform === "qq"
                 ? messageDraftInformationKind
-                : assistantTextInformationKind,
+                : speech
+                  ? speechReadyInformationKind
+                  : assistantTextInformationKind,
               {
                 payload: {
                   text: response.text,
                   source: message.payload.target,
                   originatingModuleInstanceId: context.instanceId,
                   turn: message.payload.turn,
+                  ...(speech ? { speech } : {}),
                 },
               },
             );
@@ -602,6 +748,423 @@ export function createHeavyModule<
             await release(assistant, context);
           },
         ),
+        onInformation(
+          speechReadyInformationKind,
+          { subscriptionId: "kaguya.heavy.pacing", delivery: "durable" },
+          async (ready, context) => {
+            if (
+              ready.payload.originatingModuleInstanceId !== context.instanceId
+            )
+              return;
+            if (ready.payload.speech) {
+              await context.use(oneShotScheduleCapability).schedule({
+                operationKey: `heavy-speech:${context.instanceId}:${ready.informationId}`,
+                sourceInformationId: ready.informationId,
+                dueAt: ready.payload.speech.readyAt,
+                activation,
+                input: {
+                  purpose: "heavy-speech",
+                  readyInformationId: ready.informationId,
+                },
+              });
+            } else
+              await context.registerOnce(
+                "kaguya.heavy.ready-assistant",
+                ready.informationId,
+                assistantTextInformationKind,
+                { payload: ready.payload },
+              );
+          },
+        ),
+        onInformation(
+          oneShotDueInformationKind,
+          { subscriptionId: "kaguya.heavy.pacing-due", delivery: "durable" },
+          async (due, context) => {
+            const atoms = await context.select(speechDueSelector);
+            const ready = atoms.find(
+              (a) => a.kind === speechReadyInformationKind.kind,
+            );
+            if (
+              !ready ||
+              ready.payload.originatingModuleInstanceId !== context.instanceId
+            )
+              return;
+            const runtime = atoms.find(
+              (a) => a.kind === "core.runtime.context",
+            )!;
+            if ((await context.select(speechClosedSelector)).length) {
+              await context.use(oneShotScheduleCapability).finish({
+                scheduleInformationId: due.payload.scheduleInformationId,
+                status: "fired",
+              });
+              return;
+            }
+            await context.registerOnce(
+              "kaguya.heavy.ready-assistant",
+              ready.informationId,
+              assistantTextInformationKind,
+              {
+                payload: assistantTextInformationKind.payloadSchema.parse(
+                  ready.payload,
+                ),
+                contextInformationId: runtime.informationId,
+                references: [
+                  {
+                    relation: "core:uses-context",
+                    informationId: ready.informationId,
+                  },
+                ],
+              },
+            );
+            await context.use(oneShotScheduleCapability).finish({
+              scheduleInformationId: due.payload.scheduleInformationId,
+              status: "fired",
+            });
+          },
+        ),
+        ...(dependencies.deliveryDeliveredInformationKind
+          ? [
+              onInformation(
+                dependencies.deliveryDeliveredInformationKind,
+                {
+                  subscriptionId: "kaguya.heavy.delivered",
+                  delivery: "durable",
+                },
+                async (delivered, context) => {
+                  const atoms = await context.select(speechDeliveredSelector);
+                  const deliveryId = delivered.references.find(
+                    (r) => r.relation === "core:status-of",
+                  )?.informationId;
+                  const delivery = atoms.find(
+                    (a) => a.informationId === deliveryId,
+                  );
+                  if (!delivery) return;
+                  if ((await context.select(speechClosedSelector)).length)
+                    return;
+                  const speech =
+                    deliveryRequestedInformationKind.payloadSchema.parse(
+                      delivery.payload,
+                    ).speech!;
+                  const previous = atoms.find(
+                    (a) => a.informationId === speech.completedInformationId,
+                  )!;
+                  if (
+                    (previous.payload.activation as { instanceId: string })
+                      .instanceId !== context.instanceId
+                  )
+                    return;
+                  const root = requireSelectedMessageIntent(
+                    atoms,
+                    speech.intentInformationId,
+                  );
+                  const priorSource = atoms.find(
+                    (a) => a.informationId === speech.stepInformationId,
+                  )!;
+                  const turn = atoms.find(
+                    (a) =>
+                      a.informationId ===
+                      root.payload.turn.contextInformationId,
+                  )!;
+                  const previousRequest = atoms.find(
+                    (a) =>
+                      a.informationId ===
+                      previous.references.find(
+                        (r) => r.relation === "core:caused-by",
+                      )!.informationId,
+                  )!;
+                  const rootRequest = atoms.find(
+                    (a) =>
+                      a.kind === "core.model.task.requested" &&
+                      a.payload.sourceInformationId === root.informationId,
+                  )!;
+                  const knownIds = new Set(
+                    previousRequest.payload.contextInformationIds as string[],
+                  );
+                  const incoming = atoms.filter(
+                    (a) =>
+                      a.kind === inboundTextInformationKind.kind &&
+                      !knownIds.has(a.informationId),
+                  );
+                  const originalIds = new Set(
+                    rootRequest.payload.contextInformationIds as string[],
+                  );
+                  const interjections = atoms.filter(
+                    (a) =>
+                      a.kind === inboundTextInformationKind.kind &&
+                      !originalIds.has(a.informationId),
+                  );
+                  const through =
+                    incoming.at(-1)?.informationId ??
+                    String(
+                      priorSource.payload.observedThroughInformationId ??
+                        turn.payload.observedThroughInformationId,
+                    );
+                  const content = JSON.stringify({
+                    continuation: speech.continuation,
+                    delivered: atoms
+                      .filter(
+                        (a) =>
+                          a.kind === "core.delivery.requested" &&
+                          (
+                            a.payload.speech as
+                              { intentInformationId?: string } | undefined
+                          )?.intentInformationId === root.informationId,
+                      )
+                      .map((a) => ({
+                        step: a.payload.speech,
+                        message: a.payload.message,
+                        receipt: atoms.find(
+                          (r) =>
+                            r.kind === "core.delivery.delivered" &&
+                            r.references.some(
+                              (ref) =>
+                                ref.relation === "core:status-of" &&
+                                ref.informationId === a.informationId,
+                            ),
+                        )?.payload,
+                      })),
+                    newMessages: incoming.map((a) => ({
+                      id: a.informationId,
+                      at: a.occurredAt,
+                      ...a.payload,
+                    })),
+                    earlierInterjections: interjections
+                      .filter((a) => knownIds.has(a.informationId))
+                      .map((a) => ({
+                        id: a.informationId,
+                        at: a.occurredAt,
+                        ...a.payload,
+                      })),
+                  });
+                  const ids = atoms.map((a) => a.informationId);
+                  await context.registerOnce(
+                    "kaguya.heavy.step",
+                    `${context.instanceId}:${delivered.informationId}`,
+                    speechStepRequestedInformationKind,
+                    {
+                      payload:
+                        speechStepRequestedInformationKind.payloadSchema.parse({
+                          ...root.payload,
+                          intentInformationId: root.informationId,
+                          stepIndex: speech.stepIndex + 1,
+                          continuation: speech.continuation!,
+                          previousDeliveryInformationId:
+                            delivered.informationId,
+                          observedThroughInformationId: through,
+                          scopeKey: String(turn.payload.scopeKey),
+                          contextInformationIds: ids,
+                          prompt: appendSpeechContext(
+                            compiledPromptSchema.parse(
+                              previousRequest.payload.prompt,
+                            ),
+                            content,
+                            ids,
+                          ),
+                        }),
+                      references: ids.map((informationId) => ({
+                        relation: "core:uses-context",
+                        informationId,
+                      })),
+                    },
+                  );
+                },
+              ),
+            ]
+          : []),
+        onInformation(
+          speechStepRequestedInformationKind,
+          { subscriptionId: "kaguya.heavy.step", delivery: "durable" },
+          async (step, context) => {
+            if ((await context.select(speechClosedSelector)).length) return;
+            const atoms = await context.select(speechStepContextSelector);
+            const rootRequest = atoms.find(
+              (a) =>
+                a.kind === "core.model.task.requested" &&
+                a.payload.sourceInformationId ===
+                  step.payload.intentInformationId,
+            )!;
+            if (
+              (rootRequest.payload.activation as { instanceId: string })
+                .instanceId !== context.instanceId
+            )
+              return;
+            await context.use(modelTaskCapability).execute({
+              task: {
+                taskId: "agent.heavy.respond",
+                outputMode: "object",
+                outputSchema: responseSchema(
+                  compiledPromptSchema.parse(step.payload.prompt),
+                  Boolean(dependencies.nativeMemoryCapability),
+                ),
+                allowedTiers: ["heavy"],
+              },
+              sourceInformationId: step.informationId,
+              contextInformationId: step.references.find(
+                (r) => r.relation === "core:context",
+              )!.informationId,
+              activation,
+              selectionPolicy: { tier: "heavy" },
+              prompt: compiledPromptSchema.parse(step.payload.prompt),
+              contextAtoms: atoms,
+              nativeContinuation: true,
+            });
+          },
+        ),
+        onInformation(
+          memoryRecallRequested,
+          { subscriptionId: "kaguya.heavy.recall", delivery: "durable" },
+          async (request, context) => {
+            if ((await context.select(speechClosedSelector)).length) return;
+            const atoms = await context.select(recallContextSelector);
+            const root = atoms.find(
+              (a) =>
+                a.kind === "core.model.task.requested" &&
+                a.payload.sourceInformationId ===
+                  request.payload.intentInformationId,
+            );
+            if (
+              !root ||
+              (root.payload.activation as { instanceId: string }).instanceId !==
+                context.instanceId
+            )
+              return;
+            if (
+              atoms.some(
+                (a) =>
+                  a.kind === memoryRecallCompleted.kind &&
+                  a.references.some(
+                    (r) =>
+                      r.relation === "core:caused-by" &&
+                      r.informationId === request.informationId,
+                  ),
+              )
+            )
+              return;
+            const variable = request.payload.prompt.variables.find(
+              (v) => v.name === "native_memory",
+            );
+            const base = variable
+              ? nativeMemorySnapshotSchema.parse(JSON.parse(variable.content))
+              : undefined;
+            let snapshot = null;
+            let status: "completed" | "disabled" | "failed" = "disabled";
+            if (base && dependencies.nativeMemoryCapability) {
+              const memory = context.use(dependencies.nativeMemoryCapability);
+              if (memory.enabled) {
+                try {
+                  const prior = recallHistory(
+                    compiledPromptSchema.parse(request.payload.prompt),
+                  ).flatMap((r) => {
+                    const parsed = nativeMemorySnapshotSchema.safeParse(
+                      (r as { snapshot?: unknown }).snapshot,
+                    );
+                    return parsed.success ? [parsed.data] : [];
+                  });
+                  const candidates = [base, ...prior].flatMap((s) => [
+                    ...s.fixed,
+                    ...s.recalled.map((r) => r.node),
+                    ...(s.personCandidates ?? []).map((p) => p.summary),
+                  ]);
+                  const selectedCandidates = candidates.filter((n) =>
+                    request.payload.candidateIds.includes(n.id),
+                  );
+                  snapshot = await (memory.recall ?? memory.freeze).call(
+                    memory,
+                    {
+                      scope: base.scope,
+                      owners: [
+                        ...new Set([
+                          ...base.owners,
+                          ...selectedCandidates.map((n) => n.metadata.ownerId),
+                        ]),
+                      ],
+                      asOf: base.frozenAt,
+                      people: base.people,
+                      participants: base.participants,
+                      query: request.payload.query,
+                      explicitIds: request.payload.candidateIds.filter((id) =>
+                        candidates.some((n) => n.id === id),
+                      ),
+                    },
+                  );
+                  status = "completed";
+                } catch {
+                  status = "failed";
+                }
+              }
+            }
+            await context.registerOnce(
+              "kaguya.heavy.recall-result",
+              request.informationId,
+              memoryRecallCompleted,
+              {
+                payload: memoryRecallCompleted.payloadSchema.parse({
+                  ...request.payload,
+                  contextInformationIds: [
+                    ...request.payload.contextInformationIds,
+                    request.informationId,
+                  ],
+                  status,
+                  snapshot,
+                }),
+                references: [
+                  ...recallTurnReferences(request.payload.turn),
+                  ...request.payload.contextInformationIds.map(
+                    (informationId) => ({
+                      relation: "core:uses-context",
+                      informationId,
+                    }),
+                  ),
+                ],
+              },
+            );
+          },
+        ),
+        onInformation(
+          memoryRecallCompleted,
+          { subscriptionId: "kaguya.heavy.after-recall", delivery: "durable" },
+          async (result, context) => {
+            if ((await context.select(speechClosedSelector)).length) return;
+            const atoms = await context.select(recallContextSelector);
+            const root = atoms.find(
+              (a) =>
+                a.kind === "core.model.task.requested" &&
+                a.payload.sourceInformationId ===
+                  result.payload.intentInformationId,
+            );
+            if (
+              !root ||
+              (root.payload.activation as { instanceId: string }).instanceId !==
+                context.instanceId
+            )
+              return;
+            const prompt = appendRecallResult(
+              compiledPromptSchema.parse(result.payload.prompt),
+              memoryRecallCompleted.payloadSchema.parse(result.payload),
+              result.informationId,
+            );
+            await context.use(modelTaskCapability).execute({
+              task: {
+                taskId: "agent.heavy.respond",
+                outputMode: "object",
+                outputSchema: responseSchema(
+                  prompt,
+                  Boolean(dependencies.nativeMemoryCapability),
+                ),
+                allowedTiers: ["heavy"],
+              },
+              sourceInformationId: result.informationId,
+              contextInformationId: result.references.find(
+                (r) => r.relation === "core:context",
+              )!.informationId,
+              activation,
+              selectionPolicy: { tier: "heavy" },
+              prompt,
+              contextAtoms: atoms,
+              nativeContinuation: true,
+            });
+          },
+        ),
       ],
     }),
   });
@@ -610,7 +1173,7 @@ export function createHeavyModule<
 /** 按共享声明编译可选上下文后缀；即使当前未启用该上下文，也在模块构造时拒绝无效模板。 */
 function createContextPromptRenderer(
   templates: HeavyPromptTemplates,
-  key: "conversationBackground" | "expressionHabits",
+  key: "conversationBackground",
 ) {
   const declaration = messageTemplateDeclarations.find(
     (candidate) => candidate.key === key,
@@ -644,13 +1207,32 @@ const completedMessageSelector = defineInformationSelector({
     });
     const message = sources[0];
     if (
-      message?.kind !== messageIntentRequestedInformationKind.kind ||
+      (message?.kind !== messageIntentRequestedInformationKind.kind &&
+        message?.kind !== speechStepRequestedInformationKind.kind &&
+        message?.kind !== memoryRecallCompleted.kind) ||
       message.informationId !== payload.sourceInformationId
     )
       throw new Error(
         "Model task completion source must match its message intent cause",
       );
-    return [message.informationId];
+    const extra =
+      message.kind === memoryRecallCompleted.kind
+        ? [
+            String(message.payload.intentInformationId),
+            String(message.payload.originalSourceInformationId),
+          ]
+        : message.kind === speechStepRequestedInformationKind.kind
+          ? [String(message.payload.intentInformationId)]
+          : [];
+    if (extra.length)
+      await ledger.find({ informationIds: extra, limit: extra.length });
+    return [
+      ...new Set([
+        message.informationId,
+        requested[0]!.informationId,
+        ...extra,
+      ]),
+    ];
   },
 });
 

@@ -1,4 +1,5 @@
 /**
+ * memory-graph.ts 提供 Memory 节点／边管理与图快照的共享协议。
  * QQ 表情使用独立结构化素材契约，出站保留原 text/reply 兼容性；图片只允许已缓存 base64。
  * module-templates.ts 提供未渲染模板管理 DTO，避免与 CompiledPrompt 混用。
  * module-settings.ts 导出全局模块配置安全 DTO，供管理端与通用表单共同校验。
@@ -14,6 +15,8 @@
  * 会拒绝未声明字段，平台返回的 `platformMessageId` 仍作为合法外部身份保留。
  */
 export * from "./inspection.js";
+export * from "./situation-context.js";
+export * from "./situation-contract.js";
 export * from "./model-metrics.js";
 
 import { z } from "zod";
@@ -198,4 +201,13 @@ export type LlmErrorKind = z.infer<typeof llmErrorKindSchema>;
 export * from "./module-settings.js";
 
 export * from "./module-templates.js";
-export * from "./person-profile.js";
+
+export * from "./memory-graph.js";
+export * from "./situation-view.js";
+export * from "./native-continuation.js";
+export {
+  activitySpanSchema,
+  lifecycleSnapshotSchema,
+  type ActivitySpan,
+  type LifecycleSnapshot,
+} from "./lifecycle.js";

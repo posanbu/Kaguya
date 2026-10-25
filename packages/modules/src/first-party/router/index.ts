@@ -1,3 +1,11 @@
+import {
+  frozenLifecycleSelector,
+  lifecycleStateInformationKind,
+} from "../lifecycle/activity.js";
+import {
+  backgroundPeopleSelector,
+  freezeBackgroundPeople,
+} from "./background-people.js";
 /**
  * 候选新旧由 Selector 的账本注册顺序确定；相同/迟到业务时间及随机 UUID 不改变消费先后。
  * Light 的 message 决策只传目标与冻结引用。
@@ -18,8 +26,35 @@
  * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
  * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
  */
+/**
+ * 候选新旧由 Selector 的账本注册顺序确定；相同/迟到业务时间及随机 UUID 不改变消费先后。
+ * Light 的 message 决策只传目标与冻结引用。
+ * manifest 声明 Light 模板；调用 compileLightPrompt 时传入装配阶段加载的 default/local 文本，不再使用代码内默认值。
+ * settings schema 的公开中文元数据供管理表单使用，运行时与保存共用约束。
+ * 管理端批准的跨会话 candidate 由宿主直接认领，不再触发 Light；其 delivery 仍使用本模块统一 turn 终态。
+ * Selector 只遍历开放 candidate 及最近 claim；恢复旧积压时每 scope 只推进一次合并观察。
+ * 在线 Router 编排器。所有推进都由可重放 Information 事实驱动；模块不保存
+ * per-chat 状态，也不依赖订阅安装顺序。
+ * createRouterModule 注入投递/模型失败 kind，返回声明订阅的模块；settings schema
+ * 校验 Focus、时效与安全策略。state/memory selector 从账本读取因果链及记忆，冻结完整输入。
+ * Light 在模型结构修复阶段检查本轮动作边界；同协议重放沿持久化请求复用 Prompt 和上下文，防止迟到历史触发第二次任务。
+ * 规划前使用冻结的本轮输入与聊天历史；未完成的记忆模块不提供额外召回。
+ * 宿主 conversation 能力冻结背景和候选；跨会话获胜决策交给 route 复核，失败关闭当前 turn，不回退发送。
+ * dispatchDecision 仅将独立 Light 的获胜 message 结果按 claim 注册一次意图，末条输入决定目标；
+ * turn 标识及引用保留完整冻结上下文，正文生成交给 composer。wait/silent 与失败路径
+ * 写入等待或终态；registerOnce/commitTerminal 保证重放幂等，模型 I/O 经宿主 capability 执行，平台 I/O 由 delivery 层负责。
+ * 展示契约：Manifest 直接提供中文名称、摘要及输入输出职责，供 Inspection 与 WebUI 展示。
+ * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
+ */
+import { situationFrozenInformationKind } from "../situation-runtime.js";
+import { situationHistorySelector } from "../situation-history.js";
+import { buildSituationFrame } from "../situation-model.js";
 import { firstPartyInspection } from "../inspection.js";
-import type { RawContextAccess } from "@kaguya/memory";
+import {
+  type RawContextAccess,
+  type NativeMemoryAccess,
+  memoryScope,
+} from "@kaguya/memory";
 import { frozenRawContextInformationKind } from "./raw-context.js";
 import { focusOpened, focusRenewed, focusKinds } from "./focus-facts.js";
 import { focusStateSelector, createRouterFocusSubscriptions } from "./focus.js";
@@ -49,6 +84,7 @@ import type { AgentIdentity, ModelTaskCapability } from "../heavy/index.js";
 import type { ModuleCapability } from "@kaguya/sdk";
 
 import {
+  jsonObjectSchema,
   type CompiledPrompt,
   type DeepReadonly,
   type InformationAtom,
@@ -64,10 +100,6 @@ import {
   type InformationSelectorLedger,
 } from "@kaguya/sdk";
 import { buildTurnBootstrap } from "./bootstrap.js";
-import {
-  selectActivePersonProfiles,
-  type ActivePersonProfiles,
-} from "../person-profile.js";
 
 import {
   observationWakeInformationKind,
@@ -123,9 +155,9 @@ interface LightDispatch {
 export interface CreateRouterModuleOptions {
   readonly modelTaskCapability: ModuleCapability<ModelTaskCapability>;
   readonly rawContextCapability: ModuleCapability<RawContextAccess>;
+  readonly nativeMemoryCapability?: ModuleCapability<NativeMemoryAccess>;
   readonly messageAuthorizationCapability?: ModuleCapability<MessageAuthorization>;
   readonly agentIdentity: AgentIdentity;
-  readonly activePersonProfiles?: ActivePersonProfiles;
   readonly lightTemplate: string;
   readonly lightBootstrapPolicy: string;
   readonly lightPlatformPolicies?: Readonly<
@@ -149,8 +181,8 @@ export const routerSettingsSchema = z
     }),
     focusIdleMs: z.number().int().min(1000).max(3600000).default(120000).meta({
       title: "关注空闲期限",
-      description: "群聊直接唤醒或成功参与后的租约时长，单位毫秒。",
-      public: true,
+      description: "由 Lifecycle 的 activity.scopeIdleMs 统一提供，单位毫秒。",
+      public: false,
       default: 120000,
     }),
     staleAfterMs: z.number().int().min(0).meta({
@@ -503,6 +535,17 @@ export const routerStateSelector = defineInformationSelector({
 });
 
 export function createRouterModule(options: CreateRouterModuleOptions) {
+  return createRoutingModule(options, "router");
+}
+export function createSituationRuntimeModule(
+  options: CreateRouterModuleOptions,
+) {
+  return createRoutingModule(options, "situation");
+}
+function createRoutingModule(
+  options: CreateRouterModuleOptions,
+  role: "router" | "situation",
+) {
   const deliveryKinds = [
     options.deliveryDeliveredInformationKind,
     options.deliveryFailedInformationKind,
@@ -635,12 +678,22 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
     manifest: {
       protocolVersion: 1,
       moduleVersion: "2.0.0",
-      definitionId: "agent.router",
+      category: "agent",
+      definitionId: role === "router" ? "agent.router" : "agent.situation",
       inspection: firstPartyInspection["agent.router"],
-      displayName: "Router 路由与关注",
-      summary: "协调回合认领、上下文冻结、Light 决策、Focus 租约和回合终态。",
-      description:
-        "只在非语义注意力观察决定 observe 后消费候选，按注册水位读取未读并经身份屏障冻结上下文，再请求内部 Light 选择发言、等待或静默；维护 Focus 租约，输出消息意图、等待请求和回合终态，不执行平台传输。",
+      displayName: { router: "Router 参与判断", situation: "情境与行动运行" }[
+        role
+      ],
+      summary: {
+        router: "冻结后由 Light 判断回应、等待或沉默。",
+        situation: "装配并冻结证据，记录行动及实际结果。",
+      }[role],
+      description: {
+        router:
+          "读取冻结快照与注意模块的许可，调用 Light 判断回应、等待或沉默。",
+        situation:
+          "按注册边界冻结原始证据、召回和已记录结果，再触发注意模块。维护行动状态与实际回执。",
+      }[role],
       settingsSchema: routerSettingsSchema,
       diagnostics: [rawMemoryBarrierFailureDiagnostic],
       promptTemplates: [
@@ -649,6 +702,7 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
         ...lightPlatformPolicyDeclarations,
       ],
       consumes: [
+        lifecycleStateInformationKind,
         focusOpened,
         focusRenewed,
         oneShotDueInformationKind,
@@ -675,6 +729,7 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
         options.executionExhaustedInformationKind,
       ],
       produces: [
+        situationFrozenInformationKind,
         ...focusKinds,
         lightDecisionInformationKind,
         turnClaimedInformationKind,
@@ -693,6 +748,9 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
         turnInterruptedInformationKind,
       ],
       selectors: [
+        frozenLifecycleSelector,
+        situationHistorySelector,
+        backgroundPeopleSelector,
         focusStateSelector,
         routerStateSelector,
         lightInterruptSelector,
@@ -703,6 +761,9 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
         oneShotScheduleCapability,
         options.modelTaskCapability,
         options.rawContextCapability,
+        ...(options.nativeMemoryCapability
+          ? [options.nativeMemoryCapability]
+          : []),
         ...(options.messageAuthorizationCapability
           ? [options.messageAuthorizationCapability]
           : []),
@@ -742,6 +803,7 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
             ]
           : []),
         ...[
+          turnCandidateInformationKind,
           personContextCompletedInformationKind,
           turnClaimedInformationKind,
           turnCompletedInformationKind,
@@ -759,44 +821,418 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
             },
             async (_atom, context) => {
               const state = await context.select(routerStateSelector);
-              await progressCandidates(
-                state,
-                settings,
-                options.activePersonProfiles,
-                context,
-              );
+              await progressCandidates(state, settings, context);
             },
           ),
         ),
-        ...[
-          attentionArousalCompletedInformationKind,
+        onInformation(
           turnContextCompletedInformationKind,
-        ].map((definition) =>
+          {
+            subscriptionId: "agent.situation.freeze",
+            durableSubscriptionId: `${activation.instanceId.replace(/\.situation$/, "")}:agent.router.observe.agent.router.turn.context.completed`,
+            delivery: "durable",
+            retryForever: true,
+            retryDelayMs: 5_000,
+          },
+          async (turn, context) => {
+            const payload = turn.payload as any;
+            const selected = await context.select(lightContextSelector);
+            let raw = selected.find(
+              (a) =>
+                a.kind === frozenRawContextInformationKind.kind &&
+                a.payload.turnInformationId === turn.informationId,
+            );
+            let snapshot:
+              Awaited<ReturnType<RawContextAccess["freeze"]>> | undefined;
+            if (!raw) {
+              snapshot = await context
+                .use(options.rawContextCapability)
+                .freeze({
+                  turnInformationId: turn.informationId,
+                  asOf: payload.backlog.evaluatedAt,
+                  scope: payload.source,
+                  unreadInformationIds: payload.inputs.map(
+                    (i: { informationId: string }) => i.informationId,
+                  ),
+                });
+              const activity = (
+                await context.select(frozenLifecycleSelector)
+              )[0];
+              raw = await context.registerOnce(
+                "agent.router.memory.context.frozen",
+                turn.informationId,
+                frozenRawContextInformationKind,
+                {
+                  payload: {
+                    turnInformationId: turn.informationId,
+                    global: {
+                      text: [
+                        snapshot.global.text,
+                        ...(activity
+                          ? [
+                              `当前生命周期（内部规则状态，不是消息正文）：${JSON.stringify(activity.payload)}`,
+                            ]
+                          : []),
+                      ].join("\n\n"),
+                      informationIds: [
+                        ...snapshot.global.informationIds,
+                        ...(activity ? [activity.informationId] : []),
+                      ],
+                    },
+                    currentScope: {
+                      text: snapshot.currentScope.text,
+                      informationIds: [...snapshot.currentScope.informationIds],
+                    },
+                    overBudget: snapshot.overBudget,
+                    characterCount: snapshot.characterCount,
+                    evidence: (snapshot.evidence ?? []).map((item) => ({
+                      ...item,
+                    })),
+                    through: snapshot.through ?? 0,
+                  },
+                },
+              );
+            }
+            const evidence = (raw.payload.evidence ?? []) as any[];
+            const source = payload.source;
+            const destination = source.destination;
+            const sceneId = JSON.stringify([
+              source.platform,
+              source.adapterId,
+              destination.kind,
+              destination.kind === "private"
+                ? destination.userId
+                : destination.kind === "group"
+                  ? destination.groupId
+                  : (destination.conversationId ?? null),
+            ]);
+            const history = await context.select(situationHistorySelector);
+            const previous = history.find(
+              (a) => a.kind === "agent.situation.frozen",
+            );
+            const previousFrame = previous?.payload.frame as any;
+            const recalls = payload.memory?.length
+              ? [
+                  {
+                    sceneId,
+                    revision: turn.informationId,
+                    items: payload.memory.flatMap((id: string) => {
+                      const item = selected.find((a) => a.informationId === id);
+                      return item
+                        ? [
+                            {
+                              id,
+                              text: String(item.payload.text ?? ""),
+                              evidenceIds: [id],
+                            },
+                          ]
+                        : [];
+                    }),
+                  },
+                ]
+              : [];
+            const frame = buildSituationFrame({
+              id: turn.informationId,
+              agentId: "kaguya",
+              sceneId,
+              frozenAt: payload.backlog.evaluatedAt,
+              evidence,
+              through: Number(raw.payload.through ?? 0),
+              recalls,
+              previous: previousFrame
+                ? {
+                    manifestId: previousFrame.id,
+                    through: previousFrame.background.through,
+                  }
+                : null,
+            });
+            if (options.nativeMemoryCapability) {
+              const native = context.use(options.nativeMemoryCapability);
+              const backgroundAtoms = await context.select(
+                backgroundPeopleSelector,
+              );
+              const participants = await freezeBackgroundPeople(
+                [
+                  ...backgroundAtoms.flatMap<{
+                    informationId: string;
+                    source: unknown;
+                  }>((a) => {
+                    if (a.kind === "core.message.inbound.text")
+                      return [
+                        {
+                          informationId: a.informationId,
+                          source: a.payload.source,
+                        },
+                      ];
+                    if (a.kind === "memory.identity.platform.account.entity")
+                      return [
+                        {
+                          informationId: a.informationId,
+                          source: {
+                            platform: a.payload.platform,
+                            adapterId: a.payload.adapterId,
+                            senderId: a.payload.accountId,
+                          },
+                        },
+                      ];
+                    return [];
+                  }),
+                  ...(payload.inputs ?? []).map((i: any) => ({
+                    informationId: i.informationId,
+                    source: i.source,
+                  })),
+                ],
+                native,
+              );
+              const relatedPeople = participants
+                .filter(
+                  (p) =>
+                    p.platform === source.platform &&
+                    p.adapterId === source.adapterId &&
+                    p.ownerId !== null,
+                )
+                .map((p) => ({ accountId: p.accountId, ownerId: p.ownerId! }));
+              const owners = [
+                ...new Set([
+                  ...participants.flatMap((p) =>
+                    p.ownerId ? [p.ownerId] : [],
+                  ),
+                  "self:kaguya",
+                  "expression:kaguya",
+                  `conversation:${memoryScope(source)}`,
+                  ...(payload.inputs ?? []).flatMap((i: any) =>
+                    i.identity?.personInformationId
+                      ? [`person:${i.identity.personInformationId}`]
+                      : [],
+                  ),
+                  ...(payload.personNames ?? []).map(
+                    (p: any) => `person:${p.personInformationId}`,
+                  ),
+                ]),
+              ];
+              const scope = memoryScope(source);
+              const basicContext = {
+                scope,
+                owners,
+                asOf: payload.backlog.evaluatedAt,
+                query: "",
+              };
+              const observations = [
+                ...new Map(
+                  [...backgroundAtoms, ...selected].map((a) => [
+                    a.informationId,
+                    a,
+                  ]),
+                ).values(),
+              ].flatMap((inbound) => {
+                if (
+                  inbound.kind !== "core.message.inbound.text" ||
+                  !String(inbound.payload.text ?? "").trim()
+                )
+                  return [];
+                const parsed =
+                  inboundTextInformationKind.payloadSchema.safeParse(
+                    inbound.payload,
+                  );
+                if (
+                  !parsed.success ||
+                  memoryScope(parsed.data.source) !== scope
+                )
+                  return [];
+                const ownerId = relatedPeople.find(
+                  (p) => p.accountId === parsed.data.source.senderId,
+                )?.ownerId;
+                return [
+                  {
+                    ownerId: `conversation:${scope}`,
+                    kind: "conversation" as const,
+                    sourceId: inbound.informationId,
+                    observedAt: inbound.occurredAt,
+                  },
+                  ...(ownerId
+                    ? [
+                        {
+                          ownerId,
+                          kind: "person" as const,
+                          sourceId: inbound.informationId,
+                          observedAt: inbound.occurredAt,
+                        },
+                      ]
+                    : []),
+                ];
+              });
+              await native.ensureBasicSummaries?.(basicContext, observations);
+              frame.memory = await native.freeze({
+                people: relatedPeople,
+                participants,
+                scope: memoryScope(source),
+                owners,
+                asOf: payload.backlog.evaluatedAt,
+                query: (payload.inputs ?? [])
+                  .map(
+                    (i: any) =>
+                      selected.find((a) => a.informationId === i.informationId)
+                        ?.payload.text ?? "",
+                  )
+                  .join("\n")
+                  .slice(-512),
+              });
+              frame.recalls = [
+                {
+                  sceneId,
+                  revision: turn.informationId,
+                  items: frame.memory.recalled.map(({ node }) => ({
+                    id: node.id,
+                    text: node.content,
+                    evidenceIds: node.metadata.sourceIds,
+                  })),
+                },
+              ];
+            }
+            const continuity = history
+              .filter((a) => a.kind === "core.model.task.completed")
+              .flatMap((result) => {
+                const intent = history.find(
+                  (a) => a.informationId === result.payload.sourceInformationId,
+                );
+                const candidateId = (intent?.payload.turn as any)
+                  ?.candidateInformationId;
+                const terminal = history.find(
+                  (a) =>
+                    a.payload.candidateInformationId === candidateId &&
+                    a.kind.startsWith("agent.router.turn.") &&
+                    [
+                      "completed",
+                      "silent",
+                      "waiting",
+                      "failed",
+                      "interrupted",
+                      "superseded",
+                    ].includes(a.kind.split(".").at(-1)!),
+                );
+                if (!candidateId) return [];
+                const delivery = history.find(
+                  (a) =>
+                    a.kind === "core.delivery.requested" &&
+                    (
+                      a.payload.speech as
+                        { completedInformationId?: string } | undefined
+                    )?.completedInformationId === result.informationId,
+                );
+                const isRecall =
+                  (result.payload.output as { action?: string } | undefined)
+                    ?.action === "recall";
+                const recallRequest = history.find(
+                  (a) =>
+                    a.kind === "agent.heavy.recall.requested" &&
+                    a.references.some(
+                      (r) =>
+                        r.relation === "core:caused-by" &&
+                        r.informationId === result.informationId,
+                    ),
+                );
+                const recallResult = history.find(
+                  (a) =>
+                    a.kind === "agent.heavy.recall.completed" &&
+                    a.references.some(
+                      (r) =>
+                        r.relation === "core:caused-by" &&
+                        r.informationId === recallRequest?.informationId,
+                    ),
+                );
+                const silent =
+                  (result.payload.output as { action?: string } | undefined)
+                    ?.action === "silent";
+                const receipt = silent
+                  ? undefined
+                  : delivery
+                    ? history.find(
+                        (a) =>
+                          (a.kind === "core.delivery.delivered" ||
+                            a.kind === "core.delivery.failed") &&
+                          a.references.some(
+                            (r) =>
+                              r.relation === "core:status-of" &&
+                              r.informationId === delivery.informationId,
+                          ),
+                      )
+                    : history.find(
+                        (a) =>
+                          a.informationId ===
+                          terminal?.payload.deliveryTerminalInformationId,
+                      );
+                return [
+                  {
+                    callResultId: result.informationId,
+                    candidateInformationId: candidateId,
+                    status: isRecall
+                      ? recallResult
+                        ? `recall-${recallResult.payload.status}`
+                        : "recall-pending"
+                      : silent
+                        ? "silent"
+                        : receipt?.payload.outcome === "unknown"
+                          ? "unknown"
+                          : (receipt?.kind.split(".").at(-1) ??
+                            terminal?.kind.split(".").at(-1) ??
+                            "pending"),
+                    receiptId: isRecall
+                      ? null
+                      : (receipt?.informationId ?? null),
+                    result: isRecall
+                      ? (recallResult?.payload.snapshot ?? null)
+                      : (receipt?.payload ?? null),
+                  },
+                ];
+              });
+            await context.registerOnce(
+              "agent.situation.frozen",
+              turn.informationId,
+              situationFrozenInformationKind,
+              {
+                payload: {
+                  candidateInformationId: payload.candidateInformationId,
+                  turnInformationId: turn.informationId,
+                  rawInformationId: raw.informationId,
+                  continuity: continuity.map((item) =>
+                    jsonObjectSchema.parse(item),
+                  ),
+                  frame: jsonObjectSchema.parse(frame),
+                  historyInformationIds: history.map((a) => a.informationId),
+                },
+                references: [
+                  ...new Set([
+                    turn.informationId,
+                    payload.candidateInformationId,
+                    raw.informationId,
+                    ...history.map((a) => a.informationId),
+                  ]),
+                ].map((informationId) => ({
+                  relation: "core:uses-context",
+                  informationId,
+                })),
+              },
+            );
+          },
+        ),
+        ...[attentionArousalCompletedInformationKind].map((definition) =>
           onInformation(
             definition as AnyKind,
             {
               subscriptionId: `agent.router.observe.${definition.kind}`,
               delivery: "durable",
-              ...(definition.kind === turnContextCompletedInformationKind.kind
-                ? { retryForever: true, retryDelayMs: 5_000 }
-                : {}),
             },
-            async (sourceAtom, context) => {
-              if (
-                sourceAtom.kind ===
-                attentionArousalCompletedInformationKind.kind
-              ) {
-                if (sourceAtom.payload.outcome !== "observe") return;
-                const state = await context.select(routerStateSelector);
-                await progressCandidates(
-                  state,
-                  settings,
-                  options.activePersonProfiles,
-                  context,
-                );
-                return;
-              }
+            async (gateAtom, context) => {
+              if (gateAtom.payload.outcome !== "observe") return;
               const state = await context.select(routerStateSelector);
+              const sourceAtom = state.find(
+                (a) =>
+                  a.kind === turnContextCompletedInformationKind.kind &&
+                  a.payload.candidateInformationId ===
+                    gateAtom.payload.candidateInformationId,
+              );
+              if (!sourceAtom)
+                throw new Error("Missing frozen situation context");
               const decision = state.find(
                 (atom) =>
                   atom.kind === attentionArousalCompletedInformationKind.kind &&
@@ -875,58 +1311,8 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
                   atom.kind === frozenRawContextInformationKind.kind &&
                   atom.payload.turnInformationId === sourceAtom.informationId,
               );
-              if (!rawAtom && !hasPersistedPrompt) {
-                let frozenRaw;
-                try {
-                  frozenRaw = await context.use(options.rawContextCapability).freeze({
-                        turnInformationId: sourceAtom.informationId,
-                        asOf: sourceAtom.payload.backlog.evaluatedAt,
-                        scope: {
-                          platform: sourceAtom.payload.source.platform,
-                          adapterId: sourceAtom.payload.source.adapterId,
-                          destination: sourceAtom.payload.source.destination,
-                        },
-                        unreadInformationIds: sourceAtom.payload.inputs.map(
-                          (input: any) => input.informationId,
-                        ),
-                      });
-                } catch (error) {
-                  await context.report(rawMemoryBarrierFailureDiagnostic, {
-                    errorType:
-                      error instanceof Error ? error.name : "UnknownError",
-                    turnInformationId: sourceAtom.informationId,
-                  });
-                  throw error;
-                }
-                rawAtom =
-                  frozenRaw &&
-                  (await context.registerOnce(
-                    "agent.router.memory.context.frozen",
-                    sourceAtom.informationId,
-                    frozenRawContextInformationKind,
-                    {
-                      payload: {
-                        turnInformationId: sourceAtom.informationId,
-                        global: {
-                          text: frozenRaw.global.text,
-                          informationIds: [...frozenRaw.global.informationIds],
-                        },
-                        currentScope: {
-                          text: frozenRaw.currentScope.text,
-                          informationIds: [
-                            ...frozenRaw.currentScope.informationIds,
-                          ],
-                        },
-                        overBudget: frozenRaw.overBudget,
-                        characterCount: frozenRaw.characterCount,
-                      },
-                      contextInformationId: sourceAtom.references.find(
-                        (r) => r.relation === "core:context",
-                      )!.informationId,
-                    },
-                  ));
-                if (rawAtom) selected.push(rawAtom);
-              }
+              if (!rawAtom && !hasPersistedPrompt)
+                throw new Error("Situation was not frozen");
               const turn = selected.find(
                 (atom) => atom.informationId === gate.turnContextInformationId,
               )!;
@@ -1002,6 +1388,7 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
                       ),
                   contextAtoms: taskAtoms,
                 });
+              if (result.status !== "completed") return;
               const parsed =
                 result.status === "completed"
                   ? lightActionSchema.safeParse(result.output)
@@ -1161,6 +1548,27 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
               )
             )
               throw new Error("Heavy silent must reference its message intent");
+            if (silent.payload.previousDeliveryInformationId) {
+              await context.commitTerminal(
+                "agent.router.turn.terminal",
+                candidate.informationId,
+                turnCompletedInformationKind,
+                {
+                  payload: {
+                    candidateInformationId: candidate.informationId,
+                    claimInformationId: claim.informationId,
+                    scopeKey: String(candidate.payload.scopeKey),
+                    deliveryTerminalInformationId:
+                      silent.payload.previousDeliveryInformationId,
+                  },
+                  references: terminalReferences(
+                    candidate.informationId,
+                    claim.informationId,
+                  ),
+                },
+              );
+              return;
+            }
             await context.commitTerminal(
               "agent.router.turn.terminal",
               candidate.informationId,
@@ -1195,12 +1603,7 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
                 state,
                 context,
               );
-              await progressCandidates(
-                state,
-                settings,
-                options.activePersonProfiles,
-                context,
-              );
+              await progressCandidates(state, settings, context);
             },
           ),
         ),
@@ -1213,7 +1616,6 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
             },
             async (terminal, context) => {
               const state = await context.select(routerStateSelector);
-              if (terminal.payload.taskId === LIGHT_TASK_ID) return;
               await failOpenTurns(
                 terminal,
                 definition === options.modelTaskFailedInformationKind
@@ -1241,7 +1643,23 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
             );
           },
         ),
-      ],
+      ]
+        .filter((subscription) => {
+          const light = subscription.subscriptionId.startsWith(
+            "agent.router.observe.",
+          );
+          return role === "router" ? light : !light;
+        })
+        .map((subscription) =>
+          role === "situation" && activation.instanceId.endsWith(".situation")
+            ? {
+                ...subscription,
+                durableSubscriptionId:
+                  subscription.durableSubscriptionId ??
+                  `${activation.instanceId.slice(0, -10)}:${subscription.subscriptionId}`,
+              }
+            : subscription,
+        ),
     }),
   });
   return module;
@@ -1250,33 +1668,20 @@ export function createRouterModule(options: CreateRouterModuleOptions) {
 async function progressCandidates(
   atoms: readonly DeepReadonly<InformationAtom>[],
   settings: DeepReadonly<RouterSettings>,
-  activePersonProfiles: ActivePersonProfiles | undefined,
   context: InformationModuleHandlerContext,
 ) {
   const candidates = atoms.filter(
     (a) =>
       a.kind === turnCandidateInformationKind.kind &&
       !turnTerminalFor(a.informationId, atoms) &&
-      a.payload.managementAuthorizationId === undefined &&
-      atoms.some(
-        (decision) =>
-          decision.kind === attentionArousalCompletedInformationKind.kind &&
-          decision.payload.candidateInformationId === a.informationId &&
-          decision.payload.outcome === "observe",
-      ),
+      a.payload.managementAuthorizationId === undefined,
   );
   const scopes = new Set(candidates.map((a) => String(a.payload.scopeKey)));
   for (const scope of scopes) {
     // routerStateSelector 保证候选子序列按持久注册位置递增。
     const open = candidates.filter((a) => a.payload.scopeKey === scope);
     const winner = open.at(-1)!;
-    await progressCandidate(
-      winner,
-      atoms,
-      settings,
-      activePersonProfiles,
-      context,
-    );
+    await progressCandidate(winner, atoms, settings, context);
     if (open.length < 2) continue;
     const refreshed = await context.select(routerStateSelector);
     const claim = claimForCandidate(winner.informationId, refreshed);
@@ -1303,7 +1708,6 @@ async function progressCandidate(
   candidate: DeepReadonly<InformationAtom>,
   atoms: readonly DeepReadonly<InformationAtom>[],
   settings: DeepReadonly<RouterSettings>,
-  activePersonProfiles: ActivePersonProfiles | undefined,
   context: InformationModuleHandlerContext,
 ) {
   const map = new Map(atoms.map((atom) => [atom.informationId, atom]));
@@ -1518,23 +1922,6 @@ async function progressCandidate(
     inbound: DeepReadonly<InformationAtom>;
     identity: DeepReadonly<InformationAtom>;
   }[];
-  const personProfiles = frozenContext
-    ? (((frozenContext.payload as any).personProfiles ?? []) as ReturnType<
-        typeof selectActivePersonProfiles
-      >)
-    : selectActivePersonProfiles(
-        completeInputs.map(({ inbound, identity }) => ({
-          source: (inbound.payload as any).source,
-          personInformationId:
-            (identity.payload as any).status === "complete" &&
-            (identity.payload as any).scopeMode === "canonical"
-              ? (identity.payload as any).personInformationId
-              : undefined,
-        })),
-        (completeInputs.at(-1)!.inbound.payload as any).source.destination
-          ?.kind === "group",
-        activePersonProfiles,
-      );
   const personNames = frozenContext
     ? (((frozenContext.payload as any).personNames ?? []) as {
         personInformationId: string;
@@ -1567,38 +1954,11 @@ async function progressCandidate(
                   speakerKey,
                   platform: inputSource.platform,
                   adapterId: inputSource.adapterId,
-                  initialName:
-                    activePersonProfiles?.initialNames?.get(
-                      String(resolved.personInformationId),
-                    ) ||
-                    String(
-                      resolved.initialName ||
-                        inputSource.sender?.nickname ||
-                        inputSource.senderId,
-                    ),
-                },
-              ] as const,
-            ];
-          }),
-          ...personProfiles.flatMap((profile) => {
-            const initialName = activePersonProfiles?.initialNames?.get(
-              profile.personInformationId,
-            );
-            if (!initialName || !profile.platform || !profile.adapterId)
-              return [];
-            return [
-              [
-                JSON.stringify([
-                  profile.platform,
-                  profile.adapterId,
-                  profile.speakerKey.slice("speaker:".length),
-                ]),
-                {
-                  personInformationId: profile.personInformationId,
-                  speakerKey: profile.speakerKey,
-                  platform: profile.platform,
-                  adapterId: profile.adapterId,
-                  initialName,
+                  initialName: String(
+                    resolved.initialName ||
+                      inputSource.sender?.nickname ||
+                      inputSource.senderId,
+                  ),
                 },
               ] as const,
             ];
@@ -1675,7 +2035,7 @@ async function progressCandidate(
     context.now().toISOString(),
     settings.staleAfterMs,
   );
-  const bootstrap = buildTurnBootstrap(completeInputs, atoms, false, 0);
+  const bootstrap = buildTurnBootstrap(completeInputs, atoms);
   const bootstrapEvidenceIds = [
     ...new Set(
       completeInputs.flatMap(({ identity }) => {
@@ -1739,7 +2099,6 @@ async function progressCandidate(
           Number.isFinite(asOfMs) &&
           Date.parse(payload.firedAt) - asOfMs > settings.staleAfterMs,
         bootstrap,
-        ...(personProfiles.length === 0 ? {} : { personProfiles }),
         ...(personNames.length === 0 ? {} : { personNames }),
         attempt: payload.attempt,
         totalWaitBudget: payload.totalWaitBudget,
@@ -1768,10 +2127,6 @@ async function progressCandidate(
               },
             ]
           : []),
-        ...personProfiles.map(({ profileInformationId }) => ({
-          relation: "core:uses-context" as const,
-          informationId: profileInformationId,
-        })),
       ],
       contextInformationId: runtimeContext.informationId,
     },
@@ -1908,6 +2263,12 @@ async function finishDelivery(
   const request = outgoingStatusTarget(terminal, atoms);
   const turn = (request?.payload as any)?.turn;
   if (request === undefined || turn === undefined) return;
+  if (
+    delivered &&
+    (request.payload.speech as { continuation?: string | null } | undefined)
+      ?.continuation
+  )
+    return;
   const candidate = atoms.find(
     (atom) => atom.informationId === turn.candidateInformationId,
   );
@@ -1944,7 +2305,14 @@ async function finishDelivery(
       candidate.informationId,
       turnFailedInformationKind,
       {
-        payload: { ...base, reason: "delivery-failed" },
+        payload: {
+          ...base,
+          reason:
+            terminal.payload.outcome === "unknown"
+              ? "delivery-unknown"
+              : "delivery-failed",
+          deliveryTerminalInformationId: terminal.informationId,
+        },
         references: terminalReferences(
           candidate.informationId,
           claim.informationId,

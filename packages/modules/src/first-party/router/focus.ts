@@ -1,3 +1,4 @@
+import { lifecycleStateInformationKind } from "../lifecycle/activity.js";
 /**
  * 功能概述：关注租约后台生命周期，消费 Router 的直接开启与回合终态。
  * focusStateSelector 从账本限定 scope 读取最新租约和终态；调度以 grant ID 幂等，重启由 durable delivery 恢复。
@@ -68,9 +69,29 @@ export const focusStateSelector = defineInformationSelector({
             limit: 1,
           })
         : [];
+    const candidate =
+      sourceAtom.kind === "agent.situation.frozen"
+        ? (
+            await ledger.find({
+              informationIds: [
+                String(sourceAtom.payload.candidateInformationId),
+              ],
+              limit: 1,
+            })
+          )[0]
+        : undefined;
+    const scopeKey = String(
+      candidate?.payload.scopeKey ??
+        sourceAtom.payload.scopeKey ??
+        (sourceAtom.kind === lifecycleStateInformationKind.kind
+          ? (sourceAtom.payload.timeline as { scopeKey: string | null }[]).at(
+              -1,
+            )?.scopeKey
+          : undefined),
+    );
     const grants = await ledger.find({
       kinds: [focusOpened.kind, focusRenewed.kind],
-      payloadContains: { scopeKey: String(sourceAtom.payload.scopeKey) },
+      payloadContains: { scopeKey },
       registrationOrder: true,
       order: "desc",
       limit: 16,
@@ -90,46 +111,162 @@ export function createRouterFocusSubscriptions(
   activation: ModuleActivationProvenance,
   lifecycle: InformationModuleLifecycleContext,
 ) {
-
-    const scheduler = lifecycle.use(oneShotScheduleCapability);
-    return [
-        ...[focusOpened, focusRenewed].map((kind) =>
-          onInformation(
-            kind,
-            {
-              subscriptionId: `focus.schedule.${kind.kind}`,
-              delivery: "durable",
+  const scheduler = lifecycle.use(oneShotScheduleCapability);
+  return [
+    onInformation(
+      lifecycleStateInformationKind,
+      { subscriptionId: "focus.activity", delivery: "durable" },
+      async (atom, context) => {
+        const scopeKey = atom.payload.timeline.at(-1)?.scopeKey;
+        if (!scopeKey || atom.payload.state !== "awake") return;
+        const at = atom.payload.scopeActivityAt[scopeKey];
+        if (!at) return;
+        const state = await context.select(focusStateSelector);
+        const grant = activeFocus(state, scopeKey, at);
+        if (!grant || at <= String(grant.payload.startedAt)) return;
+        const duration =
+          Date.parse(String(grant.payload.expiresAt)) -
+          Date.parse(String(grant.payload.startedAt));
+        await context.registerOnce(
+          "agent.router.focus.activity",
+          `${scopeKey}:${at}`,
+          focusRenewed,
+          {
+            payload: {
+              scopeKey,
+              generation: atom.informationId,
+              startedAt: at,
+              expiresAt: new Date(Date.parse(at) + duration).toISOString(),
+              reason: "actual-activity",
+              sourceInformationId: atom.informationId,
             },
-            async (atom) => {
-              await scheduler.schedule({
-                operationKey: `focus:${atom.informationId}`,
-                sourceInformationId: atom.informationId,
-                dueAt: atom.payload.expiresAt,
-                input: { purpose: "router-focus" },
-                activation,
-              });
+            references: [
+              {
+                relation: "core:uses-context",
+                informationId: grant.informationId,
+              },
+            ],
+          },
+        );
+      },
+    ),
+    ...[focusOpened, focusRenewed].map((kind) =>
+      onInformation(
+        kind,
+        {
+          subscriptionId: `focus.schedule.${kind.kind}`,
+          delivery: "durable",
+        },
+        async (atom) => {
+          await scheduler.schedule({
+            operationKey: `focus:${atom.informationId}`,
+            sourceInformationId: atom.informationId,
+            dueAt: atom.payload.expiresAt,
+            input: { purpose: "router-focus" },
+            activation,
+          });
+        },
+      ),
+    ),
+    onInformation(
+      oneShotDueInformationKind,
+      { subscriptionId: "focus.expire", delivery: "durable" },
+      async (atom, context) => {
+        const state = await context.select(focusStateSelector);
+        const grant = state.find(
+          (a) => a.kind === focusOpened.kind || a.kind === focusRenewed.kind,
+        );
+        if (!grant) return;
+        await context.commitTerminal(
+          "agent.router.focus.terminal",
+          grant.informationId,
+          focusExpired,
+          {
+            payload: {
+              scopeKey: String(grant.payload.scopeKey),
+              generation: String(grant.payload.generation),
+              reason: "idle-timeout",
             },
-          ),
-        ),
-        onInformation(
-          oneShotDueInformationKind,
-          { subscriptionId: "focus.expire", delivery: "durable" },
-          async (atom, context) => {
-            const state = await context.select(focusStateSelector);
-            const grant = state.find(
-              (a) =>
-                a.kind === focusOpened.kind || a.kind === focusRenewed.kind,
+            references: [
+              {
+                relation: "core:status-of",
+                informationId: grant.informationId,
+              },
+            ],
+          },
+        );
+        await scheduler.finish({
+          scheduleInformationId: atom.payload.scheduleInformationId,
+          status: "fired",
+        });
+      },
+    ),
+    ...[
+      turnCompletedInformationKind,
+      turnSilentInformationKind,
+      turnFailedInformationKind,
+    ].map((kind) =>
+      onInformation(
+        kind as unknown as InformationKindDefinition<string, JsonObject>,
+        {
+          subscriptionId: `focus.participation.${kind.kind}`,
+          delivery: "durable",
+        },
+        async (atom, context) => {
+          const state = await context.select(focusStateSelector);
+          const turn = state.find(
+            (a) => a.kind === turnContextCompletedInformationKind.kind,
+          );
+          if (!turn || turn.payload.isPrivate) return;
+          const grant = activeFocus(
+            state,
+            String(atom.payload.scopeKey),
+            atom.occurredAt,
+          );
+          if (!grant || turn.payload.focusInformationId !== grant.informationId)
+            return;
+          if (kind === turnCompletedInformationKind) {
+            const duration =
+              Date.parse(String(grant.payload.expiresAt)) -
+              Date.parse(String(grant.payload.startedAt));
+            await context.registerOnce(
+              "agent.router.focus.renew",
+              atom.informationId,
+              focusRenewed,
+              {
+                payload: {
+                  scopeKey: String(grant.payload.scopeKey),
+                  generation: atom.informationId,
+                  startedAt: atom.occurredAt,
+                  expiresAt: new Date(
+                    Date.parse(atom.occurredAt) + duration,
+                  ).toISOString(),
+                  reason: "delivered",
+                  sourceInformationId: atom.informationId,
+                },
+                references: [
+                  {
+                    relation: "core:uses-context",
+                    informationId: grant.informationId,
+                  },
+                  {
+                    relation: "core:uses-context",
+                    informationId: atom.informationId,
+                  },
+                ],
+              },
             );
-            if (!grant) return;
+          } else
             await context.commitTerminal(
               "agent.router.focus.terminal",
               grant.informationId,
-              focusExpired,
+              focusClosed,
               {
                 payload: {
                   scopeKey: String(grant.payload.scopeKey),
                   generation: String(grant.payload.generation),
-                  reason: "idle-timeout",
+                  reason:
+                    kind === turnSilentInformationKind ? "silent" : "failed",
                 },
                 references: [
                   {
@@ -139,94 +276,8 @@ export function createRouterFocusSubscriptions(
                 ],
               },
             );
-            await scheduler.finish({
-              scheduleInformationId: atom.payload.scheduleInformationId,
-              status: "fired",
-            });
-          },
-        ),
-        ...[
-          turnCompletedInformationKind,
-          turnSilentInformationKind,
-          turnFailedInformationKind,
-        ].map((kind) =>
-          onInformation(
-            kind as unknown as InformationKindDefinition<string, JsonObject>,
-            {
-              subscriptionId: `focus.participation.${kind.kind}`,
-              delivery: "durable",
-            },
-            async (atom, context) => {
-              const state = await context.select(focusStateSelector);
-              const turn = state.find(
-                (a) => a.kind === turnContextCompletedInformationKind.kind,
-              );
-              if (!turn || turn.payload.isPrivate) return;
-              const grant = activeFocus(
-                state,
-                String(atom.payload.scopeKey),
-                atom.occurredAt,
-              );
-              if (
-                !grant ||
-                turn.payload.focusInformationId !== grant.informationId
-              )
-                return;
-              if (kind === turnCompletedInformationKind) {
-                const duration =
-                  Date.parse(String(grant.payload.expiresAt)) -
-                  Date.parse(String(grant.payload.startedAt));
-                await context.registerOnce(
-                  "agent.router.focus.renew",
-                  atom.informationId,
-                  focusRenewed,
-                  {
-                    payload: {
-                      scopeKey: String(grant.payload.scopeKey),
-                      generation: atom.informationId,
-                      startedAt: atom.occurredAt,
-                      expiresAt: new Date(
-                        Date.parse(atom.occurredAt) + duration,
-                      ).toISOString(),
-                      reason: "delivered",
-                      sourceInformationId: atom.informationId,
-                    },
-                    references: [
-                      {
-                        relation: "core:uses-context",
-                        informationId: grant.informationId,
-                      },
-                      {
-                        relation: "core:uses-context",
-                        informationId: atom.informationId,
-                      },
-                    ],
-                  },
-                );
-              } else
-                await context.commitTerminal(
-                  "agent.router.focus.terminal",
-                  grant.informationId,
-                  focusClosed,
-                  {
-                    payload: {
-                      scopeKey: String(grant.payload.scopeKey),
-                      generation: String(grant.payload.generation),
-                      reason:
-                        kind === turnSilentInformationKind
-                          ? "silent"
-                          : "failed",
-                    },
-                    references: [
-                      {
-                        relation: "core:status-of",
-                        informationId: grant.informationId,
-                      },
-                    ],
-                  },
-                );
-            },
-          ),
-        ),
-    ];
+        },
+      ),
+    ),
+  ];
 }

@@ -8,6 +8,16 @@
  * 不调用外部模型或真实网络，每次测试关闭 Fastify、Runtime 与内存数据库。
  * 输入输出与副作用：仅隔离测试数据库 I/O；对比请求前后原子数量确保检查接口不追加事实。
  */
+/**
+ * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
+ * 功能概述：验证开发者 API 在真实 PGlite 账本上的认证、脱敏、游标分页、详情和有界 Flow。
+ * 主要职责：fixture 创建两个独立 context 与跨 context 引用；通过 Fastify inject 检查
+ * 无认证先拒绝、同时间分页不丢消息、过滤绑定、完整 Prompt 保留及秘密移除、只读与错误隔离。
+ * 注意力观察只投影唤醒状态、非语义信号、水位、未读数量和 Focus 快照，不读取正文。
+ * 代码库关系：Runtime 业务装配统一来自 @kaguya/composition；组合 app.ts、inspection.ts、真实 Runtime Manifest 和 database/testing；
+ * 不调用外部模型或真实网络，每次测试关闭 Fastify、Runtime 与内存数据库。
+ * 输入输出与副作用：仅隔离测试数据库 I/O；对比请求前后原子数量确保检查接口不追加事实。
+ */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestingDatabase } from "@kaguya/database/testing";
 import { KaguyaRuntime } from "@kaguya/runtime";
@@ -49,6 +59,7 @@ describe("developer inspection", () => {
     database = await createTestingDatabase();
     runtime = new KaguyaRuntime({
       database,
+      now: () => new Date(time),
       ...createMessageComposition(undefined, {
         moduleConfigs: createFirstPartyModuleConfigDefaults("test"),
       }),
@@ -295,8 +306,24 @@ describe("developer inspection", () => {
       ...(auth ? { headers } : {}),
     });
 
+  it("returns an empty read-only situation view without inventing history", async () => {
+    const before = await database.information.inspectPage({ limit: 100 });
+    const response = await get("situation");
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toMatchObject({
+      version: 1,
+      frames: [],
+      steps: [],
+      truncated: false,
+    });
+    expect(await database.information.inspectPage({ limit: 100 })).toEqual(
+      before,
+    );
+  });
+
   it("authenticates every endpoint before validating and disables response caching", async () => {
     for (const path of [
+      "situation",
       "modules",
       "atoms?limit=bad",
       "atoms/missing",
@@ -323,8 +350,7 @@ describe("developer inspection", () => {
     const modules = response.json().data.modules;
     expect(modules.length).toBeGreaterThan(0);
     const composer = modules.find(
-      (m: { definitionId: string }) =>
-        m.definitionId === "agent.heavy",
+      (m: { definitionId: string }) => m.definitionId === "agent.heavy",
     );
     expect(composer.bindings[0].instanceId).toBe("heavy.default");
     expect(composer.tags).toEqual([]);
@@ -401,7 +427,7 @@ describe("developer inspection", () => {
   });
   it("shows non-semantic observations, filters by registered view and binds pagination to it", async () => {
     for (const [id, source, outcome, signal] of [
-      ["gate-a", "module:attention-arousal.default", "defer", "passive"],
+      ["gate-a", "module:lifecycle.default", "defer", "passive"],
       ["gate-b", "module:historical-gate", "observe", "recheck"],
     ] as const) {
       await database.information.append(
@@ -431,8 +457,7 @@ describe("developer inspection", () => {
         [],
       );
     }
-    const query =
-      "atoms?definitionId=agent.attention.arousal&view=gates&limit=1";
+    const query = "atoms?definitionId=agent.lifecycle&view=gates&limit=1";
     const response = await get(query);
     expect(response.statusCode).toBe(200);
     const first = response.json().data;
@@ -452,71 +477,30 @@ describe("developer inspection", () => {
     expect(second.items[0].informationId).toBe("gate-a");
     expect(second.nextCursor).toBeNull();
     expect(
-      (await get(query + "&source=module:attention-arousal.default")).json()
-        .data.items[0].informationId,
+      (await get(query + "&source=module:lifecycle.default")).json().data
+        .items[0].informationId,
     ).toBe("gate-a");
     expect((await get(query + "&source=module:other")).statusCode).toBe(400);
     expect((await get(query + "&kind=memory.text")).statusCode).toBe(400);
     expect(
       (
         await get(
-          "atoms?definitionId=memory.expression&view=library&cursor=" +
+          "atoms?definitionId=memory.native&view=formation&cursor=" +
             encodeURIComponent(first.nextCursor),
         )
       ).statusCode,
     ).toBe(400);
     expect(
-      (await get("atoms?definitionId=memory.expression&view=missing"))
-        .statusCode,
+      (await get("atoms?definitionId=memory.native&view=missing")).statusCode,
     ).toBe(404);
     expect(
-      (await get("flows?definitionId=memory.expression&view=library"))
-        .statusCode,
+      (await get("flows?definitionId=memory.native&view=formation")).statusCode,
     ).toBe(400);
     expect(
       (await get(query + "&after=2026-09-12T00:00:00Z")).json().data.items,
     ).toEqual([]);
     const stored = await database.information.get("gate-a");
     expect(stored!.payload).not.toHaveProperty("text");
-  });
-  it("reads real shared Memory documents while inactive and distinguishes missing vector storage", async () => {
-    const address = {
-      platform: "web",
-      adapterId: "web",
-      platformMessageId: "test",
-      accountId: "user",
-      destination: { kind: "web" as const },
-    };
-    for (const source of ["a", "b"])
-      await database.memory.put({
-        sourceInformationId: source,
-        sourceKind: "core.message.inbound.text",
-        content: "已存储原文 " + token,
-        occurredAt: time,
-        address: { ...address, platformMessageId: source },
-      });
-    const path = "modules/memory.raw/storage?limit=1";
-    expect((await get(path, false)).statusCode).toBe(401);
-    const response = await get(path);
-    expect(response.statusCode).toBe(200);
-    expect(response.headers["cache-control"]).toBe("no-store");
-    expect(response.body).not.toContain(token);
-    const first = response.json().data;
-    expect(first.items).toHaveLength(1);
-    expect(first.items[0].fields[0].value).toContain("已存储原文");
-    const second = (
-      await get(path + "&cursor=" + encodeURIComponent(first.nextCursor))
-    ).json().data;
-    expect(second.items[0].id).not.toBe(first.items[0].id);
-    expect(second.nextCursor).toBeNull();
-    expect((await get("modules/memory.native/storage")).statusCode).toBe(404);
-    expect((await get(path.replace("limit=1", "limit=999"))).statusCode).toBe(
-      400,
-    );
-    expect((await get("modules/memory.expression/storage")).statusCode).toBe(
-      404,
-    );
-    expect((await database.memory.getBySource("a"))!.content).toContain(token);
   });
   it("projects the identity surface with bounded search, filters, summary and related detail", async () => {
     const path = "modules/memory.identity/surfaces/people";

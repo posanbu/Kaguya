@@ -280,6 +280,7 @@ describe("runtime information kinds", () => {
       "core.message.inbound.text",
       "core.delivery.requested",
       "core.delivery.delivered",
+      "core.delivery.started",
       "core.delivery.failed",
     ]);
     expect(new Set(builtInInformationKinds.map(({ kind }) => kind)).size).toBe(

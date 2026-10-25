@@ -22,7 +22,8 @@
     "@kaguya/prompt": "workspace:*",
     "@kaguya/scheduler": "workspace:*",
     "@kaguya/schema": "workspace:*",
-    "@kaguya/sdk": "workspace:*"
+    "@kaguya/sdk": "workspace:*",
+    "@kaguya/agent-contracts": "workspace:*"
   },
   "devDependencies": {
     "@kaguya/database": "workspace:*",

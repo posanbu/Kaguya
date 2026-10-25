@@ -403,3 +403,55 @@ it.each([0, -1, 300_001, 1.5, NaN, Infinity])(
     expect(model.doGenerateCalls).toHaveLength(0);
   },
 );
+
+it("preserves native reasoning and protocol metadata across the messages boundary", async () => {
+  const model = new MockLanguageModelV3({
+    doGenerate: async () => ({
+      content: [
+        {
+          type: "reasoning",
+          text: "服务返回的推理",
+          providerMetadata: { fixture: { signature: "opaque-token" } },
+        },
+        { type: "text", text: "silence" },
+      ],
+      finishReason: { unified: "stop", raw: "stop" },
+      usage: {
+        inputTokens: {
+          total: 1,
+          noCache: 1,
+          cacheRead: undefined,
+          cacheWrite: undefined,
+        },
+        outputTokens: { total: 2, text: 1, reasoning: 1 },
+      },
+      warnings: [],
+    }),
+  });
+  const client = new KaguyaLlmClient({ model });
+  const first = await client.generate({
+    modelId: "test",
+    prompt,
+    outputMode: "text",
+    outputSchema: z.string(),
+  });
+  expect(first.native?.reasoning).toMatchObject([
+    { type: "reasoning", text: "服务返回的推理" },
+  ]);
+  const history = first.native!.messages;
+  await client.generate({
+    modelId: "test",
+    messages: [...history, { role: "user", content: "新情境" }],
+    outputMode: "text",
+    outputSchema: z.string(),
+  });
+  const sent = model.doGenerateCalls[1]!.prompt;
+  expect(JSON.stringify(sent)).toContain("opaque-token");
+  expect(sent[0]).toMatchObject({
+    role: "assistant",
+    content: [
+      { type: "reasoning", text: "服务返回的推理" },
+      { type: "text", text: "silence" },
+    ],
+  });
+});
