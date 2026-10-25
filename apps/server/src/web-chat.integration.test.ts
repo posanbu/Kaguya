@@ -487,8 +487,7 @@ describe("Web private chat through the production information DAG", () => {
         durableWait,
       );
       for (const fact of [
-        "agent.heavy.message.draft",
-        "agent.heavy.message.prepared",
+        "agent.heavy.message.ready",
         "core.message.assistant.text",
         "core.delivery.requested",
       ]) {
@@ -504,6 +503,13 @@ describe("Web private chat through the production information DAG", () => {
           ),
         ).toEqual([0, 1]);
       }
+      for (const kind of [
+        "agent.heavy.message.draft",
+        "agent.heavy.message.prepared",
+      ])
+        expect(
+          await f.database.information.find({ kinds: [kind], limit: 10 }),
+        ).toEqual([]);
     },
   );
 
