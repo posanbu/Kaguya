@@ -10,8 +10,9 @@
  * 代码库关系：App.tsx 处理 history 与锁屏，api.ts 复用 Gateway 认证并用 schema 包验证 DTO；
  * developer.css 定义响应式布局，模块和 Kind 名称完全由 Manifest 提供。
  * 输入输出与副作用：仅 GET 请求、history 导航和用户触发的剪贴板写入；无轮询、编辑或重放；
- * 卸载清理异步任务，加载/失败时隐藏旧数据，明确显示空结果、分页和图截断。
+ * 卸载清理异步任务，同查询刷新保留内容，切换查询/失败时隐藏旧数据，明确显示空结果、分页和图截断。
  */
+import { FEATURE_CHANGED_EVENT } from "./feature-api.js";
 import { FlowSummary } from "./FlowSummary.js";
 import { ModuleTemplatesSection } from "./ModuleTemplatesSection.js";
 import { ModuleSettingsSection } from "./ModuleSettingsSection.js";
@@ -69,6 +70,11 @@ export function DeveloperConsole({
   navigate: (path: string) => void;
 }) {
   const [revision, setRevision] = useState(0);
+  useEffect(() => {
+    const refresh = () => setRevision((value) => value + 1);
+    window.addEventListener(FEATURE_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(FEATURE_CHANGED_EVENT, refresh);
+  }, []);
   const modules = useInspection(
     token,
     "modules",
