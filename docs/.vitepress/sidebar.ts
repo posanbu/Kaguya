@@ -49,6 +49,10 @@ const developerGuide: DefaultTheme.SidebarItem[] = [
       { text: "运行时架构", link: "/developers/architecture" },
       { text: "信息模块 SDK", link: "/developers/information-modules" },
       { text: "LLM Prompt 装配与原文", link: "/developers/prompt-assembly" },
+      {
+        text: "通用媒体与可切换识图（规划中）",
+        link: "/developers/media-understanding",
+      },
       { text: "Memory 认知层", link: "/developers/memory" },
       { text: "配置生命周期", link: "/developers/configuration-lifecycle" },
       { text: "信息账本", link: "/developers/information-ledger" },
