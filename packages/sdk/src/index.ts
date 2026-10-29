@@ -32,3 +32,4 @@ export {
 } from "./information-selector.js";
 export * from "./modules.js";
 export * from "./module-plugin.js";
+export * from "./media-resources.js";

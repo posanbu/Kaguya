@@ -66,6 +66,8 @@ import {
 
 import {
   assistantTextInformationKind,
+  authorizedAssistantOutputInformationKind,
+  messageOutputProcessorReady,
   deliveryRequestedInformationKind,
   inboundTextInformationKind,
   messageIntentRequestedInformationKind,
@@ -275,39 +277,14 @@ export function createHeavyModule<
     )
       return;
     await context.registerOnce(
-      "kaguya.heavy.delivery.v1",
+      "kaguya.heavy.authorized-output.v1",
       `${context.instanceId}:${assistant.informationId}`,
-      deliveryRequestedInformationKind,
+      authorizedAssistantOutputInformationKind,
       {
-        payload: {
-          adapterId: assistantPayload.source.adapterId,
-          platform: assistantPayload.source.platform,
-          destination: assistantPayload.source.destination,
-          message: {
-            kind: "text",
-            text: assistantPayload.text,
-            ...(assistantPayload.expression
-              ? { expression: assistantPayload.expression }
-              : {}),
-          },
-          turn: assistantPayload.turn,
-          ...(assistantPayload.speech
-            ? { speech: assistantPayload.speech }
-            : {}),
-        },
-        references:
-          assistantPayload.turn == null
-            ? []
-            : [
-                {
-                  relation: "agent:turn-claim" as const,
-                  informationId: assistantPayload.turn.claimInformationId,
-                },
-                {
-                  relation: "agent:turn-candidate" as const,
-                  informationId: assistantPayload.turn.candidateInformationId,
-                },
-              ],
+        ...(context.sourceAtom.informationId === assistant.informationId
+          ? {}
+          : { causedByInformationId: assistant.informationId }),
+        payload: assistantPayload,
       },
     );
   }
@@ -335,6 +312,7 @@ export function createHeavyModule<
         assistantHistoryPromptRenderer,
       ],
       requires: [
+        messageOutputProcessorReady,
         ...(dependencies.draftProcessingEnabled
           ? [messageDraftProcessorReady]
           : []),
@@ -375,6 +353,7 @@ export function createHeavyModule<
           : []),
       ],
       produces: [
+        authorizedAssistantOutputInformationKind,
         memoryRecallRequested,
         memoryRecallCompleted,
         heavyResponseSilentInformationKind,
@@ -382,7 +361,6 @@ export function createHeavyModule<
           ? [messageDraftInformationKind]
           : []),
         assistantTextInformationKind,
-        deliveryRequestedInformationKind,
         speechStepRequestedInformationKind,
         speechObservedInformationKind,
         speechReadyInformationKind,

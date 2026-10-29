@@ -50,6 +50,7 @@ import {
 } from "./message-targets.js";
 import type { TargetDirectory } from "@kaguya/platform-adapters";
 import { GatewayAllowlist } from "./gateway-allowlist.js";
+import { mediaResourceRetentionGuard } from "./media-resource-retention.js";
 import { randomUUID } from "node:crypto";
 
 import {
@@ -119,7 +120,9 @@ import type {
   InformationModuleCatalog,
   ModuleCapabilityImplementation,
   ModuleActivationProvenance,
+  MediaResourceStore,
 } from "@kaguya/sdk";
+import { mediaResourceStoreCapability } from "@kaguya/sdk";
 import {
   ModelTaskClient,
   modelTaskCapability,
@@ -196,6 +199,10 @@ type KaguyaRuntimeBaseOptions = {
   readonly catalog: InformationModuleCatalog;
   readonly activations: readonly InformationModuleActivation[];
   readonly capabilities?: RuntimeCapabilities;
+  /** 宿主控制的持久媒体存储；模块和最终投递共享同一个实例。 */
+  readonly mediaResources?: MediaResourceStore;
+  /** 媒体在最后写入七天后可清理；历史 Atom 仍保留元数据并明确投递失败。 */
+  readonly mediaRetentionMs?: number;
   readonly retrievalStrategies?: readonly InformationRetrievalStrategy[];
   /** 可选长期原文索引默认关闭；原始事件投影始终运行。 */
   readonly memory?: RuntimeMemoryOptions;
@@ -311,6 +318,11 @@ type DeliveryRequestedAtom = DeepReadonly<
       platform: string;
       destination: PlatformDestination;
       message: OutboundMessageContent;
+      turn?: {
+        claimInformationId: string;
+        candidateInformationId: string;
+        contextInformationId: string;
+      } | null;
     }
   >
 >;
@@ -731,6 +743,14 @@ export class KaguyaRuntime implements InformationIngress {
               this.#messageTargets!.stage(assistant),
           }),
         },
+        ...(this.options.mediaResources
+          ? [
+              {
+                capability: mediaResourceStoreCapability,
+                value: this.options.mediaResources,
+              },
+            ]
+          : []),
         ...composeModelTaskCapabilities(
           this.options,
           { core, now: this.#now, oneShotSchedule },
@@ -739,6 +759,16 @@ export class KaguyaRuntime implements InformationIngress {
       ];
 
       this.#hostCapabilities = capabilities;
+      if (this.options.mediaResources) {
+        const retentionMs =
+          this.options.mediaRetentionMs ?? 7 * 24 * 60 * 60 * 1000;
+        if (!Number.isSafeInteger(retentionMs) || retentionMs < 60_000)
+          throw new Error("Invalid media retention period");
+        await this.options.mediaResources.cleanupExpired(
+          new Date(this.#now().getTime() - retentionMs),
+          mediaResourceRetentionGuard(database.sql),
+        );
+      }
       this.#memoryOptions = this.options.memory ?? { enabled: false };
       const moduleHost = new ModuleHost({
         drainTimeoutMs: this.options.drainTimeoutMs ?? 5000,
@@ -1124,8 +1154,7 @@ export class KaguyaRuntime implements InformationIngress {
         request.payload.platform,
         request.payload.destination,
       ) ||
-      !targetAuthorized ||
-      !this.#messageTargets!.deliveryStillCurrent(request.informationId)
+      !targetAuthorized
     ) {
       await core.commitTerminal(
         "kaguya.delivery.result.v1",
@@ -1199,10 +1228,45 @@ export class KaguyaRuntime implements InformationIngress {
     }
     let receipt: PlatformDeliveryReceipt;
     try {
+      const media =
+        request.payload.message.kind === "audio"
+          ? await this.#resolveAudioResource(request.payload.message)
+          : undefined;
+      if (
+        this.#state === "closing" ||
+        this.#state === "closed" ||
+        (request.payload.turn != null &&
+          (
+            await core.find({
+              kinds: [
+                "agent.router.turn.failed",
+                "agent.router.turn.superseded",
+                "agent.router.turn.silent",
+                "agent.router.turn.waiting",
+                "agent.router.turn.interrupted",
+              ],
+              payloadContains: {
+                claimInformationId: request.payload.turn.claimInformationId,
+              },
+              limit: 1,
+            })
+          ).length > 0) ||
+        !this.#messageTargets!.deliveryStillCurrent(request.informationId)
+      ) {
+        await this.#registerDeliveryFailure(
+          request,
+          context.informationId,
+          "target-authorization-expired",
+        );
+        return;
+      }
       receipt = await registration.transport.sendMessage(
         request.payload.destination,
         request.payload.message,
-        { rootInformationId: context.informationId },
+        {
+          rootInformationId: context.informationId,
+          ...(media ? { media } : {}),
+        },
       );
     } catch (cause) {
       await this.#registerDeliveryFailure(
@@ -1252,6 +1316,24 @@ export class KaguyaRuntime implements InformationIngress {
     this.#deliveriesByContext
       .get(context.informationId)
       ?.push(safeRuntimeReceipt(receipt));
+  }
+
+  async #resolveAudioResource(
+    message: Extract<OutboundMessageContent, { kind: "audio" }>,
+  ) {
+    const resource = await this.options.mediaResources?.get(message.resourceId);
+    if (
+      !resource ||
+      resource.mimeType !== message.mimeType ||
+      resource.sha256 !== message.sha256 ||
+      resource.bytes.byteLength !== message.byteLength
+    )
+      throw new Error("Audio resource is missing or no longer valid");
+    return {
+      bytes: resource.bytes,
+      mimeType: resource.mimeType,
+      sha256: resource.sha256,
+    };
   }
 
   async #registerDeliveryFailure(

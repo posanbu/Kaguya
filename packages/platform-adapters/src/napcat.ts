@@ -26,6 +26,7 @@ import type {
   PlatformDeliveryReceipt,
   PlatformMessageTarget,
   PlatformOutboundTransport,
+  PlatformOutboundMetadata,
 } from "./types.js";
 import {
   buildOneBotSendAction,
@@ -170,9 +171,10 @@ export class NapCatActionClient
   async sendMessage(
     target: PlatformMessageTarget,
     message: OutboundMessageContent,
+    metadata?: PlatformOutboundMetadata,
   ): Promise<PlatformDeliveryReceipt> {
     const echo = this.options.nextEcho();
-    const request = buildOneBotSendAction(target, message, echo);
+    const request = buildOneBotSendAction(target, message, echo, metadata);
     const receipt = new Promise<PlatformDeliveryReceipt>((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(echo);

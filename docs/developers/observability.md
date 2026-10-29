@@ -84,6 +84,8 @@ KAGUYA_LOG_LEVELS=runtime:module:agent.heavy=debug
 
 未声明 definition、schema 错误、投影错误或 observer 错误只生成脱敏的 `module.diagnostic.rejected`，不得使模块启动或业务 handler 失败。已经形成 Atom 的成功结果应由 kind log policy 投影，避免再发一条临时成功诊断。
 
+Qwen TTS 插件以 `agent.tts.requested.v1`、`started.v1`、`completed.v1`、`failed.v1`、`cancelled.v1` 和 `fallback.v1` 分别记录请求、执行、产物、失败、回合失效取消和文字回退。Inspection 提供对应只读视图。日志只包含耗时、字节数、失败类别、取消及回退原因，不包含 API Key、供应商响应正文、音频字节或临时下载 URL。完成事实表示持久资源已准备完成；最终是否发送成功仍以 `core.delivery.delivered` 或 `core.delivery.failed` 为准。
+
 模块可实现 `describeStartup()`，在 `start()` 成功后返回一句状态和少量安全 JSON 字段。描述无效或抛错不会否定 Host 的 `module.started`，只会追加 `module.status.failed`。
 
 ## Gateway / Adapter

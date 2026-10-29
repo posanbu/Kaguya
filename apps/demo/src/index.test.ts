@@ -117,6 +117,7 @@ describe("demo entry point", () => {
       "core.delivery.delivered: 1",
       "core.delivery.requested: 1",
       "core.delivery.started: 1",
+      "core.message.assistant.authorized: 1",
       "core.message.assistant.text: 1",
       "core.message.inbound.text: 1",
       "core.model.task.completed: 2",

@@ -150,8 +150,14 @@ describe("shared Runtime Composition", () => {
       moduleConfigs.filter(
         (config) =>
           config.enabled && !config.definitionId.startsWith("adapter."),
-      ).length + 1,
+      ).length + 2,
     );
+    expect(composition.activations).toContainEqual({
+      instanceId: "message-output.text.default",
+      definitionId: "agent.message-output.text",
+      enabled: true,
+      settings: {},
+    });
     expect(
       composition.activations.some(
         ({ definitionId }) => definitionId === "memory.native",

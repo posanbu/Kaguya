@@ -1,3 +1,4 @@
+import { textMessageOutputModule } from "./message-output/index.js";
 /**
  * QQ 表情独立进入 Catalog 和生产默认配置，显式关闭后不安装 Heavy 草稿处理路径。
  * 功能概述：集中显式导入 first-party 模块，提供可被 composition root 选择和合并的 Catalog。
@@ -71,6 +72,7 @@ export function createFirstPartyModuleCatalog<
       ...options,
       draftProcessingEnabled: options.qqExpressionEnabled ?? false,
     }),
+    textMessageOutputModule,
     createRouterModule(options),
     createSituationRuntimeModule(options),
   );
@@ -167,7 +169,7 @@ export function createFirstPartyModuleActivations(
   const scopeIdleMs = lifecycle
     ? lifecycleSettingsSchema.parse(lifecycle.settings).activity.scopeIdleMs
     : undefined;
-  return Object.freeze(
+  const activations = Object.freeze(
     configs
       .flatMap((config) =>
         config.definitionId === "agent.router"
@@ -224,6 +226,26 @@ export function createFirstPartyModuleActivations(
       })
       .filter((activation) => activation.enabled),
   );
+  const hasOutputProcessor = activations.some((activation) =>
+    catalog.definitions
+      .find(({ manifest }) => manifest.definitionId === activation.definitionId)
+      ?.manifest.provides.some(
+        (capability) => capability.id === "agent:message-output-processor",
+      ),
+  );
+  return Object.freeze([
+    ...activations,
+    ...(hasOutputProcessor
+      ? []
+      : [
+          Object.freeze({
+            instanceId: "message-output.text.default",
+            definitionId: "agent.message-output.text",
+            enabled: true,
+            settings: Object.freeze({}),
+          }),
+        ]),
+  ]);
 }
 
 const DEFAULT_AGENT_IDENTITY: Pick<AgentIdentity, "name" | "aliases"> = {

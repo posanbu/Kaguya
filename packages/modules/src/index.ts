@@ -69,6 +69,8 @@ export {
 } from "./first-party/heavy/message-context.js";
 export {
   assistantTextInformationKind,
+  authorizedAssistantOutputInformationKind,
+  messageOutputProcessorReady,
   deliveryRequestedInformationKind,
   filterDecisionInformationKind,
   inboundTextInformationKind,

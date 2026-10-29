@@ -196,6 +196,7 @@ async function fixture(
     restart,
     getCore: () => core,
     runtime,
+    database,
     service: runtime.messageTargets!,
     atoms,
     settle,
@@ -310,22 +311,28 @@ it.each(["100", "200"])(
         status.text,
       ),
     ).toEqual({ status: "confirmed" });
-    await f.settle();
-    expect(f.send).toHaveBeenCalledTimes(1);
+    await vi.waitFor(
+      () => expect(f.send).toHaveBeenCalledTimes(1),
+      persistedWaitOptions,
+    );
     expect(f.send.mock.calls[0]![0]).toEqual(
       id === "100"
         ? { kind: "group", groupId: "100" }
         : { kind: "private", userId: "200" },
     );
-    expect(
-      (await f.atoms()).some(
-        (a) =>
-          a.kind === "agent.router.turn.completed" &&
-          a.payload.candidateInformationId ===
-            (intent.payload.turn as { candidateInformationId: string })
-              .candidateInformationId,
-      ),
-    ).toBe(true);
+    await vi.waitFor(
+      async () =>
+        expect(
+          (await f.atoms()).some(
+            (a) =>
+              a.kind === "agent.router.turn.completed" &&
+              a.payload.candidateInformationId ===
+                (intent.payload.turn as { candidateInformationId: string })
+                  .candidateInformationId,
+          ),
+        ).toBe(true),
+      persistedWaitOptions,
+    );
     expect(
       await f.service.confirm(
         approved.requestId,

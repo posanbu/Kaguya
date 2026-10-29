@@ -312,6 +312,33 @@ export const assistantTextInformationKind = defineInformationKind({
   },
 });
 
+/** Heavy 完成授权后的唯一输出接管点。输出插件只能从这里选择文字或媒体分支。 */
+export const authorizedAssistantOutputInformationKind = defineInformationKind({
+  kind: "core.message.assistant.authorized",
+  displayName: "已授权的助手输出",
+  description:
+    "正文通过目标授权后的稳定输出事实；默认文字模块或一个独立输出插件消费它，避免并行重复发送。",
+  payloadSchema: assistantTextInformationKind.payloadSchema,
+  references: {
+    "core:caused-by": {
+      required: true,
+      multiple: false,
+      targetKinds: [assistantTextInformationKind.kind],
+    },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
+  },
+  log: { enabled: false },
+});
+
+/** 同一装配只能启用一个已授权输出处理器。 */
+export const messageOutputProcessorReady = defineModuleCapability<{
+  readonly ready: true;
+}>("agent:message-output-processor", 1);
+
 const deliveryRequestedPayloadSchema = z
   .object({
     adapterId: nonBlankString,
@@ -346,6 +373,10 @@ export const deliveryRequestedInformationKind = defineInformationKind({
       required: true,
       multiple: false,
       targetKinds: ["core.runtime.context"],
+    },
+    "core:result": {
+      required: false,
+      multiple: false,
     },
     "agent:turn-claim": {
       required: false,

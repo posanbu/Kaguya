@@ -32,6 +32,10 @@ const criticalTests = [
   "apps/web/src/memory-graph-model.test.ts",
   "apps/web/src/memory-graph-colors.test.ts",
   "apps/web/src/components/AppShell.test.tsx",
+  "examples/plugins/qwen-tts/provider.test.mjs",
+  "examples/plugins/qwen-tts/plugin.test.mjs",
+  "examples/plugins/qwen-tts/runtime.test.mjs",
+  "packages/runtime/src/media-resource-store.test.ts",
 ];
 
 // Vitest 的位置参数是过滤器，失效的文件名可能被静默忽略。
