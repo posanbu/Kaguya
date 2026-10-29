@@ -7,17 +7,14 @@
  * 入站按 scope 直接竞争唯一候选；due 仅恢复 Light wait/interrupt，终态 resume 合并期间新输入。
  * isImmediateObservation 识别私聊、@ 与回复机器人，用于唤醒休眠状态和提升已有观察。
  * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
+ * 入站经 observationCapability 发现持久接收边界，连续成功事实用于后继候选；空水位保留 null，不作为字符串 cursor。
  */
-/**
- * 功能概述：定义心跳模块的设置、订阅和调度行为。
- * 主要职责：heartbeatSettingsSchema 提供校验及中文公开字段元数据；模块通过调度能力管理等待。
- * 代码库关系：Catalog 与管理表单共用 schema，Host 负责创建实例。
- * 输入输出与副作用：字段声明无副作用；订阅处理写入调度原子，不直接发送消息。
- * heartbeatObservationSelector 只读取开放集合与最近水位；开放期间入站账本即待观察集合。
- * 入站按 scope 直接竞争唯一候选；due 仅恢复 Light wait/interrupt，终态 resume 合并期间新输入。
- * isImmediateObservation 识别私聊、@ 与回复机器人，用于唤醒休眠状态和提升已有观察。
- * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
- */
+import {
+  observationProgress,
+  situationObservationContract,
+  publishObservationProgress,
+} from "../observation.js";
+import { observationCapability } from "@kaguya/sdk";
 import { firstPartyInspection } from "../inspection.js";
 import { z } from "@kaguya/schema";
 import { defineInformationModule, onInformation } from "@kaguya/sdk";
@@ -108,6 +105,7 @@ export const heartbeatModule = defineInformationModule({
       ...observationTerminals,
     ],
     produces: [
+      observationProgress,
       attentionArousalActivityInformationKind,
       heartbeatScheduledInformationKind,
       heartbeatFiredInformationKind,
@@ -124,7 +122,7 @@ export const heartbeatModule = defineInformationModule({
       heartbeatDeferredObservationSelector,
     ],
     promptRenderers: [],
-    requires: [oneShotScheduleCapability],
+    requires: [oneShotScheduleCapability, observationCapability],
     provides: [],
   },
   create: ({ settings }, lifecycle) => {
@@ -339,7 +337,8 @@ export const heartbeatModule = defineInformationModule({
               if (!runtimeContext) continue;
               const observed = selected.find(
                 (item) =>
-                  (item.kind === "agent.router.turn.context.completed" ||
+                  (item.kind === "agent.observation.progress.v1" ||
+                    item.kind === "agent.router.turn.context.completed" ||
                     item.kind === "agent.heavy.step.observed") &&
                   item.payload.scopeKey === previousCandidate.payload.scopeKey,
               );
@@ -401,6 +400,14 @@ export const heartbeatModule = defineInformationModule({
           inboundTextInformationKind,
           { subscriptionId: "heartbeat.message", delivery: "durable" },
           async (atom, context) => {
+            const progress = await context
+              .use(observationCapability)
+              .discover(situationObservationContract(atom.payload.source));
+            await publishObservationProgress(
+              context,
+              progress,
+              scopeOf(atom.payload.source),
+            );
             await context.registerOnce(
               "agent.attention.arousal.activity",
               atom.informationId,
@@ -529,6 +536,7 @@ export const heartbeatModule = defineInformationModule({
               if (!latest) return;
               const observedContext = observations.find(
                 (item) =>
+                  item.kind === "agent.observation.progress.v1" ||
                   item.kind === "agent.router.turn.context.completed" ||
                   item.kind === "agent.heavy.step.observed",
               );
@@ -560,8 +568,8 @@ export const heartbeatModule = defineInformationModule({
                     platform: atom.payload.source.platform,
                     adapterId: atom.payload.source.adapterId,
                     destination: atom.payload.source.destination,
-                    ...(observedContext?.payload
-                      .observedThroughInformationId === undefined
+                    ...(typeof observedContext?.payload
+                      .observedThroughInformationId !== "string"
                       ? {}
                       : {
                           unreadAfterInformationId: String(
@@ -755,6 +763,7 @@ export const heartbeatModule = defineInformationModule({
               if (!upperInformationId) return;
               const observedContext = state.find(
                 (a) =>
+                  a.kind === "agent.observation.progress.v1" ||
                   a.kind === "agent.router.turn.context.completed" ||
                   a.kind === "agent.heavy.step.observed",
               );
@@ -868,6 +877,7 @@ export const heartbeatModule = defineInformationModule({
               if (!previous && !interrupted) {
                 const observedContext = state.find(
                   (item) =>
+                    item.kind === "agent.observation.progress.v1" ||
                     item.kind === "agent.router.turn.context.completed" ||
                     item.kind === "agent.heavy.step.observed",
                 );
@@ -896,8 +906,8 @@ export const heartbeatModule = defineInformationModule({
                       platform: (latest.payload as any).source.platform,
                       adapterId: (latest.payload as any).source.adapterId,
                       destination: (latest.payload as any).source.destination,
-                      ...(observedContext?.payload
-                        .observedThroughInformationId === undefined
+                      ...(typeof observedContext?.payload
+                        .observedThroughInformationId !== "string"
                         ? {}
                         : {
                             unreadAfterInformationId: String(

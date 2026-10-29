@@ -2,9 +2,11 @@
  * 功能概述：验证 Heartbeat 即时提升已有 schedule 时仍携带已聚合输入。
  * 主要职责：注入 one-shot 替身，断言替换 deadline、来源顺序与旧 heartbeat 终态。
  * 代码库关系：真实数据库和开放槽行为由 observation.test.ts 覆盖；本文件隔离 capability 协议。
+ * 入站替身显式提供独立观察发现能力，并验证消费者契约；不将 one-shot 替身误用为观察端口。
  * 输入输出与副作用：只使用固定时钟和模拟回执，不访问模型或平台。
  */
 import { freezeInformationAtom, informationIdSchema } from "@kaguya/schema";
+import { observationCapability, type ObservationAccess } from "@kaguya/sdk";
 import {
   oneShotRequestedInformationKind,
   oneShotScheduleCapability,
@@ -13,6 +15,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import { heartbeatModule, heartbeatSettingsSchema } from "./index.js";
+import { situationObservationContract } from "../observation.js";
 import {
   heartbeatDeferredObservationSelector,
   heartbeatObservationSelector,
@@ -37,6 +40,21 @@ const source = {
   senderId: "web",
 };
 
+function mockObservationDiscovery() {
+  return vi.fn<ObservationAccess["discover"]>(async (input) => ({
+    sceneId: "test-scene",
+    consumerId: input.consumerId,
+    policyVersion: input.policyVersion,
+    address: input.address,
+    throughPosition: "0",
+    throughInformationId: null,
+    discoveredThroughPosition: "2",
+    allocatedThroughPosition: "0",
+    revision: 0,
+    latestObservationId: null,
+  }));
+}
+
 describe("heartbeatModule", () => {
   it("has no cadence dependency and produces activity facts", () => {
     expect(
@@ -50,6 +68,7 @@ describe("heartbeatModule", () => {
   });
 
   it("opens the accumulated scope immediately when a notification arrives", async () => {
+    const discover = mockObservationDiscovery();
     const schedule = vi.fn<OneShotScheduleCapability["schedule"]>();
     const oneShot: OneShotScheduleCapability = {
       schedule,
@@ -90,7 +109,7 @@ describe("heartbeatModule", () => {
           ...source,
           platform: "qq",
           adapterId: "adapter",
-          destination: { kind: "group", groupId: "room" },
+          destination: { kind: "group" as const, groupId: "room" },
         },
       },
       references: [
@@ -111,11 +130,18 @@ describe("heartbeatModule", () => {
     )!;
     await subscription.handle(inbound, {
       now: () => new Date("2026-09-08T00:00:10.000Z"),
+      use: (capability: unknown) => {
+        expect(capability).toBe(observationCapability);
+        return { discover };
+      },
       select,
       registerOnce,
     } as never);
 
     expect(schedule).not.toHaveBeenCalled();
+    expect(discover).toHaveBeenCalledExactlyOnceWith(
+      situationObservationContract(inbound.payload.source),
+    );
     expect(registerOnce).toHaveBeenCalledWith(
       "agent.heartbeat.candidate",
       inbound.informationId,
@@ -471,6 +497,7 @@ describe("heartbeatModule", () => {
   });
 
   it("replaces the open generation and carries ordered source ids forward", async () => {
+    const discover = mockObservationDiscovery();
     const replace = vi.fn<OneShotScheduleCapability["replace"]>(async () => ({
       scheduleInformationId: informationIdSchema.parse("schedule-new"),
       created: true,
@@ -581,7 +608,11 @@ describe("heartbeatModule", () => {
       sourceAtom: inbound,
       now: () => new Date("2026-09-08T00:00:10.000Z"),
       report: async () => undefined,
-      use: () => oneShot as never,
+      use: (capability: unknown) => {
+        if (Object.is(capability, observationCapability)) return { discover };
+        expect(capability).toBe(oneShotScheduleCapability);
+        return oneShot;
+      },
       select: async () => [previousSchedule, previousHeartbeat],
       register: async () => {
         throw new Error("unexpected register");
@@ -590,6 +621,9 @@ describe("heartbeatModule", () => {
       commitTerminal,
     } as never);
 
+    expect(discover).toHaveBeenCalledExactlyOnceWith(
+      situationObservationContract(inbound.payload.source),
+    );
     expect(registerOnce).toHaveBeenCalledWith(
       "agent.attention.arousal.activity",
       inbound.informationId,

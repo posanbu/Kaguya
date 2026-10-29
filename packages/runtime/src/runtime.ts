@@ -20,29 +20,7 @@
  * Runtime 过滤旧检索策略，不创建稀疏、向量或认知工作者。
  * inspectModules 仅在 started 状态返回模块声明、版本、Kind、Prompt 和能力绑定的只读投影。
  * ModuleHost observation 在这里映射到 lifecycle/module 命名空间，持久 Atom 单独进入 information logger。
- */
-/**
- * 入站 expressions 仅透传给插件，Runtime 不推断表情含义或改变调度。
- * 授权消息正文由 composition 注入的渲染器提供；Runtime 只传冻结变量并维持权限检查。
- * Runtime 只接收 outboundAllowlist；目标授权与最终 transport 前终检使用它，入站权限属于 AdapterHost。
- * 为 Router 注入 conversation/route 窄能力，结构化候选由宿主冻结，自动跨会话投递继续经过最终授权检查。
- * close({ drain: true }) 用于热应用：停止调度与 claim 领取，允许已领取任务有界完成，
- * 然后 abort/清理旧宿主；外部注入的数据库保持打开，可供下一 Runtime 复用。
- * createRuntimeKindRegistry 冻结完整 Kind（包括兼容读取版本），供数据库预检与 Runtime 共享；moduleLifecycle 注入真实插件 fiber。
- * 功能概述：以 PostgreSQL information ledger 装配通用 Runtime，接受显式 Catalog、activations 和宿主 capabilities。
- * 主要职责：start 注册完整 kind 并预检模块，最后开放 ingress；submit 持久化 context/inbound 后返回接受凭据；
- * 最终发送前使用当前出站 GatewayAllowlist 校验目的地，拒绝时只记录安全失败码和目标类型。
- * 平台投递使用 durable subscription，终态唯一槽避免重放再次落账，已有终态时不重复调用 transport。
- * 代码库关系：依赖 Database、Core、ModuleHost 和平台适配契约；具体 Agent 列表与 LLM 模型绑定位于 apps composition root。
- * 输入输出与副作用：连接、迁移、账本写入和 transport I/O 均在生命周期内执行；close 拒绝新入口并停止可靠领取。
- * 数据库初始化错误脱敏；只关闭自行创建的连接。submit 的 deliveries 是当次实际收集快照，可靠链通常异步完成。
- * Model Task 由 composeModelTaskCapabilities 注入批准的 ModelTaskClient；ApprovedModelTaskClient
- * 校验宿主 activation/tier 白名单，provider、resolver、Core 与 approval 数据均保存在私有字段，
- * 模块只通过 #76 的 context.use 获得通用能力。缺少批准或无效 capability 在任何 create 前拒绝。
- * 原始事件 Memory 常开；可选 Memory 开关只装配额外的入站文档、稀疏索引与召回能力。
- * Runtime 过滤旧检索策略，不创建稀疏、向量或认知工作者。
- * inspectModules 仅在 started 状态返回模块声明、版本、Kind、Prompt 和能力绑定的只读投影。
- * ModuleHost observation 在这里映射到 lifecycle/module 命名空间，持久 Atom 单独进入 information logger。
+ * 启动注入数据库 observationCapability，Memory 热重载保留同一绑定；观察端口不改变平台投递和 Memory 发布的状态拥有者。
  */
 import {
   MessageTargetService,
@@ -111,7 +89,7 @@ import type {
   OutboundMessageContent,
   PlatformDestination,
 } from "@kaguya/schema";
-import { defineInformationSelector } from "@kaguya/sdk";
+import { defineInformationSelector, observationCapability } from "@kaguya/sdk";
 import type {
   InformationKindDefinition,
   InformationModuleActivation,
@@ -699,6 +677,7 @@ export class KaguyaRuntime implements InformationIngress {
           : this.options.capabilities;
       const enabledSuppliedCapabilities = suppliedCapabilities ?? [];
       const capabilities = [
+        { capability: observationCapability, value: database.observations },
         { capability: rawContextCapability, value: database.rawEvents },
         {
           capability: nativeMemoryCapability,

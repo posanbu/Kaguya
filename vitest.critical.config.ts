@@ -1,3 +1,9 @@
+/**
+ * 功能概述：将 PR 必须执行的集成测试列为关键门禁，复用根 Vitest 配置和分片策略。
+ * 主要职责：criticalTests 固定完整文件清单；校验文件存在后合并配置，禁止按用例名称缩小范围。
+ * 代码库关系：CI 的关键分片调用本文件；包含观察仓储、Runtime 接线、Memory 重挂载、Demo DAG 及 Lifecycle/Router/Heartbeat 回归。
+ * 输入输出与副作用：只配置测试收集，不改变生产代码、测试断言或等待预算。
+ */
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { mergeConfig } from "vitest/config";
@@ -11,6 +17,14 @@ const criticalTests = [
   "packages/config/src/module-config.test.ts",
   "packages/config/src/startup-validation.test.ts",
   "packages/database/src/schema.test.ts",
+  "packages/database/src/observation-store.test.ts",
+  "packages/runtime/src/observation-runtime.test.ts",
+  "packages/runtime/src/runtime.test.ts",
+  "packages/modules/src/first-party/router/index.test.ts",
+  "packages/modules/src/first-party/lifecycle/index.test.ts",
+  "packages/modules/src/first-party/heartbeat/observation.test.ts",
+  "packages/modules/src/first-party/heartbeat/index.test.ts",
+  "apps/demo/src/index.test.ts",
   "packages/database/src/memory-graph.test.ts",
   "packages/database/src/reliable-core.test.ts",
   "packages/database/src/reliable-repository.test.ts",

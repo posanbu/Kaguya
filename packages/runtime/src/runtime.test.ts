@@ -1,53 +1,34 @@
+/**
+ * 测试夹具显式装配 QQ 表情模板，验证新增模块契约与既有流程兼容。
+ * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
+ * Light 普通日志仅保留元数据，不能泄漏 Prompt 预览或模型输出。
+ * fixture 显式批准合成 QQ 目标，生产 Runtime 默认为空出站白名单。
+ * 测试显式注入统一文件模板，避免 Light 或 Expression 绕过 default/local 选择。
+ * 功能概述：用真实 PGlite、Core 和 ModuleHost 验证 `KaguyaRuntime` 的完整信息 DAG。
+ * 数据库收敛、日志落地和模型任务前置等待共用 8 秒持久化预算；超时附带队列元数据，内存取消与关闭 deadline 单独验证。
+ * Light v2 拒绝耗尽后的 wait；持续非法响应经一次修复后以 light-unavailable 静默闭合。
+ * Light 使用独立 object Model Task，测试分别定位 plan 与 compose，确保故障静默与唯一分派。
+ * 主要职责：覆盖 Web 入站到投递成功的直接因果链、生成失败不会继续 assistant/outbound/delivery、
+ * 三类 transport 失败、无订阅持久化、同 kind 消费并发与多 message composer activation 共享模型任务后
+ * 各自按 intent target 投递纯文本，默认 OneBot action 仅含 text 段、start/close 确定性交错、
+ * in-flight 关闭、关闭后 ingress 拒绝、数据库初始化错误固定分类及抛出型反射属性，
+ * 以及消费者失败与其他结果并存；默认 message Prompt 必须带原子 provenance 和有序
+ * uses-context 引用。
+ * Memory 集成用例推进宿主时钟越过数据库实际入库时刻，分别验证未来入库证据被排除与后续正常召回。
+ * 代码库关系：测试直接消费 Runtime 的 `InformationIngress.submit` 和注入数据库选项；默认业务
+ * 模块来自 `@kaguya/modules`，自定义 fixture 只用于隔离并发和消费者故障语义。
+ * 输入输出与副作用：每个用例创建隔离的内存 PGlite 数据库，Runtime 只写 information
+ * ledger；所有创建 PGlite 的用例共享 15 秒跨平台超时，测试结束显式关闭注入数据库，
+ * 并检查持久化 payload 不包含 raw/provider secret。
+ * Memory 重挂载测试通过真实 native 模块验证能力唯一性及重挂载后的观察；清理汇总错误并释放所有数据库。
+ * 受控 gate 的前置等待有界；finally 释放阻塞并等待已启动任务收敛，断言失败也不会阻塞资源清理。
+ * 观察 DAG 明确包含 completed/progress 两种事实，保留完整因果链和上下文引用断言。
+ */
 import {
   lifecycleStartupCapability,
   lifecycleStartedInformationKind,
 } from "@kaguya/modules";
-/**
- * 测试夹具显式装配 QQ 表情模板，验证新增模块契约与既有流程兼容。
- * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
- * Light 普通日志仅保留元数据，不能泄漏 Prompt 预览或模型输出。
- * fixture 显式批准合成 QQ 目标，生产 Runtime 默认为空出站白名单。
- * 测试显式注入统一文件模板，避免 Light 或 Expression 绕过 default/local 选择。
- * 功能概述：用真实 PGlite、Core 和 ModuleHost 验证 `KaguyaRuntime` 的完整信息 DAG。
- * 数据库收敛、日志落地和模型任务前置等待共用 8 秒持久化预算；超时附带队列元数据，内存取消与关闭 deadline 单独验证。
- * Light v2 拒绝耗尽后的 wait；持续非法响应经一次修复后以 light-unavailable 静默闭合。
- * Light 使用独立 object Model Task，测试分别定位 plan 与 compose，确保故障静默与唯一分派。
- * 主要职责：覆盖 Web 入站到投递成功的直接因果链、生成失败不会继续 assistant/outbound/delivery、
- * 三类 transport 失败、无订阅持久化、同 kind 消费并发与多 message composer activation 共享模型任务后
- * 各自按 intent target 投递纯文本，默认 OneBot action 仅含 text 段、start/close 确定性交错、
- * in-flight 关闭、关闭后 ingress 拒绝、数据库初始化错误固定分类及抛出型反射属性，
- * 以及消费者失败与其他结果并存；默认 message Prompt 必须带原子 provenance 和有序
- * uses-context 引用。
- * Memory 集成用例推进宿主时钟越过数据库实际入库时刻，分别验证未来入库证据被排除与后续正常召回。
- * 代码库关系：测试直接消费 Runtime 的 `InformationIngress.submit` 和注入数据库选项；默认业务
- * 模块来自 `@kaguya/modules`，自定义 fixture 只用于隔离并发和消费者故障语义。
- * 输入输出与副作用：每个用例创建隔离的内存 PGlite 数据库，Runtime 只写 information
- * ledger；所有创建 PGlite 的用例共享 15 秒跨平台超时，测试结束显式关闭注入数据库，
- * 并检查持久化 payload 不包含 raw/provider secret。
- */
-/**
- * 测试夹具显式装配 QQ 表情模板，验证新增模块契约与既有流程兼容。
- * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
- * Light 普通日志仅保留元数据，不能泄漏 Prompt 预览或模型输出。
- * fixture 显式批准合成 QQ 目标，生产 Runtime 默认为空出站白名单。
- * 测试显式注入统一文件模板，避免 Light 或 Expression 绕过 default/local 选择。
- * 功能概述：用真实 PGlite、Core 和 ModuleHost 验证 `KaguyaRuntime` 的完整信息 DAG。
- * 数据库收敛、日志落地和模型任务前置等待共用 8 秒持久化预算；超时附带队列元数据，内存取消与关闭 deadline 单独验证。
- * Light v2 拒绝耗尽后的 wait；持续非法响应经一次修复后以 light-unavailable 静默闭合。
- * Light 使用独立 object Model Task，测试分别定位 plan 与 compose，确保故障静默与唯一分派。
- * 主要职责：覆盖 Web 入站到投递成功的直接因果链、生成失败不会继续 assistant/outbound/delivery、
- * 三类 transport 失败、无订阅持久化、同 kind 消费并发与多 message composer activation 共享模型任务后
- * 各自按 intent target 投递纯文本，默认 OneBot action 仅含 text 段、start/close 确定性交错、
- * in-flight 关闭、关闭后 ingress 拒绝、数据库初始化错误固定分类及抛出型反射属性，
- * 以及消费者失败与其他结果并存；默认 message Prompt 必须带原子 provenance 和有序
- * uses-context 引用。
- * Memory 集成用例推进宿主时钟越过数据库实际入库时刻，分别验证未来入库证据被排除与后续正常召回。
- * 代码库关系：测试直接消费 Runtime 的 `InformationIngress.submit` 和注入数据库选项；默认业务
- * 模块来自 `@kaguya/modules`，自定义 fixture 只用于隔离并发和消费者故障语义。
- * 输入输出与副作用：每个用例创建隔离的内存 PGlite 数据库，Runtime 只写 information
- * ledger；所有创建 PGlite 的用例共享 15 秒跨平台超时，测试结束显式关闭注入数据库，
- * 并检查持久化 payload 不包含 raw/provider secret。
- */
+
 import { loadFirstPartyPromptTemplates } from "@kaguya/modules/prompt-templates/node";
 import { rawContextCapability } from "@kaguya/memory";
 const testPrompts = loadFirstPartyPromptTemplates();
@@ -177,10 +158,21 @@ class GatedSchemaDatabase extends KaguyaDatabase {
 }
 
 afterEach(async () => {
+  const failures: unknown[] = [];
   for (const resource of resources.splice(0)) {
-    await resource.runtime?.close().catch(() => undefined);
-    await resource.database.close().catch(() => undefined);
+    for (const close of [
+      () => resource.runtime?.close(),
+      () => resource.database.close(),
+    ]) {
+      try {
+        await close();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
   }
+  if (failures.length)
+    throw new AggregateError(failures, "Runtime fixture cleanup failed");
 });
 
 function webMessage(text = "hello"): PlatformInboundMessage {
@@ -242,6 +234,8 @@ async function createRuntime(
   }> = {},
 ) {
   const database = await createTestingDatabase();
+  const resource: (typeof resources)[number] = { database };
+  resources.push(resource);
   let id = 0;
   const memoryEnabled = overrides.memory?.enabled === true;
   const activations = memoryEnabled
@@ -266,7 +260,7 @@ async function createRuntime(
     informationIdGenerator: () => `runtime-atom-${++id}`,
     ...overrides,
   });
-  resources.push({ runtime, database });
+  resource.runtime = runtime;
   return { runtime, database };
 }
 
@@ -289,15 +283,32 @@ async function settleDeliveries(database: KaguyaDatabase): Promise<void> {
 
 async function createGatedRuntime() {
   const base = await createTestingDatabase();
+  const resource: (typeof resources)[number] = { database: base };
+  resources.push(resource);
   const database = new GatedSchemaDatabase(base.sql);
+  resource.database = database;
   const runtime = new KaguyaRuntime({
     ...createMessageComposition(),
     database,
     catalog: defineInformationModuleCatalog(...[]),
     activations: [],
   });
-  resources.push({ runtime, database });
+  resource.runtime = runtime;
   return { runtime, database };
+}
+
+async function waitForTestSignal(signal: Promise<void>): Promise<void> {
+  let settled = false;
+  void signal.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  await vi.waitFor(() => expect(settled).toBe(true), PERSISTENCE_WAIT);
+  await signal;
 }
 
 async function flushMicrotasks(turns = 10): Promise<void> {
@@ -745,13 +756,19 @@ describe("KaguyaRuntime", () => {
       const { runtime, database } = await createGatedRuntime();
 
       const firstStart = runtime.start();
-      await database.schemaPreparationStarted;
-      const secondStart = runtime.start();
-
-      expect(secondStart).toBe(firstStart);
-      expect(database.prepareSchemaCalls).toBe(1);
-      database.releaseSchemaPreparation();
-      await Promise.all([firstStart, secondStart]);
+      const starts = [firstStart];
+      void firstStart.catch(() => undefined);
+      try {
+        await waitForTestSignal(database.schemaPreparationStarted);
+        const secondStart = runtime.start();
+        starts.push(secondStart);
+        expect(secondStart).toBe(firstStart);
+        expect(database.prepareSchemaCalls).toBe(1);
+      } finally {
+        database.releaseSchemaPreparation();
+        await Promise.allSettled(starts);
+      }
+      await Promise.all(starts);
       expect(database.prepareSchemaCalls).toBe(1);
     },
     TEST_TIMEOUT,
@@ -762,24 +779,27 @@ describe("KaguyaRuntime", () => {
     async () => {
       const { runtime, database } = await createGatedRuntime();
       const starting = runtime.start();
-      await database.schemaPreparationStarted;
-
-      expect(() =>
-        runtime.registerTransport({
-          adapterId: "late.web",
-          platform: "web",
-          transport: {
-            sendMessage: async (target) => ({
-              ok: true,
-              adapterId: "late.web",
-              platform: "web",
-              target,
-            }),
-          },
-        }),
-      ).toThrow(RuntimeUnavailableError);
-
-      database.releaseSchemaPreparation();
+      void starting.catch(() => undefined);
+      try {
+        await waitForTestSignal(database.schemaPreparationStarted);
+        expect(() =>
+          runtime.registerTransport({
+            adapterId: "late.web",
+            platform: "web",
+            transport: {
+              sendMessage: async (target) => ({
+                ok: true,
+                adapterId: "late.web",
+                platform: "web",
+                target,
+              }),
+            },
+          }),
+        ).toThrow(RuntimeUnavailableError);
+      } finally {
+        database.releaseSchemaPreparation();
+        await Promise.allSettled([starting]);
+      }
       await starting;
     },
     TEST_TIMEOUT,
@@ -841,15 +861,16 @@ describe("KaguyaRuntime", () => {
     });
     const starting = runtime.start();
     void starting.catch(() => undefined);
-    await creating;
-    const closing = runtime.close();
+    let closing: Promise<void> | undefined;
     try {
+      await waitForTestSignal(creating);
+      closing = runtime.close();
       await vi.waitFor(() => expect(aborted).toBe(true));
     } finally {
       release();
-      await starting.catch(() => undefined);
-      await closing;
+      await Promise.allSettled([starting, closing]);
     }
+    await closing;
   });
 
   it(
@@ -904,15 +925,20 @@ describe("KaguyaRuntime", () => {
       });
 
       const starting = runtime.start();
-      await creating;
+      void starting.catch(() => undefined);
       let closeSettled = false;
-      const closing = runtime.close().then(() => {
-        closeSettled = true;
-      });
-      await flushMicrotasks();
-      expect(closeSettled).toBe(false);
-
-      releaseCreation();
+      let closing: Promise<void> | undefined;
+      try {
+        await waitForTestSignal(creating);
+        closing = runtime.close().then(() => {
+          closeSettled = true;
+        });
+        await flushMicrotasks();
+        expect(closeSettled).toBe(false);
+      } finally {
+        releaseCreation();
+        await Promise.allSettled([starting, closing]);
+      }
       await expect(starting).rejects.toBeInstanceOf(RuntimeUnavailableError);
       await closing;
       expect(disposeCalls).toBe(1);
@@ -978,6 +1004,8 @@ describe("KaguyaRuntime", () => {
           "core.delivery.delivered",
           "core.delivery.started",
           "agent.situation.frozen",
+          "agent.observation.completed.v1",
+          "agent.observation.progress.v1",
         ]),
       );
       expect(result.deliveries).toEqual([]);
@@ -1420,9 +1448,14 @@ describe("KaguyaRuntime", () => {
       await runtime.start();
 
       const submission = runtime.submit(webMessage());
-      await bothStarted;
-      expect(starts).toBe(2);
-      release();
+      void submission.catch(() => undefined);
+      try {
+        await waitForTestSignal(bothStarted);
+        expect(starts).toBe(2);
+      } finally {
+        release();
+        await Promise.allSettled([submission]);
+      }
       await submission;
     },
     TEST_TIMEOUT,
@@ -1441,18 +1474,23 @@ describe("KaguyaRuntime", () => {
       });
       await runtime.start();
       const submission = runtime.submit(platformMessage());
-      await deferred.started;
-
+      void submission.catch(() => undefined);
       let closed = false;
-      const close = runtime.close().then(() => {
-        closed = true;
-      });
-      await expect(runtime.submit(platformMessage())).rejects.toBeInstanceOf(
-        RuntimeUnavailableError,
-      );
-      await Promise.resolve();
-      expect(closed).toBe(false);
-      deferred.release();
+      let close: Promise<void> | undefined;
+      try {
+        await waitForTestSignal(deferred.started);
+        close = runtime.close().then(() => {
+          closed = true;
+        });
+        await expect(runtime.submit(platformMessage())).rejects.toBeInstanceOf(
+          RuntimeUnavailableError,
+        );
+        await Promise.resolve();
+        expect(closed).toBe(false);
+      } finally {
+        deferred.release();
+        await Promise.allSettled([submission, close]);
+      }
       const result = await submission;
       await close;
 
@@ -1776,12 +1814,14 @@ it(
     });
     await runtime.start();
     const submitting = runtime.submit(webMessage());
-    await started;
+    void submitting.catch(() => undefined);
     let closed = false;
-    const closing = runtime.close().then(() => {
-      closed = true;
-    });
+    let closing: Promise<void> | undefined;
     try {
+      await waitForTestSignal(started);
+      closing = runtime.close().then(() => {
+        closed = true;
+      });
       await vi.waitFor(() => expect(closed).toBe(true), {
         timeout: 400,
         interval: 10,
@@ -1793,6 +1833,7 @@ it(
       release();
       await Promise.allSettled([submitting, closing]);
     }
+    await Promise.all([submitting, closing]);
   },
   TEST_TIMEOUT,
 );
@@ -2119,3 +2160,67 @@ it("reuses the permanent v1 Memory formation subscription on startup", async () 
     },
   ]);
 });
+
+it(
+  "remounts native Memory repeatedly while retaining the observation provider",
+  async () => {
+    const { runtime, database } = await createRuntime({
+      memory: { enabled: true },
+    });
+    const catalog = createMessageComposition().catalog;
+    const memoryActivations = createFirstPartyModuleActivations(
+      catalog,
+      createFirstPartyModuleConfigDefaults("test").map((config) =>
+        config.definitionId === "memory.native"
+          ? { ...config, enabled: true }
+          : config,
+      ),
+    ).filter((a) => a.definitionId === "memory.native");
+    expect(memoryActivations).toHaveLength(1);
+    await runtime.start();
+    await settleDeliveries(database);
+    for (let i = 0; i < 2; i++) {
+      await runtime.replaceMemoryFeatures({
+        memory: { enabled: true },
+        activations: [],
+      });
+      await runtime.replaceMemoryFeatures({
+        memory: { enabled: true },
+        activations: memoryActivations,
+      });
+      expect(
+        runtime
+          .inspectModules()
+          .some(
+            (m) => m.definitionId === "memory.native" && m.bindings.length > 0,
+          ),
+      ).toBe(true);
+    }
+    await runtime.submit(webMessage("after Memory remount"));
+    await settleDeliveries(database);
+    const inbound = (
+      await database.information.find({
+        kinds: ["core.message.inbound.text"],
+        registrationOrder: true,
+        order: "desc",
+        limit: 1,
+      })
+    )[0]!;
+    expect(
+      (
+        await database.observations.progress({
+          consumerId: "agent.situation",
+          policyVersion: "observation.v1",
+          address: {
+            platform: "web",
+            adapterId: "web.ui.main",
+            destination: { kind: "web" },
+          },
+          kinds: ["core.message.inbound.text"],
+          resultKind: "agent.observation.completed.v1",
+        })
+      )?.throughInformationId,
+    ).toBe(inbound.informationId);
+  },
+  TEST_TIMEOUT,
+);

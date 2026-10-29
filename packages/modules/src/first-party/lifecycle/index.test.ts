@@ -1,3 +1,14 @@
+/**
+ * 功能概述：通过真实 Core、ModuleHost、Scheduler 与 PGlite 验证 Lifecycle 状态、调度和观察恢复。
+ * 主要职责：fixture 提供合成时钟、入站与手动 due；settle 等待持久队列并报告处理错误。
+ * restart 关闭原 core/runner 后重建宿主和绑定能力，保留数据库、订阅 ID、时钟与 ID 序列。
+ * 代码库关系：直接运行 createLifecycleModule，覆盖离线期间多人消息及无新入站的启动恢复。
+ * 超页回归登记 1002 个开放调度，验证重启保持原 deadline；30 秒仅覆盖该例批量设置，收敛仍用 8 秒预算。
+ * 资源取得后立即登记清理；启动拒绝或 stop 失败时仍顺序释放全部资源并汇总错误。
+ * 输入输出与副作用：每例独立数据库，8 秒/20 毫秒条件等待；结束关闭 host/core/数据库，不请求外部服务。
+ */
+import { closeTestResources } from "../test-support/cleanup.js";
+import { observationCapability } from "@kaguya/sdk";
 import { afterEach, expect, it, vi } from "vitest";
 import { createTestingDatabase } from "@kaguya/database/testing";
 import {
@@ -28,7 +39,7 @@ import {
 
 const clean: Array<() => Promise<void>> = [];
 afterEach(async () => {
-  for (const close of clean.splice(0).reverse()) await close();
+  await closeTestResources(clean);
 });
 const runtimeContext = defineInformationKind({
   kind: "core.runtime.context",
@@ -54,12 +65,43 @@ const taskCompleted = defineInformationKind({
   references: { "core:status-of": { required: true, multiple: false } },
   log: { enabled: false },
 });
-async function fixture() {
+async function fixture(
+  beforeStart?: (seed: {
+    core: InformationCore;
+    scheduler: OneShotScheduleClient;
+    inbound: (
+      direct: boolean,
+      senderId?: string,
+      wait?: boolean,
+    ) => Promise<{ informationId: string }>;
+    now: () => Date;
+  }) => Promise<void>,
+) {
   const db = await createTestingDatabase();
+  clean.push(() => db.close());
   await db.prepareSchema();
-  const catalog = defineInformationModuleCatalog(
-    createLifecycleModule({ timeZone: "Asia/Shanghai" }),
-  );
+  const failures: unknown[] = [];
+  const definition = createLifecycleModule({ timeZone: "Asia/Shanghai" });
+  const catalog = defineInformationModuleCatalog({
+    ...definition,
+    create: async (options, ctx) => {
+      const instance = await definition.create(options, ctx);
+      return {
+        ...instance,
+        subscriptions: instance.subscriptions.map((subscription) => ({
+          ...subscription,
+          handle: async (atom, context) => {
+            try {
+              await subscription.handle(atom, context);
+            } catch (error) {
+              failures.push(error);
+              throw error;
+            }
+          },
+        })),
+      };
+    },
+  });
   const registry = new InformationKindRegistry();
   for (const kind of [
     ...catalogInformationKinds(catalog),
@@ -73,13 +115,16 @@ async function fixture() {
   let n = 0;
   let time = Date.UTC(2026, 9, 22);
   const now = () => new Date(time);
-  const core = new InformationCore({
-    registry,
-    store: db.information,
-    now,
-    nextInformationId: () => `lifecycle-${String(++n).padStart(6, "0")}`,
-  });
-  const scheduler = new OneShotScheduleClient(core);
+  const makeCore = () =>
+    new InformationCore({
+      registry,
+      store: db.information,
+      now,
+      nextInformationId: () => `lifecycle-${String(++n).padStart(6, "0")}`,
+    });
+  let core = makeCore();
+  clean.push(() => core.close());
+  let scheduler = new OneShotScheduleClient(core);
   const start = async (instanceId: string) => {
     await core.register(lifecycleStartedInformationKind, {
       occurredAt: now().toISOString(),
@@ -88,36 +133,30 @@ async function fixture() {
       references: [],
     });
   };
-  const host = new ModuleHost({
-    core,
-    catalog,
-    now,
-    capabilities: [
-      { capability: oneShotScheduleCapability, value: scheduler },
-      { capability: lifecycleStartupCapability, value: { start } },
-    ],
-  });
+  const makeHost = () =>
+    new ModuleHost({
+      core,
+      catalog,
+      now,
+      capabilities: [
+        { capability: observationCapability, value: db.observations },
+        { capability: oneShotScheduleCapability, value: scheduler },
+        { capability: lifecycleStartupCapability, value: { start } },
+      ],
+    });
+  let host = makeHost();
+  clean.push(() => host.stop());
   await core.start();
-  clean.push(async () => {
-    await host.stop();
-    await core.close();
-    await db.close();
-  });
-  await host.start([
-    {
-      instanceId: "lifecycle.default",
-      definitionId: "agent.lifecycle",
-      settings: lifecycleSettingsSchema.parse({}),
-    },
-  ]);
+
   const settle = () =>
     vi.waitFor(
       async () => {
         const health = await db.information.reliable.health();
+        if (failures.length) throw failures[0];
         expect(health.pending).toBe(0);
         expect(health.exhausted).toBe(0);
       },
-      { timeout: 5000 },
+      { timeout: 8000, interval: 20 },
     );
   const all = (kind: string) =>
     db.information.find({
@@ -132,6 +171,7 @@ async function fixture() {
     (
       await db.information.find({
         kinds: ["core.schedule.one-shot.requested"],
+        payloadContains: { input: { purpose } },
         openOnly: true,
         limit: 1000,
       })
@@ -160,8 +200,8 @@ async function fixture() {
     payload: {},
     references: [],
   });
-  const inbound = async (direct: boolean) => {
-    await core.register(inboundTextInformationKind, {
+  const inbound = async (direct: boolean, senderId = "user", wait = true) => {
+    const atom = await core.register(inboundTextInformationKind, {
       occurredAt: now().toISOString(),
       source: "adapter:test",
       payload: {
@@ -170,7 +210,7 @@ async function fixture() {
           platform: "qq",
           adapterId: "qq.main",
           destination: { kind: "group", groupId: "g" },
-          senderId: "user",
+          senderId,
           selfId: "bot",
           platformMessageId: `m${n}`,
           ...(direct ? { mentions: [{ kind: "user", id: "bot" }] } : {}),
@@ -180,14 +220,44 @@ async function fixture() {
         { relation: "core:context", informationId: context.informationId },
       ],
     });
-    await settle();
+    if (wait) await settle();
+    return atom;
   };
+  await beforeStart?.({ core, scheduler, inbound, now });
+  await host.start([
+    {
+      instanceId: "lifecycle.default",
+      definitionId: "agent.lifecycle",
+      settings: lifecycleSettingsSchema.parse({}),
+    },
+  ]);
   await settle();
   return {
     db,
-    scheduler,
-    core,
-    host,
+    restart: async () => {
+      await closeTestResources([() => core.close(), () => host.stop()]);
+      core = makeCore();
+      scheduler = new OneShotScheduleClient(core);
+      await core.start();
+      host = makeHost();
+      await host.start([
+        {
+          instanceId: "lifecycle.default",
+          definitionId: "agent.lifecycle",
+          settings: lifecycleSettingsSchema.parse({}),
+        },
+      ]);
+      await settle();
+    },
+    get scheduler() {
+      return scheduler;
+    },
+    get core() {
+      return core;
+    },
+    get host() {
+      return host;
+    },
     now,
     state,
     timers,
@@ -323,3 +393,118 @@ it("consumes a persisted legacy-instance recheck and schedules its successor und
     instanceId: "lifecycle.default",
   });
 });
+
+it("recovers every sender and message in the same scene after downtime without another input", async () => {
+  const f = await fixture();
+  await f.host.stop();
+  const first = await f.inbound(false, "alice", false);
+  const second = await f.inbound(false, "bob", false);
+  const third = await f.inbound(true, "carol", false);
+  expect(
+    new Set(
+      [first, second, third].map((a) => a.payload.source.platformMessageId),
+    ).size,
+  ).toBe(3);
+  await f.restart();
+  const candidates = await f.all("agent.heartbeat.candidate");
+  expect(candidates).toHaveLength(1);
+  expect(candidates[0]!.payload.unreadCount).toBe(3);
+  expect(candidates[0]!.payload.unreadThroughInformationId).toBe(
+    third.informationId,
+  );
+  expect(candidates[0]!.payload.unreadAfterInformationId).toBeUndefined();
+  const wakes = await f.all("agent.heartbeat.observation.wake");
+  expect(
+    wakes[0]!.references
+      .filter((r) => r.relation === "core:uses-context")
+      .map((r) => r.informationId),
+  ).toEqual([first.informationId, second.informationId, third.informationId]);
+  await f.restart();
+  expect(await f.all("agent.heartbeat.candidate")).toHaveLength(1);
+});
+
+it("preserves a deferred scene behind more than one page of open owners until its deadline", async () => {
+  let targetTimer!: string;
+  let tailTimer!: string;
+  const f = await fixture(async ({ core, scheduler, inbound, now }) => {
+    const source = await inbound(false, "alice", false);
+    const dueAt = new Date(now().getTime() + 300000).toISOString();
+    targetTimer = (
+      await scheduler.schedule({
+        operationKey: "target-defer",
+        sourceInformationId: source.informationId,
+        dueAt,
+        input: {
+          purpose: "observation-recheck",
+          scopeKey: "qq:qq.main:group:g",
+        },
+        activation: {
+          definitionId: "agent.lifecycle",
+          instanceId: "lifecycle.default",
+        },
+      })
+    ).scheduleInformationId;
+    // 原选择器默认倒序只取 1000 条；较早的 targetTimer 将被这些独立场景挤出。
+    for (let i = 0; i < 1000; i++)
+      await scheduler.schedule({
+        operationKey: `other-scene:${i}`,
+        sourceInformationId: source.informationId,
+        dueAt,
+        input: { purpose: "other", scopeKey: `qq:qq.main:group:other-${i}` },
+        activation: {
+          definitionId: "agent.lifecycle",
+          instanceId: "lifecycle.default",
+        },
+      });
+    // 另一个有输入的场景放在尾页，同时验证正序和倒序都不能只读取首 1000 条。
+    const first = (await core.store.get(source.informationId))!;
+    const tail = await core.register(inboundTextInformationKind, {
+      occurredAt: now().toISOString(),
+      source: "adapter:test",
+      payload: {
+        text: "tail scene input",
+        source: {
+          platform: "qq",
+          adapterId: "qq.main",
+          destination: { kind: "group", groupId: "tail" },
+          senderId: "bob",
+          selfId: "bot",
+          platformMessageId: "tail-input",
+        },
+      },
+      references: [...first.references],
+    });
+    tailTimer = (
+      await scheduler.schedule({
+        operationKey: "tail-defer",
+        sourceInformationId: tail.informationId,
+        dueAt,
+        input: {
+          purpose: "observation-recheck",
+          scopeKey: "qq:qq.main:group:tail",
+        },
+        activation: {
+          definitionId: "agent.lifecycle",
+          instanceId: "lifecycle.default",
+        },
+      })
+    ).scheduleInformationId;
+  });
+  expect(await f.all("agent.heartbeat.candidate")).toHaveLength(0);
+  await f.restart();
+  expect(await f.all("agent.heartbeat.candidate")).toHaveLength(0);
+  for (const timerId of [targetTimer, tailTimer])
+    expect((await f.db.information.get(timerId))?.payload.dueAt).toBe(
+      new Date(Date.UTC(2026, 9, 22) + 300000).toISOString(),
+    );
+  // 到期交付只恢复原输入；整个场景没有后续入站。
+  await f.fire("observation-recheck", 300000);
+  expect(await f.all("agent.heartbeat.candidate")).toHaveLength(1);
+  await f.fire("observation-recheck", 300000);
+  const candidates = await f.all("agent.heartbeat.candidate");
+  expect(candidates).toHaveLength(2);
+  expect(new Set(candidates.map((c) => c.payload.scopeKey))).toEqual(
+    new Set(["qq:qq.main:group:g", "qq:qq.main:group:tail"]),
+  );
+  expect(await f.all(inboundTextInformationKind.kind)).toHaveLength(2);
+}, 30000);

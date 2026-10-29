@@ -1,4 +1,25 @@
-/** Lifecycle is the sole public activation for pulse, activity, sleep and observation. */
+/**
+ * 功能概述：统一 Lifecycle 的节拍、活动、睡眠和观察恢复，保留旧持久订阅身份。
+ * 主要职责：createLifecycleModule 组合观察及睡眠实例；update 记录活动并管理定时器。
+ * lifecycleSettingsSchema 约束时间预算；defer 处理登记持久复查，启动和到期调用 recoverObservations。
+ * 代码库关系：Runtime 装配本模块，Scheduler 提供 one-shot，数据库 observationCapability 保存独立快照与进度。
+ * 输入输出与副作用：追加 Kind 与调度事实，不调用模型或平台；延期不确认读取，宿主负责重试与关闭。
+ */
+import {
+  recoverySourcesSelector,
+  recoverObservations,
+} from "./observation-recovery.js";
+import { observationCapability, defineInformationSelector } from "@kaguya/sdk";
+import {
+  observationCompleted,
+  observationProgress,
+  situationObservationContract,
+} from "../observation.js";
+import {
+  attentionArousalCompletedInformationKind,
+  turnCandidateInformationKind,
+  observationWakeInformationKind,
+} from "../information-kinds.js";
 import { z, lifecycleSnapshotSchema } from "@kaguya/schema";
 import {
   defineInformationModule,
@@ -37,6 +58,26 @@ import {
 } from "./pulse.js";
 import { scopeOf, isImmediateObservation } from "./observation-state.js";
 
+const deferredCandidateSelector = defineInformationSelector({
+  selectorId: "agent.lifecycle.deferred-candidate",
+  select: async ({ sourceAtom, ledger }) =>
+    (
+      await ledger.find({
+        informationIds: [String(sourceAtom.payload.candidateInformationId)],
+        limit: 1,
+      })
+    ).map((a) => a.informationId),
+});
+const recoveryScheduleSelector = defineInformationSelector({
+  selectorId: "agent.lifecycle.recovery-schedule",
+  select: async ({ sourceAtom, ledger }) =>
+    (
+      await ledger.find({
+        informationIds: [String(sourceAtom.payload.scheduleInformationId)],
+        limit: 1,
+      })
+    ).map((a) => a.informationId),
+});
 export const lifecycleSettingsSchema = z
   .object({
     pulse: z
@@ -158,18 +199,26 @@ export function createLifecycleModule(options: { timeZone: string }) {
         ],
       },
       consumes: unique([
+        attentionArousalCompletedInformationKind,
         ...sleep.manifest.consumes,
         ...observation.manifest.consumes,
         lifecycleStartedInformationKind,
         attentionArousalStateRecordedInformationKind,
       ]),
       produces: unique([
+        observationCompleted,
+        observationProgress,
+        turnCandidateInformationKind,
+        observationWakeInformationKind,
         ...sleep.manifest.produces,
         ...observation.manifest.produces,
         lifecycleStateInformationKind,
         lifecycleStartedInformationKind,
       ]),
       selectors: unique([
+        recoverySourcesSelector,
+        deferredCandidateSelector,
+        recoveryScheduleSelector,
         ...sleep.manifest.selectors!,
         ...observation.manifest.selectors!,
         lifecycleStateSelector,
@@ -385,14 +434,77 @@ export function createLifecycleModule(options: { timeZone: string }) {
             }) satisfies InformationModuleSubscription,
         );
       const subscriptions: InformationModuleSubscription[] = [
+        onInformation(
+          attentionArousalCompletedInformationKind,
+          {
+            subscriptionId: "lifecycle.observation-defer",
+            delivery: "durable",
+          },
+          async (atom, ctx) => {
+            if (atom.payload.outcome !== "defer") return;
+            const candidate = (await ctx.select(deferredCandidateSelector))[0];
+            if (!candidate) throw new Error("Deferred candidate missing");
+            const p = candidate.payload as any;
+            const dueAt = new Date(
+              ctx.now().getTime() + config.settings.sleep.periodicWakeEveryMs,
+            ).toISOString();
+            const scheduled = await scheduler.schedule({
+              operationKey: `observation-defer:${atom.informationId}`,
+              sourceInformationId: atom.informationId,
+              dueAt,
+              input: { purpose: "observation-recheck", scopeKey: p.scopeKey },
+              activation: config.activation,
+            });
+            const access = ctx.use(observationCapability);
+            const contract = situationObservationContract({
+              platform: p.platform,
+              adapterId: p.adapterId,
+              destination: p.destination,
+            });
+            for (const page of await access.pending(contract))
+              await access.defer(
+                page.observationId,
+                dueAt,
+                scheduled.scheduleInformationId,
+              );
+          },
+        ),
+        onInformation(
+          oneShotDueInformationKind,
+          {
+            subscriptionId: "lifecycle.observation-recheck",
+            delivery: "durable",
+          },
+          async (atom, ctx) => {
+            const schedule = (await ctx.select(recoveryScheduleSelector))[0];
+            if (
+              (schedule?.payload.input as any)?.purpose !==
+              "observation-recheck"
+            )
+              return;
+            await scheduler.finish({
+              scheduleInformationId: String(atom.payload.scheduleInformationId),
+              status: "fired",
+            });
+            await recoverObservations(
+              ctx,
+              config.settings.observation.totalWaitBudget,
+            );
+          },
+        ),
         ...inherited(sleeping, "attention-arousal.default"),
         ...inherited(observing, "heartbeat.default"),
         onInformation(
           lifecycleStartedInformationKind,
           { subscriptionId: "lifecycle.start", delivery: "durable" },
           async (atom, ctx) => {
-            if (atom.payload.instanceId === ctx.instanceId)
+            if (atom.payload.instanceId === ctx.instanceId) {
               await update(atom, ctx);
+              await recoverObservations(
+                ctx,
+                config.settings.observation.totalWaitBudget,
+              );
+            }
           },
         ),
         onInformation(
