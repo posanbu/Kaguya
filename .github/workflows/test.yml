@@ -67,6 +67,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Test CI timing calculations
+        run: node --test scripts/ci-timing-report-checks.mjs
+
       - name: Lint
         run: pnpm lint
 
@@ -130,6 +133,15 @@ jobs:
       - name: Require complete critical test results
         run: node scripts/check-critical-test-report.mjs critical-results.json
 
+      - name: Preserve test timings even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: critical-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          path: critical-results.json
+          retention-days: 90
+          if-no-files-found: warn
+
   pr-contracts-result:
     # 保留原检查名称，供已有分支保护规则继续使用。
     name: PR contracts and startup
@@ -179,6 +191,15 @@ jobs:
       - name: Require complete routing test results
         run: node scripts/check-critical-test-report.mjs routing-results.json
 
+      - name: Preserve test timings even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: routing-attempt-${{ github.run_attempt }}
+          path: routing-results.json
+          retention-days: 90
+          if-no-files-found: warn
+
   test:
     name: test (${{ matrix.os }}, shard ${{ matrix.shard }}/2)
     if: github.event_name != 'pull_request'
@@ -213,7 +234,16 @@ jobs:
         run: pnpm build
 
       - name: Run tests
-        run: pnpm test --shard=${{ matrix.shard }}/2
+        run: pnpm test --shard=${{ matrix.shard }}/2 --reporter=default --reporter=json --outputFile=full-results.json
+
+      - name: Preserve full test timings even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-${{ matrix.os }}-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          path: full-results.json
+          retention-days: 90
+          if-no-files-found: warn
 
   postgres:
     name: PostgreSQL integration
