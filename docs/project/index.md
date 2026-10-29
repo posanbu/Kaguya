@@ -11,7 +11,7 @@ description: Kaguya 当前已实现能力、明确边界和后续演进方向。
 
 项目以“持续感知、自然互动”为统一故事：相关 Information 到达可以唤醒 Agent，但 tick 不自动等于 turn；模块的订阅单位也不自动等于完整语义输入。完整约束见[持续 Agent 设计原则](../developers/continuous-agent)。
 
-**已经对齐** — InformationAtom 已作为不可变证据保存；Heartbeat candidate 只携带通知与水位；Arousal 将被唤醒与完成观察分开；Router 在 `observe` 后冻结多条输入；Light 明确支持 `message | wait | silent`；Expression 使用多来源批次学习。
+**已经对齐** — InformationAtom 保存不可变证据。`agent.lifecycle` 统一节拍、活动、睡眠唤醒和观察调度，保留的 candidate 只携带通知与水位。Router 在 `observe` 后冻结多条输入，Light 支持 `message | wait | silent`。`memory.native` 统一维护人物、会话、自身、经历和表达记忆，并独立推进形成批次。
 
 **部分对齐** — 当前 `agent.router.turn.*` 同时承载调度、观察和决策生命周期，名称仍容易被理解成逐消息问答；Router 的多输入 turn context 接近 observation，但协议尚未采用这套领域术语。输入与输出按各自节奏推进目前是设计哲学，不是统一并发协议。
 
@@ -80,9 +80,17 @@ InformationLedger 已改为异步端口；PostgreSQL 17 实现追加式存储、
 
 ## 后续方向
 
-### 下一次 PR：启动恢复与回复时效性（规划中）
+### 通用媒体与可切换识图（规划中）
 
-启动恢复未完成任务时，旧回复可能在话题结束后继续发送。下一次 PR 将在恢复处理和实际发送前核对回复是否仍然适用。本项尚未实现。
+[Issue #272](https://github.com/posanbu/Kaguya/issues/272) 和[设计文档](../developers/media-understanding)记录已确认方向，尚未实现。图片、静态表情和动图将共用媒体证据、情境、模型请求与投递链。旧表情模块作为废稿，不作为新方案的实现或兼容基线。
+
+识图采用 `off / native / external` 三档。原生模式仅 Heavy 看图，外挂模式在 Heavy 启动后按需调用。Heavy 在同一次主回复请求中决定文字、纯表情或图文混排，不增加专属表情选择步骤。
+
+Light 继续依据文字和媒体元信息判断参与，可能错过仅存在于图片中的回复意图。本次文档变更不修改运行代码、配置、数据库或模型调用行为。
+
+### 启动恢复与回复时效性（规划中）
+
+启动恢复未完成任务时，旧回复可能在话题结束后继续发送。后续实现需要在恢复处理和实际发送前核对回复是否仍然适用。本项尚未实现，由 [#249](https://github.com/posanbu/Kaguya/issues/249) 跟踪。[#247](https://github.com/posanbu/Kaguya/issues/247) 的观察进度与恢复不能代替回复时效验收。
 
 **判断依据** — 保留原始消息、生成结果和计划发送时间，不因重启重置回复年龄。结合经过时间、后续消息、话题变化、明确撤回及已完成的交流判断是否继续。闲聊接话与仍未解决的明确请求应分别处理，不对全部回复使用同一过期规则。具体时间阈值和重新判断方式在该 PR 中确定。
 
