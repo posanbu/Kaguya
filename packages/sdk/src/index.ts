@@ -8,6 +8,7 @@
  * 代码库关系：engine 的 `ModuleHost`、内建 modules 与 Runtime 都通过本入口共享同一
  * definition 对象；事件定义、工作流节点和旧事件模块 SDK 已被移除而不提供兼容包装。
  * 输入输出与副作用：本文件只组织静态导出，无运行时 I/O 或注册副作用。
+ * observation.ts 导出稳定观察 capability、完整清单与独立进度类型，模块经此端口持久冻结和确认来源。
  */
 export {
   defineInformationKind,
@@ -32,3 +33,5 @@ export {
 } from "./information-selector.js";
 export * from "./modules.js";
 export * from "./module-plugin.js";
+
+export * from "./observation.js";

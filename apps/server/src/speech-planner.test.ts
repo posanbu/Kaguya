@@ -17,26 +17,7 @@
  * Light v2 的每轮 schema 在模型修复阶段拒绝超预算 wait 与焦点越界；保留单次结构修复和单一回合终态。
  * 同时保留直接信号、Light 独立等待预算和并发入站去重回归。
  * 所有消息和密钥均为合成测试数据；清理按 Runtime、数据库顺序关闭，不访问外部服务。
- */
-/**
- * 补充 QQ 插件在真实 Runtime 中的收藏、发送回执、语境门控和重启限频验证。
- * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
- * 兼容 #136 的 agent.light.decide 与 message/wait/silent 契约，仅增强已合并的单一 Light 链。
- * 测试显式批准合成 QQ 目标，Runtime 未注入策略时默认拒绝非 Web 出站。
- * 功能概述：通过真实 Runtime/PGlite 与 DeepSeek-compatible HTTP mock 验证先观察、后规划的发言链。
- * fixture 装配正式 Catalog、light Light 和 heavy Heavy；settle 等待 durable 订阅闭合，
- * restart 保留数据库并重建宿主，advance 推进持久 heartbeat 时钟。仅 mock provider HTTP，
- * waitForPersistence 将本 fixture 的启动、打断、重建、重放及 settle 等待统一到已有的 8 秒
- * 持久化预算，条件满足即继续；不改变注入时钟、业务静默窗、等待次数或精确行为断言。
- * 多次取消、重建与重启场景另设 30 秒总预算；QQ 四至五轮 45 秒、八轮加重启 60 秒。
- * macOS 四轮实测约 26 秒，Windows 八轮约 29 秒，顺序 I/O 不能套用单轮的 15 秒总上限；
- * 每次状态等待仍受 8 秒预算约束，不增加业务 deadline 或允许的重试次数。
- * 尚未提交决策的 Light 可由新输入打断；静默窗后合并旧、新输入重构，已提交决策仍保持唯一终态。
- * 覆盖 message/wait/silent 与 target union 的 JSON mode 本地校验、一次结构修复、耗尽后失败关闭、
- * 累计 usage 和单 requested/terminal/decision；重试复用冻结 Prompt，重放与新输入取消均不重复落地。
- * Light v2 的每轮 schema 在模型修复阶段拒绝超预算 wait 与焦点越界；保留单次结构修复和单一回合终态。
- * 同时保留直接信号、Light 独立等待预算和并发入站去重回归。
- * 所有消息和密钥均为合成测试数据；清理按 Runtime、数据库顺序关闭，不访问外部服务。
+ * 观察延期测试保留数据库重建 Runtime，在无新入站时触发到期复查，并核对原 manifest 及最终成功状态。
  */
 import { readSituation } from "./inspection-situation.js";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
@@ -978,6 +959,85 @@ describe("Router Light via DeepSeek-compatible provider", () => {
       expect(prompt).toContain(ok ? "已发送" : "发送失败");
       if (!ok) expect(prompt).toContain("未被确认收到");
     },
+  );
+
+  it(
+    "rechecks a deferred frozen observation after restart without a new message",
+    async () => {
+      const f = await fixture([silent]);
+      await f.core().register(attentionArousalStateRecordedInformationKind, {
+        occurredAt: "2026-09-12T12:00:00.000Z",
+        source: "module:test",
+        payload: {
+          state: "asleep",
+          cause: "external",
+          lastEvaluatedAt: "2026-09-12T12:00:00.000Z",
+          lastInboundInformationId: null,
+          lastActivityAt: "2026-09-12T12:00:00.000Z",
+          sleepStartedAt: "2026-09-12T12:00:00.000Z",
+          lastPeriodicWakeAt: null,
+          reasonCodes: ["test-asleep"],
+          policyVersion: "attention-observation.v1",
+        },
+        references: [],
+      });
+      await f.submit(
+        f.message("deferred", {
+          target: { kind: "group", groupId: "group" },
+          text: "明天的安排",
+        }),
+      );
+      await f.settle();
+      const before = await f.atoms();
+      expect(f.requests).toHaveLength(0);
+      expect(
+        before.filter((a) => a.kind === "agent.observation.completed.v1"),
+      ).toHaveLength(0);
+      const timer = before.find(
+        (a) =>
+          a.kind === "core.schedule.one-shot.requested" &&
+          (a.payload.input as any)?.purpose === "observation-recheck",
+      );
+      expect(timer).toBeDefined();
+      const pending = await f.database.observations.pending({
+        consumerId: "agent.situation",
+        policyVersion: "observation.v1",
+        address: {
+          platform: "qq",
+          adapterId: "test",
+          destination: { kind: "group", groupId: "group" },
+        },
+        kinds: ["core.message.inbound.text"],
+        resultKind: "agent.observation.completed.v1",
+      });
+      expect(pending).toHaveLength(1);
+      const frozen = pending[0]!.manifest;
+      await f.restart();
+      await f.settle();
+      expect(f.requests).toHaveLength(0);
+      f.setTime(300001);
+      await f.restart();
+      await waitForPersistence(async () =>
+        expect(
+          (await f.atoms()).some(
+            (a) => a.kind === "agent.observation.completed.v1",
+          ),
+        ).toBe(true),
+      );
+      await f.settle();
+      const after = await f.atoms();
+      expect(
+        after.filter((a) => a.kind === "core.message.inbound.text"),
+      ).toHaveLength(1);
+      expect(
+        (await f.database.observations.read(pending[0]!.observationId))
+          ?.manifest,
+      ).toEqual(frozen);
+      expect(
+        (await f.database.observations.read(pending[0]!.observationId))?.status,
+      ).toBe("completed");
+    },
+    MULTI_STAGE_TIMEOUT,
   );
 
   it(

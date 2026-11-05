@@ -2,9 +2,14 @@
  * 功能概述：用真实账本、ModuleHost 和 one-shot port 验证观察创建、即时唤醒和水位恢复。
  * 主要职责：fixture 注入时钟，fire 交付持久 due；断言 candidate 数与冻结来源，不调用真实模型或平台。
  * 代码库关系：直接运行 heartbeatModule 与数据库开放槽；补足单元替身无法验证的 Selector/事务边界。
+ * 资源取得后立即登记清理；启动拒绝或 stop 失败时仍顺序释放全部资源并汇总错误。
  * 输入输出与副作用：每例隔离 PGlite，关闭宿主与 Core；重放 handler 和同时间戳输入验证幂等性。
+ * 持久队列等待统一使用 8 秒/20 毫秒有界轮询；fixture 注入 observationCapability 验证真实独立进度。
  */
+import { closeTestResources } from "../test-support/cleanup.js";
+import { observationCapability } from "@kaguya/sdk";
 import { afterEach, expect, it, vi } from "vitest";
+import { KaguyaDatabase } from "@kaguya/database";
 import { createTestingDatabase } from "@kaguya/database/testing";
 import {
   InformationCore,
@@ -38,7 +43,7 @@ import { focusOpened } from "../router/focus-facts.js";
 
 const clean: Array<() => Promise<void>> = [];
 afterEach(async () => {
-  for (const close of clean.splice(0).reverse()) await close();
+  await closeTestResources(clean);
 });
 const runtimeContext = defineInformationKind({
   kind: "core.runtime.context",
@@ -53,6 +58,7 @@ async function fixture(
   arousalSettings: Record<string, unknown> = {},
 ) {
   const db = await createTestingDatabase();
+  clean.push(() => db.close());
   await db.prepareSchema();
   const registry = new InformationKindRegistry();
   const catalog = withArousal
@@ -81,10 +87,12 @@ async function fixture(
     now,
     nextInformationId: () => `observation-${String(++n).padStart(6, "0")}`,
   });
+  clean.push(() => core.close());
   const host = new ModuleHost({
     core,
     catalog,
     capabilities: [
+      { capability: observationCapability, value: db.observations },
       {
         capability: oneShotScheduleCapability,
         value: new OneShotScheduleClient(core),
@@ -92,6 +100,7 @@ async function fixture(
     ],
     now,
   });
+  clean.push(() => host.stop());
   await core.start();
   await host.start([
     {
@@ -112,11 +121,7 @@ async function fixture(
         ]
       : []),
   ]);
-  clean.push(async () => {
-    await host.stop();
-    await core.close();
-    await db.close();
-  });
+
   const context = await core.register(runtimeContext, {
     occurredAt: now().toISOString(),
     source: "core:test",
@@ -124,11 +129,14 @@ async function fixture(
     references: [],
   });
   const settle = () =>
-    vi.waitFor(async () => {
-      const h = await db.information.reliable.health();
-      expect(h.pending).toBe(0);
-      expect(h.exhausted).toBe(0);
-    });
+    vi.waitFor(
+      async () => {
+        const h = await db.information.reliable.health();
+        expect(h.pending).toBe(0);
+        expect(h.exhausted).toBe(0);
+      },
+      { timeout: 8000, interval: 20 },
+    );
   const source = {
     platform: "qq",
     adapterId: "qq.main",
@@ -459,15 +467,20 @@ it("marks a direct notification as an immediate wake for the open scope", async 
 it("defaults Arousal to awake and observes the first passive opportunity", async () => {
   const f = await fixture(true);
   await f.inbound();
-  await vi.waitFor(async () => {
-    const decisions = await f.atoms("agent.attention.arousal.completed");
-    expect(decisions.map((atom) => atom.payload.outcome)).toEqual(["observe"]);
-    expect(decisions[0]!.payload).toMatchObject({
-      arousalState: "awake",
-      wakeSignal: false,
-      reasonCodes: ["arousal-awake"],
-    });
-  });
+  await vi.waitFor(
+    async () => {
+      const decisions = await f.atoms("agent.attention.arousal.completed");
+      expect(decisions.map((atom) => atom.payload.outcome)).toEqual([
+        "observe",
+      ]);
+      expect(decisions[0]!.payload).toMatchObject({
+        arousalState: "awake",
+        wakeSignal: false,
+        reasonCodes: ["arousal-awake"],
+      });
+    },
+    { timeout: 8000, interval: 20 },
+  );
   expect(await f.atoms("agent.heartbeat.scheduled")).toHaveLength(0);
   expect(await f.atoms("agent.attention.arousal.state.recorded")).toHaveLength(
     1,
@@ -482,41 +495,50 @@ it("defers during night sleep and lets the periodic deadline recheck accumulated
   });
   await f.setArousalState("asleep");
   await f.inbound();
-  await vi.waitFor(async () => {
-    const decisions = await f.atoms("agent.attention.arousal.completed");
-    expect(decisions.map((atom) => atom.payload.outcome)).toEqual(["defer"]);
-    expect(decisions[0]!.payload).toMatchObject({
-      arousalState: "asleep",
-      wakeSignal: false,
-      reasonCodes: ["arousal-asleep"],
-    });
-  });
+  await vi.waitFor(
+    async () => {
+      const decisions = await f.atoms("agent.attention.arousal.completed");
+      expect(decisions.map((atom) => atom.payload.outcome)).toEqual(["defer"]);
+      expect(decisions[0]!.payload).toMatchObject({
+        arousalState: "asleep",
+        wakeSignal: false,
+        reasonCodes: ["arousal-asleep"],
+      });
+    },
+    { timeout: 8000, interval: 20 },
+  );
   const schedules = await f.atoms("agent.heartbeat.scheduled");
   expect(schedules).toHaveLength(0);
   await f.inbound();
-  await vi.waitFor(async () => {
-    const decisions = await f.atoms("agent.attention.arousal.completed");
-    expect(decisions.map((atom) => atom.payload.outcome)).toEqual([
-      "defer",
-      "defer",
-    ]);
-    expect(decisions[1]!.payload.unreadCount).toBe(2);
-  });
+  await vi.waitFor(
+    async () => {
+      const decisions = await f.atoms("agent.attention.arousal.completed");
+      expect(decisions.map((atom) => atom.payload.outcome)).toEqual([
+        "defer",
+        "defer",
+      ]);
+      expect(decisions[1]!.payload.unreadCount).toBe(2);
+    },
+    { timeout: 8000, interval: 20 },
+  );
   await f.fire(attentionArousalModule.manifest.definitionId, "periodic-wake");
-  await vi.waitFor(async () => {
-    const decisions = await f.atoms("agent.attention.arousal.completed");
-    expect(decisions.map((atom) => atom.payload.outcome)).toEqual([
-      "defer",
-      "defer",
-      "observe",
-    ]);
-    expect(decisions[2]!.payload.signals).toContain("recheck");
-    expect(decisions[2]!.payload.unreadCount).toBe(2);
-    expect(decisions[2]!.payload).toMatchObject({
-      arousalState: "awake",
-      wakeSignal: true,
-    });
-  });
+  await vi.waitFor(
+    async () => {
+      const decisions = await f.atoms("agent.attention.arousal.completed");
+      expect(decisions.map((atom) => atom.payload.outcome)).toEqual([
+        "defer",
+        "defer",
+        "observe",
+      ]);
+      expect(decisions[2]!.payload.signals).toContain("recheck");
+      expect(decisions[2]!.payload.unreadCount).toBe(2);
+      expect(decisions[2]!.payload).toMatchObject({
+        arousalState: "awake",
+        wakeSignal: true,
+      });
+    },
+    { timeout: 8000, interval: 20 },
+  );
 });
 it("recognizes private, replies and broadcast mentions without treating ordinary group messages as urgent", () => {
   expect(isImmediateObservation({ destination: { kind: "private" } })).toBe(
@@ -567,4 +589,43 @@ it("reads Focus metadata from the frozen candidate while asleep", async () => {
     focusState: "active",
     reasonCodes: ["focus-active"],
   });
+});
+
+it("closes the core and database even when startup and host cleanup reject", async () => {
+  const startError = new Error("synthetic startup failure");
+  const stopError = new Error("synthetic host cleanup failure");
+  const coreError = new Error("synthetic core cleanup failure");
+  const realStop = ModuleHost.prototype.stop;
+  const realCoreClose = InformationCore.prototype.close;
+  const start = vi
+    .spyOn(ModuleHost.prototype, "start")
+    .mockRejectedValue(startError);
+  const stop = vi
+    .spyOn(ModuleHost.prototype, "stop")
+    .mockImplementation(async function (this: ModuleHost) {
+      await realStop.call(this);
+      throw stopError;
+    });
+  const coreClose = vi
+    .spyOn(InformationCore.prototype, "close")
+    .mockImplementation(async function (this: InformationCore) {
+      await realCoreClose.call(this);
+      throw coreError;
+    });
+  const databaseClose = vi.spyOn(KaguyaDatabase.prototype, "close");
+  try {
+    await expect(fixture()).rejects.toBe(startError);
+    await expect(closeTestResources(clean)).rejects.toMatchObject({
+      errors: [stopError, coreError],
+    });
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(coreClose).toHaveBeenCalledTimes(1);
+    expect(databaseClose).toHaveBeenCalledTimes(1);
+    expect(clean).toHaveLength(0);
+  } finally {
+    start.mockRestore();
+    stop.mockRestore();
+    coreClose.mockRestore();
+    databaseClose.mockRestore();
+  }
 });

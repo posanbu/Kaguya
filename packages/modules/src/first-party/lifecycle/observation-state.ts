@@ -4,7 +4,10 @@
  * 未携带会话 ID 的旧 Web 消息保持原范围键；openObservations 按终态过滤开放候选。
  * 三个 Selector 分别恢复 scope schedule、due 来源和观察水位；immediateInState 仅认可成功投递的引用目标。
  * 查询有界且不写账本，保持原有导出对象身份与 Scheduler/Router 外部契约。
+ * 新消费者优先读取匹配 scene 的连续进度事实；旧 turn 水位仅用于尚无新进度事实的兼容查询。
  */
+import { observationProgress } from "../observation.js";
+import { sceneIdentity, type SceneAddress } from "@kaguya/schema";
 import type { DeepReadonly, InformationAtom } from "@kaguya/schema";
 import { speechObservedInformationKind } from "../heavy/speech.js";
 import {
@@ -35,7 +38,23 @@ import {
 async function latestObservedContext(
   ledger: InformationSelectorLedger,
   scopeKey: string,
+  address?: SceneAddress,
 ) {
+  const progress = await ledger.find({
+    kinds: [observationProgress.kind],
+    scopeKey,
+    payloadContains: {
+      consumerId: "agent.situation",
+      ...(address ? { sceneId: sceneIdentity(address) } : {}),
+    },
+    registrationOrder: true,
+    order: "desc",
+    limit: 1000,
+  });
+  if (progress.length)
+    return [...progress].sort(
+      (a, b) => Number(b.payload.revision) - Number(a.payload.revision),
+    )[0];
   let throughInformationId: string | undefined;
   for (;;) {
     const turns = await ledger.find({
@@ -269,7 +288,11 @@ export const heartbeatDeferredObservationSelector = defineInformationSelector({
       )[0];
       if (!runtimeContext) continue;
       const candidatePayload = candidate.payload as any;
-      const observed = await latestObservedContext(ledger, scopeKey);
+      const observed = await latestObservedContext(ledger, scopeKey, {
+        platform: candidatePayload.platform,
+        adapterId: candidatePayload.adapterId,
+        destination: candidatePayload.destination,
+      });
       const watermark = observed?.payload.observedThroughInformationId as
         string | undefined;
       const inbounds = await ledger.find({
@@ -367,7 +390,20 @@ export const heartbeatObservationSelector = defineInformationSelector({
       limit: 1,
     });
     const candidate = latest[0];
-    const observed = await latestObservedContext(ledger, scopeKey);
+    const target =
+      source ??
+      (candidate
+        ? {
+            platform: candidate.payload.platform,
+            adapterId: candidate.payload.adapterId,
+            destination: candidate.payload.destination,
+          }
+        : undefined);
+    const observed = await latestObservedContext(
+      ledger,
+      scopeKey,
+      target as SceneAddress | undefined,
+    );
     const observedContexts = observed ? [observed] : [];
     const selected = new Map(
       [...open, ...latest, ...observedContexts].map((a) => [
@@ -405,15 +441,6 @@ export const heartbeatObservationSelector = defineInformationSelector({
         limit: 10,
       }))
         selected.set(a.informationId, a);
-    const target =
-      source ??
-      (candidate
-        ? {
-            platform: candidate.payload.platform,
-            adapterId: candidate.payload.adapterId,
-            destination: candidate.payload.destination,
-          }
-        : undefined);
     if (target) {
       const observed = observedContexts[0];
       const watermark = observed?.payload.observedThroughInformationId as

@@ -56,6 +56,8 @@ description: Kaguya 当前已实现能力、明确边界和后续演进方向。
 
 **持久订阅与历史回填** — 已启用的 durable subscription 有持久队列，进程重启后可继续领取未完成交付。后来新注册的订阅不会自动回填注册前的全部原子；独立消费者的历史扫描与待处理范围仍需由模块明确建立。
 
+**持续观察端口** — Runtime 提供 `agent:observation` v1，默认 Lifecycle 与 Situation/Router 已接入场景映射、有界冻结、独立进度、defer 到期和启动恢复。清单保存实际读取的 frame、Memory revision 与稳定 run 引用；后台发布仍由 native Memory 自己确认。实现及迁移见[情境与观察](../developers/continuous/observation)。
+
 **可靠任务与外部副作用** — 持久任务已有租约、失败重试和重试耗尽记录，唯一提交槽约束重复结果。它们不等于任意平台、工具或设备的副作用恰好发生一次；请求已发出但回执丢失时的核对、取消和补偿属于后续行动契约。
 
 **模块热更新与沙箱** — 模块是受信任的同进程代码。

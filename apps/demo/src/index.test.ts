@@ -1,20 +1,6 @@
 /**
  * 固定相同时间戳并让第二轮 UUID 字典序更小，验证旧终态不会反复替代新候选；仍保留真实 UUID 重复运行用例。
- * Demo 与 Server 共用 Composition；确定性图计数包含每轮一次的结构化会话背景。
- * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
- * 功能概述：验证 demo 以 PostgreSQL information ledger 运行确定性入站 DAG，
- * 输出根 `informationId` 和每个衍生 kind 的计数，不再使用 SQLite path 或 dispatch。
- * 主要职责：覆盖 selected Profile runtime 读取与旧数据库环境变量忽略，并用真实内存 PGlite
- * 运行 Web 消息的 context、inbound、Light、message intent、Heavy Model Task、assistant 与 delivery 链。
- * 代码库关系：直接调用 `index.ts` 导出的 `readDemoDatabaseUrl`/`runDemo`；
- * 测试数据库来自 `@kaguya/database/testing`，实际 CLI 则由同一 URL 连接方式启动。
- * 输入输出与副作用：用例收集内存输出行并显式关闭 PGlite；
- * 单次展示用例注入可预测 ID，重复运行用例验证生产 UUID 在同一持久账本不冲突；
- * 不调用外部平台或模型。
- */
-/**
- * 固定相同时间戳并让第二轮 UUID 字典序更小，验证旧终态不会反复替代新候选；仍保留真实 UUID 重复运行用例。
- * Demo 与 Server 共用 Composition；确定性图计数包含每轮一次的结构化会话背景。
+ * Demo 与 Server 共用 Composition；确定性图计数包含结构化会话背景、观察完成及发现/成功进度。
  * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * 功能概述：验证 demo 以 PostgreSQL information ledger 运行确定性入站 DAG，
  * 输出根 `informationId` 和每个衍生 kind 的计数，不再使用 SQLite path 或 dispatch。
@@ -106,6 +92,8 @@ describe("demo entry point", () => {
       "agent.attention.arousal.state.recorded: 2",
       "agent.heartbeat.candidate: 1",
       "agent.light.decision.completed: 1",
+      "agent.observation.completed.v1: 1",
+      "agent.observation.progress.v1: 2",
       "agent.router.conversation.context.frozen: 1",
       "agent.router.memory.context.frozen: 1",
       "agent.router.message.intent.requested: 1",
