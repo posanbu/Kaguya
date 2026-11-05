@@ -32,7 +32,6 @@ import {
 
 const serverRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = resolve(serverRoot, "../..");
-const pnpmExecutable = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 export const POSTGRES_TEST_FILES = [
   "packages/database/src/observation-store.test.ts",
   "packages/runtime/src/observation-runtime.test.ts",
@@ -98,9 +97,9 @@ export async function runPostgresCli(
         `Database preparation unavailable [${error.name}]: ${error.message}; Server will inspect configuration and start in degraded mode when possible.\n请先启动 Docker Desktop（macOS: open -a Docker），等待 docker info 成功后，在仓库根目录重新运行 pnpm dev。\n`,
       );
     }
-    return spawnInteractive(
-      pnpmExecutable,
-      ["exec", "tsx", "src/server.ts"],
+    return runNodeCli(
+      fileURLToPath(import.meta.resolve("tsx/cli")),
+      ["src/server.ts"],
       serverRoot,
       { ...process.env, NODE_ENV: "development" },
     );
@@ -121,9 +120,11 @@ export async function runPostgresCli(
       await checkManagedPostgresDatabase(databaseUrl, { prepareSchema: false });
     }
     await assertPostgresTestManifestComplete(repositoryRoot);
-    return spawnInteractive(
-      pnpmExecutable,
-      ["exec", "vitest", "run", ...POSTGRES_TEST_FILES],
+    return runNodeCli(
+      fileURLToPath(
+        new URL("./vitest.mjs", import.meta.resolve("vitest/package.json")),
+      ),
+      ["run", ...POSTGRES_TEST_FILES],
       repositoryRoot,
       {
         ...process.env,
@@ -189,18 +190,27 @@ export function parsePostgresPort(args: readonly string[]): number | undefined {
   return port;
 }
 
-function spawnInteractive(
-  command: string,
+// Run the installed JavaScript entrypoint with Node, without Windows .cmd shims or a shell.
+export function runNodeCli(
+  entrypoint: string,
   args: readonly string[],
   cwd: string,
   environment: NodeJS.ProcessEnv,
 ): Promise<number> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, [...args], {
-      cwd,
-      env: environment,
-      stdio: "inherit",
-    });
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(process.execPath, [entrypoint, ...args], {
+        cwd,
+        env: environment,
+        stdio: "inherit",
+      });
+    } catch {
+      reject(
+        new PostgresDevelopmentError("Child process could not be started"),
+      );
+      return;
+    }
     const forwardSignal = (signal: NodeJS.Signals) => child.kill(signal);
     const interrupt = () => forwardSignal("SIGINT");
     const terminate = () => forwardSignal("SIGTERM");

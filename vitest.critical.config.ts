@@ -40,6 +40,7 @@ const criticalTests = [
   "apps/server/src/configuration-application.test.ts",
   "apps/server/src/feature-management.test.ts",
   "apps/server/src/server-composition.test.ts",
+  "apps/server/src/postgres-cli.test.ts",
   "apps/server/src/gateway-auth.test.ts",
   "apps/server/src/web-chat.integration.test.ts",
   "apps/server/src/speech-planner.test.ts",
