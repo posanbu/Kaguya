@@ -1,7 +1,9 @@
 """功能概述：以临时合成归档验证安装包校验与不可覆盖 staging，不执行 sudo、Podman 或网络。
-主要职责：校验源码/镜像遗漏与篡改、路径注入、符号链接和同 hash 的重入；错误必须在系统变更前拒绝。
+主要职责：校验源码/镜像遗漏与篡改、包内 CI 与镜像身份不一致、复制期间变更、路径注入、符号链接和同 hash 重入。
+所有错误必须在系统变更前拒绝；合成证据不代表真实 CI、Podman 或管理员安装通过。
 代码库关系：直接调用生产 install_bundle.py；真实 Linux 安装由人工审核后的包另行验收。
 """
+import copy
 import json
 from pathlib import Path
 import tempfile
@@ -16,14 +18,19 @@ class BundleTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.manifest = {"version": 1, "commit": "a" * 40, "sources": {}, "images": {}}
+        self.manifest = {"version": 1, "commit": "a" * 40, "workflowRun": "https://example.invalid/run", "sources": {}, "images": {}}
         for name in bundle.SOURCE_FILES:
             (self.root / name).write_text("synthetic source " + name)
             self.manifest["sources"][name] = bundle.digest(self.root / name)
         for role in bundle.IMAGE_ROLES:
             name = role + "-tools.oci"
             (self.root / name).write_bytes(b"synthetic OCI " + role.encode())
-            self.manifest["images"][role] = {"file": name, "archiveSha256": bundle.digest(self.root / name)}
+            self.manifest["images"][role] = {"file": name, "archiveSha256": bundle.digest(self.root / name),
+                                             "image": "localhost/kaguya-" + role + "@sha256:" + "b" * 64}
+        self.run = {"head_sha": self.manifest["commit"], "conclusion": "success", "status": "completed", "html_url": self.manifest["workflowRun"]}
+        self.receipt = {"passed": True, "existingHomeRecovered": True, "imageDigest": "sha256:" + "b" * 64}
+        (self.root / "workflow-run.json").write_text(json.dumps(self.run))
+        (self.root / "gui-provider-receipt.json").write_text(json.dumps(self.receipt))
         self.save()
         self.acl = patch.object(bundle, "set_broker_read_acl").start()
         self.addCleanup(patch.stopall)
@@ -70,6 +77,47 @@ class BundleTest(unittest.TestCase):
         with self.assertRaises(OSError):
             bundle.stage_image(self.root, image, inbox, 65534)
 
+    def test_manifest_requires_commit_and_immutable_role_image_identity(self):
+        original = copy.deepcopy(self.manifest)
+        for invalid in ({}, {**original, "commit": "main"}, {**original, "sources": []}):
+            with self.subTest(manifest=invalid):
+                self.manifest = invalid
+                self.save()
+                with self.assertRaisesRegex(RuntimeError, "manifest-invalid"):
+                    bundle.verify_manifest(self.root)
+        for field, value in (("image", "localhost/kaguya-gui:latest"),
+                             ("image", "localhost/kaguya-shell@sha256:" + "b" * 64),
+                             ("archiveSha256", "../archive")):
+            with self.subTest(field=field, value=value):
+                self.manifest = copy.deepcopy(original)
+                self.manifest["images"]["gui"][field] = value
+                self.save()
+                with self.assertRaisesRegex(RuntimeError, "image-identity-invalid"):
+                    bundle.verify_manifest(self.root)
+
+    def test_verify_rechecks_packaged_ci_and_gui_evidence(self):
+        for field, value in (("head_sha", "c" * 40), ("status", "in_progress"), ("conclusion", "failure")):
+            with self.subTest(field=field):
+                (self.root / "workflow-run.json").write_text(json.dumps({**self.run, field: value}))
+                with self.assertRaisesRegex(RuntimeError, "ci-not-passed"):
+                    bundle.verify_manifest(self.root)
+        (self.root / "workflow-run.json").write_text(json.dumps({**self.run, "html_url": "https://example.invalid/other"}))
+        with self.assertRaisesRegex(RuntimeError, "ci-reference-mismatch"):
+            bundle.verify_manifest(self.root)
+        (self.root / "workflow-run.json").write_text(json.dumps(self.run))
+        (self.root / "gui-provider-receipt.json").write_text(json.dumps({**self.receipt, "imageDigest": "sha256:" + "c" * 64}))
+        with self.assertRaisesRegex(RuntimeError, "receipt-image-mismatch"):
+            bundle.verify_manifest(self.root)
+        (self.root / "gui-provider-receipt.json").write_text(json.dumps({**self.receipt, "passed": False}))
+        with self.assertRaisesRegex(RuntimeError, "gui-provider-not-passed"):
+            bundle.verify_manifest(self.root)
+        # 回退仍只依赖原宿主源码；镜像和诊断证据丢失不阻止保留数据回退。
+        for role in bundle.IMAGE_ROLES:
+            (self.root / (role + "-tools.oci")).unlink()
+        (self.root / "workflow-run.json").unlink()
+        (self.root / "gui-provider-receipt.json").unlink()
+        self.assertEqual(bundle.verify_manifest(self.root, images=False), self.manifest)
+
     def test_linked_source_is_not_accepted(self):
         path = self.root / "server.py"
         path.unlink()
@@ -108,6 +156,18 @@ class BundleTest(unittest.TestCase):
         result = bundle.verify_manifest(output)
         self.assertEqual(result["commit"], sha)
         self.assertEqual(set(result["images"]), set(bundle.IMAGE_ROLES))
+        original_copy = package_bundle.shutil.copyfile
+        def changed_during_copy(src, dst):
+            result = original_copy(src, dst)
+            if Path(dst).name == "gui-tools.oci":
+                Path(dst).write_bytes(b"changed after initial checksum")
+            return result
+        interrupted = self.root / "changed-copy"
+        with patch.object(package_bundle.subprocess, "check_output", side_effect=[sha, ""]), \
+             patch.object(package_bundle.shutil, "copyfile", side_effect=changed_during_copy):
+            with self.assertRaisesRegex(RuntimeError, "image-checksum-mismatch"):
+                package_bundle.package(self.root, artifacts, interrupted, sha)
+        self.assertFalse((interrupted / "SHA256SUMS").exists())
         (evidence / "gui-provider-receipt.json").write_text(json.dumps({"passed": True, "existingHomeRecovered": True, "imageDigest": "sha256:" + "c" * 64}))
         with patch.object(package_bundle.subprocess, "check_output", side_effect=[sha, ""]):
             with self.assertRaisesRegex(RuntimeError, "receipt-image-mismatch"):

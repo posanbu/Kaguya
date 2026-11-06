@@ -1,4 +1,4 @@
-/** 框架无关的情境—行动契约。两端可复制类型和样例，不共享运行时实现。 */
+/** 情境—行动类型契约；可选 contentSegments 保存媒体元信息，供 Light 与 Heavy 冻结证据共用，不含字节或临时来源。 */
 export const CONTRACT_VERSION = "1.0.0" as const;
 
 export interface EvidenceInput {
@@ -11,6 +11,15 @@ export interface EvidenceInput {
   kind:
     "message" | "correction" | "clock" | "recall" | "tool-result" | "delivery";
   text: string;
+  contentSegments?: (
+    | { kind: "text"; text: string }
+    | { kind: "media"; media: {
+        mediaId: string; position: number; mediaType: "image" | "face" | "mface";
+        status: "available" | "unavailable" | "invalid" | "omitted";
+        resourceId: string | null; mimeType: "image/png" | "image/jpeg" | "image/gif" | "image/webp" | null;
+        byteLength: number;
+      } }
+  )[] | undefined;
   replaces: string[];
 }
 

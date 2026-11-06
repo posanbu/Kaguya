@@ -1,6 +1,7 @@
 /**
  * 功能概述：隔离 Linux 桌面的 observe/act/verify 参数合同，不暴露 Cua 原始工具或命令。
  * 主要职责：观察明确区分桌面和窗口；一次输入绑定观察引用，文字插入与整字段替换分别声明。
+ * insert/key 必须使用窗口观察，避免固定 Cua 驱动的桌面输入忽略位置并沿用隐式焦点。
  * 代码库关系：LinuxToolsHost 注册这些 schema，可信 GUI component 再检查实际 capture、许可和 generation。
  * 输入输出与副作用：仅校验参数；截图坐标保持原图像素，verify 只核对当前状态并引用原操作。
  */
@@ -61,7 +62,11 @@ export const linuxGuiActSchema = z.discriminatedUnion("action", [
   z
     .object({
       ...observed,
-      action: z.literal("insert"),
+      action: z
+        .literal("insert")
+        .describe(
+          "Requires an observation of the target window; desktop observations cannot select an insertion point.",
+        ),
       selector,
       text: z
         .string()
@@ -81,7 +86,11 @@ export const linuxGuiActSchema = z.discriminatedUnion("action", [
   z
     .object({
       ...observed,
-      action: z.literal("key"),
+      action: z
+        .literal("key")
+        .describe(
+          "Requires an observation of the target window; desktop observations do not identify keyboard focus.",
+        ),
       key,
       modifiers: z
         .array(z.enum(["ctrl", "shift", "alt", "super"]))

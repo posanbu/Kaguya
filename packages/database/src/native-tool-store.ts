@@ -5,6 +5,8 @@
  * 功能概述：在同一持久事务内裁决工具 run/step、预算、模型 dispatch 和 call→intent 身份。
  * open/freeze 固定不可变上下文，admitModel 在有效 claim 下扣一次步骤预算，calls 固定模型调用顺序。
  * bind 与 W3 register 共用 7149321 锁，stop 阻止后续 admission；结果事实保留实际 receipt，不重执行。
+ * registerCalls 对新增与恢复的整批调用核对原生消息、参数、行动身份和结果证明，全部通过后才返回可推进记录。
+ * auditCall 检查历史结果指针及回执投影；intents 仅返回属于本 run/call 的行动，避免异常指针取消其他行动。
  * Runtime 协调器调用本仓储；模型没有 SQL 或授权入口。所有状态均追加事实并保留原始依据。
  */
 import { randomUUID } from "node:crypto";
@@ -17,6 +19,7 @@ import {
   type z,
 } from "@kaguya/schema";
 import {
+  actionIntentSchema,
   nativeToolBudgetSchema,
   nativeToolStepSchema,
   type ActionIntent,
@@ -588,14 +591,6 @@ export class PostgresNativeToolStore {
     return this.tx(async (tx) => {
       const row = await this.row(tx, runInformationId);
       const old = await this.calls(runInformationId, index, tx);
-      if (old.length) {
-        if (
-          old[0]!.completed_id !== completedId ||
-          actionDigest(old.map((c) => c.call)) !== actionDigest(calls)
-        )
-          throw new Error("native-calls-conflict");
-        return old;
-      }
       await this.active(tx, row, guard);
       const completed = (
         await tx.query<{ payload: any }>(
@@ -629,6 +624,65 @@ export class PostgresNativeToolStore {
         new Set(calls.map((c) => c.toolCallId)).size !== calls.length
       )
         throw new Error("native-call-id-conflict");
+      const messages = completed.payload.native?.messages;
+      if (
+        !Array.isArray(messages) ||
+        messages.some(
+          (m: any) =>
+            m.role !== "assistant" ||
+            m.nativeToolResultGroup !== undefined ||
+            (Array.isArray(m.content) &&
+              m.content.some((part: any) => part?.type === "tool-result")),
+        )
+      )
+        throw new Error("native-calls-message-mismatch");
+      const nativeCalls = messages.flatMap((m: any) =>
+        Array.isArray(m.content)
+          ? m.content.filter((part: any) => part?.type === "tool-call")
+          : [],
+      );
+      if (
+        nativeCalls.length !== calls.length ||
+        nativeCalls.some(
+          (part: any, i: number) =>
+            part.toolCallId !== calls[i]!.toolCallId ||
+            part.toolName !== calls[i]!.toolName,
+        )
+      )
+        throw new Error("native-calls-message-mismatch");
+      for (const [i, call] of calls.entries()) {
+        if (call.validation !== "valid") continue;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(call.rawInput);
+        } catch {
+          throw new Error("native-call-input-mismatch");
+        }
+        if (
+          nativeCalls[i].input === undefined ||
+          actionDigest(parsed) !== actionDigest(call.input) ||
+          actionDigest(nativeCalls[i].input) !== actionDigest(call.input) ||
+          (nativeCalls[i].rawInput !== undefined &&
+            nativeCalls[i].rawInput !== call.rawInput)
+        )
+          throw new Error("native-call-input-mismatch");
+      }
+      if (old.length) {
+        if (
+          old.length !== calls.length ||
+          old.some(
+            (c, i) =>
+              c.call_index !== i ||
+              c.call_id !== calls[i]!.toolCallId ||
+              c.completed_id !== completedId,
+          ) ||
+          actionDigest(old.map((c) => c.call)) !== actionDigest(calls)
+        )
+          throw new Error("native-calls-conflict");
+        // 整批先审计，再让 Runtime 执行其中任何未完成行动。
+        for (const call of old) await this.auditCall(tx, row, call);
+        return old;
+      }
       const budget = nativeToolBudgetSchema.parse(row.spec.budget);
       if (row.calls_count + calls.length > budget.maxCalls)
         throw new Error("native-call-budget");
@@ -650,6 +704,131 @@ export class PostgresNativeToolStore {
       );
       return this.calls(runInformationId, index, tx);
     });
+  }
+  private ownsIntent(
+    row: NativeToolRunRow,
+    call: NativeToolCallRow,
+    intent: any,
+  ) {
+    return Boolean(
+      intent &&
+      intent.operationId ===
+        `native:${row.run_id}:${call.step_index}:${call.call_index}:${actionDigest(call.call_id)}` &&
+      intent.runInformationId === row.spec.actionRunInformationId &&
+      intent.scope === row.spec.scope &&
+      intent.toolCallId === call.call_id,
+    );
+  }
+  private async auditCall(
+    tx: SqlTransaction,
+    row: NativeToolRunRow,
+    call: NativeToolCallRow,
+  ) {
+    const head = call.intent_id
+      ? (
+          await tx.query<{
+            input: any;
+            digest: string;
+            state: string;
+            attempt_id: string;
+            started_id: string;
+          }>(
+            "SELECT input,digest,state,attempt_id,started_id FROM information_action_heads WHERE intent_id=$1",
+            [call.intent_id],
+          )
+        ).rows[0]
+      : undefined;
+    if (
+      call.intent_id &&
+      (!head ||
+        !actionIntentSchema.safeParse(head.input).success ||
+        !this.ownsIntent(row, call, head.input) ||
+        actionDigest(head.input) !== head.digest ||
+        actionDigest(head.input.arguments) !== actionDigest(call.call.input) ||
+        head.input.deadline !== row.spec.deadline ||
+        !(row.spec.declarations as any[]).some(
+          (d) =>
+            d.wireName === call.call.toolName && d.id === head.input.toolName,
+        ))
+    )
+      throw new Error("native-recovery-intent-mismatch");
+    if (head) {
+      const original = (
+        await tx.query<{ payload: unknown }>(
+          "SELECT payload FROM information_atoms WHERE information_id=$1 AND kind='core.action.intent.v1'",
+          [call.intent_id],
+        )
+      ).rows[0];
+      if (!original || actionDigest(original.payload) !== head.digest)
+        throw new Error("native-recovery-intent-mismatch");
+    }
+    if (!call.result_id) return;
+    const result = (
+      await tx.query<{ kind: string; payload: any }>(
+        "SELECT kind,payload FROM information_atoms WHERE information_id=$1",
+        [call.result_id],
+      )
+    ).rows[0];
+    const p = result?.payload;
+    if (
+      !p ||
+      result!.kind !== "agent.heavy.tool.result.v1" ||
+      p.runInformationId !== row.run_id ||
+      p.stepIndex !== call.step_index ||
+      p.toolCallId !== call.call_id ||
+      p.modelCompletedInformationId !== call.completed_id ||
+      p.intentId !== call.intent_id ||
+      p.value === undefined ||
+      p.outputBytes !== Buffer.byteLength(JSON.stringify(p.value))
+    )
+      throw new Error("native-recovery-result-mismatch");
+    if (!p.receiptId) {
+      const truncated =
+        actionDigest(p.value) ===
+        actionDigest({
+          status: "output-budget",
+          receiptId: null,
+          truncated: true,
+        });
+      if (
+        (head && head.state !== "queued") ||
+        (!truncated &&
+          (p.value?.status !== "rejected" ||
+            p.value?.evidence !== "not-executed"))
+      )
+        throw new Error("native-recovery-result-unproved");
+      return;
+    }
+    let r;
+    try {
+      // 宿主内部审计只读取既有证明，不签发新的读取/执行授权。
+      r = await new PostgresActionStore(this.db).inspectReceipt(
+        p.receiptId,
+        String(row.spec.scope),
+        tx,
+      );
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        (error.message.startsWith("receipt-") ||
+          error.message.startsWith("action-") ||
+          error.name === "ZodError")
+      )
+        throw new Error("native-recovery-receipt-unproved", { cause: error });
+      throw error;
+    }
+    if (
+      !head ||
+      r.intentId !== call.intent_id ||
+      actionDigest(r.intent) !== head.digest
+    )
+      throw new Error("native-recovery-receipt-unproved");
+    const expected =
+      p.value?.status === "output-budget"
+        ? { status: "output-budget", receiptId: p.receiptId, truncated: true }
+        : { ...r.outcome, receiptId: p.receiptId, resultHash: r.resultHash };
+    if (actionDigest(p.value) !== actionDigest(expected))
+      throw new Error("native-recovery-result-unproved");
   }
   async bind(
     call: NativeToolCallRow,
@@ -803,11 +982,17 @@ export class PostgresNativeToolStore {
     ).rows.map((r) => r.request_id);
   }
   async intents(runInformationId: string) {
-    return (
-      await this.db.query<{ intent_id: string }>(
-        "SELECT intent_id FROM information_native_tool_calls WHERE run_id=$1 AND intent_id IS NOT NULL ORDER BY step_index,call_index",
+    const row = await this.read(runInformationId);
+    const calls = (
+      await this.db.query<
+        NativeToolCallRow & { input: any } & Record<string, unknown>
+      >(
+        "SELECT c.*,h.input FROM information_native_tool_calls c JOIN information_action_heads h ON h.intent_id=c.intent_id WHERE c.run_id=$1 ORDER BY c.step_index,c.call_index",
         [runInformationId],
       )
-    ).rows.map((r) => r.intent_id);
+    ).rows;
+    return calls
+      .filter((c) => this.ownsIntent(row, c, c.input))
+      .map((c) => c.intent_id!);
   }
 }

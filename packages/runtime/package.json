@@ -22,6 +22,7 @@
     "@kaguya/platform-adapters": "workspace:*",
     "@kaguya/schema": "workspace:*",
     "@kaguya/scheduler": "workspace:*",
-    "@kaguya/sdk": "workspace:*"
+    "@kaguya/sdk": "workspace:*",
+    "sharp": "0.35.3"
   }
 }

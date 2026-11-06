@@ -1,7 +1,8 @@
 /**
  * 功能概述：验证 W3 ActionExecution 到 Linux broker 的身份、控制租约和凭证边界。
  * 主要职责：受控 transport 记录实际发送内容，覆盖新租约核对旧 attempt、取消成功回执保留、
- * 参数不一致和秘密结果拒绝；所有用例跨平台，不把替身 transport 当作 Linux peercred 验收。
+ * 参数不一致和秘密结果拒绝；领取/续租身份不符与未确认释放均不得丢失既有清理凭证。
+ * 所有用例跨平台，不把替身 transport 当作 Linux peercred 验收。
  * 代码库关系：消费生产 LinuxEnvironmentClient；实际 Unix 入口由 Python Linux 测试覆盖。
  * 输入输出与副作用：内存与临时 Unix socket/Windows pipe fixture，关闭全部连接后清理目录；
  * 不使用模型、生产数据库、Podman 或桌面。
@@ -199,6 +200,87 @@ async function setup() {
 }
 
 describe("Linux environment action adapter", () => {
+  it("rejects acquire responses for another environment or workflow", async () => {
+    for (const changed of [
+      { ...reference, environmentId: "other" },
+      { ...reference, workflowId: "other" },
+    ]) {
+      const f = fixture();
+      f.setCurrent(changed);
+      await expect(
+        f.client.acquire({
+          environmentId: "env",
+          scope: "scope",
+          workflowId: "workflow",
+        }),
+      ).rejects.toThrow("environment-acquire-identity-mismatch");
+      await expect(f.client.renew("env", "scope")).rejects.toThrow(
+        "environment-binding-mismatch",
+      );
+      expect(f.requests).toHaveLength(1);
+    }
+  });
+
+  it("rejects renewed lease identity changes and retains the original binding", async () => {
+    const f = await setup();
+    for (const changed of [
+      { ...reference, environmentId: "other" },
+      { ...reference, workflowId: "other" },
+      { ...reference, generation: 1 },
+      { ...reference, fencing: "2" },
+      { ...reference, leaseId: "other" },
+      { ...reference, workspaceId: "other" },
+      { ...reference, resourceIds: ["other"] },
+    ]) {
+      f.setResult(changed);
+      await expect(f.client.renew("env", "scope")).rejects.toThrow(
+        "environment-renew-identity-mismatch",
+      );
+      expect(
+        await f.client.actionHooks.resolveLeaseCredential(f.input, "execute"),
+      ).toEqual({ token: secret });
+      expect(f.requests.at(-1)!.params.environment).toEqual(reference);
+    }
+    const renewed = { ...reference, expiresAt: "2099-01-02T00:00:00.000Z" };
+    f.setResult(renewed);
+    expect(await f.client.renew("env", "scope")).toEqual(renewed);
+  });
+
+  it("retains cleanup credentials until a matching quarantined release is confirmed", async () => {
+    const f = await setup();
+    const receipt = {
+      environmentId: "env",
+      scope: "scope",
+      generation: 0,
+      state: "quarantined",
+    };
+    for (const rejected of [
+      {},
+      { ...receipt, environmentId: "other" },
+      { ...receipt, scope: "other" },
+      { ...receipt, generation: 1 },
+      { ...receipt, state: "ready" },
+      { ...receipt, state: "draining" },
+    ]) {
+      f.setResult(rejected);
+      await expect(f.client.release("env", "scope")).rejects.toThrow();
+      expect(f.requests.at(-1)!.params).toEqual({
+        environment: reference,
+        token: secret,
+        scope: "scope",
+      });
+    }
+    f.setResult(receipt);
+    await f.client.closeOwnedInputs();
+    expect(f.requests.at(-1)!.method).toBe("lease.release");
+    const requestCount = f.requests.length;
+    await f.client.closeOwnedInputs();
+    expect(f.requests).toHaveLength(requestCount);
+    await expect(f.client.release("env", "scope")).rejects.toThrow(
+      "environment-binding-mismatch",
+    );
+  });
+
   it("returns only public lease identity and resolves credentials only at execution", async () => {
     const f = await setup();
     expect(JSON.stringify(f.client)).not.toContain(secret);

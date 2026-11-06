@@ -2,7 +2,7 @@
 主要职责：ShellJobs 持久登记原 operation/attempt，调度独立 systemd job unit，
 核对停止屏障，提供 start/query/stop/verify/export；文件读取保留逐级目录 FD。
 代码库关系：PodmanBackend 路由 shell.exec；job_runner.py 独占运行回执，
-本模块只在 unit 和整个 cgroup 已停止后补写终态，不与 supervisor 并发写 receipt。
+本模块只在 unit 和整个 cgroup 已停止后补写终态，不与 supervisor 并发写 receipt；隔离证明不推断信号，旧回执没有可信 exitStatus 时以 unknown 展示。
 输入输出与副作用：私有宿主目录保存 manifest/日志，只有 workspace 命名卷进入容器。
 启动声明一旦落盘就不重放；截止时间固定，未知状态必须隔离后核对，不恢复执行。
 GUI 桌面占用 384 tasks 时，全部 shell jobs 共用 112 tasks；环境总额仍为 512 tasks/4G。
@@ -430,7 +430,7 @@ class ShellJobs:
 
     def finalize(self, path, record, state, reason):
         receipt = {"state": state, "reason": reason, "completedAt": now_iso(), "exitCode": None,
-                   "signal": "SIGKILL" if state == "stopped" else None, "isolationConfirmed": True}
+                   "signal": None, "exitStatus": {"kind": "unknown"}, "isolationConfirmed": True}
         for stream in ("stdout", "stderr"):
             if (path / stream).exists():
                 receipt[stream] = file_result(path, stream)
@@ -441,6 +441,12 @@ class ShellJobs:
                                       "attemptId", "digest", "state", "cwd", "permitExpiresAt", "startedAt", "uid", "gid", "exitCode", "signal")}
         if (path / "receipt.json").exists():
             view.update(read_json(path / "receipt.json"))
+        elif (not (path / "running.json").exists()
+              and time.time() >= record["expires"] and self.unit_empty(record)):
+            # 已过期且持久 unit cgroup 已空，无法证明启动或退出，绝不重放。
+            self.retire(path, record)
+            self.finalize(path, record, "unknown", "supervisor-lost-before-running")
+            view.update(read_json(path / "receipt.json"))
         elif (path / "running.json").exists():
             if self.unit_empty(record):
                 self.retire(path, record)
@@ -449,6 +455,12 @@ class ShellJobs:
                 view.update(read_json(path / "receipt.json"))
             else:
                 view["state"] = "running"
+        if "exitStatus" not in view and view["state"] in TERMINAL:
+            # 旧版回执中的 exitCode 是容器启动门状态，不能证明 payload 的 waitpid 结果。
+            # 保留原文件供审计；不重放历史 job，不把历史 128 推断为信号或真实退出码。
+            view.update(exitStatus={"kind": "unknown"}, exitCode=None, signal=None)
+            if view["state"] == "exited":
+                view.update(state="unknown", reason="legacy-exit-status-unconfirmed")
         return view
 
     def isolate(self, env, reason="environment-fenced"):

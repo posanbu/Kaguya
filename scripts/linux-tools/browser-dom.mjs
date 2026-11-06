@@ -3,7 +3,7 @@
  * 主要职责：读取页面结构/表单属性形成观察；激活时在同一 renderer 任务中重验原状态与截止。
  * 代码库关系：browser component 用 CDP 指定隔离 world 并独立传参；输入函数无异步续发，
  * 点击为 DOM activation，fill/select 通过原生 setter 与 input/change 事件更新应用。
- * 输入输出与副作用：输入前检查完整 HTML、表单属性、视口和 URL；超期或变化均不激活。
+ * 输入输出与副作用：输入前检查完整 HTML、表单属性、视口和 URL；暴露复选框及单选框实时选中状态，继承禁用的控件不得输入。
  */
 export function readDom() {
   const viewport = {
@@ -46,6 +46,11 @@ export function readDom() {
         tag: element.tagName.toLowerCase(),
         role: element.getAttribute("role"),
         type: element.getAttribute("type"),
+        checked:
+          element.tagName === "INPUT" &&
+          ["checkbox", "radio"].includes(element.type)
+            ? element.checked
+            : undefined,
         name: (
           element.getAttribute("aria-label") ??
           element.getAttribute("placeholder") ??
@@ -59,14 +64,14 @@ export function readDom() {
           element.type === "password"
             ? undefined
             : typeof element.value === "string"
-              ? element.value.slice(0, 4096)
+              ? element.value.slice(0, 32768)
               : undefined,
         text: (element.innerText ?? element.textContent ?? "")
           .trim()
           .slice(0, 4096),
         href: element.tagName === "A" ? element.href : undefined,
         disabled:
-          !!element.disabled ||
+          element.matches(":disabled") ||
           element.getAttribute("aria-disabled") === "true" ||
           !!element.closest("[inert]"),
         box: { x: box.x, y: box.y, width: box.width, height: box.height },
@@ -99,7 +104,7 @@ export const activateDomFunction = `function(args) {
   const identity = {url: state.url, viewport: state.viewport, html: state.html, inputs: state.inputs};
   if (JSON.stringify(identity) !== JSON.stringify(args.expected)) return {dispatched:false,reason:'stale-observation'};
   const element = args.selector ? document.querySelector(args.selector) : null;
-  if (args.action !== 'navigate' && (!element || element.disabled)) return {dispatched:false,reason:'node-unavailable'};
+  if (args.action !== 'navigate' && (!element || element.matches(':disabled'))) return {dispatched:false,reason:'node-unavailable'};
   if (args.action !== 'navigate') {
     const current = state.nodes.find(node=>node.selector===args.selector);
     if (!current?.visible || !current.inViewport || current.disabled || JSON.stringify(current.box)!==JSON.stringify(args.expectedBox)) return {dispatched:false,reason:'node-actionability-changed'};

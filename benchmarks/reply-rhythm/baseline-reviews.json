@@ -1,0 +1,245 @@
+[
+  {
+    "candidateId": "direct-question-short",
+    "caseSha256": "4d1d757a2369f166da4321e34110373e69ce2f47cc1d378d3f37f1a2431dc270",
+    "candidateSha256": "3325ac2545f73c3389cd1969bfb5e9cad61f59a48845451130353720d04b2286",
+    "status": "completed",
+    "reviewer": "synthetic-fixture-author",
+    "reviewKind": "authored-fixture",
+    "answers": [
+      {
+        "id": "start-time",
+        "status": "answered",
+        "reason": "合成诊断标注：回复覆盖此明确要求。"
+      }
+    ],
+    "extraActions": [],
+    "extraActionsAssessment": "complete",
+    "note": "固定的作者标注，用于验证报告区分两类问题；不是真人复核，也不是模型表现。"
+  },
+  {
+    "candidateId": "direct-question-overfull",
+    "caseSha256": "4d1d757a2369f166da4321e34110373e69ce2f47cc1d378d3f37f1a2431dc270",
+    "candidateSha256": "7fb69e4b1d88a41d6e70e5cac2f1cbc57c7bf9b6d1d543dca5f99f23905b980e",
+    "status": "completed",
+    "reviewer": "synthetic-fixture-author",
+    "reviewKind": "authored-fixture",
+    "answers": [
+      {
+        "id": "start-time",
+        "status": "answered",
+        "reason": "合成诊断标注：回复覆盖此明确要求。"
+      }
+    ],
+    "extraActions": [
+      {
+        "kind": "followup",
+        "excerpt": "你准备怎么去？",
+        "reason": "此合成案例中，对方没有请求这项额外推进。"
+      },
+      {
+        "kind": "advice",
+        "excerpt": "建议提前半小时到。",
+        "reason": "此合成案例中，对方没有请求这项额外推进。"
+      }
+    ],
+    "extraActionsAssessment": "complete",
+    "note": "固定的作者标注，用于验证报告区分两类问题；不是真人复核，也不是模型表现。"
+  },
+  {
+    "candidateId": "joke-short",
+    "caseSha256": "cc77b485cf1c154a383fc1cd4128ba9cd01b8fc5221b1d609d843a6503274cf6",
+    "candidateSha256": "5ddbb8f6e1085cbd5a7819de42abbd48d39ae1117253d0a5a50923b8d0f59684",
+    "status": "completed",
+    "reviewer": "synthetic-fixture-author",
+    "reviewKind": "authored-fixture",
+    "answers": [],
+    "extraActions": [],
+    "extraActionsAssessment": "complete",
+    "note": "固定的作者标注，用于验证报告区分两类问题；不是真人复核，也不是模型表现。"
+  },
+  {
+    "candidateId": "joke-overfull",
+    "caseSha256": "cc77b485cf1c154a383fc1cd4128ba9cd01b8fc5221b1d609d843a6503274cf6",
+    "candidateSha256": "b2022826a9599a4a4e9eecb336194acb66215208132b1ea59074e20f34b54dab",
+    "status": "completed",
+    "reviewer": "synthetic-fixture-author",
+    "reviewKind": "authored-fixture",
+    "answers": [],
+    "extraActions": [
+      {
+        "kind": "followup",
+        "excerpt": "要不要试试换个铃声？",
+        "reason": "此合成案例中，对方没有请求这项额外推进。"
+      },
+      {
+        "kind": "advice",
+        "excerpt": "可以把手机放远一点。",
+        "reason": "此合成案例中，对方没有请求这项额外推进。"
+      }
+    ],
+    "extraActionsAssessment": "complete",
+    "note": "固定的作者标注，用于验证报告区分两类问题；不是真人复核，也不是模型表现。"
+  },
+  {
+    "candidateId": "complaint-short",
+    "caseSha256": "1df30e0c9f0447a2eabc377ad63a2171a12b2071562119155deac47e5fea249e",
+    "candidateSha256": "43eee48bdd91b303d5aff05c0297bc31097b7092e438cf85bae6c27cd0ade275",
+    "status": "completed",
+    "reviewer": "synthetic-fixture-author",
+    "reviewKind": "authored-fixture",
+    "answers": [],
+    "extraActions": [],
+    "extraActionsAssessment": "complete",
+    "note": "固定的作者标注，用于验证报告区分两类问题；不是真人复核，也不是模型表现。"
+  },
+  {
+    "candidateId": "complaint-overfull",
+    "caseSha256": "1df30e0c9f0447a2eabc377ad63a2171a12b2071562119155deac47e5fea249e",
+    "candidateSha256": "c86dd22338605e3db2c7206f0ef383d0d3ee31e448d36663805dfa39d8bb9a2c",
+    "status": "completed",
+    "reviewer": "synthetic-fixture-author",
+    "reviewKind": "authored-fixture",
+    "answers": [],
+    "extraActions": [
+      {
+        "kind": "advice",
+        "excerpt": "下次早点去吧，再带点吃的。",
+        "reason": "此合成案例中，对方没有请求这项额外推进。"
+      },
+      {
+        "kind": "followup",
+        "excerpt": "你现在到家了吗？",
+        "reason": "此合成案例中，对方没有请求这项额外推进。"
+      }
+    ],
+    "extraActionsAssessment": "complete",
+    "note": "固定的作者标注，用于验证报告区分两类问题；不是真人复核，也不是模型表现。"
+  },
+  {
+    "candidateId": "followup-short",
+    "caseSha256": "64e12aeea04858aca3c689164d87ed0aca9ada6ea1de132f9899b5fcef41b409",
+    "candidateSha256": "4f2c79ebe2e4c0c81ec7fa9e4b4bd00b01673bbeedb60f56fe1988a7a59f7ca0",
+    "status": "completed",
+    "reviewer": "synthetic-fixture-author",
+    "reviewKind": "authored-fixture",
+    "answers": [
+      {
+        "id": "meeting-point",
+        "status": "answered",
+        "reason": "合成诊断标注：回复覆盖此明确要求。"
+      }
+    ],
+    "extraActions": [],
+    "extraActionsAssessment": "complete",
+    "note": "固定的作者标注，用于验证报告区分两类问题；不是真人复核，也不是模型表现。"
+  },
+  {
+    "candidateId": "followup-overfull",
+    "caseSha256": "64e12aeea04858aca3c689164d87ed0aca9ada6ea1de132f9899b5fcef41b409",
+    "candidateSha256": "ede8d55c3562fbcda555f639ff1060d76d8e885ed3414cd43d95d87cefbf7b87",
+    "status": "completed",
+    "reviewer": "synthetic-fixture-author",
+    "reviewKind": "authored-fixture",
+    "answers": [
+      {
+        "id": "meeting-point",
+        "status": "missing",
+        "reason": "合成诊断标注：候选未回答此明确要求。"
+      }
+    ],
+    "extraActions": [
+      {
+        "kind": "topic-extension",
+        "excerpt": "顺便想想结束后去哪吃饭。",
+        "reason": "此合成案例中，对方没有请求这项额外推进。"
+      }
+    ],
+    "extraActionsAssessment": "complete",
+    "note": "固定的作者标注，用于验证报告区分两类问题；不是真人复核，也不是模型表现。"
+  },
+  {
+    "candidateId": "multiple-topics-short",
+    "caseSha256": "b9324b86a2a1d900e0e3384002a317dfe5b0fe976c14faa8424b080afa1e7876",
+    "candidateSha256": "a15cac35f5da10a2df3f10db741aff37c698f0d5c5d78c60b9c390161a265482",
+    "status": "completed",
+    "reviewer": "synthetic-fixture-author",
+    "reviewKind": "authored-fixture",
+    "answers": [
+      {
+        "id": "submit-location",
+        "status": "answered",
+        "reason": "合成诊断标注：回复覆盖此明确要求。"
+      }
+    ],
+    "extraActions": [],
+    "extraActionsAssessment": "complete",
+    "note": "固定的作者标注，用于验证报告区分两类问题；不是真人复核，也不是模型表现。"
+  },
+  {
+    "candidateId": "multiple-topics-overfull",
+    "caseSha256": "b9324b86a2a1d900e0e3384002a317dfe5b0fe976c14faa8424b080afa1e7876",
+    "candidateSha256": "10d9a60e9d92204f938808ad6e87171b8c4a3791b89b4337fd33f67203b340a2",
+    "status": "completed",
+    "reviewer": "synthetic-fixture-author",
+    "reviewKind": "authored-fixture",
+    "answers": [
+      {
+        "id": "submit-location",
+        "status": "missing",
+        "reason": "合成诊断标注：候选未回答此明确要求。"
+      }
+    ],
+    "extraActions": [
+      {
+        "kind": "advice",
+        "excerpt": "下次可以提前列个计划。",
+        "reason": "此合成案例中，对方没有请求这项额外推进。"
+      }
+    ],
+    "extraActionsAssessment": "complete",
+    "note": "固定的作者标注，用于验证报告区分两类问题；不是真人复核，也不是模型表现。"
+  },
+  {
+    "candidateId": "missing-media-short",
+    "caseSha256": "aa17cdffd8c11e9b9d5292a26fea25cf082bc960b289fd008559094fb8e01468",
+    "candidateSha256": "587f39b59daa710894f0e031978af8e4074e95c7d585ac6f52d94b64bbf95aec",
+    "status": "completed",
+    "reviewer": "synthetic-fixture-author",
+    "reviewKind": "authored-fixture",
+    "answers": [
+      {
+        "id": "missing-image",
+        "status": "answered",
+        "reason": "合成诊断标注：回复覆盖此明确要求。"
+      }
+    ],
+    "extraActions": [],
+    "extraActionsAssessment": "complete",
+    "note": "固定的作者标注，用于验证报告区分两类问题；不是真人复核，也不是模型表现。"
+  },
+  {
+    "candidateId": "missing-media-overfull",
+    "caseSha256": "aa17cdffd8c11e9b9d5292a26fea25cf082bc960b289fd008559094fb8e01468",
+    "candidateSha256": "e799492f78e83d5664299df4ae2ed65c273b5d985b841f713c33117bc525ae39",
+    "status": "completed",
+    "reviewer": "synthetic-fixture-author",
+    "reviewKind": "authored-fixture",
+    "answers": [
+      {
+        "id": "missing-image",
+        "status": "missing",
+        "reason": "合成诊断标注：候选未回答此明确要求。"
+      }
+    ],
+    "extraActions": [
+      {
+        "kind": "followup",
+        "excerpt": "你要不要先规划路线？",
+        "reason": "此合成案例中，对方没有请求这项额外推进。"
+      }
+    ],
+    "extraActionsAssessment": "complete",
+    "note": "固定的作者标注，用于验证报告区分两类问题；不是真人复核，也不是模型表现。"
+  }
+]

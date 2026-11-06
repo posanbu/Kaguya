@@ -1,5 +1,5 @@
-"""功能概述：真实 broker/helper/单 Chromium owner 的 DOM、未知回执和持久下载验证。
-代码库关系：供 check-browser-container 调用；网站 ledger 位于独立 Node 进程，不依赖工具回执。
+"""功能概述：真实 broker/helper/单 Chromium owner 的 DOM、选择控件、未知回执和持久下载验证。
+代码库关系：供 check-browser-container 调用；网站 ledger 位于独立 Node 进程，不依赖工具回执；覆盖动态表单与旧观察。
 输入输出与副作用：固定合成站点和随机操作；handoff/recover 均走 Broker，最后停止站点进程。
 """
 import base64
@@ -56,6 +56,29 @@ def check_browser(broker, key, command):
         assert nav['result']['dispatched'] is True
         current = until(observe, lambda state: any(item['name'] == 'unsaved' for item in state['nodes']))
         target = current['pageId']
+        for size in (4096, 4097, 32768):
+            value = 'x' * size
+            _, filled = execute('browser.act', {'observation': current['observation'], 'action': 'fill', 'nodeId': node(current, 'unsaved'), 'value': value})
+            current = observe()
+            _, checked = execute('browser.verify', {'mode': 'page', 'original': filled['result']['original'], 'observation': current['observation'], 'expectation': {'kind': 'value', 'nodeId': node(current, 'unsaved'), 'equals': value}})
+            assert checked['result']['matched'] is True
+        assert next(item for item in current['nodes'] if item['name'] == 'fieldset disabled')['disabled'] is True
+        assert next(item for item in current['nodes'] if item['name'] == 'agree')['checked'] is False
+        _, checked_click = execute('browser.act', {'observation': current['observation'], 'action': 'click', 'nodeId': node(current, 'agree')})
+        current = observe()
+        assert next(item for item in current['nodes'] if item['name'] == 'agree')['checked'] is True
+        _, checked_state = execute('browser.verify', {'mode': 'page', 'original': checked_click['result']['original'], 'observation': current['observation'], 'expectation': {'kind': 'checked', 'nodeId': node(current, 'agree'), 'equals': True}})
+        assert checked_state['result']['matched'] is True and checked_state['result']['actual'] is True
+        assert next(item for item in current['nodes'] if item['name'] == 'first choice')['checked'] is True
+        assert next(item for item in current['nodes'] if item['name'] == 'second choice')['checked'] is False
+        _, radio_click = execute('browser.act', {'observation': current['observation'], 'action': 'click', 'nodeId': node(current, 'second choice')})
+        current = observe()
+        for name, expected in (('first choice', False), ('second choice', True)):
+            assert next(item for item in current['nodes'] if item['name'] == name)['checked'] is expected
+            _, radio_state = execute('browser.verify', {'mode': 'page', 'original': radio_click['result']['original'], 'observation': current['observation'], 'expectation': {'kind': 'checked', 'nodeId': node(current, name), 'equals': expected}})
+            assert radio_state['result']['matched'] is True and radio_state['result']['actual'] is expected
+        execute('browser.act', {'observation': current['observation'], 'action': 'select', 'nodeId': node(current, 'dynamic choice'), 'value': 'b'})
+        current = until(observe, lambda state: any(item['tag'] == 'output' and item['text'] == 'selected b' for item in state['nodes']))
         execute('browser.act', {'observation': current['observation'], 'action': 'fill', 'nodeId': node(current, 'unsaved'), 'value': 'retain-me'})
         current = observe()
         assert next(item['value'] for item in current['nodes'] if item['name'] == 'unsaved') == 'retain-me'
@@ -67,6 +90,7 @@ def check_browser(broker, key, command):
         count = next(item for item in current['nodes'] if item['tag'] == 'output' and item['text'] == '1')
         _, verified = execute('browser.verify', {'mode': 'page', 'original': click['result']['original'], 'observation': current['observation'], 'expectation': {'kind': 'text', 'nodeId': count['id'], 'equals': '1'}})
         assert verified['evidence'] == 'returned' and verified['result']['matched'] is True
+        assert verified['result']['verificationKind'] == 'current-page-state' and verified['result']['causalAttribution'] == 'unconfirmed'
         _, downloaded = execute('browser.act', {'observation': current['observation'], 'action': 'click', 'nodeId': node(current, 'download CSV')})
         current = until(observe, lambda state: any(item['state'] == 'completed' for item in state['downloads']))
         file = next(item for item in current['downloads'] if item['state'] == 'completed')
@@ -77,6 +101,8 @@ def check_browser(broker, key, command):
         artifact = exported['artifacts'][0]
         payload = broker.read_artifact({'scope': 'ci', 'id': artifact['id']})
         assert base64.b64decode(payload['dataBase64']) == expected
+        old_observation = current['observation']
+        old_lease_request = request('browser.observe', {})
         before = health()
         control = {'environmentId': key, 'scope': 'ci', 'generation': 0, 'controlAuthorizationId': uuid.uuid4().hex}
         human = broker.handoff(control)
@@ -84,6 +110,18 @@ def check_browser(broker, key, command):
         assert health()['executors'][0]['ownerPid'] == before['executors'][0]['ownerPid']
         broker.resume({**control, 'generation': 1, 'controlAuthorizationId': uuid.uuid4().hex})
         binding = broker.acquire({'environmentId': key, 'scope': 'ci', 'workflowId': 'resumed-flow', 'ttlSeconds': 120})
+        try:
+            broker.execute(old_lease_request)
+        except BrokerError as error:
+            assert str(error) == 'stale-environment', error
+        else:
+            raise AssertionError('old lease accepted after handoff')
+        try:
+            broker.execute(request('browser.act', {'observation': old_observation, 'action': 'click', 'nodeId': 'n0'}))
+        except BrokerError as error:
+            assert str(error) == 'stale-observation', error
+        else:
+            raise AssertionError('old observation accepted after handoff')
         current = observe()
         assert current['pageId'] == target
         assert any(item.get('value') == 'retain-me' for item in current['nodes'])

@@ -1,5 +1,5 @@
 /**
- * 功能概述：用受控 DOM 准备屏障验证观察到期与下载控制 epoch，不冒充真实 Chromium。
+ * 功能概述：用受控 DOM 准备屏障验证观察到期、选择控件核对与下载控制 epoch，不冒充真实 Chromium。
  * 代码库关系：消费生产 BrowserComponent，覆盖异步 page/state 返回后的最终授权检查。
  * 输入输出与副作用：模拟时钟与内存观察；finally 释放全部屏障，不启动浏览器或网络。
  */
@@ -184,6 +184,35 @@ test(
     }
   },
 );
+
+test("checked verification reports both matching and mismatching current state", async () => {
+  const f = fixture();
+  try {
+    f.component.page = async () => f.page;
+    f.component.state = async () => f.state;
+    f.state.nodes[0].checked = false;
+    const request = (equals) =>
+      f.request("browser.verify", {
+        mode: "page",
+        original: { operationId: "old", attemptId: "old-attempt" },
+        expectation: { kind: "checked", nodeId: "n0", equals },
+      });
+    const match = await f.component.execute(request(false));
+    assert.equal(match.result.matched, true);
+    assert.equal(match.result.actual, false);
+    assert.equal(match.result.causalAttribution, "unconfirmed");
+    const mismatch = await f.component.execute(request(true));
+    assert.equal(mismatch.result.matched, false);
+    assert.equal(mismatch.result.actual, false);
+    delete f.state.nodes[0].checked;
+    await assert.rejects(
+      f.component.execute(request(false)),
+      /invalid-browser-expectation/,
+    );
+  } finally {
+    f.close();
+  }
+});
 
 test("handoff closes the old download attribution window", async () => {
   const f = fixture();

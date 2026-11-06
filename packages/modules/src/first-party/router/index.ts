@@ -1,4 +1,5 @@
 /**
+ * 候选竞争、claim 前驱和新 operation 槽按完整 scene 隔离，旧 claim 通过候选引用恢复并原样复用。
  * 候选新旧由 Selector 的账本注册顺序确定；相同/迟到业务时间及随机 UUID 不改变消费先后。
  * Light 的 message 决策只传目标与冻结引用。
  * manifest 声明 Light 模板；调用 compileLightPrompt 时传入装配阶段加载的 default/local 文本，不再使用代码内默认值。
@@ -76,6 +77,9 @@ import type { AgentIdentity, ModelTaskCapability } from "../heavy/index.js";
 import type { ModuleCapability } from "@kaguya/sdk";
 
 import {
+  sceneIdentity,
+  situationEvidenceRecordSchema,
+  type SceneAddress,
   jsonObjectSchema,
   type CompiledPrompt,
   type DeepReadonly,
@@ -245,13 +249,19 @@ const lightInterruptSelector = defineInformationSelector({
             }
           : {
               scopeKey,
+              payloadContains: {
+                platform: source.platform,
+                adapterId: source.adapterId,
+                destination: source.destination,
+              },
               registrationOrder: true,
               order: "desc" as const,
             }),
         limit: 1,
       }),
     )[0];
-    if (!candidate) return [...selected.keys()];
+    if (!candidate || !sameScope(candidate.payload, source))
+      return [...selected.keys()];
     const claims = add(
       await ledger.related({
         from: [candidate.informationId],
@@ -477,19 +487,30 @@ export const routerStateSelector = defineInformationSelector({
       ];
     }
 
-    const scopes = new Set(
+    const scenes = new Map(
       anchors
         .filter(({ kind }) => kind === turnCandidateInformationKind.kind)
-        .map((atom) => (atom.payload as any).scopeKey as string),
+        .map((atom) => {
+          const payload = turnCandidateInformationKind.payloadSchema.parse(
+            atom.payload,
+          );
+          return [sceneIdentity(payload), payload] as const;
+        }),
     );
     const candidates = [...anchors];
-    for (const scopeKey of scopes) {
+    for (const payload of scenes.values()) {
+      const scopeKey = String(payload.scopeKey);
       let afterInformationId: string | undefined;
       for (;;) {
         const page = remember(
           await ledger.find({
             kinds: [turnCandidateInformationKind.kind],
             scopeKey,
+            payloadContains: {
+              platform: payload.platform,
+              adapterId: payload.adapterId,
+              destination: payload.destination,
+            },
             openOnly: true,
             registrationOrder: true,
             order: "asc",
@@ -896,9 +917,9 @@ function createRoutingModule(
                     },
                     overBudget: snapshot.overBudget,
                     characterCount: snapshot.characterCount,
-                    evidence: (snapshot.evidence ?? []).map((item) => ({
-                      ...item,
-                    })),
+                    evidence: (snapshot.evidence ?? []).map((item) =>
+                      situationEvidenceRecordSchema.parse(item),
+                    ),
                     through: snapshot.through ?? 0,
                   },
                 },
@@ -1699,10 +1720,14 @@ async function progressCandidates(
       !turnTerminalFor(a.informationId, atoms) &&
       a.payload.managementAuthorizationId === undefined,
   );
-  const scopes = new Set(candidates.map((a) => String(a.payload.scopeKey)));
-  for (const scope of scopes) {
-    // routerStateSelector 保证候选子序列按持久注册位置递增。
-    const open = candidates.filter((a) => a.payload.scopeKey === scope);
+  const scenes = new Set(
+    candidates.map((a) => sceneIdentity(a.payload as unknown as SceneAddress)),
+  );
+  for (const scene of scenes) {
+    // routerStateSelector 保证候选子序列按持久注册位置递增；旧 scope 不能决定跨场景竞争。
+    const open = candidates.filter(
+      (a) => sceneIdentity(a.payload as unknown as SceneAddress) === scene,
+    );
     const winner = open.at(-1)!;
     await progressCandidate(winner, atoms, settings, context);
     if (open.length < 2) continue;
@@ -1765,7 +1790,9 @@ async function progressCandidate(
     .filter(
       (atom) =>
         atom.kind === turnClaimedInformationKind.kind &&
-        (atom.payload as any).scopeKey === payload.scopeKey,
+        referenced(atom, "agent:turn-candidate", map).some((owner) =>
+          sameScope(owner.payload, payload),
+        ),
     )
     .sort(compareClaims);
   const latestClaim = claims.at(-1);
@@ -1847,30 +1874,33 @@ async function progressCandidate(
     latestClaim === undefined
       ? 0
       : ((latestClaim.payload as any).generation ?? 0) + 1;
-  const claim = await context.registerOnce(
-    "agent.router.turn.claim",
-    `${payload.scopeKey}:${predecessorId ?? "root"}`,
-    turnClaimedInformationKind,
-    {
-      payload: {
-        candidateInformationId: candidate.informationId,
-        scopeKey: payload.scopeKey,
-        generation,
-        predecessorTerminalInformationId: predecessorId ?? null,
-      },
-      references: [
-        ...effectiveSourceInformationIds.map((informationId) => ({
-          relation: "core:uses-context",
-          informationId,
-        })),
-        {
-          relation: "agent:turn-candidate",
-          informationId: candidate.informationId,
+  // 历史已认领候选继续使用原 claim；新操作槽采用无碰撞的 scene+前驱元组。
+  const claim =
+    ownClaim ??
+    (await context.registerOnce(
+      "agent.router.turn.claim",
+      JSON.stringify([sceneIdentity(payload), predecessorId ?? "root"]),
+      turnClaimedInformationKind,
+      {
+        payload: {
+          candidateInformationId: candidate.informationId,
+          scopeKey: payload.scopeKey,
+          generation,
+          predecessorTerminalInformationId: predecessorId ?? null,
         },
-      ],
-      contextInformationId: runtimeContext.informationId,
-    },
-  );
+        references: [
+          ...effectiveSourceInformationIds.map((informationId) => ({
+            relation: "core:uses-context",
+            informationId,
+          })),
+          {
+            relation: "agent:turn-candidate",
+            informationId: candidate.informationId,
+          },
+        ],
+        contextInformationId: runtimeContext.informationId,
+      },
+    ));
   if ((claim.payload as any).candidateInformationId !== candidate.informationId)
     return;
 

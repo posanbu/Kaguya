@@ -1,6 +1,6 @@
 /**
  * 功能概述：沿明确账本引用选择 Memory 来源、参与者和原批次恢复事实。
- * 主要职责：sourceSelector 还原调度上下文；sourceParticipants 保留未知归属；恢复只读取原请求和终态。
+ * 主要职责：sourceSelector 还原调度上下文；sourceParticipants 保留未知归属；currentSpeakerOwner 检查当前有效绑定，恢复只读取原请求和终态。
  * 代码库关系：通过 SDK ledger selector 访问证据，不读取其他模块的私有存储。
  */
 import { defineInformationSelector } from "@kaguya/sdk";
@@ -50,6 +50,39 @@ export const sourceSelector = defineInformationSelector({
     ];
   },
 });
+
+/** 仅当终态为 canonical complete 且当前有效绑定唯一匹配时，才将发言归属于人物。 */
+export async function currentSpeakerOwner(
+  source: { platform: string; adapterId: string; senderId: string },
+  identity: {
+    status?: unknown;
+    scopeMode?: unknown;
+    personInformationId?: unknown;
+  },
+  memory: import("@kaguya/memory").NativeMemoryAccess,
+): Promise<string | null> {
+  if (
+    identity.status !== "complete" ||
+    identity.scopeMode !== "canonical" ||
+    typeof identity.personInformationId !== "string" ||
+    !identity.personInformationId
+  )
+    return null;
+  const expected = `person:${identity.personInformationId}`;
+  const bindings = await memory.people({
+    platform: source.platform,
+    adapterId: source.adapterId,
+    accountIds: [source.senderId],
+  });
+  const owners = [
+    ...new Set(
+      bindings
+        .filter((b) => b.accountId === source.senderId)
+        .map((b) => b.ownerId),
+    ),
+  ];
+  return owners.length === 1 && owners[0] === expected ? expected : null;
+}
 
 /** Resolve explicit account references only. Names never bind identities. */
 export async function sourceParticipants(

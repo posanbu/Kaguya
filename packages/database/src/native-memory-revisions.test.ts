@@ -1,6 +1,7 @@
 /**
  * 功能概述：验证 native 历史上界、来源失效、经历事务、分页及真实 PostgreSQL 提交可见性。
- * 主要职责：双数据库用例保留原文/epoch/哈希；真实 PG barrier 将 publication 停在提交前，
+ * 主要职责：双数据库用例保留原文/epoch/哈希，验证合并拆分不能覆盖既有节点或复用归档前驱；
+ * 真实 PG barrier 将 publication 停在提交前，
  * 证明较晚冻结不会因较早分配 position 而吸入未见知识。所有阻塞在 finally 释放后再关闭连接。
  * 代码库关系：直接调用生产 NativeMemoryStore/Access，仅向量候选使用离线替身；不调用外部模型。
  */
@@ -910,7 +911,54 @@ describe.each(backends)("native revision boundary ($name)", ({ create }) => {
         merge,
       ),
     ).rejects.toThrow("memory_experience_scope");
+    const existingOutput = experience(6, ["S1", "S2"]);
+    await put(db, "existing-output", [existingOutput]);
+    await expect(
+      put(
+        db,
+        "overwrite-output",
+        [
+          archive(e1),
+          archive(e2),
+          {
+            ...existingOutput,
+            metadata: { ...existingOutput.metadata, revision: 2 },
+          },
+        ],
+        {
+          experienceOperation: {
+            ...merge.experienceOperation,
+            outputIds: [existingOutput.id],
+          },
+        },
+      ),
+    ).rejects.toThrow("memory_invalid_experience");
     await put(db, "merge", [archive(e1), archive(e2), e3], merge);
+    const duplicate = experience(7, ["S1", "S2"]);
+    duplicate.metadata.experience!.predecessors = [e1.id, e2.id];
+    await expect(
+      put(
+        db,
+        "reuse-archived",
+        [
+          {
+            ...archive(e1),
+            metadata: { ...archive(e1).metadata, revision: 3 },
+          },
+          {
+            ...archive(e2),
+            metadata: { ...archive(e2).metadata, revision: 3 },
+          },
+          duplicate,
+        ],
+        {
+          experienceOperation: {
+            ...merge.experienceOperation,
+            outputIds: [duplicate.id],
+          },
+        },
+      ),
+    ).rejects.toThrow("memory_invalid_experience");
     await expect(put(db, "stale", [archive(e1)])).rejects.toThrow(
       "memory_revision_conflict",
     );

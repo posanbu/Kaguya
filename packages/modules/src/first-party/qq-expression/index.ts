@@ -599,13 +599,17 @@ export function createQqExpressionModule(
                   (a) => a.kind === turnContextCompletedInformationKind.kind,
                 );
                 let expression: OutboundExpression | undefined;
-                let text = stripEmoji(payload.text);
+                // 有序内容已绑定冻结请求，不能改写文字或给纯媒体添加占位正文。
+                let text = payload.contentSegments
+                  ? payload.text
+                  : stripEmoji(payload.text);
                 // 纯 emoji 草稿被抑制时保留可读占位，避免空字符串使投递链报错。
-                if (!text) text = "嗯。";
+                if (!text && !payload.contentSegments) text = "嗯。";
                 const semanticSource = state.find(
                   (a) => a.kind === inboundTextInformationKind.kind,
                 );
                 const canDecorate =
+                  !payload.contentSegments &&
                   !!semanticSource &&
                   !!turn &&
                   !!intent &&

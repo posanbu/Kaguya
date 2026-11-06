@@ -1,10 +1,11 @@
 /**
  * 功能概述：可信 GUI provider，将有期限的桌面观察映射为一次 Cua 输入，保留应用进程。
  * 主要职责：GuiComponent 检查 scope/许可/代际/会话；最终 stdin.write 前同步复查，
+ * 每次输入前重读同一目标并比较原图、坐标框与文本，只有状态一致才换用新 snapshot token；
  * isolate 先撤销观察，再终止 Driver 组、释放真实 X11 输入并读回，完成后才确认排空。
  * 代码库关系：ToolService 分派 gui.observe/act/verify；broker 保存操作身份与不可变 PNG，
  * CuaStdio 禁止程序启动及任意 MCP；gui-x11.py 是固定可信状态收尾入口。
- * 输入输出与副作用：截图保持原尺寸并声明窗口原点/坐标空间；未知输入不重发，关闭不杀应用。
+ * 输入输出与副作用：截图保持原尺寸并声明窗口原点/坐标空间，拒绝空 capture ID；未知输入不重发，关闭不杀应用。
  */
 import { createHash, randomBytes } from "node:crypto";
 import { mkdir } from "node:fs/promises";
@@ -81,7 +82,8 @@ function capture(result, where) {
     height > 800 ||
     data?.screenshot_width !== width ||
     data?.screenshot_height !== height ||
-    typeof data?.capture_id !== "string"
+    typeof data?.capture_id !== "string" ||
+    !data.capture_id
   )
     throw new Error("gui-capture-size-unconfirmed");
   let origin = { x: 0, y: 0 };
@@ -122,6 +124,61 @@ function capture(result, where) {
       mime: "image/png",
     },
   };
+}
+
+// Cua 文本包含 walk_ms、snapshot_id 与旧 token 提示；这些驱动元数据会随读取改变。
+// 比较结构化语义字段，保留元素状态、顺序、窗口层级及覆盖层；只去掉元素自己的 token。
+function fingerprint(image) {
+  const { captureId: _captureId, ...geometry } = image.geometry;
+  const data = image.data;
+  const elements = data.elements?.map(
+    ({ element_token: _token, ...element }) => element,
+  );
+  if (
+    geometry.target.kind === "window" &&
+    (typeof data.tree_markdown !== "string" || !Array.isArray(elements))
+  )
+    throw new Error("gui-window-state-unconfirmed");
+  return hash(
+    JSON.stringify({
+      geometry,
+      tree: data.tree_markdown,
+      elements,
+      windows: data.windows,
+      appName: data.app_name,
+      windowTitle: data.window_title,
+      dialogs: data.dialogs,
+      popups: data.popups,
+      followUp: data.follow_up,
+      composited: data.screenshot_composited,
+      elementCount: data.element_count,
+      totalElementCount: data.total_element_count,
+      returnedElementCount: data.returned_element_count,
+      elementsComplete: data.elements_complete,
+      boundsComplete: data.bounds_complete,
+      truncated: data.truncated === true,
+      truncationReason: data.truncation_reason,
+    }),
+  );
+}
+function elementsOf(image, text) {
+  if (
+    image.geometry.target.kind !== "window" ||
+    !/^s[0-9a-f]{8}$/.test(image.data.snapshot_id)
+  )
+    return [];
+  return text.split("\n").flatMap((line) => {
+    const index = /^\s*- \[(\d+)\]/.exec(line)?.[1];
+    return index === undefined
+      ? []
+      : [
+          {
+            id: `e${index}`,
+            token: `${image.data.snapshot_id}:${index}`,
+            description: line.trim().slice(0, 160),
+          },
+        ];
+  });
 }
 
 export class GuiComponent {
@@ -256,26 +313,17 @@ export class GuiComponent {
       where.kind === "desktop" ? "get_desktop_state" : "get_window_state",
       where.kind === "desktop"
         ? { max_image_dimension: 0 }
-        : { pid: where.pid, window_id: where.windowId, max_image_dimension: 0 },
+        : {
+            pid: where.pid,
+            window_id: where.windowId,
+            max_image_dimension: 0,
+            tree_format: "both",
+          },
     );
     check();
     const image = capture(result, where),
       allText = textOf(result);
-    const elements = [];
-    if (
-      where.kind === "window" &&
-      /^s[0-9a-f]{8}$/.test(image.data.snapshot_id)
-    ) {
-      for (const line of allText.split("\n")) {
-        const index = /^\s*- \[(\d+)\]/.exec(line)?.[1];
-        if (index !== undefined)
-          elements.push({
-            id: `e${index}`,
-            token: `${image.data.snapshot_id}:${index}`,
-            description: line.trim().slice(0, 160),
-          });
-      }
-    }
+    const elements = elementsOf(image, allText);
     const ref = {
       id: randomBytes(32).toString("hex"),
       environmentId: req.permit.environmentId,
@@ -295,6 +343,7 @@ export class GuiComponent {
       humanSessionId: req.permit.humanSessionId,
       record,
       image: image.geometry,
+      fingerprint: fingerprint(image),
       elements: elements.slice(0, 100),
       expires,
     };
@@ -340,6 +389,9 @@ export class GuiComponent {
       Object.entries(observation.ref).some(
         ([key, value]) => ref[key] !== value,
       ) ||
+      ["environmentId", "workflowId", "generation"].some(
+        (key) => observation.ref[key] !== req.permit[key],
+      ) ||
       observation.scope !== req.scope ||
       observation.leaseId !== req.permit.leaseId ||
       observation.fencing !== req.permit.fencing ||
@@ -351,6 +403,32 @@ export class GuiComponent {
     )
       throw new Error("stale-gui-observation");
     return observation;
+  }
+  async refresh(observation, check) {
+    check();
+    const where = observation.image.target;
+    const result = await observation.record.driver.call(
+      where.kind === "desktop" ? "get_desktop_state" : "get_window_state",
+      where.kind === "desktop"
+        ? { max_image_dimension: 0 }
+        : {
+            pid: where.pid,
+            window_id: where.windowId,
+            max_image_dimension: 0,
+            tree_format: "both",
+          },
+    );
+    check();
+    const image = capture(result, where),
+      text = textOf(result);
+    if (fingerprint(image) !== observation.fingerprint)
+      throw new Error("stale-gui-observation");
+    // 不发布新观察，不延长期限，不改变冻结原图；仅使用已核对状态的最新驱动 token。
+    return {
+      ...observation,
+      image: image.geometry,
+      elements: elementsOf(image, text).slice(0, 100),
+    };
   }
   input(args, observation) {
     const where = observation.image.target;
@@ -404,6 +482,9 @@ export class GuiComponent {
       ];
     }
     if (args.action === "insert") {
+      // Cua 0.38 桌面 type_text 忽略 x/y；必须先观察目标窗口，禁止向隐式焦点插入。
+      if (where.kind !== "window")
+        throw new Error("gui-window-observation-required");
       keys(args, ["action", "observation", "selector", "text"]);
       if (
         typeof args.text !== "string" ||
@@ -431,6 +512,9 @@ export class GuiComponent {
       ];
     }
     if (args.action === "key") {
+      // 桌面截图不声明输入焦点；窗口级按键由明确的 pid/window_id 路由。
+      if (where.kind !== "window")
+        throw new Error("gui-window-observation-required");
       keys(args, ["action", "observation", "key"], ["modifiers"]);
       const modifiers = args.modifiers ?? [];
       if (
@@ -474,14 +558,13 @@ export class GuiComponent {
   async act(req, check) {
     const observation = this.current(req, check),
       record = observation.record;
-    const [name, args] = this.input(req.arguments, observation);
+    this.input(req.arguments, observation);
     this.observations.delete(observation.ref.id);
     record.preparingBaseline = this.keyboard({ mode: "snapshot" }).then(
       (value) => {
         record.baseline = value;
       },
     );
-    await record.preparingBaseline;
     const finalCheck = () => {
       check();
       if (
@@ -501,13 +584,20 @@ export class GuiComponent {
           this.now(),
       ),
     );
-    let result;
+    let result, refreshed;
     try {
+      await record.preparingBaseline;
+      finalCheck();
+      refreshed = await this.refresh(observation, finalCheck);
+      const [name, args] = this.input(req.arguments, refreshed);
       result = await record.driver.call(name, args, finalCheck);
-    } catch {
+    } catch (error) {
       return output(
         {
-          reason: "gui-input-unconfirmed",
+          reason:
+            error?.message === "stale-gui-observation"
+              ? "stale-gui-observation"
+              : "gui-input-unconfirmed",
           original: { operationId: req.operationId, attemptId: req.attemptId },
           captureId: observation.image.captureId,
         },
@@ -523,6 +613,7 @@ export class GuiComponent {
       {
         original: { operationId: req.operationId, attemptId: req.attemptId },
         captureId: observation.image.captureId,
+        revalidatedCaptureId: refreshed.image.captureId,
         effect: effect ?? "unverifiable",
         route: result.structuredContent?.route,
         text: textOf(result).slice(0, 4096),

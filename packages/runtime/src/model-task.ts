@@ -1,4 +1,5 @@
 /**
+ * prepareMedia 仅对尚未登记的新 Heavy 请求执行；媒体实际消息随 requested 保存，恢复不重新读取素材。
  * 原生步骤核对冻结模型配置；历史 GUI 回执经共享投影读取原始归档图，缺失或失配时不派发模型。
  * 功能概述：提供模块可声明的通用模型任务能力，任务 ID 及输出 schema 由调用方拥有。
  * 主要职责：modelTaskCapability 是版本化 token；ModelTaskClient.execute 重载 selected atoms、
@@ -140,6 +141,11 @@ export interface ModelTaskClientOptions {
   ) => z.infer<typeof modelTaskResolvedModelSchema>;
   readonly now?: () => Date;
   readonly renderStructuredOutputPrompt: StructuredOutputPromptRenderer;
+  readonly prepareMedia?: (
+    key: string,
+    request: ModelTaskRequest<unknown>,
+    model: { providerId: string; modelId: string },
+  ) => Promise<NativeMessage[]>;
   readonly readNativeArtifact?: NativeArtifactReader;
   readonly admitNativeDispatch?: (
     requestedInformationId: string,
@@ -157,6 +163,7 @@ type Requested = DeepReadonly<
 export class ModelTaskClient implements ModelTaskCapability {
   readonly #core: InformationCore;
   readonly #client: Pick<KaguyaLlmClient, "generate">;
+  readonly #prepareMedia: ModelTaskClientOptions["prepareMedia"];
   readonly #readNativeArtifact: NativeArtifactReader | undefined;
   readonly #resolveModel: ModelTaskClientOptions["resolveModel"];
   readonly #now: () => Date;
@@ -165,6 +172,7 @@ export class ModelTaskClient implements ModelTaskCapability {
   readonly #inflight = new Map<string, Set<AbortController>>();
   constructor(options: ModelTaskClientOptions) {
     this.#core = options.core;
+    this.#prepareMedia = options.prepareMedia;
     this.#admitNativeDispatch = options.admitNativeDispatch;
     this.#client = options.client;
     this.#resolveModel = options.resolveModel;
@@ -392,6 +400,39 @@ export class ModelTaskClient implements ModelTaskCapability {
         else throw error;
       }
     }
+    let mediaInputByteLength = 0;
+    if (
+      !requested &&
+      !inputBlocked &&
+      selectionPolicy.tier === "heavy" &&
+      this.#prepareMedia
+    ) {
+      try {
+        const media = await this.#prepareMedia(key, request, resolvedModel!);
+        if (media.length) {
+          mediaInputByteLength = Buffer.byteLength(JSON.stringify(media));
+          if (mediaInputByteLength > 30 * 1024 * 1024)
+            throw new Error("SITUATION_CONTEXT_BUDGET_EXCEEDED");
+          messages = nativeMessagesSchema.parse([
+            ...(messages ?? [{ role: "user", content: prompt.text }]),
+            ...media,
+          ]);
+        }
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message === "media-native-model-unapproved"
+        )
+          inputBlocked = "native-protocol";
+        else if (
+          error instanceof Error &&
+          error.message === "SITUATION_CONTEXT_BUDGET_EXCEEDED"
+        ) {
+          inputBlocked = "context-budget";
+          mediaInputByteLength = 0;
+        } else throw error;
+      }
+    }
     requested ??= await this.#core.registerOnce(
       "kaguya.model.task.requested",
       key,
@@ -404,6 +445,7 @@ export class ModelTaskClient implements ModelTaskCapability {
           prompt,
           resolvedModel: resolvedModel!,
           messages: messages ?? null,
+          ...(mediaInputByteLength ? { mediaInputByteLength } : {}),
           inputBlocked,
         },
         references: [
@@ -499,7 +541,9 @@ export class ModelTaskClient implements ModelTaskCapability {
                 })),
                 tool_choice: "auto",
               }),
-            ) > requested.payload.nativeStep.maxContextBytes
+            ) >
+            requested.payload.nativeStep.maxContextBytes +
+              (requested.payload.mediaInputByteLength ?? 0)
           ) {
             failureStage = "context-budget";
             throw new Error("Native input budget exhausted");
@@ -563,7 +607,9 @@ export class ModelTaskClient implements ModelTaskCapability {
           : {}),
         ...(requested.payload.nativeStep
           ? {
-              maxInputBytes: requested.payload.nativeStep.maxContextBytes,
+              maxInputBytes:
+                requested.payload.nativeStep.maxContextBytes +
+                (requested.payload.mediaInputByteLength ?? 0),
               timeoutMs: Math.min(
                 300000,
                 Math.max(
@@ -835,6 +881,7 @@ function persistedMetadata(requested: Requested) {
   const {
     prompt: _prompt,
     messages: _messages,
+    mediaInputByteLength: _mediaBytes,
     inputBlocked: _blocked,
     ...metadata
   } = modelTaskRequestedInformationKind.payloadSchema.parse(requested.payload);

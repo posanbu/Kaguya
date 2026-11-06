@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """功能概述：供 Linux 本机受信用户执行已审查的一次性 W7/W8 安装包。
-主要职责：verify_manifest 校验固定源码和 OCI 归档；install 调用既有 bootstrap 的只读预检与管理员 apply，
+主要职责：verify_manifest 校验固定源码、OCI 归档、不可变镜像引用及包内 CI/GUI 回执的一致性；
+verify_ci_evidence 供制包和安装复用离线证据检查，不证明远端 CI 状态。install 调用 bootstrap 的预检与管理员 apply，
 随后以原用户复制归档并调用 broker image.import；rollback 只复用 bootstrap 的保留数据回退。
 代码库关系：package_bundle.py 生成 manifest；特权系统变更全部由同目录 bootstrap.py 实现。
 输入输出与副作用：不创建环境、不改 Kaguya Profile/数据库/QQ，不调用模型；镜像身份和回执写入用户目录。
@@ -14,6 +15,7 @@ import os
 from pathlib import Path
 import platform
 import pwd
+import re
 import shutil
 import socket
 import stat
@@ -36,25 +38,53 @@ def regular(path):
         raise RuntimeError("bundle-nonregular-file")
 
 
+def verify_ci_evidence(run, receipt, sha, images):
+    if (not isinstance(run, dict) or run.get("head_sha") != sha or
+            run.get("conclusion") != "success" or run.get("status") != "completed" or
+            not isinstance(run.get("html_url"), str) or not run["html_url"].startswith("https://")):
+        raise RuntimeError("bundle-ci-not-passed")
+    if (not isinstance(receipt, dict) or receipt.get("passed") is not True or
+            receipt.get("existingHomeRecovered") is not True):
+        raise RuntimeError("bundle-gui-provider-not-passed")
+    if receipt.get("imageDigest") != images["gui"]["image"].split("@", 1)[1]:
+        raise RuntimeError("bundle-receipt-image-mismatch")
+
+
 def verify_manifest(root, images=True):
     regular(root / "manifest.json")
     manifest = json.loads((root / "manifest.json").read_text())
-    if manifest.get("version") != 1 or set(manifest.get("sources", {})) != set(SOURCE_FILES):
+    if (not isinstance(manifest, dict) or manifest.get("version") != 1 or
+            not isinstance(manifest.get("commit"), str) or
+            not re.fullmatch(r"[a-f0-9]{40}", manifest["commit"]) or
+            not isinstance(manifest.get("sources"), dict) or
+            set(manifest["sources"]) != set(SOURCE_FILES)):
         raise RuntimeError("bundle-manifest-invalid")
     for name, expected in manifest["sources"].items():
         regular(root / name)
         if digest(root / name) != expected:
             raise RuntimeError("bundle-source-checksum-mismatch")
     if images:
-        if set(manifest.get("images", {})) != set(IMAGE_ROLES):
+        if not isinstance(manifest.get("images"), dict) or set(manifest["images"]) != set(IMAGE_ROLES):
             raise RuntimeError("bundle-images-missing")
         for role, image in manifest["images"].items():
-            if image["file"] != role + "-tools.oci":
+            if not isinstance(image, dict) or image.get("file") != role + "-tools.oci":
                 raise RuntimeError("bundle-image-path-invalid")
+            if (not isinstance(image.get("archiveSha256"), str) or
+                    not re.fullmatch(r"[a-f0-9]{64}", image["archiveSha256"]) or
+                    not isinstance(image.get("image"), str) or
+                    not re.fullmatch(r"localhost/kaguya-" + role + r"@sha256:[a-f0-9]{64}", image["image"])):
+                raise RuntimeError("bundle-image-identity-invalid")
             path = root / image["file"]
             regular(path)
             if digest(path) != image["archiveSha256"]:
                 raise RuntimeError("bundle-image-checksum-mismatch")
+        for name in ("workflow-run.json", "gui-provider-receipt.json"):
+            regular(root / name)
+        run = json.loads((root / "workflow-run.json").read_text())
+        receipt = json.loads((root / "gui-provider-receipt.json").read_text())
+        verify_ci_evidence(run, receipt, manifest["commit"], manifest["images"])
+        if run["html_url"] != manifest.get("workflowRun"):
+            raise RuntimeError("bundle-ci-reference-mismatch")
     return manifest
 
 

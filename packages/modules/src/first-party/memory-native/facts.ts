@@ -1,6 +1,6 @@
 /**
  * 功能概述：声明 native Memory 来源、形成、修订、重试及观察确认的事实契约。
- * 主要职责：formationSchemaFor 按持久 cutoff 选择输出协议，既有无 cutoff 请求保持原 v1 schema。
+ * 主要职责：formationSchemaFor 按持久策略选择输出协议，旧请求保持其原 schema 和模型指纹。
  * 代码库关系：模块生产事实，database 核验其原始来源、冻结输入与完成依据；schema 本身无 I/O。
  */
 import { memorySourceSchema } from "@kaguya/memory";
@@ -14,6 +14,7 @@ export const nativeMemoryRequested = defineInformationKind({
     .object({
       batchId: z.string(),
       scope: z.string(),
+      formationPolicy: z.literal("experience-operations.v1").exactOptional(),
       sources: z.array(memorySourceSchema),
       existing: z.record(z.string(), z.json()),
     })
@@ -154,8 +155,25 @@ export const revisableFormationOutputSchema = formationOutputSchema.extend({
     .max(24),
 });
 
+/** 新请求可以提交一次原子经历操作；引用使用旧节点 ID 或本批节点 key。 */
+export const experienceFormationOutputSchema =
+  revisableFormationOutputSchema.extend({
+    experienceOperation: z
+      .object({
+        kind: z.enum(["correct", "seal", "reopen", "merge", "split"]),
+        inputIds: z.array(z.string().min(1)).min(1).max(24),
+        outputIds: z.array(z.string().min(1)).min(1).max(24),
+      })
+      .strict()
+      .optional(),
+  });
+
 /** 以持久冻结字段选择协议；旧 v1 请求永远保持原模型输出 schema。 */
-export function formationSchemaFor(existing: { cutoff?: unknown }) {
+export function formationSchemaFor(
+  existing: { cutoff?: unknown },
+  formationPolicy?: "experience-operations.v1",
+) {
+  if (formationPolicy) return experienceFormationOutputSchema;
   return existing.cutoff
     ? revisableFormationOutputSchema
     : formationOutputSchema;

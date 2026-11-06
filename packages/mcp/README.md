@@ -55,6 +55,8 @@ tools/list 使用单页协议 request。整个发现过程受总 deadline、页�
 
 W3 在发送前持久登记 intent/attempt。返回的 JSON-RPC ID 与模型 toolCallId、operationId、attemptId 分开保存。断连、输出验证失败、取消或超时保留 unknown；isError 保留 partial 与实际返回，均不自动重发。MCP 没有通用的已执行操作查询接口；unknown 由 W3/管理端核对。取消通知或中断 HTTP 流仅表示停止等待，不能证明远端副作用已停止。
 
+HTTP 认证引用的完整头值及 Bearer/Basic 参数按派发时凭据集合脱敏，覆盖响应正文、JSON 键和迟到证据。工具明确返回 `isError` 时保留错误格式及 `partial/returned`；成功结果仍按冻结的输出 schema 校验，缺失或不匹配时保留 `unknown`。
+
 内容信封保留连接与定义修订、scope、获取时间、原始内容/URI/媒体类型，标记 `untrusted-mcp-data`。它不会成为 system 指令或权限。resources 仅按需 list/templates/read，模板展开后的 URI 仍受前缀策略约束。prompts/get 消耗一次性的用户选择，不能通过工具参数制造该选择。
 
 模块可使用 `mcp:resources`、`mcp:prompts` capability；后者只有 list/get，不提供 select。可信管理端通过 `POST /api/mcp/read` 访问，要求 Gateway management Bearer token，正文包含 connectionId、scope 和 kind。kind 为 resources、templates、prompts、resource 或 prompt；resource 另给 uri；prompt 另给 name/arguments，该 POST 本身是明确用户选择。没有执行任意工具、修改连接或隐式读取资源的 HTTP 路由。
@@ -76,6 +78,12 @@ CuaDriver 0.38.0 的真实兼容验证与合成 2025-06-18 协议测试分别记
 取消或超时后的 `unknown` 回执保持不变。只有 transport 实际收到、能匹配原已发送 `tools/call` 的响应，才写入独立的 `mcp.client.late-result.v1` Information。HTTP 已中断且未收到的正文不能作为客户端观察结果。每个 transport 使用独立 generation；JSON-RPC ID 按原类型匹配，未知 ID 与重连后的同号请求不会关联到旧请求。
 
 证据携带 `scopeKey`、原 intent/operation/attempt/model call ID、冻结的连接/定义 revision、接收时间和脱敏响应摘要。Server 复核原 W3 intent/attempt 后 append，允许证据先于 unknown 提交；不调用改变 W3 head 的完成或核对接口。保存失败保留同一事件 ID，关闭等待保存并在失败时保留宿主和数据库供显式重试；已提交的同一事实只读确认，不重复 append 或重发工具。凭据按派发时上下文脱敏，响应仍受 `maxBytes` 限制。回退时保留已写入的 Information Kind 与事实。
+
+### 人工核对入口
+
+管理端用 Gateway management Bearer token 读取 `GET /api/v1/inspection/actions/{intentId}?scope={编码后的原scope}`，核对原 intent/attempt、unknown 回执及 `lateEvidence` 的原请求身份和摘要。未认证请求返回 401，不匹配的 scope 返回 404。此查询只读，不发送 MCP 请求、不触发工具重试、不改变行动状态。服务端已产生副作用但 HTTP 响应未到达客户端时，页面没有迟到证据是正常结果，不能据此确认未执行。
+
+通用 MCP provider 的 `reconciliation` 保持 false。该入口供人检查已有证据，没有人工填写成功状态的写接口，也不以客户端迟到响应代替远端副作用核对。只有具体服务提供可信查询能力并接入 W3 provider 后，才能据该证据执行状态核对。
 
 ## 合成服务的控制与等待
 

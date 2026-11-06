@@ -1,4 +1,5 @@
 /**
+ * 延期调度保存完整 scene 地址，恢复仍兼容沿引用解析旧调度。
  * 功能概述：统一 Lifecycle 的节拍、活动、睡眠和观察恢复，保留旧持久订阅身份。
  * 主要职责：createLifecycleModule 组合观察及睡眠实例；update 记录活动并管理定时器。
  * lifecycleSettingsSchema 约束时间预算；defer 处理登记持久复查，启动和到期调用 recoverObservations。
@@ -8,6 +9,7 @@
  */
 import {
   recoverySourcesSelector,
+  recoveryOwnersSelector,
   recoverObservations,
 } from "./observation-recovery.js";
 import { observationCapability, defineInformationSelector } from "@kaguya/sdk";
@@ -239,6 +241,7 @@ export function createLifecycleModule(options: { timeZone: string }) {
       ]),
       selectors: unique([
         recoverySourcesSelector,
+        recoveryOwnersSelector,
         deferredCandidateSelector,
         recoveryScheduleSelector,
         ...sleep.manifest.selectors!,
@@ -474,7 +477,15 @@ export function createLifecycleModule(options: { timeZone: string }) {
               operationKey: `observation-defer:${atom.informationId}`,
               sourceInformationId: atom.informationId,
               dueAt,
-              input: { purpose: "observation-recheck", scopeKey: p.scopeKey },
+              input: {
+                purpose: "observation-recheck",
+                scopeKey: p.scopeKey,
+                sceneAddress: {
+                  platform: p.platform,
+                  adapterId: p.adapterId,
+                  destination: p.destination,
+                },
+              },
               activation: config.activation,
             });
             const access = ctx.use(observationCapability);

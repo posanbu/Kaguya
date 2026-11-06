@@ -1,5 +1,8 @@
 /** 情境—行动契约的运行时校验。JSON Schema 由 scripts/export-situation-contract.ts 导出。 */
 /** 情境—行动契约的运行时校验。JSON Schema 由 scripts/export-situation-contract.ts 导出。 */
+import { mediaContentSegmentsSchema } from "./media-content.js";
+import type { JsonObject } from "./index.js";
+import type { EvidenceRecord } from "./situation-context.js";
 import { z } from "zod";
 import { nativeMemorySnapshotSchema } from "./memory-graph.js";
 
@@ -28,13 +31,14 @@ export const situationEvidenceInputSchema = z.strictObject({
     "delivery",
   ]),
   text: z.string(),
+  contentSegments: mediaContentSegmentsSchema.optional(),
   replaces: z.array(id),
 });
 export const situationEvidenceRecordSchema =
   situationEvidenceInputSchema.extend({
     sequence: z.number().int().positive(),
     receivedAt: instant,
-  });
+  }) as z.ZodType<EvidenceRecord & JsonObject>;
 export const situationRecallSchema = z.strictObject({
   sceneId: id,
   revision: id,

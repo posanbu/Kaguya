@@ -6,7 +6,7 @@
  * 每段沿用8秒条件等待；fixture预算计入setup、MCP请求、控制和close，诊断记录backend、阶段与关联ID。
  * Light gate 只阻塞合成模型响应，回归确认观察完成不等于模型完成；release与observer settle独立清理。
  * 管理 GUI 测试仅替换 broker RPC，保留真实 Host/W3/SDK 原图链路；不产生外部模型请求。
- * 迟到响应经真实JSONB读取再由Inspection核验摘要与intent/attempt，防止仅落账而无法展示。
+ * 迟到响应经真实JSONB读取再由Inspection核验摘要与intent/attempt；人工核对入口拒绝未认证与跨scope读取。
  * 正式链路按 MCP 回执、匹配 run 的模型/assistant 持久化、Web 交付与队列收敛分阶段等待。
  * fixture 在 setup 失败和 shutdown 异常时也尝试释放所有资源；记录子进程 PID，验证关闭后不残留。
  */
@@ -1591,8 +1591,31 @@ it.each(["before-unknown", "after-unknown"] as const)(
           ).toBe("unknown");
           await expectPersistenceSettled(f.db);
         });
+        const inspectionUrl = `/api/v1/inspection/actions/${action.intentId}`;
+        expect(
+          (
+            await server.app.inject({
+              url: `${inspectionUrl}?${new URLSearchParams({ scope: f.scope })}`,
+            })
+          ).statusCode,
+        ).toBe(401);
+        expect(
+          (
+            await server.app.inject({
+              url: `${inspectionUrl}?${new URLSearchParams({
+                scope: JSON.stringify([
+                  "web",
+                  "web",
+                  "conversation",
+                  "88a874b7-bf52-4799-8c2a-6255c20eaa11",
+                ]),
+              })}`,
+              headers: { authorization: "Bearer synthetic-gateway" },
+            })
+          ).statusCode,
+        ).toBe(404);
         const inspection = await server.app.inject({
-          url: `/api/v1/inspection/actions/${action.intentId}?${new URLSearchParams({ scope: f.scope })}`,
+          url: `${inspectionUrl}?${new URLSearchParams({ scope: f.scope })}`,
           headers: { authorization: "Bearer synthetic-gateway" },
         });
         expect(inspection.statusCode).toBe(200);

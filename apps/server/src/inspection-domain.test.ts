@@ -2,8 +2,10 @@
  * 功能概述：以独立 PGlite/真实 PostgreSQL 和合成持久事实验证跨领域 Inspection 的实际 HTTP 投影。
  * fixture 只构造测试证据；所有写入先 await，GET 前后比较持久状态，不把投影测试冒充 provider 执行。
  * 覆盖认证先行、只读事务、固定边界/过滤游标、独立水位、Memory 历史、取消与迟到证据，以及内容泄露。
+ * 正规来源绑定 Atom 身份；迟到结果覆盖规范 JSON 摘要、历史摘要与篡改拒绝，不依赖 JSONB 键序。
  * 代码库关系：组合正式 schema、database、Inspection 路由和 Gateway 认证；无模型/外部网络/生产数据。
  * 清理等待 Fastify 与数据库关闭；没有固定 sleep、默认轮询或未等待后台任务。
+ * 显式要求 PostgreSQL 时缺少连接串直接失败，不能静默退回仅 PGlite 的验收。
  */
 import { randomUUID, createHash } from "node:crypto";
 import Fastify from "fastify";
@@ -46,16 +48,16 @@ afterEach(async () => {
   if (errors.length)
     throw new AggregateError(errors, "Inspection fixture cleanup failed");
 });
+const postgresUrl = process.env.KAGUYA_TEST_DATABASE_URL?.trim();
+if (process.env.KAGUYA_REQUIRE_POSTGRES_TESTS === "1" && !postgresUrl)
+  throw new Error("PostgreSQL Inspection URL required");
 const backends = [
   { name: "PGlite", create: createTestingDatabase },
-  ...(process.env.KAGUYA_TEST_DATABASE_URL
+  ...(postgresUrl
     ? [
         {
           name: "PostgreSQL",
-          create: () =>
-            createPostgresTestingDatabase(
-              process.env.KAGUYA_TEST_DATABASE_URL!,
-            ),
+          create: () => createPostgresTestingDatabase(postgresUrl),
         },
       ]
     : []),
@@ -588,14 +590,16 @@ for (const backend of backends)
             modelToolCallId: "call",
           },
         ],
-        value: { result: "late", dataUrl: "data:image/png;base64,private" },
+        value: {
+          result: "late",
+          nested: { z: 2, a: 1 },
+          dataUrl: "data:image/png;base64,private",
+        },
       };
       const payload = {
         scopeKey: scope,
         envelope,
-        responseDigest: createHash("sha256")
-          .update(JSON.stringify(envelope.value))
-          .digest("hex"),
+        responseDigest: `canonical-json-v1:sha256:${actionDigest(envelope.value)}`,
       };
       await f.atom("late", "mcp.client.late-result.v1", payload, [
         { relation: "core:caused-by", informationId: "intent" },
@@ -612,6 +616,39 @@ for (const backend of backends)
         },
         [{ relation: "core:caused-by", informationId: "intent" }],
       );
+      // Canonical hashing accepts reordered nested JSON, but never a different value.
+      expect(actionDigest(envelope.value)).toBe(
+        actionDigest({
+          dataUrl: envelope.value.dataUrl,
+          nested: { a: 1, z: 2 },
+          result: "late",
+        }),
+      );
+      await f.atom(
+        "tampered",
+        "mcp.client.late-result.v1",
+        {
+          ...payload,
+          envelope: {
+            ...envelope,
+            value: { ...envelope.value, result: "TAMPERED LATE VALUE" },
+          },
+        },
+        [{ relation: "core:caused-by", informationId: "intent" }],
+      );
+      const legacyValue = "legacy late result";
+      await f.atom(
+        "legacy-late",
+        "mcp.client.late-result.v1",
+        {
+          ...payload,
+          envelope: { ...envelope, value: legacyValue },
+          responseDigest: createHash("sha256")
+            .update(JSON.stringify(legacyValue))
+            .digest("hex"),
+        },
+        [{ relation: "core:caused-by", informationId: "intent" }],
+      );
       const response = await f.get("actions/intent");
       expect(response.statusCode).toBe(200);
       const a = response.json().data;
@@ -621,8 +658,12 @@ for (const backend of backends)
       expect(a.receipts[0].content.value.result.causalAttribution).toBe(
         "unconfirmed",
       );
-      expect(a.lateEvidence).toHaveLength(1);
-      expect(a.rejectedEvidenceCount).toBe(1);
+      expect(a.lateEvidence.map((e: any) => e.informationId)).toEqual([
+        "legacy-late",
+        "late",
+      ]);
+      expect(a.rejectedEvidenceCount).toBe(2);
+      expect(response.body).not.toContain("TAMPERED LATE VALUE");
       expect(response.body).not.toContain("/home/private");
       expect(response.body).not.toContain("private-model-key");
       expect(response.body).not.toContain("data:image");
@@ -889,6 +930,83 @@ for (const backend of backends)
       ).json().data;
       expect(withdrawn.items[0].reasons).toContain("source-withdrawal");
       expect(withdrawn.knowledgeCutoff).toBe(p2.position);
+    });
+    it("binds canonical source proof to the requested atom identity", async () => {
+      const f = await fixture(backend.create);
+      const source = {
+        memorySource: {
+          id: "source",
+          ownerId: "person:a",
+          scope,
+          text: "proved source",
+        },
+        originalInformationId: "source",
+        sourceProofVersion: 1,
+        sourceOwners: ["person:a"],
+      };
+      const references = [
+        { relation: "core:uses-context", informationId: "source" },
+      ];
+      await f.atom(
+        "memory-native-source:source",
+        "memory.native.source.v1",
+        source,
+        references,
+      );
+      await f.atom(
+        "source-alias",
+        "memory.native.source.v1",
+        {
+          ...source,
+          memorySource: { ...source.memorySource, text: "UNPROVED ALIAS TEXT" },
+        },
+        references,
+      );
+      const canonical = await f.get("sources/memory-native-source:source");
+      expect(canonical.statusCode, canonical.body).toBe(200);
+      expect(canonical.json().data.availability).toBe("available");
+      expect(canonical.json().data.content.value.memorySource.text).toBe(
+        "proved source",
+      );
+      const alias = await f.get("sources/source-alias");
+      expect(alias.statusCode, alias.body).toBe(200);
+      expect(alias.json().data).toMatchObject({
+        availability: "unavailable",
+        reason: "source-proof-missing",
+        content: null,
+        references: [],
+      });
+      expect(alias.body).not.toContain("UNPROVED ALIAS TEXT");
+      for (const variant of ["wrong-original", "wrong-reference"]) {
+        await f.atom(variant, "core.message.inbound.text", {
+          text: "independent source",
+          source: address,
+        });
+        await f.atom(
+          `memory-native-source:${variant}`,
+          "memory.native.source.v1",
+          {
+            ...source,
+            originalInformationId:
+              variant === "wrong-original" ? "source" : variant,
+            memorySource: {
+              ...source.memorySource,
+              id: variant,
+              text: "INCONSISTENT SOURCE TEXT",
+            },
+          },
+          [
+            {
+              relation: "core:uses-context",
+              informationId: variant === "wrong-reference" ? "source" : variant,
+            },
+          ],
+        );
+        const invalid = await f.get(`sources/memory-native-source:${variant}`);
+        expect(invalid.statusCode, invalid.body).toBe(200);
+        expect(invalid.json().data.reason).toBe("source-proof-missing");
+        expect(invalid.body).not.toContain("INCONSISTENT SOURCE TEXT");
+      }
     });
     it("rejects directory drift from late observations and newly registered consumers", async () => {
       const f = await fixture(backend.create);

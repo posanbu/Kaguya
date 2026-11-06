@@ -6,7 +6,7 @@
  * postgres-development.ts，生产 pnpm start 不经过这里。
  * 输入输出与副作用：可能启动 Docker 容器、补齐 selected Profile runtime 或创建子进程；
  * 不停止/删除容器和数据卷；开发准备失败提示启动 Docker Desktop 并运行 docker info 确认。
- * 使用独立临时 schema；验证清单包含 Memory 节点／边存储契约。
+ * 使用独立临时 schema；验证清单包含 Memory 节点／边及媒体资源存储契约。
  * MCP、Inspection、行动、工具循环、Memory 历史和 Lifecycle 分页均进入真实 PostgreSQL 清单。
  * 真实 PostgreSQL 清单覆盖 observation-store 与 observation-runtime，验证跨事务冻结、确认和重连。
  */
@@ -36,8 +36,15 @@ const repositoryRoot = resolve(serverRoot, "../..");
 export const POSTGRES_TEST_FILES = [
   "apps/server/src/mcp-host.test.ts",
   "apps/server/src/inspection-domain.test.ts",
+  "apps/server/src/issue279-replay.test.ts",
   "packages/database/src/observation-store.test.ts",
   "packages/runtime/src/action.test.ts",
+  "packages/runtime/src/media-input.test.ts",
+  "apps/server/src/media-output.test.ts",
+  "packages/runtime/src/media-resource-retention.test.ts",
+  "packages/runtime/src/media-vision.test.ts",
+  "packages/modules/src/first-party/identity/durable.test.ts",
+  "packages/modules/src/first-party/memory-native/experience-operations.test.ts",
   "packages/runtime/src/native-tool-loop.test.ts",
   "packages/runtime/src/observation-runtime.test.ts",
   "packages/modules/src/first-party/lifecycle/index.test.ts",
@@ -45,6 +52,7 @@ export const POSTGRES_TEST_FILES = [
   "packages/database/src/postgres-index.test.ts",
   "packages/database/src/postgres-reliable.test.ts",
   "packages/database/src/memory-graph.test.ts",
+  "packages/database/src/media-resource-store.test.ts",
   "packages/database/src/native-memory.test.ts",
   "packages/database/src/native-memory-revisions.test.ts",
   "packages/database/src/web-conversation-storage.test.ts",

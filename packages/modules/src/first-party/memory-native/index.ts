@@ -1,6 +1,6 @@
 /**
  * 功能概述：运行独立 Memory 消费、形成、发布与恢复流程。
- * 主要职责：按正规来源冻结 observation，使用持久请求选择模型协议；发布、终态、批次完成和观察确认分别幂等恢复。
+ * 主要职责：按正规来源和当前有效身份绑定冻结 observation，使用持久请求选择模型协议；发布、终态、批次完成和观察确认分别幂等恢复。
  * 代码库关系：通过 memory/observation/model capability 工作；定时维护扫描原账本，不依赖前台回复。
  */
 import { memoryObservations, ackMemoryObservations } from "./observation.js";
@@ -9,6 +9,7 @@ import { nativeMemorySnapshotSchema } from "@kaguya/schema";
 import {
   sourceSelector,
   sourceParticipants,
+  currentSpeakerOwner,
   recoveryFormationSelector,
 } from "./collection.js";
 import { stableId, publishFormation } from "./formation.js";
@@ -97,6 +98,7 @@ export function createNativeMemoryModule(
         payload: {
           batchId: batch.id,
           scope: batch.scope,
+          formationPolicy: "experience-operations.v1",
           sources: batch.sources.map((s) => ({ ...s })),
           existing,
         },
@@ -372,18 +374,19 @@ export function createNativeMemoryModule(
                 return;
               const scope = memoryScope(parsed.source);
               const formation = context.use(memoryFormationCapability);
+              const speakerOwnerId = await currentSpeakerOwner(
+                parsed.source,
+                p,
+                context.use(nativeMemoryCapability),
+              );
               const accepted = await formation.ingest({
                 id: source.informationId,
                 scope,
-                ownerId: p.personInformationId
-                  ? `person:${p.personInformationId}`
-                  : `conversation:${scope}`,
+                ownerId: speakerOwnerId ?? `conversation:${scope}`,
                 sourceType: "inbound",
                 participants: await sourceParticipants(
                   parsed.source,
-                  p.personInformationId
-                    ? `person:${p.personInformationId}`
-                    : null,
+                  speakerOwnerId,
                   context.use(nativeMemoryCapability),
                 ),
                 replyTo: parsed.source.replyTo
@@ -466,7 +469,10 @@ export function createNativeMemoryModule(
                     task: {
                       taskId: "memory.native.form",
                       outputMode: "object",
-                      outputSchema: formationSchemaFor(p.existing),
+                      outputSchema: formationSchemaFor(
+                        p.existing,
+                        p.formationPolicy,
+                      ),
                       allowedTiers: ["light"],
                     },
                     sourceInformationId: atom.informationId,
@@ -479,7 +485,18 @@ export function createNativeMemoryModule(
                     prompt: render([
                       {
                         name: "context",
-                        content: JSON.stringify(p),
+                        content: JSON.stringify({
+                          ...p,
+                          ...(p.formationPolicy
+                            ? {
+                                formationRules: {
+                                  policy: p.formationPolicy,
+                                  instructions:
+                                    "批次仅为读取窗口。延续同一经历时使用已有节点ID作为key。证据不足时保持不变，不把旁观者内容归给被提问者。封口、重开、更正用experienceOperation且inputIds和outputIds为同一已有ID。合并/拆分用旧ID作为inputIds、新key作为outputIds，nodes同时包含归档输入及active输出。输出明确分配原输入全部来源，不编造归属。每批至多一次经历操作；其他节点可普通增补。空结果或完全无变化确认本批读取。",
+                                },
+                              }
+                            : {}),
+                        }),
                         informationIds: [
                           atom.informationId,
                           ...sources.map((s) => s.informationId),

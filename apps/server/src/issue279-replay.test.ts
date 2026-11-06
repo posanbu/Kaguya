@@ -2,8 +2,12 @@
  * 功能概述：同一虚构多人场景贯穿正式 Server/Adapter/Identity/Memory/观察/行动/MCP/Inspection。
  * 每组在 PGlite 与显式 PG schema 上执行，模型仅替换 HTTP；来源/冻结/形成/结果均由生产 writer 创建。
  * 主要职责：quiet 检查独立形成；late 检查跨页旧冻结；holes 检查失败不越水位；withdraw 检查准入；
- * unknown 用独立 stdio journal 核对真实一次 effect。SQL 只读定位身份，不能种成功事实或消费进度。
+ * success 验证工具成功、Heavy 接续与一次投递；unknown 用独立 stdio journal 核对真实一次 effect。
+ * SQL 只读定位身份，不能种成功事实或消费进度；门闩期间等待已登记形成请求，最终仍检查整个队列收敛。
  * 代码库关系：复用 test-support/replay-fixture、persistence 和 MCP 合成服务；不执行外部 LLM 或物理 GUI。
+ * 迟到来源按冻结页逐页等待观察确认，再单独等待模型与持久队列收尾，避免将多页串行工作压进一个等待预算。
+ * waitIngressFanout 按输入逐条证明 Lifecycle、身份推进和 Focus 的精确 ACK，避免空队列或批量时长误判。
+ * waitForHeavyInput 先证明触发消息进入真实情境和 Light 终态；十页批量确认按每页 8 秒组成基础设施预算。
  * 所有 gate 在 fixture.close 释放，模型工作收敛后再关闭 Runtime/SQL；各阶段8秒、外层按顺序阶段计预算。
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -48,7 +52,7 @@ afterEach(async () => {
   if (errors.length)
     throw new AggregateError(errors, "Unified replay cleanup failed");
 }, replayCleanupBudget);
-const url = process.env.KAGUYA_TEST_DATABASE_URL;
+const url = process.env.KAGUYA_TEST_DATABASE_URL?.trim();
 if (process.env.KAGUYA_REQUIRE_POSTGRES_TESTS === "1" && !url)
   throw new Error("PostgreSQL replay URL required");
 const backends = ["PGlite", ...(url ? ["PostgreSQL"] : [])] as Array<
@@ -168,22 +172,43 @@ async function prefix(
     );
     sources.push(receipt.inboundInformationId);
   }
+  await waitIngressFanout(f, `${group}/${adapter}: prefix`, sources);
+  await waitCanonicalSources(f, sources);
+  expect(
+    (await f.facts("memory.native.source.v1")).filter((a) =>
+      sources.includes(String(a.payload.originalInformationId)),
+    ),
+  ).toHaveLength(8);
+  let batchId = "";
   await f.wait(
-    `${group}/${adapter}: canonical source/formation/observation ACK`,
+    `${group}/${adapter}: source-bound formation requested`,
     async () => {
-      const canonical = await f.facts("memory.native.source.v1");
-      expect(
-        canonical.filter((a) =>
-          sources.includes(String(a.payload.originalInformationId)),
-        ),
-      ).toHaveLength(8);
-      const done = (
-        await f.facts("memory.native.formation.completed.v1")
-      ).filter((a) => a.payload.scope === replayScope(group, adapter));
-      expect(done.some((a) => a.payload.status === "completed")).toBe(true);
-      const acks = await f.facts("memory.native.observation.completed.v1");
-      expect(
-        acks.some((a) =>
+      const request = (
+        await f.facts("memory.native.formation.requested.v1")
+      ).find(
+        (a) =>
+          a.payload.scope === replayScope(group, adapter) &&
+          (a.payload.sources as any[]).some((source) =>
+            sources.includes(source.id),
+          ),
+      );
+      expect(request).toBeDefined();
+      batchId = String(request!.payload.batchId);
+    },
+  );
+  await f.wait(`${group}/${adapter}: formation completed`, async () => {
+    const done = (await f.facts("memory.native.formation.completed.v1")).filter(
+      (a) => a.payload.batchId === batchId,
+    );
+    expect(done.some((a) => a.payload.status === "completed")).toBe(true);
+  });
+  await f.wait(`${group}/${adapter}: Memory observation ACK`, async () => {
+    const canonical = await f.facts("memory.native.source.v1");
+    const acks = await f.facts("memory.native.observation.completed.v1");
+    expect(
+      acks.some(
+        (a) =>
+          a.payload.operationId === batchId &&
           a.references.some((r) =>
             canonical.some(
               (c) =>
@@ -191,10 +216,44 @@ async function prefix(
                 sources.includes(String(c.payload.originalInformationId)),
             ),
           ),
-        ),
-      ).toBe(true);
-    },
+      ),
+    ).toBe(true);
+  });
+  for (const sourceId of sources) {
+    await f.wait(
+      `${group}/${adapter}: turn context for ${sourceId}`,
+      async () => {
+        const inputs = new Set(
+          (await f.facts("agent.router.turn.context.completed")).flatMap((a) =>
+            (a.payload.inputs as any[]).map((input) => input.informationId),
+          ),
+        );
+        expect(inputs.has(sourceId)).toBe(true);
+      },
+    );
+    await f.wait(
+      `${group}/${adapter}: Situation page for ${sourceId}`,
+      async () => {
+        const observed = new Set(
+          (await rows(f))
+            .filter((o) => o?.status === "completed")
+            .flatMap((o) => [...o!.sourceInformationIds]),
+        );
+        expect(observed.has(sourceId)).toBe(true);
+      },
+    );
+  }
+  const inputs = new Set(
+    (await f.facts("agent.router.turn.context.completed")).flatMap((a) =>
+      (a.payload.inputs as any[]).map((input) => input.informationId),
+    ),
   );
+  const observed = new Set(
+    (await rows(f))
+      .filter((o) => o?.status === "completed")
+      .flatMap((o) => [...o!.sourceInformationIds]),
+  );
+  expect(sources.every((id) => inputs.has(id) && observed.has(id))).toBe(true);
   return sources;
 }
 async function rows(f: ReplayFixture, consumer?: string) {
@@ -205,6 +264,99 @@ async function rows(f: ReplayFixture, consumer?: string) {
   return Promise.all(
     result.rows.map((r) => f.db.observations.read(r.observation_id)),
   );
+}
+// 每条输入最多五个有界阶段：heartbeat、Focus、Identity 产物、Router ACK、规范 Memory 来源。
+const ingressStages = 5;
+const prefixStages = replayScenario.prefix.length * (ingressStages + 2) + 3;
+async function waitCanonicalSources(f: ReplayFixture, sourceIds: string[]) {
+  for (const sourceId of sourceIds)
+    await f.wait(`canonical source for ${sourceId}`, async () => {
+      expect(
+        (await f.facts("memory.native.source.v1")).filter(
+          (a) => a.payload.originalInformationId === sourceId,
+        ),
+      ).toHaveLength(1);
+    });
+}
+async function waitIngressFanout(
+  f: ReplayFixture,
+  phase: string,
+  sourceIds: string[],
+) {
+  const acknowledged = async (subscription: string, informationId: string) => {
+    await f.wait(`${phase}: ${subscription} ACK ${informationId}`, async () => {
+      const result = await f.db.sql.query<{ state: string }>(
+        "SELECT state FROM information_deliveries WHERE subscription_id=$1 AND information_id=$2",
+        [subscription, informationId],
+      );
+      expect(result.rows).toEqual([{ state: "acked" }]);
+    });
+  };
+  for (const sourceId of sourceIds) {
+    await acknowledged("heartbeat.default:heartbeat.message", sourceId);
+    // Lifecycle writes the source-bound state before the inherited heartbeat handler ACKs.
+    const lifecycle = (await f.facts("agent.lifecycle.state.recorded")).filter(
+      (a) =>
+        a.references.some(
+          (r) =>
+            r.relation === "core:caused-by" && r.informationId === sourceId,
+        ),
+    );
+    expect(lifecycle).toHaveLength(1);
+    await acknowledged(
+      "router.default:focus.activity",
+      lifecycle[0]!.informationId,
+    );
+    let identityId = "";
+    await f.wait(`${phase}: Identity completed for ${sourceId}`, async () => {
+      const identity = (
+        await f.facts("memory.identity.person.context.completed")
+      ).filter((a) =>
+        a.references.some(
+          (r) =>
+            r.relation === "core:status-of" && r.informationId === sourceId,
+        ),
+      );
+      expect(identity).toHaveLength(1);
+      identityId = identity[0]!.informationId;
+    });
+    await acknowledged(
+      "router.default:agent.router.progress.memory.identity.person.context.completed",
+      identityId,
+    );
+  }
+}
+async function waitForHeavyInput(f: ReplayFixture, sourceId: string) {
+  await waitIngressFanout(f, `trigger ${sourceId}`, [sourceId]);
+  let turnId = "";
+  await f.wait("trigger persisted in Router turn context", async () => {
+    const turn = (await f.facts("agent.router.turn.context.completed")).find(
+      (a) =>
+        (a.payload.inputs as any[]).some(
+          (input) => input.informationId === sourceId,
+        ),
+    );
+    expect(turn).toBeDefined();
+    turnId = turn!.informationId;
+  });
+  await f.wait("trigger Light completed before Heavy dispatch", async () => {
+    expect(
+      (await f.facts("core.model.task.completed")).some(
+        (a) =>
+          a.payload.taskId === "agent.light.decide" &&
+          a.payload.sourceInformationId === turnId,
+      ),
+    ).toBe(true);
+  });
+  await f.wait("trigger native Heavy model request persisted", async () => {
+    expect(
+      (await f.facts("core.model.task.requested")).some(
+        (a) =>
+          a.payload.taskId === "agent.heavy.respond" &&
+          a.payload.nativeStep !== undefined,
+      ),
+    ).toBe(true);
+  });
 }
 async function oneAction(f: ReplayFixture) {
   const result = await f.db.sql.query<{ intent_id: string }>(
@@ -254,7 +406,7 @@ for (const backend of backends)
           "D8.scope-speaker-adapter-isolation",
         ]);
       },
-      replayBudget(12),
+      replayBudget(prefixStages * 3 + 1),
     );
 
     it(
@@ -263,28 +415,33 @@ for (const backend of backends)
         const { f, control } = await setup(backend);
         const initial = await prefix(f);
         await f.settled();
+        const observationPageLimit = 4;
         const freeze = f.db.observations.freezeNext.bind(f.db.observations);
         vi.spyOn(f.db.observations, "freezeNext").mockImplementation((input) =>
-          freeze({ ...input, limit: 4 }),
+          freeze({ ...input, limit: observationPageLimit }),
         );
         const barrier = gate(f);
         control.lightGate = barrier.promise;
         const receipt = await f.submit(
           f.message("freeze", "请先保留当前活动情况"),
         );
+        await waitIngressFanout(f, "held Light trigger", [
+          receipt.inboundInformationId,
+        ]);
+        let heldRequestId = "";
         await f.wait(
           "Light requested with original frozen observation",
           async () => {
             const requests = await f.facts("core.model.task.requested");
-            expect(
-              requests.some(
-                (a) =>
-                  a.payload.taskId === "agent.light.decide" &&
-                  JSON.stringify(a.payload.prompt).includes(
-                    "请先保留当前活动情况",
-                  ),
-              ),
-            ).toBe(true);
+            const held = requests.find(
+              (a) =>
+                a.payload.taskId === "agent.light.decide" &&
+                JSON.stringify(a.payload.prompt).includes(
+                  "请先保留当前活动情况",
+                ),
+            );
+            expect(held).toBeDefined();
+            heldRequestId = held!.informationId;
           },
         );
         const old = (await rows(f)).filter((o) =>
@@ -295,6 +452,7 @@ for (const backend of backends)
         expect(old.length).toBeGreaterThan(0);
         const saved = JSON.parse(JSON.stringify(old));
         const late: string[] = [];
+        const completedFormations = new Set<string>();
         for (let i = 0; i < 39; i++) {
           const r = await f.submit(
             f.message(
@@ -309,31 +467,76 @@ for (const backend of backends)
           late.push(r.inboundInformationId);
           if ((i + 1) % 8 === 0 || i === 38) {
             const expected = late.length;
-            await f.wait(
-              `late ingress page ${Math.ceil(expected / 8)}: ${expected} canonical originals`,
-              async () => {
-                expect(
-                  (await f.facts("memory.native.source.v1")).filter((a) =>
-                    late.includes(String(a.payload.originalInformationId)),
-                  ),
-                ).toHaveLength(expected);
-              },
+            const page = late.slice(Math.floor(i / 8) * 8);
+            await waitIngressFanout(
+              f,
+              `late ingress page ${Math.ceil(expected / 8)}`,
+              page,
             );
-            await f.wait(
-              `late ingress page ${Math.ceil(expected / 8)}: non-model consumers drained`,
-              async () => {
-                const pending = await f.db.sql.query<{ count: number }>(
-                  "SELECT count(*)::int count FROM information_deliveries WHERE state IN ('pending','claimed') AND subscription_id NOT LIKE 'router.default:agent.router.observe.%'",
-                );
-                expect(pending.rows[0]!.count).toBe(0);
-              },
+            await waitCanonicalSources(f, page);
+            expect(
+              (await f.facts("memory.native.source.v1")).filter((a) =>
+                late.includes(String(a.payload.originalInformationId)),
+              ),
+            ).toHaveLength(expected);
+            // Light is deliberately held; its subscription cannot drain yet.
+            // Wait for persisted formation and each independent ingress lane before the next burst.
+            // Final settled() still requires every queue to drain after the gate is released.
+            const requested = await f.facts(
+              "memory.native.formation.requested.v1",
             );
+            for (const request of requested) {
+              if (completedFormations.has(request.informationId)) continue;
+              await f.wait(
+                `late ingress page ${Math.ceil(expected / 8)}: formation ${request.payload.batchId} completed`,
+                async () => {
+                  expect(
+                    (
+                      await f.facts("memory.native.formation.completed.v1")
+                    ).some(
+                      (a) =>
+                        a.payload.batchId === request.payload.batchId &&
+                        a.payload.status === "completed",
+                    ),
+                  ).toBe(true);
+                },
+              );
+              completedFormations.add(request.informationId);
+            }
           }
         }
         for (const o of old)
           expect(await f.db.observations.read(o!.observationId)).toEqual(o);
         barrier.resolve();
         control.lightGate = undefined;
+        await f.wait("held Light model terminal persisted", async () => {
+          const completed = await f.facts("core.model.task.completed");
+          expect(
+            completed.some((a) =>
+              a.references.some(
+                (r) =>
+                  r.relation === "core:status-of" &&
+                  r.informationId === heldRequestId,
+              ),
+            ),
+          ).toBe(true);
+        });
+        // 同一情境的 recordSituationObservations/confirmSituationObservations 串行处理整组冻结页。
+        // 确认预算按实际输入页数组成；后续模型和队列收尾仍各用独立的单阶段预算。
+        const releasedPages = Math.ceil(late.length / observationPageLimit);
+        await f.wait(
+          `late released ${releasedPages} pages: every source observation completed`,
+          async () => {
+            const completed = (await rows(f)).filter(
+              (o) => o?.status === "completed",
+            );
+            const observed = new Set(
+              completed.flatMap((o) => [...o!.sourceInformationIds]),
+            );
+            expect(late.every((id) => observed.has(id))).toBe(true);
+          },
+          releasedPages,
+        );
         await f.settled();
         const correctedRequest = (
           await f.facts("memory.native.formation.requested.v1")
@@ -364,6 +567,9 @@ for (const backend of backends)
             "乙已经调班，请核对周六活动的最新记忆",
           ),
         );
+        await waitIngressFanout(f, "corrected successor", [
+          next.inboundInformationId,
+        ]);
         let successor: any;
         await f.wait(
           "successor observation freezes corrected Memory and actually requests Light",
@@ -441,7 +647,7 @@ for (const backend of backends)
           "D8.restart-no-model-replay",
         ]);
       },
-      replayBudget(21, 1),
+      replayBudget(prefixStages + 41 * ingressStages + 32, 1),
     );
 
     it(
@@ -449,8 +655,13 @@ for (const backend of backends)
       async () => {
         const { f, control } = await setup(backend);
         control.failNextFormation = true;
-        for (const [i, text] of replayScenario.prefix.entries())
-          await f.submit(f.message(`failed-${i}`, text));
+        const failedSources: string[] = [];
+        for (const [i, text] of replayScenario.prefix.entries()) {
+          const receipt = await f.submit(f.message(`failed-${i}`, text));
+          failedSources.push(receipt.inboundInformationId);
+        }
+        await waitIngressFanout(f, "failed formation inputs", failedSources);
+        await waitCanonicalSources(f, failedSources);
         let failed: any;
         await f.wait(
           "original formation failure and Memory failed page",
@@ -515,7 +726,7 @@ for (const backend of backends)
           "D8.independent-watermarks-no-gap-jump",
         ]);
       },
-      replayBudget(14),
+      replayBudget(prefixStages + 8 * ingressStages + 4),
     );
 
     it(
@@ -536,6 +747,7 @@ for (const backend of backends)
         const trigger = await f.submit(
           f.message("withdraw-trigger", "读取天气工具前先核实活动"),
         );
+        await waitForHeavyInput(f, trigger.inboundInformationId);
         await f.wait(
           "Heavy model completed and W3 admission gate reached",
           async () => {
@@ -621,7 +833,146 @@ for (const backend of backends)
           "D5.withdrawn-source-redaction",
         ]);
       },
-      replayBudget(10),
+      replayBudget(prefixStages + ingressStages + 8),
+    );
+
+    it(
+      "success: a proved tool result continues Heavy, delivers once and remains paired after restart",
+      async () => {
+        const { f, control } = await setup(backend);
+        await prefix(f);
+        await f.settled();
+        control.speak = true;
+        const trigger = await f.submit(
+          f.message("success-trigger", "请读取天气并告知活动结果"),
+        );
+        await waitForHeavyInput(f, trigger.inboundInformationId);
+        let runId = "";
+        await f.wait(
+          "successful MCP receipt and second Heavy request",
+          async () => {
+            const results = await f.facts("agent.heavy.tool.result.v1");
+            expect(results).toHaveLength(1);
+            expect(results[0]!.payload.value).toMatchObject({
+              status: "succeeded",
+              evidence: "returned",
+            });
+            runId = String(results[0]!.payload.runInformationId);
+            expect(control.heavyCalls).toBe(2);
+          },
+        );
+        let assistantId = "";
+        let finalModelId = "";
+        await f.wait(
+          "native final and assistant bind the completed second model step",
+          async () => {
+            const terminal = (
+              await f.facts("agent.heavy.tool.terminal.v1")
+            ).filter((a) => a.payload.runInformationId === runId);
+            expect(terminal).toHaveLength(1);
+            expect(terminal[0]!.payload.reason).toBe("final");
+            const result = terminal[0]!.payload.modelResult as any;
+            const model = await f.db.information.get(
+              result.terminalInformationId,
+            );
+            expect(model?.kind).toBe("core.model.task.completed");
+            expect(model!.payload.nativeStep).toMatchObject({
+              runInformationId: runId,
+              stepIndex: 1,
+            });
+            finalModelId = model!.informationId;
+            const assistants = await f.facts("core.message.assistant.text");
+            expect(assistants).toHaveLength(1);
+            expect(assistants[0]!.payload.text).toBe(
+              "已读取带来源的虚构天气结果",
+            );
+            expect(assistants[0]!.references).toContainEqual({
+              relation: "core:caused-by",
+              informationId: model!.informationId,
+            });
+            assistantId = assistants[0]!.informationId;
+          },
+        );
+        await f.wait(
+          "one delivery refers to the native final assistant",
+          async () => {
+            const delivered = await f.facts("core.delivery.delivered");
+            expect(delivered).toHaveLength(1);
+            expect(delivered[0]!.payload.ok).toBe(true);
+            const requestId = delivered[0]!.references.find(
+              (r) => r.relation === "core:status-of",
+            )!.informationId;
+            const request = await f.db.information.get(requestId);
+            expect(request?.kind).toBe("core.delivery.requested");
+            expect(request!.references).toContainEqual({
+              relation: "core:caused-by",
+              informationId: assistantId,
+            });
+            expect(f.sent).toHaveLength(1);
+            expect(f.sent[0]).toMatchObject({
+              target: { kind: "group", groupId: "G" },
+              message: { text: "已读取带来源的虚构天气结果" },
+            });
+          },
+        );
+        await f.settled();
+        const action = await oneAction(f);
+        expect(action.state).toBe("succeeded");
+        expect(
+          (await f.logs()).filter((r) => r.kind === "effect"),
+        ).toHaveLength(1);
+        const detail = await f.get(`runs/${runId}`);
+        expect(detail.statusCode, detail.body).toBe(200);
+        const projected = detail.json().data;
+        expect(projected.run.terminalReason).toBe("final");
+        expect(projected.steps).toHaveLength(2);
+        expect(projected.steps[1].terminalInformationId).toBe(finalModelId);
+        expect(projected.steps.every((s: any) => s.phase === "completed")).toBe(
+          true,
+        );
+        expect(projected.calls).toHaveLength(1);
+        expect(projected.calls[0]).toMatchObject({
+          pairing: "verified",
+          toolCallId: action.intent.toolCallId,
+          intent: { id: action.intentId, availability: "available" },
+          receipt: { id: action.receiptId, availability: "available" },
+          result: { value: { status: "succeeded", evidence: "returned" } },
+        });
+        const successor = f.requests.filter(
+          (r) =>
+            r.body.model === "heavy" &&
+            r.body.messages.some((m: any) => m.role === "tool"),
+        );
+        expect(successor).toHaveLength(1);
+        expect(
+          successor[0]!.body.messages.filter((m: any) => m.role === "tool"),
+        ).toEqual([
+          expect.objectContaining({ tool_call_id: action.intent.toolCallId }),
+        ]);
+        const modelCalls = f.requests.length;
+        await f.restart();
+        await f.settled();
+        await Promise.all([
+          f.server.runtime!.actions.execute(action.intentId, replayScope()),
+          f.server.runtime!.actions.execute(action.intentId, replayScope()),
+        ]);
+        await f.settled();
+        expect(f.requests).toHaveLength(modelCalls);
+        expect(f.sent).toHaveLength(1);
+        expect(
+          (await f.logs()).filter((r) => r.kind === "effect"),
+        ).toHaveLength(1);
+        expect((await oneAction(f)).attemptId).toBe(action.attemptId);
+        const recovered = await f.get(`runs/${runId}`);
+        expect(recovered.statusCode, recovered.body).toBe(200);
+        expect(recovered.json().data.calls).toEqual(projected.calls);
+        f.complete([
+          "D6.real-stdio-success-effect-once",
+          "D8.success-restart-no-reexecution",
+          "D5.success-paired-run-inspection",
+        ]);
+      },
+      replayBudget(prefixStages + ingressStages + 12, 1),
     );
 
     it(
@@ -632,9 +983,10 @@ for (const backend of backends)
         await f.settled();
         control.speak = true;
         await f.update({ hold: true });
-        await f.submit(
+        const trigger = await f.submit(
           f.message("unknown-trigger", "请读取天气并记录有来源的结果"),
         );
+        await waitForHeavyInput(f, trigger.inboundInformationId);
         let action: any;
         await f.wait(
           "independent MCP effect journal and W3 started identity",
@@ -688,6 +1040,7 @@ for (const backend of backends)
           f.server.runtime!.actions.execute(action.intentId, replayScope()),
           f.server.runtime!.actions.execute(action.intentId, replayScope()),
         ]);
+        await f.settled();
         expect((await oneAction(f)).state).toBe("unknown");
         expect(
           (await f.logs()).filter((r) => r.kind === "effect"),
@@ -699,6 +1052,6 @@ for (const backend of backends)
           "D5.scoped-action-inspection",
         ]);
       },
-      replayBudget(14, 1),
+      replayBudget(prefixStages + ingressStages + 11, 1),
     );
   });

@@ -2,7 +2,10 @@
  * 用 receipt 提交后、下一步 freeze 前的故障边界核验原点/模型冻结；重启换配置后不新建 run 或重复效果。
  * 功能概述：用真实 Core、ModelTaskClient、W3 及两种数据库验证原生工具循环持久窗口。
  * fixture 固定 observation 与 Memory，上游模型为合成单步生成器；外部效果由受控 provider 计数。
- * 同一用例检查实际 requested、dispatch、call→intent→receipt、下一步 messages 与停止状态。
+ * Memory 历史跨两页保留修订及上界；重启重放核对同一发布、工具输出和外部效果，不重复写入。
+ * 同一用例检查实际 requested、dispatch、call→intent→receipt、下一步 messages 与停止状态；
+ * 原生消息与调用清单不一致时验证行动未登记；历史恢复整批审计指针、参数和回执，先拒绝异常再执行副作用。
+ * 裁剪验证工具名及消息角色，数据库故障注入模拟旧记录异常且保留准确效果次数。
  * barrier 控制取消/重启窗口；恢复复用持久证据，清理释放所有后台任务后关闭 Core 和数据库。
  */
 import { createHash, randomUUID } from "node:crypto";
@@ -15,7 +18,7 @@ import {
   createTestingDatabase,
   createPostgresTestingDatabaseScope,
 } from "@kaguya/database/testing";
-import { KaguyaDatabase } from "@kaguya/database";
+import { actionDigest, KaguyaDatabase } from "@kaguya/database";
 import { InformationCore, InformationKindRegistry } from "@kaguya/engine";
 import { createNativeMemoryAccess } from "@kaguya/memory";
 import { createStructuredOutputPromptRenderer } from "@kaguya/llm";
@@ -112,6 +115,9 @@ async function fixture(
     guiRoute?: "matching" | "other";
     guiImage?: boolean;
     largeGuiImage?: boolean;
+    frozenInboundMedia?: boolean;
+    nativeMismatch?: "missing" | "name" | "order" | "input" | "result";
+    parallelTools?: boolean;
   } = {},
 ) {
   const pg = postgres
@@ -290,6 +296,9 @@ async function fixture(
     png = Buffer.concat([png.subarray(0, -12), chunk, png.subarray(-12)]);
   }
   let archiveReads = 0;
+  let mediaReads = 0;
+  let mediaAvailable = true;
+  const inboundImage = Buffer.alloc(140000, 23).toString("base64");
   const readArchive = async (reference: {
     id: string;
     scope: string;
@@ -315,7 +324,9 @@ async function fixture(
   let effects = 0,
     providerCalls = 0,
     requests: any[] = [];
-  let behavior = async () => {
+  let behavior: (
+    input: Parameters<ActionProvider["execute"]>[0],
+  ) => Promise<ActionOutcome> = async () => {
     effects++;
     return outcome;
   };
@@ -335,7 +346,7 @@ async function fixture(
     },
     execute: async (input) => {
       providerCalls++;
-      const result = await behavior();
+      const result = await behavior(input);
       if (!archive) return result;
       const hash = createHash("sha256").update(png).digest("hex");
       const artifact = {
@@ -393,8 +404,8 @@ async function fixture(
     providerVersion: "1",
     executor: "test:host",
     policyVersion: "1",
-    readonly: false,
-    independent: false,
+    readonly: options.parallelTools ?? false,
+    independent: options.parallelTools ?? false,
     bind: async () => ({
       target: { resource: "test" },
       ...(options.guiImage
@@ -454,6 +465,47 @@ async function fixture(
     cleanups.push(() => executor.close());
     const model = (rawModel = new ModelTaskClient({
       readNativeArtifact: readArchive,
+      ...(options.frozenInboundMedia
+        ? {
+            prepareMedia: async (
+              _key: string,
+              request: ModelTaskRequest<unknown>,
+            ) => {
+              return db.mediaSources.freeze(
+                request.nativeStep!.runInformationId,
+                scope,
+                async () => {
+                  mediaReads++;
+                  if (!mediaAvailable)
+                    throw new Error(
+                      "changed media mode and missing original resource",
+                    );
+                  return [
+                    {
+                      role: "user" as const,
+                      content: [
+                        {
+                          type: "text",
+                          text: JSON.stringify({
+                            mediaInput: {
+                              mediaId: `media:${"a".repeat(64)}`,
+                              mode: "native",
+                            },
+                          }),
+                        },
+                        {
+                          type: "file",
+                          mediaType: "image/png",
+                          data: { type: "data", data: inboundImage },
+                        },
+                      ],
+                    },
+                  ];
+                },
+              );
+            },
+          }
+        : {}),
       core,
       renderStructuredOutputPrompt:
         createStructuredOutputPromptRenderer("{{json_schema}}"),
@@ -492,12 +544,35 @@ async function fixture(
                   messages: [
                     {
                       role: "assistant",
-                      content: output.map((c) => ({
-                        type: "tool-call",
-                        toolCallId: c.toolCallId,
-                        toolName: c.toolName,
-                        input: c.input,
-                      })),
+                      content: [
+                        ...(options.nativeMismatch === "missing"
+                          ? []
+                          : options.nativeMismatch === "order"
+                            ? [...output].reverse()
+                            : output
+                        ).map((c) => ({
+                          type: "tool-call",
+                          toolCallId: c.toolCallId,
+                          toolName:
+                            options.nativeMismatch === "name"
+                              ? "wrong"
+                              : c.toolName,
+                          input:
+                            options.nativeMismatch === "input"
+                              ? { changed: true }
+                              : c.input,
+                        })),
+                        ...(options.nativeMismatch === "result"
+                          ? [
+                              {
+                                type: "tool-result",
+                                toolCallId: "second",
+                                toolName: "forged",
+                                output: { type: "json", value: {} },
+                              },
+                            ]
+                          : []),
+                      ],
                     },
                   ],
                   reasoning: [],
@@ -577,6 +652,11 @@ async function fixture(
       return rawModel;
     },
     archiveReads: () => archiveReads,
+    mediaReads: () => mediaReads,
+    changeMedia: () => {
+      mediaAvailable = false;
+    },
+    inboundImage,
     originalPng: png,
     get db() {
       return db;
@@ -1448,6 +1528,64 @@ for (const postgres of backends)
         ).toHaveLength(change === "unchanged" ? 2 : 1);
       },
     );
+    it("reuses frozen inbound media above the text budget exactly once per step after a receipt restart", async () => {
+      const f = await fixture(postgres, {
+        frozenInboundMedia: true,
+        budget: { maxContextBytes: 128000 },
+      });
+      const freeze = f.db.nativeTools.freeze.bind(f.db.nativeTools);
+      const boundary = vi
+        .spyOn(f.db.nativeTools, "freeze")
+        .mockImplementation(async (...args) => {
+          if (args[0].stepIndex === 1)
+            throw new Error("restart before media successor");
+          return freeze(...args);
+        });
+      await expect(f.loop.execute(f.request)).rejects.toThrow(
+        "restart before media successor",
+      );
+      boundary.mockRestore();
+      expect(f.mediaReads()).toBe(1);
+      expect(f.providerCalls()).toBe(1);
+      f.changeMedia();
+      await f.restart();
+      expect((await f.loop.execute(f.request)).status).toBe("completed");
+      expect(f.requests).toHaveLength(2);
+      expect(f.providerCalls()).toBe(1);
+      expect(f.mediaReads()).toBe(1);
+      for (const request of f.requests) {
+        const images = request.messages
+          .flatMap((m: any) => (Array.isArray(m.content) ? m.content : []))
+          .filter((p: any) => p.type === "file" && p.mediaType === "image/png");
+        expect(images).toHaveLength(1);
+        expect(images[0].data).toEqual({ type: "data", data: f.inboundImage });
+      }
+      const facts = (
+        await f.db.sql.query<any>(
+          "SELECT payload FROM information_atoms WHERE kind='core.model.task.requested' ORDER BY (payload->'nativeStep'->>'stepIndex')::int",
+        )
+      ).rows;
+      expect(facts).toHaveLength(2);
+      expect(facts.every((r) => r.payload.mediaInputByteLength > 128000)).toBe(
+        true,
+      );
+      expect(facts[1].payload.contextTrimming.retainedBytes).toBeLessThan(
+        128000,
+      );
+      const parts = f.requests[1].messages.flatMap((m: any) =>
+        Array.isArray(m.content) ? m.content : [],
+      );
+      expect(
+        parts
+          .filter((p: any) => p.type === "tool-call")
+          .map((p: any) => p.toolCallId),
+      ).toEqual(["call-1"]);
+      expect(
+        parts
+          .filter((p: any) => p.type === "tool-result")
+          .map((p: any) => p.toolCallId),
+      ).toEqual(["call-1"]);
+    });
     it("runs a real model-task → W3 receipt → paired next step and replays without effects", async () => {
       const f = await fixture(postgres);
       const result = await f.loop.execute(f.request);
@@ -1515,6 +1653,338 @@ for (const postgres of backends)
         expect(f.providerCalls()).toBe(1);
       },
     );
+    it.each(["missing", "name", "order"] as const)(
+      "rejects %s native-message mismatch before registering actions and after restart",
+      async (nativeMismatch) => {
+        const f = await fixture(postgres, { nativeMismatch });
+        f.generate(async () => [call("first"), call("second")]);
+        expect((await f.loop.execute(f.request)).status).toBe("failed");
+        expect(f.providerCalls()).toBe(0);
+        expect(f.effects()).toBe(0);
+        expect(
+          (await f.db.sql.query("SELECT * FROM information_native_tool_calls"))
+            .rows,
+        ).toHaveLength(0);
+        await f.restart();
+        expect((await f.loop.execute(f.request)).status).toBe("failed");
+        expect(f.requests).toHaveLength(1);
+        expect(f.providerCalls()).toBe(0);
+      },
+    );
+    it.each([
+      "completed",
+      "index",
+      "call-id",
+      "native-input",
+      "native-message",
+      "native-result",
+      "raw-input",
+      "valid",
+    ] as const)(
+      "audits the whole registered batch before recovery effects: %s",
+      async (mutation) => {
+        const f = await fixture(postgres, {
+          ...(mutation === "native-input"
+            ? { nativeMismatch: "input" as const }
+            : {}),
+          ...(mutation === "native-message"
+            ? { nativeMismatch: "missing" as const }
+            : {}),
+          ...(mutation === "native-result"
+            ? { nativeMismatch: "result" as const }
+            : {}),
+        });
+        f.generate(async () =>
+          f.requests.length === 1
+            ? [
+                call("first"),
+                {
+                  ...call("second"),
+                  ...(mutation === "raw-input"
+                    ? { rawInput: '{"changed":true}' }
+                    : {}),
+                },
+              ]
+            : "完成",
+        );
+        // 模拟升级前的已登记记录；只追加模型事实和调用索引，保持 append-only 保护。
+        const crash = vi
+          .spyOn(f.db.nativeTools, "registerCalls")
+          .mockImplementationOnce(async (run, step, completed, calls) => {
+            await f.db.sql.transaction(async (tx) => {
+              for (const [index, item] of calls.entries())
+                await tx.query(
+                  "INSERT INTO information_native_tool_calls(run_id,step_index,call_index,call_id,completed_id,call) VALUES($1,$2,$3,$4,$5,$6::jsonb)",
+                  [
+                    run,
+                    step,
+                    index,
+                    item.toolCallId,
+                    completed,
+                    JSON.stringify(item),
+                  ],
+                );
+              await tx.query(
+                "UPDATE information_native_tool_runs SET calls_count=calls_count+$2 WHERE run_id=$1",
+                [run, calls.length],
+              );
+            });
+            throw new Error("crash after call registration");
+          });
+        await expect(f.loop.execute(f.request)).rejects.toThrow(
+          "crash after call registration",
+        );
+        crash.mockRestore();
+        if (mutation === "completed")
+          await f.db.sql.query(
+            "UPDATE information_native_tool_calls SET completed_id=$1 WHERE call_index=1",
+            [f.request.sourceInformationId],
+          );
+        if (mutation === "index")
+          await f.db.sql.query(
+            "UPDATE information_native_tool_calls SET call_index=5 WHERE call_index=1",
+          );
+        if (mutation === "call-id")
+          await f.db.sql.query(
+            "UPDATE information_native_tool_calls SET call_id='wrong' WHERE call_index=1",
+          );
+        await f.restart();
+        const result = await f.loop.execute(f.request);
+        expect(result.status).toBe(
+          mutation === "valid" ? "completed" : "failed",
+        );
+        expect(f.effects()).toBe(mutation === "valid" ? 2 : 0);
+        expect(f.providerCalls()).toBe(mutation === "valid" ? 2 : 0);
+        expect(f.requests).toHaveLength(mutation === "valid" ? 2 : 1);
+        await f.restart();
+        expect(await f.loop.execute(f.request)).toEqual(result);
+        expect(f.providerCalls()).toBe(mutation === "valid" ? 2 : 0);
+      },
+    );
+    it.each([
+      "result-pointer",
+      "result-envelope",
+      "projection",
+      "receipt-ref",
+      "intent-original",
+      "valid",
+    ] as const)(
+      "audits saved result proof before executing the next registered call: %s",
+      async (mutation) => {
+        const f = await fixture(postgres);
+        f.generate(async () =>
+          f.requests.length === 1 ? [call("first"), call("second")] : "完成",
+        );
+        const save = f.db.nativeTools.result.bind(f.db.nativeTools);
+        const crash = vi
+          .spyOn(f.db.nativeTools, "result")
+          .mockImplementationOnce(async (...args) => {
+            await save(...args);
+            throw new Error("crash after paired result");
+          });
+        await expect(f.loop.execute(f.request)).rejects.toThrow(
+          "crash after paired result",
+        );
+        crash.mockRestore();
+        const first = (
+          await f.db.sql.query<any>(
+            "SELECT * FROM information_native_tool_calls WHERE call_index=0",
+          )
+        ).rows[0];
+        const payload = (
+          await f.db.sql.query<any>(
+            "SELECT payload FROM information_atoms WHERE information_id=$1",
+            [first.result_id],
+          )
+        ).rows[0].payload;
+        if (mutation === "result-pointer")
+          await f.db.sql.query(
+            "UPDATE information_native_tool_calls SET result_id=$1 WHERE call_index=1",
+            [first.result_id],
+          );
+        if (mutation === "result-envelope") payload.stepIndex = 9;
+        if (mutation === "projection") {
+          payload.value.result.value = 999;
+          payload.outputBytes = Buffer.byteLength(
+            JSON.stringify(payload.value),
+          );
+        }
+        if (mutation === "receipt-ref") {
+          const original = (
+            await f.db.sql.query<any>(
+              "SELECT kind,payload FROM information_atoms WHERE information_id=$1",
+              [payload.receiptId],
+            )
+          ).rows[0];
+          const unproved = await f.append(original.kind, original.payload);
+          await f.db.sql.query(
+            "INSERT INTO information_action_receipts(receipt_id,intent_id,receipt_key) VALUES($1,$2,$3)",
+            [unproved, first.intent_id, `legacy:${unproved}`],
+          );
+          payload.receiptId = unproved;
+          payload.value.receiptId = unproved;
+          payload.outputBytes = Buffer.byteLength(
+            JSON.stringify(payload.value),
+          );
+        }
+        if (
+          ["result-envelope", "projection", "receipt-ref"].includes(mutation)
+        ) {
+          const replacement = await f.append(
+            "agent.heavy.tool.result.v1",
+            payload,
+            [
+              first.run_id,
+              first.completed_id,
+              ...(payload.receiptId ? [payload.receiptId] : []),
+            ],
+          );
+          await f.db.sql.query(
+            "UPDATE information_native_tool_calls SET result_id=$2 WHERE run_id=$1 AND call_index=0",
+            [first.run_id, replacement],
+          );
+        }
+        if (mutation === "intent-original") {
+          const input = (
+            await f.db.sql.query<any>(
+              "SELECT input FROM information_action_heads WHERE intent_id=$1",
+              [first.intent_id],
+            )
+          ).rows[0].input;
+          input.target = { changed: true };
+          await f.db.sql.query(
+            "UPDATE information_action_heads SET input=$2::jsonb,digest=$3 WHERE intent_id=$1",
+            [first.intent_id, JSON.stringify(input), actionDigest(input)],
+          );
+        }
+        await f.restart();
+        const result = await f.loop.execute(f.request);
+        expect(result.status).toBe(
+          mutation === "valid" ? "completed" : "failed",
+        );
+        expect(f.providerCalls()).toBe(mutation === "valid" ? 2 : 1);
+        expect(f.effects()).toBe(mutation === "valid" ? 2 : 1);
+        expect(f.requests).toHaveLength(mutation === "valid" ? 2 : 1);
+        await f.restart();
+        expect(await f.loop.execute(f.request)).toEqual(result);
+        expect(f.providerCalls()).toBe(mutation === "valid" ? 2 : 1);
+      },
+    );
+    it("rejects a queued historical head that no longer matches its original fact before any provider effect", async () => {
+      const f = await fixture(postgres);
+      const bind = f.db.nativeTools.bind.bind(f.db.nativeTools);
+      const crash = vi
+        .spyOn(f.db.nativeTools, "bind")
+        .mockImplementationOnce(async (...args) => {
+          await bind(...args);
+          throw new Error("crash after intent binding");
+        });
+      await expect(f.loop.execute(f.request)).rejects.toThrow(
+        "crash after intent binding",
+      );
+      crash.mockRestore();
+      const head = (
+        await f.db.sql.query<any>(
+          "SELECT intent_id,input FROM information_action_heads",
+        )
+      ).rows[0];
+      head.input.target = { changed: true };
+      await f.db.sql.query(
+        "UPDATE information_action_heads SET input=$2::jsonb,digest=$3 WHERE intent_id=$1",
+        [head.intent_id, JSON.stringify(head.input), actionDigest(head.input)],
+      );
+      await f.restart();
+      expect((await f.loop.execute(f.request)).status).toBe("failed");
+      expect(f.providerCalls()).toBe(0);
+      expect(f.effects()).toBe(0);
+    });
+    it("excludes another native run's intent from recovery and cancellation", async () => {
+      const f = await fixture(postgres);
+      const bind = f.db.nativeTools.bind.bind(f.db.nativeTools);
+      const crash = vi
+        .spyOn(f.db.nativeTools, "bind")
+        .mockImplementationOnce(async (...args) => {
+          await bind(...args);
+          throw new Error("crash after intent binding");
+        });
+      await expect(f.loop.execute(f.request)).rejects.toThrow(
+        "crash after intent binding",
+      );
+      crash.mockRestore();
+      const first = (
+        await f.db.sql.query<any>("SELECT * FROM information_native_tool_calls")
+      ).rows[0];
+      const alternate = await f.alternate();
+      f.generate(async () =>
+        f.requests.length === 2 ? [call("call-1")] : "完成",
+      );
+      expect((await f.loop.execute(alternate.request)).status).toBe(
+        "completed",
+      );
+      const foreign = (
+        await f.db.sql.query<any>(
+          "SELECT * FROM information_native_tool_calls WHERE run_id<>$1",
+          [first.run_id],
+        )
+      ).rows[0];
+      await f.db.sql.query(
+        "UPDATE information_native_tool_calls SET intent_id=$2 WHERE run_id=$1",
+        [first.run_id, foreign.intent_id],
+      );
+      expect(await f.db.nativeTools.intents(first.run_id)).toEqual([]);
+      await f.restart();
+      expect((await f.loop.execute(f.request)).status).toBe("failed");
+      expect(f.providerCalls()).toBe(1);
+      expect(f.effects()).toBe(1);
+      expect(f.requests).toHaveLength(3);
+    });
+    it("runs independent calls in parallel and projects results in call order", async () => {
+      const f = await fixture(postgres, { parallelTools: true });
+      let entered = 0;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      f.behavior(async (input) => {
+        entered++;
+        if (input.intent.toolCallId === "first") await gate;
+        return { ...outcome, result: { call: input.intent.toolCallId ?? "" } };
+      });
+      f.generate(async () =>
+        f.requests.length === 1 ? [call("first"), call("second")] : "完成",
+      );
+      const work = f.loop.execute(f.request);
+      const settled = Promise.allSettled([work]);
+      cleanups.push(async () => {
+        release();
+        await settled;
+      });
+      await vi.waitFor(() => expect(entered).toBe(2), {
+        timeout: 8000,
+        interval: 20,
+      });
+      await vi.waitFor(
+        async () => {
+          const rows = (
+            await f.db.sql.query<{ result_id: string | null }>(
+              "SELECT result_id FROM information_native_tool_calls WHERE call_id='second'",
+            )
+          ).rows;
+          expect(rows[0]?.result_id).toBeTruthy();
+        },
+        { timeout: 8000, interval: 20 },
+      );
+      release();
+      expect((await work).status).toBe("completed");
+      const results = f.requests[1].messages.flatMap((m: any) =>
+        m.role === "tool" ? m.content : [],
+      );
+      expect(results.map((r: any) => r.toolCallId)).toEqual([
+        "first",
+        "second",
+      ]);
+      expect(f.providerCalls()).toBe(2);
+    });
     it("pairs invalid and unknown calls without inventing action receipts", async () => {
       const f = await fixture(postgres);
       f.generate(async () =>
@@ -2009,11 +2479,26 @@ for (const postgres of backends)
             return [
               call("history", "memory.history", {
                 id: nodeId,
-                limit: 10,
+                limit: 1,
                 cursor: null,
               }),
             ];
-          case 6:
+          case 6: {
+            const first = (
+              await f.db.sql.query<any>(
+                "SELECT a.payload FROM information_native_tool_calls c JOIN information_atoms a ON a.information_id=c.result_id WHERE c.call_id='history'",
+              )
+            ).rows[0].payload.value.result;
+            expect(first.nextCursor).toEqual(expect.any(String));
+            return [
+              call("history-next", "memory.history", {
+                id: nodeId,
+                limit: 1,
+                cursor: first.nextCursor,
+              }),
+            ];
+          }
+          case 7:
             return [call("final-effect")];
           default:
             return "完成";
@@ -2039,14 +2524,27 @@ for (const postgres of backends)
           "SELECT a.payload FROM information_native_tool_calls c JOIN information_atoms a ON a.information_id=c.result_id WHERE c.call_id='history'",
         )
       ).rows[0].payload.value.result;
+      const historyNext = (
+        await f.db.sql.query<any>(
+          "SELECT a.payload FROM information_native_tool_calls c JOIN information_atoms a ON a.information_id=c.result_id WHERE c.call_id='history-next'",
+        )
+      ).rows[0].payload.value.result;
       expect(history.items.map((i: any) => i.node.metadata.revision)).toEqual([
-        2, 1,
+        2,
       ]);
       expect(
-        history.memorySnapshots.map(
-          (s: any) => s.recalled[0].node.metadata.revision,
-        ),
-      ).toEqual([2, 1]);
+        historyNext.items.map((i: any) => i.node.metadata.revision),
+      ).toEqual([1]);
+      expect(historyNext.nextCursor).toBeNull();
+      for (const page of [history, historyNext]) {
+        expect(page.memorySnapshots).toHaveLength(1);
+        expect(page.memorySnapshots[0].recalled[0].node).toEqual(
+          page.items[0].node,
+        );
+        expect(page.memorySnapshots[0].cutoff.publicationPosition).toBe(
+          page.items[0].position,
+        );
+      }
       const read = (
         await f.db.sql.query<any>(
           "SELECT a.payload FROM information_native_tool_calls c JOIN information_atoms a ON a.information_id=c.result_id WHERE c.call_id='read'",
@@ -2061,7 +2559,34 @@ for (const postgres of backends)
           )
         ).rows[0].metadata.revision,
       ).toBe(2);
-    });
+      const publications = await f.db.sql.query(
+        "SELECT operation_id,nodes FROM memory_native_publications WHERE operation_id LIKE 'memory-tool:%' ORDER BY operation_id",
+      );
+      const outputs = await f.db.sql.query(
+        "SELECT operation_id,input_hash,result FROM memory_native_tool_outputs ORDER BY operation_id",
+      );
+      expect(publications.rows).toHaveLength(2);
+      expect(outputs.rows).toHaveLength(5);
+      expect(f.requests).toHaveLength(8);
+      await f.restart();
+      expect((await f.loop.execute(f.request)).status).toBe("completed");
+      expect(f.requests).toHaveLength(8);
+      expect(f.effects()).toBe(2);
+      expect(
+        (
+          await f.db.sql.query(
+            "SELECT operation_id,nodes FROM memory_native_publications WHERE operation_id LIKE 'memory-tool:%' ORDER BY operation_id",
+          )
+        ).rows,
+      ).toEqual(publications.rows);
+      expect(
+        (
+          await f.db.sql.query(
+            "SELECT operation_id,input_hash,result FROM memory_native_tool_outputs ORDER BY operation_id",
+          )
+        ).rows,
+      ).toEqual(outputs.rows);
+    }, 40000); // 八轮确定性 SQL/模型步骤和一次重连；不改变产品循环或单次持久等待预算。
     it("preserves the full receipt but stops when its projected output exceeds the budget", async () => {
       const f = await fixture(postgres, {
         budget: { maxToolOutputBytes: 256 },
@@ -2070,6 +2595,14 @@ for (const postgres of backends)
         ...outcome,
         result: { text: "x".repeat(2000) },
       }));
+      const stop = vi
+        .spyOn(f.db.nativeTools, "stop")
+        .mockRejectedValueOnce(new Error("crash after truncated projection"));
+      await expect(f.loop.execute(f.request)).rejects.toThrow(
+        "crash after truncated projection",
+      );
+      stop.mockRestore();
+      await f.restart();
       expect((await f.loop.execute(f.request)).status).toBe("failed");
       expect(f.requests).toHaveLength(1);
       expect(f.providerCalls()).toBe(1);
@@ -2081,6 +2614,51 @@ for (const postgres of backends)
       expect(result.value.status).toBe("output-budget");
       const receipt = await f.core.get(result.receiptId);
       expect((receipt!.payload.outcome as any).result.text).toHaveLength(2000);
+    });
+    it("stops on cumulative rejection output budget and recovers the no-receipt projection", async () => {
+      const f = await fixture(postgres, {
+        budget: { maxTotalToolOutputBytes: 256 },
+      });
+      f.generate(async () =>
+        f.requests.length === 1
+          ? Array.from({ length: 4 }, (_, i) => ({
+              ...call(`unknown-${i}`),
+              toolName: "missing",
+            }))
+          : "不应生成",
+      );
+      const stop = vi
+        .spyOn(f.db.nativeTools, "stop")
+        .mockRejectedValueOnce(new Error("crash after rejection projection"));
+      await expect(f.loop.execute(f.request)).rejects.toThrow(
+        "crash after rejection projection",
+      );
+      stop.mockRestore();
+      expect(f.requests).toHaveLength(1);
+      const pairs = (
+        await f.db.sql.query<any>(
+          "SELECT payload FROM information_atoms WHERE kind='agent.heavy.tool.result.v1'",
+        )
+      ).rows;
+      expect(pairs).toHaveLength(4);
+      expect(
+        pairs.some((r) => r.payload.value.status === "output-budget"),
+      ).toBe(true);
+      expect(
+        pairs.every(
+          (r) => r.payload.receiptId === null && r.payload.intentId === null,
+        ),
+      ).toBe(true);
+      await f.restart();
+      expect((await f.loop.execute(f.request)).status).toBe("failed");
+      const terminal = (
+        await f.db.sql.query<any>(
+          "SELECT payload FROM information_atoms WHERE kind='agent.heavy.tool.terminal.v1'",
+        )
+      ).rows[0].payload;
+      expect(terminal.reason).toBe("unknown");
+      expect(f.requests).toHaveLength(1);
+      expect(f.providerCalls()).toBe(0);
     });
     it("rejects duplicate native call IDs before any action is registered", async () => {
       const f = await fixture(postgres);
@@ -2260,4 +2838,20 @@ it("drops only complete interactions and rejects orphan tool results", () => {
   expect(() => fitToolTranscript([pair[1]], 1000)).toThrow(
     "native-orphan-result",
   );
+  const wrongName = structuredClone(pair);
+  wrongName[1].content[0].toolName = "other";
+  expect(() => fitToolTranscript(wrongName, 1000)).toThrow(
+    "native-orphan-result",
+  );
+  const wrongRole = structuredClone(pair);
+  wrongRole[1].role = "assistant";
+  expect(() => fitToolTranscript(wrongRole, 1000)).toThrow(
+    "native-orphan-result",
+  );
+  const wrongCallRole = structuredClone(pair);
+  wrongCallRole[0].role = "user";
+  expect(() => fitToolTranscript(wrongCallRole, 1000)).toThrow(
+    "native-invalid-call",
+  );
+  expect(fitToolTranscript([pair[0]], 1000)).toEqual([pair[0]]);
 });

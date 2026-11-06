@@ -39,3 +39,4 @@ export * from "./observation.js";
 
 export * from "./action.js";
 export * from "./native-tools.js";
+export * from "./media-resources.js";

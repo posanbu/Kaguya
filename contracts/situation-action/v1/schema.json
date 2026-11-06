@@ -48,6 +48,108 @@
         "text": {
           "type": "string"
         },
+        "contentSegments": {
+          "maxItems": 256,
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "text"
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": ["kind", "text"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "media"
+                  },
+                  "media": {
+                    "type": "object",
+                    "properties": {
+                      "mediaId": {
+                        "type": "string",
+                        "pattern": "^media:[a-f0-9]{64}$"
+                      },
+                      "position": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "mediaType": {
+                        "type": "string",
+                        "enum": ["image", "face", "mface"]
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "available",
+                          "unavailable",
+                          "invalid",
+                          "omitted"
+                        ]
+                      },
+                      "resourceId": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "pattern": "^sha256:[a-f0-9]{64}$"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "mimeType": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "image/png",
+                              "image/jpeg",
+                              "image/gif",
+                              "image/webp"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "byteLength": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "mediaId",
+                      "position",
+                      "mediaType",
+                      "status",
+                      "resourceId",
+                      "mimeType",
+                      "byteLength"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": ["kind", "media"],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
         "replaces": {
           "type": "array",
           "items": {
@@ -183,6 +285,108 @@
                   "text": {
                     "type": "string"
                   },
+                  "contentSegments": {
+                    "maxItems": 256,
+                    "type": "array",
+                    "items": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "text"
+                            },
+                            "text": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["kind", "text"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "media"
+                            },
+                            "media": {
+                              "type": "object",
+                              "properties": {
+                                "mediaId": {
+                                  "type": "string",
+                                  "pattern": "^media:[a-f0-9]{64}$"
+                                },
+                                "position": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "mediaType": {
+                                  "type": "string",
+                                  "enum": ["image", "face", "mface"]
+                                },
+                                "status": {
+                                  "type": "string",
+                                  "enum": [
+                                    "available",
+                                    "unavailable",
+                                    "invalid",
+                                    "omitted"
+                                  ]
+                                },
+                                "resourceId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^sha256:[a-f0-9]{64}$"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "mimeType": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "image/png",
+                                        "image/jpeg",
+                                        "image/gif",
+                                        "image/webp"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "byteLength": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "mediaId",
+                                "position",
+                                "mediaType",
+                                "status",
+                                "resourceId",
+                                "mimeType",
+                                "byteLength"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": ["kind", "media"],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  },
                   "replaces": {
                     "type": "array",
                     "items": {
@@ -277,6 +481,108 @@
                   },
                   "text": {
                     "type": "string"
+                  },
+                  "contentSegments": {
+                    "maxItems": 256,
+                    "type": "array",
+                    "items": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "text"
+                            },
+                            "text": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["kind", "text"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "media"
+                            },
+                            "media": {
+                              "type": "object",
+                              "properties": {
+                                "mediaId": {
+                                  "type": "string",
+                                  "pattern": "^media:[a-f0-9]{64}$"
+                                },
+                                "position": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "mediaType": {
+                                  "type": "string",
+                                  "enum": ["image", "face", "mface"]
+                                },
+                                "status": {
+                                  "type": "string",
+                                  "enum": [
+                                    "available",
+                                    "unavailable",
+                                    "invalid",
+                                    "omitted"
+                                  ]
+                                },
+                                "resourceId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^sha256:[a-f0-9]{64}$"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "mimeType": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "image/png",
+                                        "image/jpeg",
+                                        "image/gif",
+                                        "image/webp"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "byteLength": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "mediaId",
+                                "position",
+                                "mediaType",
+                                "status",
+                                "resourceId",
+                                "mimeType",
+                                "byteLength"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": ["kind", "media"],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
                   },
                   "replaces": {
                     "type": "array",
@@ -1923,6 +2229,108 @@
                       "text": {
                         "type": "string"
                       },
+                      "contentSegments": {
+                        "maxItems": 256,
+                        "type": "array",
+                        "items": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "text"
+                                },
+                                "text": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["kind", "text"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "media"
+                                },
+                                "media": {
+                                  "type": "object",
+                                  "properties": {
+                                    "mediaId": {
+                                      "type": "string",
+                                      "pattern": "^media:[a-f0-9]{64}$"
+                                    },
+                                    "position": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "mediaType": {
+                                      "type": "string",
+                                      "enum": ["image", "face", "mface"]
+                                    },
+                                    "status": {
+                                      "type": "string",
+                                      "enum": [
+                                        "available",
+                                        "unavailable",
+                                        "invalid",
+                                        "omitted"
+                                      ]
+                                    },
+                                    "resourceId": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "pattern": "^sha256:[a-f0-9]{64}$"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "mimeType": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "enum": [
+                                            "image/png",
+                                            "image/jpeg",
+                                            "image/gif",
+                                            "image/webp"
+                                          ]
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "byteLength": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "mediaId",
+                                    "position",
+                                    "mediaType",
+                                    "status",
+                                    "resourceId",
+                                    "mimeType",
+                                    "byteLength"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": ["kind", "media"],
+                              "additionalProperties": false
+                            }
+                          ]
+                        }
+                      },
                       "replaces": {
                         "type": "array",
                         "items": {
@@ -2017,6 +2425,108 @@
                       },
                       "text": {
                         "type": "string"
+                      },
+                      "contentSegments": {
+                        "maxItems": 256,
+                        "type": "array",
+                        "items": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "text"
+                                },
+                                "text": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["kind", "text"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "media"
+                                },
+                                "media": {
+                                  "type": "object",
+                                  "properties": {
+                                    "mediaId": {
+                                      "type": "string",
+                                      "pattern": "^media:[a-f0-9]{64}$"
+                                    },
+                                    "position": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "mediaType": {
+                                      "type": "string",
+                                      "enum": ["image", "face", "mface"]
+                                    },
+                                    "status": {
+                                      "type": "string",
+                                      "enum": [
+                                        "available",
+                                        "unavailable",
+                                        "invalid",
+                                        "omitted"
+                                      ]
+                                    },
+                                    "resourceId": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "pattern": "^sha256:[a-f0-9]{64}$"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "mimeType": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "enum": [
+                                            "image/png",
+                                            "image/jpeg",
+                                            "image/gif",
+                                            "image/webp"
+                                          ]
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "byteLength": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "mediaId",
+                                    "position",
+                                    "mediaType",
+                                    "status",
+                                    "resourceId",
+                                    "mimeType",
+                                    "byteLength"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": ["kind", "media"],
+                              "additionalProperties": false
+                            }
+                          ]
+                        }
                       },
                       "replaces": {
                         "type": "array",

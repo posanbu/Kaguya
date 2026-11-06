@@ -1,6 +1,7 @@
 /**
  * 跨领域 Inspection DTO 从 inspection-domain 导出，保留独立证据状态和有界读取协议。
  * memory-graph.ts 提供 Memory 节点／边管理与图快照的共享协议。
+ * 有序出站内容只允许文字和来源 mediaId；公共 schema 校验正文与内容段一致，宿主另验来源权限。
  * QQ 表情使用独立结构化素材契约，出站保留原 text/reply 兼容性；图片只允许已缓存 base64。
  * module-templates.ts 提供未渲染模板管理 DTO，避免与 CompiledPrompt 混用。
  * module-settings.ts 导出全局模块配置安全 DTO，供管理端与通用表单共同校验。
@@ -21,6 +22,10 @@ export * from "./situation-context.js";
 export * from "./situation-contract.js";
 export * from "./model-metrics.js";
 
+import {
+  outboundContentSegmentsSchema,
+  type OutboundContentSegment,
+} from "./media-content.js";
 import { z } from "zod";
 
 import { informationIdSchema } from "./information.js";
@@ -124,6 +129,24 @@ export type OutboundExpression = z.infer<typeof outboundExpressionSchema>;
 export const outboundMessageContentSchema = z.discriminatedUnion("kind", [
   z
     .object({
+      kind: z.literal("content"),
+      text: z.string(),
+      segments: outboundContentSegmentsSchema,
+      requestInformationId: z.string().trim().min(1),
+      expression: outboundExpressionSchema.optional(),
+    })
+    .strict()
+    .refine(
+      (value) =>
+        value.text ===
+        value.segments
+          .filter((part) => part.kind === "text")
+          .map((part) => part.text)
+          .join(""),
+      "Content text must match ordered text segments",
+    ),
+  z
+    .object({
       kind: z.literal("text"),
       text: z.string().min(1),
       expression: outboundExpressionSchema.optional(),
@@ -136,11 +159,41 @@ export const outboundMessageContentSchema = z.discriminatedUnion("kind", [
       text: z.string().min(1),
     })
     .strict(),
+  z
+    .object({
+      kind: z.literal("audio"),
+      resourceId: z.string().regex(/^sha256:[a-f0-9]{64}$/u),
+      mimeType: z.enum(["audio/wav", "audio/mpeg", "audio/ogg"]),
+      byteLength: z
+        .number()
+        .int()
+        .positive()
+        .max(16 * 1024 * 1024),
+      sha256: z.string().regex(/^[a-f0-9]{64}$/u),
+      text: z.string().min(1),
+    })
+    .strict(),
 ]) as z.ZodType<OutboundMessageContent>;
 
 export type OutboundMessageContent =
+  | {
+      kind: "content";
+      text: string;
+      segments: OutboundContentSegment[];
+      requestInformationId: string;
+      expression?: OutboundExpression;
+    }
   | { kind: "text"; text: string; expression?: OutboundExpression }
-  | { kind: "reply"; text: string; replyToPlatformMessageId: string };
+  | { kind: "reply"; text: string; replyToPlatformMessageId: string }
+  | {
+      kind: "audio";
+      resourceId: string;
+      mimeType: "audio/wav" | "audio/mpeg" | "audio/ogg";
+      byteLength: number;
+      sha256: string;
+      /** 已授权正文，也是历史查询与无障碍展示使用的文本回退。 */
+      text: string;
+    };
 
 export const promptVariableSchema = z.object({
   name: z.string().regex(/^[a-z][a-z0-9_]*$/u),
@@ -192,5 +245,6 @@ export {
 } from "./lifecycle.js";
 
 export * from "./scene.js";
+export * from "./media-content.js";
 
 export * from "./inspection-domain.js";

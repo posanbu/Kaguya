@@ -1,7 +1,7 @@
 /**
  * 功能概述：以真实 PGlite/PostgreSQL 证明行动 admission、取消、恢复与冻结证据的竞争边界。
- * 主要职责：fixture 经生产 observation 校验冻结来源；受控 provider 统计实际 effect；
- * barrier 明确进入/释放/完成阶段，所有失败路径先释放 provider 再关闭隔离数据库。
+ * 主要职责：fixture 经生产 observation 校验冻结来源；替换测试经 schema 校验生成可写 manifest；受控 provider 统计实际 effect；
+ * barrier 明确进入/释放/完成阶段，并检查 admission 后来源失效和期限到达；失败路径释放阻塞后关闭数据库。
  * 代码库关系：调用生产 ActionExecutor/PostgresActionStore 与 LinuxEnvironmentClient 适配，不调用模型、QQ 或真实桌面。
  * 输入输出与副作用：每例独立数据库；PG 恢复关闭并重连 pool，未接外部服务不冒充端到端验收。
  */
@@ -29,6 +29,7 @@ import {
 } from "@kaguya/schema";
 import { createNativeMemoryAccess } from "@kaguya/memory";
 import {
+  observationManifestSchema,
   type ActionIntent,
   type ActionProvider,
   type ActionOutcome,
@@ -607,6 +608,15 @@ describe.each(backends)("action lifecycle (PostgreSQL=%s)", (postgres) => {
             ],
           });
       let second: Promise<unknown> | undefined;
+      const canInvoke = gated.actions.canInvoke.bind(gated.actions);
+      const invocation = admissionFirst
+        ? vi
+            .spyOn(gated.actions, "canInvoke")
+            .mockImplementation(async (...args) => {
+              await second;
+              return canInvoke(...args);
+            })
+        : undefined;
       try {
         await enteredBeforeCompletion(first, locked.promise);
         second = admissionFirst ? f.withdraw() : e.execute(a.intentId, f.scope);
@@ -614,12 +624,13 @@ describe.each(backends)("action lifecycle (PostgreSQL=%s)", (postgres) => {
         release.release();
         await Promise.all([first, second]);
         expect((await e.read(a.intentId, f.scope)).state).toBe(
-          admissionFirst ? "succeeded" : "rejected",
+          admissionFirst ? "cancelled" : "rejected",
         );
-        expect(f.effects()).toBe(admissionFirst ? 1 : 0);
+        expect(f.effects()).toBe(0);
       } finally {
         release.release();
         await Promise.allSettled([first, ...(second ? [second] : [])]);
+        invocation?.mockRestore();
         await e.close();
       }
     },
@@ -1108,6 +1119,155 @@ describe.each(backends)("action lifecycle (PostgreSQL=%s)", (postgres) => {
       e.readReceipt(result.receiptId!, f.scope, f.intent.authorizationId),
     ).rejects.toThrow("denied");
   });
+  it("keeps a superseded observation on a delayed message instead of granting legacy delivery", async () => {
+    const f = await fixture(postgres);
+    await f.append(
+      "agent.light.decision.completed",
+      { action: { action: "message" } },
+      [f.run],
+      "core:status-of",
+    );
+    const requestId = await f.append(
+      "core.delivery.requested",
+      {
+        adapterId: "test",
+        platform: "qq",
+        destination: { kind: "group", groupId: "G" },
+        message: { kind: "text", text: "obsolete reply" },
+        turn: { claimInformationId: f.run },
+      },
+      [f.sourceId],
+      "core:context",
+    );
+    expect(f.observation.manifest).not.toBeNull();
+    const manifest = observationManifestSchema.parse(f.observation.manifest);
+    await f.db.observations.replace(
+      f.observation.observationId,
+      "corrected-observation",
+      manifest,
+    );
+    const action = await f.db.actions.prepareDelivery(requestId);
+    expect(action.intent.dependencies.observationId).toBe(
+      f.observation.observationId,
+    );
+    const admission = await f.db.actions.admit(action.intentId, f.scope, 30000);
+    expect(admission.claim).toBeUndefined();
+    expect(admission.view.state).toBe("rejected");
+    const receipt = await f.db.actions.readReceipt(
+      admission.view.receiptId!,
+      f.scope,
+      action.intent.authorizationId,
+    );
+    expect(receipt.outcome).toMatchObject({
+      status: "rejected",
+      evidence: "not-executed",
+      result: { reason: "dependency-invalid" },
+    });
+    await f.reconnect();
+    expect((await f.db.actions.prepareDelivery(requestId)).intentId).toBe(
+      action.intentId,
+    );
+    expect(
+      (await f.db.actions.admit(action.intentId, f.scope, 30000)).claim,
+    ).toBeUndefined();
+    expect(f.effects()).toBe(0);
+  });
+
+  it.each(["expired", "stopped", "revoked"] as const)(
+    "records %s message preparation as not executed instead of throwing into unknown recovery",
+    async (reason) => {
+      const f = await fixture(postgres);
+      await f.db.information.synchronizeKinds(["core.delivery.requested"]);
+      await f.db.sql.query(
+        "INSERT INTO information_subscriptions(subscription_id,kind,enabled) VALUES('kaguya.runtime.delivery','core.delivery.requested',true)",
+      );
+      const requestId = await f.append(
+        "core.delivery.requested",
+        {
+          adapterId: "test",
+          platform: "qq",
+          destination: { kind: "group", groupId: "G" },
+          message: { kind: "text", text: "old casual reply" },
+        },
+        [f.sourceId],
+        "core:context",
+      );
+      if (reason === "expired")
+        await f.db.sql.query(
+          "UPDATE information_deliveries SET created_at=clock_timestamp()-interval '1 day' WHERE information_id=$1",
+          [requestId],
+        );
+      else if (reason === "stopped")
+        await f.db.actions.invalidateRun(f.sourceId, f.scope, f.sourceId);
+      await f.reconnect();
+      const authorize = f.db.actions.authorize.bind(f.db.actions);
+      const hook = vi
+        .spyOn(f.db.actions, "authorize")
+        .mockImplementation(async (input) => {
+          await authorize(input);
+          if (reason === "revoked")
+            await f.db.actions.revoke(input.id, f.sourceId);
+        });
+      cleanups.push(async () => {
+        hook.mockRestore();
+      });
+      const action = await f.db.actions.prepareDelivery(requestId);
+      const admission = await f.db.actions.admit(
+        action.intentId,
+        f.scope,
+        30000,
+      );
+      expect(admission.claim).toBeUndefined();
+      expect(admission.view.state).toBe("rejected");
+      expect(admission.view.attemptId).toBeNull();
+      const outcome = await f.db.actions.deliveryResult(requestId);
+      expect(outcome).toMatchObject({
+        status: "rejected",
+        evidence: "not-executed",
+        result: {
+          reason:
+            reason === "stopped" ? "run-invalidated" : "authorization-denied",
+        },
+      });
+      await f.reconnect();
+      const replay = await f.db.actions.prepareDelivery(requestId);
+      expect(replay.intentId).toBe(action.intentId);
+      expect(replay.intent.deadline).toBe(action.intent.deadline);
+      expect(await f.db.actions.deliveryResult(requestId)).toEqual(outcome);
+      expect(f.effects()).toBe(0);
+    },
+  );
+
+  it("does not revive a queued action after downtime past its deadline", async () => {
+    const f = await fixture(postgres),
+      e = f.executor(),
+      a = await e.register(f.intent);
+    await f.reconnect();
+    const now = vi
+      .spyOn(Date, "now")
+      .mockReturnValue(Date.parse(f.intent.deadline) + 1);
+    try {
+      const recovered = await f.executor().execute(a.intentId, f.scope);
+      expect(recovered.state).toBe("rejected");
+      expect(recovered.attemptId).toBeNull();
+      now.mockRestore();
+      const receipt = await f.db.actions.readReceipt(
+        recovered.receiptId!,
+        f.scope,
+        f.intent.authorizationId,
+      );
+      expect(receipt.outcome.result).toMatchObject({
+        reason: "deadline-expired",
+      });
+      expect((await f.executor().execute(a.intentId, f.scope)).receiptId).toBe(
+        recovered.receiptId,
+      );
+      expect(f.effects()).toBe(0);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it("revocation before admission performs zero effects", async () => {
     const f = await fixture(postgres),
       e = f.executor(),
@@ -1179,6 +1339,52 @@ describe.each(backends)("action lifecycle (PostgreSQL=%s)", (postgres) => {
     const admitted = await f.db.actions.admit(a.intentId, f.scope, 30000);
     await f.db.actions.intervene(f.intervention(a.intentId));
     expect(await f.db.actions.canInvoke(admitted.claim!, f.scope)).toBe(false);
+    expect(f.effects()).toBe(0);
+  });
+  it("withdrawal after admission prevents the provider call", async () => {
+    const f = await fixture(postgres),
+      e = f.executor(),
+      a = await e.register(f.intent),
+      entered = barrier(),
+      release = barrier();
+    const canInvoke = f.db.actions.canInvoke.bind(f.db.actions);
+    const spy = vi
+      .spyOn(f.db.actions, "canInvoke")
+      .mockImplementation(async (...args) => {
+        entered.release();
+        await release.promise;
+        return canInvoke(...args);
+      });
+    const work = e.execute(a.intentId, f.scope);
+    cleanups.push(async () => {
+      release.release();
+      try {
+        await work;
+      } finally {
+        spy.mockRestore();
+      }
+    });
+    await enteredBeforeCompletion(work, entered.promise);
+    await f.withdraw();
+    release.release();
+    expect((await work).state).toBe("cancelled");
+    expect(f.effects()).toBe(0);
+  });
+  it("rejects invocation after the intent deadline even with a live claim", async () => {
+    const f = await fixture(postgres),
+      a = await f.db.actions.register(f.intent),
+      admitted = await f.db.actions.admit(a.intentId, f.scope, 300000);
+    expect(admitted.claim).toBeDefined();
+    const now = vi
+      .spyOn(Date, "now")
+      .mockReturnValue(Date.parse(f.intent.deadline));
+    try {
+      expect(await f.db.actions.canInvoke(admitted.claim!, f.scope)).toBe(
+        false,
+      );
+    } finally {
+      now.mockRestore();
+    }
     expect(f.effects()).toBe(0);
   });
   it("started-first keeps late success and ignores a later cancellation as outcome", async () => {

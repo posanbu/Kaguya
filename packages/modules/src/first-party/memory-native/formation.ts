@@ -1,12 +1,17 @@
 /**
  * 功能概述：校验模型提案的归属、证据和经历状态，再调用事务发布。
- * 主要职责：保留稳定节点 ID 和 expectedRevision；空结果及无变化成功确认来源，冲突保留明确拒绝原因。
+ * 主要职责：保留稳定节点 ID 和 expectedRevision；将持久策略下的经历操作接到原子发布，派生前驱与归属。
+ * 空结果及无变化成功确认来源，冲突保留明确拒绝原因；旧请求仍使用原输出协议。
  * 代码库关系：由 memory-native handler 调用；不直接读取数据库或改写原模型结果。
  */
 import { createHash } from "node:crypto";
 import type { NativeMemoryAccess, NativeMemorySnapshot } from "@kaguya/memory";
 import { z } from "@kaguya/schema";
-import { formationSchemaFor, nativeMemoryRequested } from "./facts.js";
+import {
+  experienceFormationOutputSchema,
+  formationSchemaFor,
+  nativeMemoryRequested,
+} from "./facts.js";
 type FormationInput = Omit<
   z.infer<typeof nativeMemoryRequested.payloadSchema>,
   "existing"
@@ -38,7 +43,9 @@ export async function publishFormation(
     reason = "model-unavailable";
   let nodeIds: string[] = [];
   if (result.status === "completed") {
-    const parsed = formationSchemaFor(p.existing).safeParse(result.output);
+    const parsed = formationSchemaFor(p.existing, p.formationPolicy).safeParse(
+      result.output,
+    );
     if (parsed.success) {
       const existing = new Map(
         [...p.existing.fixed, ...p.existing.recalled.map((r) => r.node)].map(
@@ -106,6 +113,43 @@ export async function publishFormation(
       const ids = new Map(
         parsed.data.nodes.map((n, i) => [n.key, nodes[i]!.node.id]),
       );
+      const proposedOperation =
+        "experienceOperation" in parsed.data
+          ? experienceFormationOutputSchema.shape.experienceOperation.parse(
+              parsed.data.experienceOperation,
+            )
+          : undefined;
+      const experienceOperation = proposedOperation
+        ? {
+            ...proposedOperation,
+            inputIds: proposedOperation.inputIds,
+            outputIds: proposedOperation.outputIds.map(
+              (id) => ids.get(id) ?? id,
+            ),
+          }
+        : undefined;
+      if (experienceOperation) {
+        if (
+          experienceOperation.inputIds.some((id) => !existing.has(id)) ||
+          experienceOperation.outputIds.some(
+            (id) => !nodes.some((n) => n.node.id === id),
+          )
+        )
+          return {
+            status: "rejected" as const,
+            reason: "invalid-experience-reference",
+            nodeIds: [],
+          };
+        if (["merge", "split"].includes(experienceOperation.kind))
+          for (const { node } of nodes)
+            if (
+              experienceOperation.outputIds.includes(node.id) &&
+              node.metadata.experience
+            )
+              node.metadata.experience.predecessors = [
+                ...experienceOperation.inputIds,
+              ];
+      }
       const edges = parsed.data.edges.map((e) => ({
         ...e,
         sourceId: ids.get(e.sourceId) ?? e.sourceId,
@@ -128,7 +172,18 @@ export async function publishFormation(
                   s.id === id &&
                   s.ownerId === n.metadata.ownerId &&
                   s.sourceType === "inbound",
-              ) || previous?.metadata.sourceIds.includes(id),
+              ) ||
+              previous?.metadata.sourceIds.includes(id) ||
+              (experienceOperation &&
+                ["merge", "split"].includes(experienceOperation.kind) &&
+                experienceOperation.outputIds.includes(n.id) &&
+                experienceOperation.inputIds.some((inputId) => {
+                  const input = existing.get(inputId);
+                  return (
+                    input?.metadata.ownerId === n.metadata.ownerId &&
+                    input.metadata.sourceIds.includes(id)
+                  );
+                })),
           )
         )
           return false;
@@ -221,7 +276,7 @@ export async function publishFormation(
                 canonical({ ...n.metadata, revision: 0, occurredAt: "" })
             );
           }) && edges.length === 0;
-        if (same)
+        if (same && !experienceOperation)
           return {
             status: "completed" as const,
             reason: "no-change",
@@ -236,6 +291,7 @@ export async function publishFormation(
               [...existing.values()].map((n) => [n.id, n.metadata.revision]),
             ),
             edges,
+            ...(experienceOperation ? { experienceOperation } : {}),
           });
           nodeIds = published.map((n) => n.id);
           status = "completed";

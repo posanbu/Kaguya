@@ -4,6 +4,7 @@
  * 代码库关系：直接运行 heartbeatModule 与数据库开放槽；补足单元替身无法验证的 Selector/事务边界。
  * 资源取得后立即登记清理；启动拒绝或 stop 失败时仍顺序释放全部资源并汇总错误。
  * 输入输出与副作用：每例隔离 PGlite，关闭宿主与 Core；重放 handler 和同时间戳输入验证幂等性。
+ * inbound 可延后发布冻结事实，让 Focus 先绑定真实同场景来源；无来源证明的 Focus 仍应被隔离。
  * 持久队列等待统一使用 8 秒/20 毫秒有界轮询；fixture 注入 observationCapability 验证真实独立进度。
  */
 import { closeTestResources } from "../test-support/cleanup.js";
@@ -278,7 +279,7 @@ async function fixture(
     }
     await settle();
   };
-  const inbound = async (extra: any = {}) => {
+  const inbound = async (extra: any = {}, freeze = true) => {
     const atom = await core.register(inboundTextInformationKind, {
       occurredAt: now().toISOString(),
       source: "adapter:test",
@@ -288,7 +289,7 @@ async function fixture(
       ],
     });
     await settle();
-    await publishFrozen();
+    if (freeze) await publishFrozen();
     return atom;
   };
   const atoms = (kind: string) =>
@@ -422,6 +423,7 @@ async function fixture(
     fire,
     finish,
     setArousalState,
+    publishFrozen,
     context,
   };
 }
@@ -557,39 +559,52 @@ it("recognizes private, replies and broadcast mentions without treating ordinary
   ).toBe(false);
 });
 
-it("reads Focus metadata from the frozen candidate while asleep", async () => {
-  const f = await fixture(true, {
-    nightSleepEnabled: true,
-    nightSleepStart: "00:00",
-    nightSleepEnd: "23:59",
-  });
-  await f.setArousalState("asleep");
-  await f.core.register(focusOpened, {
-    occurredAt: "2026-09-14T00:00:00.000Z",
-    source: "test:focus",
-    payload: {
-      scopeKey: "qq:qq.main:group:g",
-      generation: "focus:1",
-      startedAt: "2026-09-14T00:00:00.000Z",
-      expiresAt: "2026-09-14T00:02:00.000Z",
-      reason: "mentioned-self",
-      sourceInformationId: f.context.informationId,
-    },
-    references: [
-      { relation: "core:context", informationId: f.context.informationId },
-      { relation: "core:caused-by", informationId: f.context.informationId },
-      { relation: "core:uses-context", informationId: f.context.informationId },
-    ],
-  });
-  await f.inbound();
-  expect(
-    (await f.atoms("agent.attention.arousal.completed"))[0]?.payload,
-  ).toMatchObject({
-    outcome: "observe",
-    focusState: "active",
-    reasonCodes: ["focus-active"],
-  });
-});
+it.each([true, false])(
+  "reads only scene-proven Focus metadata while asleep (proven=%s)",
+  async (proven) => {
+    const f = await fixture(true, {
+      nightSleepEnabled: true,
+      nightSleepStart: "00:00",
+      nightSleepEnd: "23:59",
+    });
+    await f.setArousalState("asleep");
+    const input = await f.inbound({}, false);
+    const focusSource = proven ? input.informationId : f.context.informationId;
+    await f.core.register(focusOpened, {
+      occurredAt: "2026-09-14T00:00:00.000Z",
+      source: "test:focus",
+      payload: {
+        scopeKey: "qq:qq.main:group:g",
+        generation: "focus:1",
+        startedAt: "2026-09-14T00:00:00.000Z",
+        expiresAt: "2026-09-14T00:02:00.000Z",
+        reason: "mentioned-self",
+        sourceInformationId: focusSource,
+      },
+      references: [
+        { relation: "core:context", informationId: f.context.informationId },
+        { relation: "core:caused-by", informationId: focusSource },
+        { relation: "core:uses-context", informationId: focusSource },
+      ],
+    });
+    await f.publishFrozen();
+    const decisions = await f.atoms("agent.attention.arousal.completed");
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]?.payload).toMatchObject(
+      proven
+        ? {
+            outcome: "observe",
+            focusState: "active",
+            reasonCodes: ["focus-active"],
+          }
+        : {
+            outcome: "defer",
+            focusState: "inactive",
+            reasonCodes: ["arousal-asleep"],
+          },
+    );
+  },
+);
 
 it("closes the core and database even when startup and host cleanup reject", async () => {
   const startError = new Error("synthetic startup failure");

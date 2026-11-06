@@ -7,6 +7,7 @@
 shell_jobs/job_runner 在宿主监督独立命令容器；GUI/browser helper 从不执行任意 shell。
 输入输出与副作用：按环境锁串行 admission/启动，外部完成等待不占全局锁；接管先隔离容器。
 日志保留旧 generation 和 unknown 事实；重启隔离自动化并保留桌面，绝不恢复派发。
+镜像导入先以非阻塞方式打开 inbox，再验证普通文件和内容哈希，避免特殊文件占住连接。
 """
 import base64
 from datetime import datetime, timezone
@@ -830,7 +831,7 @@ class PodmanBackend:
         private = storage / "imports"
         private.mkdir(mode=0o700, exist_ok=True)
         destination = private / uuid.uuid4().hex
-        source = os.open(storage / "inbox" / (sha + ".oci"), os.O_RDONLY | os.O_NOFOLLOW)
+        source = os.open(storage / "inbox" / (sha + ".oci"), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         size = os.fstat(source).st_size
         if not stat.S_ISREG(os.fstat(source).st_mode) or not 0 < size <= 12 * 1024 ** 3:
             os.close(source)

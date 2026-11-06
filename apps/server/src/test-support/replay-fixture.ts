@@ -5,6 +5,8 @@
  * wait 为每个绑定 ID 的阶段记录实际耗时；gate 在失败清理前释放，close 逆序尝试所有资源并保留错误。
  * 代码库关系：issue279-replay.test.ts 提供确定性模型响应；复用 MCP testing 与 persistence helper，
  * 输出可选证据文件明确区分 scripted 模型、真实 SQL、真实 MCP 传输及尚未运行的物理 GUI。
+ * readReplaySourceState 在每例开始和清理后记录源码身份；证据不能把执行期间变更过的输入标成最终验收。
+ * wait 默认等待一个持久阶段；同一次确认包含多个冻结页时按页数累加原 8 秒预算，并记录实际预算。
  */
 import { randomUUID, createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -34,6 +36,7 @@ import type { PlatformInboundMessage } from "@kaguya/platform-adapters";
 import { startKaguyaServer, type StartedKaguyaServer } from "../server.js";
 import {
   createPersistenceWait,
+  persistenceWait,
   expectPersistenceSettled,
 } from "./persistence.js";
 
@@ -70,7 +73,11 @@ export interface ReplayFixture {
   readonly db: KaguyaDatabase;
   readonly server: StartedKaguyaServer;
   facts(kind: string): ReturnType<KaguyaDatabase["information"]["find"]>;
-  wait<T>(phase: string, assertion: () => T | Promise<T>): Promise<T>;
+  wait<T>(
+    phase: string,
+    assertion: () => T | Promise<T>,
+    stages?: number,
+  ): Promise<T>;
   logs(): Promise<any[]>;
   message(
     id: string,
@@ -103,6 +110,28 @@ export interface ReplayFixture {
 export const replayCleanupBudget = 120_000;
 export const replayBudget = (stages: number, restarts = 0) =>
   90_000 + stages * 8_000 + restarts * 60_000 + replayCleanupBudget;
+async function readReplaySourceState() {
+  const sourceHashes = Object.fromEntries(
+    await Promise.all(
+      [
+        "apps/server/src/test-support/replay-fixture.ts",
+        "apps/server/src/issue279-replay.test.ts",
+      ].map(async (path) => [
+        path,
+        createHash("sha256")
+          .update(await readFile(path))
+          .digest("hex"),
+      ]),
+    ),
+  );
+  const git = (args: string[]) =>
+    execFileSync("git", args, { encoding: "utf8", timeout: 2_000 }).trim();
+  return {
+    headSha: git(["rev-parse", "HEAD"]),
+    dirty: Boolean(git(["status", "--porcelain"])),
+    sourceHashes,
+  };
+}
 async function boundedReplay<T>(
   phase: string,
   budgetMs: number,
@@ -132,6 +161,7 @@ export async function createReplayFixture(
   installHttp: (fetch: typeof globalThis.fetch) => void,
   response: ReplayResponse,
 ) {
+  const sourceBefore = await readReplaySourceState();
   const startedAt = performance.now();
   const root = await mkdtemp(join(tmpdir(), "kaguya-replay-"));
   const cpuStart = process.cpuUsage();
@@ -242,6 +272,11 @@ export async function createReplayFixture(
             "agent.heavy.tool.run.v1",
             "agent.heavy.tool.step.frozen.v1",
             "agent.heavy.tool.result.v1",
+            "agent.heavy.tool.terminal.v1",
+            "core.message.assistant.text",
+            "core.delivery.requested",
+            "core.delivery.delivered",
+            "core.delivery.failed",
             "core.action.intent.v1",
             "core.action.started.v1",
             "core.action.result.v1",
@@ -282,30 +317,13 @@ export async function createReplayFixture(
       await attempt("evidence manifest write", 5_000, async () => {
         const directory = process.env.KAGUYA_REPLAY_EVIDENCE_DIR!;
         await mkdir(directory, { recursive: true });
-        const sourceHashes = Object.fromEntries(
-          await Promise.all(
-            [
-              "apps/server/src/test-support/replay-fixture.ts",
-              "apps/server/src/issue279-replay.test.ts",
-            ].map(async (path) => [
-              path,
-              createHash("sha256")
-                .update(await readFile(path))
-                .digest("hex"),
-            ]),
-          ),
-        );
+        const sourceAfter = await readReplaySourceState();
         const manifest = {
           schemaVersion: 1,
-          headSha: execFileSync("git", ["rev-parse", "HEAD"], {
-            encoding: "utf8",
-            timeout: 2_000,
-          }).trim(),
-          dirty: !!execFileSync("git", ["status", "--porcelain"], {
-            encoding: "utf8",
-            timeout: 2_000,
-          }).trim(),
-          sourceHashes,
+          headSha: sourceAfter.headSha,
+          dirty: sourceBefore.dirty || sourceAfter.dirty,
+          sourceHashes: sourceAfter.sourceHashes,
+          sourceState: { before: sourceBefore, after: sourceAfter },
           backend,
           fixtureSha256: createHash("sha256")
             .update(JSON.stringify(replayScenario))
@@ -568,17 +586,26 @@ export async function createReplayFixture(
         limit: 2000,
         registrationOrder: true,
       });
-    const wait = async <T>(phase: string, assertion: () => T | Promise<T>) => {
+    const wait = async <T>(
+      phase: string,
+      assertion: () => T | Promise<T>,
+      stages = 1,
+    ) => {
+      if (!Number.isSafeInteger(stages) || stages < 1 || stages > 32)
+        throw new Error(
+          "Replay wait must cover 1–32 explicit persisted stages",
+        );
       const start = performance.now();
+      const budgetMs = persistenceWait.timeout * stages;
       try {
         return await createPersistenceWait(db, () => ({
           backend,
           phase,
           requests: requests.length,
           root,
-        }))(phase, assertion);
+        }))(phase, assertion, { ...persistenceWait, timeout: budgetMs });
       } finally {
-        spans.push({ phase, durationMs: performance.now() - start });
+        spans.push({ phase, budgetMs, durationMs: performance.now() - start });
       }
     };
     const logs = async () =>
@@ -672,6 +699,7 @@ export async function createReplayFixture(
       async settled() {
         await wait("all Runtime/model/action/native work settled", async () => {
           await expectPersistenceSettled(db);
+          expect((await db.information.reliable.health()).exhausted).toBe(0);
           const rows = await db.sql.query(
             `SELECT (SELECT count(*)::int FROM information_action_heads WHERE state IN ('queued','started','cancel_requested')) actions,(SELECT count(*)::int FROM information_native_tool_runs WHERE stopped_id IS NULL) native`,
           );

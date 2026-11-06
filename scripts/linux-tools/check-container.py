@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """功能概述：GitHub 临时 Linux runner 上实证宿主 supervisor 与 rootless shell 容器。
-主要职责：复用生产 PodmanBackend/ShellJobs，验证真实 argv、文件、私有控制面与完整停止。
+主要职责：复用生产 PodmanBackend/ShellJobs，验证真实 argv、退出码/信号区分与 stderr、文件、私有控制面与完整停止。
 代码库关系：镜像由同一 workflow 构建；记录实际 runtime/policy，不能替代生产策略验收。
 输入输出与副作用：随机环境/命名卷/unit，finally 停止全部已登记成员后清理；失败输出监督日志。
 """
@@ -87,9 +87,24 @@ def main():
             assert verified["sha256"] == hashlib.sha256(b"actual-container").hexdigest()
             logs = operation("export", jobId=start["jobId"], stream="stdout", mime="text/plain")
             assert base64.b64decode(logs["artifacts"][0]["dataBase64"]) == b"actual-output\n"
+            failed = operation("start", argv=["/bin/sh", "-c", "printf failure >&2; exit 23"], cwd=".", env={})["result"]
+            failed_state = until(lambda: operation("query", jobId=failed["jobId"])["result"], lambda r: r["state"] in ("exited", "stopped", "unknown"))
+            assert failed_state["state"] == "exited" and failed_state["exitCode"] == 23, failed_state
+            error_output = operation("export", jobId=failed["jobId"], stream="stderr", mime="text/plain")
+            assert base64.b64decode(error_output["artifacts"][0]["dataBase64"]) == b"failure"
+            for argv, expected in [
+                (["/bin/sh", "-c", "exit 128"], {"kind": "exit", "code": 128}),
+                (["/bin/sh", "-c", "exit 143"], {"kind": "exit", "code": 143}),
+                (["/usr/bin/python3", "-c", "import os;os.kill(os.getpid(),15)"], {"kind": "signal", "number": 15}),
+            ]:
+                signaled = operation("start", argv=argv, cwd=".", env={})["result"]
+                result = until(lambda: operation("query", jobId=signaled["jobId"])["result"], lambda r: r["state"] in ("exited", "stopped", "unknown"))
+                assert result["state"] == "exited" and result["exitStatus"] == expected, result
+                assert result["exitCode"] == expected.get("code"), result
+                assert result["signal"] == ("SIGTERM" if expected["kind"] == "signal" else None), result
             code = """const f=require('fs'),a=require('assert');
 for(const p of ['/home/tool/kaguya-tools.sock','/private','/run/podman/podman.sock','/workspace/.kaguya-tools']) a.equal(f.existsSync(p),false,p);
-a.equal(process.getuid(),1000); for(const d of f.readdirSync('/proc/self/fd')){try{a.equal(f.readlinkSync('/proc/self/fd/'+d).includes('shell-jobs'),false)}catch(e){if(e.code!=='ENOENT')throw e}}
+a.equal(process.getuid(),1000); for(const p of ['/proc/1/fd/0','/proc/1/fd/1','/proc/1/fd/2','/proc/1/mem']) a.throws(()=>f.openSync(p,'w'),e=>['EACCES','EPERM'].includes(e.code)); for(const d of f.readdirSync('/proc/self/fd')){try{a.equal(f.readlinkSync('/proc/self/fd/'+d).includes('shell-jobs'),false)}catch(e){if(e.code!=='ENOENT')throw e}}
 f.writeFileSync('isolation.json',JSON.stringify({pid:f.readlinkSync('/proc/self/ns/pid'),net:f.readlinkSync('/proc/self/ns/net')}));"""
             # /private exists in image but is empty; the trusted persistent volume is never mounted in a job.
             code = code.replace("'/private',", "") + "require('assert').deepEqual(require('fs').readdirSync('/private'),[]);"

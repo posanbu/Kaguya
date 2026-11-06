@@ -77,6 +77,8 @@ JSONL 每行是一个记录。公共字段为 `recordId`、`captureSeq`、`schem
 
 `ParticipantPolicy.predict(frozen_input)` 返回 `{"30": p30, "120": p120}`。两个概率均须为有限的 `[0,1]` 数值，且 `p120 >= p30`。每次调用获得输入副本，不接收标签。接口独立于生产 Light/Planner 动作协议。
 
+评测器逐次复制已验证的概率，候选复用或修改同一个返回对象也不能覆盖早期样本。通过 `evaluate(..., predict=...)` 传入的候选在报告中标为 `provided-callback/v1`，不使用默认统计基线的拟合说明。
+
 `HistoricalPolicy` 只用 history 段两个窗口均覆盖完整的样本拟合。它先按目标与群分开，再按以下历史特征分组：
 
 | 特征             | 固定规则                                                        |
@@ -89,7 +91,57 @@ JSONL 每行是一个记录。公共字段为 `recordId`、`captureSeq`、`schem
 
 dev 按目标、群、窗口独立最大化 F1，同分取较高阈值。dev 缺少任一类别时使用 0.5，并记录原因。test 固定拟合统计和阈值；历史前缀可继续包含已经发生的 dev/test 消息。history 报告标为拟合诊断，dev 标为阈值选择，test 标为 held-out。
 
-`MemoryAdapter.build(scope, watermark, earlier_history)` 接收近期预算之外的旧历史，返回绑定范围和水位的 checkpoint；`recall(checkpoint,target)` 返回带 `sourceIds` 的证据列表。工具要求证据引用当前截点更早的同群记录。首轮的 `EmptyMemory` 返回空证据，checkpoint 绑定旧历史哈希。后续 adapter 在独立实验空间重建记忆；接口本身是数据访问约定，不是运行任意插件的安全沙箱。
+`MemoryAdapter.build(scope, watermark, earlier_history)` 接收近期预算之外的旧历史，返回绑定范围和水位的 checkpoint；`recall(checkpoint,target)` 返回带 `sourceIds` 的证据列表。工具要求证据引用当前截点更早的同群记录。默认 `EmptyMemory` 返回空证据，checkpoint 绑定旧历史哈希。`native-extractive/v1` 通过下面的显式批处理入口调用实际 native Memory。所有 adapter 的证据均不得引用已撤回来源。
+
+每个样本独立复制 checkpoint 与证据，adapter 复用缓存不会改变已冻结的目标、前缀或时间块。native 响应只接受约定的证据字段，附带的说话人、时间、引用和媒体元数据必须与旧历史逐项一致；额外标签或未来来源会被拒绝。
+
+## native Memory 离线接入
+
+`memory-requests` 沿用同一 `Corpus.snapshot`、近期预算与截点规则，只导出近期上下文之前的旧历史。请求 ID 绑定 adapter 版本、平台/adapter/登录账号/群、来源水位、旧历史哈希和目标账号。请求没有未来标签。具有相同旧历史、水位和目标的请求去重，样本本身及其 `blockId` 保留。
+
+`native-memory.ts` 为请求分配独立内存 PGlite，调用生产 `memoryGraph.native` 的入库、发布和 `createNativeMemoryAccess.freeze`。形成策略明确命名为 `native-extractive/v1`：从旧原文构造有来源的摘录和图链接，使用真实 native 图/文本召回及预算。它不调用形成模型或 embedding，不读取生产数据库配置。它保留发言者、原文时间、媒体类型及媒体内容缺失标记，不能解释未读取的图片。
+
+在仓库根目录执行；所有输出路径须尚不存在。构建只准备本地生产依赖，不发送模型请求。
+
+```bash
+pnpm exec tsc -b packages/database packages/memory
+
+python3 benchmarks/participation/bench.py memory-requests \
+  --source benchmarks/participation/example-events.jsonl \
+  --config benchmarks/participation/example-config.json \
+  --output .data/participation/native-requests
+
+pnpm exec tsx benchmarks/participation/native-memory.ts \
+  --requests .data/participation/native-requests/memory-requests.jsonl \
+  --output .data/participation/native-responses.jsonl
+
+python3 benchmarks/participation/bench.py prepare \
+  --source benchmarks/participation/example-events.jsonl \
+  --config benchmarks/participation/example-config.json \
+  --native-memory .data/participation/native-responses.jsonl \
+  --output .data/participation/native-dataset
+
+python3 benchmarks/participation/bench.py preview \
+  --dataset .data/participation/native-dataset \
+  --output .data/participation/native-preview
+
+python3 benchmarks/participation/bench.py evaluate \
+  --dataset .data/participation/native-dataset \
+  --output .data/participation/native-report
+```
+
+导入器逐请求核对范围、水位、目标和前缀哈希，并要求每条证据引用未撤回的旧来源。缺失、重复、其他数据集的多余响应或错误绑定会中止准备；不会回退为空记忆。prepared manifest 保存响应文件 SHA256，样本保存 checkpoint 和实际证据。请求及响应都是冻结的本地评测工件，不是可随意编辑的模型结果。
+
+`evaluate` 仍运行既有 `historical-strata/v1` 统计基线。它记录 `memoryAdapter`、`predictorUsesMemory=false` 和 `memoryEffectEvaluated=false`：将 Memory 输入接好不代表统计预测器使用了这些证据。当前命令用于检查同一数据与标签下的可重现流程。正式近期上下文、文本检索、native 图和 embedding 对照须采用读取证据的候选策略并分别记录模型、Prompt、预算和费用。
+
+回归入口：
+
+```bash
+python3 -m unittest discover -s benchmarks/participation -p 'test_*.py' -v
+pnpm exec vitest run benchmarks/participation/native-memory.test.ts
+```
+
+Python 回归验证工件绑定与撤回边界；TypeScript 回归验证实际 PGlite/native 召回。两类证据分别报告。真实 PostgreSQL、真人语料和模型评测使用各自验收，不从合成例子的分数推断效果。
 
 ## 输出与指标
 
@@ -109,6 +161,8 @@ dev 按目标、群、窗口独立最大化 F1，同分取较高阈值。dev 缺
 主报告采用自然截点分布，报告正例比例、已知/未知标签、覆盖不完整、成功/失败与等待截尾计数。PR-AUC 使用 average precision，相同概率的预测整体处理 ties。另给 Brier score、precision、recall、F1 及混淆计数。空集或单类别组的指标为 `null` 并记录原因；混合类别但没有预测正例时 precision 为 `null`、recall/F1 为 0。
 
 预测失败始终计入 `attempted/failures`。有已知标签的预测失败时，全量指标为 `null`、原因是 `prediction_failures`；成功子集的指标单列在 `completedOnly`，其样本分母同时保存。未知标签只进入质量计数。首轮不预测首次发言时间，因此时间误差保持 `null`，同时报告 120 秒观察范围内的等待标签计数。
+
+发生预测失败时，全量 `metrics` 的样本数、正例数与正例率仍按全部已知标签计算。`completedOnly` 保留成功子集自己的类别分布，不能代替全量分布。
 
 ## 下一阶段的采集接口
 

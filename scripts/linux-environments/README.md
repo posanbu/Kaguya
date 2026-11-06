@@ -30,7 +30,7 @@ sudo /usr/bin/python3 -I bootstrap.py apply --trusted-user andrew
 
 HOME tmpfs 使用 Podman 支持的 `mode=0700,U`，按容器用户 1000:1000 设置所有权；不直接传入解析器不支持的 `uid=`/`gid=`。实际挂载所有者、权限与可写性由工具镜像 CI 和生产预检分别核对。
 
-受信宿主用户可将 OCI archive 放入 `/var/lib/kaguya-tools-storage/containers/inbox/<SHA256>.oci`，通过 `image.import` RPC 提交 SHA-256。broker 使用 `O_NOFOLLOW` 打开，复制到不可由宿主用户写入的私有区，校验全文件 SHA-256 后执行固定的 `podman load`。文件大小最多 12 GiB，导入需要预留一份复制空间。随后 `environment.create` 使用完整的 `name@sha256:...`；`--pull=never` 保证执行时不会自行更新镜像。导入和环境管理是宿主管理操作，不注册成模型工具。
+受信宿主用户可将 OCI archive 放入 `/var/lib/kaguya-tools-storage/containers/inbox/<SHA256>.oci`，通过 `image.import` RPC 提交 SHA-256。broker 使用 `O_NOFOLLOW | O_NONBLOCK` 打开并拒绝非普通文件，复制到不可由宿主用户写入的私有区，校验全文件 SHA-256 后执行固定的 `podman load`。文件大小最多 12 GiB，导入需要预留一份复制空间。随后 `environment.create` 使用完整的 `name@sha256:...`；`--pull=never` 保证执行时不会自行更新镜像。导入和环境管理是宿主管理操作，不注册成模型工具。
 
 所有 RPC 为单连接、单 JSON 行：`{"protocol":1,"method":"health","params":{}}`。请求最多 256 KiB，最多 16 个并发连接。`health` 不启动任务。业务输入错误返回稳定错误码，不输出原始请求或异常堆栈。
 
@@ -95,7 +95,15 @@ supervisor 在放行 argv 前设置 systemd 运行上限和日历截止 timer，
 python3 -B -m unittest discover -s scripts/linux-environments -p 'test_broker.py'
 ```
 
-这组测试使用受控后端，证明协议与日志边界。真实 Linux 验收必须另行证明实际 peer credentials、rootless/cgroup/AppArmor、磁盘容量、网络边界、Chromium sandbox、GUI/D-Bus/AT-SPI、接管后的物理隔离和重启恢复。W7/W8 完整镜像交付后才能验证浏览器与 GUI。尚未执行的项目必须记录为 pending。
+这组测试使用受控后端，证明协议与日志边界。在已有 Linux 环境中运行以下专项可验证真实 Unix socket 和内核 SO_PEERCRED，并通过 RPC 检查租约过期、接管、恢复与持久重启后的旧请求拒绝：
+
+```bash
+python3 -B -m unittest discover -s scripts/linux-environments -p 'test_server_linux.py'
+```
+
+`check_server_uid_linux.py` 进一步用实际不同 UID 的子进程连接同一 socket，验证受信用户可访问、其他用户不能通过 JSON 伪造身份。它只允许在一次性 Linux 测试容器中以 root 执行；容器仅需 SETUID/SETGID，不使用 privileged 或宿主 sudo。socket 权限在该 fixture 中刻意放宽，以单独检查 SO_PEERCRED；部署时的 ACL 仍需独立验证。
+
+以上测试的容器执行端仍是受控后端。真实 rootless Podman/cgroup/AppArmor、磁盘容量、网络边界、Chromium sandbox、GUI/D-Bus/AT-SPI、接管后的物理输入隔离和宿主重启恢复，需要在已配置的隔离 Linux 环境另行验收。W7/W8 完整镜像交付后才能验证浏览器与 GUI。尚未执行的项目必须记录为 pending。
 
 ## 回退
 

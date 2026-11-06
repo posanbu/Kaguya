@@ -1,4 +1,5 @@
 /**
+ * 音频回归覆盖资源坏损、读取期间取消、unknown回执先提交后丢投影；重启不得重发或转发文字。
  * 普通模块入口拒绝 nativeStep/nativeModelBinding，内部循环使用宿主私有调用路径。
  * 测试夹具显式装配 QQ 表情模板，验证新增模块契约与既有流程兼容。
  * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
@@ -25,6 +26,9 @@
  * 受控 gate 的前置等待有界；finally 释放阻塞并等待已启动任务收敛，断言失败也不会阻塞资源清理。
  * 观察 DAG 明确包含 completed/progress 两种事实，保留完整因果链和上下文引用断言。
  */
+import { createHash } from "node:crypto";
+import type { MediaResourceStore } from "@kaguya/sdk";
+import { deliveryRequestedInformationKind } from "@kaguya/modules";
 import {
   lifecycleStartupCapability,
   lifecycleStartedInformationKind,
@@ -50,6 +54,7 @@ import {
   type ModelTaskCapability,
 } from "./model-task.js";
 import {
+  runtimeContextInformationKind,
   deliveryDeliveredInformationKind,
   deliveryFailedInformationKind,
   modelTaskFailedInformationKind,
@@ -232,6 +237,9 @@ async function createRuntime(
     retrievalStrategies: NonNullable<
       ConstructorParameters<typeof KaguyaRuntime>[0]["retrievalStrategies"]
     >;
+    mediaResources: NonNullable<
+      ConstructorParameters<typeof KaguyaRuntime>[0]["mediaResources"]
+    >;
     logger: KaguyaLogger;
   }> = {},
 ) {
@@ -386,6 +394,7 @@ describe("KaguyaRuntime", () => {
           )
           .map((entry) => entry.definitionId),
       ).toEqual([
+        "agent.message-output.text",
         "agent.heavy",
         "agent.lifecycle",
         "memory.identity",
@@ -997,6 +1006,7 @@ describe("KaguyaRuntime", () => {
           "core.model.task.requested",
           "core.model.task.completed",
           "core.message.assistant.text",
+          "core.message.assistant.authorized",
           "core.delivery.requested",
           "memory.identity.chat.scope.entity",
           "memory.identity.chat.scope.binding",
@@ -1039,6 +1049,7 @@ describe("KaguyaRuntime", () => {
         ["core.model.task.requested", "agent.router.message.intent.requested"],
         ["core.model.task.completed", "core.model.task.requested"],
         ["core.message.assistant.text", "core.model.task.completed"],
+        ["core.message.assistant.authorized", "core.message.assistant.text"],
         ["core.delivery.requested", "core.message.assistant.text"],
         ["core.delivery.delivered", "core.delivery.requested"],
       ] as const;
@@ -2408,3 +2419,290 @@ it(
   },
   TEST_TIMEOUT,
 );
+
+/** 合成存储只替换资源读取；投递、W3准入、终态与恢复使用真实Runtime和隔离PGlite。 */
+async function audioDeliveryFixture() {
+  const bytes = Buffer.from("synthetic audio bytes");
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  const resource = {
+    resourceId: `sha256:${sha256}`,
+    bytes,
+    mimeType: "audio/wav",
+    sha256,
+  };
+  const get = vi.fn<MediaResourceStore["get"]>(async () => resource);
+  const mediaResources: MediaResourceStore = {
+    get,
+    put: async () => {},
+    delete: async () => {},
+    cleanupExpired: async () => 0,
+  };
+  let core!: RuntimeCapabilityContext["core"];
+  const capabilities = (context: RuntimeCapabilityContext) => {
+    core = context.core;
+    return [];
+  };
+  const initial = await createRuntime({
+    activations: [],
+    capabilities,
+    mediaResources,
+  });
+  let runtime = initial.runtime;
+  const database = initial.database;
+  const sendMessage = vi.fn<PlatformOutboundTransport["sendMessage"]>(
+    async (target) => ({
+      ok: true,
+      adapterId: "web.ui.main",
+      platform: "web",
+      target,
+    }),
+  );
+  const connectTransport = () =>
+    runtime.registerTransport({
+      adapterId: "web.ui.main",
+      platform: "web",
+      transport: { sendMessage },
+    });
+  connectTransport();
+  await runtime.start();
+  const context = await core.register(runtimeContextInformationKind, {
+    source: "test:audio",
+    occurredAt: new Date().toISOString(),
+    payload: {},
+    references: [],
+  });
+  // 只准备已存在的旧assistant输入；所有请求和执行结果均由正式writer产生，不预填成功结果。
+  const assistantId = "test:audio-assistant";
+  await database.information.append(
+    freezeInformationAtom(
+      informationAtomSchema.parse({
+        informationId: assistantId,
+        kind: "core.message.assistant.text",
+        source: "test:audio",
+        occurredAt: new Date().toISOString(),
+        payload: {
+          text: "授权的语音正文",
+          source: {
+            adapterId: "web.ui.main",
+            platform: "web",
+            destination: { kind: "web" },
+          },
+          originatingModuleInstanceId: "heavy.default",
+          turn: null,
+        },
+        references: [
+          { relation: "core:context", informationId: context.informationId },
+        ],
+      }),
+    ),
+    [{ relation: "core:context", required: true, multiple: false }],
+  );
+  const terminal = async (requestId: string) =>
+    (
+      await database.information.find({
+        kinds: ["core.delivery.delivered", "core.delivery.failed"],
+        limit: 10,
+      })
+    ).filter((atom) =>
+      atom.references.some(
+        (ref) =>
+          ref.relation === "core:status-of" && ref.informationId === requestId,
+      ),
+    );
+  return {
+    database,
+    get,
+    sendMessage,
+    contextId: context.informationId,
+    get runtime() {
+      return runtime;
+    },
+    get core() {
+      return core;
+    },
+    submit: () =>
+      core.register(deliveryRequestedInformationKind, {
+        source: "test:audio",
+        occurredAt: new Date().toISOString(),
+        payload: {
+          adapterId: "web.ui.main",
+          platform: "web",
+          destination: { kind: "web" },
+          turn: null,
+          message: {
+            kind: "audio",
+            resourceId: resource.resourceId,
+            sha256,
+            mimeType: "audio/wav",
+            byteLength: bytes.length,
+            text: "授权的语音正文",
+          },
+        },
+        references: [
+          { relation: "core:caused-by", informationId: assistantId },
+          { relation: "core:context", informationId: context.informationId },
+        ],
+      }),
+    terminal,
+    async settle(requestId: string) {
+      await vi.waitFor(
+        async () => expect(await terminal(requestId)).toHaveLength(1),
+        PERSISTENCE_WAIT,
+      );
+      await settleDeliveries(database);
+    },
+    async restart() {
+      await runtime.close();
+      runtime = new KaguyaRuntime({
+        ...createMessageComposition(undefined, []),
+        database,
+        capabilities,
+        mediaResources,
+      });
+      resources.find((entry) => entry.database === database)!.runtime = runtime;
+      connectTransport();
+      await runtime.start();
+    },
+  };
+}
+
+it.each(["missing", "integrity-error", "metadata-mismatch"] as const)(
+  "rejects %s audio before transport and keeps that result after restart",
+  async (failure) => {
+    const f = await audioDeliveryFixture();
+    if (failure === "missing") f.get.mockResolvedValue(undefined);
+    else if (failure === "integrity-error")
+      f.get.mockRejectedValue(
+        new Error("Stored media resource failed integrity validation"),
+      );
+    else {
+      const original = await f.get("unused");
+      f.get.mockClear();
+      f.get.mockResolvedValue({ ...original!, mimeType: "audio/ogg" });
+    }
+    const request = await f.submit();
+    await f.settle(request.informationId);
+    expect(f.sendMessage).not.toHaveBeenCalled();
+    expect(
+      await f.database.actions.deliveryResult(request.informationId),
+    ).toMatchObject({ status: "rejected", evidence: "not-executed" });
+    expect(
+      (await f.terminal(request.informationId))[0]!.payload,
+    ).not.toHaveProperty("outcome", "unknown");
+    await f.restart();
+    await f.settle(request.informationId);
+    expect(f.get).toHaveBeenCalledTimes(1);
+    expect(f.sendMessage).not.toHaveBeenCalled();
+    expect(
+      await f.database.information.find({
+        kinds: ["core.delivery.requested"],
+        limit: 10,
+      }),
+    ).toHaveLength(1);
+  },
+  30000,
+);
+
+it("cancels during audio resource reading before any transport invocation", async () => {
+  const f = await audioDeliveryFixture();
+  const original = await f.get("unused");
+  f.get.mockClear();
+  const gate = Promise.withResolvers<void>();
+  f.get.mockImplementation(async () => {
+    await gate.promise;
+    return original;
+  });
+  try {
+    const request = await f.submit();
+    await vi.waitFor(
+      () => expect(f.get).toHaveBeenCalledTimes(1),
+      PERSISTENCE_WAIT,
+    );
+    const head = (
+      await f.database.sql.query<{
+        intent_id: string;
+        input: any;
+        state: string;
+      }>(
+        "SELECT intent_id,input,state FROM information_action_heads WHERE operation_id=$1",
+        [`delivery:${request.informationId}`],
+      )
+    ).rows[0]!;
+    expect(head.state).toBe("started");
+    await f.runtime.actions.cancel({
+      intentId: head.intent_id,
+      scope: head.input.scope,
+      causeInformationId: f.contextId,
+      controlAuthorizationId: head.input.authorizationId,
+    });
+    gate.resolve();
+    await f.settle(request.informationId);
+    expect(f.sendMessage).not.toHaveBeenCalled();
+    expect(
+      await f.database.actions.deliveryResult(request.informationId),
+    ).toMatchObject({ status: "cancelled", evidence: "not-executed" });
+    await f.restart();
+    await f.settle(request.informationId);
+    expect(f.sendMessage).not.toHaveBeenCalled();
+    expect(f.get).toHaveBeenCalledTimes(1);
+  } finally {
+    gate.resolve();
+  }
+}, 40000); // 资源入口、终态及队列均显式等待，另覆盖一次Runtime重连。
+
+it("recovers an audio unknown receipt after projection loss without resending or falling back to text", async () => {
+  const f = await audioDeliveryFixture();
+  f.sendMessage.mockImplementation(async (target) => ({
+    ok: false,
+    outcome: "unknown",
+    adapterId: "web.ui.main",
+    platform: "web",
+    target,
+    error: "synthetic receipt lost after effect",
+  }));
+  const commit = f.core.commitTerminal.bind(f.core);
+  const projection = vi
+    .spyOn(f.core, "commitTerminal")
+    .mockImplementation((...args) =>
+      args[0] === "kaguya.delivery.result.v1"
+        ? Promise.reject(new Error("synthetic projection crash"))
+        : commit(...args),
+    );
+  try {
+    const request = await f.submit();
+    await vi.waitFor(async () => {
+      expect(
+        await f.database.actions.deliveryResult(request.informationId),
+      ).toMatchObject({ status: "unknown", evidence: "unconfirmed" });
+      expect(f.sendMessage).toHaveBeenCalledTimes(1);
+      expect(projection).toHaveBeenCalled();
+    }, PERSISTENCE_WAIT);
+    expect(await f.terminal(request.informationId)).toHaveLength(0);
+    await f.runtime.close();
+    projection.mockRestore();
+    // 模拟进程恢复时领取原pending投递；只调整测试队列的重试时间，不写任何业务结果。
+    await f.database.sql.query(
+      "UPDATE information_deliveries SET available_at=clock_timestamp() WHERE subscription_id='kaguya.runtime.delivery' AND information_id=$1",
+      [request.informationId],
+    );
+    await f.restart();
+    await f.settle(request.informationId);
+    expect((await f.terminal(request.informationId))[0]!.payload).toMatchObject(
+      { ok: false, outcome: "unknown" },
+    );
+    expect(
+      await f.database.actions.deliveryResult(request.informationId),
+    ).toMatchObject({ status: "unknown", evidence: "unconfirmed" });
+    expect(f.sendMessage).toHaveBeenCalledTimes(1);
+    expect(f.sendMessage.mock.calls[0]![1].kind).toBe("audio");
+    expect(f.get).toHaveBeenCalledTimes(1);
+    expect(
+      await f.database.information.find({
+        kinds: ["core.delivery.requested"],
+        limit: 10,
+      }),
+    ).toHaveLength(1);
+  } finally {
+    projection.mockRestore();
+  }
+}, 40000); // 持久unknown、两次关闭/启动及恢复投影各有界，不用固定sleep。

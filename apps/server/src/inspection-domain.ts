@@ -1,6 +1,7 @@
 /**
  * 功能概述：组合跨领域只读 Inspection 服务，供现有认证路由调用，不向客户端开放 SQL 或领域 mutation。
  * createDomainInspection 共享签名游标/脱敏闭包，按观察、原生循环、行动、Memory 和环境分别产出版本化 DTO。
+ * 正规 Memory 来源必须匹配 Atom 身份、originalInformationId 与原来源引用，不能借用其他来源证明。
  * 代码库关系：inspection.ts 持有此服务，server.ts 动态提供数据库与环境只读门面；UI 留在现有工作台。
  */
 import {
@@ -13,6 +14,7 @@ import {
   DomainReader,
   denied,
   permittedFact,
+  hasReference,
   reference,
   serialMap,
 } from "./inspection-domain-common.js";
@@ -51,7 +53,13 @@ export function createDomainInspection(source: {
           reason = "domain-detail-required";
         if (f.kind === "memory.native.source.v1") {
           const original = f.payload.memorySource?.id;
-          if (typeof original !== "string") reason = "source-proof-missing";
+          if (
+            typeof original !== "string" ||
+            f.id !== `memory-native-source:${original}` ||
+            f.payload.originalInformationId !== original ||
+            !hasReference(f, original, "core:uses-context")
+          )
+            reason = "source-proof-missing";
           else {
             const proof = await persistedSourceProofOwners(
               r.tx,

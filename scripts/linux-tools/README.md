@@ -4,6 +4,8 @@
 
 `shell.exec` 参数的 mode 为 start、query、stop、verify、export。start 接收绝对可执行文件 argv、workspace 相对 cwd 和独立 env。不会继承宿主环境，禁止通过 env 覆盖 helper 身份。verify 在新 operation 下读取真实文件或原 job 回执，明确携带原 operationId/attemptId；journal reconcile 仍只读 W6 journal。export 限定 workspace 普通文件，拒绝路径穿越与符号链接；stdout/stderr 使用 jobId/stream 引用。附件按单件及原始总额 16 MiB 限制，超限保留完整文件、大小和 hash，可按 offset/maxBytes 分段读取。
 
+新作业由容器 PID 1 监控器返回独立的 `exitStatus`：`exit/code` 或 `signal/number`。`exitCode` 仅表示命令正常退出时的退出码；`signal` 表示 `waitpid` 实际观察到的信号。监控器禁止进程转储，命令 stdout/stderr 只作为数据封装。监控器、传输或协议证据缺失时返回 `unknown`，不能用 128 或 143 推断信号。完成回执仍须确认整个 payload cgroup 已停止。
+
 Server 从敏感配置目录的 `linux-tools.json` 显式启用；文件不存在即关闭。配置样例：
 
 ```json
@@ -60,7 +62,7 @@ Server 从敏感配置目录的 `linux-tools.json` 显式启用；文件不存�
 
 使用宿主实际生成的 scope，并选择当前 Profile 内已配置的 provider。Server 为管理入口创建的独立 `agent.gui.execute` 任务选择这条路由。同一 scope 的普通 `agent.heavy.respond` 继续使用聊天模型，其工具目录不包含 `gui.observe`、`gui.act` 或 `gui.verify`。GUI 路由沿用 Profile 的 Heavy generation 设置。凭据只来自 Profile；配置摘要包含适配器、协议、无凭据的 endpoint 和 generation 设置。原生绑定要求 endpoint 的凭据与查询参数为空，API key 使用独立字段。
 
-`gui.observe` 返回桌面或指定窗口的原始 PNG、capture ID、原图尺寸、坐标系、窗口原点及短期观察引用。`gui.act` 接受一次元素或像素点击、ASCII 插入、完整字段 Unicode 替换、按键或滚动。引用绑定当前 lease、generation 和会话，输入后消费，交接后必须重新观察。所有输入在共享桌面的前台执行。`gui.verify` 引用原 operationId/attemptId，读取当前 GUI 状态；原操作的 unknown 记录保持不变。
+`gui.observe` 返回桌面或指定窗口的原始 PNG、capture ID、原图尺寸、坐标系、窗口原点及短期观察引用。`gui.act` 接受一次元素或像素点击、ASCII 插入、完整字段 Unicode 替换、按键或滚动；插入和按键必须使用目标窗口的观察引用。引用绑定当前 lease、generation 和会话，输入后消费，交接后必须重新观察。执行前重新核对同一目标的截图和语义状态；检查后的应用变化仍可能发生。所有输入在共享桌面的前台执行。`gui.verify` 引用原 operationId/attemptId，读取当前 GUI 状态；原操作的 unknown 记录保持不变。
 
 原生循环把整批工具结果保存在 tool 消息中，再追加对应原图。实时续轮和重启恢复读取同一个不可变 blob，并核对 scope、intent、generation、哈希和尺寸。图片与完整工具交互一同裁剪；base64、元数据和最终 HTTP JSON 均受输入字节预算约束。run 身份固定为 activation、task 和 source；模型路由与非秘密配置在首轮冻结。重启后更改模型、配置、路由或关闭 native，会停止原 run 并保留已有回执。旧 run 的来源仅从真实 requested 事实恢复；缺少模型绑定时停止推进，已有终态仍可读取。
 

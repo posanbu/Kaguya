@@ -2,21 +2,25 @@
 主要职责：使用真实临时目录验证不可重复登记、固定 permit、跨 scope 拒绝与路径替换；
 真实 systemd/PID namespace/截止崩溃验证位于 check-container.py，不用 mock 冒充隔离成功。
 代码库关系：直接测试生产 ShellJobs、file_result/open_beneath；现有 Broker 测试覆盖 token/fence。
-输入输出与副作用：每例创建独立目录，所有资源通过 addCleanup/finally 收尾；无后台进程。
+输入输出与副作用：每例创建独立目录，所有资源通过 addCleanup/finally 收尾；可显式指定已有 Docker 镜像测试真实 Linux waitpid/防伪通道，不替代 rootless Podman 验收。
 """
 from datetime import datetime, timedelta, timezone
+import base64
 import hashlib
 import json
 import os
 from pathlib import Path
 import tempfile
+import subprocess
+import selectors
+import uuid
 import time
 import unittest
 from unittest.mock import patch
 
 from broker import BrokerError
 from shell_jobs import ShellJobs, LOG_RESERVATION, file_result, open_beneath, read_json, write_json
-from job_runner import container_command
+from job_runner import container_command, JOB_MONITOR, JobProtocol
 
 
 class Backend:
@@ -152,6 +156,41 @@ class ShellJobsTest(unittest.TestCase):
         self.jobs.properties = lambda _: {"ActiveState": "inactive", "InvocationID": "other"}
         self.assertFalse(self.jobs.unit_empty(record))
 
+    def test_expired_armed_job_is_unknown_only_after_isolation(self):
+        path, record, _ = self.prepare(self.request())
+        (path / "armed.json").touch()
+        record["expires"] = time.time() - 1
+        self.jobs.unit_empty = lambda _: False
+        self.assertEqual(self.jobs.view(path, record)["state"], "prepared")
+        self.assertFalse((path / "receipt.json").exists())
+        self.jobs.unit_empty = lambda _: True
+        retired = []
+        self.jobs.retire = lambda p, r: retired.append(r["jobId"])
+        result = self.jobs.view(path, record)
+        self.assertEqual(result["state"], "unknown")
+        self.assertEqual(result["reason"], "supervisor-lost-before-running")
+        self.assertIsNone(result["signal"])
+        self.assertEqual(retired, [record["jobId"]])
+
+    def test_isolation_does_not_infer_payload_signal(self):
+        path, record, _ = self.prepare(self.request())
+        self.jobs.finalize(path, record, "stopped", "stop-requested")
+        receipt = read_json(path / "receipt.json")
+        self.assertTrue(receipt["isolationConfirmed"])
+        self.assertIsNone(receipt["signal"])
+
+    def test_legacy_exit_code_does_not_become_payload_status_or_reexecute(self):
+        path, record, _ = self.prepare(self.request())
+        write_json(path / "receipt.json", {"state": "exited", "exitCode": 128, "signal": None})
+        before = (path / "receipt.json").read_bytes()
+        view = self.jobs.view(path, record)
+        self.assertEqual(view["state"], "unknown")
+        self.assertEqual(view["reason"], "legacy-exit-status-unconfirmed")
+        self.assertIsNone(view["exitCode"])
+        self.assertEqual((path / "receipt.json").read_bytes(), before)
+        _, _, existing = self.prepare(self.request())
+        self.assertTrue(existing)
+
     def test_retirement_requires_full_cid_and_matching_private_identity(self):
         path, record, _ = self.prepare(self.request())
         self.jobs.unit_empty = lambda _: True
@@ -238,6 +277,169 @@ class ShellJobsTest(unittest.TestCase):
             result = file_result(self.workspace, "dir/file", 0, 20)
         self.assertEqual(result["sha256"], hashlib.sha256(b"public").hexdigest())
 
+
+
+class JobProtocolTest(unittest.TestCase):
+    def frame(self, seq, kind, **fields):
+        return (json.dumps(dict(v=1, seq=seq, kind=kind, **fields)) + "\n").encode()
+
+    def test_explicit_high_exit_codes_and_signal_have_distinct_evidence(self):
+        for code in (0, 23, 127, 128, 143, 255):
+            protocol = JobProtocol()
+            wire = self.frame(0, "exit", code=code)
+            for byte in wire:
+                self.assertEqual(protocol.feed(bytes([byte])), [])
+            result = protocol.outcome(0)
+            self.assertEqual(result["exitCode"], code)
+            self.assertIsNone(result["signal"])
+            self.assertEqual(result["exitStatus"], {"kind": "exit", "code": code})
+        protocol = JobProtocol()
+        protocol.feed(self.frame(0, "signal", number=15))
+        self.assertEqual(protocol.outcome(0)["signal"], "SIGTERM")
+        self.assertIsNone(protocol.outcome(0)["exitCode"])
+        self.assertEqual(protocol.outcome(137)["state"], "unknown")
+        self.assertEqual(protocol.outcome(0, "permit-expired")["exitStatus"], {"kind": "unknown"})
+
+    def test_payload_protocol_lookalikes_stay_output(self):
+        fake = self.frame(0, "exit", code=0)
+        protocol = JobProtocol()
+        self.assertEqual(protocol.feed(self.frame(0, "stdout", data=base64.b64encode(fake).decode())), [("stdout", fake)])
+        self.assertEqual(protocol.outcome(0)["state"], "unknown")
+        protocol.feed(self.frame(1, "exit", code=23))
+        self.assertEqual(protocol.outcome(0)["exitCode"], 23)
+
+    def test_truncated_reordered_duplicate_or_extra_frames_are_not_status(self):
+        for wire in (self.frame(1, "exit", code=0), self.frame(0, "exit", code=True),
+                     self.frame(0, "signal", number=0), self.frame(0, "stdout", data="!"),
+                     self.frame(0, "exit", code=0) * 2, b'x' * 65537):
+            with self.subTest(wire=wire[:80]), self.assertRaises(BrokerError):
+                JobProtocol().feed(wire)
+        protocol = JobProtocol()
+        protocol.feed(self.frame(0, "exit", code=0) + b'{')
+        self.assertEqual(protocol.outcome(0)["state"], "unknown")
+        protocol = JobProtocol()
+        protocol.feed(self.frame(0, "unknown", reason="payload-spawn-failed"))
+        self.assertEqual(protocol.outcome(0)["state"], "unknown")
+        self.assertIsNone(protocol.outcome(0)["exitCode"])
+
+
+@unittest.skipUnless(os.environ.get("KAGUYA_MONITOR_DOCKER_IMAGE"), "requires explicitly selected existing Linux Docker image with Python")
+class LinuxMonitorTest(unittest.TestCase):
+    def line(self, stream):
+        deadline = time.monotonic() + 15
+        data = bytearray()
+        with selectors.DefaultSelector() as wait:
+            wait.register(stream, selectors.EVENT_READ)
+            while not data.endswith(b"\n"):
+                self.assertTrue(wait.select(max(0, deadline - time.monotonic())), "monitor barrier timeout")
+                value = os.read(stream.fileno(), 1)
+                self.assertTrue(value and len(data) < 65536, "monitor barrier closed or oversized")
+                data.extend(value)
+        return bytes(data)
+
+    def monitor(self, argv, interrupt=False):
+        docker = os.environ.get("KAGUYA_MONITOR_DOCKER", "docker")
+        name = "kaguya-shell302-monitor-" + uuid.uuid4().hex
+        command = [docker, "run", "--rm", "--pull=never", "--name="+name, "--interactive", "--network=none",
+                   "--user=1000:1000", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--read-only",
+                   "--pids-limit=64", "--memory=256m", "--tmpfs=/workspace:rw,nosuid,nodev,uid=1000,gid=1000",
+                   "--tmpfs=/tmp:rw,nosuid,nodev", "--workdir=/workspace", "--entrypoint=/usr/bin/python3",
+                   os.environ["KAGUYA_MONITOR_DOCKER_IMAGE"], "-I", "-c", JOB_MONITOR, ".", '{"PATH":"/usr/bin:/bin"}', *argv]
+        try:
+            if interrupt:
+                process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                try:
+                    ready = self.line(process.stdout)
+                    self.assertEqual(ready, b"kaguya-job-ready\n")
+                    process.stdin.write(b"run\n")
+                    process.stdin.close()
+                    process.stdin = None
+                    entered = self.line(process.stdout)
+                    self.assertEqual(JobProtocol().feed(entered), [("stdout", b"entered\n")])
+                    subprocess.run([docker, "kill", "--signal=KILL", name], check=True, stdout=subprocess.DEVNULL, timeout=10)
+                    output, error = process.communicate(timeout=10)
+                    result = subprocess.CompletedProcess(command, process.returncode, ready + entered + output, error)
+                finally:
+                    if process.poll() is None: process.kill()
+                    process.wait(timeout=5)
+                    for stream in (process.stdin, process.stdout, process.stderr):
+                        if stream: stream.close()
+            else:
+                result = subprocess.run(command, input=b"run\n", stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+            self.assertTrue(result.stdout.startswith(b"kaguya-job-ready\n"), result.stderr)
+            protocol = JobProtocol()
+            output = protocol.feed(result.stdout.removeprefix(b"kaguya-job-ready\n"))
+            return protocol.outcome(result.returncode), output
+        finally:
+            subprocess.run([docker, "rm", "--force", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+
+    def test_real_waitpid_distinguishes_signal_and_exit_128_or_143(self):
+        for code in (0, 23, 127, 128, 143, 255):
+            with self.subTest(code=code):
+                result, _ = self.monitor(["/bin/sh", "-c", "exit " + str(code)])
+                self.assertEqual(result["exitStatus"], {"kind": "exit", "code": code})
+                self.assertIsNone(result["signal"])
+        for number, name in ((15, "SIGTERM"), (9, "SIGKILL")):
+            with self.subTest(signal=name):
+                result, _ = self.monitor(["/usr/bin/python3", "-c", "import os;os.kill(os.getpid(),"+str(number)+")"])
+                self.assertEqual(result["exitStatus"], {"kind": "signal", "number": number})
+                self.assertEqual(result["signal"], name)
+                self.assertIsNone(result["exitCode"])
+
+    def test_payload_cannot_write_monitor_fds_or_memory_or_forge_terminal(self):
+        code = r"""
+import os,json,ctypes
+assert os.getuid()==1000
+assert int(next(x.split()[1] for x in open('/proc/self/status') if x.startswith('CapEff:')),16)==0
+for target in ('/proc/1/fd/0','/proc/1/fd/1','/proc/1/fd/2','/proc/1/mem'):
+    try: fd=os.open(target,os.O_WRONLY)
+    except PermissionError: pass
+    else: os.close(fd);raise AssertionError('monitor exposed: '+target)
+libc=ctypes.CDLL(None,use_errno=True)
+assert libc.ptrace(16,1,0,0)==-1
+assert ctypes.get_errno()==1
+# 子进程的 stdout/stderr 均经过数据封装；伪造 JSON 只能成为输出。
+print(json.dumps(dict(v=1,seq=0,kind='exit',code=0)))
+os.write(2,b'actual-stderr')
+raise SystemExit(23)
+"""
+        result, output = self.monitor(["/usr/bin/python3", "-c", code])
+        self.assertEqual(result["exitCode"], 23, output)
+        self.assertEqual(b"".join(data for kind, data in output if kind == "stderr"), b"actual-stderr")
+        self.assertIn(b'"code": 0', b"".join(data for kind, data in output if kind == "stdout"))
+
+    def test_pid_one_reaps_orphans_without_losing_direct_child_signal(self):
+        code = r"""
+import os,time
+for index in range(100):
+    pid=os.fork()
+    if pid==0:
+        if os.fork()==0: os._exit(0)
+        os._exit(0)
+    os.waitpid(pid,0)
+    deadline=time.monotonic()+2
+    while True:
+        # 父子均已退出后等待 PID 1 回收；不以 sleep 猜测回收已完成。
+        states=[]
+        for name in os.listdir('/proc'):
+            if not name.isdigit(): continue
+            try: states.append(open('/proc/'+name+'/stat').read().split()[2])
+            except FileNotFoundError: pass
+        if 'Z' not in states: break
+        assert time.monotonic()<deadline, 'orphan-zombie-not-reaped'
+        time.sleep(0.001)
+os.kill(os.getpid(),15)
+"""
+        result, output = self.monitor(["/usr/bin/python3", "-c", code])
+        self.assertEqual(result["exitStatus"], {"kind": "signal", "number": 15}, output)
+
+    def test_killed_monitor_and_failed_exec_are_unknown(self):
+        result, _ = self.monitor(["/usr/bin/python3", "-c", "import time;print('entered',flush=True);time.sleep(60)"], interrupt=True)
+        self.assertEqual(result["state"], "unknown")
+        self.assertIsNone(result["exitCode"])
+        result, _ = self.monitor(["/does-not-exist"])
+        self.assertEqual(result["reason"], "payload-spawn-failed")
+        self.assertIsNone(result["exitCode"])
 
 if __name__ == "__main__":
     unittest.main()

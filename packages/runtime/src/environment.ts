@@ -6,7 +6,8 @@
  * helper 由 Python broker 调用。环境管理只提供宿主 API，不自动注册模型工具。
  * 输入输出与副作用：token 仅留宿主内存及 socket 请求；控制调用用新 lease 核对原 attempt。
  * 传输中断不是取消证明；返回已有成功证据时保留 succeeded，不改写成 cancelled。
- * release 仅在确认响应后移除秘密绑定；响应丢失可用同身份读取 broker 幂等释放回执。
+ * acquire/renew 核对响应的租约身份；release 核对同代次已隔离回执后才移除秘密绑定。
+ * 响应丢失或身份不符时保留清理 owner，允许用原身份读取 broker 幂等释放回执。
  * 人工会话保留独立秘密绑定；接管重试复用同一凭证，输入回执丢失后只查询原 operation。
  */
 import { createConnection } from "node:net";
@@ -229,6 +230,11 @@ export class LinuxEnvironmentClient {
     const response = bindingSchema.parse(
       await this.#transport("lease.acquire", input),
     );
+    if (
+      response.environment.environmentId !== input.environmentId ||
+      response.environment.workflowId !== input.workflowId
+    )
+      throw new Error("environment-acquire-identity-mismatch");
     this.#bindings.set(input.environmentId, {
       ...response,
       scope: input.scope,
@@ -250,17 +256,28 @@ export class LinuxEnvironmentClient {
         ttlSeconds,
       }),
     );
+    if (!sameReference(environment, binding.environment))
+      throw new Error("environment-renew-identity-mismatch");
     this.#bindings.set(environmentId, { ...binding, environment });
     return structuredClone(environment);
   }
 
   async release(environmentId: string, scope: string) {
     const binding = this.#binding(environmentId, scope);
-    const result = await this.#transport("lease.release", {
-      environment: binding.environment,
-      token: binding.token,
-      scope,
-    });
+    const result = environmentControlSchema.parse(
+      await this.#transport("lease.release", {
+        environment: binding.environment,
+        token: binding.token,
+        scope,
+      }),
+    );
+    if (
+      result.environmentId !== environmentId ||
+      result.scope !== scope ||
+      result.generation !== binding.environment.generation ||
+      result.state !== "quarantined"
+    )
+      throw new Error("environment-release-unconfirmed");
     this.#bindings.delete(environmentId);
     this.#cleanupBindings.delete(this.#leaseKey(binding.environment));
     return result;

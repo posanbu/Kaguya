@@ -1,6 +1,6 @@
 # W7 + W8 Linux 一次性安装包
 
-本包对应 `manifest.json` 中的 Git SHA 和成功 CI run，包含完整宿主 broker、shell 监督程序、固定依赖清单、两份 Chromium seccomp 配置，以及 shell、Chromium、GUI 三份 OCI 镜像。`SHA256SUMS` 校验整个包；部署前还须核对交接消息中的 manifest SHA-256。实际执行入口为 `install_bundle.py`，特权系统变更全部复用包内的 `bootstrap.py`。
+本包对应 `manifest.json` 中的 Git SHA 和成功 CI run，包含完整宿主 broker、shell 监督程序、固定依赖清单、两份 Chromium seccomp 配置，以及 shell、Chromium、GUI 三份 OCI 镜像。`SHA256SUMS` 校验整个包；`verify` 会再次核对固定 commit、按角色固定的镜像摘要引用，以及包内 workflow 和 GUI 回执。离线校验只证明包内信息一致；部署前还须独立核对该 SHA 的真实 CI 状态、产物来源和交接消息中的 manifest SHA-256。实际执行入口为 `install_bundle.py`，特权系统变更全部复用包内的 `bootstrap.py`。
 
 在 **Ubuntu 26.04 x86_64 本机终端**以 `andrew` 登录，将整个包放到新目录。旧 `9fd7bae` 安装包已废弃，不得执行；保留旧 staging 供核对，不覆盖已有安装包。先审阅 `HOST-DETAILS.md`、`TOOLS-DETAILS.md`、代码和依赖清单；父会话的独立安装审查通过后执行：
 
@@ -14,7 +14,7 @@ python3 -I install_bundle.py install --trusted-user andrew
 
 安装只建立 Linux 工具基础设施并导入镜像；Kaguya、PostgreSQL、QQ/NapCat、Profile 与会话数据保持现有状态。后续由宿主使用 manifest 中的完整 `name@sha256:...` 创建环境，再在 `linux-tools.json` 中显式配置实际 scope/environment/workflow。GUI 环境使用 `desktopKind: "gui"` 和 `sandboxPolicy: "chromium-v1"`；`guiModel` 只用于独立 `agent.gui.execute`。没有 scope 或模型配置时不自动猜测或启用。详见 `TOOLS-DETAILS.md`。
 
-CI 已验证固定镜像的实际 rootless shell、Chromium sandbox、跨 UID GUI、GTK 原图与人工接管。生产 Ubuntu 的系统安装、网络边界、容量和实际桌面启动须在安装后按 `HOST-DETAILS.md` 现场验收。真实模型管理 API→GUI 闭环由 W11 统一联调；本包不发送任何模型请求。
+本包应配套同一 SHA 的 CI 证据，覆盖实际 rootless shell、Chromium sandbox、跨 UID GUI、GTK 原图与人工接管；以独立核实的 CI 记录为准。生产 Ubuntu 的系统安装、网络边界、容量和实际桌面启动须在安装后按 `HOST-DETAILS.md` 现场验收。真实模型管理 API→GUI 闭环由 W11 统一联调；本包不发送任何模型请求。
 
 ## 回退
 

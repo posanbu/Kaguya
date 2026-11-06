@@ -6,8 +6,11 @@
  * finish 追加结果/核对事实，unknown 可澄清；intervene/invalidateRun/revoke 保留停止来源。
  * 代码库关系：Runtime ActionExecutor 独占 provider I/O，模块只能经 SDK 端口访问；
  * prepareActionSchema 增量建表，所有事实通过标准 appendInformationAtom 进入持久订阅/outbox。
+ * prepareDelivery 保留失效 observation 的原身份，禁止降级 legacy；消息有效期从持久入队时刻计算。
+ * 消息桥接可登记已经失效的宿主 intent，再由 admission 保存拒绝证据；普通工具 register 仍立即拒绝。
  * 输入输出与副作用：事务使用 READ COMMITTED，外部调用在提交后；lease 失效拒绝旧提交，
- * started 恢复只产生 unknown，不重发。唯一事实与稳定操作身份不承诺外部 exactly-once。
+ * canInvoke 在调用前重新校验授权、冻结依赖与期限；started 恢复只产生 unknown，不重发。
+ * 唯一事实与稳定操作身份不承诺外部 exactly-once。
  */
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -286,7 +289,11 @@ export class PostgresActionStore {
       causeInformationId: r?.invalidated_id ?? null,
     };
   }
-  private async authorized(tx: SqlTransaction, i: ActionIntent) {
+  private async authorized(
+    tx: SqlTransaction,
+    i: ActionIntent,
+    checkCurrentEligibility = true,
+  ) {
     const r = (
       await tx.query<{
         input: ActionAuthorization;
@@ -299,8 +306,7 @@ export class PostgresActionStore {
     ).rows[0];
     return (
       !!r &&
-      !r.revoked_id &&
-      r.live &&
+      (!checkCurrentEligibility || (!r.revoked_id && r.live)) &&
       r.input.executionDigest === actionExecutionDigest(i) &&
       r.input.scope === i.scope &&
       r.input.version === i.authorizationVersion &&
@@ -399,6 +405,7 @@ export class PostgresActionStore {
     legacy: boolean,
     guard?: InformationClaim,
     transaction?: SqlTransaction,
+    deferEligibilityToAdmission = false,
   ) {
     const input = actionIntentSchema.parse(raw),
       digest = actionDigest(input);
@@ -414,7 +421,7 @@ export class PostgresActionStore {
       }
       if (guard) await assertClaimInTransaction(tx, guard);
       if (!legacy) await this.basis(tx, input);
-      if (!(await this.authorized(tx, input)))
+      if (!(await this.authorized(tx, input, !deferEligibilityToAdmission)))
         throw new Error("action-authorization-denied");
       await tx.query(
         "INSERT INTO information_action_runs(run_id,scope) VALUES($1,$2) ON CONFLICT DO NOTHING",
@@ -426,7 +433,10 @@ export class PostgresActionStore {
           [input.runInformationId],
         )
       ).rows[0]!;
-      if (run.invalidated_id || run.scope !== input.scope)
+      if (
+        (!deferEligibilityToAdmission && run.invalidated_id) ||
+        run.scope !== input.scope
+      )
         throw new Error("action-run-invalidated");
       const intentId = await this.fact(tx, "core.action.intent.v1", input, [
         input.runInformationId,
@@ -524,8 +534,14 @@ export class PostgresActionStore {
     ).rows[0];
     if (old) return view(old);
     const request = (
-      await this.db.query<{ payload: any }>(
-        "SELECT payload FROM information_atoms WHERE information_id=$1 AND kind='core.delivery.requested'",
+      await this.db.query<{
+        payload: any;
+        occurred_at: string;
+        queued_at: string | null;
+      }>(
+        `SELECT a.payload,a.occurred_at,d.created_at::text queued_at FROM information_atoms a
+        LEFT JOIN information_deliveries d ON d.information_id=a.information_id AND d.subscription_id='kaguya.runtime.delivery'
+        WHERE a.information_id=$1 AND a.kind='core.delivery.requested'`,
         [requestId],
       )
     ).rows[0];
@@ -547,7 +563,7 @@ export class PostgresActionStore {
             contract: any;
           }>(
             `SELECT o.observation_id,o.manifest,p.scene_id,p.contract FROM information_observations o JOIN information_observation_progress p USING(stream_id)
-       WHERE o.complete AND o.replacement_observation_id IS NULL AND o.manifest->>'runInformationId'=$1 AND p.consumer_id='agent.situation' ORDER BY o.through_position LIMIT 1`,
+       WHERE o.manifest->>'runInformationId'=$1 AND p.consumer_id='agent.situation' ORDER BY (o.replacement_observation_id IS NULL),o.through_position LIMIT 1`,
             [p.turn.claimInformationId],
           )
         ).rows[0]
@@ -581,7 +597,10 @@ export class PostgresActionStore {
       )
     ).rows[0];
     const deadline =
-      prior?.input.expiresAt ?? new Date(Date.now() + 300000).toISOString();
+      prior?.input.expiresAt ??
+      new Date(
+        Date.parse(request.queued_at ?? request.occurred_at) + 300000,
+      ).toISOString();
     const target = {
       adapterId: p.adapterId,
       platform: p.platform,
@@ -644,7 +663,7 @@ export class PostgresActionStore {
       expiresAt: deadline,
       causeInformationId: requestId,
     });
-    return this.registerInternal(intent, !o, guard);
+    return this.registerInternal(intent, !o, guard, undefined, true);
   }
   async admit(
     id: string,
@@ -819,7 +838,11 @@ export class PostgresActionStore {
         r.state === "started" &&
         !run?.invalidated_id &&
         (await this.nativeRunActive(tx, r.intent_id)) &&
-        (await this.authorized(tx, r.input))
+        (r.legacy_delivery ||
+          (await checkActionDependencies(tx, r.input.dependencies)).valid) &&
+        (await this.authorized(tx, r.input)) &&
+        (await this.row(tx, claim.intentId, scope)).live &&
+        Date.parse(r.input.deadline) > Date.now()
       );
     });
   }

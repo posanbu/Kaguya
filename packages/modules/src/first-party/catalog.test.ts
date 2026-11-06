@@ -95,7 +95,7 @@ describe("first-party module configuration", () => {
       lifecycle?.manifest.inspection?.views.find(({ id }) => id === "schedules")
         ?.kinds,
     ).toEqual(scheduleKinds);
-    expect(definitions).toHaveLength(7);
+    expect(definitions).toHaveLength(8);
     for (const { manifest } of definitions) {
       if (manifest.development?.status === "incomplete") {
         expect(manifest.inspection).toBeUndefined();
@@ -153,7 +153,7 @@ describe("first-party module configuration", () => {
       defaults.find((config) => config.definitionId === "adapter.web")?.enabled,
     ).toBe(true);
     expect(createFirstPartyModuleActivations(catalog(), defaults)).toHaveLength(
-      6,
+      7,
     );
   });
 

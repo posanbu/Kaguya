@@ -1,5 +1,6 @@
 /**
  * 功能概述：通过真实 Core、ModuleHost、Scheduler 与 PGlite 验证 Lifecycle 状态、调度和观察恢复。
+ * 碰撞回归以相同旧 scope 的不同 scene 验证 legacy defer、启动/到期恢复与候选开放槽隔离。
  * 主要职责：fixture 提供合成时钟、入站与手动 due；settle 等待持久队列并报告处理错误。
  * restart 关闭原 core/runner 后重建宿主和绑定能力，保留数据库、订阅 ID、时钟与 ID 序列。
  * 代码库关系：直接运行 createLifecycleModule，覆盖离线期间多人消息及无新入站的启动恢复。
@@ -28,7 +29,12 @@ import {
   defineInformationKind,
   defineInformationModuleCatalog,
 } from "@kaguya/sdk";
-import { informationAtomSchema, z } from "@kaguya/schema";
+import {
+  informationAtomSchema,
+  z,
+  sceneIdentity,
+  type SceneAddress,
+} from "@kaguya/schema";
 import {
   OneShotScheduleClient,
   oneShotDueInformationKind,
@@ -247,6 +253,7 @@ async function fixture(
       direct: boolean,
       senderId?: string,
       wait?: boolean,
+      address?: SceneAddress,
     ) => Promise<{ informationId: string }>;
     now: () => Date;
   }) => Promise<void>,
@@ -386,7 +393,16 @@ async function fixture(
       references: [],
     }),
   );
-  const inbound = async (direct: boolean, senderId = "user", wait = true) => {
+  const inbound = async (
+    direct: boolean,
+    senderId = "user",
+    wait = true,
+    address: SceneAddress = {
+      platform: "qq",
+      adapterId: "qq.main",
+      destination: { kind: "group", groupId: "g" },
+    },
+  ) => {
     const atom = await diagnostics.step(
       `inbound.register:${direct ? "direct" : "ordinary"}:${senderId}`,
       () =>
@@ -396,9 +412,7 @@ async function fixture(
           payload: {
             text: "hello",
             source: {
-              platform: "qq",
-              adapterId: "qq.main",
-              destination: { kind: "group", groupId: "g" },
+              ...address,
               senderId,
               selfId: "bot",
               platformMessageId: `m${n}`,
@@ -858,3 +872,92 @@ it.for(paginationDatabases)(
       expect(await f.all(inboundTextInformationKind.kind)).toHaveLength(2);
     }),
 );
+
+for (const backend of paginationDatabases) {
+  const budget = ordinaryBudget({ register: 4, restart: 1, due: 1 });
+  it(
+    `keeps colliding legacy scenes independent through deferred restart and due recovery (${backend.name})`,
+    { timeout: bodyTimeout(budget) },
+    (testContext) =>
+      withDiagnostics(
+        testContext,
+        budget,
+        backend.name,
+        async (diagnostics) => {
+          const first: SceneAddress = {
+            platform: "a:b",
+            adapterId: "c",
+            destination: { kind: "group", groupId: "d" },
+          };
+          const second: SceneAddress = {
+            platform: "a",
+            adapterId: "b:c",
+            destination: { kind: "group", groupId: "d" },
+          };
+          let firstInput = "",
+            secondInput = "",
+            timerId = "";
+          const f = await fixture(
+            diagnostics,
+            async ({ inbound, scheduler, now }) => {
+              firstInput = (await inbound(false, "alice", false, first))
+                .informationId;
+              secondInput = (await inbound(false, "bob", false, second))
+                .informationId;
+              timerId = (
+                await scheduler.schedule({
+                  operationKey: "collision-legacy-defer",
+                  sourceInformationId: firstInput,
+                  dueAt: new Date(now().getTime() + 300000).toISOString(),
+                  input: {
+                    purpose: "observation-recheck",
+                    scopeKey: "a:b:c:group:d",
+                  },
+                  activation: {
+                    definitionId: "agent.lifecycle",
+                    instanceId: "lifecycle.default",
+                  },
+                })
+              ).scheduleInformationId;
+            },
+            backend.create,
+          );
+          const candidates = await f.all("agent.heartbeat.candidate");
+          expect(candidates).toHaveLength(1);
+          expect(
+            sceneIdentity(candidates[0]!.payload as unknown as SceneAddress),
+          ).toBe(sceneIdentity(second));
+          expect(candidates[0]!.payload.unreadThroughInformationId).toBe(
+            secondInput,
+          );
+          expect(candidates[0]!.payload.unreadCount).toBe(1);
+          expect(
+            (await f.timers("observation-recheck")).map((a) => a.informationId),
+          ).toEqual([timerId]);
+          await f.restart();
+          expect(await f.all("agent.heartbeat.candidate")).toHaveLength(1);
+          expect(
+            (await f.timers("observation-recheck"))[0]!.payload.dueAt,
+          ).toBe(new Date(Date.UTC(2026, 9, 22) + 300000).toISOString());
+          await f.fire("observation-recheck", 300000);
+          const recovered = await f.all("agent.heartbeat.candidate");
+          expect(recovered).toHaveLength(2);
+          expect(
+            new Set(
+              recovered.map((a) =>
+                sceneIdentity(a.payload as unknown as SceneAddress),
+              ),
+            ),
+          ).toEqual(new Set([sceneIdentity(first), sceneIdentity(second)]));
+          expect(
+            new Set(recovered.map((a) => a.payload.unreadThroughInformationId)),
+          ).toEqual(new Set([firstInput, secondInput]));
+          expect(recovered.every((a) => a.payload.unreadCount === 1)).toBe(
+            true,
+          );
+          expect(await f.timers("observation-recheck")).toHaveLength(0);
+          expect(await f.all("core.model.task.requested")).toHaveLength(0);
+        },
+      ),
+  );
+}

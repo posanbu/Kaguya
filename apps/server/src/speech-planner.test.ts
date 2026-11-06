@@ -18,10 +18,12 @@
  * 同时保留直接信号、Light 独立等待预算和并发入站去重回归。
  * 所有消息和密钥均为合成测试数据；清理按 Runtime、数据库顺序关闭，不访问外部服务。
  * 观察延期测试保留数据库重建 Runtime，在无新入站时触发到期复查，并核对原 manifest 及最终成功状态。
+ * Heavy 生成期间分别注入来源更正、显式停止与无关插话；settle 同时检查模型终态，防止队列短暂为空误通过。
  */
 import {
   closeTestResources,
   createPersistenceWait,
+  withModelGateCleanup,
 } from "./test-support/persistence.js";
 import { randomUUID } from "node:crypto";
 import { freezeInformationAtom, informationAtomSchema } from "@kaguya/schema";
@@ -159,7 +161,12 @@ async function fixture(
         ...createFirstPartyModuleConfigDefaults("test").map((c) =>
           c.definitionId === "memory.native"
             ? { ...c, enabled: qqExpression }
-            : c,
+            : c.definitionId === "agent.heavy"
+              ? {
+                  ...c,
+                  settings: { ...c.settings, pacing: { minMs: 0, maxMs: 0 } },
+                }
+              : c,
         ),
         ...(qqExpression
           ? [
@@ -226,9 +233,15 @@ async function fixture(
       limit: 1000,
     });
   const settle = async (phase = "durable queue settled") => {
-    await waitFor(phase, async () =>
-      expect((await database.information.reliable.health()).pending).toBe(0),
-    );
+    await waitFor(phase, async () => {
+      const state = await database.sql.query(`SELECT
+        (SELECT count(*)::int FROM information_deliveries WHERE state IN ('pending','claimed')) pending,
+        (SELECT count(*)::int FROM information_atoms a WHERE a.kind='core.model.task.requested' AND NOT EXISTS (
+          SELECT 1 FROM information_references r JOIN information_atoms terminal ON terminal.information_id=r.information_id
+          WHERE r.target_information_id=a.information_id AND r.relation='core:status-of'
+          AND terminal.kind IN ('core.model.task.completed','core.model.task.failed','core.model.task.cancelled'))) models`);
+      expect(state.rows).toEqual([{ pending: 0, models: 0 }]);
+    });
   };
   const message = (
     id = "m1",
@@ -456,6 +469,200 @@ describe("Router Light via DeepSeek-compatible provider", () => {
       }
     },
     40000,
+  );
+
+  it.each(["correction", "stop", "unrelated"] as const)(
+    "checks a late Heavy reply against %s while preserving the frozen input",
+    async (change) => {
+      let entered = false;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const f = await fixture([speak, silent], false, async () => {
+        entered = true;
+        await gate;
+        return { action: "message", text: "old frozen reply" };
+      });
+      await withModelGateCleanup(
+        async () => {
+          await f.submit(f.message("original", { text: "请回复当前问题" }));
+          await f.waitFor("Heavy request entered", () =>
+            expect(entered).toBe(true),
+          );
+          const before = await f.atoms();
+          const frozen = before.find(
+            (a) => a.kind === "agent.situation.frozen",
+          )!;
+          const source = before.find(
+            (a) => a.kind === "core.message.inbound.text",
+          )!;
+          if (change === "correction")
+            await f.database.memoryGraph.native.publish({
+              operationId: "late-correction",
+              actor: "manual",
+              nodes: [],
+              invalidations: [
+                {
+                  kind: "source-withdrawal",
+                  targetId: source.informationId,
+                  reason: "更正原问题",
+                },
+              ],
+            });
+          if (change === "stop") await f.invalidateCurrentRun();
+          f.setTime(1);
+          await f.submit(
+            f.message("interjection", {
+              text:
+                change === "unrelated"
+                  ? "顺便说一句天气不错"
+                  : "原问题已更正，请停止旧回复",
+            }),
+          );
+          release();
+          await f.settle("late Heavy result and persistent terminals settled");
+          expect(f.delivered).toHaveBeenCalledTimes(
+            change === "unrelated" ? 1 : 0,
+          );
+          expect(
+            (await f.atoms()).find(
+              (a) => a.informationId === frozen.informationId,
+            )?.payload,
+          ).toEqual(frozen.payload);
+          const deliveredCount = f.delivered.mock.calls.length;
+          await f.restart();
+          await f.settle("restart cannot resend the old reply");
+          expect(f.delivered).toHaveBeenCalledTimes(deliveredCount);
+        },
+        () => {
+          release();
+        },
+        () => f.settle("released Heavy callback drained before teardown"),
+      );
+    },
+    MULTI_STAGE_TIMEOUT,
+  );
+
+  it(
+    "rejects an old queued reply after downtime and preserves not-executed delivery evidence",
+    async () => {
+      const f = await fixture([speak]);
+      let entered = false;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const prepare = f.database.actions.prepareDelivery.bind(
+        f.database.actions,
+      );
+      const hook = vi
+        .spyOn(f.database.actions, "prepareDelivery")
+        .mockImplementation(async (...args) => {
+          entered = true;
+          await gate;
+          return prepare(...args);
+        });
+      await withModelGateCleanup(
+        async () => {
+          await f.submit(f.message());
+          await f.waitFor("durable delivery reached preparation", () =>
+            expect(entered).toBe(true),
+          );
+          await f.database.sql.query(
+            "UPDATE information_deliveries SET created_at=clock_timestamp()-interval '1 day' WHERE subscription_id='kaguya.runtime.delivery'",
+          );
+          release();
+          await f.settle("expired reply and delivery terminal persisted");
+          expect(f.delivered).not.toHaveBeenCalled();
+          const rows = (
+            await f.database.sql.query(
+              "SELECT state,attempt_id FROM information_action_heads",
+            )
+          ).rows;
+          expect(rows).toEqual([{ state: "rejected", attempt_id: null }]);
+          const failed = (await f.atoms()).filter(
+            (a) => a.kind === "core.delivery.failed",
+          );
+          expect(failed).toHaveLength(1);
+          expect(failed[0]!.payload).toMatchObject({
+            ok: false,
+            error: "Action admission rejected",
+          });
+          expect(failed[0]!.payload).not.toHaveProperty("outcome");
+          await f.restart();
+          await f.settle("expired reply remains rejected after restart");
+          expect(f.delivered).not.toHaveBeenCalled();
+          expect(
+            (await f.atoms()).filter((a) => a.kind === "core.delivery.failed"),
+          ).toEqual(failed);
+        },
+        () => {
+          release();
+          hook.mockRestore();
+        },
+        () => f.settle("preparation gate drained before teardown"),
+      );
+    },
+    MULTI_STAGE_TIMEOUT,
+  );
+
+  it(
+    "preserves the delivered first segment while a stopped continuation stays stopped across restart",
+    async () => {
+      let calls = 0;
+      let entered = false;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const f = await fixture([speak], false, async () => {
+        calls++;
+        if (calls === 1)
+          return {
+            action: "message",
+            text: "first segment",
+            continuation: "continue old answer",
+          };
+        entered = true;
+        await gate;
+        return {
+          action: "message",
+          text: "obsolete continuation",
+          continuation: null,
+        };
+      });
+      await withModelGateCleanup(
+        async () => {
+          await f.submit(f.message());
+          await f.waitFor(
+            "continuation model entered after first delivery",
+            () => expect(entered).toBe(true),
+          );
+          expect(f.delivered).toHaveBeenCalledTimes(1);
+          await f.invalidateCurrentRun();
+          release();
+          await f.settle("stopped continuation reached terminal");
+          expect(f.delivered).toHaveBeenCalledTimes(1);
+          expect(
+            (
+              await f.database.sql.query(
+                "SELECT state FROM information_action_heads ORDER BY state",
+              )
+            ).rows,
+          ).toEqual([{ state: "rejected" }, { state: "succeeded" }]);
+          await f.restart();
+          await f.settle("stopped continuation remains terminal after restart");
+          expect(calls).toBe(2);
+          expect(f.delivered).toHaveBeenCalledTimes(1);
+        },
+        () => {
+          release();
+        },
+        () => f.settle("continuation callback drained before teardown"),
+      );
+    },
+    MULTI_STAGE_TIMEOUT,
   );
 
   it(

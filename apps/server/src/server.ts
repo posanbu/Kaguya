@@ -1,4 +1,5 @@
 /**
+ * Lifecycle 配置首迁注入模块真实 schema，先验证旧设置再提交迁移 journal。
  * GUI 模型仅按 linux-tools.json 显式路由创建，首轮前选定；普通 Heavy 保持原 tier。模型配置摘要不包含凭据。
  * MCP 宿主由本文件按 Runtime 生命周期打开和回收；首次装配与配置重建共用冻结工具/provider 接口。
  * Inspection 注入环境公开只读门面，跟随 MCP/Runtime 重挂载更新。
@@ -10,6 +11,7 @@
  * 显式 nativeMemoryTools 配置贯通初次启动与 Runtime 重建，工具目录和执行权限由宿主安装。
  * 功能概述：Server composition root，组合配置、数据库、Runtime、HTTP/Web 与 NapCat 生命周期。
  * 主要职责：startKaguyaServer 验证 Profile 和模块配置后启动宿主；close 逆序释放资源；
+ * 媒体初始与热应用共用显式 vision 配置、受控下载及持久视觉 ModelTask；默认 off。
  * createRuntimeModelSelectionResolver 根据 Profile 批准的 tier 解析 provider/model、思考参数及硬超时；
  * generationOptionsForTier 仅在该 Provider 明确声明 supportsStructuredOutputs 时启用 schema，
  * 其他 Provider 使用 json 与 LLM client 的本地业务 schema 校验，不扩大其能力声明。
@@ -59,6 +61,7 @@ import {
 } from "./mcp-host.js";
 import { type McpHost } from "@kaguya/mcp";
 import { migrateLifecycleConfig } from "@kaguya/config";
+import { lifecycleSettingsSchema } from "@kaguya/modules";
 import { ModuleTemplateManagement } from "./module-template-management.js";
 import { IdentityPersonaManagement } from "./identity-persona-management.js";
 import { ModuleSettingsManagement } from "./module-settings-management.js";
@@ -83,7 +86,10 @@ import {
   memoryConfigFromModules,
   type RuntimeModelSelectionResolver,
 } from "@kaguya/composition";
+import { PostgresMediaResourceStore } from "@kaguya/database";
+import { createServerMediaComposition } from "./media-composition.js";
 import { pathToFileURL } from "node:url";
+import { join } from "node:path";
 
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
@@ -119,6 +125,7 @@ import {
 } from "@kaguya/logger";
 import {
   KaguyaRuntime,
+  FileMediaResourceStore,
   RuntimeDatabaseInitializationError,
   createRuntimeKindRegistry,
 } from "@kaguya/runtime";
@@ -232,6 +239,7 @@ export async function startKaguyaServer(
     await migrateLifecycleConfig(
       bootstrap.configRoot,
       createFirstPartyModuleConfigDefaults("production", workspaceIdentity()),
+      lifecycleSettingsSchema,
     );
     configuration = await createConfigurationManagement(bootstrap.configRoot);
     configurationStatus = await configuration.getRegistryStatus();
@@ -507,6 +515,14 @@ export async function startKaguyaServer(
           targetDirectory: adapterHost,
           database,
           logger: rootLogger,
+          ...createServerMediaComposition(
+            selectedProfile,
+            createVisionModelResolver(selectedProfile),
+          ),
+          mediaResources: new PostgresMediaResourceStore(
+            database.sql,
+            new FileMediaResourceStore(join(bootstrap.configRoot, "media")),
+          ),
           ...withServerMcp(
             mcp,
             createMessageComposition(resolveModelSelection, {
@@ -791,6 +807,14 @@ export async function startKaguyaServer(
             targetDirectory: nextHost,
             database,
             logger: rootLogger,
+            ...createServerMediaComposition(
+              snapshot.profile,
+              createVisionModelResolver(snapshot.profile),
+            ),
+            mediaResources: new PostgresMediaResourceStore(
+              database.sql,
+              new FileMediaResourceStore(join(bootstrap.configRoot, "media")),
+            ),
             ...withServerMcp(
               nextMcp,
               createMessageComposition(
@@ -1091,6 +1115,17 @@ function createGuiModelRoutes(host: McpHost, profile: UserConfigProfile) {
   });
 }
 
+/** 外挂视觉复用原有 Provider 解析，仅在专用目标上选择模型；不改普通 Heavy。 */
+function createVisionModelResolver(profile: UserConfigProfile) {
+  if (profile.ai.vision?.mode !== "external") return undefined;
+  const target = profile.ai.modelTiers?.vision;
+  if (!target || !profile.ai.modelTiers)
+    throw new Error("Vision model unavailable");
+  const visual = structuredClone(profile);
+  visual.ai.modelTiers!.heavy = target;
+  const resolve = createRuntimeModelSelectionResolver(visual);
+  return () => resolve({ modelTier: "heavy" });
+}
 export function createRuntimeModelSelectionResolver(
   profile: UserConfigProfile,
 ): RuntimeModelSelectionResolver {

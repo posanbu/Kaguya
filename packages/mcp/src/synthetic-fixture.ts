@@ -1,7 +1,7 @@
 /**
  * 功能概述：为 MCP 集成测试提供独立 Node stdio/HTTP 合成服务源码，不接触真实账号或外部网络。
  * syntheticServerSource 写入测试临时目录后运行；日志精确记录启动、RPC 和副作用次数。
- * 参数控制协议、分页、断连、晚到、认证和 schema 变化；回环控制通道确认状态应用和 barrier 释放。
+ * 参数控制协议、分页（含空字符串游标）、断连、晚到、认证回显和成功/错误结果 schema；回环控制通道确认状态应用和 barrier 释放。
  * applySyntheticControl 只供测试宿主调用，按 journal 中本进程端点发送状态并等待有界 ACK；不作为 MCP 工具。
  * 本文件无自动运行入口，生产 Server 不导入；测试在失败路径也回收其直接子进程及临时文件。
  */
@@ -146,8 +146,8 @@ async function hold(request){
   await new Promise(resolve=>{held.push({resolve,method:request.method,rpcId:request.id});log({kind:'held',method:request.method,rpcId:request.id});});
   log({kind:'released',method:request.method,rpcId:request.id});
 }
-function tool(name){return {name,description:'synthetic '+name,inputSchema:{type:'object',properties:{value:{type:state().schemaType||'number'}},required:['value'],additionalProperties:false},annotations:{readOnlyHint:true,idempotentHint:true}};}
-async function handle(request,reply,drop){
+function tool(name){return {name,description:'synthetic '+name,inputSchema:{type:'object',properties:{value:{type:state().schemaType||'number'}},required:['value'],additionalProperties:false},...(state().outputSchema?{outputSchema:{type:'object',properties:{value:{type:'number'}},required:['value'],additionalProperties:false}}:{}),annotations:{readOnlyHint:true,idempotentHint:true}};}
+async function handle(request,reply,drop,authorization=""){
   const current=state();log({kind:'request',rpcId:request.id??null,method:request.method,params:request.params});
   if(request.id===undefined)return;
   const complete=result=>reply({jsonrpc:'2.0',id:request.id,result:current.protocol==='2026-07-28'&&request.method!=='server/discover'?{resultType:'complete',ttlMs:0,cacheScope:'private',...result}:result});
@@ -156,7 +156,7 @@ async function handle(request,reply,drop){
   if(request.method==='tools/list'){
     if(current.holdList&&!current.release)await hold(request);
     const cursor=request.params?.cursor;
-    complete({tools:[tool(cursor?'increment':'echo')],...((!cursor||current.loopPages)?{nextCursor:current.loopPages?'repeat':'second'}:{})});return;
+    complete({tools:[tool(cursor!==undefined?'increment':'echo')],...((cursor===undefined||current.loopPages)?{nextCursor:current.loopPages?'repeat':current.emptyCursor?'':'second'}:{})});return;
   }
   if(request.method==='tools/call'){
     log({kind:'effect',operation:request.params.name});
@@ -166,7 +166,8 @@ async function handle(request,reply,drop){
     if(current.headerMismatch){reply({jsonrpc:'2.0',id:request.id,error:{code:-32020,message:'mismatch'}});return;}
     if(current.inputRequired){reply({jsonrpc:'2.0',id:request.id,result:{resultType:'input_required',inputRequests:{},requestState:'opaque'}});return;}
     if(current.hold&&!current.release)await hold(request);
-    complete({content:[{type:'text',text:current.echoSecret?process.env.SYNTHETIC_SECRET:JSON.stringify(request.params.arguments)}],isError:!!current.isError});log({kind:'returned'});return;
+    const token=authorization.replace(/^Bearer[ \t]+/i,'');
+    complete({content:[{type:'text',text:current.echoAuth?token:current.echoSecret?process.env.SYNTHETIC_SECRET:JSON.stringify(request.params.arguments)}],...(current.echoAuth?{structuredContent:{[token]:'credential-key'}}:current.outputSchema&&!current.missingOutput?{structuredContent:current.isError?{error:'synthetic failure'}:current.invalidOutput?{value:'wrong-type'}:request.params.arguments}:{}),isError:!!current.isError});log({kind:'returned'});return;
   }
   if(request.method==='resources/list'){complete({resources:[{name:'test',uri:'fixture://allowed/item',mimeType:'text/plain'}]});return;}
   if(request.method==='resources/templates/list'){complete({resourceTemplates:[{name:'template',uriTemplate:'fixture://allowed/{id}'}]});return;}
@@ -192,7 +193,7 @@ if(mode==='stdio'){
     await handle(request,value=>{
       if(state().sse){res.writeHead(200,{'content-type':'text/event-stream'});res.end('data: '+JSON.stringify(value)+'\n\n');}
       else {res.writeHead(200,{'content-type':'application/json',...(request.method==='initialize'?{'mcp-session-id':'synthetic-session'}:{})});res.end(JSON.stringify(value));}
-    },()=>res.destroy());
+    },()=>res.destroy(),req.headers.authorization||"");
   });
   server.listen(0,'127.0.0.1',()=>process.stdout.write(JSON.stringify({port:server.address().port})+'\n'));
 }

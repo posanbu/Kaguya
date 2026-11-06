@@ -1,5 +1,8 @@
 /**
+ * 有序图片输出绑定真实 Heavy 完成链与宿主持久快照，读取资源后再做 W3 终检。
+ * 入站媒体登记独立来源权限，Heavy 请求冻结三档输入，Light 只见元信息。
  * 恢复先查持久原点，再校验当前批准策略；native 关闭或路由消失时不回落到普通模型请求。
+ * 音频读取在 transport 前核验，缺损标记未执行；投递不确定时不再发送。
  * 入站 expressions 仅透传给插件，Runtime 不推断表情含义或改变调度。
  * 授权消息正文由 composition 注入的渲染器提供；Runtime 只传冻结变量并维持权限检查。
  * Runtime 只接收 outboundAllowlist；目标授权与最终 transport 前终检使用它，入站权限属于 AdapterHost。
@@ -35,6 +38,8 @@ import {
 } from "./message-targets.js";
 import type { TargetDirectory } from "@kaguya/platform-adapters";
 import { GatewayAllowlist } from "./gateway-allowlist.js";
+import { mediaResourceRetentionGuard } from "./media-resource-retention.js";
+import { resolveOutboundImages } from "./media-output.js";
 import { randomUUID } from "node:crypto";
 
 import {
@@ -96,6 +101,7 @@ import type {
   OutboundMessageContent,
   PlatformDestination,
 } from "@kaguya/schema";
+import { outboundMessageContentSchema } from "@kaguya/schema";
 import { createNativeMemoryTools } from "./native-memory-tools.js";
 import {
   NativeToolLoop,
@@ -115,7 +121,9 @@ import type {
   InformationModuleCatalog,
   ModuleCapabilityImplementation,
   ModuleActivationProvenance,
+  MediaResourceStore,
 } from "@kaguya/sdk";
+import { mediaResourceStoreCapability } from "@kaguya/sdk";
 import {
   ModelTaskClient,
   modelTaskCapability,
@@ -133,6 +141,17 @@ import {
   modelTaskInformationKinds,
 } from "./information-kinds.js";
 
+import {
+  createMediaVisionObserver,
+  type MediaVisionTaskOptions,
+} from "./media-vision.js";
+import {
+  ingestMediaContent,
+  prepareHeavyMedia,
+  selectedMedia,
+  type MediaInputOptions,
+} from "./media-input.js";
+import { sceneIdentity, platformDestinationSchema } from "@kaguya/schema";
 import { GuiTaskService } from "./gui-tasks.js";
 const hostNativeLoops = new WeakMap<ModelTaskClient, NativeToolLoop>();
 
@@ -181,6 +200,10 @@ function isMemoryCapability(id: string): boolean {
 }
 
 type KaguyaRuntimeBaseOptions = {
+  /** 媒体接入与识图由宿主配置；Light 只读元信息。 */
+  readonly mediaInput?: MediaInputOptions;
+  /** external 仅使用已批准的模型端口，复用持久 ModelTask。 */
+  readonly mediaVisionTask?: MediaVisionTaskOptions;
   readonly nativeTools?: NativeToolLoopOptions;
   readonly actionProviders?: readonly ActionProvider[];
   readonly actionEnvironment?: Pick<
@@ -202,6 +225,10 @@ type KaguyaRuntimeBaseOptions = {
   readonly catalog: InformationModuleCatalog;
   readonly activations: readonly InformationModuleActivation[];
   readonly capabilities?: RuntimeCapabilities;
+  /** 宿主控制的持久媒体存储；模块和最终投递共享同一个实例。 */
+  readonly mediaResources?: MediaResourceStore;
+  /** 媒体在最后写入七天后可清理；历史 Atom 仍保留元数据并明确投递失败。 */
+  readonly mediaRetentionMs?: number;
   readonly retrievalStrategies?: readonly InformationRetrievalStrategy[];
   /** 可选长期原文索引默认关闭；原始事件投影始终运行。 */
   readonly memory?: RuntimeMemoryOptions;
@@ -317,6 +344,11 @@ type DeliveryRequestedAtom = DeepReadonly<
       platform: string;
       destination: PlatformDestination;
       message: OutboundMessageContent;
+      turn?: {
+        claimInformationId: string;
+        candidateInformationId: string;
+        contextInformationId: string;
+      } | null;
     }
   >
 >;
@@ -790,6 +822,14 @@ export class KaguyaRuntime implements InformationIngress {
               this.#messageTargets!.stage(assistant),
           }),
         },
+        ...(this.options.mediaResources
+          ? [
+              {
+                capability: mediaResourceStoreCapability,
+                value: this.options.mediaResources,
+              },
+            ]
+          : []),
         ...composeModelTaskCapabilities(
           nativeOptions,
           { core, now: this.#now, oneShotSchedule },
@@ -814,6 +854,16 @@ export class KaguyaRuntime implements InformationIngress {
           host: nativeOptions.nativeTools?.guiTasks,
           activations: this.options.activations,
         });
+      if (this.options.mediaResources) {
+        const retentionMs =
+          this.options.mediaRetentionMs ?? 7 * 24 * 60 * 60 * 1000;
+        if (!Number.isSafeInteger(retentionMs) || retentionMs < 60_000)
+          throw new Error("Invalid media retention period");
+        await this.options.mediaResources.cleanupExpired(
+          new Date(this.#now().getTime() - retentionMs),
+          mediaResourceRetentionGuard(database.sql),
+        );
+      }
       this.#memoryOptions = this.options.memory ?? { enabled: false };
       const moduleHost = new ModuleHost({
         drainTimeoutMs: this.options.drainTimeoutMs ?? 5000,
@@ -1121,11 +1171,18 @@ export class KaguyaRuntime implements InformationIngress {
     const receipts: PlatformDeliveryReceipt[] = [];
     this.#deliveriesByContext.set(context.informationId, receipts);
     try {
+      const contentSegments = await ingestMediaContent(
+        input,
+        required(this.#database, "database").mediaSources,
+        this.options.mediaResources,
+        this.options.mediaInput,
+      );
       await core.register(inboundTextInformationKind, {
         occurredAt: input.occurredAt,
         source: "runtime:ingress",
         payload: {
           text: input.text,
+          ...(contentSegments ? { contentSegments } : {}),
           source: {
             adapterId: input.adapterId,
             platform: input.platform,
@@ -1345,13 +1402,94 @@ export class KaguyaRuntime implements InformationIngress {
         );
         return;
       }
+      let media:
+        | Awaited<ReturnType<KaguyaRuntime["resolveAudioForDelivery"]>>
+        | undefined;
+      let images: Awaited<ReturnType<typeof resolveOutboundImages>> | undefined;
+      try {
+        media =
+          request.payload.message.kind === "audio"
+            ? await this.resolveAudioForDelivery(request.payload.message)
+            : undefined;
+        if (request.payload.message.kind === "content") {
+          const db = required(this.#database, "database");
+          images = await resolveOutboundImages({
+            message: request.payload.message,
+            delivery: request,
+            contextId: context.informationId,
+            target: {
+              platform: request.payload.platform,
+              adapterId: request.payload.adapterId,
+              destination: request.payload.destination,
+            },
+            read: (id) => core.get(id),
+            readSnapshot: async (key, scope) =>
+              (
+                await db.sql.query<{ snapshot: JsonValue }>(
+                  "SELECT snapshot FROM media_input_snapshots WHERE request_key=$1 AND scope=$2",
+                  [key, scope],
+                )
+              ).rows[0]?.snapshot,
+            readSource: (id, scope) => db.mediaSources.read(id, scope),
+            resources: this.options.mediaResources,
+            signal: core.executionSignal,
+          });
+        }
+      } catch {
+        await actionStore.finish(
+          actionClaim,
+          action.intent.scope,
+          {
+            status: "rejected",
+            evidence: "not-executed",
+            result: {
+              reason:
+                request.payload.message.kind === "content"
+                  ? "media-resource-invalid"
+                  : "audio-resource-invalid",
+            },
+            artifacts: [],
+            truncated: false,
+          },
+          false,
+          core.executionClaim,
+        );
+        await this.#registerDeliveryFailure(
+          request,
+          context.informationId,
+          request.payload.message.kind === "content"
+            ? "Media source or resource missing or invalid"
+            : "Audio resource missing or invalid",
+        );
+        return;
+      }
       let receipt: PlatformDeliveryReceipt;
+      const turnClosed =
+        request.payload.turn != null &&
+        (
+          await core.find({
+            kinds: [
+              "agent.router.turn.failed",
+              "agent.router.turn.superseded",
+              "agent.router.turn.silent",
+              "agent.router.turn.waiting",
+              "agent.router.turn.interrupted",
+            ],
+            payloadContains: {
+              claimInformationId: request.payload.turn.claimInformationId,
+            },
+            limit: 1,
+          })
+        ).length > 0;
       const allowed = await actionStore.canInvoke(
         actionClaim,
         action.intent.scope,
       );
       if (
         !allowed ||
+        turnClosed ||
+        this.#state === "closing" ||
+        this.#state === "closed" ||
         !(
           this.options.outboundAllowlist ?? new GatewayAllowlist()
         ).allowsDestination(
@@ -1384,8 +1522,12 @@ export class KaguyaRuntime implements InformationIngress {
       try {
         receipt = await registration.transport.sendMessage(
           request.payload.destination,
-          request.payload.message,
-          { rootInformationId: context.informationId },
+          outboundMessageContentSchema.parse(request.payload.message),
+          {
+            rootInformationId: context.informationId,
+            ...(media ? { media } : {}),
+            ...(images ? { images } : {}),
+          },
         );
       } catch (cause) {
         await actionStore.finish(
@@ -1475,6 +1617,24 @@ export class KaguyaRuntime implements InformationIngress {
     } finally {
       await actionStore.release(actionClaim, action.intent.scope);
     }
+  }
+
+  private async resolveAudioForDelivery(
+    message: Extract<OutboundMessageContent, { kind: "audio" }>,
+  ) {
+    const resource = await this.options.mediaResources?.get(message.resourceId);
+    if (
+      !resource ||
+      resource.mimeType !== message.mimeType ||
+      resource.sha256 !== message.sha256 ||
+      resource.bytes.byteLength !== message.byteLength
+    )
+      throw new Error("Audio resource is missing or no longer valid");
+    return {
+      bytes: resource.bytes,
+      mimeType: resource.mimeType,
+      sha256: resource.sha256,
+    };
   }
 
   async #registerDeliveryFailure(
@@ -1626,6 +1786,57 @@ function composeModelTaskCapabilities(
             : {}),
           ...(native
             ? {
+                prepareMedia: async (key, request, model) => {
+                  const refs = selectedMedia(request.contextAtoms);
+                  if (!refs.length) return [];
+                  const source = request.contextAtoms.find(
+                    (a) => a.informationId === request.sourceInformationId,
+                  );
+                  const target = source?.payload.target as
+                    | {
+                        platform?: string;
+                        adapterId?: string;
+                        destination?: unknown;
+                      }
+                    | undefined;
+                  const destination = platformDestinationSchema.safeParse(
+                    target?.destination,
+                  );
+                  const scope =
+                    destination.success && target?.platform && target.adapterId
+                      ? sceneIdentity({
+                          platform: target.platform,
+                          adapterId: target.adapterId,
+                          destination: destination.data,
+                        })
+                      : "unresolved-media-scope";
+                  const mediaOptions =
+                    options.mediaInput &&
+                    options.mediaInput.mode === "external" &&
+                    options.mediaVisionTask
+                      ? {
+                          ...options.mediaInput,
+                          observe: createMediaVisionObserver(
+                            context.core,
+                            native.db.mediaSources,
+                            scope,
+                            options.mediaVisionTask,
+                            request,
+                          ),
+                        }
+                      : options.mediaInput;
+                  return prepareHeavyMedia({
+                    key: request.nativeStep
+                      ? `media-run:${request.nativeStep.runInformationId}`
+                      : key,
+                    scope,
+                    refs,
+                    model,
+                    sources: native.db.mediaSources,
+                    resources: options.mediaResources,
+                    ...(mediaOptions ? { options: mediaOptions } : {}),
+                  });
+                },
                 admitNativeDispatch: (id, step) =>
                   native.db.nativeTools.admitModel(
                     step.runInformationId,

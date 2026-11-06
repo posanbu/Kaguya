@@ -1,9 +1,11 @@
 /**
+ * 每步从独立媒体快照重新追加输入图像，文字历史裁剪先移除上一轮宿主媒体块，不消耗文字/工具预算。
  * 原点不含路由；首轮冻结模型绑定，重启后每步核验，关闭 native 或更改配置即停止原 run。
  * projectNativeToolResults 只读原图，关联图片和完整工具批次共同裁剪，闭合旧图片不永久占用预算。
  * 功能概述：协调 Heavy 单步模型与 W3 行动，不把 provider execute 装进 LLM SDK。
- * NativeToolLoop 固定宿主目录/预算，按持久步骤恢复调用和实际回执；cancel 先停 run 再调用 W3。
- * nativeToolWireName 生成稳定无点号别名，fitToolTranscript 按完整交互裁剪，保留图像与开放配对。
+ * NativeToolLoop 固定宿主目录/预算，按持久步骤恢复调用和实际回执；校验拒绝也按实际投影执行输出预算。
+ * cancel 先停 run 再调用 W3。
+ * nativeToolWireName 生成稳定无点号别名，fitToolTranscript 校验调用与结果的角色、ID 和工具名，按完整交互裁剪，保留图像与开放配对。
  * Runtime 装配本类，Memory/W5/W7/W8 共用注册端口。授权、目标及环境绑定只来自宿主回调。
  */
 import { createHash, randomUUID } from "node:crypto";
@@ -48,6 +50,7 @@ import {
   projectNativeToolResults,
   type NativeArtifactReader,
 } from "./native-tool-results.js";
+import { withoutFrozenMediaInput } from "./media-input.js";
 import { nativeModelBindingSchema } from "./information-kinds.js";
 
 export type NativeToolRegistration = {
@@ -156,7 +159,7 @@ export function fitToolTranscriptWithMetadata(
 ) {
   const segments: { messages: NativeMessage[]; pinned: boolean }[] = [];
   let current: NativeMessage[] = [];
-  const calls = new Set<string>(),
+  const calls = new Map<string, string>(),
     seen = new Set<string>();
   let image = false;
   for (const message of input) {
@@ -190,14 +193,28 @@ export function fitToolTranscriptWithMetadata(
         if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
         if (["image", "file"].includes(String(raw.type))) image = true;
         if (raw.type === "tool-call") {
-          const id = String(raw.toolCallId);
+          if (
+            message.role !== "assistant" ||
+            typeof raw.toolCallId !== "string" ||
+            !raw.toolCallId ||
+            typeof raw.toolName !== "string" ||
+            !raw.toolName
+          )
+            throw new Error("native-invalid-call");
+          const id = raw.toolCallId;
           if (seen.has(id)) throw new Error("native-duplicate-call");
-          calls.add(id);
+          calls.set(id, raw.toolName);
           seen.add(id);
         }
         if (raw.type === "tool-result") {
-          if (!calls.delete(String(raw.toolCallId)))
+          if (
+            message.role !== "tool" ||
+            typeof raw.toolCallId !== "string" ||
+            !calls.has(raw.toolCallId) ||
+            calls.get(raw.toolCallId) !== raw.toolName
+          )
             throw new Error("native-orphan-result");
+          calls.delete(raw.toolCallId);
         }
       }
     if (!calls.size) {
@@ -568,7 +585,7 @@ export class NativeToolLoop {
         const atoms = await this.deps.core.getMany(contextIds);
         const fitted = transcript
           ? fitToolTranscriptWithMetadata(
-              transcript,
+              withoutFrozenMediaInput(transcript),
               budget.maxContextBytes - Buffer.byteLength(prompt.text) - 4096,
             )
           : undefined;
@@ -753,12 +770,16 @@ export class NativeToolLoop {
       };
     }
     const reject = async (reason: string) => {
-      await this.deps.db.nativeTools.result(
+      const id = await this.deps.db.nativeTools.result(
         call,
         { status: "rejected", evidence: "not-executed", reason },
         null,
       );
-      return { uncertain: false };
+      const projected = await this.deps.core.get(id);
+      return {
+        uncertain:
+          (projected?.payload.value as any)?.status === "output-budget",
+      };
     };
     const declaration = spec.declarations.find(
       (t) => t.wireName === call.call.toolName,

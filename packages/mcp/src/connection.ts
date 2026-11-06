@@ -1,7 +1,9 @@
 /**
  * 功能概述：维护显式协议的 MCP 连接，原子发布有界目录并保留请求来源。
  * connect/reconnect 只恢复连接和目录，不重放行动；request 分开记录 JSON-RPC 与模型 call ID。
+ * 分页将 cursor 作为不透明字符串转发，空字符串也不能省略。
  * tools 使用冻结的原始 schema；结果保留 scope、时间、定义摘要和不可信来源标记。
+ * 凭据脱敏包括认证头中的Bearer/Basic参数及JSON键；每次派发冻结同一凭据集合供迟到证据使用。
  * close独立保留transport回收和late持久化错误的脱敏cause；中断请求并回收进程；凭据只在宿主闭包解析，HTTP 禁止重定向、OAuth 和自动重连。
  */
 import { randomUUID } from "node:crypto";
@@ -155,7 +157,18 @@ export class McpConnection {
     if (this.credentialDigest !== undefined && next !== this.credentialDigest)
       throw new McpError("mcp-credential-revision-changed");
     this.credentialDigest = next;
-    this.secretValues = Object.values(values);
+    this.secretValues = [
+      ...new Set(
+        Object.entries(values).flatMap(([key, value]) => {
+          const token =
+            this.config.transport.type === "http" &&
+            /^(?:proxy-)?authorization$/i.test(key)
+              ? /^(?:Bearer|Basic)[ \t]+(\S+)$/i.exec(value)?.[1]
+              : undefined;
+          return token ? [value, token] : [value];
+        }),
+      ),
+    ].sort((a, b) => b.length - a.length);
     return values;
   }
   sanitize(value: unknown, secrets = this.secretValues): unknown {
@@ -171,7 +184,7 @@ export class McpConnection {
     if (value && typeof value === "object")
       return Object.fromEntries(
         Object.entries(value).map(([key, item]) => [
-          key,
+          this.sanitize(key, secrets),
           /^(authorization|cookie|set-cookie|password|apiKey|accessToken|refreshToken)$/i.test(
             key,
           )
@@ -452,7 +465,7 @@ export class McpConnection {
     for (let page = 0; page < this.config.maxPages; page++) {
       // 公共 request 是单页请求；不走 listTools() 的自动聚合/缓存路径。
       const result = (await this.client!.request(
-        { method, params: cursor ? { cursor } : {} },
+        { method, params: cursor !== undefined ? { cursor } : {} },
         options,
       )) as unknown as Record<string, unknown>;
       bytes += Buffer.byteLength(JSON.stringify(result));

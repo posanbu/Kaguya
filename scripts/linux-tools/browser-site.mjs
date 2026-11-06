@@ -1,5 +1,5 @@
 /**
- * 功能概述：CI 合成本机站点，独立于 Chromium 持久保存真实提交计数并提供固定下载。
+ * 功能概述：CI 合成本机站点，独立于 Chromium 持久保存真实提交计数并提供固定下载、动态表单、选择控件和继承禁用的控件。
  * 代码库关系：browser_checks.py 经生产 Broker/helper 驱动页面，直接读取本 ledger 作 oracle。
  * 输入输出与副作用：只监听隔离容器 loopback，fsync 后原子替换 /private 计数与 ready 文件。
  */
@@ -71,9 +71,10 @@ const server = createServer(async (request, response) => {
       "cross-origin-embedder-policy": "require-corp",
     });
     response.end(
-      '<input aria-label="unsaved"><button id="submit">submit once</button><output id="count">0</output><output id="nonce">' +
+      '<input aria-label="unsaved"><fieldset disabled><input aria-label="fieldset disabled"></fieldset><input type="checkbox" aria-label="agree"><input type="radio" name="choice" aria-label="first choice" checked><input type="radio" name="choice" aria-label="second choice"><select aria-label="dynamic choice"><option value="a">A</option><option value="b">B</option></select><output id="dynamic">initial</output><button id="submit">submit once</button><output id="count">0</output><output id="nonce">' +
         nonce +
         `</output><a href="/file.csv">download CSV</a><button id="hide">hide submit</button><button id="show">show submit</button><button id="arm">arm block</button><style></style><script>
+document.querySelector('select').onchange=(event)=>{dynamic.textContent='selected '+event.target.value};
 submit.onclick=async()=>{count.textContent=await(await fetch('/submit',{method:'POST',body:document.querySelector('input').value})).text()};
 hide.onclick=()=>document.styleSheets[0].insertRule('#submit {display:none}',0);
 show.onclick=()=>document.styleSheets[0].deleteRule(0);

@@ -1,4 +1,5 @@
 /**
+ * 模型 requested 可冻结独立媒体字节预算，保持旧纯文本请求兼容；只有受控媒体准备阶段写入。
  * 原生模型绑定保存首次批准的 policy 与非秘密配置摘要；可选字段保留旧任务事实的可读性。
  * 工具单步声明和原始调用随 requested/completed 保存，dispatched 为不自动重发的持久请求凭据。
  * conversationContextInformationKind 注册宿主冻结的背景与目标解析投影，内容日志仅输出目录状态。
@@ -478,6 +479,12 @@ export const modelTaskRequestedInformationKind = defineInformationKind({
     .extend({
       prompt: informationCompiledPromptSchema,
       messages: nativeMessagesSchema.nullable().default(null),
+      mediaInputByteLength: z
+        .number()
+        .int()
+        .positive()
+        .max(30 * 1024 * 1024)
+        .exactOptional(),
       inputBlocked: z
         .enum(["context-budget", "native-protocol"])
         .nullable()

@@ -17,6 +17,8 @@ export * from "./information-kinds.js";
 export * from "./model-task.js";
 export * from "@kaguya/scheduler";
 export * from "./runtime.js";
+export * from "./media-input.js";
+export * from "./media-resource-store.js";
 export { executionExhaustedInformationKind } from "@kaguya/engine";
 
 export * from "./message-targets.js";

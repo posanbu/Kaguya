@@ -4,6 +4,8 @@
  * 主要职责：criticalTests 固定完整文件清单；校验文件存在后合并配置，禁止按用例名称缩小范围。
  * 代码库关系：CI 的关键分片调用本文件；包含观察仓储、Runtime/环境执行接线、Memory 重挂载、Demo DAG 及 Lifecycle/Router/Heartbeat 回归。
  * MCP 门禁以真实 stdio/HTTP 合成进程覆盖冻结目录、取消清理和 Server/W3 持久闭环。
+ * W11 双数据库重放验证正式 writer；Lifecycle 活动、调度目录、配置迁移和当前情境一起验收。
+ * 媒体权限/冻结恢复、unknown资源保留、旧Heavy升级防重发、真实Identity并发与离线迁移拒绝均收集完整文件。
  * 输入输出与副作用：只配置测试收集，不改变生产代码、测试断言或等待预算。
  */
 import { existsSync } from "node:fs";
@@ -23,6 +25,8 @@ const criticalTests = [
   "packages/mcp/src/host.test.ts",
   "apps/server/src/mcp-host.test.ts",
   "apps/server/src/inspection-domain.test.ts",
+  "apps/server/src/issue279-replay.test.ts",
+  "apps/server/src/inspection-situation.test.ts",
   "packages/runtime/src/action.test.ts",
   "packages/runtime/src/native-tool-loop.test.ts",
   "packages/runtime/src/native-tool-results.test.ts",
@@ -45,6 +49,9 @@ const criticalTests = [
   "packages/runtime/src/runtime.test.ts",
   "packages/modules/src/first-party/router/index.test.ts",
   "packages/modules/src/first-party/lifecycle/index.test.ts",
+  "packages/modules/src/first-party/lifecycle/activity.test.ts",
+  "packages/modules/src/first-party/lifecycle/inspection.test.ts",
+  "apps/server/src/lifecycle-migration.test.ts",
   "packages/modules/src/first-party/heartbeat/observation.test.ts",
   "packages/modules/src/first-party/heartbeat/index.test.ts",
   "apps/demo/src/index.test.ts",
@@ -70,6 +77,27 @@ const criticalTests = [
   "apps/web/src/memory-graph-model.test.ts",
   "apps/web/src/memory-graph-colors.test.ts",
   "apps/web/src/components/AppShell.test.tsx",
+  "examples/plugins/qwen-tts/provider.test.mjs",
+  "examples/plugins/qwen-tts/plugin.test.mjs",
+  "examples/plugins/qwen-tts/runtime.test.mjs",
+  "packages/runtime/src/media-resource-store.test.ts",
+  "packages/runtime/src/media-resource-retention.test.ts",
+  "packages/runtime/src/media-input.test.ts",
+  "apps/server/src/media-output.test.ts",
+  "packages/runtime/src/media-input-wire.test.ts",
+  "packages/runtime/src/media-vision.test.ts",
+  "packages/runtime/src/image-decoder.test.ts",
+  "packages/database/src/media-resource-store.test.ts",
+  "apps/server/src/media-download.test.ts",
+  "packages/runtime/src/model-task.test.ts",
+  "packages/modules/src/first-party/heavy/index.test.ts",
+  "packages/modules/src/first-party/heavy/confirmation.test.ts",
+  "packages/modules/src/first-party/heavy/pacing-recovery.test.ts",
+  "packages/modules/src/first-party/memory-native/experience-operations.test.ts",
+  "packages/modules/src/first-party/identity/durable.test.ts",
+  "packages/modules/src/first-party/lifecycle/observation-scene.test.ts",
+  "packages/modules/src/first-party/router/focus.test.ts",
+  "apps/server/src/offline-upgrade.test.ts",
 ];
 
 // Vitest 的位置参数是过滤器，失效的文件名可能被静默忽略。

@@ -1,6 +1,7 @@
 /**
  * 功能概述：在 native 存储内执行原子发布、历史读取、来源正规化与批次恢复。
- * 主要职责：publish 保留操作哈希及修订；当前查询使用同快照现态与局部失效闭包，历史查询服从独立提交上界。
+ * 主要职责：publish 保留操作哈希及修订；合并拆分只接受当前有效输入和全新输出。
+ * 当前查询使用同快照现态与局部失效闭包，历史查询服从独立提交上界。
  * 已有宿主事务中的 snapshot 实例复用同一读取边界，不重新设置事务隔离级别。
  * ingest/recover 保留 epoch 和原始账本，形成失败通过唯一后继重试；historyPage 只投影目标节点。
  * 代码库关系：实现 memory 领域端口，复用 information 与 observation 表；不引入模型或另一存储后端。
@@ -1059,11 +1060,6 @@ export class PostgresNativeMemoryStore
               op.outputIds.some((id) => op.inputIds.includes(id)))
           )
             throw new NativeMemoryError("memory_invalid_experience", 400);
-          if (["merge", "split"].includes(op.kind) && p.actor !== "manual")
-            throw new NativeMemoryError(
-              "memory_manual_experience_required",
-              400,
-            );
           const old = parse(
             (
               await tx.query<Row>(
@@ -1077,6 +1073,12 @@ export class PostgresNativeMemoryStore
             old.some((n) => n.metadata.kind !== "experience")
           )
             throw new NativeMemoryError("memory_invalid_experience", 400);
+          if (
+            ["merge", "split"].includes(op.kind) &&
+            p.actor === "automatic" &&
+            old.some((n) => p.expectedVersions[n.id] !== n.metadata.revision)
+          )
+            throw new NativeMemoryError("memory_revision_conflict");
           const outputs = op.outputIds.map(
             (id) => p.nodes.find((n) => n.node.id === id)?.node,
           );
@@ -1097,13 +1099,33 @@ export class PostgresNativeMemoryStore
           const proof = await memoryProofMetadata(tx, op.inputIds);
           const sources = new Set(proof.flatMap((n) => n.sources));
           if (["merge", "split"].includes(op.kind)) {
+            // 已归档的前驱不能再次分叉；输出必须是新节点，不能覆盖已有经历。
+            if (
+              old.some((n) => n.metadata.status !== "active") ||
+              outputs.some(
+                (n) =>
+                  n!.metadata.status !== "active" ||
+                  p.nodes.find((item) => item.node.id === n!.id)
+                    ?.expectedRevision !== 0,
+              )
+            )
+              throw new NativeMemoryError("memory_invalid_experience", 400);
             if (
               old.some(
                 (n) =>
                   !p.nodes.some(
                     (x) =>
                       x.node.id === n.id &&
-                      x.node.metadata.status === "archived",
+                      x.node.metadata.status === "archived" &&
+                      x.node.metadata.kind === n.metadata.kind &&
+                      x.node.metadata.scope === n.metadata.scope &&
+                      x.node.metadata.ownerId === n.metadata.ownerId &&
+                      n.metadata.sourceIds.every((id) =>
+                        x.node.metadata.sourceIds.includes(id),
+                      ) &&
+                      x.node.metadata.sourceIds.every((id) =>
+                        n.metadata.sourceIds.includes(id),
+                      ),
                   ),
               ) ||
               outputs.some(

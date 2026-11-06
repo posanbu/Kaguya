@@ -2,7 +2,7 @@
  * 功能概述：定义可信 Linux Chromium 的原生 DOM 工具参数，不接受任意 JavaScript 或 CDP。
  * 代码库关系：LinuxToolsHost 使用这些 schema 注册 observe/act/verify；helper 保有观察记录，
  * 并核对当前页面、scope、lease 与 generation。模型提交的观察字段本身不构成授权。
- * 输入输出与副作用：仅进行有界参数校验；verify 明确引用原 operation/attempt，不重新点击。
+ * 输入输出与副作用：仅进行有界参数校验；verify 明确引用原 operation/attempt，可核对控件实时选中状态，不重新点击。
  */
 import { z } from "@kaguya/schema";
 
@@ -69,6 +69,13 @@ export const linuxBrowserVerifySchema = z.discriminatedUnion("mode", [
             kind: z.literal("value"),
             nodeId,
             equals: z.string().max(32768),
+          })
+          .strict(),
+        z
+          .object({
+            kind: z.literal("checked"),
+            nodeId,
+            equals: z.boolean(),
           })
           .strict(),
       ]),

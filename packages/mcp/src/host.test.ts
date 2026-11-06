@@ -3,7 +3,8 @@
  * fixture 在 setup 前登记清理；等待 journal 中的真实请求/副作用信号，失败时也释放 hold 并回收进程。
  * 控制通道以 held/released 与应用 ACK 同步；控制 ACK 失败也独立等待原工作收敛并汇总错误。
  * 首次close失败保存脱敏cause并保留fixture目录；真实进程barrier覆盖成员退出与signal ESRCH。
- * 覆盖分页、权限、凭据、单进程探测、取消晚到、断连与 schema 更换；严格断言没有隐式重发。
+ * 覆盖分页（含空游标）、权限、凭据、单进程探测、取消晚到、断连与 schema 更换；严格断言没有隐式重发。
+ * 认证回显覆盖Bearer裸令牌与JSON键；显式工具错误不套用成功结果schema。
  * 所有凭据与正文均为合成数据，不运行模型或生产服务；完整文件进入 critical 门禁。
  */
 import { mkdtemp, writeFile, readFile, rm, readdir } from "node:fs/promises";
@@ -498,6 +499,21 @@ it.each(["stdio", "http"] as const)(
   },
   fixtureBudget({ connections: 1, closes: 1, timeoutMs: 3000 }),
 );
+it.each(["stdio", "http"] as const)(
+  "passes an empty opaque pagination cursor to the next %s request",
+  async (mode) => {
+    const f = await fixture(mode, "2025-11-25", { emptyCursor: true });
+    const host = await f.open();
+    expect(host.snapshot().nativeTools.registrations).toHaveLength(2);
+    const pages = (await f.logs()).filter(
+      (row) => row.kind === "request" && row.method === "tools/list",
+    );
+    expect(pages).toHaveLength(2);
+    expect(pages[0].params).not.toHaveProperty("cursor");
+    expect(pages[1].params).toHaveProperty("cursor", "");
+  },
+  fixtureBudget({ connections: 1, closes: 1, timeoutMs: 3000 }),
+);
 it(
   "rejects endless pagination and atomically publishes no partial directory",
   async () => {
@@ -677,6 +693,80 @@ it(
     ).rejects.toThrow("mcp-resource-result-denied");
   },
   fixtureBudget({ connections: 1, calls: 2, controls: 1, timeoutMs: 3000 }),
+);
+it(
+  "redacts the referenced HTTP bearer token in text and object keys",
+  async () => {
+    const f = await fixture("http", "2025-11-25", {
+      auth: true,
+      echoAuth: true,
+    });
+    const host = await f.open();
+    const result = await invoke(host);
+    expect(result.status).toBe("succeeded");
+    expect(JSON.stringify(result)).not.toContain("synthetic-token");
+    expect(result.result).toMatchObject({
+      value: {
+        content: [{ type: "text", text: "[REDACTED]" }],
+        structuredContent: { "[REDACTED]": "credential-key" },
+      },
+    });
+    expect(
+      (await f.logs()).filter((row) => row.kind === "effect"),
+    ).toHaveLength(1);
+  },
+  fixtureBudget({ connections: 1, calls: 1, timeoutMs: 3000 }),
+);
+describe.each(["stdio", "http"] as const)(
+  "%s success output schema",
+  (mode) => {
+    it.each([
+      { flag: "validOutput", status: "succeeded" },
+      { flag: "invalidOutput", status: "unknown" },
+      { flag: "missingOutput", status: "unknown" },
+    ])(
+      "validates $flag without repeating an effect",
+      async ({ flag, status }) => {
+        const f = await fixture(mode, "2025-11-25", {
+          outputSchema: true,
+          [flag]: true,
+        });
+        const host = await f.open();
+        expect(await invoke(host)).toMatchObject({
+          status,
+          evidence: status === "succeeded" ? "returned" : "unconfirmed",
+        });
+        expect(
+          (await f.logs()).filter((row) => row.kind === "effect"),
+        ).toHaveLength(1);
+      },
+      fixtureBudget({ connections: 1, calls: 1, timeoutMs: 3000 }),
+    );
+  },
+);
+it.each(["stdio", "http"] as const)(
+  "retains explicit %s tool errors without applying the success output schema",
+  async (mode) => {
+    const f = await fixture(mode, "2025-11-25", {
+      outputSchema: true,
+      isError: true,
+    });
+    const host = await f.open();
+    expect(await invoke(host)).toMatchObject({
+      status: "partial",
+      evidence: "returned",
+      result: {
+        value: {
+          isError: true,
+          structuredContent: { error: "synthetic failure" },
+        },
+      },
+    });
+    expect(
+      (await f.logs()).filter((row) => row.kind === "effect"),
+    ).toHaveLength(1);
+  },
+  fixtureBudget({ connections: 1, calls: 1, timeoutMs: 3000 }),
 );
 it(
   "reports capabilities explicitly and defaults missing config to disabled",

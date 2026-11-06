@@ -22,6 +22,7 @@ jobs:
           node-version: 24.18.0
       - name: Real subprocess helper contracts
         run: |
+          python3 -B scripts/linux-environments/test_shell_jobs.py
           node --test scripts/linux-tools/check-shell.mjs
           node --test scripts/linux-tools/check-browser-input.mjs
           node --test scripts/linux-tools/check-browser-freshness.mjs

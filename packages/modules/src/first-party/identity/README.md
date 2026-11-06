@@ -10,7 +10,9 @@
 
 ## 数据流与边界
 
-平台 ID 保持为外部事实，模块通过追加式绑定建立 canonical 或 ephemeral 身份。
+平台 ID 保持为外部事实。首版按 platform、adapter 与精确账号建立 account/person，按 destination 建立独立 scope。同账号跨群聊和私聊复用人物，昵称和群名片只作观察。
+
+匿名 Web 输入返回 unresolved，不创建长期 account/person。同 conversationId 只复用 ephemeral scope；不同会话、adapter 及无 conversationId 的请求隔离。
 
 ## Settings
 
@@ -18,7 +20,9 @@
 
 ## 可靠性、幂等和失败行为
 
-同一入站只提交一个身份终态；无法解析时显式记录降级状态。
+成功处理的同一入站只提交一个身份终态。registerOnce 保留实体和绑定的唯一赢家，commitTerminal 保留终态；重投和重启复用这些持久事实。基础设施错误交由 durable handler 重试和耗尽记录处理。
+
+Memory 的 identity-split 撤销旧人物作为记忆证据的可信性，收集、发布与读路径消费失效事实；它不替账号选择新人物。首版不提供人工重绑定或跨平台合并。
 
 ## 日志与可观测性
 

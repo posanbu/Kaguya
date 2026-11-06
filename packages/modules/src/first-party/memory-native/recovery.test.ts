@@ -1,6 +1,7 @@
 /**
  * 功能概述：通过真实 Core、ModuleHost、原始账本及观察仓储验证静默形成和崩溃恢复。
  * 主要职责：在发布、批次完成、观察确认边界注入一次中断；检查模型去重、唯一发布及连续水位。
+ * 40 条来源与迟到更正用例验证跨批稳定经历、封口重开及历史 cutoff，不通过定时休眠推进测试。
  * 代码库关系：复用 cognitiveFixture，仅模型生成使用离线替身；每个等待使用持久状态断言，finally 关闭宿主。
  */
 import { expect, it, vi } from "vitest";
@@ -756,3 +757,153 @@ it.each(["forward", "reverse"])(
   },
   30000,
 );
+
+it("revises one experience after source 33, reopens for late correction, and replays the frozen revision", async () => {
+  const scope = memoryScope(address);
+  const f = await fixture(
+    false,
+    (request) => {
+      const p = nativeMemoryRequested.payloadSchema.parse(
+        request.contextAtoms.find((a) => a.kind === nativeMemoryRequested.kind)!
+          .payload,
+      );
+      expect(p.formationPolicy).toBe("experience-operations.v1");
+      const snapshot = nativeMemorySnapshotSchema.parse(p.existing);
+      const prior = snapshot.recalled.find(
+        (r) => r.node.metadata.kind === "experience",
+      )?.node;
+      const corrected = p.sources.some((s) => s.text === "第40条：更正为周五");
+      const late = p.sources.some((s) => s.text === "迟到更正：最终周六");
+      const key = prior?.id ?? "appointment";
+      return {
+        nodes: [
+          {
+            key,
+            kind: "experience",
+            ownerId: `conversation:${scope}`,
+            scope,
+            level: 1,
+            content: late ? "约定周六" : corrected ? "约定周五" : "约定周四",
+            sourceIds: [
+              ...new Set([
+                ...(prior?.metadata.sourceIds ?? []),
+                ...p.sources.map((s) => s.id),
+              ]),
+            ],
+            tags: [],
+            aliases: [],
+            status: "active",
+            experience: {
+              state: corrected ? "sealed" : "open",
+              policyVersion: "experience.v1",
+            },
+          },
+        ],
+        edges: [],
+        ...(prior
+          ? {
+              experienceOperation: {
+                kind: late ? "reopen" : "seal",
+                inputIds: [key],
+                outputIds: [key],
+              },
+            }
+          : {}),
+      };
+    },
+    async (db) => {
+      await db.information.synchronizeKinds(["core.message.inbound.text"]);
+      for (let i = 1; i <= 40; i++)
+        await db.information.append(
+          freezeInformationAtom(
+            informationAtomSchema.parse({
+              informationId: `correction-${i}`,
+              kind: "core.message.inbound.text",
+              source: "test:synthetic",
+              occurredAt: "2021-01-01T00:00:00Z",
+              payload: {
+                text: i === 40 ? "第40条：更正为周五" : `讨论${i}`,
+                source: { ...address, senderId: "human", selfId: "bot" },
+              },
+              references: [],
+            }),
+          ),
+          [],
+        );
+    },
+  );
+  try {
+    await f.flush();
+    await vi.waitFor(
+      async () =>
+        expect(
+          await f.all("memory.native.formation.completed.v1"),
+        ).toHaveLength(2),
+      wait,
+    );
+    const read = {
+      scope,
+      owners: [`conversation:${scope}`],
+      query: "约定",
+      asOf: "2030-01-01T00:00:00Z",
+    };
+    const requests = await f.all(nativeMemoryRequested.kind);
+    expect(
+      requests
+        .map((r) => (r.payload.sources as unknown[]).length)
+        .sort((a, b) => a - b),
+    ).toEqual([16, 24]);
+    expect(
+      (await f.all("memory.native.formation.completed.v1")).every(
+        (r) => r.payload.status === "completed",
+      ),
+    ).toBe(true);
+    const before = await f.database.memoryGraph.native.forFormation(read);
+    expect(before).toHaveLength(1);
+    expect(before[0]).toMatchObject({
+      content: "约定周五",
+      metadata: { revision: 2, experience: { state: "sealed" } },
+    });
+    const cutoff = await f.database.memoryGraph.native.cutoff(read);
+    const late = await f.send("迟到更正：最终周六"); // occurredAt=2020, registered after the 2021 messages.
+    await f.database.memoryGraph.native.recover(); // Run the independent maintenance boundary without a timer sleep.
+    await f.flush();
+    await vi.waitFor(
+      async () =>
+        expect(
+          await f.all("memory.native.formation.completed.v1"),
+        ).toHaveLength(3),
+      wait,
+    );
+    const current = await f.database.memoryGraph.native.current(read, [
+      before[0]!.id,
+    ]);
+    expect(current[0]).toMatchObject({
+      id: before[0]!.id,
+      content: "约定周六",
+      metadata: { revision: 3, experience: { state: "open" } },
+    });
+    expect(current[0]!.metadata.sourceIds).toContain(late.informationId);
+    expect(
+      await f.database.memoryGraph.native.current({ ...read, cutoff }, [
+        before[0]!.id,
+      ]),
+    ).toEqual(before);
+    await vi.waitFor(
+      async () =>
+        expect(
+          (await f.database.observations.progress(contract(address)))
+            ?.throughInformationId,
+        ).toBe(`memory-native-source:${late.informationId}`),
+      wait,
+    );
+    await f.restart();
+    expect(f.calls).toBe(3);
+    expect(
+      await f.database.memoryGraph.native.history(before[0]!.id),
+    ).toHaveLength(3);
+    expect(await f.all("memory.native.formation.completed.v1")).toHaveLength(3);
+  } finally {
+    await f.close();
+  }
+}, 30000);

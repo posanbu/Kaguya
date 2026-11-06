@@ -1,4 +1,5 @@
 /**
+ * 可选 vision 目标同样检查已启用 Provider 与声明模型，模式/图像能力由 Profile schema 校验。
  * 架构说明：本模块只负责把单个 Profile 的健康度判定组合成安全的
  * 配置就绪态输出，不修改 Profile 判定逻辑本身。Registry 元数据与
  * selectedProfileId 通过独立组合帮助器附加，保证现存仓库状态只暴露
@@ -191,8 +192,9 @@ function deriveConfigurationIssues(
     return issues;
   }
 
-  for (const tier of ["light", "heavy"] as const) {
+  for (const tier of ["light", "heavy", "vision"] as const) {
     const target = tiers[tier];
+    if (!target) continue;
     const provider = profile.ai.providers.find(
       ({ id }) => id === target.providerId,
     );

@@ -1,5 +1,6 @@
 """功能概述：Linux 原生 Unix socket/内核 SO_PEERCRED 的真实入口验收，无 root 或 Podman。
-主要职责：覆盖受信/非受信 UID、伪造 UID、畸形/超限请求、并发上限、连接丢失后核对和关闭。
+主要职责：覆盖受信/非受信 UID、伪造 UID、畸形/超限请求、并发上限、连接丢失后核对和关闭；
+经真实 RPC 验证租约过期、接管/恢复与持久重启后的旧输入拒绝，时钟由 fixture 控制。
 代码库关系：启动生产 Server 与 Broker，执行端使用有界受控 FakeBackend；Linux CI 独立运行。
 输入输出与副作用：临时 socket；全部连接和线程立即登记清理，条件变量等待而非固定 sleep。
 """
@@ -9,6 +10,7 @@ from pathlib import Path
 import socket
 import tempfile
 import threading
+import time
 import unittest
 from broker import Broker
 from server import Server, peer_uid
@@ -23,8 +25,9 @@ class ServerTest(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.backend = FakeBackend()
-        self.broker = Broker(self.root / "state", self.backend)
-        self.addCleanup(self.broker.close)
+        self.now = time.time()
+        self.broker = Broker(self.root / "state", self.backend, clock=lambda: self.now)
+        self.addCleanup(lambda: self.broker.close())
         self.path = self.root / "broker.sock"
         self.server = Server(self.path, self.broker, os.getuid())
         self.addCleanup(self.server.server_close)
@@ -53,6 +56,94 @@ class ServerTest(unittest.TestCase):
         stream = client.makefile("rb")
         self.addCleanup(stream.close)
         return json.loads(stream.readline())
+
+    def bound_environment(self):
+        created = self.rpc("environment.create", {
+            "environmentId": "env", "scope": "scope", "workspaceId": "ws",
+            "resourceIds": ["desktop"], "image": "example.org/tools@sha256:" + "1" * 64,
+        })
+        self.assertTrue(created["ok"])
+        return self.rpc("lease.acquire", {
+            "environmentId": "env", "scope": "scope", "workflowId": "flow", "ttlSeconds": 60,
+        })["result"]
+
+    def operation(self, binding, name="op"):
+        return {**binding, "scope": "scope", "intentId": "intent", "attemptId": "attempt",
+                "operationId": name, "digest": "digest", "toolName": "shell.exec",
+                "arguments": {}, "target": {}, "deadline": "2099-01-01T00:00:00Z"}
+
+    def control(self, generation, name="control"):
+        return {"environmentId": "env", "scope": "scope", "generation": generation,
+                "controlAuthorizationId": name}
+
+    def test_rpc_scope_expiry_and_explicit_recovery_fence_old_requests(self):
+        binding = self.bound_environment()
+        original = self.operation(binding)
+        self.assertFalse(self.rpc("lease.validate", {**binding, "scope": "other"})["ok"])
+        self.assertFalse(self.rpc("operation.execute", {**original, "scope": "other"})["ok"])
+        self.now += 61
+        self.assertFalse(self.rpc("operation.execute", original)["ok"])
+        self.assertFalse(self.rpc("lease.renew", {**binding, "scope": "scope"})["ok"])
+        self.assertFalse(self.rpc("lease.acquire", {
+            "environmentId": "env", "scope": "scope", "workflowId": "other",
+        })["ok"])
+        self.assertEqual(self.backend.effects, 0)
+        restored = self.rpc("environment.recover", self.control(0))["result"]
+        self.assertEqual((restored["state"], restored["generation"]), ("ready", 1))
+        replacement = self.rpc("lease.acquire", {
+            "environmentId": "env", "scope": "scope", "workflowId": "new",
+        })["result"]
+        self.assertGreater(int(replacement["environment"]["fencing"]), int(binding["environment"]["fencing"]))
+        self.assertFalse(self.rpc("operation.execute", original)["ok"])
+        self.assertFalse(self.rpc("lease.release", {**binding, "scope": "scope"})["ok"])
+        self.assertEqual(self.rpc("operation.execute", self.operation(replacement, "new-op"))["result"]["status"], "succeeded")
+        self.assertEqual(self.backend.effects, 1)
+
+    def test_rpc_handoff_and_resume_require_new_lease_preserving_desktop(self):
+        binding = self.bound_environment()
+        desktop = set(self.backend.running)
+        handoff = self.rpc("environment.handoff", self.control(0))["result"]
+        self.assertEqual((handoff["state"], handoff["generation"]), ("human", 1))
+        self.assertEqual(self.rpc("environment.handoff", self.control(0))["result"], handoff)
+        self.assertEqual(self.backend.running, desktop)
+        self.assertFalse(self.rpc("operation.execute", self.operation(binding))["ok"])
+        self.assertFalse(self.rpc("lease.acquire", {
+            "environmentId": "env", "scope": "scope", "workflowId": "flow",
+        })["ok"])
+        self.assertEqual(self.backend.effects, 0)
+        resumed = self.rpc("environment.resume", self.control(1, "resume"))["result"]
+        self.assertEqual((resumed["state"], resumed["generation"]), ("ready", 2))
+        self.assertEqual(self.backend.running, desktop)
+        self.assertEqual(len(self.backend.handoffs), 2)
+        replacement = self.rpc("lease.acquire", {
+            "environmentId": "env", "scope": "scope", "workflowId": "flow",
+        })["result"]
+        self.assertFalse(self.rpc("operation.execute", self.operation(binding))["ok"])
+        self.assertEqual(self.rpc("operation.execute", self.operation(replacement, "new"))["result"]["status"], "succeeded")
+        self.assertEqual(self.backend.effects, 1)
+
+    def test_rpc_restart_retains_unknown_and_does_not_replay(self):
+        binding = self.bound_environment()
+        original = self.operation(binding)
+        self.backend.fail_after_effect = True
+        first = self.rpc("operation.execute", original)["result"]
+        self.assertEqual(first["status"], "unknown")
+        self.assertTrue(self.server.wait_handlers(4), "handlers must settle before replacing broker")
+        self.broker.close()
+        self.broker = Broker(self.root / "state", self.backend, clock=lambda: self.now)
+        self.server.broker = self.broker
+        self.assertEqual(self.rpc("environment.inspect", {"environmentId": "env", "scope": "scope"})["result"]["state"], "quarantined")
+        self.assertFalse(self.rpc("operation.execute", original)["ok"])
+        self.assertTrue(self.rpc("environment.recover", self.control(0))["ok"])
+        replacement = self.rpc("lease.acquire", {
+            "environmentId": "env", "scope": "scope", "workflowId": "new",
+        })["result"]
+        reconciled = self.rpc("operation.reconcile", {
+            **original, "controlEnvironment": replacement["environment"],
+            "token": replacement["token"], "controlAuthorizationId": "reconcile",
+        })["result"]
+        self.assertEqual(reconciled, first)
+        self.assertEqual(self.backend.effects, 1)
 
     def test_real_peer_uid_and_health(self):
         left, right = socket.socketpair()

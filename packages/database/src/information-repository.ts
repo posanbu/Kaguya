@@ -12,6 +12,7 @@
  * kinds 支持模块视图的多 Kind 过滤，与单 Kind/source/时间条件取交集，先过滤再分页。
  * lifecycle 投影支持开放集合、scope 索引和注册位置水位；原子追加及 status-of 关闭在同一事务提交。
  * Web conversationId 纳入来源/投递回执 scope 与同 scope 写锁，位置分配不越过同会话未提交记录。
+ * 批量读取用两条集合查询加载原子与有序引用，按调用方顺序保留重复 ID、跳过缺失项，避免分页恢复逐条往返。
  * 读取返回经过 schema 校验并深冻结的 atom，不允许通过返回值修改持久化事实。
  */
 import {
@@ -212,16 +213,14 @@ export class InformationRepository implements InformationLedger {
   async getMany(
     informationIds: readonly InformationId[],
   ): Promise<readonly DeepReadonly<InformationAtom>[]> {
-    return this.database.transaction(async (tx) => {
-      const atoms: DeepReadonly<InformationAtom>[] = [];
-      for (const informationId of informationIds) {
-        const atom = await readAtomById(tx, informationId);
-        if (atom !== undefined) {
-          atoms.push(atom);
-        }
-      }
-      return atoms;
-    });
+    return this.database.transaction((tx) =>
+      readAtomsByRows(
+        tx,
+        informationIds.map((informationId) => ({
+          information_id: informationId,
+        })),
+      ),
+    );
   }
 
   /** 只读控制台分页：按真实时间和 ID 降序，引用查询同样在 SQL 内限制规模。 */
@@ -794,17 +793,58 @@ async function readAtomsByRows(
   tx: SqlTransaction,
   rows: readonly { information_id: string }[],
 ): Promise<readonly DeepReadonly<InformationAtom>[]> {
-  const atoms: DeepReadonly<InformationAtom>[] = [];
-  for (const row of rows) {
-    const atom = await readAtomById(
-      tx,
-      informationIdSchema.parse(row.information_id),
-    );
-    if (atom !== undefined) {
-      atoms.push(atom);
-    }
+  if (rows.length === 0) return [];
+  // 与 get 一样按原始 ID 精确查询；批量读取不额外修剪或拒绝未命中的输入。
+  const informationIds = rows.map((row) => row.information_id);
+  const uniqueIds = [...new Set(informationIds)];
+  const atomRows = await tx.query<AtomRow>(
+    `SELECT information_id, kind, occurred_at, source, payload
+       FROM information_atoms WHERE information_id = ANY($1::text[])`,
+    [uniqueIds],
+  );
+  const referenceRows = await tx.query<
+    ReferenceRow & { information_id: string }
+  >(
+    `SELECT information_id, relation, target_information_id, ordinal
+       FROM information_references WHERE information_id = ANY($1::text[])
+       ORDER BY information_id, ordinal ASC`,
+    [uniqueIds],
+  );
+  const referencesById = new Map<string, ReferenceRow[]>();
+  for (const reference of referenceRows.rows) {
+    const references = referencesById.get(reference.information_id) ?? [];
+    references.push(reference);
+    referencesById.set(reference.information_id, references);
   }
-  return atoms;
+  const atomsById = new Map(
+    atomRows.rows.map(
+      (row) =>
+        [
+          row.information_id,
+          freezeInformationAtom(
+            informationAtomSchema.parse({
+              informationId: row.information_id,
+              kind: row.kind,
+              occurredAt: row.occurred_at,
+              source: row.source,
+              payload: decodeJsonObject(row.payload),
+              references: (referencesById.get(row.information_id) ?? []).map(
+                (reference) =>
+                  informationReferenceSchema.parse({
+                    relation: reference.relation,
+                    informationId: reference.target_information_id,
+                  }),
+              ),
+            }),
+          ),
+        ] as const,
+    ),
+  );
+  // SQL 的返回顺序不承担 API 顺序；重复请求仍返回重复项，缺失 ID 仍跳过。
+  return informationIds.flatMap((informationId) => {
+    const atom = atomsById.get(informationId);
+    return atom === undefined ? [] : [atom];
+  });
 }
 
 async function loadTargetKinds(

@@ -3,6 +3,7 @@
  * McpHost.open 完整发现后返回不可变注册快照；reconnect 不改变已发出的定义；provider 执行前复核摘要。
  * resources 按需 list/templates/read；selectPrompt 只供可信用户控制入口调用，getPrompt 消耗一次性选择。
  * 结果保留远端内容、来源和独立请求 ID；未知副作用交 W3 核对，cancel 只中断传输，不谎称远端已取消。
+ * 成功结果按冻结outputSchema复核；isError保留错误正文及partial/returned，不套用成功结果格式。
  * close保留各connection的脱敏清理cause，外层稳定错误码继续供Server识别。
  * Runtime/Server 注入注册项和 provider；本类不持有数据库、不运行模型、不自行授予跨 scope 权限。
  */
@@ -224,6 +225,7 @@ export class McpHost {
         structuredContent?: unknown;
       };
       if (
+        !value.isError &&
         definition.tool.outputSchema &&
         value.structuredContent !== undefined &&
         !definition.validateOutput?.(value.structuredContent)

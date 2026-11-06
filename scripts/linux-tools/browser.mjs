@@ -3,7 +3,7 @@
  * 主要职责：私有 pipe 承载所有 CDP；观察记录绑定 scope/lease/generation 与实际 DOM；
  * handoff 先封闭输入并清空观察，再等待真实 CDP 回执，保留 PID、页面、profile 与未保存状态。
  * 代码库关系：ToolService 注入权威 mode/generation；broker 固定许可并保存最终回执/附件。
- * 输入输出与副作用：只用 /private 保存 profile/下载，不加载宿主 profile；不重发未知输入。
+ * 输入输出与副作用：只用 /private 保存 profile/下载；页面核对包含控件选中状态，只证明当前状态，不推断原输入因果。
  */
 import { createHash, randomBytes } from "node:crypto";
 import {
@@ -466,14 +466,22 @@ export class BrowserComponent {
           ? node.text
           : expected.kind === "value"
             ? node.value
-            : undefined;
+            : expected.kind === "checked"
+              ? node.checked
+              : undefined;
     }
-    if (typeof actual !== "string" || typeof expected.equals !== "string")
+    if (
+      expected?.kind === "checked"
+        ? typeof actual !== "boolean" || typeof expected.equals !== "boolean"
+        : typeof actual !== "string" || typeof expected?.equals !== "string"
+    )
       throw new Error("invalid-browser-expectation");
     const matched = actual === expected.equals;
     return output(
       {
         original: args.original,
+        verificationKind: "current-page-state",
+        causalAttribution: "unconfirmed",
         matched,
         actual,
         expectation: expected,

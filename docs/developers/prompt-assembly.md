@@ -66,11 +66,13 @@ Light 选择 `message` 后，Heavy 根据消息意图取得同一个原始 Memor
 
 Heavy 普通回应任务追加 `action_records`。这些记录来自冻结边界内已保存的模型结果、行动终态和投递回执。装配过程不推断承诺、待办或行动理由。
 
+有序图片回复可包含 `contentSegments`，按原顺序列出文字与 `mediaRef`。每个媒体 ID 必须来自当前宿主冻结的可用媒体输入；`text` 等于全部文字段的拼接，纯图片回复可为空。模型不能提供 URL、文件路径或模型请求 ID。Heavy 保存实际请求身份，Runtime 另行核对生成链、媒体快照、目标场景和字节摘要，再进入既有投递流程。文字回复继续省略 `contentSegments`。
+
 Model Task 在调用前保存实际 `messages`。请求以同一冻结输入重试。完成后保存服务返回的原生消息、推理项与协议元数据。沉默也保存这些内容。取消或已被替代的结果不进入后续接续。Light 与 Heavy 的记录分开。
 
 LLM 客户端接受文本 `prompt` 或结构化 `messages`，两者互斥。Heavy 接续按原顺序保留兼容模型的原生返回，再附上已记录的执行结果和当前冻结 Prompt。模型身份改变时，只在工具交互闭合后开始新的请求历史。不可读数据保持原形，不转写成正文。
 
-原始证据窗口仍使用既有 32,000 字目标预算。接续另按完整请求的 UTF-8 JSON 字节检查 128,000 字节上限。它是保守容量约束，不是精确 token 计数。先保留未完成行动、等待、未知结果和未配对工具，再选取可容纳的近期闭合片段。必要内容仍超限时记录受阻，不调用摘要模型。原账本记录不删除。
+原始证据窗口仍使用既有 32,000 字目标预算。接续的基础上下文按 UTF-8 JSON 字节检查 128,000 字节上限。冻结媒体另行计量，上限为 30 MiB；最终请求的字节上限为基础预算加已保存的媒体字节数。这是保守容量约束，不是精确 token 计数。先保留未完成行动、等待、未知结果和未配对工具，再选取可容纳的近期闭合片段。必要内容仍超限时记录受阻，不调用摘要模型。原账本记录不删除。
 
 界面只展示服务实际提供的可读推理。没有内容时显示“未提供”。模型错误单独显示，不转换为沉默。
 
@@ -112,7 +114,7 @@ LLM 客户端接受文本 `prompt` 或结构化 `messages`，两者互斥。Heav
 
 :::
 
-普通回复的 Heavy 任务为 `object` Model Task，返回 `{"action":"message","text":"..."}` 或 `{"action":"silent"}`。选择 silent 时记录事实并结束回合，不创建 assistant 或投递。已授权的跨会话发送使用 `text` 模式。Runtime 核对变量的来源 ID、保存最终 `prompt.text`、模板和 digest；结构化任务追加 JSON Schema 协议，LLM client 使用保存的 `prompt.text` 调用模型。这条 Model Task 路径不另传 `system` 字段。[持久化与调用](https://github.com/posanbu/Kaguya/blob/main/packages/runtime/src/model-task.ts)、[LLM client](https://github.com/posanbu/Kaguya/blob/main/packages/llm/src/client.ts)。
+普通回复的 Heavy 任务为 `object` Model Task，返回 `{"action":"message","text":"..."}` 或 `{"action":"silent"}`。选择 silent 时记录事实并结束回合，不创建 assistant 或投递。已授权的跨会话发送使用 `text` 模式。Runtime 核对变量的来源 ID，保存最终 `prompt.text`、模板和 digest；结构化任务追加 JSON Schema 协议。请求保存了 `messages` 时，LLM client 使用这些消息，包括已追加的冻结媒体；否则使用保存的 `prompt.text`。这条 Model Task 路径不另传 `system` 字段。[持久化与调用](https://github.com/posanbu/Kaguya/blob/main/packages/runtime/src/model-task.ts)、[LLM client](https://github.com/posanbu/Kaguya/blob/main/packages/llm/src/client.ts)。
 
 ## 查看某一次请求的完整文本
 
