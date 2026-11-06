@@ -32,11 +32,12 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { Writable } from "node:stream";
 
 import {
@@ -72,6 +73,11 @@ import {
 import { createWebMessageGateway } from "./web-gateway.js";
 import { registerWebUi } from "./web.js";
 import { heavySettingsSchema } from "@kaguya/modules";
+import {
+  ensureDevelopmentPostgres,
+  MANAGED_POSTGRES_IMAGE,
+  MANAGED_POSTGRES_VOLUME,
+} from "./postgres-development.js";
 
 const chatModel = vi.fn((modelId: string) => ({ modelId }));
 
@@ -118,6 +124,20 @@ function tempWorkspaceRoot(): string {
   const root = mkdtempSync(join(tmpdir(), "kaguya-server-composition-"));
   roots.push(root);
   return root;
+}
+
+function configurationFiles(rootDir: string): Record<string, string | null> {
+  return Object.fromEntries(
+    readdirSync(rootDir, { recursive: true, withFileTypes: true }).map(
+      (entry) => {
+        const path = join(entry.parentPath, entry.name);
+        return [
+          relative(rootDir, path),
+          entry.isDirectory() ? null : readFileSync(path, "utf8"),
+        ];
+      },
+    ),
+  );
 }
 
 async function bootstrapWithModules(
@@ -528,6 +548,126 @@ describe("unified server composition", () => {
     closeLoggerSpy.mockRestore();
     await closeLogger(rootLogger);
   });
+
+  it.each(["empty root", "PostgreSQL-prepared Registry"])(
+    "initializes absent module stores after an %s without replacing existing configuration",
+    async (initialState) => {
+      const workspaceRoot = tempWorkspaceRoot();
+      const serverConfig = { ...config(workspaceRoot), port: 0 };
+      const rootDir = serverConfig.configRoot;
+      mkdirSync(serverConfig.webDistPath, { recursive: true });
+      writeFileSync(
+        join(serverConfig.webDistPath, "index.html"),
+        "<main>Kaguya</main>",
+      );
+      let profileFiles: Record<string, string | null> | undefined;
+      if (initialState === "PostgreSQL-prepared Registry") {
+        await ensureDevelopmentPostgres({
+          configRoot: rootDir,
+          dependencies: {
+            runCommand: async (_command, args) => ({
+              exitCode: 0,
+              stdout:
+                args[1] === "inspect"
+                  ? [
+                      MANAGED_POSTGRES_IMAGE,
+                      "17",
+                      "running",
+                      "127.0.0.1",
+                      "5432",
+                      MANAGED_POSTGRES_VOLUME,
+                    ].join("\t")
+                  : "ready",
+            }),
+            checkDatabase: async () => undefined,
+          },
+        });
+        expect(readdirSync(rootDir).sort()).toEqual(["index.json", "profiles"]);
+        profileFiles = configurationFiles(rootDir);
+      }
+      const connect = vi
+        .spyOn(KaguyaDatabase, "connect")
+        .mockImplementation(async () => createTestingDatabase());
+      const server = await startKaguyaServer(serverConfig);
+      try {
+        expect((await server.app.inject("/healthz")).statusCode).toBe(200);
+        expect(server.adapterHost.status().runtime).toMatchObject({
+          ingress: "runtime_unavailable",
+          reason: "configuration_not_ready",
+        });
+      } finally {
+        await server.close();
+      }
+      const defaults = createFirstPartyModuleConfigDefaults();
+      const configs = await loadModuleInstanceConfigs({
+        rootDir,
+        defaults,
+        initialize: false,
+      });
+      expect(configs).toHaveLength(defaults.length);
+      if (profileFiles)
+        expect(configurationFiles(rootDir)).toMatchObject(profileFiles);
+
+      const expression = configs.find(
+        (item) => item.definitionId === "plugin.qq-expression",
+      )!;
+      await writeModuleInstanceConfig(rootDir, {
+        ...expression,
+        settings: { ...expression.settings, cooldownSeconds: 900 },
+      });
+      await writeCordisModuleEnabled(
+        rootDir,
+        defaults,
+        expression.instanceId,
+        true,
+      );
+      const saved = configurationFiles(rootDir);
+      const restarted = await startKaguyaServer(serverConfig);
+      try {
+        expect((await restarted.app.inject("/healthz")).statusCode).toBe(200);
+        expect(configurationFiles(rootDir)).toEqual(saved);
+        expect(connect).toHaveBeenCalledTimes(2);
+      } finally {
+        await restarted.close();
+      }
+    },
+    20_000,
+  );
+
+  it.each([
+    "missing tree",
+    "missing modules",
+    "invalid tree",
+    "invalid module",
+  ])(
+    "rejects %s on startup without repairing existing configuration",
+    async (damage) => {
+      const workspaceRoot = tempWorkspaceRoot();
+      const serverConfig = config(workspaceRoot);
+      const rootDir = serverConfig.configRoot;
+      await bootstrapWithModules(rootDir);
+      const treePath = join(rootDir, "cordis.yml");
+      if (damage === "missing tree") unlinkSync(treePath);
+      else if (damage === "missing modules")
+        rmSync(join(rootDir, "modules"), { recursive: true });
+      else if (damage === "invalid tree")
+        writeFileSync(treePath, "plugins: []\n");
+      else
+        writeFileSync(
+          join(rootDir, "modules", "heavy.default", "config.json"),
+          JSON.stringify({ version: 2 }),
+        );
+      const saved = configurationFiles(rootDir);
+      const connect = vi.spyOn(KaguyaDatabase, "connect");
+
+      await expect(startKaguyaServer(serverConfig)).rejects.toMatchObject({
+        code: "CONFIG_CORRUPT_STORE",
+      });
+
+      expect(configurationFiles(rootDir)).toEqual(saved);
+      expect(connect).not.toHaveBeenCalled();
+    },
+  );
 
   it("connects the information database once and redacts credentials from startup errors", async () => {
     const root = mkdtempSync(join(tmpdir(), "kaguya-database-startup-"));

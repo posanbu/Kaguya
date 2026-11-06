@@ -1,3 +1,4 @@
+import { useRead } from "./use-read.js";
 /**
  * 功能概述：工作台概览展示基础设施状态，并提供 Memory 与 NapCat 的待重启开关。
  * 主要职责：Overview 读取安全接入快照和当前 Profile 的脱敏 Memory 存储摘要；
@@ -39,30 +40,12 @@ import { ModelMetricsPanel } from "./ModelMetricsPanel.js";
 import { pollAdapterStatus, type AdapterStatus } from "./adapter-status.js";
 import "./overview.css";
 
-type ReadState<T> = { data?: T; error: boolean; loading: boolean };
-function useRead<T>(token: string, load: (token: string) => Promise<T>) {
-  const [revision, setRevision] = useState(0);
-  const [state, setState] = useState<ReadState<T>>({
-    error: false,
-    loading: true,
-  });
-  useEffect(() => {
-    let live = true;
-    setState({ error: false, loading: true });
-    void load(token).then(
-      (data) => {
-        if (live) setState({ data, error: false, loading: false });
-      },
-      () => {
-        if (live) setState({ error: true, loading: false });
-      },
-    );
-    return () => {
-      live = false;
-    };
-  }, [token, load, revision]);
-  return { ...state, retry: () => setRevision((value) => value + 1) };
-}
+type ReadState<T> = {
+  data?: T;
+  error: boolean;
+  loading: boolean;
+  token?: string;
+};
 function useAdapterRead(token: string) {
   const [state, setState] = useState<ReadState<AdapterStatus>>({
     error: false,
@@ -368,6 +351,8 @@ export function Overview({
         title="概览"
         actions={
           <Button
+            disabled={featureRead.loading}
+            aria-busy={featureRead.loading}
             onClick={() => {
               adapters.retry();
               featureRead.retry();

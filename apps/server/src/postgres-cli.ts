@@ -1,5 +1,4 @@
 /**
- * MCP Server 持久闭环加入 PostgreSQL 清单，避免新测试只在 PGlite 上验证。
  * 功能概述：暴露 postgres:start/status/check、默认开发启动和真实 PostgreSQL 测试入口。
  * 主要职责：解析稳定命令与可选端口，尝试数据库准备后启动 Server，测试入口仍要求数据库就绪，并转发
  * SIGINT/SIGTERM；测试 URL 只注入子进程，普通输出不打印连接串或凭据。
@@ -8,8 +7,8 @@
  * 输入输出与副作用：可能启动 Docker 容器、补齐 selected Profile runtime 或创建子进程；
  * 不停止/删除容器和数据卷；开发准备失败提示启动 Docker Desktop 并运行 docker info 确认。
  * 使用独立临时 schema；验证清单包含 Memory 节点／边存储契约。
+ * MCP、Inspection、行动、工具循环、Memory 历史和 Lifecycle 分页均进入真实 PostgreSQL 清单。
  * 真实 PostgreSQL 清单覆盖 observation-store 与 observation-runtime，验证跨事务冻结、确认和重连。
- * Lifecycle 超页 fixture 验证批量 owner 的完整关联、分页顺序及重启后的原定时恢复。
  */
 import { spawn } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
@@ -34,7 +33,6 @@ import {
 
 const serverRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = resolve(serverRoot, "../..");
-const pnpmExecutable = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 export const POSTGRES_TEST_FILES = [
   "apps/server/src/mcp-host.test.ts",
   "apps/server/src/inspection-domain.test.ts",
@@ -106,9 +104,9 @@ export async function runPostgresCli(
         `Database preparation unavailable [${error.name}]: ${error.message}; Server will inspect configuration and start in degraded mode when possible.\n请先启动 Docker Desktop（macOS: open -a Docker），等待 docker info 成功后，在仓库根目录重新运行 pnpm dev。\n`,
       );
     }
-    return spawnInteractive(
-      pnpmExecutable,
-      ["exec", "tsx", "src/server.ts"],
+    return runNodeCli(
+      fileURLToPath(import.meta.resolve("tsx/cli")),
+      ["src/server.ts"],
       serverRoot,
       { ...process.env, NODE_ENV: "development" },
     );
@@ -129,9 +127,11 @@ export async function runPostgresCli(
       await checkManagedPostgresDatabase(databaseUrl, { prepareSchema: false });
     }
     await assertPostgresTestManifestComplete(repositoryRoot);
-    return spawnInteractive(
-      pnpmExecutable,
-      ["exec", "vitest", "run", ...POSTGRES_TEST_FILES],
+    return runNodeCli(
+      fileURLToPath(
+        new URL("./vitest.mjs", import.meta.resolve("vitest/package.json")),
+      ),
+      ["run", ...POSTGRES_TEST_FILES],
       repositoryRoot,
       {
         ...process.env,
@@ -197,18 +197,27 @@ export function parsePostgresPort(args: readonly string[]): number | undefined {
   return port;
 }
 
-function spawnInteractive(
-  command: string,
+// Run the installed JavaScript entrypoint with Node, without Windows .cmd shims or a shell.
+export function runNodeCli(
+  entrypoint: string,
   args: readonly string[],
   cwd: string,
   environment: NodeJS.ProcessEnv,
 ): Promise<number> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, [...args], {
-      cwd,
-      env: environment,
-      stdio: "inherit",
-    });
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(process.execPath, [entrypoint, ...args], {
+        cwd,
+        env: environment,
+        stdio: "inherit",
+      });
+    } catch {
+      reject(
+        new PostgresDevelopmentError("Child process could not be started"),
+      );
+      return;
+    }
     const forwardSignal = (signal: NodeJS.Signals) => child.kill(signal);
     const interrupt = () => forwardSignal("SIGINT");
     const terminate = () => forwardSignal("SIGTERM");

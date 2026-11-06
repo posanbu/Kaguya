@@ -23,6 +23,22 @@ description: 配置 NapCat WebSocket、机器人账号和入站出站白名单�
 
 NapCat 设置保存后重启生效。白名单属于 Profile，保存后仍须到“配置生效管理”点击“应用当前配置”。
 
+## 图片与其他媒体的当前边界
+
+截至 2026-10-29，Kaguya 主线 `7edca245` 尚未接通通用识图。普通图片进入模型上下文时只剩 `[image]`。部分 QQ 表情保留平台资源字段，但图片字节没有进入主回复请求。更换多模态模型或开启 NapCat 文件选项，不能单独补齐这条链路。
+
+语音、视频、文件和合并转发目前主要保留类型占位。引用回复保留原消息 ID，不主动从 NapCat 拉取原消息。独立采集字段 `captureEnabled`、`captureGroups` 和 `captureQueueLimit` 控制采集，不提供识图能力。
+
+**消息上报格式** — 建议在 NapCat 的正向 WebSocket 设置中选择 `messagePostFormat: "array"`，保留结构化消息段。Kaguya 也能解析 CQ 字符串。[NapCat 基础配置](https://napneko.github.io/config/basic)
+
+**`enableLocalFile2Url`** — 不是识图开关，不要求为当前 Kaguya 接入开启。所核对版本中，开启后 `get_file` 可以额外返回 base64。返回的本地路径属于 NapCat 所在机器，不能假定 Kaguya 能读取。[固定版本实现](https://github.com/NapNeko/NapCatQQ/blob/3420f0b76d7dc0ac92cde1663f21ea27f61e13bb/packages/napcat-onebot/action/file/GetFile.ts#L59)
+
+**`parseMultMsg`** — 控制合并转发内容展开。当前 Kaguya 不消费展开内容，单独开启不会获得识图能力。
+
+**图片链接有效期** — NapCat 官方文档说明，图片 URL 约两小时过期，并提供刷新方式。当前 Kaguya 尚未接通通用媒体刷新与识图流程。[文件处理说明](https://napneko.github.io/develop/file)
+
+可切换识图及纯表情、图文混排仍处于规划阶段。设计依据、商城表情格式差异和验收要求见[通用媒体与可切换识图](../developers/media-understanding)，跟踪入口为 [Issue #272](https://github.com/posanbu/Kaguya/issues/272)。其中的拟新增配置尚不可用。
+
 ## 允许哪些群和私聊
 
 配置页分别提供“入站白名单”和“出站白名单”，每行填写一条规则。

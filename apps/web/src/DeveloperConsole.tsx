@@ -13,6 +13,7 @@
  * 卸载清理异步任务，加载/失败时隐藏旧数据，明确显示空结果、分页和图截断。
  * location 独立携带领域查询参数；严格 pathname 仍交给既有模块/请求路由，不新增顶层入口。
  */
+import { FEATURE_CHANGED_EVENT } from "./feature-api.js";
 import { FlowSummary } from "./FlowSummary.js";
 import { DomainInspection } from "./DomainInspection.js";
 import { ModuleTemplatesSection } from "./ModuleTemplatesSection.js";
@@ -73,6 +74,11 @@ export function DeveloperConsole({
   navigate: (path: string) => void;
 }) {
   const [revision, setRevision] = useState(0);
+  useEffect(() => {
+    const refresh = () => setRevision((value) => value + 1);
+    window.addEventListener(FEATURE_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(FEATURE_CHANGED_EVENT, refresh);
+  }, []);
   const modules = useInspection(
     token,
     "modules",

@@ -228,12 +228,7 @@ export async function startKaguyaServer(
               ? { nativeMemoryTools: true }
               : {}),
           };
-    const newConfigRoot =
-      (
-        await FileUserConfigManager.inspect({
-          rootDir: bootstrap.configRoot,
-        })
-      ).status === "setup_required";
+    await FileUserConfigManager.inspect({ rootDir: bootstrap.configRoot });
     await migrateLifecycleConfig(
       bootstrap.configRoot,
       createFirstPartyModuleConfigDefaults("production", workspaceIdentity()),
@@ -245,7 +240,9 @@ export async function startKaguyaServer(
     );
     moduleConfigs = await loadModuleInstanceConfigs({
       rootDir: bootstrap.configRoot,
-      initialize: newConfigRoot,
+      // PostgreSQL preparation may already have created the Profile Registry.
+      // The loader initializes only when both module stores are absent.
+      initialize: true,
       defaults: createFirstPartyModuleConfigDefaults(
         "production",
         workspaceIdentity(),
