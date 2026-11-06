@@ -2,6 +2,7 @@
  * 功能概述：读取 W3 原行动及全部有界回执，分别解释当前状态、取消请求、核对与迟到 MCP 证据。
  * actionSummary 不从模型完成推断效果；verifiedReceipt 校验持久 intent/attempt/result 摘要；
  * late evidence 必须匹配 scope、连接版本、类型化 RPC 与原操作身份，不会修改 unknown/partial。
+ * 摘要按显式规范JSON前缀或历史原始JSON格式验证；规范摘要不依赖JSONB返回键序。
  * 代码库关系：inspection-domain 使用本模块，读取现有 action 表与 Information；返回内容统一清理。
  */
 import {
@@ -10,6 +11,7 @@ import {
 } from "@kaguya/runtime";
 import { createHash } from "node:crypto";
 import {
+  actionDigest,
   type InspectionFact,
   type InspectionReader,
   type InspectionRow,
@@ -110,8 +112,9 @@ export function verifiedLate(
     s.definitionRevision === target.definitionRevision &&
     s.protocol === target.protocol &&
     hasReference(f, row.intent_id, "core:caused-by") &&
-    p.responseDigest ===
-      createHash("sha256").update(JSON.stringify(e.value)).digest("hex") &&
+    (p.responseDigest === `canonical-json-v1:sha256:${actionDigest(e.value)}` ||
+      p.responseDigest ===
+        createHash("sha256").update(JSON.stringify(e.value)).digest("hex")) &&
     requests.some(
       (t) =>
         t.method === "tools/call" &&

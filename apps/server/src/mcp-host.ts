@@ -7,10 +7,10 @@
  * 连接目标和凭据引用来自敏感 mcp.json，HTTP 请求只能给出已配置连接、scope、资源 URI 或 prompt 参数。
  * 返回值保留不可信来源；Linux shell 从独立敏感配置显式启用，合并 providers 并共用关闭顺序。
  * Linux GUI 管理路由复用当前 host 与 management 认证，人工会话秘密保留在宿主 client。
+ * 迟到响应使用显式规范JSON摘要前缀，跨JSONB键序稳定；同ID旧格式重试不改写原事实。
  */
 import { isDeepStrictEqual } from "node:util";
 import { createRuntimeKindRegistry } from "@kaguya/runtime";
-import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { join } from "node:path";
 import {
@@ -27,7 +27,7 @@ import {
   freezeInformationAtom,
   informationAtomSchema,
 } from "@kaguya/schema";
-import type { KaguyaDatabase } from "@kaguya/database";
+import { actionDigest, type KaguyaDatabase } from "@kaguya/database";
 import type {
   NativeToolLoopOptions,
   RuntimeCapabilities,
@@ -63,6 +63,11 @@ export function createMcpLateResultRecorder(database: KaguyaDatabase) {
       target.protocol !== envelope.source.protocol
     )
       throw new McpError("mcp-late-result-unmapped");
+    const existing = await database.information.get(informationId);
+    const digest =
+      existing && /^[a-f0-9]{64}$/.test(String(existing.payload.responseDigest))
+        ? String(existing.payload.responseDigest)
+        : `canonical-json-v1:sha256:${actionDigest(envelope.value)}`;
     const atom = freezeInformationAtom(
       informationAtomSchema.parse({
         informationId,
@@ -71,9 +76,7 @@ export function createMcpLateResultRecorder(database: KaguyaDatabase) {
         occurredAt: envelope.source.observedAt,
         payload: {
           scopeKey: envelope.source.scope,
-          responseDigest: createHash("sha256")
-            .update(JSON.stringify(envelope.value))
-            .digest("hex"),
+          responseDigest: digest,
           envelope: JSON.parse(JSON.stringify(envelope)),
         },
         references: [
@@ -81,7 +84,6 @@ export function createMcpLateResultRecorder(database: KaguyaDatabase) {
         ],
       }),
     );
-    const existing = await database.information.get(informationId);
     if (existing) {
       if (
         existing.kind !== atom.kind ||

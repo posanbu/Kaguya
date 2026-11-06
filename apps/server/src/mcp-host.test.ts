@@ -6,6 +6,7 @@
  * 每段沿用8秒条件等待；fixture预算计入setup、MCP请求、控制和close，诊断记录backend、阶段与关联ID。
  * Light gate 只阻塞合成模型响应，回归确认观察完成不等于模型完成；release与observer settle独立清理。
  * 管理 GUI 测试仅替换 broker RPC，保留真实 Host/W3/SDK 原图链路；不产生外部模型请求。
+ * 迟到响应经真实JSONB读取再由Inspection核验摘要与intent/attempt，防止仅落账而无法展示。
  * 正式链路按 MCP 回执、匹配 run 的模型/assistant 持久化、Web 交付与队列收敛分阶段等待。
  * fixture 在 setup 失败和 shutdown 异常时也尝试释放所有资源；记录子进程 PID，验证关闭后不残留。
  */
@@ -1589,6 +1590,26 @@ it.each(["before-unknown", "after-unknown"] as const)(
             (await f.db.actions.read(action.intentId, f.scope)).state,
           ).toBe("unknown");
           await expectPersistenceSettled(f.db);
+        });
+        const inspection = await server.app.inject({
+          url: `/api/v1/inspection/actions/${action.intentId}?${new URLSearchParams({ scope: f.scope })}`,
+          headers: { authorization: "Bearer synthetic-gateway" },
+        });
+        expect(inspection.statusCode).toBe(200);
+        const projected = inspection.json().data;
+        expect(projected.action.state).toBe("unknown");
+        expect(projected.lateEvidence).toHaveLength(1);
+        expect(projected.lateEvidence[0].informationId).toBe(
+          observation.informationId,
+        );
+        expect(projected.lateEvidence[0].responseDigest).toMatch(
+          /^canonical-json-v1:sha256:[a-f0-9]{64}$/,
+        );
+        expect(projected.lateEvidence[0].requests.value[0]).toMatchObject({
+          intentId: action.intentId,
+          operationId: action.intent.operationId,
+          attemptId: action.attemptId,
+          modelToolCallId: "mcp-model-original",
         });
         const originalHead = await f.db.actions.read(action.intentId, f.scope);
         // 模拟 append 已提交但调用方报错：相同事实重试只读取同 ID，不新增事实。
