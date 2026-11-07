@@ -1,4 +1,5 @@
 /**
+ * parseCordisTreeText 提供无文件权限副作用的纯解析入口，供离线升级拒绝未审查插件。
  * 功能概述：读取和校验宿主服务及可安装模块的 Cordis 配置快照。
  * 主要职责：固定宿主服务必须存在；模块条目允许 npm/file 包、非固定 instanceId 和内联 settings，
  * definitionId 将实例关联到包声明。禁用外部包时不要求加载代码，历史 Kind 由账本保存。
@@ -110,6 +111,25 @@ export function validateCordisTree(
   return freezeTree(parsed.data);
 }
 
+/** 解析已由调用方安全读取的文本；不读取或 chmod 配置，不执行插件代码。 */
+export function parseCordisTreeText(text: string): CordisPluginTree {
+  const document = parseDocument(text, { uniqueKeys: true, schema: "core" });
+  if (document.errors.length || document.warnings.length) throw invalidTree();
+  let hasAlias = false;
+  visit(document, (_key, node) => {
+    if (isAlias(node)) hasAlias = true;
+  });
+  if (hasAlias) throw invalidTree();
+  const result = treeSchema.safeParse(document.toJS({ maxAliasCount: 0 }));
+  if (
+    !result.success ||
+    new Set(result.data.plugins.map((p) => p.id)).size !==
+      result.data.plugins.length
+  )
+    throw invalidTree();
+  return freezeTree(result.data);
+}
+
 export async function loadCordisTree(options: {
   readonly rootDir: string;
   readonly modules: readonly CordisModuleIdentity[];
@@ -117,18 +137,8 @@ export async function loadCordisTree(options: {
 }): Promise<CordisPluginTree> {
   const path = treePath(options.rootDir);
   try {
-    const document = parseDocument(await readSensitiveText(path), {
-      uniqueKeys: true,
-      schema: "core",
-    });
-    if (document.errors.length || document.warnings.length) throw invalidTree();
-    let hasAlias = false;
-    visit(document, (_key, node) => {
-      if (isAlias(node)) hasAlias = true;
-    });
-    if (hasAlias) throw invalidTree();
     return validateCordisTree(
-      document.toJS({ maxAliasCount: 0 }),
+      parseCordisTreeText(await readSensitiveText(path)),
       options.modules,
     );
   } catch (error) {

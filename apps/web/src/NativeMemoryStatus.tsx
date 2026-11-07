@@ -1,3 +1,9 @@
+/**
+ * 功能概述：现有 Memory 模块页的持久处理摘要、失败批次和冻结目录入口。
+ * NativeMemoryStatus 按 token/revision/refresh 隔离读取；模块装配与实际执行分开措辞。
+ * 来自 memory-graph-api 与模块设置的摘要不代替精确历史；明确失败批次才允许显式重新排队。
+ * 精确观察、修订与来源通过情境中的领域检视读取，不把泛化链接称为所选请求。
+ */
 import { useEffect, useState } from "react";
 import {
   readNativeMemoryStatus,
@@ -22,6 +28,8 @@ export function NativeMemoryStatus({
   const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(0);
   const [retrying, setRetrying] = useState(false);
+  const [statusKey, setStatusKey] = useState("");
+  const key = `${token}:${revision}:${refresh}`;
   useEffect(() => {
     const controller = new AbortController();
     setError("");
@@ -35,11 +43,13 @@ export function NativeMemoryStatus({
       ),
     ]).then(
       ([value, settings]) => {
-        if (!controller.signal.aborted)
+        if (!controller.signal.aborted) {
           setStatus({
             ...value,
             configuration: settings.instances[0]?.settings ?? {},
           });
+          setStatusKey(key);
+        }
       },
       (reason) => {
         if (!controller.signal.aborted)
@@ -47,14 +57,15 @@ export function NativeMemoryStatus({
       },
     );
     return () => controller.abort();
-  }, [token, revision, refresh]);
+  }, [token, revision, refresh, key]);
   if (error) return <FieldMessage tone="error">{error}</FieldMessage>;
-  if (!status) return <FieldMessage>正在读取 Memory 状态…</FieldMessage>;
+  if (!status || statusKey !== key)
+    return <FieldMessage>正在读取 Memory 状态…</FieldMessage>;
   return (
     <section aria-label="Memory 处理状态">
       <p>
         {active
-          ? "统一 Memory 正在运行"
+          ? "统一 Memory 模块已装配，以下为已保存的处理记录。"
           : "统一 Memory 未运行。以下为已保存的处理记录。"}
       </p>
       <p>
@@ -104,7 +115,11 @@ export function NativeMemoryStatus({
                 {batch.status === "rejected" ? "发布被拒绝" : "形成失败"}{" "}
                 <button
                   type="button"
-                  disabled={!active || retrying}
+                  disabled={
+                    !active ||
+                    retrying ||
+                    !["failed", "rejected"].includes(batch.status)
+                  }
                   onClick={() => {
                     setRetrying(true);
                     void retryMemoryBatch(token, batch.id)
@@ -145,7 +160,7 @@ export function NativeMemoryStatus({
         <p>尚未记录上下文冻结。</p>
       )}
       <p>
-        <a href="/situation">查看所选请求的实际输入</a>
+        <a href="/situation?inspect=observation">查看观察与冻结记忆</a>
         。以上是冻结阶段计数，最终 Prompt 的预算裁剪见情境页。
       </p>
       <p>

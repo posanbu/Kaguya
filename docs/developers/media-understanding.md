@@ -1,13 +1,25 @@
 ---
-title: 通用媒体与可切换识图（规划中）
+title: 通用媒体与可切换识图
 description: 让图片和表情进入统一情境与模型请求，并由 Heavy 统一决定文字、纯表情和图文混排。
 ---
 
-# 通用媒体与可切换识图（规划中）
+# 通用媒体与可切换识图
 
-::: info 方案记录，尚未实现
-本文记录 [Issue #272](https://github.com/posanbu/Kaguya/issues/272) 的已确认方向。本次文档变更不修改运行代码、配置、数据库或模型调用行为。文中的拟新增字段尚不可用，不能直接写入当前配置。
+::: info 输入与识图链已接通
+入站媒体引用、独立持久存储与 Heavy 三档输入已接通。通用图文输出和长期媒体召回仍需实现。真实视觉服务与 QQ 投递验收须分别执行，确定性测试不代替真实服务验收。
 :::
+
+## 已接入的输入基础设施
+
+Runtime 将有序入站内容转换为稳定 `mediaId` 和资源摘要，按完整 scene 登记来源权限。临时 URL、路径和凭据不进入消息事实或情境。图片与 TTS 共用 `MediaResourceStore`；Server 将新字节写入 PostgreSQL，旧文件资源仍可读取。这个路径不依赖 Memory 开关。
+
+`ai.vision.mode` 缺省为 `off`。`native` 要求 `ai.modelTiers.heavy.imageInput: true`；`external` 要求配置 `ai.modelTiers.vision` 并声明 `imageInput: true`。Light 不触发识图。外挂模式复用持久 ModelTask，观察保存真实模型、完成时间及派生证据身份，并按会话、图像帧、模型配置和提示版本复用。
+
+`ai.vision.allowedHosts` 是精确 HTTPS 下载主机列表，缺省为空。例：`["gchat.qpic.cn"]` 只允许该主机，不允许其子域或跳转。下载拒绝本机、内网、非 443 端口、带认证的 URL 和重定向；先校验公网 IPv4，再固定地址发起 TLS 请求。每条消息最多获取四个素材，每个原件最多 10 MiB，单次下载最多五秒。只有已授权入站能到达这个入口，素材来源本身不能扩大权限。配置保存后沿现有显式应用流程生效。
+
+Sharp 在独立的 1600 万像素预算下校验首帧；动图识图按累计帧时长选取至多四帧并覆盖首尾，每个选定帧独立解码，发送原件仍保留。每次 Heavy 的图像字节最多 20 MiB，编码后的媒体消息最多 30 MiB，与文字及工具历史预算分开。原生工具接续从同一 run 的媒体快照重新追加图像，旧图片不会挤掉未闭合工具交互。
+
+新 Heavy 请求保存实际图像或已完成视觉观察。已有 requested 直接恢复原消息；媒体快照命中也不重新下载或识图。失败保留不可见状态，原生图像模型失败不切换到外挂。尚未实现 NapCat 资源查询刷新失效 URL、通用 text/mediaRef 输出和长期媒体召回；无法取得字节时明确标记不可用。
 
 ## 目标与范围
 
@@ -47,9 +59,9 @@ description: 让图片和表情进入统一情境与模型请求，并由 Heavy 
 
 **商城表情兼容** — 接收端需要兼容显式 `mface`、旧版表情图片，以及带 `emoji_id`、`emoji_package_id`、`key` 的新版 `image`。所核对上游会把部分商城表情编码为 `gxh.vip.qq.com` 上的 GIF，没有 `sub_type=1` 或 `file=marketface`。当前解析器会漏掉这种表情结构。这是源码对照结论，尚未证明某个部署受影响。[上游编码](https://github.com/NapNeko/NapCatQQ/blob/3420f0b76d7dc0ac92cde1663f21ea27f61e13bb/packages/napcat-onebot/api/msg.ts#L258)
 
-## 拟新增识图配置
+## 识图配置
 
-以下字段是设计接口，尚未实现。
+以下字段已进入 Profile schema；通过敏感 Profile JSON 或现有配置 API 修改，当前不增加管理页面控件。
 
 **`ai.vision.mode`** — 取值为 `off | native | external`，缺省为 `off`。模式只由显式配置决定，不在运行失败时自动切换。
 
@@ -130,7 +142,7 @@ Heavy 的 `message` 输出拟采用有序内容段，支持 `text` 和 `mediaRef
 
 **检视** — 在对应 Heavy 请求下显示实际模式、媒体预览、抽帧、外挂描述和失败状态。基础情境与请求补充证据分别展示，避免把 Heavy 后来知道的内容显示为 Light 当时已经知道。
 
-这些是后续实现需要覆盖的接口变化。本次文档整理不修改 schema、运行配置、旧模块启停状态或存储结构。
+这些是后续实现需要覆盖的接口变化。输入部分已按上述公共接口接入；通用输出、Memory 媒体召回及对应检视仍按本节目标实施。
 
 ## 验收与已知限制
 

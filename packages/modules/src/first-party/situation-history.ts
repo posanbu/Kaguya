@@ -1,3 +1,8 @@
+/**
+ * 功能概述：在 situation 冻结时选取原生历史及实际工具结果，保持 call/result 成对。
+ * 同一 completed 的调用结果受同一登记上界约束；未知结果保留，旧闭合片段采用有界尾部。
+ * Heavy 消费这些不可变 ID，不在下一次模型 dispatch 时另行读取新的事实。
+ */
 import { defineInformationSelector } from "@kaguya/sdk";
 import type { DeepReadonly, InformationAtom } from "@kaguya/schema";
 
@@ -28,6 +33,18 @@ export const situationHistorySelector = defineInformationSelector({
     }
     add(completed);
     for (const atom of completed) {
+      if (atom.payload.generationKind === "tool-calls")
+        add(
+          await ledger.find({
+            kinds: ["agent.heavy.tool.result.v1"],
+            payloadContains: {
+              modelCompletedInformationId: atom.informationId,
+            },
+            throughInformationId: sourceAtom.informationId,
+            registrationOrder: true,
+            limit: 128,
+          }),
+        );
       if (
         (atom.payload.output as { action?: string } | undefined)?.action ===
         "recall"
@@ -200,6 +217,21 @@ export const situationHistorySelector = defineInformationSelector({
             if (part?.type === "tool-call") calls.add(part.toolCallId);
             if (part?.type === "tool-result") calls.delete(part.toolCallId);
           }
+      const toolResults = [...selected.values()].filter(
+        (a) =>
+          a.kind === "agent.heavy.tool.result.v1" &&
+          a.payload.modelCompletedInformationId === result.informationId,
+      );
+      for (const r of toolResults) calls.delete(String(r.payload.toolCallId));
+      const toolUnconfirmed = toolResults.some(
+        (r) =>
+          ["unknown", "partial", "output-budget"].includes(
+            String((r.payload.value as any)?.status),
+          ) ||
+          ["fenced", "unconfirmed"].includes(
+            String((r.payload.value as any)?.environmentValidation),
+          ),
+      );
       const recall =
         (result.payload.output as { action?: string } | undefined)?.action ===
         "recall";
@@ -226,7 +258,8 @@ export const situationHistorySelector = defineInformationSelector({
         : !terminal ||
           terminal.kind.endsWith(".waiting") ||
           receipt?.payload.outcome === "unknown" ||
-          calls.size > 0;
+          calls.size > 0 ||
+          toolUnconfirmed;
       if (index < completed.length - 64 && !unresolved) continue;
       const contextId = (
         source?.payload.turn as { contextInformationId?: string } | undefined
@@ -243,6 +276,7 @@ export const situationHistorySelector = defineInformationSelector({
           retained.add(background.informationId);
       for (const id of [
         result.informationId,
+        ...toolResults.map((a) => a.informationId),
         recallRequest?.informationId,
         recallResult?.informationId,
         source?.informationId,

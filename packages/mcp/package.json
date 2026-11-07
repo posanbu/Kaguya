@@ -1,0 +1,31 @@
+{
+  "name": "@kaguya/mcp",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/synthetic-fixture.d.ts",
+      "default": "./dist/synthetic-fixture.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "@kaguya/config": "workspace:*",
+    "@kaguya/runtime": "workspace:*",
+    "@kaguya/schema": "workspace:*",
+    "@kaguya/sdk": "workspace:*",
+    "@modelcontextprotocol/client": "2.3.1",
+    "ajv": "8.20.0"
+  },
+  "devDependencies": {
+    "@kaguya/database": "workspace:*",
+    "@kaguya/engine": "workspace:*"
+  }
+}

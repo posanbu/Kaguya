@@ -1,11 +1,13 @@
 import { lifecycleStateInformationKind } from "../lifecycle/activity.js";
 /**
  * 功能概述：关注租约后台生命周期，消费 Router 的直接开启与回合终态。
- * focusStateSelector 从账本限定 scope 读取最新租约和终态；调度以 grant ID 幂等，重启由 durable delivery 恢复。
+ * focusStateSelector 在旧 scope 索引内核验完整 scene 读取最新租约和终态；活动续租键绑定原 grant 身份；调度以 grant ID 幂等，重启由 durable delivery 恢复。
  * 成功投递对应的 turn.completed 才续租；silent/failed 关闭本轮所用代际；wait 保留到自然到期。
  * 到期事实先持久化再确认 Scheduler，任一步重试均不重复续租或关闭更新的 grant；日志只记录元数据。
  * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
  */
+import { resolveObservationAddress } from "../lifecycle/observation-scene.js";
+import { findSceneFacts } from "./scene-query.js";
 import type { JsonObject } from "@kaguya/schema";
 import {
   type InformationKindDefinition,
@@ -89,7 +91,12 @@ export const focusStateSelector = defineInformationSelector({
             )?.scopeKey
           : undefined),
     );
-    const grants = await ledger.find({
+    const address = await resolveObservationAddress(
+      candidate ?? turns[0] ?? sourceAtom,
+      async (id) => (await ledger.find({ informationIds: [id], limit: 1 }))[0],
+    );
+    if (!address) return turns.map((a) => a.informationId);
+    const grants = await findSceneFacts(ledger, address, {
       kinds: [focusOpened.kind, focusRenewed.kind],
       payloadContains: { scopeKey },
       registrationOrder: true,
@@ -129,7 +136,7 @@ export function createRouterFocusSubscriptions(
           Date.parse(String(grant.payload.startedAt));
         await context.registerOnce(
           "agent.router.focus.activity",
-          `${scopeKey}:${at}`,
+          `${grant.informationId}:${at}`,
           focusRenewed,
           {
             payload: {

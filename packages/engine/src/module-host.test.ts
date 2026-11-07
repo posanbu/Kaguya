@@ -1270,6 +1270,104 @@ describe("ModuleHost", () => {
     await host.stop();
   });
 
+  it("only passes through the source atom's direct cause", async () => {
+    const intermediateKind = defineInformationKind({
+      kind: "acme.message.intermediate",
+      displayName: "Acme Message Intermediate",
+      description: "A transparent processing stage for causal passthrough.",
+      payloadSchema: z.object({ text: z.string() }).strict(),
+      references: {
+        "core:caused-by": {
+          required: true,
+          multiple: false,
+          targetKinds: [inboundKind.kind],
+        },
+        "core:context": {
+          required: true,
+          multiple: false,
+          targetKinds: [contextKind.kind],
+        },
+      },
+      log: { enabled: false },
+    });
+    const { core } = createCore([intermediateKind]);
+    await core.start();
+    const context = await appendContext(core);
+    const outputs: DeepReadonly<InformationAtom>[] = [];
+    const rejections: unknown[] = [];
+    const module = defineInformationModule({
+      manifest: {
+        protocolVersion: 1,
+        summary: "Test causal passthrough module.",
+        moduleVersion: "1.0.0",
+        selectors: [],
+        promptRenderers: [],
+        requires: [],
+        provides: [],
+        definitionId: "acme.causal-passthrough",
+        displayName: "Causal passthrough",
+        description: "Exercises the constrained transparent processor API.",
+        settingsSchema: z.object({}).strict(),
+        consumes: [intermediateKind],
+        produces: [outputKind],
+      },
+      create: () => ({
+        provisions: [],
+        subscriptions: [
+          onInformation(
+            intermediateKind,
+            { subscriptionId: "causal-passthrough", delivery: "live" },
+            async (atom, handlerContext) => {
+              const directCause = atom.references.find(
+                ({ relation }) => relation === "core:caused-by",
+              )!.informationId;
+              outputs.push(
+                await handlerContext.register(outputKind, {
+                  causedByInformationId: directCause,
+                  payload: { text: atom.payload.text },
+                }),
+              );
+              try {
+                await handlerContext.register(outputKind, {
+                  causedByInformationId: context.informationId,
+                  payload: { text: "blocked" },
+                });
+              } catch (error) {
+                rejections.push(error);
+              }
+            },
+          ),
+        ],
+      }),
+    });
+    const host = await startHost(module, core);
+    const inbound = await core.register(
+      inboundKind,
+      registration({ text: "moon" }, context),
+    );
+    await core.register(intermediateKind, {
+      occurredAt: "2026-09-03T00:00:01.000Z",
+      source: "core:test",
+      payload: { text: "moon" },
+      references: [
+        { relation: "core:caused-by", informationId: inbound.informationId },
+        { relation: "core:context", informationId: context.informationId },
+      ],
+    });
+
+    expect(outputs[0]?.references).toContainEqual({
+      relation: "core:caused-by",
+      informationId: inbound.informationId,
+    });
+    expect(rejections).toEqual([
+      expect.objectContaining({
+        message:
+          "Module causal passthrough must use the source atom's direct cause",
+      }),
+    ]);
+    await host.stop();
+  });
+
   it("rejects a structural subscription with a different manifest definition", async () => {
     const { core } = createCore();
     await core.start();

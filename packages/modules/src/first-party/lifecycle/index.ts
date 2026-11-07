@@ -1,12 +1,15 @@
 /**
+ * 延期调度保存完整 scene 地址，恢复仍兼容沿引用解析旧调度。
  * 功能概述：统一 Lifecycle 的节拍、活动、睡眠和观察恢复，保留旧持久订阅身份。
  * 主要职责：createLifecycleModule 组合观察及睡眠实例；update 记录活动并管理定时器。
  * lifecycleSettingsSchema 约束时间预算；defer 处理登记持久复查，启动和到期调用 recoverObservations。
  * 代码库关系：Runtime 装配本模块，Scheduler 提供 one-shot，数据库 observationCapability 保存独立快照与进度。
  * 输入输出与副作用：追加 Kind 与调度事实，不调用模型或平台；延期不确认读取，宿主负责重试与关闭。
+ * inspection 的 schedules 视图声明真实 one-shot 调度事实，供现有工作台按同一 atoms API 查询；不改变调度行为。
  */
 import {
   recoverySourcesSelector,
+  recoveryOwnersSelector,
   recoverObservations,
 } from "./observation-recovery.js";
 import { observationCapability, defineInformationSelector } from "@kaguya/sdk";
@@ -196,6 +199,27 @@ export function createLifecycleModule(options: { timeZone: string }) {
           },
           ...firstPartyInspection["agent.attention.arousal"]!.views,
           ...firstPartyInspection["agent.heartbeat.short"]!.views,
+          {
+            id: "schedules",
+            title: "调度事实",
+            description:
+              "持久 one-shot 的预约、到期、完成、替代与失败；历史事实不代表当前仍待执行。",
+            kinds: [
+              "core.schedule.one-shot.requested",
+              "core.schedule.one-shot.due",
+              "core.schedule.one-shot.fired",
+              "core.schedule.one-shot.superseded",
+              "core.schedule.one-shot.failed",
+            ],
+            fields: [
+              { path: "operationKey", label: "调度操作" },
+              { path: "activation.instanceId", label: "归属实例" },
+              { path: "dueAt", label: "预约时间" },
+              { path: "scheduleInformationId", label: "预约来源" },
+              { path: "deliveredAt", label: "实际交付时间" },
+              { path: "failureKind", label: "失败类别" },
+            ],
+          },
         ],
       },
       consumes: unique([
@@ -217,6 +241,7 @@ export function createLifecycleModule(options: { timeZone: string }) {
       ]),
       selectors: unique([
         recoverySourcesSelector,
+        recoveryOwnersSelector,
         deferredCandidateSelector,
         recoveryScheduleSelector,
         ...sleep.manifest.selectors!,
@@ -452,7 +477,15 @@ export function createLifecycleModule(options: { timeZone: string }) {
               operationKey: `observation-defer:${atom.informationId}`,
               sourceInformationId: atom.informationId,
               dueAt,
-              input: { purpose: "observation-recheck", scopeKey: p.scopeKey },
+              input: {
+                purpose: "observation-recheck",
+                scopeKey: p.scopeKey,
+                sceneAddress: {
+                  platform: p.platform,
+                  adapterId: p.adapterId,
+                  destination: p.destination,
+                },
+              },
               activation: config.activation,
             });
             const access = ctx.use(observationCapability);

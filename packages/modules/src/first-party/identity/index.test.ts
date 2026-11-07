@@ -1,7 +1,7 @@
 /**
  * 功能概述：验证 Identity 在 Web 会话连续性和匿名身份边界之间的契约。
  * 主要职责：内存 registerOnce/commitTerminal 替身复用命名槽，直接运行 identityModule 的真实入站 handler；
- * 断言同会话复用范围、不同会话及适配器隔离、旧 Web 逐条独立、QQ canonical 身份保持不变。
+ * 断言同会话复用范围、不同会话及适配器隔离、旧 Web 逐条独立、并发重放和 QQ canonical 身份。
  * 代码库关系：使用 information-kinds 的真实载荷 schema；持久化槽原子性由 Core 测试负责。
  * 输入输出与副作用：仅生成合成原子和内存槽，不访问数据库、不启动 Runner，也不使用轮询或固定等待。
  */
@@ -210,4 +210,51 @@ it("preserves per-inbound scopes for legacy Web and canonical identities for QQ"
   expect(qqSecond.payload).toEqual(qqFirst.payload);
   expect(f.all(personEntityInformationKind.kind)).toHaveLength(1);
   expect(f.all(platformAccountEntityInformationKind.kind)).toHaveLength(1);
+});
+
+it("isolates canonical scopes and accounts across platform, adapter and destination", async () => {
+  const f = await fixture();
+  const group = { kind: "group" as const, groupId: "one" };
+  const [first, repeated, otherGroup, direct, adapter, platform] =
+    await Promise.all([
+      f.inbound("one", group, "qq", "main"),
+      f.inbound("two", group, "qq", "main"),
+      f.inbound("three", { kind: "group", groupId: "two" }, "qq", "main"),
+      f.inbound(
+        "four",
+        { kind: "private", userId: "same-sender" },
+        "qq",
+        "main",
+      ),
+      f.inbound("five", group, "qq", "other"),
+      f.inbound("six", group, "other", "main"),
+    ]);
+  expect(first.payload.scopeInformationId).toBe(
+    repeated.payload.scopeInformationId,
+  );
+  expect(
+    new Set(
+      [first, otherGroup, direct, adapter, platform].map(
+        (x) => x.payload.scopeInformationId,
+      ),
+    ).size,
+  ).toBe(5);
+  expect(first.payload.personInformationId).toBe(
+    otherGroup.payload.personInformationId,
+  );
+  expect(first.payload.personInformationId).toBe(
+    direct.payload.personInformationId,
+  );
+  expect(first.payload.personInformationId).not.toBe(
+    adapter.payload.personInformationId,
+  );
+  expect(first.payload.personInformationId).not.toBe(
+    platform.payload.personInformationId,
+  );
+  expect(f.all(personEntityInformationKind.kind)).toHaveLength(3);
+  expect(f.all(platformAccountBindingInformationKind.kind)).toHaveLength(3);
+  const terminals = await Promise.all(
+    Array.from({ length: 8 }, () => f.inbound("one", group, "qq", "main")),
+  );
+  expect(terminals.every((x) => x === first)).toBe(true);
 });

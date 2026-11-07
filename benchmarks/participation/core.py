@@ -3,7 +3,8 @@
 主要职责：load_corpus 校验事件、配置、覆盖和去重；Corpus.visible/snapshot 恢复
 截点的同群消息与撤回；continuous_end/label 处理覆盖缺口、窗口和等待时间；
 prepare_samples 先按连续时间块限制窗口，再生成事件及定时截点。
-MemoryAdapter/EmptyMemory 定义仅接收旧历史、群范围和来源水位的离线记忆边界；
+MemoryAdapter/EmptyMemory 定义仅接收旧历史、群范围和来源水位的离线记忆边界，
+召回证据只能引用该前缀内尚未撤回的记录，每个样本复制 checkpoint 与证据以冻结结果；
 validate_prediction 校验 ParticipantPolicy 的双窗口概率。features 只从历史前缀
 提取目标参与、群活跃度和直接寻址信息。所有时间采用 UTC 整数微秒。
 代码库关系：bench.py 调用本模块；baseline.py 仅消费已冻结输入；不接入生产
@@ -323,13 +324,13 @@ def prepare_samples(corpus: Corpus, source_hash: str, config_hash: str,
                 if checkpoint.get("scope") != scope or checkpoint.get("sourceWatermark") != watermark:
                     raise ValueError("memory checkpoint scope or source watermark mismatch")
                 evidence = adapter.recall(copy.deepcopy(checkpoint), user)
-                eligible = {m["recordId"] for m in earlier}
+                eligible = {m["recordId"] for m in earlier if not m["retracted"]}
                 if not isinstance(evidence, list) or any(
                     not isinstance(e, dict) or not isinstance(e.get("sourceIds"), list) or not e["sourceIds"] or
                     any(not isinstance(s, str) for s in e["sourceIds"]) or
                     not set(e["sourceIds"]).issubset(eligible) for e in evidence
                 ):
-                    raise ValueError("memory evidence must cite earlier same-scope prefix records")
+                    raise ValueError("memory evidence must cite unretracted earlier same-scope prefix records")
                 for message in recent:
                     message["isTarget"] = message["senderId"] == user
                     message["mentionsTarget"] = user in message["mentions"]
@@ -339,7 +340,7 @@ def prepare_samples(corpus: Corpus, source_hash: str, config_hash: str,
                                    "scope", "targetUser", "blockId", "cutoff", "sourceWatermark", "cutoffKind")},
                                "opportunityKind": "continuation" if snapshot and snapshot[-1]["senderId"] == user else "joining",
                                "recentMessages": recent, "features": features(snapshot, user, cutoff),
-                               "memoryCheckpoint": checkpoint, "memoryEvidence": evidence})
+                               "memoryCheckpoint": copy.deepcopy(checkpoint), "memoryEvidence": copy.deepcopy(evidence)})
                 labels.append({"id": sample_id, **corpus.label(scope, user, cutoff, watermark)})
     if not inputs:
         raise ValueError("no eligible cutoffs; blocks must leave room for the 120-second window")

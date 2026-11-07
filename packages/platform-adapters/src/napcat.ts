@@ -26,6 +26,7 @@ import type {
   PlatformDeliveryReceipt,
   PlatformMessageTarget,
   PlatformOutboundTransport,
+  PlatformOutboundMetadata,
 } from "./types.js";
 import {
   buildOneBotSendAction,
@@ -170,14 +171,16 @@ export class NapCatActionClient
   async sendMessage(
     target: PlatformMessageTarget,
     message: OutboundMessageContent,
+    metadata?: PlatformOutboundMetadata,
   ): Promise<PlatformDeliveryReceipt> {
     const echo = this.options.nextEcho();
-    const request = buildOneBotSendAction(target, message, echo);
+    const request = buildOneBotSendAction(target, message, echo, metadata);
     const receipt = new Promise<PlatformDeliveryReceipt>((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(echo);
         resolve({
           ok: false,
+          outcome: "unknown",
           adapterId: this.options.adapterId,
           platform: "qq",
           target,
@@ -229,6 +232,7 @@ export class NapCatActionClient
       const platformMessageId = extractMessageId(body.data);
       pending.resolve({
         ok: true,
+        outcome: "delivered",
         adapterId: this.options.adapterId,
         platform: "qq",
         target: pending.target,
@@ -240,6 +244,7 @@ export class NapCatActionClient
 
     pending.resolve({
       ok: false,
+      outcome: "unknown",
       adapterId: this.options.adapterId,
       platform: "qq",
       target: pending.target,
@@ -254,6 +259,7 @@ export class NapCatActionClient
       clearTimeout(pending.timer);
       pending.resolve({
         ok: false,
+        outcome: "unknown",
         adapterId: this.options.adapterId,
         platform: "qq",
         target: pending.target,

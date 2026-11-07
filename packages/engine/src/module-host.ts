@@ -761,6 +761,19 @@ export class ModuleHost {
         throw new Error(
           "Information module cannot override core causal references",
         );
+      const causedByInformationId =
+        input.causedByInformationId ?? sourceAtom.informationId;
+      if (
+        input.causedByInformationId !== undefined &&
+        !sourceAtom.references.some(
+          (reference) =>
+            reference.relation === "core:caused-by" &&
+            reference.informationId === input.causedByInformationId,
+        )
+      )
+        throw new Error(
+          "Module causal passthrough must use the source atom's direct cause",
+        );
       if (
         input.contextInformationId !== undefined &&
         !selectedContexts.has(input.contextInformationId)
@@ -786,7 +799,7 @@ export class ModuleHost {
         references: [
           {
             relation: "core:caused-by",
-            informationId: sourceAtom.informationId,
+            informationId: causedByInformationId,
           },
           ...inheritedContext,
           ...custom,

@@ -1,10 +1,13 @@
 /**
  * 功能概述：Router 的账本水合与分页查询边界，从在线编排入口提取。
+ * 最新 claim 与 Focus 在旧索引内分页，并按候选来源核验 scene，避免另一场景的最新记录遮挡本场景历史。
  * 主要职责：hydrateCandidate、candidatesForClaims、related 各自维护候选、claim、身份和终态之间的关系。
  * 代码库关系：index.ts 负责推进与提交，本文件只读取 Selector Ledger 并返回事实，不写数据库；外部 Information 协议保持不变。
  */
+import { findSceneFacts } from "./scene-query.js";
 import { focusOpened, focusRenewed } from "../router/focus-facts.js";
 import {
+  type SceneAddress,
   type DeepReadonly,
   type InformationAtom,
   type InformationId,
@@ -89,7 +92,7 @@ export async function hydrateCandidate(
   );
   const scopeKey = (candidate.payload as any).scopeKey;
   const focusGrants = remember(
-    await ledger.find({
+    await findSceneFacts(ledger, candidate.payload as unknown as SceneAddress, {
       kinds: [focusOpened.kind, focusRenewed.kind],
       payloadContains: { scopeKey },
       order: "desc",
@@ -107,7 +110,7 @@ export async function hydrateCandidate(
       }),
     );
   const claims = remember(
-    await ledger.find({
+    await findSceneFacts(ledger, candidate.payload as unknown as SceneAddress, {
       kinds: [turnClaimedInformationKind.kind],
       scopeKey,
       registrationOrder: true,

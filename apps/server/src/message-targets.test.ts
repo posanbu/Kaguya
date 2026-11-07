@@ -3,40 +3,49 @@
  * 功能概述：使用真实 PGlite/Runtime/Heavy 验证管理端跨会话授权及投递终检。
  * 主要职责：覆盖目录解析、两次确认、注入的授权模板及变量来源、上下文隔离、伪造目的地、断线代次和失败 turn；所有平台 I/O 使用 spy。
  * 代码库关系：正式 composition 提供确定性模型，MessageTargetService 使用假目录，账本保持真实持久化与 durable 消费。
- * 输入输出与副作用：每例独立内存数据库，测试后关闭 Runtime；不调用真实模型或 QQ。
- */
-/**
- * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
- * 功能概述：使用真实 PGlite/Runtime/Heavy 验证管理端跨会话授权及投递终检。
- * 主要职责：覆盖目录解析、两次确认、注入的授权模板及变量来源、上下文隔离、伪造目的地、断线代次和失败 turn；所有平台 I/O 使用 spy。
- * 代码库关系：正式 composition 提供确定性模型，MessageTargetService 使用假目录，账本保持真实持久化与 durable 消费。
- * 输入输出与副作用：每例独立内存数据库，测试后关闭 Runtime；不调用真实模型或 QQ。
+ * 输入输出与副作用：每例独立内存数据库，资源创建后即登记清理，等待持久终态再核对单次发送；不调用真实模型或 QQ。
  */
 import { AdapterHost } from "./adapter-host.js";
 import { Writable } from "node:stream";
+import { randomUUID } from "node:crypto";
 import { createLogger, closeLogger } from "@kaguya/logger";
 import { createMessageComposition } from "@kaguya/composition";
 import { createTestingDatabase } from "@kaguya/database/testing";
 import {
   createFirstPartyModuleConfigDefaults,
   deliveryRequestedInformationKind,
+  messageIntentRequestedInformationKind,
 } from "@kaguya/modules";
 import {
   KaguyaRuntime,
+  MessageTargetService,
   GatewayAllowlist,
   type AuthorizedMessagePromptRenderer,
   type RuntimeCapabilityContext,
 } from "@kaguya/runtime";
-import type { CompiledPrompt } from "@kaguya/schema";
+import type {
+  CompiledPrompt,
+  InformationAtom,
+  InformationId,
+} from "@kaguya/schema";
 import type {
   ReachableTarget,
-  PlatformMessageTarget,
+  PlatformOutboundTransport,
 } from "@kaguya/platform-adapters";
 import { afterEach, expect, it, vi } from "vitest";
 const cleanups: (() => Promise<void>)[] = [];
 const persistedWaitOptions = { timeout: 8000, interval: 20 };
 afterEach(async () => {
-  for (const fn of cleanups.splice(0).reverse()) await fn();
+  const errors: unknown[] = [];
+  for (const fn of cleanups.splice(0).reverse()) {
+    try {
+      await fn();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length)
+    throw new AggregateError(errors, "Target fixture cleanup failed");
 });
 async function fixture(
   outboundRules = ["qq:group:100", "qq:group:300", "qq:private:200"],
@@ -44,6 +53,7 @@ async function fixture(
   authorizedMessagePromptRenderer?: AuthorizedMessagePromptRenderer,
 ) {
   const database = await createTestingDatabase();
+  cleanups.push(() => database.close());
   const logs: string[] = [];
   const stream = new Writable({
     write(chunk, _encoding, callback) {
@@ -56,6 +66,7 @@ async function fixture(
     level: "info",
     stream,
   });
+  cleanups.push(() => closeLogger(logger));
   let generation = "account-a:connection-1";
   let unavailable = false;
   const candidates: ReachableTarget[] = [
@@ -110,12 +121,14 @@ async function fixture(
   });
   const host = new AdapterHost(logger, inboundRules);
   host.finalizeRuntime(runtime);
-  const send = vi.fn(async (target: PlatformMessageTarget) => ({
-    ok: true as const,
-    adapterId: "test",
-    platform: "qq" as const,
-    target,
-  }));
+  const send = vi.fn<PlatformOutboundTransport["sendMessage"]>(
+    async (target) => ({
+      ok: true as const,
+      adapterId: "test",
+      platform: "qq" as const,
+      target,
+    }),
+  );
   runtime.registerTransport({
     adapterId: "test",
     platform: "qq",
@@ -133,12 +146,8 @@ async function fixture(
       }),
     },
   });
+  cleanups.push(() => runtime.close());
   await runtime.start();
-  cleanups.push(async () => {
-    await runtime.close();
-    await database.close();
-    await closeLogger(logger);
-  });
   const atoms = () =>
     database.information.find({
       occurredAfter: "2020-01-01T00:00:00.000Z",
@@ -148,7 +157,10 @@ async function fixture(
   const settle = () =>
     vi.waitFor(
       async () =>
-        expect((await database.information.reliable.health()).pending).toBe(0),
+        expect(await database.information.reliable.health()).toMatchObject({
+          pending: 0,
+          exhausted: 0,
+        }),
       persistedWaitOptions,
     );
   await runtime.submit({
@@ -186,8 +198,8 @@ async function fixture(
       platform: "qq",
       transport: { sendMessage: send },
     });
-    await next.start();
     cleanups.push(() => next.close());
+    await next.start();
     return next;
   };
   return {
@@ -196,6 +208,7 @@ async function fixture(
     restart,
     getCore: () => core,
     runtime,
+    database,
     service: runtime.messageTargets!,
     atoms,
     settle,
@@ -310,22 +323,32 @@ it.each(["100", "200"])(
         status.text,
       ),
     ).toEqual({ status: "confirmed" });
-    await f.settle();
-    expect(f.send).toHaveBeenCalledTimes(1);
+    await vi.waitFor(
+      () => expect(f.send).toHaveBeenCalledTimes(1),
+      persistedWaitOptions,
+    );
     expect(f.send.mock.calls[0]![0]).toEqual(
       id === "100"
         ? { kind: "group", groupId: "100" }
         : { kind: "private", userId: "200" },
     );
-    expect(
-      (await f.atoms()).some(
-        (a) =>
-          a.kind === "agent.router.turn.completed" &&
-          a.payload.candidateInformationId ===
-            (intent.payload.turn as { candidateInformationId: string })
-              .candidateInformationId,
-      ),
-    ).toBe(true);
+    expect(f.send.mock.calls[0]![1]).toEqual({
+      kind: "text",
+      text: status.text,
+    });
+    await vi.waitFor(
+      async () =>
+        expect(
+          (await f.atoms()).some(
+            (a) =>
+              a.kind === "agent.router.turn.completed" &&
+              a.payload.candidateInformationId ===
+                (intent.payload.turn as { candidateInformationId: string })
+                  .candidateInformationId,
+          ),
+        ).toBe(true),
+      persistedWaitOptions,
+    );
     expect(
       await f.service.confirm(
         approved.requestId,
@@ -333,6 +356,8 @@ it.each(["100", "200"])(
         status.text,
       ),
     ).toEqual({ status: "conflict" });
+    await f.settle();
+    expect(f.send).toHaveBeenCalledTimes(1);
   },
   20000,
 );
@@ -614,6 +639,179 @@ it.each(["group", "private"] as const)(
       ),
     ).toBe(true);
     expect(f.send).not.toHaveBeenCalled();
+  },
+  20000,
+);
+
+it.each(["approved", ""])(
+  "binds ordered content confirmation to frozen segments and request (text=%j)",
+  async (text) => {
+    const f = await fixture();
+    // 使用真实 fixture 的 turn/candidate 载荷；独立账本替身只验证授权状态机，不启动第二个 Heavy。
+    const atoms = new Map(
+      (await f.atoms()).map((atom) => [String(atom.informationId), atom]),
+    );
+    const register = async (
+      definition: { kind: string },
+      input: Omit<InformationAtom, "informationId" | "kind">,
+    ) => {
+      const atom = {
+        ...input,
+        kind: definition.kind,
+        informationId: randomUUID() as InformationId,
+      };
+      atoms.set(atom.informationId, atom);
+      return atom;
+    };
+    const core = {
+      register,
+      registerOnce: (
+        _operation: string,
+        _key: string,
+        definition: { kind: string },
+        input: Omit<InformationAtom, "informationId" | "kind">,
+      ) => register(definition, input),
+      find: async () => [],
+      select: async (selector: { selectorId: string }, id: string) => {
+        const atom = atoms.get(id)!;
+        return selector.selectorId === "runtime.target.self"
+          ? [atom]
+          : atom.references
+              .filter((reference) => reference.relation === "core:caused-by")
+              .map((reference) => atoms.get(reference.informationId)!);
+      },
+    } as unknown as RuntimeCapabilityContext["core"];
+    const target = {
+      adapterId: "test",
+      platform: "qq" as const,
+      destination: { kind: "group" as const, groupId: "100" },
+    };
+    const service = new MessageTargetService(
+      core,
+      {
+        listTargets: async () => ({
+          generation: "fixed",
+          candidates: [{ ...target, name: "group" }],
+        }),
+      },
+      new GatewayAllowlist(["qq:group:100"]),
+    );
+    cleanups.push(async () => service.close());
+    const resolved = await service.resolve({ mode: "id", value: "100" });
+    if (!("candidates" in resolved)) throw new Error("missing target");
+    const approved = await service.authorize({
+      reference: resolved.candidates[0]!.reference,
+      sourceTurnContextInformationId: f.turn.informationId,
+      instruction: "send selected content",
+    });
+    if (!("requestId" in approved) || !approved.intentInformationId)
+      throw new Error("missing approval");
+    const intent = atoms.get(approved.intentInformationId)!;
+    const turn = messageIntentRequestedInformationKind.payloadSchema.parse(
+      intent.payload,
+    ).turn;
+    const segments = [
+      ...(text ? [{ kind: "text", text }] : []),
+      { kind: "mediaRef", mediaId: `media:${"a".repeat(64)}` },
+    ];
+    const emptyAssistant = await register(
+      { kind: "core.message.assistant.text" },
+      {
+        occurredAt: new Date().toISOString(),
+        source: "test:authorization",
+        payload: { text: "", source: target, turn },
+        references: [
+          { relation: "core:caused-by", informationId: intent.informationId },
+        ],
+      },
+    );
+    await expect(service.stage(emptyAssistant)).rejects.toThrow(
+      "target-authorization-required",
+    );
+    const assistant = await register(
+      { kind: "core.message.assistant.text" },
+      {
+        occurredAt: new Date().toISOString(),
+        source: "test:authorization",
+        payload: {
+          text,
+          source: target,
+          turn,
+          contentSegments: segments,
+          mediaRequestInformationId: "frozen-model-request",
+        },
+        references: [
+          { relation: "core:caused-by", informationId: intent.informationId },
+          ...intent.references.filter(
+            (reference) => reference.relation === "core:context",
+          ),
+        ],
+      },
+    );
+    expect(await service.stage(assistant)).toBe(false);
+    expect(
+      await service.confirm(approved.requestId, assistant.informationId, text),
+    ).toEqual({ status: "confirmed" });
+    const message = {
+      kind: "content",
+      text,
+      segments,
+      requestInformationId: "frozen-model-request",
+    };
+    const delivery = await register(
+      { kind: "core.delivery.requested" },
+      {
+        occurredAt: new Date().toISOString(),
+        source: "test:output",
+        payload: { ...target, message },
+        references: [
+          {
+            relation: "core:caused-by",
+            informationId: assistant.informationId,
+          },
+        ],
+      },
+    );
+    for (const forgedMessage of [
+      { kind: "text", text },
+      { ...message, text: "tampered" },
+      { ...message, requestInformationId: "different-model-request" },
+      {
+        ...message,
+        segments: [{ kind: "mediaRef", mediaId: `media:${"b".repeat(64)}` }],
+      },
+      { ...message, segments: [] },
+    ]) {
+      expect(
+        await service.validateDelivery({
+          ...delivery,
+          payload: { ...delivery.payload, message: forgedMessage },
+        }),
+      ).toBe(false);
+    }
+    expect(
+      await service.validateDelivery({
+        ...delivery,
+        payload: {
+          ...delivery.payload,
+          destination: { kind: "group", groupId: "300" },
+        },
+      }),
+    ).toBe(false);
+    expect(await service.validateDelivery(delivery)).toBe(true);
+    const duplicate = await register(
+      { kind: delivery.kind },
+      {
+        occurredAt: delivery.occurredAt,
+        source: delivery.source,
+        payload: delivery.payload,
+        references: delivery.references,
+      },
+    );
+    expect(await service.validateDelivery(duplicate)).toBe(false);
+    expect(
+      await service.confirm(approved.requestId, assistant.informationId, text),
+    ).toEqual({ status: "conflict" });
   },
   20000,
 );

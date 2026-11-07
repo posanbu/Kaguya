@@ -1,12 +1,20 @@
 /**
+ * 原生工具完成分支由 Runtime 循环接续，不进入 Heavy 正文投递。
  * Heavy 根据冻结上下文逐段生成正文，每段成功投递后才创建下一步。
  * 接续绕过参与判断，保留原意图、原生模型历史、实际回执和新增消息。
  * 持久化 one-shot 计入模型耗时后安排短暂停顿，独立步骤键贯穿草稿、助手消息和投递。
+ * 有序媒体输出仅可引用本次请求的冻结素材；纯媒体可使用空正文，来源请求贯穿草稿和逐段投递。
  * QQ 可经独立表情处理器装饰。全部出站沿用宿主授权，跨会话批准仍仅发送一次。
+ * release 在升级恢复时先检查原助手已有的旧版投递，任何既有投递都阻止重新创建输出。
+ * 已生成待发段超过五分钟的恢复窗口后关闭剩余表达；定时器重放不发布过期正文。
  * 失败、预算受阻或投递未知交给 Router 记录，不能当作自然结束。
  */
 import type { NativeMemoryAccess } from "@kaguya/memory";
-import { nativeMemorySnapshotSchema } from "@kaguya/schema";
+import {
+  nativeMemorySnapshotSchema,
+  outboundContentSegmentsSchema,
+  validateOutboundMediaSelection,
+} from "@kaguya/schema";
 import {
   memoryRecallRequested,
   memoryRecallCompleted,
@@ -23,6 +31,7 @@ import {
 } from "@kaguya/scheduler";
 import {
   pacingSchema,
+  pendingSpeechExpiryMs,
   speechReadyAt,
   speechReadyInformationKind,
   speechStepRequestedInformationKind,
@@ -66,6 +75,8 @@ import {
 
 import {
   assistantTextInformationKind,
+  authorizedAssistantOutputInformationKind,
+  messageOutputProcessorReady,
   deliveryRequestedInformationKind,
   inboundTextInformationKind,
   messageIntentRequestedInformationKind,
@@ -130,6 +141,24 @@ export const messageResponseWithoutRecallSchema = z.union([
   z
     .object({
       action: z.literal("message"),
+      text: z.string().max(16000),
+      contentSegments: outboundContentSegmentsSchema,
+      continuation: z.string().trim().min(1).nullable().exactOptional(),
+    })
+    .strict()
+    .refine(
+      (response) =>
+        response.contentSegments
+          .filter((part) => part.kind === "text")
+          .map((part) => part.text)
+          .join("") === response.text &&
+        (response.text.trim().length > 0 ||
+          response.contentSegments.some((part) => part.kind === "mediaRef")),
+      "Message text must match nonempty content segments",
+    ),
+  z
+    .object({
+      action: z.literal("message"),
       text: z.string().trim().min(1),
       continuation: z.string().trim().min(1).nullable(),
     })
@@ -174,6 +203,11 @@ type ModelTaskResultIdentity = {
 export type ModelTaskResult<TOutput> = ModelTaskResultIdentity &
   (
     | { readonly status: "completed"; readonly output: TOutput }
+    | {
+        readonly status: "tool-calls";
+        readonly native: import("@kaguya/schema").NativeResponse;
+        readonly calls: import("@kaguya/schema").NativeToolCall[];
+      }
     | {
         readonly status: "failed";
         readonly error: {
@@ -274,40 +308,21 @@ export function createHeavyModule<
         .stage(assistant))
     )
       return;
+    if (
+      (await context.select(legacyAssistantDeliverySelector)).some(
+        (atom) => atom.kind === deliveryRequestedInformationKind.kind,
+      )
+    )
+      return;
     await context.registerOnce(
-      "kaguya.heavy.delivery.v1",
+      "kaguya.heavy.authorized-output.v1",
       `${context.instanceId}:${assistant.informationId}`,
-      deliveryRequestedInformationKind,
+      authorizedAssistantOutputInformationKind,
       {
-        payload: {
-          adapterId: assistantPayload.source.adapterId,
-          platform: assistantPayload.source.platform,
-          destination: assistantPayload.source.destination,
-          message: {
-            kind: "text",
-            text: assistantPayload.text,
-            ...(assistantPayload.expression
-              ? { expression: assistantPayload.expression }
-              : {}),
-          },
-          turn: assistantPayload.turn,
-          ...(assistantPayload.speech
-            ? { speech: assistantPayload.speech }
-            : {}),
-        },
-        references:
-          assistantPayload.turn == null
-            ? []
-            : [
-                {
-                  relation: "agent:turn-claim" as const,
-                  informationId: assistantPayload.turn.claimInformationId,
-                },
-                {
-                  relation: "agent:turn-candidate" as const,
-                  informationId: assistantPayload.turn.candidateInformationId,
-                },
-              ],
+        ...(context.sourceAtom.informationId === assistant.informationId
+          ? {}
+          : { causedByInformationId: assistant.informationId }),
+        payload: assistantPayload,
       },
     );
   }
@@ -324,6 +339,7 @@ export function createHeavyModule<
         completedMessageSelector,
         recallContextSelector,
         confirmedAssistantSelector,
+        legacyAssistantDeliverySelector,
         speechStepContextSelector,
         speechDueSelector,
         speechDeliveredSelector,
@@ -335,6 +351,7 @@ export function createHeavyModule<
         assistantHistoryPromptRenderer,
       ],
       requires: [
+        messageOutputProcessorReady,
         ...(dependencies.draftProcessingEnabled
           ? [messageDraftProcessorReady]
           : []),
@@ -375,6 +392,7 @@ export function createHeavyModule<
           : []),
       ],
       produces: [
+        authorizedAssistantOutputInformationKind,
         memoryRecallRequested,
         memoryRecallCompleted,
         heavyResponseSilentInformationKind,
@@ -382,7 +400,6 @@ export function createHeavyModule<
           ? [messageDraftInformationKind]
           : []),
         assistantTextInformationKind,
-        deliveryRequestedInformationKind,
         speechStepRequestedInformationKind,
         speechObservedInformationKind,
         speechReadyInformationKind,
@@ -575,6 +592,8 @@ export function createHeavyModule<
               completed.payload.selectionPolicy.tier !== "heavy"
             )
               return;
+            // 原生工具步骤由宿主循环消费，只有最终正文进入现有投递/recall 路径。
+            if (completed.payload.generationKind === "tool-calls") return;
             const selected = await context.select(completedMessageSelector);
             const modelSource = selected.find(
               (a) => a.informationId === completed.payload.sourceInformationId,
@@ -712,8 +731,22 @@ export function createHeavyModule<
             const requested = selected.find(
               (a) => a.kind === "core.model.task.requested",
             );
+            const contentSegments =
+              "contentSegments" in response
+                ? outboundContentSegmentsSchema.parse(response.contentSegments)
+                : undefined;
+            if (contentSegments) {
+              if (!requested) throw new Error("MEDIA_OUTPUT_REQUEST_MISSING");
+              validateOutboundMediaSelection(
+                response.text,
+                contentSegments,
+                requested.payload.messages,
+              );
+            }
             const speech =
-              "continuation" in response && requested
+              "continuation" in response &&
+              response.continuation !== undefined &&
+              requested
                 ? {
                     intentInformationId: message.informationId,
                     stepInformationId: source.informationId,
@@ -743,6 +776,12 @@ export function createHeavyModule<
               {
                 payload: {
                   text: response.text,
+                  ...(contentSegments
+                    ? {
+                        contentSegments,
+                        mediaRequestInformationId: requested!.informationId,
+                      }
+                    : {}),
                   source: message.payload.target,
                   originatingModuleInstanceId: context.instanceId,
                   turn: message.payload.turn,
@@ -794,7 +833,11 @@ export function createHeavyModule<
                 "kaguya.heavy.ready-assistant",
                 ready.informationId,
                 assistantTextInformationKind,
-                { payload: ready.payload },
+                {
+                  payload: assistantTextInformationKind.payloadSchema.parse(
+                    ready.payload,
+                  ),
+                },
               );
           },
         ),
@@ -815,6 +858,63 @@ export function createHeavyModule<
               (a) => a.kind === "core.runtime.context",
             )!;
             if ((await context.select(speechClosedSelector)).length) {
+              await context.use(oneShotScheduleCapability).finish({
+                scheduleInformationId: due.payload.scheduleInformationId,
+                status: "fired",
+              });
+              return;
+            }
+            const payload = speechReadyInformationKind.payloadSchema.parse(
+              ready.payload,
+            );
+            if (
+              payload.speech &&
+              payload.turn &&
+              context.now().getTime() >=
+                Date.parse(payload.speech.readyAt) + pendingSpeechExpiryMs
+            ) {
+              const previous = atoms.find(
+                (atom) =>
+                  atom.informationId === payload.speech!.stepInformationId,
+              );
+              const step =
+                previous?.kind === speechStepRequestedInformationKind.kind
+                  ? speechStepRequestedInformationKind.payloadSchema.parse(
+                      previous.payload,
+                    )
+                  : undefined;
+              await context.registerOnce(
+                "kaguya.heavy.expired-speech.v1",
+                ready.informationId,
+                heavyResponseSilentInformationKind,
+                {
+                  contextInformationId: runtime.informationId,
+                  payload: {
+                    intentInformationId: payload.speech.intentInformationId,
+                    turn: payload.turn,
+                    ...(step
+                      ? {
+                          previousDeliveryInformationId:
+                            step.previousDeliveryInformationId,
+                        }
+                      : {}),
+                  },
+                  references: [
+                    {
+                      relation: "core:uses-context",
+                      informationId: payload.speech.intentInformationId,
+                    },
+                    {
+                      relation: "agent:turn-claim",
+                      informationId: payload.turn.claimInformationId,
+                    },
+                    {
+                      relation: "agent:turn-candidate",
+                      informationId: payload.turn.candidateInformationId,
+                    },
+                  ],
+                },
+              );
               await context.use(oneShotScheduleCapability).finish({
                 scheduleInformationId: due.payload.scheduleInformationId,
                 status: "fired",
@@ -1090,25 +1190,27 @@ export function createHeavyModule<
                   const selectedCandidates = candidates.filter((n) =>
                     request.payload.candidateIds.includes(n.id),
                   );
-                  snapshot = await (memory.recall ?? memory.freeze).call(
-                    memory,
-                    {
-                      scope: base.scope,
-                      owners: [
-                        ...new Set([
-                          ...base.owners,
-                          ...selectedCandidates.map((n) => n.metadata.ownerId),
-                        ]),
-                      ],
-                      asOf: base.frozenAt,
-                      people: base.people,
-                      participants: base.participants,
-                      query: request.payload.query,
-                      explicitIds: request.payload.candidateIds.filter((id) =>
-                        candidates.some((n) => n.id === id),
-                      ),
-                    },
-                  );
+                  snapshot = !base.cutoff
+                    ? base
+                    : await (memory.recall ?? memory.freeze).call(memory, {
+                        scope: base.scope,
+                        owners: [
+                          ...new Set([
+                            ...base.owners,
+                            ...selectedCandidates.map(
+                              (n) => n.metadata.ownerId,
+                            ),
+                          ]),
+                        ],
+                        asOf: base.frozenAt,
+                        cutoff: base.cutoff,
+                        people: base.people,
+                        participants: base.participants,
+                        query: request.payload.query,
+                        explicitIds: request.payload.candidateIds.filter((id) =>
+                          candidates.some((n) => n.id === id),
+                        ),
+                      });
                   status = "completed";
                 } catch {
                   status = "failed";
@@ -1310,5 +1412,75 @@ const confirmedAssistantSelector = defineInformationSelector({
     )
       throw new Error("target-authorization-required");
     return [atoms[0]!.informationId];
+  },
+});
+
+/** 升级前直接或经人工确认提交的投递保持唯一身份；不能因更换输出处理器重复发送。 */
+export const legacyAssistantDeliverySelector = defineInformationSelector({
+  selectorId: "kaguya.heavy.legacy-assistant-delivery",
+  select: async ({ sourceAtom, ledger }) => {
+    let assistantId = sourceAtom.informationId;
+    if (sourceAtom.kind !== assistantTextInformationKind.kind) {
+      const confirmation = messageConfirmedInformationKind.payloadSchema.parse(
+        sourceAtom.payload,
+      );
+      // Selector 的读取许可各自独立；必须沿当前确认事实重新加载助手，不能沿用另一 selector 的许可。
+      const assistants = await ledger.related({
+        from: [sourceAtom.informationId],
+        relation: "core:caused-by",
+        direction: "outgoing",
+        limit: 2,
+      });
+      if (
+        assistants.length !== 1 ||
+        assistants[0]!.kind !== assistantTextInformationKind.kind ||
+        assistants[0]!.informationId !== confirmation.assistantInformationId
+      )
+        throw new Error("target-authorization-required");
+      assistantId = assistants[0]!.informationId;
+    }
+    const deliveryFrom = async (causeId: string) => {
+      for (let offset = 0; ; offset += 1000) {
+        const page = await ledger.related({
+          from: [causeId],
+          relation: "core:caused-by",
+          direction: "incoming",
+          offset,
+          limit: 1000,
+        });
+        const existing = page.find(
+          (atom) => atom.kind === deliveryRequestedInformationKind.kind,
+        );
+        if (existing) return existing.informationId;
+        if (page.length < 1000) return undefined;
+      }
+    };
+    for (let offset = 0; ; offset += 1000) {
+      const page = await ledger.related({
+        from: [assistantId],
+        relation: "core:caused-by",
+        direction: "incoming",
+        offset,
+        limit: 1000,
+      });
+      const existing = page.find(
+        (atom) => atom.kind === deliveryRequestedInformationKind.kind,
+      );
+      if (existing) return [existing.informationId];
+      // 旧 confirmed handler 沿默认 caused-by 生成delivery；只跟随真正指向本assistant的确认事实。
+      for (const atom of page) {
+        if (atom.kind !== messageConfirmedInformationKind.kind) continue;
+        const confirmation =
+          messageConfirmedInformationKind.payloadSchema.safeParse(atom.payload);
+        if (
+          !confirmation.success ||
+          confirmation.data.assistantInformationId !== assistantId
+        )
+          continue;
+        const deliveryId = await deliveryFrom(atom.informationId);
+        if (deliveryId) return [deliveryId];
+      }
+      if (page.length < 1000) return [];
+    }
   },
 });

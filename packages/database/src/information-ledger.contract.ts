@@ -1,6 +1,6 @@
 /**
  * 功能概述：此测试模块把 information ledger 的持久化行为定义为可由多个数据库后端注册的契约，防止 PGlite 与真实 PostgreSQL 的语义漂移。
- * 主要职责：`defineInformationLedgerContract` 接收显示名称和 `KaguyaDatabase` factory，注册 Kind 的新增登记与历史保留、原子追加、引用校验、读取排序与 outbox 投影的共享行为测试。
+ * 主要职责：`defineInformationLedgerContract` 接收显示名称和 `KaguyaDatabase` factory，注册 Kind 的新增登记与历史保留、原子追加、引用校验、读取排序、批量重复 ID/缺失项及引用序列与 outbox 投影的共享行为测试。
  * 代码库关系：`information-repository.test.ts` 用 PGlite factory 注册；`postgres-information-ledger.test.ts` 用 schema 隔离的 PostgreSQL factory 注册；仓储、迁移和 runner 是被测的生产边界。
  * 输入输出与副作用：每个用例迁移独立数据库，并在 `afterEach` 关闭它；断言只通过公开数据库 API 与原始 SQL 观察持久化及事务结果。
  */
@@ -601,6 +601,13 @@ export function defineInformationLedgerContract(
           },
         ]);
 
+        const batch = await database.information.getMany([
+          inboundAtom.informationId,
+          secondContext.informationId,
+          inboundAtom.informationId,
+        ]);
+        expect(batch).toEqual([inboundAtom, secondContext, inboundAtom]);
+        expect(Object.isFrozen(batch[0]!.references)).toBe(true);
         expect(
           (await database.information.get(inboundAtom.informationId))
             ?.references,
@@ -1011,7 +1018,7 @@ export function defineInformationLedgerContract(
     );
 
     it(
-      "returns only existing atoms from getMany in caller order",
+      "preserves caller order and duplicates while skipping missing atoms in getMany",
       async () => {
         const database = await createMigratedDatabase();
         await database.information.synchronizeKinds([contextKind.kind]);
@@ -1037,11 +1044,25 @@ export function defineInformationLedgerContract(
           second.informationId,
           informationIdSchema.parse("atom-missing"),
           first.informationId,
+          second.informationId,
         ]);
         expect(results.map((atom) => atom.informationId)).toEqual([
           second.informationId,
           first.informationId,
+          second.informationId,
         ]);
+        expect(results).toEqual([second, first, second]);
+        expect(results.every((atom) => Object.isFrozen(atom))).toBe(true);
+        for (const missingId of ["", ` ${first.informationId} `]) {
+          expect(await database.information.get(missingId)).toBeUndefined();
+          expect(await database.information.getMany([missingId])).toEqual([]);
+        }
+        expect(await database.information.getMany([])).toEqual([]);
+        expect(
+          await database.information.getMany([
+            informationIdSchema.parse("atom-missing"),
+          ]),
+        ).toEqual([]);
       },
       TEST_TIMEOUT,
     );

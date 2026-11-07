@@ -1,4 +1,9 @@
-/** 持久的逐段表达。只在成功投递后冻结下一步，原始请求和已发事实均保持可追溯。 */
+/**
+ * 功能概述：持久化逐段表达、发送节奏与接续上下文，保留原始请求和实际投递事实。
+ * speechReadyAt 计算稳定节奏；pendingSpeechExpiryMs 限制已生成待发段的恢复期限。
+ * speechDueSelector 读取待发段、原模型完成、意图和回合证据，供 Heavy 关闭过期待发内容；
+ * 其他 selectors 按冻结来源准备接续和终态检查。本文件不调用模型或平台发送。
+ */
 import {
   compiledPromptSchema,
   z,
@@ -16,6 +21,9 @@ import {
   messageIntentRequestedInformationPayloadSchema,
   turnProvenanceSchema,
 } from "../kinds/message.js";
+
+/** 与消息派发窗口一致；仅针对已生成、等待节奏计时的段，不拒绝旧入站消息。 */
+export const pendingSpeechExpiryMs = 300_000;
 
 export const pacingSchema = z
   .object({
@@ -245,7 +253,29 @@ export const speechDueSelector = defineInformationSelector({
       (r) => r.relation === "core:context",
     )!.informationId;
     await getSpeechAtom(ledger, contextId);
-    return [schedule.informationId, ready.informationId, contextId];
+    const payload = speechReadyInformationKind.payloadSchema.parse(
+      ready.payload,
+    );
+    const evidence =
+      payload.speech && payload.turn
+        ? await getSpeechAtoms(ledger, [
+            ...new Set([
+              payload.speech.completedInformationId,
+              payload.speech.intentInformationId,
+              payload.speech.stepInformationId,
+              payload.turn.claimInformationId,
+              payload.turn.candidateInformationId,
+            ]),
+          ])
+        : [];
+    return [
+      ...new Set([
+        schedule.informationId,
+        ready.informationId,
+        contextId,
+        ...evidence.map((atom) => atom.informationId),
+      ]),
+    ];
   },
 });
 

@@ -10,10 +10,12 @@
  * 代码库关系：App.tsx 处理 history 与锁屏，api.ts 复用 Gateway 认证并用 schema 包验证 DTO；
  * developer.css 定义响应式布局，模块和 Kind 名称完全由 Manifest 提供。
  * 输入输出与副作用：仅 GET 请求、history 导航和用户触发的剪贴板写入；无轮询、编辑或重放；
- * 卸载清理异步任务，同查询刷新保留内容，切换查询/失败时隐藏旧数据，明确显示空结果、分页和图截断。
+ * 卸载清理异步任务，加载/失败时隐藏旧数据，明确显示空结果、分页和图截断。
+ * location 独立携带领域查询参数；严格 pathname 仍交给既有模块/请求路由，不新增顶层入口。
  */
 import { FEATURE_CHANGED_EVENT } from "./feature-api.js";
 import { FlowSummary } from "./FlowSummary.js";
+import { DomainInspection } from "./DomainInspection.js";
 import { ModuleTemplatesSection } from "./ModuleTemplatesSection.js";
 import { ModuleSettingsSection } from "./ModuleSettingsSection.js";
 import { useEffect, useRef, useMemo, useState, type FormEvent } from "react";
@@ -62,11 +64,13 @@ export function DeveloperConsole({
   token,
   page,
   path,
+  location = path,
   navigate,
 }: {
   token: string;
   page: Page;
   path: string;
+  location?: string;
   navigate: (path: string) => void;
 }) {
   const [revision, setRevision] = useState(0);
@@ -116,6 +120,10 @@ export function DeveloperConsole({
               ))}
             </nav>
           </>
+        )}
+        {(new URLSearchParams(location.split("?")[1] ?? "").has("inspect") ||
+          path === "/developer/modules/agent.lifecycle") && (
+          <DomainInspection token={token} location={location} />
         )}
         {page === "modules" ? (
           <ModulePage

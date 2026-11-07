@@ -17,6 +17,18 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  linux-environments:
+    name: Linux environment broker
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Verify broker, durable recovery and kernel peer credentials
+        run: python3 -B -m unittest discover -s scripts/linux-environments -p 'test_*.py'
+      - name: Verify archive ACL across actual Linux UIDs and a replaced pathname
+        run: sudo /usr/bin/python3 -B scripts/linux-environments/check_bundle_linux.py
+
   docs:
     name: documentation
     runs-on: ubuntu-latest

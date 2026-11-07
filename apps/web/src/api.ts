@@ -20,6 +20,7 @@ import {
  * method / URL / Bearer 头 / JSON body，避免把鉴权或隐藏字段交给浏览器猜测。
  * 人工跨会话目标查询与确认请求门面已移除，服务端对应能力不在本文件管理。
  * getInspection 使用共享 DTO schema 校验只读响应，并复用认证、取消与 401 锁屏处理。
+ * 已取消请求的迟到响应不再触发全局401事件，防止旧认证上下文影响当前页面。
  * 主要职责：为 App 及后续 Profile 管理页面提供稳定的 typed API，
  * 同时保留旧的消息与健康检查路径；Profile 请求必须编码 path 参数，
  * Profile 状态要能返回安全的 Registry 元数据，但不能包含任何 secret。
@@ -660,6 +661,8 @@ async function requestJson(
 ): Promise<Response> {
   try {
     const response = await fetchImplementation(path, init);
+    if (init.signal?.aborted)
+      throw new DOMException("Request aborted", "AbortError");
     if (response.status === 401 && hasAuthorizationHeader(init.headers)) {
       globalThis.window?.dispatchEvent(new Event(GATEWAY_UNAUTHORIZED_EVENT));
     }

@@ -4,7 +4,8 @@
 冻结输入，以直接寻址、发言间隔和群活跃度分组，样本不足回退到目标同群统计。
 choose_threshold 在 dev 上最大化 F1，同分选择较高阈值；metrics 实现按相同概率
 整体处理 ties 的 average precision、Brier 和混淆计数。evaluate 固定训练统计与
-dev 阈值后运行 test，预测异常保留为失败；未知标签不冒充负例。
+dev 阈值后运行 test，逐次复制已验证概率，防止候选复用输出对象改写早期样本；
+预测异常保留为失败，未知标签不冒充负例。外部传入的函数单独标识，不冒充统计基线。
 代码库关系：依赖 core.py 的概率及范围契约，由 bench.py 调用。独立预测函数
 可替换，但没有生产 Planner 或外部模型适配器，也不读取环境变量和网络。
 输入输出与副作用：内存输入和报告；预测计时单独返回，不进入确定性内容哈希。
@@ -127,7 +128,9 @@ def summarize(rows: list[dict], labels: dict[str, dict], horizon: str, threshold
     if failures:
         for field in ("averagePrecision", "precision", "recall", "f1", "brierScore"):
             result["metrics"][field] = None
-        result["metrics"].update(samples=len(known), metricReason="prediction_failures")
+        result["metrics"].update(samples=len(known),
+                                 positives=sum(labels[r["id"]]["windows"][horizon]["participates"] for r in known),
+                                 positiveRate=result["positiveRate"], metricReason="prediction_failures")
         # 成功子集的混淆矩阵不可作为包含失败的全量矩阵。
         for field in ("tp", "fp", "fn", "tn"):
             result["metrics"][field] = None
@@ -140,7 +143,8 @@ def evaluate(inputs: list[dict], label_rows: list[dict], minimum: int = 5,
     if len(labels) != len(label_rows) or len({i["id"] for i in inputs}) != len(inputs) or set(labels) != {i["id"] for i in inputs}:
         raise ValueError("input and label IDs must be unique and match exactly")
     policy = HistoricalPolicy(minimum)
-    policy.fit(inputs, labels)
+    if predict is None:
+        policy.fit(inputs, labels)
     predictor = predict if predict is not None else policy.predict
     rows, timings = [], []
     # 所有预测只拿副本，候选既拿不到标签，也不能更改随后评分使用的输入。
@@ -154,7 +158,7 @@ def evaluate(inputs: list[dict], label_rows: list[dict], minimum: int = 5,
             counts, fallback = policy.stats(item)
             row.update(trainingSamples=counts[0], probabilitySource=fallback)
         try:
-            row.update(status="success", probabilities=validate_prediction(predictor(copy.deepcopy(item))))
+            row.update(status="success", probabilities=dict(validate_prediction(predictor(copy.deepcopy(item)))))
         except Exception as error:
             row.update(status="failed", probabilities=None, errorType=type(error).__name__)
         timings.append({"id": item["id"], "predictionSeconds": time.perf_counter() - start})
@@ -176,6 +180,7 @@ def evaluate(inputs: list[dict], label_rows: list[dict], minimum: int = 5,
                 summaries.append({**identity, "split": split, "evaluationRole": role,
                                   **summarize(split_rows, labels, horizon, threshold),
                                   "blocks": sorted({r["blockId"] for r in split_rows})})
-    return {"policy": policy.export(), "thresholds": thresholds, "groups": summaries,
+    policy_metadata = policy.export() if predict is None else {"policy": "provided-callback/v1", "fitSplit": None}
+    return {"policy": policy_metadata, "thresholds": thresholds, "groups": summaries,
             "sampleDependence": "overlapping cutoffs share blockId; no independent-sample inference",
             "delayPrediction": {"available": False, "timeError": None, "observationWindowSeconds": 120}}, rows, {"timings": timings}

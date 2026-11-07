@@ -18,12 +18,14 @@ import { defineModuleCapability } from "./modules.js";
 export const observationManifestSchema = z
   .object({
     version: z.literal(1),
+    proofKind: z.literal("memory-native").optional(),
     runInformationId: informationIdSchema,
     frozenInformationId: informationIdSchema,
     sourceInformationIds: z.array(informationIdSchema),
     knowledgeCutoff: z
       .object({
         informationId: informationIdSchema,
+        memoryPublicationPosition: z.string().regex(/^\d+$/).optional(),
         memoryRevisions: z.array(
           z
             .object({ id: z.string(), revision: z.number().int().positive() })

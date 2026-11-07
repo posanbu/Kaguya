@@ -1,4 +1,5 @@
 /**
+ * 原生 Memory fixture 显式声明合成模型配置身份，恢复与生产路径执行相同的冻结校验。
  * 功能概述：用真实 HTTP 路由、Runtime、正式模块组合和 PGlite 信息账本验证 WebUI 私聊闭环。
  * 主要职责：fixture 仅替换模型供应商 HTTP，保留 Light、Heavy、Web transport 与历史读取；
  * exchange 在同一个显式持久化等待预算内确认回复可读和订阅队列闭合，避免把 202 当成回复完成。
@@ -8,6 +9,12 @@
  * 内存 PGlite，失败路径也按 HTTP、Runtime、数据库顺序关闭。覆盖会话隔离、后续上下文、
  * 游标增量读取、Runtime/reader 重建恢复，以及已生成但未送达的助手消息不得显示。
  */
+import {
+  closeTestResources,
+  createPersistenceWait,
+  expectPersistenceSettled,
+  withModelGateCleanup,
+} from "./test-support/persistence.js";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,7 +25,11 @@ import { createTestingDatabase } from "@kaguya/database/testing";
 import { closeLogger, createLogger } from "@kaguya/logger";
 import { createFirstPartyModuleConfigDefaults } from "@kaguya/modules";
 import { createWebOutboundTransport } from "@kaguya/platform-adapters";
-import { KaguyaRuntime, GatewayAllowlist } from "@kaguya/runtime";
+import {
+  KaguyaRuntime,
+  GatewayAllowlist,
+  nativeToolWireName,
+} from "@kaguya/runtime";
 import type { PlatformOutboundTransport } from "@kaguya/platform-adapters";
 import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -34,10 +45,16 @@ const adapterId = "web.ui.main";
 const durableWait = { timeout: 8_000, interval: 20 };
 // HTTP 历史独立限流为每分钟 120 次；三轮最长等待总计不超过 96 次轮询。
 const historyWait = { timeout: durableWait.timeout, interval: 250 };
+// 多阶段用例包含初始化、生成/投递、重启或 gate 清理；单次等待仍为 8 秒。
+const MULTI_STAGE_TIMEOUT = 30_000;
+// receipt 重放/插话包含 3 次等待和 1 次清理（4×8 秒），另留初始化和 HTTP 余量。
+const GATED_CONTINUATION_TIMEOUT = 45_000;
+// failure → 重放 ack → 收敛共 3×8 秒，另含初次启动和重启。
+const REPLAY_RESTART_TIMEOUT = 40_000;
 const cleanups: (() => Promise<void>)[] = [];
 
 afterEach(async () => {
-  for (const close of cleanups.splice(0).reverse()) await close();
+  await closeTestResources(cleanups);
 }, 15_000);
 
 type ChatHistory = Awaited<
@@ -72,12 +89,14 @@ function testConfig(): ServerConfig {
 
 async function fixture(
   options: {
+    nativeMemoryTools?: boolean;
     registerTransport?: boolean;
     respond?: (prompt: string, index: number) => unknown | Promise<unknown>;
     transport?: PlatformOutboundTransport;
     qq?: boolean;
     expressions?: boolean;
     pacingMs?: number;
+    diagnostics?: () => Record<string, unknown>;
   } = {},
 ) {
   const database = await createTestingDatabase();
@@ -104,11 +123,19 @@ async function fixture(
   });
 
   const composerPrompts: string[] = [];
+  const providerRequests: any[] = [];
+  const waitFor = createPersistenceWait(database, () => ({
+    composerCalls: composerPrompts.length,
+    ...options.diagnostics?.(),
+  }));
+  const settle = (phase = "durable replay settled") =>
+    waitFor(phase, () => expectPersistenceSettled(database));
   const fetch = vi.fn<typeof globalThis.fetch>(async (_url, init) => {
     const request = JSON.parse(String(init?.body)) as {
       model: string;
       messages: unknown[];
     };
+    providerRequests.push(request);
     const prompt = JSON.stringify(request.messages);
     let output: unknown;
     if (prompt.includes("归纳这批真人消息")) {
@@ -138,12 +165,23 @@ async function fixture(
         choices: [
           {
             index: 0,
-            message: {
-              role: "assistant",
-              content:
-                typeof output === "string" ? output : JSON.stringify(output),
-            },
-            finish_reason: "stop",
+            message: (output as any)?.nativeToolCalls
+              ? {
+                  role: "assistant",
+                  content: null,
+                  reasoning_content: "合成工具推理",
+                  tool_calls: (output as any).nativeToolCalls,
+                }
+              : {
+                  role: "assistant",
+                  content:
+                    typeof output === "string"
+                      ? output
+                      : JSON.stringify(output),
+                },
+            finish_reason: (output as any)?.nativeToolCalls
+              ? "tool_calls"
+              : "stop",
           },
         ],
         usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
@@ -166,8 +204,17 @@ async function fixture(
           providerId: "web-test",
           modelId: `web-test-${modelTier}`,
           model: provider.chatModel(`web-test-${modelTier}`),
+          configuration: {
+            adapter: "synthetic-openai-compatible",
+            protocol: "chat-completions",
+            endpoint: "https://web-chat-provider.invalid/v1",
+            revision: "1",
+          },
         }),
         {
+          ...(options.nativeMemoryTools
+            ? { nativeMemoryTools: true, memoryEnabled: true }
+            : {}),
           moduleConfigs: [
             ...createFirstPartyModuleConfigDefaults("test"),
             ...(options.expressions
@@ -176,21 +223,23 @@ async function fixture(
                 )
               : []),
           ].map((config) =>
-            config.definitionId === "agent.heavy" &&
-            options.pacingMs !== undefined
-              ? {
-                  ...config,
-                  settings: {
-                    pacing: {
-                      minMs: options.pacingMs,
-                      maxMs: options.pacingMs,
+            config.definitionId === "memory.native" && options.nativeMemoryTools
+              ? { ...config, enabled: true }
+              : config.definitionId === "agent.heavy" &&
+                  options.pacingMs !== undefined
+                ? {
+                    ...config,
+                    settings: {
+                      pacing: {
+                        minMs: options.pacingMs,
+                        maxMs: options.pacingMs,
+                      },
                     },
-                  },
-                }
-              : config.definitionId === "plugin.qq-expression" &&
-                  options.expressions
-                ? { ...config, enabled: true }
-                : config,
+                  }
+                : config.definitionId === "plugin.qq-expression" &&
+                    options.expressions
+                  ? { ...config, enabled: true }
+                  : config,
           ),
         },
       ),
@@ -300,12 +349,16 @@ async function fixture(
     app,
     database,
     composerPrompts,
+    providerRequests,
+    waitFor,
+    settle,
     runtime: () => runtime!,
     read,
     send,
     exchange,
-    restart: async () => {
+    restart: async (beforeStart?: () => Promise<void>) => {
       await runtime!.close();
+      await beforeStart?.();
       await startRuntime();
       reader = createWebChatHistory(database.information);
     },
@@ -313,83 +366,178 @@ async function fixture(
 }
 
 describe("Web private chat through the production information DAG", () => {
-  it("keeps continuation delivery records scoped to the current expression", async () => {
-    const f = await fixture({
-      respond: (_prompt, index) => ({
-        action: "message",
-        text: `范围测试第${index}条`,
-        continuation: index % 2 ? "再说一条" : null,
-      }),
-    });
-    await f.exchange(randomUUID(), "会话甲", "scope-a", [
-      "会话甲",
-      "范围测试第1条",
-      "范围测试第2条",
-    ]);
-    await f.exchange(randomUUID(), "会话乙", "scope-b", [
-      "会话乙",
-      "范围测试第3条",
-      "范围测试第4条",
-    ]);
-    const steps = await f.database.information.find({
-      kinds: ["agent.heavy.step.requested"],
-      registrationOrder: true,
-      order: "asc",
-      limit: 10,
-    });
-    expect(steps).toHaveLength(2);
-    const continuation = (
-      steps[1]!.payload.prompt as {
-        variables: { name: string; content: string }[];
-      }
-    ).variables.find((v) => v.name === "speech_continuation")!;
-    expect(
-      JSON.parse(continuation.content).delivered.map(
-        (item: { message: { text: string } }) => item.message.text,
-      ),
-    ).toEqual(["范围测试第3条"]);
-  });
-  it("keeps input arriving during the final part unread for the next turn", async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const f = await fixture({
-      respond: async (_prompt, index) => {
-        if (index === 2) await gate;
-        return {
-          action: "message",
-          text: `末段测试第${index}条`,
-          continuation: index === 1 ? "补完这一点" : null,
-        };
-      },
-    });
-    const conversation = randomUUID();
-    await f.send(conversation, "说完这一点", "final-start");
-    await vi.waitFor(
-      () => expect(f.composerPrompts).toHaveLength(2),
-      durableWait,
-    );
-    await f.send(conversation, "现在问一个新问题", "final-interjection");
-    release();
-    await vi.waitFor(
-      async () =>
-        expect(
-          await f.database.information.find({
-            kinds: ["agent.router.turn.completed"],
-            limit: 10,
+  it(
+    "routes production Heavy native Memory query through a W3 receipt into the next prompt",
+    async () => {
+      const f = await fixture({
+        nativeMemoryTools: true,
+        respond: (_prompt, index) =>
+          index === 1
+            ? {
+                nativeToolCalls: [
+                  {
+                    id: "memory-call-original",
+                    type: "function",
+                    function: {
+                      name: nativeToolWireName("memory.query", "1"),
+                      arguments: JSON.stringify({ query: "本轮对话" }),
+                    },
+                  },
+                ],
+              }
+            : { action: "message", text: "已完成记忆查询" },
+      });
+      const conversation = randomUUID();
+      await f.exchange(
+        conversation,
+        "请查询本轮记忆",
+        "native-memory-production",
+        ["请查询本轮记忆", "已完成记忆查询"],
+      );
+      const heavy = f.providerRequests.filter(
+        (r) => r.model === "web-test-heavy",
+      );
+      expect(heavy).toHaveLength(2);
+      expect(heavy[0].tools.map((t: any) => t.function.name)).toContain(
+        nativeToolWireName("memory.query", "1"),
+      );
+      expect(heavy[1].messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: "tool",
+            tool_call_id: "memory-call-original",
           }),
-        ).toHaveLength(2),
-      durableWait,
-    );
-    expect(f.composerPrompts).toHaveLength(3);
-    expect(f.composerPrompts[2]).toContain("现在问一个新问题");
-    expect(
-      (await f.read(conversation)).messages
-        .filter((m) => m.role === "assistant")
-        .map((m) => m.text),
-    ).toEqual(["末段测试第1条", "末段测试第2条", "末段测试第3条"]);
-  });
+        ]),
+      );
+      const calls = (
+        await f.database.sql.query<any>(
+          "SELECT * FROM information_native_tool_calls",
+        )
+      ).rows;
+      expect(calls).toHaveLength(1);
+      expect(calls[0].call_id).toBe("memory-call-original");
+      expect(calls[0].intent_id).toBeTruthy();
+      expect(calls[0].result_id).toBeTruthy();
+      const steps = (
+        await f.database.sql.query<any>(
+          "SELECT payload FROM information_atoms WHERE kind='agent.heavy.tool.step.frozen.v1' ORDER BY (payload->>'stepIndex')::integer",
+        )
+      ).rows;
+      expect(steps).toHaveLength(2);
+      expect(steps[1].payload.supplements).toHaveLength(1);
+      await f.exchange(conversation, "继续", "native-memory-next-turn", [
+        "请查询本轮记忆",
+        "已完成记忆查询",
+        "继续",
+        "已完成记忆查询",
+      ]);
+      const next = f.providerRequests
+        .filter((r) => r.model === "web-test-heavy")
+        .at(-1);
+      expect(next.messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: "tool",
+            tool_call_id: "memory-call-original",
+          }),
+        ]),
+      );
+    },
+    MULTI_STAGE_TIMEOUT,
+  );
+  it(
+    "keeps continuation delivery records scoped to the current expression",
+    async () => {
+      const f = await fixture({
+        respond: (_prompt, index) => ({
+          action: "message",
+          text: `范围测试第${index}条`,
+          continuation: index % 2 ? "再说一条" : null,
+        }),
+      });
+      await f.exchange(randomUUID(), "会话甲", "scope-a", [
+        "会话甲",
+        "范围测试第1条",
+        "范围测试第2条",
+      ]);
+      await f.exchange(randomUUID(), "会话乙", "scope-b", [
+        "会话乙",
+        "范围测试第3条",
+        "范围测试第4条",
+      ]);
+      const steps = await f.database.information.find({
+        kinds: ["agent.heavy.step.requested"],
+        registrationOrder: true,
+        order: "asc",
+        limit: 10,
+      });
+      expect(steps).toHaveLength(2);
+      const continuation = (
+        steps[1]!.payload.prompt as {
+          variables: { name: string; content: string }[];
+        }
+      ).variables.find((v) => v.name === "speech_continuation")!;
+      expect(
+        JSON.parse(continuation.content).delivered.map(
+          (item: { message: { text: string } }) => item.message.text,
+        ),
+      ).toEqual(["范围测试第3条"]);
+    },
+    MULTI_STAGE_TIMEOUT,
+  );
+  it(
+    "keeps input arriving during the final part unread for the next turn",
+    async () => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const f = await fixture({
+        respond: async (_prompt, index) => {
+          if (index === 2) await gate;
+          return {
+            action: "message",
+            text: `末段测试第${index}条`,
+            continuation: index === 1 ? "补完这一点" : null,
+          };
+        },
+      });
+      await withModelGateCleanup(
+        async () => {
+          const conversation = randomUUID();
+          await f.send(conversation, "说完这一点", "final-start");
+          await f.waitFor(
+            "web persistence",
+            () => expect(f.composerPrompts).toHaveLength(2),
+            durableWait,
+          );
+          await f.send(conversation, "现在问一个新问题", "final-interjection");
+          release();
+          await f.waitFor(
+            "web persistence",
+            async () =>
+              expect(
+                await f.database.information.find({
+                  kinds: ["agent.router.turn.completed"],
+                  limit: 10,
+                }),
+              ).toHaveLength(2),
+            durableWait,
+          );
+          expect(f.composerPrompts).toHaveLength(3);
+          expect(f.composerPrompts[2]).toContain("现在问一个新问题");
+          expect(
+            (await f.read(conversation)).messages
+              .filter((m) => m.role === "assistant")
+              .map((m) => m.text),
+          ).toEqual(["末段测试第1条", "末段测试第2条", "末段测试第3条"]);
+        },
+        release,
+        () => f.settle("released model gate drained"),
+      );
+    },
+    MULTI_STAGE_TIMEOUT,
+  );
 
   it("retains delivered content but fails the turn when continuation generation fails", async () => {
     const f = await fixture({
@@ -404,7 +552,8 @@ describe("Web private chat through the production information DAG", () => {
     });
     const conversation = randomUUID();
     await f.send(conversation, "测试模型失败", "model-failure");
-    await vi.waitFor(
+    await f.waitFor(
+      "web persistence",
       async () =>
         expect(
           await f.database.information.find({
@@ -472,11 +621,13 @@ describe("Web private chat through the production information DAG", () => {
             : { kind, userId: "person" },
         raw: {},
       });
-      await vi.waitFor(
+      await f.waitFor(
+        "web persistence",
         () => expect(sent).toEqual(["QQ 第1段", "QQ 第2段"]),
         durableWait,
       );
-      await vi.waitFor(
+      await f.waitFor(
+        "web persistence",
         async () =>
           expect(
             await f.database.information.find({
@@ -505,58 +656,70 @@ describe("Web private chat through the production information DAG", () => {
         ).toEqual([0, 1]);
       }
     },
+    MULTI_STAGE_TIMEOUT,
   );
 
-  it("restores a pending typing deadline without generating or sending the first part twice", async () => {
-    const f = await fixture({
-      pacingMs: 1200,
-      respond: (_prompt, index) => ({
-        action: "message",
-        text: `恢复第${index}段`,
-        continuation: index === 1 ? "继续恢复" : null,
-      }),
-    });
-    const conversation = randomUUID();
-    await f.send(conversation, "重启测试", "restart-speech");
-    await vi.waitFor(
-      async () =>
-        expect(
-          await f.database.information.find({
-            kinds: ["core.schedule.one-shot.requested"],
-            payloadContains: { input: { purpose: "heavy-speech" } },
-            limit: 10,
-          }),
-        ).toHaveLength(1),
-      durableWait,
-    );
-    expect(
-      (await f.read(conversation)).messages.filter(
-        (m) => m.role === "assistant",
-      ),
-    ).toHaveLength(0);
-    await f.send(conversation, "等待时也能接收这条插话", "typing-interjection");
-    await f.restart();
-    await vi.waitFor(
-      async () =>
-        expect(
-          (await f.read(conversation)).messages.map((m) => m.text),
-        ).toEqual([
-          "重启测试",
-          "等待时也能接收这条插话",
-          "恢复第1段",
-          "恢复第2段",
-        ]),
-      durableWait,
-    );
-    expect(f.composerPrompts).toHaveLength(2);
-    expect(f.composerPrompts[1]).toContain("等待时也能接收这条插话");
-  });
+  it(
+    "restores a pending typing deadline without generating or sending the first part twice",
+    async () => {
+      const f = await fixture({
+        pacingMs: 1200,
+        respond: (_prompt, index) => ({
+          action: "message",
+          text: `恢复第${index}段`,
+          continuation: index === 1 ? "继续恢复" : null,
+        }),
+      });
+      const conversation = randomUUID();
+      await f.send(conversation, "重启测试", "restart-speech");
+      await f.waitFor(
+        "web persistence",
+        async () =>
+          expect(
+            await f.database.information.find({
+              kinds: ["core.schedule.one-shot.requested"],
+              payloadContains: { input: { purpose: "heavy-speech" } },
+              limit: 10,
+            }),
+          ).toHaveLength(1),
+        durableWait,
+      );
+      expect(
+        (await f.read(conversation)).messages.filter(
+          (m) => m.role === "assistant",
+        ),
+      ).toHaveLength(0);
+      await f.send(
+        conversation,
+        "等待时也能接收这条插话",
+        "typing-interjection",
+      );
+      await f.restart();
+      await f.waitFor(
+        "web persistence",
+        async () =>
+          expect(
+            (await f.read(conversation)).messages.map((m) => m.text),
+          ).toEqual([
+            "重启测试",
+            "等待时也能接收这条插话",
+            "恢复第1段",
+            "恢复第2段",
+          ]),
+        historyWait,
+      );
+      expect(f.composerPrompts).toHaveLength(2);
+      expect(f.composerPrompts[1]).toContain("等待时也能接收这条插话");
+    },
+    MULTI_STAGE_TIMEOUT,
+  );
 
   it.each(["failed", "unknown"])(
     "stops continuation after a %s delivery and does not resend on restart",
     async (mode) => {
       let attempts = 0;
       const f = await fixture({
+        diagnostics: () => ({ sendAttempts: attempts }),
         transport: {
           sendMessage: async (target) => {
             attempts++;
@@ -564,6 +727,7 @@ describe("Web private chat through the production information DAG", () => {
               if (mode === "unknown") throw new Error("Synthetic receipt lost");
               return {
                 ok: false,
+                outcome: "rejected-before-effect",
                 adapterId,
                 platform: "web",
                 target,
@@ -587,14 +751,20 @@ describe("Web private chat through the production information DAG", () => {
       });
       const conversation = randomUUID();
       await f.send(conversation, "失败测试", "failure-speech");
-      await vi.waitFor(
-        async () =>
-          expect(
-            await f.database.information.find({
-              kinds: ["agent.router.turn.failed"],
-              limit: 10,
-            }),
-          ).toHaveLength(1),
+      await f.waitFor(
+        "second delivery failure committed and receipt acknowledged",
+        async () => {
+          const failed = await f.database.information.find({
+            kinds: ["agent.router.turn.failed"],
+            limit: 10,
+          });
+          expect(failed).toHaveLength(1);
+          const receipt = await f.database.sql.query<{ state: string }>(
+            "SELECT state FROM information_deliveries WHERE information_id=$1 AND subscription_id LIKE '%:agent.router.delivery.core.delivery.failed'",
+            [failed[0]!.payload.deliveryTerminalInformationId],
+          );
+          expect(receipt.rows).toEqual([{ state: "acked" }]);
+        },
         durableWait,
       );
       expect(attempts).toBe(2);
@@ -604,71 +774,143 @@ describe("Web private chat through the production information DAG", () => {
           .filter((m) => m.role === "assistant")
           .map((m) => m.text),
       ).toEqual(["失败测试第1段"]);
-      await f.restart();
+      const failures = await f.database.information.find({
+        kinds: ["agent.router.turn.failed", "core.delivery.failed"],
+        limit: 10,
+      });
+      expect(failures).toHaveLength(2);
+      expect(
+        failures.find((a) => a.kind === "core.delivery.failed")!.payload
+          .outcome,
+      ).toBe(mode === "unknown" ? "unknown" : undefined);
+      const failureId = failures.find(
+        (a) => a.kind === "core.delivery.failed",
+      )!.informationId;
+      let replay!: { subscription_id: string; attempts: number };
+      await f.restart(async () => {
+        const rows = await f.database.sql.query<{
+          subscription_id: string;
+          attempts: number;
+          state: string;
+        }>(
+          "SELECT subscription_id,attempts,state FROM information_deliveries WHERE information_id=$1 AND subscription_id LIKE '%:agent.router.delivery.core.delivery.failed'",
+          [failureId],
+        );
+        expect(rows.rows).toHaveLength(1);
+        expect(rows.rows[0]!.state).toBe("acked");
+        replay = rows.rows[0]!;
+        await f.database.sql.query(
+          "UPDATE information_deliveries SET state='pending',token=NULL,lease_until=NULL,available_at=clock_timestamp() WHERE subscription_id=$1 AND information_id=$2",
+          [replay.subscription_id, failureId],
+        );
+      });
+      await f.waitFor(
+        "failed receipt replayed and acknowledged after restart",
+        async () => {
+          const rows = await f.database.sql.query<{
+            attempts: number;
+            state: string;
+          }>(
+            "SELECT attempts,state FROM information_deliveries WHERE subscription_id=$1 AND information_id=$2",
+            [replay.subscription_id, failureId],
+          );
+          expect(rows.rows[0]).toEqual({
+            attempts: replay.attempts + 1,
+            state: "acked",
+          });
+        },
+      );
+      await f.settle("failed delivery replay settled after restart");
+      expect(
+        await f.database.information.find({
+          kinds: ["agent.router.turn.failed", "core.delivery.failed"],
+          limit: 10,
+        }),
+      ).toEqual(failures);
       expect(attempts).toBe(2);
       expect(f.composerPrompts).toHaveLength(2);
     },
+    REPLAY_RESTART_TIMEOUT,
   );
 
-  it("coalesces a replayed receipt while the next generation is in progress", async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const f = await fixture({
-      respond: async (_prompt, index) => {
-        if (index === 2) await gate;
-        return {
-          action: "message",
-          text: `重复测试第${index}段`,
-          continuation: index === 1 ? "继续" : null,
-        };
-      },
-    });
-    const conversation = randomUUID();
-    await f.send(conversation, "重复测试", "duplicate-speech");
-    await vi.waitFor(
-      () => expect(f.composerPrompts).toHaveLength(2),
-      durableWait,
-    );
-    const receipt = (
-      await f.database.information.find({
-        kinds: ["core.delivery.delivered"],
-        limit: 1,
-      })
-    )[0]!;
-    await f.database.sql.query(
-      "UPDATE information_deliveries SET state = 'pending', available_at = clock_timestamp() WHERE subscription_id = $1 AND information_id = $2",
-      ["heavy.default:kaguya.heavy.delivered", receipt.informationId],
-    );
-    await vi.waitFor(async () => {
-      const row = await f.database.sql.query<{
-        state: string;
-        attempts: number;
-      }>(
-        "SELECT state, attempts FROM information_deliveries WHERE subscription_id = $1 AND information_id = $2",
-        ["heavy.default:kaguya.heavy.delivered", receipt.informationId],
+  it(
+    "coalesces a replayed receipt while the next generation is in progress",
+    async () => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const f = await fixture({
+        respond: async (_prompt, index) => {
+          if (index === 2) await gate;
+          return {
+            action: "message",
+            text: `重复测试第${index}段`,
+            continuation: index === 1 ? "继续" : null,
+          };
+        },
+      });
+      await withModelGateCleanup(
+        async () => {
+          const conversation = randomUUID();
+          await f.send(conversation, "重复测试", "duplicate-speech");
+          await f.waitFor(
+            "web persistence",
+            () => expect(f.composerPrompts).toHaveLength(2),
+            durableWait,
+          );
+          const receipt = (
+            await f.database.information.find({
+              kinds: ["core.delivery.delivered"],
+              limit: 1,
+            })
+          )[0]!;
+          await f.database.sql.query(
+            "UPDATE information_deliveries SET state = 'pending', available_at = clock_timestamp() WHERE subscription_id = $1 AND information_id = $2",
+            ["heavy.default:kaguya.heavy.delivered", receipt.informationId],
+          );
+          await f.waitFor(
+            "web persistence",
+            async () => {
+              const row = await f.database.sql.query<{
+                state: string;
+                attempts: number;
+              }>(
+                "SELECT state, attempts FROM information_deliveries WHERE subscription_id = $1 AND information_id = $2",
+                ["heavy.default:kaguya.heavy.delivered", receipt.informationId],
+              );
+              expect(row.rows[0]).toMatchObject({
+                state: "acked",
+                attempts: 2,
+              });
+            },
+            durableWait,
+          );
+          release();
+          await f.waitFor(
+            "web persistence",
+            async () =>
+              expect(
+                (await f.read(conversation)).messages.filter(
+                  (m) => m.role === "assistant",
+                ),
+              ).toHaveLength(2),
+            historyWait,
+          );
+          expect(f.composerPrompts).toHaveLength(2);
+          expect(
+            await f.database.information.find({
+              kinds: ["agent.heavy.step.requested"],
+              limit: 10,
+            }),
+          ).toHaveLength(1);
+        },
+        release,
+        () => f.settle("released model gate drained"),
       );
-      expect(row.rows[0]).toMatchObject({ state: "acked", attempts: 2 });
-    }, durableWait);
-    release();
-    await vi.waitFor(
-      async () =>
-        expect(
-          (await f.read(conversation)).messages.filter(
-            (m) => m.role === "assistant",
-          ),
-        ).toHaveLength(2),
-      durableWait,
-    );
-    expect(f.composerPrompts).toHaveLength(2);
-    expect(
-      await f.database.information.find({
-        kinds: ["agent.heavy.step.requested"],
-        limit: 10,
-      }),
-    ).toHaveLength(1);
-  });
+    },
+    GATED_CONTINUATION_TIMEOUT,
+  );
   it("delivers each part before generating the next and closes only the final part", async () => {
     const calls: string[] = [];
     const f = await fixture({
@@ -760,50 +1002,66 @@ describe("Web private chat through the production information DAG", () => {
               };
         },
       });
-      const conversation = randomUUID();
-      await f.send(conversation, "说说这个", "speech-start");
-      await vi.waitFor(
-        () => expect(f.composerPrompts).toHaveLength(1),
-        durableWait,
+      await withModelGateCleanup(
+        async () => {
+          const conversation = randomUUID();
+          await f.send(conversation, "说说这个", "speech-start");
+          await f.waitFor(
+            "web persistence",
+            () => expect(f.composerPrompts).toHaveLength(1),
+            durableWait,
+          );
+          await f.send(conversation, `${mode}的新消息`, "speech-interjection");
+          await f.waitFor(
+            "web persistence",
+            async () =>
+              expect((await f.read(conversation)).messages).toHaveLength(2),
+            historyWait,
+          );
+          release();
+          await f.waitFor(
+            "web persistence",
+            async () => {
+              expect(
+                await f.database.information.find({
+                  kinds: ["agent.router.turn.completed"],
+                  limit: 10,
+                }),
+              ).toHaveLength(1);
+              const history = await f.read(conversation);
+              expect(
+                history.messages
+                  .filter((m) => m.role === "assistant")
+                  .map((m) => m.text),
+              ).toEqual(
+                mode === "停止"
+                  ? ["先说这一段"]
+                  : [
+                      "先说这一段",
+                      mode === "更正" ? "按更正接着说" : "继续把话说完",
+                    ],
+              );
+              expect(
+                await f.database.information.find({
+                  kinds: ["agent.heavy.step.observed"],
+                  limit: 10,
+                }),
+              ).toHaveLength(1);
+            },
+            historyWait,
+          );
+          expect(
+            await f.database.information.find({
+              kinds: ["agent.router.turn.silent"],
+              limit: 10,
+            }),
+          ).toHaveLength(0);
+        },
+        release,
+        () => f.settle("released model gate drained"),
       );
-      await f.send(conversation, `${mode}的新消息`, "speech-interjection");
-      await vi.waitFor(
-        async () =>
-          expect((await f.read(conversation)).messages).toHaveLength(2),
-        durableWait,
-      );
-      release();
-      await vi.waitFor(async () => {
-        expect(
-          await f.database.information.find({
-            kinds: ["agent.router.turn.completed"],
-            limit: 10,
-          }),
-        ).toHaveLength(1);
-        const history = await f.read(conversation);
-        expect(
-          history.messages
-            .filter((m) => m.role === "assistant")
-            .map((m) => m.text),
-        ).toEqual(
-          mode === "停止"
-            ? ["先说这一段"]
-            : ["先说这一段", mode === "更正" ? "按更正接着说" : "继续把话说完"],
-        );
-        expect(
-          await f.database.information.find({
-            kinds: ["agent.heavy.step.observed"],
-            limit: 10,
-          }),
-        ).toHaveLength(1);
-      }, durableWait);
-      expect(
-        await f.database.information.find({
-          kinds: ["agent.router.turn.silent"],
-          limit: 10,
-        }),
-      ).toHaveLength(0);
     },
+    GATED_CONTINUATION_TIMEOUT,
   );
   it("returns replies over HTTP, isolates conversations and restores durable history after restart", async () => {
     const f = await fixture();
@@ -873,45 +1131,72 @@ describe("Web private chat through the production information DAG", () => {
     }
 
     await f.restart();
-    await vi.waitFor(async () => {
-      expect((await f.database.information.reliable.health()).pending).toBe(0);
-    }, durableWait);
+    await f.waitFor(
+      "web persistence",
+      async () => {
+        expect((await f.database.information.reliable.health()).pending).toBe(
+          0,
+        );
+      },
+      durableWait,
+    );
     expect(await f.read(conversationA)).toEqual(continued);
     expect(await f.read(conversationB)).toEqual(other);
     expect(f.composerPrompts).toHaveLength(3);
   }, 50_000); // 三轮持久化及一次重启收敛各有 8 秒预算，余量用于 PGlite/HTTP 初始化。
 
-  it("does not expose generated assistant text when delivery failed", async () => {
-    const f = await fixture({ registerTransport: false });
-    const conversationId = randomUUID();
-    await f.send(
-      conversationId,
-      "这条消息没有可用的出站通道",
-      "web-undelivered",
-    );
-    await vi.waitFor(async () => {
-      const atoms = await f.database.information.find({
-        occurredAfter: "2020-01-01T00:00:00.000Z",
-        order: "asc",
-        limit: 1000,
-      });
-      expect(
-        atoms.filter((atom) => atom.kind === "core.message.assistant.text"),
-      ).toHaveLength(1);
-      expect(
-        atoms.filter((atom) => atom.kind === "core.delivery.failed"),
-      ).toHaveLength(1);
-      expect(
-        atoms.filter((atom) => atom.kind === "core.delivery.delivered"),
-      ).toHaveLength(0);
-      expect((await f.database.information.reliable.health()).pending).toBe(0);
-    }, durableWait);
-    expect((await f.read(conversationId)).messages).toEqual([
-      expect.objectContaining({
-        role: "user",
-        text: "这条消息没有可用的出站通道",
-        requestId: "web-undelivered",
-      }),
-    ]);
-  });
+  it(
+    "does not expose generated assistant text when delivery failed",
+    async () => {
+      const f = await fixture({ registerTransport: false });
+      const conversationId = randomUUID();
+      await f.send(
+        conversationId,
+        "这条消息没有可用的出站通道",
+        "web-undelivered",
+      );
+      await f.waitFor(
+        "assistant generation persisted before delivery",
+        async () => {
+          expect(
+            await f.database.information.find({
+              kinds: ["core.message.assistant.text"],
+              limit: 10,
+            }),
+          ).toHaveLength(1);
+        },
+      );
+      await f.waitFor(
+        "failed delivery committed and history remains hidden",
+        async () => {
+          const atoms = await f.database.information.find({
+            occurredAfter: "2020-01-01T00:00:00.000Z",
+            order: "asc",
+            limit: 1000,
+          });
+          expect(
+            atoms.filter((atom) => atom.kind === "core.message.assistant.text"),
+          ).toHaveLength(1);
+          expect(
+            atoms.filter((atom) => atom.kind === "core.delivery.failed"),
+          ).toHaveLength(1);
+          expect(
+            atoms.filter((atom) => atom.kind === "core.delivery.delivered"),
+          ).toHaveLength(0);
+          expect((await f.database.information.reliable.health()).pending).toBe(
+            0,
+          );
+        },
+        durableWait,
+      );
+      expect((await f.read(conversationId)).messages).toEqual([
+        expect.objectContaining({
+          role: "user",
+          text: "这条消息没有可用的出站通道",
+          requestId: "web-undelivered",
+        }),
+      ]);
+    },
+    MULTI_STAGE_TIMEOUT,
+  );
 });

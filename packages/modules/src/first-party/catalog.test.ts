@@ -4,17 +4,8 @@
  * 功能概述：验证 first-party Catalog 默认配置及激活边界。
  * 主要职责：catalog fixture 注入宿主能力与共享 kind，测试八个默认模块、严格 modelTier 设置、
  * disabled 配置校验与旧 reply/outbound 配置拒绝；Profile 身份不再投影进 Router 设置。
- * 检查视图只引用 Catalog 中的模块 Kind，或由 model-task 能力及请求 Surface 明确声明的 Runtime 请求 Kind。
- * 代码库关系：直接约束 catalog 工厂以及 heavy 模块的公开 settings schema。
- * 输入输出与副作用：纯内存组装，不连接模型或数据库；错误不包含设置值。
- */
-/**
- * 测试夹具显式装配 QQ 表情模板，验证新增模块契约与既有流程兼容。
- * 测试显式注入统一文件模板，避免 Light 或 Expression 绕过 default/local 选择。
- * 功能概述：验证 first-party Catalog 默认配置及激活边界。
- * 主要职责：catalog fixture 注入宿主能力与共享 kind，测试八个默认模块、严格 modelTier 设置、
- * disabled 配置校验与旧 reply/outbound 配置拒绝；Profile 身份不再投影进 Router 设置。
- * 检查视图只引用 Catalog 中的模块 Kind，或由 model-task 能力及请求 Surface 明确声明的 Runtime 请求 Kind。
+ * 检查视图仅引用模块 Kind 或正式 Runtime Kind；调度视图完整对照 oneShotInformationKinds，
+ * 并检查 Lifecycle 归属、schedules 视图及 one-shot 能力；模型请求仍检查原能力和 Surface。
  * 代码库关系：直接约束 catalog 工厂以及 heavy 模块的公开 settings schema。
  * 输入输出与副作用：纯内存组装，不连接模型或数据库；错误不包含设置值。
  */
@@ -24,6 +15,10 @@ import { describe, expect, it } from "vitest";
 
 import { executionExhaustedInformationKind } from "@kaguya/engine";
 import { rawContextCapability } from "@kaguya/memory";
+import {
+  oneShotInformationKinds,
+  oneShotScheduleCapability,
+} from "@kaguya/scheduler";
 import { z } from "@kaguya/schema";
 import { defineInformationKind, defineModuleCapability } from "@kaguya/sdk";
 
@@ -92,7 +87,15 @@ describe("first-party module configuration", () => {
         .flatMap((d) => [...d.manifest.produces, ...d.manifest.consumes])
         .map((k) => k.kind),
     );
-    expect(definitions).toHaveLength(7);
+    const scheduleKinds = oneShotInformationKinds.map(({ kind }) => kind);
+    const lifecycle = definitions.find(
+      ({ manifest }) => manifest.definitionId === "agent.lifecycle",
+    );
+    expect(
+      lifecycle?.manifest.inspection?.views.find(({ id }) => id === "schedules")
+        ?.kinds,
+    ).toEqual(scheduleKinds);
+    expect(definitions).toHaveLength(8);
     for (const { manifest } of definitions) {
       if (manifest.development?.status === "incomplete") {
         expect(manifest.inspection).toBeUndefined();
@@ -123,6 +126,11 @@ describe("first-party module configuration", () => {
                 }),
               ]),
             );
+          } else if (scheduleKinds.some((registered) => registered === kind)) {
+            // Runtime 注册正式 scheduler Kind；检视不要求业务模块伪造生产/消费关系。
+            expect(manifest.definitionId).toBe("agent.lifecycle");
+            expect(view.id).toBe("schedules");
+            expect(manifest.requires).toContainEqual(oneShotScheduleCapability);
           } else {
             expect(kinds.has(kind), kind).toBe(true);
           }
@@ -145,7 +153,7 @@ describe("first-party module configuration", () => {
       defaults.find((config) => config.definitionId === "adapter.web")?.enabled,
     ).toBe(true);
     expect(createFirstPartyModuleActivations(catalog(), defaults)).toHaveLength(
-      6,
+      7,
     );
   });
 

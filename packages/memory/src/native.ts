@@ -1,12 +1,19 @@
-/** Unified memory ports and deterministic retrieval policy. No database or model SDK dependencies. */
-/** Unified memory ports and deterministic retrieval policy. No database or model SDK dependencies. */
+/**
+ * 功能概述：定义统一 Memory 端口并冻结有界检索结果，不依赖数据库或模型 SDK。
+ * 主要职责：prepare 保留完整修订输入；freeze 在同一读快照捕获提交上界、复核候选并分配动态正文预算。
+ * 代码库关系：database 实现存储，模块通过 capability 调用；辅助检索在事务外运行，结果在事务内重新校验。
+ */
 import {
   nativeMemorySnapshotSchema,
   type NativeMemoryNode,
   type NativeMemorySnapshot,
   type MemoryPublication,
 } from "@kaguya/schema";
-import { defineModuleCapability } from "@kaguya/sdk";
+import {
+  defineModuleCapability,
+  type ActionDependencies,
+  type MemoryDependencyCheck,
+} from "@kaguya/sdk";
 import { z } from "@kaguya/schema";
 import type { EmbeddingProvider } from "./vector.js";
 export const nativeEmbeddingSettingsSchema = z
@@ -84,6 +91,7 @@ export interface MemoryReadContext {
   owners: readonly string[];
   asOf: string;
   query: string;
+  cutoff?: { publicationPosition: string };
   explicitIds?: readonly string[];
   people?: readonly MemoryPersonBinding[];
   participants?: NativeMemorySnapshot["participants"];
@@ -103,6 +111,12 @@ export interface BasicMemoryObservation {
   name?: string;
 }
 export interface NativeMemoryStore {
+  checkDependencies?(input: ActionDependencies): Promise<MemoryDependencyCheck>;
+  cutoff?(input: MemoryReadContext): Promise<{ publicationPosition: string }>;
+  pendingEvidence?(input: MemoryReadContext): Promise<{
+    pendingEvidence: NonNullable<NativeMemorySnapshot["pendingEvidence"]>;
+    evidenceHasMore: boolean;
+  }>;
   ensureBasicSummaries?(
     input: MemoryReadContext,
     observations: readonly BasicMemoryObservation[],
@@ -151,6 +165,7 @@ export interface MemoryAuxiliaryRetriever {
   index?(signal?: AbortSignal): Promise<void>;
 }
 export interface NativeMemoryAccess {
+  checkDependencies?(input: ActionDependencies): Promise<MemoryDependencyCheck>;
   readonly enabled: boolean;
   ensureBasicSummaries?(
     input: MemoryReadContext,
@@ -185,7 +200,7 @@ export const memorySourceSchema = z
     text: z.string(),
     occurredAt: z.string(),
     collectedAt: z.string(),
-    sourceType: z.enum(["inbound", "delivered"]),
+    sourceType: z.enum(["inbound", "delivered", "action-result"]),
     participants: z.array(memorySourcePersonSchema),
     replyTo: z
       .object({
@@ -202,7 +217,12 @@ export interface MemoryBatch {
   scope: string;
   sources: MemorySource[];
 }
+export const canonicalMemorySourceId = (id: string) =>
+  `memory-native-source:${id}`;
 export interface MemoryFormationAccess {
+  sourceBoundary?(ids: readonly string[]): Promise<string>;
+  recover?(): Promise<void>;
+  successor?(batchId: string): Promise<MemoryBatch | undefined>;
   ingest(source: MemorySource): Promise<boolean>;
   claim(
     scope: string,
@@ -377,6 +397,11 @@ export function createNativeMemoryAccess(
 ): NativeMemoryAccess {
   return {
     enabled: options.enabled,
+    checkDependencies: async (input) => {
+      if (!options.store.checkDependencies)
+        throw new Error("Memory dependency validation unavailable");
+      return options.store.checkDependencies(input);
+    },
     async ensureBasicSummaries(input, observations) {
       if (options.enabled)
         await options.store.ensureBasicSummaries?.(input, observations);
@@ -392,9 +417,16 @@ export function createNativeMemoryAccess(
     },
     async prepare(input) {
       if (!options.enabled) throw new Error("MEMORY_DISABLED");
+      if (!inSnapshot && options.store.withReadSnapshot)
+        return options.store.withReadSnapshot((store) =>
+          createNativeMemoryAccess({ ...options, store }, true).prepare(input),
+        );
+      const cutoff = await options.store.cutoff?.(input);
+      input = { ...input, ...(cutoff ? { cutoff } : {}) };
       const nodes = await options.store.forFormation(input);
       return {
         version: 1,
+        ...(cutoff ? { cutoff } : {}),
         status: "enabled",
         frozenAt: input.asOf,
         scope: input.scope,
@@ -451,12 +483,41 @@ export function createNativeMemoryAccess(
         budget: { dynamicCharacters: 0, omittedNodeIds: [] },
       };
       if (!options.enabled) return empty;
+      const cutoff = await options.store.cutoff?.(input);
+      const pending = input.cutoff
+        ? undefined
+        : await options.store.pendingEvidence?.(input);
+      input = { ...input, ...(cutoff ? { cutoff } : {}) };
+      let pendingCharacters = 0;
+      const evidenceOmittedInformationIds: string[] = [];
+      const pendingEvidence = pending?.pendingEvidence.flatMap((item) => {
+        const remaining = Math.min(1200, 2000 - pendingCharacters);
+        if (remaining <= 0) {
+          evidenceOmittedInformationIds.push(item.informationId);
+          return [];
+        }
+        const chars = Array.from(item.text),
+          text = chars.slice(0, remaining).join("");
+        pendingCharacters += Array.from(text).length;
+        return [
+          {
+            ...item,
+            text,
+            truncated: Boolean(item.truncated) || chars.length > remaining,
+            originalCharacters: item.originalCharacters ?? chars.length,
+          },
+        ];
+      });
       let candidateCharacters = 0;
       const candidateOmissions: string[] = [];
       const personCandidates = (
         (await options.store.personCandidates?.(input)) ?? []
       ).flatMap((candidate) => {
-        const remaining = Math.min(1200, 2000 - candidateCharacters);
+        const remaining = Math.min(
+          1200,
+          2000 - candidateCharacters,
+          4000 - pendingCharacters - candidateCharacters,
+        );
         if (remaining <= 0) {
           candidateOmissions.push(candidate.summary.id);
           return [];
@@ -530,7 +591,7 @@ export function createNativeMemoryAccess(
       ]);
       const recalled: NativeMemorySnapshot["recalled"] = [];
       const omittedNodeIds: string[] = [...candidateOmissions];
-      let used = candidateCharacters,
+      let used = candidateCharacters + pendingCharacters,
         expressions = 0,
         expressionChars = 0;
       for (const group of groups) {
@@ -576,6 +637,17 @@ export function createNativeMemoryAccess(
       return nativeMemorySnapshotSchema.parse({
         ...empty,
         status: "enabled",
+        ...(cutoff ? { cutoff } : {}),
+        ...(pending
+          ? {
+              pendingEvidence,
+              evidenceHasMore:
+                pending.evidenceHasMore ||
+                evidenceOmittedInformationIds.length > 0 ||
+                pendingEvidence!.some((e) => e.truncated),
+              evidenceOmittedInformationIds,
+            }
+          : {}),
         personCandidates,
         fixed,
         recalled,

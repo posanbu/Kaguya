@@ -4,12 +4,6 @@
  * 代码库关系：schema 入口导出；memory 声明存储端口，database/server/web 共用同一字段契约。
  * 输入输出与副作用：只执行同步解析，不建立数据库连接或发出网络请求。
  */
-/**
- * 功能概述：声明跨浏览器与服务端共享的 Memory 节点、有向边、查询和图快照协议。
- * 主要职责：校验可扩展 JSON metadata，规范化 UTC 时间、标签及有界检视查询。
- * 代码库关系：schema 入口导出；memory 声明存储端口，database/server/web 共用同一字段契约。
- * 输入输出与副作用：只执行同步解析，不建立数据库连接或发出网络请求。
- */
 import { z } from "zod";
 
 const nonBlank = z.string().trim().min(1);
@@ -149,6 +143,29 @@ export const nativeMemoryMetadataSchema = memoryNodeMetadataSchema.extend({
   sourceIds: z.array(nonBlank).default([]),
   aliases: z.array(nonBlank).default([]),
   evidence: personEvidenceSchema.exactOptional(),
+  // 所有 native 类型共用的服务端来源归属；可选字段保留历史 publication 的解析与哈希。
+  proofOwners: z
+    .array(
+      z
+        .object({ ownerId: nonBlank, sourceIds: z.array(nonBlank).min(1) })
+        .strict(),
+    )
+    .exactOptional(),
+  experience: z
+    .object({
+      state: z.enum(["open", "sealed"]),
+      policyVersion: nonBlank,
+      predecessors: z.array(memoryNodeIdSchema).default([]),
+      proofOwners: z
+        .array(
+          z
+            .object({ ownerId: nonBlank, sourceIds: z.array(nonBlank).min(1) })
+            .strict(),
+        )
+        .exactOptional(),
+    })
+    .strict()
+    .exactOptional(),
 });
 export const nativeMemoryNodeSchema = memoryNodeSchema.extend({
   metadata: nativeMemoryMetadataSchema,
@@ -173,6 +190,26 @@ export const memoryPublicationSchema = z
       .max(100),
     edges: z.array(memoryEdgeInputSchema).max(500).default([]),
     removeEdges: z.array(memoryEdgeInputSchema).max(500).default([]),
+    invalidations: z
+      .array(
+        z
+          .object({
+            kind: z.enum(["source-withdrawal", "identity-split"]),
+            targetId: nonBlank,
+            reason: nonBlank,
+          })
+          .strict(),
+      )
+      .max(100)
+      .exactOptional(),
+    experienceOperation: z
+      .object({
+        kind: z.enum(["correct", "seal", "reopen", "merge", "split"]),
+        inputIds: z.array(memoryNodeIdSchema).min(1),
+        outputIds: z.array(memoryNodeIdSchema).min(1),
+      })
+      .strict()
+      .exactOptional(),
   })
   .strict();
 export type MemoryPublication = z.input<typeof memoryPublicationSchema>;
@@ -191,6 +228,27 @@ export const nativeMemorySnapshotSchema = z.object({
   version: z.literal(1),
   status: z.enum(["enabled", "disabled"]),
   frozenAt: z.iso.datetime({ offset: true }),
+  cutoff: z
+    .object({ publicationPosition: z.string().regex(/^\d+$/) })
+    .strict()
+    .exactOptional(),
+  pendingEvidence: z
+    .array(
+      z
+        .object({
+          informationId: nonBlank,
+          text: z.string(),
+          ownerId: nonBlank,
+          scope: nonBlank,
+          occurredAt: z.string(),
+          truncated: z.boolean().exactOptional(),
+          originalCharacters: z.number().int().nonnegative().exactOptional(),
+        })
+        .strict(),
+    )
+    .exactOptional(),
+  evidenceHasMore: z.boolean().exactOptional(),
+  evidenceOmittedInformationIds: z.array(nonBlank).exactOptional(),
   scope: z.string(),
   owners: z.array(z.string()),
   people: z

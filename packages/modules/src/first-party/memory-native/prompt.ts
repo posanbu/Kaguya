@@ -1,5 +1,8 @@
-/** Mandatory memory suffix. A custom template cannot accidentally omit fixed context. */
-/** Mandatory memory suffix. A custom template cannot accidentally omit fixed context. */
+/**
+ * 功能概述：把已冻结 Memory 加入模型实际提示，保证固定摘要可见。
+ * 主要职责：更新来源投影并执行最终 UTF-8 预算；动态原话截断保留来源与截断标记，不修改已保存快照。
+ * 代码库关系：Light/Heavy 共用；旧回合无 native 快照时保留原提示。
+ */
 import {
   nativeMemorySnapshotSchema,
   type CompiledPrompt,
@@ -129,7 +132,10 @@ export function appendNativeMemoryToPrompt(
     );
     snapshot.recalled = [];
     snapshot.personCandidates = [];
-    snapshot.budget.dynamicCharacters = 0;
+    snapshot.budget.dynamicCharacters = (snapshot.pendingEvidence ?? []).reduce(
+      (n, e) => n + Array.from(e.text).length,
+      0,
+    );
   }
   if (bytes() > 128_000) {
     const history = variables.find((v) => v.name === "global_context");
@@ -139,6 +145,28 @@ export function appendNativeMemoryToPrompt(
         v === history ? { ...v, content: "" } : v,
       );
     }
+  }
+  // 历史冻结也可能携带未裁剪原话；按 UTF-8 最终字节预算裁剪末尾原话，保留来源元数据。
+  for (const evidence of [...(snapshot.pendingEvidence ?? [])].reverse()) {
+    if (bytes() <= 128_000) break;
+    const chars = Array.from(evidence.text),
+      original = evidence.originalCharacters ?? chars.length;
+    let low = 0,
+      high = chars.length;
+    evidence.truncated = true;
+    evidence.originalCharacters = original;
+    snapshot.evidenceHasMore = true;
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2);
+      evidence.text = chars.slice(0, mid).join("");
+      if (bytes() <= 128_000) low = mid;
+      else high = mid - 1;
+    }
+    evidence.text = chars.slice(0, low).join("");
+    snapshot.budget.dynamicCharacters = (snapshot.pendingEvidence ?? []).reduce(
+      (n, e) => n + Array.from(e.text).length,
+      0,
+    );
   }
   if (bytes() > 128_000)
     throw new Error("MEMORY_FIXED_CONTEXT_BUDGET_EXCEEDED");

@@ -6,19 +6,27 @@
  * 功能概述：通过真实 Runtime/PGlite 与 DeepSeek-compatible HTTP mock 验证先观察、后规划的发言链。
  * fixture 装配正式 Catalog、light Light 和 heavy Heavy；settle 等待 durable 订阅闭合，
  * restart 保留数据库并重建宿主，advance 推进持久 heartbeat 时钟。仅 mock provider HTTP，
- * waitForPersistence 将本 fixture 的启动、打断、重建、重放及 settle 等待统一到已有的 8 秒
+ * createPersistenceWait 将本 fixture 的启动、打断、重建、重放及 settle 等待统一到已有的 8 秒
  * 持久化预算，条件满足即继续；不改变注入时钟、业务静默窗、等待次数或精确行为断言。
  * 多次取消、重建与重启场景另设 30 秒总预算；QQ 四至五轮 45 秒、八轮加重启 60 秒。
  * macOS 四轮实测约 26 秒，Windows 八轮约 29 秒，顺序 I/O 不能套用单轮的 15 秒总上限；
  * 每次状态等待仍受 8 秒预算约束，不增加业务 deadline 或允许的重试次数。
- * 尚未提交决策的 Light 可由新输入打断；静默窗后合并旧、新输入重构，已提交决策仍保持唯一终态。
+ * 尚未提交决策的 Light 可由宿主持久确认的干预打断；静默窗后合并旧、新输入重构，已提交决策仍保持唯一终态。
  * 覆盖 message/wait/silent 与 target union 的 JSON mode 本地校验、一次结构修复、耗尽后失败关闭、
  * 累计 usage 和单 requested/terminal/decision；重试复用冻结 Prompt，重放与新输入取消均不重复落地。
  * Light v2 的每轮 schema 在模型修复阶段拒绝超预算 wait 与焦点越界；保留单次结构修复和单一回合终态。
  * 同时保留直接信号、Light 独立等待预算和并发入站去重回归。
  * 所有消息和密钥均为合成测试数据；清理按 Runtime、数据库顺序关闭，不访问外部服务。
  * 观察延期测试保留数据库重建 Runtime，在无新入站时触发到期复查，并核对原 manifest 及最终成功状态。
+ * Heavy 生成期间分别注入来源更正、显式停止与无关插话；settle 同时检查模型终态，防止队列短暂为空误通过。
  */
+import {
+  closeTestResources,
+  createPersistenceWait,
+  withModelGateCleanup,
+} from "./test-support/persistence.js";
+import { randomUUID } from "node:crypto";
+import { freezeInformationAtom, informationAtomSchema } from "@kaguya/schema";
 import { readSituation } from "./inspection-situation.js";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { createMessageComposition } from "@kaguya/composition";
@@ -36,17 +44,17 @@ import {
 import type { PlatformInboundMessage } from "@kaguya/platform-adapters";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const PERSISTENCE_WAIT = { timeout: 8000, interval: 20 } as const;
 const MULTI_STAGE_TIMEOUT = 30_000;
+// 受控打断含 5 次持久化等待（5×8 秒）和两次重启，60 秒覆盖初始化/收尾。
+const INTERRUPTION_TIMEOUT = 60_000;
+// 双重重建：1 次启动等待 + 2×3 次循环等待 + wake/settle 共 9×8 秒，另留两次重启余量。
+const REBUILD_LIMIT_TIMEOUT = 90_000;
 const QQ_MULTI_TURN_TIMEOUT = 45_000;
 const QQ_RESTART_TIMEOUT = 60_000;
-function waitForPersistence(assertion: () => void | Promise<void>) {
-  return vi.waitFor(assertion, PERSISTENCE_WAIT);
-}
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
-  for (const close of cleanups.splice(0).reverse()) await close();
+  await closeTestResources(cleanups);
 });
 const speak = {
   action: "message",
@@ -65,6 +73,11 @@ async function fixture(
     emoji: string | null;
   } = { assetInformationId: null, emoji: null };
   const database = await createTestingDatabase();
+  cleanups.push(() => database.close());
+  let activeRuntime: KaguyaRuntime | undefined;
+  cleanups.push(async () => {
+    await activeRuntime?.close();
+  });
   let now = Date.parse("2026-09-12T12:00:00.000Z");
   const requests: Record<string, any>[] = [];
   const backgroundRequests: Record<string, any>[] = [];
@@ -148,7 +161,12 @@ async function fixture(
         ...createFirstPartyModuleConfigDefaults("test").map((c) =>
           c.definitionId === "memory.native"
             ? { ...c, enabled: qqExpression }
-            : c,
+            : c.definitionId === "agent.heavy"
+              ? {
+                  ...c,
+                  settings: { ...c.settings, pacing: { minMs: 0, maxMs: 0 } },
+                }
+              : c,
         ),
         ...(qqExpression
           ? [
@@ -199,24 +217,31 @@ async function fixture(
       platform: "qq",
       transport: { sendMessage: delivered },
     });
+    activeRuntime = runtime;
     await runtime.start();
     return runtime;
   };
   let runtime = await start();
-  cleanups.push(async () => {
-    await runtime.close();
-    await database.close();
-  });
+  const waitFor = createPersistenceWait(database, () => ({
+    modelCalls: requests.length,
+    backgroundCalls: backgroundRequests.length,
+  }));
   const atoms = () =>
     database.information.find({
       occurredAfter: "2020-01-01T00:00:00.000Z",
       order: "asc",
       limit: 1000,
     });
-  const settle = async () => {
-    await waitForPersistence(async () =>
-      expect((await database.information.reliable.health()).pending).toBe(0),
-    );
+  const settle = async (phase = "durable queue settled") => {
+    await waitFor(phase, async () => {
+      const state = await database.sql.query(`SELECT
+        (SELECT count(*)::int FROM information_deliveries WHERE state IN ('pending','claimed')) pending,
+        (SELECT count(*)::int FROM information_atoms a WHERE a.kind='core.model.task.requested' AND NOT EXISTS (
+          SELECT 1 FROM information_references r JOIN information_atoms terminal ON terminal.information_id=r.information_id
+          WHERE r.target_information_id=a.information_id AND r.relation='core:status-of'
+          AND terminal.kind IN ('core.model.task.completed','core.model.task.failed','core.model.task.cancelled'))) models`);
+      expect(state.rows).toEqual([{ pending: 0, models: 0 }]);
+    });
   };
   const message = (
     id = "m1",
@@ -236,7 +261,10 @@ async function fixture(
   });
   return {
     waitForDeliveries: (count: number) =>
-      waitForPersistence(() => expect(delivered).toHaveBeenCalledTimes(count)),
+      waitFor(`deliveries reach ${count}`, () =>
+        expect(delivered).toHaveBeenCalledTimes(count),
+      ),
+    waitFor,
     database,
     requests,
     backgroundRequests,
@@ -247,6 +275,23 @@ async function fixture(
     atoms,
     settle,
     message,
+    invalidateCurrentRun: async () => {
+      const turn = (await atoms())
+        .filter((a) => a.kind === "agent.router.turn.context.completed")
+        .at(-1)!;
+      const source = turn.payload.source as any,
+        d = source.destination;
+      await database.actions.invalidateRun(
+        String(turn.payload.claimInformationId),
+        JSON.stringify([
+          source.platform,
+          source.adapterId,
+          d.kind,
+          d.userId ?? d.groupId ?? d.conversationId ?? null,
+        ]),
+        turn.informationId,
+      );
+    },
     cancel: (id: string) => cancelTask(id),
     core: () => core,
     submit: (m: PlatformInboundMessage) => runtime.submit(m),
@@ -267,6 +312,359 @@ function kinds(
 }
 
 describe("Router Light via DeepSeek-compatible provider", () => {
+  it.each([false, true])(
+    "checks the actual Heavy recall supplement before delivery (withdraw=%s)",
+    async (withdraw) => {
+      let calls = 0,
+        entered = false,
+        release!: () => void;
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      const term = "紫晶星云超导档案";
+      const f = await fixture([silent, speak], true, async () => {
+        if (calls++ === 0)
+          return { action: "recall", query: term, candidateIds: [] };
+        entered = true;
+        await gate;
+        return { action: "message", text: "补查结果已读取" };
+      });
+      try {
+        await f.submit(f.message("seed", { text: "一条已经处理的历史来源" }));
+        await f.settle();
+        // 已形成的独立历史来源不在本轮 pending 或初始固定摘要中。
+        const source = { informationId: randomUUID() };
+        const scope = JSON.stringify(["qq", "test", "private", "user"]),
+          nodeId = randomUUID();
+        await f.database.information.synchronizeKinds([
+          "memory.native.source.v1",
+          "test.historical.evidence",
+        ]);
+        await f.database.information.append(
+          freezeInformationAtom(
+            informationAtomSchema.parse({
+              informationId: source.informationId,
+              kind: "test.historical.evidence",
+              source: "test:historical-proof",
+              occurredAt: "2020-01-01T00:00:00Z",
+              payload: { text: term },
+              references: [],
+            }),
+          ),
+          [],
+        );
+        await f.database.information.append(
+          freezeInformationAtom(
+            informationAtomSchema.parse({
+              informationId: `memory-native-source:${source.informationId}`,
+              kind: "memory.native.source.v1",
+              source: "test:historical-proof",
+              occurredAt: "2020-01-01T00:00:00Z",
+              payload: {
+                memorySource: {
+                  id: source.informationId,
+                  ownerId: "person:historical",
+                  scope,
+                },
+                sourceProofVersion: 1,
+                sourceOwners: ["person:historical"],
+              },
+              references: [],
+            }),
+          ),
+          [],
+        );
+        await f.database.memoryGraph.native.publish({
+          operationId: "seed-supplement",
+          actor: "manual",
+          nodes: [
+            {
+              expectedRevision: 0,
+              node: {
+                id: nodeId,
+                content: term,
+                metadata: {
+                  system: "native-v1",
+                  kind: "experience",
+                  scope,
+                  ownerId: "person:historical",
+                  level: 1,
+                  revision: 1,
+                  status: "active",
+                  locked: false,
+                  sourceIds: [source.informationId],
+                  aliases: [],
+                  tags: [],
+                  occurredAt: "2020-01-01T00:00:00Z",
+                },
+              },
+            },
+          ],
+        });
+        f.setTime(1000);
+        await f.submit(f.message("question", { text: "请完成另一项任务" }));
+        await f.waitFor("Heavy follow-up sees the persisted recall", () =>
+          expect(entered).toBe(true),
+        );
+        const graph = await f.atoms(),
+          frozen = graph
+            .filter((a) => a.kind === "agent.situation.frozen")
+            .at(-1)!;
+        const original = (frozen.payload.frame as any).memory;
+        expect(
+          [...original.fixed, ...original.recalled.map((r: any) => r.node)].map(
+            (n: any) => n.id,
+          ),
+        ).not.toContain(nodeId);
+        expect(
+          (original.pendingEvidence ?? []).map((e: any) => e.informationId),
+        ).not.toContain(source.informationId);
+        const recall = graph
+          .filter((a) => a.kind === "agent.heavy.recall.completed")
+          .at(-1)!;
+        expect(
+          (recall.payload.snapshot as any).recalled.map((r: any) => r.node.id),
+        ).toContain(nodeId);
+        const followup = graph.find(
+          (a) =>
+            a.kind === "core.model.task.requested" &&
+            a.payload.sourceInformationId === recall.informationId,
+        )!;
+        expect(
+          JSON.stringify(
+            (followup.payload.prompt as any).variables.find(
+              (v: any) => v.name === "memory_recall",
+            ),
+          ),
+        ).toContain(nodeId);
+        if (withdraw)
+          await f.database.memoryGraph.native.publish({
+            operationId: "withdraw-supplement",
+            actor: "manual",
+            nodes: [],
+            invalidations: [
+              {
+                kind: "source-withdrawal",
+                targetId: source.informationId,
+                reason: "synthetic correction",
+              },
+            ],
+          });
+        release();
+        await f.settle();
+        expect(f.delivered).toHaveBeenCalledTimes(withdraw ? 0 : 1);
+        const actions = (
+          await f.database.sql.query<{ input: any; state: string }>(
+            "SELECT input,state FROM information_action_heads",
+          )
+        ).rows;
+        expect(actions).toHaveLength(1);
+        expect(actions[0]!.state).toBe(withdraw ? "rejected" : "succeeded");
+        expect(actions[0]!.input.dependencies.memoryRevisions).toContainEqual({
+          id: nodeId,
+          revision: 1,
+        });
+      } finally {
+        release();
+      }
+    },
+    40000,
+  );
+
+  it.each(["correction", "stop", "unrelated"] as const)(
+    "checks a late Heavy reply against %s while preserving the frozen input",
+    async (change) => {
+      let entered = false;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const f = await fixture([speak, silent], false, async () => {
+        entered = true;
+        await gate;
+        return { action: "message", text: "old frozen reply" };
+      });
+      await withModelGateCleanup(
+        async () => {
+          await f.submit(f.message("original", { text: "请回复当前问题" }));
+          await f.waitFor("Heavy request entered", () =>
+            expect(entered).toBe(true),
+          );
+          const before = await f.atoms();
+          const frozen = before.find(
+            (a) => a.kind === "agent.situation.frozen",
+          )!;
+          const source = before.find(
+            (a) => a.kind === "core.message.inbound.text",
+          )!;
+          if (change === "correction")
+            await f.database.memoryGraph.native.publish({
+              operationId: "late-correction",
+              actor: "manual",
+              nodes: [],
+              invalidations: [
+                {
+                  kind: "source-withdrawal",
+                  targetId: source.informationId,
+                  reason: "更正原问题",
+                },
+              ],
+            });
+          if (change === "stop") await f.invalidateCurrentRun();
+          f.setTime(1);
+          await f.submit(
+            f.message("interjection", {
+              text:
+                change === "unrelated"
+                  ? "顺便说一句天气不错"
+                  : "原问题已更正，请停止旧回复",
+            }),
+          );
+          release();
+          await f.settle("late Heavy result and persistent terminals settled");
+          expect(f.delivered).toHaveBeenCalledTimes(
+            change === "unrelated" ? 1 : 0,
+          );
+          expect(
+            (await f.atoms()).find(
+              (a) => a.informationId === frozen.informationId,
+            )?.payload,
+          ).toEqual(frozen.payload);
+          const deliveredCount = f.delivered.mock.calls.length;
+          await f.restart();
+          await f.settle("restart cannot resend the old reply");
+          expect(f.delivered).toHaveBeenCalledTimes(deliveredCount);
+        },
+        () => {
+          release();
+        },
+        () => f.settle("released Heavy callback drained before teardown"),
+      );
+    },
+    MULTI_STAGE_TIMEOUT,
+  );
+
+  it(
+    "rejects an old queued reply after downtime and preserves not-executed delivery evidence",
+    async () => {
+      const f = await fixture([speak]);
+      let entered = false;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const prepare = f.database.actions.prepareDelivery.bind(
+        f.database.actions,
+      );
+      const hook = vi
+        .spyOn(f.database.actions, "prepareDelivery")
+        .mockImplementation(async (...args) => {
+          entered = true;
+          await gate;
+          return prepare(...args);
+        });
+      await withModelGateCleanup(
+        async () => {
+          await f.submit(f.message());
+          await f.waitFor("durable delivery reached preparation", () =>
+            expect(entered).toBe(true),
+          );
+          await f.database.sql.query(
+            "UPDATE information_deliveries SET created_at=clock_timestamp()-interval '1 day' WHERE subscription_id='kaguya.runtime.delivery'",
+          );
+          release();
+          await f.settle("expired reply and delivery terminal persisted");
+          expect(f.delivered).not.toHaveBeenCalled();
+          const rows = (
+            await f.database.sql.query(
+              "SELECT state,attempt_id FROM information_action_heads",
+            )
+          ).rows;
+          expect(rows).toEqual([{ state: "rejected", attempt_id: null }]);
+          const failed = (await f.atoms()).filter(
+            (a) => a.kind === "core.delivery.failed",
+          );
+          expect(failed).toHaveLength(1);
+          expect(failed[0]!.payload).toMatchObject({
+            ok: false,
+            error: "Action admission rejected",
+          });
+          expect(failed[0]!.payload).not.toHaveProperty("outcome");
+          await f.restart();
+          await f.settle("expired reply remains rejected after restart");
+          expect(f.delivered).not.toHaveBeenCalled();
+          expect(
+            (await f.atoms()).filter((a) => a.kind === "core.delivery.failed"),
+          ).toEqual(failed);
+        },
+        () => {
+          release();
+          hook.mockRestore();
+        },
+        () => f.settle("preparation gate drained before teardown"),
+      );
+    },
+    MULTI_STAGE_TIMEOUT,
+  );
+
+  it(
+    "preserves the delivered first segment while a stopped continuation stays stopped across restart",
+    async () => {
+      let calls = 0;
+      let entered = false;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const f = await fixture([speak], false, async () => {
+        calls++;
+        if (calls === 1)
+          return {
+            action: "message",
+            text: "first segment",
+            continuation: "continue old answer",
+          };
+        entered = true;
+        await gate;
+        return {
+          action: "message",
+          text: "obsolete continuation",
+          continuation: null,
+        };
+      });
+      await withModelGateCleanup(
+        async () => {
+          await f.submit(f.message());
+          await f.waitFor(
+            "continuation model entered after first delivery",
+            () => expect(entered).toBe(true),
+          );
+          expect(f.delivered).toHaveBeenCalledTimes(1);
+          await f.invalidateCurrentRun();
+          release();
+          await f.settle("stopped continuation reached terminal");
+          expect(f.delivered).toHaveBeenCalledTimes(1);
+          expect(
+            (
+              await f.database.sql.query(
+                "SELECT state FROM information_action_heads ORDER BY state",
+              )
+            ).rows,
+          ).toEqual([{ state: "rejected" }, { state: "succeeded" }]);
+          await f.restart();
+          await f.settle("stopped continuation remains terminal after restart");
+          expect(calls).toBe(2);
+          expect(f.delivered).toHaveBeenCalledTimes(1);
+        },
+        () => {
+          release();
+        },
+        () => f.settle("continuation callback drained before teardown"),
+      );
+    },
+    MULTI_STAGE_TIMEOUT,
+  );
+
   it(
     "freezes first-contact summaries and resumes Heavy from persisted recall after restart",
     async () => {
@@ -335,7 +733,7 @@ describe("Router Light via DeepSeek-compatible provider", () => {
     const freeze = vi.spyOn(f.database.rawEvents, "freeze");
     freeze.mockRejectedValueOnce(new Error("synthetic raw projection outage"));
     await f.submit(f.message());
-    await waitForPersistence(async () =>
+    await f.waitFor("speech persistence", async () =>
       expect(freeze).toHaveBeenCalledTimes(1),
     );
     expect(f.requests).toHaveLength(0);
@@ -559,37 +957,41 @@ describe("Router Light via DeepSeek-compatible provider", () => {
     },
   );
 
-  it("repairs an obsolete composition field before dispatch and replays the decision once", async () => {
-    const f = await fixture([
-      {
-        ...speak,
-        composition: {
-          focusInputIndexes: [0],
-          topic: "topic",
-          replyAct: "reply",
+  it(
+    "repairs an obsolete composition field before dispatch and replays the decision once",
+    async () => {
+      const f = await fixture([
+        {
+          ...speak,
+          composition: {
+            focusInputIndexes: [0],
+            topic: "topic",
+            replyAct: "reply",
+          },
         },
-      },
-      speak,
-    ]);
-    await f.submit(f.message());
-    await f.settle();
-    const before = await f.atoms();
-    expect(f.requests).toHaveLength(3); // invalid Light, repaired Light, Heavy
-    const task = before.find(
-      (a) =>
-        a.kind === "core.model.task.requested" &&
-        a.payload.taskId === "agent.light.decide",
-    )!;
-    expect(task.payload).not.toHaveProperty("version");
-    expect(
-      before.filter((a) => a.kind === "agent.light.decision.completed"),
-    ).toHaveLength(1);
-    expect(f.delivered).toHaveBeenCalledTimes(1);
-    await f.restart();
-    await f.settle();
-    expect(f.requests).toHaveLength(3);
-    expect(f.delivered).toHaveBeenCalledTimes(1);
-  });
+        speak,
+      ]);
+      await f.submit(f.message());
+      await f.settle("repaired decision committed");
+      const before = await f.atoms();
+      expect(f.requests).toHaveLength(3); // invalid Light, repaired Light, Heavy
+      const task = before.find(
+        (a) =>
+          a.kind === "core.model.task.requested" &&
+          a.payload.taskId === "agent.light.decide",
+      )!;
+      expect(task.payload).not.toHaveProperty("version");
+      expect(
+        before.filter((a) => a.kind === "agent.light.decision.completed"),
+      ).toHaveLength(1);
+      expect(f.delivered).toHaveBeenCalledTimes(1);
+      await f.restart();
+      await f.settle();
+      expect(f.requests).toHaveLength(3);
+      expect(f.delivered).toHaveBeenCalledTimes(1);
+    },
+    MULTI_STAGE_TIMEOUT,
+  );
 
   it("fails closed without structural repair for an HTTP failure", async () => {
     const f = await fixture(["HTTP_FAILURE", speak]);
@@ -686,7 +1088,7 @@ describe("Router Light via DeepSeek-compatible provider", () => {
   );
 
   it.each([false, true])(
-    "interrupts Light during repair=%s and coalesces incoming messages after the quiet window",
+    "persistent invalidation interrupts Light during repair=%s and coalesces messages after the quiet window",
     async (duringRepair) => {
       let release!: (value: unknown) => void;
       const blocked = new Promise((resolve) => {
@@ -700,13 +1102,14 @@ describe("Router Light via DeepSeek-compatible provider", () => {
       const blockedRequestCount = duringRepair ? 2 : 1;
       try {
         await f.submit(f.message());
-        await waitForPersistence(() =>
+        await f.waitFor("speech persistence", () =>
           expect(f.requests).toHaveLength(blockedRequestCount),
         );
+        await f.invalidateCurrentRun();
         f.setTime(1000);
         for (let i = 0; i < 8; i++)
           await f.submit(f.message(`m${i + 2}`, { text: `更新的消息 ${i}` }));
-        await waitForPersistence(async () =>
+        await f.waitFor("speech persistence", async () =>
           expect(kinds(await f.atoms())).toContain(
             "agent.heartbeat.observation.wake",
           ),
@@ -718,7 +1121,9 @@ describe("Router Light via DeepSeek-compatible provider", () => {
         ).toHaveLength(1);
         expect(f.requests).toHaveLength(blockedRequestCount);
         release(speak);
-        await f.settle();
+        await f.settle(
+          "cancelled Light result drained before quiet-window restart",
+        );
         f.setTime(1001);
         await f.restart();
         await f.settle();
@@ -767,11 +1172,11 @@ describe("Router Light via DeepSeek-compatible provider", () => {
         release(speak);
       }
     },
-    MULTI_STAGE_TIMEOUT,
+    INTERRUPTION_TIMEOUT,
   );
 
   it(
-    "refreshes the interruption quiet window from the latest message",
+    "refreshes the quiet window after persistent invalidation from the latest message",
     async () => {
       let release!: (value: unknown) => void;
       const blocked = new Promise((resolve) => {
@@ -780,10 +1185,13 @@ describe("Router Light via DeepSeek-compatible provider", () => {
       const f = await fixture([() => blocked, silent]);
       try {
         await f.submit(f.message());
-        await waitForPersistence(() => expect(f.requests).toHaveLength(1));
+        await f.waitFor("speech persistence", () =>
+          expect(f.requests).toHaveLength(1),
+        );
+        await f.invalidateCurrentRun();
         f.setTime(1000);
         await f.submit(f.message("m2"));
-        await waitForPersistence(async () =>
+        await f.waitFor("speech persistence", async () =>
           expect(kinds(await f.atoms())).toContain(
             "agent.router.turn.interrupted",
           ),
@@ -814,7 +1222,7 @@ describe("Router Light via DeepSeek-compatible provider", () => {
   );
 
   it(
-    "stops interrupting after two Light rebuilds",
+    "keeps explicit invalidation effective after two Light rebuilds",
     async () => {
       const releases: ((value: unknown) => void)[] = [];
       const blocked = () =>
@@ -824,11 +1232,14 @@ describe("Router Light via DeepSeek-compatible provider", () => {
       const f = await fixture([blocked, blocked, blocked, silent]);
       try {
         await f.submit(f.message());
-        await waitForPersistence(() => expect(releases).toHaveLength(1));
+        await f.waitFor("speech persistence", () =>
+          expect(releases).toHaveLength(1),
+        );
         for (let round = 1; round <= 2; round++) {
+          await f.invalidateCurrentRun();
           f.setTime(1000);
           await f.submit(f.message(`m${round + 1}`));
-          await waitForPersistence(async () =>
+          await f.waitFor("speech persistence", async () =>
             expect(
               (await f.atoms()).filter(
                 (a) => a.kind === "agent.router.turn.interrupted",
@@ -839,33 +1250,31 @@ describe("Router Light via DeepSeek-compatible provider", () => {
           await f.settle();
           f.setTime(1001);
           await f.restart();
-          await waitForPersistence(() =>
+          await f.waitFor("speech persistence", () =>
             expect(releases).toHaveLength(round + 1),
           );
         }
+        await f.invalidateCurrentRun();
         f.setTime(1000);
         await f.submit(f.message("m4"));
-        await waitForPersistence(async () =>
-          expect(kinds(await f.atoms())).toContain(
-            "agent.heartbeat.observation.wake",
-          ),
+        await f.waitFor("third persistent invalidation committed", async () =>
+          expect(
+            (await f.atoms()).filter(
+              (a) => a.kind === "agent.router.turn.interrupted",
+            ),
+          ).toHaveLength(3),
         );
-        expect(
-          (await f.atoms()).filter(
-            (a) => a.kind === "agent.router.turn.interrupted",
-          ),
-        ).toHaveLength(2);
         releases[2]!(silent);
         await f.settle();
       } finally {
         for (const release of releases) release(silent);
       }
     },
-    MULTI_STAGE_TIMEOUT,
+    REBUILD_LIMIT_TIMEOUT,
   );
 
   it(
-    "rebuilds on new input without consuming the wait budget",
+    "rebuilds after persistent invalidation without consuming the wait budget",
     async () => {
       let release!: (value: unknown) => void;
       const blocked = new Promise((resolve) => {
@@ -874,10 +1283,13 @@ describe("Router Light via DeepSeek-compatible provider", () => {
       const f = await fixture([() => blocked, speak]);
       try {
         await f.submit(f.message());
-        await waitForPersistence(() => expect(f.requests).toHaveLength(1));
+        await f.waitFor("speech persistence", () =>
+          expect(f.requests).toHaveLength(1),
+        );
+        await f.invalidateCurrentRun();
         f.setTime(1000);
         await f.submit(f.message("during-wait"));
-        await waitForPersistence(async () =>
+        await f.waitFor("speech persistence", async () =>
           expect(kinds(await f.atoms())).toContain(
             "agent.heartbeat.observation.wake",
           ),
@@ -919,7 +1331,9 @@ describe("Router Light via DeepSeek-compatible provider", () => {
     const f = await fixture([() => blocked]);
     try {
       await f.submit(f.message());
-      await waitForPersistence(() => expect(f.requests).toHaveLength(1));
+      await f.waitFor("speech persistence", () =>
+        expect(f.requests).toHaveLength(1),
+      );
       const requested = (await f.atoms()).find(
         (a) => a.kind === "core.model.task.requested",
       )!;
@@ -1017,7 +1431,7 @@ describe("Router Light via DeepSeek-compatible provider", () => {
       expect(f.requests).toHaveLength(0);
       f.setTime(300001);
       await f.restart();
-      await waitForPersistence(async () =>
+      await f.waitFor("speech persistence", async () =>
         expect(
           (await f.atoms()).some(
             (a) => a.kind === "agent.observation.completed.v1",
@@ -1075,7 +1489,7 @@ describe("Router Light via DeepSeek-compatible provider", () => {
       for (let round = 0; round < 3; round++) {
         f.setTime(6000);
         await f.restart();
-        await waitForPersistence(() =>
+        await f.waitFor("speech persistence", () =>
           expect(f.requests).toHaveLength(round === 2 ? 5 : round + 2),
         );
         await f.settle();
@@ -1110,7 +1524,9 @@ describe("Router Light via DeepSeek-compatible provider", () => {
     const f = await fixture([() => blocked]);
     try {
       await f.submit(f.message());
-      await waitForPersistence(() => expect(f.requests).toHaveLength(1));
+      await f.waitFor("speech persistence", () =>
+        expect(f.requests).toHaveLength(1),
+      );
       f.setTime(60000);
       release(wait);
       await f.settle();
@@ -1126,7 +1542,7 @@ describe("Router Light via DeepSeek-compatible provider", () => {
   });
 
   it(
-    "rebuilds after a decision write failure when new input arrives before decision commit",
+    "rebuilds after persistent invalidation between a decision write failure and retry",
     async () => {
       const f = await fixture([speak, speak]);
       const commit = f.core().commitTerminal.bind(f.core());
@@ -1147,7 +1563,10 @@ describe("Router Light via DeepSeek-compatible provider", () => {
         });
       try {
         await f.submit(f.message());
-        await waitForPersistence(() => expect(interrupted).toBe(true));
+        await f.waitFor("speech persistence", () =>
+          expect(interrupted).toBe(true),
+        );
+        await f.invalidateCurrentRun();
         await f.submit(
           f.message("late-history", {
             occurredAt: "2026-09-12T11:59:00.000Z",
@@ -1195,7 +1614,7 @@ describe("Router Light via DeepSeek-compatible provider", () => {
       for (let round = 1; round <= 3; round++) {
         f.setTime(6000);
         await f.restart();
-        await waitForPersistence(() =>
+        await f.waitFor("speech persistence", () =>
           expect(f.requests).toHaveLength(round === 3 ? 5 : round + 1),
         );
         await f.settle();

@@ -4,12 +4,8 @@
  * cognitiveFixture 装配显式模块和时钟；模型替身只替换外部生成，结果仍通过 Core 持久化去重。
  * restart 关闭并重建宿主和 Core，保留数据库；close 由测试 finally 调用，不连接真实模型或平台。
  */
-/**
- * ModuleHost 与 Core 共用可控时钟，模块派生事实和限频测试不会混用墙钟。
- * 功能概述：认知模块测试的真实 PGlite、Core 与 ModuleHost 夹具，验证引用校验、幂等槽与调度持久化。
- * cognitiveFixture 装配显式模块和时钟；模型替身只替换外部生成，结果仍通过 Core 持久化去重。
- * restart 关闭并重建宿主和 Core，保留数据库；close 由测试 finally 调用，不连接真实模型或平台。
- */
+import { closeTestResources } from "./cleanup.js";
+import type { KaguyaDatabase } from "@kaguya/database";
 import {
   nativeMemoryCapability,
   memoryFormationCapability,
@@ -23,6 +19,8 @@ import {
 } from "@kaguya/engine";
 import { z } from "@kaguya/schema";
 import {
+  observationCapability,
+  actionRunValidityCapability,
   defineInformationKind,
   defineModuleCapability,
   defineInformationModuleCatalog,
@@ -65,9 +63,8 @@ export async function cognitiveFixture(
   generate: (request: ModelTaskRequest<unknown>) => unknown = () => ({
     patterns: [],
   }),
+  beforeStart?: (database: KaguyaDatabase) => Promise<void>,
 ) {
-  const database = await createTestingDatabase();
-  await database.prepareSchema();
   let seq = 0;
   let now = "2026-09-09T00:00:10.000Z";
   let core: InformationCore;
@@ -79,7 +76,9 @@ export async function cognitiveFixture(
     definitionId: m.manifest.definitionId,
     settings: m.manifest.settingsSchema.parse({}),
   }));
-  async function start() {
+  const database = await createTestingDatabase();
+  const runningResources: Array<() => Promise<unknown>> = [];
+  async function launch() {
     const registry = new InformationKindRegistry();
     const defs = [
       runtimeKind,
@@ -108,6 +107,8 @@ export async function cognitiveFixture(
       nextInformationId: () => `cognitive-${++seq}`,
       now: () => new Date(now),
     });
+    const startedCore = core;
+    runningResources.push(() => startedCore.close());
     const model = {
       execute: async (request: ModelTaskRequest<unknown>) => {
         const existing = (
@@ -123,7 +124,7 @@ export async function cognitiveFixture(
         let terminal = existing;
         if (!terminal) {
           calls++;
-          const output = generate(request);
+          const output = await generate(request);
           terminal = await core.registerOnce(
             "test.model",
             request.sourceInformationId,
@@ -155,6 +156,8 @@ export async function cognitiveFixture(
       core,
       catalog,
       capabilities: [
+        { capability: observationCapability, value: database.observations },
+        { capability: actionRunValidityCapability, value: database.actions },
         {
           capability: nativeMemoryCapability,
           value: createNativeMemoryAccess({
@@ -176,10 +179,40 @@ export async function cognitiveFixture(
         },
       ],
     });
+    const startedHost = host;
+    runningResources.push(() => startedHost.stop());
     await core.start();
     await host.start(configs);
   }
-  await start();
+  async function start() {
+    try {
+      await launch();
+    } catch (error) {
+      try {
+        await closeTestResources(runningResources);
+      } catch (cleanup) {
+        throw new AggregateError([error, cleanup], "Fixture start failed");
+      }
+      throw error;
+    }
+  }
+  const stop = () => closeTestResources(runningResources);
+  const close = () => closeTestResources([() => database.close(), stop]);
+  try {
+    await database.prepareSchema();
+    await beforeStart?.(database);
+    await start();
+  } catch (error) {
+    try {
+      await close();
+    } catch (cleanup) {
+      throw new AggregateError(
+        [error, cleanup],
+        "Fixture initialization failed",
+      );
+    }
+    throw error;
+  }
   return {
     database,
     get core() {
@@ -191,16 +224,13 @@ export async function cognitiveFixture(
     setNow(value: string) {
       now = value;
     },
+    stop,
+    start,
     async restart() {
-      await host.stop();
-      await core.close();
+      await stop();
       await start();
     },
-    async close() {
-      await host.stop();
-      await core.close();
-      await database.close();
-    },
+    close,
     async context() {
       return core.register(runtimeKind, {
         source: "core:test",

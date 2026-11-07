@@ -9,12 +9,14 @@
  * 代码库关系：Server 管理认证路由调用本类，Runtime 注入 Core/目录/生效 allowlist 和授权正文渲染器；不读取模板文件或直接调用 transport。
  * AuthorizedMessagePromptRenderer 只接收授权说明和已冻结的背景变量；prepare 保留其来源引用，未装配渲染器时拒绝生成正文。
  * 输入输出与副作用：持久化授权/确认事实，私有授权表重启失效；目录、白名单或内容变化拒绝；不记录文本或 ID。
+ * 有序媒体确认绑定已暂存助手的完整内容段和冻结请求；宿主另行核验素材场景权限及字节，空正文只允许有效纯媒体内容。
  */
 import { randomUUID } from "node:crypto";
 import type { InformationCore } from "@kaguya/engine";
 import { defineInformationSelector } from "@kaguya/sdk";
 import {
   z,
+  outboundMessageContentSchema,
   nativeMemorySnapshotSchema,
   type CompiledPrompt,
   type DeepReadonly,
@@ -1102,6 +1104,20 @@ export class MessageTargetService implements MessageAuthorization {
       typeof assistant.payload.text !== "string"
     )
       throw new Error("target-authorization-required");
+    if (assistant.payload.text.length === 0) {
+      const content = outboundMessageContentSchema.safeParse({
+        kind: "content",
+        text: assistant.payload.text,
+        segments: assistant.payload.contentSegments,
+        requestInformationId: assistant.payload.mediaRequestInformationId,
+      });
+      if (
+        !content.success ||
+        content.data.kind !== "content" ||
+        !content.data.segments.some((segment) => segment.kind === "mediaRef")
+      )
+        throw new Error("target-authorization-required");
+    }
     if (
       approval.assistantId &&
       approval.assistantId !== assistant.informationId
@@ -1200,18 +1216,50 @@ export class MessageTargetService implements MessageAuthorization {
       )
         return false;
       if (!approval) return true;
-      const message = request.payload.message;
+      const parsedMessage = outboundMessageContentSchema.safeParse(
+        request.payload.message,
+      );
+      if (!parsedMessage.success) return false;
+      const message = parsedMessage.data;
+      const approvedText =
+        message &&
+        typeof message === "object" &&
+        "kind" in message &&
+        (message.kind === "text" ||
+          message.kind === "audio" ||
+          message.kind === "content") &&
+        "text" in message &&
+        typeof message.text === "string"
+          ? message.text
+          : undefined;
       if (
         !approval.confirmed ||
-        !message ||
-        typeof message !== "object" ||
-        !("kind" in message) ||
-        message.kind !== "text" ||
-        !("text" in message) ||
-        message.text !== approval.text ||
+        approvedText !== approval.text ||
         (approval.deliveryId && approval.deliveryId !== request.informationId)
       )
         return false;
+      if (!approval.assistantId) return false;
+      const assistant = await this.read(approval.assistantId);
+      if (
+        message.kind === "content" ||
+        assistant.payload.contentSegments !== undefined
+      ) {
+        if (message.kind !== "content") return false;
+        const staged = outboundMessageContentSchema.safeParse({
+          kind: "content",
+          text: assistant.payload.text,
+          segments: assistant.payload.contentSegments,
+          requestInformationId: assistant.payload.mediaRequestInformationId,
+        });
+        if (
+          !staged.success ||
+          staged.data.kind !== "content" ||
+          staged.data.requestInformationId !== message.requestInformationId ||
+          JSON.stringify(staged.data.segments) !==
+            JSON.stringify(message.segments)
+        )
+          return false;
+      }
       approval.deliveryId = request.informationId;
       this.#validatedCrossDeliveries.set(request.informationId, approval);
       return true;

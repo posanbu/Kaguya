@@ -1,3 +1,7 @@
+/**
+ * 功能概述：验证最终 Memory 提示的来源投影、动态裁剪及 UTF-8 字节边界。
+ * 主要职责：覆盖长原话、固定摘要、历史上下文和无快照回放；检查原冻结对象保持不变。
+ */
 import { describe, it, expect } from "vitest";
 import {
   compiledPromptSchema,
@@ -95,6 +99,45 @@ describe("mandatory frozen Memory context", () => {
     ).toThrow("MEMORY_FIXED_CONTEXT_BUDGET_EXCEEDED");
     expect(appendNativeMemoryToPrompt(prompt, [], "turn")).toBe(prompt);
   });
+  it.each(["a", "中", "🧪"])(
+    "truncates oversized pending evidence at the final UTF-8 boundary (%s)",
+    (character) => {
+      const evidence = {
+        informationId: "raw-source",
+        text: character.repeat(130000),
+        ownerId: "person:ada",
+        scope: "one",
+        occurredAt: "2026-10-20T00:00:00Z",
+      };
+      const memory = {
+        ...snapshot,
+        pendingEvidence: [evidence],
+        evidenceHasMore: false,
+      };
+      const result = appendNativeMemoryToPrompt(
+        prompt,
+        [frozen(memory)],
+        "turn",
+      );
+      const actual = JSON.parse(
+        result.variables.find((v) => v.name === "native_memory")!.content,
+      );
+      expect(Buffer.byteLength(result.text, "utf8")).toBeLessThanOrEqual(
+        128000,
+      );
+      expect(actual.pendingEvidence[0]).toMatchObject({
+        informationId: "raw-source",
+        ownerId: "person:ada",
+        truncated: true,
+        originalCharacters: 130000,
+      });
+      expect(actual.evidenceHasMore).toBe(true);
+      expect(actual.budget.dynamicCharacters).toBe(
+        Array.from(actual.pendingEvidence[0].text).length,
+      );
+      expect(evidence.text).toBe(character.repeat(130000));
+    },
+  );
 });
 
 describe("final evidence projection", () => {

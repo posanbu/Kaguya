@@ -6,6 +6,7 @@
  * ui.tsx 导出的 Radix Dialog/DropdownMenu，视觉沿用 workbench.css 和品牌素材。
  * 每次导航冻结守卫快照；注册 effect 只依赖稳定的 register，保存重渲染不会重复执行守卫。
  * history 使用 entry index/go 恢复取消的后退/前进，不 push 截断历史；并发导航只保留首个请求。
+ * 路由保留 pathname+search；history entry 只保存焦点标识与滚动位置，异步目录加载后可恢复。
  * 输入输出与副作用：导航守卫返回 false 时保留当前页和抽屉；成功导航关闭抽屉。
  * 抽屉由 Radix 管理焦点圈定、Escape 和触发器焦点恢复；不读取或持久化 Token。
  * 消息路由使用独立布局标记，使消息记录在视口内滚动、输入区保持可见，不影响长表单页面。
@@ -41,6 +42,7 @@ export const workbenchRoutes = [
   { path: "/developer/modules", label: "检查", icon: ScanSearch },
 ] as const;
 export function navigationDomain(path: string): string {
+  path = path.split("?")[0]!;
   if (path === "/situation") return "/situation";
   if (path === "/memory") return "/memory";
   if (path.startsWith("/developer")) return "/developer/modules";
@@ -50,13 +52,48 @@ export function navigationDomain(path: string): string {
   return path === "/messages" ? "/messages" : "/";
 }
 type Guard = () => boolean | Promise<boolean>;
+function captureWorkbenchPosition() {
+  window.history.replaceState(
+    {
+      ...window.history.state,
+      kaguyaView: {
+        y: window.scrollY,
+        focus: (document.activeElement as HTMLElement | null)?.id,
+        scroll: [
+          ...document.querySelectorAll<HTMLElement>("[data-scroll-key]"),
+        ].map((node) => ({ key: node.dataset.scrollKey, top: node.scrollTop })),
+      },
+    },
+    "",
+  );
+}
+export function restoreWorkbenchPosition() {
+  const view = window.history.state?.kaguyaView;
+  if (!view) return;
+  requestAnimationFrame(() => {
+    if (window.history.state?.kaguyaView !== view) return;
+    if (view.focus)
+      document.getElementById(view.focus)?.focus({ preventScroll: true });
+    for (const node of document.querySelectorAll<HTMLElement>(
+      "[data-scroll-key]",
+    )) {
+      const saved = view.scroll?.find(
+        (row: { key: string }) => row.key === node.dataset.scrollKey,
+      );
+      if (saved) node.scrollTop = saved.top;
+    }
+    window.scrollTo({ top: view.y ?? 0 });
+  });
+}
 const NavigationContext = createContext<{
-  navigate: (path: string) => void;
+  navigate: (path: string) => Promise<boolean>;
   register: (guard: Guard) => () => void;
 } | null>(null);
 /** App 的路由控制器：先用 history.go 恢复原位置再确认，取消不会截断 forward 历史。 */
 export function useWorkbenchRouter() {
-  const [path, setPath] = useState(() => window.location.pathname);
+  const [path, setPath] = useState(
+    () => window.location.pathname + window.location.search,
+  );
   const guards = useRef(new Set<Guard>());
   const current = useRef(path);
   const index = useRef(0);
@@ -78,11 +115,14 @@ export function useWorkbenchRouter() {
   const allow = useCallback(() => checkNavigationGuards(guards.current), []);
   const navigate = useCallback(
     async (next: string) => {
+      if (!next.startsWith("/") || next.startsWith("//") || next.includes("#"))
+        return false;
       if (busy.current) return false;
       if (next === current.current) return true;
       busy.current = true;
       try {
         if (!(await allow())) return false;
+        captureWorkbenchPosition();
         index.current += 1;
         window.history.pushState(
           { kaguyaWorkbenchIndex: index.current },
@@ -119,6 +159,7 @@ export function useWorkbenchRouter() {
         index.current = intent.index;
         current.current = intent.path;
         setPath(intent.path);
+        restoreWorkbenchPosition();
         popIntent.current = undefined;
         busy.current = false;
         return;
@@ -129,6 +170,7 @@ export function useWorkbenchRouter() {
           return;
         }
         if (intent.phase === "restoring") {
+          captureWorkbenchPosition();
           intent.phase = "confirming";
           void allow().then((allowed) => {
             if (!allowed) {
@@ -150,7 +192,7 @@ export function useWorkbenchRouter() {
       busy.current = true;
       popIntent.current = {
         index: destination,
-        path: window.location.pathname,
+        path: window.location.pathname + window.location.search,
         phase: "restoring",
       };
       window.history.go(index.current - destination);
@@ -212,8 +254,9 @@ export function AppShell({
   const [open, setOpen] = useState(false);
   const navigate = useCallback(
     (path: string) => {
-      void onNavigate(path).then((allowed) => {
+      return onNavigate(path).then((allowed) => {
         if (allowed) setOpen(false);
+        return allowed;
       });
     },
     [onNavigate],

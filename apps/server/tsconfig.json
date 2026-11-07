@@ -36,6 +36,9 @@
     },
     {
       "path": "../../packages/composition"
+    },
+    {
+      "path": "../../packages/mcp"
     }
   ]
 }

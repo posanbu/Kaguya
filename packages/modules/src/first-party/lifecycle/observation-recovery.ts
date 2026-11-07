@@ -1,6 +1,7 @@
 /**
  * 功能概述：在 Lifecycle 启动与持久延期到期时，从账本恢复观察积压，不依赖在线入站广播。
  * recoverySourcesSelector 分页扫描启动上界内的来源，按完整 scene 地址选择各流的第一完整页；
+ * recoveryOwnersSelector 保留开放任务身份；旧调度沿显式来源链恢复归属，无法解析者保留但不猜测 scene。
  * 开放调度与候选独立完整分页，已有 owner 不因超页被误判为不存在。
  * recoverObservations 登记独立发现进度并复用现有 Candidate/openScope/wake 协议，不确认读取成功。
  * 代码库关系：由 agent.lifecycle 持久订阅调用；使用 SDK observation、账本 Selector 和已有 Kind。
@@ -28,8 +29,32 @@ import {
   turnCandidateInformationKind,
   observationWakeInformationKind,
 } from "../information-kinds.js";
+import { resolveObservationAddress } from "./observation-scene.js";
 import { scopeOf, observationSignals } from "./observation-state.js";
 
+export const recoveryOwnersSelector = defineInformationSelector({
+  selectorId: "agent.lifecycle.observation-owners",
+  select: async ({ ledger }) => {
+    const result: string[] = [];
+    let after: string | undefined;
+    for (;;) {
+      const page = await ledger.find({
+        kinds: [
+          oneShotRequestedInformationKind.kind,
+          turnCandidateInformationKind.kind,
+        ],
+        openOnly: true,
+        registrationOrder: true,
+        order: "asc",
+        limit: 1000,
+        ...(after ? { afterInformationId: after } : {}),
+      });
+      result.push(...page.map((a) => a.informationId));
+      if (page.length < 1000) return result;
+      after = page.at(-1)!.informationId;
+    }
+  },
+});
 export const recoverySourcesSelector = defineInformationSelector({
   selectorId: "agent.lifecycle.observation-recovery",
   select: async ({ sourceAtom, ledger }) => {
@@ -114,7 +139,17 @@ export const recoverySourcesSelector = defineInformationSelector({
         limit: 1000,
         ...(ownerAfter ? { afterInformationId: ownerAfter } : {}),
       });
-      for (const owner of owners) selected.set(owner.informationId, owner);
+      for (const owner of owners) {
+        selected.set(owner.informationId, owner);
+        // 旧调度没有地址字段时，保留其显式来源链；不能按有碰撞的 scope 猜测归属。
+        await resolveObservationAddress(owner, async (id) => {
+          const found =
+            selected.get(id) ??
+            (await ledger.find({ informationIds: [id], limit: 1 }))[0];
+          if (found) selected.set(found.informationId, found);
+          return found;
+        });
+      }
       if (owners.length < 1000) break;
       ownerAfter = owners.at(-1)!.informationId;
     }
@@ -126,6 +161,9 @@ export async function recoverObservations(
   totalWaitBudget: number,
 ) {
   const selected = await context.select(recoverySourcesSelector);
+  const openOwnerIds = new Set(
+    (await context.select(recoveryOwnersSelector)).map((a) => a.informationId),
+  );
   const scenes = new Map<string, DeepReadonly<InformationAtom>[]>();
   for (const atom of selected.filter(
     (a) => a.kind === inboundTextInformationKind.kind,
@@ -148,13 +186,28 @@ export async function recoverObservations(
       .discover(contract);
     await publishObservationProgress(context, progress, scopeKey, contextId);
     // 已有调度（包括到期但尚未交付）及开放候选由其持久处理器继续，启动补扫不能重置预算。
-    const owned = selected.some(
-      (a) =>
-        (a.kind === oneShotRequestedInformationKind.kind &&
-          (a.payload.input as any)?.scopeKey === scopeKey) ||
-        (a.kind === turnCandidateInformationKind.kind &&
-          a.payload.scopeKey === scopeKey),
-    );
+    let owned = false;
+    for (const owner of selected) {
+      if (
+        owner.kind !== oneShotRequestedInformationKind.kind &&
+        owner.kind !== turnCandidateInformationKind.kind
+      )
+        continue;
+      // 只判断仍开放的 owner；来源链中的已关闭候选不重新占有场景。
+      if (!openOwnerIds.has(owner.informationId)) continue;
+      const ownerScope =
+        owner.kind === oneShotRequestedInformationKind.kind
+          ? (owner.payload.input as any)?.scopeKey
+          : owner.payload.scopeKey;
+      if (ownerScope !== scopeKey) continue;
+      const address = await resolveObservationAddress(owner, async (id) =>
+        selected.find((a) => a.informationId === id),
+      );
+      if (address && sceneIdentity(address) === sceneIdentity(source)) {
+        owned = true;
+        break;
+      }
+    }
     if (owned) continue;
     const now = context.now().toISOString();
     const candidate = await context.registerOnce(
@@ -164,7 +217,7 @@ export async function recoverObservations(
       {
         contextInformationId: contextId,
         openScope: {
-          key: scopeKey,
+          key: sceneIdentity(source),
           terminalGroup: "agent.router.turn.terminal",
         },
         payload: {

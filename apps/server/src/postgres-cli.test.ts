@@ -3,10 +3,10 @@
  * 功能概述：验证开发 CLI 的数据库失败降级、Docker 启动指引与配置错误阻断。
  * 主要职责：模拟数据库准备并验证进程、退出码与安全诊断；真实 tsx/Vitest 子进程验证无 pnpm 启动。
  * 代码库关系：覆盖 postgres-cli 与 postgres-development 契约；不启动真实 Docker 或 Server。
- * 输入输出与副作用：捕获 stderr 和 spawn，在临时目录检查参数及环境，每例清理进程监听与文件。
+ * 输入输出与副作用：捕获 stderr 和 spawn，在临时目录检查参数、真实工作目录及环境；信号断言失败也关闭模拟子进程，每例清理监听与文件。
  */
 import { ChildProcess, spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -194,12 +194,16 @@ it("forwards interruption and termination and removes handlers after child exit"
     .listeners("SIGTERM")
     .find((listener) => !originalTerminates.includes(listener));
 
-  expect(interrupt).toBeDefined();
-  expect(terminate).toBeDefined();
-  interrupt!("SIGINT");
-  terminate!("SIGTERM");
-  expect(child.kill.mock.calls).toEqual([["SIGINT"], ["SIGTERM"]]);
-  child.emit("close", 7);
+  try {
+    expect(interrupt).toBeDefined();
+    expect(terminate).toBeDefined();
+    interrupt!("SIGINT");
+    terminate!("SIGTERM");
+    expect(child.kill.mock.calls).toEqual([["SIGINT"], ["SIGTERM"]]);
+  } finally {
+    child.emit("close", 7);
+    await result;
+  }
 
   await expect(result).resolves.toBe(7);
   expect(process.listeners("SIGINT")).toEqual(originalInterrupts);
@@ -245,9 +249,10 @@ process.exitCode = 7;
       { ...process.env, PATH: "", KAGUYA_CLI_PROBE: "inherited" },
     ),
   ).resolves.toBe(7);
-  expect(JSON.parse(await readFile(output, "utf8"))).toEqual({
+  const probe = JSON.parse(await readFile(output, "utf8"));
+  expect({ ...probe, cwd: await realpath(probe.cwd) }).toEqual({
     args,
-    cwd: directory,
+    cwd: await realpath(directory),
     value: "typed",
     environment: "inherited",
   });

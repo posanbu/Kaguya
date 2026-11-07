@@ -5,13 +5,14 @@
  * `testTimeout` 为受限 CI runner 上的 PGlite 初始化与文件系统调度保留 15 秒上限。
  * 代码库关系：根 `pnpm test` 和迁移聚焦命令都加载本文件；database/testing.ts 创建的 PGlite
  * 实例由多个 Runtime、database 与 Server 集成测试使用，因此此处是跨包资源调度的唯一位置。
+ * 历史 .worktrees 目录保留在磁盘上，但不参与当前 checkout 的测试收集。
  * 输入输出与副作用：只影响测试 runner 的进程并发、单测超时和文件过滤，不改变生产 Runtime 或断言。
  */
 import { defaultExclude, defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    exclude: [...defaultExclude, "**/dist/**"],
+    exclude: [...defaultExclude, "**/dist/**", "**/.worktrees/**"],
     maxWorkers: 2,
     testTimeout: 15_000,
   },

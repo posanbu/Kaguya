@@ -2,6 +2,7 @@
  * 功能概述：验证开发者页面路由和浏览器只读 API 的认证、取消及 DTO 校验边界。
  * 主要职责：检查三个精确路径、GET/no-store/Bearer 参数、服务端不可用和无效响应；
  * 认证失败沿用全局锁屏事件，避免开发者视图保留上一轮已加载数据。
+ * 过期请求即使收到401，也不再影响当前认证上下文。
  * 代码库关系：调用 DeveloperConsole.tsx 的路由解析器与 api.ts 的 getInspection。
  * 输入输出与副作用：仅 mock fetch 和全局事件对象，每例恢复环境，无真实网络请求。
  */
@@ -10,6 +11,25 @@ import { inspectionPageSchema } from "@kaguya/schema";
 import { developerPage } from "./DeveloperConsole.js";
 import { getInspection, GATEWAY_UNAUTHORIZED_EVENT } from "./api.js";
 afterEach(() => vi.unstubAllGlobals());
+it("does not lock a current session for an aborted reader's late 401", async () => {
+  const dispatchEvent = vi.fn();
+  vi.stubGlobal("window", { dispatchEvent });
+  const controller = new AbortController();
+  const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => {
+    controller.abort();
+    return Response.json({}, { status: 401 });
+  });
+  await expect(
+    getInspection(
+      { token: "old-token" },
+      "atoms",
+      inspectionPageSchema,
+      controller.signal,
+      fetcher,
+    ),
+  ).rejects.toMatchObject({ code: "network_error", message: "服务请求已取消" });
+  expect(dispatchEvent).not.toHaveBeenCalled();
+});
 it("matches developer routes and rejects unrelated paths", () => {
   expect(developerPage("/developer/modules")).toBe("modules");
   expect(developerPage("/developer/atoms")).toBe("atoms");

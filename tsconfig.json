@@ -16,6 +16,7 @@
     { "path": "./packages/platform-adapters" },
     { "path": "./packages/runtime" },
     { "path": "./packages/composition" },
+    { "path": "./packages/mcp" },
     { "path": "./apps/server" },
     { "path": "./apps/demo" },
     { "path": "./apps/web" }

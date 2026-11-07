@@ -3,12 +3,7 @@
  * ModuleRuntimeSection 提供领域标签、实例/时间/Kind 过滤和游标分页；StorageRecords 浏览全局持久库。
  * 详情组件由 DeveloperConsole 注入以复用引用导航；useInspection 取消过期请求，切换过滤清空选择。
  * 仅 GET；页内计数明确不代表全库，inactive 保留历史入口，可选库不可用与空库区分。
- */
-/**
- * 功能概述：以模块自描述视图浏览运行历史和真实存储，机制说明与可编辑配置分开。
- * ModuleRuntimeSection 提供领域标签、实例/时间/Kind 过滤和游标分页；StorageRecords 浏览全局持久库。
- * 详情组件由 DeveloperConsole 注入以复用引用导航；useInspection 取消过期请求，切换过滤清空选择。
- * 仅 GET；页内计数明确不代表全库，inactive 保留历史入口，可选库不可用与空库区分。
+ * fixedKind 用于 Lifecycle 的睡眠领域，从同一 gates view 精确查询原睡眠状态事实。
  */
 import { useState, type ComponentType, type FormEvent } from "react";
 import { inspectionPageSchema, type InspectionModule } from "@kaguya/schema";
@@ -26,11 +21,13 @@ export function ModuleRuntimeSection({
   token,
   revision,
   DetailComponent,
+  fixedKind,
 }: {
   module: InspectionModule;
   token: string;
   revision: number;
   DetailComponent: ComponentType<InspectionDetailProps>;
+  fixedKind?: string | undefined;
 }) {
   const views = module.inspection?.views ?? [];
   const [viewId, setViewId] = useState(views[0]?.id ?? "");
@@ -42,6 +39,7 @@ export function ModuleRuntimeSection({
   query.set("definitionId", module.definitionId);
   query.set("view", viewId);
   query.set("limit", "20");
+  if (fixedKind) query.set("kind", fixedKind);
   if (cursors.length) query.set("cursor", cursors.at(-1)!);
   const state = useInspection(
     token,

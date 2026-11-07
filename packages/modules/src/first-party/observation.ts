@@ -1,7 +1,7 @@
 /**
  * 功能概述：把 Situation 的持久冻结正文接到公共观察端口；模型判断与观察成功分别记录。
  * situationObservationContract 固定独立消费者和读取地址；recordSituationObservations 按账本有界分页，
- * 保存原情境、claim 身份和精确 Memory revision。confirmSituationObservations 只确认完整页，
+ * 保存原情境、claim 身份、提交 cutoff 和精确 Memory revision。confirmSituationObservations 只确认完整页，
  * publishObservationProgress 发布连续成功水位，失败页与后续成功页不混淆。
  * 代码库关系：Router/Situation 在冻结和 observe gate 调用，Lifecycle 读取进度事实；数据库能力负责锁与恢复。
  * 输入输出与副作用：只调用 SDK capability/registerOnce，不做模型或平台 I/O；重试复用已落账情境，来源缺失报错。
@@ -156,6 +156,9 @@ export async function recordSituationObservations(
     sourceInformationIds,
     knowledgeCutoff: {
       informationId: frozen.informationId,
+      ...(frame.memory?.cutoff
+        ? { memoryPublicationPosition: frame.memory.cutoff.publicationPosition }
+        : {}),
       memoryRevisions: [
         ...new Map<string, { id: string; revision: number }>(
           nodes.map((n: any) => [

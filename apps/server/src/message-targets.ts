@@ -3,6 +3,7 @@
  * 主要职责：所有路由先验证 management 凭据，再严格校验输入；动态读取 Runtime，热切换返回 503。
  * 代码库关系：app.ts 注入认证钩子，server.ts 注入 MessageTargetService；本文件不调用平台出口。
  * 输入输出与副作用：批准会写入统一信息链；响应 no-store，错误不反射原始 ID、正文或异常。
+ * 确认允许纯媒体的空正文，由 MessageTargetService 校验已暂存内容、目标与请求身份。
  */
 import { z } from "@kaguya/schema";
 import { targetQuerySchema, type MessageTargetService } from "@kaguya/runtime";
@@ -24,7 +25,7 @@ export function registerMessageTargetRoutes(
     .object({
       requestId: id,
       assistantInformationId: id,
-      text: z.string().min(1).max(131072),
+      text: z.string().max(131072),
     })
     .strict();
   function post<T>(

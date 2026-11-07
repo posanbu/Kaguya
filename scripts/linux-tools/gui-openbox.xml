@@ -1,0 +1,11 @@
+<!-- 应用 UID 的窗口管理器；固定终端、身份验收快捷键和菜单，不读取共享 workspace 配置。 -->
+<openbox_config xmlns="http://openbox.org/3.4/rc">
+  <focus><focusNew>yes</focusNew><followMouse>no</followMouse></focus>
+  <keyboard>
+    <keybind key="A-F2"><action name="Execute"><command>/usr/bin/xterm -fa monospace -fs 11</command></action></keybind>
+    <keybind key="A-F8"><action name="Execute"><command>/usr/bin/python3 /opt/kaguya-tools/gui-launch-marker.py shortcut</command></action></keybind>
+    <keybind key="A-F9"><action name="ShowMenu"><menu>root-menu</menu></action></keybind>
+  </keyboard>
+  <menu><file>/opt/kaguya-tools/gui-menu.xml</file></menu>
+  <mouse><context name="Titlebar"><mousebind button="Left" action="Drag"><action name="Move"/></mousebind></context></mouse>
+</openbox_config>

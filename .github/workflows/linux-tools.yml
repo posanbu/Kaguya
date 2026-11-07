@@ -1,0 +1,188 @@
+name: Linux tools image
+on:
+  push:
+    branches: ["codex/issue279-w7-**", "codex/issue279-w8-**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: linux-tools-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  shell:
+    name: shell image and rootless smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.18.0
+      - name: Real subprocess helper contracts
+        run: |
+          python3 -B scripts/linux-environments/test_shell_jobs.py
+          node --test scripts/linux-tools/check-shell.mjs
+          node --test scripts/linux-tools/check-browser-input.mjs
+          node --test scripts/linux-tools/check-browser-freshness.mjs
+          node --test scripts/linux-tools/check-gui.mjs
+          python3 -B scripts/linux-tools/check_files.py
+          python3 -B scripts/linux-tools/check_gui_x11.py
+          python3 -B scripts/linux-tools/check_gui_readiness.py
+          python3 -B scripts/linux-tools/check_gui_cleanup.py
+          python3 -B scripts/linux-tools/check_gui_barrier.py
+      - name: Prepare pinned OCI builder
+        run: |
+          docker buildx create --name kaguya-oci --driver docker-container --driver-opt image=moby/buildkit@sha256:e39f6119f134b4811af19fd5c20f495a6a264a85c1b6920daf569b23009dd42c --use
+          docker buildx inspect --bootstrap
+      - name: Build fixed Linux amd64 OCI image
+        run: >-
+          docker buildx build --platform linux/amd64
+          --provenance=false --sbom=false
+          --file scripts/linux-tools/Dockerfile
+          --tag localhost/kaguya-shell:ci
+          --output type=oci,dest=shell-tools.oci
+          --metadata-file shell-image-metadata.json .
+      - name: Record archive and image identities
+        run: |
+          sha256sum shell-tools.oci > shell-tools.oci.sha256
+          node -e "const f=require('fs');const m=JSON.parse(f.readFileSync('shell-image-metadata.json'));f.writeFileSync('shell-image.digest',m['containerimage.digest']+'\n')"
+      - name: Rootless container using production W6 parameters
+        run: >-
+          python3 -B scripts/linux-tools/check-container.py
+          --archive shell-tools.oci --digest "$(cat shell-image.digest)"
+          > shell-container-receipt.json
+      - name: Show actual container diagnostics
+        if: always()
+        run: test ! -f shell-container-receipt.json || cat shell-container-receipt.json
+      - name: Preserve OCI archive, hashes and actual smoke receipt
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: shell-tools-${{ github.sha }}
+          path: |
+            shell-tools.oci
+            shell-tools.oci.sha256
+            shell-image.digest
+            shell-image-metadata.json
+            shell-container-receipt.json
+          retention-days: 7
+  chromium:
+    name: Chromium image and rootless sandbox
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Prepare pinned OCI builder
+        run: |
+          docker buildx create --name kaguya-browser-oci --driver docker-container --driver-opt image=moby/buildkit@sha256:e39f6119f134b4811af19fd5c20f495a6a264a85c1b6920daf569b23009dd42c --use
+          docker buildx inspect --bootstrap
+      - name: Build fixed Chromium Linux amd64 OCI image
+        run: >-
+          docker buildx build --platform linux/amd64
+          --provenance=false --sbom=false
+          --file scripts/linux-tools/Dockerfile.chromium
+          --tag localhost/kaguya-chromium:ci
+          --output type=oci,dest=chromium-tools.oci
+          --metadata-file chromium-image-metadata.json .
+      - name: Record archive and image identities
+        run: |
+          sha256sum chromium-tools.oci > chromium-tools.oci.sha256
+          node -e "const f=require('fs');const m=JSON.parse(f.readFileSync('chromium-image-metadata.json'));f.writeFileSync('chromium-image.digest',m['containerimage.digest']+'\\n')"
+      - name: Verify Chromium sandbox with production W6 parameters
+        run: >-
+          python3 -B scripts/linux-tools/check-browser-container.py
+          --archive chromium-tools.oci --digest "$(cat chromium-image.digest)"
+          > chromium-container-receipt.json
+      - name: Show actual Chromium diagnostics
+        if: always()
+        run: test ! -f chromium-container-receipt.json || cat chromium-container-receipt.json
+      - name: Preserve Chromium OCI image and sandbox receipt
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: chromium-tools-${{ github.sha }}
+          path: |
+            chromium-tools.oci
+            chromium-tools.oci.sha256
+            chromium-image.digest
+            chromium-image-metadata.json
+            chromium-container-receipt.json
+          retention-days: 7
+
+  gui:
+    name: GUI image and cross-UID desktop
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - name: Prepare pinned OCI builder
+        run: |
+          docker buildx create --name kaguya-gui-oci --driver docker-container --driver-opt image=moby/buildkit@sha256:e39f6119f134b4811af19fd5c20f495a6a264a85c1b6920daf569b23009dd42c --use
+          docker buildx inspect --bootstrap
+      - name: Build fixed Cua Linux amd64 GUI image
+        id: gui_image
+        run: >-
+          docker buildx build --platform linux/amd64
+          --provenance=false --sbom=false
+          --file scripts/linux-tools/Dockerfile.gui
+          --tag localhost/kaguya-gui:ci
+          --output type=oci,dest=gui-tools.oci
+          --metadata-file gui-image-metadata.json .
+      - name: Record image identities
+        run: |
+          sha256sum gui-tools.oci > gui-tools.oci.sha256
+          node -e "const f=require('fs');const m=JSON.parse(f.readFileSync('gui-image-metadata.json'));f.writeFileSync('gui-image.digest',m['containerimage.digest'])"
+      - name: Verify real cross-UID GUI on rootless Linux
+        run: >-
+          python3 -B scripts/linux-tools/check-gui-container.py
+          --archive gui-tools.oci --digest "$(cat gui-image.digest)"
+          > gui-container-receipt.json
+      - name: Show GUI diagnostics
+        if: always()
+        run: test ! -f gui-container-receipt.json || cat gui-container-receipt.json
+      - name: Verify production broker and GUI provider without a model
+        if: ${{ !cancelled() && steps.gui_image.outcome == 'success' }}
+        run: >-
+          python3 -B scripts/linux-tools/check-gui-provider.py
+          --digest "$(cat gui-image.digest)"
+      - name: Preserve GUI evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: gui-evidence-${{ github.sha }}
+          path: |
+            gui-container-receipt.json
+            gui-probe.json
+            gui-packages.txt
+            gui-host-diagnostics.jsonl
+            gui-failure.txt
+            gui-drain-*.json
+            gui-gtk.png
+            gui-desktop.png
+            gui-chromium.png
+            gui-chromium-probe.json
+            gui-chromium.log
+            gui-resources.json
+            gui-provider-receipt.json
+            gui-provider-original.png
+            gui-provider-final.png
+            gui-chromium-ledger.json
+            gui-gtk-ledger.json
+            gui-key-events.json
+            gui-menu.png
+            gui-menu-observation.json
+            gui-menu-state.json
+          retention-days: 7
+      - name: Preserve GUI image
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: gui-tools-${{ github.sha }}
+          path: |
+            gui-tools.oci
+            gui-tools.oci.sha256
+            gui-image.digest
+            gui-image-metadata.json
+          retention-days: 7

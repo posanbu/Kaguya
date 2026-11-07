@@ -1,4 +1,5 @@
 /**
+ * ai.vision 显式选择 off/native/external，模型目标 imageInput 声明图像能力；external 必须有 vision 目标。
  * runtimeConfigSchema 要求独立的 inboundAllowlist/outboundAllowlist，拒绝旧 gatewayAllowlist；持久化文件需手动升级。
  * Memory 可选 embedding/cognition 配置只定义宿主端点与版本身份；enabled=false 时不装配任何 provider。
  * 架构说明：本模块拥有配置 Profile 与 Registry 的持久化 schema，
@@ -88,22 +89,58 @@ const modelTierTargetSchema = z.strictObject({
   modelId: nonEmptyIdSchema,
   generation: modelGenerationOptionsSchema.optional(),
   recommendedDurationMs: z.int().positive().max(300_000).optional(),
+  imageInput: z.boolean().optional(),
 });
 
 export const modelTiersSchema = z.strictObject({
   light: modelTierTargetSchema,
   heavy: modelTierTargetSchema,
+  vision: modelTierTargetSchema.optional(),
 });
 
 const aiConfigInnerSchema = z
   .strictObject({
     defaultProviderId: nonEmptyIdSchema.optional(),
     modelTiers: modelTiersSchema.optional(),
+    vision: z
+      .strictObject({
+        mode: z.enum(["off", "native", "external"]),
+        allowedHosts: z
+          .array(
+            z
+              .string()
+              .trim()
+              .toLowerCase()
+              .regex(
+                /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/,
+              ),
+          )
+          .max(32)
+          .optional(),
+      })
+      .optional(),
     providers: z.array(aiProviderConfigSchema),
   })
   .superRefine((ai, context) => {
     rejectOwnUndefined(ai, "defaultProviderId", context);
     rejectOwnUndefined(ai, "modelTiers", context);
+    rejectOwnUndefined(ai, "vision", context);
+    const target =
+      ai.vision?.mode === "native"
+        ? ai.modelTiers?.heavy
+        : ai.vision?.mode === "external"
+          ? ai.modelTiers?.vision
+          : undefined;
+    if (
+      ai.vision &&
+      ai.vision.mode !== "off" &&
+      (!target || target.imageInput !== true)
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["vision", "mode"],
+        message: "Vision requires an explicitly image-capable model target",
+      });
     addDuplicateIdIssues(ai.providers, "provider", ["providers"], context);
   });
 

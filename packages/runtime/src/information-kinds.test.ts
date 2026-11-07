@@ -1,4 +1,5 @@
 /**
+ * GUI requested/terminal 同样锁定完整聚合次序和原始 definition 身份，保持 exactly-once 断言。
  * 内建 kind 集合包含宿主冻结的双投影事实，验证其与其他定义同样只注册一次。
  * 聚合列表包含管理端目标批准和正文确认事实；失败出站可使用不含原始目标的安全分支。
  * 功能概述：锁定 Runtime 信息 DAG 的完整内建 kind 集合、唯一对象所有权和关键引用契约。
@@ -30,6 +31,8 @@ import {
   modelTaskRequestedInformationKind,
   runtimeContextInformationKind,
 } from "./information-kinds.js";
+
+import { guiTaskRequestedKind, guiTaskTerminalKind } from "./gui-task-kinds.js";
 
 const metadata = {
   taskId: "test.task",
@@ -272,6 +275,8 @@ describe("runtime information kinds", () => {
 
   it("aggregates every owned definition exactly once", () => {
     expect(builtInInformationKinds.map(({ kind }) => kind)).toEqual([
+      "agent.gui.task.requested.v1",
+      "agent.gui.task.terminal.v1",
       "agent.router.conversation.context.frozen",
       "agent.router.message.target.authorized",
       "agent.heavy.message.content.confirmed",
@@ -290,6 +295,8 @@ describe("runtime information kinds", () => {
 
   it("reuses the Engine and Runtime boundary definition objects", () => {
     for (const definition of [
+      guiTaskRequestedKind,
+      guiTaskTerminalKind,
       consumerFailedInformationKind,
       inboundTextInformationKind,
       deliveryRequestedInformationKind,

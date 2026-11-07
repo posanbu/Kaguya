@@ -1,4 +1,5 @@
-/** Ordered, durable projection of semantic Information and its evidence into raw Memory. */
+/** 原始事实投影与冻结证据共用持久顺序；媒体仅透传已校验元信息，Light 不读字节或发起视觉请求。 */
+import { mediaContentSegmentsSchema } from "@kaguya/schema";
 /** Ordered, durable projection of semantic Information and its evidence into raw Memory. */
 import {
   RAW_PROJECTED_KINDS,
@@ -569,6 +570,15 @@ export class PostgresRawEventStore implements RawContextAccess {
             ? ("delivery" as const)
             : ("message" as const),
           text: block.text,
+          ...(mediaContentSegmentsSchema.safeParse(
+            event.payload.contentSegments,
+          ).success
+            ? {
+                contentSegments: mediaContentSegmentsSchema.parse(
+                  event.payload.contentSegments,
+                ),
+              }
+            : {}),
           replaces: [],
         })),
       global: block(global),
