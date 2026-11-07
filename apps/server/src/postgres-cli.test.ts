@@ -6,7 +6,7 @@
  * 输入输出与副作用：捕获 stderr 和 spawn，在临时目录检查参数及环境，每例清理进程监听与文件。
  */
 import { ChildProcess, spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -247,7 +247,7 @@ process.exitCode = 7;
   ).resolves.toBe(7);
   expect(JSON.parse(await readFile(output, "utf8"))).toEqual({
     args,
-    cwd: directory,
+    cwd: await realpath(directory),
     value: "typed",
     environment: "inherited",
   });
