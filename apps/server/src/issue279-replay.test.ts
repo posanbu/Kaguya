@@ -7,7 +7,7 @@
  * 代码库关系：复用 test-support/replay-fixture、persistence 和 MCP 合成服务；不执行外部 LLM 或物理 GUI。
  * 迟到来源按冻结页逐页等待观察确认，再单独等待模型与持久队列收尾，避免将多页串行工作压进一个等待预算。
  * waitIngressFanout 按输入逐条证明 Lifecycle、身份推进和 Focus 的精确 ACK，避免空队列或批量时长误判。
- * waitPrefixTurns 按唯一 turn 等待 Light 请求、终态、决策及 observe/dispatch ACK；合法替代/终止按原身份闭合。
+ * waitObservedTurns 按唯一 turn 等待 Light、决策、observe/dispatch 和终态 progress ACK；分页释放后逐阶段收敛。
  * successor 先检查冻结观察，再绑定同一 turn 的 Light，并比较 native_memory 中的实际修订和来源正文。
  * waitForHeavyInput 先证明触发消息进入真实情境和 Light 终态；十页批量确认按每页 8 秒组成基础设施预算。
  * 所有 gate 在 fixture.close 释放，模型工作收敛后再关闭 Runtime/SQL；各阶段8秒、外层按顺序阶段计预算。
@@ -256,7 +256,7 @@ async function prefix(
       .flatMap((o) => [...o!.sourceInformationIds]),
   );
   expect(sources.every((id) => inputs.has(id) && observed.has(id))).toBe(true);
-  await waitPrefixTurns(f, sources);
+  await waitObservedTurns(f, sources);
   return sources;
 }
 type ReplayAtom = Awaited<ReturnType<ReplayFixture["facts"]>>[number];
@@ -301,8 +301,8 @@ async function hasTurnTerminal(f: ReplayFixture, turn: ReplayAtom) {
           )),
   );
 }
-async function waitPrefixTurns(f: ReplayFixture, sourceIds: string[]) {
-  // 仅用于未设 Light 门闩的前缀；每个持久 turn 只处理一次，不能按消息数量假定模型调用数。
+async function waitObservedTurns(f: ReplayFixture, sourceIds: string[]) {
+  // 仅在 Light 门闩已释放时调用；每个持久 turn 只处理一次，不能按消息数量假定模型调用数。
   const turns = (await f.facts("agent.router.turn.context.completed")).filter(
     (turn) =>
       (turn.payload.inputs as any[]).some((input) =>
@@ -312,7 +312,7 @@ async function waitPrefixTurns(f: ReplayFixture, sourceIds: string[]) {
   for (const turn of new Map(
     turns.map((turn) => [turn.informationId, turn]),
   ).values()) {
-    const phase = `prefix turn ${turn.informationId}`;
+    const phase = `observed turn ${turn.informationId}`;
     const request = await f.wait(
       `${phase}: Light requested or turn terminated`,
       async () => {
@@ -390,6 +390,24 @@ async function waitPrefixTurns(f: ReplayFixture, sourceIds: string[]) {
         decision.informationId,
       );
     }
+    // dispatch ACK 只证明终态已发布，progress 消费仍会查询并推进后续候选，必须单独等待。
+    const terminals = (
+      await f.db.information.query({
+        informationId: String(turn.payload.candidateInformationId),
+        relation: "core:status-of",
+      })
+    ).filter(
+      (atom) =>
+        atom.kind.startsWith("agent.router.turn.") &&
+        atom.payload.claimInformationId === turn.payload.claimInformationId,
+    );
+    for (const terminal of terminals)
+      await waitAcknowledged(
+        f,
+        phase,
+        `router.default:agent.router.progress.${terminal.kind}`,
+        terminal.informationId,
+      );
   }
 }
 async function rows(f: ReplayFixture, consumer?: string) {
@@ -667,6 +685,7 @@ for (const backend of backends)
           },
           releasedPages,
         );
+        await waitObservedTurns(f, late);
         await f.settled();
         const correctedRequest = (
           await f.facts("memory.native.formation.requested.v1")
@@ -736,6 +755,7 @@ for (const backend of backends)
             );
           },
         );
+        await waitObservedTurns(f, [next.inboundInformationId]);
         await f.settled();
         const epoch = await f.db.sql.query("SELECT * FROM memory_native_epoch");
         const before = f.requests.length;
