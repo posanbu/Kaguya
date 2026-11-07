@@ -6,7 +6,15 @@
  * 输入输出与副作用：捕获 stderr 和 spawn，在临时目录检查参数及环境，每例清理进程监听与文件。
  */
 import { ChildProcess, spawn } from "node:child_process";
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -217,41 +225,55 @@ it("reports a signal-only child exit as unsuccessful", async () => {
   ).resolves.toBe(1);
 });
 
-it("runs real tsx with spaces and shell metacharacters without pnpm on PATH", async () => {
-  const actual =
-    await vi.importActual<typeof import("node:child_process")>(
-      "node:child_process",
-    );
-  vi.mocked(spawn).mockImplementationOnce(actual.spawn);
-  const directory = await mkdtemp(join(tmpdir(), "kaguya cli (spaces) "));
-  temporaryDirectories.push(directory);
-  const script = join(directory, "probe (entry).ts");
-  const output = join(directory, "result.json");
-  const args = ["value with spaces", "& echo unexpected", "%PATH%", "中文"];
-  await writeFile(
-    script,
-    `import { writeFileSync } from "node:fs";
+it.each(["direct", "directory alias"])(
+  "runs real tsx with spaces and shell metacharacters without pnpm on PATH (%s)",
+  async (mode) => {
+    const actual =
+      await vi.importActual<typeof import("node:child_process")>(
+        "node:child_process",
+      );
+    vi.mocked(spawn).mockImplementationOnce(actual.spawn);
+    const root = await mkdtemp(join(tmpdir(), "kaguya cli (spaces) "));
+    temporaryDirectories.push(root);
+    const workingDirectory = join(root, "working directory");
+    await mkdir(workingDirectory);
+    const directory =
+      mode === "direct" ? workingDirectory : join(root, "alias");
+    if (mode !== "direct")
+      await symlink(
+        workingDirectory,
+        directory,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    const script = join(directory, "probe (entry).ts");
+    const output = join(directory, "result.json");
+    const args = ["value with spaces", "& echo unexpected", "%PATH%", "中文"];
+    await writeFile(
+      script,
+      `import { writeFileSync } from "node:fs";
 const value: string = "typed";
 writeFileSync(process.argv[2]!, JSON.stringify({ args: process.argv.slice(3), cwd: process.cwd(), value, environment: process.env.KAGUYA_CLI_PROBE }));
 process.exitCode = 7;
 `,
-  );
+    );
 
-  await expect(
-    runNodeCli(
-      fileURLToPath(import.meta.resolve("tsx/cli")),
-      [script, output, ...args],
-      directory,
-      { ...process.env, PATH: "", KAGUYA_CLI_PROBE: "inherited" },
-    ),
-  ).resolves.toBe(7);
-  expect(JSON.parse(await readFile(output, "utf8"))).toEqual({
-    args,
-    cwd: await realpath(directory),
-    value: "typed",
-    environment: "inherited",
-  });
-});
+    await expect(
+      runNodeCli(
+        fileURLToPath(import.meta.resolve("tsx/cli")),
+        [script, output, ...args],
+        directory,
+        { ...process.env, PATH: "", KAGUYA_CLI_PROBE: "inherited" },
+      ),
+    ).resolves.toBe(7);
+    const { cwd, ...result } = JSON.parse(await readFile(output, "utf8"));
+    expect(await realpath(cwd)).toBe(await realpath(directory));
+    expect(result).toEqual({
+      args,
+      value: "typed",
+      environment: "inherited",
+    });
+  },
+);
 
 it("runs the real Vitest CLI without pnpm on PATH", async () => {
   const actual =
