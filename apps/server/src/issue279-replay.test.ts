@@ -721,7 +721,7 @@ for (const backend of backends)
         ]);
         let successor: any;
         await f.wait(
-          "successor observation freezes corrected Memory and actually requests Light",
+          "successor observation freezes corrected Memory",
           async () => {
             successor = (await rows(f)).find((o) =>
               o?.manifest?.sourceInformationIds.includes(
@@ -737,17 +737,35 @@ for (const backend of backends)
             expect(node).toBeDefined();
             expect(node.metadata.sourceIds).toContain(late[32]);
             expect(node.content).toContain(replayScenario.correction);
+          },
+        );
+        const successorTurn = await f.wait(
+          "successor source-bound turn context",
+          async () => {
             const turn = (
               await f.facts("agent.router.turn.context.completed")
             ).find((a: any) =>
               a.payload.inputs.some(
                 (i: any) => i.informationId === next.inboundInformationId,
               ),
-            )!;
+            );
+            expect(turn).toBeDefined();
+            return turn!;
+          },
+        );
+        await f.wait("successor frozen observation confirmed", async () => {
+          expect(
+            (await f.db.observations.read(successor.observationId))?.status,
+          ).toBe("completed");
+        });
+        // 冻结、确认和 Light 请求是串行持久阶段，分别等待以保留每个阶段的基础设施预算。
+        await f.wait(
+          "successor exact Light request contains corrected Memory",
+          async () => {
             const model = (await f.facts("core.model.task.requested")).find(
               (a) =>
                 a.payload.taskId === "agent.light.decide" &&
-                a.payload.sourceInformationId === turn?.informationId,
+                a.payload.sourceInformationId === successorTurn.informationId,
             );
             expect(model).toBeDefined();
             expect(JSON.stringify(model!.payload.prompt)).toContain(
