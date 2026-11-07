@@ -11,15 +11,24 @@ export interface EvidenceInput {
   kind:
     "message" | "correction" | "clock" | "recall" | "tool-result" | "delivery";
   text: string;
-  contentSegments?: (
-    | { kind: "text"; text: string }
-    | { kind: "media"; media: {
-        mediaId: string; position: number; mediaType: "image" | "face" | "mface";
-        status: "available" | "unavailable" | "invalid" | "omitted";
-        resourceId: string | null; mimeType: "image/png" | "image/jpeg" | "image/gif" | "image/webp" | null;
-        byteLength: number;
-      } }
-  )[] | undefined;
+  contentSegments?:
+    | (
+        | { kind: "text"; text: string }
+        | {
+            kind: "media";
+            media: {
+              mediaId: string;
+              position: number;
+              mediaType: "image" | "face" | "mface";
+              status: "available" | "unavailable" | "invalid" | "omitted";
+              resourceId: string | null;
+              mimeType:
+                "image/png" | "image/jpeg" | "image/gif" | "image/webp" | null;
+              byteLength: number;
+            };
+          }
+      )[]
+    | undefined;
   replaces: string[];
 }
 

@@ -7,6 +7,8 @@
  * 代码库关系：复用 test-support/replay-fixture、persistence 和 MCP 合成服务；不执行外部 LLM 或物理 GUI。
  * 迟到来源按冻结页逐页等待观察确认，再单独等待模型与持久队列收尾，避免将多页串行工作压进一个等待预算。
  * waitIngressFanout 按输入逐条证明 Lifecycle、身份推进和 Focus 的精确 ACK，避免空队列或批量时长误判。
+ * waitPrefixTurns 按唯一 turn 等待 Light 请求、终态、决策及 observe/dispatch ACK；合法替代/终止按原身份闭合。
+ * successor 先检查冻结观察，再绑定同一 turn 的 Light，并比较 native_memory 中的实际修订和来源正文。
  * waitForHeavyInput 先证明触发消息进入真实情境和 Light 终态；十页批量确认按每页 8 秒组成基础设施预算。
  * 所有 gate 在 fixture.close 释放，模型工作收敛后再关闭 Runtime/SQL；各阶段8秒、外层按顺序阶段计预算。
  */
@@ -254,7 +256,141 @@ async function prefix(
       .flatMap((o) => [...o!.sourceInformationIds]),
   );
   expect(sources.every((id) => inputs.has(id) && observed.has(id))).toBe(true);
+  await waitPrefixTurns(f, sources);
   return sources;
+}
+type ReplayAtom = Awaited<ReturnType<ReplayFixture["facts"]>>[number];
+async function waitAcknowledged(
+  f: ReplayFixture,
+  phase: string,
+  subscription: string,
+  informationId: string,
+) {
+  await f.wait(`${phase}: ${subscription} ACK ${informationId}`, async () => {
+    const result = await f.db.sql.query<{ state: string }>(
+      "SELECT state FROM information_deliveries WHERE subscription_id=$1 AND information_id=$2",
+      [subscription, informationId],
+    );
+    expect(result.rows).toEqual([{ state: "acked" }]);
+  });
+}
+async function hasTurnTerminal(f: ReplayFixture, turn: ReplayAtom) {
+  const candidateId = String(turn.payload.candidateInformationId);
+  const claimId = String(turn.payload.claimInformationId);
+  const terminals = await f.db.information.query({
+    informationId: candidateId,
+    relation: "core:status-of",
+  });
+  return terminals.some(
+    (atom) =>
+      atom.payload.candidateInformationId === candidateId &&
+      (atom.kind === "agent.attention.arousal.completed"
+        ? atom.payload.outcome === "defer"
+        : [
+            "completed",
+            "waiting",
+            "silent",
+            "failed",
+            "superseded",
+            "interrupted",
+          ].some((status) => atom.kind === `agent.router.turn.${status}`) &&
+          atom.payload.claimInformationId === claimId &&
+          atom.references.some(
+            (r) =>
+              r.relation === "agent:turn-claim" && r.informationId === claimId,
+          )),
+  );
+}
+async function waitPrefixTurns(f: ReplayFixture, sourceIds: string[]) {
+  // 仅用于未设 Light 门闩的前缀；每个持久 turn 只处理一次，不能按消息数量假定模型调用数。
+  const turns = (await f.facts("agent.router.turn.context.completed")).filter(
+    (turn) =>
+      (turn.payload.inputs as any[]).some((input) =>
+        sourceIds.includes(input.informationId),
+      ),
+  );
+  for (const turn of new Map(
+    turns.map((turn) => [turn.informationId, turn]),
+  ).values()) {
+    const phase = `prefix turn ${turn.informationId}`;
+    const request = await f.wait(
+      `${phase}: Light requested or turn terminated`,
+      async () => {
+        const requests = (await f.facts("core.model.task.requested")).filter(
+          (a) =>
+            a.payload.taskId === "agent.light.decide" &&
+            a.payload.sourceInformationId === turn.informationId,
+        );
+        if (requests.length) {
+          expect(requests).toHaveLength(1);
+          return requests[0];
+        }
+        expect(await hasTurnTerminal(f, turn)).toBe(true);
+        return undefined;
+      },
+    );
+    if (request)
+      await f.wait(`${phase}: exact Light model terminal`, async () => {
+        const terminals = (
+          await f.db.information.query({
+            informationId: request.informationId,
+            relation: "core:status-of",
+          })
+        ).filter((a) =>
+          [
+            "core.model.task.completed",
+            "core.model.task.failed",
+            "core.model.task.cancelled",
+          ].includes(a.kind),
+        );
+        expect(terminals).toHaveLength(1);
+      });
+    await f.wait(`${phase}: Light decision or turn terminal`, async () => {
+      const decisions = (
+        await f.facts("agent.light.decision.completed")
+      ).filter(
+        (a) => a.payload.turnContextInformationId === turn.informationId,
+      );
+      expect(decisions.length > 0 || (await hasTurnTerminal(f, turn))).toBe(
+        true,
+      );
+    });
+    const gates = (await f.facts("agent.attention.arousal.completed")).filter(
+      (a) =>
+        a.payload.candidateInformationId ===
+          turn.payload.candidateInformationId &&
+        a.references.some(
+          (r) =>
+            r.relation === "core:status-of" &&
+            r.informationId === turn.payload.candidateInformationId,
+        ),
+    );
+    if (request)
+      expect(gates.some((a) => a.payload.outcome === "observe")).toBe(true);
+    for (const gate of gates)
+      await waitAcknowledged(
+        f,
+        phase,
+        "router.default:agent.router.observe.agent.attention.arousal.completed",
+        gate.informationId,
+      );
+    // observe ACK 之后读取最终决策集合，合法 superseded/terminal 路径可以没有 dispatch。
+    const decisions = (await f.facts("agent.light.decision.completed")).filter(
+      (a) => a.payload.turnContextInformationId === turn.informationId,
+    );
+    for (const decision of decisions) {
+      expect(decision.references).toContainEqual({
+        relation: "core:status-of",
+        informationId: turn.payload.claimInformationId,
+      });
+      await waitAcknowledged(
+        f,
+        phase,
+        "router.default:agent.router.dispatch-light",
+        decision.informationId,
+      );
+    }
+  }
 }
 async function rows(f: ReplayFixture, consumer?: string) {
   const result = await f.db.sql.query<{ observation_id: string }>(
@@ -284,13 +420,7 @@ async function waitIngressFanout(
   sourceIds: string[],
 ) {
   const acknowledged = async (subscription: string, informationId: string) => {
-    await f.wait(`${phase}: ${subscription} ACK ${informationId}`, async () => {
-      const result = await f.db.sql.query<{ state: string }>(
-        "SELECT state FROM information_deliveries WHERE subscription_id=$1 AND information_id=$2",
-        [subscription, informationId],
-      );
-      expect(result.rows).toEqual([{ state: "acked" }]);
-    });
+    await waitAcknowledged(f, phase, subscription, informationId);
   };
   for (const sourceId of sourceIds) {
     await acknowledged("heartbeat.default:heartbeat.message", sourceId);

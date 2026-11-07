@@ -1,5 +1,6 @@
 /**
  * 媒体准备回归检查实际 provider messages、持久 requested 与重放；Light 不能触发准备回调。
+ * 外挂视觉按 AI SDK 7 的 file 数据段核对 MIME、原帧字节与消息顺序，复用断言仍检查唯一持久请求。
  * 功能概述：用真实 Core/PGlite 验证通用 Model Task 的身份、输出校验和唯一终态。
  * 主要职责：fixture 创建隔离账本；用不同任务 schema 检查去重、预检、取消及 claim fencing。
  * 代码库关系：消费 model-task 与 information-kinds；transform 测试组合真实 KaguyaLlmClient
@@ -1123,7 +1124,26 @@ it("executes external vision through durable ModelTask and reuses the completed 
   const first = await observe(input, new AbortController().signal);
   expect(first.text).toBe("a synthetic pixel");
   expect(generate).toHaveBeenCalledTimes(1);
-  expect(JSON.stringify(generate.mock.calls[0])).toContain('"type":"image"');
+  expect(generate.mock.calls[0]).toEqual([
+    expect.objectContaining({
+      messages: expect.arrayContaining([
+        {
+          role: "user",
+          content: [
+            expect.objectContaining({ type: "text" }),
+            {
+              type: "file",
+              mediaType: "image/png",
+              data: {
+                type: "data",
+                data: input.frames[0]!.bytes.toString("base64"),
+              },
+            },
+          ],
+        },
+      ]),
+    }),
+  ]);
   const second = await observe(
     { ...input, key: "outer-two" },
     new AbortController().signal,
