@@ -7,7 +7,7 @@
  * 输入输出与副作用：回复以完整消息同步，不模拟逐字生成；仅位于底部或主动发送时跟随
  * 新消息，避免阅读历史被打断；hook 负责取消聊天读写。
  */
-import { LoaderCircle, Plus, SendHorizontal } from "lucide-react";
+import { LoaderCircle, MoonStar, Plus, SendHorizontal } from "lucide-react";
 import { useEffect, useRef, type FormEvent, type KeyboardEvent } from "react";
 import { MAX_MESSAGE_LENGTH } from "./api.js";
 import { Button, FieldMessage, PageHeader } from "./components/ui.js";
@@ -94,8 +94,10 @@ export function WebChat({
           >
             {chat.messages.length === 0 ? (
               <div className="empty-state">
-                {chat.isLoading && (
+                {chat.isLoading ? (
                   <LoaderCircle className="spin" size={20} aria-hidden="true" />
+                ) : (
+                  chat.historyReady && <MoonStar size={28} aria-hidden="true" />
                 )}
                 <p>
                   {chat.isLoading
