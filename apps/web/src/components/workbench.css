@@ -40,7 +40,7 @@
   position: sticky;
   top: 0;
   align-self: start;
-  max-height: 100dvh;
+  height: 100dvh;
   overflow-y: auto;
   overscroll-behavior: contain;
   border-right: 1px solid var(--kaguya-line);
