@@ -1,5 +1,7 @@
 /**
+ * Situation 遇到明确的冻结引用完整性错误时记录带原因码的唯一失败终态；临时 I/O 故障保留重试。
  * 候选竞争、claim 前驱和新 operation 槽按完整 scene 隔离，旧 claim 通过候选引用恢复并原样复用。
+ * Selector 同时按登记顺序排列输入和候选；Identity 事件先加载的消息不能改变冻结输入窗口。
  * 候选新旧由 Selector 的账本注册顺序确定；相同/迟到业务时间及随机 UUID 不改变消费先后。
  * Light 的 message 决策只传目标与冻结引用。
  * manifest 声明 Light 模板；调用 compileLightPrompt 时传入装配阶段加载的 default/local 文本，不再使用代码内默认值。
@@ -20,6 +22,8 @@
  * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
  * Situation 先恢复或登记固定 frame 和观察清单；observe gate 在模型调用前确认完整页并发布连续进度，缺口保留待处理。
  */
+import { InformationIntegrityError } from "@kaguya/sdk";
+import { frozenContextFailure } from "../heavy/message-context.js";
 import {
   observationCompleted,
   observationProgress,
@@ -527,32 +531,38 @@ export const routerStateSelector = defineInformationSelector({
       if (candidate.kind !== turnCandidateInformationKind.kind) continue;
       await hydrateCandidate(ledger, candidate, remember);
     }
-    // 水合会先加入触发候选，再补旧 claim；Map 插入顺序不能代表账本先后。
-    // 只重排已经选中的候选，分页保留全部身份，不扩张读取范围或按事件时间排序。
-    const candidateIds = [...selected.values()]
-      .filter((atom) => atom.kind === turnCandidateInformationKind.kind)
+    // Identity 事件先加载触发消息，水合也会先加入触发候选；Map 插入顺序不代表登记顺序。
+    // 对已授权的输入和候选共同排序，保证 unreadThrough/unreadCount 的窗口不随触发事件变化。
+    const orderedFactIds = [...selected.values()]
+      .filter(
+        (atom) =>
+          atom.kind === turnCandidateInformationKind.kind ||
+          atom.kind === inboundTextInformationKind.kind,
+      )
       .map((atom) => atom.informationId);
-    if (candidateIds.length === 0) return [...selected.keys()];
-    const orderedCandidateIds: string[] = [];
+    if (orderedFactIds.length === 0) return [...selected.keys()];
+    const registeredFactIds: string[] = [];
     let afterInformationId: string | undefined;
     for (;;) {
       const page = await ledger.find({
-        informationIds: candidateIds,
+        informationIds: orderedFactIds,
         registrationOrder: true,
         order: "asc",
         limit: 1000,
         ...(afterInformationId ? { afterInformationId } : {}),
       });
-      orderedCandidateIds.push(...page.map((atom) => atom.informationId));
+      registeredFactIds.push(...page.map((atom) => atom.informationId));
       if (page.length < 1000) break;
       afterInformationId = page.at(-1)!.informationId;
     }
-    if (orderedCandidateIds.length !== candidateIds.length)
-      throw new Error("Router candidate registration order is incomplete");
-    const candidatesSet = new Set(candidateIds);
+    if (registeredFactIds.length !== orderedFactIds.length)
+      throw new Error(
+        "Router input/candidate registration order is incomplete",
+      );
+    const orderedFactsSet = new Set(orderedFactIds);
     return [
-      ...[...selected.keys()].filter((id) => !candidatesSet.has(id)),
-      ...orderedCandidateIds,
+      ...[...selected.keys()].filter((id) => !orderedFactsSet.has(id)),
+      ...registeredFactIds,
     ];
   },
 });
@@ -868,7 +878,31 @@ function createRoutingModule(
               await recordSituationObservations(context, turn, previousFreeze);
               return;
             }
-            const selected = await context.select(lightContextSelector);
+            let selected: readonly DeepReadonly<InformationAtom>[];
+            try {
+              selected = await context.select(lightContextSelector);
+            } catch (error) {
+              const failure = frozenContextFailure(error);
+              if (!failure) throw error;
+              await context.commitTerminal(
+                "agent.router.turn.terminal",
+                payload.candidateInformationId,
+                turnFailedInformationKind,
+                {
+                  payload: {
+                    candidateInformationId: payload.candidateInformationId,
+                    claimInformationId: payload.claimInformationId,
+                    scopeKey: payload.scopeKey,
+                    reason: `frozen-context-${failure.code}`,
+                  },
+                  references: terminalReferences(
+                    payload.candidateInformationId,
+                    payload.claimInformationId,
+                  ),
+                },
+              );
+              return;
+            }
             let raw = selected.find(
               (a) =>
                 a.kind === frozenRawContextInformationKind.kind &&
@@ -1395,7 +1429,10 @@ function createRoutingModule(
                     (id) => {
                       const atom = byId.get(id);
                       if (!atom)
-                        throw new Error("Missing persisted Light context");
+                        throw new InformationIntegrityError(
+                          "missing-persisted-context",
+                          "Missing persisted Light context",
+                        );
                       return atom;
                     },
                   )

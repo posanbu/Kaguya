@@ -5,16 +5,9 @@
  * 主要职责：turnMessageContextSelector 核对 intent→turn 引用并保留全部冻结输入；仅辅助历史受预算限制，
  * 已投递 assistant 才可进入历史，每条输入通过同目标成功回执链或入站 ID 查询引用上下文。
  * 代码库关系：index.ts 声明选择器与渲染器，message-prompt 使用冻结快照编译；Engine 按返回 ID 重载事实。
- * 输入输出与副作用：只读 ledger、返回去重 ID；缺少 turn、输入或记忆授权时抛错，不回退到复制的末条正文。
- * 冻结原文记忆额外核验目标范围和事件截止点；检索命中或显式引用不能放宽消息来源权限。
- */
-/**
- * 冻结的原始消息记忆须再次通过范围和事件截止点检查。
- * 功能概述：消息编写模块的受控账本选择器及 Prompt 预览入口，不参与 Router 的发言决策。
- * 已确认的跨会话消息通过 confirmation→assistant 因果链验证成功投递，才能进入同目标历史或引用。
- * 主要职责：turnMessageContextSelector 核对 intent→turn 引用并保留全部冻结输入；仅辅助历史受预算限制，
- * 已投递 assistant 才可进入历史，每条输入通过同目标成功回执链或入站 ID 查询引用上下文。
- * 代码库关系：index.ts 声明选择器与渲染器，message-prompt 使用冻结快照编译；Engine 按返回 ID 重载事实。
+ * selectPersistedModelContext 检查持久请求所列上下文确由引用授权，避免恢复时静默漏项。
+ * 分页读取全部冻结引用；FrozenContextIntegrityError 标识不可重试的输入或记忆授权错误。
+ * frozenContextFailure 沿 Selector 的 cause 链提取安全原因码，供 Situation 写入失败终态。
  * 输入输出与副作用：只读 ledger、返回去重 ID；缺少 turn、输入或记忆授权时抛错，不回退到复制的末条正文。
  * 冻结原文记忆额外核验目标范围和事件截止点；检索命中或显式引用不能放宽消息来源权限。
  */
@@ -26,6 +19,9 @@ import type {
 } from "@kaguya/schema";
 import {
   defineInformationSelector,
+  readAllOutgoingInformation,
+  InformationIntegrityError,
+  informationIntegrityFailure,
   type InformationSelectorContext,
   type InformationSelectorLedger,
   type InformationPromptRendererDefinition,
@@ -54,6 +50,30 @@ import {
 import { isMemorySourceInScope } from "../memory-source-scope.js";
 import { frozenRawContextInformationKind } from "../router/raw-context.js";
 
+export const FrozenContextIntegrityError = InformationIntegrityError;
+export const frozenContextFailure = informationIntegrityFailure;
+
+export async function selectPersistedModelContext(
+  ledger: InformationSelectorLedger,
+  request: DeepReadonly<InformationAtom>,
+): Promise<readonly DeepReadonly<InformationAtom>[]> {
+  const atoms = await readAllOutgoingInformation(
+    ledger,
+    [request.informationId],
+    "core:uses-context",
+  );
+  const ids = new Set(atoms.map((atom) => atom.informationId));
+  for (const id of (request.payload.contextInformationIds as
+    readonly string[] | undefined) ?? []) {
+    if (!ids.has(id))
+      throw new InformationIntegrityError(
+        "missing-persisted-context",
+        "Persisted model context lacks an authorized reference",
+      );
+  }
+  return atoms;
+}
+
 export const currentAcceptedMessageSelector = defineInformationSelector({
   selectorId: "agent.heavy.message.current-intent",
   select: ({ sourceAtom }) => [sourceAtom.informationId],
@@ -66,12 +86,11 @@ export const turnMessageContextSelector = defineInformationSelector({
       sourceAtom.payload,
     );
     const turns = (
-      await ledger.related({
-        from: [sourceAtom.informationId],
-        relation: "core:uses-context",
-        direction: "outgoing",
-        limit: 1000,
-      })
+      await readAllOutgoingInformation(
+        ledger,
+        [sourceAtom.informationId],
+        "core:uses-context",
+      )
     ).filter((atom) => atom.kind === "agent.router.turn.context.completed");
     if (
       turns.length !== 1 ||
@@ -97,13 +116,16 @@ export const turnMessageContextSelector = defineInformationSelector({
         atom.kind === "core.model.task.requested" &&
         atom.payload.taskId === "agent.heavy.respond",
     );
+    const persisted = (
+      await Promise.all(
+        requests.map((atom) => selectPersistedModelContext(ledger, atom)),
+      )
+    ).flat();
     return [
       ...new Set([
         ...selected,
-        ...requests.flatMap((atom) => [
-          atom.informationId,
-          ...((atom.payload.contextInformationIds as string[]) ?? []),
-        ]),
+        ...requests.map((atom) => atom.informationId),
+        ...persisted.map((atom) => atom.informationId),
       ]),
     ];
   },
@@ -124,29 +146,33 @@ export async function selectFrozenTurnMessageContext(options: {
 }): Promise<readonly InformationId[]> {
   const { ledger, sourceInformationId, turn, intent } = options;
   const inputs = frozenTurnInputs([turn], intent);
-  const context = await ledger.related({
-    from: [turn.informationId],
-    relation: "core:uses-context",
-    direction: "outgoing",
-    limit: 1000,
-  });
+  const context = await readAllOutgoingInformation(
+    ledger,
+    [turn.informationId],
+    "core:uses-context",
+  );
   const byId = new Map(context.map((atom) => [atom.informationId, atom]));
   for (const input of inputs) {
     if (byId.get(input.informationId)?.kind !== inboundTextInformationKind.kind)
-      throw new Error(
+      throw new FrozenContextIntegrityError(
+        "missing-input",
         `Missing frozen turn input reference: ${input.informationId}`,
       );
   }
   // 意图列出的记忆必须由冻结上下文授权，不从当前会话临时推测。
   for (const id of intent.memoryInformationIds) {
     if (!byId.has(id))
-      throw new Error(`Missing frozen memory reference: ${id}`);
+      throw new FrozenContextIntegrityError(
+        "missing-memory",
+        `Missing frozen memory reference: ${id}`,
+      );
     const memory = byId.get(id)!;
     if (
       memory.kind === inboundTextInformationKind.kind &&
       !isMemorySourceInScope(memory, intent.target, String(turn.payload.asOf))
     )
-      throw new Error(
+      throw new FrozenContextIntegrityError(
+        "memory-out-of-scope",
         "Frozen memory source is outside the turn scope or cutoff",
       );
   }

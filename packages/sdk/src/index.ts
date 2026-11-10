@@ -1,4 +1,5 @@
 /**
+ * 导出完整出向引用读取与跨层完整性错误契约，供冻结、重放及可靠执行器共同使用。
  * native-tools 导出循环预算及持久步骤事实，供 Runtime/database 共享验证。
  * 功能概述：聚合信息原子模块 SDK 的最终公共 API，使模块作者只接触 kind 声明、
  * `onInformation` 订阅、`context.register` 派生边界与显式 Selector 上下文选择契约。
@@ -25,6 +26,9 @@ export {
 } from "./information-kind.js";
 export {
   defineInformationSelector,
+  readAllOutgoingInformation,
+  InformationIntegrityError,
+  informationIntegrityFailure,
   type InformationFindQuery,
   type InformationRelatedQuery,
   type InformationRetrievalQuery,

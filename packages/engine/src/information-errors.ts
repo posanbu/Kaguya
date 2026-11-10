@@ -1,9 +1,12 @@
 /**
+ * SelectedInformationMissingError 使用 SDK 完整性错误契约，使冻结失败与可靠执行能停止确定性重试。
  * 架构说明：本模块集中声明信息原子体系在 engine 层的错误类型，
  * 让 registry、bus、core、Selector 与后续 storage 实现共享同一组可判定异常。
  * 代码库关系：`packages/engine/src/index.ts` 统一导出这里的错误类，
  * 下游在启动、注册、追加与订阅阶段可据此区分可恢复与不可恢复失败。
  */
+import { InformationIntegrityError } from "@kaguya/sdk";
+
 export class InformationEngineError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
@@ -136,6 +139,12 @@ export class SelectedInformationMissingError extends InformationEngineError {
   ) {
     super(
       `Selected information disappeared during load: ${selectorId} -> ${informationId}`,
+      {
+        cause: new InformationIntegrityError(
+          "missing-referenced-information",
+          "Referenced information is missing",
+        ),
+      },
     );
   }
 }

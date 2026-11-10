@@ -1,5 +1,7 @@
 /**
  * 功能概述：定义业务模块可声明的 Information Selector 与受限只读账本契约。
+ * readAllOutgoingInformation 分页读取不可变原子的完整出向引用；每页仍受 Engine 授权检查。
+ * InformationIntegrityError 与 informationIntegrityFailure 跨 SDK/Engine/模块识别已确认不可恢复的数据错误。
  * 主要职责：提供按 kind、来源、时间、引用图和命名检索策略读取候选原子的查询类型，
  * 并通过 `defineInformationSelector` 规范化标识、冻结 Selector definition。
  * 代码库关系：模块通过本文件声明选择策略；Engine 注入受控 reader、校验有序 ID
@@ -81,4 +83,52 @@ export function defineInformationSelector(
     throw new Error("information selector id must not be blank");
   }
   return Object.freeze({ selectorId, select: definition.select });
+}
+
+export class InformationIntegrityError extends Error {
+  constructor(
+    readonly code:
+      | "missing-input"
+      | "missing-memory"
+      | "memory-out-of-scope"
+      | "missing-referenced-information"
+      | "missing-persisted-context",
+    message: string,
+  ) {
+    super(message);
+    this.name = new.target.name;
+  }
+}
+
+export function informationIntegrityFailure(
+  error: unknown,
+): InformationIntegrityError | undefined {
+  const seen = new Set<unknown>();
+  while (error instanceof Error && !seen.has(error)) {
+    if (error instanceof InformationIntegrityError) return error;
+    seen.add(error);
+    error = error.cause;
+  }
+  return undefined;
+}
+
+/** Complete immutable outgoing references; never apply this offset loop to a changing incoming set. */
+export async function readAllOutgoingInformation(
+  ledger: InformationSelectorLedger,
+  from: readonly InformationId[],
+  relation: string,
+): Promise<readonly DeepReadonly<InformationAtom>[]> {
+  const result: DeepReadonly<InformationAtom>[] = [];
+  const pageSize = 1000;
+  for (let offset = 0; ; offset += pageSize) {
+    const page = await ledger.related({
+      from,
+      relation,
+      direction: "outgoing",
+      offset,
+      limit: pageSize,
+    });
+    result.push(...page);
+    if (page.length < pageSize) return result;
+  }
 }

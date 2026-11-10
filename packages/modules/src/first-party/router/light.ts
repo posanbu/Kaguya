@@ -1,4 +1,5 @@
 /**
+ * 首次冻结与重放的出向引用均完整分页读取，避免持久 Prompt 上下文被单页预算截断。
  * Light 只判断参与动作与必要目标。
  * memory 变量携带原文来源 ID，与当前聊天输入在规划时区分。
  * context_bootstrap 显式说明本轮证据缺口，避免把身份解析或角色设定误当作既有关系。
@@ -49,9 +50,16 @@ import {
   type DeepReadonly,
   type InformationAtom,
 } from "@kaguya/schema";
-import { defineInformationKind, defineInformationSelector } from "@kaguya/sdk";
+import {
+  defineInformationKind,
+  defineInformationSelector,
+  readAllOutgoingInformation,
+} from "@kaguya/sdk";
 import { createPromptTemplateRenderer } from "../../prompt-template.js";
-import { selectFrozenTurnMessageContext } from "../heavy/message-context.js";
+import {
+  selectFrozenTurnMessageContext,
+  selectPersistedModelContext,
+} from "../heavy/message-context.js";
 import {
   sameMessageTarget,
   beforeQuoteCutoff,
@@ -125,12 +133,11 @@ export const lightContextSelector = defineInformationSelector({
     const turns =
       sourceAtom.kind === turnContextCompletedInformationKind.kind
         ? [sourceAtom]
-        : await ledger.related({
-            from: [sourceAtom.informationId],
-            relation: "core:uses-context",
-            direction: "outgoing",
-            limit: 1000,
-          });
+        : await readAllOutgoingInformation(
+            ledger,
+            [sourceAtom.informationId],
+            "core:uses-context",
+          );
     const turn = turns.find(
       (atom) => atom.kind === turnContextCompletedInformationKind.kind,
     );
@@ -181,14 +188,7 @@ export const lightContextSelector = defineInformationSelector({
     );
     const persisted = (
       await Promise.all(
-        requests.map((atom) =>
-          ledger.related({
-            from: [atom.informationId],
-            relation: "core:uses-context",
-            direction: "outgoing",
-            limit: 1000,
-          }),
-        ),
+        requests.map((atom) => selectPersistedModelContext(ledger, atom)),
       )
     ).flat();
     return [

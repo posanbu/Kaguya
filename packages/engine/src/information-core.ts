@@ -1,4 +1,5 @@
 /**
+ * recordReliableFailure 按订阅、源原子和安全错误类别去重记录 durable 故障；诊断不泄露原始异常或阻断恢复。
  * registerOnce 可附带 openScope，由数据库原子复用唯一开放赢家；普通 register/terminal 拒绝此参数。
  * stopReliableDelivery 可选 drain：停止领取后有界等待活跃 claim，再执行 shutdown fencing，支持 Runtime 热切换。
  * 接收已冻结的完整 Registry 时验证内建对象身份；启动把同一份定义及版本契约交给账本同步。
@@ -15,6 +16,7 @@
  * promise；关闭先拒绝新注册、有界等待已接受的落账和广播，再排空日志投影并清理订阅，
  * 确保并发调用不能重复初始化、复活 Core 或泄漏原异常正文。
  */
+import { informationIntegrityFailure } from "@kaguya/sdk";
 import {
   ReliableInformationRunner,
   type ReliableInformationSubscription,
@@ -359,6 +361,53 @@ export class InformationCore implements OneShotScheduleCorePort {
       key: subjectInformationId,
       ...(guard ? { guard } : {}),
     });
+  }
+
+  async recordReliableFailure(
+    claim: InformationClaim,
+    reason: unknown,
+  ): Promise<void> {
+    try {
+      const source = await this.get(claim.informationId);
+      if (!source || source.kind === consumerFailedInformationKind.kind) return;
+      const errorType =
+        informationIntegrityFailure(reason)?.code ??
+        "unclassified-handler-error";
+      await this.withClaim(
+        claim,
+        claim.signal ?? new AbortController().signal,
+        () =>
+          this.registerOnce(
+            "core.reliable.failure",
+            JSON.stringify([
+              claim.subscriptionId,
+              claim.informationId,
+              errorType,
+            ]),
+            consumerFailedInformationKind,
+            {
+              occurredAt: this.#now().toISOString(),
+              source: "core:reliable-dag",
+              payload: {
+                consumer: { consumerId: claim.subscriptionId },
+                error: {
+                  errorType,
+                  message:
+                    "Durable handler failed; inspect source and subscription",
+                },
+              },
+              references: [
+                {
+                  relation: "core:caused-by",
+                  informationId: claim.informationId,
+                },
+              ],
+            },
+          ),
+      );
+    } catch (error) {
+      await this.reportBootstrap(error);
+    }
   }
 
   async exhaustClaim(claim: InformationClaim): Promise<void> {
