@@ -5,6 +5,7 @@
  * 冻结后 ack 失败触发真实重投，验证恢复复用已有快照、模型只执行一次且后续会话继续。
  * 延迟 Identity 的双消息回归等待真实 claim 与每次 ACK，验证触发事件不能改变输入登记顺序。
  * 冻结引用校验失败持久化原因终态并释放会话；后续机会仍可进入 Light。
+ * Light 派发读取独立冻结回合；查询不加载输入身份或开放候选，工作量不随同场景积压增长。
  * 功能概述：通过真实 InformationCore/PGlite 验证先观察再冻结上下文、Light 分派和唯一终态。
  * 主要职责：fixture 安装 Router 与受控模型能力；appendOpportunity/decide 构造通知与观察事实；
  * waitFor/settle 按 8 秒持久化预算等待事实或 durable 队列收敛，否定断言不依赖固定休眠。
@@ -51,6 +52,7 @@ import {
   createRouterModule,
   createSituationRuntimeModule,
   routerStateSelector,
+  lightDispatchSelector,
 } from "./index.js";
 import { focusOpened } from "../router/focus-facts.js";
 import { scopeOf } from "../heartbeat/observation.js";
@@ -639,6 +641,60 @@ it("persists the observation and run identity before model execution can create 
   await decide(f.core, opportunity.candidate, "observe");
   await settle(f.database);
   expect(checked).toBe(true);
+}, 25000);
+
+it("dispatches from the frozen claim without rehydrating inputs or open candidates", async () => {
+  const f = await fixture({
+    action: { action: "silent", reason: "no-response-needed" },
+  });
+  const opportunity = await appendOpportunity(f.core, {
+    texts: ["first", "second"],
+  });
+  await decide(f.core, opportunity.candidate, "observe");
+  await settle(f.database);
+  const decision = (await all(f.database)).find(
+    (atom: any) => atom.kind === "agent.light.decision.completed",
+  )!;
+  expect(decision).toBeDefined();
+  const queries: any[] = [];
+  const selected = await f.core.select(
+    {
+      ...lightDispatchSelector,
+      select: (context) =>
+        lightDispatchSelector.select({
+          ...context,
+          ledger: {
+            ...context.ledger,
+            find: async (query) => {
+              queries.push(query);
+              return context.ledger.find(query);
+            },
+            related: async (query) => {
+              queries.push(query);
+              return context.ledger.related(query);
+            },
+          },
+        }),
+    },
+    decision.informationId,
+  );
+  expect(
+    selected.filter(
+      (atom) => atom.kind === turnContextCompletedInformationKind.kind,
+    ),
+  ).toHaveLength(1);
+  expect(
+    selected.filter((atom) => atom.kind === turnSilentInformationKind.kind),
+  ).toHaveLength(1);
+  expect(
+    selected.some(
+      (atom) =>
+        atom.kind === inboundTextInformationKind.kind ||
+        atom.kind === personContextCompletedInformationKind.kind,
+    ),
+  ).toBe(false);
+  expect(queries.length).toBeLessThanOrEqual(5);
+  expect(queries.every((query) => query.from !== undefined)).toBe(true);
 }, 25000);
 
 it("freezes before attention and defer does not call Light or advance progress", async () => {

@@ -9,6 +9,7 @@
  * waitIngressFanout 按输入逐条证明 Lifecycle、身份推进和 Focus 的精确 ACK，避免空队列或批量时长误判。
  * waitObservedTurns 按唯一 turn 等待 Light、决策、observe/dispatch 和终态 progress ACK；分页释放后逐阶段收敛。
  * successor 先检查冻结观察，再绑定同一 turn 的 Light，并比较 native_memory 中的实际修订和来源正文。
+ * 尾批 Memory 可等待正式 60 秒 flush；来源绑定的形成请求、完成与发布分别等待，空队列不能替代未来调度。
  * waitForHeavyInput 先证明触发消息进入真实情境和 Light 终态；十页批量确认按每页 8 秒组成基础设施预算。
  * 所有 gate 在 fixture.close 释放，模型工作收敛后再关闭 Runtime/SQL；各阶段8秒、外层按顺序阶段计预算。
  */
@@ -686,30 +687,62 @@ for (const backend of backends)
           releasedPages,
         );
         await waitObservedTurns(f, late);
-        await f.settled();
-        const correctedRequest = (
-          await f.facts("memory.native.formation.requested.v1")
-        ).find((a: any) =>
-          a.payload.sources.some((source: any) => source.id === late[32]),
-        )!;
-        expect(correctedRequest).toBeDefined();
-        const correctedTerminal = (
-          await f.facts("memory.native.formation.completed.v1")
-        ).find(
-          (a) =>
-            a.payload.batchId === correctedRequest.payload.batchId &&
-            a.payload.status === "completed",
-        )!;
+        // 慢速执行可能已触发前面的 60 秒 flush，最后七条会留在新的尾批。
+        // 等待生产定时器和一个 8 秒持久阶段；不把暂时空队列当作 Memory 已消费来源。
+        const correctedRequest = await f.wait(
+          "correction source-bound Memory formation requested after scheduled flush",
+          async () => {
+            const request = (
+              await f.facts("memory.native.formation.requested.v1")
+            ).find((a: any) =>
+              a.payload.sources.some((source: any) => source.id === late[32]),
+            );
+            expect(request).toBeDefined();
+            return request!;
+          },
+          Math.ceil((60_000 + 8_000) / 8_000),
+        );
+        const correctedTerminal = await f.wait(
+          "correction Memory formation completed",
+          async () => {
+            const terminal = (
+              await f.facts("memory.native.formation.completed.v1")
+            ).find(
+              (a) =>
+                a.payload.batchId === correctedRequest.payload.batchId &&
+                a.payload.status === "completed",
+            );
+            expect(terminal).toBeDefined();
+            return terminal!;
+          },
+        );
         const correctedNodeId = (
           correctedTerminal.payload.nodeIds as string[]
         )[0]!;
-        const correctedPublication = (
-          await f.facts("memory.native.revision.v1")
-        ).find(
-          (a: any) =>
-            a.payload.operationId === correctedRequest.payload.batchId,
+        await f.wait("correction Memory revision published", async () => {
+          const publication = (await f.facts("memory.native.revision.v1")).find(
+            (a: any) =>
+              a.payload.operationId === correctedRequest.payload.batchId,
+          );
+          expect(publication).toBeDefined();
+        });
+        await f.wait(
+          "late Memory tail flush and every source observation completed",
+          async () => {
+            const observed = new Set(
+              (await rows(f, "memory.native"))
+                .filter((observation) => observation?.status === "completed")
+                .flatMap((observation) =>
+                  (
+                    observation!.manifest!.content.sources as { id: string }[]
+                  ).map((source) => source.id),
+                ),
+            );
+            expect(late.every((id) => observed.has(id))).toBe(true);
+          },
+          Math.ceil(60_000 / 8_000) + releasedPages,
         );
-        expect(correctedPublication).toBeDefined();
+        await f.settled();
         const next = await f.submit(
           f.message(
             "corrected-successor",

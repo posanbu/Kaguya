@@ -4,6 +4,7 @@
  * Selector 同时按登记顺序排列输入和候选；Identity 事件先加载的消息不能改变冻结输入窗口。
  * 候选新旧由 Selector 的账本注册顺序确定；相同/迟到业务时间及随机 UUID 不改变消费先后。
  * Light 的 message 决策只传目标与冻结引用。
+ * lightDispatchSelector 只恢复获胜决策的 claim、冻结回合、候选及终态，派发不重复扫描积压输入和身份。
  * manifest 声明 Light 模板；调用 compileLightPrompt 时传入装配阶段加载的 default/local 文本，不再使用代码内默认值。
  * settings schema 的公开中文元数据供管理表单使用，运行时与保存共用约束。
  * 管理端批准的跨会话 candidate 由宿主直接认领，不再触发 Light；其 delivery 仍使用本模块统一 turn 终态。
@@ -352,6 +353,70 @@ const lightInterruptSelector = defineInformationSelector({
         },
       }),
     );
+    return [...selected.keys()];
+  },
+});
+
+export const lightDispatchSelector = defineInformationSelector({
+  selectorId: "agent.router.light-dispatch",
+  select: async ({ sourceAtom, ledger }) => {
+    const selected = new Map([[sourceAtom.informationId, sourceAtom]]);
+    const remember = (atoms: readonly DeepReadonly<InformationAtom>[]) => {
+      for (const atom of atoms) selected.set(atom.informationId, atom);
+      return atoms;
+    };
+    const claims = remember(
+      await related(
+        ledger,
+        sourceAtom.informationId,
+        "core:status-of",
+        "outgoing",
+      ),
+    ).filter((atom) => atom.kind === turnClaimedInformationKind.kind);
+    for (const claim of claims) {
+      remember(
+        (
+          await related(
+            ledger,
+            claim.informationId,
+            "agent:turn-claim",
+            "incoming",
+            100,
+          )
+        ).filter(
+          (atom) =>
+            atom.kind === turnContextCompletedInformationKind.kind &&
+            atom.informationId === sourceAtom.payload.turnContextInformationId,
+        ),
+      );
+      const candidates = remember(
+        await related(
+          ledger,
+          claim.informationId,
+          "agent:turn-candidate",
+          "outgoing",
+        ),
+      ).filter((atom) => atom.kind === turnCandidateInformationKind.kind);
+      for (const candidate of candidates) {
+        remember(
+          await related(
+            ledger,
+            candidate.informationId,
+            "core:context",
+            "outgoing",
+          ),
+        );
+        remember(
+          await related(
+            ledger,
+            candidate.informationId,
+            "core:status-of",
+            "incoming",
+            10,
+          ),
+        );
+      }
+    }
     return [...selected.keys()];
   },
 });
@@ -786,6 +851,7 @@ function createRoutingModule(
         backgroundPeopleSelector,
         focusStateSelector,
         routerStateSelector,
+        lightDispatchSelector,
         lightInterruptSelector,
         lightContextSelector,
       ],
@@ -1553,7 +1619,7 @@ function createRoutingModule(
             delivery: "durable",
           },
           async (plan, context) => {
-            const state = await context.select(routerStateSelector);
+            const state = await context.select(lightDispatchSelector);
             const turn = state.find(
               (atom) =>
                 atom.kind === turnContextCompletedInformationKind.kind &&
